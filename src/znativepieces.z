@@ -1,0 +1,1532 @@
+# znativepieces -- `zc natives check piece`: a piece of a fixed file or of a
+# row's fragment is written only where written C needs it (zemitterc
+# loadPieces), so every text that calls what a piece defines must say so: a row
+# (its body, its fragments) and another piece by its needs, a template by its
+# needs and its sections' needs, and the emitter by `preludeNeed :ctx memb:
+# "@<piece>"` in the definition that spells the name. Text outside every piece
+# may call none. A missing need is caught here whether or not a program writes
+# the call. Each piece closes the #if it opens, each piece name is defined once,
+# a condition a need names is declared, a fixed file's piece spells no hole but
+# String and StringView, a row with pieces is the prelude's or answers its
+# unit's `@unit`, one demand word fires one class's members, and a fragment
+# calling an instance's member by its canon names it in `members`.
+
+public: unit {
+    :checkPieces
+}
+
+schema: nativec.runtime.nativec
+
+# pieceWord -- the words the check acts on: C words that are no name a line
+# defines, the containers a canon may instantiate, the emitter definitions that
+# spell C as data
+pieceWord: list {
+    kReturn: "return"
+    kElse: "else"
+    kStatic: "static"
+    kExtern: "extern"
+    kTypedef: "typedef"
+    kIf: "if"
+    kFor: "for"
+    kWhile: "while"
+    cList: "List"
+    cListVal: "ListVal"
+    cMap: "Map"
+    cSet: "Set"
+    cIdMap: "IdMap"
+    cIdSet: "IdSet"
+    tKindFacts: "kindFacts"
+    tInt128: "int128WordsC"
+    tFloatBits: "floatBitsC"
+    mDestroy: "destroy"
+} out staticlist StringView
+
+# uw -- a demand: a unit and one of its demand words, each by its id in Words
+uw: record {
+    owner: u32
+    word: u32
+}
+
+# Words -- the unit and demand names the check meets, each interned once
+Words: class {
+    ids: (MapRV String v: u32)
+    # by id; id 0 is the sentinel ""
+    texts: List String
+} as {
+    # id -- the id of `text`, interned on first sight
+    id: function {:this text: StringView} out u32 is {
+        k: (this.ids.get key: text.string).or d: 0
+        if k > 0 then return k
+        n: this.texts.length.u32.orPanic
+        this.ids.set key: text.string value: n
+        this.texts.append from: text.string
+        return n
+    }
+
+    # textOf -- the text of id `k`
+    textOf: function {this: this.view k: u32} out String is {
+        return (this.texts.get i: k.u64).copy
+    }
+}
+
+# PRow -- a row or a piece as the closure walks it
+PRow: class {
+    # its key as the emitter keys it: `<unit>.<key>`, `@<unit>.<name>`
+    key: String
+    # where a finding about it is: `row <key>`, `piece <key>`
+    where: String
+    # the unit the key names
+    owner: u32
+    # the words that fire it
+    demands: ListVal u32
+    # what it needs, its pulls among them
+    needs: ListVal uw
+    # the C it writes
+    text: String
+    isPiece: bool
+}
+
+# Pieces -- what the check reads off the rows zc carries
+Pieces: class {
+    words: Words
+    # the conditions the foundation declares
+    conds: Set String
+    rows: List PRow
+    # the rows each demand fires, by place in `rows`
+    byDemand: (MapVV uw v: u64)
+    fired: List (ListVal u64)
+    kw: zast.Vocab
+    # the ids of the demand words the check reads: `@unit`, `@class`
+    unitWord: u32
+    classWord: u32
+    # each name a piece defines, to its entry: the name, the piece's key and its
+    # first demand
+    owner: (MapRV String v: u64)
+    ownerName: List String
+    ownerKey: List String
+    ownerDem: ListVal uw
+    # how many named pieces there are
+    pieceCount: u64
+    # the text outside every piece: each pieced row's and fixed file's, and where
+    outside: List String
+    outsideWhere: List String
+    fails: List String
+}
+
+# checkPieces -- the piece checks over the rows zc carries and the emitter's
+# source at `emitter`, findings into `fails`; answers the summary
+checkPieces: function {emitter: StringView fails: List String} out String is {
+    p: (
+        Pieces
+        words: (Words ids: (MapRV String v: u32) texts: List String)
+        conds: Set String
+        rows: List PRow
+        byDemand: (MapVV uw v: u64)
+        fired: List (ListVal u64)
+        kw: (zast.Vocab.create block: pieceWord)
+        unitWord: 0
+        classWord: 0
+        owner: (MapRV String v: u64)
+        ownerName: List String
+        ownerKey: List String
+        ownerDem: ListVal uw
+        pieceCount: 0
+        outside: List String
+        outsideWhere: List String
+        fails: List String
+    )
+    p.words.texts.append from: "".string
+    p.unitWord = p.words.id text: "@unit"
+    p.classWord = p.words.id text: "@class"
+    fd: nativec.systemc.foundation
+    for each c: fd.conditions loop p.conds.add item: c.name.string
+    readRows :p
+    indexRows :p
+    ownNames :p
+    rowNeeds :p
+    outsideText :p
+    templateNeeds :p
+    emitterNeeds :p :emitter
+    memberCalls :p
+    demandClasses :p
+    s: "PIECES \{p.pieceCount} NAMES \{p.ownerKey.length}"
+    for each f: p.fails loop fails.append from: f.copy
+    return s
+}
+
+# readRows -- every row of every unit, group and structural list, and every
+# named piece, rows of their own; a fixed file's named pieces are the
+# prelude's
+readRows: function {p: Pieces} is {
+    for each u: nativec.units loop {
+        for each w: u.implementation.rows loop readRow :p owner: u.name.stringView :w
+    }
+    fd: nativec.systemc.foundation
+    for each g: fd.groups loop {
+        for each w: g.rows loop readRow :p owner: g.name.stringView :w
+    }
+    for each w: fd.structural loop readRow :p owner: "" :w
+    for each fl: fd.files loop readFixedFile :p :fl
+    duplicatePieces :p
+}
+
+# readFixedFile -- a fixed file's named pieces, rows of the prelude's, and the
+# text outside them
+readFixedFile: function {p: Pieces fl: schema.file} is {
+    rest: String
+    for each pc: fl.pieces loop {
+        if pc.name.length == 0 then {
+            rest.append "\{pc.text}\n"
+        } else {
+            readPiece :p owner: "prelude" :pc fixed: true
+        }
+    }
+    p.outside.append rest.take
+    p.outsideWhere.append "file \{fl.name}"
+}
+
+# duplicatePieces -- each piece's key is defined once
+duplicatePieces: function {p: Pieces} is {
+    keys: Set String
+    for each r: p.rows loop {
+        if r.isPiece.not then continue
+        if (keys.has item: r.key) then p.fails.append "piece \{r.key} is defined more than once"
+        keys.add item: r.key.copy
+    }
+}
+
+# readRow -- one row, and its named pieces as rows of their own
+readRow: function {p: Pieces owner: StringView w: schema.row} is {
+    key: zemitterc.servedKey :owner key: w.key.stringView
+    t: w.body.string
+    for each f: w.fragments loop t.append "\n\{f}"
+    if w.destroy.length > 0 then t.append "\n\{w.destroy}"
+    dem: zemitterc.servedList xs: w.demand
+    r: newRow :p key: key.stringView demand: dem.stringView text: t.take piece: false
+    addNeeds :p :r needs: (zemitterc.servedList xs: w.needs).stringView
+    addNeeds :p :r needs: (zemitterc.servedList xs: w.pulls).stringView
+    hosts: (key.stringView.startsWith "@prelude.") or (r.demands.contains item: p.unitWord)
+    rest: String
+    for each pc: w.pieces loop {
+        if pc.name.length == 0 then {
+            rest.append "\{pc.text}\n"
+            continue
+        }
+        readPiece :p :owner :pc fixed: false
+        if hosts.not then (
+            p.fails.append
+            "row \{key} has pieces but is no prelude row and answers no @unit, so no compiler writes them a piece at a time"
+        )
+    }
+    p.rows.append r
+    if w.pieces.length == 0 then return
+    p.outside.append rest.take
+    p.outsideWhere.append "row \{key}"
+}
+
+# readPiece -- one named piece of `owner`'s, a row of its own: `@<owner>.<name>`;
+# `fixed` when it is a fixed file's, written unfilled
+readPiece: function {p: Pieces owner: StringView pc: schema.piece fixed: bool} is {
+    key: "@".string
+    key.append owner
+    key.append "."
+    key.append pc.name.stringView
+    r: (
+        newRow
+        :p
+        key: key.stringView
+        demand: (zemitterc.servedList xs: pc.demand).stringView
+        text: pc.text.string
+        piece: true
+    )
+    addNeeds :p :r needs: (zemitterc.servedList xs: pc.needs).stringView
+    p.pieceCount = p.pieceCount + 1
+    if (ifDepthOk body: pc.text.stringView).not then (
+        p.fails.append
+        "piece \{key} opens or closes an #if it does not close or open"
+    )
+    if fixed when (loneHole text: pc.text.stringView) then (
+        p.fails.append
+        "piece \{key} of a fixed file spells an `@` that is not a String/StringView hole"
+    )
+    p.rows.append r
+}
+
+# newRow -- a row of `key`, fired by the words of `demand` (comma-separated),
+# or by its key's last part when it names none
+newRow: function {
+    p: Pieces key: StringView demand: StringView text: String.take piece: bool
+} out PRow is {
+    wh: "row ".string
+    if piece then wh = "piece ".string
+    wh.append key
+    r: (
+        PRow
+        key: key.string
+        where: wh.take
+        owner: (p.words.id text: (unitOf :key))
+        demands: ListVal u32
+        needs: ListVal uw
+        :text
+        isPiece: piece
+    )
+    for each d: (demandsOf :key :demand) loop r.demands.append (p.words.id text: d.stringView)
+    return r
+}
+
+# unitOf -- a key's unit: its first part, without a leading `@`
+unitOf: function {key: StringView} out StringView is {
+    k: key
+    if k.startsWith "@" then k = k.substring from: 1 to: k.length
+    return (k.substring from: 0 to: ((k.indexOf needle: ".").or d: k.length))
+}
+
+# demandsOf -- the words of `demand`, or the key's last part when it has none
+demandsOf: function {key: StringView demand: StringView} out List String is {
+    r: List String
+    for each d: (demand.split sep: ",") loop {
+        if d.length > 0 then r.append from: d.string
+    }
+    if r.length > 0 then return r
+    dot: key.lastIndexOf needle: "."
+    match (
+        dot
+    ) case some then {
+        r.append from: (key.substring from: dot + 1 to: key.length).string
+    } case none then r.append from: key.string
+    return r
+}
+
+# addNeeds -- each need of `needs` (comma-separated) onto `r`: `<unit>.<demand>`,
+# or a demand of its own unit; a `?<condition>` it holds under must be declared
+addNeeds: function {p: Pieces r: PRow needs: StringView} is {
+    for each n0: (needs.split sep: ",") loop {
+        if n0.length == 0 then continue
+        n: uncond :p need: n0 where: r.key.stringView
+        r.needs.append (needOf :p need: n.stringView own: r.owner)
+    }
+}
+
+# needOf -- `need` as a demand: `<unit>.<demand>`, or a demand of unit `own`
+needOf: function {p: Pieces need: StringView own: u32} out uw is {
+    dot: need.indexOf needle: "."
+    match (
+        dot
+    ) case some then {
+        un: p.words.id text: (need.substring from: 0 to: dot)
+        return (uw owner: un word: (p.words.id text: (need.substring from: dot + 1 to: need.length))
+        )
+    } case none then null
+    return (uw owner: own word: (p.words.id text: need))
+}
+
+# uncond -- a need without its `?<condition>`, whose condition must be one the
+# foundation declares
+uncond: function {p: Pieces need: StringView where: StringView} out String is {
+    q: need.indexOf needle: "?"
+    match (
+        q
+    ) case some then {
+        c: need.substring from: q + 1 to: need.length
+        if (p.conds.has item: c.string).not then (
+            p.fails.append
+            "\{where}: the condition \{c} of a need is declared by no foundation condition"
+        )
+        return (need.substring from: 0 to: q).string
+    } case none then null
+    return need.string
+}
+
+# indexRows -- each row by the demands that fire it
+indexRows: function {p: Pieces} is {
+    k: u64
+    for each r: p.rows loop {
+        for each d: r.demands loop {
+            key: uw owner: r.owner word: d
+            i: (p.byDemand.get :key).or d: p.fired.length
+            if i == p.fired.length then {
+                p.byDemand.set :key value: i
+                p.fired.append (ListVal u64)
+            }
+            (p.fired.getMut :i).append k
+        }
+        k = k + 1
+    }
+}
+
+# closure -- every demand `start` reaches: each fires its rows, which need more
+closure: function {p: Pieces.view start: (ListVal uw).view} out SetVal uw is {
+    seen: SetVal uw
+    todo: ListVal uw
+    for each s: start loop todo.append s
+    for todo.length > 0 loop {
+        n: todo.pop
+        if (seen.has item: n) then continue
+        seen.add item: n
+        fire :p demand: n :todo
+    }
+    return seen
+}
+
+# fire -- what the rows `demand` fires need onto `todo`. A row fired by one of
+# its words is the row: it covers what it defines, whatever word its owner
+# entry carries, so its other words go too.
+fire: function {p: Pieces.view demand: uw todo: ListVal uw} is {
+    fi: (p.byDemand.get key: demand).or d: p.fired.length
+    if fi == p.fired.length then return
+    for each ri: (p.fired.get i: fi) loop {
+        r: p.rows.get i: ri
+        for each x: r.needs loop todo.append x
+        for each d: r.demands loop todo.append (uw owner: demand.owner word: d)
+    }
+}
+
+# startOf -- where a row's closure starts: its needs and its own demands
+startOf: function {r: PRow.view} out ListVal uw is {
+    s: ListVal uw
+    for each x: r.needs loop s.append x
+    for each d: r.demands loop s.append (uw owner: r.owner word: d)
+    return s
+}
+
+# ownNames -- each name a piece defines, owned by the piece and its first
+# demand; then what a prelude row's fragments define, which they own as a
+# piece does when no piece defines it
+ownNames: function {p: Pieces} is {
+    ownPass :p pieces: true
+    ownPass :p pieces: false
+}
+
+# ownPass -- one pass of ownNames: the pieces' names (`pieces`), or the
+# prelude rows' fragments'
+ownPass: function {p: Pieces pieces: bool} is {
+    k: u64
+    for k < p.rows.length loop {
+        names: List String
+        {
+            r: p.rows.get i: k
+            prelude: r.isPiece.not and (r.key.stringView.startsWith "@prelude.")
+            if pieces and r.isPiece or (pieces.not and prelude) then names = (
+                definedNames
+                body: r.text.stringView
+                kw: p.kw
+            )
+        }
+        for each nm: names loop own :p name: nm.stringView row: k replace: pieces
+        k = k + 1
+    }
+}
+
+# own -- `name` owned by row `row` and its first demand; an owner it has is
+# replaced only when `replace`
+own: function {p: Pieces name: StringView row: u64 replace: bool} is {
+    r: p.rows.get i: row
+    dem: uw owner: r.owner word: (r.demands.get i: 0)
+    o: (p.owner.get key: name.string).or d: p.ownerKey.length
+    if o == p.ownerKey.length then {
+        p.owner.set key: name.string value: o
+        p.ownerName.append from: name.string
+        p.ownerKey.append from: r.key.copy
+        p.ownerDem.append dem
+        return
+    }
+    if replace.not then return
+    p.ownerKey.set i: o val: r.key.copy
+    p.ownerDem.set i: o val: dem
+}
+
+# spelled -- the names `text` spells that a piece defines, by owner entry
+spelled: function {p: Pieces.view text: StringView} out ListVal u64 is {
+    r: ListVal u64
+    seen: Set String
+    for each n: (identsOf text: (stripC :text).stringView) loop {
+        if (seen.has item: n) then continue
+        seen.add item: n.copy
+        o: (p.owner.get key: n.copy).or d: p.ownerKey.length
+        if o < p.ownerKey.length then r.append o
+    }
+    return r
+}
+
+# rowNeeds -- every row and piece that spells a name another piece defines
+# needs that piece's demand
+rowNeeds: function {p: Pieces} is {
+    for each r: p.rows loop {
+        names: spelled :p text: r.text.stringView
+        if names.length == 0 then continue
+        cov: closure :p start: (startOf :r)
+        for each o: names loop {
+            if r.isPiece.not when (isHoleName :p :o) then continue
+            if (p.ownerKey.get i: o) == r.key then continue
+            dem: p.ownerDem.get i: o
+            if (cov.has item: dem).not then (
+                p.fails.append
+                "\{r.where} spells \{ownedName :p :o} (piece \{(
+                    p.ownerKey.get
+                    i: o
+                )}) and does not need it: add the need \{demandText :p :dem}"
+            )
+        }
+    }
+}
+
+# isHoleName -- whether owner entry `o` names the String or StringView type,
+# spelled through its hole (`z_@String@_t`): a fragment's or a template's fill
+# records it, so only a piece must need it
+isHoleName: function {p: Pieces.view o: u64} out bool is {
+    n: (p.ownerName.get i: o).stringView
+    return (n.startsWith "z_@String@_t") or (n.startsWith "z_@StringView@_t")
+}
+
+# ownedName -- the name owner entry `o` was made for
+ownedName: function {p: Pieces.view o: u64} out String is {
+    return (p.ownerName.get i: o).copy
+}
+
+# demandText -- `<unit>.<demand>`, as a need spells it
+demandText: function {p: Pieces.view dem: uw} out String is {
+    r: p.words.textOf k: dem.owner
+    r.append "."
+    r.append (p.words.textOf k: dem.word)
+    return r
+}
+
+# outsideText -- text outside every piece calls nothing a piece defines: nothing
+# declares a need for it
+outsideText: function {p: Pieces} is {
+    k: u64
+    for each t: p.outside loop {
+        for each o: (spelled :p text: t.stringView) loop (
+            p.fails.append
+            "\{p.outsideWhere.get i: k} spells \{ownedName :p :o} (piece \{(
+                p.ownerKey.get
+                i: o
+            )}) outside any piece, where nothing declares the need"
+        )
+        k = k + 1
+    }
+}
+
+# templateNeeds -- a template's text outside its member sections is covered by
+# its needs and those of the class rows written from it (bar `@class`, which
+# every class row of a unit shares); a member section by those and its own
+# needs, a sibling section's followed
+templateNeeds: function {p: Pieces} is {
+    for each u: nativec.units loop {
+        for each t: u.implementation.templates loop templateCover :p :t
+    }
+}
+
+# templateCover -- templateNeeds for template `t`
+templateCover: function {p: Pieces t: schema.template} is {
+    where: "template \{t.name}"
+    decl: templateDecl :p :t
+    plain: String
+    for each s: t.sections loop {
+        if s.member.length == 0 then plain.append "\{s.text}\n"
+    }
+    sectionCover :p where: where.stringView text: plain.stringView :decl
+    for each s: t.sections loop {
+        if s.member.length > 0 then memberCover :p :t :s :decl where: where.stringView
+    }
+}
+
+# templateDecl -- what covers template `t` whole: its needs naming another
+# unit's demand, and the needs and words (bar `@class`) of the class rows
+# written from it
+templateDecl: function {p: Pieces t: schema.template} out ListVal uw is {
+    decl: ListVal uw
+    for each n: t.needs loop {
+        if (n.stringView.contains needle: ".") then decl.append (needOf :p need: n.stringView own: 0
+        )
+    }
+    for each r: p.rows loop {
+        if (templateOfRow :r name: t.name.stringView).not then continue
+        for each x: r.needs loop decl.append x
+        for each d: r.demands loop {
+            if d != p.classWord then decl.append (uw owner: r.owner word: d)
+        }
+    }
+    return decl
+}
+
+# memberCover -- member section `s` of `t` is covered by the template's `decl`
+# and its own needs, a sibling section's followed
+memberCover: function {
+    p: Pieces t: schema.template s: schema.section decl: (ListVal uw).view where: StringView
+} is {
+    d2: ListVal uw
+    for each x: decl loop d2.append x
+    seen: Set String
+    sectionNeeds :p :t member: s.member.stringView :seen into: d2 :where
+    sw: "\{where} (member \{s.member})"
+    sectionCover :p where: sw.stringView text: s.text.stringView decl: d2
+}
+
+# templateOfRow -- whether `r` is a class row written from template `name`:
+# rowTemplates records them
+templateOfRow: function {r: PRow.view name: StringView} out bool is {
+    for each u: nativec.units loop {
+        for each w: u.implementation.rows loop {
+            if w.template.stringView == name when (
+                (zemitterc.servedKey owner: u.name.stringView key: w.key.stringView) == r.key
+            ) then return true
+        }
+    }
+    return false
+}
+
+# sectionNeeds -- the needs of member section `member` of `t` onto `into`: each
+# `<unit>.<demand>`, and a sibling section's needs for a need naming one
+sectionNeeds: function {
+    p: Pieces
+    t: schema.template
+    member: StringView
+    seen: Set String
+    into: ListVal uw
+    where: StringView
+} is {
+    if (seen.has item: member.string) then return
+    seen.add item: member.string
+    for each s: t.sections loop {
+        if s.member.stringView != member then continue
+        for each n0: s.needs loop {
+            nn: uncond :p need: n0.stringView :where
+            n: nn.stringView
+            if (n.contains needle: ".") then {
+                into.append (needOf :p need: n own: 0)
+            } else {
+                sectionNeeds :p :t member: n :seen :into :where
+            }
+        }
+    }
+}
+
+# sectionCover -- what `text` spells that a piece defines is reached from `decl`
+sectionCover: function {p: Pieces where: StringView text: StringView decl: (ListVal uw).view} is {
+    names: spelled :p :text
+    if names.length == 0 then return
+    cov: closure :p start: decl
+    for each o: names loop {
+        if (isHoleName :p :o) then continue
+        dem: p.ownerDem.get i: o
+        if (cov.has item: dem).not then (
+            p.fails.append
+            "\{where} spells \{ownedName :p :o} (piece \{(
+                p.ownerKey.get
+                i: o
+            )}) and neither its needs nor its section's needs name \{demandText :p :dem}"
+        )
+    }
+}
+
+# memberCalls -- a fragment calling a member of a container instance by its canon
+# (`z_@List_String@_append`), or any type's destructor, names it in `members`
+memberCalls: function {p: Pieces} is {
+    for each u: nativec.units loop {
+        for each w: u.implementation.rows loop memberCallsOf :p owner: u.name.stringView :w
+    }
+    fd: nativec.systemc.foundation
+    for each g: fd.groups loop {
+        for each w: g.rows loop memberCallsOf :p owner: g.name.stringView :w
+    }
+}
+
+# memberCallsOf -- memberCalls for one row
+memberCallsOf: function {p: Pieces owner: StringView w: schema.row} is {
+    if w.constant.length > 0 then return
+    if w.fragments.length == 0 when w.pieces.length == 0 then return
+    key: zemitterc.servedKey :owner key: w.key.stringView
+    have: Set String
+    for each m: w.members loop have.add item: (uncond :p need: m.stringView where: key.stringView)
+    code: String
+    for each f: w.fragments loop code.append "\{f}\n"
+    for each pc: w.pieces loop code.append "\{pc.text}\n"
+    for each c: (instanceCalls code: (stripC text: code.stringView).stringView kw: p.kw) loop {
+        if (have.has item: c).not then (
+            p.fails.append
+            "row \{key} calls \{c} and does not name it: add it to members"
+        )
+    }
+}
+
+# instanceCalls -- the `<canon>.<member>` each `z_@<canon>@_<member>(` call of a
+# List, ListVal, Map, Set, IdMap or IdSet instance names, and `<type>.destroy`
+# for each `z_@<type>@_destroy(` called rather than declared `void`, sorted
+instanceCalls: function {code: StringView kw: zast.Vocab.view} out List String is {
+    r: List String
+    seen: Set String
+    at: u64
+    for at < code.length loop {
+        o: (code.substring from: at to: code.length).indexOf needle: "z_@"
+        if o.none then break
+        s: at + o + 3
+        at = s
+        e: wordEnd text: code from: s
+        if (
+            (e == s) or
+            (((code.byteAt i: e).or d: 0) != 64) or
+            (((code.byteAt i: e + 1).or d: 0) != 95)
+        ) then continue
+        m: wordEnd text: code from: e + 2
+        if (m == (e + 2)) or (((code.byteAt i: m).or d: 0) != 40) then continue
+        declared: followsVoid text: code at: s - 3
+        canon: code.substring from: s to: e
+        member: code.substring from: e + 2 to: m
+        call: String
+        if (isContainerCanon :canon :kw) then {
+            call.append canon
+            call.append "."
+            call.append member
+        } else if (kw.slotOf text: member) == pieceWord.slot.mDestroy when declared.not then {
+            call.append canon
+            call.append ".destroy"
+        }
+        if call.length > 0 when (seen.has item: call).not then {
+            seen.add item: call.copy
+            r.append call.take
+        }
+    }
+    r.sort
+    return r
+}
+
+# isContainerCanon -- List, ListVal, Map, Set, IdMap or IdSet, alone or with `_`
+# and its arguments
+isContainerCanon: function {canon: StringView kw: zast.Vocab.view} out bool is {
+    w: (
+        kw.slotOf
+        text: (canon.substring from: 0 to: ((canon.indexOf needle: "_").or d: canon.length))
+    )
+    lists: (w == pieceWord.slot.cList) or (w == pieceWord.slot.cListVal)
+    maps: (w == pieceWord.slot.cMap) or (w == pieceWord.slot.cIdMap)
+    sets: (w == pieceWord.slot.cSet) or (w == pieceWord.slot.cIdSet)
+    return lists or maps or sets
+}
+
+# followsVoid -- whether `void ` ends just before `at`
+followsVoid: function {text: StringView at: u64} out bool is {
+    return ((text.substring from: 0 to: at).endsWith "void ")
+}
+
+# demandClasses -- a member row answers its own name unless it says otherwise,
+# and one demand word fires every row answering it: two classes of a unit with
+# a member of one name would each write the other's
+demandClasses: function {p: Pieces} is {
+    for each u: nativec.units loop {
+        firsts: MapRV String v: u64
+        classes: List String
+        for each w: u.implementation.rows loop {
+            if w.fragments.length == 0 when w.pieces.length == 0 then continue
+            c: memberClass key: w.key.stringView
+            if c.length == 0 then continue
+            m: memberName key: w.key.stringView
+            for each d: (
+                demandsOf
+                key: m.stringView
+                demand: (zemitterc.servedList xs: w.demand).stringView
+            ) loop (
+                classWord
+                :p
+                unitName: u.name.stringView
+                word: d.stringView
+                cls: c.stringView
+                :firsts
+                :classes
+            )
+        }
+    }
+}
+
+# classWord -- demand word `word` of unit `unitName` fires a member of class
+# `cls`: the first class it fires is kept, a second is reported
+classWord: function {
+    p: Pieces
+    unitName: StringView
+    word: StringView
+    cls: StringView
+    firsts: (MapRV String v: u64)
+    classes: List String
+} is {
+    i: (firsts.get key: word.string).or d: classes.length
+    if i == classes.length then {
+        firsts.set key: word.string value: i
+        classes.append from: cls.string
+    } else if (classes.get :i).stringView != cls then (
+        p.fails.append
+        "demand word \{word} of unit \{unitName} fires the members of two classes (\{(
+            classes.get
+            :i
+        )}, \{cls}): give each its own demand"
+    )
+}
+
+# memberClass -- the class of a member row's key `<Class>.<member>`, "" when the
+# key is no such
+memberClass: function {key: StringView} out String is {
+    dot: (key.indexOf needle: ".").or d: key.length
+    if dot == key.length then return "".string
+    m: memberName :key
+    c: (key.substring from: 0 to: dot).string
+    if (isWord text: c.stringView).not or (isWord text: m.stringView).not then return "".string
+    return c
+}
+
+# memberName -- the member of a key `<Class>.<member>[.<more>]`
+memberName: function {key: StringView} out String is {
+    rest: key.substring from: ((key.indexOf needle: ".").or d: key.length) + 1 to: key.length
+    return (rest.substring from: 0 to: ((rest.indexOf needle: ".").or d: rest.length)).string
+}
+
+# isWord -- a non-empty run of letters, digits and `_`
+isWord: function {text: StringView} out bool is {
+    if text.length == 0 then return false
+    return (wordEnd :text from: 0) == text.length
+}
+
+# emitterNeeds -- each top-level definition of the emitter's source that spells
+# a name a piece defines records that piece's demand with `preludeNeed :ctx
+# memb:` (or `needsAddM :ctx uname: "prelude" memb:`). The conversion rows'
+# writers and the scalar facts spell C as data, not as written C.
+emitterNeeds: function {p: Pieces emitter: StringView} is {
+    rd: io.readText path: emitter
+    src: String
+    match (
+        rd
+    ) case ok then {
+        src = rd.copy
+    } case err then {
+        p.fails.append "cannot read the emitter's source \{emitter}"
+        return
+    }
+    items: emitterItems text: src.stringView
+    conv: convRows :items
+    for each it: items loop {
+        if (conv.has item: it.name) or (isTypeData name: it.name.stringView kw: p.kw) then continue
+        emitterItemNeeds :p :it :emitter
+    }
+}
+
+# EmitterItem -- one top-level definition of the emitter's source: its first
+# line, its name, its lines but comment lines
+EmitterItem: class {
+    line: u64
+    name: String
+    code: String
+}
+
+# emitterItems -- the emitter's top-level definitions, each from a line that opens
+# with its name and a colon
+emitterItems: function {text: StringView} out List EmitterItem is {
+    r: List EmitterItem
+    ln: u64
+    for each l: text.lines loop {
+        ln = ln + 1
+        b: (l.byteAt i: 0).or d: 0
+        isTop: (b >= 0ca) and (b <= 0cz) or ((b >= 0cA) and (b <= 0cZ))
+        we: wordEnd text: l from: 0
+        if isTop when ((l.byteAt i: we).or d: 0) == 58 then (
+            r.append
+            (EmitterItem line: ln name: (l.substring from: 0 to: we).string code: String)
+        )
+        if r.length > 0 when (l.trimStart.startsWith "#").not then {
+            it: r.getMut i: r.length - 1
+            it.code.append l
+            it.code.append "\n"
+        }
+    }
+    return r
+}
+
+# convRows -- nativeConvRows and every `conv...` definition it calls, by name:
+# they write the conversion rows' text, which carries its own needs
+convRows: function {items: (List EmitterItem).view} out Set String is {
+    r: Set String
+    byName: MapRV String v: u64
+    k: u64
+    for each it: items loop {
+        byName.set key: it.name.copy value: k
+        k = k + 1
+    }
+    todo: List String
+    todo.append "nativeConvRows".string
+    for todo.length > 0 loop {
+        n: todo.pop
+        if (r.has item: n) then continue
+        i: byName.get key: n.copy
+        match (
+            i
+        ) case some then {
+            r.add item: n.copy
+            for each c: (convCalls code: (items.get :i).code.stringView) loop (
+                todo.append
+                from: c.copy
+            )
+        } case none then null
+    }
+    return r
+}
+
+# convCalls -- the `conv...` names `code` calls: a name then spaces then a
+# label's colon (`conv :ctx`, `conv x: 1`), or a name just inside `(`
+convCalls: function {code: StringView} out List String is {
+    r: List String
+    at: u64
+    for at < code.length loop {
+        o: (code.substring from: at to: code.length).indexOf needle: "conv"
+        if o.none then break
+        s: at + o
+        at = s + 1
+        if s > 0 when (isWordByte b: ((code.byteAt i: s - 1).or d: 0)) then continue
+        e: wordEnd text: code from: s
+        called: labelAfter text: code from: e
+        if s > 0 when ((code.byteAt i: s - 1).or d: 0) == 40 then called = true
+        if called then r.append from: (code.substring from: s to: e).string
+    }
+    return r
+}
+
+# labelAfter -- whether, from `from`, white space comes (line breaks too), then
+# a `:` (`conv :ctx`), or a word and a `:` (`conv x: 1`)
+labelAfter: function {text: StringView from: u64} out bool is {
+    p: from
+    for p < text.length while (isSpaceByte b: ((text.byteAt i: p).or d: 0)) loop p = p + 1
+    if p == from then return false
+    if ((text.byteAt i: p).or d: 0) == 58 then return true
+    p = wordEnd :text from: p
+    return ((text.byteAt i: p).or d: 0) == 58
+}
+
+# isTypeData -- the scalar type facts and the literal writers spell the 128-bit
+# and f16 types and literal macros as data: the type is recorded where it is
+# spelled, and a literal is written beside a spelling of its type
+isTypeData: function {name: StringView kw: zast.Vocab.view} out bool is {
+    w: kw.slotOf text: name
+    return (
+        (w == pieceWord.slot.tKindFacts) or
+        (w == pieceWord.slot.tInt128) or
+        (w == pieceWord.slot.tFloatBits)
+    )
+}
+
+# emitterItemNeeds -- emitterNeeds for one definition
+emitterItemNeeds: function {p: Pieces it: EmitterItem.view emitter: StringView} is {
+    loc: emitter.string
+    loc.append ":"
+    loc.append "\{it.line} \{it.name}"
+    code: holeSpelled code: it.code.stringView
+    cv: code.stringView
+    got: recordedNeeds code: cv
+    spellsComputed: (cv.contains needle: "z_@String@_\\{") or (spellsStrC code: cv)
+    recordsComputed: (
+        (cv.contains needle: "preludeNeed :ctx memb: pm.stringView") or
+        (cv.contains needle: "preludeNeed :ctx memb: \"@String_")
+    )
+    if spellsComputed when recordsComputed.not then (
+        p.fails.append
+        "\{loc} spells a String function by a computed name or in pieces without preludeNeed"
+    )
+    seen: Set String
+    for each n: (emitterIdents code: cv) loop {
+        if (seen.has item: n) then continue
+        seen.add item: n.copy
+        o: p.owner.get key: n.copy
+        match (
+            o
+        ) case some then {
+            w: p.words.textOf k: (p.ownerDem.get i: o).word
+            if (got.has item: w).not then (
+                p.fails.append
+                "\{loc} spells \{n} (piece \{(
+                    p.ownerKey.get
+                    i: o
+                )}) without preludeNeed :ctx memb: \"\{w}\""
+            )
+        } case none then null
+    }
+}
+
+# holeSpelled -- `code` with the String and StringView C names the emitter
+# binds spelled through their holes, as the pieces define them
+holeSpelled: function {code: StringView} out String is {
+    r: String
+    i: u64
+    for i < code.length loop {
+        rest: code.substring from: i to: code.length
+        if rest.startsWith "\\{ctx.strC}_" then {
+            r.append "z_@String@_"
+            i = i + 12
+        } else if rest.startsWith "\\{ctx.svC}_" then {
+            r.append "z_@StringView@_"
+            i = i + 11
+        } else {
+            r.appendByte ((code.byteAt :i).or d: 0)
+            i = i + 1
+        }
+    }
+    return r
+}
+
+# spellsStrC -- whether `code` appends the String type's C name on its own
+spellsStrC: function {code: StringView} out bool is {
+    at: u64
+    for at < code.length loop {
+        o: (code.substring from: at to: code.length).indexOf needle: ".append ctx.strC"
+        if o.none then return false
+        e: at + o + 16
+        if (isWordByte b: ((code.byteAt i: e).or d: 0)).not then return true
+        at = e
+    }
+    return false
+}
+
+# recordedNeeds -- the prelude demands `code` records, `preludeNeed :ctx memb:
+# "X"` and `needsAddM :ctx uname: "prelude" memb: "X"`
+recordedNeeds: function {code: StringView} out Set String is {
+    r: Set String
+    quotedAfter :code needle: "preludeNeed :ctx memb: \"" into: r
+    quotedAfter :code needle: "needsAddM :ctx uname: \"prelude\" memb: \"" into: r
+    return r
+}
+
+# quotedAfter -- each text up to the closing `"` after each `needle` in `code`,
+# when it is letters, digits, `_` and `@`
+quotedAfter: function {code: StringView needle: StringView into: Set String} is {
+    at: u64
+    for at < code.length loop {
+        o: (code.substring from: at to: code.length).indexOf :needle
+        if o.none then return
+        s: at + o + needle.length
+        e: s
+        for e < code.length while (isNameByte b: ((code.byteAt i: e).or d: 0)) loop e = e + 1
+        if e > s when ((code.byteAt i: e).or d: 0) == 34 then (
+            into.add
+            item: (code.substring from: s to: e).string
+        )
+        at = s
+    }
+}
+
+# emitterIdents -- the identifiers `code` spells as C would: a letter or `_`,
+# then letters, digits, `_` and `@`, not just after a letter, digit, `_`, `@`
+# or `\`
+emitterIdents: function {code: StringView} out List String is {
+    r: List String
+    i: u64
+    for i < code.length loop {
+        b: (code.byteAt :i).or d: 0
+        startOk: (isWordByte :b) and (isDigit :b).not
+        if startOk when i > 0 then {
+            pb: (code.byteAt i: i - 1).or d: 0
+            if (isNameByte b: pb) or (pb == 92) then startOk = false
+        }
+        if startOk.not then {
+            i = i + 1
+            continue
+        }
+        e: i
+        for e < code.length while (isNameByte b: ((code.byteAt i: e).or d: 0)) loop e = e + 1
+        r.append from: (code.substring from: i to: e).string
+        i = e
+    }
+    return r
+}
+
+# stripC -- `text` without its comments and its string and character literals:
+# a block comment leaves its line breaks, a line comment nothing, a literal `""`.
+# One pass, left to right, so a `//` inside a literal is the literal's.
+stripC: function {text: StringView} out String is {
+    r: String
+    i: u64
+    for i < text.length loop {
+        j: stripOne :text from: i :r
+        if j > i then {
+            i = j
+        } else {
+            r.appendByte ((text.byteAt :i).or d: 0)
+            i = i + 1
+        }
+    }
+    return r
+}
+
+# stripOne -- the literal or comment opening at `from`, what stands for it
+# appended to `r`; answers where the text goes on, `from` when none opens there
+stripOne: function {text: StringView from: u64 r: String.borrow} out u64 is {
+    b: (text.byteAt i: from).or d: 0
+    nb: (text.byteAt i: from + 1).or d: 0
+    if (b == 34) or (b == 39) then {
+        e: literalEnd :text :from quote: b
+        if e == 0 then return from
+        r.append "\"\""
+        return e
+    }
+    if b != 47 then return from
+    if nb == 47 then {
+        i: from
+        for i < text.length while ((text.byteAt :i).or d: 0) != 10 loop i = i + 1
+        return i
+    }
+    if nb != 42 then return from
+    c: (text.substring from: from + 2 to: text.length).indexOf needle: "*/"
+    if c.none then return from
+    e: from + 2 + c + 2
+    nl: countByte text: (text.substring :from to: e) b: 10
+    for nl > 0 loop {
+        r.append "\n"
+        nl = nl - 1
+    }
+    return e
+}
+
+# literalEnd -- past the closing quote of the literal opening at `from` with
+# `quote`, a backslash escaping the next byte; 0 when a line break or the end
+# comes first
+literalEnd: function {text: StringView from: u64 quote: u8} out u64 is {
+    j: from + 1
+    for j < text.length loop {
+        b: (text.byteAt i: j).or d: 0
+        if b == quote then return j + 1
+        if b == 10 then return 0
+        if b == 92 then {
+            j = j + 2
+        } else {
+            j = j + 1
+        }
+    }
+    return 0
+}
+
+# identsOf -- the names `text` spells: a letter, `_` or `@`, then letters,
+# digits, `_` and `@`
+identsOf: function {text: StringView} out List String is {
+    r: List String
+    i: u64
+    for i < text.length loop {
+        b: (text.byteAt :i).or d: 0
+        if (isNameByte :b).not or (isDigit :b) then {
+            i = i + 1
+            continue
+        }
+        e: i
+        for e < text.length while (isNameByte b: ((text.byteAt i: e).or d: 0)) loop e = e + 1
+        r.append from: (text.substring from: i to: e).string
+        i = e
+    }
+    return r
+}
+
+# ifDepthOk -- whether `body` closes every #if it opens and opens every #endif
+# it closes
+ifDepthOk: function {body: StringView} out bool is {
+    d: i64
+    for each l: (stripC text: body).stringView.lines loop {
+        s: directive line: l.trim
+        if s.startsWith "if" then {
+            d = d + 1
+        } else if s.startsWith "endif" then {
+            d = d - 1
+            if d < 0 then return false
+        }
+    }
+    return d == 0
+}
+
+# directive -- a preprocessor line's directive and what follows it, the `#` and
+# the spaces after it dropped; "" for any other line
+directive: function {line: StringView} out StringView is {
+    if (line.startsWith "#").not then return ""
+    return (line.substring from: 1 to: line.length).trimStart
+}
+
+# loneHole -- whether `text`, its `@@...@@` keys and its @String@ and
+# @StringView@ holes taken out, spells an `@` with no `@` beside it
+loneHole: function {text: StringView} out bool is {
+    for each l: text.lines loop {
+        a: dropKeys line: l
+        b: removeAll text: a.stringView needle: "@String@"
+        c: removeAll text: b.stringView needle: "@StringView@"
+        cv: c.stringView
+        i: u64
+        for i < cv.length loop {
+            if ((cv.byteAt :i).or d: 0) == 64 then {
+                before: (i > 0) and (((cv.byteAt i: i - 1).or d: 0) == 64)
+                after: ((cv.byteAt i: i + 1).or d: 0) == 64
+                if before.not when after.not then return true
+            }
+            i = i + 1
+        }
+    }
+    return false
+}
+
+# removeAll -- `text` without each occurrence of `needle`
+removeAll: function {text: StringView needle: StringView} out String is {
+    r: String
+    i: u64
+    for i < text.length loop {
+        if (text.substring from: i to: text.length).startsWith needle then {
+            i = i + needle.length
+        } else {
+            r.appendByte ((text.byteAt :i).or d: 0)
+            i = i + 1
+        }
+    }
+    return r
+}
+
+# dropKeys -- `line` without its `@@...@@` keys, each the shortest
+dropKeys: function {line: StringView} out String is {
+    r: String
+    i: u64
+    for i < line.length loop {
+        if (line.substring from: i to: line.length).startsWith "@@" then {
+            c: (line.substring from: i + 2 to: line.length).indexOf needle: "@@"
+            match (
+                c
+            ) case some then {
+                i = i + 2 + c + 2
+                continue
+            } case none then null
+        }
+        r.appendByte ((line.byteAt :i).or d: 0)
+        i = i + 1
+    }
+    return r
+}
+
+# wordEnd -- where the run of letters, digits and `_` from `from` ends
+wordEnd: function {text: StringView from: u64} out u64 is {
+    i: from
+    for i < text.length while (isWordByte b: ((text.byteAt :i).or d: 0)) loop i = i + 1
+    return i
+}
+
+# isSpaceByte -- a space, a tab or a line break
+isSpaceByte: function {b: u8} out bool is {
+    return (b == 32) or (b == 9) or (b == 10) or (b == 13)
+}
+
+# isWordByte -- a letter, a digit or `_`
+isWordByte: function {b: u8} out bool is {
+    return (b >= 0ca) and (b <= 0cz) or ((b >= 0cA) and (b <= 0cZ)) or (isDigit :b) or (b == 95)
+}
+
+# isNameByte -- a letter, a digit, `_` or `@`
+isNameByte: function {b: u8} out bool is {
+    return (isWordByte :b) or (b == 64)
+}
+
+# isDigit -- an ASCII digit
+isDigit: function {b: u8} out bool is {
+    return (b >= 0c0) and (b <= 0c9)
+}
+
+# definedNames -- the names a piece's C defines: its functions and prototypes,
+# its statics, typedefs and macros
+definedNames: function {body: StringView kw: zast.Vocab.view} out List String is {
+    r: List String
+    depth: i64
+    for each l: (stripC text: body).stringView.lines loop {
+        s: l.trim
+        top: depth == 0
+        depth = depth + (countByte text: s b: 123) - (countByte text: s b: 125)
+        n: definedOnLine line: s :top :kw
+        w: kw.slotOf text: n.stringView
+        loopWord: (
+            (w == pieceWord.slot.kIf) or (w == pieceWord.slot.kFor) or (w == pieceWord.slot.kWhile)
+        )
+        if n.length > 0 when loopWord.not when (r.contains item: n).not then r.append n.take
+    }
+    return r
+}
+
+# countByte -- how many times `b` occurs in `text`
+countByte: function {text: StringView b: u8} out i64 is {
+    n: i64
+    i: u64
+    for i < text.length loop {
+        if ((text.byteAt :i).or d: 0) == b then n = n + 1
+        i = i + 1
+    }
+    return n
+}
+
+# definedOnLine -- the name one line of a piece defines, "" for none: in order,
+# a library's prototype at file level (`int f(T x);`, `top`), a `#define`, a
+# struct's closing `} NAME;`, a one-line struct typedef, then declaredOnLine's
+definedOnLine: function {line: StringView top: bool kw: zast.Vocab.view} out String is {
+    if top then {
+        pn: prototypeName :line :kw
+        if pn.length > 0 then return pn
+    }
+    if line.startsWith "#" then return (defineName :line)
+    if line.startsWith "}" then {
+        cn: closeName :line
+        if cn.length > 0 then return cn
+    }
+    if (startsWord :line word: "typedef") then {
+        tn: structTypedefName :line
+        if tn.length > 0 then return tn
+    }
+    return (declaredOnLine :line)
+}
+
+# declaredOnLine -- definedOnLine's last shapes: a static whose type is a macro
+# call, a plain typedef (a function pointer's name), a static or extern
+# declaration
+declaredOnLine: function {line: StringView} out String is {
+    sx: (startsWord :line word: "static") or (startsWord :line word: "extern")
+    if sx then {
+        mn: macroStaticName :line
+        if mn.length > 0 then return mn
+    }
+    td: (startsWord :line word: "typedef") or (extensionTypedef :line)
+    if td when line.endsWith ";" when (line.contains needle: "{").not then return (typedefName :line
+    )
+    if sx then return (declName :line)
+    return "".string
+}
+
+# extensionTypedef -- whether `line` opens with `__extension__`, spaces, then
+# the word `typedef`
+extensionTypedef: function {line: StringView} out bool is {
+    if (startsWord :line word: "__extension__").not then return false
+    p: skipSpaces text: line from: 13
+    if p == 13 then return false
+    return (startsWord line: (line.substring from: p to: line.length) word: "typedef")
+}
+
+# startsWord -- whether `line` opens with `word` and no letter, digit or `_` after it
+startsWord: function {line: StringView word: StringView} out bool is {
+    if (line.startsWith word).not then return false
+    return (isWordByte b: ((line.byteAt i: word.length).or d: 0)).not
+}
+
+# prototypeName -- `[const ][unsigned ]T[ *]+NAME (...) ;` with T no keyword and
+# no `=` in the line: NAME, each optional word tried taken, then not
+prototypeName: function {line: StringView kw: zast.Vocab.view} out String is {
+    if (line.contains needle: "=") or (line.endsWith ";").not then return "".string
+    starts: ListVal u64
+    c: afterWord :line from: 0 word: "const"
+    if c > 0 then {
+        cu: afterWord :line from: c word: "unsigned"
+        if cu > 0 then starts.append cu
+        starts.append c
+    }
+    u: afterWord :line from: 0 word: "unsigned"
+    if u > 0 then starts.append u
+    starts.append 0
+    for each st: starts loop {
+        n: protoAt :line from: st :kw
+        if n.length > 0 then return n
+    }
+    return "".string
+}
+
+# afterWord -- past `word` at `from` and the one or more spaces after it; 0 when
+# `word` and a space are not there
+afterWord: function {line: StringView from: u64 word: StringView} out u64 is {
+    if ((line.substring :from to: line.length).startsWith word).not then return 0
+    p: skipSpaces text: line from: from + word.length
+    if p == (from + word.length) then return 0
+    return p
+}
+
+# protoAt -- prototypeName from `from` on, its optional words read: T, one or
+# more spaces or `*`, NAME, spaces, `(`, anything, `)`, spaces, `;` at the end
+protoAt: function {line: StringView from: u64 kw: zast.Vocab.view} out String is {
+    b0: (line.byteAt i: from).or d: 0
+    if (isWordByte b: b0).not or (isDigit b: b0) then return "".string
+    te: wordEnd text: line :from
+    w: kw.slotOf text: (line.substring :from to: te)
+    flow: (w == pieceWord.slot.kReturn) or (w == pieceWord.slot.kElse)
+    storage: (
+        (w == pieceWord.slot.kStatic) or
+        (w == pieceWord.slot.kExtern) or
+        (w == pieceWord.slot.kTypedef)
+    )
+    if flow or storage then return "".string
+    p: te
+    for p < line.length while (
+        (((line.byteAt i: p).or d: 0) == 32) or
+        (((line.byteAt i: p).or d: 0) == 42) or
+        (((line.byteAt i: p).or d: 0) == 9)
+    ) loop p = p + 1
+    if p == te then return "".string
+    b1: (line.byteAt i: p).or d: 0
+    if (isWordByte b: b1).not or (isDigit b: b1) then return "".string
+    ne: wordEnd text: line from: p
+    q: skipSpaces text: line from: ne
+    if ((line.byteAt i: q).or d: 0) != 40 then return "".string
+    head: line.substring from: 0 to: line.length - 1
+    head2: head.trimEnd
+    if (head2.endsWith ")").not then return "".string
+    if (head2.length - 1) < (q + 1) then return "".string
+    return (line.substring from: p to: ne).string
+}
+
+# skipSpaces -- past the spaces and tabs from `from`
+skipSpaces: function {text: StringView from: u64} out u64 is {
+    i: from
+    for i < text.length while (
+        (((text.byteAt :i).or d: 0) == 32) or (((text.byteAt :i).or d: 0) == 9)
+    ) loop i = i + 1
+    return i
+}
+
+# defineName -- the name a `#define` line defines, "" for any other
+# preprocessor line
+defineName: function {line: StringView} out String is {
+    d: directive :line
+    if (startsWord line: d word: "define").not then return "".string
+    p: skipSpaces text: d from: 6
+    if p == 6 then return "".string
+    e: p
+    for e < d.length while (isNameByte b: ((d.byteAt i: e).or d: 0)) loop e = e + 1
+    return (d.substring from: p to: e).string
+}
+
+# closeName -- NAME in `} NAME;` at the start of `line`
+closeName: function {line: StringView} out String is {
+    p: skipSpaces text: line from: 1
+    e: p
+    for e < line.length while (isNameByte b: ((line.byteAt i: e).or d: 0)) loop e = e + 1
+    if e == p then return "".string
+    q: skipSpaces text: line from: e
+    if ((line.byteAt i: q).or d: 0) != 59 then return "".string
+    return (line.substring from: p to: e).string
+}
+
+# structTypedefName -- NAME in a one-line `typedef ... } NAME;` whose braces
+# balance
+structTypedefName: function {line: StringView} out String is {
+    if (countByte text: line b: 123) != (countByte text: line b: 125) then return "".string
+    if (line.endsWith ";").not then return "".string
+    j: line.length - 1
+    for j > 0 while ((line.byteAt i: j - 1).or d: 0) == 32 loop j = j - 1
+    e: j
+    for j > 0 while (isNameByte b: ((line.byteAt i: j - 1).or d: 0)) loop j = j - 1
+    if j == e then return "".string
+    s: j
+    for j > 0 while ((line.byteAt i: j - 1).or d: 0) == 32 loop j = j - 1
+    if (j == 0) or (((line.byteAt i: j - 1).or d: 0) != 125) then return "".string
+    return (line.substring from: s to: e).string
+}
+
+# macroStaticName -- NAME in `static T(...) NAME;` or `= ...;`: a static whose
+# type is a macro call, no `=`, `;` or `(` before the call
+macroStaticName: function {line: StringView} out String is {
+    o: line.indexOf needle: "("
+    if o.none then return "".string
+    {
+        pre: line.substring from: 0 to: o
+        if (pre.contains needle: "=") or (pre.contains needle: ";") then return "".string
+    }
+    c: o + 1
+    for c < line.length while (
+        (((line.byteAt i: c).or d: 0) != 40) and (((line.byteAt i: c).or d: 0) != 41)
+    ) loop c = c + 1
+    if ((line.byteAt i: c).or d: 0) != 41 then return "".string
+    p: skipSpaces text: line from: c + 1
+    e: p
+    for e < line.length while (isNameByte b: ((line.byteAt i: e).or d: 0)) loop e = e + 1
+    if e == p then return "".string
+    q: skipSpaces text: line from: e
+    b: (line.byteAt i: q).or d: 0
+    if b == 59 when q == (line.length - 1) then return (line.substring from: p to: e).string
+    if b == 61 when line.endsWith ";" then return (line.substring from: p to: e).string
+    return "".string
+}
+
+# typedefName -- a plain typedef's name: a function pointer's `(*NAME)`, else
+# the last name of the line before its `;`
+typedefName: function {line: StringView} out String is {
+    fp: pointerName :line
+    if fp.length > 0 then return fp
+    ids: identsOf text: (line.substring from: 0 to: line.length - 1)
+    if ids.length == 0 then return "".string
+    return (ids.get i: ids.length - 1).copy
+}
+
+# pointerName -- NAME in the first `( [T ]* NAME )` of `line`
+pointerName: function {line: StringView} out String is {
+    i: u64
+    for i < line.length loop {
+        if ((line.byteAt :i).or d: 0) == 40 then {
+            n: pointerAt :line open: i
+            if n.length > 0 then return n
+        }
+        i = i + 1
+    }
+    return "".string
+}
+
+# pointerAt -- NAME in `( [T ]* NAME )` with its `(` at `open`, a type word
+# before the `*` tried first
+pointerAt: function {line: StringView open: u64} out String is {
+    p: skipSpaces text: line from: open + 1
+    we: wordEnd text: line from: p
+    if we > p then {
+        q: skipSpaces text: line from: we
+        if q > we when ((line.byteAt i: q).or d: 0) == 42 then {
+            n: starName :line from: q
+            if n.length > 0 then return n
+        }
+    }
+    if ((line.byteAt i: p).or d: 0) != 42 then return "".string
+    return (starName :line from: p)
+}
+
+# starName -- the pointer's name in `* NAME )`, its `*` at `from`; "" when the
+# text there has no such shape
+starName: function {line: StringView from: u64} out String is {
+    p: skipSpaces text: line from: from + 1
+    e: p
+    for e < line.length while (isNameByte b: ((line.byteAt i: e).or d: 0)) loop e = e + 1
+    if e == p then return "".string
+    q: skipSpaces text: line from: e
+    if ((line.byteAt i: q).or d: 0) != 41 then return "".string
+    return (line.substring from: p to: e).string
+}
+
+# declName -- a static or extern declaration's name: the first name before a
+# `(` (a function), unless the first `(` opens a pointer `(*`; else the last
+# name before any `[`
+declName: function {line: StringView} out String is {
+    pre: line.substring from: 0 to: ((line.indexOf needle: "=").or d: line.length)
+    pre2: pre.substring from: 0 to: ((pre.indexOf needle: ";").or d: pre.length)
+    o: pre2.indexOf needle: "("
+    pointer: false
+    match (
+        o
+    ) case some then {
+        pointer = ((pre2.byteAt i: (skipSpaces text: pre2 from: o + 1)).or d: 0) == 42
+    } case none then null
+    if pointer.not then {
+        fnName: calledName text: pre2
+        if fnName.length > 0 then return fnName
+    }
+    cut: pre2.substring from: 0 to: ((pre2.indexOf needle: "[").or d: pre2.length)
+    ids: identsOf text: cut
+    if ids.length == 0 then return "".string
+    return (ids.get i: ids.length - 1).copy
+}
+
+# calledName -- the first name followed, spaces between, by `(`
+calledName: function {text: StringView} out String is {
+    i: u64
+    for i < text.length loop {
+        if ((text.byteAt :i).or d: 0) == 40 then {
+            j: i
+            for j > 0 while (
+                (((text.byteAt i: j - 1).or d: 0) == 32) or (((text.byteAt i: j - 1).or d: 0) == 9)
+            ) loop j = j - 1
+            e: j
+            for j > 0 while (isNameByte b: ((text.byteAt i: j - 1).or d: 0)) loop j = j - 1
+            if e > j then return (text.substring from: j to: e).string
+        }
+        i = i + 1
+    }
+    return "".string
+}

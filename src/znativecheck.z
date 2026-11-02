@@ -15,6 +15,8 @@ schema: nativec.runtime.nativec
 checkWord: list {
     # the check of the rows against the declarations
     cNative: "native"
+    # the check of the pieces' needs (znativepieces)
+    cPiece: "piece"
     # the units whose names every unit sees
     uSystem: "system"
     uCore: "core"
@@ -73,27 +75,35 @@ Decls: class {
     members: NameSets
 }
 
-# checkNatives -- run check `what` over the rows zc carries and the declarations
-# under `systemdir`; print each finding once, then a summary. Answers the exit
+# checkNatives -- run check `what` over the rows zc carries: `native` against
+# the declarations under `systemdir`, `piece` against the emitter's source at
+# `emitter` too. Prints each finding once, then a summary. Answers the exit
 # code: 0 when nothing was found, 1 when something was, 2 for an unknown check.
-checkNatives: function {what: StringView systemdir: StringView} out i32 is {
+checkNatives: function {what: StringView systemdir: StringView emitter: StringView} out i32 is {
     words: zast.Vocab.create block: checkWord
-    if (words.slotOf text: what) != checkWord.slot.cNative then {
-        io.eprintln "zc natives check: unknown check '\{what}' (native)"
+    w: words.slotOf text: what
+    fails: List String
+    n: String
+    guard: "native-guard"
+    if w == checkWord.slot.cNative then {
+        d: readDecls :systemdir :words
+        texts: allTexts
+        n = checkNative :d :texts :fails
+    } else if w == checkWord.slot.cPiece then {
+        guard = "piece-guard"
+        n = znativepieces.checkPieces :emitter :fails
+    } else {
+        io.eprintln "zc natives check: unknown check '\{what}' (native, piece)"
         return 2
     }
-    d: readDecls :systemdir :words
-    texts: allTexts
-    fails: List String
-    n: checkNative :d :texts :fails
     said: Set String
     for each f: fails loop {
         if (said.has item: f) then continue
         said.add item: f.copy
-        print "native-guard: \{f}"
+        print "\{guard} FAIL: \{f}"
     }
+    print "\{guard}: \{n}"
     if fails.length > 0 then return 1
-    print "native-guard OK: \{n}"
     return 0
 }
 
