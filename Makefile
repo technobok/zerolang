@@ -1299,7 +1299,7 @@ perf: $(PERFBIN)
 # deletes write-only allocations; perf-elision measures that), a failed run and
 # allocs != frees. Above ALLOC_BASELINE fails; a commit raising it says why in
 # its message, and one lowering the count lowers it here.
-ALLOC_BASELINE := 2788457
+ALLOC_BASELINE := 2796005
 # ALLOC_LINE -- the one measurement every allocation number comes from.
 ALLOC_LINE = valgrind --tool=memcheck $(PERFRUN) 2>&1 | grep 'total heap usage' | sed 's/.*usage: //'
 
@@ -2687,7 +2687,10 @@ clean:
 # emitter looks it up in unit order); no text spells a tag constant or a
 # generated struct's member literally; a value row's body calls nothing and
 # opens no statement expression, and a constant variant is a value exactly when
-# its plain row is.
+# its plain row is; every native operator has a row in its unit and every
+# operator row implements one; every conversion between two numeric types is
+# declared native, answers a resultval exactly when it can fail, and has the
+# row the numeric rule gives (body, needs and form; `zc natives` prints them).
 native-guard: bin/zc
 	@bin/zc natives check native --system lib/system
 
@@ -2788,37 +2791,12 @@ zl-full-guard: bin/zl
 	if [ $$fail -ne 0 ]; then exit 1; fi; \
 	echo "zl-full-guard OK: --full runs without flags from a foreign cwd and without a runtime, says why when it cannot, places a dependency's error in its own file, and lints a subunit as itself"
 
-# natives-tbl-guard -- every native operator the system units declare has exactly
-# one natives.tbl row and every row a declaration; the generated conversions
-# section is `zc natives` output and matches each declared return; every frag=
-# names a fragment on disk. LC_ALL=C: other collations fold punctuation in sort.
+# natives-tbl-guard -- src/runtime/natives.tbl, which `--runtime` still reads, agrees
+# with what zc carries: its generated conversions section is `zc natives` output, and
+# every frag= names a fragment on disk. (The rows zc carries are checked by
+# native-guard: operators, and conversions against the rule.)
 natives-tbl-guard: bin/zc
-	@fail=0; d=$$(mktemp -d); \
-	for f in lib/system/system.z lib/system/system/*.z lib/system/collections.z; do \
-	  u=system; case "$$f" in *collections.z) u=collections;; esac; \
-	  awk -v U=$$u '/^[A-Za-z_][A-Za-z0-9_]*: (record|variant|class)( |$$)/ {o=$$1; sub(/:$$/,"",o)} \
-	    o != "" && /^    ([-+*\/%&<>=!|^]+|and|or|not): function .*is native/ {op=$$1; sub(/:$$/,"",op); print U"."o"."op}' \
-	    $$f; \
-	done | LC_ALL=C sort -u > $$d/decl; \
-	grep -oE '^\[[a-z]+\.[A-Za-z0-9_]+\.([-+*/%&<>=!|^]+|and|or|not)[] ]' src/runtime/natives.tbl \
-	  | sed -e 's/^\[//' -e 's/[] ]$$//' | LC_ALL=C sort -u > $$d/rows; \
-	miss=$$(LC_ALL=C comm -23 $$d/decl $$d/rows); \
-	orph=$$(LC_ALL=C comm -13 $$d/decl $$d/rows); \
-	if [ -n "$$miss" ]; then \
-	  echo "natives-tbl-guard FAIL: declared native, no row in natives.tbl:"; \
-	  echo "$$miss" | sed 's/^/    /'; fail=1; \
-	fi; \
-	if [ -n "$$orph" ]; then \
-	  echo "natives-tbl-guard FAIL: row in natives.tbl names no native declaration:"; \
-	  echo "$$orph" | sed 's/^/    /'; fail=1; \
-	fi; \
-	n=$$(wc -l < $$d/decl); rm -rf $$d; d2=$$(mktemp -d); \
-	if [ $$fail -ne 0 ]; then \
-	  echo "  Add the row, or drop it -- an operator resolves to its path and an"; \
-	  echo "  absent path is 'no native implementation', not a fallthrough."; \
-	  exit 1; \
-	fi; \
-	echo "natives-tbl-guard OK: $$n declared native operators, each with exactly one row"; \
+	@d2=$$(mktemp -d); \
 	sed -n '/BEGIN GENERATED CONVERSIONS/,/END GENERATED CONVERSIONS/p' src/runtime/natives.tbl \
 	  | sed '1,5d;$$d' > $$d2/section 2>/dev/null || true; \
 	bin/zc natives > $$d2/gen; \
@@ -2829,30 +2807,8 @@ natives-tbl-guard: bin/zc
 	  echo "  and the table did not, which is the drift this check exists to catch."; \
 	  exit 1; \
 	fi; \
-	cn=$$(grep -c "^\[" $$d2/gen); \
-	NUM='^(i8|i16|i32|i64|i128|u8|u16|u32|u64|u128|c8|c32|f16|f32|f64|f128)$$'; \
-	for f in lib/system/system.z lib/system/system/*.z; do \
-	  awk -v U=system -v NUM="$$NUM" '/^[A-Za-z_][A-Za-z0-9_]*: (record|variant|class)( |$$)/ {o=$$1; sub(/:$$/,"",o)} \
-	    o ~ NUM && /^    [a-z][a-z0-9]*: function \{(:this|t: this\.view)\} out .* is native/ { \
-	      n=$$1; sub(/:$$/,"",n); if (n ~ NUM) { k=($$0 ~ /resultval/) ? "lossy" : "safe"; print U"."o"."n" "k } }' \
-	    $$f; \
-	done | LC_ALL=C sort -u > $$d2/declkind; \
-	grep '^\[' $$d2/gen \
-	  | sed -E 's/^\[([^] ]*)[^]]*\] +.*@ERRTAG@.*/\1 lossy/; t; s/^\[([^] ]*)[^]]*\] +.*/\1 safe/' \
-	  | LC_ALL=C sort -u > $$d2/rowkind; \
-	nd=$$(wc -l < $$d2/declkind); nr=$$(wc -l < $$d2/rowkind); \
-	if [ "$$nd" != "$$nr" ]; then \
-	  echo "natives-tbl-guard FAIL: $$nd declared conversions but $$nr rows"; exit 1; \
-	fi; \
-	bad=$$(LC_ALL=C join -j1 -o 0,1.2,2.2 $$d2/declkind $$d2/rowkind 2>/dev/null | awk '$$2 != $$3'); \
-	if [ -n "$$bad" ]; then \
-	  echo "natives-tbl-guard FAIL: a conversion row disagrees with its declared return:"; \
-	  echo "$$bad" | sed 's/^/    /' | head -8; \
-	  echo "  A resultval declaration must build one; a direct one must be a plain conversion."; \
-	  exit 1; \
-	fi; \
-	rm -rf $$d2; \
-	echo "natives-tbl-guard OK: $$cn generated conversion rows, each matching its declared return"; \
+	cn=$$(grep -c "^\[" $$d2/gen); rm -rf $$d2; \
+	echo "natives-tbl-guard OK: $$cn generated conversion rows, as zc natives prints them"; \
 	d3=$$(mktemp -d); fail=0; \
 	{ grep -oE '^\[[^]]*frag=[A-Z0-9_,]+' src/runtime/natives.tbl \
 	  | sed -E 's/^\[([^ ]+).*frag=([A-Z0-9_,]+)/\1 \2/'; \

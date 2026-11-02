@@ -15,6 +15,8 @@ public: unit {
     :servedList
     :servedCallWord
     :nativeConvRows
+    :convKinds
+    :convRule
 }
 
 astnode: zast.astnode
@@ -1223,20 +1225,70 @@ convBodyOf: function {
     return body
 }
 
+# convKinds -- the numeric kinds in the order the conversion rows stand
+convKinds: function out ListVal ztypes.numkind is {
+    # the rows' order: the table is diffed against its checked-in self, so it
+    # is fixed here rather than taken from the kinds' own order
+    order: ListVal ztypes.numkind
+    order.append ztypes.numkind.u8Type
+    order.append ztypes.numkind.c8Type
+    order.append ztypes.numkind.c32Type
+    order.append ztypes.numkind.i8Type
+    order.append ztypes.numkind.i16Type
+    order.append ztypes.numkind.i32Type
+    order.append ztypes.numkind.i64Type
+    order.append ztypes.numkind.u16Type
+    order.append ztypes.numkind.u32Type
+    order.append ztypes.numkind.u64Type
+    order.append ztypes.numkind.f32Type
+    order.append ztypes.numkind.f64Type
+    order.append ztypes.numkind.i128Type
+    order.append ztypes.numkind.u128Type
+    order.append ztypes.numkind.f16Type
+    order.append ztypes.numkind.f128Type
+    return order
+}
+
+# ConvRule -- what the numeric rule gives the row of one conversion
+ConvRule: class {
+    # the conversion can fail, so it answers a resultval
+    lossy: bool
+    # the row's form is a value
+    value: bool
+    body: String
+    # the helpers the row calls, as a row's needs
+    needs: List String
+}
+
+# convRule -- the row the rule gives the conversion from `srcK` to `dstK`
+convRule: function {srcK: ztypes.numkind dstK: ztypes.numkind} out ConvRule is {
+    lo: convIsLossy :srcK :dstK
+    nds: List String
+    bd: convBodyOf :srcK :dstK lossy: lo needs: nds
+    return (
+        ConvRule
+        lossy: lo
+        value: (convIsValue :srcK :dstK lossy: lo)
+        body: bd
+        needs: (convNeeds :srcK :dstK needs: nds)
+    )
+}
+
 # convRowHead -- a conversion row's head, `[system.<src>.<dst> ...]`: the
 # helpers the row calls, and whether it is a value, go inside the bracket.
 convRowHead: function {
-    srcK: ztypes.numkind dstK: ztypes.numkind lossy: bool needs: (List String).view
+    srcK: ztypes.numkind dstK: ztypes.numkind rule: ConvRule.view
 } out String is {
     sn: ztypes.numkindName k: srcK
     dn: ztypes.numkindName k: dstK
     head: "[system.\{sn}.\{dn}"
-    nds: convNeeds :srcK :dstK :needs
-    if nds.length > 0 then {
-        head.append " needs="
-        head.append nds
+    sep: " needs="
+    for each n: rule.needs loop {
+        head.append sep
+        head.append n
+        sep = ","
     }
-    if (convIsValue :srcK :dstK :lossy) then head.append " form=value"
+    if rule.value then head.append " form=value"
     head.append "]"
     return head
 }
@@ -1252,27 +1304,25 @@ convIsValue: function {srcK: ztypes.numkind dstK: ztypes.numkind lossy: bool} ou
     return (half or wide).not
 }
 
-# convNeeds -- the helper fragments a conversion row calls, as its `needs=`
-# list: the int128 or f16 fragment's row for a 128-bit integer or an f16 on
-# either side, then each prelude piece its body calls, as the body's builders
-# recorded them (convNeed), once each in the order first called. "" for a row
-# that needs none.
+# convNeeds -- the helper fragments a conversion row calls, as its needs: the
+# int128 or f16 fragment's row for a 128-bit integer or an f16 on either side,
+# then each prelude piece its body calls, as the body's builders recorded them
+# (convNeed), once each in the order first called
 convNeeds: function {
     srcK: ztypes.numkind dstK: ztypes.numkind needs: (List String).view
-} out String is {
-    r: String
-    if ((kindBits k: srcK) == 128) or ((kindBits k: dstK) == 128) then r.append "prelude.int128"
-    if (srcK == ztypes.numkind.f16Type) or (dstK == ztypes.numkind.f16Type) then {
-        if r.length > 0 then r.append ","
-        r.append "prelude.f16"
-    }
+} out List String is {
+    r: List String
+    if (
+        ((kindBits k: srcK) == 128) or ((kindBits k: dstK) == 128)
+    ) then r.append "prelude.int128".string
+    if (
+        (srcK == ztypes.numkind.f16Type) or (dstK == ztypes.numkind.f16Type)
+    ) then r.append "prelude.f16".string
     seen: Set String
     for each p: needs loop {
         if (seen.has item: p) then continue
         seen.add item: p.copy
-        if r.length > 0 then r.append ","
-        r.append "prelude."
-        r.append p
+        r.append "prelude.\{p}"
     }
     return r
 }
@@ -1302,25 +1352,7 @@ convNeedCall: function {needs: List String call: StringView} is {
 # natives-tbl-guard regenerates this and diffs it against the checked-in file,
 # so the table is provably the rule's own output.
 nativeConvRows: function out String is {
-    # the rows' order: the table is diffed against its checked-in self, so it
-    # is fixed here rather than taken from the kinds' own order
-    order: ListVal ztypes.numkind
-    order.append ztypes.numkind.u8Type
-    order.append ztypes.numkind.c8Type
-    order.append ztypes.numkind.c32Type
-    order.append ztypes.numkind.i8Type
-    order.append ztypes.numkind.i16Type
-    order.append ztypes.numkind.i32Type
-    order.append ztypes.numkind.i64Type
-    order.append ztypes.numkind.u16Type
-    order.append ztypes.numkind.u32Type
-    order.append ztypes.numkind.u64Type
-    order.append ztypes.numkind.f32Type
-    order.append ztypes.numkind.f64Type
-    order.append ztypes.numkind.i128Type
-    order.append ztypes.numkind.u128Type
-    order.append ztypes.numkind.f16Type
-    order.append ztypes.numkind.f128Type
+    order: convKinds
     buf: String
     si: u64
     n: order.length
@@ -1334,13 +1366,10 @@ nativeConvRows: function out String is {
         for di < n loop {
             d: order.get i: di
             di = di + 1
-            lo: convIsLossy srcK: s dstK: d
-            nds: List String
-            bd: convBodyOf srcK: s dstK: d lossy: lo needs: nds
-            key: convRowHead srcK: s dstK: d lossy: lo needs: nds
-            pad: key.copy
+            r: convRule srcK: s dstK: d
+            pad: convRowHead srcK: s dstK: d rule: r
             for pad.length < 30 loop pad.append " "
-            row: "\{pad} \{bd}\n"
+            row: "\{pad} \{r.body}\n"
             buf.append row
         }
     }

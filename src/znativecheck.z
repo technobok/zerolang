@@ -3,7 +3,10 @@
 # against the standard library's declarations. `native`: every native function
 # of a unit with rows has a row; every hole a text spells names a declared type,
 # arm or member, or one the emitter binds; no text spells a tag constant or a
-# generated struct's member literally; a value row's body calls nothing.
+# generated struct's member literally; a value row's body calls nothing; every
+# native operator has a row, and every operator row implements one; every
+# numeric conversion is declared, answering a resultval exactly when it can
+# fail, and has the row the numeric rule gives (zemitterc.convRule).
 
 public: unit {
     :checkNatives
@@ -22,7 +25,20 @@ checkWord: list {
     # the units whose names every unit sees
     uSystem: "system"
     uCore: "core"
+    # the operators spelt as words
+    opAnd: "and"
+    opOr: "or"
+    opNot: "not"
+    # the type a fallible conversion answers
+    tResultval: "resultval"
 } out staticlist StringView
+
+# kindpair -- a conversion: the numeric kinds it converts from and to, each by
+# its tag
+kindpair: record {
+    src: u8
+    dst: u8
+}
 
 # NativeText -- one text a row, a template or a fixed file holds, and where:
 # `row io.eprintln`, `template List`, `file head`
@@ -75,6 +91,14 @@ Decls: class {
     arms: NameSets
     # the members of each record, class, variant, union, protocol and facet
     members: NameSets
+    # the native operators of each type, and the unit declaring each such type
+    operators: NameSets
+    typeUnit: (Map String V: String)
+    # the native conversions each numeric type declares, and those of them that
+    # answer a resultval
+    conversions: NameSets
+    lossy: NameSets
+    words: zast.Vocab
 }
 
 # checkNatives -- run check `what` over the rows zc carries: `native` against
@@ -122,6 +146,8 @@ checkNative: function {
     d: Decls.view texts: (List NativeText).view fails: List String
 } out String is {
     nativeRows :d :fails
+    no: operatorRows :d :fails
+    nc: conversionRows :d :fails
     bound: boundHoles
     nh: holesKnown :d :bound :texts :fails
     holesDeclaredOnce :d :bound :texts :fails
@@ -131,7 +157,8 @@ checkNative: function {
     nv: valueRows :fails
     r: "native declarations have rows, \{nh} holes name known types, "
     r.append "\{na} tag-constant holes name declared arms, \{nm} member holes name "
-    r.append "declared members, \{nv} value rows call nothing"
+    r.append "declared members, \{nv} value rows call nothing, \{no} native operators have "
+    r.append "rows, \{nc} conversions are declared and written as the numeric rule gives them"
     return r
 }
 
@@ -146,6 +173,11 @@ readDecls: function {systemdir: StringView words: zast.Vocab.view} out Decls is 
         natives: newNameSets
         arms: newNameSets
         members: newNameSets
+        operators: newNameSets
+        typeUnit: (Map String V: String)
+        conversions: newNameSets
+        lossy: newNameSets
+        words: (zast.Vocab.create block: checkWord)
     )
     for each sf: (znativedecls.sourceFiles :systemdir) loop {
         sw: words.slotOf text: sf.owner.stringView
@@ -180,6 +212,8 @@ readDef: function {d: Decls unitName: StringView sys: bool tree: zast.Ast.view i
             if op.isNative then d.natives.add key: unitName name: nm.stringView
         } case objectdef then {
             readMembers :d type: nm.stringView :tree items: op.isItems kind: op.kind
+            readNativeMethods :d :unitName type: nm.stringView :tree items: op.isItems
+            readNativeMethods :d :unitName type: nm.stringView :tree items: op.asItems
         } else null
     } else null
 }
@@ -202,6 +236,283 @@ readMembers: function {
             d.members.add key: type name: mn.stringView
         } else null
     }
+}
+
+# readNativeMethods -- the native methods among a type's `items`: its
+# operators, and, on a numeric type, its conversions
+readNativeMethods: function {
+    d: Decls unitName: StringView type: StringView tree: zast.Ast.view items: zast.kidspan
+} is {
+    for each k: (zast.kidIds ast: tree span: items) loop {
+        it: tree.nodes.get i: k
+        match (
+            it
+        ) case namedoperation then {
+            fd: tree.nodes.get i: it.operation
+            match (
+                fd
+            ) case functiondef then {
+                if fd.isNative then readNativeMethod :d :unitName :type :tree name: it.name fn: fd
+            } else null
+        } else null
+    }
+}
+
+# readNativeMethod -- native method `name` of type `type`, when it is an
+# operator or a conversion
+readNativeMethod: function {
+    d: Decls
+    unitName: StringView
+    type: StringView
+    tree: zast.Ast.view
+    name: zast.nameid
+    fn: zast.functionrow
+} is {
+    nm: zast.poolTextAt pool: tree.names ref: name
+    if (isOperator words: d.words text: nm.stringView) then {
+        d.operators.add key: type name: nm.stringView
+        d.typeUnit.set key: type.string value: unitName.string
+    }
+    if (isConversion :tree :type name: nm.stringView params: fn.parameters).not then return
+    d.conversions.add key: type name: nm.stringView
+    if (answersResult :tree words: d.words id: fn.returntype) then (
+        d.lossy.add
+        key: type
+        name: nm.stringView
+    )
+}
+
+# isOperator -- `text` names an operator: `and`, `or`, `not`, or a run of
+# operator symbols
+isOperator: function {words: zast.Vocab.view text: StringView} out bool is {
+    w: words.slotOf :text
+    if (
+        (w == checkWord.slot.opAnd) or (w == checkWord.slot.opOr) or (w == checkWord.slot.opNot)
+    ) then return true
+    if text.length == 0 then return false
+    for each b: text.byteView loop {
+        if (isOperatorByte :b).not then return false
+    }
+    return true
+}
+
+# isOperatorByte -- a byte a symbolic operator's name is made of (`- + * / % &
+# < > = ! | ^`); the operators spelt as words are checkWord's
+isOperatorByte: function {b: u8} out bool is {
+    if (b == 45) or (b == 43) or (b == 42) or (b == 47) or (b == 37) or (b == 38) then return true
+    return (b == 60) or (b == 62) or (b == 61) or (b == 33) or (b == 124) or (b == 94)
+}
+
+# isConversion -- method `name` of type `type` is a conversion: both name
+# numeric kinds, and it takes the receiver alone
+isConversion: function {
+    tree: zast.Ast.view type: StringView name: StringView params: zast.kidspan
+} out bool is {
+    if (ztypes.numkindByName name: type).has.not then return false
+    if (ztypes.numkindByName :name).has.not then return false
+    if (zast.kidIds ast: tree span: params).length != 1 then return false
+    return (znativedecls.receiverOf :tree :params).absent.not
+}
+
+# answersResult -- return type `id` is a resultval
+answersResult: function {tree: zast.Ast.view words: zast.Vocab.view id: zast.nodeid} out bool is {
+    rt: tree.nodes.get i: id
+    match (
+        rt
+    ) case call then {
+        c: tree.nodes.get i: rt.callable
+        match (
+            c
+        ) case atomid then {
+            t: zast.poolTextAt pool: tree.names ref: c.name
+            return (words.slotOf text: t.stringView) == checkWord.slot.tResultval
+        } else null
+    } else null
+    return false
+}
+
+# operatorRows -- every native operator has a row of its key in its unit's
+# file, and every operator row implements a native operator of its unit;
+# answers how many native operators there are
+operatorRows: function {d: Decls.view fails: List String} out u64 is {
+    rowOps: newNameSets
+    for each u: nativec.units loop {
+        for each w: u.implementation.rows loop (
+            operatorRow
+            :d
+            owner: u.name.stringView
+            key: w.key.stringView
+            :rowOps
+            :fails
+        )
+    }
+    n: u64
+    for each t: d.operators.index loop {
+        k: (d.operators.index.get key: t.copy).or d: 0
+        ops: List String
+        for each o: (d.operators.sets.get i: k) loop ops.append from: o.copy
+        ops.sort
+        n = n + ops.length
+        for each o: ops loop {
+            if (rowOps.has key: t.stringView name: o.stringView).not then fails.append (
+                operatorWithoutRow
+                :d
+                type: t.stringView
+                op: o.stringView
+            )
+        }
+    }
+    return n
+}
+
+# operatorRow -- row `key` of unit `owner`, when it is an operator's: into
+# `rowOps` when it implements a native operator of its unit, else a finding
+operatorRow: function {
+    d: Decls.view owner: StringView key: StringView rowOps: NameSets fails: List String
+} is {
+    dot: (key.indexOf needle: ".").or d: key.length
+    if dot == key.length then return
+    if (isOperator words: d.words text: (key.substring from: dot + 1 to: key.length)
+    ).not then return
+    if (addOperatorRow :d :owner :key :dot :rowOps) then return
+    fails.append "\{(
+        rowWhere
+        :owner
+        :key
+    )} implements no native operator of unit \{owner} (declare it native, or drop the row)"
+}
+
+# addOperatorRow -- operator row `key` (its type before `dot`) into `rowOps`
+# when it implements a native operator of its unit `owner`
+addOperatorRow: function {
+    d: Decls.view owner: StringView key: StringView dot: u64 rowOps: NameSets
+} out bool is {
+    t: key.substring from: 0 to: dot
+    m: key.substring from: dot + 1 to: key.length
+    if (d.operators.has key: t name: m).not then return false
+    if (unitOf :d type: t) != owner then return false
+    rowOps.add key: t name: m
+    return true
+}
+
+# operatorWithoutRow -- the finding for native operator `op` of `type`, which
+# has no row
+operatorWithoutRow: function {d: Decls.view type: StringView op: StringView} out String is {
+    u: unitOf :d :type
+    return "native operator \{(
+        dotted
+        a: type
+        b: op
+    )} of unit \{u} has no row in its nativec.zd (add the row)"
+}
+
+# unitOf -- the unit declaring type `type`
+unitOf: function {d: Decls.view type: StringView} out String is {
+    u: d.typeUnit.get key: type.string
+    match (
+        u
+    ) case some then {
+        return u.copy
+    } case none then return String
+}
+
+# dotted -- a member as a finding names it, `<type>.<name>`: the check keys
+# members by their two parts and joins them only for the message
+dotted: function {a: StringView b: StringView} out String is {
+    r: a.string
+    r.append "."
+    r.append b
+    return r
+}
+
+# conversionRows -- each conversion's row in system's file is the one the
+# numeric rule gives (zemitterc.convRule: its body, needs and form), and each
+# numeric type declares each conversion, answering a resultval exactly when the
+# rule calls it lossy; answers how many conversions there are
+conversionRows: function {d: Decls.view fails: List String} out u64 is {
+    rows: rulesMet :d :fails
+    kinds: zemitterc.convKinds
+    n: u64
+    for each s: kinds loop {
+        for each t: kinds loop {
+            n = n + 1
+            sn: ztypes.numkindName k: s
+            tn: ztypes.numkindName k: t
+            nm: dotted a: sn.stringView b: tn.stringView
+            if (rows.has item: (kindpair src: s.tag dst: t.tag)
+            ).not then fails.append "conversion \{nm} has no row in system's nativec.zd (write the one `zc natives` prints)"
+            lossy: (zemitterc.convRule srcK: s dstK: t).lossy
+            if (d.conversions.has key: sn.stringView name: tn.stringView).not then {
+                fails.append "conversion \{nm} is not declared native on \{sn} (declare it)"
+            } else if (d.lossy.has key: sn.stringView name: tn.stringView) != lossy then {
+                fails.append "conversion \{nm} must answer a resultval exactly when it can fail, and the rule says it \{(
+                    failText
+                    :lossy
+                )}"
+            }
+        }
+    }
+    return n
+}
+
+# rulesMet -- the conversions whose plain row in system's file the check met,
+# each compared with the rule's
+rulesMet: function {d: Decls.view fails: List String} out SetVal kindpair is {
+    r: SetVal kindpair
+    for each u: nativec.units loop {
+        if (d.words.slotOf text: u.name.stringView) != checkWord.slot.uSystem then continue
+        for each w: u.implementation.rows loop {
+            if (w.fact.length > 0) or (w.constant.length > 0) then continue
+            k: conversionKey key: w.key.stringView
+            if k.has.not then continue
+            r.add item: (kindpair src: k.src.tag dst: k.dst.tag)
+            rule: zemitterc.convRule srcK: k.src dstK: k.dst
+            same: (w.body.stringView == rule.body) and (w.form.value == rule.value)
+            if (
+                same.not or (sameTexts a: w.needs b: rule.needs).not
+            ) then fails.append "row system.\{w.key} is not the numeric rule's (its body, needs or form differ): write the row `zc natives` prints for it"
+        }
+    }
+    return r
+}
+
+# convkey -- a row key read as a conversion's: `<kind>.<kind>`
+convkey: record {
+    # the key names two numeric kinds
+    has: bool
+    src: ztypes.numkind
+    dst: ztypes.numkind
+}
+
+# conversionKey -- row key `key` as a conversion's
+conversionKey: function {key: StringView} out convkey is {
+    dot: (key.indexOf needle: ".").or d: key.length
+    if dot == key.length then return (
+        convkey
+        has: false
+        src: ztypes.numkind.i64Type
+        dst: ztypes.numkind.i64Type
+    )
+    s: ztypes.numkindByName name: (key.substring from: 0 to: dot)
+    t: ztypes.numkindByName name: (key.substring from: dot + 1 to: key.length)
+    return (convkey has: s.has and t.has src: s.kind dst: t.kind)
+}
+
+# sameTexts -- a row's list `a` holds the texts of `b`, in order
+sameTexts: function {a: staticlist text b: (List String).view} out bool is {
+    if a.length != b.length then return false
+    i: u64
+    for each x: a loop {
+        if x.stringView != (b.get :i) then return false
+        i = i + 1
+    }
+    return true
+}
+
+# failText -- the rule's verdict on a conversion, as a finding says it
+failText: function {lossy: bool} out String is {
+    if lossy then return "can".string
+    return "cannot".string
 }
 
 # allTexts -- every text the rows zc carries hold: each row's body, fragments,
