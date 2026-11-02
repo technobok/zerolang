@@ -1709,6 +1709,8 @@ rtinfo: record {
     arms: bool
     # a hole is an `@MEMBER_<canon>.<name>@` member (rtBindMembers)
     members: bool
+    # the text is cut; a deferred one (RtTexts.defer) is not until `ready`
+    parsed: bool
 }
 
 # rtpiece -- one `/*@@member NAME needs=a,b@@*/ ... /*@@end@@*/` section of a
@@ -1851,6 +1853,7 @@ RtTexts: class {
             open: false
             arms: false
             members: false
+            parsed: true
         )
         return r
     }
@@ -1858,6 +1861,39 @@ RtTexts: class {
     # parse -- cut `text` into its stretches and its member sections, and keep
     # it: its id (rtNextMark finds each hole and key, nextPiece each section)
     parse: function {:this text: StringView} out rtid is {
+        this.infos.append (this.cut :text)
+        return (this.texts.append text.string)
+    }
+
+    # defer -- keep `text` uncut: its id, which `ready` cuts on first use. A
+    # row's body is kept so, as most rows go unused by a program
+    defer: function {:this text: StringView} out rtid is {
+        this.infos.append (
+            rtinfo
+            segFrom: 0
+            segTo: 0
+            pieceFrom: 0
+            pieceTo: 0
+            open: false
+            arms: false
+            members: false
+            parsed: false
+        )
+        return (this.texts.append text.string)
+    }
+
+    # ready -- text `id` cut, if it was deferred
+    ready: function {:this id: rtid} is {
+        if (this.infos.get i: id).parsed then return
+        # cut where it stands: moved out of the list for the cut, which appends
+        # to the other lists, then moved back
+        t: this.texts.set i: id val: String
+        this.infos.set i: id val: (this.cut text: t.stringView)
+        this.texts.set i: id val: t.take
+    }
+
+    # cut -- `text`'s stretches and member sections appended, and where they lie
+    cut: function {:this text: StringView} out rtinfo is {
         segFrom: this.segs.length
         pieceFrom: this.pieces.length
         open: false
@@ -1877,7 +1913,7 @@ RtTexts: class {
         this.addLiteral from: lit to: text.length
         if (spells & 4) != 0 then this.addPieces :text openM: "/*@@member "
         if (spells & 8) != 0 then this.addPieces :text openM: "/*@@row "
-        this.infos.append (
+        return (
             rtinfo
             :segFrom
             segTo: this.segs.length
@@ -1886,8 +1922,8 @@ RtTexts: class {
             :open
             arms: (spells & 1) != 0
             members: (spells & 2) != 0
+            parsed: true
         )
-        return (this.texts.append text.string)
     }
 
     # addMark -- the hole or key `m` of `text` as a stretch, its name interned:
@@ -3304,7 +3340,7 @@ recordFragmentRow: function {
 recordRowBodies: function {ctx: Ctx h: NativeHead.view body: StringView} is {
     if body.length > 0 then {
         kb: h.key.copy
-        bid: ctx.rt.parse text: body
+        bid: ctx.rt.defer text: body
         if h.cst.length > 0 then {
             ctx.nativeConstBody.set key: kb value: bid
             kc: h.key.copy
@@ -4620,8 +4656,10 @@ nativeHasBody: function {ctx: Ctx.view path: StringView} out bool is {
 # nativeImplOf -- the C body the rows give for a qualified path, parsed
 # (RtTexts), zero when no row is keyed by it. Zero is the error case at
 # every call site: the compiler supplies no implementation for that declaration.
-nativeImplOf: function {ctx: Ctx.view path: StringView} out rtid is {
-    return ((ctx.nativeTbl.get key: path.asString).or d: rtid.zero)
+nativeImplOf: function {ctx: Ctx path: StringView} out rtid is {
+    id: (ctx.nativeTbl.get key: path.asString).or d: rtid.zero
+    ctx.rt.ready :id
+    return id
 }
 
 # nativeConstImplOf -- the body of the row that answers only when the argument
@@ -4629,8 +4667,10 @@ nativeImplOf: function {ctx: Ctx.view path: StringView} out rtid is {
 # row. A constant position fills with a LITERAL, so the row may spell what only
 # a known value allows: `[system.u64./ const=1]` divides inline, where the plain
 # row calls the helper that checks the divisor.
-nativeConstImplOf: function {ctx: Ctx.view path: StringView} out rtid is {
-    return ((ctx.nativeConstBody.get key: path.asString).or d: rtid.zero)
+nativeConstImplOf: function {ctx: Ctx path: StringView} out rtid is {
+    id: (ctx.nativeConstBody.get key: path.asString).or d: rtid.zero
+    ctx.rt.ready :id
+    return id
 }
 
 # nativeConstPosOf -- the argument positions that row requires to be constant,
@@ -11631,7 +11671,7 @@ nextWrittenParam: function {
 wordOperatorRowBinds: function {
     ast: Ast.view
     symtab: zenv.ZSymbolTable.view
-    ctx: Ctx.view
+    ctx: Ctx
     method: ztypes.tid
     owner: ztypes.tid
     mn: StringView
