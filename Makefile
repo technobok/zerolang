@@ -1259,7 +1259,7 @@ perf: $(PERFBIN)
 # deletes write-only allocations; perf-elision measures that), a failed run and
 # allocs != frees. Above ALLOC_BASELINE fails; a commit raising it says why in
 # its message, and one lowering the count lowers it here.
-ALLOC_BASELINE := 2676689
+ALLOC_BASELINE := 2687204
 # ALLOC_LINE -- the one measurement every allocation number comes from.
 ALLOC_LINE = valgrind --tool=memcheck $(PERFRUN) 2>&1 | grep 'total heap usage' | sed 's/.*usage: //'
 
@@ -1437,8 +1437,8 @@ sqlite-decls-guard:
 	  || { echo "sqlite-decls-guard FAIL: _Z_SQLITE_DECLS.inc disagrees with vendor/sqlite/sqlite3.h -- match the declaration to the vendored header"; exit 1; }; \
 	echo "sqlite-decls-guard OK: the sqlite fragments' declarations match the vendored sqlite3.h"
 
-# cobj-guard -- a unit whose runtime is a C source of its own (a natives.tbl
-# `csrc=` row) builds through the object cache: the first build compiles it
+# cobj-guard -- a unit whose runtime is a C source of its own (a `source` in
+# its nativec.zd) builds through the object cache: the first build compiles it
 # (a miss), the second links the same object (a hit, the same inode), inproc
 # and a spawned tcc get objects of their own, a changed define gets a new key,
 # eight `zc cobj` at once build ONE object and leave no lock or partial file,
@@ -1446,21 +1446,19 @@ sqlite-decls-guard:
 # unit that shares the unit's name but declares nothing native builds nothing.
 cobj-guard: bin/zc $(BUILDDIR)/tcc
 	@d=$$(mktemp -d); fail=0; F=tests/fixtures/cobj; \
-	mkdir -p $$d/rt $$d/rt43; cp -r src/runtime/. $$d/rt/; \
-	cat $$F/cobjdemo.tbl >> $$d/rt/natives.tbl; cp $$F/_Z_COBJDEMO_ANSWER.inc $$d/rt/natives/; \
-	cp -r $$d/rt/. $$d/rt43/; sed -i 's/COBJ_ANSWER=42/COBJ_ANSWER=43/' $$d/rt43/natives.tbl; \
+	mkdir -p $$d/f43; cp -r $$F/. $$d/f43/; sed -i 's/COBJ_ANSWER=42/COBJ_ANSWER=43/' $$d/f43/cobjdemo/nativec.zd; \
 	export ZEROLANG_VENDOR=$$PWD/$$F/vendor ZC_OBJ_CACHE=$$d/cache; \
-	run() { bin/zc run cobjmain --src $$F --system lib/system --runtime "$$@" 2>&1 | tr '\n' ' '; }; \
-	got=$$(run $$d/rt); [ "$$got" = "answer 42 " ] || { echo "cobj-guard FAIL: first build printed '$$got'"; fail=1; }; \
+	run() { bin/zc run cobjmain --system lib/system "$$@" 2>&1 | tr '\n' ' '; }; \
+	got=$$(run --src $$F); [ "$$got" = "answer 42 " ] || { echo "cobj-guard FAIL: first build printed '$$got'"; fail=1; }; \
 	n1=$$(ls $$d/cache/*.o 2>/dev/null | wc -l); i1=$$(ls -i $$d/cache/*.o 2>/dev/null); \
 	[ "$$n1" = 1 ] || { echo "cobj-guard FAIL: the miss left $$n1 objects, want 1"; fail=1; }; \
-	got=$$(run $$d/rt); i2=$$(ls -i $$d/cache/*.o 2>/dev/null); \
+	got=$$(run --src $$F); i2=$$(ls -i $$d/cache/*.o 2>/dev/null); \
 	[ "$$got" = "answer 42 " ] && [ "$$i1" = "$$i2" ] || { echo "cobj-guard FAIL: the second build did not reuse the object ('$$got')"; fail=1; }; \
-	got=$$(run $$d/rt --cc $(BUILDDIR)/tcc --cc-mode inproc); [ "$$got" = "answer 42 " ] || { echo "cobj-guard FAIL: inproc printed '$$got'"; fail=1; }; \
-	got=$$(run $$d/rt --cc $(BUILDDIR)/tcc); [ "$$got" = "answer 42 " ] || { echo "cobj-guard FAIL: a spawned tcc printed '$$got'"; fail=1; }; \
-	got=$$(run $$d/rt43); [ "$$got" = "answer 43 " ] || { echo "cobj-guard FAIL: a changed define printed '$$got'"; fail=1; }; \
+	got=$$(run --src $$F --cc $(BUILDDIR)/tcc --cc-mode inproc); [ "$$got" = "answer 42 " ] || { echo "cobj-guard FAIL: inproc printed '$$got'"; fail=1; }; \
+	got=$$(run --src $$F --cc $(BUILDDIR)/tcc); [ "$$got" = "answer 42 " ] || { echo "cobj-guard FAIL: a spawned tcc printed '$$got'"; fail=1; }; \
+	got=$$(run --src $$d/f43); [ "$$got" = "answer 43 " ] || { echo "cobj-guard FAIL: a changed define printed '$$got'"; fail=1; }; \
 	n2=$$(ls $$d/cache/*.o | wc -l); [ "$$n2" = 4 ] || { echo "cobj-guard FAIL: $$n2 objects after four distinct keys, want 4"; fail=1; }; \
-	bin/zc emit cobjmain --src $$F --system lib/system --runtime $$d/rt -o $$d/m.c; \
+	bin/zc emit cobjmain --src $$F --system lib/system -o $$d/m.c; \
 	grep -q '^/\* zcsrc: answer/answer.c COBJ_ANSWER=42 \*/' $$d/m.c || { echo "cobj-guard FAIL: the emitted header names no zcsrc"; fail=1; }; \
 	export ZC_OBJ_CACHE=$$d/par; \
 	for i in 1 2 3 4 5 6 7 8; do bin/zc cobj $$d/m.c > $$d/p$$i.txt 2>&1 & done; wait; \
@@ -1474,14 +1472,14 @@ cobj-guard: bin/zc $(BUILDDIR)/tcc
 	if [ $$fail -ne 0 ]; then exit 1; fi; \
 	echo "cobj-guard OK: a unit's C source builds once per compiler, target and defines, shared by parallel builds"
 
-# user-native-guard -- a unit outside src/runtime with its own natives.tbl rows and
-# fragments compiles, links and runs, one native in a hidden subunit, and a
+# user-native-guard -- a unit outside the standard library with its own C
+# implementation file (`<unit>/nativec.zd`) compiles, links and runs, one native in a hidden subunit, and a
 # `when=` variant replaces its plain row exactly when its fact holds; and a
 # generic native class (cellar.Cell) is instantiated per element type from the
 # C template its `@class` row names, and a generic native function (cellar.holding)
 # is the template function of the instance it answers; and an `os=windows` @unit row links
-# for a windows target and nowhere else. The runtime dir is built from src/runtime
-# plus the fixture's rows, fragments and template.
+# for a windows target and nowhere else. Each unit's rows, fragments and
+# templates are its own nativec.zd's.
 # A user unit's class template is written whole where it has no member
 # sections, and the member words a section may name are the runtime's own
 # (memberWord): Cell's `puts` and `holding`, which one instance calls and
@@ -1490,12 +1488,8 @@ USERTMPLCFLAGS := -Wno-unused-function
 
 user-native-guard: bin/zc
 	@d=$$(mktemp -d); fail=0; \
-	mkdir -p $$d/rt; cp -r src/runtime/. $$d/rt/; \
-	cat tests/fixtures/user_native/mystery.tbl >> $$d/rt/natives.tbl; \
-	cp tests/fixtures/user_native/_Z_MYSTERY_*.inc $$d/rt/natives/; \
-	cp tests/fixtures/user_native/*.c.tmpl $$d/rt/; \
 	bin/zc mystery --src tests/fixtures/user_native --system lib/system \
-	  --runtime $$d/rt --emit-c $$d/mystery.c > $$d/emit.log 2>&1 \
+	  --emit-c $$d/mystery.c > $$d/emit.log 2>&1 \
 	  || { echo "user-native-guard FAIL: emit"; sed -n 1,5p $$d/emit.log; fail=1; }; \
 	if [ $$fail -eq 0 ]; then \
 	  $(CC) $(CFLAGS) -o $$d/mystery $$d/mystery.c $(call ZLINKOF,$$d/mystery.c) -lm > $$d/cc.log 2>&1 \
@@ -1513,7 +1507,7 @@ user-native-guard: bin/zc
 	fi; \
 	if [ $$fail -eq 0 ]; then \
 	  bin/zc cellar --src tests/fixtures/user_native --system lib/system \
-	    --runtime $$d/rt --emit-c $$d/cellar.c > $$d/cemit.log 2>&1 \
+	    --emit-c $$d/cellar.c > $$d/cemit.log 2>&1 \
 	    || { echo "user-native-guard FAIL: emit cellar"; sed -n 1,5p $$d/cemit.log; fail=1; }; \
 	fi; \
 	if [ $$fail -eq 0 ]; then \
@@ -1527,7 +1521,7 @@ user-native-guard: bin/zc
 	fi; \
 	if [ $$fail -eq 0 ]; then \
 	  for t in x86_64-w64-mingw32:win x86_64-linux-gnu:lin; do \
-	    bin/zc cellar --src tests/fixtures/user_native --system lib/system --runtime $$d/rt \
+	    bin/zc cellar --src tests/fixtures/user_native --system lib/system \
 	      --target $${t%%:*} --emit-c $$d/cellar_$${t#*:}.c > $$d/temit.log 2>&1 \
 	      || { echo "user-native-guard FAIL: emit cellar for $${t%%:*}"; sed -n 1,5p $$d/temit.log; fail=1; }; \
 	  done; \
@@ -1538,7 +1532,7 @@ user-native-guard: bin/zc
 	fi; \
 	rm -rf $$d; \
 	if [ $$fail -ne 0 ]; then exit 1; fi; \
-	echo "user-native-guard OK: a unit outside src/runtime links and runs its own natives, a hidden subunit's among them, a fact's variant chosen, a generic and a non-generic class from their templates, a generic function from its result's, an os= row only for its OS"
+	echo "user-native-guard OK: a unit outside the standard library links and runs its own natives, a hidden subunit's among them, a fact's variant chosen, a generic and a non-generic class from their templates, a generic function from its result's, an os= row only for its OS"
 
 # shim-guard -- the C thread shim (_Z_THREAD_SHIM.inc) passes its own test under
 # every compiler zc drives and under ThreadSanitizer: tests/c/zthread_shim_test.c

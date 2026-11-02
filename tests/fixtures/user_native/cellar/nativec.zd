@@ -1,0 +1,112 @@
+# nativec -- cellar's C implementation, a runtime.nativec file
+c: runtime.nativec
+
+# implementation -- cellar's classes, written from their templates. Its link
+# speaks for Windows builds only: winmm, which every Windows toolchain has and
+# nothing else here links, is linked for a windows target and named for no other.
+implementation: (
+    c.implementation
+    rows: list {
+        (c.row key: "Cell.@class" template: "Cell")
+        (c.row key: "Cell.put")
+        (c.row key: "Cell.full")
+        (c.row key: "Cell.puts")
+        (c.row key: "Cell.create")
+        # a generic native free function the Cell instance it answers implements
+        (c.row key: "holding" via: "holding")
+        # a NON-generic native class written from its own template, once
+        (c.row key: "Tally.@class" template: "Tally")
+        (c.row key: "Tally.bump")
+        (c.row key: "Tally.count")
+        (c.row key: "Tally.create")
+    }
+    links: list { (c.link library: "winmm" os: list { c.os.windows }) }
+    templates: list {
+        (
+            c.template
+            name: "Cell"
+            sections: list {
+                (
+                    c.section
+                    text: """
+                        /* Cell -- a generic native class for the user-native guard: one slot that
+                           holds a @@T@@ or nothing. Instantiated per mono from its class row's
+                           tmpl=; @@T_DESTROY@@(x) destroys a value of the element type in place. */
+                        typedef struct z_@@NAME@@_t {
+                            bool full;
+                            @@T@@ value;
+                        } z_@@NAME@@_t;
+
+                        static z_@@NAME@@_t z_@@NAME@@_create(void) {
+                            z_@@NAME@@_t c;
+                            memset(&c, 0, sizeof c);
+                            return c;
+                        }
+
+                        static void z_@@NAME@@_destroy(z_@@NAME@@_t* c) {
+                            if (c->full) { @@T_DESTROY@@(&c->value); }
+                            c->full = false;
+                        }
+
+                        static void z_@@NAME@@_put(z_@@NAME@@_t* c, @@T@@ v) {
+                            if (c->full) { @@T_DESTROY@@(&c->value); }
+                            c->value = v;
+                            c->full = true;
+                        }
+
+                        /* cellar.holding's body (its row's via=holding) */
+                        static z_@@NAME@@_t z_@@NAME@@_holding(@@T@@ v, uint64_t times) {
+                            z_@@NAME@@_t c = z_@@NAME@@_create();
+                            if (times == 0) { @@T_DESTROY@@(&v); return c; }
+                            z_@@NAME@@_put(&c, v);
+                            return c;
+                        }
+
+                        static bool z_@@NAME@@_full(const z_@@NAME@@_t* c) {
+                            return c->full;
+                        }
+
+                        static uint64_t z_@@NAME@@_puts(const z_@@NAME@@_t* c) {
+                            return c->full ? 1 : 0;
+                        }
+                        """
+                )
+            }
+        )
+        (
+            c.template
+            name: "Tally"
+            sections: list {
+                (
+                    c.section
+                    text: """
+                        /* Tally -- a non-generic templated class: a counter in a heap cell */
+                        typedef struct z_@@NAME@@_t {
+                            uint64_t* n;
+                        } z_@@NAME@@_t;
+
+                        static z_@@NAME@@_t z_@@NAME@@_create(uint64_t start) {
+                            z_@@NAME@@_t t;
+                            t.n = (uint64_t*)z_xmalloc(sizeof(uint64_t));
+                            *t.n = start;
+                            return t;
+                        }
+
+                        static void z_@@NAME@@_destroy(z_@@NAME@@_t* t) {
+                            free(t->n);
+                            t->n = NULL;
+                        }
+
+                        static void z_@@NAME@@_bump(const z_@@NAME@@_t* t) {
+                            *t->n += 1;
+                        }
+
+                        static uint64_t z_@@NAME@@_count(const z_@@NAME@@_t* t) {
+                            return *t->n;
+                        }
+                        """
+                )
+            }
+        )
+    }
+)

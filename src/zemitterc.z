@@ -8,6 +8,8 @@
 # other top-level definitions are private to this unit.
 public: unit {
     :emitC
+    :UserImplementation
+    :isServedUnit
     :nativeConvRows
 }
 
@@ -2774,6 +2776,12 @@ nativeWord: list {
     osDarwin: "darwin"
     osWindows: "windows"
     osOther: "other"
+    # the arms of a checked implementation file's choices, by name (checkedRow)
+    armValue: "value"
+    armSimple: "simple"
+    armArgument: "argument"
+    armParse: "parse"
+    armNoArguments: "noArguments"
 } out staticlist StringView
 
 # NativeHead -- a row's head, parsed: the path key and the attributes the
@@ -3409,23 +3417,23 @@ loadNativeTbl: function {
 # schema -- the implementation files' schema, as the served unit holds it
 schema: nativec.runtime.nativec
 
-# registerServed -- the rows zc carries (`nativec.units`, foundation
-# `nativec.systemc.foundation`) into the row tables, as loadNativeTbl records a
-# table read from disk and in the same order: the conditions, every unit's facts
-# and canons, the structural rows, the unit order, the foundation's groups,
-# then each unit's rows and requirements, the units in the foundation's order.
-# A row's fragments, pieces, templates and the fixed files are put in the
-# template cache under the paths the emitter reads them by, so no file is
-# opened. The rows are read here (servedRow, servedRequirements,
-# servedTemplate) and registered by a RowWalk.
-registerServed: function {ctx: Ctx ast: Ast.view symtab: zenv.ZSymbolTable.view} is {
-    w: (
-        RowWalk
-        used: Set String
-        rf: (RowFacts declared: Set String held: Set String replaced: Set String)
-        frags: String
-        destroy: String
-    )
+# registerImplementations -- the rows zc carries (`nativec.units`, foundation
+# `nativec.systemc.foundation`) and each user unit's checked rows (`users`)
+# into the row tables, as loadNativeTbl records a table read from disk and in
+# the same order: the conditions, every unit's facts and canons, the
+# structural rows, the unit order, the foundation's groups, then each unit's
+# rows and requirements, the units in the foundation's order and the user
+# units after them. A row's fragments, pieces, templates and the fixed files
+# are put in the template cache under the paths the emitter reads them by, so
+# no file is opened. The rows are read by a reader of each kind (servedRow and
+# the like, checkedRow and the like) and registered by one RowWalk.
+registerImplementations: function {
+    ctx: Ctx
+    ast: Ast.view
+    symtab: zenv.ZSymbolTable.view
+    users: (List UserImplementation).view
+} is {
+    w: newRowWalk
     fd: nativec.systemc.foundation
     order: servedUnitOrder :fd
     for each c: fd.conditions loop {
@@ -3433,6 +3441,8 @@ registerServed: function {ctx: Ctx ast: Ast.view symtab: zenv.ZSymbolTable.view}
         recordCond :ctx head: hd.stringView
     }
     servedFactsAndCanons :w :ctx :ast :symtab :order
+    for each u: users loop checkedFacts :w :ctx :ast :symtab :u
+    for each u: users loop checkedCanons :w :ctx :ast :symtab :u
     for each r: fd.structural loop servedRow :w :ctx :ast :symtab :r owner: ""
     recordUnitOrder :ctx order: (servedList xs: fd.order).stringView
     for each g: fd.groups loop {
@@ -3452,10 +3462,36 @@ registerServed: function {ctx: Ctx ast: Ast.view symtab: zenv.ZSymbolTable.view}
         servedRequirements :w :ctx :ast :symtab im: u.implementation owner: u.name.stringView
         for each t: u.implementation.templates loop servedTemplate :ctx :t
     }
+    for each u: users loop checkedUnit :w :ctx :ast :symtab :u
     for each fl: fd.files loop {
         p: "\{ctx.runtimeDir}/z_\{fl.name}.inc"
         ctx.tmplCache.set key: p.take value: (servedPieces ps: fl.pieces owner: "prelude")
     }
+}
+
+# newRowWalk -- a walk that has registered nothing yet
+newRowWalk: function out RowWalk is {
+    return (
+        RowWalk
+        used: Set String
+        rf: (RowFacts declared: Set String held: Set String replaced: Set String)
+        frags: String
+        destroy: String
+    )
+}
+
+# registerUsers -- each user unit's checked rows on their own, after a table
+# read from disk (loadNativeTbl, --runtime): their facts, canons, then rows
+registerUsers: function {
+    ctx: Ctx
+    ast: Ast.view
+    symtab: zenv.ZSymbolTable.view
+    users: (List UserImplementation).view
+} is {
+    w: newRowWalk
+    for each u: users loop checkedFacts :w :ctx :ast :symtab :u
+    for each u: users loop checkedCanons :w :ctx :ast :symtab :u
+    for each u: users loop checkedUnit :w :ctx :ast :symtab :u
 }
 
 # servedFactsAndCanons -- every served unit's facts, then every one's canons,
@@ -3699,6 +3735,261 @@ RowWalk: class {
     }
 }
 
+# UserImplementation -- a user unit's C implementation file: its nativec.zd,
+# checked when the program is built (zdata.open), whose rows register as the
+# rows zc carries do
+UserImplementation: class {
+    # the name of the unit the file implements
+    name: String
+    # the file, checked
+    file: zdata.DataFile
+}
+
+# checkedFacts -- a user unit's facts, read off its checked file
+checkedFacts: function {
+    w: RowWalk
+    ctx: Ctx
+    ast: Ast.view
+    symtab: zenv.ZSymbolTable.view
+    u: UserImplementation.view
+} is {
+    f: u.file
+    for each v: (zdata.itemsOf :f v: (checkedField :u name: "facts")) loop (
+        w.fact
+        :ctx
+        :ast
+        :symtab
+        name: (zdata.textOf :f v: (zdata.fieldOf :f :v name: "name")).stringView
+        reach: (checkedTexts :u :v name: "reach")
+    )
+}
+
+# checkedCanons -- a user unit's canonical stems, read off its checked file
+checkedCanons: function {
+    w: RowWalk
+    ctx: Ctx
+    ast: Ast.view
+    symtab: zenv.ZSymbolTable.view
+    u: UserImplementation.view
+} is {
+    f: u.file
+    for each v: (zdata.itemsOf :f v: (checkedField :u name: "canons")) loop (
+        w.canon
+        :ctx
+        :ast
+        :symtab
+        stem: (zdata.textOf :f v: (zdata.fieldOf :f :v name: "stem")).stringView
+        spec: (checkedTexts :u :v name: "spec")
+    )
+}
+
+# checkedUnit -- a user unit's rows, requirements and templates, read off its
+# checked file
+checkedUnit: function {
+    w: RowWalk
+    ctx: Ctx
+    ast: Ast.view
+    symtab: zenv.ZSymbolTable.view
+    u: UserImplementation.view
+} is {
+    f: u.file
+    owner: u.name.stringView
+    for each r: (zdata.itemsOf :f v: (checkedField :u name: "rows")) loop (
+        checkedRow
+        :w
+        :ctx
+        :ast
+        :symtab
+        :u
+        :r
+    )
+    for each l: (zdata.itemsOf :f v: (checkedField :u name: "links")) loop {
+        h: NativeHead.create head: "" words: ctx.nativeWords
+        h.whenFact = checkedText :u v: l name: "fact"
+        h.os = checkedArms :u v: l name: "os"
+        h.link = checkedText :u v: l name: "library"
+        (
+            w.requirement
+            :ctx
+            :ast
+            :symtab
+            :h
+            :owner
+            subunit: (checkedText :u v: l name: "subunit").stringView
+        )
+    }
+    for each s: (zdata.itemsOf :f v: (checkedField :u name: "sources")) loop {
+        h: NativeHead.create head: "" words: ctx.nativeWords
+        h.whenFact = checkedText :u v: s name: "fact"
+        h.os = checkedArms :u v: s name: "os"
+        h.csrc = checkedText :u v: s name: "path"
+        h.cdefs = checkedTexts :u v: s name: "defines"
+        (
+            w.requirement
+            :ctx
+            :ast
+            :symtab
+            :h
+            :owner
+            subunit: (checkedText :u v: s name: "subunit").stringView
+        )
+    }
+    for each x: (zdata.itemsOf :f v: (checkedField :u name: "refusals")) loop {
+        h: NativeHead.create head: "" words: ctx.nativeWords
+        h.cfeature = checkedText :u v: x name: "feature"
+        h.nocc = checkedArms :u v: x name: "compilers"
+        h.arch = checkedArms :u v: x name: "onlyArchitectures"
+        (
+            w.requirement
+            :ctx
+            :ast
+            :symtab
+            :h
+            :owner
+            subunit: (checkedText :u v: x name: "subunit").stringView
+        )
+    }
+    for each t: (zdata.itemsOf :f v: (checkedField :u name: "templates")) loop {
+        x: templateHead needs: (checkedTexts :u v: t name: "needs").stringView
+        for each s: (zdata.itemsOf :f v: (zdata.fieldOf :f v: t name: "sections")) loop (
+            appendSection
+            :x
+            member: (checkedText :u v: s name: "member").stringView
+            needs: (checkedTexts :u v: s name: "needs").stringView
+            text: (checkedText :u v: s name: "text").stringView
+        )
+        cacheTemplate :ctx name: (checkedText :u v: t name: "name").stringView text: x.take
+    }
+}
+
+# checkedRow -- one row of a user unit's checked file: its fields onto a head,
+# its texts handed to the walk, as servedRow reads a row zc carries
+checkedRow: function {
+    w: RowWalk
+    ctx: Ctx
+    ast: Ast.view
+    symtab: zenv.ZSymbolTable.view
+    u: UserImplementation.view
+    r: ztypes.cval
+} is {
+    f: u.file
+    owner: u.name.stringView
+    key: checkedText :u v: r name: "key"
+    h: NativeHead.create head: "" words: ctx.nativeWords
+    h.need = checkedTexts :u v: r name: "needs"
+    for each t: (zdata.textsOf :f v: (zdata.fieldOf :f v: r name: "fragments")) loop (
+        w.fragment
+        :ctx
+        :owner
+        key: key.stringView
+        text: "\{t}\n"
+    )
+    ps: zdata.itemsOf :f v: (zdata.fieldOf :f v: r name: "pieces")
+    if ps.length > 0 then {
+        pt: String
+        for each p: ps loop {
+            nm: checkedText :u v: p name: "name"
+            if nm.length == 0 then {
+                (
+                    appendPiece
+                    r: pt
+                    :owner
+                    name: ""
+                    demand: ""
+                    needs: ""
+                    text: (checkedText :u v: p name: "text").stringView
+                )
+            } else {
+                (
+                    appendPiece
+                    r: pt
+                    :owner
+                    name: nm.stringView
+                    demand: (checkedTexts :u v: p name: "demand").stringView
+                    needs: (checkedTexts :u v: p name: "needs").stringView
+                    text: (checkedText :u v: p name: "text").stringView
+                )
+            }
+        }
+        w.pieces :ctx :owner key: key.stringView text: pt.take
+    }
+    h.dem = checkedTexts :u v: r name: "demand"
+    fm: checkedArm :u v: r name: "form"
+    h.value = (ctx.nativeWords.slotOf text: fm.stringView) == nativeWord.slot.armValue
+    h.ptr = zdata.boolOf v: (zdata.fieldOf :f v: r name: "byPointer")
+    h.eq = zdata.boolOf v: (zdata.fieldOf :f v: r name: "callsEquals")
+    h.call = callWordOf :ctx arm: (checkedArm :u v: r name: "call").stringView
+    for each c: (zdata.itemsOf :f v: (zdata.fieldOf :f v: r name: "constant")) loop {
+        if h.cst.length > 0 then h.cst.append ","
+        h.cst.append "\{c.ival}"
+    }
+    h.whenFact = checkedText :u v: r name: "fact"
+    h.pulls = checkedTexts :u v: r name: "pulls"
+    h.members = checkedTexts :u v: r name: "members"
+    h.via = checkedText :u v: r name: "via"
+    h.live = checkedTexts :u v: r name: "live"
+    ds: checkedText :u v: r name: "destroy"
+    if ds.length > 0 then w.destroyFragment :ctx :owner key: key.stringView text: "\{ds}\n"
+    bd: checkedText :u v: r name: "body"
+    (
+        w.row
+        :ctx
+        :ast
+        :symtab
+        :h
+        :owner
+        key: key.stringView
+        template: (checkedText :u v: r name: "template").stringView
+        body: bd.stringView.trim
+    )
+}
+
+# checkedField -- field `name` of a user file's implementation
+checkedField: function {u: UserImplementation.view name: StringView} out ztypes.cval is {
+    im: zdata.definition f: u.file name: "implementation"
+    return (zdata.fieldOf f: u.file v: im :name)
+}
+
+# checkedText -- text field `name` of data value `v` of a user file
+checkedText: function {u: UserImplementation.view v: ztypes.cval name: StringView} out String is {
+    return (zdata.textOf f: u.file v: (zdata.fieldOf f: u.file :v :name))
+}
+
+# checkedTexts -- list-of-text field `name` of data value `v`, comma-separated
+# as servedList writes one
+checkedTexts: function {u: UserImplementation.view v: ztypes.cval name: StringView} out String is {
+    r: String
+    for each t: (zdata.textsOf f: u.file v: (zdata.fieldOf f: u.file :v :name)) loop {
+        if r.length > 0 then r.append ","
+        r.append t
+    }
+    return r
+}
+
+# checkedArm -- the arm a choice field `name` of `v` holds, by its name
+checkedArm: function {u: UserImplementation.view v: ztypes.cval name: StringView} out String is {
+    return (zdata.armOf f: u.file v: (zdata.fieldOf f: u.file :v :name))
+}
+
+# checkedArms -- the arms a list-of-choice field `name` of `v` holds, by their
+# names, comma-separated as servedOs writes them
+checkedArms: function {u: UserImplementation.view v: ztypes.cval name: StringView} out String is {
+    r: String
+    for each a: (zdata.itemsOf f: u.file v: (zdata.fieldOf f: u.file :v :name)) loop {
+        if r.length > 0 then r.append ","
+        r.append (zdata.armOf f: u.file v: a)
+    }
+    return r
+}
+
+# isServedUnit -- whether zc carries the rows of unit `name` (`nativec.units`)
+isServedUnit: function {name: StringView} out bool is {
+    for each u: nativec.units loop {
+        if u.name.stringView == name then return true
+    }
+    return false
+}
+
 # servedUnitOrder -- each served unit's place in `nativec.units`, in the order
 # the foundation names them, then the units it does not name, as served
 servedUnitOrder: function {fd: schema.foundation} out ListVal u64 is {
@@ -3865,6 +4156,17 @@ servedCallWord: function {c: schema.call} out String is {
     } case noArguments then {
         return "noarg".string
     } else return String
+}
+
+# callWordOf -- a call choice's arm, by its name, as its row's `call` word
+# (servedCallWord); none for the general paths
+callWordOf: function {ctx: Ctx arm: StringView} out String is {
+    k: ctx.nativeWords.slotOf text: arm
+    if k == nativeWord.slot.armSimple then return "simple".string
+    if k == nativeWord.slot.armArgument then return "arg".string
+    if k == nativeWord.slot.armParse then return "parse".string
+    if k == nativeWord.slot.armNoArguments then return "noarg".string
+    return String
 }
 
 # servedOs -- operating systems by their arm names, comma-separated
@@ -40166,8 +40468,10 @@ emitC: function {
     symtab: zenv.ZSymbolTable
     runtimeDir: StringView
     # read the runtime from `runtimeDir` on disk rather than from the rows zc
-    # carries (znativec.generate), which are served under the same paths
+    # carries, which are served under the same paths
     runtimeFromDisk: false
+    # the user units' C implementation files, checked (UserImplementation)
+    users: (List UserImplementation).view
     fastHash: bool
     readableNames: bool
     errs: List zast.ErrorData
@@ -40428,8 +40732,9 @@ emitC: function {
     ctx.runtimeDir = runtimeDir.string
     if runtimeFromDisk then {
         loadNativeTbl :ctx ast: program :symtab :runtimeDir
+        registerUsers :ctx ast: program :symtab :users
     } else {
-        registerServed :ctx ast: program :symtab
+        registerImplementations :ctx ast: program :symtab :users
     }
     loadPieces :ctx :runtimeDir
     linkLibs: List String

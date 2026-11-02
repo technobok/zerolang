@@ -915,20 +915,7 @@ runData: function {argv: (List String).view n: u64 zv: zast.Vocab.view} out i32 
         :srcdirs
         systemdir: (zcheck.resolveSystemDir flagVal: sysFlag.stringView).stringView
     )
-    if df.check.parseOk.not then (
-        reportParseError
-        prog: df.check.prog
-        vfs: df.check.vfs
-        fallbackFsno: zvfs.fsno
-    )
-    {
-        o: df.check.st
-        match (
-            o
-        ) case some then {
-            reportTypeErrors st: o prog: df.check.prog vfs: df.check.vfs mainFsno: zvfs.fsno
-        } case none then null
-    }
+    reportDataErrors :df
     # one line a definition, each ending its line; print ends the last
     t: zdata.dumpText f: df
     if t.length > 0 then print (t.stringView.substring from: 0 to: t.length - 1)
@@ -1393,6 +1380,69 @@ parseZcArgs: function {
     return cf
 }
 
+# reportDataErrors -- a data file's parse error, or every error its check
+# found, rendered as a program's are, and stop. Returns when the file checked.
+reportDataErrors: function {df: zdata.DataFile} is {
+    if df.check.parseOk.not then (
+        reportParseError
+        prog: df.check.prog
+        vfs: df.check.vfs
+        fallbackFsno: zvfs.fsno
+    )
+    o: df.check.st
+    match (
+        o
+    ) case some then {
+        reportTypeErrors st: o prog: df.check.prog vfs: df.check.vfs mainFsno: zvfs.fsno
+    } case none then null
+}
+
+# userImplementations -- the C implementation file of each unit the program
+# loaded that carries one beside it (`<unit>/nativec.zd`), each checked as a
+# data file is (zdata.open), the build stopping at one that does not check.
+# The standard library's units are left out: zc carries their rows.
+userImplementations: function {
+    prog: zast.Ast.view
+    vfs: zvfs.ZVfs
+    rootid: zvfs.fsno
+    srcdirs: (List String).view
+    systemdir: StringView
+} out List zemitterc.UserImplementation is {
+    r: List zemitterc.UserImplementation
+    for each u: prog.units loop {
+        n: prog.nodes.get i: u
+        if n.namedoperation then {
+            nm: (zast.poolTextAt pool: prog.names ref: n.name).stringView
+            if (zemitterc.isServedUnit name: nm).not then {
+                p: nativecFileOf :vfs :rootid unitName: nm
+                if p.length > 0 then {
+                    df: zdata.open file: p.stringView :srcdirs :systemdir
+                    reportDataErrors :df
+                    r.append (zemitterc.UserImplementation name: nm.string file: df.take)
+                }
+            }
+        }
+    }
+    return r
+}
+
+# nativecFileOf -- the path of `<unit>/nativec.zd` beside the unit's own file,
+# "" when the unit has none
+nativecFileOf: function {vfs: zvfs.ZVfs rootid: zvfs.fsno unitName: StringView} out String is {
+    ufn: "\{unitName}.z"
+    fsid: vfs.walk parent: rootid name: ufn.stringView
+    if fsid.isZero then return String
+    dirid: vfs.siblingDir fileid: fsid name: unitName
+    zid: vfs.walk parent: dirid name: "nativec.zd"
+    k: vfs.arm dentryid: zid
+    match (
+        k
+    ) case file then {
+        return (vfs.displayPath dentryid: zid)
+    } case dir then null case notfound then null
+    return String
+}
+
 # reportParseError -- a failed parse hands the tree back with the error as its
 # root row: render it and stop.
 reportParseError: function {
@@ -1789,6 +1839,8 @@ emitCSource: function {
     # the main unit's file, for a failure that carries no file of its own
     mainFsno: zvfs.fsno
     runtimeDir: StringView
+    # the user units' C implementation files, checked
+    users: (List zemitterc.UserImplementation).view
     cf: ZcFlags.view
     libs: (List String).view
     ccFamily: zcc.ccfamily
@@ -1803,6 +1855,7 @@ emitCSource: function {
         symtab: st
         :runtimeDir
         runtimeFromDisk: (zcheck.runtimeDirGiven flagVal: cf.runtimeFlag.stringView)
+        :users
         fastHash: cf.fastHash
         readableNames: cf.readableNames
         errs: emitErrs
@@ -2043,6 +2096,14 @@ compileUnit: function {
     }
     emitLibs: ztypecheck.requiredLibs :st
     ccReal0: ccRealPath name: ccPath.stringView
+    users: (
+        userImplementations
+        :prog
+        :vfs
+        :rootid
+        srcdirs: cf.srcdirs
+        systemdir: systemdir.stringView
+    )
     csrc: (
         emitCSource
         :prog
@@ -2050,6 +2111,7 @@ compileUnit: function {
         :vfs
         :mainFsno
         runtimeDir: runtimeDir.stringView
+        :users
         :cf
         libs: emitLibs
         ccFamily: (zcc.ccFamilyOf ccPath: ccReal0.stringView)
