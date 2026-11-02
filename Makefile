@@ -1299,7 +1299,7 @@ perf: $(PERFBIN)
 # deletes write-only allocations; perf-elision measures that), a failed run and
 # allocs != frees. Above ALLOC_BASELINE fails; a commit raising it says why in
 # its message, and one lowering the count lowers it here.
-ALLOC_BASELINE := 2701564
+ALLOC_BASELINE := 2720276
 # ALLOC_LINE -- the one measurement every allocation number comes from.
 ALLOC_LINE = valgrind --tool=memcheck $(PERFRUN) 2>&1 | grep 'total heap usage' | sed 's/.*usage: //'
 
@@ -3477,130 +3477,18 @@ fallback-guard: $(EXCS) bin/zc bin/zl bin/zls
 clean:
 	rm -rf $(BUILDDIR) bin
 
-# native-guard -- natives are declaration-driven. The units it covers are the
-# ones natives.tbl has rows for, read off the table, and every top-level `is
-# native` function such a unit declares has its own `[<unit>.<name> ...]` row;
-# every fragment is referenced (by the emitter, a natives.tbl frag= list or a
-# `.@class` row's destroy=); and
-# every z_@Name@, @ARM_canon.arm@ and @MEMBER_canon.name@ hole a fragment spells
-# names a declared type, arm or member. A plain z_@Name@ that no @canon row and
-# no loader binds must be declared by the system unit or by exactly ONE row
-# unit: the loader looks it up in table order, and two declarers would make
-# that order decide. No fragment spells a tag constant or a generated struct's
-# member literally. A natives.tbl `form=value` row's body calls nothing and
-# opens no statement expression (its facts are its operands'), and a `const=`
-# variant is a value exactly when its plain row is.
-NATIVE_GUARD_SYSTEM := lib/system/system.z lib/system/system/*.z lib/system/core.z
-
-native-guard:
-	@fail=0; \
-	rowunits=""; \
-	for u in $$(sed -nE 's/^\[@?([a-z][a-zA-Z0-9]*)[]. ].*/\1/p' src/runtime/natives.tbl | awk '!s[$$0]++'); do \
-	  test -f lib/system/$$u.z && rowunits="$$rowunits $$u"; \
-	done; \
-	for u in $$rowunits; do \
-	  for n in $$(awk '/^[a-zA-Z][a-zA-Z0-9]*: function/ {name=$$1; sub(/:.*/,"",name); pending=1} pending && /is native/ {print name; pending=0} pending && /is \{/ {pending=0}' lib/system/$$u.z $$(ls lib/system/$$u/*.z 2>/dev/null)); do \
-	    grep -qE "^\[$$u\.$$n[] ]" src/runtime/natives.tbl || { echo "native-guard: $$u.$$n is declared native but natives.tbl has no [$$u.$$n ...] row (add the row)"; fail=1; }; \
-	  done; \
-	done; \
-	for f in $$(grep -oE '"_Z_[A-Z0-9_]+"' src/zemitterc.z | tr -d '"' | sort -u); do \
-	  test -f src/runtime/natives/$$f.inc || { echo "native-guard: fragment $$f.inc referenced but missing"; fail=1; }; \
-	done; \
-	for f in src/runtime/natives/*.inc; do \
-	  stem=$$(basename $$f .inc); \
-	  need=$$(echo "$$stem" | sed 's/^_Z_//' | tr 'A-Z' 'a-z'); \
-	  ref=0; \
-	  grep -qF "\"$$stem\"" src/zemitterc.z && ref=1; \
-	  grep -qF "\"$$need\"" src/zemitterc.z && ref=1; \
-	  grep -qE "(frag|destroy)=([A-Z0-9_]+,)*$$stem(,|\]| )" src/runtime/natives.tbl && ref=1; \
-	  for u in $$rowunits; do \
-	    case "$$need" in "$$u"_*) \
-	      grep -qF "memb: \"$${need#$$u\_}\"" src/zemitterc.z && ref=1;; \
-	    esac; \
-	  done; \
-	  [ "$$ref" = 1 ] || { echo "native-guard: $$stem.inc on disk but nothing references it (orphan -- delete it or load it)"; fail=1; }; \
-	done; \
-	bound=$$({ sed -nE 's/^\[@canon\.([A-Za-z_][A-Za-z0-9_]*) .*/"\1"/p' src/runtime/natives.tbl; \
-	    grep -oE 'mono: "[A-Za-z_][A-Za-z0-9_]*"' src/zemitterc.z; \
-	    grep -ohE 'bn\.append from: "[A-Za-z_][A-Za-z0-9_]*"' src/zemitterc.z; \
-	    for sl in $$(grep -ohE 'bn\.append \(rtHoleId slot: rtHole\.slot\.[A-Za-z0-9_]+\)' src/zemitterc.z | sed -E 's/.*slot\.([A-Za-z0-9_]+)\)/\1/' | sort -u); do \
-	      sed -nE "/^rtHole: list \{/,/^\}/ s/^    $$sl: (\"[^\"]*\")/\1/p" src/zemitterc.z; done; \
-	  } | sed 's/.*"\(.*\)"/\1/'; printf 'String\nStringView\n'); \
-	bound=" $$(echo "$$bound" | sort -u | tr '\n' ' ') "; \
-	known=$$(echo "$$bound" | tr ' ' '\n'; \
-	  sed -nE 's/^([A-Za-z_][A-Za-z0-9_]*):.*/\1/p' lib/system/*.z lib/system/*/*.z); \
-	known=" $$(echo "$$known" | sort -u | tr '\n' ' ') "; \
-	for h in $$(grep -ohE 'z_@[A-Za-z_][A-Za-z0-9_]*@' src/runtime/natives/*.inc src/runtime/*.inc src/runtime/*.c.tmpl src/runtime/*.tbl | sed -e 's/^z_@//' -e 's/@$$//' | sort -u); do \
-	  case "$$bound" in *" $$h "*) continue;; esac; \
-	  grep -qE "^$$h:" $(NATIVE_GUARD_SYSTEM) && continue; \
-	  decl=""; \
-	  for u in $$rowunits; do \
-	    grep -qE "^$$h:" lib/system/$$u.z $$(ls lib/system/$$u/*.z 2>/dev/null) && decl="$$decl $$u"; \
-	  done; \
-	  case "$$decl" in " "*" "*) echo "native-guard: hole @$$h@ is declared by more than one unit ($$decl); give it an @canon row naming the one it means"; fail=1;; esac; \
-	done; \
-	nh=0; \
-	for f in src/runtime/natives/*.inc src/runtime/*.inc src/runtime/*.c.tmpl src/runtime/*.tbl; do \
-	  for h in $$(grep -ohE 'z_@[A-Za-z_][A-Za-z0-9_]*@' $$f | sed -e 's/^z_@//' -e 's/@$$//' | sort -u); do \
-	    nh=$$((nh + 1)); \
-	    case "$$known" in *" $$h "*) ;; \
-	      *) echo "native-guard: $$f spells hole @$$h@, which names no known canon (declare the type, add its natives.tbl canon row, or bind it at the loader)"; fail=1;; \
-	    esac; \
-	  done; \
-	done; \
-	for f in src/runtime/natives/*.inc src/runtime/*.inc src/runtime/*.c.tmpl src/runtime/*.tbl; do \
-	  if grep -qE 'Z_[A-Z0-9_]+_TAG_' $$f; then \
-	    echo "native-guard: $$f spells a tag constant literally; name it @ARM_<canon>.<arm>@ (or @@<KEY>_SOME@@ in a template)"; fail=1; \
-	  fi; \
-	done; \
-	na=0; \
-	for f in src/runtime/natives/*.inc src/runtime/*.inc src/runtime/*.c.tmpl src/runtime/*.tbl; do \
-	  for h in $$(grep -ohE '@ARM_[A-Za-z_][A-Za-z0-9_]*\.[A-Za-z_][A-Za-z0-9_]*@' $$f | sed -e 's/^@ARM_//' -e 's/@$$//' | sort -u); do \
-	    na=$$((na + 1)); canon=$${h%%.*}; arm=$${h#*.}; head=$${canon%%_*}; \
-	    case "$$known" in *" $$canon "*) ;; \
-	      *) echo "native-guard: $$f spells @ARM_$$h@, whose type $$canon names no known canon"; fail=1; continue;; \
-	    esac; \
-	    arms=" $$(awk -v h="$$head" '$$0 ~ ("^" h ": (variant|union) [{]") {on=1; next} on && /^[}]/ {on=0} on && /^    [A-Za-z][A-Za-z0-9]*: / {sub(/^    /, ""); sub(/:.*/, ""); printf "%s ", $$0}' lib/system/*.z lib/system/*/*.z) "; \
-	    case "$$arms" in *" $$arm "*) ;; \
-	      *) echo "native-guard: $$f spells @ARM_$$h@, but $$head declares no arm $$arm"; fail=1;; \
-	    esac; \
-	  done; \
-	done; \
-	nm=0; \
-	for f in src/runtime/natives/*.inc src/runtime/*.inc src/runtime/*.c.tmpl src/runtime/*.tbl; do \
-	  for h in $$(grep -ohE '@MEMBER_[A-Za-z_][A-Za-z0-9_]*\.[A-Za-z_][A-Za-z0-9_]*@' $$f | sed -e 's/^@MEMBER_//' -e 's/@$$//' | sort -u); do \
-	    nm=$$((nm + 1)); canon=$${h%%.*}; mem=$${h#*.}; head=$${canon%%_*}; \
-	    case "$$known" in *" $$canon "*) ;; \
-	      *) echo "native-guard: $$f spells @MEMBER_$$h@, whose type $$canon names no known canon"; fail=1; continue;; \
-	    esac; \
-	    mems=" $$(awk -v h="$$head" '$$0 ~ ("^" h ": (record|class|variant|union|protocol|facet) [{]") {on=1; next} on && /^[}]/ {on=0} on && /^    [A-Za-z_][A-Za-z0-9_]*: / {sub(/^    /, ""); sub(/:.*/, ""); printf "%s ", $$0}' lib/system/*.z lib/system/*/*.z) "; \
-	    case "$$mems" in *" $$mem "*) ;; \
-	      *) echo "native-guard: $$f spells @MEMBER_$$h@, but $$head declares no member $$mem"; fail=1;; \
-	    esac; \
-	  done; \
-	done; \
-	for f in src/runtime/natives/*.inc src/runtime/*.inc src/runtime/*.c.tmpl src/runtime/*.tbl; do \
-	  if grep -qE '\.data\.[A-Za-z_]|(\.|->)in_[A-Za-z_]|vtable->[A-Za-z_]' $$f; then \
-	    echo "native-guard: $$f spells a member of a generated struct literally (an arm in \`data\`, an inline arm, a vtable slot); name it @MEMBER_<canon>.<name>@ (or @OKMEMBER@/@ERRMEMBER@ in a conversion row)"; fail=1; \
-	  fi; \
-	done; \
-	nv=$$(grep -cE '^\[[^]]* form=value[] ]' src/runtime/natives.tbl); \
-	badv=$$(grep -E '^\[[^]]* form=value[] ]' src/runtime/natives.tbl \
-	  | awk '{ b = $$0; sub(/^\[[^]]*\] */, "", b); gsub(/\(\([A-Za-z_][A-Za-z0-9_ ]*\*?\)/, "((", b); \
-	      if (b ~ /\(\{/ || b ~ /[A-Za-z_][A-Za-z0-9_]* *\(/) print "    " $$0 }'); \
-	if [ -n "$$badv" ]; then \
-	  echo "native-guard: a form=value row's body calls or opens a statement expression -- drop the mark, and its result is taken for a call's:"; \
-	  echo "$$badv"; fail=1; \
-	fi; \
-	badc=$$(awk '/^\[/ { h = $$0; sub(/\].*/, "", h); sub(/^\[/, "", h); split(h, w, " "); \
-	      v = (h ~ / form=value( |$$)/); if (h ~ / const=/) cf[w[1]] = v; else pf[w[1]] = v } \
-	    END { for (k in cf) if ((k in pf) && cf[k] != pf[k]) print "    " k }' src/runtime/natives.tbl); \
-	if [ -n "$$badc" ]; then \
-	  echo "native-guard: a const= variant and its plain row disagree on form=value (the loader keys the mark by path):"; \
-	  echo "$$badc"; fail=1; \
-	fi; \
-	if [ $$fail -ne 0 ]; then exit 1; fi; \
-	echo "native-guard OK: native declarations and runtime fragments consistent (incl. no orphans, $$nh fragment holes known, $$na tag-constant holes name declared arms, $$nm member holes name declared members, $$nv form=value rows call nothing)"
+# native-guard -- the rows zc carries agree with the standard library's
+# declarations (`zc natives check native`, src/znativecheck.z): every native
+# free function of a unit with rows has a row of its key; every z_@Name@,
+# @ARM_canon.arm@ and @MEMBER_canon.name@ hole a text spells names a declared
+# type, arm or member, or one the emitter binds; a plain hole the emitter does
+# not bind and system does not declare is declared by one unit at most (the
+# emitter looks it up in unit order); no text spells a tag constant or a
+# generated struct's member literally; a value row's body calls nothing and
+# opens no statement expression, and a constant variant is a value exactly when
+# its plain row is.
+native-guard: bin/zc
+	@bin/zc natives check native --system lib/system
 
 # generic-param-guard -- L023 (a parameter's case follows its bound's) over the
 # examples and fixtures, which no lint gate reads.

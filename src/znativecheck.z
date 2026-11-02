@@ -1,0 +1,704 @@
+# znativecheck -- `zc natives check WHAT`: what must hold of the rows zc carries
+# (nativec.units, the foundation) beyond what their schema checks, checked
+# against the standard library's declarations. `native`: every native function
+# of a unit with rows has a row; every hole a text spells names a declared type,
+# arm or member, or one the emitter binds; no text spells a tag constant or a
+# generated struct's member literally; a value row's body calls nothing.
+
+public: unit {
+    :checkNatives
+}
+
+schema: nativec.runtime.nativec
+
+# checkWord -- the words `zc natives check` and its checks act on
+checkWord: list {
+    # the check of the rows against the declarations
+    cNative: "native"
+    # the units whose names every unit sees
+    uSystem: "system"
+    uCore: "core"
+} out staticlist StringView
+
+# NativeText -- one text a row, a template or a fixed file holds, and where:
+# `row io.eprintln`, `template List`, `file head`
+NativeText: class {
+    where: String
+    text: String
+}
+
+# NameSets -- a set of names per key: a unit's top-level names, a type's arms
+NameSets: class {
+    # the key's place in `sets`
+    index: (MapRV String v: u64)
+    sets: List (Set String)
+} as {
+    # add -- `name` into the set of `key`
+    add: function {:this key: StringView name: StringView} is {
+        k: (this.index.get key: key.string).or d: this.sets.length
+        if k == this.sets.length then {
+            this.index.set key: key.string value: k
+            this.sets.append (Set String)
+        }
+        (this.sets.getMut i: k).add item: name.string
+    }
+
+    # has -- whether the set of `key` holds `name`
+    has: function {this: this.view key: StringView name: StringView} out bool is {
+        k: (this.index.get key: key.string).or d: this.sets.length
+        if k == this.sets.length then return false
+        return ((this.sets.get i: k).has item: name.string)
+    }
+}
+
+# newNameSets -- name sets holding no name
+newNameSets: function out NameSets is {
+    return (NameSets index: (MapRV String v: u64) sets: List (Set String))
+}
+
+# Decls -- the standard library's declarations, as the checks read them: each
+# file's top-level definitions, parsed
+Decls: class {
+    # every top-level name of every file
+    names: Set String
+    # the top-level names system and core declare
+    systemNames: Set String
+    # the top-level names of each unit, its subunit files' among them
+    unitNames: NameSets
+    # the native free functions of each unit
+    natives: NameSets
+    # the arms of each variant and union, by its name
+    arms: NameSets
+    # the members of each record, class, variant, union, protocol and facet
+    members: NameSets
+}
+
+# checkNatives -- run check `what` over the rows zc carries and the declarations
+# under `systemdir`; print each finding once, then a summary. Answers the exit
+# code: 0 when nothing was found, 1 when something was, 2 for an unknown check.
+checkNatives: function {what: StringView systemdir: StringView} out i32 is {
+    words: zast.Vocab.create block: checkWord
+    if (words.slotOf text: what) != checkWord.slot.cNative then {
+        io.eprintln "zc natives check: unknown check '\{what}' (native)"
+        return 2
+    }
+    d: readDecls :systemdir :words
+    texts: allTexts
+    fails: List String
+    n: checkNative :d :texts :fails
+    said: Set String
+    for each f: fails loop {
+        if (said.has item: f) then continue
+        said.add item: f.copy
+        print "native-guard: \{f}"
+    }
+    if fails.length > 0 then return 1
+    print "native-guard OK: \{n}"
+    return 0
+}
+
+# checkNative -- the `native` check's findings into `fails`; answers what was
+# checked, for the summary
+checkNative: function {
+    d: Decls.view texts: (List NativeText).view fails: List String
+} out String is {
+    nativeRows :d :fails
+    bound: boundHoles
+    nh: holesKnown :d :bound :texts :fails
+    holesDeclaredOnce :d :bound :texts :fails
+    na: prefixedHoles :d :bound :texts :fails arms: true
+    nm: prefixedHoles :d :bound :texts :fails arms: false
+    literalSpellings :texts :fails
+    nv: valueRows :fails
+    r: "native declarations have rows, \{nh} holes name known types, "
+    r.append "\{na} tag-constant holes name declared arms, \{nm} member holes name "
+    r.append "declared members, \{nv} value rows call nothing"
+    return r
+}
+
+# readDecls -- the top-level definitions of every `.z` file under `systemdir`
+# and its unit folders
+readDecls: function {systemdir: StringView words: zast.Vocab.view} out Decls is {
+    d: (
+        Decls
+        names: Set String
+        systemNames: Set String
+        unitNames: newNameSets
+        natives: newNameSets
+        arms: newNameSets
+        members: newNameSets
+    )
+    for each f: (zFilesIn dir: systemdir) loop {
+        u: f.stringView.substring from: 0 to: f.length - 2
+        sw: words.slotOf text: u
+        sys: (sw == checkWord.slot.uSystem) or (sw == checkWord.slot.uCore)
+        readFile :d unitName: u :sys path: "\{systemdir}/\{f}".stringView
+        sub: "\{systemdir}/\{u}"
+        for each g: (zFilesIn dir: sub.stringView) loop (
+            readFile
+            :d
+            unitName: u
+            :sys
+            path: "\{sub}/\{g}".stringView
+        )
+    }
+    return d
+}
+
+# zFilesIn -- the `.z` files directly under `dir`, by name
+zFilesIn: function {dir: StringView} out List String is {
+    r: List String
+    ents: io.listDir path: dir
+    match (
+        ents
+    ) case ok then {
+        for each e: ents loop {
+            if (e.stringView.endsWith suffix: ".z") then r.append from: e.copy
+        }
+    } case err then null
+    r.sort
+    return r
+}
+
+# readFile -- one file's top-level definitions into `d`, as unit `unitName`'s;
+# `sys` when that unit is system or core
+readFile: function {d: Decls unitName: StringView sys: bool path: StringView} is {
+    rd: io.readText :path
+    src: String
+    match (
+        rd
+    ) case ok then {
+        src = rd.copy
+    } case err then return
+    tree: ast.parseSource source: src.take
+    if tree.units.length == 0 then return
+    top: tree.nodes.get i: (tree.units.get i: 0)
+    match (
+        top
+    ) case namedoperation then {
+        un: tree.nodes.get i: top.operation
+        match (
+            un
+        ) case unitdef then {
+            for each k: (zast.kidIds ast: tree span: un.body) loop (
+                readDef
+                :d
+                :unitName
+                :sys
+                :tree
+                id: k
+            )
+        } else null
+    } else null
+}
+
+# readDef -- one top-level definition `id` of unit `unitName` into `d`
+readDef: function {d: Decls unitName: StringView sys: bool tree: zast.Ast.view id: zast.nodeid} is {
+    nd: tree.nodes.get i: id
+    match (
+        nd
+    ) case namedoperation then {
+        nm: zast.poolTextCopy pool: tree.names ref: nd.name
+        d.names.add item: nm.copy
+        d.unitNames.add key: unitName name: nm.stringView
+        if sys then d.systemNames.add item: nm.copy
+        op: tree.nodes.get i: nd.operation
+        match (
+            op
+        ) case functiondef then {
+            if op.isNative then d.natives.add key: unitName name: nm.stringView
+        } case objectdef then {
+            readMembers :d type: nm.stringView :tree items: op.isItems kind: op.kind
+        } else null
+    } else null
+}
+
+# readMembers -- a type's `is` items: its arms when it is a variant or a union,
+# and, for every kind whose generated struct a hole may name, its members
+readMembers: function {
+    d: Decls type: StringView tree: zast.Ast.view items: zast.kidspan kind: zast.objectkind
+} is {
+    sum: kind.variantDef or kind.unionDef
+    named: sum or kind.recordDef or kind.classDef or kind.protocolDef or kind.facetDef
+    if named.not then return
+    for each k: (zast.kidIds ast: tree span: items) loop {
+        it: tree.nodes.get i: k
+        match (
+            it
+        ) case namedoperation then {
+            mn: zast.poolTextCopy pool: tree.names ref: it.name
+            if sum then d.arms.add key: type name: mn.stringView
+            d.members.add key: type name: mn.stringView
+        } else null
+    }
+}
+
+# allTexts -- every text the rows zc carries hold: each row's body, fragments,
+# pieces and destroy, each template's sections, each fixed file's pieces
+allTexts: function out List NativeText is {
+    r: List NativeText
+    for each u: nativec.units loop {
+        for each w: u.implementation.rows loop rowTexts :r owner: u.name.stringView :w
+        for each t: u.implementation.templates loop {
+            for each s: t.sections loop r.append (
+                NativeText
+                where: "template \{t.name}"
+                text: s.text.string
+            )
+        }
+    }
+    fd: nativec.systemc.foundation
+    for each g: fd.groups loop {
+        for each w: g.rows loop rowTexts :r owner: g.name.stringView :w
+    }
+    for each w: fd.structural loop rowTexts :r owner: "" :w
+    for each fl: fd.files loop {
+        for each p: fl.pieces loop r.append (NativeText where: "file \{fl.name}" text: p.text.string
+        )
+    }
+    return r
+}
+
+# rowTexts -- one row's texts onto `r`
+rowTexts: function {r: List NativeText owner: StringView w: schema.row} is {
+    wh: rowWhere :owner key: w.key.stringView
+    if w.body.length > 0 then r.append (NativeText where: wh.copy text: w.body.string)
+    for each t: w.fragments loop r.append (NativeText where: wh.copy text: t.string)
+    for each p: w.pieces loop r.append (NativeText where: wh.copy text: p.text.string)
+    if w.destroy.length > 0 then r.append (NativeText where: wh.copy text: w.destroy.string)
+}
+
+# rowWhere -- `row <unit>.<key>`, the key alone for a structural row
+rowWhere: function {owner: StringView key: StringView} out String is {
+    r: "row ".string
+    if owner.length > 0 then {
+        r.append owner
+        r.append "."
+    }
+    r.append key
+    return r
+}
+
+# nativeRows -- every native free function of a unit with rows has a row of its
+# key in that unit's file
+nativeRows: function {d: Decls.view fails: List String} is {
+    for each u: nativec.units loop {
+        k: (d.natives.index.get key: u.name.string).or d: d.natives.sets.length
+        if k == d.natives.sets.length then continue
+        keys: Set String
+        for each w: u.implementation.rows loop keys.add item: w.key.string
+        fns: List String
+        for each f: (d.natives.sets.get i: k) loop fns.append from: f.copy
+        fns.sort
+        for each f: fns loop {
+            if (keys.has item: f).not then (
+                fails.append
+                "native function \{f} of unit \{u.name} has no row keyed \"\{f}\" in its nativec.zd (add the row)"
+            )
+        }
+    }
+}
+
+# boundHoles -- the plain hole names the emitter binds itself (rtHole), each
+# unit's canonical stems, and String and StringView
+boundHoles: function out Set String is {
+    r: Set String
+    for each h: zemitterc.rtHole loop r.add item: h.string
+    for each u: nativec.units loop {
+        for each c: u.implementation.canons loop r.add item: c.stem.string
+    }
+    r.add item: "String".string
+    r.add item: "StringView".string
+    return r
+}
+
+# holesKnown -- every `z_@Name@` hole names a canon the emitter binds or a
+# declared type; answers how many distinct holes the texts spell
+holesKnown: function {
+    d: Decls.view bound: (Set String).view texts: (List NativeText).view fails: List String
+} out u64 is {
+    seen: Set String
+    for each t: texts loop {
+        for each h: (plainHoles text: t.text.stringView) loop {
+            seen.add item: h.copy
+            if (bound.has item: h).not when (d.names.has item: h).not then (
+                fails.append
+                "\{t.where} spells hole @\{h}@, which names no known type (declare it, add a canon for it, or bind it in the emitter)"
+            )
+        }
+    }
+    return seen.length
+}
+
+# holesDeclaredOnce -- a plain hole the emitter does not bind, and system does not
+# declare, is declared by one unit at most: the emitter looks it up in unit
+# order, and two declarers would leave that order to decide
+holesDeclaredOnce: function {
+    d: Decls.view bound: (Set String).view texts: (List NativeText).view fails: List String
+} is {
+    seen: Set String
+    for each t: texts loop {
+        for each h: (plainHoles text: t.text.stringView) loop {
+            if (
+                (seen.has item: h) or (bound.has item: h) or (d.systemNames.has item: h)
+            ) then continue
+            seen.add item: h.copy
+            decl: declarers :d name: h.stringView
+            if decl.length > 1 then (
+                fails.append
+                "hole @\{h}@ is declared by more than one unit (\{(
+                    joined
+                    xs: decl
+                )}); give it a canon naming the one it means"
+            )
+        }
+    }
+}
+
+# declarers -- the units with rows whose files declare `name` at top level
+declarers: function {d: Decls.view name: StringView} out List String is {
+    r: List String
+    for each u: nativec.units loop {
+        if (d.unitNames.has key: u.name.stringView :name) then r.append from: u.name.string
+    }
+    return r
+}
+
+# prefixedHoles -- each `@ARM_<canon>.<arm>@` hole (`arms`), or each
+# `@MEMBER_<canon>.<name>@`, names a known type, and that type (the canon up to
+# its first `_`) declares the arm or the member; answers how many there are
+prefixedHoles: function {
+    d: Decls.view
+    bound: (Set String).view
+    texts: (List NativeText).view
+    fails: List String
+    arms: bool
+} out u64 is {
+    pre: "@MEMBER_"
+    if arms then pre = "@ARM_"
+    n: u64
+    for each t: texts loop {
+        tv: t.text.stringView
+        at: u64
+        for at < tv.length loop {
+            h: nextPrefixed text: tv from: at :pre
+            if h.found.not then break
+            at = h.next
+            if h.whole then {
+                n = n + 1
+                f: prefixedFinding :d :bound :h text: tv :arms
+                if f.length > 0 then fails.append "\{t.where} spells \{f}"
+            }
+        }
+    }
+    return n
+}
+
+# prefixedhole -- an `@ARM_<canon>.<name>@` or `@MEMBER_<canon>.<name>@` hole
+# as nextPrefixed finds it: offsets into its text
+prefixedhole: record {
+    # a prefix was found
+    found: bool
+    # it opens a whole hole: a canon, a dot, a name, a closing `@`
+    whole: bool
+    # where the search goes on
+    next: u64
+    # the hole's opening `@`
+    at: u64
+    canonFrom: u64
+    canonTo: u64
+    nameTo: u64
+}
+
+# nextPrefixed -- the next hole opening with `pre` in `text` from `from` on
+nextPrefixed: function {text: StringView from: u64 pre: StringView} out prefixedhole is {
+    r: (
+        prefixedhole
+        found: false
+        whole: false
+        next: text.length
+        at: 0
+        canonFrom: 0
+        canonTo: 0
+        nameTo: 0
+    )
+    o: (text.substring :from to: text.length).indexOf needle: pre
+    if o.none then return r
+    r.found = true
+    r.at = from + o
+    r.canonFrom = r.at + pre.length
+    r.next = r.canonFrom
+    r.canonTo = identEnd :text from: r.canonFrom
+    if (r.canonTo == r.canonFrom) or (((text.byteAt i: r.canonTo).or d: 0) != 46) then return r
+    r.nameTo = identEnd :text from: r.canonTo + 1
+    if (r.nameTo == (r.canonTo + 1)) or (((text.byteAt i: r.nameTo).or d: 0) != 64) then return r
+    r.whole = true
+    r.next = r.nameTo + 1
+    return r
+}
+
+# prefixedFinding -- what is wrong with hole `h` of `text`: its type names no
+# known type, or that type (the canon up to its first `_`) declares no such arm
+# (`arms`) or member; "" when nothing is
+prefixedFinding: function {
+    d: Decls.view bound: (Set String).view h: prefixedhole text: StringView arms: bool
+} out String is {
+    hole: text.substring from: h.at to: h.nameTo + 1
+    canon: text.substring from: h.canonFrom to: h.canonTo
+    name: text.substring from: h.canonTo + 1 to: h.nameTo
+    head: canon.substring from: 0 to: ((canon.indexOf needle: "_").or d: canon.length)
+    if (bound.has item: canon.string).not when (d.names.has item: canon.string).not then {
+        return "\{hole}, whose type \{canon} names no known type"
+    }
+    if arms when (d.arms.has key: head :name
+    ).not then return "\{hole}, but \{head} declares no arm \{name}"
+    if arms.not when (d.members.has key: head :name
+    ).not then return "\{hole}, but \{head} declares no member \{name}"
+    return "".string
+}
+
+# literalSpellings -- no text spells a tag constant (`Z_..._TAG_`) or a
+# generated struct's member (`.data.x`, `->in_x`, `vtable->x`) literally: the
+# holes name them, so the backend may lay them out as it likes
+literalSpellings: function {texts: (List NativeText).view fails: List String} is {
+    for each t: texts loop {
+        tv: t.text.stringView
+        if (spellsTagConstant text: tv) then (
+            fails.append
+            "\{t.where} spells a tag constant literally; name it @ARM_<canon>.<arm>@ (or @@<KEY>_SOME@@ in a template)"
+        )
+        if (spellsGeneratedMember text: tv) then (
+            fails.append
+            "\{t.where} spells a member of a generated struct literally (an arm in `data`, an inline arm, a vtable slot); name it @MEMBER_<canon>.<name>@ (or @OKMEMBER@/@ERRMEMBER@ in a conversion row)"
+        )
+    }
+}
+
+# valueRows -- a value row's body calls nothing and opens no statement
+# expression (its facts are its operands'), and a constant variant is a value
+# exactly when its plain row is; answers how many value rows there are
+valueRows: function {fails: List String} out u64 is {
+    n: u64
+    for each u: nativec.units loop n = (
+        n + (valueRowsOf rows: u.implementation.rows owner: u.name.stringView :fails)
+    )
+    fd: nativec.systemc.foundation
+    for each g: fd.groups loop n = n + (valueRowsOf rows: g.rows owner: g.name.stringView :fails)
+    n = n + (valueRowsOf rows: fd.structural owner: "" :fails)
+    return n
+}
+
+# valueRowsOf -- valueRows over one list of rows
+valueRowsOf: function {
+    rows: staticlist schema.row owner: StringView fails: List String
+} out u64 is {
+    n: u64
+    for each w: rows loop {
+        if w.form.value then {
+            n = n + 1
+            if (bodyCalls body: w.body.stringView) then (
+                fails.append
+                "\{(
+                    rowWhere
+                    :owner
+                    key: w.key.stringView
+                )}: a value row's body calls or opens a statement expression -- drop form: c.form.value, and its result is taken for a call's"
+            )
+        }
+    }
+    constantForms :rows :owner :fails
+    return n
+}
+
+# constantForms -- each constant variant of `rows` is a value exactly when the
+# plain row of its key is
+constantForms: function {rows: staticlist schema.row owner: StringView fails: List String} is {
+    plain: MapRV String v: bool
+    for each w: rows loop {
+        if w.constant.length == 0 then plain.set key: w.key.string value: w.form.value
+    }
+    for each w: rows loop {
+        if w.constant.length == 0 then continue
+        p: plain.get key: w.key.string
+        match (
+            p
+        ) case some then {
+            if p != w.form.value then (
+                fails.append
+                "\{(
+                    rowWhere
+                    :owner
+                    key: w.key.stringView
+                )}: a constant variant and its plain row disagree on form (the emitter keys the form by path)"
+            )
+        } case none then null
+    }
+}
+
+# plainHoles -- the names of the `z_@Name@` holes `text` spells, in order
+plainHoles: function {text: StringView} out List String is {
+    r: List String
+    at: u64
+    for at < text.length loop {
+        o: (text.substring from: at to: text.length).indexOf needle: "z_@"
+        if o.none then return r
+        s: at + o + 3
+        at = s
+        e: identEnd :text from: s
+        if e > s when ((text.byteAt i: e).or d: 0) == 64 then {
+            r.append from: (text.substring from: s to: e).string
+            at = e + 1
+        }
+    }
+    return r
+}
+
+# identEnd -- where the C identifier starting at `from` ends; `from` when none
+# starts there
+identEnd: function {text: StringView from: u64} out u64 is {
+    i: from
+    for i < text.length loop {
+        b: (text.byteAt :i).or d: 0
+        if (isIdentByte :b).not then break
+        if i == from when (isDigit :b) then break
+        i = i + 1
+    }
+    return i
+}
+
+# isIdentByte -- a letter, a digit or `_`
+isIdentByte: function {b: u8} out bool is {
+    return (isUpper :b) or (isDigit :b) or ((b >= 0ca) and (b <= 0cz)) or (b == 95)
+}
+
+# isUpper -- an ASCII capital letter
+isUpper: function {b: u8} out bool is {
+    return (b >= 0cA) and (b <= 0cZ)
+}
+
+# isDigit -- an ASCII digit
+isDigit: function {b: u8} out bool is {
+    return (b >= 0c0) and (b <= 0c9)
+}
+
+# spellsTagConstant -- whether `text` holds `Z_`, then one or more capitals,
+# digits or `_`, then `_TAG_`
+spellsTagConstant: function {text: StringView} out bool is {
+    at: u64
+    for at < text.length loop {
+        o: (text.substring from: at to: text.length).indexOf needle: "_TAG_"
+        if o.none then return false
+        t: at + o
+        at = t + 1
+        s: t
+        for s > 0 while (isUpperIdentByte b: ((text.byteAt i: s - 1).or d: 0)) loop s = s - 1
+        p: s
+        for (p + 3) <= t loop {
+            if ((text.byteAt i: p).or d: 0) == 0cZ when (
+                ((text.byteAt i: p + 1).or d: 0) == 95
+            ) then return true
+            p = p + 1
+        }
+    }
+    return false
+}
+
+# isUpperIdentByte -- a capital letter, a digit or `_`
+isUpperIdentByte: function {b: u8} out bool is {
+    return (isUpper :b) or (isDigit :b) or (b == 95)
+}
+
+# spellsGeneratedMember -- whether `text` holds `.data.<x>`, `.in_<x>`,
+# `->in_<x>` or `vtable-><x>`, each <x> a letter or `_`
+spellsGeneratedMember: function {text: StringView} out bool is {
+    if (followedByIdent :text needle: ".data.") then return true
+    if (followedByIdent :text needle: ".in_") then return true
+    if (followedByIdent :text needle: "->in_") then return true
+    return (followedByIdent :text needle: "vtable->")
+}
+
+# followedByIdent -- whether `needle` occurs in `text` followed by a letter or `_`
+followedByIdent: function {text: StringView needle: StringView} out bool is {
+    at: u64
+    for at < text.length loop {
+        o: (text.substring from: at to: text.length).indexOf :needle
+        if o.none then return false
+        e: at + o + needle.length
+        b: (text.byteAt i: e).or d: 0
+        if (isUpper :b) or ((b >= 0ca) and (b <= 0cz)) or (b == 95) then return true
+        at = at + o + 1
+    }
+    return false
+}
+
+# bodyCalls -- whether a body opens a statement expression `({` or calls: an
+# identifier, then spaces, then `(`. A cast's type `((T)` or `((T *)` is no call.
+bodyCalls: function {body: StringView} out bool is {
+    b: dropCasts :body
+    bv: b.stringView
+    if (bv.contains needle: "({") then return true
+    i: u64
+    for i < bv.length loop {
+        if ((bv.byteAt :i).or d: 0) == 40 when (namedBefore text: bv at: i) then return true
+        i = i + 1
+    }
+    return false
+}
+
+# namedBefore -- whether an identifier ends just before `at` in `text`, spaces
+# between: a run of letters, digits and `_` that is not all digits
+namedBefore: function {text: StringView at: u64} out bool is {
+    j: at
+    for j > 0 while ((text.byteAt i: j - 1).or d: 0) == 32 loop j = j - 1
+    for j > 0 while (isIdentByte b: ((text.byteAt i: j - 1).or d: 0)) loop {
+        j = j - 1
+        if (isDigit b: ((text.byteAt i: j).or d: 0)).not then return true
+    }
+    return false
+}
+
+# dropCasts -- `body` with each `((T)` and `((T *)` cast written `((`, T letters,
+# digits, `_` and spaces after a letter or `_`
+dropCasts: function {body: StringView} out String is {
+    r: String
+    i: u64
+    for i < body.length loop {
+        if (body.substring from: i to: body.length).startsWith "((" then {
+            e: castEnd text: body from: i + 2
+            if e > 0 then {
+                r.append "(("
+                i = e
+                continue
+            }
+        }
+        r.appendByte ((body.byteAt :i).or d: 0)
+        i = i + 1
+    }
+    return r
+}
+
+# castEnd -- past the `)` of a cast's type starting at `from` (a letter or `_`,
+# then letters, digits, `_` and spaces, then an optional `*`); 0 when none does
+castEnd: function {text: StringView from: u64} out u64 is {
+    b0: (text.byteAt i: from).or d: 0
+    if (isIdentByte b: b0).not or (isDigit b: b0) then return 0
+    i: from + 1
+    for i < text.length loop {
+        b: (text.byteAt :i).or d: 0
+        if (isIdentByte :b).not when b != 32 then break
+        i = i + 1
+    }
+    if ((text.byteAt :i).or d: 0) == 42 then i = i + 1
+    if ((text.byteAt :i).or d: 0) != 41 then return 0
+    return i + 1
+}
+
+# joined -- `xs`, comma-separated
+joined: function {xs: (List String).view} out String is {
+    r: String
+    for each x: xs loop {
+        if r.length > 0 then r.append ", "
+        r.append x
+    }
+    return r
+}

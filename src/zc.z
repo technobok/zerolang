@@ -155,6 +155,7 @@ zcWord: list {
     fSystem: "--system"
     fWriteSource: "--write-source"
     nShow: "show"
+    nCheck: "check"
     fOnlyC: "--c"
     fRuntime: "--runtime"
     fEmitC: "--emit-c"
@@ -247,7 +248,7 @@ printCommandHelp: function {zv: zast.Vocab.view cmd: StringView} is {
         io.eprintln "Dump the typecheck model as SQL to -o FILE (or stdout)."
         io.eprintln "--canon emits the id-normalized model instead."
     } else if w == zcWord.slot.vNatives then {
-        io.eprintln "usage: zc natives [show WHAT [--c] | --write-source FILE] [--system DIR]"
+        io.eprintln "usage: zc natives [show WHAT [--c] | check WHAT | --write-source FILE] [--system DIR]"
         io.eprintln "Print the conversions section of src/runtime/natives.tbl, derived from"
         io.eprintln "the numeric rule. natives-tbl-guard diffs this against the checked-in"
         io.eprintln "file, so the table cannot drift from the rule it caches."
@@ -259,6 +260,9 @@ printCommandHelp: function {zv: zast.Vocab.view cmd: StringView} is {
         io.eprintln "fixed file (hash; one piece of it, hash.mul128) -- and the line of the"
         io.eprintln "nativec.zd each was written at, the line `zc emit --mark-natives` names."
         io.eprintln "--c prints only the C, holes as written: for a C file or a test to include."
+        io.eprintln "check native checks the rows against the standard library's declarations:"
+        io.eprintln "every native function has a row, every hole names a declared type, arm or"
+        io.eprintln "member, and a value row's body calls nothing (make native-guard)."
     } else if w == zcWord.slot.vData then {
         io.eprintln "usage: zc data <file.zd> [--src DIR]... [--system DIR]"
         io.eprintln "Check a data file (docs/zdata.pdoc) and print every value it defines, one"
@@ -839,6 +843,66 @@ dispatchToolVerb: function {argv: (List String).borrow n: u64 w: u64 zv: zast.Vo
     }
 }
 
+# NativesArgs -- `zc natives`' arguments, as nativesArgs reads them
+NativesArgs: class {
+    # --write-source FILE
+    sourceFile: String
+    # `show WHAT`: what to print
+    showWhat: String
+    # `check WHAT`: which check to run
+    checkWhat: String
+    # --c: show prints only the C
+    onlyC: bool
+    # --system DIR
+    sysFlag: String
+    # an argument none of these is, already reported
+    bad: bool
+}
+
+# nativesArgs -- `zc natives`' arguments after the command
+nativesArgs: function {argv: (List String).view n: u64 zv: zast.Vocab.view} out NativesArgs is {
+    r: (
+        NativesArgs
+        sourceFile: String
+        showWhat: String
+        checkWhat: String
+        onlyC: false
+        sysFlag: String
+        bad: false
+    )
+    i: 2.u64
+    for i < n loop {
+        a: (argv.get :i).copy
+        i = i + 1
+        fw: zv.slotOf text: a.stringView
+        if fw == zcWord.slot.fOnlyC then {
+            r.onlyC = true
+            continue
+        }
+        if i >= n then {
+            io.eprintln "zc natives: unexpected argument '\{a}'"
+            r.bad = true
+            return r
+        }
+        v: (argv.get :i).copy
+        i = i + 1
+        if fw == zcWord.slot.fWriteSource then {
+            r.sourceFile = v.take
+        } else if fw == zcWord.slot.nShow then {
+            r.showWhat = v.take
+        } else if fw == zcWord.slot.nCheck then {
+            r.checkWhat = v.take
+        } else if fw == zcWord.slot.fSystem then {
+            r.sysFlag = v.take
+        } else {
+            io.eprintln "zc natives: unexpected argument '\{a}'"
+            r.bad = true
+            return r
+        }
+    }
+    return r
+}
+
 # runNatives -- `zc natives`: the conversions section of natives.tbl; with
 # `--write-source FILE` the generated unit the nativec files under the system
 # directory make (znativec.servedText). Answers the exit code.
@@ -847,46 +911,28 @@ runNatives: function {argv: (List String).view n: u64 zv: zast.Vocab.view} out i
         print zemitterc.nativeConvRows
         return 0
     }
-    sourceFile: String
-    sysFlag: String
-    showWhat: String
-    onlyC: false
-    i: 2.u64
-    for i < n loop {
-        a: (argv.get :i).copy
-        i = i + 1
-        fw: zv.slotOf text: a.stringView
-        if fw == zcWord.slot.fWriteSource when i < n then {
-            sourceFile = (argv.get :i).copy
-            i = i + 1
-        } else if fw == zcWord.slot.nShow when i < n then {
-            showWhat = (argv.get :i).copy
-            i = i + 1
-        } else if fw == zcWord.slot.fSystem when i < n then {
-            sysFlag = (argv.get :i).copy
-            i = i + 1
-        } else if fw == zcWord.slot.fOnlyC then {
-            onlyC = true
-        } else {
-            io.eprintln "zc natives: unexpected argument '\{a}'"
-            return 2
-        }
-    }
-    sysdir: zcheck.resolveSystemDir flagVal: sysFlag.stringView
-    if showWhat.length > 0 then {
-        t: znativec.showNative what: showWhat.stringView systemdir: sysdir.stringView c: onlyC
+    na: nativesArgs :argv :n :zv
+    if na.bad then return 2
+    sysdir: zcheck.resolveSystemDir flagVal: na.sysFlag.stringView
+    if na.checkWhat.length > 0 then return (
+        znativecheck.checkNatives
+        what: na.checkWhat.stringView
+        systemdir: sysdir.stringView
+    )
+    if na.showWhat.length > 0 then {
+        t: znativec.showNative what: na.showWhat.stringView systemdir: sysdir.stringView c: na.onlyC
         if t.length == 0 then {
-            io.eprintln "zc natives: '\{showWhat}' names no unit, row (unit.key), template or file zc carries"
+            io.eprintln "zc natives: '\{na.showWhat}' names no unit, row (unit.key), template or file zc carries"
             return 1
         }
         print (t.stringView.substring from: 0 to: t.length - 1)
         return 0
     }
-    if sourceFile.length == 0 then {
-        io.eprintln "zc natives: missing --write-source FILE or show WHAT"
+    if na.sourceFile.length == 0 then {
+        io.eprintln "zc natives: missing --write-source FILE, show WHAT or check WHAT"
         return 2
     }
-    return (writeServedSource file: sourceFile.stringView systemdir: sysdir.stringView)
+    return (writeServedSource file: na.sourceFile.stringView systemdir: sysdir.stringView)
 }
 
 # writeServedSource -- `zc natives --write-source FILE`: the generated `nativec`
