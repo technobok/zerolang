@@ -2776,6 +2776,8 @@ nativeWord: list {
     osDarwin: "darwin"
     osWindows: "windows"
     osOther: "other"
+    # the unit whose implementation file holds the foundation
+    unitSystem: "system"
     # the arms of a checked implementation file's choices, by name (checkedRow)
     armValue: "value"
     armSimple: "simple"
@@ -3808,6 +3810,7 @@ checkedUnit: function {
         :symtab
         :u
         :r
+        :owner
     )
     for each l: (zdata.itemsOf :f v: (checkedField :u name: "links")) loop {
         h: NativeHead.create head: "" words: ctx.nativeWords
@@ -3877,9 +3880,11 @@ checkedRow: function {
     symtab: zenv.ZSymbolTable.view
     u: UserImplementation.view
     r: ztypes.cval
+    # the unit the row is keyed under: the file's unit, a foundation group,
+    # "" for a structural row
+    owner: StringView
 } is {
     f: u.file
-    owner: u.name.stringView
     key: checkedText :u v: r name: "key"
     h: NativeHead.create head: "" words: ctx.nativeWords
     h.need = checkedTexts :u v: r name: "needs"
@@ -3891,34 +3896,13 @@ checkedRow: function {
         text: "\{t}\n"
     )
     ps: zdata.itemsOf :f v: (zdata.fieldOf :f v: r name: "pieces")
-    if ps.length > 0 then {
-        pt: String
-        for each p: ps loop {
-            nm: checkedText :u v: p name: "name"
-            if nm.length == 0 then {
-                (
-                    appendPiece
-                    r: pt
-                    :owner
-                    name: ""
-                    demand: ""
-                    needs: ""
-                    text: (checkedText :u v: p name: "text").stringView
-                )
-            } else {
-                (
-                    appendPiece
-                    r: pt
-                    :owner
-                    name: nm.stringView
-                    demand: (checkedTexts :u v: p name: "demand").stringView
-                    needs: (checkedTexts :u v: p name: "needs").stringView
-                    text: (checkedText :u v: p name: "text").stringView
-                )
-            }
-        }
-        w.pieces :ctx :owner key: key.stringView text: pt.take
-    }
+    if ps.length > 0 then (
+        w.pieces
+        :ctx
+        :owner
+        key: key.stringView
+        text: (checkedPieces :u :ps :owner)
+    )
     h.dem = checkedTexts :u v: r name: "demand"
     fm: checkedArm :u v: r name: "form"
     h.value = (ctx.nativeWords.slotOf text: fm.stringView) == nativeWord.slot.armValue
@@ -3948,6 +3932,158 @@ checkedRow: function {
         template: (checkedText :u v: r name: "template").stringView
         body: bd.stringView.trim
     )
+}
+
+# checkedPieces -- a list of pieces read off a checked file, as the text the
+# emitter cuts (appendPiece), as servedPieces writes the pieces zc carries
+checkedPieces: function {
+    u: UserImplementation.view
+    ps: (ListVal ztypes.cval).view
+    owner: StringView
+} out String is {
+    pt: String
+    for each p: ps loop {
+        nm: checkedText :u v: p name: "name"
+        if nm.length == 0 then {
+            (
+                appendPiece
+                r: pt
+                :owner
+                name: ""
+                demand: ""
+                needs: ""
+                text: (checkedText :u v: p name: "text").stringView
+            )
+        } else {
+            (
+                appendPiece
+                r: pt
+                :owner
+                name: nm.stringView
+                demand: (checkedTexts :u v: p name: "demand").stringView
+                needs: (checkedTexts :u v: p name: "needs").stringView
+                text: (checkedText :u v: p name: "text").stringView
+            )
+        }
+    }
+    return pt
+}
+
+# registerFromFiles -- registerImplementations with every unit's rows read off
+# its checked nativec.zd, the standard library's among them (`users`, zc
+# --nativec-files), rather than from the rows zc carries: the same order, the
+# foundation read off system's file. The agreement check: what this registers
+# must emit the same C (nativec-agree-guard).
+registerFromFiles: function {
+    ctx: Ctx
+    ast: Ast.view
+    symtab: zenv.ZSymbolTable.view
+    users: (List UserImplementation).view
+} is {
+    sk: u64
+    found: false
+    k: u64
+    for each u: users loop {
+        if (ctx.nativeWords.slotOf text: u.name.stringView) == nativeWord.slot.unitSystem then {
+            sk = k
+            found = true
+        }
+        k = k + 1
+    }
+    # zc refuses --nativec-files for a program whose files hold no system's
+    # (userImplementations), so the foundation is there
+    if found.not then return
+    sys: users.get i: sk
+    fd: zdata.definition f: sys.file name: "foundation"
+    order: checkedUnitOrder :ctx :users :sys :fd
+    for each c: (checkedItems u: sys v: fd name: "conditions") loop {
+        hd: "@cond \{checkedText u: sys v: c name: "name"} = \{(
+            checkedText
+            u: sys
+            v: c
+            name: "expression"
+        )}"
+        recordCond :ctx head: hd.stringView
+    }
+    w: newRowWalk
+    for each i: order loop checkedFacts :w :ctx :ast :symtab u: (users.get :i)
+    for each i: order loop checkedCanons :w :ctx :ast :symtab u: (users.get :i)
+    for each r: (checkedItems u: sys v: fd name: "structural") loop (
+        checkedRow
+        :w
+        :ctx
+        :ast
+        :symtab
+        u: sys
+        :r
+        owner: ""
+    )
+    recordUnitOrder :ctx order: (checkedTexts u: sys v: fd name: "order").stringView
+    for each g: (checkedItems u: sys v: fd name: "groups") loop {
+        gn: checkedText u: sys v: g name: "name"
+        for each r: (checkedItems u: sys v: g name: "rows") loop (
+            checkedRow
+            :w
+            :ctx
+            :ast
+            :symtab
+            u: sys
+            :r
+            owner: gn.stringView
+        )
+    }
+    for each i: order loop checkedUnit :w :ctx :ast :symtab u: (users.get :i)
+    for each fl: (checkedItems u: sys v: fd name: "files") loop {
+        p: "\{ctx.runtimeDir}/z_\{checkedText u: sys v: fl name: "name"}.inc"
+        ps: checkedItems u: sys v: fl name: "pieces"
+        ctx.tmplCache.set key: p.take value: (checkedPieces u: sys :ps owner: "prelude")
+    }
+}
+
+# checkedUnitOrder -- each file's place in `users`, in the order the foundation
+# `fd` names the units, then the files it does not name, system's first and the
+# rest by name, as servedUnitOrder orders the rows zc carries
+checkedUnitOrder: function {
+    ctx: Ctx
+    users: (List UserImplementation).view
+    sys: UserImplementation.view
+    fd: ztypes.cval
+} out ListVal u64 is {
+    named: zdata.textsOf f: sys.file v: (zdata.fieldOf f: sys.file v: fd name: "order")
+    rest: List String
+    if (named.contains item: sys.name).not then rest.append from: sys.name.copy
+    sorted: List String
+    for each u: users loop {
+        isSys: (ctx.nativeWords.slotOf text: u.name.stringView) == nativeWord.slot.unitSystem
+        if (named.contains item: u.name).not when isSys.not then sorted.append from: u.name.copy
+    }
+    sorted.sort
+    for each nm: sorted loop rest.append from: nm.copy
+    order: ListVal u64
+    for each o: named loop appendUserIndex :users name: o.stringView :order
+    for each o: rest loop appendUserIndex :users name: o.stringView :order
+    return order
+}
+
+# appendUserIndex -- the place in `users` of the file named `name`, when there
+# is one
+appendUserIndex: function {
+    users: (List UserImplementation).view
+    name: StringView
+    order: ListVal u64
+} is {
+    k: u64
+    for each u: users loop {
+        if u.name.stringView == name then order.append k
+        k = k + 1
+    }
+}
+
+# checkedItems -- the elements of list field `name` of data value `v`
+checkedItems: function {
+    u: UserImplementation.view v: ztypes.cval name: StringView
+} out ListVal ztypes.cval is {
+    return (zdata.itemsOf f: u.file v: (zdata.fieldOf f: u.file :v :name))
 }
 
 # checkedField -- field `name` of a user file's implementation
@@ -40507,6 +40643,9 @@ emitC: function {
     runtimeFromDisk: false
     # the user units' C implementation files, checked (UserImplementation)
     users: (List UserImplementation).view
+    # the standard library's rows are the ones zc carries; false when its own
+    # files are among `users` instead (zc --nativec-files)
+    servedRows: true
     fastHash: bool
     readableNames: bool
     errs: List zast.ErrorData
@@ -40769,8 +40908,10 @@ emitC: function {
     if runtimeFromDisk then {
         loadNativeTbl :ctx ast: program :symtab :runtimeDir
         registerUsers :ctx ast: program :symtab :users
-    } else {
+    } else if servedRows then {
         registerImplementations :ctx ast: program :symtab :users
+    } else {
+        registerFromFiles :ctx ast: program :symtab :users
     }
     loadPieces :ctx :runtimeDir
     linkLibs: List String

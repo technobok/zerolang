@@ -890,6 +890,7 @@ runnerWord: list {
     fSaveTemps: "--save-temps"
     fRegenLsp: "--regen-lsp"
     fDoccodeOnly: "--doccode-only"
+    fAgreeOnly: "--agree-only"
     fRunOnly: "--run-only"
     fZc: "--zc"
     fCc: "--cc"
@@ -947,6 +948,8 @@ Runner: class {
     regenLsp: bool
     # run the doccode kind alone (`make doc-check`)
     doccodeOnly: bool
+    # run the agree kind alone (`make nativec-agree-guard`)
+    agreeOnly: bool
     # run the RUN kind alone (`make test-mingw`): the only kind whose programs
     # can be built for another target
     runOnly: bool
@@ -1096,6 +1099,116 @@ runArchCases: function {r: Runner} is {
     } else {
         r.passN = r.passN + 1
     }
+}
+
+# runAgreeCases -- the AGREE kind: every example and emitc_corpus program is
+# emitted for the host and for x86_64-w64-mingw32 twice, once with the C rows zc
+# carries and once with the standard library's rows read off its own nativec.zd
+# files, checked as a user unit's are (`zc emit --nativec-files`). The two must
+# emit the same C, or fail alike: one walk registers both, so this compares the
+# two readers (nativec S6).
+runAgreeCases: function {r: Runner} is {
+    progs: List String
+    appendPrograms :progs dir: r.examplesDir.stringView
+    appendPrograms :progs dir: r.corpusDir.stringView
+    dir: "\{r.tmp.stringView}/agree"
+    io.mkdirp path: dir
+    pool: List PoolJob
+    bases: List String
+    targets: List String
+    for each pg: progs loop {
+        for each t: agreeTargets loop {
+            base: "\{dir}/a\{bases.length}"
+            steps: List PoolStep
+            steps.append (
+                agreeStep
+                :r
+                prog: pg.stringView
+                target: t.stringView
+                option: ""
+                cfile: "\{base}.served.c".stringView
+            )
+            (
+                steps.append
+                (
+                    agreeStep
+                    :r
+                    prog: pg.stringView
+                    target: t.stringView
+                    option: "--nativec-files"
+                    cfile: "\{base}.files.c".stringView
+                )
+            )
+            pool.append (mkJob name: pg.stringView :steps)
+            bases.append base.take
+            targets.append t.string
+        }
+    }
+    statuses: ListVal i32
+    failSteps: ListVal i64
+    runJobs jobs: pool maxJobs: r.jobsMax :statuses :failSteps
+    bad: u64
+    i: u64
+    for i < bases.length loop {
+        base: bases.get :i
+        served: slurp path: "\{base}.served.c".stringView
+        files: slurp path: "\{base}.files.c".stringView
+        if served != files then {
+            print "FAIL(agree) \{(pool.get :i).name} \{(
+                targets.get
+                :i
+            )}: the rows zc carries and the nativec.zd files emit different C"
+            bad = bad + 1
+        }
+        i = i + 1
+    }
+    if bad > 0 then {
+        r.fails = r.fails + bad
+    } else {
+        r.passN = r.passN + bases.length
+    }
+}
+
+# agreeStep -- one agree emit: `prog` for `target` ("" for the host), with
+# `option` when it is not "", its C to `cfile`. A program that does not emit fails
+# both ways or the C differs.
+agreeStep: function {
+    r: Runner.view
+    prog: StringView
+    target: StringView
+    option: StringView
+    cfile: StringView
+} out PoolStep is {
+    argv: List String
+    argv.append from: r.zc.copy
+    argv.append "emit".string
+    argv.append prog.string
+    if target.length > 0 then {
+        argv.append "--target".string
+        argv.append target.string
+    }
+    if option.length > 0 then argv.append option.string
+    argv.append "-o".string
+    argv.append cfile.string
+    return (
+        mkStep
+        argv: argv.take
+        cwd: r.root.stringView
+        outPath: os.nullDevice.stringView
+        errPath: os.nullDevice.stringView
+        timeoutSecs: r.timeoutSecs
+        allowFail: true
+        zlinkFrom: ""
+    )
+}
+
+# agreeTargets -- the targets the agree kind emits for: the host, and Windows,
+# whose rows differ by OS
+agreeTargets: list { "" "x86_64-w64-mingw32" }
+
+# appendPrograms -- each `.z` program of `dir`, by path
+appendPrograms: function {progs: List String dir: StringView} is {
+    for each nm: (fixtureNames :dir suffix: ".z") loop progs.append "\{dir}/\{nm}.z"
 }
 
 # runDoccodeCases -- the DOCCODE kind: every zerolang example of docs/*.pdoc and
@@ -3670,6 +3783,7 @@ newRunner: function out Runner is {
         saveTemps: false
         regenLsp: false
         doccodeOnly: false
+        agreeOnly: false
         runOnly: false
         target: String
         exec: String
@@ -3715,6 +3829,10 @@ takeFlag: function {r: Runner w: u64} out bool is {
     }
     if w == runnerWord.slot.fDoccodeOnly then {
         r.doccodeOnly = true
+        return true
+    }
+    if w == runnerWord.slot.fAgreeOnly then {
+        r.agreeOnly = true
         return true
     }
     if w == runnerWord.slot.fRunOnly then {
@@ -3858,6 +3976,8 @@ main: function is {
     }
     if r.doccodeOnly then {
         runDoccodeCases :r
+    } else if r.agreeOnly then {
+        runAgreeCases :r
     } else if r.runOnly then {
         runRunCases :r
     } else {

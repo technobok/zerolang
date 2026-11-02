@@ -148,6 +148,7 @@ zcWord: list {
     fTime: "--time"
     fFastHash: "--fast-hash"
     fReadableNames: "--readable-names"
+    fNativecFiles: "--nativec-files"
     fEager: "--eager"
     fSrc: "--src"
     fSystem: "--system"
@@ -1053,6 +1054,10 @@ ZcFlags: class {
     fastHash: bool
     # --readable-names: emit source names rather than numbered ones
     readableNames: bool
+    # --nativec-files: read the standard library's C rows from its nativec.zd
+    # files, checked, rather than from the rows zc carries (the agreement
+    # check, nativec-agree-guard)
+    nativecFiles: bool
     # --eager: typecheck every definition, not only what main reaches
     eagerCheck: bool
     # the arguments after `--`, which belong to the program and not to zc
@@ -1096,6 +1101,10 @@ ZcFlags: class {
         }
         if w == zcWord.slot.fReadableNames then {
             this.readableNames = true
+            return true
+        }
+        if w == zcWord.slot.fNativecFiles then {
+            this.nativecFiles = true
             return true
         }
         if w == zcWord.slot.fEager then {
@@ -1353,6 +1362,7 @@ parseZcArgs: function {
         timed: false
         fastHash: false
         readableNames: false
+        nativecFiles: false
         eagerCheck: false
         progArgs: List String
         inProgArgs: false
@@ -1407,23 +1417,45 @@ userImplementations: function {
     rootid: zvfs.fsno
     srcdirs: (List String).view
     systemdir: StringView
+    # the standard library's units too, whose rows zc otherwise carries
+    withServed: bool
 } out List zemitterc.UserImplementation is {
     r: List zemitterc.UserImplementation
+    sawSystem: false
     for each u: prog.units loop {
         n: prog.nodes.get i: u
         if n.namedoperation then {
             nm: (zast.poolTextAt pool: prog.names ref: n.name).stringView
-            if (zemitterc.isServedUnit name: nm).not then {
-                p: nativecFileOf :vfs :rootid unitName: nm
-                if p.length > 0 then {
-                    df: zdata.open file: p.stringView :srcdirs :systemdir
-                    reportDataErrors :df
-                    r.append (zemitterc.UserImplementation name: nm.string file: df.take)
-                }
+            if withServed or (zemitterc.isServedUnit name: nm).not then {
+                got: openUserImplementation :vfs :rootid :srcdirs :systemdir unitName: nm :r
+                if got when n.name == zast.wellKnown.slot.unSystem then sawSystem = true
             }
         }
     }
+    if withServed when sawSystem.not then {
+        io.eprintln "zc: --nativec-files: no system/nativec.zd under the system directory"
+        os.exit code: 2
+    }
     return r
+}
+
+# openUserImplementation -- the unit's implementation file, checked, onto `r`
+# when it has one (nativecFileOf); a file that does not check stops the build.
+# Whether there was one.
+openUserImplementation: function {
+    vfs: zvfs.ZVfs
+    rootid: zvfs.fsno
+    srcdirs: (List String).view
+    systemdir: StringView
+    unitName: StringView
+    r: List zemitterc.UserImplementation
+} out bool is {
+    p: nativecFileOf :vfs :rootid :unitName
+    if p.length == 0 then return false
+    df: zdata.open file: p.stringView :srcdirs :systemdir
+    reportDataErrors :df
+    r.append (zemitterc.UserImplementation name: unitName.string file: df.take)
+    return true
 }
 
 # nativecFileOf -- the path of `<unit>/nativec.zd` beside the unit's own file,
@@ -1855,6 +1887,7 @@ emitCSource: function {
         :runtimeDir
         runtimeFromDisk: (zcheck.runtimeDirGiven flagVal: cf.runtimeFlag.stringView)
         :users
+        servedRows: cf.nativecFiles.not
         fastHash: cf.fastHash
         readableNames: cf.readableNames
         errs: emitErrs
@@ -2100,6 +2133,7 @@ compileUnit: function {
         :rootid
         srcdirs: cf.srcdirs
         systemdir: systemdir.stringView
+        withServed: cf.nativecFiles
     )
     csrc: (
         emitCSource
