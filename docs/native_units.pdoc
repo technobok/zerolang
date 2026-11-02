@@ -1,0 +1,310 @@
+#doc.lang: en
+
+#//: native_units -- a unit's C implementation file
+
+#doc.title: Native Units -- C Implementation Files
+#doc.content type=main id=content
+#doc.heading.number level=4
+#doc.heading.anchor level=4
+#doc.link rel=stylesheet href=style/zerolang.css
+#doc.link rel=icon type=image/png sizes=192x192 href=style/favicon-192x192.png
+#doc.link rel=icon type=image/x-icon href=style/favicon-48x48.ico
+#doc.link rel=icon type=image/png sizes=32x32 href=style/favicon-32x32.png
+#doc.link rel=icon type=image/png sizes=16x16 href=style/favicon-16x16.png
+
+#doc.script src=style/tocbot.min.js
+#doc.script src=style/init.js
+#doc.script src=style/prism.min.js
+#doc.script src=style/prism-zerolang.js
+#doc.author: pw <p@zerolang.org>
+#doc.datecreated: 2026-11-02
+#doc.version: v0.1
+
+#doc.body class=toc-sidebar
+#nav id=nav: [#include literal=true: style/nav.html]
+
+#header:
+  #-: Native Units -- C Implementation Files
+
+#nav id=toc class=toc-sidebar:
+  #div id=tocfile: Table of Contents
+  #doc.toc
+
+#--: What a native unit is
+
+A declaration marked #~"is native" has no body in zerolang. Its body is
+written in C, in the #_*"C implementation file" of its unit:
+#~"<unit>/nativec.zd", in the directory of the unit's own name beside
+#~"<unit>.z". A unit with such a declaration is a #_*"native unit". The file
+can hold the C for functions, for a class's methods, and for whole classes.
+It also holds what the unit needs from the C toolchain: the libraries to link,
+the C sources to build, and the compilers that cannot build it.
+
+The file is a data file (see [#> to=./zdata.html: zdata]). Its value has the
+type #~"runtime.nativec", which #~"lib/system/runtime.zd" declares. That file
+also documents each field. The standard library's units are native units in
+the same way: the C of #~"io" is in #~"lib/system/io/nativec.zd".
+
+#ul:
+  [#*: The standard library's files are built into #~"zc". A build does not
+    read them.]
+  [#*: The file of any other unit is read and checked each time a program that
+    reaches the unit is built, as #~"zc data" checks a data file. An error in
+    the file stops the build, and names the file and the line.]
+  [#*: A native declaration that the program uses, and that has no row in its
+    unit's file, is error #~"E0501". When the unit has no file, the error names
+    the file that it looked for.]
+
+#--: A first native unit
+
+The unit #~"counter" declares two native functions:
+
+#code language=zerolang check=none: """
+  # counter.z -- two natives, implemented in counter/nativec.zd
+
+  # triple -- three times n
+  triple: function {n: i64} out i64 is native
+
+  # hypot -- the length of the hypotenuse of a right triangle with sides a and b
+  hypot: function {a: f64 b: f64} out f64 is native
+
+  main: function is {
+      print "\{triple n: 14}"
+      print "\{hypot a: 3.0 b: 4.0}"
+  }
+  """
+
+Its C is in #~"counter/nativec.zd". Each native has a #_*"row", found by its
+#~"key": the name of the declaration in its unit. The row's fragment is C that
+is written once into a program that uses the native. The C function of a
+native free function is named #~"z_<unit>_<name>", and takes its arguments in
+their declared order. #~"hypot" calls #~"sqrt", so a program that reaches the
+unit links the C math library (#~"m"):
+
+#code language=zdata: """"
+  # nativec -- counter's C implementation
+  c: runtime.nativec
+
+  # implementation -- the C behind counter's native declarations
+  implementation: (
+      c.implementation
+      rows: list {
+          (
+              c.row
+              key: "triple"
+              fragments: list {
+                  """
+                  static int64_t z_counter_triple(int64_t n) {
+                      return n * 3;
+                  }
+                  """
+              }
+          )
+          (
+              c.row
+              key: "hypot"
+              fragments: list {
+                  """
+                  static double z_counter_hypot(double a, double b) {
+                      return sqrt(a * a + b * b);
+                  }
+                  """
+              }
+          )
+      }
+      links: list { (c.link library: "m") }
+  )
+  """"
+
+#code: """
+  $ zc run counter.z
+  42
+  5
+  """
+
+The fixtures under #~"tests/fixtures/user_native/" are two larger native
+units. #~"mystery" has a hidden subunit's native, a fragment that calls the
+standard library's C, and a variant row chosen by a fact. #~"cellar" has
+native classes written from C templates.
+
+#--: Rows
+
+A row's #~"key" says what the row implements:
+
+#ul:
+  [#*: #~"<function>" -- a free function of the unit (#~"readText").]
+  [#*: #~"<type>.<member>" -- a member of a type of the unit (#~"File.close",
+    #~"u8.+").]
+  [#*: #~"<type>.@class" -- a class whose C struct the runtime writes.]
+  [#*: #~"@<name>" -- a helper, which several rows share. No declaration of the
+    unit can spell a name that starts with #~"@".]
+
+A row holds C in one of three forms:
+
+#ul:
+  [#*: #~"body" -- a C expression, written where the native is used. A body
+    is for a member of a type: an operator, a conversion, a method. Its holes
+    (below) are the operands.]
+  [#*: #~"fragments" -- C functions, each written once into a program that
+    uses the native.]
+  [#*: #~"pieces" -- a fragment in parts. A piece is written only when a need
+    names its demand; a piece with no demand is written always.]
+
+The other fields of a row:
+
+#table:
+  [#tr: [#th: Field] [#th: What it says]]
+  [#tr: [#td: #~"needs"] [#td: the rows that this row's C calls. A need is
+    a demand of the row's own unit (#~"@errno") or #~"<unit>.<demand>" of
+    another unit's (#~"prelude.@xmalloc"). Without the need, the callee is not
+    written, and the C does not compile.]]
+  [#tr: [#td: #~"demand"] [#td: the demands that reach the row, when that is
+    not the last part of the key: a member's name, #~"@unit" (the unit is
+    used), #~"uses_<T>" (the C names the unit's type #~"T").]]
+  [#tr: [#td: #~"form"] [#td: what the body is: #~"c.form.call", a call
+    (the default), or #~"c.form.value", a value computed from the holes with
+    no call.]]
+  [#tr: [#td: #~"byPointer"] [#td: the body takes its operands by pointer.]]
+  [#tr: [#td: #~"constant"] [#td: a variant row, used in place of the plain
+    row of the same key when the arguments at these positions are constants.]]
+  [#tr: [#td: #~"fact"] [#td: a variant row, used in place of the plain row of
+    the same key when the fact holds (below).]]
+  [#tr: [#td: #~"pulls"] [#td: the demands of other units that using the row
+    makes at once.]]
+  [#tr: [#td: #~"members"] [#td: the template members of other instances
+    that the fragments call (#~"List_String.append").]]
+  [#tr: [#td: #~"via"] [#td: on a native free function: the template function
+    of the class instance that the function returns is its body.]]
+  [#tr: [#td: #~"template"] [#td: on a class row: the template the class is
+    written from.]]
+  [#tr: [#td: #~"live"] [#td: on a class row: the instances that must all
+    exist for the class to be in use.]]
+  [#tr: [#td: #~"destroy"] [#td: on a class row: the C of the class's
+    destructor, for what its declaration cannot show (a file descriptor, a
+    handle).]]
+  [#tr: [#td: #~"callsEquals"] [#td: on an #~"=="/#~"!=" row: the body calls
+    the generated #~"==" of its type.]]
+  [#tr: [#td: #~"call"] [#td: on a #~"StringView" member: how a call of the
+    member is written.]]
+
+The rows of a unit are in #_*"load order": the C of a row is written after
+the C of the rows above it. A row must stand below every row whose C it uses.
+
+#--: Holes
+
+A body, a fragment and a piece can have #_*"holes": names between #~"@"
+characters, which #~"zc" fills when it writes the C.
+
+#ul:
+  [#*: #~"@L@", #~"@R@" -- the left and right operands of an operator.]
+  [#*: #~"@V@" -- the receiver of a row that takes no argument.]
+  [#*: #~"@A1@", #~"@A2@", ... -- the arguments, in declared order. The
+    receiver is not counted.]
+  [#*: #~"@T@" -- the C name of the receiver's type, without its #~"z_".]
+  [#*: #~"@<Type>@" -- the C name of a type, without its #~"z_", by its
+    name (#~"z_@File@_t").]
+  [#*: #~"@TAG_<type>@", #~"@ARM_<type>.<arm>@", #~"@MEMBER_<type>.<name>@"
+    -- the discriminator of a variant, the tag of one of its arms, and a member
+    of a struct that #~"zc" writes for a declaration.]
+
+An operand is read once, in written order, before the body. A lone #~"@"
+opens a hole, so C that needs the character itself cannot have one in a
+fragment.
+
+#--: Facts and variant rows
+
+A #_*"fact" is true of the whole program: it holds when the program uses any
+of the declarations it lists. A row with #~"fact" is a variant of the plain
+row of the same key. When the fact holds, the variant is used. When it does
+not hold, the variant is dropped. The variant stands above the plain row.
+
+#code language=zdata: """
+  c: runtime.nativec
+
+  implementation: (
+      c.implementation
+      rows: list {
+          (c.row key: "conjure" fact: "brewing" fragments: list { "/* while brewing */" })
+          (c.row key: "conjure" fragments: list { "/* otherwise */" })
+      }
+      facts: list { (c.fact name: "brewing" reach: list { "mystery.spell.brew" }) }
+  )
+  """
+
+A link and a source can also hold under a fact. The standard library uses the
+fact #~"threaded", which holds when a program starts a thread: then its rows
+take locks and its C sources are built thread-safe.
+
+#--: Classes and templates
+
+A class marked #~"is native" has its struct and methods written in C. Its
+#~"<Class>.@class" row names a #~"template", and the file's #~"templates" hold
+it. A template is C text with holes of its own: #~"@@NAME@@" is the C name of
+the instance, and for each type parameter #~"P", #~"@@P@@" is the C type of its
+argument and #~"@@P_DESTROY@@" a function that destroys one. A generic class
+is written once for each instance. A class that is not generic is written
+once. A template's #~"sections" can each belong to a member: a section is
+written only when its member is used. Each native method still has its row.
+
+A native method is a C function #~"z_<class>_<method>", called with a pointer
+to the receiver, then the arguments. A view (#~"StringView", a #~".view") is
+passed by value, an owned collection by pointer, and anything else by value. A
+template defines it as #~"z_@@NAME@@_<method>". A method row of a class that
+has no template defines it in a fragment, with the class's C name as a hole:
+#~"z_@File@_close(z_@File@_t* p)".
+
+#--: Toolchain requirements
+
+#ul:
+  [#*: #~"links" -- a library to link (#~"(c.link library: \"pthread\")").]
+  [#*: #~"sources" -- a C source under the vendor directory to compile and
+    link, with its #~"defines". The driver builds it into its object cache
+    (see #~"zc cobj").]
+  [#*: #~"refusals" -- what cannot build the unit: the C compilers that lack
+    a feature, or the only architectures that have it. A refused toolchain is
+    named before any C is compiled.]
+
+Each can be for one hidden subunit (#~"subunit"), for some operating systems
+only (#~"os"), or only when a fact holds (#~"fact"). A requirement applies
+only when its unit is reached: a program that does not use the unit does not
+link its library.
+
+#--: Threads
+
+A native's C must hold with other threads running, because the checker lets
+values move between threads and lets several threads read one value:
+
+#ul:
+  [#*: A method with a #~".view" receiver gets a const pointer, and writes
+    nothing that its object reaches. Then any number of threads can read one
+    object at the same time.]
+  [#*: What two values share changes only atomically, or under a lock of its
+    own.]
+  [#*: State of the whole process is written before the program's #~"main"
+    runs, or by a row that holds under the fact #~"threaded".]
+  [#*: Use the reentrant C library calls (#~"getpwuid_r", not
+    #~"strerror").]
+
+#--: Finding what wrote a line of C
+
+#~"zc emit --mark-natives" writes a comment line before each part of the C
+that a native unit's file gave: a row's fragment, a piece, a template, or one
+of the fixed files that every program's C starts with. The comment names the
+row and the file and line it is written at:
+
+#code: """
+  $ zc emit counter.z --mark-natives -o counter.c
+  $ grep -A3 'nativec: row counter.triple' counter.c
+  /* nativec: row counter.triple, counter/nativec.zd:9 */
+  static int64_t z_counter_triple(int64_t n) {
+      return n * 3;
+  }
+  """
+
+Without the comment lines, the C is the same as without the flag.
+
+#~"zc natives show" prints what #~"zc" has built in for the standard
+library: the rows of a unit (#~"zc natives show io"), one row with every
+variant of it, its fields and its C (#~"zc natives show io.eprintln"), or a
+template (#~"zc natives show List"). Each comes with the file and line that
+a mark names.

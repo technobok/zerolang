@@ -122,7 +122,7 @@ scanCode: function {
     readArgs :b :args
     next: at + 1
     if tail.startsWith "\"\"\"" then {
-        next = readQuoted :b :lines from: at + 1
+        next = readQuoted :b :lines from: at + 1 fence: (quoteRun text: tail).stringView
     } else if tail.length == 0 then {
         next = readIndented :b :lines from: at + 1
     } else {
@@ -132,15 +132,26 @@ scanCode: function {
     return next
 }
 
-# readQuoted -- the lines up to the one holding the closing `"""`, dedented by
-# their common indent. Answers the line after the closer.
-readQuoted: function {b: DocBlock lines: (List String).view from: u64} out u64 is {
+# quoteRun -- the run of `"` that `text` opens with: a body opened by more than
+# three closes at as many, so it may hold `"""` itself
+quoteRun: function {text: StringView} out String is {
+    n: u64
+    for ((text.byteAt i: n).or d: 0) == 34 loop n = n + 1
+    return (text.substring from: 0 to: n).string
+}
+
+# readQuoted -- the lines up to the one holding the closing `fence` (the
+# opening run of quotes), dedented by their common indent. Answers the line
+# after the closer.
+readQuoted: function {
+    b: DocBlock lines: (List String).view from: u64 fence: StringView
+} out u64 is {
     raw: List String
     j: from
     closed: false
     for (j < lines.length) and closed.not loop {
         lj: lines.get i: j
-        if lj.stringView.contains "\"\"\"" then {
+        if lj.stringView.contains fence then {
             closed = true
         } else {
             raw.append from: lj.copy

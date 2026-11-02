@@ -1,0 +1,349 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Native Units -- C Implementation Files</title>
+<link rel="stylesheet" href="style/zerolang.css">
+<link rel="icon" href="style/favicon-192x192.png" type="image/png" sizes="192x192">
+<link rel="icon" href="style/favicon-48x48.ico" type="image/x-icon">
+<link rel="icon" href="style/favicon-32x32.png" type="image/png" sizes="32x32">
+<link rel="icon" href="style/favicon-16x16.png" type="image/png" sizes="16x16">
+<script src="style/tocbot.min.js"></script>
+<script src="style/init.js"></script>
+<script src="style/prism.min.js"></script>
+<script src="style/prism-zerolang.js"></script>
+<meta name="author" content="pw &lt;p@zerolang.org&gt;">
+<meta name="datecreated" content="2026-11-02">
+<meta name="version" content="v0.1">
+</head>
+<body class="toc-sidebar">
+<nav id="nav">
+  <div class="doc-wrapper">
+    <a title="Zerolang" href="./index.html">Zerolang</a>
+  </div>
+
+  <label>
+    <input id="mode-checkbox" class="mode-checkbox" type="checkbox" />
+    <div class="mode-slot">
+      <div class="sun-icon-wrapper">
+        <svg
+          class="sun-icon"
+          xmlns="http://www.w3.org/2000/svg"
+          width="24"
+          height="24"
+          viewBox="0 0 24 24"
+          fill="none"
+          stroke="currentColor"
+          stroke-width="2"
+          stroke-linecap="round"
+          stroke-linejoin="round"
+        >
+          <circle cx="12" cy="12" r="5"></circle>
+          <line x1="12" y1="1" x2="12" y2="3"></line>
+          <line x1="12" y1="21" x2="12" y2="23"></line>
+          <line x1="4.22" y1="4.22" x2="5.64" y2="5.64"></line>
+          <line x1="18.36" y1="18.36" x2="19.78" y2="19.78"></line>
+          <line x1="1" y1="12" x2="3" y2="12"></line>
+          <line x1="21" y1="12" x2="23" y2="12"></line>
+          <line x1="4.22" y1="19.78" x2="5.64" y2="18.36"></line>
+          <line x1="18.36" y1="5.64" x2="19.78" y2="4.22"></line>
+        </svg>
+      </div>
+      <div class="mode-button"></div>
+      <div class="moon-icon-wrapper">
+        <svg
+          class="moon-icon"
+          xmlns="http://www.w3.org/2000/svg"
+          width="24"
+          height="24"
+          viewBox="0 0 24 24"
+          fill="none"
+          stroke="currentColor"
+          stroke-width="2"
+          stroke-linecap="round"
+          stroke-linejoin="round"
+        >
+          <path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"></path>
+        </svg>
+      </div>
+    </div>
+  </label>
+
+
+</nav>
+<header>
+<h1 id="native-units-c-implementation-files"><a href="#native-units-c-implementation-files">Native Units -- C Implementation Files</a></h1>
+</header>
+<nav class="toc-sidebar" id="toc">
+<div id="tocfile">
+Table of Contents</div>
+
+<ul>
+<li><a href="#native-units-c-implementation-files">Native Units -- C Implementation Files</a>
+<ul>
+<li><a href="#what-a-native-unit-is">What a native unit is</a>
+</li>
+<li><a href="#a-first-native-unit">A first native unit</a>
+</li>
+<li><a href="#rows">Rows</a>
+</li>
+<li><a href="#holes">Holes</a>
+</li>
+<li><a href="#facts-and-variant-rows">Facts and variant rows</a>
+</li>
+<li><a href="#classes-and-templates">Classes and templates</a>
+</li>
+<li><a href="#toolchain-requirements">Toolchain requirements</a>
+</li>
+<li><a href="#threads">Threads</a>
+</li>
+<li><a href="#finding-what-wrote-a-line-of-c">Finding what wrote a line of C</a>
+</li>
+</ul>
+</li>
+</ul>
+
+</nav>
+<main id="content">
+<h2 id="what-a-native-unit-is"><a href="#what-a-native-unit-is">1. What a native unit is</a></h2>
+<p>A declaration marked <code>is native</code> has no body in zerolang. Its body is
+written in C, in the <em><strong>C implementation file</strong></em> of its unit:
+<code>&lt;unit&gt;/nativec.zd</code>, in the directory of the unit's own name beside
+<code>&lt;unit&gt;.z</code>. A unit with such a declaration is a <em><strong>native unit</strong></em>. The file
+can hold the C for functions, for a class's methods, and for whole classes.
+It also holds what the unit needs from the C toolchain: the libraries to link,
+the C sources to build, and the compilers that cannot build it.</p>
+<p>The file is a data file (see <a href="./zdata.html">zdata</a>). Its value has the
+type <code>runtime.nativec</code>, which <code>lib/system/runtime.zd</code> declares. That file
+also documents each field. The standard library's units are native units in
+the same way: the C of <code>io</code> is in <code>lib/system/io/nativec.zd</code>.</p>
+<ul>
+<li>The standard library's files are built into <code>zc</code>. A build does not
+    read them.</li>
+<li>The file of any other unit is read and checked each time a program that
+    reaches the unit is built, as <code>zc data</code> checks a data file. An error in
+    the file stops the build, and names the file and the line.</li>
+<li>A native declaration that the program uses, and that has no row in its
+    unit's file, is error <code>E0501</code>. When the unit has no file, the error names
+    the file that it looked for.</li>
+</ul>
+<h2 id="a-first-native-unit"><a href="#a-first-native-unit">2. A first native unit</a></h2>
+<p>The unit <code>counter</code> declares two native functions:</p>
+<pre><code class="language-zerolang"># counter.z -- two natives, implemented in counter/nativec.zd
+
+# triple -- three times n
+triple: function {n: i64} out i64 is native
+
+# hypot -- the length of the hypotenuse of a right triangle with sides a and b
+hypot: function {a: f64 b: f64} out f64 is native
+
+main: function is {
+    print "\{triple n: 14}"
+    print "\{hypot a: 3.0 b: 4.0}"
+}</code></pre>
+<p>Its C is in <code>counter/nativec.zd</code>. Each native has a <em><strong>row</strong></em>, found by its
+<code>key</code>: the name of the declaration in its unit. The row's fragment is C that
+is written once into a program that uses the native. The C function of a
+native free function is named <code>z_&lt;unit&gt;_&lt;name&gt;</code>, and takes its arguments in
+their declared order. <code>hypot</code> calls <code>sqrt</code>, so a program that reaches the
+unit links the C math library (<code>m</code>):</p>
+<pre><code class="language-zdata"># nativec -- counter's C implementation
+c: runtime.nativec
+
+# implementation -- the C behind counter's native declarations
+implementation: (
+    c.implementation
+    rows: list {
+        (
+            c.row
+            key: "triple"
+            fragments: list {
+                """
+                static int64_t z_counter_triple(int64_t n) {
+                    return n * 3;
+                }
+                """
+            }
+        )
+        (
+            c.row
+            key: "hypot"
+            fragments: list {
+                """
+                static double z_counter_hypot(double a, double b) {
+                    return sqrt(a * a + b * b);
+                }
+                """
+            }
+        )
+    }
+    links: list { (c.link library: "m") }
+)</code></pre>
+<pre><code>$ zc run counter.z
+42
+5</code></pre>
+<p>The fixtures under <code>tests/fixtures/user_native/</code> are two larger native
+units. <code>mystery</code> has a hidden subunit's native, a fragment that calls the
+standard library's C, and a variant row chosen by a fact. <code>cellar</code> has
+native classes written from C templates.</p>
+<h2 id="rows"><a href="#rows">3. Rows</a></h2>
+<p>A row's <code>key</code> says what the row implements:</p>
+<ul>
+<li><code>&lt;function&gt;</code> -- a free function of the unit (<code>readText</code>).</li>
+<li><code>&lt;type&gt;.&lt;member&gt;</code> -- a member of a type of the unit (<code>File.close</code>,
+<code>u8.+</code>).</li>
+<li><code>&lt;type&gt;.@class</code> -- a class whose C struct the runtime writes.</li>
+<li><code>@&lt;name&gt;</code> -- a helper, which several rows share. No declaration of the
+unit can spell a name that starts with <code>@</code>.</li>
+</ul>
+<p>A row holds C in one of three forms:</p>
+<ul>
+<li><code>body</code> -- a C expression, written where the native is used. A body
+is for a member of a type: an operator, a conversion, a method. Its holes
+(below) are the operands.</li>
+<li><code>fragments</code> -- C functions, each written once into a program that
+uses the native.</li>
+<li><code>pieces</code> -- a fragment in parts. A piece is written only when a need
+names its demand; a piece with no demand is written always.</li>
+</ul>
+<p>The other fields of a row:</p>
+<table>
+<thead>
+<tr><th style="text-align: left">Field</th><th style="text-align: left">What it says</th></tr>
+</thead>
+<tbody>
+<tr><td><code>needs</code></td><td>the rows that this row's C calls. A need is
+    a demand of the row's own unit (<code>@errno</code>) or <code>&lt;unit&gt;.&lt;demand&gt;</code> of
+    another unit's (<code>prelude.@xmalloc</code>). Without the need, the callee is not
+    written, and the C does not compile.</td></tr>
+<tr><td><code>demand</code></td><td>the demands that reach the row, when that is
+    not the last part of the key: a member's name, <code>@unit</code> (the unit is
+    used), <code>uses_&lt;T&gt;</code> (the C names the unit's type <code>T</code>).</td></tr>
+<tr><td><code>form</code></td><td>what the body is: <code>c.form.call</code>, a call
+    (the default), or <code>c.form.value</code>, a value computed from the holes with
+    no call.</td></tr>
+<tr><td><code>byPointer</code></td><td>the body takes its operands by pointer.</td></tr>
+<tr><td><code>constant</code></td><td>a variant row, used in place of the plain
+    row of the same key when the arguments at these positions are constants.</td></tr>
+<tr><td><code>fact</code></td><td>a variant row, used in place of the plain row of
+    the same key when the fact holds (below).</td></tr>
+<tr><td><code>pulls</code></td><td>the demands of other units that using the row
+    makes at once.</td></tr>
+<tr><td><code>members</code></td><td>the template members of other instances
+    that the fragments call (<code>List_String.append</code>).</td></tr>
+<tr><td><code>via</code></td><td>on a native free function: the template function
+    of the class instance that the function returns is its body.</td></tr>
+<tr><td><code>template</code></td><td>on a class row: the template the class is
+    written from.</td></tr>
+<tr><td><code>live</code></td><td>on a class row: the instances that must all
+    exist for the class to be in use.</td></tr>
+<tr><td><code>destroy</code></td><td>on a class row: the C of the class's
+    destructor, for what its declaration cannot show (a file descriptor, a
+    handle).</td></tr>
+<tr><td><code>callsEquals</code></td><td>on an <code>==</code>/<code>!=</code> row: the body calls
+    the generated <code>==</code> of its type.</td></tr>
+<tr><td><code>call</code></td><td>on a <code>StringView</code> member: how a call of the
+    member is written.</td></tr>
+</tbody>
+</table>
+<p>The rows of a unit are in <em><strong>load order</strong></em>: the C of a row is written after
+the C of the rows above it. A row must stand below every row whose C it uses.</p>
+<h2 id="holes"><a href="#holes">4. Holes</a></h2>
+<p>A body, a fragment and a piece can have <em><strong>holes</strong></em>: names between <code>@</code>
+characters, which <code>zc</code> fills when it writes the C.</p>
+<ul>
+<li><code>@L@</code>, <code>@R@</code> -- the left and right operands of an operator.</li>
+<li><code>@V@</code> -- the receiver of a row that takes no argument.</li>
+<li><code>@A1@</code>, <code>@A2@</code>, ... -- the arguments, in declared order. The
+receiver is not counted.</li>
+<li><code>@T@</code> -- the C name of the receiver's type, without its <code>z_</code>.</li>
+<li><code>@&lt;Type&gt;@</code> -- the C name of a type, without its <code>z_</code>, by its
+name (<code>z_@File@_t</code>).</li>
+<li><code>@TAG_&lt;type&gt;@</code>, <code>@ARM_&lt;type&gt;.&lt;arm&gt;@</code>, <code>@MEMBER_&lt;type&gt;.&lt;name&gt;@</code>
+-- the discriminator of a variant, the tag of one of its arms, and a member
+of a struct that <code>zc</code> writes for a declaration.</li>
+</ul>
+<p>An operand is read once, in written order, before the body. A lone <code>@</code>
+opens a hole, so C that needs the character itself cannot have one in a
+fragment.</p>
+<h2 id="facts-and-variant-rows"><a href="#facts-and-variant-rows">5. Facts and variant rows</a></h2>
+<p>A <em><strong>fact</strong></em> is true of the whole program: it holds when the program uses any
+of the declarations it lists. A row with <code>fact</code> is a variant of the plain
+row of the same key. When the fact holds, the variant is used. When it does
+not hold, the variant is dropped. The variant stands above the plain row.</p>
+<pre><code class="language-zdata">c: runtime.nativec
+
+implementation: (
+    c.implementation
+    rows: list {
+        (c.row key: "conjure" fact: "brewing" fragments: list { "/* while brewing */" })
+        (c.row key: "conjure" fragments: list { "/* otherwise */" })
+    }
+    facts: list { (c.fact name: "brewing" reach: list { "mystery.spell.brew" }) }
+)</code></pre>
+<p>A link and a source can also hold under a fact. The standard library uses the
+fact <code>threaded</code>, which holds when a program starts a thread: then its rows
+take locks and its C sources are built thread-safe.</p>
+<h2 id="classes-and-templates"><a href="#classes-and-templates">6. Classes and templates</a></h2>
+<p>A class marked <code>is native</code> has its struct and methods written in C. Its
+<code>&lt;Class&gt;.@class</code> row names a <code>template</code>, and the file's <code>templates</code> hold
+it. A template is C text with holes of its own: <code>@@NAME@@</code> is the C name of
+the instance, and for each type parameter <code>P</code>, <code>@@P@@</code> is the C type of its
+argument and <code>@@P_DESTROY@@</code> a function that destroys one. A generic class
+is written once for each instance. A class that is not generic is written
+once. A template's <code>sections</code> can each belong to a member: a section is
+written only when its member is used. Each native method still has its row.</p>
+<p>A native method is a C function <code>z_&lt;class&gt;_&lt;method&gt;</code>, called with a pointer
+to the receiver, then the arguments. A view (<code>StringView</code>, a <code>.view</code>) is
+passed by value, an owned collection by pointer, and anything else by value. A
+template defines it as <code>z_@@NAME@@_&lt;method&gt;</code>. A method row of a class that
+has no template defines it in a fragment, with the class's C name as a hole:
+<code>z_@File@_close(z_@File@_t* p)</code>.</p>
+<h2 id="toolchain-requirements"><a href="#toolchain-requirements">7. Toolchain requirements</a></h2>
+<ul>
+<li><code>links</code> -- a library to link (<code>(c.link library: "pthread")</code>).</li>
+<li><code>sources</code> -- a C source under the vendor directory to compile and
+link, with its <code>defines</code>. The driver builds it into its object cache
+(see <code>zc cobj</code>).</li>
+<li><code>refusals</code> -- what cannot build the unit: the C compilers that lack
+a feature, or the only architectures that have it. A refused toolchain is
+named before any C is compiled.</li>
+</ul>
+<p>Each can be for one hidden subunit (<code>subunit</code>), for some operating systems
+only (<code>os</code>), or only when a fact holds (<code>fact</code>). A requirement applies
+only when its unit is reached: a program that does not use the unit does not
+link its library.</p>
+<h2 id="threads"><a href="#threads">8. Threads</a></h2>
+<p>A native's C must hold with other threads running, because the checker lets
+values move between threads and lets several threads read one value:</p>
+<ul>
+<li>A method with a <code>.view</code> receiver gets a const pointer, and writes
+    nothing that its object reaches. Then any number of threads can read one
+    object at the same time.</li>
+<li>What two values share changes only atomically, or under a lock of its
+    own.</li>
+<li>State of the whole process is written before the program's <code>main</code>
+    runs, or by a row that holds under the fact <code>threaded</code>.</li>
+<li>Use the reentrant C library calls (<code>getpwuid_r</code>, not
+    <code>strerror</code>).</li>
+</ul>
+<h2 id="finding-what-wrote-a-line-of-c"><a href="#finding-what-wrote-a-line-of-c">9. Finding what wrote a line of C</a></h2>
+<p><code>zc emit --mark-natives</code> writes a comment line before each part of the C
+that a native unit's file gave: a row's fragment, a piece, a template, or one
+of the fixed files that every program's C starts with. The comment names the
+row and the file and line it is written at:</p>
+<pre><code>$ zc emit counter.z --mark-natives -o counter.c
+$ grep -A3 'nativec: row counter.triple' counter.c
+/* nativec: row counter.triple, counter/nativec.zd:9 */
+static int64_t z_counter_triple(int64_t n) {
+    return n * 3;
+}</code></pre>
+<p>Without the comment lines, the C is the same as without the flag.</p>
+<p><code>zc natives show</code> prints what <code>zc</code> has built in for the standard
+library: the rows of a unit (<code>zc natives show io</code>), one row with every
+variant of it, its fields and its C (<code>zc natives show io.eprintln</code>), or a
+template (<code>zc natives show List</code>). Each comes with the file and line that
+a mark names.</p>
+</main>
+</body>
+</html>
