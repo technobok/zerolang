@@ -178,14 +178,18 @@ doc-check: bin/zc bin/zl $(BUILDDIR)/ztestrunner
 	$(BUILDDIR)/ztestrunner --zc bin/zc --cc $(CC) --root . --jobs $(NPROC) --doccode-only
 
 # natives-show-guard -- `zc natives show` names where each thing it shows is
-# written: a row's first line is its key and the line of its unit's nativec.zd
-# that spells that key, and its fragment's C follows; a unit lists its rows; a
-# name that is none of them is refused.
+# written: each row `zc emit --mark-natives` marks in a program's C, shown, is
+# placed at the file and line its mark names; a row's fragment's C is shown; a
+# unit lists its rows; a name that is none of them is refused.
 natives-show-guard: bin/zc
-	@fail=0; \
-	n=$$(grep -n 'key: "eprintln"' lib/system/io/nativec.zd | head -1 | cut -d: -f1); \
-	first=$$(bin/zc natives show io.eprintln --system lib/system | head -1); \
-	[ "$$first" = "io.eprintln  lib/system/io/nativec.zd:$$n" ] || { echo "natives-show-guard FAIL: io.eprintln shows '$$first', want line $$n"; fail=1; }; \
+	@fail=0; d=$(BUILDDIR)/natives-show; mkdir -p $$d; \
+	bin/zc emit examples/io_textreader.z --system lib/system --mark-natives -o $$d/marked.c || fail=1; \
+	grep '^/\* nativec: row ' $$d/marked.c | sort -u | sed 's|^/\* nativec: row \(.*\), \(.*\) \*/$$|\1  \2|' > $$d/rows.txt; \
+	[ -s $$d/rows.txt ] || { echo "natives-show-guard FAIL: zc emit --mark-natives marked no row"; fail=1; }; \
+	while IFS= read -r m; do \
+	  bin/zc natives show "$${m%%  *}" --system lib/system | grep -qxF "$$m" \
+	    || { echo "natives-show-guard FAIL: the mark says '$$m', zc natives show does not"; fail=1; }; \
+	done < $$d/rows.txt; \
 	bin/zc natives show io.eprintln --system lib/system | grep -q 'static void z_io_eprintln' \
 	  || { echo "natives-show-guard FAIL: io.eprintln's fragment is not shown"; fail=1; }; \
 	bin/zc natives show io --system lib/system | grep -q '^io.eprintln  ' \
@@ -193,14 +197,15 @@ natives-show-guard: bin/zc
 	bin/zc natives show io.nosuch --system lib/system > /dev/null 2>&1 \
 	  && { echo "natives-show-guard FAIL: a row that does not exist was shown"; fail=1; }; \
 	if [ $$fail -ne 0 ]; then exit 1; fi; \
-	echo "natives-show-guard OK: zc natives show names each row's file and line and shows its C"
+	echo "natives-show-guard OK: zc natives show places each row where zc emit --mark-natives marks it, and shows its C"
 
 # nativec-agree-guard -- the agree kind alone: every example and emitc_corpus
 # program, for the host and for Windows, emits the same C from the rows zc
 # carries as from the standard library's own nativec.zd files read as a user
 # unit's are (`zc emit --nativec-files`): one walk registers both, so the two
-# readers agree. (bin/zc is rebuilt when a nativec.zd changes, so the rows it
-# carries are the files' as they stand.)
+# readers agree. A third emit, `--mark-natives`, must write marks and, without
+# them, the same C. (bin/zc is rebuilt when a nativec.zd changes, so the rows
+# it carries are the files' as they stand.)
 nativec-agree-guard: bin/zc $(BUILDDIR)/ztestrunner
 	$(BUILDDIR)/ztestrunner --zc bin/zc --cc $(CC) --root . --jobs $(NPROC) --agree-only
 
@@ -1286,7 +1291,7 @@ perf: $(PERFBIN)
 # deletes write-only allocations; perf-elision measures that), a failed run and
 # allocs != frees. Above ALLOC_BASELINE fails; a commit raising it says why in
 # its message, and one lowering the count lowers it here.
-ALLOC_BASELINE := 2693136
+ALLOC_BASELINE := 2699339
 # ALLOC_LINE -- the one measurement every allocation number comes from.
 ALLOC_LINE = valgrind --tool=memcheck $(PERFRUN) 2>&1 | grep 'total heap usage' | sed 's/.*usage: //'
 

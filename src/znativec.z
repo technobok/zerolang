@@ -228,81 +228,151 @@ servedProvider: function {systemdir: StringView shown: StringView} out ZVfsProvi
 }
 
 # showNative -- `zc natives show WHAT`: what zc carries for WHAT, as the emitter
-# holds it -- a unit's rows by key, one row (`unit.key`, every variant of it)
-# with its fields and texts, or a template by name -- each with the line of the
-# unit's nativec.zd under `systemdir` it was written at. "" when WHAT names
+# holds it -- a unit's rows by key, one row (`unit.key`, every variant of it;
+# a foundation group's as `group.key`, a structural row by its key alone) with
+# its fields and texts, or a template by name -- each with where the unit's
+# nativec.zd under `systemdir` writes it, as that file's check places it
+# (zdata.placeOf) and `zc emit --mark-natives` marks it. "" when WHAT names
 # none of them.
 showNative: function {what: StringView systemdir: StringView} out String is {
     buf: String
     for each u: nativec.units loop {
         un: u.name.stringView
+        if (namesInUnit :what :u).not then continue
         path: "\{systemdir}/\{un}/nativec.zd"
-        src: String
-        rd: io.readText :path
-        match (
-            rd
-        ) case ok then {
-            src = rd.copy
-        } case err then null
-        if what == un then showUnitRows :buf :u path: path.stringView src: src.stringView
-        seen: MapRV String v: u64
-        for each r: u.implementation.rows loop {
-            k: r.key.stringView
-            n: (seen.get key: k.string).or d: 0
-            seen.set key: k.string value: n + 1
-            if (namesRow :what unitName: un key: k) then (
-                showRow
-                :buf
-                :r
-                unitName: un
-                at: (
-                    fileLineOf
-                    path: path.stringView
-                    src: src.stringView
-                    needle: "key: \"\{k}\"".stringView
-                    nth: n
-                ).stringView
-            )
-        }
+        f: zdata.open file: path.stringView srcdirs: List String :systemdir
+        im: zdata.definition :f name: "implementation"
+        places: itemsNamed :f v: im name: "rows"
+        if what == un then showUnitRows :buf :u :f :places
+        showRows :buf :what rows: u.implementation.rows unitName: un :f :places
+        tps: itemsNamed :f v: im name: "templates"
+        k: u64
         for each t: u.implementation.templates loop {
             if what == t.name.stringView then (
                 showTemplate
                 :buf
                 :t
                 unitName: un
-                at: (
-                    fileLineOf
-                    path: path.stringView
-                    src: src.stringView
-                    needle: "name: \"\{t.name}\"".stringView
-                    nth: 0
-                ).stringView
+                at: (placeAt :f places: tps :k).stringView
             )
+            k = k + 1
         }
     }
+    showFoundationRows :buf :what :systemdir
     return buf
+}
+
+# namesInUnit -- whether `what` names unit `u`, one of its rows or one of its
+# templates
+namesInUnit: function {what: StringView u: nativec.servedUnit} out bool is {
+    if what == u.name.stringView then return true
+    for each r: u.implementation.rows loop {
+        if (namesRow :what unitName: u.name.stringView key: r.key.stringView) then return true
+    }
+    for each t: u.implementation.templates loop {
+        if what == t.name.stringView then return true
+    }
+    return false
+}
+
+# showFoundationRows -- showNative over the foundation's rows, which system's
+# nativec.zd holds: each group's rows, then the structural rows
+showFoundationRows: function {buf: String.borrow what: StringView systemdir: StringView} is {
+    fd: nativec.systemc.foundation
+    named: false
+    for each g: fd.groups loop {
+        for each r: g.rows loop {
+            if (namesRow :what unitName: g.name.stringView key: r.key.stringView) then named = true
+        }
+    }
+    for each r: fd.structural loop {
+        if (namesRow :what unitName: "" key: r.key.stringView) then named = true
+    }
+    if named.not then return
+    path: "\{systemdir}/system/nativec.zd"
+    f: zdata.open file: path.stringView srcdirs: List String :systemdir
+    fv: zdata.definition :f name: "foundation"
+    gs: itemsNamed :f v: fv name: "groups"
+    k: u64
+    for each g: fd.groups loop {
+        gv: ztypes.noConst
+        if k < gs.length then gv = gs.get i: k
+        (
+            showRows
+            :buf
+            :what
+            rows: g.rows
+            unitName: g.name.stringView
+            :f
+            places: (itemsNamed :f v: gv name: "rows")
+        )
+        k = k + 1
+    }
+    (
+        showRows
+        :buf
+        :what
+        rows: fd.structural
+        unitName: ""
+        :f
+        places: (itemsNamed :f v: fv name: "structural")
+    )
+}
+
+# showRows -- showRow for each of `rows` that `what` names, placed by the same
+# row of `places`, the rows as `f` checked them
+showRows: function {
+    buf: String.borrow
+    what: StringView
+    rows: staticlist schema.row
+    unitName: StringView
+    f: zdata.DataFile.view
+    places: (ListVal ztypes.cval).view
+} is {
+    k: u64
+    for each r: rows loop {
+        if (namesRow :what :unitName key: r.key.stringView) then (
+            showRow
+            :buf
+            :r
+            :unitName
+            at: (placeAt :f :places :k).stringView
+        )
+        k = k + 1
+    }
+}
+
+# itemsNamed -- the elements of list field `name` of data value `v` of `f`
+itemsNamed: function {
+    f: zdata.DataFile.view v: ztypes.cval name: StringView
+} out ListVal ztypes.cval is {
+    return (zdata.itemsOf :f v: (zdata.fieldOf :f :v :name))
+}
+
+# placeAt -- where element `k` of `places` is written (zdata.placeOf); "" past
+# its end, as for a file that did not check
+placeAt: function {f: zdata.DataFile.view places: (ListVal ztypes.cval).view k: u64} out String is {
+    if k >= places.length then return "".string
+    return (zdata.placeOf :f v: (places.get i: k))
 }
 
 # showUnitRows -- a unit's rows, one line each: its key and where it is written
 showUnitRows: function {
     buf: String.borrow
     u: nativec.servedUnit
-    path: StringView
-    src: StringView
+    f: zdata.DataFile.view
+    places: (ListVal ztypes.cval).view
 } is {
-    seen: MapRV String v: u64
+    k: u64
     for each r: u.implementation.rows loop {
-        k: r.key.stringView
-        n: (seen.get key: k.string).or d: 0
-        seen.set key: k.string value: n + 1
-        at: fileLineOf :path :src needle: "key: \"\{k}\"".stringView nth: n
         buf.append u.name.stringView
         buf.append "."
-        buf.append k
+        buf.append r.key.stringView
         buf.append "  "
-        buf.append at
+        buf.append (placeAt :f :places :k)
         if r.fact.length > 0 then buf.append "  (when \{r.fact})"
         buf.append "\n"
+        k = k + 1
     }
     for each t: u.implementation.templates loop buf.append "template \{t.name}\n"
 }
@@ -310,8 +380,7 @@ showUnitRows: function {
 # showRow -- one row: where it is written, each field it sets, then its texts
 # with their holes as written
 showRow: function {buf: String.borrow r: schema.row unitName: StringView at: StringView} is {
-    buf.append unitName
-    buf.append "."
+    if unitName.length > 0 then buf.append "\{unitName}."
     buf.append r.key.stringView
     buf.append "  "
     buf.append at
@@ -390,31 +459,13 @@ showText: function {buf: String.borrow name: StringView text: StringView} is {
     }
 }
 
-# namesRow -- whether `what`, as written on the command line, is `<unit>.<key>`
+# namesRow -- whether `what`, as written on the command line, is `<unit>.<key>`,
+# or the key alone for a row of no unit
 namesRow: function {what: StringView unitName: StringView key: StringView} out bool is {
+    if unitName.length == 0 then return what == key
     n: unitName.length
     if what.length != (n + 1 + key.length) then return false
     if (what.startsWith unitName).not then return false
     if ((what.byteAt i: n).or d: 0) != 46 then return false
     return (what.substring from: n + 1 to: what.length) == key
-}
-
-# fileLineOf -- `path:line` of the `nth` (0-based) line of `src` holding
-# `needle`; `path` alone when there is none
-fileLineOf: function {path: StringView src: StringView needle: StringView nth: u64} out String is {
-    line: u64
-    seen: u64
-    for each l: src.lines loop {
-        line = line + 1
-        if (l.contains :needle) then {
-            if seen == nth then {
-                r: path.string
-                r.append ":"
-                r.append "\{line}"
-                return r
-            }
-            seen = seen + 1
-        }
-    }
-    return path.string
 }

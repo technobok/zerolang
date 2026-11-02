@@ -1106,7 +1106,8 @@ runArchCases: function {r: Runner} is {
 # carries and once with the standard library's rows read off its own nativec.zd
 # files, checked as a user unit's are (`zc emit --nativec-files`). The two must
 # emit the same C, or fail alike: one walk registers both, so this compares the
-# two readers (nativec S6).
+# two readers. A third emit marks each native text with where it is written
+# (`--mark-natives`): it must write marks, and without them be the same C.
 runAgreeCases: function {r: Runner} is {
     progs: List String
     appendPrograms :progs dir: r.examplesDir.stringView
@@ -1139,6 +1140,14 @@ runAgreeCases: function {r: Runner} is {
                     cfile: "\{base}.files.c".stringView
                 )
             )
+            steps.append (
+                agreeStep
+                :r
+                prog: pg.stringView
+                target: t.stringView
+                option: "--mark-natives"
+                cfile: "\{base}.marked.c".stringView
+            )
             pool.append (mkJob name: pg.stringView :steps)
             bases.append base.take
             targets.append t.string
@@ -1160,6 +1169,20 @@ runAgreeCases: function {r: Runner} is {
             )}: the rows zc carries and the nativec.zd files emit different C"
             bad = bad + 1
         }
+        marked: slurp path: "\{base}.marked.c".stringView
+        if served.length > 0 when (marked.stringView.contains needle: markOpen).not then {
+            print "FAIL(agree) \{(pool.get :i).name} \{(
+                targets.get
+                :i
+            )}: --mark-natives wrote no mark"
+            bad = bad + 1
+        } else if (withoutMarks c: served.stringView) != (withoutMarks c: marked.stringView) then {
+            print "FAIL(agree) \{(pool.get :i).name} \{(
+                targets.get
+                :i
+            )}: --mark-natives changed the C beside its marks"
+            bad = bad + 1
+        }
         i = i + 1
     }
     if bad > 0 then {
@@ -1167,6 +1190,20 @@ runAgreeCases: function {r: Runner} is {
     } else {
         r.passN = r.passN + bases.length
     }
+}
+
+# markOpen -- how a line `zc emit --mark-natives` adds starts
+markOpen: "/* nativec: "
+
+# withoutMarks -- C text `c`, line by line, without the lines --mark-natives adds
+withoutMarks: function {c: StringView} out String is {
+    r: String
+    for each l: c.lines loop {
+        if (l.startsWith prefix: markOpen) when (l.endsWith suffix: " */") then continue
+        r.append l
+        r.append "\n"
+    }
+    return r
 }
 
 # agreeStep -- one agree emit: `prog` for `target` ("" for the host), with

@@ -3487,6 +3487,7 @@ newRowWalk: function out RowWalk is {
         rf: (RowFacts declared: Set String held: Set String replaced: Set String)
         frags: String
         destroy: String
+        at: String
     )
 }
 
@@ -3611,6 +3612,9 @@ RowWalk: class {
     rf: RowFacts
     frags: String
     destroy: String
+    # where the row being read is written, as its texts' mark (NativeMark);
+    # "" when none is asked for
+    at: String
 } as {
     # fact -- a unit's fact, its `@fact.` row
     fact: function {
@@ -3646,6 +3650,7 @@ RowWalk: class {
     fragment: function {:this ctx: Ctx owner: StringView key: StringView text: String.take} is {
         nm: this.fragmentName :owner :key
         servedFragment :ctx name: nm.stringView text: text.take
+        this.markFragment :ctx name: nm.stringView
         if this.frags.length > 0 then this.frags.append ","
         this.frags.append nm
     }
@@ -3666,7 +3671,21 @@ RowWalk: class {
         dkey: "\{key}_destroy"
         nm: this.fragmentName :owner key: dkey.stringView
         servedFragment :ctx name: nm.stringView text: text.take
+        this.markFragment :ctx name: nm.stringView
         this.destroy = nm.copy
+    }
+
+    # markFragment -- the fragment `name` marked with where its row is written,
+    # when a mark is asked for
+    markFragment: function {this: this.view ctx: Ctx name: StringView} is {
+        if this.at.length == 0 then return
+        p: nativePath runtimeDir: ctx.runtimeDir.stringView frag: name
+        (
+            recordMark
+            :ctx
+            path: p.stringView
+            m: (NativeMark mark: this.at.copy parts: (Map String V: String))
+        )
     }
 
     # row -- the row a reader read onto `h`, with the texts it handed over
@@ -3869,7 +3888,9 @@ checkedUnit: function {
             needs: (checkedTexts :u v: s name: "needs").stringView
             text: (checkedText :u v: s name: "text").stringView
         )
-        cacheTemplate :ctx name: (checkedText :u v: t name: "name").stringView text: x.take
+        tn: checkedText :u v: t name: "name"
+        cacheTemplate :ctx name: tn.stringView text: x.take
+        if ctx.markNatives then markTemplate :ctx :u :t name: tn.stringView
     }
 }
 
@@ -3888,6 +3909,12 @@ checkedRow: function {
 } is {
     f: u.file
     key: checkedText :u v: r name: "key"
+    w.at = String
+    if ctx.markNatives then w.at = "row \{rowAddress :owner key: key.stringView}, \{(
+        zdata.placeOf
+        :f
+        v: r
+    )}"
     h: NativeHead.create head: "" words: ctx.nativeWords
     h.need = checkedTexts :u v: r name: "needs"
     for each t: (zdata.textsOf :f v: (zdata.fieldOf :f v: r name: "fragments")) loop (
@@ -3898,13 +3925,13 @@ checkedRow: function {
         text: "\{t}\n"
     )
     ps: zdata.itemsOf :f v: (zdata.fieldOf :f v: r name: "pieces")
-    if ps.length > 0 then (
-        w.pieces
-        :ctx
-        :owner
-        key: key.stringView
-        text: (checkedPieces :u :ps :owner)
-    )
+    if ps.length > 0 then {
+        w.pieces :ctx :owner key: key.stringView text: (checkedPieces :u :ps :owner)
+        if ctx.markNatives then {
+            p: nativePath runtimeDir: ctx.runtimeDir.stringView frag: w.frags.stringView
+            recordMark :ctx path: p.stringView m: (piecesMark :u :ps mark: w.at.copy)
+        }
+    }
     h.dem = checkedTexts :u v: r name: "demand"
     fm: checkedArm :u v: r name: "form"
     h.value = (ctx.nativeWords.slotOf text: fm.stringView) == nativeWord.slot.armValue
@@ -4036,10 +4063,82 @@ registerFromFiles: function {
     }
     for each i: order loop checkedUnit :w :ctx :ast :symtab u: (users.get :i)
     for each fl: (checkedItems u: sys v: fd name: "files") loop {
-        p: "\{ctx.runtimeDir}/z_\{checkedText u: sys v: fl name: "name"}.inc"
+        fn: checkedText u: sys v: fl name: "name"
+        p: "\{ctx.runtimeDir}/z_\{fn}.inc"
         ps: checkedItems u: sys v: fl name: "pieces"
+        if ctx.markNatives then {
+            fm: "file \{fn}, \{zdata.placeOf f: sys.file v: fl}"
+            (
+                recordMark
+                :ctx
+                path: p.stringView
+                m: (piecesMark u: sys :ps mark: fm.take)
+            )
+        }
         ctx.tmplCache.set key: p.take value: (checkedPieces u: sys :ps owner: "prelude")
     }
+}
+
+# NativeMark -- where a native text the emitter writes is written (zc emit
+# --mark-natives), each part of it written before that part as a C comment:
+# the text's own place, then each of its named pieces' or sections'
+NativeMark: class {
+    # what the text is and where it is written: `row <unit>.<key>, <file>:<line>`
+    mark: String
+    # each piece's and section's mark, by the name its head spells
+    parts: (Map String V: String)
+}
+
+# recordMark -- `m` as the mark of the text cached under `path`
+recordMark: function {ctx: Ctx path: StringView m: NativeMark.take} is {
+    if ctx.marks.length == 0 then ctx.marks.append (
+        NativeMark
+        mark: String
+        parts: (Map String V: String)
+    )
+    ctx.nativeMarks.set key: path.string value: ctx.marks.length
+    ctx.marks.append m.take
+}
+
+# rowAddress -- a row's address as `zc natives show` takes it: `<unit>.<key>`,
+# the key alone for a structural row
+rowAddress: function {owner: StringView key: StringView} out String is {
+    r: owner.string
+    if r.length > 0 then r.append "."
+    r.append key
+    return r
+}
+
+# piecesMark -- `mark` with the place of each named piece of `ps`, by its name
+piecesMark: function {
+    u: UserImplementation.view
+    ps: (ListVal ztypes.cval).view
+    mark: String.take
+} out NativeMark is {
+    m: NativeMark mark: mark.take parts: (Map String V: String)
+    for each p: ps loop {
+        nm: checkedText :u v: p name: "name"
+        if nm.length == 0 then continue
+        m.parts.set key: nm.copy value: "piece \{nm}, \{zdata.placeOf f: u.file v: p}"
+    }
+    return m
+}
+
+# markTemplate -- template `t` of a checked file marked with where it and each
+# of its member sections is written
+markTemplate: function {ctx: Ctx u: UserImplementation.view t: ztypes.cval name: StringView} is {
+    m: (
+        NativeMark
+        mark: "template \{name}, \{zdata.placeOf f: u.file v: t}"
+        parts: (Map String V: String)
+    )
+    for each s: (checkedItems :u v: t name: "sections") loop {
+        mb: checkedText :u v: s name: "member"
+        if mb.length == 0 then continue
+        m.parts.set key: mb.copy value: "section \{mb}, \{zdata.placeOf f: u.file v: s}"
+    }
+    p: "\{ctx.runtimeDir}/z_\{name}.c.tmpl"
+    recordMark :ctx path: p.stringView :m
 }
 
 # checkedUnitOrder -- each file's place in `users`, in the order the foundation
@@ -6012,6 +6111,14 @@ Ctx: class {
     # the user units whose C implementation file (`<unit>/nativec.zd`) was
     # read (UserImplementation), by name
     implementedUnits: Set String
+    # zc emit --mark-natives: each native text written is marked with where
+    # it is written (NativeMark)
+    markNatives: bool
+    # the native texts' places, by the path each text is cached under: its row
+    # in `marks`, 0 for a text with none
+    nativeMarks: (MapRV String v: u64)
+    # row 0 is the sentinel, no place
+    marks: List NativeMark
     # the StringView natives' call kinds (natives.tbl `call=`), by member name id
     svCalls: (IdMapV zast.nameid v: svcall)
     # the paths a FRAGMENT implements: a native whose C the runtime supplies
@@ -40147,6 +40254,10 @@ rtRenderWith: function {
     id: plan.id
     inf: rt.infos.get i: id
     total: (rt.texts.get i: id).length
+    mk: openMark :ctx :path buf: res
+    # a piece's mark was written last: the text's own is written again before
+    # more of it
+    pieceMarked: false
     pos: u64
     i: u64
     j: inf.pieceFrom
@@ -40154,6 +40265,7 @@ rtRenderWith: function {
         pc: rt.pieces.get i: j
         j = j + 1
         if pc.whole.not then break
+        pieceMarked = remarkText :ctx :mk :id from: pos to: pc.at after: pieceMarked buf: res
         (
             rt.fillSpan
             :id
@@ -40170,6 +40282,7 @@ rtRenderWith: function {
             buf: res
         )
         if (plan.kept.get :i) then {
+            pieceMarked = markPiece :ctx :mk :id :pc buf: res
             # a section written under a condition is filled apart, to wrap it
             wrapped: false
             if i < plan.conds.length then wrapped = (condAlwaysHolds c: (plan.conds.get :i)).not
@@ -40199,6 +40312,7 @@ rtRenderWith: function {
         i = i + 1
         pos = pc.next
     }
+    remarkText :ctx :mk :id from: pos to: total after: pieceMarked buf: res
     (
         rt.fillSpan
         :id
@@ -40215,6 +40329,59 @@ rtRenderWith: function {
         buf: res
     )
     return res
+}
+
+# appendNativeMark -- the mark of native text `mk` (NativeMark) as a C comment
+# line: the piece's or section's whose head spells `name` (a row piece's
+# `@<unit>.<name>`, a section's member), the text's own for ""
+appendNativeMark: function {ctx: Ctx.view mk: u64 name: StringView buf: String.borrow} is {
+    m: ctx.marks.get i: mk
+    nm: name
+    if nm.startsWith "@" then nm = (
+        nm.substring
+        from: ((nm.indexOf needle: ".").or d: 0) + 1
+        to: nm.length
+    )
+    if nm.length > 0 then {
+        pm: m.parts.get key: nm.asString
+        match (
+            pm
+        ) case some then {
+            buf.append "/* nativec: \{pm} */\n"
+            return
+        } case none then null
+    }
+    buf.append "/* nativec: \{m.mark} */\n"
+}
+
+# openMark -- the mark of the native text cached under `path`, written first
+# (zc emit --mark-natives): its row in Ctx.marks, 0 for none
+openMark: function {ctx: Ctx.view path: StringView buf: String.borrow} out u64 is {
+    if ctx.markNatives.not then return 0
+    mk: (ctx.nativeMarks.get key: path.asString).or d: 0
+    if mk > 0 then appendNativeMark :ctx :mk name: "" :buf
+    return mk
+}
+
+# markPiece -- the mark of piece `pc` of text `id`, when the text has a mark
+# `mk`; whether it had
+markPiece: function {ctx: Ctx.view mk: u64 id: rtid pc: rtpiece buf: String.borrow} out bool is {
+    if mk == 0 then return false
+    tv: (ctx.rt.texts.get i: id).stringView
+    appendNativeMark :ctx :mk name: (tv.substring from: pc.headFrom to: pc.nameTo) :buf
+    return true
+}
+
+# remarkText -- the mark of text `id` again, after a piece's (`after`), before
+# more of the text (bytes `from` to `to`) that is not blank; whether a piece's
+# mark is still the last written
+remarkText: function {
+    ctx: Ctx.view mk: u64 id: rtid from: u64 to: u64 after: bool buf: String.borrow
+} out bool is {
+    if after.not then return false
+    if ((ctx.rt.texts.get i: id).stringView.substring :from :to).trim.length == 0 then return true
+    appendNativeMark :ctx :mk name: "" :buf
+    return false
 }
 
 # condAlwaysHolds -- `c` holds in every configuration: wrapCond writes a body
@@ -40648,6 +40815,9 @@ emitC: function {
     # the standard library's rows are the ones zc carries; false when its own
     # files are among `users` instead (zc --nativec-files)
     servedRows: true
+    # mark each native text written with where it is written (NativeMark);
+    # only the rows read off their files carry a place
+    markNatives: false
     fastHash: bool
     readableNames: bool
     errs: List zast.ErrorData
@@ -40821,6 +40991,9 @@ emitC: function {
         opWords: (zast.Vocab.create block: opSpelling)
         nativeWords: (zast.Vocab.create block: nativeWord)
         implementedUnits: Set String
+        :markNatives
+        nativeMarks: (MapRV String v: u64)
+        marks: List NativeMark
         svCalls: (IdMapV zast.nameid v: svcall)
         nativeFragPaths: (MapRV String v: u64)
         nativeVia: (MapRR String V: String)

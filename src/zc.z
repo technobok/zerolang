@@ -149,6 +149,7 @@ zcWord: list {
     fFastHash: "--fast-hash"
     fReadableNames: "--readable-names"
     fNativecFiles: "--nativec-files"
+    fMarkNatives: "--mark-natives"
     fEager: "--eager"
     fSrc: "--src"
     fSystem: "--system"
@@ -213,7 +214,7 @@ printUsage: function is {
     io.eprintln "  -o OUT  --src DIR  --release  --cc CC  --cc-mode MODE"
     io.eprintln "  --target TRIPLE"
     io.eprintln "  --cflags STR  --ldflags STR  --save-temps  --time  --fast-hash"
-    io.eprintln "  --readable-names  --eager"
+    io.eprintln "  --readable-names  --mark-natives  --eager"
     io.eprintln "  --system DIR  --runtime DIR  --tcc-lib DIR  -h/--help  -V/--version"
 }
 
@@ -237,6 +238,9 @@ printCommandHelp: function {zv: zast.Vocab.view cmd: StringView} is {
         io.eprintln "usage: zc emit <src> [flags]"
         io.eprintln "Emit standalone C17 to -o FILE (or stdout). The runtime is inlined,"
         io.eprintln "so the single .c needs no extra include paths."
+        io.eprintln "--mark-natives writes a comment line before each piece of C a unit's"
+        io.eprintln "nativec.zd rendered, naming the row and the file and line it is written"
+        io.eprintln "at; without those lines the C is the same."
     } else if w == zcWord.slot.vDump then {
         io.eprintln "usage: zc dump <src> [--canon] [flags]"
         io.eprintln "Dump the typecheck model as SQL to -o FILE (or stdout)."
@@ -249,8 +253,10 @@ printCommandHelp: function {zv: zast.Vocab.view cmd: StringView} is {
         io.eprintln "--write-source FILE writes into FILE the generated unit `nativec` that"
         io.eprintln "every build serves beside z.z: the same files as static data."
         io.eprintln "show WHAT prints what zc carries for WHAT -- a unit's rows, one row"
-        io.eprintln "(unit.key, every variant of it) with its fields and C, or a template --"
-        io.eprintln "and the line of the unit's nativec.zd each was written at."
+        io.eprintln "(unit.key, every variant of it; group.key for a row of a foundation group,"
+        io.eprintln "the key alone for a structural row) with its fields and C, or a template --"
+        io.eprintln "and the line of the unit's nativec.zd each was written at, the line"
+        io.eprintln "`zc emit --mark-natives` names."
     } else if w == zcWord.slot.vData then {
         io.eprintln "usage: zc data <file.zd> [--src DIR]... [--system DIR]"
         io.eprintln "Check a data file (docs/zdata.pdoc) and print every value it defines, one"
@@ -1072,6 +1078,10 @@ ZcFlags: class {
     # files, checked, rather than from the rows zc carries (the agreement
     # check, nativec-agree-guard)
     nativecFiles: bool
+    # --mark-natives: write before each native text in the C where its row is
+    # written; the rows are then read from their nativec.zd files, which
+    # carry the places
+    markNatives: bool
     # --eager: typecheck every definition, not only what main reaches
     eagerCheck: bool
     # the arguments after `--`, which belong to the program and not to zc
@@ -1119,6 +1129,10 @@ ZcFlags: class {
         }
         if w == zcWord.slot.fNativecFiles then {
             this.nativecFiles = true
+            return true
+        }
+        if w == zcWord.slot.fMarkNatives then {
+            this.markNatives = true
             return true
         }
         if w == zcWord.slot.fEager then {
@@ -1377,6 +1391,7 @@ parseZcArgs: function {
         fastHash: false
         readableNames: false
         nativecFiles: false
+        markNatives: false
         eagerCheck: false
         progArgs: List String
         inProgArgs: false
@@ -1447,7 +1462,7 @@ userImplementations: function {
         }
     }
     if withServed when sawSystem.not then {
-        io.eprintln "zc: --nativec-files: no system/nativec.zd under the system directory"
+        io.eprintln "zc: no system/nativec.zd under the system directory to read the C rows from"
         os.exit code: 2
     }
     return r
@@ -1901,7 +1916,8 @@ emitCSource: function {
         :runtimeDir
         runtimeFromDisk: (zcheck.runtimeDirGiven flagVal: cf.runtimeFlag.stringView)
         :users
-        servedRows: cf.nativecFiles.not
+        servedRows: (cf.nativecFiles or cf.markNatives).not
+        markNatives: cf.markNatives
         fastHash: cf.fastHash
         readableNames: cf.readableNames
         errs: emitErrs
@@ -2147,7 +2163,7 @@ compileUnit: function {
         :rootid
         srcdirs: cf.srcdirs
         systemdir: systemdir.stringView
-        withServed: cf.nativecFiles
+        withServed: cf.nativecFiles or cf.markNatives
     )
     csrc: (
         emitCSource
