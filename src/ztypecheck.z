@@ -94,7 +94,6 @@ public: unit {
     :unitPathOfDecl
     :unitPathOfTid
     :reexportTargetIdsOf
-    :requiredLibs
     :rootNameOf
     :specLookup
     :sumSubtypeNames
@@ -1187,8 +1186,7 @@ indexDeclDef: function {
                 kind: ztyping.declkind.unitDecl
                 node: nopNodeId
             )
-            # a namespace, subunit or template is a lookup scope; a
-            # `require:` block is not (its schema check runs in its unit)
+            # a namespace, subunit or template is a lookup scope
             if (zast.unitOpHasBody :ast opId: opNodeId) then st.typing.declSetUnitScope declId: did0
             npub: ztypes.declid
             npubOp: zast.nodeid
@@ -3054,7 +3052,6 @@ stampNestedTyperef: function {
         mt = (
             nestedUnitMemberTid
             :st
-            :scope
             :ast
             ownerDeclId: unitDecl
             nestedNameId: unitId
@@ -3922,7 +3919,6 @@ instanceMemberTemplate: function {
         if md.isZero.not when (declTypeIdOf :st declId: md).isZero then (
             resolveDemandedDecl
             :st
-            scope: qd
             :ast
             declId: md
         )
@@ -12125,189 +12121,6 @@ scanUnitVisibility: function {
     }
 }
 
-# checkOneRequireBlock -- the schema for one `require:` block: it introduces a
-# unit, declares at least one requirement, and every entry is a key the
-# compiler consumes -- today only `library:`, whose value is a compile-time
-# string. A key nothing reads would be silently ignored, so it is rejected.
-# The block is read as what it is -- a nested unit -- through its Decl children
-# and the constant its resolution folded, never off the AST: an entry may be
-# computed from other definitions in the block, and only the ordinary
-# machinery resolves those in dependency order.
-checkOneRequireBlock: function {
-    st: zenv.ZSymbolTable
-    ast: Ast.view
-    declId: ztypes.declid
-    libNid: zast.nameid
-} is {
-    rnode9q: zast.nodeid
-    isUnit9q: false
-    rtid9q: ztypes.tid
-    dr9q: st.typing.decls.get i: declId
-    rnode9q = dr9q.node
-    if dr9q.kind.unitDecl then isUnit9q = true
-    rtid9q = dr9q.typeId
-    dr9q.drop
-    if rnode9q.isZero then return
-    rline9q: u32
-    rcol9q: u32
-    rn9q: ast.nodes.get i: rnode9q
-    rline9q = nodeLine n: rn9q
-    rcol9q = nodeCol n: rn9q
-    if isUnit9q.not then {
-        (
-            addResolveErrorH
-            :st
-            nodeid: rnode9q
-            lineno: rline9q
-            colno: rcol9q
-            e: zast.err.requireBlock
-            msg: "'require:' must introduce a unit definition, e.g. `require: unit { library: \"m\" }`".string
-            width: 7
-        )
-        return
-    }
-    nmem9q: st.typing.declChildSlots :declId
-    if nmem9q == 0 then {
-        (
-            addResolveErrorH
-            :st
-            nodeid: rnode9q
-            lineno: rline9q
-            colno: rcol9q
-            e: zast.err.requireBlock
-            msg: "a 'require:' block must declare at least one requirement".string
-            width: 7
-        )
-        return
-    }
-    i9q: u64
-    for i9q < nmem9q loop {
-        c9q: st.typing.declChildAt :declId index: i9q
-        i9q = i9q + 1
-        if c9q.isZero.not then {
-            cnm9q: st.typing.declNameOf declId: c9q
-            cnode9q: zast.nodeid
-            cd9q: st.typing.decls.get i: c9q
-            cnode9q = cd9q.node
-            cd9q.drop
-            eline9q: rline9q
-            ecol9q: rcol9q
-            enid9q: rnode9q
-            if cnode9q.isZero.not then {
-                cn9q: ast.nodes.get i: cnode9q
-                eline9q = nodeLine n: cn9q
-                ecol9q = nodeCol n: cn9q
-                enid9q = nodeId n: cn9q
-            }
-            if cnm9q == libNid then {
-                # the value the block's own resolution folded. An entry the
-                # evaluator already reported on -- a reached `error`, an
-                # interpolation -- has said what is wrong, and "must evaluate
-                # to a string" on top of that is noise.
-                lv9q: st.typing.memberConstOf parentTypeId: rtid9q nameId: libNid
-                if lv9q.kind.svalKind.not when st.typing.isError.not then {
-                    (
-                        addResolveErrorH
-                        :st
-                        nodeid: enid9q
-                        lineno: eline9q
-                        colno: ecol9q
-                        e: zast.err.requireBlock
-                        msg: "'library:' must evaluate to a string at compile time".string
-                        width: 7
-                    )
-                }
-            } else {
-                kt9q: (
-                    zast.poolTextAt
-                    pool: ast.names
-                    ref: cnm9q
-                )
-                (
-                    addResolveErrorH
-                    :st
-                    nodeid: enid9q
-                    lineno: eline9q
-                    colno: ecol9q
-                    e: zast.err.requireBlock
-                    msg: "unknown 'require:' entry '\{kt9q}' -- the compiler consumes only 'library:'"
-                    width: 1
-                )
-            }
-        }
-    }
-}
-
-# requireLibraryOf -- the link library one demanded `require:` block names, ""
-# when it names none. A pure read of the constant its resolution folded.
-requireLibraryOf: function {
-    st: zenv.ZSymbolTable.view
-    declId: ztypes.declid
-    libNid: zast.nameid
-} out String is {
-    lib9w: String
-    rtid9w: ztypes.tid
-    dr9w: st.typing.decls.get i: declId
-    rtid9w = dr9w.typeId
-    if rtid9w.isZero then return lib9w
-    v9w: st.typing.memberConstOf parentTypeId: rtid9w nameId: libNid
-    if v9w.kind.svalKind then lib9w = constStringAt :st id: v9w.strId
-    return lib9w
-}
-
-# requiredLibs -- the link libraries the program's reached units declare. A
-# `require:` block applies only when the program reaches its unit, and
-# ZTyping.requireDemanded IS that set: a block is demanded by the first
-# declaration resolved from its unit and by nothing else, so it cannot light
-# its own unit.
-requiredLibs: function {st: zenv.ZSymbolTable.view} out List String is {
-    libs9w: List String
-    {
-        libNid9w: zast.wellKnown.slot.wkLibrary
-        if libNid9w.isZero then return libs9w
-        for each rq9w: st.typing.requireDemanded loop {
-            lib9x: requireLibraryOf :st declId: rq9w libNid: libNid9w
-            if lib9x.length > 0 then {
-                dup9w: false
-                for each e9w: libs9w loop {
-                    if e9w.stringView == lib9x then dup9w = true
-                }
-                if dup9w.not then libs9w.append from: lib9x.copy
-            }
-        }
-    }
-    return libs9w
-}
-
-# checkRequireBlocks -- the schema check for every `require:` block the program
-# demanded. A block in a unit nothing reached is never resolved and so has no
-# claim to make about this program; the linter is what checks code a program
-# does not use.
-checkRequireBlocks: function {
-    st: zenv.ZSymbolTable
-    program: Ast.view
-} is {
-    {
-        # 0 when no source spells `library` at all: then every key a block
-        # writes is unknown, which is still a block to check
-        libNid9q: zast.wellKnown.slot.wkLibrary
-        rqs9q: ListVal ztypes.declid
-        for each r9q: st.typing.requireDemanded loop (
-            rqs9q.append
-            from: r9q
-        )
-        for each rq9q: rqs9q loop {
-            (
-                checkOneRequireBlock
-                :st
-                ast: program
-                declId: rq9q
-                libNid: libNid9q
-            )
-        }
-    }
-}
-
 # applyUnitVisibility -- run scanUnitVisibility for every file unit that
 # declares a `public:` block, after all unit members are registered.
 applyUnitVisibility: function {
@@ -13781,7 +13594,6 @@ qualifiedMemberTid: function {
     return (
         nestedUnitMemberTid
         :st
-        :scope
         :ast
         ownerDeclId: owner
         nestedNameId: (st.typing.declNameOf declId: ud)
@@ -16914,7 +16726,6 @@ aliasTargetOwner: function {
 # unit, which is the caller's cue that the name means something else.
 nestedUnitTidOf: function {
     st: zenv.ZSymbolTable
-    scope: ztypes.declid
     ast: Ast
     ownerDeclId: ztypes.declid
     nestedNameId: zast.nameid
@@ -16922,7 +16733,7 @@ nestedUnitTidOf: function {
     if ownerDeclId.isZero then return ztypes.tid.zero
     sub: st.typing.declFindChild parentDeclId: ownerDeclId nameId: nestedNameId
     if (declDeclaresUnit :st :ast declId: sub).not then return ztypes.tid.zero
-    resolveDemandedDecl :st :scope :ast declId: sub
+    resolveDemandedDecl :st :ast declId: sub
     return (declTypeIdOf :st declId: sub)
 }
 
@@ -16949,13 +16760,12 @@ declDeclaresUnit: function {
 # the way any definition is. 0 when either edge is missing.
 nestedUnitMemberTid: function {
     st: zenv.ZSymbolTable
-    scope: ztypes.declid
     ast: Ast
     ownerDeclId: ztypes.declid
     nestedNameId: zast.nameid
     defName: zast.nameid
 } out ztypes.tid is {
-    subTid: nestedUnitTidOf :st :scope :ast :ownerDeclId :nestedNameId
+    subTid: nestedUnitTidOf :st :ast :ownerDeclId :nestedNameId
     if subTid.isZero then return ztypes.tid.zero
     sub: st.typing.declFindChild parentDeclId: ownerDeclId nameId: nestedNameId
     mem: st.typing.declFindChild parentDeclId: sub nameId: defName
@@ -16981,7 +16791,7 @@ nestedUnitMemberTid: function {
             typetype: tto
         )
     } case none then null
-    resolveDemandedDecl :st :scope :ast declId: mem
+    resolveDemandedDecl :st :ast declId: mem
     r: declTypeIdOf :st declId: mem
     if r.isZero when declared.isZero.not then return declared
     return r
@@ -17914,7 +17724,6 @@ resolveAliasKeyIn: function {
     atid: (
         nestedUnitMemberTid
         :st
-        :scope
         :ast
         ownerDeclId: (aliasTargetOwner :st :ast scopeDeclId: aParent nestedNameId: altK.unitName)
         nestedNameId: altK.unitName
@@ -18456,11 +18265,11 @@ resolveDef: function {
     # caller's scope (a nested unit's member reached from its own unit walk).
     defNameId: nameIdOf :ast name: defName
     resolvedDecl: declOfUnitDef :st :scope :unitDecl nameId: defNameId
-    # every resolver funnels through here, so this is where a unit's toolchain
-    # requirement is owed: before its first definition resolves.
+    # every resolver funnels through here, so this is where a unit is first
+    # reached: before its first definition resolves
     ehd: resolvedDecl
     if ehd.isZero then ehd = scope
-    ensureUnitRequire :st :scope :ast declId: ehd
+    markUnitReached :st declId: ehd
     rf: scope
     if resolvedDecl.isZero.not then rf = st.typing.declParentOf declId: resolvedDecl
     # a definition that declares a unit -- an inline namespace, a hidden
@@ -18470,7 +18279,7 @@ resolveDef: function {
     # constant fold reaching `impl.Foo` or `lib.ic` through the descent gets
     # here first.
     if resolvedDecl.isZero.not when (zast.unitOpHasBody :ast opId: defnId) then {
-        resolveDemandedDecl :st :scope :ast declId: resolvedDecl
+        resolveDemandedDecl :st :ast declId: resolvedDecl
         return
     }
     enterUnitOnce :st :ast :unitDecl
@@ -19350,8 +19159,8 @@ publicNsChildOf: function {st: zenv.ZSymbolTable.view root: ztypes.declid} out z
 
 # owningUnitDecl -- the unit a declaration is written in: the nearest
 # enclosing unit-kind Decl, or the declaration itself when it is one. Not the
-# file root -- a subunit owns its own `require:` block, and `quadfloat`'s is
-# not `system`'s.
+# file root -- a subunit is reached on its own, and reaching `quadfloat` is
+# not reaching `system`.
 owningUnitDecl: function {st: zenv.ZSymbolTable.view declId: ztypes.declid} out ztypes.declid is {
     cur: declId
     for cur.isZero.not loop {
@@ -19362,68 +19171,14 @@ owningUnitDecl: function {st: zenv.ZSymbolTable.view declId: ztypes.declid} out 
     return ztypes.declid.zero
 }
 
-# ensureUnitRequire -- the FIRST declaration demanded from a unit marks the unit
-# reached (requireSeen, which the C backend also reads for what a reached unit
-# needs of its toolchain), and resolves its `require:` block, if it has one:
-# what it needs linked, a precondition on using the unit. The block resolves
-# through the ordinary unit machinery, so one with definitions of its own folds
-# them in dependency order. Marking before demanding is what stops the regress
-# -- folding `library:` may demand a `z.build` member, a declaration in
-# another unit, which re-enters here.
-ensureUnitRequire: function {
-    st: zenv.ZSymbolTable
-    scope: ztypes.declid
-    ast: Ast
-    declId: ztypes.declid
-} is {
+# markUnitReached -- the FIRST declaration demanded from a unit marks the unit
+# reached (unitsReached), which the C backend reads for what a reached unit
+# needs of its toolchain: a requirement in its implementation file applies
+# only to a program that reaches the unit.
+markUnitReached: function {st: zenv.ZSymbolTable declId: ztypes.declid} is {
     own: owningUnitDecl :st :declId
     if own.isZero then return
-    if (st.typing.requireSeen.has item: own) then return
-    st.typing.requireSeen.add item: own
-    rqn: zast.wellKnown.slot.wkRequire
-    if rqn.isZero then return
-    rq: st.typing.declFindChild parentDeclId: own nameId: rqn
-    if rq.isZero then return
-    st.typing.requireDemanded.append from: rq
-    # a block that is demanded is one this program reaches, so a reached
-    # `error` in it is this program's to hear, and hearing it HERE is the point
-    # of the block: at the moment the unit is first used, not after its C has
-    # been written. The ambient pending failure belongs to whatever resolution
-    # we interrupted; save it.
-    prevFail: st.typing.constFail
-    constFailClear :st
-    resolveDemandedDecl :st :scope :ast declId: rq
-    # the block resolved as the unit it is; now DEMAND the fold of each entry,
-    # which is what a general compile-time expression needs -- the eager
-    # namespace walk folds only the simple forms.
-    {
-        ecnt: st.typing.declChildSlots declId: rq
-        ei: u64
-        for ei < ecnt loop {
-            ec: st.typing.declChildAt declId: rq index: ei
-            ei = ei + 1
-            if ec.isZero.not then {
-                enm: st.typing.declNameOf declId: ec
-                enode: zast.nodeid
-                ed: st.typing.decls.get i: ec
-                enode = ed.node
-                ed.drop
-                nameId95: st.typing.declNameOf declId: own
-                hUnitDecl: unitDeclOfName :st nameId: nameId95
-                (
-                    constValueOfMemberAt
-                    :st
-                    :ast
-                    unitDecl: hUnitDecl
-                    ownerDecl: rq
-                    nameId: enm
-                    defNodeId: enode
-                )
-            }
-        }
-    }
-    reportPendingConstFail :st
-    st.typing.constFail = prevFail
+    st.typing.unitsReached.add item: own
 }
 
 # resolveDemandedReexport -- a re-export is a definition like any other, and
@@ -19481,9 +19236,8 @@ resolveDemandedReexport: function {
 }
 
 # resolveDemandedNamespace -- a demanded `unit { … }` resolves as the namespace it
-# is. A DEMAND for one -- a `require:` block owed before its unit's first
-# definition -- has to reach the same door the enclosing walk does, or its members
-# never resolve.
+# is. A DEMAND for one has to reach the same door the enclosing walk does, or its
+# members never resolve.
 resolveDemandedNamespace: function {
     st: zenv.ZSymbolTable
     ast: Ast
@@ -19562,14 +19316,13 @@ resolveDemandedNamespace: function {
 # resolveInlineGenericUnit, every other definition through resolveDef.
 resolveDemandedDecl: function {
     st: zenv.ZSymbolTable
-    scope: ztypes.declid
     ast: Ast
     declId: ztypes.declid
 } is {
     st.typing.declSetPending :declId mark: false
     if (st.typing.declIsResolving :declId) then return
     if (st.typing.declIsDefined :declId) then return
-    ensureUnitRequire :st :scope :ast :declId
+    markUnitReached :st :declId
     # a demanded declaration resolves in the scope it is written in -- its
     # parent -- whatever scope the demand came from
     rf: st.typing.declParentOf :declId
@@ -19647,8 +19400,7 @@ resolveDemandedDecl: function {
         st.typing.declSetDefined :declId
     } else if (isUnitOp op: (ast.nodes.get i: opId)) then {
         # an inline `unit { ... }` resolves as the namespace it is. The walk
-        # reaches one when it walks the enclosing unit; a DEMAND for one --
-        # a `require:` block owed before its unit's first definition -- has to
+        # reaches one when it walks the enclosing unit; a DEMAND for one has to
         # reach the same door, or the members never resolve and their
         # constants never fold.
         alreadyI: false
@@ -19702,7 +19454,7 @@ stampResolvedOnDemand: function {st: zenv.ZSymbolTable ast: Ast} is {
 # body is scanned once its own resolution completes, so a callee is never
 # resolved inside its caller's grey window. A drain that is already running
 # resolves whatever a nested request queued, so the nested call returns.
-resolveDemandedDefs: function {st: zenv.ZSymbolTable scope: ztypes.declid ast: Ast} is {
+resolveDemandedDefs: function {st: zenv.ZSymbolTable ast: Ast} is {
     if st.typing.drainingDefs then return
     if st.typing.pendingDefs.length == 0 then return
     st.typing.drainingDefs = true
@@ -19710,7 +19462,6 @@ resolveDemandedDefs: function {st: zenv.ZSymbolTable scope: ztypes.declid ast: A
     # inside a body walk, whose template / containment state belongs to that
     # body, not to the definitions resolved here (each of which resolves in
     # the scope of its own declaration)
-    rf: scope
     pCe: st.typing.inContainmentEdge
     pSup: st.typing.suppressParamStamps
     pMs: st.typing.curMonoStamp
@@ -19723,7 +19474,7 @@ resolveDemandedDefs: function {st: zenv.ZSymbolTable scope: ztypes.declid ast: A
     for i < st.typing.pendingDefs.length loop {
         d: st.typing.pendingDefs.get :i
         i = i + 1
-        resolveDemandedDecl :st scope: rf :ast declId: d
+        resolveDemandedDecl :st :ast declId: d
     }
     st.typing.pendingDefs = ListVal ztypes.declid
     # after the post-demand stamp pass, a drain stamps what it recorded
@@ -20073,7 +19824,7 @@ resolveDemands: function {
 } is {
     seedBodyWalkDemands :st :scope :program
     {
-        resolveDemandedDefs :st :scope ast: program
+        resolveDemandedDefs :st ast: program
     }
 }
 
@@ -21733,7 +21484,7 @@ mintNamespaceMember: function {
 } is {
     nd: st.typing.declFindChild parentDeclId: rf nameId: member.name
     if nd.isZero then return
-    if (declTypeIdOf :st declId: nd).isZero then resolveDemandedDecl :st scope: rf :ast declId: nd
+    if (declTypeIdOf :st declId: nd).isZero then resolveDemandedDecl :st :ast declId: nd
     ntpl: declTypeIdOf :st declId: nd
     if ntpl.isZero or (st.reg.isGenericOf tid: ntpl).not then return
     lbl: st.reg.nameOf tid: monoId
@@ -22548,7 +22299,7 @@ mintUnitMonoOf: function {
     r: InstReq.view
 } is {
     demandInstArgs :st :scope :ast :r
-    resolveDemandedDefs :st :scope :ast
+    resolveDemandedDefs :st :ast
     templateTid: declTypeIdOf :st declId: r.tmplDeclId
     args: ListVal ztypes.genericarg
     ok: instMonoKeys :st :scope :ast :r tdecl: r.tmplDeclId :args
@@ -31996,7 +31747,7 @@ scopeMemberTid: function {
     # which is their resolution: neither is resolved a second time here
     mk: (st.typing.decls.get i: md).kind
     if mk.constDecl or mk.reexportDecl then return r
-    resolveDemandedDecl :st scope: root :ast declId: md
+    resolveDemandedDecl :st :ast declId: md
     stampResolvedOnDemand :st :ast
     return (probeScopeTyperef :st :ast :root :nameId)
 }
@@ -58928,7 +58679,7 @@ checkFunctionBodyIn: function {
     # an owner or function resolved late (from a walk) queued what its
     # bodies reference, and those must be resolved before those bodies are
     # walked, exactly as the early ones were.
-    resolveDemandedDefs :st scope: rf :ast
+    resolveDemandedDefs :st :ast
     # Claim this definition BEFORE the trigger runs. The trigger now walks
     # a free function's body, and the body it would walk here is the one
     # already being walked -- checkFunctionBody calls it with its OWN name.
@@ -59558,7 +59309,7 @@ checkBodies: function {st: zenv.ZSymbolTable scope: ztypes.declid program: Ast} 
         # a body walk can demand definitions the signatures never reached
         # (a type constructed only inside a late-resolved owner's method):
         # resolve them before the completion pass walks their owners
-        resolveDemandedDefs :st :scope ast: program
+        resolveDemandedDefs :st ast: program
         walkOwedNamespaceBodies :st :scope ast: program
         walkLateResolvedOwners :st :scope ast: program
         # a member used only after its owner walked is walked now, and an
@@ -59568,7 +59319,7 @@ checkBodies: function {st: zenv.ZSymbolTable scope: ztypes.declid program: Ast} 
         for more loop {
             markGeneratedEqParts :st ast: program
             for (walkLateUsedBodies :st ast: program) loop {
-                resolveDemandedDefs :st :scope ast: program
+                resolveDemandedDefs :st ast: program
                 walkOwedNamespaceBodies :st :scope ast: program
                 walkLateResolvedOwners :st :scope ast: program
                 markGeneratedEqParts :st ast: program
@@ -59642,7 +59393,7 @@ walkOwedNamespaceBodies: function {st: zenv.ZSymbolTable scope: ztypes.declid as
         }
         # a walked body demands definitions of its own; resolving them here is
         # what puts the next depth on the list
-        resolveDemandedDefs :st :scope :ast
+        resolveDemandedDefs :st :ast
     }
 }
 
@@ -61630,7 +61381,7 @@ constantIfType: function {
 # of a NAMED constant on demand and memoises it. On demand rather than in source
 # order because definitions are not written in dependency order and units are
 # not visited in dependency order: `B: A + 2` may precede `A: 1`, and a
-# `require:` block in one unit reads a constant declared in another.
+# definition in one unit reads a constant declared in another.
 
 # reportConstError -- the E0600 diagnostic: the compiler was asked for a value
 # at compile time and could not produce one. One code for the whole category
@@ -61694,8 +61445,8 @@ constFailRecord: function {
 }
 
 # reportPendingConstFail -- render the recorded failure, if any, and clear it.
-# Only a caller that REQUIRED a value calls this: a unit-level definition, a
-# `require:` block. A body fold never does, which is what keeps an unfoldable
+# Only a caller that REQUIRED a value calls this: a unit-level definition. A
+# body fold never does, which is what keeps an unfoldable
 # body condition an ordinary runtime branch instead of an error.
 reportPendingConstFail: function {st: zenv.ZSymbolTable} is {
     f: st.typing.constFail
@@ -66484,7 +66235,7 @@ fnRefTid: function {
         fd: st.typing.declFindChild parentDeclId: ud nameId: cn
         if fd.isZero then return ft
         # resolved now, as a demand would resolve it: the signature is compared
-        resolveDemandedDecl :st :scope :ast declId: fd
+        resolveDemandedDecl :st :ast declId: fd
         return (st.typing.decls.get i: fd).typeId
     }
     pt: typeNamedFrom :st :scope :ast lookupUnit: unitDecl typeNameId: rn
@@ -67147,7 +66898,6 @@ constOfNamedBase: function {
             sst: (
                 nestedUnitTidOf
                 :st
-                :scope
                 :ast
                 ownerDeclId: sro
                 nestedNameId: nestedNameId9
@@ -72162,8 +71912,8 @@ typecheck: function {
         # synthesised comparison and holds no ast to look it up with, and
         # resolving it where such a member is minted means minting DURING
         # record and variant resolution -- which pulls bool ahead of the demand
-        # order and broke an unrelated compile-time fold in quadfloat's
-        # `require:` block. Before any user type is resolved there is no order
+        # order and broke an unrelated compile-time fold in quadfloat. Before
+        # any user type is resolved there is no order
         # to disturb, and both the lazy and the eager tier pass through here.
         stdTid ast: program :st wk: zast.wellKnown.slot.wkBool
     }
@@ -72190,11 +71940,6 @@ typecheck: function {
     applyUnitVisibility :st :program
     stampTyperefs :st :program
     checkBodies :st scope: rf :program
-    # AFTER checkBodies: whether a program reaches a unit is not settled until
-    # its bodies have been walked -- `x: 1.5.f128` is what pulls quadfloat in,
-    # and nothing before this point knows that. Running earlier made every
-    # require: block a claim about every program.
-    checkRequireBlocks :st :program
     walkGenericUnitTemplates :st scope: rf :program
     {
         ctorUd9: (

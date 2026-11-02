@@ -3437,37 +3437,19 @@ filesystems of differing capabilities. They must:
 
 #----: Toolchain Requirements
 
-A unit may state what it needs from the host toolchain in a #~"require:"
-block:
+What a unit needs from the host toolchain -- a library to link, a C source to
+build, a compiler or architecture it cannot be built with -- is not written in
+its source. It is part of the unit's implementation for a backend: for the C
+backend, the #~"links", #~"sources" and #~"refusals" of the unit's
+#~"<unit>/nativec.zd" file, typed data under #~"runtime.nativec" (see Native
+Units in the compiler documentation). Each may speak for one subunit, for some
+operating systems only, or only when a fact holds.
 
-#code language=zerolang:
-  require: unit {
-      library: "quadmath"
-  }
-
-The block is an ordinary inline unit and is parsed as one; the rules below
-are a schema layered over it, not a change to how units are processed.
-
-#ul:
-  [#*: #~"require:" #_*"must" introduce a unit definition, written in a unit
-    body: a type's or a function's #~"as" block has no toolchain needs, and a
-    #~"require:" unit there is refused.]
-  [#*: the block #_*"must" declare at least one requirement.]
-  [#*: every entry #_*"must" be a key the compiler consumes. Today that is
-    #~"library:" alone, whose value is a compile-time string naming a link
-    library: a literal, or an expression that folds to one, such as an
-    #~"if" on #~"z.build.os" whose taken branch is a literal or reaches
-    #~"error". A key nothing reads would be silently ignored, so an unknown or
-    misspelt one is rejected.]
-
-Violations raise error E0038.
-
-A requirement applies only when the declaring unit is #_*"reached": a program
-that never uses the unit does not link its library. A backend may know
-requirements of its own for a unit, which follow the same rule: the C backend
-links libquadmath for #~"system"'s #~"quadfloat" subunit, which holds
-#~"f128", and refuses a C compiler without #~"__float128" -- only for programs
-that use #~"f128".
+A requirement applies only when the unit it is written for is #_*"reached": a
+program that never uses the unit does not link its library. The standard
+library's units follow the same rule: the C backend links libquadmath for
+#~"system"'s #~"quadfloat" subunit, which holds #~"f128", and refuses a C
+compiler without #~"__float128" -- only for programs that use #~"f128".
 
 #----: Implementation Subunits (Hidden File Units)
 
@@ -7896,8 +7878,7 @@ neither.
 
 An integer result outside its type and an integer division or remainder by a
 constant zero are compile-time errors (#~"E0600") wherever they are written:
-in a body as in a unit-level definition, a type's #~"as" constant or a
-#~"require:" block. Their operands are constants, so the run time has nothing
+in a body as in a unit-level definition or a type's #~"as" constant. Their operands are constants, so the run time has nothing
 to add -- C would wrap the one and trap on the other. Where a value is required, a float
 result that is not finite is an error too, since an infinity or a NaN has no
 literal a constant could inline; in a body it is IEEE's answer, and runs.
@@ -7923,7 +7904,7 @@ back to run time.
 
 What a build is -- #~"z.build.os", #~"arch", #~"triple" and the rest of the
 generated #~"z" unit -- are compile-time values everywhere a constant is: in a
-#~"require:" block, in a body's #~"if", and in a unit-level definition, which
+body's #~"if" and in a unit-level definition, which
 is how a unit picks a value per target
 (#~"BACKEND: if z.build.os.windows then { ... } else { ... }"). They describe
 the build being made: #~"--target" decides them, not the host.

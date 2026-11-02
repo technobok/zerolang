@@ -141,11 +141,9 @@ isFriendNarrowTok: function {tt: zlexer.toktype} out bool is {
 
 # The kind a `unit` body carries, from the label that introduces it. This is
 # the one place a unit's meaning is read from a name; every later reader asks
-# `zast.unitrow.kind`. `require:` is a unit-level block only: in a type's or
-# a function's `as` block, a `require:` unit is refused (objectLabelItem).
-unitKindForLabel: function {id: zast.nameid unitBody: bool} out zast.unitkind is {
+# `zast.unitrow.kind`.
+unitKindForLabel: function {id: zast.nameid} out zast.unitkind is {
     if id == zast.wellKnown.slot.wkPublic then return zast.unitkind.publicNs
-    if unitBody when id == zast.wellKnown.slot.wkRequire then return zast.unitkind.requirement
     return zast.unitkind.namespace
 }
 
@@ -3478,7 +3476,7 @@ Parser: class {
         opName: lblTok.text
         lv: this.mkLabelValue line: lblTok.lineno col: lblTok.colno nameId: lvName
         if typeBody when (isReservedMemberName id: lblTok.text) then {
-            mKind: unitKindForLabel id: lblTok.text unitBody: false
+            mKind: unitKindForLabel id: lblTok.text
             rerr: this.reservedMemberError :lblTok member: lv :mKind
             if rerr.some then {
                 items.append (this.intern n: rerr)
@@ -3520,7 +3518,7 @@ Parser: class {
         }
         names.add item: nm
         opName: lblTok.text
-        mKind: unitKindForLabel id: lblTok.text unitBody: false
+        mKind: unitKindForLabel id: lblTok.text
         lex.accept tt: zlexer.toktype.eolTok pool: this.ast.names
         # a bare `if` or `match` reads as it does at unit level, where it reads
         # as a body binding's does: its unbraced arms end with their line
@@ -3531,16 +3529,6 @@ Parser: class {
         mErr: Parser.isError node: member
         if mErr then {
             items.append (this.intern n: member)
-            return true
-        }
-        if lblTok.text == zast.wellKnown.slot.wkRequire when (Parser.isUnitDef node: member) then {
-            items.append (this.intern n: (
-                this.mkError
-                tok: lblTok
-                code: zast.err.requireBlock
-                msg: "'require:' is written in a unit body: it states what the unit needs from the host toolchain".string
-            )
-            )
             return true
         }
         if typeBody when (isReservedMemberName id: lblTok.text) then {
@@ -3813,7 +3801,7 @@ Parser: class {
                 opName: lblTok.text
                 lv: this.mkLabelValue line: lblTok.lineno col: lblTok.colno nameId: lvName
                 if (isReservedMemberName id: lblTok.text) then {
-                    sKind: unitKindForLabel id: lblTok.text unitBody: true
+                    sKind: unitKindForLabel id: lblTok.text
                     serr: this.reservedMemberError :lblTok member: lv mKind: sKind
                     if serr.some then {
                         body.append (this.intern n: serr)
@@ -3848,7 +3836,7 @@ Parser: class {
                     }
                     names.add item: nm
                     opName: lblTok.text
-                    dKind: unitKindForLabel id: lblTok.text unitBody: true
+                    dKind: unitKindForLabel id: lblTok.text
                     lex.accept tt: zlexer.toktype.eolTok pool: this.ast.names
                     # a bare `if` or `match` reads as a body binding's does:
                     # newlines stay, so an unbraced arm ends with its line

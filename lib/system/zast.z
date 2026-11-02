@@ -131,7 +131,7 @@ public: unit {
 
 # parse/AST error variants; the diagnostics layer maps each arm to a code.
 err: variant {
-    # a require: names a unit with no file behind it
+    # a unit is named that has no file behind it
     fileNotFound: null
     # two definitions in one scope claim the same name
     duplicateDef: null
@@ -209,8 +209,6 @@ err: variant {
     nonExhaustive: null
     # a member name the language reserves
     reservedMember: null
-    # a require: block is malformed
-    requireBlock: null
     # the name exists, but the unit that owns it does not export it
     notPublic: null
     # a private type surfaces in a signature other units can see
@@ -322,8 +320,6 @@ unitkind: variant {
     template: null
     # a `public:` block: the unit's or type's exported interface
     publicNs: null
-    # a `require:` toolchain-requirement block
-    requirement: null
 } as { tag: u8.tag }
 
 # The AST node, as a reftype tagged sum. The arm is the
@@ -530,8 +526,6 @@ errCode: function {c: err} out u32 is {
         r = 36
     } case reservedMember then {
         r = 37
-    } case requireBlock then {
-        r = 38
     } case noMain then {
         r = 39
     } case dataFile then {
@@ -658,12 +652,10 @@ explainText: function {code: u32} out String is {
         r = "non-exhaustive match\n\nA `match` over a variant or union does not cover every arm and has no `else`. Add the missing case(s), or an `else` clause.".string
     } else if code == 37 then {
         r = "reserved member name\n\nA type body declares a member named `public` or `tag`, or a unit declares a definition named `public`. `public` names the visibility block, so `public: unit { ... }` is the only declaration it may introduce; `tag` is the arm tag every sum type carries. Rename it.".string
-    } else if code == 38 then {
-        r = "malformed require block\n\nA unit's `require:` block declares what the unit needs from the host toolchain. It must be a unit definition, must declare at least one requirement, and every entry must be a key the compiler consumes -- today only `library:`, whose value is a compile-time string naming a link library. An unknown or misspelt key would be silently ignored, so it is rejected.".string
     } else if code == 39 then {
         r = "no main\n\nThe unit being compiled declares no `main: function is { ... }`, so the compiler has no entry point to start from. Compilation is demand-driven: `main` is the root, and what it reaches is what gets checked and emitted. A unit with no `main` is a library -- compile the program that opens it instead, or add a `main`. `--eager` resolves every definition rather than what a root reaches, so it does not require one.".string
     } else if code == 41 then {
-        r = "not data in a data file\n\nA data file (`.zd`) holds values -- numbers, strings, bools, lists, data and choice values, references to other definitions -- and the `data` and `choice` types they are built from, in units that nest with `unit { }`. A function, any other kind of type, an `as` block, a `public:` or `require:` block, an operator, an interpolated string and an `if` or `match` compute or declare behaviour, so a data file cannot hold them. Write the value itself, or move the code to a source file.".string
+        r = "not data in a data file\n\nA data file (`.zd`) holds values -- numbers, strings, bools, lists, data and choice values, references to other definitions -- and the `data` and `choice` types they are built from, in units that nest with `unit { }`. A function, any other kind of type, an `as` block, a `public:` block, an operator, an interpolated string and an `if` or `match` compute or declare behaviour, so a data file cannot hold them. Write the value itself, or move the code to a source file.".string
     } else if code == 100 then {
         r = "type error\n\nA value's type does not match what is required here: a mismatch, an undefined type, or an incompatible assignment.".string
     } else if code == 101 then {
@@ -779,8 +771,6 @@ wellKnown: list {
     wkPrivate: "private"
     wkPublic: "public"
     wkYield: "yield"
-    # `require`, the unit-level block label
-    wkRequire: "require"
     # the collection methods the emitter writes out only when a program calls
     # them: a template method nobody uses is dead C in every program that names
     # the collection at all
@@ -1034,7 +1024,6 @@ wellKnown: list {
     unCli: "cli"
     unNet: "net"
     unCollections: "collections"
-    wkLibrary: "library"
     wkUnderscore: "_"
     tyConverror: "converror"
     tyFile: "File"
@@ -2016,8 +2005,6 @@ errname: function {e: err} out String is {
         return "NONEXHAUSTIVE".string
     } case reservedMember then {
         return "RESERVEDMEMBER".string
-    } case requireBlock then {
-        return "REQUIREBLOCK".string
     } case notPublic then {
         return "NOTPUBLIC".string
     } case privateEscape then {
@@ -2125,8 +2112,6 @@ unitkindname: function {uk: unitkind} out String is {
         return "TEMPLATE".string
     } case publicNs then {
         return "PUBLIC".string
-    } case requirement then {
-        return "REQUIREMENT".string
     }
 }
 
@@ -3711,7 +3696,7 @@ unitOpKindIs: function {ast: Ast.view opId: nodeid k: unitkind} out bool is {
 # file unit root, an inline `m: unit { }` (both `namespace`) or a hidden
 # implementation subunit (`subunit`), or a `public:` block -- a nested unit
 # named `public` whose body designates the unit's surface? False for a
-# `template` and for the `private:` / `require:` block forms, which are not
+# `template` and for the `private:` block form, which are not
 # units.
 #
 # The two arms are NOT interchangeable and this does not merge them: a hidden
