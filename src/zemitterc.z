@@ -3416,12 +3416,15 @@ schema: nativec.runtime.nativec
 # then each unit's rows and requirements, the units in the foundation's order.
 # A row's fragments, pieces, templates and the fixed files are put in the
 # template cache under the paths the emitter reads them by, so no file is
-# opened.
+# opened. The rows are read here (servedRow, servedRequirements,
+# servedTemplate) and registered by a RowWalk.
 registerServed: function {ctx: Ctx ast: Ast.view symtab: zenv.ZSymbolTable.view} is {
     w: (
-        ServedRows
+        RowWalk
         used: Set String
         rf: (RowFacts declared: Set String held: Set String replaced: Set String)
+        frags: String
+        destroy: String
     )
     fd: nativec.systemc.foundation
     order: servedUnitOrder :fd
@@ -3429,16 +3432,24 @@ registerServed: function {ctx: Ctx ast: Ast.view symtab: zenv.ZSymbolTable.view}
         hd: "@cond \{c.name} = \{c.expression}"
         recordCond :ctx head: hd.stringView
     }
-    w.factsAndCanons :ctx :ast :symtab :order
-    for each r: fd.structural loop w.row :ctx :ast :symtab :r owner: ""
+    servedFactsAndCanons :w :ctx :ast :symtab :order
+    for each r: fd.structural loop servedRow :w :ctx :ast :symtab :r owner: ""
     recordUnitOrder :ctx order: (servedList xs: fd.order).stringView
     for each g: fd.groups loop {
-        for each r: g.rows loop w.row :ctx :ast :symtab :r owner: g.name.stringView
+        for each r: g.rows loop servedRow :w :ctx :ast :symtab :r owner: g.name.stringView
     }
     for each k: order loop {
         u: nativec.units.get i: k
-        for each r: u.implementation.rows loop w.row :ctx :ast :symtab :r owner: u.name.stringView
-        w.requirements :ctx :ast :symtab im: u.implementation owner: u.name.stringView
+        for each r: u.implementation.rows loop (
+            servedRow
+            :w
+            :ctx
+            :ast
+            :symtab
+            :r
+            owner: u.name.stringView
+        )
+        servedRequirements :w :ctx :ast :symtab im: u.implementation owner: u.name.stringView
         for each t: u.implementation.templates loop servedTemplate :ctx :t
     }
     for each fl: fd.files loop {
@@ -3447,122 +3458,204 @@ registerServed: function {ctx: Ctx ast: Ast.view symtab: zenv.ZSymbolTable.view}
     }
 }
 
-# ServedRows -- registerServed's walk: the fragment names given so far, and the
-# facts the rows declared and settled (RowFacts)
-ServedRows: class {
+# servedFactsAndCanons -- every served unit's facts, then every one's canons,
+# the units in `order`, above every unit's own rows
+servedFactsAndCanons: function {
+    w: RowWalk
+    ctx: Ctx
+    ast: Ast.view
+    symtab: zenv.ZSymbolTable.view
+    order: (ListVal u64).view
+} is {
+    for each k: order loop {
+        for each f: (nativec.units.get i: k).implementation.facts loop {
+            w.fact :ctx :ast :symtab name: f.name.stringView reach: (servedList xs: f.reach)
+        }
+    }
+    for each k: order loop {
+        for each c: (nativec.units.get i: k).implementation.canons loop {
+            w.canon :ctx :ast :symtab stem: c.stem.stringView spec: (servedList xs: c.spec)
+        }
+    }
+}
+
+# servedRow -- one row zc carries: its fields onto a head, its texts handed to
+# the walk, which registers it
+servedRow: function {
+    w: RowWalk
+    ctx: Ctx
+    ast: Ast.view
+    symtab: zenv.ZSymbolTable.view
+    r: schema.row
+    owner: StringView
+} is {
+    key: r.key.stringView
+    h: NativeHead.create head: "" words: ctx.nativeWords
+    h.need = servedList xs: r.needs
+    for each t: r.fragments loop w.fragment :ctx :owner :key text: "\{t}\n"
+    if r.pieces.length > 0 then w.pieces :ctx :owner :key text: (servedPieces ps: r.pieces :owner)
+    h.dem = servedList xs: r.demand
+    h.value = r.form.value
+    h.ptr = r.byPointer
+    h.eq = r.callsEquals
+    h.call = servedCallWord c: r.call
+    for each c: r.constant loop {
+        if h.cst.length > 0 then h.cst.append ","
+        h.cst.append "\{c}"
+    }
+    h.whenFact = r.fact.string
+    h.pulls = servedList xs: r.pulls
+    h.members = servedList xs: r.members
+    h.via = r.via.string
+    h.live = servedList xs: r.live
+    if r.destroy.length > 0 then w.destroyFragment :ctx :owner :key text: "\{r.destroy}\n"
+    (
+        w.row
+        :ctx
+        :ast
+        :symtab
+        :h
+        :owner
+        :key
+        template: r.template.stringView
+        body: r.body.stringView.trim
+    )
+}
+
+# servedRequirements -- a unit's links, sources and refusals, each read onto a
+# head the walk registers as the unit's `@unit.` row
+servedRequirements: function {
+    w: RowWalk
+    ctx: Ctx
+    ast: Ast.view
+    symtab: zenv.ZSymbolTable.view
+    im: schema.implementation
+    owner: StringView
+} is {
+    for each l: im.links loop {
+        h: NativeHead.create head: "" words: ctx.nativeWords
+        h.whenFact = l.fact.string
+        h.os = servedOs xs: l.os
+        h.link = l.library.string
+        w.requirement :ctx :ast :symtab :h :owner subunit: l.subunit.stringView
+    }
+    for each s: im.sources loop {
+        h: NativeHead.create head: "" words: ctx.nativeWords
+        h.whenFact = s.fact.string
+        h.os = servedOs xs: s.os
+        h.csrc = s.path.string
+        h.cdefs = servedList xs: s.defines
+        w.requirement :ctx :ast :symtab :h :owner subunit: s.subunit.stringView
+    }
+    for each f: im.refusals loop {
+        h: NativeHead.create head: "" words: ctx.nativeWords
+        h.cfeature = f.feature.string
+        h.nocc = servedCompilers xs: f.compilers
+        h.arch = servedArchitectures xs: f.onlyArchitectures
+        w.requirement :ctx :ast :symtab :h :owner subunit: f.subunit.stringView
+    }
+}
+
+# RowWalk -- registering the rows a reader reads, as loadNativeTbl records a
+# table read from disk: the fragment names given so far, the facts the rows
+# declared and settled (RowFacts), and what the reader handed over for the
+# row it is reading -- its fragments' names, its destroy fragment's
+RowWalk: class {
     used: Set String
     rf: RowFacts
+    frags: String
+    destroy: String
 } as {
-    # row -- one row as loadNativeTbl records it, its fragments, pieces and
-    # destroy fragment cached under the names its head gives them
+    # fact -- a unit's fact, its `@fact.` row
+    fact: function {
+        :this
+        ctx: Ctx
+        ast: Ast.view
+        symtab: zenv.ZSymbolTable.view
+        name: StringView
+        reach: String.take
+    } is {
+        h: NativeHead.create head: "" words: ctx.nativeWords
+        h.key = "@fact.\{name}"
+        h.reach = reach.take
+        this.place :ctx :ast :symtab :h body: ""
+    }
+
+    # canon -- a unit's canonical stem, its `@canon.` row
+    canon: function {
+        :this
+        ctx: Ctx
+        ast: Ast.view
+        symtab: zenv.ZSymbolTable.view
+        stem: StringView
+        spec: String.take
+    } is {
+        h: NativeHead.create head: "" words: ctx.nativeWords
+        h.key = "@canon.\{stem}"
+        h.spec = spec.take
+        this.place :ctx :ast :symtab :h body: ""
+    }
+
+    # fragment -- one of the row's fragments, cached under a name of its own
+    fragment: function {:this ctx: Ctx owner: StringView key: StringView text: String.take} is {
+        nm: this.fragmentName :owner :key
+        servedFragment :ctx name: nm.stringView text: text.take
+        if this.frags.length > 0 then this.frags.append ","
+        this.frags.append nm
+    }
+
+    # pieces -- the row's fragment as pieces (servedPieces' text), in place of
+    # its fragments
+    pieces: function {:this ctx: Ctx owner: StringView key: StringView text: String.take} is {
+        nm: this.fragmentName :owner :key
+        servedFragment :ctx name: nm.stringView text: text.take
+        this.frags = nm.copy
+    }
+
+    # destroyFragment -- the row's destroy fragment, cached under a name of its
+    # own
+    destroyFragment: function {
+        :this ctx: Ctx owner: StringView key: StringView text: String.take
+    } is {
+        dkey: "\{key}_destroy"
+        nm: this.fragmentName :owner key: dkey.stringView
+        servedFragment :ctx name: nm.stringView text: text.take
+        this.destroy = nm.copy
+    }
+
+    # row -- the row a reader read onto `h`, with the texts it handed over
+    # since the last: its key, its fragments, its template's path, recorded
     row: function {
         :this
         ctx: Ctx
         ast: Ast.view
         symtab: zenv.ZSymbolTable.view
-        r: schema.row
+        h: NativeHead
         owner: StringView
+        key: StringView
+        template: StringView
+        body: StringView
     } is {
-        key: r.key.stringView
-        h: NativeHead.create head: "" words: ctx.nativeWords
         h.key = servedKey :owner :key
-        h.need = servedList xs: r.needs
-        for each t: r.fragments loop {
-            nm: this.fragmentName :owner :key
-            servedFragment :ctx name: nm.stringView text: "\{t}\n"
-            if h.frag.length > 0 then h.frag.append ","
-            h.frag.append nm
-        }
-        if r.pieces.length > 0 then {
-            nm: this.fragmentName :owner :key
-            servedFragment :ctx name: nm.stringView text: (servedPieces ps: r.pieces :owner)
-            h.frag = nm.copy
-        }
-        h.dem = servedList xs: r.demand
-        h.value = r.form.value
-        h.ptr = r.byPointer
-        h.eq = r.callsEquals
-        h.call = servedCallWord c: r.call
-        for each c: r.constant loop {
-            if h.cst.length > 0 then h.cst.append ","
-            h.cst.append "\{c}"
-        }
-        h.whenFact = r.fact.string
-        h.pulls = servedList xs: r.pulls
-        h.members = servedList xs: r.members
-        h.via = r.via.string
-        if r.template.length > 0 then h.tmpl = "z_\{r.template}.c.tmpl"
-        h.live = servedList xs: r.live
-        if r.destroy.length > 0 then {
-            dkey: "\{key}_destroy"
-            nm: this.fragmentName :owner key: dkey.stringView
-            servedFragment :ctx name: nm.stringView text: "\{r.destroy}\n"
-            h.destroy = nm.copy
-        }
-        this.place :ctx :ast :symtab :h body: r.body.stringView.trim
+        h.frag swap this.frags
+        h.destroy swap this.destroy
+        if template.length > 0 then h.tmpl = "z_\{template}.c.tmpl"
+        this.place :ctx :ast :symtab :h :body
     }
 
-    # factsAndCanons -- every unit's `@fact.` and `@canon.` rows, the units in
-    # `order`, above every unit's own rows
-    factsAndCanons: function {
+    # requirement -- a link, source or refusal a reader read onto `h`, as the
+    # `@unit.` row of the unit or of its subunit `subunit`
+    requirement: function {
         :this
         ctx: Ctx
         ast: Ast.view
         symtab: zenv.ZSymbolTable.view
-        order: (ListVal u64).view
-    } is {
-        for each k: order loop {
-            for each f: (nativec.units.get i: k).implementation.facts loop {
-                h: NativeHead.create head: "" words: ctx.nativeWords
-                h.key = "@fact.\{f.name}"
-                h.reach = servedList xs: f.reach
-                this.place :ctx :ast :symtab :h body: ""
-            }
-        }
-        for each k: order loop {
-            for each c: (nativec.units.get i: k).implementation.canons loop {
-                h: NativeHead.create head: "" words: ctx.nativeWords
-                h.key = "@canon.\{c.stem}"
-                h.spec = servedList xs: c.spec
-                this.place :ctx :ast :symtab :h body: ""
-            }
-        }
-    }
-
-    # requirements -- a unit's links, sources and refusals as its `@unit.` rows
-    requirements: function {
-        :this
-        ctx: Ctx
-        ast: Ast.view
-        symtab: zenv.ZSymbolTable.view
-        im: schema.implementation
+        h: NativeHead
         owner: StringView
+        subunit: StringView
     } is {
-        for each l: im.links loop {
-            h: NativeHead.create head: "" words: ctx.nativeWords
-            h.key = "@unit.\{servedSubunit sub: l.subunit.stringView :owner}"
-            h.whenFact = l.fact.string
-            h.os = servedOs xs: l.os
-            h.link = l.library.string
-            this.place :ctx :ast :symtab :h body: ""
-        }
-        for each s: im.sources loop {
-            h: NativeHead.create head: "" words: ctx.nativeWords
-            h.key = "@unit.\{servedSubunit sub: s.subunit.stringView :owner}"
-            h.whenFact = s.fact.string
-            h.os = servedOs xs: s.os
-            h.csrc = s.path.string
-            h.cdefs = servedList xs: s.defines
-            this.place :ctx :ast :symtab :h body: ""
-        }
-        for each f: im.refusals loop {
-            h: NativeHead.create head: "" words: ctx.nativeWords
-            h.key = "@unit.\{servedSubunit sub: f.subunit.stringView :owner}"
-            h.cfeature = f.feature.string
-            h.nocc = servedCompilers xs: f.compilers
-            h.arch = servedArchitectures xs: f.onlyArchitectures
-            this.place :ctx :ast :symtab :h body: ""
-        }
+        h.key = "@unit.\{servedSubunit sub: subunit :owner}"
+        this.place :ctx :ast :symtab :h body: ""
     }
 
     # place -- a row recorded as loadNativeTbl records one it read
@@ -3636,41 +3729,96 @@ servedFragment: function {ctx: Ctx name: StringView text: String.take} is {
     ctx.tmplCache.set key: p.take value: text.take
 }
 
-# servedTemplate -- one template's text, its needs line and its sections,
-# cached under the path the template is read by
+# servedTemplate -- one template zc carries, read and written as templateHead
+# and appendSection write any, and cached under the path it is read by
 servedTemplate: function {ctx: Ctx t: schema.template} is {
-    x: String
-    nd: servedList xs: t.needs
-    if nd.length > 0 then x.append "/*@@needs \{nd}@@*/\n"
+    x: templateHead needs: (servedList xs: t.needs).stringView
     for each s: t.sections loop {
         if s.member.length == 0 then {
-            x.append "\{s.text}\n"
+            appendSection :x member: "" needs: "" text: s.text.stringView
         } else {
-            snd: servedList xs: s.needs
-            x.append "/*@@member \{s.member}\{servedAttr name: "needs" value: snd.stringView}@@*/\n"
-            x.append "\{s.text}\n/*@@end@@*/\n"
+            (
+                appendSection
+                :x
+                member: s.member.stringView
+                needs: (servedList xs: s.needs).stringView
+                text: s.text.stringView
+            )
         }
     }
-    p: "\{ctx.runtimeDir}/z_\{t.name}.c.tmpl"
-    ctx.tmplCache.set key: p.take value: x.take
+    cacheTemplate :ctx name: t.name.stringView text: x.take
 }
 
-# servedPieces -- a list of pieces as the text the emitter cuts: a piece with no
-# name as it stands, a named one between `/*@@row` and `/*@@end@@*/`
+# templateHead -- a template's text before its sections: its needs line, when
+# it needs anything
+templateHead: function {needs: StringView} out String is {
+    x: String
+    if needs.length > 0 then x.append "/*@@needs \{needs}@@*/\n"
+    return x
+}
+
+# appendSection -- one section of a template onto its text: a section of no
+# member as it stands, a member's between `/*@@member` and `/*@@end@@*/`
+appendSection: function {
+    x: String.borrow
+    member: StringView
+    needs: StringView
+    text: StringView
+} is {
+    if member.length == 0 then {
+        x.append "\{text}\n"
+        return
+    }
+    x.append "/*@@member \{member}\{servedAttr name: "needs" value: needs}@@*/\n"
+    x.append "\{text}\n/*@@end@@*/\n"
+}
+
+# cacheTemplate -- a template's text, cached under the path the template of
+# that name is read by
+cacheTemplate: function {ctx: Ctx name: StringView text: String.take} is {
+    p: "\{ctx.runtimeDir}/z_\{name}.c.tmpl"
+    ctx.tmplCache.set key: p.take value: text.take
+}
+
+# servedPieces -- a list of pieces zc carries as the text the emitter cuts
+# (appendPiece)
 servedPieces: function {ps: staticlist schema.piece owner: StringView} out String is {
     r: String
     for each p: ps loop {
         if p.name.length == 0 then {
-            r.append "\{p.text}\n"
+            appendPiece :r :owner name: "" demand: "" needs: "" text: p.text.stringView
         } else {
-            dem: servedList xs: p.demand
-            nd: servedList xs: p.needs
-            r.append "/*@@row @\{owner}.\{p.name}\{servedAttr name: "demand" value: dem.stringView}"
-            r.append "\{servedAttr name: "needs" value: nd.stringView}@@*/\n"
-            r.append "\{p.text}\n/*@@end@@*/\n"
+            (
+                appendPiece
+                :r
+                :owner
+                name: p.name.stringView
+                demand: (servedList xs: p.demand).stringView
+                needs: (servedList xs: p.needs).stringView
+                text: p.text.stringView
+            )
         }
     }
     return r
+}
+
+# appendPiece -- one piece onto the text the emitter cuts: a piece with no name
+# as it stands, a named one between `/*@@row` and `/*@@end@@*/`
+appendPiece: function {
+    r: String.borrow
+    owner: StringView
+    name: StringView
+    demand: StringView
+    needs: StringView
+    text: StringView
+} is {
+    if name.length == 0 then {
+        r.append "\{text}\n"
+        return
+    }
+    r.append "/*@@row @\{owner}.\{name}\{servedAttr name: "demand" value: demand}"
+    r.append "\{servedAttr name: "needs" value: needs}@@*/\n"
+    r.append "\{text}\n/*@@end@@*/\n"
 }
 
 # servedKey -- a row's key: `<unit>.<key>`, a helper `@<unit>.<name>`, a
