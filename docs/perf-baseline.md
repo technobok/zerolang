@@ -81,7 +81,7 @@ for i in range(0, n, max(1, n // 50)):
 out.append('    print "\\{xs.length}"\n}\n')
 sys.stdout.write("".join(out))
 PY
-# each compiler runs from ITS OWN tree's root (it reads src/runtime/natives.tbl):
+# each compiler runs from ITS OWN tree's root (one before cf2c975e reads src/runtime):
 perf stat -e instructions:u -r 3 out/zc-perf emit out/fx.z -o /dev/null
 ```
 
@@ -247,7 +247,36 @@ the account there under its own `<a id="r-<commit>">` anchor.
 | 2026-10-12 | 17175e8d | [review P4-P5: facts slot, one call router, row records, three spellings](#r-17175e8d) | 0.72s | 0.76s | 153MB / 120MB | 107 / 364 / 257 (total 728) | 2,172,858 | 453MB | 36.6s | 171,555 |
 | 2026-10-30 | 59f8083e | [the emitter writes only what `main` reaches](#r-59f8083e) | 0.88s | 0.92s | 169MB / 141MB | 121 / 459 / 326 (total 906) | 2,386,430 | 498MB | 37.9s | 192,267 |
 | 2026-10-30 | 255de41e | [runtime text is parsed once](#r-255de41e) | 0.87s | 0.93s | 168MB / 142MB | 103 / 463 / 316 (total 882) | 2,370,692 | 485MB | 39.3s | 192,742 |
+| 2026-11-03 | cf2c975e | [native C from the rows zc carries](#r-cf2c975e) | 0.95s | 1.02s | 195MB / 168MB | 108 / 493 / 351 (total 952) | 2,795,025 | 564MB | 42.2s | 203,800 |
 
+
+<a id="r-cf2c975e"></a>
+**Native C from the rows zc carries** (`255de41e` -> `cf2c975e`, the zdata and
+nativec arcs; `make ci` green at `b3385438`, `make ci-windows` green at
+`b8d508e6`). Each standard-library unit's C is the rows of its own
+`nativec.zd`, which zc carries as static data and registers at every emit;
+`src/runtime` and `natives.tbl` are gone, and a user unit brings its own
+`nativec.zd`. Emitted C was byte-identical across the switch (rtcmp, 1,446
+programs). Measured as the row above, each commit's series binary on its own
+source and on the fixed input, from its own tree, gcc -O1 with mimalloc,
+core 0:
+
+| commit | instructions (own source) | fixed input | allocs | fixed-input allocs | LOC |
+|---|---|---|---|---|---|
+| `255de41e` | 9,177M | 2,125M | 2,370,692 | 508,801 | 192,742 |
+| `cf2c975e` | 10,516M | 2,100M | 2,795,025 | 528,580 | 203,800 |
+
+On the same input the compiler does 1.2% less work. The self-compile's growth is its
+source: 11,058 more lines (the zdata reader, the served `nativec` unit, the
+three `zc natives check` guards ported from awk, shell and Python, and the
+user-unit path), each line compiled. Allocations moved the other way on the
+fixed input, +19.8K (+3.9%): every emit registers every row from the served
+table, copying its texts into the emitter's store and rebuilding each piece
+and section as marked-up text that RtTexts then cuts apart again. Removing
+that round trip (pieces and sections kept as data) is the next step. Peak RSS
+is up about 26MB under both allocators (195MB and 168MB, against 170MB and
+142MB). `make test`, warm,
+both on this machine: 37.2s and 42.2s, with 46 more cases.
 
 <a id="r-255de41e"></a>
 **Runtime text is parsed once** (`82a76ad2` -> `255de41e`, five commits: rows
