@@ -248,7 +248,39 @@ the account there under its own `<a id="r-<commit>">` anchor.
 | 2026-10-30 | 59f8083e | [the emitter writes only what `main` reaches](#r-59f8083e) | 0.88s | 0.92s | 169MB / 141MB | 121 / 459 / 326 (total 906) | 2,386,430 | 498MB | 37.9s | 192,267 |
 | 2026-10-30 | 255de41e | [runtime text is parsed once](#r-255de41e) | 0.87s | 0.93s | 168MB / 142MB | 103 / 463 / 316 (total 882) | 2,370,692 | 485MB | 39.3s | 192,742 |
 | 2026-11-03 | cf2c975e | [native C from the rows zc carries](#r-cf2c975e) | 0.95s | 1.02s | 195MB / 168MB | 108 / 493 / 351 (total 952) | 2,795,025 | 564MB | 42.2s | 203,800 |
+| 2026-11-04 | d1fde8ef | [the emitter reads the rows as data](#r-d1fde8ef) | 0.95s | 0.99s | 195MB / 166MB | 109 / 491 / 346 (total 946) | 2,751,540 | 559MB | 41.7s | 203,728 |
 
+
+<a id="r-d1fde8ef"></a>
+**The emitter reads the rows as data** (`cf2c975e` -> `d1fde8ef`, STAGE D of
+the embedded-nativec plan with the defects found on the way; `make ci` green
+and `make ci-windows` green at `d1fde8ef`, 1,278 of 1,278 run binaries
+matching on Windows). The emitter had kept the retired natives.tbl row format
+inside: every typed row was turned back into a head of strings, filed in
+about twenty tables keyed by composed `<unit>.<key>` paths, and every piece
+and template section was written between text markers to be cut out again
+at each emit. Rows are now records in one table (zemitrows), found from the
+declaration a call site holds by name ids, their needs read on first use;
+pieces and sections are data beside the C; the emitter's hand-written fast
+paths for the standard library's StringView natives demand their rows by
+declaration, and five of them, measured to give the same C without them,
+are gone. Emitted C is byte-identical over the corpus across the stage
+except where a commit says (rtcmp, 2,771 files). Measured as the row above:
+
+| commit | instructions (own source) | fixed input | allocs | fixed-input allocs | LOC |
+|---|---|---|---|---|---|
+| `cf2c975e` | 10,516M | 2,100M | 2,795,025 | 528,580 | 203,800 |
+| `d1fde8ef` | 10,445M | 2,045M | 2,751,540 | 500,096 | 203,728 |
+
+On the same input the compiler does 2.6% less work and allocates 5.4% less
+(-28.5K); the self-compile allocates 43.5K less. A small program shows it
+more: `zc emit examples/hello.z` (bin/zc, instructions:u, core 0) went from
+97.0M at `cfefff38` to 76.3M, and under callgrind (a `--readable-names`
+gcc -O1 build) from 178.9M to 142.8M -- registering the rows 12.9M -> 8.5M,
+finding the pieces 13.3M -> nothing (they are registered as they are read),
+the emitter as a whole 37.4M -> 16.6M; the type checker's share, 62.7M ->
+47.3M, is the collection-template fix `1e9b05f0` (R-D1a) made on the way.
+Wall and peak RSS are unchanged within noise; `make test`, warm, 41.7s.
 
 <a id="r-cf2c975e"></a>
 **Native C from the rows zc carries** (`255de41e` -> `cf2c975e`, the zdata and
