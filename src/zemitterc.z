@@ -2597,10 +2597,7 @@ recordRowBodies: function {ctx: Ctx h: NativeHead.view body: StringView} is {
         kn: h.key.copy
         ctx.nativeNeed.set key: kn value: h.need.copy
     }
-    if h.pulls.length > 0 then {
-        kl: h.key.copy
-        ctx.nativePulls.set key: kl value: h.pulls.copy
-    }
+    if h.pulls.length > 0 when h.frag.length > 0 then recordRowPulls :ctx pulls: h.pulls.stringView
     if h.ptr then {
         kp: h.key.copy
         ctx.nativePtrArgs.set key: kp value: true
@@ -5337,8 +5334,8 @@ Ctx: class {
     nativeTbl: (MapRV String v: rtid)
     # what each native fragment needs declared before it
     nativeNeed: (Map String V: String)
-    # the `pulls=` of each row, keyed by the path
-    nativePulls: (Map String V: String)
+    # the pulls of the rows answering each demand, comma-separated (needsAddPullsOf)
+    pullsByDemand: (MapVR zemitrows.demandkey V: String)
     # which natives take their arguments by pointer
     nativePtrArgs: (MapRV String v: bool)
     # which rows are values computed from their holes (`form=value`); a
@@ -6845,34 +6842,49 @@ needsAddKeyCond: function {ctx: Ctx key: zemitrows.demandkey cond: Cond.view} is
     needsAddPullsOf :ctx :key :cond
 }
 
-# needsAddPullsOf -- the pulls of the row demand `key` names, under `cond`
+# needsAddPullsOf -- the demands the rows answering demand `key` pull along with
+# it (their `pulls`), under `cond`: the helpers another unit's C supplies to
+# theirs. os.env builds a C string out of a StringView and os.cwd maps errno to
+# an IoError: that C is io's, so the demand is io's. Recorded where the demand
+# is met, rather than recomputed at emission by reading its unit's demands back
+# -- which is what let io's runtime gate on a predicate no row could state.
 needsAddPullsOf: function {ctx: Ctx key: zemitrows.demandkey cond: Cond.view} is {
-    pl: (
-        pullsOf
-        :ctx
-        uname: (ctx.demands.nameText id: key.owner)
-        memb: (ctx.demands.nameText id: key.name)
-    )
+    # copied out: each pulled demand writes the tables the rows are read from
+    pl: String
+    {
+        pg: ctx.pullsByDemand.get :key
+        match (
+            pg
+        ) case some then {
+            pl = pg.copy
+        } case none then null
+    }
     if pl.length > 0 then needsAddPullsIn :ctx pulls: pl.stringView :cond
 }
 
-# needsAddPulls -- the demands a member's row pulls along with it (its `pulls`):
-# the helpers another unit's C supplies to its body. os.env builds a C string out
-# of a StringView and os.cwd maps errno to an IoError: that C is io's, so the
-# demand is io's. Recorded where the member is demanded, rather than recomputed at
-# emission by reading its unit's demands back -- which is what let io's runtime
-# gate on a predicate no row could state. The pulled names wear the `@` that
-# marks a demand outside the member space: no declaration is called sv_cstr.
-pullsOf: function {ctx: Ctx.view uname: StringView memb: StringView} out String is {
-    # copied out: each pulled demand writes the tables the row is read from
-    pl: String
-    pg: ctx.nativePulls.get key: "\{uname}.\{memb}"
-    match (
-        pg
-    ) case some then {
-        pl = pg.copy
-    } case none then null
-    return pl
+# recordRowPulls -- the pulls of the fragment row just registered, filed under
+# each demand that fires it: a method's row answers its demand word
+# (`file_pollReadable`), a helper its `@name`, not its key
+recordRowPulls: function {ctx: Ctx pulls: StringView} is {
+    i: ctx.fragUnits.length - 1
+    k: ctx.fragDemandFrom.get :i
+    to: rowDemandTo :ctx :i
+    for k < to loop {
+        key: ctx.fragDemands.get i: k
+        cur: String
+        {
+            got: ctx.pullsByDemand.get :key
+            match (
+                got
+            ) case some then {
+                cur = got.copy
+            } case none then null
+        }
+        if cur.length > 0 then cur.append ","
+        cur.append pulls
+        ctx.pullsByDemand.set :key value: cur.take
+        k = k + 1
+    }
 }
 
 # needsAddPullsIn -- each `<unit>.<member>` of a row's `pulls=` list, demanded
@@ -40262,7 +40274,7 @@ emitC: function {
         nativeConstBody: (MapRV String v: rtid)
         nativeConstPos: (Map String V: String)
         nativeNeed: (Map String V: String)
-        nativePulls: (Map String V: String)
+        pullsByDemand: (MapVR zemitrows.demandkey V: String)
         nativePtrArgs: (MapRV String v: bool)
         nativeValueRows: (MapRV String v: bool)
         nativeEqRows: (MapRV String v: bool)
