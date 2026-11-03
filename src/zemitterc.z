@@ -9263,7 +9263,7 @@ emitNativeArgMethod: function {
     if pNames.length < 2 then return "".string
     # the receiver is evaluated first, then the arguments as written
     ord: orderBegin :ctx slots: pNames.length
-    orderNamesTwiceArgs :ctx st: ord :body count: pNames.length
+    orderNamesTwiceArgs :ctx st: ord :body count: pNames.length firstHole: 0
     recvNid: dottedParentNodeId n: (ast.nodes.get i: call.callable)
     (
         orderArgAtWith
@@ -9283,13 +9283,41 @@ emitNativeArgMethod: function {
     oprefix: orderFinish :ctx st: ord
     rn: ListVal zast.nameid
     rv: List String
-    filledAll: nativeHoleValues t: ctx st: ord count: pNames.length names: rn vals: rv
+    filledAll: nativeHoleValues t: ctx st: ord count: pNames.length firstHole: 0 names: rn vals: rv
     orderEnd :ctx st: ord
     # a slot no argument fills leaves the caller on its ordinary path rather than
     # emitting a body with a hole still in it
     if filledAll.not then return "".string
-    # a row that builds a record spells the record's C type as @RT@, and a row
-    # over text the view's as @StringView@
+    filled: (
+        nativeBodyFill
+        :ast
+        :symtab
+        :ctx
+        :call
+        :body
+        key: key.stringView
+        argIds: rn
+        argVals: rv
+    )
+    # a call's facts even for a value row: the arguments' own are not kept
+    # here, and call facts cost at most a temp
+    return (stating :facts from: callFacts text: (orderWrap prefix: oprefix call: filled))
+}
+
+# nativeBodyFill -- a native row's body `body` (keyed `key`) filled for `call`:
+# the operand holes from `argIds`/`argVals`, a record built by the row as @RT@
+# (the call's own type) and text's view type as @StringView@. One fill for a
+# method's row and a free function's.
+nativeBodyFill: function {
+    ast: Ast.view
+    symtab: zenv.ZSymbolTable.view
+    ctx: Ctx
+    call: zast.callrow.view
+    body: rtid
+    key: StringView
+    argIds: ListVal zast.nameid
+    argVals: List String
+} out String is {
     bn: ListVal zast.nameid
     bv: List String
     if (rtHas :ctx id: body slot: rtHole.slot.holeRT) then {
@@ -9305,29 +9333,28 @@ emitNativeArgMethod: function {
         preludeNeed :ctx memb: "@StringView_t"
         bv.append from: ctx.svC.copy
     }
-    filled: (
+    return (
         rtFillForCtx
         :ast
         :symtab
         :ctx
         id: body
-        path: key.stringView
+        path: key
         bindIds: bn
         bindVals: bv
-        rawIds: rn
-        rawVals: rv
+        rawIds: argIds
+        rawVals: argVals
     )
-    # a call's facts even for a value row: the arguments' own are not kept
-    # here, and call facts cost at most a temp
-    return (stating :facts from: callFacts text: (orderWrap prefix: oprefix call: filled))
 }
 
-# nativeHoleValues -- @V@, @A1@, @A2@, ... and the texts in the slots of the call
-# `st` opened that fill them; false when a slot is empty.
+# nativeHoleValues -- the holes of the slots of the call `st` opened and the
+# texts that fill them: slot i fills hole `firstHole + i`, where hole 0 is @V@
+# (a method's receiver) and hole k is @Ak@; false when a slot is empty.
 nativeHoleValues: function {
     t: Ctx.view
     st: orderstate
     count: u64
+    firstHole: u64
     names: ListVal zast.nameid
     vals: List String
 } out bool is {
@@ -9336,7 +9363,7 @@ nativeHoleValues: function {
     for hi < count loop {
         hv: orderSlotText :t :st slot: hi
         if hv.length == 0 then filledAll = false
-        names.append (rtArgHole ctx: t :hi)
+        names.append (rtArgHole ctx: t hi: firstHole + hi)
         vals.append hv.string
         hi = hi + 1
     }
@@ -9782,12 +9809,19 @@ rtArgHole: function {ctx: Ctx.view hi: u64} out zast.nameid is {
 }
 
 # orderNamesTwiceArgs -- orderNamesTwice for each of an argument row's `count`
-# slots that `body` names more than once: @V@ fills slot 0, @A1@ slot 1, and
-# so on.
-orderNamesTwiceArgs: function {ctx: Ctx.view st: orderstate.borrow body: rtid count: u64} is {
+# slots that `body` names more than once: slot i fills hole `firstHole + i`
+# (nativeHoleValues), so a method's @V@ fills slot 0, @A1@ slot 1, and a free
+# function's @A1@ slot 0.
+orderNamesTwiceArgs: function {
+    ctx: Ctx.view st: orderstate.borrow body: rtid count: u64 firstHole: u64
+} is {
     i: u64
     for i < count loop {
-        if (rtTwice :ctx id: body hole: (rtArgHole :ctx hi: i)) then orderNamesTwice :st slot: i
+        if (rtTwice :ctx id: body hole: (rtArgHole :ctx hi: firstHole + i)) then (
+            orderNamesTwice
+            :st
+            slot: i
+        )
         i = i + 1
     }
 }
@@ -50790,9 +50824,11 @@ emitNativeArg: function {
 # DECLARES the callee, never the spelled base: a hidden subunit's members belong
 # to their parent, which is the key the rows and checkNativesResolve use.
 # A generic native (collections.stringJoin) arrives as its instance and is
-# called by the template's name. "" for anything else: bodied siblings fall
+# called by the template's name. A row with a body and no fragment is the body,
+# filled as a method's row is (nativeBodyFill) with @A1@, @A2@, ... the
+# arguments in declared order. "" for anything else: bodied siblings fall
 # through to the id-cname route, methods to their own legs, natives with no
-# fragment (print, panic) to theirs.
+# row of their own (print, panic) to theirs.
 emitNativeFreeFnCall: function {
     ast: Ast.view
     symtab: zenv.ZSymbolTable.view
@@ -50819,13 +50855,18 @@ emitNativeFreeFnCall: function {
     # instance it answers
     callee: "z_\{un}_\{mn}"
     viaMember: nativeViaMember :ctx key: key.stringView
+    # the row's body, when the row is one rather than a fragment's function
+    body: rtid
     if viaMember.length > 0 then {
         viaInst: stampIdOf :symtab nid: call.nodeid
         noteMemberUse :ctx mono: viaInst member: (ctx.memberWords.slotOf text: viaMember.stringView)
         callee = "\{spelledCname :ctx tid: viaInst}_\{viaMember}"
-    } else if (nativeIsFragBacked :ctx path: key.stringView).not then return "".string
+    } else if (nativeIsFragBacked :ctx path: key.stringView).not then {
+        body = nativeImplOf :ctx path: key.stringView
+        if body.isZero then return "".string
+    }
     needsAddM :ctx uname: un.stringView memb: "@unit"
-    needsAddM :ctx uname: un.stringView memb: mn
+    if body.isZero then needsAddM :ctx uname: un.stringView memb: mn
     rowNeedAdd :ctx key: key.stringView
     pn: List String
     pidl: ListVal ztypes.tid
@@ -50839,8 +50880,72 @@ emitNativeFreeFnCall: function {
     m: pn.length
     wbase: orderPositions :ast :ctx :call nameIds: pidlNm labelsOnly: false
     ord: orderBegin :ctx slots: m
+    # an argument a body names twice is read into a temporary first; a free
+    # function has no receiver, so its slot 0 is @A1@
+    if body.isZero.not then orderNamesTwiceArgs :ctx st: ord :body count: m firstHole: 1
+    (
+        orderNativeFreeArgs
+        :ast
+        :symtab
+        :ctx
+        :call
+        :fid
+        :ord
+        :wbase
+        count: m
+        :pidl
+        :pidlNm
+        :viaTids
+    )
+    orderDropPositions :ctx base: wbase
+    oprefix: orderFinish :ctx st: ord
+    if body.isZero.not then {
+        rn: ListVal zast.nameid
+        rv: List String
+        nativeHoleValues t: ctx st: ord count: m firstHole: 1 names: rn vals: rv
+        orderEnd :ctx st: ord
+        filled: (
+            nativeBodyFill
+            :ast
+            :symtab
+            :ctx
+            :call
+            :body
+            key: key.stringView
+            argIds: rn
+            argVals: rv
+        )
+        return (stating :facts from: callFacts text: (orderWrap prefix: oprefix call: filled))
+    }
+    args: orderJoinSlots :ctx st: ord count: m
+    orderEnd :ctx st: ord
+    return (
+        stating
+        :facts
+        from: callFacts
+        text: (orderClose prefix: oprefix callee: callee.stringView args: args.stringView)
+    )
+}
+
+# orderNativeFreeArgs -- a native free function's `count` arguments lowered from
+# their declared parameters (emitNativeArg), in written order, into the slots of
+# the call `ord` opened; a via function's argument converted to the template
+# function's parameter type (viaArgText).
+orderNativeFreeArgs: function {
+    ast: Ast.view
+    symtab: zenv.ZSymbolTable.view
+    ctx: Ctx
+    call: zast.callrow.view
+    fid: ztypes.tid
+    ord: orderstate.borrow
+    wbase: u64
+    count: u64
+    pidl: (ListVal ztypes.tid).view
+    pidlNm: (ListVal zast.nameid).view
+    viaTids: (ListVal ztypes.tid).view
+} is {
     k: u64
-    for k < m loop {
+    for k < count loop {
         j: orderNextParam :ctx base: wbase
         k = k + 1
         mk: pendingHoistMark :ctx
@@ -50880,16 +50985,6 @@ emitNativeFreeFnCall: function {
             slot: j
         )
     }
-    orderDropPositions :ctx base: wbase
-    oprefix: orderFinish :ctx st: ord
-    args: orderJoinSlots :ctx st: ord count: m
-    orderEnd :ctx st: ord
-    return (
-        stating
-        :facts
-        from: callFacts
-        text: (orderClose prefix: oprefix callee: callee.stringView args: args.stringView)
-    )
 }
 
 # nativeViaMember -- the member `via=` names for the native free function
