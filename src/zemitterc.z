@@ -765,8 +765,8 @@ castLitVal: function {val: StringView dst: ztypes.suffixinfo} out String is {
 # widening within a signedness are safe; a signed source never fits an unsigned
 # target; an unsigned one needs a strictly wider signed target; and a float
 # target must have significand enough for the source's whole width.
-# natives-tbl-guard checks this against the declarations, so the two encodings
-# of the rule cannot drift apart.
+# `zc natives check native` (native-guard) checks this against the
+# declarations, so the two encodings of the rule cannot drift apart.
 convIsLossy: function {srcK: ztypes.numkind dstK: ztypes.numkind} out bool is {
     if srcK == dstK then return false
     sf: kindIsFloat k: srcK
@@ -1169,8 +1169,8 @@ convIntToInt: function {
 # convBodyOf -- the C the rows give for the conversion `<src>.<dst>`, as a
 # row body. This is the SAME derivation emitNumericCast runs -- kindBits,
 # kindSigned, kindLoStr, kindHiStr -- so the checked-in rows cannot
-# say anything the rule does not; natives-tbl-guard regenerates and diffs to keep
-# it that way. `lossy` follows the DECLARATION: a conversion the units declare as
+# say anything the rule does not; `zc natives check native` compares each
+# system conversion row with convRule to keep it that way. `lossy` follows the DECLARATION: a conversion the units declare as
 # returning `resultval` builds one, and one returning the type directly is a
 # plain cast, so the table and the declaration agree by construction. A checked
 # conversion is one expression: its tests, in order, each choosing a result.
@@ -2884,15 +2884,11 @@ memberWord: list {
 } out staticlist StringView
 
 # nativeWord -- the words the rows and the runtime fragments spell that the
-# loader acts on: the pointer-arguments and value-form flags, the unit-order
-# row, the demand a unit-wide row answers, the two runtime units it orders
-# specially, the two type holes the
-# emitter fills itself, and the operating systems an `os=` may name. Read through a zast.Vocab (ctx.nativeWords), never
-# compared as text.
+# loader acts on: the demand a unit-wide row answers, the runtime units it
+# orders specially, the two type holes the emitter fills itself, the operating
+# systems a requirement may name, and the arms of a checked file's choices.
+# Read through a zast.Vocab (ctx.nativeWords), never compared as text.
 nativeWord: list {
-    argsPtr: "args=ptr"
-    formValue: "form=value"
-    callsEq: "calls=eq"
     unitDemand: "@unit"
     unitIo: "io"
     unitPrelude: "prelude"
@@ -2966,9 +2962,8 @@ NativeHead: class {
     # `reach=`: on an `@fact.` row, the paths whose reaching makes the fact hold
     reach: String
 } as {
-    # create -- the head between `[` and `]`, split on spaces: the first word
-    # is the key, every other word an attribute
-    create: function {head: StringView words: zast.Vocab.view} out this is {
+    # create -- a head with every attribute "" or false, for a reader to fill
+    create: function out this is {
         h: (
             meta.create
             key: String
@@ -2997,36 +2992,29 @@ NativeHead: class {
             reach: String
             via: String
         )
+        return h
+    }
+
+    # fromMarker -- the head of a piece's marker (appendPiece), between
+    # `/*@@row ` and `@@*/`: the path key, then `demand=` and `needs=` when set
+    fromMarker: function {head: StringView} out this is {
+        h: NativeHead.create
         for each f: (head.split sep: " ") loop {
             if f.length > 0 then {
                 if h.key.length == 0 then {
                     h.key = f.string
                 } else {
-                    h.setAttr :f :words
+                    h.setMarkerAttr :f
                 }
             }
         }
         return h
     }
 
-    # setAttr -- one attribute word. A keyed attribute is matched by STRIPPING
-    # its key rather than comparing the word: a spelling compare is what the
-    # architecture rules count against this file. A word it does not know is
-    # ignored.
-    setAttr: function {:this f: StringView words: zast.Vocab.view} is {
-        w: words.slotOf text: f
-        this.setUnitAttr :f
-        this.setClassAttr :f
-        this.setFactAttr :f
-        if w == nativeWord.slot.argsPtr then this.ptr = true
-        if w == nativeWord.slot.formValue then this.value = true
-        if w == nativeWord.slot.callsEq then this.eq = true
-        fo: f.stripPrefix p: "frag="
-        match (
-            fo
-        ) case some then {
-            this.frag = fo.string
-        } case none then null
+    # setMarkerAttr -- one attribute word of a marker. A keyed attribute is
+    # matched by STRIPPING its key rather than comparing the word: a spelling
+    # compare is what the architecture rules count against this file.
+    setMarkerAttr: function {:this f: StringView} is {
         demandText: f.stripPrefix p: "demand="
         match (
             demandText
@@ -3038,127 +3026,6 @@ NativeHead: class {
             so
         ) case some then {
             this.need = so.string
-        } case none then null
-        co: f.stripPrefix p: "const="
-        match (
-            co
-        ) case some then {
-            this.cst = co.string
-        } case none then null
-        spo: f.stripPrefix p: "spec="
-        match (
-            spo
-        ) case some then {
-            this.spec = spo.string
-        } case none then null
-        clo: f.stripPrefix p: "call="
-        match (
-            clo
-        ) case some then {
-            this.call = clo.string
-        } case none then null
-        plo: f.stripPrefix p: "pulls="
-        match (
-            plo
-        ) case some then {
-            this.pulls = plo.string
-        } case none then null
-        mlo: f.stripPrefix p: "members="
-        match (
-            mlo
-        ) case some then {
-            this.members = mlo.string
-        } case none then null
-    }
-
-    # setFactAttr -- a fact's attribute word: `when=` on a variant row, `reach=`
-    # on the `@fact.` row it names
-    setFactAttr: function {:this f: StringView} is {
-        wo: f.stripPrefix p: "when="
-        match (
-            wo
-        ) case some then {
-            this.whenFact = wo.string
-        } case none then null
-        ro: f.stripPrefix p: "reach="
-        match (
-            ro
-        ) case some then {
-            this.reach = ro.string
-        } case none then null
-        vo: f.stripPrefix p: "via="
-        match (
-            vo
-        ) case some then {
-            this.via = vo.string
-        } case none then null
-    }
-
-    # setClassAttr -- a `.@class` row's attribute word (ClassRow)
-    setClassAttr: function {:this f: StringView} is {
-        lvo: f.stripPrefix p: "live="
-        match (
-            lvo
-        ) case some then {
-            this.live = lvo.string
-        } case none then null
-        dso: f.stripPrefix p: "destroy="
-        match (
-            dso
-        ) case some then {
-            this.destroy = dso.string
-        } case none then null
-        tpo: f.stripPrefix p: "tmpl="
-        match (
-            tpo
-        ) case some then {
-            this.tmpl = tpo.string
-        } case none then null
-    }
-
-    # setUnitAttr -- an `@unit.` row's attribute word (UnitReq)
-    setUnitAttr: function {:this f: StringView} is {
-        lo: f.stripPrefix p: "link="
-        match (
-            lo
-        ) case some then {
-            this.link = lo.string
-        } case none then null
-        cfo: f.stripPrefix p: "cfeature="
-        match (
-            cfo
-        ) case some then {
-            this.cfeature = cfo.string
-        } case none then null
-        nco: f.stripPrefix p: "nocc="
-        match (
-            nco
-        ) case some then {
-            this.nocc = nco.string
-        } case none then null
-        aro: f.stripPrefix p: "arch="
-        match (
-            aro
-        ) case some then {
-            this.arch = aro.string
-        } case none then null
-        oso: f.stripPrefix p: "os="
-        match (
-            oso
-        ) case some then {
-            this.os = oso.string
-        } case none then null
-        cso: f.stripPrefix p: "csrc="
-        match (
-            cso
-        ) case some then {
-            this.csrc = cso.string
-        } case none then null
-        cdo: f.stripPrefix p: "cdefs="
-        match (
-            cdo
-        ) case some then {
-            this.cdefs = cdo.string
         } case none then null
     }
 }
@@ -3491,8 +3358,7 @@ schema: nativec.runtime.nativec
 
 # registerImplementations -- the rows zc carries (`nativec.units`, foundation
 # `nativec.systemc.foundation`) and each user unit's checked rows (`users`)
-# into the row tables, as loadNativeTbl records a table read from disk and in
-# the same order: the conditions, every unit's facts and canons, the
+# into the row tables, in this order: the conditions, every unit's facts and canons, the
 # structural rows, the unit order, the foundation's groups, then each unit's
 # rows and requirements, the units in the foundation's order and the user
 # units after them. A row's fragments, pieces, templates and the fixed files
@@ -3595,7 +3461,7 @@ servedRow: function {
     owner: StringView
 } is {
     key: r.key.stringView
-    h: NativeHead.create head: "" words: ctx.nativeWords
+    h: NativeHead.create
     h.need = servedList xs: r.needs
     for each t: r.fragments loop w.fragment :ctx :owner :key text: "\{t}\n"
     if r.pieces.length > 0 then w.pieces :ctx :owner :key text: (servedPieces ps: r.pieces :owner)
@@ -3638,14 +3504,14 @@ servedRequirements: function {
     owner: StringView
 } is {
     for each l: im.links loop {
-        h: NativeHead.create head: "" words: ctx.nativeWords
+        h: NativeHead.create
         h.whenFact = l.fact.string
         h.os = servedOs xs: l.os
         h.link = l.library.string
         w.requirement :ctx :ast :symtab :h :owner subunit: l.subunit.stringView
     }
     for each s: im.sources loop {
-        h: NativeHead.create head: "" words: ctx.nativeWords
+        h: NativeHead.create
         h.whenFact = s.fact.string
         h.os = servedOs xs: s.os
         h.csrc = s.path.string
@@ -3653,7 +3519,7 @@ servedRequirements: function {
         w.requirement :ctx :ast :symtab :h :owner subunit: s.subunit.stringView
     }
     for each f: im.refusals loop {
-        h: NativeHead.create head: "" words: ctx.nativeWords
+        h: NativeHead.create
         h.cfeature = f.feature.string
         h.nocc = servedCompilers xs: f.compilers
         h.arch = servedArchitectures xs: f.onlyArchitectures
@@ -3661,8 +3527,7 @@ servedRequirements: function {
     }
 }
 
-# RowWalk -- registering the rows a reader reads, as loadNativeTbl records a
-# table read from disk: the fragment names given so far, the facts the rows
+# RowWalk -- registering the rows a reader reads: the fragment names given so far, the facts the rows
 # declared and settled (RowFacts), and what the reader handed over for the
 # row it is reading -- its fragments' names, its destroy fragment's
 RowWalk: class {
@@ -3683,7 +3548,7 @@ RowWalk: class {
         name: StringView
         reach: String.take
     } is {
-        h: NativeHead.create head: "" words: ctx.nativeWords
+        h: NativeHead.create
         h.key = "@fact.\{name}"
         h.reach = reach.take
         this.place :ctx :ast :symtab :h body: ""
@@ -3698,7 +3563,7 @@ RowWalk: class {
         stem: StringView
         spec: String.take
     } is {
-        h: NativeHead.create head: "" words: ctx.nativeWords
+        h: NativeHead.create
         h.key = "@canon.\{stem}"
         h.spec = spec.take
         this.place :ctx :ast :symtab :h body: ""
@@ -3780,7 +3645,7 @@ RowWalk: class {
         this.place :ctx :ast :symtab :h body: ""
     }
 
-    # place -- a row recorded as loadNativeTbl records one it read
+    # place -- a row recorded into the row tables
     place: function {
         :this
         ctx: Ctx
@@ -3891,7 +3756,7 @@ checkedUnit: function {
         :owner
     )
     for each l: (zdata.itemsOf :f v: (checkedField :u name: "links")) loop {
-        h: NativeHead.create head: "" words: ctx.nativeWords
+        h: NativeHead.create
         h.whenFact = checkedText :u v: l name: "fact"
         h.os = checkedArms :u v: l name: "os"
         h.link = checkedText :u v: l name: "library"
@@ -3906,7 +3771,7 @@ checkedUnit: function {
         )
     }
     for each s: (zdata.itemsOf :f v: (checkedField :u name: "sources")) loop {
-        h: NativeHead.create head: "" words: ctx.nativeWords
+        h: NativeHead.create
         h.whenFact = checkedText :u v: s name: "fact"
         h.os = checkedArms :u v: s name: "os"
         h.csrc = checkedText :u v: s name: "path"
@@ -3922,7 +3787,7 @@ checkedUnit: function {
         )
     }
     for each x: (zdata.itemsOf :f v: (checkedField :u name: "refusals")) loop {
-        h: NativeHead.create head: "" words: ctx.nativeWords
+        h: NativeHead.create
         h.cfeature = checkedText :u v: x name: "feature"
         h.nocc = checkedArms :u v: x name: "compilers"
         h.arch = checkedArms :u v: x name: "onlyArchitectures"
@@ -3972,7 +3837,7 @@ checkedRow: function {
         :f
         v: r
     )}"
-    h: NativeHead.create head: "" words: ctx.nativeWords
+    h: NativeHead.create
     h.need = checkedTexts :u v: r name: "needs"
     for each t: (zdata.textsOf :f v: (zdata.fieldOf :f v: r name: "fragments")) loop (
         w.fragment
@@ -6130,10 +5995,8 @@ Ctx: class {
     # line names
     tmplTexts: (MapVV textkey v: rtid)
     tmplNeeds: (MapVR textkey V: String)
-    # the rows, registered once at emit start: qualified path -> the C body, parsed
-    # (rt), plus the two row attributes. Read eagerly rather than on first
-    # lookup because the lookup site is inside emitExpr, which holds a Ctx but
-    # not the runtime dir; emitC has both.
+    # the rows, registered once at emit start: qualified path -> the C body, its
+    # text deferred and cut on first use (nativeImplOf)
     nativeTbl: (MapRV String v: rtid)
     # what each native fragment needs declared before it
     nativeNeed: (Map String V: String)
@@ -37601,8 +37464,8 @@ unitClassTid: function {
 
 # unitDeclByName -- the file unit spelled `name`, asked of the ENVIRONMENT:
 # the program root's own children, which IS the list of units in scope. A name
-# reaches this only from a source literal, a unit segment loadNativeTbl parsed
-# out of a row path, or the main-unit binding -- identity itself
+# reaches this only from a source literal, a unit segment of a row's path, or
+# the main-unit binding -- identity itself
 # travels as a declid. Answering from the declaration tree rather than a side
 # index means there is nothing to go stale and nothing silently overwritten
 # when two files declare the same unit name.
@@ -40000,11 +39863,7 @@ loadPiecesOf: function {ctx: Ctx key: textkey} is {
             )
             return
         }
-        h: (
-            NativeHead.create
-            head: (tt.stringView.substring from: pc.headFrom to: pc.headTo)
-            words: ctx.nativeWords
-        )
+        h: NativeHead.fromMarker head: (tt.stringView.substring from: pc.headFrom to: pc.headTo)
         ctx.rowsInPlace.add item: ctx.fragUnits.length
         (
             recordFragmentRow

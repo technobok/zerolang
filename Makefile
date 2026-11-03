@@ -1297,7 +1297,7 @@ perf: $(PERFBIN)
 # deletes write-only allocations; perf-elision measures that), a failed run and
 # allocs != frees. Above ALLOC_BASELINE fails; a commit raising it says why in
 # its message, and one lowering the count lowers it here.
-ALLOC_BASELINE := 2797199
+ALLOC_BASELINE := 2793020
 # ALLOC_LINE -- the one measurement every allocation number comes from.
 ALLOC_LINE = valgrind --tool=memcheck $(PERFRUN) 2>&1 | grep 'total heap usage' | sed 's/.*usage: //'
 
@@ -1434,7 +1434,7 @@ frontend-guard:
 	if [ "$$t" -gt 0 ]; then \
 	  echo "frontend-guard FAIL: the front end names the resolved target $$t times; it is the generated z unit's to say"; fail=1; fi; \
 	if [ "$$fail" = "1" ]; then \
-	  echo "  A backend fact belongs to the backend: the C emitter and its table (natives.tbl)."; \
+	  echo "  A backend fact belongs to the backend: the C emitter and its rows (lib/system/<unit>/nativec.zd)."; \
 	  exit 1; \
 	fi; \
 	echo "frontend-guard OK: no C spelling, no triple parse and no target in the front end's code"
@@ -1959,7 +1959,7 @@ ident-set:
 	  sed 's/^/  /' "$$rep" | head -60; rm -rf "$$na" "$$nb" "$$rep"; exit 1; \
 	fi
 
-# const-row-guard -- a natives.tbl `const=` row is chosen exactly when its operand
+# const-row-guard -- a nativec row with a `constant` position is chosen exactly when its operand
 # is a compile-time constant: const_divide_form divides by a variable four times,
 # and each of those must call the helper that checks the divisor; its constant
 # divisors divide inline.
