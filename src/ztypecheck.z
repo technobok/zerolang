@@ -6411,7 +6411,7 @@ resolveTyperefShell: function {
         )
     }
     # anything else is a value, not a type: its fold has said why it is
-    # refused, and the member is declared with no type (memberDeclRefused)
+    # refused, and the member is declared with no type (memberDefinitionFailed)
     st.typing.refusedDefaults.add item: nid
     return ztypes.tid.zero
 }
@@ -9011,17 +9011,34 @@ reportUnknownAsCallHead: function {
     vn: ast.nodes.get i: item.operation
     if vn.call.not then return false
     headNid = vn.callable
-    headId: bareAtomNameId n: (ast.nodes.get i: headNid)
+    # an operator's call (`cap * 2`) has a path for its head, and no name in it
+    if (zast.infixPartsOf :ast n: (ast.nodes.get i: item.operation)).found then return false
+    # a head through a unit (`sch.row`) is checked at its root, then at its member
+    rootNid: headNid
+    {
+        hn0: ast.nodes.get i: headNid
+        match (
+            hn0
+        ) case dottedpath then {
+            rootNid = hn0.parent
+        } else null
+    }
+    headId: bareAtomNameId n: (ast.nodes.get i: rootNid)
     if headId.isZero then return false
     td: declOfTypeId :st tid: parentId
     if td.isZero then return false
+    # the type's own generic parameter, which only an instance has a value for
+    if ((st.reg.genericParamNamesOf tdecl: td).contains item: headId) then return false
     unknown: unresolvedBareName :ast :st unitDecl: (unitRootOfDecl :st declId: td) nameId: headId
-    if unknown.length == 0 then return false
-    hn: ast.nodes.get i: headNid
+    if unknown.length == 0 then {
+        if rootNid == headNid then return false
+        return (reportMissingHeadMember :st scope: td :ast callable: headNid)
+    }
+    hn: ast.nodes.get i: rootNid
     (
         addErrorH
         :st
-        nodeid: headNid
+        nodeid: rootNid
         lineno: (nodeLine n: hn)
         colno: (nodeCol n: hn)
         e: zast.err.badReference
@@ -31703,22 +31720,7 @@ unitMemberTypeOf: function {
 } out optionval ztypes.tid is {
     nid: memberId
     if nid.isZero then return (optionval.none ztypes.tid)
-    # A top-level unit roots a scope under its own name; a nested unit is
-    # deliberately absent from that index -- two files may hold units of the
-    # same name -- so its root comes off its type id instead. The name is
-    # only trusted when it produces THIS unit: a nested unit may share a name
-    # with a top-level one, and answering from the index alone probed the
-    # other unit's scope for the member. A generic mono's own declaration
-    # (declIdOfType) carries its substituted members; declOfTypeId hops to
-    # the TEMPLATE's, whose members are the generic ones.
-    root: ztypes.declid
-    uro: unitDecl
-    if uro.isZero.not then {
-        urt: declTypeIdOf :st declId: uro
-        if urt == unitTid then root = uro
-    }
-    if root.isZero then root = st.typing.declIdOfType typeId: unitTid
-    if root.isZero then root = declOfTypeId :st tid: unitTid
+    root: unitScopeRoot :st :unitTid :unitDecl
     r: scopeMemberTid :st :ast :root nameId: nid
     if r.isZero.not then return (optionval.some r)
     # a definition the unit's `public:` block makes is on its surface
@@ -31729,6 +31731,27 @@ unitMemberTypeOf: function {
     }
     return (optionval.none ztypes.tid)
 }
+
+# unitScopeRoot -- the declaration whose scope holds unit `unitTid`'s members.
+# A top-level unit roots a scope under its own name; a nested unit is
+# deliberately absent from that index -- two files may hold units of the same
+# name -- so its root comes off its type id instead. The name is only trusted
+# when it produces THIS unit: a nested unit may share a name with a top-level
+# one, and answering from the index alone probed the other unit's scope for the
+# member. A generic mono's own declaration (declIdOfType) carries its
+# substituted members; declOfTypeId hops to the TEMPLATE's, whose members are
+# the generic ones.
+unitScopeRoot: function {
+    st: zenv.ZSymbolTable.view
+    unitTid: ztypes.tid
+    unitDecl: ztypes.declid
+} out ztypes.declid is {
+    if unitDecl.isZero.not when (declTypeIdOf :st declId: unitDecl) == unitTid then return unitDecl
+    root: st.typing.declIdOfType typeId: unitTid
+    if root.isZero then root = declOfTypeId :st tid: unitTid
+    return root
+}
+
 
 # scopeMemberTid -- the type of member `nameId` of the scope `root`, resolving
 # it first when nothing has: a namespace's member resolves when a use first
@@ -31752,19 +31775,32 @@ scopeMemberTid: function {
     return (probeScopeTyperef :st :ast :root :nameId)
 }
 
-# memberDeclRefused -- `tid` declares a member `nameId` by a default that was
-# refused (ZTyping.refusedDefaults). The refusal is reported where the default
-# is written, and that report stands for every read of the member.
-memberDeclRefused: function {
-    st: zenv.ZSymbolTable.view ast: Ast.view tid: ztypes.tid nameId: zast.nameid
+# memberDefinitionFailed -- the scope `root` (a type's or a unit's, or its
+# `public:` block) declares a member `nameId` that a read found no type for,
+# because the member's definition failed and reported why where it is written:
+# a constant, a list or a type's `as` constant whose value did not type (with an
+# error recorded), or a default refused (ZTyping.refusedDefaults). That report stands for every read
+# of the member, so a read adds no "has no member" of its own. A function, a
+# parameter, a field or a method a read does not find is the read's to report.
+memberDefinitionFailed: function {
+    st: zenv.ZSymbolTable.view
+    ast: Ast.view
+    root: ztypes.declid
+    nameId: zast.nameid
 } out bool is {
-    td: declOfTypeId :st :tid
-    if td.isZero then return false
-    md: st.typing.declFindChild parentDeclId: td :nameId
-    if md.isZero then return false
-    dn: (st.typing.decls.get i: md).node
-    if dn.isZero then return false
-    n: ast.nodes.get i: dn
+    if root.isZero then return false
+    md: st.typing.declFindChild parentDeclId: root :nameId
+    if md.isZero then {
+        pb: publicNsChildOf :st :root
+        if pb.isZero then return false
+        md = st.typing.declFindChild parentDeclId: pb :nameId
+        if md.isZero then return false
+    }
+    d: st.typing.decls.get i: md
+    valued: d.kind.constDecl or d.kind.staticListDecl or (st.typing.isAsConstDecl declId: md)
+    if valued then return st.typing.errors.length > 0
+    if d.node.isZero then return false
+    n: ast.nodes.get i: d.node
     if n.namedoperation.not then return false
     return (st.typing.refusedDefaults.has item: n.operation)
 }
@@ -31835,7 +31871,13 @@ reportUnknownMemberAs: function {
             baseNum: (isNumericTid :st tid: bt) or (isLiteralTypeId :st tid: bt)
             if (isScalarNameId id: cnId) when baseNum then stillMiss = false
         }
-        if stillMiss when (memberDeclRefused :st :ast tid: bt nameId: cnId) then stillMiss = false
+        if stillMiss when (
+            memberDefinitionFailed
+            :st
+            :ast
+            root: (declOfTypeId :st tid: bt)
+            nameId: cnId
+        ) then stillMiss = false
         if stillMiss then {
             cn: zast.nameTextAt :ast ref: cnId
             btnMm: specWrittenName :st :ast tid: shown
@@ -32913,7 +32955,17 @@ checkUnitQualifiedMember: function {
             )
             )
         } case none then {
-            return (checkUnitUndeclaredMember :st :ast :dp :bt :cnId un: un.stringView)
+            return (
+                checkUnitUndeclaredMember
+                :st
+                :ast
+                :dp
+                :bt
+                memberUnit: btUd
+                :cnId
+                memberId: effUcn
+                un: un.stringView
+            )
         }
     }
     return (callleg handled: false tid: ztypes.tid.zero)
@@ -33563,17 +33615,28 @@ constBranchReadsNumericParam: function {
     return false
 }
 
-# checkUnitUndeclaredMember -- `unit.name` naming no member the unit declares: an
-# instance's numeric generic parameter, or a constant of its template, both read
-# through it as through a type; anything else is unknown.
+# checkUnitUndeclaredMember -- `unit.name` naming no member of the unit
+# `memberUnit` (the declaration of `bt`) that has a type: a member whose
+# definition failed, which said why where it is written; an instance's numeric
+# generic parameter, or a constant of its template, both read through it as
+# through a type; anything else is unknown.
 checkUnitUndeclaredMember: function {
     st: zenv.ZSymbolTable
     ast: Ast
     dp: dpref
     bt: ztypes.tid
+    memberUnit: ztypes.declid
     cnId: zast.nameid
+    memberId: zast.nameid
     un: StringView
 } out callleg is {
+    if (
+        memberDefinitionFailed
+        :st
+        :ast
+        root: (unitScopeRoot :st unitTid: bt unitDecl: memberUnit)
+        nameId: memberId
+    ) then return (callleg handled: true tid: ztypes.tid.zero)
     npU: checkNumericParamMember :st :ast :dp :bt :cnId
     if npU.handled then return npU
     icU: checkInstanceConstant :st :ast :dp :bt :cnId
@@ -68094,20 +68157,20 @@ staticValueCall: function {
     return ct.isZero.not
 }
 
-# reportMissingHeadMember -- the head of a unit-level call is `unit.member`
-# and the unit declares no such member: reported at the member, as a body
-# reports the same read. False when the head is another shape or the member
-# exists.
+# reportMissingHeadMember -- the head `callable` of a call outside a function
+# (a unit-level constant's, a type constant's) is `unit.member` and the unit
+# declares no such member: reported at the member, as a body reports the same
+# read. False when the head is another shape or the member exists.
 reportMissingHeadMember: function {
     st: zenv.ZSymbolTable
     scope: ztypes.declid
     ast: Ast
-    defn: callref
+    callable: zast.nodeid
 } out bool is {
     qualId: zast.nodeid
     memberNid: zast.nodeid
     {
-        hn: ast.nodes.get i: defn.callable
+        hn: ast.nodes.get i: callable
         match (
             hn
         ) case dottedpath then {
@@ -68167,7 +68230,7 @@ resolveCalledConstantDef: function {
         # reads as a construction.
         # a head reached through a unit (`c.impl`) names a member that unit
         # declares, or the construction has nothing to build
-        if (reportMissingHeadMember :st :scope :ast :defn) then return
+        if (reportMissingHeadMember :st :scope :ast callable: defn.callable) then return
         cbu: nameDenotesUnit :st :scope nameId: (nameIdOf :ast name: cbn.stringView)
         if cbu.not then {
             # the same scope walk the instantiation collector uses --
