@@ -1,6 +1,6 @@
 # znativecheck -- `zc natives check WHAT`: what must hold of the rows zc carries
 # (nativec.units, the foundation) beyond what their schema checks, checked
-# against the standard library's declarations. `native`: every native function
+# against the standard library's declarations. `rows`: every native function
 # of a unit with rows has a row; every hole a text spells names a declared type,
 # arm or member, or one the emitter binds; no text spells a tag constant or a
 # generated struct's member literally; a value row's body calls nothing; every
@@ -18,11 +18,11 @@ schema: nativec.runtime.nativec
 # checkWord -- the words `zc natives check` and its checks act on
 checkWord: list {
     # the check of the rows against the declarations
-    cNative: "native"
+    cRows: "rows"
     # the check of the pieces' needs (znativepieces)
-    cPiece: "piece"
+    cNeeds: "needs"
     # the check of the native receivers' `.view` markers (znativeview)
-    cView: "view"
+    cViews: "views"
     # the units whose names every unit sees
     uSystem: "system"
     uCore: "core"
@@ -92,6 +92,8 @@ Decls: class {
     arms: NameSets
     # the members of each record, class, variant, union, protocol and facet
     members: NameSets
+    # the functions each type declares, in either of its blocks
+    methods: NameSets
     # the native operators of each type, and the unit declaring each such type
     operators: NameSets
     typeUnit: (Map String V: String)
@@ -107,27 +109,38 @@ Decls: class {
 # `emitter` too. Prints each finding once, then a summary. Answers the exit
 # code: 0 when nothing was found, 1 when something was, 2 for an unknown check.
 checkNatives: function {
-    what: StringView systemdir: StringView emitter: StringView register: StringView
+    what: StringView
+    systemdir: StringView
+    emitter: StringView
+    register: StringView
+    # `rows` of one user unit: its folder holding its nativec.zd; "" for the
+    # rows zc carries
+    unitdir: StringView
 } out i32 is {
     words: zast.Vocab.create block: checkWord
     w: words.slotOf text: what
     fails: List String
     n: String
     guard: "native-guard"
-    if w == checkWord.slot.cNative then {
+    if w == checkWord.slot.cRows then {
         d: readDecls :systemdir :words
-        texts: allTexts
-        n = checkNative :d :texts :fails
-    } else if w == checkWord.slot.cPiece then {
+        if unitdir.length > 0 then {
+            guard = "check rows"
+            n = checkUnitRows :d :unitdir :systemdir :fails
+        } else {
+            texts: allTexts
+            n = checkNative :d :texts :fails
+        }
+    } else if w == checkWord.slot.cNeeds then {
         guard = "piece-guard"
         n = znativepieces.checkPieces :emitter :fails
-    } else if w == checkWord.slot.cView then {
+    } else if w == checkWord.slot.cViews then {
         guard = "view-guard"
         files: List String
         for each sf: (znativedecls.sourceFiles :systemdir) loop files.append from: sf.path.copy
         n = znativeview.checkView :files :emitter :register :systemdir :fails
     } else {
-        io.eprintln "zc natives check: unknown check '\{what}' (native, piece, view)"
+        io.eprintln "zc natives check: unknown check '\{what}' (rows, needs, views)"
         return 2
     }
     said: Set String
@@ -139,6 +152,167 @@ checkNatives: function {
     print "\{guard}: \{n}"
     if fails.length > 0 then return 1
     return 0
+}
+
+# checkUnitRows -- the `rows` check of one user unit, its folder `unitdir`
+# holding its nativec.zd beside the unit's own file: every native function of
+# the unit has a row, every row's key names a declaration of the unit (a typo'd
+# key implements nothing), and every hole its texts spell names a known type,
+# arm or member. Answers what was checked, for the summary.
+checkUnitRows: function {
+    d: Decls
+    unitdir: StringView
+    systemdir: StringView
+    fails: List String
+} out String is {
+    dirTo: unitdir.length
+    if (unitdir.endsWith suffix: "/") then dirTo = dirTo - 1
+    dir: (unitdir.substring from: 0 to: dirTo).string
+    unitName: dir.copy
+    srcdir: ".".string
+    cut: dir.stringView.lastIndexOf needle: "/"
+    match (
+        cut
+    ) case some then {
+        unitName = (dir.stringView.substring from: cut + 1 to: dir.length).string
+        srcdir = (dir.stringView.substring from: 0 to: cut).string
+    } case none then null
+    file: "\{dir}/nativec.zd"
+    if (io.exists path: file).not then {
+        fails.append "\{dir} holds no nativec.zd"
+        return String
+    }
+    for each sf: (znativedecls.unitFiles srcdir: srcdir.stringView name: unitName.stringView) loop {
+        pf: znativedecls.parseFile path: sf.path.stringView
+        for each k: pf.defs loop (
+            readDef
+            :d
+            unitName: unitName.stringView
+            sys: false
+            tree: pf.tree
+            id: k
+        )
+    }
+    srcs: List String
+    srcs.append from: srcdir.copy
+    df: zdata.open file: file.stringView srcdirs: srcs :systemdir
+    if df.ok.not then {
+        fails.append "\{file} does not check:\n\{zdata.errorsText f: df}"
+        return String
+    }
+    keys: List String
+    texts: List NativeText
+    bound: boundHoles
+    unitRowTexts :df unitName: unitName.stringView :keys :texts :bound
+    unitNativeRows :d unitName: unitName.stringView :keys :fails
+    rowKeysDeclared :d unitName: unitName.stringView :keys :fails
+    nh: holesKnown :d :bound :texts :fails
+    na: prefixedHoles :d :bound :texts :fails arms: true
+    nm: prefixedHoles :d :bound :texts :fails arms: false
+    literalSpellings :texts :fails
+    r: "unit \{unitName}: its native functions have rows, its \{keys.length} rows' keys name its "
+    r.append "declarations, \{nh} holes name known types, \{na} tag-constant holes name "
+    r.append "declared arms, \{nm} member holes name declared members"
+    return r
+}
+
+# unitRowTexts -- a user unit's checked nativec.zd `df` read for the check: its
+# rows' keys onto `keys`, every text its rows, classes and templates hold onto
+# `texts`, and its canons' stems onto the holes the emitter binds (`bound`)
+unitRowTexts: function {
+    df: zdata.DataFile.view
+    unitName: StringView
+    keys: List String
+    texts: List NativeText
+    bound: Set String
+} is {
+    im: zdata.definition f: df name: "implementation"
+    for each c: (zdata.itemsOf f: df v: (zdata.fieldOf f: df v: im name: "canons")) loop {
+        bound.add item: (zdata.textOf f: df v: (zdata.fieldOf f: df v: c name: "stem"))
+    }
+    for each r: (zdata.itemsOf f: df v: (zdata.fieldOf f: df v: im name: "rows")) loop {
+        key: zdata.textOf f: df v: (zdata.fieldOf f: df v: r name: "key")
+        wh: rowWhere owner: unitName key: key.stringView
+        bd: zdata.textOf f: df v: (zdata.fieldOf f: df v: r name: "body")
+        if bd.length > 0 then texts.append (NativeText where: wh.copy text: bd.take)
+        for each t: (zdata.textsOf f: df v: (zdata.fieldOf f: df v: r name: "fragments")) loop {
+            texts.append (NativeText where: wh.copy text: t.copy)
+        }
+        for each p: (zdata.itemsOf f: df v: (zdata.fieldOf f: df v: r name: "pieces")) loop {
+            texts.append (
+                NativeText
+                where: wh.copy
+                text: (zdata.textOf f: df v: (zdata.fieldOf f: df v: p name: "text"))
+            )
+        }
+        keys.append from: key.take
+    }
+    for each c: (zdata.itemsOf f: df v: (zdata.fieldOf f: df v: im name: "classes")) loop {
+        ds: zdata.textOf f: df v: (zdata.fieldOf f: df v: c name: "destroy")
+        if ds.length > 0 then texts.append (NativeText where: "class \{unitName}" text: ds.take)
+    }
+    for each t: (zdata.itemsOf f: df v: (zdata.fieldOf f: df v: im name: "templates")) loop {
+        for each s: (zdata.itemsOf f: df v: (zdata.fieldOf f: df v: t name: "sections")) loop {
+            texts.append (
+                NativeText
+                where: "template of \{unitName}"
+                text: (zdata.textOf f: df v: (zdata.fieldOf f: df v: s name: "text"))
+            )
+        }
+    }
+}
+
+# unitNativeRows -- every native free function of unit `unitName` has a row of its
+# key among `keys`
+unitNativeRows: function {
+    d: Decls.view unitName: StringView keys: (List String).view fails: List String
+} is {
+    k: (d.natives.index.get key: unitName.string).or d: d.natives.sets.length
+    if k == d.natives.sets.length then return
+    have: Set String
+    for each w: keys loop have.add item: w.copy
+    fns: List String
+    for each f: (d.natives.sets.get i: k) loop fns.append from: f.copy
+    fns.sort
+    for each f: fns loop {
+        if (have.has item: f).not then (
+            fails.append
+            "native function \{f} of unit \{unitName} has no row keyed \"\{f}\" in its nativec.zd (add the row)"
+        )
+    }
+}
+
+# rowKeysDeclared -- every row key of unit `unitName` names a declaration of it:
+# `name` a native function or a type of the unit, `Type.member` a member of
+# one of its types; a helper's `@name` names none and is not asked
+rowKeysDeclared: function {
+    d: Decls.view unitName: StringView keys: (List String).view fails: List String
+} is {
+    for each k: keys loop {
+        if k.stringView.startsWith "@" then continue
+        wh: rowWhere owner: unitName key: k.stringView
+        dot: k.stringView.indexOf needle: "."
+        match (
+            dot
+        ) case some then {
+            tn: k.stringView.substring from: 0 to: dot
+            mn: k.stringView.substring from: dot + 1 to: k.length
+            if (d.unitNames.has key: unitName name: tn).not then {
+                fails.append "\{wh} names \{tn}, which unit \{unitName} does not declare (correct the key)"
+            } else if (d.methods.has key: tn name: mn).not when (d.members.has key: tn name: mn
+            ).not then {
+                fails.append "\{wh} names member \{mn}, which \{tn} does not declare (correct the key)"
+            }
+        } case none then {
+            if (d.natives.has key: unitName name: k.stringView).not when (
+                d.unitNames.has
+                key: unitName
+                name: k.stringView
+            ).not then {
+                fails.append "\{wh} names no declaration of unit \{unitName} (correct the key)"
+            }
+        }
+    }
 }
 
 # checkNative -- the `native` check's findings into `fails`; answers what was
@@ -174,6 +348,7 @@ readDecls: function {systemdir: StringView words: zast.Vocab.view} out Decls is 
         natives: newNameSets
         arms: newNameSets
         members: newNameSets
+        methods: newNameSets
         operators: newNameSets
         typeUnit: (Map String V: String)
         conversions: newNameSets
@@ -215,6 +390,8 @@ readDef: function {d: Decls unitName: StringView sys: bool tree: zast.Ast.view i
             readMembers :d type: nm.stringView :tree items: op.isItems kind: op.kind
             readNativeMethods :d :unitName type: nm.stringView :tree items: op.isItems
             readNativeMethods :d :unitName type: nm.stringView :tree items: op.asItems
+            readMethods :d type: nm.stringView :tree items: op.isItems
+            readMethods :d type: nm.stringView :tree items: op.asItems
         } else null
     } else null
 }
@@ -235,6 +412,24 @@ readMembers: function {
             mn: zast.poolTextCopy pool: tree.names ref: it.name
             if sum then d.arms.add key: type name: mn.stringView
             d.members.add key: type name: mn.stringView
+        } else null
+    }
+}
+
+# readMethods -- the functions among a type's `items`, by name
+readMethods: function {d: Decls type: StringView tree: zast.Ast.view items: zast.kidspan} is {
+    for each k: (zast.kidIds ast: tree span: items) loop {
+        it: tree.nodes.get i: k
+        match (
+            it
+        ) case namedoperation then {
+            if (tree.nodes.get i: it.operation).functiondef then {
+                (
+                    d.methods.add
+                    key: type
+                    name: (zast.poolTextCopy pool: tree.names ref: it.name).stringView
+                )
+            }
         } else null
     }
 }
@@ -1005,7 +1200,7 @@ joined: function {xs: (List String).view} out String is {
 # What each `<src>.<dst>` conversion row of system's nativec.zd must be: its
 # body, needs and form, derived from the scalar kinds' C facts the emitter
 # writes casts with (zemitterc.kindBits ...). The rows are the truth the
-# emitter reads; this rule is what `check native` proves them against, and what
+# emitter reads; this rule is what `check rows` proves them against, and what
 # `zc natives` prints.
 
 # convIsLossy -- whether `<src>.<dst>` can lose information, which is exactly
@@ -1014,7 +1209,7 @@ joined: function {xs: (List String).view} out String is {
 # widening within a signedness are safe; a signed source never fits an unsigned
 # target; an unsigned one needs a strictly wider signed target; and a float
 # target must have significand enough for the source's whole width.
-# `zc natives check native` (native-guard) checks this against the
+# `zc natives check rows` (native-guard) checks this against the
 # declarations, so the two encodings of the rule cannot drift apart.
 convIsLossy: function {srcK: ztypes.numkind dstK: ztypes.numkind} out bool is {
     if srcK == dstK then return false
@@ -1389,7 +1584,7 @@ convIntToInt: function {
 # convBodyOf -- the C the rows give for the conversion `<src>.<dst>`, as a
 # row body. This is the SAME derivation emitNumericCast runs -- kindBits,
 # kindSigned, kindLoStr, kindHiStr -- so the checked-in rows cannot
-# say anything the rule does not; `zc natives check native` compares each
+# say anything the rule does not; `zc natives check rows` compares each
 # system conversion row with convRule to keep it that way. `lossy` follows the DECLARATION: a conversion the units declare as
 # returning `resultval` builds one, and one returning the type directly is a
 # plain cast, so the table and the declaration agree by construction. A checked
@@ -1588,7 +1783,7 @@ convNeedCall: function {needs: List String call: StringView} is {
 # as system's nativec.zd writes them (convRowText), grouped by the kind they
 # convert from: 256 pairs, generated rather than written by hand, since a bound
 # written wrong on a pair no program happens to use is not something the corpus
-# can catch. `zc natives check native` requires the rows zc carries to be
+# can catch. `zc natives check rows` requires the rows zc carries to be
 # these.
 nativeConvRows: function out String is {
     order: convKinds

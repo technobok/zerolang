@@ -1297,7 +1297,7 @@ perf: $(PERFBIN)
 # deletes write-only allocations; perf-elision measures that), a failed run and
 # allocs != frees. Above ALLOC_BASELINE fails; a commit raising it says why in
 # its message, and one lowering the count lowers it here.
-ALLOC_BASELINE := 2751540
+ALLOC_BASELINE := 2758495
 # ALLOC_LINE -- the one measurement every allocation number comes from.
 ALLOC_LINE = valgrind --tool=memcheck $(PERFRUN) 2>&1 | grep 'total heap usage' | sed 's/.*usage: //'
 
@@ -1571,9 +1571,17 @@ user-native-guard: bin/zc
 	  $(ZLINKSED) $$d/cellar_win.c | grep -qw winmm && ! $(ZLINKSED) $$d/cellar_lin.c | grep -qw winmm \
 	    || { echo "user-native-guard FAIL: an os=windows @unit row must link for a windows target and only there"; fail=1; }; \
 	fi; \
+	for u in mystery cellar; do \
+	  bin/zc natives check rows tests/fixtures/user_native/$$u --system lib/system > $$d/rows.log 2>&1 \
+	    || { echo "user-native-guard FAIL: zc natives check rows refuses $$u's rows"; sed -n 1,5p $$d/rows.log; fail=1; }; \
+	done; \
+	mkdir -p $$d/typo; cp -r tests/fixtures/user_native/mystery.z tests/fixtures/user_native/mystery $$d/typo/; \
+	sed -i 's/key: "triple"/key: "tripel"/' $$d/typo/mystery/nativec.zd; \
+	bin/zc natives check rows $$d/typo/mystery --system lib/system 2>&1 | grep -q 'row mystery.tripel names no declaration' \
+	  || { echo "user-native-guard FAIL: zc natives check rows let a mistyped key (mystery.tripel) through"; fail=1; }; \
 	rm -rf $$d; \
 	if [ $$fail -ne 0 ]; then exit 1; fi; \
-	echo "user-native-guard OK: a unit outside the standard library links and runs its own natives, a hidden subunit's among them, a fact's variant chosen, a generic and a non-generic class from their templates, a generic function from its result's, an os= row only for its OS"
+	echo "user-native-guard OK: a unit outside the standard library links and runs its own natives, a hidden subunit's among them, a fact's variant chosen, a generic and a non-generic class from their templates, a generic function from its result's, an os= row only for its OS; zc natives check rows passes both units and refuses a mistyped key"
 
 # shim-guard -- the C thread shim (system's prelude.@zthread row, written to
 # $(NATIVEC_INC)/zthread_shim.inc) passes its own test under
@@ -2354,17 +2362,17 @@ cc-unused-guard: bin/zc
 # is defined once, a need's condition is declared, a row with pieces is the
 # prelude's or answers @unit, one demand word fires one class's members, and a
 # fragment calling an instance's member by its canon names it in members
-# (`zc natives check piece`, src/znativepieces.z). It first runs on a copy of the
+# (`zc natives check needs`, src/znativepieces.z). It first runs on a copy of the
 # emitter with one record removed, and must report it.
 PIECE_GUARD_DIR := $(BUILDDIR)/piece-guard
 piece-guard: bin/zc
 	@mkdir -p $(PIECE_GUARD_DIR); \
 	grep -vF 'preludeNeed :ctx memb: "@quadmath_snprintf"' src/zemitterc.z > $(PIECE_GUARD_DIR)/zemitterc.z; \
-	got=$$(bin/zc natives check piece --emitter $(PIECE_GUARD_DIR)/zemitterc.z --system lib/system | grep -c 'FAIL.*quadmath_snprintf'); \
+	got=$$(bin/zc natives check needs --emitter $(PIECE_GUARD_DIR)/zemitterc.z --system lib/system | grep -c 'FAIL.*quadmath_snprintf'); \
 	if [ "$$got" = 0 ]; then \
 	  echo "piece-guard FAIL: an emitter record removed gives no report"; exit 1; \
 	fi; \
-	bin/zc natives check piece --emitter src/zemitterc.z --system lib/system
+	bin/zc natives check needs --emitter src/zemitterc.z --system lib/system
 
 # static-value-guard -- every static value the emitter writes (`_zag<row>`) is
 # read by the C: a value no run-time code reaches is not written (clang's
@@ -2629,11 +2637,11 @@ highlight-guard:
 
 # view-guard -- a native receiver marked `.view` is const in the C function that
 # takes it, and a const one is marked `.view`, so the C compiler proves a viewed
-# receiver is never written (`zc natives check view`, src/znativeview.z). The
+# receiver is never written (`zc natives check views`, src/znativeview.z). The
 # register tests/view_guard.zd places the receivers no C function the check
 # reads takes, and each of its entries must still place one.
 view-guard: bin/zc
-	@bin/zc natives check view --system lib/system --emitter src/zemitterc.z --register tests/view_guard.zd
+	@bin/zc natives check views --system lib/system --emitter src/zemitterc.z --register tests/view_guard.zd
 
 # fallback-guard -- the emitter never degrades silently: no example or driver C
 # carries a live `/* zemitterc: */` marker (the emitter quoting itself in a string
@@ -2680,7 +2688,7 @@ clean:
 	rm -rf $(BUILDDIR) bin
 
 # native-guard -- the rows zc carries agree with the standard library's
-# declarations (`zc natives check native`, src/znativecheck.z): every native
+# declarations (`zc natives check rows`, src/znativecheck.z): every native
 # free function of a unit with rows has a row of its key; every z_@Name@,
 # @ARM_canon.arm@ and @MEMBER_canon.name@ hole a text spells names a declared
 # type, arm or member, or one the emitter binds; a plain hole the emitter does
@@ -2691,9 +2699,9 @@ clean:
 # its plain row is; every native operator has a row in its unit and every
 # operator row implements one; every conversion between two numeric types is
 # declared native, answers a resultval exactly when it can fail, and has the
-# row the numeric rule gives (body, needs and form; `zc natives` prints them).
+# row the numeric rule gives (body, needs and form; `zc natives conversions` prints them).
 native-guard: bin/zc
-	@bin/zc natives check native --system lib/system
+	@bin/zc natives check rows --system lib/system
 
 # generic-param-guard -- L023 (a parameter's case follows its bound's) over the
 # examples and fixtures, which no lint gate reads.

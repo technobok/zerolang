@@ -155,9 +155,10 @@ zcWord: list {
     fEager: "--eager"
     fSrc: "--src"
     fSystem: "--system"
-    fWriteSource: "--write-source"
     nShow: "show"
     nCheck: "check"
+    nConversions: "conversions"
+    nSource: "source"
     fOnlyC: "--c"
     fEmitC: "--emit-c"
     fDumpSql: "--dump-sql"
@@ -199,8 +200,9 @@ printUsage: function is {
     io.eprintln ""
     io.eprintln "diagnostics:"
     io.eprintln "  dump  <src>          dump the typecheck model as SQL (--canon: id-normalized)"
-    io.eprintln "  natives              print the conversion rows the numeric rule gives;"
-    io.eprintln "                       --write-source FILE writes the generated `nativec` unit"
+    io.eprintln "  natives show|check|conversions|source"
+    io.eprintln "                       the C rows zc carries: show one, check them, print the"
+    io.eprintln "                       numeric rule's rows, write the generated `nativec` unit"
     io.eprintln "  data <file.zd>       check a data file and print its values, defaults applied"
     io.eprintln "  explain <code>       explain an error code, e.g. zc explain E0200"
     io.eprintln ""
@@ -249,28 +251,35 @@ printCommandHelp: function {zv: zast.Vocab.view cmd: StringView} is {
         io.eprintln "Dump the typecheck model as SQL to -o FILE (or stdout)."
         io.eprintln "--canon emits the id-normalized model instead."
     } else if w == zcWord.slot.vNatives then {
-        io.eprintln "usage: zc natives [show WHAT [--c] | check WHAT [--emitter FILE] [--register FILE]"
-        io.eprintln "       | --write-source FILE]"
-        io.eprintln "       [--system DIR]"
-        io.eprintln "Print the conversion rows the numeric rule gives, as system's nativec.zd"
-        io.eprintln "writes them; check native requires the rows zc carries to be these."
-        io.eprintln "--write-source FILE writes into FILE the generated unit `nativec` that"
-        io.eprintln "every build serves beside z.z: the same files as static data."
+        io.eprintln "usage: zc natives show WHAT [--c] [--system DIR]"
+        io.eprintln "       zc natives check rows [UNITDIR] [--system DIR]"
+        io.eprintln "       zc natives check needs --emitter FILE [--system DIR]"
+        io.eprintln "       zc natives check views --emitter FILE --register FILE [--system DIR]"
+        io.eprintln "       zc natives conversions"
+        io.eprintln "       zc natives source FILE [--system DIR]"
         io.eprintln "show WHAT prints what zc carries for WHAT -- a unit's rows, one row"
         io.eprintln "(unit.key, every variant of it; group.key for a row of a foundation group,"
         io.eprintln "the key alone for a structural row) with its fields and C, a template, or a"
         io.eprintln "fixed file (hash; one piece of it, hash.mul128) -- and the line of the"
         io.eprintln "nativec.zd each was written at, the line `zc emit --mark-natives` names."
         io.eprintln "--c prints only the C, holes as written: for a C file or a test to include."
-        io.eprintln "check native checks the rows against the standard library's declarations:"
-        io.eprintln "every native function has a row, every hole names a declared type, arm or"
-        io.eprintln "member, a value row's body calls nothing, every native operator has a row, and"
-        io.eprintln "each numeric conversion is declared and has the rule's row (make native-guard)."
-        io.eprintln "check piece checks that every text calling what a piece defines needs it, the"
-        io.eprintln "emitter's source (--emitter FILE) among them (make piece-guard). check view checks"
-        io.eprintln "that a native receiver marked .view is const in the C taking it, and a const"
-        io.eprintln "one is marked; the data file --register FILE places each receiver no C"
+        io.eprintln "check rows checks the rows zc carries against the standard library's"
+        io.eprintln "declarations: every native function has a row, every hole names a declared"
+        io.eprintln "type, arm or member, a value row's body calls nothing, every native operator"
+        io.eprintln "has a row, and each numeric conversion is declared and has the rule's row"
+        io.eprintln "(make native-guard). With UNITDIR, a unit's folder holding its nativec.zd"
+        io.eprintln "beside the unit's own file, it checks that unit's rows the same way: every"
+        io.eprintln "native function of the unit has a row, every row's key names a declaration"
+        io.eprintln "of the unit, every hole names a known type, arm or member."
+        io.eprintln "check needs checks that every text calling what a piece defines needs it, the"
+        io.eprintln "emitter's source (--emitter FILE) among them (make piece-guard). check views"
+        io.eprintln "checks that a native receiver marked .view is const in the C taking it, and a"
+        io.eprintln "const one is marked; the data file --register FILE places each receiver no C"
         io.eprintln "function the check reads takes (make view-guard)."
+        io.eprintln "conversions prints the conversion rows the numeric rule gives, as system's"
+        io.eprintln "nativec.zd writes them; check rows requires the rows zc carries to be these."
+        io.eprintln "source FILE writes into FILE the generated unit `nativec` that every build"
+        io.eprintln "serves beside z.z: the standard library's nativec files as static data."
     } else if w == zcWord.slot.vData then {
         io.eprintln "usage: zc data <file.zd> [--src DIR]... [--system DIR]"
         io.eprintln "Check a data file (docs/zdata.pdoc) and print every value it defines, one"
@@ -849,39 +858,42 @@ dispatchToolVerb: function {argv: (List String).borrow n: u64 w: u64 zv: zast.Vo
 
 # NativesArgs -- `zc natives`' arguments, as nativesArgs reads them
 NativesArgs: class {
-    # --write-source FILE
-    sourceFile: String
-    # `show WHAT`: what to print
-    showWhat: String
-    # `check WHAT`: which check to run
-    checkWhat: String
+    # the subcommand's word (zcWord): show, check, conversions or source
+    sub: u64
+    # show's WHAT, check's check, source's FILE
+    what: String
+    # check rows' UNITDIR: a unit's folder holding its nativec.zd
+    unitDir: String
     # --c: show prints only the C
     onlyC: bool
     # --system DIR
     sysFlag: String
-    # --emitter FILE: the emitter's source, which `check piece` and `check view`
+    # --emitter FILE: the emitter's source, which `check needs` and `check views`
     # read
     emitter: String
-    # --register FILE: the register `check view` reads
+    # --register FILE: the register `check views` reads
     register: String
     # an argument none of these is, already reported
     bad: bool
 }
 
-# nativesArgs -- `zc natives`' arguments after the command
+# nativesArgs -- `zc natives`' arguments after the command: the subcommand,
+# the word it takes (show's WHAT, check's check, source's FILE), check rows'
+# UNITDIR, then flags
 nativesArgs: function {argv: (List String).view n: u64 zv: zast.Vocab.view} out NativesArgs is {
     r: (
         NativesArgs
-        sourceFile: String
-        showWhat: String
-        checkWhat: String
+        sub: (zv.slotOf text: (argv.get i: 2).stringView)
+        what: String
+        unitDir: String
         onlyC: false
         sysFlag: String
         emitter: String
         register: String
         bad: false
     )
-    i: 2.u64
+    i: nativesWords :argv :n :r
+    if r.bad then return r
     for i < n loop {
         a: (argv.get :i).copy
         i = i + 1
@@ -897,13 +909,7 @@ nativesArgs: function {argv: (List String).view n: u64 zv: zast.Vocab.view} out 
         }
         v: (argv.get :i).copy
         i = i + 1
-        if fw == zcWord.slot.fWriteSource then {
-            r.sourceFile = v.take
-        } else if fw == zcWord.slot.nShow then {
-            r.showWhat = v.take
-        } else if fw == zcWord.slot.nCheck then {
-            r.checkWhat = v.take
-        } else if fw == zcWord.slot.fSystem then {
+        if fw == zcWord.slot.fSystem then {
             r.sysFlag = v.take
         } else if fw == zcWord.slot.fEmitter then {
             r.emitter = v.take
@@ -918,43 +924,80 @@ nativesArgs: function {argv: (List String).view n: u64 zv: zast.Vocab.view} out 
     return r
 }
 
-# runNatives -- `zc natives`: the conversion rows the numeric rule gives
-# (znativecheck.nativeConvRows); with `show WHAT` what zc carries for WHAT, with
-# `check WHAT` a check of the rows, and with `--write-source FILE` the generated
-# unit the nativec files under the system directory make
-# (znativec.servedText). Answers the exit code.
+# nativesWords -- the word `r`'s subcommand takes (show's WHAT, check's check,
+# source's FILE) and check rows' UNITDIR, read onto `r`; where the flags begin
+nativesWords: function {argv: (List String).view n: u64 r: NativesArgs} out u64 is {
+    i: 3.u64
+    takesWord: (
+        (r.sub == zcWord.slot.nShow) or
+        (r.sub == zcWord.slot.nCheck) or
+        (r.sub == zcWord.slot.nSource)
+    )
+    if takesWord.not then return i
+    if i >= n then {
+        io.eprintln "zc natives \{argv.get i: 2}: missing its argument (zc help natives)"
+        r.bad = true
+        return i
+    }
+    r.what = (argv.get :i).copy
+    i = i + 1
+    # check rows' optional unit folder
+    if r.sub == zcWord.slot.nCheck when i < n when ((argv.get :i).stringView.startsWith "--"
+    ).not then {
+        r.unitDir = (argv.get :i).copy
+        i = i + 1
+    }
+    return i
+}
+
+# runNatives -- `zc natives SUB ...`: `show WHAT`, what zc carries for WHAT;
+# `check WHAT`, a check of the rows (of a user unit's with UNITDIR);
+# `conversions`, the conversion rows the numeric rule gives
+# (znativecheck.nativeConvRows); `source FILE`, the generated unit the nativec
+# files under the system directory make (znativec.servedText). Bare, the
+# usage. Answers the exit code.
 runNatives: function {argv: (List String).view n: u64 zv: zast.Vocab.view} out i32 is {
     if n <= 2 then {
-        print znativecheck.nativeConvRows
-        return 0
+        printCommandHelp :zv cmd: "natives"
+        return 2
     }
     na: nativesArgs :argv :n :zv
     if na.bad then return 2
     sysdir: zcheck.resolveSystemDir flagVal: na.sysFlag.stringView
-    if na.checkWhat.length > 0 then return (
+    if na.sub == zcWord.slot.nCheck then return (
         znativecheck.checkNatives
-        what: na.checkWhat.stringView
+        what: na.what.stringView
         systemdir: sysdir.stringView
         emitter: na.emitter.stringView
         register: na.register.stringView
+        unitdir: na.unitDir.stringView
     )
-    if na.showWhat.length > 0 then {
-        t: znativec.showNative what: na.showWhat.stringView systemdir: sysdir.stringView c: na.onlyC
+    if na.sub == zcWord.slot.nShow then {
+        t: znativec.showNative what: na.what.stringView systemdir: sysdir.stringView c: na.onlyC
         if t.length == 0 then {
-            io.eprintln "zc natives: '\{na.showWhat}' names no unit, row (unit.key), template or file zc carries"
+            io.eprintln "zc natives: '\{na.what}' names no unit, row (unit.key), template or file zc carries"
             return 1
         }
         print (t.stringView.substring from: 0 to: t.length - 1)
         return 0
     }
-    if na.sourceFile.length == 0 then {
-        io.eprintln "zc natives: missing --write-source FILE, show WHAT or check WHAT"
-        return 2
+    if na.sub == zcWord.slot.nConversions then {
+        print znativecheck.nativeConvRows
+        return 0
     }
-    return (writeServedSource file: na.sourceFile.stringView systemdir: sysdir.stringView)
+    if na.sub == zcWord.slot.nSource then return (
+        writeServedSource
+        file: na.what.stringView
+        systemdir: sysdir.stringView
+    )
+    io.eprintln "zc natives: unknown subcommand '\{(
+        argv.get
+        i: 2
+    )}' (show, check, conversions, source)"
+    return 2
 }
 
-# writeServedSource -- `zc natives --write-source FILE`: the generated `nativec`
+# writeServedSource -- `zc natives source FILE`: the generated `nativec`
 # unit (znativec.servedText) written to `file`. Answers the exit code.
 writeServedSource: function {file: StringView systemdir: StringView} out i32 is {
     st: znativec.servedText :systemdir
