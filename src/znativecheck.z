@@ -516,20 +516,12 @@ failText: function {lossy: bool} out String is {
     return "cannot".string
 }
 
-# allTexts -- every text the rows zc carries hold: each row's body, fragments,
-# pieces and destroy, each template's sections, each fixed file's pieces
+# allTexts -- every text the rows zc carries hold: each row's body, fragments
+# and pieces, each class's destroy, each template's sections, each fixed file's
+# pieces
 allTexts: function out List NativeText is {
     r: List NativeText
-    for each u: nativec.units loop {
-        for each w: u.implementation.rows loop rowTexts :r owner: u.name.stringView :w
-        for each t: u.implementation.templates loop {
-            for each s: t.sections loop r.append (
-                NativeText
-                where: "template \{t.name}"
-                text: s.text.string
-            )
-        }
-    }
+    for each u: nativec.units loop unitTexts :r :u
     fd: nativec.systemc.foundation
     for each g: fd.groups loop {
         for each w: g.rows loop rowTexts :r owner: g.name.stringView :w
@@ -542,13 +534,36 @@ allTexts: function out List NativeText is {
     return r
 }
 
+# unitTexts -- one unit's texts onto `r`: its rows', its classes' and its
+# templates'
+unitTexts: function {r: List NativeText u: nativec.servedUnit} is {
+    for each w: u.implementation.rows loop rowTexts :r owner: u.name.stringView :w
+    for each c: u.implementation.classes loop classTexts :r owner: u.name.stringView :c
+    for each t: u.implementation.templates loop {
+        for each s: t.sections loop r.append (
+            NativeText
+            where: "template \{t.name}"
+            text: s.text.string
+        )
+    }
+}
+
 # rowTexts -- one row's texts onto `r`
 rowTexts: function {r: List NativeText owner: StringView w: schema.row} is {
     wh: rowWhere :owner key: w.key.stringView
     if w.body.length > 0 then r.append (NativeText where: wh.copy text: w.body.string)
     for each t: w.fragments loop r.append (NativeText where: wh.copy text: t.string)
     for each p: w.pieces loop r.append (NativeText where: wh.copy text: p.text.string)
-    if w.destroy.length > 0 then r.append (NativeText where: wh.copy text: w.destroy.string)
+}
+
+# classTexts -- one class's destroy onto `r`
+classTexts: function {r: List NativeText owner: StringView c: schema.classRow} is {
+    if c.destroy.length == 0 then return
+    wh: "class ".string
+    wh.append owner
+    wh.append "."
+    wh.append c.key.stringView
+    r.append (NativeText where: wh.take text: c.destroy.string)
 }
 
 # rowWhere -- `row <unit>.<key>`, the key alone for a structural row

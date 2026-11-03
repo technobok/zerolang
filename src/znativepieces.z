@@ -47,11 +47,12 @@ uw: record {
     word: u32
 }
 
-# PRow -- a row or a piece as the closure walks it
+# PRow -- a row, a piece or a class as the closure walks it
 PRow: class {
-    # its key as the emitter keys it: `<unit>.<key>`, `@<unit>.<name>`
+    # its key as the emitter keys it: `<unit>.<key>`, `@<unit>.<name>`; a
+    # class's `<unit>.<class>`
     key: String
-    # where a finding about it is: `row <key>`, `piece <key>`
+    # where a finding about it is: `row <key>`, `piece <key>`, `class <key>`
     where: String
     # the unit the key names
     owner: u32
@@ -62,6 +63,8 @@ PRow: class {
     # the C it writes
     text: String
     isPiece: bool
+    # a class's template, which the class is written from; "" for the others
+    template: String
 }
 
 # Pieces -- what the check reads off the rows zc carries
@@ -74,9 +77,8 @@ Pieces: class {
     byDemand: (MapVV uw v: u64)
     fired: List (ListVal u64)
     kw: zast.Vocab
-    # the ids of the demand words the check reads: `@unit`, `@class`
+    # the id of the demand word `@unit`, which a unit-wide row answers
     unitWord: u32
-    classWord: u32
     # each name a piece defines, to its entry: the name, the piece's key and its
     # first demand
     owner: (MapRV String v: u64)
@@ -103,7 +105,6 @@ checkPieces: function {emitter: StringView fails: List String} out String is {
         fired: List (ListVal u64)
         kw: (zast.Vocab.create block: pieceWord)
         unitWord: 0
-        classWord: 0
         owner: (MapRV String v: u64)
         ownerName: List String
         ownerKey: List String
@@ -114,7 +115,6 @@ checkPieces: function {emitter: StringView fails: List String} out String is {
         fails: List String
     )
     p.unitWord = p.words.id text: "@unit"
-    p.classWord = p.words.id text: "@class"
     fd: nativec.systemc.foundation
     for each c: fd.conditions loop p.conds.add item: c.name.string
     readRows :p
@@ -131,12 +131,13 @@ checkPieces: function {emitter: StringView fails: List String} out String is {
     return s
 }
 
-# readRows -- every row of every unit, group and structural list, and every
-# named piece, rows of their own; a fixed file's named pieces are the
+# readRows -- every row of every unit, group and structural list, every class,
+# and every named piece, rows of their own; a fixed file's named pieces are the
 # prelude's
 readRows: function {p: Pieces} is {
     for each u: nativec.units loop {
         for each w: u.implementation.rows loop readRow :p owner: u.name.stringView :w
+        for each c: u.implementation.classes loop readClass :p owner: u.name.stringView :c
     }
     fd: nativec.systemc.foundation
     for each g: fd.groups loop {
@@ -177,7 +178,6 @@ readRow: function {p: Pieces owner: StringView w: schema.row} is {
     key: zemitterc.servedKey :owner key: w.key.stringView
     t: w.body.string
     for each f: w.fragments loop t.append "\n\{f}"
-    if w.destroy.length > 0 then t.append "\n\{w.destroy}"
     dem: zemitterc.servedList xs: w.demand
     r: newRow :p key: key.stringView demand: dem.stringView text: t.take piece: false
     addNeeds :p :r needs: (zemitterc.servedList xs: w.needs).stringView
@@ -199,6 +199,18 @@ readRow: function {p: Pieces owner: StringView w: schema.row} is {
     if w.pieces.length == 0 then return
     p.outside.append rest.take
     p.outsideWhere.append "row \{key}"
+}
+
+# readClass -- one class: its destroy is its C and its needs cover it. No demand
+# word fires a class; the struct is written when the class is used or live
+readClass: function {p: Pieces owner: StringView c: schema.classRow} is {
+    key: zemitterc.servedKey :owner key: c.key.stringView
+    r: newRow :p key: key.stringView demand: "" text: c.destroy.string piece: false
+    r.demands = ListVal u32
+    r.where = "class \{key}"
+    r.template = c.template.string
+    addNeeds :p :r needs: (zemitterc.servedList xs: c.needs).stringView
+    p.rows.append r
 }
 
 # readPiece -- one named piece of `owner`'s, a row of its own: `@<owner>.<name>`;
@@ -246,6 +258,7 @@ newRow: function {
         needs: ListVal uw
         :text
         isPiece: piece
+        template: String
     )
     for each d: (demandsOf :key :demand) loop r.demands.append (p.words.id text: d.stringView)
     return r
@@ -485,8 +498,8 @@ outsideText: function {p: Pieces} is {
 }
 
 # templateNeeds -- a template's text outside its member sections is covered by
-# its needs and those of the class rows written from it (bar `@class`, which
-# every class row of a unit shares); a member section by those and its own
+# its needs and those of the classes written from it; a member section by
+# those and its own
 # needs, a sibling section's followed
 templateNeeds: function {p: Pieces} is {
     for each u: nativec.units loop {
@@ -509,8 +522,7 @@ templateCover: function {p: Pieces t: schema.template} is {
 }
 
 # templateDecl -- what covers template `t` whole: its needs naming another
-# unit's demand, and the needs and words (bar `@class`) of the class rows
-# written from it
+# unit's demand, and the needs of the classes written from it
 templateDecl: function {p: Pieces t: schema.template} out ListVal uw is {
     decl: ListVal uw
     for each n: t.needs loop {
@@ -518,10 +530,8 @@ templateDecl: function {p: Pieces t: schema.template} out ListVal uw is {
         )
     }
     for each r: p.rows loop {
-        if (templateOfRow :r name: t.name.stringView).not then continue
-        for each x: r.needs loop decl.append x
-        for each d: r.demands loop {
-            if d != p.classWord then decl.append (uw owner: r.owner word: d)
+        if r.template.stringView == t.name.stringView then {
+            for each x: r.needs loop decl.append x
         }
     }
     return decl
@@ -538,19 +548,6 @@ memberCover: function {
     sectionNeeds :p :t member: s.member.stringView :seen into: d2 :where
     sw: "\{where} (member \{s.member})"
     sectionCover :p where: sw.stringView text: s.text.stringView decl: d2
-}
-
-# templateOfRow -- whether `r` is a class row written from template `name`:
-# rowTemplates records them
-templateOfRow: function {r: PRow.view name: StringView} out bool is {
-    for each u: nativec.units loop {
-        for each w: u.implementation.rows loop {
-            if w.template.stringView == name when (
-                (zemitterc.servedKey owner: u.name.stringView key: w.key.stringView) == r.key
-            ) then return true
-        }
-    }
-    return false
 }
 
 # sectionNeeds -- the needs of member section `member` of `t` onto `into`: each

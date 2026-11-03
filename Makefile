@@ -186,7 +186,7 @@ doc-check: bin/zc bin/zl $(BUILDDIR)/ztestrunner
 natives-show-guard: bin/zc
 	@fail=0; d=$(BUILDDIR)/natives-show; mkdir -p $$d; \
 	bin/zc emit examples/io_textreader.z --system lib/system --mark-natives -o $$d/marked.c || fail=1; \
-	grep '^/\* nativec: row ' $$d/marked.c | sort -u | sed 's|^/\* nativec: row \(.*\), \(.*\) \*/$$|\1  \2|' > $$d/rows.txt; \
+	grep -E '^/\* nativec: (row|class) ' $$d/marked.c | sort -u | sed -E 's|^/\* nativec: (row\|class) (.*), (.*) \*/$$|\2  \3|' > $$d/rows.txt; \
 	[ -s $$d/rows.txt ] || { echo "natives-show-guard FAIL: zc emit --mark-natives marked no row"; fail=1; }; \
 	while IFS= read -r m; do \
 	  bin/zc natives show "$${m%%  *}" --system lib/system | grep -qxF "$$m" \
@@ -1297,7 +1297,7 @@ perf: $(PERFBIN)
 # deletes write-only allocations; perf-elision measures that), a failed run and
 # allocs != frees. Above ALLOC_BASELINE fails; a commit raising it says why in
 # its message, and one lowering the count lowers it here.
-ALLOC_BASELINE := 2794568
+ALLOC_BASELINE := 2780534
 # ALLOC_LINE -- the one measurement every allocation number comes from.
 ALLOC_LINE = valgrind --tool=memcheck $(PERFRUN) 2>&1 | grep 'total heap usage' | sed 's/.*usage: //'
 
@@ -1514,7 +1514,7 @@ cobj-guard: bin/zc $(BUILDDIR)/tcc
 # implementation file (`<unit>/nativec.zd`) compiles, links and runs, one native in a hidden subunit, and a
 # `when=` variant replaces its plain row exactly when its fact holds; and a
 # generic native class (cellar.Cell) is instantiated per element type from the
-# C template its `@class` row names, and a generic native function (cellar.holding)
+# C template its class entry names, and a generic native function (cellar.holding)
 # is the template function of the instance it answers; and an `os=windows` @unit row links
 # for a windows target and nowhere else. Each unit's rows, fragments and
 # templates are its own nativec.zd's.

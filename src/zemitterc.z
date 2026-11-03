@@ -2168,7 +2168,7 @@ mangleVarName: function {name: StringView cw: zast.Vocab.view} out String is {
     return name.string
 }
 
-# ClassRow -- a `<unit>.<Class>.@class` row: a class whose C the runtime owns.
+# ClassRow -- a class whose C the runtime owns (a classRow of its unit's file).
 # Its struct is laid out from its declaration as a record's is; the row adds
 # what a declaration cannot say -- the fragment that destroys one (an fd closed
 # once, a handle released) and the canons whose presence makes it LIVE, the
@@ -2180,12 +2180,13 @@ ClassRow: class {
     cls: String
     # comma-separated canons, all of which must exist for the class to be live
     live: String
-    # the destructor fragment
+    # the destructor fragment's name; "" for none
     destroy: String
-    # `tmpl=`: the C template a GENERIC class is instantiated from, one copy per
+    # the C template a GENERIC class is instantiated from, one copy per
     # instance (emitTmplClassMono); "" for a class laid out from its declaration
     tmpl: String
-    # `needs=`: what a templated class's instances call (demandTmplClassNeeds)
+    # comma-separated: what a templated class's instances call
+    # (demandTmplClassNeeds)
     need: String
 }
 
@@ -2358,12 +2359,6 @@ NativeHead: class {
     os: String
     csrc: String
     cdefs: String
-    # `live=`, `destroy=`, `tmpl=`: on a `<unit>.<Class>.@class` row, the
-    # canons whose presence makes the class live, the fragment that destroys
-    # one, and the template a generic class is instantiated from
-    live: String
-    destroy: String
-    tmpl: String
     # `when=`: the fact under which this row replaces the plain row of its key
     whenFact: String
     # `via=`: on a native free function's row, the member of the templated class
@@ -2395,9 +2390,6 @@ NativeHead: class {
             os: String
             csrc: String
             cdefs: String
-            live: String
-            destroy: String
-            tmpl: String
             whenFact: String
             reach: String
             via: String
@@ -2730,13 +2722,6 @@ recordNativeRow: function {ctx: Ctx ast: Ast.view h: NativeHead.view body: Strin
         recordCanonRow :ctx key: h.key.stringView spec: h.spec.stringView
         return
     }
-    cr: h.key.stringView.stripSuffix s: ".@class"
-    match (
-        cr
-    ) case some then {
-        recordClassRow :ctx path: cr :h
-        return
-    } case none then null
     kk: h.key.copy
     ctx.nativeKeys.set key: kk value: true
     if h.call.length > 0 then recordSvCall :ctx :ast key: h.key.stringView call: h.call.stringView
@@ -2746,25 +2731,6 @@ recordNativeRow: function {ctx: Ctx ast: Ast.view h: NativeHead.view body: Strin
     if h.via.length > 0 then ctx.nativeVia.set key: h.key.copy value: h.via.copy
     if h.frag.length > 0 then recordHeadFragment :ctx :h
     recordRowBodies :ctx :h :body
-}
-
-# recordClassRow -- a `.@class` row for the class `path` (`io.File`), kept in
-# table order: the order the structs are written in
-recordClassRow: function {ctx: Ctx path: StringView h: NativeHead.view} is {
-    dot: path.lastIndexOf needle: "."
-    match (
-        dot
-    ) case some then {
-        ctx.classRows.append (
-            ClassRow
-            uname: (path.substring from: 0 to: dot).string
-            cls: (path.substring from: dot + 1 to: path.length).string
-            live: h.live.copy
-            destroy: h.destroy.copy
-            tmpl: h.tmpl.copy
-            need: h.need.copy
-        )
-    } case none then null
 }
 
 # schema -- the implementation files' schema, as the served unit holds it
@@ -2800,20 +2766,7 @@ registerImplementations: function {
     for each g: fd.groups loop {
         for each r: g.rows loop servedRow :w :ctx :ast :symtab :r owner: g.name.stringView
     }
-    for each k: order loop {
-        u: nativec.units.get i: k
-        for each r: u.implementation.rows loop (
-            servedRow
-            :w
-            :ctx
-            :ast
-            :symtab
-            :r
-            owner: u.name.stringView
-        )
-        servedRequirements :w :ctx :ast :symtab im: u.implementation owner: u.name.stringView
-        for each t: u.implementation.templates loop servedTemplate :ctx :t
-    }
+    for each k: order loop servedUnit :w :ctx :ast :symtab u: (nativec.units.get i: k)
     for each u: users loop checkedUnit :w :ctx :ast :symtab :u
     for each fl: fd.files loop {
         (
@@ -2823,6 +2776,38 @@ registerImplementations: function {
             text: (servedPieces ps: fl.pieces owner: "prelude")
         )
     }
+}
+
+# servedUnit -- one unit zc carries: its rows, its classes, its requirements and
+# its templates
+servedUnit: function {
+    w: RowWalk
+    ctx: Ctx
+    ast: Ast.view
+    symtab: zenv.ZSymbolTable.view
+    u: nativec.servedUnit
+} is {
+    for each r: u.implementation.rows loop (
+        servedRow
+        :w
+        :ctx
+        :ast
+        :symtab
+        :r
+        owner: u.name.stringView
+    )
+    for each c: u.implementation.classes loop (
+        w.classRow
+        :ctx
+        owner: u.name.stringView
+        key: c.key.stringView
+        template: c.template.stringView
+        live: (servedList xs: c.live)
+        destroy: c.destroy.stringView
+        need: (servedList xs: c.needs)
+    )
+    servedRequirements :w :ctx :ast :symtab im: u.implementation owner: u.name.stringView
+    for each t: u.implementation.templates loop servedTemplate :ctx :t
 }
 
 # recordImplementedUnits -- the user units whose implementation file was read,
@@ -2838,7 +2823,6 @@ newRowWalk: function out RowWalk is {
         used: Set String
         rf: (RowFacts declared: Set String held: Set String replaced: Set String)
         frags: String
-        destroy: String
         at: String
     )
 }
@@ -2892,8 +2876,6 @@ servedRow: function {
     h.pulls = servedList xs: r.pulls
     h.members = servedList xs: r.members
     h.via = r.via.string
-    h.live = servedList xs: r.live
-    if r.destroy.length > 0 then w.destroyFragment :ctx :owner :key text: "\{r.destroy}\n"
     (
         w.row
         :ctx
@@ -2902,7 +2884,6 @@ servedRow: function {
         :h
         :owner
         :key
-        template: r.template.stringView
         body: r.body.stringView.trim
     )
 }
@@ -2941,14 +2922,13 @@ servedRequirements: function {
     }
 }
 
-# RowWalk -- registering the rows a reader reads: the fragment names given so far, the facts the rows
-# declared and settled (RowFacts), and what the reader handed over for the
-# row it is reading -- its fragments' names, its destroy fragment's
+# RowWalk -- registering the rows a reader reads: the fragment names given so
+# far, the facts the rows declared and settled (RowFacts), and what the reader
+# handed over for the row it is reading -- its fragments' names
 RowWalk: class {
     used: Set String
     rf: RowFacts
     frags: String
-    destroy: String
     # where the row being read is written, as its texts' mark (NativeMark);
     # "" when none is asked for
     at: String
@@ -3000,16 +2980,38 @@ RowWalk: class {
         this.frags = nm.copy
     }
 
-    # destroyFragment -- the row's destroy fragment, cached under a name of its
-    # own
-    destroyFragment: function {
-        :this ctx: Ctx owner: StringView key: StringView text: String.take
+    # classRow -- a class whose C struct the runtime writes, recorded in the
+    # order read (the order the structs are written in): its destroy fragment,
+    # when it has one, cached under a name of its own
+    classRow: function {
+        :this
+        ctx: Ctx
+        owner: StringView
+        key: StringView
+        template: StringView
+        live: String.take
+        destroy: StringView
+        need: String.take
     } is {
-        dkey: "\{key}_destroy"
-        nm: this.fragmentName :owner key: dkey.stringView
-        servedFragment :ctx name: nm.stringView text: text.take
-        this.markFragment :ctx name: nm.stringView
-        this.destroy = nm.copy
+        dn: String
+        if destroy.length > 0 then {
+            dkey: "\{key}.@destroy"
+            dn = this.fragmentName :owner key: dkey.stringView
+            servedFragment :ctx name: dn.stringView text: "\{destroy}\n"
+            this.markFragment :ctx name: dn.stringView
+        }
+        (
+            ctx.classRows.append
+            (
+                ClassRow
+                uname: owner.string
+                cls: key.string
+                live: live.take
+                destroy: dn.take
+                tmpl: template.string
+                need: need.take
+            )
+        )
     }
 
     # markFragment -- the fragment `name` marked with where its row is written,
@@ -3025,7 +3027,7 @@ RowWalk: class {
     }
 
     # row -- the row a reader read onto `h`, with the texts it handed over
-    # since the last: its key, its fragments, its template's name, recorded
+    # since the last: its key and its fragments, recorded
     row: function {
         :this
         ctx: Ctx
@@ -3034,13 +3036,10 @@ RowWalk: class {
         h: NativeHead
         owner: StringView
         key: StringView
-        template: StringView
         body: StringView
     } is {
         h.key = servedKey :owner :key
         h.frag swap this.frags
-        h.destroy swap this.destroy
-        if template.length > 0 then h.tmpl = template.string
         this.place :ctx :ast :symtab :h :body
     }
 
@@ -3169,6 +3168,14 @@ checkedUnit: function {
         :r
         :owner
     )
+    for each c: (zdata.itemsOf :f v: (checkedField :u name: "classes")) loop (
+        checkedClass
+        :w
+        :ctx
+        :u
+        :c
+        :owner
+    )
     for each l: (zdata.itemsOf :f v: (checkedField :u name: "links")) loop {
         h: NativeHead.create
         h.whenFact = checkedText :u v: l name: "fact"
@@ -3286,9 +3293,6 @@ checkedRow: function {
     h.pulls = checkedTexts :u v: r name: "pulls"
     h.members = checkedTexts :u v: r name: "members"
     h.via = checkedText :u v: r name: "via"
-    h.live = checkedTexts :u v: r name: "live"
-    ds: checkedText :u v: r name: "destroy"
-    if ds.length > 0 then w.destroyFragment :ctx :owner key: key.stringView text: "\{ds}\n"
     bd: checkedText :u v: r name: "body"
     (
         w.row
@@ -3298,8 +3302,36 @@ checkedRow: function {
         :h
         :owner
         key: key.stringView
-        template: (checkedText :u v: r name: "template").stringView
         body: bd.stringView.trim
+    )
+}
+
+# checkedClass -- one class of a user unit's checked file, as the served
+# reader reads a class zc carries
+checkedClass: function {
+    w: RowWalk
+    ctx: Ctx
+    u: UserImplementation.view
+    c: ztypes.cval
+    owner: StringView
+} is {
+    key: checkedText :u v: c name: "key"
+    w.at = String
+    if ctx.markNatives then w.at = "class \{rowAddress :owner key: key.stringView}, \{(
+        zdata.placeOf
+        f: u.file
+        v: c
+    )}"
+    ds: checkedText :u v: c name: "destroy"
+    (
+        w.classRow
+        :ctx
+        :owner
+        key: key.stringView
+        template: (checkedText :u v: c name: "template").stringView
+        live: (checkedTexts :u v: c name: "live")
+        destroy: ds.stringView
+        need: (checkedTexts :u v: c name: "needs")
     )
 }
 
@@ -5286,7 +5318,7 @@ Ctx: class {
     osUnitDecl: ztypes.declid
     # the cli unit's declaration, cached for the same reason
     cliUnitDecl: ztypes.declid
-    # the `.@class` rows in table order, each class's id once bound
+    # the classes the runtime writes, in table order, each class's id once bound
     # (bindClassRows), and the ones the program made live (markLiveClasses)
     classRows: List ClassRow
     classRowTids: ListVal ztypes.tid
@@ -10042,7 +10074,7 @@ destroyParts: function {
 
 # destroyGated -- `tid`'s destructor is one zc writes only when written C calls
 # it: a record's or a class's (emitOneRecord), a runtime-owned class's
-# `destroy=` fragment (emitClassRowStructs), a templated class's `destroy`
+# `destroy` fragment (emitClassRowStructs), a templated class's `destroy`
 # section (rtSectionPlan), a union's -- Option, Result, a user's
 # (emitUnionMono) --, a view option's (emitOptionViewMono) or a protocol's
 # (emitOneProtocol); but not an instance of a runtime container template
@@ -10083,7 +10115,7 @@ destroyTargetTid: function {
 
 # ownsResources -- a value of `tid` owns something its destructor releases: the
 # checker's verdict from its fields and conformances, or a runtime-owned class
-# (a `.@class` row) whose destructor the runtime supplies -- an fd, a database
+# (a ClassRow) whose destructor the runtime supplies -- an fd, a database
 # handle -- which no field of its declaration shows, in a program that has
 # the class (live or used, as emitClassRowStructs writes it), or an instance
 # of a templated class. Every question of whether the C must destroy a value
@@ -44361,7 +44393,7 @@ emitIoStdStreams: function {
     }
 }
 
-# bindClassRows -- each `.@class` row's class, by id (ctx.classRowTids, parallel
+# bindClassRows -- each ClassRow's class, by id (ctx.classRowTids, parallel
 # to ctx.classRows); 0 when the program has no such class (rowTypeTid)
 bindClassRows: function {symtab: zenv.ZSymbolTable.view ctx: Ctx ast: Ast.view} is {
     for each r: ctx.classRows loop {
@@ -44415,10 +44447,10 @@ demandSpecNatives: function {
     }
 }
 
-# emitClassRowStructs -- each `.@class` row's struct and destructor, in table
+# emitClassRowStructs -- each ClassRow's struct and destructor, in table
 # order, when the C written spells the class (typeReached). The struct is laid
 # out from the declaration as a record's is (emitRecordStructBody); the
-# destructor is the row's `destroy=` fragment. The type is marked in
+# destructor is the class's `destroy` fragment. The type is marked in
 # ctx.emittedUserTypes so every other path skips it -- a by-value use would
 # otherwise emit a second struct with a generic destructor -- and it is written
 # here, ahead of the fragments that dereference its fields.
@@ -45303,7 +45335,7 @@ emitMonoById: function {
     if tr > 0 then emitTmplClassMono :ast :symtab :ctx :monoId row: tr - 1 :buf
 }
 
-# tmplClassRowOf -- the `.@class` row whose `tmpl=` writes `tid`: an instance
+# tmplClassRowOf -- the ClassRow whose template writes `tid`: an instance
 # of a generic templated class, or a non-generic class with a template of its
 # own; as its index plus one, 0 when `tid` is neither
 tmplClassRowOf: function {symtab: zenv.ZSymbolTable.view ctx: Ctx.view tid: ztypes.tid} out u64 is {
@@ -45316,7 +45348,7 @@ tmplClassRowOf: function {symtab: zenv.ZSymbolTable.view ctx: Ctx.view tid: ztyp
     return (tmplRowOfClass :ctx cls: o)
 }
 
-# tmplRowOfClass -- the `.@class` row with a `tmpl=` that the class `cls` (a
+# tmplRowOfClass -- the ClassRow with a template that the class `cls` (a
 # generic template, or a class of its own) declares, as its index plus one; 0
 # when it has none
 tmplRowOfClass: function {ctx: Ctx.view cls: ztypes.tid} out u64 is {

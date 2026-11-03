@@ -38,6 +38,9 @@ nativec: unit {
         # below every row whose C it uses. The units load in the order the
         # foundation gives; a unit it does not name loads after those it does
         rows: list {} out staticlist row
+        # the classes whose C struct the runtime writes, in the order the structs
+        # are written
+        classes: list {} out staticlist classRow
         # the generic instances this unit's C names by a canonical stem
         canons: list {} out staticlist canon
         # the facts this unit's rows may vary by
@@ -55,9 +58,9 @@ nativec: unit {
 
     # row -- the implementation of one declaration, or a helper several share.
     # The key says which: `<type>.<member>` or `<function>` for a declaration of
-    # the unit (`u8.+`, `File.close`, `readText`); `<type>.@class` for a
-    # runtime-owned class; `@<name>` for a helper, outside the declaration space,
-    # as `@` marks every name the unit's declarations cannot spell.
+    # the unit (`u8.+`, `File.close`, `readText`); `@<name>` for a helper,
+    # outside the declaration space, as `@` marks every name the unit's
+    # declarations cannot spell.
     #
     # A class's NATIVE METHOD row's fragment defines the `<Class>_<method>`
     # function, called `(&receiver, args...)` -- the METHOD ABI, one rule decided
@@ -68,12 +71,12 @@ nativec: unit {
     # The row is demanded wherever the method is called or read (`f.close`), and
     # when its class is live for each method its declared conformances name.
     #
-    # A row that names a TYPE -- a method row, a class row, a `uses_<Type>`
+    # A row that names a TYPE -- a method row, a class (classRow), a `uses_<Type>`
     # demand -- applies only to a type that declares something native, and a
     # method row only to a native method: a user unit or type that shares the
     # stdlib's name is not the one the row implements, and gets none of it.
     row: data {
-        # the declaration's path within the unit, `<type>.@class`, or `@<name>`
+        # the declaration's path within the unit, or `@<name>`
         key: text
         # a C expression with holes, when the native is one:
         #   @T@        the receiver type's C name, minus the leading z_ that a
@@ -172,23 +175,33 @@ nativec: unit {
         # on a structural `==`/`!=` row: the body calls the generated `==` of its
         # @T@
         callsEquals: false
-        # on a class row: the class is written from this template -- once per
-        # instance when it is GENERIC, once when it is not (a class holding OS
-        # state, whose layout no declaration can say)
+    }
+
+    # classRow -- a class of the unit whose C struct the runtime writes: one
+    # holding what no declaration can say (an fd closed once, a handle
+    # released), or one written from a template. Its native methods are rows.
+    classRow: data {
+        # the class's name within the unit (`File`)
+        key: text
+        # the class is written from this template -- once per instance when it is
+        # GENERIC, once when it is not (a class holding OS state, whose layout no
+        # declaration can say)
         template: ""
-        # on a class row whose struct is laid out from its declaration: the canons
-        # whose instances must ALL exist for the class to be LIVE. A live class is
-        # used, and the native methods its declared conformances name are
-        # demanded: their vtables take those addresses whether or not anything
-        # calls them. The gate is order-independent -- true exactly when what the
-        # fragments reference exists -- so the C always compiles
+        # on a class laid out from its declaration: the canons whose instances
+        # must ALL exist for the class to be LIVE. A live class is used, and the
+        # native methods its declared conformances name are demanded: their
+        # vtables take those addresses whether or not anything calls them. The
+        # gate is order-independent -- true exactly when what the fragments
+        # reference exists -- so the C always compiles
         live: list {} out staticlist text
-        # on a class row: the C defining the class's `_destroy(<Class>_t* p)`,
-        # what a declaration cannot say (an fd closed once, a handle released),
-        # written with the struct. A destructor that calls what the unit's own
-        # fragments declare is instead a row of the unit's after them (sqlite's
-        # Database): the struct's destructor is declared ahead of it either way
+        # the C defining the class's `_destroy(<Class>_t* p)`, what a declaration
+        # cannot say, written with the struct. A destructor that calls what the
+        # unit's own fragments declare is instead a row of the unit's after them
+        # (sqlite's Database): the struct's destructor is declared ahead of it
+        # either way
         destroy: ""
+        # what the class's C calls, as a row's needs
+        needs: list {} out staticlist text
     }
 
     # piece -- a part of a fixed file or a fragment, written in place only where

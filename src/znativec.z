@@ -246,8 +246,10 @@ showNative: function {what: StringView systemdir: StringView c: bool} out String
         f: zdata.open file: path.stringView srcdirs: List String :systemdir
         im: zdata.definition :f name: "implementation"
         places: itemsNamed :f v: im name: "rows"
-        if what == un when c.not then showUnitRows :buf :u :f :places
+        cps: itemsNamed :f v: im name: "classes"
+        if what == un when c.not then showUnitRows :buf :u :f :places classPlaces: cps
         showRows :buf :what rows: u.implementation.rows unitName: un :f :places :c
+        showClasses :buf :what :u :f places: cps :c
         tps: itemsNamed :f v: im name: "templates"
         k: u64
         for each t: u.implementation.templates loop {
@@ -273,6 +275,9 @@ namesInUnit: function {what: StringView u: nativec.servedUnit} out bool is {
     if what == u.name.stringView then return true
     for each r: u.implementation.rows loop {
         if (namesRow :what unitName: u.name.stringView key: r.key.stringView) then return true
+    }
+    for each cl: u.implementation.classes loop {
+        if (namesRow :what unitName: u.name.stringView key: cl.key.stringView) then return true
     }
     for each t: u.implementation.templates loop {
         if what == t.name.stringView then return true
@@ -427,12 +432,14 @@ placeAt: function {f: zdata.DataFile.view places: (ListVal ztypes.cval).view k: 
     return (zdata.placeOf :f v: (places.get i: k))
 }
 
-# showUnitRows -- a unit's rows, one line each: its key and where it is written
+# showUnitRows -- a unit's rows, one line each: its key and where it is
+# written; then its classes and its templates
 showUnitRows: function {
     buf: String.borrow
     u: nativec.servedUnit
     f: zdata.DataFile.view
     places: (ListVal ztypes.cval).view
+    classPlaces: (ListVal ztypes.cval).view
 } is {
     k: u64
     for each r: u.implementation.rows loop {
@@ -445,6 +452,17 @@ showUnitRows: function {
         buf.append "\n"
         k = k + 1
     }
+    j: u64
+    for each cl: u.implementation.classes loop {
+        buf.append "class "
+        buf.append u.name.stringView
+        buf.append "."
+        buf.append cl.key.stringView
+        buf.append "  "
+        buf.append (placeAt :f places: classPlaces k: j)
+        buf.append "\n"
+        j = j + 1
+    }
     for each t: u.implementation.templates loop buf.append "template \{t.name}\n"
 }
 
@@ -456,7 +474,6 @@ showRow: function {
     if c then {
         for each t: r.fragments loop buf.append "\{t}\n"
         for each p: r.pieces loop buf.append "\{p.text}\n"
-        if r.destroy.length > 0 then buf.append "\{r.destroy}\n"
         return
     }
     if unitName.length > 0 then buf.append "\{unitName}."
@@ -470,16 +487,58 @@ showRow: function {
     showField :buf name: "demand" value: (zemitterc.servedList xs: r.demand).stringView
     showField :buf name: "pulls" value: (zemitterc.servedList xs: r.pulls).stringView
     showField :buf name: "members" value: (zemitterc.servedList xs: r.members).stringView
-    showField :buf name: "live" value: (zemitterc.servedList xs: r.live).stringView
     showField :buf name: "via" value: r.via.stringView
-    showField :buf name: "template" value: r.template.stringView
     showField :buf name: "call" value: (zemitterc.servedCallWord c: r.call).stringView
     if r.form.value then showField :buf name: "form" value: "value"
     if r.byPointer then showField :buf name: "byPointer" value: "true"
     if r.callsEquals then showField :buf name: "callsEquals" value: "true"
     for each t: r.fragments loop showText :buf name: "fragment" text: t.stringView
     for each p: r.pieces loop showPiece :buf :p at: "" c: false
-    if r.destroy.length > 0 then showText :buf name: "destroy" text: r.destroy.stringView
+}
+
+# showClasses -- showClass for each class of unit `u` that `what` names, placed
+# by the same element of `places`
+showClasses: function {
+    buf: String.borrow
+    what: StringView
+    u: nativec.servedUnit
+    f: zdata.DataFile.view
+    places: (ListVal ztypes.cval).view
+    c: bool
+} is {
+    k: u64
+    for each cl: u.implementation.classes loop {
+        if (namesRow :what unitName: u.name.stringView key: cl.key.stringView) then (
+            showClass
+            :buf
+            :cl
+            unitName: u.name.stringView
+            at: (placeAt :f :places :k).stringView
+            :c
+        )
+        k = k + 1
+    }
+}
+
+# showClass -- one class: where it is written, each field it sets, then its
+# destroy with its holes as written; with `c`, its destroy alone
+showClass: function {
+    buf: String.borrow cl: schema.classRow unitName: StringView at: StringView c: bool
+} is {
+    if c then {
+        if cl.destroy.length > 0 then buf.append "\{cl.destroy}\n"
+        return
+    }
+    buf.append unitName
+    buf.append "."
+    buf.append cl.key.stringView
+    buf.append "  "
+    buf.append at
+    buf.append "\n"
+    showField :buf name: "template" value: cl.template.stringView
+    showField :buf name: "live" value: (zemitterc.servedList xs: cl.live).stringView
+    showField :buf name: "needs" value: (zemitterc.servedList xs: cl.needs).stringView
+    if cl.destroy.length > 0 then showText :buf name: "destroy" text: cl.destroy.stringView
 }
 
 # showTemplate -- a template: where it is written, its needs, then its sections
