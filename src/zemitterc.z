@@ -2318,6 +2318,10 @@ nativeWord: list {
     armArgument: "argument"
     armParse: "parse"
     armNoArguments: "noArguments"
+    # the shapes a structural row's key names (rowShapeOf)
+    shapeScalar: "scalar"
+    shapeVariant: "variant"
+    shapeRecord: "record"
 } out staticlist StringView
 
 # NativeHead -- a row's head, parsed: the path key and the attributes the
@@ -2566,22 +2570,17 @@ recordFragmentRow: function {
     ctx.fragTypeNames.append from: tn
 }
 
-# recordRowBodies -- the row's tables: its body, under `const=` a
-# constant-operand variant with its position and otherwise the plain body,
-# then the runtime it needs, pointer arguments, value form and folding, each
-# keyed by the path. The plain body's id, zero for none
+# recordRowBodies -- the row's tables, each keyed by the path: its body
+# (a plain row's), the runtime it needs, its value form. The body's id, the
+# deferred text of a plain row's or a constant-operand variant's; zero for
+# none
 recordRowBodies: function {ctx: Ctx h: NativeHead.view body: StringView} out rtid is {
-    plain: rtid
+    bid: rtid
     if body.length > 0 then {
-        kb: h.key.copy
-        bid: ctx.rt.defer text: body
-        if h.cst.length > 0 then {
-            ctx.nativeConstBody.set key: kb value: bid
-            kc: h.key.copy
-            ctx.nativeConstPos.set key: kc value: h.cst.copy
-        } else {
+        bid = ctx.rt.defer text: body
+        if h.cst.length == 0 then {
+            kb: h.key.copy
             ctx.nativeTbl.set key: kb value: bid
-            plain = bid
         }
     }
     if h.need.length > 0 then {
@@ -2589,19 +2588,11 @@ recordRowBodies: function {ctx: Ctx h: NativeHead.view body: StringView} out rti
         ctx.nativeNeed.set key: kn value: h.need.copy
     }
     if h.pulls.length > 0 when h.frag.length > 0 then recordRowPulls :ctx pulls: h.pulls.stringView
-    if h.ptr then {
-        kp: h.key.copy
-        ctx.nativePtrArgs.set key: kp value: true
-    }
     if h.value then {
         kv: h.key.copy
         ctx.nativeValueRows.set key: kv value: true
     }
-    if h.eq then {
-        ke: h.key.copy
-        ctx.nativeEqRows.set key: ke value: true
-    }
-    return plain
+    return bid
 }
 
 # svcall -- how a call of a StringView native member is emitted: the `call`
@@ -2679,10 +2670,10 @@ recordNativeRow: function {
         frag = ctx.fragUnits.length + 1
         recordHeadFragment :ctx :h
     }
-    plain: recordRowBodies :ctx :h :body
-    if h.cst.length > 0 then return
+    bid: recordRowBodies :ctx :h :body
+    mask: constMaskOf positions: h.cst.stringView
     nt: u64
-    if owner.isZero.not when h.need.length > 0 then {
+    if mask == 0 when owner.isZero.not when h.need.length > 0 then {
         ctx.rows.needTexts.append from: h.need.copy
         nt = ctx.rows.needTexts.length
     }
@@ -2693,22 +2684,58 @@ recordNativeRow: function {
         (
             zemitrows.nativerow
             :owner
-            body: plain
+            body: bid
             via: vi
             needText: nt
             needFrom: 0
             needTo: 0
             :frag
+            constMask: mask
+            value: h.value
+            byPointer: h.ptr
+            callsEquals: h.eq
         )
     )
-    if impl > 0 then nameRow :ctx :ast :impl :key row: ctx.rows.rows.length - 1
+    rid: ctx.rows.rows.length - 1
+    if owner.isZero then {
+        shapeRow :ctx :ast :key row: rid
+    } else if impl > 0 then {
+        nameRow :ctx :ast :impl :key row: rid constant: mask != 0
+    }
+}
+
+# constMaskOf -- a constant-operand variant's positions (`1`, `1,2`, ...) as
+# bits, bit k for position k + 1; zero for a plain row's (none)
+constMaskOf: function {positions: StringView} out u64 is {
+    m: u64
+    for each p: (positions.split sep: ",") loop {
+        k: p.parseU64.or d: 0
+        if k > 0 when k <= 64 then m = m | (1.u64 << (k - 1))
+    }
+    return m
+}
+
+# shapeRow -- structural row `row`, keyed `<shape>.<op>`, found by the shape
+# and the operator's name id (rowShapeOf); a shape the vocabulary does not
+# hold, or an operator the program never spells, is not found
+shapeRow: function {ctx: Ctx ast: Ast.view key: StringView row: u64} is {
+    d: key.indexOf needle: "."
+    match (
+        d
+    ) case some then {
+        sh: ctx.nativeWords.slotOf text: (key.substring from: 0 to: d)
+        op: poolIdOf :ast text: (key.substring from: d + 1 to: key.length)
+        if (sh == ctx.nativeWords.none) or op.isZero then return
+        ctx.rows.shapes.set key: (zemitrows.shapekey shape: sh :op) value: row
+    } case none then null
 }
 
 # nameRow -- row `row` of file `impl`, keyed `key` there, found by the key as
-# the program's names spell it (rowname): `name`, or `Type.name`. A helper's
-# key (`@name`) and a key naming what the program never spells name no
-# declaration, and are not found this way.
-nameRow: function {ctx: Ctx ast: Ast.view impl: u64 key: StringView row: u64} is {
+# the program's names spell it (rowname): `name`, or `Type.name`; a
+# `constant` variant among the variants. A helper's key (`@name`) and a key
+# naming what the program never spells name no declaration, and are not
+# found this way.
+nameRow: function {ctx: Ctx ast: Ast.view impl: u64 key: StringView row: u64 constant: bool} is {
     if key.startsWith "@" then return
     tn: zast.nameid
     from: u64
@@ -2722,7 +2749,19 @@ nameRow: function {ctx: Ctx ast: Ast.view impl: u64 key: StringView row: u64} is
     } case none then null
     nm: poolIdOf :ast text: (key.substring :from to: key.length)
     if nm.isZero then return
-    ctx.rows.byName.set key: (zemitrows.rowname :impl typeName: tn name: nm) value: row
+    n: zemitrows.rowname :impl typeName: tn name: nm
+    if constant then {
+        ctx.rows.constByName.set key: n value: row
+    } else {
+        ctx.rows.byName.set key: n value: row
+    }
+}
+
+# rowBody -- row `row`'s C body, cut on first use; zero for none
+rowBody: function {ctx: Ctx row: u64} out rtid is {
+    id: (ctx.rows.rows.get i: row).body
+    ctx.rt.ready :id
+    return id
 }
 
 # readRowNeeds -- row `row`'s needs (`u.m`, or `m` of the row's own unit, each
@@ -4033,47 +4072,6 @@ nativeImplOf: function {ctx: Ctx path: StringView} out rtid is {
     return id
 }
 
-# nativeConstImplOf -- the body of the row that answers only when the argument
-# positions it names are COMPILE-TIME CONSTANTS; "" when the path has no such
-# row. A constant position fills with a LITERAL, so the row may spell what only
-# a known value allows: `[system.u64./ const=1]` divides inline, where the plain
-# row calls the helper that checks the divisor.
-nativeConstImplOf: function {ctx: Ctx path: StringView} out rtid is {
-    id: (ctx.nativeConstBody.get key: path.asString).or d: rtid.zero
-    ctx.rt.ready :id
-    return id
-}
-
-# nativeConstPosOf -- the argument positions that row requires to be constant,
-# 1-based with the receiver excluded, so the attribute reads the same for a
-# binop (which has exactly one argument) and for an N-argument call later.
-nativeConstPosOf: function {ctx: Ctx.view path: StringView} out String is {
-    result: String
-    g: ctx.nativeConstPos.get key: path.asString
-    match (
-        g
-    ) case some then {
-        result = g.copy
-    } case none then null
-    return result
-}
-
-# constPosIsFirstOnly -- the position list names argument 1 and nothing else.
-# A binop HAS only argument 1, so a row asking for any other position cannot be
-# satisfied by one and is not selected; the list form is what lets a call ask
-# for two. Asked with stripPrefix rather than a literal compare, the way the
-# loader reads every other attribute -- the architecture lint counts a `==`
-# against a spelling, and it is right to.
-constPosIsFirstOnly: function {pos: StringView} out bool is {
-    o: pos.stripPrefix p: "1"
-    match (
-        o
-    ) case some then {
-        return o.length == 0
-    } case none then null
-    return false
-}
-
 # nativeNeedOf -- the runtime fragment a row's body calls, "" when it calls
 # none. Recorded as data because the demand has to be registered before the
 # fragment pass runs, and only the row knows it is needed.
@@ -4181,23 +4179,11 @@ recordCondition: function {ctx: Ctx name: StringView expression: StringView} is 
     ctx.condExprs.append from: ex.string
 }
 
-# nativePtrArgsOf -- true when a row's body takes its operands by pointer, so
-# they must be projected as lvalues rather than values.
-nativePtrArgsOf: function {ctx: Ctx.view path: StringView} out bool is {
-    return ((ctx.nativePtrArgs.get key: path.asString).or d: false)
-}
-
 # nativeValueRowOf -- true when a row's body is a value computed from its holes
 # (`form=value`): its facts are its operands', where any other row's are a
 # call's.
 nativeValueRowOf: function {ctx: Ctx.view path: StringView} out bool is {
     return ((ctx.nativeValueRows.get key: path.asString).or d: false)
-}
-
-# nativeCallsEqOf -- true when a row's body calls the generated `==` of the type
-# it is filled for (`calls=eq`).
-nativeCallsEqOf: function {ctx: Ctx.view path: StringView} out bool is {
-    return ((ctx.nativeEqRows.get key: path.asString).or d: false)
 }
 
 # emitFail -- record an emission failure for an unhandled construct. The
@@ -4759,40 +4745,19 @@ convSrcPathOf: function {symtab: zenv.ZSymbolTable.view srcTid: ztypes.tid} out 
     return k
 }
 
-# binopKeyOf -- the row path for an operator on `owner`. A declared
-# native is three segments, `<declaring unit>.<type>.<operator>`, built from
-# the owner's id rather than from anything the source spelled. The synthesised
-# structural cases have no declaration, and their `@` prefix keeps them out of
-# the declaration space: a free function's path is `<unit>.<name>`, two segments
-# just like theirs. They key on the SHAPE
-# the emitter would have built by hand -- a variant's tag compare, a record's
-# byte compare, or the inline compare a record whose typedef chain ends at a
-# scalar gets instead.
-binopKeyOf: function {
-    ast: Ast.view
-    symtab: zenv.ZSymbolTable.view
-    owner: ztypes.tid
-    isNative: bool
-    op: StringView
-} out String is {
-    if isNative then {
-        uo: definedInUnitName :symtab tid: owner
-        if uo.length == 0 then return "".string
-        tn: regNameView :symtab tid: owner
-        k: "\{uo}.\{tn}.\{op}"
-        return k
-    }
+# rowShapeOf -- the shape a structural row of an operator on `owner` is keyed
+# by (shapekey), for a type that declares no native operator: the inline
+# compare a C scalar gets (an ordinal variant, or a record whose typedef chain
+# ends at a scalar), a variant's tag compare, a record's byte compare; the
+# vocabulary's `none` for any other type
+rowShapeOf: function {
+    ast: Ast.view symtab: zenv.ZSymbolTable.view ctx: Ctx.view owner: ztypes.tid
+} out u64 is {
     tt: symtab.reg.typetypeOf typeId: owner
     # an ORDINAL PAIR is a C scalar, so it compares with `==` rather than
     # through the tagged-struct comparator it has no struct for
-    if (isOrdinalVariant :symtab tid: owner) then {
-        k0: "@scalar.\{op}"
-        return k0
-    }
-    if tt == ztypes.ztypetype.variantType then {
-        k1: "@variant.\{op}"
-        return k1
-    }
+    if (isOrdinalVariant :symtab tid: owner) then return nativeWord.slot.shapeScalar
+    if tt == ztypes.ztypetype.variantType then return nativeWord.slot.shapeVariant
     if tt == ztypes.ztypetype.recordType then {
         bn: typedefChaseBaseName :ast :symtab tid: owner
         if bn.length > 0 then {
@@ -4801,15 +4766,28 @@ binopKeyOf: function {
                 :symtab
                 tid: (ztypecheck.typedefChaseTid st: symtab tid: owner)
             )
-            if sc.length > 0 then {
-                k2: "@scalar.\{op}"
-                return k2
-            }
+            if sc.length > 0 then return nativeWord.slot.shapeScalar
         }
-        k3: "@record.\{op}"
-        return k3
+        return nativeWord.slot.shapeRecord
     }
-    return "".string
+    return ctx.nativeWords.none
+}
+
+# shapeLabel -- the structural row keyed `k` as the rows' check names it,
+# `@<shape>.<op>`, written in one allocation
+shapeLabel: function {ast: Ast.view k: zemitrows.shapekey} out String is {
+    sw: ""
+    if k.shape == nativeWord.slot.shapeScalar then sw = "scalar"
+    if k.shape == nativeWord.slot.shapeVariant then sw = "variant"
+    if k.shape == nativeWord.slot.shapeRecord then sw = "record"
+    op: zast.nameTextAt :ast ref: k.op
+    r: String
+    r.reserve n: sw.length + op.length + 2
+    r.append "@"
+    r.append sw
+    r.append "."
+    r.append op
+    return r
 }
 
 # dottedTaggedTid -- the tagged-construction stamp for a dotted node: the
@@ -5496,23 +5474,8 @@ Ctx: class {
     nativeNeed: (Map String V: String)
     # the pulls of the rows answering each demand, comma-separated (needsAddPullsOf)
     pullsByDemand: (MapVR zemitrows.demandkey V: String)
-    # which natives take their arguments by pointer
-    nativePtrArgs: (MapRV String v: bool)
-    # which rows are values computed from their holes (`form=value`); a
-    # `const=` variant is marked as its plain row is
+    # which rows are values computed from their holes (`form=value`)
     nativeValueRows: (MapRV String v: bool)
-    # the rows whose body calls the generated `==` of the type they are filled
-    # for (`calls=eq`)
-    nativeEqRows: (MapRV String v: bool)
-    # a row that answers only when named ARGUMENTS are compile-time constants,
-    # kept beside the ordinary body rather than in it: `nativeTbl` is keyed by
-    # path alone, so a second row of the same path would overwrite the first
-    # and the guarded form would simply vanish. The body and the positions it
-    # requires are two maps rather than one composed key for the same reason
-    # the rest of this table is: the path IS the key.
-    nativeConstBody: (MapRV String v: rtid)
-    # which argument position of a native must be a constant
-    nativeConstPos: (Map String V: String)
     # the conversion rows, split so the two questions stay separate: is this
     # member a CONVERSION at all (a type that converts, and a member every
     # converting type declares), and if so what C does this pair emit. Asking
@@ -11071,17 +11034,16 @@ nextWrittenParam: function {
 # binds the operator holes. THE ROW IS THE AUTHORITY -- a bodyless row
 # (`optionval.or`) or a user method with a word name is not an operator.
 wordOperatorRowBinds: function {
-    ast: Ast.view
     symtab: zenv.ZSymbolTable.view
     ctx: Ctx
     method: ztypes.tid
     owner: ztypes.tid
-    mn: StringView
+    mnId: zast.nameid
 } out bool is {
-    if (nativeIsArgMembOf :ctx memb: mn).not then return false
     if (fnIsNativeId :symtab fid: method).not then return false
-    key: binopKeyOf :ast :symtab :owner isNative: true op: mn
-    return (rtHas :ctx id: (nativeImplOf :ctx path: key.stringView) slot: rtHole.slot.holeL)
+    row: ctx.rows.ofName n: (rowNameOfMember :symtab :ctx :owner name: mnId)
+    if row == 0 then return false
+    return (rtHas :ctx id: (rowBody :ctx :row) slot: rtHole.slot.holeL)
 }
 
 # opPairPartnerId -- the OTHER half of the comparison pair, 0 for any other
@@ -11268,12 +11230,11 @@ emitOperatorCallForm: function {
     if method.isZero when (opPairPartnerId nameId: mnId9).isZero then return "".string
     if (ztypecheck.isOperatorName name: mnO).not when (
         wordOperatorRowBinds
-        :ast
         :symtab
         :ctx
         :method
         :owner
-        mn: mnO
+        mnId: mnId9
     ).not then return "".string
     lhsNid: zast.nodeid
     cb: ast.nodes.get i: call.callable
@@ -23335,10 +23296,55 @@ emitOperatorAt: function {
         )
         if eNi.length > 0 then return eNi
     }
-    key: binopKeyOf :ast :symtab :owner isNative: isNat :op
-    body: nativeImplOf :ctx path: key.stringView
+    return (
+        emitOperatorByRow
+        :ast
+        :symtab
+        :ctx
+        :lineno
+        :opId
+        :owner
+        :isNat
+        :lhsNid
+        :rhsNid
+        :facts
+    )
+}
+
+# emitOperatorByRow -- operator `opId` on `owner` through its row: the native
+# operator's row keyed by the operator as written (a derived comparison's
+# declared partner is not the row's), else the structural row of the type's
+# shape; its constant-operand variant when the right operand is a constant the
+# variant takes
+emitOperatorByRow: function {
+    ast: Ast.view
+    symtab: zenv.ZSymbolTable.view
+    ctx: Ctx
+    lineno: u32
+    opId: zast.nameid
+    owner: ztypes.tid
+    # the operator's declaration is native
+    isNat: bool
+    lhsNid: zast.nodeid
+    rhsNid: zast.nodeid
+    facts: cfacts.borrow
+} out String is {
+    row: u64
+    rowKey: zemitrows.rowname impl: 0 typeName: zast.nameid.zero name: zast.nameid.zero
+    label: String
+    if isNat then {
+        rowKey = rowNameOfMember :symtab :ctx :owner name: opId
+        row = ctx.rows.ofName n: rowKey
+        label = rowLabel :ast owner: (definedInUnitName :symtab tid: owner) n: rowKey
+    } else {
+        sk: zemitrows.shapekey shape: (rowShapeOf :ast :symtab :ctx :owner) op: opId
+        row = ctx.rows.ofShape k: sk
+        label = shapeLabel :ast k: sk
+    }
+    body: rtid
+    if row > 0 then body = rowBody :ctx :row
     if body.isZero then {
-        emitFail :ctx what: "no native implementation for '\{key}'" line: lineno
+        emitFail :ctx what: "no native implementation for '\{label}'" line: lineno
         return (
             stating
             :facts
@@ -23358,16 +23364,28 @@ emitOperatorAt: function {
     if rhsConst.kind.none.not then {
         ieee: zeroDivisionC :symtab :ctx :owner :opId :lhsNid rhs: rhsConst
         if ieee.length > 0 then return (stating :facts from: constFacts text: ieee)
-        cbody: nativeConstImplOf :ctx path: key.stringView
-        if cbody.isZero.not then {
-            cpos: nativeConstPosOf :ctx path: key.stringView
-            if (constPosIsFirstOnly pos: cpos.stringView) then {
-                body = cbody
-                constRow = true
-            }
+        crow: ctx.rows.constOfName n: rowKey
+        # a binop HAS only argument 1, so a variant asking for any other
+        # position cannot be satisfied by one and is not selected
+        if crow > 0 when (ctx.rows.rows.get i: crow).constMask == 1 then {
+            body = rowBody :ctx row: crow
+            constRow = true
         }
     }
-    return (emitOperatorRow :ast :symtab :ctx :owner :key :body :constRow :lhsNid :rhsNid :facts)
+    return (
+        emitOperatorRow
+        :ast
+        :symtab
+        :ctx
+        :owner
+        :row
+        :label
+        :body
+        :constRow
+        :lhsNid
+        :rhsNid
+        :facts
+    )
 }
 
 # zeroDivisionC -- an f32 or f64 division whose operands are both constants and
@@ -23436,14 +23454,18 @@ emitOperatorRow: function {
     symtab: zenv.ZSymbolTable.view
     ctx: Ctx
     owner: ztypes.tid
-    key: String
+    # the plain row, whose flags hold for its constant-operand variant too
+    row: u64
+    # the row as a failure names it
+    label: String
     body: rtid
     constRow: bool
     lhsNid: zast.nodeid
     rhsNid: zast.nodeid
     facts: cfacts.borrow
 } out String is {
-    if constRow.not then rowNeedAdd :ctx key: key.stringView
+    r: ctx.rows.rows.get i: row
+    if constRow.not then rowNeedsAdd :ctx :row cond: condAlways
     ord: orderBegin :ctx slots: 2
     lh: rtHoleId slot: rtHole.slot.holeL
     rh: rtHoleId slot: rtHole.slot.holeR
@@ -23456,7 +23478,7 @@ emitOperatorRow: function {
         :symtab
         :ctx
         :owner
-        key: key.stringView
+        byPtr: r.byPointer
         nid: lhsNid
         slot: 0
         :ord
@@ -23469,7 +23491,7 @@ emitOperatorRow: function {
         :symtab
         :ctx
         :owner
-        key: key.stringView
+        byPtr: r.byPointer
         nid: rhsNid
         slot: 1
         :ord
@@ -23481,10 +23503,10 @@ emitOperatorRow: function {
     if (typedefChaseHasBaseName :symtab tid: owner) then {
         tcnTid = ztypecheck.typedefChaseTid st: symtab tid: owner
     }
-    if (nativeCallsEqOf :ctx path: key.stringView) then noteEqUse :ast :symtab :ctx tid: tcnTid
-    filled: fillOperatorRow :ast :symtab :ctx :ord :body :key :tcnTid
+    if r.callsEquals then noteEqUse :ast :symtab :ctx tid: tcnTid
+    filled: fillOperatorRow :ast :symtab :ctx :ord :body :label :tcnTid
     # a value row with no temps ahead of it reads as its operands do
-    if oprefix.length == 0 when (nativeValueRowOf :ctx path: key.stringView) then {
+    if oprefix.length == 0 when r.value then {
         return (stating :facts from: (valueFacts a: lhsF b: rhsF) text: filled)
     }
     return (stating :facts from: callFacts text: (orderWrap prefix: oprefix call: filled))
@@ -23502,7 +23524,8 @@ fillOperatorRow: function {
     ctx: Ctx
     ord: orderstate
     body: rtid
-    key: String
+    # the row as a failure names it
+    label: String
     tcnTid: ztypes.tid
 } out String is {
     bn: ListVal zast.nameid
@@ -23542,7 +23565,7 @@ fillOperatorRow: function {
         :symtab
         :ctx
         id: body
-        path: key.stringView
+        path: label.stringView
         bindIds: bn
         bindVals: bv
         rawIds: rn
@@ -23590,8 +23613,8 @@ orderRowOperand: function {
     symtab: zenv.ZSymbolTable.view
     ctx: Ctx
     owner: ztypes.tid
-    # the row's path
-    key: StringView
+    # the row takes its operands by pointer
+    byPtr: bool
     nid: zast.nodeid
     slot: u64
     ord: orderstate.borrow
@@ -23625,7 +23648,7 @@ orderRowOperand: function {
         )
         return
     }
-    if (nativePtrArgsOf :ctx path: key) then {
+    if byPtr then {
         pfF: cfacts
         pf: stringViewBinopOperand :ast :symtab :ctx :n expr: v.stringView exprF: vF facts: pfF
         stateFacts facts: opF from: callFacts
@@ -40425,13 +40448,9 @@ emitC: function {
         tmplTexts: (MapVV textkey v: rtid)
         tmplNeeds: (MapVR textkey V: String)
         nativeTbl: (MapRV String v: rtid)
-        nativeConstBody: (MapRV String v: rtid)
-        nativeConstPos: (Map String V: String)
         nativeNeed: (Map String V: String)
         pullsByDemand: (MapVR zemitrows.demandkey V: String)
-        nativePtrArgs: (MapRV String v: bool)
         nativeValueRows: (MapRV String v: bool)
-        nativeEqRows: (MapRV String v: bool)
         nativeKeys: (MapRV String v: bool)
         cWords: (zast.Vocab.create block: cReserved)
         opWords: (zast.Vocab.create block: opSpelling)
@@ -49116,16 +49135,36 @@ rowNameOfFn: function {
     return (zemitrows.rowname :impl typeName: tn name: dc.name)
 }
 
+# rowNameOfMember -- the key of the row implementing member `name` of type
+# `owner` (an operator, a conversion, a native method): in the file
+# implementing the unit that declares the type, the type's name and the
+# member's. No file (impl 0) when the program reaches none for it.
+rowNameOfMember: function {
+    symtab: zenv.ZSymbolTable.view ctx: Ctx.view owner: ztypes.tid name: zast.nameid
+} out zemitrows.rowname is {
+    none: zemitrows.rowname impl: 0 typeName: zast.nameid.zero name: zast.nameid.zero
+    did: symtab.typing.declIdOfType typeId: owner
+    if did.isZero then return none
+    impl: ctx.rows.fileOfUnit ud: (ztypecheck.unitDeclOfTid st: symtab tid: owner)
+    if impl == 0 then return none
+    return (zemitrows.rowname :impl typeName: (symtab.typing.decls.get i: did).name :name)
+}
+
 # rowLabel -- row key `n` of unit `owner`'s file as `zc natives show`
-# addresses it: `<unit>.<key>`
+# addresses it, `<unit>.<key>`, written in one allocation
 rowLabel: function {ast: Ast.view owner: StringView n: zemitrows.rowname} out String is {
-    r: owner.string
+    nm: zast.nameTextAt :ast ref: n.name
+    tl: u64
+    if n.typeName.isZero.not then tl = (zast.nameTextAt :ast ref: n.typeName).length + 1
+    r: String
+    r.reserve n: owner.length + tl + nm.length + 1
+    r.append owner
     r.append "."
     if n.typeName.isZero.not then {
         r.append (zast.nameTextAt :ast ref: n.typeName)
         r.append "."
     }
-    r.append (zast.nameTextAt :ast ref: n.name)
+    r.append nm
     return r
 }
 
@@ -51489,7 +51528,7 @@ emitOneVariant: function {
     # nothing else, so the type IS the tag's storage -- the enum stays for the
     # constants, which are the arm ordinals, and names no type: its tag type is
     # never spelled. The type is named only where written C spells it.
-    # Comparison is `==` (binopKeyOf routes it to @scalar), so there is no
+    # Comparison is `==` (rowShapeOf keys it as a scalar), so there is no
     # comparator to emit either.
     ovc: ordinalVariantCType :symtab :tid
     emitVariantEnum :ast :ctx :symtab :tid :aidsNm ctype: ovc.stringView cn: vc.stringView :buf

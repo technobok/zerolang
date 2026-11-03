@@ -13,6 +13,7 @@ public: unit {
     :rtid
     :rowneed
     :rowname
+    :shapekey
     :nativerow
     :RowTable
 }
@@ -130,6 +131,14 @@ rowname: record {
     name: zast.nameid
 }
 
+# shapekey -- a structural row's key: the shape of the type it compares (a
+# slot of zemitterc's nativeWord vocabulary: scalar, variant or record) and the
+# operator's name id in the program's pool
+shapekey: record {
+    shape: u64
+    op: zast.nameid
+}
+
 # nativerow -- one row of an implementation file, as the emitter reads it
 nativerow: record {
     # the unit a need naming no unit of its own is a member of: the row's file's
@@ -151,6 +160,17 @@ nativerow: record {
     # the row's place in zemitterc's fragment lists plus one; zero for a row
     # with no fragment
     frag: u64
+    # on a constant-operand variant, the argument positions it requires to be
+    # constant: bit k for position k + 1, the receiver excluded; zero on a
+    # plain row
+    constMask: u64
+    # the body is a value computed from its holes (`form: value`): its facts
+    # are its operands', where any other row's are a call's
+    value: bool
+    # the body takes its operands by pointer
+    byPointer: bool
+    # the body calls the generated `==` of the type it is filled for
+    callsEquals: bool
 }
 
 # RowTable -- the rows, registered once at emit start, row 0 the sentinel:
@@ -164,6 +184,10 @@ RowTable: class {
     needTexts: List String
     # the rows by key, those whose names the program spells
     byName: (MapVV rowname v: u64)
+    # the constant-operand variants, by the key of the row they vary
+    constByName: (MapVV rowname v: u64)
+    # the structural rows, by shape and operator
+    shapes: (MapVV shapekey v: u64)
     # the files read so far; the foundation's groups and structural rows are
     # in none
     files: u64
@@ -178,6 +202,8 @@ RowTable: class {
             needs: ListVal rowneed
             needTexts: List String
             byName: (MapVV rowname v: u64)
+            constByName: (MapVV rowname v: u64)
+            shapes: (MapVV shapekey v: u64)
             files: 0
             fileOf: (IdMapV ztypes.declid v: u64)
         )
@@ -192,6 +218,10 @@ RowTable: class {
                 needFrom: 0
                 needTo: 0
                 frag: 0
+                constMask: 0
+                value: false
+                byPointer: false
+                callsEquals: false
             )
         )
         return t
@@ -200,6 +230,17 @@ RowTable: class {
     # ofName -- the row keyed `n`; 0 for none
     ofName: function {t: this.view n: rowname} out u64 is {
         return ((t.byName.get key: n).or d: 0)
+    }
+
+    # constOfName -- the constant-operand variant of the row keyed `n`; 0 for
+    # none
+    constOfName: function {t: this.view n: rowname} out u64 is {
+        return ((t.constByName.get key: n).or d: 0)
+    }
+
+    # ofShape -- the structural row keyed `k`; 0 for none
+    ofShape: function {t: this.view k: shapekey} out u64 is {
+        return ((t.shapes.get key: k).or d: 0)
     }
 
     # fileOfUnit -- the place of the file implementing unit `ud`; 0 for none
