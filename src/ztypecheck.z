@@ -24201,28 +24201,32 @@ mintMonoRecordShape: function {
 
 # templateNeedsMonoDtor -- whether a mono of this builtin template owns heap
 # its destructor must release. The list is the collection families that carry
-# one; a user template's answer comes from its substituted fields instead.
+# one; a user template's answer comes from its substituted fields instead. The
+# template's own name says which family it could be, and its id is compared
+# with that family's, read without resolving it (templateIsCollection).
 templateNeedsMonoDtor: function {
     ast: Ast
     st: zenv.ZSymbolTable
     templateId: ztypes.tid
 } out bool is {
-    needsDtorM: (
-        (templateId == (stdTid :ast :st wk: zast.wellKnown.slot.tyListRef)) or
-        (templateId == (stdTid :ast :st wk: zast.wellKnown.slot.tyListVal)) or
-        (templateId == (stdTid :ast :st wk: zast.wellKnown.slot.tyOption)) or
-        (templateId == (stdTid :ast :st wk: zast.wellKnown.slot.tyResult)) or
-        (templateId == (stdTid :ast :st wk: zast.wellKnown.slot.tyMapRR)) or
-        (templateId == (stdTid :ast :st wk: zast.wellKnown.slot.tyMapRV)) or
-        (templateId == (stdTid :ast :st wk: zast.wellKnown.slot.tyMapVR)) or
-        (templateId == (stdTid :ast :st wk: zast.wellKnown.slot.tyMapVV)) or
-        (templateId == (stdTid :ast :st wk: zast.wellKnown.slot.tySetRef)) or
-        (templateId == (stdTid :ast :st wk: zast.wellKnown.slot.tySetVal)) or
-        (templateId == (stdTid :ast :st wk: zast.wellKnown.slot.tyIdMapR)) or
-        (templateId == (stdTid :ast :st wk: zast.wellKnown.slot.tyIdMapV)) or
-        (templateId == (stdTid :ast :st wk: zast.wellKnown.slot.tyIdSet))
-    )
-    return needsDtorM
+    nm: templateNameId :st :templateId
+    if (isHeapCollectionName :nm).not then return false
+    return templateId == (stdTidRo :ast :st wk: nm)
+}
+
+# isHeapCollectionName -- whether `nm` names a builtin collection family whose
+# instances own heap: the lists, Option and Result, the maps and sets, the id
+# maps and the id set
+isHeapCollectionName: function {nm: zast.nameid} out bool is {
+    if (
+        (nm == zast.wellKnown.slot.tyListRef) or (nm == zast.wellKnown.slot.tyListVal)
+    ) then return true
+    if (nm == zast.wellKnown.slot.tyOption) or (nm == zast.wellKnown.slot.tyResult) then return true
+    if (nm == zast.wellKnown.slot.tyMapRR) or (nm == zast.wellKnown.slot.tyMapRV) then return true
+    if (nm == zast.wellKnown.slot.tyMapVR) or (nm == zast.wellKnown.slot.tyMapVV) then return true
+    if (nm == zast.wellKnown.slot.tySetRef) or (nm == zast.wellKnown.slot.tySetVal) then return true
+    if (nm == zast.wellKnown.slot.tyIdMapR) or (nm == zast.wellKnown.slot.tyIdMapV) then return true
+    return nm == zast.wellKnown.slot.tyIdSet
 }
 
 # unionMonoNeedsDtor -- an instance of a generic union owns the cell each arm is
@@ -28041,100 +28045,96 @@ mintStrCompare: function {
 
 # templateIsCollection -- whether a template is one of the builtin collection
 # families, and (through iterOut) whether it is one of the ITERATOR families.
-# Comparing tids rather than names is what makes this shadow-proof: a user type
-# spelled `ListRef` is not this ListRef.
+# The template's own name says which family it could be, and its id is then
+# compared with that family's: comparing tids rather than names is what makes
+# this shadow-proof (a user type spelled `ListRef` is not this ListRef), and
+# reading the family's id without resolving it (stdTidRo) is exact, since the
+# stdlib type is resolved whenever a tid equal to it exists.
 templateIsCollection: function {
     ast: Ast
     st: zenv.ZSymbolTable
     templateId: ztypes.tid
     iterOut: ListVal bool
 } out bool is {
-    listTid: stdTid :ast :st wk: zast.wellKnown.slot.tyListRef
-    listValTid: stdTid :ast :st wk: zast.wellKnown.slot.tyListVal
-    listViewTid: stdTid :ast :st wk: zast.wellKnown.slot.tyListView
-    listViewValTid: stdTid :ast :st wk: zast.wellKnown.slot.tyListViewVal
-    spanValTid: stdTid :ast :st wk: zast.wellKnown.slot.tySpanVal
-    setTid: stdTid :ast :st wk: zast.wellKnown.slot.tySetRef
-    setValTid: stdTid :ast :st wk: zast.wellKnown.slot.tySetVal
-    mapTid: stdTid :ast :st wk: zast.wellKnown.slot.tyMapRR
-    mapRVTid: stdTid :ast :st wk: zast.wellKnown.slot.tyMapRV
-    mapVRTid: stdTid :ast :st wk: zast.wellKnown.slot.tyMapVR
-    mapVVTid: stdTid :ast :st wk: zast.wellKnown.slot.tyMapVV
-    idMapRTid: stdTid :ast :st wk: zast.wellKnown.slot.tyIdMapR
-    idMapVTid: stdTid :ast :st wk: zast.wellKnown.slot.tyIdMapV
-    idSetTid: stdTid :ast :st wk: zast.wellKnown.slot.tyIdSet
-    mapEntryTid: stdTid :ast :st wk: zast.wellKnown.slot.tyMapEntry
-    strTid: stdTid :ast :st wk: zast.wellKnown.slot.tyStr
-    arrayTid: stdTid :ast :st wk: zast.wellKnown.slot.tyArray
-    listIterTid: stdTid :ast :st wk: zast.wellKnown.slot.tyListIter
-    listIterValTid: stdTid :ast :st wk: zast.wellKnown.slot.tyListIterVal
-    # read, not resolved: a template no program named cannot be this one
-    listIterMutTid: stdTidRo :ast :st wk: zast.wellKnown.slot.tyListIterMut
-    listIterMutValTid: stdTidRo :ast :st wk: zast.wellKnown.slot.tyListIterMutVal
-    staticIterTid: stdTidRo :ast :st wk: zast.wellKnown.slot.tyStaticIter
-    setIterTid: stdTid :ast :st wk: zast.wellKnown.slot.tySetIter
-    setIterValTid: stdTid :ast :st wk: zast.wellKnown.slot.tySetIterVal
-    idSetIterTid: stdTid :ast :st wk: zast.wellKnown.slot.tyIdSetIter
-    idMapItemIterRTid: stdTid :ast :st wk: zast.wellKnown.slot.tyIdMapItemIterR
-    idMapItemIterVTid: stdTid :ast :st wk: zast.wellKnown.slot.tyIdMapItemIterV
-    idMapEntryRTid: stdTid :ast :st wk: zast.wellKnown.slot.tyIdMapEntryR
-    idMapEntryVTid: stdTid :ast :st wk: zast.wellKnown.slot.tyIdMapEntryV
-    mapKeyIterTid: stdTid :ast :st wk: zast.wellKnown.slot.tyMapKeyIter
-    mapItemIterTid: stdTid :ast :st wk: zast.wellKnown.slot.tyMapItemIter
-    mapKeyIterRVTid: stdTid :ast :st wk: zast.wellKnown.slot.tyMapKeyIterRV
-    mapKeyIterVRTid: stdTid :ast :st wk: zast.wellKnown.slot.tyMapKeyIterVR
-    mapKeyIterVVTid: stdTid :ast :st wk: zast.wellKnown.slot.tyMapKeyIterVV
-    mapItemIterRVTid: stdTid :ast :st wk: zast.wellKnown.slot.tyMapItemIterRV
-    mapItemIterVRTid: stdTid :ast :st wk: zast.wellKnown.slot.tyMapItemIterVR
-    mapItemIterVVTid: stdTid :ast :st wk: zast.wellKnown.slot.tyMapItemIterVV
-    mapEntryRVTid: stdTid :ast :st wk: zast.wellKnown.slot.tyMapEntryRV
-    mapEntryVRTid: stdTid :ast :st wk: zast.wellKnown.slot.tyMapEntryVR
-    mapEntryVVTid: stdTid :ast :st wk: zast.wellKnown.slot.tyMapEntryVV
-    isIter: (
-        (templateId == listIterTid) or
-        (templateId == listIterValTid) or
-        (templateId == listIterMutTid) or
-        (templateId == listIterMutValTid) or
-        (templateId == staticIterTid) or
-        (templateId == setIterTid) or
-        (templateId == setIterValTid) or
-        (templateId == idSetIterTid) or
-        (templateId == idMapItemIterRTid) or
-        (templateId == idMapItemIterVTid) or
-        (templateId == mapKeyIterTid) or
-        (templateId == mapItemIterTid) or
-        (templateId == mapKeyIterRVTid) or
-        (templateId == mapKeyIterVRTid) or
-        (templateId == mapKeyIterVVTid) or
-        (templateId == mapItemIterRVTid) or
-        (templateId == mapItemIterVRTid) or
-        (templateId == mapItemIterVVTid)
-    )
-    isColl: isIter
-    if templateId == listTid then isColl = true
-    if templateId == listValTid then isColl = true
-    if templateId == listViewTid then isColl = true
-    if templateId == listViewValTid then isColl = true
-    if templateId == spanValTid then isColl = true
-    if templateId == setTid then isColl = true
-    if templateId == setValTid then isColl = true
-    if templateId == mapTid then isColl = true
-    if templateId == mapRVTid then isColl = true
-    if templateId == mapVRTid then isColl = true
-    if templateId == mapVVTid then isColl = true
-    if templateId == idMapRTid then isColl = true
-    if templateId == idMapVTid then isColl = true
-    if templateId == idSetTid then isColl = true
-    if templateId == idMapEntryRTid then isColl = true
-    if templateId == idMapEntryVTid then isColl = true
-    if templateId == mapEntryTid then isColl = true
-    if templateId == mapEntryRVTid then isColl = true
-    if templateId == mapEntryVRTid then isColl = true
-    if templateId == mapEntryVVTid then isColl = true
-    if templateId == strTid then isColl = true
-    if templateId == arrayTid then isColl = true
+    nm: templateNameId :st :templateId
+    isIter: isIterFamilyName :nm
+    if isIter.not when (isCollectionFamilyName :nm).not then {
+        iterOut.append false
+        return false
+    }
+    if templateId != (stdTidRo :ast :st wk: nm) then {
+        iterOut.append false
+        return false
+    }
     iterOut.append isIter
-    return isColl
+    return true
+}
+
+# templateNameId -- the name a template is declared with; 0 for none
+templateNameId: function {st: zenv.ZSymbolTable.view templateId: ztypes.tid} out zast.nameid is {
+    td: declOfTypeId :st tid: templateId
+    if td.isZero then return zast.nameid
+    return (declNameIdOf :st declId: td)
+}
+
+# isIterFamilyName -- whether `nm` names one of the builtin iterator families
+isIterFamilyName: function {nm: zast.nameid} out bool is {
+    if (
+        (nm == zast.wellKnown.slot.tyListIter) or (nm == zast.wellKnown.slot.tyListIterVal)
+    ) then return true
+    if (
+        (nm == zast.wellKnown.slot.tyListIterMut) or (nm == zast.wellKnown.slot.tyListIterMutVal)
+    ) then return true
+    if (
+        (nm == zast.wellKnown.slot.tyStaticIter) or (nm == zast.wellKnown.slot.tySetIter)
+    ) then return true
+    if (
+        (nm == zast.wellKnown.slot.tySetIterVal) or (nm == zast.wellKnown.slot.tyIdSetIter)
+    ) then return true
+    if (
+        (nm == zast.wellKnown.slot.tyIdMapItemIterR) or (nm == zast.wellKnown.slot.tyIdMapItemIterV)
+    ) then return true
+    if (
+        (nm == zast.wellKnown.slot.tyMapKeyIter) or (nm == zast.wellKnown.slot.tyMapItemIter)
+    ) then return true
+    if (
+        (nm == zast.wellKnown.slot.tyMapKeyIterRV) or (nm == zast.wellKnown.slot.tyMapKeyIterVR)
+    ) then return true
+    if (
+        (nm == zast.wellKnown.slot.tyMapKeyIterVV) or (nm == zast.wellKnown.slot.tyMapItemIterRV)
+    ) then return true
+    return (
+        (nm == zast.wellKnown.slot.tyMapItemIterVR) or (nm == zast.wellKnown.slot.tyMapItemIterVV)
+    )
+}
+
+# isCollectionFamilyName -- whether `nm` names one of the builtin collection
+# families that is not an iterator: the lists and their views, the span, the
+# sets, maps and id maps and their entries, str and Array
+isCollectionFamilyName: function {nm: zast.nameid} out bool is {
+    if (
+        (nm == zast.wellKnown.slot.tyListRef) or (nm == zast.wellKnown.slot.tyListVal)
+    ) then return true
+    if (
+        (nm == zast.wellKnown.slot.tyListView) or (nm == zast.wellKnown.slot.tyListViewVal)
+    ) then return true
+    if (
+        (nm == zast.wellKnown.slot.tySpanVal) or (nm == zast.wellKnown.slot.tySetRef)
+    ) then return true
+    if (nm == zast.wellKnown.slot.tySetVal) or (nm == zast.wellKnown.slot.tyMapRR) then return true
+    if (nm == zast.wellKnown.slot.tyMapRV) or (nm == zast.wellKnown.slot.tyMapVR) then return true
+    if (nm == zast.wellKnown.slot.tyMapVV) or (nm == zast.wellKnown.slot.tyIdMapR) then return true
+    if (nm == zast.wellKnown.slot.tyIdMapV) or (nm == zast.wellKnown.slot.tyIdSet) then return true
+    if (
+        (nm == zast.wellKnown.slot.tyIdMapEntryR) or (nm == zast.wellKnown.slot.tyIdMapEntryV)
+    ) then return true
+    if (
+        (nm == zast.wellKnown.slot.tyMapEntry) or (nm == zast.wellKnown.slot.tyMapEntryRV)
+    ) then return true
+    if (
+        (nm == zast.wellKnown.slot.tyMapEntryVR) or (nm == zast.wellKnown.slot.tyMapEntryVV)
+    ) then return true
+    return (nm == zast.wellKnown.slot.tyStr) or (nm == zast.wellKnown.slot.tyArray)
 }
 
 # mintCollectionCreate -- the `create` child a ListView, Set or iterator
