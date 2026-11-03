@@ -1,0 +1,85 @@
+# zemitrows -- what the C emitter's written C demands of the native rows. A
+# demand is a pair of ids -- the unit whose rows answer it and the name it is
+# demanded by -- interned in the emitter's own vocabulary, never the program's
+# names, and found through an index rather than a scan. zemitterc records a
+# demand where the C it writes calls a row's C, and reads the set when it
+# decides which rows to write and under which configurations.
+
+public: unit {
+    :demandkey
+    :DemandSet
+}
+
+# demandkey -- one demand: the unit whose rows answer it (`owner`) and the name it is
+# demanded by -- a member, a helper's `@name`, `uses_<Type>`, `destroys_<Type>`
+# or the unit itself, `@unit` -- each an id of DemandSet.names
+demandkey: record {
+    owner: zast.nameid
+    name: zast.nameid
+}
+
+# DemandSet -- the demands met so far, in the order met, and the
+# configurations each holds in: an `always` demand holds in every one; any other
+# holds where one of its terms does, a term being a mask of the foundation's
+# conditions (zemitterc's Cond)
+DemandSet: class {
+    # the unit and demand names, each interned once
+    names: zast.StringPool
+    # the demands, in the order met
+    keys: ListVal demandkey
+    # each demand's place in `keys`, plus one
+    index: (MapVV demandkey v: u64)
+    # per demand: it holds in every configuration
+    always: ListVal bool
+    # the terms of the demands that do not: the demand's place, and the mask
+    termDemand: ListVal u64
+    termMask: ListVal u64
+} as {
+    # create -- no demand yet
+    create: function {} out this is {
+        return (
+            meta.create
+            names: zast.StringPool.createEmpty
+            keys: ListVal demandkey
+            index: (MapVV demandkey v: u64)
+            always: ListVal bool
+            termDemand: ListVal u64
+            termMask: ListVal u64
+        )
+    }
+
+    # keyOf -- the key of `name` demanded of unit `owner`, interning both names
+    keyOf: function {:this owner: StringView name: StringView} out demandkey is {
+        return (demandkey owner: (this.names.intern s: owner) name: (this.names.intern s: name))
+    }
+
+    # at -- the place of demand `key` plus one; 0 when it was not demanded
+    at: function {t: this.view key: demandkey} out u64 is {
+        return ((t.index.get :key).or d: 0)
+    }
+
+    # atNamed -- `at` by the two names, read-only: a name never interned was
+    # never demanded
+    atNamed: function {t: this.view owner: StringView name: StringView} out u64 is {
+        u: t.names.find s: owner
+        if u.isZero then return 0
+        n: t.names.find s: name
+        if n.isZero then return 0
+        return (t.at key: (demandkey owner: u name: n))
+    }
+
+    # add -- demand `key`, met for the first time, holding in every
+    # configuration or (not `always`) in none until its terms are added
+    add: function {:this key: demandkey always: bool} is {
+        this.keys.append key
+        this.always.append always
+        this.index.set :key value: this.keys.length
+    }
+
+    # nameText -- a unit or demand name as written, which a row's table is still
+    # keyed by
+    nameText: function {t: this.view id: zast.nameid} outx StringView is {
+        got: t.names.texts.get i: id
+        return got.stringView
+    }
+}
