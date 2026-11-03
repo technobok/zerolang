@@ -11,10 +11,12 @@ public: unit {
     :demandkey
     :DemandSet
     :rtid
+    :svcall
     :rowneed
     :rowname
     :shapekey
     :nativerow
+    :blankRow
     :RowTable
 }
 
@@ -112,6 +114,21 @@ rtid: typedef u64 as {
     zero: rtid 0
 }
 
+# svcall -- how a call of a StringView native member is emitted: the `call`
+# of the member's row
+svcall: variant {
+    # no `call` choice: the member takes the general paths
+    none: null
+    # the receiver and arguments by pointer, a plain result
+    simple: null
+    # an argument, an optionval / Option result
+    arg: null
+    # a resultval result
+    parse: null
+    # no arguments; the fragment is registered where the call is written
+    noarg: null
+} as { tag: u8.tag }
+
 # rowneed -- one of a row's needs, parsed once: the demand it adds where the
 # row's C is written, and the bit of the foundation condition it holds under
 # besides the row's own (0 for none)
@@ -157,9 +174,29 @@ nativerow: record {
     # once read, the needs: RowTable.needs[needFrom .. needTo]
     needFrom: u64
     needTo: u64
-    # the row's place in zemitterc's fragment lists plus one; zero for a row
-    # with no fragment
-    frag: u64
+    # the row's C is its fragments' or, for a piece, the piece's: written when
+    # a demand it answers fires (zemitterc's rowDemandFired), not filled at a
+    # call
+    fragment: bool
+    # a fragment row's demands, any of which fires it:
+    # RowTable.demandKeys[demandFrom .. demandTo]
+    demandFrom: u64
+    demandTo: u64
+    # a `uses_<Type>` or `destroys_<Type>` demand's type: its name, an id of
+    # DemandSet.names (zero for none), and the type it names once bound
+    typeName: zast.nameid
+    typeTid: ztypes.tid
+    # the type demand is `destroys_<Type>`: the row fires where written C calls
+    # the type's destructor, not where it spells the type
+    destroys: bool
+    # the fragments' text names, comma-separated: RowTable.fragTexts' place
+    # plus one; zero for none (a piece is written by the text holding it)
+    fragText: u64
+    # the template members of other instances the fragments call (`members`,
+    # comma-separated): RowTable.memberTexts' place plus one; zero for none
+    members: u64
+    # on a StringView member's row, how a call of the member is emitted
+    call: svcall
     # on a constant-operand variant, the argument positions it requires to be
     # constant: bit k for position k + 1, the receiver excluded; zero on a
     # plain row
@@ -180,6 +217,18 @@ RowTable: class {
     rows: ListVal nativerow
     # every row's needs read so far, each row's a span
     needs: ListVal rowneed
+    # every fragment row's demands, each row's a span
+    demandKeys: ListVal demandkey
+    # the fragment rows, in the order registered: the order their C is
+    # written in
+    fragRows: ListVal u64
+    # the fragment rows' fragment names and member texts (nativerow.fragText,
+    # nativerow.members)
+    fragTexts: List String
+    memberTexts: List String
+    # the helper rows (`@name`) of each file or foundation group, by the
+    # demand naming them: the group or unit and the `@name`
+    helpers: (MapVV demandkey v: u64)
     # the needs of the rows, as the files write them, until read
     needTexts: List String
     # the rows by key, those whose names the program spells
@@ -205,6 +254,11 @@ RowTable: class {
             meta.create
             rows: ListVal nativerow
             needs: ListVal rowneed
+            demandKeys: ListVal demandkey
+            fragRows: ListVal u64
+            fragTexts: List String
+            memberTexts: List String
+            helpers: (MapVV demandkey v: u64)
             needTexts: List String
             byName: (MapVV rowname v: u64)
             constByName: (MapVV rowname v: u64)
@@ -213,23 +267,7 @@ RowTable: class {
             fileUnits: ListVal zast.nameid
             fileOf: (IdMapV ztypes.declid v: u64)
         )
-        (
-            t.rows.append
-            (
-                nativerow
-                owner: zast.nameid.zero
-                body: rtid.zero
-                via: zast.nameid.zero
-                needText: 0
-                needFrom: 0
-                needTo: 0
-                frag: 0
-                constMask: 0
-                value: false
-                byPointer: false
-                callsEquals: false
-            )
-        )
+        t.rows.append (blankRow owner: zast.nameid.zero)
         t.fileUnits.append zast.nameid.zero
         return t
     }
@@ -250,6 +288,11 @@ RowTable: class {
         return ((t.constByName.get key: n).or d: 0)
     }
 
+    # helperOf -- the helper row demanded as `k`; 0 for none
+    helperOf: function {t: this.view k: demandkey} out u64 is {
+        return ((t.helpers.get key: k).or d: 0)
+    }
+
     # ofShape -- the structural row keyed `k`; 0 for none
     ofShape: function {t: this.view k: shapekey} out u64 is {
         return ((t.shapes.get key: k).or d: 0)
@@ -266,4 +309,30 @@ RowTable: class {
     fileOfUnit: function {t: this.view ud: ztypes.declid} out u64 is {
         return ((t.fileOf.get key: ud).or d: 0)
     }
+}
+
+# blankRow -- a row of unit or group `owner` that carries nothing yet
+blankRow: function {owner: zast.nameid} out nativerow is {
+    return (
+        nativerow
+        :owner
+        body: rtid.zero
+        via: zast.nameid.zero
+        needText: 0
+        needFrom: 0
+        needTo: 0
+        fragment: false
+        demandFrom: 0
+        demandTo: 0
+        typeName: zast.nameid.zero
+        typeTid: ztypes.tid.zero
+        destroys: false
+        fragText: 0
+        members: 0
+        call: svcall.none
+        constMask: 0
+        value: false
+        byPointer: false
+        callsEquals: false
+    )
 }

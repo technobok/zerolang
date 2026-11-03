@@ -2432,152 +2432,142 @@ recordUnitOrder: function {ctx: Ctx order: StringView} is {
     }
 }
 
-# recordHeadFragment -- a table row's fragment: its `members=`, by the row it
-# becomes, then the row itself (recordFragmentRow)
-recordHeadFragment: function {ctx: Ctx h: NativeHead.view} is {
-    if h.members.length > 0 then ctx.fragMembers.set key: ctx.fragUnits.length value: h.members.copy
-    (
-        recordFragmentRow
-        :ctx
-        key: h.key.stringView
-        frag: h.frag.stringView
-        dem: h.dem.stringView
-        need: h.need.stringView
+# fragmentRow -- row `r` as a fragment row keyed `key` (its path), its
+# halves split here and nowhere else. The unit is the path's first segment
+# with the `@` that marks a path outside the declaration space stripped; the
+# demand is `dem` or the path's last segment; the type name is the demand's
+# `uses_` or `destroys_` suffix when it has one. `frag` names its fragments,
+# "" for a piece; `members` the template members they call.
+fragmentRow: function {
+    ctx: Ctx
+    r: zemitrows.nativerow
+    key: StringView
+    frag: StringView
+    dem: StringView
+    members: StringView
+} out zemitrows.nativerow is {
+    fr: r
+    fr.fragment = true
+    # the unit: the path's first segment, its `@` stripped; the whole path when
+    # it has no `.`
+    uFrom: u64
+    uTo: key.length
+    fd: key.indexOf needle: "."
+    match (
+        fd
+    ) case some then {
+        uTo = fd
+        if key.startsWith "@" then uFrom = 1
+    } case none then null
+    fr.owner = ctx.demands.names.intern s: (key.substring from: uFrom to: uTo)
+    if dem.length > 0 then return (fragmentDemands :ctx r: fr dm: dem :frag :members)
+    dFrom: u64
+    ld: key.lastIndexOf needle: "."
+    match (
+        ld
+    ) case some then {
+        dFrom = ld + 1
+    } case none then null
+    return (fragmentDemands :ctx r: fr dm: (key.substring from: dFrom to: key.length) :frag :members
     )
 }
 
-# recordFragmentRow -- a fragment-backed row: its path, then the row's own
-# halves, split here and nowhere else. The unit is the path's first segment
-# with the `@` that marks a path outside the declaration space stripped; the
-# demand is `demand=` or the path's last segment; the type name is the
-# demand's `uses_` suffix when it has one. Neither half starts as a copy of
-# the key: both are assigned on every path below, so a copy here would be
-# written and never read -- one per fragment row, which was the whole of
-# `make perf-elision`'s pool.
-recordFragmentRow: function {
-    ctx: Ctx key: StringView frag: StringView dem: StringView need: StringView
-} is {
-    if need.length > 0 then ctx.fragNeeds.set key: ctx.fragUnits.length value: need.string
-    fp: key.string
-    ctx.nativeFragPaths.set key: fp value: ctx.fragUnits.length + 1
-    du: String
-    {
-        fd: key.indexOf needle: "."
-        match (
-            fd
-        ) case some then {
-            hd: key.substring from: 0 to: fd
-            so: hd.stripPrefix p: "@"
-            match (
-                so
-            ) case some then {
-                du = so.string
-            } case none then {
-                du = hd.string
-            }
-        } case none then {
-            # no `.` at all: the whole path is the unit
-            du = key.string
-        }
-    }
-    dm: String
-    if dem.length == 0 then {
-        ld: key.lastIndexOf needle: "."
-        match (
-            ld
-        ) case some then {
-            dm = (key.substring from: ld + 1 to: key.length).string
-        } case none then {
-            dm = key.string
-        }
-    } else {
-        dm = dem.string
-    }
+# fragmentDemands -- fragmentRow's fragment row `r` with its demands `dm`
+# (comma-separated), its type demand, its fragments and members
+fragmentDemands: function {
+    ctx: Ctx
+    r: zemitrows.nativerow
+    dm: StringView
+    frag: StringView
+    members: StringView
+} out zemitrows.nativerow is {
+    fr: r
     # `uses_<Type>` first: the row fires when written C spells the type, and on
     # any member the rest of the list names. `destroys_<Type>` fires when
     # written C calls the type's destructor.
-    tn: String
-    with uo: (dm.stringView.stripPrefix p: "uses_") do match (
+    with uo: (dm.stripPrefix p: "uses_") do match (
         uo
     ) case some then {
-        tn = (uo.substring from: 0 to: ((uo.indexOf needle: ",").or d: uo.length)).string
+        fr.typeName = (
+            ctx.demands.names.intern
+            s: (uo.substring from: 0 to: ((uo.indexOf needle: ",").or d: uo.length))
+        )
     } case none then null
-    with dso: (dm.stringView.stripPrefix p: "destroys_") do match (
+    with dso: (dm.stripPrefix p: "destroys_") do match (
         dso
     ) case some then {
-        tn = (dso.substring from: 0 to: ((dso.indexOf needle: ",").or d: dso.length)).string
-        ctx.fragDestroyRows.add item: ctx.fragUnits.length
+        fr.typeName = (
+            ctx.demands.names.intern
+            s: (dso.substring from: 0 to: ((dso.indexOf needle: ",").or d: dso.length))
+        )
+        fr.destroys = true
     } case none then null
-    ctx.fragDemandFrom.append ctx.fragDemands.length
-    for each w: (dm.stringView.split sep: ",") loop {
-        if w.length > 0 then ctx.fragDemands.append (ctx.demands.keyOf owner: du.stringView name: w)
+    fr.demandFrom = ctx.rows.demandKeys.length
+    for each w: (dm.split sep: ",") loop {
+        if w.length > 0 then ctx.rows.demandKeys.append (
+            zemitrows.demandkey
+            owner: fr.owner
+            name: (ctx.demands.names.intern s: w)
+        )
     }
-    ctx.fragUnits.append from: du
-    ctx.fragMembs.append from: dm
-    ctx.fragNames.append from: frag.string
-    ctx.fragTypeNames.append from: tn
+    fr.demandTo = ctx.rows.demandKeys.length
+    if frag.length > 0 then {
+        ctx.rows.fragTexts.append from: frag.string
+        fr.fragText = ctx.rows.fragTexts.length
+    }
+    if members.length > 0 then {
+        ctx.rows.memberTexts.append from: members.string
+        fr.members = ctx.rows.memberTexts.length
+    }
+    return fr
 }
 
-# recordRowBodies -- the row's body, deferred, and its fragment's pulls (by
-# the demands that fire it). The body's id, a plain row's or a
-# constant-operand variant's; zero for none
-recordRowBodies: function {ctx: Ctx h: NativeHead.view body: StringView} out rtid is {
-    bid: rtid
-    if body.length > 0 then bid = ctx.rt.defer text: body
-    if h.pulls.length > 0 when h.frag.length > 0 then recordRowPulls :ctx pulls: h.pulls.stringView
-    return bid
+# appendFragmentRow -- fragment row `r`, keyed `path`, into the row table and
+# its fragment rows; its place
+appendFragmentRow: function {ctx: Ctx r: zemitrows.nativerow path: StringView} out u64 is {
+    ctx.rows.rows.append r
+    row: ctx.rows.rows.length - 1
+    ctx.rows.fragRows.append row
+    ctx.nativeFragPaths.set key: path.string value: row
+    return row
 }
 
-# svcall -- how a call of a StringView native member is emitted: the `call`
-# of the member's row
-svcall: variant {
-    # no `call=` row: the member takes the general paths
-    none: null
-    # the receiver and arguments by pointer, a plain result
-    simple: null
-    # an argument, an optionval / Option result
-    arg: null
-    # a resultval result
-    parse: null
-    # no arguments; the fragment is registered where the call is written
-    noarg: null
-} as { tag: u8.tag }
+# rowNeedText -- a row's needs as its file writes them, kept to be read on
+# first use (readRowNeeds): RowTable.needTexts' place plus one
+rowNeedText: function {ctx: Ctx needs: StringView} out u64 is {
+    ctx.rows.needTexts.append from: needs.string
+    return ctx.rows.needTexts.length
+}
 
-# svCallOf -- how a call of the StringView native named `nameId` is emitted,
-# from its row's `call` (svcall.none when its row has none)
-svCallOf: function {ctx: Ctx.view nameId: zast.nameid} out svcall is {
-    k: ctx.svCalls.get key: nameId
-    match (
-        k
-    ) case some then {
-        return k
-    } case none then null
+# svcall -- how a call of a StringView native member is emitted
+# (zemitrows.svcall: the `call` of the member's row)
+svcall: zemitrows.svcall
+
+# svCallOf -- how a call of the StringView native named `nameId` is emitted:
+# its row's `call` (svcall.none when it has no row, or the row says none)
+svCallOf: function {
+    symtab: zenv.ZSymbolTable.view ctx: Ctx.view nameId: zast.nameid
+} out svcall is {
+    row: ctx.rows.ofName n: (rowNameOfMember :symtab :ctx owner: ctx.svTid name: nameId)
+    if row == 0 then return svcall.none
+    return (ctx.rows.rows.get i: row).call
+}
+
+# callKindOf -- a row's `call` word (servedCallWord, callWordOf) as its kind,
+# by the word's id in this program's pool; svcall.none for none
+callKindOf: function {ast: Ast.view call: StringView} out svcall is {
+    if call.length == 0 then return svcall.none
+    kid: zast.poolFind pool: ast.names text: call
+    if kid == zast.wellKnown.slot.wkSvSimple then return svcall.simple
+    if kid == zast.wellKnown.slot.wkSvArg then return svcall.arg
+    if kid == zast.wellKnown.slot.wkSvParse then return svcall.parse
+    if kid == zast.wellKnown.slot.wkSvNoArg then return svcall.noarg
     return svcall.none
 }
 
-# recordSvCall -- a `system.StringView.<m> call=<k>` row: <m>'s kind, keyed by
-# its name id in this program's pool. The kind word is interned too and read
-# by id. A row of any other type, or an unknown kind, records nothing.
-recordSvCall: function {ctx: Ctx ast: Ast.view key: StringView call: StringView} is {
-    mo: key.stripPrefix p: "system.StringView."
-    match (
-        mo
-    ) case some then {
-        # a member this program never names is one it never calls
-        mid: zast.poolFind pool: ast.names text: mo
-        if mid.isZero then return
-        kid: zast.poolFind pool: ast.names text: call
-        if kid == zast.wellKnown.slot.wkSvSimple then ctx.svCalls.set key: mid value: svcall.simple
-        if kid == zast.wellKnown.slot.wkSvArg then ctx.svCalls.set key: mid value: svcall.arg
-        if kid == zast.wellKnown.slot.wkSvParse then ctx.svCalls.set key: mid value: svcall.parse
-        if kid == zast.wellKnown.slot.wkSvNoArg then ctx.svCalls.set key: mid value: svcall.noarg
-    } case none then null
-}
-
-# recordNativeRow -- one row of `owner`'s file, keyed `key` there: its path,
-# then the member filter it may feed, the fragment halves when it is
-# fragment-backed, and its tables; a row that is not a constant-operand variant
-# joins the row table (RowTable)
+# recordNativeRow -- one row of `owner`'s file, keyed `key` there, into the
+# row table: its body deferred, its flags, its fragment halves when it is
+# fragment-backed (fragmentRow), and the indexes it is found by
 recordNativeRow: function {
     ctx: Ctx
     ast: Ast.view
@@ -2592,44 +2582,43 @@ recordNativeRow: function {
     key: StringView
     body: StringView
 } is {
-    if h.call.length > 0 then recordSvCall :ctx :ast key: h.key.stringView call: h.call.stringView
-    frag: u64
+    r: zemitrows.blankRow :owner
+    if body.length > 0 then r.body = ctx.rt.defer text: body
+    r.constMask = constMaskOf positions: h.cst.stringView
+    if r.constMask == 0 when owner.isZero.not when h.need.length > 0 then {
+        r.needText = rowNeedText :ctx needs: h.need.stringView
+    }
+    if h.via.length > 0 then r.via = ctx.demands.names.intern s: h.via.stringView
+    r.value = h.value
+    r.byPointer = h.ptr
+    r.callsEquals = h.eq
+    r.call = callKindOf :ast call: h.call.stringView
+    rid: u64
     if h.frag.length > 0 then {
-        frag = ctx.fragUnits.length + 1
-        recordHeadFragment :ctx :h
-    }
-    bid: recordRowBodies :ctx :h :body
-    mask: constMaskOf positions: h.cst.stringView
-    nt: u64
-    if mask == 0 when owner.isZero.not when h.need.length > 0 then {
-        ctx.rows.needTexts.append from: h.need.copy
-        nt = ctx.rows.needTexts.length
-    }
-    vi: zast.nameid
-    if h.via.length > 0 then vi = ctx.demands.names.intern s: h.via.stringView
-    (
-        ctx.rows.rows.append
-        (
-            zemitrows.nativerow
-            :owner
-            body: bid
-            via: vi
-            needText: nt
-            needFrom: 0
-            needTo: 0
-            :frag
-            constMask: mask
-            value: h.value
-            byPointer: h.ptr
-            callsEquals: h.eq
+        r = (
+            fragmentRow
+            :ctx
+            :r
+            key: h.key.stringView
+            frag: h.frag.stringView
+            dem: h.dem.stringView
+            members: h.members.stringView
         )
-    )
-    rid: ctx.rows.rows.length - 1
+        rid = appendFragmentRow :ctx :r path: h.key.stringView
+        if h.pulls.length > 0 then recordRowPulls :ctx row: rid pulls: h.pulls.stringView
+    } else {
+        ctx.rows.rows.append r
+        rid = ctx.rows.rows.length - 1
+    }
     if owner.isZero then {
         shapeRow :ctx :ast :key row: rid
-    } else if impl > 0 then {
-        nameRow :ctx :ast :impl :key row: rid constant: mask != 0
+        return
     }
+    if key.startsWith "@" then {
+        k: zemitrows.demandkey :owner name: (ctx.demands.names.intern s: key)
+        ctx.rows.helpers.set key: k value: rid
+    }
+    if impl > 0 then nameRow :ctx :ast :impl :key row: rid constant: r.constMask != 0
 }
 
 # constMaskOf -- a constant-operand variant's positions (`1`, `1,2`, ...) as
@@ -3964,8 +3953,8 @@ RowFacts: class {
     }
 }
 
-# nativeFragRow -- the fragment row that implements this path, as its index in
-# the parallel frag lists plus one; 0 when no fragment does
+# nativeFragRow -- the fragment row registered under path `path` (a piece's
+# marker head names its row by it); 0 when none is
 nativeFragRow: function {ctx: Ctx.view path: StringView} out u64 is {
     return ((ctx.nativeFragPaths.get key: path.asString).or d: 0)
 }
@@ -5321,53 +5310,24 @@ Ctx: class {
     nativeMarks: (MapVV textkey v: u64)
     # row 0 is the sentinel, no place
     marks: List NativeMark
-    # the StringView natives' call kinds (a row's `call`), by member name id
-    svCalls: (IdMapV zast.nameid v: svcall)
-    # the paths a FRAGMENT implements: a native whose C the runtime supplies
-    # under the `z_<unit>_<name>` convention, whoever declares it -- each to its
-    # row's index in the parallel frag lists, plus one (0 is no row)
+    # the fragment rows by the path they were registered under, which a
+    # piece's marker head names (rtRowPlan)
     nativeFragPaths: (MapRV String v: u64)
     # the rows, one table, each found by the declaration it implements
     # (rowNameOfFn, rowNameOfMember)
     rows: zemitrows.RowTable
-    # the fragment-backed rows, as the (unit, demand) PAIR each is reached by
-    # plus the fragments it needs. Parallel lists because the demand is a pair
-    # and stays one: nothing here joins the halves, and nothing splits them.
-    fragUnits: List String
     # the hoists that realise one of the checker's unnamed locals: the local's
     # name id by hoist name; flushing a hoist moves it onto the temporary it owes
     hoistTags: (MapRV String v: zast.nameid)
-    # the table rows already written: a unit whose types a function type's
+    # the fragment rows already written: a unit whose types a function type's
     # typedef spells is written ahead of the typedefs, and not again after
     rowsWritten: IdSet u64
-    # the fired rows whose `needs=` are registered (closeRowNeeds), and the
+    # the fired rows whose needs are registered (closeRowNeeds), and the
     # count of demands when that was last made whole
     rowsClosed: IdSet u64
     # the closed rows that hold in every configuration: their needs are final
     rowsAlwaysClosed: IdSet u64
     rowNeedsAt: u64
-    # the members fragments were emitted for
-    fragMembs: List String
-    # each fragment row's demands, parsed once: row i's are
-    # fragDemands[fragDemandFrom[i] .. fragDemandFrom[i + 1]]
-    fragDemands: ListVal zemitrows.demandkey
-    fragDemandFrom: ListVal u64
-    # their names, parallel to fragMembs
-    fragNames: List String
-    # a row whose demand is `uses_<Type>` is reached by that TYPE being
-    # constructed rather than by a member being called. The name the table
-    # spells, and the id it resolves to once the registry is built; 0 on every
-    # member-demanded row, which is nearly all of them.
-    fragTypeNames: List String
-    # their owning types, parallel again
-    fragTypeTids: ListVal ztypes.tid
-    # the rows whose type demand is `destroys_<Type>` instead: reached by
-    # written C calling the type's destructor (destroyUsed), not by the type
-    fragDestroyRows: IdSet u64
-    # the `needs=` of the fragment rows that have one, by row: registered when
-    # the row is written, so a helper row loaded by its demand gets what its
-    # body calls as a called row does (the prelude is written after them all)
-    fragNeeds: (IdMapR u64 V: String)
     # the rows a file writes in place, which no unit walk writes: every piece,
     # and the row whose fragment the header writes (z_panic's)
     rowsInPlace: IdSet u64
@@ -5384,8 +5344,6 @@ Ctx: class {
     memberAlways: IdSet u64
     # the template members' vocabulary
     memberWords: zast.Vocab
-    # the `members=` of the fragment rows that have one, by row
-    fragMembers: (IdMapR u64 V: String)
     # the members an instance was written without: spelling one after is late
     membersLeftOut: IdSet u64
     # the units the rows belong to, each once, in the order the table first
@@ -6790,15 +6748,14 @@ needsAddPullsOf: function {ctx: Ctx key: zemitrows.demandkey cond: Cond.view} is
     if pl.length > 0 then needsAddPullsIn :ctx pulls: pl.stringView :cond
 }
 
-# recordRowPulls -- the pulls of the fragment row just registered, filed under
-# each demand that fires it: a method's row answers its demand word
+# recordRowPulls -- the pulls of fragment row `row`, filed under each demand
+# that fires it: a method's row answers its demand word
 # (`file_pollReadable`), a helper its `@name`, not its key
-recordRowPulls: function {ctx: Ctx pulls: StringView} is {
-    i: ctx.fragUnits.length - 1
-    k: ctx.fragDemandFrom.get :i
-    to: rowDemandTo :ctx :i
-    for k < to loop {
-        key: ctx.fragDemands.get i: k
+recordRowPulls: function {ctx: Ctx row: u64 pulls: StringView} is {
+    r: ctx.rows.rows.get i: row
+    k: r.demandFrom
+    for k < r.demandTo loop {
+        key: ctx.rows.demandKeys.get i: k
         cur: String
         {
             got: ctx.pullsByDemand.get :key
@@ -7776,7 +7733,7 @@ emitSvParseCall: function {
         isStringyTid
         :ctx
         tid: btid
-    ) when (svCallOf :ctx nameId: mnId).parse then {
+    ) when (svCallOf :symtab :ctx nameId: mnId).parse then {
         recvF: bnvF
         bfp: svValueForm :ast :symtab :ctx expr: bnv isStr: btIsStr vid: dcbV facts: recvF
         needsAddM :ctx uname: "system" memb: mnv
@@ -7804,7 +7761,7 @@ emitSvArgNativeCall: function {
         isStringyTid
         :ctx
         tid: btid
-    ) when (svCallOf :ctx nameId: mnId).arg then {
+    ) when (svCallOf :symtab :ctx nameId: mnId).arg then {
         needsAddM :ctx uname: "system" memb: mnv
         # the argument is built once, as the native takes it
         if mnId == zast.wellKnown.slot.wkByteAt then {
@@ -7888,7 +7845,7 @@ emitSvSimpleCall: function {
     facts: cfacts.borrow
 } out String is {
     svRecvOk: (btid == ctx.svTid) or btIsStr
-    if svRecvOk when (svCallOf :ctx nameId: mnId).simple then {
+    if svRecvOk when (svCallOf :symtab :ctx nameId: mnId).simple then {
         needsAddM :ctx uname: "system" memb: mnv
         # a String receiver projects to a view value, like the
         # substring/parse legs (a StringView receiver is one already)
@@ -7953,7 +7910,7 @@ emitSvNativeInfix: function {
     facts: cfacts.borrow
 } out String is {
     if (isStringOrViewLaid :ctx tid: owner).not then return "".string
-    if (svCallOf :ctx nameId: opId).simple.not then return "".string
+    if (svCallOf :symtab :ctx nameId: opId).simple.not then return "".string
     needsAddM :ctx uname: "system" memb: op
     ord: orderBegin :ctx slots: 2
     mk: pendingHoistMark :ctx
@@ -19471,7 +19428,7 @@ emitNestedMonoMethodBase: function {
                 if (symtab.reg.typetypeOf typeId: nmco) == ztypes.ztypetype.functionType then {
                     # no-arg SV natives on a nested stringy base: the
                     # canonical native symbol, not the method-id cname
-                    if (svCallOf :ctx nameId: mnId).noarg when (
+                    if (svCallOf :symtab :ctx nameId: mnId).noarg when (
                         isStringyTid
                         :ctx
                         tid: nlid
@@ -19677,7 +19634,7 @@ nestedStringMember: function {
         )
         if nsm.length > 0 then return nsm
     }
-    if (isStringyTid :ctx tid: nptT) when (svCallOf :ctx nameId: mnId).parse then {
+    if (isStringyTid :ctx tid: nptT) when (svCallOf :symtab :ctx nameId: mnId).parse then {
         needsAddM :ctx uname: "system" memb: mn2
         pnvF: cfacts
         stateFacts facts: pnvF from: baseF
@@ -20133,7 +20090,7 @@ methodAutoCallRead: function {
     facts: cfacts.borrow
 } out String is {
     viewNative: (isStringyTid :ctx tid: bstamp) or (viewLaidNative :symtab :ctx tid: bstamp :mnId)
-    if (svCallOf :ctx nameId: mnId).noarg when viewNative then {
+    if (svCallOf :symtab :ctx nameId: mnId).noarg when viewNative then {
         needsAddM :ctx uname: "system" memb: mn2
         svfaF: bn2F
         svfa: (
@@ -20958,6 +20915,7 @@ dottedTypeConstRead: function {
 # parse members, and the simple view natives, each a direct field or call on the
 # view value rather than a dispatch.
 emitSvAtomBase: function {
+    symtab: zenv.ZSymbolTable.view
     ctx: Ctx
     bn2: StringView
     bn2F: cfacts
@@ -21010,7 +20968,7 @@ emitSvAtomBase: function {
             needsAddM :ctx uname: "system" memb: "parseF128"
             return (stating :facts from: callFacts text: "\{ctx.svC}_parseF128(&\{bn2})")
         }
-        if (svCallOf :ctx nameId: mnId).simple then {
+        if (svCallOf :symtab :ctx nameId: mnId).simple then {
             # a no-paren method reference auto-calls
             needsAddM :ctx uname: "system" memb: mn2
             return (stating :facts from: callFacts text: "\{ctx.svC}_\{mn2}(&\{bn2})")
@@ -21116,7 +21074,7 @@ emitDottedAtomBase: function {
     bareTid: chaseStrTypedef :symtab :ctx tid: (stampIdOf :symtab nid: bnid2)
     bareSv: viewLaidNative :symtab :ctx tid: bareTid :mnId
     bareStr: bareTid == ctx.strTid
-    if bareStr when (svCallOf :ctx nameId: mnId).noarg then {
+    if bareStr when (svCallOf :symtab :ctx nameId: mnId).noarg then {
         # String receivers project to a view for the no-arg SV
         # natives, mirroring the chained/auto-call legs
         needsAddM :ctx uname: "system" memb: mn2
@@ -21130,7 +21088,7 @@ emitDottedAtomBase: function {
     if bareSv when childNameId == zast.wellKnown.slot.wkStringView then {
         return (stating :facts from: bn2F text: bn2.string)
     }
-    eSv: emitSvAtomBase :ctx :bn2 :bn2F :mn2 :mnId :bn2v :bareSv :facts
+    eSv: emitSvAtomBase :symtab :ctx :bn2 :bn2F :mn2 :mnId :bn2v :bareSv :facts
     if eSv.length > 0 then return eSv
     if bareTid == ctx.strTid when mnId == zast.wellKnown.slot.wkLength then {
         sacc3: ".".string
@@ -39129,44 +39087,52 @@ loadPieces: function {ctx: Ctx} is {
     loadFixedPieces :ctx name: "start"
     # z_panic's fragment, the one the table chose (a threaded program's
     # differs): written in the header's slot, a piece at a time
-    pr: nativeFragRow :ctx path: "@prelude.panic"
+    pr: panicRow :ctx
     if pr > 0 then {
-        ctx.rowsInPlace.add item: pr - 1
-        pf: (ctx.fragNames.get i: pr - 1).copy
+        ctx.rowsInPlace.add item: pr
+        pf: rowFragText :ctx row: pr
         pp: fragKey :ctx name: pf.stringView
         loadPiecesOf :ctx key: pp
     }
     # the prelude rows' fragments, and a unit's own (the rows answering its
     # `@unit`, which hold what every member of it shares): one holding pieces
     # is written by its row, a piece at a time (ioFrag)
-    n: ctx.fragUnits.length
+    prelude: ctx.demands.names.find s: "prelude"
+    n: ctx.rows.fragRows.length
     i: u64
     for i < n loop {
-        hosts: false
-        {
-            u: ctx.fragUnits.get :i
-            hosts = (ctx.nativeWords.slotOf text: u.stringView) == nativeWord.slot.unitPrelude
-            if hosts.not then hosts = answersUnit :ctx dem: (ctx.fragMembs.get :i).stringView
-        }
-        if hosts when (ctx.rowsInPlace.has item: i).not then {
-            fl: (ctx.fragNames.get :i).copy
+        row: ctx.rows.fragRows.get :i
+        i = i + 1
+        hosts: (ctx.rows.rows.get i: row).owner == prelude
+        if hosts.not then hosts = answersUnit :ctx :row
+        if hosts when (ctx.rowsInPlace.has item: row).not then {
+            fl: rowFragText :ctx :row
             for each fr: (fl.stringView.split sep: ",") loop {
                 if fr.length > 0 then loadFragPieces :ctx frag: fr
             }
         }
-        i = i + 1
     }
 }
 
-# answersUnit -- a row's demand list `dem` names its unit's `@unit`: the row
-# holds what the unit's members share, and its fragment may hold pieces.
-answersUnit: function {ctx: Ctx.view dem: StringView} out bool is {
-    # a single word is the common row: asked whole, nothing is split
-    if (dem.contains needle: ",").not then return (
-        (ctx.nativeWords.slotOf text: dem) == nativeWord.slot.unitDemand
-    )
-    for each w: (dem.split sep: ",") loop {
-        if (ctx.nativeWords.slotOf text: w) == nativeWord.slot.unitDemand then return true
+# panicRow -- the prelude's `@panic` row, whose fragment is z_panic's; 0 when
+# the prelude has none
+panicRow: function {ctx: Ctx.view} out u64 is {
+    p: ctx.demands.names.find s: "prelude"
+    n: ctx.demands.names.find s: "@panic"
+    if p.isZero or n.isZero then return 0
+    return (ctx.rows.helperOf k: (zemitrows.demandkey owner: p name: n))
+}
+
+# answersUnit -- fragment row `row` answers its unit's `@unit`: it holds what
+# the unit's members share, and its fragment may hold pieces.
+answersUnit: function {ctx: Ctx.view row: u64} out bool is {
+    un: ctx.demands.names.find s: "@unit"
+    if un.isZero then return false
+    r: ctx.rows.rows.get i: row
+    k: r.demandFrom
+    for k < r.demandTo loop {
+        if (ctx.rows.demandKeys.get i: k).name == un then return true
+        k = k + 1
     }
     return false
 }
@@ -39209,15 +39175,17 @@ loadPiecesOf: function {ctx: Ctx key: textkey} is {
             return
         }
         h: NativeHead.fromMarker head: (tt.stringView.substring from: pc.headFrom to: pc.headTo)
-        ctx.rowsInPlace.add item: ctx.fragUnits.length
-        (
-            recordFragmentRow
+        r: (
+            fragmentRow
             :ctx
+            r: (zemitrows.blankRow owner: zast.nameid.zero)
             key: h.key.stringView
             frag: ""
             dem: h.dem.stringView
-            need: h.need.stringView
+            members: ""
         )
+        if h.need.length > 0 then r.needText = rowNeedText :ctx needs: h.need.stringView
+        ctx.rowsInPlace.add item: (appendFragmentRow :ctx :r path: h.key.stringView)
     }
 }
 
@@ -39458,10 +39426,10 @@ rtRowPlan: function {ctx: Ctx.view id: rtid} out RtPlan is {
         if pc.whole.not then break
         row: nativeFragRow :ctx path: (text.substring from: pc.headFrom to: pc.nameTo)
         fired: false
-        if row > 0 when (rowDemandFired :ctx i: row - 1) then fired = true
+        if row > 0 when (rowDemandFired :ctx :row) then fired = true
         plan.kept.append fired
-        if fired when (rowAlways :ctx i: row - 1).not then {
-            plan.conds.append (rowCond :ctx i: row - 1)
+        if fired when (rowAlways :ctx :row).not then {
+            plan.conds.append (rowCond :ctx :row)
         } else {
             plan.conds.append condAlways
         }
@@ -40272,23 +40240,13 @@ emitC: function {
         :markNatives
         nativeMarks: (MapVV textkey v: u64)
         marks: List NativeMark
-        svCalls: (IdMapV zast.nameid v: svcall)
         nativeFragPaths: (MapRV String v: u64)
         rows: zemitrows.RowTable.create
-        fragUnits: List String
         hoistTags: (MapRV String v: zast.nameid)
         rowsWritten: IdSet u64
         rowsClosed: IdSet u64
         rowsAlwaysClosed: IdSet u64
         rowNeedsAt: 0
-        fragMembs: List String
-        fragDemands: ListVal zemitrows.demandkey
-        fragDemandFrom: ListVal u64
-        fragNames: List String
-        fragTypeNames: List String
-        fragTypeTids: ListVal ztypes.tid
-        fragDestroyRows: IdSet u64
-        fragNeeds: (IdMapR u64 V: String)
         rowsInPlace: IdSet u64
         piecedFrags: Set String
         memberUses: IdSet u64
@@ -40296,7 +40254,6 @@ emitC: function {
         memberCondMask: ListVal u64
         memberAlways: IdSet u64
         memberWords: (zast.Vocab.create block: memberWord)
-        fragMembers: (IdMapR u64 V: String)
         membersLeftOut: IdSet u64
         fragUnitDecls: ListVal ztypes.declid
         demandGatedTids: IdSet ztypes.tid
@@ -40476,9 +40433,9 @@ emitC: function {
         fnsBuf: fnsBuf.stringView
     )
     # z_panic's fragment, chosen by the table (a threaded program's differs)
-    pr: nativeFragRow :ctx path: "@prelude.panic"
+    pr: panicRow :ctx
     pf: String
-    if pr > 0 then pf = (ctx.fragNames.get i: pr - 1).copy
+    if pr > 0 then pf = rowFragText :ctx row: pr
     if pf.length == 0 then {
         (
             emitFail
@@ -43690,38 +43647,42 @@ declaresNative: function {
     return false
 }
 
-# bindFragTypeTids -- resolve each row's `uses_<Type>` demand to a type id.
-# Runs after buildDefUnitIndex so the defining unit is an id question too; a
-# name that resolves to nothing leaves 0, and the row keeps its member path.
-# The registry scan is the house pattern and runs once over the handful of
-# rows the table demand-types.
+# bindFragTypeTids -- resolve each fragment row's `uses_<Type>` /
+# `destroys_<Type>` demand to a type id. Runs after buildDefUnitIndex so the
+# defining unit is an id question too; a name that resolves to nothing leaves
+# 0, and the row keeps its member demands. The registry scan is the house
+# pattern and runs once over the handful of rows the table demand-types.
 bindFragTypeTids: function {symtab: zenv.ZSymbolTable.view ctx: Ctx ast: Ast.view} is {
-    i: u64
-    n: ctx.fragTypeNames.length
-    for i < n loop {
-        tn: ctx.fragTypeNames.get :i
-        found: ztypes.tid
-        if tn.length > 0 then {
-            unitNameText: ctx.fragUnits.get :i
-            found = rowTypeTid :ast :symtab uname: unitNameText.stringView tname: tn.stringView
+    for each row: ctx.rows.fragRows loop {
+        r: ctx.rows.rows.get i: row
+        if r.typeName.isZero.not then {
+            r.typeTid = (
+                rowTypeTid
+                :ast
+                :symtab
+                uname: (ctx.demands.nameText id: r.owner)
+                tname: (ctx.demands.nameText id: r.typeName)
+            )
+            ctx.rows.rows.set i: row val: r
+            # a destructor's row gates no type: the type is written when reached
+            if r.typeTid.isZero.not when r.destroys.not then ctx.demandGatedTids.add item: r.typeTid
         }
-        ctx.fragTypeTids.append found
-        # a destructor's row gates no type: the type is written when reached
-        if found.isZero.not when (ctx.fragDestroyRows.has item: i).not then {
-            ctx.demandGatedTids.add item: found
-        }
-        i = i + 1
     }
 }
 
-# bindFragUnitDecls -- the units the table's rows belong to, each once, in the
-# order the table first names them (ctx.fragUnitDecls). A row path's first
-# segment that names no unit in scope (`sviter`, a unit the program does not
+# bindFragUnitDecls -- the units the table's fragment rows belong to, each
+# once, in the order the table first names them (ctx.fragUnitDecls). A row's
+# unit that names no unit in scope (`sviter`, a unit the program does not
 # reach) lists nothing.
 bindFragUnitDecls: function {symtab: zenv.ZSymbolTable.view ctx: Ctx ast: Ast.view} is {
     sysU: symtab.typing.systemUnitRoot
-    for each un: ctx.fragUnits loop {
-        uid: unitDeclByName :symtab :ast name: un.stringView
+    for each row: ctx.rows.fragRows loop {
+        uid: (
+            unitDeclByName
+            :symtab
+            :ast
+            name: (ctx.demands.nameText id: (ctx.rows.rows.get i: row).owner)
+        )
         seen: uid.isZero or (uid == sysU)
         for each d: ctx.fragUnitDecls loop {
             if d == uid then seen = true
@@ -43880,70 +43841,64 @@ setDemandCond: function {ctx: Ctx at: u64 c: Cond.view} is {
     }
 }
 
-# rowDemandTo -- where row `i`'s demands end in fragDemands
-rowDemandTo: function {ctx: Ctx.view i: u64} out u64 is {
-    if (i + 1) < ctx.fragDemandFrom.length then return (ctx.fragDemandFrom.get i: i + 1)
-    return ctx.fragDemands.length
-}
-
-# rowAlways -- the fired row `i` holds in every configuration: a demand it
-# answers does, or written C spelled its type
-rowAlways: function {ctx: Ctx.view i: u64} out bool is {
-    if (ctx.fragTypeTids.get :i).isZero.not then return true
-    k: ctx.fragDemandFrom.get :i
-    to: rowDemandTo :ctx :i
-    for k < to loop {
-        x: ctx.demands.at key: (ctx.fragDemands.get i: k)
+# rowAlways -- fired fragment row `row` holds in every configuration: a demand
+# it answers does, or written C spelled its type
+rowAlways: function {ctx: Ctx.view row: u64} out bool is {
+    r: ctx.rows.rows.get i: row
+    if r.typeTid.isZero.not then return true
+    k: r.demandFrom
+    for k < r.demandTo loop {
+        x: ctx.demands.at key: (ctx.rows.demandKeys.get i: k)
         if x > 0 when (ctx.demands.always.get i: x - 1) then return true
         k = k + 1
     }
     return false
 }
 
-# rowCond -- the condition the fired row `i` holds under: the OR of the
+# rowCond -- the condition fired fragment row `row` holds under: the OR of the
 # demands it answers
-rowCond: function {ctx: Ctx.view i: u64} out Cond is {
-    if (rowAlways :ctx :i) then return condAlways
+rowCond: function {ctx: Ctx.view row: u64} out Cond is {
+    if (rowAlways :ctx :row) then return condAlways
     c: Cond always: false terms: ListVal u64
-    k: ctx.fragDemandFrom.get :i
-    to: rowDemandTo :ctx :i
-    for k < to loop {
-        x: ctx.demands.at key: (ctx.fragDemands.get i: k)
+    r: ctx.rows.rows.get i: row
+    k: r.demandFrom
+    for k < r.demandTo loop {
+        x: ctx.demands.at key: (ctx.rows.demandKeys.get i: k)
         if x > 0 then condMerge dst: c src: (demandCond :ctx at: x - 1)
         k = k + 1
     }
     return c
 }
 
-# rowDemandFired -- true when ANY demand the row at `i` names was demanded for that
-# row's unit. `demand=a,b,c` means ANY OF: a helper several members share is one
-# row naming the members that reach it, so it loads once however many fired. A
-# `uses_<Type>` row fires too when written C spells the type (typeRowDemanded),
-# and a `destroys_<Type>` row when written C calls the type's destructor.
-rowDemandFired: function {ctx: Ctx.view i: u64} out bool is {
-    tt: ctx.fragTypeTids.get :i
-    if tt.isZero.not then {
-        if (ctx.fragDestroyRows.has item: i) then {
-            if (ctx.destroyUsed.has item: tt) then return true
-        } else if (typeRowDemanded :ctx tid: tt) then return true
+# rowDemandFired -- true when ANY demand fragment row `row` names was demanded
+# of that row's unit. A demand list `a,b,c` means ANY OF: a helper several
+# members share is one row naming the members that reach it, so it loads once
+# however many fired. A `uses_<Type>` row fires too when written C spells the
+# type (typeRowDemanded), and a `destroys_<Type>` row when written C calls the
+# type's destructor.
+rowDemandFired: function {ctx: Ctx.view row: u64} out bool is {
+    r: ctx.rows.rows.get i: row
+    if r.typeTid.isZero.not then {
+        if r.destroys then {
+            if (ctx.destroyUsed.has item: r.typeTid) then return true
+        } else if (typeRowDemanded :ctx tid: r.typeTid) then return true
     }
-    k: ctx.fragDemandFrom.get :i
-    to: rowDemandTo :ctx :i
-    for k < to loop {
-        if (ctx.demands.at key: (ctx.fragDemands.get i: k)) > 0 then return true
+    k: r.demandFrom
+    for k < r.demandTo loop {
+        if (ctx.demands.at key: (ctx.rows.demandKeys.get i: k)) > 0 then return true
         k = k + 1
     }
     return false
 }
 
-# emitRuntimeUnit -- one unit's runtime: every row it owns, in TABLE ORDER,
-# loaded when its demands fired. This is the whole of what emitRuntimeIo,
-# emitRuntimeCli, emitRuntimeOs, emitRuntimeNet, emitRuntimeTcc,
-# emitNeededNatives and emitRuntimeSvIter did by hand. The order they spelled is
-# the order the rows are written in -- including the alphabetical convention
-# runs, because a subset of an alphabetically ordered list, taken in order, is
-# already sorted. The per-unit skip lists are gone with them: a member the
-# runtime does not supply has no row to walk.
+# emitRuntimeUnit -- one unit's runtime: every fragment row it owns, in TABLE
+# ORDER, loaded when its demands fired. This is the whole of what
+# emitRuntimeIo, emitRuntimeCli, emitRuntimeOs, emitRuntimeNet, emitRuntimeTcc,
+# emitNeededNatives and emitRuntimeSvIter did by hand. The order they spelled
+# is the order the rows are written in -- including the alphabetical
+# convention runs, because a subset of an alphabetically ordered list, taken in
+# order, is already sorted. The per-unit skip lists are gone with them: a
+# member the runtime does not supply has no row to walk.
 emitRuntimeUnit: function {
     ast: Ast.view
     symtab: zenv.ZSymbolTable.view
@@ -43952,21 +43907,19 @@ emitRuntimeUnit: function {
     buf: String.borrow
 } is {
     closeRowNeeds :ctx
+    uid: ctx.demands.names.find s: uname
+    if uid.isZero then return
     i: u64
-    n: ctx.fragUnits.length
+    n: ctx.rows.fragRows.length
     for i < n loop {
-        # the unit name is read through a view, dropped before the fragment
-        # emitter below lends ctx; the fragment list is an owned copy
-        isU: false
-        u: ctx.fragUnits.get :i
-        isU = u.stringView == uname
-        u.drop
-        # a piece is written in place by its file (loadPieces)
-        if isU when (ctx.rowsInPlace.has item: i) then isU = false
-        if isU when (ctx.rowsWritten.has item: i).not when (rowDemandFired :ctx :i) then {
-            writeRuntimeRow :ast :symtab :ctx row: i :buf
-        }
+        row: ctx.rows.fragRows.get :i
         i = i + 1
+        if (ctx.rows.rows.get i: row).owner != uid then continue
+        # a piece is written in place by its file (loadPieces)
+        if (ctx.rowsInPlace.has item: row) then continue
+        if (ctx.rowsWritten.has item: row).not when (rowDemandFired :ctx :row) then {
+            writeRuntimeRow :ast :symtab :ctx :row :buf
+        }
     }
 }
 
@@ -43982,8 +43935,8 @@ writeRuntimeRow: function {
     ctx.rowsWritten.add item: row
     closeRowNeeds :ctx
     rowMemberUses :ast :symtab :ctx :row
-    fl: (ctx.fragNames.get i: row).copy
-    if (rowAlways :ctx i: row) then {
+    fl: rowFragText :ctx :row
+    if (rowAlways :ctx :row) then {
         for each fr: (fl.stringView.split sep: ",") loop {
             if fr.length > 0 then ioFrag :ast :symtab :ctx frag: fr :buf
         }
@@ -43993,7 +43946,15 @@ writeRuntimeRow: function {
     for each fr: (fl.stringView.split sep: ",") loop {
         if fr.length > 0 then ioFrag :ast :symtab :ctx frag: fr buf: rb
     }
-    wrapCond :ctx c: (rowCond :ctx i: row) body: rb.stringView :buf
+    wrapCond :ctx c: (rowCond :ctx :row) body: rb.stringView :buf
+}
+
+# rowFragText -- fragment row `row`'s fragment names, comma-separated, as an
+# owned copy (the fragment emitter lends ctx); "" for a piece
+rowFragText: function {ctx: Ctx.view row: u64} out String is {
+    ft: (ctx.rows.rows.get i: row).fragText
+    if ft == 0 then return String
+    return (ctx.rows.fragTexts.get i: ft - 1).copy
 }
 
 # needsOutsidePrelude -- whether a need registered from position `from` on is
@@ -44010,18 +43971,12 @@ needsOutsidePrelude: function {ctx: Ctx.view from: u64} out bool is {
 }
 
 # rowMemberUses -- the template members row `row`'s fragments call (its
-# `members=`): each `<canon>.<member>` is recorded by the C name the canon's
+# `members`): each `<canon>.<member>` is recorded by the C name the canon's
 # instance has
 rowMemberUses: function {ast: Ast.view symtab: zenv.ZSymbolTable.view ctx: Ctx row: u64} is {
-    ml: String
-    {
-        mo: ctx.fragMembers.get key: row
-        match (
-            mo
-        ) case some then {
-            ml = mo.copy
-        } case none then null
-    }
+    mt: (ctx.rows.rows.get i: row).members
+    if mt == 0 then return
+    ml: (ctx.rows.memberTexts.get i: mt - 1).copy
     for each one: (ml.stringView.split sep: ",") loop rowMemberUse :ast :symtab :ctx :row :one
 }
 
@@ -44048,20 +44003,20 @@ rowMemberUse: function {
     }
     cb: u64
     if qm < one.length then cb = condBitOf :ctx name: (one.substring from: qm + 1 to: one.length)
-    if cb == 0 when (rowAlways :ctx i: row) then {
+    if cb == 0 when (rowAlways :ctx :row) then {
         noteMemberUse :ctx mono: mt member: sl
         return
     }
-    rc: rowCond :ctx i: row
+    rc: rowCond :ctx :row
     if cb != 0 then rc = condWith c: rc bit: cb
     noteMemberUseCond :ctx mono: mt member: sl cond: rc
 }
 
-# closeRowNeeds -- register the `needs=` of every fired row, until a round
-# fires no row it has not seen: made whole before a row is written, so a row a
-# later one needs -- in a unit the walk has already passed -- is written in the
-# same walk, ahead of the C that calls it. Nothing to do while no demand has
-# been added since the last time.
+# closeRowNeeds -- register the needs of every fired row, until a round fires
+# no row it has not seen: made whole before a row is written, so a row a later
+# one needs -- in a unit the walk has already passed -- is written in the same
+# walk, ahead of the C that calls it. Nothing to do while no demand has been
+# added since the last time.
 closeRowNeeds: function {ctx: Ctx} is {
     for (ctx.demands.keys.length != ctx.rowNeedsAt) or (ctx.condEpoch != ctx.rowCondEpochAt) loop {
         ctx.rowNeedsAt = ctx.demands.keys.length
@@ -44070,8 +44025,9 @@ closeRowNeeds: function {ctx: Ctx} is {
         recond: ctx.condEpoch != ctx.rowCondEpochAt
         ctx.rowCondEpochAt = ctx.condEpoch
         i: u64
-        for i < ctx.fragUnits.length loop {
-            if (rowDemandFired :ctx :i) then closeRow :ctx row: i :recond
+        for i < ctx.rows.fragRows.length loop {
+            row: ctx.rows.fragRows.get :i
+            if (rowDemandFired :ctx :row) then closeRow :ctx :row :recond
             i = i + 1
         }
     }
@@ -44086,19 +44042,18 @@ closeRow: function {ctx: Ctx row: u64 recond: bool} is {
         return
     }
     ctx.rowsClosed.add item: row
-    if (rowAlways :ctx i: row).not then {
+    if (rowAlways :ctx :row).not then {
         rowNeedsUnder :ctx :row
         return
     }
     ctx.rowsAlwaysClosed.add item: row
-    un: (ctx.fragUnits.get i: row).copy
-    rowNeeds :ctx :row uname: un.stringView cond: condAlways
+    rowNeedsAdd :ctx :row cond: condAlways
 }
 
-# rowNeedsUnder -- rowNeeds for fired row `row` under the condition it holds in,
-# once per condition: a row the walk revisits under the same one adds nothing
+# rowNeedsUnder -- rowNeedsAdd for fired row `row` under the condition it holds
+# in, once per condition: a row the walk revisits under the same one adds nothing
 rowNeedsUnder: function {ctx: Ctx row: u64} is {
-    c: rowCond :ctx i: row
+    c: rowCond :ctx :row
     k: condKey :c
     seen: false
     {
@@ -44111,25 +44066,7 @@ rowNeedsUnder: function {ctx: Ctx row: u64} is {
     }
     if seen then return
     ctx.rowCondKey.set key: row value: k.copy
-    un: (ctx.fragUnits.get i: row).copy
-    rowNeeds :ctx :row uname: un.stringView cond: c
-}
-
-# rowNeeds -- register what fragment row `row` of unit `uname` needs (its
-# `needs=`, ctx.fragNeeds)
-rowNeeds: function {ctx: Ctx row: u64 uname: StringView cond: Cond.view} is {
-    nd: String
-    {
-        ndo: ctx.fragNeeds.get key: row
-        match (
-            ndo
-        ) case some then {
-            nd = ndo.copy
-        } case none then null
-    }
-    for each n1: (nd.stringView.split sep: ",") loop {
-        if n1.length > 0 then rowNeedAddCond :ctx :uname need: n1 :cond
-    }
+    rowNeedsAdd :ctx :row cond: c
 }
 
 # emitUnorderedUnits -- the units with rows the order directive does not name,
@@ -44144,10 +44081,11 @@ emitUnorderedUnits: function {
 } is {
     done: List String
     i: u64
-    n: ctx.fragUnits.length
+    n: ctx.rows.fragRows.length
     for i < n loop {
         # an owned copy: the runtime emitter below lends ctx
-        u: (ctx.fragUnits.get :i).copy
+        u: (ctx.demands.nameText id: (ctx.rows.rows.get i: (ctx.rows.fragRows.get :i)).owner).string
+        i = i + 1
         skip: false
         if (
             (ctx.nativeWords.slotOf text: u.stringView) == nativeWord.slot.unitPrelude
@@ -44162,7 +44100,6 @@ emitUnorderedUnits: function {
             done.append from: u.copy
             emitRuntimeUnit :ast :symtab :ctx uname: u.stringView :buf
         }
-        i = i + 1
     }
 }
 
@@ -48985,7 +48922,7 @@ rowLabel: function {ctx: Ctx.view ast: Ast.view n: zemitrows.rowname} out String
 methodFragRow: function {symtab: zenv.ZSymbolTable.view ctx: Ctx.view mfid: ztypes.tid} out u64 is {
     row: rowOfFn :symtab :ctx fid: mfid
     if row == 0 then return 0
-    if (ctx.rows.rows.get i: row).frag == 0 then return 0
+    if (ctx.rows.rows.get i: row).fragment.not then return 0
     return row
 }
 
@@ -49003,20 +48940,17 @@ nativeMethodCallOpen: function {fc: StringView mn: StringView recv: StringView} 
     return "\{fc}_\{mn}(\{recv}"
 }
 
-# demandNativeRow -- what calling the method the fragment row `row` (keyed
-# `key`) implements demands: its unit's runtime, and the row's own demands --
-# none for a `uses_<Type>` or `destroys_<Type>` row, which loads with its type's
-# use or destructor -- plus the runtime
-# its body `needs=`
+# demandNativeRow -- what calling the method fragment row `row` implements
+# demands: its unit's runtime, and the row's own demands -- none for a
+# `uses_<Type>` or `destroys_<Type>` row, which loads with its type's use or
+# destructor -- plus the runtime its body needs
 demandNativeRow: function {ctx: Ctx row: u64} is {
     r: ctx.rows.rows.get i: row
-    i: r.frag - 1
     needsAddKey :ctx key: (ctx.demands.unitOf owner: r.owner)
-    if (ctx.fragTypeTids.get :i).isZero then {
-        k: ctx.fragDemandFrom.get :i
-        to: rowDemandTo :ctx :i
-        for k < to loop {
-            needsAddKey :ctx key: (ctx.fragDemands.get i: k)
+    if r.typeTid.isZero then {
+        k: r.demandFrom
+        for k < r.demandTo loop {
+            needsAddKey :ctx key: (ctx.rows.demandKeys.get i: k)
             k = k + 1
         }
     }
@@ -50037,7 +49971,7 @@ emitNativeFreeFnCall: function {
         viaInst: stampIdOf :symtab nid: call.nodeid
         noteMemberUse :ctx mono: viaInst member: (ctx.memberWords.slotOf text: viaMember.stringView)
         callee = "\{spelledCname :ctx tid: viaInst}_\{viaMember}"
-    } else if r.frag == 0 then {
+    } else if r.fragment.not then {
         body = r.body
         if body.isZero then return "".string
         ctx.rt.ready id: body
