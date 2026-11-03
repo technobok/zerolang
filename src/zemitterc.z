@@ -2592,8 +2592,6 @@ recordNativeRow: function {
     key: StringView
     body: StringView
 } is {
-    kk: h.key.copy
-    ctx.nativeKeys.set key: kk value: true
     if h.call.length > 0 then recordSvCall :ctx :ast key: h.key.stringView call: h.call.stringView
     frag: u64
     if h.frag.length > 0 then {
@@ -2861,6 +2859,7 @@ newRowWalk: function out RowWalk is {
             RowFacts
             declared: Set String
             held: Set String
+            placed: Set String
             replaced: Set String
             linkReplaced: Set String
             sourceReplaced: Set String
@@ -3110,12 +3109,13 @@ RowWalk: class {
         key: StringView
         body: StringView
     } is {
-        if (this.rf.applies :ctx :h).not then return
         if owner != this.ownerText then {
             this.ownerText = owner.string
             this.owner = zast.nameid.zero
             if owner.length > 0 then this.owner = ctx.demands.names.intern s: owner
+            this.rf.beginFile
         }
+        if (this.rf.applies :ctx :h :owner :key).not then return
         im: u64
         if this.reached then im = this.impl
         recordNativeRow :ctx :ast :h impl: im owner: this.owner :key :body
@@ -3857,14 +3857,17 @@ servedArchitectures: function {xs: staticlist schema.architecture} out String is
     return r
 }
 
-# RowFacts -- the facts the files declared so far, which of them hold, and the
-# keys a held fact's variant replaced
+# RowFacts -- the facts the files declared so far, which of them hold, and,
+# in the file being read, the keys recorded and those a held fact's variant
+# replaced
 RowFacts: class {
     # every fact read so far, by name
     declared: Set String
     # the declared facts the program makes hold
     held: Set String
-    # the keys a variant under a held fact took
+    # the keys recorded so far in the file being read, as it writes them
+    placed: Set String
+    # the keys a variant under a held fact took, in the file being read
     replaced: Set String
     # the unit paths whose links, and whose sources, a variant under a held
     # fact took
@@ -3875,23 +3878,42 @@ RowFacts: class {
     # holds; a plain row unless a variant of its key replaced it. A variant under
     # a fact no file declares, or below a plain row of its key that was already
     # recorded, is refused.
-    applies: function {:this ctx: Ctx h: NativeHead.view} out bool is {
-        if h.key.length == 0 then return false
-        if h.whenFact.length == 0 then return (this.replaced.has item: h.key.stringView.asString
-        ).not
+    applies: function {
+        :this
+        ctx: Ctx
+        h: NativeHead.view
+        # the file's unit or group, "" for the structural rows
+        owner: StringView
+        # the row's key, as its file writes it
+        key: StringView
+    } out bool is {
+        if key.length == 0 then return false
+        if h.whenFact.length == 0 then {
+            if (this.replaced.has item: key.asString) then return false
+            this.placed.add item: key.string
+            return true
+        }
         bad: String
+        adr: rowAddress :owner :key
         if (this.declared.has item: h.whenFact.stringView.asString).not then {
-            bad = "'\{h.key}' is a variant under '\{h.whenFact}', which no file declares"
-        } else if (nativeHasRow :ctx path: h.key.stringView) then {
-            bad = "the variant of '\{h.key}' under '\{h.whenFact}' stands below its plain row; place it above"
+            bad = "'\{adr}' is a variant under '\{h.whenFact}', which no file declares"
+        } else if (this.placed.has item: key.asString) then {
+            bad = "the variant of '\{adr}' under '\{h.whenFact}' stands below its plain row; place it above"
         }
         if bad.length > 0 then {
             emitFail :ctx what: "nativec: \{bad}" line: 0
             return false
         }
         if (this.held.has item: h.whenFact.stringView.asString).not then return false
-        this.replaced.add item: h.key.copy
+        this.replaced.add item: key.string
+        this.placed.add item: key.string
         return true
+    }
+
+    # beginFile -- the rows of another file are read next: its keys are its own
+    beginFile: function {:this} is {
+        this.placed = Set String
+        this.replaced = Set String
     }
 
     # settle -- fact `name` is declared, and holds when any of its `reach`
@@ -3946,13 +3968,6 @@ RowFacts: class {
 # the parallel frag lists plus one; 0 when no fragment does
 nativeFragRow: function {ctx: Ctx.view path: StringView} out u64 is {
     return ((ctx.nativeFragPaths.get key: path.asString).or d: 0)
-}
-
-# nativeHasRow -- the table has a row for this path, whatever the row says. A
-# row with no body and no fragment still answers the only question asked here:
-# does the compiler claim to supply this native at all.
-nativeHasRow: function {ctx: Ctx.view path: StringView} out bool is {
-    return ((ctx.nativeKeys.get key: path.asString).or d: false)
 }
 
 # rowNeedAddOne -- one need of a row's `needs=` list (rowNeedAdd): a member of
@@ -5290,9 +5305,6 @@ Ctx: class {
     tmplNeeds: (MapVR textkey V: String)
     # the pulls of the rows answering each demand, comma-separated (needsAddPullsOf)
     pullsByDemand: (MapVR zemitrows.demandkey V: String)
-    # every row's path, whatever the row carries: the check at the declaration
-    # asks only whether one exists
-    nativeKeys: (MapRV String v: bool)
     # the C words an emitted identifier dodges (cReserved)
     cWords: zast.Vocab
     # the operator spellings a C identifier cannot carry (opSpelling)
@@ -36913,11 +36925,11 @@ unitConstTextOf: function {
 # rode inside fillMethodReturns until that table turned out to be unreadable;
 # the CHECK was never part of the table's job and stays.
 #
-# The unit's own name is read PER UNIT and not hoisted, because it builds the
-# lookup key. Hoisting it -- which is what the main-unit filter left behind --
-# resolves every unit's natives under the main unit's name, so every row misses
+# The unit's own file is found PER UNIT and not hoisted, because the rows are
+# looked up in it. Hoisting it -- which is what the main-unit filter left behind
+# -- resolves every unit's natives in the main unit's file, so every row misses
 # and every declaration in the program reads as unimplemented at once.
-checkLoadedNatives: function {program: Ast.view ctx: Ctx} is {
+checkLoadedNatives: function {program: Ast.view symtab: zenv.ZSymbolTable.view ctx: Ctx} is {
     {
         uCnt9c: program.units.length
         uIdx9c: u64
@@ -36926,11 +36938,13 @@ checkLoadedNatives: function {program: Ast.view ctx: Ctx} is {
             uIdx9c = uIdx9c + 1
             opId: zast.nodeid
             unitName: String
+            impl: u64
             u: program.nodes.get i: uId
             if u.namedoperation then {
                 un: zast.poolTextAt pool: program.names ref: u.name
                 opId = u.operation
                 unitName = un.copy
+                impl = ctx.rows.fileOfUnit ud: (ztypecheck.unitDeclOfName st: symtab nameId: u.name)
             }
             if opId.isZero.not then {
                 (
@@ -36939,6 +36953,7 @@ checkLoadedNatives: function {program: Ast.view ctx: Ctx} is {
                     :ctx
                     unitOpId: opId
                     unitName: unitName.stringView
+                    :impl
                 )
             }
         }
@@ -36953,7 +36968,9 @@ checkNativeMembers: function {
     ctx: Ctx
     items: zast.kidspan
     unitName: StringView
-    typeName: StringView
+    # the file implementing the unit (RowTable.fileUnits), 0 for none
+    impl: u64
+    typeName: zast.nameid
 } is {
     h7x9: u64
     for h7x9 < items.count loop {
@@ -36961,20 +36978,20 @@ checkNativeMembers: function {
         h7x9 = h7x9 + 1
         amn: ast.nodes.get i: am
         if amn.namedoperation then {
-            mn: zast.nameTextAt :ast ref: amn.name
             mo: ast.nodes.get i: amn.operation
-            if mo.functiondef when mo.isNative then {
-                mk: "\{unitName}.\{typeName}.\{mn}"
-                if (nativeHasRow :ctx path: mk.stringView).not then {
-                    ctx.emitErrors.append (
-                        noNativeImplFailure
-                        :ast
-                        :ctx
-                        nid: am
-                        key: mk.stringView
-                        :unitName
-                    )
-                }
+            rk: zemitrows.rowname :impl :typeName name: amn.name
+            if mo.functiondef when mo.isNative when (ctx.rows.hasRowNamed n: rk).not then {
+                tn: zast.nameTextAt :ast ref: typeName
+                mn: zast.nameTextAt :ast ref: amn.name
+                tk: rowAddress owner: tn.stringView key: mn.stringView
+                ctx.emitErrors.append (
+                    noNativeImplFailure
+                    :ast
+                    :ctx
+                    nid: am
+                    key: (rowAddress owner: unitName key: tk.stringView).stringView
+                    :unitName
+                )
             }
         }
     }
@@ -37037,6 +37054,8 @@ checkNativesResolve: function {
     ctx: Ctx
     unitOpId: zast.nodeid
     unitName: StringView
+    # the file implementing the unit (RowTable.fileUnits), 0 for none
+    impl: u64
 } is {
     bodyIds: zast.unitBodyIdsAt :ast unitId: unitOpId
     vx239: u64
@@ -37050,18 +37069,16 @@ checkNativesResolve: function {
             match (
                 op
             ) case functiondef then {
-                if op.isNative then {
-                    pk: "\{unitName}.\{nm}"
-                    if (nativeHasRow :ctx path: pk.stringView).not then {
-                        ctx.emitErrors.append (
-                            noNativeImplFailure
-                            :ast
-                            :ctx
-                            nid: bm
-                            key: pk.stringView
-                            :unitName
-                        )
-                    }
+                rk: zemitrows.rowname :impl typeName: zast.nameid.zero name: bn.name
+                if op.isNative when (ctx.rows.hasRowNamed n: rk).not then {
+                    ctx.emitErrors.append (
+                        noNativeImplFailure
+                        :ast
+                        :ctx
+                        nid: bm
+                        key: (rowAddress owner: unitName key: nm.stringView).stringView
+                        :unitName
+                    )
                 }
             } case objectdef then {
                 # BOTH blocks. A native method may be written in either, and
@@ -37076,7 +37093,8 @@ checkNativesResolve: function {
                     :ctx
                     items: op.isItems
                     :unitName
-                    typeName: nm.stringView
+                    :impl
+                    typeName: bn.name
                 )
                 (
                     checkNativeMembers
@@ -37084,7 +37102,8 @@ checkNativesResolve: function {
                     :ctx
                     items: op.asItems
                     :unitName
-                    typeName: nm.stringView
+                    :impl
+                    typeName: bn.name
                 )
             } case unitdef then {
                 # a SUBUNIT -- lib/system/system/wideint.z and its siblings are
@@ -37099,6 +37118,7 @@ checkNativesResolve: function {
                     :ctx
                     unitOpId: bn.operation
                     :unitName
+                    :impl
                 )
             } else null
         }
@@ -40245,7 +40265,6 @@ emitC: function {
         tmplTexts: (MapVV textkey v: rtid)
         tmplNeeds: (MapVR textkey V: String)
         pullsByDemand: (MapVR zemitrows.demandkey V: String)
-        nativeKeys: (MapRV String v: bool)
         cWords: (zast.Vocab.create block: cReserved)
         opWords: (zast.Vocab.create block: opSpelling)
         nativeWords: (zast.Vocab.create block: nativeWord)
@@ -40368,7 +40387,7 @@ emitC: function {
             unitDecl: symtab.typing.mainUnitRoot
         )
     }
-    checkLoadedNatives :program :ctx
+    checkLoadedNatives :program :symtab :ctx
     noteStaticVids :symtab :ctx
     demandTmplClassNeeds :symtab :ctx
     # A runtime-owned class's methods are demanded by the class being LIVE
