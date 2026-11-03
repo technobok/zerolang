@@ -121,7 +121,7 @@ rowneed: record {
 }
 
 # rowname -- a row's key as the program's names spell it: the file the row is
-# read from (its place among the files read, from 1), and the type and the member the key
+# read from (its place in RowTable.fileUnits), and the type and the member the key
 # names, ids of the program's name pool; a key naming a member of the unit
 # itself names no type. A key naming what the program never spells has none:
 # nothing the program declares is implemented by it.
@@ -188,10 +188,15 @@ RowTable: class {
     constByName: (MapVV rowname v: u64)
     # the structural rows, by shape and operator
     shapes: (MapVV shapekey v: u64)
-    # the files read so far; the foundation's groups and structural rows are
-    # in none
-    files: u64
-    # each file's place (from 1), by the declaration of the unit it implements
+    # the member names some type's row gives a body, program name ids: what a
+    # dotted read or a call asks before it looks a row up, since nearly every
+    # member names none
+    memberBodies: IdSet zast.nameid
+    # the unit each file read implements, by the file's place, an id of
+    # DemandSet.names; place 0 the sentinel: the foundation's groups and
+    # structural rows are in no file
+    fileUnits: ListVal zast.nameid
+    # each file's place, by the declaration of the unit it implements
     fileOf: (IdMapV ztypes.declid v: u64)
 } as {
     # create -- no row and no file yet: the sentinels alone
@@ -204,7 +209,8 @@ RowTable: class {
             byName: (MapVV rowname v: u64)
             constByName: (MapVV rowname v: u64)
             shapes: (MapVV shapekey v: u64)
-            files: 0
+            memberBodies: IdSet zast.nameid
+            fileUnits: ListVal zast.nameid
             fileOf: (IdMapV ztypes.declid v: u64)
         )
         (
@@ -224,6 +230,7 @@ RowTable: class {
                 callsEquals: false
             )
         )
+        t.fileUnits.append zast.nameid.zero
         return t
     }
 
@@ -241,6 +248,13 @@ RowTable: class {
     # ofShape -- the structural row keyed `k`; 0 for none
     ofShape: function {t: this.view k: shapekey} out u64 is {
         return ((t.shapes.get key: k).or d: 0)
+    }
+
+    # unitOfFile -- the unit file `impl` implements, an id of DemandSet.names;
+    # zero for none
+    unitOfFile: function {t: this.view impl: u64} out zast.nameid is {
+        if impl >= t.fileUnits.length then return zast.nameid.zero
+        return (t.fileUnits.get i: impl)
     }
 
     # fileOfUnit -- the place of the file implementing unit `ud`; 0 for none
