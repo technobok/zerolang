@@ -12,8 +12,6 @@ public: unit {
     :servedKey
     :UserImplementation
     :isServedUnit
-    :servedList
-    :servedCallWord
     # the C-backend facts the numeric conversion rule (znativecheck) is built from
     :kindBits
     :kindCType
@@ -2327,59 +2325,20 @@ nativeWord: list {
     shapeRecord: "record"
 } out staticlist StringView
 
-# NativeHead -- a row's head, parsed: the path key and the attributes the
-# table spells, each "" or false until a word of the head sets it.
+# NativeHead -- a piece's marker head, parsed (fromMarker): the path key and
+# the attributes the marker spells, each "" until a word of the head sets it.
 NativeHead: class {
-    # the row's path, the first word of the head
+    # the piece's path, the first word of the head
     key: String
-    # `needs=`: the runtime the row needs linked
+    # `needs=`: the runtime the piece needs
     need: String
-    # `frag=`: the runtime fragment the row is backed by
-    frag: String
-    # `demand=`: the demand the fragment answers to; the path's last segment
+    # `demand=`: the demand the piece answers to; the path's last segment
     # when absent
     dem: String
-    # `const=`: the argument position a constant-operand variant of the row
-    # applies to
-    cst: String
-    # `args=ptr`: the arguments arrive as pointers
-    ptr: bool
-    # `form=value`: the body is a value computed from its holes
-    value: bool
-    # `calls=eq`: the body calls the generated `==` of its `@T@` (noteEqUse)
-    eq: bool
-    # `call=`: on a StringView row, how a call of the member is emitted (svcall)
-    call: String
-    # `pulls=`: the other units' members demanding this one demands
-    pulls: String
-    # `members=`: the template members of other instances the row's fragments
-    # call, each `<canon>.<member>` (List_String.append)
-    members: String
-    # `when=`: the fact under which this row replaces the plain row of its key
-    whenFact: String
-    # `via=`: on a native free function's row, the member of the templated class
-    # the function answers whose template function implements it
-    via: String
 } as {
-    # create -- a head with every attribute "" or false, for a reader to fill
+    # create -- a head with every attribute "", for fromMarker to fill
     create: function out this is {
-        h: (
-            meta.create
-            key: String
-            need: String
-            frag: String
-            dem: String
-            cst: String
-            ptr: false
-            value: false
-            eq: false
-            call: String
-            pulls: String
-            members: String
-            whenFact: String
-            via: String
-        )
-        return h
+        return (meta.create key: String need: String dem: String)
     }
 
     # fromMarker -- the head of a piece's marker (appendPiece), between
@@ -2432,77 +2391,61 @@ recordUnitOrder: function {ctx: Ctx order: StringView} is {
     }
 }
 
-# fragmentRow -- row `r` as a fragment row keyed `key` (its path), its
-# halves split here and nowhere else. The unit is the path's first segment
-# with the `@` that marks a path outside the declaration space stripped; the
-# demand is `dem` or the path's last segment; the type name is the demand's
-# `uses_` or `destroys_` suffix when it has one. `frag` names its fragments,
-# "" for a piece; `members` the template members they call.
-fragmentRow: function {
-    ctx: Ctx
-    r: zemitrows.nativerow
-    key: StringView
-    frag: StringView
-    dem: StringView
-    members: StringView
-} out zemitrows.nativerow is {
+# beginDemands -- row `r` as a fragment row whose demands follow
+# (addRowDemands), its span opening where the table's demands end
+beginDemands: function {ctx: Ctx.view r: zemitrows.nativerow} out zemitrows.nativerow is {
     fr: r
     fr.fragment = true
-    # the unit: the path's first segment, its `@` stripped; the whole path when
-    # it has no `.`
-    uFrom: u64
-    uTo: key.length
-    fd: key.indexOf needle: "."
-    match (
-        fd
-    ) case some then {
-        uTo = fd
-        if key.startsWith "@" then uFrom = 1
-    } case none then null
-    fr.owner = ctx.demands.names.intern s: (key.substring from: uFrom to: uTo)
-    if dem.length > 0 then return (fragmentDemands :ctx r: fr dm: dem :frag :members)
-    dFrom: u64
+    fr.demandFrom = ctx.rows.demandKeys.length
+    fr.demandTo = fr.demandFrom
+    return fr
+}
+
+# endDemands -- fragment row `r`, keyed `key`, with its demands closed: a row
+# whose file names none answers the key's last segment, a helper's (`@name`)
+# without its `@`
+endDemands: function {ctx: Ctx r: zemitrows.nativerow key: StringView} out zemitrows.nativerow is {
+    if r.demandTo > r.demandFrom then return r
+    from: u64
     ld: key.lastIndexOf needle: "."
     match (
         ld
     ) case some then {
-        dFrom = ld + 1
-    } case none then null
-    return (fragmentDemands :ctx r: fr dm: (key.substring from: dFrom to: key.length) :frag :members
-    )
+        from = ld + 1
+    } case none then {
+        if key.startsWith "@" then from = 1
+    }
+    return (addRowDemands :ctx :r dm: (key.substring :from to: key.length))
 }
 
-# fragmentDemands -- fragmentRow's fragment row `r` with its demands `dm`
-# (comma-separated), its type demand, its fragments and members
-fragmentDemands: function {
-    ctx: Ctx
-    r: zemitrows.nativerow
-    dm: StringView
-    frag: StringView
-    members: StringView
+# addRowDemands -- demands `dm` (one, or comma-separated) onto fragment row
+# `r`, whose span ends where the table's demands do. The row's first demand,
+# when it is `uses_<Type>` or `destroys_<Type>`, is its type demand: the row
+# fires where written C spells the type, or calls its destructor, and on any
+# member the rest names.
+addRowDemands: function {
+    ctx: Ctx r: zemitrows.nativerow dm: StringView
 } out zemitrows.nativerow is {
     fr: r
-    # `uses_<Type>` first: the row fires when written C spells the type, and on
-    # any member the rest of the list names. `destroys_<Type>` fires when
-    # written C calls the type's destructor.
-    with uo: (dm.stripPrefix p: "uses_") do match (
-        uo
-    ) case some then {
-        fr.typeName = (
-            ctx.demands.names.intern
-            s: (uo.substring from: 0 to: ((uo.indexOf needle: ",").or d: uo.length))
-        )
-    } case none then null
-    with dso: (dm.stripPrefix p: "destroys_") do match (
-        dso
-    ) case some then {
-        fr.typeName = (
-            ctx.demands.names.intern
-            s: (dso.substring from: 0 to: ((dso.indexOf needle: ",").or d: dso.length))
-        )
-        fr.destroys = true
-    } case none then null
-    fr.demandFrom = ctx.rows.demandKeys.length
+    if fr.demandTo == fr.demandFrom then {
+        with uo: (dm.stripPrefix p: "uses_") do match (
+            uo
+        ) case some then {
+            fr.typeName = (
+                ctx.demands.names.intern
+                s: (uo.substring from: 0 to: ((uo.indexOf needle: ",").or d: uo.length))
+            )
+        } case none then null
+        with dso: (dm.stripPrefix p: "destroys_") do match (
+            dso
+        ) case some then {
+            fr.typeName = (
+                ctx.demands.names.intern
+                s: (dso.substring from: 0 to: ((dso.indexOf needle: ",").or d: dso.length))
+            )
+            fr.destroys = true
+        } case none then null
+    }
     for each w: (dm.split sep: ",") loop {
         if w.length > 0 then ctx.rows.demandKeys.append (
             zemitrows.demandkey
@@ -2511,24 +2454,15 @@ fragmentDemands: function {
         )
     }
     fr.demandTo = ctx.rows.demandKeys.length
-    if frag.length > 0 then {
-        ctx.rows.fragTexts.append from: frag.string
-        fr.fragText = ctx.rows.fragTexts.length
-    }
-    if members.length > 0 then {
-        ctx.rows.memberTexts.append from: members.string
-        fr.members = ctx.rows.memberTexts.length
-    }
     return fr
 }
 
-# appendFragmentRow -- fragment row `r`, keyed `path`, into the row table and
-# its fragment rows; its place
-appendFragmentRow: function {ctx: Ctx r: zemitrows.nativerow path: StringView} out u64 is {
+# appendFragmentRow -- fragment row `r` into the row table and its fragment
+# rows; its place
+appendFragmentRow: function {ctx: Ctx r: zemitrows.nativerow} out u64 is {
     ctx.rows.rows.append r
     row: ctx.rows.rows.length - 1
     ctx.rows.fragRows.append row
-    ctx.nativeFragPaths.set key: path.string value: row
     return row
 }
 
@@ -2553,83 +2487,11 @@ svCallOf: function {
     return (ctx.rows.rows.get i: row).call
 }
 
-# callKindOf -- a row's `call` word (servedCallWord, callWordOf) as its kind,
-# by the word's id in this program's pool; svcall.none for none
-callKindOf: function {ast: Ast.view call: StringView} out svcall is {
-    if call.length == 0 then return svcall.none
-    kid: zast.poolFind pool: ast.names text: call
-    if kid == zast.wellKnown.slot.wkSvSimple then return svcall.simple
-    if kid == zast.wellKnown.slot.wkSvArg then return svcall.arg
-    if kid == zast.wellKnown.slot.wkSvParse then return svcall.parse
-    if kid == zast.wellKnown.slot.wkSvNoArg then return svcall.noarg
-    return svcall.none
-}
-
-# recordNativeRow -- one row of `owner`'s file, keyed `key` there, into the
-# row table: its body deferred, its flags, its fragment halves when it is
-# fragment-backed (fragmentRow), and the indexes it is found by
-recordNativeRow: function {
-    ctx: Ctx
-    ast: Ast.view
-    h: NativeHead.view
-    # the file's place (from 1), 0 for the foundation's rows and a
-    # file whose unit the program does not reach: the row is found by name
-    # only when it is not
-    impl: u64
-    # the file's unit or the foundation group, an id of DemandSet.names; zero
-    # for a structural row
-    owner: zast.nameid
-    key: StringView
-    body: StringView
-} is {
-    r: zemitrows.blankRow :owner
-    if body.length > 0 then r.body = ctx.rt.defer text: body
-    r.constMask = constMaskOf positions: h.cst.stringView
-    if r.constMask == 0 when owner.isZero.not when h.need.length > 0 then {
-        r.needText = rowNeedText :ctx needs: h.need.stringView
-    }
-    if h.via.length > 0 then r.via = ctx.demands.names.intern s: h.via.stringView
-    r.value = h.value
-    r.byPointer = h.ptr
-    r.callsEquals = h.eq
-    r.call = callKindOf :ast call: h.call.stringView
-    rid: u64
-    if h.frag.length > 0 then {
-        r = (
-            fragmentRow
-            :ctx
-            :r
-            key: h.key.stringView
-            frag: h.frag.stringView
-            dem: h.dem.stringView
-            members: h.members.stringView
-        )
-        rid = appendFragmentRow :ctx :r path: h.key.stringView
-        if h.pulls.length > 0 then recordRowPulls :ctx row: rid pulls: h.pulls.stringView
-    } else {
-        ctx.rows.rows.append r
-        rid = ctx.rows.rows.length - 1
-    }
-    if owner.isZero then {
-        shapeRow :ctx :ast :key row: rid
-        return
-    }
-    if key.startsWith "@" then {
-        k: zemitrows.demandkey :owner name: (ctx.demands.names.intern s: key)
-        ctx.rows.helpers.set key: k value: rid
-    }
-    if impl > 0 then nameRow :ctx :ast :impl :key row: rid constant: r.constMask != 0
-}
-
-# constMaskOf -- a constant-operand variant's positions (`1`, `1,2`, ...) as
-# bits, bit k for position k + 1; zero for a plain row's (none)
-constMaskOf: function {positions: StringView} out u64 is {
-    m: u64
-    for each p: (positions.split sep: ",") loop {
-        k: p.parseU64.or d: 0
-        if k > 0 when k <= 64 then m = m | (1.u64 << (k - 1))
-    }
-    return m
+# constBit -- a constant-operand variant's position (1-based, the receiver
+# excluded) as its bit of nativerow.constMask; zero for a position past 64
+constBit: function {position: u64} out u64 is {
+    if (position == 0) or (position > 64) then return 0
+    return 1.u64 << (position - 1)
 }
 
 # shapeRow -- structural row `row`, keyed `<shape>.<op>`, found by the shape
@@ -2883,8 +2745,8 @@ servedFactsAndCanons: function {
     }
 }
 
-# servedRow -- one row zc carries: its fields onto a head, its texts handed to
-# the walk, which registers it
+# servedRow -- one row zc carries, written into the row table from its typed
+# fields (placeRow): its texts handed to the walk first
 servedRow: function {
     w: RowWalk
     ctx: Ctx
@@ -2893,32 +2755,50 @@ servedRow: function {
     owner: StringView
 } is {
     key: r.key.stringView
-    h: NativeHead.create
-    h.need = servedList xs: r.needs
+    if (w.admits :ctx :owner :key fact: r.fact.stringView).not then return
     for each t: r.fragments loop w.fragment :ctx :owner :key text: "\{t}\n"
     if r.pieces.length > 0 then w.pieces :ctx :owner :key text: (servedPieces ps: r.pieces :owner)
-    h.dem = servedList xs: r.demand
-    h.value = r.form.value
-    h.ptr = r.byPointer
-    h.eq = r.callsEquals
-    h.call = servedCallWord c: r.call
-    for each c: r.constant loop {
-        if h.cst.length > 0 then h.cst.append ","
-        h.cst.append "\{c}"
+    x: zemitrows.blankRow owner: w.owner
+    bd: r.body.stringView.trim
+    if bd.length > 0 then x.body = ctx.rt.defer text: bd
+    for each c: r.constant loop x.constMask = x.constMask | (constBit position: c)
+    x.value = r.form.value
+    x.byPointer = r.byPointer
+    x.callsEquals = r.callsEquals
+    x.call = servedCall c: r.call
+    if r.via.length > 0 then x.via = ctx.demands.names.intern s: r.via.stringView
+    if x.constMask == 0 when w.owner.isZero.not when r.needs.length > 0 then {
+        x.needText = rowNeedText :ctx needs: (servedList xs: r.needs).stringView
     }
-    h.whenFact = r.fact.string
-    h.pulls = servedList xs: r.pulls
-    h.members = servedList xs: r.members
-    h.via = r.via.string
+    if w.frags.length > 0 then {
+        x = beginDemands :ctx r: x
+        for each d: r.demand loop x = addRowDemands :ctx r: x dm: d.stringView
+        x = endDemands :ctx r: x :key
+    }
     (
-        w.row
+        w.place
         :ctx
         :ast
-        :h
-        :owner
+        r: x
         :key
-        body: r.body.stringView.trim
+        members: (servedList xs: r.members).stringView
+        pulls: (servedList xs: r.pulls).stringView
     )
+}
+
+# servedCall -- a row's `call` choice as the kind the emitter acts on
+servedCall: function {c: schema.call} out svcall is {
+    match (
+        c
+    ) case simple then {
+        return svcall.simple
+    } case argument then {
+        return svcall.arg
+    } case parse then {
+        return svcall.parse
+    } case noArguments then {
+        return svcall.noarg
+    } else return svcall.none
 }
 
 # servedRequirements -- a unit's links, sources and refusals, each recorded as
@@ -3059,20 +2939,19 @@ RowWalk: class {
         )
     }
 
-    # row -- the row a reader read onto `h`, with the texts it handed over
-    # since the last: its key and its fragments, recorded
-    row: function {
-        :this
-        ctx: Ctx
-        ast: Ast.view
-        h: NativeHead
-        owner: StringView
-        key: StringView
-        body: StringView
-    } is {
-        h.key = servedKey :owner :key
-        h.frag swap this.frags
-        this.place :ctx :ast :h :owner :key :body
+    # admits -- whether the row of `owner`'s file keyed `key`, a variant under
+    # `fact` ("" for none), is recorded (RowFacts.applies); the owner is read
+    # where its run of rows begins
+    admits: function {
+        :this ctx: Ctx owner: StringView key: StringView fact: StringView
+    } out bool is {
+        if owner != this.ownerText then {
+            this.ownerText = owner.string
+            this.owner = zast.nameid.zero
+            if owner.length > 0 then this.owner = ctx.demands.names.intern s: owner
+            this.rf.beginFile
+        }
+        return (this.rf.applies :ctx :fact :owner :key)
     }
 
     # requirement -- a link, source or refusal a reader read: a link or a
@@ -3087,27 +2966,58 @@ RowWalk: class {
         if holds then ctx.unitReqs.append req.take
     }
 
-    # place -- a row of `owner`'s file, keyed `key` there, recorded into the
-    # row tables
+    # place -- row `r` of the file being read, keyed `key` there, into the row
+    # table and the indexes it is found by: a fragment row with the fragments
+    # handed over since the last, its `members` and its `pulls`
+    # (comma-separated); a helper (`@name`) by its owner and name; a structural
+    # row by its shape; a row of a file the program reaches by its key's names
     place: function {
         :this
         ctx: Ctx
         ast: Ast.view
-        h: NativeHead.view
-        owner: StringView
+        r: zemitrows.nativerow
         key: StringView
-        body: StringView
+        members: StringView
+        pulls: StringView
     } is {
-        if owner != this.ownerText then {
-            this.ownerText = owner.string
-            this.owner = zast.nameid.zero
-            if owner.length > 0 then this.owner = ctx.demands.names.intern s: owner
-            this.rf.beginFile
+        x: r
+        rid: u64
+        if x.fragment then {
+            if this.frags.length > 0 then {
+                ctx.rows.fragTexts.append from: this.frags.copy
+                x.fragText = ctx.rows.fragTexts.length
+                this.frags = String
+            }
+            if members.length > 0 then {
+                ctx.rows.memberTexts.append from: members.string
+                x.members = ctx.rows.memberTexts.length
+            }
+            rid = appendFragmentRow :ctx r: x
+            if pulls.length > 0 then recordRowPulls :ctx row: rid :pulls
+        } else {
+            ctx.rows.rows.append x
+            rid = ctx.rows.rows.length - 1
         }
-        if (this.rf.applies :ctx :h :owner :key).not then return
-        im: u64
-        if this.reached then im = this.impl
-        recordNativeRow :ctx :ast :h impl: im owner: this.owner :key :body
+        if x.owner.isZero then {
+            shapeRow :ctx :ast :key row: rid
+            return
+        }
+        if key.startsWith "@" then {
+            (
+                ctx.rows.helpers.set
+                key: (zemitrows.demandkey owner: x.owner name: (ctx.demands.names.intern s: key))
+                value: rid
+            )
+        }
+        if this.reached then (
+            nameRow
+            :ctx
+            :ast
+            impl: this.impl
+            :key
+            row: rid
+            constant: x.constMask != 0
+        )
     }
 
     # fragmentName -- the name of a row's fragment, `_Z_<UNIT>_<KEY>`, each byte
@@ -3253,8 +3163,8 @@ checkedUnit: function {
     }
 }
 
-# checkedRow -- one row of a user unit's checked file: its fields onto a head,
-# its texts handed to the walk, as servedRow reads a row zc carries
+# checkedRow -- one row of a user unit's checked file, written into the row
+# table from its fields (placeRow), as servedRow writes a row zc carries
 checkedRow: function {
     w: RowWalk
     ctx: Ctx
@@ -3267,14 +3177,14 @@ checkedRow: function {
 } is {
     f: u.file
     key: checkedText :u v: r name: "key"
+    if (w.admits :ctx :owner key: key.stringView fact: (checkedText :u v: r name: "fact").stringView
+    ).not then return
     w.at = String
     if ctx.markNatives then w.at = "row \{rowAddress :owner key: key.stringView}, \{(
         zdata.placeOf
         :f
         v: r
     )}"
-    h: NativeHead.create
-    h.need = checkedTexts :u v: r name: "needs"
     for each t: (zdata.textsOf :f v: (zdata.fieldOf :f v: r name: "fragments")) loop (
         w.fragment
         :ctx
@@ -3294,30 +3204,52 @@ checkedRow: function {
             )
         }
     }
-    h.dem = checkedTexts :u v: r name: "demand"
-    fm: checkedArm :u v: r name: "form"
-    h.value = (ctx.nativeWords.slotOf text: fm.stringView) == nativeWord.slot.armValue
-    h.ptr = zdata.boolOf v: (zdata.fieldOf :f v: r name: "byPointer")
-    h.eq = zdata.boolOf v: (zdata.fieldOf :f v: r name: "callsEquals")
-    h.call = callWordOf :ctx arm: (checkedArm :u v: r name: "call").stringView
-    for each c: (zdata.itemsOf :f v: (zdata.fieldOf :f v: r name: "constant")) loop {
-        if h.cst.length > 0 then h.cst.append ","
-        h.cst.append "\{c.ival}"
-    }
-    h.whenFact = checkedText :u v: r name: "fact"
-    h.pulls = checkedTexts :u v: r name: "pulls"
-    h.members = checkedTexts :u v: r name: "members"
-    h.via = checkedText :u v: r name: "via"
+    x: zemitrows.blankRow owner: w.owner
     bd: checkedText :u v: r name: "body"
+    if bd.stringView.trim.length > 0 then x.body = ctx.rt.defer text: bd.stringView.trim
+    for each c: (zdata.itemsOf :f v: (zdata.fieldOf :f v: r name: "constant")) loop {
+        x.constMask = x.constMask | (constBit position: (c.ival.u64.or d: 0))
+    }
+    x.value = (
+        (ctx.nativeWords.slotOf text: (checkedArm :u v: r name: "form").stringView) ==
+        nativeWord.slot.armValue
+    )
+    x.byPointer = zdata.boolOf v: (zdata.fieldOf :f v: r name: "byPointer")
+    x.callsEquals = zdata.boolOf v: (zdata.fieldOf :f v: r name: "callsEquals")
+    x.call = callOfArm :ctx arm: (checkedArm :u v: r name: "call").stringView
+    via: checkedText :u v: r name: "via"
+    if via.length > 0 then x.via = ctx.demands.names.intern s: via.stringView
+    nd: checkedTexts :u v: r name: "needs"
+    if x.constMask == 0 when w.owner.isZero.not when nd.length > 0 then {
+        x.needText = rowNeedText :ctx needs: nd.stringView
+    }
+    if w.frags.length > 0 then {
+        x = beginDemands :ctx r: x
+        for each d: (zdata.textsOf :f v: (zdata.fieldOf :f v: r name: "demand")) loop {
+            x = addRowDemands :ctx r: x dm: d.stringView
+        }
+        x = endDemands :ctx r: x key: key.stringView
+    }
     (
-        w.row
+        w.place
         :ctx
         :ast
-        :h
-        :owner
+        r: x
         key: key.stringView
-        body: bd.stringView.trim
+        members: (checkedTexts :u v: r name: "members").stringView
+        pulls: (checkedTexts :u v: r name: "pulls").stringView
     )
+}
+
+# callOfArm -- a checked file's `call` arm, by its name, as the kind the emitter
+# acts on
+callOfArm: function {ctx: Ctx.view arm: StringView} out svcall is {
+    k: ctx.nativeWords.slotOf text: arm
+    if k == nativeWord.slot.armSimple then return svcall.simple
+    if k == nativeWord.slot.armArgument then return svcall.arg
+    if k == nativeWord.slot.armParse then return svcall.parse
+    if k == nativeWord.slot.armNoArguments then return svcall.noarg
+    return svcall.none
 }
 
 # checkedClass -- one class of a user unit's checked file, as the served
@@ -3761,33 +3693,6 @@ servedSubunit: function {sub: StringView owner: StringView} out String is {
     return "\{owner}.\{sub}"
 }
 
-# servedCallWord -- the call choice as a row's `call` word (svcall); none for
-# the general paths
-servedCallWord: function {c: schema.call} out String is {
-    match (
-        c
-    ) case simple then {
-        return "simple".string
-    } case argument then {
-        return "arg".string
-    } case parse then {
-        return "parse".string
-    } case noArguments then {
-        return "noarg".string
-    } else return String
-}
-
-# callWordOf -- a call choice's arm, by its name, as its row's `call` word
-# (servedCallWord); none for the general paths
-callWordOf: function {ctx: Ctx arm: StringView} out String is {
-    k: ctx.nativeWords.slotOf text: arm
-    if k == nativeWord.slot.armSimple then return "simple".string
-    if k == nativeWord.slot.armArgument then return "arg".string
-    if k == nativeWord.slot.armParse then return "parse".string
-    if k == nativeWord.slot.armNoArguments then return "noarg".string
-    return String
-}
-
 # servedOs -- operating systems by their arm names, comma-separated
 servedOs: function {xs: staticlist schema.os} out String is {
     r: String
@@ -3870,30 +3775,31 @@ RowFacts: class {
     applies: function {
         :this
         ctx: Ctx
-        h: NativeHead.view
+        # the fact the row is a variant under, "" for a plain row
+        fact: StringView
         # the file's unit or group, "" for the structural rows
         owner: StringView
         # the row's key, as its file writes it
         key: StringView
     } out bool is {
         if key.length == 0 then return false
-        if h.whenFact.length == 0 then {
+        if fact.length == 0 then {
             if (this.replaced.has item: key.asString) then return false
             this.placed.add item: key.string
             return true
         }
         bad: String
         adr: rowAddress :owner :key
-        if (this.declared.has item: h.whenFact.stringView.asString).not then {
-            bad = "'\{adr}' is a variant under '\{h.whenFact}', which no file declares"
+        if (this.declared.has item: fact.asString).not then {
+            bad = "'\{adr}' is a variant under '\{fact}', which no file declares"
         } else if (this.placed.has item: key.asString) then {
-            bad = "the variant of '\{adr}' under '\{h.whenFact}' stands below its plain row; place it above"
+            bad = "the variant of '\{adr}' under '\{fact}' stands below its plain row; place it above"
         }
         if bad.length > 0 then {
             emitFail :ctx what: "nativec: \{bad}" line: 0
             return false
         }
-        if (this.held.has item: h.whenFact.stringView.asString).not then return false
+        if (this.held.has item: fact.asString).not then return false
         this.replaced.add item: key.string
         this.placed.add item: key.string
         return true
@@ -3953,8 +3859,8 @@ RowFacts: class {
     }
 }
 
-# nativeFragRow -- the fragment row registered under path `path` (a piece's
-# marker head names its row by it); 0 when none is
+# nativeFragRow -- the piece row registered under path `path`, which its marker
+# head names it by; 0 when none is
 nativeFragRow: function {ctx: Ctx.view path: StringView} out u64 is {
     return ((ctx.nativeFragPaths.get key: path.asString).or d: 0)
 }
@@ -5310,8 +5216,7 @@ Ctx: class {
     nativeMarks: (MapVV textkey v: u64)
     # row 0 is the sentinel, no place
     marks: List NativeMark
-    # the fragment rows by the path they were registered under, which a
-    # piece's marker head names (rtRowPlan)
+    # the piece rows by the path their marker heads name them by (rtRowPlan)
     nativeFragPaths: (MapRV String v: u64)
     # the rows, one table, each found by the declaration it implements
     # (rowNameOfFn, rowNameOfMember)
@@ -39154,6 +39059,22 @@ loadFixedPieces: function {ctx: Ctx name: StringView} is {
     loadPiecesOf :ctx key: p
 }
 
+# markerOwner -- the unit a piece's marker path names, an id of
+# DemandSet.names: its first segment, the `@` that marks a path outside the
+# declaration space stripped; the whole path when it has no `.`
+markerOwner: function {ctx: Ctx key: StringView} out zast.nameid is {
+    from: u64
+    to: key.length
+    fd: key.indexOf needle: "."
+    match (
+        fd
+    ) case some then {
+        to = fd
+        if key.startsWith "@" then from = 1
+    } case none then null
+    return (ctx.demands.names.intern s: (key.substring :from :to))
+}
+
 # loadPiecesOf -- loadPieces for native text `key`: each of its pieces (rtpiece)
 # recorded as a row, in place in the text
 loadPiecesOf: function {ctx: Ctx key: textkey} is {
@@ -39175,17 +39096,13 @@ loadPiecesOf: function {ctx: Ctx key: textkey} is {
             return
         }
         h: NativeHead.fromMarker head: (tt.stringView.substring from: pc.headFrom to: pc.headTo)
-        r: (
-            fragmentRow
-            :ctx
-            r: (zemitrows.blankRow owner: zast.nameid.zero)
-            key: h.key.stringView
-            frag: ""
-            dem: h.dem.stringView
-            members: ""
-        )
+        r: beginDemands :ctx r: (zemitrows.blankRow owner: (markerOwner :ctx key: h.key.stringView))
+        if h.dem.length > 0 then r = addRowDemands :ctx :r dm: h.dem.stringView
+        r = endDemands :ctx :r key: h.key.stringView
         if h.need.length > 0 then r.needText = rowNeedText :ctx needs: h.need.stringView
-        ctx.rowsInPlace.add item: (appendFragmentRow :ctx :r path: h.key.stringView)
+        row: appendFragmentRow :ctx :r
+        ctx.nativeFragPaths.set key: h.key.copy value: row
+        ctx.rowsInPlace.add item: row
     }
 }
 
