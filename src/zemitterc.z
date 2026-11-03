@@ -1070,6 +1070,90 @@ emitFillFails: function {ctx: Ctx fails: (List String).view} is {
 }
 
 
+# PiecedText -- a native text cut into pieces as its reader reads it, before
+# RtTexts cuts its holes: the C (each piece's text and its line break, no
+# marker), the pieces' names and needs (`heads`, kept beside the C), and where
+# each piece lies
+PiecedText: class {
+    text: String
+    heads: String
+    pieces: ListVal rtpiece
+} as {
+    # plain -- text written wherever the text is, as it stands
+    plain: function {:this text: StringView} is {
+        this.text.append text
+        this.text.append "\n"
+    }
+
+    # plainLines -- plain, for `text` that holds its own line breaks
+    plainLines: function {:this text: StringView} is {
+        this.text.append text
+    }
+
+    # named -- the piece or section `name`, needing `needs` (comma-separated),
+    # answering row `row` (zero for a member section): written where its plan
+    # keeps it
+    named: function {:this name: StringView needs: StringView row: u64 text: StringView} is {
+        this.namedLines :name :needs :row :text
+        this.text.append "\n"
+        last: this.pieces.length - 1
+        pc: this.pieces.get i: last
+        pc.bodyTo = this.text.length
+        pc.next = this.text.length
+        this.pieces.set i: last val: pc
+    }
+
+    # namedLines -- named, for `text` that holds its own line breaks
+    namedLines: function {:this name: StringView needs: StringView row: u64 text: StringView} is {
+        hf: this.heads.length
+        this.heads.append name
+        nt: this.heads.length
+        this.heads.append " "
+        nf: this.heads.length
+        this.heads.append needs
+        ne: this.heads.length
+        this.heads.append "\n"
+        at: this.text.length
+        this.text.append text
+        (
+            this.pieces.append
+            (
+                rtpiece
+                :at
+                bodyFrom: at
+                bodyTo: this.text.length
+                next: this.text.length
+                headFrom: hf
+                nameTo: nt
+                needsFrom: nf
+                needsTo: ne
+                :row
+            )
+        )
+    }
+}
+
+# newPiecedText -- a text with nothing in it yet
+newPiecedText: function out PiecedText is {
+    return (PiecedText text: String heads: String pieces: ListVal rtpiece)
+}
+
+# pieceRow -- the row of a piece named `name` of `owner`'s file or of the
+# foundation (`prelude`), answering `demands` (or its name when the list is
+# empty) and needing `needs`: written in place, by the text holding it, when a
+# demand it answers fires
+pieceRow: function {
+    ctx: Ctx owner: StringView name: StringView demands: (List String).view needs: StringView
+} out u64 is {
+    r: beginDemands :ctx r: (zemitrows.blankRow owner: (ctx.demands.names.intern s: owner))
+    for each d: demands loop r = addRowDemands :ctx :r dm: d.stringView
+    if r.demandTo == r.demandFrom then r = addRowDemands :ctx :r dm: name
+    if needs.length > 0 then r.needText = rowNeedText :ctx :needs
+    row: appendFragmentRow :ctx :r
+    ctx.rowsInPlace.add item: row
+    return row
+}
+
 # rtid -- a parsed runtime text's id in RtTexts (zemitrows.rtid: a row holds
 # its body's)
 rtid: zemitrows.rtid
@@ -1113,28 +1197,26 @@ rtinfo: record {
     parsed: bool
 }
 
-# rtpiece -- one `/*@@member NAME needs=a,b@@*/ ... /*@@end@@*/` section of a
-# template, or one `/*@@row PATH ...@@*/ ... /*@@end@@*/` piece of a runtime
-# file, found once (nextPiece): its head's name and needs, and its body
+# rtpiece -- one member section of a template, or one row piece of a fixed file
+# or a unit's fragment, as its reader read it (PiecedText): where it lies in
+# the text, its name and needs in the text's heads, and the row it answers
 rtpiece: record {
-    # its markers are whole; a section that is not is the text's last, and the
-    # text from its open marker on is written as it stands
-    whole: bool
-    # where its open marker starts
+    # where it starts in the text, and its body: the piece's own text and its
+    # line break (a piece has no marker, so the body is the whole piece)
     at: u64
-    # its head, between its open marker and `@@*/`, and its name: the head up to
-    # `nameTo`
-    headFrom: u64
-    headTo: u64
-    nameTo: u64
-    # its `needs=` list, empty when the head has none
-    needsFrom: u64
-    needsTo: u64
-    # its text, between the markers' lines
     bodyFrom: u64
     bodyTo: u64
-    # where the template's own text resumes
+    # where the text resumes after it
     next: u64
+    # its name in the text's heads (RtTexts.heads): from `headFrom` to `nameTo`
+    headFrom: u64
+    nameTo: u64
+    # its needs there, comma-separated; empty when it has none
+    needsFrom: u64
+    needsTo: u64
+    # the row a row piece answers (its demands and needs, written in place);
+    # zero for a member section
+    row: u64
 }
 
 # rtmark -- the next hole or key of a runtime text (rtNextMark)
@@ -1218,6 +1300,9 @@ rtHoleId: function {slot: u64} out zast.nameid is {
 RtTexts: class {
     # the texts, by id; id 0 is the sentinel empty text
     texts: (List String i: rtid)
+    # each text's pieces' names and needs, by id as `texts` is ("" for a text
+    # with no pieces): what a piece is answers is kept beside the C, not in it
+    heads: (List String i: rtid)
     # each text's stretches and facts, by id as `texts` is
     infos: (ListVal rtinfo i: rtid)
     # every text's stretches, each text's in one run (rtinfo)
@@ -1236,6 +1321,7 @@ RtTexts: class {
         r: (
             meta.create
             texts: (List String i: rtid)
+            heads: (List String i: rtid)
             infos: (ListVal rtinfo i: rtid)
             segs: ListVal rtseg
             pieces: ListVal rtpiece
@@ -1244,6 +1330,7 @@ RtTexts: class {
             noKeys: RtKeys.create
         )
         r.texts.append "".string
+        r.heads.append "".string
         r.infos.append (
             rtinfo
             segFrom: 0
@@ -1258,11 +1345,35 @@ RtTexts: class {
         return r
     }
 
-    # parse -- cut `text` into its stretches and its member sections, and keep
-    # it: its id (rtNextMark finds each hole and key, nextPiece each section)
+    # parse -- cut `text` into its stretches, and keep it: its id (rtNextMark
+    # finds each hole and key)
     parse: function {:this text: StringView} out rtid is {
         this.infos.append (this.cut :text)
+        this.heads.append "".string
         return (this.texts.append text.string)
+    }
+
+    # parsePieced -- `x`'s text cut into its stretches and kept with its pieces
+    # and their heads, as its reader cut it: its id
+    parsePieced: function {:this x: PiecedText.take} out rtid is {
+        # a stretch never crosses a piece's edge: each is written or not with
+        # its piece
+        edges: ListVal u64
+        for each p: x.pieces loop {
+            edges.append p.at
+            edges.append p.next
+        }
+        inf: this.cutAt text: x.text.stringView :edges
+        inf.pieceFrom = this.pieces.length
+        for each p: x.pieces loop this.pieces.append p
+        inf.pieceTo = this.pieces.length
+        this.infos.append inf
+        hd: String
+        hd swap x.heads
+        this.heads.append hd.take
+        tx: String
+        tx swap x.text
+        return (this.texts.append tx.take)
     }
 
     # defer -- keep `text` uncut: its id, which `ready` cuts on first use. A
@@ -1279,6 +1390,7 @@ RtTexts: class {
             members: false
             parsed: false
         )
+        this.heads.append "".string
         return (this.texts.append text.string)
     }
 
@@ -1292,8 +1404,14 @@ RtTexts: class {
         this.texts.set i: id val: t.take
     }
 
-    # cut -- `text`'s stretches and member sections appended, and where they lie
+    # cut -- `text`'s stretches appended, and where they lie
     cut: function {:this text: StringView} out rtinfo is {
+        return (this.cutAt :text edges: ListVal u64)
+    }
+
+    # cutAt -- cut, with no literal stretch crossing any of `edges` (offsets in
+    # rising order)
+    cutAt: function {:this text: StringView edges: (ListVal u64).view} out rtinfo is {
         segFrom: this.segs.length
         pieceFrom: this.pieces.length
         open: false
@@ -1306,13 +1424,11 @@ RtTexts: class {
                 open = m.open
                 break
             }
-            this.addLiteral from: lit to: m.at
+            this.addLiterals from: lit to: m.at :edges
             spells = spells | (this.addMark :text :m)
             lit = m.to
         }
-        this.addLiteral from: lit to: text.length
-        if (spells & 4) != 0 then this.addPieces :text openM: "/*@@member "
-        if (spells & 8) != 0 then this.addPieces :text openM: "/*@@row "
+        this.addLiterals from: lit to: text.length :edges
         return (
             rtinfo
             :segFrom
@@ -1327,18 +1443,14 @@ RtTexts: class {
     }
 
     # addMark -- the hole or key `m` of `text` as a stretch, its name interned:
-    # 1 when it is an ARM hole, 2 a MEMBER hole, 4 a member section's head, 8 a
-    # row piece's head
+    # 1 when it is an ARM hole, 2 a MEMBER hole
     addMark: function {:this text: StringView m: rtmark} out u64 is {
         spells: u64
         hid: zast.nameid.zero
         k: rtsegkind.hole
         if m.key then {
             k = rtsegkind.key
-            kn: text.substring from: m.at + 2 to: m.to - 2
-            if (kn.startsWith prefix: "member ") then spells = 4
-            if (kn.startsWith prefix: "row ") then spells = 8
-            hid = this.keys.set s: kn
+            hid = this.keys.set s: (text.substring from: m.at + 2 to: m.to - 2)
         } else {
             nm: text.substring from: m.at + 1 to: m.to - 1
             if (nm.startsWith prefix: "ARM_") then spells = 1
@@ -1349,40 +1461,17 @@ RtTexts: class {
         return spells
     }
 
-    # addPieces -- each piece of `text` opening with `openM` (a template's
-    # member sections, a fixed file's row pieces), in order, up to and
-    # including the first whose markers are not whole
-    addPieces: function {:this text: StringView openM: StringView} is {
-        pos: u64
-        for pos < text.length loop {
-            sp: nextPiece :text from: pos :openM
-            if sp.found.not then return
-            hd: text.substring from: sp.headFrom to: sp.headTo
-            nameTo: sp.headFrom + ((hd.indexOf needle: " ").or d: hd.length)
-            needFrom: sp.headTo
-            needTo: sp.headTo
-            no: hd.indexOf needle: "needs="
-            if no.some then {
-                needFrom = sp.headFrom + no + 6
-                rest: text.substring from: needFrom to: sp.headTo
-                needTo = needFrom + ((rest.indexOf needle: " ").or d: rest.length)
+    # addLiterals -- the text from `from` to `to` as literal stretches, cut at
+    # each of `edges` inside it
+    addLiterals: function {:this from: u64 to: u64 edges: (ListVal u64).view} is {
+        at: from
+        for each e: edges loop {
+            if e > at when e < to then {
+                this.addLiteral from: at to: e
+                at = e
             }
-            this.pieces.append (
-                rtpiece
-                whole: sp.whole
-                at: sp.at
-                headFrom: sp.headFrom
-                headTo: sp.headTo
-                :nameTo
-                needsFrom: needFrom
-                needsTo: needTo
-                bodyFrom: sp.bodyFrom
-                bodyTo: sp.bodyTo
-                next: sp.next
-            )
-            if sp.whole.not then return
-            pos = sp.next
         }
+        this.addLiteral from: at :to
     }
 
     # addLiteral -- the text from `from` to `to` as a literal stretch, when there
@@ -2057,11 +2146,9 @@ setText: function {ctx: Ctx key: textkey text: String.take} is {
     ctx.texts.set :key value: text.take
 }
 
-# tmplTextOf -- a template's text, parsed once (RtTexts), for writing
-# an instance of it. Its first line may be `/*@@needs <unit>.<member>,...@@*/`:
-# the runtime the template calls, registered at every instance as a row's
-# `needs=` is, and left out of the text (a compiler that knows no marker writes
-# it as a comment).
+# tmplTextOf -- a template's text, parsed once (RtTexts), for writing an
+# instance of it, and its needs (the runtime the template calls, kept when it
+# was read) registered at every instance as a row's are
 tmplTextOf: function {ctx: Ctx key: textkey} out rtid is {
     id: tmplParsed :ctx :key
     nds: String
@@ -2079,23 +2166,22 @@ tmplTextOf: function {ctx: Ctx key: textkey} out rtid is {
     return id
 }
 
-# tmplParsed -- native text `key` parsed (RtTexts) on its first read and
-# kept by key, its `/*@@needs` line left out and kept apart (tmplTextOf)
+# tmplParsed -- native text `key` parsed (RtTexts) on its first read and kept
+# by key: a pieced text (a template, a fixed file, a fragment of pieces) with
+# the pieces its reader cut
 tmplParsed: function {ctx: Ctx key: textkey} out rtid is {
     id: (ctx.tmplTexts.get :key).or d: rtid.zero
-    if id.isZero then {
+    if id.isZero.not then return id
+    po: ctx.piecedTexts.remove :key
+    match (
+        po
+    ) case some then {
+        id = ctx.rt.parsePieced x: po.take
+    } case none then {
         raw: textOf :ctx :key
-        needs: String
-        from: u64
-        if (raw.stringView.startsWith prefix: "/*@@needs ") then {
-            cl: (raw.stringView.indexOf needle: "@@*/").or d: 0
-            needs = (raw.stringView.substring from: 10 to: cl).string
-            from = lineAfter text: raw.stringView at: cl + 4
-        }
-        id = ctx.rt.parse text: (raw.stringView.substring :from to: raw.length)
-        ctx.tmplTexts.set :key value: id
-        ctx.tmplNeeds.set :key value: needs
+        id = ctx.rt.parse text: raw.stringView
     }
+    ctx.tmplTexts.set :key value: id
     return id
 }
 
@@ -2220,8 +2306,8 @@ newUnitReq: function {path: String.take} out UnitReq is {
     )
 }
 
-# memberWord -- the template members an instance's text is cut into
-# (`/*@@member NAME@@*/`): a member written C calls is recorded by its instance
+# memberWord -- the template members an instance's text is cut into (its
+# sections, PiecedText): a member written C calls is recorded by its instance
 # and its slot here (noteMemberUse), never by its spelling.
 memberWord: list {
     destroy: "destroy"
@@ -2324,57 +2410,6 @@ nativeWord: list {
     shapeVariant: "variant"
     shapeRecord: "record"
 } out staticlist StringView
-
-# NativeHead -- a piece's marker head, parsed (fromMarker): the path key and
-# the attributes the marker spells, each "" until a word of the head sets it.
-NativeHead: class {
-    # the piece's path, the first word of the head
-    key: String
-    # `needs=`: the runtime the piece needs
-    need: String
-    # `demand=`: the demand the piece answers to; the path's last segment
-    # when absent
-    dem: String
-} as {
-    # create -- a head with every attribute "", for fromMarker to fill
-    create: function out this is {
-        return (meta.create key: String need: String dem: String)
-    }
-
-    # fromMarker -- the head of a piece's marker (appendPiece), between
-    # `/*@@row ` and `@@*/`: the path key, then `demand=` and `needs=` when set
-    fromMarker: function {head: StringView} out this is {
-        h: NativeHead.create
-        for each f: (head.split sep: " ") loop {
-            if f.length > 0 then {
-                if h.key.length == 0 then {
-                    h.key = f.string
-                } else {
-                    h.setMarkerAttr :f
-                }
-            }
-        }
-        return h
-    }
-
-    # setMarkerAttr -- one attribute word of a marker. A keyed attribute is
-    # matched by STRIPPING its key rather than comparing the word: a spelling
-    # compare is what the architecture rules count against this file.
-    setMarkerAttr: function {:this f: StringView} is {
-        demandText: f.stripPrefix p: "demand="
-        match (
-            demandText
-        ) case some then {
-            this.dem = demandText.string
-        } case none then null
-        so: f.stripPrefix p: "needs="
-        match (
-            so
-        ) case some then {
-            this.need = so.string
-        } case none then null
-    }
-}
 
 # recordCanon -- a unit's canonical stem: the generic instance a runtime
 # fragment spells as the hole <stem>, its template then each type argument
@@ -2655,10 +2690,9 @@ registerImplementations: function {
     for each u: users loop checkedUnit :w :ctx :ast :symtab :u
     for each fl: fd.files loop {
         (
-            setText
-            :ctx
+            ctx.piecedTexts.set
             key: (fileKey :ctx name: fl.name.stringView)
-            text: (servedPieces ps: fl.pieces owner: "prelude")
+            value: (servedPieces :ctx ps: fl.pieces owner: "prelude")
         )
     }
 }
@@ -2757,7 +2791,13 @@ servedRow: function {
     key: r.key.stringView
     if (w.admits :ctx :owner :key fact: r.fact.stringView).not then return
     for each t: r.fragments loop w.fragment :ctx :owner :key text: "\{t}\n"
-    if r.pieces.length > 0 then w.pieces :ctx :owner :key text: (servedPieces ps: r.pieces :owner)
+    if r.pieces.length > 0 then (
+        w.pieces
+        :ctx
+        :owner
+        :key
+        text: (servedPieces :ctx ps: r.pieces :owner)
+    )
     x: zemitrows.blankRow owner: w.owner
     bd: r.body.stringView.trim
     if bd.length > 0 then x.body = ctx.rt.defer text: bd
@@ -2885,11 +2925,12 @@ RowWalk: class {
         this.frags.append nm
     }
 
-    # pieces -- the row's fragment as pieces (servedPieces' text), in place of
-    # its fragments
-    pieces: function {:this ctx: Ctx owner: StringView key: StringView text: String.take} is {
+    # pieces -- the row's fragment as pieces (servedPieces), in place of its
+    # fragments: written a piece at a time
+    pieces: function {:this ctx: Ctx owner: StringView key: StringView text: PiecedText.take} is {
         nm: this.fragmentName :owner :key
-        servedFragment :ctx name: nm.stringView text: text.take
+        ctx.piecedTexts.set key: (fragKey :ctx name: nm.stringView) value: text.take
+        ctx.piecedFrags.add item: nm.copy
         this.frags = nm.copy
     }
 
@@ -3149,16 +3190,26 @@ checkedUnit: function {
         w.requirement :ctx req: r.take fact: ""
     }
     for each t: (zdata.itemsOf :f v: (checkedField :u name: "templates")) loop {
-        x: templateHead needs: (checkedTexts :u v: t name: "needs").stringView
-        for each s: (zdata.itemsOf :f v: (zdata.fieldOf :f v: t name: "sections")) loop (
-            appendSection
-            :x
-            member: (checkedText :u v: s name: "member").stringView
-            needs: (checkedTexts :u v: s name: "needs").stringView
-            text: (checkedText :u v: s name: "text").stringView
-        )
+        x: newPiecedText
+        for each s: (zdata.itemsOf :f v: (zdata.fieldOf :f v: t name: "sections")) loop {
+            mb: checkedText :u v: s name: "member"
+            tx: checkedText :u v: s name: "text"
+            if mb.length == 0 then {
+                x.plain text: tx.stringView
+            } else {
+                (
+                    x.named
+                    name: mb.stringView
+                    needs: (checkedTexts :u v: s name: "needs").stringView
+                    row: 0
+                    text: tx.stringView
+                )
+            }
+        }
         tn: checkedText :u v: t name: "name"
-        cacheTemplate :ctx name: tn.stringView text: x.take
+        k: tmplKey :ctx name: tn.stringView
+        ctx.tmplNeeds.set key: k value: (checkedTexts :u v: t name: "needs")
+        ctx.piecedTexts.set key: k value: x.take
         if ctx.markNatives then markTemplate :ctx :u :t name: tn.stringView
     }
 }
@@ -3194,7 +3245,7 @@ checkedRow: function {
     )
     ps: zdata.itemsOf :f v: (zdata.fieldOf :f v: r name: "pieces")
     if ps.length > 0 then {
-        w.pieces :ctx :owner key: key.stringView text: (checkedPieces :u :ps :owner)
+        w.pieces :ctx :owner key: key.stringView text: (checkedPieces :ctx :u :ps :owner)
         if ctx.markNatives then {
             (
                 recordMark
@@ -3281,39 +3332,30 @@ checkedClass: function {
     )
 }
 
-# checkedPieces -- a list of pieces read off a checked file, as the text the
-# emitter cuts (appendPiece), as servedPieces writes the pieces zc carries
+# checkedPieces -- a list of pieces read off a checked file as the text the
+# emitter writes, as servedPieces reads the pieces zc carries
 checkedPieces: function {
+    ctx: Ctx
     u: UserImplementation.view
     ps: (ListVal ztypes.cval).view
     owner: StringView
-} out String is {
-    pt: String
+} out PiecedText is {
+    x: newPiecedText
     for each p: ps loop {
         nm: checkedText :u v: p name: "name"
+        tx: checkedText :u v: p name: "text"
         if nm.length == 0 then {
-            (
-                appendPiece
-                r: pt
-                :owner
-                name: ""
-                demand: ""
-                needs: ""
-                text: (checkedText :u v: p name: "text").stringView
-            )
-        } else {
-            (
-                appendPiece
-                r: pt
-                :owner
-                name: nm.stringView
-                demand: (checkedTexts :u v: p name: "demand").stringView
-                needs: (checkedTexts :u v: p name: "needs").stringView
-                text: (checkedText :u v: p name: "text").stringView
-            )
+            x.plain text: tx.stringView
+            continue
         }
+        dl: List String
+        for each d: (zdata.textsOf f: u.file v: (zdata.fieldOf f: u.file v: p name: "demand")
+        ) loop dl.append from: d.copy
+        nd: checkedTexts :u v: p name: "needs"
+        row: pieceRow :ctx :owner name: nm.stringView demands: dl needs: nd.stringView
+        x.named name: nm.stringView needs: nd.stringView :row text: tx.stringView
     }
-    return pt
+    return x
 }
 
 # registerFromFiles -- registerImplementations with every unit's rows read off
@@ -3388,7 +3430,7 @@ registerFromFiles: function {
                 m: (piecesMark u: sys :ps mark: fm.take)
             )
         }
-        setText :ctx key: k text: (checkedPieces u: sys :ps owner: "prelude")
+        ctx.piecedTexts.set key: k value: (checkedPieces :ctx u: sys :ps owner: "prelude")
     }
 }
 
@@ -3573,94 +3615,44 @@ servedFragment: function {ctx: Ctx name: StringView text: String.take} is {
     setText :ctx key: (fragKey :ctx :name) text: text.take
 }
 
-# servedTemplate -- one template zc carries, read and written as templateHead
-# and appendSection write any, kept as the template of its name
+# servedTemplate -- one template zc carries, its sections as pieces
+# (PiecedText) and its needs kept by its key (tmplTextOf)
 servedTemplate: function {ctx: Ctx t: schema.template} is {
-    x: templateHead needs: (servedList xs: t.needs).stringView
+    x: newPiecedText
     for each s: t.sections loop {
         if s.member.length == 0 then {
-            appendSection :x member: "" needs: "" text: s.text.stringView
+            x.plain text: s.text.stringView
         } else {
             (
-                appendSection
-                :x
-                member: s.member.stringView
+                x.named
+                name: s.member.stringView
                 needs: (servedList xs: s.needs).stringView
+                row: 0
                 text: s.text.stringView
             )
         }
     }
-    cacheTemplate :ctx name: t.name.stringView text: x.take
+    k: tmplKey :ctx name: t.name.stringView
+    ctx.tmplNeeds.set key: k value: (servedList xs: t.needs)
+    ctx.piecedTexts.set key: k value: x.take
 }
 
-# templateHead -- a template's text before its sections: its needs line, when
-# it needs anything
-templateHead: function {needs: StringView} out String is {
-    x: String
-    if needs.length > 0 then x.append "/*@@needs \{needs}@@*/\n"
-    return x
-}
-
-# appendSection -- one section of a template onto its text: a section of no
-# member as it stands, a member's between `/*@@member` and `/*@@end@@*/`
-appendSection: function {
-    x: String.borrow
-    member: StringView
-    needs: StringView
-    text: StringView
-} is {
-    if member.length == 0 then {
-        x.append "\{text}\n"
-        return
-    }
-    x.append "/*@@member \{member}\{servedAttr name: "needs" value: needs}@@*/\n"
-    x.append "\{text}\n/*@@end@@*/\n"
-}
-
-# cacheTemplate -- a template's text, as template `name`
-cacheTemplate: function {ctx: Ctx name: StringView text: String.take} is {
-    setText :ctx key: (tmplKey :ctx :name) text: text.take
-}
-
-# servedPieces -- a list of pieces zc carries as the text the emitter cuts
-# (appendPiece)
-servedPieces: function {ps: staticlist schema.piece owner: StringView} out String is {
-    r: String
+# servedPieces -- pieces `ps` of `owner` zc carries as the text the emitter
+# writes (PiecedText), each named piece a row of its own (pieceRow)
+servedPieces: function {ctx: Ctx ps: staticlist schema.piece owner: StringView} out PiecedText is {
+    x: newPiecedText
     for each p: ps loop {
         if p.name.length == 0 then {
-            appendPiece :r :owner name: "" demand: "" needs: "" text: p.text.stringView
-        } else {
-            (
-                appendPiece
-                :r
-                :owner
-                name: p.name.stringView
-                demand: (servedList xs: p.demand).stringView
-                needs: (servedList xs: p.needs).stringView
-                text: p.text.stringView
-            )
+            x.plain text: p.text.stringView
+            continue
         }
+        dl: List String
+        for each d: p.demand loop dl.append from: d.string
+        nd: servedList xs: p.needs
+        row: pieceRow :ctx :owner name: p.name.stringView demands: dl needs: nd.stringView
+        x.named name: p.name.stringView needs: nd.stringView :row text: p.text.stringView
     }
-    return r
-}
-
-# appendPiece -- one piece onto the text the emitter cuts: a piece with no name
-# as it stands, a named one between `/*@@row` and `/*@@end@@*/`
-appendPiece: function {
-    r: String.borrow
-    owner: StringView
-    name: StringView
-    demand: StringView
-    needs: StringView
-    text: StringView
-} is {
-    if name.length == 0 then {
-        r.append "\{text}\n"
-        return
-    }
-    r.append "/*@@row @\{owner}.\{name}\{servedAttr name: "demand" value: demand}"
-    r.append "\{servedAttr name: "needs" value: needs}@@*/\n"
-    r.append "\{text}\n/*@@end@@*/\n"
+    return x
 }
 
 # servedKey -- a row's key: `<unit>.<key>`, a helper `@<unit>.<name>`, a
@@ -3669,12 +3661,6 @@ servedKey: function {owner: StringView key: StringView} out String is {
     if owner.length == 0 then return "@\{key}"
     if key.startsWith "@" then return "@\{owner}.\{key.substring from: 1 to: key.length}"
     return "\{owner}.\{key}"
-}
-
-# servedAttr -- ` name=value` when the value is not empty
-servedAttr: function {name: StringView value: StringView} out String is {
-    if value.length == 0 then return String
-    return " \{name}=\{value}"
 }
 
 # servedList -- a list of texts, comma-separated
@@ -3857,12 +3843,6 @@ RowFacts: class {
         }
         return true
     }
-}
-
-# nativeFragRow -- the piece row registered under path `path`, which its marker
-# head names it by; 0 when none is
-nativeFragRow: function {ctx: Ctx.view path: StringView} out u64 is {
-    return ((ctx.nativeFragPaths.get key: path.asString).or d: 0)
 }
 
 # rowNeedAddOne -- one need of a row's `needs=` list (rowNeedAdd): a member of
@@ -5194,10 +5174,11 @@ Ctx: class {
     unitReqs: List UnitReq
     # the runtime text the emitter fills, each parsed once (RtTexts)
     rt: RtTexts
-    # each native text's parse (tmplTextOf), and the runtime its `/*@@needs`
-    # line names
+    # each native text's parse (tmplTextOf), and the runtime a template needs
     tmplTexts: (MapVV textkey v: rtid)
     tmplNeeds: (MapVR textkey V: String)
+    # the pieced texts read and not yet parsed (tmplParsed)
+    piecedTexts: (MapVR textkey V: PiecedText)
     # the pulls of the rows answering each demand, comma-separated (needsAddPullsOf)
     pullsByDemand: (MapVR zemitrows.demandkey V: String)
     # the C words an emitted identifier dodges (cReserved)
@@ -5216,8 +5197,6 @@ Ctx: class {
     nativeMarks: (MapVV textkey v: u64)
     # row 0 is the sentinel, no place
     marks: List NativeMark
-    # the piece rows by the path their marker heads name them by (rtRowPlan)
-    nativeFragPaths: (MapRV String v: u64)
     # the rows, one table, each found by the declaration it implements
     # (rowNameOfFn, rowNameOfMember)
     rows: zemitrows.RowTable
@@ -38780,48 +38759,12 @@ emitCHeader: function {
     buf.append (loadFixedFile :ctx key: p2)
 }
 
-# loadPieces -- the pieces of the runtime's fixed files, registered as rows of
-# the prelude unit, and those of a unit's shared fragments, as rows of their
-# unit. A piece is the text between `/*@@row KEY attr=...@@*/` and
-# `/*@@end@@*/`; its head is read as a row's head is, so its
-# `demand=` and `needs=` decide it as they decide any row (rowDemandFired,
-# closeRowNeeds). It is written in place, by the file that holds it
-# (loadFixedFile), never by a unit walk. Both markers are C comments: a
-# compiler that knows no pieces writes the file whole, and the C compiles.
-loadPieces: function {ctx: Ctx} is {
-    loadFixedPieces :ctx name: "head"
-    loadFixedPieces :ctx name: "alloc"
-    loadFixedPieces :ctx name: "String"
-    loadFixedPieces :ctx name: "StringView"
-    loadFixedPieces :ctx name: "hash"
-    loadFixedPieces :ctx name: "start"
-    # z_panic's fragment, the one the table chose (a threaded program's
-    # differs): written in the header's slot, a piece at a time
+# placePanicRow -- the row of z_panic's fragment, the one the table chose (a
+# threaded program's differs), is written by the header, in its slot: no unit
+# walk writes it. Every other piece row was placed as its reader read it.
+placePanicRow: function {ctx: Ctx} is {
     pr: panicRow :ctx
-    if pr > 0 then {
-        ctx.rowsInPlace.add item: pr
-        pf: rowFragText :ctx row: pr
-        pp: fragKey :ctx name: pf.stringView
-        loadPiecesOf :ctx key: pp
-    }
-    # the prelude rows' fragments, and a unit's own (the rows answering its
-    # `@unit`, which hold what every member of it shares): one holding pieces
-    # is written by its row, a piece at a time (ioFrag)
-    prelude: ctx.demands.names.find s: "prelude"
-    n: ctx.rows.fragRows.length
-    i: u64
-    for i < n loop {
-        row: ctx.rows.fragRows.get :i
-        i = i + 1
-        hosts: (ctx.rows.rows.get i: row).owner == prelude
-        if hosts.not then hosts = answersUnit :ctx :row
-        if hosts when (ctx.rowsInPlace.has item: row).not then {
-            fl: rowFragText :ctx :row
-            for each fr: (fl.stringView.split sep: ",") loop {
-                if fr.length > 0 then loadFragPieces :ctx frag: fr
-            }
-        }
-    }
+    if pr > 0 then ctx.rowsInPlace.add item: pr
 }
 
 # panicRow -- the prelude's `@panic` row, whose fragment is z_panic's; 0 when
@@ -38831,144 +38774,6 @@ panicRow: function {ctx: Ctx.view} out u64 is {
     n: ctx.demands.names.find s: "@panic"
     if p.isZero or n.isZero then return 0
     return (ctx.rows.helperOf k: (zemitrows.demandkey owner: p name: n))
-}
-
-# answersUnit -- fragment row `row` answers its unit's `@unit`: it holds what
-# the unit's members share, and its fragment may hold pieces.
-answersUnit: function {ctx: Ctx.view row: u64} out bool is {
-    un: ctx.demands.names.find s: "@unit"
-    if un.isZero then return false
-    r: ctx.rows.rows.get i: row
-    k: r.demandFrom
-    for k < r.demandTo loop {
-        if (ctx.rows.demandKeys.get i: k).name == un then return true
-        k = k + 1
-    }
-    return false
-}
-
-# loadFragPieces -- loadPiecesOf for the fragment `frag`, when it holds
-# pieces: it is marked to be written a piece at a time
-loadFragPieces: function {ctx: Ctx frag: StringView} is {
-    p: fragKey :ctx name: frag
-    inf: ctx.rt.infos.get i: (tmplParsed :ctx key: p)
-    if inf.pieceFrom == inf.pieceTo then return
-    if (ctx.piecedFrags.has item: frag.string) then return
-    ctx.piecedFrags.add item: frag.string
-    loadPiecesOf :ctx key: p
-}
-
-# loadFixedPieces -- loadPiecesOf for the fixed file `name`
-loadFixedPieces: function {ctx: Ctx name: StringView} is {
-    p: fileKey :ctx :name
-    loadPiecesOf :ctx key: p
-}
-
-# markerOwner -- the unit a piece's marker path names, an id of
-# DemandSet.names: its first segment, the `@` that marks a path outside the
-# declaration space stripped; the whole path when it has no `.`
-markerOwner: function {ctx: Ctx key: StringView} out zast.nameid is {
-    from: u64
-    to: key.length
-    fd: key.indexOf needle: "."
-    match (
-        fd
-    ) case some then {
-        to = fd
-        if key.startsWith "@" then from = 1
-    } case none then null
-    return (ctx.demands.names.intern s: (key.substring :from :to))
-}
-
-# loadPiecesOf -- loadPieces for native text `key`: each of its pieces (rtpiece)
-# recorded as a row, in place in the text
-loadPiecesOf: function {ctx: Ctx key: textkey} is {
-    p: textLabel :ctx :key
-    id: tmplParsed :ctx :key
-    tt: (ctx.rt.texts.get i: id).copy
-    inf: ctx.rt.infos.get i: id
-    j: inf.pieceFrom
-    for j < inf.pieceTo loop {
-        pc: ctx.rt.pieces.get i: j
-        j = j + 1
-        if pc.whole.not then {
-            (
-                emitFail
-                :ctx
-                what: "\{p}: the piece marker at byte \{pc.at} is not closed"
-                line: 0
-            )
-            return
-        }
-        h: NativeHead.fromMarker head: (tt.stringView.substring from: pc.headFrom to: pc.headTo)
-        r: beginDemands :ctx r: (zemitrows.blankRow owner: (markerOwner :ctx key: h.key.stringView))
-        if h.dem.length > 0 then r = addRowDemands :ctx :r dm: h.dem.stringView
-        r = endDemands :ctx :r key: h.key.stringView
-        if h.need.length > 0 then r.needText = rowNeedText :ctx needs: h.need.stringView
-        row: appendFragmentRow :ctx :r
-        ctx.nativeFragPaths.set key: h.key.copy value: row
-        ctx.rowsInPlace.add item: row
-    }
-}
-
-# piecespan -- where the next piece of a fixed file lies (nextPiece)
-piecespan: record {
-    # a piece opens at or after the point searched from
-    found: bool
-    # its markers are whole: a head closed by `@@*/`, an end marker after it
-    whole: bool
-    # where its open marker starts
-    at: u64
-    # its head, between `/*@@row ` and `@@*/`
-    headFrom: u64
-    headTo: u64
-    # its text: from the line after the open marker up to the end marker
-    bodyFrom: u64
-    bodyTo: u64
-    # where the file's own text resumes, after the end marker's line
-    next: u64
-}
-
-# nextPiece -- the first piece of `text` at or after `from` that opens with
-# `openM` (`/*@@row ` for a fixed file's piece, `/*@@member ` for a template's
-# member). Each marker owns the line break that follows it, so a piece left out
-# leaves no blank line.
-nextPiece: function {text: StringView from: u64 openM: StringView} out piecespan is {
-    sp: (
-        piecespan
-        found: false
-        whole: false
-        at: text.length
-        headFrom: 0
-        headTo: 0
-        bodyFrom: 0
-        bodyTo: 0
-        next: text.length
-    )
-    endM: "/*@@end@@*/"
-    oo: (text.substring :from to: text.length).indexOf needle: openM
-    if oo.none then return sp
-    sp.found = true
-    sp.at = from + oo
-    sp.headFrom = sp.at + openM.length
-    hc: (text.substring from: sp.headFrom to: text.length).indexOf needle: "@@*/"
-    if hc.none then return sp
-    sp.headTo = sp.headFrom + hc
-    sp.bodyFrom = lineAfter :text at: sp.headTo + 4
-    ec: (text.substring from: sp.bodyFrom to: text.length).indexOf needle: endM
-    if ec.none then return sp
-    sp.bodyTo = sp.bodyFrom + ec
-    sp.next = lineAfter :text at: sp.bodyTo + endM.length
-    sp.whole = true
-    return sp
-}
-
-# lineAfter -- `at`, moved past the line break there when there is one
-lineAfter: function {text: StringView at: u64} out u64 is {
-    b: text.byteAt i: at
-    if b.none then return at
-    if b == 10 then return at + 1
-    return at
 }
 
 # memberKey -- the key a template member is recorded by: its instance, and its
@@ -39079,7 +38884,8 @@ rtSectionPlan: function {ctx: Ctx mono: ztypes.tid id: rtid} out RtPlan is {
     if inf.pieceFrom == inf.pieceTo then return plan
     marks: ListVal u64
     rtKept :ctx :mono :id :marks kept: plan.kept
-    tt: (ctx.rt.texts.get i: id).copy
+    # the sections' names and needs, not the C
+    tt: (ctx.rt.heads.get i: id).copy
     text: tt.stringView
     # a section kept only for a call some configurations make is written
     # inside `#if`, and so is each section only it needs
@@ -39107,14 +38913,13 @@ rtKept: function {
     marks: ListVal u64
     kept: ListVal bool
 } is {
-    t: ctx.rt.texts.get i: id
+    t: ctx.rt.heads.get i: id
     text: t.stringView
     inf: ctx.rt.infos.get i: id
     j: inf.pieceFrom
     for j < inf.pieceTo loop {
         pc: ctx.rt.pieces.get i: j
         j = j + 1
-        if pc.whole.not then break
         marks.append pc.headFrom
         marks.append pc.nameTo
         marks.append pc.needsFrom
@@ -39138,15 +38943,12 @@ rtKeptPlan: function {ctx: Ctx.view mono: ztypes.tid id: rtid} out RtPlan is {
 # its row fired, inside `#if` where the row holds under a condition
 rtRowPlan: function {ctx: Ctx.view id: rtid} out RtPlan is {
     plan: RtPlan :id kept: ListVal bool conds: List Cond
-    t: ctx.rt.texts.get i: id
-    text: t.stringView
     inf: ctx.rt.infos.get i: id
     j: inf.pieceFrom
     for j < inf.pieceTo loop {
         pc: ctx.rt.pieces.get i: j
         j = j + 1
-        if pc.whole.not then break
-        row: nativeFragRow :ctx path: (text.substring from: pc.headFrom to: pc.nameTo)
+        row: pc.row
         fired: false
         if row > 0 when (rowDemandFired :ctx :row) then fired = true
         plan.kept.append fired
@@ -39250,7 +39052,6 @@ rtRenderWith: function {
     for j < inf.pieceTo loop {
         pc: rt.pieces.get i: j
         j = j + 1
-        if pc.whole.not then break
         pieceMarked = remarkText :ctx :mk :id from: pos to: pc.at after: pieceMarked buf: res
         (
             rt.fillSpan
@@ -39318,18 +39119,11 @@ rtRenderWith: function {
 }
 
 # appendNativeMark -- the mark of native text `mk` (NativeMark) as a C comment
-# line: the piece's or section's whose head spells `name` (a row piece's
-# `@<unit>.<name>`, a section's member), the text's own for ""
+# line: the piece's or section's named `name`, the text's own for ""
 appendNativeMark: function {ctx: Ctx.view mk: u64 name: StringView buf: String.borrow} is {
     m: ctx.marks.get i: mk
-    nm: name
-    if nm.startsWith "@" then nm = (
-        nm.substring
-        from: ((nm.indexOf needle: ".").or d: 0) + 1
-        to: nm.length
-    )
-    if nm.length > 0 then {
-        pm: m.parts.get key: nm.asString
+    if name.length > 0 then {
+        pm: m.parts.get key: name.asString
         match (
             pm
         ) case some then {
@@ -39353,7 +39147,7 @@ openMark: function {ctx: Ctx.view key: textkey buf: String.borrow} out u64 is {
 # `mk`; whether it had
 markPiece: function {ctx: Ctx.view mk: u64 id: rtid pc: rtpiece buf: String.borrow} out bool is {
     if mk == 0 then return false
-    tv: (ctx.rt.texts.get i: id).stringView
+    tv: (ctx.rt.heads.get i: id).stringView
     appendNativeMark :ctx :mk name: (tv.substring from: pc.headFrom to: pc.nameTo) :buf
     return true
 }
@@ -39402,7 +39196,7 @@ rtPlanWrites: function {ctx: Ctx.view plan: RtPlan.view at: u64} out bool is {
     for j < inf.pieceTo loop {
         pc: ctx.rt.pieces.get i: j
         j = j + 1
-        if pc.whole.not or (at < pc.at) then return true
+        if at < pc.at then return true
         if at < pc.next then {
             if (plan.kept.get :i).not then return false
             return (at >= pc.bodyFrom) and (at < pc.bodyTo)
@@ -39954,6 +39748,7 @@ emitC: function {
         rt: RtTexts.create
         tmplTexts: (MapVV textkey v: rtid)
         tmplNeeds: (MapVR textkey V: String)
+        piecedTexts: (MapVR textkey V: PiecedText)
         pullsByDemand: (MapVR zemitrows.demandkey V: String)
         cWords: (zast.Vocab.create block: cReserved)
         opWords: (zast.Vocab.create block: opSpelling)
@@ -39962,7 +39757,6 @@ emitC: function {
         :markNatives
         nativeMarks: (MapVV textkey v: u64)
         marks: List NativeMark
-        nativeFragPaths: (MapRV String v: u64)
         rows: zemitrows.RowTable.create
         hoistTags: (MapRV String v: zast.nameid)
         rowsWritten: IdSet u64
@@ -40039,7 +39833,7 @@ emitC: function {
     } else {
         registerFromFiles :ctx ast: program :symtab :users
     }
-    loadPieces :ctx
+    placePanicRow :ctx
     linkLibs: List String
     csrcs: List String
     (
@@ -45184,6 +44978,70 @@ tmplTypeMade: function {symtab: zenv.ZSymbolTable.view ctx: Ctx.view tid: ztypes
     return (tmplClassInProgram :symtab tpl: tid)
 }
 
+# rtFillPieced -- a class template's text `id` with the keys `keys` binds
+# filled and its unmade functions dropped (dropUnmadeFns), its member sections
+# kept as sections: each stretch between and in them is filled apart
+rtFillPieced: function {ctx: Ctx.view id: rtid keys: RtKeys.view} out PiecedText is {
+    x: newPiecedText
+    hd: (ctx.rt.heads.get i: id).copy
+    total: (ctx.rt.texts.get i: id).length
+    inf: ctx.rt.infos.get i: id
+    pos: u64
+    j: inf.pieceFrom
+    for j < inf.pieceTo loop {
+        pc: ctx.rt.pieces.get i: j
+        j = j + 1
+        (
+            x.plainLines
+            text: (
+                dropUnmadeFns
+                text: (rtFillKeysSpan :ctx :id :keys from: pos to: pc.at).stringView
+            ).stringView
+        )
+        (
+            x.namedLines
+            name: (hd.stringView.substring from: pc.headFrom to: pc.nameTo)
+            needs: (hd.stringView.substring from: pc.needsFrom to: pc.needsTo)
+            row: pc.row
+            text: (
+                dropUnmadeFns
+                text: (rtFillKeysSpan :ctx :id :keys from: pc.bodyFrom to: pc.bodyTo).stringView
+            ).stringView
+        )
+        pos = pc.next
+    }
+    (
+        x.plainLines
+        text: (dropUnmadeFns text: (rtFillKeysSpan :ctx :id :keys from: pos to: total).stringView
+        ).stringView
+    )
+    return x
+}
+
+# rtFillKeysSpan -- rtFillKeys for bytes `from` to `to` of text `id`
+rtFillKeysSpan: function {
+    ctx: Ctx.view id: rtid keys: RtKeys.view from: u64 to: u64
+} out String is {
+    buf: String
+    fails: List String
+    (
+        ctx.rt.fillSpan
+        :id
+        :from
+        :to
+        :keys
+        bindIds: ListVal zast.nameid
+        bindVals: List String
+        rawIds: ListVal zast.nameid
+        rawVals: List String
+        holes: false
+        path: ""
+        :fails
+        :buf
+    )
+    return buf
+}
+
 # dropUnmadeFns -- a class template without the functions that still spell a
 # hole (answerKeys leaves those whose type the program does not have):
 # each runs from its `static ...) {` line to the `}` closing it at the start of
@@ -45346,13 +45204,12 @@ emitTmplClassMono: function {
     # the program writes are known
     ab: String
     answerKeys :ast :symtab :ctx id: ti keys: kt inst: monoId nm: nm.stringView buf: ab
-    t: rtFillKeys :ctx id: ti keys: kt
-    made: dropUnmadeFns text: t.stringView
+    made: rtFillPieced :ctx id: ti keys: kt
     # the members written C calls, and those they need (rtSectionPlan), in this
     # instance's own text, parsed once; what is left in it is a runtime
     # fragment's own holes, every one bound: a type by canon, a tag constant, a
     # member
-    plan: rtSectionPlan :ctx mono: monoId id: (ctx.rt.parse text: made.stringView)
+    plan: rtSectionPlan :ctx mono: monoId id: (ctx.rt.parsePieced x: made.take)
     kept: rtFragmentText :ast :symtab :ctx :plan all: true key: p
     di: u64
     for di < dfns.length loop {
