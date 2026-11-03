@@ -1069,20 +1069,9 @@ emitFillFails: function {ctx: Ctx fails: (List String).view} is {
 }
 
 
-# rtid -- a parsed runtime text's id in RtTexts: ids rise as texts are parsed,
-# and 0 is no text
-rtid: typedef u64 as {
-    # identity by id
-    ==: function {this: this.view rhs: rtid} out bool is {
-        return this.u64 == rhs.u64
-    }
-    # the sentinel: 0 is no text, never the first one
-    isZero: function {this: this.view} out bool is {
-        return this.u64 == 0
-    }
-    # the zero rtid: no text. A path the rows give no body answers it
-    zero: rtid 0
-}
+# rtid -- a parsed runtime text's id in RtTexts (zemitrows.rtid: a row holds
+# its body's)
+rtid: zemitrows.rtid
 
 # rtsegkind -- what one stretch of a parsed runtime text is (rtseg)
 rtsegkind: variant {
@@ -2580,8 +2569,9 @@ recordFragmentRow: function {
 # recordRowBodies -- the row's tables: its body, under `const=` a
 # constant-operand variant with its position and otherwise the plain body,
 # then the runtime it needs, pointer arguments, value form and folding, each
-# keyed by the path
-recordRowBodies: function {ctx: Ctx h: NativeHead.view body: StringView} is {
+# keyed by the path. The plain body's id, zero for none
+recordRowBodies: function {ctx: Ctx h: NativeHead.view body: StringView} out rtid is {
+    plain: rtid
     if body.length > 0 then {
         kb: h.key.copy
         bid: ctx.rt.defer text: body
@@ -2591,6 +2581,7 @@ recordRowBodies: function {ctx: Ctx h: NativeHead.view body: StringView} is {
             ctx.nativeConstPos.set key: kc value: h.cst.copy
         } else {
             ctx.nativeTbl.set key: kb value: bid
+            plain = bid
         }
     }
     if h.need.length > 0 then {
@@ -2610,6 +2601,7 @@ recordRowBodies: function {ctx: Ctx h: NativeHead.view body: StringView} is {
         ke: h.key.copy
         ctx.nativeEqRows.set key: ke value: true
     }
+    return plain
 }
 
 # svcall -- how a call of a StringView native member is emitted: the `call`
@@ -2658,18 +2650,147 @@ recordSvCall: function {ctx: Ctx ast: Ast.view key: StringView call: StringView}
     } case none then null
 }
 
-# recordNativeRow -- one row: its key, then the member filter it may feed,
-# the fragment halves when it is fragment-backed, and its tables
-recordNativeRow: function {ctx: Ctx ast: Ast.view h: NativeHead.view body: StringView} is {
+# recordNativeRow -- one row of `owner`'s file, keyed `key` there: its path,
+# then the member filter it may feed, the fragment halves when it is
+# fragment-backed, and its tables; a row that is not a constant-operand variant
+# joins the row table (RowTable)
+recordNativeRow: function {
+    ctx: Ctx
+    ast: Ast.view
+    h: NativeHead.view
+    # the file's place (from 1), 0 for the foundation's rows and a
+    # file whose unit the program does not reach: the row is found by name
+    # only when it is not
+    impl: u64
+    # the file's unit or the foundation group, an id of DemandSet.names; zero
+    # for a structural row
+    owner: zast.nameid
+    key: StringView
+    body: StringView
+} is {
     kk: h.key.copy
     ctx.nativeKeys.set key: kk value: true
     if h.call.length > 0 then recordSvCall :ctx :ast key: h.key.stringView call: h.call.stringView
     if body.length > 0 when h.cst.length == 0 then {
         recordConvMember :ctx :ast key: h.key.stringView :body
     }
-    if h.via.length > 0 then ctx.nativeVia.set key: h.key.copy value: h.via.copy
-    if h.frag.length > 0 then recordHeadFragment :ctx :h
-    recordRowBodies :ctx :h :body
+    frag: u64
+    if h.frag.length > 0 then {
+        frag = ctx.fragUnits.length + 1
+        recordHeadFragment :ctx :h
+    }
+    plain: recordRowBodies :ctx :h :body
+    if h.cst.length > 0 then return
+    nt: u64
+    if owner.isZero.not when h.need.length > 0 then {
+        ctx.rows.needTexts.append from: h.need.copy
+        nt = ctx.rows.needTexts.length
+    }
+    vi: zast.nameid
+    if h.via.length > 0 then vi = ctx.demands.names.intern s: h.via.stringView
+    (
+        ctx.rows.rows.append
+        (
+            zemitrows.nativerow
+            :owner
+            body: plain
+            via: vi
+            needText: nt
+            needFrom: 0
+            needTo: 0
+            :frag
+        )
+    )
+    if impl > 0 then nameRow :ctx :ast :impl :key row: ctx.rows.rows.length - 1
+}
+
+# nameRow -- row `row` of file `impl`, keyed `key` there, found by the key as
+# the program's names spell it (rowname): `name`, or `Type.name`. A helper's
+# key (`@name`) and a key naming what the program never spells name no
+# declaration, and are not found this way.
+nameRow: function {ctx: Ctx ast: Ast.view impl: u64 key: StringView row: u64} is {
+    if key.startsWith "@" then return
+    tn: zast.nameid
+    from: u64
+    d: key.indexOf needle: "."
+    match (
+        d
+    ) case some then {
+        tn = poolIdOf :ast text: (key.substring from: 0 to: d)
+        if tn.isZero then return
+        from = d + 1
+    } case none then null
+    nm: poolIdOf :ast text: (key.substring :from to: key.length)
+    if nm.isZero then return
+    ctx.rows.byName.set key: (zemitrows.rowname :impl typeName: tn name: nm) value: row
+}
+
+# readRowNeeds -- row `row`'s needs (`u.m`, or `m` of the row's own unit, each
+# `?NAME` holding under the foundation's condition NAME too) parsed onto the
+# row table's needs, the first time the row is emitted from; a need under a
+# condition no file declares is reported (condBitOf) and dropped
+readRowNeeds: function {ctx: Ctx row: u64} is {
+    r: ctx.rows.rows.get i: row
+    if r.needText == 0 then return
+    needs: (ctx.rows.needTexts.get i: r.needText - 1).copy
+    r.needFrom = ctx.rows.needs.length
+    parseRowNeeds :ctx owner: r.owner needs: needs.stringView
+    r.needTo = ctx.rows.needs.length
+    r.needText = 0
+    ctx.rows.rows.set i: row val: r
+}
+
+# parseRowNeeds -- readRowNeeds' parse of the needs of a row of `owner`
+parseRowNeeds: function {ctx: Ctx owner: zast.nameid needs: StringView} is {
+    for each nd: (needs.split sep: ",") loop {
+        if nd.length > 0 then {
+            bit: u64
+            keep: true
+            cut: nd.length
+            q: nd.indexOf needle: "?"
+            match (
+                q
+            ) case some then {
+                bit = condBitOf :ctx name: (nd.substring from: q + 1 to: nd.length)
+                keep = bit != 0
+                cut = q
+            } case none then null
+            if keep then {
+                bare: nd.substring from: 0 to: cut
+                key: zemitrows.demandkey :owner name: zast.nameid.zero
+                d: bare.indexOf needle: "."
+                match (
+                    d
+                ) case some then {
+                    key = (
+                        ctx.demands.keyOf
+                        owner: (bare.substring from: 0 to: d)
+                        name: (bare.substring from: d + 1 to: bare.length)
+                    )
+                } case none then {
+                    key.name = ctx.demands.names.intern s: bare
+                }
+                ctx.rows.needs.append (zemitrows.rowneed :key cond: bit)
+            }
+        }
+    }
+}
+
+# rowNeedsAdd -- what row `row`'s body calls (its needs), demanded wherever
+# the row is emitted from, in the configurations `cond` holds in
+rowNeedsAdd: function {ctx: Ctx row: u64 cond: Cond.view} is {
+    readRowNeeds :ctx :row
+    r: ctx.rows.rows.get i: row
+    k: r.needFrom
+    for k < r.needTo loop {
+        nd: ctx.rows.needs.get i: k
+        if nd.cond == 0 then {
+            needsAddKeyCond :ctx key: nd.key :cond
+        } else {
+            needsAddKeyCond :ctx key: nd.key cond: (condWith c: cond bit: nd.cond)
+        }
+        k = k + 1
+    }
 }
 
 # schema -- the implementation files' schema, as the served unit holds it
@@ -2707,8 +2828,8 @@ registerImplementations: function {
     for each g: fd.groups loop {
         for each r: g.rows loop servedRow :w :ctx :ast :r owner: g.name.stringView
     }
-    for each k: order loop servedUnit :w :ctx :ast u: (nativec.units.get i: k)
-    for each u: users loop checkedUnit :w :ctx :ast :u
+    for each k: order loop servedUnit :w :ctx :ast :symtab u: (nativec.units.get i: k)
+    for each u: users loop checkedUnit :w :ctx :ast :symtab :u
     for each fl: fd.files loop {
         (
             setText
@@ -2725,8 +2846,10 @@ servedUnit: function {
     w: RowWalk
     ctx: Ctx
     ast: Ast.view
+    symtab: zenv.ZSymbolTable.view
     u: nativec.servedUnit
 } is {
+    w.file :ctx :ast :symtab owner: u.name.stringView
     for each r: u.implementation.rows loop (
         servedRow
         :w
@@ -2770,6 +2893,10 @@ newRowWalk: function out RowWalk is {
         )
         frags: String
         at: String
+        impl: 0
+        ownerText: String
+        owner: zast.nameid.zero
+        reached: false
     )
 }
 
@@ -2872,7 +2999,29 @@ RowWalk: class {
     # where the row being read is written, as its texts' mark (NativeMark);
     # "" when none is asked for
     at: String
+    # the place of the file being read (from 1), 0 while the
+    # foundation's groups and structural rows are
+    impl: u64
+    # the unit or group the last row placed was read for, and its id in
+    # DemandSet.names (zero for a structural row): read once per run of rows
+    ownerText: String
+    owner: zast.nameid
+    # the program reaches the unit of the file being read
+    reached: bool
 } as {
+    # file -- the file implementing unit `owner` is read next: found by the
+    # unit's declaration (RowTable.fileOf) when the program reaches the unit,
+    # and its rows found by name then only (nameRow)
+    file: function {
+        :this ctx: Ctx ast: Ast.view symtab: zenv.ZSymbolTable.view owner: StringView
+    } is {
+        ctx.rows.files = ctx.rows.files + 1
+        this.impl = ctx.rows.files
+        ud: unitDeclByName :symtab :ast name: owner
+        this.reached = ud.isZero.not
+        if this.reached then ctx.rows.fileOf.set key: ud value: this.impl
+    }
+
     # fact -- a unit's fact: declared, and held when any of `reach`'s paths
     # (comma-separated) is reached
     fact: function {
@@ -2961,7 +3110,7 @@ RowWalk: class {
     } is {
         h.key = servedKey :owner :key
         h.frag swap this.frags
-        this.place :ctx :ast :h :body
+        this.place :ctx :ast :h :owner :key :body
     }
 
     # requirement -- a link, source or refusal a reader read: a link or a
@@ -2976,9 +3125,26 @@ RowWalk: class {
         if holds then ctx.unitReqs.append req.take
     }
 
-    # place -- a row recorded into the row tables
-    place: function {:this ctx: Ctx ast: Ast.view h: NativeHead.view body: StringView} is {
-        if (this.rf.applies :ctx :h) then recordNativeRow :ctx :ast :h :body
+    # place -- a row of `owner`'s file, keyed `key` there, recorded into the
+    # row tables
+    place: function {
+        :this
+        ctx: Ctx
+        ast: Ast.view
+        h: NativeHead.view
+        owner: StringView
+        key: StringView
+        body: StringView
+    } is {
+        if (this.rf.applies :ctx :h).not then return
+        if owner != this.ownerText then {
+            this.ownerText = owner.string
+            this.owner = zast.nameid.zero
+            if owner.length > 0 then this.owner = ctx.demands.names.intern s: owner
+        }
+        im: u64
+        if this.reached then im = this.impl
+        recordNativeRow :ctx :ast :h impl: im owner: this.owner :key :body
     }
 
     # fragmentName -- the name of a row's fragment, `_Z_<UNIT>_<KEY>`, each byte
@@ -3057,10 +3223,12 @@ checkedUnit: function {
     w: RowWalk
     ctx: Ctx
     ast: Ast.view
+    symtab: zenv.ZSymbolTable.view
     u: UserImplementation.view
 } is {
     f: u.file
     owner: u.name.stringView
+    w.file :ctx :ast :symtab :owner
     for each r: (zdata.itemsOf :f v: (checkedField :u name: "rows")) loop (
         checkedRow
         :w
@@ -3311,7 +3479,7 @@ registerFromFiles: function {
             owner: gn.stringView
         )
     }
-    for each i: order loop checkedUnit :w :ctx :ast u: (users.get :i)
+    for each i: order loop checkedUnit :w :ctx :ast :symtab u: (users.get :i)
     for each fl: (checkedItems u: sys v: fd name: "files") loop {
         fn: checkedText u: sys v: fl name: "name"
         k: fileKey :ctx name: fn.stringView
@@ -3835,14 +4003,6 @@ nativeConvMembOn: function {
     } case none then {
         return false
     }
-}
-
-# nativeIsFragBacked -- a fragment implements this path, so its C symbol is the
-# convention one. The question is never which unit a native lives in, it is
-# whether the runtime supplies its body, and a user unit that ships a fragment
-# answers yes on the same terms as io does.
-nativeIsFragBacked: function {ctx: Ctx.view path: StringView} out bool is {
-    return (nativeFragRow :ctx :path) > 0
 }
 
 # nativeFragRow -- the fragment row that implements this path, as its index in
@@ -5383,15 +5543,9 @@ Ctx: class {
     # under the `z_<unit>_<name>` convention, whoever declares it -- each to its
     # row's index in the parallel frag lists, plus one (0 is no row)
     nativeFragPaths: (MapRV String v: u64)
-    # the native free functions a templated class implements (a row's
-    # `via`), each to the member of the class it answers whose template
-    # function is its body
-    nativeVia: (MapRR String V: String)
-    # the fragment rows that implement a class's native METHOD, by the method's
-    # type id: the row's path, bound once from nativeFragPaths the first time a
-    # native method is called (bindMethodRows)
-    methodRowPaths: (IdMapR ztypes.tid V: String)
-    methodRowsBound: bool
+    # the rows, one table, each found by the declaration it implements
+    # (bindRows)
+    rows: zemitrows.RowTable
     # which natives are conversion members, whose routing differs: each member
     # name to the name id of the one type whose receiver-only rows carry it, or
     # zero when rows of several types do, so a read on any other type is told no
@@ -15258,7 +15412,7 @@ emitRecordCtor: function {
         named: String
         if (fnIsNativeId :symtab fid: cco) then {
             noteMemberUse :ctx mono: tid member: memberWord.slot.create
-            demandMethodRow :ast :symtab :ctx mfid: cco
+            demandMethodRow :symtab :ctx mfid: cco
             named = "\{spelledCname :ctx :tid}_create"
         }
         return (userCreateCtor :ast :symtab :ctx :call :cco :facts named: named.stringView)
@@ -40288,9 +40442,7 @@ emitC: function {
         marks: List NativeMark
         svCalls: (IdMapV zast.nameid v: svcall)
         nativeFragPaths: (MapRV String v: u64)
-        nativeVia: (MapRR String V: String)
-        methodRowPaths: (IdMapR ztypes.tid V: String)
-        methodRowsBound: false
+        rows: zemitrows.RowTable.create
         nativeConvMemb: (MapRV String v: zast.nameid)
         nativeArgMemb: (MapRV String v: bool)
         fragUnits: List String
@@ -44355,7 +44507,7 @@ demandSpecNatives: function {
         match (
             mo
         ) case some then {
-            demandMethodRow :ast :symtab :ctx mfid: mo
+            demandMethodRow :symtab :ctx mfid: mo
         } case none then null
     }
 }
@@ -48933,79 +49085,57 @@ poolIdOf: function {ast: Ast.view text: StringView} out zast.nameid is {
     return (zast.poolFind pool: ast.names :text)
 }
 
-# bindMethodRows -- each fragment row whose path is `<unit>.<Class>.<method>`,
-# by the method's type id (ctx.methodRowPaths). Resolved once, the first time a
-# native method is called, so a call asks by id and never composes a key; a
-# path naming no unit, class or method in this program binds nothing.
-bindMethodRows: function {ast: Ast.view symtab: zenv.ZSymbolTable.view ctx: Ctx} is {
-    if ctx.methodRowsBound then return
-    ctx.methodRowsBound = true
-    for each e: ctx.nativeFragPaths.iterateItems loop {
-        # split by position, viewing the key: every compile that reads a native
-        # member binds the table once, and copies only the rows it keeps
-        k: e.key.stringView
-        d1o: k.indexOf needle: "."
-        match (
-            d1o
-        ) case some then {
-            rest: k.substring from: d1o + 1 to: k.length
-            d2o: rest.indexOf needle: "."
-            match (
-                d2o
-            ) case some then {
-                mname: rest.substring from: d2o + 1 to: rest.length
-                if (mname.contains needle: ".").not then {
-                    (
-                        bindMethodRow
-                        :ast
-                        :symtab
-                        rows: ctx.methodRowPaths
-                        uname: (k.substring from: 0 to: d1o)
-                        cls: (rest.substring from: 0 to: d2o)
-                        :mname
-                        path: k
-                    )
-                }
-            } case none then null
-        } case none then null
+# rowOfFn -- the row implementing native function `fid` (rowNameOfFn); 0 when
+# no row does
+rowOfFn: function {symtab: zenv.ZSymbolTable.view ctx: Ctx.view fid: ztypes.tid} out u64 is {
+    return (ctx.rows.ofName n: (rowNameOfFn :symtab :ctx :fid))
+}
+
+# rowNameOfFn -- the key of the row implementing native function `fid`, an
+# instance of a generic one by its template's: in the file implementing the
+# unit that declares it (a hidden subunit's or an inline unit's members are
+# their file unit's, ztypecheck.unitDeclOfTid), its name and, for a member of a
+# type, the type's. No file (impl 0) when the program reaches none for it.
+rowNameOfFn: function {
+    symtab: zenv.ZSymbolTable.view ctx: Ctx.view fid: ztypes.tid
+} out zemitrows.rowname is {
+    none: zemitrows.rowname impl: 0 typeName: zast.nameid.zero name: zast.nameid.zero
+    d: originTidOf :symtab tid: fid
+    if d.isZero then d = fid
+    if (fnIsNativeId :symtab fid: d).not then return none
+    did: symtab.typing.declIdOfType typeId: d
+    if did.isZero then return none
+    impl: ctx.rows.fileOfUnit ud: (ztypecheck.unitDeclOfTid st: symtab tid: d)
+    if impl == 0 then return none
+    dc: symtab.typing.decls.get i: did
+    tn: zast.nameid
+    if dc.parent.isZero.not then {
+        pd: symtab.typing.decls.get i: dc.parent
+        if pd.kind.unitDecl.not then tn = pd.name
     }
+    return (zemitrows.rowname :impl typeName: tn name: dc.name)
 }
 
-# bindMethodRow -- one `<unit>.<Class>.<method>` row path, bound under the
-# method's type id when the program has that unit, class and method
-bindMethodRow: function {
-    ast: Ast.view
-    symtab: zenv.ZSymbolTable.view
-    # the binding the row joins (ctx.methodRowPaths)
-    rows: (IdMapR ztypes.tid V: String).borrow
-    uname: StringView
-    cls: StringView
-    mname: StringView
-    path: StringView.view
-} is {
-    cid: rowTypeTid :ast :symtab :uname tname: cls
-    if cid.isZero then return
-    mo: symtab.typing.declChildOfId parentTypeId: cid nameId: (poolIdOf :ast text: mname)
-    match (
-        mo
-    ) case some then {
-        if (fnIsNativeId :symtab fid: mo) then rows.set key: mo value: path.string
-    } case none then null
+# rowLabel -- row key `n` of unit `owner`'s file as `zc natives show`
+# addresses it: `<unit>.<key>`
+rowLabel: function {ast: Ast.view owner: StringView n: zemitrows.rowname} out String is {
+    r: owner.string
+    r.append "."
+    if n.typeName.isZero.not then {
+        r.append (zast.nameTextAt :ast ref: n.typeName)
+        r.append "."
+    }
+    r.append (zast.nameTextAt :ast ref: n.name)
+    return r
 }
 
-# methodRowPath -- the path of the fragment row implementing method `mfid`
-# (bindMethodRows), "" when no fragment does
-methodRowPath: function {
-    ast: Ast.view symtab: zenv.ZSymbolTable.view ctx: Ctx mfid: ztypes.tid
-} out String is {
-    bindMethodRows :ast :symtab :ctx
-    po: ctx.methodRowPaths.get key: mfid
-    match (
-        po
-    ) case some then {
-        return po.copy
-    } case none then null
-    return "".string
+# methodFragRow -- the row implementing native method `mfid` when a fragment
+# implements it, its C the fragment's function; 0 otherwise
+methodFragRow: function {symtab: zenv.ZSymbolTable.view ctx: Ctx.view mfid: ztypes.tid} out u64 is {
+    row: rowOfFn :symtab :ctx fid: mfid
+    if row == 0 then return 0
+    if (ctx.rows.rows.get i: row).frag == 0 then return 0
+    return row
 }
 
 # noteTmplMemberUse -- written C calls member `mnId` of templated class instance
@@ -49027,10 +49157,10 @@ nativeMethodCallOpen: function {fc: StringView mn: StringView recv: StringView} 
 # none for a `uses_<Type>` or `destroys_<Type>` row, which loads with its type's
 # use or destructor -- plus the runtime
 # its body `needs=`
-demandNativeRow: function {ctx: Ctx row: u64 key: StringView} is {
-    i: row - 1
-    u: (ctx.fragUnits.get :i).copy
-    needsAddM :ctx uname: u.stringView memb: "@unit"
+demandNativeRow: function {ctx: Ctx row: u64} is {
+    r: ctx.rows.rows.get i: row
+    i: r.frag - 1
+    needsAddKey :ctx key: (ctx.demands.unitOf owner: r.owner)
     if (ctx.fragTypeTids.get :i).isZero then {
         k: ctx.fragDemandFrom.get :i
         to: rowDemandTo :ctx :i
@@ -49039,17 +49169,14 @@ demandNativeRow: function {ctx: Ctx row: u64 key: StringView} is {
             k = k + 1
         }
     }
-    rowNeedAdd :ctx :key
+    rowNeedsAdd :ctx :row cond: condAlways
 }
 
 # demandMethodRow -- what calling native method `mfid` demands, through the
 # fragment row that implements it (demandNativeRow); nothing when none does
-demandMethodRow: function {
-    ast: Ast.view symtab: zenv.ZSymbolTable.view ctx: Ctx mfid: ztypes.tid
-} is {
-    key: methodRowPath :ast :symtab :ctx :mfid
-    row: nativeFragRow :ctx path: key.stringView
-    if row > 0 then demandNativeRow :ctx :row key: key.stringView
+demandMethodRow: function {symtab: zenv.ZSymbolTable.view ctx: Ctx mfid: ztypes.tid} is {
+    row: methodFragRow :symtab :ctx :mfid
+    if row > 0 then demandNativeRow :ctx :row
 }
 
 # nativeMethodArgForm -- how a native method's fragment takes a parameter of type
@@ -49217,10 +49344,9 @@ emitClassNativeCall: function {
     mtid: (symtab.typing.declChildOfId parentTypeId: cid nameId: mnId).or d: ztypes.tid.zero
     if mtid.isZero then return "".string
     if tmplInst.not then {
-        key: methodRowPath :ast :symtab :ctx mfid: mtid
-        row: nativeFragRow :ctx path: key.stringView
+        row: methodFragRow :symtab :ctx mfid: mtid
         if row == 0 then return "".string
-        demandNativeRow :ctx :row key: key.stringView
+        demandNativeRow :ctx :row
     }
     if tmplInst then noteTmplMemberUse :ast :ctx :cid :mnId
     fc: spelledCname :ctx tid: cid
@@ -49423,11 +49549,9 @@ emitClassNativeRead: function {
     if ctx.cliUnitDecl.isZero.not when (
         (defUnitIdOf :ctx tid: cid) == ctx.cliUnitDecl
     ) then return "".string
-    key: String
     row: u64
     if tmplInst.not then {
-        key = methodRowPath :ast :symtab :ctx :mfid
-        row = nativeFragRow :ctx path: key.stringView
+        row = methodFragRow :symtab :ctx :mfid
         if row == 0 then return "".string
     }
     pNames: List String
@@ -49442,7 +49566,7 @@ emitClassNativeRead: function {
         ).not then return "".string
         k = k + 1
     }
-    if tmplInst.not then demandNativeRow :ctx :row key: key.stringView
+    if tmplInst.not then demandNativeRow :ctx :row
     # a templated class's member is a section of its template (noteMemberUse)
     if tmplInst then noteTmplMemberUse :ast :ctx :cid :mnId
     fc: spelledCname :ctx tid: cid
@@ -49699,7 +49823,7 @@ emitIoWrapperCreate: function {
         cid = cco
     } case none then null
     if cid.isZero then return "".string
-    demandMethodRow :ast :symtab :ctx mfid: cid
+    demandMethodRow :symtab :ctx mfid: cid
     pnames: List String
     pids: ListVal ztypes.tid
     pidsNm: ListVal zast.nameid
@@ -50047,25 +50171,29 @@ emitNativeFreeFnCall: function {
     if (fnIsNativeId :symtab :fid).not then return "".string
     duo: definedInUnitName :symtab tid: fid
     if duo.length == 0 then return "".string
+    rowKey: rowNameOfFn :symtab :ctx :fid
+    row: ctx.rows.ofName n: rowKey
+    if row == 0 then return "".string
+    r: ctx.rows.rows.get i: row
     un: duo.string
-    key: "\{un}.\{mn}"
     # a function a templated class implements is the template function of the
     # instance it answers
     callee: "z_\{un}_\{mn}"
-    viaMember: nativeViaMember :ctx key: key.stringView
+    viaMember: rowVia :ctx :r
     # the row's body, when the row is one rather than a fragment's function
     body: rtid
     if viaMember.length > 0 then {
         viaInst: stampIdOf :symtab nid: call.nodeid
         noteMemberUse :ctx mono: viaInst member: (ctx.memberWords.slotOf text: viaMember.stringView)
         callee = "\{spelledCname :ctx tid: viaInst}_\{viaMember}"
-    } else if (nativeIsFragBacked :ctx path: key.stringView).not then {
-        body = nativeImplOf :ctx path: key.stringView
+    } else if r.frag == 0 then {
+        body = r.body
         if body.isZero then return "".string
+        ctx.rt.ready id: body
     }
     needsAddM :ctx uname: un.stringView memb: "@unit"
     if body.isZero then needsAddM :ctx uname: un.stringView memb: mn
-    rowNeedAdd :ctx key: key.stringView
+    rowNeedsAdd :ctx :row cond: condAlways
     pn: List String
     pidl: ListVal ztypes.tid
     pidlNm: ListVal zast.nameid
@@ -50102,6 +50230,7 @@ emitNativeFreeFnCall: function {
         rv: List String
         nativeHoleValues t: ctx st: ord count: m firstHole: 1 names: rn vals: rv
         orderEnd :ctx st: ord
+        adr: rowLabel :ast owner: un.stringView n: rowKey
         filled: (
             nativeBodyFill
             :ast
@@ -50109,7 +50238,7 @@ emitNativeFreeFnCall: function {
             :ctx
             :call
             :body
-            key: key.stringView
+            key: adr.stringView
             argIds: rn
             argVals: rv
         )
@@ -50185,17 +50314,11 @@ orderNativeFreeArgs: function {
     }
 }
 
-# nativeViaMember -- the member `via=` names for the native free function
-# `key`; "" when its row names none
-nativeViaMember: function {ctx: Ctx.view key: StringView} out String is {
-    via: ctx.nativeVia.get key: key.asString
-    match (
-        via
-    ) case some then {
-        return via.copy
-    } case none then {
-        return "".string
-    }
+# rowVia -- the member row `r` (a native free function's) names `via`; ""
+# when it names none
+rowVia: function {ctx: Ctx.view r: zemitrows.nativerow} out String is {
+    if r.via.isZero then return String
+    return (ctx.demands.nameText id: r.via).string
 }
 
 # viaArgText -- argument `j`, of a call whose template function takes the types

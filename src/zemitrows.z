@@ -1,5 +1,7 @@
-# zemitrows -- what the C emitter's written C demands of the native rows. A
-# demand is a pair of ids -- the unit whose rows answer it and the name it is
+# zemitrows -- the native rows the C emitter reads, and what its written C
+# demands of them. A row is a record of ids and flags in one table (RowTable),
+# found by the declaration it implements, never by a composed path. A demand
+# is a pair of ids -- the unit whose rows answer it and the name it is
 # demanded by -- interned in the emitter's own vocabulary, never the program's
 # names, and found through an index rather than a scan. zemitterc records a
 # demand where the C it writes calls a row's C, and reads the set when it
@@ -8,6 +10,11 @@
 public: unit {
     :demandkey
     :DemandSet
+    :rtid
+    :rowneed
+    :rowname
+    :nativerow
+    :RowTable
 }
 
 # demandkey -- one demand: the unit whose rows answer it (`owner`) and the name it is
@@ -53,6 +60,11 @@ DemandSet: class {
         return (demandkey owner: (this.names.intern s: owner) name: (this.names.intern s: name))
     }
 
+    # unitOf -- the demand of unit `owner` itself, its `@unit`
+    unitOf: function {:this owner: zast.nameid} out demandkey is {
+        return (demandkey :owner name: (this.names.intern s: "@unit"))
+    }
+
     # at -- the place of demand `key` plus one; 0 when it was not demanded
     at: function {t: this.view key: demandkey} out u64 is {
         return ((t.index.get :key).or d: 0)
@@ -81,5 +93,117 @@ DemandSet: class {
     nameText: function {t: this.view id: zast.nameid} outx StringView is {
         got: t.names.texts.get i: id
         return got.stringView
+    }
+}
+
+# rtid -- a parsed runtime text's id in zemitterc's RtTexts: ids rise as texts
+# are parsed, and 0 is no text
+rtid: typedef u64 as {
+    # identity by id
+    ==: function {this: this.view rhs: rtid} out bool is {
+        return this.u64 == rhs.u64
+    }
+    # the sentinel: 0 is no text, never the first one
+    isZero: function {this: this.view} out bool is {
+        return this.u64 == 0
+    }
+    # the zero rtid: no text. A row with no body answers it
+    zero: rtid 0
+}
+
+# rowneed -- one of a row's needs, parsed once: the demand it adds where the
+# row's C is written, and the bit of the foundation condition it holds under
+# besides the row's own (0 for none)
+rowneed: record {
+    key: demandkey
+    cond: u64
+}
+
+# rowname -- a row's key as the program's names spell it: the file the row is
+# read from (its place among the files read, from 1), and the type and the member the key
+# names, ids of the program's name pool; a key naming a member of the unit
+# itself names no type. A key naming what the program never spells has none:
+# nothing the program declares is implemented by it.
+rowname: record {
+    impl: u64
+    typeName: zast.nameid
+    name: zast.nameid
+}
+
+# nativerow -- one row of an implementation file, as the emitter reads it
+nativerow: record {
+    # the unit a need naming no unit of its own is a member of: the row's file's
+    # unit or foundation group, an id of DemandSet.names; zero for a structural
+    # row
+    owner: zast.nameid
+    # the C body, its text deferred and cut on first use; zero for none
+    body: rtid
+    # on a native free function a templated class implements, the member of the
+    # class whose template function implements it (an id of DemandSet.names);
+    # zero for none
+    via: zast.nameid
+    # the needs as the file writes them, comma-separated, read on first use:
+    # RowTable.needTexts' place plus one, zero once read (or for none)
+    needText: u64
+    # once read, the needs: RowTable.needs[needFrom .. needTo]
+    needFrom: u64
+    needTo: u64
+    # the row's place in zemitterc's fragment lists plus one; zero for a row
+    # with no fragment
+    frag: u64
+}
+
+# RowTable -- the rows, registered once at emit start, row 0 the sentinel:
+# each found by its key as the program's names spell it, the file it is read
+# from found by the unit the file implements
+RowTable: class {
+    rows: ListVal nativerow
+    # every row's needs read so far, each row's a span
+    needs: ListVal rowneed
+    # the needs of the rows, as the files write them, until read
+    needTexts: List String
+    # the rows by key, those whose names the program spells
+    byName: (MapVV rowname v: u64)
+    # the files read so far; the foundation's groups and structural rows are
+    # in none
+    files: u64
+    # each file's place (from 1), by the declaration of the unit it implements
+    fileOf: (IdMapV ztypes.declid v: u64)
+} as {
+    # create -- no row and no file yet: the sentinels alone
+    create: function {} out this is {
+        t: (
+            meta.create
+            rows: ListVal nativerow
+            needs: ListVal rowneed
+            needTexts: List String
+            byName: (MapVV rowname v: u64)
+            files: 0
+            fileOf: (IdMapV ztypes.declid v: u64)
+        )
+        (
+            t.rows.append
+            (
+                nativerow
+                owner: zast.nameid.zero
+                body: rtid.zero
+                via: zast.nameid.zero
+                needText: 0
+                needFrom: 0
+                needTo: 0
+                frag: 0
+            )
+        )
+        return t
+    }
+
+    # ofName -- the row keyed `n`; 0 for none
+    ofName: function {t: this.view n: rowname} out u64 is {
+        return ((t.byName.get key: n).or d: 0)
+    }
+
+    # fileOfUnit -- the place of the file implementing unit `ud`; 0 for none
+    fileOfUnit: function {t: this.view ud: ztypes.declid} out u64 is {
+        return ((t.fileOf.get key: ud).or d: 0)
     }
 }
