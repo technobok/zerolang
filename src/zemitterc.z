@@ -7430,7 +7430,7 @@ emitSvSubstringCall: function {
             }
         }
         if recvp.length > 0 then {
-            needsAddM :ctx uname: "system" memb: "substring"
+            demandSvMember :symtab :ctx nameId: zast.wellKnown.slot.wkSubstring
             # a receiver that is a call is read into its temp first, as
             # svNativeCall reads it
             pre: String
@@ -7619,35 +7619,6 @@ emitSvLinesCall: function {
     return "".string
 }
 
-# emitSvParseCall -- `s.toU64` and friends: a no-argument parse native on a
-# receiver projected to a view value.
-emitSvParseCall: function {
-    ast: Ast.view
-    symtab: zenv.ZSymbolTable.view
-    ctx: Ctx
-    bnv: StringView
-    bnvF: cfacts
-    mnv: StringView
-    mnId: zast.nameid
-    btid: ztypes.tid
-    btIsStr: bool
-    dcbV: ztypes.vid
-    facts: cfacts.borrow
-} out String is {
-    if (
-        isStringyTid
-        :ctx
-        tid: btid
-    ) when (svCallOf :symtab :ctx nameId: mnId).parse then {
-        recvF: bnvF
-        bfp: svValueForm :ast :symtab :ctx expr: bnv isStr: btIsStr vid: dcbV facts: recvF
-        needsAddM :ctx uname: "system" memb: mnv
-        epn: "\{ctx.svC}_\{mnv}(&\{bfp})"
-        return (stating :facts from: callFacts text: epn)
-    }
-    return "".string
-}
-
 # emitSvArgNativeCall -- the one-argument view natives (`startsWith`, `indexOf`,
 # ...), plus `byteAt`, whose argument is an index and not a view.
 emitSvArgNativeCall: function {
@@ -7667,7 +7638,7 @@ emitSvArgNativeCall: function {
         :ctx
         tid: btid
     ) when (svCallOf :symtab :ctx nameId: mnId).arg then {
-        needsAddM :ctx uname: "system" memb: mnv
+        demandSvMember :symtab :ctx nameId: mnId
         # the argument is built once, as the native takes it
         if mnId == zast.wellKnown.slot.wkByteAt then {
             barg: String
@@ -7751,7 +7722,7 @@ emitSvSimpleCall: function {
 } out String is {
     svRecvOk: (btid == ctx.svTid) or btIsStr
     if svRecvOk when (svCallOf :symtab :ctx nameId: mnId).simple then {
-        needsAddM :ctx uname: "system" memb: mnv
+        demandSvMember :symtab :ctx nameId: mnId
         # a String receiver projects to a view value, like the
         # substring/parse legs (a StringView receiver is one already)
         recvS: bnv.string
@@ -7789,125 +7760,6 @@ emitSvSimpleCall: function {
     return "".string
 }
 
-
-# emitSvNativeInfix -- a NATIVE NAMED method reached INFIX. `s startsWith "he"`
-# and `s.startsWith prefix: "he"` are the same one-argument method, so they must
-# emit the same C. The call form has always routed through emitDottedCall's
-# native legs; the infix form reached emitOperatorAt, which asks the rows for
-# an inline body -- and a fragment-backed native like startsWith has no inline
-# body, only a real C function. The lookup missed and reported "no native
-# implementation" for a member that is implemented perfectly well.
-#
-# Scope is the simple view natives, the ones that take a single argument and
-# return a plain value: startsWith, endsWith, contains, concat, repeated. The
-# optionval-returning set (indexOf, byteAt, ...) keeps its dedicated call-form
-# leg. "" means "not mine", and the caller falls through to the table.
-emitSvNativeInfix: function {
-    ast: Ast.view
-    symtab: zenv.ZSymbolTable.view
-    ctx: Ctx
-    owner: ztypes.tid
-    lhsNid: zast.nodeid
-    rhsNid: zast.nodeid
-    op: StringView
-    # the operator's name id
-    opId: zast.nameid
-    facts: cfacts.borrow
-} out String is {
-    if (isStringOrViewLaid :ctx tid: owner).not then return "".string
-    if (svCallOf :symtab :ctx nameId: opId).simple.not then return "".string
-    needsAddM :ctx uname: "system" memb: op
-    ord: orderBegin :ctx slots: 2
-    mk: pendingHoistMark :ctx
-    # a String receiver projects to a view value; a StringView already is one
-    recvF: cfacts
-    recv: operandValueC :ast :symtab :ctx nid: lhsNid facts: recvF
-    if owner == ctx.strTid then {
-        rf: (
-            svValueFormAt
-            :ast
-            :symtab
-            :ctx
-            n: (ast.nodes.get i: lhsNid)
-            expr: recv.stringView
-            isStr: true
-            vid: (atomVid :symtab nid: lhsNid)
-            facts: recvF
-        )
-        recv = rf.take
-    }
-    (
-        orderArgAtWith
-        :ast
-        :symtab
-        :ctx
-        st: ord
-        mark: mk
-        text: recv
-        tf: recvF
-        nid: lhsNid
-        byPtr: false
-        slot: 0
-    )
-    mkA: pendingHoistMark :ctx
-    # a folded string constant is a static view, and its address is what the
-    # native takes
-    afrag: String
-    afragF: cfacts
-    {
-        cg: symtab.typing.nodeConst.get key: rhsNid
-        match (
-            cg
-        ) case some then {
-            if cg.kind.svalKind then {
-                cvF: cfacts
-                cv: operandValueC :ast :symtab :ctx nid: rhsNid facts: cvF
-                afrag = "&\{cv}"
-                afragF = addrFacts e: cvF
-            }
-        } case none then null
-    }
-    if afrag.length == 0 then {
-        afrag = (
-            svNativeArgFrag
-            :ast
-            :symtab
-            :ctx
-            n: (ast.nodes.get i: rhsNid)
-            addrAlways: false
-            facts: afragF
-        )
-    }
-    (
-        orderArgAtWith
-        :ast
-        :symtab
-        :ctx
-        st: ord
-        mark: mkA
-        text: afrag
-        tf: afragF
-        nid: rhsNid
-        byPtr: true
-        slot: 1
-    )
-    oprefix: orderFinish :ctx st: ord
-    aargs: ", \{orderSlotText t: ctx st: ord slot: 1}"
-    recv0: (orderSlotText t: ctx st: ord slot: 0).string
-    recv0F: orderSlotFacts t: ctx st: ord slot: 0
-    ecall: (
-        svNativeCall
-        :ast
-        :symtab
-        :ctx
-        m: op
-        recv: recv0.stringView
-        recvF: recv0F
-        args: aargs.stringView
-    )
-    orderEnd :ctx st: ord
-    return (stating :facts from: callFacts text: (orderWrap prefix: oprefix call: ecall))
-}
 
 # emitDottedCall -- a method call on a stamped String/StringView base:
 # the simple native set emits {svC}_{member}(&base, &args...).
@@ -8037,8 +7889,6 @@ emitSvCallLegs: function {
     if eSpl.length > 0 then return eSpl
     eLin: emitSvLinesCall :ctx :bnv :mnId :btid :facts
     if eLin.length > 0 then return eLin
-    ePar: emitSvParseCall :ast :symtab :ctx :bnv :bnvF :mnv :mnId :btid :btIsStr :dcbV :facts
-    if ePar.length > 0 then return ePar
     eArg: emitSvArgNativeCall :ast :symtab :ctx :call :bnv :bnvF :mnv :mnId :btid :facts
     if eArg.length > 0 then return eArg
     return (
@@ -19338,7 +19188,7 @@ emitNestedMonoMethodBase: function {
                         :ctx
                         tid: nlid
                     ) then {
-                        needsAddM :ctx uname: "system" memb: mn2
+                        demandSvMember :symtab :ctx nameId: mnId
                         svfnF: baseAtomF
                         svfn: (
                             svValueForm
@@ -19518,7 +19368,6 @@ nestedStringMember: function {
     parent: astnode.view
     base: StringView
     baseF: cfacts
-    mn2: StringView
     mnId: zast.nameid
     bs9vid: ztypes.vid
     facts: cfacts.borrow
@@ -19538,22 +19387,6 @@ nestedStringMember: function {
             :facts
         )
         if nsm.length > 0 then return nsm
-    }
-    if (isStringyTid :ctx tid: nptT) when (svCallOf :symtab :ctx nameId: mnId).parse then {
-        needsAddM :ctx uname: "system" memb: mn2
-        pnvF: cfacts
-        stateFacts facts: pnvF from: baseF
-        pnv: (
-            svValueForm
-            :ast
-            :symtab
-            :ctx
-            expr: base
-            isStr: nptT == ctx.strTid
-            vid: bs9vid
-            facts: pnvF
-        )
-        return (stating :facts from: callFacts text: "\{ctx.svC}_\{mn2}(&\{pnv})")
     }
     return "".string
 }
@@ -19662,7 +19495,6 @@ emitDottedNestedBase: function {
         parent: (ast.nodes.get i: n.parent)
         base: baseAtom.stringView
         baseF: baseAtomF
-        :mn2
         :mnId
         :bs9vid
         :facts
@@ -19980,7 +19812,6 @@ methodAutoCallRead: function {
     symtab: zenv.ZSymbolTable.view
     ctx: Ctx
     baseNid: zast.nodeid
-    mn2: StringView
     mnId: zast.nameid
     bn2: StringView
     bn2F: cfacts
@@ -19996,7 +19827,7 @@ methodAutoCallRead: function {
 } out String is {
     viewNative: (isStringyTid :ctx tid: bstamp) or (viewLaidNative :symtab :ctx tid: bstamp :mnId)
     if (svCallOf :symtab :ctx nameId: mnId).noarg when viewNative then {
-        needsAddM :ctx uname: "system" memb: mn2
+        demandSvMember :symtab :ctx nameId: mnId
         svfaF: bn2F
         svfa: (
             svValueForm
@@ -20008,7 +19839,8 @@ methodAutoCallRead: function {
             vid: bn2v
             facts: svfaF
         )
-        return (stating :facts from: callFacts text: "\{ctx.svC}_\{mn2}(&\{svfa})")
+        mn: zast.nameTextAt :ast ref: mnId
+        return (stating :facts from: callFacts text: "\{ctx.svC}_\{mn}(&\{svfa})")
     }
     mt: mco
     mc2: autoCallCname :symtab :ctx owner: bstamp method: mt
@@ -20222,7 +20054,6 @@ emitResolvedMemberRead: function {
         :symtab
         :ctx
         :baseNid
-        :mn2
         :mnId
         :bn2
         :bn2F
@@ -20846,36 +20677,36 @@ emitSvAtomBase: function {
             return (stating :facts from: avsF text: "(\{cast}\{accA}\{bn2})")
         }
         if mnId == zast.wellKnown.slot.wkCount then {
-            needsAddM :ctx uname: "system" memb: "count"
+            demandSvMember :symtab :ctx nameId: zast.wellKnown.slot.wkCount
             return (stating :facts from: callFacts text: "\{ctx.svC}_count(&\{bn2})")
         }
         if mnId == zast.wellKnown.slot.wkCodepoints then {
-            needsAddM :ctx uname: "system" memb: "codepoints"
+            demandSvMember :symtab :ctx nameId: zast.wellKnown.slot.wkCodepoints
             return (stating :facts from: callFacts text: "\{ctx.svC}_codepoints(&\{bn2})")
         }
         if mnId == zast.wellKnown.slot.wkParseI64 then {
-            needsAddM :ctx uname: "system" memb: "parseI64"
+            demandSvMember :symtab :ctx nameId: zast.wellKnown.slot.wkParseI64
             return (stating :facts from: callFacts text: "\{ctx.svC}_parseI64(&\{bn2})")
         }
         if mnId == zast.wellKnown.slot.wkParseU64 then {
-            needsAddM :ctx uname: "system" memb: "parseU64"
+            demandSvMember :symtab :ctx nameId: zast.wellKnown.slot.wkParseU64
             return (stating :facts from: callFacts text: "\{ctx.svC}_parseU64(&\{bn2})")
         }
         if mnId == zast.wellKnown.slot.wkParseF64 then {
-            needsAddM :ctx uname: "system" memb: "parseF64"
+            demandSvMember :symtab :ctx nameId: zast.wellKnown.slot.wkParseF64
             return (stating :facts from: callFacts text: "\{ctx.svC}_parseF64(&\{bn2})")
         }
         if mnId == zast.wellKnown.slot.wkParseF16 then {
-            needsAddM :ctx uname: "system" memb: "parseF16"
+            demandSvMember :symtab :ctx nameId: zast.wellKnown.slot.wkParseF16
             return (stating :facts from: callFacts text: "\{ctx.svC}_parseF16(&\{bn2})")
         }
         if mnId == zast.wellKnown.slot.wkParseF128 then {
-            needsAddM :ctx uname: "system" memb: "parseF128"
+            demandSvMember :symtab :ctx nameId: zast.wellKnown.slot.wkParseF128
             return (stating :facts from: callFacts text: "\{ctx.svC}_parseF128(&\{bn2})")
         }
         if (svCallOf :symtab :ctx nameId: mnId).simple then {
             # a no-paren method reference auto-calls
-            needsAddM :ctx uname: "system" memb: mn2
+            demandSvMember :symtab :ctx nameId: mnId
             return (stating :facts from: callFacts text: "\{ctx.svC}_\{mn2}(&\{bn2})")
         }
         if mnId == zast.wellKnown.slot.wkLines then {
@@ -20978,15 +20809,6 @@ emitDottedAtomBase: function {
     bnid2: interpPartNodeId n: (ast.nodes.get i: n.parent)
     bareTid: chaseStrTypedef :symtab :ctx tid: (stampIdOf :symtab nid: bnid2)
     bareSv: viewLaidNative :symtab :ctx tid: bareTid :mnId
-    bareStr: bareTid == ctx.strTid
-    if bareStr when (svCallOf :symtab :ctx nameId: mnId).noarg then {
-        # String receivers project to a view for the no-arg SV
-        # natives, mirroring the chained/auto-call legs
-        needsAddM :ctx uname: "system" memb: mn2
-        svfbF: bn2F
-        svfb: svValueForm :ast :symtab :ctx expr: bn2 isStr: true vid: bn2v facts: svfbF
-        return (stating :facts from: callFacts text: "\{ctx.svC}_\{mn2}(&\{svfb})")
-    }
     # `.stringView` of a view is the view: a generic body wrote it for a type
     # parameter a StringView fills
     childNameId: aliasOrChildId :ast :symtab aliasId: n.nodeid childId: n.child
@@ -22947,26 +22769,6 @@ emitOperatorAt: function {
             :neg
             :facts
         )
-    }
-    # A NATIVE NAMED METHOD IS NOT AN OPERATOR. The table holds inline bodies
-    # for operators; a fragment-backed native like `startsWith` has none, so
-    # asking for one reports "no native implementation" about a member that is
-    # implemented. Emit the ordinary method call instead -- the mirror of
-    # emitOperatorCallForm, which routes the other direction.
-    if call.isZero.not when isNat then {
-        eNi: (
-            emitSvNativeInfix
-            :ast
-            :symtab
-            :ctx
-            :owner
-            :lhsNid
-            :rhsNid
-            :op
-            :opId
-            :facts
-        )
-        if eNi.length > 0 then return eNi
     }
     return (
         emitOperatorByRow
@@ -48864,14 +48666,27 @@ nativeMethodCallOpen: function {fc: StringView mn: StringView recv: StringView} 
 demandNativeRow: function {ctx: Ctx row: u64} is {
     r: ctx.rows.rows.get i: row
     needsAddKey :ctx key: (ctx.demands.unitOf owner: r.owner)
-    if r.typeTid.isZero then {
-        k: r.demandFrom
-        for k < r.demandTo loop {
-            needsAddKey :ctx key: (ctx.rows.demandKeys.get i: k)
-            k = k + 1
-        }
-    }
+    if r.typeTid.isZero then demandRowKeys :ctx :row
     rowNeedsAdd :ctx :row cond: condAlways
+}
+
+# demandRowKeys -- fragment row `row`'s own demands, each met in every
+# configuration
+demandRowKeys: function {ctx: Ctx row: u64} is {
+    r: ctx.rows.rows.get i: row
+    k: r.demandFrom
+    for k < r.demandTo loop {
+        needsAddKey :ctx key: (ctx.rows.demandKeys.get i: k)
+        k = k + 1
+    }
+}
+
+# demandSvMember -- written C calls the C of StringView member `nameId` (a
+# view native reached on a String, StringView or text receiver): the demands
+# of the member's row, found by its declaration on the StringView type
+demandSvMember: function {symtab: zenv.ZSymbolTable.view ctx: Ctx nameId: zast.nameid} is {
+    row: ctx.rows.ofName n: (rowNameOfMember :symtab :ctx owner: ctx.svTid name: nameId)
+    if row > 0 then demandRowKeys :ctx :row
 }
 
 # demandMethodRow -- what calling native method `mfid` demands, through the
