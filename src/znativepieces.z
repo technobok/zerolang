@@ -763,8 +763,8 @@ isWord: function {text: StringView} out bool is {
 
 # emitterNeeds -- each top-level definition of the emitter's source that spells
 # a name a piece defines records that piece's demand with `preludeNeed :ctx
-# memb:` (or `needsAddM :ctx uname: "prelude" memb:`). The conversion rows'
-# writers and the scalar facts spell C as data, not as written C.
+# memb:` (or `needsAddM :ctx uname: "prelude" memb:`). The scalar facts spell
+# C as data, not as written C.
 emitterNeeds: function {p: Pieces emitter: StringView} is {
     rd: io.readText path: emitter
     src: String
@@ -777,9 +777,8 @@ emitterNeeds: function {p: Pieces emitter: StringView} is {
         return
     }
     items: emitterItems text: src.stringView
-    conv: convRows :items
     for each it: items loop {
-        if (conv.has item: it.name) or (isTypeData name: it.name.stringView kw: p.kw) then continue
+        if (isTypeData name: it.name.stringView kw: p.kw) then continue
         emitterItemNeeds :p :it :emitter
     }
 }
@@ -813,65 +812,6 @@ emitterItems: function {text: StringView} out List EmitterItem is {
         }
     }
     return r
-}
-
-# convRows -- nativeConvRows and every `conv...` definition it calls, by name:
-# they write the conversion rows' text, which carries its own needs
-convRows: function {items: (List EmitterItem).view} out Set String is {
-    r: Set String
-    byName: MapRV String v: u64
-    k: u64
-    for each it: items loop {
-        byName.set key: it.name.copy value: k
-        k = k + 1
-    }
-    todo: List String
-    todo.append "nativeConvRows".string
-    for todo.length > 0 loop {
-        n: todo.pop
-        if (r.has item: n) then continue
-        i: byName.get key: n.copy
-        match (
-            i
-        ) case some then {
-            r.add item: n.copy
-            for each c: (convCalls code: (items.get :i).code.stringView) loop (
-                todo.append
-                from: c.copy
-            )
-        } case none then null
-    }
-    return r
-}
-
-# convCalls -- the `conv...` names `code` calls: a name then spaces then a
-# label's colon (`conv :ctx`, `conv x: 1`), or a name just inside `(`
-convCalls: function {code: StringView} out List String is {
-    r: List String
-    at: u64
-    for at < code.length loop {
-        o: (code.substring from: at to: code.length).indexOf needle: "conv"
-        if o.none then break
-        s: at + o
-        at = s + 1
-        if s > 0 when (isWordByte b: ((code.byteAt i: s - 1).or d: 0)) then continue
-        e: wordEnd text: code from: s
-        called: labelAfter text: code from: e
-        if s > 0 when ((code.byteAt i: s - 1).or d: 0) == 40 then called = true
-        if called then r.append from: (code.substring from: s to: e).string
-    }
-    return r
-}
-
-# labelAfter -- whether, from `from`, white space comes (line breaks too), then
-# a `:` (`conv :ctx`), or a word and a `:` (`conv x: 1`)
-labelAfter: function {text: StringView from: u64} out bool is {
-    p: from
-    for p < text.length while (isSpaceByte b: ((text.byteAt i: p).or d: 0)) loop p = p + 1
-    if p == from then return false
-    if ((text.byteAt i: p).or d: 0) == 58 then return true
-    p = wordEnd :text from: p
-    return ((text.byteAt i: p).or d: 0) == 58
 }
 
 # isTypeData -- the scalar type facts and the literal writers spell the 128-bit
@@ -1177,11 +1117,6 @@ wordEnd: function {text: StringView from: u64} out u64 is {
     i: from
     for i < text.length while (isWordByte b: ((text.byteAt :i).or d: 0)) loop i = i + 1
     return i
-}
-
-# isSpaceByte -- a space, a tab or a line break
-isSpaceByte: function {b: u8} out bool is {
-    return (b == 32) or (b == 9) or (b == 10) or (b == 13)
 }
 
 # isWordByte -- a letter, a digit or `_`
