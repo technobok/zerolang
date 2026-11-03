@@ -6707,11 +6707,6 @@ preludeNeed: function {ctx: Ctx memb: StringView} is {
     needsAddM :ctx uname: "prelude" :memb
 }
 
-# needsHasM -- true when `memb` of unit `uname` was demanded
-needsHasM: function {ctx: Ctx.view uname: StringView memb: StringView} out bool is {
-    return (ctx.demands.atNamed owner: uname name: memb) > 0
-}
-
 # typeUseAdd -- record that the program constructed this type.
 typeUseAdd: function {ctx: Ctx tid: ztypes.tid} is {
     ctx.usedTypeIds.add item: tid
@@ -12203,6 +12198,7 @@ emitListValLendCall: function {
         return (stating :facts from: callFacts text: er)
     }
     recvT: "\{cb}_t*"
+    demandMemberNeeds :symtab :ctx mono: bt :mnId
     return (stating :facts from: callFacts text: (
         emitWindowSlice
         :ast
@@ -12502,6 +12498,7 @@ emitArrayMethodCall: function {
         if (
             mnId == zast.wellKnown.slot.wkSlice
         ) then whatA = "array slice" else whatA = "array spanSlice"
+        demandMemberNeeds :symtab :ctx mono: bt :mnId
         return (stating :facts from: callFacts text: (
             emitWindowSlice
             :ast
@@ -12626,6 +12623,7 @@ emitSpanMethodCall: function {
         return (stating :facts from: callFacts text: ef)
     }
     if mnId == zast.wellKnown.slot.wkSplit then {
+        demandMemberNeeds :symtab :ctx mono: bt :mnId
         return (
             emitSpanSplit
             :ast
@@ -12638,6 +12636,7 @@ emitSpanMethodCall: function {
         )
     }
     if mnId == zast.wellKnown.slot.wkCopyFrom then {
+        demandMemberNeeds :symtab :ctx mono: bt :mnId
         return (
             emitSpanCopyFrom
             :ast
@@ -12664,7 +12663,6 @@ emitSpanSplit: function {
     recvR: StringView
     facts: cfacts.borrow
 } out String is {
-    needsAddM :ctx uname: "collections" memb: "window"
     va: listArg :ast :symtab :ctx :call label: zast.wellKnown.slot.wkAt
     pairTid: chaseAggregateTypedef :symtab :ctx tid: (stampIdOf :symtab nid: call.nodeid)
     pc: spelledCname :ctx tid: pairTid
@@ -12773,7 +12771,6 @@ emitSpanCopyFrom: function {
     ec: String
     ec.append "(z_coll_window_check(0, \{f}.length, \{r}->length, \"SpanVal copyFrom\"), "
     ec.append "\{f}.length > 0 ? (void)memmove(\{r}->data, \{f}.data, \{f}.length * sizeof(*\{r}->data)) : (void)0)"
-    needsAddM :ctx uname: "collections" memb: "window"
     return (
         stating
         :facts
@@ -12801,7 +12798,6 @@ emitWindowSlice: function {
     what: StringView
     inline: bool
 } out String is {
-    needsAddM :ctx uname: "collections" memb: "window"
     wc: (
         spelledCname
         :ctx
@@ -38723,7 +38719,14 @@ assembleEmitOutput: function {
     ps: fileKey :ctx name: "start"
     buf.append (loadFixedFile :ctx key: ps)
     buf.append "int main(int argc, char* argv[]) {\n"
-    if (needsHasM :ctx uname: "os" memb: "args") then {
+    if (
+        stdDeclDemanded
+        ast: program
+        :symtab
+        :ctx
+        stdUnit: zast.wellKnown.slot.unOs
+        member: zast.wellKnown.slot.wkArgs
+    ) then {
         buf.append "    z_os_args_init(argc, argv);\n"
     }
     buf.append "    z_start();\n"
@@ -43871,19 +43874,28 @@ emitIoFileConformance: function {
     }
 }
 
+# ioStreamDemanded -- written C reads io's standard stream `stream` (a
+# well-known name id: stdout, stderr, stdin), whose C emitIoStdStreams writes
+ioStreamDemanded: function {
+    ast: Ast.view symtab: zenv.ZSymbolTable.view ctx: Ctx.view stream: zast.nameid
+} out bool is {
+    return (stdDeclDemanded :ast :symtab :ctx stdUnit: zast.wellKnown.slot.unIo member: stream)
+}
+
 # demandStdStreamBoxes -- the std streams emitIoStdStreams writes box their
 # backing File as a Writer (stdout, stderr) or a Reader (stdin).
 demandStdStreamBoxes: function {ast: Ast.view symtab: zenv.ZSymbolTable.view ctx: Ctx} is {
     fid: ioFileId :symtab :ctx
     if fid.isZero then return
     if (
-        (needsHasM :ctx uname: "io" memb: "stdout") or (needsHasM :ctx uname: "io" memb: "stderr")
+        (ioStreamDemanded :ast :symtab :ctx stream: zast.wellKnown.slot.wkStdout) or
+        (ioStreamDemanded :ast :symtab :ctx stream: zast.wellKnown.slot.wkStderr)
     ) then {
         spW: ioCanonTidAny :ast :symtab :ctx canon: "Writer"
         noteBoxUse :symtab :ctx implTid: fid protoTid: spW
         noteBorrowBoxUse :ctx implTid: fid protoTid: spW
     }
-    if (needsHasM :ctx uname: "io" memb: "stdin") then {
+    if (ioStreamDemanded :ast :symtab :ctx stream: zast.wellKnown.slot.wkStdin) then {
         spR: ioCanonTidAny :ast :symtab :ctx canon: "Reader"
         noteBoxUse :symtab :ctx implTid: fid protoTid: spR
         noteBorrowBoxUse :ctx implTid: fid protoTid: spR
@@ -43918,26 +43930,26 @@ emitIoStdStreams: function {
     buf: String.borrow
 } is {
     needAny: (
-        (needsHasM :ctx uname: "io" memb: "stdout") or
-        (needsHasM :ctx uname: "io" memb: "stderr") or
-        (needsHasM :ctx uname: "io" memb: "stdin")
+        (ioStreamDemanded :ast :symtab :ctx stream: zast.wellKnown.slot.wkStdout) or
+        (ioStreamDemanded :ast :symtab :ctx stream: zast.wellKnown.slot.wkStderr) or
+        (ioStreamDemanded :ast :symtab :ctx stream: zast.wellKnown.slot.wkStdin)
     )
     if needAny.not then return
     fid: ioFileId :symtab :ctx
     if fid.isZero then return
     fbase: spelledCname :ctx tid: fid
     # each stream spells only the protocol it is
-    if (needsHasM :ctx uname: "io" memb: "stdout") then {
+    if (ioStreamDemanded :ast :symtab :ctx stream: zast.wellKnown.slot.wkStdout) then {
         wcn: ioCanonCname :ast :symtab :ctx canon: "Writer"
         b0: "static \{fbase}_t z_io_stdout_File = { 1, false };\nstatic \{wcn}_t z_io_stdout(void) {\n    return \{fbase}_Writer_create(&z_io_stdout_File);\n}\n\n"
         buf.append b0
     }
-    if (needsHasM :ctx uname: "io" memb: "stderr") then {
+    if (ioStreamDemanded :ast :symtab :ctx stream: zast.wellKnown.slot.wkStderr) then {
         wcn: ioCanonCname :ast :symtab :ctx canon: "Writer"
         b1: "static \{fbase}_t z_io_stderr_File = { 2, false };\nstatic \{wcn}_t z_io_stderr(void) {\n    return \{fbase}_Writer_create(&z_io_stderr_File);\n}\n\n"
         buf.append b1
     }
-    if (needsHasM :ctx uname: "io" memb: "stdin") then {
+    if (ioStreamDemanded :ast :symtab :ctx stream: zast.wellKnown.slot.wkStdin) then {
         rcn: ioCanonCname :ast :symtab :ctx canon: "Reader"
         b2: "static \{fbase}_t z_io_stdin_File = { 0, false };\nstatic \{rcn}_t z_io_stdin(void) {\n    return \{fbase}_Reader_create(&z_io_stdin_File);\n}\n\n"
         buf.append b2
@@ -48681,6 +48693,36 @@ demandRowKeys: function {ctx: Ctx row: u64} is {
     }
 }
 
+# demandMemberNeeds -- written C, a lowering by hand of member `mnId` of
+# instance `mono`, calls what the member's row needs: the row of the member's
+# declaration on the instance's template
+demandMemberNeeds: function {
+    symtab: zenv.ZSymbolTable.view ctx: Ctx mono: ztypes.tid mnId: zast.nameid
+} is {
+    o: originTidOf :symtab tid: mono
+    if o.isZero then o = mono
+    row: ctx.rows.ofName n: (rowNameOfMember :symtab :ctx owner: o name: mnId)
+    if row > 0 then rowNeedsAdd :ctx :row cond: condAlways
+}
+
+# stdDeclDemanded -- written C calls the standard declaration `member` of
+# unit `stdUnit` (well-known name ids; ztypecheck.stdDeclRo), which the emitter
+# lowers by hand: its demand, by its declaring unit and its name, was met
+stdDeclDemanded: function {
+    ast: Ast.view
+    symtab: zenv.ZSymbolTable.view
+    ctx: Ctx.view
+    stdUnit: zast.nameid
+    member: zast.nameid
+} out bool is {
+    fid: ztypecheck.stdDeclRo :ast st: symtab :stdUnit :member
+    if fid.isZero then return false
+    did: symtab.typing.declIdOfType typeId: fid
+    if did.isZero then return false
+    nm: zast.poolTextAt pool: ast.names ref: (symtab.typing.decls.get i: did).name
+    return (ctx.demands.atNamed owner: (definedInUnitName :symtab tid: fid) name: nm.stringView) > 0
+}
+
 # demandSvMember -- written C calls the C of StringView member `nameId` (a
 # view native reached on a String, StringView or text receiver): the demands
 # of the member's row, found by its declaration on the StringView type
@@ -49992,8 +50034,8 @@ emitCliSpecCreate: function {
     oprefix: orderFinish :ctx st: ord
     args: orderJoinSlots :ctx st: ord count: pn
     orderEnd :ctx st: ord
-    needsAddM :ctx uname: "cli" memb: "@unit"
-    needsAddM :ctx uname: "cli" memb: "spec_create"
+    crr: rowOfFn :symtab :ctx fid: crid
+    if crr > 0 then demandNativeRow :ctx row: crr
     ccb: spelledCname :ctx tid: cid
     ccb.append "_create"
     return (
@@ -50123,8 +50165,8 @@ emitParsedMethodCall: function {
     recvC: emitLocalAtomNameAt :symtab :ctx nid: bnid name: bn vid: recvV0
     recvExpr: "&\{recvC}"
     if (isPtrVid :ctx vid: recvV) then recvExpr = recvC.take
-    needsAddM :ctx uname: "cli" memb: "@unit"
-    needsAddM :ctx uname: "cli" memb: mn
+    pmr: ctx.rows.ofName n: (rowNameOfMember :symtab :ctx owner: pid name: mnId)
+    if pmr > 0 then demandNativeRow :ctx row: pmr
     nameArg: ctorArgByLabel :ast :symtab :ctx :call label: zast.wellKnown.slot.wkName
     return (stating :facts from: callFacts text: "\{pc}_\{mn}(\{recvExpr}, &\{nameArg})")
 }
