@@ -85,14 +85,14 @@ module Rouge
       def self.builtins   # predeclared
         @builtins ||= %w(
           AnyRef Box ByteView Bytes Closer
-          CpIter Drop File IdMapEntryR IdMapEntryV IdMapItemIterR IdMapItemIterV
+          CpIter File IdMapEntryR IdMapEntryV IdMapItemIterR IdMapItemIterV
           IdMapR IdMapV IdSet IdSetIter IoError
           LinesIter List ListIter ListIterVal ListIterMut ListIterMutVal ListRef ListVal
           ListView ListViewVal Map MapEntry MapEntryRV MapEntryVR
           MapEntryVV MapItemIter MapItemIterRV MapItemIterVR MapItemIterVV MapKeyIter
           MapKeyIterRV MapKeyIterVR MapKeyIterVV MapRR MapRV MapVR
           MapVV Option OptionView OptionViewVal OptionMut OptionMutVal Path PathView Reader
-          RefHashable Result ResultRV ResultVR Seeker Set SetIter SetIterVal
+          RefHashable Releasing Result ResultRV ResultVR Seeker Set SetIter SetIterVal
           SetRef SetVal SpanPair SpanVal Splitter StaticIter StaticView String StringLike StringView StringViewable
           TextReader Writer _ anyval array
           bool break c32 c8 continue

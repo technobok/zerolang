@@ -43765,6 +43765,26 @@ demandBoxedNatives: function {ast: Ast.view symtab: zenv.ZSymbolTable.view ctx: 
     }
 }
 
+# ioStreamCreate -- the C function that borrows File `fid` as the io protocol
+# `canon` (Reader or Writer): its box helper, named by the label File
+# implements the protocol under. Composed with append: a name built by
+# interpolation reads to A002 as a composed table key.
+ioStreamCreate: function {
+    ast: Ast.view
+    symtab: zenv.ZSymbolTable.view
+    ctx: Ctx
+    fid: ztypes.tid
+    canon: StringView
+} out String is {
+    ptid: ioCanonTidAny :ast :symtab :ctx :canon
+    lbl: boxLabelFor :symtab :ctx implTid: fid protoTid: ptid
+    fn: spelledCname :ctx tid: fid
+    fn.append "_"
+    fn.append lbl
+    fn.append "_create"
+    return fn
+}
+
 # emitIoStdStreams -- io.stdin/stdout/stderr: a borrowed Reader/Writer over a
 # static backing File on fd 0/1/2, not `open` -- it holds nothing of its own,
 # so RAII never closes it.
@@ -43786,17 +43806,20 @@ emitIoStdStreams: function {
     # each stream spells only the protocol it is
     if (ioStreamDemanded :ast :symtab :ctx stream: zast.wellKnown.slot.wkStdout) then {
         wcn: ioCanonCname :ast :symtab :ctx canon: "Writer"
-        b0: "static \{fbase}_t z_io_stdout_File = { 1, false };\nstatic \{wcn}_t z_io_stdout(void) {\n    return \{fbase}_Writer_create(&z_io_stdout_File);\n}\n\n"
+        wcr: ioStreamCreate :ast :symtab :ctx :fid canon: "Writer"
+        b0: "static \{fbase}_t z_io_stdout_File = { 1, false };\nstatic \{wcn}_t z_io_stdout(void) {\n    return \{wcr}(&z_io_stdout_File);\n}\n\n"
         buf.append b0
     }
     if (ioStreamDemanded :ast :symtab :ctx stream: zast.wellKnown.slot.wkStderr) then {
         wcn: ioCanonCname :ast :symtab :ctx canon: "Writer"
-        b1: "static \{fbase}_t z_io_stderr_File = { 2, false };\nstatic \{wcn}_t z_io_stderr(void) {\n    return \{fbase}_Writer_create(&z_io_stderr_File);\n}\n\n"
+        wcr: ioStreamCreate :ast :symtab :ctx :fid canon: "Writer"
+        b1: "static \{fbase}_t z_io_stderr_File = { 2, false };\nstatic \{wcn}_t z_io_stderr(void) {\n    return \{wcr}(&z_io_stderr_File);\n}\n\n"
         buf.append b1
     }
     if (ioStreamDemanded :ast :symtab :ctx stream: zast.wellKnown.slot.wkStdin) then {
         rcn: ioCanonCname :ast :symtab :ctx canon: "Reader"
-        b2: "static \{fbase}_t z_io_stdin_File = { 0, false };\nstatic \{rcn}_t z_io_stdin(void) {\n    return \{fbase}_Reader_create(&z_io_stdin_File);\n}\n\n"
+        rcr: ioStreamCreate :ast :symtab :ctx :fid canon: "Reader"
+        b2: "static \{fbase}_t z_io_stdin_File = { 0, false };\nstatic \{rcn}_t z_io_stdin(void) {\n    return \{rcr}(&z_io_stdin_File);\n}\n\n"
         buf.append b2
     }
 }
