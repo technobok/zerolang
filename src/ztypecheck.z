@@ -10371,7 +10371,14 @@ asItemMarkerTarget: function {
     } case none then {
         if (isLabelValue op: (ast.nodes.get i: op)).not then {
             asItemTypeNameRefused :st :scope :ast :unitDecl :parentId :item :op
-            reportMissingTypeMember :st :scope :ast :unitDecl :op
+            # a member the path's type does not declare is the value's error,
+            # where it is written: the member has no type, and a read of it --
+            # a field declared by it among them -- reports nothing further
+            # (memberDefinitionFailed)
+            if (reportMissingTypeMember :st :scope :ast :unitDecl :op) then (
+                st.typing.refusedValues.add
+                item: op
+            )
         }
     }
     if refused then return (optionval.none ztypes.tid)
@@ -32101,10 +32108,11 @@ memberDefinitionFailed: function {
 
 # memberTyperefRefused -- member `nameId` of `bt` is declared by a type-ref that
 # named nothing, refused and reported where it is written (ZTyping.
-# refusedValues). The member is still the type's -- a construction gives it a
-# value -- but a READ of it has no type: the shell the ref was given is no type
-# a value can be checked against, and every check made on it was a second
-# report of the first.
+# refusedValues), or by the name of a constant whose own definition failed and
+# said why (namesFailedConstant). The member is still the type's -- a
+# construction gives it a value -- but a READ of it has no type: the shell the
+# ref was given is no type a value can be checked against, and every check made
+# on it was a second report of the first.
 memberTyperefRefused: function {
     st: zenv.ZSymbolTable.view
     ast: Ast.view
@@ -32119,7 +32127,38 @@ memberTyperefRefused: function {
     if d.node.isZero then return false
     n: ast.nodes.get i: d.node
     if n.namedoperation.not then return false
-    return (st.typing.refusedValues.has item: n.operation)
+    if (st.typing.refusedValues.has item: n.operation) then return true
+    return (namesFailedConstant :st :ast scope: d.parent opId: n.operation)
+}
+
+# namesFailedConstant -- `opId` is a bare name whose nearest declaration, from
+# `scope` outward, is a constant with no type because its definition failed: an
+# error said why where it is written (memberDefinitionFailed).
+namesFailedConstant: function {
+    st: zenv.ZSymbolTable.view
+    ast: Ast.view
+    scope: ztypes.declid
+    opId: zast.nodeid
+} out bool is {
+    if opId.isZero then return false
+    isAtom: false
+    {
+        vn: ast.nodes.get i: opId
+        isAtom = vn.atomid
+    }
+    if isAtom.not then return false
+    nameId: atomNameId :ast n: (ast.nodes.get i: opId)
+    if nameId.isZero then return false
+    at: scope
+    for at.isZero.not loop {
+        hit: st.typing.declFindChild parentDeclId: at :nameId
+        if hit.isZero.not then {
+            if (declTypeIdOf :st declId: hit).isZero.not then return false
+            return (memberDefinitionFailed :st :ast root: at :nameId)
+        }
+        at = st.typing.declParentOf declId: at
+    }
+    return false
 }
 
 # reportUnknownMember -- an unknown member on a type whose member set is
