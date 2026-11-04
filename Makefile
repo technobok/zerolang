@@ -201,6 +201,31 @@ natives-show-guard: bin/zc
 	if [ $$fail -ne 0 ]; then exit 1; fi; \
 	echo "natives-show-guard OK: zc natives show places each row where zc emit --mark-natives marks it, and shows its C"
 
+# prelude-share-guard -- a parse that reads on from the prelude another parse
+# kept (zparser.Parser.parseShared) builds the tree that parse would have built
+# itself. `zc dump` of one program in two projects: in the first, the program's
+# parse shares the project check's prelude; in the second, the project's
+# systemDir names a copy of the stdlib, the lookups find other files, and the
+# program reads the prelude again. The two models -- every node with the file
+# it was read from -- are identical.
+prelude-share-guard: bin/zc
+	@d=$(BUILDDIR)/prelude-share; rm -rf $$d; mkdir -p $$d/shared $$d/own; fail=0; \
+	cp -r lib/system $$d/sys; \
+	printf 'project: (\n    toolchain.project\n    programs: list { "probe" }\n)\n' > $$d/shared/project.zd; \
+	printf 'project: (\n    toolchain.project\n    systemDir: "../sys"\n    programs: list { "probe" }\n)\n' > $$d/own/project.zd; \
+	for p in shared own; do \
+	  cp examples/io_textreader.z $$d/$$p/probe.z; \
+	  (cd $$d/$$p && env -u ZEROLANG_SYSTEM -u ZEROLANG_ROOT $(CURDIR)/bin/zc dump probe.z -o ../$$p.sql) \
+	    || { echo "prelude-share-guard FAIL: zc dump in the $$p project"; fail=1; }; \
+	done; \
+	if [ $$fail -eq 0 ]; then \
+	  cmp -s $$d/shared.sql $$d/own.sql \
+	    || { echo "prelude-share-guard FAIL: the model read on from the shared prelude differs from the one read again"; \
+	         diff $$d/shared.sql $$d/own.sql | head -4; fail=1; }; \
+	fi; \
+	if [ $$fail -ne 0 ]; then exit 1; fi; \
+	echo "prelude-share-guard OK: a program reading on from the project check's prelude has the model it reads for itself"
+
 # nativec-agree-guard -- the agree kind alone: every example and emitc_corpus
 # program, for the host and for Windows, emits the same C from the rows zc
 # carries as from the standard library's own nativec.zd files read as a user
@@ -225,7 +250,7 @@ ci:
 	@$(MAKE) --no-print-directory windows-due
 
 # ci-gates -- the gates ci runs in parallel, after perf-strict.
-ci-gates: style-lint zl-full-guard complexity-report warn-check pedantic-check emitter-guard typename-guard frontend-guard lifetime-guard native-guard alias-label-guard fwd-shape-guard generic-param-guard const-row-guard view-guard fallback-guard highlight-guard any-guard deadcode-guard cdead-guard cc-unused-guard piece-guard static-value-guard eager-guard eager-lib-guard case-guard user-native-guard shim-guard thread-tsan-guard cobj-guard sqlite-decls-guard zlink-guard zlink-rules-guard require-guard static-tcc-guard refusal-guard fmt-raw-guard nativec-agree-guard natives-show-guard readable-check test-tcc-heavy test-clang test-signed-ub test-math-arm64 test-sqlite-arm64 test-math-noasm test-portable-scalars test-mingw test-tcc-mingw test-msvc-wine test-msvc-corpus math-asm-guard matrix-guard constparity-guard docs-link-guard mode-parity ci-corpus
+ci-gates: style-lint zl-full-guard complexity-report warn-check pedantic-check emitter-guard typename-guard frontend-guard lifetime-guard native-guard alias-label-guard fwd-shape-guard generic-param-guard const-row-guard view-guard fallback-guard highlight-guard any-guard deadcode-guard cdead-guard cc-unused-guard piece-guard static-value-guard eager-guard eager-lib-guard case-guard user-native-guard shim-guard thread-tsan-guard cobj-guard sqlite-decls-guard zlink-guard zlink-rules-guard require-guard static-tcc-guard refusal-guard fmt-raw-guard nativec-agree-guard natives-show-guard prelude-share-guard readable-check test-tcc-heavy test-clang test-signed-ub test-math-arm64 test-sqlite-arm64 test-math-noasm test-portable-scalars test-mingw test-tcc-mingw test-msvc-wine test-msvc-corpus math-asm-guard matrix-guard constparity-guard docs-link-guard mode-parity ci-corpus
 
 ci-corpus: bin/zc bin/zl $(BUILDDIR)/ztestrunner
 	$(BUILDDIR)/ztestrunner --zc bin/zc --cc $(CC) --root . --heavy --jobs $(NPROC)
@@ -1297,7 +1322,7 @@ perf: $(PERFBIN)
 # deletes write-only allocations; perf-elision measures that), a failed run and
 # allocs != frees. Above ALLOC_BASELINE fails; a commit raising it says why in
 # its message, and one lowering the count lowers it here.
-ALLOC_BASELINE := 2763302
+ALLOC_BASELINE := 2770049
 # ALLOC_LINE -- the one measurement every allocation number comes from.
 ALLOC_LINE = valgrind --tool=memcheck $(PERFRUN) 2>&1 | grep 'total heap usage' | sed 's/.*usage: //'
 

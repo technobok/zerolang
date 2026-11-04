@@ -193,11 +193,14 @@ inProject: function {dir: StringView rel: StringView} out String is {
 # project.zd at or above it, read against the schema in `systemdir`, the
 # driver's own stdlib (the schema is the driver's: a project's own systemDir
 # setting cannot name where the file that gives it is checked). No project.zd
-# anywhere above is an empty ProjectFile, which is single-file mode.
-discoverProject: function {start: StringView systemdir: StringView} out ProjectFile is {
+# anywhere above is an empty ProjectFile, which is single-file mode. The
+# check's parse shares the prelude through `prelude` (zparser.PreludeStore).
+discoverProject: function {
+    start: StringView systemdir: StringView prelude: zparser.PreludeStore
+} out ProjectFile is {
     dir: findProjectDir :start
     if dir.length == 0 then return ProjectFile.create
-    return (readProject dir: dir.stringView :systemdir)
+    return (readProject dir: dir.stringView :systemdir :prelude)
 }
 
 # findProjectDir -- the nearest directory at or above `start` holding a
@@ -273,7 +276,9 @@ upOne: function {p: StringView} out String is {
 # `toolchain.project` value, checked by zdata against the schema in
 # `systemdir`. What is wrong with the file is the result's `error`, every
 # error rendered.
-readProject: function {dir: StringView systemdir: StringView} out ProjectFile is {
+readProject: function {
+    dir: StringView systemdir: StringView prelude: zparser.PreludeStore
+} out ProjectFile is {
     pf: ProjectFile.create
     pf.dir = dir.string
     file: path.join a: dir b: projectFileName
@@ -282,7 +287,7 @@ readProject: function {dir: StringView systemdir: StringView} out ProjectFile is
     # the driver could build: its own report of the missing root is the one
     # that stops it
     if (zcheck.pathKindIs path: systemdir want: io.filekind.dir).not then return pf
-    df: zdata.open file: file.stringView srcdirs: List String :systemdir
+    df: zdata.openShared file: file.stringView srcdirs: List String :systemdir :prelude
     if df.ok.not then {
         pf.error = zdata.errorsText f: df
         pf.errorCount = zdata.errorCount f: df

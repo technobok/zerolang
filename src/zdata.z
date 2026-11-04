@@ -9,6 +9,7 @@
 public: unit {
     :DataFile
     :open
+    :openShared
     :dumpText
     :errorsText
     :errorCount
@@ -44,9 +45,7 @@ DataFile: class {
 open: function {
     file: StringView srcdirs: (List String).view systemdir: StringView
 } out DataFile is {
-    roots: List String
-    roots.append (path.dirname p: file)
-    for each sd: srcdirs loop roots.append from: sd.copy
+    roots: dataRoots :file :srcdirs
     unitName: unitNameOf :file
     r: (
         zcheck.check
@@ -58,13 +57,50 @@ open: function {
         dataFile: true
         reach: ztypecheck.checkreach.mainUnit
     )
+    return (dataFileOf check: r unitName: unitName.stringView)
+}
+
+# openShared -- `open`, its parse sharing the prelude with the other parses
+# handed `prelude` (zcheck.checkShared)
+openShared: function {
+    file: StringView
+    srcdirs: (List String).view
+    systemdir: StringView
+    prelude: zparser.PreludeStore
+} out DataFile is {
+    roots: dataRoots :file :srcdirs
+    unitName: unitNameOf :file
+    r: (
+        zcheck.checkShared
+        srcdirs: roots
+        :systemdir
+        mainUnit: unitName.stringView
+        overlays: List (Map String V: String)
+        layer: zcheck.noLayer
+        dataFile: true
+        reach: ztypecheck.checkreach.mainUnit
+        :prelude
+    )
+    return (dataFileOf check: r unitName: unitName.stringView)
+}
+
+# dataRoots -- a data file's roots: its own directory, then `srcdirs`
+dataRoots: function {file: StringView srcdirs: (List String).view} out List String is {
+    roots: List String
+    roots.append (path.dirname p: file)
+    for each sd: srcdirs loop roots.append from: sd.copy
+    return roots
+}
+
+# dataFileOf -- the data file `r` checked, with its unit `unitName` found
+dataFileOf: function {check: zcheck.CheckResult.take unitName: StringView} out DataFile is {
     ud: ztypes.declid
     {
-        o: r.st
+        o: check.st
         match (
             o
         ) case some then {
-            nid: zast.poolFind pool: r.prog.names text: unitName.stringView
+            nid: zast.poolFind pool: check.prog.names text: unitName
             if nid.isZero.not then ud = (
                 o.typing.declFindChild
                 parentDeclId: o.typing.programRoot
@@ -72,7 +108,7 @@ open: function {
             )
         } case none then null
     }
-    return (DataFile check: r unitDecl: ud)
+    return (DataFile :check unitDecl: ud)
 }
 
 # errorCount -- how many errors the check found: its parse error, or every

@@ -2104,11 +2104,15 @@ main: function is {
     isRun: subW == zcWord.slot.vRun
     cf: parseZcArgs :argv :n :zv sub: sub.stringView :unitname :isRun
     # project.zd is checked against this zc's own stdlib, the --system the
-    # command names or the one installed with it
+    # command names or the one installed with it. The prelude read for it is
+    # kept for each program, which reads on from it where it finds the same
+    # files (zparser.Parser.parseShared)
+    prelude: zparser.PreludeStore.create share: true
     pf: (
         zproject.discoverProject
         start: cf.projectStart.stringView
         systemdir: (zcheck.resolveSystemDir flagVal: cf.systemFlag.stringView).stringView
+        :prelude
     )
     applyProjectOrExit :cf :zv :pf
     refuseBadTarget targetTriple: cf.targetTriple.stringView
@@ -2124,9 +2128,13 @@ main: function is {
         dumpSqlTarget: cf.dumpSqlTarget.stringView
     )
     units: unitsToCompile :cf :pf :subW
+    k: u64
     for each u: units loop {
+        k = k + 1
+        # no parse follows the last program's, so it keeps no prelude
+        prelude.share = k < units.length
         cf.unitname = u.copy
-        compileUnit :cf :pf :zv :mode :isRun
+        compileUnit :cf :pf :zv :mode :isRun :prelude
     }
 }
 
@@ -2177,6 +2185,9 @@ compileUnit: function {
     zv: zast.Vocab.view
     mode: outmode
     isRun: bool
+    # the prelude the project read kept, which the parse reads on from where it
+    # finds the same files
+    prelude: zparser.PreludeStore
 } is {
     cf.resolveRoots
     systemdir: zcheck.resolveSystemDir flagVal: cf.systemFlag.stringView
@@ -2211,7 +2222,7 @@ compileUnit: function {
         tccDir: tccDir.stringView
     )
     p: zparser.Parser.create
-    prog: p.parse :vfs :rootid mainUnitName: cf.unitname
+    prog: p.parseShared :vfs :rootid mainUnitName: cf.unitname store: prelude
     tParse1: os.monotonicMillis
     mfn: "\{cf.unitname.stringView}.z"
     mainFsno: vfs.walk parent: rootid name: mfn.stringView

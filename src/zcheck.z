@@ -12,6 +12,7 @@
 public: unit {
     :CheckResult
     :check
+    :checkShared
     :diagrow
     :diagsOf
     :exeRoot
@@ -328,6 +329,48 @@ check: function {
     reach: ztypecheck.checkreach.everything
 } out CheckResult is {
     vfs: newVfs
+    rootid: mountCheck :vfs :systemdir :srcdirs :overlays :layer
+    p: zparser.Parser.create ext: (unitExtOf :dataFile)
+    prog: p.parse :vfs :rootid mainUnitName: mainUnit.string
+    return (checkTree :prog :vfs parser: p :reach :dataFile)
+}
+
+# checkShared -- `check`, its parse sharing the prelude with the other parses
+# handed `prelude` (zparser.Parser.parseShared): a project file's check and the
+# program built after it read the stdlib's units once
+checkShared: function {
+    srcdirs: (List String).view
+    systemdir: StringView
+    mainUnit: StringView
+    overlays: List (Map String V: String)
+    layer: GenLayer.view
+    dataFile: false
+    reach: ztypecheck.checkreach.everything
+    prelude: zparser.PreludeStore
+} out CheckResult is {
+    vfs: newVfs
+    rootid: mountCheck :vfs :systemdir :srcdirs :overlays :layer
+    p: zparser.Parser.create ext: (unitExtOf :dataFile)
+    prog: p.parseShared :vfs :rootid mainUnitName: mainUnit.string store: prelude
+    return (checkTree :prog :vfs parser: p :reach :dataFile)
+}
+
+# unitExtOf -- the extension a check's unit files carry
+unitExtOf: function {dataFile: bool} out StringView is {
+    if dataFile then return ".zd"
+    return ".z"
+}
+
+# mountCheck -- the roots a check reads through, bound in `vfs`: `srcdirs`
+# over `systemdir` (and the generated `layer`), each root's open buffers in
+# front of it. Answers the root a parse walks from.
+mountCheck: function {
+    vfs: zvfs.ZVfs
+    systemdir: StringView
+    srcdirs: (List String).view
+    overlays: List (Map String V: String)
+    layer: GenLayer.view
+} out zvfs.fsno is {
     roots: buildRoots :vfs :systemdir :srcdirs :layer
     rootid: roots.root
     # the last root's buffers first, so the first root's end up in front
@@ -347,10 +390,19 @@ check: function {
             }
         }
     }
-    ext: ".z"
-    if dataFile then ext = ".zd"
-    p: zparser.Parser.create :ext
-    prog: p.parse :vfs :rootid mainUnitName: mainUnit.string
+    return rootid
+}
+
+# checkTree -- the check of a parsed tree: typecheck it from `reach`, and with
+# `dataFile` ask its data files what they may not hold. A failed parse is
+# handed back unchecked.
+checkTree: function {
+    prog: Ast.take
+    vfs: zvfs.ZVfs.take
+    parser: zparser.Parser.take
+    reach: ztypecheck.checkreach
+    dataFile: bool
+} out CheckResult is {
     # a failed parse names its error as the tree's root row
     isErr: zast.isErrorAt ast: prog id: prog.root
     if isErr then {
@@ -361,7 +413,7 @@ check: function {
             :prog
             st: Option.none zenv.ZSymbolTable
             :vfs
-            parser: p
+            :parser
         )
     }
     reg: ztypes.newRegistry
@@ -383,7 +435,7 @@ check: function {
         :prog
         st: Option.some st
         :vfs
-        parser: p
+        :parser
     )
 }
 

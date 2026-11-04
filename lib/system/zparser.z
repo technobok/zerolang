@@ -16,6 +16,7 @@
 # other top-level definitions are private to this unit.
 public: unit {
     :Parser
+    :PreludeStore
     :isValidUnitName
 }
 
@@ -264,6 +265,10 @@ Parser: class {
     # the extension a unit's file carries: `.z` for source, `.zd` for a data
     # file (docs/zdata.pdoc). One parse reads one kind
     ext: String
+    # the lookups that found the prelude's files, noted while `recording`: the
+    # first parse to share a PreludeStore hands them to it (parseShared)
+    looks: Lookups
+    recording: bool
 } as {
     # a parser with an empty tree: the node table holds only its sentinel row,
     # and the name pool only the empty text. It reads unit files named
@@ -278,6 +283,8 @@ Parser: class {
             argNameStack: ListVal zast.nameid
             segStack: ListVal strseg
             ext: ext.string
+            looks: (Lookups.create root: zvfs.fsno)
+            recording: false
         )
     }
 
@@ -4349,6 +4356,9 @@ Parser: class {
         }
         fn: "\{unitname.stringView}\{this.ext}"
         fsid: vfs.walk parent: parentid name: fn.stringView
+        if this.recording then {
+            this.looks.note :vfs from: parentid beside: false name: fn.stringView answer: fsid
+        }
         fkind: vfs.arm dentryid: fsid
         isNF: false
         match (
@@ -4423,6 +4433,9 @@ Parser: class {
             ewBindNameList ast: this.ast scope: outNames items: body
             raw: collectExterns ast: this.ast :body
             dirid: vfs.siblingDir fileid: fsid name: unitname.stringView
+            if this.recording then {
+                this.looks.note :vfs from: fsid beside: true name: unitname.stringView answer: dirid
+            }
             dkind: vfs.arm dentryid: dirid
             hasSubdir: false
             match (
@@ -4879,13 +4892,54 @@ Parser: class {
     parse: function {
         :this vfs: zvfs.ZVfs rootid: zvfs.fsno mainUnitName: String.view
     } out zast.Ast is {
-        units: ListVal zast.nodeid
-        coreNames: List String
+        state: ParseState.create
+        pres: this.readPrelude :vfs :rootid :state
+        if (Parser.isError node: pres) then return (this.errorTree e: pres)
+        return (this.readMain :vfs :rootid :mainUnitName :state)
+    }
+
+    # parseShared -- `parse`, sharing the prelude with the other parses handed
+    # `store`. The first one reads it and keeps a copy of the tree as it stands
+    # after it; a later one, in a file view of its own, starts from that copy
+    # when every lookup that found the prelude's files finds the same files
+    # from its `rootid`, and reads the prelude itself otherwise (a src root
+    # holding a unit of the same name, a buffer open over one, another stdlib).
+    # A store made without `share` keeps nothing, and this is `parse`.
+    parseShared: function {
+        :this
+        vfs: zvfs.ZVfs
+        rootid: zvfs.fsno
+        mainUnitName: String.view
+        store: PreludeStore
+    } out zast.Ast is {
+        if (this.resume :vfs :rootid :store) then {
+            again: store.state.copy
+            return (this.readMain :vfs :rootid :mainUnitName state: again)
+        }
+        keep: store.share and store.tree.none
+        if keep then this.looks = Lookups.create root: rootid
+        this.recording = keep
+        state: ParseState.create
+        pres: this.readPrelude :vfs :rootid :state
+        this.recording = false
+        if (Parser.isError node: pres) then return (this.errorTree e: pres)
+        if keep when this.looks.whole then {
+            store.tree = Option.some this.ast.copy
+            store.state = state.copy
+            store.looks swap this.looks
+        }
+        return (this.readMain :vfs :rootid :mainUnitName :state)
+    }
+
+    # readPrelude -- a parse's first phase: core, then every unit it names,
+    # into `state`. THE PRELUDE IS ZEROLANG whatever kind of file the parse
+    # reads: they load as `.z`, and only the main unit and what it names as
+    # `ext`. Answers the `error` node of a failed load, or an unminted `atomid`.
+    readPrelude: function {
+        :this vfs: zvfs.ZVfs rootid: zvfs.fsno state: ParseState
+    } out astnode is {
         coreNamesOut: ListVal zast.nameid
         coreExterns: List String
-        # THE PRELUDE IS ZEROLANG whatever kind of file this parse reads: core
-        # and the units it names load as `.z` first, and only then the main
-        # unit and what it names, as `ext`
         ownExt: ".z".string
         ownExt swap this.ext
         coreRes: (
@@ -4894,25 +4948,18 @@ Parser: class {
             parentid: rootid
             unitname: "core".string
             kind: zast.unitkind.namespace
-            :coreNames
-            outBody: units
+            coreNames: state.coreNames
+            outBody: state.units
             outExterns: coreExterns
             outNames: coreNamesOut
         )
         ownExt swap this.ext
-        coreErr: Parser.isError node: coreRes
-        coreOk: false
-        if coreErr then {
-            coreNF: Parser.isFileNotFound node: coreRes
-            if coreNF.not then return (this.errorTree e: coreRes)
+        if (Parser.isError node: coreRes) then {
+            if (Parser.isFileNotFound node: coreRes).not then return coreRes
         } else {
-            coreOk = true
-        }
-        defNames: List String
-        if coreOk then {
-            defNames.append "core".string
+            state.defNames.append "core".string
             cnIt: coreNamesOut.iterate
-            for cn: cnIt loop coreNames.append (
+            for cn: cnIt loop state.coreNames.append (
                 zast.poolTextCopy
                 pool: this.ast.names
                 ref: cn
@@ -4920,35 +4967,42 @@ Parser: class {
         }
         preludeQueue: List String
         ceIt: coreExterns.iterate
-        for ce: ceIt loop enqueueUnit queue: preludeQueue :defNames name: ce.copy
+        for ce: ceIt loop enqueueUnit queue: preludeQueue defNames: state.defNames name: ce.copy
         ownExt swap this.ext
         pres: (
             this.loadQueued
             :vfs
             :rootid
-            :coreNames
-            :defNames
+            coreNames: state.coreNames
+            defNames: state.defNames
             queue: preludeQueue
-            :units
+            units: state.units
             required: ""
         )
         ownExt swap this.ext
-        if (Parser.isError node: pres) then return (this.errorTree e: pres)
+        return pres
+    }
+
+    # readMain -- a parse's second phase: the main unit and every unit it
+    # names, read on from `state`, then the program row. Answers the tree.
+    readMain: function {
+        :this vfs: zvfs.ZVfs rootid: zvfs.fsno mainUnitName: String.view state: ParseState
+    } out zast.Ast is {
         loadQueue: List String
         loadQueue.append mainUnitName.copy
         res: (
             this.loadQueued
             :vfs
             :rootid
-            :coreNames
-            :defNames
+            coreNames: state.coreNames
+            defNames: state.defNames
             queue: loadQueue
-            :units
+            units: state.units
             required: mainUnitName.stringView
         )
         if (Parser.isError node: res) then return (this.errorTree e: res)
         pid: this.nextId
-        units swap this.ast.units
+        state.units swap this.ast.units
         tbl: Ast
         tbl swap this.ast
         # the root is a row like every other node: the tree is what is returned,
@@ -4963,6 +5017,283 @@ Parser: class {
             child: astnode.program (zast.programrow nodeid: pid lineno: 1 colno: 1)
         )
         return tbl
+    }
+
+    # resume -- start this parse's tree from the store's: a copy of it, each
+    # row's file renamed to the same file in `vfs`, when the store holds one
+    # and its lookups find the same files from `rootid` there (Lookups.replay).
+    # False otherwise, the tree left as it was.
+    resume: function {:this vfs: zvfs.ZVfs rootid: zvfs.fsno store: PreludeStore.view} out bool is {
+        kept: store.tree
+        match (
+            kept
+        ) case some then {
+            answers: ListVal zvfs.fsno
+            if (store.looks.replay :vfs :rootid :answers).not then return false
+            renamed: store.looks.renaming :answers
+            tree: kept.copy
+            if (refile :tree :renamed).not then return false
+            tree swap this.ast
+            return true
+        } case none then null
+        return false
+    }
+}
+
+# ParseState -- a parse between its two phases (Parser.parse): the units it
+# has loaded, core's names, and every name resolved so far, to a unit or to no
+# file at all
+ParseState: class {
+    units: ListVal zast.nodeid
+    coreNames: List String
+    defNames: List String
+} as {
+    # the state before core is read
+    create: function {} out this is {
+        return (meta.create units: ListVal zast.nodeid coreNames: List String defNames: List String)
+    }
+
+    # copy -- an owned duplicate, for each parse that reads on from a stored one
+    copy: function {this: this.view} out this is {
+        r: meta.create units: this.units.copy coreNames: List String defNames: List String
+        for each cn: this.coreNames loop r.coreNames.append cn.copy
+        for each dn: this.defNames loop r.defNames.append dn.copy
+        return r
+    }
+}
+
+# Lookups -- the file lookups a parse made while it read the prelude, in
+# order, each with what it found. Replayed in another file view, the same
+# answers mean the same files (Parser.parseShared). A lookup walks `name` from
+# the parse's root or from an earlier lookup's folder, or takes the folder
+# `name` beside an earlier lookup's file (vfs.siblingDir): the only two ways a
+# parse finds a unit file.
+Lookups: class {
+    # the root the parse walked from
+    root: zvfs.fsno
+    # 0 for the root; else 1 + the earlier lookup whose answer it starts from
+    base: ListVal u32
+    # whether it took the folder beside its base's file rather than walking
+    beside: ListVal bool
+    # the name it asked for
+    names: List String
+    # its answer in the view it ran in
+    found: ListVal zvfs.fsno
+    # what the answer is, and its path on disk, absolute ("" when nothing is
+    # there)
+    kinds: ListVal zvfs.nodekind
+    paths: List String
+    # the working directory a relative path on disk is read against, read at
+    # the first lookup that finds something
+    cwd: String
+    # false once a lookup is noted that cannot be replayed: one from no earlier
+    # answer, or one finding an entry with no path on disk of its own (an open
+    # buffer, a union of two folders)
+    whole: bool
+} as {
+    # no lookups yet, from `root`
+    create: function {root: zvfs.fsno} out this is {
+        return (
+            meta.create
+            :root
+            base: ListVal u32
+            beside: ListVal bool
+            names: List String
+            found: ListVal zvfs.fsno
+            kinds: ListVal zvfs.nodekind
+            paths: List String
+            cwd: String
+            whole: true
+        )
+    }
+
+    # note -- one lookup: from `from` (the root, or an earlier answer), `name`
+    # walked or, `beside`, the folder `name` beside the file `from`, found
+    # `answer`
+    note: function {
+        :this
+        vfs: zvfs.ZVfs.view
+        from: zvfs.fsno
+        beside: bool
+        name: StringView
+        answer: zvfs.fsno
+    } is {
+        b: u32
+        if from != this.root then {
+            b = this.answerIndex id: from
+            if b == 0 then this.whole = false
+        }
+        kind: vfs.arm dentryid: answer
+        p: String
+        if kind != zvfs.nodekind.notfound then {
+            if this.cwd.length == 0 then this.cwd = workingDir
+            np: vfs.pathfromproviderNative dentryid: answer
+            p = onDisk p: np.stringView cwd: this.cwd.stringView
+            if p.length == 0 then this.whole = false
+        }
+        this.base.append b
+        this.beside.append beside
+        this.names.append name.string
+        this.found.append answer
+        this.kinds.append kind
+        this.paths.append p
+    }
+
+    # answerIndex -- 1 + the latest lookup that answered `id`, 0 when none did
+    answerIndex: function {this: this.view id: zvfs.fsno} out u32 is {
+        i: this.found.length
+        for i > 0 loop {
+            if (this.found.get i: i - 1) == id then return i.u32.orPanic
+            i = i - 1
+        }
+        return 0
+    }
+
+    # replay -- the same lookups in `vfs`, from its root `rootid`, each answer
+    # appended to `answers`: true when every one finds what it found when it
+    # was noted, the same kind of entry at the same path on disk
+    replay: function {
+        this: this.view
+        vfs: zvfs.ZVfs
+        rootid: zvfs.fsno
+        answers: ListVal zvfs.fsno
+    } out bool is {
+        if this.whole.not then return false
+        cwd: workingDir
+        i: u64
+        for i < this.found.length loop {
+            b: this.base.get :i
+            from: rootid
+            if b > 0 then from = answers.get i: b.u64 - 1
+            got: this.lookUp :vfs :i :from
+            if (this.sameAnswer :vfs :i :got cwd: cwd.stringView).not then return false
+            answers.append got
+            i = i + 1
+        }
+        return true
+    }
+
+    # lookUp -- lookup `i` made again in `vfs`, from `from`
+    lookUp: function {this: this.view vfs: zvfs.ZVfs i: u64 from: zvfs.fsno} out zvfs.fsno is {
+        nm: (this.names.get :i).stringView
+        if (this.beside.get :i) then return (vfs.siblingDir fileid: from name: nm)
+        return (vfs.walk parent: from name: nm)
+    }
+
+    # sameAnswer -- `got`, in `vfs`, is what lookup `i` found: the same kind of
+    # entry, at the same path on disk
+    sameAnswer: function {
+        this: this.view
+        vfs: zvfs.ZVfs.view
+        i: u64
+        got: zvfs.fsno
+        cwd: StringView
+    } out bool is {
+        kind: vfs.arm dentryid: got
+        if kind != (this.kinds.get :i) then return false
+        if kind == zvfs.nodekind.notfound then return true
+        np: vfs.pathfromproviderNative dentryid: got
+        p: onDisk p: np.stringView :cwd
+        if p.length == 0 then return false
+        return p.stringView == (this.paths.get :i)
+    }
+
+    # renaming -- each noted answer's fsno in another view, `answers` (what
+    # replay found there), by its fsno where it was noted
+    renaming: function {this: this.view answers: (ListVal zvfs.fsno).view} out (
+        ListVal
+        zvfs.fsno
+        i: zvfs.fsno
+    ) is {
+        renamed: ListVal zvfs.fsno i: zvfs.fsno
+        k: u64
+        for k < answers.length loop {
+            was: this.found.get i: k
+            if was.u64 >= renamed.length then renamed.resize to: was.u64 + 1
+            renamed.set i: was val: (answers.get i: k)
+            k = k + 1
+        }
+        return renamed
+    }
+}
+
+# refile -- every row's file and every loaded file of `tree` renamed through
+# `renamed` (a file's fsno in another view, by its fsno in the tree's): false
+# when one has no new name
+refile: function {tree: Ast renamed: (ListVal zvfs.fsno i: zvfs.fsno).view} out bool is {
+    n: zast.nodeid
+    for n.u64 < tree.rowFile.length loop {
+        f: tree.rowFile.get i: n
+        if f.isZero.not then {
+            g: renamedFile :f :renamed
+            if g.isZero then return false
+            tree.rowFile.set i: n val: g
+        }
+        n = n.next
+    }
+    j: u64
+    for j < tree.files.length loop {
+        g: renamedFile f: (tree.files.get i: j) :renamed
+        if g.isZero then return false
+        tree.files.set i: j val: g
+        j = j + 1
+    }
+    return true
+}
+
+# renamedFile -- the file `f`'s fsno in the other view, 0 when it has none
+renamedFile: function {
+    f: zvfs.fsno renamed: (ListVal zvfs.fsno i: zvfs.fsno).view
+} out zvfs.fsno is {
+    none: zvfs.fsno
+    if f.u64 >= renamed.length then return none
+    return (renamed.get i: f)
+}
+
+# workingDir -- the working directory, "" when it cannot be read
+workingDir: function out String is {
+    cw: os.cwd
+    match (
+        cw
+    ) case ok then {
+        return cw.copy
+    } case err then null
+    return "".string
+}
+
+# onDisk -- the file `p` names, as an absolute path with its "." and ".."
+# components resolved by text, so two spellings of one file -- relative to
+# the working directory `cwd` or not -- are one ("" stays "")
+onDisk: function {p: StringView cwd: StringView} out String is {
+    if p.length == 0 then return "".string
+    if (path.isAbsolute :p) then return (path.clean :p)
+    j: path.join a: cwd b: p
+    return (path.clean p: j.stringView)
+}
+
+# PreludeStore -- the prelude, read once for the parses that share the store
+# (Parser.parseShared): the tree as it stands after core and the units it
+# names, the parse's state there, and how its files were found
+PreludeStore: class {
+    # whether the first parse handed the store fills it; one made without
+    # keeps nothing
+    share: bool
+    # the tree as it stands after the prelude, once a parse has kept one: a
+    # prelude that failed to read, or found a file with no path on disk, is
+    # not kept. None until then, so a store no parse fills makes no tree
+    tree: Option Ast
+    state: ParseState
+    looks: Lookups
+} as {
+    # an empty store, filled by the first parse handed it when `share`
+    create: function {share: false} out this is {
+        return (
+            meta.create
+            :share
+            tree: Option.none Ast
+            state: ParseState.create
+            looks: (Lookups.create root: zvfs.fsno)
+        )
     }
 }
 
