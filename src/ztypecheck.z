@@ -28766,6 +28766,44 @@ elidedPrimaryTypeArg: function {
     return (bodyTypeNameTid :st :ast :unitDecl nameId: anE nid: opId).isZero.not
 }
 
+# argNamesNothing -- a construction's argument is a bare name (under any strip
+# markers) that no lookup answers: no local or parameter, no type, no
+# declaration in scope (typeNameResolvesNowhere), and no member of any loaded
+# unit. A local written as a type argument is a value in the wrong place, which
+# refuseValueTypeArg says.
+argNamesNothing: function {
+    st: zenv.ZSymbolTable
+    ast: Ast
+    unitDecl: ztypes.declid
+    opId: zast.nodeid
+} out bool is {
+    atomNid: markedBareAtom :ast nid: opId
+    if atomNid.isZero then return false
+    nameId: atomNameId :ast n: (ast.nodes.get i: atomNid)
+    if (st.findLocal :nameId).isZero.not then return false
+    return (typeNameResolvesNowhere :st :ast :unitDecl scope: st.curScope :nameId)
+}
+
+# reportUnknownTypeArg -- E0023 at a construction's type argument that names
+# nothing (argNamesNothing), worded as a bare type-ref's is.
+reportUnknownTypeArg: function {st: zenv.ZSymbolTable ast: Ast opId: zast.nodeid} is {
+    atomNid: markedBareAtom :ast nid: opId
+    an: ast.nodes.get i: atomNid
+    tn: (zast.nameTextAt :ast ref: (atomNameId :ast n: an)).copy
+    (
+        addErrorH
+        :st
+        nodeid: atomNid
+        lineno: (nodeLine n: an)
+        colno: (nodeCol n: an)
+        e: zast.err.badReference
+        msg: "Unknown type '\{tn}'"
+        note: String
+        hint: String
+        width: tn.length.u32.orPanic
+    )
+}
+
 # bindTypeArgSub -- a label naming a generic param carries its argument
 # directly: a numeric parameter's value spells itself into the mono suffix and
 # binds the parameter's value, anything else resolves to the type id that
@@ -28775,7 +28813,7 @@ bindTypeArgSub: function {
     st: zenv.ZSymbolTable
     unitDecl: ztypes.declid
     ast: Ast
-    opId: zast.nodeid
+    arg: argref
     pk: zast.nameid
     sfx: String
     subs: (IdMapV zast.nameid v: ztypes.tid)
@@ -28783,6 +28821,7 @@ bindTypeArgSub: function {
     boundParams: IdSet zast.nameid
     tk: ztypes.declid
 } is {
+    opId: arg.operation
     cdB: st.reg.genericParamConstraintOf tdecl: tk paramName: pk
     if cdB.numKind.has then {
         boundParams.add item: pk
@@ -28817,7 +28856,17 @@ bindTypeArgSub: function {
         :opId
         baseId: anId
     )
-    if aid9.isZero then return
+    if aid9.isZero then {
+        # a type argument naming nothing at all, or naming a local, is its own
+        # error; inference stops there (inferGenericConstruction)
+        if (argNamesNothing :st :ast :unitDecl :opId) then {
+            reportUnknownTypeArg :st :ast :opId
+            return
+        }
+        lv: (st.lookup nameId: anId).or d: ztypes.tid.zero
+        if lv.isZero.not then refuseValueTypeArg :st :unitDecl :ast :arg vt: lv
+        return
+    }
     atn: (
         monoValName
         :st
@@ -28977,8 +29026,20 @@ inferConstructionArg: function {
     if pk.isZero.not then {
         isP = st.reg.isGenericParamOf tdecl: tk name: pk
     }
+    # a leading argument naming nothing at all is reported as any value naming
+    # nothing is; inference stops there (inferGenericConstruction)
+    if pk.isZero when argIdx == 0 when primaryName.isZero.not when (
+        argNamesNothing
+        :st
+        :ast
+        :unitDecl
+        :opId
+    ) then {
+        reportUnresolvedValue :st :unitDecl :ast nid: opId
+        return
+    }
     if isP then {
-        bindTypeArgSub :st :unitDecl :ast :opId :pk :sfx :subs :valueSubs :boundParams :tk
+        bindTypeArgSub :st :unitDecl :ast :arg :pk :sfx :subs :valueSubs :boundParams :tk
     } else {
         (
             bindValueArgSub
@@ -29249,6 +29310,7 @@ inferGenericConstruction: function {
     ).not then {
         return ztypes.tid.zero
     }
+    enI: st.typing.errors.length
     (
         inferConstructionSubs
         :st
@@ -29267,6 +29329,10 @@ inferGenericConstruction: function {
         :tk
     )
     st.popDiscard
+    # an argument refused on the way said why: inference would only report the
+    # parameter it was written for again, as one it cannot infer, and a type
+    # minted without it would read the argument once more as a field
+    if st.typing.errors.length > enI then return ztypes.tid.zero
     sfx.append s: isfx
     # a parameter no argument names takes its default
     if (fillGenericDefaults :st :ast tdecl: tk :subs valSubs: valueSubs :sfx).not then {
@@ -31500,7 +31566,7 @@ applyTypedefTypePins: function {
             :st
             :unitDecl
             :ast
-            opId: arg.operation
+            :arg
             pk: arg.name
             sfx: psfx
             subs: pins
