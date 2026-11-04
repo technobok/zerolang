@@ -6413,7 +6413,7 @@ resolveTyperefShell: function {
     }
     # anything else is a value, not a type: its fold has said why it is
     # refused, and the member is declared with no type (memberDefinitionFailed)
-    st.typing.refusedDefaults.add item: nid
+    st.typing.refusedValues.add item: nid
     return ztypes.tid.zero
 }
 
@@ -8996,7 +8996,7 @@ attachAsConstant: function {
     folded: constValueOfDecl :st declId: md
     if folded.kind.none then {
         reported: reportAsMemberNotConstant :st :ast :parentId :item
-        if reported.not then reported = reportUnknownAsCallHead :st :ast :parentId :item
+        if reported.not then reported = reportUnknownAsHead :st :ast :parentId :item
         if reported.not then reported = reportAsConstruction :st :ast :parentId :item
         # attachMarkers classifies a bare name or a path, which may name a
         # conformance or a type
@@ -9198,20 +9198,24 @@ asItemNamesOf: function {
     return names
 }
 
-# reportUnknownAsCallHead -- an `as` item whose value is a call (`k: (f a: 1)`,
-# or a type application `g: (Getter v: i64)`) whose head resolves nowhere:
-# reported as the same name is in a body, rather than left a constant that
-# never folds. True when it reported.
-reportUnknownAsCallHead: function {
+# reportUnknownAsHead -- an `as` item whose value is a call (`k: (f a: 1)`,
+# or a type application `g: (Getter v: i64)`) or a path (`origin: io.nosuch`)
+# whose head resolves nowhere: reported as the same name is in a body, rather
+# than left a constant that never folds or a conformance naming nothing. True
+# when it reported.
+reportUnknownAsHead: function {
     st: zenv.ZSymbolTable
     ast: Ast
     parentId: ztypes.tid
     item: argref
 } out bool is {
     headNid: zast.nodeid
-    vn: ast.nodes.get i: item.operation
-    if vn.call.not then return false
-    headNid = vn.callable
+    {
+        vn: ast.nodes.get i: item.operation
+        if vn.call then headNid = vn.callable
+        if vn.dottedpath then headNid = item.operation
+    }
+    if headNid.isZero then return false
     # an operator's call (`cap * 2`) has a path for its head, and no name in it
     if (zast.infixPartsOf :ast n: (ast.nodes.get i: item.operation)).found then return false
     # a head through a unit (`sch.row`) is checked at its root, then at its member
@@ -17614,6 +17618,7 @@ reportUnknownBareAliasTarget: function {
     unknown: unresolvedBareName :ast :st :unitDecl :nameId
     if unknown.length == 0 then return false
     at: aliasValueSite :st :ast :adecl
+    st.typing.refusedValues.add item: at.nid
     (
         addErrorH
         :st
@@ -17788,6 +17793,7 @@ reportMissingAliasTarget: function {
     if what == 2 then msg = "type '\{root}' has no member '\{member}'"
     if what != 3 then code = zast.err.typeError
     at: aliasValueSite :st :ast :adecl
+    st.typing.refusedValues.add item: at.nid
     (
         addErrorH
         :st
@@ -22998,6 +23004,7 @@ stampOnePendingTyperef: function {
     }
     if (stampQualifiedTyperef :st :ast unitDecl: origin scope: rf :uk) then return
     if (typerefExcused :st :ast :uk :rf :origin :pval) then return
+    st.typing.refusedValues.add item: uk
     un: ast.nodes.get i: uk
     pvalT: zast.nameTextAt :ast ref: pval
     um: "Unknown type '\{pvalT}'"
@@ -31992,9 +31999,11 @@ scopeMemberTid: function {
 # `public:` block) declares a member `nameId` that a read found no type for,
 # because the member's definition failed and reported why where it is written:
 # a constant, a list or a type's `as` constant whose value did not type (with an
-# error recorded), or a default refused (ZTyping.refusedDefaults). That report stands for every read
-# of the member, so a read adds no "has no member" of its own. A function, a
-# parameter, a field or a method a read does not find is the read's to report.
+# error recorded), or a value refused where it is written (ZTyping.refusedValues):
+# a default, a type name or an alias target naming nothing. That report stands
+# for every read of the member, so a read adds no "has no member" of its own. A
+# function, a parameter, a field or a method a read does not find is the read's
+# to report.
 memberDefinitionFailed: function {
     st: zenv.ZSymbolTable.view
     ast: Ast.view
@@ -32015,7 +32024,7 @@ memberDefinitionFailed: function {
     if d.node.isZero then return false
     n: ast.nodes.get i: d.node
     if n.namedoperation.not then return false
-    return (st.typing.refusedDefaults.has item: n.operation)
+    return (st.typing.refusedValues.has item: n.operation)
 }
 
 # reportUnknownMember -- an unknown member on a type whose member set is
