@@ -17174,29 +17174,40 @@ valueHeadIsSelf: function {
 }
 
 # valueHeadDecl -- the definition the head of `declId`'s value names (`foo` in
-# `foo.x.y`), looked up from the scope the definition is written in; 0 when the
-# value has no name at its head, the name finds no definition, or `declId` is
-# no definition by value (a re-export or a constant) -- a unit, a type or a
-# function ends the chain.
+# `foo.x.y`, `Beta` in `u.Beta.x` when `u` names a unit), looked up from the
+# scope the definition is written in; 0 when the value has no name at its head,
+# the name finds no definition, or `declId` is no definition by value (a
+# re-export or a constant) -- a unit, a type or a function ends the chain.
 valueHeadDecl: function {
     st: zenv.ZSymbolTable.view ast: Ast.view declId: ztypes.declid
 } out ztypes.declid is {
     dk: (st.typing.decls.get i: declId).kind
     if dk.reexportDecl.not when dk.constDecl.not then return ztypes.declid.zero
     ar: argRefAt :ast nid: (st.typing.decls.get i: declId).node
+    scope: st.typing.declParentOf :declId
     nid: ar.operation
     for nid.isZero.not loop {
         n: ast.nodes.get i: nid
         match (
             n
         ) case dottedpath then {
+            # a qualifier naming a unit is no definition by value: the head is
+            # the member it reaches, so a ring through a unit's name -- the
+            # definition's own unit or another -- is still a ring
+            qu: qualifierUnitDecl :st :scope :ast nid: n.parent
+            if qu.isZero.not then {
+                cn: atomNameId :ast n: (ast.nodes.get i: n.child)
+                if cn.isZero then return ztypes.declid.zero
+                own: qualifiedMemberScope :st unitRoot: qu memberId: cn
+                return (st.typing.declFindChild parentDeclId: own nameId: cn)
+            }
             nid = n.parent
         } else break
     }
     if nid.isZero then return ztypes.declid.zero
     head: atomNameId :ast n: (ast.nodes.get i: nid)
     if head.isZero then return ztypes.declid.zero
-    return (envLookup :st scope: (st.typing.declParentOf :declId) nameId: head).declId
+    return (envLookup :st :scope nameId: head).declId
 }
 
 # resolveDeepAlias -- a unit-level alias whose target is reached through a path
@@ -17704,8 +17715,6 @@ aliasTargetTid: function {
     ast: Ast
     adecl: ztypes.declid
     aParent: ztypes.declid
-    aNameId: zast.nameid
-    aUnitId: zast.nameid
     tuId: zast.nameid
     tnId: zast.nameid
     atid0: ztypes.tid
@@ -17782,14 +17791,11 @@ aliasTargetTid: function {
         # a ring of bare aliases (`Alpha: Beta` / `Beta: Alpha`) is cut by
         # the guard at the top of this function, which returns silently --
         # the caller then mints a forward shell and the C carries an
-        # incomplete type. Report it the way the dotted leg does instead.
+        # incomplete type. A ring is caught where the definition resolves
+        # (valueHeadIsSelf); one reached here is reported the same way.
         btd: st.typing.declFindChild parentDeclId: aParent nameId: defNameId
         if (st.typing.declIsResolving declId: btd) then {
-            aUnit: zast.nameTextAt :ast ref: aUnitId
-            aName: zast.nameTextAt :ast ref: aNameId
-            tn: zast.nameTextAt :ast ref: tnId
-            bcm: "alias cycle: '\{aUnit}.\{aName}' aliases '\{aUnit}.\{tn}' which is still resolving"
-            addResolveError :st e: zast.err.typeError msg: bcm
+            reportAliasCycle :st :ast declId: adecl dnode: (st.typing.decls.get i: adecl).node
             rootedOut.append typeRooted
             return ztypes.tid.zero
         }
@@ -17989,19 +17995,6 @@ resolveAliasKeyIn: function {
     aNameId = ado.name
     ado.drop
     if aNameId.isZero then return ztypes.tid.zero
-    # the file unit the alias is written in, for the name walkers and the
-    # diagnostics -- the alias's OWN scope is aParent, which is that unit's
-    # root for a top-level alias and the nested unit's Decl for a nested one
-    aUnitId: (
-        declNameIdOf
-        :st
-        declId: (
-            unitDeclOfNameOrOwn
-            :st
-            :scope
-            nameId: (declNameIdOf :st declId: (unitRootOfDecl :st declId: adecl))
-        )
-    )
     st.typing.declSetResolving declId: adecl mark: true
     # A subunit of THIS unit is the nearer scope, so it answers before the
     # file-unit index -- the same order a name written inside a namespace takes.
@@ -18053,8 +18046,6 @@ resolveAliasKeyIn: function {
         :ast
         :adecl
         :aParent
-        :aNameId
-        :aUnitId
         tuId: altK.unitName
         tnId: altK.defName
         atid0: atid
@@ -18307,8 +18298,6 @@ resolveDottedDef: function {
     # ref to a (shell) type id and register it under the unit's name, so bare-alias
     # return types and value uses resolve. Replicates resolveTyperefShell's
     # cross-unit leg.
-    # owned copies: the resolutions below lend ast
-    apNm: zast.nameTextCopy :ast ref: (atomNameId :ast n: (ast.nodes.get i: defn.parent))
     apId: atomNameId :ast n: (ast.nodes.get i: defn.parent)
     if (nameDenotesUnit :st scope: rf nameId: apId) then {
         acId: atomNameId :ast n: (ast.nodes.get i: defn.child)
@@ -18325,13 +18314,16 @@ resolveDottedDef: function {
                 nameId: acId
             )
         ) then {
-            acNm: zast.nameTextAt :ast ref: acId
-            aem: "alias cycle: '\{(unitNameTextOf
+            # a ring through a unit's name, caught where the definition resolves
+            # (valueHeadIsSelf); one reached here is reported the same way
+            ad: st.typing.declFindChild parentDeclId: rf nameId: (nameIdOf :ast name: defName)
+            if ad.isZero.not then (
+                reportAliasCycle
                 :st
                 :ast
-                :unitDecl
-            )}.\{defName}' aliases '\{apNm}.\{acNm}' which is still resolving"
-            addResolveError :st e: zast.err.typeError msg: aem
+                declId: ad
+                dnode: (st.typing.decls.get i: ad).node
+            )
         }
         udA: unitDeclOfNameOrOwn :st scope: rf nameId: apId
         (
