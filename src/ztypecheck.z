@@ -55,6 +55,7 @@ public: unit {
     :isNullTid
     :dataFieldNames
     :isBareGenericParam
+    :asAliasKnownAt
     :implicitReturnValue
     :controlArmBlocks
     :lastStmtLineIdAt
@@ -1457,6 +1458,24 @@ indexDeclObjInner: function {
     }
 }
 
+# asOpIsTypeShaped -- an `as` item's value is shaped as a type may be: a name
+# that is no numeric literal, a path whose leaf is no marker, or an
+# application -- an operator expression (`x: a + b`) is none. Read off the text
+# alone, as indexing is.
+asOpIsTypeShaped: function {ast: Ast.view opNode: astnode.view} out bool is {
+    match (
+        opNode
+    ) case atomid then {
+        return (isNumericLiteralNameAt :ast ref: opNode.name).not
+    } case dottedpath then {
+        return (leafNamesNoMember leafId: (atomNameId :ast n: (ast.nodes.get i: opNode.child))).not
+    } case call then {
+        return opNode.infix.not
+    } else {
+        return false
+    }
+}
+
 # indexDeclAsMember -- one as-block member Decl: a method when the member
 # is a function (with its own parameter Decls), a field-like entry
 # otherwise (generic parameters, tag specs, member constants).
@@ -1469,6 +1488,7 @@ indexDeclAsMember: function {
     opNodeId: zast.nodeid
 } is {
     opNode: ast.nodes.get i: opNodeId
+    if (asOpIsTypeShaped :ast :opNode) then st.typing.asTypeShapedNames.add item: nameRef
     match (
         opNode
     ) case functiondef then {
@@ -2011,10 +2031,11 @@ literalNameTypeId: function {
     return (st.reg.newType name: dn7 typetype: ztypes.ztypetype.recordType)
 }
 
-# genericParamTypeId -- the name is a generic PARAMETER of the enclosing type:
-# its canonical GENERIC_PARAM id, minted on first reference and recorded
-# against the referencing node. 0 when there is no enclosing type, or the name
-# is not one of its parameters.
+# genericParamTypeId -- the name is a member of the enclosing type that is a
+# type there (typeAsMemberTid): a generic PARAMETER, its canonical
+# GENERIC_PARAM id, minted on first reference and recorded against the
+# referencing node, or an alias, its target. 0 when there is no enclosing type,
+# or the name is neither.
 genericParamTypeId: function {
     st: zenv.ZSymbolTable
     ast: Ast
@@ -2026,9 +2047,535 @@ genericParamTypeId: function {
 } out ztypes.tid is {
     if thisName.length == 0 then return ztypes.tid.zero
     etk7: declOfUnitDef :st :scope :unitDecl nameId: (nameIdOf :ast name: thisName)
-    if (st.reg.isGenericParamOf tdecl: etk7 name: nameId).not then return ztypes.tid.zero
-    recordGenericParamRef :st :nid scope: etk7 name: nameId
-    return (genericParamTidMint :st :ast tdecl: etk7 :nameId)
+    return (typeAsMemberTid :st :ast tdecl: etk7 :nameId :nid numeric: true)
+}
+
+# typeAsMemberTid -- the type the name `nameId` denotes as a member of the type
+# declared by `tdecl`, written in that type's own scope: a generic parameter,
+# its GENERIC_PARAM id recorded against `nid` (a numeric one only when
+# `numeric`, for elsewhere it is a value), or an alias, its target. 0 for any
+# other name.
+typeAsMemberTid: function {
+    st: zenv.ZSymbolTable
+    ast: Ast
+    tdecl: ztypes.declid
+    nameId: zast.nameid
+    nid: zast.nodeid
+    numeric: bool
+} out ztypes.tid is {
+    if tdecl.isZero or nameId.isZero then return ztypes.tid.zero
+    if (st.reg.isGenericParamOf :tdecl name: nameId) then {
+        if numeric.not when (
+            st.reg.genericParamConstraintOf
+            :tdecl
+            paramName: nameId
+        ).numKind.has then return ztypes.tid.zero
+        recordGenericParamRef :st :nid scope: tdecl name: nameId
+        return (genericParamTidMint :st :ast :tdecl :nameId)
+    }
+    md: st.typing.declFindChild parentDeclId: tdecl :nameId
+    if md.isZero then return ztypes.tid.zero
+    at: asAliasTargetOf :st :ast :tdecl :md
+    # the nearest declaration wins: an `as` member that is a value -- a
+    # constant, an implementation -- stops the name here, and is refused as
+    # what it is. A method is named for what it converts to (`u64`'s `.i128`,
+    # BigInt's `u64` returning a u64), and the type's `is` members -- its fields
+    # and arms (`idkey`'s `:u8`) -- name no types: neither stops the name
+    if at.isZero when nid.isZero.not when (memberStopsTypeName :st :ast :tdecl :md) then {
+        refuseMemberAsType :st :ast :tdecl :md :nid
+        return ztypes.tid.zero
+    }
+    # the referencing node is stamped with the target here: the deferred stamp
+    # resolves in the scope the type is written in, which sees no alias
+    if at.isZero.not when nid.isZero.not then {
+        ztyping.nodeTypeSet tbl: st.typing.nodeType :nid tid: at
+        nsk: nid
+        nsv: true
+        st.typing.noStampNode.set key: nsk value: nsv
+    }
+    return at
+}
+
+# memberStopsTypeName -- the member `md` of the type declared by `tdecl` is an
+# `as` item holding a value -- a constant that folds -- and no alias, method or
+# generic parameter: written where a type is, its name finds it before any
+# outer type of that spelling.
+memberStopsTypeName: function {
+    st: zenv.ZSymbolTable
+    ast: Ast
+    tdecl: ztypes.declid
+    md: ztypes.declid
+} out bool is {
+    if (st.typing.decls.get i: md).kind.methodDecl then return false
+    if (asMemberIsAsItem :st :ast :tdecl :md).not then return false
+    if (asMemberIsAlias :st :ast :tdecl :md) then return false
+    item: argRefAt :ast nid: (st.typing.decls.get i: md).node
+    if item.operation.isZero then return false
+    if (zast.isGenericParamOp :ast opId: item.operation) then return false
+    if (ast.nodes.get i: item.operation).functiondef then return false
+    # only a value stops it: a constant that does not fold says why where it is
+    # written (attachAsConstant), and that report stands for every use of it
+    constFoldDecl :ast :st declId: md
+    return (constValueOfDecl :st declId: md).kind.none.not
+}
+
+# refuseMemberAsType -- E0100 at the type-ref `nid` that names the `as` member
+# `md` of the type declared by `tdecl`, a member that is no type: the nearest
+# declaration of the name, which an outer type of that spelling does not
+# answer for. The ref is refused with it, so its stamp reports nothing more.
+refuseMemberAsType: function {
+    st: zenv.ZSymbolTable
+    ast: Ast
+    tdecl: ztypes.declid
+    md: ztypes.declid
+    nid: zast.nodeid
+} is {
+    what: "a constant".string
+    dname: (st.typing.decls.get i: md).name
+    {
+        item: argRefAt :ast nid: (st.typing.decls.get i: md).node
+        if (zast.implementBaseOf :ast opId: item.operation
+        ).isZero.not then what = "an implementation".string
+    }
+    nn: zast.nameTextAt :ast ref: dname
+    tn: zast.nameTextAt :ast ref: (st.typing.decls.get i: tdecl).name
+    n: ast.nodes.get i: nid
+    (
+        addErrorH
+        :st
+        nodeid: nid
+        lineno: (nodeLine :n)
+        colno: (nodeCol :n)
+        e: zast.err.typeError
+        msg: "'\{nn}' is \{what} of '\{tn}', not a type"
+        note: "".string
+        hint: "".string
+        width: nn.length.u32.orPanic
+    )
+    st.typing.refusedValues.add item: nid
+    nsk: nid
+    nsv: true
+    st.typing.noStampNode.set key: nsk value: nsv
+}
+
+# --- `as` aliases -----------------------------------------------------------
+# A type's `as` item whose value names a type is an alias of it: a name local
+# to the type (`Node: zast.Node`), seen wherever the type's own scope is -- its
+# fields, its method signatures and bodies -- and through a path (`Tree.Node`).
+# Whether an item is one is read off the declarations; its target resolves on
+# first use, in the scope the type is written in, with the type's own generic
+# parameters and aliases in reach.
+
+# the depth a chain of aliases naming aliases is followed to; a ring is cut there
+asAliasDepth: 16
+
+# asMemberIsAsItem -- the member declaration `md` of the type declared by
+# `tdecl` is one of its `as` items, not an `is` field or arm.
+asMemberIsAsItem: function {
+    st: zenv.ZSymbolTable.view
+    ast: Ast.view
+    tdecl: ztypes.declid
+    md: ztypes.declid
+} out bool is {
+    dn: (st.typing.decls.get i: md).node
+    tn: (st.typing.decls.get i: tdecl).node
+    if dn.isZero or tn.isZero then return false
+    objId: zast.nodeid
+    {
+        nop: ast.nodes.get i: tn
+        if nop.namedoperation then objId = nop.operation
+    }
+    if objId.isZero then return false
+    orf: objRefAt :ast nid: objId
+    i: u64
+    for i < orf.nas loop {
+        if (zast.objAsItemAt :ast nid: objId :i) == dn then return true
+        i = i + 1
+    }
+    return false
+}
+
+# declNamesType -- the declaration `d`, found by name, defines a type: a type
+# definition, or a unit's alias of one (`Node: zast.Node`). Read off the
+# declaration and never folded -- a constant's value reads the names in it
+# (`A: B + 1` asks `B.+`), so a fold here would follow a ring of constants
+# without end. A constant, a function and a unit name none.
+declNamesType: function {st: zenv.ZSymbolTable.view ast: Ast.view d: ztypes.declid} out bool is {
+    if d.isZero then return false
+    k: (st.typing.decls.get i: d).kind
+    if k.unitDecl or k.funcDecl or k.constDecl then return false
+    tto: declDefTypetype :st :ast declId: d
+    match (
+        tto
+    ) case some then {
+        return (tto != ztypes.ztypetype.functionType) and (tto != ztypes.ztypetype.unitType)
+    } case none then null
+    if k.reexportDecl then return (aliasNamesType :st :ast declId: d)
+    return false
+}
+
+# pathTypeDecl -- the type declaration a name or a path written in the unit
+# scope `scope` names, read off the declarations: a name the scope reaches, or
+# a member of a unit a path names (`zast.Node`, `u.sub.T`). 0 when it names no
+# type that way.
+pathTypeDecl: function {
+    st: zenv.ZSymbolTable
+    ast: Ast
+    scope: ztypes.declid
+    nid: zast.nodeid
+} out ztypes.declid is {
+    none: ztypes.declid
+    isAtom: false
+    nm: zast.nameid
+    par: zast.nodeid
+    chd: zast.nodeid
+    {
+        n: ast.nodes.get i: nid
+        if n.atomid then {
+            isAtom = true
+            nm = n.name
+        }
+        if n.dottedpath then {
+            par = n.parent
+            chd = n.child
+        }
+    }
+    if isAtom then {
+        d: nearestDeclOf :st :scope baseId: nm
+        if (declNamesType :st :ast :d) then return d
+        return none
+    }
+    if par.isZero then return none
+    ud: qualifierUnitDecl :st :scope :ast nid: par
+    if ud.isZero then return none
+    m: (
+        st.typing.declFindChild
+        parentDeclId: ud
+        nameId: (atomNameId :ast n: (ast.nodes.get i: chd))
+    )
+    if (declNamesType :st :ast d: m) then return m
+    return none
+}
+
+# asValueNamesType -- the value `op` of the `as` item named `item` of the type
+# declared by `tdecl` names a type, which makes the item an alias of it: the
+# type's own generic parameter or alias, a type its scope reaches by name or
+# through a unit (`zast.Node`), an alias of another type (`Tree.Node`), or an
+# instance of a generic template (`(ListVal t)`). Read off the declarations,
+# never resolved: a constant, an arm (`kind.fast`), a member that is no type,
+# a marker and a literal name none.
+asValueNamesType: function {
+    st: zenv.ZSymbolTable
+    ast: Ast
+    tdecl: ztypes.declid
+    item: zast.nameid
+    op: zast.nodeid
+    depth: u64
+} out bool is {
+    if op.isZero or (depth > asAliasDepth) then return false
+    # 1 a name, 2 a path, 3 an application
+    shape: u8
+    nm: zast.nameid
+    par: zast.nodeid
+    chd: zast.nodeid
+    cal: zast.nodeid
+    {
+        n: ast.nodes.get i: op
+        if n.atomid then {
+            shape = 1
+            nm = n.name
+        }
+        if n.dottedpath then {
+            shape = 2
+            par = n.parent
+            chd = n.child
+        }
+        if n.call then {
+            shape = 3
+            cal = n.callable
+        }
+    }
+    if shape == 1 then return (asNameNamesType :st :ast :tdecl :item :nm :depth)
+    if shape == 2 then return (asPathNamesType :st :ast :tdecl :op :par :chd :depth)
+    if shape == 3 then {
+        tpl: (
+            typeApplicationTemplate
+            :st
+            scope: tdecl
+            :ast
+            unitDecl: (unitRootOfDecl :st declId: tdecl)
+            callableNid: cal
+        )
+        if tpl.isZero then return false
+        return (st.reg.isGenericOf tid: tpl)
+    }
+    return false
+}
+
+# asNameNamesType -- asValueNamesType for a bare name `nm`: the type's own
+# generic parameter (a numeric one is a value) or alias, or a type the type's
+# scope reaches by name. The item's own name names itself, no type.
+asNameNamesType: function {
+    st: zenv.ZSymbolTable
+    ast: Ast
+    tdecl: ztypes.declid
+    item: zast.nameid
+    nm: zast.nameid
+    depth: u64
+} out bool is {
+    if (nm == item) or (isNumericLiteralNameAt :ast ref: nm) then return false
+    if (st.reg.isGenericParamOf :tdecl name: nm) then return (
+        st.reg.genericParamConstraintOf
+        :tdecl
+        paramName: nm
+    ).numKind.has.not
+    own: st.typing.declFindChild parentDeclId: tdecl nameId: nm
+    if own.isZero.not then return (asMemberIsAliasAt :st :ast :tdecl md: own depth: depth + 1)
+    uscope: unitScopeOf :st declId: tdecl
+    return (declNamesType :st :ast d: (nearestDeclOf :st scope: uscope baseId: nm))
+}
+
+# asPathNamesType -- asValueNamesType for a path `op` (`par`.`chd`): a member of
+# a unit that is a type (`zast.Node`), or an alias of another type
+# (`Tree.Node`). A marker leaf, an arm and any other member name none.
+asPathNamesType: function {
+    st: zenv.ZSymbolTable
+    ast: Ast
+    tdecl: ztypes.declid
+    op: zast.nodeid
+    par: zast.nodeid
+    chd: zast.nodeid
+    depth: u64
+} out bool is {
+    leaf: atomNameId :ast n: (ast.nodes.get i: chd)
+    if (leafNamesNoMember leafId: leaf) then return false
+    uscope: unitScopeOf :st declId: tdecl
+    if (pathTypeDecl :st :ast scope: uscope nid: op).isZero.not then return true
+    pt: pathTypeDecl :st :ast scope: uscope nid: par
+    if pt.isZero then return false
+    pm: st.typing.declFindChild parentDeclId: pt nameId: leaf
+    return (asMemberIsAliasAt :st :ast tdecl: pt md: pm depth: depth + 1)
+}
+
+# asMemberIsAlias -- the member `md` of the type declared by `tdecl` is an
+# alias: one of its `as` items, no method, generic parameter, implementation,
+# tag spec or shorthand, whose value names a type (asValueNamesType). Asked
+# once per member.
+asMemberIsAlias: function {
+    st: zenv.ZSymbolTable
+    ast: Ast
+    tdecl: ztypes.declid
+    md: ztypes.declid
+} out bool is {
+    return (asMemberIsAliasAt :st :ast :tdecl :md depth: 0)
+}
+
+# asMemberIsAliasAt -- asMemberIsAlias, `depth` aliases into a chain of them.
+asMemberIsAliasAt: function {
+    st: zenv.ZSymbolTable
+    ast: Ast
+    tdecl: ztypes.declid
+    md: ztypes.declid
+    depth: u64
+} out bool is {
+    if md.isZero or tdecl.isZero then return false
+    kv: st.typing.asAliasKind.get key: md
+    match (
+        kv
+    ) case some then {
+        return kv == 1
+    } case none then null
+    yes: false
+    # a method, and a name no `as` item spells as a type, are no alias: asked
+    # before the walk of the type's `as` items
+    mdk: (st.typing.decls.get i: md).kind
+    mdn: (st.typing.decls.get i: md).name
+    shaped: mdk.methodDecl.not and (st.typing.asTypeShapedNames.has item: mdn)
+    if shaped when (asMemberIsAsItem :st :ast :tdecl :md) then {
+        item: argRefAt :ast nid: (st.typing.decls.get i: md).node
+        if (asItemCanAlias :st :ast :tdecl :item) then yes = (
+            asValueNamesType
+            :st
+            :ast
+            :tdecl
+            item: item.name
+            op: item.operation
+            :depth
+        )
+    }
+    kk: md
+    kvv: 2.u8
+    if yes then kvv = 1
+    st.typing.asAliasKind.set key: kk value: kvv
+    return yes
+}
+
+# asItemCanAlias -- the `as` item `item` of the type declared by `tdecl` has a
+# value that may name a type: it is no method, generic parameter,
+# implementation, tag spec, shorthand or opt-out (`create: null`).
+asItemCanAlias: function {
+    st: zenv.ZSymbolTable.view
+    ast: Ast.view
+    tdecl: ztypes.declid
+    item: argref
+} out bool is {
+    if item.operation.isZero or (item.name == zast.wellKnown.slot.wkTag) then return false
+    if (zast.implementBaseOf :ast opId: item.operation).isZero.not then return false
+    if (zast.isGenericParamOp :ast opId: item.operation) then return false
+    op: ast.nodes.get i: item.operation
+    if op.functiondef or (isLabelValue :op) then return false
+    return (namesNullType :st :ast ownerDecl: tdecl nameId: (bareAtomNameId n: op)).not
+}
+
+# asAliasKnownAt -- whether the member `md` is already known to be an alias,
+# for a reader holding only views: the forced member was asked first
+# (forceMemberDecl).
+asAliasKnownAt: function {st: zenv.ZSymbolTable.view md: ztypes.declid} out bool is {
+    if md.isZero then return false
+    return ((st.typing.asAliasKind.get key: md).or d: 0.u8) == 1
+}
+
+# asAliasTargetOf -- the type the alias `md` of the type declared by `tdecl`
+# names: resolved on first ask in the scope the type is written in, with the
+# type's own generic parameters and aliases in reach, and kept. 0 when `md` is
+# no alias, or its target does not resolve (an alias asked while its own target
+# resolves is a ring of them).
+asAliasTargetOf: function {
+    st: zenv.ZSymbolTable
+    ast: Ast
+    tdecl: ztypes.declid
+    md: ztypes.declid
+} out ztypes.tid is {
+    if (asMemberIsAlias :st :ast :tdecl :md).not then return ztypes.tid.zero
+    have: (st.typing.asAliasTarget.get key: md).or d: ztypes.tid.zero
+    if have.isZero.not then return have
+    if (st.typing.declIsResolving declId: md) then return ztypes.tid.zero
+    op: (argRefAt :ast nid: (st.typing.decls.get i: md).node).operation
+    tn: zast.nameTextCopy :ast ref: (st.typing.decls.get i: tdecl).name
+    st.typing.declSetResolving declId: md mark: true
+    t: (
+        resolveTyperefShell
+        :st
+        scope: tdecl
+        :ast
+        unitDecl: (unitRootOfDecl :st declId: tdecl)
+        nid: op
+        thisName: tn.stringView
+    )
+    st.typing.declSetResolving declId: md mark: false
+    if t.isZero.not then {
+        mk: md
+        mv: t
+        st.typing.asAliasTarget.set key: mk value: mv
+    }
+    return t
+}
+
+# typePathAliasTid -- the target of the alias a path through a type names
+# (`Tree.Node`, `unit.Tree.Node`): the type the parent `parentNid` names, read
+# off the declarations from the scope `scope` it is written in, and its alias
+# `leafId`. One the type keeps out of its `public:` block is refused where the
+# path is written outside the type (E0101) and still names its target. 0 when
+# the path names no alias.
+typePathAliasTid: function {
+    st: zenv.ZSymbolTable
+    ast: Ast
+    scope: ztypes.declid
+    parentNid: zast.nodeid
+    leafId: zast.nameid
+    # the path, where a refusal is placed
+    nid: zast.nodeid
+} out ztypes.tid is {
+    if (st.typing.asTypeShapedNames.has item: leafId).not then return ztypes.tid.zero
+    # an operator is a method (`B + 1` calls `B.+`), never an alias
+    isOp: false
+    {
+        lt: zast.nameTextAt :ast ref: leafId
+        isOp = isOperatorName name: lt.stringView
+    }
+    if isOp then return ztypes.tid.zero
+    td: pathTypeDecl :st :ast scope: (unitScopeOf :st declId: scope) nid: parentNid
+    if td.isZero then return ztypes.tid.zero
+    md: st.typing.declFindChild parentDeclId: td nameId: leafId
+    if (asMemberIsAlias :st :ast tdecl: td :md).not then return ztypes.tid.zero
+    # the path refers to the alias, as a path to a definition refers to it
+    rdk: nid
+    rdv: md
+    st.typing.refDecl.set key: rdk value: rdv
+    pn: st.typing.declPublicNsOf owner: td
+    if pn.isZero.not when (st.typing.declFindChild parentDeclId: pn nameId: leafId).isZero when (
+        scopeIsInside
+        :st
+        :scope
+        outer: td
+    ).not then {
+        dn: ast.nodes.get i: nid
+        cn: zast.nameTextAt :ast ref: leafId
+        tn: zast.nameTextAt :ast ref: (st.typing.decls.get i: td).name
+        (
+            addErrorH
+            :st
+            nodeid: nid
+            lineno: (nodeLine n: dn)
+            colno: (nodeCol n: dn)
+            e: zast.err.notPublic
+            msg: "'\{cn}' is not public on type '\{tn}'"
+            note: "".string
+            hint: "".string
+            width: 1
+        )
+    }
+    return (asAliasTargetOf :st :ast tdecl: td :md)
+}
+
+# scopeIsInside -- the scope `scope` is the declaration `outer` or lies within
+# it: a member, a method's body.
+scopeIsInside: function {
+    st: zenv.ZSymbolTable.view
+    scope: ztypes.declid
+    outer: ztypes.declid
+} out bool is {
+    cur: scope
+    for cur.isZero.not loop {
+        if cur == outer then return true
+        cur = st.typing.declParentOf declId: cur
+    }
+    return false
+}
+
+# typeDeclAliasTid -- the target of the alias `nameId` of the type declared by
+# `decl`; 0 when `decl` declares no type, or no alias of that name.
+typeDeclAliasTid: function {
+    st: zenv.ZSymbolTable
+    ast: Ast
+    decl: ztypes.declid
+    nameId: zast.nameid
+} out ztypes.tid is {
+    if (st.typing.asTypeShapedNames.has item: nameId).not then return ztypes.tid.zero
+    if (st.typing.decls.get i: decl).kind.typeDecl.not then return ztypes.tid.zero
+    md: st.typing.declFindChild parentDeclId: decl :nameId
+    if md.isZero then return ztypes.tid.zero
+    return (asAliasTargetOf :st :ast tdecl: decl :md)
+}
+
+# enclosingAsAliasTid -- the target of an alias named `nameId` of a type
+# enclosing the scope `scope` (a method's body, a type's `as` item), the
+# nearest first; 0 when none declares one.
+enclosingAsAliasTid: function {
+    st: zenv.ZSymbolTable
+    ast: Ast
+    scope: ztypes.declid
+    nameId: zast.nameid
+} out ztypes.tid is {
+    if (st.typing.asTypeShapedNames.has item: nameId).not then return ztypes.tid.zero
+    cur: scope
+    for cur.isZero.not loop {
+        if (st.typing.decls.get i: cur).kind.unitDecl then return ztypes.tid.zero
+        at: typeDeclAliasTid :st :ast decl: cur :nameId
+        if at.isZero.not then return at
+        cur = st.typing.declParentOf declId: cur
+    }
+    return ztypes.tid.zero
 }
 
 # aliasOrShellTypeId -- the defining unit knows the name but its definition
@@ -3129,7 +3676,18 @@ recordResolvedName: function {
                 gpnr: nameId
                 if thisName.length > 0 then {
                     enclK: declOfUnitDef :st :scope :unitDecl nameId: (nameIdOf :ast name: thisName)
-                    if (st.reg.isGenericParamOf tdecl: enclK name: gpnr) then gskip = true
+                    if (st.reg.isGenericParamOf tdecl: enclK name: gpnr) then {
+                        gskip = true
+                    } else if (st.typing.asTypeShapedNames.has item: gpnr) when (
+                        st.typing.declFindChild
+                        parentDeclId: enclK
+                        nameId: gpnr
+                    ).isZero.not then {
+                        # a member of the enclosing type: the stamp asks the
+                        # type whether it is an alias
+                        akn: nid
+                        st.typing.aliasRefOwner.set key: akn value: enclK
+                    }
                 }
                 if gskip.not when st.typing.sigGenericDecl.isZero.not when (
                     st.reg.isGenericParamOf
@@ -3319,6 +3877,9 @@ resolveDottedArgTid: function {
     cqId: atomNameId :ast n: (ast.nodes.get i: dr.child)
     qm: qualifiedMemberTid :st :scope :ast qualNid: dr.parent memberId: cqId
     if qm.isZero.not then return qm
+    # an alias of a type, reached through it
+    tpa: typePathAliasTid :st :ast :scope parentNid: dr.parent leafId: cqId :nid
+    if tpa.isZero.not then return tpa
     # owned copies: the walks below lend ast
     pq: zast.nameTextCopy :ast ref: (atomNameId :ast n: (ast.nodes.get i: dr.parent))
     cq: zast.nameTextCopy :ast ref: (atomNameId :ast n: (ast.nodes.get i: dr.child))
@@ -5505,6 +6066,61 @@ recordReturnType: function {
     refuseMarkedFunctionType :st :ast :unitDecl :scope typeNid: oId
     # the return still types as the interface the misplaced marker names
     refuseMisplacedImplement :st :ast nid: oId
+    # an alias of the enclosing type is stamped now (typeAsMemberTid): the
+    # deferred stamp may meet it while its target is still being minted. One
+    # reached through a type (`Tree.Node`) is stamped now too: the dotted return
+    # is checked before any stamp (checkReturnNamesType)
+    rnm: zast.nameid
+    rpar: zast.nodeid
+    rchd: zast.nodeid
+    {
+        rn: ast.nodes.get i: oId
+        if rn.atomid then rnm = rn.name
+        if rn.dottedpath then {
+            rpar = rn.parent
+            rchd = rn.child
+        }
+    }
+    if rpar.isZero.not then {
+        rpt: (
+            typePathAliasTid
+            :st
+            :ast
+            :scope
+            parentNid: rpar
+            leafId: (atomNameId :ast n: (ast.nodes.get i: rchd))
+            nid: oId
+        )
+        if rpt.isZero.not then {
+            ztyping.nodeTypeSet tbl: st.typing.nodeType nid: oId tid: rpt
+            rsk: oId
+            rsv: true
+            st.typing.noStampNode.set key: rsk value: rsv
+        }
+    }
+    # only a name some `as` item spells as a type may be an alias
+    if rnm.isZero.not when (st.typing.asTypeShapedNames.has item: rnm) when (
+        thisName.length > 0
+    ) when (
+        st.reg.isGenericParamOf
+        tdecl: (
+            declOfUnitDef
+            :st
+            :scope
+            :unitDecl
+            nameId: (nameIdOf :ast name: thisName)
+        )
+        name: rnm
+    ).not then (
+        genericParamTypeId
+        :st
+        :ast
+        :unitDecl
+        :scope
+        nameId: rnm
+        :thisName
+        nid: oId
+    )
     recordTyperef :st :scope :ast :unitDecl :thisName nid: oId
     checkReturnNamesType :st :scope :ast :unitDecl :thisName :oId
 }
@@ -5712,7 +6328,7 @@ dottedTyperefShell: function {
     # a member of a unit the declarations name (a file unit, a nested unit, a
     # path of them, an alias of any): the member, the way a cross-unit ref is
     if (isStripMarkerId nameId: cId).not then {
-        qm: qualifiedMemberTid :st :scope :ast qualNid: parentId memberId: cId
+        qm: pathMemberTypeTid :st :ast :scope :parentId leafId: cId :nid
         if qm.isZero.not then return qm
     }
     if (qualifierNamesUnit :st :scope qualId: pId memberId: cId) then {
@@ -5740,6 +6356,23 @@ dottedTyperefShell: function {
         }
         return (peeledTyperef :st :scope :ast :unitDecl :nid :parentId leafId: cId :thisName)
     }
+}
+
+# pathMemberTypeTid -- the type a path's member names: a member of a unit the
+# declarations name (a file unit, a nested unit, a path of them, an alias of
+# any), the way a cross-unit ref is, or an alias of a type reached through it
+# (`Tree.Node`). 0 when it names neither.
+pathMemberTypeTid: function {
+    st: zenv.ZSymbolTable
+    ast: Ast
+    scope: ztypes.declid
+    parentId: zast.nodeid
+    leafId: zast.nameid
+    nid: zast.nodeid
+} out ztypes.tid is {
+    qm: qualifiedMemberTid :st :scope :ast qualNid: parentId memberId: leafId
+    if qm.isZero.not then return qm
+    return (typePathAliasTid :st :ast :scope parentNid: parentId :leafId :nid)
 }
 
 # reportPeeledLeaf -- a dotted type-ref about to peel to its parent: `.drop` is
@@ -8352,8 +8985,9 @@ forceMemberDecl: function {
             thisName: tn.stringView
             :opId
         )
-    } else {
-        # an as-block MARKER designates a type rather than declaring a field
+    } else if (asMemberIsAlias :st :ast tdecl: par md: memberDeclId).not then {
+        # an as-block MARKER designates a type rather than declaring a field;
+        # an alias names a type, and is no member a value carries
         memberIdAt = (
             markerTargetId
             :st
@@ -9050,9 +9684,14 @@ attachAsConstant: function {
     item: argref
 } is {
     if item.operation.isZero then return
-    if (asItemNamesNoValue :st :ast typeDecl: (declOfTypeId :st tid: parentId) :item) then return
+    tdecl: declOfTypeId :st tid: parentId
+    if (asItemNamesNoValue :st :ast typeDecl: tdecl :item) then return
     md: st.typing.declMemberIdOf parentTypeId: parentId nameId: item.name
     if md.isZero then return
+    # an alias names a type, not a value; asked before the fold, which would
+    # declare an application's instance (`Elems: (ListVal t)`) as the member's
+    # type and so make it a field
+    if (asMemberIsAlias :st :ast :tdecl :md) then return
     # only an instance has a value for a constant over the template's numeric
     # parameter: each instance folds it, and says why it does not
     # (foldInstanceConstant)
@@ -9066,8 +9705,8 @@ attachAsConstant: function {
         reported: reportAsMemberNotConstant :st :ast :parentId :item
         if reported.not then reported = reportUnknownAsHead :st :ast :parentId :item
         if reported.not then reported = reportAsConstruction :st :ast :parentId :item
-        # attachMarkers classifies a bare name or a path, which may name a
-        # conformance or a type
+        # a bare name or a path that names a type and is no alias -- the item's
+        # own name, say -- is attachMarkers' to refuse
         if reported.not when (valueMayNameType :st :ast :parentId node: item.operation) then return
     }
     st.typing.markAsConstDecl declId: md
@@ -10570,7 +11209,7 @@ reportAsItemTypeName: function {
         lineno: ar.lineno
         colno: ar.colno
         e: zast.err.typeError
-        msg: "'\{it}' names a type: an `as` member is a constant, an implementation or a generic parameter"
+        msg: "'\{it}' names a type: an `as` member is a constant, an alias of another type, an implementation or a generic parameter"
         note: "".string
         hint: "a field belongs in the type's body".string
         width: it.length.u32.orPanic
@@ -10665,6 +11304,7 @@ attachMarkers: function {
 } out bool is {
     needsDtor: false
     orf: objRefAt :ast nid: objId
+    ptdecl: declOfTypeId :st tid: parentId
     kMiter: u64
     for kMiter < orf.nas loop {
         mmId: zast.objAsItemAt :ast nid: objId i: kMiter
@@ -10678,7 +11318,8 @@ attachMarkers: function {
         cnm: String
         {
             mm: ast.nodes.get i: mmId
-            if mm.namedoperation then {
+            # a method is no marker, and is asked nothing more
+            if mm.namedoperation when (ast.nodes.get i: mm.operation).functiondef.not then {
                 isMarker = true
                 mmOp = mm.operation
                 mmName = mm.name
@@ -10705,6 +11346,14 @@ attachMarkers: function {
             :parentId
             item: mmName
             op: mmOp
+        ) then isMarker = false
+        # an alias names a type, which it is asked for where it is read
+        if isMarker when implemented.not when (
+            asMemberIsAlias
+            :st
+            :ast
+            tdecl: ptdecl
+            md: (st.typing.declFindChild parentDeclId: ptdecl nameId: mmName)
         ) then isMarker = false
         if isMarker then {
             # `tag: tag` is not a field of the numeric record that carries it:
@@ -12727,8 +13376,11 @@ noteFieldRefOwner: function {
     od: declOfTypeId :st tid: ownerTid
     # a field named as its type is (`text: text`) names the type, not itself
     if nameId.isZero or od.isZero or (nameId == fm.name) then return
-    if (st.typing.declFindChild parentDeclId: od :nameId).isZero then return
+    omd: st.typing.declFindChild parentDeclId: od :nameId
+    if omd.isZero then return
     if (st.reg.isGenericParamOf tdecl: od name: nameId) then return
+    # an alias is a type, resolved as one
+    if (asAliasKnownAt :st md: omd) then return
     kf: fm.operation
     st.typing.fieldRefOwner.set key: kf value: od
 }
@@ -13978,7 +14630,8 @@ dottedParentName: function {ast: Ast.view n: astnode.view} out String is {
 
 # dottedTyperefId -- the type id of a cross-unit qualified type ref `unit.Type`
 # (e.g. the `zvfs.ProviderBox` element of a `(List of: zvfs.ProviderBox)`),
-# resolved through the defining unit's scope. Bare-name visibility covers only
+# resolved through the defining unit's scope, or of a type's alias reached
+# through it (`Tree.Node`). Bare-name visibility covers only
 # main+system, so a dep element misses there; this bridges via the unit probe
 # plus resolved. 0 when not a dotted ref or unresolved.
 dottedTyperefId: function {ast: Ast st: zenv.ZSymbolTable op: astnode.view} out ztypes.tid is {
@@ -13998,6 +14651,17 @@ dottedTyperefId: function {ast: Ast st: zenv.ZSymbolTable op: astnode.view} out 
             )
             return (ro.or d: ztypes.tid.zero)
         }
+        # an alias reached through its type (`Tree.Node`)
+        tpa: (
+            typePathAliasTid
+            :st
+            :ast
+            scope: st.curScope
+            parentNid: op.parent
+            leafId: cnId
+            nid: op.nodeid
+        )
+        if tpa.isZero.not then return tpa
         return (qualifiedMemberTid :st scope: st.curScope :ast qualNid: op.parent memberId: cnId)
     } else {
         return ztypes.tid.zero
@@ -17094,6 +17758,8 @@ bareNameDenotesType: function {
     tid: ztypes.tid
 } out bool is {
     if nameId.isZero then return false
+    # an alias of a type enclosing the site names its target
+    if tid.isZero.not when (enclosingAsAliasTid :st :ast :scope :nameId) == tid then return true
     aad: declOfUnitDef :st :unitDecl :scope :nameId
     # a constant names a value, whatever its type is called: `foundation:
     # (c.foundation n: 3)` is a value of the type `foundation`. A constant
@@ -23216,6 +23882,9 @@ stampOnePendingTyperef: function {
     our: unitRootOfDecl :st declId: rf
     if our.isZero.not then originId = declNameIdOf :st declId: our
     if originId.isZero.not then origin = unitDeclOfNameOrOwn :st scope: rf nameId: originId
+    # an alias of the type the ref is written in, which the scope it waits in
+    # does not see
+    if (stampAliasRef :st :ast :uk :pval :origin) then return
     r: walkLookupTyperefFrom :st :ast scope: rf baseId: pval
     if r.some then {
         rt: r
@@ -23251,6 +23920,30 @@ stampOnePendingTyperef: function {
         msg: um
         width: pvalT.length.u32.orPanic
     )
+}
+
+# stampAliasRef -- stamp the deferred type-ref `uk`, spelled `pval`, when it
+# names an alias of the type it is written in (ZTyping.aliasRefOwner). True
+# when it did.
+stampAliasRef: function {
+    st: zenv.ZSymbolTable
+    ast: Ast
+    uk: zast.nodeid
+    pval: zast.nameid
+    origin: ztypes.declid
+} out bool is {
+    ao: (st.typing.aliasRefOwner.get key: uk).or d: ztypes.declid
+    if ao.isZero then return false
+    aot: (
+        asAliasTargetOf
+        :st
+        :ast
+        tdecl: ao
+        md: (st.typing.declFindChild parentDeclId: ao nameId: pval)
+    )
+    if aot.isZero then return false
+    stampResolvedTyperef :st :ast nid: uk :pval :origin tid: aot
+    return true
 }
 
 # stampQualifiedTyperef -- a deferred type-ref spelled with its unit
@@ -28694,6 +29387,9 @@ constructionArgTid: function {
     opId: zast.nodeid
     baseId: zast.nameid
 } out ztypes.tid is {
+    # an alias reached through its type (`Tree.Node`)
+    tpa: dottedArgAliasTid :st :ast :opId
+    if tpa.isZero.not then return tpa
     inl9: (
         resolveMonoRefInline
         :st
@@ -28789,7 +29485,8 @@ enclosingTypeDecl: function {st: zenv.ZSymbolTable.view scope: ztypes.declid} ou
 
 # genericParamInScope -- the GENERIC_PARAM type a bare name denotes when it is a
 # type parameter of a declaration at or enclosing `scope`, recorded against node
-# `nid`. 0 when no enclosing declaration has a parameter of that name, and for a
+# `nid`, or the target when it is an alias of an enclosing type. 0 when no
+# enclosing declaration has a parameter or an alias of that name, and for a
 # numeric parameter, which is a value.
 genericParamInScope: function {
     st: zenv.ZSymbolTable
@@ -28807,6 +29504,9 @@ genericParamInScope: function {
             recordGenericParamRef :st :nid scope: cur name: nameId
             return (genericParamTidMint :st :ast tdecl: cur :nameId)
         }
+        # an enclosing type's alias, as near as its parameters
+        at: typeDeclAliasTid :st :ast decl: cur :nameId
+        if at.isZero.not then return at
         cur = st.typing.declParentOf declId: cur
     }
     return ztypes.tid.zero
@@ -28918,9 +29618,34 @@ elidedPrimaryTypeArg: function {
     ast: Ast
     opId: zast.nodeid
 } out bool is {
+    if (dottedArgAliasTid :st :ast :opId).isZero.not then return true
     anE: paramTypeBaseNameId :ast op: (ast.nodes.get i: opId)
     if (isNumericLiteralNameAt :ast ref: anE) then return false
     return (bodyTypeNameTid :st :ast :unitDecl nameId: anE nid: opId).isZero.not
+}
+
+# dottedArgAliasTid -- the target of the alias a body's type argument names
+# through its type (`ListVal t: Tree.Node`); 0 for any other argument.
+dottedArgAliasTid: function {st: zenv.ZSymbolTable ast: Ast opId: zast.nodeid} out ztypes.tid is {
+    par: zast.nodeid
+    chd: zast.nodeid
+    {
+        n: ast.nodes.get i: opId
+        if n.dottedpath then {
+            par = n.parent
+            chd = n.child
+        }
+    }
+    if par.isZero then return ztypes.tid.zero
+    return (
+        typePathAliasTid
+        :st
+        :ast
+        scope: st.curScope
+        parentNid: par
+        leafId: (atomNameId :ast n: (ast.nodes.get i: chd))
+        nid: opId
+    )
 }
 
 # argNamesNothing -- a construction's argument is a bare name (under any strip
@@ -30784,6 +31509,8 @@ nodeNamesType: function {
     # `type` in a type's members names that type
     if (bodySelfTypeNameId :st :nameId) != nameId then return true
     if (st.isLocalName :nameId) then return false
+    # an alias of a type enclosing the body
+    if (enclosingAsAliasTid :st :ast scope: st.curScope :nameId).isZero.not then return true
     if (isNumericLiteralNameAt :ast ref: nameId) then return false
     return (nameNamesType :st :ast :unitDecl :nameId)
 }
@@ -30796,6 +31523,9 @@ nodeNamesType: function {
 pathNamesType: function {st: zenv.ZSymbolTable ast: Ast nid: zast.nodeid} out bool is {
     rr: rootNameIdOf :ast n: (ast.nodes.get i: nid)
     if rr.isZero.not when (st.isLocalName nameId: rr) then return false
+    # a type's alias reached through it (`Tree.Node`), whether or not a walk
+    # has met the path yet
+    if (dottedArgAliasTid :st :ast opId: nid).isZero.not then return true
     rd: (st.typing.refDecl.get key: nid).or d: ztypes.declid
     if rd.isZero then return false
     isType: false
@@ -35922,6 +36652,30 @@ dottedBaseTid: function {
 }
 
 
+# dottedAliasValueTid -- the type a body's path through a type names when its
+# leaf is an alias of that type (`Tree.Node x: 1`, `ListVal Tree.Node`),
+# stamped on the path as a type name is; 0 when the base is a local value, or
+# the path names no alias.
+dottedAliasValueTid: function {st: zenv.ZSymbolTable ast: Ast dp: dpref} out ztypes.tid is {
+    bnm: zast.nameid
+    {
+        bn: ast.nodes.get i: dp.parent
+        if bn.atomid then bnm = bn.name
+    }
+    if bnm.isZero.not when (st.lookup nameId: bnm).none.not then return ztypes.tid.zero
+    t: (
+        typePathAliasTid
+        :st
+        :ast
+        scope: st.curScope
+        parentNid: dp.parent
+        leafId: (atomNameId :ast n: (ast.nodes.get i: dp.child))
+        nid: dp.nid
+    )
+    if t.isZero.not then stampGate :st nid: dp.nid tid: t
+    return t
+}
+
 # checkDotted -- a dotted method reference in a body: type the base, then the
 # member on it (checkDottedOn).
 checkDotted: function {
@@ -35932,6 +36686,9 @@ checkDotted: function {
     coerce: bool
 } out ztypes.tid is {
     if (refuseMisplacedImplement :st :ast nid: dp.nid) then return ztypes.tid.zero
+    # an alias reached through its type (`Tree.Node x: 1`) names the type
+    tpv: dottedAliasValueTid :st :ast :dp
+    if tpv.isZero.not then return tpv
     nsc: checkNumericSuffixCast :st :ast :dp
     if nsc.handled then return nsc.tid
     if (
@@ -71930,6 +72687,9 @@ walkLookupTyperefById: function {
     baseId: zast.nameid
 } out optionval ztypes.tid is {
     if baseId.isZero then return (optionval.none ztypes.tid)
+    # an alias of a type enclosing the scope is nearer than any unit's name
+    ea: enclosingAsAliasTid :st :ast :scope nameId: baseId
+    if ea.isZero.not then return (optionval.some ea)
     scope96: scopeFor :st :scope :unitDecl
     return (
         walkLookupTyperefFrom
