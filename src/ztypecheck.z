@@ -8797,6 +8797,8 @@ isFunctionDefOp: function {op: astnode.view} out bool is {
 # the order the two are written in cannot decide it. A type application
 # (`g: (Getter v: i64)`) names an instance of a generic spec, resolved in
 # `ownerDecl`, the conforming type, whose own parameters it may name.
+# An `X.implement` item points at its X, and only when X is an interface; one
+# refused where it is written (refuseMisplacedImplement) points at nothing.
 markerTargetId: function {
     st: zenv.ZSymbolTable
     unitDecl: ztypes.declid
@@ -8805,19 +8807,42 @@ markerTargetId: function {
     opNid: zast.nodeid
     ownerDecl: ztypes.declid
 } out optionval ztypes.tid is {
+    ib: zast.implementBaseOf :ast opId: opNid
+    if ib.isZero then return (markerBaseTarget :st :unitDecl :scope :ast :opNid :ownerDecl)
+    if (st.typing.refusedValues.has item: opNid) then return (optionval.none ztypes.tid)
+    r: markerBaseTarget :st :unitDecl :scope :ast opNid: ib :ownerDecl
+    match (
+        r
+    ) case some then {
+        if (specTypetypeOf :st tid: r).isInterface then return (optionval.some r)
+    } case none then null
+    return (optionval.none ztypes.tid)
+}
+
+# markerBaseTarget -- markerTargetId for an item written without `.implement`,
+# or for the X of one written with it.
+markerBaseTarget: function {
+    st: zenv.ZSymbolTable
+    unitDecl: ztypes.declid
+    scope: ztypes.declid
+    ast: Ast
+    opNid: zast.nodeid
+    ownerDecl: ztypes.declid
+} out optionval ztypes.tid is {
+    tgt: opNid
     nameId: zast.nameid
     isApp: false
     isPath: false
-    op: ast.nodes.get i: opNid
+    op: ast.nodes.get i: tgt
     nameId = atomNameId :ast n: op
     isApp = op.call
     isPath = op.dottedpath
-    if isApp then return (markerApplicationTarget :st :unitDecl :scope :ast :opNid :ownerDecl)
+    if isApp then return (markerApplicationTarget :st :unitDecl :scope :ast opNid: tgt :ownerDecl)
     # a marker through a unit (`r: pr.Rd`) names what the path does
     if isPath then return (
         markerFamilyTarget
         :st
-        rid: (resolveDottedArgTid :st :scope :ast nid: opNid)
+        rid: (resolveDottedArgTid :st :scope :ast nid: tgt)
     )
     if nameId.isZero then return (optionval.none ztypes.tid)
     mnm: zast.nameTextCopy :ast ref: nameId
@@ -8836,9 +8861,18 @@ markerTargetId: function {
         rr
     ) case some then {
         return (markerFamilyTarget :st rid: rr)
-    } case none then {
-        return (optionval.none ztypes.tid)
-    }
+    } case none then null
+    # an interface another unit declares and this one reaches through the
+    # environment -- core's `StringViewable` from collections -- is the one
+    # the walk finds, as a type-ref's is. Any other type the walk finds is no
+    # target: an item naming it is refused as such (asItemTypeNameRefused)
+    wr: walkLookupTyperefById :st :scope :ast :unitDecl baseId: nameId
+    match (
+        wr
+    ) case some then {
+        if (specTypetypeOf :st tid: wr).isInterface then return (optionval.some wr)
+    } case none then null
+    return (optionval.none ztypes.tid)
 }
 
 # markerFamilyTarget -- a marker's resolved target, when its family is one a
