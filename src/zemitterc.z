@@ -2263,7 +2263,7 @@ mangleVarName: function {name: StringView cw: zast.Vocab.view} out String is {
 # Its struct is laid out from its declaration as a record's is; the row adds
 # what a declaration cannot say -- the fragment that destroys one (an fd closed
 # once, a handle released) and the canons whose presence makes it LIVE, the
-# moment its declared conformances need their native methods' addresses.
+# moment its declared implementations need their native methods' addresses.
 ClassRow: class {
     # the unit's name, `io`
     uname: String
@@ -5177,7 +5177,7 @@ Ctx: class {
     # every function written C spells, whether or not it is a job: a generated
     # member written only where named (hashMemberRead) asks it
     fnSpelled: IdSet ztypes.tid
-    # the (impl, protocol) pairs a NATIVE conformer is boxed as -- a String or a
+    # the (impl, protocol) pairs a NATIVE implementer is boxed as -- a String or a
     # str mono handed to a StringViewable. The runtime supplies such an impl's struct, so
     # no unit pass writes its helpers: every box site asks for them here, and
     # emitC writes them once the last body is out
@@ -5263,11 +5263,11 @@ Ctx: class {
     demandGatedTids: IdSet ztypes.tid
     # the types something actually referenced, which is what decides emission
     usedTypeIds: IdSet ztypes.tid
-    # conformance rows whose helper set is already in the buffer, by row id
-    emittedConformance: IdSet ztypes.confid
-    # conformance rows written C makes a value of -- an impl boxed as its
+    # implementation rows whose helper set is already in the buffer, by row id
+    emittedImplementation: IdSet ztypes.confid
+    # implementation rows written C makes a value of -- an impl boxed as its
     # protocol or facet (noteBoxUse): only these rows' helpers are written
-    boxedConformance: IdSet ztypes.confid
+    boxedImplementation: IdSet ztypes.confid
     # each (impl, protocol) pair written C boxes as an OWNED protocol value
     # (noteOwnedBoxUse): only these get `_create_owned` and `_owned_destroy`
     ownedBoxUses: IdSet u64
@@ -5512,7 +5512,7 @@ ptrHeldValtype: function {
 }
 
 # passesByValue -- an unmarked parameter of tid takes its argument BY VALUE: a
-# valtype, a protocol, whose fat pointer is a pure handle on a boxed conformer,
+# valtype, a protocol, whose fat pointer is a pure handle on a boxed implementer,
 # and a view union (OptionView), whose payload is a pointer to what it views.
 # A class, a String, an owning union (Option, Result) and the collections pass
 # by pointer (unionBorrowsByPtr).
@@ -6717,24 +6717,24 @@ typeUseAdd: function {ctx: Ctx tid: ztypes.tid} is {
 }
 
 # typeStructEmitted -- this emitter wrote the type's struct, which is the
-# reachability signal the conformance helpers need: they forward to the impl's
+# reachability signal the implementation helpers need: they forward to the impl's
 # methods, so emitting them for a type the program never reached names natives
 # that were never loaded.
 typeStructEmitted: function {ctx: Ctx.view tid: ztypes.tid} out bool is {
     return (ctx.emittedUserTypes.has item: tid)
 }
 
-# conformanceRowMark / conformanceRowEmitted -- a conformance row is one
+# implementationRowMark / implementationRowEmitted -- an implementation row is one
 # (impl, spec, label) triple and produces one set of wrappers, a vtable and the
 # two create helpers. Emitted once, keyed by the row's confid.
-conformanceRowMark: function {ctx: Ctx row: ztypes.confid} is {
-    ctx.emittedConformance.add item: row
+implementationRowMark: function {ctx: Ctx row: ztypes.confid} is {
+    ctx.emittedImplementation.add item: row
 }
 
-# whether a conformance's row is already out, so a second demand does not
+# whether an implementation's row is already out, so a second demand does not
 # repeat it
-conformanceRowEmitted: function {ctx: Ctx.view row: ztypes.confid} out bool is {
-    return (ctx.emittedConformance.has item: row)
+implementationRowEmitted: function {ctx: Ctx.view row: ztypes.confid} out bool is {
+    return (ctx.emittedImplementation.has item: row)
 }
 
 # listIterMark / listIterEmitted -- the cursor for one ListIter mono, keyed by
@@ -9662,7 +9662,7 @@ destroyTargetTid: function {
 }
 
 # ownsResources -- a value of `tid` owns something its destructor releases: the
-# checker's verdict from its fields and conformances, or a runtime-owned class
+# checker's verdict from its fields and implementations, or a runtime-owned class
 # (a ClassRow) whose destructor the runtime supplies -- an fd, a database
 # handle -- which no field of its declaration shows, in a program that has
 # the class (live or used, as emitClassRowStructs writes it), or an instance
@@ -10174,14 +10174,14 @@ passMethodArg: function {
             av = emitExprWith :ast :symtab :ctx n: avn facts: avF
         }
     }
-    # a conformer standing in for a spec parameter is passed as its box: its
+    # an implementer standing in for a spec parameter is passed as its box: its
     # source's own temporary is spelled inside it, so it takes no other hoist,
     # and the box owns nothing here -- it holds its source by pointer, or the
     # parameter that owns it takes it
     if avNd.isZero.not when (symtab.typing.standInOf.has key: avNd) then {
         avn: ast.nodes.get i: avNd
         bx: (
-            conformanceArgText
+            implementationArgText
             :ast
             :symtab
             :ctx
@@ -13499,7 +13499,7 @@ emitInterpArgForParam: function {
         }
     } else if (symtab.typing.standInOf.has key: (zast.nodeIdOf :n)) then {
         # the String stands in for a spec the parameter is typed as (`StringViewable`):
-        # the temporary itself, which conformanceArgText boxes
+        # the temporary itself, which implementationArgText boxes
         retx = nmH.copy
     } else {
         retx = (
@@ -16764,13 +16764,13 @@ emitFnptrLocalCall: function {
 
 # emit a call used as a value (its result expression).
 
-# conformanceArgText -- the value at `argOpNode` boxed as the spec it stands in
+# implementationArgText -- the value at `argOpNode` boxed as the spec it stands in
 # for, when the checker recorded it as a stand-in (standInOf): what a
 # `P.create from: x` or `P x` of the same value emits -- `_create_owned` where
 # the place owns a protocol value, `_create` otherwise (a facet box copies).
 # Every slot that spells a value asks it; "" when the value stands in for
 # nothing.
-conformanceArgText: function {
+implementationArgText: function {
     ast: Ast.view
     symtab: zenv.ZSymbolTable.view
     ctx: Ctx
@@ -16809,7 +16809,7 @@ conformanceArgText: function {
 }
 
 # standInText -- a slot's text for the value at `n`: boxed as the spec it stands
-# in for (conformanceArgText), or `text` as written.
+# in for (implementationArgText), or `text` as written.
 standInText: function {
     ast: Ast.view
     symtab: zenv.ZSymbolTable.view
@@ -16821,7 +16821,7 @@ standInText: function {
 } out String is {
     if (symtab.typing.standInOf.has key: (zast.nodeIdOf :n)).not then return text
     bx: (
-        conformanceArgText
+        implementationArgText
         :ast
         :symtab
         :ctx
@@ -16871,7 +16871,7 @@ paramTakesPointer: function {
     return (isListPtrParam :symtab :ctx :fid :pnameId tid: pid)
 }
 
-# boxAddressArg -- a conformance box handed to a facet parameter marked
+# boxAddressArg -- an implementation box handed to a facet parameter marked
 # `.view` or `.borrow`, which takes a pointer: the box is a value, so it is
 # bound to a temp of its own and the temp is addressed. Not the argument's
 # temp: an inline construction's box is made FROM that one. A facet box holds
@@ -16898,7 +16898,7 @@ boxAddressArg: function {
 
 # userFnArgTextWith -- the C text of one argument of a user-function call, for
 # the parameter it binds, its facts stated into `facts`: the interpolation /
-# conformance projections, then the by-reference or borrow hoist the
+# implementation projections, then the by-reference or borrow hoist the
 # parameter's mode asks for.
 userFnArgTextWith: function {
     ast: Ast.view
@@ -16944,7 +16944,7 @@ userFnArgTextWith: function {
     ppid: pinId
     {
         spec: (
-            conformanceArgText
+            implementationArgText
             :ast
             :symtab
             :ctx
@@ -16956,7 +16956,7 @@ userFnArgTextWith: function {
         if spec.length > 0 then {
             atomVarId = spec.take
             projd = true
-            # a conformance box is built by a call
+            # an implementation box is built by a call
             projF = callFacts
             if (markedValtypeRefParam :symtab :fid pnameId: pinNmId pid: ppid) then {
                 atomVarId = boxAddressArg :ast :symtab :ctx box: atomVarId.stringView tid: ppid
@@ -19741,11 +19741,11 @@ nestedBaseMember: function {
     return (stating :facts from: (memberFacts b: baseAtomF) text: "\{base}\{acc}\{mnNbC}")
 }
 
-# protocolProjectionRead -- a borrowed conformance projection: f.myreader ->
+# protocolProjectionRead -- a borrowed implementation projection: f.myreader ->
 # {Impl}_{label}_create(&f) (a borrowed fat pointer; for a facet, the copy its
-# one create makes). Only an as-block conformance LABEL materializes; a stored
+# one create makes). Only an as-block implementation LABEL materializes; a stored
 # protocol or facet field (p: SomeProto) is a by-value value accessed directly,
-# so the read is gated on the conformance row. Empty when the member is not the
+# so the read is gated on the implementation row. Empty when the member is not the
 # label.
 protocolProjectionRead: function {
     symtab: zenv.ZSymbolTable.view
@@ -20014,7 +20014,7 @@ staticListValueMemberRead: function {
 }
 
 # emitResolvedMemberRead -- the member resolved on the receiver's type: a protocol
-# conformance field, an fn-pointer field, a plain field, or a no-arg method that
+# implementation field, an fn-pointer field, a plain field, or a no-arg method that
 # auto-calls. The receiver goes by address or by value as its variable dictates.
 emitResolvedMemberRead: function {
     ast: Ast.view
@@ -20106,7 +20106,7 @@ synthHashRead: function {
 }
 
 # sumMemberMethodRead -- a sum type's dotted read where the member is a declared
-# METHOD or conformance label rather than an arm. An arm and a method can never
+# METHOD or implementation label rather than an arm. An arm and a method can never
 # share a name (E0003 rejects it), so the DECLARATION answers which one a bare
 # read is; the payload read below applies only when it answers nothing, or
 # names something with no body to read. The declared arms are children too,
@@ -20134,7 +20134,7 @@ sumMemberMethodRead: function {
     match (
         mco
     ) case some then {
-        # a conformance label reads as its projection; emitResolvedMemberRead
+        # an implementation label reads as its projection; emitResolvedMemberRead
         # answers only for the label, so an arm holding a spec value stays one
         mtt: symtab.reg.typetypeOf typeId: mco
         if (
@@ -20760,13 +20760,13 @@ dottedAtomRecClsBase: function {
     if rtt == ztypes.ztypetype.classType then {
         # user classes only -- collection monos (List/Set/Map, with a
         # generic origin) keep their own dottedpath legs below. An instance
-        # of a generic conformer reads its conformance label as a projection.
+        # of a generic implementer reads its implementation label as a projection.
         baseStampOrigin: originTidOf :symtab tid: bstamp
         if baseStampOrigin.isZero then {
             isRecOrCls = true
         } else {
             isRecOrCls = (
-                zenv.isConformanceLabelOf
+                zenv.isImplementationLabelOf
                 ty: symtab.typing
                 reg: symtab.reg
                 tid: bstamp
@@ -33549,7 +33549,7 @@ emitPlainReturn: function {
     emitReturnCleanup :symtab :ctx :tmp retExpr: rv.stringView keepRefd: false :ind buf: clFull
     leakFix: clFull.length > clProbe.length
     rtid: stampIdOf :symtab nid: (interpPartNodeId n: (ast.nodes.get i: vid))
-    # a conformer returned as the spec is its box, of the spec's type
+    # an implementer returned as the spec is its box, of the spec's type
     so: symtab.typing.standInOf.get key: vid
     match (
         so
@@ -34471,7 +34471,7 @@ fnReturnTypeId: function {
 # opposed to a collection mono or a runtime-owned one. Every family whose method
 # bodies this emitter writes qualifies: a record, a variant and a facet carry
 # the same method surface as a class, only by value. A protocol's instance has
-# no bodies of its own -- its conformers carry them -- so it is not one.
+# no bodies of its own -- its implementers carry them -- so it is not one.
 isUserGenericMonoTid: function {
     symtab: zenv.ZSymbolTable.view
     ctx: Ctx.view
@@ -35774,7 +35774,7 @@ holeParamArg: function {
 # demandWrittenDestroys -- the destructors written whatever calls them call
 # their parts': every reached type's that is not gated (destroyGated: an
 # instance of List, Box or a templated class), and the impl of each owned
-# protocol box written C makes (emitConformanceImpl's `_owned_destroy`).
+# protocol box written C makes (emitImplementationImpl's `_owned_destroy`).
 demandWrittenDestroys: function {symtab: zenv.ZSymbolTable.view ctx: Ctx} is {
     rs: ListVal ztypes.tid
     for each r: ctx.reachedTypes loop rs.append r
@@ -35788,7 +35788,7 @@ demandWrittenDestroys: function {symtab: zenv.ZSymbolTable.view ctx: Ctx} is {
     ri: ztypes.confid
     for ri.next < symtab.typing.nextConf loop {
         ri = ri.next
-        row: symtab.typing.conformance.get i: ri
+        row: symtab.typing.implementation.get i: ri
         k: ownedBoxKey implTid: row.implTypeId protoTid: row.specTypeId
         if (ctx.ownedBoxUses.has item: k) then impls.append row.implTypeId
     }
@@ -36104,7 +36104,7 @@ variantArmIds: function {
 }
 
 # isArmRow -- a member row of sum `tid` is one of its arms: not a method, not
-# the tag accessor's slot and not a conformance label.
+# the tag accessor's slot and not an implementation label.
 isArmRow: function {
     # the checked program
     symtab: zenv.ZSymbolTable.view
@@ -36120,7 +36120,7 @@ isArmRow: function {
     isFn: (symtab.reg.typetypeOf typeId: rowTid) == ztypes.ztypetype.functionType
     if isFn when (ztypecheck.sumArmDeclared st: symtab sumTid: tid :nameId).not then return false
     if nameId == zast.wellKnown.slot.wkTag then return false
-    return (zenv.isConformanceLabelOf ty: symtab.typing reg: symtab.reg :tid :nameId).not
+    return (zenv.isImplementationLabelOf ty: symtab.typing reg: symtab.reg :tid :nameId).not
 }
 
 # tagConstC -- the C constant naming the tag of sum `tid`'s arm at ordinal
@@ -36448,7 +36448,7 @@ recFieldIds: function {
 }
 
 # recFieldLists -- a record type's field names and type ids in order
-# (non-FUNCTION children, conformance markers excluded). The filter lives in
+# (non-FUNCTION children, implementation markers excluded). The filter lives in
 # ztypecheck: the C struct layout the emitter lays down and the data-field
 # list the checker validates against must agree field for field.
 recFieldLists: function {
@@ -36774,7 +36774,7 @@ checkNativesResolve: function {
                 # which one carries it is a fact about the type rather than
                 # about the method: the containers declare theirs in `as`,
                 # io.File declares its five in the class body and keeps `as`
-                # for the protocols it conforms to. Reading only `as` left
+                # for the protocols it implements. Reading only `as` left
                 # File.read and its four siblings checked by nothing.
                 (
                     checkNativeMembers
@@ -37716,8 +37716,8 @@ appendWrittenFns: function {
 # demandHelperCalls -- queue the methods the author wrote that only generated
 # C written after the functions are fixed calls: a container's element and key
 # methods (demandContainerCalls), the `==` and `hash` of a part a generated
-# `_eq` or `_hash` compares, and the impl methods a boxed conformance's
-# wrappers call (emitConformanceImpl). Asked of the types reached so far, which
+# `_eq` or `_hash` compares, and the impl methods a boxed implementation's
+# wrappers call (emitImplementationImpl). Asked of the types reached so far, which
 # `preview` keeps from one call to the next (reachPreview); true when it queued
 # a job, whose C may reach more.
 demandHelperCalls: function {
@@ -37741,8 +37741,8 @@ demandHelperCalls: function {
     ri: ztypes.confid
     for ri.next < symtab.typing.nextConf loop {
         ri = ri.next
-        if (ctx.boxedConformance.has item: ri).not then continue
-        row: symtab.typing.conformance.get i: ri
+        if (ctx.boxedImplementation.has item: ri).not then continue
+        row: symtab.typing.implementation.get i: ri
         demandImplCalls :ast :symtab :ctx implTid: row.implTypeId specTid: row.specTypeId
     }
     return (queuedFnCount :ctx) != before
@@ -37910,8 +37910,8 @@ demandHashCalls: function {
     for each p: parts loop demandHashCalls :ast :symtab :ctx tid: p :seen
 }
 
-# demandImplCalls -- the impl methods a conformance row's wrappers call: one
-# per spec method the vtable has a slot for (emitConformanceImpl).
+# demandImplCalls -- the impl methods an implementation row's wrappers call: one
+# per spec method the vtable has a slot for (emitImplementationImpl).
 demandImplCalls: function {
     ast: Ast.view
     symtab: zenv.ZSymbolTable.view
@@ -39647,7 +39647,7 @@ emitRuntimeUnits: function {
         if late.not when (
             (ctx.nativeWords.slotOf text: uo.stringView) == nativeWord.slot.unitIo
         ) then {
-            emitIoFileConformance :ast :symtab :ctx :buf
+            emitIoFileImplementation :ast :symtab :ctx :buf
             emitIoStdStreams :ast :symtab :ctx :buf
         }
     }
@@ -39850,8 +39850,8 @@ emitC: function {
         fragUnitDecls: ListVal ztypes.declid
         demandGatedTids: IdSet ztypes.tid
         usedTypeIds: IdSet ztypes.tid
-        emittedConformance: IdSet ztypes.confid
-        boxedConformance: IdSet ztypes.confid
+        emittedImplementation: IdSet ztypes.confid
+        boxedImplementation: IdSet ztypes.confid
         ownedBoxUses: IdSet u64
         borrowBoxUses: IdSet u64
         aggUses: IdSet u64
@@ -39940,7 +39940,7 @@ emitC: function {
     noteStaticVids :symtab :ctx
     demandTmplClassNeeds :symtab :ctx
     # A runtime-owned class's methods are demanded by the class being LIVE
-    # rather than by a call: a DECLARED Reader/Writer conformance needs the
+    # rather than by a call: a DECLARED Reader/Writer implementation needs the
     # native's address whether or not anything calls it, and net's `Conn`
     # declares one that nothing in the tree constructs. This runs ahead of
     # every consultation: a function body asks it (ownsResources) of each value it
@@ -39989,9 +39989,9 @@ emitC: function {
     codeBuf: String
     needsAt: emitCodeBody :program :symtab :ctx :nodeEstE :codeBuf
     # what is asked for after the runtime pass has run -- while a type or a
-    # conformance helper is written -- goes in where that pass ended: ahead of
+    # implementation helper is written -- goes in where that pass ended: ahead of
     # every method body, behind every struct and runtime unit it reads. That is
-    # a native conformer's helpers, and the fragment rows whose demand fired
+    # a native implementer's helpers, and the fragment rows whose demand fired
     # only there -- an operator or a native method's `needs=`
     natAt: codeBuf.length
     codeBuf.append protosBuf
@@ -40003,7 +40003,7 @@ emitC: function {
         emitRuntimeUnits ast: program :symtab :ctx buf: lateBuf late: true
     }
     if ctx.nativeBoxImpls.length > 0 then {
-        emitNativeConformanceImpls ast: program :symtab :ctx buf: lateBuf
+        emitNativeImplementationImpls ast: program :symtab :ctx buf: lateBuf
     }
     if lateBuf.length > 0 then {
         spliced: String
@@ -43706,10 +43706,10 @@ isIoUnitClass: function {symtab: zenv.ZSymbolTable.view ctx: Ctx tid: ztypes.tid
 }
 
 
-# emitIoFileConformance -- protocol conformance helpers for every reachable io
+# emitIoFileImplementation -- protocol implementation helpers for every reachable io
 # class (File -> Reader/Writer/Closer/Seeker; BufWriter -> Writer; BufReader ->
 # Reader), emitted after the io natives the wrappers forward to.
-emitIoFileConformance: function {
+emitIoFileImplementation: function {
     ast: Ast.view
     symtab: zenv.ZSymbolTable.view
     ctx: Ctx
@@ -43721,7 +43721,7 @@ emitIoFileConformance: function {
         tid: ti
         ti = ti.next
         if (isIoUnitClass :symtab :ctx :tid) then {
-            emitConformanceImplsForType :ast :symtab :ctx implTid: tid isFacet: false :buf
+            emitImplementationImplsForType :ast :symtab :ctx implTid: tid isFacet: false :buf
         }
     }
 }
@@ -43759,12 +43759,12 @@ demandStdStreamBoxes: function {ast: Ast.view symtab: zenv.ZSymbolTable.view ctx
 # (demandSpecNatives): demanded before the runtime pass writes the rows.
 demandBoxedNatives: function {ast: Ast.view symtab: zenv.ZSymbolTable.view ctx: Ctx} is {
     rows: ListVal ztypes.confid
-    for each b: ctx.boxedConformance loop rows.append b
+    for each b: ctx.boxedImplementation loop rows.append b
     for each ri: rows loop {
         cid: ztypes.tid
         spec: ztypes.tid
         {
-            row: symtab.typing.conformance.get i: ri
+            row: symtab.typing.implementation.get i: ri
             cid = row.implTypeId
             spec = row.specTypeId
         }
@@ -43843,7 +43843,7 @@ bindClassRows: function {symtab: zenv.ZSymbolTable.view ctx: Ctx ast: Ast.view} 
 # markLiveClasses -- each row's class is LIVE once every canon its `live=`
 # names exists: the instances its constructor hands back or its methods take,
 # which only a program that makes one mints. A live class is used, and the
-# native methods its declared conformances name are demanded, since their
+# native methods its declared implementations name are demanded, since their
 # vtables take those addresses whether or not anything calls them. The gate is
 # order-independent: it is true exactly when what the fragments reference has
 # been demanded, so the C always compiles.
@@ -44596,7 +44596,7 @@ userDefnRefsUnemitted: function {
         fidsNm: ListVal zast.nameid
         variantArmIds :symtab tid: typeId ids: fids nameIds: fidsNm
     } else if tt == ztypes.ztypetype.facetType then {
-        # a facet's ordering edges are its conforming impls (embedded by
+        # a facet's ordering edges are its implementing impls (embedded by
         # value in the data union), not record fields
         facetImplTids :symtab tid: typeId acc: fids
     } else {
@@ -45156,7 +45156,7 @@ dropUnmadeFns: function {text: StringView} out String is {
 # memberKeys -- bind each `@@<param>.<member>@@` in a class template to the C
 # name of the function the argument type `arg` declares as `member`, which the
 # template calls with the receiver by pointer (`@@T.call@@(&b->task)`). A
-# template only names members its parameter's bound requires, and conformance
+# template only names members its parameter's bound requires, and implementation
 # to a bound is declared, so the function is emitted. A member `arg` lacks is
 # reported, not left as a hole.
 memberKeys: function {
@@ -47476,7 +47476,7 @@ staticAggItemText: function {
     return (cvalText :ast :symtab :ctx :tid :v :facts)
 }
 
-# emitRecordDefs -- the conformance helpers and the hash prototypes, which are
+# emitRecordDefs -- the implementation helpers and the hash prototypes, which are
 # written after the types they serve and so are generated after them: every
 # file unit's, then each generic instance's. The units' methods are function
 # jobs (planRecordMethods).
@@ -47523,19 +47523,19 @@ emitRecordDefs: function {
             ctxBindMain :ctx name: sm.stringView unitDecl: smD
         }
     }
-    emitInstanceConformanceImpls ast: program :symtab :ctx :buf
+    emitInstanceImplementationImpls ast: program :symtab :ctx :buf
     # the generated hashes every method body may call are declared once
     # every struct they take is
     emitHashPrototypes ast: program :symtab :ctx :buf
 }
 
-# emitInstanceConformanceImpls -- the conformance helpers of each generic
-# instance that carries rows of its own: an instance of a generic conformer,
+# emitInstanceImplementationImpls -- the implementation helpers of each generic
+# instance that carries rows of its own: an instance of a generic implementer,
 # checked against the spec at the end of typecheck, and an instance of a
 # generic typedef, which inherited its base's. No unit body declares an
 # instance, so the per-unit pass never reaches either. A native instance (str)
 # is boxed per use instead (boxLabelFor).
-emitInstanceConformanceImpls: function {
+emitInstanceImplementationImpls: function {
     ast: Ast.view
     symtab: zenv.ZSymbolTable.view
     ctx: Ctx
@@ -47545,16 +47545,16 @@ emitInstanceConformanceImpls: function {
     cfId: ztypes.confid
     for cfId.next < symtab.typing.nextConf loop {
         cfId = cfId.next
-        row: symtab.typing.conformance.get i: cfId
+        row: symtab.typing.implementation.get i: cfId
         it: row.implTypeId
         isMono: (symtab.reg.genericOriginOf tid: it).isZero.not
-        natRow: nativeConformerRow :symtab tid: it
+        natRow: nativeImplementerRow :symtab tid: it
         if isMono when natRow.isZero when (insts.contains item: it).not then insts.append it
     }
     for each it: insts loop {
         implT: it
-        emitConformanceImplsForType :ast :symtab :ctx implTid: implT isFacet: false :buf
-        emitConformanceImplsForType :ast :symtab :ctx implTid: implT isFacet: true :buf
+        emitImplementationImplsForType :ast :symtab :ctx implTid: implT isFacet: false :buf
+        emitImplementationImplsForType :ast :symtab :ctx implTid: implT isFacet: true :buf
     }
 }
 
@@ -47663,8 +47663,8 @@ protoParamCtype: function {
     return pct
 }
 
-# facetImplTids -- the deduplicated impl type ids conforming to facet `tid`,
-# in conformance-row (declaration) order: each instance of a generic conformer
+# facetImplTids -- the deduplicated impl type ids implementing to facet `tid`,
+# in implementation-row (declaration) order: each instance of a generic implementer
 # by its own row, never the template, whose struct is never emitted.
 facetImplTids: function {
     symtab: zenv.ZSymbolTable.view tid: ztypes.tid acc: ListVal ztypes.tid
@@ -47672,7 +47672,7 @@ facetImplTids: function {
     cfId: ztypes.confid
     for cfId.next < symtab.typing.nextConf loop {
         cfId = cfId.next
-        row: symtab.typing.conformance.get i: cfId
+        row: symtab.typing.implementation.get i: cfId
         if row.specTypeId == tid when (acc.contains item: row.implTypeId).not when (
             isGenericType
             :symtab
@@ -47684,7 +47684,7 @@ facetImplTids: function {
 # specMemberIsSelfTyped -- a spec member with a parameter of the INTERFACE's
 # OWN type, the receiver excluded. `type` inside an interface means the
 # interface, so `near: function {:this rhs: type}` asks for a
-# conformer-to-conformer call, and a vtable cannot type one: the slot would
+# implementer-to-implementer call, and a vtable cannot type one: the slot would
 # have to name a single implementation's argument and there may be many. Such a
 # member is NOT part of the dispatchable surface -- no slot, no wrapper -- and
 # calling it through the interface is refused where the call is written.
@@ -47716,7 +47716,7 @@ specMemberIsSelfTyped: function {
 }
 
 # emitOneFacet -- the facet value representation: a vtable typedef (one fn
-# pointer per spec, void* receiver), an inline data union over the conforming
+# pointer per spec, void* receiver), an inline data union over the implementing
 # impls (copied by value -- facets are valtype existentials), and the
 # {vtable*, data} struct. No destroy helper: impls are valtypes. The impl
 # structs are pre-emitted first because the union embeds them by value.
@@ -47952,7 +47952,7 @@ emitProtocolDestroy: function {
     buf.append l2
 }
 
-# implStructC -- the C struct a conformer's value is: a typedef over an
+# implStructC -- the C struct an implementer's value is: a typedef over an
 # aggregate or a String is its chain end's struct, anything else its own.
 implStructC: function {symtab: zenv.ZSymbolTable.view ctx: Ctx.view tid: ztypes.tid} out String is {
     e: chaseStrTypedef :symtab :ctx tid: (chaseAggregateTypedef :symtab :ctx :tid)
@@ -47960,7 +47960,7 @@ implStructC: function {symtab: zenv.ZSymbolTable.view ctx: Ctx.view tid: ztypes.
     return "\{ecn}_t"
 }
 
-# implMethodCname -- the C name a conformance wrapper calls for the impl's
+# implMethodCname -- the C name an implementation wrapper calls for the impl's
 # `mname`. A NATIVE member's symbol is the canon-named one a fragment defines,
 # whichever unit is being emitted; the per-unit emission pass rebinds mainName,
 # so the nonmain test below cannot answer that half on its own. A typedef's
@@ -47988,11 +47988,11 @@ implMethodCname: function {
 }
 
 
-# emitConformanceImplsForType -- the conformance helpers one impl type owes a
-# family: every row of the conformance table naming it, each emitted once.
+# emitImplementationImplsForType -- the implementation helpers one impl type owes a
+# family: every row of the implementation table naming it, each emitted once.
 # The families differ in which impls they accept and which helper they emit,
 # and in nothing else.
-emitConformanceImplsForType: function {
+emitImplementationImplsForType: function {
     ast: Ast.view
     symtab: zenv.ZSymbolTable.view
     ctx: Ctx
@@ -48005,7 +48005,7 @@ emitConformanceImplsForType: function {
     # would break the valtype guarantee, and catching that is front-end work
     implTT: symtab.reg.typetypeOf typeId: implTid
     if isFacet when implTT.isValueData.not then return
-    # a protocol conforms only to markers, and its value stands in for its own
+    # a protocol implements only to markers, and its value stands in for its own
     # protocol only, so its rows need no helpers
     if implTT == ztypes.ztypetype.protocolType then return
     want: ztypes.ztypetype.protocolType
@@ -48017,7 +48017,7 @@ emitConformanceImplsForType: function {
         tid: ztypes.tid
         label: String
         {
-            row: symtab.typing.conformance.get i: ri
+            row: symtab.typing.implementation.get i: ri
             if row.implTypeId == implTid then {
                 hit = true
                 tid = row.specTypeId
@@ -48026,15 +48026,15 @@ emitConformanceImplsForType: function {
         }
         if hit.not then continue
         # a row's helpers are written once written C makes a value of it
-        if (ctx.boxedConformance.has item: ri).not then continue
+        if (ctx.boxedImplementation.has item: ri).not then continue
         if (symtab.reg.typetypeOf typeId: tid) == want when (
-            conformanceRowEmitted
+            implementationRowEmitted
             :ctx
             row: ri
         ).not then {
-            conformanceRowMark :ctx row: ri
+            implementationRowMark :ctx row: ri
             (
-                emitConformanceImpl
+                emitImplementationImpl
                 :ast
                 :symtab
                 :ctx
@@ -48050,7 +48050,7 @@ emitConformanceImplsForType: function {
 
 # markerValueMade -- false only for a marker protocol (one with no members)
 # that no value of is made: no call or label read is typed by it
-# (makesMarkerValue) and nothing stands in for it. A conformance to such a marker says something about the type and
+# (makesMarkerValue) and nothing stands in for it. An implementation to such a marker says something about the type and
 # needs no helpers. Answered once per protocol.
 markerValueMade: function {
     ast: Ast.view
@@ -48086,7 +48086,7 @@ markerValueMade: function {
 }
 
 # makesMarkerValue -- the node, typed by a marker protocol, makes a value of
-# it: a call (`Pinned.create from: g`) or a conformance label read (`g.pinned`).
+# it: a call (`Pinned.create from: g`) or an implementation label read (`g.pinned`).
 # A type written in a signature or an `as` block is typed by the marker too, and
 # makes nothing.
 makesMarkerValue: function {
@@ -48097,17 +48097,17 @@ makesMarkerValue: function {
     if n.dottedpath.not then return false
     pt: ztyping.nodeTypeAt tbl: symtab.typing.nodeType nid: n.parent
     cn: atomNameIdOf :ast n: (ast.nodes.get i: n.child)
-    return (zenv.isConformanceLabelOf ty: symtab.typing reg: symtab.reg tid: pt nameId: cn)
+    return (zenv.isImplementationLabelOf ty: symtab.typing reg: symtab.reg tid: pt nameId: cn)
 }
 
-# emitConformanceImpl -- one conformance row's helper set: a wrapper per spec
+# emitImplementationImpl -- one implementation row's helper set: a wrapper per spec
 # method (casts the `void*` data to the impl and calls the impl's method), the
 # static vtable, and the creates. A protocol's are a borrowed create (the data
 # is the value, no destroy) and an owned create/destroy (the value heap-boxed,
 # freed with the impl's destroy on drop). A facet's is one copy-create, serving
 # `.create` and `.borrow` alike: a facet copies its source, and its impls are
 # valtypes, so it has no heap and no destroy.
-emitConformanceImpl: function {
+emitImplementationImpl: function {
     ast: Ast.view
     symtab: zenv.ZSymbolTable.view
     ctx: Ctx
@@ -48118,13 +48118,13 @@ emitConformanceImpl: function {
     buf: String.borrow
 } is {
     # a native mono (str) is boxed per instance, on demand (boxLabelFor); any
-    # other instance conforms by a row of its own (emitInstanceConformanceImpls).
-    # A facet has no native conformer: only a type declaring it conforms.
-    isNat: (nativeConformerRow :symtab tid: implTid).isZero.not
+    # other instance implements by a row of its own (emitInstanceImplementationImpls).
+    # A facet has no native implementer: only a type declaring it implements.
+    isNat: (nativeImplementerRow :symtab tid: implTid).isZero.not
     if isFacet then {
         if (isGenericType :symtab tid: implTid) then return
     } else if (originTidOf :symtab tid: implTid).isZero.not when isNat.not then {
-        ownLbl: conformanceLabelFor :symtab :implTid protoTid: specTid
+        ownLbl: implementationLabelFor :symtab :implTid protoTid: specTid
         if ownLbl.length == 0 then return
     }
     implBase: spelledCname :ctx tid: implTid
@@ -48233,14 +48233,14 @@ emitConformanceImpl: function {
         w1: "    \{implCtype}* _self = (\{implCtype}*)_data;\n"
         buf.append w1
         w2: "    \{retkw}\{implMc}(\{cargs});\n"
-        # a typedef's slot served by a NATIVE conformer at the end of its
-        # chain (a typedef over str) is spelled as that conformer's: the
+        # a typedef's slot served by a NATIVE implementer at the end of its
+        # chain (a typedef over str) is spelled as that implementer's: the
         # typedef shares its struct, and the runtime has no function for it
         natOwner: implTid
         viaNat: isNat
         if isNat.not then {
             natOwner = ztypecheck.valOpOwner st: symtab tid: implTid nameId: mnameId
-            natRow: nativeConformerRow :symtab tid: natOwner
+            natRow: nativeImplementerRow :symtab tid: natOwner
             if natOwner != implTid when natRow.isZero.not then viaNat = true
         }
         if viaNat then {
@@ -48306,11 +48306,11 @@ emitConformanceImpl: function {
     buf.append oc0
 }
 
-# nativeConformerRow -- the type a NATIVE conformer's conformance rows name:
+# nativeImplementerRow -- the type a NATIVE implementer's implementation rows name:
 # the type itself (String), or the generic origin a mono was instantiated from
-# (str), whose rows its instances share. 0 for every conformer the program
+# (str), whose rows its instances share. 0 for every implementer the program
 # declares, whose helpers its unit pass writes.
-nativeConformerRow: function {symtab: zenv.ZSymbolTable.view tid: ztypes.tid} out ztypes.tid is {
+nativeImplementerRow: function {symtab: zenv.ZSymbolTable.view tid: ztypes.tid} out ztypes.tid is {
     rowTid: tid
     og: originTidOf :symtab :tid
     if og.isZero.not then rowTid = og
@@ -48319,7 +48319,7 @@ nativeConformerRow: function {symtab: zenv.ZSymbolTable.view tid: ztypes.tid} ou
 }
 
 # noteBoxUse -- written C makes a `protoTid` value of an `implTid`: its
-# conformance row's helpers are written (emitConformanceImplsForType), and both
+# implementation row's helpers are written (emitImplementationImplsForType), and both
 # types are spelled.
 noteBoxUse: function {
     symtab: zenv.ZSymbolTable.view ctx: Ctx implTid: ztypes.tid protoTid: ztypes.tid
@@ -48329,12 +48329,12 @@ noteBoxUse: function {
         ri = ri.next
         hit: false
         {
-            row: symtab.typing.conformance.get i: ri
+            row: symtab.typing.implementation.get i: ri
             hit = (row.implTypeId == implTid) and (row.specTypeId == protoTid)
         }
         if hit.not then continue
-        if (ctx.boxedConformance.has item: ri) then return
-        ctx.boxedConformance.add item: ri
+        if (ctx.boxedImplementation.has item: ri) then return
+        ctx.boxedImplementation.add item: ri
         if ctx.reachFixed.not then {
             ctx.typeUses.add item: implTid
             ctx.typeUses.add item: protoTid
@@ -48352,7 +48352,7 @@ noteOwnedBoxUse: function {ctx: Ctx implTid: ztypes.tid protoTid: ztypes.tid} is
 
 # noteBorrowBoxUse -- written C boxes an `implTid` as a borrowed `protoTid`
 # value, or copies it into a `protoTid` facet (`_create`): the pair's create is
-# written (emitConformanceImpl)
+# written (emitImplementationImpl)
 noteBorrowBoxUse: function {ctx: Ctx implTid: ztypes.tid protoTid: ztypes.tid} is {
     ctx.borrowBoxUses.add item: (ownedBoxKey :implTid :protoTid)
 }
@@ -48362,8 +48362,8 @@ ownedBoxKey: function {implTid: ztypes.tid protoTid: ztypes.tid} out u64 is {
     return implTid.u64 * 4294967296 + protoTid.u64
 }
 
-# boxLabelFor -- conformanceLabelFor at a site that boxes `implTid` as
-# `protoTid`. A native conformer is looked up through the row its origin
+# boxLabelFor -- implementationLabelFor at a site that boxes `implTid` as
+# `protoTid`. A native implementer is looked up through the row its origin
 # carries, and the pair is recorded: nothing else would ever write its helpers.
 boxLabelFor: function {
     symtab: zenv.ZSymbolTable.view
@@ -48371,12 +48371,12 @@ boxLabelFor: function {
     implTid: ztypes.tid
     protoTid: ztypes.tid
 } out String is {
-    nrow: nativeConformerRow :symtab tid: implTid
+    nrow: nativeImplementerRow :symtab tid: implTid
     if nrow.isZero then {
         noteBoxUse :symtab :ctx :implTid :protoTid
-        return (conformanceLabelFor :symtab :implTid :protoTid)
+        return (implementationLabelFor :symtab :implTid :protoTid)
     }
-    lbl: conformanceLabelFor :symtab implTid: nrow :protoTid
+    lbl: implementationLabelFor :symtab implTid: nrow :protoTid
     if lbl.length == 0 then return lbl
     if ctx.reachFixed.not then {
         ctx.typeUses.add item: implTid
@@ -48397,10 +48397,10 @@ boxLabelFor: function {
     return lbl
 }
 
-# nativeBoxCall -- a wrapper's call of a NATIVE conformer's method, spelled the
+# nativeBoxCall -- a wrapper's call of a NATIVE implementer's method, spelled the
 # way a call site spells it: the runtime has no function behind the method for
 # a vtable slot to point at. `stringView`, StringViewable's one member, is the only one a
-# native conformer declares; any other is refused rather than emitted as a
+# native implementer declares; any other is refused rather than emitted as a
 # call to nothing.
 nativeBoxCall: function {
     symtab: zenv.ZSymbolTable.view
@@ -48426,9 +48426,9 @@ nativeBoxCall: function {
     return "".string
 }
 
-# emitNativeConformanceImpls -- the helpers of every native conformer a box
+# emitNativeImplementationImpls -- the helpers of every native implementer a box
 # site asked for (boxLabelFor), one set per (impl, protocol) pair.
-emitNativeConformanceImpls: function {
+emitNativeImplementationImpls: function {
     ast: Ast.view
     symtab: zenv.ZSymbolTable.view
     ctx: Ctx
@@ -48439,10 +48439,10 @@ emitNativeConformanceImpls: function {
         implT: ctx.nativeBoxImpls.get i: ni
         protoT: ctx.nativeBoxProtos.get i: ni
         ni = ni + 1
-        nrow: nativeConformerRow :symtab tid: implT
-        lbl: conformanceLabelFor :symtab implTid: nrow protoTid: protoT
+        nrow: nativeImplementerRow :symtab tid: implT
+        lbl: implementationLabelFor :symtab implTid: nrow protoTid: protoT
         (
-            emitConformanceImpl
+            emitImplementationImpl
             :ast
             :symtab
             :ctx
@@ -48455,9 +48455,9 @@ emitNativeConformanceImpls: function {
     }
 }
 
-# conformanceLabelFor -- the as-block label under which implTid satisfies
+# implementationLabelFor -- the as-block label under which implTid satisfies
 # protoTid (e.g. "myreader"); "" when not found.
-conformanceLabelFor: function {
+implementationLabelFor: function {
     symtab: zenv.ZSymbolTable.view
     implTid: ztypes.tid
     protoTid: ztypes.tid
@@ -48466,7 +48466,7 @@ conformanceLabelFor: function {
     cfId: ztypes.confid
     for cfId.next < symtab.typing.nextConf loop {
         cfId = cfId.next
-        row: symtab.typing.conformance.get i: cfId
+        row: symtab.typing.implementation.get i: cfId
         if row.implTypeId == implTid when row.specTypeId == protoTid when (
             res.length == 0
         ) then res.append row.label
@@ -49229,7 +49229,7 @@ wrapperCreateArg: function {
         a: ast.nodes.get i: aId
         if a.namedoperation when a.name == label then {
             if (symtab.reg.typetypeOf typeId: prtid) == ztypes.ztypetype.protocolType then {
-                # a conformer is boxed as the protocol it stands in for, as at
+                # an implementer is boxed as the protocol it stands in for, as at
                 # any other slot (standInText); a value that already is the
                 # protocol passes as it stands, a header by value
                 aF: cfacts
@@ -49869,7 +49869,7 @@ viaParams: function {
 
 # viaBoxArg -- an argument of type `paramTid` a `via=` native passes where its
 # template function takes the protocol `targetTid`: boxed, owned, through the
-# argument's conformance (`spawn`'s task, which the handle's `create` takes as a
+# argument's implementation (`spawn`'s task, which the handle's `create` takes as a
 # Task value). "" when the two types are one, or the target is no protocol.
 viaBoxArg: function {
     ast: Ast.view
@@ -50571,7 +50571,7 @@ emitProtocolDispatch: function {
 
 # emitProtocolCreateCall -- `Reader g.take` / `Reader.create from: g.take`
 # (owned, heap-box + source invalidation) or `Provider m.borrow` / `Provider m`
-# (borrowed, shares the source). Both route to the impl's conformance helper for
+# (borrowed, shares the source). Both route to the impl's implementation helper for
 # the protocol.
 emitProtocolCreateCall: function {
     ast: Ast.view
@@ -50679,11 +50679,11 @@ isGenericFnTid: function {symtab: zenv.ZSymbolTable.view tid: ztypes.tid} out bo
 }
 
 
-# emitUnitConformanceImpls -- one unit body's conformance implementations, the
+# emitUnitImplementationImpls -- one unit body's implementation implementations, the
 # protocol family then the facet one, for every type it declares that may
-# conform: a class, record, union, variant or typedef.
+# implement: a class, record, union, variant or typedef.
 # The name is wanted for nothing but the lookup, so it is asked by id.
-emitUnitConformanceImpls: function {
+emitUnitImplementationImpls: function {
     ast: Ast.view
     symtab: zenv.ZSymbolTable.view
     ctx: Ctx
@@ -50708,7 +50708,7 @@ emitUnitConformanceImpls: function {
         implT: unitMemberTid :symtab :ctx :ownerTid nameId: bi.name
         if implT.isZero then continue
         (
-            emitConformanceImplsForType
+            emitImplementationImplsForType
             :ast
             :symtab
             :ctx
@@ -50717,7 +50717,7 @@ emitUnitConformanceImpls: function {
             :buf
         )
         (
-            emitConformanceImplsForType
+            emitImplementationImplsForType
             :ast
             :symtab
             :ctx
@@ -50729,7 +50729,7 @@ emitUnitConformanceImpls: function {
 }
 
 
-# emitRecordDefsIn -- one file unit's conformance helpers. Struct layout is NOT
+# emitRecordDefsIn -- one file unit's implementation helpers. Struct layout is NOT
 # emitted here: emitUserStructsOrdered owns it, and resolves the by-value
 # ordering between user types and the monos that embed them, which a per-unit
 # walk in declaration order cannot.
@@ -50746,7 +50746,7 @@ emitRecordDefsIn: function {
     # their functions and their copies of its types
     isTpl: isGenericTemplateUnitOp :ast opId: mainOpId
     if isTpl.not then {
-        emitUnitConformanceImpls :ast :symtab :ctx :bodyIds ownerTid: ztypes.tid :buf
+        emitUnitImplementationImpls :ast :symtab :ctx :bodyIds ownerTid: ztypes.tid :buf
         emitNestedRecordDefs :ast :symtab :ctx :bodyIds ownerTid: ztypes.tid :buf
     }
 }
@@ -50777,7 +50777,7 @@ emitNestedRecordDefs: function {
         nb: zast.unitBodyIdsAt :ast unitId: nOp
         sns: ctx.nsTid
         ctx.nsTid = nsTid
-        emitUnitConformanceImpls :ast :symtab :ctx bodyIds: nb ownerTid: nsTid :buf
+        emitUnitImplementationImpls :ast :symtab :ctx bodyIds: nb ownerTid: nsTid :buf
         emitNestedRecordDefs :ast :symtab :ctx bodyIds: nb ownerTid: nsTid :buf
         ctx.nsTid = sns
     }

@@ -125,7 +125,7 @@ unmetbound: record {
 
 # specstandin -- a value placed where a protocol or facet value is expected:
 # an argument, a constructor field or a reassignment. Whether its type
-# conforms is asked once typecheck ends, when every conformance row the
+# implements is asked once typecheck ends, when every implementation row the
 # program reaches has been recorded.
 specstandin: record {
     # the value's type
@@ -140,7 +140,7 @@ specstandin: record {
     valueNid: zast.nodeid
     # the place OWNS what it is given: a `.take` parameter, a constructor
     # field, a reassignment or a return. Only a borrowing place may hold a
-    # conformer as the spec implicitly
+    # implementer as the spec implicitly
     owning: bool
 }
 
@@ -603,11 +603,11 @@ Decl: class {
     # is-block function member of a record or class, or an as-block member of a
     # generic class. Where it was declared, not its kind, decides this.
     fnptrField: bool
-    # conformerName -- on a protocol / facet decl, the name id of the first
+    # implementerName -- on a protocol / facet decl, the name id of the first
     # type in this unit whose as-block named it (0 = none). A spec's `this`
     # binds to that type. On the DECLARATION, so the marker name is scoped by
     # what declared it rather than by the unit it was written in.
-    conformerName: zast.nameid
+    implementerName: zast.nameid
     # varId -- on a local declaration bound to a runtime variable, that
     # variable's id (0 for a type-only binding and for every other kind)
     varId: ztypes.vid
@@ -1271,9 +1271,9 @@ ZTyping: class {
     constFail: ztypes.constfail
 
     # aggregate typecheck state
-    # every recorded conformance, indexed by its confid: row 0 is the sentinel
+    # every recorded implementation, indexed by its confid: row 0 is the sentinel
     # and rows are appended and never removed, so the id IS the index
-    conformance: (List ztypes.ZConformance i: ztypes.confid)
+    implementation: (List ztypes.ZImplementation i: ztypes.confid)
     # every value placed where a spec value is expected, checked at the end
     specStandIns: ListVal specstandin
     # the stand-ins that hold, by the value's node: what the emitter boxes the
@@ -1507,7 +1507,7 @@ ZTyping: class {
     # awaiting resolution (resolveDemandedDefs drains it)
     pendingDefs: ListVal ztypes.declid
     # dependency units in which a demanded definition has resolved (by unit
-    # name id): each runs its conformance pass once, on first entry
+    # name id): each runs its implementation pass once, on first entry
     enteredUnits: IdSet ztypes.declid
     # the units the program reaches (by unit-root declid): those some
     # declaration was demanded from (markUnitReached)
@@ -1550,23 +1550,23 @@ ZTyping: class {
     # generator yields before it can receive.
     currentYieldInputTid: ztypes.tid
 } as {
-    # --- conformance rows ---
+    # --- implementation rows ---
 
-    # nextConf -- the id the next conformance row takes: every id from 1 below
+    # nextConf -- the id the next implementation row takes: every id from 1 below
     # it names a row, which bounds a walk over them
     nextConf: function {this: this.view} out ztypes.confid is {
-        return (ztypes.confid.create from: this.conformance.length)
+        return (ztypes.confid.create from: this.implementation.length)
     }
 
-    # addConformance -- record that one type satisfies a protocol or facet
+    # addImplementation -- record that one type satisfies a protocol or facet
     # under a label; the row's id is the index it lands at
-    addConformance: function {
+    addImplementation: function {
         :this
-        # the type that conforms
+        # the type that implements
         implTypeId: ztypes.tid
-        # the protocol or facet it conforms to
+        # the protocol or facet it implements
         specTypeId: ztypes.tid
-        # the conformance's written label
+        # the implementation's written label
         label: StringView
         # that label interned, which is what the comparisons use
         labelNameId: zast.nameid
@@ -1574,8 +1574,8 @@ ZTyping: class {
         # value carries its vtable
         isFacet: bool
     } is {
-        this.conformance.append (
-            ztypes.ZConformance
+        this.implementation.append (
+            ztypes.ZImplementation
             :implTypeId
             :specTypeId
             label: label.string
@@ -1618,7 +1618,7 @@ ZTyping: class {
             grantsPrivate: false
             unitScope: false
             fnptrField: false
-            conformerName: zast.nameid.zero
+            implementerName: zast.nameid.zero
             varId: ztypes.vid
             rows: 0
             children: (IdMapV zast.nameid v: ztypes.declid)
@@ -1820,15 +1820,15 @@ ZTyping: class {
         return decl.pending
     }
 
-    # whether member `nameId` of `implTid` is a conformance marker's label: the
+    # whether member `nameId` of `implTid` is an implementation marker's label: the
     # marker is a member of its type, but no field of it and no arm
-    isConformanceLabel: function {
+    isImplementationLabel: function {
         this: this.view
         implTid: ztypes.tid
         nameId: zast.nameid
     } out bool is {
         isLabel: false
-        for each crow: this.conformance loop {
+        for each crow: this.implementation loop {
             if crow.implTypeId == implTid when crow.labelNameId == nameId then isLabel = true
         }
         return isLabel
@@ -1891,11 +1891,11 @@ ZTyping: class {
         return decl.defined
     }
 
-    # First conformer wins, in body order: a later as-block naming the same
+    # First implementer wins, in body order: a later as-block naming the same
     # marker does not displace the spec receiver already bound.
-    declSetConformer: function {:this declId: ztypes.declid nameId: zast.nameid} is {
+    declSetImplementer: function {:this declId: ztypes.declid nameId: zast.nameid} is {
         decl: this.decls.getMut i: declId
-        if decl.conformerName.isZero then decl.conformerName = nameId
+        if decl.implementerName.isZero then decl.implementerName = nameId
     }
 
     # declSetType -- record the canonical type a declaration minted, and the
@@ -3476,7 +3476,7 @@ newTyping: function {nodeEst: 0.u64} out ZTyping is {
         constAggIndex: (ConstIndex heads: (MapVV u64 v: u32) next: ListVal u32)
         foldedBranch: (IdMapV zast.nodeid v: foldedbranch)
         constFail: ztypes.noConstFail
-        conformance: (List ztypes.ZConformance i: ztypes.confid)
+        implementation: (List ztypes.ZImplementation i: ztypes.confid)
         specStandIns: ListVal specstandin
         standInOf: (IdMapV zast.nodeid v: specstandin)
         monoSite: (IdMapV ztypes.tid v: monosite)
@@ -3574,13 +3574,13 @@ newTyping: function {nodeEst: 0.u64} out ZTyping is {
         grantsPrivate: false
         unitScope: false
         fnptrField: false
-        conformerName: zast.nameid.zero
+        implementerName: zast.nameid.zero
         varId: ztypes.vid
         rows: 0
         children: (IdMapV zast.nameid v: ztypes.declid)
     )
-    childTid.conformance.append (
-        ztypes.ZConformance
+    childTid.implementation.append (
+        ztypes.ZImplementation
         implTypeId: ztypes.tid
         specTypeId: ztypes.tid
         label: String
