@@ -17116,12 +17116,39 @@ resolveAliasKey: function {
 }
 
 # valueHeadIsSelf -- whether the value of the definition `declId` starts with
-# the definition's own name: the scope the definition is written in finds the
-# definition itself for its head (`foo` in `foo` and in `foo.x.y`), and so hides
-# any unit of that name (`io: io.print`)
+# the definition itself: its head names it (`foo` in `foo` and in `foo.x.y`), or
+# names a definition whose value's head does, through any chain of them (`foo:
+# bar.x` with `bar: foo`). The scope a definition is written in finds the
+# definition itself for its head, and so hides any unit of that name (`io:
+# io.print`). The chain is followed two steps at a time beside one at a time,
+# so a ring the definition is not on ends the walk when the two meet.
 valueHeadIsSelf: function {
     st: zenv.ZSymbolTable.view ast: Ast.view declId: ztypes.declid
 } out bool is {
+    if declId.isZero then return false
+    slow: declId
+    fast: declId
+    for true loop {
+        fast = valueHeadDecl :st :ast declId: fast
+        if fast.isZero or (fast == declId) then return fast == declId
+        fast = valueHeadDecl :st :ast declId: fast
+        if fast.isZero or (fast == declId) then return fast == declId
+        slow = valueHeadDecl :st :ast declId: slow
+        if slow == fast then return false
+    }
+    return false
+}
+
+# valueHeadDecl -- the definition the head of `declId`'s value names (`foo` in
+# `foo.x.y`), looked up from the scope the definition is written in; 0 when the
+# value has no name at its head, the name finds no definition, or `declId` is
+# no definition by value (a re-export or a constant) -- a unit, a type or a
+# function ends the chain.
+valueHeadDecl: function {
+    st: zenv.ZSymbolTable.view ast: Ast.view declId: ztypes.declid
+} out ztypes.declid is {
+    dk: (st.typing.decls.get i: declId).kind
+    if dk.reexportDecl.not when dk.constDecl.not then return ztypes.declid.zero
     ar: argRefAt :ast nid: (st.typing.decls.get i: declId).node
     nid: ar.operation
     for nid.isZero.not loop {
@@ -17132,11 +17159,10 @@ valueHeadIsSelf: function {
             nid = n.parent
         } else break
     }
-    if nid.isZero then return false
+    if nid.isZero then return ztypes.declid.zero
     head: atomNameId :ast n: (ast.nodes.get i: nid)
-    if head.isZero then return false
-    hit: envLookup :st scope: (st.typing.declParentOf :declId) nameId: head
-    return hit.declId == declId
+    if head.isZero then return ztypes.declid.zero
+    return (envLookup :st scope: (st.typing.declParentOf :declId) nameId: head).declId
 }
 
 # resolveDeepAlias -- a unit-level alias whose target is reached through a path
