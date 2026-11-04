@@ -3869,6 +3869,8 @@ Analysis: class {
         # the file is a data file: its own directory is its first root, and
         # it is asked what a data file may not hold
         dataFile: bool
+        # the prelude the parse shares (zparser.PreludeStore)
+        prelude: zparser.PreludeStore
     } is {
         if (this.rootsReady :srcdirs :systemdir).not then return
         vfs: zcheck.newVfs
@@ -3877,7 +3879,7 @@ Analysis: class {
         roots: zcheck.buildRoots :vfs :systemdir srcdirs: own :layer
         rootid: roots.root
         p: zparser.Parser.create ext: (unitFileExt file: this.path.stringView)
-        prog: p.parse :vfs :rootid mainUnitName: uname.string
+        prog: p.parseShared :vfs :rootid mainUnitName: uname.string store: prelude
         # a failed parse names its error as the tree's root row. The test is a
         # call so no lock outlives it: typecheck below takes the tree.
         if (zast.isErrorAt ast: prog id: prog.root) then {
@@ -6403,6 +6405,8 @@ analyzeFileFull: function {
     # the generated `z` unit the project mounts
     layer: zcheck.GenLayer.view
     opts: lintopts
+    # the prelude the parse shares (zparser.PreludeStore)
+    prelude: zparser.PreludeStore
 } out Analysis is {
     rd: io.readText :path
     match (
@@ -6454,6 +6458,7 @@ analyzeFileFull: function {
             :layer
             uname: un.stringView
             dataFile: (isDataFile file: a.path.stringView)
+            :prelude
         )
         a.checkLineLength width: opts.lineLength
         a.sortEditsInPlace
@@ -6506,8 +6511,10 @@ analyzeFileTiered: function {
     # the generated `z` unit the project mounts, for the full tier
     layer: zcheck.GenLayer.view
     opts: lintopts
+    # the prelude the full tier's parse shares (zparser.PreludeStore)
+    prelude: zparser.PreludeStore
 } out Analysis is {
-    if opts.full then return (analyzeFileFull :path :srcdirs :systemdir :layer :opts)
+    if opts.full then return (analyzeFileFull :path :srcdirs :systemdir :layer :opts :prelude)
     return (analyzeFile :path :opts)
 }
 

@@ -123,6 +123,8 @@ rootsFor: function {
     systemFlag: StringView
     file: StringView
     discover: bool
+    # the prelude the project check's parse shares (zparser.PreludeStore)
+    prelude: zparser.PreludeStore
 } out FileRoots is {
     r: (
         FileRoots
@@ -139,7 +141,7 @@ rootsFor: function {
             zproject.discoverProject
             start: start.stringView
             systemdir: (zcheck.resolveSystemDir flagVal: systemFlag).stringView
-            prelude: zparser.PreludeStore.create
+            :prelude
         )
         r.fromProject :pf path: file
     }
@@ -181,9 +183,20 @@ runLint: function {
         return 2
     }
     total: u64
+    # every file's project check and its own check read the prelude once, where
+    # they find the same files (zparser.Parser.parseShared). Lint writes no
+    # file, so the prelude read first is the one on disk throughout.
+    prelude: zparser.PreludeStore.create share: true
     for each p: paths loop {
         top: zsource.topUnitPathOf file: p.stringView
-        roots: rootsFor :srcdirs systemFlag: systemdir file: top.stringView discover: opts.full
+        roots: (
+            rootsFor
+            :srcdirs
+            systemFlag: systemdir
+            file: top.stringView
+            discover: opts.full
+            :prelude
+        )
         if roots.error.length > 0 then {
             io.eprintln roots.error
             return 2
@@ -195,6 +208,7 @@ runLint: function {
             systemdir: roots.systemdir.stringView
             layer: roots.layer
             :opts
+            :prelude
         )
         reportAnalysis :a
         total = total + a.failCount
@@ -293,7 +307,17 @@ formatOnePath: function {
     fmtOpts: zsource.defaultOpts
     fmtOpts.full = full
     top: zsource.topUnitPathOf file: p
-    roots: rootsFor :srcdirs systemFlag: systemdir file: top.stringView discover: full
+    # fmt rewrites files as it goes, so no prelude read before a write is kept
+    # for a later file
+    noShare: zparser.PreludeStore.create
+    roots: (
+        rootsFor
+        :srcdirs
+        systemFlag: systemdir
+        file: top.stringView
+        discover: full
+        prelude: noShare
+    )
     if roots.error.length > 0 then {
         io.eprintln roots.error
         return 2
@@ -305,6 +329,7 @@ formatOnePath: function {
         systemdir: roots.systemdir.stringView
         layer: roots.layer
         opts: fmtOpts
+        prelude: noShare
     )
     if a.parseErrorCount > 0 then {
         reportAnalysis :a
