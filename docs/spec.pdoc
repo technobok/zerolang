@@ -808,7 +808,7 @@ respective sections, but at a high level, they are built from
 A definition's blocks share one namespace. A function's parameters (its
 #~"in" block) and its generic parameters and other #~"as" members, and an
 object's #~"is" members (fields, arms) and #~"as" members (generic
-parameters, methods, constants, conformance labels), must all have different
+parameters, methods, constants, aliases, implementation labels), must all have different
 names, as the items of any one block must: #~"f: function as { k:
 anyval.generic } in { k: k }" and a field beside an #~"as" method of the same
 name are both refused.
@@ -2532,7 +2532,7 @@ constraint, and can be used to specify generic fields or parameters.
 #p: #b:"A bound admits one family."
 
 A generic parameter admits the types of ONE family: the family of the
-declaration that bounds it, whatever its members or conformers are.
+declaration that bounds it, whatever its members or implementers are.
 
 #table cols="4 2 5":
   Bound                              |Admits          |Examples
@@ -2541,8 +2541,8 @@ declaration that bounds it, whatever its members or conformers are.
   a numeric type                     |its constants   |#~"u64.generic"
 
 The family is checked for each argument where the instance is made, before
-membership or conformance, and #~"null" is reference-family. Conformance
-itself stays open: a record may conform to a protocol, and a protocol
+membership or implementation, and #~"null" is reference-family. Implementation
+itself stays open: a record may implement a protocol, and a protocol
 #_*"value" -- a parameter or field typed #~"StringViewable" -- holds a #~"str" and a
 #~"String" alike. What the rule refuses is the record as the generic
 #_*"argument" of a protocol bound. So a #~"str" reaches a #~"StringLike"
@@ -2575,8 +2575,8 @@ definition with the same type parameters.
 A type declared in another unit is named through that unit (#~"pairs.Sh",
 #~"(pairs.Pair t: u64)") in every position its bare name is: a parameter,
 field or return type, a typedef base, a unit-level alias, a type argument of
-another application (#~"ListVal (pairs.Pair t: u64)"), a conformance marker
-(#~"g: (pairs.Getter v: i64)", #~"r: pairs.Rd"), a bound, a construction or an
+another application (#~"ListVal (pairs.Pair t: u64)"), an implementation
+(#~"g: (pairs.Getter v: i64).implement", #~"r: pairs.Rd.implement"), a bound, a construction or an
 arm (#~"(pairs.slot t: i64).full 3"), a projection (#~"pairs.Rd v"), and the
 subject of a #~"match".
 
@@ -2708,8 +2708,8 @@ The resolution order for generic type arguments is:
   parameter no value names is inferred through a CONFORMANCE: a bound
   #~"J: (Job R).generic", or a parameter typed #~"(Job R)", met by a #~"Name"
   that declares #~"job: (Job String)" binds #~"R" to #~"String". A generic
-  function handing on its own #~"J: (Job R).generic" conforms by that bound,
-  so the callee's #~"R" is the caller's. An argument that conforms to no
+  function handing on its own #~"J: (Job R).generic" implements by that bound,
+  so the callee's #~"R" is the caller's. An argument that implements no
   instance of #~"Job" is refused as an unmet bound]
   [#*: #_*"Default": the default type specified in the generic parameter
   declaration is used]
@@ -2862,7 +2862,7 @@ Examples:
 
 A bound decides which types may instantiate a generic definition, and nothing
 more. Each instantiation checks that its concrete type satisfies the bound --
-a type outside a union bound, or one that does not conform to a protocol or
+a type outside a union bound, or one that does not implement a protocol or
 facet bound, is refused at the instantiating call -- and then checks the
 template's body again with that type in place of the parameter.
 
@@ -2886,7 +2886,7 @@ it:
   }
 
   # `extra` is not measurable's: pt has it, so `g v: p` compiles; a second
-  # conformer without it would be refused in its own instance
+  # implementer without it would be refused in its own instance
   g: function as { t: measurable.generic } in {v: t} out i64 is { return v.extra }
   """
 
@@ -2919,9 +2919,9 @@ instantiation supplies a type.
 A #~"union" used as a generic constraint via #~".generic" may contain a mix of
 concrete reference-type members and protocol members. A concrete member
 accepts an argument whose type is exactly that concrete type; a protocol
-member accepts any reference-type argument whose type #_*"declares
-conformance" to that protocol (an entry of the form #~"<label>:
-<protocol-name>" or the #~":<name>" shorthand in the type's #~"as" clause). A
+member accepts any reference-type argument whose type #_*"implements" that
+protocol (an entry #~"<label>: <protocol-name>.implement" in the type's
+#~"as" clause). A
 union bound admits reference types only (see [#> to=generic-types: generic
 types]), so a value-type member -- a record, a scalar, a facet -- is refused
 where the bound is written.
@@ -2952,7 +2952,7 @@ union used as a generic constraint, not just the examples below:
 Example — a StringLike constraint for generic-over-string functions:
 
 #code language=zerolang check=none: """
-  # StringViewable protocol: the converter method any "StringLike" conformer provides
+  # StringViewable protocol: the converter method any "StringLike" implementer provides
   StringViewable: protocol {
       stringView: function {t: this.view} outx StringView
   }
@@ -2962,14 +2962,14 @@ Example — a StringLike constraint for generic-over-string functions:
 
   # String declares `:StringViewable` in its `as` clause, so it satisfies
   # `StringLike` via the protocol member; StringView satisfies via the
-  # concrete member. A str conforms to StringViewable too, but it is a value type,
+  # concrete member. A str implements StringViewable too, but it is a value type,
   # and reaches the parameter as its view.
 
   print: function as { T: StringLike.generic } in { msg: T.view } is native
 
   main: function is {
       print "hi"                     # T = StringView
-      print "hi".string              # T = String (conforms via :StringViewable)
+      print "hi".string              # T = String (implements StringViewable)
       g: "hi".str to: 8
       print g.stringView             # T = StringView
   }
@@ -3833,7 +3833,7 @@ container families.
 A bound names what its spelling resolves to where the template is declared,
 as any name does. A family's name is a predefined identifier and can be
 redefined: a unit's own #~"StringLike" is that declaration, and
-#~"T: StringLike.generic" there admits what conforms to it. A bound may be a
+#~"T: StringLike.generic" there admits what implements it. A bound may be a
 type application or reached through a unit (#~"T: (Getter v: i64).generic",
 #~"T: pr.Rd.generic", #~"T: (pr.Getter v: i64).generic"), and a record's or
 variant's parameter is refused a bound that admits a reference type however
@@ -4000,22 +4000,22 @@ typedef, the base is outside code.
 There is no field for the base. The base value is reached by passing the
 typedef where the base is expected (below).
 
-#p: #b:"Conformance."
+#p: #b:"Implementation."
 
-A typedef inherits its base's conformances, to protocols and facets alike.
-The inherited conformance holds while every method the spec names keeps the
+A typedef inherits its base's implementations, to protocols and facets alike.
+The inherited implementation holds while every method the spec names keeps the
 spec's signature on the typedef, read at its first declarer:
 
 #ul:
   [#*: a method the typedef hides with #~"null" implements nothing;]
   [#*: a method the typedef overrides counts as its own new definition, and
-  is checked against the spec exactly, as any conformer's is.]
+  is checked against the spec exactly, as any implementer's is.]
 
-A typedef whose hide or override breaks a conformance quietly does not
-conform, and using it as that protocol or facet is refused at the use. An
-explicit conformance marker in the typedef's #~"as" block is checked
+A typedef whose hide or override breaks an implementation quietly does not
+implement, and using it as that protocol or facet is refused at the use. An
+explicit #~".implement" item in the typedef's #~"as" block is checked
 exactly, each spec method answered by its first declarer -- so a typedef may
-conform through its base's methods. Where a typedef stands in for a
+implement through its base's methods. Where a typedef stands in for a
 protocol, it does so with its own dispatch: an override it writes is what
 the protocol calls.
 
@@ -4065,7 +4065,7 @@ A typedef whose base names its own generic parameters is generic, and each
 instance wraps the matching instance of its base: #~"Bag T: String" wraps
 #~"List String". Everything above holds per instance -- members forward to
 the base instance, the typedef's own methods are checked per instance (a
-generic is a template, as for a generic class), and the instance conforms
+generic is a template, as for a generic class), and the instance implements
 and keys as its base instance does.
 
 A generic typedef's unlabelled argument is #~"from", the value of its base,
@@ -4869,7 +4869,7 @@ the sibling forms name the other family combinations: #~"MapRV",
 entry array plus a separate index table -- with automatic resizing.
 
 A key's #~"hash" and #~"==" are checked exactly against the bound, as a
-conformance is: #~"hash: function {t: this.view} out u64" and
+implementation is: #~"hash: function {t: this.view} out u64" and
 #~"==: function {t: this.view rhs: K} out bool", #~"K" the key's own type.
 The parameter count, the #~".view" receiver (a bare #~":this" is not one),
 #~"=="'s parameter type and marker, and each return type all count; a
@@ -4910,10 +4910,10 @@ pre-allocate buckets.
   c: ages.capacity   # u64, current bucket count
   """
 
-A key type conforms to its family's hashability interface -- it declares
+A key type implements its family's hashability interface -- it declares
 #~"hash" and #~"==" (#~"String" and the integer, char and bool types ship
 theirs; a float has no #~"hash", because no hash agrees with its IEEE
-#~"=="; any conforming user type is a legal key). The reftype-key forms take ownership
+#~"=="; any implementing user type is a legal key). The reftype-key forms take ownership
 of keys; the reftype-value forms take ownership of values. On replacement via #~"set", the old value is destroyed. #~"remove key: k"
 deletes the entry and returns its #_*"owned" value wrapped in #~"Option" (for
 reference-type / #~"String" values) or #~"optionval" (for value-type values),
@@ -4973,7 +4973,7 @@ The constructor is #~"(Set K: <element_type>)" for an empty set, or
 
 A set element must satisfy its family's hashable bound (#~"RefHashable"
 for #~"SetRef", #~"valhashable" for #~"SetVal" -- it declares #~"hash" and
-#~"=="); any conforming type is a legal element, and a float is not one.
+#~"=="); any implementing type is a legal element, and a float is not one.
 The set takes ownership of items on #~"add"; on a
 duplicate-add the caller's copy is destroyed so the take-on-add contract
 holds. On #~"delete" the stored item is destroyed.
@@ -5616,7 +5616,7 @@ Generators compose through existing constructs:
       iterable (see #~"examples/generator_map_filter.z").]
 
 Any class with a #~"call" method returning the right option wrapper is
-iterable; no conformance declares it. A generator is one way of writing such a
+iterable; no implementation declares it. A generator is one way of writing such a
 class, not the only one.
 
 #----: Methods
@@ -6039,8 +6039,8 @@ A record's members are public unless its #~"as" block holds a
 [#> to=public: public]); a name's spelling, a leading underscore included,
 makes nothing private.
 
-A record declares the facets it conforms to in its #~"as" block, as every
-type declares its conformances (see [#> to=facet: facet]).
+A record declares the facets it implements in its #~"as" block, as every
+type declares its implementations (see [#> to=facet: facet]).
 
 A record may define its own #~"create" in its #~"as" block. It builds the
 instance through #~"meta.create", the one raw constructor, which takes the
@@ -6125,8 +6125,8 @@ Arguments for #~"class":
 
 Defines a user defined reference type.
 
-A class declares the protocols it conforms to in its #~"as" block, as every
-type declares its conformances (see [#> to=protocol: protocol]).
+A class declares the protocols it implements in its #~"as" block, as every
+type declares its implementations (see [#> to=protocol: protocol]).
 
 A generic class declares its parameters in its #~"as" block, and may name an
 instance of itself in a field:
@@ -6162,8 +6162,10 @@ The #~"as" section contains type-level static members:
   [#*: String constants (static, immutable — e.g., #~'name: "hello"')]
   [#*: Computed constant expressions (e.g., #~"max: 2 * 1024")]
   [#*: Compile-time #~"if" and #~"match" expressions (e.g., #~"mode: if max > 10 then { 1 } else { 2 }")]
-  [#*: References to other constants (e.g., #~"alias: some_constant")]
-  [#*: Protocol/facet conformances (#~":Speaker", #~"m: (sized n: u32)")]
+  [#*: References to other constants (e.g., #~"limit: page_size")]
+  [#*: Static data: lists, data and choice values]
+  [#*: Aliases -- a name for a type, local to the type (#~"Node: zast.Node", #~"Elems: (ListVal t)")]
+  [#*: Protocol/facet implementations (#~"speaker: Speaker.implement", #~"m: (sized n: u32).implement")]
   [#*: The visibility declaration, a #~"public:" block]
 
 Functions defined in the #~"is" section are stored as function pointer fields
@@ -6205,10 +6207,13 @@ so it is used wherever a value is: an interpolation, a binding, an argument, a
 condition, a default, or another constant, in this unit
 (#~"TypeName.name") or another (#~"unit.TypeName.name").
 
-An #~"as" item is classified by what its value is. A value is a constant; a
-protocol or facet names a conformance label; a #~".generic" constraint is a
-generic parameter. A plain type name (#~"extra: i64") is none of these and is
-refused: a field belongs in the #~"is" section.
+An #~"as" item is classified by what its value is. A value is a constant. A
+type -- a name, a path through a unit or another type, an instance of a
+generic -- makes the item an alias of it (below). #~"X.implement" says the type
+implements the protocol or facet #~"X", and its label converts a value to it
+(#~"p.m"). A #~".generic" constraint is a generic parameter. A field belongs in
+the #~"is" section: #~"extra: i64" in #~"as" is an alias of #~"i64", not a
+field.
 
 The names in a constant are looked up in the type's own members first -- its
 #~"is" and #~"as" sections are one scope, forward references included -- and
@@ -6228,7 +6233,6 @@ field or a method, is an error rather than a fall through to the unit.
       later: max_val * 2           # the type's max_val, not the unit's
       mode: (if max_val > 10 then { 1 } else { 2 })
       greeting: "hello"
-      # extra: i64                 # compile error: a field belongs in `is`
   }
 
   main: function is {
@@ -6240,6 +6244,48 @@ field or a method, is an error rather than a fall through to the unit.
   }
   """
 
+
+#----: Aliases
+
+An #~"as" item whose value names a type is an alias of that type: a name for
+it that belongs to the type. The type's own scope sees it -- its fields, its
+method signatures and its bodies, where it constructs as the type does -- and
+the nearest declaration wins, so an alias hides a unit's type of the same
+name. From outside, an alias is reached through its type (#~"Tree.Node",
+#~"unit.Tree.Node"), in a type position, a type argument or a construction
+alike. #~"public:" controls an alias as it controls any member; hiding one
+hides only its name, for the alias is the type it names. An alias over the
+type's own generic parameter is each instance's (#~"Elem: t" is #~"i64" in
+one, #~"bool" in another). An #~"as" constant written where a type is, is an
+error naming what it is.
+
+#code language=zerolang: """
+  Point: record { x: i64 y: i64 }
+
+  Canvas: class {
+      origin: P
+      pts: Pts
+  } as {
+      P: Point
+      Pts: ListVal P
+      mid: function {c: this.view} out P is {
+          return (P x: c.origin.x + 1 y: c.origin.y)
+      }
+  }
+
+  Box: class { first: Elem } as {
+      t: anyval.generic
+      Elem: t
+      top: function {b: this.view} out Elem is { return b.first }
+  }
+
+  main: function is {
+      c: Canvas origin: (Point x: 1 y: 2) pts: ListVal Point
+      c.pts.append (Canvas.P x: 3 y: 4)
+      b: Box first: 7
+      print "\{c.mid.x} \{c.pts.length} \{b.top}"
+  }
+  """
 
 #---: Default values
 
@@ -6399,25 +6445,27 @@ defined over the protocol object and addition methods (that can only interact
 with the object via protocol methods) can be defined.
 
 Types (records, classes, unions, variants and enums, including protocols
-themselves) can claim support for one or more protocols by naming each protocol
-in an #~"as" clause and implementing (or relisting for protocols) all specs
-listed in that protocol as methods. All protocols supported must be given a
-label that exists in the same namespace on the object as its fields and
-methods.
+themselves) implement one or more protocols by writing #~"label:
+Protocol.implement" for each in their #~"as" clause and defining (or relisting
+for protocols) all specs listed in that protocol as methods. The label is a
+member of the type, in the same namespace as its fields and methods, and
+converts a value to the protocol (#~"d.label"). #~".implement" is written only
+there: an #~"as" item naming a protocol bare is an alias of it, which
+implements nothing (see [#> to=is-and-as-sections: 'is' and 'as' Sections]).
 
-A protocol with no specs at all is a #_+"marker": a type conforms to it (#~"bound:
-thread.ThreadBound", or the bare label #~":Pinned") to say something about
+A protocol with no specs at all is a #_+"marker": a type implements it (#~"bound:
+thread.ThreadBound.implement", #~"pinned: Pinned.implement") to say something about
 itself that the checker reads, and nothing is called through it. The stdlib's
 are #~"Releasing" (the runtime releases something when a value is destroyed) and
 #~"thread.ThreadBound" (a value never leaves the thread that made it).
 
-Both families may conform to a protocol, and a protocol value holds either. A
+Both families may implement a protocol, and a protocol value holds either. A
 protocol used as a generic bound (#~"T: Shape.generic") admits reference types
-only: a record that conforms is held as a #~"Shape" value but is not a #~"T"
+only: a record that implements is held as a #~"Shape" value but is not a #~"T"
 (see [#> to=generic-types: generic types]).
 
-Conformance is exact. For every method a protocol or facet specifies, the
-conforming type declares a method of the same name with:
+Implementation is exact. For every method a protocol or facet specifies, the
+implementing type declares a method of the same name with:
 
 - the same number of parameters, the receiver aside;
 - the same parameter types, in the same order, and the same return type;
@@ -6435,9 +6483,9 @@ type has no place in the vtable and is not compared. Linting defers to the
 spec too: a method implementing a spec member keeps the spec's receiver, and
 L027 does not ask it to be #~".view".
 
-#p: #b:"Generic conformers."
+#p: #b:"Generic implementers."
 
-A generic class, union, record or variant declares a conformance in its
+A generic class, union, record or variant declares an implementation in its
 #~"as" clause as any other type does, and the marker is a promise for
 #_*"every" instance. Each instance the program makes is checked against the
 spec, exactly, with its own methods -- the template's, with the instance's
@@ -6445,7 +6493,7 @@ type arguments in place of its parameters. An instance that breaks the
 promise is reported at the marker, in the template's name, with a note
 naming the instance and where it was made; a failure every instance shares
 is reported once. A template nothing instantiates is not checked. Each
-instance is a conformer of its own: it has its own vtable, and a facet's
+instance is an implementer of its own: it has its own vtable, and a facet's
 data union has a member for it.
 
 #code language=zerolang expect=E0100: """
@@ -6464,7 +6512,7 @@ data union has a member for it.
   }
 
   main: function is {
-      a: Box v: 7          # Box with t = i64 conforms
+      a: Box v: 7          # Box with t = i64 implements
       b: Box v: 7.u8       # Box with t = u8 does not
       print "\{a.get} \{b.get}"
   }
@@ -6483,13 +6531,13 @@ its #~"as" section, as every type's are; its body holds only the specs, and a
 parameter written there is refused. Each #_*"instance" is an interface of its own, its parameters
 substituted in every spec, and is written as a type application wherever a
 type goes -- a parameter, a #~"List" element, a projection
-#~"(Getter v: i64) c.borrow" or #~"(Getter v: i64).create from: c". A conformance names the instance it conforms to, in parentheses,
-and is checked exactly against that instance's specs. A generic conformer
+#~"(Getter v: i64) c.borrow" or #~"(Getter v: i64).create from: c". An implementation names the instance it implements, in parentheses,
+and is checked exactly against that instance's specs. A generic implementer
 may name an instance over its own parameter, as #~"Box" does below: each
-instance of #~"Box" conforms to its own substituted instance -- #~"Box" with
+instance of #~"Box" implements its own substituted instance -- #~"Box" with
 #~"t = i64" to #~"(Getter v: i64)" -- and is checked against it as the
-generic conformers above are. A generic bound may name an instance too:
-#~"T: (Getter v: i64).generic" admits the types that conform to it.
+generic implementers above are. A generic bound may name an instance too:
+#~"T: (Getter v: i64).generic" admits the types that implement it.
 
 #code language=zerolang: """
   Getter: protocol {
@@ -6528,7 +6576,7 @@ generic conformers above are. A generic bound may name an instance too:
 
 The generic spec itself names no interface a type can implement: a marker
 naming it, as a label or by name, is refused at the marker, and nothing is
-inferred from the conformer's methods.
+inferred from the implementer's methods.
 
 #code language=zerolang expect=E0100: """
   Getter: protocol {
@@ -6546,10 +6594,10 @@ inferred from the conformer's methods.
       }
   }
 
-  # error[E0100]: 'Getter' is generic: name the instance this type conforms to, e.g. `Getter: (Getter v: i64)`
-  #  --> app.z:9:6
-  #    9 |     :Getter
-  #      |      ^
+  # error[E0100]: 'Getter' is generic: name the instance this type implements, e.g. `getter: (Getter v: i64).implement`
+  #  --> app.z:9:13
+  #    9 |     getter: Getter.implement
+  #      |             ^
   """
 
 Protocols can be used:
@@ -6588,7 +6636,7 @@ data, a pointer to a vtable with function pointers for each spec, and a
 destructor pointer (NULL for borrowed instances, set for owned instances).
 
 An instance -- a protocol's or a facet's -- reaches exactly the members its
-interface declares. A method the conformer adds is not one of them, and any
+interface declares. A method the implementer adds is not one of them, and any
 other name is refused as on every declared type:
 
 #code language=zerolang expect=E0100: """
@@ -6629,20 +6677,20 @@ There are three ways to create a protocol instance:
   protocol instance lives on the stack until it falls out of scope; the
   underlying data is not destroyed.]
 
-A conformer may also be written where a protocol value is expected, without
+An implementer may also be written where a protocol value is expected, without
 creating an instance, but only where the value is #_*"borrowed": an argument
 to a parameter that borrows or views it (#~"show s: sq" for
 #~"show: function {s: Shape}"). The call lends it as a borrowed instance for
 its duration. A place that #_*"owns" what it is given -- a constructor field,
 a #~".take" parameter, a container slot such as #~"append", a reassignment,
-a return -- refuses a bare conformer: it would own an instance of a value it
+a return -- refuses a bare implementer: it would own an instance of a value it
 never took. Write the owned instance there, #~"Shape.create from: sq" (the
 place takes #~"sq"; #~".take" says so) or around a construction,
 #~"Shape.create from: (Sq side: 2)", and a borrowed one
 (#~"from: sq.borrow") cannot be moved into it either. A type
-that does not conform is refused wherever it is written. A generic
+that does not implement is refused wherever it is written. A generic
 parameter is not a protocol place: a bound only admits the types that may
-instantiate it, and a conformer passed for one is the instance's own type,
+instantiate it, and an implementer passed for one is the instance's own type,
 with nothing to box.
 
 For borrowed instances (label and #~".borrow" forms): if the protocol instance
@@ -6652,7 +6700,7 @@ is again available for use.
 
 #_*"Implicit projection at call sites." When a function parameter is declared
 with a protocol (or facet) type, callers may pass a concrete value that
-declares conformance to that protocol directly — no explicit
+declares implementation to that protocol directly — no explicit
 #~"protocol x.borrow" / #~"protocol x" projection is needed.
 The compiler synthesises the projection at the call boundary:
 
@@ -6664,7 +6712,7 @@ The compiler synthesises the projection at the call boundary:
     binding is invalidated after the call and the callee's protocol handle
     owns the data.]
 
-Non-conforming arguments are rejected with a standard type-mismatch error.
+Non-implementing arguments are rejected with a standard type-mismatch error.
 This rule reduces boilerplate at every call site while preserving the
 explicit forms for cases where the projection kind must be named. Also see
 the #~"StringViewable" / #~"StringLike" heterogeneous union pattern for the analogous
@@ -6713,7 +6761,7 @@ contain a pointer to the underlying data, facet instances contain a copy of the
 data itself, making them value types.
 
 Facet definitions follow the same syntax as protocols: the body contains
-specs (function signatures without bodies) that conforming types must
+specs (function signatures without bodies) that implementing types must
 implement. Only value types (records, variants) can implement facets.
 
 #code language=zerolang name=facet: """
@@ -6723,7 +6771,7 @@ implement. Only value types (records, variants) can implement facets.
   """
 
 A facet may be generic, its parameters declared in its #~"as" section, and a value type
-conforms to one of its instances by naming it, exactly as for a generic
+implements one of its instances by naming it, exactly as for a generic
 protocol (see [#> to=protocol: protocol]):
 
 #code language=zerolang: """
@@ -6741,9 +6789,9 @@ protocol (see [#> to=protocol: protocol]):
   }
   """
 
-#----: Conformance
+#----: Implementing
 
-A value type declares conformance to a facet via a labeled entry in its
+A value type implements a facet with a labelled #~".implement" entry in its
 #~"as" section, the same pattern used for protocols:
 
 #code language=zerolang after=facet name=point: """
@@ -6770,11 +6818,11 @@ protocol instance is made with (see [#> to=protocol-instance-creation:
 Protocol Instance Creation]):
 
 #ul:
-  [#*: the conformer's facet label, #~"p.m", which reads as a
+  [#*: the implementer's facet label, #~"p.m", which reads as a
   #~"measurable" holding a copy of #~"p";]
   [#*: #~"measurable.create from: p", or the bare name #~"measurable p".]
 
-A conformer written where a facet value is expected -- an argument to a facet
+An implementer written where a facet value is expected -- an argument to a facet
 parameter -- is copied the same way at the call. #~"take" and #~"borrow" are
 not facet constructors. The copy keeps no reference to #~"p", so the
 source's #~".borrow" marker, which makes a protocol's instance a borrow of
@@ -6797,8 +6845,8 @@ Facet instances are stack-allocated value types. The C representation is:
 
 #ul:
   [#*: A pointer to the vtable (constant offset, first field)]
-  [#*: An inline data union sized to the largest conforming type, each
-  instance of a generic conformer counting as a type of its own]
+  [#*: An inline data union sized to the largest implementing type, each
+  instance of a generic implementer counting as a type of its own]
 
 No heap allocation or destructor is needed. Method dispatch goes through
 the vtable, the same as protocols.
@@ -6812,7 +6860,7 @@ the vtable, the same as protocols.
 #----: Facets as generic constraints
 
 Facets can be used as generic constraints, the same as protocols. A
-generic parameter constrained by a facet accepts any type that conforms
+generic parameter constrained by a facet accepts any type that implements
 to that facet -- value types only, the facet's own family (see
 [#> to=generic-types: generic types]).
 
@@ -6866,7 +6914,7 @@ the bare element, and a write through a narrowed payload reaches the union. A
 value type.
 
 A union used as a generic bound (#~"T: Choice.generic") admits reference types
-only: its members' own types, #~"null" among them, and the conformers of a
+only: its members' own types, #~"null" among them, and the implementers of a
 protocol member. A union with a value-type member is refused as a bound, where
 the bound is written (see [#> to=generic-types: generic types]).
 
