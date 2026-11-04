@@ -249,7 +249,46 @@ the account there under its own `<a id="r-<commit>">` anchor.
 | 2026-10-30 | 255de41e | [runtime text is parsed once](#r-255de41e) | 0.87s | 0.93s | 168MB / 142MB | 103 / 463 / 316 (total 882) | 2,370,692 | 485MB | 39.3s | 192,742 |
 | 2026-11-03 | cf2c975e | [native C from the rows zc carries](#r-cf2c975e) | 0.95s | 1.02s | 195MB / 168MB | 108 / 493 / 351 (total 952) | 2,795,025 | 564MB | 42.2s | 203,800 |
 | 2026-11-04 | d1fde8ef | [the emitter reads the rows as data](#r-d1fde8ef) | 0.95s | 0.99s | 195MB / 166MB | 109 / 491 / 346 (total 946) | 2,751,540 | 559MB | 41.7s | 203,728 |
+| 2026-11-04 | acf9c47d | [a project reads the prelude once](#r-acf9c47d) | 0.97s | 1.05s | 196MB / 167MB | 106 / 529 / 360 (total 995) | 2,770,117 | 559MB | 43.0s | 204,876 |
 
+
+<a id="r-acf9c47d"></a>
+**A project reads the prelude once** (`d1fde8ef` -> `acf9c47d`; `make ci`
+green and `make ci-windows` green at `acf9c47d`, 1,281 of 1,281 run binaries
+matching on Windows; the range also holds the four checker fixes
+`78ba77e1`..`3ab2103c` and the `zc natives` subcommands `a8b34484`). A program
+built beside a project.zd paid for two front ends: the project file is checked
+as data against the standard library, then the program is parsed and checked
+again from scratch, and the data check alone cost as much as a small program.
+Two causes. A conformance resolved every member of the conforming type, while
+the check compares only the members its protocol names (`5a8415bb` resolves
+those). And the prelude (core and the units it names) was parsed twice:
+`d5037869` records the walks the project check's parse makes, replays them in
+the program's own file system, and when every one reaches the same file on
+disk the program starts from a copy of that parse; `9f9d64dd` does the same
+for each file of a `zl lint --full` run. `zl fmt` and zls keep nothing. The
+copy found two emitter defects on the way (`21cd67a4`, `ed7201c9`), and
+`acf9c47d` makes the copy keep its tables' room, without which the fixed
+input churned 6.9% more bytes. Emitted C is unchanged over the corpus except
+where a commit says (rtcmp). Measured as the row above, both sides in one
+session on the same machine:
+
+| commit | instructions (own source) | fixed input | allocs | fixed-input allocs | LOC |
+|---|---|---|---|---|---|
+| `d1fde8ef` | 10,440M | 2,045M | 2,751,540 | 500,102 | 203,728 |
+| `acf9c47d` | 10,506M | 2,004M | 2,770,117 | 494,921 | 204,876 |
+
+On the same input the compiler does 2.0% less work and allocates 1.0% less
+(-5.2K, bytes 127.3MB -> 125.6MB); the self-compile does 0.6% more work, and
+allocates 18.6K more, for 1,148 more lines of source. A program in a project
+shows the change: `zc emit examples/hello.z` in the repo (bin/zc,
+instructions:u, core 0) went from 76.4M to 52.8M, and `zc data` on a
+13-line file from 32.1M to 24.9M (both measured from `05f7d795`, where the
+plan started); hello with no project.zd beside it (the
+`out/zc-perf` build) from 75.0M to 70.3M, the conformance fix alone. The wall
+columns were taken with a browser busy on the machine. Timed alternately
+under the same load, `d1fde8ef` and `acf9c47d` best-of-7 were 0.99s and
+1.00s: unchanged within noise. `make test`, warm, 43.0s and 44.5s.
 
 <a id="r-d1fde8ef"></a>
 **The emitter reads the rows as data** (`cf2c975e` -> `d1fde8ef`, STAGE D of
