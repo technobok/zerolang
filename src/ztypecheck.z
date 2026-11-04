@@ -8668,6 +8668,40 @@ forceAllMembers: function {
     }
 }
 
+# forceSpecMembers -- the members of `impl` that the spec `spec` names: what a
+# conformance compares and its vtable wrapper calls, and no more. Forcing every
+# member of the conformer instead made each program resolve all of String's,
+# text's and str's members for their one `stringView`, and through those
+# signatures the collection families. A typedef forwards its members to its
+# base, so each name is forced along the chain, as markSpecMembersUsed marks it.
+forceSpecMembers: function {
+    st: zenv.ZSymbolTable
+    ast: Ast
+    impl: ztypes.tid
+    spec: ztypes.tid
+} is {
+    # `--eager` resolved every declaration up front, a generic template's
+    # members aside (forceAllMembers)
+    if st.typing.eagerAll when (st.reg.isGenericOf tid: impl).not then return
+    sd: st.typing.declIdOfType typeId: spec
+    if sd.isZero then return
+    n: st.typing.declChildSlots declId: sd
+    i: u64
+    for i < n loop {
+        did: st.typing.declChildAt declId: sd index: i
+        i = i + 1
+        if did.isZero.not then {
+            mn: (st.typing.decls.get i: did).name
+            t: impl
+            for t.isZero.not loop {
+                md: st.typing.declMemberIdOf parentTypeId: t nameId: mn
+                if md.isZero.not then forceMemberDecl :st :ast memberDeclId: md
+                t = (st.typing.typedefBaseTid.get key: t).or d: ztypes.tid.zero
+            }
+        }
+    }
+}
+
 # forceAllFields -- every FIELD signature of `tid`, in declaration order: the
 # members a field walk consumes. A methodDecl is skipped unless it holds a
 # function-pointer slot (an is-block `function {..} out T` with no body), which
@@ -9629,12 +9663,12 @@ recordConformance: function {
         # a marker names no member: conforming to one demands nothing of the type
         if (specIsMarker :st spec: specTypeId) then return
         markSpecMembersUsed :st impl: implTypeId spec: specTypeId
+        # the spec's members, which checkConformances compares the impl's with
+        forceAllMembers :st :ast tid: specTypeId
         # the vtable wrapper names every member the spec names, and it is
         # emitted from the conformance row rather than from a use site, so
-        # nothing else would ever demand the impl's signatures
-        forceAllMembers :st :ast tid: implTypeId
-        # and the spec's, which checkConformances compares them with
-        forceAllMembers :st :ast tid: specTypeId
+        # nothing else would ever demand those of the impl's signatures
+        forceSpecMembers :st :ast impl: implTypeId spec: specTypeId
     }
 }
 
