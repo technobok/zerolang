@@ -8797,8 +8797,9 @@ isFunctionDefOp: function {op: astnode.view} out bool is {
 # the order the two are written in cannot decide it. A type application
 # (`g: (Getter v: i64)`) names an instance of a generic spec, resolved in
 # `ownerDecl`, the conforming type, whose own parameters it may name.
-# An `X.implement` item points at its X, and only when X is an interface; one
-# refused where it is written (refuseMisplacedImplement) points at nothing.
+# An `X.implement` item points at its X, and only when X is an interface; an
+# item refused where it is written (refuseMisplacedImplement,
+# reportAsItemTypeName) points at nothing.
 markerTargetId: function {
     st: zenv.ZSymbolTable
     unitDecl: ztypes.declid
@@ -8807,9 +8808,9 @@ markerTargetId: function {
     opNid: zast.nodeid
     ownerDecl: ztypes.declid
 } out optionval ztypes.tid is {
+    if (st.typing.refusedValues.has item: opNid) then return (optionval.none ztypes.tid)
     ib: zast.implementBaseOf :ast opId: opNid
     if ib.isZero then return (markerBaseTarget :st :unitDecl :scope :ast :opNid :ownerDecl)
-    if (st.typing.refusedValues.has item: opNid) then return (optionval.none ztypes.tid)
     r: markerBaseTarget :st :unitDecl :scope :ast opNid: ib :ownerDecl
     match (
         r
@@ -10374,10 +10375,10 @@ asItemIsNoMarker: function {
     return (st.typing.declFindChild parentDeclId: ownDecl nameId: vnId).isZero.not
 }
 
-# asItemMarkerTarget -- the facet or protocol an `as` item names as a
-# conformance, or none. An item naming any other type is refused here as no
-# member an `as` section holds (asItemNamesPlainType, asItemTypeNameRefused), so
-# it is no marker either.
+# asItemMarkerTarget -- the facet or protocol an `X.implement` item implements,
+# or none. An item naming a type bare -- an interface as any other -- is
+# refused here as no member an `as` section holds (asItemNamesPlainType,
+# asItemTypeNameRefused), so it implements nothing.
 asItemMarkerTarget: function {
     st: zenv.ZSymbolTable
     scope: ztypes.declid
@@ -10403,7 +10404,7 @@ asItemMarkerTarget: function {
     match (
         mtid
     ) case some then {
-        refused = asItemNamesPlainType :st :ast :parentId :item target: mtid
+        refused = asItemNamesPlainType :st :ast :parentId :item
     } case none then {
         if (isLabelValue op: (ast.nodes.get i: op)).not then {
             asItemTypeNameRefused :st :scope :ast :unitDecl :parentId :item :op
@@ -10508,21 +10509,17 @@ reportMissingTypeMember: function {
     return true
 }
 
-# asItemNamesPlainType -- an `as` item naming a type that is neither a
-# conformance (a facet, a protocol) nor the tag spec: `extra: i64`,
-# `Elem: String`. An `as` member is a constant, a conformance or a generic
-# parameter, and a field belongs in the type's body -- reported here. True when
-# it reported.
+# asItemNamesPlainType -- an `as` item naming a type bare, the tag spec aside:
+# `extra: i64`, `Elem: String`, `m: sizer`. An `as` member is a constant, an
+# implementation (`m: sizer.implement`) or a generic parameter, and a field
+# belongs in the type's body -- reported here. True when it reported.
 asItemNamesPlainType: function {
     st: zenv.ZSymbolTable
     ast: Ast
     parentId: ztypes.tid
     item: zast.nameid
-    target: ztypes.tid
 } out bool is {
     if item == zast.wellKnown.slot.wkTag then return false
-    tt: specTypetypeOf :st tid: target
-    if tt.isInterface then return false
     reportAsItemTypeName :st :ast :parentId :item
     return true
 }
@@ -10545,9 +10542,8 @@ asItemTypeNameRefused: function {
     if (isNumericLiteralNameAt :ast ref: vnId) then return
     # `create: null` opts out of a member; null is no type an item declares
     if (namesNullType :st :ast ownerDecl: (declOfTypeId :st tid: parentId) nameId: vnId) then return
-    tto: (walkLookupTyperefById :st :scope :ast :unitDecl baseId: vnId).or d: ztypes.tid.zero
-    if tto.isZero then return
-    asItemNamesPlainType :st :ast :parentId :item target: tto
+    if (walkLookupTyperefById :st :scope :ast :unitDecl baseId: vnId).none then return
+    asItemNamesPlainType :st :ast :parentId :item
 }
 
 # reportAsItemTypeName -- the E0100 for an `as` item whose value is a type name
@@ -10561,6 +10557,11 @@ reportAsItemTypeName: function {
     md: st.typing.declMemberIdOf parentTypeId: parentId nameId: item
     if md.isZero then return
     ar: argRefAt :ast nid: (st.typing.decls.get i: md).node
+    # refused where it is written, the item declares no member a read or a
+    # construction asks of again (markerTargetId): an application's type, which
+    # its value declares when read, goes with it
+    st.typing.refusedValues.add item: ar.operation
+    st.typing.setMemberType parentTypeId: parentId nameId: item childTypeId: ztypes.tid.zero
     it: zast.nameTextAt :ast ref: item
     (
         addErrorH
@@ -10569,7 +10570,7 @@ reportAsItemTypeName: function {
         lineno: ar.lineno
         colno: ar.colno
         e: zast.err.typeError
-        msg: "'\{it}' names a type: an `as` member is a constant, a conformance or a generic parameter"
+        msg: "'\{it}' names a type: an `as` member is a constant, an implementation or a generic parameter"
         note: "".string
         hint: "a field belongs in the type's body".string
         width: it.length.u32.orPanic
@@ -10649,9 +10650,10 @@ implementBaseResolves: function {
     return (envLookup :st :scope nameId: vnId).declId.isZero.not
 }
 
-# attachMarkers -- resolve an as-block's facet/protocol conformance markers
-# (`m: measurable` / `myreader: Reader`) as children of `parentId`, run AFTER the
-# methods so markers take later positions. Returns whether any marker target owns a
+# attachMarkers -- resolve an as-block's implementations (`m:
+# measurable.implement`, `r: io.Reader.implement`) as children of `parentId`,
+# run AFTER the methods so markers take later positions; an item naming a type
+# bare is refused (asItemMarkerTarget). Returns whether any marker target owns a
 # destructor (a protocol), so a class holder keeps its own.
 attachMarkers: function {
     st: zenv.ZSymbolTable
@@ -10740,57 +10742,29 @@ attachMarkers: function {
             match (
                 mtid
             ) case some then {
-                mlbl: zast.nameTextCopy :ast ref: mmName
                 (
                     st.typing.setMemberType
                     parentTypeId: parentId
                     nameId: mmName
                     childTypeId: mtid
                 )
-                if (st.reg.needsDestructor typeId: mtid) then needsDtor = true
-                (
-                    recordConformance
-                    :st
-                    :ast
-                    implTypeId: parentId
-                    specTypeId: mtid
-                    label: mlbl.stringView
-                    labelNameId: mmName
-                    markerOp: mmOp
-                )
-            } case none then {
-                if (isLabelValue op: (ast.nodes.get i: mmOp)) then {
-                    amlbl: zast.nameTextCopy :ast ref: mmName
-                    amlid: (
-                        resolveAtomType
-                        :st
-                        :scope
-                        :ast
-                        :unitDecl
-                        nameId: mmName
-                        thisName: ""
-                    )
-                    (
-                        st.typing.setMemberType
-                        parentTypeId: parentId
-                        nameId: mmName
-                        childTypeId: amlid
-                    )
-                    if (st.reg.needsDestructor typeId: amlid) then needsDtor = true
-                    # a LABEL marker (`:StringViewable`) conforms without naming a spec
-                    # member: the same row, and the same check, as a named one
+                # only an `X.implement` item implements; a bare item answered
+                # here is the tag spec, which names the tag's storage type
+                if implemented then {
+                    mlbl: zast.nameTextCopy :ast ref: mmName
+                    if (st.reg.needsDestructor typeId: mtid) then needsDtor = true
                     (
                         recordConformance
                         :st
                         :ast
                         implTypeId: parentId
-                        specTypeId: amlid
-                        label: amlbl.stringView
+                        specTypeId: mtid
+                        label: mlbl.stringView
                         labelNameId: mmName
                         markerOp: mmOp
                     )
                 }
-            }
+            } case none then null
         }
     }
     return needsDtor
@@ -19303,21 +19277,14 @@ registerAndResolveMain: function {
 }
 
 # isConformanceMarker -- true when an as-item operation declares an
-# implementation: `r: Reader.implement` (through a unit, or a type application,
-# alike), or a bare type reference (atomid / labelvalue) like `:StringViewable`
-# or `m: Reader`.
+# implementation: `r: Reader.implement`, through a unit or a type application
+# alike.
 # An opt-out (`==: null`) and a numeric constant (`version: 1`) are atoms that
 # name no type, so they declare nothing.
 isConformanceMarker: function {ast: Ast.view op: astnode.view} out bool is {
     match (
         op
-    ) case atomid then {
-        if op.name == zast.wellKnown.slot.tyNull then return false
-        nm: zast.nameTextAt :ast ref: op.name
-        return (isNumericLiteralName name: nm.stringView).not
-    } case labelvalue then {
-        return true
-    } case dottedpath then {
+    ) case dottedpath then {
         return (zast.markerKindOfLeaf :ast leaf: op.child).implementMarker
     } else {
         return false
@@ -47655,10 +47622,7 @@ checkSpecStandIns: function {ast: Ast st: zenv.ZSymbolTable} is {
         vn: "'\{specWrittenName :st :ast tid: su.value}'"
         if (isLiteralTypeId :st tid: su.value) then vn = "a numeric literal".string
         sn: specWrittenName :st :ast tid: su.spec
-        hn: "a conformer declares `:\{sn}` in its `as` block"
-        if (st.reg.genericOriginOf tid: su.spec).isZero.not then {
-            hn = "a conformer declares `name: \{sn}` in its `as` block"
-        }
+        hn: "a type implementing it declares `name: \{sn}.implement` in its `as` block"
         why: "it does not conform to it".string
         if (st.reg.typetypeOf typeId: su.value) == ztypes.ztypetype.protocolType then {
             why = "a protocol value wraps its conformer and stands in for its own protocol only".string
