@@ -1091,10 +1091,13 @@ PiecedText: class {
     }
 
     # named -- the piece or section `name`, needing `needs` (comma-separated),
-    # answering row `row` (zero for a member section): written where its plan
-    # keeps it
-    named: function {:this name: StringView needs: StringView row: u64 text: StringView} is {
-        this.namedLines :name :needs :row :text
+    # answering row `row` (zero for a member section), written where the program
+    # reaches the type template key `reached` names (none: wherever): written
+    # where its plan keeps it
+    named: function {
+        :this name: StringView needs: StringView row: u64 reached: StringView text: StringView
+    } is {
+        this.namedLines :name :needs :row :reached :text
         this.text.append "\n"
         last: this.pieces.length - 1
         pc: this.pieces.get i: last
@@ -1104,7 +1107,9 @@ PiecedText: class {
     }
 
     # namedLines -- named, for `text` that holds its own line breaks
-    namedLines: function {:this name: StringView needs: StringView row: u64 text: StringView} is {
+    namedLines: function {
+        :this name: StringView needs: StringView row: u64 reached: StringView text: StringView
+    } is {
         hf: this.heads.length
         this.heads.append name
         nt: this.heads.length
@@ -1112,6 +1117,10 @@ PiecedText: class {
         nf: this.heads.length
         this.heads.append needs
         ne: this.heads.length
+        this.heads.append " "
+        rf: this.heads.length
+        this.heads.append reached
+        re: this.heads.length
         this.heads.append "\n"
         at: this.text.length
         this.text.append text
@@ -1127,6 +1136,8 @@ PiecedText: class {
                 nameTo: nt
                 needsFrom: nf
                 needsTo: ne
+                reachedFrom: rf
+                reachedTo: re
                 :row
             )
         )
@@ -1214,6 +1225,10 @@ rtpiece: record {
     # its needs there, comma-separated; empty when it has none
     needsFrom: u64
     needsTo: u64
+    # the template key whose type the program must reach for a section to be
+    # written (`MAPENTRY`), there; empty when the member alone decides
+    reachedFrom: u64
+    reachedTo: u64
     # the row a row piece answers (its demands and needs, written in place);
     # zero for a member section
     row: u64
@@ -3193,8 +3208,9 @@ checkedUnit: function {
         x: newPiecedText
         for each s: (zdata.itemsOf :f v: (zdata.fieldOf :f v: t name: "sections")) loop {
             mb: checkedText :u v: s name: "member"
+            rd: checkedText :u v: s name: "reached"
             tx: checkedText :u v: s name: "text"
-            if mb.length == 0 then {
+            if mb.length == 0 when rd.length == 0 then {
                 x.plain text: tx.stringView
             } else {
                 (
@@ -3202,6 +3218,7 @@ checkedUnit: function {
                     name: mb.stringView
                     needs: (checkedTexts :u v: s name: "needs").stringView
                     row: 0
+                    reached: rd.stringView
                     text: tx.stringView
                 )
             }
@@ -3353,7 +3370,7 @@ checkedPieces: function {
         ) loop dl.append from: d.copy
         nd: checkedTexts :u v: p name: "needs"
         row: pieceRow :ctx :owner name: nm.stringView demands: dl needs: nd.stringView
-        x.named name: nm.stringView needs: nd.stringView :row text: tx.stringView
+        x.named name: nm.stringView needs: nd.stringView :row reached: "" text: tx.stringView
     }
     return x
 }
@@ -3620,7 +3637,7 @@ servedFragment: function {ctx: Ctx name: StringView text: String.take} is {
 servedTemplate: function {ctx: Ctx t: schema.template} is {
     x: newPiecedText
     for each s: t.sections loop {
-        if s.member.length == 0 then {
+        if s.member.length == 0 when s.reached.length == 0 then {
             x.plain text: s.text.stringView
         } else {
             (
@@ -3628,6 +3645,7 @@ servedTemplate: function {ctx: Ctx t: schema.template} is {
                 name: s.member.stringView
                 needs: (servedList xs: s.needs).stringView
                 row: 0
+                reached: s.reached.stringView
                 text: s.text.stringView
             )
         }
@@ -3650,7 +3668,14 @@ servedPieces: function {ctx: Ctx ps: staticlist schema.piece owner: StringView} 
         for each d: p.demand loop dl.append from: d.string
         nd: servedList xs: p.needs
         row: pieceRow :ctx :owner name: p.name.stringView demands: dl needs: nd.stringView
-        x.named name: p.name.stringView needs: nd.stringView :row text: p.text.stringView
+        (
+            x.named
+            name: p.name.stringView
+            needs: nd.stringView
+            :row
+            reached: ""
+            text: p.text.stringView
+        )
     }
     return x
 }
@@ -38904,7 +38929,8 @@ rtSectionPlan: function {ctx: Ctx mono: ztypes.tid id: rtid} out RtPlan is {
 
 # rtKept -- per member section of template `id`, in text order, whether instance
 # `mono` writes it: written C calls its member, or a written section needs it
-# (closeSectionNeeds); each section's name and needs as offsets in `marks`
+# (closeSectionNeeds), or it has no member (a section kept only where a type is
+# reached, rtKeepReached); each section's name and needs as offsets in `marks`
 rtKept: function {
     ctx: Ctx.view
     mono: ztypes.tid
@@ -38924,10 +38950,36 @@ rtKept: function {
         marks.append pc.nameTo
         marks.append pc.needsFrom
         marks.append pc.needsTo
-        slot: ctx.memberWords.slotOf text: (text.substring from: pc.headFrom to: pc.nameTo)
-        kept.append (ctx.memberUses.has item: (memberKey :mono member: slot))
+        if pc.nameTo == pc.headFrom then {
+            kept.append true
+        } else {
+            slot: ctx.memberWords.slotOf text: (text.substring from: pc.headFrom to: pc.nameTo)
+            kept.append (ctx.memberUses.has item: (memberKey :mono member: slot))
+        }
     }
     closeSectionNeeds :text :marks :kept
+}
+
+# rtKeepReached -- plan `plan` with each section whose `reached` key is `key`
+# left out unless the program reaches the type the key names (`reached`). Asked
+# after the plan, so a section its member keeps is not recorded as its member
+# left out (planNeeds).
+rtKeepReached: function {ctx: Ctx.view plan: RtPlan key: StringView reached: bool} is {
+    if reached then return
+    t: ctx.rt.heads.get i: plan.id
+    hd: t.stringView
+    inf: ctx.rt.infos.get i: plan.id
+    j: inf.pieceFrom
+    for j < inf.pieceTo loop {
+        pc: ctx.rt.pieces.get i: j
+        i: j - inf.pieceFrom
+        j = j + 1
+        if (hd.substring from: pc.reachedFrom to: pc.reachedTo) == key then (
+            plan.kept.set
+            :i
+            val: false
+        )
+    }
 }
 
 # rtKeptPlan -- rtKept as a plan, for a question about the text instance `mono`
@@ -42186,6 +42238,7 @@ emitMapIters: function {
     ti: tmplTextOf :ctx key: pi
     if (rtEmpty :ctx id: ti).not then {
         plan: rtSectionPlan :ctx mono: monoId id: ti
+        rtKeepReached :ctx :plan key: "MAPENTRY" reached: (typeReached :ctx tid: meId)
         kt: RtKeys.create
         rtKey :ctx keys: kt name: "NAME" val: nm
         rtKey :ctx keys: kt name: "KEY_T" val: keyT
@@ -42198,29 +42251,9 @@ emitMapIters: function {
         rtKey :ctx keys: kt name: "OPTIONVIEW_ENTRY" val: ove.stringView
         rtOptionKeys :ast :ctx :symtab :plan keys: kt key: "OPTIONVIEW_ENTRY" tid: oveId
         filled: rtRender :ctx :plan keys: kt
-        buf.append (entryTypedefKept :ctx text: filled.stringView entryId: meId)
+        buf.append filled
         buf.append "\n"
     }
-}
-
-# entryTypedefKept -- a map iterator template's text with its
-# `/*@@entrytype@@*/` line -- the typedef naming the map's entry as its MapEntry
-# type `entryId` -- kept where that type is reached and dropped elsewhere: the
-# item walk hands entries out through an option view, which spells no entry
-# type, so only C that reads one names it.
-entryTypedefKept: function {ctx: Ctx.view text: StringView entryId: ztypes.tid} out String is {
-    mk: "/*@@entrytype@@*/"
-    at: (text.indexOf needle: mk).or d: text.length
-    if at == text.length then return text.string
-    rest: text.substring from: at + mk.length to: text.length
-    kept: (text.substring from: 0 to: at).string
-    if (typeReached :ctx tid: entryId) then {
-        kept.append rest
-    } else {
-        nl: (rest.indexOf needle: "\n").or d: rest.length
-        if nl < rest.length then kept.append (rest.substring from: nl + 1 to: rest.length)
-    }
-    return kept
 }
 
 # mapKeyType -- a Map mono's KEY type, read off its `set` member's `key`
@@ -42840,6 +42873,7 @@ emitIdMapIters: function {
     ti: tmplTextOf :ctx key: pi
     if (rtEmpty :ctx id: ti) then return
     plan: rtSectionPlan :ctx mono: monoId id: ti
+    rtKeepReached :ctx :plan key: "IDMAPENTRY" reached: (typeReached :ctx tid: meId)
     kt: RtKeys.create
     rtKey :ctx keys: kt name: "NAME" val: nm
     rtKey :ctx keys: kt name: "KEY_T" val: keyT
@@ -42849,7 +42883,7 @@ emitIdMapIters: function {
     rtKey :ctx keys: kt name: "OPTIONVIEW_ENTRY" val: ove.stringView
     rtOptionKeys :ast :ctx :symtab :plan keys: kt key: "OPTIONVIEW_ENTRY" tid: oveId
     filled: rtRender :ctx :plan keys: kt
-    buf.append (entryTypedefKept :ctx text: filled.stringView entryId: meId)
+    buf.append filled
     buf.append "\n"
 }
 
@@ -45003,6 +45037,7 @@ rtFillPieced: function {ctx: Ctx.view id: rtid keys: RtKeys.view} out PiecedText
             name: (hd.stringView.substring from: pc.headFrom to: pc.nameTo)
             needs: (hd.stringView.substring from: pc.needsFrom to: pc.needsTo)
             row: pc.row
+            reached: (hd.stringView.substring from: pc.reachedFrom to: pc.reachedTo)
             text: (
                 dropUnmadeFns
                 text: (rtFillKeysSpan :ctx :id :keys from: pc.bodyFrom to: pc.bodyTo).stringView
