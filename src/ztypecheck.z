@@ -30363,6 +30363,9 @@ methodReturnOf: function {st: zenv.ZSymbolTable.view mid: ztypes.tid} out option
     ) case some then {
         nt: ztyping.nodeTypeAt tbl: st.typing.nodeType nid: rn
         if nt.isZero.not then return (optionval.some nt)
+        # a return type naming nothing was reported where it is written: a call
+        # has a value of no type, not none
+        if (st.typing.refusedValues.has item: rn) then return (optionval.some ztypes.tid.zero)
     } case none then null
     return (optionval.none ztypes.tid)
 }
@@ -32081,6 +32084,29 @@ memberDefinitionFailed: function {
     d: st.typing.decls.get i: md
     valued: d.kind.constDecl or d.kind.staticListDecl or (st.typing.isAsConstDecl declId: md)
     if valued then return st.typing.errors.length > 0
+    if d.node.isZero then return false
+    n: ast.nodes.get i: d.node
+    if n.namedoperation.not then return false
+    return (st.typing.refusedValues.has item: n.operation)
+}
+
+# memberTyperefRefused -- member `nameId` of `bt` is declared by a type-ref that
+# named nothing, refused and reported where it is written (ZTyping.
+# refusedValues). The member is still the type's -- a construction gives it a
+# value -- but a READ of it has no type: the shell the ref was given is no type
+# a value can be checked against, and every check made on it was a second
+# report of the first.
+memberTyperefRefused: function {
+    st: zenv.ZSymbolTable.view
+    ast: Ast.view
+    bt: ztypes.tid
+    nameId: zast.nameid
+} out bool is {
+    # a refusal is always reported, so a program with no errors has none
+    if (st.typing.errors.length == 0) or bt.isZero then return false
+    md: declMemberOf :st ownerTid: bt :nameId
+    if md.isZero then return false
+    d: st.typing.decls.get i: md
     if d.node.isZero then return false
     n: ast.nodes.get i: d.node
     if n.namedoperation.not then return false
@@ -34610,6 +34636,7 @@ checkResolvedMember: function {
         # which the emitter writes only for a base instance something used
         markTypedefListViewUse :st :bt :cnId
     }
+    if (memberTyperefRefused :st :ast :bt nameId: cnId) then return ztypes.tid.zero
     if (checkMemberNamespace :st :ast :unitDecl :dp :bt :cnId :mo :coerce
     ).not then return ztypes.tid.zero
     # a generated comparison exists only when every part has one
@@ -58670,6 +58697,12 @@ bindFunctionParam: function {
         # an arm default through a unit (`m: math.roundingmode.toZero`) names no
         # type its node can give: it has the type registerValueParam recorded
         ptid = (st.typing.declChildOfId parentTypeId: fnTid nameId: pm.name).or d: ztypes.tid.zero
+    }
+    # a parameter whose type-ref named nothing was reported where it is written
+    # (refusedValues): it binds with no type, as a read of a field declared so
+    # has none (memberTyperefRefused)
+    if st.typing.errors.length > 0 when (st.typing.refusedValues.has item: pm.operation) then {
+        ptid = ztypes.tid.zero
     }
     if ptid.isZero.not then {
         (
