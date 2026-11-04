@@ -9054,6 +9054,23 @@ instanceOnlyAsConstant: function {
     return (constReadsNumericParam :st :ast owner: tdecl opId: item.operation)
 }
 
+# instanceConstantRead -- `memberDecl`, read on `bt` (a template's instance, or
+# the template itself while an instance is walked), is a constant over the
+# template's numeric parameter, which only an instance has a value for
+# (instanceOnlyAsConstant).
+instanceConstantRead: function {
+    st: zenv.ZSymbolTable.view
+    ast: Ast.view
+    bt: ztypes.tid
+    memberDecl: ztypes.declid
+} out bool is {
+    if memberDecl.isZero then return false
+    tmpl: st.reg.genericOriginOf tid: bt
+    if tmpl.isZero then tmpl = bt
+    item: argRefAt :ast nid: (st.typing.decls.get i: memberDecl).node
+    return (instanceOnlyAsConstant :st :ast parentId: tmpl :item)
+}
+
 # foldInstanceConstant -- a template's constant over one of its numeric
 # generic parameters -- an `as` constant (instanceOnlyAsConstant) or a generic
 # unit's definition -- folded for the instance `mono` when the instance first
@@ -33887,6 +33904,7 @@ constReadsNumericParam: function {
             kids.append from: ip.rhs
         }
         if ip.found.not when n.dottedpath then kids.append from: n.parent
+        appendHeldValues :ast :n :kids
         if ip.found.not when n.call then {
             kids.append from: n.callable
             c: callRefAt :ast nid: opId
@@ -33905,6 +33923,15 @@ constReadsNumericParam: function {
         if (constReadsNumericParam :st :ast :owner opId: k) then return true
     }
     return (constBranchReadsNumericParam :st :ast :owner :opId)
+}
+
+# appendHeldValues -- the values a node holds without being an operation of
+# its own, appended to the caller's list: an `if`'s condition is held by a
+# labelled node, and a branch's value by its block's lines.
+appendHeldValues: function {ast: Ast.view n: astnode.view kids: ListVal zast.nodeid} is {
+    if n.namedoperation then kids.append from: n.operation
+    if n.statementline then kids.append from: n.statementline
+    if n.statement then appendKidIds :ast span: n.statements ids: kids
 }
 
 # constBranchReadsNumericParam -- constReadsNumericParam over an `if`'s
@@ -34654,8 +34681,17 @@ checkResolvedMember: function {
         )
         if acv.kind.none when (refuseTemplateOnlyConstant :st :ast :dp :bt :cnId
         ) then return ztypes.tid
-        stampGate :st nid: dp.nid tid: mo
-        return mo
+        # a template's constant over its numeric parameter has a value only in
+        # an instance, and so a type only there: the branches of an `if` may
+        # give each instance a value of another type, which the template's
+        # member cannot know
+        rt: mo
+        if acv.kind.none.not when (instanceConstantRead :st :ast :bt :memberDecl) then {
+            vt: constValueTid :ast :st scope: unitDecl v: acv
+            if vt.isZero.not then rt = vt
+        }
+        stampGate :st nid: dp.nid tid: rt
+        return rt
     }
     tgleg: (
         checkTaggedMemberPath
