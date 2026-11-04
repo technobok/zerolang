@@ -7788,8 +7788,12 @@ dotplace: variant {
     body: null
     # a parameter list: `function {`, `in {` or `generator {`
     params: null
-    # an `as { }` block, where a generic parameter names its bound
+    # a type's `as { }` block, where a generic parameter names its bound and
+    # an implementation its interface
     asItems: null
+    # a function's or a generator's `as { }` block, where a generic parameter
+    # names its bound
+    fnAsItems: null
     # a class's fields
     classFields: null
     # a union's arms
@@ -7811,8 +7815,10 @@ dotsite: record {
     binding: bool
 }
 
-# placeOpenedBy -- the block a `{` opens, named by the token before it
-placeOpenedBy: function {prev: zlexer.toktype} out dotplace is {
+# placeOpenedBy -- the block a `{` opens, named by the token before it; an
+# `as` block is the one of the definition `decl`, the declarator keyword it
+# belongs to, opened
+placeOpenedBy: function {prev: zlexer.toktype decl: zlexer.toktype} out dotplace is {
     match (
         prev
     ) case functionTok then {
@@ -7822,6 +7828,7 @@ placeOpenedBy: function {prev: zlexer.toktype} out dotplace is {
     } case generatorTok then {
         return dotplace.params
     } case asTok then {
+        if decl.functionTok or decl.generatorTok then return dotplace.fnAsItems
         return dotplace.asItems
     } case classTok then {
         return dotplace.classFields
@@ -7843,6 +7850,38 @@ placeOpenedBy: function {prev: zlexer.toktype} out dotplace is {
         return dotplace.unmarked
     } else {
         return dotplace.body
+    }
+}
+
+# isDeclaratorTok -- `tt` is a keyword that declares a definition: what an
+# `as` block after it belongs to
+isDeclaratorTok: function {tt: zlexer.toktype} out bool is {
+    match (
+        tt
+    ) case functionTok then {
+        return true
+    } case generatorTok then {
+        return true
+    } case classTok then {
+        return true
+    } case recordTok then {
+        return true
+    } case variantTok then {
+        return true
+    } case unionTok then {
+        return true
+    } case facetTok then {
+        return true
+    } case protocolTok then {
+        return true
+    } case dataTok then {
+        return true
+    } case choiceTok then {
+        return true
+    } case typedefTok then {
+        return true
+    } else {
+        return false
     }
 }
 
@@ -7885,6 +7924,12 @@ DotScan: class {
     prev2: zlexer.toktype
     # the last token that is not a line end, which is what names a block
     prevCode: zlexer.toktype
+    # the declarator keyword last taken in the innermost block: the
+    # definition an `as` there belongs to
+    decl: zlexer.toktype
+    # beside each place: the declarator of the block around it, back in force
+    # when the place ends
+    outerDecls: ListVal zlexer.toktype
 } as {
     # take one token that is not whitespace, a comment or a label's colon. A
     # `{` opens the place its keyword names -- an interpolation's `\{` lexes as
@@ -7893,19 +7938,28 @@ DotScan: class {
         match (
             tt
         ) case braceOpenTok then {
-            this.places.append (placeOpenedBy prev: this.prevCode)
+            this.places.append (placeOpenedBy prev: this.prevCode decl: this.decl)
             this.parens.append false
+            this.enterDecl
         } case parenOpenTok then {
             this.places.append this.innermost
             this.parens.append true
+            this.enterDecl
         } case braceCloseTok then {
             this.close
         } case parenCloseTok then {
             this.close
         } else null
+        if (isDeclaratorTok :tt) then this.decl = tt
         this.prev2 = this.prev
         this.prev = tt
         if tt.eolTok.not then this.prevCode = tt
+    }
+
+    # a block opens: no definition has been declared in it yet
+    enterDecl: function {:this} is {
+        this.outerDecls.append this.decl
+        this.decl = zlexer.toktype.bofTok
     }
 
     # end the innermost block, ignoring a stray closer
@@ -7913,6 +7967,7 @@ DotScan: class {
         if this.places.length == 0 then return
         this.places.pop
         this.parens.pop
+        this.decl = this.outerDecls.pop
     }
 
     # the innermost open place; a body when none is open
@@ -7943,6 +7998,8 @@ dotSiteOf: function {docText: StringView line: u32 col: u32} out dotsite is {
         prev: zlexer.toktype.bofTok
         prev2: zlexer.toktype.bofTok
         prevCode: zlexer.toktype.bofTok
+        decl: zlexer.toktype.bofTok
+        outerDecls: ListVal zlexer.toktype
     )
     for true loop {
         t: tk.nextToken :pool
@@ -8398,6 +8455,8 @@ markerLabel: function {k: zast.markerkind} out StringView is {
         return "private"
     } case genericBound then {
         return "generic"
+    } case implementMarker then {
+        return "implement"
     } else {
         return ""
     }
@@ -8421,6 +8480,8 @@ markerDetail: function {k: zast.markerkind} out StringView is {
         return "the friend handle: reaches the type's non-public members"
     } case genericBound then {
         return "the bound of a generic parameter"
+    } case implementMarker then {
+        return "the interface the type implements"
     } else {
         return ""
     }
@@ -8448,6 +8509,9 @@ addTypeMarkers: function {place: dotplace marks: ListVal zast.markerkind} is {
         marks.append zast.markerkind.borrowMarker
         marks.append zast.markerkind.viewMarker
     } case asItems then {
+        marks.append zast.markerkind.genericBound
+        marks.append zast.markerkind.implementMarker
+    } case fnAsItems then {
         marks.append zast.markerkind.genericBound
     } else null
 }

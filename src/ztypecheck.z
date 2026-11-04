@@ -2337,7 +2337,7 @@ isDropMarkerId: function {nameId: zast.nameid} out bool is {
 isStripMarkerId: function {nameId: zast.nameid} out bool is {
     if nameId == zast.wellKnown.slot.wkPublic then return true
     k: zast.markerKindOfName id: nameId
-    if k.unmarked or k.dropMarker then return false
+    if k.unmarked or k.dropMarker or k.implementMarker then return false
     return k.genericBound.not
 }
 
@@ -5503,6 +5503,8 @@ recordReturnType: function {
 } is {
     if oId.isZero then return
     refuseMarkedFunctionType :st :ast :unitDecl :scope typeNid: oId
+    # the return still types as the interface the misplaced marker names
+    refuseMisplacedImplement :st :ast nid: oId
     recordTyperef :st :scope :ast :unitDecl :thisName nid: oId
     checkReturnNamesType :st :scope :ast :unitDecl :thisName :oId
 }
@@ -5700,6 +5702,9 @@ dottedTyperefShell: function {
     # owned copies: the resolutions below lend ast
     pId: atomNameId :ast n: (ast.nodes.get i: parentId)
     cId: atomNameId :ast n: (ast.nodes.get i: childId)
+    # refused where it is written, the slot is declared with no type
+    # (memberDefinitionFailed), as a type-ref naming a value is
+    if (refuseMisplacedImplement :st :ast :nid) then return ztypes.tid.zero
     # a unit INSTANCE's member type (`ic.Cell` with `ic: (cells t: i64)`) names
     # that instance's own copy
     uim: instanceTyperefMember :st :scope :ast :unitDecl :nid :pId :cId
@@ -8008,7 +8013,14 @@ resolveFunction: function {
     }
     # an `as` item naming a member its type does not declare names nothing
     for each faOp: asOps loop {
-        reportMissingTypeMember :st scope: rf :ast :unitDecl op: faOp
+        if (refuseMisplacedImplement :st :ast nid: faOp).not then (
+            reportMissingTypeMember
+            :st
+            scope: rf
+            :ast
+            :unitDecl
+            op: faOp
+        )
     }
     fnDecl: declOfFnDef :st scope: rf :ast :unitDecl :ownerNameId :defName :thisName
     # link the declaration to its type up front: the parameter loop below
@@ -8994,8 +9006,8 @@ eqNullOptOut: function {
 # another constant. One that does not fold is still a constant, never a field,
 # unless its value may name a type. The type owns it as a unit owns its constants -- folded
 # through the same channel, keyed on the type -- so the member's type is the
-# value's. A generic parameter, the tag spec, a conformance label and an
-# opt-out (`create: null`) are not values and are not asked.
+# value's. A generic parameter, the tag spec, an implementation and an opt-out
+# (`create: null`) are not values and are not asked (asItemNamesNoValue).
 attachAsConstant: function {
     st: zenv.ZSymbolTable
     ast: Ast
@@ -9003,20 +9015,7 @@ attachAsConstant: function {
     item: argref
 } is {
     if item.operation.isZero then return
-    if item.name == zast.wellKnown.slot.wkTag then return
-    notValue: false
-    op: ast.nodes.get i: item.operation
-    notValue = (isBareGenericParam :ast :op) or (isLabelValue :op)
-    if notValue.not then {
-        notValue = (
-            namesNullType
-            :st
-            :ast
-            ownerDecl: (declOfTypeId :st tid: parentId)
-            nameId: (bareAtomNameId n: op)
-        )
-    }
-    if notValue then return
+    if (asItemNamesNoValue :st :ast typeDecl: (declOfTypeId :st tid: parentId) :item) then return
     md: st.typing.declMemberIdOf parentTypeId: parentId nameId: item.name
     if md.isZero then return
     # only an instance has a value for a constant over the template's numeric
@@ -10353,6 +10352,8 @@ asItemMarkerTarget: function {
     parentId: ztypes.tid
     item: zast.nameid
     op: zast.nodeid
+    # the item is written `X.implement`; `op` is its X
+    implemented: bool
 } out optionval ztypes.tid is {
     mtid: (
         markerTargetId
@@ -10363,6 +10364,7 @@ asItemMarkerTarget: function {
         opNid: op
         ownerDecl: (declOfTypeId :st tid: parentId)
     )
+    if implemented then return (implementTargetOf :st :scope :unitDecl :ast target: mtid :op)
     refused: false
     match (
         mtid
@@ -10385,12 +10387,41 @@ asItemMarkerTarget: function {
     return mtid
 }
 
+# implementTargetOf -- the interface an `X.implement` item implements: `target`,
+# its X resolved, when that is a protocol or a facet. Any other X is refused
+# where it is written (reportNotImplementable), and implements nothing.
+implementTargetOf: function {
+    st: zenv.ZSymbolTable
+    scope: ztypes.declid
+    unitDecl: ztypes.declid
+    ast: Ast
+    target: optionval ztypes.tid
+    op: zast.nodeid
+} out optionval ztypes.tid is {
+    match (
+        target
+    ) case some then {
+        if (specTypetypeOf :st tid: target).isInterface then return (optionval.some target)
+        reportNotImplementable :st :ast :op
+    } case none then {
+        if (implementBaseResolves :st :scope :ast :unitDecl :op) then (
+            reportNotImplementable
+            :st
+            :ast
+            :op
+        )
+    }
+    return (optionval.none ztypes.tid)
+}
+
 # leafNamesNoMember -- a path leaf that marks its root rather than naming a
-# member of it: `.generic`, an ownership or access marker, and the tag spec.
+# member of it: `.generic`, `.implement`, an ownership or access marker, and
+# the tag spec.
 leafNamesNoMember: function {leafId: zast.nameid} out bool is {
     if leafId == zast.wellKnown.slot.wkTag then return true
     if (isStripMarkerId nameId: leafId) then return true
-    return (zast.markerKindOfName id: leafId).genericBound
+    k: zast.markerKindOfName id: leafId
+    return k.genericBound or k.implementMarker
 }
 
 # reportMissingTypeMember -- a dotted value `P.m` whose root names a TYPE (not a
@@ -10511,6 +10542,75 @@ reportAsItemTypeName: function {
     )
 }
 
+# reportNotImplementable -- the E0100 for an `X.implement` item whose X is no
+# protocol or facet: only an interface is implemented. `op` is the X.
+reportNotImplementable: function {st: zenv.ZSymbolTable ast: Ast op: zast.nodeid} is {
+    xt: typeExprText :ast nid: op
+    n: ast.nodes.get i: op
+    (
+        addErrorH
+        :st
+        nodeid: op
+        lineno: (nodeLine :n)
+        colno: (nodeCol :n)
+        e: zast.err.typeError
+        msg: "'\{xt}' is not a protocol or a facet: only an interface is implemented"
+        note: "".string
+        hint: "".string
+        width: xt.length.u32.orPanic
+    )
+}
+
+# refuseMisplacedImplement -- `.implement` outside a type's `as` block. Only an
+# item there declares that its type implements an interface, and attachMarkers
+# reads such an item at its base, so a path ending in the marker that reaches a
+# type-ref, a value or another block's item is misplaced. True when `nid` ends
+# in it; the report is placed at the marker, and stands for every read of what
+# it declares (memberDefinitionFailed).
+refuseMisplacedImplement: function {st: zenv.ZSymbolTable ast: Ast nid: zast.nodeid} out bool is {
+    if (zast.implementBaseOf :ast opId: nid).isZero then return false
+    st.typing.refusedValues.add item: nid
+    n: ast.nodes.get i: nid
+    if n.dottedpath.not then return false
+    lf: ast.nodes.get i: n.child
+    (
+        addErrorH
+        :st
+        nodeid: n.child
+        lineno: (nodeLine n: lf)
+        colno: (nodeCol n: lf)
+        e: zast.err.typeError
+        msg: "`.implement` is written only as an item of a type's `as` block".string
+        note: "".string
+        hint: "".string
+        width: 9
+    )
+    return true
+}
+
+# implementBaseResolves -- whether the X of an `X.implement` item names
+# something, so that it being no interface is the report to make. A bare name
+# that names nothing, and an application of no generic template, are reported
+# where their type-ref is stamped.
+implementBaseResolves: function {
+    st: zenv.ZSymbolTable
+    scope: ztypes.declid
+    ast: Ast
+    unitDecl: ztypes.declid
+    op: zast.nodeid
+} out bool is {
+    if (ast.nodes.get i: op).call then {
+        hc: callRefAt :ast nid: op
+        htpl: typeApplicationTemplate :st :scope :ast :unitDecl callableNid: hc.callable
+        if htpl.isZero then return false
+        return (st.reg.isGenericOf tid: htpl)
+    }
+    vnId: bareAtomNameId n: (ast.nodes.get i: op)
+    if vnId.isZero then return true
+    if (walkLookupTyperefById :st :scope :ast :unitDecl baseId: vnId).some then return true
+    return (envLookup :st :scope nameId: vnId).declId.isZero.not
+}
+
 # attachMarkers -- resolve an as-block's facet/protocol conformance markers
 # (`m: measurable` / `myreader: Reader`) as children of `parentId`, run AFTER the
 # methods so markers take later positions. Returns whether any marker target owns a
@@ -10532,6 +10632,7 @@ attachMarkers: function {
         # the marker is read through a view scoped to this block (an owned
         # copy of its operation's name): the recordings below lend ast
         isMarker: false
+        implemented: false
         mmOp: zast.nodeid
         mmName: zast.nameid
         cnm: String
@@ -10541,19 +10642,30 @@ attachMarkers: function {
                 isMarker = true
                 mmOp = mm.operation
                 mmName = mm.name
+                # `r: Reader.implement` names its interface before the marker
+                ib: zast.implementBaseOf :ast opId: mmOp
+                if ib.isZero.not then {
+                    mmOp = ib
+                    implemented = true
+                }
                 cnm = (
                     zast.nameTextCopy
                     :ast
-                    ref: (atomNameId :ast n: (ast.nodes.get i: mm.operation))
+                    ref: (atomNameId :ast n: (ast.nodes.get i: mmOp))
                 )
             }
         }
         # a member already folded to a constant of the type is no marker, and
         # neither is a name the type's own scope declares -- reported as having
         # no value where the constant was asked for
-        if isMarker when (asItemIsNoMarker :st :ast :parentId item: mmName op: mmOp) then {
-            isMarker = false
-        }
+        if isMarker when implemented.not when (
+            asItemIsNoMarker
+            :st
+            :ast
+            :parentId
+            item: mmName
+            op: mmOp
+        ) then isMarker = false
         if isMarker then {
             # `tag: tag` is not a field of the numeric record that carries it:
             # it designates the discriminator STORAGE type so a sum type can
@@ -10585,6 +10697,7 @@ attachMarkers: function {
                 :parentId
                 item: mmName
                 op: mmOp
+                :implemented
             )
             match (
                 mtid
@@ -19151,8 +19264,10 @@ registerAndResolveMain: function {
     }
 }
 
-# isConformanceMarker -- true when an as-item operation is a bare type reference
-# (atomid / labelvalue), i.e. a conformance marker like `:StringViewable` or `m: Reader`.
+# isConformanceMarker -- true when an as-item operation declares an
+# implementation: `r: Reader.implement` (through a unit, or a type application,
+# alike), or a bare type reference (atomid / labelvalue) like `:StringViewable`
+# or `m: Reader`.
 # An opt-out (`==: null`) and a numeric constant (`version: 1`) are atoms that
 # name no type, so they declare nothing.
 isConformanceMarker: function {ast: Ast.view op: astnode.view} out bool is {
@@ -19164,6 +19279,8 @@ isConformanceMarker: function {ast: Ast.view op: astnode.view} out bool is {
         return (isNumericLiteralName name: nm.stringView).not
     } case labelvalue then {
         return true
+    } case dottedpath then {
+        return (zast.markerKindOfLeaf :ast leaf: op.child).implementMarker
     } else {
         return false
     }
@@ -35809,6 +35926,7 @@ checkDotted: function {
     dp: dpref
     coerce: bool
 } out ztypes.tid is {
+    if (refuseMisplacedImplement :st :ast nid: dp.nid) then return ztypes.tid.zero
     nsc: checkNumericSuffixCast :st :ast :dp
     if nsc.handled then return nsc.tid
     if (
@@ -64002,6 +64120,23 @@ unitMemberHoldsValue: function {
     return (op.functiondef or op.objectdef or op.unitdef or op.listblock).not
 }
 
+# asItemNamesNoValue -- the `as` item `item` of the type declared by `typeDecl`
+# is no value of the type: a method, a generic parameter, an implementation
+# (`r: Reader.implement`, or a label marker `:Reader`), the tag spec, or an
+# opt-out (`create: null`). Every other item is a constant.
+asItemNamesNoValue: function {
+    st: zenv.ZSymbolTable.view
+    ast: Ast.view
+    typeDecl: ztypes.declid
+    item: argref
+} out bool is {
+    if item.name == zast.wellKnown.slot.wkTag then return true
+    if (zast.implementBaseOf :ast opId: item.operation).isZero.not then return true
+    op: ast.nodes.get i: item.operation
+    if op.functiondef or (isBareGenericParam :ast :op) or (isLabelValue :op) then return true
+    return (namesNullType :st :ast ownerDecl: typeDecl nameId: (bareAtomNameId n: op))
+}
+
 # typeMemberHoldsConstant -- the member written at `defNode` is one of the type's
 # `as` items holding a value: the only member of a type a constant can read. An
 # `is` field belongs to each instance; a method, a generic parameter, a
@@ -64023,12 +64158,7 @@ typeMemberHoldsConstant: function {
         itemId: zast.objAsItemAt :ast nid: objId :i
         i = i + 1
         if itemId == defNode then {
-            item: argRefAt :ast nid: itemId
-            if item.name == zast.wellKnown.slot.wkTag then return false
-            op: ast.nodes.get i: item.operation
-            if op.functiondef then return false
-            if (isBareGenericParam :ast :op) or (isLabelValue :op) then return false
-            return (namesNullType :st :ast ownerDecl: typeDecl nameId: (bareAtomNameId n: op)).not
+            return (asItemNamesNoValue :st :ast :typeDecl item: (argRefAt :ast nid: itemId)).not
         }
     }
     return false
@@ -68887,6 +69017,7 @@ resolveDottedConstantRead: function {
     defName: StringView
     defnId: zast.nodeid
 } is {
+    if (refuseMisplacedImplement :st :ast nid: defnId) then return
     dr: dpRefAt :ast nid: defnId
     sfLit: String
     sfTy: String

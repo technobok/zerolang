@@ -48,7 +48,7 @@ syn match zerolangKeyword /\<\%(function\|in\|out\|outx\|is\|as\|native\)\>/
 syn match zerolangKeyword /\<\%(if\|when\|then\|else\)\>/
 syn match zerolangKeyword /\<\%(for\|each\|while\|loop\|with\|do\|on\)\>/
 syn match zerolangKeyword /\<\%(match\|case\|swap\)\>/
-syn match zerolangKeyword /\<\%(take\|borrow\|view\|hold\|drop\|private\|generic\)\>/
+syn match zerolangKeyword /\<\%(take\|borrow\|view\|hold\|drop\|private\|generic\|implement\)\>/
 " Operator-class identifiers: runs of non-alphanumeric WORD chars
 " (=, ==, !=, <, <=, >, >=, +, -, *, /, &, |, ?, etc.) highlight
 " as a single token instead of splitting per character.

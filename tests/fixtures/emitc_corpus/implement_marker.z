@@ -1,0 +1,100 @@
+# implement_marker.z -- `label: X.implement` declares that a type implements the
+# interface X, on every kind of type: a record and a variant implement a facet,
+# a class and a union a protocol, a typedef restates its base's implementation,
+# a choice implements a facet, a protocol implements a marker protocol, a class
+# implements an instance of a generic protocol (`(Getter v: i64).implement`), a
+# template implements the instance over its own parameter, and a class
+# implements `thread.ThreadBound` through its unit's path. The label is the
+# conversion: `p.m` is `p` as the facet, as passing `p` itself is.
+Speaker: protocol {
+    speak: function {t: this.view} out u64
+}
+sizer: facet {
+    size: function {t: this.view} out u64
+}
+Getter: protocol {
+    get: function {t: this.view} out v
+} as {
+    v: anyval.generic
+}
+Marked: protocol {}
+
+pt: record { x: u64 } as {
+    m: sizer.implement
+    size: function {t: this.view} out u64 is { return t.x }
+}
+Dog: class { n: u64 } as {
+    s: Speaker.implement
+    g: (Getter v: u64).implement
+    speak: function {t: this.view} out u64 is { return t.n }
+    get: function {t: this.view} out u64 is { return t.n * 2 }
+}
+Echo: typedef Dog as {
+    s: Speaker.implement
+    speak: function {t: this.view} out u64 is { return t.n * 3 }
+}
+dir: variant {
+    n: u64
+    none: null
+} as {
+    m: sizer.implement
+    size: function {t: this.view} out u64 is {
+        match (t) case n then return t case none then return 0
+    }
+}
+Shape: union {
+    sq: String
+    none: null
+} as {
+    s: Speaker.implement
+    speak: function {t: this.view} out u64 is {
+        match (t) case sq then return t.length case none then return 0
+    }
+}
+pick: choice {
+    none: null
+    n: u64
+} as {
+    m: sizer.implement
+    size: function {t: this.view} out u64 is {
+        match (t) case n then return t case none then return 0
+    }
+}
+Holder: class { v: t } as {
+    t: anyval.generic
+    g: (Getter v: t).implement
+    get: function {h: this.view} out t is { return h.v }
+}
+Tagged: protocol {
+    name: function {t: this.view} out u64
+} as {
+    mk: Marked.implement
+}
+Guard: class { n: u64 } as {
+    bound: thread.ThreadBound.implement
+}
+
+six: (pick.n 6)
+
+hear: function {s: Speaker} out u64 is {
+    return s.speak
+}
+measure: function {m: sizer} out u64 is {
+    return m.size
+}
+fetch: function {g: (Getter v: u64)} out u64 is {
+    return g.get
+}
+
+main: function is {
+    p: pt x: 3
+    d: Dog n: 4
+    e: Echo (Dog n: 5)
+    v: dir.n 7
+    u: Shape.sq "hello".string
+    h: Holder v: 9.u64
+    g: Guard n: 1
+    print "\{measure m: p.m} \{measure m: p} \{hear s: d} \{hear s: d.s} \{fetch g: d}"
+    print "\{hear s: e} \{measure m: v.m} \{hear s: u} \{measure m: six}"
+    print "\{fetch g: h} \{h.get} \{g.n}"
+}

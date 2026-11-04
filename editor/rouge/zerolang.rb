@@ -63,6 +63,7 @@ module Rouge
           drop
           private
           generic
+          implement
         )
       end
 
