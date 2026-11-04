@@ -12569,6 +12569,7 @@ declaredFieldTid: function {
 } out ztypes.tid is {
     if folded.isZero.not then return folded
     refuseUnfoldedConversion :st :ast what: "field" dm: fm
+    noteFieldRefOwner :st :ast ownerTid: rid :fm
     return (
         fieldSlotTid
         :st
@@ -12579,6 +12580,32 @@ declaredFieldTid: function {
         oId: fm.operation
         thisName: defName
     )
+}
+
+# noteFieldRefOwner -- a field declared by the bare name of a member of its own
+# type that did not fold (`w: u` with `u` an `as` member): the type-ref that
+# stands in for it waits in the scope the type is written in, where `u` is not
+# seen, so the type is noted for the stamp to ask (ZTyping.fieldRefOwner). A
+# generic parameter is a type, resolved as one, a field named as its type names
+# the type, and a member that folds never gets here.
+noteFieldRefOwner: function {
+    st: zenv.ZSymbolTable ast: Ast.view ownerTid: ztypes.tid fm: argref
+} is {
+    if fm.operation.isZero then return
+    isAtom: false
+    {
+        vn: ast.nodes.get i: fm.operation
+        isAtom = vn.atomid
+    }
+    if isAtom.not then return
+    nameId: atomNameId :ast n: (ast.nodes.get i: fm.operation)
+    od: declOfTypeId :st tid: ownerTid
+    # a field named as its type is (`text: text`) names the type, not itself
+    if nameId.isZero or od.isZero or (nameId == fm.name) then return
+    if (st.typing.declFindChild parentDeclId: od :nameId).isZero then return
+    if (st.reg.isGenericParamOf tdecl: od name: nameId) then return
+    kf: fm.operation
+    st.typing.fieldRefOwner.set key: kf value: od
 }
 
 # attachDeclaredField -- a field declared by a type-ref rather than by a
@@ -23080,6 +23107,14 @@ stampOnePendingTyperef: function {
     }
     if (stampQualifiedTyperef :st :ast unitDecl: origin scope: rf :uk) then return
     if (typerefExcused :st :ast :uk :rf :origin :pval) then return
+    # a field's ref naming a member of its own type whose definition failed and
+    # said why where it is written is no unknown name: the ref is refused with
+    # it, quietly, and a read of the field reports nothing further
+    own: (st.typing.fieldRefOwner.get key: uk).or d: ztypes.declid
+    if own.isZero.not when (memberDefinitionFailed :st :ast root: own nameId: pval) then {
+        st.typing.refusedValues.add item: uk
+        return
+    }
     st.typing.refusedValues.add item: uk
     un: ast.nodes.get i: uk
     pvalT: zast.nameTextAt :ast ref: pval
