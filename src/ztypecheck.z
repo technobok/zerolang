@@ -8985,6 +8985,13 @@ attachAsConstant: function {
     if notValue then return
     md: st.typing.declMemberIdOf parentTypeId: parentId nameId: item.name
     if md.isZero then return
+    # only an instance has a value for a constant over the template's numeric
+    # parameter: each instance folds it, and says why it does not
+    # (foldInstanceConstant)
+    if (instanceOnlyAsConstant :st :ast :parentId :item) then {
+        st.typing.markAsConstDecl declId: md
+        return
+    }
     constFoldDecl :ast :st declId: md
     folded: constValueOfDecl :st declId: md
     if folded.kind.none then {
@@ -8996,6 +9003,199 @@ attachAsConstant: function {
         if reported.not when (valueMayNameType :st :ast :parentId node: item.operation) then return
     }
     st.typing.markAsConstDecl declId: md
+}
+
+# instanceOnlyAsConstant -- the `as` constant `item` of the template
+# `parentId` reads one of the template's numeric generic parameters, which
+# only an instance has a value for.
+instanceOnlyAsConstant: function {
+    st: zenv.ZSymbolTable.view
+    ast: Ast.view
+    parentId: ztypes.tid
+    item: argref
+} out bool is {
+    if (st.reg.genericOriginOf tid: parentId).isZero.not then return false
+    tdecl: declOfTypeId :st tid: parentId
+    if (st.reg.genericNumericParamCountOf :tdecl) == 0 then return false
+    return (constReadsNumericParam :st :ast owner: tdecl opId: item.operation)
+}
+
+# foldInstanceConstant -- a template's constant over one of its numeric
+# generic parameters -- an `as` constant (instanceOnlyAsConstant) or a generic
+# unit's definition -- folded for the instance `mono` when the instance first
+# meets it: a read through the instance (foldReadInstanceConstant) or, for an
+# `as` constant, the sweep at the end of the check (foldInstanceConstants).
+# One that does not fold is asked why as any constant is (constFoldDecl). The
+# template has no value for it and said nothing, so the reason is the
+# instance's, and carries its note.
+foldInstanceConstant: function {
+    st: zenv.ZSymbolTable
+    ast: Ast
+    mono: ztypes.tid
+    declId: ztypes.declid
+} is {
+    if declId.isZero then return
+    nameId: zast.nameid
+    dnode: zast.nodeid
+    own: ztypes.declid
+    isConst: false
+    {
+        d: st.typing.decls.get i: declId
+        nameId = d.name
+        dnode = d.node
+        own = d.parent
+        # a path reads as a re-export until its root is a value
+        isConst = d.kind.constDecl or d.kind.reexportDecl
+    }
+    if dnode.isZero then return
+    if isConst.not when (st.typing.isAsConstDecl :declId).not then return
+    opId: zast.nodeid
+    {
+        dn: ast.nodes.get i: dnode
+        if dn.namedoperation then opId = dn.operation
+    }
+    if (constReadsNumericParam :st :ast owner: own :opId).not then return
+    k: st.typing.memberConstKey parentTypeId: mono :nameId
+    if (st.typing.instanceConstsChecked.has item: k) then return
+    st.typing.instanceConstsChecked.add item: k
+    prev: st.typing.constMono
+    st.typing.constMono = mono
+    from: st.typing.errors.length
+    constFoldDecl :ast :st :declId
+    st.typing.constMono = prev
+    noteInstanceErrors :st :ast :mono :from
+    # the instance's member has the type of the instance's value: it has none
+    # of its own, or the parameter's stand-in when the definition is the
+    # parameter itself (`K: cap`), which a unit indexes as a re-export
+    v: st.typing.memberConstOf parentTypeId: mono :nameId
+    if v.kind.none then return
+    had: (st.typing.declChildOfId parentTypeId: mono :nameId).or d: ztypes.tid.zero
+    if had.isZero.not when (st.reg.isTypeParamOf tid: had).not then return
+    vt: constValueTid :st scope: own :ast :v
+    if vt.isZero.not then st.typing.setMemberType parentTypeId: mono :nameId childTypeId: vt
+}
+
+# forInstancesOnly -- the definition with value `defnId` of the template
+# `owner`, met with no instance of it being folded for, reads one of the
+# template's numeric generic parameters: only an instance has a value for it.
+forInstancesOnly: function {
+    st: zenv.ZSymbolTable.view
+    ast: Ast.view
+    owner: ztypes.declid
+    defnId: zast.nodeid
+} out bool is {
+    if owner.isZero or ((st.reg.genericNumericParamCountOf tdecl: owner) == 0) then return false
+    if (activeConstMono :st ownerDecl: owner).isZero.not then return false
+    return (constReadsNumericParam :st :ast :owner opId: defnId)
+}
+
+# instanceOnlyConstantNamed -- member `cnId` of `bt` (a template, or an
+# instance of one) is the template's constant over one of its numeric generic
+# parameters (foldInstanceConstant). Read with no type, it is an instance's
+# whose fold failed and said why, or the template's own, which only an
+# instance has a value for.
+instanceOnlyConstantNamed: function {
+    st: zenv.ZSymbolTable.view
+    ast: Ast.view
+    bt: ztypes.tid
+    cnId: zast.nameid
+} out bool is {
+    if bt.isZero or cnId.isZero then return false
+    tpl: bt
+    org: st.reg.genericOriginOf tid: bt
+    if org.isZero.not then tpl = org
+    tdecl: declOfTypeId :st tid: tpl
+    if tdecl.isZero or ((st.reg.genericNumericParamCountOf :tdecl) == 0) then return false
+    md: st.typing.declFindChild parentDeclId: tdecl nameId: cnId
+    if md.isZero then return false
+    dnode: zast.nodeid
+    isConst: false
+    {
+        d: st.typing.decls.get i: md
+        dnode = d.node
+        isConst = d.kind.constDecl or d.kind.reexportDecl
+    }
+    if dnode.isZero then return false
+    if isConst.not when (st.typing.isAsConstDecl declId: md).not then return false
+    opId: zast.nodeid
+    {
+        dn: ast.nodes.get i: dnode
+        if dn.namedoperation then opId = dn.operation
+    }
+    return (constReadsNumericParam :st :ast owner: tdecl :opId)
+}
+
+# foldReadInstanceConstant -- a read of member `cnId` of `bt`: when it is a
+# template's constant over a numeric parameter, read through an instance or in
+# an instance's walk, the instance folds it first (foldInstanceConstant),
+# since the member's type is the value's.
+foldReadInstanceConstant: function {
+    st: zenv.ZSymbolTable
+    ast: Ast
+    bt: ztypes.tid
+    cnId: zast.nameid
+} is {
+    if bt.isZero or cnId.isZero then return
+    org: st.reg.genericOriginOf tid: bt
+    tpl: bt
+    if org.isZero.not then tpl = org
+    tdecl: declOfTypeId :st tid: tpl
+    if tdecl.isZero or ((st.reg.genericNumericParamCountOf :tdecl) == 0) then return
+    mono: bt
+    if org.isZero then mono = activeConstMono :st ownerDecl: tdecl
+    if mono.isZero or (st.reg.isPartialOf tid: mono) then return
+    (
+        foldInstanceConstant
+        :st
+        :ast
+        :mono
+        declId: (st.typing.declFindChild parentDeclId: tdecl nameId: cnId)
+    )
+}
+
+# foldInstanceConstants -- every type instance's `as` constants over its
+# numeric parameters, read or not: a used type's constants are checked with it
+# (attachAsConstant), and only an instance has values for these.
+foldInstanceConstants: function {ast: Ast st: zenv.ZSymbolTable} is {
+    last: st.reg.nextTid
+    t: ztypes.tid 1
+    for t < last loop {
+        mono: t
+        t = t.next
+        org: st.reg.genericOriginOf tid: mono
+        if org.isZero or (st.reg.isPartialOf tid: mono) then continue
+        if (st.reg.typetypeOf typeId: org) == ztypes.ztypetype.unitType then continue
+        tdecl: declOfTypeId :st tid: org
+        if tdecl.isZero or ((st.reg.genericNumericParamCountOf :tdecl) == 0) then continue
+        for each nm: (asItemNamesOf :st :ast :tdecl) loop {
+            (
+                foldInstanceConstant
+                :st
+                :ast
+                :mono
+                declId: (st.typing.declFindChild parentDeclId: tdecl nameId: nm)
+            )
+        }
+    }
+}
+
+# asItemNamesOf -- the names the `as` block of the type `tdecl` declares, in
+# the order written; none for a type with no `as` block.
+asItemNamesOf: function {
+    st: zenv.ZSymbolTable.view ast: Ast.view tdecl: ztypes.declid
+} out ListVal zast.nameid is {
+    names: ListVal zast.nameid
+    dn: ast.nodes.get i: (st.typing.decls.get i: tdecl).node
+    if dn.namedoperation.not then return names
+    op: ast.nodes.get i: dn.operation
+    if op.objectdef.not then return names
+    k: u64
+    for k < op.asItems.count loop {
+        am: ast.nodes.get i: (zast.kidAt kids: ast.kids span: op.asItems i: k)
+        k = k + 1
+        if am.namedoperation then names.append am.name
+    }
+    return names
 }
 
 # reportUnknownAsCallHead -- an `as` item whose value is a call (`k: (f a: 1)`,
@@ -32911,6 +33111,7 @@ checkUnitQualifiedMember: function {
             un: un.stringView
         )
         if effUcn.isZero then return (callleg handled: true tid: ztypes.tid.zero)
+        foldReadInstanceConstant :st :ast :bt cnId: effUcn
         memberDecl: (
             unitMemberTypeOf
             :st
@@ -33578,7 +33779,8 @@ refuseTemplateOnlyConstant: function {
 
 # constReadsNumericParam -- whether a constant's value expression names a
 # numeric generic parameter of `owner`, through an operator, an `if` or a
-# `match` as the constant fold reaches it.
+# `match` as the constant fold reaches it, a member read or a method call on it
+# (`cap.u64`, `cap.max y: 2`), or a call's argument.
 constReadsNumericParam: function {
     st: zenv.ZSymbolTable.view
     ast: Ast.view
@@ -33596,6 +33798,19 @@ constReadsNumericParam: function {
         if ip.found then {
             kids.append from: ip.lhs
             kids.append from: ip.rhs
+        }
+        if ip.found.not when n.dottedpath then kids.append from: n.parent
+        if ip.found.not when n.call then {
+            kids.append from: n.callable
+            c: callRefAt :ast nid: opId
+            ai: u64
+            for ai < c.nargs loop {
+                (
+                    kids.append
+                    from: (argRefAt :ast nid: (zast.callArgAt :ast nid: c.nid i: ai)).operation
+                )
+                ai = ai + 1
+            }
         }
     }
     if nameId.isZero.not then return (numericParamOwnerFrom :st scope: owner :nameId).isZero.not
@@ -33654,6 +33869,10 @@ checkUnitUndeclaredMember: function {
     if npU.handled then return npU
     icU: checkInstanceConstant :st :ast :dp :bt :cnId
     if icU.handled then return icU
+    if (instanceOnlyConstantNamed :st :ast :bt :cnId) then {
+        refuseTemplateOnlyConstant :st :ast :dp :bt :cnId
+        return (callleg handled: true tid: ztypes.tid)
+    }
     reportUnknownUnitMember :st :ast :dp :bt :cnId :un
     return (callleg handled: true tid: ztypes.tid)
 }
@@ -33813,6 +34032,13 @@ checkUnresolvedMember: function {
 } out ztypes.tid is {
     npleg: checkNumericParamMember :st :ast :dp :bt :cnId
     if npleg.handled then return npleg.tid
+    # a template's constant over its numeric parameter with no type: an
+    # instance's fold said why, the template's own walk reads it as not yet
+    # known, and a read through the template from anywhere else is refused
+    if (instanceOnlyConstantNamed :st :ast :bt :cnId) then {
+        refuseTemplateOnlyConstant :st :ast :dp :bt :cnId
+        return ztypes.tid
+    }
     # `T.create` on a type with no `create` to find -- a sum, a `create: null`
     # type, a generic sum template: the construction is refused by the rule it
     # breaks, in the words every other spelling of it uses, not as a missing
@@ -35412,6 +35638,7 @@ checkDottedOn: function {
     if (refuseTypedefArmConstructor :st :unitDecl :ast :dp :tdT :bt :cnId) then return ztypes.tid
     tacc: checkTagAccessor :st :unitDecl :ast :dp :bt :cnId
     if tacc.handled then return tacc.tid
+    foldReadInstanceConstant :st :ast :bt :cnId
     forceMemberOf :st :ast parentTypeId: bt nameId: cnId
     mo: st.typing.declChildOfId parentTypeId: bt nameId: cnId
     preHas: false
@@ -60430,7 +60657,8 @@ recordMonoRef: function {
 # naming the template, its type arguments and the call that instantiated it.
 # Duck typing puts a type's missing member inside library code, and without
 # this the reader would not know which instantiation to look at. Once per
-# instance: an instance is walked once.
+# instance: an error the instance's own constant fold raised inside its walk
+# (foldInstanceConstant) already names it.
 noteInstanceErrors: function {st: zenv.ZSymbolTable ast: Ast.view mono: ztypes.tid from: u64} is {
     n: st.typing.errors.length
     if n <= from then return
@@ -60440,7 +60668,7 @@ noteInstanceErrors: function {st: zenv.ZSymbolTable ast: Ast.view mono: ztypes.t
         e: st.typing.errors.getMut :i
         if e.note.length == 0 then {
             e.note = ctxt.copy
-        } else {
+        } else if (e.note.startsWith prefix: ctxt).not then {
             e.note = "\{ctxt.stringView}; \{e.note.stringView}"
         }
         i = i + 1
@@ -68882,6 +69110,15 @@ resolveConstantMember: function {
     defName: StringView
     defnId: zast.nodeid
 } is {
+    # a template's constant over its numeric parameter is each instance's
+    # (foldInstanceConstant): with no instance it has no value to judge
+    if (
+        forInstancesOnly
+        :st
+        :ast
+        owner: (constOwnerDeclFor :st :scope :ast :unitDecl :defName)
+        :defnId
+    ) then return
     constFailClear :st
     resolveConstantDef :st :scope :ast :unitDecl :defName :defnId
     cvv: constValueOfMember :st :scope :ast :unitDecl :defName
@@ -72054,6 +72291,7 @@ typecheck: function {
             scope: rf
             unitDecl: canonUd9
         )
+        foldInstanceConstants ast: program :st
         checkGenericBounds ast: program :st
         checkUnionArmSlots ast: program :st
         checkConformances ast: program :st
