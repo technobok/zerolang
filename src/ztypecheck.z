@@ -39090,11 +39090,53 @@ checkUnboundAtom: function {
     if (refuseBodyFieldRead :st :ast nameId: node.name nid: node.nid) then return ztypes.tid
     ncr: checkNarrowedConstRead :st :unitDecl :ast :node
     if ncr.isZero.not then return ncr
+    if (refuseStrayControl :st :unitDecl :ast :node) then return ztypes.tid
     # the parameter is the innermost scope's: a unit template declares it as a
     # member, where a type lookup would find it as a name
     result: checkNumericParamAtom :st :ast :node
     if result.isZero then result = typeOfBareName :st :unitDecl :ast :node
     return result
+}
+
+# refuseStrayControl -- a `break` or `continue` outside every scope that brings
+# it in: a `for` loop brings both, a block `break` alone. The name then finds
+# the system unit's own declaration, which documents the builtin and has no
+# loop or block to leave. A unit's own definition of the name is an ordinary
+# one. True when it refused.
+refuseStrayControl: function {
+    st: zenv.ZSymbolTable
+    unitDecl: ztypes.declid
+    ast: Ast
+    node: atomref
+} out bool is {
+    isBreak: node.name == zast.wellKnown.slot.wkBreak
+    if isBreak.not when node.name != zast.wellKnown.slot.wkContinue then return false
+    fo: walkLookupTyperefById :st scope: st.curScope :ast :unitDecl baseId: node.name
+    if fo.none then return false
+    d: declOfTypeId :st tid: fo
+    if d.isZero then return false
+    if (st.typing.decls.get i: d).parent != st.typing.systemUnitRoot then return false
+    nm: "continue"
+    note: "`continue` is defined only inside a `for` loop".string
+    hint: "it ends the current iteration of the innermost `for` loop that holds it -- move it into one, or remove it".string
+    if isBreak then {
+        nm = "break"
+        note = "`break` is defined only inside a `for` loop or a block".string
+        hint = "it leaves the innermost `for` loop or block that holds it -- move it into one, or remove it".string
+    }
+    (
+        addErrorH
+        :st
+        nodeid: node.nid
+        lineno: node.lineno
+        colno: node.colno
+        e: zast.err.badReference
+        msg: "Unknown reference '\{nm}'"
+        :note
+        :hint
+        width: nm.length.u32.orPanic
+    )
+    return true
 }
 
 # checkNarrowedConstRead -- a bare name reading a unit constant that a match arm
