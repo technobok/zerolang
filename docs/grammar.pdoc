@@ -40,6 +40,8 @@ name:
   #*: #~"x" represents exactly 1 #~"x"
   #*: #~"[x]" represents 0 or 1 #~"x"
   #*: #~"{x}" represents 0 or more #~"x"
+  [#*: #~"x+" represents 1 or more #~"x"; the #~"+" follows the element it
+  repeats, an #~"x" or a group #~"( x y )"]
   #*: #~"x | y" represents #~"x" or #~"y"
   [#*: #~"( x )" groups #~"x" as one element. There is no precedence between
   sequence and #~"|": a production that mixes them groups every alternative
@@ -270,13 +272,9 @@ If a variable needs to be created for the #~"if", a #>"with-expression"
 statement can be used immediately before the #~"if".
 
 #code:
-  : "if"
-  #>"operation"
-  {
-    { "when" #>"operation" }
-    "then" #>"primary-expression"
-  }
-  \[ "else" #>"expression" \]
+  : "if" #>"operation" { "when" #>"operation" } "then" #>"primary-expression"
+    { ( "when" #>"operation" )+ "then" #>"primary-expression" }
+    \[ "else" #>"expression" \]
 
 #---: match_expression
 
@@ -324,11 +322,8 @@ constant or an intermediate value (definition) to a constant.
 
 #code:
   : "match" \[ "on" \] #>"operation"
-  {
-    "case" #>"id"
-    "then" #>"primary-expression"
-  }
-  \[ "else" #>"expression" \]
+    ( "case" #>"id" "then" #>"primary-expression" )+
+    \[ "else" #>"expression" \]
 
 #---: function_definition
 
@@ -337,9 +332,9 @@ Function definition.
 Can take maximum one each of the arguments in any order.
 
 #ul:
-  [#*: #~"in" is the default argument and may be specified first without name.
-  It is the block of function/generator parameters. If #~"as" appears before
-  the parameter block, #~"in" must be explicitly stated.]
+  [#*: #~"in" is the default argument: the block of function/generator
+  parameters. Its name may be left out only when the block is the first
+  argument; after any other argument #~"in" is written.]
   [#*: #~"out" specifies the return type for the function or for each generated
   type; the result pins nothing]
   [#*: #~"outx" specifies the return type of a function whose result keeps the
@@ -401,7 +396,7 @@ Return (#~"out" / #~"outx" parameter):
 
 Implicit return: when a function has an #~"out" type, the value of the last
 expression in the body is the implicit return value, checked as a #~"return"
-value is; a body that ends on no value is an error. The #~"return" keyword is
+value is; a body that ends on no value is an error. The #~"return" builtin is
 only required for early returns. For void functions (no #~"out"), the last
 expression value is discarded.
 
@@ -415,15 +410,20 @@ Methods and generic parameters:
   monomorphized.]
 
 #code:
-  : "function" {
-    ( \[ "in" \] "{" {
-      ( #>"label" #>"operation" )
-      | #>"label-shorthand"
-    } "}" )
+  : "function" \[ #>"parameter-block" \] {
+    ( "in" #>"parameter-block" )
     | ( ( "out" | "outx" ) #>"operation" )
     | ( "is" ( #>"block" | "native" ) )
     | ( "as" "{" { ( #>"label" #>"operation" ) | #>"label-shorthand" } "}" )
   }
+
+#---: parameter_block
+
+The parameters of a function or a generator: each a label and its type, or a
+label shorthand.
+
+#code:
+  : "{" { ( #>"label" #>"operation" ) | #>"label-shorthand" } "}"
 
 #---: unit_definition
 
@@ -560,7 +560,6 @@ full rule.
 
 #code:
   : "list" \[ "is" \] "{"
-      ( ( \[ #>"label" \] #>"term" ) | #>"label-shorthand" )  \# first element, required
       { ( \[ #>"label" \] #>"term" ) | #>"label-shorthand" }
   "}"
   \[ "out" #>"operation" \]
@@ -744,9 +743,10 @@ statement can be used immediately before the #~"for".
 
 #code:
   : "for"
-  \[ #>"operation" \]                  \# precondition, arg name optional for first
-  { "while" #>"operation" }          \# precondition(s)
-  \[ \[ "each" \] #>"label" #>"operation" \]  \# binding: walked once (each) or re-evaluated
+  \[ ( \[ "each" \] #>"label" #>"operation" ) | #>"operation" \]
+                                     \# the first condition: a binding (walked
+                                     \# once with each, else re-evaluated), or a
+                                     \# precondition with its name left out
   { "while" #>"operation" }          \# precondition(s)
   \[ "loop" #>"expression" \]
   { "while" #>"operation" }          \# postcondition(s)
