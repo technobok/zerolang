@@ -610,17 +610,6 @@ isKeySeparator: function {s: StringView} out bool is {
     )
 }
 
-# atomName -- the identifier name of an atomid node, else "".
-atomName: function {ast: Ast.view n: astnode.view} out String is {
-    match (
-        n
-    ) case atomid then {
-        return (zast.nameTextCopy :ast ref: n.name)
-    } else {
-        return "".string
-    }
-}
-
 # isStatementArm -- the node is a braced `{ ... }` statement block.
 isStatementArm: function {n: astnode.view} out bool is {
     match (
@@ -1084,7 +1073,7 @@ genericBoundBase: function {ast: Ast.view opId: zast.nodeid} out String is {
         return (genericBoundBase :ast opId: n.callable)
     } case dottedpath then {
         if (zast.markerKindOfLeaf :ast leaf: n.child).genericBound.not then return "".string
-        return (atomName :ast n: (ast.nodes.get i: n.parent))
+        return (zast.atomNameText :ast n: (ast.nodes.get i: n.parent))
     } else {
         return "".string
     }
@@ -1381,7 +1370,7 @@ Analysis: class {
     # checkCollapseName -- L006: a named argument `name: name` whose label equals its bare-atom
     # value collapses to the `:name` shorthand (same atomVariableId stamp -- codegen-neutral once
     # the emitter treats labelvalue == atomid). Fires on atomid values only, so it is idempotent:
-    # a `:name` parses to a labelvalue and atomName returns "".
+    # a `:name` parses to a labelvalue and zast.atomNameText returns "".
     checkCollapseName: function {:this ast: Ast.view arguments: zast.kidspan} is {
         if this.lineStart.length == 0 then return
         h2x9: u64
@@ -1391,7 +1380,7 @@ Analysis: class {
             a: ast.nodes.get i: aId
             if a.namedoperation then {
                 label: zast.nameTextAt :ast ref: a.name
-                val: atomName :ast n: (ast.nodes.get i: a.operation)
+                val: zast.atomNameText :ast n: (ast.nodes.get i: a.operation)
                 lsv: label.stringView
                 vsv: val.stringView
                 if lsv.length > 0 when vsv.length > 0 when lsv == vsv then {
@@ -3268,7 +3257,7 @@ Analysis: class {
                 chn: ast.nodes.get i: dpn.child
                 if (isNumericLiteralNode :ast n: bn).not then {
                     from = ztyping.nodeTypeAt tbl: st.typing.nodeType nid: (nodeInfoOf n: bn).id
-                    mname = atomName :ast n: chn
+                    mname = zast.atomNameText :ast n: chn
                     ci: nodeInfoOf n: chn
                     cln = ci.line
                     ccl = ci.col
@@ -3343,7 +3332,7 @@ Analysis: class {
             dpn: ast.nodes.get i: opId
             if dpn.dottedpath then {
                 chn: ast.nodes.get i: dpn.child
-                cn = atomName :ast n: chn
+                cn = zast.atomNameText :ast n: chn
                 cnId = zast.atomNameIdOf n: chn
                 ci: nodeInfoOf n: chn
                 cln = ci.line
@@ -4704,7 +4693,7 @@ Analysis: class {
         match (
             n
         ) case dottedpath then {
-            fcn: atomName :ast n: (ast.nodes.get i: n.child)
+            fcn: zast.atomNameText :ast n: (ast.nodes.get i: n.child)
             if fcn.length == 0 then return false
             fpn: ast.nodes.get i: n.parent
             fpi: nodeInfoOf n: fpn
@@ -5728,11 +5717,11 @@ operandSuffix: function {ast: Ast.view n: astnode.view} out SufRec is {
     match (
         n
     ) case dottedpath then {
-        cn: atomName :ast n: (ast.nodes.get i: n.child)
+        cn: zast.atomNameText :ast n: (ast.nodes.get i: n.child)
         if (ztypecheck.isNumericTypeName name: cn.stringView).not then {
             return (SufRec tname: "".string line: 0 col: 0)
         }
-        pn: atomName :ast n: (ast.nodes.get i: n.parent)
+        pn: zast.atomNameText :ast n: (ast.nodes.get i: n.parent)
         if pn.length == 0 then return (SufRec tname: "".string line: 0 col: 0)
         if (literalFitsBase numstr: pn.stringView).not then {
             return (SufRec tname: "".string line: 0 col: 0)

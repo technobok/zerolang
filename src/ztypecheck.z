@@ -2846,13 +2846,6 @@ isNumericLiteralNameAt: function {ast: Ast.view ref: zast.nameid} out bool is {
     return r9nl
 }
 
-# isNumericTypeNameAt -- isNumericTypeName asked of an interned name id: by id,
-# no text read.
-isNumericTypeNameAt: function {ast: Ast.view ref: zast.nameid} out bool is {
-    ast.drop
-    return (isScalarNameId id: ref)
-}
-
 # markerText -- a field or parameter marker's source spelling, for diagnostics.
 markerText: function {o: ztypes.zparamownership} out String is {
     match (
@@ -6408,7 +6401,7 @@ dottedTyperefShell: function {
         # literal default (i64/f64), silently mistyping the slot. A suffix is
         # the system's scalar, as it is on a literal in an expression,
         # whatever the program declares under its name
-        isSfx: isNumericTypeNameAt :ast ref: cId
+        isSfx: isScalarNameId id: cId
         if (isNumericLiteralNameAt :ast ref: pId) when isSfx then {
             return (scalarTidOf :st :scope :ast nameId: cId)
         }
@@ -6560,7 +6553,7 @@ instanceTyperefMember: function {
     cId: zast.nameid
 } out ztypes.tid is {
     if (isStripMarkerId nameId: cId) then return ztypes.tid
-    if (isNumericTypeNameAt :ast ref: cId) then return ztypes.tid
+    if (isScalarNameId id: cId) then return ztypes.tid
     # a qualifier that is itself a path (`lib.ic`) binds in another unit, and
     # one that is an application (`(cells t: i64)`) is one: only resolving it
     # says what it is
@@ -23828,10 +23821,12 @@ stdDeclRo: function {
     return ((resolveUnitChildRo :ast :st unitDecl: ud nameId: member).or d: ztypes.tid.zero)
 }
 
-# stdTidRo -- stdTid's read half: the memoised or already-resolved id, 0 when the
-# type has not been resolved. Never mints, so it lends ast as a view; a
-# comparison against a tid that already exists is exact, because the stdlib type
-# it could equal is resolved whenever that tid is.
+# stdTidRo -- stdTid for a caller holding only a view of the tree: the memoised
+# or already-resolved id, 0 when the type has not been resolved. It never mints a
+# type, and it memoises what it finds, which saves the next asker the walk (about
+# 0.1% of a self-compile's instructions); stdTidPeek is the same read for a
+# caller that cannot store. A comparison against a tid that already exists is
+# exact, because the stdlib type it could equal is resolved whenever that tid is.
 stdTidRo: function {ast: Ast.view st: zenv.ZSymbolTable wk: zast.nameid} out ztypes.tid is {
     r: stdTidPeek :ast :st :wk
     if r.isZero.not then st.typing.stdTidMemo.set key: wk value: r
@@ -24396,7 +24391,7 @@ paramTypeId: function {
         # suffix is the system's scalar, whatever the program declares under
         # its name. The two shape questions are asked of the ids, through
         # block-scoped borrows.
-        isSfx: isNumericTypeNameAt :ast ref: dcnId
+        isSfx: isScalarNameId id: dcnId
         if (isNumericLiteralNameAt :ast ref: bnId) when isSfx then {
             return (scalarTidOf :st scope: st.curScope :ast nameId: dcnId)
         }
@@ -36718,7 +36713,7 @@ checkUntypedConstantCast: function {
     v: st.typing.nodeConstIn mono: st.typing.curMonoStamp nid: dp.parent
     if (v.kind.ivalKind or v.kind.fvalKind).not or v.numTid.isZero.not then return notCast
     childId: atomNameId :ast n: (ast.nodes.get i: dp.child)
-    if (isNumericTypeNameAt :ast ref: childId).not then return notCast
+    if (isScalarNameId id: childId).not then return notCast
     litTid: st.reg.literalIntTid
     if v.kind.fvalKind then litTid = st.reg.literalFloatTid
     castOpt: literalConvTarget :ast :st tid: litTid nameId: childId
@@ -44734,25 +44729,13 @@ argIsTrivial: function {ast: Ast.view op: astnode.view} out bool is {
 }
 
 
-# bareAtomName -- the bare atom name of a value node,
-# or "" when the value is any other shape.
-bareAtomName: function {ast: Ast.view n: astnode.view} out String is {
-    match (
-        n
-    ) case atomid then {
-        return (zast.nameTextCopy :ast ref: n.name)
-    } else {
-        return "".string
-    }
-}
-
 # methodReceiverRoot -- the bare root name of a dotted callable's receiver
 # (`a.compare` -> a), "" for non-dotted or non-bare receivers.
 methodReceiverRoot: function {ast: Ast.view n: astnode.view} out String is {
     match (
         n
     ) case dottedpath then {
-        return (bareAtomName :ast n: (ast.nodes.get i: n.parent))
+        return (zast.atomNameText :ast n: (ast.nodes.get i: n.parent))
     } else {
         return "".string
     }
@@ -62935,7 +62918,7 @@ constantOperandType: function {
             # a numeric conversion (`10.u64`, `N.u8`) has the type it names,
             # which is what it folds to
             cn: atomNameId :ast n: (ast.nodes.get i: n.child)
-            if (isNumericTypeNameAt :ast ref: cn) then {
+            if (isScalarNameId id: cn) then {
                 arm = 5
                 nameId = cn
             }
@@ -64436,7 +64419,7 @@ constOfConversion: function {
     co: u32
 } out ztypes.cval is {
     if v.kind.ivalKind.not when v.kind.fvalKind.not then return ztypes.noConst
-    if (isNumericTypeNameAt :ast ref: targetId).not then return ztypes.noConst
+    if (isScalarNameId id: targetId).not then return ztypes.noConst
     target: scalarTidOf :st :scope :ast nameId: targetId
     if target.isZero then return ztypes.noConst
     # a float literal declares conversions to the float types alone
