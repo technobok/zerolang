@@ -1285,15 +1285,15 @@ ZSymbolTable: class {
     # where it was taken, so the error points at the transfer and not only at
     # the use
     getTakenLocation: function {
-        this: this.view
+        t: this.view
         nameId: zast.nameid
     } out optionval ztypes.zsrcpos is {
-        d: this.findLocal :nameId
-        ro: this.rowOf declId: d
+        d: t.findLocal :nameId
+        ro: t.rowOf declId: d
         match (
             ro
         ) case some then {
-            e: this.entries.get i: ro
+            e: t.entries.get i: ro
             if e.isTaken then return e.takenAt
         } case none then null
         return (optionval.none ztypes.zsrcpos)
@@ -1301,14 +1301,12 @@ ZSymbolTable: class {
 
     # takenAtOfDecl -- where the local's newest row says its value was moved
     # out, none when it holds one.
-    takenAtOfDecl: function {
-        this: this.view declId: ztypes.declid
-    } out optionval ztypes.zsrcpos is {
-        ro: this.rowOf :declId
+    takenAtOfDecl: function {t: this.view declId: ztypes.declid} out optionval ztypes.zsrcpos is {
+        ro: t.rowOf :declId
         match (
             ro
         ) case some then {
-            e: this.entries.get i: ro
+            e: t.entries.get i: ro
             if e.isTaken then return e.takenAt
         } case none then null
         return (optionval.none ztypes.zsrcpos)
@@ -1486,19 +1484,19 @@ ZSymbolTable: class {
     # tempDiesAbove -- the local is one of the checker's temporaries, bound in
     # a scope opened at or above the entry index `start`: one dropped with it.
     tempDiesAbove: function {
-        this: this.view
+        t: this.view
         # the local asked about
         declId: ztypes.declid
         # the entry index the dropped scopes begin at
         start: u64
     } out bool is {
-        v: this.typing.declLocalVarOf :declId
-        if (this.typing.tempVars.has item: v).not then return false
-        p: this.typing.declParentOf :declId
-        k: this.open.length
+        v: t.typing.declLocalVarOf :declId
+        if (t.typing.tempVars.has item: v).not then return false
+        p: t.typing.declParentOf :declId
+        k: t.open.length
         for k > 0 loop {
             k = k - 1
-            sc: this.open.get i: k
+            sc: t.open.get i: k
             if sc.start < start then return false
             if sc.id == p then return true
         }
@@ -1567,7 +1565,7 @@ ZSymbolTable: class {
     # scopeEncloses -- `outer` is `inner` or one of the scopes enclosing it, so
     # a value bound in `outer` lives at least as long as one bound in `inner`.
     scopeEncloses: function {
-        this: this.view
+        t: this.view
         # the scope expected to be the outer one
         outer: ztypes.declid
         # the scope whose ancestry is climbed
@@ -1576,8 +1574,8 @@ ZSymbolTable: class {
         cur: inner
         for cur.isZero.not loop {
             if cur == outer then return true
-            if (this.typing.declIsScope declId: cur).not then return false
-            cur = this.typing.declParentOf declId: cur
+            if (t.typing.declIsScope declId: cur).not then return false
+            cur = t.typing.declParentOf declId: cur
         }
         return false
     }
@@ -1586,13 +1584,13 @@ ZSymbolTable: class {
     # its strength. Intent prefixes are re-derived when the pins are installed
     # under another holder.
     heldLockPaths: function {
-        this: this.view
+        t: this.view
         # the holder whose target rows are collected
         holder: ztypes.zlockholder
         # receives one pin per target row
         dst: List ztyping.PinPath
     } is {
-        for each e: this.entries loop {
+        for each e: t.entries loop {
             if e.hasLock when e.lockScope == ztypes.zlockscope.target when (
                 holderEq
                 a: e.lockHolder
@@ -1628,14 +1626,14 @@ ZSymbolTable: class {
     # render what holds a lock, so a conflict names the holder rather than only
     # the conflict
     formatLockHolder: function {
-        this: this.view
+        t: this.view
         pool: zast.StringPool.view
         holder: ztypes.zlockholder
     } out String is {
         match (
             holder
         ) case var then {
-            return (this.formatVarHolder :pool vid: holder)
+            return (t.formatVarHolder :pool vid: holder)
         } case call then {
             return "call:\{holder}"
         }
@@ -1643,9 +1641,9 @@ ZSymbolTable: class {
 
     # the variable holding a lock, by its local's name
     formatVarHolder: function {
-        this: this.view pool: zast.StringPool.view vid: ztypes.vid
+        t: this.view pool: zast.StringPool.view vid: ztypes.vid
     } out String is {
-        nmId: this.localNameOfVar :vid
+        nmId: t.localNameOfVar :vid
         if nmId.isZero then return "<var:\{vid}>"
         return (zast.poolTextCopy :pool ref: nmId)
     }
@@ -1653,7 +1651,7 @@ ZSymbolTable: class {
     # render the conflict itself: what was wanted, what stands in the way, and
     # where that came from
     formatLockConflict: function {
-        this: this.view
+        t: this.view
         pool: zast.StringPool.view
         reqPath: ListViewVal zast.nameid
         reqType: ztypes.zlockstate
@@ -1675,7 +1673,7 @@ ZSymbolTable: class {
             hp: formatPath :pool path: existingPath
             heldDetail = " on '\{hp}'"
         }
-        holderName: this.formatVarHolder :pool vid: existingHolder
+        holderName: t.formatVarHolder :pool vid: existingHolder
         # A binding holding a SHARED lock on ITSELF is a readonly parameter:
         # saying it "already has a lock held by" its own name explains nothing.
         # An exclusive self-lock is not that, and keeps the ordinary wording.
@@ -1857,17 +1855,17 @@ ZSymbolTable: class {
     # stops `name.drop`. A binding's own locks -- the readonly lock it holds on
     # itself -- end with it, so they stop nothing.
     findLockHeldByOther: function {
-        this: this.view
+        t: this.view
         nameId: zast.nameid
         self: ztypes.zlockholder
     } out optionval heldlock is {
-        d: this.findLocal :nameId
+        d: t.findLocal :nameId
         if d.isZero then return (optionval.none heldlock)
-        if (this.typing.declRowsOf declId: d) == 0 then return (optionval.none heldlock)
-        j: this.entries.length
+        if (t.typing.declRowsOf declId: d) == 0 then return (optionval.none heldlock)
+        j: t.entries.length
         for j > 0 loop {
             j = j - 1
-            e: this.entries.get i: j
+            e: t.entries.get i: j
             if e.declId == d when e.hasLock when (holderEq a: e.lockHolder b: self).not then {
                 return (optionval.some (heldlock state: e.lockType holder: e.lockHolder))
             }
@@ -1931,17 +1929,17 @@ ZSymbolTable: class {
 
     # Holder of the innermost lock on `name` (for the .drop-of-locked check).
     findLockHolder: function {
-        this: this.view
+        t: this.view
         nameId: zast.nameid
     } out optionval ztypes.zlockholder is {
-        d: this.findLocal :nameId
+        d: t.findLocal :nameId
         if d.isZero then return (optionval.none ztypes.zlockholder)
-        if (this.typing.declRowsOf declId: d) == 0 then return (optionval.none ztypes.zlockholder)
-        ne: this.entries.length
+        if (t.typing.declRowsOf declId: d) == 0 then return (optionval.none ztypes.zlockholder)
+        ne: t.entries.length
         j: ne
         for j > 0 loop {
             j2: j - 1
-            e: this.entries.get i: j2
+            e: t.entries.get i: j2
             if e.declId == d when e.hasLock then return (optionval.some e.lockHolder)
             j = j - 1
         }
@@ -1953,19 +1951,19 @@ ZSymbolTable: class {
     # its `.borrow` input, which a read of that input must not cross.
     findExclusiveVarLock: function {
         # the symbol table whose lock rows are scanned
-        this: this.view
+        t: this.view
         # the path read, root variable first
         path: (ListVal zast.nameid).view
     } out optionval ztypes.zlockholder is {
         if path.length == 0 then return (optionval.none ztypes.zlockholder)
-        d: this.findLocal nameId: (path.get i: 0)
+        d: t.findLocal nameId: (path.get i: 0)
         if d.isZero then return (optionval.none ztypes.zlockholder)
-        if (this.typing.declRowsOf declId: d) == 0 then return (optionval.none ztypes.zlockholder)
-        ne: this.entries.length
+        if (t.typing.declRowsOf declId: d) == 0 then return (optionval.none ztypes.zlockholder)
+        ne: t.entries.length
         j: ne
         for j > 0 loop {
             j2: j - 1
-            e: this.entries.get i: j2
+            e: t.entries.get i: j2
             if e.declId == d when e.hasLock when (
                 e.lockType == ztypes.zlockstate.exclusive
             ) when e.lockHolder.var then {
@@ -1982,16 +1980,16 @@ ZSymbolTable: class {
     # needs.
     hasExclusiveVarLock: function {
         # the symbol table whose lock rows are scanned
-        this: this.view
+        t: this.view
         # the local read
         declId: ztypes.declid
     } out bool is {
-        if (this.typing.declRowsOf :declId) == 0 then return false
-        ne: this.entries.length
+        if (t.typing.declRowsOf :declId) == 0 then return false
+        ne: t.entries.length
         j: ne
         for j > 0 loop {
             j2: j - 1
-            e: this.entries.get i: j2
+            e: t.entries.get i: j2
             if e.declId == declId when e.hasLock when (
                 e.lockType == ztypes.zlockstate.exclusive
             ) when e.lockHolder.var then return true
@@ -2002,18 +2000,18 @@ ZSymbolTable: class {
 
     # Holder of an EXCLUSIVE lock prefix-overlapping `path`, or none.
     findExclusiveLock: function {
-        this: this.view
+        t: this.view
         path: (ListVal zast.nameid).view
     } out optionval ztypes.zlockholder is {
         if path.length == 0 then return (optionval.none ztypes.zlockholder)
-        d: this.findLocal nameId: (path.get i: 0)
+        d: t.findLocal nameId: (path.get i: 0)
         if d.isZero then return (optionval.none ztypes.zlockholder)
-        if (this.typing.declRowsOf declId: d) == 0 then return (optionval.none ztypes.zlockholder)
-        ne: this.entries.length
+        if (t.typing.declRowsOf declId: d) == 0 then return (optionval.none ztypes.zlockholder)
+        ne: t.entries.length
         j: ne
         for j > 0 loop {
             j2: j - 1
-            e: this.entries.get i: j2
+            e: t.entries.get i: j2
             if e.declId == d when e.hasLock when e.lockType == ztypes.zlockstate.exclusive then {
                 ov: pathsOverlap a: e.lockPath.listView b: path.listView
                 if ov then return (optionval.some e.lockHolder)
@@ -2027,17 +2025,17 @@ ZSymbolTable: class {
     # lockHeldByOther -- a lock on the local `nameId`, or on a path through
     # it, held by any holder but `except`: something borrows it or through it.
     lockHeldByOther: function {
-        this: this.view
+        t: this.view
         nameId: zast.nameid
         except: ztypes.zlockholder
     } out optionval ztypes.zlockholder is {
-        d: this.findLocal :nameId
+        d: t.findLocal :nameId
         if d.isZero then return (optionval.none ztypes.zlockholder)
-        if (this.typing.declRowsOf declId: d) == 0 then return (optionval.none ztypes.zlockholder)
-        j: this.entries.length
+        if (t.typing.declRowsOf declId: d) == 0 then return (optionval.none ztypes.zlockholder)
+        j: t.entries.length
         for j > 0 loop {
             j = j - 1
-            e: this.entries.get i: j
+            e: t.entries.get i: j
             if e.declId == d when e.hasLock when (holderEq a: e.lockHolder b: except).not then {
                 return (optionval.some e.lockHolder)
             }
@@ -2050,18 +2048,18 @@ ZSymbolTable: class {
     # blocked too; a shared INTENT is only bookkeeping toward a deeper lock,
     # which is checked on its own row.
     findReadBlocker: function {
-        this: this.view
+        t: this.view
         path: (ListVal zast.nameid).view
     } out optionval ztypes.zlockholder is {
         if path.length == 0 then return (optionval.none ztypes.zlockholder)
-        d: this.findLocal nameId: (path.get i: 0)
+        d: t.findLocal nameId: (path.get i: 0)
         if d.isZero then return (optionval.none ztypes.zlockholder)
-        if (this.typing.declRowsOf declId: d) == 0 then return (optionval.none ztypes.zlockholder)
-        ne: this.entries.length
+        if (t.typing.declRowsOf declId: d) == 0 then return (optionval.none ztypes.zlockholder)
+        ne: t.entries.length
         j: ne
         for j > 0 loop {
             j2: j - 1
-            e: this.entries.get i: j2
+            e: t.entries.get i: j2
             if e.declId == d when e.hasLock when e.lockType == ztypes.zlockstate.shared then {
                 blocks: (
                     (isPrefix p: path.listView whole: e.lockPath.listView) or
@@ -2414,12 +2412,12 @@ ZSymbolTable: class {
     # whether an arm has been ruled out for a name, which is what lets a later
     # match need fewer arms
     isExcluded: function {
-        this: this.view
+        t: this.view
         nameId: zast.nameid
         subtypeName: zast.nameid
     } out bool is {
         tmp: IdSet zast.nameid
-        this.collectExcluded :nameId into: tmp
+        t.collectExcluded :nameId into: tmp
         return (tmp.has item: subtypeName)
     }
 
@@ -2428,15 +2426,15 @@ ZSymbolTable: class {
     # or exclusion collapse). Shadow-narrowed rows (originalZtypeId set --
     # the name IS a payload) and un-narrowed locals yield "".
     narrowedArmOf: function {
-        this: this.view
+        t: this.view
         nameId: zast.nameid
         fullTypeId: ztypes.tid
     } out zast.nameid is {
-        ro: this.rowOf declId: (this.subjectDecl :nameId)
+        ro: t.rowOf declId: (t.subjectDecl :nameId)
         match (
             ro
         ) case some then {
-            e: this.entries.get i: ro
+            e: t.entries.get i: ro
             isShadow: false
             oz: e.originalZtypeId
             match (

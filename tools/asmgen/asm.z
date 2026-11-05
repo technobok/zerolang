@@ -21,6 +21,9 @@ public: unit {
     :create
 }
 
+# the arch unit, which Asm's own `arch` field hides inside its methods
+archunit: arch
+
 Arch: arch.Arch
 operand: arch.operand
 
@@ -112,14 +115,14 @@ Asm: class {
 
     # zr -- the zero register, or the empty operand
     zr: function {t: this.view} out operand is {
-        if t.arch.reg0 == 0 then return arch.noReg
-        return (arch.regOf n: t.arch.reg0)
+        if t.arch.reg0 == 0 then return archunit.noReg
+        return (archunit.regOf n: t.arch.reg0)
     }
 
     # imm -- the immediate x, or the zero register for 0 where there is one
     imm: function {t: this.view x: i64} out operand is {
-        if (x == 0) and (t.arch.reg0 != 0) then return (arch.regOf n: t.arch.reg0)
-        return (arch.immOf :x)
+        if (x == 0) and (t.arch.reg0 != 0) then return (archunit.regOf n: t.arch.reg0)
+        return (archunit.immOf :x)
     }
 
     # isZero -- r is a zero immediate or the zero register
@@ -140,7 +143,7 @@ Asm: class {
         i: this.regavail.trailingZeros
         if i >= this.arch.regs.length then this.fatal msg: "out of registers"
         this.claim :i
-        return (arch.regOf n: (this.arch.regs.get :i))
+        return (archunit.regOf n: (this.arch.regs.get :i))
     }
 
     # regHint -- a newly allocated register, with a hint as to its purpose
@@ -148,13 +151,13 @@ Asm: class {
         n: this.hintReg :h
         if n == 0 then return this.reg
         p: this.position :n
-        if p < 0 then return (arch.regOf :n)
+        if p < 0 then return (archunit.regOf :n)
         i: p.u64.orPanic
         if (this.regavail & (1.u64 << i)) == 0 then {
             this.fatal msg: "hint for already allocated register \{this.regName :n}"
         }
         this.claim :i
-        return (arch.regOf :n)
+        return (archunit.regOf :n)
     }
 
     # free -- release a register; a no-op for an immediate, a memory operand or
@@ -374,7 +377,7 @@ Asm: class {
 
     # checkCount -- a register shift count stands where the architecture needs it
     checkCount: function {t: this.view shift: operand} is {
-        need: t.hintReg h: arch.hint.shiftCount
+        need: t.hintReg h: archunit.hint.shiftCount
         if (need != 0) and shift.isImm.not and (shift.isReg n: need).not then {
             t.fatal msg: "shift count not in \{t.regName n: need}"
         }
@@ -385,15 +388,17 @@ Asm: class {
         if this.arch.kind.amd64 then {
             if (amd64.add a: this :src1 :src2 :dst :c) then return
         }
-        keepOrSmash: (c == arch.carry.keep) or (c == arch.carry.smash)
-        useOnly: (c == arch.carry.use) or (c == (arch.carry.use | arch.carry.smash))
+        keepOrSmash: (c == archunit.carry.keep) or (c == archunit.carry.smash)
+        useOnly: (c == archunit.carry.use) or (c == (archunit.carry.use | archunit.carry.smash))
         useSet: (
-            (c == (arch.carry.use | arch.carry.set)) or (c == (arch.carry.use | arch.carry.smash))
+            (c == (archunit.carry.use | archunit.carry.set)) or
+            (c == (archunit.carry.use | archunit.carry.smash))
         )
         if (this.arch.add.length > 0) and keepOrSmash then {
             this.op3 op: this.arch.add.copy :src1 :src2 :dst
         } else if (
-            (this.arch.adds.length > 0) and ((c == arch.carry.set) or (c == arch.carry.smash))
+            (this.arch.adds.length > 0) and
+            ((c == archunit.carry.set) or (c == archunit.carry.smash))
         ) then {
             this.op3 op: this.arch.adds.copy :src1 :src2 :dst
         } else if (this.arch.adc.length > 0) and useOnly then {
@@ -421,15 +426,17 @@ Asm: class {
 
     # sub -- dst = src2 - src1, with the given carry behaviour
     sub: function {:this src1: operand src2: operand dst: operand c: u64} is {
-        keepOrSmash: (c == arch.carry.keep) or (c == arch.carry.smash)
-        useOnly: (c == arch.carry.use) or (c == (arch.carry.use | arch.carry.smash))
+        keepOrSmash: (c == archunit.carry.keep) or (c == archunit.carry.smash)
+        useOnly: (c == archunit.carry.use) or (c == (archunit.carry.use | archunit.carry.smash))
         useSet: (
-            (c == (arch.carry.use | arch.carry.set)) or (c == (arch.carry.use | arch.carry.smash))
+            (c == (archunit.carry.use | archunit.carry.set)) or
+            (c == (archunit.carry.use | archunit.carry.smash))
         )
         if (this.arch.sub.length > 0) and keepOrSmash then {
             this.op3 op: this.arch.sub.copy :src1 :src2 :dst
         } else if (
-            (this.arch.subs.length > 0) and ((c == arch.carry.set) or (c == arch.carry.smash))
+            (this.arch.subs.length > 0) and
+            ((c == archunit.carry.set) or (c == archunit.carry.smash))
         ) then {
             this.op3 op: this.arch.subs.copy :src1 :src2 :dst
         } else if (this.arch.sbc.length > 0) and useOnly then {
@@ -438,7 +445,7 @@ Asm: class {
             this.op3 op: this.arch.sbcs.copy :src1 :src2 :dst
         } else if src1.isImm and keepOrSmash then {
             # no sub that leaves the carry alone: add the negation
-            this.add src1: (arch.immOf x: 0 - src1.off) :src2 :dst :c
+            this.add src1: (archunit.immOf x: 0 - src1.off) :src2 :dst :c
         } else {
             this.fatal msg: "unsupported carry behavior"
         }
@@ -447,12 +454,12 @@ Asm: class {
     # clearCarry -- clear the carry flag; which is carry.add or carry.sub, for
     # how the flag will be used, and carry.alt or 0
     clearCarry: function {:this which: u64} is {
-        dst: arch.regOf n: (this.arch.regs.get i: 0)
-        alt: which & arch.carry.alt
-        if (which & arch.carry.add) != 0 then {
-            this.add src1: (this.imm x: 0) src2: dst :dst c: arch.carry.set | alt
-        } else if (which & arch.carry.sub) != 0 then {
-            this.sub src1: (this.imm x: 0) src2: dst :dst c: arch.carry.set | alt
+        dst: archunit.regOf n: (this.arch.regs.get i: 0)
+        alt: which & archunit.carry.alt
+        if (which & archunit.carry.add) != 0 then {
+            this.add src1: (this.imm x: 0) src2: dst :dst c: archunit.carry.set | alt
+        } else if (which & archunit.carry.sub) != 0 then {
+            this.sub src1: (this.imm x: 0) src2: dst :dst c: archunit.carry.set | alt
         } else {
             this.fatal msg: "bad carry"
         }
@@ -462,18 +469,18 @@ Asm: class {
     # saveCarry -- save the carry flag into dst, in an architecture's own
     # encoding; the flag is left undefined
     saveCarry: function {:this dst: operand} is {
-        this.sub src1: dst src2: dst :dst c: arch.carry.use | arch.carry.smash
+        this.sub src1: dst src2: dst :dst c: archunit.carry.use | archunit.carry.smash
         this.eol text: "save carry"
     }
 
     # restoreCarry -- restore the carry flag from src, which is left undefined
     restoreCarry: function {:this src: operand} is {
         if this.arch.subCarryIsBorrow then {
-            this.add src1: src src2: src dst: src c: arch.carry.set
+            this.add src1: src src2: src dst: src c: archunit.carry.set
         } else {
             # saveCarry encoded the sub carry as 0 or ^0: subtracting it from
             # the zero register carries exactly when it is not 0
-            this.sub src1: src src2: this.zr dst: src c: arch.carry.set
+            this.sub src1: src src2: this.zr dst: src c: archunit.carry.set
         }
         this.eol text: "restore carry"
     }
@@ -481,14 +488,14 @@ Asm: class {
     # convertCarry -- turn the carry saved in dst into 0 or 1; the flag is
     # left undefined
     convertCarry: function {:this which: u64 dst: operand} is {
-        if which == arch.carry.add then {
+        if which == archunit.carry.add then {
             if this.arch.subCarryIsBorrow then {
                 this.neg src: dst :dst
             } else {
-                this.add src1: (this.imm x: 1) src2: dst :dst c: arch.carry.smash
+                this.add src1: (this.imm x: 1) src2: dst :dst c: archunit.carry.smash
             }
             this.eol text: "convert add carry"
-        } else if which == arch.carry.sub then {
+        } else if which == archunit.carry.sub then {
             this.neg src: dst :dst
             this.eol text: "convert sub carry"
         }
@@ -497,10 +504,13 @@ Asm: class {
     # saveConvertCarry -- save the carry flag into dst as 0 or 1; the flag is
     # left undefined
     saveConvertCarry: function {:this which: u64 dst: operand} is {
-        if (which != arch.carry.add) and (which != arch.carry.sub) then this.fatal msg: "bad carry"
+        if (which != archunit.carry.add) and (which != archunit.carry.sub) then (
+            this.fatal
+            msg: "bad carry"
+        )
         hasAdc: (this.arch.adc.length > 0) or (this.arch.adcs.length > 0)
-        if (which == arch.carry.add) and hasAdc and this.zr.valid then {
-            this.add src1: this.zr src2: this.zr :dst c: arch.carry.use | arch.carry.smash
+        if (which == archunit.carry.add) and hasAdc and this.zr.valid then {
+            this.add src1: this.zr src2: this.zr :dst c: archunit.carry.use | archunit.carry.smash
             this.eol text: "save & convert add carry"
             return
         }
@@ -564,7 +574,7 @@ Asm: class {
             this.line text: "jnz \{label}%="
             return
         }
-        this.sub src1: (this.imm x: 1) src2: n dst: n c: arch.carry.keep
+        this.sub src1: (this.imm x: 1) src2: n dst: n c: archunit.carry.keep
         this.jmpNonZero src: n :label
     }
 
@@ -704,7 +714,7 @@ Asm: class {
 
     # arg -- a register holding the named argument
     arg: function as { T: StringLike.generic } in {:this name: T.view} out operand is {
-        return (this.argHint :name h: arch.hint.none)
+        return (this.argHint :name h: archunit.hint.none)
     }
 
     # argHint -- arg, the register chosen with a hint
@@ -727,7 +737,7 @@ Asm: class {
             }
             this.result = this.reg.num
         }
-        this.mov :src dst: (arch.regOf n: this.result)
+        this.mov :src dst: (archunit.regOf n: this.result)
     }
 
     # finish -- close the function and write it into the file as C
