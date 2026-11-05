@@ -905,16 +905,16 @@ promoteForCond: function {
     }
     if doHoist then {
         synthN: "_iter\{ctr.bump}"
-        rhs0: zast.cloneTreeAt :ast nid: opId
-        snv0: synthN.stringView
-        snid0: zast.poolSet pool: ast.names text: snv0
+        rhsClone: zast.cloneTreeAt :ast nid: opId
+        synthName: synthN.stringView
+        synthNameId: zast.poolSet pool: ast.names text: synthName
         sa0: astnode.assignment (
             zast.assignmentrow
             nodeid: (zast.tableReserve :ast from: c0Id)
             lineno: hl0
             colno: hc0
-            name: snid0
-            value: (zast.tableAdd :ast n: rhs0)
+            name: synthNameId
+            value: (zast.tableAdd :ast n: rhsClone)
         )
         sl0: astnode.statementline (
             zast.statementlinerow
@@ -929,7 +929,7 @@ promoteForCond: function {
         # the loop walks the object `_iterN` holds -- an iterator, or a
         # container through its `iterate` -- and does not call it: a bare
         # callable is called, so the walk names it with a marker
-        na0: mkAtom :ast from: c0Id line: hl0 col: hc0 name: snv0
+        na0: mkAtom :ast from: c0Id line: hl0 col: hc0 name: synthName
         nb0: mkAtom :ast from: c0Id line: hl0 col: hc0 name: "borrow"
         nd0: astnode.dottedpath (
             zast.dottedpathrow
@@ -1169,17 +1169,17 @@ injectCallReceiver: function {
     )
     thisParam: mkNamedOp :ast from: callFnId :line :col name: "this" op: thisP
     tpId: zast.tableAdd :ast n: thisParam
-    cfm2: ast.nodes.getMut i: callFnId
-    if cfm2.functiondef then {
+    callFn: ast.nodes.getMut i: callFnId
+    if callFn.functiondef then {
         rest: ListVal zast.nodeid
         rest.append tpId
         i: u64
-        for i < cfm2.parameters.count loop {
-            pId: zast.kidAt kids: ast.kids span: cfm2.parameters :i
+        for i < callFn.parameters.count loop {
+            pId: zast.kidAt kids: ast.kids span: callFn.parameters :i
             i = i + 1
             rest.append pId
         }
-        cfm2.parameters = zast.kidsAdd kids: ast.kids xs: rest
+        callFn.parameters = zast.kidsAdd kids: ast.kids xs: rest
     }
 }
 
@@ -1237,9 +1237,9 @@ buildDeclaredCreate: function {
         asMerged: ListVal zast.nodeid
         i: u64
         for i < objc.asItems.count loop {
-            aId2: zast.kidAt kids: ast.kids span: objc.asItems :i
+            itemId: zast.kidAt kids: ast.kids span: objc.asItems :i
             i = i + 1
-            asMerged.append aId2
+            asMerged.append itemId
         }
         asMerged.append cmId
         objc.asItems = zast.kidsAdd kids: ast.kids xs: asMerged
@@ -1616,10 +1616,10 @@ lowerDeclared: function {
     # the suspension transform, on the body the author wrote
     newBodyId: promoteIterablesIdAt :ast :ctr oId: bodyId
     if newBodyId.isZero.not then {
-        cfm3: ast.nodes.getMut i: callFnId
-        if cfm3.functiondef then cfm3.body = newBodyId
+        callFn: ast.nodes.getMut i: callFnId
+        if callFn.functiondef then callFn.body = newBodyId
     }
-    bodyId2: callBodyIdOf :ast :callFnId
+    callBodyId: callBodyIdOf :ast :callFnId
     # one resume SLOT per suspension point and one counter per suspending loop,
     # counted by the SAME functions the emitter numbers its resume labels and
     # draws its counters with. An out-only generator has no slots: they hold the
@@ -1627,7 +1627,7 @@ lowerDeclared: function {
     yieldSlots: u64
     forSlots: u64
     {
-        body: ast.nodes.get i: bodyId2
+        body: ast.nodes.get i: callBodyId
         yieldSlots = zast.yieldCountOf :ast n: body
         forSlots = zast.suspendingForCountOf :ast n: body
         # `a: yield e` binds the value the NEXT call supplies. With no input

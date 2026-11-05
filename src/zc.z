@@ -2077,19 +2077,19 @@ main: function is {
         printUsage
         os.exit code: 2
     }
-    arg1: (argv.get i: 1).copy
+    firstArg: (argv.get i: 1).copy
     zv: zast.Vocab.create block: zcWord
-    w1: zv.slotOf text: arg1.stringView
+    w1: zv.slotOf text: firstArg.stringView
     dispatchHelpVerb :argv :n :zv w: w1
     dispatchToolVerb :argv :n w: w1 :zv
     sub: String
     subW: zv.none
     unitname: String
     if (isPipelineVerb w: w1) then {
-        sub = arg1.copy
+        sub = firstArg.copy
         subW = w1
     } else {
-        unitname = arg1.copy
+        unitname = firstArg.copy
     }
     isRun: subW == zcWord.slot.vRun
     cf: parseZcArgs :argv :n :zv sub: sub.stringView :unitname :isRun
@@ -2194,7 +2194,7 @@ compileUnit: function {
     # resolving a second time.
     tccDir: zcheck.resolveTccDir flagVal: cf.tccLibFlag.stringView
     ccMode: zcheck.pickCcMode modeFlag: cf.ccModeFlag.stringView
-    tParse0: os.monotonicMillis
+    parseStart: os.monotonicMillis
     rootCause: zcheck.missingRootCause systemdir: systemdir.stringView srcdirs: cf.srcdirs
     if rootCause.length > 0 then {
         io.eprintln "zc: \{rootCause}"
@@ -2213,7 +2213,7 @@ compileUnit: function {
     )
     p: zparser.Parser.create
     prog: p.parseShared :vfs :rootid mainUnitName: cf.unitname store: prelude
-    tParse1: os.monotonicMillis
+    parseEnd: os.monotonicMillis
     mfn: "\{cf.unitname.stringView}.z"
     mainFsno: vfs.walk parent: rootid name: mfn.stringView
     # a dump introspects the unit rather than building it, so it asks for no
@@ -2241,21 +2241,27 @@ compileUnit: function {
     reportTypeErrors :st :prog :vfs :mainFsno
     if mode.dumpcanon then {
         canonOut: zsqldump.dumpCanon program: prog symtab: st
-        tgt2: outTarget primary: "" fallback: cf.outPath.stringView
-        writeOut :zv target: tgt2.stringView content: canonOut.stringView what: "canonical dump"
+        canonTarget: outTarget primary: "" fallback: cf.outPath.stringView
+        (
+            writeOut
+            :zv
+            target: canonTarget.stringView
+            content: canonOut.stringView
+            what: "canonical dump"
+        )
         return
     }
     if mode.dumpsql then {
         sql: zsqldump.dumpSql program: prog :vfs symtab: st
-        tgt3: (
+        sqlTarget: (
             outTarget
             primary: cf.dumpSqlTarget.stringView
             fallback: cf.outPath.stringView
         )
-        writeOut :zv target: tgt3.stringView content: sql.stringView what: "SQL dump"
+        writeOut :zv target: sqlTarget.stringView content: sql.stringView what: "SQL dump"
         return
     }
-    ccReal0: ccRealPath name: ccPath.stringView
+    ccReal: ccRealPath name: ccPath.stringView
     users: (
         userImplementations
         :prog
@@ -2273,9 +2279,9 @@ compileUnit: function {
         :mainFsno
         :users
         :cf
-        ccFamily: (zcc.ccFamilyOf ccPath: ccReal0.stringView)
-        t0: tParse0
-        t1: tParse1
+        ccFamily: (zcc.ccFamilyOf ccPath: ccReal.stringView)
+        t0: parseStart
+        t1: parseEnd
         t2: checkStart
     )
     if mode.emitc then {
