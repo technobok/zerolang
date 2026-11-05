@@ -40398,10 +40398,20 @@ refuseValueBorrow: function {
     return true
 }
 
-# refuseNullValue -- `null` or `never` bound or assigned as a value, `vt` its
-# type: `null` has no value until a union or variant wraps it, and an
-# expression of type `never` does not finish, so there is nothing to bind.
-# true when it refused.
+# namesItsOwnType -- the value at `nid` is a bare name whose declaration, or the
+# alias it reached it through, declares its own type `vt`: the type itself
+# written as a value
+namesItsOwnType: function {st: zenv.ZSymbolTable.view nid: zast.nodeid vt: ztypes.tid} out bool is {
+    rd: (st.typing.refDecl.get key: nid).or d: ztypes.declid
+    if rd.isZero then return false
+    return (declTypeIdOf :st declId: rd) == vt
+}
+
+# refuseNullValue -- a value of type `null` or `never` bound or assigned, `vt`
+# its type: the type `null` written as a value has none until a union or
+# variant wraps it, any other expression typed `null` produces none, and one of
+# type `never` does not finish, so there is nothing to bind. True when it
+# refused.
 refuseNullValue: function {
     st: zenv.ZSymbolTable ast: Ast.view vt: ztypes.tid nid: zast.nodeid
 } out bool is {
@@ -40409,11 +40419,16 @@ refuseNullValue: function {
     vtt: st.reg.typetypeOf typeId: vt
     if vtt != ztypes.ztypetype.nullType when vtt != ztypes.ztypetype.neverType then return false
     vn: ast.nodes.get i: nid
-    nm: "'null' cannot be used as a value — null must be wrapped in a union or variant (eg. option.none)".string
-    w: 4.u32
+    nm: "the expression produces no value, so it cannot be used as one".string
+    hint: "a call to a function with no `out` produces none, and so does a block whose last line has none or that ends in `break`".string
+    w: 1.u32
     if vtt == ztypes.ztypetype.neverType then {
         nm = "a value of type 'never' cannot be bound -- the expression never finishes".string
-        w = 1
+        hint = String
+    } else if (namesItsOwnType :st :nid :vt) then {
+        nm = "'null' cannot be used as a value — null must be wrapped in a union or variant (eg. option.none)".string
+        hint = String
+        w = 4
     }
     (
         addErrorH
@@ -40424,7 +40439,7 @@ refuseNullValue: function {
         e: zast.err.typeError
         msg: nm
         note: String
-        hint: String
+        :hint
         width: w
     )
     return true
@@ -42477,7 +42492,10 @@ refuseLeavingArm: function {
 # payload type unchanged when there is nothing to wrap.
 #
 # A break-carrying do-block's value wraps in optionval (early exit =
-# none). A REFTYPE block value wraps in Option instead (boxed payload).
+# none). A REFTYPE block value wraps in Option instead (boxed payload). A block
+# whose last line has no value, or never finishes, is left only by its
+# `break` and has no value either: null, not `never`, since the code after
+# the block runs when it breaks.
 #
 # MATERIALISE THE PAYLOAD FIRST. The wrap mints a monomorphization keyed on
 # the payload type, and a literal one would key it on `intliteral` -- which
@@ -42492,61 +42510,42 @@ wrapDoBreakValue: function {
     donode: doref
     result: ztypes.tid
 } out ztypes.tid is {
-    # `result` is a borrowed parameter; the wrap replaces the type, so the
-    # rebinding happens in a local.
-    res: result
-    if res.isZero.not when (blockHasBreak :ast n: (ast.nodes.get i: donode.statement)) then {
-        mres0: materialiseLiteral :ast :st t: res
-        res = mres0
-        vtn0: st.reg.nameOf tid: res
-        payloadTid: res
-        if vtn0.length > 0 then {
-            # the system's own Option or optionval: by its well-known slot, so a
-            # user type spelled like one does not capture the value
-            wrapWk: zast.wellKnown.slot.tyOptionval
-            if (
-                typeIsReftype
-                :st
-                tid: payloadTid
-            ) then wrapWk = zast.wellKnown.slot.tyOption
-            ovo0: stdTidOpt :ast :st wk: wrapWk
-            match (
-                ovo0
-            ) case some then {
-                optionSubs: IdMapV zast.nameid v: ztypes.tid
-                ov0: payloadTid
-                # `ovo0` is whichever of Option / optionval the payload's
-                # family selected, and each names its own parameter. A zero
-                # id stages under the elided key, which getOrMintSpec rebinds
-                # to that same first parameter.
-                (
-                    optionSubs.set
-                    key: (
-                        firstGenericParamId
-                        :st
-                        templateId: ovo0
-                    )
-                    value: ov0
-                )
-                omn0: "_\{vtn0}"
-                vsF: IdMapV zast.nameid v: u64
-                omid0: (
-                    getOrMintSpec
-                    :st
-                    scope: st.curScope
-                    :ast
-                    :unitDecl
-                    sfx: omn0.stringView
-                    templateId: ovo0
-                    subs: optionSubs
-                    valSubs: vsF
-                    fallbackArg: ztypes.tid.zero
-                )
-                if omid0.isZero.not then res = omid0
-            } case none then null
-        }
+    if result.isZero then return result
+    if (blockHasBreak :ast n: (ast.nodes.get i: donode.statement)).not then return result
+    rtt: st.reg.typetypeOf typeId: result
+    if (rtt == ztypes.ztypetype.nullType) or (rtt == ztypes.ztypetype.neverType) then {
+        return st.typing.nullTypeId
     }
-    return res
+    payloadTid: materialiseLiteral :ast :st t: result
+    vtn0: st.reg.nameOf tid: payloadTid
+    if vtn0.length == 0 then return payloadTid
+    # the system's own Option or optionval: by its well-known slot, so a user
+    # type spelled like one does not capture the value
+    wrapWk: zast.wellKnown.slot.tyOptionval
+    if (typeIsReftype :st tid: payloadTid) then wrapWk = zast.wellKnown.slot.tyOption
+    ovo0: stdTidOpt :ast :st wk: wrapWk
+    if ovo0.none then return payloadTid
+    # `ovo0` is whichever of Option / optionval the payload's family selected,
+    # and each names its own parameter. A zero id stages under the elided key,
+    # which getOrMintSpec rebinds to that same first parameter.
+    optionSubs: IdMapV zast.nameid v: ztypes.tid
+    optionSubs.set key: (firstGenericParamId :st templateId: ovo0) value: payloadTid
+    omn0: "_\{vtn0}"
+    vsF: IdMapV zast.nameid v: u64
+    omid0: (
+        getOrMintSpec
+        :st
+        scope: st.curScope
+        :ast
+        :unitDecl
+        sfx: omn0.stringView
+        templateId: ovo0
+        subs: optionSubs
+        valSubs: vsF
+        fallbackArg: ztypes.tid.zero
+    )
+    if omid0.isZero then return payloadTid
+    return omid0
 }
 
 # checkDo -- walk a do-block: push the `block` scope, define break (an entry
@@ -56668,7 +56667,12 @@ checkGenericCall: function {
     calleeNodeId: nodeId n: (ast.nodes.get i: call.callable)
     setc2: mid
     stampGate :st nid: calleeNodeId tid: setc2
-    return ((methodReturnOf :st :mid).or d: ztypes.tid)
+    rt: methodReturnOf :st :mid
+    if rt.some then return rt
+    # a function with no `out` returns no value; one whose `out` the walk has
+    # not settled yet answers 0
+    if (st.typing.funcReturnNode.has key: funcId) then return ztypes.tid
+    return st.typing.nullTypeId
 }
 
 # subjectAtomName -- a match subject's bare-atom name (narrowing requires a
