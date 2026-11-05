@@ -1,7 +1,8 @@
 # ZTyping -- the typecheck-output container.
 #
-# The parser produces a frozen zast.Program; the type checker consumes it
-# and produces a ZTyping: every typecheck-derived datum the downstream
+# The parser produces a zast.Program; the type checker consumes it --
+# appending an instance's clone of a template body, and rewriting a bare read
+# that is a call into the call -- and produces a ZTyping: every typecheck-derived datum the downstream
 # consumers (emitter, SQL dumper) read. It is the data module, kept apart
 # from the producer the way zast is kept apart from zparser, and it
 # references ztypes.z for ZType and the shared enums.
@@ -406,7 +407,7 @@ monostamp: record {
 }
 
 # destroyitem -- one variable a destroy point destroys, in the state the walk
-# reached it in there (D3): 0 it holds its value, 1 it was moved on every path
+# reached it in there: 0 it holds its value, 1 it was moved on every path
 # to the point, 2 it was moved on some path and not others.
 destroyitem: record {
     # the variable
@@ -643,7 +644,7 @@ PinPath: class {
 
 # the typing side-tables: every typecheck stamp keyed by AST node id
 # (types, monomorphisations, lock overlays) plus the declaration tree, kept
-# separate from the frozen AST so the tree is never mutated.
+# beside the AST rather than in its rows.
 ZTyping: class {
     # typecheck-synthesised AST rows, the per-run `_t` temp-name counter,
     # and the current `unit.def` dump label the body walk maintains.
@@ -1086,7 +1087,7 @@ ZTyping: class {
     # list: a zero-argument call written as a read
     autoCallNodes: IdSet zast.nodeid
     # the checker's own temporary a statement's discarded value is held in until
-    # the statement ends (D4), keyed by the value's node: a fresh owned result
+    # the statement ends, keyed by the value's node: a fresh owned result
     # nothing receives
     discardTemp: (IdMapV zast.nodeid v: ztypes.vid)
     # the blocks whose last line's value nothing receives: a function body, and
@@ -1116,7 +1117,7 @@ ZTyping: class {
     # (it may not be in scope at a yield), nor a `yield` value (it lives in the
     # resume slot)
     genLocalFieldOf: (IdMapV ztypes.vid v: zast.nameid)
-    # --- destruction (D3, D4, D5) ---
+    # --- destruction ---
     # every destroy point's items, run after run
     destroyItems: ListVal destroyitem
     # what the fall-through end of a scope destroys, keyed by the node the scope
@@ -1126,11 +1127,11 @@ ZTyping: class {
     # what an exit destroys before it leaves, keyed by its node: a `return` the
     # owned locals of every scope it leaves but the one it returns, a `break` or
     # a `continue` those of every scope inside its loop, a `.drop` the local it
-    # drops and a reassignment the local's old value (D5)
+    # drops and a reassignment the local's old value
     exitDestroy: (IdMapV zast.nodeid v: destroyrange)
     # the variables a destroy point sees maybe moved: a move of one of them
     # zeroes what it moved out of, so the destroy that runs anyway frees
-    # nothing (D3)
+    # nothing
     zeroOnMove: IdSet ztypes.vid
     # the checker's own temporaries: the emitter still decides WHEN each one
     # dies, so `scopeDestroy` does not list them (ownsDestroy). What a scope
@@ -2122,11 +2123,9 @@ ZTyping: class {
     # destructor frees it, whether the struct holds it by pointer, and whether
     # a write through it takes the container exclusively.
     #
-    # Read off the MEMBER's own ownership, which is where a field's marker was
-    # already recorded. The owning type used to name a single member as "the"
-    # lock field instead -- one slot, unguarded, last writer wins -- so a type
-    # with two non-owned fields remembered only the last and freed the rest.
-    # Nothing in the tree had two until a generator could declare them.
+    # Read off the MEMBER's own ownership, which is where a field's marker is
+    # recorded: a type may have several non-owned fields, and one slot naming
+    # "the" lock field would remember only the last and free the rest.
     #
     # `noneMode` is NOT non-owned here: on a field it means unmarked, which is
     # owned. The same slot means "borrows by default" on a PARAMETER, so the
