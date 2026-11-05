@@ -2073,6 +2073,9 @@ typeAsMemberTid: function {
         recordGenericParamRef :st :nid scope: tdecl name: nameId
         return (genericParamTidMint :st :ast :tdecl :nameId)
     }
+    # a `:x` shorthand names x as it is named outside the declaration it makes,
+    # which is the one member of that name
+    if nid.isZero.not when (ast.nodes.get i: nid).labelvalue then return ztypes.tid.zero
     md: st.typing.declFindChild parentDeclId: tdecl :nameId
     if md.isZero then return ztypes.tid.zero
     at: asAliasTargetOf :st :ast :tdecl :md
@@ -2106,17 +2109,57 @@ memberStopsTypeName: function {
     tdecl: ztypes.declid
     md: ztypes.declid
 } out bool is {
-    if (st.typing.decls.get i: md).kind.methodDecl then return false
-    if (asMemberIsAsItem :st :ast :tdecl :md).not then return false
     if (asMemberIsAlias :st :ast :tdecl :md) then return false
     item: argRefAt :ast nid: (st.typing.decls.get i: md).node
+    if item.operation.isZero.not when (zast.isGenericParamOp :ast opId: item.operation
+    ) then return false
+    return true
+}
+
+# memberKindPhrase -- what the member `md` of the type declared by `tdecl` is,
+# as a refusal names it: a method, a field, an arm, an implementation or a
+# constant.
+memberKindPhrase: function {
+    st: zenv.ZSymbolTable
+    ast: Ast
+    tdecl: ztypes.declid
+    md: ztypes.declid
+} out String is {
+    if (st.typing.decls.get i: md).kind.methodDecl then return "a method".string
+    item: argRefAt :ast nid: (st.typing.decls.get i: md).node
+    if (asMemberIsAsItem :st :ast :tdecl :md) then {
+        if item.operation.isZero.not when (zast.implementBaseOf :ast opId: item.operation
+        ).isZero.not then return "an implementation".string
+        if item.operation.isZero.not when (ast.nodes.get i: item.operation).functiondef then {
+            return "a method".string
+        }
+        return "a constant".string
+    }
+    if (st.reg.typetypeOf typeId: (declTypeIdOf :st declId: tdecl)
+    ).isSum then return "an arm".string
+    return "a field".string
+}
+
+# memberFailedWhereWritten -- the member `md` of the type declared by `tdecl`
+# has no definition to stand for, and its own refusal says why: an `as`
+# constant whose value does not fold, or a member whose value was refused
+# where it is written. That report stands for every use of the member.
+memberFailedWhereWritten: function {
+    st: zenv.ZSymbolTable
+    ast: Ast
+    tdecl: ztypes.declid
+    md: ztypes.declid
+} out bool is {
+    item: argRefAt :ast nid: (st.typing.decls.get i: md).node
     if item.operation.isZero then return false
-    if (zast.isGenericParamOp :ast opId: item.operation) then return false
-    if (ast.nodes.get i: item.operation).functiondef then return false
-    # only a value stops it: a constant that does not fold says why where it is
-    # written (attachAsConstant), and that report stands for every use of it
+    if (st.typing.refusedValues.has item: item.operation) then return true
+    if (asMemberIsAsItem :st :ast :tdecl :md).not then return false
+    if (st.typing.decls.get i: md).kind.methodDecl then return false
+    # an implementation holds no value either, and is refused as what it is
+    if (zast.implementBaseOf :ast opId: item.operation).isZero.not then return false
+    # a constant that does not fold says why where it is written (attachAsConstant)
     constFoldDecl :ast :st declId: md
-    return (constValueOfDecl :st declId: md).kind.none.not
+    return (constValueOfDecl :st declId: md).kind.none
 }
 
 # refuseMemberAsType -- E0100 at the type-ref `nid` that names the `as` member
@@ -2130,17 +2173,15 @@ refuseMemberAsType: function {
     md: ztypes.declid
     nid: zast.nodeid
 } is {
-    what: "a constant".string
     dname: (st.typing.decls.get i: md).name
-    {
-        item: argRefAt :ast nid: (st.typing.decls.get i: md).node
-        if (zast.implementBaseOf :ast opId: item.operation
-        ).isZero.not then what = "an implementation".string
-    }
+    # a member whose own definition failed said why where it is written, and
+    # that report stands for every use of it
+    quiet: memberFailedWhereWritten :st :ast :tdecl :md
+    what: memberKindPhrase :st :ast :tdecl :md
     nn: zast.nameTextAt :ast ref: dname
     tn: zast.nameTextAt :ast ref: (st.typing.decls.get i: tdecl).name
     n: ast.nodes.get i: nid
-    (
+    if quiet.not then (
         addErrorH
         :st
         nodeid: nid
@@ -2629,6 +2670,12 @@ aliasOrShellTypeId: function {
     return (st.reg.newType name: nT9.stringView typetype: ztypes.ztypetype.recordType)
 }
 
+# nodeRefused -- the type-ref node `nid` was refused where it is written
+nodeRefused: function {st: zenv.ZSymbolTable.view nid: zast.nodeid} out bool is {
+    if nid.isZero then return false
+    return (st.typing.refusedValues.has item: nid)
+}
+
 # resolveNamedTypeId -- resolveNamedType by the name's id. The spelling is read
 # through a block-scoped borrow where a literal is classified, and copied only
 # where a type is minted or declared under it.
@@ -2660,7 +2707,8 @@ resolveNamedTypeId: function {
         :thisName
         :nid
     )
-    if gp7.isZero.not then return gp7
+    # a name refused as the member it names has no type of that spelling either
+    if gp7.isZero.not or (nodeRefused :st :nid) then return gp7
     site7: definingSiteForId :st :scope :ast :unitDecl :nameId
     duo7: site7.defUnit
     if duo7.isZero then {
@@ -3705,7 +3753,7 @@ recordResolvedName: function {
                     enclK: declOfUnitDef :st :scope :unitDecl nameId: (nameIdOf :ast name: thisName)
                     if (st.reg.isGenericParamOf tdecl: enclK name: gpnr) then {
                         gskip = true
-                    } else if (st.typing.asTypeShapedNames.has item: gpnr) when (
+                    } else if (ast.nodes.get i: nid).labelvalue.not when (
                         st.typing.declFindChild
                         parentDeclId: enclK
                         nameId: gpnr
@@ -5473,13 +5521,14 @@ recordDottedTyperef: function {
         )
         if qro.isZero.not then qfr = qualifiedMemberScope :st unitRoot: qro memberId: cnId
         udQ: unitDeclOfNameOrOwn :st :scope nameId: pnId
+        # the member is the unit's: the type the ref is written in has no say
         (
             recordResolvedName
             :st
             :scope
             :ast
             unitDecl: udQ
-            :thisName
+            thisName: ""
             nameId: cnId
             :nid
             recScope: qfr
@@ -10101,7 +10150,24 @@ reportAsMemberNotConstant: function {
     vnId = bareAtomNameId n: vn
     ln = nodeLine n: vn
     co = nodeCol n: vn
-    if vnId.isZero or (vnId == item.name) then return false
+    if vnId.isZero then return false
+    # its own name: the nearest declaration is the item being made
+    if vnId == item.name then {
+        sn: zast.nameTextAt :ast ref: vnId
+        (
+            addErrorH
+            :st
+            nodeid: item.operation
+            lineno: ln
+            colno: co
+            e: zast.err.constError
+            msg: "'\{sn}' is defined in terms of itself"
+            note: "".string
+            hint: "a definition's value may not name the definition; the shorthand `:\{sn}` names `\{sn}` as it is named outside it"
+            width: sn.length.u32.orPanic
+        )
+        return true
+    }
     ownDecl: declOfTypeId :st tid: parentId
     if (st.typing.declFindChild parentDeclId: ownDecl nameId: vnId).isZero then return false
     vt: zast.nameTextAt :ast ref: vnId
@@ -11045,8 +11111,7 @@ asItemIsNoMarker: function {
     itemDecl: st.typing.declMemberIdOf parentTypeId: ptid nameId: item
     if (st.typing.isAsConstDecl declId: itemDecl) then return true
     vnId: bareAtomNameId n: (ast.nodes.get i: op)
-    # `tag: tag` names the tag type, not the item itself
-    if vnId.isZero or (vnId == item) then return false
+    if vnId.isZero then return false
     ownDecl: declOfTypeId :st tid: ptid
     return (st.typing.declFindChild parentDeclId: ownDecl nameId: vnId).isZero.not
 }
@@ -13323,6 +13388,10 @@ fieldHeadMemberTid: function {
             forceMemberDecl :st :ast memberDeclId: md
         }
     }
+    hmd: st.typing.declMemberIdOf parentTypeId: ownerTid :nameId
+    if hmd.isZero or (st.typing.decls.get i: hmd).kind.methodDecl.not then {
+        return (optionval.none ztypes.tid)
+    }
     markMemberUsed :st :ownerTid :nameId
     return (
         resolvedByIdsMember
@@ -13332,6 +13401,46 @@ fieldHeadMemberTid: function {
         defId: (zast.poolFind pool: ast.names text: defName)
         memberId: nameId
     )
+}
+
+# refuseSelfNamedMember -- a field or an arm whose value starts with its own
+# name (`nodeid: nodeid`, `k: k.view`): the nearest declaration of a name is
+# the one being made, so the value names the member itself, which is no type.
+# The `:nodeid` shorthand says what was meant -- the name as it is named
+# outside the declaration. True when it refused.
+refuseSelfNamedMember: function {
+    st: zenv.ZSymbolTable
+    ast: Ast
+    ownerTid: ztypes.tid
+    fm: argref
+} out bool is {
+    if fm.operation.isZero then return false
+    vn: ast.nodes.get i: fm.operation
+    head: zast.nameid
+    if vn.atomid then head = atomNameId :ast n: (ast.nodes.get i: fm.operation)
+    if vn.dottedpath then head = rootNameIdOf :ast n: (ast.nodes.get i: fm.operation)
+    if head.isZero then return false
+    if head != fm.name then return false
+    od: declOfTypeId :st tid: ownerTid
+    md: st.typing.declFindChild parentDeclId: od nameId: fm.name
+    what: "a field".string
+    if md.isZero.not then what = memberKindPhrase :st :ast tdecl: od :md
+    nn: zast.nameTextAt :ast ref: fm.name
+    tn: st.reg.nameOf tid: ownerTid
+    (
+        addErrorH
+        :st
+        nodeid: fm.operation
+        lineno: (nodeLine n: (ast.nodes.get i: fm.operation))
+        colno: (nodeCol n: (ast.nodes.get i: fm.operation))
+        e: zast.err.typeError
+        msg: "'\{nn}' is \{what} of '\{tn}', not a type"
+        note: "".string
+        hint: "the shorthand `:\{nn}` names the type `\{nn}` as it is named outside the declaration"
+        width: nn.length.u32.orPanic
+    )
+    st.typing.refusedValues.add item: fm.operation
+    return true
 }
 
 # attachRecordField -- an isItem that is not a method is a FIELD: resolve its
@@ -13348,6 +13457,7 @@ attachRecordField: function {
     fname: StringView
 } is {
     if (refuseStringDefault :st :ast what: "field" nameId: fm.name :fm) then return
+    refuseSelfNamedMember :st :ast ownerTid: rid :fm
     refuseMarkedFunctionType :st :ast :unitDecl :scope typeNid: fm.operation
     ftnR: fieldHeadNameId :ast n: (ast.nodes.get i: fm.operation)
     # a field's type-ref can name a SIBLING function (an fn-ptr
@@ -14452,6 +14562,7 @@ resolveVariant: function {
                 payload: armPayloadV
             )
             if armBadV then continue
+            if (refuseSelfNamedMember :st :ast ownerTid: variantTid :fm) then continue
             # an arm over the variant's own parameter (`(Cell t: t)`) is a
             # partial, as a field's is
             cid: (
@@ -14859,6 +14970,22 @@ unionCustomTagOfArm: function {
 } out tagsource is {
     none: tagsource row: 0 decl: ztypes.declid
     if am.name != zast.wellKnown.slot.wkTag then return none
+    # `tag: tag` names the item being made; `:tag` names the system's tag
+    if (bareAtomNameId n: (ast.nodes.get i: am.operation)) == zast.wellKnown.slot.wkTag then {
+        (
+            addErrorH
+            :st
+            nodeid: am.operation
+            lineno: am.lineno
+            colno: am.colno
+            e: zast.err.constError
+            msg: "'tag' is defined in terms of itself".string
+            note: "".string
+            hint: "a definition's value may not name the definition; the shorthand `:tag` names `tag` as it is named outside it".string
+            width: 3
+        )
+        return none
+    }
     pnId: zast.nameid
     baseId: zast.nodeid
     {
@@ -15239,7 +15366,8 @@ attachUnionArm: function {
         oId: armTe
         thisName: defName
     )
-    if armTe != fm.operation when (typeIsValtype :st tid: cid).not then {
+    # a payload refused where it is written has no type to judge
+    if armTe != fm.operation when cid.isZero.not when (typeIsValtype :st tid: cid).not then {
         bxw: atomName :ast n: (ast.nodes.get i: armTe)
         mbx: "'\{bxw}' is already a reftype; a union arm holds it directly -- drop the Box"
         (
@@ -15454,6 +15582,8 @@ resolveUnion: function {
                 :fm
             )
             if armBadU then continue
+            if (refuseSelfNamedMember :st :ast ownerTid: (declTypeIdOf :st declId: uDecl) :fm
+            ) then continue
             (
                 attachUnionArm
                 :st
@@ -16603,6 +16733,7 @@ resolveClassFieldEntry: function {
         nameId: fm.name
         :fm
     ) then return false
+    refuseSelfNamedMember :st :ast ownerTid: cid :fm
     ftn: fieldHeadNameId :ast n: (ast.nodes.get i: fm.operation)
     # A NON-OWNED field marker (lock / borrow / view) makes the
     # slot static: it is set in the constructor, never reassigned,
@@ -24002,14 +24133,14 @@ stampAliasRef: function {
 } out bool is {
     ao: (st.typing.aliasRefOwner.get key: uk).or d: ztypes.declid
     if ao.isZero then return false
-    aot: (
-        asAliasTargetOf
-        :st
-        :ast
-        tdecl: ao
-        md: (st.typing.declFindChild parentDeclId: ao nameId: pval)
-    )
-    if aot.isZero then return false
+    amd: st.typing.declFindChild parentDeclId: ao nameId: pval
+    aot: asAliasTargetOf :st :ast tdecl: ao md: amd
+    if aot.isZero then {
+        # the nearest declaration of the name is a member that is no type
+        if amd.isZero or (memberStopsTypeName :st :ast tdecl: ao md: amd).not then return false
+        refuseMemberAsType :st :ast tdecl: ao md: amd nid: uk
+        return true
+    }
     stampResolvedTyperef :st :ast nid: uk :pval :origin tid: aot
     return true
 }
@@ -48269,6 +48400,21 @@ coerceArgToParam: function {
     if wasPos then coercePositionalArg :st :ast :effId :vt :pnId :arg
 }
 
+# fieldRefusedWhereWritten -- `label` is a FIELD of `owner` whose type-ref was
+# refused where it is written (memberTyperefRefused): still the type's field
+fieldRefusedWhereWritten: function {
+    st: zenv.ZSymbolTable.view
+    ast: Ast.view
+    owner: ztypes.tid
+    label: zast.nameid
+} out bool is {
+    if owner.isZero then return false
+    md: declMemberOf :st ownerTid: owner nameId: label
+    if md.isZero then return false
+    if (asMemberIsAsItem :st :ast tdecl: (declOfTypeId :st tid: owner) :md) then return false
+    return (memberTyperefRefused :st :ast bt: owner nameId: label)
+}
+
 # reportUnknownArgument -- a label the callee has no parameter for, with the
 # closest name it does have as the hint.
 reportUnknownArgument: function {
@@ -48278,6 +48424,12 @@ reportUnknownArgument: function {
     label: zast.nameid
     arg: argref
 } is {
+    # a member refused where it is written is still the type's, as written:
+    # naming it is no second error -- a construction names it through the
+    # type's `create`, whose parameters are the type's fields
+    if (fieldRefusedWhereWritten :st :ast owner: ownerTid :label) then return
+    if (fieldRefusedWhereWritten :st :ast owner: (st.reg.ownerTidOf tid: ownerTid) :label
+    ) then return
     pn: zast.nameTextAt :ast ref: label
     m: "unknown argument '\{pn}'"
     sug: suggestSimilar :ast :st parentTypeId: ownerTid name: pn.stringView
