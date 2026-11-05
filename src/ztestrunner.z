@@ -225,24 +225,24 @@ dumpArgv: function {
 # because a missing library the libc happens to supply looks like success.
 zlinkArgs: function {csrc: StringView fam: zcc.ccfamily} out List String is {
     words: zast.Vocab.create block: runnerWord
-    flags9k: List String
-    txt9k: slurp path: csrc
-    if txt9k.length == 0 then return flags9k
-    end9k: txt9k.length
-    if end9k > 512 then end9k = 512
-    head9k: txt9k.stringView.substring from: 0 to: end9k
-    for each line9k: (head9k.split sep: "\n") loop {
-        if (line9k.startsWith prefix: "/* zlink:") then {
-            seen9k: false
-            for each tok9k: (line9k.split sep: " ") loop {
-                tw9k: words.slotOf text: tok9k
-                if tw9k == runnerWord.slot.zlinkClose then seen9k = false
-                if seen9k then flags9k.append from: (zcc.libraryArg f: fam name: tok9k)
-                if tw9k == runnerWord.slot.zlinkOpen then seen9k = true
+    flags: List String
+    text: slurp path: csrc
+    if text.length == 0 then return flags
+    end: text.length
+    if end > 512 then end = 512
+    head: text.stringView.substring from: 0 to: end
+    for each line: (head.split sep: "\n") loop {
+        if (line.startsWith prefix: "/* zlink:") then {
+            seen: false
+            for each token: (line.split sep: " ") loop {
+                word: words.slotOf text: token
+                if word == runnerWord.slot.zlinkClose then seen = false
+                if seen then flags.append from: (zcc.libraryArg f: fam name: token)
+                if word == runnerWord.slot.zlinkOpen then seen = true
             }
         }
     }
-    return flags9k
+    return flags
 }
 
 # withZlink -- `argv` with the objects of the C sources `csrc` declares
@@ -255,11 +255,11 @@ zlinkArgs: function {csrc: StringView fam: zcc.ccfamily} out List String is {
 withZlink: function {argv: (List String).take csrc: StringView zc: StringView} out List String is {
     fam: zcc.ccfamily.other
     if argv.length > 0 then fam = zcc.ccFamilyOf ccPath: (argv.get i: 0).stringView
-    ob9m: cobjArgs :argv :csrc :zc
-    if ob9m.length > 0 then argv = withObjects :argv :csrc objs: ob9m :fam
-    zl9m: zlinkArgs :csrc :fam
-    for each zf9m: zl9m loop {
-        argv.append from: zf9m.copy
+    objects: cobjArgs :argv :csrc :zc
+    if objects.length > 0 then argv = withObjects :argv :csrc objs: objects :fam
+    linkArgs: zlinkArgs :csrc :fam
+    for each linkFlag: linkArgs loop {
+        argv.append from: linkFlag.copy
     }
     return argv
 }
@@ -276,10 +276,10 @@ withObjects: function {
     cArg: csrc.string
     if fam.msvc then cArg = zcc.msvcPath p: csrc
     r: List String
-    for each a9m: argv loop {
-        r.append from: a9m.copy
-        if a9m == cArg then {
-            for each o9m: objs loop r.append from: (familyPath :fam p: o9m.stringView)
+    for each arg: argv loop {
+        r.append from: arg.copy
+        if arg == cArg then {
+            for each obj: objs loop r.append from: (familyPath :fam p: obj.stringView)
         }
     }
     return r
@@ -339,11 +339,11 @@ cobjArgs: function {argv: (List String).view csrc: StringView zc: StringView} ou
 # .err golden, the way a run case names its program's argv in <name>.args.
 # An absent file reads as empty, since slurp returns "" for an unreadable path.
 withExtraArgs: function {argv: (List String).take file: StringView} out List String is {
-    ac9x: slurp path: file
-    acv9x: ac9x.stringView
-    for each ln9x: acv9x.lines loop {
-        if ln9x.length > 0 then {
-            argv.append from: ln9x.string
+    argsText: slurp path: file
+    argsView: argsText.stringView
+    for each line: argsView.lines loop {
+        if line.length > 0 then {
+            argv.append from: line.string
         }
     }
     return argv
@@ -448,8 +448,8 @@ ccArgv: function {
     if fam.msvc then return (msvcArgv :cc :ccflags :bin :csrc)
     a: List String
     a.append from: cc.string
-    for each cf9g: (ccflags.split sep: " ") loop {
-        if cf9g.length > 0 then a.append from: cf9g.string
+    for each ccFlag: (ccflags.split sep: " ") loop {
+        if ccFlag.length > 0 then a.append from: ccFlag.string
     }
     if asan then {
         if (usesBoundsChecker ccPath: cc) then {
@@ -485,7 +485,7 @@ ccArgv: function {
     # not tcc's: its runtime is always linked in, and under -static it would
     # take libraries only as archives, never through its .def import lists
     if windows when fam.tcc.not then a.append from: "-static".string
-    for each of9h: (zcc.outputArgs f: fam exe: bin) loop a.append from: of9h.copy
+    for each outArg: (zcc.outputArgs f: fam exe: bin) loop a.append from: outArg.copy
     a.append from: csrc.string
     if windows.not then a.append from: "-lm".string
     return a
@@ -580,12 +580,12 @@ mkStep: function {
 # stepArgv -- a step's argv as spawned: the link flags its C declares are
 # resolved now, because the C is written by an earlier step of this pipeline.
 stepArgv: function {step: PoolStep.view} out List String is {
-    a9n: List String
-    for each e9n: step.argv loop {
-        a9n.append from: e9n.copy
+    args: List String
+    for each arg: step.argv loop {
+        args.append from: arg.copy
     }
-    if step.zlinkFrom.length == 0 then return a9n
-    return (withZlink argv: a9n csrc: step.zlinkFrom.stringView zc: step.zc.stringView)
+    if step.zlinkFrom.length == 0 then return args
+    return (withZlink argv: args csrc: step.zlinkFrom.stringView zc: step.zc.stringView)
 }
 
 # PoolJob -- a test case's sequential spawn pipeline (immutable; the
@@ -1939,7 +1939,7 @@ runRunCases: function {r: Runner} is {
                 if r.exec.length > 0 then {
                     under: List String
                     under.append from: r.exec.copy
-                    for each a9e: ba loop under.append from: a9e.copy
+                    for each arg: ba loop under.append from: arg.copy
                     ba = under.take
                 }
                 steps.append (
@@ -2299,26 +2299,26 @@ lspRelative: function {text: StringView uris: LspUris.view} out String is {
 # line. Keyed by family and not by name alone because the two sanitizers do not
 # measure the same thing: see isLeak.
 knownLeakers: function {root: StringView kind: StringView} out List String is {
-    out9k: List String
-    p9k: "\{root}/tests/known-leaks.txt"
-    txt9k: slurp path: p9k.stringView
-    suffix9k: " (\{kind})"
-    for each ln9k: txt9k.stringView.lines loop {
-        if ln9k.length > 0 when (ln9k.startsWith prefix: "#").not when (
-            ln9k.endsWith
-            suffix: suffix9k
+    names: List String
+    path: "\{root}/tests/known-leaks.txt"
+    text: slurp path: path.stringView
+    suffix: " (\{kind})"
+    for each line: text.stringView.lines loop {
+        if line.length > 0 when (line.startsWith prefix: "#").not when (
+            line.endsWith
+            :suffix
         ) then {
-            nm9k: ln9k.substring from: 0 to: ln9k.length - suffix9k.length
-            out9k.append from: nm9k.string
+            name: line.substring from: 0 to: line.length - suffix.length
+            names.append from: name.string
         }
     }
-    return out9k
+    return names
 }
 
 # listHas -- whether `names` contains `n`.
 listHas: function {names: (List String).view n: StringView} out bool is {
-    for each e9h: names loop {
-        if e9h.stringView == n then return true
+    for each entry: names loop {
+        if entry.stringView == n then return true
     }
     return false
 }
@@ -2332,7 +2332,7 @@ buildAndRunProbe: function {
     bin: StringView
     err: StringView
 } out bool is {
-    ga9b: (
+    genArgs: (
         ccArgv
         cc: r.cc.stringView
         ccflags: r.ccflags.stringView
@@ -2341,25 +2341,25 @@ buildAndRunProbe: function {
         :csrc
         asan: true
     )
-    bc9b: (
+    buildArgs: (
         os.spawn
-        argv: ga9b
+        argv: genArgs
         cwd: ""
         outPath: os.nullDevice.stringView
         errPath: err
         timeoutSecs: 0
     )
-    if bc9b != 0 then {
-        ce9b: slurp path: err
+    if buildArgs != 0 then {
+        compileErr: slurp path: err
         print "FAIL(leak) sanitizer-probe: '\{r.cc.stringView}' cannot build a sanitized program"
-        print "\{ce9b.stringView}"
+        print "\{compileErr.stringView}"
         return false
     }
-    ra9b: List String
-    ra9b.append from: bin.string
+    runArgs: List String
+    runArgs.append from: bin.string
     (
         os.spawn
-        argv: ra9b
+        argv: runArgs
         cwd: r.tmp.stringView
         outPath: os.nullDevice.stringView
         errPath: err
@@ -2401,9 +2401,9 @@ proveSanitizer: function {r: Runner bounds: bool kind: StringView} out bool is {
     }
     # the pointer leaves through a file-scope sink and is then cleared, so the
     # block is unreachable at exit however the stack happens to be laid out.
-    head9p: "#include <stdlib.h>\nstatic void *sink;\n"
-    leakSrc: "\{head9p}static void bleed(void) { void *p = malloc(1024); sink = p; }\nint main(void) { bleed(); sink = 0; return 0; }\n"
-    cleanSrc: "\{head9p}static void hold(void) { void *p = malloc(1024); sink = p; }\nint main(void) { hold(); free(sink); sink = 0; return 0; }\n"
+    header: "#include <stdlib.h>\nstatic void *sink;\n"
+    leakSrc: "\{header}static void bleed(void) { void *p = malloc(1024); sink = p; }\nint main(void) { bleed(); sink = 0; return 0; }\n"
+    cleanSrc: "\{header}static void hold(void) { void *p = malloc(1024); sink = p; }\nint main(void) { hold(); free(sink); sink = 0; return 0; }\n"
     w0: io.writeText path: lcp content: leakSrc
     match (
         w0
@@ -2420,10 +2420,10 @@ proveSanitizer: function {r: Runner bounds: bool kind: StringView} out bool is {
     }
     # the probe has to run under the SAME environment the pool will, or it
     # measures a differently-configured tool than the one it is vouching for.
-    ek9p: sanEnvKey :bounds
-    ev9p: sanEnvValue :bounds
-    os.setEnv key: ek9p.stringView value: ev9p.stringView
-    ok9p: true
+    envKey: sanEnvKey :bounds
+    envValue: sanEnvValue :bounds
+    os.setEnv key: envKey.stringView value: envValue.stringView
+    proven: true
     if (
         buildAndRunProbe
         :r
@@ -2431,7 +2431,7 @@ proveSanitizer: function {r: Runner bounds: bool kind: StringView} out bool is {
         bin: lbp.stringView
         err: lep.stringView
     ).not then {
-        os.unsetEnv key: ek9p.stringView
+        os.unsetEnv key: envKey.stringView
         return false
     }
     if (
@@ -2441,36 +2441,36 @@ proveSanitizer: function {r: Runner bounds: bool kind: StringView} out bool is {
         bin: cbp.stringView
         err: cep.stringView
     ).not then {
-        os.unsetEnv key: ek9p.stringView
+        os.unsetEnv key: envKey.stringView
         return false
     }
     if (buildAndRunProbe :r csrc: obp.stringView bin: obb.stringView err: obe.stringView).not then {
-        os.unsetEnv key: ek9p.stringView
+        os.unsetEnv key: envKey.stringView
         return false
     }
-    os.unsetEnv key: ek9p.stringView
-    dirty9p: slurp path: lep.stringView
-    clean9p: slurp path: cep.stringView
-    if (isLeak :bounds s: dirty9p.stringView).not then {
+    os.unsetEnv key: envKey.stringView
+    dirtyOut: slurp path: lep.stringView
+    cleanOut: slurp path: cep.stringView
+    if (isLeak :bounds s: dirtyOut.stringView).not then {
         print "FAIL(leak) sanitizer-probe: '\{r.cc.stringView}' (\{kind}) did not report a deliberate 1 KB leak"
         print "  the leak verdicts below would have been about a check that never ran"
-        ok9p = false
+        proven = false
     }
-    if (isLeak :bounds s: clean9p.stringView) then {
+    if (isLeak :bounds s: cleanOut.stringView) then {
         print "FAIL(leak) sanitizer-probe: '\{r.cc.stringView}' (\{kind}) reports a leak for a program with none"
-        ok9p = false
+        proven = false
     }
-    past9p: slurp path: obe.stringView
-    if (isUnsafe :bounds s: past9p.stringView).not then {
+    pastOut: slurp path: obe.stringView
+    if (isUnsafe :bounds s: pastOut.stringView).not then {
         print "FAIL(leak) sanitizer-probe: '\{r.cc.stringView}' (\{kind}) did not report a read past a static array"
         print "  the unsafe verdicts below would miss one"
-        ok9p = false
+        proven = false
     }
-    if (isUnsafe :bounds s: clean9p.stringView) then {
+    if (isUnsafe :bounds s: cleanOut.stringView) then {
         print "FAIL(leak) sanitizer-probe: '\{r.cc.stringView}' (\{kind}) reports unsafe memory for a program with none"
-        ok9p = false
+        proven = false
     }
-    return ok9p
+    return proven
 }
 
 # runLeakCases -- the LEAK cases kind.
@@ -3544,39 +3544,39 @@ addSelfhostJob: function {
     # the mode arrives as a bool and the spellings are produced from it, never
     # compared against it: a literal compare here would cost the A001 ratchet,
     # and one composed path would cost A002.
-    ep9s: "\{r.tmp.stringView}/SA1_\{name}.err"
-    if dumpMode then ep9s = "\{r.tmp.stringView}/SA2_\{name}.err"
-    mn9s: "emit-c".string
-    if dumpMode then mn9s = "dump-sql".string
-    a9s: List String
-    a9s.append from: zcaB.string
-    a9s.append from: name.string
-    a9s.append from: "--src".string
-    a9s.append from: srcdir.string
-    a9s.append from: "--system".string
-    a9s.append from: r.sys.copy
+    errPath: "\{r.tmp.stringView}/SA1_\{name}.err"
+    if dumpMode then errPath = "\{r.tmp.stringView}/SA2_\{name}.err"
+    mode: "emit-c".string
+    if dumpMode then mode = "dump-sql".string
+    args: List String
+    args.append from: zcaB.string
+    args.append from: name.string
+    args.append from: "--src".string
+    args.append from: srcdir.string
+    args.append from: "--system".string
+    args.append from: r.sys.copy
     if dumpMode then {
-        a9s.append from: "--dump-sql".string
-        a9s.append from: "-".string
+        args.append from: "--dump-sql".string
+        args.append from: "-".string
     } else {
-        a9s.append from: "--emit-c".string
-        a9s.append from: os.nullDevice
+        args.append from: "--emit-c".string
+        args.append from: os.nullDevice
     }
-    st9s: List PoolStep
-    st9s.append (
+    steps: List PoolStep
+    steps.append (
         mkStep
-        argv: a9s
+        argv: args
         cwd: ""
         outPath: os.nullDevice.stringView
-        errPath: ep9s.stringView
+        errPath: errPath.stringView
         timeoutSecs: r.timeoutSecs
         allowFail: true
         zlinkFrom: ""
     )
-    pool.append (mkJob :name steps: st9s)
+    pool.append (mkJob :name :steps)
     names.append from: name.string
-    modes.append from: mn9s
-    errs.append from: ep9s
+    modes.append from: mode
+    errs.append from: errPath
 }
 
 # selfhostVerdict -- judge one sanitized run of the compiler over one unit.

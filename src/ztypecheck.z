@@ -843,11 +843,11 @@ suggestSimilar: function {
 # existing post-demand handling (defTypetypeOf returns none for them).
 indexUnitDefs: function {st: zenv.ZSymbolTable scope: ztypes.declid program: Ast} is {
     {
-        uCnt9b: program.units.length
-        uIdx9b: u64
-        for uIdx9b < uCnt9b loop {
-            ruId: program.units.get i: uIdx9b
-            uIdx9b = uIdx9b + 1
+        unitCount: program.units.length
+        unitIdx: u64
+        for unitIdx < unitCount loop {
+            ruId: program.units.get i: unitIdx
+            unitIdx = unitIdx + 1
             indexOneUnitDef :st :program :ruId
         }
         st.typing.defNodeIndexBuilt = true
@@ -889,8 +889,8 @@ indexUnitDefs: function {st: zenv.ZSymbolTable scope: ztypes.declid program: Ast
         # a type minted before the def index existed has no def link; link any
         # still-unlinked named system def now
         cu: ztypes.tid
-        cn9x: st.reg.nextTid
-        for cu < cn9x loop {
+        tidMark: st.reg.nextTid
+        for cu < tidMark loop {
             unl: false
             if (st.reg.defOf tid: cu).u64 == 0 then unl = true
             if unl then {
@@ -2808,10 +2808,10 @@ isNumericLiteralName: function {name: StringView} out bool is {
 # The text is read through a borrow, so a caller that wants only the answer
 # copies nothing; a zero ref reads the sentinel empty text.
 isNumericLiteralNameAt: function {ast: Ast.view ref: zast.nameid} out bool is {
-    r9nl: false
-    t9nl: zast.nameTextAt :ast :ref
-    r9nl = isNumericLiteralName name: t9nl.stringView
-    return r9nl
+    result: false
+    text: zast.nameTextAt :ast :ref
+    result = isNumericLiteralName name: text.stringView
+    return result
 }
 
 # markerText -- a field or parameter marker's source spelling, for diagnostics.
@@ -4166,9 +4166,9 @@ collectMonoRefArgs: function {
     firstA: ztypes.tid
     h21x9: u64
     for h21x9 < arguments.length loop {
-        arg9Id: arguments.get i: h21x9
+        argId: arguments.get i: h21x9
         h21x9 = h21x9 + 1
-        arg: argRefAt :ast nid: arg9Id
+        arg: argRefAt :ast nid: argId
         if arg.nid.isZero.not then {
             an: atomName :ast n: (ast.nodes.get i: arg.operation)
             pnR: numericLeadingParam :st :tdecl label: arg.name argIdx: h21x9 - 1
@@ -8378,8 +8378,8 @@ recordFunctionReturn: function {
         rpt4 = returnParamTid :st :ast enclDecl: fnDecl oId: frOpt
     }
     if rpt4.isZero then {
-        frOpt9b: fnode.returntype
-        rpt4 = returnParamTid :st :ast enclDecl: receiverEnclDecl oId: frOpt9b
+        returnNode: fnode.returntype
+        rpt4 = returnParamTid :st :ast enclDecl: receiverEnclDecl oId: returnNode
     }
     if rpt4.isZero.not then {
         st.reg.setReturnType typeId: fid value: rpt4
@@ -9297,19 +9297,19 @@ stampForcedTyperef: function {
         ztyping.nodeTypeSet tbl: st.typing.nodeType :nid tid: dn
         return
     }
-    r9b: walkLookupTyperefById :st :scope :ast :unitDecl baseId: recvBaseId
-    if r9b.some then {
+    recvTid: walkLookupTyperefById :st :scope :ast :unitDecl baseId: recvBaseId
+    if recvTid.some then {
         (
             ztyping.nodeTypeSet
             tbl: st.typing.nodeType
             nid: tnid
-            tid: r9b
+            tid: recvTid
         )
         (
             ztyping.nodeTypeSet
             tbl: st.typing.nodeType
             :nid
-            tid: r9b
+            tid: recvTid
         )
     }
 }
@@ -9372,8 +9372,8 @@ forceUnitDef: function {
     }
     if nmId.isZero then return ztypes.tid.zero
     uId: unitNameIdOf :st :unitDecl
-    uDecl9b: unitDeclOfName :st nameId: uId
-    got: resolvedByIds :st :ast unitDecl: uDecl9b name: nmId
+    targetUnit: unitDeclOfName :st nameId: uId
+    got: resolvedByIds :st :ast unitDecl: targetUnit name: nmId
     if got.some then {
         return got
     }
@@ -9390,7 +9390,7 @@ forceUnitDef: function {
     if (st.typing.declIsResolving declId: (
         declOfUnitDefIds
         :st
-        unitDecl: uDecl9b
+        unitDecl: targetUnit
         nameId: nmId
     )
     ) then return ztypes.tid.zero
@@ -9404,7 +9404,7 @@ forceUnitDef: function {
         defName: dn.stringView
         defnId: opId
     )
-    ro: resolvedByIds :st :ast unitDecl: uDecl9b name: nmId
+    ro: resolvedByIds :st :ast unitDecl: targetUnit name: nmId
     if ro.some then {
         return ro
     }
@@ -15060,11 +15060,11 @@ unionCustomTagId: function {
 typeExprText: function {ast: Ast.view nid: zast.nodeid} out String is {
     if nid.isZero then return "".string
     isCall: false
-    n9t: ast.nodes.get i: nid
+    node: ast.nodes.get i: nid
     # exprTextOf spells atoms, dotted paths and calls; any other node spells
     # nothing a report could name
-    if n9t.atomid.not when n9t.dottedpath.not when n9t.call.not then return "".string
-    isCall = n9t.call
+    if node.atomid.not when node.dottedpath.not when node.call.not then return "".string
+    isCall = node.call
     r: String
     if isCall then r.append "("
     exprTextOf :ast n: (ast.nodes.get i: nid) dst: r
@@ -19342,15 +19342,15 @@ refuseEmptyObjectDef: function {
         (defn.kind == zast.objectkind.dataDef)
     )
     if defn.nas > 0 when holdsData.not then return
-    em9o: "'\{defName}' is an empty object definition — it declares no fields and no members"
-    eh9o: "give it a field, give it a member, or mark it `is native` when the runtime owns its layout".string
+    msg: "'\{defName}' is an empty object definition — it declares no fields and no members"
+    hint: "give it a field, give it a member, or mark it `is native` when the runtime owns its layout".string
     if defn.nas > 0 then {
-        em9o = "'\{defName}' declares no fields — a record, class or data type holds its data in fields"
-        eh9o = "give it a field, or mark it `is native` when the runtime owns its layout".string
+        msg = "'\{defName}' declares no fields — a record, class or data type holds its data in fields"
+        hint = "give it a field, or mark it `is native` when the runtime owns its layout".string
     }
     # a data type cannot be native (refuseDataShape)
-    if defn.kind == zast.objectkind.dataDef then eh9o = "give it a field".string
-    en9o: String
+    if defn.kind == zast.objectkind.dataDef then hint = "give it a field".string
+    note: String
     (
         addErrorH
         :st
@@ -19358,9 +19358,9 @@ refuseEmptyObjectDef: function {
         lineno: defn.lineno
         colno: defn.colno
         e: zast.err.typeError
-        msg: em9o
-        note: en9o
-        hint: eh9o
+        :msg
+        :note
+        :hint
         width: defName.length.u32.orPanic
     )
 }
@@ -19758,11 +19758,11 @@ registerUnitRoots: function {st: zenv.ZSymbolTable program: Ast.view} is {
         # Keyed by name-pool id -- the pool interns, so id equality is text
         # equality and no spelling is compared.
         seenUnits: IdSet zast.nameid
-        uCnt9c: program.units.length
-        uIdx9c: u64
-        for uIdx9c < uCnt9c loop {
-            ruId: program.units.get i: uIdx9c
-            uIdx9c = uIdx9c + 1
+        unitCount: program.units.length
+        unitIdx: u64
+        for unitIdx < unitCount loop {
+            ruId: program.units.get i: unitIdx
+            unitIdx = unitIdx + 1
             registerOneUnitRoot :st :program :ruId :seenUnits
         }
     }
@@ -19833,9 +19833,9 @@ demandAllUnitDefs: function {
     bodyIds: zast.unitBodyIdsAt :ast unitId: unitdefId
     vx89: u64
     for vx89 < bodyIds.count loop {
-        bm9Id: zast.kidAt kids: ast.kids span: bodyIds i: vx89
+        memberId: zast.kidAt kids: ast.kids span: bodyIds i: vx89
         vx89 = vx89 + 1
-        bm: ast.nodes.get i: bm9Id
+        bm: ast.nodes.get i: memberId
         if bm.namedoperation then {
             demandUnitMember :st :unitNameId nameId: bm.name
         }
@@ -20910,11 +20910,11 @@ scanMainBodyCalls: function {
 } is {
     {
         unitDecl: st.typing.mainUnitRoot
-        uCnt9f: program.units.length
-        uIdx9f: u64
-        for uIdx9f < uCnt9f loop {
-            uId: program.units.get i: uIdx9f
-            uIdx9f = uIdx9f + 1
+        unitCount: program.units.length
+        unitIdx: u64
+        for unitIdx < unitCount loop {
+            uId: program.units.get i: unitIdx
+            unitIdx = unitIdx + 1
             opId: zast.nodeid
             eager: false
             u: program.nodes.get i: uId
@@ -21231,9 +21231,9 @@ fillUnitArgs: function {ast: Ast.view r: InstReq op: astnode.view} is {
     ) case call then {
         i: u64
         for i < op.arguments.count loop {
-            a9Id: zast.kidAt kids: ast.kids span: op.arguments :i
+            argId: zast.kidAt kids: ast.kids span: op.arguments :i
             i = i + 1
-            a: ast.nodes.get i: a9Id
+            a: ast.nodes.get i: argId
             if a.namedoperation then {
                 anm: atomName :ast n: (ast.nodes.get i: a.operation)
                 aid: instArgAtomId op: (ast.nodes.get i: a.operation)
@@ -26198,8 +26198,8 @@ unmetBoundReported: function {
 qualifiedTemplateName: function {st: zenv.ZSymbolTable.view tdecl: ztypes.declid} out String is {
     tdo: st.typing.decls.get i: tdecl
     tdn: st.reg.nameOf tid: tdo.typeId
-    un9x: unitNameOfTid :st tid: tdo.typeId
-    if un9x.length > 0 then return "\{un9x}.\{tdn}"
+    unitName: unitNameOfTid :st tid: tdo.typeId
+    if unitName.length > 0 then return "\{unitName}.\{tdn}"
     return tdn
 }
 
@@ -33552,8 +33552,8 @@ checkMemberProjections: function {
         # comment above always claimed was happening.
         natE3: st.typing.inAssignTarget
         if st.typing.suppressFnAutoCall then natE3 = true
-        isNative9v: st.reg.isNativeOf tid: mo
-        if isNative9v then natE3 = true
+        isNative: st.reg.isNativeOf tid: mo
+        if isNative then natE3 = true
         if natE3.not when (
             methodHasNoUserArgs
             :st
@@ -33791,8 +33791,8 @@ checkTaggedMemberPath: function {
                 return (callleg handled: true tid: abt)
             }
             gtpl: false
-            isgeneric9v: st.reg.isGenericOf tid: bt
-            if isgeneric9v then gtpl = true
+            isGeneric: st.reg.isGenericOf tid: bt
+            if isGeneric then gtpl = true
             # a value whose type is a partial of the template (`optionval_t` in
             # a generic body) tests its arm as any value does; each instance
             # walk stamps the concrete predicate the emitter reads
@@ -36320,10 +36320,10 @@ literalFitsMessage: function {
         return (constFitsKindMessage :st :v k: tk.kind spelling: lit)
     }
     if lit.startsWith "-" then return (ztypes.negativeLiteralFits :lit :target)
-    nk9c: ztypes.numkindByName name: target
-    pn9c: ztypes.parseNumberAs numstr: lit k: nk9c.kind
-    if pn9c.err.length > 0 then return pn9c.err.copy
-    if (ztypes.isFloatKind k: pn9c.kind).not then return "".string
+    kind: ztypes.numkindByName name: target
+    parsed: ztypes.parseNumberAs numstr: lit k: kind.kind
+    if parsed.err.length > 0 then return parsed.err.copy
+    if (ztypes.isFloatKind k: parsed.kind).not then return "".string
     return "Value \{lit} overflows \{target}: its nearest \{target} is an infinity"
 }
 
@@ -48824,7 +48824,7 @@ checkNumericCoercion: function {
     if (isLiteralTypeId :st tid: srcTid) then {
         lex: argLiteralLexeme :ast nid: vn9
         if lex.length == 0 then return
-        tn9c: st.reg.nameOf tid: dstTid
+        dstName: st.reg.nameOf tid: dstTid
         (
             checkLiteralFits
             :st
@@ -48832,18 +48832,18 @@ checkNumericCoercion: function {
             :lineno
             :colno
             lit: lex.stringView
-            target: tn9c.stringView
+            target: dstName.stringView
         )
         return
     }
     if (isNumericTid :st tid: srcTid).not then return
     if (isNumericTid :st tid: dstTid).not then return
     if (losslessConvTo :st :ast from: srcTid to: dstTid) then return
-    an9n: specWrittenName :st :ast tid: srcTid
-    pn9n: specWrittenName :st :ast tid: dstTid
-    mn9n: "'\{an9n}' does not convert to '\{pn9n}' without loss, so it cannot stand in for one"
-    hn9n: "convert it where the loss is visible -- `\{pn9n}` returns a result: `v.\{pn9n}.or d: <fallback>`"
-    nn9n: String
+    srcSpelled: specWrittenName :st :ast tid: srcTid
+    dstSpelled: specWrittenName :st :ast tid: dstTid
+    msg: "'\{srcSpelled}' does not convert to '\{dstSpelled}' without loss, so it cannot stand in for one"
+    hint: "convert it where the loss is visible -- `\{dstSpelled}` returns a result: `v.\{dstSpelled}.or d: <fallback>`"
+    note: String
     (
         addErrorH
         :st
@@ -48851,9 +48851,9 @@ checkNumericCoercion: function {
         :lineno
         :colno
         e: zast.err.typeError
-        msg: mn9n
-        note: nn9n
-        hint: hn9n
+        :msg
+        :note
+        :hint
         width: 1
     )
 }
@@ -48957,17 +48957,17 @@ losslessConvTo: function {
     # tree -- 52,479 copies of a name whose only use is the pool lookup on the
     # next line. The view pins the registry for its binding's scope, so it is
     # scoped to die before `forceMemberOf` mints anything.
-    nid9l: zast.nameid
-    tn9l: st.reg.nameViewOf tid: to
-    if tn9l.length > 0 then nid9l = zast.poolFind pool: ast.names text: tn9l
-    tn9l.drop
-    if nid9l.isZero then return false
-    forceMemberOf :st :ast parentTypeId: from nameId: nid9l
-    co9l: st.typing.declChildOfId parentTypeId: from nameId: nid9l
-    if co9l.some then {
-        rt9l: methodReturnOf :st mid: co9l
-        if rt9l.some then {
-            return rt9l.u64 == to.u64
+    convNameId: zast.nameid
+    toName: st.reg.nameViewOf tid: to
+    if toName.length > 0 then convNameId = zast.poolFind pool: ast.names text: toName
+    toName.drop
+    if convNameId.isZero then return false
+    forceMemberOf :st :ast parentTypeId: from nameId: convNameId
+    conv: st.typing.declChildOfId parentTypeId: from nameId: convNameId
+    if conv.some then {
+        convReturn: methodReturnOf :st mid: conv
+        if convReturn.some then {
+            return convReturn.u64 == to.u64
         }
     }
     return false
@@ -53014,8 +53014,8 @@ checkResolvedValueCall: function {
     dtp: (st.typing.dpTaggedParent.get key: calleeNodeId).or d: ztypes.tid
     if dtp.isZero.not then {
         isGenT: false
-        isgeneric9v: st.reg.isGenericOf tid: dtp
-        if isgeneric9v when (unitNestedSelf :st :ast tid: dtp).isZero then isGenT = true
+        isGeneric: st.reg.isGenericOf tid: dtp
+        if isGeneric when (unitNestedSelf :st :ast tid: dtp).isZero then isGenT = true
         if isGenT then {
             gleg: checkGenericTypeCall :st :unitDecl :ast :call :dtp
             if gleg.handled then return gleg
@@ -59135,8 +59135,8 @@ walkDeclaredDef: function {
         # rest of that method then reads `b.private` as external code. The type
         # branch has bracketed these two since it was the only branch.
         prevL: st.typing.synthLabel.copy
-        prevL9U: st.typing.synthOwnerUnit
-        prevL9N: st.typing.synthOwnerName
+        prevOwnerUnit: st.typing.synthOwnerUnit
+        prevOwnerName: st.typing.synthOwnerName
         prevT: st.typing.currentThisTid
         cfbFr: fnRefAt :ast nid: mopId
         (
@@ -59153,8 +59153,8 @@ walkDeclaredDef: function {
             declId: dd
         )
         st.typing.synthLabel = prevL.take
-        st.typing.synthOwnerUnit = prevL9U
-        st.typing.synthOwnerName = prevL9N
+        st.typing.synthOwnerUnit = prevOwnerUnit
+        st.typing.synthOwnerName = prevOwnerName
         st.typing.currentThisTid = prevT
     } else {
         # the owner's own type, which a namespace's type has and the file
@@ -60736,11 +60736,11 @@ checkBodies: function {st: zenv.ZSymbolTable scope: ztypes.declid program: Ast} 
         mainIdx: u64
         found: false
         i0: u64
-        uCnt9d: program.units.length
-        uIdx9d: u64
-        for uIdx9d < uCnt9d loop {
-            uId: program.units.get i: uIdx9d
-            uIdx9d = uIdx9d + 1
+        unitCount: program.units.length
+        unitIdx: u64
+        for unitIdx < unitCount loop {
+            uId: program.units.get i: unitIdx
+            unitIdx = unitIdx + 1
             u: program.nodes.get i: uId
             if u.namedoperation then {
                 uc5z: unitDeclOfNameOrOwn :st :scope nameId: u.name
@@ -61045,11 +61045,11 @@ stampOneFnMono: function {
     st.typing.curMonoStamp = monoId
     st.typing.curMonoFnTid = monoId
     prevL: st.typing.synthLabel.copy
-    prevL9U: st.typing.synthOwnerUnit
-    prevL9N: st.typing.synthOwnerName
+    prevOwnerUnit: st.typing.synthOwnerUnit
+    prevOwnerName: st.typing.synthOwnerName
     prevT: st.typing.currentThisTid
-    tplDecl29Org: st.reg.genericOriginOf tid: monoId
-    fnTemplateDecl: declOfTypeId :st tid: tplDecl29Org
+    origin: st.reg.genericOriginOf tid: monoId
+    fnTemplateDecl: declOfTypeId :st tid: origin
     cfbFr: (
         fnRefAt
         :ast
@@ -61071,8 +61071,8 @@ stampOneFnMono: function {
     )
     noteInstanceErrors :st :ast mono: monoId from: errF0
     st.typing.synthLabel = prevL.take
-    st.typing.synthOwnerUnit = prevL9U
-    st.typing.synthOwnerName = prevL9N
+    st.typing.synthOwnerUnit = prevOwnerUnit
+    st.typing.synthOwnerName = prevOwnerName
     st.typing.currentThisTid = prevT
     st.typing.curMonoFnTid = ztypes.tid.zero
     st.typing.curMonoStamp = ztypes.tid.zero
@@ -61274,8 +61274,8 @@ stampOneClassMono: function {
     }
     st.typing.curMonoStamp = monoId
     prevL: st.typing.synthLabel.copy
-    prevL9U: st.typing.synthOwnerUnit
-    prevL9N: st.typing.synthOwnerName
+    prevOwnerUnit: st.typing.synthOwnerUnit
+    prevOwnerName: st.typing.synthOwnerName
     prevT: st.typing.currentThisTid
     errC0: st.typing.errors.length
     # a walk can use another member of this instance, which is walked in the
@@ -61296,8 +61296,8 @@ stampOneClassMono: function {
                 st.typing.curMonoFnTid = ztypes.tid.zero
             }
             q: "\{monoNm}.\{mnm}"
-            tplDecl39Org: st.reg.genericOriginOf tid: monoId
-            classTemplateDecl: declOfTypeId :st tid: tplDecl39Org
+            origin: st.reg.genericOriginOf tid: monoId
+            classTemplateDecl: declOfTypeId :st tid: origin
             mgen: st.typing.curMonoFnTid
             if mgen.isZero.not when (st.reg.isGenericOf tid: mgen) then {
                 # a method with type parameters of its own is walked per instance
@@ -61341,8 +61341,8 @@ stampOneClassMono: function {
     }
     noteInstanceErrors :st :ast mono: monoId from: errC0
     st.typing.synthLabel = prevL.take
-    st.typing.synthOwnerUnit = prevL9U
-    st.typing.synthOwnerName = prevL9N
+    st.typing.synthOwnerUnit = prevOwnerUnit
+    st.typing.synthOwnerName = prevOwnerName
     st.typing.currentThisTid = prevT
     st.typing.curMonoFnTid = ztypes.tid.zero
     st.typing.curMonoStamp = ztypes.tid.zero
@@ -61587,8 +61587,8 @@ stampUnitMonoMembers: function {
             if fnTid.isZero.not when (
                 (st.reg.typetypeOf typeId: fnTid) == ztypes.ztypetype.functionType
             ) then {
-                isgeneric9v: st.reg.isGenericOf tid: fnTid
-                if isgeneric9v then isGenFn = true
+                isGeneric: st.reg.isGenericOf tid: fnTid
+                if isGeneric then isGenFn = true
             }
             if isGenFn then {
                 (
@@ -62180,8 +62180,8 @@ walkUnitMonoFns: function {
     collectOwedUnitFns :st :ast :bodyIds :monoId :idxs
     st.typing.curMonoStamp = monoId
     prevL: st.typing.synthLabel.copy
-    prevL9U: st.typing.synthOwnerUnit
-    prevL9N: st.typing.synthOwnerName
+    prevOwnerUnit: st.typing.synthOwnerUnit
+    prevOwnerName: st.typing.synthOwnerName
     prevT: st.typing.currentThisTid
     for idxs.length > 0 loop {
         wi: u64
@@ -62220,8 +62220,8 @@ walkUnitMonoFns: function {
                     st.typing.curMonoStamp = monoId
                     continue
                 }
-                tplDecl49Org: st.reg.genericOriginOf tid: monoId
-                unitTemplateDecl: declOfTypeId :st tid: tplDecl49Org
+                origin: st.reg.genericOriginOf tid: monoId
+                unitTemplateDecl: declOfTypeId :st tid: origin
                 cfbFr: (
                     fnRefAt
                     :ast
@@ -62246,8 +62246,8 @@ walkUnitMonoFns: function {
         collectOwedUnitFns :st :ast :bodyIds :monoId :idxs
     }
     st.typing.synthLabel = prevL.take
-    st.typing.synthOwnerUnit = prevL9U
-    st.typing.synthOwnerName = prevL9N
+    st.typing.synthOwnerUnit = prevOwnerUnit
+    st.typing.synthOwnerName = prevOwnerName
     st.typing.currentThisTid = prevT
     st.typing.curMonoFnTid = ztypes.tid.zero
     st.typing.curMonoStamp = ztypes.tid.zero
@@ -62577,7 +62577,7 @@ constantLineType: function {
     ast: Ast
     unitDecl: ztypes.declid
     scope: ztypes.declid
-    s9Id: zast.nodeid
+    stmtId: zast.nodeid
     innerId: zast.nodeid
 } out ztypes.tid is {
     bt0: constantOperandType :st :scope :ast :unitDecl nid: innerId
@@ -62587,7 +62587,7 @@ constantLineType: function {
         (
             ztyping.nodeTypeSet
             tbl: st.typing.nodeType
-            nid: s9Id
+            nid: stmtId
             tid: mt0
         )
         eid0: nodeId n: (ast.nodes.get i: innerId)
@@ -62605,7 +62605,7 @@ constantLineType: function {
             (
                 ztyping.nodeTypeSet
                 tbl: st.typing.nodeType
-                nid: s9Id
+                nid: stmtId
                 tid: bt0
             )
             return bt0
@@ -62642,14 +62642,14 @@ constantBranchWalk: function {
     }
     if isStmt.not then return ztypes.tid.zero
     result: ztypes.tid
-    for each s9Id: lineIds loop {
+    for each stmtId: lineIds loop {
         innerId: zast.nodeid
         {
-            s: ast.nodes.get i: s9Id
+            s: ast.nodes.get i: stmtId
             if s.statementline then innerId = s.statementline
         }
         if innerId.isZero.not then {
-            lt: constantLineType :st :scope :ast :unitDecl :s9Id :innerId
+            lt: constantLineType :st :scope :ast :unitDecl :stmtId :innerId
             if lt.isZero.not then result = lt
         }
     }
@@ -71533,8 +71533,8 @@ unitDeclOfTid: function {
     tid: ztypes.tid
 } out ztypes.declid is {
     cur: ztypes.declid
-    def9v: st.reg.defOf :tid
-    cur = def9v
+    def: st.reg.defOf :tid
+    cur = def
     for cur.isZero.not loop {
         par: ztypes.declid
         isU: false
@@ -73074,8 +73074,8 @@ publicNsOf: function {
     tid: ztypes.tid
 } out ztypes.declid is {
     od: ztypes.declid
-    def9v: st.reg.defOf :tid
-    od = def9v
+    def: st.reg.defOf :tid
+    od = def
     # a nested unit or hidden subunit links its declaration through the
     # typing side (declSetType), not the registry's def
     if od.u64 == 0 then od = st.typing.declIdOfType typeId: tid
