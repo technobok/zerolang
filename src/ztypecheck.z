@@ -10253,7 +10253,10 @@ attachMethods: function {
                 }
             }
             ownerNmId: nameIdOf :ast name: defName
-            mido: (
+            # a function a field of the type is declared by was resolved when
+            # the field attached (fieldHeadMemberTid), and keeps that signature
+            mido: st.typing.declChildOfId parentTypeId: parentId nameId: am.name
+            if mido.none then mido = (
                 resolveMethodFnLazy
                 :st
                 :scope
@@ -13272,6 +13275,38 @@ applyUnitVisibility: function {
     }
 }
 
+# fieldHeadMemberTid -- the type of the member of a field's own type that the
+# field's type-ref names (`x: helper`), resolved now: a function there makes the
+# field a slot defaulting to it. The fields attach before the type's `as` block
+# does, so a function is forced in either tier: the eager one resolves the `as`
+# block only after the fields. None when the name is no member of the type, or
+# names one carrying no type.
+fieldHeadMemberTid: function {
+    st: zenv.ZSymbolTable
+    ast: Ast
+    unitDecl: ztypes.declid
+    defName: StringView
+    ownerTid: ztypes.tid
+    nameId: zast.nameid
+} out optionval ztypes.tid is {
+    forceMemberOf :st :ast parentTypeId: ownerTid :nameId
+    if st.typing.eagerAll then {
+        md: st.typing.declMemberIdOf parentTypeId: ownerTid :nameId
+        if md.isZero.not when (st.typing.decls.get i: md).kind.methodDecl then {
+            forceMemberDecl :st :ast memberDeclId: md
+        }
+    }
+    markMemberUsed :st :ownerTid :nameId
+    return (
+        resolvedByIdsMember
+        :st
+        :ast
+        :unitDecl
+        defId: (zast.poolFind pool: ast.names text: defName)
+        memberId: nameId
+    )
+}
+
 # attachRecordField -- an isItem that is not a method is a FIELD: resolve its
 # type-ref (which may name a SIBLING method, an fn-ptr slot defaulting to it),
 # attach it, and record the marker and default the declaration carries.
@@ -13288,24 +13323,9 @@ attachRecordField: function {
     if (refuseStringDefault :st :ast what: "field" nameId: fm.name :fm) then return
     refuseMarkedFunctionType :st :ast :unitDecl :scope typeNid: fm.operation
     ftnR: fieldHeadNameId :ast n: (ast.nodes.get i: fm.operation)
-    # a field's type-ref can name a SIBLING method (an fn-ptr
+    # a field's type-ref can name a SIBLING function (an fn-ptr
     # slot defaulting to it), which is a member like any other
-    (
-        forceMemberOf
-        :st
-        :ast
-        parentTypeId: rid
-        nameId: ftnR
-    )
-    markMemberUsed :st ownerTid: rid nameId: ftnR
-    mrefR: (
-        resolvedByIdsMember
-        :st
-        :ast
-        :unitDecl
-        defId: (zast.poolFind pool: ast.names text: defName)
-        memberId: ftnR
-    )
+    mrefR: fieldHeadMemberTid :st :ast :unitDecl :defName ownerTid: rid nameId: ftnR
     handledR: false
     match (
         mrefR
@@ -16577,22 +16597,7 @@ resolveClassFieldEntry: function {
         )
         if fOwned.not then borrowedField = true
     } case none then null
-    (
-        forceMemberOf
-        :st
-        :ast
-        parentTypeId: cid
-        nameId: ftn
-    )
-    markMemberUsed :st ownerTid: cid nameId: ftn
-    mref: (
-        resolvedByIdsMember
-        :st
-        :ast
-        :unitDecl
-        defId: (zast.poolFind pool: ast.names text: defName)
-        memberId: ftn
-    )
+    mref: fieldHeadMemberTid :st :ast :unitDecl :defName ownerTid: cid nameId: ftn
     match (
         mref
     ) case some then {
