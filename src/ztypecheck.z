@@ -39048,6 +39048,21 @@ reportGreyUse: function {
     st.typing.refusedValues.add item: nid
 }
 
+# refuseUnreadableLocal -- the bare name `node` finds a local with no value to
+# read: grey, while its own statement is checked (E0103), or moved out of
+# (E0200). True when it refused.
+refuseUnreadableLocal: function {st: zenv.ZSymbolTable ast: Ast.view node: atomref} out bool is {
+    ld: st.findLocal nameId: node.name
+    if ld.isZero then return false
+    if (st.typing.declIsResolving declId: ld) then {
+        reportGreyUse :st :ast nid: node.nid nameId: node.name
+        return true
+    }
+    if (st.isTakenDecl declId: ld).not then return false
+    reportTakenNameUse :st :ast :node
+    return true
+}
+
 # checkUnboundAtom -- a bare name no local binds: a moved name's use, a literal,
 # a type, unit or function, or a numeric generic parameter. 0 when it names
 # none of those.
@@ -39058,25 +39073,21 @@ checkUnboundAtom: function {
     node: atomref
 } out ztypes.tid is {
     if node.name == zast.wellKnown.slot.wkReturn then reportMissingReturnValue :st :node
-    if (st.isGreyName nameId: node.name) then {
-        reportGreyUse :st :ast nid: node.nid nameId: node.name
-        return ztypes.tid
-    }
-    if (bodyMemberAsPath :st :ast nameId: node.name nid: node.nid) then {
-        return (checkValueAt :st :unitDecl :ast nid: node.nid)
-    }
-    if (refuseBodyFieldRead :st :ast nameId: node.name nid: node.nid) then return ztypes.tid
-    if (st.isTakenName nameId: node.name) then {
-        reportTakenNameUse :st :ast :node
-        return ztypes.tid
-    }
     # a numeric literal is told by its text, read through a view dropped before
-    # the bare-name walk below lends ast
+    # the bare-name walk below lends ast. It names no local and no member, so
+    # it is told first
     isLit: false
     ndNm: zast.nameTextAt :ast ref: node.name
     isLit = isNumericLiteralName name: ndNm.stringView
     ndNm.drop
     if isLit then return (checkLiteralAtom :st :ast :node)
+    # a local the lookup answered none for: one whose statement is still being
+    # checked, or one moved out of, asked off one lookup
+    if (refuseUnreadableLocal :st :ast :node) then return ztypes.tid
+    if (bodyMemberAsPath :st :ast nameId: node.name nid: node.nid) then {
+        return (checkValueAt :st :unitDecl :ast nid: node.nid)
+    }
+    if (refuseBodyFieldRead :st :ast nameId: node.name nid: node.nid) then return ztypes.tid
     ncr: checkNarrowedConstRead :st :unitDecl :ast :node
     if ncr.isZero.not then return ncr
     # the parameter is the innermost scope's: a unit template declares it as a
@@ -55087,15 +55098,15 @@ checkBareCalleeCall: function {
     call: callref
     cnId: zast.nameid
 } out callleg is {
-    if cnId.isZero then return (callleg handled: false tid: ztypes.tid)
-    if (st.isGreyName nameId: cnId) then {
+    unhandled: callleg handled: false tid: ztypes.tid
+    if cnId.isZero then return unhandled
+    d: st.findLocal nameId: cnId
+    if d.isZero.not then {
+        if (st.typing.declIsResolving declId: d).not then return unhandled
         reportGreyUse :st :ast nid: call.callable nameId: cnId
         return (callleg handled: true tid: ztypes.tid)
     }
-    if (st.findLocal nameId: cnId).isZero.not then return (callleg handled: false tid: ztypes.tid)
-    if (bodyMemberAsPath :st :ast nameId: cnId nid: call.callable).not then {
-        return (callleg handled: false tid: ztypes.tid)
-    }
+    if (bodyMemberAsPath :st :ast nameId: cnId nid: call.callable).not then return unhandled
     asPath: checkRegularCall :st :unitDecl :ast :call cnId: zast.nameid.zero
     return (callleg handled: true tid: asPath)
 }
@@ -58799,10 +58810,6 @@ checkLabelValueAt: function {
     ast: Ast
     lv: atomref
 } out ztypes.tid is {
-    if (st.isGreyName nameId: lv.name) then {
-        reportGreyUse :st :ast nid: lv.nid nameId: lv.name
-        return ztypes.tid
-    }
     lvo: st.lookup nameId: lv.name
     match (
         lvo
@@ -58832,6 +58839,12 @@ checkLabelValueAt: function {
         } case none then null
         return lvt
     } case none then {
+        # the local whose statement is being checked, which lookup answers
+        # none for
+        if (st.isGreyName nameId: lv.name) then {
+            reportGreyUse :st :ast nid: lv.nid nameId: lv.name
+            return ztypes.tid
+        }
         lvNm: zast.nameTextAt :ast ref: lv.name
         lvm: "Unknown reference '\{lvNm}'"
         lvn: String
