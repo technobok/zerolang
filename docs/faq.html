@@ -127,7 +127,7 @@ Table of Contents</div>
 </li>
 <li><a href="#why-records-can-be-embedded">Why records can be embedded</a>
 </li>
-<li><a href="#why-no-constructors-for-records">Why no constructors for records?</a>
+<li><a href="#how-is-a-record-constructed">How is a record constructed?</a>
 </li>
 <li><a href="#why-typedefs">Why typedefs?</a>
 </li>
@@ -168,8 +168,9 @@ Table of Contents</div>
     argument of -1)</li>
 <li>looks neater anyway</li>
 <li>allows additional chars to be used in identifiers: <code>+ - / * &lt; &gt; &amp; |</code> etc</li>
-<li>nb: these are not operators so are not required to have surrounding ws: ':',
-    '=</li>
+<li><code>:</code> is not an identifier character, so a label needs no space after it
+(<code>x:1</code>). <code>=</code> is one, so a reassignment is written <code>x = 2</code>: <code>x=2</code> is
+a single name</li>
 </ul>
 <h2 id="why-no-unary-operators"><a href="#why-no-unary-operators">2. Why no unary operators?</a></h2>
 <ul>
@@ -195,22 +196,19 @@ short-circuit disjunction (see Design-OPEN)</li>
 <ul>
 <li>it is safer. Assignment (mutation) should not be buried inside a line, needs
     its own line</li>
-<li><code>if</code>/<code>with</code> can bind and then test in subsequent clauses eg.
-<code>with x: read() do if x &gt; 0 then { ... }</code></li>
-<li>Pascal/Haskell do not have assignment as an expression</li>
+<li><code>with</code> binds a name for the expression that follows it:
+<code>with x: readCount do if x &gt; 0 then { ... }</code></li>
 </ul>
 <h2 id="why-no-precedence"><a href="#why-no-precedence">5. Why no precedence?</a></h2>
 <ul>
-<li>simpler, remembering large precendence order table is error prone</li>
+<li>simpler: there is no precedence table to remember</li>
 <li>explicit is better than implicit</li>
-<li>can warn if precendence is different to usual mathematical precedence (with a
-    linter?)</li>
-<li>precendence left to right, associativity left to right</li>
-<li>can have simplified operator overloading, they are just functions</li>
-<li>operators are then just calls with 2 params</li>
-<li>compiler enforces declaration and reassignment at a hardcoded
-    lower precedence so that parens are not required for rhs calls in this common
-    case</li>
+<li>operators read left to right and group left to right; <code>zl lint</code> warns
+    (L032) where a chain groups differently from how it reads</li>
+<li>an operator is an ordinary method with one argument, so a type defines
+    its own the way it defines any method</li>
+<li>a definition and a reassignment are statements, not operators: the whole
+    right-hand side is their value, so a call there needs no parentheses</li>
 </ul>
 <h2 id="why-are-top-level-items-always-constant"><a href="#why-are-top-level-items-always-constant">6. Why are top level items always constant?</a></h2>
 <ul>
@@ -323,16 +321,13 @@ variants were possible but they should be fairly small.</p>
 <p>Comparison:</p>
 <table>
 <thead>
-<tr><th style="text-align: left"></th><th style="text-align: left">Feature</th><th style="text-align: left">Enumeration</th><th style="text-align: left">Variant</th><th style="text-align: left">Union</th></tr>
+<tr><th style="text-align: left"></th><th style="text-align: left">Feature</th><th style="text-align: left">Variant</th><th style="text-align: left">Union</th></tr>
 </thead>
 <tbody>
-<tr><td></td><td>Creation</td><td>Referenced by dot notation</td><td>Constructed</td><td>Constructed</td></tr>
-<tr><td></td><td>Type</td><td>Value Type</td><td>Value type</td><td>Reference type</td></tr>
-<tr><td></td><td>Variability</td><td>Homogeneous</td><td>Heterogeneous</td><td>Heterogeneous</td></tr>
-<tr><td></td><td>Underlying Type</td><td>Consistent Numeric Type</td><td>Any value type</td><td>Reftype arms (a valtype arm is spelled Box T)</td></tr>
-<tr><td></td><td>Conditional Expression</td><td>Yes</td><td>Yes</td><td>Yes</td></tr>
-<tr><td></td><td>Assignment in Condition</td><td>Yes (to numeric value)</td><td>Yes (to associated type)</td><td>Yes (to associated type)</td></tr>
-<tr><td></td><td>Truthy at top level</td><td>Yes (provided 0/non-0 only)</td><td>Yes (provided 0/non-0 only)</td><td>Yes (to associated type)</td></tr>
+<tr><td></td><td>Creation</td><td><code>T.arm value</code>, or <code>T.arm</code></td><td><code>T.arm value</code>, or <code>T.arm</code></td></tr>
+<tr><td></td><td>Type</td><td>Value type</td><td>Reference type</td></tr>
+<tr><td></td><td>Arm payloads</td><td>Value types, or <code>null</code></td><td>Any type, or <code>null</code></td></tr>
+<tr><td></td><td>Tested with</td><td><code>x.arm</code>, <code>match</code></td><td><code>x.arm</code>, <code>match</code></td></tr>
 </tbody>
 </table>
 <h2 id="interfaces"><a href="#interfaces">18. Interfaces</a></h2>
@@ -397,15 +392,12 @@ compiler...</p>
 <p>Records can be embedded in other records without flattening. Embedded records
 are always passed by value and are zero-initialized (no traditional
 constructors).</p>
-<h2 id="why-no-constructors-for-records"><a href="#why-no-constructors-for-records">24. Why no constructors for records?</a></h2>
-<p>Records are zero-initialized by default. To enforce invariants:</p>
-<ul>
-<li>make the record private</li>
-<li>provide a static method (factory function) to create instances</li>
-<li>that method is responsible for enforcing all invariants, even on sub-records
-    (possibly by calling sub-'constructors')</li>
-<li>...but then how to initialise in arrays?</li>
-</ul>
+<h2 id="how-is-a-record-constructed"><a href="#how-is-a-record-constructed">24. How is a record constructed?</a></h2>
+<p>A construction names every field of the record (<code>pt x: 1 y: 2</code>); one left
+out is a missing argument. A record that must hold an invariant defines its own
+<code>create</code> in its <code>as</code> block and builds the instance there through
+<code>meta.create</code>; a construction of the type then goes through it (see the
+record section of the spec).</p>
 <h2 id="why-typedefs"><a href="#why-typedefs">25. Why typedefs?</a></h2>
 <p>Typedefs create a new type wrapping an underlying type. The new type has no
 runtime overhead. See the typedef section in the spec for full details.</p>
@@ -595,101 +587,21 @@ its bytes, and a reftype is never copied unless <code>.copy</code> is written. S
 <a href="./ownership.html">ownership (Defaults)</a>.</p>
 <h2 id="reftype-vs-valtype"><a href="#reftype-vs-valtype">37. reftype vs valtype</a></h2>
 <ul>
-<li>u8 u32 i32 f32 c8 c32 - valtype</li>
-<li>record - valtype</li>
-<li>array - valtype. Always. Can make an array out of any valtype:
-<ul>
-<li>fixed size known at compile time</li>
-<li>default value is the 'zero' value of that type (?)</li>
+<li>Value types: the numbers (<code>u8</code> ... <code>f128</code>), <code>c8</code>, <code>c32</code>,
+<code>bool</code>, fixed-capacity <code>str</code>, arrays, function references, and the user
+types <code>record</code>, <code>variant</code> and <code>facet</code>. A value type is its bytes: it is
+copied whole, and it never holds a reference type.</li>
+<li>Reference types: <code>String</code>, the containers (<code>ListRef</code> -- whose
+everyday name is <code>List</code> -- <code>ListVal</code>, the maps and sets, and <code>Bytes</code>,
+a <code>ListVal u8</code>), and the user types <code>class</code>, <code>union</code> and
+<code>protocol</code>. A reference type has one owner, and the compiler tracks every
+transfer.</li>
+<li>The views (<code>StringView</code>, <code>ListView</code>, the option views) refer into
+    another value's storage: they are passed by value, and keep that storage
+    locked while they live.</li>
 </ul>
-</li>
-<li>spec - valtype
-<ul>
-<li>note that spec is only 'non-local' (not self contained) valtype</li>
-<li>but it can only point to static function defs that cannot be freed</li>
-</ul>
-</li>
-<li>variant - valtype
-<ul>
-<li>size is always tag (enum) size + size of biggest potential member</li>
-<li>all children must be valtypes</li>
-</ul>
-</li>
-<li>byte (bytes) - valtype (equivalent to u8 array)</li>
-<li>the collections List family - reftype containers split by element
-    kind: ListRef holds reftype elements, ListVal holds valtype elements,
-    and List is the everyday ListRef alias.
-<ul>
-<li>better name? vector?</li>
-<li>list of reftypes must be empty to start with (?) then added/retained
-        arguments given to the list</li>
-<li>list of valtypes also empty to begin with ?</li>
-<li>how does it look in memory? Numelements, capacity</li>
-<li>can be expanded up to capacity; then can be resized</li>
-<li>can also pop elements? (for reftypes? last elements will be returned then
-        maybe destroyed)</li>
-</ul>
-</li>
-<li>data - reftype but, it is shared immutable (can have multiple reference to
-    it)</li>
-<li>string - reftype
-<ul>
-<li>different types of strings? fixed (max) length, arbitrary length....</li>
-<li>'str' for short string? 'string' for arbitrary length? (like char vs
-        varchar)</li>
-<li>str and string are both mutable? Like c</li>
-<li>NO, not mutable. Since they can be multibyte per character, it is not
-        safe to modify bytes in the middle of a string. Maybe append or replace
-        only (?). Or just immutable like most other languages.</li>
-</ul>
-</li>
-<li>list - reftype
-<ul>
-<li>can be arbitrary length</li>
-<li>split by element family -- ListRef owns reftype members, ListVal
-        holds valtype members; one template cannot take both</li>
-</ul>
-</li>
-<li>class - reftype
-<ul>
-<li>similar to a record but can have members that refer to external reftypes</li>
-</ul>
-</li>
-<li>union - reftype
-<ul>
-<li>option (none/some) can be done without tag by using null pointers</li>
-<li>otherwise, size is always 2 words:
-<ul>
-<li>tag (enum) - size can vary depending on underlying numeric type of
-            enum</li>
-<li>to data (can be the data itself if it fits in a word. Type info will
-            note if this is so, so that memory 'free' does not have to take
-            place)</li>
-</ul>
-</li>
-<li>if subtype is a reftype that does not fit in the data word, (another)
-        allocation is performed on creation and the value is copied in</li>
-</ul>
-</li>
-<li>protocol - reftype (if at runtime)
-<ul>
-<li>size is always 2 pointers:
-<ul>
-<li>to type info / protocol method list</li>
-<li>to data (can be the data itself if it fits in a word. Type info will
-            note if this is so, so that memory 'free' does not have to take
-            place)</li>
-</ul>
-</li>
-<li>if subtype is a reftype that does not fit in the data word, (another)
-        allocation is performed on creation and the value is copied in</li>
-<li>protocol method lists should be precomputed by compiler so a not freed
-        when the protocol object is freed.</li>
-<li>can you have a protocol as a valtype? (pointer to method list should be
-        static and never be freed...). Would need a different keyword?</li>
-</ul>
-</li>
-</ul>
+<p>The layout of each is in <a href="./representation_of_types.html">the
+representation of types</a>.</p>
 </main>
 </body>
 </html>

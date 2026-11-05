@@ -93,7 +93,7 @@ Table of Contents</div>
 </li>
 <li><a href="#higher-kinded-types">higher-kinded types?</a>
 </li>
-<li><a href="#deep-copy-for-user-defined-reftypes">deep copy for user-defined reftypes</a>
+<li><a href="#deep-copy-for-user-defined-reftypes-decided">deep copy for user-defined reftypes (decided)</a>
 </li>
 <li><a href="#bare-option-result-names-as-their-falsy-arms">bare Option/Result names as their falsy arms</a>
 </li>
@@ -123,9 +123,10 @@ Table of Contents</div>
 
 </nav>
 <main id="content">
-<p>Open design questions -- ideas that have been considered but are not yet
-decided or implemented. None of them describe shipped behaviour; they are
-kept so the thinking isn't lost. For the language as it currently exists,
+<p>Design questions that have been considered. Most are open: ideas not yet
+decided or built. An entry marked <em><strong>decided</strong></em> records a question that was
+settled, with the reason, so that it is not reopened; one marked
+<em><strong>deferred</strong></em> waits for a program that needs it. For the language as it currently exists,
 see <a href="./spec.html">the specification</a> and
 <a href="./ownership.html">the ownership model</a>.</p>
 <h2 id="enum"><a href="#enum">1. enum</a></h2>
@@ -374,25 +375,13 @@ argument?...</p>
     j: generic # ...
 
 }</code></pre>
-<h2 id="deep-copy-for-user-defined-reftypes"><a href="#deep-copy-for-user-defined-reftypes">7. deep copy for user-defined reftypes</a></h2>
-<p><code>.copy</code> is declared on <code>String</code> and on the six all-valtype containers
-(<code>ListVal</code> and <code>Bytes</code>, <code>SetVal</code>, <code>MapVV</code>, <code>IdMapV</code>,
-<code>IdSet</code>), and it is the compiler-provided default on a valtype. A
-<em><strong>generic parameter</strong></em> types <code>.copy</code> as <code>t -&gt; t</code> while the template
-body is checked, and the per-monomorphisation walk then holds each
-instance to the concrete type's own interface -- so <code>T = StringView</code> or
-<code>T = List String</code> is refused inside a template exactly as it is outside
-one. On a user-defined class or union it is a compile-time error (E0100):
-the emitter has no recursive clone generation, and before the error
-landed the miss produced silently-invalid C.</p>
-<p>Implementing it would mirror the auto-destructor machinery -- a
-per-type <code>_copy</code> walking fields and union payloads, boxing heap
-members -- and needs decisions on cycles (reject? runtime trap?) and
-on whether protocol-typed fields can be cloned at all (the vtable
-knows destroy but not copy today). Until then the idioms are
-<code>.take</code> for transfer and field-by-field construction for real
-duplication; the json unit's scalar-only accessors are an example of
-designing around the gap.</p>
+<h2 id="deep-copy-for-user-defined-reftypes-decided"><a href="#deep-copy-for-user-defined-reftypes-decided">7. deep copy for user-defined reftypes (decided)</a></h2>
+<p>The compiler synthesises no <code>.copy</code> for a class or a union. Which fields a
+duplicate clones and which it shares, and what a nested container means, are
+the author's decisions, so the author writes the method in the type's <code>as</code>
+block; until then <code>x.copy</code> on such a type is a compile error naming the type.
+A value type's copy is its bytes and is always complete. See
+<a href="./ownership.html">ownership</a>, "Which types have a .copy".</p>
 <h2 id="bare-option-result-names-as-their-falsy-arms"><a href="#bare-option-result-names-as-their-falsy-arms">8. bare Option/Result names as their falsy arms</a></h2>
 <p>The zero-value rule (spec: Implicit Construction, Zero Values) gives
 bare type names in runtime value position a zero-argument
@@ -544,17 +533,14 @@ print "\{total xs: a.listView} \{total xs: b.listView}"</code></pre>
 method; its fields are what it captures, each with its ownership written out
 (<code>.view</code>, <code>.borrow</code>, <code>.take</code>), which is what lets the handle carry the
 right locks. A closure literal would save the class for one-off work, but the
-language has no closures and none are planned. Decided 2026-10-20: a task stays
-a class. Recorded here so the question is not reopened.</p>
+language has no closures and none are planned, so a task stays a class.</p>
 <h2 id="threads-one-sqlite-connection-shared-without-a-mutex-decided"><a href="#threads-one-sqlite-connection-shared-without-a-mutex-decided">14. threads: one SQLite connection shared without a Mutex (decided)</a></h2>
 <p>A connection is <code>thread.Unshareable</code>: it moves to a thread, or threads share
 one through <code>sync.Mutex sqlite.Database</code>, each use holding the lock (SQLite
 is built <code>THREADSAFE=2</code>, which keeps no lock per connection). A second
 connection type opened in SQLite's SERIALIZED mode, locking inside each SQLite
-call, was considered and dropped 2026-10-20: it is the same lock moved into
-SQLite, with no more parallelism and no safety the Mutex lacks. rusqlite takes
-the same line -- its <code>Connection</code> is <code>Send</code> and not <code>Sync</code> whatever the
-open flags. Recorded here so the question is not reopened.</p>
+call, was considered and dropped: it is the same lock moved into SQLite, with
+no more parallelism and no safety the Mutex lacks.</p>
 <p>Noted for later, if a need shows: a connection pool (<code>sqlite.Pool</code>), the
 shape threads that share a database usually want. It opens connections to one
 file and lends one to a thread for as long as the thread holds it; on a file
@@ -565,8 +551,7 @@ gives that today; the pool would only reuse them.</p>
 sendable -- a held value is never moved out (<code>h.take</code> is refused), and
 receiving it would give the other thread a value it could change -- so it is
 sent as <code>.copy</code>, written out. A channel of held values, received as held,
-would need held twins of <code>Sender</code>, <code>Receiver</code> and <code>ReceiverIter</code>.
-Deferred 2026-10-20 until a program needs one.</p>
+would need held twins of <code>Sender</code>, <code>Receiver</code> and <code>ReceiverIter</code>.</p>
 <h2 id="static-data-what-is-not-built-yet"><a href="#static-data-what-is-not-built-yet">16. static data: what is not built yet</a></h2>
 <p>The static data arc (<code>list</code>, <code>data</code>, <code>choice</code>) left these open, by
 decision or for lack of a use:</p>
@@ -599,17 +584,15 @@ reference, an interpolation temp), from every SOURCE (a String local, a
 String field, a parameter), into every SINK that ends the source while the
 view lives (reassigning or dropping it, moving the view into a container,
 returning it). Each combination is compiled, what compiles is run under
-ASan, and each hole gets its fix at the root and a fixture. Deferred
-2026-10-26 to an arc of its own.</p>
+ASan, and each hole gets its fix at the root and a fixture.</p>
 <h2 id="a-typedef-s-surface-is-its-base-s-decided"><a href="#a-typedef-s-surface-is-its-base-s-decided">18. a typedef's surface is its base's (decided)</a></h2>
 <p>A typedef forwards its base's signatures: <code>Celsius: typedef f64</code> has
 <code>f64</code>'s methods and operators exactly as <code>f64</code> declares them, so
-<code>c + 1.5</code> takes and gives the base's types. Decided 2026-10-10 to keep
-this -- it costs nothing and the surface is the one the base already
-documents. A typedef that wants a stricter surface writes it by hand in its
+<code>c + 1.5</code> takes and gives the base's types. It stays so: it costs nothing,
+and the surface is the one the base already documents. A typedef that wants a stricter surface writes it by hand in its
 <code>as</code> block: <code>+: null</code> strikes a member off, and a typed member
 (<code>&lt;: function {a: this.view b: this.view} out bool</code>) replaces the
-base's. Recorded here so the question is not reopened.</p>
+base's.</p>
 </main>
 </body>
 </html>

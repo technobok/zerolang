@@ -31,9 +31,10 @@
   #div id=tocfile: Table of Contents
   #doc.toc
 
-Open design questions -- ideas that have been considered but are not yet
-decided or implemented. None of them describe shipped behaviour; they are
-kept so the thinking isn't lost. For the language as it currently exists,
+Design questions that have been considered. Most are open: ideas not yet
+decided or built. An entry marked #_*"decided" records a question that was
+settled, with the reason, so that it is not reopened; one marked
+#_*"deferred" waits for a program that needs it. For the language as it currently exists,
 see [#> to=./spec.html: the specification] and
 [#> to=./ownership.html: the ownership model].
 
@@ -339,27 +340,14 @@ argument?...
   }
   """
 
-#--: deep copy for user-defined reftypes
+#--: deep copy for user-defined reftypes (decided)
 
-#~".copy" is declared on #~"String" and on the six all-valtype containers
-(#~"ListVal" and #~"Bytes", #~"SetVal", #~"MapVV", #~"IdMapV",
-#~"IdSet"), and it is the compiler-provided default on a valtype. A
-#_*"generic parameter" types #~".copy" as #~"t -> t" while the template
-body is checked, and the per-monomorphisation walk then holds each
-instance to the concrete type's own interface -- so #~"T = StringView" or
-#~"T = List String" is refused inside a template exactly as it is outside
-one. On a user-defined class or union it is a compile-time error (E0100):
-the emitter has no recursive clone generation, and before the error
-landed the miss produced silently-invalid C.
-
-Implementing it would mirror the auto-destructor machinery -- a
-per-type #~"_copy" walking fields and union payloads, boxing heap
-members -- and needs decisions on cycles (reject? runtime trap?) and
-on whether protocol-typed fields can be cloned at all (the vtable
-knows destroy but not copy today). Until then the idioms are
-#~".take" for transfer and field-by-field construction for real
-duplication; the json unit's scalar-only accessors are an example of
-designing around the gap.
+The compiler synthesises no #~".copy" for a class or a union. Which fields a
+duplicate clones and which it shares, and what a nested container means, are
+the author's decisions, so the author writes the method in the type's #~"as"
+block; until then #~"x.copy" on such a type is a compile error naming the type.
+A value type's copy is its bytes and is always complete. See
+[#> to=./ownership.html: ownership], "Which types have a .copy".
 
 #--: bare Option/Result names as their falsy arms
 
@@ -538,8 +526,7 @@ A task is a class that declares #~"task: (thread.Task R)" and a #~"call"
 method; its fields are what it captures, each with its ownership written out
 (#~".view", #~".borrow", #~".take"), which is what lets the handle carry the
 right locks. A closure literal would save the class for one-off work, but the
-language has no closures and none are planned. Decided 2026-10-20: a task stays
-a class. Recorded here so the question is not reopened.
+language has no closures and none are planned, so a task stays a class.
 
 #--: threads: one SQLite connection shared without a Mutex (decided)
 
@@ -547,10 +534,8 @@ A connection is #~"thread.Unshareable": it moves to a thread, or threads share
 one through #~"sync.Mutex sqlite.Database", each use holding the lock (SQLite
 is built #~"THREADSAFE=2", which keeps no lock per connection). A second
 connection type opened in SQLite's SERIALIZED mode, locking inside each SQLite
-call, was considered and dropped 2026-10-20: it is the same lock moved into
-SQLite, with no more parallelism and no safety the Mutex lacks. rusqlite takes
-the same line -- its #~"Connection" is #~"Send" and not #~"Sync" whatever the
-open flags. Recorded here so the question is not reopened.
+call, was considered and dropped: it is the same lock moved into SQLite, with
+no more parallelism and no safety the Mutex lacks.
 
 Noted for later, if a need shows: a connection pool (#~"sqlite.Pool"), the
 shape threads that share a database usually want. It opens connections to one
@@ -565,7 +550,6 @@ sendable -- a held value is never moved out (#~"h.take" is refused), and
 receiving it would give the other thread a value it could change -- so it is
 sent as #~".copy", written out. A channel of held values, received as held,
 would need held twins of #~"Sender", #~"Receiver" and #~"ReceiverIter".
-Deferred 2026-10-20 until a program needs one.
 
 #--: static data: what is not built yet
 
@@ -602,16 +586,14 @@ reference, an interpolation temp), from every SOURCE (a String local, a
 String field, a parameter), into every SINK that ends the source while the
 view lives (reassigning or dropping it, moving the view into a container,
 returning it). Each combination is compiled, what compiles is run under
-ASan, and each hole gets its fix at the root and a fixture. Deferred
-2026-10-26 to an arc of its own.
+ASan, and each hole gets its fix at the root and a fixture.
 
 #--: a typedef's surface is its base's (decided)
 
 A typedef forwards its base's signatures: #~"Celsius: typedef f64" has
 #~"f64"'s methods and operators exactly as #~"f64" declares them, so
-#~"c + 1.5" takes and gives the base's types. Decided 2026-10-10 to keep
-this -- it costs nothing and the surface is the one the base already
-documents. A typedef that wants a stricter surface writes it by hand in its
+#~"c + 1.5" takes and gives the base's types. It stays so: it costs nothing,
+and the surface is the one the base already documents. A typedef that wants a stricter surface writes it by hand in its
 #~"as" block: #~"+: null" strikes a member off, and a typed member
 (#~"<: function {a: this.view b: this.view} out bool") replaces the
-base's. Recorded here so the question is not reopened.
+base's.
