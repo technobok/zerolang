@@ -1440,7 +1440,7 @@ emitter-guard:
 	chk "member-name TEXT (C spelling and row keys only; look members up by aliasChildNameId)" "$$e12" 14; \
 	if [ "$$fail" = "1" ]; then \
 	  echo "  A new name-resolution site was added to the emitter. Read the typechecker"; \
-	  echo "  stamp (atomVariableId/atomUnitDefId/callKind), the canonical child id, or"; \
+	  echo "  stamp (atomVariableId/refDecl/callKind), the canonical child id, or"; \
 	  echo "  ctxCname instead of resolving by name."; \
 	  exit 1; \
 	fi; \

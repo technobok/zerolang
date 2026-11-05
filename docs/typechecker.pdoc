@@ -111,10 +111,10 @@ Key fields:
   [#*: #~"returnTypeId", #~"thisParamNameId":
     populated for function types]
   [#*: generic-state fields: #~"genericOriginId",
-    #~"isTagGenericOrigin", and the specialization trie
-    #~"genericChildren" (an #~"IdMap" keyed by the argument's type id,
-    or by the literal value at a numeric parameter level) with the
-    ordered argument ids in #~"genericArgs" / #~"genericArgIsValue"]
+    #~"isTagGenericOrigin", and the specialization trie --
+    #~"typeChildren" keyed by an argument's type id, #~"valueChildren" by
+    the value at a numeric parameter level -- with the instance's ordered
+    arguments in #~"genericArgs"]
   [#*: layout / memory metadata: #~"needsDestructor",
     #~"isHeapAllocated", #~"isBox" (see
     #~"representation_of_types.pdoc")]
@@ -220,13 +220,10 @@ per-instantiation mono stamps (#~"monoNodeType", #~"monoParamSubst").
 The class comment in #~"src/ztyping.z" is the authoritative list. The
 container also carries some of the body walk's ambient state (the
 pending-borrow slot, the suppress flags), the error accumulator
-(#~"errors", #~"isError"), the implementation rows and the build facts
-(#~"ccPath", #~"ccMode", #~"targetTriple").
+(#~"errors", #~"isError") and the implementation rows.
 
-The SQL dumper writes one row per component entry of the tables it
-projects (#~"src/zsqldump.z").
-The SQL dumper writes one row per component entry, so every table
-has a direct SQL representation.
+The SQL dumper (#~"src/zsqldump.z") writes one row per component entry of
+the tables it projects, so every table has a direct SQL representation.
 
 
 #---: ZSymbolTable -- the body walk's state
@@ -277,80 +274,53 @@ install a lock; the rule for whether it conflicts is owned by
 the scope module.
 
 
-#--: Code Map of #~"ztypecheck.z"
+#--: Entry points of #~"ztypecheck.z"
 
-The file is long, but it organises top-to-bottom roughly as
-follows. Functions are listed by name (no line numbers -- they
-rot fast; #~"grep -n" finds them quickly). Use this map to scroll
-into the right region; read prose below for the semantics.
+The functions below are where each part of the check starts. They are
+not in any order in the file; #~"grep -n '^name:'" finds each one. Read the
+prose below for the semantics.
 
 #table:
-  [#tr: [#th: Band] [#th: Key functions]]
-  [#tr: [#td: Pass setup]
-        [#td: module-level #~"typecheck" entry -- resolving
-              stack, unit cache, call-id stack, and the
-              fresh-temp counter (#~"ZTyping.nextTempId")]]
-  [#tr: [#td: Entry point]
-        [#td: #~"typecheck" -- starts at #~"main", drives demand-
-              driven resolution and body checking, returns the
-              accumulated error list]]
-  [#tr: [#td: Unit-level name resolution]
+  [#tr: [#th: Part] [#th: Entry points]]
+  [#tr: [#td: The pass]
+        [#td: #~"typecheck" -- starts at #~"main", drives demand-driven
+              resolution and body checking, and returns the error list]]
+  [#tr: [#td: Unit-level names]
         [#td: #~"resolveDef" (dispatches over #~"nodetype"),
               #~"resolveUnitBody"]]
-  [#tr: [#td: Type-definition resolvers]
-        [#td: #~"resolveFunction",
-              #~"resolveRecord", #~"resolveClass",
-              #~"resolveUnion",
-              #~"resolveVariant",
-              #~"refuseReftypeMember", #~"refuseReftypeBounds",
-              #~"resolveProtocol",
-              #~"resolveFacet",
-              #~"resolveInlineGenericUnit",
-              #~"resolveStaticList"]]
-  [#tr: [#td: Name and typeref resolution]
+  [#tr: [#td: Type definitions]
+        [#td: #~"resolveFunction", #~"resolveRecord", #~"resolveClass",
+              #~"resolveUnion", #~"resolveVariant", #~"resolveProtocol",
+              #~"resolveFacet", #~"resolveInlineGenericUnit",
+              #~"resolveStaticListInto", #~"refuseReftypeMember",
+              #~"refuseReftypeBounds"]]
+  [#tr: [#td: Names and type references]
         [#td: #~"envLookup", #~"walkLookupTyperef",
-              #~"resolveTyperefShell", #~"checkDotted",
-              #~"dottedParentName", and the
-              #~"type" / #~"this" keyword resolvers]]
+              #~"resolveTyperefShell", #~"dottedParentName"]]
   [#tr: [#td: Monomorphisation]
         [#td: #~"getOrMintSpec", #~"mintMono",
               #~"validateGenericTypeArgs"]]
-  [#tr: [#td: Function body]
-        [#td: #~"checkFunctionBody", #~"checkMethodBodies",
-              #~"checkBodies"]]
+  [#tr: [#td: Bodies]
+        [#td: #~"checkBodies", #~"checkMethodBodies",
+              #~"checkFunctionBody"]]
   [#tr: [#td: Statements]
-        [#td: #~"checkStatement",
-              #~"checkStmtInner",
-              #~"checkStmtExpression",
-              #~"checkAssignment",
+        [#td: #~"checkStatement", #~"checkStmtInner",
+              #~"checkStmtExpression", #~"checkAssignment",
               #~"checkReassignment", #~"checkSwap"]]
   [#tr: [#td: Expressions]
-        [#td: #~"checkValueAt", #~"checkValueArmAt",
-              #~"checkAtomid",
-              #~"checkString"]]
-  [#tr: [#td: Dotted paths]
-        [#td: #~"checkDotted" -- auto-call coercion gate;
-              handles #~".take" / #~".drop" / #~".borrow" /
-              #~".view" / #~".private"]]
+        [#td: #~"checkValueAt", #~"checkValueArmAt", #~"checkAtomid",
+              #~"checkString", #~"checkDotted" (auto-call, and the
+              #~".take" / #~".drop" / #~".borrow" / #~".view" /
+              #~".private" markers)]]
   [#tr: [#td: Calls]
-        [#td: #~"checkCall",
-              #~"checkMissingCallArgs",
-              #~"lockCallArg", #~"installBorrowLocks",
-              #~"checkProjectionCreate",
-              #~"checkTypedefCreate", and the argument-take /
-              lock-escape helpers]]
-  [#tr: [#td: Special call forms]
-        [#td: the return-call (#~"children[create]" construction)
-              and string-convert dispatch. The infix form is not
-              one: #~"a op b" is a call and takes the #~"checkCall"
-              path above]]
+        [#td: #~"checkCall", #~"checkMissingCallArgs", #~"lockCallArg",
+              #~"installBorrowLocks", #~"checkProjectionCreate",
+              #~"checkTypedefCreate". An infix #~"a op b" is a call and
+              takes the same path]]
   [#tr: [#td: Control flow]
-        [#td: #~"checkIf",
-              #~"checkFor", #~"checkWith",
-              #~"checkCase" / #~"checkClause" (match arm checking,
-              including branch narrowing and post-match
-              exclusion), #~"checkBoxConstruction"]]
-
+        [#td: #~"checkIf", #~"checkFor", #~"checkWith", #~"checkDo",
+              #~"checkCase" (match arms, their narrowing and the
+              exclusion after the match), #~"checkBoxConstruction"]]
 
 #--: Dispatch Mechanism
 
@@ -665,10 +635,11 @@ clone.
     parameters); a hit returns the existing instance, a miss
     materializes one via #~"mintMono" and links it into the
     trie with its ordered #~"genericArgs".]
-  [#*: the instance walk -- a mono's method bodies are re-walked over
-    the TEMPLATE's AST with the instance's arguments bound
-    (#~"monoParamSubst"), stamping per-instance types into
-    #~"monoNodeType"; nothing is cloned.]
+  [#*: the instance walk -- a mono's method bodies are walked over a
+    clone of the template's body (#~"instanceBodyAt"), with the instance's
+    arguments bound (#~"monoParamSubst"). The signature's nodes are still
+    the template's, so what the walk answers about them is kept per
+    instance and node in #~"monoNodeType".]
   [#*: #~"validateGenericTypeArgs" -- enforces generic
     constraints on a candidate argument type.]
 
@@ -740,7 +711,7 @@ A bare type name in a runtime value position (no call at all) is the
 zero-argument case of the same dispatch. #~"checkAtomid" (and the
 unit-qualified leg of #~"checkDotted") stamps eligible atoms in the
 #~"implicitCreate" side table (nodeid to constructed type id, beside
-#~"callKind" / #~"atomUnitDefId"); the emitter keys the zero-value
+#~"callKind" / #~"refDecl"); the emitter keys the zero-value
 emission off that stamp. Eligibility is validated up front --
 #~"missingCtorFields" must come back empty -- and non-constructible
 families get targeted E0300 diagnostics instead of a stamp. Two gates
@@ -816,7 +787,7 @@ order:
   [#*: #~"src/zenv.z" -- the scope stack and the lock-conflict
     rule. The semantics of "what makes two locks conflict" lives
     here, not in the typechecker.]
-  [#*: #~"src/ztypecheck.z" -- enter via the Code Map above.
+  [#*: #~"src/ztypecheck.z" -- enter via the entry points above.
     A good first dive is #~"typecheck" → #~"resolveDef" →
     #~"resolveFunction" → #~"checkFunctionBody" →
     #~"checkStatement" → #~"checkStmtInner" → #~"checkValueAt" →

@@ -99,7 +99,7 @@ Table of Contents</div>
 </li>
 </ul>
 </li>
-<li><a href="#code-map-of">Code Map of </a>
+<li><a href="#entry-points-of">Entry points of </a>
 </li>
 <li><a href="#dispatch-mechanism">Dispatch Mechanism</a>
 </li>
@@ -204,10 +204,10 @@ enum) and a set of optional fields.</p>
 <li><code>returnTypeId</code>, <code>thisParamNameId</code>:
 populated for function types</li>
 <li>generic-state fields: <code>genericOriginId</code>,
-    <code>isTagGenericOrigin</code>, and the specialization trie
-    <code>genericChildren</code> (an <code>IdMap</code> keyed by the argument's type id,
-    or by the literal value at a numeric parameter level) with the
-    ordered argument ids in <code>genericArgs</code> / <code>genericArgIsValue</code></li>
+    <code>isTagGenericOrigin</code>, and the specialization trie --
+    <code>typeChildren</code> keyed by an argument's type id, <code>valueChildren</code> by
+    the value at a numeric parameter level -- with the instance's ordered
+    arguments in <code>genericArgs</code></li>
 <li>layout / memory metadata: <code>needsDestructor</code>,
     <code>isHeapAllocated</code>, <code>isBox</code> (see
     <code>representation_of_types.pdoc</code>)</li>
@@ -299,12 +299,9 @@ per-instantiation mono stamps (<code>monoNodeType</code>, <code>monoParamSubst</
 The class comment in <code>src/ztyping.z</code> is the authoritative list. The
 container also carries some of the body walk's ambient state (the
 pending-borrow slot, the suppress flags), the error accumulator
-(<code>errors</code>, <code>isError</code>), the implementation rows and the build facts
-(<code>ccPath</code>, <code>ccMode</code>, <code>targetTriple</code>).</p>
-<p>The SQL dumper writes one row per component entry of the tables it
-projects (<code>src/zsqldump.z</code>).
-The SQL dumper writes one row per component entry, so every table
-has a direct SQL representation.</p>
+(<code>errors</code>, <code>isError</code>) and the implementation rows.</p>
+<p>The SQL dumper (<code>src/zsqldump.z</code>) writes one row per component entry of
+the tables it projects, so every table has a direct SQL representation.</p>
 <h3 id="zsymboltable-the-body-walk-s-state"><a href="#zsymboltable-the-body-walk-s-state">3.5. ZSymbolTable -- the body walk's state</a></h3>
 <p><code>ZSymbolTable</code> (<code>src/zenv.z</code>) is the body walk's state over the
 declaration tree. A scope is a <code>scopeDecl</code> under the scope or
@@ -347,67 +344,44 @@ exclusion overlay row in the current scope</li>
 <code>ztypecheck.z</code>. The typechecker only chooses <em><strong>when</strong></em> to
 install a lock; the rule for whether it conflicts is owned by
 the scope module.</p>
-<h2 id="code-map-of"><a href="#code-map-of">4. Code Map of <code>ztypecheck.z</code></a></h2>
-<p>The file is long, but it organises top-to-bottom roughly as
-follows. Functions are listed by name (no line numbers -- they
-rot fast; <code>grep -n</code> finds them quickly). Use this map to scroll
-into the right region; read prose below for the semantics.</p>
+<h2 id="entry-points-of"><a href="#entry-points-of">4. Entry points of <code>ztypecheck.z</code></a></h2>
+<p>The functions below are where each part of the check starts. They are
+not in any order in the file; <code>grep -n '^name:'</code> finds each one. Read the
+prose below for the semantics.</p>
 <table>
 <thead>
-<tr><th style="text-align: left">Band</th><th style="text-align: left">Key functions</th></tr>
+<tr><th style="text-align: left">Part</th><th style="text-align: left">Entry points</th></tr>
 </thead>
 <tbody>
-<tr><td>Pass setup</td><td>module-level <code>typecheck</code> entry -- resolving
-              stack, unit cache, call-id stack, and the
-              fresh-temp counter (<code>ZTyping.nextTempId</code>)</td></tr>
-<tr><td>Entry point</td><td><code>typecheck</code> -- starts at <code>main</code>, drives demand-
-driven resolution and body checking, returns the
-accumulated error list</td></tr>
-<tr><td>Unit-level name resolution</td><td><code>resolveDef</code> (dispatches over <code>nodetype</code>),
+<tr><td>The pass</td><td><code>typecheck</code> -- starts at <code>main</code>, drives demand-driven
+resolution and body checking, and returns the error list</td></tr>
+<tr><td>Unit-level names</td><td><code>resolveDef</code> (dispatches over <code>nodetype</code>),
 <code>resolveUnitBody</code></td></tr>
-<tr><td>Type-definition resolvers</td><td><code>resolveFunction</code>,
-<code>resolveRecord</code>, <code>resolveClass</code>,
-<code>resolveUnion</code>,
-<code>resolveVariant</code>,
-<code>refuseReftypeMember</code>, <code>refuseReftypeBounds</code>,
-<code>resolveProtocol</code>,
-<code>resolveFacet</code>,
-<code>resolveInlineGenericUnit</code>,
-<code>resolveStaticList</code></td></tr>
-<tr><td>Name and typeref resolution</td><td><code>envLookup</code>, <code>walkLookupTyperef</code>,
-<code>resolveTyperefShell</code>, <code>checkDotted</code>,
-<code>dottedParentName</code>, and the
-<code>type</code> / <code>this</code> keyword resolvers</td></tr>
+<tr><td>Type definitions</td><td><code>resolveFunction</code>, <code>resolveRecord</code>, <code>resolveClass</code>,
+<code>resolveUnion</code>, <code>resolveVariant</code>, <code>resolveProtocol</code>,
+<code>resolveFacet</code>, <code>resolveInlineGenericUnit</code>,
+<code>resolveStaticListInto</code>, <code>refuseReftypeMember</code>,
+<code>refuseReftypeBounds</code></td></tr>
+<tr><td>Names and type references</td><td><code>envLookup</code>, <code>walkLookupTyperef</code>,
+<code>resolveTyperefShell</code>, <code>dottedParentName</code></td></tr>
 <tr><td>Monomorphisation</td><td><code>getOrMintSpec</code>, <code>mintMono</code>,
 <code>validateGenericTypeArgs</code></td></tr>
-<tr><td>Function body</td><td><code>checkFunctionBody</code>, <code>checkMethodBodies</code>,
-<code>checkBodies</code></td></tr>
-<tr><td>Statements</td><td><code>checkStatement</code>,
-<code>checkStmtInner</code>,
-<code>checkStmtExpression</code>,
-<code>checkAssignment</code>,
+<tr><td>Bodies</td><td><code>checkBodies</code>, <code>checkMethodBodies</code>,
+<code>checkFunctionBody</code></td></tr>
+<tr><td>Statements</td><td><code>checkStatement</code>, <code>checkStmtInner</code>,
+<code>checkStmtExpression</code>, <code>checkAssignment</code>,
 <code>checkReassignment</code>, <code>checkSwap</code></td></tr>
-<tr><td>Expressions</td><td><code>checkValueAt</code>, <code>checkValueArmAt</code>,
-<code>checkAtomid</code>,
-<code>checkString</code></td></tr>
-<tr><td>Dotted paths</td><td><code>checkDotted</code> -- auto-call coercion gate;
-handles <code>.take</code> / <code>.drop</code> / <code>.borrow</code> /
-<code>.view</code> / <code>.private</code></td></tr>
-<tr><td>Calls</td><td><code>checkCall</code>,
-<code>checkMissingCallArgs</code>,
-<code>lockCallArg</code>, <code>installBorrowLocks</code>,
-<code>checkProjectionCreate</code>,
-<code>checkTypedefCreate</code>, and the argument-take /
-lock-escape helpers</td></tr>
-<tr><td>Special call forms</td><td>the return-call (<code>children[create]</code> construction)
-              and string-convert dispatch. The infix form is not
-              one: <code>a op b</code> is a call and takes the <code>checkCall</code>
-              path above</td></tr>
-<tr><td>Control flow</td><td><code>checkIf</code>,
-<code>checkFor</code>, <code>checkWith</code>,
-<code>checkCase</code> / <code>checkClause</code> (match arm checking,
-including branch narrowing and post-match
-exclusion), <code>checkBoxConstruction</code></td></tr>
+<tr><td>Expressions</td><td><code>checkValueAt</code>, <code>checkValueArmAt</code>, <code>checkAtomid</code>,
+<code>checkString</code>, <code>checkDotted</code> (auto-call, and the
+<code>.take</code> / <code>.drop</code> / <code>.borrow</code> / <code>.view</code> /
+<code>.private</code> markers)</td></tr>
+<tr><td>Calls</td><td><code>checkCall</code>, <code>checkMissingCallArgs</code>, <code>lockCallArg</code>,
+<code>installBorrowLocks</code>, <code>checkProjectionCreate</code>,
+<code>checkTypedefCreate</code>. An infix <code>a op b</code> is a call and
+takes the same path</td></tr>
+<tr><td>Control flow</td><td><code>checkIf</code>, <code>checkFor</code>, <code>checkWith</code>, <code>checkDo</code>,
+<code>checkCase</code> (match arms, their narrowing and the
+exclusion after the match), <code>checkBoxConstruction</code></td></tr>
 </tbody>
 </table>
 <h2 id="dispatch-mechanism"><a href="#dispatch-mechanism">5. Dispatch Mechanism</a></h2>
@@ -680,10 +654,11 @@ parameter (type-id keys, literal-value keys for numeric
 parameters); a hit returns the existing instance, a miss
 materializes one via <code>mintMono</code> and links it into the
 trie with its ordered <code>genericArgs</code>.</li>
-<li>the instance walk -- a mono's method bodies are re-walked over
-    the TEMPLATE's AST with the instance's arguments bound
-    (<code>monoParamSubst</code>), stamping per-instance types into
-    <code>monoNodeType</code>; nothing is cloned.</li>
+<li>the instance walk -- a mono's method bodies are walked over a
+    clone of the template's body (<code>instanceBodyAt</code>), with the instance's
+    arguments bound (<code>monoParamSubst</code>). The signature's nodes are still
+    the template's, so what the walk answers about them is kept per
+    instance and node in <code>monoNodeType</code>.</li>
 <li><code>validateGenericTypeArgs</code> -- enforces generic
 constraints on a candidate argument type.</li>
 </ul>
@@ -741,7 +716,7 @@ disables bare-name construction (the case for <code>union</code> and
 zero-argument case of the same dispatch. <code>checkAtomid</code> (and the
 unit-qualified leg of <code>checkDotted</code>) stamps eligible atoms in the
 <code>implicitCreate</code> side table (nodeid to constructed type id, beside
-<code>callKind</code> / <code>atomUnitDefId</code>); the emitter keys the zero-value
+<code>callKind</code> / <code>refDecl</code>); the emitter keys the zero-value
 emission off that stamp. Eligibility is validated up front --
 <code>missingCtorFields</code> must come back empty -- and non-constructible
 families get targeted E0300 diagnostics instead of a stamp. Two gates
@@ -804,7 +779,7 @@ component-table architecture concrete.</li>
 <li><code>src/zenv.z</code> -- the scope stack and the lock-conflict
 rule. The semantics of "what makes two locks conflict" lives
 here, not in the typechecker.</li>
-<li><code>src/ztypecheck.z</code> -- enter via the Code Map above.
+<li><code>src/ztypecheck.z</code> -- enter via the entry points above.
 A good first dive is <code>typecheck</code> &#x2192; <code>resolveDef</code> &#x2192;
 <code>resolveFunction</code> &#x2192; <code>checkFunctionBody</code> &#x2192;
 <code>checkStatement</code> &#x2192; <code>checkStmtInner</code> &#x2192; <code>checkValueAt</code> &#x2192;
