@@ -9932,12 +9932,12 @@ instanceMethodArgValue: function {
     mco: ztypes.tid
     posParamNameId: zast.nameid
     posParamId: ztypes.tid
-    posIdx0: u64
+    posIdx: u64
     av: String.borrow
     # the facts of what is appended to `av`
     avF: cfacts.borrow
 } out instargval is {
-    positionalIdx: posIdx0
+    positionalIdx: posIdx
     ca: ctorArgFor :ast :call label: posParamNameId posIdx: positionalIdx
     isLabelled: ca.labelled
     iiF: cfacts
@@ -10041,7 +10041,7 @@ instanceMethodArg: function {
     mco: ztypes.tid
     posParamNameId: zast.nameid
     posParamId: ztypes.tid
-    posIdx0: u64
+    posIdx: u64
     args: String.borrow
     facts: cfacts.borrow
 } out u64 is {
@@ -10056,7 +10056,7 @@ instanceMethodArg: function {
         :mco
         :posParamNameId
         :posParamId
-        :posIdx0
+        :posIdx
         av: atomVarId
         :avF
     )
@@ -10395,7 +10395,7 @@ orderMethodParam: function {
             :mco
             posParamNameId: pname
             posParamId: pid
-            posIdx0: posIdx
+            :posIdx
             args: one
             facts: oneF
         )
@@ -20092,7 +20092,7 @@ emitUserTypeMemberRead: function {
 # emitIdCollectionMemberRead -- a counter or no-arg method on the id-keyed pair,
 # on a Set or Map, or on a map ENTRY. A Set/Map is a heap pointer and reads
 # through `->`; the id-keyed pair and the entries are stack structs and read
-# through accB2, exactly as a List does.
+# through `acc`, exactly as a List does.
 emitIdCollectionMemberRead: function {
     ast: Ast.view
     symtab: zenv.ZSymbolTable.view
@@ -20102,26 +20102,26 @@ emitIdCollectionMemberRead: function {
     bn2: StringView
     bn2F: cfacts
     bstamp: ztypes.tid
-    accB2: StringView
-    recvB2: StringView
+    acc: StringView
+    recv: StringView
     facts: cfacts.borrow
 } out String is {
     if (isIdCollectionOriginOf :symtab :ctx tid: bstamp) then {
         if mnId == zast.wellKnown.slot.wkLength then {
-            return (stating :facts from: (memberFacts b: bn2F) text: "\{bn2}\{accB2}length")
+            return (stating :facts from: (memberFacts b: bn2F) text: "\{bn2}\{acc}length")
         }
         if mnId == zast.wellKnown.slot.wkCapacity then {
-            return (stating :facts from: (memberFacts b: bn2F) text: "\{bn2}\{accB2}capacity")
+            return (stating :facts from: (memberFacts b: bn2F) text: "\{bn2}\{acc}capacity")
         }
         if mnId == zast.wellKnown.slot.wkIterate then {
             idcb: spelledCname :ctx tid: bstamp
             noteMemberUse :ctx mono: bstamp member: memberWord.slot.iterateAll
-            return (stating :facts from: callFacts text: "\{idcb}_iterate(\{recvB2})")
+            return (stating :facts from: callFacts text: "\{idcb}_iterate(\{recv})")
         }
         if mnId == zast.wellKnown.slot.wkIterateItems then {
             idBaseC: spelledCname :ctx tid: bstamp
             noteMemberUse :ctx mono: bstamp member: memberWord.slot.iterateItems
-            return (stating :facts from: callFacts text: "\{idBaseC}_iterateItems(\{recvB2})")
+            return (stating :facts from: callFacts text: "\{idBaseC}_iterateItems(\{recv})")
         }
     }
     if (isSetOriginOf :symtab :ctx tid: bstamp) then {
@@ -20399,7 +20399,7 @@ emitCollectionMemberRead: function {
         }
     }
     # the id-keyed pair are STACK structs, so their counters are read
-    # through accB2 (`.` or `->`) exactly as a List's are, not through
+    # through `acc` (`.` or `->`) exactly as a List's are, not through
     # the unconditional `->` a heap Map uses
     icm: (
         emitIdCollectionMemberRead
@@ -20411,8 +20411,8 @@ emitCollectionMemberRead: function {
         :bn2
         :bn2F
         :bstamp
-        accB2: acc.stringView
-        recvB2: recv.stringView
+        acc: acc.stringView
+        recv: recv.stringView
         :facts
     )
     if icm.length > 0 then return icm
@@ -26914,7 +26914,7 @@ emitForStmt: function {
             :ctx
             :n
             :ind
-            ind2: bodyInd.stringView
+            bodyInd: bodyInd.stringView
             :tmp
             :buf
         )
@@ -27163,14 +27163,14 @@ emitSteppedWhileHead: function {
     # the indent the loop itself is written at
     ind: StringView
     # the indent inside it, where the conditions and the test go
-    ind2: StringView
+    bodyInd: StringView
     # the free list the conditions' temps ride
     tmp: TmpCtr
     # the loop opening, the conditions and the break test all append here
     buf: String.borrow
 } is {
     buf.append "\{ind}while (1) {\n"
-    gv: newCondGuard :ctx ind: ind2 :buf
+    gv: newCondGuard :ctx ind: bodyInd :buf
     (
         emitSteppedCond
         :ast
@@ -27179,11 +27179,11 @@ emitSteppedWhileHead: function {
         conds: n.conditions
         gvar: gv.stringView
         inLoop: true
-        ind: ind2
+        ind: bodyInd
         :tmp
         :buf
     )
-    buf.append "\{ind2}if (!\{gv}) break;\n"
+    buf.append "\{bodyInd}if (!\{gv}) break;\n"
 }
 
 # emitIfStmt -- an `if` in statement position. A chain whose conditions all fold
@@ -37498,8 +37498,8 @@ demandKeyCalls: function {
         return
     }
     if kind != 0 then return
-    dh: declaredKeyFnId :symtab :ctx tid0: k nid: zast.wellKnown.slot.wkHash
-    de: declaredKeyFnId :symtab :ctx tid0: k nid: zast.wellKnown.slot.wkOpEq
+    dh: declaredKeyFnId :symtab :ctx keyTid: k nid: zast.wellKnown.slot.wkHash
+    de: declaredKeyFnId :symtab :ctx keyTid: k nid: zast.wellKnown.slot.wkOpEq
     if dh.isZero.not when de.isZero.not then {
         if hashK then noteFnUse :ctx tid: dh
         if eqK then noteFnUse :ctx tid: de
@@ -41392,14 +41392,14 @@ monoMethodReturn: function {
 declaredKeyFnId: function {
     symtab: zenv.ZSymbolTable.view
     ctx: Ctx.view
-    tid0: ztypes.tid
+    keyTid: ztypes.tid
     # the member, `hash` or `==`
     nid: zast.nameid
 } out ztypes.tid is {
     if nid.isZero then return ztypes.tid
-    tid: tid0
-    if (chaseAggregateTypedef :symtab :ctx tid: tid0) != tid0 then {
-        tid = ztypecheck.valOpOwner st: symtab tid: tid0 nameId: nid
+    tid: keyTid
+    if (chaseAggregateTypedef :symtab :ctx tid: keyTid) != keyTid then {
+        tid = ztypecheck.valOpOwner st: symtab tid: keyTid nameId: nid
     }
     if (symtab.typing.declIsMethodId parentTypeId: tid nameId: nid).not then return ztypes.tid
     if (symtab.typing.declMemberIsSynth parentTypeId: tid nameId: nid) then return ztypes.tid
@@ -41424,7 +41424,7 @@ declaredKeyFnC: function {
     tid: ztypes.tid
     memberId: zast.nameid
 } out String is {
-    fid: declaredKeyFnId :symtab :ctx tid0: tid nid: memberId
+    fid: declaredKeyFnId :symtab :ctx keyTid: tid nid: memberId
     if fid.isZero then return "".string
     noteFnUse :ctx tid: fid
     return (ctxCname :ctx tid: fid)
@@ -41467,8 +41467,8 @@ keyFnProtosC: function {
     rhsT: StringView
     rhsByPtr: bool
 } out String is {
-    hfid: declaredKeyFnId :symtab :ctx tid0: tid nid: zast.wellKnown.slot.wkHash
-    efid: declaredKeyFnId :symtab :ctx tid0: tid nid: zast.wellKnown.slot.wkOpEq
+    hfid: declaredKeyFnId :symtab :ctx keyTid: tid nid: zast.wellKnown.slot.wkHash
+    efid: declaredKeyFnId :symtab :ctx keyTid: tid nid: zast.wellKnown.slot.wkOpEq
     hq: keyFnParamConstC :symtab fid: hfid index: 0
     eq: keyFnParamConstC :symtab fid: efid index: 0
     rq: String

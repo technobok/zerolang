@@ -18637,12 +18637,12 @@ aliasTargetTid: function {
     aParent: ztypes.declid
     tuId: zast.nameid
     tnId: zast.nameid
-    atid0: ztypes.tid
+    startTid: ztypes.tid
     rootedOut: ListVal bool
     defNameId: zast.nameid
 } out ztypes.tid is {
     typeRooted: false
-    atid: atid0
+    atid: startTid
     if atid.isZero then {
         # a type-rooted target (`true: bool.true`): the root names a tagged
         # type, the member one of its value arms -- the alias denotes a VALUE
@@ -18990,7 +18990,7 @@ resolveAliasKeyIn: function {
         :aParent
         tuId: altK.unitName
         tnId: altK.defName
-        atid0: atid
+        startTid: atid
         :rootedOut
         defNameId: altK.defName
     )
@@ -22864,13 +22864,13 @@ buildInstanceMono: function {
     rtId: zast.nameid
     rtu: ztypes.declid
     rtop: zast.nodeid
-    tplId0: ztypes.tid
+    tplId: ztypes.tid
     memberIdAt: ztypes.tid
     subs: (IdMapV zast.nameid v: ztypes.tid).view
 } is {
     # the request resolved its template at COLLECTION: its id, the node that
     # declares it, and the unit whose AST holds that node
-    if rtop.isZero or tplId0.isZero then return
+    if rtop.isZero or tplId.isZero then return
     (
         buildUnitMono
         :st
@@ -22879,7 +22879,7 @@ buildInstanceMono: function {
         tmplUnitName: rtu
         tmplNameId: rtId
         monoId: memberIdAt
-        tplId: tplId0
+        :tplId
         :subs
         templateOpId: rtop
     )
@@ -23036,7 +23036,7 @@ completeOneInstance: function {
         :rtId
         :rtu
         :rtop
-        tplId0: tplId
+        :tplId
         :memberIdAt
         :subs
     )
@@ -24432,24 +24432,24 @@ cloneMethodParams: function {
     unitDecl: ztypes.declid
     scope: ztypes.declid
     specId: ztypes.tid
-    fid5: ztypes.tid
+    fnTid: ztypes.tid
     templateName: StringView
     # the template's parameters: name ids, types and declared ownership, slot
     # for slot
-    cNid5: (ListVal zast.nameid).view
-    cI5: (ListVal ztypes.tid).view
-    cOh5: (ListVal bool).view
-    cOv5: (ListVal ztypes.zparamownership).view
+    paramNames: (ListVal zast.nameid).view
+    paramTids: (ListVal ztypes.tid).view
+    paramHolds: (ListVal bool).view
+    paramOwnerships: (ListVal ztypes.zparamownership).view
     idSubs: (IdMapV ztypes.tid v: ztypes.genericarg)
     tplClassId: ztypes.tid
     # the template's receiver name, when a marked receiver renames it
     tpn0id: zast.nameid
 } is {
     pi5: u64
-    pn5: cNid5.length
+    pn5: paramNames.length
     for pi5 < pn5 loop {
-        paramName: cNid5.get i: pi5
-        paramTid: cI5.get i: pi5
+        paramName: paramNames.get i: pi5
+        paramTid: paramTids.get i: pi5
         targetTid: paramTid
         if paramTid == tplClassId then targetTid = specId
         if paramName == zast.wellKnown.slot.wkThis then targetTid = specId
@@ -24479,12 +24479,12 @@ cloneMethodParams: function {
                 if rs5.isZero.not then targetTid = rs5
             }
         }
-        st.typing.setMemberType parentTypeId: fid5 nameId: paramName childTypeId: targetTid
-        if (cOh5.get i: pi5) then {
-            paramOwnership: cOv5.get i: pi5
+        st.typing.setMemberType parentTypeId: fnTid nameId: paramName childTypeId: targetTid
+        if (paramHolds.get i: pi5) then {
+            paramOwnership: paramOwnerships.get i: pi5
             (
                 st.typing.setChildOwnershipId
-                parentTypeId: fid5
+                parentTypeId: fnTid
                 nameId: paramName
                 ownership: paramOwnership
             )
@@ -24545,7 +24545,7 @@ cloneMethodReturn: function {
     scope: ztypes.declid
     specId: ztypes.tid
     tplClassId: ztypes.tid
-    fid5: ztypes.tid
+    fnTid: ztypes.tid
     tplFnId: ztypes.tid
     templateName: StringView
     idSubs: (IdMapV ztypes.tid v: ztypes.genericarg)
@@ -24576,7 +24576,7 @@ cloneMethodReturn: function {
             nid: rn5
             tplDecl: (declOfTypeId :st tid: tplClassId)
         ) then {
-            st.reg.setReturnType typeId: fid5 value: specId
+            st.reg.setReturnType typeId: fnTid value: specId
             return
         }
         # a type a generic unit declares, cloned before its method's return was
@@ -24617,7 +24617,7 @@ cloneMethodReturn: function {
         # asks the tag rather than isPartialOf; the name-keyed fixup arms heal
         # it after minting
         if (st.reg.typetypeOf typeId: rt5) != ztypes.ztypetype.genericParam then {
-            st.reg.setReturnType typeId: fid5 value: rt5
+            st.reg.setReturnType typeId: fnTid value: rt5
         }
     }
 }
@@ -24836,12 +24836,12 @@ cloneMethodInto: function {
         :unitDecl
         :scope
         :specId
-        fid5: fnTid
+        :fnTid
         templateName: templateName.stringView
-        cNid5: paramNames
-        cI5: paramTids
-        cOh5: paramHolds
-        cOv5: paramOwnerships
+        :paramNames
+        :paramTids
+        :paramHolds
+        :paramOwnerships
         :idSubs
         :tplClassId
         :tpn0id
@@ -24858,7 +24858,7 @@ cloneMethodInto: function {
         :scope
         :specId
         :tplClassId
-        fid5: fnTid
+        :fnTid
         :tplFnId
         templateName: templateName.stringView
         :idSubs
@@ -28528,7 +28528,7 @@ mintSpecUnderTemplate: function {
     templateId: ztypes.tid
     mid8: ztypes.tid
     subs: (IdMapV zast.nameid v: ztypes.tid)
-    idSubs8: (IdMapV ztypes.tid v: ztypes.genericarg)
+    idSubs: (IdMapV ztypes.tid v: ztypes.genericarg)
     fallbackArg: ztypes.tid
 } out ztypes.tid is {
     {
@@ -28541,7 +28541,7 @@ mintSpecUnderTemplate: function {
             :name
             :templateId
             :subs
-            idSubs: idSubs8
+            :idSubs
             :fallbackArg
             monoTid: mid8
         )
@@ -28572,16 +28572,16 @@ defaultsTailLength: function {
     st: zenv.ZSymbolTable
     ast: Ast
     tk8: ztypes.declid
-    args8: (ListVal ztypes.genericarg).view
+    args: (ListVal ztypes.genericarg).view
     label: StringView
 } out u64 is {
     end: label.length
-    ki: args8.length
+    ki: args.length
     for ki > 1 loop {
         ki = ki - 1
         d: st.reg.genericParamDefaultTidAt tdecl: tk8 i: ki
         if d.isZero then break
-        if ((args8.get i: ki) == (ztypes.genericarg.typeArg d)).not then break
+        if ((args.get i: ki) == (ztypes.genericarg.typeArg d)).not then break
         cut: defaultComponentLength :st :ast :d head: (label.substring from: 0 to: end)
         if cut == 0 then break
         end = end - cut
@@ -28615,14 +28615,14 @@ bindSpecDefaults: function {
     st: zenv.ZSymbolTable
     ast: Ast
     tk8: ztypes.declid
-    pnames8: (ListVal zast.nameid).view
+    paramNames: (ListVal zast.nameid).view
     subs: (IdMapV zast.nameid v: ztypes.tid)
     valSubs: (IdMapV zast.nameid v: u64)
     fallbackArg: ztypes.tid
     sfx: String
 } is {
     if fallbackArg.isZero.not then {
-        for each pn: pnames8 loop {
+        for each pn: paramNames loop {
             if (subs.has key: pn).not when (valSubs.has key: pn).not when (
                 st.reg.genericParamConstraintOf
                 tdecl: tk8
@@ -28642,15 +28642,15 @@ bindSpecDefaults: function {
 buildSpecTrieKeys: function {
     ast: Ast
     st: zenv.ZSymbolTable
-    pnames8: (ListVal zast.nameid).view
+    paramNames: (ListVal zast.nameid).view
     subs: (IdMapV zast.nameid v: ztypes.tid).view
     valSubs: (IdMapV zast.nameid v: u64).view
     fallbackArg: ztypes.tid
-    args8: ListVal ztypes.genericarg
+    args: ListVal ztypes.genericarg
     tk8: ztypes.declid
 } out bool is {
     trieOk: true
-    if pnames8.length == 0 then {
+    if paramNames.length == 0 then {
         # The template's arity is unreadable here -- its parameters are keyed by
         # the DEFINITION's Decl, and a canonical mint made before the unit roots
         # existed links `def` at a proxy instead. The loop below is skipped in
@@ -28661,12 +28661,12 @@ buildSpecTrieKeys: function {
         # instead: that at worst emits one instance twice, each under its own id.
         argCount: subs.length + valSubs.length
         if fallbackArg.isZero.not when argCount <= 1 then {
-            args8.append (ztypes.genericarg.typeArg fallbackArg)
+            args.append (ztypes.genericarg.typeArg fallbackArg)
         } else {
             trieOk = false
         }
     }
-    for each pn8: pnames8 loop {
+    for each pn8: paramNames loop {
         a8: paramArgOf :st tdecl: tk8 pnm: pn8 :subs :valSubs
         match (
             a8
@@ -28686,10 +28686,10 @@ buildSpecTrieKeys: function {
                     colno: 0
                 )
             } case valueArg then null
-            args8.append a8
+            args.append a8
         } case none then {
-            if fallbackArg.isZero.not when pnames8.length == 1 then {
-                args8.append (ztypes.genericarg.typeArg fallbackArg)
+            if fallbackArg.isZero.not when paramNames.length == 1 then {
+                args.append (ztypes.genericarg.typeArg fallbackArg)
             } else {
                 trieOk = false
             }
@@ -28701,7 +28701,7 @@ buildSpecTrieKeys: function {
         :ast
         unitDecl: (unitRootOfDecl :st declId: tk8)
         tdecl: tk8
-        pnames: pnames8
+        pnames: paramNames
         :subs
         at: zast.nodeid
         lineno: 0
@@ -28719,13 +28719,13 @@ registerSpecOnTrie: function {
     name: StringView
     templateId: ztypes.tid
     mid8: ztypes.tid
-    args8: (ListVal ztypes.genericarg).view
+    args: (ListVal ztypes.genericarg).view
 } is {
     cur: templateId
     ki: u64
-    kn: args8.length
+    kn: args.length
     for ki < kn loop {
-        k: args8.get i: ki
+        k: args.get i: ki
         last: false
         if (ki + 1) == kn then last = true
         n: st.reg.getGenericChild parentId: cur key: k
@@ -28755,7 +28755,7 @@ registerSpecOnTrie: function {
                     (
                         st.reg.appendGenericArg
                         specId: step
-                        arg: (args8.get i: kj)
+                        arg: (args.get i: kj)
                     )
                     kj = kj + 1
                 }
@@ -28765,7 +28765,7 @@ registerSpecOnTrie: function {
         cur = step
         ki = ki + 1
     }
-    for each a: args8 loop st.reg.appendGenericArg specId: mid8 arg: a
+    for each a: args loop st.reg.appendGenericArg specId: mid8 arg: a
 }
 
 # recordNumericArgConsts -- each numeric generic argument of a mono recorded as
@@ -28819,15 +28819,15 @@ recordNumericArgConsts: function {
 numericLevelKeyedByParam: function {
     st: zenv.ZSymbolTable.view
     tk8: ztypes.declid
-    pnames8: (ListVal zast.nameid).view
-    args8: (ListVal ztypes.genericarg).view
+    paramNames: (ListVal zast.nameid).view
+    args: (ListVal ztypes.genericarg).view
 } out bool is {
     pi: u64
-    for pi < pnames8.length loop {
-        if pi < args8.length when (args8.get i: pi).typeArg when (
+    for pi < paramNames.length loop {
+        if pi < args.length when (args.get i: pi).typeArg when (
             st.reg.genericParamConstraintOf
             tdecl: tk8
-            paramName: (pnames8.get i: pi)
+            paramName: (paramNames.get i: pi)
         ).numKind.has then return true
         pi = pi + 1
     }
@@ -28840,13 +28840,13 @@ mintValuePartialSpec: function {
     st: zenv.ZSymbolTable
     templateId: ztypes.tid
     sfx: StringView
-    args8: (ListVal ztypes.genericarg).view
+    args: (ListVal ztypes.genericarg).view
 } out ztypes.tid is {
     mn: "\{st.reg.nameOf tid: templateId}\{sfx}"
     mid: st.reg.newType name: mn.stringView typetype: ztypes.ztypetype.genericParam
     st.reg.setGenericOrigin typeId: mid value: templateId
     st.reg.setPartial typeId: mid value: true
-    for each a: args8 loop st.reg.appendGenericArg specId: mid arg: a
+    for each a: args loop st.reg.appendGenericArg specId: mid arg: a
     return mid
 }
 
@@ -28856,20 +28856,20 @@ mintValuePartialSpec: function {
 # the members are resolved.
 buildSpecIdSubs: function {
     st: zenv.ZSymbolTable.view
-    pnames8: (ListVal zast.nameid).view
-    args8: (ListVal ztypes.genericarg).view
-    idSubs8: (IdMapV ztypes.tid v: ztypes.genericarg)
+    paramNames: (ListVal zast.nameid).view
+    args: (ListVal ztypes.genericarg).view
+    idSubs: (IdMapV ztypes.tid v: ztypes.genericarg)
     tk8: ztypes.declid
 } is {
     pi8: u64
-    pt8: pnames8.length
+    pt8: paramNames.length
     for pi8 < pt8 loop {
-        paramName: pnames8.get i: pi8
+        paramName: paramNames.get i: pi8
         # a numeric parameter's value substitutes too: a reference over the
         # parameter inside the template completes with it
         paramTid: st.reg.genericParamTidOf tdecl: tk8 :paramName
         if paramTid.some then {
-            idSubs8.set key: paramTid value: (args8.get i: pi8)
+            idSubs.set key: paramTid value: (args.get i: pi8)
         }
         pi8 = pi8 + 1
     }
@@ -28940,7 +28940,7 @@ getOrMintSpec: function {
             :st
             :ast
             :tk8
-            pnames8: paramNames
+            :paramNames
             :subs
             :valSubs
             :fallbackArg
@@ -28953,16 +28953,16 @@ getOrMintSpec: function {
         :ast
         :st
         :tk8
-        pnames8: paramNames
+        :paramNames
         :subs
         :valSubs
         :fallbackArg
-        args8: args
+        :args
     )
     # a numeric level keyed by a generic parameter is a partial that stays off
     # the trie, where a value and a type id could coincide
-    if trieOk when (numericLevelKeyedByParam :st :tk8 pnames8: paramNames args8: args) then {
-        return (mintValuePartialSpec :st :templateId :sfx args8: args)
+    if trieOk when (numericLevelKeyedByParam :st :tk8 :paramNames :args) then {
+        return (mintValuePartialSpec :st :templateId :sfx :args)
     }
     if trieOk then {
         cur: templateId
@@ -28990,11 +28990,11 @@ getOrMintSpec: function {
     # decided once, where the spec is minted
     mn8: "\{st.reg.nameOf tid: templateId}\{sfx}\{defaultSuffix}"
     if trieOk then {
-        defaultsCut: defaultsTailLength :st :ast :tk8 args8: args label: mn8.stringView
+        defaultsCut: defaultsTailLength :st :ast :tk8 :args label: mn8.stringView
         if defaultsCut > 0 then mn8 = "\{mn8.substring from: 0 to: mn8.length - defaultsCut}"
     }
     idSubs: IdMapV ztypes.tid v: ztypes.genericarg
-    if trieOk then buildSpecIdSubs :st pnames8: paramNames args8: args idSubs8: idSubs :tk8
+    if trieOk then buildSpecIdSubs :st :paramNames :args :idSubs :tk8
     # A generic-parameter argument makes the spec partial -- and so does a
     # nested PARTIAL argument, which wears the same tag. Both readings are
     # wanted here and the tag is what carries both: narrowing this to
@@ -29049,7 +29049,7 @@ getOrMintSpec: function {
             name: mn8.stringView
             :templateId
             :mid8
-            args8: args
+            :args
         )
         recordNumericArgConsts :ast :st :scope monoId: mid8 tdecl: tk8
     }
@@ -29068,7 +29068,7 @@ getOrMintSpec: function {
         :templateId
         :mid8
         :subs
-        idSubs8: idSubs
+        :idSubs
         :fallbackArg
     )
     completes: trieOk
@@ -30389,10 +30389,10 @@ skipCapacityArg: function {
     argOpId: zast.nodeid
     tplId: ztypes.tid
     pk0: zast.nameid
-    isP0: bool
+    isPrimary: bool
 } out bool is {
     skipCr: false
-    if isP0.not when pk0 == zast.wellKnown.slot.wkCapacity when (
+    if isPrimary.not when pk0 == zast.wellKnown.slot.wkCapacity when (
         templateTakesCapacity
         :st
         :ast
@@ -30874,7 +30874,7 @@ collectTypeArgAt: function {
         argOpId: opId
         :tplId
         :pk0
-        isP0: isPrimary
+        :isPrimary
     )
     if isPrimary.not when skipCr.not then anyMiss = true
     baseNameId: paramTypeBaseNameId :ast op: (ast.nodes.get i: opId)
@@ -33397,9 +33397,9 @@ checkMemberAutoCall: function {
     bt: ztypes.tid
     mo: ztypes.tid
     coerce: bool
-    result0: ztypes.tid
+    memberResult: ztypes.tid
 } out ztypes.tid is {
-    result: result0
+    result: memberResult
     # only a FUNCTION member auto-calls. fnAutoCallable counts the member's
     # parameters, and a field's type -- a generic parameter above all -- may
     # declare none, which read a field as a call that locked its receiver.
@@ -35763,7 +35763,7 @@ checkResolvedMember: function {
         :bt
         :mo
         coerce: callIt
-        result0: result
+        memberResult: result
     )
     # a refused read has no type, so what binds it is not refused again at
     # each use (`v: c.compare` then `"\{v}"`)
@@ -39580,7 +39580,7 @@ transferTakeIntoBinding: function {
     # the bound type
     vt: ztypes.tid
     # the new binding's variable
-    vid2: ztypes.vid
+    boundVid: ztypes.vid
 } is {
     if (st.reg.isReftypeOf tid: vt).not then return
     tv5: takenLocalVar :st :ast nid: asgn.value
@@ -39590,7 +39590,7 @@ transferTakeIntoBinding: function {
         :st
         :ast
         from: tv5
-        to: vid2
+        to: boundVid
         verb: "into an owned binding"
         nodeid: asgn.nid
         lineno: asgn.lineno
@@ -39608,9 +39608,9 @@ checkReadonlyBindSource: function {
     ast: Ast.view
     asgn: asgnref
     vt: ztypes.tid
-    vid2: ztypes.vid
+    boundVid: ztypes.vid
 } is {
-    transferTakeIntoBinding :st :ast :asgn :vt :vid2
+    transferTakeIntoBinding :st :ast :asgn :vt :boundVid
     # Readonly is deep: a reftype read out of a readonly path is itself
     # readonly, and takes the same self-lock. Without this the binding is
     # a laundering step -- `i: c.sub` off a `view` receiver would hand back
@@ -39623,7 +39623,7 @@ checkReadonlyBindSource: function {
     if roDeep when (valueIsHold :ast n: (ast.nodes.get i: asgn.value)).not then {
         rop: ListVal zast.nameid
         rop.append asgn.name
-        roh: ztypes.zlockholder.var vid2
+        roh: ztypes.zlockholder.var boundVid
         ror: (
             st.tryLock
             pool: ast.names
@@ -39657,7 +39657,7 @@ checkReadonlyBindSource: function {
         # anything.
         hpp: ListVal zast.nameid
         hpp.append asgn.name
-        hph: ztypes.zlockholder.var vid2
+        hph: ztypes.zlockholder.var boundVid
         hpr: (
             st.tryLock
             pool: ast.names
@@ -40218,7 +40218,7 @@ checkAssignmentIn: function {
             :ast
             :asgn
             :vt
-            vid2: boundVid
+            :boundVid
         )
         instX: (own == ztypes.zownership.borrowed) or (pboX and (bpins.length > 0))
         st.typing.pendingBorrowOwned = false
@@ -59664,7 +59664,7 @@ lockReadonlyParam: function {
     pm: argref
     pnid: zast.nodeid
     pnId: zast.nameid
-    vid2: ztypes.vid
+    boundVid: ztypes.vid
 } is {
     # A readonly parameter -- `view` (not owned) or `hold`
     # (owned) -- is readonly for the whole body: it holds a
@@ -59680,7 +59680,7 @@ lockReadonlyParam: function {
     # here rather than left to the emitter's ABI choice.
     vpp: ListVal zast.nameid
     vpp.append pnId
-    vph: ztypes.zlockholder.var vid2
+    vph: ztypes.zlockholder.var boundVid
     vpr: (
         st.tryLock
         pool: ast.names
@@ -59875,7 +59875,7 @@ bindFunctionParam: function {
     ) then st.reg.setVariablePrivate id: paramVid
     pnId: pm.name
     st.defineVar nameId: pnId vid: paramVid
-    if isRoP then lockReadonlyParam :st :ast :pm :pnid :pnId vid2: paramVid
+    if isRoP then lockReadonlyParam :st :ast :pm :pnid :pnId boundVid: paramVid
     st.typing.setDefVariable nid: pnid vid: paramVid
     st.reg.setVariableOrigin id: paramVid origin: ztypes.zvarorigin.param
 }
