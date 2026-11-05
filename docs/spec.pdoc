@@ -197,8 +197,6 @@ Other predefined identifiers:
   error panic
 
   return break continue yield
-
-  iterator
   """
 
 #----: Integer Identifiers
@@ -1144,9 +1142,11 @@ They are one of the following forms:
   [#*: the receiver object followed by the method name followed by it's single
     unnamed argument (#_*"operator syntax").]
 
-Calls may only be used in function bodies. Type specifiers may only be used
-where types are required - argument definitions, components of classes,
-records, units etc.
+A function is called only in a function body. Outside one, an operation on
+constant values is folded at compile time instead (see
+[#> to=constant-folding: Constant Folding]): #~"third: 1.0 / 3.0" defines a
+constant. Type specifiers are used only where types are required -- parameter
+definitions, the members of classes, records, units and so on.
 
 Note that parentheses are not used for function calls but as the call itself is
 an expression, the entire call may be surrounded by parentheses for grouping or
@@ -1160,8 +1160,6 @@ a field holding a function reference. Use
 function reference instead.
 
 #----: Call Arguments
-
-TODO: generic argument are 'unevaluated'
 
 Named arguments can be specified in any order. Arguments are evaluated left to
 right as specified in the call, whatever the order of the parameters they bind;
@@ -1432,10 +1430,6 @@ so a function-typed parameter with no default names a spec.
   }
   """
 
-TODO: generic function call (with and without generic parameter derivation)
-
-TODO: generic type specifier. With and without arguments passed down
-
 
 #---: Operations
 
@@ -1508,7 +1502,9 @@ expression.
 #~"break" can be used for early exit of a block. When a block contains
 #~"break", the expression type becomes optional (#~"optionval(T)" for value
 types, #~"Option(T)" for reference types). Normal completion produces
-#~"some(value)", while #~"break" produces #~"none".
+#~"some(value)", while #~"break" produces #~"none". A block whose last line has
+no value, or does not finish, is left only by its #~"break" and has no value
+of its own: using it as one is a compile error.
 
 #~"break" and #~"continue" are scope-based: each #~"for" loop introduces
 both into its scope; each block introduces only #~"break". A #~"break"
@@ -1965,7 +1961,7 @@ header says how its value is evaluated:
       iterator read bare is its #~"call", so the plain form walks it:
       #~"with it: xs.iterate do for x: it loop".]
 
-Either way a value of one of those four types is produced per iteration; the
+Either way a value of one of those types is produced per iteration; the
 loop terminates when it is #~"none", and binds 'var' to the unwrapped
 some-payload otherwise. Anything else bound here is a compile error: the
 binding is what ends the loop. #~"each" always takes a binding. See
@@ -2697,9 +2693,8 @@ a legal type but not a legal bound, since no argument could ever be the
 #~"i64".
 
 For compound types and functions, generic parameters are declared in the
-#~"as" clause, not in instance fields or function parameters -- except for a
-protocol or a facet, whose body holds only specs and which declares its
-generic parameters there, beside the specs they type. Functions declare
+#~"as" clause, not in instance fields or function parameters. A protocol and a
+facet are no exception: their body holds only their specs. Functions declare
 generic parameters via #~"as { name: constraint.generic }" alongside their
 #~"in", #~"out" and #~"is" clauses. See [#> to=function-definition-arguments:
 Function Definition Arguments] for details.
@@ -3328,11 +3323,12 @@ Ownership states:
 
 #~"this" within object methods is always borrowed (you cannot own yourself).
 
-Instance fields are always borrowed even if the parent is owned. Valtype fields
-can be reassigned freely with #~"=". Reftype fields must be set in the
-constructor and can only be changed later with #~"swap" -- this ensures that
-both locations always contain a valid instance throughout the lifetime of the
-parent object.
+A field read through its parent is a borrow, even when the parent is owned. A
+valtype field is reassigned with #~"=", which copies the new value in. A reftype
+field is reassigned with #~"=" from an owned value, which destroys the old value
+and moves the new one in (see [#> to=reassignment: reassignment]), or it
+exchanges its value with another location by #~"swap". Either way the field
+always holds a valid instance.
 
 Aliasing is never permitted for reftypes. (A #~"list" is no reftype: its
 name is a readonly view of one static array, which any number of names may
@@ -3957,11 +3953,7 @@ whose conditions are always true at compile time. A function may declare
   }
   """
 
-#----: any
-
-Compiler created union type that contains all types except itself. Can
-#_*"only" be used as a generic field type.
-
+#----: AnyRef and anyval
 
 #~"AnyRef.generic" constrains a generic parameter to reference types
 (classes, unions, protocols, strings, the reftype containers).
@@ -4368,22 +4360,12 @@ constant array).
 
 #----: break
 
-The builtin break function. Breaks out of the innermost #>"for" loop or block
-expression. Syntax error if not within a #~"for" or block expression. (TODO: only
-defined (on the call stack) within a for or in a block expression?)
-
-The type of the expression is #>"never" for the current block, and defaults to
-#>"null" for the caller, or returns the value of the specified argument.
-
-#table cols="2 2 4":
-  Argument  |Default |Value/Description
-  t         |Yes/Gen |Generic type descriptor.
-  result    |Yes     |Return operation, optional, returns null if missing
-
-#code language=zerolang: """
-  # effective signature
-  break: function {result: T} out never     # T: the block's value type
-  """
+The builtin #~"break" leaves the innermost #>"for" loop or block that holds
+it. It takes no argument, and its type is #>"never": it does not finish. Each
+#~"for" loop and each block brings #~"break" into its scope (see
+[#> to=block: block]), and outside all of them it is a compile error. A block
+that a #~"break" can leave has an optional value. The system unit declares it as
+#~"break: function out never is native".
 
 
 #code language=zerolang: """
@@ -4405,24 +4387,11 @@ The type of the expression is #>"never" for the current block, and defaults to
 
 #----: continue
 
-The builtin continue function. Abandons the current loop execution and resets
-back to the top of the innermost #>"for" loop. It is a syntax error if not
-within a #~"for" loop.
-(TODO: only defined (on the call stack) within a for?)
-
-The type of the expression is #>"never" for the current block, and defaults to
-#>"null" for the current iteration, or returns the value of the specified
-argument for the current iteration.
-
-#table cols="2 2 4":
-  Argument  |Default |Value/Description
-  t         |Yes/Gen |Generic type descriptor.
-  result    |Yes     |Return operation, optional, returns null if missing
-
-#code language=zerolang: """
-  # effective signature
-  continue: function {result: T} out never  # T: the iteration's value type
-  """
+The builtin #~"continue" ends the current iteration of the innermost #>"for"
+loop that holds it; the loop then tests its conditions again. It takes no
+argument, and its type is #>"never". Only a #~"for" loop brings #~"continue"
+into its scope, and outside one it is a compile error. The system unit declares it as
+#~"continue: function out never is native".
 
 #code language=zerolang: """
   xs: ListVal t: i64
@@ -4461,28 +4430,12 @@ resumption (only valid in a generator whose #~"accepts" is non-#~"null").
 
 #----: return
 
-The return builtin function. Exits the current function returning the value of
-the #~"is" expression, if provided.  The return value must match the return type
-specified in the function signature.
-
-The type of the expression is #>"never" for the current block, and the type of
-the return expression for the caller.
-
-(TODO: only defined (on the call stack) within a function?)
-
-#table cols="2 2 4":
-  Argument  |Default |Value/Description
-  t         |Yes/Gen |Generic type descriptor.
-  result    |Yes     |Return operation, optional, returns null if missing
-
-#code language=zerolang: """
-  # effective signature
-  return: function {result: T} out never    # T: the function's out type
-  """
-
-#table cols="2 2 4":
-  Argument  |Default |Value/Description
-  is        |Yes     |Return expression
+The builtin #~"return" leaves the enclosing function. The value written after
+it is the function's result, and it must match the function's #~"out" type; a
+function with no #~"out" returns no value. Its type is #>"never": it does not
+finish. #~"return" declares no parameter -- the compiler reads the value
+written after it and checks it against the #~"out". The system unit declares it as
+#~"return: function out never is native".
 
 #code language=zerolang:
   : answer: function out i64 is {
@@ -4933,8 +4886,8 @@ are incompatible.
 #~"List" is a growable collection reftype, generic over the element type,
 with dynamic-length storage and amortized O(1) append. It is the everyday
 alias of #~"ListRef", whose elements are reference types
-(#~"of: AnyRef.generic"); the valtype twin is #~"ListVal"
-(#~"of: anyval.generic"). Element accessors come in readonly/mutable pairs:
+(#~"T: AnyRef.generic"); the valtype twin is #~"ListVal"
+(#~"t: anyval.generic"). Element accessors come in readonly/mutable pairs:
 #~"get" (a view, or a copy on #~"ListVal") beside #~"getMut" (an exclusive
 #~"of.borrow" in both families), and #~"iterate" (shared, readonly) beside
 #~"iterateMut" (exclusive). Lists follow reftype ownership semantics: they
@@ -5143,8 +5096,6 @@ The function keyword defines a:
   object
 - a method: defined within an object and has a #~"this" receiver as the first
   argument
-- generator function: a function (or method) whose body contains
-  #~"yield"; see [#> to=generator-functions: Generator functions]
 - 'spec': a signature only; no body (only at unit level)
 
 It may also be generic by having generic parameters.
@@ -5187,7 +5138,7 @@ returns no value. It only has side-effects.
 
 The #~"in"  argument takes a brace delimited block of parameter definitions
 of the form #~"name: typereference". See #>"declarations-and-references" for
-details. A parameter #_*"must not" be private (#~"_") but may have ownership
+details. A parameter may have ownership
 attributes (#~"type.take", #~"type.borrow", #~"type.view", #~"type.hold") or it may have a
 default constant numeric value or a default function reference value. Parameters
 may reference generic types declared in the #~"as" clause. Declaring generic
@@ -5821,25 +5772,26 @@ level by passing a generic variable at the call site into the constructor.
 
 
 #code language=zerolang: """
-  myObj: class {
+  MyObj: class {
       a: u32
       b: String
-
+  } as {
       create: function {a: 0.u32 b: String.take} out this is {
-          return (meta.create :a :b)      # no stuttering... can use default args
+          return (meta.create :a :b)
       }
   }
   """
 
-Class constructors whose type carries non-owned fields simply return
-#~"out this" like any other class constructor; the type system verifies
-that the non-owned fields are initialised from #~".borrow" parameters of
-the constructor (escape analysis). See
+A constructor of a class that carries non-owned fields returns #~"outx this":
+the result holds references into the constructor's inputs, and #~"outx" keeps
+those inputs locked for the result's lifetime (#~"out this" is refused). The
+compiler checks that each non-owned field is initialised from a #~".borrow" or
+#~".view" parameter of the constructor (escape analysis). See
 [#> to=non-owned-fields-on-classes: Non-Owned Fields on Classes]
 and [#> to=./ownership.html: ownership].
 
 Note that constructors are not executed for value types that are copied as
-those values are a clone of the original. Contructors for value types are only
+those values are a clone of the original. Constructors for value types are only
 run when the value type is created explicitly.
 
 #-----: Implicit Construction
@@ -7298,10 +7250,11 @@ will cause a compilation error.
   }
   """
 
-Enum-style types (where all subtypes are null) should use `variant`, not `union`.
-A union is a reference type requiring heap allocation, which is pointless for a
-type that only carries a tag discriminator. Using `variant` makes the enum a
-stack-allocated value type with no allocation overhead.
+An enumeration -- a sum type whose arms all carry #~"null" -- is written as a
+#~"variant", not a #~"union". A variant is a value type: it is copied like a
+number, and a record or another variant can hold it. A union is a reference
+type with one owner, whose every transfer the compiler tracks, and a type that
+carries only its tag has no use for that.
 
 The built-in #~"bool" type is an ordinary 2-arm variant declared in the
 system unit, falsy arm first. Its values may be created directly by name
@@ -7322,9 +7275,8 @@ a 2-arm variant of the author's own reads the same way.
 
 #----: Using sum-type instances
 
-A sum type instance can be tested to see if it is a specific subtype. A
-predicate #~"method" is generated for each member named as the member name
-followed by a question mark. The method returns a boolean.
+A sum type instance can be tested for the arm it holds: #~"x.arm" is a
+#~"bool", true when #~"x" holds that arm.
 
 #code language=zerolang: """
   MyUnion: union {
@@ -8375,16 +8327,3 @@ compilation will always fail).
   # also be shown
   """
 
-#---: Identifier Metadata
-
-TODO: metadata about identifiers exposed via #~"meta" namespace.
-
-
-#code language=zerolang: """
-  myconstants: unit {
-      FIRST: 0
-      SECOND: 1
-  }
-
-  print "First is \{myconstants.FIRST}"
-  """

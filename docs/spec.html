@@ -201,8 +201,6 @@ Table of Contents</div>
 </li>
 <li><a href="#compile-time-error">Compile-Time Error</a>
 </li>
-<li><a href="#identifier-metadata">Identifier Metadata</a>
-</li>
 </ul>
 </li>
 </ul>
@@ -341,9 +339,7 @@ meta
 
 error panic
 
-return break continue yield
-
-iterator</code></pre>
+return break continue yield</code></pre>
 <h4 id="integer-identifiers"><a href="#integer-identifiers">2.7.2. Integer Identifiers</a></h4>
 <p>Integer literals follow the rules above for numeric identifiers.</p>
 <p>Decimal integer literals default to 64 bits wide and signed. Non-decimal
@@ -1161,9 +1157,11 @@ returning a value or owned reference.</p>
 <li>the receiver object followed by the method name followed by it's single
     unnamed argument (<em><strong>operator syntax</strong></em>).</li>
 </ul>
-<p>Calls may only be used in function bodies. Type specifiers may only be used
-where types are required - argument definitions, components of classes,
-records, units etc.</p>
+<p>A function is called only in a function body. Outside one, an operation on
+constant values is folded at compile time instead (see
+<a href="#constant-folding">Constant Folding</a>): <code>third: 1.0 / 3.0</code> defines a
+constant. Type specifiers are used only where types are required -- parameter
+definitions, the members of classes, records, units and so on.</p>
 <p>Note that parentheses are not used for function calls but as the call itself is
 an expression, the entire call may be surrounded by parentheses for grouping or
 precedence purposes.</p>
@@ -1174,7 +1172,6 @@ a field holding a function reference. Use
 <a href="#copy-on-function-names">.copy</a> on the function name to retrieve a
 function reference instead.</p>
 <h4 id="call-arguments"><a href="#call-arguments">4.4.1. Call Arguments</a></h4>
-<p>TODO: generic argument are 'unevaluated'</p>
 <p>Named arguments can be specified in any order. Arguments are evaluated left to
 right as specified in the call, whatever the order of the parameters they bind;
 a method's receiver is evaluated before its arguments.
@@ -1384,8 +1381,6 @@ main: function is {
     calc a: 1 b: 5           # c=20 -&gt; 26
     calc a: 1 b: 2 c: 3     # -&gt; 6
 }</code></pre>
-<p>TODO: generic function call (with and without generic parameter derivation)</p>
-<p>TODO: generic type specifier. With and without arguments passed down</p>
 <h3 id="operations"><a href="#operations">4.5. Operations</a></h3>
 <h3 id="flow-control-expressions"><a href="#flow-control-expressions">4.6. Flow Control Expressions</a></h3>
 <p>There are four flow control related constructs/expressions: <a href="#with">with</a> for a
@@ -1451,7 +1446,9 @@ expression.</p>
 <p><code>break</code> can be used for early exit of a block. When a block contains
 <code>break</code>, the expression type becomes optional (<code>optionval(T)</code> for value
 types, <code>Option(T)</code> for reference types). Normal completion produces
-<code>some(value)</code>, while <code>break</code> produces <code>none</code>.</p>
+<code>some(value)</code>, while <code>break</code> produces <code>none</code>. A block whose last line has
+no value, or does not finish, is left only by its <code>break</code> and has no value
+of its own: using it as one is a compile error.</p>
 <p><code>break</code> and <code>continue</code> are scope-based: each <code>for</code> loop introduces
 both into its scope; each block introduces only <code>break</code>. A <code>break</code>
 always binds to the innermost enclosing scope that defines it, so a
@@ -1873,7 +1870,7 @@ answer <code>Option(t)</code>, <code>optionval(t)</code> or a view union
 iterator read bare is its <code>call</code>, so the plain form walks it:
 <code>with it: xs.iterate do for x: it loop</code>.</li>
 </ul>
-<p>Either way a value of one of those four types is produced per iteration; the
+<p>Either way a value of one of those types is produced per iteration; the
 loop terminates when it is <code>none</code>, and binds 'var' to the unwrapped
 some-payload otherwise. Anything else bound here is a compile error: the
 binding is what ends the loop. <code>each</code> always takes a binding. See
@@ -2489,9 +2486,8 @@ union with a value-type member (<code>Choice: union { num: i64 text: String }</c
 a legal type but not a legal bound, since no argument could ever be the
 <code>i64</code>.</p>
 <p>For compound types and functions, generic parameters are declared in the
-<code>as</code> clause, not in instance fields or function parameters -- except for a
-protocol or a facet, whose body holds only specs and which declares its
-generic parameters there, beside the specs they type. Functions declare
+<code>as</code> clause, not in instance fields or function parameters. A protocol and a
+facet are no exception: their body holds only their specs. Functions declare
 generic parameters via <code>as { name: constraint.generic }</code> alongside their
 <code>in</code>, <code>out</code> and <code>is</code> clauses. See <a href="#function-definition-arguments">Function Definition Arguments</a> for details.</p>
 <p>Any object (unit, function/spec, union, variant, class, object, protocol,
@@ -3023,11 +3019,12 @@ out of scope.</p>
     <code>.borrow</code> parameter is the caller's value, passed by reference.</li>
 </ul>
 <p><code>this</code> within object methods is always borrowed (you cannot own yourself).</p>
-<p>Instance fields are always borrowed even if the parent is owned. Valtype fields
-can be reassigned freely with <code>=</code>. Reftype fields must be set in the
-constructor and can only be changed later with <code>swap</code> -- this ensures that
-both locations always contain a valid instance throughout the lifetime of the
-parent object.</p>
+<p>A field read through its parent is a borrow, even when the parent is owned. A
+valtype field is reassigned with <code>=</code>, which copies the new value in. A reftype
+field is reassigned with <code>=</code> from an owned value, which destroys the old value
+and moves the new one in (see <a href="#reassignment">reassignment</a>), or it
+exchanges its value with another location by <code>swap</code>. Either way the field
+always holds a valid instance.</p>
 <p>Aliasing is never permitted for reftypes. (A <code>list</code> is no reftype: its
 name is a readonly view of one static array, which any number of names may
 share.) A reftype can
@@ -3541,9 +3538,7 @@ for true loop {
     print "\{z}"
     break
 }</code></pre>
-<h4 id="any"><a href="#any">5.4.3. any</a></h4>
-<p>Compiler created union type that contains all types except itself. Can
-<em><strong>only</strong></em> be used as a generic field type.</p>
+<h4 id="anyref-and-anyval"><a href="#anyref-and-anyval">5.4.3. AnyRef and anyval</a></h4>
 <p><code>AnyRef.generic</code> constrains a generic parameter to reference types
 (classes, unions, protocols, strings, the reftype containers).
 <code>anyval.generic</code> constrains it to value types (records, variants,
@@ -3872,27 +3867,12 @@ Priority: union {
 # using a numeric type tag (auto-generate sequential values):
 MyUnion: union { a: i64 b: null } as { tag: u16.tag }</code></pre>
 <h4 id="break"><a href="#break">5.4.11. break</a></h4>
-<p>The builtin break function. Breaks out of the innermost <a href="#for">for</a> loop or block
-expression. Syntax error if not within a <code>for</code> or block expression. (TODO: only
-defined (on the call stack) within a for or in a block expression?)</p>
-<p>The type of the expression is <a href="#never">never</a> for the current block, and defaults to
-<a href="#null">null</a> for the caller, or returns the value of the specified argument.</p>
-<table>
-<colgroup>
-<col style="width: 25%">
-<col style="width: 25%">
-<col style="width: 50%">
-</colgroup>
-<thead>
-<tr><th style="text-align: left">Argument</th><th style="text-align: left">Default</th><th style="text-align: left">Value/Description</th></tr>
-</thead>
-<tbody>
-<tr><td>t</td><td>Yes/Gen</td><td>Generic type descriptor.</td></tr>
-<tr><td>result</td><td>Yes</td><td>Return operation, optional, returns null if missing</td></tr>
-</tbody>
-</table>
-<pre><code class="language-zerolang"># effective signature
-break: function {result: T} out never     # T: the block's value type</code></pre>
+<p>The builtin <code>break</code> leaves the innermost <a href="#for">for</a> loop or block that holds
+it. It takes no argument, and its type is <a href="#never">never</a>: it does not finish. Each
+<code>for</code> loop and each block brings <code>break</code> into its scope (see
+<a href="#block">block</a>), and outside all of them it is a compile error. A block
+that a <code>break</code> can leave has an optional value. The system unit declares it as
+<code>break: function out never is native</code>.</p>
 <pre><code class="language-zerolang">sometest: true
 
 for loop {
@@ -3908,29 +3888,11 @@ for loop {
     print "step3"
 }</code></pre>
 <h4 id="continue"><a href="#continue">5.4.12. continue</a></h4>
-<p>The builtin continue function. Abandons the current loop execution and resets
-back to the top of the innermost <a href="#for">for</a> loop. It is a syntax error if not
-within a <code>for</code> loop.
-(TODO: only defined (on the call stack) within a for?)</p>
-<p>The type of the expression is <a href="#never">never</a> for the current block, and defaults to
-<a href="#null">null</a> for the current iteration, or returns the value of the specified
-argument for the current iteration.</p>
-<table>
-<colgroup>
-<col style="width: 25%">
-<col style="width: 25%">
-<col style="width: 50%">
-</colgroup>
-<thead>
-<tr><th style="text-align: left">Argument</th><th style="text-align: left">Default</th><th style="text-align: left">Value/Description</th></tr>
-</thead>
-<tbody>
-<tr><td>t</td><td>Yes/Gen</td><td>Generic type descriptor.</td></tr>
-<tr><td>result</td><td>Yes</td><td>Return operation, optional, returns null if missing</td></tr>
-</tbody>
-</table>
-<pre><code class="language-zerolang"># effective signature
-continue: function {result: T} out never  # T: the iteration's value type</code></pre>
+<p>The builtin <code>continue</code> ends the current iteration of the innermost <a href="#for">for</a>
+loop that holds it; the loop then tests its conditions again. It takes no
+argument, and its type is <a href="#never">never</a>. Only a <code>for</code> loop brings <code>continue</code>
+into its scope, and outside one it is a compile error. The system unit declares it as
+<code>continue: function out never is native</code>.</p>
 <pre><code class="language-zerolang">xs: ListVal t: i64
 xs.append from: 0
 xs.append from: 5
@@ -3967,41 +3929,12 @@ yield: function {result: T_out} out T_in  # the generator's gives / accepts</cod
 <code>x: yield v</code> binds <code>x</code> to the value the caller supplied on
 resumption (only valid in a generator whose <code>accepts</code> is non-<code>null</code>).</p>
 <h4 id="return"><a href="#return">5.4.14. return</a></h4>
-<p>The return builtin function. Exits the current function returning the value of
-the <code>is</code> expression, if provided.  The return value must match the return type
-specified in the function signature.</p>
-<p>The type of the expression is <a href="#never">never</a> for the current block, and the type of
-the return expression for the caller.</p>
-<p>(TODO: only defined (on the call stack) within a function?)</p>
-<table>
-<colgroup>
-<col style="width: 25%">
-<col style="width: 25%">
-<col style="width: 50%">
-</colgroup>
-<thead>
-<tr><th style="text-align: left">Argument</th><th style="text-align: left">Default</th><th style="text-align: left">Value/Description</th></tr>
-</thead>
-<tbody>
-<tr><td>t</td><td>Yes/Gen</td><td>Generic type descriptor.</td></tr>
-<tr><td>result</td><td>Yes</td><td>Return operation, optional, returns null if missing</td></tr>
-</tbody>
-</table>
-<pre><code class="language-zerolang"># effective signature
-return: function {result: T} out never    # T: the function's out type</code></pre>
-<table>
-<colgroup>
-<col style="width: 25%">
-<col style="width: 25%">
-<col style="width: 50%">
-</colgroup>
-<thead>
-<tr><th style="text-align: left">Argument</th><th style="text-align: left">Default</th><th style="text-align: left">Value/Description</th></tr>
-</thead>
-<tbody>
-<tr><td>is</td><td>Yes</td><td>Return expression</td></tr>
-</tbody>
-</table>
+<p>The builtin <code>return</code> leaves the enclosing function. The value written after
+it is the function's result, and it must match the function's <code>out</code> type; a
+function with no <code>out</code> returns no value. Its type is <a href="#never">never</a>: it does not
+finish. <code>return</code> declares no parameter -- the compiler reads the value
+written after it and checks it against the <code>out</code>. The system unit declares it as
+<code>return: function out never is native</code>.</p>
 <pre><code class="language-zerolang">: answer: function out i64 is {
 :     return 0
 : }</code></pre>
@@ -4345,8 +4278,8 @@ are incompatible.</p>
 <p><code>List</code> is a growable collection reftype, generic over the element type,
 with dynamic-length storage and amortized O(1) append. It is the everyday
 alias of <code>ListRef</code>, whose elements are reference types
-(<code>of: AnyRef.generic</code>); the valtype twin is <code>ListVal</code>
-(<code>of: anyval.generic</code>). Element accessors come in readonly/mutable pairs:
+(<code>T: AnyRef.generic</code>); the valtype twin is <code>ListVal</code>
+(<code>t: anyval.generic</code>). Element accessors come in readonly/mutable pairs:
 <code>get</code> (a view, or a copy on <code>ListVal</code>) beside <code>getMut</code> (an exclusive
 <code>of.borrow</code> in both families), and <code>iterate</code> (shared, readonly) beside
 <code>iterateMut</code> (exclusive). Lists follow reftype ownership semantics: they
@@ -4525,8 +4458,6 @@ non-owning view over one. Their members are documented in
   object
 - a method: defined within an object and has a <code>this</code> receiver as the first
   argument
-- generator function: a function (or method) whose body contains
-  <code>yield</code>; see <a href="#generator-functions">Generator functions</a>
 - 'spec': a signature only; no body (only at unit level)</p>
 <p>It may also be generic by having generic parameters.</p>
 <p>Functions are structurally equivalent. Two function types are considered
@@ -4568,7 +4499,7 @@ equivalent when, in both definitions:</p>
 returns no value. It only has side-effects.</p>
 <p>The <code>in</code>  argument takes a brace delimited block of parameter definitions
 of the form <code>name: typereference</code>. See <a href="#declarations-and-references">Declarations and References</a> for
-details. A parameter <em><strong>must not</strong></em> be private (<code>_</code>) but may have ownership
+details. A parameter may have ownership
 attributes (<code>type.take</code>, <code>type.borrow</code>, <code>type.view</code>, <code>type.hold</code>) or it may have a
 default constant numeric value or a default function reference value. Parameters
 may reference generic types declared in the <code>as</code> clause. Declaring generic
@@ -5118,22 +5049,23 @@ for the full dispatch rule.</p>
 object. It must be able to be determined at the call site the actual type of
 the item being created (although this can be explicitly passed to a higher
 level by passing a generic variable at the call site into the constructor.</p>
-<pre><code class="language-zerolang">myObj: class {
+<pre><code class="language-zerolang">MyObj: class {
     a: u32
     b: String
-
+} as {
     create: function {a: 0.u32 b: String.take} out this is {
-        return (meta.create :a :b)      # no stuttering... can use default args
+        return (meta.create :a :b)
     }
 }</code></pre>
-<p>Class constructors whose type carries non-owned fields simply return
-<code>out this</code> like any other class constructor; the type system verifies
-that the non-owned fields are initialised from <code>.borrow</code> parameters of
-the constructor (escape analysis). See
+<p>A constructor of a class that carries non-owned fields returns <code>outx this</code>:
+the result holds references into the constructor's inputs, and <code>outx</code> keeps
+those inputs locked for the result's lifetime (<code>out this</code> is refused). The
+compiler checks that each non-owned field is initialised from a <code>.borrow</code> or
+<code>.view</code> parameter of the constructor (escape analysis). See
 <a href="#non-owned-fields-on-classes">Non-Owned Fields on Classes</a>
 and <a href="./ownership.html">ownership</a>.</p>
 <p>Note that constructors are not executed for value types that are copied as
-those values are a clone of the original. Contructors for value types are only
+those values are a clone of the original. Constructors for value types are only
 run when the value type is created explicitly.</p>
 <h5 id="implicit-construction">Implicit Construction</h5>
 <p>When a type appears in a runtime expression in callable position, the
@@ -6376,10 +6308,11 @@ if v.FIRST then {  # v.FIRST is a predicate
 if v == myenum.FIRST then {
     # ...
 }</code></pre>
-<p>Enum-style types (where all subtypes are null) should use `variant`, not `union`.
-A union is a reference type requiring heap allocation, which is pointless for a
-type that only carries a tag discriminator. Using `variant` makes the enum a
-stack-allocated value type with no allocation overhead.</p>
+<p>An enumeration -- a sum type whose arms all carry <code>null</code> -- is written as a
+<code>variant</code>, not a <code>union</code>. A variant is a value type: it is copied like a
+number, and a record or another variant can hold it. A union is a reference
+type with one owner, whose every transfer the compiler tracks, and a type that
+carries only its tag has no use for that.</p>
 <p>The built-in <code>bool</code> type is an ordinary 2-arm variant declared in the
 system unit, falsy arm first. Its values may be created directly by name
 or indirectly via the comparison operators.</p>
@@ -6393,9 +6326,8 @@ true: bool.true</code></pre>
 its arms are looked up on the declaration like any other sum type's, and
 a 2-arm variant of the author's own reads the same way.</p>
 <h4 id="using-sum-type-instances"><a href="#using-sum-type-instances">5.22.2. Using sum-type instances</a></h4>
-<p>A sum type instance can be tested to see if it is a specific subtype. A
-predicate <code>method</code> is generated for each member named as the member name
-followed by a question mark. The method returns a boolean.</p>
+<p>A sum type instance can be tested for the arm it holds: <code>x.arm</code> is a
+<code>bool</code>, true when <code>x</code> holds that arm.</p>
 <pre><code class="language-zerolang">MyUnion: union {
     t1: u32
     t2: String
@@ -7264,14 +7196,6 @@ This would usually be within a conditionally compiled section (otherwise
 compilation will always fail).</p>
 <pre><code class="language-zerolang">error "Constant error string"   # "stack" with lineno's and filenames will
 # also be shown</code></pre>
-<h3 id="identifier-metadata"><a href="#identifier-metadata">6.4. Identifier Metadata</a></h3>
-<p>TODO: metadata about identifiers exposed via <code>meta</code> namespace.</p>
-<pre><code class="language-zerolang">myconstants: unit {
-    FIRST: 0
-    SECOND: 1
-}
-
-print "First is \{myconstants.FIRST}"</code></pre>
 </main>
 </body>
 </html>
