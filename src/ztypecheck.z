@@ -3127,6 +3127,13 @@ registerGenericParamOne: function {
     if m.namedoperation when (isGenericParam :ast op: (ast.nodes.get i: m.operation)) then {
         cb: genericConstraintBase :ast n: (ast.nodes.get i: m.operation)
         cbId: genericConstraintBaseId :ast n: (ast.nodes.get i: m.operation)
+        if cbId.isZero then cbId = (
+            familyBoundLeafId
+            :ast
+            :st
+            :tdecl
+            op: (ast.nodes.get i: m.operation)
+        )
         k: ztypes.constraintkind.none
         if cb.length > 0 then k = constraintKindForId id: cbId
         # a family's name a declaration in scope takes -- a unit's own
@@ -3309,6 +3316,26 @@ genericConstraintBaseId: function {ast: Ast.view n: astnode.view} out zast.namei
     } else {
         return zast.nameid
     }
+}
+
+# familyBoundLeafId -- the family a bound written through the unit that
+# declares the families names (`system.u64.generic`, `core.anyval.generic`):
+# its leaf, which names that family as the bare name does. 0 for any other
+# bound, a bare one included.
+familyBoundLeafId: function {
+    ast: Ast.view
+    st: zenv.ZSymbolTable.view
+    tdecl: ztypes.declid
+    op: astnode.view
+} out zast.nameid is {
+    q: genericBoundQualifierId :ast n: op
+    if q.isZero then return zast.nameid.zero
+    qd: fileUnitNamedAt :st scope: (st.typing.declParentOf declId: tdecl) nameId: q
+    if qd.isZero then return zast.nameid.zero
+    if qd != st.typing.systemUnitRoot when qd != st.typing.coreUnitRoot then {
+        return zast.nameid.zero
+    }
+    return (atomNameId :ast n: (ast.nodes.get i: (genericBoundAtomId :ast n: op)))
 }
 
 # genericBoundAtomId -- the node the bound is SPELLED at, for a report: the
@@ -49589,10 +49616,30 @@ walkOneCallArg: function {
     if arg.nid.isZero.not then {
         vt: ztypes.tid
         errV: st.typing.errors.length
-        # a type argument names a type: it constructs nothing
-        isTypeArg: isCtor and (ctorArgIsTypeArg :st tplId: funcId :arg)
+        # a type argument names a type: it constructs nothing. A leading one
+        # may go unlabelled (`(intrange u8 cur: 0 ..)`), as the scan binds it
+        isTypeArg: false
+        if isCtor then {
+            isTypeArg = (
+                (ctorArgIsTypeArg :st tplId: funcId :arg) or
+                (
+                    ctorLeadingTypeArg
+                    :st
+                    :ast
+                    :unitDecl
+                    tplId: funcId
+                    :arg
+                    :argIdx
+                )
+            )
+        }
         tpa: ztypes.tid
         if isTypeArg then tpa = ctorTypeArgParamTid :st :ast :unitDecl :arg
+        # one written with its unit (`system.u8`) is that type, and walked as a
+        # value it would be a construction of it
+        if isTypeArg when tpa.isZero when (ast.nodes.get i: arg.operation).dottedpath then {
+            tpa = typeArgTid :st :ast :unitDecl opId: arg.operation baseId: zast.nameid.zero
+        }
         if tpa.isZero.not then {
             vt = tpa
             stampGate :st nid: arg.operation tid: vt
@@ -49646,8 +49693,10 @@ walkOneCallArg: function {
             )
         }
         # a label naming the template's own parameter supplies that parameter,
-        # not one of the constructor's
+        # not one of the constructor's, and so does a leading type argument
         if isCtor when (ctorArgNamesTemplateParam :st tplId: funcId :arg) then return
+        if isCtor when (ctorLeadingTypeArg :st :ast :unitDecl tplId: funcId :arg :argIdx
+        ) then return
         (
             checkTypedCallArg
             :st
@@ -49906,6 +49955,26 @@ ctorArgIsTypeArg: function {st: zenv.ZSymbolTable.view tplId: ztypes.tid arg: ar
     tk: declOfTypeId :st tid: tpl
     if (st.reg.isGenericParamOf tdecl: tk name: arg.name).not then return false
     return (st.reg.genericParamConstraintOf tdecl: tk paramName: arg.name).numKind.has.not
+}
+
+# ctorLeadingTypeArg -- a construction's first argument, unlabelled, that names
+# a type: it binds the template's primary type parameter, as the argument scan
+# reads it (collectTypeArgAt).
+ctorLeadingTypeArg: function {
+    st: zenv.ZSymbolTable
+    ast: Ast
+    unitDecl: ztypes.declid
+    tplId: ztypes.tid
+    arg: argref
+    argIdx: u64
+} out bool is {
+    if argIdx != 0 then return false
+    if arg.name.isZero.not then return false
+    tpl: tplId
+    og: st.reg.genericOriginOf tid: tplId
+    if og.isZero.not then tpl = og
+    if (firstGenericParamId :st templateId: tpl).isZero then return false
+    return (elidedPrimaryTypeArg :st :unitDecl :ast opId: arg.operation)
 }
 
 # refuseValueTypeArg -- a construction's type argument that the walk typed as
@@ -64045,11 +64114,11 @@ scalarTidOf: function {
 
 # declaredLossless -- whether the numeric type `from` declares its conversion
 # to `targetId` as LOSSLESS: its own name, or a member whose written `out` is
-# the target itself, where a conversion that can lose data returns a result
-# (`out (resultval t: u8 e: converror)`). Read off the declaration's spelling
-# rather than its resolved signature: a constant folds while a scalar's members
-# may still be resolving, and the spelling is the declaration's answer either
-# way.
+# the target itself (`out u32`, `out system.u32`), where a conversion that can
+# lose data returns a result (`out (resultval t: u8 e: converror)`). Read off
+# the declaration's spelling rather than its resolved signature: a constant
+# folds while a scalar's members may still be resolving, and the spelling is
+# the declaration's answer either way.
 declaredLossless: function {
     st: zenv.ZSymbolTable.view
     ast: Ast.view
@@ -64067,7 +64136,33 @@ declaredLossless: function {
         if fnode.functiondef then retId = fnode.returntype
     }
     if retId.isZero then return false
-    return (bareAtomNameId n: (ast.nodes.get i: retId)) == targetId
+    return (writtenScalarNameId :st :ast nid: retId) == targetId
+}
+
+# writtenScalarNameId -- the name a type-ref spells a scalar by: a bare name, or
+# a name written through the unit that declares the scalars (`system.u32`,
+# `core.u32`). 0 for any other spelling. Read off the text, as declaredLossless
+# reads it.
+writtenScalarNameId: function {
+    st: zenv.ZSymbolTable.view
+    ast: Ast.view
+    nid: zast.nodeid
+} out zast.nameid is {
+    n: ast.nodes.get i: nid
+    match (
+        n
+    ) case atomid then {
+        return n.name
+    } case dottedpath then {
+        q: bareAtomNameId n: (ast.nodes.get i: n.parent)
+        if q.isZero then return zast.nameid.zero
+        if q != (st.typing.decls.get i: st.typing.systemUnitRoot).name when (
+            q != (st.typing.decls.get i: st.typing.coreUnitRoot).name
+        ) then return zast.nameid.zero
+        return (bareAtomNameId n: (ast.nodes.get i: n.child))
+    } else {
+        return zast.nameid.zero
+    }
 }
 
 # literalDefaultTid -- the type an untyped literal of `v`'s kind reads as when a
