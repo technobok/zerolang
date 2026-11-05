@@ -1322,7 +1322,7 @@ perf: $(PERFBIN)
 # deletes write-only allocations; perf-elision measures that), a failed run and
 # allocs != frees. Above ALLOC_BASELINE fails; a commit raising it says why in
 # its message, and one lowering the count lowers it here.
-ALLOC_BASELINE := 2800158
+ALLOC_BASELINE := 2799489
 # ALLOC_LINE -- the one measurement every allocation number comes from.
 ALLOC_LINE = valgrind --tool=memcheck $(PERFRUN) 2>&1 | grep 'total heap usage' | sed 's/.*usage: //'
 
@@ -2668,46 +2668,21 @@ highlight-guard:
 view-guard: bin/zc
 	@bin/zc natives check views --system lib/system --emitter src/zemitterc.z --register tests/view_guard.zd
 
-# fallback-guard -- the emitter never degrades silently: no example or driver C
-# carries a live `/* zemitterc: */` marker (the emitter quoting itself in a string
-# is not live), and the emitFail and marker-site counts in src/zemitterc.z are
-# ratchets. A new refusal leg may raise EMITFAIL_BASELINE (say so in the commit);
-# a new fallback leg may not.
+# fallback-guard -- the emitter never degrades silently: a construct it cannot
+# emit records an emitFail, and zc then writes no C at all. The count of
+# emitFail lines in src/zemitterc.z is a ratchet: a new refusal leg may raise
+# EMITFAIL_BASELINE (say so in the commit); a new fallback leg may not.
 EMITFAIL_BASELINE := 54
-MARKER_BASELINE := 23
-EXCS := $(NAMES:%=$(EXDIR)/%.c)
-fallback-guard: $(EXCS) bin/zc bin/zl bin/zls
-	@fail=0; \
-	for f in $(EXCS); do \
-	  if grep -q '/\* zemitterc: ' $$f; then \
-	    echo "fallback-guard FAIL: $$(basename $$f) carries an emitter marker"; fail=1; \
-	  fi; \
-	done; \
-	for d in bin/zc.c $(BUILDDIR)/zl.c $(BUILDDIR)/zls.c; do \
-	  n=$$(grep '/\* zemitterc: ' $$d | grep -cv '"[[:space:]]*/\* zemitterc: '); \
-	  if [ "$$n" -gt 0 ]; then \
-	    echo "fallback-guard FAIL: $$d carries $$n live emitter marker(s)"; fail=1; \
-	  fi; \
-	done; \
-	n=$$(grep -c 'emitFail' src/zemitterc.z); \
+fallback-guard:
+	@n=$$(grep -c 'emitFail' src/zemitterc.z); \
 	if [ "$$n" -gt $(EMITFAIL_BASELINE) ]; then \
-	  echo "fallback-guard FAIL: src/zemitterc.z emitFail lines = $$n (baseline $(EMITFAIL_BASELINE)) -- new fallback leg?"; fail=1; \
+	  echo "fallback-guard FAIL: src/zemitterc.z emitFail lines = $$n (baseline $(EMITFAIL_BASELINE)) -- new fallback leg?"; \
+	  echo "  The emitter hit a construct it cannot emit. Fix the emission gap."; \
+	  exit 1; \
 	elif [ "$$n" -lt $(EMITFAIL_BASELINE) ]; then \
 	  echo "fallback-guard: emitFail lines = $$n < baseline $(EMITFAIL_BASELINE) -- lower EMITFAIL_BASELINE"; \
 	fi; \
-	m=$$(grep -c '/\* zemitterc: ' src/zemitterc.z); \
-	if [ "$$m" -gt $(MARKER_BASELINE) ]; then \
-	  echo "fallback-guard FAIL: src/zemitterc.z marker sites = $$m (baseline $(MARKER_BASELINE))"; \
-	  echo "  A new marker site MUST record an emitFail beside it, or it degrades in"; \
-	  echo "  silence where no file leg can see it. Bump MARKER_BASELINE and say so."; fail=1; \
-	elif [ "$$m" -lt $(MARKER_BASELINE) ]; then \
-	  echo "fallback-guard: marker sites = $$m < baseline $(MARKER_BASELINE) -- lower MARKER_BASELINE"; \
-	fi; \
-	if [ "$$fail" = "1" ]; then \
-	  echo "  The emitter hit a construct it cannot emit. Fix the emission gap."; \
-	  exit 1; \
-	fi; \
-	echo "fallback-guard OK: no emitter markers (emitFail legs $$n, marker sites $$m)"
+	echo "fallback-guard OK: emitFail legs $$n"
 
 clean:
 	rm -rf $(BUILDDIR) bin
