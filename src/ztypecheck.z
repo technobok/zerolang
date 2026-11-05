@@ -29766,6 +29766,37 @@ constructionArgTid: function {
     return (instanceTypeOf :st :ast :unitDecl tid: named)
 }
 
+# refuseLocalAsType -- a type written in a body naming a local or a parameter:
+# the nearest declaration of the name is that value, which is no type, refused
+# as what it is (R3). Once per node.
+refuseLocalAsType: function {
+    st: zenv.ZSymbolTable ast: Ast.view nameId: zast.nameid nid: zast.nodeid
+} is {
+    if nid.isZero then return
+    if (st.typing.refusedValues.has item: nid) then return
+    fid: st.typing.currentFnTid
+    what: "a local".string
+    if fid.isZero.not when (st.typing.declChildOfId parentTypeId: fid :nameId).some then {
+        what = "a parameter".string
+    }
+    nn: zast.nameTextAt :ast ref: nameId
+    fnm: st.reg.nameOf tid: fid
+    n: ast.nodes.get i: nid
+    (
+        addErrorH
+        :st
+        nodeid: nid
+        lineno: (nodeLine :n)
+        colno: (nodeCol :n)
+        e: zast.err.typeError
+        msg: "'\{nn}' is \{what} of '\{fnm}', not a type"
+        note: "".string
+        hint: "".string
+        width: nn.length.u32.orPanic
+    )
+    st.typing.refusedValues.add item: nid
+}
+
 # bodyTypeNameTid -- the type a bare name denotes as a type argument written in
 # a body: a type parameter of a declaration enclosing the body first, since it
 # shadows any type of that name, then a type the scope reaches. 0 when it
@@ -29777,6 +29808,10 @@ bodyTypeNameTid: function {
     nameId: zast.nameid
     nid: zast.nodeid
 } out ztypes.tid is {
+    # a local or a parameter of the name is nearer than any type: the name is
+    # that value, and denotes none (refuseValueTypeArg refuses it where a type
+    # must be)
+    if (st.findLocal :nameId).isZero.not then return ztypes.tid.zero
     bn: bodySelfTypeNameId :st :nameId
     gp: genericParamInScope :st :ast scope: st.curScope nameId: bn :nid
     if gp.isZero.not then return gp
@@ -30431,6 +30466,8 @@ constructionParamMissing: function {
     }
     if firstMissing.isZero then return false
     if reportMissing.not then return true
+    primary: st.reg.genericParamNameAt :tdecl i: 0
+    if firstMissing == primary when (refuseLeadingLocalArg :st :ast :call) then return true
     mmsg: "cannot infer type arguments for generic type '\{tname}'"
     if sfx.length > 0 then {
         fmT: zast.nameTextAt :ast ref: firstMissing
@@ -30448,6 +30485,27 @@ constructionParamMissing: function {
         hint: String
         width: 0
     )
+    return true
+}
+
+# refuseLeadingLocalArg -- a construction left its primary type parameter
+# unbound, and its leading unlabelled argument, where that parameter is
+# written, names a local or a parameter: the name is that value, which is no
+# type (R3). True when it refused.
+refuseLeadingLocalArg: function {st: zenv.ZSymbolTable ast: Ast.view call: callref} out bool is {
+    if call.nargs == 0 then return false
+    first: zast.callArgAt :ast nid: call.nid i: 0
+    op: first
+    ar: argRefAt :ast nid: first
+    if ar.nid.isZero.not then {
+        if ar.name.isZero.not then return false
+        op = ar.operation
+    }
+    atomNid: markedBareAtom :ast nid: op
+    if atomNid.isZero then return false
+    nameId: atomNameId :ast n: (ast.nodes.get i: atomNid)
+    if (st.findLocal :nameId).isZero then return false
+    refuseLocalAsType :st :ast :nameId nid: atomNid
     return true
 }
 
@@ -38967,6 +39025,29 @@ refuseBodyFieldRead: function {
     return true
 }
 
+# reportGreyUse -- E0103 at a use of a local whose statement is still being
+# checked (zenv.isGreyName): it holds no value yet. Once per node.
+reportGreyUse: function {
+    st: zenv.ZSymbolTable ast: Ast.view nid: zast.nodeid nameId: zast.nameid
+} is {
+    if (st.typing.refusedValues.has item: nid) then return
+    nn: zast.nameTextAt :ast ref: nameId
+    n: ast.nodes.get i: nid
+    (
+        addErrorH
+        :st
+        nodeid: nid
+        lineno: (nodeLine :n)
+        colno: (nodeCol :n)
+        e: zast.err.useBeforeInit
+        msg: "'\{nn}' is used before it is initialised"
+        note: "".string
+        hint: "".string
+        width: nn.length.u32.orPanic
+    )
+    st.typing.refusedValues.add item: nid
+}
+
 # checkUnboundAtom -- a bare name no local binds: a moved name's use, a literal,
 # a type, unit or function, or a numeric generic parameter. 0 when it names
 # none of those.
@@ -38977,6 +39058,10 @@ checkUnboundAtom: function {
     node: atomref
 } out ztypes.tid is {
     if node.name == zast.wellKnown.slot.wkReturn then reportMissingReturnValue :st :node
+    if (st.isGreyName nameId: node.name) then {
+        reportGreyUse :st :ast nid: node.nid nameId: node.name
+        return ztypes.tid
+    }
     if (bodyMemberAsPath :st :ast nameId: node.name nid: node.nid) then {
         return (checkValueAt :st :unitDecl :ast nid: node.nid)
     }
@@ -40379,6 +40464,27 @@ checkAssignment: function {
     ast: Ast
     asgn: asgnref
 } is {
+    # the local is in scope from its statement on, grey while its value is
+    # checked (zenv.beginLocal)
+    grey: st.beginLocal nameId: asgn.name
+    checkAssignmentIn :st :unitDecl :ast :asgn :grey
+    # one whose value failed binds a typeless variable (endLocal), which the
+    # binding names too: a generic unit's template walk runs after its
+    # instances' and re-binds every read, so a binding left naming an instance
+    # walk's variable would disagree with its own reads
+    vh: st.endLocal declId: grey
+    if vh.isZero.not then st.typing.setDefVariable nid: asgn.nid vid: vh
+}
+
+# checkAssignmentIn -- checkAssignment's check of the definition, whose local
+# `grey` is bound and grey (0 when the block already binds the name).
+checkAssignmentIn: function {
+    st: zenv.ZSymbolTable
+    unitDecl: ztypes.declid
+    ast: Ast
+    asgn: asgnref
+    grey: ztypes.declid
+} is {
     drainPendingBorrow :st
     errA0: st.typing.errors.length
     # an `if` or a `match` that is the whole value runs as statements, so its
@@ -40441,7 +40547,9 @@ checkAssignment: function {
         if st.typing.pendingBorrowFrozen then roRef = true
         st.typing.pendingBorrowReadonly = false
         st.typing.pendingBorrowFrozen = false
-        if (st.scopeBindsHere nameId: asgn.name) then {
+        # the block bound the name before this statement began
+        redefined: grey.isZero and asgn.name.isZero.not
+        if redefined then {
             dnm: zast.poolTextAt pool: ast.names ref: asgn.name
             dlm: "duplicate definition of '\{dnm}': this block already binds that name -- rebinding it here is a redefinition, and only a NESTED block shadows"
             (
@@ -42015,6 +42123,8 @@ checkWith: function {
     withnode: withref
 } out ztypes.tid is {
     withMarker: st.pushBlock node: withnode.nid
+    # the name is bound, grey, while its value is checked
+    grey: st.beginLocal nameId: withnode.name
     errW: st.typing.errors.length
     vt: checkValueAt :st :unitDecl :ast nid: withnode.value
     vt = staticListAsValue :st :ast :vt nid: withnode.value
@@ -42121,6 +42231,7 @@ checkWith: function {
     }
     # a `with` standing as a statement discards its body's value, so the body
     # stands as the statement too: `with x: v do if c then ...` needs no else
+    st.endLocal declId: grey
     outerStmt: st.typing.stmtExprNid
     if outerStmt == withnode.nid then st.typing.stmtExprNid = withnode.body
     dt: checkValueAt :st :unitDecl :ast nid: withnode.body
@@ -43073,6 +43184,23 @@ checkForCondition: function {
     # walks below lend ast
     cond: argRefAt :ast nid: condId
     if cond.nid.isZero then return
+    # the name a condition binds is bound, grey, while its value is checked
+    grey: ztypes.declid
+    if (zast.nameTextAt :ast ref: cond.name).length > 0 then grey = st.beginLocal nameId: cond.name
+    checkForConditionIn :st :unitDecl :ast :cond :condId :spillFor :isEach
+    st.endLocal declId: grey
+}
+
+# checkForConditionIn -- checkForCondition's check of the condition `cond`.
+checkForConditionIn: function {
+    st: zenv.ZSymbolTable
+    unitDecl: ztypes.declid
+    ast: Ast
+    cond: argref
+    condId: zast.nodeid
+    spillFor: bool
+    isEach: bool
+} is {
     # A bare 0-arg function returning an iterator class, as an `each`
     # binding, auto-invokes: its walk runs in a call scope and the atom keeps
     # the FUNCTION stamp rather than the auto-call's coerced return.
@@ -50396,6 +50524,11 @@ refuseValueTypeArg: function {
 } is {
     baseId: paramTypeBaseNameId :ast op: (ast.nodes.get i: arg.operation)
     if (typeArgTid :st :ast :unitDecl opId: arg.operation :baseId).isZero.not then return
+    # a local or a parameter is a declaration of the body's, and says so
+    if baseId.isZero.not when (st.findLocal nameId: baseId).isZero.not then {
+        refuseLocalAsType :st :ast nameId: baseId nid: arg.operation
+        return
+    }
     tn: specWrittenName :st :ast tid: (materialiseLiteral :ast :st t: vt)
     msg: "the type argument is a value of type '\{tn}', not a type"
     if baseId.isZero.not then {
@@ -54943,6 +55076,30 @@ bareCalleeKind: function {
     return (calleekind fid: funcId isUser: true isGen: false :isCtor unknown: false)
 }
 
+# checkBareCalleeCall -- what a bare callee's own name decides before the call
+# is dispatched: the local whose statement is being checked is no value to call
+# (E0103), and a name no local binds that finds a function of the enclosing
+# type is that function, reached as `type.name`. Unhandled otherwise.
+checkBareCalleeCall: function {
+    st: zenv.ZSymbolTable
+    unitDecl: ztypes.declid
+    ast: Ast
+    call: callref
+    cnId: zast.nameid
+} out callleg is {
+    if cnId.isZero then return (callleg handled: false tid: ztypes.tid)
+    if (st.isGreyName nameId: cnId) then {
+        reportGreyUse :st :ast nid: call.callable nameId: cnId
+        return (callleg handled: true tid: ztypes.tid)
+    }
+    if (st.findLocal nameId: cnId).isZero.not then return (callleg handled: false tid: ztypes.tid)
+    if (bodyMemberAsPath :st :ast nameId: cnId nid: call.callable).not then {
+        return (callleg handled: false tid: ztypes.tid)
+    }
+    asPath: checkRegularCall :st :unitDecl :ast :call cnId: zast.nameid.zero
+    return (callleg handled: true tid: asPath)
+}
+
 # checkRegularCall -- a call that is neither `return` nor `yield`. A dotted
 # callable resolves through the dotted-path walk first, which reports an
 # undeclared member itself. A bare-name callable: a non-generic user function
@@ -54959,14 +55116,8 @@ checkRegularCall: function {
 } out ztypes.tid is {
     sleg: checkSpecialFormCall :st :unitDecl :ast :call
     if sleg.handled then return sleg.tid
-    # a bare callee no local binds that finds a function of the enclosing type
-    if cnId.isZero.not when (st.findLocal nameId: cnId).isZero when (
-        bodyMemberAsPath
-        :st
-        :ast
-        nameId: cnId
-        nid: call.callable
-    ) then return (checkRegularCall :st :unitDecl :ast :call cnId: zast.nameid.zero)
+    bleg: checkBareCalleeCall :st :unitDecl :ast :call :cnId
+    if bleg.handled then return bleg.tid
     result: ztypes.tid
     dro: callableDottedResultAt :st :unitDecl :ast nid: call.callable
     match (
@@ -58648,6 +58799,10 @@ checkLabelValueAt: function {
     ast: Ast
     lv: atomref
 } out ztypes.tid is {
+    if (st.isGreyName nameId: lv.name) then {
+        reportGreyUse :st :ast nid: lv.nid nameId: lv.name
+        return ztypes.tid
+    }
     lvo: st.lookup nameId: lv.name
     match (
         lvo
@@ -59057,17 +59212,6 @@ checkStmtInner: function {
     ) case assignment then {
         ar: asgnRefAt :ast nid: innerId
         checkAssignment :st :unitDecl :ast asgn: ar
-        # a binding whose value failed still binds its name, typeless: the
-        # failure is reported once, at the value, and a later read of the name
-        # is not a second unknown reference. The binding names that variable
-        # too: a generic unit's template walk runs after its instances' and
-        # re-binds every read, so a binding left naming an instance walk's
-        # variable would disagree with its own reads.
-        if (st.scopeBindsHere nameId: ar.name).not then {
-            vh: st.reg.newVariable ztypeId: ztypes.tid ownership: ztypes.zownership.owned
-            st.defineVar nameId: ar.name vid: vh
-            st.typing.setDefVariable nid: ar.nid vid: vh
-        }
         stampLineFrom :st :lineId :innerId
         return zenv.divkind.none
     } case reassignment then {

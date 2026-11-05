@@ -230,6 +230,8 @@ err: variant {
     emitterError: null
     # an `is native` declaration that no row of its unit implements
     noNativeImpl: null
+    # a local is used before the statement declaring it completes
+    useBeforeInit: null
 } as { tag: u8.tag }
 
 # objectkind -- which of the eight object definitions an objectdef is.
@@ -545,6 +547,8 @@ errCode: function {c: err} out u32 is {
         r = 101
     } case privateEscape then {
         r = 102
+    } case useBeforeInit then {
+        r = 103
     } case refNotFound then {
         r = 8
     } case ownerError then {
@@ -663,6 +667,8 @@ explainText: function {code: u32} out String is {
         r = "member not public\n\nThe member exists but is not in the type's `public:` interface. Access it from within the type's own methods (`this`), or through a `.private` friend handle the type handed out.".string
     } else if code == 102 then {
         r = "private escape\n\nA `.private` view may only be taken by the value's own type, or by a holder of an existing `.private` handle (a friend the type passed it to). External code holding only a public value cannot produce one.".string
+    } else if code == 103 then {
+        r = "used before it is initialised\n\nCode runs top to bottom: a local is in scope from the statement that declares it, and holds a value once that statement is done. A use inside its own value (`n: n + 1`, `point: point x: 10`), or inside a binding's own expression (`for each xs: xs`, `with s: s`), finds the local -- the nearest declaration of the name -- before it holds anything. Name the local differently, or reach the outer declaration through its unit (`system.u64`, `myunit.n`).".string
     } else if code == 200 then {
         r = "ownership error\n\nA value's ownership was used incorrectly: used after a take/move, a borrow outliving its lock, a reftype aliased while locked, or a reassignment in another mode than the name was bound with -- an owned name takes an owned value (`x = d.take`), a borrow is re-pointed (`b = d`). See docs/ownership.".string
     } else if code == 300 then {
@@ -2079,6 +2085,8 @@ errname: function {e: err} out String is {
         return "EMITTERERROR".string
     } case noNativeImpl then {
         return "NONATIVEIMPL".string
+    } case useBeforeInit then {
+        return "USEBEFOREINIT".string
     }
 }
 

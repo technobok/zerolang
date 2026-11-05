@@ -829,6 +829,53 @@ ZSymbolTable: class {
         return d.isZero.not
     }
 
+    # beginLocal -- a body's code runs top to bottom, so a local is in scope
+    # from the statement that declares it on: bind `nameId` in the innermost
+    # scope as that statement begins, GREY -- the DFS grey mark a declaration
+    # wears while it resolves -- until defineLocal completes it with its value.
+    # Its own value, or a binding's own expression, finds it before anything
+    # outer, and a grey local is no value to read (isGreyName). 0 when the
+    # scope already binds the name: the statement is a redefinition, which the
+    # binding site reports, and the name stays the earlier binding.
+    beginLocal: function {:this nameId: zast.nameid} out ztypes.declid is {
+        n: this.open.length
+        if (n == 0) or nameId.isZero then return ztypes.declid
+        if (this.scopeBindsHere :nameId) then return ztypes.declid
+        this.materialiseTop
+        top: this.open.get i: n - 1
+        d: (
+            this.typing.declNewLocal
+            name: nameId
+            parent: top.id
+            node: zast.nodeid
+            typeId: ztypes.tid
+            varId: ztypes.vid
+        )
+        this.typing.declSetResolving declId: d mark: true
+        return d
+    }
+
+    # endLocal -- the statement that began the local `declId` is done. One
+    # whose value failed was never completed: it binds its name all the same,
+    # typeless, to a variable of its own, so the failure is reported once, at
+    # the value, and a later read of the name is not a second error. Answers
+    # that variable, 0 when the local was complete.
+    endLocal: function {:this declId: ztypes.declid} out ztypes.vid is {
+        if declId.isZero then return ztypes.vid
+        if (this.typing.declIsResolving :declId).not then return ztypes.vid
+        vh: this.reg.newVariable ztypeId: ztypes.tid ownership: ztypes.zownership.owned
+        this.defineVar nameId: (this.typing.declNameOf :declId) vid: vh
+        return vh
+    }
+
+    # isGreyName -- the nearest declaration of `nameId` is a local whose
+    # statement is still being checked.
+    isGreyName: function {t: this.view nameId: zast.nameid} out bool is {
+        d: t.findLocal :nameId
+        if d.isZero then return false
+        return (t.typing.declIsResolving declId: d)
+    }
+
     # bind a name in the innermost scope
     defineLocal: function {:this nameId: zast.nameid ztypeId: ztypes.tid varId: ztypes.vid} is {
         n: this.open.length
@@ -838,9 +885,18 @@ ZSymbolTable: class {
         # one binding per name per scope: the namespace walks read a scope's
         # children by name and stop at the first hit, so a second edge under
         # the same name would be unreachable. The binding site reports the
-        # duplicate; this keeps the tree honest if one ever reaches here.
+        # duplicate; this keeps the tree honest if one ever reaches here. The
+        # one binding there may be the grey one beginLocal made for this
+        # statement, which this completes.
         ex: this.typing.declFindChild parentDeclId: top.id :nameId
-        if ex.isZero.not then return
+        if ex.isZero.not then {
+            if (this.typing.declIsResolving declId: ex) then {
+                this.typing.declCompleteLocal declId: ex typeId: ztypeId :varId
+                top.defs = top.defs + 1
+                this.open.set i: n - 1 val: top
+            }
+            return
+        }
         (
             this.typing.declNewLocal
             name: nameId
@@ -939,10 +995,11 @@ ZSymbolTable: class {
         }
     }
 
-    # Resolve a name to its type id, or none (also none when taken).
+    # Resolve a name to its type id, or none (also none when taken, or grey).
     lookup: function {t: this.view nameId: zast.nameid} out optionval ztypes.tid is {
         d: t.findLocal :nameId
         if d.isZero then return (optionval.none ztypes.tid)
+        if (t.typing.declIsResolving declId: d) then return (optionval.none ztypes.tid)
         ro: t.rowOf declId: d
         match (
             ro
@@ -962,6 +1019,7 @@ ZSymbolTable: class {
     declaredTypeOf: function {t: this.view nameId: zast.nameid} out optionval ztypes.tid is {
         d: t.findLocal :nameId
         if d.isZero then return (optionval.none ztypes.tid)
+        if (t.typing.declIsResolving declId: d) then return (optionval.none ztypes.tid)
         ro: t.rowOf declId: d
         match (
             ro
