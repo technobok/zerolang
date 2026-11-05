@@ -68,24 +68,18 @@ uriToPath: function {uri: StringView} out String is {
     n: uri.length
     for i < n loop {
         bo: uri.byteAt :i
-        match (
-            bo
-        ) case some then {
+        if bo.some then {
             if bo == 37 when (i + 2) < n then {
                 h1: i64
                 h2: i64
                 b1: uri.byteAt i: i + 1
-                match (
-                    b1
-                ) case some then {
+                if b1.some then {
                     h1 = hexNibble b: b1
-                } case none then null
+                }
                 b2: uri.byteAt i: i + 2
-                match (
-                    b2
-                ) case some then {
+                if b2.some then {
                     h2 = hexNibble b: b2
-                } case none then null
+                }
                 if h1 >= 0 when h2 >= 0 then {
                     r.appendByte b: ((h1 << 4) | h2).u8.orPanic
                     i = i + 2
@@ -95,7 +89,7 @@ uriToPath: function {uri: StringView} out String is {
             } else {
                 r.appendByte b: bo
             }
-        } case none then null
+        }
         i = i + 1
     }
     if z.build.os == z.build.oskind.windows then return (windowsPathOfUri p: r.stringView)
@@ -129,20 +123,16 @@ pathToUri: function {file: StringView} out String is {
         if (v.startsWith prefix: "//?/") then {
             v = v.substring from: 4 to: v.length
             un: v.stripPrefix p: "UNC/"
-            match (
-                un
-            ) case some then {
+            if un.some then {
                 r.append un
                 return r
-            } case none then null
+            }
         }
         share: v.stripPrefix p: "//"
-        match (
-            share
-        ) case some then {
+        if share.some then {
             r.append share
             return r
-        } case none then null
+        }
         if ((v.byteAt i: 1).or d: 0) == 58 then r.append "/"
         r.append v
         return r
@@ -274,17 +264,13 @@ resolveRoots: function {
         syd = zcheck.resolveSystemDir flagVal: ""
         yw = "the lib/system beside the zls executable".string
         rv: os.env key: "ZEROLANG_ROOT"
-        match (
-            rv
-        ) case some then {
+        if rv.some then {
             yw = "$ZEROLANG_ROOT/lib/system".string
-        } case none then null
+        }
         ev: os.env key: "ZEROLANG_SYSTEM"
-        match (
-            ev
-        ) case some then {
+        if ev.some then {
             yw = "$ZEROLANG_SYSTEM".string
-        } case none then null
+        }
     }
     return (
         ResolvedRoots
@@ -651,14 +637,10 @@ Server: class {
                     if n > 0 then {
                         lv: line.stringView
                         lb: lv.byteAt i: n - 1
-                        match (
-                            lb
-                        ) case some then {
-                            if lb == 13 then {
-                                s2: (lv.substring from: 0 to: n - 1).string
-                                return (Option.some s2)
-                            }
-                        } case none then null
+                        if lb.some when lb == 13 then {
+                            s2: (lv.substring from: 0 to: n - 1).string
+                            return (Option.some s2)
+                        }
                     }
                     return (Option.some line)
                 }
@@ -793,25 +775,19 @@ Server: class {
         # auto-detect (zerolang repo layout) > cwd
         rootPath: String
         ro: json.textAt v: msg path: "params/rootUri"
-        match (
-            ro
-        ) case some then {
+        if ro.some then {
             rootPath = uriToPath uri: ro.stringView
-        } case none then null
+        }
         optSrc: String
         io1: json.textAt v: msg path: "params/initializationOptions/srcDir"
-        match (
-            io1
-        ) case some then {
+        if io1.some then {
             optSrc = io1.copy
-        } case none then null
+        }
         optSys: String
         io2: json.textAt v: msg path: "params/initializationOptions/systemDir"
-        match (
-            io2
-        ) case some then {
+        if io2.some then {
             optSys = io2.copy
-        } case none then null
+        }
         rr: (
             resolveRoots
             srcFlag: this.srcFlag.stringView
@@ -948,61 +924,53 @@ Server: class {
         to: json.textAt v: msg path: "params/textDocument/text"
         vo: json.intAt v: msg path: "params/textDocument/version"
         ver: i64
-        match (
-            vo
-        ) case some then {
+        if vo.some then {
             ver = vo
-        } case none then null
-        match (
-            uo
-        ) case some then {
-            match (
-                to
-            ) case some then {
-                pth: uriToPath uri: uo.stringView
-                this.enterProjectOf file: pth.stringView
-                rel: (
-                    relPathBest
-                    path: pth.stringView
-                    srcDir: this.srcDir.stringView
-                    systemDir: this.systemDir.stringView
-                )
-                docSrc: this.srcDir.copy
-                # a data file is a unit of its own directory first (zdata.open),
-                # so that is the root its relpath is relative to
-                if (zsource.isDataFile file: pth.stringView) then {
-                    docSrc = path.dirname p: pth.stringView
-                    rel = path.baseName p: pth.stringView
-                }
-                if rel.length == 0 then {
-                    # Outside both roots -- every .z file in examples/ or a
-                    # scratch directory, whenever srcDir is a project's src/.
-                    # An empty relpath kept the buffer out of the overlay AND
-                    # made pathMatches reject every row, so the file got lint
-                    # squiggles and no compiler diagnostics at all: a clean
-                    # compile it never had. Serve it from its own buffer
-                    # instead, under the name the parser will look the unit up
-                    # by, so the overlay that shadows disk is the one the main
-                    # unit resolves to.
-                    un9: zsource.unitNameOf file: pth.stringView
-                    rel = "\{un9}.z"
-                    io.eprintln "zls: \{pth} is outside srcDir and systemDir; serving it from its open buffer"
-                }
-                d: (
-                    Document
-                    uri: uo.copy
-                    path: pth
-                    relpath: rel
-                    srcDir: docSrc
-                    systemDir: this.systemDir.copy
-                    text: to.copy
-                    version: ver
-                )
-                key: uo.copy
-                this.docs.set :key value: d
-                this.syncDoc uri: uo.stringView
-            } case none then null
-        } case none then null
+        }
+        if uo.some when to.some then {
+            pth: uriToPath uri: uo.stringView
+            this.enterProjectOf file: pth.stringView
+            rel: (
+                relPathBest
+                path: pth.stringView
+                srcDir: this.srcDir.stringView
+                systemDir: this.systemDir.stringView
+            )
+            docSrc: this.srcDir.copy
+            # a data file is a unit of its own directory first (zdata.open),
+            # so that is the root its relpath is relative to
+            if (zsource.isDataFile file: pth.stringView) then {
+                docSrc = path.dirname p: pth.stringView
+                rel = path.baseName p: pth.stringView
+            }
+            if rel.length == 0 then {
+                # Outside both roots -- every .z file in examples/ or a
+                # scratch directory, whenever srcDir is a project's src/.
+                # An empty relpath kept the buffer out of the overlay AND
+                # made pathMatches reject every row, so the file got lint
+                # squiggles and no compiler diagnostics at all: a clean
+                # compile it never had. Serve it from its own buffer
+                # instead, under the name the parser will look the unit up
+                # by, so the overlay that shadows disk is the one the main
+                # unit resolves to.
+                un9: zsource.unitNameOf file: pth.stringView
+                rel = "\{un9}.z"
+                io.eprintln "zls: \{pth} is outside srcDir and systemDir; serving it from its open buffer"
+            }
+            d: (
+                Document
+                uri: uo.copy
+                path: pth
+                relpath: rel
+                srcDir: docSrc
+                systemDir: this.systemDir.copy
+                text: to.copy
+                version: ver
+            )
+            key: uo.copy
+            this.docs.set :key value: d
+            this.syncDoc uri: uo.stringView
+        }
     }
 
     # the editor edited a buffer; replace the text and mark it dirty rather than
@@ -1011,40 +979,28 @@ Server: class {
         uo: json.textAt v: msg path: "params/textDocument/uri"
         to: json.textAt v: msg path: "params/contentChanges/0/text"
         vo: json.intAt v: msg path: "params/textDocument/version"
-        match (
-            uo
-        ) case some then {
-            match (
-                to
-            ) case some then {
-                rem: this.docs.remove key: uo
-                changed: false
-                match (
-                    rem
-                ) case some then {
-                    d: rem.take
-                    d.text = to.copy
-                    match (
-                        vo
-                    ) case some then {
-                        d.version = vo
-                    } case none then null
-                    key: uo.copy
-                    this.docs.set :key value: d
-                    changed = true
-                } case none then null
-                if changed then this.syncDoc uri: uo.stringView
-            } case none then null
-        } case none then null
+        if uo.some when to.some then {
+            rem: this.docs.remove key: uo
+            changed: false
+            if rem.some then {
+                d: rem.take
+                d.text = to.copy
+                if vo.some then {
+                    d.version = vo
+                }
+                key: uo.copy
+                this.docs.set :key value: d
+                changed = true
+            }
+            if changed then this.syncDoc uri: uo.stringView
+        }
     }
 
     # the editor closed a buffer; drop it, since the file on disk is
     # authoritative again
     handleDidClose: function {:this msg: Value.view} is {
         uo: json.textAt v: msg path: "params/textDocument/uri"
-        match (
-            uo
-        ) case some then {
+        if uo.some then {
             rem: this.docs.remove key: uo
             match (
                 rem
@@ -1062,7 +1018,7 @@ Server: class {
                 params: pv
                 tp: this.transport
             )
-        } case none then null
+        }
     }
 
     # forgetChecks -- closing document `uri`: its group's check goes with the
@@ -1070,9 +1026,7 @@ Server: class {
     # buffer, goes too
     forgetChecks: function {:this uri: StringView} is {
         gone: this.docCheck.remove key: uri.string
-        match (
-            gone
-        ) case some then {
+        if gone.some then {
             gk: gone.take
             if (this.groupInUse key: gk.stringView).not then {
                 dropped: this.snapshots.remove key: gk.copy
@@ -1084,7 +1038,7 @@ Server: class {
                     dm
                 ) case some then null case none then null
             }
-        } case none then null
+        }
         this.entrySnap = Map String V: zcheck.CheckResult
         de: this.docPrograms.remove key: uri.string
         match (
@@ -1159,13 +1113,11 @@ Server: class {
         found: false
         {
             dgo: this.docs.get key: uri.asString
-            match (
-                dgo
-            ) case some then {
+            if dgo.some then {
                 mp = dgo.path.copy
                 drel = dgo.relpath.copy
                 found = true
-            } case none then null
+            }
         }
         if found.not then return
         this.enterProjectOf file: mp.stringView
@@ -1232,11 +1184,9 @@ Server: class {
         own: Map String V: String
         {
             dgo: this.docs.get key: uri.asString
-            match (
-                dgo
-            ) case some then {
+            if dgo.some then {
                 own.set key: base.copy value: dgo.text.copy
-            } case none then null
+            }
         }
         ovs: this.overlaysOf
         ovs.insert from: own.take at: 0
@@ -1304,17 +1254,13 @@ Server: class {
         for stepping loop {
             stepping = false
             slashOpt: cur.stringView.lastIndexOf needle: "/"
-            match (
-                slashOpt
-            ) case some then {
-                if slashOpt > 0 then {
-                    parentRel: "\{cur.stringView.substring from: 0 to: slashOpt}.z"
-                    if (t.unitFileExists rel: parentRel.stringView :srcDir :systemDir) then {
-                        cur = parentRel.take
-                        stepping = true
-                    }
+            if slashOpt.some when slashOpt > 0 then {
+                parentRel: "\{cur.stringView.substring from: 0 to: slashOpt}.z"
+                if (t.unitFileExists rel: parentRel.stringView :srcDir :systemDir) then {
+                    cur = parentRel.take
+                    stepping = true
                 }
-            } case none then null
+            }
         }
         return cur
     }
@@ -1331,13 +1277,9 @@ Server: class {
         open: false
         for each k: t.docs loop {
             dgo: t.docs.get key: k
-            match (
-                dgo
-            ) case some then {
-                if dgo.relpath.stringView == rel when (
-                    dgo.srcDir.stringView == srcDir
-                ) then open = true
-            } case none then null
+            if dgo.some when dgo.relpath.stringView == rel when (
+                dgo.srcDir.stringView == srcDir
+            ) then open = true
         }
         if open then return true
         if (io.exists path: (path.join a: srcDir b: rel)) then return true
@@ -1374,14 +1316,10 @@ Server: class {
         rels: List String
         for each k: this.docs loop {
             dgo: this.docs.get key: k
-            match (
-                dgo
-            ) case some then {
-                if dgo.srcDir.stringView == this.srcDir then {
-                    uris.append k.copy
-                    rels.append dgo.relpath.copy
-                }
-            } case none then null
+            if dgo.some when dgo.srcDir.stringView == this.srcDir then {
+                uris.append k.copy
+                rels.append dgo.relpath.copy
+            }
         }
         members: List String
         members.append uri.string
@@ -1413,11 +1351,7 @@ Server: class {
         used: false
         for each k: t.docCheck loop {
             g: t.docCheck.get key: k
-            match (
-                g
-            ) case some then {
-                if g.stringView == key then used = true
-            } case none then null
+            if g.some when g.stringView == key then used = true
         }
         return used
     }
@@ -1468,11 +1402,9 @@ Server: class {
                     m: msgs.get i: ri
                     lineText: String
                     lt: r.vfs.getline dentryid: row.fsno lineno: row.lineno - 1
-                    match (
-                        lt
-                    ) case some then {
+                    if lt.some then {
                         lineText = lt.copy
-                    } case none then null
+                    }
                     dv: (
                         diagValue
                         :row
@@ -1529,27 +1461,23 @@ Server: class {
         idv: idValueOf :msg
         uo: json.textAt v: msg path: "params/textDocument/uri"
         answer: Value.nul
-        match (
-            uo
-        ) case some then {
+        if uo.some then {
             dtext: String
             drel: String
             found: false
             {
                 dgo: this.docs.get key: uo
-                match (
-                    dgo
-                ) case some then {
+                if dgo.some then {
                     dtext = dgo.text.copy
                     drel = dgo.relpath.copy
                     found = true
-                } case none then null
+                }
             }
             if found then {
                 res: formatAnswer text: dtext.stringView relpath: drel.stringView
                 answer = res.take
             }
-        } case none then null
+        }
         sendResult id: idv result: answer tp: this.transport
     }
 
@@ -1564,130 +1492,114 @@ Server: class {
         lo: json.intAt v: msg path: "params/position/line"
         co: json.intAt v: msg path: "params/position/character"
         line0: -1
-        match (
-            lo
-        ) case some then {
+        if lo.some then {
             line0 = lo
-        } case none then null
+        }
         ch0: -1
-        match (
-            co
-        ) case some then {
+        if co.some then {
             ch0 = co
-        } case none then null
+        }
         answer: Value.nul
-        match (
-            uo
-        ) case some then {
-            if line0 >= 0 when ch0 >= 0 then {
-                dtext: String
-                drel: String
-                dsrc: String
-                dsys: String
-                dpath: String
-                found: false
-                {
-                    dgo: this.docs.get key: uo
-                    match (
-                        dgo
-                    ) case some then {
-                        dtext = dgo.text.copy
-                        drel = dgo.relpath.copy
-                        dsrc = dgo.srcDir.copy
-                        dsys = dgo.systemDir.copy
-                        dpath = dgo.path.copy
-                        found = true
-                    } case none then null
-                }
-                if found then {
-                    # the document's own project answers for it
-                    this.srcDir = dsrc.take
-                    this.systemDir = dsys.take
-                    ck: this.checkKeyOf uri: uo.stringView
-                    {
-                        sno: this.snapshots.getMut key: ck
-                        match (
-                            sno
-                        ) case some then {
-                            res: Value.nul
-                            trigCh: String
-                            # a client that sends no context asks for every
-                            # reference, as Find References does
-                            inclDecl: true
-                            ido: json.boolAt v: msg path: "params/context/includeDeclaration"
-                            match (
-                                ido
-                            ) case some then {
-                                inclDecl = ido
-                            } case none then null
-                            tco: json.textAt v: msg path: "params/context/triggerCharacter"
-                            match (
-                                tco
-                            ) case some then {
-                                trigCh = tco.copy
-                            } case none then null
-                            if mode == 4 then {
-                                res = (
-                                    completionAnswer
-                                    snap: sno
-                                    docUri: uo.stringView
-                                    docRel: drel.stringView
-                                    docText: dtext.stringView
-                                    :line0
-                                    ch: ch0
-                                    utf32: this.encUtf32
-                                    trig: trigCh.stringView
-                                    words: this.words
-                                )
-                            } else if mode == 5 then {
-                                res = (
-                                    signatureHelpAnswer
-                                    snap: sno
-                                    docRel: drel.stringView
-                                    docText: dtext.stringView
-                                    :line0
-                                    ch: ch0
-                                    utf32: this.encUtf32
-                                )
-                            } else {
-                                res = (
-                                    navAnswer
-                                    snap: sno
-                                    docRel: drel.stringView
-                                    docUri: uo.stringView
-                                    srcDir: this.srcDir.stringView
-                                    systemDir: this.systemDir.stringView
-                                    docText: dtext.stringView
-                                    :line0
-                                    ch: ch0
-                                    utf32: this.encUtf32
-                                    :mode
-                                    :inclDecl
-                                )
-                            }
-                            answer = res.take
-                        } case none then null
-                    }
-                    if mode == 3 when (this.searchesElsewhere uri: uo.stringView ck: ck.stringView
-                    ) then {
-                        m3: (
-                            this.referencesElsewhere
-                            :msg
-                            own: answer
-                            ck: ck.stringView
-                            uri: uo.stringView
-                            docPath: dpath.stringView
-                            docRel: drel.stringView
-                            docUri: uo.stringView
-                            docText: dtext.stringView
-                            :line0
-                            ch: ch0
-                        )
-                        answer = m3.take
-                    }
+        if uo.some when line0 >= 0 when ch0 >= 0 then {
+            dtext: String
+            drel: String
+            dsrc: String
+            dsys: String
+            dpath: String
+            found: false
+            {
+                dgo: this.docs.get key: uo
+                if dgo.some then {
+                    dtext = dgo.text.copy
+                    drel = dgo.relpath.copy
+                    dsrc = dgo.srcDir.copy
+                    dsys = dgo.systemDir.copy
+                    dpath = dgo.path.copy
+                    found = true
                 }
             }
-        } case none then null
+            if found then {
+                # the document's own project answers for it
+                this.srcDir = dsrc.take
+                this.systemDir = dsys.take
+                ck: this.checkKeyOf uri: uo.stringView
+                {
+                    sno: this.snapshots.getMut key: ck
+                    if sno.some then {
+                        res: Value.nul
+                        trigCh: String
+                        # a client that sends no context asks for every
+                        # reference, as Find References does
+                        inclDecl: true
+                        ido: json.boolAt v: msg path: "params/context/includeDeclaration"
+                        if ido.some then {
+                            inclDecl = ido
+                        }
+                        tco: json.textAt v: msg path: "params/context/triggerCharacter"
+                        if tco.some then {
+                            trigCh = tco.copy
+                        }
+                        if mode == 4 then {
+                            res = (
+                                completionAnswer
+                                snap: sno
+                                docUri: uo.stringView
+                                docRel: drel.stringView
+                                docText: dtext.stringView
+                                :line0
+                                ch: ch0
+                                utf32: this.encUtf32
+                                trig: trigCh.stringView
+                                words: this.words
+                            )
+                        } else if mode == 5 then {
+                            res = (
+                                signatureHelpAnswer
+                                snap: sno
+                                docRel: drel.stringView
+                                docText: dtext.stringView
+                                :line0
+                                ch: ch0
+                                utf32: this.encUtf32
+                            )
+                        } else {
+                            res = (
+                                navAnswer
+                                snap: sno
+                                docRel: drel.stringView
+                                docUri: uo.stringView
+                                srcDir: this.srcDir.stringView
+                                systemDir: this.systemDir.stringView
+                                docText: dtext.stringView
+                                :line0
+                                ch: ch0
+                                utf32: this.encUtf32
+                                :mode
+                                :inclDecl
+                            )
+                        }
+                        answer = res.take
+                    }
+                }
+                if mode == 3 when (this.searchesElsewhere uri: uo.stringView ck: ck.stringView
+                ) then {
+                    m3: (
+                        this.referencesElsewhere
+                        :msg
+                        own: answer
+                        ck: ck.stringView
+                        uri: uo.stringView
+                        docPath: dpath.stringView
+                        docRel: drel.stringView
+                        docUri: uo.stringView
+                        docText: dtext.stringView
+                        :line0
+                        ch: ch0
+                    )
+                    answer = m3.take
+                }
+            }
+        }
         sendResult id: idv result: answer tp: this.transport
     }
 
@@ -1714,20 +1626,16 @@ Server: class {
         acc: mergeLocations a: own b: Value.nul
         inclDecl: true
         ido: json.boolAt v: msg path: "params/context/includeDeclaration"
-        match (
-            ido
-        ) case some then {
+        if ido.some then {
             inclDecl = ido
-        } case none then null
+        }
         keys: List String
         for each k: this.snapshots loop {
             if k.stringView != ck then keys.append from: k.copy
         }
         for each k: keys loop {
             so: this.snapshots.getMut key: k
-            match (
-                so
-            ) case some then {
+            if so.some then {
                 r: (
                     navAnswer
                     snap: so
@@ -1743,15 +1651,13 @@ Server: class {
                     :inclDecl
                 )
                 acc = mergeLocations a: acc b: r
-            } case none then null
+            }
         }
         for each ent: (this.programsOf :uri) loop {
             if (this.entryOpen entry: ent.stringView).not then {
                 this.checkEntry entry: ent.stringView :docPath
                 eo: this.entrySnap.getMut key: ent.copy
-                match (
-                    eo
-                ) case some then {
+                if eo.some then {
                     r: (
                         navAnswer
                         snap: eo
@@ -1767,7 +1673,7 @@ Server: class {
                         :inclDecl
                     )
                     acc = mergeLocations a: acc b: r
-                } case none then null
+                }
             }
         }
         return acc
@@ -1803,11 +1709,9 @@ Server: class {
     programsOf: function {t: this.view uri: StringView} out List String is {
         r: List String
         g: t.docPrograms.get key: uri.string
-        match (
-            g
-        ) case some then {
+        if g.some then {
             for each pg: g loop r.append from: pg.copy
-        } case none then null
+        }
         return r
     }
 
@@ -1827,9 +1731,7 @@ Server: class {
         this.enterProjectOf file: docPath
         ovs: this.overlaysOf
         lo: this.entryLayers.get key: entry.string
-        match (
-            lo
-        ) case some then {
+        if lo.some then {
             r: (
                 zcheck.check
                 srcdirs: this.srcDirs
@@ -1839,7 +1741,7 @@ Server: class {
                 layer: lo
             )
             if r.parseOk then this.entrySnap.set key: entry.string value: r
-        } case none then null
+        }
     }
 
     # handleResolve -- completionItem/resolve: the item back exactly as the
@@ -1857,39 +1759,29 @@ Server: class {
         base: String
         {
             lbo: json.textAt v: msg path: "params/label"
-            match (
-                lbo
-            ) case some then {
+            if lbo.some then {
                 lbl = lbo.copy
-            } case none then null
+            }
             bo: json.textAt v: msg path: "params/data/base"
-            match (
-                bo
-            ) case some then {
+            if bo.some then {
                 base = bo.copy
-            } case none then null
+            }
         }
         uo: json.textAt v: msg path: "params/data/uri"
         lo: json.intAt v: msg path: "params/data/line"
         match (
             item
         ) case object then {
-            match (
-                uo
-            ) case some then {
-                match (
-                    lo
-                ) case some then {
-                    (
-                        this.resolveInto
-                        it: item
-                        uri: uo.stringView
-                        line0: lo
-                        base: base.stringView
-                        label: lbl.stringView
-                    )
-                } case none then null
-            } case none then null
+            if uo.some when lo.some then {
+                (
+                    this.resolveInto
+                    it: item
+                    uri: uo.stringView
+                    line0: lo
+                    base: base.stringView
+                    label: lbl.stringView
+                )
+            }
         } else null
         sendResult id: idv result: item tp: this.transport
     }
@@ -1909,21 +1801,17 @@ Server: class {
         found: false
         {
             dgo: this.docs.get key: uri.string
-            match (
-                dgo
-            ) case some then {
+            if dgo.some then {
                 drel = dgo.relpath.copy
                 dsrc = dgo.srcDir.copy
                 found = true
-            } case none then null
+            }
         }
         if found.not then return
         this.srcDir = dsrc.take
         ck: this.checkKeyOf :uri
         sno: this.snapshots.getMut key: ck
-        match (
-            sno
-        ) case some then {
+        if sno.some then {
             card: (
                 completionCard
                 snap: sno
@@ -1934,18 +1822,16 @@ Server: class {
             )
             md: String
             mo: json.textAt v: card path: "contents/value"
-            match (
-                mo
-            ) case some then {
+            if mo.some then {
                 md = mo.copy
-            } case none then null
+            }
             if md.length > 0 then {
                 doc: newObj
                 doc.set key: "kind".string value: Value.text "markdown".string
                 doc.set key: "value".string value: Value.text md.copy
                 it.set key: "documentation".string value: Value.object doc
             }
-        } case none then null
+        }
     }
 
     # answer a document-symbol request with the file's definitions, which is
@@ -1955,9 +1841,7 @@ Server: class {
         idv: idValueOf :msg
         uo: json.textAt v: msg path: "params/textDocument/uri"
         answer: Value.nul
-        match (
-            uo
-        ) case some then {
+        if uo.some then {
             drel: String
             dtext: String
             dsrc: String
@@ -1965,24 +1849,20 @@ Server: class {
             found: false
             {
                 dgo: this.docs.get key: uo
-                match (
-                    dgo
-                ) case some then {
+                if dgo.some then {
                     drel = dgo.relpath.copy
                     dtext = dgo.text.copy
                     dsrc = dgo.srcDir.copy
                     dsys = dgo.systemDir.copy
                     found = true
-                } case none then null
+                }
             }
             if found then {
                 this.srcDir = dsrc.take
                 this.systemDir = dsys.take
                 ck: this.checkKeyOf uri: uo.stringView
                 sno: this.snapshots.get key: ck
-                match (
-                    sno
-                ) case some then {
+                if sno.some then {
                     res: (
                         symbolsAnswer
                         snap: sno
@@ -1991,9 +1871,9 @@ Server: class {
                         utf32: this.encUtf32
                     )
                     answer = res.take
-                } case none then null
+                }
             }
-        } case none then null
+        }
         sendResult id: idv result: answer tp: this.transport
     }
 }
@@ -2521,15 +2401,11 @@ docLine: function {text: StringView lineno: u32} out String is {
     n: text.length
     for i < n loop {
         b: text.byteAt :i
-        match (
-            b
-        ) case some then {
-            if b == 10 then {
-                if cur == lineno then return (text.substring from: start to: i).string
-                cur = cur + 1
-                start = i + 1
-            }
-        } case none then null
+        if b.some when b == 10 then {
+            if cur == lineno then return (text.substring from: start to: i).string
+            cur = cur + 1
+            start = i + 1
+        }
         i = i + 1
     }
     if cur == lineno then return (text.substring from: start to: n).string
@@ -2739,11 +2615,9 @@ genericParamCard: function {
     card: String
     {
         pnm: String
-        match (
-            o
-        ) case some then {
+        if o.some then {
             pnm = declNameText ast: prog st: o declId: gpd
-        } case none then null
+        }
         if pnm.length == 0 then return "".string
         card.append pnm
         if bnm.length > 0 then {
@@ -2765,16 +2639,14 @@ genericParamOwner: function {
     if gpd.isZero then return "".string
     own: String
     {
-        match (
-            o
-        ) case some then {
+        if o.some then {
             par: ztypes.declid
             d: o.typing.decls.get i: gpd
             par = d.parent
             if par.isZero.not then {
                 own = declNameText ast: prog st: o declId: par
             }
-        } case none then null
+        }
     }
     return own
 }
@@ -2801,19 +2673,13 @@ genericUseDecl: function {
     d: genericParamDeclOf o: snap.st :nid
     if d.isZero then {
         op: sp.genUse.get key: nid
-        match (
-            op
-        ) case some then {
+        if op.some then {
             d = genericParamDeclOf o: snap.st nid: op
-        } case none then null
+        }
     }
     if d.isZero then return d
     o: snap.st
-    match (
-        o
-    ) case some then {
-        if (o.typing.decls.get i: d).name == name then return d
-    } case none then null
+    if o.some when (o.typing.decls.get i: d).name == name then return d
     return ztypes.declid.zero
 }
 
@@ -2854,12 +2720,10 @@ memberOwnerOf: function {o: (Option zenv.ZSymbolTable).view nid: zast.nodeid} ou
 declOwnerOf: function {o: (Option zenv.ZSymbolTable).view declId: ztypes.declid} out ztypes.tid is {
     if declId.isZero then return ztypes.tid.zero
     par: ztypes.declid
-    match (
-        o
-    ) case some then {
+    if o.some then {
         d: o.typing.decls.get i: declId
         par = d.parent
-    } case none then null
+    }
     if par.isZero then return ztypes.tid.zero
     match (
         o
@@ -2910,9 +2774,7 @@ surfaceDeclOfType: function {
     tid: ztypes.tid
 } out ztypes.declid is {
     if tid.isZero then return ztypes.declid.zero
-    match (
-        o
-    ) case some then {
+    if o.some then {
         {
             return (
                 ztypecheck.surfaceDeclOfTypeId
@@ -2921,21 +2783,19 @@ surfaceDeclOfType: function {
                 :tid
             )
         }
-    } case none then null
+    }
     return ztypes.declid.zero
 }
 
 # isLiteralTid -- one of the registry's reserved literal rows.
 isLiteralTid: function {o: (Option zenv.ZSymbolTable).view tid: ztypes.tid} out bool is {
     if tid.isZero then return false
-    match (
-        o
-    ) case some then {
+    if o.some then {
         if tid == o.reg.literalIntTid then return true
         if tid == o.reg.literalBitsTid then return true
         if tid == o.reg.literalTextTid then return true
         return tid == o.reg.literalFloatTid
-    } case none then null
+    }
     return false
 }
 
@@ -2951,9 +2811,7 @@ literalNote: function {
     site: ztypes.declid
 } out String is {
     if (ztypecheck.isNumericLiteralName :name).not then return "".string
-    match (
-        o
-    ) case some then {
+    if o.some then {
         falls: literalFallNote st: o :name :refTid
         if falls.length > 0 then return falls
         if nodeTid.isZero.not then {
@@ -2965,7 +2823,7 @@ literalNote: function {
                 return note
             }
         }
-    } case none then null
+    }
     return "".string
 }
 
@@ -3153,17 +3011,13 @@ typeKindTextOpt: function {
 } out String is {
     result: String
     if tid.isZero then return result
-    match (
-        o
-    ) case some then {
+    if o.some then {
         tdb: o.typing.typedefBaseTid.get key: tid
-        match (
-            tdb
-        ) case some then {
+        if tdb.some then {
             result = "typedef ".string
             result.append (displayTypeNameSt st: o tid: tdb :site)
             return result
-        } case none then null
+        }
         tt: o.reg.typetypeOf typeId: tid
         match (
             tt
@@ -3183,7 +3037,7 @@ typeKindTextOpt: function {
         } case protocolType then {
             result = "protocol".string
         } else null
-    } case none then null
+    }
     return result
 }
 
@@ -3347,13 +3201,11 @@ paramStartsLine: function {vfs: zvfs.ZVfs fsno: zvfs.fsno line1: u32 name: Strin
     result: false
     if line1 == 0 then return result
     lg: vfs.getline dentryid: fsno lineno: line1 - 1
-    match (
-        lg
-    ) case some then {
+    if lg.some then {
         lv: lg.stringView
         tl: lv.trimStart
         if tl.startsWith name then result = true
-    } case none then null
+    }
     return result
 }
 
@@ -3459,14 +3311,12 @@ ownershipSuffix: function {
     nameId: zast.nameid
 } out StringView is {
     oo: st.typing.declOwnershipOfId :parentTypeId :nameId
-    match (
-        oo
-    ) case some then {
+    if oo.some then {
         if oo == ztypes.zparamownership.takeMode then return ".take"
         if oo == ztypes.zparamownership.borrowMode then return ".borrow"
         if oo == ztypes.zparamownership.viewMode then return ".view"
         if oo == ztypes.zparamownership.holdMode then return ".hold"
-    } case none then null
+    }
     return ""
 }
 
@@ -3509,14 +3359,10 @@ paramDisplayOf: function {
 # result is owned.
 returnSuffix: function {st: zenv.ZSymbolTable.view tid: ztypes.tid} out StringView is {
     rb: st.typing.funcReturnsBorrow.get key: tid
-    match (
-        rb
-    ) case some then {
-        if rb then {
-            if ((st.typing.funcReturnsView.get key: tid).or d: false) then return ".view"
-            return ".borrow"
-        }
-    } case none then null
+    if rb.some when rb then {
+        if ((st.typing.funcReturnsView.get key: tid).or d: false) then return ".view"
+        return ".borrow"
+    }
     return ""
 }
 
@@ -3564,17 +3410,13 @@ paramDocLines: function {
         {
             pn0: pnames.get i: pdi
             dgot: docs.get key: pn0
-            match (
-                dgot
-            ) case some then {
+            if dgot.some then {
                 pdc = dgot.copy
-            } case none then null
+            }
             lgot: leads.get key: pn0
-            match (
-                lgot
-            ) case some then {
+            if lgot.some then {
                 plc = lgot.copy
-            } case none then null
+            }
         }
         if pdc.length > 0 then hasDocs = true
         if plc.length > 0 then hasDocs = true
@@ -3615,16 +3457,14 @@ docPrefixed: function {block: StringView} out String is {
     wbj: u64
     for wbj < block.length loop {
         wcb: block.byteAt i: wbj
-        match (
-            wcb
-        ) case some then {
+        if wcb.some then {
             if wcb == 10 then {
                 r.appendByte b: 10
                 r.append "    # "
             } else {
                 r.appendByte b: wcb
             }
-        } case none then null
+        }
         wbj = wbj + 1
     }
     return r
@@ -3734,9 +3574,7 @@ fnParamDisplays: function {
     site: ztypes.declid
 } out List String is {
     result: List String
-    match (
-        o
-    ) case some then {
+    if o.some then {
         pnames: List String
         ptids: ListVal ztypes.tid
         pnids: ListVal zast.nameid
@@ -3758,7 +3596,7 @@ fnParamDisplays: function {
             )
             pi = pi + 1
         }
-    } case none then null
+    }
     return result
 }
 
@@ -3801,22 +3639,18 @@ defNodeInfo: function {
     member: StringView
 } out zast.nodeid is {
     did: ztypes.declid
-    match (
-        o
-    ) case some then {
+    if o.some then {
         did = ztypecheck.declOfTypeId st: o :tid
-    } case none then null
+    }
     if did.isZero then return zast.nodeid
     if member.length == 0 then return (declNodeOf :o declId: did)
     {
         mnid: zast.poolFind pool: prog.names text: member
         if mnid.isZero then return zast.nodeid
         mdid: ztypes.declid
-        match (
-            o
-        ) case some then {
+        if o.some then {
             mdid = o.typing.declFindChild parentDeclId: did nameId: mnid
-        } case none then null
+        }
         return (declNodeOf :o declId: mdid)
     }
     return zast.nodeid
@@ -3848,11 +3682,9 @@ locationValue: function {
             lineText = docLine text: docText lineno: line
         } else {
             lg: snap.vfs.getline dentryid: fs lineno: line - 1
-            match (
-                lg
-            ) case some then {
+            if lg.some then {
                 lineText = lg.copy
-            } case none then null
+            }
         }
     }
     w: width
@@ -3952,9 +3784,7 @@ trailingDocOf: function {vfs: zvfs.ZVfs fsno: zvfs.fsno line1: u32} out String i
     result: String
     if line1 == 0 then return result
     lg: vfs.getline dentryid: fsno lineno: line1 - 1
-    match (
-        lg
-    ) case some then {
+    if lg.some then {
         lv: lg.stringView
         n: lv.length
         inStr: false
@@ -3963,15 +3793,13 @@ trailingDocOf: function {vfs: zvfs.ZVfs fsno: zvfs.fsno line1: u32} out String i
         i: u64
         for i < n loop {
             b: lv.byteAt :i
-            match (
-                b
-            ) case some then {
+            if b.some then {
                 if b == 34 then inStr = inStr.not
                 if b == 35 when inStr.not when found.not then {
                     hashAt = i
                     found = true
                 }
-            } case none then null
+            }
             if found then break
             i = i + 1
         }
@@ -3980,7 +3808,7 @@ trailingDocOf: function {vfs: zvfs.ZVfs fsno: zvfs.fsno line1: u32} out String i
             trimmed: after.trim
             result = trimmed.string
         }
-    } case none then null
+    }
     return result
 }
 
@@ -4003,11 +3831,7 @@ docBlockAboveOf: function {vfs: zvfs.ZVfs fsno: zvfs.fsno line1: u32} out String
             if tl.startsWith "#" then {
                 st: 1.u64
                 sb: tl.byteAt i: 1
-                match (
-                    sb
-                ) case some then {
-                    if sb == 32 then st = 2
-                } case none then null
+                if sb.some when sb == 32 then st = 2
                 ds: tl.substring from: st to: tl.length
                 acc.append ds.string
             } else {
@@ -4133,11 +3957,7 @@ unitDocComment: function {snap: zcheck.CheckResult fsno: zvfs.fsno} out String i
             if tl.startsWith "#" then {
                 st: 1.u64
                 sb: tl.byteAt i: 1
-                match (
-                    sb
-                ) case some then {
-                    if sb == 32 then st = 2
-                } case none then null
+                if sb.some when sb == 32 then st = 2
                 ds: tl.substring from: st to: tl.length
                 if result.length > 0 then result.appendByte b: 10
                 result.append ds
@@ -4172,13 +3992,9 @@ locationAtFileTop: function {
 # dispositionNote -- a call argument's disposition (from the argDisposition
 # stamp) as a one-line prose note, or "".
 dispositionNote: function {o: (Option zenv.ZSymbolTable).view nid: zast.nodeid} out String is {
-    match (
-        o
-    ) case some then {
+    if o.some then {
         d: o.typing.argDisposition.get key: nid
-        match (
-            d
-        ) case some then {
+        if d.some then {
             if d == ztypes.zparamownership.takeMode then {
                 return "Moved into the call (a taking parameter).".string
             }
@@ -4191,8 +4007,8 @@ dispositionNote: function {o: (Option zenv.ZSymbolTable).view nid: zast.nodeid} 
             if d == ztypes.zparamownership.holdMode then {
                 return "Held: moved in and frozen, the caller keeps the storage.".string
             }
-        } case none then null
-    } case none then null
+        }
+    }
     return "".string
 }
 
@@ -4528,9 +4344,7 @@ declOfDefOp: function {
 } out ztypes.declid is {
     nm: zast.poolFind pool: prog.names text: name
     if nm.isZero then return ztypes.declid.zero
-    match (
-        o
-    ) case some then {
+    if o.some then {
         k: u64
         for each d: o.typing.decls loop {
             if d.name == nm when d.node.isZero.not then {
@@ -4539,7 +4353,7 @@ declOfDefOp: function {
             }
             k = k + 1
         }
-    } case none then null
+    }
     return ztypes.declid.zero
 }
 
@@ -4565,11 +4379,7 @@ listDeclOfNodeOpt: function {
 } out ztypes.declid is {
     d: refDeclOf :o :nid
     if d.isZero then return d
-    match (
-        o
-    ) case some then {
-        if (o.typing.decls.get i: d).kind.staticListDecl then return d
-    } case none then null
+    if o.some when (o.typing.decls.get i: d).kind.staticListDecl then return d
     return ztypes.declid.zero
 }
 
@@ -4602,12 +4412,10 @@ listMemberDecl: function {snap: zcheck.CheckResult dpid: zast.nodeid} out ztypes
     }
     if ld.isZero then return ld
     o: snap.st
-    match (
-        o
-    ) case some then {
+    if o.some then {
         e: o.typing.declFindChild parentDeclId: ld nameId: nm
         if e.isZero.not then return e
-    } case none then null
+    }
     return ld
 }
 
@@ -4624,15 +4432,13 @@ listOfDeclOpt: function {
     o: (Option zenv.ZSymbolTable).view declId: ztypes.declid
 } out ztypes.declid is {
     if declId.isZero then return declId
-    match (
-        o
-    ) case some then {
+    if o.some then {
         d: o.typing.decls.get i: declId
         if d.kind.staticListDecl then return declId
         if d.parent.isZero.not when (o.typing.decls.get i: d.parent).kind.staticListDecl then {
             return d.parent
         }
-    } case none then null
+    }
     return ztypes.declid.zero
 }
 
@@ -4657,11 +4463,9 @@ listMemberPrefix: function {snap: zcheck.CheckResult hit: navhit} out String is 
 # nodeConstOpt -- the value the check folded node `nid` to, over the LSP's
 # optional snapshot; none when it folded to none.
 nodeConstOpt: function {o: (Option zenv.ZSymbolTable).view nid: zast.nodeid} out ztypes.cval is {
-    match (
-        o
-    ) case some then {
+    if o.some then {
         return ((o.typing.nodeConst.get key: nid).or d: ztypes.noConst)
-    } case none then null
+    }
     return ztypes.noConst
 }
 
@@ -4669,15 +4473,13 @@ nodeConstOpt: function {o: (Option zenv.ZSymbolTable).view nid: zast.nodeid} out
 listPathOpt: function {snap: zcheck.CheckResult declId: ztypes.declid} out String is {
     ld: declId
     o: snap.st
-    match (
-        o
-    ) case some then {
+    if o.some then {
         up: ztypecheck.unitPathOfDecl st: o declId: ld
         nm: zast.nameTextAt ast: snap.prog ref: (o.typing.decls.get i: ld).name
         if up.length > 0 then up.appendByte b: 46
         up.append nm
         return up
-    } case none then null
+    }
     return "".string
 }
 
@@ -4689,15 +4491,13 @@ listRowTidOpt: function {
     ld: listOfDeclOpt o: snap.st :declId
     if ld.isZero or (ld == declId) then return ztypes.tid.zero
     o: snap.st
-    match (
-        o
-    ) case some then {
+    if o.some then {
         lv: ztypecheck.constValueOfDeclLate st: o ast: snap.prog declId: ld
         if lv.kind.aggKind.not then return ztypes.tid.zero
         g: o.typing.constAggs.get i: lv.aggId.u64
         if slot then return g.slot
         return g.elem
-    } case none then null
+    }
     return ztypes.tid.zero
 }
 
@@ -4707,16 +4507,12 @@ listSlotValueOpt: function {snap: zcheck.CheckResult hit: navhit} out ztypes.cva
     ld: listOfDeclOpt o: snap.st declId: hit.declId
     if ld.isZero or (ld == hit.declId) then return ztypes.noConst
     o: snap.st
-    match (
-        o
-    ) case some then {
+    if o.some then {
         lv: ztypecheck.constValueOfDeclLate st: o ast: snap.prog declId: ld
         if lv.kind.aggKind.not then return ztypes.noConst
         g: o.typing.constAggs.get i: lv.aggId.u64
         po: o.typing.aggLabelPos id: lv.aggId label: (o.typing.decls.get i: hit.declId).name
-        match (
-            po
-        ) case some then {
+        if po.some then {
             cv: ztypes.makeIntConst po.i64.orPanic
             if g.slot != o.reg.literalIntTid when (
                 ztypecheck.numKindOfTid
@@ -4724,8 +4520,8 @@ listSlotValueOpt: function {snap: zcheck.CheckResult hit: navhit} out ztypes.cva
                 tid: g.slot
             ).has then cv = ztypes.typedConst c: cv numTid: g.slot
             return cv
-        } case none then null
-    } case none then null
+        }
+    }
     return ztypes.noConst
 }
 
@@ -4736,11 +4532,9 @@ readsListSlotOpt: function {snap: zcheck.CheckResult nid: zast.nodeid} out bool 
     st0: ztypes.tid
     {
         o: snap.st
-        match (
-            o
-        ) case some then {
+        if o.some then {
             st0 = o.typing.listSlotTid
-        } case none then null
+        }
     }
     return st0.isZero.not and ((nodeTypeAt o: snap.st nid: n.parent) == st0)
 }
@@ -4971,14 +4765,12 @@ staticTypeDeclNamed: function {
 } out ztypes.declid is {
     if nameId.isZero then return ztypes.declid.zero
     o: snap.st
-    match (
-        o
-    ) case some then {
+    if o.some then {
         d: o.typing.declFindChild parentDeclId: unitDecl :nameId
         if d.isZero then return d
         dt: (o.typing.decls.get i: d).typeId
         if (o.reg.isStaticOf tid: dt) then return d
-    } case none then null
+    }
     return ztypes.declid.zero
 }
 
@@ -4988,11 +4780,9 @@ declChildOf: function {
     snap: zcheck.CheckResult declId: ztypes.declid nameId: zast.nameid
 } out ztypes.declid is {
     o: snap.st
-    match (
-        o
-    ) case some then {
+    if o.some then {
         return (o.typing.declFindChild parentDeclId: declId :nameId)
-    } case none then null
+    }
     return ztypes.declid.zero
 }
 
@@ -5030,9 +4820,7 @@ caseArmDecl: function {
     }
     t: nodeTypeAt o: snap.st nid: subj
     o: snap.st
-    match (
-        o
-    ) case some then {
+    if o.some then {
         if t.isZero or nm.isZero then return ztypes.declid.zero
         if (o.reg.isTypeParamOf tid: t) then return (dissectArmDecl prog: snap.prog :o :fn name: nm)
         sum: caseSumOf :o :t
@@ -5041,7 +4829,7 @@ caseArmDecl: function {
         td: ztypecheck.declOfTypeId st: o tid: sum
         if isSum.not or td.isZero then return ztypes.declid.zero
         return (o.typing.declFindChild parentDeclId: td nameId: nm)
-    } case none then null
+    }
     return ztypes.declid.zero
 }
 
@@ -5088,11 +4876,9 @@ dissectArmDecl: function {
         :scope
         base: nm.stringView
     )
-    match (
-        at
-    ) case some then {
+    if at.some then {
         return (ztypecheck.declOfTypeId st: o tid: at)
-    } case none then null
+    }
     return ztypes.declid.zero
 }
 
@@ -5107,16 +4893,12 @@ loopVarOf: function {snap: zcheck.CheckResult sp: Spans.view row: spanrow} out z
     v: defVarIdOf o: snap.st nid: row.nodeid
     if v.isZero.not then return v
     o: snap.st
-    match (
-        o
-    ) case some then {
+    if o.some then {
         mi: o.typing.forImplicitIterate.get key: arm
-        match (
-            mi
-        ) case some then {
+        if mi.some then {
             return ((o.typing.defVariableId.get key: mi).or d: ztypes.vid.zero)
-        } case none then null
-    } case none then null
+        }
+    }
     return v
 }
 
@@ -5128,12 +4910,10 @@ labelSubject: function {snap: zcheck.CheckResult sp: Spans.view row: spanrow} ou
     lab: labelDeclOf :snap :sp :row
     if lab.isZero then return row.nodeid
     o: snap.st
-    match (
-        o
-    ) case some then {
+    if o.some then {
         arm: snap.prog.nodes.get i: (o.typing.decls.get i: lab).node
         if arm.namedoperation then return arm.operation
-    } case none then null
+    }
     return row.nodeid
 }
 
@@ -5228,13 +5008,11 @@ declNamed: function {
     name: StringView
 } out bool is {
     if declId.isZero then return false
-    match (
-        o
-    ) case some then {
+    if o.some then {
         nm: (o.typing.decls.get i: declId).name
         if nm.isZero then return false
         return nm == (zast.poolFind pool: prog.names text: name)
-    } case none then null
+    }
     return false
 }
 
@@ -5807,12 +5585,10 @@ spelledOrigin: function {
 } out ztypes.declid is {
     if declId.isZero then return declId
     o: snap.st
-    match (
-        o
-    ) case some then {
+    if o.some then {
         if (o.typing.decls.get i: declId).name != name then return ztypes.declid.zero
         return (sameNameOrigin prog: snap.prog :o :declId)
-    } case none then null
+    }
     return ztypes.declid.zero
 }
 
@@ -5888,15 +5664,13 @@ labelDeclOf: function {snap: zcheck.CheckResult sp: Spans.view row: spanrow} out
     cd: calleeDeclOf :snap :calNid
     if cd.isZero then return ztypes.declid.zero
     o: snap.st
-    match (
-        o
-    ) case some then {
+    if o.some then {
         org: sameNameOrigin prog: snap.prog :o declId: cd
         ch: o.typing.declFindChild parentDeclId: org nameId: row.name
         if ch.isZero then return ch
         k: (o.typing.decls.get i: ch).kind
         if k.paramDecl or k.fieldDecl then return ch
-    } case none then null
+    }
     return ztypes.declid.zero
 }
 
@@ -5919,12 +5693,10 @@ paramVarOf: function {snap: zcheck.CheckResult declId: ztypes.declid} out ztypes
     if (declKindIsParam :snap :declId).not then return ztypes.vid.zero
     opNid: zast.nodeid
     o: snap.st
-    match (
-        o
-    ) case some then {
+    if o.some then {
         arm: snap.prog.nodes.get i: (o.typing.decls.get i: declId).node
         if arm.namedoperation then opNid = arm.operation
-    } case none then null
+    }
     if opNid.isZero then return ztypes.vid.zero
     return (defVarIdOf :o nid: opNid)
 }
@@ -6025,11 +5797,7 @@ RefFile: class {
         i: u64
         for i < n loop {
             b: tv.byteAt :i
-            match (
-                b
-            ) case some then {
-                if b == 10 then f.starts.append i + 1
-            } case none then null
+            if b.some when b == 10 then f.starts.append i + 1
             i = i + 1
         }
         return f
@@ -6129,9 +5897,7 @@ declOpsOf: function {snap: zcheck.CheckResult tg: reftarget} out ListVal zast.no
     ops: ListVal zast.nodeid
     if tg.declId.isZero or tg.vid.isZero.not then return ops
     o: snap.st
-    match (
-        o
-    ) case some then {
+    if o.some then {
         k: u64
         for each d: o.typing.decls loop {
             if d.name == tg.name when d.node.isZero.not when (
@@ -6146,7 +5912,7 @@ declOpsOf: function {snap: zcheck.CheckResult tg: reftarget} out ListVal zast.no
             }
             k = k + 1
         }
-    } case none then null
+    }
     return ops
 }
 
@@ -6284,11 +6050,9 @@ appendLocations: function {arr: Arr had: Set String from: Value.view skipHad: bo
         for each l: from.items loop {
             us: String
             u: json.textAt v: l path: "uri"
-            match (
-                u
-            ) case some then {
+            if u.some then {
                 us = u.copy
-            } case none then null
+            }
             if (before.has item: us).not then {
                 had.add item: us.copy
                 arr.items.append (
@@ -6512,9 +6276,7 @@ tcLintInto: function {
     lo.lineLength = 100
     lo.complexity = zsource.complexityThreshold
     la: zsource.analyzeSource source: text path: relpath.string opts: lo
-    match (
-        sto
-    ) case some then {
+    if sto.some then {
         lu: zsource.lintedUnitOf :prog :self
         if lu.op.isZero.not then {
             la.lintSuffixUnit :prog :lu st: sto
@@ -6522,7 +6284,7 @@ tcLintInto: function {
             la.reportUnusedVars :prog :lu st: sto
             la.reportViewableLocals :prog :lu st: sto
         }
-    } case none then null
+    }
     appendLintDiags :arr :la :utf32
 }
 
@@ -6614,11 +6376,7 @@ formatAnswer: function {text: StringView relpath: StringView} out Value is {
         n: text.length
         for i < n loop {
             b: text.byteAt :i
-            match (
-                b
-            ) case some then {
-                if b == 10 then nl = nl + 1
-            } case none then null
+            if b.some when b == 10 then nl = nl + 1
             i = i + 1
         }
         st: newObj
@@ -6649,16 +6407,14 @@ byteIdxOfCp: function {s: StringView cp1: u32} out u64 is {
     n: s.length
     for i < n loop {
         b: s.byteAt :i
-        match (
-            b
-        ) case some then {
+        if b.some then {
             isStart: b < 128
             if b >= 192 then isStart = true
             if isStart then {
                 cnt = cnt + 1
                 if cnt == cp1 then return i
             }
-        } case none then null
+        }
         i = i + 1
     }
     return n
@@ -6669,11 +6425,9 @@ byteIdxOfCp: function {s: StringView cp1: u32} out u64 is {
 # which is what `d` spells without a `match` around every read.
 byteOr: function {s: StringView.view i: u64 d: u8} out u8 is {
     got: s.byteAt :i
-    match (
-        got
-    ) case some then {
+    if got.some then {
         return got
-    } case none then null
+    }
     return d
 }
 
@@ -6809,9 +6563,7 @@ addUnitChainDefs: function {
     sink: (MapRV String v: u8)
 } is {
     o: snap.st
-    match (
-        o
-    ) case some then {
+    if o.some then {
         cur: site
         for cur.isZero.not loop {
             if (o.typing.declIsUnitScope declId: cur) then {
@@ -6819,19 +6571,17 @@ addUnitChainDefs: function {
             }
             cur = o.typing.declParentOf declId: cur
         }
-    } case none then null
+    }
 }
 
 # addCoreDefs -- the prelude's definitions, which a bare name reaches from
 # every unit.
 addCoreDefs: function {snap: zcheck.CheckResult.view sink: (MapRV String v: u8)} is {
     o: snap.st
-    match (
-        o
-    ) case some then {
+    if o.some then {
         cr: o.typing.coreUnitRoot
         if cr.isZero.not then addDeclUnitDefs prog: snap.prog st: o declId: cr outside: true :sink
-    } case none then null
+    }
 }
 
 # addDeclUnitDefs -- the definitions of the unit declaration `declId` that a
@@ -6865,11 +6615,12 @@ addUnitFiles: function {vfs: zvfs.ZVfs.view dirid: zvfs.fsno sink: (MapRV String
     ) case dir then {
         for each nm: r loop {
             stem: nm.stringView.stripSuffix s: ".z"
-            match (
-                stem
-            ) case some then {
-                if (zparser.isValidUnitName name: stem) then addCand :sink name: stem kind: 9
-            } case none then null
+            if stem.some when (zparser.isValidUnitName name: stem) then (
+                addCand
+                :sink
+                name: stem
+                kind: 9
+            )
         }
     } case file then null case err then null
 }
@@ -7148,13 +6899,11 @@ addTypeMembers: function {
     # the `.` follows a value, where a member of the type is not offered
     onValue: bool
 } is {
-    match (
-        o
-    ) case some then {
+    if o.some then {
         {
             addTypeMembersIn :prog :o :tid :sink :skipNumeric :privateOk :onValue
         }
-    } case none then null
+    }
 }
 
 # userParams -- a function type's user parameters, in declaration order:
@@ -7287,11 +7036,9 @@ addHeadUnitMembers: function {
     d: bareDeclOf o: snap.st :site nameId: (zast.poolFind pool: snap.prog.names text: name)
     if d.isZero then return
     o: snap.st
-    match (
-        o
-    ) case some then {
+    if o.some then {
         addDeclUnitDefs prog: snap.prog st: o declId: d outside: d != site :sink
-    } case none then null
+    }
 }
 
 # addUnitMembers -- the top-level symbols of the file-unit named `name`, read
@@ -7351,28 +7098,24 @@ privateMembersReachable: function {
         if inOwn when (zcheck.fsnoFor r: snap nodeid: tn) == docFs then return true
     }
     o: snap.st
-    match (
-        o
-    ) case some then {
+    if o.some then {
         if (ztypecheck.publicNsOf st: o :tid).isZero then return true
         if vid.isZero then return false
         return (o.reg.variableIsPrivate id: vid)
-    } case none then null
+    }
     return false
 }
 
 # typeDefNode -- the definition node of type `tid`, a generic instance's being
 # its template's; 0 when the snapshot knows none
 typeDefNode: function {o: (Option zenv.ZSymbolTable).view tid: ztypes.tid} out zast.nodeid is {
-    match (
-        o
-    ) case some then {
+    if o.some then {
         owner: tid
         og: o.reg.genericOriginOf :tid
         if og.isZero.not then owner = og
         d: o.reg.defOf tid: owner
         if d.isZero.not then return (o.typing.decls.get i: d).node
-    } case none then null
+    }
     return zast.nodeid
 }
 
@@ -7455,16 +7198,14 @@ parenOpenOf: function {ltv: StringView close: u64} out u64 is {
     for i > 0 loop {
         i = i - 1
         b: ltv.byteAt :i
-        match (
-            b
-        ) case some then {
+        if b.some then {
             if b == 41 then depth = depth + 1
             if b == 40 then {
                 if depth == 0 then return close
                 depth = depth - 1
                 if depth == 0 then return i
             }
-        } case none then null
+        }
     }
     return close
 }
@@ -7497,15 +7238,11 @@ memberBaseOf: function {ltv: StringView dot: u64} out baserange is {
     if bs < dot then return (baserange lo: bs hi: dot)
     if dot == 0 then return (baserange lo: dot hi: dot)
     cb: ltv.byteAt i: dot - 1
-    match (
-        cb
-    ) case some then {
-        if cb == 41 then {
-            close: dot - 1
-            op: parenOpenOf :ltv :close
-            if (op + 1) < close then return (baserange lo: op + 1 hi: close)
-        }
-    } case none then null
+    if cb.some when cb == 41 then {
+        close: dot - 1
+        op: parenOpenOf :ltv :close
+        if (op + 1) < close then return (baserange lo: op + 1 hi: close)
+    }
     return (baserange lo: dot hi: dot)
 }
 
@@ -7547,12 +7284,10 @@ numberEnd: function {base: StringView} out u64 is {
 # literalTidOf -- the literal type a numeric lexeme wears: floatliteral when it
 # carries a decimal point, intliteral otherwise.
 literalTidOf: function {o: (Option zenv.ZSymbolTable).view name: StringView} out ztypes.tid is {
-    match (
-        o
-    ) case some then {
+    if o.some then {
         if (ztypes.isFloatLexeme numstr: name) then return o.reg.literalFloatTid
         return o.reg.literalIntTid
-    } case none then null
+    }
     return ztypes.tid.zero
 }
 
@@ -7568,16 +7303,12 @@ literalConvTid: function {
 } out ztypes.tid is {
     m: childOfIn :prog :o parent: litTid :name
     if m.isZero then return ztypes.tid.zero
-    match (
-        o
-    ) case some then {
+    if o.some then {
         r: ztypecheck.methodReturnOf st: o mid: m
-        match (
-            r
-        ) case some then {
+        if r.some then {
             return r
-        } case none then null
-    } case none then null
+        }
+    }
     return ztypes.tid.zero
 }
 
@@ -7591,11 +7322,7 @@ literalDefaultTid: function {
     bits: bool
 } out ztypes.tid is {
     isF: false
-    match (
-        o
-    ) case some then {
-        if litTid == o.reg.literalFloatTid then isF = true
-    } case none then null
+    if o.some when litTid == o.reg.literalFloatTid then isF = true
     if isF then return (literalConvTid :prog :o :litTid name: "f64")
     if bits then return (literalConvTid :prog :o :litTid name: "u64")
     return (literalConvTid :prog :o :litTid name: "i64")
@@ -7628,11 +7355,7 @@ dotFrom: function {base: StringView start: u64} out u64 is {
     i: start
     for i < n loop {
         b: base.byteAt :i
-        match (
-            b
-        ) case some then {
-            if b == 46 then return i
-        } case none then null
+        if b.some when b == 46 then return i
         i = i + 1
     }
     return n
@@ -7648,9 +7371,7 @@ descendUnitType: function {
     o: Option zenv.ZSymbolTable
 } out ztypes.tid is {
     result: ztypes.tid
-    match (
-        o
-    ) case some then {
+    if o.some then {
         {
             ud: (
                 ztypecheck.unitDeclOfName
@@ -7665,7 +7386,7 @@ descendUnitType: function {
                 :name
             )
         }
-    } case none then null
+    }
     return result
 }
 
@@ -7678,9 +7399,7 @@ childOfIn: function {
     name: StringView
 } out ztypes.tid is {
     result: ztypes.tid
-    match (
-        o
-    ) case some then {
+    if o.some then {
         {
             # the name is the editor's text: interned here, at the tool's edge
             co: (
@@ -7688,13 +7407,11 @@ childOfIn: function {
                 parentTypeId: parent
                 nameId: (zast.poolFind pool: prog.names text: name)
             )
-            match (
-                co
-            ) case some then {
+            if co.some then {
                 result = co
-            } case none then null
+            }
         }
-    } case none then null
+    }
     return result
 }
 
@@ -8058,9 +7775,7 @@ declBaseKind: function {
     d: ztypes.declid
     throughStorage: bool
 } out basekind is {
-    match (
-        o
-    ) case some then {
+    if o.some then {
         cur: d
         hops: u32
         for hops < 8 loop {
@@ -8071,7 +7786,7 @@ declBaseKind: function {
             if cur.isZero then return basekind.value
             hops = hops + 1
         }
-    } case none then null
+    }
     return basekind.unknown
 }
 
@@ -8121,11 +7836,9 @@ bareDeclOf: function {
     site: ztypes.declid
     nameId: zast.nameid
 } out ztypes.declid is {
-    match (
-        o
-    ) case some then {
+    if o.some then {
         return (bareDeclIn st: o :site :nameId)
-    } case none then null
+    }
     return ztypes.declid.zero
 }
 
@@ -8152,12 +7865,10 @@ unitChildDecl: function {
     unitId: zast.nameid
     nameId: zast.nameid
 } out ztypes.declid is {
-    match (
-        o
-    ) case some then {
+    if o.some then {
         ud: ztypecheck.unitDeclOfName st: o nameId: unitId
         return (ztypecheck.declOfUnitDefIds st: o unitDecl: ud :nameId)
-    } case none then null
+    }
     return ztypes.declid.zero
 }
 
@@ -8168,14 +7879,12 @@ memberDeclOf: function {
     parent: ztypes.tid
     nameId: zast.nameid
 } out ztypes.declid is {
-    match (
-        o
-    ) case some then {
+    if o.some then {
         if (o.reg.typetypeOf typeId: parent) == ztypes.ztypetype.unitType then {
             return (ztypecheck.declOfUnitDefIds st: o unitDecl: (o.reg.defOf tid: parent) :nameId)
         }
         return (o.typing.declMemberIdOf parentTypeId: parent :nameId)
-    } case none then null
+    }
     return ztypes.declid.zero
 }
 
@@ -8187,9 +7896,7 @@ bareTypeOf: function {
     site: ztypes.declid
     name: StringView
 } out ztypes.tid is {
-    match (
-        o
-    ) case some then {
+    if o.some then {
         r: (
             ztypecheck.walkLookupTyperefRo
             ast: prog
@@ -8199,7 +7906,7 @@ bareTypeOf: function {
             base: name
         )
         return (r.or d: ztypes.tid.zero)
-    } case none then null
+    }
     return ztypes.tid.zero
 }
 
@@ -8390,15 +8097,13 @@ addUnitDeclMembers: function {
     site: ztypes.declid
     sink: (MapRV String v: u8)
 } is {
-    match (
-        o
-    ) case some then {
+    if o.some then {
         ud: o.reg.defOf tid: unitTid
         if ud.isZero then return
         pb: ztypecheck.publicNsOf st: o tid: unitTid
         if pb.isZero or (ud == site) then addDeclChildren :prog :o declId: ud :sink
         if pb.isZero.not then addDeclChildren :prog :o declId: pb :sink
-    } case none then null
+    }
 }
 
 # addDeclChildren -- each child of declaration `declId` as a completion, its
@@ -8418,11 +8123,9 @@ addDeclChildren: function {
             dd: o.typing.decls.get i: declId
             nid = dd.children.keyAt :i
             cv: dd.children.valueAt :i
-            match (
-                cv
-            ) case some then {
+            if cv.some then {
                 cd = cv
-            } case none then null
+            }
         }
         i = i + 1
         k: 21.u8
@@ -8635,23 +8338,19 @@ addValueCompletions: function {
 tagCarrier: function {snap: zcheck.CheckResult tid: ztypes.tid} out bool is {
     if tid.isZero then return false
     o: snap.st
-    match (
-        o
-    ) case some then {
+    if o.some then {
         sl: ztypecheck.stdTidRo ast: snap.prog st: o wk: zast.wellKnown.slot.tyStaticlist
         if sl.isZero.not when (o.reg.genericOriginOf :tid) == sl then return true
         return (ztypecheck.numKindOfTid st: o :tid).has
-    } case none then null
+    }
     return false
 }
 
 # isValtypeOpt -- the type is known to be a valtype
 isValtypeOpt: function {o: (Option zenv.ZSymbolTable).view tid: ztypes.tid} out bool is {
-    match (
-        o
-    ) case some then {
+    if o.some then {
         return (o.reg.isValtypeOf :tid)
-    } case none then null
+    }
     return false
 }
 
@@ -8806,12 +8505,10 @@ resolveCalleeFuncId: function {
     if udx.isZero.not then ftid = udx
     if ftid.isZero then return ztypes.tid.zero
     result: ztypes.tid
-    match (
-        o
-    ) case some then {
+    if o.some then {
         tt: o.reg.typetypeOf typeId: ftid
         if tt.functionType then result = ftid
-    } case none then null
+    }
     return result
 }
 
@@ -8928,9 +8625,7 @@ emitLabels: function {
     pnids: ListVal zast.nameid
     pptids: ListVal ztypes.tid
     {
-        match (
-            o
-        ) case some then {
+        if o.some then {
             (
                 userParams
                 :prog
@@ -8940,7 +8635,7 @@ emitLabels: function {
                 tids: pptids
                 nameIds: pnids
             )
-        } case none then null
+        }
     }
     if pnames.length == 0 then return false
     ri: u64
@@ -8954,9 +8649,7 @@ emitLabels: function {
         if prefix.length > 0 when (pn.startsWith prefix).not then matchp = false
         if isSupp.not when matchp then {
             det: String
-            match (
-                o
-            ) case some then {
+            if o.some then {
                 tn: displayTypeNameSt st: o tid: (pptids.get i: ri) :site
                 det.append tn
                 det.append (
@@ -8965,7 +8658,7 @@ emitLabels: function {
                     parentTypeId: funcId
                     nameId: (pnids.get i: ri)
                 )
-            } case none then null
+            }
             arr.items.append (completionItem label: pn.stringView kind: 5 detail: det.stringView)
         }
         ri = ri + 1
@@ -9007,12 +8700,10 @@ argLabelComplete: function {
     if ws == 0 then return false
     pvb: ltv.byteAt i: ws - 1
     badPos: false
-    match (
-        pvb
-    ) case some then {
+    if pvb.some then {
         if pvb == 58 then badPos = true
         if pvb == 46 then badPos = true
-    } case none then null
+    }
     if badPos then return false
     sp: fileSpans :prog fsno: docFs
     callId: (
@@ -9425,27 +9116,23 @@ completionAnswer: function {
     # member position: a '.' before the prefix -> complete the base's members
     if ps > 0 then {
         pb: ltv.byteAt i: ps - 1
-        match (
-            pb
-        ) case some then {
-            if pb == 46 then {
-                memberMode = true
-                be: ps - 1
-                br: memberBaseOf :ltv dot: be
-                base: ltv.substring from: br.lo to: br.hi
-                memberBase = base.string
-                (
-                    addMemberCompletions
-                    :snap
-                    :docRel
-                    :l1u
-                    :base
-                    site: (dotSiteOf :docText line: l1u col: (cpColOfByte s: ltv i: br.lo))
-                    sink: cands
-                    :marks
-                )
-            }
-        } case none then null
+        if pb.some when pb == 46 then {
+            memberMode = true
+            be: ps - 1
+            br: memberBaseOf :ltv dot: be
+            base: ltv.substring from: br.lo to: br.hi
+            memberBase = base.string
+            (
+                addMemberCompletions
+                :snap
+                :docRel
+                :l1u
+                :base
+                site: (dotSiteOf :docText line: l1u col: (cpColOfByte s: ltv i: br.lo))
+                sink: cands
+                :marks
+            )
+        }
     }
     # an owned copy: the completers below lend the line
     prefix: (ltv.substring from: ps to: cur).string
@@ -9489,11 +9176,9 @@ completionAnswer: function {
         if ce.key.stringView.startsWith prefix then {
             lk: String
             ro0: rank.get key: ce.key
-            match (
-                ro0
-            ) case some then {
+            if ro0.some then {
                 lk = "\{ro0.u64}"
-            } case none then null
+            }
             lk.append ce.key
             labels.append lk
         }
@@ -9509,11 +9194,9 @@ completionAnswer: function {
         lb: (lk.stringView.substring from: skip to: lk.length).string
         ko: cands.get key: lb
         kind: 6.u8
-        match (
-            ko
-        ) case some then {
+        if ko.some then {
             kind = ko
-        } case none then null
+        }
         it: newObj
         it.set key: "label".string value: Value.text lb.copy
         it.set key: "kind".string value: Value.intval kind.i64
@@ -9564,11 +9247,9 @@ paramsCopy: function {msg: Value.view} out Value is {
         msg
     ) case object then {
         po: msg.entries.get key: "params".string
-        match (
-            po
-        ) case some then {
+        if po.some then {
             return (valueCopy v: po)
-        } case none then null
+        }
     } else null
     return Value.nul
 }
@@ -9595,11 +9276,9 @@ valueCopy: function {v: Value.view} out Value is {
         o: newObj
         for each k: v.keys loop {
             e: v.entries.get key: k
-            match (
-                e
-            ) case some then {
+            if e.some then {
                 o.set key: k.copy value: (valueCopy v: e)
-            } case none then null
+            }
         }
         return (Value.object o)
     }
@@ -9675,11 +9354,9 @@ declKindIs: function {
     k: ztyping.declkind
 } out bool is {
     if declId.isZero then return false
-    match (
-        o
-    ) case some then {
+    if o.some then {
         return (o.typing.decls.get i: declId).kind == k
-    } case none then null
+    }
     return false
 }
 
@@ -9728,11 +9405,9 @@ itemHit: function {
         } else if db.tid.isZero.not then {
             hit.owner = db.tid
             o: snap.st
-            match (
-                o
-            ) case some then {
+            if o.some then {
                 hit.declId = o.typing.declMemberIdOf parentTypeId: db.tid :nameId
-            } case none then null
+            }
             hit.tid = childOfIn prog: snap.prog :o parent: db.tid name: label
         }
     }
@@ -9782,13 +9457,11 @@ unitBaseHolder: function {
     named: false
     if db.single then named = (unitFsnoByName :snap name: base).isZero.not
     o: snap.st
-    match (
-        o
-    ) case some then {
+    if o.some then {
         if db.single.not then return (o.reg.defOf tid: db.tid)
         if named then return (ztypecheck.unitDeclOfName st: o nameId: bn)
         return (bareDeclIn st: o :site nameId: bn)
-    } case none then null
+    }
     return ztypes.declid.zero
 }
 
@@ -9803,9 +9476,7 @@ unitMemberTid: function {
     label: StringView
 } out ztypes.tid is {
     o: snap.st
-    match (
-        o
-    ) case some then {
+    if o.some then {
         tHolder: holder
         tName: label.string
         if (o.typing.decls.get i: declId).kind.reexportDecl then {
@@ -9826,7 +9497,7 @@ unitMemberTid: function {
             unitDecl: tHolder
             name: tName.stringView
         )
-    } case none then null
+    }
     return ztypes.tid.zero
 }
 

@@ -227,9 +227,9 @@ monoSubstTid: function {st: zenv.ZSymbolTable.view tid: ztypes.tid} out ztypes.t
     return ((st.typing.monoParamSubst.get key: tid).or d: tid)
 }
 
-# stampParamSuppressed -- a TEMPLATE walk drops a GENERIC_PARAM answer: the
-# emitter re-walks the shared template AST per instance and must not see
-# template-time param stamps.
+# stampParamSuppressed -- a TEMPLATE walk drops a GENERIC_PARAM answer: an
+# instance clones only the template's body and shares its signature nodes, so a
+# template-time param stamp on one would reach the instance's emission.
 stampParamSuppressed: function {st: zenv.ZSymbolTable.view tid: ztypes.tid} out bool is {
     if st.typing.suppressParamStamps.not then return false
     return (st.reg.typetypeOf typeId: tid) == ztypes.ztypetype.genericParam
@@ -605,11 +605,9 @@ isNativeIteratorTid: function {ast: Ast st: zenv.ZSymbolTable tid: ztypes.tid} o
         nameId: zast.wellKnown.slot.wkCall
     )
     coIt: st.typing.declChildOfId parentTypeId: tid nameId: zast.wellKnown.slot.wkCall
-    match (
-        coIt
-    ) case some then {
+    if coIt.some then {
         return true
-    } case none then null
+    }
     return false
 }
 
@@ -757,11 +755,9 @@ typesCompatible: function {
 # byteOf -- the byte at index i (0 when out of range).
 byteOf: function {s: StringView i: u64} out u8 is {
     bo: s.byteAt i
-    match (
-        bo
-    ) case some then {
+    if bo.some then {
         return bo
-    } case none then null
+    }
     return 0
 }
 
@@ -936,9 +932,7 @@ indexOneUnitDef: function {st: zenv.ZSymbolTable program: Ast ruId: zast.nodeid}
     # already rejected -- it gets no declaration, so the program root keeps one
     # child per name.
     utl: st.typing.unitTypesById.get key: (unitdefNodeId ast: program nId: opId)
-    match (
-        utl
-    ) case some then {
+    if utl.some then {
         # a file unit is a NAMED child of the program root, which is what makes
         # declFindChild(programRoot, name) the unit-root lookup. The root
         # carries no unit-scope bit, so no bare-name walk reaches these
@@ -954,7 +948,7 @@ indexOneUnitDef: function {st: zenv.ZSymbolTable program: Ast ruId: zast.nodeid}
         st.typing.declSetType declId: udid typeId: utl
         st.reg.setDef typeId: utl declId: udid
         indexUnitBody :st ast: program unitopId: opId unitDeclId: udid
-    } case none then null
+    }
 }
 
 # indexAddedUnits -- index units loaded into a checked tree after its check
@@ -1804,11 +1798,9 @@ declareCanonicalTypeId: function {
     nsT: declTypeIdOf :st declId: nsF
     if ownerNameId.isZero.not when nsT.isZero.not then {
         nso: st.typing.declChildOfId parentTypeId: nsT nameId: ownerNameId
-        match (
-            nso
-        ) case some then {
+        if nso.some then {
             qowner = nso
-        } case none then null
+        }
     }
     if ownerNameId.isZero.not when qowner.isZero then {
         cudq: (
@@ -1829,11 +1821,9 @@ declareCanonicalTypeId: function {
                 parentTypeId: cudq
                 nameId: ownerNameId
             )
-            match (
-                bo
-            ) case some then {
+            if bo.some then {
                 qowner = bo
-            } case none then null
+            }
         }
     }
     # a free definition that is a member of the namespace is declared under
@@ -1848,11 +1838,9 @@ declareCanonicalTypeId: function {
     }
     if qowner.isZero.not then {
         exq: st.typing.declChildOfId parentTypeId: qowner :nameId
-        match (
-            exq
-        ) case some then {
+        if exq.some then {
             return exq
-        } case none then null
+        }
     }
     if ownerNameId.isZero when qowner.isZero then {
         cudm: (
@@ -1862,12 +1850,10 @@ declareCanonicalTypeId: function {
         )
         if cudm.isZero.not then {
             exm: st.typing.declChildOfId parentTypeId: cudm :nameId
-            match (
-                exm
-            ) case some then {
+            if exm.some then {
                 linkDeclTypeId :st :scope :unitDecl :nameId tid: exm
                 return exm
-            } case none then null
+            }
         }
     }
     # the mint spells the name, read through a borrow
@@ -1993,11 +1979,7 @@ literalNameTypeId: function {
     {
         nT: zast.nameTextAt :ast ref: nameId
         b0: nT.stringView.byteAt 0.u64
-        match (
-            b0
-        ) case some then {
-            if b0 >= 48 when b0 <= 57 then isnum = true
-        } case none then null
+        if b0.some when b0 >= 48 when b0 <= 57 then isnum = true
         if (ztypes.isFloatLexeme numstr: nT.stringView) then hasDot = true
         isBits = isBitsLexeme lex: nT.stringView
     }
@@ -2233,11 +2215,9 @@ declNamesType: function {st: zenv.ZSymbolTable.view ast: Ast.view d: ztypes.decl
     k: (st.typing.decls.get i: d).kind
     if k.unitDecl or k.funcDecl or k.constDecl then return false
     tto: declDefTypetype :st :ast declId: d
-    match (
-        tto
-    ) case some then {
+    if tto.some then {
         return (tto != ztypes.ztypetype.functionType) and (tto != ztypes.ztypetype.unitType)
-    } case none then null
+    }
     if k.reexportDecl then return (aliasNamesType :st :ast declId: d)
     return false
 }
@@ -2408,11 +2388,9 @@ asMemberIsAliasAt: function {
 } out bool is {
     if md.isZero or tdecl.isZero then return false
     kv: st.typing.asAliasKind.get key: md
-    match (
-        kv
-    ) case some then {
+    if kv.some then {
         return kv == 1
-    } case none then null
+    }
     yes: false
     # a method, and a name no `as` item spells as a type, are no alias: asked
     # before the walk of the type's `as` items
@@ -2626,11 +2604,9 @@ aliasOrShellTypeId: function {
         unitDecl: defUnit
         name: nameId
     )
-    match (
-        ex7
-    ) case some then {
+    if ex7.some then {
         return ex7
-    } case none then null
+    }
     al7: resolveAliasKey :st :ast declId: defDecl
     if al7.isZero.not then return al7
     # `Strs: (List String)` names a TYPE through a call-shaped value. It
@@ -2720,9 +2696,7 @@ resolveNamedTypeId: function {
     tto7: optionval.none ztypes.ztypetype
     dd7: declOfUnitDef :st :scope unitDecl: duo7 :nameId
     if dd7.isZero.not then tto7 = declDefTypetype :st :ast declId: dd7
-    match (
-        tto7
-    ) case some then {
+    if tto7.some then {
         did7: descendNamedId :st :scope :ast unitDecl: duo7 :nameId
         if did7.isZero.not then return did7
         return (
@@ -2735,7 +2709,7 @@ resolveNamedTypeId: function {
             :nameId
             typetype: tto7
         )
-    } case none then null
+    }
     return (
         aliasOrShellTypeId
         :st
@@ -2819,20 +2793,14 @@ isScalarNameId: function {id: zast.nameid} out bool is {
 # are the ASCII digits, 45 the minus and 43 the plus.
 isNumericLiteralName: function {name: StringView} out bool is {
     b0: name.byteAt 0.u64
-    match (
-        b0
-    ) case some then {
+    if b0.some then {
         if b0 >= 48 when b0 <= 57 then return true
         # a sign, `-` or `+`, then a digit
         if (b0 == 45) or (b0 == 43) then {
             b1: name.byteAt 1.u64
-            match (
-                b1
-            ) case some then {
-                if b1 >= 48 when b1 <= 57 then return true
-            } case none then null
+            if b1.some when b1 >= 48 when b1 <= 57 then return true
         }
-    } case none then null
+    }
     return false
 }
 
@@ -4446,11 +4414,9 @@ numericParamRefTid: function {
     if owner.isZero then owner = numericParamOwnerFrom :st :scope :nameId
     if owner.isZero when thisName.length > 0 then {
         tto: walkLookupTyperef :st :scope :ast :unitDecl base: thisName
-        match (
-            tto
-        ) case some then {
+        if tto.some then {
             owner = declOfTypeId :st tid: tto
-        } case none then null
+        }
     }
     if owner.isZero then return ztypes.tid
     if (st.reg.genericParamConstraintOf tdecl: owner paramName: nameId
@@ -7650,11 +7616,7 @@ fnHasPinnableInput: function {
                     parentTypeId: fid
                     nameId: pm.name
                 )
-                match (
-                    pto
-                ) case some then {
-                    if (st.reg.isReftypeOf tid: pto) then return true
-                } case none then null
+                if pto.some when (st.reg.isReftypeOf tid: pto) then return true
             }
         }
     }
@@ -8179,9 +8141,7 @@ registerGenericOrReceiverParam: function {
         # methodReceiverIsView asks. A bodyless spec has no other
         # chance to record it.
         rcvOw: pathOwnership :ast n: (ast.nodes.get i: pm.operation)
-        match (
-            rcvOw
-        ) case some then {
+        if rcvOw.some then {
             (
                 st.typing.setChildOwnership
                 pool: ast.names
@@ -8189,7 +8149,7 @@ registerGenericOrReceiverParam: function {
                 name: rcvNm.stringView
                 ownership: rcvOw
             )
-        } case none then null
+        }
     }
     (
         registerFnGenericParam
@@ -8238,16 +8198,14 @@ registerGenericOrReceiverParam: function {
     # row needs the member laid above, and a receiver recorded its own.
     if isRecvP.not then {
         gOw: pathOwnership :ast n: (ast.nodes.get i: pm.operation)
-        match (
-            gOw
-        ) case some then {
+        if gOw.some then {
             (
                 st.typing.setChildOwnershipId
                 parentTypeId: fid
                 nameId: pm.name
                 ownership: gOw
             )
-        } case none then null
+        }
     }
 }
 
@@ -8537,11 +8495,9 @@ finishFunctionSignature: function {
     # whose type's members are attached with the unit; a user function's is
     # asked where its body is walked, with its type's members forced first.
     rtH: methodReturnOf :st mid: fid
-    match (
-        rtH
-    ) case some then {
+    if rtH.some then {
         checkPinHonesty :st :ast :fnode retTid: rtH :defName defNameId: zast.nameid
-    } case none then null
+    }
     if fnDecl.isZero.not then {
         st.typing.declSetType declId: fnDecl typeId: dfid
         st.reg.setDef typeId: dfid declId: fnDecl
@@ -9180,9 +9136,7 @@ forceMemberDecl: function {
     match (
         memberIdAt
     ) case some then null case none then null
-    match (
-        memberIdAt
-    ) case some then {
+    if memberIdAt.some then {
         if isM then (
             stampMemberSignature
             :st
@@ -9201,7 +9155,7 @@ forceMemberDecl: function {
             childTypeId: memberIdAt
         )
         return (optionval.some memberIdAt)
-    } case none then null
+    }
     return (optionval.none ztypes.tid)
 }
 
@@ -9319,9 +9273,7 @@ stampForcedTyperef: function {
     )
     if recvBaseId.isZero then return
     r: walkLookupTyperefById :st :scope :ast :unitDecl baseId: recvBaseId
-    match (
-        r
-    ) case some then {
+    if r.some then {
         (
             ztyping.nodeTypeSet
             tbl: st.typing.nodeType
@@ -9335,7 +9287,7 @@ stampForcedTyperef: function {
             tid: r
         )
         return
-    } case none then null
+    }
     # the name resolves nowhere because nothing ever demanded it: a member
     # resolved on demand can be the FIRST reference to a type, and the demand
     # fixpoint finished before the body walk. Descend into it here.
@@ -9346,9 +9298,7 @@ stampForcedTyperef: function {
         return
     }
     r9b: walkLookupTyperefById :st :scope :ast :unitDecl baseId: recvBaseId
-    match (
-        r9b
-    ) case some then {
+    if r9b.some then {
         (
             ztyping.nodeTypeSet
             tbl: st.typing.nodeType
@@ -9361,7 +9311,7 @@ stampForcedTyperef: function {
             :nid
             tid: r9b
         )
-    } case none then null
+    }
 }
 
 # forceMemberOf -- the member `nameId` of `parentTypeId`, resolved if it is not
@@ -9424,11 +9374,9 @@ forceUnitDef: function {
     uId: unitNameIdOf :st :unitDecl
     uDecl9b: unitDeclOfName :st nameId: uId
     got: resolvedByIds :st :ast unitDecl: uDecl9b name: nmId
-    match (
-        got
-    ) case some then {
+    if got.some then {
         return got
-    } case none then null
+    }
     if opId.isZero then return ztypes.tid.zero
     # a TYPE only: a namespace, a template and a function each reach their own
     # resolver, and none of them owns the method bodies this guards.
@@ -9457,11 +9405,9 @@ forceUnitDef: function {
         defnId: opId
     )
     ro: resolvedByIds :st :ast unitDecl: uDecl9b name: nmId
-    match (
-        ro
-    ) case some then {
+    if ro.some then {
         return ro
-    } case none then null
+    }
     return ztypes.tid.zero
 }
 
@@ -9623,11 +9569,7 @@ markerTargetId: function {
     ib: zast.implementBaseOf :ast opId: opNid
     if ib.isZero then return (markerBaseTarget :st :unitDecl :scope :ast :opNid :ownerDecl)
     r: markerBaseTarget :st :unitDecl :scope :ast opNid: ib :ownerDecl
-    match (
-        r
-    ) case some then {
-        if (specTypetypeOf :st tid: r).isInterface then return (optionval.some r)
-    } case none then null
+    if r.some when (specTypetypeOf :st tid: r).isInterface then return (optionval.some r)
     return (optionval.none ztypes.tid)
 }
 
@@ -9669,21 +9611,15 @@ markerBaseTarget: function {
         :unitDecl
         name: nameId
     )
-    match (
-        rr
-    ) case some then {
+    if rr.some then {
         return (markerFamilyTarget :st rid: rr)
-    } case none then null
+    }
     # an interface another unit declares and this one reaches through the
     # environment -- core's `StringViewable` from collections -- is the one
     # the walk finds, as a type-ref's is. Any other type the walk finds is no
     # target: an item naming it is refused as such (asItemTypeNameRefused)
     wr: walkLookupTyperefById :st :scope :ast :unitDecl baseId: nameId
-    match (
-        wr
-    ) case some then {
-        if (specTypetypeOf :st tid: wr).isInterface then return (optionval.some wr)
-    } case none then null
+    if wr.some when (specTypetypeOf :st tid: wr).isInterface then return (optionval.some wr)
     return (optionval.none ztypes.tid)
 }
 
@@ -10338,11 +10274,9 @@ namesNullTypeAt: function {
         dd: declOfUnitDef :st :scope unitDecl: du :nameId
         if dd.isZero then return false
         tt: declDefTypetype :st :ast declId: dd
-        match (
-            tt
-        ) case some then {
+        if tt.some then {
             return tt == ztypes.ztypetype.nullType
-        } case none then null
+        }
         # a re-export the defining unit itself makes (core's `null: system.null`)
         du = unitDeclOfName :st nameId: (reexportUnitOf :st :ast declId: dd)
     }
@@ -10964,11 +10898,9 @@ implementationImplMethod: function {
         parentTypeId: (valOpOwner :st tid: implTid nameId: mnameId)
         nameId: mnameId
     )
-    match (
-        imo
-    ) case some then {
+    if imo.some then {
         r = imo
-    } case none then null
+    }
     if r.isZero.not when (st.reg.typetypeOf typeId: r) != ztypes.ztypetype.functionType then {
         r = ztypes.tid.zero
     }
@@ -11591,9 +11523,7 @@ attachMarkers: function {
                 op: mmOp
                 :implemented
             )
-            match (
-                mtid
-            ) case some then {
+            if mtid.some then {
                 (
                     st.typing.setMemberType
                     parentTypeId: parentId
@@ -11616,7 +11546,7 @@ attachMarkers: function {
                         markerOp: mmOp
                     )
                 }
-            } case none then null
+            }
         }
     }
     return needsDtor
@@ -12572,11 +12502,9 @@ resolveStaticListInto: function {
         # prelude's type whatever the unit declares, as a literal's suffix
         # does in a body
         lk: walkLookupTyperefFrom :st :ast scope: ztypes.declid baseId: etId
-        match (
-            lk
-        ) case some then {
+        if lk.some then {
             elemTid = lk
-        } case none then null
+        }
         # a list of arms, data values or lists is of its first element's type
         ft: staticListFirstValueTid :ast :st :scope :vals
         if ft.isZero.not then elemTid = ft
@@ -12939,12 +12867,10 @@ createParamOwnership: function {
     fieldTid: ztypes.tid
 } out ztypes.zparamownership is {
     fo: st.typing.declOwnershipOfId parentTypeId: ownerTid nameId: fieldId
-    match (
-        fo
-    ) case some then {
+    if fo.some then {
         if fo == ztypes.zparamownership.borrowMode then return fo
         if fo == ztypes.zparamownership.viewMode then return fo
-    } case none then null
+    }
     if (st.reg.isReftypeOf tid: fieldTid) then {
         return ztypes.zparamownership.takeMode
     }
@@ -13565,9 +13491,7 @@ attachRecordField: function {
     # slot defaulting to it), which is a member like any other
     mrefR: fieldHeadMemberTid :st :ast :unitDecl :defName ownerTid: rid nameId: ftnR
     handledR: false
-    match (
-        mrefR
-    ) case some then {
+    if mrefR.some then {
         (
             st.typing.setMemberType
             parentTypeId: rid
@@ -13589,7 +13513,7 @@ attachRecordField: function {
         pdiR: mrefR
         st.typing.pendingDefaultId.set key: pdk2R value: pdiR
         handledR = true
-    } case none then null
+    }
     if handledR.not then attachDeclaredField :st :scope :ast :unitDecl :defName :rid :fm :fname
 }
 
@@ -14423,11 +14347,9 @@ recordTagBase: function {
     # none when nothing is declared: distinct from tid.zero, a data-sourced tag,
     # whose constants set their own width and whose enum must stay the storage
     tb: variantTagBaseTid :st :scope :ast :unitDecl :objId
-    match (
-        tb
-    ) case some then {
+    if tb.some then {
         st.typing.variantTagBase.set key: ownerId value: tb
-    } case none then null
+    }
 }
 
 # tagAccessorOwner -- the type whose tag accessor `tid` answers with: its own,
@@ -15101,12 +15023,10 @@ unionCustomTagOfArm: function {
     }
     hUnitDecl: unitDeclOfName :st nameId: zast.wellKnown.slot.unSystem
     tgo: resolvedByIds :st :ast unitDecl: hUnitDecl name: zast.wellKnown.slot.wkTag
-    match (
-        tgo
-    ) case some then {
+    if tgo.some then {
         tnid0: nodeId n: (ast.nodes.get i: am.operation)
         ztyping.nodeTypeSet tbl: st.typing.nodeType nid: tnid0 tid: tgo
-    } case none then null
+    }
     return none
 }
 
@@ -15494,9 +15414,7 @@ attachUnionArm: function {
     # resolve above strips it, so record it per member the way a class
     # field does. `view` / `hold` are what a match arm reads back.
     alk: pathOwnership :ast n: (ast.nodes.get i: fm.operation)
-    match (
-        alk
-    ) case some then {
+    if alk.some then {
         (
             st.typing.setChildOwnership
             pool: ast.names
@@ -15504,7 +15422,7 @@ attachUnionArm: function {
             name: aname.stringView
             ownership: alk
         )
-    } case none then null
+    }
     (
         recordTyperef
         :st
@@ -15729,9 +15647,7 @@ resolveClassMethodDecl: function {
                 opId: fm.operation
                 lazyOk: isgen.not
             )
-            match (
-                mido
-            ) case some then {
+            if mido.some then {
                 (
                     st.typing.setMemberType
                     parentTypeId: cid
@@ -15751,7 +15667,7 @@ resolveClassMethodDecl: function {
                         name: fname.stringView
                     )
                 }
-            } case none then null
+            }
         }
     }
 }
@@ -15961,11 +15877,9 @@ foldedDeclType: function {
         parentTypeId: ownerTid
         nameId: dm.name
     )
-    match (
-        fto
-    ) case some then {
+    if fto.some then {
         return fto
-    } case none then null
+    }
     return ztypes.tid
 }
 
@@ -16048,9 +15962,7 @@ recordNumericFieldDefaults: function {
             fname: row.name
             tmd: st.typing.declMemberIdOf parentTypeId: templateId nameId: fname
             po: st.typing.numericParamDefault.get key: tmd
-            match (
-                po
-            ) case some then {
+            if po.some then {
                 v: st.typing.memberConstOf parentTypeId: monoId nameId: po
                 if v.kind.none.not then {
                     st.typing.setMemberConst parentTypeId: monoId nameId: fname value: v
@@ -16062,7 +15974,7 @@ recordNumericFieldDefaults: function {
                         value: ztyping.defaultval.constant mmd
                     )
                 }
-            } case none then null
+            }
         }
     }
 }
@@ -16526,9 +16438,7 @@ resolveNamedFieldSlot: function {
             name: fname
         )
     }
-    match (
-        fieldOwn
-    ) case some then {
+    if fieldOwn.some then {
         (
             st.typing.setChildOwnership
             pool: ast.names
@@ -16536,7 +16446,7 @@ resolveNamedFieldSlot: function {
             name: fname
             ownership: fieldOwn
         )
-    } case none then null
+    }
     # an expression, or a name the type's own scope declares, is no type-ref to
     # stamp; a name the unit declares (`p: false`) still navigates as one
     stampsTyperef: valueStampsTyperef :st :ast ownerTid: cid folded: foldTid node: fm.operation
@@ -16579,9 +16489,7 @@ recordMemberRefField: function {
             name: fname
         )
     }
-    match (
-        fieldOwn
-    ) case some then {
+    if fieldOwn.some then {
         (
             st.typing.setChildOwnership
             pool: ast.names
@@ -16589,7 +16497,7 @@ recordMemberRefField: function {
             name: fname
             ownership: fieldOwn
         )
-    } case none then null
+    }
     # a sibling-member ref default: the construction fill
     # stamps the default's node with the member's type.
     pdk: nodeId n: (ast.nodes.get i: fm.operation)
@@ -16761,9 +16669,7 @@ resolveClassFieldEntry: function {
     # `hold` freezes the contents, not the slot.
     borrowedField: false
     fieldOwn: pathOwnership :ast n: (ast.nodes.get i: fm.operation)
-    match (
-        fieldOwn
-    ) case some then {
+    if fieldOwn.some then {
         # This test is INVERTED: anything not named here becomes a
         # borrowed field, so a new owned mode must be listed or it is
         # silently treated as non-owned.
@@ -16772,7 +16678,7 @@ resolveClassFieldEntry: function {
             (fieldOwn == ztypes.zparamownership.holdMode)
         )
         if fOwned.not then borrowedField = true
-    } case none then null
+    }
     mref: fieldHeadMemberTid :st :ast :unitDecl :defName ownerTid: cid nameId: ftn
     match (
         mref
@@ -16959,9 +16865,7 @@ resolveClassAsMethods: function {
                     thisName: defName
                     opId: amP4.operation
                 )
-                match (
-                    amidP4
-                ) case some then {
+                if amidP4.some then {
                     (
                         st.typing.setMemberType
                         parentTypeId: cid
@@ -16969,7 +16873,7 @@ resolveClassAsMethods: function {
                         childTypeId: amidP4
                     )
                     st.reg.setGeneric typeId: amidP4 value: true
-                } case none then null
+                }
             }
         }
     }
@@ -17498,9 +17402,7 @@ registerEmptyType: function {
         :unitDecl
         name: (zast.poolFind pool: ast.names text: name)
     )
-    match (
-        ex0
-    ) case some then {
+    if ex0.some then {
         st.reg.setValtype typeId: ex0 value: true
         cci0: (
             st.reg.newType
@@ -17516,7 +17418,7 @@ registerEmptyType: function {
             childTypeId: cci0
         )
         return ex0
-    } case none then null
+    }
     nid: st.reg.newType :name typetype: tt
     st.reg.setValtype typeId: nid value: true
     ccid: st.reg.newType name: "create" ownerTid: nid typetype: ztypes.ztypetype.functionType
@@ -17656,13 +17558,11 @@ typedefDefTypetype: function {
         return (typedefDefTypetype :st :ast declId: bd baseNid: bb depth: depth + 1)
     }
     btt: declDefTypetype :st :ast declId: bd
-    match (
-        btt
-    ) case some then {
+    if btt.some then {
         if btt == ztypes.ztypetype.classType then return ztypes.ztypetype.classType
         if btt == ztypes.ztypetype.unionType then return ztypes.ztypetype.classType
         if btt == ztypes.ztypetype.protocolType then return ztypes.ztypetype.classType
-    } case none then null
+    }
     return ztypes.ztypetype.recordType
 }
 
@@ -18063,9 +17963,7 @@ nestedUnitMemberTid: function {
     # -- gets the id, not the not-yet-linked declaration field
     declared: ztypes.tid
     tto: declDefTypetype :st :ast declId: mem
-    match (
-        tto
-    ) case some then {
+    if tto.some then {
         declared = (
             declareCanonicalTypeId
             :st
@@ -18076,7 +17974,7 @@ nestedUnitMemberTid: function {
             nameId: defName
             typetype: tto
         )
-    } case none then null
+    }
     resolveDemandedDecl :st :ast declId: mem
     r: declTypeIdOf :st declId: mem
     if r.isZero when declared.isZero.not then return declared
@@ -18512,17 +18410,13 @@ stampGenericBounds: function {st: zenv.ZSymbolTable ast: Ast} is {
         fr9: ztypes.declid
         {
             no9: st.typing.genericBoundName.get key: k9
-            match (
-                no9
-            ) case some then {
+            if no9.some then {
                 nm9 = no9
-            } case none then null
+            }
             fo9: st.typing.genericBoundScope.get key: k9
-            match (
-                fo9
-            ) case some then {
+            if fo9.some then {
                 fr9 = fo9
-            } case none then null
+            }
         }
         if nm9.isZero.not then {
             td9: boundNameDecl :st :ast scope: fr9 nameId: nm9
@@ -18547,11 +18441,9 @@ boundNameDecl: function {
     if d.isZero.not then return d
     ud: unitRootOfDecl :st declId: scope
     bo: walkLookupTyperefByIdRo :ast :st unitDecl: ud :scope baseId: nameId
-    match (
-        bo
-    ) case some then {
+    if bo.some then {
         return (declOfTypeId :st tid: bo)
-    } case none then null
+    }
     return d
 }
 
@@ -18577,17 +18469,13 @@ stampGenericParams: function {st: zenv.ZSymbolTable ast: Ast} is {
         fr9: ztypes.declid
         {
             no9: st.typing.genericParamName.get key: k9
-            match (
-                no9
-            ) case some then {
+            if no9.some then {
                 nm9 = no9
-            } case none then null
+            }
             fo9: st.typing.genericParamScope.get key: k9
-            match (
-                fo9
-            ) case some then {
+            if fo9.some then {
                 fr9 = fo9
-            } case none then null
+            }
         }
         if nm9.isZero.not then {
             d9: st.typing.declFindChild parentDeclId: fr9 nameId: nm9
@@ -18786,9 +18674,7 @@ aliasTargetTid: function {
             )
             if rtb.isZero.not then rto = optionval.some rtb
         }
-        match (
-            rto
-        ) case some then {
+        if rto.some then {
             rtt: st.reg.typetypeOf typeId: rto
             isTag: rtt.isSum
             if isTag then {
@@ -18797,9 +18683,7 @@ aliasTargetTid: function {
                     parentTypeId: rto
                     nameId: tnId
                 )
-                match (
-                    memberDecl
-                ) case some then {
+                if memberDecl.some then {
                     mtt: st.reg.typetypeOf typeId: memberDecl
                     isMem: (
                         (mtt == ztypes.ztypetype.functionType) or
@@ -18810,9 +18694,9 @@ aliasTargetTid: function {
                         atid = rto
                         typeRooted = true
                     }
-                } case none then null
+                }
             }
-        } case none then null
+        }
     }
     # a BARE alias (`Text: String`, `tally: u64`): its target resolves
     # current-unit-relative, so it may live in a stdlib unit rather than in
@@ -19225,12 +19109,10 @@ descendNamedId: function {
     if ddec.isZero.not then tto = declDefTypetype :st :ast declId: ddec
     ttv: ztypes.ztypetype.nullType
     classified: false
-    match (
-        tto
-    ) case some then {
+    if tto.some then {
         ttv = tto
         classified = true
-    } case none then null
+    }
     tid: ztypes.tid
     if classified then {
         tid = (
@@ -19571,16 +19453,14 @@ resolveObjectDef: function {
         :unitDecl
         name: (zast.poolFind pool: ast.names text: defName)
     )
-    match (
-        objrid
-    ) case some then {
+    if objrid.some then {
         (
             ztyping.nodeTypeSet
             tbl: st.typing.nodeType
             nid: defn.nid
             tid: objrid
         )
-    } case none then null
+    }
 }
 
 
@@ -20284,11 +20164,9 @@ stampCtorDefaults: function {
                 nd3: dnids.get i: di
                 ngId: zast.nameid
                 ngo: st.typing.pendingDefaultName.get key: nd3
-                match (
-                    ngo
-                ) case some then {
+                if ngo.some then {
                     ngId = ngo
-                } case none then null
+                }
                 if ngId.isZero.not then {
                     nrt: (
                         (
@@ -22147,16 +22025,14 @@ registerMonoFnParams: function {
                 if (fnDeclaresGeneric :ast op: (ast.nodes.get i: op.nodeid) nameId: pptn
                 ) then continue
                 ppgo: subs.get key: pptn
-                match (
-                    ppgo
-                ) case some then {
+                if ppgo.some then {
                     (
                         st.typing.setMemberType
                         parentTypeId: fnId
                         nameId: ppm.name
                         childTypeId: ppgo
                     )
-                } case none then null
+                }
             }
         }
     }
@@ -22199,21 +22075,17 @@ unitMonoIdSubs: function {
     for pi < pn.length loop {
         pnm: pn.get i: pi
         po: st.reg.genericParamTidOf :tdecl paramName: pnm
-        match (
-            po
-        ) case some then {
+        if po.some then {
             vg: st.reg.genericValueArgAt specId: monoId ordinal: pi
             if vg.some then {
                 idSubs.set key: po value: ztypes.genericarg.valueArg vg
             } else {
                 sg: subs.get key: pnm
-                match (
-                    sg
-                ) case some then {
+                if sg.some then {
                     idSubs.set key: po value: ztypes.genericarg.typeArg sg
-                } case none then null
+                }
             }
-        } case none then null
+        }
         pi = pi + 1
     }
 }
@@ -22420,11 +22292,9 @@ fillMonoMethodSignature: function {
                     unitDecl: tmplUnitName
                     baseId: rnmId
                 )
-                match (
-                    rlo2
-                ) case some then {
+                if rlo2.some then {
                     rid2 = rlo2
-                } case none then null
+                }
             }
             if rid2.isZero.not then {
                 (
@@ -22489,9 +22359,7 @@ buildUnitMonoMember: function {
                     fnTid: mo0v
                 )
             }
-            match (
-                mo0
-            ) case some then {
+            if mo0.some then {
                 srcId = mo0
                 (
                     st.typing.setMemberType
@@ -22499,7 +22367,7 @@ buildUnitMonoMember: function {
                     nameId: fmNode.name
                     childTypeId: mo0
                 )
-            } case none then null
+            }
         }
         newFnId: (
             st.reg.newType
@@ -23064,9 +22932,7 @@ resolveInstArgSubs: function {
                     if atR.isZero.not then aoR = optionval.some atR
                 }
             }
-            match (
-                aoR
-            ) case some then {
+            if aoR.some then {
                 subs.set key: lblR value: aoR
                 if aidR.isZero.not then {
                     (
@@ -23076,7 +22942,7 @@ resolveInstArgSubs: function {
                         tid: aoR
                     )
                 }
-            } case none then null
+            }
         }
         aiR = aiR + 1
     }
@@ -23235,9 +23101,7 @@ completeUnitInstantiations: function {
                 }
             }
         }
-        match (
-            mgo
-        ) case some then {
+        if mgo.some then {
             (
                 completeOneInstance
                 :st
@@ -23248,7 +23112,7 @@ completeUnitInstantiations: function {
                 :subs
                 :valSubs
             )
-        } case none then null
+        }
         i = i + 1
     }
 }
@@ -23425,11 +23289,9 @@ instArgTypeOf: function {
             unitDecl: r.declUnit
             base: anm.stringView
         )
-        match (
-            ao
-        ) case some then {
+        if ao.some then {
             result = ao
-        } case none then null
+        }
     } else {
         nid: r.argNodeIds.get :i
         if nid.isZero.not then {
@@ -23602,11 +23464,9 @@ mintUnitMonoOf: function {
         return
     }
     got: unitMonoOnTrie :st tplTid: templateTid :args
-    match (
-        got
-    ) case some then {
+    if got.some then {
         return
-    } case none then null
+    }
     label: instMonoLabel :st :scope :ast :r :args
     mono: (
         createUnitMono
@@ -23779,11 +23639,9 @@ scanTemplateBodyDemands: function {
 # nothing. Memoized on the name id.
 stdTid: function {ast: Ast st: zenv.ZSymbolTable wk: zast.nameid} out ztypes.tid is {
     m: st.typing.stdTidMemo.get key: wk
-    match (
-        m
-    ) case some then {
+    if m.some then {
         return m
-    } case none then null
+    }
     r: (walkLookupTyperefFrom :st :ast scope: ztypes.declid baseId: wk).or d: ztypes.tid.zero
     if r.isZero then return r
     st.typing.stdTidMemo.set key: wk value: r
@@ -23837,11 +23695,9 @@ stdTidRo: function {ast: Ast.view st: zenv.ZSymbolTable wk: zast.nameid} out zty
 # emitter: the memoised id, else the prelude's answer, never stored.
 stdTidPeek: function {ast: Ast.view st: zenv.ZSymbolTable.view wk: zast.nameid} out ztypes.tid is {
     m: st.typing.stdTidMemo.get key: wk
-    match (
-        m
-    ) case some then {
+    if m.some then {
         return m
-    } case none then null
+    }
     return (
         (
             walkLookupTyperefByIdRo
@@ -23887,11 +23743,9 @@ nameClaimedByScopeId: function {
         :unitDecl
         name: nameId
     )
-    match (
-        ncr
-    ) case some then {
+    if ncr.some then {
         return true
-    } case none then null
+    }
     nameId96: nameId
     ncs: (
         resolveUnitChild
@@ -23900,13 +23754,9 @@ nameClaimedByScopeId: function {
         unitDecl: st.typing.systemUnitRoot
         nameId: nameId96
     )
-    match (
-        ncs
-    ) case some then {
-        # system's own nested units are private to it: a bare name that is
-        # one of them is in scope nowhere else
-        if (st.reg.typetypeOf typeId: ncs) != ztypes.ztypetype.unitType then return true
-    } case none then null
+    # system's own nested units are private to it: a bare name that is
+    # one of them is in scope nowhere else
+    if ncs.some when (st.reg.typetypeOf typeId: ncs) != ztypes.ztypetype.unitType then return true
     return false
 }
 
@@ -24282,12 +24132,10 @@ stampPendingTyperefsIn: function {
         rk: st.typing.typerefRetry.get i: ri
         ri = ri + 1
         rv: st.typing.pendingTyperef.get key: rk
-        match (
-            rv
-        ) case some then {
+        if rv.some then {
             pkeys.append rk
             pvals.append rv
-        } case none then null
+        }
     }
     st.typing.typerefRetry = ListVal zast.nodeid
     seen: u64
@@ -24569,13 +24417,11 @@ checkString: function {
     } else {
         tyOpt = optionval.some st.reg.literalTextTid
     }
-    match (
-        tyOpt
-    ) case some then {
+    if tyOpt.some then {
         result = tyOpt
         setk: result
         stampGate :st nid: node.nid tid: setk
-    } case none then null
+    }
     drainPendingBorrow :st
     return result
 }
@@ -24879,11 +24725,9 @@ cloneDroppedReceiver: function {
     if (st.typing.declMemberIdOf parentTypeId: toFn nameId: rnid).isZero.not then return
     st.typing.declSynthMember parentTypeId: toFn nameId: rnid kind: ztyping.declkind.paramDecl
     rown: st.typing.declOwnershipOfId parentTypeId: tplFnId nameId: rnid
-    match (
-        rown
-    ) case some then {
+    if rown.some then {
         st.typing.setChildOwnershipId parentTypeId: toFn nameId: rnid ownership: rown
-    } case none then null
+    }
 }
 
 # cloneMethodInto -- specialize one template method for an instance: a fresh
@@ -25233,9 +25077,7 @@ copyMemberMarkers: function {
             value: dft
         )
     }
-    match (
-        cho
-    ) case some then {
+    if cho.some then {
         (
             st.typing.setChildOwnership
             pool: ast.names
@@ -25243,7 +25085,7 @@ copyMemberMarkers: function {
             name: chName
             ownership: cho
         )
-    } case none then null
+    }
     if (st.typing.declIsBorrowedFieldId parentTypeId: templateId nameId: chNameId) then null else {
         if (st.reg.needsDestructor typeId: target) then monoNeedsDtor = true
     }
@@ -25613,13 +25455,11 @@ completeIdSubs: function {
     k: u64
     for k < pns.length loop {
         po: st.reg.genericParamTidOf tdecl: td paramName: (pns.get i: k)
-        match (
-            po
-        ) case some then {
-            if (idSubs.has key: po).not when k < (st.reg.genericArgCount specId: mid) then {
-                idSubs.set key: po value: (st.reg.genericArgAt specId: mid ordinal: k)
-            }
-        } case none then null
+        if po.some when (idSubs.has key: po).not when (
+            k < (st.reg.genericArgCount specId: mid)
+        ) then {
+            idSubs.set key: po value: (st.reg.genericArgAt specId: mid ordinal: k)
+        }
         k = k + 1
     }
 }
@@ -25743,11 +25583,9 @@ mintMono: function {
         tplNative = tpl.isNative
     }
     mid: monoTid
-    match (
-        vto
-    ) case some then {
+    if vto.some then {
         st.reg.setValtype typeId: mid value: vto
-    } case none then null
+    }
     st.reg.setGenericOrigin typeId: mid value: templateId
     # an instance of a generic method takes its receiver where the template
     # does, under the name the template gives it
@@ -25791,12 +25629,10 @@ mintMono: function {
     {
         emptyKey: zast.nameid
         ev: subs.get key: emptyKey
-        match (
-            ev
-        ) case some then {
+        if ev.some then {
             prnm: firstGenericParamId :st :templateId
             if prnm.isZero.not then subs.set key: prnm value: ev
-        } case none then null
+        }
     }
     monoNeedsDtor: (
         mintMonoMembers
@@ -25885,11 +25721,9 @@ mintMonoTypedefBase: function {
     st.typing.quietBounds = prevQuiet
     st.typing.typedefBaseTid.set key: mt value: target
     bn: st.typing.typedefBaseName.get key: templateId
-    match (
-        bn
-    ) case some then {
+    if bn.some then {
         st.typing.typedefBaseName.set key: mid value: bn
-    } case none then null
+    }
     if (st.reg.needsDestructor typeId: target) then {
         st.reg.setNeedsDestructor typeId: mt
     }
@@ -25946,9 +25780,7 @@ reportTypedefClash: function {
     colno: u32
 } is {
     co: st.typing.typedefClash.get key: tid
-    match (
-        co
-    ) case some then {
+    if co.some then {
         if co.reported then return
         cl: co
         cl.reported = true
@@ -25958,7 +25790,7 @@ reportTypedefClash: function {
         tdn: qualifiedTypeName :st tid: org name: (st.reg.nameOf tid: org).stringView
         m.append " (the base of '\{tdn}')"
         reportConstraintUnmet :st :at :lineno :colno msg: m
-    } case none then null
+    }
 }
 
 # reportTypedefClashes -- every recorded base refusal no site reported.
@@ -26398,15 +26230,13 @@ checkPartialBounds: function {
     idSubs: IdMapV ztypes.tid v: ztypes.genericarg
     for each an: pnames loop {
         av: subs.get key: an
-        match (
-            av
-        ) case some then {
+        if av.some then {
             (
                 idSubs.set
                 key: (genericParamTidMint :st :ast :tdecl nameId: an)
                 value: ztypes.genericarg.typeArg av
             )
-        } case none then null
+        }
     }
     for each pn: pnames loop {
         argv: (subs.get key: pn).or d: ztypes.tid.zero
@@ -26502,11 +26332,9 @@ namedBoundAdmits: function {
     argTid: ztypes.tid
 } out bool is {
     sb: sumBoundByDecl :ast :st :tdecl :cd :argTid
-    match (
-        sb
-    ) case some then {
+    if sb.some then {
         return sb
-    } case none then null
+    }
     bt: namedBoundTid :ast :st :tdecl :cd
     if bt.isZero then return true
     if (boundFamilyAdmits :st :bt :argTid).not then return false
@@ -27495,9 +27323,7 @@ reportWideArm: function {
     # template may be another unit's, the system's among them, and the
     # argument that made the arm wide is the instantiation's
     so: st.typing.monoSite.get key: uid
-    match (
-        so
-    ) case some then {
+    if so.some then {
         org: st.reg.genericOriginOf tid: uid
         if org.isZero.not then {
             # a Box argument is refused by the value bound, so the cure is the
@@ -27523,7 +27349,7 @@ reportWideArm: function {
             st.typing.isError = true
             return
         }
-    } case none then null
+    }
     nn: ast.nodes.get i: nd
     (
         addResolveErrorH
@@ -27960,15 +27786,11 @@ keyReturnMismatch: function {
     wantT: stdTid :ast :st wk: zast.wellKnown.slot.wkBool
     if isHash then wantT = stdTid :ast :st wk: zast.wellKnown.slot.tyU64
     rt: methodReturnOf :st :mid
-    match (
-        rt
-    ) case some then {
-        if rt != wantT then {
-            rtn: specWrittenName :st :ast tid: rt
-            wtn: specWrittenName :st :ast tid: wantT
-            return "its '\{mname}' returns \{rtn}, where a key's returns \{wtn}"
-        }
-    } case none then null
+    if rt.some when rt != wantT then {
+        rtn: specWrittenName :st :ast tid: rt
+        wtn: specWrittenName :st :ast tid: wantT
+        return "its '\{mname}' returns \{rtn}, where a key's returns \{wtn}"
+    }
     rmk: implementationReturnMarker :st :mid
     if rmk.length == 0 then return "".string
     return "its '\{mname}' returns `.\{rmk}`, where a key's return is unmarked"
@@ -28260,12 +28082,10 @@ valPartTids: function {
 } is {
     # a typedef is its base: a member generated on it is built from the base's
     tdb: st.typing.typedefBaseTid.get key: tid
-    match (
-        tdb
-    ) case some then {
+    if tdb.some then {
         parts.append tdb
         return
-    } case none then null
+    }
     if (st.reg.typetypeOf typeId: tid) == ztypes.ztypetype.variantType then {
         variantPayloadTids :st :tid :parts
         return
@@ -29046,11 +28866,9 @@ buildSpecIdSubs: function {
         # a numeric parameter's value substitutes too: a reference over the
         # parameter inside the template completes with it
         pto8: st.reg.genericParamTidOf tdecl: tk8 paramName: pnm8
-        match (
-            pto8
-        ) case some then {
+        if pto8.some then {
             idSubs8.set key: pto8 value: (args8.get i: pi8)
-        } case none then null
+        }
         pi8 = pi8 + 1
     }
 }
@@ -29095,19 +28913,15 @@ getOrMintSpec: function {
     {
         emptyKey8: zast.nameid
         ev8: subs.get key: emptyKey8
-        match (
-            ev8
-        ) case some then {
+        if ev8.some then {
             prnm8: firstGenericParamId :st :templateId
             if prnm8.isZero.not then subs.set key: prnm8 value: ev8
-        } case none then null
+        }
         evv8: valSubs.get key: emptyKey8
-        match (
-            evv8
-        ) case some then {
+        if evv8.some then {
             prnmv8: firstGenericParamId :st :templateId
             if prnmv8.isZero.not then valSubs.set key: prnmv8 value: evv8
-        } case none then null
+        }
     }
     # the label components the defaults add, after the caller's own
     dsfx8: String
@@ -29743,11 +29557,9 @@ genericParamTidMint: function {
     nameId: zast.nameid
 } out ztypes.tid is {
     po: st.reg.genericParamTidOf :tdecl paramName: nameId
-    match (
-        po
-    ) case some then {
+    if po.some then {
         return po
-    } case none then null
+    }
     pt: ztypes.tid
     nT: zast.nameTextAt :ast ref: nameId
     pt = st.reg.newType name: nT.stringView typetype: ztypes.ztypetype.genericParam
@@ -29763,15 +29575,13 @@ idTypeSubOf: function {
     key: ztypes.tid
 } out optionval ztypes.tid is {
     g: idSubs.get :key
-    match (
-        g
-    ) case some then {
+    if g.some then {
         match (
             g
         ) case typeArg then {
             return (optionval.some g)
         } case valueArg then null
-    } case none then null
+    }
     return (optionval.none ztypes.tid)
 }
 
@@ -29821,11 +29631,9 @@ bindMonoValueParams: function {
         vg: st.reg.genericValueArgAt specId: monoId ordinal: pj
         if vg.some then {
             pto: st.reg.genericParamTidOf :tdecl paramName: (pn.get i: pj)
-            match (
-                pto
-            ) case some then {
+            if pto.some then {
                 subs.set key: pto value: ztypes.genericarg.valueArg vg
-            } case none then null
+            }
         }
         pj = pj + 1
     }
@@ -30018,12 +29826,10 @@ bindValueArgSub: function {
     gio: fieldParamIndexOf names: fNames name: pk
     gidx: u64
     gfound: false
-    match (
-        gio
-    ) case some then {
+    if gio.some then {
         gidx = gio
         gfound = true
-    } case none then null
+    }
     if vt0.isZero then return
     if gfound.not then {
         bindPartialRowArg :st :ast :pk :ptNames :ptTids argTid: vt0 :sfx :subs :boundParams :tk
@@ -31565,15 +31371,13 @@ methodReturnOf: function {st: zenv.ZSymbolTable.view mid: ztypes.tid} out option
     if (st.typing.synthCmpTids.has item: mid
     ) when st.typing.boolTid.isZero.not then return (optionval.some st.typing.boolTid)
     rn: st.typing.funcReturnNode.get key: mid
-    match (
-        rn
-    ) case some then {
+    if rn.some then {
         nt: ztyping.nodeTypeAt tbl: st.typing.nodeType nid: rn
         if nt.isZero.not then return (optionval.some nt)
         # a return type naming nothing was reported where it is written: a call
         # has a value of no type, not none
         if (st.typing.refusedValues.has item: rn) then return (optionval.some ztypes.tid.zero)
-    } case none then null
+    }
     return (optionval.none ztypes.tid)
 }
 
@@ -31590,17 +31394,9 @@ iterWrapperElem: function {
     if origin.isZero then return (optionval.none ztypes.tid)
     isWrapper: false
     oo: stdTidOpt :ast :st wk: zast.wellKnown.slot.tyOption
-    match (
-        oo
-    ) case some then {
-        if origin == oo then isWrapper = true
-    } case none then null
+    if oo.some when origin == oo then isWrapper = true
     vo: stdTidOpt :ast :st wk: zast.wellKnown.slot.tyOptionval
-    match (
-        vo
-    ) case some then {
-        if origin == vo then isWrapper = true
-    } case none then null
+    if vo.some when origin == vo then isWrapper = true
     if (isViewUnionOrigin :ast :st :origin) then isWrapper = true
     forceMemberOf :st :ast parentTypeId: wid nameId: zast.wellKnown.slot.wkSome
     if isWrapper then return (
@@ -31936,11 +31732,7 @@ unionCreateArmId: function {
     } case call then {
         kOpt: st.typing.callKind.get key: n.nodeid
         isUC: false
-        match (
-            kOpt
-        ) case some then {
-            if kOpt == zast.callkind.unionCreate then isUC = true
-        } case none then null
+        if kOpt.some when kOpt == zast.callkind.unionCreate then isUC = true
         if isUC then return (dottedNodeMemberId :st :ast nid: n.callable)
         return zast.nameid
     } else {
@@ -32000,12 +31792,10 @@ pinProjectionBorrow: function {
     pbr: rootNameIdOf :ast n: (ast.nodes.get i: arg.operation)
     if pbr.isZero then return
     pbv2: st.lookupVarId nameId: pbr
-    match (
-        pbv2
-    ) case some then {
+    if pbv2.some then {
         drainPendingBorrow :st
         pinsPushOne :st nameId: pbr shared: false mutable: true
-    } case none then null
+    }
 }
 
 # consumeProjectionSource -- a `create` projection COPIES its source, so a
@@ -32046,15 +31836,13 @@ consumeProjectionSource: function {
     )
     if pbn.length == 0 then return
     pbv: st.lookupVarId nameId: (nameIdOf :ast name: pbn.stringView)
-    match (
-        pbv
-    ) case some then {
+    if pbv.some then {
         (
             st.invalidate
             nameId: (nameIdOf :ast name: pbn.stringView)
             loc: takenHere
         )
-    } case none then null
+    }
 }
 
 # projectionCallKind -- which projection a `F.create` / `P.borrow` is: a facet
@@ -32290,22 +32078,18 @@ consumeCastFromArg: function {
         )
         if bn.length > 0 then {
             bvo: st.lookupVarId nameId: (nameIdOf :ast name: bn.stringView)
-            match (
-                bvo
-            ) case some then {
-                # only a REFTYPE source transfers. A
-                # valtype owns no heap, so the typedef
-                # takes a copy and the name stays live --
-                # the same guard a returned owned local
-                # carries before it records a move.
-                if (st.reg.isReftypeOf tid: vt) then {
-                    (
-                        st.invalidate
-                        nameId: (nameIdOf :ast name: bn.stringView)
-                        loc: takenHere
-                    )
-                }
-            } case none then null
+            # only a REFTYPE source transfers. A
+            # valtype owns no heap, so the typedef
+            # takes a copy and the name stays live --
+            # the same guard a returned owned local
+            # carries before it records a move.
+            if bvo.some when (st.reg.isReftypeOf tid: vt) then {
+                (
+                    st.invalidate
+                    nameId: (nameIdOf :ast name: bn.stringView)
+                    loc: takenHere
+                )
+            }
         }
     } else {
         (
@@ -33392,11 +33176,9 @@ reportUnknownMemberAs: function {
         forceMemberOf :st :ast parentTypeId: bt nameId: cnId
         moMm: st.typing.declChildOfId parentTypeId: bt nameId: cnId
         stillMiss: true
-        match (
-            moMm
-        ) case some then {
+        if moMm.some then {
             stillMiss = false
-        } case none then null
+        }
         # a function's PARAMETERS are its declared children, but a parameter is
         # not a member of the function VALUE: only a CALL reaches one, and it
         # reaches it by label. So a function base misses whatever was found.
@@ -33746,9 +33528,7 @@ checkMemberProjections: function {
         )
         if pjroot.length > 0 then {
             pjvo: st.lookupVarId nameId: (nameIdOf :ast name: pjroot.stringView)
-            match (
-                pjvo
-            ) case some then {
+            if pjvo.some then {
                 drainPendingBorrow :st
                 (
                     pinsPushOne
@@ -33757,7 +33537,7 @@ checkMemberProjections: function {
                     shared: false
                     mutable: true
                 )
-            } case none then null
+            }
         }
     }
     if coerce when (st.typing.declIsFnptrFieldId parentTypeId: bt nameId: cnId) then {
@@ -34061,11 +33841,7 @@ checkTagAccessor: function {
         tagHit: false
         tob: tagAccessorOwner :st tid: bt
         tan5: st.typing.tagAccessorName.get key: tob
-        match (
-            tan5
-        ) case some then {
-            if tan5 == cnId then tagHit = true
-        } case none then null
+        if tan5.some when tan5 == cnId then tagHit = true
         if tagHit then {
             if st.typing.inAssignTarget then {
                 cn: zast.nameTextAt :ast ref: cnId
@@ -34107,23 +33883,19 @@ checkTagAccessor: function {
             # a list-sourced tag is declared, but the spec makes only a numeric
             # tag source readable on an instance: name the block it came from
             tbD: st.typing.variantTagBase.get key: tob
-            match (
-                tbD
-            ) case some then {
-                if tbD.isZero then {
-                    dtD: (
-                        (
-                            st.typing.declChildOfId
-                            parentTypeId: tob
-                            nameId: zast.wellKnown.slot.wkTag
-                        ).or
-                        d: ztypes.tid.zero
-                    )
-                    lsD: (st.typing.tagSourceDecls.get key: dtD).or d: ztypes.declid
-                    dnD: zast.nameTextCopy :ast ref: (declNameIdOf :st declId: lsD)
-                    mnx5 = "tag not readable on '\{btn5}' — its values come from list '\{dnD}'; only a numeric tag source (eg. `tag: u8.tag`) is readable on an instance"
-                }
-            } case none then null
+            if tbD.some when tbD.isZero then {
+                dtD: (
+                    (
+                        st.typing.declChildOfId
+                        parentTypeId: tob
+                        nameId: zast.wellKnown.slot.wkTag
+                    ).or
+                    d: ztypes.tid.zero
+                )
+                lsD: (st.typing.tagSourceDecls.get key: dtD).or d: ztypes.declid
+                dnD: zast.nameTextCopy :ast ref: (declNameIdOf :st declId: lsD)
+                mnx5 = "tag not readable on '\{btn5}' — its values come from list '\{dnD}'; only a numeric tag source (eg. `tag: u8.tag`) is readable on an instance"
+            }
             en6: String
             eh6: String
             (
@@ -34697,16 +34469,14 @@ listMemberType: function {
 } out ztypes.tid is {
     g: st.typing.constAggs.get i: row.u64
     lp: st.typing.aggLabelPos id: row label: nameId
-    match (
-        lp
-    ) case some then {
+    if lp.some then {
         return (
             listElemReadTid
             :st
             elem: g.elem
             item: (st.typing.constAggItems.get i: g.itemStart.u64 + lp)
         )
-    } case none then null
+    }
     if nameId == zast.wellKnown.slot.wkLength then return st.reg.literalIntTid
     pos: (zast.nameTextAt :ast ref: nameId).stringView.parseU64
     match (
@@ -34753,9 +34523,7 @@ checkListArray: function {
     if elo.isZero then return (callleg handled: false tid: ztypes.tid.zero)
     ecnt: g.itemCount.u64
     ato: stdTidOpt :ast :st wk: zast.wellKnown.slot.tyArray
-    match (
-        ato
-    ) case some then {
+    if ato.some then {
         eno: st.reg.nameOf tid: elo
         amn: "_\{eno}_\{ecnt}"
         # `array` declares its element parameter then its count; asking
@@ -34784,7 +34552,7 @@ checkListArray: function {
         mintCollectionChildren :st :ast monoId: amid templateId: ato
         stampGate :st nid: dp.nid tid: amid
         return (callleg handled: true tid: amid)
-    } case none then null
+    }
     return (callleg handled: false tid: ztypes.tid.zero)
 }
 
@@ -34877,18 +34645,14 @@ checkArrayIndexMember: function {
         if isArr then {
             forceMemberOf :st :ast parentTypeId: bt nameId: zast.wellKnown.slot.wkGet
             go8: st.typing.declChildOfId parentTypeId: bt nameId: zast.wellKnown.slot.wkGet
-            match (
-                go8
-            ) case some then {
+            if go8.some then {
                 ro8: methodReturnOf :st mid: go8
-                match (
-                    ro8
-                ) case some then {
+                if ro8.some then {
                     seta8: ro8
                     stampGate :st nid: dp.nid tid: seta8
                     return (callleg handled: true tid: ro8)
-                } case none then null
-            } case none then null
+                }
+            }
         }
     }
     return (callleg handled: false tid: ztypes.tid.zero)
@@ -34916,9 +34680,7 @@ checkDropMarkerVar: function {
         )
         rlk: st.findLockHeldByOther nameId: (nameIdOf :ast name: mkRoot) self: selfH
         heldByOther: false
-        match (
-            rlk
-        ) case some then {
+        if rlk.some then {
             relBlocked = true
             heldByOther = true
             rhn: st.formatLockHolder pool: ast.names holder: rlk.holder
@@ -34933,16 +34695,14 @@ checkDropMarkerVar: function {
                 e: zast.err.ownerError
                 msg: mrel
             )
-        } case none then null
+        }
         # a lock another holder has is what stops the drop, said once; failing
         # that, an exclusive lock the name itself holds stops any access
         if heldByOther.not then {
             rpath: ListVal zast.nameid
             rpath.append (nameIdOf :ast name: mkRoot)
             elh: st.findExclusiveLock path: rpath
-            match (
-                elh
-            ) case some then {
+            if elh.some then {
                 relBlocked = true
                 ahn: st.formatLockHolder pool: ast.names holder: elh
                 macc: "Cannot access: '\{mkRoot}' has exclusive lock held by '\{ahn}'"
@@ -34966,7 +34726,7 @@ checkDropMarkerVar: function {
                     hint: ahint
                     width: mkRoot.length.u32.orPanic
                 )
-            } case none then null
+            }
         }
     }
     return relBlocked
@@ -35055,19 +34815,13 @@ derivedInequalityMember: function {
 } out optionval ztypes.tid is {
     if cnId != zast.wellKnown.slot.wkOpNe then return (optionval.none ztypes.tid)
     neSynthetic: true
-    match (
-        mo
-    ) case some then {
+    if mo.some then {
         neSynthetic = st.typing.synthCmpTids.has item: mo
-    } case none then null
+    }
     if neSynthetic.not then return (optionval.none ztypes.tid)
     forceMemberOf :st :ast parentTypeId: bt nameId: zast.wellKnown.slot.wkOpEq
     eqM9: st.typing.declChildOfId parentTypeId: bt nameId: zast.wellKnown.slot.wkOpEq
-    match (
-        eqM9
-    ) case some then {
-        if (st.typing.synthCmpTids.has item: eqM9).not then return (optionval.some eqM9)
-    } case none then null
+    if eqM9.some when (st.typing.synthCmpTids.has item: eqM9).not then return (optionval.some eqM9)
     return (optionval.none ztypes.tid)
 }
 
@@ -36232,11 +35986,9 @@ checkMarkerMember: function {
         }
         if isStrBase then {
             sto: stdTidOpt :ast :st wk: zast.wellKnown.slot.tyStr
-            match (
-                sto
-            ) case some then {
+            if sto.some then {
                 return (callleg handled: true tid: sto)
-            } case none then null
+            }
         }
     }
     if cnId == zast.wellKnown.slot.wkBorrow then {
@@ -36513,9 +36265,7 @@ checkTransferMarker: function {
                     :unitDecl
                     baseId: mkRootId
                 )
-                match (
-                    dfo
-                ) case some then {
+                if dfo.some then {
                     mkRoot: zast.nameTextAt :ast ref: mkRootId
                     mtl: "Cannot drop top-level definition '\{mkRoot}'"
                     (
@@ -36527,7 +36277,7 @@ checkTransferMarker: function {
                         e: zast.err.ownerError
                         msg: mtl
                     )
-                } case none then null
+                }
             }
         }
     }
@@ -36593,16 +36343,12 @@ literalConvTarget: function {
     # the literal types are reached by literals, not by name.
     forceMemberOf :st :ast parentTypeId: tid :nameId
     co: st.typing.declChildOfId parentTypeId: tid :nameId
-    match (
-        co
-    ) case some then {
+    if co.some then {
         rt: methodReturnOf :st mid: co
-        match (
-            rt
-        ) case some then {
+        if rt.some then {
             return (optionval.some rt)
-        } case none then null
-    } case none then null
+        }
+    }
     return (optionval.none ztypes.tid)
 }
 
@@ -36638,9 +36384,7 @@ checkNumericSuffixCast: function {
         ) then {
             return (callleg handled: true tid: ztypes.tid.zero)
         }
-        match (
-            castOpt
-        ) case some then {
+        if castOpt.some then {
             castChild: zast.nameTextAt :ast ref: castChildId
             if (st.reg.typetypeOf typeId: castOpt) != ztypes.ztypetype.functionType then {
                 # a compile-time-constant conversion is checked statically: a
@@ -36663,7 +36407,7 @@ checkNumericSuffixCast: function {
                 recordSuffixDecl :st nid: dp.nid tid: litTid nameId: castChildId
                 return (callleg handled: true tid: castOpt)
             }
-        } case none then null
+        }
     }
     return (callleg handled: false tid: ztypes.tid.zero)
 }
@@ -37029,11 +36773,9 @@ checkDottedOn: function {
     forceMemberOf :st :ast parentTypeId: bt nameId: cnId
     mo: st.typing.declChildOfId parentTypeId: bt nameId: cnId
     preHas: false
-    match (
-        mo
-    ) case some then {
+    if mo.some then {
         preHas = true
-    } case none then null
+    }
     # the partial a member is read through to its template, whose own type
     # arguments the member's type takes back (partialSubstituted)
     viaPartial: ztypes.tid
@@ -37055,11 +36797,9 @@ checkDottedOn: function {
         }
     }
     dn9: derivedInequalityMember :st :ast :bt :cnId :mo
-    match (
-        dn9
-    ) case some then {
+    if dn9.some then {
         mo = optionval.some dn9
-    } case none then null
+    }
     # a native container's `create` is its TEMPLATE's: every family declares the
     # one `create: function {capacity: 0.u64}`, which no type argument
     # substitutes, and an instance need not carry a copy of it -- under --eager
@@ -37333,29 +37073,25 @@ refuseReadUnderPin: function {
     rvo: st.lookupVarId nameId: (rp.get i: 0)
     if rvo.none then return
     xh: st.findExclusiveVarLock path: rp
-    match (
-        xh
-    ) case some then {
-        if (xh == (ztypes.zlockholder.var rvo)).not then {
-            hn: st.formatLockHolder pool: ast.names holder: xh
-            pp: zenv.formatPath pool: ast.names path: rp.listView
-            mr: "Cannot read '\{pp}': exclusive lock held by '\{hn}'"
-            hr: "read through '\{hn}' instead, or end '\{hn}'s scope first to release the lock"
-            nr: String
-            (
-                addErrorH
-                :st
-                nodeid: nid
-                :lineno
-                :colno
-                e: zast.err.ownerError
-                msg: mr
-                note: nr
-                hint: hr
-                width: pp.length.u32.orPanic
-            )
-        }
-    } case none then null
+    if xh.some when (xh == (ztypes.zlockholder.var rvo)).not then {
+        hn: st.formatLockHolder pool: ast.names holder: xh
+        pp: zenv.formatPath pool: ast.names path: rp.listView
+        mr: "Cannot read '\{pp}': exclusive lock held by '\{hn}'"
+        hr: "read through '\{hn}' instead, or end '\{hn}'s scope first to release the lock"
+        nr: String
+        (
+            addErrorH
+            :st
+            nodeid: nid
+            :lineno
+            :colno
+            e: zast.err.ownerError
+            msg: mr
+            note: nr
+            hint: hr
+            width: pp.length.u32.orPanic
+        )
+    }
 }
 
 # checkBareTypeValue -- a bare TYPE name in value position is zero-argument
@@ -37686,9 +37422,7 @@ typeOfBareName: function {
         sty: constructionArgTid :st :ast :unitDecl opId: node.nid baseId: node.name
         if sty.isZero.not then fo = optionval.some sty
     }
-    match (
-        fo
-    ) case some then {
+    if fo.some then {
         result = fo
         # A bare no-arg non-generic FUNCTION name is a call: the
         # value is its return (an unregistered shell when out-less).
@@ -37778,7 +37512,7 @@ typeOfBareName: function {
         # the definition the name resolved to, wherever it lives: a namespace
         # member is no definition of the unit the read is written in
         walkDefinitionById :st :ast tid: fo
-    } case none then null
+    }
     return result
 }
 
@@ -37953,19 +37687,15 @@ checkReturnRooting: function {
     cr: callRefAt :ast nid: cid
     isCtor: false
     cko: st.typing.callKind.get key: cid
-    match (
-        cko
-    ) case some then {
+    if cko.some then {
         if cko.classCreate then isCtor = true
         if cko.unionCreate then isCtor = true
         if cko.recordCreate then isCtor = true
-    } case none then null
+    }
     mcb: metaCreateBaseId :ast n: (ast.nodes.get i: cr.callable)
-    match (
-        mcb
-    ) case some then {
+    if mcb.some then {
         isCtor = true
-    } case none then null
+    }
     if isCtor.not then return false
     reported: false
     kA: u64
@@ -38192,24 +37922,20 @@ checkReturnCarries: function {
                 for each hp: held loop {
                     srcNm: hp.path.get i: 0
                     svo: st.lookupVarId nameId: srcNm
-                    match (
-                        svo
-                    ) case some then {
-                        if (pinRootDiesWithCall :st nameId: srcNm depth: 0) then {
-                            sn: lockRootPhrase :st :ast nameId: srcNm
-                            m2: "Cannot return '\{wn}': it holds locks on \{sn}, which dies with this call"
-                            (
-                                addError
-                                :st
-                                nodeid: arg.nid
-                                lineno: arg.lineno
-                                colno: arg.colno
-                                e: zast.err.ownerError
-                                msg: m2
-                            )
-                            return
-                        }
-                    } case none then null
+                    if svo.some when (pinRootDiesWithCall :st nameId: srcNm depth: 0) then {
+                        sn: lockRootPhrase :st :ast nameId: srcNm
+                        m2: "Cannot return '\{wn}': it holds locks on \{sn}, which dies with this call"
+                        (
+                            addError
+                            :st
+                            nodeid: arg.nid
+                            lineno: arg.lineno
+                            colno: arg.colno
+                            e: zast.err.ownerError
+                            msg: m2
+                        )
+                        return
+                    }
                 }
                 # the locks travel with the value: the caller's binding installs
                 # the callee's pins, which name these very parameters
@@ -38229,13 +37955,11 @@ checkReturnCarries: function {
     badPn: zast.nameid
     for each p: st.typing.pendingPins loop {
         pvo: st.lookupVarId nameId: (p.path.get i: 0)
-        match (
-            pvo
-        ) case some then {
-            if badPn.isZero when (st.reg.variableOriginOf id: pvo) == ztypes.zvarorigin.param then {
-                badPn = p.path.get i: 0
-            }
-        } case none then null
+        if pvo.some when badPn.isZero when (
+            (st.reg.variableOriginOf id: pvo) == ztypes.zvarorigin.param
+        ) then {
+            badPn = p.path.get i: 0
+        }
     }
     if badPn.isZero.not then {
         pn: zast.nameTextAt :ast ref: badPn
@@ -38360,12 +38084,10 @@ checkLiteralAtom: function {st: zenv.ZSymbolTable ast: Ast.view node: atomref} o
         rejS = true
         if (ndNm.stringView.startsWith prefix: "0x") then {
             sb: ndNm.stringView.byteAt ndNm.length - sfR.len
-            match (
-                sb
-            ) case some then {
+            if sb.some then {
                 if sb == 102 then rejS = false
                 if sb == 99 then rejS = false
-            } case none then null
+            }
         }
         if (ndNm.stringView.startsWith prefix: "0c") then rejS = false
     }
@@ -38769,12 +38491,10 @@ checkAtomid: function {
         # atom-use variable id: stamped even during template walks (variable
         # ids are valid there; stampGate only gates GENERIC_PARAM types)
         avo: st.lookupVarId nameId: node.name
-        match (
-            avo
-        ) case some then {
+        if avo.some then {
             setav: avo
             st.typing.setAtomVariable nid: node.nid vid: setav
-        } case none then null
+        }
     } case none then {
         result = checkUnboundAtom :st :unitDecl :ast :node
     }
@@ -39381,11 +39101,9 @@ predFactOf: function {
         }
     }
     ef0: equalityArmFact :ast :st :n :boolId
-    match (
-        ef0
-    ) case some then {
+    if ef0.some then {
         return (Option.some ef0)
-    } case none then null
+    }
     match (
         n
     ) case dottedpath then {
@@ -39443,9 +39161,7 @@ shadowCollapseIfSingle: function {
     arm: st.narrowedArmOf nameId: name fullTypeId: fullTid
     if arm.isZero then return
     po: sumArmTid :st sumTid: fullTid armId: arm
-    match (
-        po
-    ) case some then {
+    if po.some then {
         if (st.reg.typetypeOf typeId: po) == ztypes.ztypetype.nullType then return
         (
             st.narrow
@@ -39463,7 +39179,7 @@ shadowCollapseIfSingle: function {
             armName: arm
             payloadTid: po
         )
-    } case none then null
+    }
 }
 
 # applyPredFact -- record one predicate fact on its subject in the current
@@ -39476,9 +39192,7 @@ applyPredFact: function {ast: Ast.view st: zenv.ZSymbolTable f: ArmPredFact.view
     doNarrow: holds != f.negated
     if doNarrow then {
         po: sumArmTid :st sumTid: f.fullTid armId: f.armName
-        match (
-            po
-        ) case some then {
+        if po.some then {
             (
                 st.narrow
                 nameId: f.subject
@@ -39495,7 +39209,7 @@ applyPredFact: function {ast: Ast.view st: zenv.ZSymbolTable f: ArmPredFact.view
                 armName: f.armName
                 payloadTid: po
             )
-        } case none then null
+        }
     } else {
         (
             st.exclude
@@ -39536,16 +39250,14 @@ postGuardRecord: function {
         parentTypeId: fullTid
         nameId: arm
     )
-    match (
-        po
-    ) case some then {
+    if po.some then {
         if (st.reg.typetypeOf typeId: po) == ztypes.ztypetype.nullType then return
         st.typing.postGuardName.set key: stmtNid value: subject
         pgv: (st.lookupVarId nameId: subject).or d: ztypes.vid.zero
         st.typing.setPostGuardVar nid: stmtNid vid: pgv
         st.typing.postGuardTid.set key: stmtNid value: fullTid
         st.typing.postGuardArm.set key: stmtNid value: arm
-    } case none then null
+    }
 }
 
 # checkClauseCondition -- walk one if-clause condition: an unresolved value
@@ -39633,13 +39345,11 @@ checkClauseConditions: function {
             # runs only where this one held. Applying it here is what makes
             # `if x.some when x > 3` mean what the nested form means.
             fo: predFactOf :ast :st n: (ast.nodes.get i: cond.operation) :boolId
-            match (
-                fo
-            ) case some then {
+            if fo.some then {
                 pf: fo.take
                 applyPredFact :ast :st f: pf holds: true
                 factsOut.append pf
-            } case none then null
+            }
         }
     }
 }
@@ -40123,11 +39833,9 @@ stashValuePins: function {st: zenv.ZSymbolTable ast: Ast.view valNid: zast.nodei
     bn: zast.atomNameIdOf n: (ast.nodes.get i: valNid)
     if bn.isZero.not when (st.scopeBindsHere nameId: bn) then {
         hv: st.lookupVarId nameId: bn
-        match (
-            hv
-        ) case some then {
+        if hv.some then {
             st.heldLockPaths holder: ztypes.zlockholder.var hv dst: st.typing.pendingPins
-        } case none then null
+        }
     }
     n: st.typing.pendingPins.length
     if n == 0 then return
@@ -40564,9 +40272,7 @@ moveLocksToTarget: function {
     tgtRoot: rootNameIdOf :ast n: (ast.nodes.get i: rasgn.topath)
     if tgtRoot.isZero then return
     tvo: st.lookupVarId nameId: tgtRoot
-    match (
-        tvo
-    ) case some then {
+    if tvo.some then {
         bareT: (zast.atomNameIdOf n: (ast.nodes.get i: rasgn.topath)).isZero.not
         if bareT then {
             st.releaseHeldLocks holder: ztypes.zlockholder.var tvo
@@ -40582,7 +40288,7 @@ moveLocksToTarget: function {
             lineno: rasgn.lineno
             colno: rasgn.colno
         )
-    } case none then null
+    }
 }
 
 # refuseArmLeavesIntoOwned -- `r = if c then w else ..` into an owned target: an
@@ -40647,28 +40353,18 @@ borrowedFieldMarkerOf: function {
     targetFnId: dottedChildNameId :ast n: (ast.nodes.get i: rasgn.topath)
     if targetRoot.isZero or targetFnId.isZero then return tmk
     tto: st.lookup nameId: targetRoot
-    match (
-        tto
-    ) case some then {
-        if (
-            st.typing.declIsBorrowedFieldId
+    if tto.some when (st.typing.declIsBorrowedFieldId parentTypeId: tto nameId: targetFnId) then {
+        tmk.append "borrow"
+        tmo: (
+            st.typing.declOwnershipOfId
             parentTypeId: tto
             nameId: targetFnId
-        ) then {
-            tmk.append "borrow"
-            tmo: (
-                st.typing.declOwnershipOfId
-                parentTypeId: tto
-                nameId: targetFnId
-            )
-            match (
-                tmo
-            ) case some then {
-                tmt: markerText o: tmo
-                if tmt.length > 0 then tmk = tmt.take
-            } case none then null
+        )
+        if tmo.some then {
+            tmt: markerText o: tmo
+            if tmt.length > 0 then tmk = tmt.take
         }
-    } case none then null
+    }
     return tmk
 }
 
@@ -40698,11 +40394,9 @@ checkReassignedType: function {
             nmId: atomNameId :ast n: (ast.nodes.get i: rasgn.topath)
             if nmId.isZero.not then {
                 dtoC: st.declaredTypeOf nameId: nmId
-                match (
-                    dtoC
-                ) case some then {
+                if dtoC.some then {
                     chkT = dtoC
-                } case none then null
+                }
             }
         }
         if (numberLandsInNumber :st srcTid: rvt dstTid: chkT) then {
@@ -40778,11 +40472,9 @@ checkNarrowedTargetWrite: function {
     # target's stamp -- the payload's would assign a union to its payload
     if (st.isShadowNarrowed nameId: nmId) then {
         dto: st.declaredTypeOf nameId: nmId
-        match (
-            dto
-        ) case some then {
+        if dto.some then {
             stampGate :st nid: rasgn.topath tid: dto
-        } case none then null
+        }
     }
     st.endNarrowingByWrite nameId: nmId
 }
@@ -40931,32 +40623,22 @@ checkReassignment: function {
     rvIsHold = valueIsHold :ast n: (ast.nodes.get i: rasgn.value)
     if hbNmId.isZero.not then {
         hbo: st.lookupVarId nameId: hbNmId
-        match (
-            hbo
-        ) case some then {
+        if hbo.some then {
             hlh: st.findLockHolder nameId: hbNmId
-            match (
-                hlh
-            ) case some then {
-                if hlh == (ztypes.zlockholder.var hbo) then {
-                    hbVid = hbo
-                    if rvIsHold then st.releaseHeldLocks holder: hlh
-                }
-            } case none then null
-        } case none then null
+            if hlh.some when hlh == (ztypes.zlockholder.var hbo) then {
+                hbVid = hbo
+                if rvIsHold then st.releaseHeldLocks holder: hlh
+            }
+        }
     }
     # a borrowed reftype local or parameter is re-pointed, not written through;
     # a value-type parameter is its own copy, and is not reassigned whole
     if hbNmId.isZero.not when (st.reg.isReftypeOf tid: lvt) then {
         bvo: st.lookupVarId nameId: hbNmId
-        match (
-            bvo
-        ) case some then {
-            if (isBorrowedVar :st vid: bvo) then {
-                checkRepoint :st :unitDecl :ast :rasgn xVid: bvo :lvt
-                return
-            }
-        } case none then null
+        if bvo.some when (isBorrowedVar :st vid: bvo) then {
+            checkRepoint :st :unitDecl :ast :rasgn xVid: bvo :lvt
+            return
+        }
     }
     # a refused target walks no value: a move the value spells would outlive
     # the refusal and report its source as spent
@@ -41088,9 +40770,7 @@ checkRepoint: function {
         nameId: (atomNameId :ast n: (ast.nodes.get i: rasgn.topath))
         except: ztypes.zlockholder.var xVid
     )
-    match (
-        oth
-    ) case some then {
+    if oth.some then {
         tn: varNameText :st :ast vid: xVid
         hn: st.formatLockHolder pool: ast.names holder: oth
         (
@@ -41103,7 +40783,7 @@ checkRepoint: function {
             msg: "Cannot re-point '\{tn}': '\{hn}' borrows through it"
         )
         return
-    } case none then null
+    }
     drainPendingBorrow :st
     errR: st.typing.errors.length
     rvt: checkValueAt :st :unitDecl :ast nid: rasgn.value
@@ -41264,34 +40944,30 @@ refuseRepointOutlives: function {
     for each p: pins loop {
         root: p.path.get i: 0
         rvo: st.lookupVarId nameId: root
-        match (
-            rvo
-        ) case some then {
-            if (st.reg.variableOriginOf id: rvo) != ztypes.zvarorigin.param when (
-                st.scopeEncloses
-                outer: (st.scopeOfVar vid: rvo)
-                inner: xScope
-            ).not then {
-                xn: varNameText :st :ast vid: xVid
-                rn: zast.nameTextAt :ast ref: root
-                mo: "Cannot re-point '\{xn}' at '\{rn}': '\{xn}' outlives '\{rn}'"
-                # a call's argument the result keeps locked has no name of the
-                # program's
-                if (st.typing.pinnedArgTemps.get key: root).some then {
-                    mo = "Cannot re-point '\{xn}' at a value that locks a temporary: '\{xn}' outlives the temporary"
-                }
-                (
-                    addError
-                    :st
-                    nodeid: rasgn.value
-                    lineno: (nodeLine n: (ast.nodes.get i: rasgn.value))
-                    colno: (nodeCol n: (ast.nodes.get i: rasgn.value))
-                    e: zast.err.ownerError
-                    msg: mo
-                )
-                return true
+        if rvo.some when (st.reg.variableOriginOf id: rvo) != ztypes.zvarorigin.param when (
+            st.scopeEncloses
+            outer: (st.scopeOfVar vid: rvo)
+            inner: xScope
+        ).not then {
+            xn: varNameText :st :ast vid: xVid
+            rn: zast.nameTextAt :ast ref: root
+            mo: "Cannot re-point '\{xn}' at '\{rn}': '\{xn}' outlives '\{rn}'"
+            # a call's argument the result keeps locked has no name of the
+            # program's
+            if (st.typing.pinnedArgTemps.get key: root).some then {
+                mo = "Cannot re-point '\{xn}' at a value that locks a temporary: '\{xn}' outlives the temporary"
             }
-        } case none then null
+            (
+                addError
+                :st
+                nodeid: rasgn.value
+                lineno: (nodeLine n: (ast.nodes.get i: rasgn.value))
+                colno: (nodeCol n: (ast.nodes.get i: rasgn.value))
+                e: zast.err.ownerError
+                msg: mo
+            )
+            return true
+        }
     }
     return false
 }
@@ -41615,13 +41291,11 @@ borrowedMoveError: function {
     # a borrowed BOX is a call, not a name: what makes one that owns is the
     # source's marker
     bck: st.typing.callKind.get key: (nodeId :n)
-    match (
-        bck
-    ) case some then {
-        if (bck == zast.callkind.protocolBorrow) or (bck == zast.callkind.facetBorrow) then {
-            mbv = "Cannot move '\{text}' \{verb}: it is a borrowed box, bound to its source for the full scope -- take the source (`.take`, or no marker) for a box that owns it"
-        }
-    } case none then null
+    if bck.some when (
+        (bck == zast.callkind.protocolBorrow) or (bck == zast.callkind.facetBorrow)
+    ) then {
+        mbv = "Cannot move '\{text}' \{verb}: it is a borrowed box, bound to its source for the full scope -- take the source (`.take`, or no marker) for a box that owns it"
+    }
     (
         addError
         :st
@@ -41676,9 +41350,7 @@ consumeReassignPins: function {
     rpins: List ztyping.PinPath
     takePendingPins :st dst: rpins
     tvo: st.lookupVarId nameId: tgtNm
-    match (
-        tvo
-    ) case some then {
+    if tvo.some then {
         if owned when (
             refuseLockHolder
             :st
@@ -41705,7 +41377,7 @@ consumeReassignPins: function {
             lineno: rasgn.lineno
             colno: rasgn.colno
         )
-    } case none then null
+    }
 }
 
 # checkSwap -- `lhs swap rhs` writes BOTH sides, so each is walked as a write
@@ -41808,11 +41480,9 @@ checkSwapSide: function {
     nmId: atomNameId :ast n: (ast.nodes.get i: side)
     if nmId.isZero.not then {
         dto: st.declaredTypeOf nameId: nmId
-        match (
-            dto
-        ) case some then {
+        if dto.some then {
             dt = dto
-        } case none then null
+        }
         if dt != walked then stampGate :st nid: side tid: dt
     }
     return (materialiseLiteral :ast :st t: dt)
@@ -42595,12 +42265,10 @@ forOptionElementOf: function {
 } out forelem is {
     fe: forelem elem: ztypes.tid.zero wrapper: vt isView: false
     w1: iterWrapperElem :ast :st wid: vt
-    match (
-        w1
-    ) case some then {
+    if w1.some then {
         fe.elem = w1
         fe.isView = isViewUnionMono :ast :st wid: vt
-    } case none then null
+    }
     return fe
 }
 
@@ -42619,20 +42287,16 @@ forIteratorElementOf: function {
     c1: objectCallOf :st :ast t: vt
     if c1.isZero.not then {
         rv0: methodReturnOf :st mid: c1
-        match (
-            rv0
-        ) case some then {
+        if rv0.some then {
             # a native's answer is its template's, read through the instance
             rv: nativeReturnOnInstance :st :ast :unitDecl recvTid: vt ret: rv0
             w2: iterWrapperElem :ast :st wid: rv
-            match (
-                w2
-            ) case some then {
+            if w2.some then {
                 fe.elem = w2
                 fe.wrapper = rv
                 fe.isView = isViewUnionMono :ast :st wid: rv
-            } case none then null
-        } case none then null
+            }
+        }
     }
     if fe.elem.isZero when (st.reg.isPartialOf tid: vt) then {
         return (partialForElement :st :ast :vt)
@@ -42663,13 +42327,11 @@ partialForElement: function {
     otd: declOfTypeId :st tid: og
     pn: st.reg.genericParamNameOfTid tdecl: otd ptid: et
     ordo: st.reg.paramOrdinalOf tdecl: otd paramName: pn
-    match (
-        ordo
-    ) case some then {
+    if ordo.some then {
         fe.elem = st.reg.genericTypeArgAt specId: vt ordinal: ordo
         fe.wrapper = rv
         fe.isView = isViewUnionMono :ast :st wid: rv
-    } case none then null
+    }
     return fe
 }
 
@@ -42905,27 +42567,19 @@ forFactoryTid: function {
     facId: ztypes.tid
     if fbnId.isZero.not then {
         ffo: walkLookupTyperefById :st scope: st.curScope :ast :unitDecl baseId: fbnId
-        match (
-            ffo
-        ) case some then {
-            if (st.reg.typetypeOf typeId: ffo) == ztypes.ztypetype.functionType when (
-                methodHasNoUserArgs
+        if ffo.some when (st.reg.typetypeOf typeId: ffo) == ztypes.ztypetype.functionType when (
+            methodHasNoUserArgs
+            :st
+            mid: ffo
+        ) then {
+            fro: methodReturnOf :st mid: ffo
+            if fro.some when (st.reg.typetypeOf typeId: fro) == ztypes.ztypetype.classType when (
+                objectCallOf
                 :st
-                mid: ffo
-            ) then {
-                fro: methodReturnOf :st mid: ffo
-                match (
-                    fro
-                ) case some then {
-                    if (st.reg.typetypeOf typeId: fro) == ztypes.ztypetype.classType when (
-                        objectCallOf
-                        :st
-                        :ast
-                        t: fro
-                    ).isZero.not then facId = ffo
-                } case none then null
-            }
-        } case none then null
+                :ast
+                t: fro
+            ).isZero.not then facId = ffo
+        }
     }
     return facId
 }
@@ -43018,11 +42672,9 @@ implicitIterate: function {
 # reported from E's file and position.
 implicitIterateNode: function {st: zenv.ZSymbolTable ast: Ast cond: argref} out zast.nodeid is {
     have: st.typing.forImplicitIterate.get key: cond.nid
-    match (
-        have
-    ) case some then {
+    if have.some then {
         return have
-    } case none then null
+    }
     aid: zast.tableReserve :ast from: cond.operation
     (
         zast.tableAdd
@@ -43238,9 +42890,7 @@ checkComprehensionValue: function {
     bn9: zast.atomNameIdOf n: vn9
     if bn9.isZero.not then {
         bvo9: st.lookupVarId nameId: bn9
-        match (
-            bvo9
-        ) case some then {
+        if bvo9.some then {
             bnt9: zast.nameTextAt :ast ref: bn9
             # the value moves into the list the loop builds, which could hand
             # it out again without its locks: one that holds any is refused
@@ -43259,7 +42909,7 @@ checkComprehensionValue: function {
                 colno: (nodeCol n: vn9)
             )
             return
-        } case none then null
+        }
     }
     # a `w.take` kept its locks for this place (forTakeNode): they are
     # refused, as a bare `w`'s are
@@ -43312,9 +42962,7 @@ forComprehensionTid: function {
                 tid: elemT
             ) then ltWk = zast.wellKnown.slot.tyListVal
             lto: stdTidOpt :ast :st wk: ltWk
-            match (
-                lto
-            ) case some then {
+            if lto.some then {
                 lsubs: IdMapV zast.nameid v: ztypes.tid
                 lv: elemT
                 # `lto` is whichever of ListRef / ListVal the element's family
@@ -43347,7 +42995,7 @@ forComprehensionTid: function {
                     stampGate :st nid: fornode.nid tid: setf
                     return lmid
                 }
-            } case none then null
+            }
         }
     }
     return ztypes.tid.zero
@@ -44811,11 +44459,7 @@ memberIsSelfTyped: function {
                     parentTypeId: memberTid
                     nameId: pnid
                 )
-                match (
-                    pto
-                ) case some then {
-                    if pto == ifaceTid then found = true
-                } case none then null
+                if pto.some when pto == ifaceTid then found = true
             }
         }
     }
@@ -44839,9 +44483,7 @@ refuseSelfTypedMember: function {
     isIface: btt.isInterface
     if isIface.not then return false
     mo: st.typing.declChildOfId parentTypeId: recvTid :nameId
-    match (
-        mo
-    ) case some then {
+    if mo.some then {
         mtid: mo
         if (memberIsSelfTyped :st ifaceTid: recvTid memberTid: mtid) then {
             iname: st.reg.nameOf tid: recvTid
@@ -44859,7 +44501,7 @@ refuseSelfTypedMember: function {
             )
             return true
         }
-    } case none then null
+    }
     return false
 }
 
@@ -44913,11 +44555,9 @@ ctorSelfRecursionAt: function {
     if ft.isZero then return false
     cro: st.typing.declChildOfId parentTypeId: tt nameId: zast.wellKnown.slot.wkCreate
     crid: ztypes.tid
-    match (
-        cro
-    ) case some then {
+    if cro.some then {
         crid = cro
-    } case none then null
+    }
     if crid.isZero then return false
     if (ft == crid).not then return false
     tnm: st.reg.nameOf tid: tt
@@ -44982,12 +44622,10 @@ positionalParamNameId: function {
 markVarMutated: function {st: zenv.ZSymbolTable nameId: zast.nameid} is {
     if nameId.isZero then return
     vo: st.lookupVarId :nameId
-    match (
-        vo
-    ) case some then {
+    if vo.some then {
         mk: vo
         st.typing.variableMutated.add item: mk
-    } case none then null
+    }
 }
 
 # markVarRebound -- record that a reassignment or a swap rebinds the variable
@@ -45754,16 +45392,14 @@ outlivedSource: function {
     for each hp: held loop {
         rootNm: hp.path.get i: 0
         rvo: st.lookupVarId nameId: rootNm
-        match (
-            rvo
-        ) case some then {
+        if rvo.some then {
             isParam: (st.reg.variableOriginOf id: rvo) == ztypes.zvarorigin.param
             if isParam.not when (
                 st.scopeEncloses
                 outer: (st.scopeOfVar vid: rvo)
                 inner: toScope
             ).not then return rootNm
-        } case none then null
+        }
     }
     return zast.nameid
 }
@@ -46637,12 +46273,10 @@ frozenFieldInPath: function {
             parentTypeId: cur
             nameId: seg
         )
-        match (
-            oo
-        ) case some then {
+        if oo.some then {
             if oo == ztypes.zparamownership.viewMode then return seg
             if oo == ztypes.zparamownership.holdMode then return seg
-        } case none then null
+        }
         co: (
             st.typing.declChildOfId
             parentTypeId: cur
@@ -46888,12 +46522,10 @@ armPayloadReadonly: function {
         nameId: armName
     )
     apr: false
-    match (
-        ao
-    ) case some then {
+    if ao.some then {
         if ao == ztypes.zparamownership.viewMode then apr = true
         if ao == ztypes.zparamownership.holdMode then apr = true
-    } case none then null
+    }
     if apr.not then return
     svo: st.lookupVarId nameId: subject
     if svo.none then return
@@ -46985,9 +46617,7 @@ pinnedMoveError: function {
 # payload answers for its arm.
 keepSourceHint: function {st: zenv.ZSymbolTable.view ast: Ast.view name: StringView} out String is {
     to: st.lookup nameId: (nameIdOf :ast :name)
-    match (
-        to
-    ) case some then {
+    if to.some then {
         vt: typedefChaseTid :st tid: to
         if vt == (stdTidPeek :ast :st wk: zast.wellKnown.slot.tyStringView) then {
             return "; a StringView has no owned copy: '.string' makes an owned String (allocates)".string
@@ -46999,7 +46629,7 @@ keepSourceHint: function {st: zenv.ZSymbolTable.view ast: Ast.view name: StringV
         if cm.isZero.not or (st.reg.typetypeOf typeId: vt).isValueFamily then {
             return "; copy with '.copy' to keep the source".string
         }
-    } case none then null
+    }
     return "".string
 }
 
@@ -47291,11 +46921,9 @@ checkWriteLock: function {
 # does: `bool.or` is an operator by its native row, not by its spelling.
 isOperatorName: function {name: StringView} out bool is {
     b0: name.byteAt 0.u64
-    match (
-        b0
-    ) case some then {
+    if b0.some then {
         return ((b0 >= 97) and (b0 <= 122) or ((b0 >= 65) and (b0 <= 90)) or (b0 == 95)).not
-    } case none then null
+    }
     return false
 }
 
@@ -47905,11 +47533,9 @@ checkMissingCallArgs: function {
     recvImplicit: bool
 } is {
     mcb0: metaCreateBaseId :ast n: (ast.nodes.get i: call.callable)
-    match (
-        mcb0
-    ) case some then {
+    if mcb0.some then {
         return
-    } case none then null
+    }
     posCount: u64
     provided: ListVal zast.nameid
     kAiter: u64
@@ -48068,9 +47694,7 @@ lockBorrowedArgPath: function {
         rt: src.get i: 0
         if st.typing.pendingPins.length == 0 then {
             rvo: st.lookupVarId nameId: rt
-            match (
-                rvo
-            ) case some then {
+            if rvo.some then {
                 drainPendingBorrow :st
                 pinsPush :st path: src shared: true mutable: isViewArg.not
                 # the call's result keeps this pin: a path-shaped argument
@@ -48085,7 +47709,7 @@ lockBorrowedArgPath: function {
                         carried: false
                     )
                 }
-            } case none then null
+            }
         } else if calleePins then pinsFromPending :st :pins :isViewArg
     }
 }
@@ -48339,9 +47963,7 @@ hoistTrivialArg: function {
     byRef: isRecvArg or (st.reg.isReftypeOf tid: vt)
     if bnId.isZero.not when byRef or valByPointer then {
         bvo: st.lookupVarId nameId: bnId
-        match (
-            bvo
-        ) case some then {
+        if bvo.some then {
             if isTake then {
                 # the only leg that spells the name: the diagnostics it may
                 # raise are written from the text
@@ -48386,7 +48008,7 @@ hoistTrivialArg: function {
                     }
                 }
             }
-        } case none then null
+        }
     }
 }
 
@@ -49101,15 +48723,9 @@ functionSignaturesMatch: function {
     ar: methodReturnOf :st mid: a
     br: methodReturnOf :st mid: b
     if ar.none != br.none then return false
-    match (
-        ar
-    ) case some then {
-        match (
-            br
-        ) case some then {
-            return (paramTypesMatch :ast :st a: ar b: br)
-        } case none then null
-    } case none then null
+    if ar.some when br.some then {
+        return (paramTypesMatch :ast :st a: ar b: br)
+    }
     return true
 }
 
@@ -49348,16 +48964,12 @@ losslessConvTo: function {
     if nid9l.isZero then return false
     forceMemberOf :st :ast parentTypeId: from nameId: nid9l
     co9l: st.typing.declChildOfId parentTypeId: from nameId: nid9l
-    match (
-        co9l
-    ) case some then {
+    if co9l.some then {
         rt9l: methodReturnOf :st mid: co9l
-        match (
-            rt9l
-        ) case some then {
+        if rt9l.some then {
             return rt9l.u64 == to.u64
-        } case none then null
-    } case none then null
+        }
+    }
     return false
 }
 
@@ -49647,13 +49259,11 @@ argOwnershipOf: function {
     if funcId.isZero.not when pnId.isZero.not then {
         if (isAnyLiteralTid :st tid: vt) then {
             po: st.typing.declChildOfId parentTypeId: funcId nameId: pnId
-            match (
-                po
-            ) case some then {
-                # a generic parameter's type is the argument's own: inference
-                # already gave the literal its default
-                if (st.reg.typetypeOf typeId: po) != ztypes.ztypetype.genericParam then pt = po
-            } case none then null
+            # a generic parameter's type is the argument's own: inference
+            # already gave the literal its default
+            if po.some when (
+                (st.reg.typetypeOf typeId: po) != ztypes.ztypetype.genericParam
+            ) then pt = po
         }
         oo: (
             st.typing.declOwnershipOfId
@@ -49923,11 +49533,9 @@ ctorEffectiveTid: function {
     effId: funcId
     isMetaC: false
     mcbC: metaCreateBaseId :ast n: (ast.nodes.get i: call.callable)
-    match (
-        mcbC
-    ) case some then {
+    if mcbC.some then {
         isMetaC = true
-    } case none then null
+    }
     if isMetaC.not then {
         (
             forceMemberOf
@@ -50501,12 +50109,10 @@ consumeBoxedName: function {
     bvo8: st.lookupVarId nameId: (nameIdOf :ast :name)
     known: false
     vid8: ztypes.vid
-    match (
-        bvo8
-    ) case some then {
+    if bvo8.some then {
         known = true
         vid8 = bvo8
-    } case none then null
+    }
     if known.not then {
         st.invalidate nameId: (nameIdOf :ast :name) loc: takenHere
         return
@@ -50888,11 +50494,9 @@ unresolvedBareName: function {
     # walk leaves untyped is the instance walk's to check
     if (bodySelfTypeNameId :st :nameId) != nameId then return "".string
     ubv: st.lookupVarId :nameId
-    match (
-        ubv
-    ) case some then {
+    if ubv.some then {
         return "".string
-    } case none then null
+    }
     # lookupVarId reads two in-scope names as absent: a binding that minted no
     # varId (a `meta.create` result) and a MOVED one (both `lookup` and
     # `lookupVarId` refuse a taken local). A declared name is in scope however
@@ -50908,11 +50512,9 @@ unresolvedBareName: function {
     # out claims only its constants and parameters, as resolution does.
     if (nameDeclaredOutward :st from: st.curScope :nameId) then return "".string
     ubw: walkLookupTyperefById :st scope: st.curScope :ast :unitDecl baseId: nameId
-    match (
-        ubw
-    ) case some then {
+    if ubw.some then {
         return "".string
-    } case none then null
+    }
     return (zast.nameTextCopy :ast ref: nameId)
 }
 
@@ -51116,11 +50718,9 @@ yieldInputTidOf: function {
     pn: ast.nodes.get i: pmId
     if pn.namedoperation then {
         po: st.lookup nameId: pn.name
-        match (
-            po
-        ) case some then {
+        if po.some then {
             return po
-        } case none then null
+        }
     }
     return ztypes.tid
 }
@@ -51443,11 +51043,9 @@ recordReturnedOwnedLocal: function {
     if rbnId.isZero then return
     rvv: st.lookupVarId nameId: rbnId
     rvid: ztypes.vid
-    match (
-        rvv
-    ) case some then {
+    if rvv.some then {
         rvid = rvv
-    } case none then null
+    }
     if rvid.isZero then return
     returnOwnedLocal :st :ast nid: arg.operation vid: rvid tid: argT
 }
@@ -51707,12 +51305,10 @@ checkControlBuiltinCall: function {
 } out ztypes.tid is {
     result: ztypes.tid
     rtOpt: stdTidOpt :ast :st wk: zast.wellKnown.slot.wkReturn
-    match (
-        rtOpt
-    ) case some then {
+    if rtOpt.some then {
         calid: nodeId n: (ast.nodes.get i: call.callable)
         stampGate :st nid: calid tid: rtOpt
-    } case none then null
+    }
     st.typing.callKind.set key: call.nid value: zast.callkind.returnCall
     if (reportReturnLabelledArg :st :ast :call).not then {
         kAiter: u64
@@ -51724,13 +51320,11 @@ checkControlBuiltinCall: function {
         }
     }
     nvOpt: stdTidOpt :ast :st wk: zast.wellKnown.slot.tyNever
-    match (
-        nvOpt
-    ) case some then {
+    if nvOpt.some then {
         result = nvOpt
         setk: result
         stampGate :st nid: call.nid tid: setk
-    } case none then null
+    }
     return result
 }
 
@@ -51800,13 +51394,9 @@ lockMethodReceiver: function {
     recvShared: true
     if rroId.isZero.not then {
         rvo2: st.lookupVarId nameId: rroId
-        match (
-            rvo2
-        ) case some then {
+        if rvo2.some then {
             rvt2: st.lookup nameId: rroId
-            match (
-                rvt2
-            ) case some then {
+            if rvt2.some then {
                 recvShared = callReadsReceiver :st mid: dro nid: call.callable
                 (
                     lockCallArg
@@ -51820,8 +51410,8 @@ lockMethodReceiver: function {
                     lineno: call.lineno
                     colno: call.colno
                 )
-            } case none then null
-        } case none then null
+            }
+        }
     }
     if rroId.isZero then recvShared = lockNestedMethodReceiver :st :ast :call :dro
     return recvShared
@@ -51852,9 +51442,7 @@ lockNestedMethodReceiver: function {
     methodReceiverTuple :ast n: callableNode dst: rtupC
     if rtupC.length > 1 then {
         rvoN: st.lookupVarId nameId: (rtupC.get i: 0)
-        match (
-            rvoN
-        ) case some then {
+        if rvoN.some then {
             callableNode: ast.nodes.get i: call.callable
             rpidN: dottedParentNodeId :ast n: callableNode
             rvtN: walkTypeOf :st nid: rpidN
@@ -51874,7 +51462,7 @@ lockNestedMethodReceiver: function {
                     colno: call.colno
                 )
             }
-        } case none then null
+        }
     }
     return recvShared
 }
@@ -51893,11 +51481,9 @@ checkResolvedMethodCall: function {
 } out ztypes.tid is {
     tdcb: createDottedBaseId :ast n: (ast.nodes.get i: call.callable)
     tdcid: zast.nodeid
-    match (
-        tdcb
-    ) case some then {
+    if tdcb.some then {
         tdcid = tdcb
-    } case none then null
+    }
     # `T.create ...` from inside T's own create -- the explicit spelling
     # of the same recursion the bare-name leg refuses. The dotted base's
     # stamped type is the type being constructed, the same move the
@@ -51961,9 +51547,7 @@ checkResolvedMethodCall: function {
     st.popTo marker: mcm
     mres: ztypes.tid
     mro: methodReturnOf :st mid: dro
-    match (
-        mro
-    ) case some then {
+    if mro.some then {
         # a self-type return reached on an instance is the instance, as the
         # dotted auto-call answers it
         recvTid: (
@@ -51974,7 +51558,7 @@ checkResolvedMethodCall: function {
         mres = selfReturnOnInstance :st :recvTid ret: mro
         setmr: mres
         stampGate :st nid: call.nid tid: setmr
-    } case none then null
+    }
     # A BARE-LITERAL LEFT OPERAND KEEPS ITS COERCIBLE LITERAL RESULT. `(0 - 24)`
     # at an i32 destination still narrows, exactly as it does written any other
     # way, because the operation answers with the literal type rather than the
@@ -52019,11 +51603,9 @@ checkResolvedMethodCall: function {
     if mres.isZero then {
         cdb: createDottedBaseId :ast n: (ast.nodes.get i: call.callable)
         cdbid: zast.nodeid
-        match (
-            cdb
-        ) case some then {
+        if cdb.some then {
             cdbid = cdb
-        } case none then null
+        }
         if cdbid.isZero.not then {
             btid: walkTypeOf :st nid: cdbid
             if btid.isZero.not then {
@@ -52601,9 +52183,7 @@ movePayloadIntoArm: function {
     bn: zast.atomNameIdOf n: (ast.nodes.get i: op)
     if bn.isZero.not then {
         bvo: st.lookupVarId nameId: bn
-        match (
-            bvo
-        ) case some then {
+        if bvo.some then {
             bnT: zast.nameTextAt :ast ref: bn
             (
                 consumeBareArgOwnership
@@ -52619,7 +52199,7 @@ movePayloadIntoArm: function {
                 :colno
             )
             stampArgDisposition :st :ast :op own: ztypes.zparamownership.takeMode
-        } case none then null
+        }
     } else {
         tkv: takenLocalVar :st :ast nid: op
         if tkv.isZero.not then carryHeldLocks :st from: tkv pins: carry
@@ -53219,12 +52799,10 @@ refuseCrossingParamArg: function {
 } is {
     if fieldCtor or pnId.isZero or st.typing.threadUnitRoot.isZero then return
     po: st.typing.declChildOfId parentTypeId: funcId nameId: pnId
-    match (
-        po
-    ) case some then {
+    if po.some then {
         pro: crossingProtocolOf :st :ast :funcId ptid: po
         if pro.isZero.not then refuseCrossingArg :st :ast :arg at: vt :pro :funcId
-    } case none then null
+    }
 }
 
 # threadBoundResultError -- the refusal of a crossing argument `arg` whose task
@@ -54038,9 +53616,7 @@ checkTypeConstruction: function {
     {
         forceMemberOf :st :ast parentTypeId: funcId nameId: zast.wellKnown.slot.wkCreate
         wco: st.typing.declChildOfId parentTypeId: funcId nameId: zast.wellKnown.slot.wkCreate
-        match (
-            wco
-        ) case some then {
+        if wco.some then {
             wct: wco
             isFn: (st.reg.typetypeOf typeId: wct) == ztypes.ztypetype.functionType
             if isFn when (
@@ -54051,7 +53627,7 @@ checkTypeConstruction: function {
                 walkFn = wct
                 walkAsCtor = false
             }
-        } case none then null
+        }
     }
     cm: st.pushCall node: call.nid
     pins: (
@@ -54324,11 +53900,9 @@ wrappedCalleeIsContainer: function {ast: Ast st: zenv.ZSymbolTable wcv: ztypes.t
 # what it yields is a value the outer arguments cannot construct.
 wrappedCalleeIsCallResult: function {st: zenv.ZSymbolTable.view call: callref} out bool is {
     ck: st.typing.callKind.get key: call.callable
-    match (
-        ck
-    ) case some then {
+    if ck.some then {
         return ck == zast.callkind.regular
-    } case none then null
+    }
     return false
 }
 
@@ -54501,30 +54075,22 @@ bareCalleeTid: function {
         # A local variable of FUNCTION type (a spec-typed param or a
         # function reference) is callable; locals shadow unit names.
         lvo: st.lookup nameId: cnId
-        match (
-            lvo
-        ) case some then {
-            if (st.reg.typetypeOf typeId: lvo) == ztypes.ztypetype.functionType then {
-                funcId = lvo
-                st.typing.callKind.set key: call.nid value: zast.callkind.callable
-                # callee-use variable id: calling through a fn-typed
-                # variable reads it, so it stamps like a value atom
-                cvo: st.lookupVarId nameId: cnId
-                match (
-                    cvo
-                ) case some then {
-                    setcv: cvo
-                    st.typing.setAtomVariable nid: call.callable vid: setcv
-                } case none then null
+        if lvo.some when (st.reg.typetypeOf typeId: lvo) == ztypes.ztypetype.functionType then {
+            funcId = lvo
+            st.typing.callKind.set key: call.nid value: zast.callkind.callable
+            # callee-use variable id: calling through a fn-typed
+            # variable reads it, so it stamps like a value atom
+            cvo: st.lookupVarId nameId: cnId
+            if cvo.some then {
+                setcv: cvo
+                st.typing.setAtomVariable nid: call.callable vid: setcv
             }
-        } case none then null
+        }
         if funcId.isZero then {
             fo: walkLookupTyperefById :st scope: st.curScope :ast :unitDecl baseId: cnId
-            match (
-                fo
-            ) case some then {
+            if fo.some then {
                 funcId = fo
-            } case none then null
+            }
         }
     }
     return funcId
@@ -54819,11 +54385,9 @@ checkSpecialFormCall: function {
     ) then return (callleg handled: true tid: ztypes.tid.zero)
     mcb: metaCreateBaseId :ast n: (ast.nodes.get i: call.callable)
     mcid: zast.nodeid
-    match (
-        mcb
-    ) case some then {
+    if mcb.some then {
         mcid = mcb
-    } case none then null
+    }
     if mcid.isZero.not when st.typing.currentThisTid.isZero.not then {
         mcres: checkMetaCreateCall :st :unitDecl :ast :call :mcid
         if mcres.isZero.not then return (callleg handled: true tid: mcres)
@@ -54950,13 +54514,11 @@ checkRegularCall: function {
     if bleg.handled then return bleg.tid
     result: ztypes.tid
     dro: callableDottedResultAt :st :unitDecl :ast nid: call.callable
-    match (
-        dro
-    ) case some then {
+    if dro.some then {
         dleg: checkDottedCallableCall :st :unitDecl :ast :call :dro
         if dleg.handled then return dleg.tid
         result = dleg.tid
-    } case none then null
+    }
     ck: bareCalleeKind :st :unitDecl :ast :call :cnId
     if ck.unknown then return result
     # the name resolved to a type it does not NAME, so it names a VALUE of that
@@ -55136,12 +54698,10 @@ healGenericReturn: function {
         rto: ztypes.tid
         {
             rns: st.typing.funcReturnNode.get key: funcId
-            match (
-                rns
-            ) case some then {
+            if rns.some then {
                 rst: ztyping.nodeTypeAt tbl: st.typing.nodeType nid: rns
                 if rst.isZero.not then rto = rst
-            } case none then null
+            }
         }
         if rto.isZero then {
             tro: st.reg.returnTypeOf tid: funcId
@@ -55310,12 +54870,10 @@ bindExplicitTypeArg: function {
         :unitDecl
         base: tn3.stringView
     )
-    match (
-        to3
-    ) case some then {
+    if to3.some then {
         sv: monoSubstTid :st tid: to3
         subs.set key: arg.name value: sv
-    } case none then null
+    }
 }
 
 # argHolderSlot -- the declared parameter an argument binds: a LABEL names one,
@@ -55906,16 +55464,12 @@ substituteGenericReturn: function {
     subs: (IdMapV zast.nameid v: ztypes.tid).view
 } is {
     rno: st.typing.funcReturnNode.get key: funcId
-    match (
-        rno
-    ) case some then {
+    if rno.some then {
         rk2: zast.nameid
         rko: st.typing.pendingTyperef.get key: rno
-        match (
-            rko
-        ) case some then {
+        if rko.some then {
             rk2 = rko
-        } case none then null
+        }
         if rk2.isZero.not then {
             rgot2: subs.get key: rk2
             match (
@@ -55929,7 +55483,7 @@ substituteGenericReturn: function {
                 if ownR.isZero.not then st.reg.setReturnType typeId: mid value: ownR
             }
         }
-    } case none then null
+    }
 }
 
 # genericCallHolders -- the template's value parameters whose declared types name a
@@ -57303,11 +56857,9 @@ checkCaseArms: function {
     }
     neverId: ztypes.tid
     nvOpt: stdTidOpt :ast :st wk: zast.wellKnown.slot.tyNever
-    match (
-        nvOpt
-    ) case some then {
+    if nvOpt.some then {
         neverId = nvOpt
-    } case none then null
+    }
     nullId: stdTid :ast :st wk: zast.wellKnown.slot.tyNull
     anyEmpty: false
     armEnds: st.openArmNarrowingEnds
@@ -57413,9 +56965,7 @@ rejectGenericValueMatch: function {
     # rejected rather than silently taking the else path.
     gvid: nodeId n: (ast.nodes.get i: casenode.subject)
     gvav: st.typing.atomVariableId.get key: gvid
-    match (
-        gvav
-    ) case some then {
+    if gvav.some then {
         gvav.drop
         gsub0: ast.nodes.get i: casenode.subject
         gtn0: specWrittenName :st :ast tid: subjT
@@ -57435,7 +56985,7 @@ rejectGenericValueMatch: function {
             width: 0
         )
         return true
-    } case none then null
+    }
     return false
 }
 
@@ -57850,12 +57400,10 @@ unitParamSubjectTid: function {
     nameId: zast.atomNameIdOf n: (ast.nodes.get i: casenode.subject)
     if nameId.isZero then return ztypes.tid
     ro: walkLookupTyperefById :st scope: st.curScope :ast :unitDecl baseId: nameId
-    match (
-        ro
-    ) case some then {
+    if ro.some then {
         rt: ro
         if (st.reg.isTypeParamOf tid: rt) then return rt
-    } case none then null
+    }
     return ztypes.tid
 }
 
@@ -58655,12 +58203,10 @@ checkLabelValueAt: function {
         }
         stampGate :st nid: lv.nid tid: lvt
         lvv: st.lookupVarId nameId: lv.name
-        match (
-            lvv
-        ) case some then {
+        if lvv.some then {
             setlvv: lvv
             st.typing.setAtomVariable nid: lv.nid vid: setlvv
-        } case none then null
+        }
         return lvt
     } case none then {
         # the local whose statement is being checked, which lookup answers
@@ -58735,11 +58281,9 @@ walkTypeOf: function {st: zenv.ZSymbolTable.view nid: zast.nodeid} out ztypes.ti
     }
     if st.typing.suppressParamStamps then {
         ts: st.templateStamps.get key: nid
-        match (
-            ts
-        ) case some then {
+        if ts.some then {
             return ts
-        } case none then null
+        }
     }
     return (ztyping.nodeTypeAt tbl: st.typing.nodeType :nid)
 }
@@ -60196,8 +59740,6 @@ bindFunctionParam: function {
     isGenDef: bool
     fnTid: ztypes.tid
 } is {
-    rgot: optionval.none ztypes.tid
-    if fnTid.isZero.not then rgot = optionval.some fnTid
     # every value form a parameter may be declared by, an `if` or a `match`
     # included, keys the parameter's variable
     pnid: zast.nodeIdOf n: (ast.nodes.get i: pm.operation)
@@ -60206,33 +59748,17 @@ bindFunctionParam: function {
         # per-mono instance walk: the mono FUNCTION child
         # carries the substituted param type
         mpo: st.typing.declChildOfId parentTypeId: st.typing.curMonoFnTid nameId: pm.name
-        match (
-            mpo
-        ) case some then {
+        if mpo.some then {
             ptid = mpo
-        } case none then null
+        }
     }
-    if ptid.isZero when isGenDef then {
-        # a template's own bare param carries no stamp; bind
-        # the canonical param tid from the FUNCTION child so
-        # the walk types it (stampGate suppresses the stamp)
-        fgo3: rgot
-        match (
-            fgo3
-        ) case some then {
-            fco3: (
-                st.typing.declChildOfId
-                parentTypeId: fgo3
-                nameId: pm.name
-            )
-            match (
-                fco3
-            ) case some then {
-                if (st.reg.typetypeOf typeId: fco3) == ztypes.ztypetype.genericParam then {
-                    ptid = fco3
-                }
-            } case none then null
-        } case none then null
+    # a template's own bare param carries no stamp; bind the canonical param tid
+    # from the FUNCTION child so the walk types it (stampGate suppresses the stamp)
+    if ptid.isZero when isGenDef when fnTid.isZero.not then {
+        fco3: st.typing.declChildOfId parentTypeId: fnTid nameId: pm.name
+        if fco3.some when (st.reg.typetypeOf typeId: fco3) == ztypes.ztypetype.genericParam then {
+            ptid = fco3
+        }
     }
     fpt: foldedParamTid :st :ast :fnTid :pm
     if fpt.isZero.not then ptid = fpt
@@ -60282,21 +59808,17 @@ bindFunctionParam: function {
             :unitDecl
             base: thisName
         )
-        match (
-            thOpt
-        ) case some then {
+        if thOpt.some then {
             ptid = thOpt
-        } case none then null
+        }
     }
     pown: pathOwnership :ast n: (ast.nodes.get i: pm.operation)
     hasOwn: false
     ownMode: ztypes.zparamownership.borrowMode
-    match (
-        pown
-    ) case some then {
+    if pown.some then {
         hasOwn = true
         ownMode = pown
-    } case none then null
+    }
     checkReceiverOwnership :st :ast :pm :pnid :hasOwn :ownMode
     own: ownershipOfParam o: (
         pathOwnership
@@ -60304,12 +59826,10 @@ bindFunctionParam: function {
         n: (ast.nodes.get i: pm.operation)
     )
     isRoP: false
-    match (
-        pown
-    ) case some then {
+    if pown.some then {
         if pown == ztypes.zparamownership.viewMode then isRoP = true
         if pown == ztypes.zparamownership.holdMode then isRoP = true
-    } case none then null
+    }
     vid2: (
         st.reg.newVariable
         ztypeId: ptid
@@ -60668,17 +60188,10 @@ checkFunctionBodyIn: function {
     # the function's own tid, off the Decl the caller passed; a defName is
     # display only (a mono walk's owner is a registry label such as
     # `mathops_i64`, never an interned name).
-    rgot: optionval.none ztypes.tid
-    if fnTid.isZero.not then rgot = optionval.some fnTid
-    match (
-        rgot
-    ) case some then {
-        isgeneric9v: st.reg.isGenericOf tid: rgot
-        if isgeneric9v then isGenDef = true
-    } case none then null
+    if fnTid.isZero.not when (st.reg.isGenericOf tid: fnTid) then isGenDef = true
     if hasBody then {
-        # A generic template body is checked ONCE, for diagnostics; the
-        # emitter re-walks the shared AST per instance, so
+        # A generic template body is checked ONCE, for diagnostics; each
+        # instance walks its own clone of the body (instanceBodyAt), so
         # GENERIC_PARAM-valued stamps are suppressed for the walk (and
         # its scopes/entries stay out of the dump log).
         prevSup: st.typing.suppressParamStamps
@@ -60710,7 +60223,7 @@ checkFunctionBodyIn: function {
         prevFn: st.typing.currentFnTid
         st.typing.currentFnTid = fnTid
         prevRet: st.typing.currentReturnTypeId
-        fitid: rgot.or d: ztypes.tid.zero
+        fitid: fnTid
         crt: ztypes.tid
         if fitid.isZero.not then crt = (
             (
@@ -61462,15 +60975,13 @@ bindMonoParams: function {
         if av.isZero.not then {
             pnm: pn.get i: pj
             pto: st.reg.genericParamTidOf :tdecl paramName: pnm
-            match (
-                pto
-            ) case some then {
+            if pto.some then {
                 (
                     st.typing.monoParamSubst.set
                     key: pto
                     value: av
                 )
-            } case none then null
+            }
         }
         pj = pj + 1
     }
@@ -62197,11 +61708,9 @@ instanceBodyAt: function {
 } out zast.nodeid is {
     k: ztyping.monostamp :mono node: opId
     have: st.typing.instanceBody.get key: k
-    match (
-        have
-    ) case some then {
+    if have.some then {
         return have
-    } case none then null
+    }
     bodyId: zast.nodeid
     {
         fv: ast.nodes.get i: opId
@@ -62352,14 +61861,12 @@ instanceNote: function {st: zenv.ZSymbolTable.view ast: Ast.view mono: ztypes.ti
         i = i + 1
     }
     so: st.typing.monoSite.get key: mono
-    match (
-        so
-    ) case some then {
+    if so.some then {
         uname: (st.typing.decls.get i: so.unitDecl).name
         un: zast.nameTextAt :ast ref: uname
         at: ", instantiated at \{un}.z line \{so.lineno}"
         r.append at
-    } case none then null
+    }
     return r
 }
 
@@ -62374,14 +61881,12 @@ instanceArgText: function {
     cd: ztypes.constraintdesc
 } out String is {
     vg: st.reg.genericValueArgAt specId: mono :ordinal
-    match (
-        vg
-    ) case some then {
+    if vg.some then {
         if cd.numKind.has when (ztypes.isSignedIntKind k: cd.numKind.kind) when (
             vg > 9223372036854775807
         ) then return "-\{ztypes.absI64 v: (ztypes.bitsI64 b: vg)}"
         return "\{vg}"
-    } case none then null
+    }
     at: st.reg.genericTypeArgAt specId: mono :ordinal
     if at.isZero then return "".string
     return (st.reg.nameOf tid: at)
@@ -62966,11 +62471,9 @@ constantAtomType: function {
             result = numericBoundTid :ast :st :scope cd: cdN
         } else {
             ro: walkLookupTyperef :st :scope :ast :unitDecl base: trN.stringView
-            match (
-                ro
-            ) case some then {
+            if ro.some then {
                 result = ro
-            } case none then null
+            }
         }
     }
     if result.isZero.not then {
@@ -63060,9 +62563,7 @@ constantCompareType: function {
     }
     bres: ztypes.tid
     bo: stdTidOpt :ast :st wk: zast.wellKnown.slot.wkBool
-    match (
-        bo
-    ) case some then {
+    if bo.some then {
         bres = bo
         (
             ztyping.nodeTypeSet
@@ -63070,7 +62571,7 @@ constantCompareType: function {
             :nid
             tid: bres
         )
-    } case none then null
+    }
     return bres
 }
 
@@ -64223,11 +63724,9 @@ constTypedShift: function {
     signed: ztypes.isSignedIntKind :k
     if lv.bigId == 0 when rv.bigId == 0 when bits <= 64 then {
         sh: constShiftInt :op a: lv.ival b: rv.ival :bits :signed
-        match (
-            sh
-        ) case some then {
+        if sh.some then {
             return (ztypes.typedConst c: ztypes.makeIntConst sh :numTid)
-        } case none then null
+        }
     }
     a: constBigOf :st v: lv
     past: (rv.bigId != 0) or (rv.ival < 0) or (rv.ival >= bits.i64.orPanic)
@@ -64267,11 +63766,9 @@ constIntNot: function {st: zenv.ZSymbolTable v: ztypes.cval} out ztypes.cval is 
     signed: ztypes.isSignedIntKind k: k.kind
     if v.bigId == 0 when bits <= 64 then {
         w: wrapToWidth v: v.ival.not :bits :signed
-        match (
-            w
-        ) case some then {
+        if w.some then {
             return (ztypes.typedConst c: ztypes.makeIntConst w numTid: v.numTid)
-        } case none then null
+        }
     }
     r: wrapBig b: (constBigOf :st :v).not :bits :signed
     return (ztypes.typedConst c: (constOfBig :st b: r) numTid: v.numTid)
@@ -65263,11 +64760,7 @@ constValueOfMemberTidId: function {
     }
     k: st.typing.memberConstKey parentTypeId: readTid nameId: nid
     sg: st.typing.constEvalState.get key: k
-    match (
-        sg
-    ) case some then {
-        if sg == 2 then return (st.typing.memberConstOf parentTypeId: readTid nameId: nid)
-    } case none then null
+    if sg.some when sg == 2 then return (st.typing.memberConstOf parentTypeId: readTid nameId: nid)
     # not folded yet -- READING a constant is what folds it, so descend into
     # the owner's declaration and fold there, then read back. Without this a
     # constant that names another unit's constant sees a memo that nothing
@@ -65459,11 +64952,9 @@ constValueOfMemberAt: function {
     # its initializer
     evalState: u64
     sg: st.typing.constEvalState.get key: k
-    match (
-        sg
-    ) case some then {
+    if sg.some then {
         evalState = sg
-    } case none then null
+    }
     if evalState == 2 then return (st.typing.memberConstOf parentTypeId: utid nameId: nid)
     dnid: defNodeId
     if dnid.isZero then return ztypes.noConst
@@ -65765,12 +65256,10 @@ staticListMemberValue: function {
     g: st.typing.constAggs.get i: row.u64
     folds: staticListElemFolds :ast :st elemTid: g.elem
     lp: st.typing.aggLabelPos id: row label: nameId
-    match (
-        lp
-    ) case some then {
+    if lp.some then {
         if folds.not then return ztypes.noConst
         return (st.typing.constAggItems.get i: g.itemStart.u64 + lp)
-    } case none then null
+    }
     if nameId == zast.wellKnown.slot.wkLength then return (ztypes.makeIntConst g.itemCount)
     pos: (zast.nameTextAt :ast ref: nameId).stringView.parseU64
     match (
@@ -66910,12 +66399,10 @@ constTextIndex: function {
     if op == textfold.lastIndexOf then at = sv.lastIndexOf needle: arg
     if op == textfold.splitOnce then at = sv.splitOnce sep: arg
     u64t: stdTid :ast :st wk: zast.wellKnown.slot.tyU64
-    match (
-        at
-    ) case some then {
+    if at.some then {
         n: ztypes.typedConst c: ztypes.makeIntConst at.i64.orPanic numTid: u64t
         return (constOptionSome :st :ast item: n)
-    } case none then null
+    }
     return (constOptionNone :st :ast elem: u64t)
 }
 
@@ -66924,12 +66411,10 @@ constTextIndex: function {
 constByteAt: function {st: zenv.ZSymbolTable ast: Ast sv: StringView i: u64} out ztypes.cval is {
     u8t: stdTid :ast :st wk: zast.wellKnown.slot.tyU8
     b: sv.byteAt :i
-    match (
-        b
-    ) case some then {
+    if b.some then {
         n: ztypes.typedConst c: ztypes.makeIntConst b numTid: u8t
         return (constOptionSome :st :ast item: n)
-    } case none then null
+    }
     return (constOptionNone :st :ast elem: u8t)
 }
 
@@ -66942,12 +66427,10 @@ constTextPiece: function {
     txT: stdTid :ast :st wk: zast.wellKnown.slot.tyText
     rest: sv.stripPrefix p: arg
     if op == textfold.stripSuffix then rest = sv.stripSuffix s: arg
-    match (
-        rest
-    ) case some then {
+    if rest.some then {
         c: ztypes.makeStrConst (constInternString :st text: rest)
         return (constOptionSome :st :ast item: (ztypes.typedConst :c numTid: txT))
-    } case none then null
+    }
     return (constOptionNone :st :ast elem: txT)
 }
 
@@ -68311,11 +67794,9 @@ constAggField: function {
 # rather than asking again.
 dataFieldsOf: function {st: zenv.ZSymbolTable ast: Ast tid: ztypes.tid} out ztyping.fieldspan is {
     known: st.typing.fieldSpans.get key: tid
-    match (
-        known
-    ) case some then {
+    if known.some then {
         return known
-    } case none then null
+    }
     forceAllMembers :st :ast :tid
     ftids: ListVal ztypes.tid
     fnames: ListVal zast.nameid
@@ -68850,15 +68331,13 @@ constOfNamedBase: function {
                 :unitDecl
                 name: ptId
             )
-            match (
-                nso
-            ) case some then {
+            if nso.some then {
                 nst: nso
                 if (st.reg.typetypeOf typeId: nst) == ztypes.ztypetype.unitType then {
                     nsv: constValueOfMemberTidId :st :ast unitTid: nst nameId: ncId
                     if nsv.kind.none.not then return nsv
                 }
-            } case none then null
+            }
         }
         # A nested unit of the SCOPE being evaluated: not in the unit-name
         # index either, and it resolves on demand, so it may have no id at
@@ -69121,15 +68600,13 @@ constStaticListSlotRead: function {
         return ztypes.noConst
     }
     po: st.typing.aggLabelPos id: lv.aggId label: labelId
-    match (
-        po
-    ) case some then {
+    if po.some then {
         cv: ztypes.makeIntConst po.i64.orPanic
         if (isLiteralTypeId :st tid: g.slot).not when (isNumericTid :st tid: g.slot) then {
             cv = ztypes.typedConst c: cv numTid: g.slot
         }
         return cv
-    } case none then null
+    }
     return ztypes.noConst
 }
 
@@ -69865,12 +69342,10 @@ resolveDottedConstantDef: function {
                 )
                 if pdc.isZero.not then {
                     pdt: declDefTypetype :st :ast declId: pdc
-                    match (
-                        pdt
-                    ) case some then {
+                    if pdt.some then {
                         ptt = pdt
                         known = true
-                    } case none then null
+                    }
                 }
             }
             if known.not then {
@@ -69882,12 +69357,10 @@ resolveDottedConstantDef: function {
                     :unitDecl
                     base: sfLit
                 )
-                match (
-                    pTo
-                ) case some then {
+                if pTo.some then {
                     ptt = st.reg.typetypeOf typeId: pTo
                     known = true
-                } case none then null
+                }
             }
             # a member the type does not declare is no construction: the read
             # names nothing, and says so
@@ -72024,11 +71497,9 @@ declOfTypeId: function {st: zenv.ZSymbolTable.view tid: ztypes.tid} out ztypes.d
         zo: st.reg.typeById.get i: cur
         if zo.def.isZero.not then return zo.def
         go: zo.genericOriginId
-        match (
-            go
-        ) case some then {
+        if go.some then {
             next = go
-        } case none then null
+        }
         cur = next
     }
     return ztypes.declid.zero
@@ -72834,11 +72305,9 @@ declProbeUnitChildRoot: function {
         rt: declTypeIdOf :st declId: unitRoot
         if rt.isZero.not then {
             co: st.typing.declChildOfId parentTypeId: rt :nameId
-            match (
-                co
-            ) case some then {
+            if co.some then {
                 return co
-            } case none then null
+            }
         }
     }
     return ztypes.tid.zero
@@ -72867,11 +72336,9 @@ probeScopeTyperef: function {
     rt: declTypeIdOf :st declId: root
     if rt.isZero then return ztypes.tid.zero
     co: st.typing.declChildOfId parentTypeId: rt :nameId
-    match (
-        co
-    ) case some then {
+    if co.some then {
         return co
-    } case none then null
+    }
     return ztypes.tid.zero
 }
 
@@ -72936,11 +72403,9 @@ probeScopeTyperefRo: function {
     rt: declTypeIdOf :st declId: root
     if rt.isZero then return ztypes.tid.zero
     co: st.typing.declChildOfId parentTypeId: rt :nameId
-    match (
-        co
-    ) case some then {
+    if co.some then {
         return co
-    } case none then null
+    }
     return ztypes.tid.zero
 }
 
@@ -73050,9 +72515,7 @@ resolvedByIds: function {
     h: unitChildHit :st :ast :unitDecl :name
     if h.viaReexport then {
         tgo: h.tid
-        match (
-            tgo
-        ) case some then {
+        if tgo.some then {
             uro: declTypeIdOf :st declId: unitDecl
             if uro.isZero.not when name.isZero.not then (
                 st.typing.setMemberType
@@ -73060,7 +72523,7 @@ resolvedByIds: function {
                 nameId: name
                 childTypeId: tgo
             )
-        } case none then null
+        }
     }
     return h.tid
 }
@@ -73087,11 +72550,9 @@ unitChildHit: function {
 } out unitchildhit is {
     none: unitchildhit tid: optionval.none ztypes.tid viaReexport: false
     wo: childOfWalkIds :st :unitDecl :name
-    match (
-        wo
-    ) case some then {
+    if wo.some then {
         return (unitchildhit tid: optionval.some wo viaReexport: false)
-    } case none then null
+    }
     alDecl: declOfUnitDefIds :st :unitDecl nameId: name
     # a definition the unit's `public:` block makes: on the unit's surface,
     # so `unit.name` reaches it, but NOT laid on the unit's member index --
@@ -73114,11 +72575,9 @@ unitChildHit: function {
             unitDecl: (unitDeclOfName :st nameId: alTgt.unitName)
             name: alTgt.defName
         )
-        match (
-            tgo
-        ) case some then {
+        if tgo.some then {
             return (unitchildhit tid: optionval.some tgo viaReexport: true)
-        } case none then null
+        }
     }
     return none
 }
@@ -73134,15 +72593,13 @@ resolvedByIdsMember: function {
     memberId: zast.nameid
 } out optionval ztypes.tid is {
     decl: resolvedByIds :st :ast :unitDecl name: defId
-    match (
-        decl
-    ) case some then {
+    if decl.some then {
         return (
             st.typing.declChildOfId
             parentTypeId: decl
             nameId: memberId
         )
-    } case none then null
+    }
     return (optionval.none ztypes.tid)
 }
 
@@ -73159,11 +72616,9 @@ resolveUnitChild: function {
     ro: declTypeIdOf :st declId: unitDecl
     if ro.isZero.not then {
         co: st.typing.declChildOfId parentTypeId: ro :nameId
-        match (
-            co
-        ) case some then {
+        if co.some then {
             return (optionval.some co)
-        } case none then null
+        }
     }
     # miss: the alias follow lays the unit->alias edge, so the next probe
     # resolves through childOf above
@@ -73282,11 +72737,9 @@ canonShellTid: function {
 } out ztypes.tid is {
     if tid.isZero then return ztypes.tid.zero
     co: cache.get key: tid
-    match (
-        co
-    ) case some then {
+    if co.some then {
         return co
-    } case none then null
+    }
     res: ztypes.tid
     ok: (st.reg.typetypeOf typeId: tid) != ztypes.ztypetype.genericParam
     # a registered mono is inherently canonical (its name resolves back to
@@ -73500,11 +72953,9 @@ shellResolveByName: function {
         unitDecl: fromUnit
         nameId: nameId99
     )
-    match (
-        r1
-    ) case some then {
+    if r1.some then {
         return r1
-    } case none then null
+    }
     nameId910: zast.poolFind pool: ast.names text: name
     r2: (
         resolveUnitChild
@@ -73513,17 +72964,13 @@ shellResolveByName: function {
         unitDecl: st.typing.systemUnitRoot
         nameId: nameId910
     )
-    match (
-        r2
-    ) case some then {
+    if r2.some then {
         return r2
-    } case none then null
+    }
     r3: walkLookupTyperef :st :scope :ast unitDecl: fromUnit base: name
-    match (
-        r3
-    ) case some then {
+    if r3.some then {
         return r3
-    } case none then null
+    }
     return ztypes.tid.zero
 }
 
