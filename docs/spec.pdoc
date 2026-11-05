@@ -168,7 +168,9 @@ Exceptions and special cases:
 #----: Predefined Identifiers
 
 Predefined identifiers have a value established by the compiler but are not
-keywords. They can be redefined locally.
+keywords. They can be redefined locally: a declaration of the name is the
+nearest one wherever it is in scope, and the predefined one is reached through
+its unit (#~"system.u64"; see [#> to=names-and-scope: Names and scope]).
 
 All numeric identifiers ([#> to=integer-identifiers: integer] or [#>
 to=floating-point-identifiers: floating point]) are predefined. All numeric
@@ -518,9 +520,12 @@ Labels are case sensitive.
 
 A shortened syntax is available where the definition refers to an item in scope
 that has the same name -- a single colon #_*"precedes" the identifier. For
-example: #~":id" is (somewhat) equivalent to #~"id: id". The lookup of the value
-specifically excludes mapping to itself but otherwise searches the current
-environment hierachically as usual.
+example: #~":id" is #~"id: id" with the value #~"id" read from #_*"outside" the
+declaration it makes: the lookup of the value excludes the declaration itself
+but otherwise searches the enclosing scopes as usual. Written out, #~"id: id"
+names the declaration itself, which is refused (see
+[#> to=names-and-scope: Names and scope]). The shorthand is one identifier:
+#~":id" and no path or marker after it.
 
 The colon must immediately precede the identifier without intervening
 whitespace.
@@ -843,15 +848,15 @@ leading colon can be used to represent both the key and the value.
 
   # then:
   myfunc :arg
-
-  # is equivalent to:
-  myfunc :arg
   """
+
+The call is #~"myfunc arg: arg" written short (#~"zl fmt" writes it so).
 
 Each item in the block body ends with the beginning of the next item (the next
 key) or by a delimiter or a newline or EOF.
 
-Blocks of code also define a unit of scope.
+Blocks of code also define a unit of scope (see
+[#> to=names-and-scope: Names and scope]).
 
 The 'value' depends on context but is one of:
 
@@ -883,6 +888,143 @@ the key for the first argument is optional (see #>"call-arguments" and
 For data literals, the optional key names the element. An integer key is a
 name like any other: it does not place the element at that index.
 
+
+#---: Names and scope
+
+One rule finds what a name means, at every level: a use finds the
+#_*"nearest" declaration of the name. Where the declarations are and when they
+are available follows two models.
+
+#ul:
+  [#*: #_*"Definitions" -- at unit level and in a type -- are declarations
+    only, written in any order: each is in scope throughout the scope that
+    declares it, its own declaration included, which is what lets a function
+    call itself and a type refer to one declared after it. A cycle among them
+    is an error: a constant that reaches itself is defined in terms of itself
+    (E0600).]
+  [#*: #_*"Code" -- a function's body -- runs top to bottom, and its scope is
+    built the same way: a local is in scope from the statement that declares
+    it to the end of its block, and before that statement the name means what
+    it meant already.]
+
+The scopes nest:
+
+#ul:
+  [#*: the unit;]
+  [#*: a type: its #~"is" and #~"as" items, and the signatures and bodies of
+    its methods;]
+  [#*: a function: its #~"as" generics and its parameters, which its
+    signature sees as well as its body;]
+  [#*: the function's body, and each block nested in it -- an #~"if" or
+    #~"match" arm, a loop's header and its body, a #~"with" body, a bare
+    block.]
+
+A use finds the #_*"nearest" scope that declares the name, in every position:
+a value, a type, a type argument, a field's or a parameter's type or default,
+an #~"out". No position skips a declaration because of what kind it is. What
+the use finds must suit the position; otherwise it is refused, saying what it
+found -- a parameter, a local, a field, a method, an arm, a constant of the
+type or the function that declares it:
+
+#code language=zerolang expect=E0100: """
+  # error: 'u8' is a parameter of 'f', not a type
+  f: function {u8: i64 m: u8} out i64 is { return m }
+
+  main: function is {
+      print "\{f u8: 1 m: 2}"
+  }
+  """
+
+An outer declaration of a name a nearer scope declares is reached through the
+unit that declares it: #~"system.u8", #~"zast.nodeid", or a unit's own name
+for its own members.
+
+#code language=zerolang: """
+  f: function {u8: i64 m: system.u8} out system.u8 is { return m }
+
+  main: function is {
+      print "\{f u8: 1 m: 2}"
+  }
+  """
+
+A type's members are in scope in its methods' bodies, nearer than anything
+outside the type: a bare static or constant there is the type's own. A field
+or an arm is an instance's, read through a value of the type.
+
+#code language=zerolang: """
+  Cfg: record { v: i64 } as {
+      K: 5
+      helper: function {n: i64} out i64 is { return n + 1 }
+      use: function {c: this.view} out i64 is { return (helper n: c.v) + K }
+  }
+
+  main: function is {
+      c: Cfg v: 3
+      print "\{c.use}"
+  }
+  """
+
+#b:"A local while its statement runs." A local holds nothing until its
+statement is done: while its value -- or a loop's or a #~"with"'s binding
+expression -- is checked, a use of the name finds the local and is refused
+(E0103), whatever an outer scope declares by that name:
+
+#code language=zerolang expect=E0103: """
+  main: function is {
+      n: 4
+      if n > 0 then {
+          # error: 'n' is used before it is initialised -- the arm's own n
+          n: n + 1
+          print "\{n}"
+      }
+  }
+  """
+
+Before its statement, the name is still the outer one:
+
+#code language=zerolang: """
+  y: 7
+
+  main: function is {
+      print "\{y}"         # the unit's y: 7
+      y: 5
+      print "\{y}"         # the local: 5
+  }
+  """
+
+A nested block's local ends with its block, so the enclosing block may declare
+the name after it; a loop's, a #~"with"'s and a match arm's bindings are their
+own. A parameter is available throughout the body.
+
+#b:"A declaration names itself."
+Because a declaration is in scope at its own value, #~"x: x" binds #~"x" to itself:
+#~"nodeid: nodeid" as a field is the field (refused: no type), and
+#~"point: point x: 10" or #~"n: n + 1" as a local uses the local while its
+statement runs. The [#> to=labels: label shorthand] #~":x" is the declaration
+whose value is #~"x" as it is named #_*"outside" the declaration it makes, so
+it is never circular:
+
+#code language=zerolang: """
+  nodeid: record { v: u32 }
+
+  Row: record {
+      :nodeid        # the field nodeid, of the unit's type nodeid
+  }
+
+  main: function is {
+      r: Row nodeid: (nodeid v: 7)
+      print "\{r.nodeid.v}"
+  }
+  """
+
+For the same reason a receiver is not named #~"this": in
+#~"this: this.view" the #~"this" of the type would be the parameter itself.
+The #~":this" shorthand declares the receiver #~"this"; any other receiver
+takes a name of its own (#~"t: this.view"). See [#> to=this: this].
+
+A field's value is looked up the same way: #~"x: i64" beside a method
+#~"i64" of the type is a function slot holding that method (see
+[#> to=default-values: Default values]), and #~"x: system.i64" is the scalar.
 
 #---: if definition
 
@@ -4421,8 +4563,11 @@ method. #~"type" can be used to refer to any instance of the current definition
 #~"this" must be the return type for a user defined constructor.
 
 #~"this" must be the first argument type (the receiver) in an object instance
-method. It may optionally be declared with a new name for documentation
-purposes or ease of use.
+method. The receiver is declared with the #~":this" shorthand, which names it
+#~"this", or with a name of its own (#~"t: this.view"). A receiver may not be
+#_*"named" #~"this" any other way: in #~"this: this.view" the #~"this" of the
+type would be the parameter itself (see [#> to=names-and-scope: Names and
+scope]), and the declaration is refused.
 
 The name of the #~"this" parameter is not considered as part of the method
 signature for satisfying protocols. #~"this" can also be specified using the

@@ -499,6 +499,37 @@ composed at the mint (<code>getOrMintSpec</code>) from <code>templateId</code> r
 caller: a type has one declaration and any number of aliases -- <code>List</code> and
 <code>ListRef</code> both name <code>collections.ListRef</code> -- so neither the spelling a use
 site reached it by nor which mint site ran first can decide what it is called.</p>
+<p><strong>One lookup, nearest first.</strong> The walk outward is the language's one name
+rule (spec, Names and scope): the nearest scope that declares a name answers
+for it in every position, whatever the declaration is, and a declaration of
+the wrong kind is refused as what it is, never skipped. The levels, innermost
+first:</p>
+<ul>
+<li><em><strong>a body's blocks</strong></em> -- its locals and bindings (<code>findLocal</code>),
+built top to bottom as the walk goes. A definition, a <code>for</code> condition's
+binding and a <code>with</code> name are bound as their statement begins
+(<code>zenv.beginLocal</code>), wearing the Decl's grey mark (<code>resolving</code>, the
+one a declaration wears while it resolves), and completed by
+<code>defineLocal</code> when the value is done; <code>endLocal</code> binds a failed one
+typeless. <code>lookup</code> answers none for a grey local, as for a moved one, and
+a use of one is E0103 (<code>refuseUnreadableLocal</code>, <code>checkLabelValueAt</code>,
+<code>checkBareCalleeCall</code>). A type position naming a local is refused
+(<code>refuseLocalAsType</code>, asked by <code>refuseValueTypeArg</code> and
+<code>refuseLeadingLocalArg</code>).</li>
+<li><em><strong>the function</strong></em> -- its parameters, in its signature too
+(<code>ZTyping.sigFnNode</code> while <code>resolveFunction</code> resolves it;
+<code>refuseParamAsType</code>), and its <code>as</code> generics.</li>
+<li><em><strong>the enclosing type</strong></em> -- every member stops a type name
+(<code>memberStopsTypeName</code>), an alias or a generic parameter answering as
+the type it is; a bare value or callee in a method body that finds a
+member function or constant is rewritten to <code>type.name</code>
+(<code>bodyMemberAsPath</code>), and one that finds a field or arm is refused
+(<code>refuseBodyFieldRead</code>).</li>
+<li><em><strong>the unit</strong></em>, then the prelude, as above.</li>
+</ul>
+<p>A <code>:x</code> shorthand is a <code>labelvalue</code> node: its lookup starts outside the
+declaration it makes, so every leg that would find the declaration itself
+skips it there.</p>
 <h2 id="unit-members-three-passes-each-keyed-on-the-value-s-arm"><a href="#unit-members-three-passes-each-keyed-on-the-value-s-arm">8. Unit members: three passes, each keyed on the value's ARM</a></h2>
 <p>A unit-level definition is dispatched three times, and every one of them
 matches on the shape of the member's VALUE node. Reading only one of
