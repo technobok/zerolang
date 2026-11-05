@@ -32794,7 +32794,7 @@ bareFnRefError: function {
     width: u32
     fid: ztypes.tid
 } is {
-    fn: specWrittenName :st :ast tid: fid
+    fn: declWrittenName :st :ast tid: fid
     (
         bareFnRefErrorFor
         :ast
@@ -37931,7 +37931,7 @@ checkReturnCarries: function {
                 tid: argT
             ) when st.typing.currentFnPins.not when st.typing.currentReturnsBorrow.not then {
                 pwn: zast.nameTextAt :ast ref: rbn
-                pfn: specWrittenName :st :ast tid: st.typing.currentFnTid
+                pfn: declWrittenName :st :ast tid: st.typing.currentFnTid
                 pm: "Cannot return '\{pwn}': it views what the caller passed, which the caller cannot see because '\{pfn}' is `out`, not `outx`"
                 (
                     addError
@@ -37954,7 +37954,7 @@ checkReturnCarries: function {
                 wn: zast.nameTextAt :ast ref: rbn
                 src0: lockRootPhrase :st :ast nameId: (pinRootAt pins: held i: 0)
                 if st.typing.currentFnPins.not then {
-                    fnNm: specWrittenName :st :ast tid: st.typing.currentFnTid
+                    fnNm: declWrittenName :st :ast tid: st.typing.currentFnTid
                     m1: "Cannot return '\{wn}': it holds locks on \{src0}, which the caller cannot see because '\{fnNm}' is `out`, not `outx`"
                     (
                         addError
@@ -38017,7 +38017,7 @@ checkReturnCarries: function {
     }
     if badPn.isZero.not then {
         pn: zast.nameTextAt :ast ref: badPn
-        fnNm: specWrittenName :st :ast tid: st.typing.currentFnTid
+        fnNm: declWrittenName :st :ast tid: st.typing.currentFnTid
         m3: "Cannot return this call's result: it keeps '\{pn}' locked, which the caller cannot see because '\{fnNm}' is `out`, not `outx`"
         (
             addError
@@ -48499,17 +48499,10 @@ standInNeedsBox: function {
     return (st.reg.typetypeOf typeId: value).isReferenceData
 }
 
-# isFieldSignature -- `tid` is the signature a function field declares
-# written out, a type named after its field.
-isFieldSignature: function {st: zenv.ZSymbolTable.view tid: ztypes.tid} out bool is {
-    fd: declOfTypeId :st :tid
-    if fd.isZero then return false
-    return (st.typing.decls.get i: fd).fnptrField
-}
-
 # signatureText -- a function type spelled as its signature is written,
-# `function {x: i64} out i64`. A function field's signature is a type of its
-# own named after the field, and that name says nothing about what it takes.
+# `function {x: i64} out i64`. A function type is named after what declares it
+# -- the function, or a function field's signature -- and that name says
+# nothing about what it takes.
 signatureText: function {st: zenv.ZSymbolTable.view ast: Ast.view tid: ztypes.tid} out String is {
     r: "function".string
     ns: st.typing.declRowSlots ownerTid: tid
@@ -48534,19 +48527,39 @@ signatureText: function {st: zenv.ZSymbolTable.view ast: Ast.view tid: ztypes.ti
     return r
 }
 
-# specWrittenName -- a spec as a program writes it: its name, a function
-# field's own signature written out (signatureText), or for an instance of a
-# generic spec the application that names it, `(Getter v: i64)`.
+# specWrittenName -- a spec as a program writes it: a function type no program
+# names, its signature written out (signatureText); any other, its name or the
+# application that names it (declWrittenName).
+specWrittenName: function {st: zenv.ZSymbolTable.view ast: Ast.view tid: ztypes.tid} out String is {
+    if (spelledAsSignature :st :tid) then return (signatureText :st :ast :tid)
+    return (declWrittenName :st :ast :tid)
+}
+
+# spelledAsSignature -- `tid` is a function type no program writes by a name of
+# its own: a function field's signature, named after the field, or the type of
+# a function with a body, named after the function. A spec -- a function type
+# declared without a body -- is a type a program names, and so is a generic
+# template, which only an application of it spells.
+spelledAsSignature: function {st: zenv.ZSymbolTable.view tid: ztypes.tid} out bool is {
+    if (st.reg.genericOriginOf :tid).isZero.not then return false
+    if (st.reg.isGenericOf :tid) then return false
+    fd: declOfTypeId :st :tid
+    if fd.isZero.not when (st.typing.decls.get i: fd).fnptrField then return true
+    if (st.reg.typetypeOf typeId: tid) != ztypes.ztypetype.functionType then return false
+    return ((st.typing.fnHasBody.get key: tid).or d: false)
+}
+
+# declWrittenName -- a declaration as a program names it: its name, or for an
+# instance of a generic one the application that names it, `(Getter v: i64)`.
+# A message naming a function itself says this; the function's TYPE, as a
+# value has it, is spelled by specWrittenName.
 # Trailing arguments that are their parameter's default are left out, as the
 # instance's label leaves them (defaultsTailLength): `(ListVal t: u8)`.
-specWrittenName: function {st: zenv.ZSymbolTable.view ast: Ast.view tid: ztypes.tid} out String is {
+declWrittenName: function {st: zenv.ZSymbolTable.view ast: Ast.view tid: ztypes.tid} out String is {
     org: st.reg.genericOriginOf :tid
-    if org.isZero then {
-        if (isFieldSignature :st :tid) then return (signatureText :st :ast :tid)
-        return (st.reg.nameOf :tid)
-    }
+    if org.isZero then return (st.reg.nameOf :tid)
     otid: org
-    r: "(\{specWrittenName :st :ast tid: otid}"
+    r: "(\{declWrittenName :st :ast tid: otid}"
     tdecl: declOfTypeId :st tid: otid
     pns: st.reg.genericParamNamesOf :tdecl
     n: st.reg.genericArgCount specId: tid
