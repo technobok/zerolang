@@ -2697,6 +2697,8 @@ resolveNamedTypeId: function {
 } out ztypes.tid is {
     lit7: literalNameTypeId :st :ast :scope :nameId
     if lit7.isZero.not then return lit7
+    # a name its signature's parameter declares is refused, and the node with it
+    refuseParamAsType :st :ast :nameId :nid
     gp7: (
         genericParamTypeId
         :st
@@ -3744,6 +3746,7 @@ recordResolvedName: function {
                     recordNodeName :ast :st name: "i64" :nid scope: recScope
                 }
             } else {
+                if (refuseParamAsType :st :ast :nameId :nid) then return
                 # a template's own param name still RECORDS (the pending
                 # map feeds mono substitution) but never name-resolves: mark
                 # it no-stamp so resolution doesn't chase or report it
@@ -8294,6 +8297,7 @@ resolveFunctionParam: function {
     pmId: zast.nodeid
 } is {
     pm: argRefAt :ast nid: pmId
+    refuseThisNamedReceiver :st :ast :pm
     if pm.nid.isZero.not then {
         skipParam: false
         genParam: false
@@ -8746,6 +8750,11 @@ resolveFunction: function {
     receiverEnclDecl: receiverOwnerDecl :st :ast :unitDecl :rf :thisName
     sgkPrev: st.typing.sigGenericDecl
     if isgen then st.typing.sigGenericDecl = fnDecl
+    # the signature is the function's scope: its parameters are in it
+    spPrev: st.typing.sigFnNode
+    st.typing.sigFnNode = fnId
+    sfPrev: st.typing.sigFnName
+    st.typing.sigFnName = nameIdOf :ast name: defName
     kP: u64
     for kP < fnode.nparams loop {
         pmId: zast.fnParamAt :ast nid: fnId i: kP
@@ -8781,7 +8790,127 @@ resolveFunction: function {
         :fnode
     )
     st.typing.sigGenericDecl = sgkPrev
+    st.typing.sigFnNode = spPrev
+    st.typing.sigFnName = sfPrev
     return rfid
+}
+
+# refuseThisNamedReceiver -- a parameter NAMED `this` (`this: this.view`): its
+# own name is in scope in its type, where `this` would name the parameter
+# being declared, which is no type. A receiver is given a name (`t: this.view`);
+# the `:this` shorthand names the type as it is named outside.
+refuseThisNamedReceiver: function {st: zenv.ZSymbolTable ast: Ast.view pm: argref} is {
+    if pm.nid.isZero then return
+    if pm.name != zast.wellKnown.slot.wkThis then return
+    if pm.operation.isZero then return
+    if (ast.nodes.get i: pm.operation).labelvalue then return
+    n: ast.nodes.get i: pm.nid
+    (
+        addErrorH
+        :st
+        nodeid: pm.nid
+        lineno: (nodeLine :n)
+        colno: (nodeCol :n)
+        e: zast.err.typeError
+        msg: "only the `:this` receiver is named `this`; this parameter needs a name of its own".string
+        note: "".string
+        hint: "name it, as `t: this.view`: written `this: this.view`, the name is in scope in its own type, where it would name the parameter".string
+        width: 4
+    )
+}
+
+# signatureDeclaresParam -- the function `fnId`'s signature declares a value
+# parameter `nameId`, which is in scope throughout it
+signatureDeclaresParam: function {ast: Ast.view fnId: zast.nodeid nameId: zast.nameid} out bool is {
+    if nameId == zast.wellKnown.slot.wkThis then return false
+    fnode: fnRefAt :ast nid: fnId
+    k: u64
+    for k < fnode.nparams loop {
+        pm: argRefAt :ast nid: (zast.fnParamAt :ast nid: fnId i: k)
+        k = k + 1
+        if pm.name == nameId then return true
+    }
+    return false
+}
+
+# signatureTypeHolds -- `nid` is one of the nodes of `fnId`'s signature where a
+# name is looked up as a type: a parameter's or the return's head, the root of
+# a marked or qualified path (`u8.view`, `zast.nodeid`), or a part of an
+# application. A qualified path's leaf is its unit's, and is none of them.
+signatureTypeHolds: function {ast: Ast.view fnId: zast.nodeid nid: zast.nodeid} out bool is {
+    fnode: fnRefAt :ast nid: fnId
+    k: u64
+    for k < fnode.nparams loop {
+        pm: argRefAt :ast nid: (zast.fnParamAt :ast nid: fnId i: k)
+        k = k + 1
+        if (typeRefHolds :ast root: pm.operation :nid) then return true
+    }
+    return (typeRefHolds :ast root: (fnReturnTyperefOf op: (ast.nodes.get i: fnId)) :nid)
+}
+
+# typeRefHolds -- `nid` is `root` or a node of it where a name is looked up as
+# a type (signatureTypeHolds)
+typeRefHolds: function {ast: Ast.view root: zast.nodeid nid: zast.nodeid} out bool is {
+    if root.isZero then return false
+    if root == nid then return true
+    n: ast.nodes.get i: root
+    match (
+        n
+    ) case dottedpath then {
+        return (typeRefHolds :ast root: n.parent :nid)
+    } case call then {
+        if (typeRefHolds :ast root: n.callable :nid) then return true
+        ax: u64
+        for ax < n.arguments.count loop {
+            aId: zast.kidAt kids: ast.kids span: n.arguments i: ax
+            ax = ax + 1
+            if (typeRefHolds :ast root: (argRefAt :ast nid: aId).operation :nid) then return true
+        }
+        return false
+    } else {
+        return false
+    }
+}
+
+# refuseParamAsType -- a type-ref inside a signature that names one of the
+# function's parameters: the nearest declaration of the name is the parameter,
+# which is no type. A `:x` shorthand names x from outside its own declaration.
+# True when it refused (once per node).
+refuseParamAsType: function {
+    st: zenv.ZSymbolTable
+    ast: Ast.view
+    nameId: zast.nameid
+    nid: zast.nodeid
+} out bool is {
+    if nid.isZero or nameId.isZero then return false
+    fn: st.typing.sigFnNode
+    if fn.isZero then return false
+    if (signatureDeclaresParam :ast fnId: fn :nameId).not then return false
+    if (signatureTypeHolds :ast fnId: fn :nid).not then return false
+    n: ast.nodes.get i: nid
+    if n.labelvalue then return false
+    # the name the node looks up first: its own, or its path's root
+    if n.dottedpath when (rootNameIdOf :ast n: (ast.nodes.get i: nid)) != nameId then return false
+    if (st.typing.refusedValues.has item: nid) then return true
+    nn: zast.nameTextAt :ast ref: nameId
+    fnm: zast.nameTextAt :ast ref: st.typing.sigFnName
+    (
+        addErrorH
+        :st
+        nodeid: nid
+        lineno: (nodeLine :n)
+        colno: (nodeCol :n)
+        e: zast.err.typeError
+        msg: "'\{nn}' is a parameter of '\{fnm}', not a type"
+        note: "".string
+        hint: "".string
+        width: nn.length.u32.orPanic
+    )
+    st.typing.refusedValues.add item: nid
+    nsk: nid
+    nsv: true
+    st.typing.noStampNode.set key: nsk value: nsv
+    return true
 }
 
 
