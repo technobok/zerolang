@@ -38873,6 +38873,100 @@ checkAtomid: function {
     return result
 }
 
+# enclosingTypeDeclOf -- the type whose method body (or a body nested in one)
+# the scope is inside; 0 outside any
+enclosingTypeDeclOf: function {
+    st: zenv.ZSymbolTable.view scope: ztypes.declid
+} out ztypes.declid is {
+    cur: scope
+    for cur.isZero.not loop {
+        k: (st.typing.decls.get i: cur).kind
+        if k.unitDecl then return ztypes.declid.zero
+        if k.typeDecl then return cur
+        cur = st.typing.declParentOf declId: cur
+    }
+    return ztypes.declid.zero
+}
+
+# bodyMemberDecl -- the member of the enclosing type a bare body name finds
+# before any outer declaration: a type's members are in scope throughout its
+# methods' bodies. 0 when no enclosing type declares the name.
+bodyMemberDecl: function {st: zenv.ZSymbolTable.view nameId: zast.nameid} out ztypes.declid is {
+    td: enclosingTypeDeclOf :st scope: st.curScope
+    if td.isZero then return td
+    return (st.typing.declFindChild parentDeclId: td :nameId)
+}
+
+# bodyMemberAsPath -- a bare body name that finds a FUNCTION of the enclosing
+# type is that function, reached through the type being checked: the row
+# becomes `type.name`, which a walk -- this one, and an instance's -- reads as
+# any member path. True when it rewrote.
+bodyMemberAsPath: function {
+    st: zenv.ZSymbolTable ast: Ast nameId: zast.nameid nid: zast.nodeid
+} out bool is {
+    md: bodyMemberDecl :st :nameId
+    if md.isZero then return false
+    if (st.typing.decls.get i: md).kind.methodDecl.not when (bodyMemberIsConstant :st :ast :md
+    ).not then {
+        return false
+    }
+    n: ast.nodes.get i: nid
+    (
+        spellQualifiedUnderscore
+        :ast
+        at: nid
+        unitName: zast.wellKnown.slot.wkType
+        typeName: nameId
+        line: (nodeLine :n)
+        col: (nodeCol :n)
+    )
+    return true
+}
+
+# bodyMemberIsConstant -- the member `md` is an `as` constant: an item holding
+# a value, no alias, generic parameter or implementation, which the walk reads
+# as it reads `type.K`
+bodyMemberIsConstant: function {st: zenv.ZSymbolTable ast: Ast md: ztypes.declid} out bool is {
+    td: (st.typing.decls.get i: md).parent
+    if (asMemberIsAsItem :st :ast tdecl: td :md).not then return false
+    if (asMemberIsAlias :st :ast tdecl: td :md) then return false
+    item: argRefAt :ast nid: (st.typing.decls.get i: md).node
+    if item.operation.isZero then return false
+    if (zast.isGenericParamOp :ast opId: item.operation) then return false
+    if (zast.implementBaseOf :ast opId: item.operation).isZero.not then return false
+    return (ast.nodes.get i: item.operation).functiondef.not
+}
+
+# refuseBodyFieldRead -- a bare body name that finds a FIELD or an ARM of the
+# enclosing type: an instance's member, read through a value of it. True when
+# it refused.
+refuseBodyFieldRead: function {
+    st: zenv.ZSymbolTable ast: Ast nameId: zast.nameid nid: zast.nodeid
+} out bool is {
+    md: bodyMemberDecl :st :nameId
+    if md.isZero then return false
+    td: (st.typing.decls.get i: md).parent
+    if (asMemberIsAsItem :st :ast tdecl: td :md) then return false
+    if (st.typing.decls.get i: md).kind.methodDecl then return false
+    what: memberKindPhrase :st :ast tdecl: td :md
+    nn: zast.nameTextAt :ast ref: nameId
+    tn: zast.nameTextAt :ast ref: (st.typing.decls.get i: td).name
+    n: ast.nodes.get i: nid
+    (
+        addErrorH
+        :st
+        nodeid: nid
+        lineno: (nodeLine :n)
+        colno: (nodeCol :n)
+        e: zast.err.typeError
+        msg: "'\{nn}' is \{what} of '\{tn}', not a value: read it through a '\{tn}'"
+        note: "".string
+        hint: "".string
+        width: nn.length.u32.orPanic
+    )
+    return true
+}
+
 # checkUnboundAtom -- a bare name no local binds: a moved name's use, a literal,
 # a type, unit or function, or a numeric generic parameter. 0 when it names
 # none of those.
@@ -38883,6 +38977,10 @@ checkUnboundAtom: function {
     node: atomref
 } out ztypes.tid is {
     if node.name == zast.wellKnown.slot.wkReturn then reportMissingReturnValue :st :node
+    if (bodyMemberAsPath :st :ast nameId: node.name nid: node.nid) then {
+        return (checkValueAt :st :unitDecl :ast nid: node.nid)
+    }
+    if (refuseBodyFieldRead :st :ast nameId: node.name nid: node.nid) then return ztypes.tid
     if (st.isTakenName nameId: node.name) then {
         reportTakenNameUse :st :ast :node
         return ztypes.tid
@@ -54861,6 +54959,14 @@ checkRegularCall: function {
 } out ztypes.tid is {
     sleg: checkSpecialFormCall :st :unitDecl :ast :call
     if sleg.handled then return sleg.tid
+    # a bare callee no local binds that finds a function of the enclosing type
+    if cnId.isZero.not when (st.findLocal nameId: cnId).isZero when (
+        bodyMemberAsPath
+        :st
+        :ast
+        nameId: cnId
+        nid: call.callable
+    ) then return (checkRegularCall :st :unitDecl :ast :call cnId: zast.nameid.zero)
     result: ztypes.tid
     dro: callableDottedResultAt :st :unitDecl :ast nid: call.callable
     match (
