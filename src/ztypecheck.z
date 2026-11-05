@@ -3337,8 +3337,8 @@ genericBoundApplication: function {ast: Ast.view n: astnode.view} out zast.nodei
 # genericConstraintBase -- the constraint name of a `u64.generic`-style param
 # declaration: the dotted parent, spelled whole when it is itself a path
 # (`io.Reader`). A DEFAULTED bound is a call over the same path -- `(T.generic
-# default: i64)` -- and answers for its callable; the call form used to answer
-# nothing, so the bound registered as no constraint at all.
+# default: i64)` -- and answers for its callable, or the bound would register
+# as no constraint at all.
 genericConstraintBase: function {ast: Ast.view n: astnode.view} out String is {
     match (
         n
@@ -7222,8 +7222,8 @@ resolveTyperefCallShell: function {
     # type, or one no translation unit declares. That is fine for the shapes it
     # exists for (a forward reference, a sized record's value key), and a lie
     # for a GENERIC template whose arguments did not settle: `(Cell :t)` written
-    # where nothing owns a `t` reaches here, and used to compile to a struct
-    # field of a type that was never defined. Say so instead.
+    # where nothing owns a `t` reaches here, and would compile to a struct
+    # field of a type that is never defined. Say so instead.
     hn9: String
     hl9: u32
     hc9: u32
@@ -10701,7 +10701,7 @@ checkImplementations: function {ast: Ast st: zenv.ZSymbolTable} is {
 }
 
 # checkInstanceImplementations -- a generic template's implementation row, checked on
-# each instance the program made (D15: against the instance's own substituted
+# each instance the program made (against the instance's own substituted
 # methods), at the template's marker and in the template's name, each error
 # carrying the instance note; the same failure in two instances is one error.
 # An implementing instance gets its own row, as a generic typedef instance does. A
@@ -13933,12 +13933,10 @@ synthComparisonMember: function {
     st.typing.synthCmpTids.add item: fid
 }
 
-# synthComparisonPair -- `==` and `!=` together, each yielding independently.
-# THE GATE USED TO ASK ABOUT `==` ALONE and then synthesise BOTH, so a type
-# declaring only `!=` had its own operator overwritten by the synth shell --
-# and a type declaring only `==` got no `!=` MEMBER at all, only the emitter's
-# derived negation, so `a != b` worked and `a.!= rhs: b` was "no member '!='".
-# Either declaration now suppresses exactly itself and generates its partner.
+# synthComparisonPair -- `==` and `!=` together, each yielding independently:
+# either declaration suppresses exactly itself and generates its partner. A
+# type declaring only `!=` keeps its own operator, and one declaring only `==`
+# gets a real `!=` member, which `a.!= rhs: b` reaches as `a != b` does.
 synthComparisonPair: function {
     st: zenv.ZSymbolTable
     ownerTid: ztypes.tid
@@ -14193,10 +14191,8 @@ resolveRecord: function {
     }
     if unitTmpl.isZero.not then isgen = true
     ridDecl: declOfTypeId :st tid: rid
-    # BOTH NAMES, INDEPENDENTLY. The old gate asked about `==` alone and then
-    # synthesised the pair, so a type writing only `!=` had its own operator
-    # replaced by the synth shell -- and one writing only `==` got no `!=`
-    # MEMBER at all, only the emitter's derived negation.
+    # BOTH NAMES, INDEPENDENTLY (synthComparisonPair): asking about `==` alone
+    # would replace a type's own `!=` with the synth shell.
     eqAsR: (
         asBindingOf
         :st
@@ -16742,9 +16738,9 @@ refuseStringDefault: function {
     # what was declared, for the message: `field` or `parameter`
     what: StringView
     # the declared name's pool id. Read AFTER the shape test, as a view: this
-    # runs on every declaration in the tree and reports on almost none, and the
-    # copy its callers used to take was 11,922 allocations of a name nobody
-    # went on to name.
+    # runs on every declaration in the tree and reports on almost none, so a
+    # copy here would cost an allocation per declaration for a name almost
+    # never named.
     nameId: zast.nameid
     # the declaration, whose root is tested
     fm: argref
@@ -18276,7 +18272,7 @@ resolveAliasKey: function {
     # resolves and so has only the text to go on. Here the target CAN be asked,
     # so it is: a definition whose value is a compile-time CONSTANT is a
     # constant, and minting an alias type for it would give the program a type
-    # named `false` -- which is what `x: false` used to fail as.
+    # named `false`, and `x: false` would fail as one.
     #
     # Folded first for that reason. A genuine type alias folds to nothing and
     # falls through to the chase below, unchanged.
@@ -23684,7 +23680,7 @@ resolveMainUnitInstantiations: function {
         # instTemplateDecl found the template's Decl at COLLECTION, through the
         # scope the instantiation was written in. resolveInlineGenericUnit
         # self-guards on that Decl's type id, so this is a no-op whenever
-        # anything already resolved the template -- which today is always.
+        # anything already resolved the template.
         # A Decl parented straight to the program root is a file unit of the
         # template's name, not an inline template: registerUnitRoots has
         # already minted it.
@@ -24642,7 +24638,7 @@ checkInterpPart: function {
     if (printableInterpTid :ast :st tid: ptid) then {
         # A PART IS A VALUE HELD WHILE IT IS SPLICED. A part no name binds -- a
         # call's result, a path that auto-calls one -- is built, appended to the
-        # string being assembled and then released, so by D1 the value the
+        # string being assembled and then released, and every value the
         # emitter releases is a variable of the checker's. A part a NAME binds
         # is appended where it stands and never held, which is why this asks
         # `receiverIsValue` rather than minting for every part.
@@ -29768,7 +29764,7 @@ constructionArgTid: function {
 
 # refuseLocalAsType -- a type written in a body naming a local or a parameter:
 # the nearest declaration of the name is that value, which is no type, refused
-# as what it is (R3). Once per node.
+# as what it is. Once per node.
 refuseLocalAsType: function {
     st: zenv.ZSymbolTable ast: Ast.view nameId: zast.nameid nid: zast.nodeid
 } is {
@@ -30491,7 +30487,7 @@ constructionParamMissing: function {
 # refuseLeadingLocalArg -- a construction left its primary type parameter
 # unbound, and its leading unlabelled argument, where that parameter is
 # written, names a local or a parameter: the name is that value, which is no
-# type (R3). True when it refused.
+# type. True when it refused.
 refuseLeadingLocalArg: function {st: zenv.ZSymbolTable ast: Ast.view call: callref} out bool is {
     if call.nargs == 0 then return false
     first: zast.callArgAt :ast nid: call.nid i: 0
@@ -33640,13 +33636,11 @@ checkCopyMember: function {
         # A MONO PRESENTS EXACTLY THE CONCRETE TYPE'S INTERFACE, so there is
         # no per-mono leg here. The template body validated `.copy` against
         # the parameter (t -> t); the INSTANCE is held to what the type it was
-        # given declares, by the same legs concrete code takes. The waiver
-        # that used to sit here answered three ways and every one of them
-        # offered something the concrete spelling does not: a container
-        # reached the EMITTER to fail there as an E0500 about emission, a
-        # StringView was accepted and lowered to an ALIAS of its source, and
-        # a valtype whose author wrote `copy: null` was let through because
-        # the leg returned for anything that was not a class or a union.
+        # given declares, by the same legs concrete code takes. A waiver here
+        # would offer what the concrete spelling does not: a container reaching
+        # the EMITTER to fail there as an E0500, a StringView lowered to an
+        # ALIAS of its source, a valtype whose author wrote `copy: null` let
+        # through.
         btnCp: specWrittenName :st :ast tid: bt
         bttCp: st.reg.typetypeOf typeId: bt
         # A valtype's `.copy` is ALWAYS the byte copy its assignment already
@@ -36152,8 +36146,8 @@ checkResolvedMember: function {
     return (callFieldObject :st :unitDecl :ast :dp :mo :coerce :result)
 }
 
-# callFieldObject -- a FIELD holding a callable object is called when read bare
-# (D10), as a variable holding one is: the read, already checked, becomes the
+# callFieldObject -- a FIELD holding a callable object is called when read bare,
+# as a variable holding one is: the read, already checked, becomes the
 # base of its `call`, and only the call is checked on top of it. Answers the
 # read's type unchanged when it is not such a field.
 callFieldObject: function {
@@ -36585,7 +36579,7 @@ checkTransferMarker: function {
             msg: mvs
         )
     }
-    # A VALUE IS TAKEN BY COPYING ITS BYTES (D16): a valtype -- a number, a
+    # A VALUE IS TAKEN BY COPYING ITS BYTES: a valtype -- a number, a
     # record, a variant, a function reference -- has no owner, so `.take` or
     # `.hold` of one moves nothing and leaves its source as it is: no
     # invalidation, no field emptied, no readonly or borrow to refuse. A `.hold`
@@ -37027,8 +37021,8 @@ dottedBaseTid: function {
     }
     # A VALUE READ THROUGH IS HELD WHILE IT IS READ. `(mkBox).label` reads a
     # field out of a value no name binds; the emitter hoists it so the read can
-    # happen and then destroys it, so by D1 that value is a variable of the
-    # checker's. Every dotted path passes here -- a field, a marker, a method's
+    # happen and then destroys it, and every value the emitter destroys is a
+    # variable of the checker's. Every dotted path passes here -- a field, a marker, a method's
     # receiver -- so the rule is stated once for all of them, and the call legs
     # that ask it too find the temporary already made.
     if (receiverIsValue :st :ast :unitDecl nid: dp.parent) then (
@@ -37679,7 +37673,7 @@ objectCallOf: function {st: zenv.ZSymbolTable ast: Ast t: ztypes.tid} out ztypes
 # object's `call`: the type has one, and nothing asks for the object itself --
 # no marker after it (suppressFnAutoCall), not a dotted path's base
 # (suppressBareCtor), not a write target, and not a `for each` header's value
-# whose type declares `iterate`: `for each` asks `iterate` first (D14). 0 when
+# whose type declares `iterate`: `for each` asks `iterate` first. 0 when
 # it is read as the object.
 readsObjectAsCall: function {
     st: zenv.ZSymbolTable ast: Ast t: ztypes.tid nid: zast.nodeid
@@ -39979,7 +39973,7 @@ armLeafLocal: function {st: zenv.ZSymbolTable ast: Ast.view nid: zast.nodeid} ou
 # armLeafIsPartial -- whether a control value one of whose arm values
 # (`leaves`) yields the local `from` has another that yields something else: a
 # path reaches past the `if` or `match` still holding the local, so moving it
-# there is a maybe (D3) -- zeroed where it happens, destroyed at the scope's
+# there is a maybe -- zeroed where it happens, destroyed at the scope's
 # end all the same.
 armLeafIsPartial: function {
     st: zenv.ZSymbolTable ast: Ast.view leaves: (ListVal zast.nodeid).view from: ztypes.vid
@@ -43962,7 +43956,7 @@ reportLoopMove: function {
 # consumed. A body-local recorded there is gone with the loop's scope, and
 # a name it shadowed must not be consumed in its place, so only a decl the
 # name still resolves to is re-laid. The loop may end without that break,
-# so each is moved only maybe (D3).
+# so each is moved only maybe.
 relayBreakTakes: function {st: zenv.ZSymbolTable run: zenv.looprun} is {
     for st.loopBreakTakes.length > run.breakStart loop {
         d: st.loopBreakTakes.pop
@@ -43979,7 +43973,7 @@ relayBreakTakes: function {st: zenv.ZSymbolTable run: zenv.looprun} is {
 
 # settleDoBreakTakes -- a `do` block a `break` left: the takes on the paths
 # that left it with `break` (recorded from `brkMark`) are laid again after it,
-# and those its end laid (`endTook`) stay, each moved only maybe (D3) -- some
+# and those its end laid (`endTook`) stay, each moved only maybe -- some
 # path reached past the block without it. A block-local is gone with the
 # block, and a name it shadowed must not be consumed in its place, so only a
 # declaration the name still resolves to is laid.
@@ -44007,7 +44001,7 @@ declStillResolves: function {st: zenv.ZSymbolTable.view d: ztypes.declid} out bo
 # before it: every such local, consumed after the statement on at least one
 # path, and how many of the arms that reach the statement's end moved each. A
 # local every reaching arm of an exhaustive statement moved is moved; any other
-# only maybe (D3).
+# only maybe.
 ArmTakes: class {
     # every local some arm moved
     taken: IdSet ztypes.declid
@@ -44317,7 +44311,7 @@ deadBodyDiverges: function {
 # where the `if` stands once the clause is walked: the clauses after it and
 # the code after the `if` see them consumed. A clause after the first runs its
 # conditions only when those before failed (`later`), so what they moved is
-# moved only maybe (D3), as is what a conjunct after the first moved.
+# moved only maybe, as is what a conjunct after the first moved.
 layConditionTakes: function {
     st: zenv.ZSymbolTable
     decls: (ListVal ztypes.declid).view
@@ -44491,8 +44485,9 @@ recordControlPlaceLeaves: function {st: zenv.ZSymbolTable ast: Ast nid: zast.nod
 # parkOwnedArmLeaves -- when ANY arm of a value `if` or `match` yields a place,
 # the whole value is a reference to that arm's storage, and an arm that yields a
 # value of its own has no storage to point at: it is parked in a temporary the
-# statement releases, and its address is what that arm answers. By D1 that
-# temporary is a variable of the checker's, so it is minted here -- beside the
+# statement releases, and its address is what that arm answers. That
+# temporary, like every value the emitter releases, is a variable of the
+# checker's, so it is minted here -- beside the
 # fact that made the value a reference, which is the only place both are known.
 parkOwnedArmLeaves: function {
     st: zenv.ZSymbolTable ast: Ast leaves: (ListVal zast.nodeid).view
@@ -46261,8 +46256,8 @@ resultPins: function {st: zenv.ZSymbolTable.view funcId: ztypes.tid} out bool is
 
 # ownedValueReceiver -- a receiver that owns what it holds and that no name
 # binds is a temporary of the checker's EVEN WHEN the call's result keeps
-# nothing: the emitter hoists it so the call runs once, and frees it, so D1
-# says the value it frees is a variable of the checker's. A receiver rooted in
+# nothing: the emitter hoists it so the call runs once, and frees it, and
+# every value the emitter frees is a variable of the checker's. A receiver rooted in
 # a variable names its storage already, unless the path ends in a fresh value
 # (`grid.pop.length`), which nothing names either.
 ownedValueReceiver: function {
@@ -46655,7 +46650,7 @@ mintReceiverTemp: function {
 
 # ownedReceiverTemp -- a receiver that is a value and owns its storage is held
 # by a temporary of the checker's WHETHER OR NOT the call's result keeps it
-# locked. The emitter hoists and frees it either way, so D1 says the value it
+# locked. The emitter hoists and frees it either way, and every value it
 # frees is a variable of the checker's. It joins no pin list: nothing holds it
 # past the call, and no name binds it.
 ownedReceiverTemp: function {
@@ -47716,7 +47711,7 @@ hoistArg: function {
 
 # hoistRows -- the synth Assignment / AtomId rows a hoisted argument shows as
 # in the dump, stamped with the argument's and the parameter's types; the
-# Assignment's id, 0 for a compile, which reserves no rows (D2).
+# Assignment's id, 0 for a compile, which reserves no rows.
 hoistRows: function {
     ast: Ast
     st: zenv.ZSymbolTable
@@ -48746,10 +48741,9 @@ hoistAndLockArg: function {
 # coercePositionalArg -- a positional argument takes the parameter at its own
 # index, and is then THE SAME CHECK a labelled argument gets.
 #
-# It used to be a hand-copied one with its own skip list, and the lists had
-# drifted: this one skipped every numeric/numeric pair outright, so a lossy
-# width never got the coercion question and `5 < big.i128` was ACCEPTED while
-# `5.< rhs: big.i128` was refused. One call form, one argument check.
+# One call form, one argument check: a copy with its own skip list drifts, and
+# one that skipped every numeric pair would accept `5 < big.i128` while it
+# refuses `5.< rhs: big.i128`.
 coercePositionalArg: function {
     st: zenv.ZSymbolTable
     ast: Ast
@@ -48982,7 +48976,7 @@ checkBareGenericReturns: function {ast: Ast st: zenv.ZSymbolTable} is {
 
 # checkSpecStandIns -- every value noted where a spec value is expected
 # implements the spec: an implementation row names its type, or the template it
-# was instantiated from. Anything else used to typecheck and then fail in the
+# was instantiated from. Anything else would typecheck and then fail in the
 # C compiler, whatever its type -- an i64 passed for a protocol parameter
 # included. A type parameter, and a type still partial, are the instance's
 # to decide.
@@ -55632,8 +55626,8 @@ reportGenericBindingConflict: function {
 
 # bindOrConflict -- bind a generic parameter to the type this argument infers,
 # or report the inconsistency when it already holds a different CONCRETE one.
-# FIRST WRITE WINS for the binding itself; what changed is that a later,
-# disagreeing one is no longer dropped in silence.
+# FIRST WRITE WINS for the binding itself, and a later, disagreeing one is
+# reported, not dropped.
 bindOrConflict: function {
     # where the binding and any conflict are both recorded
     st: zenv.ZSymbolTable
@@ -55949,9 +55943,9 @@ inferGenericCallSubs: function {
         avt: checkValueAt :st :unitDecl :ast nid: arg.operation
         if wantTypes then recordArgType :argTypes at: kAiter - 1 tid: avt
         # a value that did not type is reported HERE, as the concrete
-        # argument walk reports it (walkOneCallArg): the generic leg used to
-        # walk on, bind nothing, and let the emitter write the unresolved name
-        # into C for the C compiler to reject
+        # argument walk reports it (walkOneCallArg): walking on would bind
+        # nothing and let the emitter write the unresolved name into C for the
+        # C compiler to reject
         if avt.u64 == 0 when st.typing.errors.length == errG then {
             (
                 reportUnresolvedValue
@@ -59421,7 +59415,7 @@ doStatementOf: function {n: astnode.view} out zast.nodeid is {
 # receives: when that value is a fresh owned result -- a call's, or a
 # construction's, that owns what it holds and borrows from nothing -- the
 # checker holds it in a temporary of its own that dies as the statement ends
-# (discardTemp, D4). A read of a local or a field holds nothing of its own.
+# (discardTemp). A read of a local or a field holds nothing of its own.
 recordDiscard: function {st: zenv.ZSymbolTable ast: Ast innerId: zast.nodeid} is {
     if innerId.isZero then return
     if (freshResultNode :st nid: innerId).not then return
@@ -60753,9 +60747,9 @@ checkFunctionBody: function {
     # A BODY IS ITS OWN EXPRESSION SCOPE. A body walked on demand is reached from
     # inside some other expression, and that expression's position flags --
     # a dotted base's suppressions, a write target, a call's callable or
-    # argument -- are about the TRIGGERING reference, not this body. Leaked in,
-    # `(mk).val` walked `mk` with bare construction suppressed, so `i: Inner`
-    # was never checked and reached the C as the type's name.
+    # argument -- are about the TRIGGERING reference, not this body. Leaked
+    # in, they would walk `mk` in `(mk).val` with bare construction suppressed,
+    # leaving `i: Inner` unchecked to reach the C as the type's name.
     prevBare: st.typing.suppressBareCtor
     prevFn: st.typing.suppressFnAutoCall
     prevTarget: st.typing.inAssignTarget
@@ -61091,8 +61085,8 @@ walkUnitTemplateBodies: function {
     }
     # a template-time walk: the generic parameter resolves to its
     # GENERIC_PARAM id in the template's scope, and stamps of that type stay
-    # out of the global table -- the emitter re-walks the shared AST per
-    # instance and reads the instance's stamps (the rule every template walk
+    # out of the global table -- each instance walks its own clone of the body
+    # (instanceBodyAt), which the emitter emits with the instance's stamps (the rule every template walk
     # follows; the `match t` marker writes past it on purpose)
     prevSup: st.typing.suppressParamStamps
     st.typing.suppressParamStamps = true
@@ -63903,8 +63897,7 @@ literalRadix: function {lex: StringView.view at: u64} out u64 is {
 }
 
 # untypedIntBits -- the magnitude an untyped integer constant holds, in bits:
-# Go's limit, wide enough for every intermediate of the fixed types up to 512
-# bits
+# wide enough for every intermediate of the fixed types up to 512 bits
 untypedIntBits: 512.u64
 
 # constInternRow -- the row of `item` in a constant pool whose row 0 is its
@@ -69543,9 +69536,7 @@ evalConstViaDottedParent: function {
 }
 
 # evalConstNode -- the compile-time value of a node, or `none` when the node is
-# not a constant shape. Numeric shapes only for now: bool and variant arms,
-# strings and static string methods arrive with the paths that render them.
-# Silence is deliberate here -- a shape with no value is not automatically an
+# not a constant shape. Silence is deliberate here -- a shape with no value is not automatically an
 # error, because this walk also runs over definitions that are not constants at
 # all. The E0600s below are the cases where a value was genuinely required and
 # the operands were there.
@@ -73223,9 +73214,6 @@ resolveUnitChildRo: function {
     return (optionval.none ztypes.tid)
 }
 
-# resolvedByIds / resolvedByIdsMember -- resolve a (unit, name[, member])
-# id tuple by walking childOf from the unit root, with the on-demand alias
-# follow on a miss. resolveUnitChild is the probing entry point.
 # declOfUnitDefIds -- declOfUnitDef for a caller holding BOTH ids: unit
 # root by id, then the child edge. No name is interned and no key is built.
 declOfUnitDefIds: function {
@@ -73358,8 +73346,8 @@ unitChildHit: function {
 }
 
 # resolvedByIdsMember -- `unit.def.member` from ids: the unit-level
-# definition, then one more child edge. The two three-segment keys in this
-# unit were the only reason the walk had to handle an arbitrary segment count.
+# definition, then one more child edge. It serves the unit's two
+# three-segment keys, so the walk needs no arbitrary segment count.
 resolvedByIdsMember: function {
     ast: Ast.view
     st: zenv.ZSymbolTable
