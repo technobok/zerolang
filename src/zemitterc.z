@@ -4463,9 +4463,9 @@ stampIsSv: function {symtab: zenv.ZSymbolTable.view ctx: Ctx.view nid: zast.node
     return (stampIdOf :symtab :nid) == ctx.svTid
 }
 
-# monoStampIdOf -- the per-mono side stamp for a template node: the
-# checker's instance walk records (monoId << 32 | nodeid) -> tid; consulted
-# during mono re-walks (ctx.curThisTid) before any fallback resolution.
+# monoStampIdOf -- the per-instance type of a template node: the checker's
+# instance walk records it in monoNodeType, keyed by (instance, node); asked
+# while an instance is emitted (ctx.curThisTid) before any fallback.
 monoStampIdOf: function {
     symtab: zenv.ZSymbolTable.view ctx: Ctx.view nid: zast.nodeid
 } out ztypes.tid is {
@@ -6421,8 +6421,8 @@ implicitTakeSource: function {
 # destroy is the emitter's own and the checker said so when it minted the
 # variable -- zeroOnMove either way), it is a generator's local, whose field
 # the instance's destructor frees, or it is no variable of the checker's at
-# all. A local moved on every path that reaches a destroy of it needs nothing
-# (D3).
+# all. A local moved on every path that reaches a destroy of it needs
+# nothing.
 moveNeedsZero: function {symtab: zenv.ZSymbolTable.view vid: ztypes.vid} out bool is {
     if vid.isZero then return true
     if (symtab.typing.zeroOnMove.has item: vid) then return true
@@ -13360,9 +13360,9 @@ emitInterpStmtValue: function {
 
 # argHoistName -- what an argument hoist's temporary is CALLED. A value the
 # checker holds a temporary for is spelled by that temporary's variable, so the
-# name the emitter prints and the name the checker reasons about are one name
-# (D1); anything else still gets the emitter's own `_ahN`, which this is
-# steadily replacing. WHEN it dies is still the hoist list's business.
+# name the emitter prints and the name the checker reasons about are one name;
+# anything else gets the emitter's own `_ahN`. WHEN it dies is the hoist list's
+# business.
 argHoistName: function {
     symtab: zenv.ZSymbolTable.view
     ctx: Ctx
@@ -13397,7 +13397,7 @@ ownedTypedefArg: function {symtab: zenv.ZSymbolTable.view argNid: zast.nodeid} o
 # owns what it holds where it dies: what the checker listed for the scope that
 # binds the temporary (scopeTempDestroy), in the state that scope's end left it.
 # False when no temporary holds the value, when the temporary owns nothing -- a
-# hoist that only borrows -- and when the value moved out of it (D3). The scope
+# hoist that only borrows -- and when the value moved out of it. The scope
 # is the one `tempScopeOf` recorded as the temporary was bound, which is the key
 # its list is under.
 scopeOwnsTemp: function {symtab: zenv.ZSymbolTable.view argNid: zast.nodeid} out bool is {
@@ -14184,9 +14184,9 @@ userCreateCallC: function {
 # call, whose RECEIVER is among the ARGUMENTS rather than reached through a
 # dot: it is the call's one unlabelled argument, or it carries the receiver
 # parameter's own declared name. Both call forms then share ONE
-# argument-placement rule and a label binds by name in either; this leg used to
-# walk the call's arguments in WRITTEN order, which silently swapped a pair of
-# reordered labels.
+# argument-placement rule and a label binds by name in either; walking the
+# call's arguments in WRITTEN order would silently swap a pair of reordered
+# labels.
 #
 # THE CHECKER ANSWERED WHERE THE RECEIVER COMES FROM, and this reads the
 # answer. A call reaches here only when the walk stamped its receiver as coming
@@ -17770,13 +17770,11 @@ emitCallValue: function {
     # A SYNTHESISED OPERATOR HAS NO BODY TO CALL, so it must reach the
     # structural emitter before the by-decl leg claims it as an ordinary method.
     # AN OPERATOR CALL REACHES THE OPERATOR EMITTER WHATEVER ELSE IT PASSES.
-    # It used to be asked LAST, at the end of the named-callee chain: every
-    # operator walked every probe -- each building names, keys and receiver
-    # text -- to discover what its own shape already said. Now that the infix
-    # form IS a call, that chain runs for every operator in the program, and a
-    # self-compile paid millions of allocations for the walk. Asked here, both
-    # spellings still reach one emitter, and a call this declines falls through
-    # to exactly the legs it fell through to before.
+    # Asked here, first: the infix form IS a call, so at the end of the
+    # named-callee chain every operator in the program would walk every probe
+    # -- each building names, keys and receiver text -- to discover what its
+    # own shape already says. Both spellings reach one emitter, and a call this
+    # declines falls through to the rest of the chain.
     eopN9: aliasChildName :ast :symtab n: (ast.nodes.get i: call.callable)
     isOp9: ztypecheck.isOperatorName name: eopN9
     if call.arguments.count.u64 == 1 when isOp9 then {
@@ -22127,8 +22125,7 @@ emitExpr: function {
     return (emitExprArms :ast :symtab :ctx :n :facts)
 }
 
-# emitExprWith -- emitExpr, its facts stated into `facts`. An arm that does not
-# yet state them has them read off its text.
+# emitExprWith -- emitExpr, the facts its arm states written into `facts`.
 emitExprWith: function {
     ast: Ast.view
     symtab: zenv.ZSymbolTable.view
@@ -23525,7 +23522,7 @@ emitInterpPrint: function {
 # answers the buffer's C NAME, which the caller prints, frees or binds. The
 # name is the checker's temporary for the literal (`tempOf` keyed by the
 # atomstring node), so the string the emitter assembles and the value the
-# checker reasons about are one variable (D1).
+# checker reasons about are one variable.
 emitInterpBuild: function {
     ast: Ast.view
     symtab: zenv.ZSymbolTable.view
@@ -28241,8 +28238,8 @@ releaseStatementTemps: function {
 
 # releaseUnheldTemps -- a line a binding holds keeps its temporaries past the
 # statement, but only the ones something holds: a temporary the checker
-# recorded as unheld still ends with its statement. An untagged one is kept,
-# as every temporary of a held line used to be.
+# recorded as unheld still ends with its statement. An untagged one is
+# kept.
 releaseUnheldTemps: function {
     symtab: zenv.ZSymbolTable.view
     tmp: TmpCtr
@@ -29357,7 +29354,7 @@ branchScopeOf: function {
 # which is spent so no later flush or exit emits it again, and a local that
 # registered none -- a generator's local kept in the instance -- by its type,
 # the field zeroed after so the instance's destructor finds it empty. A local
-# moved on every path here holds nothing and is skipped (D3); one moved on
+# moved on every path here holds nothing and is skipped; one moved on
 # some was zeroed where it moved, and its destroy frees nothing there.
 emitScopeDestroy: function {
     symtab: zenv.ZSymbolTable.view
@@ -29497,7 +29494,7 @@ emitContinueFrees: function {
 # (ctx.exitNode) destroys (exitDestroy), in its order: each local by the
 # destroy its binding registered, which stays owed -- the path that does not
 # take the exit destroys it too -- and a local that registered none by its
-# type (emitUnownedDestroy). A local moved on every path here is skipped (D3).
+# type (emitUnownedDestroy). A local moved on every path here is skipped.
 # A `return` whose value is `retExpr` keeps a local that value reads
 # (`keepRefd`).
 emitExitDestroy: function {
@@ -32228,8 +32225,8 @@ seedAndLayerCond: function {
 # layerCondExclusion -- record that a conjunct's NEGATED arm predicate excludes
 # its arm, for everything after it: the conjuncts that follow and the clause
 # body. `remainingArm` reads ctx.exclArms, so two exclusions that leave one arm
-# collapse the subject to that arm's payload -- the rule the checker already
-# applies, and which the emitter used to apply only on the else side.
+# collapse the subject to that arm's payload -- the rule the checker applies,
+# on both sides of the clause.
 #
 # Classification is the chain facts' own, so this cannot disagree with them, and
 # it allocates nothing at all unless the conjunct really does exclude an arm.
@@ -33695,10 +33692,10 @@ emitTailValue: function {
         vn: ast.nodes.get i: vid
         isBlock = vn.doexpr
         # A `with` THAT YIELDS A VALUE binds a return local like any other
-        # control value. It used to fall through to emitTailStmt, which emits
-        # the binding and then the body as a statement -- so the function
-        # returned the value the `with` BOUND rather than the one its body
-        # yielded: `with a: (xs.get i: 0) do a * 3` answered a, silently. A
+        # control value. emitTailStmt would emit the binding and then the body
+        # as a statement, so the function would return the value the `with`
+        # BOUND rather than the one its body yields: `with a: (xs.get i: 0) do
+        # a * 3` would answer a, silently. A
         # `with` whose body RETURNS yields nothing, so implicitReturnValue
         # answers 0 above and that leg still has it.
         isCtl = vn.ifexpr or vn.caseexpr or vn.forexpr or vn.withexpr
@@ -34394,12 +34391,9 @@ emitComprehensionNode: function {
 # counted range, the closed range, an object iterator, a do-while and a plain
 # condition all reach the emitters they already reach as statements -- and
 # bring the loop labels, the `while:` arms, the scope destroys, the break and
-# continue cleanup and the generator spills with them.
-#
-# It used to emit ONE shape of its own, a counted header that re-read its bound
-# (the re-read emitCountedRangeFor stopped doing), and for every other source
-# it returned having emitted nothing at all. The list was already created, so
-# the answer was an empty list and no diagnostic.
+# continue cleanup and the generator spills with them. A shape of its own would
+# have to be kept beside each of those, and a source it did not know would
+# answer an empty list with no diagnostic.
 emitListComprehension: function {
     ast: Ast.view
     symtab: zenv.ZSymbolTable.view
@@ -40546,8 +40540,7 @@ emitListMono: function {
         buf.append (rtRender :ctx :plan keys: kt)
     }
     # insert and extend are their own fragments, written only for an instance
-    # that calls them. Every List instance used to carry both, and in the
-    # compiler's own C half of them were never called
+    # that calls them, so an instance that calls neither carries neither
     (
         emitColMethodOnDemand
         :ctx
@@ -52183,7 +52176,7 @@ methodBodyWalked: function {
 
 
 # nodeYieldCount -- the number of `yield` expressions in a subtree (yields do
-# not nest). Used to detect a generator `call` body and size its resume-state
+# not nest). It tells a generator `call` body, and sizes its resume-state
 # switch.
 nodeYieldCount: function {ast: Ast.view n: astnode.view} out u64 is {
     return (zast.yieldCountOf :ast :n)
