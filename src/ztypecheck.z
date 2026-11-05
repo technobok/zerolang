@@ -18023,7 +18023,8 @@ resolveAliasKey: function {
     constFoldDecl :st :ast :declId
     cvA: constValueOfDecl :st :declId
     if cvA.kind.none.not then return (declTypeIdOf :st :declId)
-    r: resolveAliasKeyIn :st scope: ascope :ast :declId
+    r: fileUnitAliasTid :st :ast adecl: declId
+    if r.isZero then r = resolveAliasKeyIn :st scope: ascope :ast :declId
     if r.isZero then r = resolveAppliedMemberAlias :st :ast scope: ascope :declId
     if r.isZero then r = resolveDeepAlias :st :ast scope: ascope :declId
     refuseArmAliasPayload :st :ast :declId tid: r
@@ -18840,6 +18841,34 @@ missingAliasTargetKind: function {
     if (st.typing.declChildOfId parentTypeId: rt nameId: target.defName).none.not then return 0
     if (leafNamesNoMember leafId: target.defName) then return 0
     return 2
+}
+
+# fileUnitAliasTid -- an alias of a FILE unit (`l: lib1`) is that unit, as an
+# alias of a nested one is: its bare value names no member of the unit the
+# alias is written in. The unit's type, recorded as the alias's own and as the
+# member of its unit; 0 for any other alias.
+fileUnitAliasTid: function {st: zenv.ZSymbolTable ast: Ast adecl: ztypes.declid} out ztypes.tid is {
+    if (aliasIsBareForm :st :ast declId: adecl).not then return ztypes.tid.zero
+    aParent: st.typing.declParentOf declId: adecl
+    aNameId: (st.typing.decls.get i: adecl).name
+    fu: (
+        fileUnitNamedAt
+        :st
+        scope: aParent
+        nameId: (reexportTargetIdsOf :st :ast declId: adecl).defName
+    )
+    if fu.isZero then return ztypes.tid.zero
+    fuTid: declTypeIdOf :st declId: fu
+    if fuTid.isZero then return fuTid
+    ownTid: declTypeIdOf :st declId: aParent
+    if ownTid.isZero.not then (
+        st.typing.setMemberType
+        parentTypeId: ownTid
+        nameId: aNameId
+        childTypeId: fuTid
+    )
+    st.typing.declSetType declId: adecl typeId: fuTid
+    return fuTid
 }
 
 # chase an alias to the declaration it finally names, so callers compare one
