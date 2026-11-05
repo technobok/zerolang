@@ -199,13 +199,13 @@ Builder: class {
     }
 
     # node -- the row of node `id`
-    node: function {this: this.view id: zast.nodeid} out zast.astnode is {
-        return (this.ast.nodes.get i: id)
+    node: function {t: this.view id: zast.nodeid} out zast.astnode is {
+        return (t.ast.nodes.get i: id)
     }
 
     # kid -- the i-th child id a span names
-    kid: function {this: this.view span: zast.kidspan i: u64} out zast.nodeid is {
-        return (zast.kidAt kids: this.ast.kids :span :i)
+    kid: function {t: this.view span: zast.kidspan i: u64} out zast.nodeid is {
+        return (zast.kidAt kids: t.ast.kids :span :i)
     }
 
     # rawCopy -- in raw mode, the bytes from the last copied token through
@@ -396,10 +396,10 @@ Builder: class {
     }
 
     # appendBlanks -- `n` extra newlines, which the printer writes bare
-    appendBlanks: function {this: this.view xs: ListVal u32 n: u32} is {
+    appendBlanks: function {t: this.view xs: ListVal u32 n: u32} is {
         i: u32
         for i < n loop {
-            xs.append this.idHard
+            xs.append t.idHard
             i = i + 1
         }
     }
@@ -730,8 +730,8 @@ Builder: class {
     }
 
     # isTerm -- an atom, a path, a string or a shorthand
-    isTerm: function {this: this.view id: zast.nodeid} out bool is {
-        n: this.node :id
+    isTerm: function {t: this.view id: zast.nodeid} out bool is {
+        n: t.node :id
         match (
             n
         ) case atomid then {
@@ -750,21 +750,21 @@ Builder: class {
     # isBinop -- a binary operation, in EITHER spelling. An
     # infix call is one: `a op b` parses to the call form, so every layout rule
     # keyed on this predicate reads the two spellings alike
-    isBinop: function {this: this.view id: zast.nodeid} out bool is {
-        n: this.node :id
-        ip: zast.infixPartsOf ast: this.ast :n
+    isBinop: function {t: this.view id: zast.nodeid} out bool is {
+        n: t.node :id
+        ip: zast.infixPartsOf ast: t.ast :n
         return ip.found
     }
 
     # isLabelledCall -- a call with a named argument
-    isLabelledCall: function {this: this.view id: zast.nodeid} out bool is {
-        n: this.node :id
+    isLabelledCall: function {t: this.view id: zast.nodeid} out bool is {
+        n: t.node :id
         match (
             n
         ) case call then {
             i: u64
             for i < n.arguments.count loop {
-                a: this.node id: (this.kid span: n.arguments :i)
+                a: t.node id: (t.kid span: n.arguments :i)
                 i = i + 1
                 match (
                     a
@@ -781,9 +781,9 @@ Builder: class {
     # isComplex -- a value the grammar cannot leave bare wherever a following
     # token could continue it: a call carrying a labelled argument, or a form
     # that runs to a block
-    isComplex: function {this: this.view id: zast.nodeid} out bool is {
-        if (this.isLabelledCall :id) then return true
-        n: this.node :id
+    isComplex: function {t: this.view id: zast.nodeid} out bool is {
+        if (t.isLabelledCall :id) then return true
+        n: t.node :id
         match (
             n
         ) case ifexpr then {
@@ -812,25 +812,25 @@ Builder: class {
     # would need it. A list ends at its brace, a term; with an `out` clause it
     # ends at the clause's type, which a following dot continues, so it ranks
     # as a binary operation does. Measured both ways in every position
-    shapeRank: function {this: this.view id: zast.nodeid} out u8 is {
-        if (this.isTerm :id) then return 0
-        n: this.node :id
+    shapeRank: function {t: this.view id: zast.nodeid} out u8 is {
+        if (t.isTerm :id) then return 0
+        n: t.node :id
         match (
             n
         ) case listblock then {
             if n.outType.isZero then return 0
             return 1
         } else null
-        if (this.isComplex :id) then return 3
-        if (this.isBinop :id) then return 1
+        if (t.isComplex :id) then return 3
+        if (t.isBinop :id) then return 1
         return 2
     }
 
     # parensRequired -- whether the GRAMMAR requires parentheses around `inner`
     # in `slot`. Not whether the author wrote them: the printed form is a
     # function of the tree and the position, and of nothing else
-    parensRequired: function {this: this.view inner: zast.nodeid slot: u8} out bool is {
-        return (this.shapeRank id: inner) >= slot
+    parensRequired: function {t: this.view inner: zast.nodeid slot: u8} out bool is {
+        return (t.shapeRank id: inner) >= slot
     }
 
     # parenGroup -- `open body close` as a group that breaks inside: the body
@@ -976,18 +976,18 @@ Builder: class {
 
     # kindChangesAt -- `lhs` is itself an operator chain whose operator is of
     # another kind than `outerOp` (both being operators of some kind)
-    kindChangesAt: function {this: this.view outerOp: zast.nodeid lhs: zast.nodeid} out bool is {
-        ip: zast.infixPartsOf ast: this.ast n: (this.node id: lhs)
+    kindChangesAt: function {t: this.view outerOp: zast.nodeid lhs: zast.nodeid} out bool is {
+        ip: zast.infixPartsOf ast: t.ast n: (t.node id: lhs)
         if ip.found.not then return false
-        ok: this.opKindOf id: outerOp
-        ik: this.opKindOf id: ip.operator
+        ok: t.opKindOf id: outerOp
+        ik: t.opKindOf id: ip.operator
         return (ok != 0) and (ik != 0) and (ok != ik)
     }
 
     # opKindOf -- ztypes.operatorKindOf for the operator atom `id`; 0 for any
     # other node
-    opKindOf: function {this: this.view id: zast.nodeid} out u8 is {
-        n: this.node :id
+    opKindOf: function {t: this.view id: zast.nodeid} out u8 is {
+        n: t.node :id
         match (
             n
         ) case atomid then {
@@ -1101,11 +1101,11 @@ Builder: class {
     # hugsLast -- whether the LAST argument is the only one that breaks: then
     # the call stays on its line and that argument breaks inside its own
     # delimiters. False when an earlier argument breaks, or the last does not.
-    hugsLast: function {this: this.view args: (ListVal u32).view} out bool is {
+    hugsLast: function {t: this.view args: (ListVal u32).view} out bool is {
         ai: u64
         for ai < args.length loop {
             last: (ai + 1) == args.length
-            if (this.d.breaksAt id: (args.get i: ai)) then {
+            if (t.d.breaksAt id: (args.get i: ai)) then {
                 if last.not then return false
             } else if last then return false
             ai = ai + 1
@@ -1138,12 +1138,12 @@ Builder: class {
 
     # soleUnnamedArg -- whether the call's one argument carries no label, and
     # so can hold the pair the call would otherwise need when it breaks
-    soleUnnamedArg: function {this: this.view n: zast.astnode} out bool is {
+    soleUnnamedArg: function {t: this.view n: zast.astnode} out bool is {
         match (
             n
         ) case call then {
             if n.arguments.count != 1 then return false
-            a: this.node id: (this.kid span: n.arguments i: 0)
+            a: t.node id: (t.kid span: n.arguments i: 0)
             match (
                 a
             ) case namedoperation then {
@@ -1248,10 +1248,10 @@ Builder: class {
 
     # holePart -- the index of the next interpolation expression among the
     # string parts from `from` on; the count when there is none
-    holePart: function {this: this.view parts: zast.kidspan from: u64} out u64 is {
+    holePart: function {t: this.view parts: zast.kidspan from: u64} out u64 is {
         i: from
         for i < parts.count loop {
-            p: this.node id: (this.kid span: parts :i)
+            p: t.node id: (t.kid span: parts :i)
             if p.stringchunk.not then return i
             i = i + 1
         }
@@ -1443,15 +1443,15 @@ Builder: class {
 
     # bareControlValue -- the `if` or `match` statement `id` is, as a value; 0
     # for any other statement
-    bareControlValue: function {this: this.view id: zast.nodeid} out zast.nodeid is {
+    bareControlValue: function {t: this.view id: zast.nodeid} out zast.nodeid is {
         vid: id
-        n: this.node :id
+        n: t.node :id
         match (
             n
         ) case statementline then {
             vid = n.statementline
         } else null
-        v: this.node id: vid
+        v: t.node id: vid
         match (
             v
         ) case ifexpr then {
@@ -2018,9 +2018,9 @@ Builder: class {
     # itemSep -- the separator before an item, and before the closing brace: a
     # parameter block's first item and its close are soft (the block may stay
     # on its line), every other item takes a line.
-    itemSep: function {this: this.view kind: u8 first: bool} out u32 is {
-        if kind == 1 when first then return this.idSoft
-        return this.idLine
+    itemSep: function {t: this.view kind: u8 first: bool} out u32 is {
+        if kind == 1 when first then return t.idSoft
+        return t.idLine
     }
 
     # fillItem -- one element of a filled list, as the fill's next separator
@@ -2091,10 +2091,10 @@ Builder: class {
     }
 
     # allUnlabelled -- whether every element of a list is a bare term
-    allUnlabelled: function {this: this.view span: zast.kidspan} out bool is {
+    allUnlabelled: function {t: this.view span: zast.kidspan} out bool is {
         i: u64
         for i < span.count loop {
-            e: this.node id: (this.kid :span :i)
+            e: t.node id: (t.kid :span :i)
             i = i + 1
             match (
                 e

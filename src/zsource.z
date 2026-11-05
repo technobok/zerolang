@@ -1234,9 +1234,9 @@ Analysis: class {
 } as {
     # parseErrorCount -- how many collected diagnostics are hard (ERROR) -- i.e.
     # parse errors. The fmt parse gate refuses any file with a non-zero count.
-    parseErrorCount: function {this: this.view} out u64 is {
+    parseErrorCount: function {t: this.view} out u64 is {
         c: u64
-        for each d: this.diags loop {
+        for each d: t.diags loop {
             match (
                 d.sev
             ) case error then {
@@ -1248,9 +1248,9 @@ Analysis: class {
 
     # failCount -- diagnostics that fail the gate: everything except advisory INFO. `zl lint` exits
     # non-zero on a non-zero count, so INFO rules (line-length) report without failing.
-    failCount: function {this: this.view} out u64 is {
+    failCount: function {t: this.view} out u64 is {
         c: u64
-        for each d: this.diags loop {
+        for each d: t.diags loop {
             isInfo: false
             match (
                 d.sev
@@ -2178,12 +2178,12 @@ Analysis: class {
 
     # flagBindingAt -- the flag binding a statement line holds (`name: true` /
     # `name: false`), or zeros for any other line.
-    flagBindingAt: function {this: this.view ast: Ast.view sid: zast.nodeid} out flagbind is {
+    flagBindingAt: function {t: this.view ast: Ast.view sid: zast.nodeid} out flagbind is {
         n: ast.nodes.get i: (innerNodeIdOf :ast id: sid)
         match (
             n
         ) case assignment then {
-            lit: this.boolLiteralAt :ast id: n.value
+            lit: t.boolLiteralAt :ast id: n.value
             if lit.isZero then return (flagbind name: zast.nameid lit: zast.nameid)
             return (flagbind name: n.name :lit)
         } else {
@@ -2193,11 +2193,11 @@ Analysis: class {
 
     # boolLiteralAt -- the pool id of `true` / `false` when the node at `id`, its
     # statement line peeled, is that literal; 0 otherwise.
-    boolLiteralAt: function {this: this.view ast: Ast.view id: zast.nodeid} out zast.nameid is {
+    boolLiteralAt: function {t: this.view ast: Ast.view id: zast.nodeid} out zast.nameid is {
         nm: atomNameIdOf n: (ast.nodes.get i: (innerNodeIdOf :ast :id))
         if nm.isZero then return nm
-        if nm == this.trueId then return nm
-        if nm == this.falseId then return nm
+        if nm == t.trueId then return nm
+        if nm == t.falseId then return nm
         return zast.nameid
     }
 
@@ -2557,12 +2557,12 @@ Analysis: class {
 
     # hasDocAbove -- true when the source line directly above `line1` (1-based)
     # is a `#` comment line -- the start of a leading doc block.
-    hasDocAbove: function {this: this.view line1: u32} out bool is {
+    hasDocAbove: function {t: this.view line1: u32} out bool is {
         result: false
         if line1 < 2 then return result
         idx: (line1 - 2).u64
-        if idx >= this.lines.length then return result
-        ln: this.lines.get i: idx
+        if idx >= t.lines.length then return result
+        ln: t.lines.get i: idx
         lv: ln.stringView
         lt: lv.trim
         if lt.startsWith "#" then result = true
@@ -2625,12 +2625,12 @@ Analysis: class {
     # docBlockAbove -- the contiguous `#` block directly above `line1`, markers dropped
     # and lines joined by spaces; "" when there is none. This is the same block hover
     # renders, so a rule reading it judges what a reader actually sees.
-    docBlockAbove: function {this: this.view line1: u32} out String is {
+    docBlockAbove: function {v: this.view line1: u32} out String is {
         buf: String
         if line1 < 2 then return buf
         lo: (line1 - 2).u64
-        if lo >= this.lines.length then return buf
-        last: this.lines.get i: lo
+        if lo >= v.lines.length then return buf
+        last: v.lines.get i: lo
         if (docLineIsComment ln: last.stringView).not then return buf
         top: lo
         more: true
@@ -2638,7 +2638,7 @@ Analysis: class {
             if top == 0 then {
                 more = false
             } else {
-                prev: this.lines.get i: top - 1
+                prev: v.lines.get i: top - 1
                 if (docLineIsComment ln: prev.stringView) then {
                     top = top - 1
                 } else more = false
@@ -2646,7 +2646,7 @@ Analysis: class {
         }
         i: top
         for i <= lo loop {
-            ln: this.lines.get :i
+            ln: v.lines.get :i
             t: ln.stringView.trim
             body: t.substring from: 1 to: t.length
             if buf.length > 0 then buf.appendByte b: 32
@@ -2695,11 +2695,11 @@ Analysis: class {
     # docBlockBody -- the comment block starting at line `from`: each line's text
     # after its `#`, trimmed, joined by single spaces into `into`. Answers the
     # index of the first line after the block.
-    docBlockBody: function {this: this.view from: u64 into: String.borrow} out u64 is {
+    docBlockBody: function {v: this.view from: u64 into: String.borrow} out u64 is {
         i: from
-        n: this.lines.length
+        n: v.lines.length
         for i < n loop {
-            ln: this.lines.get :i
+            ln: v.lines.get :i
             t: ln.stringView.trim
             if (t.startsWith "#").not then return i
             body: t.substring from: 1 to: t.length
@@ -2713,10 +2713,10 @@ Analysis: class {
     # docBlockKey -- a doc body's comparison key: its words with the vocabulary
     # of the declaration at `declAt` (the line after the block) and every
     # width folded out, joined.
-    docBlockKey: function {this: this.view ws: List String declAt: u64} out String is {
+    docBlockKey: function {t: this.view ws: List String declAt: u64} out String is {
         vocab: List String
-        if declAt < this.lines.length then {
-            decl: (this.lines.get i: declAt).copy
+        if declAt < t.lines.length then {
+            decl: (t.lines.get i: declAt).copy
             docVocabInto s: (docStripComment ln: decl.stringView) into: vocab
         }
         folded: docFoldTemplate words: ws :vocab
@@ -4049,12 +4049,12 @@ Analysis: class {
     # selfFsnoOf -- the fsno the parse gave THIS file: the loaded file that is
     # the same filesystem object as its path, so two spellings of one path
     # agree. 0 when the parse did not load it.
-    selfFsnoOf: function {this: this.view vfs: zvfs.ZVfs.view prog: Ast.view} out zvfs.fsno is {
+    selfFsnoOf: function {t: this.view vfs: zvfs.ZVfs.view prog: Ast.view} out zvfs.fsno is {
         found: zvfs.fsno
         for each f: prog.files loop {
             if found.isZero then {
                 fp: vfs.pathfromproviderNative dentryid: f
-                if (sameFile a: fp.stringView b: this.path.stringView) then found = f
+                if (sameFile a: fp.stringView b: t.path.stringView) then found = f
             }
         }
         return found

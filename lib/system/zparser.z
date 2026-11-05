@@ -321,10 +321,10 @@ Parser: class {
     # a reserved word, and "" when it is not. One place asks the pool for the
     # text and one place decides, so a caller tests a length and then has the
     # word to name in its diagnostic.
-    peekReservedWord: function {this: this.view lex: zlexer.Lexer.view} out String is {
+    peekReservedWord: function {t: this.view lex: zlexer.Lexer.view} out String is {
         id: lex.peekTextId
         if (Parser.isReservedWordId :id).not then return "".string
-        return (zast.poolTextCopy pool: this.ast.names ref: id)
+        return (zast.poolTextCopy pool: t.ast.names ref: id)
     }
 
     # True when word `id` is a keyword or a future-reserved word (illegal
@@ -382,12 +382,12 @@ Parser: class {
     # bareFlowWord -- the name of `return`, `yield` or `break` when a block line
     # is that word alone; the zero id for any other line. Each takes its value
     # as a call's argument, and an `if` or `match` is one only in parentheses.
-    bareFlowWord: function {this: this.view sl: astnode.view} out zast.nameid is {
+    bareFlowWord: function {t: this.view sl: astnode.view} out zast.nameid is {
         none: zast.nameid.zero
         match (
             sl
         ) case statementline then {
-            e: this.ast.nodes.get i: sl.statementline
+            e: t.ast.nodes.get i: sl.statementline
             match (
                 e
             ) case atomid then {
@@ -520,7 +520,7 @@ Parser: class {
 
     # reservedLabelLookahead -- the buffered token is a keyword or a reserved
     # word written as a label (`view:`) or a label shorthand (`:view`)
-    reservedLabelLookahead: function {this: this.view lex: zlexer.Lexer.view} out bool is {
+    reservedLabelLookahead: function {t: this.view lex: zlexer.Lexer.view} out bool is {
         tt: lex.peekType
         return (tt == zlexer.toktype.reservedLabelTok) or (tt == zlexer.toktype.reservedLabelPreTok)
     }
@@ -540,7 +540,7 @@ Parser: class {
 
     # Does an atom start at the current token? (PARENOPEN | REFID | STRBEG |
     # LIST)
-    atomLookahead: function {this: this.view lex: zlexer.Lexer.view} out bool is {
+    atomLookahead: function {t: this.view lex: zlexer.Lexer.view} out bool is {
         tt: lex.peekType
         match (
             tt
@@ -919,12 +919,12 @@ Parser: class {
 
     # keptFrom -- where the literal at `base` starts its text: past a blank
     # first line, else at its first token
-    keptFrom: function {this: this.view base: u64 src: StringView} out u64 is {
+    keptFrom: function {t: this.view base: u64 src: StringView} out u64 is {
         i: base
-        for i < this.segStack.length loop {
-            s: this.segStack.get :i
+        for i < t.segStack.length loop {
+            s: t.segStack.get :i
             if s.kind == chunkkind.eol then return i + 1
-            if (this.blankSeg seg: s :src).not then return base
+            if (t.blankSeg seg: s :src).not then return base
             i = i + 1
         }
         return base
@@ -933,16 +933,16 @@ Parser: class {
     # blankLineAt -- token `i`, at a line start, is the whole line and holds only
     # spaces and tabs: a line end follows it. That line is empty in the value,
     # whatever its indent.
-    blankLineAt: function {this: this.view i: u64 src: StringView} out bool is {
-        if (i + 1) >= this.segStack.length then return false
-        if (this.segStack.get i: i + 1).kind != chunkkind.eol then return false
-        return (this.blankSeg seg: (this.segStack.get :i) :src)
+    blankLineAt: function {t: this.view i: u64 src: StringView} out bool is {
+        if (i + 1) >= t.segStack.length then return false
+        if (t.segStack.get i: i + 1).kind != chunkkind.eol then return false
+        return (t.blankSeg seg: (t.segStack.get :i) :src)
     }
 
     # blankSeg -- a text token holding only spaces and tabs
-    blankSeg: function {this: this.view seg: strseg src: StringView} out bool is {
+    blankSeg: function {t: this.view seg: strseg src: StringView} out bool is {
         if seg.kind != chunkkind.strmid then return false
-        return (isWsOnlyView sv: (segTextOf pool: this.ast.names :seg :src))
+        return (isWsOnlyView sv: (segTextOf pool: t.ast.names :seg :src))
     }
 
     # lineStartsCarry -- whether every line of `from`..`to` begins with `p9`, a
@@ -1184,10 +1184,10 @@ Parser: class {
 
     # argLabelSeen -- `nm` already labels an argument of the call whose label
     # window starts at `nbase`
-    argLabelSeen: function {this: this.view nbase: u64 nm: zast.nameid} out bool is {
+    argLabelSeen: function {t: this.view nbase: u64 nm: zast.nameid} out bool is {
         i: nbase
-        for i < this.argNameStack.length loop {
-            if (this.argNameStack.get :i) == nm then return true
+        for i < t.argNameStack.length loop {
+            if (t.argNameStack.get :i) == nm then return true
             i = i + 1
         }
         return false
@@ -1316,8 +1316,8 @@ Parser: class {
     }
 
     # pathCount -- how many paths the operation at `base` pushed.
-    pathCount: function {this: this.view base: u64} out u64 is {
-        return this.opStack.length - base
+    pathCount: function {t: this.view base: u64} out u64 is {
+        return t.opStack.length - base
     }
 
     # takePaths -- the operation at `base`, off the stack and into a list of
@@ -1685,7 +1685,7 @@ Parser: class {
 
     # Does an expression start at the current token? Control-flow forms
     # begin with a keyword; everything else begins with an atom.
-    exprLookahead: function {this: this.view lex: zlexer.Lexer.view} out bool is {
+    exprLookahead: function {t: this.view lex: zlexer.Lexer.view} out bool is {
         tt: lex.peekType
         match (
             tt
@@ -1700,12 +1700,12 @@ Parser: class {
         } case braceOpenTok then {
             return true
         } else {
-            return (this.atomLookahead :lex)
+            return (t.atomLookahead :lex)
         }
     }
 
     # True for a block-line separator token (EOL or ';').
-    atSeparator: function {this: this.view lex: zlexer.Lexer.view} out bool is {
+    atSeparator: function {t: this.view lex: zlexer.Lexer.view} out bool is {
         tt: lex.peekType
         match (
             tt
@@ -1725,13 +1725,13 @@ Parser: class {
 
     # True when the current token is an EOL (a unit-body definition
     # separator; only observable while EOL filtering is off).
-    atEol: function {this: this.view lex: zlexer.Lexer.view} out bool is {
+    atEol: function {t: this.view lex: zlexer.Lexer.view} out bool is {
         return lex.peekType == zlexer.toktype.eolTok
     }
 
     # Does a block line start at the current token? (a binding label, a
     # label shorthand, or an expression)
-    blocklineLookahead: function {this: this.view lex: zlexer.Lexer.view} out bool is {
+    blocklineLookahead: function {t: this.view lex: zlexer.Lexer.view} out bool is {
         tt: lex.peekType
         match (
             tt
@@ -1744,7 +1744,7 @@ Parser: class {
         } case reservedLabelPreTok then {
             return true
         } else {
-            return (this.exprLookahead :lex)
+            return (t.exprLookahead :lex)
         }
     }
 
@@ -4847,13 +4847,13 @@ Parser: class {
     }
 
     # loadedUnitNames -- the names of the top-level units the tree holds
-    loadedUnitNames: function {this: this.view} out List String is {
+    loadedUnitNames: function {t: this.view} out List String is {
         names: List String
-        for each u: this.ast.units loop {
-            n: this.ast.nodes.get i: u
+        for each u: t.ast.units loop {
+            n: t.ast.nodes.get i: u
             if n.namedoperation then names.append (
                 zast.poolTextCopy
-                pool: this.ast.names
+                pool: t.ast.names
                 ref: n.name
             )
         }
@@ -4862,23 +4862,23 @@ Parser: class {
 
     # unitDefNames -- the names the top-level unit `unitName` defines, as
     # `parse` keeps core's to tell a core name from a reference to a unit
-    unitDefNames: function {this: this.view unitName: StringView} out List String is {
+    unitDefNames: function {t: this.view unitName: StringView} out List String is {
         names: List String
-        for each u: this.ast.units loop {
-            n: this.ast.nodes.get i: u
+        for each u: t.ast.units loop {
+            n: t.ast.nodes.get i: u
             if n.namedoperation when (
-                (zast.poolTextAt pool: this.ast.names ref: n.name).stringView == unitName
+                (zast.poolTextAt pool: t.ast.names ref: n.name).stringView == unitName
             ) then {
-                span: zast.unitBodyIdsAt ast: this.ast unitId: n.operation
+                span: zast.unitBodyIdsAt ast: t.ast unitId: n.operation
                 items: ListVal zast.nodeid
                 i: u64
                 for i < span.count loop {
-                    items.append (zast.kidAt kids: this.ast.kids :span :i)
+                    items.append (zast.kidAt kids: t.ast.kids :span :i)
                     i = i + 1
                 }
                 ids: ListVal zast.nameid
-                ewBindNameList ast: this.ast scope: ids :items
-                for each id: ids loop names.append (zast.poolTextCopy pool: this.ast.names ref: id)
+                ewBindNameList ast: t.ast scope: ids :items
+                for each id: ids loop names.append (zast.poolTextCopy pool: t.ast.names ref: id)
             }
         }
         return names
@@ -5054,10 +5054,10 @@ ParseState: class {
     }
 
     # copy -- an owned duplicate, for each parse that reads on from a stored one
-    copy: function {this: this.view} out this is {
-        r: meta.create units: this.units.copy coreNames: List String defNames: List String
-        for each cn: this.coreNames loop r.coreNames.append cn.copy
-        for each dn: this.defNames loop r.defNames.append dn.copy
+    copy: function {t: this.view} out this is {
+        r: meta.create units: t.units.copy coreNames: List String defNames: List String
+        for each cn: t.coreNames loop r.coreNames.append cn.copy
+        for each dn: t.defNames loop r.defNames.append dn.copy
         return r
     }
 }
@@ -5140,10 +5140,10 @@ Lookups: class {
     }
 
     # answerIndex -- 1 + the latest lookup that answered `id`, 0 when none did
-    answerIndex: function {this: this.view id: zvfs.fsno} out u32 is {
-        i: this.found.length
+    answerIndex: function {t: this.view id: zvfs.fsno} out u32 is {
+        i: t.found.length
         for i > 0 loop {
-            if (this.found.get i: i - 1) == id then return i.u32.orPanic
+            if (t.found.get i: i - 1) == id then return i.u32.orPanic
             i = i - 1
         }
         return 0
@@ -5174,9 +5174,9 @@ Lookups: class {
     }
 
     # lookUp -- lookup `i` made again in `vfs`, from `from`
-    lookUp: function {this: this.view vfs: zvfs.ZVfs i: u64 from: zvfs.fsno} out zvfs.fsno is {
-        nm: (this.names.get :i).stringView
-        if (this.beside.get :i) then return (vfs.siblingDir fileid: from name: nm)
+    lookUp: function {t: this.view vfs: zvfs.ZVfs i: u64 from: zvfs.fsno} out zvfs.fsno is {
+        nm: (t.names.get :i).stringView
+        if (t.beside.get :i) then return (vfs.siblingDir fileid: from name: nm)
         return (vfs.walk parent: from name: nm)
     }
 
@@ -5200,7 +5200,7 @@ Lookups: class {
 
     # renaming -- each noted answer's fsno in another view, `answers` (what
     # replay found there), by its fsno where it was noted
-    renaming: function {this: this.view answers: (ListVal zvfs.fsno).view} out (
+    renaming: function {t: this.view answers: (ListVal zvfs.fsno).view} out (
         ListVal
         zvfs.fsno
         i: zvfs.fsno
@@ -5208,7 +5208,7 @@ Lookups: class {
         renamed: ListVal zvfs.fsno i: zvfs.fsno
         k: u64
         for k < answers.length loop {
-            was: this.found.get i: k
+            was: t.found.get i: k
             if was.u64 >= renamed.length then renamed.resize to: was.u64 + 1
             renamed.set i: was val: (answers.get i: k)
             k = k + 1
@@ -5345,15 +5345,15 @@ EwScope: class {
     }
 
     # whether `id` is bound here
-    has: function {this: this.view id: zast.nameid} out bool is {
+    has: function {t: this.view id: zast.nameid} out bool is {
         n: id.u64
-        if n >= this.counts.length then return false
-        return (this.counts.get i: n) > 0
+        if n >= t.counts.length then return false
+        return (t.counts.get i: n) > 0
     }
 
     # how many names are bound: the point a block truncates back to
-    depth: function {this: this.view} out u64 is {
-        return this.stack.length
+    depth: function {t: this.view} out u64 is {
+        return t.stack.length
     }
 
     # drop the bindings made since depth `n` (block / scope exit)

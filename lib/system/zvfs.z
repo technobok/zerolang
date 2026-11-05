@@ -40,32 +40,32 @@ fsno: typedef u32 as {
         return t.u32 == rhs.u32
     }
     # the sentinel test: entry 0 is no file, never the first one registered
-    isZero: function {this: this.view} out bool is {
-        return this.u32 == 0
+    isZero: function {t: this.view} out bool is {
+        return t.u32 == 0
     }
     # the zero fsno: no file. A parameter or field that may be handed none
     # defaults to it
     zero: fsno 0
     # the file id's place in the order the files were registered in: an id only ever orders against
     # an id of its own space, never a bare number
-    compare: function {this: this.view rhs: fsno} out i32 is {
-        return (this.u32.compare rhs: rhs.u32)
+    compare: function {t: this.view rhs: fsno} out i32 is {
+        return (t.u32.compare rhs: rhs.u32)
     }
     # this file id was numbered earlier than `rhs`
-    <: function {this: this.view rhs: fsno} out bool is {
-        return this.u32 < rhs.u32
+    <: function {t: this.view rhs: fsno} out bool is {
+        return t.u32 < rhs.u32
     }
     # this file id was numbered no later than `rhs`
-    <=: function {this: this.view rhs: fsno} out bool is {
-        return this.u32 <= rhs.u32
+    <=: function {t: this.view rhs: fsno} out bool is {
+        return t.u32 <= rhs.u32
     }
     # this file id was numbered later than `rhs`
-    >: function {this: this.view rhs: fsno} out bool is {
-        return this.u32 > rhs.u32
+    >: function {t: this.view rhs: fsno} out bool is {
+        return t.u32 > rhs.u32
     }
     # this file id was numbered no earlier than `rhs`
-    >=: function {this: this.view rhs: fsno} out bool is {
-        return this.u32 >= rhs.u32
+    >=: function {t: this.view rhs: fsno} out bool is {
+        return t.u32 >= rhs.u32
     }
     # no arithmetic and no bitwise operator: a file id names one file, and a number made from it
     # names nothing. Walking the space reads `next`, and a boundary that needs the number (a dump, a
@@ -83,12 +83,12 @@ fsno: typedef u32 as {
     not: null
     # the id's hash, agreeing with `==`: both read the id alone, so an fsno
     # keys a map or a set
-    hash: function {this: this.view} out u64 is {
-        return this.u32
+    hash: function {t: this.view} out u64 is {
+        return t.u32
     }
     # the next id in sequence, which is how a walk over every entry steps
-    next: function {this: this.view} out fsno is {
-        n: this.u32 + 1
+    next: function {t: this.view} out fsno is {
+        n: t.u32 + 1
         return (fsno from: n)
     }
 }
@@ -847,8 +847,8 @@ ZVfs: class {
     # which we treat as a directory for printing purposes). file /
     # directory / notfound map directly. The mount case will be
     # mount arm once UNION-aware walk lands.
-    arm: function {this: this.view dentryid: fsno} out nodekind is {
-        e: this.entrytable.entries.get i: dentryid
+    arm: function {t: this.view dentryid: fsno} out nodekind is {
+        e: t.entrytable.entries.get i: dentryid
         match (
             e
         ) case root then {
@@ -867,16 +867,16 @@ ZVfs: class {
     # into parallel out-lists. Only `file` arms are included so that
     # directories and not-found entries (which also carry a name in
     # file_names) are excluded.
-    fileTable: function {this: this.view outIds: ListVal fsno outPaths: List String} is {
-        n: this.entrytable.entries.length
+    fileTable: function {t: this.view outIds: ListVal fsno outPaths: List String} is {
+        n: t.entrytable.entries.length
         i: fsno
         for i.u64 < n loop {
-            e: this.entrytable.entries.get :i
+            e: t.entrytable.entries.get :i
             match (
                 e
             ) case file then {
                 outIds.append from: i
-                nm: this.file_names.get :i
+                nm: t.file_names.get :i
                 outPaths.append nm.copy
             } case root then null case notfound then null case directory then null case mount then null
             i = i.next
@@ -889,7 +889,7 @@ ZVfs: class {
     # anything else (notfound, file, dir, mount) keeps going. Up to
     # 1024 ancestors before we bail (defensive cap; trees in
     # practice stay shallow).
-    path: function {this: this.view dentryid: fsno} out String is {
+    path: function {t: this.view dentryid: fsno} out String is {
         # Collect names walking upward, then assemble in reverse.
         # Cap at 1024 ancestors (defensive; trees stay shallow).
         names: List String
@@ -898,7 +898,7 @@ ZVfs: class {
         cap: 1024.u32
         active: true
         for active loop {
-            e: this.entrytable.entries.get i: curid
+            e: t.entrytable.entries.get i: curid
             at_root: false
             par: fsno
             match (
@@ -921,7 +921,7 @@ ZVfs: class {
             if at_root or (curid == par) then {
                 active = false
             } else {
-                nm: this.file_names.get i: curid
+                nm: t.file_names.get i: curid
                 names.append nm.copy
                 curid = par
                 steps = steps + 1
@@ -944,8 +944,8 @@ ZVfs: class {
     # path representation. For mount arms returns "[UNION]" (no
     # underlying path); for root/notfound returns "[NULL]"/
     # "[NOT FOUND]".
-    pathfromprovider: function {this: this.view dentryid: fsno} out String is {
-        e: this.entrytable.entries.get i: dentryid
+    pathfromprovider: function {t: this.view dentryid: fsno} out String is {
+        e: t.entrytable.entries.get i: dentryid
         match (
             e
         ) case root then {
@@ -957,13 +957,13 @@ ZVfs: class {
         } case file then {
             pid: e.providerid
             nid: e.nodeid
-            box: this.providers.get i: pid
+            box: t.providers.get i: pid
             s: box.p.path item: nid
             return s
         } case directory then {
             pid: e.providerid
             nid: e.nodeid
-            box: this.providers.get i: pid
+            box: t.providers.get i: pid
             s: box.p.path item: nid
             return s
         }
@@ -974,8 +974,8 @@ ZVfs: class {
     # cleaned and in native separators.
     # "" when the provider has no native root (the in-memory overlay); the
     # caller resolves those against its source dir, which the overlay shadows.
-    pathfromproviderNative: function {this: this.view dentryid: fsno} out String is {
-        e: this.entrytable.entries.get i: dentryid
+    pathfromproviderNative: function {t: this.view dentryid: fsno} out String is {
+        e: t.entrytable.entries.get i: dentryid
         rel: String
         pid: u32
         got: false
@@ -984,18 +984,18 @@ ZVfs: class {
         ) case root then null case notfound then null case mount then null case file then {
             pid = e.providerid
             nid: e.nodeid
-            box: this.providers.get i: pid
+            box: t.providers.get i: pid
             rel = box.p.path item: nid
             got = true
         } case directory then {
             pid = e.providerid
             nid: e.nodeid
-            box: this.providers.get i: pid
+            box: t.providers.get i: pid
             rel = box.p.path item: nid
             got = true
         }
         if got.not then return "".string
-        ro: this.providerRoot.get key: pid
+        ro: t.providerRoot.get key: pid
         # an in-memory provider spells its paths from `/`; under a root that is
         # the separator, already there
         relv: rel.stringView
@@ -1056,8 +1056,8 @@ ZVfs: class {
 
     # parentOf -- the directory entry `dentryid` hangs under; the root is its
     # own parent.
-    parentOf: function {this: this.view dentryid: fsno} out fsno is {
-        e: this.entrytable.entries.get i: dentryid
+    parentOf: function {t: this.view dentryid: fsno} out fsno is {
+        e: t.entrytable.entries.get i: dentryid
         match (
             e
         ) case root then {
@@ -1075,8 +1075,8 @@ ZVfs: class {
 
     # _sameProvider -- whether two entries belong to one provider. A root or a
     # mount belongs to none, so it matches nothing.
-    _sameProvider: function {this: this.view a: fsno b: fsno} out bool is {
-        ea: this.entrytable.entries.get i: a
+    _sameProvider: function {t: this.view a: fsno b: fsno} out bool is {
+        ea: t.entrytable.entries.get i: a
         pa: u32
         match (
             ea
@@ -1091,7 +1091,7 @@ ZVfs: class {
         } case mount then {
             return false
         }
-        eb: this.entrytable.entries.get i: b
+        eb: t.entrytable.entries.get i: b
         match (
             eb
         ) case file then {
@@ -1112,9 +1112,9 @@ ZVfs: class {
     # from where the tool ran, cleaned as path.join does (Go's filepath):
     # native separators, no `./`. A file whose provider has no native root (an
     # in-memory overlay) keeps its path under that root.
-    displayPath: function {this: this.view dentryid: fsno} out String is {
-        np: this.pathfromproviderNative :dentryid
-        if np.length == 0 then return (this.pathfromprovider :dentryid)
+    displayPath: function {t: this.view dentryid: fsno} out String is {
+        np: t.pathfromproviderNative :dentryid
+        if np.length == 0 then return (t.pathfromprovider :dentryid)
         return np
     }
 
@@ -1122,8 +1122,8 @@ ZVfs: class {
     # mountinfo carrier. For mount arms: is_mount=true + first/second/
     # has_second fields. For other arms: is_mount=false. Used by walk to
     # release the entrytable borrow before recursing into the mount arms.
-    _extractMount: function {this: this.view dentryid: fsno} out mountinfo is {
-        e: this.entrytable.entries.get i: dentryid
+    _extractMount: function {t: this.view dentryid: fsno} out mountinfo is {
+        e: t.entrytable.entries.get i: dentryid
         match (
             e
         ) case mount then {
@@ -1141,8 +1141,8 @@ ZVfs: class {
     # _dentryIsNotFound -- true iff the dentry at `dentryid` is the
     # notfound arm. Used by walk to decide whether to fall through from
     # the first union arm to the second on a mount.
-    _dentryIsNotFound: function {this: this.view dentryid: fsno} out bool is {
-        e: this.entrytable.entries.get i: dentryid
+    _dentryIsNotFound: function {t: this.view dentryid: fsno} out bool is {
+        e: t.entrytable.entries.get i: dentryid
         match (
             e
         ) case notfound then {
@@ -1154,8 +1154,8 @@ ZVfs: class {
     # open -- read an entry. A file answers its provider's contents; a
     # directory or a mount answers its entry names (`_openDir`); notfound and
     # the bare root answer an IoError.
-    open: function {this: this.view dentryid: fsno} out OpenResult is {
-        e: this.entrytable.entries.get i: dentryid
+    open: function {t: this.view dentryid: fsno} out OpenResult is {
+        e: t.entrytable.entries.get i: dentryid
         match (
             e
         ) case root then {
@@ -1165,22 +1165,22 @@ ZVfs: class {
             ie: IoError.notfound
             return (OpenResult.err ie.take)
         } case directory then {
-            return (this._openDir :dentryid)
+            return (t._openDir :dentryid)
         } case mount then {
-            return (this._openDir :dentryid)
+            return (t._openDir :dentryid)
         } case file then {
             pid: e.providerid
             nid: e.nodeid
-            box: this.providers.get i: pid
+            box: t.providers.get i: pid
             return (box.p.open item: nid)
         }
     }
 
     # _openDir -- a directory-like entry's names, sorted, each once: the first
     # root of a mount wins a name, and a name is the same text in every root
-    _openDir: function {this: this.view dentryid: fsno} out OpenResult is {
+    _openDir: function {t: this.view dentryid: fsno} out OpenResult is {
         names: List String
-        this._listInto :dentryid :names
+        t._listInto :dentryid :names
         names.sort
         once: List String
         for each nm: names loop {
@@ -1194,15 +1194,15 @@ ZVfs: class {
     # _listInto -- append the names under `dentryid` to `names`: a directory's
     # provider entries, a mount's roots in turn, and whatever is bound at the
     # entry. Anything else holds no names
-    _listInto: function {this: this.view dentryid: fsno names: List String} is {
-        mi: this._extractMount :dentryid
+    _listInto: function {t: this.view dentryid: fsno names: List String} is {
+        mi: t._extractMount :dentryid
         if mi.is_mount then {
-            this._listInto dentryid: mi.first :names
-            if mi.has_second then this._listInto dentryid: mi.second :names
+            t._listInto dentryid: mi.first :names
+            if mi.has_second then t._listInto dentryid: mi.second :names
         } else {
-            this._providerNamesInto :dentryid :names
+            t._providerNamesInto :dentryid :names
         }
-        bn: this.bound.get key: dentryid
+        bn: t.bound.get key: dentryid
         match (
             bn
         ) case some then {
@@ -1212,12 +1212,12 @@ ZVfs: class {
 
     # _providerNamesInto -- append a directory entry's names, as its provider
     # lists them, to `names`. Any other entry adds none
-    _providerNamesInto: function {this: this.view dentryid: fsno names: List String} is {
-        e: this.entrytable.entries.get i: dentryid
+    _providerNamesInto: function {t: this.view dentryid: fsno names: List String} is {
+        e: t.entrytable.entries.get i: dentryid
         match (
             e
         ) case directory then {
-            box: this.providers.get i: e.providerid
+            box: t.providers.get i: e.providerid
             r: box.p.open item: e.nodeid
             match (
                 r
@@ -1230,8 +1230,8 @@ ZVfs: class {
     # getline -- the file's line `lineno` (0-based) as Option.some, read
     # up to that line and no further. Out-of-range index or open-failure
     # returns Option.none.
-    getline: function {this: this.view dentryid: fsno lineno: u64} out Option String is {
-        r: this.open :dentryid
+    getline: function {t: this.view dentryid: fsno lineno: u64} out Option String is {
+        r: t.open :dentryid
         match (
             r
         ) case file then {

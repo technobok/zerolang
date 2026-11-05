@@ -479,11 +479,11 @@ ZSymbolTable: class {
 
     # innermostScope -- the innermost open scope that has a row, or the zero
     # id when none is open.
-    innermostScope: function {this: this.view} out ztypes.declid is {
-        n: this.open.length
+    innermostScope: function {t: this.view} out ztypes.declid is {
+        n: t.open.length
         for n > 0 loop {
             n = n - 1
-            f: (this.open.get i: n).id
+            f: (t.open.get i: n).id
             if f.isZero.not then return f
         }
         return ztypes.declid.zero
@@ -538,11 +538,11 @@ ZSymbolTable: class {
 
     # openIndexOf -- where the open scope `scope` sits in `open`, none when it is
     # not open.
-    openIndexOf: function {this: this.view scope: ztypes.declid} out optionval openpos is {
-        i: this.open.length
+    openIndexOf: function {t: this.view scope: ztypes.declid} out optionval openpos is {
+        i: t.open.length
         for i > 0 loop {
             i = i - 1
-            if (this.open.get :i).id == scope then return (optionval.some (openpos.create from: i))
+            if (t.open.get :i).id == scope then return (optionval.some (openpos.create from: i))
         }
         return (optionval.none openpos)
     }
@@ -600,10 +600,10 @@ ZSymbolTable: class {
     # innermostOpenIs -- the innermost open scope is `scope` itself: no block,
     # arm, loop or call the walk entered since lies between, materialised or
     # not.
-    innermostOpenIs: function {this: this.view scope: ztypes.declid} out bool is {
-        n: this.open.length
+    innermostOpenIs: function {t: this.view scope: ztypes.declid} out bool is {
+        n: t.open.length
         if n == 0 then return false
-        return (this.open.get i: n - 1).id == scope
+        return (t.open.get i: n - 1).id == scope
     }
 
     # materialiseTop -- give the innermost open scope its row, under the
@@ -820,12 +820,12 @@ ZSymbolTable: class {
     # Same-scope only: an OUTER scope binding the name is shadowing, which is
     # legal and resolved by declFindLocal's outward walk. An unmaterialised
     # scope has no locals yet, so it binds nothing.
-    scopeBindsHere: function {this: this.view nameId: zast.nameid} out bool is {
-        n: this.open.length
+    scopeBindsHere: function {t: this.view nameId: zast.nameid} out bool is {
+        n: t.open.length
         if n == 0 then return false
-        fr: (this.open.get i: n - 1).id
+        fr: (t.open.get i: n - 1).id
         if fr.isZero then return false
-        d: this.typing.declFindChild parentDeclId: fr :nameId
+        d: t.typing.declFindChild parentDeclId: fr :nameId
         return d.isZero.not
     }
 
@@ -859,20 +859,19 @@ ZSymbolTable: class {
     # open scope outward: each scope's own locals (the last defined wins),
     # then the scope enclosing it, until the chain leaves the scopes. Zero
     # when no scope defines it.
-    findLocal: function {this: this.view nameId: zast.nameid} out ztypes.declid is {
-        return (this.typing.declFindLocal scope: this.curScope :nameId)
+    findLocal: function {t: this.view nameId: zast.nameid} out ztypes.declid is {
+        return (t.typing.declFindLocal scope: t.curScope :nameId)
     }
 
     # bodyStart -- where the rows of the body being walked begin: the start of
     # the innermost open scope a body opened (push), whose parent is the
     # declaration the body belongs to rather than an enclosing scope
-    bodyStart: function {this: this.view} out u64 is {
-        n: this.open.length
+    bodyStart: function {t: this.view} out u64 is {
+        n: t.open.length
         for n > 0 loop {
             n = n - 1
-            sc: this.open.get i: n
-            if sc.parent.isZero.not when (this.typing.decls.get i: sc.parent
-            ).kind.scopeDecl.not then {
+            sc: t.open.get i: n
+            if sc.parent.isZero.not when (t.typing.decls.get i: sc.parent).kind.scopeDecl.not then {
                 return sc.start
             }
         }
@@ -880,8 +879,8 @@ ZSymbolTable: class {
     }
 
     # isLocalName -- does an open scope define `nameId`, taken or not?
-    isLocalName: function {this: this.view nameId: zast.nameid} out bool is {
-        d: this.findLocal :nameId
+    isLocalName: function {t: this.view nameId: zast.nameid} out bool is {
+        d: t.findLocal :nameId
         return d.isZero.not
     }
 
@@ -889,16 +888,16 @@ ZSymbolTable: class {
     # constant is every body's to narrow, and a body another one demands is
     # walked while that one's rows are still open: a constant's rows count
     # only from the body being walked (bodyStart).
-    rowOf: function {this: this.view declId: ztypes.declid} out optionval u64 is {
+    rowOf: function {t: this.view declId: ztypes.declid} out optionval u64 is {
         if declId.isZero then return (optionval.none u64)
-        if (this.typing.declRowsOf :declId) == 0 then return (optionval.none u64)
+        if (t.typing.declRowsOf :declId) == 0 then return (optionval.none u64)
         lowest: u64
-        if (this.typing.decls.get i: declId).kind.constDecl then lowest = this.bodyStart
-        ne: this.entries.length
+        if (t.typing.decls.get i: declId).kind.constDecl then lowest = t.bodyStart
+        ne: t.entries.length
         j: ne
         for j > lowest loop {
             j2: j - 1
-            e: this.entries.get i: j2
+            e: t.entries.get i: j2
             if e.declId == declId then return (optionval.some j2)
             j = j - 1
         }
@@ -941,18 +940,18 @@ ZSymbolTable: class {
     }
 
     # Resolve a name to its type id, or none (also none when taken).
-    lookup: function {this: this.view nameId: zast.nameid} out optionval ztypes.tid is {
-        d: this.findLocal :nameId
+    lookup: function {t: this.view nameId: zast.nameid} out optionval ztypes.tid is {
+        d: t.findLocal :nameId
         if d.isZero then return (optionval.none ztypes.tid)
-        ro: this.rowOf declId: d
+        ro: t.rowOf declId: d
         match (
             ro
         ) case some then {
-            e: this.entries.get i: ro
+            e: t.entries.get i: ro
             if e.isTaken then return (optionval.none ztypes.tid)
             return (optionval.some e.ztypeId)
         } case none then null
-        return (optionval.some (this.typing.declLocalTypeOf declId: d))
+        return (optionval.some (t.typing.declLocalTypeOf declId: d))
     }
 
     # Declared type of `name`, ignoring narrowing overlays: the row's
@@ -960,14 +959,14 @@ ZSymbolTable: class {
     # narrowed sum-type target accepts a fresh value of its whole declared
     # type, so a reassignment validates its RHS against this, not the
     # narrowed view.
-    declaredTypeOf: function {this: this.view nameId: zast.nameid} out optionval ztypes.tid is {
-        d: this.findLocal :nameId
+    declaredTypeOf: function {t: this.view nameId: zast.nameid} out optionval ztypes.tid is {
+        d: t.findLocal :nameId
         if d.isZero then return (optionval.none ztypes.tid)
-        ro: this.rowOf declId: d
+        ro: t.rowOf declId: d
         match (
             ro
         ) case some then {
-            e: this.entries.get i: ro
+            e: t.entries.get i: ro
             if e.isTaken then return (optionval.none ztypes.tid)
             oz: e.originalZtypeId
             match (
@@ -977,16 +976,16 @@ ZSymbolTable: class {
             } case none then null
             return (optionval.some e.ztypeId)
         } case none then null
-        return (optionval.some (this.typing.declLocalTypeOf declId: d))
+        return (optionval.some (t.typing.declLocalTypeOf declId: d))
     }
 
     # Variable id bound to `name`, skipping lock/narrow overlays; none if
     # taken or unbound.
-    lookupVarId: function {this: this.view nameId: zast.nameid} out optionval ztypes.vid is {
-        d: this.findLocal :nameId
+    lookupVarId: function {t: this.view nameId: zast.nameid} out optionval ztypes.vid is {
+        d: t.findLocal :nameId
         if d.isZero then return (optionval.none ztypes.vid)
-        if (this.isTakenDecl declId: d) then return (optionval.none ztypes.vid)
-        v: this.typing.declLocalVarOf declId: d
+        if (t.isTakenDecl declId: d) then return (optionval.none ztypes.vid)
+        v: t.typing.declLocalVarOf declId: d
         if v.isZero then return (optionval.none ztypes.vid)
         return (optionval.some v)
     }
@@ -1045,12 +1044,12 @@ ZSymbolTable: class {
     # stateOfDecl -- the state a destroy point here records the local `declId`
     # in (destroyitem): 0 it holds its value, 1 it was moved on every path here,
     # 2 on some.
-    stateOfDecl: function {this: this.view declId: ztypes.declid} out u8 is {
-        ro: this.rowOf :declId
+    stateOfDecl: function {t: this.view declId: ztypes.declid} out u8 is {
+        ro: t.rowOf :declId
         match (
             ro
         ) case some then {
-            e: this.entries.get i: ro
+            e: t.entries.get i: ro
             if e.isTaken when e.takenMaybe then return 2
             if e.isTaken then return 1
         } case none then null
@@ -1060,19 +1059,19 @@ ZSymbolTable: class {
     # ownsDestroy -- `vid` is a variable a destroy point lists: one that owns
     # what it holds and whose type can own something (D14), and not one of the
     # checker's own temporaries.
-    ownsDestroy: function {this: this.view vid: ztypes.vid} out bool is {
+    ownsDestroy: function {t: this.view vid: ztypes.vid} out bool is {
         if vid.isZero then return false
-        if (this.typing.tempVars.has item: vid) then return false
-        if (this.reg.variableOwnershipOf id: vid) != ztypes.zownership.owned then return false
-        return (this.reg.isReftypeOf tid: (this.reg.variableTypeOf id: vid))
+        if (t.typing.tempVars.has item: vid) then return false
+        if (t.reg.variableOwnershipOf id: vid) != ztypes.zownership.owned then return false
+        return (t.reg.isReftypeOf tid: (t.reg.variableTypeOf id: vid))
     }
 
     # recording -- whether what the walk passes is recorded for the emitter:
     # not in a dry run, and not in a generic template's walk, whose body only an
     # instance's copy of it is emitted from.
-    recording: function {this: this.view} out bool is {
-        if this.dryRunDepth > 0 then return false
-        return (this.typing.suppressParamStamps and this.typing.curMonoStamp.isZero).not
+    recording: function {t: this.view} out bool is {
+        if t.dryRunDepth > 0 then return false
+        return (t.typing.suppressParamStamps and t.typing.curMonoStamp.isZero).not
     }
 
     # appendOwnedTempsOf -- the TEMPORARIES `scope` binds that own something at
@@ -1182,20 +1181,20 @@ ZSymbolTable: class {
     }
 
     # breakLeavesInnermost -- whether a `break` left the innermost break scope.
-    breakLeavesInnermost: function {this: this.view} out bool is {
-        n: this.breakSeen.length
+    breakLeavesInnermost: function {t: this.view} out bool is {
+        n: t.breakSeen.length
         if n == 0 then return false
-        return (this.breakSeen.get i: n - 1)
+        return (t.breakSeen.get i: n - 1)
     }
 
     # takenDeclsInScope -- the declarations the innermost scope's rows take,
     # in order.
-    takenDeclsInScope: function {this: this.view into: ListVal ztypes.declid} is {
-        n: this.open.length
+    takenDeclsInScope: function {t: this.view into: ListVal ztypes.declid} is {
+        n: t.open.length
         if n == 0 then return
-        p: (this.open.get i: n - 1).start
-        for p < this.entries.length loop {
-            e: this.entries.get i: p
+        p: (t.open.get i: n - 1).start
+        for p < t.entries.length loop {
+            e: t.entries.get i: p
             if e.isTaken then into.append e.declId
             p = p + 1
         }
@@ -1262,23 +1261,23 @@ ZSymbolTable: class {
     }
 
     # currentTypeOf -- the local's type as its newest row has it.
-    currentTypeOf: function {this: this.view declId: ztypes.declid} out ztypes.tid is {
-        ro: this.rowOf :declId
+    currentTypeOf: function {t: this.view declId: ztypes.declid} out ztypes.tid is {
+        ro: t.rowOf :declId
         match (
             ro
         ) case some then {
-            return (this.entries.get i: ro).ztypeId
+            return (t.entries.get i: ro).ztypeId
         } case none then null
-        return (this.typing.declLocalTypeOf :declId)
+        return (t.typing.declLocalTypeOf :declId)
     }
 
     # whether a declaration's value has been moved out
-    isTakenDecl: function {this: this.view declId: ztypes.declid} out bool is {
-        ro: this.rowOf :declId
+    isTakenDecl: function {t: this.view declId: ztypes.declid} out bool is {
+        ro: t.rowOf :declId
         match (
             ro
         ) case some then {
-            return (this.entries.get i: ro).isTaken
+            return (t.entries.get i: ro).isTaken
         } case none then null
         return false
     }
@@ -1316,24 +1315,24 @@ ZSymbolTable: class {
     }
 
     # whether a name's value has been moved out
-    isTakenName: function {this: this.view nameId: zast.nameid} out bool is {
-        return (this.isTakenDecl declId: (this.findLocal :nameId))
+    isTakenName: function {t: this.view nameId: zast.nameid} out bool is {
+        return (t.isTakenDecl declId: (t.findLocal :nameId))
     }
 
     # Index of the newest taken row for `name`, or none.
-    takenIndex: function {this: this.view nameId: zast.nameid} out optionval u64 is {
-        return (this.takenIndexDecl declId: (this.findLocal :nameId))
+    takenIndex: function {t: this.view nameId: zast.nameid} out optionval u64 is {
+        return (t.takenIndexDecl declId: (t.findLocal :nameId))
     }
 
     # takenIndexDecl -- the same for a local named by its declaration.
-    takenIndexDecl: function {this: this.view declId: ztypes.declid} out optionval u64 is {
+    takenIndexDecl: function {t: this.view declId: ztypes.declid} out optionval u64 is {
         d: declId
         if d.isZero then return (optionval.none u64)
-        ne: this.entries.length
+        ne: t.entries.length
         j: ne
         for j > 0 loop {
             j2: j - 1
-            e: this.entries.get i: j2
+            e: t.entries.get i: j2
             if e.declId == d when e.isTaken then return (optionval.some j2)
             j = j - 1
         }
@@ -1342,14 +1341,14 @@ ZSymbolTable: class {
 
     # takenInInnermost -- whether a take was laid over `declId` in the
     # innermost scope, whatever rows were laid after it.
-    takenInInnermost: function {this: this.view declId: ztypes.declid} out bool is {
-        n: this.open.length
+    takenInInnermost: function {t: this.view declId: ztypes.declid} out bool is {
+        n: t.open.length
         if n == 0 then return false
-        ko: this.takenIndexDecl :declId
+        ko: t.takenIndexDecl :declId
         match (
             ko
         ) case some then {
-            return ko >= (this.open.get i: n - 1).start
+            return ko >= (t.open.get i: n - 1).start
         } case none then {
             return false
         }
@@ -1358,15 +1357,15 @@ ZSymbolTable: class {
     # refilledInInnermost -- the locals of enclosing scopes the innermost scope
     # refilled (a `refills` row) and that hold a value here, appended to `into`
     # once each.
-    refilledInInnermost: function {this: this.view into: ListVal ztypes.declid} is {
-        n: this.open.length
+    refilledInInnermost: function {t: this.view into: ListVal ztypes.declid} is {
+        n: t.open.length
         if n == 0 then return
-        p: (this.open.get i: n - 1).start
-        for p < this.entries.length loop {
-            e: this.entries.get i: p
+        p: (t.open.get i: n - 1).start
+        for p < t.entries.length loop {
+            e: t.entries.get i: p
             p = p + 1
             if e.refills.not then continue
-            if (this.isTakenDecl declId: e.declId) then continue
+            if (t.isTakenDecl declId: e.declId) then continue
             if (into.contains item: e.declId) then continue
             into.append e.declId
         }
@@ -1381,10 +1380,10 @@ ZSymbolTable: class {
     }
 
     # takenBetween -- whether a take row lies in rows [from, to).
-    takenBetween: function {this: this.view from: u64 to: u64} out bool is {
+    takenBetween: function {t: this.view from: u64 to: u64} out bool is {
         i: from
         for i < to loop {
-            if (this.entries.get :i).isTaken then return true
+            if (t.entries.get :i).isTaken then return true
             i = i + 1
         }
         return false
@@ -1530,37 +1529,37 @@ ZSymbolTable: class {
     # --- lock holder formatting ---
 
     # localNameOfVar -- the name of the open local bound to `vid`, or 0.
-    localNameOfVar: function {this: this.view vid: ztypes.vid} out zast.nameid is {
-        cur: this.curScope
+    localNameOfVar: function {t: this.view vid: ztypes.vid} out zast.nameid is {
+        cur: t.curScope
         for cur.isZero.not loop {
-            if (this.typing.declIsScope declId: cur).not then return zast.nameid.zero
-            kn: this.typing.declChildSlots declId: cur
+            if (t.typing.declIsScope declId: cur).not then return zast.nameid.zero
+            kn: t.typing.declChildSlots declId: cur
             ki: kn
             for ki > 0 loop {
                 ki = ki - 1
-                kd: this.typing.declChildAt declId: cur index: ki
-                kv: this.typing.declLocalVarOf declId: kd
-                if kv == vid then return (this.typing.declNameOf declId: kd)
+                kd: t.typing.declChildAt declId: cur index: ki
+                kv: t.typing.declLocalVarOf declId: kd
+                if kv == vid then return (t.typing.declNameOf declId: kd)
             }
-            cur = this.typing.declParentOf declId: cur
+            cur = t.typing.declParentOf declId: cur
         }
         return zast.nameid.zero
     }
 
     # scopeOfVar -- the open scope that binds `vid`, climbing from the innermost;
     # zero when no open scope binds it.
-    scopeOfVar: function {this: this.view vid: ztypes.vid} out ztypes.declid is {
-        cur: this.curScope
+    scopeOfVar: function {t: this.view vid: ztypes.vid} out ztypes.declid is {
+        cur: t.curScope
         for cur.isZero.not loop {
-            if (this.typing.declIsScope declId: cur).not then return ztypes.declid
-            kn: this.typing.declChildSlots declId: cur
+            if (t.typing.declIsScope declId: cur).not then return ztypes.declid
+            kn: t.typing.declChildSlots declId: cur
             ki: kn
             for ki > 0 loop {
                 ki = ki - 1
-                kd: this.typing.declChildAt declId: cur index: ki
-                if (this.typing.declLocalVarOf declId: kd) == vid then return cur
+                kd: t.typing.declChildAt declId: cur index: ki
+                if (t.typing.declLocalVarOf declId: kd) == vid then return cur
             }
-            cur = this.typing.declParentOf declId: cur
+            cur = t.typing.declParentOf declId: cur
         }
         return ztypes.declid
     }
@@ -1839,15 +1838,15 @@ ZSymbolTable: class {
     }
 
     # the outstanding lock on a name, if any
-    findLock: function {this: this.view nameId: zast.nameid} out optionval ztypes.zlockstate is {
-        d: this.findLocal :nameId
+    findLock: function {t: this.view nameId: zast.nameid} out optionval ztypes.zlockstate is {
+        d: t.findLocal :nameId
         if d.isZero then return (optionval.none ztypes.zlockstate)
-        if (this.typing.declRowsOf declId: d) == 0 then return (optionval.none ztypes.zlockstate)
-        ne: this.entries.length
+        if (t.typing.declRowsOf declId: d) == 0 then return (optionval.none ztypes.zlockstate)
+        ne: t.entries.length
         j: ne
         for j > 0 loop {
             j2: j - 1
-            e: this.entries.get i: j2
+            e: t.entries.get i: j2
             if e.declId == d when e.hasLock then return (optionval.some e.lockType)
             j = j - 1
         }
@@ -1920,11 +1919,11 @@ ZSymbolTable: class {
     # argLockQueued -- an argument of a call whose arguments are still being
     # walked passes the local `nameId`: the call starts after anything a later
     # argument does, so it would read the local after a move out of it.
-    argLockQueued: function {this: this.view nameId: zast.nameid} out bool is {
-        if this.argLocks.length == 0 then return false
-        d: this.findLocal :nameId
+    argLockQueued: function {t: this.view nameId: zast.nameid} out bool is {
+        if t.argLocks.length == 0 then return false
+        d: t.findLocal :nameId
         if d.isZero then return false
-        for each q: this.argLocks loop {
+        for each q: t.argLocks loop {
             if q.declId == d then return true
         }
         return false
@@ -2083,16 +2082,16 @@ ZSymbolTable: class {
     }
 
     # Any lock (SHARED or EXCLUSIVE) prefix-overlapping `path`?
-    isPathLocked: function {this: this.view path: (ListVal zast.nameid).view} out bool is {
+    isPathLocked: function {t: this.view path: (ListVal zast.nameid).view} out bool is {
         if path.length == 0 then return false
-        d: this.findLocal nameId: (path.get i: 0)
+        d: t.findLocal nameId: (path.get i: 0)
         if d.isZero then return false
-        if (this.typing.declRowsOf declId: d) == 0 then return false
-        ne: this.entries.length
+        if (t.typing.declRowsOf declId: d) == 0 then return false
+        ne: t.entries.length
         j: ne
         for j > 0 loop {
             j2: j - 1
-            e: this.entries.get i: j2
+            e: t.entries.get i: j2
             if e.declId == d when e.hasLock then {
                 ov: pathsOverlap a: e.lockPath.listView b: path.listView
                 if ov then return true
@@ -2138,17 +2137,17 @@ ZSymbolTable: class {
     # local an open scope defines, else the unit-level constant the name reads.
     # A constant never changes, so it narrows as a local does; a nearer
     # definition of another kind shadows it, and narrows nothing.
-    subjectDecl: function {this: this.view nameId: zast.nameid} out ztypes.declid is {
-        d: this.findLocal :nameId
+    subjectDecl: function {t: this.view nameId: zast.nameid} out ztypes.declid is {
+        d: t.findLocal :nameId
         if d.isZero.not then return d
-        cur: this.curScope
+        cur: t.curScope
         for cur.isZero.not loop {
-            c: this.typing.declFindChild parentDeclId: cur :nameId
+            c: t.typing.declFindChild parentDeclId: cur :nameId
             if c.isZero.not then {
-                if (this.typing.decls.get i: c).kind.constDecl then return c
+                if (t.typing.decls.get i: c).kind.constDecl then return c
                 return ztypes.declid.zero
             }
-            cur = this.typing.declParentOf declId: cur
+            cur = t.typing.declParentOf declId: cur
         }
         return ztypes.declid.zero
     }
@@ -2255,12 +2254,12 @@ ZSymbolTable: class {
     }
 
     # Copy the current exclusion set for `name` into `into`.
-    collectExcluded: function {this: this.view nameId: zast.nameid into: IdSet zast.nameid} is {
-        ro: this.rowOf declId: (this.subjectDecl :nameId)
+    collectExcluded: function {t: this.view nameId: zast.nameid into: IdSet zast.nameid} is {
+        ro: t.rowOf declId: (t.subjectDecl :nameId)
         match (
             ro
         ) case some then {
-            e: this.entries.get i: ro
+            e: t.entries.get i: ro
             it: e.excludedSubtypes.iterate
             for s: it loop {
                 into.add item: s
@@ -2310,10 +2309,10 @@ ZSymbolTable: class {
 
     # isNarrowedDecl -- whether the local's newest row narrows it: to an arm, to
     # an arm's payload, or by ruling arms out.
-    isNarrowedDecl: function {this: this.view declId: ztypes.declid} out bool is {
-        ro: this.rowOf :declId
+    isNarrowedDecl: function {t: this.view declId: ztypes.declid} out bool is {
+        ro: t.rowOf :declId
         if ro.none then return false
-        e: this.entries.get i: ro
+        e: t.entries.get i: ro
         if e.narrowedSubtype.isZero.not then return true
         if e.originalZtypeId.none.not then return true
         return e.excludedSubtypes.length > 0
@@ -2321,10 +2320,10 @@ ZSymbolTable: class {
 
     # narrowsToArm -- whether the local's newest row narrows it to one arm or to
     # that arm's payload, so that the name reads the payload.
-    narrowsToArm: function {this: this.view declId: ztypes.declid} out bool is {
-        ro: this.rowOf :declId
+    narrowsToArm: function {t: this.view declId: ztypes.declid} out bool is {
+        ro: t.rowOf :declId
         if ro.none then return false
-        e: this.entries.get i: ro
+        e: t.entries.get i: ro
         if e.narrowedSubtype.isZero.not then return true
         return e.originalZtypeId.none.not
     }
@@ -2332,8 +2331,8 @@ ZSymbolTable: class {
     # anyNarrowed -- whether any open scope narrows any local. Asked before a
     # walk that exists only to end narrowings, which has nothing to do when
     # nothing is narrowed -- the common case.
-    anyNarrowed: function {this: this.view} out bool is {
-        for each e: this.entries loop {
+    anyNarrowed: function {t: this.view} out bool is {
+        for each e: t.entries loop {
             if e.narrowedSubtype.isZero.not then return true
             if e.originalZtypeId.none.not then return true
             if e.excludedSubtypes.length > 0 then return true
@@ -2362,10 +2361,10 @@ ZSymbolTable: class {
 
     # holdsNarrowingEnd -- whether a row at or above `from` is a narrowing end.
     # Asked before a rebuild of the rows, which nearly every scope can skip.
-    holdsNarrowingEnd: function {this: this.view from: u64} out bool is {
+    holdsNarrowingEnd: function {t: this.view from: u64} out bool is {
         i: from
-        for i < this.entries.length loop {
-            if (this.entries.get :i).endsNarrowing then return true
+        for i < t.entries.length loop {
+            if (t.entries.get :i).endsNarrowing then return true
             i = i + 1
         }
         return false
@@ -2373,8 +2372,8 @@ ZSymbolTable: class {
 
     # openArmNarrowingEnds -- a statement with arms begins: the mark its
     # collected narrowing ends are held above.
-    openArmNarrowingEnds: function {this: this.view} out u64 is {
-        return this.armNarrowingEnds.length
+    openArmNarrowingEnds: function {t: this.view} out u64 is {
+        return t.armNarrowingEnds.length
     }
 
     # collectArmNarrowingEnds -- a non-diverging arm finished: take the
@@ -2456,12 +2455,12 @@ ZSymbolTable: class {
     # isShadowNarrowed -- the current row for `name` is a shadow narrowing
     # (the bare name IS a payload; originalZtypeId records the outer sum
     # type).
-    isShadowNarrowed: function {this: this.view nameId: zast.nameid} out bool is {
-        ro: this.rowOf declId: (this.subjectDecl :nameId)
+    isShadowNarrowed: function {t: this.view nameId: zast.nameid} out bool is {
+        ro: t.rowOf declId: (t.subjectDecl :nameId)
         match (
             ro
         ) case some then {
-            e: this.entries.get i: ro
+            e: t.entries.get i: ro
             oz: e.originalZtypeId
             match (
                 oz
@@ -2476,12 +2475,12 @@ ZSymbolTable: class {
     }
 
     # the arm a name is currently narrowed to
-    getSubtypeName: function {this: this.view nameId: zast.nameid} out zast.nameid is {
-        ro: this.rowOf declId: (this.subjectDecl :nameId)
+    getSubtypeName: function {t: this.view nameId: zast.nameid} out zast.nameid is {
+        ro: t.rowOf declId: (t.subjectDecl :nameId)
         match (
             ro
         ) case some then {
-            e: this.entries.get i: ro
+            e: t.entries.get i: ro
             return e.narrowedSubtype
         } case none then {
             return zast.nameid
@@ -2502,12 +2501,12 @@ ZSymbolTable: class {
     # how the innermost open scope became unreachable; `divkind.none` while it
     # is reachable. The mark is the scope's own; one that has no row yet
     # cannot carry it.
-    unreachableKind: function {this: this.view} out u8 is {
-        n: this.open.length
+    unreachableKind: function {t: this.view} out u8 is {
+        n: t.open.length
         if n == 0 then return divkind.none
-        f: (this.open.get i: n - 1).id
+        f: (t.open.get i: n - 1).id
         if f.isZero then return divkind.none
-        ko: this.unreachableKinds.get key: f
+        ko: t.unreachableKinds.get key: f
         match (
             ko
         ) case some then {
@@ -2518,13 +2517,13 @@ ZSymbolTable: class {
     }
 
     # whether the walk is in unreachable code, where a diagnostic would be noise
-    isUnreachable: function {this: this.view} out bool is {
-        return (this.unreachableKind == divkind.none).not
+    isUnreachable: function {t: this.view} out bool is {
+        return (t.unreachableKind == divkind.none).not
     }
 
     # the height of the scope stack, for a later `discardTakenFrom`
-    entryMark: function {this: this.view} out u64 is {
-        return this.entries.length
+    entryMark: function {t: this.view} out u64 is {
+        return t.entries.length
     }
 
     # settleDivergingTakes -- what the innermost scope's takes owe once its
@@ -2580,10 +2579,10 @@ ZSymbolTable: class {
     }
 
     # isOnceTake -- the decl was moved by this loop's iterable binding
-    isOnceTake: function {this: this.view run: looprun d: ztypes.declid} out bool is {
+    isOnceTake: function {t: this.view run: looprun d: ztypes.declid} out bool is {
         i: run.onceStart
-        for i < this.loopOnceTakes.length loop {
-            if (this.loopOnceTakes.get :i) == d then return true
+        for i < t.loopOnceTakes.length loop {
+            if (t.loopOnceTakes.get :i) == d then return true
             i = i + 1
         }
         return false
@@ -2602,8 +2601,8 @@ ZSymbolTable: class {
 
     # takenDeclAt -- the decl a scope-stack row marks as taken, 0 when the
     # row is not a take
-    takenDeclAt: function {this: this.view i: u64} out ztypes.declid is {
-        e: this.entries.get :i
+    takenDeclAt: function {t: this.view i: u64} out ztypes.declid is {
+        e: t.entries.get :i
         if e.isTaken.not then return ztypes.declid.zero
         return e.declId
     }
@@ -2639,38 +2638,38 @@ ZSymbolTable: class {
 
     # All defined, non-taken names inner->outer (dedup), for did-you-mean:
     # each open scope's locals in definition order, innermost scope first.
-    allNames: function {this: this.view} out ListVal zast.nameid is {
+    allNames: function {t: this.view} out ListVal zast.nameid is {
         names: ListVal zast.nameid
         seen: IdSet zast.nameid
-        cur: this.curScope
+        cur: t.curScope
         for cur.isZero.not loop {
-            if (this.typing.declIsScope declId: cur).not then return names
-            kn: this.typing.declChildSlots declId: cur
+            if (t.typing.declIsScope declId: cur).not then return names
+            kn: t.typing.declChildSlots declId: cur
             ki: u64
             for ki < kn loop {
-                kd: this.typing.declChildAt declId: cur index: ki
-                nm: this.typing.declNameOf declId: kd
+                kd: t.typing.declChildAt declId: cur index: ki
+                nm: t.typing.declNameOf declId: kd
                 ki = ki + 1
-                if (seen.has item: nm).not when (this.isTakenDecl declId: kd).not then {
+                if (seen.has item: nm).not when (t.isTakenDecl declId: kd).not then {
                     names.append nm
                     seen.add item: nm
                 }
             }
-            cur = this.typing.declParentOf declId: cur
+            cur = t.typing.declParentOf declId: cur
         }
         return names
     }
 
     # hasTakenRow -- has a take been laid over `declId` (whatever narrowing
     # or lock rows were laid after it)?
-    hasTakenRow: function {this: this.view declId: ztypes.declid} out bool is {
+    hasTakenRow: function {t: this.view declId: ztypes.declid} out bool is {
         if declId.isZero then return false
-        if (this.typing.declRowsOf :declId) == 0 then return false
-        ne: this.entries.length
+        if (t.typing.declRowsOf :declId) == 0 then return false
+        ne: t.entries.length
         j: ne
         for j > 0 loop {
             j2: j - 1
-            e: this.entries.get i: j2
+            e: t.entries.get i: j2
             if e.declId == declId when e.isTaken then return true
             j = j - 1
         }
@@ -2682,28 +2681,28 @@ ZSymbolTable: class {
     # taken row's, so a shadow of a name inside an arm neither hides the outer
     # local nor lends it the shadow's state; a narrowing laid over a binding is
     # a row of the same declaration and does not hide a take under it.
-    getLiveOwnedVars: function {this: this.view} out IdSet ztypes.declid is {
+    getLiveOwnedVars: function {t: this.view} out IdSet ztypes.declid is {
         decls: IdSet ztypes.declid
-        cur: this.curScope
+        cur: t.curScope
         for cur.isZero.not loop {
-            if (this.typing.declIsScope declId: cur).not then return decls
-            kn: this.typing.declChildSlots declId: cur
+            if (t.typing.declIsScope declId: cur).not then return decls
+            kn: t.typing.declChildSlots declId: cur
             ki: kn
             for ki > 0 loop {
                 ki = ki - 1
-                kd: this.typing.declChildAt declId: cur index: ki
+                kd: t.typing.declChildAt declId: cur index: ki
                 # the take scan is the costly test: ask it last, of the few
                 # locals that are owned resources at all
-                v: this.typing.declLocalVarOf declId: kd
+                v: t.typing.declLocalVarOf declId: kd
                 if v.isZero.not then {
-                    dt: this.typing.declLocalTypeOf declId: kd
+                    dt: t.typing.declLocalTypeOf declId: kd
                     # a reftype moves on a take whether or not it has anything to
                     # destroy
-                    owned: (this.reg.needsDestructor typeId: dt) or (this.reg.isReftypeOf tid: dt)
-                    if owned when (this.hasTakenRow declId: kd).not then decls.add item: kd
+                    owned: (t.reg.needsDestructor typeId: dt) or (t.reg.isReftypeOf tid: dt)
+                    if owned when (t.hasTakenRow declId: kd).not then decls.add item: kd
                 }
             }
-            cur = this.typing.declParentOf declId: cur
+            cur = t.typing.declParentOf declId: cur
         }
         return decls
     }
