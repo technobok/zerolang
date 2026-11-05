@@ -805,7 +805,7 @@ simplePathFirstAtom: function {ast: Ast.view id: zast.nodeid} out zast.nodeid is
     ) case atomid then {
         return id
     } case dottedpath then {
-        if (atomNameIdOf n: (ast.nodes.get i: n.child)).isZero then return zast.nodeid
+        if (zast.atomNameIdOf n: (ast.nodes.get i: n.child)).isZero then return zast.nodeid
         return (simplePathFirstAtom :ast id: n.parent)
     } else {
         return zast.nodeid
@@ -821,18 +821,6 @@ simplePathLastAtom: function {ast: Ast.view id: zast.nodeid} out zast.nodeid is 
         return n.child
     } else {
         return id
-    }
-}
-
-# atomNameIdOf -- an atom's interned name id, 0 when the node is not an atom
-# (no pool id is 0, so a compare against it misses).
-atomNameIdOf: function {n: astnode.view} out zast.nameid is {
-    match (
-        n
-    ) case atomid then {
-        return n.name
-    } else {
-        return zast.nameid
     }
 }
 
@@ -1846,14 +1834,14 @@ Analysis: class {
     checkBoolLiteralCompare: function {
         :this ast: Ast.view opId: zast.nodeid lhsId: zast.nodeid rhsId: zast.nodeid
     } is {
-        opNm: atomNameIdOf n: (ast.nodes.get i: opId)
+        opNm: zast.atomNameIdOf n: (ast.nodes.get i: opId)
         isEq: opNm == zast.wellKnown.slot.wkOpEq
         isNe: opNm == zast.wellKnown.slot.wkOpNe
         if isEq.not when isNe.not then return
-        litNm: atomNameIdOf n: (ast.nodes.get i: rhsId)
+        litNm: zast.atomNameIdOf n: (ast.nodes.get i: rhsId)
         reversed: false
         if (this.isBoolLiteralId nm: litNm).not then {
-            litNm = atomNameIdOf n: (ast.nodes.get i: lhsId)
+            litNm = zast.atomNameIdOf n: (ast.nodes.get i: lhsId)
             if (this.isBoolLiteralId nm: litNm).not then return
             reversed = true
         }
@@ -1899,7 +1887,7 @@ Analysis: class {
         lastN: ast.nodes.get i: (simplePathLastAtom :ast id: operandId)
         fp: zast.posOf n: (ast.nodes.get i: firstId)
         ep: zast.posOf n: lastN
-        lastLen: (zast.poolTextAt pool: ast.names ref: (atomNameIdOf n: lastN)).length.u64
+        lastLen: (zast.poolTextAt pool: ast.names ref: (zast.atomNameIdOf n: lastN)).length.u64
         srcOwned: this.source.copy
         srcv: srcOwned.stringView
         litLo: (
@@ -2058,8 +2046,8 @@ Analysis: class {
         endB: opB
         for endB > lhsB while (isSpaceByte c: (docByteAt s: sv i: endB - 1)) loop endB = endB - 1
         if (groupedSpan :sv lo: lhsB hi: endB) then return
-        outerNm: zast.nameTextAt :ast ref: (atomNameIdOf n: (ast.nodes.get i: opId))
-        inn: zast.nameTextAt :ast ref: (atomNameIdOf n: (ast.nodes.get i: inner.operator))
+        outerNm: zast.nameTextAt :ast ref: (zast.atomNameIdOf n: (ast.nodes.get i: opId))
+        inn: zast.nameTextAt :ast ref: (zast.atomNameIdOf n: (ast.nodes.get i: inner.operator))
         what: "`\{inn}` and `\{outerNm}` chained without parentheses: operators group left to right, so the `\{inn}` is taken first"
         this.warn code: "L032" msg: what line: op.line col: op.col width: outerNm.length.u32.orPanic
         this.edits.append (zfix.Edit byteLo: lhsB byteHi: lhsB replacement: "(".string)
@@ -2194,7 +2182,7 @@ Analysis: class {
     # boolLiteralAt -- the pool id of `true` / `false` when the node at `id`, its
     # statement line peeled, is that literal; 0 otherwise.
     boolLiteralAt: function {t: this.view ast: Ast.view id: zast.nodeid} out zast.nameid is {
-        nm: atomNameIdOf n: (ast.nodes.get i: (innerNodeIdOf :ast :id))
+        nm: zast.atomNameIdOf n: (ast.nodes.get i: (innerNodeIdOf :ast :id))
         if nm.isZero then return nm
         if nm == t.trueId then return nm
         if nm == t.falseId then return nm
@@ -2228,7 +2216,7 @@ Analysis: class {
         match (
             n
         ) case reassignment then {
-            if (atomNameIdOf n: (ast.nodes.get i: n.topath)) != name then return false
+            if (zast.atomNameIdOf n: (ast.nodes.get i: n.topath)) != name then return false
             return (t.boolLiteralAt :ast id: n.value) == lit
         } else {
             return false
@@ -2269,7 +2257,7 @@ Analysis: class {
     checkLiteralCompare: function {
         :this ast: Ast.view opId: zast.nodeid lhsId: zast.nodeid rhsId: zast.nodeid
     } is {
-        op: atomNameIdOf n: (ast.nodes.get i: opId)
+        op: zast.atomNameIdOf n: (ast.nodes.get i: opId)
         isCmp: (op == zast.wellKnown.slot.wkOpEq) or (op == zast.wellKnown.slot.wkOpNe)
         if isCmp.not then return
         this.literalCompareSide :ast id: lhsId
@@ -2303,8 +2291,8 @@ Analysis: class {
         :this ast: Ast.view callable: astnode.view arguments: zast.kidspan
     } is {
         if this.opts.arch.not then return
-        leaf: atomNameIdOf n: callable
-        if callable.dottedpath then leaf = atomNameIdOf n: (ast.nodes.get i: callable.child)
+        leaf: zast.atomNameIdOf n: callable
+        if callable.dottedpath then leaf = zast.atomNameIdOf n: (ast.nodes.get i: callable.child)
         if leaf.isZero then return
         fw: this.lookupWords.slotOf text: (zast.nameTextAt :ast ref: leaf).stringView
         if fw == this.lookupWords.none then return
@@ -3087,12 +3075,12 @@ Analysis: class {
             if ptext.length == 0 then return
             isStr: (ast.nodes.get i: value.parent).atomstring
             # `.string` is the one member whose bare type is not its own spelling
-            childName: atomNameIdOf n: (ast.nodes.get i: value.child)
+            childName: zast.atomNameIdOf n: (ast.nodes.get i: value.child)
             isStrRepl: childName == zast.wellKnown.slot.wkString
             if isStr when isStrRepl.not then return
             if isStr.not when isStrRepl then return
             sysId: zast.wellKnown.slot.tyString
-            if isStrRepl.not then sysId = atomNameIdOf n: (ast.nodes.get i: value.child)
+            if isStrRepl.not then sysId = zast.atomNameIdOf n: (ast.nodes.get i: value.child)
             sysT: ztypecheck.stdTidRo :ast :st wk: sysId
             if sysT.isZero then return
             if (ztypecheck.bareNameReaches :st site: this.sufSite base: sysT).not then return
@@ -3356,7 +3344,7 @@ Analysis: class {
             if dpn.dottedpath then {
                 chn: ast.nodes.get i: dpn.child
                 cn = atomName :ast n: chn
-                cnId = atomNameIdOf n: chn
+                cnId = zast.atomNameIdOf n: chn
                 ci: nodeInfoOf n: chn
                 cln = ci.line
                 ccl = ci.col
@@ -3728,7 +3716,7 @@ Analysis: class {
                     rhs: brS
                     isCmp: (
                         ztypecheck.isComparisonOp
-                        nameId: (atomNameIdOf n: (ast.nodes.get i: ipS.operator))
+                        nameId: (zast.atomNameIdOf n: (ast.nodes.get i: ipS.operator))
                     )
                     :st
                 )
@@ -4289,7 +4277,7 @@ Analysis: class {
         {
             ipA: zast.infixPartsOf :ast :n
             if ipA.found then {
-                opA: atomNameIdOf n: (ast.nodes.get i: ipA.operator)
+                opA: zast.atomNameIdOf n: (ast.nodes.get i: ipA.operator)
                 if (opA == zast.wellKnown.slot.wkOpEq) or (opA == zast.wellKnown.slot.wkOpNe) then {
                     this.archNamedLiteral :ast id: ipA.lhs :namedIds
                     this.archNamedLiteral :ast id: ipA.rhs :namedIds
@@ -4762,7 +4750,7 @@ Analysis: class {
             rn
         ) case dottedpath then {
             chn: ast.nodes.get i: rn.child
-            cn: atomNameIdOf n: chn
+            cn: zast.atomNameIdOf n: chn
             if cn.isZero then return "".string
             pnn: ast.nodes.get i: rn.parent
             if (t.srcIsFieldRead :ast :st n: pnn) then return "".string
@@ -4781,7 +4769,7 @@ Analysis: class {
             match (
                 cbl
             ) case dottedpath then {
-                ccn: atomNameIdOf n: (ast.nodes.get i: cbl.child)
+                ccn: zast.atomNameIdOf n: (ast.nodes.get i: cbl.child)
                 if ccn == zast.wellKnown.slot.wkNameTextCopy then return "`nameTextCopy`".string
                 if ccn == zast.wellKnown.slot.wkPoolTextCopy then return "`poolTextCopy`".string
                 return "".string
@@ -6602,7 +6590,7 @@ isNumericLiteralNode: function {ast: Ast.view n: astnode.view} out bool is {
 
 # operatorKind -- ztypes.operatorKindOf for the operator atom at `nid`.
 operatorKind: function {ast: Ast.view nid: zast.nodeid} out u8 is {
-    return (ztypes.operatorKindOf nameId: (atomNameIdOf n: (ast.nodes.get i: nid)))
+    return (ztypes.operatorKindOf nameId: (zast.atomNameIdOf n: (ast.nodes.get i: nid)))
 }
 
 # isSpaceByte -- a space, a tab or a line end.

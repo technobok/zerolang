@@ -1953,18 +1953,6 @@ dottedDefTargetIds: function {ast: Ast.view n: astnode.view} out ztypes.deftarge
     }
 }
 
-# bareDefTargetNameId -- the name id a BARE alias value names (`Same: Holder`);
-# the zero id when the value is not a bare name. The dotted twin is dottedDefTargetIds.
-bareDefTargetNameId: function {n: astnode.view} out zast.nameid is {
-    match (
-        n
-    ) case atomid then {
-        return n.name
-    } else {
-        return zast.nameid.zero
-    }
-}
-
 # resolveNamedType -- resolve a bare type NAME to its canonical id via the
 # declare-before-bind index (definingSiteForId -> declareCanonicalTypeId), minting a
 # RECORD shell only for a numeric-literal default or an unresolved/forward name.
@@ -2465,7 +2453,7 @@ asItemCanAlias: function {
     if (zast.isGenericParamOp :ast opId: item.operation) then return false
     op: ast.nodes.get i: item.operation
     if op.functiondef or (isLabelValue :op) then return false
-    return (namesNullType :st :ast ownerDecl: tdecl nameId: (bareAtomNameId n: op)).not
+    return (namesNullType :st :ast ownerDecl: tdecl nameId: (zast.atomNameIdOf n: op)).not
 }
 
 # asAliasKnownAt -- whether the member `md` is already known to be an alias,
@@ -4656,7 +4644,7 @@ leadingArgIsValue: function {
     if arguments.length == 0 then return false
     arg: argRefAt :ast nid: (arguments.get i: 0)
     if arg.nid.isZero or arg.name.isZero.not then return false
-    nameId: bareAtomNameId n: (ast.nodes.get i: arg.operation)
+    nameId: zast.atomNameIdOf n: (ast.nodes.get i: arg.operation)
     if nameId.isZero then return false
     if (isNumericLiteralNameAt :ast ref: nameId) then return true
     # a bare name is a value when its nearest declaration is a constant, read
@@ -10157,7 +10145,7 @@ reportUnknownAsHead: function {
             rootNid = hn0.parent
         } else null
     }
-    headId: bareAtomNameId n: (ast.nodes.get i: rootNid)
+    headId: zast.atomNameIdOf n: (ast.nodes.get i: rootNid)
     if headId.isZero then return false
     td: declOfTypeId :st tid: parentId
     if td.isZero then return false
@@ -10241,9 +10229,9 @@ valueMayNameType: function {
     pathHead: zast.nodeid
     n: ast.nodes.get i: node
     if n.dottedpath then return true
-    if n.call.not then return (bareAtomNameId :n).isZero.not
+    if n.call.not then return (zast.atomNameIdOf :n).isZero.not
     if (ast.nodes.get i: n.callable).dottedpath then pathHead = n.callable
-    headId = bareAtomNameId n: (ast.nodes.get i: n.callable)
+    headId = zast.atomNameIdOf n: (ast.nodes.get i: n.callable)
     td: declOfTypeId :st tid: parentId
     if td.isZero then return false
     sc: st.typing.declParentOf declId: td
@@ -10276,7 +10264,7 @@ reportAsMemberNotConstant: function {
     ln: u32
     co: u32
     vn: ast.nodes.get i: item.operation
-    vnId = bareAtomNameId n: vn
+    vnId = zast.atomNameIdOf n: vn
     ln = nodeLine n: vn
     co = nodeCol n: vn
     if vnId.isZero then return false
@@ -11239,7 +11227,7 @@ asItemIsNoMarker: function {
     ptid: parentId
     itemDecl: st.typing.declMemberIdOf parentTypeId: ptid nameId: item
     if (st.typing.isAsConstDecl declId: itemDecl) then return true
-    vnId: bareAtomNameId n: (ast.nodes.get i: op)
+    vnId: zast.atomNameIdOf n: (ast.nodes.get i: op)
     if vnId.isZero then return false
     ownDecl: declOfTypeId :st tid: ptid
     return (st.typing.declFindChild parentDeclId: ownDecl nameId: vnId).isZero.not
@@ -11407,7 +11395,7 @@ asItemTypeNameRefused: function {
     item: zast.nameid
     op: zast.nodeid
 } is {
-    vnId: bareAtomNameId n: (ast.nodes.get i: op)
+    vnId: zast.atomNameIdOf n: (ast.nodes.get i: op)
     if vnId.isZero then return
     if (isNumericLiteralNameAt :ast ref: vnId) then return
     # `create: null` opts out of a member; null is no type an item declares
@@ -11514,7 +11502,7 @@ implementBaseResolves: function {
         # by its arguments
         return (specTypetypeOf :st tid: htpl).isInterface.not
     }
-    vnId: bareAtomNameId n: (ast.nodes.get i: op)
+    vnId: zast.atomNameIdOf n: (ast.nodes.get i: op)
     if vnId.isZero then return true
     if (walkLookupTyperefById :st :scope :ast :unitDecl baseId: vnId).some then return true
     return (envLookup :st :scope nameId: vnId).declId.isZero.not
@@ -14359,17 +14347,17 @@ sumMethodNameRejected: function {
     return false
 }
 
-# attachVariantMethods -- a variant's asItems are its methods. A name that collides
+# attachSumMethods -- a variant's or a union's asItems are its methods. A name that collides
 # with one of its ARM names is rejected here: an arm read and a method call spell
 # the same at the use site.
-attachVariantMethods: function {
+attachSumMethods: function {
     st: zenv.ZSymbolTable
     ast: Ast
     unitDecl: ztypes.declid
     scope: ztypes.declid
     defName: StringView
     vnode: objref
-    variantTid: ztypes.tid
+    sumTid: ztypes.tid
     isgen: bool
 } is {
     kAiter: u64
@@ -14402,7 +14390,7 @@ attachVariantMethods: function {
                 ).not then {
                     (
                         st.typing.setMemberType
-                        parentTypeId: variantTid
+                        parentTypeId: sumTid
                         nameId: am.name
                         childTypeId: mido
                     )
@@ -14423,14 +14411,14 @@ attachVariantMethods: function {
                     :ast
                     :unitDecl
                     :defName
-                    ownerId: variantTid
+                    ownerId: sumTid
                     :am
                 )
                 if isgen.not then (
                     attachAsConstant
                     :st
                     :ast
-                    parentId: variantTid
+                    parentId: sumTid
                     item: am
                 )
             }
@@ -14745,14 +14733,14 @@ resolveVariant: function {
         )
     }
     (
-        attachVariantMethods
+        attachSumMethods
         :st
         :ast
         :unitDecl
         :scope
         :defName
         :vnode
-        :variantTid
+        sumTid: variantTid
         :isgen
     )
     attachMarkers :st :scope :ast :unitDecl parentId: variantTid objId: vnode.nid
@@ -15096,7 +15084,7 @@ unionCustomTagOfArm: function {
     none: tagsource row: 0 decl: ztypes.declid
     if am.name != zast.wellKnown.slot.wkTag then return none
     # `tag: tag` names the item being made; `:tag` names the system's tag
-    if (bareAtomNameId n: (ast.nodes.get i: am.operation)) == zast.wellKnown.slot.wkTag then {
+    if (zast.atomNameIdOf n: (ast.nodes.get i: am.operation)) == zast.wellKnown.slot.wkTag then {
         (
             addErrorH
             :st
@@ -15544,85 +15532,6 @@ attachUnionArm: function {
     )
 }
 
-# attachUnionMethods -- a union's asItems are its methods. A name that collides
-# with one of its ARM names is rejected here: an arm read and a method call spell
-# the same at the use site.
-attachUnionMethods: function {
-    st: zenv.ZSymbolTable
-    ast: Ast
-    unitDecl: ztypes.declid
-    scope: ztypes.declid
-    defName: StringView
-    vnode: objref
-    uid: ztypes.tid
-    isgen: bool
-} is {
-    kAiter: u64
-    for kAiter < vnode.nas loop {
-        amId: zast.objAsItemAt :ast nid: vnode.nid i: kAiter
-        kAiter = kAiter + 1
-        am: argRefAt :ast nid: amId
-        if am.nid.isZero.not then {
-            mname: zast.nameTextCopy :ast ref: am.name
-            ownerNmId: nameIdOf :ast name: defName
-            mido: (
-                resolveMethodFnLazy
-                :st
-                :scope
-                :ast
-                :unitDecl
-                ownerNameId: ownerNmId
-                mname: mname.stringView
-                thisName: defName
-                opId: am.operation
-                lazyOk: isgen.not
-            )
-            match (
-                mido
-            ) case some then {
-                if (
-                    sumMethodNameRejected
-                    :st
-                    :am
-                ).not then {
-                    (
-                        st.typing.setMemberType
-                        parentTypeId: uid
-                        nameId: am.name
-                        childTypeId: mido
-                    )
-                    (
-                        markGenericMethod
-                        :st
-                        op: (ast.nodes.get i: am.operation)
-                        mid: mido
-                        :isgen
-                    )
-                }
-            } else {
-                # a generic template's tag accessor is its instances'
-                (
-                    detectTagAccessor
-                    :st
-                    :scope
-                    :ast
-                    :unitDecl
-                    :defName
-                    ownerId: uid
-                    :am
-                )
-                if isgen.not then (
-                    attachAsConstant
-                    :st
-                    :ast
-                    parentId: uid
-                    item: am
-                )
-            }
-        }
-    }
-}
-
 # resolveUnion -- resolve a union ObjectDef into a UNION reference type: a child
 # per arm (arm name -> payload type-ref shell; a `null` arm -> the `null` shell),
 # a synthesized `tag` child (the `{name}:tag:data` discriminator wrapper), then any
@@ -15754,14 +15663,14 @@ resolveUnion: function {
         )
     }
     (
-        attachUnionMethods
+        attachSumMethods
         :st
         :ast
         :unitDecl
         :scope
         :defName
         :vnode
-        :uid
+        sumTid: uid
         :isgen
     )
     attachMarkers :st :scope :ast :unitDecl parentId: uid objId: vnode.nid
@@ -16114,7 +16023,7 @@ numericParamFieldType: function {
     ownerTid: ztypes.tid
     dm: argref
 } out ztypes.tid is {
-    vnId: bareAtomNameId n: (ast.nodes.get i: dm.operation)
+    vnId: zast.atomNameIdOf n: (ast.nodes.get i: dm.operation)
     if vnId.isZero then return ztypes.tid
     tdecl: declOfTypeId :st tid: ownerTid
     cd: st.reg.genericParamConstraintOf :tdecl paramName: vnId
@@ -16348,7 +16257,7 @@ pathNamesTypeConstant: function {
     qualNid: zast.nodeid
     n: ast.nodes.get i: node
     if n.dottedpath then {
-        leafId = bareAtomNameId n: (ast.nodes.get i: n.child)
+        leafId = zast.atomNameIdOf n: (ast.nodes.get i: n.child)
         qualNid = n.parent
     }
     if leafId.isZero then return false
@@ -16384,12 +16293,12 @@ qualifierDecl: function {
     if q.dottedpath then {
         pd: qualifierDecl :st :ast :ownerDecl node: q.parent
         if pd.isZero or (st.typing.decls.get i: pd).kind.unitDecl.not then return zd
-        segId: bareAtomNameId n: (ast.nodes.get i: q.child)
+        segId: zast.atomNameIdOf n: (ast.nodes.get i: q.child)
         if segId.isZero then return zd
         sd: declOfUnitDef :st scope: pd unitDecl: pd nameId: segId
         return (aliasTargetDecl :st :ast aliasDecl: sd)
     }
-    rootId: bareAtomNameId n: q
+    rootId: zast.atomNameIdOf n: q
     if rootId.isZero then return zd
     td: st.typing.declFindChild parentDeclId: (unitRootOfDecl :st declId: ownerDecl) nameId: rootId
     # a UNIT is a type too: `n: cfg.LIMIT` reads a constant of a unit the owner's
@@ -16411,7 +16320,7 @@ valueStampsTyperef: function {
     node: zast.nodeid
 } out bool is {
     if folded.isZero then return true
-    vnId: bareAtomNameId n: (ast.nodes.get i: node)
+    vnId: zast.atomNameIdOf n: (ast.nodes.get i: node)
     if vnId.isZero then return false
     own: declOfTypeId :st tid: ownerTid
     return (st.typing.declFindChild parentDeclId: own nameId: vnId).isZero
@@ -16424,7 +16333,7 @@ valueStampsTyperef: function {
 # an arm -- have paths of their own.
 valueDeclares: function {ast: Ast.view node: zast.nodeid} out bool is {
     n: ast.nodes.get i: node
-    if (bareAtomNameId :n).isZero.not then return true
+    if (zast.atomNameIdOf :n).isZero.not then return true
     if n.atomstring or n.ifexpr or n.caseexpr or n.listblock then return true
     if (convertsExpression :ast :node) then return true
     return (zast.infixPartsOf :ast :n).found
@@ -17868,7 +17777,7 @@ reexportTargetIdsOf: function {
             if dk.unitName.isZero.not then return dk
             # a BARE alias names a target in its OWN unit, so the missing
             # segment is the enclosing unit's name -- the Decl's parent.
-            bid: bareDefTargetNameId n: vn
+            bid: zast.atomNameIdOf n: vn
             if bid.isZero.not then {
                 puid: zast.nameid
                 pdo: st.typing.decls.get i: decl.parent
@@ -17895,7 +17804,7 @@ aliasIsBareForm: function {
         bnp: ast.nodes.get i: bdo.node
         if bnp.namedoperation then {
             bvn: ast.nodes.get i: bnp.operation
-            bnid: bareDefTargetNameId n: bvn
+            bnid: zast.atomNameIdOf n: bvn
             return bnid.isZero.not
         }
     }
@@ -20471,34 +20380,6 @@ isFunctionDefWithBody: function {o: astnode.view} out bool is {
     }
 }
 
-# objectHasMethodBody -- true when an objectdef holds at least one is/as-item method
-# with a body. Scans both blocks (transient iterators over different lists).
-objectHasMethodBody: function {ast: Ast.view op: astnode.view} out bool is {
-    match (
-        op
-    ) case objectdef then {
-        isx1829: u64
-        for isx1829 < op.isItems.count loop {
-            imId: zast.kidAt kids: ast.kids span: op.isItems i: isx1829
-            isx1829 = isx1829 + 1
-            im: ast.nodes.get i: imId
-            if im.namedoperation when (isFunctionDefWithBody o: (ast.nodes.get i: im.operation)
-            ) then return true
-        }
-        asx1639: u64
-        for asx1639 < op.asItems.count loop {
-            amId: zast.kidAt kids: ast.kids span: op.asItems i: asx1639
-            asx1639 = asx1639 + 1
-            am: ast.nodes.get i: amId
-            if am.namedoperation when (isFunctionDefWithBody o: (ast.nodes.get i: am.operation)
-            ) then return true
-        }
-        return false
-    } else {
-        return false
-    }
-}
-
 # unitHasObjectMethodBody -- true when a unit body holds an objectdef with a method-body.
 unitHasObjectMethodBody: function {ast: Ast.view defId: zast.nodeid} out bool is {
     bodyIds: zast.unitBodyIdsAt :ast unitId: defId
@@ -20508,7 +20389,7 @@ unitHasObjectMethodBody: function {ast: Ast.view defId: zast.nodeid} out bool is
         vx109 = vx109 + 1
         bmNode: ast.nodes.get i: bm
         if bmNode.namedoperation when (
-            objectHasMethodBody
+            objectdefHasMethodBodies
             :ast
             op: (ast.nodes.get i: bmNode.operation)
         ) then return true
@@ -21749,10 +21630,7 @@ resolveOrdinaryMember: function {
     # (`ECHO: LIB`) names a sibling of this same unit and is an ordinary
     # definition: resolveDef is what FOLDS it, and following it instead leaves
     # the constant unfolded.
-    if isRx when (
-        isDottedValue
-        n: (ast.nodes.get i: bmNode.operation)
-    ) then {
+    if isRx when (ast.nodes.get i: bmNode.operation).dottedpath then {
         resolveAliasKey :st :ast declId: md
     } else if isDone.not then {
         (
@@ -31403,7 +31281,7 @@ genericTypeConstruction: function {
     }
     # Only a bare-atom callable restamps to the instance; a dotted callable
     # (the .str conversion form) leaves the path unstamped.
-    gcb: zast.nameTextAt :ast ref: (bareAtomNameId n: (ast.nodes.get i: call.callable))
+    gcb: zast.nameTextAt :ast ref: (zast.atomNameIdOf n: (ast.nodes.get i: call.callable))
     gcal: nodeId n: (ast.nodes.get i: call.callable)
     if gcal.isZero.not when gcb.length > 0 then {
         setga: mid
@@ -32183,7 +32061,7 @@ consumeProjectionSource: function {
         zast.nameTextAt
         :ast
         ref: (
-            bareAtomNameId
+            zast.atomNameIdOf
             n: (ast.nodes.get i: arg.operation)
         )
     )
@@ -32232,7 +32110,7 @@ projectionSourceBorrows: function {
     if mk.unmarked.not then return false
     if call.nid == st.typing.owningValueNid then return false
     if (typeIsReftype :st tid: vt).not then return false
-    bn: bareAtomNameId n: sn
+    bn: zast.atomNameIdOf n: sn
     if bn.isZero.not then return (st.lookupVarId nameId: bn).none.not
     return (localFieldPath :st :ast n: sn)
 }
@@ -32429,7 +32307,7 @@ consumeCastFromArg: function {
         bn: (
             zast.nameTextAt
             :ast
-            ref: (bareAtomNameId n: (ast.nodes.get i: aOpId))
+            ref: (zast.atomNameIdOf n: (ast.nodes.get i: aOpId))
         )
         if bn.length > 0 then {
             bvo: st.lookupVarId nameId: (nameIdOf :ast name: bn.stringView)
@@ -33885,7 +33763,7 @@ checkMemberProjections: function {
         pjroot: (
             zast.nameTextAt
             :ast
-            ref: (bareAtomNameId n: (ast.nodes.get i: dp.parent))
+            ref: (zast.atomNameIdOf n: (ast.nodes.get i: dp.parent))
         )
         if pjroot.length > 0 then {
             pjvo: st.lookupVarId nameId: (nameIdOf :ast name: pjroot.stringView)
@@ -36222,7 +36100,7 @@ refuseMarkerWithoutStorage: function {
         :ast
         :unitDecl
         scope: st.curScope
-        baseId: (bareAtomNameId n: (ast.nodes.get i: dp.parent))
+        baseId: (zast.atomNameIdOf n: (ast.nodes.get i: dp.parent))
     ) then return true
     # a function with no reference form at all is refused in those words
     if isFn when (refuseNativeReference :st :ast :dp :bt) then return true
@@ -36590,7 +36468,7 @@ checkTransferMarker: function {
         return (callleg handled: true tid: bt)
     }
     if (isMoveMarkerId nameId: cnId) then takeMarkerOnField :st :ast :dp
-    mkRootId: bareAtomNameId n: (ast.nodes.get i: dp.parent)
+    mkRootId: zast.atomNameIdOf n: (ast.nodes.get i: dp.parent)
     # a numeric literal is an atom too, and names no variable
     notVariable: mkRootId.isZero or (isNumericLiteralNameAt :ast ref: mkRootId)
     if (isDropMarkerId nameId: cnId) when notVariable then {
@@ -38278,7 +38156,7 @@ checkReturnCarries: function {
     if argT.isZero then return
     if (typeIsReftype :st tid: argT).not then return
     an: ast.nodes.get i: arg.operation
-    rbn: bareAtomNameId n: an
+    rbn: zast.atomNameIdOf n: an
     rvo: ztypes.vid
     if rbn.isZero.not then rvo = (st.lookupVarId nameId: rbn).or d: ztypes.vid
     # `return w.take`: the take kept w's locks for this check (checkMovedValueAt)
@@ -39369,7 +39247,7 @@ predDottedCore: function {
     }
     if ptid.isZero then return (Option.none ArmPredFact)
     if ptid == boolId then return (Option.none ArmPredFact)
-    sn: bareAtomNameId n: parent
+    sn: zast.atomNameIdOf n: parent
     if sn.isZero then return (Option.none ArmPredFact)
     if childName.isZero then return (Option.none ArmPredFact)
     # a renamed arm is the arm it renames
@@ -39402,7 +39280,7 @@ predDottedFact: function {
             :st
             nid: n.nodeid
             parent: (ast.nodes.get i: n.parent)
-            childName: (bareAtomNameId n: (ast.nodes.get i: n.child))
+            childName: (zast.atomNameIdOf n: (ast.nodes.get i: n.child))
             :boolId
             :negated
         )
@@ -39451,19 +39329,19 @@ equalityArmFact: function {
 } out Option ArmPredFact is {
     br0: binRefAt :ast nid: (nodeId :n)
     if br0.operator.isZero then return (Option.none ArmPredFact)
-    opn0: bareAtomNameId n: (ast.nodes.get i: br0.operator)
+    opn0: zast.atomNameIdOf n: (ast.nodes.get i: br0.operator)
     if opn0 != zast.wellKnown.slot.wkOpEq then return (Option.none ArmPredFact)
     lsd0: (
         ztyping.armSideOfName
         ty: st.typing
         typeId: boolId
-        nameId: (bareAtomNameId n: (ast.nodes.get i: br0.lhs))
+        nameId: (zast.atomNameIdOf n: (ast.nodes.get i: br0.lhs))
     )
     rsd0: (
         ztyping.armSideOfName
         ty: st.typing
         typeId: boolId
-        nameId: (bareAtomNameId n: (ast.nodes.get i: br0.rhs))
+        nameId: (zast.atomNameIdOf n: (ast.nodes.get i: br0.rhs))
     )
     if rsd0.truthy then return (
         predDottedFact
@@ -39516,7 +39394,7 @@ predFactOf: function {
     {
         ta0: truthyCondArmOf :st nid: (nodeId :n)
         if ta0.isZero.not then {
-            sj0: bareAtomNameId :n
+            sj0: zast.atomNameIdOf :n
             ft0: walkTypeOf :st nid: (nodeId :n)
             if sj0.isZero.not when ft0.isZero.not then {
                 return (Option.some (
@@ -39570,7 +39448,7 @@ predFactOf: function {
             :st
             nid: n.nodeid
             parent: (ast.nodes.get i: n.parent)
-            childName: (bareAtomNameId n: (ast.nodes.get i: n.child))
+            childName: (zast.atomNameIdOf n: (ast.nodes.get i: n.child))
             :boolId
             negated: false
         )
@@ -39929,7 +39807,7 @@ armBorrowedLeaves: function {
     armValueLeaves :st :ast :nid into: all
     for each lf: all loop {
         n: ast.nodes.get i: lf
-        if (bareAtomNameId :n).isZero then into.append from: lf
+        if (zast.atomNameIdOf :n).isZero then into.append from: lf
     }
 }
 
@@ -39964,7 +39842,7 @@ armLeafLocal: function {st: zenv.ZSymbolTable ast: Ast.view nid: zast.nodeid} ou
     none: ztypes.vid.zero
     av: st.typing.atomVariableId.get key: nid
     if av.none then return none
-    cur: st.lookupVarId nameId: (bareAtomNameId n: (ast.nodes.get i: nid))
+    cur: st.lookupVarId nameId: (zast.atomNameIdOf n: (ast.nodes.get i: nid))
     if cur.none then return none
     if (cur == av).not then return none
     return cur
@@ -39986,7 +39864,7 @@ armLeafIsPartial: function {
 
 # markLeafTakeMaybe -- the move the arm leaf `leaf` just recorded is a maybe.
 markLeafTakeMaybe: function {st: zenv.ZSymbolTable ast: Ast.view leaf: zast.nodeid} is {
-    st.markTakeMaybe declId: (st.findLocal nameId: (bareAtomNameId n: (ast.nodes.get i: leaf)))
+    st.markTakeMaybe declId: (st.findLocal nameId: (zast.atomNameIdOf n: (ast.nodes.get i: leaf)))
 }
 
 # transferTakeIntoBinding -- `b: w.take`: the take kept the value's locks for
@@ -40142,7 +40020,7 @@ pinBoundName: function {st: zenv.ZSymbolTable ast: Ast.view vt: ztypes.tid nid: 
     # a TYPE name or a zero-arg function resolves to no variable: those
     # construct or call rather than naming storage, and the binding owns what
     # they hand back
-    bn: bareAtomNameId n: (ast.nodes.get i: nid)
+    bn: zast.atomNameIdOf n: (ast.nodes.get i: nid)
     if bn.isZero then return
     if (st.lookupVarId nameId: bn).none then return
     np: ListVal zast.nameid
@@ -40184,7 +40062,7 @@ pinBoundArms: function {st: zenv.ZSymbolTable ast: Ast vt: ztypes.tid nid: zast.
 pinArmLocal: function {st: zenv.ZSymbolTable ast: Ast.view leaf: zast.nodeid from: ztypes.vid} is {
     if (typeIsReftype :st tid: (st.reg.variableTypeOf id: from)).not then return
     np: ListVal zast.nameid
-    np.append (bareAtomNameId n: (ast.nodes.get i: leaf))
+    np.append (zast.atomNameIdOf n: (ast.nodes.get i: leaf))
     mw: (pathIsReadonly :st path: np).not
     pinsPush :st path: np shared: true mutable: mw
 }
@@ -40270,7 +40148,7 @@ stashArmValuePins: function {st: zenv.ZSymbolTable ast: Ast.view lineId: zast.no
 # scope, and what binds the value keeps them instead.
 stashValuePins: function {st: zenv.ZSymbolTable ast: Ast.view valNid: zast.nodeid} is {
     if valNid.isZero then return
-    bn: bareAtomNameId n: (ast.nodes.get i: valNid)
+    bn: zast.atomNameIdOf n: (ast.nodes.get i: valNid)
     if bn.isZero.not when (st.scopeBindsHere nameId: bn) then {
         hv: st.lookupVarId nameId: bn
         match (
@@ -40728,7 +40606,7 @@ moveLocksToTarget: function {
     match (
         tvo
     ) case some then {
-        bareT: (bareAtomNameId n: (ast.nodes.get i: rasgn.topath)).isZero.not
+        bareT: (zast.atomNameIdOf n: (ast.nodes.get i: rasgn.topath)).isZero.not
         if bareT then {
             st.releaseHeldLocks holder: ztypes.zlockholder.var tvo
         }
@@ -41650,7 +41528,7 @@ reassignValueMode: function {
     if mk.borrowMarker then return "borrowed"
     if mk.unmarked.not then return ""
     if vt.isZero or (typeIsReftype :st tid: vt).not then return ""
-    bn: bareAtomNameId :n
+    bn: zast.atomNameIdOf :n
     if bn.isZero.not then {
         if (st.lookupVarId nameId: bn).none then return ""
         return "borrowed"
@@ -43024,7 +42902,7 @@ refuseUnwalkableBinding: function {
                 match (
                     rn
                 ) case dottedpath then {
-                    cid: bareAtomNameId n: (ast.nodes.get i: rn.child)
+                    cid: zast.atomNameIdOf n: (ast.nodes.get i: rn.child)
                     if cid == zast.wellKnown.slot.wkCall then srcNid = rn.parent
                 } else null
             }
@@ -43251,7 +43129,7 @@ checkForConditionIn: function {
     # binding, auto-invokes: its walk runs in a call scope and the atom keeps
     # the FUNCTION stamp rather than the auto-call's coerced return.
     fbnId: zast.nameid
-    if isEach then fbnId = bareAtomNameId n: (ast.nodes.get i: cond.operation)
+    if isEach then fbnId = zast.atomNameIdOf n: (ast.nodes.get i: cond.operation)
     facId: forFactoryTid :st :unitDecl :ast :fbnId
     vt: ztypes.tid
     errC: st.typing.errors.length
@@ -43396,7 +43274,7 @@ checkComprehensionValue: function {
     vnid9: forValueNode :st :ast block: (ast.nodes.get i: fornode.body)
     if vnid9.isZero then return
     vn9: ast.nodes.get i: vnid9
-    bn9: bareAtomNameId n: vn9
+    bn9: zast.atomNameIdOf n: vn9
     if bn9.isZero.not then {
         bvo9: st.lookupVarId nameId: bn9
         match (
@@ -44468,7 +44346,7 @@ recordControlPlaceLeaves: function {st: zenv.ZSymbolTable ast: Ast nid: zast.nod
     for each lf: leaves loop {
         ln: ast.nodes.get i: lf
         place: false
-        if (bareAtomNameId n: ln).isZero.not then {
+        if (zast.atomNameIdOf n: ln).isZero.not then {
             place = (armLeafLocal :st :ast nid: lf).isZero.not
         } else if (localFieldPath :st :ast n: ln) then {
             place = true
@@ -44908,18 +44786,6 @@ typeIsValtype: function {
 }
 
 
-# bareAtomNameId -- the interned name id of a bare atom,
-# 0 for any other shape. The id twin of bareAtomName.
-bareAtomNameId: function {n: astnode.view} out zast.nameid is {
-    match (
-        n
-    ) case atomid then {
-        return n.name
-    } else {
-        return zast.nameid.zero
-    }
-}
-
 # bareAtomName -- the bare atom name of a value node,
 # or "" when the value is any other shape.
 bareAtomName: function {ast: Ast.view n: astnode.view} out String is {
@@ -44950,7 +44816,7 @@ methodReceiverRootId: function {ast: Ast.view n: astnode.view} out zast.nameid i
     match (
         n
     ) case dottedpath then {
-        return (bareAtomNameId n: (ast.nodes.get i: n.parent))
+        return (zast.atomNameIdOf n: (ast.nodes.get i: n.parent))
     } else {
         return zast.nameid
     }
@@ -47522,7 +47388,7 @@ literalTidOfLiteralOperand: function {
     {
         ipL: zast.infixPartsOf :ast :n
         if ipL.found then {
-            opT: bareAtomNameId n: (ast.nodes.get i: ipL.operator)
+            opT: zast.atomNameIdOf n: (ast.nodes.get i: ipL.operator)
             if (isComparisonOp nameId: opT) then return ztypes.tid.zero
             return (literalTidOfLiteralOperand :st :ast nid: ipL.lhs)
         }
@@ -48536,7 +48402,7 @@ hoistTrivialArg: function {
     # identically: a take parameter consumes it, a lock/borrow
     # parameter locks it (see docs/typechecker.pdoc, `:name` at
     # the argument site).
-    bnId: bareAtomNameId n: (ast.nodes.get i: arg.operation)
+    bnId: zast.atomNameIdOf n: (ast.nodes.get i: arg.operation)
     if bnId.isZero then {
         bnId = atomNameId :ast n: (ast.nodes.get i: arg.operation)
     }
@@ -48620,7 +48486,7 @@ moveArmLeavesIntoArgument: function {
             nm: (
                 zast.nameTextAt
                 :ast
-                ref: (bareAtomNameId n: (ast.nodes.get i: lf))
+                ref: (zast.atomNameIdOf n: (ast.nodes.get i: lf))
             )
             (
                 consumeBareArgOwnership
@@ -48664,7 +48530,7 @@ atomReadsNoVariable: function {
     vt: ztypes.tid
 } out bool is {
     if (typeIsReftype :st tid: vt).not then return false
-    nm: bareAtomNameId n: (ast.nodes.get i: op)
+    nm: zast.atomNameIdOf n: (ast.nodes.get i: op)
     if nm.isZero then return false
     return (st.lookupVarId nameId: nm).none
 }
@@ -49217,7 +49083,7 @@ reportOwnedStandIn: function {ast: Ast st: zenv.ZSymbolTable su: ztyping.specsta
     vn: specWrittenName :st :ast tid: su.value
     sn: specWrittenName :st :ast tid: su.spec
     fix: "wrap it: `\{sn}.create from: (...)`"
-    bn: bareAtomNameId n: (ast.nodes.get i: su.valueNid)
+    bn: zast.atomNameIdOf n: (ast.nodes.get i: su.valueNid)
     if bn.isZero then bn = takenBareName :ast nid: su.valueNid
     if bn.isZero.not then {
         bt: zast.nameTextAt :ast ref: bn
@@ -49243,7 +49109,7 @@ takenBareName: function {ast: Ast.view nid: zast.nodeid} out zast.nameid is {
     if vn.dottedpath.not then return zast.nameid
     cid: atomNameId :ast n: (ast.nodes.get i: vn.child)
     if cid != zast.wellKnown.slot.wkTake then return zast.nameid
-    return (bareAtomNameId n: (ast.nodes.get i: vn.parent))
+    return (zast.atomNameIdOf n: (ast.nodes.get i: vn.parent))
 }
 
 # specStandInHolds -- `value` may be written where `spec` is expected. A
@@ -49796,7 +49662,7 @@ markValtypeBorrowArg: function {
     an: ast.nodes.get i: arg.operation
     rn: rootNameIdOf :ast n: an
     # the `:name` shorthand is the same bare local read, with no path to root
-    if rn.isZero then rn = bareAtomNameId n: an
+    if rn.isZero then rn = zast.atomNameIdOf n: an
     if rn.isZero then rn = atomNameId :ast n: an
     markVarMutated :st nameId: rn
 }
@@ -50786,7 +50652,7 @@ bindBoxedArgument: function {
     bn: (
         zast.nameTextCopy
         :ast
-        ref: (bareAtomNameId n: (ast.nodes.get i: arg.operation))
+        ref: (zast.atomNameIdOf n: (ast.nodes.get i: arg.operation))
     )
     if bn.length == 0 then return
     # the position is read into locals first: a nested `ast.nodes` read cannot
@@ -51158,17 +51024,6 @@ dottedRootName: function {ast: Ast.view n: astnode.view} out String is {
     }
 }
 
-# isDottedValue -- the node is a dotted path.
-isDottedValue: function {n: astnode.view} out bool is {
-    match (
-        n
-    ) case dottedpath then {
-        return true
-    } else {
-        return false
-    }
-}
-
 # unresolvedBareCallable -- the bare-atom callable name of a call-shaped
 # value that resolves to NOTHING (no local, no own-unit function, no system
 # name, no walkable type): the checker's silent args-walked fallthrough
@@ -51255,7 +51110,7 @@ reportUnresolvedValue: function {
     eLn: u32
     eCo: u32
     vnode: ast.nodes.get i: nid
-    isDotted = isDottedValue n: vnode
+    isDotted = vnode.dottedpath
     if isDotted then ubD = rootNameIdOf :ast n: vnode
     eLn = nodeLine n: vnode
     eCo = nodeCol n: vnode
@@ -51640,7 +51495,7 @@ recordReturnedOwnedLocal: function {
                     lfn: ast.nodes.get i: lf
                     (
                         st.invalidateDeclAs
-                        declId: (st.findLocal nameId: (bareAtomNameId n: lfn))
+                        declId: (st.findLocal nameId: (zast.atomNameIdOf n: lfn))
                         loc: optionval.some (
                             ztypes.zsrcpos
                             fsno: zvfs.fsno
@@ -51655,7 +51510,7 @@ recordReturnedOwnedLocal: function {
         }
         return
     }
-    rbnId: bareAtomNameId n: (ast.nodes.get i: arg.operation)
+    rbnId: zast.atomNameIdOf n: (ast.nodes.get i: arg.operation)
     if rbnId.isZero then return
     rvv: st.lookupVarId nameId: rbnId
     rvid: ztypes.vid
@@ -51715,7 +51570,7 @@ returnOwnedLocal: function {
     if isClass then isClass = (st.reg.isNativeOf :tid).not
     ownsSomething: isClass or (st.reg.needsDestructor typeId: tid)
     if ownsSomething when st.typing.currentReturnsBorrow.not when (isBorrowedVar :st :vid) then {
-        rbNm: zast.nameTextAt :ast ref: (bareAtomNameId n: (ast.nodes.get i: nid))
+        rbNm: zast.nameTextAt :ast ref: (zast.atomNameIdOf n: (ast.nodes.get i: nid))
         mbr: "Cannot return borrowed variable '\{rbNm}' as an owned result — the caller still owns it; return '\{rbNm}.copy' (duplicate), declare the source '.take' (transfer ownership in), or declare the return '.borrow'"
         (
             addError
@@ -51844,7 +51699,7 @@ returnsNullValue: function {
         :ast
         :unitDecl
         scope: st.curScope
-        nameId: (bareAtomNameId n: (ast.nodes.get i: arg.operation))
+        nameId: (zast.atomNameIdOf n: (ast.nodes.get i: arg.operation))
     ) then {
         stampGate :st nid: arg.operation tid: st.typing.nullTypeId
         return true
@@ -52814,7 +52669,7 @@ movePayloadIntoArm: function {
         return
     }
     carry: List ztyping.PinPath
-    bn: bareAtomNameId n: (ast.nodes.get i: op)
+    bn: zast.atomNameIdOf n: (ast.nodes.get i: op)
     if bn.isZero.not then {
         bvo: st.lookupVarId nameId: bn
         match (
@@ -54027,7 +53882,7 @@ reportValueCalledWithArgs: function {
         nameId = dottedChildNameId :ast n: cn
         vt = walkTypeOf :st nid: call.callable
         if nameId.isZero then {
-            nameId = bareAtomNameId n: cn
+            nameId = zast.atomNameIdOf n: cn
             vt = ztypes.tid.zero
             vo: st.lookupVarId :nameId
             if vo.some then vt = st.reg.variableTypeOf id: vo
@@ -58063,7 +57918,7 @@ unitParamSubjectTid: function {
     ast: Ast
     casenode: caseref
 } out ztypes.tid is {
-    nameId: bareAtomNameId n: (ast.nodes.get i: casenode.subject)
+    nameId: zast.atomNameIdOf n: (ast.nodes.get i: casenode.subject)
     if nameId.isZero then return ztypes.tid
     ro: walkLookupTyperefById :st scope: st.curScope :ast :unitDecl baseId: nameId
     match (
@@ -59003,7 +58858,7 @@ textFoldType: function {st: zenv.ZSymbolTable ast: Ast nid: zast.nodeid} out zty
             pn
         ) case dottedpath then {
             recvId = pn.parent
-            nameId = bareAtomNameId n: (ast.nodes.get i: pn.child)
+            nameId = zast.atomNameIdOf n: (ast.nodes.get i: pn.child)
         } else return ztypes.tid.zero
     }
     if (textFoldOp :nameId) == textfold.none then return ztypes.tid.zero
@@ -59034,7 +58889,7 @@ markFoldedFnFieldCall: function {st: zenv.ZSymbolTable ast: Ast nid: zast.nodeid
             cn
         ) case dottedpath then {
             baseId = cn.parent
-            field = bareAtomNameId n: (ast.nodes.get i: cn.child)
+            field = zast.atomNameIdOf n: (ast.nodes.get i: cn.child)
         } else return
     }
     if field.isZero then return
@@ -59194,7 +59049,7 @@ checkStmtExpression: function {
     if et0.isZero.not then stampGate :st nid: lineId tid: et0
     ckOpt0: st.typing.callKind.get key: valueId
     isR0: isReturnCallKind o: ckOpt0
-    bn0: bareAtomNameId n: (ast.nodes.get i: valueId)
+    bn0: zast.atomNameIdOf n: (ast.nodes.get i: valueId)
     k0: ctlDivKind bn: bn0
     ctl0: k0 > 0
     if ctl0.not when isR0 then k0 = zenv.divkind.exit
@@ -59233,7 +59088,7 @@ recordControlDestroy: function {
                     :ast
                     nid: (zast.kidAt kids: ast.kids span: vn.arguments i: 0)
                 )
-                rn: bareAtomNameId n: (ast.nodes.get i: a0.operation)
+                rn: zast.atomNameIdOf n: (ast.nodes.get i: a0.operation)
                 if rn.isZero.not when (nameReadsPayload :st nameId: rn).not then {
                     ret = (st.lookupVarId nameId: rn).or d: ztypes.vid
                 }
@@ -59925,7 +59780,7 @@ walkOwnerMethods: function {
 }
 
 # objectdefHasMethodBodies -- a unit member whose operation is an objectdef
-# with at least one functiondef-with-body item.
+# with at least one is- or as-item method that has a body.
 objectdefHasMethodBodies: function {ast: Ast.view op: astnode.view} out bool is {
     match (
         op
@@ -60604,7 +60459,7 @@ recordTailExit: function {
     if vn.doexpr then return
     if (withForwardsTail :ast n: vn) then return
     ret: ztypes.vid
-    rn: bareAtomNameId n: vn
+    rn: zast.atomNameIdOf n: vn
     if rn.isZero.not then ret = (st.lookupVarId nameId: rn).or d: ztypes.vid
     st.recordReturnDestroy nid: lineId except: ret
     if st.recording then st.typing.tailExits.add item: lineId
@@ -60628,7 +60483,7 @@ implicitReturnValue: function {
     arm: rowArmAt :ast nid: innerId
     if arm.assignment or arm.reassignment or arm.swapstmt then return zast.nodeid
     # a bare `return`, `break` or `continue` leaves rather than yields
-    ctl: ctlDivKind bn: (bareAtomNameId n: (ast.nodes.get i: innerId))
+    ctl: ctlDivKind bn: (zast.atomNameIdOf n: (ast.nodes.get i: innerId))
     if ctl > 0 then return zast.nodeid
     lt: walkTypeOf :st nid: lineId
     if lt.isZero then return zast.nodeid
@@ -60651,7 +60506,7 @@ tailIsControl: function {st: zenv.ZSymbolTable.view ast: Ast.view lineId: zast.n
     lt: walkTypeOf :st nid: lineId
     ltt: st.reg.typetypeOf typeId: lt
     if lt.isZero.not when ltt == ztypes.ztypetype.neverType then return true
-    return (ctlDivKind bn: (bareAtomNameId n: (ast.nodes.get i: innerId))) > 0
+    return (ctlDivKind bn: (zast.atomNameIdOf n: (ast.nodes.get i: innerId))) > 0
 }
 
 # reportNoTailValue -- an `out`-typed function body that ends on no value.
@@ -64756,12 +64611,12 @@ writtenScalarNameId: function {
     ) case atomid then {
         return n.name
     } case dottedpath then {
-        q: bareAtomNameId n: (ast.nodes.get i: n.parent)
+        q: zast.atomNameIdOf n: (ast.nodes.get i: n.parent)
         if q.isZero then return zast.nameid.zero
         if q != (st.typing.decls.get i: st.typing.systemUnitRoot).name when (
             q != (st.typing.decls.get i: st.typing.coreUnitRoot).name
         ) then return zast.nameid.zero
-        return (bareAtomNameId n: (ast.nodes.get i: n.child))
+        return (zast.atomNameIdOf n: (ast.nodes.get i: n.child))
     } else {
         return zast.nameid.zero
     }
@@ -65619,7 +65474,7 @@ asItemNamesNoValue: function {
     if (zast.implementBaseOf :ast opId: item.operation).isZero.not then return true
     op: ast.nodes.get i: item.operation
     if op.functiondef or (isBareGenericParam :ast :op) or (isLabelValue :op) then return true
-    return (namesNullType :st :ast ownerDecl: typeDecl nameId: (bareAtomNameId n: op))
+    return (namesNullType :st :ast ownerDecl: typeDecl nameId: (zast.atomNameIdOf n: op))
 }
 
 # typeMemberHoldsConstant -- the member written at `defNode` is one of the type's
@@ -71580,8 +71435,8 @@ unfoldedMemberWhy: function {
     parentId: zast.nodeid
     childId: zast.nodeid
 } out bool is {
-    pn: bareAtomNameId n: (ast.nodes.get i: parentId)
-    cn: bareAtomNameId n: (ast.nodes.get i: childId)
+    pn: zast.atomNameIdOf n: (ast.nodes.get i: parentId)
+    cn: zast.atomNameIdOf n: (ast.nodes.get i: childId)
     if pn.isZero or cn.isZero then return false
     hit: envLookup :st :scope nameId: pn
     if hit.declId.isZero then return false

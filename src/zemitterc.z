@@ -347,7 +347,7 @@ atomVidIfPlain: function {
         # a dotted path can still emit as its bare base -- a `.private` access
         # marker contributes no C text -- and then the base IS the value passed.
         dbn: ast.nodes.get i: n.parent
-        db: zast.nameTextAt :ast ref: (atomNameIdOf :ast n: dbn)
+        db: zast.nameTextAt :ast ref: (zast.atomNameIdOf n: dbn)
         if db.length == 0 then return ztypes.vid.zero
         dbv: atomVid :symtab nid: (atomNodeId n: dbn)
         dbn9: atomNodeId n: dbn
@@ -4406,19 +4406,6 @@ ternaryElse: function {
     }
 }
 
-# atomNameIdOf -- an atom's interned name id (0 when the node is not an atom;
-# no pool id is 0, so a lookup by it misses).
-atomNameIdOf: function {ast: Ast.view n: astnode.view} out zast.nameid is {
-    ast.drop
-    match (
-        n
-    ) case atomid then {
-        return n.name
-    } else {
-        return zast.nameid.zero
-    }
-}
-
 # atomTextOf -- an atomid node's name text ("" for any other shape), a view
 # into the pool: the tree is read-only throughout emission, so the text is
 # never copied out of it. The node is taken by copy: the text points into
@@ -6130,7 +6117,7 @@ takeStringSource: function {
         bnid: atomNodeId n: (ast.nodes.get i: n.parent)
         bt: stampIdOf :symtab nid: bnid
         if (symtab.reg.typetypeOf typeId: bt) == ztypes.ztypetype.functionType then return "".string
-        bn9r: zast.nameTextAt :ast ref: (atomNameIdOf :ast n: (ast.nodes.get i: n.parent))
+        bn9r: zast.nameTextAt :ast ref: (zast.atomNameIdOf n: (ast.nodes.get i: n.parent))
         return (takeSourceResolve :ctx name: bn9r.stringView vid: (atomVid :symtab nid: bnid))
     } else {
         return "".string
@@ -6149,7 +6136,7 @@ isFieldTake: function {ast: Ast.view n: astnode.view} out bool is {
         return (isFieldTake :ast n: (ast.nodes.get i: n.statementline))
     } case dottedpath then {
         if (leafMoves :ast leaf: n.child).not then return false
-        return (isDottedAutoCall n: (ast.nodes.get i: n.parent))
+        return (ast.nodes.get i: n.parent).dottedpath
     } else {
         return false
     }
@@ -6309,7 +6296,7 @@ emitNarrowedTakeZero: function {
         if (leafMoves :ast leaf: n.child) then {
             bn9v: atomVid :symtab nid: (atomNodeId n: (ast.nodes.get i: n.parent))
             if (vvHas xs: ctx.narrowBox vid: bn9v) then {
-                bn: zast.nameTextAt :ast ref: (atomNameIdOf :ast n: (ast.nodes.get i: n.parent))
+                bn: zast.nameTextAt :ast ref: (zast.atomNameIdOf n: (ast.nodes.get i: n.parent))
                 box: takeSourceResolve :ctx name: bn.stringView vid: bn9v
                 tido: vtGet xs: ctx.narrowTid vid: bn9v
                 match (
@@ -7128,25 +7115,14 @@ aliasOrChildId: function {
         ai: symtab.typing.aliasInternalIdOf nodeid: aliasId
         if ai.isZero.not then return ai
     }
-    return (atomNameIdOf :ast n: (ast.nodes.get i: childId))
+    return (zast.atomNameIdOf n: (ast.nodes.get i: childId))
 }
 
-# dottedParentNodeId -- the node a dotted path `n` reads its member of, 0 when
+# dottedParentNodeId -- the node a dotted path `n` reads its member of -- its
+# BASE, the key the checker records a value read through the path under
+# (dottedBaseTid), so the key a hoist of that value asks `tempOf` with. 0 when
 # `n` is not a dotted path.
 dottedParentNodeId: function {n: astnode.view} out zast.nodeid is {
-    match (
-        n
-    ) case dottedpath then {
-        return n.parent
-    } else {
-        return zast.nodeid
-    }
-}
-
-# dottedBaseNid -- the node id of a dotted path's BASE. That is the key the
-# checker records a value read through the path under (dottedBaseTid), so it is
-# the key a hoist of that value asks `tempOf` with. 0 when `n` is no dotted path.
-dottedBaseNid: function {n: astnode.view} out zast.nodeid is {
     match (
         n
     ) case dottedpath then {
@@ -9766,7 +9742,16 @@ receiverOnce: function {
     textF: cfacts
     tid: ztypes.tid
 } out String is {
-    return (receiverOnceAt :ast :symtab :ctx baseNid: (dottedBaseNid n: callable) :text :textF :tid)
+    return (
+        receiverOnceAt
+        :ast
+        :symtab
+        :ctx
+        baseNid: (dottedParentNodeId n: callable)
+        :text
+        :textF
+        :tid
+    )
 }
 
 # receiverOnceAt -- receiverOnce for a receiver known by its own node: a
@@ -10433,7 +10418,7 @@ orderMethodParam: function {
                 av: recvExpr
                 avF: recvF
                 :pid
-                argNid: (dottedBaseNid n: (ast.nodes.get i: call.callable))
+                argNid: (dottedParentNodeId n: (ast.nodes.get i: call.callable))
                 facts: oneF
             )
         }
@@ -11022,7 +11007,7 @@ collectionValueCallRhs: function {
             # the argument-less one (`b: Bytes`) builds an empty collection
             if cko == zast.callkind.typedefCreate then return n.arguments.count > 0
         } case none then null
-        cn: zast.nameTextAt :ast ref: (atomNameIdOf :ast n: (ast.nodes.get i: n.callable))
+        cn: zast.nameTextAt :ast ref: (zast.atomNameIdOf n: (ast.nodes.get i: n.callable))
         if cn.length == 0 then {
             # a dotted-path method callable (e.g. `p.operationPaths lex: lx`)
             # returning a List is a value-producing call, not a construction --
@@ -11861,7 +11846,7 @@ emitStrConvCall: function {
             :ast
             :symtab
             :ctx
-            argNid: (dottedBaseNid n: (ast.nodes.get i: call.callable))
+            argNid: (dottedParentNodeId n: (ast.nodes.get i: call.callable))
             av: pv.stringView
             avF: pvF
             pid: ptid
@@ -17326,7 +17311,7 @@ emitUndeclaredCall: function {
     gfc: emitGenericFnCall :ast :symtab :ctx :call :facts
     if gfc.length > 0 then return gfc
     if fid.isZero.not then return (emitUserFnCall :ast :symtab :ctx :call :fid :facts)
-    cn0: zast.nameTextAt :ast ref: (atomNameIdOf :ast n: callableNode)
+    cn0: zast.nameTextAt :ast ref: (zast.atomNameIdOf n: callableNode)
     cnV: atomVid :symtab nid: (atomNodeId n: callableNode)
     if cnV.isZero.not then {
         fplc: (
@@ -21988,7 +21973,7 @@ emitDottedMemberRead: function {
     n: zast.dottedpathrow.view
     facts: cfacts.borrow
 } out String is {
-    bn2r: zast.nameTextAt :ast ref: (atomNameIdOf :ast n: (ast.nodes.get i: n.parent))
+    bn2r: zast.nameTextAt :ast ref: (zast.atomNameIdOf n: (ast.nodes.get i: n.parent))
     baseAtomNid: atomNodeId n: (ast.nodes.get i: n.parent)
     baseAtomVid: atomVid :symtab nid: baseAtomNid
     # the receiver's variable, for the pointer-access checks below
@@ -25218,7 +25203,7 @@ emitCallStmt: function {
         reltid: stampIdOf :symtab nid: relbnid
         if (symtab.reg.typetypeOf typeId: reltid) == ztypes.ztypetype.protocolType then return
     }
-    cn0Id: atomNameIdOf :ast n: (ast.nodes.get i: call.callable)
+    cn0Id: zast.atomNameIdOf n: (ast.nodes.get i: call.callable)
     # a statement form arrives either as its core alias (an atom) or spelled
     # qualified (a dotted path, whose atom carries no name)
     sfnId: cn0Id
@@ -25286,18 +25271,6 @@ emitCallStmt: function {
         :buf
     )
     emitCallTakeInvalidations :ast :symtab :ctx :call :ind :buf
-}
-
-# isDottedAutoCall -- the node is a dotted-path auto-call (a no-arg method
-# reference used in statement position).
-isDottedAutoCall: function {n: astnode.view} out bool is {
-    match (
-        n
-    ) case dottedpath then {
-        return true
-    } else {
-        return false
-    }
 }
 
 # emitCollectionBind -- binding a List, Set or Map: the mono's own create, the
@@ -26577,7 +26550,9 @@ emitReturnStmt: function {
     if (isNullValueAtom :symtab :n) then return
     # a no-arg method auto-call in statement position (this.accept,
     # this.statepop) is a dotted path: emit the call expression as a statement.
-    if (isDottedAutoCall :n) then {
+    # Tested through a binding, so `n` stays the whole node the call takes.
+    isPath: n.dottedpath
+    if isPath then {
         emitDottedAutoCallStmt :ast :symtab :ctx :n :ind :tmp :buf
         return
     }
@@ -26617,7 +26592,7 @@ emitReturnStmt: function {
     }
     # bare control keywords parse as an AtomId reference (no value): a
     # no-value `return` (goto L_done inside a generator), `break`, `continue`.
-    bkwId: atomNameIdOf :ast :n
+    bkwId: zast.atomNameIdOf :n
     outerExit: ctx.exitNode
     ctx.exitNode = interpPartNodeId :n
     if bkwId == zast.wellKnown.slot.wkReturn then {
@@ -28467,7 +28442,7 @@ emitReassignLvalue: function {
         }
     }
     if n.dottedpath then {
-        ba: zast.nameTextAt :ast ref: (atomNameIdOf :ast n: (ast.nodes.get i: n.parent))
+        ba: zast.nameTextAt :ast ref: (zast.atomNameIdOf n: (ast.nodes.get i: n.parent))
         if ba.length > 0 then {
             ba9V: atomVid :symtab nid: (atomNodeId n: (ast.nodes.get i: n.parent))
             nbo: vvGet xs: ctx.narrowBox vid: ba9V
@@ -28493,7 +28468,7 @@ emitReassignLvalue: function {
         if rsc.isZero.not then rsFp = rsc
         rsFpc: chaseAggregateTypedef :symtab :ctx tid: rsFp
         if (symtab.typing.declIsFnptrFieldId parentTypeId: rsFpc nameId: memFpId) then {
-            recvFp: zast.nameTextAt :ast ref: (atomNameIdOf :ast n: (ast.nodes.get i: n.parent))
+            recvFp: zast.nameTextAt :ast ref: (zast.atomNameIdOf n: (ast.nodes.get i: n.parent))
             accFpL: ".".string
             recvFpC: String
             if recvFp.length > 0 then {
@@ -32051,7 +32026,7 @@ seedEqualityCond: function {
     # per use, and the hoisted temporaries the uses it loses leave behind are a
     # warn-check failure
     opNS: ast.nodes.get i: ipS.operator
-    if (atomNameIdOf :ast n: opNS) != zast.wellKnown.slot.wkOpEq then return false
+    if (zast.atomNameIdOf n: opNS) != zast.wellKnown.slot.wkOpEq then return false
     lsdS: boolArmSideOf :symtab n: (ast.nodes.get i: ipS.lhs)
     rsdS: boolArmSideOf :symtab n: (ast.nodes.get i: ipS.rhs)
     if rsdS.truthy then {
@@ -32502,7 +32477,7 @@ classifyEqualityCond: function {
     if ipC.found.not then return miss
     # read ONCE, as in seedEqualityCond
     opNC: ast.nodes.get i: ipC.operator
-    if (atomNameIdOf :ast n: opNC) != zast.wellKnown.slot.wkOpEq then return miss
+    if (zast.atomNameIdOf n: opNC) != zast.wellKnown.slot.wkOpEq then return miss
     lsdC: boolArmSideOf :symtab n: (ast.nodes.get i: ipC.lhs)
     rsdC: boolArmSideOf :symtab n: (ast.nodes.get i: ipC.rhs)
     if rsdC.truthy then return (
@@ -41056,10 +41031,30 @@ emitListIter: function {
     lmId: monoMethodReturn :symtab :monoId nameId: zast.wellKnown.slot.wkIterateMut
     if (emitIterCursorOf :ast :ctx :symtab liId: lmId :ect :buf).not then return
     lm: cbaseNoPrefix :ctx tid: lmId
-    s10: "static z_\{lm}_t z_\{nm}_iterateMut(z_\{nm}_t* _this);\n"
-    buf.append s10
-    s11: "static z_\{lm}_t z_\{nm}_iterateMut(z_\{nm}_t* _this) {\n    z_\{lm}_t _it = {0};\n    _it.data = _this->data;\n    _it.length = _this->length;\n    _it.idx = 0;\n    _it.down = false;\n    return _it;\n}\n\n"
-    buf.append s11
+    (
+        appendCursorCtor
+        head: "static z_\{lm}_t z_\{nm}_iterateMut(z_\{nm}_t* _this)"
+        cursor: lm.stringView
+        down: false
+        :buf
+    )
+}
+
+# appendCursorCtor -- the prototype and body of a List mono's cursor constructor
+# whose signature is `head`: a `cursor` over the receiver's whole window, walked
+# from the far end when `down`.
+appendCursorCtor: function {
+    head: String
+    cursor: StringView
+    down: bool
+    buf: String.borrow
+} is {
+    dn: if down then "true" else "false"
+    buf.append head
+    buf.append ";\n"
+    buf.append head
+    body: " {\n    z_\{cursor}_t _it = {0};\n    _it.data = _this->data;\n    _it.length = _this->length;\n    _it.idx = 0;\n    _it.down = \{dn};\n    return _it;\n}\n\n"
+    buf.append body
 }
 
 # emitListIterReadonly -- `iterate` and `iterateReverse` over the ListIter
@@ -41081,20 +41076,26 @@ emitListIterReadonly: function {
     # field. That the ELEMENTS are readonly is a typecheck-level guarantee --
     # the element inherits the strength of the lock its holder has on the
     # container.
-    s8: "static z_\{li}_t z_\{nm}_iterate(const z_\{nm}_t* _this);\n"
     if (memberUsed :ctx mono: monoId member: memberWord.slot.iterateAll) then {
-        buf.append s8
-        s: "static z_\{li}_t z_\{nm}_iterate(const z_\{nm}_t* _this) {\n    z_\{li}_t _it = {0};\n    _it.data = _this->data;\n    _it.length = _this->length;\n    _it.idx = 0;\n    _it.down = false;\n    return _it;\n}\n\n"
-        buf.append s
+        (
+            appendCursorCtor
+            head: "static z_\{li}_t z_\{nm}_iterate(const z_\{nm}_t* _this)"
+            cursor: li.stringView
+            down: false
+            :buf
+        )
     }
     # iterateReverse -- the same cursor over the same window, walked from the
     # far end. Readonly like `iterate`, and there is no mutable twin: writing
     # through a walk is `iterateMut`, in either direction it is the same lock.
     if (memberUsed :ctx mono: monoId member: memberWord.slot.iterateReverse) then {
-        s12: "static z_\{li}_t z_\{nm}_iterateReverse(const z_\{nm}_t* _this);\n"
-        buf.append s12
-        s13: "static z_\{li}_t z_\{nm}_iterateReverse(const z_\{nm}_t* _this) {\n    z_\{li}_t _it = {0};\n    _it.data = _this->data;\n    _it.length = _this->length;\n    _it.idx = 0;\n    _it.down = true;\n    return _it;\n}\n\n"
-        buf.append s13
+        (
+            appendCursorCtor
+            head: "static z_\{li}_t z_\{nm}_iterateReverse(const z_\{nm}_t* _this)"
+            cursor: li.stringView
+            down: true
+            :buf
+        )
     }
 }
 
@@ -48084,7 +48085,7 @@ makesMarkerValue: function {
     if n.call then return true
     if n.dottedpath.not then return false
     pt: ztyping.nodeTypeAt tbl: symtab.typing.nodeType nid: n.parent
-    cn: atomNameIdOf :ast n: (ast.nodes.get i: n.child)
+    cn: zast.atomNameIdOf n: (ast.nodes.get i: n.child)
     return (zenv.isImplementationLabelOf ty: symtab.typing reg: symtab.reg tid: pt nameId: cn)
 }
 
