@@ -2045,11 +2045,11 @@ ZTyping: class {
         return od
     }
 
-    # declSetMemberType -- record a member declaration's type. Deliberately
+    # setMemberType -- record a member declaration's type. Deliberately
     # not declSetType: the member did not mint the type, so it must not claim
     # the reverse declByTypeId edge.
-    declSetMemberType: function {
-        :this parentTypeId: ztypes.tid nameId: zast.nameid typeId: ztypes.tid
+    setMemberType: function {
+        :this parentTypeId: ztypes.tid nameId: zast.nameid childTypeId: ztypes.tid
     } is {
         md8: this.declMemberIdOf :parentTypeId :nameId
         if md8.isZero then {
@@ -2057,7 +2057,7 @@ ZTyping: class {
             # constructor gains them after its own declaration exists
             od8: this.declIdOfType typeId: parentTypeId
             if od8.isZero then {
-                this.declPendWrite :parentTypeId :nameId :typeId
+                this.declPendWrite :parentTypeId :nameId typeId: childTypeId
                 return
             }
             isFn8: false
@@ -2068,7 +2068,7 @@ ZTyping: class {
             node8 = oo8.node
             oo8.drop
             if isFn8.not then {
-                this.declPendWrite :parentTypeId :nameId :typeId
+                this.declPendWrite :parentTypeId :nameId typeId: childTypeId
                 return
             }
             md8 = (
@@ -2080,7 +2080,7 @@ ZTyping: class {
             )
         }
         do8: this.decls.getMut i: md8
-        do8.typeId = typeId
+        do8.typeId = childTypeId
         do8.drop
         # every member type names the declaration that minted it, whatever the
         # member's kind: a method's type IS the function it declares (its
@@ -2089,9 +2089,9 @@ ZTyping: class {
         # A LIST is the exception: its type is its value's, the list template's
         # instance, which the list declares no more than a constant declares
         # i64.
-        if typeId.isZero.not when (this.decls.get i: md8).kind.staticListDecl.not then {
-            exd8: this.declIdOfType :typeId
-            if exd8.isZero then this.declByTypeId.set key: typeId value: md8
+        if childTypeId.isZero.not when (this.decls.get i: md8).kind.staticListDecl.not then {
+            exd8: this.declIdOfType typeId: childTypeId
+            if exd8.isZero then this.declByTypeId.set key: childTypeId value: md8
         }
     }
 
@@ -2367,10 +2367,10 @@ ZTyping: class {
         kk: kind
         this.declNew name: nameId parent: od kind: kk :node
         (
-            this.declSetMemberType
+            this.setMemberType
             :parentTypeId
             :nameId
-            typeId: childTypeId
+            :childTypeId
         )
     }
 
@@ -2683,21 +2683,6 @@ ZTyping: class {
     }
 
     # --- member types ---
-
-    # setMemberType -- record the type of member `nameId` on `parentTypeId`:
-    # ensure the member's declaration, stamp the type onto it, and on first
-    # sight position it in the owner's last member slot, so declaration order
-    # is built as member order rather than corrected afterwards.
-    setMemberType: function {
-        :this parentTypeId: ztypes.tid nameId: zast.nameid childTypeId: ztypes.tid
-    } is {
-        (
-            this.declSetMemberType
-            :parentTypeId
-            :nameId
-            typeId: childTypeId
-        )
-    }
 
     # --- member constant values ---
 
