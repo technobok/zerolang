@@ -35,6 +35,7 @@ public: unit {
     :constnarrow
     :droptemp
     :tagaccessor
+    :typedefbase
     :armkey
     :datafield
     :fieldspan
@@ -437,6 +438,18 @@ tagaccessor: record {
     tid: ztypes.tid
 }
 
+# typedefbase -- the base a typedef wraps (`meters: typedef i64`): the name it
+# is written with and the type it resolves to. An entry is what makes a type a
+# typedef.
+typedefbase: record {
+    # the base's name, interned: for a base named through its unit (`pr.Cell`),
+    # the member it reaches
+    name: zast.nameid
+    # the base's type, resolved structurally at declaration (a parameterized
+    # base rides the spec trie, a bare atom the unit ladder); 0 until it does
+    tid: ztypes.tid
+}
+
 # destroyitem -- one variable a destroy point destroys, in the state the walk
 # reached it in there: 0 it holds its value, 1 it was moved on every path
 # to the point, 2 it was moved on some path and not others.
@@ -779,9 +792,9 @@ ZTyping: class {
     hashUsed: IdSet ztypes.tid
     # bool's type, cached because the truthiness checks ask for it constantly
     boolTid: ztypes.tid
-    # a scalar typedef's base name, keyed by tid so the answer does not depend
-    # on which unit the read happens in
-    typedefBaseName: (IdMapV ztypes.tid v: zast.nameid)
+    # each typedef's base, keyed by the typedef's tid so the answer does not
+    # depend on which unit the read happens in
+    typedefBase: (IdMapV ztypes.tid v: typedefbase)
     # an untyped numeric constant -- a literal, or a fold of literals -- that
     # lands in an i128, u128 or f16 destination, and that destination. C reads
     # the constant as a 64-bit integer or a double, and where the C compiler
@@ -789,9 +802,6 @@ ZTyping: class {
     # emitter spells it as the destination's value. Recorded outside a generic
     # instance's walk only.
     helperScalarTarget: (IdMapV zast.nodeid v: ztypes.tid)
-    # a typedef wrapper's base type id, resolved structurally at declaration
-    # (a parameterized base rides the spec trie, a bare atom the unit ladder)
-    typedefBaseTid: (IdMapV ztypes.tid v: ztypes.tid)
     # the sum type a dotted path reads an arm of
     dpTaggedParent: (IdMapV zast.nodeid v: ztypes.tid)
     # the dotted paths that are `value.arm` PREDICATES rather than reads --
@@ -2462,6 +2472,14 @@ ZTyping: class {
         return (t.inlineArms.has item: (t.armKey :parentTypeId :nameId))
     }
 
+    # typedefBaseTidOf -- the type a typedef wraps: its base INSTANCE id, or 0
+    # when `tid` is not a typedef or its base has not resolved
+    typedefBaseTidOf: function {t: this.view tid: ztypes.tid} out ztypes.tid is {
+        b: t.typedefBase.get key: tid
+        if b.some then return b.tid
+        return ztypes.tid.zero
+    }
+
     # isAsConstDecl -- whether a member declaration is such a constant
     isAsConstDecl: function {t: this.view declId: ztypes.declid} out bool is {
         if declId.isZero then return false
@@ -2843,9 +2861,8 @@ newTyping: function {nodeEst: 0.u64} out ZTyping is {
         refusedValues: IdSet zast.nodeid
         hashUsed: IdSet ztypes.tid
         boolTid: ztypes.tid
-        typedefBaseName: (IdMapV ztypes.tid v: zast.nameid)
+        typedefBase: (IdMapV ztypes.tid v: typedefbase)
         helperScalarTarget: (IdMapV zast.nodeid v: ztypes.tid)
-        typedefBaseTid: (IdMapV ztypes.tid v: ztypes.tid)
         dpTaggedParent: (IdMapV zast.nodeid v: ztypes.tid)
         dpArmPredicate: (IdMapV zast.nodeid v: ztypes.tid)
         dpTagRead: (IdMapV zast.nodeid v: ztypes.tid)

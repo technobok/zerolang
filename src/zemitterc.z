@@ -10802,18 +10802,15 @@ emitOperatorCallForm: function {
         # A DERIVED COMPARISON STOPS THE CHASE: `parity` calls 1 and 3 equal
         # and the u64 it wraps does not, so reading the base's raw comparison
         # would discard the equality the author defined.
-        tb9: optionval.none ztypes.tid
+        baseOwner: ztypes.tid
         if (derivedComparisonHere :typing :owner mnId: opNameId).not then {
-            tb9 = typing.typedefBaseTid.get key: owner
+            baseOwner = typing.typedefBaseTidOf tid: owner
         }
-        if tb9.some then {
-            baseOwner: tb9
-            if baseOwner.isZero.not then {
-                mb9: typing.declChildOfId parentTypeId: baseOwner nameId: opNameId
-                if mb9.some then {
-                    method = mb9
-                    owner = baseOwner
-                }
+        if baseOwner.isZero.not then {
+            mb9: typing.declChildOfId parentTypeId: baseOwner nameId: opNameId
+            if mb9.some then {
+                method = mb9
+                owner = baseOwner
             }
         }
     }
@@ -35203,16 +35200,11 @@ typedefChaseBaseName: function {
     cur: tid
     nmId: zast.nameid
     for true loop {
-        bn: typing.typedefBaseName.get key: cur
-        if bn.some then {
-            nmId = bn
-        }
-        bo: typing.typedefBaseTid.get key: cur
-        match (
-            bo
-        ) case some then {
-            cur = bo
-        } case none then break
+        b: typing.typedefBase.get key: cur
+        if b.none then break
+        if b.name.isZero.not then nmId = b.name
+        if b.tid.isZero then break
+        cur = b.tid
     }
     nm: String
     if nmId.isZero.not then nm = zast.poolTextCopy pool: ast.names ref: nmId
@@ -35224,13 +35216,11 @@ typedefChaseBaseName: function {
 typedefChaseHasBaseName: function {typing: ztyping.ZTyping.view tid: ztypes.tid} out bool is {
     cur: tid
     for true loop {
-        if (typing.typedefBaseName.has key: cur) then return true
-        bo: typing.typedefBaseTid.get key: cur
-        match (
-            bo
-        ) case some then {
-            cur = bo
-        } case none then break
+        b: typing.typedefBase.get key: cur
+        if b.none then return false
+        if b.name.isZero.not then return true
+        if b.tid.isZero then return false
+        cur = b.tid
     }
     return false
 }
@@ -35254,7 +35244,7 @@ typedefChaseC: function {
 
 # isTypedefType -- the type id carries a typedef base.
 isTypedefType: function {typing: ztyping.ZTyping.view tid: ztypes.tid} out bool is {
-    return (typing.typedefBaseName.has key: tid)
+    return (typing.typedefBase.has key: tid)
 }
 
 # destroyOperand -- what a value's destroy is handed: its address, or the value
@@ -35527,7 +35517,7 @@ chaseAggregateTypedef: function {
     ctx: Ctx.view
     tid: ztypes.tid
 } out ztypes.tid is {
-    if (typing.typedefBaseTid.has key: tid).not then return tid
+    if (typing.typedefBase.has key: tid).not then return tid
     e: ztypecheck.typedefChaseTid :typing :tid
     if (e == ctx.strTid) or (e == ctx.svTid) then return tid
     # a scalar is a native record, and an ordinal variant emits as one; a
@@ -35558,13 +35548,13 @@ typedefMethodOwner: function {
     # the method's name
     mnId: zast.nameid
 } out ztypes.tid is {
-    if (typing.typedefBaseTid.has key: tid).not then return tid
+    if (typing.typedefBase.has key: tid).not then return tid
     t: tid
     for t.isZero.not loop {
         mo: typing.declChildOfId parentTypeId: t nameId: mnId
         if mo.some when (reg.isNativeOf tid: mo).not then return t
-        bo: typing.typedefBaseTid.get key: t
-        if bo.none then break
+        bo: typing.typedefBaseTidOf tid: t
+        if bo.isZero then break
         t = bo
     }
     return (chaseStrTypedef :typing :ctx tid: (chaseAggregateTypedef :reg :typing :ctx :tid))
@@ -35578,7 +35568,7 @@ chaseStrTypedef: function {
     ctx: Ctx.view
     tid: ztypes.tid
 } out ztypes.tid is {
-    if (typing.typedefBaseTid.has key: tid).not then return tid
+    if (typing.typedefBase.has key: tid).not then return tid
     e: ztypecheck.typedefChaseTid :typing :tid
     if (e == ctx.strTid) or (e == ctx.svTid) then return e
     return tid

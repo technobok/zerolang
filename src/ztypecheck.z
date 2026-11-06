@@ -716,7 +716,7 @@ typesCompatible: function {
     if (isTextLiteralTid :st tid: b) when (textLiteralLands :ast :st dst: a) then return true
     cur: a
     for cur.isZero.not loop {
-        nb: typedefBaseTidOf :st tid: cur
+        nb: st.typing.typedefBaseTidOf tid: cur
         if nb.isZero then {
             cur = ztypes.tid.zero
         } else {
@@ -8372,12 +8372,9 @@ paramIsBorrowReftype: function {
 typedefChaseTid: function {typing: ztyping.ZTyping.view tid: ztypes.tid} out ztypes.tid is {
     cur: tid
     for true loop {
-        bo: typing.typedefBaseTid.get key: cur
-        match (
-            bo
-        ) case some then {
-            cur = bo
-        } case none then break
+        b: typing.typedefBaseTidOf tid: cur
+        if b.isZero then break
+        cur = b
     }
     return cur
 }
@@ -8859,7 +8856,7 @@ forceSpecMembers: function {
             for t.isZero.not loop {
                 md: st.typing.declMemberIdOf parentTypeId: t nameId: mn
                 if md.isZero.not then forceMemberDecl :st :ast memberDeclId: md
-                t = (st.typing.typedefBaseTid.get key: t).or d: ztypes.tid.zero
+                t = st.typing.typedefBaseTidOf tid: t
             }
         }
     }
@@ -13172,9 +13169,8 @@ checkTypedefShape: function {st: zenv.ZSymbolTable ast: Ast.view onode: objref} 
     }
 }
 
-# recordTypedefBase -- `X: typedef T` records the base it wraps by BOTH channels:
-# the declaration's name id and, when it resolves here, its tid. The two are not
-# the same presence set, so both are written.
+# recordTypedefBase -- `X: typedef T` records the base it wraps: the name it is
+# written with, then the type, when it resolves here.
 recordTypedefBase: function {
     st: zenv.ZSymbolTable
     scope: ztypes.declid
@@ -13186,13 +13182,12 @@ recordTypedefBase: function {
     checkTypedefShape :st :ast onode: rnode
     tdb: objectTypedefBaseId :ast onode: rnode
     if tdb.isZero.not then {
-        tdk: rid
-        st.typing.typedefBaseName.set key: tdk value: tdb
+        named: ztyping.typedefbase name: tdb tid: ztypes.tid.zero
+        st.typing.typedefBase.set key: rid value: named
     }
     tdt: objectTypedefBaseTid :st :scope :ast :unitDecl ownerTid: rid onode: rnode
     if tdt.isZero.not then {
-        typedefTid: rid
-        st.typing.typedefBaseTid.set key: typedefTid value: tdt
+        st.typing.typedefBase.set key: rid value: (ztyping.typedefbase name: tdb tid: tdt)
     }
 }
 
@@ -15982,13 +15977,8 @@ resolveClassTypedefBase: function {
     # the base the typedef resolved to answers for itself -- one reached through
     # its unit (`(pr.GBox t: i64)`) included
     if (fieldTypeNeedsCleanup :st tid: baseTid isBorrowed: false) then needsDtor = true
-    if tdbase.isZero.not then {
-        classTid: cid
-        st.typing.typedefBaseName.set key: classTid value: tdbase
-    }
-    if baseTid.isZero.not then {
-        classTid: cid
-        st.typing.typedefBaseTid.set key: classTid value: baseTid
+    if tdbase.isZero.not or baseTid.isZero.not then {
+        st.typing.typedefBase.set key: cid value: (ztyping.typedefbase name: tdbase tid: baseTid)
     }
     return needsDtor
 }
@@ -22854,7 +22844,7 @@ printableInterpTid: function {
     if (isAnyLiteralTid :st :tid) then return true
     t: tid
     for true loop {
-        b: typedefBaseTidOf :st tid: t
+        b: st.typing.typedefBaseTidOf tid: t
         if b.isZero then break
         t = b
     }
@@ -24208,7 +24198,7 @@ mintMonoTypedefBase: function {
     subs: (IdMapV zast.nameid v: ztypes.tid).view
     idSubs: (IdMapV ztypes.tid v: ztypes.genericarg)
 } is {
-    tb: typedefBaseTidOf :st tid: templateId
+    tb: st.typing.typedefBaseTidOf tid: templateId
     if tb.isZero then return
     mt: mid
     # a base argument the base's own parameter refuses is this instance's
@@ -24222,11 +24212,10 @@ mintMonoTypedefBase: function {
     }
     target: substitutedMemberTid :ast :st :unitDecl :rf :templateId chId: tb :subs :idSubs
     st.mode = savedMode
-    st.typing.typedefBaseTid.set key: mt value: target
-    bn: st.typing.typedefBaseName.get key: templateId
-    if bn.some then {
-        st.typing.typedefBaseName.set key: mid value: bn
-    }
+    bn: zast.nameid
+    tmpl: st.typing.typedefBase.get key: templateId
+    if tmpl.some then bn = tmpl.name
+    st.typing.typedefBase.set key: mt value: (ztyping.typedefbase name: bn tid: target)
     if (st.reg.needsDestructor typeId: target) then {
         st.reg.setNeedsDestructor typeId: mt
     }
@@ -25237,7 +25226,7 @@ typeImplements: function {
 typedefInheritsImplementation: function {
     st: zenv.ZSymbolTable.view impl: ztypes.tid spec: ztypes.tid
 } out bool is {
-    base: typedefBaseTidOf :st tid: impl
+    base: st.typing.typedefBaseTidOf tid: impl
     if base.isZero then return false
     if (typeImplements :st impl: base :spec).not then return false
     slots: st.typing.declRowSlots ownerTid: spec
@@ -25478,7 +25467,7 @@ valtypeLayout: function {
 } out valtypelayout is {
     if tid.isZero then return unknownLayout
     if depth > 32 then return (valtypelayout size: 0 align: 1 known: false cyclic: true)
-    tb: typedefBaseTidOf :st :tid
+    tb: st.typing.typedefBaseTidOf :tid
     if tb.isZero.not then return (valtypeLayout :ast :st tid: tb :refBytes depth: depth + 1)
     if (st.typing.ordinalVariant.has key: tid) then return (fixedLayout n: 1)
     # the runtime's shapes first: a `str` or an `array` instance is a record by
@@ -26039,8 +26028,8 @@ typeIsHashable: function {
 ownEqWithoutOwnHash: function {st: zenv.ZSymbolTable.view tid: ztypes.tid} out bool is {
     t: tid
     for t.isZero.not loop {
-        bo: st.typing.typedefBaseTid.get key: t
-        if bo.none then return false
+        bo: st.typing.typedefBaseTidOf tid: t
+        if bo.isZero then return false
         if (st.typing.declMemberIdOf parentTypeId: t nameId: zast.wellKnown.slot.wkHash
         ).isZero.not then {
             return false
@@ -26307,12 +26296,9 @@ valOpOwner: function {
     t: tid
     for t.isZero.not loop {
         if (typing.declMemberIdOf parentTypeId: t :nameId).isZero.not then return t
-        bo: typing.typedefBaseTid.get key: t
-        match (
-            bo
-        ) case some then {
-            t = bo
-        } case none then return t
+        bo: typing.typedefBaseTidOf tid: t
+        if bo.isZero then return t
+        t = bo
     }
     return t
 }
@@ -26380,7 +26366,7 @@ markSpecMembersUsed: function {st: zenv.ZSymbolTable impl: ztypes.tid spec: ztyp
             t: impl
             for t.isZero.not loop {
                 markMemberUsed :st ownerTid: t nameId: mn
-                t = (st.typing.typedefBaseTid.get key: t).or d: ztypes.tid.zero
+                t = st.typing.typedefBaseTidOf tid: t
             }
         }
     }
@@ -26545,8 +26531,8 @@ valPartTids: function {
     parts: ListVal ztypes.tid
 } is {
     # a typedef is its base: a member generated on it is built from the base's
-    tdb: typing.typedefBaseTid.get key: tid
-    if tdb.some then {
+    tdb: typing.typedefBaseTidOf :tid
+    if tdb.isZero.not then {
         parts.append tdb
         return
     }
@@ -26781,15 +26767,7 @@ listElemHasCompare: function {st: zenv.ZSymbolTable ast: Ast elem: ztypes.tid} o
         )
         return src.builtin or src.written
     }
-    et: elem
-    for true loop {
-        bo: st.typing.typedefBaseTid.get key: et
-        match (
-            bo
-        ) case some then {
-            et = bo
-        } case none then break
-    }
+    et: typedefChaseTid typing: st.typing tid: elem
     return (st.typing.declIsMethodId parentTypeId: et nameId: zast.wellKnown.slot.wkCompare)
 }
 
@@ -26800,15 +26778,7 @@ listElemHasEq: function {st: zenv.ZSymbolTable ast: Ast elem: ztypes.tid} out bo
         forceValParts :st :ast tid: elem depth: 0
         return (valEqMissingPart :ast :st tid: elem depth: 0).isZero
     }
-    et: elem
-    for true loop {
-        bo: st.typing.typedefBaseTid.get key: et
-        match (
-            bo
-        ) case some then {
-            et = bo
-        } case none then break
-    }
+    et: typedefChaseTid typing: st.typing tid: elem
     return (st.typing.declIsMethodId parentTypeId: et nameId: zast.wellKnown.slot.wkOpEq)
 }
 
@@ -26921,15 +26891,7 @@ typeIsIdKey: function {
     tid: ztypes.tid
 } out bool is {
     if tid.isZero then return false
-    ktd: tid
-    for true loop {
-        bo: st.typing.typedefBaseTid.get key: ktd
-        match (
-            bo
-        ) case some then {
-            ktd = bo
-        } case none then break
-    }
+    ktd: typedefChaseTid typing: st.typing :tid
     if ktd == (stdTid :ast :st wk: zast.wellKnown.slot.tyU8) then return true
     if ktd == (stdTid :ast :st wk: zast.wellKnown.slot.tyU16) then return true
     if ktd == (stdTid :ast :st wk: zast.wellKnown.slot.tyU32) then return true
@@ -26949,15 +26911,7 @@ typeIsNumberOf: function {
     float: bool
 } out bool is {
     if tid.isZero then return false
-    ktd: tid
-    for true loop {
-        bo: st.typing.typedefBaseTid.get key: ktd
-        match (
-            bo
-        ) case some then {
-            ktd = bo
-        } case none then break
-    }
+    ktd: typedefChaseTid typing: st.typing :tid
     nk: numKindOfTid reg: st.reg typing: st.typing tid: ktd
     if nk.has.not then return false
     return (ztypes.isFloatKind k: nk.kind) == float
@@ -30328,20 +30282,14 @@ metaCreateBaseId: function {ast: Ast.view n: astnode.view} out optionval zast.no
 
 # typedefBaseOf -- a typedef type's base TYPE: the template for a base that
 # is a generic instance (`Bytes: typedef (ListVal u8)` -> ListVal), else the
-# base itself; 0 when `tid` is not a typedef. typedefBaseTidOf is the
-# instance.
+# base itself; 0 when `tid` is not a typedef. ZTyping.typedefBaseTidOf is
+# the instance.
 typedefBaseOf: function {st: zenv.ZSymbolTable.view tid: ztypes.tid} out ztypes.tid is {
-    b: typedefBaseTidOf :st :tid
+    b: st.typing.typedefBaseTidOf :tid
     if b.isZero then return b
     go: st.reg.genericOriginOf tid: b
     if go.isZero.not then return go
     return b
-}
-
-# typedefBaseTidOf -- a typedef type's base INSTANCE id, resolved structurally
-# when the wrapper was declared, or 0.
-typedefBaseTidOf: function {st: zenv.ZSymbolTable.view tid: ztypes.tid} out ztypes.tid is {
-    return ((st.typing.typedefBaseTid.get key: tid).or d: ztypes.tid)
 }
 
 # reportUnresolvedCastArg -- a typedef cast's from-argument that resolved to
@@ -30464,7 +30412,7 @@ refuseTypedefExtraArgs: function {
 # (List t) as { t: ... }`).
 isGenericTypedef: function {st: zenv.ZSymbolTable.view tid: ztypes.tid} out bool is {
     if tid.isZero then return false
-    if (st.typing.typedefBaseName.has key: tid).not then return false
+    if (st.typing.typedefBase.has key: tid).not then return false
     return (st.reg.isGenericOf :tid)
 }
 
@@ -30570,7 +30518,7 @@ typedefInstanceSubs: function {
     tk: declOfTypeId reg: st.reg tid: tplId
     gparams: st.reg.genericParamNamesOf tdecl: tk
     if (bindTypedefFromSubs :st :ast :tplId :gparams :vt :subs).not then {
-        bo: st.reg.genericOriginOf tid: (typedefBaseTidOf :st tid: tplId)
+        bo: st.reg.genericOriginOf tid: (st.typing.typedefBaseTidOf tid: tplId)
         en: specWrittenName :st :ast tid: bo
         an: specWrittenName :st :ast tid: vt
         (
@@ -30720,7 +30668,7 @@ bindTypedefFromSubs: function {
     vt: ztypes.tid
     subs: (IdMapV zast.nameid v: ztypes.tid)
 } out bool is {
-    pb: typedefBaseTidOf :st tid: tplId
+    pb: st.typing.typedefBaseTidOf tid: tplId
     if pb.isZero then return false
     bo: st.reg.genericOriginOf tid: pb
     if bo.isZero then bo = pb
@@ -30737,7 +30685,7 @@ bindTypedefFromSubs: function {
             bindPartialParamSubs :st :ast :gparams paramTid: pb argTid: cur :subs
             return true
         }
-        nxt: typedefBaseTidOf :st tid: cur
+        nxt: st.typing.typedefBaseTidOf tid: cur
         if nxt.isZero then return false
         cur = nxt
     }
@@ -30915,7 +30863,7 @@ checkCastFromType: function {
 } is {
     # the base INSTANCE: `Bytes` is built from a `ListVal u8`, and the template
     # `ListVal` is no value's type
-    base: typedefBaseTidOf :st tid: tdId
+    base: st.typing.typedefBaseTidOf tid: tdId
     if base.isZero then return
     if vt.isZero then return
     if vt == base then return
@@ -33734,7 +33682,7 @@ markTypedefListViewUse: function {
     cnId: zast.nameid
 } is {
     if (isListViewMember nameId: cnId).not then return
-    base: typedefBaseTidOf :st tid: bt
+    base: st.typing.typedefBaseTidOf tid: bt
     if base.isZero then return
     lvD: st.typing.declMemberIdOf parentTypeId: base nameId: zast.wellKnown.slot.wkListView
     if lvD.isZero.not then st.walk.usedMemberDecl.add item: lvD
@@ -35116,9 +35064,9 @@ refuseTypedefArmConstructor: function {
 # whose arms a match, an arm predicate and narrowing read through the
 # typedef; `tid` itself when it is no typedef over a sum.
 typedefSumBase: function {st: zenv.ZSymbolTable.view tid: ztypes.tid} out ztypes.tid is {
-    if (typedefBaseTidOf :st :tid).isZero then return tid
+    if (st.typing.typedefBaseTidOf :tid).isZero then return tid
     t: tid
-    for (typedefBaseTidOf :st tid: t).isZero.not loop t = typedefBaseTidOf :st tid: t
+    for (st.typing.typedefBaseTidOf tid: t).isZero.not loop t = st.typing.typedefBaseTidOf tid: t
     tt: st.reg.typetypeOf typeId: (partialTemplateOf :st tid: t)
     if tt.isSum then return t
     return tid
@@ -35144,7 +35092,7 @@ typedefMemberOwner: function {
         forceMemberOf :st :ast parentTypeId: cur nameId: cnId
         if (st.typing.declChildOfId parentTypeId: cur nameId: cnId).some then return cur
         if (typedefHidesMember :st :ast tid: cur :cnId) then return cur
-        nxt: typedefBaseTidOf :st tid: cur
+        nxt: st.typing.typedefBaseTidOf tid: cur
         if nxt.isZero then nxt = typedefBaseOf :st tid: cur
         if nxt.isZero then return cur
         cur = nxt
@@ -35186,7 +35134,7 @@ typedefHidesMember: function {
     tid: ztypes.tid
     cnId: zast.nameid
 } out bool is {
-    if (typedefBaseTidOf :st :tid).isZero then return false
+    if (st.typing.typedefBaseTidOf :tid).isZero then return false
     td: declOfTypeId reg: st.reg :tid
     if td.isZero then return false
     dnode: zast.nodeid
@@ -46216,7 +46164,7 @@ recordInheritedImplementation: function {
     value: ztypes.tid
     spec: ztypes.tid
 } is {
-    if (typedefBaseTidOf :st tid: value).isZero then return
+    if (st.typing.typedefBaseTidOf tid: value).isZero then return
     src: implementationRowLink :st impl: value :spec
     if src.isZero or (src == value) then return
     if (typedefInheritsImplementation :st impl: value :spec).not then return
@@ -46266,7 +46214,7 @@ implementationRowLink: function {
             if og.isZero.not when crow.implTypeId == og then isT = true
             if crow.specTypeId == spec when isT then return t
         }
-        t = typedefBaseTidOf :st tid: t
+        t = st.typing.typedefBaseTidOf tid: t
     }
     return t
 }
@@ -48975,7 +48923,7 @@ checkTypedefOrProjectionCall: function {
     tdcid: zast.nodeid
 } out callleg is {
     tdo: walkTypeOf :st nid: tdcid
-    isTd: (typedefBaseOf :st tid: tdo).isZero.not or (typedefBaseTidOf :st tid: tdo).isZero.not
+    isTd: (st.typing.typedefBaseTidOf tid: tdo).isZero.not
     if isTd then {
         return (callleg handled: true tid: (checkTypedefCreate :st :unitDecl :ast :call tdId: tdo))
     }
@@ -60480,7 +60428,7 @@ numKindOfTid: function {
 # `tid`: a block of `w: typedef u8` holds u8 values.
 baseNumKind: function {st: zenv.ZSymbolTable.view tid: ztypes.tid} out ztypes.suffixinfo is {
     b: tid
-    for (typedefBaseTidOf :st tid: b).isZero.not loop b = typedefBaseTidOf :st tid: b
+    for (st.typing.typedefBaseTidOf tid: b).isZero.not loop b = st.typing.typedefBaseTidOf tid: b
     return (numKindOfTid reg: st.reg typing: st.typing tid: b)
 }
 
@@ -63804,7 +63752,7 @@ numericTypedefNamed: function {
         ztypes.tid.create
         from: (resolveNamedTypeId :st :ast :unitDecl :scope nameId: cnId thisName: "")
     )
-    base: typedefBaseTidOf :st tid: tdTid
+    base: st.typing.typedefBaseTidOf tid: tdTid
     if base.isZero then return ztypes.tid
     if (isNumericTid :st tid: base).not then return ztypes.tid
     return tdTid
@@ -63827,7 +63775,7 @@ constOfNumericTypedef: function {
     if args.length != 1 then return ztypes.noConst
     tdTid: numericTypedefNamed :st :scope :ast :unitDecl :callableId
     if tdTid.isZero then return ztypes.noConst
-    base: typedefBaseTidOf :st tid: tdTid
+    base: st.typing.typedefBaseTidOf tid: tdTid
     # the one argument: written bare, or labelled `from`
     valueId: args.get i: 0
     {
@@ -64818,11 +64766,7 @@ constFitNumber: function {
     ln: u32
     co: u32
 } out ztypes.cval is {
-    base: ftid
-    for true loop {
-        bo: st.typing.typedefBaseTid.get key: base
-        match bo case some then base = bo case none then break
-    }
+    base: typedefChaseTid typing: st.typing tid: ftid
     fm: constFitsType :st :v target: base
     if fm.length > 0 then {
         addError :st nodeid: at lineno: ln colno: co e: zast.err.typeError msg: fm
