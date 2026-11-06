@@ -11105,33 +11105,11 @@ collectionValueCallRhs: function {
     }
 }
 
-# funcBorrowFlag -- does the function type `tid` return a BORROW? A zero tid and
-# a miss both answer false: a type that was never stamped is lending nothing.
-funcBorrowFlag: function {typing: ztyping.ZTyping.view tid: ztypes.tid} out bool is {
-    if tid.isZero then return false
-    g: typing.funcReturnsBorrow.get key: tid
-    match (
-        g
-    ) case some then {
-        return g
-    } case none then {
-        return false
-    }
-}
-
-# funcViewFlag -- does the function type `tid` return a VIEW? The view half of
-# funcBorrowFlag: such a result is read through and never written through, so
-# the pointer that carries it says `const`.
-funcViewFlag: function {typing: ztyping.ZTyping.view tid: ztypes.tid} out bool is {
-    if tid.isZero then return false
-    return ((typing.funcReturnsView.get key: tid).or d: false)
-}
-
 # refPtrC -- the C spelling of a reference a function hands back, or of the
 # local that binds one: a pointer to `base`, `const` when the callee's result
 # is a `.view`, which is read through and never written through.
 refPtrC: function {typing: ztyping.ZTyping.view tid: ztypes.tid base: StringView} out String is {
-    if (funcViewFlag :typing :tid) then return "const \{base}*"
+    if (typing.returnMarkerOf :tid) == ztypes.zparamownership.viewMode then return "const \{base}*"
     return "\{base}*"
 }
 
@@ -11170,7 +11148,7 @@ returnsValueStructRef: function {
     fid: ztypes.tid
     retTid: ztypes.tid
 } out bool is {
-    if (funcViewFlag :typing tid: fid) then return false
+    if (typing.returnMarkerOf tid: fid) == ztypes.zparamownership.viewMode then return false
     return (isValueStructTid :reg :typing :ctx tid: retTid)
 }
 
@@ -11207,7 +11185,7 @@ fnReturnsRefBorrow: function {
 } out bool is {
     if fid.isZero then return false
     if retTid.isZero then return false
-    if (funcBorrowFlag :typing tid: fid).not then return false
+    if (typing.returnsReference tid: fid).not then return false
     # A container's `getMut` is native BY DECLARATION but its C is generated
     # HERE (emitColGet), not hand-written, so the exclusion below does not
     # reach it: for a compound valtype element it really does return a pointer
@@ -11237,7 +11215,7 @@ fnReturnsRefBorrow: function {
 }
 
 # callRhsIsBorrow -- the call-shaped leg of bindingRhsIsBorrow: the callee's
-# declared return carries the `.borrow` marker (funcReturnsBorrow, recorded
+# declared return carries the `.borrow` marker (funcReturnMarker, recorded
 # from the signature). Dotted method calls whose callable stamp missed probe
 # the receiver mono's method child -- fully signature-driven (List/ListView
 # element gets arrive here through their declared `out of.borrow`).
@@ -11249,13 +11227,12 @@ callRhsIsBorrow: function {
     call: zast.callrow.view
 } out bool is {
     cstid: stampIdOf :ctx :typing nid: (interpPartNodeId n: (ast.nodes.get i: call.callable))
-    if (funcBorrowFlag :typing tid: cstid) then return true
+    if (typing.returnsReference tid: cstid) then return true
     # a bare callee's own declaration (refDecl), when its stamp missed
     cnid: interpPartNodeId n: (ast.nodes.get i: call.callable)
     crd: (typing.refDecl.get key: cnid).or d: ztypes.declid
     if crd.isZero.not when (
-        funcBorrowFlag
-        :typing
+        typing.returnsReference
         tid: (typing.declTypeOf declId: crd)
     ) then return true
     chId: aliasChildNameId :ast :typing n: (ast.nodes.get i: call.callable)
@@ -11267,7 +11244,7 @@ callRhsIsBorrow: function {
         (typing.declChildOfId parentTypeId: rid nameId: chId).or
         d: ztypes.tid.zero
     )
-    return (funcBorrowFlag :typing tid: mfid)
+    return (typing.returnsReference tid: mfid)
 }
 
 # isSvAsStringNode -- the node is `sv.asString` on a StringView-typed base:
@@ -11354,7 +11331,7 @@ refBorrowCalleeFid: function {
         return (refBorrowCalleeFid :ast :reg :typing :ctx n: (ast.nodes.get i: n.statementline))
     } case call then {
         cid: stampIdOf :ctx :typing nid: (interpPartNodeId n: (ast.nodes.get i: n.callable))
-        if (funcBorrowFlag :typing tid: cid) then return cid
+        if (typing.returnsReference tid: cid) then return cid
         ch8: aliasChildName :ast :typing n: (ast.nodes.get i: n.callable)
         if ch8.length == 0 then return ztypes.tid.zero
         recvTid: dottedReceiverStampId :ctx :ast :typing callable: (ast.nodes.get i: n.callable)
@@ -11374,7 +11351,7 @@ refBorrowCalleeFid: function {
             ).or
             d: ztypes.tid.zero
         )
-        if (funcBorrowFlag :typing tid: mf8) then return mf8
+        if (typing.returnsReference tid: mf8) then return mf8
         return ztypes.tid.zero
     } case dottedpath then {
         # a zero-arg method auto-call reads as a dotted path
@@ -11385,8 +11362,7 @@ refBorrowCalleeFid: function {
             cc7
         ) case some then {
             if (reg.typetypeOf typeId: cc7) == ztypes.ztypetype.functionType when (
-                funcBorrowFlag
-                :typing
+                typing.returnsReference
                 tid: cc7
             ) then return cc7
             return ztypes.tid.zero
@@ -11461,7 +11437,7 @@ bindingRhsIsBorrow: function {
             # aliases the receiver and must not be freed with the binding, the
             # same answer callRhsIsBorrow gives the parenthesised form.
             if (reg.typetypeOf typeId: cco) == ztypes.ztypetype.functionType then {
-                return (funcBorrowFlag :typing tid: cco)
+                return (typing.returnsReference tid: cco)
             }
             return true
         } case none then {

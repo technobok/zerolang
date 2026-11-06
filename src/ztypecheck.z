@@ -6892,73 +6892,22 @@ resolveFieldTyperef: function {
     return cid
 }
 
-# returnHasBorrowMarkerNode / returnHasBorrowMarker -- the function's return
-# type carries a REFERENCE marker: `out T.borrow` hands back a mutable
-# reference into the receiver, `out T.view` a readonly one. Both pin the
-# receiver for the result binding's scope; they differ only in how strongly
-# (returnHasViewMarker picks that apart).
-returnHasBorrowMarkerNode: function {ast: Ast.view n: astnode.view} out bool is {
-    rbo: pathOwnership :ast :n
-    match (
-        rbo
-    ) case some then {
-        if rbo == ztypes.zparamownership.borrowMode then return true
-        return rbo == ztypes.zparamownership.viewMode
-    } case none then {
-        return false
-    }
+# returnMarkerAt -- the marker the return type `oId` carries: `out T.borrow`
+# hands back a mutable reference into the receiver, `out T.view` a readonly
+# one -- both pin the receiver for the result binding's scope -- and `out
+# T.hold` an OWNED result the caller may only read, which is not a reference:
+# the binding keeps its destructor. noneMode for any other return.
+returnMarkerAt: function {ast: Ast.view oId: zast.nodeid} out ztypes.zparamownership is {
+    if oId.isZero then return ztypes.zparamownership.noneMode
+    m: pathOwnership :ast n: (ast.nodes.get i: oId)
+    if m.some when m.isReference or (m == ztypes.zparamownership.holdMode) then return m
+    return ztypes.zparamownership.noneMode
 }
 
-# returnHasViewMarkerNode / returnHasViewMarker -- the reference the return
-# hands back is READONLY (`out T.view`), so the pin it leaves on the receiver
-# is shared: several such references may be live at once.
-returnHasViewMarkerNode: function {ast: Ast.view n: astnode.view} out bool is {
-    rvo: pathOwnership :ast :n
-    match (
-        rvo
-    ) case some then {
-        return rvo == ztypes.zparamownership.viewMode
-    } case none then {
-        return false
-    }
-}
-
-# whether a return type carries `.view`, which makes the result a non-owning
-# readonly reference
-returnHasViewMarker: function {ast: Ast.view oId: zast.nodeid} out bool is {
-    if oId.isZero then return false
-    o: ast.nodes.get i: oId
-    return (returnHasViewMarkerNode :ast n: o)
-}
-
-# returnHasFrozenMarkerNode / returnHasFrozenMarker -- `out T.hold`: the result
-# is OWNED and READONLY. It is not a reference return -- the binding keeps its
-# destructor -- so it is kept apart from returnHasViewMarker, which freezes a
-# binding because the binding IS the reference the callee handed back.
-returnHasFrozenMarkerNode: function {ast: Ast.view n: astnode.view} out bool is {
-    rfo: pathOwnership :ast :n
-    match (
-        rfo
-    ) case some then {
-        return rfo == ztypes.zparamownership.holdMode
-    } case none then {
-        return false
-    }
-}
-
-# whether a return type carries `.hold`, which hands back an owned value the
-# caller may only read
-returnHasFrozenMarker: function {ast: Ast.view oId: zast.nodeid} out bool is {
-    if oId.isZero then return false
-    o: ast.nodes.get i: oId
-    return (returnHasFrozenMarkerNode :ast n: o)
-}
-
-# true when operation `oId`'s return type carries a `.borrow` marker.
+# returnHasBorrowMarker -- the return type `oId` hands back a reference:
+# `.borrow` or `.view`.
 returnHasBorrowMarker: function {ast: Ast.view oId: zast.nodeid} out bool is {
-    if oId.isZero then return false
-    o: ast.nodes.get i: oId
-    return (returnHasBorrowMarkerNode :ast n: o)
+    return (returnMarkerAt :ast :oId).isReference
 }
 
 # paramIsThisReceiver -- the parameter's type names the receiver: bare `this`
@@ -7940,26 +7889,11 @@ recordFunctionReturn: function {
         if peeledReturnTid.isZero.not then st.reg.setReturnType typeId: fid value: peeledReturnTid
         markNativeRecordClone :st :fid enclDecl: receiverEnclDecl partial: peeledReturnTid
     }
-    if (returnHasBorrowMarker :ast oId: fnode.returntype) then {
-        fbk: fid
-        fbv: true
-        st.typing.funcReturnsBorrow.set key: fbk value: fbv
-        if (returnHasViewMarker :ast oId: fnode.returntype) then {
-            fvk: fid
-            fvv: true
-            st.typing.funcReturnsView.set key: fvk value: fvv
-        }
+    marker: returnMarkerAt :ast oId: fnode.returntype
+    if (marker == ztypes.zparamownership.noneMode).not then {
+        st.typing.funcReturnMarker.set key: fid value: marker
     }
-    if fnode.pins then {
-        fxk: fid
-        fxv: true
-        st.typing.funcPins.set key: fxk value: fxv
-    }
-    if (returnHasFrozenMarker :ast oId: fnode.returntype) then {
-        ffk: fid
-        ffv: true
-        st.typing.funcReturnsFrozen.set key: ffk value: ffv
-    }
+    if fnode.pins then st.typing.funcPins.add item: fid
 }
 
 # finishFunctionSignature -- close a function's signature once its parameters
@@ -10164,9 +10098,10 @@ implementationParams: function {
 # implementationReturnMarker -- the marker a method's return carries, as the
 # source spells it: `view`, `borrow`, `hold`, or "" for none.
 implementationReturnMarker: function {st: zenv.ZSymbolTable.view mid: ztypes.tid} out String is {
-    if ((st.typing.funcReturnsView.get key: mid).or d: false) then return "view".string
-    if ((st.typing.funcReturnsBorrow.get key: mid).or d: false) then return "borrow".string
-    if ((st.typing.funcReturnsFrozen.get key: mid).or d: false) then return "hold".string
+    m: st.typing.returnMarkerOf tid: mid
+    if m == ztypes.zparamownership.viewMode then return "view".string
+    if m == ztypes.zparamownership.borrowMode then return "borrow".string
+    if m == ztypes.zparamownership.holdMode then return "hold".string
     return "".string
 }
 
@@ -10472,8 +10407,8 @@ checkImplementationReturn: function {
             msg: "'\{implName}' implements \{specName}'s '\{mname}' returning \{irn}, where the spec's returns \{srn}"
         )
     }
-    sPins: (st.typing.funcPins.get key: smid).or d: false
-    iPins: (st.typing.funcPins.get key: imid).or d: false
+    sPins: st.typing.funcPins.has item: smid
+    iPins: st.typing.funcPins.has item: imid
     if sPins != iPins then {
         skw: "out".string
         if sPins then skw = "outx".string
@@ -23308,7 +23243,7 @@ cloneMethodInto: function {
     st.typing.setMemberType parentTypeId: specId nameId: methodNameId childTypeId: fnTid
     # The clone answers call-site questions the same way the template does:
     # isNative gates arg validation, the recorded receiver name drives receiver auto-fill
-    # and the no-paren auto-call, funcReturnsBorrow carries the `.borrow`
+    # and the no-paren auto-call, funcReturnMarker carries the `.borrow`
     # return marker, and funcReturnNode backs methodReturnOf for concrete
     # (non-generic) returns.
     tpn0id: zast.nameid
@@ -24040,18 +23975,9 @@ mintMonoMembers: function {
 # unit instance's copy of the unit's function. Each answers the call site and
 # its own body's return checks as the function does.
 copyReturnMarkers: function {st: zenv.ZSymbolTable fromFn: ztypes.tid toFn: ztypes.tid} is {
-    if ((st.typing.funcReturnsView.get key: fromFn).or d: false) then {
-        st.typing.funcReturnsView.set key: toFn value: true
-    }
-    if ((st.typing.funcPins.get key: fromFn).or d: false) then {
-        st.typing.funcPins.set key: toFn value: true
-    }
-    if ((st.typing.funcReturnsFrozen.get key: fromFn).or d: false) then {
-        st.typing.funcReturnsFrozen.set key: toFn value: true
-    }
-    if ((st.typing.funcReturnsBorrow.get key: fromFn).or d: false) then {
-        st.typing.funcReturnsBorrow.set key: toFn value: true
-    }
+    m: st.typing.funcReturnMarker.get key: fromFn
+    if m.some then st.typing.funcReturnMarker.set key: toFn value: m
+    if (st.typing.funcPins.has item: fromFn) then st.typing.funcPins.add item: toFn
 }
 
 # mintMono -- populate one generic-instance type: the template's typetype and
@@ -25273,8 +25199,8 @@ implementationMethodMatches: function {
     sRetT: (methodReturnOf reg: st.reg typing: st.typing mid: smid).or d: ztypes.tid
     iRetT: (methodReturnOf reg: st.reg typing: st.typing mid: imid).or d: ztypes.tid
     if sRetT != iRetT then return false
-    sPins: (st.typing.funcPins.get key: smid).or d: false
-    iPins: (st.typing.funcPins.get key: imid).or d: false
+    sPins: st.typing.funcPins.has item: smid
+    iPins: st.typing.funcPins.has item: imid
     if sPins != iPins then return false
     return (implementationReturnMarker :st mid: smid) == (implementationReturnMarker :st mid: imid)
 }
@@ -35737,7 +35663,7 @@ checkReturnRooting: function {
 } out bool is {
     if argT.isZero then return false
     cid: callNodeIdOf n: (ast.nodes.get i: arg.operation)
-    if st.walk.currentReturnsBorrow then {
+    if st.walk.currentReturnMarker.isReference then {
         okRef: false
         if cid.isZero.not then {
             okRef = pinsAllParamRooted :st
@@ -35760,7 +35686,7 @@ checkReturnRooting: function {
                 msg: m1
             )
         }
-        if okRef when st.walk.currentReturnsView.not then {
+        if okRef when (st.walk.currentReturnMarker == ztypes.zparamownership.viewMode).not then {
             checkBorrowResultSource :st :ast :arg :cid
         }
         return okRef.not
@@ -35860,7 +35786,7 @@ checkBorrowResultSource: function {
     # the method's result, judged by the method's own flag
     lm: pathLeafMethodId :st :path
     if lm.isZero.not then {
-        if ((st.typing.funcReturnsView.get key: lm).or d: false) then {
+        if (st.typing.returnMarkerOf tid: lm) == ztypes.zparamownership.viewMode then {
             (
                 addError
                 :st
@@ -35956,7 +35882,7 @@ checkReturnCarries: function {
                 :ast
                 :st
                 tid: argT
-            ) when st.walk.currentFnPins.not when st.walk.currentReturnsBorrow.not then {
+            ) when st.walk.currentFnPins.not when st.walk.currentReturnMarker.isReference.not then {
                 pwn: zast.nameTextAt :ast ref: rbn
                 pfn: declWrittenName :st :ast tid: st.walk.currentFnTid
                 pm: "Cannot return '\{pwn}': it views what the caller passed, which the caller cannot see because '\{pfn}' is `out`, not `outx`"
@@ -36019,7 +35945,7 @@ checkReturnCarries: function {
     # a returned call: its pending pins are what the result keeps locked
     if (callNodeIdOf n: an).isZero then return
     if st.walk.currentFnPins then return
-    if st.walk.currentReturnsBorrow then return
+    if st.walk.currentReturnMarker.isReference then return
     if st.walk.pendingPins.length == 0 then return
     # found first, reported after: the report takes `st` while the pins are
     # being read through it
@@ -39064,10 +38990,7 @@ dottedLendsResult: function {st: zenv.ZSymbolTable nid: zast.nodeid} out bool is
     if rdo.none then return false
     rd: st.typing.decls.get i: rdo
     if (rd.kind.methodDecl or rd.kind.funcDecl).not then return false
-    return (
-        (st.typing.funcReturnsBorrow.get key: rd.typeId).or
-        d: false
-    )
+    return (st.typing.returnsReference tid: rd.typeId)
 }
 
 # valueIsLent -- the value at `nid` is one whose storage belongs to something
@@ -39107,10 +39030,7 @@ callHandsBackBorrow: function {st: zenv.ZSymbolTable ast: Ast.view n: astnode.vi
     ) case call then {
         cal: ast.nodes.get i: n.callable
         ft: walkTypeOf :st nid: (nodeId n: cal)
-        if ft.isZero.not when (
-            (st.typing.funcReturnsBorrow.get key: ft).or
-            d: false
-        ) then return true
+        if ft.isZero.not when (st.typing.returnsReference tid: ft) then return true
         ch: dottedChildNameId :ast n: cal
         if ch.isZero then return false
         rt: walkTypeOf :st nid: (dottedParentNodeId :ast n: cal)
@@ -39119,10 +39039,7 @@ callHandsBackBorrow: function {st: zenv.ZSymbolTable ast: Ast.view n: astnode.vi
         match (
             mo
         ) case some then {
-            return (
-                (st.typing.funcReturnsBorrow.get key: mo).or
-                d: false
-            )
+            return (st.typing.returnsReference tid: mo)
         } case none then {
             return false
         }
@@ -43502,8 +43419,8 @@ pinConstructionResult: function {st: zenv.ZSymbolTable pins: (List ztyping.PinPa
 # resultPins -- whether a call's result keeps its inputs locked: an `outx`
 # result or a reference return.
 resultPins: function {st: zenv.ZSymbolTable.view funcId: ztypes.tid} out bool is {
-    if ((st.typing.funcPins.get key: funcId).or d: false) then return true
-    return ((st.typing.funcReturnsBorrow.get key: funcId).or d: false)
+    if (st.typing.funcPins.has item: funcId) then return true
+    return (st.typing.returnsReference tid: funcId)
 }
 
 # ownedValueReceiver -- a receiver that owns what it holds and that no name
@@ -43952,8 +43869,9 @@ pinCallResult: function {
     # the strength the call took on the receiver
     recvShared: bool
 } is {
-    doPins: (st.typing.funcPins.get key: funcId).or d: false
-    isRef: (st.typing.funcReturnsBorrow.get key: funcId).or d: false
+    doPins: st.typing.funcPins.has item: funcId
+    marker: st.typing.returnMarkerOf tid: funcId
+    isRef: marker.isReference
     if isRef then doPins = true
     # argument evaluation may leave residue (an inner marked-return call, e.g.
     # the get in `(xs.get i).copy`): the outer call consumes it, and only the
@@ -43966,7 +43884,7 @@ pinCallResult: function {
             pinsPush :st path: p.path shared: p.shared mutable: p.mutable
         }
         if isRef.not then st.walk.pendingBorrowOwned = true
-        if ((st.typing.funcReturnsView.get key: funcId).or d: false) then {
+        if marker == ztypes.zparamownership.viewMode then {
             st.walk.pendingBorrowReadonly = true
         }
     } else {
@@ -43975,7 +43893,7 @@ pinCallResult: function {
         pushCarriedPins :st :pins
     }
     # `hold`: owned and READONLY with no pin, so it is set after the drain
-    if ((st.typing.funcReturnsFrozen.get key: funcId).or d: false) then {
+    if marker == ztypes.zparamownership.holdMode then {
         st.walk.pendingBorrowFrozen = true
     }
 }
@@ -47659,8 +47577,7 @@ walkCallArgsHoist: function {
     # whether the call's result keeps its arguments' locks -- a construction,
     # an `outx` or reference-returning callee -- is one fact for every argument
     calleePins: isCtor
-    if ((st.typing.funcPins.get key: funcId).or d: false) then calleePins = true
-    if ((st.typing.funcReturnsBorrow.get key: funcId).or d: false) then calleePins = true
+    if (resultPins :st :funcId) then calleePins = true
     lockMark: st.argLocks.length
     kAiter: u64
     for kAiter < call.nargs loop {
@@ -48564,7 +48481,7 @@ reportReturnedBareField: function {
     ast: Ast
     arg: argref
 } is {
-    if st.walk.currentReturnsBorrow then return
+    if st.walk.currentReturnMarker.isReference then return
     bfn: returnedBareFieldName :ast :st nid: arg.operation
     if bfn.length == 0 then return
     fieldN: ast.nodes.get i: arg.operation
@@ -48635,7 +48552,7 @@ recordReturnedOwnedLocal: function {
 # bare field read is, and one that yields storage a call pinned to its source as a
 # returned borrowed name is: the owner still frees what the return hands back.
 refuseReturnedArms: function {st: zenv.ZSymbolTable ast: Ast nid: zast.nodeid} is {
-    if st.walk.currentReturnsBorrow then return
+    if st.walk.currentReturnMarker.isReference then return
     leaves: ListVal zast.nodeid
     armBorrowedLeaves :st :ast :nid into: leaves
     for each lf: leaves loop {
@@ -48677,7 +48594,8 @@ returnOwnedLocal: function {
     # a native class that owns storage has a destructor; one without is a view
     if isClass then isClass = (st.reg.isNativeOf :tid).not
     ownsSomething: isClass or (st.reg.needsDestructor typeId: tid)
-    if ownsSomething when st.walk.currentReturnsBorrow.not when (isBorrowedVar :st :vid) then {
+    lends: st.walk.currentReturnMarker.isReference
+    if ownsSomething when lends.not when (isBorrowedVar :st :vid) then {
         rbNm: zast.nameTextAt :ast ref: (zast.atomNameIdOf n: (ast.nodes.get i: nid))
         mbr: "Cannot return borrowed variable '\{rbNm}' as an owned result — the caller still owns it; return '\{rbNm}.copy' (duplicate), declare the source '.take' (transfer ownership in), or declare the return '.borrow'"
         (
@@ -48846,7 +48764,7 @@ checkReturnedValue: function {
     }
     errR: st.typing.errors.length
     argT: ztypes.tid
-    if st.walk.currentReturnsBorrow then {
+    if st.walk.currentReturnMarker.isReference then {
         argT = checkValueAt :st :unitDecl :ast nid: arg.operation
     } else {
         argT = checkMovedValueAt :st :unitDecl :ast nid: arg.operation owning: true
@@ -51102,7 +51020,7 @@ pinConstructionSources: function {
         cxO
     ) case some then {
         noRecvC: ListVal zast.nameid
-        cxPins: (st.typing.funcPins.get key: cxO).or d: false
+        cxPins: st.typing.funcPins.has item: cxO
         if cxPins.not when (typeHasNonOwnedField :st :ast :tid) then {
             # a create that does not say `outx this` on a type declaring a
             # non-owned field is the SYNTHESISED one (a written one is
@@ -57240,16 +57158,24 @@ checkFunctionBody: function {
     st.walk.callArgNode = prevArg
 }
 
-# walkedFnFlag -- a marker the walked function's signature recorded (`.borrow`
-# or `.view` on its return, `outx`): its own, or for an instance walk that
-# reached the body without it, the instance's.
-walkedFnFlag: function {
-    tbl: (IdMapV ztypes.tid v: bool).view fitid: ztypes.tid mono: ztypes.tid
-} out bool is {
-    own: tbl.get key: fitid
+# walkedReturnMarker / walkedFnPins -- what the walked function's signature
+# recorded about its return (the marker on it, `outx`): its own, or for an
+# instance walk that reached the body without it, the instance's.
+walkedReturnMarker: function {
+    typing: ztyping.ZTyping.view fitid: ztypes.tid mono: ztypes.tid
+} out ztypes.zparamownership is {
+    own: typing.funcReturnMarker.get key: fitid
     if own.some then return own
+    return (typing.returnMarkerOf tid: mono)
+}
+
+# the walked function, or the instance it is walked for, is declared `outx`
+walkedFnPins: function {
+    typing: ztyping.ZTyping.view fitid: ztypes.tid mono: ztypes.tid
+} out bool is {
+    if (typing.funcPins.has item: fitid) then return true
     if mono.isZero then return false
-    return ((tbl.get key: mono).or d: false)
+    return (typing.funcPins.has item: mono)
 }
 
 # checkFunctionBodyIn -- checkFunctionBody's walk, once the expression position
@@ -57379,17 +57305,10 @@ checkFunctionBodyIn: function {
         }
         # so do the markers on what it returns
         mono: st.walk.curMonoFnTid
-        prevRb: st.walk.currentReturnsBorrow
-        st.walk.currentReturnsBorrow = (
-            walkedFnFlag
-            tbl: st.typing.funcReturnsBorrow
-            :fitid
-            :mono
-        )
-        prevRv: st.walk.currentReturnsView
-        st.walk.currentReturnsView = walkedFnFlag tbl: st.typing.funcReturnsView :fitid :mono
+        prevRm: st.walk.currentReturnMarker
+        st.walk.currentReturnMarker = walkedReturnMarker typing: st.typing :fitid :mono
         prevFp: st.walk.currentFnPins
-        st.walk.currentFnPins = walkedFnFlag tbl: st.typing.funcPins :fitid :mono
+        st.walk.currentFnPins = walkedFnPins typing: st.typing :fitid :mono
         prevRn: st.walk.currentReturnsNothing
         # `out null` names the absence of a return, as no `out` does -- for an
         # instance whose `out R` is null too
@@ -57445,8 +57364,7 @@ checkFunctionBodyIn: function {
         st.walk.currentGenTid = prevGen
         st.walk.genSpillNext = prevSpill
         st.walk.currentReturnTypeId = prevRet
-        st.walk.currentReturnsBorrow = prevRb
-        st.walk.currentReturnsView = prevRv
+        st.walk.currentReturnMarker = prevRm
         st.walk.currentFnPins = prevFp
         st.walk.currentReturnsNothing = prevRn
         st.walk.currentFnTid = prevFn

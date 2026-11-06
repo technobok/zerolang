@@ -694,23 +694,17 @@ ZTyping: class {
     # other statement's is released at the end of the statement
     tempHoldingLines: IdSet zast.nodeid
 
-    # function types whose return carries the `.borrow` marker, recorded at
-    # resolution; the body walk's auto-call coercion reads it to report the
-    # receiver source path.
-    funcReturnsBorrow: (IdMapV ztypes.tid v: bool)
-    # of those, the ones whose reference is READONLY (`out T.view`): the pin
-    # they leave on the receiver is shared, so several may be live at once.
-    funcReturnsView: (IdMapV ztypes.tid v: bool)
+    # the marker a function type's return carries, recorded at resolution (no
+    # entry for an owned result). `.borrow` and `.view` hand back a reference
+    # into the receiver, which pins it for the result binding's scope -- a
+    # view's pin is shared, so several may be live at once. `.hold` hands back
+    # an OWNED result the caller may only read: not a reference, so the binding
+    # keeps its destructor.
+    funcReturnMarker: (IdMapV ztypes.tid v: ztypes.zparamownership)
     # function types declared `outx`: the result keeps the call's borrow/view
     # inputs locked for the binding's life. An OWNED result stays owned -- the
-    # binding keeps its destructor -- so it is tracked apart from
-    # funcReturnsBorrow.
-    funcPins: (IdMapV ztypes.tid v: bool)
-    # function types whose return carries `.hold`: an OWNED result the caller
-    # may only READ. Not a reference return -- the binding keeps its destructor
-    # -- so it is tracked apart from funcReturnsView, which freezes a binding
-    # only because that binding IS the reference handed back.
-    funcReturnsFrozen: (IdMapV ztypes.tid v: bool)
+    # binding keeps its destructor -- so it is tracked apart from the marker.
+    funcPins: IdSet ztypes.tid
     # per-mono template stamps, written by the post-sweep instance walk when
     # curMonoStamp is set; the emitter's mono re-walks read these where the
     # global table is param-suppressed.
@@ -2472,6 +2466,19 @@ ZTyping: class {
         return (t.inlineArms.has item: (t.armKey :parentTypeId :nameId))
     }
 
+    # returnMarkerOf -- the marker function type `tid`'s return carries:
+    # borrowMode, viewMode or holdMode; noneMode for an owned result
+    returnMarkerOf: function {t: this.view tid: ztypes.tid} out ztypes.zparamownership is {
+        if tid.isZero then return ztypes.zparamownership.noneMode
+        return ((t.funcReturnMarker.get key: tid).or d: ztypes.zparamownership.noneMode)
+    }
+
+    # returnsReference -- function type `tid` hands back a reference into its
+    # receiver (`out T.borrow` or `out T.view`)
+    returnsReference: function {t: this.view tid: ztypes.tid} out bool is {
+        return (t.returnMarkerOf :tid).isReference
+    }
+
     # typedefBaseTidOf -- the type a typedef wraps: its base INSTANCE id, or 0
     # when `tid` is not a typedef or its base has not resolved
     typedefBaseTidOf: function {t: this.view tid: ztypes.tid} out ztypes.tid is {
@@ -2834,10 +2841,8 @@ newTyping: function {nodeEst: 0.u64} out ZTyping is {
         ZTyping
         synthNodes: List SynthNode
         tempHoldingLines: IdSet zast.nodeid
-        funcReturnsBorrow: (IdMapV ztypes.tid v: bool)
-        funcReturnsView: (IdMapV ztypes.tid v: bool)
-        funcPins: (IdMapV ztypes.tid v: bool)
-        funcReturnsFrozen: (IdMapV ztypes.tid v: bool)
+        funcReturnMarker: (IdMapV ztypes.tid v: ztypes.zparamownership)
+        funcPins: IdSet ztypes.tid
         monoNodeType: (MapVV monostamp v: ztypes.tid)
         instanceBody: (MapVV monostamp v: zast.nodeid)
         instanceCopies: ListVal bodycopy
