@@ -32,6 +32,8 @@ public: unit {
     :monosite
     :callslot
     :monostamp
+    :constnarrow
+    :droptemp
     :armkey
     :datafield
     :fieldspan
@@ -407,6 +409,24 @@ monostamp: record {
     node: zast.nodeid
 }
 
+# constnarrow -- one compile-time `match` arm's narrowing: inside the arm the
+# subject's name reads the value the arm carries.
+constnarrow: record {
+    # the subject's name
+    name: zast.nameid
+    # the value its arm carries
+    value: ztypes.cval
+}
+
+# droptemp -- an unnamed local a `.drop` released the last hold on: its
+# temporary dies at the drop.
+droptemp: record {
+    # the `.drop` that released it
+    dropNid: zast.nodeid
+    # the unnamed local
+    temp: zast.nameid
+}
+
 # destroyitem -- one variable a destroy point destroys, in the state the walk
 # reached it in there: 0 it holds its value, 1 it was moved on every path
 # to the point, 2 it was moved on some path and not others.
@@ -702,10 +722,9 @@ ZTyping: class {
     # unnamed locals whose line ended with nothing holding them: their
     # temporaries end with the statement, even on a line a binding holds
     unheldTemps: IdSet zast.nameid
-    # a `.drop` (node id) that released the last hold on an unnamed local (name
-    # id, parallel): the temporary dies there
-    dropTempNodes: ListVal zast.nodeid
-    dropTempNames: ListVal zast.nameid
+    # each `.drop` that released the last hold on an unnamed local, with that
+    # local: the temporary dies there
+    dropTemps: ListVal droptemp
     # the instantiation being walked, which is half of every monostamp key
     # minted under it
     curMonoStamp: ztypes.tid
@@ -2802,8 +2821,7 @@ newTyping: function {nodeEst: 0.u64} out ZTyping is {
         numericParamRead: (IdMapV zast.nodeid v: zast.nameid)
         unnamedLocalOfNode: (IdMapV zast.nodeid v: zast.nameid)
         unheldTemps: IdSet zast.nameid
-        dropTempNodes: ListVal zast.nodeid
-        dropTempNames: ListVal zast.nameid
+        dropTemps: ListVal droptemp
         curMonoStamp: ztypes.tid.zero
         stdTidMemo: (IdMapV zast.nameid v: ztypes.tid)
         renameSeen: false

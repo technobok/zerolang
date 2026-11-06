@@ -36289,11 +36289,12 @@ isDecimalLexeme: function {lex: StringView} out bool is {
 # the value reports it in the same words, which addError keeps once.
 checkWideConstants: function {ast: Ast.view st: zenv.ZSymbolTable} is {
     i: u64
-    for i < st.walk.wideConstNodes.length loop {
-        nid: st.walk.wideConstNodes.get :i
-        mono: st.walk.wideConstMonos.get :i
+    for i < st.walk.wideConsts.length loop {
+        ms: st.walk.wideConsts.get :i
         i = i + 1
-        taken: (st.walk.wideConstTaken.get key: (ztyping.monostamp :mono node: nid)).or d: 0
+        nid: ms.node
+        mono: ms.mono
+        taken: (st.walk.wideConstTaken.get key: ms).or d: 0
         t: st.typing.nodeTypeIn :mono :nid
         if taken == 0 when (st.reg.typetypeOf typeId: t) != ztypes.ztypetype.genericParam then {
             v: st.typing.nodeConstIn :mono :nid
@@ -36327,17 +36328,16 @@ checkWideConstants: function {ast: Ast.view st: zenv.ZSymbolTable} is {
 # land in i64 and f64 there, so one outside them is refused at the value.
 markAggsReached: function {ast: Ast.view st: zenv.ZSymbolTable} is {
     i: u64
-    for i < st.walk.aggUseNodes.length loop {
-        nid: st.walk.aggUseNodes.get :i
-        mono: st.walk.aggUseMonos.get :i
+    for i < st.walk.aggUses.length loop {
+        ms: st.walk.aggUses.get :i
         i = i + 1
-        taken: (st.walk.wideConstTaken.get key: (ztyping.monostamp :mono node: nid)).or d: 0
+        taken: (st.walk.wideConstTaken.get key: ms).or d: 0
         if taken == 0 then (
             markAggReached
             :ast
             :st
-            id: (st.typing.nodeConstIn :mono :nid).aggId
-            at: nid
+            id: (st.typing.nodeConstIn mono: ms.mono nid: ms.node).aggId
+            at: ms.node
         )
     }
 }
@@ -36429,8 +36429,7 @@ noteClosedRange: function {st: zenv.ZSymbolTable ast: Ast.view call: callref} is
     if (cn == zast.wellKnown.slot.wkUpto).not when (
         cn == zast.wellKnown.slot.wkDownto
     ).not then return
-    st.walk.closedRangeCalls.append from: call.nid
-    st.walk.closedRangeMonos.append from: st.typing.curMonoStamp
+    st.walk.closedRanges.append (ztyping.monostamp mono: st.typing.curMonoStamp node: call.nid)
 }
 
 # checkClosedRangeSpans -- a closed range whose two ends are constants and that
@@ -36440,10 +36439,11 @@ noteClosedRange: function {st: zenv.ZSymbolTable ast: Ast.view call: callref} is
 # the counted lowering alike.
 checkClosedRangeSpans: function {ast: Ast.view st: zenv.ZSymbolTable} is {
     i: u64
-    for i < st.walk.closedRangeCalls.length loop {
-        nid: st.walk.closedRangeCalls.get :i
-        mono: st.walk.closedRangeMonos.get :i
+    for i < st.walk.closedRanges.length loop {
+        ms: st.walk.closedRanges.get :i
         i = i + 1
+        nid: ms.node
+        mono: ms.mono
         ends: closedRangeEnds :ast :nid
         if ends.from.isZero.not when ends.to.isZero.not then {
             lo: st.typing.nodeConstIn :mono nid: ends.from
@@ -56115,8 +56115,7 @@ noteDropReleasedTemps: function {st: zenv.ZSymbolTable dropNid: zast.nodeid} is 
         if (st.isPathLocked path: p) then {
             kept.append nm
         } else {
-            st.typing.dropTempNodes.append dropNid
-            st.typing.dropTempNames.append nm
+            st.typing.dropTemps.append (ztyping.droptemp :dropNid temp: nm)
         }
     }
     for kept.length > 0 loop st.walk.heldTemps.append kept.pop
@@ -61064,13 +61063,11 @@ constOfMatch: function {
     sn: atomNameId :ast n: (ast.nodes.get i: cr.subject)
     narrows: payload.kind.none.not and sn.isZero.not
     if narrows then {
-        st.walk.constNarrowNames.append sn
-        st.walk.constNarrowVals.append payload
+        st.walk.constNarrows.append (ztyping.constnarrow name: sn value: payload)
     }
     r: constBlockValue :st :scope :ast :unitDecl nid: stmt
     if narrows then {
-        st.walk.constNarrowNames.pop
-        st.walk.constNarrowVals.pop
+        st.walk.constNarrows.pop
     }
     return r
 }
@@ -65626,12 +65623,11 @@ evalConstNode: function {
         match (
             ncv
         ) case some then return ncv case none then null
-        nk: st.walk.constNarrowNames.length
+        nk: st.walk.constNarrows.length
         for nk > 0 loop {
             nk = nk - 1
-            if (st.walk.constNarrowNames.get i: nk) == plan.nameId then {
-                return (st.walk.constNarrowVals.get i: nk)
-            }
+            cn: st.walk.constNarrows.get i: nk
+            if cn.name == plan.nameId then return cn.value
         }
         if st.walk.constMono.isZero.not or st.typing.curMonoStamp.isZero.not then {
             gv: monoNumericParamValue :st nameId: plan.nameId
@@ -65824,12 +65820,10 @@ stampConstAt: function {
     st.typing.setNodeConstIn :mono :nid value: cv
     markOperandsTaken :st :ast :mono :nid
     if cv.kind.aggKind then {
-        st.walk.aggUseNodes.append from: nid
-        st.walk.aggUseMonos.append from: mono
+        st.walk.aggUses.append (ztyping.monostamp :mono node: nid)
     }
     if (cv.bigId != 0) or (constPastF64 :st v: cv) when cv.numTid.isZero then {
-        st.walk.wideConstNodes.append from: nid
-        st.walk.wideConstMonos.append from: mono
+        st.walk.wideConsts.append (ztyping.monostamp :mono node: nid)
     }
 }
 
