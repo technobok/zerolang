@@ -21143,12 +21143,13 @@ mintUnitNestedInstances: function {
     allSubs: (IdMapV zast.nameid v: ztypes.tid)
 } is {
     copies: IdMapV ztypes.tid v: ztypes.tid
+    valSubs: unitInstanceValueArgs :st :monoId :tplId
     vi: u64
     for vi < bodyIds.count loop {
         nm: argRefAt :ast nid: (zast.kidAt kids: ast.kids span: bodyIds i: vi)
         vi = vi + 1
         if nm.nid.isZero.not then {
-            inst: unitNestedInstance :st :ast :rf :tmplUnitName bmNode: nm subs: allSubs
+            inst: unitNestedInstance :st :ast :rf :tmplUnitName bmNode: nm subs: allSubs :valSubs
             if inst.isZero.not then {
                 (
                     st.typing.declSynthMember
@@ -21278,6 +21279,25 @@ mintUnitStaticListInstances: function {
     }
 }
 
+# unitInstanceValueArgs -- the numeric arguments unit instance `monoId` of
+# template `tplId` was made with, by parameter name: what an instance of a
+# definition nested in the unit takes for the unit's numeric parameters.
+unitInstanceValueArgs: function {
+    st: zenv.ZSymbolTable.view
+    monoId: ztypes.tid
+    tplId: ztypes.tid
+} out (IdMapV zast.nameid v: u64) is {
+    valSubs: IdMapV zast.nameid v: u64
+    pn: st.reg.genericParamNamesOf tdecl: (declOfTypeId reg: st.reg tid: tplId)
+    pi: u64
+    for pi < pn.length loop {
+        vg: st.reg.genericValueArgAt specId: monoId ordinal: pi
+        if vg.some then valSubs.set key: (pn.get i: pi) value: vg
+        pi = pi + 1
+    }
+    return valSubs
+}
+
 # mintUnitNamespaceInstances -- each `unit { ... }` a generic unit declares, as
 # the instance's own: the nested unit is generic over the enclosing unit's
 # parameters (resolveNamespaceUnit), and its instance with this instance's
@@ -21298,15 +21318,7 @@ mintUnitNamespaceInstances: function {
     bodyIds: zast.kidspan
     allSubs: (IdMapV zast.nameid v: ztypes.tid).view
 } is {
-    tdecl: declOfTypeId reg: st.reg tid: tplId
-    valSubs: IdMapV zast.nameid v: u64
-    pn: st.reg.genericParamNamesOf :tdecl
-    pi: u64
-    for pi < pn.length loop {
-        vg: st.reg.genericValueArgAt specId: monoId ordinal: pi
-        if vg.some then valSubs.set key: (pn.get i: pi) value: vg
-        pi = pi + 1
-    }
+    valSubs: unitInstanceValueArgs :st :monoId :tplId
     vi: u64
     for vi < bodyIds.count loop {
         nm: argRefAt :ast nid: (zast.kidAt kids: ast.kids span: bodyIds i: vi)
@@ -21440,6 +21452,8 @@ unitNestedInstance: function {
     tmplUnitName: ztypes.declid
     bmNode: argref
     subs: (IdMapV zast.nameid v: ztypes.tid).view
+    # the unit instance's numeric arguments, by parameter name
+    valSubs: (IdMapV zast.nameid v: u64).view
 } out ztypes.tid is {
     none: ztypes.tid
     isObj: false
@@ -21454,14 +21468,19 @@ unitNestedInstance: function {
     # instance, which binds the rest (bindInheritedParams)
     if (ownsTypeParams :st tid: tpl) then return tpl
     sfx: String
+    vs: IdMapV zast.nameid v: u64
     for each pn: (st.reg.genericParamNamesOf tdecl: td) loop {
         av: (subs.get key: pn).or d: ztypes.tid.zero
+        vg: valSubs.get key: pn
         if av.isZero.not then {
             sfx.append s: "_"
             sfx.append s: (monoValName :st :ast tid: av)
+        } else if vg.some then {
+            vs.set key: pn value: vg
+            cdP: st.reg.genericParamConstraintOf tdecl: td paramName: pn
+            appendNumericArgSuffix :sfx bits: vg cd: cdP
         }
     }
-    vs: IdMapV zast.nameid v: u64
     own: IdMapV zast.nameid v: ztypes.tid
     for each se: subs.iterateItems loop own.set key: se.key value: se.value
     mid: (
