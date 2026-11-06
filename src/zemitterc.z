@@ -16802,11 +16802,17 @@ emitNativeMemberCall: function {
     tc: tmplInstCreate :ast :symtab :ctx :call :isCreate :facts
     if tc.length > 0 then return tc
     if (symtab.reg.typetypeOf typeId: ownerTid) == ztypes.ztypetype.classType then {
-        if ownerUnit == ctx.cliUnitDecl then {
-            if isCreate then return (emitCliSpecCreate :ast :symtab :ctx :call :facts)
-            return (emitParsedMethodCall :ast :symtab :ctx :call :facts)
+        if isCreate then {
+            if ownerUnit == ctx.cliUnitDecl then return (
+                emitCliSpecCreate
+                :ast
+                :symtab
+                :ctx
+                :call
+                :facts
+            )
+            return (emitIoWrapperCreate :ast :symtab :ctx :call :facts)
         }
-        if isCreate then return (emitIoWrapperCreate :ast :symtab :ctx :call :facts)
         return (emitClassNativeCall :ast :symtab :ctx :call :ownerTid :facts)
     }
     return (emitOperatorCallForm :ast :symtab :ctx :call :facts)
@@ -47767,48 +47773,6 @@ emitResultCombinator: function {
     r: spelled.stringView
     ro: "(\{r}.tag == \{okTag.stringView} ? \{r}.data.\{payC} : (\{dExpr.stringView}))"
     return (stating :facts from: callFacts text: (orderWrap prefix: pre call: ro))
-}
-
-# emitParsedMethodCall -- a Parsed accessor (hasFlag/option/positional), native,
-# receiver by pointer (incl. the narrowed Result ok-arm projection) and the
-# StringView name by pointer. "" for any non-Parsed receiver.
-emitParsedMethodCall: function {
-    ast: Ast.view
-    symtab: zenv.ZSymbolTable.view
-    ctx: Ctx
-    call: zast.callrow.view
-    facts: cfacts.borrow
-} out String is {
-    bn: dottedBaseAtom :ast n: (ast.nodes.get i: call.callable)
-    if bn.length == 0 then return "".string
-    mn: aliasChildName :ast :symtab n: (ast.nodes.get i: call.callable)
-    mnId: aliasChildNameId :ast :symtab n: (ast.nodes.get i: call.callable)
-    isPM: (
-        (mnId == zast.wellKnown.slot.wkHasFlag) or
-        (mnId == zast.wellKnown.slot.wkOption) or
-        (mnId == zast.wellKnown.slot.wkPositional)
-    )
-    if isPM.not then return "".string
-    bnid: dottedBaseNodeId :ast n: (ast.nodes.get i: call.callable)
-    pid: nativeMethodOwnerOf :symtab nid: bnid :mnId
-    if pid.isZero then return "".string
-    if (
-        pid != (unitClassTid :symtab unitDecl: ctx.cliUnitDecl nameId: zast.wellKnown.slot.tyParsed)
-    ) then {
-        return "".string
-    }
-    pc: spelledCname :ctx tid: pid
-    recvVid: atomVid :symtab nid: bnid
-    recv: aliasResolveAt :symtab :ctx nid: bnid name: bn vid: recvVid
-    recvV: ztypes.vid
-    if recv.stringView == bn then recvV = recvVid
-    recvC: emitLocalAtomNameAt :symtab :ctx nid: bnid name: bn vid: recvVid
-    recvExpr: "&\{recvC}"
-    if (isPtrVid :ctx vid: recvV) then recvExpr = recvC.take
-    pmr: ctx.rows.ofName n: (rowNameOfMember :symtab :ctx owner: pid name: mnId)
-    if pmr > 0 then demandNativeRow :ctx row: pmr
-    nameArg: ctorArgByLabel :ast :symtab :ctx :call label: zast.wellKnown.slot.wkName
-    return (stating :facts from: callFacts text: "\{pc}_\{mn}(\{recvExpr}, &\{nameArg})")
 }
 
 # iterCallValueArg -- the C text of `.call`'s one argument, the per-call

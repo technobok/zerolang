@@ -1322,7 +1322,7 @@ perf: $(PERFBIN)
 # deletes write-only allocations; perf-elision measures that), a failed run and
 # allocs != frees. Above ALLOC_BASELINE fails; a commit raising it says why in
 # its message, and one lowering the count lowers it here.
-ALLOC_BASELINE := 2796982
+ALLOC_BASELINE := 2795815
 # ALLOC_LINE -- the one measurement every allocation number comes from.
 ALLOC_LINE = valgrind --tool=memcheck $(PERFRUN) 2>&1 | grep 'total heap usage' | sed 's/.*usage: //'
 
@@ -1437,7 +1437,7 @@ emitter-guard:
 	chk "io.readText (the emitter reads no file: zc carries its texts)" "$$e8" 0; \
 	chk "literal arm members (.data.<arm>; memberC spells them)" "$$e10" 0; \
 	chk "poolFind (a re-intern of a name the emitter held as an id, or table text)" "$$e11" 11; \
-	chk "member-name TEXT (C spelling and row keys only; look members up by aliasChildNameId)" "$$e12" 14; \
+	chk "member-name TEXT (C spelling and row keys only; look members up by aliasChildNameId)" "$$e12" 13; \
 	if [ "$$fail" = "1" ]; then \
 	  echo "  A new name-resolution site was added to the emitter. Read the typechecker"; \
 	  echo "  stamp (atomVariableId/refDecl/callKind), the canonical child id, or"; \
