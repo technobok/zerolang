@@ -56560,9 +56560,7 @@ walkLateUsedBodies: function {st: zenv.ZSymbolTable ast: Ast} out bool is {
     # a walk can defer more, so the length is read each round
     for i < st.walk.deferredDecls.length loop {
         d: st.walk.deferredDecls.get :i
-        if (st.walk.usedMemberDecl.has item: d) when (st.walk.lateBodiesWalked.has item: d
-        ).not then {
-            st.walk.lateBodiesWalked.add item: d
+        if (lateBodyOwed :st :d) then {
             (
                 walkDeferredBody
                 :st
@@ -56601,7 +56599,12 @@ walkDeferredBody: function {
         defNode = dm.node
     }
     opId: (argRefAt :ast nid: defNode).operation
-    if opId.isZero or ownerDecl.isZero then return
+    # the walk marks the member it takes; one it could not walk would be owed
+    # again by every round (lateBodyOwed)
+    if opId.isZero or ownerDecl.isZero then {
+        mn: zast.nameTextAt :ast ref: memberId
+        panic msg: "ztypecheck: deferred member '\{mn}' has no body or no owner to walk"
+    }
     ownerTid: st.typing.declTypeOf declId: ownerDecl
     typeName: zast.nameTextCopy :ast ref: (st.typing.decls.get i: ownerDecl).name
     prevMono: st.typing.curMonoStamp
@@ -57766,10 +57769,15 @@ checkBodies: function {st: zenv.ZSymbolTable scope: ztypes.declid program: Ast} 
 # lateBodyPending -- a deferred member a use has reached and nothing has walked.
 lateBodyPending: function {st: zenv.ZSymbolTable.view} out bool is {
     for each d: st.walk.deferredDecls loop {
-        if (st.walk.usedMemberDecl.has item: d) when (st.walk.lateBodiesWalked.has item: d
-        ).not then return true
+        if (lateBodyOwed :st :d) then return true
     }
     return false
+}
+
+# lateBodyOwed -- deferred member `d` is used and no walk has walked its body:
+# its owner's walk deferred it, and no other route reached it since.
+lateBodyOwed: function {st: zenv.ZSymbolTable.view d: ztypes.declid} out bool is {
+    return (st.walk.usedMemberDecl.has item: d) and (st.typing.declIsWalked declId: d).not
 }
 
 # markGeneratedEqParts -- every value type the program has is emitted with its
