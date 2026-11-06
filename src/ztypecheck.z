@@ -8461,7 +8461,7 @@ typeExprNamesParamOf: function {
 }
 
 # forceMemberDecl -- resolve one member's signature on demand: the rung below
-# descendNamed. The grey / done marks are read off the MEMBER's own Decl rather
+# descendNamed. The grey / black marks are read off the MEMBER's own Decl rather
 # than its type's, because the conversion lattice cycles through members --
 # u8's `.i128` names i128, whose `.u8` names u8 -- and a member reached while its
 # owner is still resolving is not the owner's back-edge.
@@ -8483,7 +8483,7 @@ forceMemberDecl: function {
     par = memberDecl.parent
     memberDecl.drop
     if have.isZero.not then return (optionval.some have)
-    if (st.typing.declIsDefined declId: memberDeclId) then return (optionval.none ztypes.tid)
+    if (st.typing.declIsResolved declId: memberDeclId) then return (optionval.none ztypes.tid)
     if (st.typing.declIsResolving declId: memberDeclId) then return (optionval.none ztypes.tid)
     if mnd.isZero then return (optionval.none ztypes.tid)
     otid: ztypes.tid
@@ -8535,7 +8535,7 @@ forceMemberDecl: function {
         )
     }
     st.typing.declSetResolving declId: memberDeclId mark: false
-    st.typing.declSetDefined declId: memberDeclId
+    st.typing.declSetResolved declId: memberDeclId
     match (
         memberIdAt
     ) case some then null case none then null
@@ -16350,7 +16350,7 @@ defWasResolved: function {
     nameId: zast.nameid
 } out bool is {
     d: declOfUnitDef :st :scope :unitDecl :nameId
-    if d.isZero.not then return (st.typing.declIsDefined declId: d)
+    if d.isZero.not then return (st.typing.declIsResolved declId: d)
     return false
 }
 
@@ -18324,7 +18324,7 @@ resolveDef: function {
     if resolvedDecl.isZero.not then rf = st.typing.declParentOf declId: resolvedDecl
     # a definition that declares a unit -- an inline namespace, a hidden
     # subunit, a template -- resolves as the unit it is, which the demand path
-    # does. The dispatch below has no leg for one, and its defined mark left the
+    # does. The dispatch below has no leg for one, and its resolved mark left the
     # unit typeless for good: the demand path then skipped it as done. A
     # constant fold reaching `impl.Foo` or `lib.ic` through the descent gets
     # here first.
@@ -18392,7 +18392,7 @@ resolveDef: function {
     defDecl: declOfUnitDef :st scope: rf :unitDecl nameId: (nameIdOf :ast name: defName)
     st.typing.declSetResolving declId: defDecl mark: false
     if defDecl.isZero.not then {
-        st.typing.declSetDefined declId: defDecl
+        st.typing.declSetResolved declId: defDecl
     }
 }
 
@@ -19056,7 +19056,7 @@ demandChildDecls: function {st: zenv.ZSymbolTable declId: ztypes.declid} is {
 demandDecl: function {st: zenv.ZSymbolTable declId: ztypes.declid} is {
     if (st.typing.declIsPending :declId) then return
     if (st.typing.declIsResolving :declId) then return
-    if (st.typing.declIsDefined :declId) then return
+    if (st.typing.declIsResolved :declId) then return
     decl: st.typing.decls.get i: declId
     if decl.parent == st.typing.coreUnitRoot when decl.typeId.isZero.not then return
     decl.drop
@@ -19209,7 +19209,7 @@ resolveDemandedNamespace: function {
             unitOpId: opId
         )
     }
-    st.typing.declSetDefined :declId
+    st.typing.declSetResolved :declId
     # its constants, as the enclosing unit's walk resolves a namespace that
     # was already built when it ran: a unit materialised on demand -- a hidden
     # subunit, first named from a body -- came after that walk, and its
@@ -19249,7 +19249,7 @@ resolveDemandedDecl: function {
 } is {
     st.typing.declSetPending :declId mark: false
     if (st.typing.declIsResolving :declId) then return
-    if (st.typing.declIsDefined :declId) then return
+    if (st.typing.declIsResolved :declId) then return
     markUnitReached :st :declId
     # a demanded declaration resolves in the scope it is written in -- its
     # parent -- whatever scope the demand came from
@@ -19284,7 +19284,7 @@ resolveDemandedDecl: function {
             resolveTemplateConstants :st scope: rf :ast tmplDeclId: dParent
         }
         if dTid.isZero.not or (st.typing.declTypeOf :declId).isZero.not then {
-            st.typing.declSetDefined :declId
+            st.typing.declSetResolved :declId
             return
         }
     }
@@ -19325,7 +19325,7 @@ resolveDemandedDecl: function {
             parentDeclId: dParent
             unitOpId: opId
         )
-        st.typing.declSetDefined :declId
+        st.typing.declSetResolved :declId
     } else if (isUnitOp op: (ast.nodes.get i: opId)) then {
         # an inline `unit { ... }` resolves as the namespace it is. The walk
         # reaches one when it walks the enclosing unit; a DEMAND for one has to
@@ -19348,7 +19348,7 @@ resolveDemandedDecl: function {
                 unitOpId: opId
             )
         }
-        st.typing.declSetDefined :declId
+        st.typing.declSetResolved :declId
         return
     } else {
         (
@@ -20172,7 +20172,7 @@ resolveOrdinaryMember: function {
     isDone: false
     mdo: st.typing.decls.get i: md
     if mdo.kind.reexportDecl then isRx = true
-    if mdo.defined then isDone = true
+    if mdo.resolved then isDone = true
     mdo.drop
     # A `public:` block's re-export (`Circle: impl.Circle`) is followed when a
     # use reaches it, and not before: following every one when the block
@@ -20201,7 +20201,7 @@ resolveOrdinaryMember: function {
         stampAliasValue :st :ast declId: md tid: rxTid
     }
     if md.isZero.not when speculative.not then {
-        st.typing.declSetDefined declId: md
+        st.typing.declSetResolved declId: md
     }
 }
 
@@ -20590,10 +20590,10 @@ resolveUnitNestedType: function {
     if isObj.not then return
     td: st.typing.declFindChild parentDeclId: scope nameId: bmNode.name
     if td.isZero then return
-    if (st.typing.declIsDefined declId: td) then return
+    if (st.typing.declIsResolved declId: td) then return
     tn: zast.nameTextCopy :ast ref: bmNode.name
     resolveDef :st :scope :ast :unitDecl defName: tn.stringView defnId: bmNode.operation
-    st.typing.declSetDefined declId: td
+    st.typing.declSetResolved declId: td
 }
 
 # createUnitMono -- mint a mono UNIT with JOIN-only function-shell children
@@ -31214,7 +31214,7 @@ scopeMemberTid: function {
     r: probeScopeTyperef :st :ast :root :nameId
     if r.isZero.not then return r
     md: st.typing.declFindChild parentDeclId: root :nameId
-    if md.isZero or (st.typing.declIsDefined declId: md) then return r
+    if md.isZero or (st.typing.declIsResolved declId: md) then return r
     # a constant folds and a re-export follows its target inside the probe,
     # which is their resolution: neither is resolved a second time here
     mk: (st.typing.decls.get i: md).kind
@@ -57582,7 +57582,7 @@ bodyWalkOwed: function {st: zenv.ZSymbolTable.view declId: ztypes.declid} out bo
     if declId.isZero then return false
     if (st.typing.declIsWalked :declId) then return false
     if st.typing.eagerAll then return true
-    return (st.typing.declIsDefined :declId)
+    return (st.typing.declIsResolved :declId)
 }
 
 # walkNamespaceOwner -- the method bodies of a type a namespace declares, once,
