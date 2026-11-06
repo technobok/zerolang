@@ -371,6 +371,559 @@ heldlock: record {
     holder: ztypes.zlockholder
 }
 
+# WalkState -- the body walk's working state: what the checker records while
+# it walks and reads back itself. Nothing downstream reads it; the output is
+# ZTyping's.
+WalkState: class {
+    # the next synthesised name's number, so two temps never collide
+    nextTempId: u64
+    # owned argument temps a pinning call's result keeps locked, by name, with
+    # their variable: once the call's own scope has popped, each is defined again
+    # -- the same variable -- as an unnamed local of the enclosing scope, so the
+    # lock has something to name
+    pinnedArgTemps: (IdMapV zast.nameid v: ztypes.vid)
+    # the same temps by VARIABLE, while they still await that second definition.
+    # A TEMPORARY HAS ONE DEATH: the call's own scope must not list one its
+    # result keeps locked, because the pin makes it outlive the call and the
+    # adopting scope lists it instead. Cleared as each is adopted, so exactly
+    # one scope ever names it.
+    pinnedTempPending: (IdMapV ztypes.vid v: bool)
+    # the unnamed locals the statement line being walked has made, by name:
+    # read, and dropped, when the line ends
+    lineUnnamedLocals: ListVal zast.nameid
+    # the label the current synthesis is running under, for diagnostics about a
+    # node no one wrote
+    synthLabel: String
+    # the same (unit, definition) pair synthLabel SPELLS, carried as ids. The
+    # label is a dump row; the pair is what checkCase resolves a bare
+    # `match t` subject against, and a spelled pair had to be split back apart
+    # and re-resolved by name to get here.
+    synthOwnerUnit: ztypes.declid
+    # the definition the current synthesis belongs to
+    synthOwnerName: zast.nameid
+    # the receiver type in scope, which is what `this` and a bare member name
+    # resolve against
+    currentThisTid: ztypes.tid
+    # the tid of the FUNCTION whose body is being walked, beside the receiver
+    # type above. Together they answer "which member of which type am I in",
+    # which `currentThisTid` alone cannot: every method of a type shares it.
+    # Zero for a generic mono instance walk, which has no declaration of its
+    # own to name.
+    currentFnTid: ztypes.tid
+    # the `w.take` node a place being walked moves in whole and whose locks
+    # it disposes of itself -- a binding or reassignment (`b: w.take`), a
+    # taking argument, an arm payload, a returned value, a comprehension's
+    # element: that take keeps the value's locks for the place rather than
+    # releasing them. Zero when no place is waiting for one
+    takeKeepsLocksAt: zast.nodeid
+    # the fn whose body is being walked declares a `.borrow` return: bare
+    # field returns are its contract (the lock/borrow source outlives).
+    currentReturnsBorrow: bool
+    # the fn whose body is being walked declares a `.view` return: what it
+    # lends is readonly, so a readonly source is its contract, not a conversion
+    currentReturnsView: bool
+    # the fn whose body is being walked is `outx`: a construction it returns
+    # may fill a non-owned field only from a borrow/view parameter
+    currentFnPins: bool
+    # the fn whose body is being walked declares no `out` type, so a `return`
+    # in it carries no value
+    currentReturnsNothing: bool
+    # the locks a just-typed call's result keeps on its inputs (`outx`, or a
+    # reference return), each at its own strength; consumed by the binding
+    # sites, drained at statement and call boundaries.
+    pendingPins: List ztyping.PinPath
+    # the node of the call argument being typed (0 outside one): a reftype
+    # argument is judged by the lock the call takes on it, not by the
+    # field-read rule
+    callArgNode: zast.nodeid
+    # the pending borrow came from an `out T.view` return, so the binding it
+    # lands on is READONLY as well as pinned.
+    pendingBorrowReadonly: bool
+    # the pending pins came from an owned `outx` return: the SOURCES are pinned
+    # for the binding's life, but the binding itself stays OWNED -- it carries a
+    # destructor and may be moved. Without this the pin would demote it to a
+    # borrow, which is what `borrow`/`view` mean and an owned `outx` does not.
+    pendingBorrowOwned: bool
+    # the pending result came from a `.hold`-marked return, so the binding it
+    # lands on is READONLY while staying OWNED. Orthogonal to
+    # pendingBorrowReadonly, which applies only to a binding that came out
+    # BORROWED and so can never describe this one.
+    pendingBorrowFrozen: bool
+    # namespace / subunit bodies the demand path owes a walk, and the unit
+    # ops already walked -- a subunit of the MAIN unit is walked by the main
+    # tree walk and must not be walked twice.
+    nsBodiesOwed: ListVal ztyping.nsbody
+    # the unit bodies already walked, so a demand-driven walk does not repeat
+    # one
+    nsBodiesWalked: IdSet zast.nodeid
+    # the unit ops whose constant definitions have been materialised, so a
+    # namespace reached twice -- once as a demanded definition, once as an
+    # alias target -- evaluates and reports them once
+    nsConstsWalked: IdSet zast.nodeid
+    # the computed constant definitions already asked why they have no value.
+    # Both constant doors ask, and asking can demand another definition whose
+    # own asking demands this one back, so each is asked once
+    constsDiagnosed: IdSet zast.nodeid
+    # the (instance, name) pairs of the template constants over a numeric
+    # parameter that an instance has folded and asked why (foldInstanceConstant)
+    instanceConstsChecked: SetVal ztyping.constslot
+    # the unit-level nodes whose shape -- a member, a call's arguments, an
+    # operator -- was reported as a body would report it: the evaluator's own
+    # reason for the same node is not the one to show
+    constShapesReported: IdSet zast.nodeid
+    # the numeric generic arguments refused as no compile-time integer, by
+    # argument node: the type-reference shell the refusal leaves behind is not a
+    # second mistake to report
+    numericArgsRefused: IdSet zast.nodeid
+    # the unit a QUALIFIED generic bound names (`io` in `io.Reader.generic`),
+    # by the bound atom's node: the bound resolves in that unit and nowhere else
+    genericBoundQual: (IdMapV zast.nodeid v: zast.nameid)
+    # the untyped integers outside i64, and the untyped floats past f64 --
+    # a literal or a fold of them -- by node, and beside each the mono whose
+    # walk evaluated it: one lands in its default unless an untyped fold
+    # consumes it or a typed destination takes it, which wideConstTaken
+    # records and checkWideConstants settles after the walk
+    wideConstNodes: ListVal zast.nodeid
+    wideConstMonos: ListVal ztypes.tid
+    # the wide untyped integers something took: 1 an untyped fold consumed it
+    # as an operand, 2 a typed destination took it
+    wideConstTaken: (MapVV ztyping.monostamp v: u8)
+    # the nodes the walk folded to a data value, and beside each the mono whose
+    # walk it was: one no fold consumed (wideConstTaken) is a run-time use, and
+    # markAggsReached marks its value reached after the walk
+    aggUseNodes: ListVal zast.nodeid
+    aggUseMonos: ListVal ztypes.tid
+    # the `upto` / `downto` calls, by node, and beside each the mono whose walk
+    # checked it: a closed range whose two ends fold is refused after the walk
+    # when it holds more values than its trip count can (checkClosedRangeSpans)
+    closedRangeCalls: ListVal zast.nodeid
+    closedRangeMonos: ListVal ztypes.tid
+    # the type applications, by node, that name their type rather than build a
+    # value of it: the callable of a call supplying the fields (`(Box cap: 8)
+    # used: "x"`) and the base of a member path (`(slot t: i64).empty`)
+    typeAppsNamed: IdSet zast.nodeid
+    # a template's field defaulted by a numeric generic parameter (`stored:
+    # cap`), by the field's declaration: the parameter, whose value each mono's
+    # field defaults to
+    numericParamDefault: (IdMapV ztypes.declid v: zast.nameid)
+    # a construction whose numeric generic argument reads a parameter of the
+    # template the walk is in, walked without an instance: the partial type the
+    # template walk gives it, by the construction's node. Each instance's walk
+    # mints the concrete one
+    valuePartialAt: (IdMapV zast.nodeid v: ztypes.tid)
+    # set while a construction's arguments are read, when one depends on an
+    # enclosing numeric generic parameter the walk has no value for
+    numericArgDependent: bool
+    # the generic template ops whose method bodies have been scanned for
+    # demands from the template's own scope (once per template)
+    templateBodiesScanned: IdSet zast.nodeid
+    # the instances the post-sweep has visited: the sweep repeats while walks
+    # mint new instances or owe an instance member, and an instance is asked
+    # whether instantiating it ends on its first visit only
+    monosWalked: IdSet ztypes.tid
+    # a use reached an instance member of an author-declared generic type
+    # that no instance walk has walked: the instance sweep owes another round
+    instanceUseOwed: bool
+    # the instance whose walk minted each type id (instances minted outside
+    # the post-sweep have no entry)
+    monoMintedBy: (IdMapV ztypes.tid v: ztypes.tid)
+    # the templates reported as instantiating themselves without end
+    monoRecursionReported: IdSet ztypes.tid
+    # unnamed locals a binding held when their line ended, until a `.drop`
+    # releases the last hold
+    heldTemps: ListVal zast.nameid
+    # the generic parameter to type-argument substitution in force for the
+    # instantiation being walked
+    monoParamSubst: (IdMapV ztypes.tid v: ztypes.tid)
+    # the instantiation a constant is being evaluated for, when it is read
+    # through one (`a.BIG` on a unit instance); 0 otherwise. A template's
+    # constant over a numeric generic parameter has a value per instantiation
+    constMono: ztypes.tid
+    # the function type being walked inside that instantiation
+    curMonoFnTid: ztypes.tid
+    # true once any member has been marked private (gates cross-unit checks)
+    privacySeen: bool
+    # the names choices are declared under: a call builds a choice value only
+    # when its head names one, so no other head's type is resolved to ask
+    choiceNames: IdSet zast.nameid
+    # a compile-time `match` arm's narrowing, innermost last: inside the arm a
+    # choice value's subject name reads the value its arm carries
+    constNarrowNames: ListVal zast.nameid
+    constNarrowVals: ListVal ztypes.cval
+    # boxedArms -- the union arms written `(Box T)`, or whose instance's
+    # argument is a Box, by armKey: a heap cell whatever the payload's size
+    boxedArms: SetVal ztyping.armkey
+    # types synthesised to carry a generator's state
+    generatorWrapper: (IdMapV zast.nodeid v: bool)
+    # nodes deliberately left unstamped, so a later pass does not read absence
+    # as an error
+    noStampNode: (IdMapV zast.nodeid v: bool)
+    # FUNCTION tid -> the definition carries a body (a bodyless spec is false)
+    fnHasBody: (IdMapV ztypes.tid v: bool)
+    # the generic template (its DeclId) whose signature is being
+    # registered: its param names are not unit typerefs
+    sigGenericDecl: ztypes.declid
+    # the function whose signature is being resolved: its parameters are in
+    # scope there, so a type-ref in it naming one finds the parameter
+    sigFnNode: zast.nodeid
+    # that function's name, for the refusal
+    sigFnName: zast.nameid
+    # the dotted node currently being walked as a CALL'S CALLABLE, 0 outside
+    # one. `Type.arm` is the same path whether an argument follows it or not,
+    # so the arm read cannot tell a construction from a bare read on its own
+    # -- this is what says an argument is coming.
+    calleeDottedNid: zast.nodeid
+    # the part that leaves a type with no generated `==`, or zero when it has
+    # one: asked at every generated comparison, answered once per type
+    valEqMissing: (IdMapV ztypes.tid v: ztypes.tid)
+    # every type a hashable bound admitted as a key, of either family: its
+    # `hash` and `==` are checked against the key spec once members resolve
+    hashKeys: IdSet ztypes.tid
+    # the value node of the `for each` header being walked: a callable object
+    # there whose type declares `iterate` is walked through it, not called
+    eachSubjectNid: zast.nodeid
+    # the type owning a default not yet resolvable
+    pendingDefaultOwner: (IdMapV zast.nodeid v: ztypes.tid)
+    # the type of the member that default names, which the construction fill
+    # stamps on the default's node
+    pendingDefaultId: (IdMapV zast.nodeid v: ztypes.tid)
+    # its name, interned
+    pendingDefaultName: (IdMapV zast.nodeid v: zast.nameid)
+    # types some site actually constructs, which is what makes construction a
+    # DEMAND the emitter must satisfy
+    constructedTypes: (IdMapV ztypes.tid v: bool)
+    # collections whose child types have been minted, so minting runs once
+    # the type-ref nodes written as a bare name in a type position -- not an
+    # application's head -- which name a generic type's defaults' instance
+    bareTyperefNodes: IdSet zast.nodeid
+    collectionChildrenBuilt: IdSet ztypes.tid
+    # the pins the value line of a block left, by the value's node id, kept
+    # before the line's walk drains them: a binding of an `if` or a `match`
+    # pins what the arm that ran hands back, as that value bound alone would
+    # (pinBoundArms), and the variable each pin's root named there
+    armValuePins: List ztyping.PinPath
+    armValuePinRoots: ListVal ztypes.vid
+    armValuePinSpan: (IdMapV zast.nodeid v: ztyping.pinspan)
+    # the blocks whose last line's value nothing receives: a function body, and
+    # the arms and bodies of an `if`, `match`, loop, `do` or `with` written as a
+    # statement
+    stmtBlocks: IdSet zast.nodeid
+    # the declarations whose call-shaped value instantiatedAliasFold is resolving
+    # right now, innermost last: a value that names its own definition (`foo:
+    # bar foo`) re-enters it, and is answered as a constant instead, whose
+    # channel reports the cycle
+    aliasFoldsOpen: ListVal ztypes.declid
+    # the declarations already reported as defined in terms of themselves
+    aliasCyclesReported: IdSet ztypes.declid
+    # the unit-level definitions whose value instantiates a generic template
+    # (`Strs: (List String)`): each names that instance, a type. A call-shaped
+    # constant (`AT: G.indexOf "#"`) is a value, whatever type it has
+    instantiatedAliases: IdSet ztypes.declid
+    # the checker's own temporaries: the emitter still decides WHEN each one
+    # dies, so `scopeDestroy` does not list them (ownsDestroy). What a scope
+    # would destroy if it did is recorded separately, below.
+    tempVars: IdSet ztypes.vid
+    # the NAME of the temporary a value node is held in, beside `tempOf`'s
+    # variable: a second mint for the same node must reuse the first, and a
+    # name is what its callers hand on
+    tempNameOf: (IdMapV zast.nodeid v: zast.nameid)
+    # the generator class whose `call` body is being walked, 0 outside one. A
+    # suspending loop or `with` inside it saves what it holds in a C local to
+    # a field of this class across each suspension, and the walk is what
+    # knows the field's type
+    currentGenTid: ztypes.tid
+    # the next ordinal for a field minted on currentGenTid, so two loops in
+    # one body never share a slot
+    genSpillNext: u64
+    # evaluation state per memberConst key: 0 unvisited, 1 evaluating, 2 done.
+    # Constants are not written in dependency order, so the evaluator pulls
+    # rather than pushes and this is its cycle guard.
+    constEvalState: (MapVV ztyping.constslot v: u8)
+    # each list-sourced tag's list, by its declaration, which a report names
+    tagSourceDecls: (IdMapV ztypes.tid v: ztypes.declid)
+    # the type-ref nodes in a static position, where a literal type may be
+    # written: a list's `out` arguments (`out (staticlist intliteral)`) and a
+    # data type's field types. A declared type may not name one anywhere else
+    staticLiteralTyperefs: IdSet zast.nodeid
+    # the pending evaluation failure, recorded by the evaluator and rendered by
+    # whichever caller REQUIRED a value. One slot, not a table: evaluation is a
+    # synchronous recursive pull, so at most one is live, and the caller either
+    # drains it or clears it before the next pull.
+    constFail: ztypes.constfail
+    # every value placed where a spec value is expected, checked at the end
+    specStandIns: ListVal ztyping.specstandin
+    # each instance's first instantiating call, which its errors name
+    monoSite: (IdMapV ztypes.tid v: ztyping.monosite)
+    # each generic typedef instance whose base refuses its argument
+    typedefClash: (IdMapV ztypes.tid v: ztyping.typedefclash)
+    # a generic parameter's BOUND, as (atom node -> the name it spells) and the
+    # scope to resolve it in. Recorded where the parameter is registered -- the
+    # bound is read as TEXT there and mapped to a constraint kind, never as a
+    # type-ref -- and resolved once at the end, for TOOLING only: an unresolved
+    # one is silent, and nothing here reaches the emitter.
+    genericBoundName: (IdMapV zast.nodeid v: zast.nameid)
+    # the scope a generic bound resolves in, which is where it was WRITTEN and
+    # not where it is used
+    genericBoundScope: (IdMapV zast.nodeid v: ztypes.declid)
+    # a generic parameter, as (node -> the name it spells) and the scope to
+    # resolve it in. Recorded at the parameter's declaration and at every type
+    # position that resolves to one: a generic parameter lives outside the
+    # name-resolution table, so nothing else records what its atom means, and
+    # `newType ... genericParam` leaves ZType.def zero -- the tid cannot answer
+    # for its declaration either. Resolved once at the end, for TOOLING only.
+    genericParamName: (IdMapV zast.nodeid v: zast.nameid)
+    # the scope a generic parameter belongs to
+    genericParamScope: (IdMapV zast.nodeid v: ztypes.declid)
+    # the node id of the expression that IS the statement being checked, or 0.
+    # `.drop` ends a lifetime and produces nothing, so it is legal only there --
+    # this is what tells `y: x.drop` from `x.drop`. astnode ids are unique, so a
+    # stale value can never wrongly permit one.
+    stmtExprNid: zast.nodeid
+    # the statement being walked -- its node, line and column -- or 0 outside a
+    # body: where a bound an instance's argument does not meet is reported when
+    # the instance is minted with no position of its own
+    boundSiteNid: zast.nodeid
+    boundSiteLine: u32
+    boundSiteCol: u32
+    # the argument type whose unmet bound was reported at that statement: the
+    # instances minted as its members (a list's view and iterator) fail over
+    # the same argument, and are not reported again
+    boundSiteFailArg: ztypes.tid
+    # every unmet bound reported so far: one error per refused instance
+    unmetBounds: ListVal ztyping.unmetbound
+    # the node id of the value a binding takes whole, or 0. An `if` or a
+    # `match` there is emitted as statements assigning the local, so an arm of
+    # it may leave; one anywhere else inside an expression may not.
+    formValueNid: zast.nodeid
+    # the node id of the value a destination that owns what it holds is walking
+    # (a taking or held parameter, an owned field, a sum arm, a return, a
+    # yield, a reassignment), or 0. An unmarked projection there takes its
+    # source; anywhere else it borrows it.
+    owningValueNid: zast.nodeid
+    # true once indexUnitDefs has populated the node finder; descent is gated
+    # off before then (generator lowering runs pre-index).
+    defNodeIndexBuilt: bool
+    # the types whose `as` block strikes `create` off with `null`: they construct in
+    # no spelling
+    createOptOut: IdSet ztypes.tid
+    # a data type's fields as its constructions read them -- in dataFieldIds'
+    # order, each with its static verdict and folded default -- computed on the
+    # first construction of the type and kept: fieldSpans finds a type's run
+    # of rows in fieldRows
+    fieldSpans: (IdMapV ztypes.tid v: ztyping.fieldspan)
+    # the thread unit's declaration: its markers say what may not cross to
+    # another thread and which protocols' values a call hands across
+    threadUnitRoot: ztypes.declid
+    # each argument a call hands to another thread (a parameter typed or
+    # bounded by a `thread.Crossing` protocol), to the callee: a lock the
+    # argument carries is refused in a thread's words
+    crossingArgCallee: (IdMapV zast.nodeid v: ztypes.tid)
+    # one-shot guard: the native link-target descend runs once per program
+    # type-ref node id -> base type name; resolved to its real type post-demand
+    pendingTyperef: (IdMapV zast.nodeid v: zast.nameid)
+    # the environment scope the type-ref was written in (curScope at record
+    # time), so the post-demand stamp resolves it where it was written
+    pendingTyperefScope: (IdMapV zast.nodeid v: ztypes.declid)
+    # a field's type-ref that names a member of the field's own type, by the
+    # ref's node, with that type's declaration: the ref waits in the scope the
+    # type is written in, where the type's members are not seen, so the stamp
+    # asks the type itself what the name is (stampOnePendingTyperef)
+    fieldRefOwner: (IdMapV zast.nodeid v: ztypes.declid)
+    # an alias's target, by the alias's member declaration, once resolved
+    asAliasTarget: (IdMapV ztypes.declid v: ztypes.tid)
+    # the names of the `as` items whose value is shaped as a type may be -- a
+    # name, a path, an application -- laid at index time: every alias's name
+    # is among them, so a name outside them asks no type for one
+    asTypeShapedNames: IdSet zast.nameid
+    # a type-ref written in a type's scope that names a member of that type,
+    # by the ref's node, with the type's declaration: the ref waits in the
+    # scope the type is written in, where the type's aliases are not seen, so
+    # the stamp asks the type (stampOnePendingTyperef)
+    aliasRefOwner: (IdMapV zast.nodeid v: ztypes.declid)
+    # the member declarations a use site actually resolved, by the declaration's
+    # own id. refDecl records the member of the DECLARING type, which for a
+    # generic instance is the template's -- so it answers "some list calls
+    # insert", never "THIS list does". This records the instance's own member,
+    # which is the question the emitter asks before it writes a template method
+    # out: a collection method nothing calls is 39 dead C functions per program.
+    usedMemberDecl: IdSet ztypes.declid
+    # the bodied members their owner's walk deferred (bodiedMemberDeferred), in
+    # the order deferred, and beside each the scope, unit and instance that
+    # walk ran in: a use can reach one after its owner walked, and the member
+    # is then walked on its own. lateBodiesWalked marks the ones walked since.
+    deferredDecls: ListVal ztypes.declid
+    deferredScopes: ListVal ztypes.declid
+    deferredUnits: ListVal ztypes.declid
+    deferredMonos: ListVal ztypes.tid
+    lateBodiesWalked: IdSet ztypes.declid
+    # the type ids below this one have had their generated `==` swept for the
+    # written part comparisons it calls (markGeneratedEqParts)
+    eqPartsSwept: ztypes.tid
+    # every generic parameter's name, swept from the registry up to
+    # gpNamesSwept: the names a pending type-ref reads as a parameter
+    # (stampPendingTyperefs)
+    gpNames: IdSet zast.nameid
+    gpNamesSwept: ztypes.tid
+    # declarations a reference found and demanded, in discovery order,
+    # awaiting resolution (resolveDemandedDefs drains it)
+    pendingDefs: ListVal ztypes.declid
+    # dependency units in which a demanded definition has resolved (by unit
+    # name id): each runs its implementation pass once, on first entry
+    enteredUnits: IdSet ztypes.declid
+    # a drain of pendingDefs is running (a nested request returns to it)
+    drainingDefs: bool
+    # how many pendingTyperef entries stampPendingTyperefs has processed (its
+    # cursor), and whether the post-demand pass has run at all
+    typerefsStamped: u64
+    # whether the type-reference pass has run, since what is legal to ask
+    # changes after it
+    typerefPassRan: bool
+    # type-ref nodes a stamp pass could not stamp because their declaration
+    # had not resolved yet; the next pass takes them first
+    typerefRetry: ListVal zast.nodeid
+    # the return type in scope, which is what a bare `return` is checked against
+    currentReturnTypeId: ztypes.tid
+    # the per-call INPUT type in scope inside a generator's `call`, which is
+    # what `yield` evaluates to. 0 outside one, and 0 for a generator that
+    # declares no input -- reading `yield`'s value there is an error. It is
+    # stashed rather than bound: the input is not a body binding, because a
+    # generator yields before it can receive.
+    currentYieldInputTid: ztypes.tid
+}
+
+# newWalkState -- a walk state with nothing recorded yet
+newWalkState: function out WalkState is {
+    return (
+        WalkState
+        nextTempId: 0
+        pinnedArgTemps: (IdMapV zast.nameid v: ztypes.vid)
+        pinnedTempPending: (IdMapV ztypes.vid v: bool)
+        lineUnnamedLocals: ListVal zast.nameid
+        synthLabel: "".string
+        synthOwnerUnit: ztypes.declid
+        synthOwnerName: zast.nameid
+        currentThisTid: ztypes.tid
+        currentFnTid: ztypes.tid
+        takeKeepsLocksAt: zast.nodeid
+        currentReturnsBorrow: false
+        currentReturnsView: false
+        currentFnPins: false
+        currentReturnsNothing: false
+        pendingPins: List ztyping.PinPath
+        callArgNode: zast.nodeid
+        pendingBorrowReadonly: false
+        pendingBorrowOwned: false
+        pendingBorrowFrozen: false
+        nsBodiesOwed: ListVal ztyping.nsbody
+        nsBodiesWalked: IdSet zast.nodeid
+        nsConstsWalked: IdSet zast.nodeid
+        constsDiagnosed: IdSet zast.nodeid
+        instanceConstsChecked: SetVal ztyping.constslot
+        constShapesReported: IdSet zast.nodeid
+        numericArgsRefused: IdSet zast.nodeid
+        genericBoundQual: (IdMapV zast.nodeid v: zast.nameid)
+        wideConstNodes: ListVal zast.nodeid
+        wideConstMonos: ListVal ztypes.tid
+        wideConstTaken: (MapVV ztyping.monostamp v: u8)
+        aggUseNodes: ListVal zast.nodeid
+        aggUseMonos: ListVal ztypes.tid
+        closedRangeCalls: ListVal zast.nodeid
+        closedRangeMonos: ListVal ztypes.tid
+        typeAppsNamed: IdSet zast.nodeid
+        numericParamDefault: (IdMapV ztypes.declid v: zast.nameid)
+        valuePartialAt: (IdMapV zast.nodeid v: ztypes.tid)
+        numericArgDependent: false
+        templateBodiesScanned: IdSet zast.nodeid
+        monosWalked: IdSet ztypes.tid
+        instanceUseOwed: false
+        monoMintedBy: (IdMapV ztypes.tid v: ztypes.tid)
+        monoRecursionReported: IdSet ztypes.tid
+        heldTemps: ListVal zast.nameid
+        monoParamSubst: (IdMapV ztypes.tid v: ztypes.tid)
+        constMono: ztypes.tid.zero
+        curMonoFnTid: ztypes.tid
+        privacySeen: false
+        choiceNames: IdSet zast.nameid
+        constNarrowNames: ListVal zast.nameid
+        constNarrowVals: ListVal ztypes.cval
+        boxedArms: SetVal ztyping.armkey
+        generatorWrapper: (IdMapV zast.nodeid v: bool)
+        noStampNode: (IdMapV zast.nodeid v: bool)
+        fnHasBody: (IdMapV ztypes.tid v: bool)
+        sigGenericDecl: ztypes.declid
+        sigFnNode: zast.nodeid
+        sigFnName: zast.nameid
+        calleeDottedNid: zast.nodeid
+        valEqMissing: (IdMapV ztypes.tid v: ztypes.tid)
+        hashKeys: IdSet ztypes.tid
+        eachSubjectNid: zast.nodeid
+        pendingDefaultOwner: (IdMapV zast.nodeid v: ztypes.tid)
+        pendingDefaultId: (IdMapV zast.nodeid v: ztypes.tid)
+        pendingDefaultName: (IdMapV zast.nodeid v: zast.nameid)
+        constructedTypes: (IdMapV ztypes.tid v: bool)
+        bareTyperefNodes: IdSet zast.nodeid
+        collectionChildrenBuilt: IdSet ztypes.tid
+        armValuePins: List ztyping.PinPath
+        armValuePinRoots: ListVal ztypes.vid
+        armValuePinSpan: (IdMapV zast.nodeid v: ztyping.pinspan)
+        stmtBlocks: IdSet zast.nodeid
+        aliasFoldsOpen: ListVal ztypes.declid
+        aliasCyclesReported: IdSet ztypes.declid
+        instantiatedAliases: IdSet ztypes.declid
+        tempVars: IdSet ztypes.vid
+        tempNameOf: (IdMapV zast.nodeid v: zast.nameid)
+        currentGenTid: ztypes.tid
+        genSpillNext: 0
+        constEvalState: (MapVV ztyping.constslot v: u8)
+        tagSourceDecls: (IdMapV ztypes.tid v: ztypes.declid)
+        staticLiteralTyperefs: IdSet zast.nodeid
+        constFail: ztypes.noConstFail
+        specStandIns: ListVal ztyping.specstandin
+        monoSite: (IdMapV ztypes.tid v: ztyping.monosite)
+        typedefClash: (IdMapV ztypes.tid v: ztyping.typedefclash)
+        genericBoundName: (IdMapV zast.nodeid v: zast.nameid)
+        genericBoundScope: (IdMapV zast.nodeid v: ztypes.declid)
+        genericParamName: (IdMapV zast.nodeid v: zast.nameid)
+        genericParamScope: (IdMapV zast.nodeid v: ztypes.declid)
+        stmtExprNid: zast.nodeid
+        boundSiteNid: zast.nodeid
+        boundSiteLine: 0
+        boundSiteCol: 0
+        boundSiteFailArg: ztypes.tid.zero
+        unmetBounds: ListVal ztyping.unmetbound
+        formValueNid: zast.nodeid
+        owningValueNid: zast.nodeid
+        defNodeIndexBuilt: false
+        createOptOut: IdSet ztypes.tid
+        fieldSpans: (IdMapV ztypes.tid v: ztyping.fieldspan)
+        threadUnitRoot: ztypes.declid
+        crossingArgCallee: (IdMapV zast.nodeid v: ztypes.tid)
+        pendingTyperef: (IdMapV zast.nodeid v: zast.nameid)
+        pendingTyperefScope: (IdMapV zast.nodeid v: ztypes.declid)
+        fieldRefOwner: (IdMapV zast.nodeid v: ztypes.declid)
+        asAliasTarget: (IdMapV ztypes.declid v: ztypes.tid)
+        asTypeShapedNames: IdSet zast.nameid
+        aliasRefOwner: (IdMapV zast.nodeid v: ztypes.declid)
+        usedMemberDecl: IdSet ztypes.declid
+        deferredDecls: ListVal ztypes.declid
+        deferredScopes: ListVal ztypes.declid
+        deferredUnits: ListVal ztypes.declid
+        deferredMonos: ListVal ztypes.tid
+        lateBodiesWalked: IdSet ztypes.declid
+        eqPartsSwept: ztypes.tid
+        gpNames: IdSet zast.nameid
+        gpNamesSwept: ztypes.tid
+        pendingDefs: ListVal ztypes.declid
+        enteredUnits: IdSet ztypes.declid
+        drainingDefs: false
+        typerefsStamped: 0
+        typerefPassRan: false
+        typerefRetry: ListVal zast.nodeid
+        currentReturnTypeId: ztypes.tid
+        currentYieldInputTid: ztypes.tid
+    )
+}
+
 # walkmode -- how the body walk reads what it meets: each a mode set around one
 # part of a walk and restored after it. A walk that changes a mode saves the
 # whole value first and puts it back (st.mode).
@@ -504,6 +1057,8 @@ ZSymbolTable: class {
     argLockSegs: ListVal zast.nameid
     # the walk's modes, saved and restored as one value
     mode: walkmode
+    # what the walk records and reads back itself
+    walk: WalkState
     # the type registry this table resolves against
     reg: ztypes.ZTypeRegistry
     # the stamp container everything checked here is recorded into
@@ -833,7 +1388,7 @@ ZSymbolTable: class {
     # defineTemp -- a binding for one of the checker's own temporaries, which no
     # destroy point lists (tempVars).
     defineTemp: function {:this nameId: zast.nameid vid: ztypes.vid} is {
-        this.typing.tempVars.add item: vid
+        this.walk.tempVars.add item: vid
         n: this.open.length
         if this.recording when n > 0 then {
             nd: (this.open.get i: n - 1).node
@@ -1135,7 +1690,7 @@ ZSymbolTable: class {
     # checker's own temporaries.
     ownsDestroy: function {t: this.view vid: ztypes.vid} out bool is {
         if vid.isZero then return false
-        if (t.typing.tempVars.has item: vid) then return false
+        if (t.walk.tempVars.has item: vid) then return false
         if (t.reg.variableOwnershipOf id: vid) != ztypes.zownership.owned then return false
         return (t.reg.isReftypeOf tid: (t.reg.variableTypeOf id: vid))
     }
@@ -1159,11 +1714,11 @@ ZSymbolTable: class {
             ki = ki - 1
             kd: this.typing.declChildAt declId: scope index: ki
             v: this.typing.declLocalVarOf declId: kd
-            if (this.typing.tempVars.has item: v).not then continue
+            if (this.walk.tempVars.has item: v).not then continue
             if v.isZero then continue
             # a temporary a pinning call's result keeps locked outlives the
             # call: the scope that adopts it lists it, and this one does not
-            if ((this.typing.pinnedTempPending.get key: v).or d: false) then continue
+            if ((this.walk.pinnedTempPending.get key: v).or d: false) then continue
             if (this.reg.variableOwnershipOf id: v) != ztypes.zownership.owned then continue
             if (this.reg.isReftypeOf tid: (this.reg.variableTypeOf id: v)).not then continue
             this.typing.destroyItems.append (
@@ -1553,7 +2108,7 @@ ZSymbolTable: class {
         start: u64
     } out bool is {
         v: t.typing.declLocalVarOf :declId
-        if (t.typing.tempVars.has item: v).not then return false
+        if (t.walk.tempVars.has item: v).not then return false
         p: t.typing.declParentOf :declId
         k: t.open.length
         for k > 0 loop {
@@ -2876,6 +3431,7 @@ newSymbolTable: function {reg: ztypes.ZTypeRegistry.take typing: ZTyping.take} o
         argLocks: ListVal queuedarglock
         argLockSegs: ListVal zast.nameid
         mode: walkmode
+        walk: newWalkState
         :reg
         :typing
     )
