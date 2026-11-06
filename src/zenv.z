@@ -371,6 +371,38 @@ heldlock: record {
     holder: ztypes.zlockholder
 }
 
+# walkmode -- how the body walk reads what it meets: each a mode set around one
+# part of a walk and restored after it. A walk that changes a mode saves the
+# whole value first and puts it back (st.mode).
+walkmode: record {
+    # a reassignment TARGET path is being checked (a write, not a read)
+    inAssignTarget: false
+    # whether the walk is inside a containment check, which is what stops a
+    # valtype cycle from recursing forever
+    inContainmentEdge: false
+    # stop stamping parameters, for the walks that re-visit a signature without
+    # re-binding it
+    suppressParamStamps: false
+    # stop reading a bare type name as a construction
+    suppressBareCtor: false
+    # stop reading a bare function reference as a zero-argument call, which is
+    # what `.take` needs
+    suppressFnAutoCall: false
+    # a FUNCTION stamp that survives here is legitimate, so a bare method
+    # reference must not be reported. Distinct from suppressFnAutoCall,
+    # which also stops the coercion: a for-header still NEEDS the 0-arg
+    # auto-call (`for each x: counter loop`) and only wants the error silenced.
+    allowBareFnRef: false
+    # the statement being walked is one whose value nothing uses: not a block's
+    # value line, not a function's implied return
+    stmtDiscarded: false
+    # recording an application's head: its name is the template, not a type
+    typerefHead: false
+    # bound refusals are not reported: a typedef instance's base is being
+    # minted after its clash was recorded, and would only repeat it
+    quietBounds: false
+}
+
 # The body walk's environment. Scopes and locals are declarations in the
 # typing's Decl tree -- a scope is a scopeDecl whose parent is the scope or
 # declaration enclosing it, a local a localDecl under the scope it is written
@@ -470,6 +502,8 @@ ZSymbolTable: class {
     # segments, back to back
     argLocks: ListVal queuedarglock
     argLockSegs: ListVal zast.nameid
+    # the walk's modes, saved and restored as one value
+    mode: walkmode
     # the type registry this table resolves against
     reg: ztypes.ZTypeRegistry
     # the stamp container everything checked here is recorded into
@@ -503,7 +537,7 @@ ZSymbolTable: class {
             firstVid: this.reg.nextVid
             unconditional: false
         )
-        if this.typing.suppressParamStamps then this.scopeHidden.add item: f
+        if this.mode.suppressParamStamps then this.scopeHidden.add item: f
         this.curScope = f
         return f
     }
@@ -1111,7 +1145,7 @@ ZSymbolTable: class {
     # instance's copy of it is emitted from.
     recording: function {t: this.view} out bool is {
         if t.dryRunDepth > 0 then return false
-        return (t.typing.suppressParamStamps and t.typing.curMonoStamp.isZero).not
+        return (t.mode.suppressParamStamps and t.typing.curMonoStamp.isZero).not
     }
 
     # appendOwnedTempsOf -- the TEMPORARIES `scope` binds that own something at
@@ -2721,7 +2755,7 @@ ZSymbolTable: class {
     # per instance).
     snapshotScope: function {:this scope: ztypes.declid start: u64} is {
         if this.typing.dumpRows.not then return
-        if this.typing.suppressParamStamps then return
+        if this.mode.suppressParamStamps then return
         kn: this.typing.declChildSlots declId: scope
         endIdx: this.entries.length
         pos: u64
@@ -2841,6 +2875,7 @@ newSymbolTable: function {reg: ztypes.ZTypeRegistry.take typing: ZTyping.take} o
         entryDump: List ZEntryDumpRow
         argLocks: ListVal queuedarglock
         argLockSegs: ListVal zast.nameid
+        mode: walkmode
         :reg
         :typing
     )

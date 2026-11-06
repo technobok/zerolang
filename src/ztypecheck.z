@@ -231,7 +231,7 @@ monoSubstTid: function {st: zenv.ZSymbolTable.view tid: ztypes.tid} out ztypes.t
 # instance clones only the template's body and shares its signature nodes, so a
 # template-time param stamp on one would reach the instance's emission.
 stampParamSuppressed: function {st: zenv.ZSymbolTable.view tid: ztypes.tid} out bool is {
-    if st.typing.suppressParamStamps.not then return false
+    if st.mode.suppressParamStamps.not then return false
     return (st.reg.typetypeOf typeId: tid) == ztypes.ztypetype.genericParam
 }
 
@@ -5401,10 +5401,10 @@ recordTyperefArgs: function {
     # the head atom is itself a type reference: record it so
     # go-to-definition / hover resolve the template (the call still
     # carries the instance stamp)
-    thPrev: st.typing.typerefHead
-    st.typing.typerefHead = true
+    savedMode: st.mode
+    st.mode.typerefHead = true
     recordTyperef :st :scope :ast :unitDecl :thisName nid: callableId
-    st.typing.typerefHead = thPrev
+    st.mode = savedMode
 }
 
 # recordTyperef -- record a signature type-ref node (param / field / arm / return) for
@@ -5471,7 +5471,7 @@ recordTyperef: function {
         recordDottedTyperef :st :ast :unitDecl :scope :thisName :nid
         return
     }
-    if (arm == 4) or (arm == 5) when st.typing.typerefHead.not then (
+    if (arm == 4) or (arm == 5) when st.mode.typerefHead.not then (
         st.typing.bareTyperefNodes.add
         item: nid
     )
@@ -6886,10 +6886,10 @@ resolveFieldTyperef: function {
     nid: zast.nodeid
     thisName: StringView
 } out ztypes.tid is {
-    prevCE: st.typing.inContainmentEdge
-    st.typing.inContainmentEdge = true
+    savedMode: st.mode
+    st.mode.inContainmentEdge = true
     cid: resolveTyperefShell :st :scope :ast :unitDecl :nid :thisName
-    st.typing.inContainmentEdge = prevCE
+    st.mode = savedMode
     refuseLiteralTyperef :st :ast :nid tid: cid
     return cid
 }
@@ -18099,7 +18099,7 @@ descendNamedId: function {
         # PATH. Grey alone says the resolution walk is inside it, and that walk
         # gets into a type through method signatures, return types and tag
         # accessors, none of which force a layout.
-        if st.typing.inContainmentEdge when (st.typing.declIsOnContainmentPath declId: ddecl) then {
+        if st.mode.inContainmentEdge when (st.typing.declIsOnContainmentPath declId: ddecl) then {
             cycV: (
                 (ttv == ztypes.ztypetype.recordType) or
                 (
@@ -18409,8 +18409,8 @@ resolveDef: function {
     # A containment edge is ONE hop: this def's own resolution starts a
     # fresh context (its field/arm legs re-arm the flag), so an outer field
     # bracket never taints nested param/return resolution.
-    prevContainmentEdge: st.typing.inContainmentEdge
-    st.typing.inContainmentEdge = false
+    savedMode: st.mode
+    st.mode.inContainmentEdge = false
     arm: rowArmAt :ast nid: defnId
     match (
         arm
@@ -18452,7 +18452,7 @@ resolveDef: function {
     } else null
     # Unit -> def childOf edges are built at mint (declareCanonicalType) for real
     # defs and on demand (resolvedByIds' alias-follow) for aliases; no tail pass.
-    st.typing.inContainmentEdge = prevContainmentEdge
+    st.mode = savedMode
     defDecl: declOfUnitDef :st scope: rf :unitDecl nameId: (nameIdOf :ast name: defName)
     st.typing.declSetResolving declId: defDecl mark: false
     if defDecl.isZero.not then {
@@ -19454,12 +19454,11 @@ resolveDemandedDefs: function {st: zenv.ZSymbolTable ast: Ast} is {
     # inside a body walk, whose template / containment state belongs to that
     # body, not to the definitions resolved here (each of which resolves in
     # the scope of its own declaration)
-    pCe: st.typing.inContainmentEdge
-    pSup: st.typing.suppressParamStamps
+    savedMode: st.mode
     pMs: st.typing.curMonoStamp
     pMf: st.typing.curMonoFnTid
-    st.typing.inContainmentEdge = false
-    st.typing.suppressParamStamps = false
+    st.mode.inContainmentEdge = false
+    st.mode.suppressParamStamps = false
     st.typing.curMonoStamp = ztypes.tid.zero
     st.typing.curMonoFnTid = ztypes.tid
     i: u64
@@ -19473,8 +19472,7 @@ resolveDemandedDefs: function {st: zenv.ZSymbolTable ast: Ast} is {
     if st.typing.typerefPassRan then {
         stampPendingTyperefs :st :ast unitDecl: st.typing.mainUnitRoot
     }
-    st.typing.inContainmentEdge = pCe
-    st.typing.suppressParamStamps = pSup
+    st.mode = savedMode
     st.typing.curMonoStamp = pMs
     st.typing.curMonoFnTid = pMf
     st.typing.drainingDefs = false
@@ -22649,12 +22647,12 @@ stampPendingTyperefs: function {
     # a declaration's type-refs belong to no instance and no template walk,
     # whichever walk asked for them
     prevMono: st.typing.curMonoStamp
-    prevSup: st.typing.suppressParamStamps
+    savedMode: st.mode
     st.typing.curMonoStamp = ztypes.tid.zero
-    st.typing.suppressParamStamps = false
+    st.mode.suppressParamStamps = false
     stampPendingTyperefsIn :st :ast :unitDecl
     st.typing.curMonoStamp = prevMono
-    st.typing.suppressParamStamps = prevSup
+    st.mode = savedMode
 }
 
 # sweepGenericParamNames -- add the names of the generic parameters minted since
@@ -24206,14 +24204,14 @@ mintMonoTypedefBase: function {
     # a base argument the base's own parameter refuses is this instance's
     # error, reported where the instance is named; the base is minted
     # quietly, so its members still answer and nothing repeats the refusal
-    prevQuiet: st.typing.quietBounds
+    savedMode: st.mode
     cl: typedefBaseClash :ast :st base: tb :idSubs
     if cl.argTid.isZero.not then {
         st.typing.typedefClash.set key: mid value: cl
-        st.typing.quietBounds = true
+        st.mode.quietBounds = true
     }
     target: substitutedMemberTid :ast :st :unitDecl :rf :templateId chId: tb :subs :idSubs
-    st.typing.quietBounds = prevQuiet
+    st.mode = savedMode
     st.typing.typedefBaseTid.set key: mt value: target
     bn: st.typing.typedefBaseName.get key: templateId
     if bn.some then {
@@ -24633,7 +24631,7 @@ checkConstraintSat: function {
     colno: u32
     argTid: ztypes.tid
 } is {
-    if st.typing.quietBounds then return
+    if st.mode.quietBounds then return
     if (constraintAdmits :ast :st :tdecl :paramName :argTid) then return
     if lineno == 0 when st.typing.boundSiteLine > 0 then {
         if st.typing.boundSiteFailArg == argTid then return
@@ -24686,7 +24684,7 @@ checkPartialBounds: function {
     lineno: u32
     colno: u32
 } is {
-    if st.typing.quietBounds then return
+    if st.mode.quietBounds then return
     anyApp: false
     for each qn: pnames loop {
         if (st.reg.genericParamConstraintOf :tdecl paramName: qn
@@ -31643,7 +31641,7 @@ checkMemberAutoCall: function {
     # a METHOD read through an INSTANCE has no reference form -- a reference has
     # nowhere to carry the receiver -- so a `.take` or `.copy` after it does not
     # stop the call: the marker applies to what the method returns
-    suppressed: st.typing.suppressFnAutoCall
+    suppressed: st.mode.suppressFnAutoCall
     if suppressed then suppressed = (readsMethodThroughInstance :st :ast :unitDecl :dp :bt :mo).not
     if coerce when suppressed.not when (fnAutoCallable :st mid: mo) then {
         aShr: callReadsReceiver :st mid: mo nid: dp.nid
@@ -31786,8 +31784,8 @@ checkMemberProjections: function {
         # this leg never asked -- so `p.op.take` was refused by the very
         # diagnostic telling it to use `.take`. Asking the flag is what the
         # comment above always claimed was happening.
-        leaveUncalled: st.typing.inAssignTarget
-        if st.typing.suppressFnAutoCall then leaveUncalled = true
+        leaveUncalled: st.mode.inAssignTarget
+        if st.mode.suppressFnAutoCall then leaveUncalled = true
         isNative: st.reg.isNativeOf tid: mo
         if isNative then leaveUncalled = true
         if leaveUncalled.not when (methodHasNoUserArgs :st mid: mo).not then {
@@ -32075,7 +32073,7 @@ checkTagAccessor: function {
         accessorName: st.typing.tagAccessorName.get key: tob
         if accessorName.some when accessorName == cnId then tagHit = true
         if tagHit then {
-            if st.typing.inAssignTarget then {
+            if st.mode.inAssignTarget then {
                 cn: zast.nameTextAt :ast ref: cnId
                 readOnlyMsg: "'\{cn}' is read-only — the tag accessor cannot be assigned"
                 en5: String
@@ -32256,7 +32254,7 @@ checkUnitMemberValue: function {
     isFn: false
     if (st.reg.typetypeOf typeId: memberDecl) == ztypes.ztypetype.functionType then isFn = true
     if coerce when isFn then {
-        if st.typing.suppressFnAutoCall.not when (fnAutoCallable :st mid: memberDecl).not then {
+        if st.mode.suppressFnAutoCall.not when (fnAutoCallable :st mid: memberDecl).not then {
             cn: zast.nameTextCopy :ast ref: cnId
             ufl: nodeLine n: (ast.nodes.get i: dp.child)
             ufc: nodeCol n: (ast.nodes.get i: dp.child)
@@ -32271,7 +32269,7 @@ checkUnitMemberValue: function {
                 fid: memberDecl
             )
         }
-        if st.typing.suppressFnAutoCall.not when (fnAutoCallable :st mid: memberDecl) then {
+        if st.mode.suppressFnAutoCall.not when (fnAutoCallable :st mid: memberDecl) then {
             noteStatementAutoCall :st nid: dp.nid
             ro: methodReturnOf :st mid: memberDecl
             match (
@@ -32287,7 +32285,7 @@ checkUnitMemberValue: function {
     # zero-argument construction as a bare atom (`p: unit.Conf`), and the
     # member's own name reaches it through an alias as readily as through the
     # type's registry name; the suppress flag keeps dotted-path bases out
-    if coerce when isFn.not when st.typing.suppressBareCtor.not when (
+    if coerce when isFn.not when st.mode.suppressBareCtor.not when (
         bareNameDenotesType
         :ast
         :st
@@ -33374,7 +33372,7 @@ checkUnresolvedMember: function {
     # strict unknown-member check says so, but a generic instance is
     # lenient there, so unstamped it reached the emitter as an unhandled
     # binding (E0500, no location) -- diagnose it on every base.
-    if cnId == zast.wellKnown.slot.wkView when st.typing.suppressParamStamps.not then {
+    if cnId == zast.wellKnown.slot.wkView when st.mode.suppressParamStamps.not then {
         cn: zast.nameTextAt :ast ref: cnId
         btnVw: specWrittenName :st :ast tid: bt
         mVw: "type '\{btnVw}' has no member 'view'"
@@ -33659,7 +33657,7 @@ checkTypeReadSuppliesReceiver: function {
     mo: ztypes.tid
     coerce: bool
 } out bool is {
-    if coerce.not or st.typing.suppressFnAutoCall then return true
+    if coerce.not or st.mode.suppressFnAutoCall then return true
     if (memberDeclaresReceiver :st :bt :cnId :mo).not then return true
     rpn: receiverParamNameOf :st tid: mo
     if rpn.isZero then rpn = zast.wellKnown.slot.wkThis
@@ -33763,7 +33761,7 @@ reportBareMemberRef: function {
     # the hint to give instead of bareFnRefErrorFor's own; "" for that one
     hint: ""
 } out bool is {
-    if st.typing.suppressFnAutoCall or st.typing.allowBareFnRef then return false
+    if st.mode.suppressFnAutoCall or st.mode.allowBareFnRef then return false
     if (st.reg.typetypeOf typeId: result) != ztypes.ztypetype.functionType then return false
     if (st.typing.declIsFnptrFieldId parentTypeId: bt nameId: cnId) then return false
     cn: zast.nameTextCopy :ast ref: cnId
@@ -33874,7 +33872,7 @@ checkResolvedMember: function {
     # suppressBareCtor): a method receiver is judged by the lock its call
     # takes, a reftype argument by the lock the call takes on it, and a write
     # target by checkWriteLock.
-    if st.typing.inAssignTarget.not when st.typing.suppressBareCtor.not when (
+    if st.mode.inAssignTarget.not when st.mode.suppressBareCtor.not when (
         (st.reg.typetypeOf typeId: mo) != ztypes.ztypetype.functionType
     ) then {
         argVal: false
@@ -33885,7 +33883,7 @@ checkResolvedMember: function {
     # `h.zero = other.take` replaces the function, where auto-calling typed the
     # target as the function's result. Asked of the OUTERMOST path only.
     callIt: coerce
-    if st.typing.inAssignTarget when st.typing.suppressBareCtor.not when (
+    if st.mode.inAssignTarget when st.mode.suppressBareCtor.not when (
         st.typing.declIsFnptrFieldId
         parentTypeId: bt
         nameId: cnId
@@ -34317,7 +34315,7 @@ checkTransferMarker: function {
     # take from it. Legal only on the node that IS the statement.
     # a line whose value is used -- a block's value line, a function's implied
     # return -- is no statement for this purpose: `x.drop` there yields nothing
-    dropIsValue: (dp.nid != st.typing.stmtExprNid) or st.typing.stmtDiscarded.not
+    dropIsValue: (dp.nid != st.typing.stmtExprNid) or st.mode.stmtDiscarded.not
     if (isDropMarkerId nameId: cnId) when dropIsValue then {
         mvs: "'.drop' is a statement, not a value -- it ends a lifetime and produces nothing; use '.take' to move the value into a new name".string
         (
@@ -34677,14 +34675,12 @@ dottedBaseTid: function {
         if (zast.markerKindOfLeaf :ast leaf: dp.child).dropMarker then childIsRef = true
         if (zast.callsBeforeMarker :ast parent: dp.parent child: dp.child) then childIsRef = false
     }
-    supPrev: st.typing.suppressBareCtor
-    if baseIsName then st.typing.suppressBareCtor = true
-    supFnPrev: st.typing.suppressFnAutoCall
-    if childIsRef then st.typing.suppressFnAutoCall = true
+    savedMode: st.mode
+    if baseIsName then st.mode.suppressBareCtor = true
+    if childIsRef then st.mode.suppressFnAutoCall = true
     errsBase: st.typing.errors.length
     bt: checkValueAt :st :unitDecl :ast nid: dp.parent
-    st.typing.suppressFnAutoCall = supFnPrev
-    st.typing.suppressBareCtor = supPrev
+    st.mode = savedMode
     # a base refused as a call missing its arguments has no value to read a
     # member of: that refusal is the one error
     if st.typing.errors.length > errsBase when (
@@ -35376,8 +35372,8 @@ objectCallOf: function {st: zenv.ZSymbolTable ast: Ast t: ztypes.tid} out ztypes
 readsObjectAsCall: function {
     st: zenv.ZSymbolTable ast: Ast t: ztypes.tid nid: zast.nodeid
 } out ztypes.tid is {
-    if st.typing.suppressFnAutoCall or st.typing.suppressBareCtor then return ztypes.tid
-    if st.typing.inAssignTarget then return ztypes.tid
+    if st.mode.suppressFnAutoCall or st.mode.suppressBareCtor then return ztypes.tid
+    if st.mode.inAssignTarget then return ztypes.tid
     if nid == st.typing.eachSubjectNid when (declaresIterate :st :ast :t) then return ztypes.tid
     return (objectCallOf :st :ast :t)
 }
@@ -35506,8 +35502,8 @@ rewriteFieldReadAsObjectCall: function {
 # marker after it (suppressFnAutoCall), and not the target of a write.
 readsFnRefAsCall: function {st: zenv.ZSymbolTable.view t: ztypes.tid} out bool is {
     if (st.reg.typetypeOf typeId: t) != ztypes.ztypetype.functionType then return false
-    if st.typing.suppressFnAutoCall then return false
-    return st.typing.inAssignTarget.not
+    if st.mode.suppressFnAutoCall then return false
+    return st.mode.inAssignTarget.not
 }
 
 # typeOfBareName -- a bare name that is not a local: it names a TYPE, a unit, or a
@@ -35554,7 +35550,7 @@ typeOfBareName: function {
         # control names are not held to this.
         if isGenFn when (
             (ctlDivKind bn: node.name) == zenv.divkind.none
-        ) when st.typing.suppressFnAutoCall.not when st.typing.allowBareFnRef.not then {
+        ) when st.mode.suppressFnAutoCall.not when st.mode.allowBareFnRef.not then {
             if (fnAutoCallable :st mid: fo) then {
                 rewriteReadAsCall :ast :node
                 return (checkValueAt :st :unitDecl :ast nid: node.nid)
@@ -35584,7 +35580,7 @@ typeOfBareName: function {
             lineno: node.lineno
             colno: node.colno
         ) then isAutoFn = false
-        if isAutoFn when st.typing.suppressFnAutoCall.not then {
+        if isAutoFn when st.mode.suppressFnAutoCall.not then {
             result = bareFnCall :st :ast :node fid: fo
         }
         # a type read as its zero value is the instance's: a generic unit's
@@ -35596,7 +35592,7 @@ typeOfBareName: function {
         sfF: declSurfaceOfName :st :ast :unitDecl nameId: node.name tid: fo
         # a list's name reads its value, never a construction of its type
         isList: sfF.isZero.not and (st.typing.decls.get i: sfF).kind.staticListDecl
-        if st.typing.suppressBareCtor.not when isList.not then (
+        if st.mode.suppressBareCtor.not when isList.not then (
             checkBareNameValue
             :st
             :unitDecl
@@ -37006,7 +37002,7 @@ predDottedCore: function {
 } out Option ArmPredFact is {
     ptid: (st.typing.dpArmPredicate.get key: nid).or d: ztypes.tid
     # a template walk reads its own, which a partial's predicate is kept in
-    if st.typing.suppressParamStamps when st.typing.curMonoStamp.isZero then {
+    if st.mode.suppressParamStamps when st.typing.curMonoStamp.isZero then {
         ptid = (st.templateArmPreds.get key: nid).or d: ptid
     }
     if ptid.isZero then return (Option.none ArmPredFact)
@@ -38582,9 +38578,9 @@ checkReassignment: function {
     errsBeforeTarget: st.typing.errors.length
     lvt: refillTargetType :st :ast :rasgn
     if lvt.isZero then {
-        st.typing.inAssignTarget = true
+        st.mode.inAssignTarget = true
         lvt = checkValueAt :st :unitDecl :ast nid: rasgn.topath
-        st.typing.inAssignTarget = false
+        st.mode.inAssignTarget = false
     }
     # a target that resolved to nothing and raised nothing: an unresolvable
     # root name is an unknown reference, as at a read -- a local is not in
@@ -39426,9 +39422,9 @@ walkSwapSide: function {
     ast: Ast
     side: zast.nodeid
 } out ztypes.tid is {
-    st.typing.inAssignTarget = true
+    st.mode.inAssignTarget = true
     t: checkValueAt :st :unitDecl :ast nid: side
-    st.typing.inAssignTarget = false
+    st.mode.inAssignTarget = false
     return t
 }
 
@@ -40697,8 +40693,8 @@ checkForConditionIn: function {
     # `r.add` in value position, so it cannot separate them -- this flag
     # does. It does NOT suppress the auto-call: `for each x: counter loop` over
     # a 0-arg generator still has to be invoked.
-    bfrFor: st.typing.allowBareFnRef
-    st.typing.allowBareFnRef = true
+    savedMode: st.mode
+    st.mode.allowBareFnRef = true
     esPrev: st.typing.eachSubjectNid
     st.typing.eachSubjectNid = eachSubjectNidOf :isEach nid: cond.operation
     if facId.isZero.not then {
@@ -40717,7 +40713,7 @@ checkForConditionIn: function {
     } else {
         vt = checkValueAt :st :unitDecl :ast nid: cond.operation
     }
-    st.typing.allowBareFnRef = bfrFor
+    st.mode = savedMode
     st.typing.eachSubjectNid = esPrev
     vt = staticListAsValue :st :ast :vt nid: cond.operation
     if (refuseUnitValue :st :ast :vt nid: cond.operation) then vt = ztypes.tid
@@ -47247,15 +47243,15 @@ walkOneCallArg: function {
             # into the tree before the argument is walked
             spellCallArgUnderscore :st :ast :unitDecl :effId :recvImplicit :argIdx :arg
             caPrev: st.typing.callArgNode
-            sbPrev: st.typing.suppressBareCtor
+            savedMode: st.mode
             st.typing.callArgNode = nodeId n: (ast.nodes.get i: arg.operation)
-            st.typing.suppressBareCtor = isTypeArg
+            st.mode.suppressBareCtor = isTypeArg
             if (argSlotOwns :st :effId :funcId :isCtor :recvImplicit :argIdx :arg) then {
                 vt = checkMovedValueAt :st :unitDecl :ast nid: arg.operation owning: true
             } else {
                 vt = checkValueAt :st :unitDecl :ast nid: arg.operation
             }
-            st.typing.suppressBareCtor = sbPrev
+            st.mode = savedMode
             st.typing.callArgNode = caPrev
             if isTypeArg when vt.isZero.not then refuseValueTypeArg :st :unitDecl :ast :arg :vt
         }
@@ -50579,7 +50575,7 @@ checkTypeApplicationValue: function {
     call: callref
     tid: ztypes.tid
 } is {
-    if st.typing.suppressBareCtor then return
+    if st.mode.suppressBareCtor then return
     if (st.typing.typeAppsNamed.has item: call.nid) then return
     (
         checkBareTypeValueAt
@@ -55460,7 +55456,7 @@ walkTypeOf: function {st: zenv.ZSymbolTable.view nid: zast.nodeid} out ztypes.ti
     if st.typing.curMonoStamp.isZero.not then {
         return (st.typing.nodeTypeIn mono: (st.typing.walkMonoOf :nid) :nid)
     }
-    if st.typing.suppressParamStamps then {
+    if st.mode.suppressParamStamps then {
         ts: st.templateStamps.get key: nid
         if ts.some then {
             return ts
@@ -55829,8 +55825,8 @@ checkStmtLine: function {
     discarded: tailLine.not and (last.not or (st.typing.stmtBlocks.has item: blockId))
     if discarded then noteStatementBlocks :st :ast :innerId
     if innerId.isZero.not then {
-        dsPrev: st.typing.stmtDiscarded
-        st.typing.stmtDiscarded = discarded
+        savedMode: st.mode
+        st.mode.stmtDiscarded = discarded
         bsPrev: st.typing.boundSiteNid
         blPrev: st.typing.boundSiteLine
         bcPrev: st.typing.boundSiteCol
@@ -55841,7 +55837,7 @@ checkStmtLine: function {
         st.typing.boundSiteLine = nodeLine n: inode
         st.typing.boundSiteCol = nodeCol n: inode
         dk = checkStmtInner :st :unitDecl :ast :innerId lineId: slnId
-        st.typing.stmtDiscarded = dsPrev
+        st.mode = savedMode
         st.typing.boundSiteNid = bsPrev
         st.typing.boundSiteLine = blPrev
         st.typing.boundSiteCol = bcPrev
@@ -56276,12 +56272,11 @@ walkDeclaredDef: function {
     # that body and not to this definition
     prevMono: st.typing.curMonoStamp
     prevMonoFn: st.typing.curMonoFnTid
-    prevSupP: st.typing.suppressParamStamps
-    prevEdge: st.typing.inContainmentEdge
+    savedMode: st.mode
     st.typing.curMonoStamp = ztypes.tid.zero
     st.typing.curMonoFnTid = ztypes.tid
-    st.typing.suppressParamStamps = false
-    st.typing.inContainmentEdge = false
+    st.mode.suppressParamStamps = false
+    st.mode.inContainmentEdge = false
     # walkOwnerMethods only ever walked a TYPE's methods; a free function
     # reaching it was marked and declined, and its unit's own free-function walk
     # then skipped it as done -- a body emitted with nothing stamped.
@@ -56329,8 +56324,7 @@ walkDeclaredDef: function {
     }
     st.typing.curMonoStamp = prevMono
     st.typing.curMonoFnTid = prevMonoFn
-    st.typing.suppressParamStamps = prevSupP
-    st.typing.inContainmentEdge = prevEdge
+    st.mode = savedMode
 }
 
 
@@ -56354,10 +56348,9 @@ walkOwnerMethods: function {
         # a demand walk of the owner's method bodies is its own scope: a
         # dotted-base suppression live at the TRIGGERING reference must
         # not leak into the walked bodies
-        mwSup: st.typing.suppressBareCtor
-        st.typing.suppressBareCtor = false
-        mwSupFn: st.typing.suppressFnAutoCall
-        st.typing.suppressFnAutoCall = false
+        savedMode: st.mode
+        st.mode.suppressBareCtor = false
+        st.mode.suppressFnAutoCall = false
         # outside-in: the owner type resolves BEFORE anything reads it. A body
         # walked ahead of its owner binds `this` to notype, and every check that
         # hangs off the receiver -- member reads, the declared return type --
@@ -56390,8 +56383,7 @@ walkOwnerMethods: function {
             st.typing.synthOwnerName = prevN
             st.typing.currentThisTid = prevThis
         }
-        st.typing.suppressFnAutoCall = mwSupFn
-        st.typing.suppressBareCtor = mwSup
+        st.mode = savedMode
     }
 }
 
@@ -56659,15 +56651,14 @@ walkDeferredBody: function {
     ownerTid: declTypeIdOf :st declId: ownerDecl
     typeName: zast.nameTextCopy :ast ref: (st.typing.decls.get i: ownerDecl).name
     prevMono: st.typing.curMonoStamp
-    prevSup: st.typing.suppressBareCtor
-    prevSupFn: st.typing.suppressFnAutoCall
+    savedMode: st.mode
     prevL: st.typing.synthLabel.copy
     prevU: st.typing.synthOwnerUnit
     prevN: st.typing.synthOwnerName
     prevThis: st.typing.currentThisTid
     st.typing.curMonoStamp = mono
-    st.typing.suppressBareCtor = false
-    st.typing.suppressFnAutoCall = false
+    st.mode.suppressBareCtor = false
+    st.mode.suppressFnAutoCall = false
     forceOwnerMember :st :ast :ownerDecl :memberId
     qn: methodLabel :ast typeName: typeName.stringView :memberId
     (
@@ -56685,8 +56676,7 @@ walkDeferredBody: function {
     )
     markMemberWalked :st :declId
     st.typing.curMonoStamp = prevMono
-    st.typing.suppressBareCtor = prevSup
-    st.typing.suppressFnAutoCall = prevSupFn
+    st.mode = savedMode
     st.typing.synthLabel = prevL.take
     st.typing.synthOwnerUnit = prevU
     st.typing.synthOwnerName = prevN
@@ -57164,16 +57154,13 @@ checkFunctionBody: function {
     # argument -- are about the TRIGGERING reference, not this body. Leaked
     # in, they would walk `mk` in `(mk).val` with bare construction suppressed,
     # leaving `i: Inner` unchecked to reach the C as the type's name.
-    prevBare: st.typing.suppressBareCtor
-    prevFn: st.typing.suppressFnAutoCall
-    prevTarget: st.typing.inAssignTarget
-    prevBareRef: st.typing.allowBareFnRef
+    savedMode: st.mode
     prevCallee: st.typing.calleeDottedNid
     prevArg: st.typing.callArgNode
-    st.typing.suppressBareCtor = false
-    st.typing.suppressFnAutoCall = false
-    st.typing.inAssignTarget = false
-    st.typing.allowBareFnRef = false
+    st.mode.suppressBareCtor = false
+    st.mode.suppressFnAutoCall = false
+    st.mode.inAssignTarget = false
+    st.mode.allowBareFnRef = false
     st.typing.calleeDottedNid = zast.nodeid
     st.typing.callArgNode = zast.nodeid
     (
@@ -57189,10 +57176,7 @@ checkFunctionBody: function {
         :ast
         :declId
     )
-    st.typing.suppressBareCtor = prevBare
-    st.typing.suppressFnAutoCall = prevFn
-    st.typing.inAssignTarget = prevTarget
-    st.typing.allowBareFnRef = prevBareRef
+    st.mode = savedMode
     st.typing.calleeDottedNid = prevCallee
     st.typing.callArgNode = prevArg
 }
@@ -57292,8 +57276,8 @@ checkFunctionBodyIn: function {
         # instance walks its own clone of the body (instanceBodyAt), so
         # GENERIC_PARAM-valued stamps are suppressed for the walk (and
         # its scopes/entries stay out of the dump log).
-        prevSup: st.typing.suppressParamStamps
-        if isGenDef then st.typing.suppressParamStamps = true
+        savedMode: st.mode
+        if isGenDef then st.mode.suppressParamStamps = true
         st.pushScope parent: rf node: fn.nid
         st.fnScopes.append (zenv.openpos.create from: st.open.length - 1)
         exitMark: st.exitLog.length
@@ -57410,7 +57394,7 @@ checkFunctionBodyIn: function {
         st.fnScopes.pop
         for st.exitLog.length > exitMark loop st.exitLog.pop
         st.pop
-        st.typing.suppressParamStamps = prevSup
+        st.mode = savedMode
     }
 }
 
@@ -57446,8 +57430,8 @@ walkUnitTemplateBodies: function {
     # out of the global table -- each instance walks its own clone of the body
     # (instanceBodyAt), which the emitter emits with the instance's stamps (the rule every template walk
     # follows; the `match t` marker writes past it on purpose)
-    prevSup: st.typing.suppressParamStamps
-    st.typing.suppressParamStamps = true
+    savedMode: st.mode
+    st.mode.suppressParamStamps = true
     bn: bodyIds.count.u64
     bi: u64
     for bi < bn loop {
@@ -57478,7 +57462,7 @@ walkUnitTemplateBodies: function {
             )
         }
     }
-    st.typing.suppressParamStamps = prevSup
+    st.mode = savedMode
 }
 
 # walkGenericUnitTemplates -- stamp `match t`/`match cap` in every generic unit
@@ -58051,8 +58035,8 @@ stampOneFnMono: function {
     if (firstInstanceWalk :st :ast :monoId opId: fnOpId).not then return
     minted: st.reg.nextTid
     monoNm: st.reg.nameOf tid: monoId
-    prevSup: st.typing.suppressParamStamps
-    st.typing.suppressParamStamps = true
+    savedMode: st.mode
+    st.mode.suppressParamStamps = true
     st.pushScope parent: scope node: zast.nodeid
     st.typing.monoParamSubst = IdMapV ztypes.tid v: ztypes.tid
     {
@@ -58088,7 +58072,7 @@ stampOneFnMono: function {
     st.typing.currentThisTid = prevT
     st.typing.curMonoFnTid = ztypes.tid.zero
     st.typing.curMonoStamp = ztypes.tid.zero
-    st.typing.suppressParamStamps = prevSup
+    st.mode = savedMode
     st.typing.monoParamSubst = IdMapV ztypes.tid v: ztypes.tid
     st.pop
     recordMintedBy :st :monoId :minted
@@ -58262,8 +58246,8 @@ stampOneClassMono: function {
     collectOwedMembers :st :ast :clsOpId :monoId names: mNames ops: mOps
     minted: st.reg.nextTid
     monoNm: st.reg.nameOf tid: monoId
-    prevSup: st.typing.suppressParamStamps
-    st.typing.suppressParamStamps = true
+    savedMode: st.mode
+    st.mode.suppressParamStamps = true
     st.pushScope parent: scope node: zast.nodeid
     st.typing.monoParamSubst = IdMapV ztypes.tid v: ztypes.tid
     {
@@ -58339,7 +58323,7 @@ stampOneClassMono: function {
     st.typing.currentThisTid = prevT
     st.typing.curMonoFnTid = ztypes.tid.zero
     st.typing.curMonoStamp = ztypes.tid.zero
-    st.typing.suppressParamStamps = prevSup
+    st.mode = savedMode
     st.typing.monoParamSubst = IdMapV ztypes.tid v: ztypes.tid
     st.pop
     recordMintedBy :st :monoId :minted
@@ -59123,8 +59107,8 @@ walkUnitMonoFns: function {
     minted: st.reg.nextTid
     errsBefore: st.typing.errors.length
     monoNm: st.reg.nameOf tid: monoId
-    prevSup: st.typing.suppressParamStamps
-    st.typing.suppressParamStamps = true
+    savedMode: st.mode
+    st.mode.suppressParamStamps = true
     st.pushScope parent: scope node: zast.nodeid
     st.typing.monoParamSubst = IdMapV ztypes.tid v: ztypes.tid
     {
@@ -59202,7 +59186,7 @@ walkUnitMonoFns: function {
     st.typing.currentThisTid = prevT
     st.typing.curMonoFnTid = ztypes.tid.zero
     st.typing.curMonoStamp = ztypes.tid.zero
-    st.typing.suppressParamStamps = prevSup
+    st.mode = savedMode
     st.typing.monoParamSubst = IdMapV ztypes.tid v: ztypes.tid
     st.pop
     recordMintedBy :st :monoId :minted

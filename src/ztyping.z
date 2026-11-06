@@ -921,8 +921,6 @@ ZTyping: class {
     noStampNode: (IdMapV zast.nodeid v: bool)
     # FUNCTION tid -> the definition carries a body (a bodyless spec is false)
     fnHasBody: (IdMapV ztypes.tid v: bool)
-    # a reassignment TARGET path is being checked (a write, not a read)
-    inAssignTarget: bool
     # the generic template (its DeclId) whose signature is being
     # registered: its param names are not unit typerefs
     sigGenericDecl: ztypes.declid
@@ -931,17 +929,6 @@ ZTyping: class {
     sigFnNode: zast.nodeid
     # that function's name, for the refusal
     sigFnName: zast.nameid
-    # whether the walk is inside a containment check, which is what stops a
-    # valtype cycle from recursing forever
-    inContainmentEdge: bool
-    # stop stamping parameters, for the walks that re-visit a signature without
-    # re-binding it
-    suppressParamStamps: bool
-    # stop reading a bare type name as a construction
-    suppressBareCtor: bool
-    # stop reading a bare function reference as a zero-argument call, which is
-    # what `.take` needs
-    suppressFnAutoCall: bool
     # the dotted node currently being walked as a CALL'S CALLABLE, 0 outside
     # one. `Type.arm` is the same path whether an argument follows it or not,
     # so the arm read cannot tell a construction from a bare read on its own
@@ -969,14 +956,6 @@ ZTyping: class {
     hashKeys: IdSet ztypes.tid
     # bool's type, cached because the truthiness checks ask for it constantly
     boolTid: ztypes.tid
-    # a FUNCTION stamp that survives here is legitimate, so a bare method
-    # reference must not be reported. Distinct from suppressFnAutoCall,
-    # which also stops the coercion: a for-header still NEEDS the 0-arg
-    # auto-call (`for each x: counter loop`) and only wants the error silenced.
-    allowBareFnRef: bool
-    # the statement being walked is one whose value nothing uses: not a block's
-    # value line, not a function's implied return
-    stmtDiscarded: bool
     # the value node of the `for each` header being walked: a callable object
     # there whose type declares `iterate` is walked through it, not called
     eachSubjectNid: zast.nodeid
@@ -1029,8 +1008,6 @@ ZTyping: class {
     # the type-ref nodes written as a bare name in a type position -- not an
     # application's head -- which name a generic type's defaults' instance
     bareTyperefNodes: IdSet zast.nodeid
-    # recording an application's head: its name is the template, not a type
-    typerefHead: bool
     collectionChildrenBuilt: IdSet ztypes.tid
     # per-call-argument disposition (take/lock/borrow); absent = valtype/none.
     # The emitter reads it to zero the source of a taken argument, and the LSP
@@ -1285,9 +1262,6 @@ ZTyping: class {
     monoSite: (IdMapV ztypes.tid v: monosite)
     # each generic typedef instance whose base refuses its argument
     typedefClash: (IdMapV ztypes.tid v: typedefclash)
-    # bound refusals are not reported: a typedef instance's base is being
-    # minted after its clash was recorded, and would only repeat it
-    quietBounds: bool
     # resolve every top-level definition of every unit, not only the ones a
     # use site demands: the tooling mode, so an error inside a definition
     # nothing references is still reported.
@@ -3318,14 +3292,9 @@ newTyping: function {nodeEst: 0.u64} out ZTyping is {
         genFieldsOf: (IdMapV zast.nodeid v: u64)
         noStampNode: (IdMapV zast.nodeid v: bool)
         fnHasBody: (IdMapV ztypes.tid v: bool)
-        inAssignTarget: false
         sigGenericDecl: ztypes.declid
         sigFnNode: zast.nodeid
         sigFnName: zast.nameid
-        inContainmentEdge: false
-        suppressParamStamps: false
-        suppressBareCtor: false
-        suppressFnAutoCall: false
         calleeDottedNid: zast.nodeid
         synthCmpTids: IdSet ztypes.tid
         refusedValues: IdSet zast.nodeid
@@ -3333,8 +3302,6 @@ newTyping: function {nodeEst: 0.u64} out ZTyping is {
         hashUsed: IdSet ztypes.tid
         hashKeys: IdSet ztypes.tid
         boolTid: ztypes.tid
-        allowBareFnRef: false
-        stmtDiscarded: false
         eachSubjectNid: zast.nodeid
         typedefBaseName: (IdMapV ztypes.tid v: zast.nameid)
         helperScalarTarget: (IdMapV zast.nodeid v: ztypes.tid)
@@ -3353,7 +3320,6 @@ newTyping: function {nodeEst: 0.u64} out ZTyping is {
         pendingDefaultName: (IdMapV zast.nodeid v: zast.nameid)
         constructedTypes: (IdMapV ztypes.tid v: bool)
         bareTyperefNodes: IdSet zast.nodeid
-        typerefHead: false
         collectionChildrenBuilt: IdSet ztypes.tid
         argDisposition: (IdMapV zast.nodeid v: ztypes.zparamownership)
         callBaseNamesType: IdSet zast.nodeid
@@ -3431,7 +3397,6 @@ newTyping: function {nodeEst: 0.u64} out ZTyping is {
         standInOf: (IdMapV zast.nodeid v: specstandin)
         monoSite: (IdMapV ztypes.tid v: monosite)
         typedefClash: (IdMapV ztypes.tid v: typedefclash)
-        quietBounds: false
         eagerAll: false
         mainUnitAll: false
         dumpRows: false
