@@ -1848,7 +1848,7 @@ rtFragHole: function {
 } is {
     if (name.startsWith prefix: "ARM_") or (name.startsWith prefix: "MEMBER_") then return
     if (name.startsWith prefix: "TAG_") then {
-        tt: ioCanonTidAny :ast :symtab :ctx canon: (name.substring from: 4 to: name.length)
+        tt: stemTid :ast :symtab :ctx canon: (name.substring from: 4 to: name.length)
         rn.append hole
         tagv: ".tag"
         if (isOrdinalVariant :symtab tid: tt) then tagv = ""
@@ -1872,13 +1872,13 @@ rtFragHole: function {
         bv.append from: ctx.strC.copy
         return
     }
-    cc: ioCanonCname :ast :symtab :ctx canon: name
+    cc: stemCname :ast :symtab :ctx canon: name
     # `z_@X@_tag_t` spells X's tag enum
     if (rtTagTypeHole :ctx :id :hole) then (
         noteTagEnumUse
         :ctx
         :symtab
-        tid: (ioCanonTidAny :ast :symtab :ctx canon: name)
+        tid: (stemTid :ast :symtab :ctx canon: name)
     )
     # a type-name hole that resolves to nothing is reported here, not left
     # for the C compiler to find as `z__t`; the TAG channel above is where an
@@ -1982,7 +1982,7 @@ armHoleC: function {
 } out String is {
     dot: body.indexOf needle: "."
     if dot.none then return "".string
-    tt: ioCanonTidAny :ast :symtab :ctx canon: (body.substring from: 0 to: dot)
+    tt: stemTid :ast :symtab :ctx canon: (body.substring from: 0 to: dot)
     aid: zast.poolFind pool: ast.names text: (body.substring from: dot + 1 to: body.length)
     ord: armOrdinalOf :symtab tid: tt armId: aid
     if ord.none then return "".string
@@ -2004,7 +2004,7 @@ memberHoleC: function {
 } out String is {
     dot: body.indexOf needle: "."
     if dot.none then return "".string
-    tt: ioCanonTidAny :ast :symtab :ctx canon: (body.substring from: 0 to: dot)
+    tt: stemTid :ast :symtab :ctx canon: (body.substring from: 0 to: dot)
     mid: zast.poolFind pool: ast.names text: (body.substring from: dot + 1 to: body.length)
     if tt.isZero or mid.isZero then return "".string
     k: memberkind.field
@@ -2364,7 +2364,7 @@ nativeWord: list {
 
 # recordCanon -- a unit's canonical stem: the generic instance a runtime
 # fragment spells as the hole <stem>, its template then each type argument
-# (`spec`, comma-separated), kept by stem for ioCanonTid
+# (`spec`, comma-separated), kept by stem for stemInstanceTid
 recordCanon: function {ctx: Ctx stem: StringView spec: StringView} is {
     ctx.canonSpecs.set key: stem.string value: spec.string
 }
@@ -5059,8 +5059,8 @@ Ctx: class {
     texts: (MapVR textkey V: String)
     textIds: (MapRV String v: u32)
     textNames: List String
-    # each io canonical stem's C name
-    ioCanonC: (Map String V: String)
+    # each canonical stem's C name (stemCname)
+    stemCnames: (Map String V: String)
     # the units' canons: stem -> the instance's template and
     # type arguments, comma-separated
     canonSpecs: (Map String V: String)
@@ -5127,7 +5127,7 @@ Ctx: class {
     membersLeftOut: IdSet u64
     # the units the rows belong to, each once, in the order the table first
     # names them: where a fragment's plain type-name hole is looked up after
-    # the system unit (ioCanonTidAny). The system unit itself is not listed
+    # the system unit (stemTid). The system unit itself is not listed
     fragUnitDecls: ListVal ztypes.declid
     # the type ids those rows gate, and the ones the program actually built
     demandGatedTids: IdSet ztypes.tid
@@ -10584,13 +10584,11 @@ emitInstanceMethodCall: function {
         parentTypeId: rtid
         nameId: (aliasChildNameId :ast :symtab n: (ast.nodes.get i: call.callable))
     )
-    # a NATIVE member is the dedicated dispatchers' to emit -- the String and
-    # StringView emitters, the collection ones, the io/cli/os fragment call --
-    # and there is no body here to call anyway. Asking which unit declared the
-    # RECEIVER relinquished every method of every type in those units, so a
-    # user unit spelled `cli` or `os` had its own bodied methods handed to a
-    # dispatcher that did not want them either, and the call fell through to
-    # `unhandled callee`.
+    # a NATIVE member is the native dispatchers' to emit -- the String and
+    # StringView emitters, the collection ones, a class's row -- and there is
+    # no body here to call. The method's own nativeness decides, never the unit
+    # that declares its receiver, so a user unit spelled `cli` or `os` keeps its
+    # bodied methods.
     if mco.some when (symtab.reg.isNativeOf tid: mco) then return "".string
     if mco.some when (symtab.reg.typetypeOf typeId: mco) == ztypes.ztypetype.functionType then {
         mci: methodInstanceOf :symtab mid: mco callable: call.callable
@@ -38093,7 +38091,7 @@ emitC: function {
         texts: (MapVR textkey V: String)
         textIds: (MapRV String v: u32)
         textNames: List String
-        ioCanonC: (Map String V: String)
+        stemCnames: (Map String V: String)
         canonSpecs: (Map String V: String)
         unitReqs: List UnitReq
         rt: RtTexts.create
@@ -41106,13 +41104,13 @@ emitIdSetMono: function {
     )
 }
 
-# ioCanonTid -- the type id behind a runtime fragment's canonical stem, for the
+# stemInstanceTid -- the type id behind a fragment's canonical stem, for the
 # GENERIC INSTANCES only: the stem's canon names the template and its
 # type arguments, resolved through the spec trie from SOURCE-named parts (Result
 # over filestat and IoError), never from the mangled spelling. 0 for a plain
 # source-name stem (File, IoError, Reader), which keeps the by-name path, and 0
 # when the instance was never demanded.
-ioCanonTid: function {
+stemInstanceTid: function {
     ast: Ast.view
     symtab: zenv.ZSymbolTable.view
     ctx: Ctx.view
@@ -41146,7 +41144,7 @@ canonPartTid: function {
     part: StringView
 } out ztypes.tid is {
     if (part.startsWith prefix: "@") then {
-        return (ioCanonTid :ast :symtab :ctx canon: (part.substring from: 1 to: part.length))
+        return (stemInstanceTid :ast :symtab :ctx canon: (part.substring from: 1 to: part.length))
     }
     dot: part.indexOf needle: "."
     if dot.some then {
@@ -41161,14 +41159,14 @@ canonPartTid: function {
     return (builtinTid :ast :symtab nameId: (zast.poolFind pool: ast.names text: part))
 }
 
-# ioCanonCname -- the id-based cname for an io canonical stem (the part after
-# `z_` in a runtime fragment): a mono (Result_*/List_u8/...) via its spec trie,
-# else a named system type (IoError/File/filestat/Reader/...) by registry name,
-# and "" when the type is not in the (demand-driven) registry for this program.
-# The canon->cname map is emit-stable and io fragments reload the same canons
-# once per unit, so each result (the "" miss included) is cached per program:
-# the O(type count) registry scan runs once per canon, not ~30 times.
-ioCanonCname: function {
+# stemCname -- the id-based cname for a canonical stem (the part after `z_` in a
+# fragment): a mono (Result_*/List_u8/...) via its spec trie, else a named type
+# (IoError/File/filestat/Reader/...) by registry name, and "" when the type is
+# not in the (demand-driven) registry for this program. The stem->cname map is
+# emit-stable and fragments name the same stems again and again, so each
+# result (the "" miss included) is cached per program: the O(type count)
+# registry scan runs once per stem.
+stemCname: function {
     ast: Ast.view
     symtab: zenv.ZSymbolTable.view
     ctx: Ctx
@@ -41177,7 +41175,7 @@ ioCanonCname: function {
     found: false
     cached: String
     {
-        h: ctx.ioCanonC.get key: canon.asString
+        h: ctx.stemCnames.get key: canon.asString
         if h.some then {
             found = true
             cached = h.copy
@@ -41185,22 +41183,22 @@ ioCanonCname: function {
     }
     if found then return cached
     # a hole names the type it is filled with, as a spelling does
-    t: ioCanonTidAny :ast :symtab :ctx :canon
+    t: stemTid :ast :symtab :ctx :canon
     if t.isZero.not when ctx.reachFixed.not then ctx.typeUses.add item: t
     r: String
     if t.isZero.not then r = ctxCname :ctx tid: t
-    ctx.ioCanonC.set key: canon.string value: r.copy
+    ctx.stemCnames.set key: canon.string value: r.copy
     return r
 }
 
-# the type behind an io canonical stem, whatever kind it turns out to be
-ioCanonTidAny: function {
+# stemTid -- the type behind a canonical stem, whatever kind it turns out to be
+stemTid: function {
     ast: Ast.view
     symtab: zenv.ZSymbolTable.view
     ctx: Ctx.view
     canon: StringView
 } out ztypes.tid is {
-    st: ioCanonTid :ast :symtab :ctx :canon
+    st: stemInstanceTid :ast :symtab :ctx :canon
     if st.isZero.not then return st
     # a plain source-name stem (File, IoError, Reader): the system unit first,
     # then each unit the table's rows belong to, in table order, by id. A
@@ -41238,9 +41236,8 @@ fragUnitChild: function {
     return (uo.or d: ztypes.tid.zero)
 }
 
-# loadIoFragment -- an io/cli fragment `key` with its holes filled
-# (rtFragmentText).
-loadIoFragment: function {
+# loadFragment -- the fragment `key` with its holes filled (rtFragmentText).
+loadFragment: function {
     ast: Ast.view
     symtab: zenv.ZSymbolTable.view
     ctx: Ctx
@@ -41597,13 +41594,13 @@ writeRuntimeRow: function {
     fl: rowFragText :ctx :row
     if (rowAlways :ctx :row) then {
         for each fr: (fl.stringView.split sep: ",") loop {
-            if fr.length > 0 then ioFrag :ast :symtab :ctx frag: fr :buf
+            if fr.length > 0 then writeFragment :ast :symtab :ctx frag: fr :buf
         }
         return
     }
     rb: String
     for each fr: (fl.stringView.split sep: ",") loop {
-        if fr.length > 0 then ioFrag :ast :symtab :ctx frag: fr buf: rb
+        if fr.length > 0 then writeFragment :ast :symtab :ctx frag: fr buf: rb
     }
     wrapCond :ctx c: (rowCond :ctx :row) body: rb.stringView :buf
 }
@@ -41652,7 +41649,7 @@ rowMemberUse: function {
     ent: one.substring from: 0 to: qm
     dot: (ent.lastIndexOf needle: ".").or d: ent.length
     if dot == ent.length then return
-    mt: ioCanonTidAny :ast :symtab :ctx canon: (ent.substring from: 0 to: dot)
+    mt: stemTid :ast :symtab :ctx canon: (ent.substring from: 0 to: dot)
     if mt.isZero then return
     sl: ctx.memberWords.slotOf text: (ent.substring from: dot + 1 to: ent.length)
     # a destructor called is a destroy use, whatever the type (noteDestroyUse)
@@ -41760,8 +41757,8 @@ emitUnorderedUnits: function {
     }
 }
 
-# ioFrag -- load + append an io runtime fragment unconditionally.
-ioFrag: function {
+# writeFragment -- a fired row's fragment `frag`, its holes filled, onto `buf`.
+writeFragment: function {
     ast: Ast.view
     symtab: zenv.ZSymbolTable.view
     ctx: Ctx
@@ -41774,7 +41771,7 @@ ioFrag: function {
         buf.append (rtFragmentText :ast :symtab :ctx :plan all: false key: p)
         return
     }
-    f: loadIoFragment :ast :symtab :ctx key: p
+    f: loadFragment :ast :symtab :ctx key: p
     buf.append f
 }
 
@@ -41824,13 +41821,13 @@ boxTidOf: function {
     dot: (one.lastIndexOf needle: ".").or d: one.length
     if dot == one.length then return ztypes.tid.zero
     if wantProtocol then return (
-        ioCanonTidAny
+        stemTid
         :ast
         :symtab
         :ctx
         canon: (one.substring from: dot + 1 to: one.length)
     )
-    return (ioCanonTidAny :ast :symtab :ctx canon: (one.substring from: 0 to: dot))
+    return (stemTid :ast :symtab :ctx canon: (one.substring from: 0 to: dot))
 }
 
 # demandBoxedNatives -- for each boxed row of a runtime-owned class, the
@@ -41876,8 +41873,7 @@ markLiveClasses: function {ast: Ast.view symtab: zenv.ZSymbolTable.view ctx: Ctx
             lv: (ctx.classRows.get :i).live.copy
             live: true
             for each c: (lv.stringView.split sep: ",") loop {
-                if c.length > 0 when (ioCanonTidAny :ast :symtab :ctx canon: c
-                ).isZero then live = false
+                if c.length > 0 when (stemTid :ast :symtab :ctx canon: c).isZero then live = false
             }
             if live then ctx.liveClasses.add item: cid
         }
@@ -41929,7 +41925,7 @@ emitClassRowStructs: function {
             emitClassRowStruct :ast :symtab :ctx :cid :buf
             dfr: (ctx.classRows.get :i).destroy.copy
             if dfr.length > 0 when (destroyWritten :symtab :ctx tid: cid) then {
-                ioFrag :ast :symtab :ctx frag: dfr.stringView :buf
+                writeFragment :ast :symtab :ctx frag: dfr.stringView :buf
             }
         }
         i = i + 1
