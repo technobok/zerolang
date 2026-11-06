@@ -2876,7 +2876,11 @@ displayTypeNameSt: function {
     if bname.length == 0 then return disp
     path: ztypecheck.unitPathOfTid :st tid: base
     if path.length == 0 then return disp
-    if (isCoreLanguageUnit :st unitDecl: (ztypecheck.unitDeclOfTid :st tid: base)) then {
+    if (
+        isCoreLanguageUnit
+        :st
+        unitDecl: (ztypecheck.unitDeclOfTid reg: st.reg typing: st.typing tid: base)
+    ) then {
         if (ztypecheck.bareNameReaches :st :site :base) then return disp
         if (coreReexports :st :base) then path = "core".string
     }
@@ -2954,7 +2958,7 @@ instanceArgSpelling: function {
 # coreReexports -- core names the type under its own name, so `core.<name>`
 # reaches it from any unit
 coreReexports: function {st: zenv.ZSymbolTable.view base: ztypes.tid} out bool is {
-    bd: ztypecheck.declOfTypeId :st tid: base
+    bd: ztypecheck.declOfTypeId reg: st.reg tid: base
     if bd.isZero or st.typing.coreUnitRoot.isZero then return false
     nameId: (st.typing.decls.get i: bd).name
     return (st.typing.declFindChild parentDeclId: st.typing.coreUnitRoot :nameId).isZero.not
@@ -3361,7 +3365,7 @@ fnReturnClause: function {
     site: ztypes.declid
 } out String is {
     rets: String
-    rr: ztypecheck.methodReturnOf :st mid: tid
+    rr: ztypecheck.methodReturnOf reg: st.reg typing: st.typing mid: tid
     rtid: rr.or d: ztypes.tid
     if rtid.isZero then return rets
     if ((st.typing.funcPins.get key: tid).or d: false) then {
@@ -3623,7 +3627,7 @@ defNodeInfo: function {
 } out zast.nodeid is {
     did: ztypes.declid
     if o.some then {
-        did = ztypecheck.declOfTypeId st: o :tid
+        did = ztypecheck.declOfTypeId reg: o.reg :tid
     }
     if did.isZero then return zast.nodeid
     if member.length == 0 then return (declNodeOf :o declId: did)
@@ -4479,7 +4483,8 @@ listSlotValueOpt: function {snap: zcheck.CheckResult hit: navhit} out ztypes.cva
             cv: ztypes.makeIntConst po.i64.orPanic
             if g.slot != o.reg.literalIntTid when (
                 ztypecheck.numKindOfTid
-                st: o
+                reg: o.reg
+                typing: o.typing
                 tid: g.slot
             ).has then cv = ztypes.typedConst c: cv numTid: g.slot
             return cv
@@ -4789,7 +4794,7 @@ caseArmDecl: function {
         sum: caseSumOf :o :t
         tt: o.reg.typetypeOf typeId: sum
         isSum: (tt == ztypes.ztypetype.unionType) or (tt == ztypes.ztypetype.variantType)
-        td: ztypecheck.declOfTypeId st: o tid: sum
+        td: ztypecheck.declOfTypeId reg: o.reg tid: sum
         if isSum.not or td.isZero then return ztypes.declid.zero
         return (o.typing.declFindChild parentDeclId: td nameId: nm)
     }
@@ -4821,7 +4826,11 @@ dissectArmDecl: function {
     prog: Ast.view o: zenv.ZSymbolTable.view fn: zast.nodeid name: zast.nameid
 } out ztypes.declid is {
     if fn.isZero then return ztypes.declid.zero
-    scope: ztypecheck.declOfTypeId st: o tid: (ztyping.nodeTypeAt tbl: o.typing.nodeType nid: fn)
+    scope: (
+        ztypecheck.declOfTypeId
+        reg: o.reg
+        tid: (ztyping.nodeTypeAt tbl: o.typing.nodeType nid: fn)
+    )
     ud: scope
     hops: u32
     for ud.isZero.not and (hops < 64) loop {
@@ -4831,9 +4840,16 @@ dissectArmDecl: function {
     }
     if ud.isZero then return ud
     nm: zast.nameTextAt ast: prog ref: name
-    at: ztypecheck.walkLookupTyperefRo ast: prog st: o unitDecl: ud :scope base: nm.stringView
+    at: (
+        ztypecheck.walkLookupTyperefRo
+        ast: prog
+        typing: o.typing
+        unitDecl: ud
+        :scope
+        base: nm.stringView
+    )
     if at.some then {
-        return (ztypecheck.declOfTypeId st: o tid: at)
+        return (ztypecheck.declOfTypeId reg: o.reg tid: at)
     }
     return ztypes.declid.zero
 }
@@ -5576,13 +5592,13 @@ reexportOriginStep: function {
 } out ztypes.declid is {
     ud: reexportTargetDecl :prog :o :declId
     if ud.isZero.not then return ud
-    tg: ztypecheck.reexportTargetIdsOf st: o ast: prog :declId
+    tg: ztypecheck.reexportTargetIdsOf typing: o.typing ast: prog :declId
     if tg.unitName.isZero then return ud
     site: o.typing.declParentOf :declId
-    ty: ztypecheck.declOfUnitDefIds st: o unitDecl: site nameId: tg.unitName
+    ty: ztypecheck.declOfUnitDefIds typing: o.typing unitDecl: site nameId: tg.unitName
     if ty.isZero then ty = (
         ztypecheck.declOfUnitDefIds
-        st: o
+        typing: o.typing
         unitDecl: o.typing.coreUnitRoot
         nameId: tg.unitName
     )
@@ -7044,7 +7060,7 @@ privateMembersReachable: function {
     }
     o: snap.st
     if o.some then {
-        if (ztypecheck.publicNsOf st: o :tid).isZero then return true
+        if (ztypecheck.publicNsOf reg: o.reg typing: o.typing :tid).isZero then return true
         if vid.isZero then return false
         return (o.reg.variableIsPrivate id: vid)
     }
@@ -7249,7 +7265,7 @@ literalConvTid: function {
     m: childOfIn :prog :o parent: litTid :name
     if m.isZero then return ztypes.tid.zero
     if o.some then {
-        r: ztypecheck.methodReturnOf st: o mid: m
+        r: ztypecheck.methodReturnOf reg: o.reg typing: o.typing mid: m
         if r.some then {
             return r
         }
@@ -7320,7 +7336,7 @@ descendUnitType: function {
         {
             ud: (
                 ztypecheck.unitDeclOfName
-                st: o
+                typing: o.typing
                 nameId: (zast.poolFind pool: prog.names text: unitName)
             )
             result = ztypecheck.resolveUnitMemberLate st: o ast: prog unitDecl: ud :name
@@ -7750,10 +7766,10 @@ reexportTargetDecl: function {
     o: zenv.ZSymbolTable.view
     declId: ztypes.declid
 } out ztypes.declid is {
-    tg: ztypecheck.reexportTargetIdsOf st: o ast: prog :declId
-    ud: ztypecheck.unitDeclOfName st: o nameId: tg.unitName
+    tg: ztypecheck.reexportTargetIdsOf typing: o.typing ast: prog :declId
+    ud: ztypecheck.unitDeclOfName typing: o.typing nameId: tg.unitName
     if ud.isZero then return ud
-    return (ztypecheck.declOfUnitDefIds st: o unitDecl: ud nameId: tg.defName)
+    return (ztypecheck.declOfUnitDefIds typing: o.typing unitDecl: ud nameId: tg.defName)
 }
 
 # bareDeclOf -- the declaration a bare name written in unit `site` reaches at
@@ -7775,8 +7791,13 @@ bareDeclIn: function {
     site: ztypes.declid
     nameId: zast.nameid
 } out ztypes.declid is {
-    d: ztypecheck.declOfUnitDefIds :st unitDecl: site :nameId
-    if d.isZero then d = ztypecheck.declOfUnitDefIds :st unitDecl: st.typing.coreUnitRoot :nameId
+    d: ztypecheck.declOfUnitDefIds typing: st.typing unitDecl: site :nameId
+    if d.isZero then d = (
+        ztypecheck.declOfUnitDefIds
+        typing: st.typing
+        unitDecl: st.typing.coreUnitRoot
+        :nameId
+    )
     return d
 }
 
@@ -7788,8 +7809,8 @@ unitChildDecl: function {
     nameId: zast.nameid
 } out ztypes.declid is {
     if o.some then {
-        ud: ztypecheck.unitDeclOfName st: o nameId: unitId
-        return (ztypecheck.declOfUnitDefIds st: o unitDecl: ud :nameId)
+        ud: ztypecheck.unitDeclOfName typing: o.typing nameId: unitId
+        return (ztypecheck.declOfUnitDefIds typing: o.typing unitDecl: ud :nameId)
     }
     return ztypes.declid.zero
 }
@@ -7803,7 +7824,12 @@ memberDeclOf: function {
 } out ztypes.declid is {
     if o.some then {
         if (o.reg.typetypeOf typeId: parent) == ztypes.ztypetype.unitType then {
-            return (ztypecheck.declOfUnitDefIds st: o unitDecl: (o.reg.defOf tid: parent) :nameId)
+            return (
+                ztypecheck.declOfUnitDefIds
+                typing: o.typing
+                unitDecl: (o.reg.defOf tid: parent)
+                :nameId
+            )
         }
         return (o.typing.declMemberIdOf parentTypeId: parent :nameId)
     }
@@ -7819,7 +7845,14 @@ bareTypeOf: function {
     name: StringView
 } out ztypes.tid is {
     if o.some then {
-        r: ztypecheck.walkLookupTyperefRo ast: prog st: o unitDecl: site scope: site base: name
+        r: (
+            ztypecheck.walkLookupTyperefRo
+            ast: prog
+            typing: o.typing
+            unitDecl: site
+            scope: site
+            base: name
+        )
         return (r.or d: ztypes.tid.zero)
     }
     return ztypes.tid.zero
@@ -8009,7 +8042,7 @@ addUnitDeclMembers: function {
     if o.some then {
         ud: o.reg.defOf tid: unitTid
         if ud.isZero then return
-        pb: ztypecheck.publicNsOf st: o tid: unitTid
+        pb: ztypecheck.publicNsOf reg: o.reg typing: o.typing tid: unitTid
         if pb.isZero or (ud == site) then addDeclChildren :prog :o declId: ud :sink
         if pb.isZero.not then addDeclChildren :prog :o declId: pb :sink
     }
@@ -8250,7 +8283,7 @@ tagCarrier: function {snap: zcheck.CheckResult tid: ztypes.tid} out bool is {
     if o.some then {
         sl: ztypecheck.stdTidRo ast: snap.prog st: o wk: zast.wellKnown.slot.tyStaticlist
         if sl.isZero.not when (o.reg.genericOriginOf :tid) == sl then return true
-        return (ztypecheck.numKindOfTid st: o :tid).has
+        return (ztypecheck.numKindOfTid reg: o.reg typing: o.typing :tid).has
     }
     return false
 }
@@ -9288,7 +9321,7 @@ unitDefHit: function {
         match (
             o
         ) case some then {
-            h.declId = ztypecheck.declOfUnitDefIds st: o unitDecl: holder :nameId
+            h.declId = ztypecheck.declOfUnitDefIds typing: o.typing unitDecl: holder :nameId
             isUnit = (o.typing.decls.get i: h.declId).kind.unitDecl
         } case none then {
             return h
@@ -9316,7 +9349,7 @@ unitBaseHolder: function {
     o: snap.st
     if o.some then {
         if db.single.not then return (o.reg.defOf tid: db.tid)
-        if named then return (ztypecheck.unitDeclOfName st: o nameId: bn)
+        if named then return (ztypecheck.unitDeclOfName typing: o.typing nameId: bn)
         return (bareDeclIn st: o :site nameId: bn)
     }
     return ztypes.declid.zero
@@ -9367,14 +9400,15 @@ chainUnitHolding: function {
     for cur.isZero.not loop {
         if (st.typing.declIsUnitScope declId: cur) when (
             ztypecheck.declOfUnitDefIds
-            :st
+            typing: st.typing
             unitDecl: cur
             :nameId
         ).isZero.not then return cur
         cur = st.typing.declParentOf declId: cur
     }
     cr: st.typing.coreUnitRoot
-    if cr.isZero.not when (ztypecheck.declOfUnitDefIds :st unitDecl: cr :nameId).isZero.not then {
+    if cr.isZero.not when (ztypecheck.declOfUnitDefIds typing: st.typing unitDecl: cr :nameId
+    ).isZero.not then {
         return cr
     }
     return ztypes.declid.zero
