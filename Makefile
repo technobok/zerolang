@@ -1193,7 +1193,9 @@ docs:
 
 # warn-check -- the seed and the three drivers' C, with warnings as errors, under
 # gcc, clang and tcc: each sees things the others do not. WARNSET_* is the set
-# each compiler actually implements (tcc silently accepts any -W).
+# each compiler actually implements (tcc silently accepts any -W). The twelve
+# compiles are independent and run at once, each into its own log under
+# $(BUILDDIR)/warn-check; every one that fails is reported.
 WARN_CCS ?= $(CC) clang $(BUILDDIR)/tcc
 
 WARNSET_gcc   := $(CFLAGS_BASE) -Werror=discarded-qualifiers $(OPTFLAGS)
@@ -1204,23 +1206,33 @@ WARNSET_tcc   := -B $(TCCLIB) -Wall -Wunsupported \
 warn-check: bin/zc.c $(BUILDDIR)/zl.c $(BUILDDIR)/zls.c $(BUILDDIR)/tcc
 	@set -e; \
 	for cc in $(WARN_CCS); do \
-	  tag=$$(basename $$cc); \
-	  case "$$tag" in \
-	    *tcc*)   w='$(WARNSET_tcc)';; \
-	    *clang*) w='$(WARNSET_clang)';; \
-	    *)       w='$(WARNSET_gcc)';; \
-	  esac; \
 	  if ! command -v $$cc >/dev/null 2>&1 && [ ! -x $$cc ]; then \
 	    echo "warn-check FAIL: '$$cc' is not available"; \
 	    echo "  WARN_CCS names the compilers this gate speaks for; install it, or"; \
 	    echo "  narrow the list deliberately: make warn-check WARN_CCS='gcc'"; \
 	    exit 1; \
 	  fi; \
+	done; \
+	mkdir -p $(BUILDDIR)/warn-check; \
+	rm -f $(BUILDDIR)/warn-check/*.log $(BUILDDIR)/warn-check/*.fail; \
+	for cc in $(WARN_CCS); do \
+	  tag=$$(basename $$cc); \
+	  case "$$tag" in \
+	    *tcc*)   w='$(WARNSET_tcc)';; \
+	    *clang*) w='$(WARNSET_clang)';; \
+	    *)       w='$(WARNSET_gcc)';; \
+	  esac; \
 	  for f in bootstrap/zc.c bin/zc.c $(BUILDDIR)/zl.c $(BUILDDIR)/zls.c; do \
-	    $$cc $$w -Werror -c $$f -o /dev/null; \
+	    n=$(BUILDDIR)/warn-check/$$tag-$$(echo $$f | tr / _); \
+	    ( $$cc $$w -Werror -c $$f -o /dev/null > $$n.log 2>&1 || echo "$$tag on $$f" > $$n.fail ) & \
 	  done; \
-	  echo "  $$tag: clean on seed + zc + zl + zls"; \
-	done
+	done; \
+	wait; \
+	if ls $(BUILDDIR)/warn-check/*.fail > /dev/null 2>&1; then \
+	  for x in $(BUILDDIR)/warn-check/*.fail; do echo "warn-check FAIL: $$(cat $$x)"; sed -n 1,20p $${x%.fail}.log; done; \
+	  exit 1; \
+	fi; \
+	for cc in $(WARN_CCS); do echo "  $$(basename $$cc): clean on seed + zc + zl + zls"; done
 	@echo "warn-check OK: zero warnings from $(words $(WARN_CCS)) compiler(s) on all four emitted files"
 
 # pedantic-check -- how far the emitted C is from ISO C17, which is all MSVC
