@@ -21457,7 +21457,7 @@ controlValueIsReference: function {
     ztypecheck.controlArmBlocks :ast :nid into: blocks
     place: false
     for each blk: blocks loop {
-        lf: armLeafNode :ast :symtab blockId: blk
+        lf: armLeafNode :ctx :ast :symtab blockId: blk
         if lf.isZero.not when (
             armLeafIsPlace
             :ast
@@ -21474,6 +21474,7 @@ controlValueIsReference: function {
 armLeafNode: function {
     ast: Ast.view
     symtab: zenv.ZSymbolTable.view
+    ctx: Ctx.view
     # the arm body
     blockId: zast.nodeid
 } out zast.nodeid is {
@@ -21483,7 +21484,14 @@ armLeafNode: function {
     if isBlock.not then return blockId
     lineId: ztypecheck.lastStmtLineIdAt :ast oId: blockId
     if lineId.isZero then return zast.nodeid
-    return (ztypecheck.implicitReturnValue st: symtab :ast :lineId)
+    return (
+        ztypecheck.implicitReturnValue
+        reg: symtab.reg
+        typing: symtab.typing
+        :ast
+        :lineId
+        lineType: (stampIdOf :symtab :ctx nid: lineId)
+    )
 }
 
 # armLeafIsPlace -- an arm's value reads storage something else owns: a local or a
@@ -21766,7 +21774,7 @@ emitControlExpr: function {
 } out String is {
     nid: zast.nodeIdOf :n
     # a generic body's value is typed by the instance being emitted
-    vt: bindingStampOf :symtab :ctx nid: (controlValueStampNid :ast :symtab :n)
+    vt: bindingStampOf :symtab :ctx nid: (controlValueStampNid :ctx :ast :symtab :n)
     ct: typeRefC :ast :symtab :ctx tid: vt
     if ct.length > 0 when (isHeapPtrCollection :symtab :ctx tid: vt) then ct = "\{ct}*"
     # "" when there is no C type, or when an arm leaves from here, which the
@@ -24441,7 +24449,14 @@ armValueOwned: function {
     if isBlock then {
         lineId: ztypecheck.lastStmtLineIdAt :ast oId: blockId
         if lineId.isZero then return true
-        valId = ztypecheck.implicitReturnValue st: symtab :ast :lineId
+        valId = (
+            ztypecheck.implicitReturnValue
+            reg: symtab.reg
+            typing: symtab.typing
+            :ast
+            :lineId
+            lineType: (stampIdOf :symtab :ctx nid: lineId)
+        )
         if valId.isZero then return true
     }
     vn: ast.nodes.get i: valId
@@ -26698,7 +26713,7 @@ withValueBlock: function {n: astnode.view} out zast.nodeid is {
 # something else, `with v: (xs.get i: 0) do "n=\{v}"` being i64 bound and String
 # yielded.
 withValueNodeId: function {
-    ast: Ast.view symtab: zenv.ZSymbolTable.view n: zast.withrow.view
+    ast: Ast.view symtab: zenv.ZSymbolTable.view ctx: Ctx.view n: zast.withrow.view
 } out zast.nodeid is {
     vb: withValueBlock n: (ast.nodes.get i: n.body)
     isBlk: false
@@ -26707,7 +26722,14 @@ withValueNodeId: function {
     if isBlk.not then return vb
     lineId: ztypecheck.lastStmtLineIdAt :ast oId: vb
     if lineId.isZero then return vb
-    vId: ztypecheck.implicitReturnValue st: symtab :ast :lineId
+    vId: (
+        ztypecheck.implicitReturnValue
+        reg: symtab.reg
+        typing: symtab.typing
+        :ast
+        :lineId
+        lineType: (stampIdOf :symtab :ctx nid: lineId)
+    )
     if vId.isZero then return vb
     return vId
 }
@@ -26716,12 +26738,12 @@ withValueNodeId: function {
 # a `match` carries its own; a `with` carries the bound value's instead
 # (withValueNodeId).
 controlValueStampNid: function {
-    ast: Ast.view symtab: zenv.ZSymbolTable.view n: astnode.view
+    ast: Ast.view symtab: zenv.ZSymbolTable.view ctx: Ctx.view n: astnode.view
 } out zast.nodeid is {
     match (
         n
     ) case withexpr then {
-        return (withValueNodeId :ast :symtab :n)
+        return (withValueNodeId :ctx :ast :symtab :n)
     } else {
         return (zast.nodeIdOf :n)
     }
@@ -32330,7 +32352,14 @@ emitTailValue: function {
     tmp: TmpCtr
     buf: String.borrow
 } out bool is {
-    vid: ztypecheck.implicitReturnValue st: symtab :ast :lineId
+    vid: (
+        ztypecheck.implicitReturnValue
+        reg: symtab.reg
+        typing: symtab.typing
+        :ast
+        :lineId
+        lineType: (stampIdOf :symtab :ctx nid: lineId)
+    )
     if vid.isZero then return false
     isBlock: false
     isCtl: false
@@ -32352,7 +32381,12 @@ emitTailValue: function {
         emitReturnOfNode :ast :symtab :ctx :vid :ind :tmp :buf
         return true
     }
-    rtid: stampIdOf :ctx :symtab nid: (controlValueStampNid :ast :symtab n: (ast.nodes.get i: vid))
+    rtid: (
+        stampIdOf
+        :ctx
+        :symtab
+        nid: (controlValueStampNid :ctx :ast :symtab n: (ast.nodes.get i: vid))
+    )
     ct: typeRefC :ast :symtab :ctx tid: rtid
     if (isHeapPtrCollection :symtab :ctx tid: rtid) then ct = "\{ct}*"
     trn: tmpNext :ctx :tmp

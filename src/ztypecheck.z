@@ -37828,7 +37828,19 @@ reportArmKeepsDyingStorage: function {
 # a `match` whose value is bound, the binding pins what the arm that ran hands
 # back (pinArmValue).
 stashArmValuePins: function {st: zenv.ZSymbolTable ast: Ast.view lineId: zast.nodeid} is {
-    stashValuePins :st :ast valNid: (implicitReturnValue :st :ast :lineId)
+    (
+        stashValuePins
+        :st
+        :ast
+        valNid: (
+            implicitReturnValue
+            reg: st.reg
+            typing: st.typing
+            :ast
+            :lineId
+            lineType: (walkTypeOf :st nid: lineId)
+        )
+    )
 }
 
 # stashValuePins -- the pending pins kept under the value node `valNid`, with the
@@ -40752,7 +40764,14 @@ forValueNode: function {
         lastId: zast.kidAt kids: ast.kids span: block.statements i: ne9 - 1
         last: ast.nodes.get i: lastId
         if last.statementline.not then return zast.nodeid
-        return (implicitReturnValue :st :ast lineId: last.nodeid)
+        return (
+            implicitReturnValue
+            reg: st.reg
+            typing: st.typing
+            :ast
+            lineId: last.nodeid
+            lineType: (walkTypeOf :st nid: last.nodeid)
+        )
     } else {
         # an expression-shaped body (`loop x * x`) carries its value on its
         # own node, exactly as lastStmtType reads it
@@ -41784,7 +41803,14 @@ armValueOf: function {st: zenv.ZSymbolTable ast: Ast blockId: zast.nodeid} out a
     if isBlock then {
         lineId = lastStmtLineIdAt :ast oId: blockId
         if lineId.isZero then return none
-        valId = implicitReturnValue :st :ast :lineId
+        valId = (
+            implicitReturnValue
+            reg: st.reg
+            typing: st.typing
+            :ast
+            :lineId
+            lineType: (walkTypeOf :st nid: lineId)
+        )
         if valId.isZero then return none
     }
     vt: walkTypeOf :st nid: lineId
@@ -55849,7 +55875,14 @@ checkStmtLine: function {
         :st
         :ast
         lineId: slnId
-        valId: (implicitReturnValue :st :ast lineId: slnId)
+        valId: (
+            implicitReturnValue
+            reg: st.reg
+            typing: st.typing
+            :ast
+            lineId: slnId
+            lineType: (walkTypeOf :st nid: slnId)
+        )
     )
     recordTempHoldingLine :st lineId: slnId from: ul0
     if last then stashArmValuePins :st :ast lineId: slnId
@@ -56971,7 +57004,14 @@ checkImplicitReturn: function {
     if (generatorCallOf :st nid: defn.nid).isZero.not then return
     lsid: lastStmtLineIdAt :ast oId: defn.body
     valId: zast.nodeid
-    if lsid.isZero.not then valId = implicitReturnValue :st :ast lineId: lsid
+    if lsid.isZero.not then valId = (
+        implicitReturnValue
+        reg: st.reg
+        typing: st.typing
+        :ast
+        lineId: lsid
+        lineType: (walkTypeOf :st nid: lsid)
+    )
     if valId.isZero then {
         if lsid.isZero.not when (tailIsControl :st :ast lineId: lsid) then return
         if st.typing.errors.length == bodyErrs then reportNoTailValue :st :ast :defn :lsid :expR
@@ -57020,13 +57060,17 @@ recordTailExit: function {
 # implicitReturnValue -- the expression an `out`-typed function body's last line
 # hands back: the line's own expression when it yields a value. 0 for a line
 # that yields none -- a binding, a write, an exchange, an expression with no
-# type or typed `null` -- and for one that diverges, which leaves on every path itself. The
-# emitter reads the same answer, so what is checked as a return is what is
+# type or typed `null` -- and for one that diverges, which leaves on every path
+# itself. The caller reads the line's type: the walk its own stamp, the emitter
+# the one it emits by. Both ask here, so what is checked as a return is what is
 # emitted as one.
 implicitReturnValue: function {
-    st: zenv.ZSymbolTable.view
+    reg: ztypes.ZTypeRegistry.view
+    typing: ztyping.ZTyping.view
     ast: Ast.view
     lineId: zast.nodeid
+    # the type stamped on the line
+    lineType: ztypes.tid
 } out zast.nodeid is {
     innerId: zast.nodeid
     ln: ast.nodes.get i: lineId
@@ -57037,11 +57081,10 @@ implicitReturnValue: function {
     # a bare `return`, `break` or `continue` leaves rather than yields
     ctl: ctlDivKind bn: (zast.atomNameIdOf n: (ast.nodes.get i: innerId))
     if ctl > 0 then return zast.nodeid
-    lt: walkTypeOf :st nid: lineId
-    if lt.isZero then return zast.nodeid
-    if (st.reg.typetypeOf typeId: lt) == ztypes.ztypetype.neverType then return zast.nodeid
+    if lineType.isZero then return zast.nodeid
+    if (reg.typetypeOf typeId: lineType) == ztypes.ztypetype.neverType then return zast.nodeid
     # `null`, or a call answering nothing, is no value to hand back
-    if lt == st.typing.nullTypeId then return zast.nodeid
+    if lineType == typing.nullTypeId then return zast.nodeid
     return innerId
 }
 
