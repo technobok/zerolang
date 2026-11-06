@@ -1322,7 +1322,7 @@ perf: $(PERFBIN)
 # deletes write-only allocations; perf-elision measures that), a failed run and
 # allocs != frees. Above ALLOC_BASELINE fails; a commit raising it says why in
 # its message, and one lowering the count lowers it here.
-ALLOC_BASELINE := 2793517
+ALLOC_BASELINE := 2793816
 # ALLOC_LINE -- the one measurement every allocation number comes from.
 ALLOC_LINE = valgrind --tool=memcheck $(PERFRUN) 2>&1 | grep 'total heap usage' | sed 's/.*usage: //'
 
@@ -2672,7 +2672,7 @@ view-guard: bin/zc
 # emit records an emitFail, and zc then writes no C at all. The count of
 # emitFail lines in src/zemitterc.z is a ratchet: a new refusal leg may raise
 # EMITFAIL_BASELINE (say so in the commit); a new fallback leg may not.
-EMITFAIL_BASELINE := 54
+EMITFAIL_BASELINE := 55
 fallback-guard:
 	@n=$$(grep -c 'emitFail' src/zemitterc.z); \
 	if [ "$$n" -gt $(EMITFAIL_BASELINE) ]; then \

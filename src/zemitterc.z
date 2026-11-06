@@ -1829,9 +1829,10 @@ rtFragmentText: function {
 
 # rtFragHole -- bind the fragment hole `name` (`hole`): a `@TAG_<canon>@` to
 # `.tag`, or to nothing for a type the backend has unwrapped, which IS its
-# discriminator; StringView and String to their C names; any other name to the
-# C name of the type its canon names. An ARM or MEMBER hole is bound apart
-# (rtBindPrefixed).
+# discriminator; a `@BOX_<type>.<protocol>@` to the function lending the type
+# as the protocol (boxHoleC); StringView and String to their C names; any other
+# name to the C name of the type its canon names. An ARM or MEMBER hole is bound
+# apart (rtBindPrefixed).
 rtFragHole: function {
     ast: Ast.view
     symtab: zenv.ZSymbolTable.view
@@ -1855,6 +1856,11 @@ rtFragHole: function {
         return
     }
     bn.append hole
+    if (name.startsWith prefix: "BOX_") then {
+        bc: boxHoleC :ast :symtab :ctx box: (name.substring from: 4 to: name.length) :path
+        bv.append from: bc
+        return
+    }
     hw: ctx.nativeWords.slotOf text: name
     if hw == nativeWord.slot.holeStringView then {
         preludeNeed :ctx memb: "@StringView_t"
@@ -1881,6 +1887,34 @@ rtFragHole: function {
         emitFail :ctx what: "fragment \{path}: hole @\{name}@ names no type in this program" line: 0
     }
     bv.append from: cc
+}
+
+# boxHoleC -- the C function a `@BOX_<type>.<protocol>@` hole names, which lends
+# a `<type>` as the `<protocol>` (`<type>_<label>_create`, the label the type
+# implements the protocol under); the fill writes it minus its z_, as every
+# hole's C name. demandRowBoxes has noted the box; one that names no type, or
+# that the type does not implement, is reported.
+boxHoleC: function {
+    ast: Ast.view symtab: zenv.ZSymbolTable.view ctx: Ctx box: StringView path: StringView
+} out String is {
+    it: boxTidOf :ast :symtab :ctx one: box wantProtocol: false
+    pt: boxTidOf :ast :symtab :ctx one: box wantProtocol: true
+    lbl: String
+    if it.isZero.not when pt.isZero.not then lbl = boxLabelFor :symtab :ctx implTid: it protoTid: pt
+    if lbl.length == 0 then {
+        (
+            emitFail
+            :ctx
+            what: "fragment \{path}: hole @BOX_\{box}@ names no box in this program"
+            line: 0
+        )
+        return "".string
+    }
+    fn: spelledCname :ctx tid: it
+    fn.append "_"
+    fn.append lbl
+    fn.append "_create"
+    return fn
 }
 
 # rtBindHoles -- bind each ARM hole (when `arms`) or MEMBER hole of the row body
@@ -2311,7 +2345,6 @@ memberWord: list {
 # Read through a zast.Vocab (ctx.nativeWords), never compared as text.
 nativeWord: list {
     unitDemand: "@unit"
-    unitIo: "io"
     unitPrelude: "prelude"
     holeString: "String"
     holeStringView: "StringView"
@@ -2655,6 +2688,7 @@ newRowWalk: function out RowWalk is {
             sourceReplaced: Set String
         )
         frags: String
+        boxes: String
         at: String
         impl: 0
         ownerText: String
@@ -2783,6 +2817,9 @@ RowWalk: class {
     used: Set String
     rf: RowFacts
     frags: String
+    # the boxes the row's fragments spell, `<type>.<protocol>` comma-separated
+    # (spelledBoxes)
+    boxes: String
     # where the row being read is written, as its texts' mark (NativeMark);
     # "" when none is asked for
     at: String
@@ -2823,6 +2860,7 @@ RowWalk: class {
 
     # fragment -- one of the row's fragments, cached under a name of its own
     fragment: function {:this ctx: Ctx owner: StringView key: StringView text: String.take} is {
+        spelledBoxes text: text.stringView into: this.boxes
         nm: this.fragmentName :owner :key
         servedFragment :ctx name: nm.stringView text: text.take
         this.markFragment :ctx name: nm.stringView
@@ -2914,7 +2952,7 @@ RowWalk: class {
 
     # place -- row `r` of the file being read, keyed `key` there, into the row
     # table and the indexes it is found by: a fragment row with the fragments
-    # handed over since the last, its `members` and its `pulls`
+    # and boxes handed over since the last, its `members` and its `pulls`
     # (comma-separated); a helper (`@name`) by its owner and name; a structural
     # row by its shape; a row of a file the program reaches by its key's names
     place: function {
@@ -2937,6 +2975,11 @@ RowWalk: class {
             if members.length > 0 then {
                 ctx.rows.memberTexts.append from: members.string
                 x.members = ctx.rows.memberTexts.length
+            }
+            if this.boxes.length > 0 then {
+                ctx.rows.boxTexts.append from: this.boxes.copy
+                x.boxes = ctx.rows.boxTexts.length
+                this.boxes = String
             }
             rid = appendFragmentRow :ctx r: x
             if pulls.length > 0 then recordRowPulls :ctx row: rid :pulls
@@ -4916,13 +4959,6 @@ Ctx: class {
     tailReturned: bool
     # which unit each definition came from
     defUnitId: (IdMapV ztypes.tid v: ztypes.declid)
-    # the four stdlib units the emitter names outright, resolved once
-    ioUnitDecl: ztypes.declid
-    # the os unit's declaration, cached because the native routing asks
-    # constantly
-    osUnitDecl: ztypes.declid
-    # the cli unit's declaration, cached for the same reason
-    cliUnitDecl: ztypes.declid
     # the classes the runtime writes, in table order, each class's id once bound
     # (bindClassRows), and the ones the program made live (markLiveClasses)
     classRows: List ClassRow
@@ -34880,11 +34916,6 @@ unitDeclByName: function {
     return (ztypecheck.unitDeclOfName st: symtab nameId: (zast.poolFind pool: ast.names text: name))
 }
 
-# defUnitIdOf -- the DECLARATION of the unit that defines tid (0 when none).
-defUnitIdOf: function {ctx: Ctx.view tid: ztypes.tid} out ztypes.declid is {
-    return ((ctx.defUnitId.get key: tid).or d: ztypes.declid.zero)
-}
-
 # pathUnitTidOf -- the type id of the unit a dotted path's BASE names, or 0
 # when the base names no unit. The checker stamps a base that names a unit with
 # that unit's type, so this is the unit the checker chose -- the nearest scope,
@@ -37844,9 +37875,9 @@ emitCodeBody: function {
     codeBuf: String.borrow
 } out u64 is {
     codeBuf.reserve n: nodeEstE * 8
-    # every body is written: the boxes the std streams make, and the natives
+    # every body is written: the boxes the fired rows make, and the natives
     # each boxed runtime class's vtable takes, are known before the rows are
-    demandStdStreamBoxes ast: program :symtab :ctx
+    demandRowBoxes ast: program :symtab :ctx
     demandBoxedNatives ast: program :symtab :ctx
     # what the written code reaches so far, so a `uses_<Type>` row fires for a
     # type reached only through another's field or arm (a Result's payload);
@@ -37867,7 +37898,7 @@ emitCodeBody: function {
         buf: svBuf
     )
     rtBuf: String
-    emitRuntimeUnits ast: program :symtab :ctx buf: rtBuf late: false
+    emitRuntimeUnits ast: program :symtab :ctx buf: rtBuf
     needsAt: ctx.demands.keys.length
     closeReachedTypes ast: program :symtab :ctx
     closeTmplDestroys ast: program :symtab :ctx
@@ -37885,30 +37916,19 @@ emitCodeBody: function {
 }
 
 # emitRuntimeUnits -- every unit's runtime, in the order the table gives, then
-# the units it does not name. The two io emitters between io and cli generate C
-# rather than load fragments, so they stay named here -- they are the one seam
-# the rows cannot state. A LATE walk loads the rows whose demand fired while a
-# type method's body was written, after the first walk: a row already written is
-# skipped, and the io emitters, which write unconditionally, are not run again.
+# the units it does not name. Run again LATE, it loads the rows whose demand
+# fired while a type method's body was written, after the first walk: a row
+# already written is skipped.
 emitRuntimeUnits: function {
     ast: Ast.view
     symtab: zenv.ZSymbolTable.view
     ctx: Ctx
     buf: String.borrow
-    late: bool
 } is {
     # the unit order is copied first: the runtime emitters below lend ctx
     uos: List String
     for each uo0: ctx.unitOrder loop uos.append uo0.copy
-    for each uo: uos loop {
-        emitRuntimeUnit :ast :symtab :ctx uname: uo.stringView :buf
-        if late.not when (
-            (ctx.nativeWords.slotOf text: uo.stringView) == nativeWord.slot.unitIo
-        ) then {
-            emitIoFileImplementation :ast :symtab :ctx :buf
-            emitIoStdStreams :ast :symtab :ctx :buf
-        }
-    }
+    for each uo: uos loop emitRuntimeUnit :ast :symtab :ctx uname: uo.stringView :buf
     emitUnorderedUnits :ast :symtab :ctx :buf
 }
 
@@ -37985,9 +38005,6 @@ emitC: function {
         tailRetActive: false
         tailReturned: false
         defUnitId: (IdMapV ztypes.tid v: ztypes.declid)
-        ioUnitDecl: ztypes.declid.zero
-        osUnitDecl: ztypes.declid.zero
-        cliUnitDecl: ztypes.declid.zero
         classRows: List ClassRow
         classRowTids: ListVal ztypes.tid
         liveClasses: IdSet ztypes.tid
@@ -38253,7 +38270,7 @@ emitC: function {
     codeBuf.append bodiesBuf
     lateBuf: String
     if (needsOutsidePrelude :ctx from: needsAt) then {
-        emitRuntimeUnits ast: program :symtab :ctx buf: lateBuf late: true
+        emitRuntimeUnits ast: program :symtab :ctx buf: lateBuf
     }
     if ctx.nativeBoxImpls.length > 0 then {
         emitNativeImplementationImpls ast: program :symtab :ctx buf: lateBuf
@@ -39694,9 +39711,6 @@ buildDefUnitIndex: function {symtab: zenv.ZSymbolTable.view ctx: Ctx} is {
         }
         t = t.next
     }
-    ctx.ioUnitDecl = ztypecheck.unitDeclOfName st: symtab nameId: zast.wellKnown.slot.unIo
-    ctx.osUnitDecl = ztypecheck.unitDeclOfName st: symtab nameId: zast.wellKnown.slot.unOs
-    ctx.cliUnitDecl = ztypecheck.unitDeclOfName st: symtab nameId: zast.wellKnown.slot.unCli
 }
 
 # ctxBindMain -- rebind the emission main unit: mainName plus its unit
@@ -41239,20 +41253,6 @@ loadIoFragment: function {
     return (rtFragmentText :ast :symtab :ctx :plan all: true :key)
 }
 
-# ioFileId -- the io File class type id: the File io's own unit declares, by id
-# (0 when io is not in the program).
-ioFileId: function {symtab: zenv.ZSymbolTable.view ctx: Ctx.view} out ztypes.tid is {
-    if ctx.ioUnitDecl.isZero then return ztypes.tid.zero
-    return (
-        (
-            symtab.typing.declChildOfId
-            parentTypeId: (ztypecheck.declTypeIdOf st: symtab declId: ctx.ioUnitDecl)
-            nameId: zast.wellKnown.slot.tyFile
-        ).or
-        d: ztypes.tid.zero
-    )
-}
-
 # isHeapPtrCollection -- a Map/Set mono is stored as a heap pointer (List is
 # embedded by value); a struct field of one is a pointer, freed without `&`.
 isHeapPtrCollection: function {
@@ -41778,63 +41778,59 @@ ioFrag: function {
     buf.append f
 }
 
-# isIoUnitClass -- whether a type is a class (not a mono) defined by the io,
-# os or cli unit.
-isIoUnitClass: function {symtab: zenv.ZSymbolTable.view ctx: Ctx tid: ztypes.tid} out bool is {
-    if (symtab.reg.typetypeOf typeId: tid) != ztypes.ztypetype.classType then return false
-    if (originTidOf :symtab :tid).isZero.not then return false
-    duId: defUnitIdOf :ctx :tid
-    if duId.isZero then return false
-    return (duId == ctx.ioUnitDecl) or (duId == ctx.osUnitDecl) or (duId == ctx.cliUnitDecl)
-}
-
-
-# emitIoFileImplementation -- protocol implementation helpers for every reachable io
-# class (File -> Reader/Writer/Closer/Seeker; BufWriter -> Writer; BufReader ->
-# Reader), emitted after the io natives the wrappers forward to.
-emitIoFileImplementation: function {
-    ast: Ast.view
-    symtab: zenv.ZSymbolTable.view
-    ctx: Ctx
-    buf: String.borrow
-} is {
-    last: symtab.reg.nextTid
-    ti: ztypes.tid 1
-    for ti < last loop {
-        tid: ti
-        ti = ti.next
-        if (isIoUnitClass :symtab :ctx :tid) then {
-            emitImplementationImplsForType :ast :symtab :ctx implTid: tid isFacet: false :buf
+# demandRowBoxes -- the boxes each fired row's fragments spell (the
+# @BOX_<type>.<protocol>@ holes, spelledBoxes): noted once every body is
+# written, so their helpers are written and the natives their vtables take are
+# demanded (demandBoxedNatives) before the rows are.
+demandRowBoxes: function {ast: Ast.view symtab: zenv.ZSymbolTable.view ctx: Ctx} is {
+    rows: ListVal u64
+    for each r0: ctx.rows.fragRows loop rows.append r0
+    for each row: rows loop {
+        bt: (ctx.rows.rows.get i: row).boxes
+        if bt == 0 then continue
+        if (rowDemandFired :ctx :row).not then continue
+        bl: (ctx.rows.boxTexts.get i: bt - 1).copy
+        for each one: (bl.stringView.split sep: ",") loop {
+            it: boxTidOf :ast :symtab :ctx :one wantProtocol: false
+            pt: boxTidOf :ast :symtab :ctx :one wantProtocol: true
+            if it.isZero.not when pt.isZero.not then {
+                noteBoxUse :symtab :ctx implTid: it protoTid: pt
+                noteBorrowBoxUse :ctx implTid: it protoTid: pt
+            }
         }
     }
 }
 
-# ioStreamDemanded -- written C reads io's standard stream `stream` (a
-# well-known name id: stdout, stderr, stdin), whose C emitIoStdStreams writes
-ioStreamDemanded: function {
-    ast: Ast.view symtab: zenv.ZSymbolTable.view ctx: Ctx.view stream: zast.nameid
-} out bool is {
-    return (stdDeclDemanded :ast :symtab :ctx stdUnit: zast.wellKnown.slot.unIo member: stream)
+# spelledBoxes -- each `@BOX_<type>.<protocol>@` hole `text` spells onto
+# `into`, comma-separated, as `<type>.<protocol>`
+spelledBoxes: function {text: StringView into: String.borrow} is {
+    at: u64
+    for at < text.length loop {
+        o: (text.substring from: at to: text.length).indexOf needle: "@BOX_"
+        if o.none then return
+        s: at + o + 5
+        e: ((text.substring from: s to: text.length).indexOf needle: "@").or d: text.length - s
+        if into.length > 0 then into.append ","
+        into.append (text.substring from: s to: s + e)
+        at = s + e + 1
+    }
 }
 
-# demandStdStreamBoxes -- the std streams emitIoStdStreams writes box their
-# backing File as a Writer (stdout, stderr) or a Reader (stdin).
-demandStdStreamBoxes: function {ast: Ast.view symtab: zenv.ZSymbolTable.view ctx: Ctx} is {
-    fid: ioFileId :symtab :ctx
-    if fid.isZero then return
-    if (
-        (ioStreamDemanded :ast :symtab :ctx stream: zast.wellKnown.slot.wkStdout) or
-        (ioStreamDemanded :ast :symtab :ctx stream: zast.wellKnown.slot.wkStderr)
-    ) then {
-        spW: ioCanonTidAny :ast :symtab :ctx canon: "Writer"
-        noteBoxUse :symtab :ctx implTid: fid protoTid: spW
-        noteBorrowBoxUse :ctx implTid: fid protoTid: spW
-    }
-    if (ioStreamDemanded :ast :symtab :ctx stream: zast.wellKnown.slot.wkStdin) then {
-        spR: ioCanonTidAny :ast :symtab :ctx canon: "Reader"
-        noteBoxUse :symtab :ctx implTid: fid protoTid: spR
-        noteBorrowBoxUse :ctx implTid: fid protoTid: spR
-    }
+# boxTidOf -- one half of a box `<type>.<protocol>` (a @BOX_...@ hole): the protocol when `wantProtocol`, else the type; 0 when it names
+# no type
+boxTidOf: function {
+    ast: Ast.view symtab: zenv.ZSymbolTable.view ctx: Ctx.view one: StringView wantProtocol: bool
+} out ztypes.tid is {
+    dot: (one.lastIndexOf needle: ".").or d: one.length
+    if dot == one.length then return ztypes.tid.zero
+    if wantProtocol then return (
+        ioCanonTidAny
+        :ast
+        :symtab
+        :ctx
+        canon: (one.substring from: dot + 1 to: one.length)
+    )
+    return (ioCanonTidAny :ast :symtab :ctx canon: (one.substring from: 0 to: dot))
 }
 
 # demandBoxedNatives -- for each boxed row of a runtime-owned class, the
@@ -41852,65 +41848,6 @@ demandBoxedNatives: function {ast: Ast.view symtab: zenv.ZSymbolTable.view ctx: 
             spec = row.specTypeId
         }
         if (ctx.classRowTids.contains item: cid) then demandSpecNatives :ast :symtab :ctx :cid :spec
-    }
-}
-
-# ioStreamCreate -- the C function that borrows File `fid` as the io protocol
-# `canon` (Reader or Writer): its box helper, named by the label File
-# implements the protocol under. Composed with append: a name built by
-# interpolation reads to A002 as a composed table key.
-ioStreamCreate: function {
-    ast: Ast.view
-    symtab: zenv.ZSymbolTable.view
-    ctx: Ctx
-    fid: ztypes.tid
-    canon: StringView
-} out String is {
-    ptid: ioCanonTidAny :ast :symtab :ctx :canon
-    lbl: boxLabelFor :symtab :ctx implTid: fid protoTid: ptid
-    fn: spelledCname :ctx tid: fid
-    fn.append "_"
-    fn.append lbl
-    fn.append "_create"
-    return fn
-}
-
-# emitIoStdStreams -- io.stdin/stdout/stderr: a borrowed Reader/Writer over a
-# static backing File on fd 0/1/2, not `open` -- it holds nothing of its own,
-# so RAII never closes it.
-emitIoStdStreams: function {
-    ast: Ast.view
-    symtab: zenv.ZSymbolTable.view
-    ctx: Ctx
-    buf: String.borrow
-} is {
-    needAny: (
-        (ioStreamDemanded :ast :symtab :ctx stream: zast.wellKnown.slot.wkStdout) or
-        (ioStreamDemanded :ast :symtab :ctx stream: zast.wellKnown.slot.wkStderr) or
-        (ioStreamDemanded :ast :symtab :ctx stream: zast.wellKnown.slot.wkStdin)
-    )
-    if needAny.not then return
-    fid: ioFileId :symtab :ctx
-    if fid.isZero then return
-    fbase: spelledCname :ctx tid: fid
-    # each stream spells only the protocol it is
-    if (ioStreamDemanded :ast :symtab :ctx stream: zast.wellKnown.slot.wkStdout) then {
-        wcn: ioCanonCname :ast :symtab :ctx canon: "Writer"
-        wcr: ioStreamCreate :ast :symtab :ctx :fid canon: "Writer"
-        b0: "static \{fbase}_t z_io_stdout_File = { 1, false };\nstatic \{wcn}_t z_io_stdout(void) {\n    return \{wcr}(&z_io_stdout_File);\n}\n\n"
-        buf.append b0
-    }
-    if (ioStreamDemanded :ast :symtab :ctx stream: zast.wellKnown.slot.wkStderr) then {
-        wcn: ioCanonCname :ast :symtab :ctx canon: "Writer"
-        wcr: ioStreamCreate :ast :symtab :ctx :fid canon: "Writer"
-        b1: "static \{fbase}_t z_io_stderr_File = { 2, false };\nstatic \{wcn}_t z_io_stderr(void) {\n    return \{wcr}(&z_io_stderr_File);\n}\n\n"
-        buf.append b1
-    }
-    if (ioStreamDemanded :ast :symtab :ctx stream: zast.wellKnown.slot.wkStdin) then {
-        rcn: ioCanonCname :ast :symtab :ctx canon: "Reader"
-        rcr: ioStreamCreate :ast :symtab :ctx :fid canon: "Reader"
-        b2: "static \{fbase}_t z_io_stdin_File = { 0, false };\nstatic \{rcn}_t z_io_stdin(void) {\n    return \{rcr}(&z_io_stdin_File);\n}\n\n"
-        buf.append b2
     }
 }
 
@@ -46770,9 +46707,6 @@ emitClassNativeRead: function {
     # which no row of its own implements
     tmplInst: (tmplClassRowOf :symtab :ctx tid: cid) > 0
     if tmplInst.not when (originTidOf :symtab tid: cid).isZero.not then return "".string
-    if ctx.cliUnitDecl.isZero.not when (
-        (defUnitIdOf :ctx tid: cid) == ctx.cliUnitDecl
-    ) then return "".string
     row: u64
     if tmplInst.not then {
         row = methodFragRow :symtab :ctx :mfid

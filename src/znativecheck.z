@@ -205,12 +205,14 @@ checkUnitRows: function {
     unitNativeRows :d unitName: unitName.stringView :keys :fails
     rowKeysDeclared :d unitName: unitName.stringView :keys :fails
     nh: holesKnown :d :bound :texts :fails
-    na: prefixedHoles :d :bound :texts :fails arms: true
-    nm: prefixedHoles :d :bound :texts :fails arms: false
+    na: prefixedHoles :d :bound :texts :fails kind: holekind.arm
+    nm: prefixedHoles :d :bound :texts :fails kind: holekind.member
+    nb: prefixedHoles :d :bound :texts :fails kind: holekind.box
     literalSpellings :texts :fails
     r: "unit \{unitName}: its native functions have rows, its \{keys.length} rows' keys name its "
     r.append "declarations, \{nh} holes name known types, \{na} tag-constant holes name "
-    r.append "declared arms, \{nm} member holes name declared members"
+    r.append "declared arms, \{nm} member holes name declared members, \{nb} box holes name "
+    r.append "known types"
     return r
 }
 
@@ -324,13 +326,15 @@ checkNative: function {
     bound: boundHoles
     nh: holesKnown :d :bound :texts :fails
     holesDeclaredOnce :d :bound :texts :fails
-    na: prefixedHoles :d :bound :texts :fails arms: true
-    nm: prefixedHoles :d :bound :texts :fails arms: false
+    na: prefixedHoles :d :bound :texts :fails kind: holekind.arm
+    nm: prefixedHoles :d :bound :texts :fails kind: holekind.member
+    nb: prefixedHoles :d :bound :texts :fails kind: holekind.box
     literalSpellings :texts :fails
     nv: valueRows :fails
     r: "native declarations have rows, \{nh} holes name known types, "
     r.append "\{na} tag-constant holes name declared arms, \{nm} member holes name "
-    r.append "declared members, \{nv} value rows call nothing, \{no} native operators have "
+    r.append "declared members, \{nb} box holes name known types, \{nv} value rows call "
+    r.append "nothing, \{no} native operators have "
     r.append "rows, \{nc} conversions are declared and written as the numeric rule gives them"
     return r
 }
@@ -848,18 +852,29 @@ declarers: function {d: Decls.view name: StringView} out List String is {
     return r
 }
 
-# prefixedHoles -- each `@ARM_<canon>.<arm>@` hole (`arms`), or each
-# `@MEMBER_<canon>.<name>@`, names a known type, and that type (the canon up to
-# its first `_`) declares the arm or the member; answers how many there are
+# holekind -- the holes that name a type and then a name of it
+holekind: variant {
+    # `@ARM_<canon>.<arm>@`: the type declares the arm
+    arm: null
+    # `@MEMBER_<canon>.<name>@`: the type declares the member
+    member: null
+    # `@BOX_<type>.<protocol>@`: the protocol is a known type too
+    box: null
+}
+
+# prefixedHoles -- each hole of `kind` names a known type, and that type (the
+# canon up to its first `_`) declares the arm or the member, or the box's
+# protocol is a known type as well; answers how many there are
 prefixedHoles: function {
     d: Decls.view
     bound: (Set String).view
     texts: (List NativeText).view
     fails: List String
-    arms: bool
+    kind: holekind
 } out u64 is {
     pre: "@MEMBER_"
-    if arms then pre = "@ARM_"
+    if kind.arm then pre = "@ARM_"
+    if kind.box then pre = "@BOX_"
     n: u64
     for each t: texts loop {
         tv: t.text.stringView
@@ -870,7 +885,7 @@ prefixedHoles: function {
             at = h.next
             if h.whole then {
                 n = n + 1
-                f: prefixedFinding :d :bound :h text: tv :arms
+                f: prefixedFinding :d :bound :h text: tv :kind
                 if f.length > 0 then fails.append "\{t.where} spells \{f}"
             }
         }
@@ -878,8 +893,8 @@ prefixedHoles: function {
     return n
 }
 
-# prefixedhole -- an `@ARM_<canon>.<name>@` or `@MEMBER_<canon>.<name>@` hole
-# as nextPrefixed finds it: offsets into its text
+# prefixedhole -- an `@ARM_`, `@MEMBER_` or `@BOX_<canon>.<name>@` hole as
+# nextPrefixed finds it: offsets into its text
 prefixedhole: record {
     # a prefix was found
     found: bool
@@ -925,7 +940,7 @@ nextPrefixed: function {text: StringView from: u64 pre: StringView} out prefixed
 # known type, or that type (the canon up to its first `_`) declares no such arm
 # (`arms`) or member; "" when nothing is
 prefixedFinding: function {
-    d: Decls.view bound: (Set String).view h: prefixedhole text: StringView arms: bool
+    d: Decls.view bound: (Set String).view h: prefixedhole text: StringView kind: holekind
 } out String is {
     hole: text.substring from: h.at to: h.nameTo + 1
     canon: text.substring from: h.canonFrom to: h.canonTo
@@ -934,9 +949,13 @@ prefixedFinding: function {
     if (bound.has item: canon.string).not when (d.names.has item: canon.string).not then {
         return "\{hole}, whose type \{canon} names no known type"
     }
-    if arms when (d.arms.has key: head :name
+    if kind.box then {
+        if (bound.has item: name.string) or (d.names.has item: name.string) then return "".string
+        return "\{hole}, whose protocol \{name} names no known type"
+    }
+    if kind.arm when (d.arms.has key: head :name
     ).not then return "\{hole}, but \{head} declares no arm \{name}"
-    if arms.not when (d.members.has key: head :name
+    if kind.member when (d.members.has key: head :name
     ).not then return "\{hole}, but \{head} declares no member \{name}"
     return "".string
 }
