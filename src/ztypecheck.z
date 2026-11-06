@@ -3493,7 +3493,7 @@ unitInstanceMemberTid: function {
 # `type` self-keywords record as the enclosing type (thisName).
 recordResolvedName: function {
     st: zenv.ZSymbolTable
-    ast: Ast.view
+    ast: Ast
     unitDecl: ztypes.declid
     scope: ztypes.declid
     thisName: StringView
@@ -3520,6 +3520,18 @@ recordResolvedName: function {
                 }
             } else {
                 if (refuseParamAsType :st :ast :nameId :nid) then return
+                # a numeric generic parameter names its bound, known now and
+                # in no scope the deferred stamp searches
+                npO: numericParamTypeOwner :st :ast :unitDecl :scope :nameId :thisName
+                if npO.isZero.not then {
+                    npT: numericParamBoundOf :st :ast :scope owner: npO :nameId
+                    ztyping.nodeTypeSet tbl: st.typing.nodeType :nid tid: npT
+                    npD: st.typing.declFindChild parentDeclId: npO :nameId
+                    stampRefDecl :st :nid declId: npD
+                    npk: nid
+                    st.walk.noStampNode.set key: npk value: true
+                    return
+                }
                 # a template's own param name still RECORDS (the pending
                 # map feeds mono substitution) but never name-resolves: mark
                 # it no-stamp so resolution doesn't chase or report it
@@ -5496,7 +5508,7 @@ returnParamTid: function {
     # a marker-suffixed generic return (`of.take` / `of.borrow`) reads its
     # base name through the peeled parent.
     if bnId.isZero then bnId = markerPeeledBaseId :ast n: o
-    if (st.reg.isGenericParamOf tdecl: enclDecl name: bnId) then {
+    if (genericParamIsType :st tdecl: enclDecl name: bnId) then {
         recordGenericParamRef :st nid: oId scope: enclDecl name: bnId
         return (genericParamTidMint :st :ast tdecl: enclDecl nameId: bnId)
     }
@@ -5725,7 +5737,7 @@ stampGenericParamRef: function {
     # base name through the peeled parent; the marker dp wears the stamp,
     # matching recordTyperef's convention for concrete marked returns.
     if bnId.isZero then bnId = markerPeeledBaseId :ast n: o
-    if (st.reg.isGenericParamOf tdecl: enclDecl name: bnId) then {
+    if (genericParamIsType :st tdecl: enclDecl name: bnId) then {
         paramTid: genericParamTidMint :st :ast tdecl: enclDecl nameId: bnId
         nodeIdOfRef: nodeId n: o
         ztyping.nodeTypeSet tbl: st.typing.nodeType nid: nodeIdOfRef tid: paramTid
@@ -5748,7 +5760,8 @@ recordGenericMarkerReturn: function {
     o: ast.nodes.get i: oId
     peeledBase: markerPeeledBase :ast n: o
     if peeledBase.length > 0 when (
-        st.reg.isGenericParamOf
+        genericParamIsType
+        :st
         tdecl: enclDecl
         name: (nameIdOf :ast name: peeledBase.stringView)
     ) then {
@@ -6620,11 +6633,51 @@ resolveTyperefAtomShell: function {
     demand: bool
     nid: zast.nodeid.zero
 } out ztypes.tid is {
+    npO: numericParamTypeOwner :st :ast :unitDecl :scope :nameId :thisName
+    if npO.isZero.not then return (numericParamBoundOf :st :ast :scope owner: npO :nameId)
     if demand then {
         walkScope: scopeFor typing: st.typing :scope :unitDecl
         demandDefinition :st scope: walkScope :nameId
     }
     return (resolveAtomType :st :scope :ast :unitDecl :nameId :thisName :nid)
+}
+
+# numericParamTypeOwner -- the declaration whose numeric generic parameter a
+# type-ref atom names, which as a type names its bound (`out cap`, `n:
+# cap.hold`), as a constant's name names the constant's type: a definition at
+# or enclosing `scope` (a generic unit), the function whose signature is being
+# resolved or one enclosing it (its own parameters, its type's), or the
+# enclosing type (a field's type-ref resolves in the scope the type is written
+# in). 0 for any other name.
+numericParamTypeOwner: function {
+    st: zenv.ZSymbolTable.view
+    ast: Ast.view
+    unitDecl: ztypes.declid
+    scope: ztypes.declid
+    nameId: zast.nameid
+    thisName: StringView
+} out ztypes.declid is {
+    owner: numericParamOwnerFrom :st :scope :nameId
+    sgd: st.walk.sigGenericDecl
+    if owner.isZero when sgd.isZero.not then owner = numericParamOwnerFrom :st scope: sgd :nameId
+    if owner.isZero when thisName.length != 0 then {
+        encl: declOfUnitDef :st :unitDecl :scope nameId: (nameIdOf :ast name: thisName)
+        if encl.isZero.not then owner = numericParamOwnerFrom :st scope: encl :nameId
+    }
+    return owner
+}
+
+# numericParamBoundOf -- the type numeric generic parameter `nameId` of `owner`
+# is: its bound's.
+numericParamBoundOf: function {
+    st: zenv.ZSymbolTable
+    ast: Ast
+    scope: ztypes.declid
+    owner: ztypes.declid
+    nameId: zast.nameid
+} out ztypes.tid is {
+    cd: st.reg.genericParamConstraintOf tdecl: owner paramName: nameId
+    return (numericBoundTid :ast :st :scope :cd)
 }
 
 # resolveTyperefShell -- register a SHALLOW named shell for a referenced type
@@ -7745,11 +7798,11 @@ resolveFunctionParam: function {
             if ptn == zast.wellKnown.slot.wkThis then skipParam = true
             if isRecvP then skipParam = true
         }
-        if skipParam.not when isgen when (st.reg.isGenericParamOf tdecl: fnDecl name: gpn) then {
+        if skipParam.not when isgen when (genericParamIsType :st tdecl: fnDecl name: gpn) then {
             skipParam = true
             fnParam = true
         }
-        if skipParam.not when (st.reg.isGenericParamOf tdecl: receiverEnclDecl name: gpn) then {
+        if skipParam.not when (genericParamIsType :st tdecl: receiverEnclDecl name: gpn) then {
             skipParam = true
             genParam = true
         }
@@ -7783,6 +7836,18 @@ resolveFunctionParam: function {
             registerValueParam :st :ast :unitDecl :rf :fid :thisName :ptn partialTid: paramTid :pm
         }
     }
+}
+
+# genericParamIsType -- whether `name` is a generic parameter of `tdecl` that stands
+# for a type. A numeric one names a value, so a parameter it declares is an
+# ordinary one, typed as a field it declares is (numericParamFieldType).
+genericParamIsType: function {
+    st: zenv.ZSymbolTable.view
+    tdecl: ztypes.declid
+    name: zast.nameid
+} out bool is {
+    if (st.reg.isGenericParamOf :tdecl :name).not then return false
+    return (st.reg.genericParamConstraintOf :tdecl paramName: name).numKind.has.not
 }
 
 # markNativeRecordClone -- a member of a sized native RECORD (array, str) whose
@@ -14941,10 +15006,10 @@ refuseNumericParamName: function {
     )
 }
 
-# numericParamFieldType -- a field (or parameter) whose value is a numeric
-# generic parameter of its owner (`stored: cap`): the bound's type, with a
-# default each mono supplies from its own argument (recordNumericFieldDefaults).
-# 0 for any other declaration.
+# numericParamFieldType -- a field or parameter whose value is a numeric generic
+# parameter of its owner or of a definition enclosing it (`stored: cap`, a
+# method's `n: cap`): the bound's type, with a default each instance supplies
+# from its own argument (recordNumericDefaults). 0 for any other declaration.
 numericParamFieldType: function {
     st: zenv.ZSymbolTable
     ast: Ast
@@ -14953,9 +15018,12 @@ numericParamFieldType: function {
 } out ztypes.tid is {
     vnId: zast.atomNameIdOf n: (ast.nodes.get i: dm.operation)
     if vnId.isZero then return ztypes.tid
-    tdecl: declOfTypeId reg: st.reg tid: ownerTid
+    # the parameter is the owner's or an enclosing definition's -- a method's
+    # type, a unit's -- found as a read of the name in a body finds it
+    ownerDecl: st.typing.declIdOfType typeId: ownerTid
+    tdecl: numericParamOwnerFrom :st scope: ownerDecl nameId: vnId
+    if tdecl.isZero then return ztypes.tid
     cd: st.reg.genericParamConstraintOf :tdecl paramName: vnId
-    if cd.numKind.has.not then return ztypes.tid
     bound: numericBoundTid :ast :st scope: st.curScope :cd
     if bound.isZero then return ztypes.tid
     fd: st.typing.declMemberIdOf parentTypeId: ownerTid nameId: dm.name
@@ -14970,13 +15038,18 @@ numericParamFieldType: function {
     return bound
 }
 
-# recordNumericFieldDefaults -- each field of a fresh mono that its template
-# defaults to a numeric generic parameter: the mono's argument is the field's
-# value and its default.
-recordNumericFieldDefaults: function {
+# recordNumericDefaults -- each member of `ownerTid`, an instance's copy of
+# `templateId`'s members, that the template defaults to a numeric generic
+# parameter (`stored: cap`, `n: cap`): the argument `instanceTid` was made with
+# is the member's value and its default.
+recordNumericDefaults: function {
     st: zenv.ZSymbolTable
-    monoId: ztypes.tid
+    ownerTid: ztypes.tid
     templateId: ztypes.tid
+    # the instance that holds the parameter's argument: the owner itself for a
+    # type's or a function's instance, the type or unit instance for a member
+    # function cloned into it
+    instanceTid: ztypes.tid
 } is {
     if st.walk.numericParamDefault.length == 0 then return
     slots: st.typing.declRowSlots ownerTid: templateId
@@ -14988,17 +15061,21 @@ recordNumericFieldDefaults: function {
             fname: row.name
             tmd: st.typing.declMemberIdOf parentTypeId: templateId nameId: fname
             po: st.walk.numericParamDefault.get key: tmd
-            if po.some then {
-                v: st.typing.memberConstOf parentTypeId: monoId nameId: po
+            mmd: st.typing.declMemberIdOf parentTypeId: ownerTid nameId: fname
+            if po.some when mmd.isZero.not then {
+                v: st.typing.memberConstOf parentTypeId: instanceTid nameId: po
                 if v.kind.none.not then {
-                    st.typing.setMemberConst parentTypeId: monoId nameId: fname value: v
-                    mmd: st.typing.declMemberIdOf parentTypeId: monoId nameId: fname
+                    st.typing.setMemberConst parentTypeId: ownerTid nameId: fname value: v
                     (
                         st.typing.declSetDefaultId
-                        parentTypeId: monoId
+                        parentTypeId: ownerTid
                         nameId: fname
                         value: ztyping.defaultval.constant mmd
                     )
+                } else {
+                    # a parameter the instance does not bind -- a generic
+                    # method's own -- is bound by each instance of the copy
+                    st.walk.numericParamDefault.set key: mmd value: po
                 }
             }
         }
@@ -15216,7 +15293,9 @@ qualifierDecl: function {
 }
 
 # valueStampsTyperef -- whether a field declaration's value is stamped as a
-# type-ref: always when nothing folded; when a value folded, only for a bare
+# type-ref: when nothing folded, unless its root is a numeric generic parameter
+# of the owner or of a definition enclosing it (`stored: cap.hold`), which the
+# scope the ref waits in does not see; when a value folded, only for a bare
 # name the enclosing scopes declare (`p: false`, `n: LIMIT`, `x: 0.0`), which
 # navigation reads. An expression names nothing, and a name the type's own
 # scope declares (`n: CAP`) is no type the drain could resolve.
@@ -15227,7 +15306,11 @@ valueStampsTyperef: function {
     folded: ztypes.tid
     node: zast.nodeid
 } out bool is {
-    if folded.isZero then return true
+    if folded.isZero then {
+        rootId: rootNameIdOf :ast n: (ast.nodes.get i: node)
+        ownerDecl: st.typing.declIdOfType typeId: ownerTid
+        return (numericParamOwnerFrom :st scope: ownerDecl nameId: rootId).isZero
+    }
     vnId: zast.atomNameIdOf n: (ast.nodes.get i: node)
     if vnId.isZero then return false
     own: declOfTypeId reg: st.reg tid: ownerTid
@@ -20866,6 +20949,7 @@ fillMonoMethodSignature: function {
             )
         }
     }
+    recordNumericDefaults :st ownerTid: newFnId templateId: srcId instanceTid: monoId
     rto: st.reg.returnTypeOf tid: srcId
     if rto.isZero.not then {
         rtv: unitMonoTypeOf :st :ast :rf :tplId :monoId :subs tid: rto
@@ -23316,6 +23400,7 @@ cloneMethodInto: function {
     # the parameter defaults: a construction or a call that leaves one out
     # fills it from the clone
     cloneParamDefaults :st from: tplFnId to: fnTid names: paramNames
+    recordNumericDefaults :st ownerTid: fnTid templateId: tplFnId instanceTid: specId
     (
         cloneMethodReturn
         :ast
@@ -27382,7 +27467,7 @@ getOrMintSpec: function {
     if mid8.isZero then completes = false
     if completes then {
         completeSpecChildren :ast :st :templateId :mid8
-        recordNumericFieldDefaults :st monoId: mid8 :templateId
+        recordNumericDefaults :st ownerTid: mid8 :templateId instanceTid: mid8
     }
     return mid8
 }
