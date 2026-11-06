@@ -13454,8 +13454,7 @@ detectTagAccessor: function {
     # a storage that is not an integer is refused where the storage is
     # decided (variantTagBaseTid)
     if (isTagStorage :st tid: nid).not then return
-    st.typing.tagAccessorName.set key: ownerId value: am.name
-    st.typing.tagAccessorTid.set key: ownerId value: nid
+    st.typing.tagAccessor.set key: ownerId value: (ztyping.tagaccessor name: am.name tid: nid)
 }
 
 # isTagStorage -- `tid` can hold a sum's discriminator: one of the system's
@@ -13564,7 +13563,7 @@ recordTagBase: function {
 tagAccessorOwner: function {
     reg: ztypes.ZTypeRegistry.view typing: ztyping.ZTyping.view tid: ztypes.tid
 } out ztypes.tid is {
-    if (typing.tagAccessorName.has key: tid) then return tid
+    if (typing.tagAccessor.has key: tid) then return tid
     og: reg.genericOriginOf :tid
     if og.isZero then return tid
     return og
@@ -32108,8 +32107,12 @@ checkTagAccessor: function {
     if isSum when (dottedBaseIsValue :st :ast :unitDecl n: (ast.nodes.get i: dp.nid)) then {
         tagHit: false
         tob: tagAccessorOwner reg: st.reg typing: st.typing tid: bt
-        accessorName: st.typing.tagAccessorName.get key: tob
-        if accessorName.some when accessorName == cnId then tagHit = true
+        accessorTid: ztypes.tid
+        acc: st.typing.tagAccessor.get key: tob
+        if acc.some when acc.name == cnId then {
+            tagHit = true
+            accessorTid = acc.tid
+        }
         if tagHit then {
             if st.mode.inAssignTarget then {
                 cn: zast.nameTextAt :ast ref: cnId
@@ -32130,7 +32133,6 @@ checkTagAccessor: function {
                 )
                 return (callleg handled: true tid: ztypes.tid.zero)
             }
-            accessorTid: (st.typing.tagAccessorTid.get key: tob).or d: ztypes.tid
             if accessorTid.isZero.not then {
                 st.typing.dpTagRead.set key: dp.nid value: bt
                 memberDecl: declMemberOf :st ownerTid: bt nameId: cnId
@@ -69486,9 +69488,9 @@ canonicalizeShellNodeStamps: function {
     avals: ListVal ztypes.tid
     aKeys: ListVal ztypes.tid
     aIns: ListVal ztypes.tid
-    for each a: st.typing.tagAccessorTid.iterateItems loop {
+    for each a: st.typing.tagAccessor.iterateItems loop {
         aKeys.append a.key
-        aIns.append a.value
+        aIns.append a.value.tid
     }
     ai: u64
     for ai < aKeys.length loop {
@@ -69499,11 +69501,15 @@ canonicalizeShellNodeStamps: function {
         }
         ai = ai + 1
     }
+    # only the type is canonicalised: each entry keeps its name
     w: u64
     for w < anids.length loop {
         k6: anids.get i: w
-        v6: avals.get i: w
-        st.typing.tagAccessorTid.set key: k6 value: v6
+        acc: st.typing.tagAccessor.get key: k6
+        if acc.some then {
+            row: ztyping.tagaccessor name: acc.name tid: (avals.get i: w)
+            st.typing.tagAccessor.set key: k6 value: row
+        }
         w = w + 1
     }
 }
