@@ -15698,18 +15698,6 @@ emitCrossUnitBareCreate: function {
     return "".string
 }
 
-# outerBaseNodeId -- the node of a LEFT-nested `(a.B).c` path's outer base `a`
-# (0 otherwise).
-outerBaseNodeId: function {ast: Ast.view n: astnode.view} out zast.nodeid is {
-    match (
-        n
-    ) case dottedpath then {
-        return (dottedParentNodeId n: (ast.nodes.get i: n.parent))
-    } else {
-        return zast.nodeid
-    }
-}
-
 
 # emitCrossUnitCtor -- construction of a cross-unit record/class
 # `unit.TypeName field: val ...` (e.g. a astnode arm's zast.ErrorData payload):
@@ -16761,9 +16749,8 @@ tmplInstCreate: function {
 # emitNativeMemberCall -- a NATIVE method: it has no body to call, so its
 # owner's family lowers it -- the result and option combinators, a list's
 # element read, a str's substring, a native collection's empty `create`, a
-# class's fragment call by its unit (cli's Parsed accessors and Spec create,
-# the io and net handles and wrappers), and otherwise its operator
-# row (`a.or rhs: b`). "" when the family's leg declines.
+# class's row (its create, or a method by its fragment), and otherwise its
+# operator row (`a.or rhs: b`). "" when the family's leg declines.
 emitNativeMemberCall: function {
     ast: Ast.view
     symtab: zenv.ZSymbolTable.view
@@ -16771,8 +16758,6 @@ emitNativeMemberCall: function {
     call: zast.callrow.view
     ownerTid: ztypes.tid
     ownerFam: ztypes.tid
-    # the unit that declares the owner
-    ownerUnit: ztypes.declid
     isCreate: bool
     facts: cfacts.borrow
 } out String is {
@@ -16802,17 +16787,7 @@ emitNativeMemberCall: function {
     tc: tmplInstCreate :ast :symtab :ctx :call :isCreate :facts
     if tc.length > 0 then return tc
     if (symtab.reg.typetypeOf typeId: ownerTid) == ztypes.ztypetype.classType then {
-        if isCreate then {
-            if ownerUnit == ctx.cliUnitDecl then return (
-                emitCliSpecCreate
-                :ast
-                :symtab
-                :ctx
-                :call
-                :facts
-            )
-            return (emitIoWrapperCreate :ast :symtab :ctx :call :facts)
-        }
+        if isCreate then return (emitNativeCreate :ast :symtab :ctx :call cid: ownerTid :facts)
         return (emitClassNativeCall :ast :symtab :ctx :call :ownerTid :facts)
     }
     return (emitOperatorCallForm :ast :symtab :ctx :call :facts)
@@ -16830,8 +16805,6 @@ emitMethodDeclCall: function {
     ownerTid: ztypes.tid
     # the method's own type: whether it is native
     method: ztypes.tid
-    # the unit that declares the owner
-    ownerUnit: ztypes.declid
     fnptrField: bool
     isCreate: bool
     facts: cfacts.borrow
@@ -16864,7 +16837,6 @@ emitMethodDeclCall: function {
         :call
         :ownerTid
         :ownerFam
-        :ownerUnit
         :isCreate
         :facts
     )
@@ -16968,11 +16940,9 @@ emitCallByDecl: function {
     rkind: rdecl.kind
     rtid: rdecl.typeId
     ownerTid: ztypes.tid
-    ownerUnit: ztypes.declid
     if rdecl.parent.isZero.not then {
         ownerDecl: symtab.typing.decls.get i: rdecl.parent
         ownerTid = ownerDecl.typeId
-        ownerUnit = ownerDecl.parent
     }
     if rkind.methodDecl when ownerTid.isZero.not then {
         return (
@@ -16983,7 +16953,6 @@ emitCallByDecl: function {
             :call
             :ownerTid
             method: rtid
-            :ownerUnit
             fnptrField: rdecl.fnptrField
             isCreate: rdecl.name == zast.wellKnown.slot.wkCreate
             :facts
@@ -34896,24 +34865,6 @@ recFieldLists: function {
     ztypecheck.dataFieldNames :ast st: symtab :tid :names :ids :nameIds
 }
 
-# unitClassTid -- the CLASS a unit declares under `nameId`, asked of THAT
-# unit's own declarations. Exactly one name is in scope inside a unit, so this
-# is a lookup and not a search. 0 when the unit declares no such class.
-unitClassTid: function {
-    symtab: zenv.ZSymbolTable.view
-    unitDecl: ztypes.declid
-    nameId: zast.nameid
-} out ztypes.tid is {
-    z: ztypes.tid
-    if unitDecl.isZero then return z
-    d: symtab.typing.declFindChild parentDeclId: unitDecl :nameId
-    if d.isZero then return z
-    t: ztypecheck.declTypeIdOf st: symtab declId: d
-    if t.isZero then return z
-    if (symtab.reg.typetypeOf typeId: t) != ztypes.ztypetype.classType then return z
-    return t
-}
-
 # unitDeclByName -- the file unit spelled `name`, asked of the ENVIRONMENT:
 # the program root's own children, which IS the list of units in scope. A name
 # reaches this only from a source literal, a unit segment of a row's path, or
@@ -41302,15 +41253,6 @@ ioFileId: function {symtab: zenv.ZSymbolTable.view ctx: Ctx.view} out ztypes.tid
     )
 }
 
-# cliClassTypeId -- the type id of a cli-unit CLASS named `name` (0 absent).
-cliClassTypeId: function {
-    symtab: zenv.ZSymbolTable.view
-    ctx: Ctx.view
-    nameId: zast.nameid
-} out ztypes.tid is {
-    return (unitClassTid :symtab unitDecl: ctx.cliUnitDecl :nameId)
-}
-
 # isHeapPtrCollection -- a Map/Set mono is stored as a heap pointer (List is
 # embedded by value); a struct field of one is a pointer, freed without `&`.
 isHeapPtrCollection: function {
@@ -46943,29 +46885,10 @@ viewArgCoerce: function {
     return (stating :facts from: avF text: av.string)
 }
 
-# unitCreateMemberId -- the member X of a `<unit>.X.create` callable whose base
-# the checker resolved to the file unit `unitDecl` (io's wrappers, cli's spec
-# classes), else 0. A nested unit, value or type spelled like the unit is not it.
-unitCreateMemberId: function {
-    ast: Ast.view
-    symtab: zenv.ZSymbolTable.view
-    n: astnode.view
-    unitDecl: ztypes.declid
-} out zast.nameid is {
-    if unitDecl.isZero then return zast.nameid.zero
-    if (aliasChildNameId :ast :symtab :n) != zast.wellKnown.slot.wkCreate then {
-        return zast.nameid.zero
-    }
-    if (baseFileUnitDecl :symtab baseId: (outerBaseNodeId :ast :n)) != unitDecl then {
-        return zast.nameid.zero
-    }
-    return (aliasChildNameId :ast :symtab n: (ast.nodes.get i: (dottedParentNodeId :n)))
-}
-
-# argBaseAtom / argBaseNodeId -- the base of a wrapper-create argument. The
-# dotted extractors take the base of a PATH, which is what a `.borrow`-suffixed
-# argument always was; a `borrow` parameter needs no suffix, so the argument
-# arrives as a BARE atom and is its own base. Without the fallback the emitter
+# argBaseAtom / argBaseNodeId -- the base of a native create's argument. The
+# dotted extractors take the base of a PATH, as a `.borrow`-suffixed argument
+# is; a `borrow` parameter needs no suffix, so the argument can arrive as a
+# BARE atom, which is its own base. Without the fallback the emitter
 # builds `z_t0__create(&)` -- an unresolved type and an empty expression -- which
 # typechecks clean and dies at gcc.
 argBaseAtom: function {ast: Ast.view n: astnode.view} outx StringView is {
@@ -46993,14 +46916,17 @@ argBaseNodeId: function {ast: Ast.view n: astnode.view} out zast.nodeid is {
     return zast.nodeid
 }
 
-# wrapperCreateArg -- one io-wrapper create arg by the create-param type: a
-# protocol-borrow param projects the `.borrow` base to that protocol; a class-borrow
-# param takes the base's address; a scalar param emits the arg directly.
-wrapperCreateArg: function {
+# nativeCreateArg -- one argument of a native create, by its parameter's type: a
+# protocol parameter takes the argument boxed as that protocol; a borrowed
+# class parameter takes the argument's address; any other takes it as written
+# (a `.take` String by value).
+nativeCreateArg: function {
     ast: Ast.view
     symtab: zenv.ZSymbolTable.view
     ctx: Ctx
     call: zast.callrow.view
+    # the create function, whose parameter `label` is
+    create: ztypes.tid
     label: zast.nameid
     ptid: ztypes.tid
     facts: cfacts.borrow
@@ -47035,7 +46961,11 @@ wrapperCreateArg: function {
                 )
                 return (stating :facts from: aF text: sit)
             }
-            if (symtab.reg.typetypeOf typeId: prtid) == ztypes.ztypetype.classType then {
+            if (symtab.reg.typetypeOf typeId: prtid) == ztypes.ztypetype.classType when (
+                symtab.typing.declIsBorrowedFieldId
+                parentTypeId: create
+                nameId: label
+            ) then {
                 a2op: ast.nodes.get i: a.operation
                 ab2: argBaseAtom :ast n: a2op
                 argBaseNode: argBaseNodeId :ast n: a2op
@@ -47056,42 +46986,34 @@ wrapperCreateArg: function {
                 if (isPtrVid :ctx vid: ab2v) then return (stating :facts from: abr2F text: abr2C)
                 return (stating :facts from: (addrFacts e: abr2F) text: "&\{abr2C}")
             }
-            return (emitExprWith :ast :symtab :ctx n: (ast.nodes.get i: a.operation) :facts)
+            return (ctorArgTextAt :ast :symtab :ctx aid: a.operation :facts)
         }
     }
     return (stating :facts from: constFacts text: "0".string)
 }
 
-# emitIoWrapperCreate -- `io.BufWriter.create to: w.borrow capacity: 16` ->
-# z_t{id}_BufWriter_create(<projected/addressed args in param order>). "" for
-# any non-io-wrapper-create callee.
-emitIoWrapperCreate: function {
+# emitNativeCreate -- `X.create ...` of a class whose native `create` its row
+# writes as `<X>_create`: `io.BufWriter.create to: w capacity: 16` ->
+# z_t{id}_create(<args in parameter order>). "" when X declares no create.
+emitNativeCreate: function {
     ast: Ast.view
     symtab: zenv.ZSymbolTable.view
     ctx: Ctx
     call: zast.callrow.view
+    # the class whose `create` is called
+    cid: ztypes.tid
     facts: cfacts.borrow
 } out String is {
-    wn: unitCreateMemberId :ast :symtab n: (ast.nodes.get i: call.callable) unitDecl: ctx.ioUnitDecl
-    if wn.isZero then return "".string
-    # the io unit's own member: a program's type of that name is not it
-    wid: (
-        (ztypecheck.resolveUnitChildRo :ast st: symtab unitDecl: ctx.ioUnitDecl nameId: wn).or
+    crid: (
+        (symtab.typing.declChildOfId parentTypeId: cid nameId: zast.wellKnown.slot.wkCreate).or
         d: ztypes.tid.zero
     )
-    if wid.isZero then return "".string
-    if (symtab.reg.typetypeOf typeId: wid) != ztypes.ztypetype.classType then return "".string
-    cco: symtab.typing.declChildOfId parentTypeId: wid nameId: zast.wellKnown.slot.wkCreate
-    cid: ztypes.tid
-    if cco.some then {
-        cid = cco
-    }
-    if cid.isZero then return "".string
-    demandMethodRow :symtab :ctx mfid: cid
+    if crid.isZero then return "".string
+    demandMethodRow :symtab :ctx mfid: crid
     pnames: List String
     pids: ListVal ztypes.tid
     pidsNm: ListVal zast.nameid
-    recFieldLists :ast :symtab tid: cid names: pnames ids: pids nameIds: pidsNm
+    recFieldLists :ast :symtab tid: crid names: pnames ids: pids nameIds: pidsNm
     pn: pnames.length
     wbase: orderPositions :ast :ctx :call nameIds: pidsNm labelsOnly: true
     ord: orderBegin :ctx slots: pn
@@ -47102,11 +47024,12 @@ emitIoWrapperCreate: function {
         mk: pendingHoistMark :ctx
         astrF: cfacts
         astr: (
-            wrapperCreateArg
+            nativeCreateArg
             :ast
             :symtab
             :ctx
             :call
+            create: crid
             label: (pidsNm.get i: pi)
             ptid: (pids.get i: pi)
             facts: astrF
@@ -47130,8 +47053,8 @@ emitIoWrapperCreate: function {
     oprefix: orderFinish :ctx st: ord
     args: orderJoinSlots :ctx st: ord count: pn
     orderEnd :ctx st: ord
-    wcn: spelledCname :ctx tid: wid
-    typeUseAdd :ctx tid: wid
+    wcn: spelledCname :ctx tid: cid
+    typeUseAdd :ctx tid: cid
     wcn.append "_create"
     return (
         stating
@@ -47615,81 +47538,6 @@ viaBoxArg: function {
     }
     noteOwnedBoxUse :ctx implTid: paramTid protoTid: targetTid
     return "\{spelledCname :ctx tid: paramTid}_\{lbl}_create_owned(\{addr})"
-}
-
-# emitCliSpecCreate -- `cli.Spec.create programName: ... summary: ...` ->
-# z_t{id}_Spec_create(<args in param order>). "" for any non-cli-create callee.
-emitCliSpecCreate: function {
-    ast: Ast.view
-    symtab: zenv.ZSymbolTable.view
-    ctx: Ctx
-    call: zast.callrow.view
-    facts: cfacts.borrow
-} out String is {
-    cn: (
-        unitCreateMemberId
-        :ast
-        :symtab
-        n: (ast.nodes.get i: call.callable)
-        unitDecl: ctx.cliUnitDecl
-    )
-    if cn.isZero then return "".string
-    cid: cliClassTypeId :symtab :ctx nameId: cn
-    if cid.isZero then return "".string
-    cco: symtab.typing.declChildOfId parentTypeId: cid nameId: zast.wellKnown.slot.wkCreate
-    crid: ztypes.tid
-    if cco.some then {
-        crid = cco
-    }
-    if crid.isZero then return "".string
-    # a project unit can replace `cli` (a user unit shadows the stdlib), so ask
-    # the resolved `create` its own declaration: the stdlib's is `is native`,
-    # a fragment supplies the body, and the parameters laid out below are its.
-    # A user's bodied create is not that one.
-    if (symtab.reg.isNativeOf tid: crid).not then return "".string
-    pnames: List String
-    pids: ListVal ztypes.tid
-    pidsNm: ListVal zast.nameid
-    recFieldLists :ast :symtab tid: crid names: pnames ids: pids nameIds: pidsNm
-    pn: pnames.length
-    wbase: orderPositions :ast :ctx :call nameIds: pidsNm labelsOnly: true
-    ord: orderBegin :ctx slots: pn
-    k: u64
-    for k < pn loop {
-        pi: orderNextParam :ctx base: wbase
-        k = k + 1
-        mk: pendingHoistMark :ctx
-        astrF: cfacts
-        astr: ctorArgByLabelWith :ast :symtab :ctx :call label: (pidsNm.get i: pi) facts: astrF
-        anid: ctorArgNodeByLabel :ast :call label: (pidsNm.get i: pi)
-        (
-            orderArgAtWith
-            :ast
-            :symtab
-            :ctx
-            st: ord
-            mark: mk
-            text: astr
-            tf: astrF
-            nid: anid
-            byPtr: false
-            slot: pi
-        )
-    }
-    orderDropPositions :ctx base: wbase
-    oprefix: orderFinish :ctx st: ord
-    args: orderJoinSlots :ctx st: ord count: pn
-    orderEnd :ctx st: ord
-    crr: rowOfFn :symtab :ctx fid: crid
-    if crr > 0 then demandNativeRow :ctx row: crr
-    ccb: spelledCname :ctx tid: cid
-    ccb.append "_create"
-    return (
-        stating
-        :facts
-        from: callFacts
-        text: (orderClose prefix: oprefix callee: ccb.stringView args: args.stringView)
-    )
 }
 
 # emitResultCombinator -- inline lowering of the built-in combinators `.orPanic`
