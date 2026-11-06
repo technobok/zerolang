@@ -435,19 +435,16 @@ WalkState: class {
     # argument is judged by the lock the call takes on it, not by the
     # field-read rule
     callArgNode: zast.nodeid
-    # the pending borrow came from an `out T.view` return, so the binding it
-    # lands on is READONLY as well as pinned.
-    pendingBorrowReadonly: bool
+    # the marker on the return the pending result came from. `.view`: the
+    # binding it lands on is READONLY as well as pinned. `.hold`: the binding
+    # is READONLY while staying OWNED -- a property of the value, not of a
+    # reference, so it holds where the binding did not come out borrowed.
+    pendingMarker: ztypes.zparamownership
     # the pending pins came from an owned `outx` return: the SOURCES are pinned
     # for the binding's life, but the binding itself stays OWNED -- it carries a
     # destructor and may be moved. Without this the pin would demote it to a
     # borrow, which is what `borrow`/`view` mean and an owned `outx` does not.
     pendingBorrowOwned: bool
-    # the pending result came from a `.hold`-marked return, so the binding it
-    # lands on is READONLY while staying OWNED. Orthogonal to
-    # pendingBorrowReadonly, which applies only to a binding that came out
-    # BORROWED and so can never describe this one.
-    pendingBorrowFrozen: bool
     # namespace / subunit bodies the demand path owes a walk, and the unit
     # ops already walked -- a subunit of the MAIN unit is walked by the main
     # tree walk and must not be walked twice.
@@ -805,9 +802,8 @@ newWalkState: function out WalkState is {
         currentReturnsNothing: false
         pendingPins: List ztyping.PinPath
         callArgNode: zast.nodeid
-        pendingBorrowReadonly: false
+        pendingMarker: ztypes.zparamownership.noneMode
         pendingBorrowOwned: false
-        pendingBorrowFrozen: false
         nsBodiesOwed: ListVal ztyping.nsbody
         nsBodiesWalked: IdSet zast.nodeid
         nsConstsWalked: IdSet zast.nodeid

@@ -31558,7 +31558,7 @@ checkMemberAutoCall: function {
         aShr: callReadsReceiver :st mid: mo nid: dp.nid
         # a receiver that is a `.view` result is read-only, written as a member
         # read (`(xs.get i: 0).pop`) exactly as written as a call
-        if aShr.not when st.walk.pendingBorrowReadonly when (
+        if aShr.not when st.walk.pendingMarker == ztypes.zparamownership.viewMode when (
             dottedBaseIsValue
             :st
             :ast
@@ -35766,7 +35766,7 @@ checkBorrowResultSource: function {
     cid: zast.nodeid
 } is {
     if cid.isZero.not then {
-        if st.walk.pendingBorrowReadonly then {
+        if st.walk.pendingMarker == ztypes.zparamownership.viewMode then {
             (
                 addError
                 :st
@@ -38081,15 +38081,15 @@ checkAssignmentIn: function {
         # value that aliases nothing, so it must not inherit the restriction.
         # `own` already draws exactly that line: the pin transfers only to a
         # binding that the borrow actually flowed into.
+        pending: st.walk.pendingMarker
         roRef: false
-        if own == ztypes.zownership.borrowed then roRef = st.walk.pendingBorrowReadonly
+        if own == ztypes.zownership.borrowed then roRef = pending == ztypes.zparamownership.viewMode
         # An `out T.hold` result is readonly for a different reason: it is
         # OWNED, so it can never satisfy the borrowed gate above, and the
         # freeze is a property of the value rather than of a reference into
         # someone else's. Both end at the same self-lock below.
-        if st.walk.pendingBorrowFrozen then roRef = true
-        st.walk.pendingBorrowReadonly = false
-        st.walk.pendingBorrowFrozen = false
+        if pending == ztypes.zparamownership.holdMode then roRef = true
+        st.walk.pendingMarker = ztypes.zparamownership.noneMode
         # the block bound the name before this statement began
         redefined: grey.isZero and asgn.name.isZero.not
         if redefined then {
@@ -38736,10 +38736,9 @@ checkRepoint: function {
         (st.walk.pendingBorrowOwned and isView.not) or
         (isView and (isAddressableTarget :ast :st nid: rasgn.value).not)
     )
-    roV: st.walk.pendingBorrowReadonly
+    roV: st.walk.pendingMarker == ztypes.zparamownership.viewMode
     st.walk.pendingBorrowOwned = false
-    st.walk.pendingBorrowReadonly = false
-    st.walk.pendingBorrowFrozen = false
+    st.walk.pendingMarker = ztypes.zparamownership.noneMode
     if owned then {
         repointOwned :st :ast :rasgn :xVid pins: bpins
         return
@@ -42947,24 +42946,16 @@ readReturnsBorrow: function {st: zenv.ZSymbolTable.view nid: zast.nodeid} out bo
 # then the arguments' in order).
 drainPendingBorrow: function {st: zenv.ZSymbolTable} is {
     for st.walk.pendingPins.length > 0 loop st.walk.pendingPins.pop
-    st.walk.pendingBorrowReadonly = false
+    st.walk.pendingMarker = ztypes.zparamownership.noneMode
     st.walk.pendingBorrowOwned = false
-    st.walk.pendingBorrowFrozen = false
 }
 
-# takePendingPins -- move the pending pins into `dst`, keeping the result
-# flags (readonly / owned / frozen) that describe the value they came with.
+# takePendingPins -- move the pending pins into `dst`, keeping what describes
+# the value they came with (the marker, whether it stays owned).
 takePendingPins: function {st: zenv.ZSymbolTable dst: List ztyping.PinPath} is {
     rev: List ztyping.PinPath
     for st.walk.pendingPins.length > 0 loop rev.append st.walk.pendingPins.pop
     for rev.length > 0 loop dst.append rev.pop
-    ro: st.walk.pendingBorrowReadonly
-    ow: st.walk.pendingBorrowOwned
-    fz: st.walk.pendingBorrowFrozen
-    drainPendingBorrow :st
-    st.walk.pendingBorrowReadonly = ro
-    st.walk.pendingBorrowOwned = ow
-    st.walk.pendingBorrowFrozen = fz
 }
 
 # pinsAppend -- record one pin in `pins`: a copy of `path` at `shared`
@@ -43468,7 +43459,7 @@ takeValueReceiver: function {
     # a receiver that is a `.view` result is read-only: a method that writes its
     # receiver cannot take one, as no `.borrow` can be lent from it. Read before
     # the capture, which drains the flag with pins the call does not keep
-    rvRo: st.walk.pendingBorrowReadonly
+    rvRo: st.walk.pendingMarker == ztypes.zparamownership.viewMode
     rvT: captureValueReceiver :st :ast :unitDecl :call :funcId :pins
     if rvRo when (callReadsReceiver :st mid: funcId nid: call.nid).not then {
         (
@@ -43884,18 +43875,14 @@ pinCallResult: function {
             pinsPush :st path: p.path shared: p.shared mutable: p.mutable
         }
         if isRef.not then st.walk.pendingBorrowOwned = true
-        if marker == ztypes.zparamownership.viewMode then {
-            st.walk.pendingBorrowReadonly = true
-        }
+        if marker == ztypes.zparamownership.viewMode then st.walk.pendingMarker = marker
     } else {
         # the locks a moved-in argument carried travel to the result whatever
         # the callee declares
         pushCarriedPins :st :pins
     }
     # `hold`: owned and READONLY with no pin, so it is set after the drain
-    if marker == ztypes.zparamownership.holdMode then {
-        st.walk.pendingBorrowFrozen = true
-    }
+    if marker == ztypes.zparamownership.holdMode then st.walk.pendingMarker = marker
 }
 
 # pushCarriedPins -- the locks moved-in values carried travel to the result
