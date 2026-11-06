@@ -13,14 +13,9 @@ public: unit {
     :UserImplementation
     :isServedUnit
     # the C-backend facts the numeric conversion rule (znativecheck) is built from
-    :kindBits
     :kindCType
     :kindHiStr
     :kindLoStr
-    :kindIsFloat
-    :kindMantissa
-    :kindSigned
-    :convNeedsHi
     :convRangeCond
 }
 
@@ -410,8 +405,6 @@ cnameById: function {tid: ztypes.tid} out String is {
 kindfacts: data {
     # the C type the kind is spelled as
     ctype: text
-    # an integer kind's width in bits; 0 for a float
-    bits: u64
     # the lower bound a narrowing check compares with, as C; "0" where no
     # check reads one
     lo: text
@@ -421,64 +414,37 @@ kindfacts: data {
     # the C literal suffix that keeps a large constant of an unsigned kind
     # unsigned
     suffix: text
-    # a float kind's significand width; 0 for an integer
-    mantissa: u64
 }
 
 # kindFacts -- each scalar kind's C facts
 kindFacts: list {
-    i8Type: (kindfacts ctype: "int8_t" bits: 8 lo: "-128" hi: "127" suffix: "" mantissa: 0)
-    i16Type: (kindfacts ctype: "int16_t" bits: 16 lo: "-32768" hi: "32767" suffix: "" mantissa: 0)
-    i32Type: (
-        kindfacts
-        ctype: "int32_t"
-        bits: 32
-        lo: "(-2147483647 - 1)"
-        hi: "2147483647"
-        suffix: ""
-        mantissa: 0
-    )
+    i8Type: (kindfacts ctype: "int8_t" lo: "-128" hi: "127" suffix: "")
+    i16Type: (kindfacts ctype: "int16_t" lo: "-32768" hi: "32767" suffix: "")
+    i32Type: (kindfacts ctype: "int32_t" lo: "(-2147483647 - 1)" hi: "2147483647" suffix: "")
     i64Type: (
         kindfacts
         ctype: "int64_t"
-        bits: 64
         lo: "(-9223372036854775807LL - 1)"
         hi: "9223372036854775807"
         suffix: ""
-        mantissa: 0
     )
-    i128Type: (kindfacts ctype: "z_i128" bits: 128 lo: "0" hi: "0" suffix: "" mantissa: 0)
-    u8Type: (kindfacts ctype: "uint8_t" bits: 8 lo: "0" hi: "255" suffix: "" mantissa: 0)
-    u16Type: (kindfacts ctype: "uint16_t" bits: 16 lo: "0" hi: "65535" suffix: "" mantissa: 0)
-    u32Type: (kindfacts ctype: "uint32_t" bits: 32 lo: "0" hi: "4294967295U" suffix: "U" mantissa: 0
-    )
-    u64Type: (
-        kindfacts
-        ctype: "uint64_t"
-        bits: 64
-        lo: "0"
-        hi: "18446744073709551615ULL"
-        suffix: "ULL"
-        mantissa: 0
-    )
-    u128Type: (kindfacts ctype: "z_u128" bits: 128 lo: "0" hi: "0" suffix: "" mantissa: 0)
-    c8Type: (kindfacts ctype: "uint8_t" bits: 8 lo: "0" hi: "255" suffix: "" mantissa: 0)
-    c32Type: (kindfacts ctype: "uint32_t" bits: 32 lo: "0" hi: "4294967295U" suffix: "U" mantissa: 0
-    )
-    f16Type: (kindfacts ctype: "z_f16" bits: 0 lo: "0" hi: "0" suffix: "" mantissa: 11)
-    f32Type: (kindfacts ctype: "float" bits: 0 lo: "0" hi: "0" suffix: "" mantissa: 24)
-    f64Type: (kindfacts ctype: "double" bits: 0 lo: "0" hi: "0" suffix: "" mantissa: 53)
-    f128Type: (kindfacts ctype: "__float128" bits: 0 lo: "0" hi: "0" suffix: "" mantissa: 113)
+    i128Type: (kindfacts ctype: "z_i128" lo: "0" hi: "0" suffix: "")
+    u8Type: (kindfacts ctype: "uint8_t" lo: "0" hi: "255" suffix: "")
+    u16Type: (kindfacts ctype: "uint16_t" lo: "0" hi: "65535" suffix: "")
+    u32Type: (kindfacts ctype: "uint32_t" lo: "0" hi: "4294967295U" suffix: "U")
+    u64Type: (kindfacts ctype: "uint64_t" lo: "0" hi: "18446744073709551615ULL" suffix: "ULL")
+    u128Type: (kindfacts ctype: "z_u128" lo: "0" hi: "0" suffix: "")
+    c8Type: (kindfacts ctype: "uint8_t" lo: "0" hi: "255" suffix: "")
+    c32Type: (kindfacts ctype: "uint32_t" lo: "0" hi: "4294967295U" suffix: "U")
+    f16Type: (kindfacts ctype: "z_f16" lo: "0" hi: "0" suffix: "")
+    f32Type: (kindfacts ctype: "float" lo: "0" hi: "0" suffix: "")
+    f64Type: (kindfacts ctype: "double" lo: "0" hi: "0" suffix: "")
+    f128Type: (kindfacts ctype: "__float128" lo: "0" hi: "0" suffix: "")
 } out staticlist kindfacts
 
 # kindCType -- the C type scalar kind `k` is spelled as.
 kindCType: function {k: ztypes.numkind} out StringView is {
     return (kindFacts.get i: k.tag.u64).ctype.stringView
-}
-
-# kindBits -- integer kind `k`'s width in bits; 0 for a float.
-kindBits: function {k: ztypes.numkind} out u64 is {
-    return (kindFacts.get i: k.tag.u64).bits
 }
 
 # kindLoStr / kindHiStr -- kind `k`'s range bounds, as the C a narrowing check
@@ -496,25 +462,6 @@ kindHiStr: function {k: ztypes.numkind} out StringView is {
 # constant is unambiguously unsigned to the C compiler; "" for the others.
 kindLitSuffix: function {k: ztypes.numkind} out StringView is {
     return (kindFacts.get i: k.tag.u64).suffix.stringView
-}
-
-# kindMantissa -- float kind `k`'s significand width; 0 for an integer. A
-# conversion INTO a float is exact only while the source's magnitude fits here.
-kindMantissa: function {k: ztypes.numkind} out u64 is {
-    return (kindFacts.get i: k.tag.u64).mantissa
-}
-
-# kindSigned -- whether `k` is one of the signed integers.
-kindSigned: function {k: ztypes.numkind} out bool is {
-    if (k == ztypes.numkind.i8Type) or (k == ztypes.numkind.i16Type) then return true
-    if (k == ztypes.numkind.i32Type) or (k == ztypes.numkind.i64Type) then return true
-    return k == ztypes.numkind.i128Type
-}
-
-# kindIsFloat -- whether `k` is one of the floats.
-kindIsFloat: function {k: ztypes.numkind} out bool is {
-    if (k == ztypes.numkind.f16Type) or (k == ztypes.numkind.f32Type) then return true
-    return (k == ztypes.numkind.f64Type) or (k == ztypes.numkind.f128Type)
 }
 
 # ordinalVariantCType -- the C scalar a VARIANT lowers to instead of a tag
@@ -666,10 +613,10 @@ isUserStructType: function {tt: ztypes.ztypetype} out bool is {
 # (int128WordsC); "" when `k` is no 128-bit kind or the lexeme is no integer.
 wideLiteralOf: function {ctx: Ctx lex: StringView k: ztypes.suffixinfo} out String is {
     if k.has.not then return "".string
-    if (kindBits k: k.kind) != 128 then return "".string
+    if (ztypes.intKindBits k: k.kind) != 128 then return "".string
     wb: ztypecheck.constLiteralBig :lex
     if wb.some then {
-        return (int128WordsC :ctx b: wb signed: (kindSigned k: k.kind))
+        return (int128WordsC :ctx b: wb signed: (ztypes.isSignedIntKind k: k.kind))
     }
     return "".string
 }
@@ -741,15 +688,6 @@ castLitVal: function {val: StringView dst: ztypes.suffixinfo} out String is {
     }
     if allDig then r.append sfx
     return r
-}
-
-# convNeedsHi -- does the destination have an UPPER bound the source can
-# breach? Same signedness needs only more bits; a signed source into unsigned
-# needs the same, and unsigned into signed needs one more for the sign.
-convNeedsHi: function {ssig: bool dsig: bool sbits: u64 dbits: u64} out bool is {
-    if ssig == dsig then return sbits > dbits
-    if ssig then return sbits > dbits
-    return sbits >= dbits
 }
 
 # convRangeCond -- the C test for an integer conversion FAILING, built from
@@ -11856,10 +11794,10 @@ narrowListIndex: function {
     idx: stampIdOf :symtab nid: call.nodeid
     nk: ztypecheck.numKindOfTid st: symtab tid: (ztypecheck.typedefChaseTid st: symtab tid: idx)
     if nk.has.not then return pos
-    dbits: kindBits k: nk.kind
-    dsig: kindSigned k: nk.kind
+    dbits: ztypes.intKindBits k: nk.kind
+    dsig: ztypes.isSignedIntKind k: nk.kind
     if dbits == 0 then return pos
-    if (convNeedsHi ssig: false :dsig sbits: 64 :dbits).not then return pos
+    if (ztypes.convNeedsHi ssig: false :dsig sbits: 64 :dbits).not then return pos
     ct: typeRefC :ast :symtab :ctx tid: idx
     # the position is read for the bound test and then the conversion
     pre: String
@@ -14958,11 +14896,11 @@ constScalarKindForTid: function {
 # assignment to truncate it the way a binding's C initializer does, so the
 # rendering keeps to the node's type itself.
 narrowConstToKind: function {v: i64 k: ztypes.numkind} out i64 is {
-    b: kindBits :k
+    b: ztypes.intKindBits :k
     if (b == 0) or (b >= 64) then return v
     span: 1 << (b.i64.or d: 0)
     t: v & (span - 1)
-    if (kindSigned :k) when t >= (span / 2) then return t - span
+    if (ztypes.isSignedIntKind :k) when t >= (span / 2) then return t - span
     return t
 }
 
@@ -15100,8 +15038,8 @@ intCvalText: function {
     v: ztypes.cval
 } out String is {
     nk: constScalarKindForTid :symtab :tid
-    if nk.has when (kindBits k: nk.kind) == 128 then {
-        sg: kindSigned k: nk.kind
+    if nk.has when (ztypes.intKindBits k: nk.kind) == 128 then {
+        sg: ztypes.isSignedIntKind k: nk.kind
         if v.bigId != 0 then return (
             int128WordsC
             :ctx
@@ -17820,7 +17758,7 @@ scalarZeroC: function {
 partIsHelperScalar: function {symtab: zenv.ZSymbolTable.view tid: ztypes.tid} out bool is {
     nk: constScalarKindForTid :symtab :tid
     if nk.has.not then return false
-    return ((kindBits k: nk.kind) == 128) or (nk.kind == ztypes.numkind.f16Type)
+    return ((ztypes.intKindBits k: nk.kind) == 128) or (nk.kind == ztypes.numkind.f16Type)
 }
 
 # emitDefRefAtom -- a bare atom that names a DEFINITION rather than a local: a
@@ -23064,7 +23002,7 @@ appendStringPart: function {
 interpPartIsInt: function {
     symtab: zenv.ZSymbolTable.view tid: ztypes.tid nk: ztypes.suffixinfo
 } out bool is {
-    if nk.has then return (kindIsFloat k: nk.kind).not
+    if nk.has then return (ztypes.isFloatKind k: nk.kind).not
     if tid.isZero then return false
     if (isOrdinalVariant :symtab :tid) then return true
     return (symtab.reg.typetypeOf typeId: tid) == ztypes.ztypetype.tagType
@@ -23185,7 +23123,9 @@ interpScalarPart: function {
         needsAddM :ctx uname: "prelude" memb: "fmt64"
         fmtFn: "z_fmt_i64"
         cast: "int64_t"
-        if nk.has when (kindSigned k: nk.kind).not when (kindBits k: nk.kind) == 64 then {
+        if nk.has when (ztypes.isSignedIntKind k: nk.kind).not when (
+            (ztypes.intKindBits k: nk.kind) == 64
+        ) then {
             fmtFn = "z_fmt_u64"
             cast = "uint64_t"
             preludeNeed :ctx memb: "@fmt_u64"
@@ -23219,7 +23159,7 @@ interpScalarPart: function {
             :buf
             :ops
         )
-    } else if nk.has when (kindIsFloat k: nk.kind) then {
+    } else if nk.has when (ztypes.isFloatKind k: nk.kind) then {
         # an f16 is read as the float it widens to: its value need be no C
         # arithmetic type
         fv: val.string
@@ -29764,7 +29704,11 @@ emitCountedRangeFor: function {
     mN: tmpNext :ctx :tmp
     fn: "_fn\{mN}"
     rk: ztypecheck.numKindOfTid st: symtab tid: rtR
-    cnt: countRangeCountExpr signed: rk.has and (kindSigned k: rk.kind) bound: bound.stringView
+    cnt: (
+        countRangeCountExpr
+        signed: rk.has and (ztypes.isSignedIntKind k: rk.kind)
+        bound: bound.stringView
+    )
     # the temporaries the count's expression recorded are declared ahead of it
     flushArgHoists :ctx :ind :tmp :buf
     d0: "\{ind}uint64_t \{fn} = \{cnt};\n"
@@ -38699,7 +38643,7 @@ elemEqIsBytes: function {ast: Ast.view symtab: zenv.ZSymbolTable.view tid: ztype
     if src.builtin.not then return false
     if (partIsCScalar :symtab :tid).not then return false
     nk: constScalarKindForTid :symtab :tid
-    return (nk.has and (kindIsFloat k: nk.kind)).not
+    return (nk.has and (ztypes.isFloatKind k: nk.kind)).not
 }
 
 # capLenT -- the C length-field type for a str mono of the given capacity:
@@ -49137,7 +49081,7 @@ partEqC: function {
             needsAddM :ctx uname: "prelude" memb: "f16"
             preludeNeed :ctx memb: "@f16_eq"
             dest.append "z_f16_eq("
-        } else if (kindSigned k: hk) then {
+        } else if (ztypes.isSignedIntKind k: hk) then {
             needsAddM :ctx uname: "prelude" memb: "int128"
             preludeNeed :ctx memb: "@i128_eq"
             dest.append "z_i128_eq("
@@ -49207,12 +49151,12 @@ partHashWords: function {
     }
     if (partIsCScalar :symtab tid: base) then {
         hbk: ztypecheck.numKindOfTid st: symtab tid: base
-        if hbk.has when (kindBits k: hbk.kind) == 128 then {
+        if hbk.has when (ztypes.intKindBits k: hbk.kind) == 128 then {
             # its two words, through the int128 helpers: the value is no C
             # arithmetic type where the C compiler has no 128-bit integer
             needsAddM :ctx uname: "prelude" memb: "int128"
             hbits: v.string
-            if (kindSigned k: hbk.kind) then {
+            if (ztypes.isSignedIntKind k: hbk.kind) then {
                 preludeNeed :ctx memb: "@i128_bits"
                 hbits = "z_i128_bits(\{v})"
             }
