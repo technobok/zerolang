@@ -4703,6 +4703,26 @@ refuseStaticWrite: function {st: zenv.ZSymbolTable ast: Ast target: zast.nodeid}
     return false
 }
 
+# refuseSingletonWrite -- a slot typed by a numeric parameter's singleton type
+# holds that type's one value: no write gives it another, nor the same one again.
+# True when it reported.
+refuseSingletonWrite: function {st: zenv.ZSymbolTable ast: Ast target: zast.nodeid} out bool is {
+    tt: walkTypeOf :st nid: target
+    if (st.typing.isSingletonType tid: tt).not then return false
+    tn: ast.nodes.get i: target
+    tw: specWrittenName :st :ast tid: tt
+    (
+        addError
+        :st
+        nodeid: target
+        lineno: (nodeLine n: tn)
+        colno: (nodeCol n: tn)
+        e: zast.err.typeError
+        msg: "this cannot be written: its type, '\{tw}', has only one value"
+    )
+    return true
+}
+
 # refuseNonGenericApplication -- a type application whose head is no generic
 # template names nothing: an instance of a type with no parameters is not a
 # type. True, with the error laid at the head, when `tplId` is not generic;
@@ -29139,7 +29159,7 @@ numericArgFold: function {
         renderConstFail :st :f
         return (argfold v: ztypes.noConst reported: true)
     }
-    return (argfold :v reported: false)
+    return (argfold v: (singletonAsBound :st :v) reported: false)
 }
 
 # numericArgHasInteger -- whether the argument's value is an integer, reporting
@@ -33455,13 +33475,16 @@ checkNumericParamMember: function {
         return (callleg handled: true tid: ztypes.tid)
     }
     if origin.isZero.not when (st.reg.isPartialOf tid: bt).not then {
-        v: st.typing.memberConstOf parentTypeId: bt nameId: cnId
+        v: monoNumericArg :st mono: bt nameId: cnId
         if v.kind.none.not then (
             st.typing.setNodeConstIn
             mono: st.typing.curMonoStamp
             nid: dp.nid
             value: v
         )
+        # an instance's parameter is its singleton type
+        sg: st.typing.singletonOf instance: bt param: cnId
+        if sg.isZero.not then bound = sg
     }
     stampGate :st nid: dp.nid tid: bound
     (
@@ -37093,6 +37116,9 @@ checkNumericParamAtom: function {
     cd: st.reg.genericParamConstraintOf tdecl: owner paramName: node.name
     bt: numericBoundTid :ast :st scope: st.curScope :cd
     if bt.isZero then return ztypes.tid
+    # an instance's walk reads the parameter as its singleton type
+    sg: monoSingletonOf :st nameId: node.name
+    if sg.isZero.not then bt = sg
     stampGate :st nid: node.nid tid: bt
     (
         stampRefDecl
@@ -38811,7 +38837,15 @@ checkReassignment: function {
         checkMovedValueAt :st :unitDecl :ast nid: rasgn.value owning: false
         return
     }
-    if (refuseStaticWrite :st :ast target: rasgn.topath) then {
+    if (
+        (refuseStaticWrite :st :ast target: rasgn.topath) or
+        (
+            refuseSingletonWrite
+            :st
+            :ast
+            target: rasgn.topath
+        )
+    ) then {
         checkMovedValueAt :st :unitDecl :ast nid: rasgn.value owning: false
         return
     }
@@ -39654,6 +39688,7 @@ checkSwapSide: function {
         reportNotAddressable :st :ast target: side write: "swap"
         return none
     }
+    if (refuseSingletonWrite :st :ast target: side) then return none
     errW: st.typing.errors.length
     checkWriteLock :st :ast n: (ast.nodes.get i: side) verb: "swap" moving: false
     if st.typing.errors.length != errW then return none
@@ -43932,9 +43967,9 @@ namesTypeApplication: function {
 }
 
 # receiverIsValue -- whether a dotted base is a value no variable holds: a call,
-# a function a bare name or a path auto-calls, or any other expression (a
-# literal, an interpolation, a value if). A name for a variable, a unit or a
-# type is not one.
+# a function a bare name or a path auto-calls, a numeric generic parameter's
+# value, or any other expression (a literal, an interpolation, a value if). A
+# name for a variable, a unit or a type is not one.
 receiverIsValue: function {
     st: zenv.ZSymbolTable
     ast: Ast
@@ -43946,7 +43981,9 @@ receiverIsValue: function {
     bn: ast.nodes.get i: nid
     isName = bn.atomid
     isPath = bn.dottedpath
-    if isName then return (baseRunsCall :st :ast :nid)
+    if isName then return (
+        (baseRunsCall :st :ast :nid) or (st.typing.numericParamRead.get key: nid).some
+    )
     if (namesTypeApplication :st :ast :unitDecl :nid) then return false
     if isPath.not then return true
     rdo: st.typing.refDecl.get key: nid
@@ -63847,9 +63884,9 @@ constOfBinop: function {
     opId: br.operator
     ln: br.lineno
     co: br.colno
-    lv: evalConstNode :st :scope :ast :unitDecl nid: lhsId
+    lv: singletonAsBound :st v: (evalConstNode :st :scope :ast :unitDecl nid: lhsId)
     if lv.kind.none then return ztypes.noConst
-    rv: evalConstNode :st :scope :ast :unitDecl nid: rhsId
+    rv: singletonAsBound :st v: (evalConstNode :st :scope :ast :unitDecl nid: rhsId)
     if rv.kind.none then return ztypes.noConst
     opnId: atomNameId :ast n: (ast.nodes.get i: opId)
     if opnId.isZero then return ztypes.noConst
@@ -64981,7 +65018,7 @@ constFitNumber: function {
     }
     r: v
     bn: nameIdOf :ast name: (st.reg.nameOf tid: base).stringView
-    cv: constOfConversion :st :scope :ast :v targetId: bn nid: at :ln :co
+    cv: constOfConversion :st :scope :ast v: (singletonAsBound :st :v) targetId: bn nid: at :ln :co
     if cv.kind.none.not then r = cv
     return (ztypes.typedConst c: r numTid: ftid)
 }
@@ -65262,7 +65299,7 @@ constOfNamedBase: function {
                 :st
                 :scope
                 :ast
-                v: lit
+                v: (singletonAsBound :st v: lit)
                 targetId: ncId
                 nid: atNid
                 ln: atLine
@@ -65349,7 +65386,7 @@ constOfNamedBase: function {
         if pcv.kind.ivalKind when ncId == zast.wellKnown.slot.wkNot then return (
             constIntNot
             :st
-            v: pcv
+            v: (singletonAsBound :st v: pcv)
         )
         if pcv.kind.ivalKind or pcv.kind.fvalKind then {
             return (
@@ -65357,7 +65394,7 @@ constOfNamedBase: function {
                 :st
                 :scope
                 :ast
-                v: pcv
+                v: (singletonAsBound :st v: pcv)
                 targetId: ncId
                 nid: atNid
                 ln: atLine
@@ -65687,9 +65724,23 @@ evalConstDotted: function {
             colno: co
         )
     }
-    if pv.kind.ivalKind when ncId == zast.wellKnown.slot.wkNot then return (constIntNot :st v: pv)
+    if pv.kind.ivalKind when ncId == zast.wellKnown.slot.wkNot then return (
+        constIntNot
+        :st
+        v: (singletonAsBound :st v: pv)
+    )
     if pv.kind.ivalKind or pv.kind.fvalKind then {
-        return (constOfConversion :st :scope :ast v: pv targetId: ncId :nid :ln :co)
+        return (
+            constOfConversion
+            :st
+            :scope
+            :ast
+            v: (singletonAsBound :st v: pv)
+            targetId: ncId
+            :nid
+            :ln
+            :co
+        )
     }
     # `io.filekind.dir` -- an arm of a type reached THROUGH its unit.
     # The parent is a dotted path of its own, so the type must be looked up
@@ -65876,11 +65927,36 @@ monoNumericParamValue: function {
     return (monoNumericArg :st mono: own :nameId)
 }
 
+# monoSingletonOf -- in a mono's walk, the singleton type a bare name is when
+# it names a numeric generic parameter of the mono's template, or -- in the walk
+# of a unit function's own instance -- of the unit's (walkOwnerMono); 0 for any
+# other name or walk.
+monoSingletonOf: function {st: zenv.ZSymbolTable.view nameId: zast.nameid} out ztypes.tid is {
+    m: st.walk.constMono
+    if m.isZero then m = st.typing.curMonoStamp
+    if m.isZero then return ztypes.tid
+    s: st.typing.singletonOf instance: m param: nameId
+    if s.isZero.not or st.walk.constMono.isZero.not then return s
+    return (st.typing.singletonOf instance: (walkOwnerMono :st) param: nameId)
+}
+
+# singletonAsBound -- a constant typed as a numeric parameter's singleton type,
+# as its bound's: the singleton's members are the bound's, so an operation on
+# it folds as the bound's does (`cap * 2` is a u32) and a conversion converts
+# from the bound.
+singletonAsBound: function {st: zenv.ZSymbolTable.view v: ztypes.cval} out ztypes.cval is {
+    if (st.typing.isSingletonType tid: v.numTid).not then return v
+    return (ztypes.typedConst c: v numTid: (st.typing.typedefBaseTidOf tid: v.numTid))
+}
+
 # monoNumericArg -- the value mono `mono` was made with for its template's
-# numeric generic parameter `nameId`; none when that is no such parameter.
+# numeric generic parameter `nameId`, typed as the parameter's singleton type
+# when the mono has one; none when that is no such parameter.
 monoNumericArg: function {
     st: zenv.ZSymbolTable.view mono: ztypes.tid nameId: zast.nameid
 } out ztypes.cval is {
+    sg: st.typing.singletonOf instance: mono param: nameId
+    if sg.isZero.not then return (st.typing.singletonValueOf tid: sg)
     origin: st.reg.genericOriginOf tid: mono
     if origin.isZero then return ztypes.noConst
     tdecl: templateDeclOf reg: st.reg typing: st.typing tid: origin

@@ -42,44 +42,44 @@ reasonOf: function {code: i64} out decerror is {
 # ---- the native tiers: coefficients in i64 ----
 
 # pow10 -- 10^k for k at most 18
-pow10: function {k: u64} out i64 is {
+pow10: function {k: u8} out i64 is {
     return (tens.get k)
 }
 
 # invalid64 -- the invalid coefficient for `why`, in a tier of maxDigits
-invalid64: function {maxDigits: u64 why: decerror} out i64 is {
+invalid64: function {maxDigits: u8 why: decerror} out i64 is {
     return (pow10 k: maxDigits) + (reasonCode :why)
 }
 
 # isInvalid64 -- the coefficient has p digits or more: |c| >= 10^p
-isInvalid64: function {c: i64 p: u64} out bool is {
+isInvalid64: function {c: i64 p: u8} out bool is {
     b: pow10 k: p
     return (c >= b) or (c <= (0 - b))
 }
 
 # reason64 -- why an invalid coefficient is invalid
-reason64: function {c: i64 maxDigits: u64} out decerror is {
+reason64: function {c: i64 maxDigits: u8} out decerror is {
     m: c
     if m < 0 then m = 0 - m
     return (reasonOf code: m - (pow10 k: maxDigits))
 }
 
 # fit64 -- c when it holds at most p digits, else the overflow coefficient
-fit64: function {c: i64 p: u64 maxDigits: u64} out i64 is {
+fit64: function {c: i64 p: u8 maxDigits: u8} out i64 is {
     if (isInvalid64 :c :p) then return (invalid64 :maxDigits why: decerror.overflow)
     return c
 }
 
 # add64 -- a + b at p digits; an invalid operand answers itself. Two
 # coefficients below 10^18 sum below 2*10^18, so i64 never wraps here
-add64: function {a: i64 b: i64 p: u64 maxDigits: u64} out i64 is {
+add64: function {a: i64 b: i64 p: u8 maxDigits: u8} out i64 is {
     if (isInvalid64 c: a :p) then return a
     if (isInvalid64 c: b :p) then return b
     return (fit64 c: a + b :p :maxDigits)
 }
 
 # sub64 -- a - b at p digits, as add64
-sub64: function {a: i64 b: i64 p: u64 maxDigits: u64} out i64 is {
+sub64: function {a: i64 b: i64 p: u8 maxDigits: u8} out i64 is {
     if (isInvalid64 c: a :p) then return a
     if (isInvalid64 c: b :p) then return b
     return (fit64 c: a - b :p :maxDigits)
@@ -88,7 +88,7 @@ sub64: function {a: i64 b: i64 p: u64 maxDigits: u64} out i64 is {
 # wholeFits64 -- whether an integer has room before the point: at most p - s
 # digits. Asked with the parameters as values, so an instance whose scale passes
 # its precision is refused by its own check, not by a constant that wraps first
-wholeFits64: function {v: i64 p: u64 s: u64} out bool is {
+wholeFits64: function {v: i64 p: u8 s: u8} out bool is {
     if s > p then return false
     return (isInvalid64 c: v p: p - s).not
 }
@@ -110,7 +110,7 @@ roundsUp: function {q: u64 r: u64 d: u64} out bool is {
 
 # divRound64 -- (hi:lo) / d rounded half-even, as the coefficient of sign `neg`
 # at p digits: overflow when the quotient has p digits or more
-divRound64: function {hi: u64 lo: u64 d: u64 neg: bool p: u64 maxDigits: u64} out i64 is {
+divRound64: function {hi: u64 lo: u64 d: u64 neg: bool p: u8 maxDigits: u8} out i64 is {
     # a quotient of 2^64 or more is past every precision
     if hi >= d then return (invalid64 :maxDigits why: decerror.overflow)
     qr: hi.divWide :lo by: d
@@ -127,7 +127,7 @@ divRound64: function {hi: u64 lo: u64 d: u64 neg: bool p: u64 maxDigits: u64} ou
 # mul64 -- a * b with s digits after the point: the product of the
 # coefficients, up to 36 digits in two words, divided by 10^s and rounded
 # half-even
-mul64: function {a: i64 b: i64 s: u64 p: u64 maxDigits: u64} out i64 is {
+mul64: function {a: i64 b: i64 s: u8 p: u8 maxDigits: u8} out i64 is {
     if (isInvalid64 c: a :p) then return a
     if (isInvalid64 c: b :p) then return b
     w: (magnitude64 c: a).mulWide rhs: (magnitude64 c: b)
@@ -145,7 +145,7 @@ mul64: function {a: i64 b: i64 s: u64 p: u64 maxDigits: u64} out i64 is {
 # div64 -- a / b with s digits after the point: a's coefficient scaled by 10^s,
 # up to 36 digits, divided by b's and rounded half-even; division by zero when b
 # is 0
-div64: function {a: i64 b: i64 s: u64 p: u64 maxDigits: u64} out i64 is {
+div64: function {a: i64 b: i64 s: u8 p: u8 maxDigits: u8} out i64 is {
     if (isInvalid64 c: a :p) then return a
     if (isInvalid64 c: b :p) then return b
     if b == 0 then return (invalid64 :maxDigits why: decerror.divisionByZero)
@@ -155,7 +155,7 @@ div64: function {a: i64 b: i64 s: u64 p: u64 maxDigits: u64} out i64 is {
 
 # compare64 -- the order of two valid coefficients as -1, 0 or 1; an invalid one
 # panics, since it has no place in the order
-compare64: function {a: i64 b: i64 p: u64} out i32 is {
+compare64: function {a: i64 b: i64 p: u8} out i32 is {
     if (isInvalid64 c: a :p) or (isInvalid64 c: b :p) then (
         panic
         msg: "an invalid decimal has no order"
@@ -166,7 +166,7 @@ compare64: function {a: i64 b: i64 p: u64} out i32 is {
 }
 
 # equal64 -- the two coefficients are the same decimal: equal, or both invalid
-equal64: function {a: i64 b: i64 p: u64} out bool is {
+equal64: function {a: i64 b: i64 p: u8} out bool is {
     ia: isInvalid64 c: a :p
     ib: isInvalid64 c: b :p
     if ia or ib then return ia and ib
@@ -174,13 +174,13 @@ equal64: function {a: i64 b: i64 p: u64} out bool is {
 }
 
 # hash64 -- a hash that agrees with equal64: every invalid alike
-hash64: function {c: i64 p: u64} out u64 is {
+hash64: function {c: i64 p: u8} out u64 is {
     if (isInvalid64 :c :p) then return 0
     return ((14695981039346656037.u64 ^ c.bits).mulWide rhs: 1099511628211).lo
 }
 
 # fromBig64 -- a BigInt coefficient at p digits, overflow past them
-fromBig64: function {c: bigint.BigInt.view p: u64 maxDigits: u64} out i64 is {
+fromBig64: function {c: bigint.BigInt.view p: u8 maxDigits: u8} out i64 is {
     v: c.i64
     match v case ok then return (fit64 c: v :p :maxDigits) case err then null
     return (invalid64 :maxDigits why: decerror.overflow)
@@ -189,7 +189,7 @@ fromBig64: function {c: bigint.BigInt.view p: u64 maxDigits: u64} out i64 is {
 # ---- the limb tiers, and what every tier reads through BigInt ----
 
 # powBig -- 10^k as a BigInt
-powBig: function {k: u64} out bigint.BigInt is {
+powBig: function {k: u8} out bigint.BigInt is {
     r: bigint.BigInt from: 1
     ten: bigint.BigInt from: 10
     i: u64
@@ -201,30 +201,30 @@ powBig: function {k: u64} out bigint.BigInt is {
 }
 
 # invalidBig -- the invalid coefficient for `why`, in a tier of maxDigits
-invalidBig: function {maxDigits: u64 why: decerror} out bigint.BigInt is {
+invalidBig: function {maxDigits: u8 why: decerror} out bigint.BigInt is {
     return (powBig k: maxDigits) + (bigint.BigInt from: (reasonCode :why))
 }
 
 # isInvalidBig -- the coefficient has p digits or more
-isInvalidBig: function {c: bigint.BigInt.view p: u64} out bool is {
+isInvalidBig: function {c: bigint.BigInt.view p: u8} out bool is {
     return (c.abs.compare rhs: (powBig k: p)) >= 0
 }
 
 # reasonBig -- why an invalid coefficient is invalid
-reasonBig: function {c: bigint.BigInt.view maxDigits: u64} out decerror is {
+reasonBig: function {c: bigint.BigInt.view maxDigits: u8} out decerror is {
     d: c.abs - (powBig k: maxDigits)
     return (reasonOf code: d.i64.orPanic)
 }
 
 # fitBig -- c when it holds at most p digits, else the overflow coefficient
-fitBig: function {c: bigint.BigInt.take p: u64 maxDigits: u64} out bigint.BigInt is {
+fitBig: function {c: bigint.BigInt.take p: u8 maxDigits: u8} out bigint.BigInt is {
     if (isInvalidBig :c :p) then return (invalidBig :maxDigits why: decerror.overflow)
     return c
 }
 
 # addBig -- a + b at p digits, as add64
 addBig: function {
-    a: bigint.BigInt.view b: bigint.BigInt.view p: u64 maxDigits: u64
+    a: bigint.BigInt.view b: bigint.BigInt.view p: u8 maxDigits: u8
 } out bigint.BigInt is {
     if (isInvalidBig c: a :p) then return a.copy
     if (isInvalidBig c: b :p) then return b.copy
@@ -233,7 +233,7 @@ addBig: function {
 
 # subBig -- a - b at p digits, as add64
 subBig: function {
-    a: bigint.BigInt.view b: bigint.BigInt.view p: u64 maxDigits: u64
+    a: bigint.BigInt.view b: bigint.BigInt.view p: u8 maxDigits: u8
 } out bigint.BigInt is {
     if (isInvalidBig c: a :p) then return a.copy
     if (isInvalidBig c: b :p) then return b.copy
@@ -242,7 +242,7 @@ subBig: function {
 
 # mulBig -- a * b with s digits after the point, as mul64
 mulBig: function {
-    a: bigint.BigInt.view b: bigint.BigInt.view s: u64 p: u64 maxDigits: u64
+    a: bigint.BigInt.view b: bigint.BigInt.view s: u8 p: u8 maxDigits: u8
 } out bigint.BigInt is {
     if (isInvalidBig c: a :p) then return a.copy
     if (isInvalidBig c: b :p) then return b.copy
@@ -252,7 +252,7 @@ mulBig: function {
 
 # divBig -- a / b with s digits after the point, as div64
 divBig: function {
-    a: bigint.BigInt.view b: bigint.BigInt.view s: u64 p: u64 maxDigits: u64
+    a: bigint.BigInt.view b: bigint.BigInt.view s: u8 p: u8 maxDigits: u8
 } out bigint.BigInt is {
     if (isInvalidBig c: a :p) then return a.copy
     if (isInvalidBig c: b :p) then return b.copy
@@ -265,7 +265,7 @@ divBig: function {
 # by `mode`: the truncated quotient, stepped one further from zero when the
 # mode says so. BigInt.divide takes only Go's four integer modes, and a decimal
 # rounds by all six
-ratCoef: function {x: bigrat.BigRat.view s: u64 mode: rounding.roundingmode} out bigint.BigInt is {
+ratCoef: function {x: bigrat.BigRat.view s: u8 mode: rounding.roundingmode} out bigint.BigInt is {
     n: x.num * (powBig k: s)
     dv: n.divide by: x.den mode: rounding.roundingmode.toZero
     q: dv.quo.copy
@@ -305,7 +305,7 @@ ratCoef: function {x: bigrat.BigRat.view s: u64 mode: rounding.roundingmode} out
 
 # coefRat -- the exact value of a valid coefficient with s digits after the
 # point
-coefRat: function {c: bigint.BigInt.view s: u64} out bigrat.BigRat is {
+coefRat: function {c: bigint.BigInt.view s: u8} out bigrat.BigRat is {
     return (bigrat.BigRat.fromFraction num: c den: (powBig k: s))
 }
 
@@ -314,7 +314,7 @@ coefRat: function {c: bigint.BigInt.view s: u64} out bigrat.BigRat is {
 # pointText -- a coefficient's text with s digits after the point: its digits
 # zero-padded to s + 1 so there is a digit before the point, a leading '-' when
 # it is negative
-pointText: function {c: bigint.BigInt.view s: u64} out String is {
+pointText: function {c: bigint.BigInt.view s: u8} out String is {
     ad: c.abs.string
     digits: String
     for (digits.length + ad.length) < (s + 1) loop digits.append "0"
@@ -336,7 +336,7 @@ pointText: function {c: bigint.BigInt.view s: u64} out String is {
 # an optional sign, digits, and an optional point with digits after it. Digits
 # past the scale round half-even; a text with no digit is `empty`, any other
 # character `invalidDigit`
-parseCoef: function {text: StringView.view s: u64} out (ResultRV bigint.BigInt e: parseerror) is {
+parseCoef: function {text: StringView.view s: u8} out (ResultRV bigint.BigInt e: parseerror) is {
     pos: u64
     neg: false
     if text.length > 0 then {
@@ -380,7 +380,7 @@ parseCoef: function {text: StringView.view s: u64} out (ResultRV bigint.BigInt e
     sticky: false
     if frac.length > s then {
         first = natconv.byteAt text: frac.stringView i: s
-        j: s + 1
+        j: s.u64 + 1
         for j < frac.length loop {
             if (natconv.byteAt text: frac.stringView i: j) != 48 then sticky = true
             j = j + 1
