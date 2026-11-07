@@ -480,6 +480,14 @@ schemaSql: function {} out String is {
         acc.append
         s: "CREATE TABLE IF NOT EXISTS call_generic_binding (call_node INTEGER NOT NULL, param_name INTEGER NOT NULL, type_id INTEGER NOT NULL, PRIMARY KEY (call_node, param_name));\n"
     )
+    acc.append monoSchemaSql
+    return acc
+}
+
+# monoSchemaSql -- DDL for the tables of what a generic instance's walk
+# records, and an instance's numeric parameters as types.
+monoSchemaSql: function {} out String is {
+    acc: String
     (
         acc.append
         s: "CREATE TABLE IF NOT EXISTS mono_node_type (mono_id INTEGER NOT NULL, node_id INTEGER NOT NULL, type_id INTEGER NOT NULL, PRIMARY KEY (mono_id, node_id));\n"
@@ -495,6 +503,10 @@ schemaSql: function {} out String is {
     (
         acc.append
         s: "CREATE TABLE IF NOT EXISTS numeric_param_read (node_id INTEGER PRIMARY KEY, name_id INTEGER NOT NULL);\n"
+    )
+    (
+        acc.append
+        s: "CREATE TABLE IF NOT EXISTS singleton (type_id INTEGER PRIMARY KEY, instance_type_id INTEGER NOT NULL, param TEXT NOT NULL, value TEXT NOT NULL);\n"
     )
     return acc
 }
@@ -1021,6 +1033,13 @@ ZDumper: class {
             tan: zast.poolTextAt :pool ref: ta.value.name
             tagAccessorRow: "INSERT INTO tag_accessor VALUES (\{ta.key}, '\{tan}', \{tat});\n"
             this.acc.append s: tagAccessorRow
+        }
+        for each sg: typing.singletons.iterateItems loop {
+            sgi: sg.value.instance.u64
+            sgp: zast.poolTextAt :pool ref: sg.value.param
+            sgv: constValueText v: sg.value.value
+            singletonRow: "INSERT INTO singleton VALUES (\{sg.key}, \{sgi}, '\{sgp}', '\{sgv}');\n"
+            this.acc.append s: singletonRow
         }
         for each ad: typing.argDisposition.iterateItems loop {
             adInt: ztypes.zparamownershipInt ad.value

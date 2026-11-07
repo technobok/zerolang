@@ -6654,6 +6654,7 @@ ensureUnitInstanceMono: function {
         unitMonoJoinTrie :st tplTid: tplId tplName: tplNm.stringView :args monoId: mono
         for each a: args loop st.reg.appendGenericArg specId: mono arg: a
         recordNumericArgConsts :ast :st :scope monoId: mono :tdecl
+        mintNumericSingletons :ast :st :scope monoId: mono :tdecl
     }
     ensureUnitMonoBuilt :st :scope :ast monoId: mono
     return mono
@@ -22249,6 +22250,7 @@ mintUnitMonoOf: function {
     # instance may be read before its completion pass records the rest
     for each a: args loop st.reg.appendGenericArg specId: mono arg: a
     recordNumericArgConsts :ast :st :scope monoId: mono tdecl: r.tmplDeclId
+    mintNumericSingletons :ast :st :scope monoId: mono tdecl: r.tmplDeclId
 }
 
 # instNumericParam -- whether an instantiation argument's label names a
@@ -27377,6 +27379,60 @@ recordNumericArgConsts: function {
     }
 }
 
+# mintNumericSingletons -- each numeric generic argument of the instance
+# `monoId` as its parameter's singleton type: a typedef over the parameter's
+# bound, owned by the instance and named by the parameter, whose one value is
+# the argument. A compiler-provided template's instance (array, str) has none.
+mintNumericSingletons: function {
+    ast: Ast
+    st: zenv.ZSymbolTable
+    scope: ztypes.declid
+    monoId: ztypes.tid
+    tdecl: ztypes.declid
+} is {
+    if (st.reg.isNativeOf tid: (st.reg.genericOriginOf tid: monoId)) then return
+    hasValue: false
+    ac: st.reg.genericArgCount specId: monoId
+    ai: u64
+    for ai < ac loop {
+        if (st.reg.genericValueArgAt specId: monoId ordinal: ai).some then hasValue = true
+        ai = ai + 1
+    }
+    if hasValue.not then return
+    pn: st.reg.genericParamNamesOf :tdecl
+    pi: u64
+    for pi < pn.length loop {
+        vg: st.reg.genericValueArgAt specId: monoId ordinal: pi
+        pnm: pn.get i: pi
+        pi = pi + 1
+        if vg.some when (st.typing.singletonOf instance: monoId param: pnm).isZero then {
+            cd: st.reg.genericParamConstraintOf :tdecl paramName: pnm
+            bt: numericBoundTid :ast :st :scope :cd
+            if bt.isZero.not then {
+                bits: vg
+                pt: zast.nameTextCopy :ast ref: pnm
+                s: (
+                    st.reg.newType
+                    name: pt.stringView
+                    typetype: (st.reg.typetypeOf typeId: bt)
+                    ownerTid: monoId
+                )
+                st.reg.setValtype typeId: s value: true
+                bn: st.reg.nameOf tid: bt
+                bnId: zast.poolFind pool: ast.names text: bn.stringView
+                st.typing.typedefBase.set key: s value: (ztyping.typedefbase name: bnId tid: bt)
+                v: ztypes.typedConst c: (ztypes.makeIntConst v: (ztypes.bitsI64 b: bits)) numTid: s
+                (
+                    st.typing.singletons.set
+                    key: s
+                    value: (ztyping.singleton instance: monoId param: pnm value: v)
+                )
+                st.typing.singletonAt.set key: (ztyping.constslot owner: monoId name: pnm) value: s
+            }
+        }
+    }
+}
+
 # numericLevelKeyedByParam -- whether a spec's keys put a generic parameter's
 # type at a numeric parameter's level: a reference inside a template over its
 # own numeric parameter.
@@ -27589,6 +27645,8 @@ getOrMintSpec: function {
     if trieOk when mid8.isZero.not then {
         registerSpecOnTrie :st name: mn8.stringView :templateId :mid8 :args
         recordNumericArgConsts :ast :st :scope monoId: mid8 tdecl: tk8
+        # a partial's value arguments complete per instance: it has no singletons
+        if hasParamKey.not then mintNumericSingletons :ast :st :scope monoId: mid8 tdecl: tk8
     }
     # The children are built LAST, and the trie path above is why. Building
     # them respecializes, which re-enters this function for this very
@@ -46419,8 +46477,17 @@ spelledAsSignature: function {st: zenv.ZSymbolTable.view tid: ztypes.tid} out bo
 # A message naming a function itself says this; the function's TYPE, as a
 # value has it, is spelled by specWrittenName.
 # Trailing arguments that are their parameter's default are left out, as the
-# instance's label leaves them (defaultsTailLength): `(ListVal t: u8)`.
+# instance's label leaves them (defaultsTailLength): `(ListVal t: u8)`. An
+# instance's numeric parameter as a type is named through the instance,
+# `(Box cap: 5).cap`.
 declWrittenName: function {st: zenv.ZSymbolTable.view ast: Ast.view tid: ztypes.tid} out String is {
+    sg: st.typing.singletons.get key: tid
+    if sg.some then {
+        sw: declWrittenName :st :ast tid: sg.instance
+        sw.append "."
+        sw.append (zast.nameTextAt :ast ref: sg.param)
+        return sw
+    }
     org: st.reg.genericOriginOf :tid
     if org.isZero then return (st.reg.nameOf :tid)
     otid: org

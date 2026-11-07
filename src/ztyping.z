@@ -34,6 +34,7 @@ public: unit {
     :monostamp
     :constnarrow
     :droptemp
+    :singleton
     :tagaccessor
     :typedefbase
     :armkey
@@ -429,6 +430,18 @@ droptemp: record {
     temp: zast.nameid
 }
 
+# singleton -- one instance's numeric generic parameter as a type (`cap` in
+# `(Box cap: 5)`): a typedef over the parameter's bound whose one value is the
+# instance's argument.
+singleton: record {
+    # the instance the parameter belongs to
+    instance: ztypes.tid
+    # the parameter's name
+    param: zast.nameid
+    # the one value, typed as the singleton type
+    value: ztypes.cval
+}
+
 # tagaccessor -- the accessor a sum's custom tag is read through (`tag:
 # u8.tag`): a read of the discriminator the sum already carries.
 tagaccessor: record {
@@ -805,6 +818,11 @@ ZTyping: class {
     dpTagRead: (IdMapV zast.nodeid v: ztypes.tid)
     # the accessor a custom tag is read through, keyed by the sum's own tid
     tagAccessor: (IdMapV ztypes.tid v: tagaccessor)
+    # each numeric parameter's singleton type, keyed by its tid
+    singletons: (IdMapV ztypes.tid v: singleton)
+    # the singleton type an instance's numeric parameter is, keyed by the
+    # instance and the parameter's name
+    singletonAt: (MapVV constslot v: ztypes.tid)
     # the name a diverging guard narrowed, which narrows the REST of the scope
     # and not just an arm
     postGuardName: (IdMapV zast.nodeid v: zast.nameid)
@@ -2479,6 +2497,29 @@ ZTyping: class {
         return (t.returnMarkerOf :tid).isReference
     }
 
+    # isSingletonType -- `tid` is an instance's numeric parameter as a type
+    isSingletonType: function {t: this.view tid: ztypes.tid} out bool is {
+        return (t.singletons.get key: tid).some
+    }
+
+    # singletonValueOf -- the one value of the singleton type `tid`; noConst
+    # when `tid` is no singleton type
+    singletonValueOf: function {t: this.view tid: ztypes.tid} out ztypes.cval is {
+        s: t.singletons.get key: tid
+        if s.some then return s.value
+        return ztypes.noConst
+    }
+
+    # singletonOf -- the singleton type that `instance`'s numeric parameter
+    # `param` is; 0 when it has none
+    singletonOf: function {
+        t: this.view
+        instance: ztypes.tid
+        param: zast.nameid
+    } out ztypes.tid is {
+        return ((t.singletonAt.get key: (constslot owner: instance name: param)).or d: ztypes.tid)
+    }
+
     # typedefBaseTidOf -- the type a typedef wraps: its base INSTANCE id, or 0
     # when `tid` is not a typedef or its base has not resolved
     typedefBaseTidOf: function {t: this.view tid: ztypes.tid} out ztypes.tid is {
@@ -2872,6 +2913,8 @@ newTyping: function {nodeEst: 0.u64} out ZTyping is {
         dpArmPredicate: (IdMapV zast.nodeid v: ztypes.tid)
         dpTagRead: (IdMapV zast.nodeid v: ztypes.tid)
         tagAccessor: (IdMapV ztypes.tid v: tagaccessor)
+        singletons: (IdMapV ztypes.tid v: singleton)
+        singletonAt: (MapVV constslot v: ztypes.tid)
         postGuardName: (IdMapV zast.nodeid v: zast.nameid)
         postGuardVarId: (IdMapV zast.nodeid v: ztypes.vid)
         postGuardTid: (IdMapV zast.nodeid v: ztypes.tid)
