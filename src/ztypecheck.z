@@ -15130,7 +15130,7 @@ refuseNumericParamName: function {
     dm: argref
 } is {
     if (isGenericParam :ast op: (ast.nodes.get i: dm.operation)) then return
-    tdecl: declOfTypeId reg: st.reg tid: ownerTid
+    tdecl: st.typing.declIdOfType typeId: ownerTid
     if (st.reg.genericParamConstraintOf :tdecl paramName: dm.name).numKind.has.not then return
     pn: zast.nameTextAt :ast ref: dm.name
     tn: specWrittenName :st :ast tid: ownerTid
@@ -15384,7 +15384,13 @@ pathNamesTypeConstant: function {
         qualNid = n.parent
     }
     if leafId.isZero then return false
-    td: qualifierDecl :st :ast ownerDecl: (declOfTypeId reg: st.reg tid: ownerTid) node: qualNid
+    td: (
+        qualifierDecl
+        :st
+        :ast
+        ownerDecl: (st.typing.declIdOfType typeId: ownerTid)
+        node: qualNid
+    )
     if td.isZero.not when (st.typing.decls.get i: td).kind.unitDecl then {
         return (unitMemberHoldsValue :st :ast unitDecl: td nameId: leafId)
     }
@@ -17586,9 +17592,9 @@ boundNameDecl: function {
 # jumping to the parameter. The declaration's answer goes in genericParamDecl,
 # which the editor consults only for a declaration row.
 #
-# declFindChild, never declOfTypeId: `newType ... genericParam` leaves ZType.def
-# zero, so a parameter's type id cannot name its own declaration. Silent on a
-# miss, and nothing here reaches the emitter.
+# declFindChild, never declIdOfType: a generic parameter's type is minted
+# (`newType ... genericParam`) with no declaration, so its type id cannot name
+# its own. Silent on a miss, and nothing here reaches the emitter.
 stampGenericParams: function {st: zenv.ZSymbolTable ast: Ast} is {
     keys: ListVal zast.nodeid
     for each e: st.walk.genericParamName.iterateItems loop keys.append e.key
@@ -31436,8 +31442,8 @@ unitMemberTypeOf: function {
 # when it produces THIS unit: a nested unit may share a name with a top-level
 # one, and answering from the index alone probed the other unit's scope for the
 # member. A generic mono's own declaration (declIdOfType) carries its
-# substituted members; declOfTypeId hops to the TEMPLATE's, whose members are
-# the generic ones.
+# substituted members; its template's (templateDeclOf) carries the generic
+# ones.
 unitScopeRoot: function {
     st: zenv.ZSymbolTable.view
     unitTid: ztypes.tid
@@ -68275,27 +68281,9 @@ templateDeclOf: function {
     return (typing.declIdOfType typeId: root)
 }
 
-# declOfTypeId -- the declaration that minted type `tid` (ZType.def); a
-# mono derives its home through genericOriginId -> the template's Decl.
-declOfTypeId: function {reg: ztypes.ZTypeRegistry.view tid: ztypes.tid} out ztypes.declid is {
-    cur: tid
-    for cur.isZero.not loop {
-        next: ztypes.tid
-        if cur >= reg.nextTid then return ztypes.declid.zero
-        zo: reg.typeById.get i: cur
-        if zo.def.isZero.not then return zo.def
-        go: zo.genericOriginId
-        if go.some then {
-            next = go
-        }
-        cur = next
-    }
-    return ztypes.declid.zero
-}
-
 # surfaceDeclOfTypeId -- the Decl a READER means by a type's name. Writing `u8`
 # navigates to core's re-export line, not to the record in `system.z` that
-# declOfTypeId returns, so a navigation driven by a TYPE ID has to make the same
+# declIdOfType returns, so a navigation driven by a TYPE ID has to make the same
 # jump or the two routes to one type disagree. A type core does not re-export
 # answers with its own declaration.
 surfaceDeclOfTypeId: function {
@@ -68323,7 +68311,7 @@ surfaceDeclOfTypeId: function {
 }
 
 # unitDeclOfTid -- the top-level unit root Decl that owns type `tid`'s
-# declaration (declOfTypeId -> parent walk to the parentless unit root);
+# declaration (its declaration -> parent walk to the parentless unit root);
 # 0 when the type has no declaration. The id-valued unit-identity
 # primitive: compare unit ownership by this, not by name.
 unitDeclOfTid: function {
