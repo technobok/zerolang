@@ -2470,7 +2470,7 @@ docUnitDecl: function {
         uk: ztypecheck.unitdefNodeId ast: r.prog nId: op
         ut: (o.typing.unitTypesById.get key: uk).or d: ztypes.tid.zero
         if ut.isZero then return ztypes.declid
-        return (o.reg.defOf tid: ut)
+        return (ztypecheck.templateDeclOf reg: o.reg typing: o.typing tid: ut)
     } case none then {
         return ztypes.declid
     }
@@ -2902,7 +2902,7 @@ instanceSpelling: function {
     go: st.reg.genericOriginOf :tid
     n: st.reg.genericArgCount specId: tid
     if go.isZero or (n == 0) then return "".string
-    tdecl: st.reg.defOf tid: go
+    tdecl: st.typing.declIdOfType typeId: go
     # the trailing arguments their defaults supply are not written
     shown: n
     for shown > 1 loop {
@@ -4481,7 +4481,6 @@ listSlotValueOpt: function {snap: zcheck.CheckResult hit: navhit} out ztypes.cva
             cv: ztypes.makeIntConst po.i64.orPanic
             if g.slot != o.reg.literalIntTid when (
                 ztypecheck.numKindOfTid
-                reg: o.reg
                 typing: o.typing
                 tid: g.slot
             ).has then cv = ztypes.typedConst c: cv numTid: g.slot
@@ -7070,10 +7069,7 @@ privateMembersReachable: function {
 # its template's; 0 when the snapshot knows none
 typeDefNode: function {o: (Option zenv.ZSymbolTable).view tid: ztypes.tid} out zast.nodeid is {
     if o.some then {
-        owner: tid
-        og: o.reg.genericOriginOf :tid
-        if og.isZero.not then owner = og
-        d: o.reg.defOf tid: owner
+        d: ztypecheck.templateDeclOf reg: o.reg typing: o.typing :tid
         if d.isZero.not then return (o.typing.decls.get i: d).node
     }
     return zast.nodeid
@@ -7826,7 +7822,7 @@ memberDeclOf: function {
             return (
                 ztypecheck.declOfUnitDefIds
                 typing: o.typing
-                unitDecl: (o.reg.defOf tid: parent)
+                unitDecl: (ztypecheck.templateDeclOf reg: o.reg typing: o.typing tid: parent)
                 :nameId
             )
         }
@@ -8039,7 +8035,7 @@ addUnitDeclMembers: function {
     sink: (MapRV String v: u8)
 } is {
     if o.some then {
-        ud: o.reg.defOf tid: unitTid
+        ud: ztypecheck.templateDeclOf reg: o.reg typing: o.typing tid: unitTid
         if ud.isZero then return
         pb: ztypecheck.publicNsOf reg: o.reg typing: o.typing tid: unitTid
         if pb.isZero or (ud == site) then addDeclChildren :prog :o declId: ud :sink
@@ -8282,7 +8278,7 @@ tagCarrier: function {snap: zcheck.CheckResult tid: ztypes.tid} out bool is {
     if o.some then {
         sl: ztypecheck.stdTidRo ast: snap.prog st: o wk: zast.wellKnown.slot.tyStaticlist
         if sl.isZero.not when (o.reg.genericOriginOf :tid) == sl then return true
-        return (ztypecheck.numKindOfTid reg: o.reg typing: o.typing :tid).has
+        return (ztypecheck.numKindOfTid typing: o.typing :tid).has
     }
     return false
 }
@@ -9347,7 +9343,12 @@ unitBaseHolder: function {
     if db.single then named = (unitFsnoByName :snap name: base).isZero.not
     o: snap.st
     if o.some then {
-        if db.single.not then return (o.reg.defOf tid: db.tid)
+        if db.single.not then return (
+            ztypecheck.templateDeclOf
+            reg: o.reg
+            typing: o.typing
+            tid: db.tid
+        )
         if named then return (ztypecheck.unitDeclOfName typing: o.typing nameId: bn)
         return (bareDeclIn st: o :site nameId: bn)
     }

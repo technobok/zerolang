@@ -536,7 +536,7 @@ tagStorageCType: function {
         # view of it inline leaves the copy with no owner to free it.
         # scalarCTypeFor, not a lookup by name: the tid is in hand, so a user type
         # shadowing a numeric name must not pick up that numeric's C spelling
-        return (scalarCTypeFor :reg :typing tid: tb)
+        return (scalarCTypeFor :typing tid: tb)
     } case none then {
         # nothing declared: the spec's default, u8
         return "uint8_t".string
@@ -599,13 +599,11 @@ ordinalPairFirstArmId: function {
 # declaration settles); "" for any other type, a program's own type spelled like
 # a scalar included. The caller then emits the type's struct (typeRefC /
 # cnameOf). The one gate every C-type site asks, by id.
-scalarCTypeFor: function {
-    reg: ztypes.ZTypeRegistry.view typing: ztyping.ZTyping.view tid: ztypes.tid
-} out String is {
+scalarCTypeFor: function {typing: ztyping.ZTyping.view tid: ztypes.tid} out String is {
     if (isOrdinalVariant :typing :tid) then {
         return (ordinalVariantCType :typing :tid)
     }
-    nk: ztypecheck.numKindOfTid :reg :typing :tid
+    nk: ztypecheck.numKindOfTid :typing :tid
     if nk.has.not then return "".string
     return (kindCType k: nk.kind).string
 }
@@ -886,7 +884,7 @@ emitNumericCast: function {
             from: (
                 castLitVal
                 val: spelled.stringView
-                dst: (constScalarKindForTid :reg :typing tid: retTid)
+                dst: (constScalarKindForTid :typing tid: retTid)
             )
         )
     }
@@ -4472,7 +4470,6 @@ rowShapeOf: function {
         if bn.length > 0 then {
             sc: (
                 scalarCTypeFor
-                :reg
                 :typing
                 tid: (ztypecheck.typedefChaseTid :typing tid: owner)
             )
@@ -7199,7 +7196,6 @@ svArgAddr: function {
         if b0d.some when b0d >= 48 when b0d <= 57 then return "".string
         if (
             ztypecheck.numKindOfTid
-            :reg
             :typing
             tid: (stampIdOf :ctx :typing nid: n.nodeid)
         ).has then return "".string
@@ -7237,7 +7233,6 @@ svArgAddr: function {
         anl: anlC.stringView
         if (
             ztypecheck.numKindOfTid
-            :reg
             :typing
             tid: (stampIdOf :ctx :typing nid: n.nodeid)
         ).has then return "".string
@@ -12330,7 +12325,6 @@ narrowListIndex: function {
     idx: stampIdOf :ctx :typing nid: call.nodeid
     nk: (
         ztypecheck.numKindOfTid
-        :reg
         :typing
         tid: (ztypecheck.typedefChaseTid :typing tid: idx)
     )
@@ -14544,7 +14538,7 @@ renderDefault: function {
         # a float literal is the target type's value nearest it, as a body
         # literal is
         if (ztypes.isFloatLexeme numstr: lt.stringView) then {
-            fk: constScalarKindForTid :reg :typing tid: targetTid
+            fk: constScalarKindForTid :typing tid: targetTid
             k: ztypes.numkind.f64Type
             if fk.has when (ztypes.isFloatKind k: fk.kind) then k = fk.kind
             return (
@@ -14558,7 +14552,7 @@ renderDefault: function {
             wideLiteralOf
             :ctx
             lex: lt.stringView
-            k: (constScalarKindForTid :reg :typing tid: targetTid)
+            k: (constScalarKindForTid :typing tid: targetTid)
         )
         if wlD.length > 0 then return (stating :facts from: constFacts text: wlD)
         return (stating :facts from: constFacts text: (literalDefaultC lex: lt.stringView :ctx))
@@ -15615,11 +15609,10 @@ argSlotList: function {
 # read happens in. `has` false when the type is no scalar at all -- a program's
 # own type spelled like one included.
 constScalarKindForTid: function {
-    reg: ztypes.ZTypeRegistry.view typing: ztyping.ZTyping.view tid: ztypes.tid
+    typing: ztyping.ZTyping.view tid: ztypes.tid
 } out ztypes.suffixinfo is {
     return (
         ztypecheck.numKindOfTid
-        :reg
         :typing
         tid: (ztypecheck.typedefChaseTid :typing :tid)
     )
@@ -15709,10 +15702,10 @@ cvalText: function {
         stating
         :facts
         from: constFacts
-        text: (intCvalText :reg :typing :ctx :tid :v)
+        text: (intCvalText :typing :ctx :tid :v)
     )
     if v.kind.fvalKind then {
-        return (stating :facts from: constFacts text: (floatCvalText :reg :typing :tid :v))
+        return (stating :facts from: constFacts text: (floatCvalText :typing :tid :v))
     }
     if v.kind.armKind then return (armCvalText :ast :reg :typing :ctx :v :facts)
     if v.kind.aggKind then return (aggCvalText :typing :ctx :v :facts)
@@ -15769,13 +15762,12 @@ aggCvalText: function {
 # intCvalText -- cvalText for a folded integer: inline in the type it is
 # narrowed to, or a value outside i64 spelled whole.
 intCvalText: function {
-    reg: ztypes.ZTypeRegistry.view
     typing: ztyping.ZTyping.view
     ctx: Ctx
     tid: ztypes.tid
     v: ztypes.cval
 } out String is {
-    nk: constScalarKindForTid :reg :typing :tid
+    nk: constScalarKindForTid :typing :tid
     if nk.has when (ztypes.intKindBits k: nk.kind) == 128 then {
         sg: ztypes.isSignedIntKind k: nk.kind
         if v.bigId != 0 then return (
@@ -15828,12 +15820,11 @@ bigValueC: function {ctx: Ctx b: math.BigInt.view} out String is {
 # floatCvalText -- cvalText for a folded float: the value the float type it is
 # written as holds nearest it, an f64 where the type is no float one.
 floatCvalText: function {
-    reg: ztypes.ZTypeRegistry.view
     typing: ztyping.ZTyping.view
     tid: ztypes.tid
     v: ztypes.cval
 } out String is {
-    fk: constScalarKindForTid :reg :typing :tid
+    fk: constScalarKindForTid :typing :tid
     k: ztypes.numkind.f64Type
     if fk.has when (ztypes.isFloatKind k: fk.kind) then k = fk.kind
     return (floatValueC :typing :v :k)
@@ -18499,16 +18490,16 @@ implicitZeroValue: function {
     tid: ztypes.tid
     facts: cfacts.borrow
 } out String is {
-    zc: scalarCTypeFor :reg :typing :tid
-    if zc.length > 0 then return (scalarZeroC :reg :typing cType: zc.stringView :tid :facts)
+    zc: scalarCTypeFor :typing :tid
+    if zc.length > 0 then return (scalarZeroC :typing cType: zc.stringView :tid :facts)
     if tid == ctx.strTid then return (emitExprStrZero :ctx :facts)
     # a typedef is its base's zero: a scalar base's cast zero (meters -> i64),
     # and otherwise whatever the base builds -- the String struct for Path, a
     # record's create with its defaults
     zb: ztypecheck.typedefChaseTid :typing :tid
     if zb != tid then {
-        zt: scalarCTypeFor :reg :typing tid: zb
-        if zt.length > 0 then return (scalarZeroC :reg :typing cType: zt.stringView :tid :facts)
+        zt: scalarCTypeFor :typing tid: zb
+        if zt.length > 0 then return (scalarZeroC :typing cType: zt.stringView :tid :facts)
         return (implicitZeroValue :ast :reg :typing :ctx tid: zb :facts)
     }
     # The collection is asked BEFORE the scalar chase, and the order is not a
@@ -18553,13 +18544,12 @@ implicitZeroValue: function {
 # own type and for the struct that stands in for it alike; every other scalar's
 # is a cast 0.
 scalarZeroC: function {
-    reg: ztypes.ZTypeRegistry.view
     typing: ztyping.ZTyping.view
     cType: StringView
     tid: ztypes.tid
     facts: cfacts.borrow
 } out String is {
-    if (partIsHelperScalar :reg :typing :tid) then {
+    if (partIsHelperScalar :typing :tid) then {
         return (stating :facts from: literalFacts text: "((\{cType}){0})")
     }
     return (stating :facts from: constFacts text: "((\{cType})0)")
@@ -18568,10 +18558,8 @@ scalarZeroC: function {
 # partIsHelperScalar -- the type is i128, u128 or f16, or a scalar typedef over
 # one: a value no C operator may touch, since where the C compiler lacks the
 # type it is a struct (z_head.inc).
-partIsHelperScalar: function {
-    reg: ztypes.ZTypeRegistry.view typing: ztyping.ZTyping.view tid: ztypes.tid
-} out bool is {
-    nk: constScalarKindForTid :reg :typing :tid
+partIsHelperScalar: function {typing: ztyping.ZTyping.view tid: ztypes.tid} out bool is {
+    nk: constScalarKindForTid :typing :tid
     if nk.has.not then return false
     return ((ztypes.intKindBits k: nk.kind) == 128) or (nk.kind == ztypes.numkind.f16Type)
 }
@@ -18598,7 +18586,7 @@ emitDefRefAtom: function {
             return (implicitZeroValue :ast :reg :typing :ctx tid: izr :facts)
         }
         # unstamped: a scalar is its zero, any other record its zero struct
-        if (scalarCTypeFor :reg :typing tid: brid).length > 0 then return (
+        if (scalarCTypeFor :typing tid: brid).length > 0 then return (
             implicitZeroValue
             :ast
             :reg
@@ -19878,15 +19866,13 @@ protocolProjectionRead: function {
 # the zero value is the construction (those creates have no C symbol). Empty
 # for every other type.
 typeNameCreateZero: function {
-    reg: ztypes.ZTypeRegistry.view
     typing: ztyping.ZTyping.view
     ctx: Ctx
     bstamp: ztypes.tid
     facts: cfacts.borrow
 } out String is {
-    zsc: scalarCTypeFor :reg :typing tid: bstamp
-    if zsc.length > 0 then return (scalarZeroC :reg :typing cType: zsc.stringView tid: bstamp :facts
-    )
+    zsc: scalarCTypeFor :typing tid: bstamp
+    if zsc.length > 0 then return (scalarZeroC :typing cType: zsc.stringView tid: bstamp :facts)
     if bstamp == ctx.strTid then {
         strT: strTypeC :ctx
         return (stating :facts from: literalFacts text: "((\{strT}){0})")
@@ -19969,7 +19955,7 @@ methodAutoCallRead: function {
     mt: mco
     mc2: autoCallCname :reg :typing :ctx owner: bstamp method: mt
     if baseIsType when mnId == zast.wellKnown.slot.wkCreate then {
-        z: typeNameCreateZero :reg :typing :ctx :bstamp :facts
+        z: typeNameCreateZero :typing :ctx :bstamp :facts
         if z.length > 0 then return z
     }
     if baseIsType then {
@@ -22972,7 +22958,7 @@ emitOperatorByRow: function {
     constRow: false
     rhsConst: typing.nodeConstIn mono: ctx.curThisTid nid: rhsNid
     if rhsConst.kind.none.not then {
-        ieee: zeroDivisionC :reg :typing :ctx :owner :opId :lhsNid rhs: rhsConst
+        ieee: zeroDivisionC :typing :ctx :owner :opId :lhsNid rhs: rhsConst
         if ieee.length > 0 then return (stating :facts from: constFacts text: ieee)
         crow: ctx.rows.constOfName n: rowKey
         # a binop HAS only argument 1, so a variant asking for any other
@@ -23008,7 +22994,6 @@ emitOperatorByRow: function {
 # sign clear under glibc and set under MSVC -- else math.h's INFINITY, negative
 # when exactly one operand is. "" for any other operation.
 zeroDivisionC: function {
-    reg: ztypes.ZTypeRegistry.view
     typing: ztyping.ZTyping.view
     ctx: Ctx.view
     # the operator's declaring type
@@ -23022,7 +23007,6 @@ zeroDivisionC: function {
     if opId != zast.wellKnown.slot.wkOpDiv then return "".string
     nk: (
         ztypecheck.numKindOfTid
-        :reg
         :typing
         tid: (ztypecheck.typedefChaseTid :typing tid: owner)
     )
@@ -23339,7 +23323,7 @@ operandScalarC: function {
 } out String is {
     st: stampIdDeep :ctx :reg :typing :n
     if st.isZero then return "".string
-    return (scalarCTypeFor :reg :typing tid: st)
+    return (scalarCTypeFor :typing tid: st)
 }
 
 # emitDeclaredOperator -- an operator whose body the author wrote: the method
@@ -24372,7 +24356,7 @@ emitInterpPart: function {
         return
     }
     pt: interpPartTid :reg :typing :ctx :n
-    nk: ztypecheck.numKindOfTid :reg :typing tid: pt
+    nk: ztypecheck.numKindOfTid :typing tid: pt
     pmk: pendingHoistMark :ctx
     valF: cfacts
     val: valueExprC :ast :reg :typing :ctx :n facts: valF
@@ -26191,7 +26175,7 @@ bindDeclaredCType: function {
     # spelled like a scalar included, is spelled from its id below
     avn: ast.nodes.get i: n.value
     ct: String
-    if btid.isZero.not then ct = scalarCTypeFor :reg :typing tid: btid
+    if btid.isZero.not then ct = scalarCTypeFor :typing tid: btid
     if ct.length == 0 then {
         tgo: stampIdOf :typing :ctx nid: n.nodeid
         # the binding's own stamp as the body being emitted sees it comes first:
@@ -27726,7 +27710,7 @@ withValueCType: function {
     }
     # a builtin scalar keeps its C name, as a binding's does (bindDeclaredCType);
     # a Set or a Map is held as its pointer (slotCType)
-    sc: scalarCTypeFor :reg :typing :tid
+    sc: scalarCTypeFor :typing :tid
     if sc.length > 0 then return sc
     return (slotCType :ast :reg :typing :ctx :tid)
 }
@@ -28754,13 +28738,12 @@ emitGenericDissect: function {
 # scalar's own where it has one (`bool`), else the pair's typedef.
 pairSubjectCType: function {
     ctx: Ctx
-    reg: ztypes.ZTypeRegistry.view
     typing: ztyping.ZTyping.view
     # the subject's stamped type name
     # the subject's type
     tid: ztypes.tid
 } out String is {
-    sct: scalarCTypeFor :reg :typing :tid
+    sct: scalarCTypeFor :typing :tid
     if sct.length > 0 then return sct
     return "\{spelledCname :ctx :tid}_t"
 }
@@ -28791,7 +28774,7 @@ matchOrdinalPairRoute: function {
         subjOnce: String
         core: ast.nodes.get i: m.subject
         if core.call then {
-            ct: pairSubjectCType :ctx :reg :typing tid: sTid
+            ct: pairSubjectCType :ctx :typing tid: sTid
             mp: tmpNext :ctx :tmp
             buf.append "\{ind}\{ct} _mp\{mp} = \{subj};\n"
             emitCallTakeInvalidations :ast :reg :typing :ctx call: core :ind :buf
@@ -31199,11 +31182,11 @@ emitCountedRangeFor: function {
     bound: rangeBoundExpr :ast :reg :typing :ctx :n
     if bound.length == 0 then return false
     rtR: rangeTid :ctx :ast :reg :typing :n
-    ctR: intScalarCTypeOf :reg :typing tid: rtR
+    ctR: intScalarCTypeOf :typing tid: rtR
     if ctR.length == 0 then return false
     mN: tmpNext :ctx :tmp
     fn: "_fn\{mN}"
-    rk: ztypecheck.numKindOfTid :reg :typing tid: rtR
+    rk: ztypecheck.numKindOfTid :typing tid: rtR
     cnt: (
         countRangeCountExpr
         signed: rk.has and (ztypes.isSignedIntKind k: rk.kind)
@@ -31568,7 +31551,6 @@ rangeBoundExpr: function {
             # stampTidDeep resolves its scalar type either way
             bct: (
                 intScalarCTypeOf
-                :reg
                 :typing
                 tid: (stampTidDeep :ctx :reg :typing n: (ast.nodes.get i: n.parent))
             )
@@ -31587,15 +31569,14 @@ rangeBoundExpr: function {
 # struct, and a float or bool receiver is no counter at all -- counted in an
 # integer a float bound would truncate silently.
 intScalarCTypeOf: function {
-    reg: ztypes.ZTypeRegistry.view
     typing: ztyping.ZTyping.view
     tid: ztypes.tid
 } out String is {
     if tid.isZero then return "".string
-    nk: ztypecheck.numKindOfTid :reg :typing :tid
+    nk: ztypecheck.numKindOfTid :typing :tid
     if nk.has.not then return "".string
     if (ztypes.isFloatKind k: nk.kind) then return "".string
-    return (scalarCTypeFor :reg :typing :tid)
+    return (scalarCTypeFor :typing :tid)
 }
 
 # rangeTid -- the type a counted range's induction variable takes: its
@@ -31648,7 +31629,7 @@ rangeCType: function {
     ctx: Ctx.view
     n: astnode.view
 } out String is {
-    return (intScalarCTypeOf :reg :typing tid: (rangeTid :ctx :ast :reg :typing :n))
+    return (intScalarCTypeOf :typing tid: (rangeTid :ctx :ast :reg :typing :n))
 }
 
 # emitForCond -- one `while:` arm of a for-header, joined into the loop
@@ -35216,7 +35197,7 @@ typedefChaseC: function {
 } out String is {
     bid: ztypecheck.typedefChaseTid :typing :tid
     if bid == tid then return "".string
-    bc: scalarCTypeFor :reg :typing tid: bid
+    bc: scalarCTypeFor :typing tid: bid
     if bc.length > 0 then return bc
     return (typeRefC :ast :reg :typing :ctx tid: bid)
 }
@@ -35468,7 +35449,7 @@ cTypeForNameTid: function {
     ctx: Ctx
     tid: ztypes.tid
 } out String is {
-    sc: scalarCTypeFor :reg :typing :tid
+    sc: scalarCTypeFor :typing :tid
     if sc.length > 0 then return sc
     return (slotCType :ast :reg :typing :ctx :tid)
 }
@@ -35599,7 +35580,7 @@ typeRefC: function {
         # the `is native` declaration -- emit its struct, not the C scalar.
         # scalarCTypeFor is that gate, and the sixteen scalars, `bool` and the
         # shells all come back through it with their C type intact.
-        ct: scalarTypeRefC :reg :typing :ctx :tid
+        ct: scalarTypeRefC :typing :ctx :tid
         if ct.length > 0 then return ct
     }
     lc: literalTypeC :reg :ctx :tid
@@ -35679,20 +35660,16 @@ noteFnptrUse: function {ctx: Ctx tid: ztypes.tid} is {
 # scalarTypeRefC -- the C scalar a type is held as, "" for one held otherwise.
 # An ordinal variant is held as a scalar: spelling it names neither its enum
 # nor its type (a value of it spells a tag constant, spelledTagConst).
-scalarTypeRefC: function {
-    reg: ztypes.ZTypeRegistry.view typing: ztyping.ZTyping.view ctx: Ctx tid: ztypes.tid
-} out String is {
-    ct: scalarCTypeFor :reg :typing :tid
-    if ct.length > 0 then noteScalarTypeUse :reg :typing :ctx :tid
+scalarTypeRefC: function {typing: ztyping.ZTyping.view ctx: Ctx tid: ztypes.tid} out String is {
+    ct: scalarCTypeFor :typing :tid
+    if ct.length > 0 then noteScalarTypeUse :typing :ctx :tid
     return ct
 }
 
 # noteScalarTypeUse -- a C spelling of the scalar `tid`: the 128-bit integers'
 # and f16's C types are prelude pieces, written where something spells them
-noteScalarTypeUse: function {
-    reg: ztypes.ZTypeRegistry.view typing: ztyping.ZTyping.view ctx: Ctx tid: ztypes.tid
-} is {
-    nk: ztypecheck.numKindOfTid :reg :typing :tid
+noteScalarTypeUse: function {typing: ztyping.ZTyping.view ctx: Ctx tid: ztypes.tid} is {
+    nk: ztypecheck.numKindOfTid :typing :tid
     if nk.has.not then return
     if nk.kind == ztypes.numkind.i128Type then preludeNeed :ctx memb: "@i128_t"
     if nk.kind == ztypes.numkind.u128Type then preludeNeed :ctx memb: "@u128_t"
@@ -40459,7 +40436,7 @@ elemEqIsBytes: function {
     )
     if src.builtin.not then return false
     if (partIsCScalar :reg :typing :tid).not then return false
-    nk: constScalarKindForTid :reg :typing :tid
+    nk: constScalarKindForTid :typing :tid
     return (nk.has and (ztypes.isFloatKind k: nk.kind)).not
 }
 
@@ -41945,7 +41922,7 @@ keyHashKind: function {
     isRv: tt == ztypes.ztypetype.recordType
     if isRv.not then isRv = tt == ztypes.ztypetype.variantType
     if isRv then {
-        sc: scalarCTypeFor :reg :typing tid: ktid
+        sc: scalarCTypeFor :typing tid: ktid
         if sc.length > 0 then return 0
         return 3
     }
@@ -45503,7 +45480,7 @@ fnptrRetTypeC: function {
         baseC = svTypeC :ctx
     }
     if baseC.length == 0 then {
-        rc: scalarCTypeFor :reg :typing tid: rtid
+        rc: scalarCTypeFor :typing tid: rtid
         if rc.length > 0 then baseC = rc.take
     }
     if baseC.length == 0 then {
@@ -45567,7 +45544,7 @@ ensureFwdStruct: function {
     # anonymous `typedef struct { ... } X_t;` with no tag for
     # `typedef struct X_t X_t;` to name. The monos emit before this pass runs.
     if (typeStructEmitted :ctx :tid) then return
-    scalarCType: scalarCTypeFor :reg :typing :tid
+    scalarCType: scalarCTypeFor :typing :tid
     if scalarCType.length > 0 then return
     if (definedInUnitTid :reg :typing :tid).isZero.not when (reg.isNativeOf :tid) then return
     # a typedef wrapper (Path over String) has no struct of its own -- its C
@@ -51108,7 +51085,7 @@ partEqCallsGenerated: function {
         nameId: zast.wellKnown.slot.wkOpEq
     )
     if src.written or src.negated then return false
-    if (partIsHelperScalar :reg :typing :tid) then return false
+    if (partIsHelperScalar :typing :tid) then return false
     return (partIsCScalar :reg :typing :tid).not
 }
 
@@ -51186,8 +51163,8 @@ partEqC: function {
         dest.append ")"
         return
     }
-    if (partIsHelperScalar :reg :typing :tid) then {
-        hk: (constScalarKindForTid :reg :typing :tid).kind
+    if (partIsHelperScalar :typing :tid) then {
+        hk: (constScalarKindForTid :typing :tid).kind
         if hk == ztypes.numkind.f16Type then {
             needsAddM :ctx uname: "prelude" memb: "f16"
             preludeNeed :ctx memb: "@f16_eq"
@@ -51269,7 +51246,7 @@ partHashWords: function {
         return
     }
     if (partIsCScalar :reg :typing tid: base) then {
-        hbk: ztypecheck.numKindOfTid :reg :typing tid: base
+        hbk: ztypecheck.numKindOfTid :typing tid: base
         if hbk.has when (ztypes.intKindBits k: hbk.kind) == 128 then {
             # its two words, through the int128 helpers: the value is no C
             # arithmetic type where the C compiler has no 128-bit integer
@@ -51781,7 +51758,7 @@ partIsCScalar: function {
     if (reg.typetypeOf typeId: base) == ztypes.ztypetype.functionType then return true
     # an untyped number held at run time is the i64 or f64 typeRefC lays it out as
     if (ztypecheck.isLiteralTypeId :reg tid: base) then return true
-    return (scalarCTypeFor :reg :typing tid: base).length > 0
+    return (scalarCTypeFor :typing tid: base).length > 0
 }
 
 # emitEqLate -- a generated `_eq` that calls a method the author wrote: its

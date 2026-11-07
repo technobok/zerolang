@@ -330,7 +330,7 @@ isBorrowedVar: function {st: zenv.ZSymbolTable.view vid: ztypes.vid} out bool is
 # isNumericTid -- a concrete integer/float type id (literal-coercion target):
 # one of the system's scalars (numKindOfTid).
 isNumericTid: function {st: zenv.ZSymbolTable.view tid: ztypes.tid} out bool is {
-    return (numKindOfTid reg: st.reg typing: st.typing :tid).has
+    return (numKindOfTid typing: st.typing :tid).has
 }
 
 # isImplicitZeroCreateTid -- a bare type name in a runtime value position
@@ -890,7 +890,7 @@ indexUnitDefs: function {st: zenv.ZSymbolTable scope: ztypes.declid program: Ast
         tidMark: st.reg.nextTid
         for cu < tidMark loop {
             unl: false
-            if (st.reg.defOf tid: cu).u64 == 0 then unl = true
+            if (st.typing.declIdOfType typeId: cu).isZero then unl = true
             if unl then {
                 cnm: st.reg.nameOf tid: cu
                 if cnm.length > 0 then {
@@ -13597,7 +13597,7 @@ detectTagAccessor: function {
 # isTagStorage -- `tid` can hold a sum's discriminator: one of the system's
 # integer types, at most 64 bits wide.
 isTagStorage: function {st: zenv.ZSymbolTable.view tid: ztypes.tid} out bool is {
-    nk: numKindOfTid reg: st.reg typing: st.typing :tid
+    nk: numKindOfTid typing: st.typing :tid
     if nk.has.not then return false
     if (ztypes.isFloatKind k: nk.kind) then return false
     return (ztypes.intKindBits k: nk.kind) <= 64
@@ -14865,7 +14865,7 @@ fieldTypeNeedsCleanup: function {
     if tid.isZero then return false
     if (st.reg.needsDestructor typeId: tid) then return true
     if (st.reg.typetypeOf typeId: tid).isReferenceData.not then return false
-    return (st.typing.declIsResolving declId: (st.reg.defOf :tid))
+    return (st.typing.declIsResolving declId: (st.typing.declIdOfType typeId: tid))
 }
 
 # resolveClassMethodDecl -- resolve a method declared in a class's `is` block:
@@ -23995,7 +23995,7 @@ isSizedTemplate: function {ast: Ast.view st: zenv.ZSymbolTable tid: ztypes.tid} 
 isBoxTemplate: function {st: zenv.ZSymbolTable.view tid: ztypes.tid} out bool is {
     if tid.isZero then return false
     if ((st.reg.typetypeOf typeId: tid) == ztypes.ztypetype.classType).not then return false
-    d: st.reg.defOf :tid
+    d: st.typing.declIdOfType typeId: tid
     if (st.typing.decls.get i: d).name != zast.wellKnown.slot.tyBox then return false
     if (declaredBySystem typing: st.typing declId: d).not then return false
     return (st.typing.declMemberCount ownerTid: tid) == 0
@@ -25681,7 +25681,7 @@ nativeLayout: function {
     depth: u64
 } out valtypelayout is {
     if (st.reg.isNativeOf :tid) then {
-        nk: numKindOfTid reg: st.reg typing: st.typing :tid
+        nk: numKindOfTid typing: st.typing :tid
         if nk.has then return (numericLayout k: nk.kind)
     }
     if (valIsMonoOf reg: st.reg typing: st.typing :tid wk: zast.wellKnown.slot.tyStr) then {
@@ -27094,7 +27094,7 @@ typeIsNumberOf: function {
 } out bool is {
     if tid.isZero then return false
     ktd: typedefChaseTid typing: st.typing :tid
-    nk: numKindOfTid reg: st.reg typing: st.typing tid: ktd
+    nk: numKindOfTid typing: st.typing tid: ktd
     if nk.has.not then return false
     return (ztypes.isFloatKind k: nk.kind) == float
 }
@@ -42172,7 +42172,7 @@ checkArmsFitFloat: function {
 # literal type before it materialises, a float after.
 isFloatLiteralTid: function {st: zenv.ZSymbolTable.view tid: ztypes.tid} out bool is {
     if tid == st.reg.literalFloatTid then return true
-    k: numKindOfTid reg: st.reg typing: st.typing :tid
+    k: numKindOfTid typing: st.typing :tid
     return k.has and (ztypes.isFloatKind k: k.kind)
 }
 
@@ -42181,8 +42181,8 @@ isFloatLiteralTid: function {st: zenv.ZSymbolTable.view tid: ztypes.tid} out boo
 # the other.
 armTypesAgree: function {st: zenv.ZSymbolTable ast: Ast a: ztypes.tid b: ztypes.tid} out bool is {
     if a == b then return true
-    ka: numKindOfTid reg: st.reg typing: st.typing tid: a
-    kb: numKindOfTid reg: st.reg typing: st.typing tid: b
+    ka: numKindOfTid typing: st.typing tid: a
+    kb: numKindOfTid typing: st.typing tid: b
     if ka.has or kb.has then {
         if ka.has.not or kb.has.not then return false
         an: st.reg.nameViewOf tid: a
@@ -47574,7 +47574,7 @@ spellUnderscore: function {
     pto: st.typing.declChildOfId parentTypeId: effId nameId: pnId
     if pto.none then return
     ptid: pto
-    def: st.reg.defOf tid: ptid
+    def: st.typing.declIdOfType typeId: ptid
     tnm: zast.nameid
     if def.isZero.not when (st.reg.genericOriginOf tid: ptid).isZero then {
         tnm = st.typing.declNameOf declId: def
@@ -60572,12 +60572,10 @@ constNumTidOf: function {
 # the name its declaration was given -- system.z's own `u8`, or wideint's `i128`.
 # `has` false for any other type: a program's own type spelled `u8` is that
 # program's type, and no spelling decides what a type is.
-numKindOfTid: function {
-    reg: ztypes.ZTypeRegistry.view typing: ztyping.ZTyping.view tid: ztypes.tid
-} out ztypes.suffixinfo is {
+numKindOfTid: function {typing: ztyping.ZTyping.view tid: ztypes.tid} out ztypes.suffixinfo is {
     none: ztypes.suffixinfo has: false kind: ztypes.numkind.i64Type len: 0
     if tid.isZero then return none
-    d: reg.defOf :tid
+    d: typing.declIdOfType typeId: tid
     if d.isZero then return none
     nm: zast.nameid
     {
@@ -60595,7 +60593,7 @@ numKindOfTid: function {
 baseNumKind: function {st: zenv.ZSymbolTable.view tid: ztypes.tid} out ztypes.suffixinfo is {
     b: tid
     for (st.typing.typedefBaseTidOf tid: b).isZero.not loop b = st.typing.typedefBaseTidOf tid: b
-    return (numKindOfTid reg: st.reg typing: st.typing tid: b)
+    return (numKindOfTid typing: st.typing tid: b)
 }
 
 # declaredBySystem -- whether a declaration sits in the system unit or one of the
@@ -60621,7 +60619,7 @@ constFitsType: function {
     v: ztypes.cval
     target: ztypes.tid
 } out String is {
-    tk: numKindOfTid reg: st.reg typing: st.typing tid: target
+    tk: numKindOfTid typing: st.typing tid: target
     if tk.has.not then return "".string
     return (constFitsKindMessage :st :v k: tk.kind spelling: "")
 }
@@ -60759,7 +60757,7 @@ constOfTypedFold: function {
         constFailMismatch :st :nid :ln :co msg: rm.stringView
         return ztypes.noConst
     }
-    gk: numKindOfTid reg: st.reg typing: st.typing tid: gov
+    gk: numKindOfTid typing: st.typing tid: gov
     if gk.has.not then return ztypes.noConst
     if (ztypes.isFloatKind k: gk.kind) then {
         return (constOfTypedFloatFold :st :ast :lv :rv :opnId :gov k: gk.kind :nid :ln :co)
@@ -60841,7 +60839,7 @@ constIntNot: function {st: zenv.ZSymbolTable v: ztypes.cval} out ztypes.cval is 
         u.bits = v.bits
         return u
     }
-    k: numKindOfTid reg: st.reg typing: st.typing tid: v.numTid
+    k: numKindOfTid typing: st.typing tid: v.numTid
     if k.has.not then return ztypes.noConst
     bits: ztypes.intKindBits k: k.kind
     if bits == 0 then return ztypes.noConst
@@ -61029,7 +61027,7 @@ constOfConversion: function {
         }
     }
     c: v
-    tk: (numKindOfTid reg: st.reg typing: st.typing tid: target).kind
+    tk: (numKindOfTid typing: st.typing tid: target).kind
     if (ztypes.isFloatKind k: tk) then c = constLandedFloat :st :v k: tk
     return (ztypes.typedConst :c numTid: target)
 }
@@ -63523,7 +63521,7 @@ constAsPayload: function {
 } out ztypes.cval is {
     if v.kind.none then return v
     if v.kind.ivalKind when v.numTid.isZero then {
-        if (numKindOfTid reg: st.reg typing: st.typing :tid).has.not then return ztypes.noConst
+        if (numKindOfTid typing: st.typing :tid).has.not then return ztypes.noConst
         if (constFitsType :st :v target: tid).length > 0 then return ztypes.noConst
         return (ztypes.typedConst c: v numTid: tid)
     }
@@ -66000,7 +65998,7 @@ refuseZeroDivisor: function {st: zenv.ZSymbolTable ast: Ast.view nid: zast.nodei
     rv: st.typing.nodeConstIn :mono nid: br.rhs
     if rv.kind.ivalKind.not then return
     if (st.typing.constIsZero v: rv).not then return
-    nk: numKindOfTid reg: st.reg typing: st.typing tid: (walkTypeOf :st nid: br.lhs)
+    nk: numKindOfTid typing: st.typing tid: (walkTypeOf :st nid: br.lhs)
     if nk.has.not then return
     if (ztypes.isFloatKind k: nk.kind) then return
     (
@@ -68310,18 +68308,20 @@ surfaceDeclOfTypeId: function {
     return own
 }
 
+
 # unitDeclOfTid -- the top-level unit root Decl that owns type `tid`'s
-# declaration (its declaration -> parent walk to the parentless unit root);
-# 0 when the type has no declaration. The id-valued unit-identity
-# primitive: compare unit ownership by this, not by name.
+# declaration as the registry links it (ZType.def -> parent walk to the
+# parentless unit root); 0 when the type has no linked declaration. The
+# id-valued unit-identity primitive: compare unit ownership by this, not by
+# name. The registry's link is sparser than the declaration map (declIdOfType):
+# a method's type links only once its signature is finished, and an instance
+# only where its mint links it, and the callers read that sparseness.
 unitDeclOfTid: function {
     reg: ztypes.ZTypeRegistry.view
     typing: ztyping.ZTyping.view
     tid: ztypes.tid
 } out ztypes.declid is {
-    cur: ztypes.declid
-    def: reg.defOf :tid
-    cur = def
+    cur: reg.defOf :tid
     for cur.isZero.not loop {
         par: ztypes.declid
         isU: false
@@ -68399,12 +68399,13 @@ qualifiedTypeName: function {
     tid: ztypes.tid
     name: StringView
 } out String is {
-    un: unitPathOfTid :st :tid
-    if un.length > 0 then return (pathQualified path: un.stringView :name)
     # an instance is minted in no unit: what tells two of them apart is the
     # type argument each was minted with, or else the template each is an
     # instance of
-    if (st.reg.genericArgCount specId: tid) > 0 then {
+    if (st.reg.genericArgCount specId: tid) == 0 then {
+        un: unitPathOfTid :st :tid
+        if un.length > 0 then return (pathQualified path: un.stringView :name)
+    } else {
         a0: st.reg.genericTypeArgAt specId: tid ordinal: 0
         au: unitPathOfTid :st tid: a0
         if au.length > 0 then {
@@ -68441,7 +68442,7 @@ pathQualified: function {path: StringView name: StringView} out String is {
 # unit alone (unitNameOfTid) dropped every level between, and the innermost
 # alone named a path nothing could write.
 unitPathOfTid: function {st: zenv.ZSymbolTable.view tid: ztypes.tid} out String is {
-    return (unitPathOfDecl :st declId: (st.reg.defOf :tid) self: tid)
+    return (unitPathOfDecl :st declId: (st.typing.declIdOfType typeId: tid) self: tid)
 }
 
 # unitPathOfDecl -- unitPathOfTid's walk from a declaration: the units a program
@@ -69767,12 +69768,7 @@ publicNsOf: function {
     typing: ztyping.ZTyping.view
     tid: ztypes.tid
 } out ztypes.declid is {
-    od: ztypes.declid
-    def: reg.defOf :tid
-    od = def
-    # a nested unit or hidden subunit links its declaration through the
-    # typing side (declSetType), not the registry's def
-    if od.u64 == 0 then od = typing.declIdOfType typeId: tid
+    od: templateDeclOf :reg :typing :tid
     pn: ztypes.declid
     if od.u64 != 0 then pn = typing.declPublicNsOf owner: od
     # a generic instance IS its template's type: it presents the template's
