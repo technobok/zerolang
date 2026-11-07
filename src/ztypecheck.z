@@ -493,6 +493,28 @@ checkBareTypeValueAt: function {
     bareCtorError :st :nodeid :lineno :colno :width msg: m hint: eh bare: spelling.bareName
 }
 
+# checkTypePathValue -- a dotted path that names a type, read as a value
+# (`p: unit.Conf`, `w: p.Inner`): the zero-argument construction the type's
+# bare name makes, placed at the path's last segment `leafNid`, named `leafId`.
+checkTypePathValue: function {
+    st: zenv.ZSymbolTable
+    ast: Ast
+    nid: zast.nodeid
+    leafNid: zast.nodeid
+    leafId: zast.nameid
+    tid: ztypes.tid
+} is {
+    if (isImplicitZeroCreateTid :ast :st :tid) then {
+        st.typing.implicitCreate.set key: nid value: tid
+        return
+    }
+    ln: ast.nodes.get i: leafNid
+    lineno: nodeLine n: ln
+    colno: nodeCol n: ln
+    cn: zast.nameTextCopy :ast ref: leafId
+    checkBareTypeValueAt :ast :st nodeid: nid :lineno :colno width: cn.length.u32.orPanic :tid
+}
+
 # refuseBorrowedBareType -- a construction with no argument of a borrowed view
 # -- a typedef class over one included (PathView) -- or a native iterator: each
 # binds to what it reads, and cannot be made from nothing. true when it refused.
@@ -32314,26 +32336,7 @@ checkUnitMemberValue: function {
         scope: memberUnit
         nameId: cnId
         tid: memberDecl
-    ) then {
-        cdl: nodeLine n: (ast.nodes.get i: dp.child)
-        cdc: nodeCol n: (ast.nodes.get i: dp.child)
-        if (isImplicitZeroCreateTid :ast :st tid: memberDecl) then {
-            icd: memberDecl
-            st.typing.implicitCreate.set key: dp.nid value: icd
-        } else {
-            cn: zast.nameTextCopy :ast ref: cnId
-            (
-                checkBareTypeValueAt
-                :ast
-                :st
-                nodeid: dp.nid
-                lineno: cdl
-                colno: cdc
-                width: cn.length.u32.orPanic
-                tid: memberDecl
-            )
-        }
-    }
+    ) then checkTypePathValue :st :ast nid: dp.nid leafNid: dp.child leafId: cnId tid: memberDecl
     setu: result
     stampGate :st nid: dp.nid tid: setu
     # record the resolved declaration so go-to-definition on a
@@ -34815,9 +34818,21 @@ checkDotted: function {
     coerce: bool
 } out ztypes.tid is {
     if (refuseMisplacedImplement :st :ast nid: dp.nid) then return ztypes.tid.zero
-    # an alias reached through its type (`Tree.Node x: 1`) names the type
+    # an alias reached through its type (`Tree.Node x: 1`) names the type; read
+    # as a value (`w: p.Inner`) it constructs, as the type's own name does
     tpv: dottedAliasValueTid :st :ast :dp
-    if tpv.isZero.not then return tpv
+    if tpv.isZero.not then {
+        if coerce when st.mode.suppressBareCtor.not then (
+            checkTypePathValue
+            :st
+            :ast
+            nid: dp.nid
+            leafNid: dp.child
+            leafId: (atomNameId :ast n: (ast.nodes.get i: dp.child))
+            tid: tpv
+        )
+        return tpv
+    }
     nsc: checkNumericSuffixCast :st :ast :dp
     if nsc.handled then return nsc.tid
     if (
