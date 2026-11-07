@@ -944,7 +944,6 @@ indexOneUnitDef: function {st: zenv.ZSymbolTable program: Ast ruId: zast.nodeid}
         )
         st.typing.declSetUnitScope declId: udid
         st.typing.declSetType declId: udid typeId: utl
-        st.reg.setDef typeId: utl declId: udid
         indexUnitBody :st ast: program unitopId: opId unitDeclId: udid
     }
 }
@@ -1581,7 +1580,6 @@ linkDeclTypeId: function {
     dko: declOfUnitDef :st :scope :unitDecl :nameId
     if dko.u64 == 0 then return
     st.typing.declSetType declId: dko typeId: tid
-    st.reg.setDef typeId: tid declId: dko
 }
 
 # defTypetypeOf -- the typetype a top-level definition node declares, mirroring
@@ -1836,11 +1834,6 @@ declareCanonicalTypeId: function {
         }
     }
     if ownerNameId.isZero then linkDeclTypeId :st :scope :unitDecl :nameId tid: id
-    prxOk: false
-    if (st.reg.defOf tid: id).u64 == 0 then prxOk = true
-    # a canonically-declared name with no source Decl (a synthesized
-    # type like tag__u8): attribute it to the unit's root Decl
-    if prxOk when unitDecl.isZero.not then st.reg.setDef typeId: id declId: unitDecl
     return id
 }
 
@@ -8138,21 +8131,7 @@ finishFunctionSignature: function {
     if rtH.some then {
         checkPinHonesty :st :ast :fnode retTid: rtH :defName defNameId: zast.nameid
     }
-    if fnDecl.isZero.not then {
-        st.typing.declSetType declId: fnDecl typeId: dfid
-        st.reg.setDef typeId: dfid declId: fnDecl
-    }
-    dfp: false
-    if (st.reg.defOf tid: dfid).u64 == 0 then dfp = true
-    if dfp then {
-        # neither a free-fn Decl nor a member Decl (a synthesized function
-        # like a generic-unit template's flattened method): attribute it
-        # to the unit's root Decl
-        dfr: unitDecl
-        if dfr.isZero.not then {
-            st.reg.setDef typeId: dfid declId: dfr
-        }
-    }
+    if fnDecl.isZero.not then st.typing.declSetType declId: fnDecl typeId: dfid
 }
 
 # registerFnGenericParams -- record a generic function's own parameter list on
@@ -20621,7 +20600,6 @@ resolveNamespaceUnit: function {
         }
         if declId.isZero.not then {
             st.typing.declSetType :declId typeId: uid
-            st.reg.setDef typeId: uid :declId
             # written in a generic unit, it is generic over that unit's
             # parameters: each instance of the unit has its own instance of it
             if (st.reg.genericParamNamesOf tdecl: parentDeclId).length > 0 then {
@@ -20753,7 +20731,6 @@ resolveInlineGenericUnit: function {
         }
         if templateDecl.isZero.not then {
             st.typing.declSetType declId: templateDecl typeId: did
-            st.reg.setDef typeId: did declId: templateDecl
         }
         # A non-generic inline unit is a real type; lay its unit->def childOf edge
         # (a generic template must NOT get one -- its id is the pre-instantiation
@@ -20846,7 +20823,6 @@ createUnitMono: function {
     # collection through the instantiation's own scope. Nothing registers the
     # label: the mono is reached through the trie, or through the binding
     # names the completion pass registers.
-    st.reg.setDef typeId: monoId declId: tmplDeclId
     mud: st.typing.declCloneType templateDeclId: tmplDeclId
     if mud.isZero.not then st.typing.declSetType declId: mud typeId: monoId
     if tplTid.isZero.not then st.reg.setGenericOrigin typeId: monoId value: tplTid
@@ -21271,7 +21247,6 @@ keepMonoFnGeneric: function {st: zenv.ZSymbolTable srcId: ztypes.tid newFnId: zt
     if newDecl.isZero then return
     st.reg.setGeneric typeId: newFnId value: true
     st.reg.copyGenericParams from: srcDecl to: newDecl
-    st.reg.setDef typeId: newFnId declId: srcDecl
     st.typing.unitFnTemplate.set key: newFnId value: srcId
     frn: (st.typing.funcReturnNode.get key: srcId).or d: zast.nodeid
     if frn.isZero.not then st.typing.funcReturnNode.set key: newFnId value: frn
@@ -68310,18 +68285,20 @@ surfaceDeclOfTypeId: function {
 
 
 # unitDeclOfTid -- the top-level unit root Decl that owns type `tid`'s
-# declaration as the registry links it (ZType.def -> parent walk to the
-# parentless unit root); 0 when the type has no linked declaration. The
-# id-valued unit-identity primitive: compare unit ownership by this, not by
-# name. The registry's link is sparser than the declaration map (declIdOfType):
-# a method's type links only once its signature is finished, and an instance
-# only where its mint links it, and the callers read that sparseness.
+# declaration (declIdOfType -> parent walk to the parentless unit root); 0
+# when the type has no declaration. An instance of a generic type, and each
+# member it copies, is minted in no unit and answers 0; a unit instance's copy
+# lies under its template, whose unit it answers. The id-valued unit-identity
+# primitive: compare unit ownership by this, not by name.
 unitDeclOfTid: function {
     reg: ztypes.ZTypeRegistry.view
     typing: ztyping.ZTyping.view
     tid: ztypes.tid
 } out ztypes.declid is {
-    cur: reg.defOf :tid
+    if (reg.genericOriginOf :tid).isZero.not when (
+        (reg.typetypeOf typeId: tid) != ztypes.ztypetype.unitType
+    ) then return ztypes.declid.zero
+    cur: typing.declIdOfType typeId: tid
     for cur.isZero.not loop {
         par: ztypes.declid
         isU: false
