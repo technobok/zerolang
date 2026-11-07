@@ -74,7 +74,6 @@ public: unit {
     :nodeLine
     :paramIsThisReceiverId
     :methodImplementsSpec
-    :declOfTypeId
     :templateDeclOf
     :tagAccessorOwner
     :surfaceDeclOfTypeId
@@ -9326,7 +9325,7 @@ instanceOnlyConstantNamed: function {
     tpl: bt
     org: st.reg.genericOriginOf tid: bt
     if org.isZero.not then tpl = org
-    tdecl: declOfTypeId reg: st.reg tid: tpl
+    tdecl: st.typing.declIdOfType typeId: tpl
     if tdecl.isZero or ((st.reg.genericNumericParamCountOf :tdecl) == 0) then return false
     md: st.typing.declFindChild parentDeclId: tdecl nameId: cnId
     if md.isZero then return false
@@ -9361,7 +9360,7 @@ foldReadInstanceConstant: function {
     org: st.reg.genericOriginOf tid: bt
     tpl: bt
     if org.isZero.not then tpl = org
-    tdecl: declOfTypeId reg: st.reg tid: tpl
+    tdecl: st.typing.declIdOfType typeId: tpl
     if tdecl.isZero or ((st.reg.genericNumericParamCountOf :tdecl) == 0) then return
     mono: bt
     if org.isZero then mono = activeConstMono :st ownerDecl: tdecl
@@ -20830,7 +20829,7 @@ unitTemplateKeyOf: function {
     if tdecl.isZero or tid.isZero then return zast.nameid
     pn: st.reg.genericParamNameOfTid :tdecl ptid: tid
     if pn.isZero.not then return pn
-    d: declOfTypeId reg: st.reg :tid
+    d: templateDeclOf reg: st.reg typing: st.typing :tid
     if d.isZero then return zast.nameid
     if (st.typing.declParentOf declId: d) != tdecl then return zast.nameid
     return (st.typing.decls.get i: d).name
@@ -23739,7 +23738,7 @@ siblingKeyOf: function {
     if td.isZero then return zast.nameid
     pn: st.reg.genericParamNameOfTid tdecl: td ptid: tid
     if pn.isZero.not then return pn
-    d: declOfTypeId reg: st.reg :tid
+    d: templateDeclOf reg: st.reg typing: st.typing :tid
     if d.isZero then return zast.nameid
     if (
         (st.typing.declParentOf declId: d) != (st.typing.declParentOf declId: td)
@@ -33271,7 +33270,7 @@ checkNumericParamMember: function {
     origin: st.reg.genericOriginOf tid: bt
     owner: bt
     if origin.isZero.not then owner = origin
-    tdecl: declOfTypeId reg: st.reg tid: owner
+    tdecl: st.typing.declIdOfType typeId: owner
     cd: st.reg.genericParamConstraintOf :tdecl paramName: cnId
     if cd.numKind.has.not then return miss
     bound: numericBoundTid :ast :st scope: st.curScope :cd
@@ -46292,7 +46291,7 @@ specWrittenName: function {st: zenv.ZSymbolTable.view ast: Ast.view tid: ztypes.
 spelledAsSignature: function {st: zenv.ZSymbolTable.view tid: ztypes.tid} out bool is {
     if (st.reg.genericOriginOf :tid).isZero.not then return false
     if (st.reg.isGenericOf :tid) then return false
-    fd: declOfTypeId reg: st.reg :tid
+    fd: st.typing.declIdOfType typeId: tid
     if fd.isZero.not when (st.typing.decls.get i: fd).fnptrField then return true
     if (st.reg.typetypeOf typeId: tid) != ztypes.ztypetype.functionType then return false
     return ((st.walk.fnHasBody.get key: tid).or d: false)
@@ -46725,8 +46724,8 @@ checkArgTypeMismatch: function {
     # type with no declaration is the shell an earlier refusal left, and that
     # refusal is the one error. Any other literal that does not fit is a
     # mistake of its own, reported whatever else was.
-    if (isLiteralTypeId reg: st.reg tid: vt) when (declOfTypeId reg: st.reg tid: ptid
-    ).isZero then emit = false
+    ptDecl: templateDeclOf reg: st.reg typing: st.typing tid: ptid
+    if (isLiteralTypeId reg: st.reg tid: vt) when ptDecl.isZero then emit = false
     if emit.not then return
     # two types of the same name say nothing to the reader: each is spelled
     # with the unit that declares it
@@ -62184,7 +62183,7 @@ constArmRead: function {
     if ptid.isZero then return ztypes.noConst
     ptt: st.reg.typetypeOf typeId: ptid
     # another type's `as` constant (`cfg.LIMIT`), folded where it is declared
-    ptd: declOfTypeId reg: st.reg tid: ptid
+    ptd: templateDeclOf reg: st.reg typing: st.typing tid: ptid
     pmd: st.typing.declFindChild parentDeclId: ptd nameId: armNameId
     if pmd.isZero.not when (
         typeMemberHoldsConstant
@@ -62227,7 +62226,7 @@ typeNamedFrom: function {
     # constant is a use, and descending below resolves it.
     ownDef: declOfUnitDef :st scope: rf unitDecl: lookupUnit nameId: typeNameId
     own: aliasTargetDecl :st :ast aliasDecl: ownDef
-    ptuDecl: declOfTypeId reg: st.reg tid: ptu
+    ptuDecl: templateDeclOf reg: st.reg typing: st.typing tid: ptu
     if ptu.isZero.not when own.isZero.not when ptuDecl != own then ptu = ztypes.tid.zero
     if ptu.isZero then {
         # a variant NOTHING ELSE mentions is not demanded, so the lookup finds
@@ -68413,7 +68412,7 @@ declMemberOf: function {
     ownerTid: ztypes.tid
     nameId: zast.nameid
 } out ztypes.declid is {
-    od: declOfTypeId reg: st.reg tid: ownerTid
+    od: templateDeclOf reg: st.reg typing: st.typing tid: ownerTid
     if od.isZero then return ztypes.declid.zero
     return (st.typing.declFindChild parentDeclId: od :nameId)
 }
@@ -68450,7 +68449,7 @@ declSurfaceOfName: function {
             if sv8.isZero.not then return sv8
         }
     }
-    return (declOfTypeId reg: st.reg :tid)
+    return (templateDeclOf reg: st.reg typing: st.typing :tid)
 }
 
 # nestedScopeSurface -- declSurfaceOfName's first answer: a scope nested in the
@@ -69587,7 +69586,7 @@ shellChildScope: function {
 } out ztypes.declid is {
     pt: rpt
     if (st.reg.genericOriginOf tid: pt).isZero.not then return scope
-    pdo: declOfTypeId reg: st.reg tid: pt
+    pdo: st.typing.declIdOfType typeId: pt
     if pdo.isZero then return scope
     return pdo
 }

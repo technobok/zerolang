@@ -1109,10 +1109,10 @@ ZTyping: class {
     # every Decl row, indexed by its DeclId: row 0 is the sentinel and ids are
     # minted dense in mint order and never removed, so the id IS the index
     decls: (List Decl i: ztypes.declid)
-    # type id -> the declaration that minted it (first mint wins), so a member
-    # setter reaches the owner's declaration without the type registry. A
-    # monomorphisation is absent: it links to its template through the
-    # registry, never through declSetType.
+    # type id -> the declaration that minted it (first mint wins): a
+    # definition, a method or function member, a type member, or a
+    # monomorphisation's own clone (declCloneType). A type nothing defines --
+    # the shell a name that resolved nowhere leaves -- has none.
     declByTypeId: (IdMapV ztypes.tid v: ztypes.declid)
     # a generic function a unit instance keeps as a template of its own
     # (keepMonoFnGeneric): the template unit's function it copies, whose
@@ -1621,9 +1621,11 @@ ZTyping: class {
         return od
     }
 
-    # setMemberType -- record a member declaration's type. Deliberately
-    # not declSetType: the member did not mint the type, so it must not claim
-    # the reverse declByTypeId edge.
+    # setMemberType -- record a member declaration's type. The member names
+    # the type as its declaration (declByTypeId) only when it defines it: a
+    # method or function member is the function its type is, and a type member
+    # is the type. A field, a parameter, an arm or a list is typed by a type it
+    # does not mint, so it claims nothing.
     setMemberType: function {
         :this parentTypeId: ztypes.tid nameId: zast.nameid childTypeId: ztypes.tid
     } is {
@@ -1652,14 +1654,9 @@ ZTyping: class {
         do8: this.decls.getMut i: md8
         do8.typeId = childTypeId
         do8.drop
-        # every member type names the declaration that minted it, whatever the
-        # member's kind: a method's type IS the function it declares (its
-        # parameters attach to that namespace), and a synthesized field's type
-        # still has exactly one declaration behind it.
-        # A LIST is the exception: its type is its value's, the list template's
-        # instance, which the list declares no more than a constant declares
-        # i64.
-        if childTypeId.isZero.not when (this.decls.get i: md8).kind.staticListDecl.not then {
+        mk8: (this.decls.get i: md8).kind
+        defines: mk8.methodDecl or mk8.funcDecl or mk8.typeDecl
+        if childTypeId.isZero.not when defines then {
             existingDecl: this.declIdOfType typeId: childTypeId
             if existingDecl.isZero then this.declByTypeId.set key: childTypeId value: md8
         }

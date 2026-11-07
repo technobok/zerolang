@@ -5350,9 +5350,13 @@ Ctx: class {
 # instance, has a declaration, or is a user family's type; 0 for a shell that is
 # none of these (a generic parameter, a list). Never looked up by name: a
 # name names a different type in another unit.
-canonTypeId: function {reg: ztypes.ZTypeRegistry.view tid: ztypes.tid} out ztypes.tid is {
+canonTypeId: function {
+    reg: ztypes.ZTypeRegistry.view
+    typing: ztyping.ZTyping.view
+    tid: ztypes.tid
+} out ztypes.tid is {
     if (originTidOf :reg :tid).isZero.not then return tid
-    if (ztypecheck.declOfTypeId :reg :tid).isZero.not then return tid
+    if (typing.declIdOfType typeId: tid).isZero.not then return tid
     if (reg.typetypeOf typeId: tid).isUserFamily then return tid
     return ztypes.tid.zero
 }
@@ -5462,8 +5466,8 @@ ptrHeldValtype: function {
     vt: chaseAggregateTypedef :reg :typing :ctx tid: (reg.variableTypeOf id: vid)
     # a data value's pointer is the value itself, never loaded: a variable of a
     # data type, or a sum's data payload the node is narrowed to
-    if (isStaticHandle :reg tid: vt) then return false
-    if (isStaticHandle :reg tid: (stampIdOf :ctx :typing :nid)) then return false
+    if (isStaticHandle :reg :typing tid: vt) then return false
+    if (isStaticHandle :reg :typing tid: (stampIdOf :ctx :typing :nid)) then return false
     return (passesByValue :reg :ctx tid: vt)
 }
 
@@ -5521,7 +5525,8 @@ pathIsPointer: function {
     n: astnode.view
 } out bool is {
     # a data value is a handle, however it is reached
-    if (isStaticHandle :reg tid: (stampIdOf :ctx :typing nid: (zast.nodeIdOf :n))) then return true
+    nStamp: stampIdOf :ctx :typing nid: (zast.nodeIdOf :n)
+    if (isStaticHandle :reg :typing tid: nStamp) then return true
     match (
         n
     ) case atomid then {
@@ -5635,7 +5640,7 @@ borrowedPointerField: function {
 } out bool is {
     pnid: zast.nodeIdOf n: (ast.nodes.get i: n.parent)
     pstamp: stampIdOf :ctx :typing nid: pnid
-    prid: canonTypeId :reg tid: pstamp
+    prid: canonTypeId :reg :typing tid: pstamp
     ptid: pstamp
     if prid.isZero.not then ptid = prid
     if (
@@ -16911,7 +16916,7 @@ implementationArgText: function {
     aIb: spelledCname :ctx tid: su.value
     aRcv: "&\{av}"
     # a data value is already the pointer the create takes (isStaticHandle)
-    if (isPtrVid :ctx vid: avVid) or (isStaticHandle :reg tid: su.value) then {
+    if (isPtrVid :ctx vid: avVid) or (isStaticHandle :reg :typing tid: su.value) then {
         aRcv = "\{av}"
     } else if avF.place.not then {
         # AN INLINE CONSTRUCTION IS NOT AN LVALUE: C rejects `&z_t109_create(40)`,
@@ -19864,7 +19869,7 @@ protocolProjectionRead: function {
     ib: ctxCnameView :ctx tid: bstamp
     # a data value is already the pointer the create takes (isStaticHandle)
     if (
-        (isPtrVid :ctx vid: bn2v) or (isStaticHandle :reg tid: bstamp)
+        (isPtrVid :ctx vid: bn2v) or (isStaticHandle :reg :typing tid: bstamp)
     ) then return "\{ib}_\{mn2}_create(\{bn2})"
     return "\{ib}_\{mn2}_create(&\{bn2})"
 }
@@ -20044,7 +20049,7 @@ fnptrFieldRead: function {
     accFp: ".".string
     rcvFp: "&\{bn2}"
     # a data value is a handle, whether a variable holds it or it folded
-    if (isPtrVid :ctx vid: bn2v) or (isStaticHandle :reg tid: bstamp) then {
+    if (isPtrVid :ctx vid: bn2v) or (isStaticHandle :reg :typing tid: bstamp) then {
         accFp = "->".string
         rcvFp = "\{bn2}"
     }
@@ -20362,7 +20367,7 @@ emitUserTypeMemberRead: function {
     mnUtC: memberC :ast :reg :typing :ctx owner: bstamp kind: memberkind.field nameId: mnId
     # a data value is a handle whatever spells it: a variable, or a narrowed
     # sum's payload read in place
-    if (isPtrVid :ctx vid: bn2v) or (isStaticHandle :reg tid: bstamp) then {
+    if (isPtrVid :ctx vid: bn2v) or (isStaticHandle :reg :typing tid: bstamp) then {
         return (stating :facts from: (memberFacts b: bn2F) text: "\{bn2}->\{mnUtC}")
     }
     return (stating :facts from: (memberFacts b: bn2F) text: "\{bn2}.\{mnUtC}")
@@ -21938,7 +21943,7 @@ boxMemberElem: function {
     if bt.isZero then bt = stampIdOf :ctx :typing nid: bnid
     if bt.isZero then return ztypes.tid.zero
     if (reg.isBoxOf tid: bt).not then {
-        bxc: canonTypeId :reg tid: bt
+        bxc: canonTypeId :reg :typing tid: bt
         if bxc.isZero then return ztypes.tid.zero
         bt = bxc
         if (reg.isBoxOf tid: bt).not then return ztypes.tid.zero
@@ -29081,7 +29086,8 @@ emitMatchStmt: function {
         :tmp
         :buf
     ) then return
-    vtid: canonTypeId :reg tid: (stampIdDeep :ctx :reg :typing n: (ast.nodes.get i: m.subject))
+    subjStamp: stampIdDeep :ctx :reg :typing n: (ast.nodes.get i: m.subject)
+    vtid: canonTypeId :reg :typing tid: subjStamp
     if (matchGenericRoute :ast :reg :typing :ctx :m :assignTo :ind :tmp :buf) then return
     # a typedef over a union or variant is matched on its base's tag
     vend: ztypecheck.typedefChaseTid :typing tid: vtid
@@ -29844,7 +29850,7 @@ emitMatchClause: function {
                 }
                 # a data payload is a handle: the shadow reads through it
                 pyo: typing.declChildOfId parentTypeId: vtid nameId: arm
-                if pyo.some when (isStaticHandle :reg tid: pyo) then {
+                if pyo.some when (isStaticHandle :reg :typing tid: pyo) then {
                     ctx.ptrVids.append from: snameVid
                     staticArm = true
                 }
@@ -34651,7 +34657,7 @@ isReftypeParam: function {
     duT: definedInUnitTid :reg :typing :tid
     isShell: duT.isZero
     if isShell then {
-        canonTid: canonTypeId :reg :tid
+        canonTid: canonTypeId :reg :typing :tid
         if canonTid.isZero.not then cid = canonTid
     }
     tt: reg.typetypeOf typeId: cid
@@ -34967,7 +34973,7 @@ paramTypeIsPointer: function {
     pid: ztypes.tid
 } out bool is {
     # a data value is a pointer already, and is passed as one
-    if (isStaticHandle :reg tid: pid) then return false
+    if (isStaticHandle :reg :typing tid: pid) then return false
     owns: paramTakesArg :typing :fid :pnameId
     # The receiver is a reference in BOTH families -- its default is `borrow`,
     # not `take`, so a record method acts on the caller's instance rather than
@@ -35042,7 +35048,7 @@ paramReadsOnly: function {
     pnameId: zast.nameid
     pid: ztypes.tid
 } out bool is {
-    if (reg.isStaticOf tid: (canonTypeId :reg tid: pid)) then return true
+    if (reg.isStaticOf tid: (canonTypeId :reg :typing tid: pid)) then return true
     return (
         typing.declOwnershipIs
         parentTypeId: fid
@@ -35243,16 +35249,20 @@ valueIsItsPointer: function {
     ctx: Ctx.view
     tid: ztypes.tid
 } out bool is {
-    if (isStaticHandle :reg :tid) then return true
+    if (isStaticHandle :reg :typing :tid) then return true
     return (reg.isBoxOf :tid) or (isHeapPtrCollection :reg :typing :ctx :tid)
 }
 
 # isStaticHandle -- a value of tid is a data value: a `const` pointer to the
 # static object the compiler built, copied as the pointer and read through it.
 # A choice is static too, but held by value, as a variant is.
-isStaticHandle: function {reg: ztypes.ZTypeRegistry.view tid: ztypes.tid} out bool is {
+isStaticHandle: function {
+    reg: ztypes.ZTypeRegistry.view
+    typing: ztyping.ZTyping.view
+    tid: ztypes.tid
+} out bool is {
     if tid.isZero then return false
-    ct: canonTypeId :reg :tid
+    ct: canonTypeId :reg :typing :tid
     if (reg.isStaticOf :tid).not when (reg.isStaticOf tid: ct).not then return false
     return (reg.typetypeOf typeId: ct) == ztypes.ztypetype.recordType
 }
@@ -35278,7 +35288,7 @@ nodeIsAtomBox: function {
         if (reg.isBoxOf tid: bxt) then return true
         if bxt.isZero then return false
         bxc: ztypes.tid
-        bxc = canonTypeId :reg tid: bxt
+        bxc = canonTypeId :reg :typing tid: bxt
         if bxc.isZero then return false
         return (reg.isBoxOf tid: bxc)
     } else {
@@ -35637,7 +35647,7 @@ typeRefC: function {
         noteTypeUse :ctx tid: cid
         rc: ctxCnameView :ctx tid: cid
         # a data value is a handle to its static object
-        if (isStaticHandle :reg tid: cid) then return "const \{rc}_t*"
+        if (isStaticHandle :reg :typing tid: cid) then return "const \{rc}_t*"
         rt: "\{rc}_t"
         return rt
     }
@@ -35780,6 +35790,7 @@ tmplSectionDestroys: function {
         templateParamArgs
         :ast
         :reg
+        :typing
         template: (originTidOf :reg tid: mono)
         :mono
         names: pNames
@@ -36892,12 +36903,12 @@ noteStaticVids: function {reg: ztypes.ZTypeRegistry.view typing: ztyping.ZTyping
     if typing.staticTypesSeen.not then return
     t: ztypes.tid 1
     for t < reg.nextTid loop {
-        if (isStaticHandle :reg tid: t) then ctx.staticTids.add item: t
+        if (isStaticHandle :reg :typing tid: t) then ctx.staticTids.add item: t
         t = t.next
     }
     v: ztypes.vid 1
     for v < reg.nextVid loop {
-        if (isStaticHandle :reg tid: (reg.variableTypeOf id: v)) then (
+        if (isStaticHandle :reg :typing tid: (reg.variableTypeOf id: v)) then (
             ctx.staticVids.add
             item: v
         )
@@ -38488,7 +38499,7 @@ takeParamDestroyTid: function {
     pt: ppid
     puse: chaseAggregateTypedef :reg :typing :ctx tid: pt
     if (ownsResources :reg :ctx tid: puse).not then {
-        prbn: canonTypeId :reg tid: pt
+        prbn: canonTypeId :reg :typing tid: pt
         if prbn.isZero.not then puse = prbn
     }
     if (ownsResources :reg :ctx tid: puse).not then return ztypes.tid
@@ -40599,7 +40610,7 @@ listElemsDestroyC: function {
 } out String is {
     ecid: eid
     if (destroyTargetTid :reg :typing :ctx tid: eid).isZero then {
-        rbn: canonTypeId :reg tid: eid
+        rbn: canonTypeId :reg :typing tid: eid
         if rbn.isZero.not then ecid = rbn
     }
     edc: destroyLineC :reg :typing :ctx tid: ecid nm: "p->data[_di]" ind: "        "
@@ -41790,7 +41801,7 @@ payloadDestructor: function {
         # way the List-element destructor does
         pfn: destroyFnC :reg :typing :ctx tid: co
         if pfn.length > 0 then return pfn
-        rbn: canonTypeId :reg tid: co
+        rbn: canonTypeId :reg :typing tid: co
         if rbn.isZero.not then return (destroyFnC :reg :typing :ctx tid: rbn)
     }
     return "".string
@@ -44041,7 +44052,7 @@ maybePreEmitElem: function {
     elemTid: eid
     elemName: reg.nameOf tid: eid
     if (definedInUnitTid :reg :typing tid: eid).isZero when elemName.length > 0 then {
-        srid: canonTypeId :reg tid: eid
+        srid: canonTypeId :reg :typing tid: eid
         if srid.isZero.not then elemTid = srid
     }
     cid: chaseAggregateTypedef :reg :typing :ctx tid: elemTid
@@ -45194,12 +45205,13 @@ memberKeys: function {
 templateParamArgs: function {
     ast: Ast.view
     reg: ztypes.ZTypeRegistry.view
+    typing: ztyping.ZTyping.view
     template: ztypes.tid
     mono: ztypes.tid
     names: List String
     tids: ListVal ztypes.tid
 } is {
-    td: ztypecheck.declOfTypeId :reg tid: template
+    td: typing.declIdOfType typeId: template
     if td.isZero then return
     pns: reg.genericParamNamesOf tdecl: td
     k: u64
@@ -45243,7 +45255,7 @@ emitTmplClassMono: function {
     tpl: originTidOf :reg tid: monoId
     pNames: List String
     pTids: ListVal ztypes.tid
-    templateParamArgs :ast :reg template: tpl mono: monoId names: pNames tids: pTids
+    templateParamArgs :ast :reg :typing template: tpl mono: monoId names: pNames tids: pTids
     # each parameter's in-place destructor, written only where a kept section
     # names it (below)
     dfns: List String
@@ -45388,7 +45400,7 @@ collectLateMonosKind: function {
 fnDeclScopeTid: function {
     reg: ztypes.ZTypeRegistry.view typing: ztyping.ZTyping.view fid: ztypes.tid
 } out ztypes.tid is {
-    d: ztypecheck.declOfTypeId :reg tid: fid
+    d: ztypecheck.templateDeclOf :reg :typing tid: fid
     if d.isZero then return ztypes.tid
     p: typing.declParentOf declId: d
     if p.isZero then return ztypes.tid
@@ -47509,7 +47521,7 @@ protoParamCtype: function {
     cpid: pid
     pidShell: (definedInUnitTid :reg :typing tid: pid).isZero
     if pidShell then {
-        rcid: canonTypeId :reg tid: pid
+        rcid: canonTypeId :reg :typing tid: pid
         if rcid.isZero.not then cpid = rcid
     }
     pct: typeRefC :ast :reg :typing :ctx tid: cpid
@@ -48546,7 +48558,7 @@ isValueViewTid: function {
     # canonicalises before it chases (protoParamCtype)
     c: tid
     if (definedInUnitTid :reg :typing :tid).isZero then {
-        rc: canonTypeId :reg :tid
+        rc: canonTypeId :reg :typing :tid
         if rc.isZero.not then c = rc
     }
     return (isListViewOriginOf :reg :ctx tid: (chaseAggregateTypedef :reg :typing :ctx tid: c))
@@ -49035,7 +49047,7 @@ nativeCreateArg: function {
     ptid: ztypes.tid
     facts: cfacts.borrow
 } out String is {
-    prtid: canonTypeId :reg tid: ptid
+    prtid: canonTypeId :reg :typing tid: ptid
     i: u64
     for i < call.arguments.count loop {
         aId: zast.kidAt kids: ast.kids span: call.arguments :i
@@ -49984,7 +49996,7 @@ dispatchReceiverTid: function {
     if (isDispatchableTid :reg tid: own) then return own
     ownerName: reg.nameOf tid: own
     if ownerName.length == 0 then return own
-    brid: canonTypeId :reg tid: own
+    brid: canonTypeId :reg :typing tid: own
     base: brid
     if (isDispatchableTid :reg tid: base) then return base
     return own
@@ -50310,6 +50322,7 @@ emitProtocolCreateCall: function {
                 fromTid = (
                     canonTypeId
                     :reg
+                    :typing
                     tid: (stampIdDeep :ctx :reg :typing n: (ast.nodes.get i: a.operation))
                 )
             }
@@ -50886,7 +50899,7 @@ borrowedFieldHeldByPointer: function {
     ctx: Ctx
     fid: ztypes.tid
 } out bool is {
-    ftid: canonTypeId :reg tid: fid
+    ftid: canonTypeId :reg :typing tid: fid
     if ftid.isZero then ftid = fid
     # a Map or a Set IS its heap pointer, and a borrowed field holds that
     if (isHeapPtrCollection :reg :typing :ctx tid: ftid) then return false
@@ -51385,10 +51398,14 @@ hashFnDemand: function {
 # appendHashSig -- the signature of `tid`'s generated `_hash`, onto `dest`: it
 # takes the value, or for a data type the handle the value is held as.
 appendHashSig: function {
-    reg: ztypes.ZTypeRegistry.view ctx: Ctx tid: ztypes.tid dest: String.borrow
+    reg: ztypes.ZTypeRegistry.view
+    typing: ztyping.ZTyping.view
+    ctx: Ctx
+    tid: ztypes.tid
+    dest: String.borrow
 } is {
     cn: spelledCname :ctx :tid
-    if (isStaticHandle :reg :tid) then {
+    if (isStaticHandle :reg :typing :tid) then {
         dest.append "static uint64_t \{cn}_hash(const \{cn}_t* a)"
     } else {
         dest.append "static uint64_t \{cn}_hash(\{cn}_t a)"
@@ -51407,7 +51424,7 @@ hashDefC: function {
     tid: ztypes.tid
     dest: String.borrow
 } is {
-    appendHashSig :reg :ctx :tid :dest
+    appendHashSig :reg :typing :ctx :tid :dest
     dest.append " {\n"
     if (
         ztypecheck.valIsMonoOf
@@ -51452,7 +51469,7 @@ hashDefC: function {
         )
         fv: "a.\{fknC}"
         # a data value is hashed through its handle
-        if (isStaticHandle :reg :tid) then fv = "a->\{fknC}"
+        if (isStaticHandle :reg :typing :tid) then fv = "a->\{fknC}"
         partHashWords :ast :reg :typing :ctx tid: (ids.get i: fk) v: fv.stringView :words
         fk = fk + 1
     }
@@ -51611,7 +51628,7 @@ valKeyHashBody: function {
     }
     base: ztypecheck.typedefChaseTid :typing tid: key
     if src.written.not when (partIsCScalar :reg :typing tid: base).not then {
-        appendHashSig :reg :ctx tid: base dest: buf
+        appendHashSig :reg :typing :ctx tid: base dest: buf
         buf.append ";\n"
     }
     return (hashExprC :ast :reg :typing :ctx tid: key v: "_key")
@@ -51681,7 +51698,7 @@ emitHashPrototypes: function {
 } is {
     oi: u64
     for oi < ctx.hashOrder.length loop {
-        appendHashSig :reg :ctx tid: (ctx.hashOrder.get i: oi) dest: buf
+        appendHashSig :reg :typing :ctx tid: (ctx.hashOrder.get i: oi) dest: buf
         buf.append ";\n"
         oi = oi + 1
     }
@@ -51808,7 +51825,7 @@ emitRecordEq: function {
     }
     body: String
     writeRecordEq :ast :reg :typing :ctx :tid :rc :nameIds :ids dest: body
-    emitEqLate :ctx cname: rc.stringView :body :buf handles: (isStaticHandle :reg :tid)
+    emitEqLate :ctx cname: rc.stringView :body :buf handles: (isStaticHandle :reg :typing :tid)
 }
 
 # writeRecordEq -- emitRecordEq's definition, written to `dest`.
@@ -51826,7 +51843,7 @@ writeRecordEq: function {
     dest: String.borrow
 } is {
     # a data value is compared through the handles it is held as
-    handles: isStaticHandle :reg :tid
+    handles: isStaticHandle :reg :typing :tid
     lq: "static bool \{rc}_eq(\{rc}_t a, \{rc}_t b) {\n"
     if handles then lq = "static bool \{rc}_eq(const \{rc}_t* a, const \{rc}_t* b) {\n"
     dest.append lq
@@ -51908,7 +51925,7 @@ emitOneRecord: function {
     }
     # a data value is built only by the compiler: no constructor at run time;
     # any other is written only when written C builds one
-    if (isStaticHandle :reg :tid).not when (ctx.createUsed.has item: tid) then {
+    if (isStaticHandle :reg :typing :tid).not when (ctx.createUsed.has item: tid) then {
         params: String
         inits: String
         (
