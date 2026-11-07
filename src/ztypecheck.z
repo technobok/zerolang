@@ -2413,9 +2413,18 @@ typePathAliasTid: function {
     }
     if isOp then return ztypes.tid.zero
     td: pathTypeDecl :st :ast scope: (unitScopeOf typing: st.typing declId: scope) nid: parentNid
-    if td.isZero then return ztypes.tid.zero
     md: st.typing.declFindChild parentDeclId: td nameId: leafId
-    if (asMemberIsAlias :st :ast tdecl: td :md).not then return ztypes.tid.zero
+    # an INSTANCE of a generic type (`(Box t: i64)`, or a name defined as one)
+    # declares no alias of its own: its template's alias, completed with the
+    # instance's arguments, is the one it has
+    inst: ztypes.tid
+    if (asMemberIsAlias :st :ast tdecl: td :md).not then {
+        inst = pathInstanceTid :st :ast :scope :parentNid :leafId
+        if inst.isZero then return ztypes.tid.zero
+        td = templateDeclOf reg: st.reg typing: st.typing tid: inst
+        md = st.typing.declFindChild parentDeclId: td nameId: leafId
+        if (asMemberIsAlias :st :ast tdecl: td :md).not then return ztypes.tid.zero
+    }
     # the path refers to the alias, as a path to a definition refers to it
     rdk: nid
     rdv: md
@@ -2443,7 +2452,93 @@ typePathAliasTid: function {
             width: 1
         )
     }
-    return (asAliasTargetOf :st :ast tdecl: td :md)
+    target: asAliasTargetOf :st :ast tdecl: td :md
+    if inst.isZero or target.isZero then return target
+    return (
+        partialSubstituted
+        :st
+        :ast
+        unitDecl: (owningUnitDecl :st declId: scope)
+        partial: inst
+        tid: target
+    )
+}
+
+# applicationDeclaresAlias -- the call `app`, written in `scope`, applies a type
+# whose declaration has the alias `leafId`: read off the declarations, so a value
+# call (an operator, a function, a method on a local) is told apart unresolved.
+applicationDeclaresAlias: function {
+    st: zenv.ZSymbolTable
+    ast: Ast
+    scope: ztypes.declid
+    app: zast.nodeid
+    leafId: zast.nameid
+} out bool is {
+    callable: zast.nodeid
+    infix: false
+    {
+        an: ast.nodes.get i: app
+        if an.call then {
+            callable = an.callable
+            infix = an.infix
+        }
+    }
+    if infix or callable.isZero then return false
+    rn: rootNameIdOf :ast n: (ast.nodes.get i: callable)
+    if rn.isZero.not when (st.lookup nameId: rn).none.not then return false
+    td: pathTypeDecl :st :ast scope: (unitScopeOf typing: st.typing declId: scope) nid: callable
+    md: st.typing.declFindChild parentDeclId: td nameId: leafId
+    return (asMemberIsAlias :st :ast tdecl: td :md)
+}
+
+# pathInstanceTid -- the instance of a generic type a path's parent names, when
+# its template declares the alias `leafId`: a type application (`(Box t: i64)`),
+# or a name whose definition is one (`B: (Box t: i64)`). Most parents a path
+# goes through are values (`(f x: 1).not`, `(v.has k).not`), so the head is read
+# off the declarations first, and only an application whose template has the
+# alias is resolved. 0 for any other parent.
+pathInstanceTid: function {
+    st: zenv.ZSymbolTable
+    ast: Ast
+    scope: ztypes.declid
+    parentNid: zast.nodeid
+    leafId: zast.nameid
+} out ztypes.tid is {
+    # the application: the parent itself, or the value of the definition the
+    # parent names, read in the scope that definition is written in
+    app: zast.nodeid
+    appScope: scope
+    nm: zast.nameid
+    {
+        n: ast.nodes.get i: parentNid
+        if n.call then app = parentNid
+        if n.atomid then nm = n.name
+    }
+    if nm.isZero.not then {
+        h: envLookup :st :scope nameId: nm
+        if h.declId.isZero then return ztypes.tid.zero
+        dn: (st.typing.decls.get i: h.declId).node
+        if dn.isZero then return ztypes.tid.zero
+        dv: ast.nodes.get i: dn
+        if dv.namedoperation when (ast.nodes.get i: dv.operation).call then {
+            app = dv.operation
+            appScope = st.typing.declParentOf declId: h.declId
+        }
+    }
+    if app.isZero then return ztypes.tid.zero
+    if (applicationDeclaresAlias :st :ast scope: appScope :app :leafId
+    ).not then return ztypes.tid.zero
+    t: (
+        resolveTyperefShell
+        :st
+        :ast
+        unitDecl: (owningUnitDecl :st declId: scope)
+        :scope
+        nid: parentNid
+        thisName: ""
+    )
+    if (st.reg.genericOriginOf tid: t).isZero then return ztypes.tid.zero
+    return t
 }
 
 # scopeIsInside -- the scope `scope` is the declaration `outer` or lies within
@@ -5812,6 +5907,41 @@ recordFuncReturnNode: function {
     st.typing.funcReturnNode.set key: fidc value: rn
 }
 
+# stampTypePathAlias -- a signature's type-ref that is an alias reached through
+# a type (`Tree.Node`, `B.Elem`) is stamped where the signature resolves it,
+# and kept from the deferred stamp, which resolves names, not paths. A body
+# binds a parameter from this stamp; without it, the path read as an arm
+# default and typed the parameter as the path's parent.
+stampTypePathAlias: function {
+    st: zenv.ZSymbolTable
+    ast: Ast
+    scope: ztypes.declid
+    nid: zast.nodeid
+} is {
+    par: zast.nodeid
+    chd: zast.nodeid
+    {
+        n: ast.nodes.get i: nid
+        if n.dottedpath then {
+            par = n.parent
+            chd = n.child
+        }
+    }
+    if par.isZero then return
+    t: (
+        typePathAliasTid
+        :st
+        :ast
+        :scope
+        parentNid: par
+        leafId: (atomNameId :ast n: (ast.nodes.get i: chd))
+        :nid
+    )
+    if t.isZero then return
+    ztyping.nodeTypeSet tbl: st.typing.nodeType :nid tid: t
+    st.walk.noStampNode.set key: nid value: true
+}
+
 # recordReturnType -- record a function's `out T` return type-ref (mirrors
 # demandReturnType's extraction). A parameterized return (out (Result ...)) yields no
 # bare base name and is skipped (its mono is NULL-defined, filtered out anyway).
@@ -5829,36 +5959,14 @@ recordReturnType: function {
     refuseMisplacedImplement :st :ast nid: oId
     # an alias of the enclosing type is stamped now (typeAsMemberTid): the
     # deferred stamp may meet it while its target is still being minted. One
-    # reached through a type (`Tree.Node`) is stamped now too: the dotted return
-    # is checked before any stamp (checkReturnNamesType)
+    # reached through a type is stamped now too: the dotted return is checked
+    # before any stamp (checkReturnNamesType)
     rnm: zast.nameid
-    rpar: zast.nodeid
-    rchd: zast.nodeid
     {
         rn: ast.nodes.get i: oId
         if rn.atomid then rnm = rn.name
-        if rn.dottedpath then {
-            rpar = rn.parent
-            rchd = rn.child
-        }
     }
-    if rpar.isZero.not then {
-        rpt: (
-            typePathAliasTid
-            :st
-            :ast
-            :scope
-            parentNid: rpar
-            leafId: (atomNameId :ast n: (ast.nodes.get i: rchd))
-            nid: oId
-        )
-        if rpt.isZero.not then {
-            ztyping.nodeTypeSet tbl: st.typing.nodeType nid: oId tid: rpt
-            rsk: oId
-            rsv: true
-            st.walk.noStampNode.set key: rsk value: rsv
-        }
-    }
+    stampTypePathAlias :st :ast :scope nid: oId
     # only a name some `as` item spells as a type may be an alias
     if rnm.isZero.not when (st.walk.asTypeShapedNames.has item: rnm) when (
         thisName.length > 0
@@ -7659,6 +7767,7 @@ registerValueParam: function {
     if (paramIsThisReceiver :ast op: (ast.nodes.get i: pm.operation)) then {
         st.reg.setThisParamName typeId: fid nameId: pm.name
     }
+    stampTypePathAlias :st :ast scope: rf nid: pm.operation
     recordTyperef :st scope: rf :ast :unitDecl :thisName nid: pm.operation
     # a `.private` parameter is a friend handle: the call must hand it one. A
     # `this.private` receiver is the type's own method, and grants itself
