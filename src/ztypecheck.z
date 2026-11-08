@@ -36972,6 +36972,7 @@ checkUnboundAtom: function {
     return result
 }
 
+
 # refuseStrayControl -- a `break` or `continue` outside every scope that brings
 # it in: a `for` loop brings both, a block `break` alone. The name then finds
 # the system unit's own declaration, which documents the builtin and has no
@@ -45067,7 +45068,17 @@ hoistArg: function {
     argNode: ast.nodes.get i: argId
     ln = nodeLine n: argNode
     co = nodeCol n: argNode
-    assignId: hoistRows :ast :st :argType :paramType :ln :co
+    # a temporary is a run-time variable, so a number literal it holds takes
+    # its default, as a binding's does: a numeric literal type has no run-time
+    # variable
+    tempType: argType
+    if (isLiteralTypeId reg: st.reg tid: argType) then tempType = (
+        materialiseLiteral
+        :ast
+        :st
+        t: argType
+    )
+    assignId: hoistRows :ast :st argType: tempType :paramType :ln :co
     argPins: List ztyping.PinPath
     takePendingPins :st dst: argPins
     # A borrow path whose LEAF is a method describes a CALL, and a call's
@@ -45081,7 +45092,7 @@ hoistArg: function {
     hown: ztypes.zownership.owned
     if hpins.length > 0 when (
         st.reg.isReftypeOf
-        tid: argType
+        tid: tempType
     ) then hown = ztypes.zownership.borrowed
     # A VALUE WHOSE STORAGE SOMETHING ELSE OWNS is held by a temp that owns
     # nothing (valueIsLent): a borrow-returning call, a field read off one, or a
@@ -45092,7 +45103,7 @@ hoistArg: function {
         :ast
         nid: argId
     ) then hown = ztypes.zownership.borrowed
-    vid: st.reg.newVariable ztypeId: argType ownership: hown
+    vid: st.reg.newVariable ztypeId: tempType ownership: hown
     st.reg.setVariableSynthOrigin id: vid origin: "anf".string
     if hown == ztypes.zownership.borrowed then (
         st.reg.setVariableBorrowOrigin
@@ -55873,6 +55884,11 @@ checkValueAt: function {
     t: checkValueArmAt :st :unitDecl :ast :nid
     refuseCompileTimeSumValue :st :ast :nid :t
     stampConstAt :st :unitDecl :ast :nid
+    ult: untypedNameReadTid :st :ast :nid
+    if ult.isZero.not then {
+        stampGate :st :nid tid: ult
+        return ult
+    }
     markStaticListIndexRead :st :ast :nid
     markFoldedFnFieldCall :st :ast :nid
     ft: textFoldType :st :ast :nid
@@ -55881,6 +55897,32 @@ checkValueAt: function {
         return ft
     }
     return t
+}
+
+# untypedNameReadTid -- the literal type a NAME read at `nid` wears when it
+# folded to an untyped number: a constant read bare or through its unit or type
+# (`K`, `nums.J`, `cfg.K` with `K: 5`), or an untyped data value's field -- not
+# a method's folded result, which has the method's type. Such
+# a constant is an untyped literal, so it reads as its value written in place
+# would -- `K + w` is w's type, as `5 + w` is. 0 for any other node; a typed
+# constant (`L: 5.u8`) is its type.
+untypedNameReadTid: function {st: zenv.ZSymbolTable ast: Ast nid: zast.nodeid} out ztypes.tid is {
+    {
+        n: ast.nodes.get i: nid
+        if n.atomid.not and n.dottedpath.not then return ztypes.tid.zero
+    }
+    # a method's result is the method's: `C.length` on a text constant is the
+    # u64 `length` declares, folded or not
+    rd: st.typing.refDecl.get key: nid
+    if rd.some then {
+        k: (st.typing.decls.get i: rd).kind
+        if k.methodDecl or k.funcDecl then return ztypes.tid.zero
+    }
+    v: st.typing.nodeConstIn mono: st.typing.curMonoStamp :nid
+    if v.numTid.isZero.not then return ztypes.tid.zero
+    if v.kind.ivalKind then return st.reg.literalIntTid
+    if v.kind.fvalKind then return st.reg.literalFloatTid
+    return ztypes.tid.zero
 }
 
 # textFoldType -- the type of a text method's folded call at `nid` on an
