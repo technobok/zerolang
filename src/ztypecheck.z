@@ -5769,8 +5769,13 @@ fieldSlotTid: function {
         st.typing.declSetContaining declId: od7 mark: true
     }
     # a data field is a static position: its value is folded, never
-    # emitted as written, so it may keep a literal untyped
-    if (st.reg.isStaticOf tid: ownerTid) then st.walk.staticLiteralTyperefs.add item: oId
+    # emitted as written, so it may keep a literal untyped. A sum's arm may
+    # name a literal type too: the sum is then a compile-time sum, which bounds
+    # a parameter and is never made (refuseCompileTimeSumValue)
+    if (st.reg.isStaticOf tid: ownerTid) or (isSumTid :st tid: ownerTid) then (
+        st.walk.staticLiteralTyperefs.add
+        item: oId
+    )
     r7: resolveFieldTyperef :st :ast :unitDecl :scope nid: oId :thisName
     if od7.isZero.not then st.typing.declSetContaining declId: od7 mark: prevOn
     return r7
@@ -8852,14 +8857,17 @@ stampForcedTyperef: function {
 # forceMemberOf -- the member `nameId` of `parentTypeId`, resolved if it is not
 # yet. The by-NAME demand point: declChildOfId is a readonly view holding no
 # registry and no ast, so it can never resolve anything itself -- every force
-# sits in front of a lookup, never inside one.
+# sits in front of a lookup, never inside one. Under --eager too: the eager
+# tier resolves every member, but in its own order, and a lookup may come
+# first -- a literal type is reached by a literal, never by a name that would
+# have resolved it, so `m: 2 * 3` as a parameter default reads intliteral's
+# `*` before the tier reaches intliteral.
 forceMemberOf: function {
     st: zenv.ZSymbolTable
     ast: Ast
     parentTypeId: ztypes.tid
     nameId: zast.nameid
 } is {
-    if st.typing.eagerAll then return
     if nameId.isZero then return
     md: st.typing.declMemberIdOf :parentTypeId :nameId
     if md.isZero then return
@@ -16648,7 +16656,8 @@ typedefBaseDecl: function {
 }
 
 # aliasTargetDecl -- the definition an alias Decl names, through any number of
-# aliases; zero when it names none.
+# aliases -- into a file unit or a unit nested where the alias is written, as
+# system's `f128: quadfloat.f128` names its subunit's; zero when it names none.
 aliasTargetDecl: function {
     st: zenv.ZSymbolTable.view
     ast: Ast.view
@@ -16660,7 +16669,7 @@ aliasTargetDecl: function {
         hops = hops + 1
         tk: reexportTargetIdsOf typing: st.typing :ast declId: d
         if tk.unitName.isZero then return d
-        du: fileUnitNamedAt :st scope: (st.typing.declParentOf declId: d) nameId: tk.unitName
+        du: boundQualifierUnit :st scope: (st.typing.declParentOf declId: d) qualId: tk.unitName
         if du.isZero then return ztypes.declid.zero
         nd: declOfUnitDef :st scope: du unitDecl: du nameId: tk.defName
         if nd.isZero then return nd
@@ -25131,7 +25140,8 @@ sumArmHeadDecl: function {
 } out ztypes.declid is {
     d: ztypes.declid
     n: ast.nodes.get i: op
-    if n.atomid then {
+    # a bare name, or the `:T` shorthand arm, whose label is the type's name
+    if n.atomid or n.labelvalue then {
         d = (
             nearestDeclOf
             :st
@@ -31888,6 +31898,7 @@ checkMemberAutoCall: function {
         }
         noteStatementAutoCall :st nid: dp.nid
         lockAutoCallReceiver :ast :st :dp shared: aShr
+        landLiteralReceiver :st :ast recv: dp.parent method: mo instance: ztypes.tid.zero
         ro: methodReturnOf reg: st.reg typing: st.typing mid: mo
         match (
             ro
@@ -34711,8 +34722,14 @@ checkNumericSuffixCast: function {
         # suffix, so a numeric target the literal type does not declare is an
         # error here rather than a fall-through -- otherwise `3.5.u8` would
         # materialise to f64 and quietly become f64's runtime-checked `u8`.
-        # A NON-numeric child does fall through: that is how `5.times` and
-        # `1.0.scaleB` reach their member on the materialised receiver.
+        # A child that names no scalar type is no conversion: it is one of the
+        # literal type's other members (`+`, `5.times`), reached by the
+        # ordinary member lookup.
+        if (isScalarNameId id: castChildId).not then return (
+            callleg
+            handled: false
+            tid: ztypes.tid.zero
+        )
         litTid: st.reg.literalIntTid
         if (ztypes.isFloatLexeme numstr: castBase.stringView) then litTid = st.reg.literalFloatTid
         castOpt: literalConvTarget :ast :st tid: litTid nameId: castChildId
@@ -34922,10 +34939,10 @@ dottedBaseTid: function {
         }
         if bt.isZero then return ztypes.tid.zero
     }
-    # A literal base materialises before member lookup (`5.times` is i64's,
-    # `"ab".length` StringView's); the parent node restamps at the concrete
-    # default.
-    if (isAnyLiteralTid :st tid: bt) then {
+    # A string literal base materialises before member lookup (`"ab".length`
+    # is StringView's); the parent node restamps at the concrete default. A
+    # numeric literal's members are its own type's.
+    if (isTextLiteralTid :st tid: bt) then {
         mbt: materialiseLiteral :ast :st t: bt
         if mbt != bt then {
             bt = mbt
@@ -39923,6 +39940,9 @@ checkWith: function {
     grey: st.beginLocal nameId: withnode.name
     errW: st.typing.errors.length
     vt: checkValueAt :st :unitDecl :ast nid: withnode.value
+    # a literal bound to a name takes its default, as a plain binding's does:
+    # a literal type has no run-time variable
+    vt = materialiseLiteral :ast :st t: vt
     vt = staticListAsValue :st :ast :vt nid: withnode.value
     if (refuseUnitValue :st :ast :vt nid: withnode.value) then vt = ztypes.tid
     refuseValueBorrow :st :ast :vt value: withnode.value
@@ -44927,37 +44947,6 @@ isOperatorName: function {name: StringView} out bool is {
     return false
 }
 
-# literalTidOfLiteralOperand -- the literal pseudo-type a left operand carries
-# by its SPELLING, or 0 when it carries none. The node's stamp cannot answer:
-# an operand that is the receiver of an operator has been materialised for the
-# member lookup and restamped at the concrete default, so a hex constant above
-# i64 reads back as i64 and the operation answers i64 where the literal itself
-# would have fit u64.
-#
-# The walk follows the left-nested chain, because that is the shape the rule is
-# about: `0xff.. + 1 - 1` is an operation whose left operand is an operation
-# whose left operand is a literal, and every step of it keeps the literal
-# result. A COMPARISON breaks the chain -- it answers bool, never a literal.
-literalTidOfLiteralOperand: function {
-    st: zenv.ZSymbolTable.view
-    ast: Ast.view
-    nid: zast.nodeid
-} out ztypes.tid is {
-    n: ast.nodes.get i: nid
-    {
-        ipL: zast.infixPartsOf :ast :n
-        if ipL.found then {
-            opT: zast.atomNameIdOf n: (ast.nodes.get i: ipL.operator)
-            if (isComparisonOp nameId: opT) then return ztypes.tid.zero
-            return (literalTidOfLiteralOperand :st :ast nid: ipL.lhs)
-        }
-    }
-    if n.atomid.not then return ztypes.tid.zero
-    txt: zast.nameTextAt :ast ref: n.name
-    if (isNumericLiteralName name: txt.stringView).not then return ztypes.tid.zero
-    return (literalTidOfLexeme :st lex: txt.stringView)
-}
-
 # isLiteralTypeId -- a literal-typed value: one of the registry's reserved
 # literal rows. Bare numeric literals and list elements wear them.
 isLiteralTypeId: function {reg: ztypes.ZTypeRegistry.view tid: ztypes.tid} out bool is {
@@ -44976,6 +44965,56 @@ isTextLiteralTid: function {st: zenv.ZSymbolTable.view tid: ztypes.tid} out bool
 # that takes the type of the place it lands in.
 isAnyLiteralTid: function {st: zenv.ZSymbolTable.view tid: ztypes.tid} out bool is {
     return (isLiteralTypeId reg: st.reg :tid) or (isTextLiteralTid :st :tid)
+}
+
+# isSumTid -- the type is a union or a variant.
+isSumTid: function {st: zenv.ZSymbolTable.view tid: ztypes.tid} out bool is {
+    tt: st.reg.typetypeOf typeId: tid
+    return (tt == ztypes.ztypetype.unionType) or (tt == ztypes.ztypetype.variantType)
+}
+
+# isCompileTimeSum -- a union or variant one of whose arms is a literal type
+# (`anyint`'s `:intliteral`). Like that arm it has no run-time form: it bounds
+# a parameter, and no value of it is made.
+isCompileTimeSum: function {st: zenv.ZSymbolTable.view tid: ztypes.tid} out bool is {
+    if (isSumTid :st :tid).not then return false
+    n: st.typing.declRowSlots ownerTid: tid
+    i: u64
+    for i < n loop {
+        row: st.typing.declRowAt ownerTid: tid membersOnly: true slot: i
+        i = i + 1
+        if row.keep when (isAnyLiteralTid :st tid: row.tid) then return true
+    }
+    return false
+}
+
+# refuseCompileTimeSumValue -- the value at `nid`, of type `t`, MAKES a value of
+# a compile-time sum: an arm's construction, or the type's name read as a
+# value. That is the one use such a sum has no answer for. Naming it, or
+# bounding a parameter with it, is not refused.
+refuseCompileTimeSumValue: function {
+    st: zenv.ZSymbolTable ast: Ast.view nid: zast.nodeid t: ztypes.tid
+} is {
+    if (isSumTid :st tid: t).not then return
+    made: st.typing.implicitCreate.has key: nid
+    ck: st.typing.callKind.get key: nid
+    if ck.some when ck == zast.callkind.unionCreate then made = true
+    if made.not then return
+    if (isCompileTimeSum :st tid: t).not then return
+    tn: specWrittenName :st :ast tid: t
+    pos: zast.posOf n: (ast.nodes.get i: nid)
+    (
+        addErrorH
+        :st
+        nodeid: nid
+        lineno: pos.line
+        colno: pos.col
+        e: zast.err.typeError
+        msg: "'\{tn}' has an arm of a compile-time type, so no value of it can be made"
+        note: "a literal type has no run-time form, and neither has a sum with one as an arm".string
+        hint: "use '\{tn}' as a bound (`\{tn}.generic`), or make a value of a type without a literal arm"
+        width: 1
+    )
 }
 
 # textLiteralLands -- a textliteral fits the place typed `dst`: text,
@@ -46275,35 +46314,44 @@ holdStandIn: function {ast: Ast st: zenv.ZSymbolTable su: ztyping.specstandin} i
 checkBareGenericReturns: function {ast: Ast st: zenv.ZSymbolTable} is {
     ri: u64
     for ri < st.typing.funcReturnNode.length loop {
-        rn: (st.typing.funcReturnNode.valueAt i: ri).or d: zast.nodeid
+        checkBareGenericReturnAt :ast :st slot: ri
         ri = ri + 1
-        if rn.isZero then continue
-        n: ast.nodes.get i: rn
-        if n.call then continue
-        root: rootNameIdOf :ast :n
-        if (
-            (root == zast.wellKnown.slot.wkThis) or (root == zast.wellKnown.slot.wkType)
-        ) then continue
-        rsc: (st.walk.pendingTyperefScope.get key: rn).or d: ztypes.declid
-        rtd: ztyping.nodeTypeAt tbl: st.typing.nodeType nid: rn
-        rtb: (
-            bareGenericType
-            :st
-            :ast
-            unitDecl: ztypes.declid
-            tid: rtd
-            nid: rn
-            scope: rsc
-            thisName: ""
-        )
-        # a generic type's name, stamped with its defaults' instance: that
-        # instance is what the function returns
-        if rtb != rtd then ztyping.nodeTypeSet tbl: st.typing.nodeType nid: rn tid: rtb
-        nameT: (walkLookupTyperefFrom :st :ast scope: rsc baseId: root).or d: ztypes.tid.zero
-        if nameT.isZero.not when (st.reg.genericOriginOf tid: rtb) == nameT then {
-            fk: st.typing.funcReturnNode.keyAt i: ri - 1
-            if fk.isZero.not then st.reg.setReturnType typeId: fk value: rtb
-        }
+    }
+}
+
+# checkBareGenericReturnAt -- checkBareGenericReturns for the function at
+# `slot` of the table of declared returns.
+checkBareGenericReturnAt: function {ast: Ast st: zenv.ZSymbolTable slot: u64} is {
+    rn: (st.typing.funcReturnNode.valueAt i: slot).or d: zast.nodeid
+    if rn.isZero then return
+    fk: st.typing.funcReturnNode.keyAt i: slot
+    n: ast.nodes.get i: rn
+    if n.call then return
+    root: rootNameIdOf :ast :n
+    if (root == zast.wellKnown.slot.wkThis) or (root == zast.wellKnown.slot.wkType) then return
+    # a return naming the function's own generic parameter (`out n`) names
+    # no generic type, and its name is no type to look up: looked up, a
+    # method's `n: anynumber.generic` would resolve as a constant
+    fd: st.typing.declIdOfType typeId: fk
+    if fd.isZero.not when (st.reg.genericParamTidOf tdecl: fd paramName: root).some then return
+    rsc: (st.walk.pendingTyperefScope.get key: rn).or d: ztypes.declid
+    rtd: ztyping.nodeTypeAt tbl: st.typing.nodeType nid: rn
+    rtb: (
+        bareGenericType
+        :st
+        :ast
+        unitDecl: ztypes.declid
+        tid: rtd
+        nid: rn
+        scope: rsc
+        thisName: ""
+    )
+    # a generic type's name, stamped with its defaults' instance: that
+    # instance is what the function returns
+    if rtb != rtd then ztyping.nodeTypeSet tbl: st.typing.nodeType nid: rn tid: rtb
+    nameT: (walkLookupTyperefFrom :st :ast scope: rsc baseId: root).or d: ztypes.tid.zero
+    if nameT.isZero.not when (st.reg.genericOriginOf tid: rtb) == nameT when fk.isZero.not then {
+        st.reg.setReturnType typeId: fk value: rtb
     }
 }
 
@@ -46755,6 +46803,64 @@ checkNumericCoercion: function {
     hint: "convert it where the loss is visible -- `\{dstSpelled}` returns a result: `v.\{dstSpelled}.or d: <fallback>`"
     note: String
     addErrorH :st :nodeid :lineno :colno e: zast.err.typeError :msg :note :hint width: 1
+}
+
+# landLiteralReceiver -- a numeric literal that is the receiver of a native
+# `method` LANDS where the method reads it, as a literal argument lands in its
+# parameter: an operator's in the type its one generic parameter is bound to
+# (`4 + w` with `w: u64` reads 4 as a u64), and `times`, `upto` and `downto`'s
+# in the literal's default, i64. It must fit there, and its node is stamped with
+# that type, which is the type the operation is emitted in, as that type's
+# member of the same name. A conversion
+# settles its literal itself, and a method bound to or returning a literal type
+# is computed by the compiler: neither lands. `recv` is the receiver's node, a
+# call's or an auto-called path's; `instance` is the generic call's instance, 0
+# for a method that is not generic.
+landLiteralReceiver: function {
+    st: zenv.ZSymbolTable
+    ast: Ast
+    recv: zast.nodeid
+    method: ztypes.tid
+    instance: ztypes.tid
+} is {
+    if method.isZero or (st.reg.isNativeOf tid: method).not then return
+    if recv.isZero then return
+    rt: walkTypeOf :st nid: recv
+    if (isLiteralTypeId reg: st.reg tid: rt).not then return
+    target: ztypes.tid
+    if instance.isZero.not then {
+        if (st.reg.genericArgCount specId: instance) != 1 then return
+        target = st.reg.genericTypeArgAt specId: instance ordinal: 0
+    } else {
+        ret: methodReturnOf reg: st.reg typing: st.typing mid: method
+        if ret.some when (isAnyLiteralTid :st tid: ret) then return
+        if (
+            scalarKindOfNameId
+            id: (st.typing.decls.get i: (st.typing.declIdOfType typeId: method)).name
+        ).has then return
+        target = materialiseLiteral :ast :st t: rt
+    }
+    if target.isZero or (isAnyLiteralTid :st tid: target) then return
+    if (st.reg.typetypeOf typeId: target) == ztypes.ztypetype.genericParam then return
+    rn: ast.nodes.get i: recv
+    (
+        checkNumericCoercion
+        :st
+        :ast
+        dstTid: target
+        srcTid: rt
+        valueNid: recv
+        nodeid: recv
+        lineno: (nodeLine n: rn)
+        colno: (nodeCol n: rn)
+    )
+    stampGate :st nid: recv tid: target
+    # the member the operation runs as is the target's, demanded here where
+    # that is decided: the emitter reads it and resolves nothing itself
+    nm: (st.typing.decls.get i: (st.typing.declIdOfType typeId: method)).name
+    owner: typedefMemberOwner :st :ast bt: target cnId: nm
+    forceMemberOf :st :ast parentTypeId: owner nameId: nm
+    markMemberUsed :st ownerTid: owner nameId: nm
 }
 
 # checkArmsCoercion -- each arm of the `if` or `match` at `nid` lands its value
@@ -49328,37 +49434,14 @@ checkResolvedMethodCall: function {
         setmr: mres
         stampGate :st nid: call.nid tid: setmr
     }
-    # A BARE-LITERAL LEFT OPERAND KEEPS ITS COERCIBLE LITERAL RESULT. `(0 - 24)`
-    # at an i32 destination still narrows, exactly as it does written any other
-    # way, because the operation answers with the literal type rather than the
-    # method's concrete return. A COMPARISON is not that: it answers bool
-    # whatever its operands were.
-    if call.infix when mres.isZero.not then {
-        bpl: zast.nodeid
-        isCmpL: false
-        {
-            cbl: ast.nodes.get i: call.callable
-            if cbl.dottedpath then bpl = cbl.parent
-            cnL: dottedChildNameId :ast n: (ast.nodes.get i: call.callable)
-            if cnL.isZero.not then isCmpL = isComparisonOp nameId: cnL
-        }
-        if bpl.isZero.not when isCmpL.not then {
-            ltl: walkTypeOf :st nid: bpl
-            # ASK THE SPELLING, NOT ONLY THE STAMP. A bare numeric literal that
-            # is the receiver of an operator has already been MATERIALISED for
-            # the member lookup, and dottedBaseTid restamped the node at the
-            # concrete default -- so a literal too wide for that default (a hex
-            # constant above i64) reads back as i64 and the operation answered
-            # i64 where the literal itself would have fit u64.
-            if (isLiteralTypeId reg: st.reg tid: ltl).not then {
-                ltl = ztypes.tid.create from: (literalTidOfLiteralOperand :st :ast nid: bpl)
-            }
-            if ltl.isZero.not when (isLiteralTypeId reg: st.reg tid: ltl) then {
-                mres = ltl
-                stampGate :st nid: call.nid tid: ltl
-            }
-        }
-    }
+    (
+        landLiteralReceiver
+        :st
+        :ast
+        recv: (dottedParentNodeId :ast n: (ast.nodes.get i: call.callable))
+        method: dro
+        instance: ztypes.tid.zero
+    )
     # A synthesized `create` has no recorded return: explicit
     # `.create` constructs, so the result is the base type.
     if mres.isZero then {
@@ -50163,6 +50246,7 @@ checkGenericFnCall: function {
     rvPinsG: List ztyping.PinPath
     rvTG: takeValueReceiver :st :ast :unitDecl :call funcId: dro :recvVal pins: rvPinsG
     pinsG: List ztyping.PinPath
+    errG: st.typing.errors.length
     gfr: checkGenericCall :st :unitDecl :ast :call funcId: dro pins: pinsG
     if gfr.isZero.not then {
         setgf: gfr
@@ -50171,6 +50255,15 @@ checkGenericFnCall: function {
     st.typing.callKind.set key: call.nid value: zast.callkind.regular
     callableNode: ast.nodes.get i: call.callable
     midG: genericCallInstance :st :ast :call
+    # a refused binding says all there is to say: the receiver lands nowhere
+    if st.typing.errors.length == errG then (
+        landLiteralReceiver
+        :st
+        :ast
+        recv: (dottedParentNodeId :ast n: callableNode)
+        method: dro
+        instance: midG
+    )
     checkGenericCallMissingArgs :ast :st :call mid: midG recvImplicit: recvVal
     rroG: methodReceiverRootId :ast n: callableNode
     recvShrG: lockMethodReceiver :st :ast :call :dro rroId: rroG
@@ -52798,9 +52891,9 @@ inferGenericCallSubs: function {
         if avt.u64 == 0 when st.typing.errors.length == errG then {
             reportUnresolvedValue :st :unitDecl :ast nid: arg.operation
         }
-        mat: materialiseLiteral :ast :st t: avt
         hs: argHolderSlot :st :ast :arg :funcId :pNames :pHolders :pHolderIds :posIdx
         posIdx = posIdx + 1
+        mat: argBindingTid :st :ast :funcId holder: hs.holder :avt
         if hs.slot < pHolderIds.length then {
             (
                 lockGenericValueArg
@@ -52829,6 +52922,55 @@ inferGenericCallSubs: function {
         }
     }
     layArgLocks :st pool: ast.names mark: lockMark
+}
+
+# argBindingTid -- the type a value argument of type `avt` binds the generic
+# parameter `holder` to. A literal binds its default (i64, f64, StringView),
+# except that a NATIVE callee's parameter whose bound lists the literal's own
+# type binds the literal itself: the native is then computed by the compiler on
+# the literal, which is how `4 + 5` is exact. An integer literal under a bound
+# that lists floatliteral but not intliteral binds floatliteral, the
+# conversion any float parameter applies (`0.5 + 1`). A singleton binds its
+# bound, whose members it has (`4 + cap` is a u32).
+argBindingTid: function {
+    st: zenv.ZSymbolTable
+    ast: Ast
+    funcId: ztypes.tid
+    holder: zast.nameid
+    avt: ztypes.tid
+} out ztypes.tid is {
+    if (st.typing.singletons.has key: avt) then return (st.typing.typedefBaseTidOf tid: avt)
+    mat: materialiseLiteral :ast :st t: avt
+    if (mat == avt) or holder.isZero then return mat
+    if (st.reg.isNativeOf tid: funcId).not then return mat
+    tdecl: templateDeclOf reg: st.reg typing: st.typing tid: funcId
+    if (boundListsType :ast :st :tdecl paramName: holder tid: avt) then return avt
+    lf: st.reg.literalFloatTid
+    if avt == st.reg.literalIntTid when (boundListsType :ast :st :tdecl paramName: holder tid: lf
+    ) then {
+        return lf
+    }
+    return mat
+}
+
+# boundListsType -- the bound of `paramName` on `tdecl` names `tid` itself: an
+# arm of a sum bound is it, or a bound the checker admits by kind admits it as
+# a literal (staticmember, staticindex). A parameter with no bound, or a family
+# bound such as `anyval`, admits a literal without listing it.
+boundListsType: function {
+    ast: Ast
+    st: zenv.ZSymbolTable
+    tdecl: ztypes.declid
+    paramName: zast.nameid
+    tid: ztypes.tid
+} out bool is {
+    cd: st.reg.genericParamConstraintOf :tdecl :paramName
+    if cd.kind == ztypes.constraintkind.other then {
+        sb: sumBoundByDecl :ast :st :tdecl :cd argTid: tid
+        if sb.some then return sb
+        return false
+    }
+    return (literalSatisfies :st ck: cd.kind argTid: tid)
 }
 
 # bindValueArg -- what one value argument says about the call's generic
@@ -55729,6 +55871,7 @@ checkValueAt: function {
     nid: zast.nodeid
 } out ztypes.tid is {
     t: checkValueArmAt :st :unitDecl :ast :nid
+    refuseCompileTimeSumValue :st :ast :nid :t
     stampConstAt :st :unitDecl :ast :nid
     markStaticListIndexRead :st :ast :nid
     markFoldedFnFieldCall :st :ast :nid
@@ -60779,10 +60922,10 @@ constFailMismatch: function {
 }
 
 # constOfTypedFold -- an operator over two numbers at least one of which
-# carries a type. The left-hand operand governs, a bare literal on the left
-# taking its default when only the right carries one -- a body's rule -- and
-# the right-hand operand must stand in for the governing type as a body
-# argument would. The result is computed in that type: an integer outside it
+# carries a type. The left-hand operand governs, except that a bare literal on
+# the left takes the typed right operand's type -- a body's rule, where the
+# literal receiver lands in it -- and the operand that does not govern must
+# stand in for the governing type as a body argument would. The result is computed in that type: an integer outside it
 # overflows, an f32 folds in f32, f16 arithmetic does not fold, and nothing over
 # f128 folds, a comparison included, since the evaluator holds an f64, which is
 # neither: an f128 compared through its nearest f64 can get the answer wrong.
@@ -60802,7 +60945,12 @@ constOfTypedFold: function {
     rNum: rv.kind.ivalKind or rv.kind.fvalKind
     if lNum.not or rNum.not then return ztypes.noConst
     gov: constNumTidOf :st :scope :ast v: lv
-    rm: constStandsInMessage :st :ast v: rv target: gov
+    landing: rv
+    if lv.numTid.isZero when rv.numTid.isZero.not then {
+        gov = rv.numTid
+        landing = lv
+    }
+    rm: constStandsInMessage :st :ast v: landing target: gov
     if rm.length > 0 then {
         constFailMismatch :st :nid :ln :co msg: rm.stringView
         return ztypes.noConst
@@ -62818,11 +62966,10 @@ constantMemberTid: function {
         if (listValueMember :st :ast :dp :row cnId: methodId).not then return none
     }
     # an untyped string's conversion (`"x".text`) is a cast, as in a body
-    # (checkUntypedTextCast); any other literal reads as the type it
-    # materialises to, as a body's base does
+    # (checkUntypedTextCast)
     if rv.kind.svalKind when rv.numTid.isZero when (textLiteralCastTarget :ast :st nameId: methodId
     ).isZero.not then return none
-    if (isAnyLiteralTid :st tid: svT) then svT = materialiseLiteral :ast :st t: svT
+    svT = constantReceiverTid :ast :st vt: svT v: rv
     shown: svT
     svT = typedefMemberOwner :st :ast bt: svT cnId: methodId
     forceMemberOf :st :ast parentTypeId: svT nameId: methodId
@@ -62832,6 +62979,19 @@ constantMemberTid: function {
         return none
     }
     return (constmember recvTid: svT memberTid: mo)
+}
+
+# constantReceiverTid -- the type a constant's member is looked up on, as a
+# body looks it up: an untyped number's literal type, the StringView an untyped
+# string materialises to, and any other value's own type `vt` (constValueTid).
+constantReceiverTid: function {
+    ast: Ast st: zenv.ZSymbolTable vt: ztypes.tid v: ztypes.cval
+} out ztypes.tid is {
+    if v.numTid.isZero.not then return vt
+    if v.kind.ivalKind then return st.reg.literalIntTid
+    if v.kind.fvalKind then return st.reg.literalFloatTid
+    if (isTextLiteralTid :st tid: vt) then return (materialiseLiteral :ast :st t: vt)
+    return vt
 }
 
 # constantFnMember -- constantMemberTid for a receiver that names a function,
@@ -66007,6 +66167,7 @@ stampConstAt: function {
         hasNone: got.kind.overflow or got.kind.indexRange or got.kind.substringRange
         if got.kind.divZero then hasNone = integerDivision :st :ast f: got
         if hasNone then renderConstFail :st f: got
+        if hasNone.not then refuseUnfoldedLiteral :st :ast :nid divZero: got.kind.divZero
         return
     }
     mono: st.typing.curMonoStamp
@@ -66018,6 +66179,34 @@ stampConstAt: function {
     if (cv.bigId != 0) or (constPastF64 :st v: cv) when cv.numTid.isZero then {
         st.walk.wideConsts.append (ztyping.monostamp :mono node: nid)
     }
+}
+
+# refuseUnfoldedLiteral -- an operator at `nid` bound to a literal type (both
+# operands are literals) whose value the compiler could not compute. A literal
+# has no run-time form, so the operation has no other answer: a negative shift
+# count, a float remainder, or -- `divZero` -- a float division by zero, whose
+# IEEE answer belongs to a float type.
+refuseUnfoldedLiteral: function {st: zenv.ZSymbolTable ast: Ast nid: zast.nodeid divZero: bool} is {
+    if (isLiteralTypeId reg: st.reg tid: (walkTypeOf :st :nid)).not then return
+    br: binRefAt :ast :nid
+    if br.nid.isZero then return
+    opn: zast.nameTextCopy :ast ref: (atomNameId :ast n: (ast.nodes.get i: br.operator))
+    lk: st.reg.nameOf tid: (walkTypeOf :st nid: br.lhs)
+    rk: st.reg.nameOf tid: (walkTypeOf :st nid: br.rhs)
+    hint: "an operation on two literals is computed by the compiler, exactly; give an operand a type (`1.i64 << k`) to compute it at run time".string
+    if divZero then {
+        hint = "a division by zero has no exact value; give an operand a float type for the IEEE answer, as in `1.0.f64 / 0.0`".string
+    }
+    (
+        reportConstError
+        :st
+        nodeid: nid
+        lineno: br.lineno
+        colno: br.colno
+        width: opn.length.u32.orPanic
+        msg: "'\{opn}' has no compile-time value for \{lk} and \{rk}"
+        :hint
+    )
 }
 
 # constPastF64 -- an untyped float whose nearest f64 is an infinity, or a zero
@@ -67783,8 +67972,8 @@ unfoldedNameWhy: function {
 # constKindName -- the type a folded value carries, named for a diagnostic.
 constKindName: function {st: zenv.ZSymbolTable.view v: ztypes.cval} out String is {
     if v.numTid.isZero.not then return (st.reg.nameOf tid: v.numTid)
-    if v.kind.ivalKind then return "i64".string
-    if v.kind.fvalKind then return "f64".string
+    if v.kind.ivalKind then return "intliteral".string
+    if v.kind.fvalKind then return "floatliteral".string
     if v.kind.svalKind then return "StringView".string
     if v.kind.armKind then return (st.reg.nameOf tid: v.armTid)
     return "no value".string

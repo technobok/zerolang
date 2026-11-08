@@ -72,7 +72,7 @@ for i < 10 loop {
 }
 
 # with/do (scoped binding)
-with y: -5.5.abs do print "abs(-5.5) = \{y}"
+with y: -5.5.f64.abs do print "abs(-5.5) = \{y}"
 ```
 
 ### Records

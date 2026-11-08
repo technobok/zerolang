@@ -385,15 +385,17 @@ method syntax on that integer. For floating point receivers and for method
 names that do not start with a non-decimal, brackets can be used to enforce the
 correct interpretation.</p>
 <pre><code class="language-zerolang">a: 0.u8           # the 'u8' method on the integer literal '0'
-b: 0.1.round    # the 'round' method on a floating point literal
+b: 0.1.f64.round  # the 'f64' conversion of a float literal, then f64's 'round'
 # (0).0method     -- a method whose name starts with a digit, bracketed</code></pre>
-<p>Integer identifiers have the following methods, provided they can losslessly be
-stored in the resulting format. This table IS the surface: it is what the
-<code>intliteral</code> type declares (see
+<p>Integer identifiers have the following conversions, provided they can
+losslessly be stored in the resulting format. This table IS the conversion
+surface: it is what the <code>intliteral</code> type declares (see
 <a href="./stdlib_system.html">the system unit</a>), and a suffix naming anything
 else &#x2014; a scalar typedef included &#x2014; is refused. A literal takes a typedef only
 where the type is asked for in writing, which is a <a href="#static-lists">list</a>'s
-<code>out T</code>.</p>
+<code>out T</code>. Besides its conversions an integer literal declares its operators and
+comparisons and <code>times</code>, <code>upto</code> and <code>downto</code>, and nothing else: any other
+number method goes through a conversion (<code>5.i64.hash</code>).</p>
 <table>
 <colgroup>
 <col style="width: 25%">
@@ -526,8 +528,17 @@ type. No explicit dotted-method suffix is required.</p>
 <tr><td>record/class field initialiser</td><td><code>Foo count: 100</code>  (field <code>count: u8</code>)</td></tr>
 <tr><td>list element</td><td><code>bytes: list { 1.u8 2 3 }</code>  (every element takes the list's type)</td></tr>
 <tr><td>untyped list element</td><td><code>want b: sizes.small</code>  (<code>sizes: list { small: 10 }</code>, parameter <code>b: u8</code>)</td></tr>
+<tr><td>operator operand</td><td><code>4 - w</code>  (<code>w: u64</code>: a <code>u64</code> subtraction, as <code>w - 4</code> is)</td></tr>
 </tbody>
 </table>
+<p>A literal's operators are its own type's -- <code>intliteral</code> and
+<code>floatliteral</code> declare them, bounded by <code>anynumber</code>, <code>anyint</code> and
+<code>anyfloat</code>. Against another literal the compiler computes the operation
+exactly and the result is a literal again, so <code>2 + 3</code>, <code>1 + 0.5</code> and
+<code>0.5 + 1</code> are untyped. Against a typed operand the literal lands in that
+operand's type, in either order, and the operation is that type's: <code>2 * b</code>
+with <code>b: u8</code> is a <code>u8</code> product, and <code>0.5 + i</code> with <code>i: i64</code> is
+refused, since a float literal's operators take no integer type.</p>
 <p>Bare-name construction (<code>Foo count: 100</code>) is equivalent to a
 <code>.create</code> call (<code>Foo.create count: 100</code>) &#x2014; both routes type-check
 arguments against the corresponding field's declared type.</p>
@@ -2503,6 +2514,13 @@ main: function is {
     c: cm (meters 9)
     d: same x: c    # d is a cm: the chain cm -&gt; meters -&gt; u32 meets :u32
 }</code></pre>
+<p><strong>A compile-time sum.</strong></p>
+<p>A union or variant one of whose arms is a literal type (<code>intliteral</code>,
+<code>floatliteral</code>, <code>textliteral</code>) is a <em><strong>compile-time sum</strong></em>: like that arm, it
+has no run-time form. It may be declared, named and used as a bound -- the
+system's <code>anyint</code>, <code>anyfloat</code> and <code>anynumber</code> are such sums, which is
+how a bound admits a literal -- but making a value of it is refused: an arm's
+construction (<code>anyint.i64 5</code>) or the type's name read as a value.</p>
 <p>For compound types and functions, generic parameters are declared in the
 <code>as</code> clause, not in instance fields or function parameters. A protocol and a
 facet are no exception: their body holds only their specs. Functions declare
@@ -6968,14 +6986,16 @@ or the sign for a signed <code>&gt;&gt;</code> -- and a left shift keeps the low
 An UNTYPED shift is exact, as every untyped operator is: <code>1 &lt;&lt; 63</code> is
 2^63 and <code>1 &lt;&lt; 64</code> is 2^64, each checked where it lands, and <code>&gt;&gt;</code>
 rounds toward negative infinity. A left shift past 512 bits overflows, and
-a negative count does not fold: the run time reads it as unsigned.</p>
+an untyped shift by a negative count has no value (<code>E0600</code>): two literals
+are computed by the compiler or not at all.</p>
 <p><strong>Width.</strong> A folded value carries its type. A suffixed literal has its
 suffix's type and a named constant its definition's; a comparison is
 <code>bool</code>; an arithmetic operator takes its left-hand operand's type, and a
-bare literal on the left takes its default (<code>i64</code> or <code>f64</code>) when the
-right-hand operand has a type, as in a body. The right-hand operand must
-convert into that type without loss, and a literal operand must fit it, so
-with <code>L: 5.u8</code> both <code>L + 7.u16</code> and <code>L &gt; 300</code> are errors. An
+bare literal on the left takes the right-hand operand's type when that one
+has a type, as in a body. The other operand must convert into that type
+without loss, and a literal operand must fit it, so with <code>L: 5.u8</code>
+<code>L + 7.u16</code>, <code>L &gt; 300</code> and <code>300 + L</code> are errors, and <code>1 + L</code> is a
+<code>u8</code>. An
 expression built only from bare literals is <em><strong>untyped</strong></em>: an integer one
 folds exactly, to 512 bits of magnitude, a float one exactly to the fraction
 its literals spell, and either coerces by value wherever it lands (see
@@ -6996,11 +7016,17 @@ constant zero are compile-time errors (<code>E0600</code>) wherever they are wri
 in a body as in a unit-level definition or a type's <code>as</code> constant. Their operands are constants, so the run time has nothing
 to add -- C would wrap the one and trap on the other. Where a value is required, a float
 result that is not finite is an error too, since an infinity or a NaN has no
-literal a constant could inline; in a body it is IEEE's answer, and runs.</p>
-<p>An operation over constant operands that does not fold for another reason
-runs as the same arithmetic on variables does: an operator the evaluator does
-not support, or an untyped shift by a negative count. An operation with a
-variable operand is a run-time one, and wraps.</p>
+literal a constant could inline; in a body a typed float's is IEEE's answer,
+and runs (<code>1.0.f64 / 0.0</code> is an infinity). Two untyped literals have no IEEE
+answer, only an exact one, so <code>1.0 / 0.0</code> has no value (<code>E0600</code>).</p>
+<p>An operation over typed constant operands that does not fold for another
+reason runs as the same arithmetic on variables does: an operator the
+evaluator does not support. An operation on two literals is the compiler's
+alone, since a literal has no run-time form: one it cannot compute -- a
+negative shift count, a float remainder (<code>7.5 % 2.0</code>), a float division by
+zero -- is <code>E0600</code> in a body too. An operation with a variable operand is a
+run-time one, and wraps: <code>4 - w</code> with <code>w: u64</code> is a <code>u64</code>
+subtraction.</p>
 <p>An integer division or remainder whose divisor is a constant zero is an error
 (<code>E0600</code>) even when its dividend is a variable: it could never produce a
 value. A divisor that is zero only at run time panics with

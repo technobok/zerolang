@@ -243,17 +243,19 @@ correct interpretation.
 
 #code language=zerolang: """
   a: 0.u8           # the 'u8' method on the integer literal '0'
-  b: 0.1.round    # the 'round' method on a floating point literal
+  b: 0.1.f64.round  # the 'f64' conversion of a float literal, then f64's 'round'
   # (0).0method     -- a method whose name starts with a digit, bracketed
   """
 
-Integer identifiers have the following methods, provided they can losslessly be
-stored in the resulting format. This table IS the surface: it is what the
-#~"intliteral" type declares (see
+Integer identifiers have the following conversions, provided they can
+losslessly be stored in the resulting format. This table IS the conversion
+surface: it is what the #~"intliteral" type declares (see
 [#> to=./stdlib_system.html: the system unit]), and a suffix naming anything
 else — a scalar typedef included — is refused. A literal takes a typedef only
 where the type is asked for in writing, which is a [#> to=static-lists: list]'s
-#~"out T".
+#~"out T". Besides its conversions an integer literal declares its operators and
+comparisons and #~"times", #~"upto" and #~"downto", and nothing else: any other
+number method goes through a conversion (#~"5.i64.hash").
 
 #table cols="1 2 >1":
   Method | Result Type                  | Bit size
@@ -378,6 +380,16 @@ Coercion sites currently include:
   record/class field initialiser| #~"Foo count: 100"  (field #~"count: u8")
   list element                  | #~"bytes: list { 1.u8 2 3 }"  (every element takes the list's type)
   untyped list element          | #~"want b: sizes.small"  (#~"sizes: list { small: 10 }", parameter #~"b: u8")
+  operator operand              | #~"4 - w"  (#~"w: u64": a #~"u64" subtraction, as #~"w - 4" is)
+
+A literal's operators are its own type's -- #~"intliteral" and
+#~"floatliteral" declare them, bounded by #~"anynumber", #~"anyint" and
+#~"anyfloat". Against another literal the compiler computes the operation
+exactly and the result is a literal again, so #~"2 + 3", #~"1 + 0.5" and
+#~"0.5 + 1" are untyped. Against a typed operand the literal lands in that
+operand's type, in either order, and the operation is that type's: #~"2 * b"
+with #~"b: u8" is a #~"u8" product, and #~"0.5 + i" with #~"i: i64" is
+refused, since a float literal's operators take no integer type.
 
 Bare-name construction (#~"Foo count: 100") is equivalent to a
 #~".create" call (#~"Foo.create count: 100") — both routes type-check
@@ -2714,6 +2726,15 @@ instance over #~"meters" works in #~"meters".
       d: same x: c    # d is a cm: the chain cm -> meters -> u32 meets :u32
   }
   """
+
+#p: #b:"A compile-time sum."
+
+A union or variant one of whose arms is a literal type (#~"intliteral",
+#~"floatliteral", #~"textliteral") is a #_*"compile-time sum": like that arm, it
+has no run-time form. It may be declared, named and used as a bound -- the
+system's #~"anyint", #~"anyfloat" and #~"anynumber" are such sums, which is
+how a bound admits a literal -- but making a value of it is refused: an arm's
+construction (#~"anyint.i64 5") or the type's name read as a value.
 
 For compound types and functions, generic parameters are declared in the
 #~"as" clause, not in instance fields or function parameters. A protocol and a
@@ -8048,15 +8069,17 @@ or the sign for a signed #~">>" -- and a left shift keeps the low bits, so
 An UNTYPED shift is exact, as every untyped operator is: #~"1 << 63" is
 2^63 and #~"1 << 64" is 2^64, each checked where it lands, and #~">>"
 rounds toward negative infinity. A left shift past 512 bits overflows, and
-a negative count does not fold: the run time reads it as unsigned.
+an untyped shift by a negative count has no value (#~"E0600"): two literals
+are computed by the compiler or not at all.
 
 #b:"Width." A folded value carries its type. A suffixed literal has its
 suffix's type and a named constant its definition's; a comparison is
 #~"bool"; an arithmetic operator takes its left-hand operand's type, and a
-bare literal on the left takes its default (#~"i64" or #~"f64") when the
-right-hand operand has a type, as in a body. The right-hand operand must
-convert into that type without loss, and a literal operand must fit it, so
-with #~"L: 5.u8" both #~"L + 7.u16" and #~"L > 300" are errors. An
+bare literal on the left takes the right-hand operand's type when that one
+has a type, as in a body. The other operand must convert into that type
+without loss, and a literal operand must fit it, so with #~"L: 5.u8"
+#~"L + 7.u16", #~"L > 300" and #~"300 + L" are errors, and #~"1 + L" is a
+#~"u8". An
 expression built only from bare literals is #_*"untyped": an integer one
 folds exactly, to 512 bits of magnitude, a float one exactly to the fraction
 its literals spell, and either coerces by value wherever it lands (see
@@ -8079,12 +8102,18 @@ constant zero are compile-time errors (#~"E0600") wherever they are written:
 in a body as in a unit-level definition or a type's #~"as" constant. Their operands are constants, so the run time has nothing
 to add -- C would wrap the one and trap on the other. Where a value is required, a float
 result that is not finite is an error too, since an infinity or a NaN has no
-literal a constant could inline; in a body it is IEEE's answer, and runs.
+literal a constant could inline; in a body a typed float's is IEEE's answer,
+and runs (#~"1.0.f64 / 0.0" is an infinity). Two untyped literals have no IEEE
+answer, only an exact one, so #~"1.0 / 0.0" has no value (#~"E0600").
 
-An operation over constant operands that does not fold for another reason
-runs as the same arithmetic on variables does: an operator the evaluator does
-not support, or an untyped shift by a negative count. An operation with a
-variable operand is a run-time one, and wraps.
+An operation over typed constant operands that does not fold for another
+reason runs as the same arithmetic on variables does: an operator the
+evaluator does not support. An operation on two literals is the compiler's
+alone, since a literal has no run-time form: one it cannot compute -- a
+negative shift count, a float remainder (#~"7.5 % 2.0"), a float division by
+zero -- is #~"E0600" in a body too. An operation with a variable operand is a
+run-time one, and wraps: #~"4 - w" with #~"w: u64" is a #~"u64"
+subtraction.
 
 An integer division or remainder whose divisor is a constant zero is an error
 (#~"E0600") even when its dividend is a variable: it could never produce a

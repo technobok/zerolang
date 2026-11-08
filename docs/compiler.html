@@ -527,7 +527,9 @@ registry's first two rows, which the declaration then attaches to. Each
 declares exactly the conversions it can reach -- sixteen for the integer
 literal, the four float targets for the float one -- so which suffixes a
 literal accepts is a question for its declaration rather than for the
-checker. They are compile-time only: <code>create: null</code> says a program
+checker. Each also declares its operators, as generic natives bounded by
+<code>anynumber</code>, <code>anyint</code> or <code>anyfloat</code>, and the integer literal its
+<code>times</code>, <code>upto</code> and <code>downto</code>. They are compile-time only: <code>create: null</code> says a program
 cannot construct one, so a binding naming either bare is refused by the
 same rule any non-constructible type gets, with no literal-specific
 message. <code>core</code> does re-export the names, so a unit-level alias can
@@ -561,7 +563,7 @@ remaining literal-typed entry with its concrete default
 (<code>i64</code> for <code>intliteral</code>, <code>f64</code> for <code>floatliteral</code>). No
 range check fires here &#x2014; that is the coercion sites' job.</li>
 </ul>
-<p>The emitter never sees a literal type. That was an aspiration for as
+<p>No VALUE of a literal type reaches the emitter. That was an aspiration for as
 long as one route went around the late pass: a break-carrying
 do-block wrapped its value in an <code>optionval</code> keyed on the payload
 type, and a literal payload minted <code>optionval_intliteral</code>, whose
@@ -583,14 +585,23 @@ either fits or it is an error. The range and exactness checks stay in
 <code>checkLiteralFits</code>, shared by the in-body and unit-level paths,
 because a declaration can say which conversions exist but not that 300
 does not fit a <code>u8</code>.</p>
-<p>A suffix the literal type does NOT declare falls through, and method
-dispatch on literal-typed receivers (e.g. <code>5.times</code>) then follows
-the existing <code>typedefBaseId</code> walk. An early pass points
-<code>intliteral.typedefBaseId</code> at <code>i64</code> and
-<code>floatliteral.typedefBaseId</code> at <code>f64</code>, so the operator-method
-lookup on the dotted call path and child-name lookups elsewhere
-resolve through the concrete type without per-site <code>isLiteral</code>
-guards.</p>
+<p>Any other member of a literal-typed receiver is looked up on the literal
+type itself, as any type's member is; one it does not declare is no member
+(<code>1.nid</code>: type 'intliteral' has no member 'nid'). A literal's operator
+is a generic native, and its argument binds the parameter by
+<code>argBindingTid</code>: a literal argument of a native whose bound lists the
+literal's own type binds the literal itself, so <code>4 + 5</code> is computed by
+the constant folder and an unfolded one is <code>E0600</code>
+(<code>refuseUnfoldedLiteral</code>); any other binds its default; a singleton binds
+its bound. Against a typed operand the receiver then LANDS
+(<code>landLiteralReceiver</code>): it is checked to fit the type the operator's
+parameter was bound to, as a literal argument is, its node is stamped
+with that type, and that type's member of the same name is demanded. The
+emitter writes a literal type's operator or method as that member -- the
+operator from the receiver's stamp, a method (<code>times</code> lands in
+<code>i64</code>) through <code>emitCallByDecl</code> -- so no row of the literal type
+carries C: its rows in <code>system/nativec.zd</code> are bodyless, there only so
+each <code>is native</code> declaration names one.</p>
 <p><code>typesCompatible</code> treats literal-vs-concrete-numeric as
 structurally compatible so multi-arm constructs unify cleanly; the
 range check happens at the typed-location coercion sites, not in the

@@ -40,6 +40,9 @@ public: unit {
     :RefHashable
     :Releasing
     :idkey
+    :anyint
+    :anyfloat
+    :anynumber
     :staticindex
     :staticmember
     :never
@@ -1523,9 +1526,16 @@ bool: variant { false: null true: null } as {
 }
 
 # intliteral / floatliteral -- the type a numeric literal wears before it is
-# pinned. COMPILE-TIME ONLY: neither reaches emission, because either the
-# programmer converts explicitly, or the context coerces, or it falls to
-# i64 / f64.
+# pinned. COMPILE-TIME ONLY: no value of either exists at run time. Where a
+# literal lands -- a typed destination, an operand of a typed value -- it is
+# read as that type, and where nothing gives it one it falls to i64 / f64.
+#
+# A literal's members are its own and are looked up as any type's are. An
+# operator against another literal is computed by the compiler, exactly, and
+# its result is a literal again: an integer to 512 bits, a float as the
+# fraction its literals spell. Against a typed operand the literal is read as
+# that operand's type, must fit it, and the operation is that type's. Anything
+# else a number does goes through a conversion: `2.0.f64.sqrt`, `5.i64.hash`.
 #
 # The conversions return the BARE target type, never a `resultval`. On a
 # scalar a lossy conversion can fail at RUN time and so must be checked; on a
@@ -1535,14 +1545,50 @@ bool: variant { false: null true: null } as {
 # `create: null` because user code cannot make one: a literal type is what the
 # checker gives a lexeme, not something a program constructs.
 intliteral: record is native as {
-    # A LITERAL HAS NO EQUALITY OF ITS OWN. It materialises to a concrete type
-    # before any member lookup, so `2 == n` is `i64`'s equality. Without the
-    # opt-out a record that declares no `==` is given a SYNTHESISED structural
-    # one, and that synth answers the lookup before materialisation can happen
-    # -- which left `2 == n` typed to nothing while `2 <= n` resolved.
-    ==: null
-    # `!=` on the same terms: the pair is opted out together
-    !=: null
+    # the sum. Against another literal it is exact and stays a literal; against
+    # a typed operand this literal is read as that type, must fit it, and the
+    # sum is that type's
+    +: function as { n: anynumber.generic } in {t: this.view rhs: n} out n is native
+    # the difference, on the terms of `+`
+    -: function as { n: anynumber.generic } in {t: this.view rhs: n} out n is native
+    # the product, on the terms of `+`
+    *: function as { n: anynumber.generic } in {t: this.view rhs: n} out n is native
+    # the quotient, on the terms of `+`. Two integers divide to an integer,
+    # rounded toward zero
+    /: function as { n: anynumber.generic } in {t: this.view rhs: n} out n is native
+    # the remainder of the division, on the terms of `+`: its sign is the
+    # dividend's
+    %: function as { n: anynumber.generic } in {t: this.view rhs: n} out n is native
+    # the bitwise and. Against another literal it is exact; against a typed
+    # integer this literal is read as that type, which must hold it
+    &: function as { n: anyint.generic } in {t: this.view rhs: n} out n is native
+    # the bitwise or, on the terms of `&`
+    |: function as { n: anyint.generic } in {t: this.view rhs: n} out n is native
+    # the bitwise exclusive or, on the terms of `&`
+    ^: function as { n: anyint.generic } in {t: this.view rhs: n} out n is native
+    # this shifted left by `rhs` bits. By a literal count it is exact; by a typed
+    # count this literal is read as the count's type, and the shift is that
+    # type's. A negative literal count has no value
+    <<: function as { n: anyint.generic } in {t: this.view rhs: n} out n is native
+    # this shifted right by `rhs` bits, on the terms of `<<`. Exact, it rounds
+    # toward negative infinity
+    >>: function as { n: anyint.generic } in {t: this.view rhs: n} out n is native
+    # the bitwise complement, computed by the compiler: a literal again
+    not: function {t: this.view} out type is native
+    # true when this is below `rhs`. Against another literal it is exact;
+    # against a typed operand this literal is read as that type, which must
+    # hold it
+    <: function as { n: anynumber.generic } in {t: this.view rhs: n} out bool is native
+    # true when this is at most `rhs`, on the terms of `<`
+    <=: function as { n: anynumber.generic } in {t: this.view rhs: n} out bool is native
+    # true when this is above `rhs`, on the terms of `<`
+    >: function as { n: anynumber.generic } in {t: this.view rhs: n} out bool is native
+    # true when this is at least `rhs`, on the terms of `<`
+    >=: function as { n: anynumber.generic } in {t: this.view rhs: n} out bool is native
+    # true when this equals `rhs`, on the terms of `<`
+    ==: function as { n: anynumber.generic } in {t: this.view rhs: n} out bool is native
+    # true when this differs from `rhs`, on the terms of `<`
+    !=: function as { n: anynumber.generic } in {t: this.view rhs: n} out bool is native
     # an integer literal read as i8. CHECKED AT COMPILE TIME: a literal outside
     # -128..127 is a diagnostic naming the value and the range, never a runtime
     # failure
@@ -1604,27 +1650,47 @@ intliteral: record is native as {
     # 0..4294967295 is a diagnostic naming the value and the range, never a
     # runtime failure
     c32: function {t: this.view} out system.c32 is native
-    # a half-open range over [0, this), walked in u64. A literal's width is
-    # FIXED here rather than taken from its magnitude: the loop variable's type
-    # would otherwise depend on how big the literal happened to be, and
-    # indexing a container with it would need a conversion that appeared and
-    # disappeared with the number. A narrower index is spelled `5.u8.times`.
-    # A negative literal is refused by the u64 conversion, at compile time,
-    # naming the value and the range
+    # a half-open range over [0, this), walked in i64: the literal is read as
+    # an i64. Its width is FIXED rather than taken from the number's size, so
+    # the loop variable's type does not change with how big the literal
+    # happens to be. A narrower walk is spelled `5.u8.times`
+    times: function {v: this.view} out intrange system.i64 is native
+    # the CLOSED range [this, to], ascending, walked in i64 as `times` is
+    upto: function {v: this.view to: system.i64} out intrange system.i64 is native
+    # the CLOSED range [to, this], descending, walked in i64 as `times` is
+    downto: function {v: this.view to: system.i64} out intrange system.i64 is native
     create: null
 }
 
 # the float literal declares only the float targets. That is what makes
 # `3.5.u8` a plain "no member" rather than a rule written by hand.
 floatliteral: record is native as {
-    # A LITERAL HAS NO EQUALITY OF ITS OWN. It materialises to a concrete type
-    # before any member lookup, so `2 == n` is `i64`'s equality. Without the
-    # opt-out a record that declares no `==` is given a SYNTHESISED structural
-    # one, and that synth answers the lookup before materialisation can happen
-    # -- which left `2 == n` typed to nothing while `2 <= n` resolved.
-    ==: null
-    # `!=` on the same terms: the pair is opted out together
-    !=: null
+    # the sum. Against another literal -- an integer one is read as a float --
+    # it is exact, the fraction both spell, and stays a literal; against a
+    # typed float this literal is read as that type and the sum is that type's
+    +: function as { n: anyfloat.generic } in {t: this.view rhs: n} out n is native
+    # the difference, on the terms of `+`
+    -: function as { n: anyfloat.generic } in {t: this.view rhs: n} out n is native
+    # the product, on the terms of `+`
+    *: function as { n: anyfloat.generic } in {t: this.view rhs: n} out n is native
+    # the quotient, on the terms of `+`
+    /: function as { n: anyfloat.generic } in {t: this.view rhs: n} out n is native
+    # the remainder of the division, on the terms of `+`. Two literals have no
+    # exact remainder, so that one has no value
+    %: function as { n: anyfloat.generic } in {t: this.view rhs: n} out n is native
+    # true when this is below `rhs`. Against another literal it is exact;
+    # against a typed float this literal is read as that type
+    <: function as { n: anyfloat.generic } in {t: this.view rhs: n} out bool is native
+    # true when this is at most `rhs`, on the terms of `<`
+    <=: function as { n: anyfloat.generic } in {t: this.view rhs: n} out bool is native
+    # true when this is above `rhs`, on the terms of `<`
+    >: function as { n: anyfloat.generic } in {t: this.view rhs: n} out bool is native
+    # true when this is at least `rhs`, on the terms of `<`
+    >=: function as { n: anyfloat.generic } in {t: this.view rhs: n} out bool is native
+    # true when this equals `rhs`, on the terms of `<`
+    ==: function as { n: anyfloat.generic } in {t: this.view rhs: n} out bool is native
+    # true when this differs from `rhs`, on the terms of `<`
+    !=: function as { n: anyfloat.generic } in {t: this.view rhs: n} out bool is native
     # a float literal read as f16: its nearest f16, a tie to the even one. One
     # that rounds past 65504 to an infinity is refused at compile time, and so is
     # a nonzero one that rounds to zero
@@ -2194,6 +2260,40 @@ Releasing: protocol {}
 # names a type up its chain, which is how an id space is usually written
 # (`declid: typedef u64`).
 idkey: variant { :u8 :u16 :u32 :u64 :c8 :c32 }
+
+# anyint -- an integer: any integer type, a typedef over one, or an integer
+# literal. A COMPILE-TIME SUM: its `intliteral` arm has no run-time form, so it
+# bounds a generic parameter and no value of it is ever made. A literal's
+# integer operators are bounded by it.
+anyint: variant { :intliteral :i8 :i16 :i32 :i64 :i128 :u8 :u16 :u32 :u64 :u128 :c8 :c32 }
+
+# anyfloat -- a float type, a typedef over one, or a float literal. A
+# compile-time sum, as anyint is.
+anyfloat: variant { :floatliteral :f16 :f32 :f64 :f128 }
+
+# anynumber -- any integer or float type, a typedef over one, or a numeric
+# literal. A compile-time sum, as anyint is. A literal's arithmetic and
+# comparisons are bounded by it.
+anynumber: variant {
+    :intliteral
+    :floatliteral
+    :i8
+    :i16
+    :i32
+    :i64
+    :i128
+    :u8
+    :u16
+    :u32
+    :u64
+    :u128
+    :c8
+    :c32
+    :f16
+    :f32
+    :f64
+    :f128
+}
 
 # staticindex -- what indexes a `list`: what `idkey` admits (its unsigned
 # integers and typedefs over them), or the untyped integer literal, which leaves

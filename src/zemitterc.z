@@ -10765,9 +10765,15 @@ emitOperatorCallForm: function {
             isPartner: (opPairPartnerId nameId: opNameId) == rd9.name
             if rd9.parent.isZero.not when sameName then {
                 # a TEMPLATE's operator has no C: the instance the receiver
-                # names does, and the derivation below reaches it
+                # names does, and the derivation below reaches it. Nor has a
+                # literal type's: the operation is the type the literal landed
+                # in, which the checker stamped on the receiver
                 pt9: (typing.decls.get i: rd9.parent).typeId
-                if pt9.isZero.not when (reg.isGenericOf tid: pt9).not then {
+                if pt9.isZero.not when (reg.isGenericOf tid: pt9).not when (
+                    isNumericLiteralType
+                    :reg
+                    tid: pt9
+                ).not then {
                     owner = pt9
                     method = rd9.typeId
                 }
@@ -17753,6 +17759,18 @@ emitCallByDecl: function {
         ownerDecl: typing.decls.get i: rdecl.parent
         ownerTid = ownerDecl.typeId
     }
+    # A LITERAL TYPE'S METHOD IS EMITTED AS THE METHOD OF THAT NAME ON THE TYPE
+    # ITS RECEIVER LANDED IN: the checker reads a literal receiver as the type
+    # the method runs in (`5.times` an i64) and stamps it there. The lookup and
+    # the signature stay the literal's; only the C is that type's.
+    if rkind.methodDecl when (isNumericLiteralType :reg tid: ownerTid) then {
+        lt: literalReceiverLanding :ast :typing :ctx :call
+        mt: typing.declChildOfId parentTypeId: lt nameId: rdecl.name
+        if mt.some then {
+            ownerTid = lt
+            rtid = mt
+        }
+    }
     if rkind.methodDecl when ownerTid.isZero.not then {
         return (
             emitMethodDeclCall
@@ -17784,6 +17802,22 @@ emitCallByDecl: function {
     # a function-pointer FIELD, called through the record that holds it
     if rkind.fieldDecl then return (emitFnptrFieldCall :ast :reg :typing :ctx :call :facts)
     return "".string
+}
+
+# isNumericLiteralType -- the type is intliteral or floatliteral, which no
+# value has at run time: their operators and methods are emitted as the type
+# the literal landed in.
+isNumericLiteralType: function {reg: ztypes.ZTypeRegistry.view tid: ztypes.tid} out bool is {
+    return (tid == reg.literalIntTid) or (tid == reg.literalFloatTid)
+}
+
+# literalReceiverLanding -- the type the checker stamped on the receiver of the
+# dotted call `call`: where a literal receiver landed. 0 when the callee is not
+# dotted.
+literalReceiverLanding: function {
+    ast: Ast.view typing: ztyping.ZTyping.view ctx: Ctx call: zast.callrow.view
+} out ztypes.tid is {
+    return (dottedReceiverStampId :ctx :ast :typing callable: (ast.nodes.get i: call.callable))
 }
 
 # emitCallValue -- the C expression for a call: the construction kinds the

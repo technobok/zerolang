@@ -7262,25 +7262,9 @@ literalConvTid: function {
     return ztypes.tid.zero
 }
 
-# literalDefaultTid -- the concrete type an unpinned literal falls to, asked of
-# the literal type's own declaration rather than spelled here twice.
-literalDefaultTid: function {
-    prog: Ast.view
-    o: (Option zenv.ZSymbolTable).view
-    litTid: ztypes.tid
-} out ztypes.tid is {
-    isF: false
-    if o.some when litTid == o.reg.literalFloatTid then isF = true
-    if isF then return (literalConvTid :prog :o :litTid name: "f64")
-    return (literalConvTid :prog :o :litTid name: "i64")
-}
-
-# addLiteralMembers -- a numeric literal's completion surface: the conversions
-# its literal type declares, plus the default type's OTHER members. The filter
-# is the checker's own rule -- a numeric target the literal type does not
-# declare is an error (`2.5.u8`), while a non-numeric child falls through to the
-# materialised receiver (`5.times`, `1.0.scaleB`). Unfiltered, a float literal
-# would be offered twelve conversions that do not compile.
+# addLiteralMembers -- a numeric literal's completion surface: the members its
+# literal type declares, as the checker reads them -- its operators, its
+# conversions, and an integer literal's `times`, `upto` and `downto`.
 addLiteralMembers: function {
     prog: Ast.view
     o: (Option zenv.ZSymbolTable).view
@@ -7288,9 +7272,6 @@ addLiteralMembers: function {
     sink: (MapRV String v: u8)
 } is {
     addTypeMembers :prog :o tid: litTid :sink skipNumeric: false privateOk: false onValue: true
-    dflt: literalDefaultTid :prog :o :litTid
-    if dflt.isZero then return
-    addTypeMembers :prog :o tid: dflt :sink skipNumeric: true privateOk: false onValue: true
 }
 
 # dotFrom -- index of the first `.` at or after `start` in base, or
@@ -7401,13 +7382,8 @@ addLiteralHead: function {
     de: dotFrom :base start: s0
     seg: (base.substring from: s0 to: de).string
     cur: literalConvTid prog: snap.prog o: snap.st litTid: ltid name: seg.stringView
-    if cur.isZero then {
-        # a NON-numeric child falls through to the materialised receiver, the
-        # rule that keeps `5.times` and `1.0.scaleB` working
-        dflt: literalDefaultTid prog: snap.prog o: snap.st litTid: ltid
-        if dflt.isZero then return
-        cur = childOfIn prog: snap.prog o: snap.st parent: dflt name: seg.stringView
-    }
+    # a child that is no conversion is another member of the literal type
+    if cur.isZero then cur = childOfIn prog: snap.prog o: snap.st parent: ltid name: seg.stringView
     if cur.isZero then return
     s1: de + 1
     cur = descendSegments :snap :base start: s1 startTid: cur

@@ -83,6 +83,7 @@ operation can fail for reasons the caller needs to handle
   [#*: [#> to=literal-types: #b:"intliteral" / #b:"floatliteral" / #b:"textliteral"] -- the compile-time types of a literal]
   [#*: [#> to=intrange: #b:"intrange"] -- the walk #~"times" / #~"upto" / #~"downto" hand back]
   [#*: [#> to=family-bounds: #b:"AnyRef" / #b:"anyval"] -- the family bounds; there is no top type]
+  [#*: #b:"anyint" / #b:"anyfloat" / #b:"anynumber" -- the number bounds: any integer, float or numeric type, a typedef over one, or a literal of the kind. Each is a compile-time sum: its literal arm has no run-time form, so it bounds a parameter and no value of it is made]
 
 #p: #b:"String types"
 
@@ -336,7 +337,7 @@ two without one either.
   d: x.scaleB n: -4         # 0.1875, exactly
   e: x.logB                 # 1 -- 3.0 lies in [2, 4)
   m: x.scaleB n: 0.i32 - x.logB    # 1.5 -- normalised to [1, 2)
-  p: 1.0.scaleB n: -24      # 2^-24, with no rounding to reason about
+  p: 1.0.f64.scaleB n: -24  # 2^-24, with no rounding to reason about
 """
 
 #b:"Word primitives." #~"u64" carries the operations a number wider
@@ -411,11 +412,11 @@ functions; #~"f16" and #~"f128" are refused there, as the types are, and
 #~"f128" is refused for any target but x86-64.
 
 #code language=zerolang: """
-  h: 3.0.hypot y: 4.0          # 5.0
-  a: 1.0.atan2 x: 1.0          # pi/4
-  r: 2.5.roundEven             # 2.0 -- where 2.5.round is 3.0
+  h: 3.0.f64.hypot y: 4.0      # 5.0
+  a: 1.0.f64.atan2 x: 1.0      # pi/4
+  r: 2.5.f64.roundEven         # 2.0 -- where 2.5.f64.round is 3.0
   q: 2.0.f32.sqrt              # the f32 nearest sqrt(2), computed in f32
-  n: (0.0 - 1.0).sqrt.isNaN    # true
+  n: (0.0 - 1.0).f64.sqrt.isNaN    # true
 """
 
 #b:"Ranges:"
@@ -488,10 +489,19 @@ when the range is held as a value:
 #--: literal types
 
 
-The type a literal wears before context pins it. #~"intliteral"
-declares a conversion to each of the sixteen scalars; #~"floatliteral"
-declares only the four float ones, which is what makes #~"3.5.u8" a
-missing member rather than a rule written by hand. #~"textliteral" is
+The type a literal wears before context pins it. Its members are its own,
+looked up as any type's are. #~"intliteral" declares a conversion to each of
+the sixteen scalars; #~"floatliteral" declares only the four float ones, which
+is what makes #~"3.5.u8" a missing member rather than a rule written by hand.
+Both declare their operators and comparisons, and #~"intliteral" its
+#~"times", #~"upto" and #~"downto", which walk an #~"i64". Against another
+literal an operator is computed by the compiler, exactly, and the result is a
+literal again (#~"2 + 3", #~"1 + 0.5"); against a typed operand the literal is
+read as that operand's type, must fit it, and the operation is that type's
+(#~"4 - w" with #~"w: u64" is a #~"u64"). The operators' bounds say which
+operands they take: #~"anynumber", or #~"anyint" for a bitwise one and
+#~"anyfloat" for a float literal's. Any other number method goes through a
+conversion: #~"2.0.f64.sqrt", #~"5.i64.hash". #~"textliteral" is
 the type of a string literal and of an untyped string constant: it
 declares #~"text", #~"stringView" and #~"string", and any other member is
 read on the #~"StringView" it becomes (#~"\"abc\".length").
@@ -502,9 +512,12 @@ so must be checked; on a literal the value is known at compile time, so
 it either fits -- and #~"65.u8" is simply a #~"u8" -- or it does not and
 the program is rejected where the literal is written.
 
-None of the three reaches emission: the programmer converts explicitly,
-or context coerces, or the literal falls to #~"i64" / #~"f64", and a
-string to #~"StringView" -- #~"text" in a static position.
+No value of the three exists at run time: the programmer converts
+explicitly, or context coerces, or the literal falls to #~"i64" / #~"f64",
+and a string to #~"StringView" -- #~"text" in a static position. An operation
+on two literals that the compiler cannot compute -- a negative shift count, a
+float remainder, a float division by zero -- has no value and is refused
+(#~"E0600").
 
 #~"core" re-exports the three names, so a unit-level alias may refer to one
 (#~"lit: intliteral"), but #~"create: null" means nothing constructs

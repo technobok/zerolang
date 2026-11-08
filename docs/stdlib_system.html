@@ -188,6 +188,7 @@ operation can fail for reasons the caller needs to handle
 <li><a href="#literal-types"><strong>intliteral</strong> / <strong>floatliteral</strong> / <strong>textliteral</strong></a> -- the compile-time types of a literal</li>
 <li><a href="#intrange"><strong>intrange</strong></a> -- the walk <code>times</code> / <code>upto</code> / <code>downto</code> hand back</li>
 <li><a href="#family-bounds"><strong>AnyRef</strong> / <strong>anyval</strong></a> -- the family bounds; there is no top type</li>
+<li><strong>anyint</strong> / <strong>anyfloat</strong> / <strong>anynumber</strong> -- the number bounds: any integer, float or numeric type, a typedef over one, or a literal of the kind. Each is a compile-time sum: its literal arm has no run-time form, so it bounds a parameter and no value of it is made</li>
 </ul>
 <p><strong>String types</strong></p>
 <ul>
@@ -399,7 +400,7 @@ two without one either.</p>
   d: x.scaleB n: -4         # 0.1875, exactly
   e: x.logB                 # 1 -- 3.0 lies in [2, 4)
   m: x.scaleB n: 0.i32 - x.logB    # 1.5 -- normalised to [1, 2)
-  p: 1.0.scaleB n: -24      # 2^-24, with no rounding to reason about</code></pre>
+  p: 1.0.f64.scaleB n: -24  # 2^-24, with no rounding to reason about</code></pre>
 <p><strong>Word primitives.</strong> <code>u64</code> carries the operations a number wider
 than a word is built from, one word at a time -- what an arbitrary-precision
 integer's loops are made of. Each answers whatever C does not: the high half
@@ -464,11 +465,11 @@ rest, so another C library may answer differently in the last place. An
 <code>f128</code> one is libquadmath's. tcc builds have the <code>f32</code> and <code>f64</code>
 functions; <code>f16</code> and <code>f128</code> are refused there, as the types are, and
 <code>f128</code> is refused for any target but x86-64.</p>
-<pre><code class="language-zerolang">  h: 3.0.hypot y: 4.0          # 5.0
-  a: 1.0.atan2 x: 1.0          # pi/4
-  r: 2.5.roundEven             # 2.0 -- where 2.5.round is 3.0
+<pre><code class="language-zerolang">  h: 3.0.f64.hypot y: 4.0      # 5.0
+  a: 1.0.f64.atan2 x: 1.0      # pi/4
+  r: 2.5.f64.roundEven         # 2.0 -- where 2.5.f64.round is 3.0
   q: 2.0.f32.sqrt              # the f32 nearest sqrt(2), computed in f32
-  n: (0.0 - 1.0).sqrt.isNaN    # true</code></pre>
+  n: (0.0 - 1.0).f64.sqrt.isNaN    # true</code></pre>
 <p><strong>Ranges:</strong></p>
 <ul>
 <li><code>i8</code>: -128 .. 127</li>
@@ -524,10 +525,19 @@ when the range is held as a value:</p>
 <pre><code class="language-zerolang">  r: 1.upto to: 3
   for h: r loop print "\{h}"           # 1 2 3 -- read bare, r is its call</code></pre>
 <h2 id="literal-types"><a href="#literal-types">5. literal types</a></h2>
-<p>The type a literal wears before context pins it. <code>intliteral</code>
-declares a conversion to each of the sixteen scalars; <code>floatliteral</code>
-declares only the four float ones, which is what makes <code>3.5.u8</code> a
-missing member rather than a rule written by hand. <code>textliteral</code> is
+<p>The type a literal wears before context pins it. Its members are its own,
+looked up as any type's are. <code>intliteral</code> declares a conversion to each of
+the sixteen scalars; <code>floatliteral</code> declares only the four float ones, which
+is what makes <code>3.5.u8</code> a missing member rather than a rule written by hand.
+Both declare their operators and comparisons, and <code>intliteral</code> its
+<code>times</code>, <code>upto</code> and <code>downto</code>, which walk an <code>i64</code>. Against another
+literal an operator is computed by the compiler, exactly, and the result is a
+literal again (<code>2 + 3</code>, <code>1 + 0.5</code>); against a typed operand the literal is
+read as that operand's type, must fit it, and the operation is that type's
+(<code>4 - w</code> with <code>w: u64</code> is a <code>u64</code>). The operators' bounds say which
+operands they take: <code>anynumber</code>, or <code>anyint</code> for a bitwise one and
+<code>anyfloat</code> for a float literal's. Any other number method goes through a
+conversion: <code>2.0.f64.sqrt</code>, <code>5.i64.hash</code>. <code>textliteral</code> is
 the type of a string literal and of an untyped string constant: it
 declares <code>text</code>, <code>stringView</code> and <code>string</code>, and any other member is
 read on the <code>StringView</code> it becomes (<code>"abc".length</code>).</p>
@@ -536,9 +546,12 @@ read on the <code>StringView</code> it becomes (<code>"abc".length</code>).</p>
 so must be checked; on a literal the value is known at compile time, so
 it either fits -- and <code>65.u8</code> is simply a <code>u8</code> -- or it does not and
 the program is rejected where the literal is written.</p>
-<p>None of the three reaches emission: the programmer converts explicitly,
-or context coerces, or the literal falls to <code>i64</code> / <code>f64</code>, and a
-string to <code>StringView</code> -- <code>text</code> in a static position.</p>
+<p>No value of the three exists at run time: the programmer converts
+explicitly, or context coerces, or the literal falls to <code>i64</code> / <code>f64</code>,
+and a string to <code>StringView</code> -- <code>text</code> in a static position. An operation
+on two literals that the compiler cannot compute -- a negative shift count, a
+float remainder, a float division by zero -- has no value and is refused
+(<code>E0600</code>).</p>
 <p><code>core</code> re-exports the three names, so a unit-level alias may refer to one
 (<code>lit: intliteral</code>), but <code>create: null</code> means nothing constructs
 one: a binding that names it bare is refused by the general
