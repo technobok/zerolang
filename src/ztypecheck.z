@@ -21324,6 +21324,12 @@ fillMonoMethodSignature: function {
                 nameId: chName
                 value: pdft
             )
+            # and its refusal: the instance's declares the bound, not the
+            # parameter the template names
+            if (memberRefusedForNumericParam :st :ast owner: srcId nameId: chName) then {
+                cpd: declMemberOf :st ownerTid: newFnId nameId: chName
+                if cpd.isZero.not then st.walk.refusedParamCopies.add item: cpd
+            }
         }
     }
     rto: st.reg.returnTypeOf tid: srcId
@@ -31613,11 +31619,24 @@ fnAutoCallable: function {st: zenv.ZSymbolTable.view mid: ztypes.tid} out bool i
             if isRecv.not then {
                 userSeen = true
                 hd: st.typing.declHasDefaultId parentTypeId: mid nameId: pnameId
-                if hd.not then return false
+                rc: refusedParamCopy :st fnId: mid nameId: pnameId
+                if (hd or rc).not then return false
             }
         }
     }
     return userSeen
+}
+
+# refusedParamCopy -- parameter `nameId` of `fnId` is a unit instance's copy of
+# one the template refused (WalkState.refusedParamCopies), which a call does
+# not pass.
+refusedParamCopy: function {
+    st: zenv.ZSymbolTable.view
+    fnId: ztypes.tid
+    nameId: zast.nameid
+} out bool is {
+    if st.walk.refusedParamCopies.length == 0 then return false
+    return (st.walk.refusedParamCopies.has item: (declMemberOf :st ownerTid: fnId :nameId))
 }
 
 # bareFnRefError -- a bare reference to a function with required parameters
@@ -31951,7 +31970,8 @@ asksNoArgument: function {
 # memberRefusedForNumericParam -- member `nameId` of `owner` was refused where it
 # is written for naming a numeric generic parameter: typed by one where only a
 # field may be (refuseSingletonDeclType), or defaulted to a value computed from
-# one (refusePerInstanceDefault). A refusal is always reported, so a program
+# one (refusePerInstanceDefault), or it is a unit instance's copy of a parameter
+# so refused (refusedParamCopies). A refusal is always reported, so a program
 # with no errors has none.
 memberRefusedForNumericParam: function {
     st: zenv.ZSymbolTable.view
@@ -31962,6 +31982,7 @@ memberRefusedForNumericParam: function {
     if (st.typing.errors.length == 0) or owner.isZero then return false
     md: declMemberOf :st ownerTid: owner :nameId
     if md.isZero then return false
+    if (refusedParamCopy :st fnId: owner :nameId) then return true
     op: declOperationOf :st :ast declId: md
     if op.isZero then return false
     ownerDecl: templateDeclOf reg: st.reg typing: st.typing tid: owner
