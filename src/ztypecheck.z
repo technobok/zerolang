@@ -33270,12 +33270,27 @@ refuseTemplateOnlyConstant: function {
 # constReadsNumericParam -- whether a constant's value expression names a
 # numeric generic parameter of `owner`, through an operator, an `if` or a
 # `match` as the constant fold reaches it, a member read or a method call on it
-# (`cap.u64`, `cap.max y: 2`), or a call's argument.
+# (`cap.u64`, `cap.max y: 2`), a call's argument, or a constant it names whose
+# own value reads one (`G: F + 1` with `F: cap.u64`): such a constant has a
+# value in each instance and none in the template, however far it derives.
 constReadsNumericParam: function {
     st: zenv.ZSymbolTable.view
     ast: Ast.view
     owner: ztypes.declid
     opId: zast.nodeid
+} out bool is {
+    followed: ListVal ztypes.declid
+    return (constReadsNumericParamVia :st :ast :owner :opId :followed)
+}
+
+# constReadsNumericParamVia -- constReadsNumericParam, given the constants the
+# walk has followed so far, so a ring of constants ends it.
+constReadsNumericParamVia: function {
+    st: zenv.ZSymbolTable.view
+    ast: Ast.view
+    owner: ztypes.declid
+    opId: zast.nodeid
+    followed: ListVal ztypes.declid
 } out bool is {
     if opId.isZero then return false
     kids: ListVal zast.nodeid
@@ -33304,11 +33319,50 @@ constReadsNumericParam: function {
             }
         }
     }
-    if nameId.isZero.not then return (numericParamOwnerFrom :st scope: owner :nameId).isZero.not
+    if nameId.isZero.not then return (nameReadsNumericParam :st :ast :owner :nameId :followed)
     for each k: kids loop {
-        if (constReadsNumericParam :st :ast :owner opId: k) then return true
+        if (constReadsNumericParamVia :st :ast :owner opId: k :followed) then return true
     }
-    return (constBranchReadsNumericParam :st :ast :owner :opId)
+    return (constBranchReadsNumericParam :st :ast :owner :opId :followed)
+}
+
+# nameReadsNumericParam -- the name `nameId`, read in a constant of `owner`, is
+# a numeric generic parameter of `owner` or of a definition enclosing it, or
+# names the nearest constant of that name whose value reads one.
+nameReadsNumericParam: function {
+    st: zenv.ZSymbolTable.view
+    ast: Ast.view
+    owner: ztypes.declid
+    nameId: zast.nameid
+    followed: ListVal ztypes.declid
+} out bool is {
+    if (numericParamOwnerFrom :st scope: owner :nameId).isZero.not then return true
+    cur: owner
+    for cur.isZero.not loop {
+        cd: st.typing.declFindChild parentDeclId: cur :nameId
+        if cd.isZero.not then {
+            if (followed.contains item: cd) or (declIsConstant :st declId: cd).not then return false
+            followed.append from: cd
+            return (
+                constReadsNumericParamVia
+                :st
+                :ast
+                :owner
+                opId: (declOperationOf :st :ast declId: cd)
+                :followed
+            )
+        }
+        cur = st.typing.declParentOf declId: cur
+    }
+    return false
+}
+
+# declIsConstant -- the declaration is a constant: a unit's, an `as`
+# section's, or a path a unit re-exports until its root is read as a value.
+declIsConstant: function {st: zenv.ZSymbolTable.view declId: ztypes.declid} out bool is {
+    k: (st.typing.decls.get i: declId).kind
+    if k.constDecl or k.reexportDecl then return true
+    return (st.typing.isAsConstDecl :declId)
 }
 
 # appendHeldValues -- the values a node holds without being an operation of
@@ -33327,6 +33381,7 @@ constBranchReadsNumericParam: function {
     ast: Ast.view
     owner: ztypes.declid
     opId: zast.nodeid
+    followed: ListVal ztypes.declid
 } out bool is {
     clauseIds: ListVal zast.nodeid
     site: readUnitIf :ast nid: opId :clauseIds
@@ -33334,12 +33389,19 @@ constBranchReadsNumericParam: function {
         condIds: ListVal zast.nodeid
         stmtId: readIfClause :ast :clauseId :condIds
         for each condId: condIds loop {
-            if (constReadsNumericParam :st :ast :owner opId: condId) then return true
+            if (constReadsNumericParamVia :st :ast :owner opId: condId :followed) then return true
         }
-        if stmtId.isZero.not when (constReadsNumericParam :st :ast :owner opId: stmtId
+        if stmtId.isZero.not when (constReadsNumericParamVia :st :ast :owner opId: stmtId :followed
         ) then return true
     }
-    if site.elseId.isZero.not then return (constReadsNumericParam :st :ast :owner opId: site.elseId)
+    if site.elseId.isZero.not then return (
+        constReadsNumericParamVia
+        :st
+        :ast
+        :owner
+        opId: site.elseId
+        :followed
+    )
     return false
 }
 
