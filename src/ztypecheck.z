@@ -31045,6 +31045,7 @@ checkTypedefCreate: function {
     call: callref
     tdId: ztypes.tid
 } out ztypes.tid is {
+    if (st.typing.isSingletonType tid: tdId) then return (checkSingletonCreate :st :ast :call :tdId)
     refuseTypedefExtraArgs :st :ast :call :tdId
     borrows: false
     found: false
@@ -31093,6 +31094,42 @@ checkTypedefCreate: function {
     ck: zast.callkind.typedefCreate
     if borrows then ck = zast.callkind.typedefBorrow
     st.typing.callKind.set key: call.nid value: ck
+    return tdId
+}
+
+# checkSingletonCreate -- the create of a numeric generic parameter's singleton
+# type (`cap.create`): the type has one value, so the create takes no argument,
+# and its result is that value, known when the instance is checked.
+checkSingletonCreate: function {
+    st: zenv.ZSymbolTable ast: Ast.view call: callref tdId: ztypes.tid
+} out ztypes.tid is {
+    kAiter: u64
+    for kAiter < call.nargs loop {
+        arg: argRefAt :ast nid: (zast.callArgAt :ast nid: call.nid i: kAiter)
+        kAiter = kAiter + 1
+        if arg.nid.isZero then continue
+        tn: specWrittenName :st :ast tid: tdId
+        (
+            addErrorH
+            :st
+            nodeid: arg.nid
+            lineno: arg.lineno
+            colno: arg.colno
+            e: zast.err.callError
+            msg: "'\{tn}' holds one value, so its create takes no argument"
+            note: String
+            hint: "drop the argument".string
+            width: 1
+        )
+    }
+    stampGate :st nid: call.nid tid: tdId
+    (
+        st.typing.setNodeConstIn
+        mono: st.typing.curMonoStamp
+        nid: call.nid
+        value: (st.typing.singletonValueOf tid: tdId)
+    )
+    st.typing.callKind.set key: call.nid value: zast.callkind.typedefCreate
     return tdId
 }
 
@@ -33733,6 +33770,12 @@ checkMemberNamespace: function {
     # a value, on a value it is the arm's predicate
     if (sumArmDeclared typing: st.typing sumTid: bt nameId: cnId) then return true
     isValue: dottedBaseIsValue :st :ast :unitDecl n: (ast.nodes.get i: dp.nid)
+    # a bare numeric generic parameter names its singleton type as well as the
+    # type's one value, and `create` belongs to the type: `cap.create`
+    if isValue when cnId == zast.wellKnown.slot.wkCreate when (
+        st.typing.numericParamRead.has
+        key: dp.parent
+    ) then return true
     if (st.typing.declIsFnptrFieldId parentTypeId: bt nameId: cnId) then {
         if isValue then return true
         (
@@ -35140,6 +35183,8 @@ checkDottedOn: function {
     if utc.handled then return utc.tid
     cnId: atomNameId :ast n: (ast.nodes.get i: dp.child)
     if cnId.isZero then return ztypes.tid.zero
+    sgc: checkSingletonCreateRead :st :dp :bt :cnId :coerce
+    if sgc.handled then return sgc.tid
     # an instance's walk reads a partial base as the spec its arguments complete
     if (st.reg.isPartialOf tid: bt) then bt = instanceTypeOf :st :ast :unitDecl tid: bt
     # a member of an INTERFACE that names the interface in a parameter has no
@@ -35254,6 +35299,31 @@ checkDottedOn: function {
     } case none then {
         return (checkUnresolvedMember :st :ast :dp :bt :cnId)
     }
+}
+
+# checkSingletonCreateRead -- `cap.create` read as a value, where `cap` is a bare
+# numeric generic parameter: the zero-argument create of its singleton type,
+# whose result is the type's one value, as the bare `cap` is. The template's own
+# walk reads the parameter as its bound, and so the create's result too.
+checkSingletonCreateRead: function {
+    st: zenv.ZSymbolTable
+    dp: dpref
+    bt: ztypes.tid
+    cnId: zast.nameid
+    coerce: bool
+} out callleg is {
+    miss: callleg handled: false tid: ztypes.tid
+    if coerce.not then return miss
+    if cnId != zast.wellKnown.slot.wkCreate then return miss
+    if (st.typing.numericParamRead.has key: dp.parent).not then return miss
+    stampGate :st nid: dp.nid tid: bt
+    if (st.typing.isSingletonType tid: bt) then (
+        st.typing.setNodeConstIn
+        mono: st.typing.curMonoStamp
+        nid: dp.nid
+        value: (st.typing.singletonValueOf tid: bt)
+    )
+    return (callleg handled: true tid: bt)
 }
 
 # memberTypeViaPartial -- a member's type as the dotted path at `dp` reads it:
@@ -65965,6 +66035,7 @@ evalConstDotted: function {
     # question was "does it hold this one".
     pv: evalConstNode :st :scope :ast :unitDecl nid: parentId
     if pv.kind.armKind then return (constArmChild :st :ast v: pv :ncId)
+    if (readsSingletonCreate :st :scope :pv :ptId :ncId) then return pv
     if pv.kind.aggKind then return (constAggField :st :ast v: pv nameId: ncId)
     # a literal receiver (`"abcd".length`) or a qualified constant
     # (`quadfloat.LIB.length`): the parent is not a bare atom, so its value
@@ -66011,6 +66082,21 @@ evalConstDotted: function {
         return (evalConstViaDottedParent :st :scope :ast :unitDecl :parentId :gpId :gcId :ncId)
     }
     return ztypes.noConst
+}
+
+# readsSingletonCreate -- the path `ptId.ncId`, whose base has the value `pv`, is
+# `cap.create` on a bare numeric generic parameter: the create of its singleton
+# type, whose value is the type's one value, `pv` itself.
+readsSingletonCreate: function {
+    st: zenv.ZSymbolTable.view
+    scope: ztypes.declid
+    pv: ztypes.cval
+    ptId: zast.nameid
+    ncId: zast.nameid
+} out bool is {
+    if ncId != zast.wellKnown.slot.wkCreate then return false
+    if (st.typing.isSingletonType tid: pv.numTid).not then return false
+    return (numericParamOwnerFrom :st :scope nameId: ptId).isZero.not
 }
 
 # constOfSelfTypeMember -- `type.K` in a method's body, the path the body reads
