@@ -514,6 +514,43 @@ checkTypePathValue: function {
     checkBareTypeValueAt :ast :st nodeid: nid :lineno :colno width: cn.length.u32.orPanic :tid
 }
 
+# readSingletonBase -- a dotted path's base `base`, of type `bt`, that names a
+# numeric generic parameter's singleton type (`SAME` in `SAME.u64`): its one
+# value, which the member is read on (readSingletonValue). A bare parameter
+# base is read as that value already.
+readSingletonBase: function {
+    st: zenv.ZSymbolTable
+    ast: Ast
+    unitDecl: ztypes.declid
+    base: zast.nodeid
+    bt: ztypes.tid
+} is {
+    if (st.typing.numericParamRead.has key: base) then return
+    if (st.typing.isSingletonType tid: bt).not then return
+    if (nodeNamesType :st :ast :unitDecl nid: base) then readSingletonValue :st nid: base tid: bt
+}
+
+# readSingletonValue -- a name of a numeric generic parameter's singleton type
+# read as a value at `nid` (`P9.SAME`, `SAME.u64` with `SAME: cap`): the
+# type's one value, read as the bare parameter is -- the instance's value, or
+# in the template's walk the value each instance gives. False for any other
+# type.
+readSingletonValue: function {st: zenv.ZSymbolTable nid: zast.nodeid tid: ztypes.tid} out bool is {
+    row: st.typing.singletons.get key: tid
+    if row.none then return false
+    sg: tid
+    # the template's own parameter type is each instance's own in its walk
+    if row.instance.isZero then {
+        ws: monoSingletonOf :st nameId: row.param
+        if ws.isZero.not then sg = ws
+    }
+    v: st.typing.singletonValueOf tid: sg
+    if v.kind.none.not then st.typing.setNodeConstIn mono: st.typing.curMonoStamp :nid value: v
+    stampGate :st :nid tid: sg
+    st.typing.numericParamRead.set key: nid value: row.param
+    return true
+}
+
 # refuseBorrowedBareType -- a construction with no argument of a borrowed view
 # -- a typedef class over one included (PathView) -- or a native iterator: each
 # binds to what it reads, and cannot be made from nothing. true when it refused.
@@ -2232,11 +2269,8 @@ asNameNamesType: function {
     depth: u64
 } out bool is {
     if (nm == item) or (isNumericLiteralNameAt :ast ref: nm) then return false
-    if (st.reg.isGenericParamOf :tdecl name: nm) then return (
-        st.reg.genericParamConstraintOf
-        :tdecl
-        paramName: nm
-    ).numKind.has.not
+    # a numeric parameter too: its type is its singleton type
+    if (st.reg.isGenericParamOf :tdecl name: nm) then return true
     own: st.typing.declFindChild parentDeclId: tdecl nameId: nm
     if own.isZero.not then return (asMemberIsAliasAt :st :ast :tdecl md: own depth: depth + 1)
     uscope: unitScopeOf typing: st.typing declId: tdecl
@@ -2358,6 +2392,17 @@ asAliasTargetOf: function {
     if (st.typing.declIsResolving declId: md) then return ztypes.tid.zero
     op: (argRefAt :ast nid: (st.typing.decls.get i: md).node).operation
     tn: zast.nameTextCopy :ast ref: (st.typing.decls.get i: tdecl).name
+    sgt: (
+        numericParamAliasTarget
+        :st
+        :ast
+        scope: tdecl
+        nameId: (zast.atomNameIdOf n: (ast.nodes.get i: op))
+    )
+    if sgt.isZero.not then {
+        st.walk.asAliasTarget.set key: md value: sgt
+        return sgt
+    }
     st.typing.declSetResolving declId: md mark: true
     t: (
         resolveTyperefShell
@@ -2375,6 +2420,25 @@ asAliasTargetOf: function {
         st.walk.asAliasTarget.set key: mk value: mv
     }
     return t
+}
+
+# numericParamAliasTarget -- the target of an alias whose value is the bare name
+# `nameId` of a numeric generic parameter of the definition at or enclosing
+# `scope` (`SAME: cap`): the parameter's own singleton type, where a type-ref of
+# the name takes its bound. 0 for any other name.
+numericParamAliasTarget: function {
+    st: zenv.ZSymbolTable
+    ast: Ast
+    scope: ztypes.declid
+    nameId: zast.nameid
+} out ztypes.tid is {
+    if nameId.isZero then return ztypes.tid
+    npo: numericParamOwnerFrom :st :scope :nameId
+    if npo.isZero then return ztypes.tid
+    cd: st.reg.genericParamConstraintOf tdecl: npo paramName: nameId
+    bnd: numericBoundTid :ast :st :scope :cd
+    if bnd.isZero then return ztypes.tid
+    return (abstractSingletonOf :st :ast tdecl: npo param: nameId bound: bnd)
 }
 
 # typePathAliasTid -- the target of the alias a path through a type names
@@ -2442,6 +2506,13 @@ typePathAliasTid: function {
     }
     target: asAliasTargetOf :st :ast tdecl: td :md
     if inst.isZero or target.isZero then return target
+    # an alias of the template's numeric parameter (`SAME: cap`) is the
+    # instance's singleton type
+    srow: st.typing.singletons.get key: target
+    if srow.some when srow.instance.isZero then {
+        isg: st.typing.singletonOf instance: inst param: srow.param
+        if isg.isZero.not then return isg
+    }
     return (
         partialSubstituted
         :st
@@ -15491,6 +15562,8 @@ refusePerInstanceDefault: function {
 } out bool is {
     ownerDecl: st.typing.declIdOfType typeId: ownerTid
     if (defaultReadsNumericParam :st :ast :ownerDecl node: dm.operation).not then return false
+    # an alias (`SAME: cap`) names a type, which declares the member
+    if (namesAsAlias :st :ast scope: ownerDecl node: dm.operation) then return false
     pn: zast.nameTextAt :ast ref: dm.name
     what: "field"
     how: "set it in a `create`"
@@ -15512,6 +15585,29 @@ refusePerInstanceDefault: function {
     )
     st.typing.refusedValues.add item: dm.operation
     return true
+}
+
+# namesAsAlias -- `node` is a bare name of an `as` alias of a type at or
+# enclosing `scope`: a type-ref, not a value.
+namesAsAlias: function {
+    st: zenv.ZSymbolTable
+    ast: Ast
+    scope: ztypes.declid
+    node: zast.nodeid
+} out bool is {
+    nm: zast.atomNameIdOf n: (ast.nodes.get i: node)
+    if nm.isZero then return false
+    cur: scope
+    for cur.isZero.not loop {
+        md: st.typing.declFindChild parentDeclId: cur nameId: nm
+        if md.isZero.not then {
+            # a unit's definition aliases a type, as a type's `as` item does
+            if (aliasNamesType :st :ast declId: md) then return true
+            return (asMemberIsAlias :st :ast tdecl: cur :md)
+        }
+        cur = st.typing.declParentOf declId: cur
+    }
+    return false
 }
 
 # defaultReadsNumericParam -- the declaration's value `node` is computed from a
@@ -17289,6 +17385,9 @@ aliasNamesType: function {
 } out bool is {
     if declId.isZero then return false
     if (aliasIsBareForm :st :ast :declId) then return true
+    # a path to an instance's numeric generic parameter (`X: B5.cap`) names its
+    # singleton type (singletonPathAlias)
+    if (st.typing.isSingletonType tid: (st.typing.declTypeOf :declId)) then return true
     ndo: st.typing.decls.get i: declId
     if ndo.kind.reexportDecl then {
         nnp: ast.nodes.get i: ndo.node
@@ -17648,16 +17747,104 @@ resolveAliasKey: function {
     # named `false`, and `x: false` would fail as one.
     #
     # Folded first for that reason. A genuine type alias folds to nothing and
-    # falls through to the chase below, unchanged.
+    # falls through to the chase below, unchanged. A path to an instance's
+    # numeric generic parameter (`X: B5.cap`) folds too, and names its
+    # singleton type: an alias.
+    sgp: singletonPathAlias :st :ast :declId scope: ascope
+    if sgp.isZero.not then {
+        registerAliasTarget :st :declId scope: ascope tid: sgp
+        return sgp
+    }
     constFoldDecl :st :ast :declId
     cvA: constValueOfDecl :st :declId
     if cvA.kind.none.not then return (st.typing.declTypeOf :declId)
+    # an alias of a numeric generic parameter (`SAME: cap`) in the template
+    # names the parameter's singleton type
+    if (aliasIsBareForm :st :ast :declId) then {
+        npa: (
+            numericParamAliasTarget
+            :st
+            :ast
+            scope: ascope
+            nameId: (zast.atomNameIdOf n: (ast.nodes.get i: (declOperationOf :st :ast :declId)))
+        )
+        if npa.isZero.not then {
+            registerAliasTarget :st :declId scope: ascope tid: npa
+            return npa
+        }
+    }
     r: fileUnitAliasTid :st :ast adecl: declId
     if r.isZero then r = resolveAliasKeyIn :st scope: ascope :ast :declId
     if r.isZero then r = resolveAppliedMemberAlias :st :ast scope: ascope :declId
     if r.isZero then r = resolveDeepAlias :st :ast scope: ascope :declId
     refuseArmAliasPayload :st :ast :declId tid: r
     return r
+}
+
+# registerAliasTarget -- the unit-level alias `declId`, written in `scope`, names
+# `tid`: the unit's member and the alias's declaration both carry it.
+registerAliasTarget: function {
+    st: zenv.ZSymbolTable
+    declId: ztypes.declid
+    scope: ztypes.declid
+    tid: ztypes.tid
+} is {
+    ownTid: st.typing.declTypeOf declId: scope
+    if ownTid.isZero.not then (
+        st.typing.setMemberType
+        parentTypeId: ownTid
+        nameId: (st.typing.decls.get i: declId).name
+        childTypeId: tid
+    )
+    st.typing.declSetType :declId typeId: tid
+}
+
+# singletonPathAlias -- the singleton type the value of the unit-level definition
+# `declId` names when it is a path to an instance's numeric generic parameter
+# (`B5.cap`, `(Box cap: 5).cap`, `w3.n`; numericParamTyperef); 0 for any other
+# value.
+singletonPathAlias: function {
+    st: zenv.ZSymbolTable
+    ast: Ast
+    declId: ztypes.declid
+    scope: ztypes.declid
+} out ztypes.tid is {
+    op: declOperationOf :st :ast :declId
+    if op.isZero then return ztypes.tid
+    parentId: zast.nodeid
+    leafId: zast.nameid
+    {
+        n: ast.nodes.get i: op
+        if n.dottedpath then {
+            parentId = n.parent
+            leafId = atomNameId :ast n: (ast.nodes.get i: n.child)
+        }
+    }
+    if parentId.isZero or leafId.isZero then return ztypes.tid
+    # only an application, or a name defined as one, names an instance
+    pnm: zast.nameid
+    isApp: false
+    {
+        pn: ast.nodes.get i: parentId
+        isApp = pn.call
+        pnm = zast.atomNameIdOf n: pn
+    }
+    if isApp.not when pnm.isZero or (qualifierValueIsCall :st :ast :scope nameId: pnm).not then {
+        return ztypes.tid
+    }
+    t: (
+        numericParamTyperef
+        :st
+        :scope
+        :ast
+        unitDecl: (unitRootOfDecl typing: st.typing declId: scope)
+        nid: op
+        :parentId
+        :leafId
+        thisName: ""
+    )
+    if (st.typing.isSingletonType tid: t).not then return ztypes.tid
+    return t
 }
 
 # valueHeadIsSelf -- whether the value of the definition `declId` starts with
@@ -30539,6 +30726,8 @@ dottedBaseIsValue: function {
         baseId = n.parent
     } else null
     if baseId.isZero then return true
+    # a numeric parameter's value, read bare or through a name of its type
+    if (st.typing.numericParamRead.has key: baseId) then return true
     bn: ast.nodes.get i: baseId
     if bn.call then callableId = bn.callable
     # the answer is recorded on the base for the emitter: a member read through
@@ -35772,6 +35961,7 @@ dottedBaseTid: function {
     errsBase: st.typing.errors.length
     bt: checkValueAt :st :unitDecl :ast nid: dp.parent
     st.mode = savedMode
+    if baseIsName then readSingletonBase :st :ast :unitDecl base: dp.parent :bt
     # a base refused as a call missing its arguments has no value to read a
     # member of: that refusal is the one error
     if st.typing.errors.length > errsBase when (
@@ -35877,6 +36067,7 @@ checkDotted: function {
     # an alias reached through its type (`Tree.Node x: 1`) names the type; read
     # as a value (`w: p.Inner`) it constructs, as the type's own name does
     tpv: dottedAliasValueTid :st :ast :dp
+    if tpv.isZero.not when coerce when (readSingletonValue :st nid: dp.nid tid: tpv) then return tpv
     if tpv.isZero.not then {
         if coerce when st.mode.suppressBareCtor.not then (
             checkTypePathValue
@@ -36346,6 +36537,8 @@ checkBareTypeValue: function {
         nameId: node.name
         tid: fo
     ).not then return
+    # a singleton type's name is its one value
+    if (readSingletonValue :st nid: node.nid tid: fo) then return
     # a type its generic unit declares is that instance's copy: checked as the
     # instance, and not at all on the template's own walk
     nsv: unitNestedSelf :st :ast tid: fo
@@ -59399,8 +59592,8 @@ walkLateResolvedOwners: function {st: zenv.ZSymbolTable scope: ztypes.declid ast
 
 # bindMonoParams -- fill monoParamSubst (param tid -> arg tid) with one mono's
 # type args, for flat substitution at stamp time; the template's Decl is the one
-# key. A numeric (value) argument substitutes nothing: a read of its parameter
-# is valued by the evaluator from the mono itself.
+# key. A numeric parameter's own type is the mono's singleton type; a read of
+# the parameter is valued by the evaluator from the mono itself.
 bindMonoParams: function {
     st: zenv.ZSymbolTable
     monoId: ztypes.tid
@@ -59413,9 +59606,11 @@ bindMonoParams: function {
     pc: pn.length
     pj: u64
     for pj < pc loop {
-        av: st.reg.genericTypeArgAt specId: monoId ordinal: pj
+        pnm: pn.get i: pj
+        # a numeric parameter's type is the instance's singleton type
+        av: st.typing.singletonOf instance: monoId param: pnm
+        if av.isZero then av = st.reg.genericTypeArgAt specId: monoId ordinal: pj
         if av.isZero.not then {
-            pnm: pn.get i: pj
             pto: st.reg.genericParamTidOf :tdecl paramName: pnm
             if pto.some then {
                 st.walk.monoParamSubst.set key: pto value: av
@@ -68042,6 +68237,10 @@ resolveDottedConstantRead: function {
         )
         return
     }
+    # a path to an instance's numeric generic parameter (`X: B5.cap`) names
+    # its singleton type: an alias, which resolveAliasKey registers
+    xd: declOfUnitDef :st :scope :unitDecl nameId: (nameIdOf :ast name: defName)
+    if (singletonPathAlias :st :ast declId: xd :scope).isZero.not then return
     if sfLit.length > 0 when sfTy.length > 0 when lookupUnit.isZero.not then {
         (
             resolveDottedConstantDef
