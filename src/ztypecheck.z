@@ -47277,7 +47277,7 @@ declWrittenName: function {st: zenv.ZSymbolTable.view ast: Ast.view tid: ztypes.
         match (
             a
         ) case valueArg then {
-            at = "\{a}"
+            at = st.reg.valueArgText :tdecl paramName: (st.reg.genericParamNameAt :tdecl :i) bits: a
         } case typeArg then {
             at = specWrittenName :st :ast tid: a
         }
@@ -55365,13 +55365,21 @@ dissectedArgOf: function {
     return (reg.genericArgAt specId: ownerTid ordinal: ord)
 }
 
-# dissectedArgText -- the argument as a diagnostic names it: a value's numeral,
-# a type's name, "" for none.
-dissectedArgText: function {reg: ztypes.ZTypeRegistry.view darg: ztypes.genericarg} out String is {
+# dissectedArgText -- the argument `darg` the instance `ownerTid` bound its
+# template's parameter `paramName` to, as a diagnostic names it: a value as the
+# program writes it, a type's name, "" for none.
+dissectedArgText: function {
+    reg: ztypes.ZTypeRegistry.view
+    typing: ztyping.ZTyping.view
+    ownerTid: ztypes.tid
+    paramName: zast.nameid
+    darg: ztypes.genericarg
+} out String is {
     match (
         darg
     ) case valueArg then {
-        return "\{darg}"
+        tdecl: typing.declIdOfType typeId: (reg.genericOriginOf tid: ownerTid)
+        return (reg.valueArgText :tdecl :paramName bits: darg)
     } case typeArg then {
         if darg.isZero then return "".string
         return (reg.nameOf tid: darg)
@@ -55449,8 +55457,16 @@ refuseMissingDissectArm: function {
     casenode: caseref
     darg: ztypes.genericarg
     pname: StringView
+    paramName: zast.nameid
 } is {
-    desc: dissectedArgText reg: st.reg :darg
+    desc: (
+        dissectedArgText
+        reg: st.reg
+        typing: st.typing
+        ownerTid: st.typing.curMonoStamp
+        :paramName
+        :darg
+    )
     (
         addError
         :st
@@ -55475,16 +55491,18 @@ checkDissectedArm: function {
     win: zast.nodeid
     darg: ztypes.genericarg.typeArg ztypes.tid.zero
     pname: String
+    pnId: zast.nameid
     {
         mn: ast.nodes.get i: casenode.nid
         if mn.caseexpr then {
             pname = subjectAtomName :ast n: (ast.nodes.get i: mn.subject)
+            pnId = nameIdOf :ast name: pname.stringView
             darg = (
                 dissectedArgOf
                 reg: st.reg
                 typing: st.typing
                 ownerTid: st.typing.curMonoStamp
-                paramName: (nameIdOf :ast name: pname.stringView)
+                paramName: pnId
             )
             win = (
                 dissectedArmOf
@@ -55499,7 +55517,7 @@ checkDissectedArm: function {
     }
     rebindSkippedArms :st :ast :casenode :win
     if win.isZero then {
-        refuseMissingDissectArm :st :casenode :darg pname: pname.stringView
+        refuseMissingDissectArm :st :casenode :darg pname: pname.stringView paramName: pnId
         return none
     }
     armBlock: win

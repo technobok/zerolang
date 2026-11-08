@@ -1340,8 +1340,10 @@ ZDumper: class {
 
     # appendGenericChildren -- one row per specialization-tree edge:
     # parent type-id x argument key -> child spec type-id. A type argument's
-    # key is a type id and a value argument's key is the value itself, so
-    # arg_is_value says which space arg_key is in (as generic_arg does).
+    # key is a type id and a value argument's key is the value's 64 bits, so
+    # arg_is_value says which space arg_key is in (as generic_arg does). An
+    # SQL integer is signed: the bits are written as one (a signed parameter's
+    # value itself), since a larger number would be read as an inexact REAL.
     appendGenericChildren: function {:this st: zenv.ZSymbolTable.view} is {
         n: st.reg.nextTid
         tid: ztypes.tid
@@ -1353,7 +1355,8 @@ ZDumper: class {
                 this.acc.append s: row
             }
             for each gv: zt.valueChildren.iterateItems loop {
-                row: "INSERT INTO generic_child VALUES (\{tid}, \{gv.key}, 1, \{gv.value});\n"
+                kv: ztypes.bitsI64 b: gv.key
+                row: "INSERT INTO generic_child VALUES (\{tid}, \{kv}, 1, \{gv.value});\n"
                 this.acc.append s: row
             }
             tid = tid.next
@@ -1381,15 +1384,15 @@ ZDumper: class {
             ai: u64
             for ai < an loop {
                 ga: gargs.get i: ai
-                av: u64
+                av: i64
                 iv: u64
                 match (
                     ga
                 ) case valueArg then {
-                    av = ga
+                    av = ztypes.bitsI64 b: ga
                     iv = 1
                 } case typeArg then {
-                    av = ga.u64
+                    av = ga.u64.i64.orPanic
                 }
                 row: "INSERT INTO generic_arg VALUES (\{tid}, \{ai}, \{av}, \{iv});\n"
                 this.acc.append s: row
