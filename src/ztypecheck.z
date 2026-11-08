@@ -32096,6 +32096,12 @@ reportUnknownMemberAs: function {
             root: (templateDeclOf reg: st.reg typing: st.typing tid: bt)
             nameId: cnId
         ) then stillMiss = false
+        # an `as` alias is one of the type's types, which a value does not
+        # reach (D9)
+        if stillMiss when (typeMemberIsAlias :st :ast :bt :cnId) then {
+            refuseTypeMemberThroughValue :st :ast :dp bt: shown :cnId
+            return
+        }
         if stillMiss then {
             cn: zast.nameTextAt :ast ref: cnId
             btnMm: specWrittenName :st :ast tid: shown
@@ -33844,7 +33850,7 @@ checkUnitUndeclaredMember: function {
         root: (unitScopeRoot :st unitTid: bt unitDecl: memberUnit)
         nameId: memberId
     ) then return (callleg handled: true tid: ztypes.tid.zero)
-    npU: checkNumericParamMember :st :ast :dp :bt :cnId
+    npU: checkNumericParamMember :st :ast unitDecl: memberUnit :dp :bt :cnId
     if npU.handled then return npU
     icU: checkInstanceConstant :st :ast :dp :bt :cnId
     if icU.handled then return icU
@@ -33936,6 +33942,7 @@ baseRunsCall: function {st: zenv.ZSymbolTable.view ast: Ast.view nid: zast.nodei
 checkNumericParamMember: function {
     st: zenv.ZSymbolTable
     ast: Ast
+    unitDecl: ztypes.declid
     dp: dpref
     bt: ztypes.tid
     cnId: zast.nameid
@@ -33950,7 +33957,16 @@ checkNumericParamMember: function {
     if cd.numKind.has.not then return miss
     bound: numericBoundTid :ast :st scope: st.curScope :cd
     if bound.isZero then return miss
-    if (baseRunsCall :st :ast nid: dp.parent) then {
+    # a value reaches its type's fields and methods, not its types (D9)
+    isValue: false
+    if (st.reg.typetypeOf typeId: bt) != ztypes.ztypetype.unitType then {
+        isValue = dottedBaseIsValue :st :ast :unitDecl n: (ast.nodes.get i: dp.nid)
+    }
+    if isValue then {
+        refuseTypeMemberThroughValue :st :ast :dp :bt :cnId
+        return (callleg handled: true tid: ztypes.tid)
+    }
+    if isValue when (baseRunsCall :st :ast nid: dp.parent) then {
         pn: zast.nameTextAt :ast ref: cnId
         (
             addErrorH
@@ -33989,6 +34005,54 @@ checkNumericParamMember: function {
     return (callleg handled: true tid: bound)
 }
 
+# typeMemberIsAlias -- `cnId` is an `as` alias the type `bt` declares (its
+# template's, for an instance): a type, reached through the type's name.
+typeMemberIsAlias: function {
+    st: zenv.ZSymbolTable ast: Ast bt: ztypes.tid cnId: zast.nameid
+} out bool is {
+    td: templateDeclOf reg: st.reg typing: st.typing tid: bt
+    if td.isZero then return false
+    md: st.typing.declFindChild parentDeclId: td nameId: cnId
+    if md.isZero then return false
+    return (asMemberIsAlias :st :ast tdecl: td :md)
+}
+
+# refuseTypeMemberThroughValue -- member `cnId` of `bt` is one of its types (a
+# numeric generic parameter, which is the instance's singleton type, or an `as`
+# alias), reached through a run-time value of it (`b.cap`, `this.cap`,
+# `b.Elem`): a value reaches its type's fields and methods, and a type through
+# the type's own name.
+refuseTypeMemberThroughValue: function {
+    st: zenv.ZSymbolTable
+    ast: Ast.view
+    dp: dpref
+    bt: ztypes.tid
+    cnId: zast.nameid
+} is {
+    cn: zast.nameTextAt :ast ref: cnId
+    tn: specWrittenName :st :ast tid: bt
+    # a template names no instance's type: inside it the bare name is read
+    h: "read it as `\{cn}` inside the type"
+    if (st.reg.isGenericOf tid: bt).not then {
+        path: tn.copy
+        path.append "."
+        path.append cn
+        h = "name it through the type: `\{path}`, or `\{cn}` inside the type"
+    }
+    (
+        addErrorH
+        :st
+        nodeid: dp.nid
+        lineno: dp.lineno
+        colno: dp.colno
+        e: zast.err.typeError
+        msg: "'\{cn}' is a type of '\{tn}'; a value reaches only its fields and methods"
+        note: String
+        hint: h
+        width: cn.length.u32.orPanic
+    )
+}
+
 # appliedTemplateBase -- `(C U).create` in a template's own walk: the type
 # arguments ARE written (the base is an application), but they are the
 # template's parameters, so no instance is minted and the application stays the
@@ -34011,11 +34075,12 @@ appliedTemplateBase: function {
 checkUnresolvedMember: function {
     st: zenv.ZSymbolTable
     ast: Ast
+    unitDecl: ztypes.declid
     dp: dpref
     bt: ztypes.tid
     cnId: zast.nameid
 } out ztypes.tid is {
-    npleg: checkNumericParamMember :st :ast :dp :bt :cnId
+    npleg: checkNumericParamMember :st :ast :unitDecl :dp :bt :cnId
     if npleg.handled then return npleg.tid
     # a template's constant over its numeric parameter with no type: an
     # instance's fold said why, the template's own walk reads it as not yet
@@ -35660,7 +35725,7 @@ checkDottedOn: function {
         rm: checkResolvedMember :st :unitDecl :ast :dp :bt :cnId :mo :coerce :aliasViaX
         return (memberTypeViaPartial :st :ast :unitDecl :dp partial: viaPartial tid: rm)
     } case none then {
-        return (checkUnresolvedMember :st :ast :dp :bt :cnId)
+        return (checkUnresolvedMember :st :ast :unitDecl :dp :bt :cnId)
     }
 }
 
@@ -66645,7 +66710,15 @@ evalConstNode: function {
         )
     }
     if plan.arm == 4 then {
-        vp: numericParamThroughValue :st :ast parentId: plan.parentId childId: plan.childId
+        vp: (
+            numericParamThroughName
+            :st
+            :ast
+            :unitDecl
+            :nid
+            parentId: plan.parentId
+            childId: plan.childId
+        )
         if vp.kind.none.not then return vp
         if (st.typing.atomVariableId.get key: plan.parentId).none.not then return ztypes.noConst
         return (
@@ -66674,34 +66747,78 @@ evalConstNode: function {
     return ztypes.noConst
 }
 
-# numericParamThroughValue -- `b.cap` / `this.cap`: a numeric generic parameter
-# read through a local whose type is a mono, whose argument is the value. The
-# local names storage, but the parameter is fixed by its type, so the read is
-# a constant. none for any other path.
-numericParamThroughValue: function {
-    st: zenv.ZSymbolTable.view
-    ast: Ast.view
+# numericParamThroughName -- `B5.cap`, `four.cap`, `(Box cap: 5).cap`: a numeric
+# generic parameter read through a name of an instance, whose value the body's
+# check recorded (checkNumericParamMember), as the instance's one value. none for
+# any other path.
+numericParamThroughName: function {
+    st: zenv.ZSymbolTable
+    ast: Ast
+    unitDecl: ztypes.declid
+    nid: zast.nodeid
     parentId: zast.nodeid
     childId: zast.nodeid
 } out ztypes.cval is {
-    rootId: atomNameId :ast n: (ast.nodes.get i: parentId)
-    if rootId.isZero then return ztypes.noConst
-    lo: st.lookup nameId: rootId
-    lt: ztypes.tid
-    match (
-        lo
-    ) case some then {
-        lt = lo
-    } case none then {
-        return ztypes.noConst
+    if (st.typing.numericParamRead.has key: nid) then {
+        cv: st.typing.nodeConstIn mono: st.typing.curMonoStamp :nid
+        if cv.kind.none.not then return cv
     }
-    origin: st.reg.genericOriginOf tid: lt
-    if origin.isZero then return ztypes.noConst
-    leafId: atomNameId :ast n: (ast.nodes.get i: childId)
-    tdecl: st.typing.declIdOfType typeId: origin
-    if (st.reg.genericParamConstraintOf :tdecl paramName: leafId
+    # asked before the body's check reaches the path (a folding `if`): a type
+    # application's parameter is the argument it is given there,
+    # `(Box cap: 5).cap`; a base that names an instance -- an alias of one, a
+    # unit instance -- by name
+    leaf: atomNameId :ast n: (ast.nodes.get i: childId)
+    pcall: callRefAt :ast nid: parentId
+    if pcall.nid.isZero.not then return (
+        typeApplicationArgValue
+        :st
+        :ast
+        :unitDecl
+        call: pcall
+        param: leaf
+    )
+    rootId: atomNameId :ast n: (ast.nodes.get i: parentId)
+    if rootId.isZero or (st.typing.atomVariableId.get key: parentId).some then return ztypes.noConst
+    # read without demanding: a name not resolved yet answers when the body
+    # reaches it
+    rd: nearestDeclOf :st scope: st.curScope baseId: rootId
+    if rd.isZero then return ztypes.noConst
+    it: st.typing.declTypeOf declId: rd
+    if it.isZero or (st.reg.genericOriginOf tid: it).isZero then return ztypes.noConst
+    return (monoNumericArg :st mono: it nameId: leaf)
+}
+
+# typeApplicationArgValue -- the value a type application `call` gives its
+# template's numeric generic parameter `param`, `5` in `(Box cap: 5)`; none when
+# the callee names no template with that parameter or the argument is absent.
+typeApplicationArgValue: function {
+    st: zenv.ZSymbolTable
+    ast: Ast
+    unitDecl: ztypes.declid
+    call: callref
+    param: zast.nameid
+} out ztypes.cval is {
+    # the template read without demanding it, by the callee's name
+    cn: atomNameId :ast n: (ast.nodes.get i: call.callable)
+    if cn.isZero then return ztypes.noConst
+    td: nearestDeclOf :st scope: st.curScope baseId: cn
+    if td.isZero then return ztypes.noConst
+    if (st.reg.genericParamConstraintOf tdecl: td paramName: param
     ).numKind.has.not then return ztypes.noConst
-    return (st.typing.memberConstOf parentTypeId: lt nameId: leafId)
+    k: u64
+    for k < call.nargs loop {
+        arg: argRefAt :ast nid: (zast.callArgAt :ast nid: call.nid i: k)
+        k = k + 1
+        if arg.nid.isZero.not when arg.name == param then return (
+            evalConstNode
+            :st
+            scope: st.curScope
+            :ast
+            :unitDecl
+            nid: arg.operation
+        )
+    }
+    return ztypes.noConst
 }
 
 # monoNumericParamValue -- a bare name's value in a mono's walk when it names a
