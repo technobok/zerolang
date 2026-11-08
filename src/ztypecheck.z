@@ -37781,9 +37781,11 @@ recordConstMatchFold: function {
 }
 
 # checkNumericParamAtom -- a bare name that names a numeric generic parameter of
-# the definition the body is in: a compile-time constant of its bound's type,
-# whose value each mono supplies (the evaluator reads it in the mono's walk). 0
-# when the name is no such parameter.
+# the definition the body is in: the one value of the parameter's singleton
+# type, which each mono supplies (the evaluator reads it in the mono's walk) --
+# the instance's singleton type in an instance's walk, the parameter's own
+# (abstractSingletonOf) in the template's. 0 when the name is no such
+# parameter.
 checkNumericParamAtom: function {
     st: zenv.ZSymbolTable
     ast: Ast
@@ -37794,9 +37796,9 @@ checkNumericParamAtom: function {
     cd: st.reg.genericParamConstraintOf tdecl: owner paramName: node.name
     bt: numericBoundTid :ast :st scope: st.curScope :cd
     if bt.isZero then return ztypes.tid
-    # an instance's walk reads the parameter as its singleton type
     sg: monoSingletonOf :st nameId: node.name
-    if sg.isZero.not then bt = sg
+    if sg.isZero then sg = abstractSingletonOf :st :ast tdecl: owner param: node.name bound: bt
+    bt = sg
     stampGate :st nid: node.nid tid: bt
     (
         stampRefDecl
@@ -47270,11 +47272,13 @@ spelledAsSignature: function {st: zenv.ZSymbolTable.view tid: ztypes.tid} out bo
 # Trailing arguments that are their parameter's default are left out, as the
 # instance's label leaves them (defaultsTailLength): `(ListVal t: u8)`. An
 # instance's numeric parameter as a type is named through the instance,
-# `(Box cap: 5).cap`.
+# `(Box cap: 5).cap`, except where the walk reads the parameter's bare name as
+# that very type -- the instance's own code -- which names it `cap`, as the
+# template's walk does.
 declWrittenName: function {st: zenv.ZSymbolTable.view ast: Ast.view tid: ztypes.tid} out String is {
     sg: st.typing.singletons.get key: tid
     # a template's own parameter is named as the template's body names it
-    if sg.some when sg.instance.isZero.not then {
+    if sg.some when sg.instance.isZero.not when (monoSingletonOf :st nameId: sg.param) != tid then {
         sw: declWrittenName :st :ast tid: sg.instance
         sw.append "."
         sw.append (zast.nameTextAt :ast ref: sg.param)
