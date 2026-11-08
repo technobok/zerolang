@@ -33305,6 +33305,8 @@ constReadsNumericParamVia: function {
             kids.append from: ip.rhs
         }
         if ip.found.not when n.dottedpath then kids.append from: n.parent
+        # `type.K`, the path a method body reads its type's bare `K` as, reads K
+        if nameId.isZero then nameId = dottedTypeMemberName :ast :n
         appendHeldValues :ast :n :kids
         if ip.found.not when n.call then {
             kids.append from: n.callable
@@ -33324,6 +33326,21 @@ constReadsNumericParamVia: function {
         if (constReadsNumericParamVia :st :ast :owner opId: k :followed) then return true
     }
     return (constBranchReadsNumericParam :st :ast :owner :opId :followed)
+}
+
+# dottedTypeMemberName -- the member `type.K` names, the path through the
+# enclosing type a method body reads a bare `K` of its type as; 0 for any other
+# node.
+dottedTypeMemberName: function {ast: Ast.view n: astnode.view} out zast.nameid is {
+    match (
+        n
+    ) case dottedpath then {
+        if (atomNameId :ast n: (ast.nodes.get i: n.parent)) != zast.wellKnown.slot.wkType then {
+            return zast.nameid
+        }
+        return (atomNameId :ast n: (ast.nodes.get i: n.child))
+    } else null
+    return zast.nameid
 }
 
 # nameReadsNumericParam -- the name `nameId`, read in a constant of `owner`, is
@@ -61991,11 +62008,12 @@ constOwnerDeclForId: function {
     nameId: zast.nameid
 } out ztypes.declid is {
     # A TYPE IS A SCOPE for the expressions written at its level -- an `as`
-    # constant, a field's default. Its `as` and `is` members are one scope,
-    # asked before the scopes enclosing it, and a member written later is found
-    # as a unit's later constant is.
-    own: st.typing.declFindChild parentDeclId: scope :nameId
-    if (declIsType :st declId: scope) when own.isZero.not then return scope
+    # constant, a field's default -- and for its methods' bodies. Its `as` and
+    # `is` members are one scope, asked before the scopes enclosing it, and a
+    # member written later is found as a unit's later constant is.
+    own: enclosingTypeDeclOf :st :scope
+    if own.isZero.not when (st.typing.declFindChild parentDeclId: own :nameId
+    ).isZero.not then return own
     # the scopes innermost outward from `scope`: a constant written inside
     # a unit is keyed on THAT unit, and on each unit enclosing it before the
     # file unit. Asking only the innermost left a constant of an enclosing
@@ -65935,6 +65953,9 @@ evalConstDotted: function {
             gcId = pn.child
         }
     }
+    tsv: constOfSelfTypeMember :st :scope :ast :unitDecl :ptId :ncId
+    if tsv.kind.none.not then return tsv
+    ptId = selfTypeNameIn :st :scope nameId: ptId
     hv: constOfDottedHead :st :scope :ast :unitDecl :nid :parentId :ptId :ncId :ln :co
     if hv.kind.none.not then return hv
     # `z.build.os.linux` -- the ARM-PREDICATE form, asked FIRST for the
@@ -65990,6 +66011,35 @@ evalConstDotted: function {
         return (evalConstViaDottedParent :st :scope :ast :unitDecl :parentId :gpId :gcId :ncId)
     }
     return ztypes.noConst
+}
+
+# constOfSelfTypeMember -- `type.K` in a method's body, the path the body reads
+# its type's bare `K` as (bodySelfTypeNameId): the bare name's value, which in
+# a generic type is the instance's. noConst for any other path.
+constOfSelfTypeMember: function {
+    st: zenv.ZSymbolTable
+    scope: ztypes.declid
+    ast: Ast
+    unitDecl: ztypes.declid
+    ptId: zast.nameid
+    ncId: zast.nameid
+} out ztypes.cval is {
+    if ptId != zast.wellKnown.slot.wkType then return ztypes.noConst
+    if (enclosingTypeDeclOf :st :scope).isZero then return ztypes.noConst
+    return (constValueOfMemberId :st :scope :ast :unitDecl nameId: ncId)
+}
+
+# selfTypeNameIn -- the name `nameId` spells in `scope`, with `type` read as the
+# enclosing type's name, as a body reads it (bodySelfTypeNameId).
+selfTypeNameIn: function {
+    st: zenv.ZSymbolTable.view
+    scope: ztypes.declid
+    nameId: zast.nameid
+} out zast.nameid is {
+    if nameId != zast.wellKnown.slot.wkType then return nameId
+    td: enclosingTypeDeclOf :st :scope
+    if td.isZero then return nameId
+    return (st.typing.decls.get i: td).name
 }
 
 # constOfInstanceMember -- `wi.inner.sq`: a constant of the unit instance the
