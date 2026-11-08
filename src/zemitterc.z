@@ -15062,13 +15062,32 @@ emitRecordCtor: function {
     fidsNm: ListVal zast.nameid
     recFieldLists :ast :reg :typing :tid names: fnames ids: fids nameIds: fidsNm
     fn0: fnames.length
+    # a field of a numeric parameter's singleton type takes no argument: the
+    # arguments bind to the other fields, and it holds its default, the type's
+    # one value
+    fixed: false
+    for each fft: fids loop {
+        if (typing.isSingletonType tid: fft) then fixed = true
+    }
+    argAt: ListVal u64
+    argNm: ListVal zast.nameid
+    if fixed then singletonFreeFields :typing :fids :fidsNm at: argAt nameIds: argNm
     # the fields' arguments are built in the order they are written
-    wbase: orderPositions :ast :ctx :call nameIds: fidsNm labelsOnly: false
+    wbase: u64
+    na: fn0
+    if fixed then {
+        wbase = orderPositions :ast :ctx :call nameIds: argNm labelsOnly: false
+        na = argNm.length
+    } else {
+        wbase = orderPositions :ast :ctx :call nameIds: fidsNm labelsOnly: false
+    }
     ord: orderBegin :ctx slots: fn0
     k: u64
-    for k < fn0 loop {
-        fi: orderNextParam :ctx base: wbase
+    for k < na loop {
+        ai: orderNextParam :ctx base: wbase
         k = k + 1
+        fi: ai
+        if fixed then fi = argAt.get i: ai
         (
             orderRecordField
             :ast
@@ -15079,11 +15098,27 @@ emitRecordCtor: function {
             :tid
             ffid: (fids.get i: fi)
             fnameId: (fidsNm.get i: fi)
-            posIdx: (ctx.orderPosAt.get i: wbase + fi)
-            written: (ctx.orderWrit.get i: wbase + fi)
+            posIdx: (ctx.orderPosAt.get i: wbase + ai)
+            written: (ctx.orderWrit.get i: wbase + ai)
             slot: fi
             :ord
         )
+    }
+    fj: u64
+    for fixed and (fj < fn0) loop {
+        if (typing.isSingletonType tid: (fids.get i: fj)) then (
+            orderSingletonField
+            :ast
+            :reg
+            :typing
+            :ctx
+            :tid
+            ffid: (fids.get i: fj)
+            fnameId: (fidsNm.get i: fj)
+            slot: fj
+            :ord
+        )
+        fj = fj + 1
     }
     orderDropPositions :ctx base: wbase
     oprefix: orderFinish :ctx st: ord
@@ -15097,6 +15132,62 @@ emitRecordCtor: function {
         :facts
         from: callFacts
         text: (orderClose prefix: oprefix callee: rc.stringView args: args.stringView)
+    )
+}
+
+# singletonFreeFields -- the fields of `fids` (names `fidsNm`) that take an
+# argument, those not typed by a numeric parameter's singleton type: each one's
+# index into the fields, and its name.
+singletonFreeFields: function {
+    typing: ztyping.ZTyping.view
+    fids: (ListVal ztypes.tid).view
+    fidsNm: (ListVal zast.nameid).view
+    at: ListVal u64
+    nameIds: ListVal zast.nameid
+} is {
+    fj: u64
+    for fj < fids.length loop {
+        if (typing.isSingletonType tid: (fids.get i: fj)).not then {
+            at.append fj
+            nameIds.append (fidsNm.get i: fj)
+        }
+        fj = fj + 1
+    }
+}
+
+# orderSingletonField -- a field of a numeric parameter's singleton type in a
+# field-wise construction: no argument names it, and its slot holds its
+# default, the type's one value, a constant.
+orderSingletonField: function {
+    ast: Ast.view
+    reg: ztypes.ZTypeRegistry.view
+    typing: ztyping.ZTyping.view
+    ctx: Ctx
+    tid: ztypes.tid
+    ffid: ztypes.tid
+    fnameId: zast.nameid
+    slot: u64
+    ord: orderstate.borrow
+} is {
+    mk: pendingHoistMark :ctx
+    avF: cfacts
+    av: fieldDefaultText :ast :reg :typing :ctx :tid nameId: fnameId fid: ffid facts: avF
+    (
+        orderPartWith
+        :ast
+        :reg
+        :typing
+        :ctx
+        st: ord
+        mark: mk
+        text: av
+        tf: avF
+        constant: true
+        fid: ztypes.tid
+        pid: ztypes.tid.zero
+        pname: zast.nameid
+        ctype: ""
+        :slot
     )
 }
 
@@ -16141,6 +16232,20 @@ metaCreateFieldText: function {
             av = avM.take
             avF = avMF
         }
+    } else if (typing.isSingletonType tid: (fids.get i: fi)) then {
+        # a field of a numeric parameter's singleton type takes no argument:
+        # it holds its default, the type's one value
+        av = (
+            fieldDefaultText
+            :ast
+            :reg
+            :typing
+            :ctx
+            tid: et
+            nameId: fnameId
+            fid: (fids.get i: fi)
+            facts: avF
+        )
     } else {
         # a field absent from the meta.create args (a generator's state: a
         # local the body keeps, an inner iterator struct or a loop counter) is

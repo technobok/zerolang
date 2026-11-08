@@ -12293,7 +12293,12 @@ materializeCreateParams: function {
                                 if mv8.isZero.not when mv8 == tcNameId then isCreateParam = true
                                 mi8 = mi8 + 1
                             }
-                            if isC.not when isCreateParam.not then inc = true
+                            # a singleton-typed field holds its type's one
+                            # value and takes no argument
+                            if isC.not when isCreateParam.not when (
+                                st.typing.isSingletonType
+                                tid: cto
+                            ).not then inc = true
                         }
                     }
                     if inc then {
@@ -15170,6 +15175,11 @@ numericParamFieldType: function {
     if bound.isZero then return ztypes.tid
     fd: st.typing.declMemberIdOf parentTypeId: ownerTid nameId: dm.name
     if fd.isZero then return ztypes.tid
+    # a type's field is a slot of the parameter's singleton type: the
+    # parameter itself in the template, its instance's singleton in each
+    # instance (completeIdSubs), holding the one value as its default
+    isField: (st.reg.typetypeOf typeId: ownerTid) != ztypes.ztypetype.functionType
+    if isField then bound = abstractSingletonOf :st :ast :tdecl param: vnId :bound
     st.walk.numericParamDefault.set key: fd value: vnId
     (
         st.typing.declSetDefaultId
@@ -15178,6 +15188,30 @@ numericParamFieldType: function {
         value: ztyping.defaultval.constant fd
     )
     return bound
+}
+
+# abstractSingletonOf -- the numeric generic parameter `param` of `tdecl` as the
+# template sees its singleton type: the parameter's own GENERIC_PARAM type, a
+# typedef over `bound` with no value yet, so the template's walk forwards the
+# bound's members to it and passes it where the bound is expected.
+abstractSingletonOf: function {
+    st: zenv.ZSymbolTable
+    ast: Ast
+    tdecl: ztypes.declid
+    param: zast.nameid
+    bound: ztypes.tid
+} out ztypes.tid is {
+    gp: genericParamTidMint :st :ast :tdecl nameId: param
+    if (st.typing.isSingletonType tid: gp) then return gp
+    bn: st.reg.nameOf tid: bound
+    bnId: zast.poolFind pool: ast.names text: bn.stringView
+    st.typing.typedefBase.set key: gp value: (ztyping.typedefbase name: bnId tid: bound)
+    (
+        st.typing.singletons.set
+        key: gp
+        value: (ztyping.singleton instance: ztypes.tid :param value: ztypes.noConst)
+    )
+    return gp
 }
 
 # recordNumericDefaults -- each member of `ownerTid`, an instance's copy of
@@ -23655,6 +23689,9 @@ respecialize: function {
         }
         cdm: st.reg.genericParamConstraintOf tdecl: tk paramName: mp
         if cdm.numKind.has then {
+            # an instance's singleton type passes its one value
+            sv: st.typing.singletonValueOf tid: mt
+            if sv.kind.none.not then bits = constBits64 :st v: sv
             rvSubs.set key: mp value: bits
             appendNumericArgSuffix :sfx :bits cd: cdm
         } else {
@@ -24146,12 +24183,17 @@ completeIdSubs: function {
     pns: st.reg.genericParamNamesOf tdecl: td
     k: u64
     for k < pns.length loop {
-        po: st.reg.genericParamTidOf tdecl: td paramName: (pns.get i: k)
+        pn: pns.get i: k
+        po: st.reg.genericParamTidOf tdecl: td paramName: pn
         if po.some when (idSubs.has key: po).not when (
             k < (st.reg.genericArgCount specId: mid)
         ) then {
             idSubs.set key: po value: (st.reg.genericArgAt specId: mid ordinal: k)
         }
+        # a numeric parameter is its instance's singleton type, whose value a
+        # numeric level reads back (respecialize)
+        sg: st.typing.singletonOf instance: mid param: pn
+        if po.some when sg.isZero.not then idSubs.set key: po value: ztypes.genericarg.typeArg sg
         k = k + 1
     }
 }
@@ -45622,6 +45664,9 @@ missingCtorFields: function {
         # which is how `point.sub p` -- receiver given, `a` omitted -- ran with
         # `a` at zero instead of being reported.
         if recvImplicit when (isReceiverParamName :pnameId :thisPnId) then continue
+        # a singleton-typed field takes no argument and no position: the
+        # construction sets its type's one value
+        if isCtor when (st.typing.isSingletonType tid: pcid) then continue
         posI: vpos
         vpos = vpos + 1
         pnId: pnameId
@@ -46388,6 +46433,57 @@ fieldRefusedWhereWritten: function {
     return (memberTyperefRefused :st :ast bt: owner nameId: label)
 }
 
+# refuseSingletonFieldArgs -- each argument of a `meta.create` of `owner` that
+# names a field typed by a numeric generic parameter's singleton type
+# (refuseSingletonFieldArg).
+refuseSingletonFieldArgs: function {
+    st: zenv.ZSymbolTable ast: Ast.view call: callref owner: ztypes.tid
+} is {
+    k: u64
+    for k < call.nargs loop {
+        arg: argRefAt :ast nid: (zast.callArgAt :ast nid: call.nid i: k)
+        k = k + 1
+        if arg.nid.isZero.not when arg.name.isZero.not then (
+            refuseSingletonFieldArg
+            :st
+            :ast
+            :owner
+            label: arg.name
+            :arg
+        )
+    }
+}
+
+# refuseSingletonFieldArg -- `label` names a field of `owner` typed by a numeric
+# generic parameter's singleton type: the field holds the type's one value, which
+# the construction sets, so no argument is given for it. true when it refused.
+refuseSingletonFieldArg: function {
+    st: zenv.ZSymbolTable
+    ast: Ast.view
+    owner: ztypes.tid
+    label: zast.nameid
+    arg: argref
+} out bool is {
+    if owner.isZero then return false
+    ft: (st.typing.declChildOfId parentTypeId: owner nameId: label).or d: ztypes.tid
+    if (st.typing.isSingletonType tid: ft).not then return false
+    pn: zast.nameTextAt :ast ref: label
+    tn: specWrittenName :st :ast tid: ft
+    (
+        addErrorH
+        :st
+        nodeid: arg.nid
+        lineno: arg.lineno
+        colno: arg.colno
+        e: zast.err.callError
+        msg: "'\{pn}' is of type '\{tn}' and holds its one value; it takes no argument"
+        note: String
+        hint: "leave it out: the construction sets it".string
+        width: pn.length.u32.orPanic
+    )
+    return true
+}
+
 # reportUnknownArgument -- a label the callee has no parameter for, with the
 # closest name it does have as the hint.
 reportUnknownArgument: function {
@@ -46402,6 +46498,9 @@ reportUnknownArgument: function {
     # type's `create`, whose parameters are the type's fields
     if (fieldRefusedWhereWritten :st :ast owner: ownerTid :label) then return
     if (fieldRefusedWhereWritten :st :ast owner: (st.reg.ownerTidOf tid: ownerTid) :label
+    ) then return
+    if (refuseSingletonFieldArg :st :ast owner: ownerTid :label :arg) then return
+    if (refuseSingletonFieldArg :st :ast owner: (st.reg.ownerTidOf tid: ownerTid) :label :arg
     ) then return
     pn: zast.nameTextAt :ast ref: label
     m: "unknown argument '\{pn}'"
@@ -46738,7 +46837,8 @@ spelledAsSignature: function {st: zenv.ZSymbolTable.view tid: ztypes.tid} out bo
 # `(Box cap: 5).cap`.
 declWrittenName: function {st: zenv.ZSymbolTable.view ast: Ast.view tid: ztypes.tid} out String is {
     sg: st.typing.singletons.get key: tid
-    if sg.some then {
+    # a template's own parameter is named as the template's body names it
+    if sg.some when sg.instance.isZero.not then {
         sw: declWrittenName :st :ast tid: sg.instance
         sw.append "."
         sw.append (zast.nameTextAt :ast ref: sg.param)
@@ -52044,6 +52144,7 @@ checkMetaCreateCall: function {
             reportUnknown: false
             recvImplicit: false
         )
+        refuseSingletonFieldArgs :st :ast :call owner: mtid
         checkMissingCallArgs :ast :st :call funcId: mtid isCtor: true recvImplicit: false
         st.popTo marker: mcm
         setmc: mtid
