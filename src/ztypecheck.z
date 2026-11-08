@@ -15354,7 +15354,7 @@ refuseNumericParamName: function {
         e: zast.err.typeError
         msg: "'\{pn}' is a numeric generic parameter of '\{tn}', so a member cannot have its name"
         note: String
-        hint: "rename the member; the parameter is read as `\{pn}`, or through a value of the type"
+        hint: "rename the member; the parameter is read as `\{pn}`"
         width: pn.length.u32.orPanic
     )
 }
@@ -33957,6 +33957,10 @@ checkNumericParamMember: function {
     if cd.numKind.has.not then return miss
     bound: numericBoundTid :ast :st scope: st.curScope :cd
     if bound.isZero then return miss
+    tb: templateNamedBase :st :ast :dp :bt :cnId :tdecl
+    if tb.none then return (callleg handled: true tid: ztypes.tid)
+    bt = tb
+    origin = st.reg.genericOriginOf tid: bt
     # a value reaches its type's fields and methods, not its types (D9)
     isValue: false
     if (st.reg.typetypeOf typeId: bt) != ztypes.ztypetype.unitType then {
@@ -34015,6 +34019,72 @@ typeMemberIsAlias: function {
     md: st.typing.declFindChild parentDeclId: td nameId: cnId
     if md.isZero then return false
     return (asMemberIsAlias :st :ast tdecl: td :md)
+}
+
+# templateNamedBase -- the base a numeric generic parameter `cnId` is read
+# through, when that is its generic template itself (`Box.cap`): inside the
+# template, the instance whose walk reads it, as the bare name reads; outside,
+# refused (refuseTemplateOnlyParam), none. Any other base is itself.
+templateNamedBase: function {
+    st: zenv.ZSymbolTable
+    ast: Ast.view
+    dp: dpref
+    bt: ztypes.tid
+    cnId: zast.nameid
+    tdecl: ztypes.declid
+} out optionval ztypes.tid is {
+    if (st.reg.genericOriginOf tid: bt).isZero.not then return (optionval.some bt)
+    if (refuseTemplateOnlyParam :st :ast :dp :bt :cnId :tdecl
+    ) then return (optionval.none ztypes.tid)
+    wi: walkedInstanceOf :st template: bt param: cnId
+    if wi.isZero then return (optionval.some bt)
+    return (optionval.some wi)
+}
+
+# walkedInstanceOf -- the instance of `template` whose walk is reading its
+# numeric generic parameter `param`: the instance the walk's singleton type for
+# the name belongs to, when that is an instance of `template`; 0 otherwise.
+walkedInstanceOf: function {
+    st: zenv.ZSymbolTable.view template: ztypes.tid param: zast.nameid
+} out ztypes.tid is {
+    sg: monoSingletonOf :st nameId: param
+    if sg.isZero then return ztypes.tid
+    row: st.typing.singletons.get key: sg
+    if row.none then return ztypes.tid
+    if (st.reg.genericOriginOf tid: row.instance) != template then return ztypes.tid
+    return row.instance
+}
+
+# refuseTemplateOnlyParam -- a numeric generic parameter read through its generic
+# template itself (`Box.cap`) where no instance is being walked: it has a value
+# only in an instance, as a template's constant over it has (refuseTemplateOnlyConstant).
+# Inside the template each instance's walk values it. True when it reported.
+refuseTemplateOnlyParam: function {
+    st: zenv.ZSymbolTable
+    ast: Ast.view
+    dp: dpref
+    bt: ztypes.tid
+    cnId: zast.nameid
+    tdecl: ztypes.declid
+} out bool is {
+    if (st.reg.genericOriginOf tid: bt).isZero.not then return false
+    if (activeConstMono :st ownerDecl: tdecl).isZero.not then return false
+    if (scopeIsWithin typing: st.typing scope: st.curScope root: tdecl) then return false
+    cn: zast.nameTextAt :ast ref: cnId
+    tn: specWrittenName :st :ast tid: bt
+    (
+        addErrorH
+        :st
+        nodeid: dp.nid
+        lineno: dp.lineno
+        colno: dp.colno
+        e: zast.err.constError
+        msg: "'\{cn}' is a numeric generic parameter of '\{tn}', which only an instance has a value for"
+        note: String
+        hint: "read it through an instance of '\{tn}'"
+        width: cn.length.u32.orPanic
+    )
+    return true
 }
 
 # refuseTypeMemberThroughValue -- member `cnId` of `bt` is one of its types (a
