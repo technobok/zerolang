@@ -3625,8 +3625,10 @@ recordResolvedName: function {
                 }
             } else {
                 if (refuseParamAsType :st :ast :nameId :nid) then return
-                # a numeric generic parameter names its bound, known now and
-                # in no scope the deferred stamp searches
+                # a numeric generic parameter as a type is refused where the
+                # declaration is written (refuseSingletonDeclType) and keeps
+                # its bound's type, known now and in no scope the deferred
+                # stamp searches
                 npO: numericParamTypeOwner :st :ast :unitDecl :scope :nameId :thisName
                 if npO.isZero.not then {
                     npT: numericParamBoundOf :st :ast :scope owner: npO :nameId
@@ -4106,6 +4108,17 @@ collectMonoRefArgs: function {
             } else if (isNumericLiteralName name: an.stringView) then {
                 sfx.append s: "_"
                 sfx.append s: an
+            } else if (
+                refuseSingletonTypeArg
+                :st
+                :ast
+                :scope
+                :enclDecl
+                :arg
+                :sfx
+                :typeSubs
+            ) then {
+                null
             } else {
                 okOut: ListVal bool
                 aid: (
@@ -4136,6 +4149,37 @@ collectMonoRefArgs: function {
     return allOk
 }
 
+
+# refuseSingletonTypeArg -- a type parameter's argument in a type reference that
+# names a numeric generic parameter (`(List t: cap)`), refused
+# (refuseSingletonTypeRef); the reference takes the parameter's bound in its
+# place, so it names a type its uses can check against. True when it refused.
+refuseSingletonTypeArg: function {
+    st: zenv.ZSymbolTable
+    ast: Ast
+    scope: ztypes.declid
+    enclDecl: ztypes.declid
+    arg: argref
+    sfx: String
+    typeSubs: (IdMapV zast.nameid v: ztypes.tid)
+} out bool is {
+    anId: atomNameId :ast n: (ast.nodes.get i: arg.operation)
+    if anId.isZero then return false
+    from: enclDecl
+    if from.isZero then from = scope
+    owner: numericParamOwnerFrom :st scope: from nameId: anId
+    if owner.isZero then return false
+    refuseSingletonTypeRef :st :ast :owner nameId: anId nid: arg.operation
+    # a reference that falls back to a shell is refused whole, as one with a
+    # refused numeric argument is, and the name resolves no further
+    st.walk.numericArgsRefused.add item: arg.operation
+    st.walk.noStampNode.set key: arg.operation value: true
+    bound: numericParamBoundOf :st :ast :scope :owner nameId: anId
+    sfx.append s: "_"
+    sfx.append s: (monoValName :st :ast tid: bound)
+    typeSubs.set key: arg.name value: bound
+    return true
+}
 
 # validateMonoRefLabels -- reject a label that names no generic parameter of the
 # template, at a TYPE REFERENCE rather than a construction. The construction
@@ -6788,12 +6832,13 @@ resolveTyperefAtomShell: function {
 }
 
 # numericParamTypeOwner -- the declaration whose numeric generic parameter a
-# type-ref atom names, which as a type names its bound (`out cap`, `n:
-# cap.hold`), as a constant's name names the constant's type: a definition at
-# or enclosing `scope` (a generic unit), the function whose signature is being
-# resolved or one enclosing it (its own parameters, its type's), or the
-# enclosing type (a field's type-ref resolves in the scope the type is written
-# in). 0 for any other name.
+# type-ref atom names: a definition at or enclosing `scope` (a generic unit),
+# the function whose signature is being resolved or one enclosing it (its own
+# parameters, its type's), or the enclosing type (a field's type-ref resolves
+# in the scope the type is written in). Such a type-ref is refused where it is
+# written (refuseSingletonDeclType, refuseSingletonTypeArg) and takes the
+# bound's type (numericParamBoundOf), so its uses say nothing more; a type's
+# numeric argument (`to: cap`) reads the same way. 0 for any other name.
 numericParamTypeOwner: function {
     st: zenv.ZSymbolTable.view
     ast: Ast.view
@@ -6825,6 +6870,67 @@ numericParamBoundOf: function {
     return (numericBoundTid :ast :st :scope :cd)
 }
 
+# refuseSingletonTypeRef -- a type-ref that names a numeric generic parameter of
+# `owner` where only a field's or a local's type may (`n: cap`, `out cap`,
+# `n: cap.hold`, `(List t: cap)`): as a type the parameter has one value, the
+# instance's argument, which a field or a local holds; a parameter, a return,
+# a marker or a type argument would carry it into code every instance shares.
+# The declaration keeps the bound's type, so its uses say nothing more.
+refuseSingletonTypeRef: function {
+    st: zenv.ZSymbolTable
+    ast: Ast.view
+    owner: ztypes.declid
+    nameId: zast.nameid
+    nid: zast.nodeid
+} is {
+    if nid.isZero then return
+    n: ast.nodes.get i: nid
+    nn: zast.nameTextAt :ast ref: nameId
+    bn: (
+        ztypes.numkindName
+        k: (st.reg.genericParamConstraintOf tdecl: owner paramName: nameId).numKind.kind
+    )
+    (
+        addErrorH
+        :st
+        nodeid: nid
+        lineno: (nodeLine :n)
+        colno: (nodeCol :n)
+        e: zast.err.typeError
+        msg: "'\{nn}' is a numeric generic parameter: as a type it has one value, so it types only a field or a local"
+        note: "".string
+        hint: "take or return its bound, `\{bn}`, and read `\{nn}` for the value"
+        width: nn.length.u32.orPanic
+    )
+}
+
+# refuseSingletonDeclType -- a declaration of `ownerDecl` typed by a numeric
+# generic parameter of it or of a definition enclosing it, in a place only a
+# field's or a local's type may name one: a function's parameter (`n: cap`,
+# `x: k`) or a marked type (`n: cap.hold`, `stored: cap.hold`). A field's bare
+# `stored: cap` is a slot of the singleton type (singletonFieldType).
+refuseSingletonDeclType: function {
+    st: zenv.ZSymbolTable
+    ast: Ast.view
+    ownerDecl: ztypes.declid
+    isFunction: bool
+    typeNid: zast.nodeid
+} is {
+    if typeNid.isZero then return
+    n: ast.nodes.get i: typeNid
+    an: zast.atomNameIdOf :n
+    baseNid: typeNid
+    if an.isZero.not when isFunction.not then return
+    if an.isZero then {
+        baseNid = markedTyperefBase :ast nid: typeNid
+        if baseNid.isZero then return
+        an = zast.atomNameIdOf n: (ast.nodes.get i: baseNid)
+    }
+    if an.isZero then return
+    owner: numericParamOwnerFrom :st scope: ownerDecl nameId: an
+    if owner.isZero.not then refuseSingletonTypeRef :st :ast :owner nameId: an nid: baseNid
+}
+
 # resolveTyperefShell -- register a SHALLOW named shell for a referenced type
 # (e.g. the `i64` in `n: i64`), routing atom names through resolveAtomType so
 # `this`/numeric-default atoms resolve correctly. A parenthesized parameterized
@@ -6839,6 +6945,8 @@ resolveTyperefShell: function {
     nid: zast.nodeid
     thisName: StringView
 } out ztypes.tid is {
+    # a declaration refused where it is written declares no type
+    if (nodeRefused :st :nid) then return ztypes.tid
     # the row is read through a view scoped to this block (1 atomid,
     # 2 labelvalue, 4 call, 5 dottedpath, 0 anything else): the resolutions
     # below lend ast exclusively
@@ -7996,8 +8104,9 @@ resolveFunctionParam: function {
 }
 
 # genericParamIsType -- whether `name` is a generic parameter of `tdecl` that stands
-# for a type. A numeric one names a value, so a parameter it declares is an
-# ordinary one, typed as a field it declares is (numericParamFieldType).
+# for a type. A numeric one is no type parameter of a signature: a parameter
+# or return it types is refused (refuseSingletonDeclType) and keeps the bound's
+# type.
 genericParamIsType: function {
     st: zenv.ZSymbolTable.view
     tdecl: ztypes.declid
@@ -8065,6 +8174,15 @@ recordFunctionReturn: function {
 } is {
     returnTid: ztypes.tid
     frOpt: fnode.returntype
+    # a numeric generic parameter as the return (`out cap`, `out k.hold`)
+    if (numericParamsInScope :st scope: fnDecl) then (
+        refuseSingletonDeclType
+        :st
+        :ast
+        ownerDecl: fnDecl
+        isFunction: true
+        typeNid: frOpt
+    )
     if isgen then {
         returnTid = returnParamTid :st :ast enclDecl: fnDecl oId: frOpt
     }
@@ -15096,8 +15214,20 @@ foldedDeclType: function {
     dm: argref
 } out ztypes.tid is {
     refuseNumericParamName :st :ast :ownerTid :dm
-    npT: numericParamFieldType :st :ast :ownerTid :dm
-    if npT.isZero.not then return npT
+    sgT: singletonFieldType :st :ast :ownerTid :dm
+    if sgT.isZero.not then return sgT
+    ownerDecl: st.typing.declIdOfType typeId: ownerTid
+    if (numericParamsInScope :st scope: ownerDecl) then {
+        (
+            refuseSingletonDeclType
+            :st
+            :ast
+            :ownerDecl
+            isFunction: (st.reg.typetypeOf typeId: ownerTid) == ztypes.ztypetype.functionType
+            typeNid: dm.operation
+        )
+        if (refusePerInstanceDefault :st :ast :ownerTid :dm) then return ztypes.tid
+    }
     bare: declaredByValue :st :ast :ownerTid node: dm.operation
     if bare.not then return ztypes.tid
     fd: st.typing.declMemberIdOf parentTypeId: ownerTid nameId: dm.name
@@ -15123,6 +15253,82 @@ foldedDeclType: function {
         return fto
     }
     return ztypes.tid
+}
+
+# numericParamsInScope -- a declaration at or enclosing `scope` has a numeric
+# generic parameter, which a declaration there may name.
+numericParamsInScope: function {st: zenv.ZSymbolTable.view scope: ztypes.declid} out bool is {
+    cur: scope
+    for cur.isZero.not loop {
+        if (st.reg.genericNumericParamCountOf tdecl: cur) > 0 then return true
+        cur = st.typing.declParentOf declId: cur
+    }
+    return false
+}
+
+# refusePerInstanceDefault -- a field or parameter whose default is computed
+# from a numeric generic parameter (`n: cap * 2`, `n: cap.u64`, `n: D` with
+# `D: cap * 3`): each instance would give it another value, and a default is
+# one value for every instance. The member is declared by its type instead and
+# set where it is made. Recorded as refused, so its uses say nothing more.
+# True when it refused.
+refusePerInstanceDefault: function {
+    st: zenv.ZSymbolTable
+    ast: Ast
+    ownerTid: ztypes.tid
+    dm: argref
+} out bool is {
+    ownerDecl: st.typing.declIdOfType typeId: ownerTid
+    if (defaultReadsNumericParam :st :ast :ownerDecl node: dm.operation).not then return false
+    pn: zast.nameTextAt :ast ref: dm.name
+    what: "field"
+    how: "set it in a `create`"
+    if (st.reg.typetypeOf typeId: ownerTid) == ztypes.ztypetype.functionType then {
+        what = "parameter"
+        how = "have the caller pass it"
+    }
+    (
+        addErrorH
+        :st
+        nodeid: dm.nid
+        lineno: dm.lineno
+        colno: dm.colno
+        e: zast.err.typeError
+        msg: "the \{what} '\{pn}' has a default computed from a numeric generic parameter, which each instance gives another value"
+        note: String
+        hint: "declare '\{pn}' by its type and \{how}"
+        width: pn.length.u32.orPanic
+    )
+    st.typing.refusedValues.add item: dm.operation
+    return true
+}
+
+# defaultReadsNumericParam -- the declaration's value `node` is computed from a
+# numeric generic parameter of `ownerDecl` or of a definition enclosing it: an
+# expression or a constant over one (constReadsNumericParam), or a member read
+# off one (`cap.u64`). A bare parameter declares a slot of its singleton type,
+# and a type built from one (`(array t: i64 to: cap)`) is a type.
+defaultReadsNumericParam: function {
+    st: zenv.ZSymbolTable.view
+    ast: Ast.view
+    ownerDecl: ztypes.declid
+    node: zast.nodeid
+} out bool is {
+    n: ast.nodes.get i: node
+    an: zast.atomNameIdOf :n
+    if an.isZero.not when (numericParamOwnerFrom :st scope: ownerDecl nameId: an).isZero.not then {
+        return false
+    }
+    leaf: dottedChildNameId :ast :n
+    root: rootNameIdOf :ast :n
+    if leaf.isZero.not when (isStripMarkerId nameId: leaf).not when (
+        numericParamOwnerFrom
+        :st
+        scope: ownerDecl
+        nameId: root
+    ).isZero.not then return true
+    if (valueDeclares :ast :node).not then return false
+    return (constReadsNumericParam :st :ast owner: ownerDecl opId: node)
 }
 
 # refuseNumericParamName -- a field or parameter named like a numeric generic
@@ -15153,20 +15359,24 @@ refuseNumericParamName: function {
     )
 }
 
-# numericParamFieldType -- a field or parameter whose value is a numeric generic
-# parameter of its owner or of a definition enclosing it (`stored: cap`, a
-# method's `n: cap`): the bound's type, with a default each instance supplies
-# from its own argument (recordNumericDefaults). 0 for any other declaration.
-numericParamFieldType: function {
+# singletonFieldType -- a type's field declared by a numeric generic parameter
+# of the type or of a definition enclosing it (`stored: cap`): a slot of the
+# parameter's singleton type -- the parameter's own type in the template
+# (abstractSingletonOf), its instance's singleton type in each instance
+# (completeIdSubs) -- whose default is that type's one value
+# (recordNumericDefaults). 0 for any other declaration: a function's parameter
+# so declared is a type-ref, which refuseSingletonTypeRef refuses.
+singletonFieldType: function {
     st: zenv.ZSymbolTable
     ast: Ast
     ownerTid: ztypes.tid
     dm: argref
 } out ztypes.tid is {
+    if (st.reg.typetypeOf typeId: ownerTid) == ztypes.ztypetype.functionType then return ztypes.tid
     vnId: zast.atomNameIdOf n: (ast.nodes.get i: dm.operation)
     if vnId.isZero then return ztypes.tid
-    # the parameter is the owner's or an enclosing definition's -- a method's
-    # type, a unit's -- found as a read of the name in a body finds it
+    # the parameter is the owner's or an enclosing definition's -- a unit's --
+    # found as a read of the name in a body finds it
     ownerDecl: st.typing.declIdOfType typeId: ownerTid
     tdecl: numericParamOwnerFrom :st scope: ownerDecl nameId: vnId
     if tdecl.isZero then return ztypes.tid
@@ -15175,11 +15385,6 @@ numericParamFieldType: function {
     if bound.isZero then return ztypes.tid
     fd: st.typing.declMemberIdOf parentTypeId: ownerTid nameId: dm.name
     if fd.isZero then return ztypes.tid
-    # a type's field is a slot of the parameter's singleton type: the
-    # parameter itself in the template, its instance's singleton in each
-    # instance (completeIdSubs), holding the one value as its default
-    isField: (st.reg.typetypeOf typeId: ownerTid) != ztypes.ztypetype.functionType
-    if isField then bound = abstractSingletonOf :st :ast :tdecl param: vnId :bound
     st.walk.numericParamDefault.set key: fd value: vnId
     (
         st.typing.declSetDefaultId
@@ -15187,7 +15392,7 @@ numericParamFieldType: function {
         nameId: dm.name
         value: ztyping.defaultval.constant fd
     )
-    return bound
+    return (abstractSingletonOf :st :ast :tdecl param: vnId :bound)
 }
 
 # abstractSingletonOf -- the numeric generic parameter `param` of `tdecl` as the
@@ -15214,18 +15419,14 @@ abstractSingletonOf: function {
     return gp
 }
 
-# recordNumericDefaults -- each member of `ownerTid`, an instance's copy of
-# `templateId`'s members, that the template defaults to a numeric generic
-# parameter (`stored: cap`, `n: cap`): the argument `instanceTid` was made with
-# is the member's value and its default.
+# recordNumericDefaults -- each field of `ownerTid`, an instance of
+# `templateId`, that the template declares by a numeric generic parameter
+# (`stored: cap`, singletonFieldType): the instance's argument is the field's
+# value and its default, which every construction writes.
 recordNumericDefaults: function {
     st: zenv.ZSymbolTable
     ownerTid: ztypes.tid
     templateId: ztypes.tid
-    # the instance that holds the parameter's argument: the owner itself for a
-    # type's or a function's instance, the type or unit instance for a member
-    # function cloned into it
-    instanceTid: ztypes.tid
 } is {
     if st.walk.numericParamDefault.length == 0 then return
     slots: st.typing.declRowSlots ownerTid: templateId
@@ -15239,7 +15440,7 @@ recordNumericDefaults: function {
             po: st.walk.numericParamDefault.get key: tmd
             mmd: st.typing.declMemberIdOf parentTypeId: ownerTid nameId: fname
             if po.some when mmd.isZero.not then {
-                v: st.typing.memberConstOf parentTypeId: instanceTid nameId: po
+                v: st.typing.memberConstOf parentTypeId: ownerTid nameId: po
                 if v.kind.none.not then {
                     st.typing.setMemberConst parentTypeId: ownerTid nameId: fname value: v
                     (
@@ -15248,10 +15449,6 @@ recordNumericDefaults: function {
                         nameId: fname
                         value: ztyping.defaultval.constant mmd
                     )
-                } else {
-                    # a parameter the instance does not bind -- a generic
-                    # method's own -- is bound by each instance of the copy
-                    st.walk.numericParamDefault.set key: mmd value: po
                 }
             }
         }
@@ -21129,7 +21326,6 @@ fillMonoMethodSignature: function {
             )
         }
     }
-    recordNumericDefaults :st ownerTid: newFnId templateId: srcId instanceTid: monoId
     rto: st.reg.returnTypeOf tid: srcId
     if rto.isZero.not then {
         rtv: unitMonoTypeOf :st :ast :rf :tplId :monoId :subs tid: rto
@@ -22683,6 +22879,8 @@ stampOnePendingTyperef: function {
     pval: zast.nameid
 } is {
     if ((st.walk.noStampNode.get key: uk).or d: false) then return
+    # a declaration refused where it is written is no type-ref to resolve
+    if (nodeRefused :st nid: uk) then return
     # the type-ref resolves in the scope it was written in
     rf: (st.walk.pendingTyperefScope.get key: uk).or d: ztypes.declid
     # the scope's unit, as the label the surface / claim probes take
@@ -23600,7 +23798,6 @@ cloneMethodInto: function {
     # the parameter defaults: a construction or a call that leaves one out
     # fills it from the clone
     cloneParamDefaults :st from: tplFnId to: fnTid names: paramNames
-    recordNumericDefaults :st ownerTid: fnTid templateId: tplFnId instanceTid: specId
     (
         cloneMethodReturn
         :ast
@@ -27784,7 +27981,7 @@ getOrMintSpec: function {
     if mid8.isZero then completes = false
     if completes then {
         completeSpecChildren :ast :st :templateId :mid8
-        recordNumericDefaults :st ownerTid: mid8 :templateId instanceTid: mid8
+        recordNumericDefaults :st ownerTid: mid8 :templateId
     }
     return mid8
 }
@@ -28460,6 +28657,19 @@ bindTypeArgSub: function {
     }
     argTid: typeArgTid :st :ast :unitDecl :opId baseId: anId
     if argTid.isZero then {
+        # a numeric generic parameter is no type argument (`(List t: cap)`)
+        npO: numericParamOwnerFrom :st scope: st.curScope nameId: anId
+        if npO.isZero.not when (st.findLocal nameId: anId).isZero then {
+            (
+                refuseSingletonTypeRef
+                :st
+                :ast
+                owner: npO
+                nameId: anId
+                nid: (markedBareAtom :ast nid: opId)
+            )
+            return
+        }
         # a type argument naming nothing at all, or naming a local, is its own
         # error; inference stops there (inferGenericConstruction)
         if (argNamesNothing :st :ast :unitDecl :opId) then {
@@ -31468,6 +31678,8 @@ bareFnRefErrorFor: function {
         missingNames: misN
         missingIds: misI
     )
+    # every one missing was refused where it is written, which said why
+    if misN.length == 0 then return
     lst: String
     li: u64
     ln: misN.length
@@ -31718,6 +31930,69 @@ memberTyperefRefused: function {
     if n.namedoperation.not then return false
     if (st.typing.refusedValues.has item: n.operation) then return true
     return (namesFailedConstant :st :ast scope: d.parent opId: n.operation)
+}
+
+# asksNoArgument -- member `nameId` of `effId`, of type `pcid`, takes no
+# argument and no position: a singleton-typed field of a construction, which
+# sets the type's one value, or a member refused where it is written for naming
+# a numeric generic parameter, which asks for nothing more.
+asksNoArgument: function {
+    st: zenv.ZSymbolTable.view
+    ast: Ast.view
+    isCtor: bool
+    effId: ztypes.tid
+    pcid: ztypes.tid
+    nameId: zast.nameid
+} out bool is {
+    if isCtor when (st.typing.isSingletonType tid: pcid) then return true
+    return (memberRefusedForNumericParam :st :ast owner: effId :nameId)
+}
+
+# memberRefusedForNumericParam -- member `nameId` of `owner` was refused where it
+# is written for naming a numeric generic parameter: typed by one where only a
+# field may be (refuseSingletonDeclType), or defaulted to a value computed from
+# one (refusePerInstanceDefault). A refusal is always reported, so a program
+# with no errors has none.
+memberRefusedForNumericParam: function {
+    st: zenv.ZSymbolTable.view
+    ast: Ast.view
+    owner: ztypes.tid
+    nameId: zast.nameid
+} out bool is {
+    if (st.typing.errors.length == 0) or owner.isZero then return false
+    md: declMemberOf :st ownerTid: owner :nameId
+    if md.isZero then return false
+    op: declOperationOf :st :ast declId: md
+    if op.isZero then return false
+    ownerDecl: templateDeclOf reg: st.reg typing: st.typing tid: owner
+    if (defaultReadsNumericParam :st :ast :ownerDecl node: op) then return true
+    base: op
+    if (zast.atomNameIdOf n: (ast.nodes.get i: op)).isZero then base = (
+        markedTyperefBase
+        :ast
+        nid: op
+    )
+    if base.isZero then return false
+    bn: zast.atomNameIdOf n: (ast.nodes.get i: base)
+    if bn.isZero then return false
+    if (numericParamOwnerFrom :st scope: ownerDecl nameId: bn).isZero then return false
+    # a type's bare field so named is a slot of the singleton type, which the
+    # construction fills (missingCtorFields skips it by its type)
+    if base != op then return true
+    return (st.reg.typetypeOf typeId: owner) == ztypes.ztypetype.functionType
+}
+
+# markedTyperefBase -- the base of a marked type-ref, `T` in `T.hold`; 0 for any
+# other node.
+markedTyperefBase: function {ast: Ast.view nid: zast.nodeid} out zast.nodeid is {
+    n: ast.nodes.get i: nid
+    if (isStripMarkerId nameId: (dottedChildNameId :ast :n)).not then return zast.nodeid
+    match (
+        n
+    ) case dottedpath then {
+        return n.parent
+    } else null
+    return zast.nodeid
 }
 
 # namesFailedConstant -- `opId` is a bare name whose nearest declaration, from
@@ -33476,7 +33751,9 @@ nameReadsNumericParam: function {
     for cur.isZero.not loop {
         cd: st.typing.declFindChild parentDeclId: cur :nameId
         if cd.isZero.not then {
-            if (followed.contains item: cd) or (declIsConstant :st declId: cd).not then return false
+            if (
+                (followed.contains item: cd) or (declIsConstant :st :ast declId: cd).not
+            ) then return false
             followed.append from: cd
             return (
                 constReadsNumericParamVia
@@ -33493,11 +33770,16 @@ nameReadsNumericParam: function {
 }
 
 # declIsConstant -- the declaration is a constant: a unit's, an `as`
-# section's, or a path a unit re-exports until its root is read as a value.
-declIsConstant: function {st: zenv.ZSymbolTable.view declId: ztypes.declid} out bool is {
+# section's -- known by its value before the section is checked -- or a path
+# a unit re-exports until its root is read as a value.
+declIsConstant: function {
+    st: zenv.ZSymbolTable.view ast: Ast.view declId: ztypes.declid
+} out bool is {
     k: (st.typing.decls.get i: declId).kind
     if k.constDecl or k.reexportDecl then return true
-    return (st.typing.isAsConstDecl :declId)
+    if (st.typing.isAsConstDecl :declId) then return true
+    if (declIsType :st declId: (st.typing.declParentOf :declId)).not then return false
+    return (valueDeclares :ast node: (declOperationOf :st :ast :declId))
 }
 
 # appendHeldValues -- the values a node holds without being an operation of
@@ -45664,9 +45946,7 @@ missingCtorFields: function {
         # which is how `point.sub p` -- receiver given, `a` omitted -- ran with
         # `a` at zero instead of being reported.
         if recvImplicit when (isReceiverParamName :pnameId :thisPnId) then continue
-        # a singleton-typed field takes no argument and no position: the
-        # construction sets its type's one value
-        if isCtor when (st.typing.isSingletonType tid: pcid) then continue
+        if (asksNoArgument :st :ast :isCtor :effId :pcid nameId: pnameId) then continue
         posI: vpos
         vpos = vpos + 1
         pnId: pnameId
