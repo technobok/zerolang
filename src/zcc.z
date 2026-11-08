@@ -16,6 +16,7 @@ public: unit {
     :objectArgs
     :libraryArg
     :objectExt
+    :mainStackArgs
     :spawnCompiler
 }
 
@@ -126,6 +127,29 @@ objectExt: function {f: ccfamily} out StringView is {
     if f.msvc then return ".obj"
     return ".o"
 }
+
+# mainStackArgs -- the link arguments that reserve a program's main stack on
+# Windows: mainStackBytes, which Windows' own default of 1 MiB is not, in the
+# family's spelling. cl's is a linker option, so it goes after `-link`. None for
+# a build that is not for Windows, whose main thread has that much already, and
+# none for a compiler the build does not name, whose spelling is not known.
+mainStackArgs: function {f: ccfamily windows: bool} out List String is {
+    a: List String
+    if windows.not then return a
+    if f.msvc then {
+        a.append from: "-STACK:\{mainStackBytes}"
+    } else if f.tcc then {
+        a.append from: "-Wl,-stack=\{mainStackBytes}"
+    } else if f.gcc or f.clang then {
+        a.append from: "-Wl,--stack,\{mainStackBytes}"
+    }
+    return a
+}
+
+# mainStackBytes -- a program's main stack on every platform: 8 MiB, what Linux
+# gives the main thread and what a zerolang thread gets
+# (Z_THREAD_STACK_DEFAULT).
+mainStackBytes: 8388608
 
 # spawnCompiler -- run the compile `argv` of family `f` on the C file `src`,
 # its diagnostics on stderr, and answer its exit status. cl names each C file

@@ -1,12 +1,21 @@
 CC       := gcc
+# a program's main stack, in bytes: what Linux gives the main thread and a
+# zerolang thread gets; zc reserves it for every program it builds for Windows
+# (zcc.mainStackBytes), and the drivers here do the same there
+MAINSTACK_BYTES := 8388608
 # Windows (MSYS2 make, UCRT64 gcc) is told apart by the OS variable Windows sets
 # for every process. There the drivers link everything statically, as zc links
-# a program built for Windows, so bin/zc.exe runs with no DLL beside it; and
-# they need no pthread (the thread shim is native Win32 there) and no libm (the
-# C runtime holds the math functions; tcc has no libm to name).
+# a program built for Windows, so bin/zc.exe runs with no DLL beside it, and
+# reserve an 8 MiB main stack, as zc does for every program it builds for
+# Windows (zcc.mainStackArgs; Windows' own default is 1 MiB); MAINSTACK and
+# TCC_MAINSTACK spell it for gcc and tcc. They need no pthread (the thread shim
+# is native Win32 there) and no libm (the C runtime holds the math functions;
+# tcc has no libm to name).
 ifeq ($(OS),Windows_NT)
 WINDOWS_HOST := 1
-DRIVERLINK   := -static
+MAINSTACK    := -Wl,--stack,$(MAINSTACK_BYTES)
+TCC_MAINSTACK := -Wl,-stack=$(MAINSTACK_BYTES)
+DRIVERLINK   := -static $(MAINSTACK)
 THREADLIB    :=
 LIBM         :=
 EXE          := .exe
@@ -14,6 +23,8 @@ HOST_TARGET  := x86_64-w64-mingw32
 HOST_OSNAME  := windows
 else
 WINDOWS_HOST :=
+MAINSTACK    :=
+TCC_MAINSTACK :=
 DRIVERLINK   :=
 THREADLIB    := -lpthread
 LIBM         := -lm
@@ -165,7 +176,7 @@ style-lint: bin/zl
 $(BUILDDIR)/ztestrunner: bin/zc src/ztestrunner.z src/zdocblocks.z src/zcc.z src/ztarget.z $(wildcard lib/system/*.z) $(wildcard lib/system/system/*.z lib/system/math/*.z)
 	@mkdir -p $(BUILDDIR)
 	bin/zc ztestrunner --src src --system lib/system --emit-c $(BUILDDIR)/ztestrunner.c
-	$(CC) $(CFLAGS) -o $(BUILDDIR)/ztestrunner $(BUILDDIR)/ztestrunner.c $(call ZLINKOF,$(BUILDDIR)/ztestrunner.c) -lm
+	$(CC) $(CFLAGS) $(MAINSTACK) -o $(BUILDDIR)/ztestrunner $(BUILDDIR)/ztestrunner.c $(call ZLINKOF,$(BUILDDIR)/ztestrunner.c) -lm
 
 # test -- the fast corpus gate. The arch and docs kinds run bin/zl, so it must be
 # built: without it those kinds count nothing and every ratchet reads zero.
@@ -1118,8 +1129,8 @@ test-bootstrap:
 	@set -e; \
 	for cc in $(BOOTSTRAP_CCS); do \
 	  tag=$$(basename $$cc); m=""; o="-o "; \
-	  case "$$cc" in *tcc*) f="-B $(TCCLIB)"; l="";; \
-	    cl|cl.exe|*/cl|*/cl.exe) f="$(MSVC_CFLAGS) -O2 -Fo:$(BUILDDIR)/"; l=""; m=1; o="-Fe:";; \
+	  s=""; case "$$cc" in *tcc*) f="-B $(TCCLIB)"; l="$(TCC_MAINSTACK)";; \
+	    cl|cl.exe|*/cl|*/cl.exe) f="$(MSVC_CFLAGS) -O2 -Fo:$(BUILDDIR)/"; l=""; m=1; o="-Fe:"; s="-link -STACK:$(MAINSTACK_BYTES)";; \
 	    *) f="$(CFLAGS)"; l="$(DRIVERLINK)";; esac; \
 	  if ! command -v $$cc >/dev/null 2>&1 && [ ! -x $$cc ]; then \
 	    echo "test-bootstrap FAIL: '$$cc' is not available"; \
@@ -1129,12 +1140,12 @@ test-bootstrap:
 	    exit 1; \
 	  fi; \
 	  echo "== bootstrap chain: $$cc =="; \
-	  $$cc $$f $${o}$(BUILDDIR)/zc-seed-$$tag bootstrap/zc.c $(if $(WINDOWS_HOST),$$l,$(call ZLINKOF,bootstrap/zc.c)) $(LIBM); \
+	  $$cc $$f $${o}$(BUILDDIR)/zc-seed-$$tag bootstrap/zc.c $(if $(WINDOWS_HOST),$$l,$(call ZLINKOF,bootstrap/zc.c)) $(LIBM) $$s; \
 	  $(BUILDDIR)/zc-seed-$$tag zc --src src --system lib/system --emit-c $(BUILDDIR)/b1-$$tag.c; \
 	  if [ -n "$$m" ]; then k="$(call MSVCLINKOF,$(BUILDDIR)/b1-$$tag.c)"; else k="$(call ZLINKOF,$(BUILDDIR)/b1-$$tag.c) $(LIBM)"; fi; \
-	  $$cc $$f $$l $${o}$(BUILDDIR)/zc-b1-$$tag $(BUILDDIR)/b1-$$tag.c $$k; \
+	  $$cc $$f $$l $${o}$(BUILDDIR)/zc-b1-$$tag $(BUILDDIR)/b1-$$tag.c $$k $$s; \
 	  $(BUILDDIR)/zc-b1-$$tag zc --src src --system lib/system --emit-c $(BUILDDIR)/b2-$$tag.c; \
-	  $$cc $$f $$l $${o}$(BUILDDIR)/zc-b2-$$tag $(BUILDDIR)/b2-$$tag.c $$k; \
+	  $$cc $$f $$l $${o}$(BUILDDIR)/zc-b2-$$tag $(BUILDDIR)/b2-$$tag.c $$k $$s; \
 	  $(BUILDDIR)/zc-b2-$$tag zc --src src --system lib/system --emit-c $(BUILDDIR)/b3-$$tag.c; \
 	  if cmp -s $(BUILDDIR)/b2-$$tag.c $(BUILDDIR)/b3-$$tag.c; then \
 	    echo "  fixpoint OK (b2 == b3) under $$tag"; \
@@ -1334,7 +1345,7 @@ perf: $(PERFBIN)
 # deletes write-only allocations; perf-elision measures that), a failed run and
 # allocs != frees. Above ALLOC_BASELINE fails; a commit raising it says why in
 # its message, and one lowering the count lowers it here.
-ALLOC_BASELINE := 2856183
+ALLOC_BASELINE := 2856943
 # ALLOC_LINE -- the one measurement every allocation number comes from.
 ALLOC_LINE = valgrind --tool=memcheck $(PERFRUN) 2>&1 | grep 'total heap usage' | sed 's/.*usage: //'
 

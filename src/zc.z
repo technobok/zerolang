@@ -484,6 +484,7 @@ runtimeLinkArgs: function {windowsTarget: bool ccKind: zcc.ccfamily} out List St
     } else if ccKind.tcc.not then {
         a.append from: "-static".string
     }
+    for each sa: (zcc.mainStackArgs f: ccKind windows: windowsTarget) loop a.append from: sa.copy
     return a
 }
 
@@ -521,8 +522,23 @@ buildExe: function {
         # There is no ldflags parameter read here: libtcc links through the
         # same state that compiled, so there is no link step to pass them to.
         # The caller REFUSES a non-empty --ldflags under inproc rather than
-        # dropping it, so this branch never has any to drop.
-        return (tcc.compileToExe csrc: tempC :exe :tccDir :release :cflags :libs :objs)
+        # dropping it, so this branch never has any to drop. libtcc reads its
+        # options as its command line does, the main stack's among them.
+        tcf: cflags.string
+        for each sa: (zcc.mainStackArgs f: zcc.ccfamily.tcc windows: windowsTarget) loop {
+            tcf.append " "
+            tcf.append sa
+        }
+        return (
+            tcc.compileToExe
+            csrc: tempC
+            :exe
+            :tccDir
+            :release
+            cflags: tcf.stringView
+            :libs
+            :objs
+        )
     }
     if ccKind.msvc then return (buildExeMsvc :cc :tempC :exe :release :cflags :ldflags :libs :objs)
     a: List String
@@ -603,6 +619,7 @@ buildExeMsvc: function {
     for each lb: libs loop a.append from: (zcc.libraryArg f: zcc.ccfamily.msvc name: lb.stringView)
     lf: List String
     if release.not then lf.append from: "-INCREMENTAL:NO".string
+    for each sa: (zcc.mainStackArgs f: zcc.ccfamily.msvc windows: true) loop lf.append from: sa.copy
     appendWords a: lf text: ldflags
     if lf.length > 0 then {
         a.append from: "-link".string
