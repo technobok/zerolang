@@ -6674,6 +6674,7 @@ ensureUnitInstanceMono: function {
         unitMonoJoinTrie :st tplTid: tplId tplName: tplNm.stringView :args monoId: mono
         for each a: args loop st.reg.appendGenericArg specId: mono arg: a
         recordNumericArgConsts :ast :st :scope monoId: mono :tdecl
+        shareUnitSingletons :st :tdecl encl: own monoId: mono
         mintNumericSingletons :ast :st :scope monoId: mono :tdecl
     }
     ensureUnitMonoBuilt :st :scope :ast monoId: mono
@@ -27465,6 +27466,35 @@ mintNumericSingletons: function {
     }
 }
 
+# shareUnitSingletons -- an instance `monoId` of the template `tdecl` written in a
+# generic unit takes, for each numeric parameter it inherits from the unit, the
+# singleton type of the unit's instance `encl` (0 for none): the same parameter
+# of the same instance is one type. mintNumericSingletons then mints only the
+# template's own.
+shareUnitSingletons: function {
+    st: zenv.ZSymbolTable
+    tdecl: ztypes.declid
+    encl: ztypes.tid
+    monoId: ztypes.tid
+} is {
+    if encl.isZero then return
+    for each pn: (st.reg.genericParamNamesOf tdecl: (st.typing.declParentOf declId: tdecl)) loop {
+        s: st.typing.singletonOf instance: encl param: pn
+        if s.isZero.not then (
+            st.typing.singletonAt.set
+            key: (ztyping.constslot owner: monoId name: pn)
+            value: s
+        )
+    }
+}
+
+# unitHasNumericParams -- the declaration `tdecl` (0 for none) has a numeric
+# generic parameter, which a template written in it inherits.
+unitHasNumericParams: function {st: zenv.ZSymbolTable.view tdecl: ztypes.declid} out bool is {
+    if tdecl.isZero then return false
+    return (st.reg.genericNumericParamCountOf :tdecl) > 0
+}
+
 # numericLevelKeyedByParam -- whether a spec's keys put a generic parameter's
 # type at a numeric parameter's level: a reference inside a template over its
 # own numeric parameter.
@@ -27678,7 +27708,16 @@ getOrMintSpec: function {
         registerSpecOnTrie :st name: mn8.stringView :templateId :mid8 :args
         recordNumericArgConsts :ast :st :scope monoId: mid8 tdecl: tk8
         # a partial's value arguments complete per instance: it has no singletons
-        if hasParamKey.not then mintNumericSingletons :ast :st :scope monoId: mid8 tdecl: tk8
+        if hasParamKey.not then {
+            if (unitHasNumericParams :st tdecl: (st.typing.declParentOf declId: tk8)) then (
+                shareUnitSingletons
+                :st
+                tdecl: tk8
+                encl: (enclosingInstanceOf :st :scope :ast tdecl: tk8 :subs :valSubs)
+                monoId: mid8
+            )
+            mintNumericSingletons :ast :st :scope monoId: mid8 tdecl: tk8
+        }
     }
     # The children are built LAST, and the trie path above is why. Building
     # them respecializes, which re-enters this function for this very
