@@ -1108,7 +1108,10 @@ the mode it was declared with.
 The target must be an addressable location: a variable, or a field
 reached through one (see the grammar's addressability rule). A call, a
 literal, a unit constant, a type, a function or a method names no
-storage, and reassigning one is #~"E0100". Reassigning a borrowed name
+storage, and reassigning one is #~"E0100". A slot of a singleton type -- a
+local or a field typed by a numeric generic parameter (#~"c: cap") -- holds
+the type's one value and is never written: reassigning it is #~"E0100" too
+(see [#> to=generic-types: generic types]). Reassigning a borrowed name
 re-points it -- at an owned value through a companion that holds it --
 and handing it #~".take" or #~".hold" is #~"E0200".
 
@@ -1127,7 +1130,8 @@ held, and both stay valid.
   target is: each must name something (#~"E0023" otherwise), be an
   addressable location -- a variable or a field reached through one
   (#~"E0100" otherwise) -- and be free of any lock that would forbid the
-  write.]
+  write. A slot of a singleton type is never written, so it is no side of a
+  swap (#~"E0100").]
   [#*: Both sides must be owned. A borrowed name -- a parameter, or a
   #~"with" alias of a path -- cannot be swapped on either side
   (#~"E0200").]
@@ -1270,7 +1274,8 @@ unlabelled argument is the first generic parameter, as in #~"(List u8)". A
 construction reads its fields the same way, as in #~"point 5 y: 2". A generic
 typedef is the exception: its unlabelled argument is #~"from", the value of its
 base, so its type arguments are always labelled (see
-[#> to=typedef: typedef]).
+[#> to=typedef: typedef]). A singleton type, the type of a numeric generic
+parameter, takes no argument at all: its create makes its one value.
 
 The rules above are designed to:
 
@@ -1778,7 +1783,7 @@ empty #~"{}") arm body yields no value and can only stand as a statement —
 consuming it as a value is a compile-time error.
 
 When the match subject is a compile-time constant (a named arm constant, or a
-numeric generic parameter value), the match is evaluated statically.
+numeric generic parameter read bare), the match is evaluated statically.
 Only the matching arm is emitted in the generated C code; dead arms are
 eliminated. See [#> to=compile-time-error: Compile-Time Error] for how this
 interacts with the #~"error" builtin.
@@ -1796,9 +1801,11 @@ forms are supported:
       concrete instantiation type.]
   [#*: #_*"Numeric-value dissection" — the parameter ranges over a numeric type
       (#~"cap: u32.generic"). Each #~"case" names a value, matched against the
-      concrete binding. The subject may be the bare parameter (#~"match cap"), a
-      receiver access (#~"match this.cap"), or another instance's access
-      (#~"match (b.cap)").]
+      concrete binding. The subject is the bare parameter (#~"match cap") or
+      the parameter read through a name of the instance
+      (#~"B8: (Buffer cap: 8)" then #~"match B8.cap"). A slot of the
+      parameter's type (#~"c: cap") holds its value at run time and is no
+      subject (see [#> to=generic-types: generic types]).]
 
 Generic dissection is available anywhere a generic parameter is in scope: class
 methods (main-body and #~"as"-block), free functions, and generic units
@@ -2785,51 +2792,169 @@ value stands in for the constraint type as a body argument does: an untyped
 constant must lie in its range, so a negative value is accepted only by a signed
 constraint, and a typed constant must convert to it without loss.
 
-Inside the template the parameter is a compile-time constant of the constraint
-type, whose value each instantiation supplies. It is read bare (#~"cap"),
-through #~"this" or any value of the type (#~"b.cap"), through an alias that
-names the instance (#~"Buffer8: (Buffer cap: 8)" then #~"Buffer8.cap"), or through a unit
-instance (#~"four.cap") -- the one static member a value reaches, since the
-value's type fixes it -- and it is never written. A condition over it folds per
-instantiation, so an #~"error" it guards is triggered or eliminated there (see
-[#> to=compile-time-error: Compile-Time Error]), and a #~"match" over it
-dissects. An operation on it folds per instantiation in the constraint's own
-type: with #~"n: u64.generic", #~"n * 18446744073709551615" overflows #~"u64"
-in #~"(Box n: 2)" and is refused there (#~"E0600"), while #~"(Box n: 1)" folds.
-A read from a call's result (#~"(make).cap") is refused: folding the read would
-not make the call.
-
-A constant of the template -- a generic unit's definition or an #~"as"
-constant -- may read the parameter (#~"big: if cap > 4 then { 1 } else { 0 }",
-#~"doubled: cap * 2"). It is evaluated for each instantiation, and read bare inside
-the template, through a unit instance (#~"eight.big") or through the type inside
-the template's own methods. Read through the template from anywhere else it is
-refused (#~"E0600"), since only an instance has a value for it.
-
-A template may instantiate another over its own parameter: in a body with any
-compile-time integer of it (#~"a: array t: i64 to: cap * 2"), and in a field,
-parameter or return type with the parameter itself (#~"slots: (array t: i64 to:
-cap)"). Each instantiation of the template instantiates its own; a type computed
-from the parameter (#~"to: cap + 1" in a type) is refused (#~"E0600").
-
-A numeric generic parameter adds no field to the concrete type: the type fixes
-its value, so nothing stores it. A field that should hold it is declared, and it
-may take the parameter as its default (#~"stored: cap"), which each
-instantiation fills with its own argument. A member named like the parameter is
-refused (#~"E0100"): the #~"as" section and the body are one scope, and a read
-through a value would mean either.
-
-A function parameter declared by the parameter (#~"n: cap") is the same: it is
-of the bound's type, and a call that leaves it out takes the argument of the
-instance it calls. This holds for a parameter of the method's type, of a
-generic unit and of the function itself. Written with a marker (#~"n: cap.hold",
-#~"stored: cap.hold") or as a return type (#~"out cap"), the parameter names
-its bound's type, as a constant's name names the constant's type. Such a
-declaration has no default.
-
 Different numeric values produce different monomorphized types (e.g. #~"myrec_10"
 vs #~"myrec_20"). Negative values use a "neg" prefix in mangled names (e.g.
 #~"myrec_neg5" for value -5).
+
+#p: #b:"The parameter is a type."
+
+In each instance, a numeric generic parameter is a type of its own: its
+#_*"singleton type". This is a typedef over the bound (see
+[#> to=typedef: typedef]) whose one value is the instance's argument. With
+#~"cap: u32.generic", the type of #~"cap" in #~"(Box cap: 5)" is named
+#~"(Box cap: 5).cap", and inside the template #~"cap". Its members are the
+bound's: #~"cap * 2" is a #~"u32", and #~"cap.u64" converts. It passes where
+the bound is expected. Like any typedef it does not widen: the type of a
+#~"u8.generic" parameter does not pass where a #~"u64" is expected. Its create
+takes no argument and makes the one value (#~"cap.create"), so
+#~"cap.create from: 5" is refused (#~"E0300").
+
+#p: #b:"Read bare, the parameter folds."
+
+Read bare in a body, #~"cap" is its type's one value, known at compile time.
+An expression over it folds in each instance:
+
+#ul:
+  [#*: #~"if cap > 4" keeps one arm, so an #~"error" it guards is triggered
+    or eliminated there (see [#> to=compile-time-error: Compile-Time Error]);]
+  [#*: a literal beside it reads as the bound: #~"4 < cap" and #~"4 + cap"
+    are over #~"u32";]
+  [#*: #~"match cap" dissects (see [#> to=match: match]);]
+  [#*: #~"a: array t: i64 to: cap * 2" sizes the array for each instance, and
+    #~"cap.times" counts to the value.]
+
+An operation on it folds in the bound's own type: with #~"n: u64.generic",
+#~"n * 18446744073709551615" overflows #~"u64" in #~"(Box n: 2)" and is
+refused there (#~"E0600"), while #~"(Box n: 1)" folds.
+
+#p: #b:"Slots."
+
+A local (#~"c: cap") or a field (#~"stored: cap") of the singleton type is a
+#_*"slot": it holds the value at run time. A read of a slot is a run-time
+read, so it does not fold. #~"a: array t: i64 to: c" is refused
+(#~"E0600": 'c' is a run-time value), an #~"error" guarded by #~"c == 0"
+stays in the program as a run-time trap, and #~"match c" is refused. No code
+writes a slot: a reassignment or a #~"swap" of one is refused (#~"E0100"),
+"this cannot be written: its type, '(Box cap: 5).cap', has only one value".
+
+A field declared by the bare parameter (#~"stored: cap") is set by the
+compiler: the compiler-made create and #~"meta.create" set it to the one
+value. It takes no argument, so a positional argument binds the next field.
+Passing it by name is refused (#~"E0300"): "'stored' is of type
+'(rec cap: 9).cap' and holds its one value; it takes no argument". It is
+stored and compared by #~"==" like any field.
+
+#code language=zerolang: """
+  Box: record {
+      stored: cap # a slot, set to the one value by every create
+      used: u32
+  } as {
+      cap: u32.generic
+      DOUBLE: cap * 2 # a u32 constant of each instance
+      describe: function {b: this} out u32 is {
+          if cap > 4 then { print "big" } else { print "small" }
+          a: array t: i64 to: cap * 2 # 10 elements in (Box cap: 5)
+          c: cap # a slot, read at run time
+          print "\{a.length} \{c} \{cap.u64}"
+          return b.stored + b.used + DOUBLE
+      }
+  }
+
+  B5: (Box cap: 5)
+
+  main: function is {
+      b: B5 3 # stored is 5, and the 3 binds used
+      print "\{b.describe}" # big, then 10 5 5, then 18
+      k: B5.cap # 5, of type (Box cap: 5).cap
+      if B5.cap == 0 then { error msg: "a Box needs room" } # folded away
+      print "\{k} \{b == (B5 used: 3)}"
+  }
+  """
+
+#p: #b:"Where it is a type."
+
+The singleton type types a field, a local, and a numeric argument of another
+generic application. A template may instantiate another over its own
+parameter: in a body with any compile-time integer of it
+(#~"a: array t: i64 to: cap * 2"), and in a field, parameter or return type
+with the parameter itself (#~"slots: (array t: i64 to: cap)"), which names
+the array instance's type. Each instance of the template instantiates its
+own. A type computed from the parameter (#~"to: cap + 1" in a type) is
+refused (#~"E0600").
+
+Anywhere else the singleton type is refused (#~"E0100"): as a parameter type
+(#~"n: cap", and a generic function's own #~"x: k"), as a return type
+(#~"out cap"), with a marker (#~"cap.hold", on a field or a parameter) and as
+a type argument (#~"(ListVal t: cap)"). The message is "'cap' is a numeric
+generic parameter: as a type it has one value, so it types only a field or a
+local". Take or return the bound, #~"u32", and read #~"cap" for the value.
+When a call infers a type parameter from a value of the singleton type, the
+parameter binds the bound: #~"pick v: b.stored" binds #~"u32", as
+#~"pick v: 5" binds #~"i64".
+
+#code language=zerolang expect=E0100: """
+  Box: class {
+      used: u32
+      grow: function {:this n: cap} is { # error: 'cap' types only a field or a local
+          this.used = this.used + n
+      }
+  } as { cap: u32.generic }
+
+  main: function is {
+      b: (Box cap: 5) used: 0
+      b.grow n: 5
+  }
+  """
+
+No default is computed from the parameter. A field's or a parameter's
+default that reads it -- #~"n: cap * 2", #~"n: cap.u64", or #~"n: D" where
+#~"D: cap * 3" -- is refused (#~"E0100"), because each instance gives it
+another value. Declare the member by its type, then set a field in a
+#~"create", or have the caller pass a parameter (see
+[#> to=default-values: Default values]).
+
+#p: #b:"Reaching it from outside."
+
+A value does not reach its type's parameter. #~"b.cap", #~"this.cap" and a
+call's result #~"(mk).cap" are refused (#~"E0100"): "'cap' is a type of
+'(Box cap: 5)'; a value reaches only its fields and methods". Inside the
+template, read it as #~"cap". The same rule refuses an #~"as" alias reached
+through a value (see [#> to=aliases: Aliases]).
+
+A name of the instance reaches the parameter, as its singleton type's value:
+the instance itself (#~"(Box cap: 5).cap"), an alias of it
+(#~"B5: (Box cap: 5)" then #~"B5.cap"), and a unit instance
+(#~"four: (sized cap: 4)" then #~"four.cap"). Each of these folds as a bare
+read does, also in a folding #~"if" that guards an #~"error". Inside the
+template, its own name reads the parameter as the bare name does
+(#~"Box.cap" in a method of #~"Box" is each instance's). Through the template
+from anywhere else it is refused (#~"E0600"), since only an instance has a
+value for it.
+
+A type or a unit written inside a generic unit inherits the unit's numeric
+parameter, and in each unit instance it is the same type. In
+#~"(wrap n: 3)", a field #~"size: n" of a nested record and a local #~"c: n"
+in a nested unit are both of type #~"(wrap n: 3).n".
+
+#p: #b:"Constants over it."
+
+A constant of the template -- a generic unit's definition or an #~"as"
+constant -- may read the parameter (#~"big: if cap > 4 then { 1 } else { 0 }",
+#~"DOUBLE: cap * 2"). It is evaluated for each instance. So is a constant
+that reads such a constant (#~"E: DOUBLE * 2"), however long the chain is.
+#~"DOUBLE" is a #~"u32" constant. #~"C: cap.create" and #~"K: cap" are
+constants of the singleton type, whose value is the argument. A constant is
+read bare inside the template, through a unit instance (#~"eight.big"), or
+through the type inside the template's own methods. Read through the template
+from anywhere else, it is refused (#~"E0600"), since only an instance has a
+value for it.
+
+A numeric generic parameter adds no field to the concrete type: the type
+fixes its value, so nothing stores it unless a slot is declared. A member
+named like the parameter is refused. In the type's own body it is a duplicate
+name (#~"E0028"), since the parameters and the #~"is" and #~"as" members are
+one namespace. In a type written inside a generic unit, which inherits the
+unit's parameter, it is #~"E0100".
 
 Example:
 
@@ -3859,6 +3984,38 @@ Writing one of the unit's parameters in such an application
 template through the unit itself rather than an instance
 (#~"(wrap.pairs t: i64 u: f64)").
 
+A unit's numeric generic parameter is a singleton type in each instance, as
+a type's is (see [#> to=generic-types: generic types]). A type or a unit
+written inside the unit inherits the parameter, and in each unit instance it
+is the same type: below, #~"size" and the local #~"c" are both of type
+#~"(wrap n: 3).n". A definition that reads the parameter (#~"TRIPLE") is
+evaluated for each instance, and a read through the instance (#~"w3.n") folds:
+
+#code language=zerolang: """
+  wrap: unit as {
+      n: u32.generic
+      TRIPLE: n * 3
+      box: record {
+          size: n
+          v: i64
+      }
+      inner: unit as {
+          twice: function out u32 is {
+              c: n
+              return c * 2
+          }
+      }
+  }
+
+  w3: (wrap n: 3)
+
+  main: function is {
+      b: w3.box v: 7
+      print "\{b.size} \{w3.TRIPLE} \{w3.inner.twice}"   # 3 9 6
+      if w3.n > 8 then { error msg: "wrap takes at most 8" }
+  }
+  """
+
 #---: Unit-level Definitions
 
 A definition at unit level (outside any function body) is one of four
@@ -4305,6 +4462,18 @@ refuses is an error at the line that names the instance:
   #   on parameter 'T' of 'collections.ListRef' (the base of 'app.Nums')
 """
 
+#p: #b:"Singleton types."
+
+The compiler makes one kind of typedef itself. In each instance of a
+template, a numeric generic parameter is a typedef over its bound whose one
+value is the instance's argument: its #_*"singleton type" (see
+[#> to=generic-types: generic types]). Its members and its compatibility are
+a typedef's: with #~"cap: u32.generic", #~"cap * 2" is a #~"u32", and a value
+of the type passes where a #~"u32" is expected. Its create takes no argument,
+not even #~"from": #~"cap.create" makes the one value, and
+#~"cap.create from: 5" is refused (#~"E0300"). Its zero value is that one
+value.
+
 #p: #b:"Compatibility."
 
 The typedef retains the underlying type and so can continue to be passed to
@@ -4358,7 +4527,9 @@ typedef, or one built from the base (#~"m = meters 9"). A value of the base
 alone is refused, as it is where a typedef parameter is expected.
 #~"swap" exchanges a typedef and the type it wraps, in either order and for a
 valtype and a reftype alike. Both variables keep their own type after the
-swap, and both must be owned, as for any swap.
+swap, and both must be owned, as for any swap. A slot of a singleton type is
+never written: it holds the type's one value, so a reassignment or a
+#~"swap" of it is refused (#~"E0100").
 
 #code language=zerolang expect=E0300: """
   meters: typedef i64
@@ -4897,7 +5068,7 @@ the number of elements.
   old: a.set i: 2 item: 99  # replaces element, returns old value
 
   # length
-  n: a.length   # u64 constant, equals 4
+  n: a.length   # 4, a u64, read at run time
 
   # a read-only view over the elements, and a writable window
   with v: a.listView do print "\{v.length}"    # (ListViewVal t: i64)
@@ -5372,8 +5543,9 @@ In the #~"in" block, the function argument types specified (after the
 function argument label), can be:
 
 - a builtin type (eg. u8, i32, f64, c8)
-- a numeric compile time constant (this is also a type). Parameter will default
-  to this value if not specified in the call
+- a numeric compile-time constant (#~"n: 5", #~"n: limit"). The parameter has
+  the constant's type and takes its value when the call leaves it out (see
+  [#> to=default-values: Default values])
 - a named user defined type (result of #~"record", #~"class", #~"union",
   #~"protocol" definition etc.)
 - a spec (a function definition without an #~"is" body). A function reference of
@@ -5400,6 +5572,9 @@ Function argument types can NOT be:
 
 - a bare function name: it is a call (use #~".copy" on the function name to pass
   a function reference for a #~"Spec" argument)
+- a numeric generic parameter (#~"n: cap"): as a type it has one value, so it
+  types only a field or a local. Take its bound (#~"n: u32") and read #~"cap"
+  for the value (see [#> to=generic-types: generic types])
 
 
 #----: Specs
@@ -5825,7 +6000,10 @@ There is only one true low-level constructor for an object and it is
 #~"meta.create" -- the compiler-internal raw allocator. #~"meta.create"
 reserves the memory for the instance and sets each member directly from
 parameters supplied (or from field defaults). It is the #_*"only" way to
-construct a new object.
+construct a new object. A field of a singleton type (#~"stored: cap", typed by
+a numeric generic parameter) is the exception: it takes no parameter, and
+#~"meta.create" sets it to the type's one value (see
+[#> to=generic-types: generic types]).
 
 #~"meta.create" is accessible only from inside the enclosing type's
 method bodies. Outside those methods it is an error. The compiler
@@ -5922,6 +6100,9 @@ empty argument list. The constructed value is the type's zero value:
   arguments.]
   [#*: A typedef follows its base -- #~"Bytes" is the empty byte
   buffer, a numeric typedef is its scalar's zero.]
+  [#*: A singleton type -- the type of a numeric generic parameter -- is
+  the exception among typedefs: it constructs its one value, so in
+  #~"(Box cap: 5)", #~"c: cap" binds 5.]
 
 The rule applies in every runtime value position -- binding
 initializers, call arguments, return values, reassignment right-hand
@@ -6379,7 +6560,10 @@ literal, a string, an operator expression, a compile-time #~"if" or #~"match",
 or another constant. A constant's type is its value's, and every read is the value itself,
 so it is used wherever a value is: an interpolation, a binding, an argument, a
 condition, a default, or another constant, in this unit
-(#~"TypeName.name") or another (#~"unit.TypeName.name").
+(#~"TypeName.name") or another (#~"unit.TypeName.name"). A method of the type
+reads them bare (#~"C") or through #~"type" (#~"type.C"), and they fold there
+as in any body: with #~"C: 5", #~"a: array t: i64 to: C" and
+#~"to: type.C * 2" size arrays.
 
 An #~"as" item is classified by what its value is. A value is a constant. A
 type -- a name, a path through a unit or another type, an instance of a
@@ -6387,7 +6571,9 @@ generic -- makes the item an alias of it (below). #~"X.implement" says the type
 implements the protocol or facet #~"X", and its label converts a value to it
 (#~"p.m"). A #~".generic" constraint is a generic parameter. A field belongs in
 the #~"is" section: #~"extra: i64" in #~"as" is an alias of #~"i64", not a
-field.
+field. A numeric generic parameter written as the whole value
+(#~"K: cap") is a value: #~"K" is a constant of the parameter's singleton
+type, and its value is the instance's argument.
 
 The names in a constant are looked up in the type's own members first -- its
 #~"is" and #~"as" sections are one scope, forward references included -- and
@@ -6427,7 +6613,9 @@ method signatures and its bodies, where it constructs as the type does -- and
 the nearest declaration wins, so an alias hides a unit's type of the same
 name. From outside, an alias is reached through its type (#~"Tree.Node",
 #~"unit.Tree.Node"), in a type position, a type argument or a construction
-alike. #~"public:" controls an alias as it controls any member; hiding one
+alike. A value of the type does not reach it: #~"t.Node" is refused
+(#~"E0100"), "'Node' is a type of 'Tree'; a value reaches only its fields and
+methods". #~"public:" controls an alias as it controls any member; hiding one
 hides only its name, for the alias is the type it names. An alias over the
 type's own generic parameter is each instance's (#~"Elem: t" is #~"i64" in
 one, #~"bool" in another). An #~"as" constant written where a type is, is an
@@ -6608,6 +6796,15 @@ those, supply the value at construction time. A static list is a default (see
 [#> to=static-lists: Static lists]). Defaulting to an
 arm that carries a non-null payload is rejected for the same
 reason.
+
+A default computed from a numeric generic parameter -- #~"n: cap * 2",
+#~"n: cap.u64", or #~"n: D" where the type's constant #~"D: cap * 3" reads
+it -- is refused (#~"E0100"), because each instance gives it another value.
+Declare the member by its type, then set a field in a #~"create", or have the
+caller pass a parameter. A field declared by the bare parameter
+(#~"stored: cap") is no default either: it is a slot of the parameter's
+singleton type, and every create sets it to the one value (see
+[#> to=generic-types: generic types]).
 
 
 #---: protocol
@@ -8319,7 +8516,7 @@ Provability is bounded by what the emitter can fold: integer literals,
 unit-level integer constants, and arithmetic / comparison expressions
 over them, in statement-position #~"if" chains and #~"match" statements
 with literal arms. An #~"error" behind a guard that does not fold (a
-runtime value, a loop, a generic field read) is not provably reachable:
+runtime value, a loop, a field read) is not provably reachable:
 it stays in the generated C as a runtime trap that panics with the
 message if execution ever reaches it.
 
@@ -8334,9 +8531,12 @@ message if execution ever reaches it.
   }
   """
 
-This interacts naturally with numeric generic parameters. When a generic
-type is monomorphised with a concrete numeric value, the condition becomes
-a compile-time constant and the error is either triggered or eliminated.
+A numeric generic parameter read bare is its instance's value, known at
+compile time, so a condition over it folds in each instance and the error is
+triggered or eliminated there. A name of the instance folds the same way
+(#~"B8: (Buffer cap: 8)" then #~"if B8.cap == 0"). A slot of the parameter's
+type does not fold: after #~"c: cap", the guard #~"if c == 0" reads #~"c" at
+run time, so its #~"error" stays a run-time trap.
 
 #code language=zerolang: """
   Buffer: class {
@@ -8362,7 +8562,10 @@ a compile-time constant and the error is either triggered or eliminated.
 A #~"match" never dissects a plain value or a named constant. Its subject
 must be a union, variant, enum, or generic parameter, and each #~"case"
 names one of the subject's child arms -- a subcomponent id, never a name
-looked up in the environment. The compile-time arm selection above therefore
+looked up in the environment. A numeric generic parameter is a subject when it
+is read bare (#~"match cap") or through a name of the instance
+(#~"match B8.cap"). A slot of its type (#~"c: cap") is a plain value, so
+#~"match c" is refused. The compile-time arm selection above therefore
 reaches a #~"match" only through a #_*"generic parameter" subject.
 
 A #~"match" dissects a generic type parameter. When the subject is a type

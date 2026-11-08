@@ -1132,7 +1132,10 @@ the mode it was declared with.</p>
 <p>The target must be an addressable location: a variable, or a field
 reached through one (see the grammar's addressability rule). A call, a
 literal, a unit constant, a type, a function or a method names no
-storage, and reassigning one is <code>E0100</code>. Reassigning a borrowed name
+storage, and reassigning one is <code>E0100</code>. A slot of a singleton type -- a
+local or a field typed by a numeric generic parameter (<code>c: cap</code>) -- holds
+the type's one value and is never written: reassigning it is <code>E0100</code> too
+(see <a href="#generic-types">generic types</a>). Reassigning a borrowed name
 re-points it -- at an owned value through a companion that holds it --
 and handing it <code>.take</code> or <code>.hold</code> is <code>E0200</code>.</p>
 <p>Use <code>swap</code> when both sides need to remain initialised and
@@ -1147,7 +1150,8 @@ held, and both stay valid.</p>
   target is: each must name something (<code>E0023</code> otherwise), be an
   addressable location -- a variable or a field reached through one
   (<code>E0100</code> otherwise) -- and be free of any lock that would forbid the
-  write.</li>
+  write. A slot of a singleton type is never written, so it is no side of a
+  swap (<code>E0100</code>).</li>
 <li>Both sides must be owned. A borrowed name -- a parameter, or a
   <code>with</code> alias of a path -- cannot be swapped on either side
   (<code>E0200</code>).</li>
@@ -1275,7 +1279,8 @@ unlabelled argument is the first generic parameter, as in <code>(List u8)</code>
 construction reads its fields the same way, as in <code>point 5 y: 2</code>. A generic
 typedef is the exception: its unlabelled argument is <code>from</code>, the value of its
 base, so its type arguments are always labelled (see
-<a href="#typedef">typedef</a>).</p>
+<a href="#typedef">typedef</a>). A singleton type, the type of a numeric generic
+parameter, takes no argument at all: its create makes its one value.</p>
 <p>The rules above are designed to:</p>
 <ul>
 <li>unambiguously document the arguments to a call or type specifier</li>
@@ -1692,7 +1697,7 @@ arm, as for an <code>if</code> (see <a href="#if">if</a>). A <code>match</code> 
 empty <code>{}</code>) arm body yields no value and can only stand as a statement &#x2014;
 consuming it as a value is a compile-time error.</p>
 <p>When the match subject is a compile-time constant (a named arm constant, or a
-numeric generic parameter value), the match is evaluated statically.
+numeric generic parameter read bare), the match is evaluated statically.
 Only the matching arm is emitted in the generated C code; dead arms are
 eliminated. See <a href="#compile-time-error">Compile-Time Error</a> for how this
 interacts with the <code>error</code> builtin.</p>
@@ -1708,9 +1713,11 @@ forms are supported:</p>
 concrete instantiation type.</li>
 <li><em><strong>Numeric-value dissection</strong></em> &#x2014; the parameter ranges over a numeric type
 (<code>cap: u32.generic</code>). Each <code>case</code> names a value, matched against the
-concrete binding. The subject may be the bare parameter (<code>match cap</code>), a
-receiver access (<code>match this.cap</code>), or another instance's access
-(<code>match (b.cap)</code>).</li>
+concrete binding. The subject is the bare parameter (<code>match cap</code>) or
+the parameter read through a name of the instance
+(<code>B8: (Buffer cap: 8)</code> then <code>match B8.cap</code>). A slot of the
+parameter's type (<code>c: cap</code>) holds its value at run time and is no
+subject (see <a href="#generic-types">generic types</a>).</li>
 </ul>
 <p>Generic dissection is available anywhere a generic parameter is in scope: class
 methods (main-body and <code>as</code>-block), free functions, and generic units
@@ -2562,46 +2569,144 @@ constant, or an expression of constants (<code>(myrec size: count * 2)</code>,
 value stands in for the constraint type as a body argument does: an untyped
 constant must lie in its range, so a negative value is accepted only by a signed
 constraint, and a typed constant must convert to it without loss.</p>
-<p>Inside the template the parameter is a compile-time constant of the constraint
-type, whose value each instantiation supplies. It is read bare (<code>cap</code>),
-through <code>this</code> or any value of the type (<code>b.cap</code>), through an alias that
-names the instance (<code>Buffer8: (Buffer cap: 8)</code> then <code>Buffer8.cap</code>), or through a unit
-instance (<code>four.cap</code>) -- the one static member a value reaches, since the
-value's type fixes it -- and it is never written. A condition over it folds per
-instantiation, so an <code>error</code> it guards is triggered or eliminated there (see
-<a href="#compile-time-error">Compile-Time Error</a>), and a <code>match</code> over it
-dissects. An operation on it folds per instantiation in the constraint's own
-type: with <code>n: u64.generic</code>, <code>n * 18446744073709551615</code> overflows <code>u64</code>
-in <code>(Box n: 2)</code> and is refused there (<code>E0600</code>), while <code>(Box n: 1)</code> folds.
-A read from a call's result (<code>(make).cap</code>) is refused: folding the read would
-not make the call.</p>
-<p>A constant of the template -- a generic unit's definition or an <code>as</code>
-constant -- may read the parameter (<code>big: if cap &gt; 4 then { 1 } else { 0 }</code>,
-<code>doubled: cap * 2</code>). It is evaluated for each instantiation, and read bare inside
-the template, through a unit instance (<code>eight.big</code>) or through the type inside
-the template's own methods. Read through the template from anywhere else it is
-refused (<code>E0600</code>), since only an instance has a value for it.</p>
-<p>A template may instantiate another over its own parameter: in a body with any
-compile-time integer of it (<code>a: array t: i64 to: cap * 2</code>), and in a field,
-parameter or return type with the parameter itself (<code>slots: (array t: i64 to:
-cap)</code>). Each instantiation of the template instantiates its own; a type computed
-from the parameter (<code>to: cap + 1</code> in a type) is refused (<code>E0600</code>).</p>
-<p>A numeric generic parameter adds no field to the concrete type: the type fixes
-its value, so nothing stores it. A field that should hold it is declared, and it
-may take the parameter as its default (<code>stored: cap</code>), which each
-instantiation fills with its own argument. A member named like the parameter is
-refused (<code>E0100</code>): the <code>as</code> section and the body are one scope, and a read
-through a value would mean either.</p>
-<p>A function parameter declared by the parameter (<code>n: cap</code>) is the same: it is
-of the bound's type, and a call that leaves it out takes the argument of the
-instance it calls. This holds for a parameter of the method's type, of a
-generic unit and of the function itself. Written with a marker (<code>n: cap.hold</code>,
-<code>stored: cap.hold</code>) or as a return type (<code>out cap</code>), the parameter names
-its bound's type, as a constant's name names the constant's type. Such a
-declaration has no default.</p>
 <p>Different numeric values produce different monomorphized types (e.g. <code>myrec_10</code>
 vs <code>myrec_20</code>). Negative values use a "neg" prefix in mangled names (e.g.
 <code>myrec_neg5</code> for value -5).</p>
+<p><strong>The parameter is a type.</strong></p>
+<p>In each instance, a numeric generic parameter is a type of its own: its
+<em><strong>singleton type</strong></em>. This is a typedef over the bound (see
+<a href="#typedef">typedef</a>) whose one value is the instance's argument. With
+<code>cap: u32.generic</code>, the type of <code>cap</code> in <code>(Box cap: 5)</code> is named
+<code>(Box cap: 5).cap</code>, and inside the template <code>cap</code>. Its members are the
+bound's: <code>cap * 2</code> is a <code>u32</code>, and <code>cap.u64</code> converts. It passes where
+the bound is expected. Like any typedef it does not widen: the type of a
+<code>u8.generic</code> parameter does not pass where a <code>u64</code> is expected. Its create
+takes no argument and makes the one value (<code>cap.create</code>), so
+<code>cap.create from: 5</code> is refused (<code>E0300</code>).</p>
+<p><strong>Read bare, the parameter folds.</strong></p>
+<p>Read bare in a body, <code>cap</code> is its type's one value, known at compile time.
+An expression over it folds in each instance:</p>
+<ul>
+<li><code>if cap &gt; 4</code> keeps one arm, so an <code>error</code> it guards is triggered
+or eliminated there (see <a href="#compile-time-error">Compile-Time Error</a>);</li>
+<li>a literal beside it reads as the bound: <code>4 &lt; cap</code> and <code>4 + cap</code>
+    are over <code>u32</code>;</li>
+<li><code>match cap</code> dissects (see <a href="#match">match</a>);</li>
+<li><code>a: array t: i64 to: cap * 2</code> sizes the array for each instance, and
+<code>cap.times</code> counts to the value.</li>
+</ul>
+<p>An operation on it folds in the bound's own type: with <code>n: u64.generic</code>,
+<code>n * 18446744073709551615</code> overflows <code>u64</code> in <code>(Box n: 2)</code> and is
+refused there (<code>E0600</code>), while <code>(Box n: 1)</code> folds.</p>
+<p><strong>Slots.</strong></p>
+<p>A local (<code>c: cap</code>) or a field (<code>stored: cap</code>) of the singleton type is a
+<em><strong>slot</strong></em>: it holds the value at run time. A read of a slot is a run-time
+read, so it does not fold. <code>a: array t: i64 to: c</code> is refused
+(<code>E0600</code>: 'c' is a run-time value), an <code>error</code> guarded by <code>c == 0</code>
+stays in the program as a run-time trap, and <code>match c</code> is refused. No code
+writes a slot: a reassignment or a <code>swap</code> of one is refused (<code>E0100</code>),
+"this cannot be written: its type, '(Box cap: 5).cap', has only one value".</p>
+<p>A field declared by the bare parameter (<code>stored: cap</code>) is set by the
+compiler: the compiler-made create and <code>meta.create</code> set it to the one
+value. It takes no argument, so a positional argument binds the next field.
+Passing it by name is refused (<code>E0300</code>): "'stored' is of type
+'(rec cap: 9).cap' and holds its one value; it takes no argument". It is
+stored and compared by <code>==</code> like any field.</p>
+<pre><code class="language-zerolang">Box: record {
+    stored: cap # a slot, set to the one value by every create
+    used: u32
+} as {
+    cap: u32.generic
+    DOUBLE: cap * 2 # a u32 constant of each instance
+    describe: function {b: this} out u32 is {
+        if cap &gt; 4 then { print "big" } else { print "small" }
+        a: array t: i64 to: cap * 2 # 10 elements in (Box cap: 5)
+        c: cap # a slot, read at run time
+        print "\{a.length} \{c} \{cap.u64}"
+        return b.stored + b.used + DOUBLE
+    }
+}
+
+B5: (Box cap: 5)
+
+main: function is {
+    b: B5 3 # stored is 5, and the 3 binds used
+    print "\{b.describe}" # big, then 10 5 5, then 18
+    k: B5.cap # 5, of type (Box cap: 5).cap
+    if B5.cap == 0 then { error msg: "a Box needs room" } # folded away
+    print "\{k} \{b == (B5 used: 3)}"
+}</code></pre>
+<p><strong>Where it is a type.</strong></p>
+<p>The singleton type types a field, a local, and a numeric argument of another
+generic application. A template may instantiate another over its own
+parameter: in a body with any compile-time integer of it
+(<code>a: array t: i64 to: cap * 2</code>), and in a field, parameter or return type
+with the parameter itself (<code>slots: (array t: i64 to: cap)</code>), which names
+the array instance's type. Each instance of the template instantiates its
+own. A type computed from the parameter (<code>to: cap + 1</code> in a type) is
+refused (<code>E0600</code>).</p>
+<p>Anywhere else the singleton type is refused (<code>E0100</code>): as a parameter type
+(<code>n: cap</code>, and a generic function's own <code>x: k</code>), as a return type
+(<code>out cap</code>), with a marker (<code>cap.hold</code>, on a field or a parameter) and as
+a type argument (<code>(ListVal t: cap)</code>). The message is "'cap' is a numeric
+generic parameter: as a type it has one value, so it types only a field or a
+local". Take or return the bound, <code>u32</code>, and read <code>cap</code> for the value.
+When a call infers a type parameter from a value of the singleton type, the
+parameter binds the bound: <code>pick v: b.stored</code> binds <code>u32</code>, as
+<code>pick v: 5</code> binds <code>i64</code>.</p>
+<pre><code class="language-zerolang">Box: class {
+    used: u32
+    grow: function {:this n: cap} is { # error: 'cap' types only a field or a local
+        this.used = this.used + n
+    }
+} as { cap: u32.generic }
+
+main: function is {
+    b: (Box cap: 5) used: 0
+    b.grow n: 5
+}</code></pre>
+<p>No default is computed from the parameter. A field's or a parameter's
+default that reads it -- <code>n: cap * 2</code>, <code>n: cap.u64</code>, or <code>n: D</code> where
+<code>D: cap * 3</code> -- is refused (<code>E0100</code>), because each instance gives it
+another value. Declare the member by its type, then set a field in a
+<code>create</code>, or have the caller pass a parameter (see
+<a href="#default-values">Default values</a>).</p>
+<p><strong>Reaching it from outside.</strong></p>
+<p>A value does not reach its type's parameter. <code>b.cap</code>, <code>this.cap</code> and a
+call's result <code>(mk).cap</code> are refused (<code>E0100</code>): "'cap' is a type of
+'(Box cap: 5)'; a value reaches only its fields and methods". Inside the
+template, read it as <code>cap</code>. The same rule refuses an <code>as</code> alias reached
+through a value (see <a href="#aliases">Aliases</a>).</p>
+<p>A name of the instance reaches the parameter, as its singleton type's value:
+the instance itself (<code>(Box cap: 5).cap</code>), an alias of it
+(<code>B5: (Box cap: 5)</code> then <code>B5.cap</code>), and a unit instance
+(<code>four: (sized cap: 4)</code> then <code>four.cap</code>). Each of these folds as a bare
+read does, also in a folding <code>if</code> that guards an <code>error</code>. Inside the
+template, its own name reads the parameter as the bare name does
+(<code>Box.cap</code> in a method of <code>Box</code> is each instance's). Through the template
+from anywhere else it is refused (<code>E0600</code>), since only an instance has a
+value for it.</p>
+<p>A type or a unit written inside a generic unit inherits the unit's numeric
+parameter, and in each unit instance it is the same type. In
+<code>(wrap n: 3)</code>, a field <code>size: n</code> of a nested record and a local <code>c: n</code>
+in a nested unit are both of type <code>(wrap n: 3).n</code>.</p>
+<p><strong>Constants over it.</strong></p>
+<p>A constant of the template -- a generic unit's definition or an <code>as</code>
+constant -- may read the parameter (<code>big: if cap &gt; 4 then { 1 } else { 0 }</code>,
+<code>DOUBLE: cap * 2</code>). It is evaluated for each instance. So is a constant
+that reads such a constant (<code>E: DOUBLE * 2</code>), however long the chain is.
+<code>DOUBLE</code> is a <code>u32</code> constant. <code>C: cap.create</code> and <code>K: cap</code> are
+constants of the singleton type, whose value is the argument. A constant is
+read bare inside the template, through a unit instance (<code>eight.big</code>), or
+through the type inside the template's own methods. Read through the template
+from anywhere else, it is refused (<code>E0600</code>), since only an instance has a
+value for it.</p>
+<p>A numeric generic parameter adds no field to the concrete type: the type
+fixes its value, so nothing stores it unless a slot is declared. A member
+named like the parameter is refused. In the type's own body it is a duplicate
+name (<code>E0028</code>), since the parameters and the <code>is</code> and <code>as</code> members are
+one namespace. In a type written inside a generic unit, which inherits the
+unit's parameter, it is <code>E0100</code>.</p>
 <p>Example:</p>
 <pre><code>sized: record {
     val: t
@@ -3464,6 +3569,34 @@ main: function is {
 (<code>(entry t: f64 u: f64)</code>) is refused (E0400), and so is reaching the
 template through the unit itself rather than an instance
 (<code>(wrap.pairs t: i64 u: f64)</code>).</p>
+<p>A unit's numeric generic parameter is a singleton type in each instance, as
+a type's is (see <a href="#generic-types">generic types</a>). A type or a unit
+written inside the unit inherits the parameter, and in each unit instance it
+is the same type: below, <code>size</code> and the local <code>c</code> are both of type
+<code>(wrap n: 3).n</code>. A definition that reads the parameter (<code>TRIPLE</code>) is
+evaluated for each instance, and a read through the instance (<code>w3.n</code>) folds:</p>
+<pre><code class="language-zerolang">wrap: unit as {
+    n: u32.generic
+    TRIPLE: n * 3
+    box: record {
+        size: n
+        v: i64
+    }
+    inner: unit as {
+        twice: function out u32 is {
+            c: n
+            return c * 2
+        }
+    }
+}
+
+w3: (wrap n: 3)
+
+main: function is {
+    b: w3.box v: 7
+    print "\{b.size} \{w3.TRIPLE} \{w3.inner.twice}"   # 3 9 6
+    if w3.n &gt; 8 then { error msg: "wrap takes at most 8" }
+}</code></pre>
 <h3 id="unit-level-definitions"><a href="#unit-level-definitions">5.3. Unit-level Definitions</a></h3>
 <p>A definition at unit level (outside any function body) is one of four
 things, decided by the shape of its value:</p>
@@ -3827,6 +3960,16 @@ refuses is an error at the line that names the instance:</p>
   n: Nums t: i64
   # error[E0400]: generic argument 'i64' does not satisfy constraint 'AnyRef'
   #   on parameter 'T' of 'collections.ListRef' (the base of 'app.Nums')</code></pre>
+<p><strong>Singleton types.</strong></p>
+<p>The compiler makes one kind of typedef itself. In each instance of a
+template, a numeric generic parameter is a typedef over its bound whose one
+value is the instance's argument: its <em><strong>singleton type</strong></em> (see
+<a href="#generic-types">generic types</a>). Its members and its compatibility are
+a typedef's: with <code>cap: u32.generic</code>, <code>cap * 2</code> is a <code>u32</code>, and a value
+of the type passes where a <code>u32</code> is expected. Its create takes no argument,
+not even <code>from</code>: <code>cap.create</code> makes the one value, and
+<code>cap.create from: 5</code> is refused (<code>E0300</code>). Its zero value is that one
+value.</p>
 <p><strong>Compatibility.</strong></p>
 <p>The typedef retains the underlying type and so can continue to be passed to
 functions that expect the underlying type as is (backward compatible). But the
@@ -3873,7 +4016,9 @@ typedef, or one built from the base (<code>m = meters 9</code>). A value of the 
 alone is refused, as it is where a typedef parameter is expected.
 <code>swap</code> exchanges a typedef and the type it wraps, in either order and for a
 valtype and a reftype alike. Both variables keep their own type after the
-swap, and both must be owned, as for any swap.</p>
+swap, and both must be owned, as for any swap. A slot of a singleton type is
+never written: it holds the type's one value, so a reassignment or a
+<code>swap</code> of it is refused (<code>E0100</code>).</p>
 <pre><code class="language-zerolang">  meters: typedef i64
 
   main: function is {
@@ -4288,7 +4433,7 @@ r: a.get i: 2          # returns element value (i64)
 old: a.set i: 2 item: 99  # replaces element, returns old value
 
 # length
-n: a.length   # u64 constant, equals 4
+n: a.length   # 4, a u64, read at run time
 
 # a read-only view over the elements, and a writable window
 with v: a.listView do print "\{v.length}"    # (ListViewVal t: i64)
@@ -4697,8 +4842,9 @@ times: function as { n: u64.generic } in {val: i64} out i64 is {
 <p>In the <code>in</code> block, the function argument types specified (after the
 function argument label), can be:</p>
 <p>- a builtin type (eg. u8, i32, f64, c8)
-- a numeric compile time constant (this is also a type). Parameter will default
-  to this value if not specified in the call
+- a numeric compile-time constant (<code>n: 5</code>, <code>n: limit</code>). The parameter has
+  the constant's type and takes its value when the call leaves it out (see
+  <a href="#default-values">Default values</a>)
 - a named user defined type (result of <code>record</code>, <code>class</code>, <code>union</code>,
   <code>protocol</code> definition etc.)
 - a spec (a function definition without an <code>is</code> body). A function reference of
@@ -4722,7 +4868,10 @@ function argument label), can be:</p>
   protocol or the method named (compiler enforces this constraint)</p>
 <p>Function argument types can NOT be:</p>
 <p>- a bare function name: it is a call (use <code>.copy</code> on the function name to pass
-  a function reference for a <code>Spec</code> argument)</p>
+  a function reference for a <code>Spec</code> argument)
+- a numeric generic parameter (<code>n: cap</code>): as a type it has one value, so it
+  types only a field or a local. Take its bound (<code>n: u32</code>) and read <code>cap</code>
+  for the value (see <a href="#generic-types">generic types</a>)</p>
 <h4 id="specs"><a href="#specs">5.13.3. Specs</a></h4>
 <p>A 'spec' is the type of a function. When defining a complete function (with an
 <code>is</code> argument), both a spec and a function value are being defined.</p>
@@ -5095,7 +5244,10 @@ fail) so should be used with caution.</p>
 <code>meta.create</code> -- the compiler-internal raw allocator. <code>meta.create</code>
 reserves the memory for the instance and sets each member directly from
 parameters supplied (or from field defaults). It is the <em><strong>only</strong></em> way to
-construct a new object.</p>
+construct a new object. A field of a singleton type (<code>stored: cap</code>, typed by
+a numeric generic parameter) is the exception: it takes no parameter, and
+<code>meta.create</code> sets it to the type's one value (see
+<a href="#generic-types">generic types</a>).</p>
 <p><code>meta.create</code> is accessible only from inside the enclosing type's
 method bodies. Outside those methods it is an error. The compiler
 generates a default <code>create</code> wrapper around <code>meta.create</code> and exposes
@@ -5174,6 +5326,9 @@ empty string's storage is the all-zero struct.</li>
   arguments.</li>
 <li>A typedef follows its base -- <code>Bytes</code> is the empty byte
   buffer, a numeric typedef is its scalar's zero.</li>
+<li>A singleton type -- the type of a numeric generic parameter -- is
+  the exception among typedefs: it constructs its one value, so in
+  <code>(Box cap: 5)</code>, <code>c: cap</code> binds 5.</li>
 </ul>
 <p>The rule applies in every runtime value position -- binding
 initializers, call arguments, return values, reassignment right-hand
@@ -5558,14 +5713,19 @@ literal, a string, an operator expression, a compile-time <code>if</code> or <co
 or another constant. A constant's type is its value's, and every read is the value itself,
 so it is used wherever a value is: an interpolation, a binding, an argument, a
 condition, a default, or another constant, in this unit
-(<code>TypeName.name</code>) or another (<code>unit.TypeName.name</code>).</p>
+(<code>TypeName.name</code>) or another (<code>unit.TypeName.name</code>). A method of the type
+reads them bare (<code>C</code>) or through <code>type</code> (<code>type.C</code>), and they fold there
+as in any body: with <code>C: 5</code>, <code>a: array t: i64 to: C</code> and
+<code>to: type.C * 2</code> size arrays.</p>
 <p>An <code>as</code> item is classified by what its value is. A value is a constant. A
 type -- a name, a path through a unit or another type, an instance of a
 generic -- makes the item an alias of it (below). <code>X.implement</code> says the type
 implements the protocol or facet <code>X</code>, and its label converts a value to it
 (<code>p.m</code>). A <code>.generic</code> constraint is a generic parameter. A field belongs in
 the <code>is</code> section: <code>extra: i64</code> in <code>as</code> is an alias of <code>i64</code>, not a
-field.</p>
+field. A numeric generic parameter written as the whole value
+(<code>K: cap</code>) is a value: <code>K</code> is a constant of the parameter's singleton
+type, and its value is the instance's argument.</p>
 <p>The names in a constant are looked up in the type's own members first -- its
 <code>is</code> and <code>as</code> sections are one scope, forward references included -- and
 only then in the enclosing unit, so a constant of the type hides a unit
@@ -5598,7 +5758,9 @@ method signatures and its bodies, where it constructs as the type does -- and
 the nearest declaration wins, so an alias hides a unit's type of the same
 name. From outside, an alias is reached through its type (<code>Tree.Node</code>,
 <code>unit.Tree.Node</code>), in a type position, a type argument or a construction
-alike. <code>public:</code> controls an alias as it controls any member; hiding one
+alike. A value of the type does not reach it: <code>t.Node</code> is refused
+(<code>E0100</code>), "'Node' is a type of 'Tree'; a value reaches only its fields and
+methods". <code>public:</code> controls an alias as it controls any member; hiding one
 hides only its name, for the alias is the type it names. An alias over the
 type's own generic parameter is each instance's (<code>Elem: t</code> is <code>i64</code> in
 one, <code>bool</code> in another). An <code>as</code> constant written where a type is, is an
@@ -5765,6 +5927,14 @@ those, supply the value at construction time. A static list is a default (see
 <a href="#static-lists">Static lists</a>). Defaulting to an
 arm that carries a non-null payload is rejected for the same
 reason.</p>
+<p>A default computed from a numeric generic parameter -- <code>n: cap * 2</code>,
+<code>n: cap.u64</code>, or <code>n: D</code> where the type's constant <code>D: cap * 3</code> reads
+it -- is refused (<code>E0100</code>), because each instance gives it another value.
+Declare the member by its type, then set a field in a <code>create</code>, or have the
+caller pass a parameter. A field declared by the bare parameter
+(<code>stored: cap</code>) is no default either: it is a slot of the parameter's
+singleton type, and every create sets it to the one value (see
+<a href="#generic-types">generic types</a>).</p>
 <h3 id="protocol"><a href="#protocol">5.19. protocol</a></h3>
 <p>A protocol is defined as a list of function specs. Each spec must include a
 <code>this</code> parameter (the receiver). Static methods can also be part of a
@@ -7194,7 +7364,7 @@ can report.</p>
 unit-level integer constants, and arithmetic / comparison expressions
 over them, in statement-position <code>if</code> chains and <code>match</code> statements
 with literal arms. An <code>error</code> behind a guard that does not fold (a
-runtime value, a loop, a generic field read) is not provably reachable:
+runtime value, a loop, a field read) is not provably reachable:
 it stays in the generated C as a runtime trap that panics with the
 message if execution ever reaches it.</p>
 <pre><code class="language-zerolang">MODE: 1
@@ -7205,9 +7375,12 @@ main: function is {
     }
     # compiles successfully because MODE is 1
 }</code></pre>
-<p>This interacts naturally with numeric generic parameters. When a generic
-type is monomorphised with a concrete numeric value, the condition becomes
-a compile-time constant and the error is either triggered or eliminated.</p>
+<p>A numeric generic parameter read bare is its instance's value, known at
+compile time, so a condition over it folds in each instance and the error is
+triggered or eliminated there. A name of the instance folds the same way
+(<code>B8: (Buffer cap: 8)</code> then <code>if B8.cap == 0</code>). A slot of the parameter's
+type does not fold: after <code>c: cap</code>, the guard <code>if c == 0</code> reads <code>c</code> at
+run time, so its <code>error</code> stays a run-time trap.</p>
 <pre><code class="language-zerolang">Buffer: class {
     used: u32
     check: function {:this} is {
@@ -7229,7 +7402,10 @@ main: function is {
 <p>A <code>match</code> never dissects a plain value or a named constant. Its subject
 must be a union, variant, enum, or generic parameter, and each <code>case</code>
 names one of the subject's child arms -- a subcomponent id, never a name
-looked up in the environment. The compile-time arm selection above therefore
+looked up in the environment. A numeric generic parameter is a subject when it
+is read bare (<code>match cap</code>) or through a name of the instance
+(<code>match B8.cap</code>). A slot of its type (<code>c: cap</code>) is a plain value, so
+<code>match c</code> is refused. The compile-time arm selection above therefore
 reaches a <code>match</code> only through a <em><strong>generic parameter</strong></em> subject.</p>
 <p>A <code>match</code> dissects a generic type parameter. When the subject is a type
 parameter name (e.g. <code>t</code> from an <code>as</code> clause), the compiler resolves it
