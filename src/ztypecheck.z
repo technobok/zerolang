@@ -34342,13 +34342,15 @@ checkMarkerMember: function {
         )
         return (callleg handled: true tid: ztypes.tid.zero)
     }
-    # `.str` on String/StringView/str bases is the sized-conversion form:
-    # the path resolves to the str TEMPLATE (unstamped -- the call check
-    # mints the sized instance and stamps only the Call node).
+    # `.str` on String/StringView/str bases, and on a string literal read as its
+    # StringView, is the sized-conversion form: the path resolves to the str
+    # TEMPLATE (unstamped -- the call check mints the sized instance and stamps
+    # only the Call node).
     if cnId == zast.wellKnown.slot.tyStr then {
         isStrBase: (
             (bt == (stdTid :ast :st wk: zast.wellKnown.slot.tyString)) or
-            (bt == (stdTid :ast :st wk: zast.wellKnown.slot.tyStringView))
+            (bt == (stdTid :ast :st wk: zast.wellKnown.slot.tyStringView)) or
+            (bt == st.reg.literalTextTid)
         )
         if isStrBase.not then {
             bga: ztypes.tid
@@ -34939,20 +34941,8 @@ dottedBaseTid: function {
         }
         if bt.isZero then return ztypes.tid.zero
     }
-    # A string literal base materialises before member lookup (`"ab".length`
-    # is StringView's); the parent node restamps at the concrete default. A
-    # numeric literal's members are its own type's.
-    if (isTextLiteralTid :st tid: bt) then {
-        mbt: materialiseLiteral :ast :st t: bt
-        if mbt != bt then {
-            bt = mbt
-            pid: dp.parent
-            if pid.isZero.not then {
-                setp: mbt
-                stampGate :st nid: pid tid: setp
-            }
-        }
-    }
+    # A literal's members are its own type's, looked up there; a member that
+    # runs reads the literal where it lands (landLiteralReceiver).
     # A BOX IS A HEAP POINTER AROUND ONE VALTYPE and declares no members of
     # its own, so its operators, fields and methods are the boxed element's --
     # always, not only when the Box resolves nothing: under --eager every member
@@ -34962,8 +34952,10 @@ dottedBaseTid: function {
     # asked of the box, which has none.
     # what the BASE itself is, before any delegation rewrites `bt` to the type
     # the member is looked up on: a temporary holds the value the path hangs
-    # off, which is the box and not the element inside it
+    # off, which is the box and not the element inside it -- and a string
+    # literal as the StringView it is at run time
     holdT: bt
+    if (isTextLiteralTid :st tid: bt) then holdT = materialiseLiteral :ast :st t: bt
     isOpB: boxMemberDelegates nameId: (atomNameId :ast n: (ast.nodes.get i: dp.child))
     if isOpB when (st.reg.isBoxOf tid: bt) when (st.reg.genericArgCount specId: bt) == 1 then {
         bxE: st.reg.genericTypeArgAt specId: bt ordinal: 0
@@ -46816,13 +46808,44 @@ checkNumericCoercion: function {
     addErrorH :st :nodeid :lineno :colno e: zast.err.typeError :msg :note :hint width: 1
 }
 
-# landLiteralReceiver -- a numeric literal that is the receiver of a native
-# `method` LANDS where the method reads it, as a literal argument lands in its
-# parameter: an operator's in the type its one generic parameter is bound to
-# (`4 + w` with `w: u64` reads 4 as a u64), and `times`, `upto` and `downto`'s
-# in the literal's default, i64. It must fit there, and its node is stamped with
-# that type, which is the type the operation is emitted in, as that type's
-# member of the same name. A conversion
+# literalLandingTid -- the type a literal receiver of type `rt` lands in for
+# native `method` (landLiteralReceiver): a string literal its StringView,
+# whatever the method's own parameters bind; a number the type the operator's
+# one generic parameter is bound to (`instance`), or for a method that is not
+# generic its default -- except a conversion, or a method returning a literal,
+# which land nowhere. 0 when it lands nowhere.
+literalLandingTid: function {
+    st: zenv.ZSymbolTable ast: Ast rt: ztypes.tid method: ztypes.tid instance: ztypes.tid
+} out ztypes.tid is {
+    if (isTextLiteralTid :st tid: rt) then return (materialiseLiteral :ast :st t: rt)
+    if (isLiteralTypeId reg: st.reg tid: rt).not then return ztypes.tid.zero
+    if instance.isZero.not then {
+        if (st.reg.genericArgCount specId: instance) != 1 then return ztypes.tid.zero
+        return (st.reg.genericTypeArgAt specId: instance ordinal: 0)
+    }
+    ret: methodReturnOf reg: st.reg typing: st.typing mid: method
+    if ret.some when (isAnyLiteralTid :st tid: ret) then return ztypes.tid.zero
+    nm: (st.typing.decls.get i: (st.typing.declIdOfType typeId: method)).name
+    if (scalarKindOfNameId id: nm).has then return ztypes.tid.zero
+    return (materialiseLiteral :ast :st t: rt)
+}
+
+# callReceiverId -- the receiver node of the dotted call `call` (`4` in
+# `4 + w`, `"ab"` in `"ab".substring ...`), 0 when the callee is not dotted.
+callReceiverId: function {ast: Ast.view call: callref} out zast.nodeid is {
+    cb: ast.nodes.get i: call.callable
+    if cb.dottedpath then return cb.parent
+    return zast.nodeid
+}
+
+# landLiteralReceiver -- a literal that is the receiver of a native `method`
+# LANDS where the method reads it, as a literal argument lands in its
+# parameter: a number's operator in the type its one generic parameter is bound
+# to (`4 + w` with `w: u64` reads 4 as a u64), `times`, `upto` and `downto` in
+# the number's default, i64, and every member of a string literal in its
+# StringView. It must fit there, and its node is stamped with that type, which
+# is the type the operation is emitted in, as that type's member of the same
+# name. A conversion
 # settles its literal itself, and a method bound to or returning a literal type
 # is computed by the compiler: neither lands. `recv` is the receiver's node, a
 # call's or an auto-called path's; `instance` is the generic call's instance, 0
@@ -46837,20 +46860,7 @@ landLiteralReceiver: function {
     if method.isZero or (st.reg.isNativeOf tid: method).not then return
     if recv.isZero then return
     rt: walkTypeOf :st nid: recv
-    if (isLiteralTypeId reg: st.reg tid: rt).not then return
-    target: ztypes.tid
-    if instance.isZero.not then {
-        if (st.reg.genericArgCount specId: instance) != 1 then return
-        target = st.reg.genericTypeArgAt specId: instance ordinal: 0
-    } else {
-        ret: methodReturnOf reg: st.reg typing: st.typing mid: method
-        if ret.some when (isAnyLiteralTid :st tid: ret) then return
-        if (
-            scalarKindOfNameId
-            id: (st.typing.decls.get i: (st.typing.declIdOfType typeId: method)).name
-        ).has then return
-        target = materialiseLiteral :ast :st t: rt
-    }
+    target: literalLandingTid :st :ast :rt :method :instance
     if target.isZero or (isAnyLiteralTid :st tid: target) then return
     if (st.reg.typetypeOf typeId: target) == ztypes.ztypetype.genericParam then return
     rn: ast.nodes.get i: recv
@@ -49449,7 +49459,7 @@ checkResolvedMethodCall: function {
         landLiteralReceiver
         :st
         :ast
-        recv: (dottedParentNodeId :ast n: (ast.nodes.get i: call.callable))
+        recv: (callReceiverId :ast :call)
         method: dro
         instance: ztypes.tid.zero
     )
@@ -50271,7 +50281,7 @@ checkGenericFnCall: function {
         landLiteralReceiver
         :st
         :ast
-        recv: (dottedParentNodeId :ast n: callableNode)
+        recv: (callReceiverId :ast :call)
         method: dro
         instance: midG
     )
@@ -63011,7 +63021,7 @@ constantMemberTid: function {
     # (checkUntypedTextCast)
     if rv.kind.svalKind when rv.numTid.isZero when (textLiteralCastTarget :ast :st nameId: methodId
     ).isZero.not then return none
-    svT = constantReceiverTid :ast :st vt: svT v: rv
+    svT = constantReceiverTid :st vt: svT v: rv
     shown: svT
     svT = typedefMemberOwner :st :ast bt: svT cnId: methodId
     forceMemberOf :st :ast parentTypeId: svT nameId: methodId
@@ -63024,15 +63034,14 @@ constantMemberTid: function {
 }
 
 # constantReceiverTid -- the type a constant's member is looked up on, as a
-# body looks it up: an untyped number's literal type, the StringView an untyped
-# string materialises to, and any other value's own type `vt` (constValueTid).
+# body looks it up: an untyped number's literal type, and any other value's own
+# type `vt` (constValueTid) -- an untyped string's is textliteral.
 constantReceiverTid: function {
-    ast: Ast st: zenv.ZSymbolTable vt: ztypes.tid v: ztypes.cval
+    st: zenv.ZSymbolTable vt: ztypes.tid v: ztypes.cval
 } out ztypes.tid is {
     if v.numTid.isZero.not then return vt
     if v.kind.ivalKind then return st.reg.literalIntTid
     if v.kind.fvalKind then return st.reg.literalFloatTid
-    if (isTextLiteralTid :st tid: vt) then return (materialiseLiteral :ast :st t: vt)
     return vt
 }
 

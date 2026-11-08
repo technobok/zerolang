@@ -1711,19 +1711,237 @@ floatliteral: record is native as {
 # wear before a destination pins them. COMPILE-TIME ONLY, like the numeric
 # literals: a `text` destination makes it text and a StringView or StringLike
 # one a StringView; with none it is text in a static position and a
-# StringView elsewhere. A member it does not declare is read on the
-# StringView it becomes.
+# StringView elsewhere. Its members are its own: the three conversions, and
+# StringView's read-only members, declared again here.
 textliteral: record is native as {
-    # neither `==` nor `!=` of its own: a string literal becomes a StringView
-    # or a text before any member lookup, and compares as that
-    ==: null
-    !=: null
     # the literal as text: part of the program, never built at run time
     text: function {t: this.view} out system.text is native
     # the literal as a StringView over its bytes
     stringView: function {t: this.view} out StringView is native
     # an owned copy of the literal's bytes
     string: function {t: this.view} out String is native
+    # EVERY READ OF A STRING LITERAL IS ITS OWN MEMBER. The members below are
+    # StringView's, with StringView's signatures and the meanings StringView's
+    # docs give them: the literal is read as the StringView over its bytes, so
+    # the same call reads the same bytes, and a call on constant arguments is
+    # computed by the compiler (a folded `"ab".length` is an untyped number,
+    # `"abc".toUpperAscii` a literal)
+    # the byte count of the viewed range
+    length: function {t: this.view} out u64 is native
+    # the viewed bytes, read in place as a ByteView over the same memory
+    byteView: function {t: this.view} outx collections.ByteView is native
+    # the borrowed-String projection of a view: no allocation, no copy --
+    # the result aliases the view's bytes and may only be read.
+    asString: function {t: this.view} outx String.view is native
+    # byte equality of two views; what they are views INTO does not enter into
+    # it
+    ==: function as { T: StringLike.generic } in {t: this.view rhs: T.view} out bool is native
+    # true when two StringViews differ in length or in any byte
+    !=: function as { T: StringLike.generic } in {t: this.view rhs: T.view} out bool is native
+    # byte-lexicographic ordering of views, matching String's so the two sort
+    # together
+    <: function as { T: StringLike.generic } in {t: this.view rhs: T.view} out bool is native
+    # the StringView byte ordering, admitting equality
+    <=: function as { T: StringLike.generic } in {t: this.view rhs: T.view} out bool is native
+    # the StringView byte ordering reversed
+    >: function as { T: StringLike.generic } in {t: this.view rhs: T.view} out bool is native
+    # the reversed StringView byte ordering, admitting equality
+    >=: function as { T: StringLike.generic } in {t: this.view rhs: T.view} out bool is native
+    # the three-way form the StringView orderings are built on: negative, zero
+    # or positive as this sorts before, with, or after rhs
+    compare: function {t: this.view rhs: StringView} out i32 is native
+
+    # `+` BUILDS a new owned String from this view and `rhs`; `concat` below is
+    # the same operation spelled as a method. Neither operand is modified.
+    +: function as { T: StringLike.generic } in {t: this.view rhs: T.view} out String is native
+
+    # -- non-allocating queries --------------------------------------
+
+    # Empty view (length == 0).
+    isEmpty: function {t: this.view} out bool is native
+
+    # Every byte is < 0x80. O(n) byte walk.
+    isAscii: function {t: this.view} out bool is native
+
+    # Does this view begin with `prefix`? Empty prefix always matches.
+    startsWith: function as { T: StringLike.generic } in {
+        t: this.view prefix: T.view
+    } out bool is native
+
+    # Does this view end with `suffix`? Empty suffix always matches.
+    endsWith: function as { T: StringLike.generic } in {
+        t: this.view suffix: T.view
+    } out bool is native
+
+    # Does this view contain `needle` as a byte substring?
+    contains: function as { T: StringLike.generic } in {
+        t: this.view needle: T.view
+    } out bool is native
+
+    # Byte index of the first occurrence of `needle`, or `none`.
+    # Empty needle matches at index 0.
+    indexOf: function as { T: StringLike.generic } in {
+        # the view searched, left to right
+        t: this.view
+        # the bytes looked for; an empty needle matches at 0
+        needle: T.view
+    } out optionval u64 is native
+
+    # Byte index of the last occurrence of `needle`, or `none`.
+    # Empty needle matches at index length.
+    lastIndexOf: function as { T: StringLike.generic } in {
+        # the view searched, right to left
+        t: this.view
+        # the bytes looked for; the LAST match wins, which is the only difference
+        # from indexOf
+        needle: T.view
+    } out optionval u64 is native
+
+    # Byte at `i`, or `none` if out of range. Returns raw bytes,
+    # NOT codepoints; use `codepoints` for decoded text.
+    byteAt: function {t: this.view i: u64} out optionval u8 is native
+
+    # -- view-returning slicing helpers ------------------------------
+    # All return a stringView borrowed from the same source as this.
+
+    # Byte-range view over [from, to): borrowed from the same source as
+    # this. Panics when from > to or to > length.
+    substring: function {t: this.view from: u64 to: u64} outx StringView is native
+
+    # Strip ASCII whitespace from both ends (space, tab, CR, LF, VT, FF).
+    trim: function {t: this.view} outx StringView is native
+
+    # Strip leading ASCII whitespace.
+    trimStart: function {t: this.view} outx StringView is native
+
+    # Strip trailing ASCII whitespace.
+    trimEnd: function {t: this.view} outx StringView is native
+
+    # Remove `p` from the start; return `some rest` on match,
+    # `none` otherwise.
+    stripPrefix: function as { T: StringLike.generic } in {
+        # the literal to strip
+        t: this.view
+        # the prefix to remove; the view comes back unchanged when it is not there,
+        # rather than an error
+        p: T.view
+    } outx Option StringView is native
+
+    # Remove `s` from the end; return `some rest` on match,
+    # `none` otherwise.
+    stripSuffix: function as { T: StringLike.generic } in {
+        # the literal to strip
+        t: this.view
+        # the suffix to remove; absent means the view comes back unchanged
+        s: T.view
+    } outx Option StringView is native
+
+    # -- splitting (iterator-based) ----------------------------------
+    # See `splitter`, `linesiter` below for the iterator classes.
+
+    # Split this view at every occurrence of `sep`. Returns an
+    # iterator; use with `for each piece: ... loop { }`. Empty `sep`
+    # yields no iterations (documented).
+    split: function as { T: StringLike.generic } in {
+        t: this.view sep: T.view
+    } outx Splitter is native
+
+    # Byte index of the first `sep`, or `none`. Lets callers slice
+    # the view themselves (see doc/os.pdoc splitOnce pattern).
+    # Empty sep returns some(0).
+    splitOnce: function as { T: StringLike.generic } in {
+        # the view to cut
+        t: this.view
+        # the separator; the FIRST occurrence cuts, and it belongs to neither half
+        sep: T.view
+    } out optionval u64 is native
+
+    # Iterate lines (split on '\n', strip a paired '\r\n'). Empty
+    # trailing line dropped.
+    lines: function {t: this.view} outx LinesIter is native
+
+    # -- allocating transforms ---------------------------------------
+    # Every method here allocates a new owned string.
+
+    # ASCII-only lowercasing. Bytes [A-Z] are lowercased; non-ASCII
+    # bytes (codepoints >= 0x80) pass through unchanged.
+    toLowerAscii: function {t: this.view} out String is native
+
+    # ASCII-only uppercasing.
+    toUpperAscii: function {t: this.view} out String is native
+
+    # Replace every occurrence of `needle` with `replacement`.
+    # Empty `needle` returns a copy of this unchanged.
+    replace: function as { T: StringLike.generic U: StringLike.generic } in {
+        # the literal to rewrite
+        t: this.view
+        # the bytes replaced -- EVERY occurrence, left to right
+        needle: T.view
+        # what each occurrence becomes; it may be longer or shorter than the needle,
+        # and empty deletes
+        replacement: U.view
+    } out String is native
+
+    # Replace only the first occurrence of `needle`.
+    replaceFirst: function as { T: StringLike.generic U: StringLike.generic } in {
+        # the literal to rewrite
+        t: this.view
+        # the bytes replaced -- only the FIRST occurrence
+        needle: T.view
+        # what that one occurrence becomes; empty deletes it
+        replacement: U.view
+    } out String is native
+
+    # Concatenation of this repeated `n` times. `n = 0` returns
+    # the empty string. Named `repeated` because `repeat` is a
+    # reserved control-flow keyword.
+    repeated: function {t: this.view n: u64} out String is native
+
+    # Concatenate this and `other` into one new owned string.
+    concat: function as { T: StringLike.generic } in {
+        t: this.view other: T.view
+    } out String is native
+
+    # -- codepoint iteration + count ---------------------------------
+
+    # Codepoint count (O(n) UTF-8 walk). Distinct from `.length`
+    # which returns byte count.
+    count: function {t: this.view} out u64 is native
+
+    # Codepoint iterator. Each `.call` yields the next decoded
+    # codepoint as a u32. Ill-formed bytes are replaced with
+    # U+FFFD and the iterator advances one byte.
+    codepoints: function {t: this.view} out CpIter is native
+
+    # -- numeric parsing ---------------------------------------------
+    # Each parse_* consumes the whole view. Optional leading sign
+    # (parseI64 / parseF64) and decimal digits; no whitespace,
+    # no underscore separators, no radix prefix.
+
+    # the WHOLE view as a signed decimal integer. A partial parse is a failure,
+    # not a prefix match, so surrounding space or a trailing unit is an err
+    # rather than a silent 0
+    parseI64: function {t: this.view} out (resultval i64 e: parseerror) is native
+    # the whole view as an unsigned decimal integer. A leading `-` is an err
+    # here rather than a wrap, which is what makes it different from parseI64
+    parseU64: function {t: this.view} out (resultval u64 e: parseerror) is native
+    # the whole view as an f64. Nothing may follow the number, so a trailing
+    # unit is an err rather than a silently truncated parse
+    parseF64: function {t: this.view} out (resultval f64 e: parseerror) is native
+    # the whole view as an f16, which holds far less than the decimal text can
+    # spell -- the value is rounded to what f16 has
+    parseF16: function {t: this.view} out (resultval f16 e: parseerror) is native
+    # the whole view as an f128, the widest float parse; nothing may follow the
+    # number
+    parseF128: function {t: this.view} out (resultval f128 e: parseerror) is native
+
+    # SipHash-1-3 of the view bytes using the per-process random
+    # seed. NOT deterministic across runs.
+    hash: function {t: this.view} out u64 is native
+    # a wyhash-style hash of the view bytes, seeded per process like `hash`
+    # but NOT flood-resistant: for a table whose keys the program itself
+    # produces, never for untrusted input. NOT deterministic across runs.
+    fastHash: function {t: this.view} out u64 is native
     create: null
 }
 
