@@ -54740,6 +54740,7 @@ checkGenericCall: function {
         lineno: call.lineno
         colno: call.colno
     )
+    mintedBefore: st.reg.nextTid
     mid: (
         getOrMintSpec
         :st
@@ -54753,6 +54754,11 @@ checkGenericCall: function {
         fallbackArg: ztypes.tid.zero
     )
     noteMonoSite :st mono: mid :call :unitDecl
+    if st.typing.errors.length > errI then {
+        if mid >= mintedBefore then st.walk.refusedInstances.set key: mid value: true
+    } else if (st.walk.refusedInstances.has key: mid) then {
+        st.walk.refusedInstances.set key: mid value: false
+    }
     if wantTypes then (
         checkPartialParamArgs
         :st
@@ -58796,6 +58802,8 @@ checkFunctionBody: function {
     st.mode.allowBareFnRef = false
     st.walk.calleeDottedNid = zast.nodeid
     st.walk.callArgNode = zast.nodeid
+    errsBefore: st.typing.errors.length
+    chargedBefore: st.walk.bodyErrorsCharged
     (
         checkFunctionBodyIn
         :st
@@ -58812,6 +58820,11 @@ checkFunctionBody: function {
     st.mode = savedMode
     st.walk.calleeDottedNid = prevCallee
     st.walk.callArgNode = prevArg
+    # a body walked on demand inside this one was charged its own errors
+    added: st.typing.errors.length - errsBefore
+    own: added - (st.walk.bodyErrorsCharged - chargedBefore)
+    if own > 0 when st.typing.curMonoStamp.isZero then st.walk.refusedBodies.add item: fn.nid
+    st.walk.bodyErrorsCharged = chargedBefore + added
 }
 
 # walkedReturnMarker / walkedFnPins -- what the walked function's signature
@@ -59426,8 +59439,7 @@ checkBodies: function {st: zenv.ZSymbolTable scope: ztypes.declid program: Ast} 
             # use it or a late walk finds after that is the next round's
             stampUnitMonoTemplates :st :scope :program
             markGeneratedEqParts :st ast: program
-            owed: st.walk.instanceUseOwed and (st.typing.errors.length == 0)
-            more = (lateBodyPending :st) or owed
+            more = (lateBodyPending :st) or st.walk.instanceUseOwed
         }
     }
 }
@@ -59770,33 +59782,38 @@ collectOwedMembers: function {
     ops: (ListVal zast.nodeid).borrow
 } is {
     cop: ast.nodes.get i: clsOpId
-    if cop.objectdef then {
-        i: u64
-        for i < cop.isItems.count loop {
-            imId: zast.kidAt kids: ast.kids span: cop.isItems :i
-            i = i + 1
-            im: ast.nodes.get i: imId
-            if im.namedoperation when (
-                isFunctionDefWithBody
-                o: (ast.nodes.get i: im.operation)
-            ) when (instanceMemberOwed :st :monoId nameId: im.name) then {
-                markInstanceMemberWalked :st :monoId nameId: im.name
-                names.append im.name
-                ops.append im.operation
-            }
-        }
-        j: u64
-        for j < cop.asItems.count loop {
-            amId: zast.kidAt kids: ast.kids span: cop.asItems i: j
-            j = j + 1
-            am: ast.nodes.get i: amId
-            if am.namedoperation when (
-                isFunctionDefWithBody
-                o: (ast.nodes.get i: am.operation)
-            ) when (instanceMemberOwed :st :monoId nameId: am.name) then {
-                markInstanceMemberWalked :st :monoId nameId: am.name
-                names.append am.name
-                ops.append am.operation
+    if cop.objectdef.not then return
+    isSpan: cop.isItems
+    asSpan: cop.asItems
+    cop.drop
+    collectOwedIn :st :ast span: isSpan :monoId :names :ops
+    collectOwedIn :st :ast span: asSpan :monoId :names :ops
+}
+
+# collectOwedIn -- collectOwedMembers over one of the class's member spans. A
+# member whose body its own check refused is marked walked and left out: its
+# instance walk would only report that error again.
+collectOwedIn: function {
+    st: zenv.ZSymbolTable
+    ast: Ast
+    span: zast.kidspan
+    monoId: ztypes.tid
+    names: (ListVal zast.nameid).borrow
+    ops: (ListVal zast.nodeid).borrow
+} is {
+    i: u64
+    for i < span.count loop {
+        mId: zast.kidAt kids: ast.kids :span :i
+        i = i + 1
+        m: ast.nodes.get i: mId
+        if m.namedoperation when (
+            isFunctionDefWithBody
+            o: (ast.nodes.get i: m.operation)
+        ) when (instanceMemberOwed :st :monoId nameId: m.name) then {
+            markInstanceMemberWalked :st :monoId nameId: m.name
+            if (st.walk.refusedBodies.has item: m.operation).not then {
+                names.append m.name
+                ops.append m.operation
             }
         }
     }
@@ -60229,8 +60246,9 @@ stampUnitMonoMembers: function {
 # curMonoStamp mode, flat param->arg substitution via monoParamSubst). The
 # emitter's per-instance template re-walk reads the table (monoStampIdOf)
 # where the global table is param-suppressed. Runs under suppressParamStamps
-# so its scopes/entries stay out of the dump log; skipped when diagnostics
-# exist (nothing will be emitted). An instance walk can mint an instance of a
+# so its scopes/entries stay out of the dump log. It runs when the program has
+# errors as well: an instance's walk reports what holds only for its
+# arguments, which no other walk sees. An instance walk can mint an instance of a
 # template this sweep has already enumerated -- a generic function called from
 # a generic body with the body's own parameter, and a walk can use another
 # member of an instance -- so the sweep repeats until a round mints nothing and
@@ -60241,13 +60259,12 @@ stampUnitMonoTemplates: function {
     scope: ztypes.declid
     program: Ast
 } is {
-    more: st.typing.errors.length == 0
+    more: true
     for more loop {
         minted: st.reg.nextTid
         st.walk.instanceUseOwed = false
         stampUnitMonoRound :st :scope :program
-        grew: (st.reg.nextTid > minted) or st.walk.instanceUseOwed
-        more = grew and (st.typing.errors.length == 0)
+        more = (st.reg.nextTid > minted) or st.walk.instanceUseOwed
     }
 }
 
@@ -60264,6 +60281,10 @@ firstInstanceWalk: function {
     opId: zast.nodeid
 } out bool is {
     if (st.walk.monosWalked.has item: monoId) then return false
+    # a walk of a body its own check refused, or of an instance a call made
+    # from arguments it refused, would only report that error again
+    if (st.walk.refusedBodies.has item: opId) then return false
+    if ((st.walk.refusedInstances.get key: monoId).or d: false) then return false
     st.walk.monosWalked.add item: monoId
     if (templateRepeatsInMints :st :monoId) < instanceRepeatLimit then return true
     org: st.reg.genericOriginOf tid: monoId
@@ -60635,7 +60656,7 @@ collectOwedUnitFns: function {
                 )
             }
             markInstanceMemberWalked :st :monoId nameId: bm.name
-            idxs.append from: di
+            if (st.walk.refusedBodies.has item: bm.operation).not then idxs.append from: di
         }
         di = di + 1
     }
