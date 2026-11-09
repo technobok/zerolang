@@ -49929,6 +49929,7 @@ checkYieldCall: function {
             if ya.nid.isZero.not then {
                 yaT: checkOwnedValueAt :st :unitDecl :ast nid: ya.operation
                 checkYieldedValue :st :ast arg: ya argT: yaT
+                refuseYieldedLocks :st :ast arg: ya argT: yaT
             }
         }
     }
@@ -50033,6 +50034,40 @@ valueIsYieldCall: function {ast: Ast.view nid: zast.nodeid} out bool is {
     } else {
         return false
     }
+}
+
+# refuseYieldedLocks -- a generator hands out owned values only (a yield of a
+# reference is not built yet: docs/Design-OPEN.pdoc), so a yielded value that
+# keeps something locked -- a view of the generator's own state, of what it was
+# given, of a local -- would reach the caller with nothing keeping its source
+# alive: it is refused, as a return through `out` is (checkReturnCarries). A
+# plain value copied out (a list walk's i64) points into nothing, whatever lock
+# the name it was read from holds.
+refuseYieldedLocks: function {st: zenv.ZSymbolTable ast: Ast arg: argref argT: ztypes.tid} is {
+    if argT.isZero then return
+    points: (st.reg.isReftypeOf tid: argT) or (isViewFamilyTid :ast :st tid: argT)
+    if points.not then return
+    held: List ztyping.PinPath
+    yn: zast.atomNameIdOf n: (ast.nodes.get i: arg.operation)
+    if yn.isZero.not then {
+        yv: st.lookupVarId nameId: yn
+        if yv.some then st.heldLockPaths holder: ztypes.zlockholder.var yv dst: held
+    }
+    root: zast.nameid
+    if held.length > 0 then root = pinRootAt pins: held i: 0
+    pending: st.walk.pendingPins.length > 0
+    if root.isZero when pending then root = pinRootAt pins: st.walk.pendingPins i: 0
+    if root.isZero then return
+    rp: lockRootPhrase :st :ast nameId: root
+    (
+        addError
+        :st
+        nodeid: arg.nid
+        lineno: arg.lineno
+        colno: arg.colno
+        e: zast.err.ownerError
+        msg: "Cannot yield this value: it keeps \{rp} locked, and a generator hands out owned values only"
+    )
 }
 
 # checkYieldedValue -- a yielded value against the generator's element type, as
