@@ -46923,6 +46923,37 @@ moveTakenTempLocks: function {
     )
 }
 
+# refuseViewToWriter -- a `.view` result (`xs.get i: 0`) lent to a parameter
+# that may write it is refused, as the same result is as a receiver
+# (`(xs.get i: 0).pop`) and as a name bound to it: a view converts to no other
+# ownership. The marker is the argument's own: its value was just walked. A
+# value-type field read off the result (`(xs.get i: 0).node`) is a copy of its
+# own, as it is bound by a let, and lends nothing.
+refuseViewToWriter: function {
+    st: zenv.ZSymbolTable
+    ast: Ast
+    vt: ztypes.tid
+    isLockish: bool
+    isViewArg: bool
+    isTake: bool
+    arg: argref
+} is {
+    if isLockish.not or isViewArg or isTake then return
+    if st.walk.pendingMarker != ztypes.zparamownership.viewMode then return
+    if (st.reg.isReftypeOf tid: vt).not then return
+    target: "this parameter".string
+    if arg.name.isZero.not then target = "'\{zast.nameTextAt :ast ref: arg.name}'"
+    (
+        addError
+        :st
+        nodeid: arg.nid
+        lineno: arg.lineno
+        colno: arg.colno
+        e: zast.err.ownerError
+        msg: "a `.view` result cannot be lent to \{target}, which may write it: a view converts to no other ownership"
+    )
+}
+
 # lockNonTrivialArg -- an argument the call cannot hoist to a temp keeps its
 # source: take it, or lock the path it reads through for the call's duration.
 # A locked path joins `pins`, the locks the call's result may keep.
@@ -46948,6 +46979,7 @@ lockNonTrivialArg: function {
     calleePins: bool
     arg: argref
 } is {
+    refuseViewToWriter :st :ast :vt :isLockish :isViewArg :isTake :arg
     # A construction or take parameter consumes the hoisted
     # temp inside the call scope; a lock/borrow parameter
     # locks it there.
@@ -48843,6 +48875,9 @@ walkOneCallArg: function {
             savedMode: st.mode
             st.walk.callArgNode = nodeId n: (ast.nodes.get i: arg.operation)
             st.mode.suppressBareCtor = isTypeArg
+            # the view marker an argument's check reads is its own value's: one
+            # an earlier argument left would make a plain field read a view
+            st.walk.pendingMarker = ztypes.zparamownership.noneMode
             if (argSlotOwns :st :effId :funcId :isCtor :recvImplicit :argIdx :arg) then {
                 vt = checkMovedValueAt :st :unitDecl :ast nid: arg.operation owning: true
             } else {
