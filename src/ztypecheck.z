@@ -37358,18 +37358,6 @@ checkReturnCarries: function {
     }
     # a returned `if`, `match` or block keeps what its arms hand back
     ctlRet: isControlValue :ast nid: arg.operation
-    # an arm's place is handed back only by a reference or a view
-    retBorrows: (isViewFamilyTid :ast :st tid: argT) or st.walk.currentReturnMarker.isReference
-    (
-        pendArmPins
-        :st
-        :ast
-        vt: argT
-        nid: arg.operation
-        borrowing: retBorrows
-        writes: true
-        verb: "return"
-    )
     if (reportReturnKeepsDyingStorage :st :ast :arg) then return
     # a returned call: its pending pins are what the result keeps locked
     if (callNodeIdOf n: an).isZero when ctlRet.not then return
@@ -39075,6 +39063,36 @@ pinsOfValue: function {
         placePins :st :ast :vt :nid :dst
     }
     return (pinread owned: vp.owned marker: vp.marker)
+}
+
+# pendReturnedPins -- what a returned value keeps locked, pending for the return
+# checks: an `if`, `match` or block's arms (pendArmPins; an arm's place is handed
+# back only by a reference or a view), any other value's record -- a tail's
+# line has drained its own by the time the body's end checks it.
+pendReturnedPins: function {st: zenv.ZSymbolTable ast: Ast arg: argref argT: ztypes.tid} is {
+    nid: arg.operation
+    if (isControlValue :ast :nid) then {
+        retBorrows: (isViewFamilyTid :ast :st tid: argT) or st.walk.currentReturnMarker.isReference
+        pendArmPins :st :ast vt: argT :nid borrowing: retBorrows writes: true verb: "return"
+        return
+    }
+    vp: valuePinsOf :st :nid
+    drainPendingBorrow :st
+    if vp.len > 0 then pinsTouched :st
+    k: u64
+    for k < vp.len loop {
+        p: st.walk.valuePins.get i: vp.start.u64 + k
+        k = k + 1
+        st.walk.pendingPins.append (
+            ztyping.PinPath
+            path: p.path.copy
+            shared: p.shared
+            mutable: p.mutable
+            carried: p.carried
+        )
+    }
+    setPendingOwned :st owned: vp.owned
+    setPendingMarker :st marker: vp.marker
 }
 
 # pendArmPins -- an `if`, `match` or block argument hands over what its arms keep
@@ -42561,6 +42579,25 @@ checkComprehensionValue: function {
     if st.typing.errors.length == errsBefore when (isMarkedMove :ast n: vn9).not then {
         checkFieldMove :st :ast n: vn9
     }
+    # an element that keeps locks of its own -- a view a call hands back, an
+    # `outx` result -- is stored in the list, which cannot keep them
+    if st.typing.errors.length != errsBefore then return
+    held: List ztyping.PinPath
+    pinsOfValue :st :ast vt: elemT nid: valueNid borrowing: false verb: "store" dst: held
+    if held.length == 0 then return
+    (
+        reportHeldIntoSlot
+        :st
+        :ast
+        name: ""
+        :held
+        movedT: elemT
+        keeper: fornode.nid
+        calleePins: false
+        nodeid: valueNid
+        lineno: (nodeLine n: vn9)
+        colno: (nodeCol n: vn9)
+    )
 }
 
 # forComprehensionTid -- the type a `for` used as an expression produces: a
@@ -44615,10 +44652,42 @@ moveHeldLocksIntoSlot: function {
     held: List ztyping.PinPath
     st.heldLockPaths holder: ztypes.zlockholder.var vid dst: held
     if held.length == 0 then return
+    (
+        reportHeldIntoSlot
+        :st
+        :ast
+        :name
+        :held
+        movedT: (st.reg.variableTypeOf id: vid)
+        :keeper
+        :calleePins
+        :nodeid
+        :lineno
+        :colno
+    )
+}
+
+# reportHeldIntoSlot -- a value moved into a slot holds the locks `held`, which
+# the slot cannot keep: a `.take` parameter of a call that is not `outx`, a
+# function body that could store it anywhere, a list a comprehension builds.
+reportHeldIntoSlot: function {
+    st: zenv.ZSymbolTable
+    ast: Ast.view
+    # the moved value's name, as the report spells it (empty: "the value")
+    name: StringView
+    held: (List ztyping.PinPath).view
+    # the moved value's type, for the remedy
+    movedT: ztypes.tid
+    keeper: zast.nodeid
+    calleePins: bool
+    nodeid: zast.nodeid
+    lineno: u32
+    colno: u32
+} is {
     root: zast.nameTextAt :ast ref: (pinRootAt pins: held i: 0)
     what: "the value".string
     if name.length > 0 then what = "'\{name}'"
-    rem: lockFreeRemedy :st :ast tid: (st.reg.variableTypeOf id: vid)
+    rem: lockFreeRemedy :st :ast tid: movedT
     msg: "Cannot move \{what} into a `.take` parameter: it holds a lock on '\{root}', and the callee is not `outx`, so nothing keeps '\{root}' locked once the call returns\{rem}"
     # a function call keeps the value through its body; one that is not `outx`
     # fails for the plainer reason above
@@ -51016,6 +51085,7 @@ checkReturnedValue: function {
     }
     reportReturnedBareField :st :ast :arg
     recordReturnedOwnedLocal :st :ast :arg :argT
+    pendReturnedPins :st :ast :arg :argT
     if (checkReturnRooting :st :ast :arg :argT).not then checkReturnCarries :st :ast :arg :argT
     checkReturnTypeMatch :st :ast :arg :argT
 }
@@ -59386,6 +59456,7 @@ checkImplicitReturn: function {
     )
     reportReturnedBareField :st :ast :arg
     recordReturnedOwnedLocal :st :ast :arg :argT
+    pendReturnedPins :st :ast :arg :argT
     if (checkReturnRooting :st :ast :arg :argT).not then checkReturnCarries :st :ast :arg :argT
     checkReturnTypeMatch :st :ast :arg :argT
     if (isAnyLiteralTid :st tid: argT) then stampGate :st nid: lsid tid: expR
