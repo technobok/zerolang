@@ -39046,6 +39046,30 @@ pinsOfValue: function {
     return (pinread owned: vp.owned marker: vp.marker)
 }
 
+# pendArmPins -- an `if`, `match` or block argument hands over what its arms keep
+# locked (pinsOfArms), pending for the argument checks that read the side
+# channel: their lines' walks left nothing pending. Any other value is left as
+# its walk left it.
+pendArmPins: function {st: zenv.ZSymbolTable ast: Ast vt: ztypes.tid nid: zast.nodeid} is {
+    if (isControlValue :ast :nid).not then return
+    ap: List ztyping.PinPath
+    ar: pinsOfArms :st :ast :vt :nid verb: "pass" dst: ap
+    drainPendingBorrow :st
+    if ap.length > 0 then pinsTouched :st
+    for each p: ap loop {
+        (
+            pinsAppend
+            pins: st.walk.pendingPins
+            path: p.path
+            shared: p.shared
+            mutable: p.mutable
+            carried: p.carried
+        )
+    }
+    setPendingOwned :st owned: ar.owned
+    setPendingMarker :st marker: ar.marker
+}
+
 # appendRecordPins -- a copy of each pin of the record `vp` onto `dst`.
 appendRecordPins: function {
     st: zenv.ZSymbolTable.view vp: ztyping.valuepins dst: List ztyping.PinPath
@@ -46412,10 +46436,13 @@ hoistArg: function {
         # to: 4)` and `(pick :l i: 0)` hold their sources as `s.stringView`
         # does, and a later argument moving or writing them meets the temp
         isCallArg: (ast.nodes.get i: argId).call
+        # and so does a control value: what its arms hand back, whatever each
+        # is rooted at
+        isCtl: isControlValue :ast nid: argId
         # and every one of them is this argument's: a construction's root is
         # its type, which names none of what it locks
-        if isCallArg then hrt = zast.nameid
-        if hrt.isZero.not or isCallArg when callHolds.not then {
+        if isCallArg or isCtl then hrt = zast.nameid
+        if hrt.isZero.not or isCallArg or isCtl when callHolds.not then {
             # A `.view` parameter only reads its argument, so the hoisted temp
             # locks the source SHARED -- exactly as the bare-name leg already
             # did via `isViewArg`. Without this a PATH-shaped argument
@@ -47136,6 +47163,7 @@ lockNonTrivialArg: function {
     calleePins: bool
     arg: argref
 } is {
+    pendArmPins :st :ast :vt nid: arg.operation
     refuseViewToWriter :st :ast :vt :isLockish :isViewArg :isTake :arg
     # A construction or take parameter consumes the hoisted
     # temp inside the call scope; a lock/borrow parameter
