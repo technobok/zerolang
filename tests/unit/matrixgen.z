@@ -2562,17 +2562,21 @@ rowOf: function {
     return (Row :where selector: sel pos: pi :expected :detail)
 }
 
-# readTable -- the rows of the table's `ownership` list, stopping when the
-# data file does not check against the system units at `systemdir`
-readTable: function {
-    path: StringView
-    systemdir: StringView
-    fams: (List Family).view
-    poss: (List Position).view
-} out List Row is {
+# openTable -- the table at `path`, stopping when it does not check against
+# the system units at `systemdir`
+openTable: function {path: StringView systemdir: StringView} out zdata.DataFile is {
     noDirs: List String
     f: zdata.open file: path srcdirs: noDirs :systemdir
     if f.ok.not then fail msg: "\{path} does not check:\n\{zdata.errorsText :f}"
+    return f
+}
+
+# readTable -- the rows of the table's `ownership` list
+readTable: function {
+    f: zdata.DataFile.view
+    fams: (List Family).view
+    poss: (List Position).view
+} out List Row is {
     rows: List Row
     for each v: (zdata.itemsOf :f v: (zdata.definition :f name: "ownership")) loop (
         rows.append
@@ -2833,25 +2837,24 @@ writeFamily: function {
     writeRefused :root :f :poss :rows slots: refused
 }
 
-# writeFixtures -- every family's programs and goldens under root, and the
-# matrix_ rows of run_cases.txt replaced by this run's
+# writeFixtures -- every family's programs and goldens under root, their
+# run_cases rows appended to `cases`
 writeFixtures: function {
     root: StringView
     fams: (List Family).view
     poss: (List Position).view
     rows: (List Row).view
     slots: (List Slot).view
+    cases: String
 } is {
     ensureDir path: "\{root}/tests/fixtures/emitc_corpus"
     ensureDir path: "\{root}/tests/fixtures/run_golden"
     ensureDir path: "\{root}/tests/fixtures/errors"
-    cases: String
     fi: u64
     for fi < fams.length loop {
         writeFamily :root :fams :poss :rows :slots :fi :cases
         fi = fi + 1
     }
-    writeCases :root :cases
 }
 
 # writeCases -- run_cases.txt with its matrix_ rows replaced by cases, IN PLACE:
@@ -2999,10 +3002,21 @@ main: function is {
     fams: families
     poss: positions
     tablePath: "\{opts.root}/tests/fixtures/matrix_expect.zd"
-    rows: readTable path: tablePath.stringView systemdir: opts.system.stringView :fams :poss
+    table: openTable path: tablePath.stringView systemdir: opts.system.stringView
+    rows: readTable f: table :fams :poss
     slots: allSlots :fams :poss :rows
+    lfRows: lockflow.lfReadRows f: table
+    lfCells: lockflow.lfCellsOf rows: lfRows
     if opts.cellsDir.length > 0 then {
         writeCells dir: opts.cellsDir.stringView :fams :poss :rows :slots
-    } else writeFixtures root: opts.root.stringView :fams :poss :rows :slots
+        lfDir: "\{opts.cellsDir}/lockflow"
+        lockflow.lfWriteCells dir: lfDir.stringView cells: lfCells rows: lfRows
+    } else {
+        cases: String
+        writeFixtures root: opts.root.stringView :fams :poss :rows :slots :cases
+        lockflow.lfWriteFixtures root: opts.root.stringView cells: lfCells rows: lfRows :cases
+        writeCases root: opts.root.stringView :cases
+    }
     report :fams :poss :rows :slots
+    lockflow.lfReport cells: lfCells
 }

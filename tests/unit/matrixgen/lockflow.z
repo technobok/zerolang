@@ -1,0 +1,1605 @@
+# lockflow -- the matrix's lock-flow cells. A PRODUCER makes a view of a source
+# that lives in a PLACE; a CARRIER takes the view to a DESTINATION, which holds
+# it; a SINK ends the source while the holder lives. The flow tier crosses
+# producer, carrier, place and destination with the place's own write; the sink
+# tier crosses each sink with every place and destination for one producer and
+# no carrier. Each cell has two forms: the HAZARD (the sink while the holder
+# lives, then a read through it), which the lock rules must refuse, and its
+# TWIN (the holder ended first, then the sink), which must run, so a refusal is
+# the pin's and nothing else's. A destination the value escapes through
+# (append, comprehension, a helper's own source) refuses every value that holds
+# a lock, so its twin is the same cell made by the static producer, whose view
+# holds none. The generator itself says why a cell it cannot write is not
+# written (the manifest's NA); the table's `lockflow` rows give the verdict of
+# every written form.
+# ---------------- the axes ----------------
+
+# lfpiece -- one top-level declaration a cell names; a program writes each
+# piece once, in this table's order. `@VT` `@VTV` `@STY` `@FRESH` `@MUTS` and
+# `@RD[x]` are the producer's and the source's, filled per program.
+lfpiece: data {
+    key: ""
+    body: ""
+}
+
+lfPieces: list {
+    (lfpiece key: "lfFlag" body: "lfFlag: function out bool is {\n    return true\n}\n")
+    (lfpiece key: "LfSide" body: "LfSide: variant {\n    left: null\n    right: null\n}\n")
+    (lfpiece key: "lfSide" body: "lfSide: function out LfSide is {\n    return LfSide.left\n}\n")
+    (
+        lfpiece
+        key: "LfBag"
+        body: "LfBag: class {\n    name: String\n} as {\n    first: function {t: this.view} outx StringView is {\n        return (t.name.substring from: 0 to: 3)\n    }\n    gcut: function as { T: StringLike.generic } in {t: this.view p: T.view} outx StringView is {\n        return (t.name.substring from: 0 to: 3)\n    }\n}\n"
+    )
+    (
+        lfpiece
+        key: "lfMkList"
+        body: "lfMkList: function out (List String) is {\n    xs: List String\n    xs.append \"abc def\".string\n    return xs\n}\n"
+    )
+    (
+        lfpiece
+        key: "LfGen"
+        body: "LfGen: generator { s: String } as {\n    call: function out StringView is {\n        yield this.s.stringView\n    }\n}\n"
+    )
+    (
+        lfpiece
+        key: "lfFirst"
+        body: "lfFirst: function {s: String.view} outx StringView is {\n    return (s.substring from: 0 to: 3)\n}\n"
+    )
+    (
+        lfpiece
+        key: "lfGFirst"
+        body: "lfGFirst: function as { T: StringLike.generic } in {s: T.view} outx StringView is {\n    return (s.stringView.substring from: 0 to: 3)\n}\n"
+    )
+    (lfpiece key: "LfBox" body: "LfBox: class {\n    name: StringView\n}\n")
+    (
+        lfpiece
+        key: "lfMk"
+        body: "lfMk: function {s: String.view} outx LfBox is {\n    return (LfBox name: s.stringView)\n}\n"
+    )
+    (
+        lfpiece
+        key: "lfRdSp"
+        body: "lfRdSp: function {it: Splitter} out i64 is {\n    p: it.call\n    match (p) case some then return (if (p.startsWith prefix: \"abc\") then 7 else 0) case none then return 0\n}\n"
+    )
+    (
+        lfpiece
+        key: "lfRdLn"
+        body: "lfRdLn: function {it: LinesIter} out i64 is {\n    p: it.call\n    match (p) case some then return (if (p.startsWith prefix: \"abc\") then 7 else 0) case none then return 0\n}\n"
+    )
+    (
+        lfpiece
+        key: "lfRdIt"
+        body: "lfRdIt: function {it: (ListIter T: String)} out i64 is {\n    p: it.call\n    match (p) case some then return (if (p.startsWith prefix: \"abc\") then 7 else 0) case none then return 0\n}\n"
+    )
+    (
+        lfpiece
+        key: "lfRdOpt"
+        body: "lfRdOpt: function {o: (Option StringView).view} out i64 is {\n    match (o) case some then return (if (o.startsWith prefix: \"abc\") then 7 else 0) case none then return 0\n}\n"
+    )
+    (
+        lfpiece
+        key: "lfPass"
+        body: "lfPass: function {v: StringView.view} outx StringView is {\n    return v\n}\n"
+    )
+    (
+        lfpiece
+        key: "lfIdent"
+        body: "lfIdent: function as { T: StringLike.generic } in {v: T.view} outx T.view is {\n    return v\n}\n"
+    )
+    (lfpiece key: "lfPassFn" body: "lfPassFn: function {v: StringView.view} outx StringView\n")
+    (lfpiece key: "LfHooks" body: "LfHooks: class {\n    f: lfPassFn\n}\n")
+    (lfpiece key: "lfPassOutFn" body: "lfPassOutFn: function {v: StringView.view} out StringView\n")
+    (lfpiece key: "LfHooksOut" body: "LfHooksOut: class {\n    f: lfPassOutFn\n}\n")
+    (lfpiece key: "LfOwn" body: "LfOwn: class {\n    s: @STY\n}\n")
+    (
+        lfpiece
+        key: "lfWrL"
+        body: "lfWrL: function {xs: (List @STY)} out i64 is {\n    xs.set i: 0 val: @FRESH\n    return 0\n}\n"
+    )
+    (lfpiece key: "LfHold" body: "LfHold: class {\n    v: @VT\n}\n")
+    (
+        lfpiece
+        key: "lfUse"
+        body: "lfUse: function {a: @VTV b: i64} out i64 is {\n    return @RD[a] + b\n}\n"
+    )
+    (
+        lfpiece
+        key: "lfWr"
+        body: "lfWr: function {s: @STY} out i64 is {\n    @MUTS\n    return 0\n}\n"
+    )
+}
+
+# lfsource -- what a producer views: its type as a type position writes it, a
+# value of it, a second value for a write, and a write that is no
+# reassignment (over @SRC; "" -- none)
+lfsource: data {
+    key: ""
+    # listable: a list of it is written as a list element place
+    tags: ""
+    ty: ""
+    mk: ""
+    fresh: ""
+    mutate: ""
+    pieces: ""
+}
+
+lfSources: list {
+    (
+        lfsource
+        key: "String"
+        tags: " listable "
+        ty: "String"
+        mk: "\"abc def\".string"
+        fresh: "\"zzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz\".string"
+        mutate: "@SRC.append s: \"zzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz\""
+    )
+    (
+        lfsource
+        key: "LfBag"
+        tags: " listable "
+        ty: "LfBag"
+        mk: "(LfBag name: \"abc def\".string)"
+        fresh: "(LfBag name: \"zzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz\".string)"
+        mutate: "@SRC.name = \"zzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz\".string"
+        pieces: "LfBag"
+    )
+    (
+        lfsource
+        key: "List"
+        ty: "(List String)"
+        mk: "lfMkList"
+        fresh: "lfMkList"
+        mutate: "@SRC.append \"zzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz\".string"
+        pieces: "lfMkList"
+    )
+    (
+        lfsource
+        key: "LfGen"
+        ty: "LfGen"
+        mk: "(LfGen s: \"abc def\".string)"
+        fresh: "(LfGen s: \"zzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz\".string)"
+        pieces: "LfGen"
+    )
+}
+
+# lfproducer -- a way to make a view of @SRC: the source it views, the view
+# (`make`), its type (`vt`), a read of it that answers 7 while it sees the
+# source (`rd`, over @X), a lock-free value of its type, an outx method on it
+# (over @X), a container of it, an element read when it is an iterator, and
+# its tags (sv: a StringView; owned: an owned value; iter: an iterator; excl:
+# an exclusive reference; static: a view of static bytes)
+lfproducer: data {
+    key: ""
+    source: "String"
+    make: ""
+    vt: "StringView"
+    rd: "(if (@X.startsWith prefix: \"abc\") then 7 else 0)"
+    initial: "\"init\""
+    method: "@X.trim"
+    container: "List StringView"
+    element: ""
+    tags: " sv "
+    pieces: ""
+}
+
+lfProducers: list {
+    (lfproducer key: "stringview" make: "@SRC.stringView")
+    (lfproducer key: "substring" make: "(@SRC.substring from: 0 to: 3)" tags: " sv sinks ")
+    (lfproducer key: "userfn" make: "(lfFirst s: @SRC)" pieces: "lfFirst")
+    (lfproducer key: "genericfn" make: "(lfGFirst s: @SRC)" pieces: "lfGFirst")
+    (lfproducer key: "usermethod" source: "LfBag" make: "@SRC.first")
+    (lfproducer key: "genericmethod" source: "LfBag" make: "(@SRC.gcut p: \"x\")")
+    (
+        lfproducer
+        key: "construction"
+        make: "(LfBox name: @SRC.stringView)"
+        vt: "LfBox"
+        rd: "(if (@X.name.startsWith prefix: \"abc\") then 7 else 0)"
+        initial: "(LfBox name: \"init\")"
+        method: ""
+        container: "List LfBox"
+        tags: " owned "
+        pieces: "LfBox"
+    )
+    (
+        lfproducer
+        key: "factory"
+        make: "(lfMk s: @SRC)"
+        vt: "LfBox"
+        rd: "(if (@X.name.startsWith prefix: \"abc\") then 7 else 0)"
+        initial: "(LfBox name: \"init\")"
+        method: ""
+        container: "List LfBox"
+        tags: " owned "
+        pieces: "LfBox lfMk"
+    )
+    (
+        lfproducer
+        key: "split"
+        make: "(@SRC.stringView.split sep: \" \")"
+        vt: "Splitter"
+        rd: "(lfRdSp it: @X.borrow)"
+        initial: "(\"init x\".split sep: \" \")"
+        method: ""
+        container: "List Splitter"
+        element: "(if (@X.startsWith prefix: \"abc\") then 7 else 0)"
+        tags: " owned iter "
+        pieces: "lfRdSp"
+    )
+    (
+        lfproducer
+        key: "lines"
+        make: "@SRC.stringView.lines"
+        vt: "LinesIter"
+        rd: "(lfRdLn it: @X.borrow)"
+        initial: "\"init\".lines"
+        method: ""
+        container: "List LinesIter"
+        element: "(if (@X.startsWith prefix: \"abc\") then 7 else 0)"
+        tags: " owned iter "
+        pieces: "lfRdLn"
+    )
+    (
+        lfproducer
+        key: "listget"
+        source: "List"
+        make: "(@SRC.get i: 0)"
+        vt: "String.view"
+        initial: ""
+        method: ""
+        container: ""
+        tags: " ref "
+    )
+    (
+        lfproducer
+        key: "iterate"
+        source: "List"
+        make: "@SRC.iterate"
+        vt: "(ListIter T: String)"
+        rd: "(lfRdIt it: @X.borrow)"
+        initial: ""
+        method: ""
+        container: ""
+        element: "(if (@X.startsWith prefix: \"abc\") then 7 else 0)"
+        tags: " owned iter "
+        pieces: "lfRdIt"
+    )
+    (
+        lfproducer
+        key: "borrow"
+        source: "LfBag"
+        make: "@SRC.borrow"
+        vt: "LfBag.borrow"
+        rd: "(if (@X.name.startsWith prefix: \"abc\") then 7 else 0)"
+        initial: ""
+        method: ""
+        container: ""
+        tags: " excl "
+    )
+    (
+        lfproducer
+        key: "barebind"
+        source: "LfBag"
+        make: "@SRC"
+        vt: "LfBag"
+        rd: "(if (@X.name.startsWith prefix: \"abc\") then 7 else 0)"
+        initial: ""
+        method: ""
+        container: ""
+        tags: " excl "
+    )
+    (
+        lfproducer
+        key: "getmut"
+        source: "List"
+        make: "(@SRC.getMut i: 0)"
+        vt: "String"
+        initial: ""
+        method: ""
+        container: ""
+        tags: " excl "
+    )
+    (
+        lfproducer
+        key: "genyield"
+        source: "LfGen"
+        make: "@SRC.call"
+        vt: "(Option StringView)"
+        rd: "(lfRdOpt o: @X)"
+        initial: ""
+        method: ""
+        container: ""
+        tags: " ref "
+        pieces: "lfRdOpt"
+    )
+    (lfproducer key: "static" make: "\"abc lit\"" tags: " sv static ")
+}
+
+# lfcarrier -- how a view travels to its destination: statements before it
+# (`before`) and the expression (`carry`), both over @E, the view
+lfcarrier: data {
+    key: ""
+    before: ""
+    carry: "@E"
+    tags: ""
+    pieces: ""
+}
+
+lfCarriers: list {
+    (lfcarrier key: "direct")
+    (lfcarrier key: "if" before: "k: lfFlag" carry: "(if k then @E else @E)" tags: " control ")
+    (
+        lfcarrier
+        key: "match"
+        before: "kv: lfSide"
+        carry: "(match (kv) case left then @E case right then @E)"
+        tags: " control "
+    )
+    (lfcarrier key: "block" carry: "{\n        @E\n    }" tags: " block ")
+    (lfcarrier key: "with" carry: "(with w: @E do w)" tags: " control alias ")
+    (lfcarrier key: "pass" carry: "(lfPass v: @E)" tags: " svonly " pieces: "lfPass")
+    (lfcarrier key: "gident" carry: "(lfIdent v: @E)" tags: " svonly " pieces: "lfIdent")
+    (
+        lfcarrier
+        key: "fnslot"
+        before: "hk: LfHooks f: lfPass.copy"
+        carry: "(hk.f v: @E)"
+        tags: " svonly "
+        pieces: "lfPass lfPassFn LfHooks"
+    )
+    (
+        lfcarrier
+        key: "fnslotout"
+        before: "hk: LfHooksOut f: lfPass.copy"
+        carry: "(hk.f v: @E)"
+        tags: " svonly "
+        pieces: "lfPass lfPassOutFn LfHooksOut"
+    )
+    (lfcarrier key: "take" before: "w: @E" carry: "w.take" tags: " take ")
+}
+
+# lfplace -- where the source lives: what makes it, the source as a cell and
+# a message spell it (@SRC), the write a flow cell ends it with, and that
+# write as an argument; `kind`: local (in the cell), param (a borrowed
+# parameter of a helper), host (a field of the receiver of a method)
+lfplace: data {
+    key: ""
+    tags: ""
+    setup: "s: @MK"
+    src: "s"
+    shown: "s"
+    root: "s"
+    write: "s = @FRESH"
+    argwrite: "(lfWr s: s)"
+    kind: "local"
+    pieces: ""
+}
+
+lfPlaces: list {
+    (lfplace key: "local")
+    (
+        lfplace
+        key: "field"
+        setup: "o: LfOwn s: @MK"
+        src: "o.s"
+        shown: "o.s"
+        root: "o"
+        write: "o.s = @FRESH"
+        argwrite: "(lfWr s: o.s)"
+        pieces: "LfOwn"
+    )
+    (lfplace key: "param" setup: "" write: "@MUT" kind: "param")
+    (
+        lfplace
+        key: "element"
+        tags: " element "
+        setup: "xs: List @STY\n    xs.append @MK"
+        src: "(xs.get i: 0)"
+        shown: "xs"
+        root: "xs"
+        write: "xs.set i: 0 val: @FRESH"
+        argwrite: "(lfWrL xs: xs)"
+        pieces: "lfWrL"
+    )
+    (
+        lfplace
+        key: "thisfield"
+        setup: ""
+        src: "t.s"
+        shown: "t.s"
+        root: "t"
+        write: "t.s = @FRESH"
+        argwrite: "(lfWr s: t.s)"
+        kind: "host"
+    )
+}
+
+# lfdest -- where the view lands and what holds it: the hazard (the write while
+# the holder lives, then a read through it) and the twin (the holder ended
+# first); an empty twin is the static producer's hazard. `needs`: what the
+# producer or the source must offer (initial method container element mutate)
+lfdest: data {
+    key: ""
+    tags: ""
+    hazard: ""
+    twin: ""
+    needs: ""
+    special: ""
+    pieces: ""
+}
+
+lfDests: list {
+    (
+        lfdest
+        key: "let"
+        tags: " binds "
+        hazard: "@PRE\n    v: @E\n    @SINK\n    return @RD[v]"
+        twin: "@PRE\n    v: @E\n    r: @RD[v]\n    v.drop\n    @SINK\n    return r"
+    )
+    (
+        lfdest
+        key: "repoint"
+        tags: " binds "
+        hazard: "v: @INIT\n    @PRE\n    v = @E\n    @SINK\n    return @RD[v]"
+        twin: "v: @INIT\n    @PRE\n    v = @E\n    r: @RD[v]\n    v.drop\n    @SINK\n    return r"
+        needs: "initial"
+    )
+    (
+        lfdest
+        key: "fieldstore"
+        tags: " binds "
+        hazard: "ho: LfHold v: @INIT\n    @PRE\n    ho.v = @E\n    @SINK\n    return @RD[ho.v]"
+        twin: "ho: LfHold v: @INIT\n    @PRE\n    ho.v = @E\n    r: @RD[ho.v]\n    ho.drop\n    @SINK\n    return r"
+        needs: "initial"
+        pieces: "LfHold"
+    )
+    (
+        lfdest
+        key: "withname"
+        hazard: "@PRE\n    r: 0\n    with v: @E do {\n        @SINK\n        r = @RD[v]\n    }\n    return r"
+        twin: "@PRE\n    r: 0\n    with v: @E do r = @RD[v]\n    @SINK\n    return r"
+    )
+    (
+        lfdest
+        key: "callarg"
+        tags: " callarg "
+        hazard: "@PRE\n    return (lfUse a: @E b: @SINKX)"
+        twin: "@PRE\n    n: lfUse a: @E b: 0\n    @SINKX\n    return n"
+        needs: "mutate"
+        pieces: "lfUse lfWr"
+    )
+    (
+        lfdest
+        key: "receiver"
+        tags: " receiver "
+        hazard: "@PRE\n    v: @OXM[@E]\n    @SINK\n    return @RD[v]"
+        twin: "@PRE\n    v: @OXM[@E]\n    r: @RD[v]\n    v.drop\n    @SINK\n    return r"
+        needs: "method"
+    )
+    (lfdest key: "return" special: "return")
+    (lfdest key: "tail" special: "tail")
+    (
+        lfdest
+        key: "append"
+        hazard: "@PRE\n    ys: @LIST\n    ys.append @E\n    @SINK\n    return @RD[(ys.get i: 0)]"
+        needs: "container"
+    )
+    (
+        lfdest
+        key: "comprehension"
+        hazard: "@PRE\n    one: ListVal i64\n    one.append 1\n    vs: for each q: one loop @E\n    @SINK\n    return @RD[(vs.get i: 0)]"
+    )
+    (
+        lfdest
+        key: "forelem"
+        hazard: "@PRE\n    r: 0\n    for each e: @E loop {\n        @SINK\n        r = r + @RDE[e]\n    }\n    return r"
+        twin: "@PRE\n    r: 0\n    for each e: @E loop r = r + @RDE[e]\n    @SINK\n    return r"
+        needs: "element"
+    )
+}
+
+# lfSinks -- the sink tier's ends of the source, each written per place by
+# sinkOf (reassign, a mutating write, a move, a drop)
+lfSinks: list { "reassign" "mutate" "take" "drop" }
+
+# ---------------- cells ----------------
+
+# lfWord -- the words this subunit reads off its tables and the matrix table,
+# classified by slot (zast.Vocab) rather than compared as text
+lfWord: list {
+    wAny: "*"
+    wHazard: "hazard"
+    wTwin: "twin"
+    wFlow: "flow"
+    wSink: "sink"
+    wLocal: "local"
+    wParam: "param"
+    wHost: "host"
+    wReassign: "reassign"
+    wMutate: "mutate"
+    wTake: "take"
+    wDrop: "drop"
+    wInitial: "initial"
+    wMethod: "method"
+    wContainer: "container"
+    wElement: "element"
+    wRet: "return"
+    wTail: "tail"
+} out staticlist StringView
+
+# LfCell -- one cell: its tier (1 flow, 2 sink), its axis values by index (the
+# sink is 0 in the flow tier), why it cannot be written ("" -- it can), the
+# outcome of each form and the row that set it (-1 -- the default)
+LfCell: class {
+    tier: u64
+    p: u64
+    c: u64
+    pl: u64
+    d: u64
+    s: u64
+    na: String
+    hazard: outcome
+    hrow: i64
+    twin: outcome
+    trow: i64
+    # the twin is the static producer's hazard of the same carrier, place and
+    # destination: a value that leaves its source's scope is refused whatever
+    # it is, so only a lock-free one runs there
+    twinStatic: bool
+}
+
+# LfRow -- one row of the table's `lockflow` list: a selector per axis and form,
+# the verdict and its detail
+LfRow: class {
+    where: String
+    tier: String
+    producer: String
+    carrier: String
+    place: String
+    destination: String
+    sink: String
+    form: String
+    expected: outcome
+    detail: String
+}
+
+# lfHas -- whether a space-padded tag list carries `tag`
+lfHas: function {tags: StringView tag: StringView} out bool is {
+    padded: " ".string
+    padded.append tag
+    padded.append " "
+    return (tags.contains padded)
+}
+
+# lfSourceIndex -- the index of producer `pi`'s source in lfSources
+lfSourceIndex: function {pi: u64} out u64 is {
+    want: (lfProducers.get i: pi).source.stringView
+    si: u64
+    for si < lfSources.length loop {
+        if (lfSources.get i: si).key.stringView == want then return si
+        si = si + 1
+    }
+    fail msg: "lockflow: producer \{(lfProducers.get i: pi).key} names no source"
+    return 0
+}
+
+# lfStaticIndex -- the lock-free producer, whose cells are every escape's twin
+lfStaticIndex: function out u64 is {
+    pi: u64
+    for pi < lfProducers.length loop {
+        if (lfHas tags: (lfProducers.get i: pi).tags.stringView tag: "static") then return pi
+        pi = pi + 1
+    }
+    fail msg: "lockflow: no producer is tagged static"
+    return 0
+}
+
+# lfSinkProducer -- the producer the sink tier crosses every sink with (tagged
+# `sinks`)
+lfSinkProducer: function out u64 is {
+    pi: u64
+    for pi < lfProducers.length loop {
+        if (lfHas tags: (lfProducers.get i: pi).tags.stringView tag: "sinks") then return pi
+        pi = pi + 1
+    }
+    fail msg: "lockflow: no producer is tagged sinks"
+    return 0
+}
+
+# lfNeeds -- whether producer `p` and source `st` offer what destination `d` needs
+lfNeedMet: function {words: zast.Vocab.view d: lfdest p: lfproducer st: lfsource} out bool is {
+    if d.needs.length == 0 then return true
+    nw: words.slotOf text: d.needs.stringView
+    if nw == lfWord.slot.wInitial then return p.initial.length > 0
+    if nw == lfWord.slot.wMethod then return p.method.length > 0
+    if nw == lfWord.slot.wContainer then return p.container.length > 0
+    if nw == lfWord.slot.wElement then return p.element.length > 0
+    if nw == lfWord.slot.wMutate then return st.mutate.length > 0
+    fail msg: "lockflow: destination \{d.key} needs '\{d.needs}', which no producer offers"
+    return false
+}
+
+# lfSinkText -- the statement that ends the source of a cell at place `pl`:
+# the place's own write in the flow tier, sink `s` in the sink tier; "" -- the
+# place cannot end its source that way
+lfSinkText: function {words: zast.Vocab.view tier: u64 pl: lfplace s: u64} out String is {
+    if tier == 1 then return pl.write.string
+    sw: words.slotOf text: (lfSinks.get i: s).stringView
+    kw: words.slotOf text: pl.kind.stringView
+    if sw == lfWord.slot.wReassign then {
+        if kw == lfWord.slot.wParam then return "".string
+        return pl.write.string
+    }
+    if sw == lfWord.slot.wMutate then return "@MUT".string
+    if sw == lfWord.slot.wTake then {
+        if kw == lfWord.slot.wLocal then return "gone: @SRC.take".string
+        return "".string
+    }
+    # a drop names a local: only the bare local place has one
+    if sw == lfWord.slot.wDrop when pl.src.stringView == pl.root.stringView when (
+        kw == lfWord.slot.wLocal
+    ) then {
+        return "@SRC.drop".string
+    }
+    return "".string
+}
+
+# lfWhyNot -- why a cell's forms cannot be written, "" when they can: what the
+# carrier, the destination and the place each demand of the producer
+lfWhyNot: function {words: zast.Vocab.view cl: LfCell.view} out String is {
+    why: lfCarrierWhyNot :cl
+    if why.length > 0 then return why
+    return (lfPlaceWhyNot :words :cl)
+}
+
+# lfCarrierWhyNot -- what the carrier and the destination demand of the producer
+lfCarrierWhyNot: function {cl: LfCell.view} out String is {
+    pt: (lfProducers.get i: cl.p).tags.stringView
+    ct: (lfCarriers.get i: cl.c).tags.stringView
+    dt: (lfDests.get i: cl.d).tags.stringView
+    isSv: lfHas tags: pt tag: "sv"
+    owned: lfHas tags: pt tag: "owned"
+    taking: lfHas tags: ct tag: "take"
+    if (lfHas tags: ct tag: "svonly"
+    ) when isSv.not then return "the carrier passes a StringView only".string
+    if (lfHas tags: ct tag: "block") when (lfHas tags: dt tag: "binds").not then {
+        return "a block yields its value only to a binding".string
+    }
+    if taking when (lfHas tags: dt tag: "receiver"
+    ) then return "a moved value takes no method in the same expression".string
+    if taking when owned.not then return "only an owned value is taken".string
+    if (lfHas tags: ct tag: "alias") when (lfHas tags: pt tag: "iter") then {
+        return "an iterator's name read as a value is called".string
+    }
+    if (lfHas tags: dt tag: "callarg") when (lfHas tags: pt tag: "excl") then {
+        return "a bare name's pin starts with its call: a later argument may write it".string
+    }
+    return "".string
+}
+
+# lfPlaceWhyNot -- what the place and the destination demand of the source
+lfPlaceWhyNot: function {words: zast.Vocab.view cl: LfCell.view} out String is {
+    p: lfProducers.get i: cl.p
+    pl: lfPlaces.get i: cl.pl
+    d: lfDests.get i: cl.d
+    st: lfSources.get i: (lfSourceIndex pi: cl.p)
+    kw: words.slotOf text: pl.kind.stringView
+    writes: st.mutate.length > 0
+    listable: lfHas tags: st.tags.stringView tag: "listable"
+    if (
+        kw == lfWord.slot.wParam
+    ) when writes.not then return "the source has no write through a parameter".string
+    if (lfHas tags: pl.tags.stringView tag: "element"
+    ) when listable.not then return "a list element is a String or a class".string
+    if (lfNeedMet :words :d :p :st
+    ).not then return "the producer offers nothing the destination needs".string
+    if d.special.length > 0 when (
+        kw == lfWord.slot.wHost
+    ) then return "a helper's value cannot leave a method's receiver".string
+    if (
+        (lfSinkText :words tier: cl.tier :pl s: cl.s).length == 0
+    ) then return "the place cannot end its source this way".string
+    return "".string
+}
+
+# LfEnv -- the text a cell's templates name, from its source, producer and place
+LfEnv: class {
+    # the source's write over a helper's parameter `s`
+    mutS: String
+    mut: String
+    fresh: String
+    mk: String
+    sty: String
+    init: String
+    holderList: String
+    vt: String
+    # the producer's type as a `.view` parameter takes it
+    vtv: String
+    sinkx: String
+    src: String
+}
+
+# lfVtv -- `vt` as a `.view` parameter's type: a reference's base viewed
+lfVtv: function {vt: StringView} out String is {
+    if (vt.endsWith suffix: ".borrow") then {
+        r: (vt.substring from: 0 to: vt.length - 7).string
+        r.append ".view"
+        return r
+    }
+    if (vt.endsWith suffix: ".view") then return vt.string
+    r: vt.string
+    r.append ".view"
+    return r
+}
+
+# lfEnvOf -- the cell's template text
+lfEnvOf: function {cl: LfCell.view} out LfEnv is {
+    p: lfProducers.get i: cl.p
+    st: lfSources.get i: (lfSourceIndex pi: cl.p)
+    pl: lfPlaces.get i: cl.pl
+    return (
+        LfEnv
+        mutS: (st.mutate.replace needle: "@SRC" replacement: "s")
+        mut: st.mutate.string
+        fresh: st.fresh.string
+        mk: st.mk.string
+        sty: st.ty.string
+        init: p.initial.string
+        holderList: p.container.string
+        vt: p.vt.string
+        vtv: (lfVtv vt: p.vt.stringView)
+        sinkx: pl.argwrite.string
+        src: pl.src.string
+    )
+}
+
+# lfFill -- `t` with every name of the environment replaced, the longer of two
+# names that share a prefix first
+lfFill: function {t: StringView env: LfEnv.view} out String is {
+    a: t.replace needle: "@SINKX" replacement: env.sinkx
+    b: a.stringView.replace needle: "@FRESH" replacement: env.fresh
+    c: b.stringView.replace needle: "@MUTS" replacement: env.mutS
+    d: c.stringView.replace needle: "@INIT" replacement: env.init
+    e: d.stringView.replace needle: "@LIST" replacement: env.holderList
+    f: e.stringView.replace needle: "@STY" replacement: env.sty
+    g: f.stringView.replace needle: "@VTV" replacement: env.vtv
+    h: g.stringView.replace needle: "@MUT" replacement: env.mut
+    i: h.stringView.replace needle: "@MK" replacement: env.mk
+    return (i.stringView.replace needle: "@VT" replacement: env.vt)
+}
+
+# lfExpand -- `text` with each `<key>[arg]` replaced by `tmpl` read at the
+# argument (its `@X`)
+lfExpand: function {text: StringView key: StringView tmpl: StringView} out String is {
+    opener: key.string
+    opener.append "["
+    buf: String
+    from: u64
+    for from < text.length loop {
+        at: (text.substring :from to: text.length).indexOf needle: opener
+        if at.none then {
+            buf.append (text.substring :from to: text.length)
+            return buf
+        }
+        start: from + at
+        buf.append (text.substring :from to: start)
+        argFrom: start + opener.length
+        close: ((text.substring from: argFrom to: text.length).indexOf needle: "]").or d: 0
+        arg: text.substring from: argFrom to: argFrom + close
+        buf.append (tmpl.replace needle: "@X" replacement: arg)
+        from = argFrom + close + 1
+    }
+    return buf
+}
+
+# lfBody -- a destination template as a cell's body: the carrier's statements
+# and expression, the sink, the producer's reads, the environment, the source
+lfBody: function {
+    tmpl: StringView
+    p: lfproducer
+    env: LfEnv.view
+    pre: StringView
+    e: StringView
+    sink: StringView
+} out String is {
+    # a carrier with no statements takes its line with it
+    bare: if pre.length == 0 then tmpl.replace needle: "@PRE\n    " replacement: "" else tmpl.string
+    b0: bare.stringView.replace needle: "@PRE" replacement: pre
+    b1: b0.stringView.replace needle: "@SINKX" replacement: env.sinkx
+    b2: b1.stringView.replace needle: "@SINK" replacement: sink
+    b3: lfExpand text: b2.stringView key: "@OXM" tmpl: p.method.stringView
+    b4: b3.stringView.replace needle: "@E" replacement: e
+    b5: lfExpand text: b4.stringView key: "@RD" tmpl: p.rd.stringView
+    b6: lfExpand text: b5.stringView key: "@RDE" tmpl: p.element.stringView
+    b7: lfFill t: b6.stringView :env
+    b8: b7.stringView.replace needle: "@SRC" replacement: env.src
+    return b8
+}
+
+# lfCap -- `k` with its first byte upper case
+lfCap: function {k: StringView} out String is {
+    buf: (k.substring from: 0 to: 1).toUpperAscii
+    buf.append (k.substring from: 1 to: k.length)
+    return buf
+}
+
+# lfCellName -- the function a cell's form is: `lf`, each axis value, H or T
+lfCellName: function {cl: LfCell.view twin: bool} out String is {
+    buf: "lf".string
+    buf.append (lfCap k: (lfProducers.get i: cl.p).key.stringView)
+    buf.append (lfCap k: (lfCarriers.get i: cl.c).key.stringView)
+    buf.append (lfCap k: (lfPlaces.get i: cl.pl).key.stringView)
+    buf.append (lfCap k: (lfDests.get i: cl.d).key.stringView)
+    if cl.tier == 2 then buf.append (lfCap k: (lfSinks.get i: cl.s).stringView)
+    if twin then {
+        buf.append "T"
+    } else buf.append "H"
+    return buf
+}
+
+# LfText -- one cell form as program text: its function's name, a helper it
+# calls (a function before it), a method of LfHost it calls, and the function
+LfText: class {
+    name: String
+    helper: String
+    method: String
+    fn: String
+}
+
+# lfIndent -- a body written at one level, moved to a method's level
+lfIndent: function {body: StringView} out String is {
+    return (body.replace needle: "\n    " replacement: "\n        ")
+}
+
+# lfCellText -- form `twin` of cell `cl`; `n` names its helper and method apart
+# from the program's other cells
+lfCellText: function {
+    words: zast.Vocab.view cl: LfCell.view twin: bool n: StringView
+} out LfText is {
+    p: lfProducers.get i: cl.p
+    c: lfCarriers.get i: cl.c
+    pl: lfPlaces.get i: cl.pl
+    d: lfDests.get i: cl.d
+    st: lfSources.get i: (lfSourceIndex pi: cl.p)
+    env: lfEnvOf :cl
+    madeOf: p.make.replace needle: "@SRC" replacement: pl.src.stringView
+    e: c.carry.replace needle: "@E" replacement: madeOf
+    pre: c.before.replace needle: "@E" replacement: madeOf
+    sink: lfSinkText :words tier: cl.tier :pl s: cl.s
+    t: LfText name: (lfCellName :cl :twin) helper: String method: String fn: String
+    if d.special.length > 0 then {
+        (
+            lfSpecialText
+            :words
+            :twin
+            :n
+            :p
+            :pl
+            :d
+            :st
+            :env
+            pre: pre.stringView
+            e: e.stringView
+            sink: sink.stringView
+            :t
+        )
+        return t
+    }
+    tmpl: if twin then d.twin.stringView else d.hazard.stringView
+    body: lfBody :tmpl :p :env pre: pre.stringView e: e.stringView sink: sink.stringView
+    kw: words.slotOf text: pl.kind.stringView
+    if kw == lfWord.slot.wLocal then {
+        setup: lfFill t: pl.setup.stringView :env
+        t.fn = "\{t.name}: function out i64 is {\n    \{setup}\n    \{body}\n}\n"
+    } else if kw == lfWord.slot.wParam then {
+        t.helper = "lfp\{n}: function {s: \{st.ty}} out i64 is {\n    \{body}\n}\n"
+        t.fn = "\{t.name}: function out i64 is {\n    s: \{st.mk}\n    return (lfp\{n} :s)\n}\n"
+    } else {
+        t.method = "    run\{n}: function {t: this.borrow} out i64 is {\n        \{(
+            lfIndent
+            body: body.stringView
+        )}\n    }\n"
+        t.fn = "\{t.name}: function out i64 is {\n    o: LfHost s: \{st.mk}\n    return o.run\{n}\n}\n"
+    }
+    return t
+}
+
+# lfSpecialText -- a value that leaves a helper (return, tail): its source is
+# the helper's own (a local place) or the caller's (a parameter), and the sink
+# and the read are the caller's
+lfSpecialText: function {
+    words: zast.Vocab.view
+    twin: bool
+    n: StringView
+    p: lfproducer
+    pl: lfplace
+    d: lfdest
+    st: lfsource
+    env: LfEnv.view
+    pre: StringView
+    e: StringView
+    sink: StringView
+    t: LfText
+} is {
+    last: if (
+        (words.slotOf text: d.special.stringView) == lfWord.slot.wTail
+    ) then "    \{e}" else "    return \{e}"
+    hpre: String
+    if pre.length > 0 then hpre = "    \{pre}\n"
+    cbody: String
+    if (words.slotOf text: pl.kind.stringView) == lfWord.slot.wLocal then {
+        setup: lfFill t: pl.setup.stringView :env
+        t.helper = "lfh\{n}: function out \{p.vt} is {\n    \{setup}\n"
+        t.helper.append hpre
+        t.helper.append last
+        t.helper.append "\n}\n"
+        cbody = "v: lfh\{n}\n    r: @RD[v]\n    return r"
+    } else {
+        t.helper = "lfh\{n}: function {s: \{st.ty}.view} outx \{p.vt} is {\n\{hpre}\{last}\n}\n"
+        if twin then {
+            cbody = "s: @MK\n    v: lfh\{n} :s\n    r: @RD[v]\n    v.drop\n    @SINK\n    return r"
+        } else cbody = "s: @MK\n    v: lfh\{n} :s\n    @SINK\n    return @RD[v]"
+    }
+    b1: cbody.stringView.replace needle: "@SINK" replacement: sink
+    b2: lfExpand text: b1.stringView key: "@RD" tmpl: p.rd.stringView
+    b3: lfFill t: b2.stringView :env
+    b4: b3.stringView.replace needle: "@SRC" replacement: "s"
+    t.fn = "\{t.name}: function out i64 is {\n    \{b4}\n}\n"
+}
+
+# lfCellPieces -- mark in `used` the pieces cell `cl` names
+lfCellPieces: function {cl: LfCell.view used: ListVal bool} is {
+    names: String
+    names.append " lfFlag LfSide lfSide "
+    names.append (lfSources.get i: (lfSourceIndex pi: cl.p)).pieces.stringView
+    names.append " "
+    names.append (lfProducers.get i: cl.p).pieces.stringView
+    names.append " "
+    names.append (lfCarriers.get i: cl.c).pieces.stringView
+    names.append " "
+    names.append (lfPlaces.get i: cl.pl).pieces.stringView
+    names.append " "
+    names.append (lfDests.get i: cl.d).pieces.stringView
+    names.append " "
+    pi: u64
+    for pi < lfPieces.length loop {
+        if (lfHas tags: names.stringView tag: (lfPieces.get i: pi).key.stringView) then (
+            used.set
+            i: pi
+            val: true
+        )
+        pi = pi + 1
+    }
+}
+
+# lfPiecesText -- the pieces marked in `used`, in the table's order, filled for
+# the program's producer
+lfPiecesText: function {used: (ListVal bool).view env: LfEnv.view p: lfproducer} out String is {
+    buf: String
+    pi: u64
+    for pi < lfPieces.length loop {
+        if (used.get i: pi) then {
+            filled: lfFill t: (lfPieces.get i: pi).body.stringView :env
+            buf.append (lfExpand text: filled.stringView key: "@RD" tmpl: p.rd.stringView)
+            buf.append "\n"
+        }
+        pi = pi + 1
+    }
+    return buf
+}
+
+# ---------------- the table ----------------
+
+# lfRowOf -- one row of the table's `lockflow` list, each part checked
+lfRowOf: function {words: zast.Vocab.view f: zdata.DataFile.view v: ztypes.cval} out LfRow is {
+    where: zdata.placeOf :f :v
+    arm: zdata.armOf :f v: (zdata.fieldOf :f :v name: "verdict")
+    expected: outcomeOf w: arm.stringView :where
+    detail: zdata.textOf :f v: (zdata.fieldOf :f :v name: "detail")
+    checkDetail :where :expected detail: detail.stringView
+    r: (
+        LfRow
+        :where
+        tier: (zdata.textOf :f v: (zdata.fieldOf :f :v name: "tier"))
+        producer: (zdata.textOf :f v: (zdata.fieldOf :f :v name: "producer"))
+        carrier: (zdata.textOf :f v: (zdata.fieldOf :f :v name: "carrier"))
+        place: (zdata.textOf :f v: (zdata.fieldOf :f :v name: "place"))
+        destination: (zdata.textOf :f v: (zdata.fieldOf :f :v name: "destination"))
+        sink: (zdata.textOf :f v: (zdata.fieldOf :f :v name: "sink"))
+        form: (zdata.textOf :f v: (zdata.fieldOf :f :v name: "form"))
+        :expected
+        :detail
+    )
+    lfCheckRow :words row: r
+    return r
+}
+
+# lfCheckRow -- every selector of a row names an axis value or a group of them
+lfCheckRow: function {words: zast.Vocab.view row: LfRow.view} is {
+    fw: words.slotOf text: row.form.stringView
+    tw: words.slotOf text: row.tier.stringView
+    if fw != lfWord.slot.wAny when fw != lfWord.slot.wHazard when fw != lfWord.slot.wTwin then {
+        fail msg: "\{row.where}: form '\{row.form}' is not *, hazard or twin"
+    }
+    if tw != lfWord.slot.wAny when tw != lfWord.slot.wFlow when tw != lfWord.slot.wSink then {
+        fail msg: "\{row.where}: tier '\{row.tier}' is not *, flow or sink"
+    }
+    lfCheckAxis :words :row sel: row.producer.stringView axis: 0
+    lfCheckAxis :words :row sel: row.carrier.stringView axis: 1
+    lfCheckAxis :words :row sel: row.place.stringView axis: 2
+    lfCheckAxis :words :row sel: row.destination.stringView axis: 3
+    lfCheckAxis :words :row sel: row.sink.stringView axis: 4
+}
+
+# lfCheckAxis -- selector `sel` names at least one value of axis `axis`
+lfCheckAxis: function {words: zast.Vocab.view row: LfRow.view sel: StringView axis: u64} is {
+    n: lfAxisLength :axis
+    k: u64
+    for k < n loop {
+        if (
+            lfSelects
+            :words
+            :sel
+            key: (lfAxisKey :axis :k).stringView
+            tags: (lfAxisTags :axis :k).stringView
+        ) then return
+        k = k + 1
+    }
+    fail msg: "\{row.where}: selector '\{sel}' names nothing on its axis"
+}
+
+# lfAxisLength -- how many values axis `axis` has: 0 producer, 1 carrier,
+# 2 place, 3 destination, 4 sink
+lfAxisLength: function {axis: u64} out u64 is {
+    if axis == 0 then return lfProducers.length
+    if axis == 1 then return lfCarriers.length
+    if axis == 2 then return lfPlaces.length
+    if axis == 3 then return lfDests.length
+    return lfSinks.length
+}
+
+# lfAxisKey -- the key of value `k` of axis `axis` (axes as lfAxisLength numbers
+# them)
+lfAxisKey: function {axis: u64 k: u64} out String is {
+    if axis == 0 then return (lfProducers.get i: k).key.string
+    if axis == 1 then return (lfCarriers.get i: k).key.string
+    if axis == 2 then return (lfPlaces.get i: k).key.string
+    if axis == 3 then return (lfDests.get i: k).key.string
+    return (lfSinks.get i: k).string
+}
+
+# lfAxisTags -- the tags of value `k` of axis `axis`; a sink has none
+lfAxisTags: function {axis: u64 k: u64} out String is {
+    if axis == 0 then return (lfProducers.get i: k).tags.string
+    if axis == 1 then return (lfCarriers.get i: k).tags.string
+    if axis == 2 then return (lfPlaces.get i: k).tags.string
+    if axis == 3 then return (lfDests.get i: k).tags.string
+    return "".string
+}
+
+# lfSelects -- whether selector `sel` names the axis value: `*`, `@<tag>` (tags
+# joined by `&` select the values carrying every one), or keys joined by `|`
+lfSelects: function {
+    words: zast.Vocab.view sel: StringView key: StringView tags: StringView
+} out bool is {
+    if (words.slotOf text: sel) == lfWord.slot.wAny then return true
+    if (sel.startsWith prefix: "@") then {
+        for each tag: ((sel.substring from: 1 to: sel.length).split sep: "&") loop {
+            if (lfHas :tags :tag).not then return false
+        }
+        return true
+    }
+    for each one: (sel.split sep: "|") loop {
+        if one == key then return true
+    }
+    return false
+}
+
+# lfRowSelects -- whether row `r` selects form `twin` of cell `cl`
+lfRowSelects: function {
+    words: zast.Vocab.view r: LfRow.view cl: LfCell.view twin: bool
+} out bool is {
+    fw: words.slotOf text: r.form.stringView
+    if fw == lfWord.slot.wHazard when twin then return false
+    if fw == lfWord.slot.wTwin when twin.not then return false
+    tw: words.slotOf text: r.tier.stringView
+    if tw == lfWord.slot.wFlow when cl.tier != 1 then return false
+    if tw == lfWord.slot.wSink when cl.tier != 2 then return false
+    if cl.tier == 1 when (
+        (words.slotOf text: r.sink.stringView) != lfWord.slot.wAny
+    ) then return false
+    if (
+        lfSelects
+        :words
+        sel: r.producer.stringView
+        key: (lfAxisKey axis: 0 k: cl.p).stringView
+        tags: (lfAxisTags axis: 0 k: cl.p).stringView
+    ).not then return false
+    if (
+        lfSelects
+        :words
+        sel: r.carrier.stringView
+        key: (lfAxisKey axis: 1 k: cl.c).stringView
+        tags: (lfAxisTags axis: 1 k: cl.c).stringView
+    ).not then return false
+    if (
+        lfSelects
+        :words
+        sel: r.place.stringView
+        key: (lfAxisKey axis: 2 k: cl.pl).stringView
+        tags: (lfAxisTags axis: 2 k: cl.pl).stringView
+    ).not then return false
+    if (
+        lfSelects
+        :words
+        sel: r.destination.stringView
+        key: (lfAxisKey axis: 3 k: cl.d).stringView
+        tags: (lfAxisTags axis: 3 k: cl.d).stringView
+    ).not then return false
+    if cl.tier == 2 then {
+        return (
+            lfSelects
+            :words
+            sel: r.sink.stringView
+            key: (lfAxisKey axis: 4 k: cl.s).stringView
+            tags: ""
+        )
+    }
+    return true
+}
+
+# lfVerdict -- the outcome of form `twin` of a cell and the row that set it:
+# the LAST row selecting it; a twin no row selects runs, a hazard no row
+# selects stops the generator
+lfVerdict: function {
+    words: zast.Vocab.view
+    rows: (List LfRow).view
+    used: ListVal bool
+    cl: LfCell
+    twin: bool
+} is {
+    row: -1
+    expected: outcome.run
+    ri: u64
+    for ri < rows.length loop {
+        if (lfRowSelects :words r: (rows.get i: ri) :cl :twin) then {
+            row = ri.i64.orPanic
+            expected = (rows.get i: ri).expected
+            used.set i: ri val: true
+        }
+        ri = ri + 1
+    }
+    if row < 0 when twin.not then (
+        fail
+        msg: "lockflow: no row decides the hazard of \{lfCellName :cl twin: false}"
+    )
+    if twin then {
+        cl.twin = expected
+        cl.trow = row
+    } else {
+        cl.hazard = expected
+        cl.hrow = row
+    }
+}
+
+# lfCellsOf -- every cell of both tiers, with the generator's reason for each
+# it cannot write, and the table's verdict for each form of the rest; a row
+# that selects no written cell is an error
+lfCellsOf: function {rows: (List LfRow).view} out List LfCell is {
+    words: zast.Vocab.create block: lfWord
+    used: ListVal bool
+    for used.length < rows.length loop used.append false
+    cells: List LfCell
+    pi: u64
+    for pi < lfProducers.length loop {
+        lfAddTier :words :rows :used :cells tier: 1 p: pi s: 0
+        pi = pi + 1
+    }
+    # the sink tier's producer, and the static one whose cells are its escapes' twins
+    si: u64
+    for si < lfSinks.length loop {
+        lfAddTier :words :rows :used :cells tier: 2 p: lfSinkProducer s: si
+        lfAddTier :words :rows :used :cells tier: 2 p: lfStaticIndex s: si
+        si = si + 1
+    }
+    ri: u64
+    for ri < rows.length loop {
+        if (used.get i: ri).not then fail msg: "\{(rows.get i: ri).where}: the row selects no cell"
+        ri = ri + 1
+    }
+    return cells
+}
+
+# lfAddTier -- producer `p`'s cells of one tier (sink `s` in the sink tier):
+# every carrier (the direct one alone in the sink tier), place and destination
+lfAddTier: function {
+    words: zast.Vocab.view
+    rows: (List LfRow).view
+    used: ListVal bool
+    cells: List LfCell
+    tier: u64
+    p: u64
+    s: u64
+} is {
+    ci: u64
+    for ci < lfCarriers.length while (tier == 1) or (ci == 0) loop {
+        pli: u64
+        for pli < lfPlaces.length loop {
+            di: u64
+            for di < lfDests.length loop {
+                cells.append (lfCellAt :words :rows :used :tier :p c: ci pl: pli d: di :s)
+                di = di + 1
+            }
+            pli = pli + 1
+        }
+        ci = ci + 1
+    }
+}
+
+# lfCellAt -- one cell: the generator's reason it cannot be written (its own,
+# or its lock-free twin's), else the table's verdict of each form it has
+lfCellAt: function {
+    words: zast.Vocab.view
+    rows: (List LfRow).view
+    used: ListVal bool
+    tier: u64
+    p: u64
+    c: u64
+    pl: u64
+    d: u64
+    s: u64
+} out LfCell is {
+    stat: lfStaticIndex
+    cl: (
+        LfCell
+        :tier
+        :p
+        :c
+        :pl
+        :d
+        :s
+        na: String
+        hazard: outcome.na
+        hrow: -1
+        twin: outcome.na
+        trow: -1
+        twinStatic: false
+    )
+    cl.na = lfWhyNot :words :cl
+    dest: lfDests.get i: d
+    pk: words.slotOf text: (lfPlaces.get i: pl).kind.stringView
+    escapes: (dest.special.length > 0) and (pk == lfWord.slot.wLocal)
+    cl.twinStatic = (dest.twin.length == 0) and (dest.special.length == 0) or escapes
+    if cl.na.length == 0 when cl.twinStatic when p != stat then {
+        twinCell: (
+            LfCell
+            :tier
+            p: stat
+            :c
+            :pl
+            :d
+            :s
+            na: String
+            hazard: outcome.na
+            hrow: -1
+            twin: outcome.na
+            trow: -1
+            twinStatic: false
+        )
+        why: lfWhyNot :words cl: twinCell
+        if why.length > 0 then cl.na = "its lock-free twin cannot be written: \{why}"
+    }
+    if cl.na.length > 0 then return cl
+    lfVerdict :words :rows :used :cl twin: false
+    if cl.twinStatic.not then lfVerdict :words :rows :used :cl twin: true
+    return cl
+}
+
+# ---------------- writing ----------------
+
+# lfDetail -- a row's detail for a cell, `@SRC` and `@ROOT` the place's source
+# and its root as the compiler's messages spell them
+lfDetail: function {rows: (List LfRow).view row: i64 cl: LfCell.view} out String is {
+    if row < 0 then return "".string
+    pl: lfPlaces.get i: cl.pl
+    d0: (
+        (rows.get i: row.u64.orPanic).detail.stringView.replace
+        needle: "@SRC"
+        replacement: pl.shown.stringView
+    )
+    return (d0.stringView.replace needle: "@ROOT" replacement: pl.root.stringView)
+}
+
+# lfStem -- the fixture stem of a program: `matrix_lf_<producer>_<place>` in the
+# flow tier, `matrix_lf_sink_<producer>_<place>` in the sink tier
+lfStem: function {tier: u64 p: u64 pl: u64} out String is {
+    buf: "matrix_lf_".string
+    if tier == 2 then buf.append "sink_"
+    buf.append (lfProducers.get i: p).key.stringView
+    buf.append "_"
+    buf.append (lfPlaces.get i: pl).key.stringView
+    return buf
+}
+
+# lfProgram -- a program of cell forms `forms` (cell index, twin): the pieces
+# they name, their helpers, LfHost with their methods, the functions, and a
+# main printing each function's name and value
+lfProgram: function {
+    words: zast.Vocab.view
+    cells: (List LfCell).view
+    forms: (ListVal u64).view
+    twins: (ListVal bool).view
+    what: StringView
+} out String is {
+    buf: "# GENERATED by tests/unit/matrixgen/lockflow.z from tests/fixtures/matrix_expect.zd --\n".string
+    buf.append "# `make regen-matrix`; do not edit. Lock-flow cells whose form is \{what}: one\n"
+    buf.append "# function per cell form, called from main.\n"
+    if forms.length == 0 then return buf
+    used: ListVal bool
+    for used.length < lfPieces.length loop used.append false
+    helpers: String
+    methods: String
+    fns: String
+    calls: String
+    k: u64
+    for k < forms.length loop {
+        cl: cells.get i: (forms.get i: k)
+        lfCellPieces :cl :used
+        nm: "\{k}"
+        t: lfCellText :words :cl twin: (twins.get i: k) n: nm.stringView
+        if t.helper.length > 0 then {
+            helpers.append t.helper
+            helpers.append "\n"
+        }
+        methods.append t.method
+        fns.append t.fn
+        fns.append "\n"
+        calls.append "    print \"\{t.name} \\{\{t.name}}\"\n"
+        k = k + 1
+    }
+    first: cells.get i: (forms.get i: 0)
+    env: lfEnvOf cl: first
+    buf.append "\n"
+    buf.append (lfPiecesText :used :env p: (lfProducers.get i: first.p))
+    buf.append helpers
+    if methods.length > 0 then {
+        st: lfSources.get i: (lfSourceIndex pi: first.p)
+        buf.append "LfHost: class {\n    s: \{st.ty}\n} as {\n\{methods}}\n"
+    }
+    buf.append fns
+    buf.append "main: function is {\n\{calls}}\n"
+    return buf
+}
+
+# lfGroup -- the forms of the cells of one program (tier, producer, place) with
+# the given outcome: a hazard, and a twin of its own
+lfGroup: function {
+    cells: (List LfCell).view
+    tier: u64
+    p: u64
+    pl: u64
+    expected: outcome
+    forms: ListVal u64
+    twins: ListVal bool
+} is {
+    ci: u64
+    for ci < cells.length loop {
+        cl: cells.get i: ci
+        if cl.tier == tier when cl.p == p when cl.pl == pl when cl.na.length == 0 then {
+            if cl.hazard == expected then {
+                forms.append ci
+                twins.append false
+            }
+            if cl.twinStatic.not when cl.twin == expected then {
+                forms.append ci
+                twins.append true
+            }
+        }
+        ci = ci + 1
+    }
+}
+
+# lfWriteProgram -- one program's RUN fixture (corpus program, golden, case row)
+# and its REFUSED fixture (errors program and .err)
+lfWriteProgram: function {
+    words: zast.Vocab.view
+    root: StringView
+    cells: (List LfCell).view
+    rows: (List LfRow).view
+    tier: u64
+    p: u64
+    pl: u64
+    cases: String
+} is {
+    stem: lfStem :tier :p :pl
+    forms: ListVal u64
+    twins: ListVal bool
+    lfGroup :cells :tier :p :pl expected: outcome.run :forms :twins
+    if forms.length > 0 then {
+        prog: lfProgram :words :cells :forms :twins what: "RUN"
+        writeFile path: "\{root}/tests/fixtures/emitc_corpus/\{stem}.z" content: prog.stringView
+        gold: String
+        k: u64
+        for k < forms.length loop {
+            gold.append (lfCellName cl: (cells.get i: (forms.get i: k)) twin: (twins.get i: k))
+            gold.append " 7\n"
+            k = k + 1
+        }
+        writeFile path: "\{root}/tests/fixtures/run_golden/\{stem}.out" content: gold.stringView
+        cases.append stem
+        cases.append " tests/fixtures/emitc_corpus\n"
+    }
+    rforms: ListVal u64
+    rtwins: ListVal bool
+    lfGroup :cells :tier :p :pl expected: outcome.refused forms: rforms twins: rtwins
+    if rforms.length == 0 then return
+    rprog: lfProgram :words :cells forms: rforms twins: rtwins what: "REFUSED"
+    rstem: stem.copy
+    rstem.append "_refused"
+    writeFile path: "\{root}/tests/fixtures/errors/\{rstem}.z" content: rprog.stringView
+    err: String
+    k: u64
+    for k < rforms.length loop {
+        cl: cells.get i: (rforms.get i: k)
+        row: if (rtwins.get i: k) then cl.trow else cl.hrow
+        err.append (errLine detail: (lfDetail :rows :row :cl).stringView)
+        k = k + 1
+    }
+    if rforms.length == 1 then {
+        err.append "1 error found\n"
+    } else err.append "\{rforms.length} errors found\n"
+    writeFile path: "\{root}/tests/fixtures/errors/\{rstem}.err" content: err.stringView
+}
+
+# lfWriteFixtures -- every program of both tiers, its run_cases rows appended
+# to `cases`
+lfWriteFixtures: function {
+    root: StringView cells: (List LfCell).view rows: (List LfRow).view cases: String
+} is {
+    words: zast.Vocab.create block: lfWord
+    pi: u64
+    for pi < lfProducers.length loop {
+        pli: u64
+        for pli < lfPlaces.length loop {
+            lfWriteProgram :words :root :cells :rows tier: 1 p: pi pl: pli :cases
+            pli = pli + 1
+        }
+        pi = pi + 1
+    }
+    pli: u64
+    for pli < lfPlaces.length loop {
+        lfWriteProgram :words :root :cells :rows tier: 2 p: lfSinkProducer pl: pli :cases
+        lfWriteProgram :words :root :cells :rows tier: 2 p: lfStaticIndex pl: pli :cases
+        pli = pli + 1
+    }
+}
+
+# lfWriteCells -- one program per written cell form (a hazard and its own twin;
+# an escape's twin is the static cell, written once as that cell's hazard), and
+# the manifest: name tier producer carrier place destination sink form verdict
+# detail; an unwritten cell's line gives the generator's reason
+lfWriteCells: function {dir: StringView cells: (List LfCell).view rows: (List LfRow).view} is {
+    words: zast.Vocab.create block: lfWord
+    ensureDir path: dir
+    manifest: String
+    ci: u64
+    for ci < cells.length loop {
+        cl: cells.get i: ci
+        if cl.na.length > 0 then {
+            manifest.append "\{lfFileStem :cl twin: false} \{lfManifestAxes :cl} - NA \{cl.na}\n"
+        } else {
+            lfWriteForm :words :dir :cells :rows :ci twin: false :manifest
+            if cl.twinStatic.not then lfWriteForm :words :dir :cells :rows :ci twin: true :manifest
+        }
+        ci = ci + 1
+    }
+    writeFile path: "\{dir}/manifest.txt" content: manifest.stringView
+}
+
+# lfManifestAxes -- a cell's tier and axis values, as the manifest lists them
+lfManifestAxes: function {cl: LfCell.view} out String is {
+    buf: String
+    if cl.tier == 1 then {
+        buf.append "flow "
+    } else buf.append "sink "
+    buf.append (lfAxisKey axis: 0 k: cl.p)
+    buf.append " "
+    buf.append (lfAxisKey axis: 1 k: cl.c)
+    buf.append " "
+    buf.append (lfAxisKey axis: 2 k: cl.pl)
+    buf.append " "
+    buf.append (lfAxisKey axis: 3 k: cl.d)
+    buf.append " "
+    if cl.tier == 1 then {
+        buf.append "-"
+    } else buf.append (lfAxisKey axis: 4 k: cl.s)
+    return buf
+}
+
+# lfFileStem -- a cell form's file when written alone: a unit name is lower
+# case, so the axis keys joined by `_`, then h or t
+lfFileStem: function {cl: LfCell.view twin: bool} out String is {
+    buf: "lf".string
+    axes: lfManifestAxes :cl
+    for each k: (axes.stringView.split sep: " ") loop {
+        buf.append "_"
+        buf.append k
+    }
+    if twin then {
+        buf.append "_t"
+    } else buf.append "_h"
+    return (buf.stringView.replace needle: "_-" replacement: "")
+}
+
+# lfWriteForm -- one cell form alone, and its manifest line
+lfWriteForm: function {
+    words: zast.Vocab.view
+    dir: StringView
+    cells: (List LfCell).view
+    rows: (List LfRow).view
+    ci: u64
+    twin: bool
+    manifest: String
+} is {
+    forms: ListVal u64
+    forms.append ci
+    twins: ListVal bool
+    twins.append twin
+    cl: cells.get i: ci
+    name: lfFileStem :cl :twin
+    prog: lfProgram :words :cells :forms :twins what: "alone"
+    writeFile path: "\{dir}/\{name}.z" content: prog.stringView
+    o: if twin then cl.twin else cl.hazard
+    row: if twin then cl.trow else cl.hrow
+    form: if twin then "twin" else "hazard"
+    manifest.append "\{name} \{lfManifestAxes :cl} \{form} \{outcomeWord :o} \{(
+        lfDetail
+        :rows
+        :row
+        :cl
+    )}\n"
+}
+
+# lfReport -- the tally of both tiers' cells
+lfReport: function {cells: (List LfCell).view} is {
+    na: u64
+    counts: ListVal u64
+    for counts.length < 5 loop counts.append 0
+    for each cl: cells loop {
+        if cl.na.length > 0 then {
+            na = na + 1
+        } else {
+            lfTally :counts o: cl.hazard
+            if cl.twinStatic.not then lfTally :counts o: cl.twin
+        }
+    }
+    print "matrixgen: \{cells.length} lock-flow cells (\{na} the generator cannot write): forms \{(
+        counts.get
+        i: 0
+    )} RUN, \{counts.get i: 1} REFUSED, \{counts.get i: 2} NA, \{counts.get i: 3} ASK, \{(
+        counts.get
+        i: 4
+    )} KNOWN"
+}
+
+# lfTally -- count outcome `o` in `counts` (run refused na ask known)
+lfTally: function {counts: ListVal u64 o: outcome} is {
+    k: match (
+        o
+    ) case run then 0.u64 case refused then 1.u64 case na then 2.u64 case ask then 3.u64 case known then 4.u64
+    counts.set i: k val: (counts.get i: k) + 1
+}
+
+# lfReadRows -- the rows of the table's `lockflow` list
+lfReadRows: function {f: zdata.DataFile.view} out List LfRow is {
+    words: zast.Vocab.create block: lfWord
+    rows: List LfRow
+    for each v: (zdata.itemsOf :f v: (zdata.definition :f name: "lockflow")) loop rows.append (
+        lfRowOf
+        :words
+        :f
+        :v
+    )
+    return rows
+}

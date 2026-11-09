@@ -133,12 +133,12 @@ TOOLSRC := $(wildcard tools/*/*.z)
 TOOLDIRS := $(sort $(patsubst %/,%,$(dir $(TOOLSRC))))
 
 # What the parse-tier linter reads.
-ZLSCOPE := src/*.z lib/system/*.z lib/system/system/*.z lib/system/math/*.z tests/unit/*.z $(TOOLSRC)
+ZLSCOPE := src/*.z lib/system/*.z lib/system/system/*.z lib/system/math/*.z tests/unit/*.z tests/unit/matrixgen/*.z $(TOOLSRC)
 # What the --full tier reads. It checks a file as the unit it is, so style-lint
 # gives each tree its own roots.
 ZLFULLSCOPE := src/*.z lib/system/*.z lib/system/system/*.z lib/system/math/*.z
 # What the formatter checks; tests/fixtures/ is input and stays as written.
-FMTSCOPE := src/*.z lib/system/*.z lib/system/system/*.z lib/system/math/*.z examples/*.z tests/unit/*.z $(TOOLSRC) lib/system/*.zd project.zd
+FMTSCOPE := src/*.z lib/system/*.z lib/system/system/*.z lib/system/math/*.z examples/*.z tests/unit/*.z tests/unit/matrixgen/*.z $(TOOLSRC) lib/system/*.zd project.zd
 
 all: bin/zc bin/zl bin/zls
 
@@ -147,7 +147,7 @@ check: style-lint-fast complexity-report
 
 # complexity-report -- every function over A008's threshold, highest first, into
 # $(COMPLEXITY_TSV); the per-file ratchet is tests/fixtures/arch_baseline.txt.
-COMPLEXITY_SCOPE := src/*.z lib/system/*.z lib/system/system/*.z lib/system/math/*.z tests/unit/*.z examples/*.z $(TOOLSRC)
+COMPLEXITY_SCOPE := src/*.z lib/system/*.z lib/system/system/*.z lib/system/math/*.z tests/unit/*.z tests/unit/matrixgen/*.z examples/*.z $(TOOLSRC)
 COMPLEXITY_TSV := $(BUILDDIR)/cognitive-complexity.tsv
 complexity-report: bin/zl
 	@mkdir -p $(BUILDDIR)
@@ -1019,7 +1019,7 @@ regen-fmt-goldens: out/zfmt
 	@echo "regenerated fmt goldens via $(BUILDDIR)/zfmt"
 
 # The ownership matrix generator: every type family by every position.
-out/matrixgen: bin/zc tests/unit/matrixgen.z $(wildcard src/*.z) $(wildcard lib/system/*.z) $(wildcard lib/system/system/*.z lib/system/math/*.z)
+out/matrixgen: bin/zc tests/unit/matrixgen.z $(wildcard tests/unit/matrixgen/*.z) $(wildcard src/*.z) $(wildcard lib/system/*.z) $(wildcard lib/system/system/*.z lib/system/math/*.z)
 	@mkdir -p $(BUILDDIR)
 	bin/zc matrixgen --src tests/unit --src src --system lib/system --emit-c $(BUILDDIR)/matrixgen.c
 	$(CC) $(CFLAGS) -o $(BUILDDIR)/matrixgen $(BUILDDIR)/matrixgen.c $(call ZLINKOF,$(BUILDDIR)/matrixgen.c) -lm
