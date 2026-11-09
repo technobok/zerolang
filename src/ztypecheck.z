@@ -44686,27 +44686,27 @@ reportHeldIntoSlot: function {
     lineno: u32
     colno: u32
 } is {
-    root: zast.nameTextAt :ast ref: (pinRootAt pins: held i: 0)
+    root: lockRootPhrase :st :ast nameId: (pinRootAt pins: held i: 0)
     what: "the value".string
     if name.length > 0 then what = "'\{name}'"
     rem: lockFreeRemedy :st :ast tid: movedT
-    msg: "Cannot move \{what} into a `.take` parameter: it holds a lock on '\{root}', and the callee is not `outx`, so nothing keeps '\{root}' locked once the call returns\{rem}"
+    msg: "Cannot move \{what} into a `.take` parameter: it holds a lock on \{root}, and the callee is not `outx`, so nothing keeps \{root} locked once the call returns\{rem}"
     # a function call keeps the value through its body; one that is not `outx`
     # fails for the plainer reason above
     keptByCall: keeper.isZero.not and (ast.nodes.get i: keeper).call
     if keptByCall when calleePins then {
         into: keeperText :ast :keeper
-        msg = "Cannot move \{what} into \{into}: it holds a lock on '\{root}', and the function's body could store it where that lock does not follow -- only a construction or a native `outx` call keeps a moved value's locks\{rem}"
+        msg = "Cannot move \{what} into \{into}: it holds a lock on \{root}, and the function's body could store it where that lock does not follow -- only a construction or a native `outx` call keeps a moved value's locks\{rem}"
     } else if keeper.isZero.not when keptByCall.not then {
         into: keeperText :ast :keeper
-        msg = "Cannot move \{what} into \{into}: it holds a lock on '\{root}', and a value stored there could later be taken out without that lock\{rem}"
+        msg = "Cannot move \{what} into \{into}: it holds a lock on \{root}, and a value stored there could later be taken out without that lock\{rem}"
     }
     # a value handed to another thread by a call that keeps nothing: nothing
     # waits for that thread, so nothing keeps the lock while it runs
     xc: (st.walk.crossingArgCallee.get key: nodeid).or d: ztypes.tid.zero
     if xc.isZero.not when calleePins.not then {
         xn: crossingCallName :st funcId: xc
-        msg = "Cannot hand \{what} to another thread with `\{xn}`: it holds a lock on '\{root}', and the call keeps no handle that would hold that lock while the thread runs\{rem}"
+        msg = "Cannot hand \{what} to another thread with `\{xn}`: it holds a lock on \{root}, and the call keeps no handle that would hold that lock while the thread runs\{rem}"
     }
     addError :st :nodeid :lineno :colno e: zast.err.ownerError :msg
 }
@@ -44945,14 +44945,14 @@ refuseLockHolder: function {
     if fromNm.length > 0 then what = "'\{fromNm}'"
     rem: lockFreeRemedy :st :ast tid: movedT
     toNm: varNameText :st :ast vid: to
-    firstRoot: zast.nameTextAt :ast ref: (pinRootAt pins: held i: 0)
+    firstRoot: lockRootPhrase :st :ast nameId: (pinRootAt pins: held i: 0)
     if (st.reg.variableOriginOf id: to) == ztypes.zvarorigin.param then {
-        mp: "Cannot move \{what} \{verb}: it holds a lock on '\{firstRoot}', and '\{toNm}' is a parameter, so the value would reach the caller without that lock\{rem}"
+        mp: "Cannot move \{what} \{verb}: it holds a lock on \{firstRoot}, and '\{toNm}' is a parameter, so the value would reach the caller without that lock\{rem}"
         addError :st :nodeid :lineno :colno e: zast.err.ownerError msg: mp
         return true
     }
     if (isBorrowedVar :st vid: to) then {
-        mr: "Cannot move \{what} \{verb}: it holds a lock on '\{firstRoot}', and '\{toNm}' is a reference, so the value would land in storage it does not own, and the lock would end with it\{rem}"
+        mr: "Cannot move \{what} \{verb}: it holds a lock on \{firstRoot}, and '\{toNm}' is a reference, so the value would land in storage it does not own, and the lock would end with it\{rem}"
         hr: String
         ow: st.reg.variableBorrowOriginOf id: to
         if ow.isZero.not then {
@@ -45200,7 +45200,7 @@ heldRootsDieWithCall: function {
 nameIsSynthVariable: function {st: zenv.ZSymbolTable.view nameId: zast.nameid} out bool is {
     vo: st.lookupVarId :nameId
     if vo.none then return false
-    return (st.reg.variableOriginOf id: vo) == ztypes.zvarorigin.synth
+    return (st.holderIsTemporary vid: vo)
 }
 
 # temporaryHint -- what releases a lock a compiler temporary holds: whatever
