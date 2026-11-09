@@ -14,6 +14,8 @@
 #            outside tests/known-leaks.txt. The spelling is proved to work on a
 #            deliberate leak before any verdict is trusted (proveSanitizer).
 #   error    errors/<n>.z must fail with the error[Exxxx] lines of <n>.err
+#   lone     every run case, with one unrelated error written at the top of
+#            `main`, reports that error and no other
 #   dump     dump_cases.txt -> `zc dump --canon` matches dump_golden/<n>.canon
 #   lexer / parser / program goldens for every example
 #   vfs      zvfs script dispatch
@@ -2683,6 +2685,153 @@ runErrorCases: function {r: Runner} is {
     }
 }
 
+# loneErrorLine / loneErrorReport -- the error the LONE kind writes as the
+# first line of a program's `main`, and the report the program must then give
+loneErrorLine: "    zqzLone: zqzLoneErrorProbe"
+loneErrorReport: "error[E0023]: Unknown reference 'zqzLoneErrorProbe'\n1 error found\n"
+
+# withLoneError -- `src` with loneErrorLine as the first line of `main`'s body,
+# or "" when no line opens `main`
+withLoneError: function {src: StringView} out String is {
+    buf: String
+    done: false
+    for each ln: src.lines loop {
+        buf.append ln
+        buf.append "\n"
+        if done.not when ln.startsWith "main: function" when ln.trimEnd.endsWith "is {" then {
+            buf.append loneErrorLine
+            buf.append "\n"
+            done = true
+        }
+    }
+    if done then return buf
+    return "".string
+}
+
+# loneErrorJob -- queue the LONE job for RUN case `name`, whose source roots
+# are `srcAbs`: the changed program goes to a directory of its own, with a copy
+# of the units it keeps in a directory of its name beside it, and its other
+# roots stay the case's. False when no root holds the program or it opens no
+# `main`.
+loneErrorJob: function {
+    r: Runner.view
+    name: StringView
+    srcAbs: (List String).view
+    pool: (List PoolJob).borrow
+} out bool is {
+    home: String
+    for each d: srcAbs loop {
+        cand: "\{d.stringView}/\{name}.z"
+        if home.length == 0 when (io.exists path: cand) then home = d.copy
+    }
+    if home.length == 0 then return false
+    srcPath: "\{home.stringView}/\{name}.z"
+    src: slurp path: srcPath.stringView
+    changed: withLoneError src: src.stringView
+    if changed.length == 0 then return false
+    work: "\{r.tmp.stringView}/lone_\{name}"
+    io.mkdirp path: work
+    io.writeText path: "\{work.stringView}/\{name}.z" content: changed
+    own: "\{home.stringView}/\{name}"
+    if (zcheck.pathKindIs path: own.stringView want: io.filekind.dir) then {
+        ownCopy: "\{work.stringView}/\{name}"
+        copyUnits from: own.stringView to: ownCopy.stringView
+    }
+    roots: List String
+    roots.append from: work.copy
+    for each d: srcAbs loop roots.append from: d.copy
+    argv: (
+        zcArgv
+        zc: r.zc.stringView
+        ccFwd: r.ccFwd.stringView
+        :name
+        srcdirs: roots
+        sys: r.sys.stringView
+        outc: os.nullDevice.stringView
+    )
+    pe: "\{r.tmp.stringView}/lone_\{name}.pe"
+    steps: List PoolStep
+    steps.append (
+        mkStep
+        :argv
+        cwd: ""
+        outPath: os.nullDevice.stringView
+        errPath: pe.stringView
+        timeoutSecs: 0
+        allowFail: true
+        zlinkFrom: ""
+    )
+    pool.append (mkJob :name :steps)
+    return true
+}
+
+# runLoneErrorCases -- the LONE kind: AN ERROR HIDES NO OTHER ERROR, checked on
+# real programs. Each RUN case, with one unrelated error written as the first
+# line of `main`, must report exactly that error. Any other error in the report
+# is one the first caused or uncovered: a check that runs only on a program
+# with no errors, or that reports from what an error left behind. A check
+# stops at the first error, so the whole kind takes about a second.
+runLoneErrorCases: function {r: Runner} is {
+    rcC: slurp path: r.runcases.stringView
+    pool: List PoolJob
+    words: zast.Vocab.create block: runnerWord
+    windows: ztarget.targetIsWindows triple: r.target.stringView
+    for each ln: rcC.stringView.lines loop queueLoneErrorCase :r :ln :words :windows :pool
+    statuses: ListVal i32
+    failSteps: ListVal i64
+    runJobs jobs: pool maxJobs: r.jobsMax :statuses :failSteps
+    for each job: pool loop checkLoneErrorJob :r name: job.name.stringView
+}
+
+# queueLoneErrorCase -- the LONE job for one line of run_cases.txt: its name,
+# its source-root column and its markers. A POSIX-only case is not a program on
+# Windows, and the LONE kind skips it as the RUN kind does.
+queueLoneErrorCase: function {
+    r: Runner
+    ln: StringView
+    words: zast.Vocab.view
+    windows: bool
+    pool: (List PoolJob).borrow
+} is {
+    nameStr: String
+    dirStr: String
+    posixOnly: false
+    idx: u64
+    for each pc: (ln.split sep: " ") loop {
+        if pc.length > 0 then {
+            if idx == 0 then {
+                nameStr = pc.string
+            } else if idx == 1 then {
+                dirStr = pc.string
+            } else if (words.slotOf text: pc) == runnerWord.slot.casePosix then {
+                posixOnly = true
+            }
+            idx = idx + 1
+        }
+    }
+    if (idx < 2) or (posixOnly and windows) then return
+    srcAbs: manifestDirs root: r.root.stringView column: dirStr.stringView
+    if (loneErrorJob :r name: nameStr.stringView :srcAbs :pool).not then {
+        print "FAIL(lone) \{nameStr}: no source root holds it with a line that opens `main`"
+        r.fails = r.fails + 1
+    }
+}
+
+# checkLoneErrorJob -- the verdict on LONE job `name`: its report is exactly
+# loneErrorReport
+checkLoneErrorJob: function {r: Runner name: StringView} is {
+    pe: "\{r.tmp.stringView}/lone_\{name}.pe"
+    got: slurp path: pe.stringView
+    ne: normErr content: got.stringView
+    if ne.stringView == loneErrorReport then {
+        r.passN = r.passN + 1
+        return
+    }
+    print "FAIL(lone) \{name}: one error in `main` changed what else is reported:"
+    print "\{ne}"
+    r.fails = r.fails + 1
+}
+
 # runZdataCases -- the ZDATA kind: each tests/fixtures/zdata/<case>.zd is read
 # with `zc data` (its own directory first, then what <case>.zcargs adds). A case
 # with a <case>.err golden must fail with those errors (normErr); any other
@@ -4006,6 +4155,7 @@ main: function is {
         runLspCases :r
         runLeakCases :r
         runErrorCases :r
+        runLoneErrorCases :r
         runZdataCases :r
         runDumpCases :r
         runDifferentialCases :r
