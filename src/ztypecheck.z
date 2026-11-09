@@ -47662,13 +47662,26 @@ standInNeedsBox: function {
 }
 
 # signatureText -- a function type spelled as its signature is written,
-# `function {x: i64} out i64`. A function type is named after what declares it
-# -- the function, or a function field's signature -- and that name says
-# nothing about what it takes.
+# `function {x: i64 v: String.view} outx StringView`: each parameter's marker,
+# and `out` or `outx` with the return's marker, are part of what a slot of the
+# type accepts (functionSignaturesMatch). A function type is named after what
+# declares it -- the function, or a function field's signature -- and that name
+# says nothing about what it takes.
 signatureText: function {st: zenv.ZSymbolTable.view ast: Ast.view tid: ztypes.tid} out String is {
     r: "function".string
-    ns: st.typing.declRowSlots ownerTid: tid
+    ps: signatureParamsText :st :ast :tid
+    if ps.length > 0 then r.append " {\{ps}}"
+    r.append (signatureReturnText :st :ast :tid)
+    return r
+}
+
+# signatureParamsText -- a function type's parameters as its signature writes
+# them, each with its marker: `x: i64 v: String.view`
+signatureParamsText: function {
+    st: zenv.ZSymbolTable.view ast: Ast.view tid: ztypes.tid
+} out String is {
     ps: String
+    ns: st.typing.declRowSlots ownerTid: tid
     k: u64
     for k < ns loop {
         row: st.typing.declRowAt ownerTid: tid membersOnly: true slot: k
@@ -47680,12 +47693,34 @@ signatureText: function {st: zenv.ZSymbolTable.view ast: Ast.view tid: ztypes.ti
             } else {
                 ptn: specWrittenName :st :ast tid: row.tid
                 ps.append "\{zast.nameTextAt :ast ref: row.name}: \{ptn}"
+                pm: st.typing.declOwnershipOfId parentTypeId: tid nameId: row.name
+                if pm.some then {
+                    ps.append "."
+                    ps.append (markerText o: pm)
+                }
             }
         }
     }
-    if ps.length > 0 then r.append " {\{ps}}"
+    return ps
+}
+
+# signatureReturnText -- a function type's return as its signature writes it,
+# ` out T` or ` outx T` with the return's marker, "" for none
+signatureReturnText: function {
+    st: zenv.ZSymbolTable.view ast: Ast.view tid: ztypes.tid
+} out String is {
+    r: String
     ro: methodReturnOf reg: st.reg typing: st.typing mid: tid
-    match ro case some then r.append " out \{specWrittenName :st :ast tid: ro}" case none then null
+    if ro.none then return r
+    if (st.typing.funcPins.has item: tid) then {
+        r.append " outx "
+    } else r.append " out "
+    r.append (specWrittenName :st :ast tid: ro)
+    rm: markerText o: (st.typing.returnMarkerOf :tid)
+    if rm.length > 0 then {
+        r.append "."
+        r.append rm
+    }
     return r
 }
 
@@ -47831,7 +47866,7 @@ specStandInHolds: function {
 
 # functionSignaturesMatch -- a function value `a` fits a place typed by the
 # function type `b`: the same parameters in order, with the same names, types and
-# ownership, and the same return. Specs and functions are structurally typed, so
+# ownership, and the same return, `out` or `outx` and its marker included. Specs and functions are structurally typed, so
 # this is the whole of the rule; it was not asked at all, and a function of any
 # signature stored in a function field or passed for a function parameter
 # reached the C as an incompatible pointer. A generic parameter on either side
@@ -47863,6 +47898,11 @@ functionSignaturesMatch: function {
         if ao != bo then return false
         i = i + 1
     }
+    # the result is the same kind of result: an `outx` one keeps its inputs
+    # locked, and a call through a slot typed `out` would keep nothing
+    if (st.typing.funcPins.has item: a) != (st.typing.funcPins.has item: b) then return false
+    sameMarker: (implementationReturnMarker :st mid: a) == (implementationReturnMarker :st mid: b)
+    if sameMarker.not then return false
     ar: methodReturnOf reg: st.reg typing: st.typing mid: a
     br: methodReturnOf reg: st.reg typing: st.typing mid: b
     if ar.none != br.none then return false
