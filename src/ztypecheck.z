@@ -39009,41 +39009,74 @@ checkReadonlyBindSource: function {
 }
 
 
-# pinBoundField -- `b: h.p`, a reftype field read bound whole: a field is always
-# borrowed, whatever owns its parent, so the binding is a second name for it and
-# pins the path as `b: h.p.borrow` does -- a write to the field, or a move out of
-# it, is refused while `b` lives.
-pinBoundField: function {st: zenv.ZSymbolTable ast: Ast.view vt: ztypes.tid nid: zast.nodeid} is {
-    if st.walk.pendingPins.length > 0 then return
-    pinFieldRead :st :ast :vt :nid
+# pinread -- a value's pins as the destination that receives it reads them
+# (pinsOfValue): whether what binds it owns it -- an `outx` result, a holder
+# moved out with its locks -- and the marker that makes the binding readonly
+# (`.view`) or frozen (`.hold`).
+pinread: record {
+    # owned by what binds it, yet pinned
+    owned: bool
+    # the marker on the return the value came from
+    marker: ztypes.zparamownership
 }
 
-# pinFieldRead -- the pin pinBoundField places for the field read at `nid`,
-# whatever else is already pending: each arm of a control value adds its own.
-pinFieldRead: function {st: zenv.ZSymbolTable ast: Ast.view vt: ztypes.tid nid: zast.nodeid} is {
-    if (st.reg.isReftypeOf tid: vt).not then return
-    fp: ListVal zast.nameid
-    vn: ast.nodes.get i: nid
-    if (isMarkedMove :ast n: vn) then return
-    if (movedFieldPath :st :ast n: vn).not then return
-    appendValueTuple :ast n: vn dst: fp
-    # (an `if` or a `match` pins the field each arm reads: pinBoundArms)
-    if fp.length < 2 then return
-    if (st.lookupVarId nameId: (fp.get i: 0)).none then return
-    # through a readonly root the second name is readonly too
-    mw: (pathIsReadonly :st path: fp).not
-    pinsPush :st path: fp shared: true mutable: mw
+# pinsOfValue -- what the value at `nid`, of type `vt`, keeps locked, appended to
+# `dst` for the destination that receives it: what its walk recorded
+# (recordValuePins), or, when it made no pins and the destination `borrowing`
+# it is a second name for it, the place it is read from -- a bare name or a
+# field (placePins). A control value keeps what every arm hands back
+# (pinsOfArms). `verb` says what the destination does with the value, for the
+# refusal of a pin on storage that dies with an arm.
+pinsOfValue: function {
+    st: zenv.ZSymbolTable
+    ast: Ast
+    vt: ztypes.tid
+    nid: zast.nodeid
+    borrowing: bool
+    verb: StringView
+    dst: List ztyping.PinPath
+} out pinread is {
+    if (isControlValue :ast :nid) then return (pinsOfArms :st :ast :vt :nid :verb :dst)
+    vp: valuePinsOf :st :nid
+    if vp.len > 0 then {
+        appendRecordPins :st :vp :dst
+    } else if borrowing then {
+        placePins :st :ast :vt :nid :dst
+    }
+    return (pinread owned: vp.owned marker: vp.marker)
 }
 
-# pinBoundName -- `b: a`, a bare reftype name bound whole: the binding is a
-# SECOND NAME for what `a` names, not a transfer of it, so it pins the source
-# exactly as `b: a.borrow` does. A write to `a`, a move out of it or a mutating
-# method on it is refused while `b` lives, and `b` cannot escape as owned.
-# `.take` is the one spelling that moves. Through a readonly root the second
-# name is readonly too, which is what keeps a rename from laundering a borrow
-# into an owned value.
-pinBoundName: function {st: zenv.ZSymbolTable ast: Ast.view vt: ztypes.tid nid: zast.nodeid} is {
-    if st.walk.pendingPins.length > 0 then return
+# appendRecordPins -- a copy of each pin of the record `vp` onto `dst`.
+appendRecordPins: function {
+    st: zenv.ZSymbolTable.view vp: ztyping.valuepins dst: List ztyping.PinPath
+} is {
+    k: u64
+    for k < vp.len loop {
+        p: st.walk.valuePins.get i: vp.start.u64 + k
+        k = k + 1
+        dst.append (
+            ztyping.PinPath
+            path: p.path.copy
+            shared: p.shared
+            mutable: p.mutable
+            carried: p.carried
+        )
+    }
+}
+
+# placePins -- `b: h.p` or `b: a`, a reftype read whole from a field or a name:
+# the binding is a SECOND NAME for that place, not a transfer of it, so it pins
+# the path exactly as `b: h.p.borrow` does -- a write to it, a move out of it or
+# a mutating method on it is refused while `b` lives, and `b` cannot escape as
+# owned. `.take` is the one spelling that moves. Through a readonly root the
+# second name is readonly too, which is what keeps a rename from laundering a
+# borrow into an owned value.
+placePins: function {
+    st: zenv.ZSymbolTable ast: Ast.view vt: ztypes.tid nid: zast.nodeid dst: List ztyping.PinPath
+} is {
+    n0: dst.length
+    fieldReadPin :st :ast :vt :nid :dst
+    if dst.length > n0 then return
     if (st.reg.isReftypeOf tid: vt).not then return
     # a TYPE name or a zero-arg function resolves to no variable: those
     # construct or call rather than naming storage, and the binding owns what
@@ -39054,81 +39087,161 @@ pinBoundName: function {st: zenv.ZSymbolTable ast: Ast.view vt: ztypes.tid nid: 
     np: ListVal zast.nameid
     np.append bn
     mw: (pathIsReadonly :st path: np).not
-    pinsPush :st path: np shared: true mutable: mw
+    pinsAppend pins: dst path: np shared: true mutable: mw carried: false
 }
 
-# pinBoundArms -- `b: if c then w else h.p`: each arm pins what it reads as the
-# same value bound alone would -- a local of an enclosing scope (pinArmLocal), a
-# field (pinFieldRead), what a call hands back (pinArmValue) -- so the binding
-# is a second name for whichever the arm that ran yields. An arm's `.take`
-# moves, and pins nothing.
-pinBoundArms: function {st: zenv.ZSymbolTable ast: Ast vt: ztypes.tid nid: zast.nodeid} is {
-    if (isControlValue :ast :nid).not then return
+# fieldReadPin -- the pin a reftype field read at `nid` places: a field is always
+# borrowed, whatever owns its parent.
+fieldReadPin: function {
+    st: zenv.ZSymbolTable ast: Ast.view vt: ztypes.tid nid: zast.nodeid dst: List ztyping.PinPath
+} is {
+    if (st.reg.isReftypeOf tid: vt).not then return
+    fp: ListVal zast.nameid
+    vn: ast.nodes.get i: nid
+    if (isMarkedMove :ast n: vn) then return
+    if (movedFieldPath :st :ast n: vn).not then return
+    appendValueTuple :ast n: vn dst: fp
+    if fp.length < 2 then return
+    if (st.lookupVarId nameId: (fp.get i: 0)).none then return
+    # through a readonly root the second name is readonly too
+    mw: (pathIsReadonly :st path: fp).not
+    pinsAppend pins: dst path: fp shared: true mutable: mw carried: false
+}
+
+# pinsOfArms -- `b: if c then w else h.p`: each arm hands back what that value
+# bound alone would pin -- a local of an enclosing scope, a field, what a call
+# hands back (its record) -- so the binding is a second name for whichever the
+# arm that ran yields. The arms' pins are one set: a path two arms pin is locked
+# once, at the stronger strength. The value is readonly when any arm's is, and
+# owned only when an arm hands back an `outx` result and none hands back a
+# place.
+pinsOfArms: function {
+    st: zenv.ZSymbolTable
+    ast: Ast
+    vt: ztypes.tid
+    nid: zast.nodeid
+    verb: StringView
+    dst: List ztyping.PinPath
+} out pinread is {
     leaves: ListVal zast.nodeid
     armValueLeaves :st :ast :nid into: leaves
-    # the binding owns an `outx` result an arm hands back, as it owns one bound
-    # alone, unless another arm hands back a place it can only borrow
     owned: false
     place: false
+    marker: ztypes.zparamownership.noneMode
+    arms: List ztyping.PinPath
     for each lf: leaves loop {
         from: armLeafLocal :st :ast nid: lf
         if from.isZero.not then {
-            pinArmLocal :st :ast leaf: lf :from
+            armLocalPin :st :ast leaf: lf :from dst: arms
             place = true
         } else {
-            pinFieldRead :st :ast :vt nid: lf
-            if (pinArmValue :st :ast leaf: lf) then owned = true
+            fieldReadPin :st :ast :vt nid: lf dst: arms
+            vp: valuePinsOf :st nid: lf
+            if (armRecordPins :st :ast leaf: lf :vp :verb dst: arms) when vp.owned then owned = true
+            marker = readonlyMarker a: marker b: vp.marker
             if (st.typing.armLeafPlaces.has item: lf) then place = true
         }
     }
-    if owned when place.not then setPendingOwned :st owned: true
+    mergePins pins: arms :dst
+    return (pinread owned: owned and place.not :marker)
 }
 
-# pinArmLocal -- an arm that yields the bare reftype local `from` of an enclosing
+# armLocalPin -- an arm that yields the bare reftype local `from` of an enclosing
 # scope: the binding is a second name for it on that arm's path, so it pins it
 # as `b: w` does, readonly through a readonly local.
-pinArmLocal: function {st: zenv.ZSymbolTable ast: Ast.view leaf: zast.nodeid from: ztypes.vid} is {
+armLocalPin: function {
+    st: zenv.ZSymbolTable ast: Ast.view leaf: zast.nodeid from: ztypes.vid dst: List ztyping.PinPath
+} is {
     if (st.reg.isReftypeOf tid: (st.reg.variableTypeOf id: from)).not then return
     np: ListVal zast.nameid
     np.append (zast.atomNameIdOf n: (ast.nodes.get i: leaf))
     mw: (pathIsReadonly :st path: np).not
-    pinsPush :st path: np shared: true mutable: mw
+    pinsAppend pins: dst path: np shared: true mutable: mw carried: false
 }
 
-# pinArmValue -- what the arm value `leaf` keeps locked (its record), pending
-# again for the binding of the `if` or `match`: an element a call hands back,
-# and an `outx` result, pin their source as they do bound alone. A pin rooted at
-# storage the arm declared is refused: it dies with the arm. True when the value
-# is an `outx` result's, owned by what binds it.
-pinArmValue: function {st: zenv.ZSymbolTable ast: Ast.view leaf: zast.nodeid} out bool is {
-    sp: valuePinsOf :st nid: leaf
-    if sp.len == 0 then return false
+# armRecordPins -- the record `vp` of the arm value `leaf`, onto `dst`: an
+# element a call hands back, and an `outx` result, pin their source as they do
+# bound alone. A pin rooted at storage the arm declared is refused: it dies
+# with the arm. True when the arm hands back pins.
+armRecordPins: function {
+    st: zenv.ZSymbolTable
+    ast: Ast.view
+    leaf: zast.nodeid
+    vp: ztyping.valuepins
+    verb: StringView
+    dst: List ztyping.PinPath
+} out bool is {
+    if vp.len == 0 then return false
     k: u64
-    for k < sp.len loop {
-        i: sp.start.u64 + k
+    for k < vp.len loop {
+        i: vp.start.u64 + k
         k = k + 1
         root: valuePinRoot :st :i
         was: st.walk.valuePinRoots.get :i
         now: (st.lookupVarId nameId: root).or d: ztypes.vid
         if was.isZero.not when now != was then {
-            reportArmKeepsDyingStorage :st :ast :leaf :root
+            reportArmKeepsDyingStorage :st :ast :leaf :root :verb
             return false
         }
     }
-    pinsTouched :st
-    k = 0
-    for k < sp.len loop {
-        p: st.walk.valuePins.get i: sp.start.u64 + k
-        k = k + 1
-        st.walk.pendingPins.append (
-            ztyping.PinPath
-            path: p.path.copy
-            shared: p.shared
-            mutable: p.mutable
-            carried: p.carried
-        )
+    appendRecordPins :st :vp :dst
+    return true
+}
+
+# mergePins -- `pins` onto `dst` as one set: a path pinned twice is locked once,
+# exclusive when either pin is, writable when either may write, carried when
+# either came with a moved value.
+mergePins: function {pins: (List ztyping.PinPath).view dst: List ztyping.PinPath} is {
+    i: u64
+    for i < pins.length loop {
+        if (pinPathSeenBefore :pins :i).not then dst.append (mergedPin :pins :i)
+        i = i + 1
     }
-    return sp.owned
+}
+
+# pinPathSeenBefore -- whether pin `i` locks a path an earlier pin locks.
+pinPathSeenBefore: function {pins: (List ztyping.PinPath).view i: u64} out bool is {
+    p: pins.get :i
+    j: u64
+    for j < i loop {
+        q: pins.get i: j
+        if (zenv.pathsEqual a: q.path.listView b: p.path.listView) then return true
+        j = j + 1
+    }
+    return false
+}
+
+# mergedPin -- pin `i` joined with every later pin on its path.
+mergedPin: function {pins: (List ztyping.PinPath).view i: u64} out ztyping.PinPath is {
+    p: pins.get :i
+    sh: p.shared
+    mu: p.mutable
+    ca: p.carried
+    k: i + 1
+    for k < pins.length loop {
+        r: pins.get i: k
+        if (zenv.pathsEqual a: r.path.listView b: p.path.listView) then {
+            sh = sh and r.shared
+            mu = mu or r.mutable
+            ca = ca or r.carried
+        }
+        k = k + 1
+    }
+    return (ztyping.PinPath path: p.path.copy shared: sh and mu.not mutable: mu carried: ca)
+}
+
+# readonlyMarker -- the marker of a value whose arms are marked `a` and `b`:
+# readonly (`.view`) when either is, else frozen (`.hold`) when either is.
+readonlyMarker: function {
+    a: ztypes.zparamownership b: ztypes.zparamownership
+} out ztypes.zparamownership is {
+    if (a == ztypes.zparamownership.viewMode) or (b == ztypes.zparamownership.viewMode) then {
+        return ztypes.zparamownership.viewMode
+    }
+    if (a == ztypes.zparamownership.holdMode) or (b == ztypes.zparamownership.holdMode) then {
+        return ztypes.zparamownership.holdMode
+    }
+    return ztypes.zparamownership.noneMode
 }
 
 # valuePinRoot -- the name recorded pin `i` is rooted at.
@@ -39140,10 +39253,10 @@ valuePinRoot: function {st: zenv.ZSymbolTable.view i: u64} out zast.nameid is {
 # reportArmKeepsDyingStorage -- the arm value `leaf` keeps `root` locked, and
 # `root` is storage the arm, block or `with` declared, which dies as it ends.
 reportArmKeepsDyingStorage: function {
-    st: zenv.ZSymbolTable ast: Ast.view leaf: zast.nodeid root: zast.nameid
+    st: zenv.ZSymbolTable ast: Ast.view leaf: zast.nodeid root: zast.nameid verb: StringView
 } is {
     dn: lockRootPhrase :st :ast nameId: root
-    m: "Cannot bind this value: it keeps \{dn} locked, which dies with the scope that declares it"
+    m: "Cannot \{verb} this value: it keeps \{dn} locked, which dies with the scope that declares it"
     ln: ast.nodes.get i: leaf
     (
         addError
@@ -39490,18 +39603,16 @@ checkAssignmentIn: function {
     if (refuseUnitValue :st :ast :vt nid: asgn.value) then return
     refuseValueBorrow :st :ast :vt value: asgn.value
     if vt.isZero.not then {
-        pinBoundField :st :ast :vt nid: asgn.value
-        pinBoundName :st :ast :vt nid: asgn.value
-        pinBoundArms :st :ast :vt nid: asgn.value
         bpins: List ztyping.PinPath
-        takePendingPins :st dst: bpins
+        bread: pinsOfValue :st :ast :vt nid: asgn.value borrowing: true verb: "bind" dst: bpins
+        drainPendingBorrow :st
         own: ztypes.zownership.owned
         # An `outx` result is pinned like a borrow but OWNED like a take, so
         # the pins must not demote it. `pendingBorrowOwned` tells them apart.
         # A view-family result (OptionView, ListView, StringView, ...) is the
         # reference itself, whatever its declaration spells: its binding is a
         # view of the parent, so the payload cannot be moved out of it.
-        pboX: st.walk.pendingBorrowOwned
+        pboX: bread.owned
         if bpins.length > 0 when (st.reg.isReftypeOf tid: vt) then {
             if pboX.not then own = ztypes.zownership.borrowed
             if (isViewFamilyTid :ast :st tid: vt) then own = ztypes.zownership.borrowed
@@ -39525,7 +39636,7 @@ checkAssignmentIn: function {
         # value that aliases nothing, so it must not inherit the restriction.
         # `own` already draws exactly that line: the pin transfers only to a
         # binding that the borrow actually flowed into.
-        pending: st.walk.pendingMarker
+        pending: bread.marker
         roRef: false
         if own == ztypes.zownership.borrowed then roRef = pending == ztypes.zparamownership.viewMode
         # An `out T.hold` result is readonly for a different reason: it is
@@ -40173,11 +40284,9 @@ checkRepoint: function {
         return
     }
     checkReassignedType :st :ast :rasgn :lvt :rvt
-    pinBoundField :st :ast vt: rvt nid: rasgn.value
-    pinBoundName :st :ast vt: rvt nid: rasgn.value
-    pinBoundArms :st :ast vt: rvt nid: rasgn.value
     bpins: List ztyping.PinPath
-    takePendingPins :st dst: bpins
+    rread: pinsOfValue :st :ast vt: rvt nid: rasgn.value borrowing: true verb: "bind" dst: bpins
+    drainPendingBorrow :st
     # an `outx` result is pinned and owned, unless it is a view -- the
     # reference itself, as its binding would be. A view a call hands back is a
     # value with no storage of its own, which `x` cannot refer to: it is kept
@@ -40185,10 +40294,10 @@ checkRepoint: function {
     isView: isViewFamilyTid :ast :st tid: rvt
     owned: (
         (bpins.length == 0) or
-        (st.walk.pendingBorrowOwned and isView.not) or
+        (rread.owned and isView.not) or
         (isView and (isAddressableTarget :ast :st nid: rasgn.value).not)
     )
-    roV: st.walk.pendingMarker == ztypes.zparamownership.viewMode
+    roV: rread.marker == ztypes.zparamownership.viewMode
     setPendingOwned :st owned: false
     setPendingMarker :st marker: ztypes.zparamownership.noneMode
     if owned then {
@@ -41087,9 +41196,9 @@ checkWith: function {
         # the alias may write through itself.
         # Valtype borrows are copies -- no lock.
         wpins: List ztyping.PinPath
-        takePendingPins :st dst: wpins
-        pboW: st.walk.pendingBorrowOwned
-        setPendingOwned :st owned: false
+        wread: pinsOfValue :st :ast :vt nid: withnode.value borrowing: false verb: "bind" dst: wpins
+        drainPendingBorrow :st
+        pboW: wread.owned
         if wpins.length == 0 then {
             # a borrow pins the path it aliases; an auto-called member's result
             # is owned, and pins the path it was called on the same way, as it
