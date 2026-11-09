@@ -32764,7 +32764,15 @@ checkMemberAutoCall: function {
                 path: tup
                 pins: recvPins
             )
-            pinCallResult :st funcId: mo pins: recvPins recvPath: tup recvShared: aShr
+            (
+                pinCallResult
+                :st
+                pool: ast.names
+                funcId: mo
+                pins: recvPins
+                recvPath: tup
+                recvShared: aShr
+            )
         } case none then {
             # A no-`out` METHOD auto-call resolves to null (the
             # reference's auto-call rule for out-less methods).
@@ -35661,7 +35669,7 @@ checkTransferMarker: function {
                 keepL: (isMoveMarkerId nameId: cnId) and keepAt.isZero.not and (dp.nid == keepAt)
                 if keepL.not then {
                     mh: ztypes.zlockholder.var mvo
-                    st.releaseHeldLocks holder: mh
+                    releaseCascade :st holder: mh
                     if (isDropMarkerId nameId: cnId) then noteDropReleasedTemps :st dropNid: dp.nid
                 }
                 if (isDropMarkerId nameId: cnId) then (
@@ -37343,7 +37351,7 @@ checkReturnCarries: function {
                 }
                 # the locks travel with the value: the caller's binding installs
                 # the callee's pins, which name these very parameters
-                st.releaseHeldLocks holder: ztypes.zlockholder.var rvo
+                releaseCascade :st holder: ztypes.zlockholder.var rvo
             }
         }
         return
@@ -37371,13 +37379,10 @@ checkReturnCarries: function {
     # found first, reported after: the report takes `st` while the pins are
     # being read through it
     badPn: zast.nameid
-    for each p: st.walk.pendingPins loop {
-        pvo: st.lookupVarId nameId: (p.path.get i: 0)
-        if pvo.some when badPn.isZero when (
-            (st.reg.variableOriginOf id: pvo) == ztypes.zvarorigin.param
-        ) then {
-            badPn = p.path.get i: 0
-        }
+    roots: ListVal zast.nameid
+    for each p: st.walk.pendingPins loop roots.append (p.path.get i: 0)
+    for each rt: roots loop {
+        if badPn.isZero then badPn = paramReachedFrom :st nameId: rt depth: 0
     }
     if badPn.isZero.not then {
         pn: zast.nameTextAt :ast ref: badPn
@@ -39396,6 +39401,13 @@ recordArmValueLocks: function {st: zenv.ZSymbolTable ast: Ast.view lineId: zast.
 # The locks are pending again for the line's own readers.
 recordHandedBackLocks: function {st: zenv.ZSymbolTable ast: Ast.view valNid: zast.nodeid} is {
     if valNid.isZero then return
+    handBackLocalLocks :st :ast :valNid
+    followDyingReferences :st nid: valNid
+}
+
+# handBackLocalLocks -- recordHandedBackLocks for a value that is a local this
+# scope declared: its held locks join the value's record.
+handBackLocalLocks: function {st: zenv.ZSymbolTable ast: Ast.view valNid: zast.nodeid} is {
     bn: zast.atomNameIdOf n: (ast.nodes.get i: valNid)
     if bn.isZero then return
     if (st.scopeBindsHere nameId: bn).not then return
@@ -39408,6 +39420,83 @@ recordHandedBackLocks: function {st: zenv.ZSymbolTable ast: Ast.view valNid: zas
         if held.length > 0 then pinsTouched :st
         st.heldLockPaths holder: ztypes.zlockholder.var hv dst: st.walk.pendingPins
     }
+}
+
+# followDyingReferences -- a value a block hands back that keeps a REFERENCE the
+# block declared locked -- a borrowed local, a hoisted temporary -- keeps what
+# that reference borrows instead: the reference dies with the block, and what
+# it borrows does not, as a return follows a borrowed local (pinRootDiesWithCall).
+# Storage the block declared stays, and the destination refuses it.
+followDyingReferences: function {st: zenv.ZSymbolTable nid: zast.nodeid} is {
+    vp: valuePinsOf :st :nid
+    if vp.len == 0 then return
+    own: List ztyping.PinPath
+    appendRecordPins :st :vp dst: own
+    followed: List ztyping.PinPath
+    changed: false
+    for each p: own loop {
+        if (appendFollowedPin :st :p dst: followed depth: 0) then changed = true
+    }
+    if changed.not then return
+    start: st.walk.valuePins.length
+    for each fp: followed loop appendValuePin :st p: fp
+    (
+        st.setValuePins
+        :nid
+        vp: (
+            ztyping.valuepins
+            start: start.u32.orPanic
+            len: followed.length.u32.orPanic
+            owned: vp.owned
+            marker: vp.marker
+        )
+    )
+}
+
+# appendFollowedPin -- `p` onto `dst`, or, when it is rooted at a reference this
+# scope declares, what that reference holds (followed in turn). True when it
+# followed one.
+appendFollowedPin: function {
+    st: zenv.ZSymbolTable.view
+    p: ztyping.PinPath.view
+    dst: List ztyping.PinPath
+    depth: u64
+} out bool is {
+    rn: p.path.get i: 0
+    rv: dyingReference :st nameId: rn :depth
+    if rv.isZero then {
+        dst.append (
+            ztyping.PinPath
+            path: p.path.copy
+            shared: p.shared
+            mutable: p.mutable
+            carried: p.carried
+        )
+        return false
+    }
+    held: List ztyping.PinPath
+    st.heldLockPaths holder: ztypes.zlockholder.var rv dst: held
+    # a readonly self-lock marks the reference itself; it borrows nothing
+    for each hp: held loop {
+        if (hp.path.get i: 0) != rn then {
+            appendFollowedPin :st p: hp :dst depth: depth + 1
+        }
+    }
+    return true
+}
+
+# dyingReference -- the variable `nameId` names when it is a reference -- a
+# borrowed local, a hoisted temporary -- that this scope declares, so it dies
+# with it while what it borrows does not; zero for anything else.
+dyingReference: function {
+    st: zenv.ZSymbolTable.view nameId: zast.nameid depth: u64
+} out ztypes.vid is {
+    if depth >= 8 then return ztypes.vid
+    if (st.scopeBindsHere :nameId).not then return ztypes.vid
+    rv: (st.lookupVarId :nameId).or d: ztypes.vid
+    if rv.isZero then return rv
+    if (st.reg.variableOwnershipOf id: rv) != ztypes.zownership.borrowed then return ztypes.vid
+    return rv
 }
 
 # recordWithLocks -- the value at `valNid` keeps `held` as well as what its
@@ -39851,7 +39940,7 @@ moveLocksToTarget: function {
     if tvo.some then {
         bareT: (zast.atomNameIdOf n: (ast.nodes.get i: rasgn.topath)).isZero.not
         if bareT then {
-            st.releaseHeldLocks holder: ztypes.zlockholder.var tvo
+            releaseCascade :st holder: ztypes.zlockholder.var tvo
         }
         (
             transferHeldLocks
@@ -40407,7 +40496,8 @@ checkRepoint: function {
     if (refuseRepointReadonly :st :ast :rasgn :xVid :lvt pins: bpins :roV) then return
     if (refuseRepointOutlives :st :ast :rasgn :xVid pins: bpins) then return
     if (st.innermostOpenIs scope: (st.scopeOfVar vid: xVid)) then (
-        st.releaseHeldLocks
+        releaseCascade
+        :st
         holder: ztypes.zlockholder.var xVid
     )
     (
@@ -40473,7 +40563,7 @@ repointOwned: function {
         return
     }
     if (refuseRepointOutlives :st :ast :rasgn :xVid :pins) then return
-    st.releaseHeldLocks holder: ztypes.zlockholder.var cv
+    releaseCascade :st holder: ztypes.zlockholder.var cv
     if pins.length > 0 then (
         installPins
         :st
@@ -40487,7 +40577,8 @@ repointOwned: function {
         colno: rasgn.colno
     )
     if (st.innermostOpenIs scope: (st.scopeOfVar vid: xVid)) then (
-        st.releaseHeldLocks
+        releaseCascade
+        :st
         holder: ztypes.zlockholder.var xVid
     )
     checkNarrowedTargetWrite :st :ast :rasgn
@@ -40935,7 +41026,7 @@ consumeReassignPins: function {
             lineno: rasgn.lineno
             colno: rasgn.colno
         ) then return
-        if hbNmId.isZero.not then st.releaseHeldLocks holder: ztypes.zlockholder.var tvo
+        if hbNmId.isZero.not then releaseCascade :st holder: ztypes.zlockholder.var tvo
         (
             installPins
             :st
@@ -44994,6 +45085,31 @@ pinRootDiesWithCall: function {
 }
 
 # heldRootsDieWithCall -- whether any lock a borrowed local holds is rooted at
+# paramReachedFrom -- the parameter a pin rooted at `nameId` keeps locked: the
+# root itself, or through a borrowed local or a hoisted temporary, a parameter
+# what it holds is rooted at (as pinRootDiesWithCall follows them); zero when
+# none.
+paramReachedFrom: function {
+    st: zenv.ZSymbolTable.view nameId: zast.nameid depth: u64
+} out zast.nameid is {
+    if depth > 16 then return zast.nameid
+    vid: (st.lookupVarId :nameId).or d: ztypes.vid
+    if vid.isZero then return zast.nameid
+    if (st.reg.variableOriginOf id: vid) == ztypes.zvarorigin.param then return nameId
+    if (st.reg.variableOwnershipOf id: vid) != ztypes.zownership.borrowed then return zast.nameid
+    held: List ztyping.PinPath
+    st.heldLockPaths holder: ztypes.zlockholder.var vid dst: held
+    roots: ListVal zast.nameid
+    for each hp: held loop roots.append (hp.path.get i: 0)
+    for each r: roots loop {
+        if r != nameId then {
+            pr: paramReachedFrom :st nameId: r depth: depth + 1
+            if pr.isZero.not then return pr
+        }
+    }
+    return zast.nameid
+}
+
 # storage that dies with this call.
 heldRootsDieWithCall: function {
     st: zenv.ZSymbolTable.view
@@ -45562,7 +45678,11 @@ ownedReceiverTemp: function {
 # left the scope with the call: each is defined again -- the same variable, so
 # it is one temporary however far it is promoted -- as an unnamed local of the
 # scope the call is in, so the pin names a live variable.
-adoptPinnedArgTemps: function {st: zenv.ZSymbolTable pins: (List ztyping.PinPath).view} is {
+adoptPinnedArgTemps: function {
+    st: zenv.ZSymbolTable
+    pool: zast.StringPool.view
+    pins: (List ztyping.PinPath).view
+} is {
     roots: ListVal zast.nameid
     for each p: pins loop roots.append (p.path.get i: 0)
     for each r: roots loop {
@@ -45577,10 +45697,103 @@ adoptPinnedArgTemps: function {st: zenv.ZSymbolTable pins: (List ztyping.PinPath
                 # which drops the free
                 st.defineTemp nameId: r vid: ato
                 st.walk.lineUnnamedLocals.append r
+                # the temporary is the user's named hoist made explicit: it
+                # keeps its own locks where it now lives
+                relayTempPins :st :pool vid: ato
             }
             # settled either way -- adopted here, or still bound by a scope that
             # has yet to pop -- so the scope that holds it now may list it
             st.walk.pinnedTempPending.set key: ato value: false
+        }
+    }
+}
+
+# recordTempPins -- the locks the hoisted temporary `vid` laid (installPins of
+# `pins`), kept for the result that may adopt it (relayTempPins).
+recordTempPins: function {
+    st: zenv.ZSymbolTable
+    vid: ztypes.vid
+    pins: (List ztyping.PinPath).view
+    onlyRoot: zast.nameid
+    forceShared: bool
+} is {
+    start: st.walk.valuePins.length
+    for each p: pins loop {
+        if onlyRoot.isZero or ((p.path.get i: 0) == onlyRoot) then {
+            sh: p.shared or forceShared
+            mu: p.mutable and forceShared.not
+            st.walk.valuePinRoots.append ztypes.vid
+            st.walk.valuePins.append (
+                ztyping.PinPath
+                path: p.path.copy
+                shared: sh
+                mutable: mu
+                carried: p.carried
+            )
+        }
+    }
+    n: st.walk.valuePins.length - start
+    if n == 0 then return
+    (
+        st.walk.tempPins.set
+        key: vid
+        value: (
+            ztyping.valuepins
+            start: start.u32.orPanic
+            len: n.u32.orPanic
+            owned: false
+            marker: ztypes.zparamownership.noneMode
+        )
+    )
+}
+
+# relayTempPins -- an adopted temporary lays again, where it now lives, the
+# locks it laid in the call's scope (recordTempPins), which closed with the
+# call: the result keeps the temporary, and the temporary keeps what it views.
+relayTempPins: function {st: zenv.ZSymbolTable pool: zast.StringPool.view vid: ztypes.vid} is {
+    tp: st.walk.tempPins.get key: vid
+    if tp.none then return
+    run: List ztyping.PinPath
+    appendRecordPins :st vp: tp dst: run
+    # a temporary it views lives on with it: the chain of hoists is adopted
+    # whole, innermost first
+    adoptPinnedArgTemps :st :pool pins: run
+    (
+        installPins
+        :st
+        :pool
+        pins: run
+        :vid
+        onlyRoot: zast.nameid
+        forceShared: false
+        nodeid: zast.nodeid
+        lineno: 0
+        colno: 0
+    )
+}
+
+# releaseCascade -- `holder` releases its locks, and so does every temporary a
+# line kept (heldTemps) that nothing locks any more: a temporary lives no longer
+# than the holds on it, and its own locks go with it, in turn freeing the
+# temporaries only it held.
+releaseCascade: function {st: zenv.ZSymbolTable holder: ztypes.zlockholder} is {
+    st.releaseHeldLocks :holder
+    names: ListVal zast.nameid
+    for each nm: st.walk.heldTemps loop names.append nm
+    released: true
+    for released loop {
+        released = false
+        for each nm: names loop {
+            tv: st.lookupVarId nameId: nm
+            if tv.some then {
+                p: ListVal zast.nameid
+                p.append nm
+                th: ztypes.zlockholder.var tv
+                if (st.isPathLocked path: p).not when (st.holdsAnyLock holder: th) then {
+                    st.releaseHeldLocks holder: th
+                    released = true
+                }
+            }
         }
     }
 }
@@ -45594,6 +45807,8 @@ adoptPinnedArgTemps: function {st: zenv.ZSymbolTable pins: (List ztyping.PinPath
 pinCallResult: function {
     # the symbol table whose pin side channel receives the pins
     st: zenv.ZSymbolTable
+    # the names the adopted temporaries' locks are spelt in
+    pool: zast.StringPool.view
     # the callee, whose return flags say whether the result pins at all
     funcId: ztypes.tid
     # the argument pins the call walk collected
@@ -45612,7 +45827,7 @@ pinCallResult: function {
     # pushes below re-establish one
     drainPendingBorrow :st
     if doPins then {
-        adoptPinnedArgTemps :st :pins
+        adoptPinnedArgTemps :st :pool :pins
         pinsPush :st path: recvPath shared: recvShared mutable: recvShared.not
         for each p: pins loop {
             pinsPush :st path: p.path shared: p.shared mutable: p.mutable
@@ -46559,6 +46774,7 @@ hoistArg: function {
                 lineno: ln
                 colno: co
             )
+            recordTempPins :st :vid pins: hpins onlyRoot: hrt forceShared: viewParam
         }
     }
     if assignId.isZero.not then st.typing.setDefVariable nid: assignId :vid
@@ -47306,7 +47522,7 @@ lockNonTrivialArg: function {
     argRoot: rootNameIdOf :ast n: (ast.nodes.get i: arg.operation)
     rootIsVar: argRoot.isZero.not and (st.lookupVarId nameId: argRoot).some
     pinTemp: false
-    if calleePins when isLockish when pinsLike when hadPending.not then {
+    if calleePins when isLockish when pinsLike then {
         # a fresh value at the end of a variable's path is the unnamed local,
         # not the path
         pinTemp = rootIsVar.not
@@ -51069,7 +51285,7 @@ checkResolvedMethodCall: function {
     # and pins its arguments alone), at the strength the call took
     rtupP: ListVal zast.nameid
     receiverResultPath :st :ast :call funcId: dro :rvT :rvPins :pins dst: rtupP
-    pinCallResult :st funcId: dro :pins recvPath: rtupP recvShared: recvShr
+    pinCallResult :st pool: ast.names funcId: dro :pins recvPath: rtupP recvShared: recvShr
     st.typing.callKind.set key: call.nid value: zast.callkind.regular
     return mres
 }
@@ -51889,6 +52105,7 @@ checkGenericFnCall: function {
     if midG.isZero.not then (
         pinCallResult
         :st
+        pool: ast.names
         funcId: midG
         pins: pinsG
         recvPath: rtupG
@@ -52340,11 +52557,14 @@ genericCallInstance: function {
 # pinGenericCallResult -- what a generic call's result keeps locked: the pins
 # its arguments collected, answered by the instance's return markers.
 pinGenericCallResult: function {
-    st: zenv.ZSymbolTable mid: ztypes.tid pins: (List ztyping.PinPath).view
+    st: zenv.ZSymbolTable
+    pool: zast.StringPool.view
+    mid: ztypes.tid
+    pins: (List ztyping.PinPath).view
 } is {
     if mid.isZero then return
     noRecv: ListVal zast.nameid
-    pinCallResult :st funcId: mid :pins recvPath: noRecv recvShared: true
+    pinCallResult :st :pool funcId: mid :pins recvPath: noRecv recvShared: true
 }
 
 
@@ -52680,7 +52900,7 @@ checkBareGenericCall: function {
     midB: genericCallInstance :st :ast :call
     checkGenericCallMissingArgs :ast :st :call mid: midB recvImplicit: false
     st.popTo marker: mcmB
-    pinGenericCallResult :st mid: midB pins: pinsB
+    pinGenericCallResult :st pool: ast.names mid: midB pins: pinsB
     result = gr
     st.typing.callKind.set key: call.nid value: zast.callkind.regular
     if gr.isZero.not then {
@@ -52890,7 +53110,7 @@ checkUserFnCall: function {
     # call took on it (a free function has no receiver). Argument
     # evaluation residue drains first (owning calls consume it).
     noRecvF: ListVal zast.nameid
-    pinCallResult :st :funcId :pins recvPath: noRecvF recvShared: true
+    pinCallResult :st pool: ast.names :funcId :pins recvPath: noRecvF recvShared: true
     return result
 }
 
@@ -53020,7 +53240,7 @@ pinConstructionSources: function {
             # refused): the construction pins as `outx this` would
             pinConstructionResult :st :pins
         } else {
-            pinCallResult :st funcId: cxO :pins recvPath: noRecvC recvShared: true
+            pinCallResult :st pool: ast.names funcId: cxO :pins recvPath: noRecvC recvShared: true
         }
     } case none then {
         # no `create` written: the construction IS the constructor, and a
@@ -57997,8 +58217,10 @@ checkStmtLine: function {
             lineType: (walkTypeOf :st nid: slnId)
         )
     )
-    recordTempHoldingLine :st lineId: slnId from: ul0
+    # a block's value takes over what its line's references hold before the
+    # line's unheld temporaries release theirs
     if last then recordArmValueLocks :st :ast lineId: slnId
+    recordTempHoldingLine :st lineId: slnId from: ul0
     if discarded when dk == zenv.divkind.none then recordDiscard :st :ast :innerId
     drainPendingBorrow :st
     if dk > 0 then st.markUnreachable kind: dk
@@ -58187,6 +58409,9 @@ recordTempHoldingLine: function {st: zenv.ZSymbolTable lineId: zast.nodeid from:
             st.walk.heldTemps.append nm
         } else {
             st.typing.unheldTemps.add item: nm
+            # it ends with the statement, and the locks it holds with it
+            tv: st.lookupVarId nameId: nm
+            if tv.some then releaseCascade :st holder: ztypes.zlockholder.var tv
         }
         i = i + 1
     }
