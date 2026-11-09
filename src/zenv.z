@@ -371,6 +371,24 @@ heldlock: record {
     holder: ztypes.zlockholder
 }
 
+# pinjournal -- a value-pin record a dry run wrote over: its node and what the
+# node held before (an empty run when it held nothing).
+pinjournal: record {
+    # the value's node
+    nid: zast.nodeid
+    # its record before the write
+    was: ztyping.valuepins
+}
+
+# pinmark -- where a dry run began: the value-pin arena's length and the
+# journal's.
+pinmark: record {
+    # the arena length
+    arena: u64
+    # the journal length
+    journal: u64
+}
+
 # WalkState -- the body walk's working state: what the checker records while
 # it walks and reads back itself. Nothing downstream reads it; the output is
 # ZTyping's.
@@ -604,13 +622,20 @@ WalkState: class {
     # application's head -- which name a generic type's defaults' instance
     bareTyperefNodes: IdSet zast.nodeid
     collectionChildrenBuilt: IdSet ztypes.tid
-    # the pins the value line of a block left, by the value's node id, kept
-    # before the line's walk drains them: a binding of an `if` or a `match`
-    # pins what the arm that ran hands back, as that value bound alone would
-    # (pinBoundArms), and the variable each pin's root named there
-    armValuePins: List ztyping.PinPath
-    armValuePinRoots: ListVal ztypes.vid
-    armValuePinSpan: (IdMapV zast.nodeid v: ztyping.pinspan)
+    # what each checked value keeps locked, by the value's node: an
+    # append-only arena of pins, the variable each pin's root named where the
+    # value was made, and each node's run of the arena (pinsOfValue)
+    valuePins: List ztyping.PinPath
+    valuePinRoots: ListVal ztypes.vid
+    pinsAt: (IdMapV zast.nodeid v: ztyping.valuepins)
+    # a dry run's record writes, newest last, each with the record its node
+    # held before, and per open dry run the arena and journal lengths at its
+    # start: popDiscard puts every record back
+    pinsJournal: ListVal pinjournal
+    pinMarks: ListVal pinmark
+    # bumped whenever the pending pins, their marker or their owned flag
+    # change: a value whose walk changed none of them made no pins of its own
+    pinGen: u64
     # the blocks whose last line's value nothing receives: a function body, and
     # the arms and bodies of an `if`, `match`, loop, `do` or `with` written as a
     # statement
@@ -868,9 +893,12 @@ newWalkState: function out WalkState is {
         constructedTypes: (IdMapV ztypes.tid v: bool)
         bareTyperefNodes: IdSet zast.nodeid
         collectionChildrenBuilt: IdSet ztypes.tid
-        armValuePins: List ztyping.PinPath
-        armValuePinRoots: ListVal ztypes.vid
-        armValuePinSpan: (IdMapV zast.nodeid v: ztyping.pinspan)
+        valuePins: List ztyping.PinPath
+        valuePinRoots: ListVal ztypes.vid
+        pinsAt: (IdMapV zast.nodeid v: ztyping.valuepins)
+        pinsJournal: ListVal pinjournal
+        pinMarks: ListVal pinmark
+        pinGen: 0
         stmtBlocks: IdSet zast.nodeid
         aliasFoldsOpen: ListVal ztypes.declid
         aliasCyclesReported: IdSet ztypes.declid
@@ -1356,6 +1384,8 @@ ZSymbolTable: class {
         f: this.pushScope parent: this.curScope node: zast.nodeid
         this.scopeHidden.add item: f
         this.dryRunDepth = this.dryRunDepth + 1
+        mk: pinmark arena: this.walk.valuePins.length journal: this.walk.pinsJournal.length
+        this.walk.pinMarks.append mk
     }
 
     # popDiscard -- close the innermost scope and drop every row it laid,
@@ -1368,6 +1398,42 @@ ZSymbolTable: class {
         if this.genBorrowPositions.length > 0 then this.dropGenBorrows
         this.curScope = this.innermostScope
         if this.dryRunDepth > 0 then this.dryRunDepth = this.dryRunDepth - 1
+        this.discardDryRunPins
+    }
+
+    # discardDryRunPins -- the value-pin records the closing dry run wrote are
+    # put back as they were, and its arena run is dropped.
+    discardDryRunPins: function {:this} is {
+        if this.walk.pinMarks.length == 0 then return
+        mk: this.walk.pinMarks.pop
+        for this.walk.pinsJournal.length > mk.journal loop {
+            j: this.walk.pinsJournal.pop
+            this.walk.pinsAt.set key: j.nid value: j.was
+        }
+        for this.walk.valuePins.length > mk.arena loop this.walk.valuePins.pop
+        for this.walk.valuePinRoots.length > mk.arena loop this.walk.valuePinRoots.pop
+    }
+
+    # setValuePins -- record `vp` as what the value at `nid` keeps locked. In a
+    # dry run the record it replaces is journalled, for popDiscard to restore.
+    setValuePins: function {:this nid: zast.nodeid vp: ztyping.valuepins} is {
+        if this.dryRunDepth > 0 then {
+            was: (
+                (
+                    this.walk.pinsAt.get
+                    key: nid
+                ).or
+                d: (
+                    ztyping.valuepins
+                    start: 0
+                    len: 0
+                    owned: false
+                    marker: ztypes.zparamownership.noneMode
+                )
+            )
+            this.walk.pinsJournal.append (pinjournal :nid :was)
+        }
+        this.walk.pinsAt.set key: nid value: vp
     }
 
     # close every scope back to `marker`, dumping the entries as they go
