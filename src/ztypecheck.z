@@ -58834,6 +58834,14 @@ checkFunctionBody: function {
     st.mode.allowBareFnRef = false
     st.walk.calleeDottedNid = zast.nodeid
     st.walk.callArgNode = zast.nodeid
+    # Nor are the pins an argument's value left pending for its call the body's:
+    # read inside it, a caller's `.view` result made the body's own receiver a
+    # view's, and whether that happened hung on which body was walked first.
+    callerPins: List ztyping.PinPath
+    takePendingPins :st dst: callerPins
+    callerMarker: st.walk.pendingMarker
+    callerOwned: st.walk.pendingBorrowOwned
+    drainPendingBorrow :st
     errsBefore: st.typing.errors.length
     chargedBefore: st.walk.bodyErrorsCharged
     (
@@ -58852,6 +58860,12 @@ checkFunctionBody: function {
     st.mode = savedMode
     st.walk.calleeDottedNid = prevCallee
     st.walk.callArgNode = prevArg
+    drainPendingBorrow :st
+    back: List ztyping.PinPath
+    for callerPins.length > 0 loop back.append callerPins.pop
+    for back.length > 0 loop st.walk.pendingPins.append back.pop
+    st.walk.pendingMarker = callerMarker
+    st.walk.pendingBorrowOwned = callerOwned
     # a body walked on demand inside this one was charged its own errors
     added: st.typing.errors.length - errsBefore
     own: added - (st.walk.bodyErrorsCharged - chargedBefore)
