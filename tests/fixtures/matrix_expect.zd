@@ -1,0 +1,1358 @@
+# matrix_expect.zd -- the ownership matrix's expectations, the input of
+# tests/unit/matrixgen.z (`make regen-matrix`). Every family crossed with every
+# position is a cell; a cell no row selects is RUN: it returns its number and
+# frees everything it made. The LAST row selecting a cell decides it.
+
+# outcome -- what a cell is expected to do
+outcome: choice {
+    # it runs, prints its number and frees everything it made
+    run: null
+    # the compiler refuses it with the row's error
+    refused: null
+    # it cannot be written; the detail says why
+    na: null
+    # it waits on an open question, and is emitted nowhere
+    ask: null
+    # it waits on the defect the detail names, and is emitted nowhere
+    known: null
+}
+
+# row -- one expectation: the cells it selects and what they do
+row: data {
+    # a family, `*`, or a group (@ref @val @constructible @sum @interface
+    # @generic @typedef @native @unit); groups joined by `&` select the
+    # families in every one (@val&sum)
+    selector: text
+    # the position's name
+    position: text
+    verdict: outcome
+    # REFUSED: `Ennnn message`, `@N` the type as the compiler names it; NA,
+    # ASK and KNOWN: the reason
+    detail: ""
+}
+
+# ownership -- the rows, in the order they apply
+ownership: list {
+    # -- a borrow locks its source for the borrow's life
+    (
+        row
+        selector: "*"
+        position: "borrow_then_write"
+        verdict: outcome.refused
+        detail: "E0200 Cannot assign to 'x': exclusive lock held by 'b'"
+    )
+    (
+        row
+        selector: "@ref"
+        position: "field_borrow_write"
+        verdict: outcome.refused
+        detail: "E0200 Cannot assign to 'h.f': exclusive lock held by 'b'"
+    )
+    (
+        row
+        selector: "*"
+        position: "list_iter_write"
+        verdict: outcome.refused
+        detail: "E0200 Cannot take exclusive lock on 'xs': already has shared lock held by 'e'"
+    )
+    (
+        row
+        selector: "@ref"
+        position: "list_get_write"
+        verdict: outcome.refused
+        detail: "E0200 Cannot take exclusive lock on 'xs': already has shared lock held by 'g'"
+    )
+    (
+        row
+        selector: "@ref"
+        position: "map_get_write"
+        verdict: outcome.refused
+        detail: "E0200 Cannot take exclusive lock on 'm': already has shared lock held by 'g'"
+    )
+    (
+        row
+        selector: "@ref"
+        position: "proj_borrow_write"
+        verdict: outcome.refused
+        detail: "E0200 Cannot assign to 'x': exclusive lock held by 'p'"
+    )
+    (
+        row
+        selector: "@ref"
+        position: "with_borrow_write"
+        verdict: outcome.refused
+        detail: "E0200 Cannot assign to 'x': exclusive lock held by 'w'"
+    )
+    (
+        row
+        selector: "*"
+        position: "conf_label_write"
+        verdict: outcome.refused
+        detail: "E0200 Cannot assign to 'x': exclusive lock held by 'p'"
+    )
+    (
+        row
+        selector: "*"
+        position: "conf_borrow_write"
+        verdict: outcome.refused
+        detail: "E0200 Cannot assign to 'x': exclusive lock held by 'p'"
+    )
+    # -- a bare bind of a reference type is a borrow, and a borrow excludes every
+    #    other use of its source while it lives; a value type's bind copies
+    (
+        row
+        selector: "@ref"
+        position: "move_then_read"
+        verdict: outcome.refused
+        detail: "E0200 Cannot take shared lock on 'a': already has exclusive lock held by 'b'"
+    )
+    # -- a `.borrow` binding of a value type is refused: the binding copies
+    (
+        row
+        selector: "@val"
+        position: "borrow_then_write"
+        verdict: outcome.refused
+        detail: "E0200 '@N' is a value type: the binding copies it, so `.borrow` has nothing to borrow"
+    )
+    (
+        row
+        selector: "@val"
+        position: "borrow_then_read"
+        verdict: outcome.refused
+        detail: "E0200 '@N' is a value type: the binding copies it, so `.borrow` has nothing to borrow"
+    )
+    (
+        row
+        selector: "@val"
+        position: "borrow_after"
+        verdict: outcome.refused
+        detail: "E0200 '@N' is a value type: the binding copies it, so `.borrow` has nothing to borrow"
+    )
+    (
+        row
+        selector: "@val"
+        position: "field_borrow_write"
+        verdict: outcome.refused
+        detail: "E0200 '@N' is a value type: the binding copies it, so `.borrow` has nothing to borrow"
+    )
+    (
+        row
+        selector: "@val"
+        position: "field_borrow_sibling"
+        verdict: outcome.refused
+        detail: "E0200 '@N' is a value type: the binding copies it, so `.borrow` has nothing to borrow"
+    )
+    # -- a moved source is gone -- a reftype's; taking a value copies its bytes and
+    #    leaves the source as it is (callables arc D16)
+    (
+        row
+        selector: "@ref"
+        position: "param_take_then_read"
+        verdict: outcome.refused
+        detail: "E0200 cannot use 'x' after ownership transfer"
+    )
+    # -- an unmarked projection bound to a name borrows its source EXCLUSIVELY, as
+    #    `.borrow` does; a value-type source is copied, and stays readable
+    (
+        row
+        selector: "@ref"
+        position: "proj_bare_then_read"
+        verdict: outcome.refused
+        detail: "E0200 Cannot take shared lock on 'x': already has exclusive lock held by 'p'"
+    )
+    (
+        row
+        selector: "@ref"
+        position: "proj_create_then_read"
+        verdict: outcome.refused
+        detail: "E0200 Cannot take shared lock on 'x': already has exclusive lock held by 'p'"
+    )
+    (
+        row
+        selector: "@ref"
+        position: "conf_bare_then_read"
+        verdict: outcome.refused
+        detail: "E0200 Cannot take shared lock on 'x': already has exclusive lock held by 'p'"
+    )
+    # -- a reftype field never moves out: a swap takes it (Q3)
+    (
+        row
+        selector: "@ref"
+        position: "field_take"
+        verdict: outcome.refused
+        detail: "E0200 Cannot move field 'h.f' with '.take': a field stays in its owner for as long as the owner lives; copy it (`.copy`), or exchange it for another value with `swap`"
+    )
+    # -- a label projection names a conformance; a typedef is not one
+    (
+        row
+        selector: "*"
+        position: "proj_label"
+        verdict: outcome.refused
+        detail: "E0100 type '@N' has no member 'PjLabel'"
+    )
+    # -- a member the type does not declare is refused
+    (
+        row
+        selector: "*"
+        position: "unknown_member"
+        verdict: outcome.refused
+        detail: "E0100 type '@N' has no member 'zork'"
+    )
+    # -- a sum is built through an arm: its name given a value constructs nothing
+    (
+        row
+        selector: "*"
+        position: "type_name_ctor"
+        verdict: outcome.na
+        detail: "a record or class constructs field by field, an interface projects and a native builds from its own create; other positions cover each"
+    )
+    (
+        row
+        selector: "@sum"
+        position: "type_name_ctor"
+        verdict: outcome.refused
+        detail: "E0300 cannot construct '@N': a union/variant selects an arm"
+    )
+    # -- a `.borrow` of a value type is refused wherever the value is copied: a
+    #    typedef built from it and a `with` as much as a binding (Q1)
+    (
+        row
+        selector: "@val"
+        position: "proj_borrow"
+        verdict: outcome.refused
+        detail: "E0200 '@N' is a value type: the binding copies it, so `.borrow` has nothing to borrow"
+    )
+    (
+        row
+        selector: "@val"
+        position: "proj_borrow_write"
+        verdict: outcome.refused
+        detail: "E0200 '@N' is a value type: the binding copies it, so `.borrow` has nothing to borrow"
+    )
+    (
+        row
+        selector: "@val"
+        position: "proj_borrow_after"
+        verdict: outcome.refused
+        detail: "E0200 '@N' is a value type: the binding copies it, so `.borrow` has nothing to borrow"
+    )
+    (
+        row
+        selector: "@val"
+        position: "with_borrow"
+        verdict: outcome.refused
+        detail: "E0200 '@N' is a value type: the binding copies it, so `.borrow` has nothing to borrow"
+    )
+    (
+        row
+        selector: "@val"
+        position: "with_borrow_write"
+        verdict: outcome.refused
+        detail: "E0200 '@N' is a value type: the binding copies it, so `.borrow` has nothing to borrow"
+    )
+    (
+        row
+        selector: "@val"
+        position: "with_borrow_after"
+        verdict: outcome.refused
+        detail: "E0200 '@N' is a value type: the binding copies it, so `.borrow` has nothing to borrow"
+    )
+    # -- a reassignment keeps the mode the name was bound with
+    (
+        row
+        selector: "@ref"
+        position: "repoint_take"
+        verdict: outcome.refused
+        detail: "E0200 Cannot reassign borrowed 'b' with an owned value: a reassignment keeps the ownership its target was bound with"
+    )
+    (
+        row
+        selector: "@ref"
+        position: "reassign_bare"
+        verdict: outcome.refused
+        detail: "E0200 Cannot reassign owned 'x' with a borrowed value: a reassignment keeps the ownership its target was bound with"
+    )
+    (
+        row
+        selector: "@ref"
+        position: "field_reassign_bare"
+        verdict: outcome.refused
+        detail: "E0200 Cannot reassign owned 'h.f' with a borrowed value: a reassignment keeps the ownership its target was bound with"
+    )
+    # -- cells that cannot be written
+    (
+        row
+        selector: "map"
+        position: "operator_lvalue"
+        verdict: outcome.na
+        detail: "Map declares no operator"
+    )
+    (
+        row
+        selector: "map"
+        position: "operator_rvalue"
+        verdict: outcome.na
+        detail: "Map declares no operator"
+    )
+    (
+        row
+        selector: "option"
+        position: "operator_lvalue"
+        verdict: outcome.na
+        detail: "Option declares no operator"
+    )
+    (
+        row
+        selector: "option"
+        position: "operator_rvalue"
+        verdict: outcome.na
+        detail: "Option declares no operator"
+    )
+    (
+        row
+        selector: "result"
+        position: "operator_lvalue"
+        verdict: outcome.na
+        detail: "Result declares no operator"
+    )
+    (
+        row
+        selector: "result"
+        position: "operator_rvalue"
+        verdict: outcome.na
+        detail: "Result declares no operator"
+    )
+    (
+        row
+        selector: "set"
+        position: "operator_lvalue"
+        verdict: outcome.na
+        detail: "Set declares no operator"
+    )
+    (
+        row
+        selector: "set"
+        position: "operator_rvalue"
+        verdict: outcome.na
+        detail: "Set declares no operator"
+    )
+    (
+        row
+        selector: "option"
+        position: "method_rvalue_arg"
+        verdict: outcome.na
+        detail: "Option declares no method with an argument"
+    )
+    (
+        row
+        selector: "result"
+        position: "method_rvalue_arg"
+        verdict: outcome.na
+        detail: "Result declares no method with an argument"
+    )
+    (
+        row
+        selector: "option"
+        position: "this_method_arg"
+        verdict: outcome.na
+        detail: "Option declares no method with an argument"
+    )
+    (
+        row
+        selector: "result"
+        position: "this_method_arg"
+        verdict: outcome.na
+        detail: "Result declares no method with an argument"
+    )
+    (
+        row
+        selector: "map"
+        position: "this_operator"
+        verdict: outcome.na
+        detail: "Map declares no operator"
+    )
+    (
+        row
+        selector: "set"
+        position: "this_operator"
+        verdict: outcome.na
+        detail: "Set declares no operator"
+    )
+    (
+        row
+        selector: "option"
+        position: "this_operator"
+        verdict: outcome.na
+        detail: "Option declares no operator"
+    )
+    (
+        row
+        selector: "result"
+        position: "this_operator"
+        verdict: outcome.na
+        detail: "Result declares no operator"
+    )
+    (
+        row
+        selector: "@native"
+        position: "operand_lvalue"
+        verdict: outcome.na
+        detail: "a native type declares no operator taking itself"
+    )
+    (
+        row
+        selector: "@native"
+        position: "operand_rvalue"
+        verdict: outcome.na
+        detail: "a native type declares no operator taking itself"
+    )
+    (
+        row
+        selector: "@native"
+        position: "operand_inline"
+        verdict: outcome.na
+        detail: "a native type declares no operator taking itself"
+    )
+    (
+        row
+        selector: "@native"
+        position: "operand_lent"
+        verdict: outcome.na
+        detail: "a native type declares no operator taking itself"
+    )
+    (
+        row
+        selector: "@native"
+        position: "operand_view_lvalue"
+        verdict: outcome.na
+        detail: "a native type declares no operator taking itself"
+    )
+    (
+        row
+        selector: "@native"
+        position: "operand_view_rvalue"
+        verdict: outcome.na
+        detail: "a native type declares no operator taking itself"
+    )
+    (
+        row
+        selector: "@native"
+        position: "operand_view_inline"
+        verdict: outcome.na
+        detail: "a native type declares no operator taking itself"
+    )
+    (
+        row
+        selector: "@native"
+        position: "operand_view_lent"
+        verdict: outcome.na
+        detail: "a native type declares no operator taking itself"
+    )
+    (
+        row
+        selector: "@interface"
+        position: "operand_lvalue"
+        verdict: outcome.na
+        detail: "an interface's method cannot take the interface itself"
+    )
+    (
+        row
+        selector: "@interface"
+        position: "operand_rvalue"
+        verdict: outcome.na
+        detail: "an interface's method cannot take the interface itself"
+    )
+    (
+        row
+        selector: "@interface"
+        position: "operand_inline"
+        verdict: outcome.na
+        detail: "an interface's method cannot take the interface itself"
+    )
+    (
+        row
+        selector: "@interface"
+        position: "operand_lent"
+        verdict: outcome.na
+        detail: "an interface's method cannot take the interface itself"
+    )
+    (
+        row
+        selector: "@interface"
+        position: "operand_view_lvalue"
+        verdict: outcome.na
+        detail: "an interface's method cannot take the interface itself"
+    )
+    (
+        row
+        selector: "@interface"
+        position: "operand_view_rvalue"
+        verdict: outcome.na
+        detail: "an interface's method cannot take the interface itself"
+    )
+    (
+        row
+        selector: "@interface"
+        position: "operand_view_inline"
+        verdict: outcome.na
+        detail: "an interface's method cannot take the interface itself"
+    )
+    (
+        row
+        selector: "@interface"
+        position: "operand_view_lent"
+        verdict: outcome.na
+        detail: "an interface's method cannot take the interface itself"
+    )
+    (
+        row
+        selector: "*"
+        position: "predicate_rvalue"
+        verdict: outcome.na
+        detail: "an arm predicate needs a sum type"
+    )
+    (row selector: "@sum" position: "predicate_rvalue" verdict: outcome.run)
+    (
+        row
+        selector: "@generic"
+        position: "conf_label"
+        verdict: outcome.na
+        detail: "a generic conforms through a generic spec per instance; gprotocol and gfacet cover it"
+    )
+    (
+        row
+        selector: "@generic"
+        position: "conf_label_write"
+        verdict: outcome.na
+        detail: "a generic conforms through a generic spec per instance; gprotocol and gfacet cover it"
+    )
+    (
+        row
+        selector: "@generic"
+        position: "conf_create"
+        verdict: outcome.na
+        detail: "a generic conforms through a generic spec per instance; gprotocol and gfacet cover it"
+    )
+    (
+        row
+        selector: "@generic"
+        position: "conf_bare"
+        verdict: outcome.na
+        detail: "a generic conforms through a generic spec per instance; gprotocol and gfacet cover it"
+    )
+    (
+        row
+        selector: "@generic"
+        position: "conf_borrow"
+        verdict: outcome.na
+        detail: "a generic conforms through a generic spec per instance; gprotocol and gfacet cover it"
+    )
+    (
+        row
+        selector: "@generic"
+        position: "conf_borrow_write"
+        verdict: outcome.na
+        detail: "a generic conforms through a generic spec per instance; gprotocol and gfacet cover it"
+    )
+    (
+        row
+        selector: "@generic"
+        position: "conf_bare_then_read"
+        verdict: outcome.na
+        detail: "a generic conforms through a generic spec per instance; gprotocol and gfacet cover it"
+    )
+    (
+        row
+        selector: "@interface"
+        position: "conf_label"
+        verdict: outcome.na
+        detail: "an interface value is already a projection; it conforms to nothing"
+    )
+    (
+        row
+        selector: "@interface"
+        position: "conf_label_write"
+        verdict: outcome.na
+        detail: "an interface value is already a projection; it conforms to nothing"
+    )
+    (
+        row
+        selector: "@interface"
+        position: "conf_create"
+        verdict: outcome.na
+        detail: "an interface value is already a projection; it conforms to nothing"
+    )
+    (
+        row
+        selector: "@interface"
+        position: "conf_bare"
+        verdict: outcome.na
+        detail: "an interface value is already a projection; it conforms to nothing"
+    )
+    (
+        row
+        selector: "@interface"
+        position: "conf_borrow"
+        verdict: outcome.na
+        detail: "an interface value is already a projection; it conforms to nothing"
+    )
+    (
+        row
+        selector: "@interface"
+        position: "conf_borrow_write"
+        verdict: outcome.na
+        detail: "an interface value is already a projection; it conforms to nothing"
+    )
+    (
+        row
+        selector: "@interface"
+        position: "conf_bare_then_read"
+        verdict: outcome.na
+        detail: "an interface value is already a projection; it conforms to nothing"
+    )
+    (
+        row
+        selector: "@native"
+        position: "conf_label"
+        verdict: outcome.na
+        detail: "a native type declares no conformance"
+    )
+    (
+        row
+        selector: "@native"
+        position: "conf_label_write"
+        verdict: outcome.na
+        detail: "a native type declares no conformance"
+    )
+    (
+        row
+        selector: "@native"
+        position: "conf_create"
+        verdict: outcome.na
+        detail: "a native type declares no conformance"
+    )
+    (
+        row
+        selector: "@native"
+        position: "conf_bare"
+        verdict: outcome.na
+        detail: "a native type declares no conformance"
+    )
+    (
+        row
+        selector: "@native"
+        position: "conf_borrow"
+        verdict: outcome.na
+        detail: "a native type declares no conformance"
+    )
+    (
+        row
+        selector: "@native"
+        position: "conf_borrow_write"
+        verdict: outcome.na
+        detail: "a native type declares no conformance"
+    )
+    (
+        row
+        selector: "@native"
+        position: "conf_bare_then_read"
+        verdict: outcome.na
+        detail: "a native type declares no conformance"
+    )
+    # -- a value type's `.borrow` field is refused where it is declared: the class holds
+    #    its copy, as a binding of one does
+    (
+        row
+        selector: "@val"
+        position: "borrowed_field"
+        verdict: outcome.refused
+        detail: "E0200 '@N' is a value type: the field holds its copy, so `.borrow` has nothing to borrow"
+    )
+    (
+        row
+        selector: "@val"
+        position: "borrowed_field_method"
+        verdict: outcome.refused
+        detail: "E0200 '@N' is a value type: the field holds its copy, so `.borrow` has nothing to borrow"
+    )
+    # -- a conformer standing in for Rd with no projection of its own: the cells a
+    #    family that cannot conform cannot write
+    (
+        row
+        selector: "@generic"
+        position: "conf_fn_arg"
+        verdict: outcome.na
+        detail: "a generic conforms through a generic spec per instance; gprotocol and gfacet cover it"
+    )
+    (
+        row
+        selector: "@interface"
+        position: "conf_fn_arg"
+        verdict: outcome.na
+        detail: "an interface value is already a projection; it conforms to nothing"
+    )
+    (
+        row
+        selector: "@native"
+        position: "conf_fn_arg"
+        verdict: outcome.na
+        detail: "a native type declares no conformance"
+    )
+    (
+        row
+        selector: "@generic"
+        position: "conf_fn_arg_inline"
+        verdict: outcome.na
+        detail: "a generic conforms through a generic spec per instance; gprotocol and gfacet cover it"
+    )
+    (
+        row
+        selector: "@interface"
+        position: "conf_fn_arg_inline"
+        verdict: outcome.na
+        detail: "an interface value is already a projection; it conforms to nothing"
+    )
+    (
+        row
+        selector: "@native"
+        position: "conf_fn_arg_inline"
+        verdict: outcome.na
+        detail: "a native type declares no conformance"
+    )
+    (
+        row
+        selector: "@generic"
+        position: "conf_meth_arg"
+        verdict: outcome.na
+        detail: "a generic conforms through a generic spec per instance; gprotocol and gfacet cover it"
+    )
+    (
+        row
+        selector: "@interface"
+        position: "conf_meth_arg"
+        verdict: outcome.na
+        detail: "an interface value is already a projection; it conforms to nothing"
+    )
+    (
+        row
+        selector: "@native"
+        position: "conf_meth_arg"
+        verdict: outcome.na
+        detail: "a native type declares no conformance"
+    )
+    (
+        row
+        selector: "@generic"
+        position: "conf_meth_arg_qual"
+        verdict: outcome.na
+        detail: "a generic conforms through a generic spec per instance; gprotocol and gfacet cover it"
+    )
+    (
+        row
+        selector: "@interface"
+        position: "conf_meth_arg_qual"
+        verdict: outcome.na
+        detail: "an interface value is already a projection; it conforms to nothing"
+    )
+    (
+        row
+        selector: "@native"
+        position: "conf_meth_arg_qual"
+        verdict: outcome.na
+        detail: "a native type declares no conformance"
+    )
+    (
+        row
+        selector: "@generic"
+        position: "conf_dispatch_arg"
+        verdict: outcome.na
+        detail: "a generic conforms through a generic spec per instance; gprotocol and gfacet cover it"
+    )
+    (
+        row
+        selector: "@interface"
+        position: "conf_dispatch_arg"
+        verdict: outcome.na
+        detail: "an interface value is already a projection; it conforms to nothing"
+    )
+    (
+        row
+        selector: "@native"
+        position: "conf_dispatch_arg"
+        verdict: outcome.na
+        detail: "a native type declares no conformance"
+    )
+    (
+        row
+        selector: "@generic"
+        position: "conf_operator"
+        verdict: outcome.na
+        detail: "a generic conforms through a generic spec per instance; gprotocol and gfacet cover it"
+    )
+    (
+        row
+        selector: "@interface"
+        position: "conf_operator"
+        verdict: outcome.na
+        detail: "an interface value is already a projection; it conforms to nothing"
+    )
+    (
+        row
+        selector: "@native"
+        position: "conf_operator"
+        verdict: outcome.na
+        detail: "a native type declares no conformance"
+    )
+    (
+        row
+        selector: "@generic"
+        position: "conf_field_borrow"
+        verdict: outcome.na
+        detail: "a generic conforms through a generic spec per instance; gprotocol and gfacet cover it"
+    )
+    (
+        row
+        selector: "@interface"
+        position: "conf_field_borrow"
+        verdict: outcome.na
+        detail: "an interface value is already a projection; it conforms to nothing"
+    )
+    (
+        row
+        selector: "@native"
+        position: "conf_field_borrow"
+        verdict: outcome.na
+        detail: "a native type declares no conformance"
+    )
+    (
+        row
+        selector: "@generic"
+        position: "conf_field_owned"
+        verdict: outcome.na
+        detail: "a generic conforms through a generic spec per instance; gprotocol and gfacet cover it"
+    )
+    (
+        row
+        selector: "@interface"
+        position: "conf_field_owned"
+        verdict: outcome.na
+        detail: "an interface value is already a projection; it conforms to nothing"
+    )
+    (
+        row
+        selector: "@native"
+        position: "conf_field_owned"
+        verdict: outcome.na
+        detail: "a native type declares no conformance"
+    )
+    (
+        row
+        selector: "@generic"
+        position: "conf_list"
+        verdict: outcome.na
+        detail: "a generic conforms through a generic spec per instance; gprotocol and gfacet cover it"
+    )
+    (
+        row
+        selector: "@interface"
+        position: "conf_list"
+        verdict: outcome.na
+        detail: "an interface value is already a projection; it conforms to nothing"
+    )
+    (
+        row
+        selector: "@native"
+        position: "conf_list"
+        verdict: outcome.na
+        detail: "a native type declares no conformance"
+    )
+    (
+        row
+        selector: "@generic"
+        position: "conf_reassign"
+        verdict: outcome.na
+        detail: "a generic conforms through a generic spec per instance; gprotocol and gfacet cover it"
+    )
+    (
+        row
+        selector: "@interface"
+        position: "conf_reassign"
+        verdict: outcome.na
+        detail: "an interface value is already a projection; it conforms to nothing"
+    )
+    (
+        row
+        selector: "@native"
+        position: "conf_reassign"
+        verdict: outcome.na
+        detail: "a native type declares no conformance"
+    )
+    (
+        row
+        selector: "@generic"
+        position: "conf_param_take"
+        verdict: outcome.na
+        detail: "a generic conforms through a generic spec per instance; gprotocol and gfacet cover it"
+    )
+    (
+        row
+        selector: "@interface"
+        position: "conf_param_take"
+        verdict: outcome.na
+        detail: "an interface value is already a projection; it conforms to nothing"
+    )
+    (
+        row
+        selector: "@native"
+        position: "conf_param_take"
+        verdict: outcome.na
+        detail: "a native type declares no conformance"
+    )
+    (
+        row
+        selector: "@generic"
+        position: "conf_return"
+        verdict: outcome.na
+        detail: "a generic conforms through a generic spec per instance; gprotocol and gfacet cover it"
+    )
+    (
+        row
+        selector: "@interface"
+        position: "conf_return"
+        verdict: outcome.na
+        detail: "an interface value is already a projection; it conforms to nothing"
+    )
+    (
+        row
+        selector: "@native"
+        position: "conf_return"
+        verdict: outcome.na
+        detail: "a native type declares no conformance"
+    )
+    # -- a conformer that is reference data cannot stand in where the place OWNS the value:
+    #    the box would share it (the checker's owning refusal); a value type's is copied in
+    (
+        row
+        selector: "class"
+        position: "conf_field_owned"
+        verdict: outcome.refused
+        detail: "E0100 '@N' cannot stand in for Rd where the value is owned: write `Rd.create from: x.take`"
+    )
+    (
+        row
+        selector: "class"
+        position: "conf_list"
+        verdict: outcome.refused
+        detail: "E0100 '@N' cannot stand in for Rd where the value is owned: write `Rd.create from: x.take`"
+    )
+    (
+        row
+        selector: "class"
+        position: "conf_param_take"
+        verdict: outcome.refused
+        detail: "E0100 '@N' cannot stand in for Rd where the value is owned: write `Rd.create from: x.take`"
+    )
+    (
+        row
+        selector: "class"
+        position: "conf_return"
+        verdict: outcome.refused
+        detail: "E0100 '@N' cannot stand in for Rd where the value is owned: write `Rd.create from: x.take`"
+    )
+    (
+        row
+        selector: "class"
+        position: "conf_reassign"
+        verdict: outcome.refused
+        detail: "E0200 Cannot reassign owned 'p' with a borrowed value: a reassignment keeps the ownership its target was bound with"
+    )
+    (
+        row
+        selector: "union"
+        position: "conf_field_owned"
+        verdict: outcome.refused
+        detail: "E0100 '@N' cannot stand in for Rd where the value is owned: write `Rd.create from: x.take`"
+    )
+    (
+        row
+        selector: "union"
+        position: "conf_list"
+        verdict: outcome.refused
+        detail: "E0100 '@N' cannot stand in for Rd where the value is owned: write `Rd.create from: x.take`"
+    )
+    (
+        row
+        selector: "union"
+        position: "conf_param_take"
+        verdict: outcome.refused
+        detail: "E0100 '@N' cannot stand in for Rd where the value is owned: write `Rd.create from: x.take`"
+    )
+    (
+        row
+        selector: "union"
+        position: "conf_return"
+        verdict: outcome.refused
+        detail: "E0100 '@N' cannot stand in for Rd where the value is owned: write `Rd.create from: x.take`"
+    )
+    (
+        row
+        selector: "union"
+        position: "conf_reassign"
+        verdict: outcome.refused
+        detail: "E0200 Cannot reassign owned 'p' with a borrowed value: a reassignment keeps the ownership its target was bound with"
+    )
+    (
+        row
+        selector: "tclass"
+        position: "conf_field_owned"
+        verdict: outcome.refused
+        detail: "E0100 '@N' cannot stand in for Rd where the value is owned: write `Rd.create from: x.take`"
+    )
+    (
+        row
+        selector: "tclass"
+        position: "conf_list"
+        verdict: outcome.refused
+        detail: "E0100 '@N' cannot stand in for Rd where the value is owned: write `Rd.create from: x.take`"
+    )
+    (
+        row
+        selector: "tclass"
+        position: "conf_param_take"
+        verdict: outcome.refused
+        detail: "E0100 '@N' cannot stand in for Rd where the value is owned: write `Rd.create from: x.take`"
+    )
+    (
+        row
+        selector: "tclass"
+        position: "conf_return"
+        verdict: outcome.refused
+        detail: "E0100 '@N' cannot stand in for Rd where the value is owned: write `Rd.create from: x.take`"
+    )
+    (
+        row
+        selector: "tclass"
+        position: "conf_reassign"
+        verdict: outcome.refused
+        detail: "E0200 Cannot reassign owned 'p' with a borrowed value: a reassignment keeps the ownership its target was bound with"
+    )
+    # -- a family declared in its unit conforms to nothing here: Rd is declared beside the
+    #    program, not in the unit
+    (
+        row
+        selector: "@unit"
+        position: "conf_label"
+        verdict: outcome.na
+        detail: "Rd is declared beside the program; the unit's type does not conform to it"
+    )
+    (
+        row
+        selector: "@unit"
+        position: "conf_label_write"
+        verdict: outcome.na
+        detail: "Rd is declared beside the program; the unit's type does not conform to it"
+    )
+    (
+        row
+        selector: "@unit"
+        position: "conf_create"
+        verdict: outcome.na
+        detail: "Rd is declared beside the program; the unit's type does not conform to it"
+    )
+    (
+        row
+        selector: "@unit"
+        position: "conf_bare"
+        verdict: outcome.na
+        detail: "Rd is declared beside the program; the unit's type does not conform to it"
+    )
+    (
+        row
+        selector: "@unit"
+        position: "conf_bare_then_read"
+        verdict: outcome.na
+        detail: "Rd is declared beside the program; the unit's type does not conform to it"
+    )
+    (
+        row
+        selector: "@unit"
+        position: "conf_borrow"
+        verdict: outcome.na
+        detail: "Rd is declared beside the program; the unit's type does not conform to it"
+    )
+    (
+        row
+        selector: "@unit"
+        position: "conf_borrow_write"
+        verdict: outcome.na
+        detail: "Rd is declared beside the program; the unit's type does not conform to it"
+    )
+    (
+        row
+        selector: "@unit"
+        position: "conf_fn_arg"
+        verdict: outcome.na
+        detail: "Rd is declared beside the program; the unit's type does not conform to it"
+    )
+    (
+        row
+        selector: "@unit"
+        position: "conf_fn_arg_inline"
+        verdict: outcome.na
+        detail: "Rd is declared beside the program; the unit's type does not conform to it"
+    )
+    (
+        row
+        selector: "@unit"
+        position: "conf_meth_arg"
+        verdict: outcome.na
+        detail: "Rd is declared beside the program; the unit's type does not conform to it"
+    )
+    (
+        row
+        selector: "@unit"
+        position: "conf_meth_arg_qual"
+        verdict: outcome.na
+        detail: "Rd is declared beside the program; the unit's type does not conform to it"
+    )
+    (
+        row
+        selector: "@unit"
+        position: "conf_dispatch_arg"
+        verdict: outcome.na
+        detail: "Rd is declared beside the program; the unit's type does not conform to it"
+    )
+    (
+        row
+        selector: "@unit"
+        position: "conf_operator"
+        verdict: outcome.na
+        detail: "Rd is declared beside the program; the unit's type does not conform to it"
+    )
+    (
+        row
+        selector: "@unit"
+        position: "conf_field_borrow"
+        verdict: outcome.na
+        detail: "Rd is declared beside the program; the unit's type does not conform to it"
+    )
+    (
+        row
+        selector: "@unit"
+        position: "conf_field_owned"
+        verdict: outcome.na
+        detail: "Rd is declared beside the program; the unit's type does not conform to it"
+    )
+    (
+        row
+        selector: "@unit"
+        position: "conf_list"
+        verdict: outcome.na
+        detail: "Rd is declared beside the program; the unit's type does not conform to it"
+    )
+    (
+        row
+        selector: "@unit"
+        position: "conf_reassign"
+        verdict: outcome.na
+        detail: "Rd is declared beside the program; the unit's type does not conform to it"
+    )
+    (
+        row
+        selector: "@unit"
+        position: "conf_param_take"
+        verdict: outcome.na
+        detail: "Rd is declared beside the program; the unit's type does not conform to it"
+    )
+    (
+        row
+        selector: "@unit"
+        position: "conf_return"
+        verdict: outcome.na
+        detail: "Rd is declared beside the program; the unit's type does not conform to it"
+    )
+    (
+        row
+        selector: "@unit"
+        position: "conf_create_return_arm"
+        verdict: outcome.na
+        detail: "Rd is declared beside the program; the unit's type does not conform to it"
+    )
+    # -- a value with no name, hoisted so its address can be taken: the cells its
+    #    named twin cannot write, it cannot either
+    (
+        row
+        selector: "map"
+        position: "lent_operator"
+        verdict: outcome.na
+        detail: "Map declares no operator"
+    )
+    (
+        row
+        selector: "option"
+        position: "lent_operator"
+        verdict: outcome.na
+        detail: "Option declares no operator"
+    )
+    (
+        row
+        selector: "result"
+        position: "lent_operator"
+        verdict: outcome.na
+        detail: "Result declares no operator"
+    )
+    (
+        row
+        selector: "set"
+        position: "lent_operator"
+        verdict: outcome.na
+        detail: "Set declares no operator"
+    )
+    (
+        row
+        selector: "option"
+        position: "lent_method_arg"
+        verdict: outcome.na
+        detail: "Option declares no method with an argument"
+    )
+    (
+        row
+        selector: "result"
+        position: "lent_method_arg"
+        verdict: outcome.na
+        detail: "Result declares no method with an argument"
+    )
+    (
+        row
+        selector: "option"
+        position: "field_rvalue_method_arg"
+        verdict: outcome.na
+        detail: "Option declares no method with an argument"
+    )
+    (
+        row
+        selector: "result"
+        position: "field_rvalue_method_arg"
+        verdict: outcome.na
+        detail: "Result declares no method with an argument"
+    )
+    (
+        row
+        selector: "*"
+        position: "lent_predicate"
+        verdict: outcome.na
+        detail: "an arm predicate needs a sum type"
+    )
+    (row selector: "@sum" position: "lent_predicate" verdict: outcome.run)
+    (
+        row
+        selector: "@generic"
+        position: "conf_create_return_arm"
+        verdict: outcome.na
+        detail: "a generic conforms through a generic spec per instance; gprotocol and gfacet cover it"
+    )
+    (
+        row
+        selector: "@interface"
+        position: "conf_create_return_arm"
+        verdict: outcome.na
+        detail: "an interface value is already a projection; it conforms to nothing"
+    )
+    (
+        row
+        selector: "@native"
+        position: "conf_create_return_arm"
+        verdict: outcome.na
+        detail: "a native type declares no conformance"
+    )
+    # -- known defects: each cell waits on its fix (the M2 worklist)
+
+    # -- a bare value-type union arm is stored in the union's pointer-wide slot, and
+    #    one wider than the slot is refused at the arm (spec §union): a tagged
+    #    variant (its tag and payload, 16 bytes) and a facet (a vtable and a copy)
+    #    are both wider, and `(Box T)` is what holds them
+    (
+        row
+        selector: "@val&sum"
+        position: "union_arm"
+        verdict: outcome.refused
+        detail: "E0100 arm `a` of `UnionArm` holds `@N` (16 bytes), wider than a union's 8-byte slot; write `(Box @N)`"
+    )
+    (
+        row
+        selector: "@val&interface"
+        position: "union_arm"
+        verdict: outcome.refused
+        detail: "E0100 arm `a` of `UnionArm` holds the facet `@N` (a vtable and a copy), which no union slot holds; write `(Box @N)`"
+    )
+    (
+        row
+        selector: "@val&sum"
+        position: "match_arm"
+        verdict: outcome.refused
+        detail: "E0100 arm `a` of `MatchArm` holds `@N` (16 bytes), wider than a union's 8-byte slot; write `(Box @N)`"
+    )
+    (
+        row
+        selector: "@val&interface"
+        position: "match_arm"
+        verdict: outcome.refused
+        detail: "E0100 arm `a` of `MatchArm` holds the facet `@N` (a vtable and a copy), which no union slot holds; write `(Box @N)`"
+    )
+    (
+        row
+        selector: "@val&sum"
+        position: "if_arm"
+        verdict: outcome.refused
+        detail: "E0100 arm `a` of `IfArm` holds `@N` (16 bytes), wider than a union's 8-byte slot; write `(Box @N)`"
+    )
+    (
+        row
+        selector: "@val&interface"
+        position: "if_arm"
+        verdict: outcome.refused
+        detail: "E0100 arm `a` of `IfArm` holds the facet `@N` (a vtable and a copy), which no union slot holds; write `(Box @N)`"
+    )
+    (
+        row
+        selector: "@val&sum"
+        position: "return_narrowed"
+        verdict: outcome.refused
+        detail: "E0100 arm `a` of `ReturnNarrowed` holds `@N` (16 bytes), wider than a union's 8-byte slot; write `(Box @N)`"
+    )
+    (
+        row
+        selector: "@val&interface"
+        position: "return_narrowed"
+        verdict: outcome.refused
+        detail: "E0100 arm `a` of `ReturnNarrowed` holds the facet `@N` (a vtable and a copy), which no union slot holds; write `(Box @N)`"
+    )
+    (
+        row
+        selector: "@val&sum"
+        position: "arm_take_assign"
+        verdict: outcome.refused
+        detail: "E0100 arm `a` of `ArmTakeAssign` holds `@N` (16 bytes), wider than a union's 8-byte slot; write `(Box @N)`"
+    )
+    (
+        row
+        selector: "@val&interface"
+        position: "arm_take_assign"
+        verdict: outcome.refused
+        detail: "E0100 arm `a` of `ArmTakeAssign` holds the facet `@N` (a vtable and a copy), which no union slot holds; write `(Box @N)`"
+    )
+    (
+        row
+        selector: "@val&sum"
+        position: "arm_take_bind"
+        verdict: outcome.refused
+        detail: "E0100 arm `a` of `ArmTakeBind` holds `@N` (16 bytes), wider than a union's 8-byte slot; write `(Box @N)`"
+    )
+    (
+        row
+        selector: "@val&interface"
+        position: "arm_take_bind"
+        verdict: outcome.refused
+        detail: "E0100 arm `a` of `ArmTakeBind` holds the facet `@N` (a vtable and a copy), which no union slot holds; write `(Box @N)`"
+    )
+}

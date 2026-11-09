@@ -1,6 +1,6 @@
 # matrixgen -- the ownership matrix's generator: every type family crossed with
 # every position a value of it can stand in, each crossing a CELL whose verdict
-# the expectations table tests/fixtures/matrix_expect.txt states. RUN (the
+# the expectations table tests/fixtures/matrix_expect.zd states. RUN (the
 # default) is a value checked by golden and leak-clean under the leak kind;
 # REFUSED is the error line an errors fixture pins; NA is a cell that cannot be
 # written, with the reason; ASK is a question for the user, emitted nowhere
@@ -8,13 +8,14 @@
 # named by its defect -- emitted nowhere in the fixtures, so they stay green,
 # and written with --cells so the defect's fix can be measured.
 #
-# Usage: matrixgen [--root DIR] [--cells DIR]
+# Usage: matrixgen [--root DIR] [--cells DIR] [--system DIR]
 #   --root   the repository the fixtures are written under (default `.`):
 #            per family emitc_corpus/matrix_<f>.z (and matrix_<f>_conf.z for the
 #            implementation cells), run_golden/matrix_<f>*.out, the matrix_ rows of
 #            run_cases.txt, and errors/matrix_<f>_refused.z + .err.
 #   --cells  one program per cell into DIR plus DIR/manifest.txt (name family
 #            position verdict expected detail) instead, to look at a cell alone.
+#   --system the system units the table is checked against (default `lib/system`).
 #
 # A family is text: its declarations, and templates for making a value (`@V` the
 # number, `@S` that many letters), reading one back (`@X` the value) and calling
@@ -81,9 +82,10 @@ Position: class {
     atEnd: bool
 }
 
-# Row -- one line of the expectations table, its position resolved to an index
+# Row -- one row of the expectations table, its position resolved to an index
 Row: class {
-    lineno: u64
+    # where the table writes it, `<file>:<line>`
+    where: String
     selector: String
     pos: u64
     expected: outcome
@@ -181,14 +183,15 @@ matrixWord: list {
     methodArg: "MA"
     operator: "OP"
     closeBrace: "}"
-    run: "RUN"
-    refused: "REFUSED"
-    na: "NA"
-    ask: "ASK"
-    known: "KNOWN"
+    run: "run"
+    refused: "refused"
+    na: "na"
+    ask: "ask"
+    known: "known"
     anyFamily: "*"
     fRoot: "--root"
     fCells: "--cells"
+    fSystem: "--system"
 } out staticlist StringView
 
 # formOf -- the form a name before `[` spells
@@ -2443,29 +2446,6 @@ addPos: function {
     )
 }
 
-# words -- the first three space-separated words of a table line, then the rest
-# of the line trimmed; fewer pieces when the line has fewer words
-words: function {line: StringView} out List String is {
-    buf: List String
-    t: line.trim
-    from: u64
-    for buf.length < 3 loop {
-        rest: (t.substring :from to: t.length).trimStart
-        if rest.length == 0 then return buf
-        from = t.length - rest.length
-        sp: rest.indexOf needle: " "
-        if sp.none then {
-            buf.append rest.string
-            return buf
-        }
-        buf.append (rest.substring from: 0 to: sp).string
-        from = from + sp
-    }
-    last: (t.substring :from to: t.length).trim
-    if last.length > 0 then buf.append last.string
-    return buf
-}
-
 # slurp -- a file's text, stopping when it cannot be read
 slurp: function {path: StringView} out String is {
     r: io.readText :path
@@ -2479,7 +2459,7 @@ slurp: function {path: StringView} out String is {
     }
 }
 
-# outcomeOf -- the outcome a verdict word names, stopping on any other word
+# outcomeOf -- the outcome a verdict arm names, stopping on any other name
 outcomeOf: function {w: StringView where: String.view} out outcome is {
     words: zast.Vocab.create block: matrixWord
     wW: words.slotOf text: w
@@ -2560,44 +2540,44 @@ checkDetail: function {where: String.view expected: outcome detail: StringView} 
     )
 }
 
-# parseRow -- one table line as a row, each part checked
-parseRow: function {
-    line: StringView
-    where: String.view
-    lineno: u64
+# rowOf -- one row of the table, each part checked
+rowOf: function {
+    f: zdata.DataFile.view
+    v: ztypes.cval
     fams: (List Family).view
     poss: (List Position).view
 } out Row is {
-    ws: words :line
-    if ws.length < 3 then fail msg: "\{where}: want `selector position verdict [detail]`"
-    sel: ws.get i: 0
+    where: zdata.placeOf :f :v
+    sel: zdata.textOf :f v: (zdata.fieldOf :f :v name: "selector")
     if (knownSelector sel: sel.stringView :fams).not then (
         fail
         msg: "\{where}: unknown selector '\{sel}'"
     )
-    pos: ws.get i: 1
+    pos: zdata.textOf :f v: (zdata.fieldOf :f :v name: "position")
     pi: positionIndex name: pos.stringView :poss :where
-    expected: outcomeOf w: (ws.get i: 2).stringView :where
-    detail: if ws.length > 3 then (ws.get i: 3).copy else "".string
+    arm: zdata.armOf :f v: (zdata.fieldOf :f :v name: "verdict")
+    expected: outcomeOf w: arm.stringView :where
+    detail: zdata.textOf :f v: (zdata.fieldOf :f :v name: "detail")
     checkDetail :where :expected detail: detail.stringView
-    return (Row :lineno selector: sel.copy pos: pi :expected :detail)
+    return (Row :where selector: sel pos: pi :expected :detail)
 }
 
-# readTable -- the expectations table's rows
+# readTable -- the rows of the table's `ownership` list, stopping when the
+# data file does not check against the system units at `systemdir`
 readTable: function {
-    path: StringView fams: (List Family).view poss: (List Position).view
+    path: StringView
+    systemdir: StringView
+    fams: (List Family).view
+    poss: (List Position).view
 } out List Row is {
+    noDirs: List String
+    f: zdata.open file: path srcdirs: noDirs :systemdir
+    if f.ok.not then fail msg: "\{path} does not check:\n\{zdata.errorsText :f}"
     rows: List Row
-    content: slurp :path
-    lineno: u64
-    for each ln: content.stringView.lines loop {
-        lineno = lineno + 1
-        t: ln.trim
-        if t.length > 0 when (t.startsWith prefix: "#").not then {
-            where: "\{path}:\{lineno}"
-            rows.append (parseRow line: t :where :lineno :fams :poss)
-        }
-    }
+    for each v: (zdata.itemsOf :f v: (zdata.definition :f name: "ownership")) loop (
+        rows.append
+        (rowOf :f :v :fams :poss)
+    )
     return rows
 }
 
@@ -2637,7 +2617,6 @@ allSlots: function {
     fams: (List Family).view
     poss: (List Position).view
     rows: (List Row).view
-    tablePath: StringView
 } out List Slot is {
     used: ListVal bool
     for used.length < rows.length loop used.append false
@@ -2655,7 +2634,7 @@ allSlots: function {
     for ri < rows.length loop {
         if (used.get i: ri).not then {
             r: rows.get i: ri
-            fail msg: "\{tablePath}:\{r.lineno}: the row selects no cell"
+            fail msg: "\{r.where}: the row selects no cell"
         }
         ri = ri + 1
     }
@@ -2680,7 +2659,7 @@ errLine: function {detail: StringView} out String is {
 
 # header -- the first lines of every generated program
 header: function {f: Family.view what: StringView} out String is {
-    buf: "# GENERATED by tests/unit/matrixgen.z from tests/fixtures/matrix_expect.txt --\n".string
+    buf: "# GENERATED by tests/unit/matrixgen.z from tests/fixtures/matrix_expect.zd --\n".string
     buf.append "# `make regen-matrix`; do not edit. The `\{f.name}` family (\{f.ty}) in every\n"
     buf.append "# position whose cell is \{what}: one function per cell, called from main.\n"
     return buf
@@ -2986,24 +2965,30 @@ report: function {
 Options: class {
     root: String
     cellsDir: String
+    system: String
 }
 
 # parseArgs -- the command line as Options, stopping on anything else
 parseArgs: function out Options is {
     words: zast.Vocab.create block: matrixWord
     argv: os.args
-    opts: Options root: ".".string cellsDir: "".string
+    opts: Options root: ".".string cellsDir: "".string system: "lib/system".string
     i: 1.u64
     for i < argv.length loop {
         a: argv.get :i
         aW: words.slotOf text: a.stringView
-        if (i + 1) >= argv.length then fail msg: "usage: matrixgen [--root DIR] [--cells DIR]"
+        if (i + 1) >= argv.length then (
+            fail
+            msg: "usage: matrixgen [--root DIR] [--cells DIR] [--system DIR]"
+        )
         v: argv.get i: i + 1
         if aW == matrixWord.slot.fRoot then {
             opts.root = v.copy
         } else if aW == matrixWord.slot.fCells then {
             opts.cellsDir = v.copy
-        } else fail msg: "usage: matrixgen [--root DIR] [--cells DIR]"
+        } else if aW == matrixWord.slot.fSystem then {
+            opts.system = v.copy
+        } else fail msg: "usage: matrixgen [--root DIR] [--cells DIR] [--system DIR]"
         i = i + 2
     }
     return opts
@@ -3013,9 +2998,9 @@ main: function is {
     opts: parseArgs
     fams: families
     poss: positions
-    tablePath: "\{opts.root}/tests/fixtures/matrix_expect.txt"
-    rows: readTable path: tablePath.stringView :fams :poss
-    slots: allSlots :fams :poss :rows tablePath: tablePath.stringView
+    tablePath: "\{opts.root}/tests/fixtures/matrix_expect.zd"
+    rows: readTable path: tablePath.stringView systemdir: opts.system.stringView :fams :poss
+    slots: allSlots :fams :poss :rows
     if opts.cellsDir.length > 0 then {
         writeCells dir: opts.cellsDir.stringView :fams :poss :rows :slots
     } else writeFixtures root: opts.root.stringView :fams :poss :rows :slots

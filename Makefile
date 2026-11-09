@@ -1019,12 +1019,12 @@ regen-fmt-goldens: out/zfmt
 	@echo "regenerated fmt goldens via $(BUILDDIR)/zfmt"
 
 # The ownership matrix generator: every type family by every position.
-out/matrixgen: bin/zc tests/unit/matrixgen.z $(wildcard lib/system/*.z) $(wildcard lib/system/system/*.z lib/system/math/*.z)
+out/matrixgen: bin/zc tests/unit/matrixgen.z $(wildcard src/*.z) $(wildcard lib/system/*.z) $(wildcard lib/system/system/*.z lib/system/math/*.z)
 	@mkdir -p $(BUILDDIR)
-	bin/zc matrixgen --src tests/unit --system lib/system --emit-c $(BUILDDIR)/matrixgen.c
+	bin/zc matrixgen --src tests/unit --src src --system lib/system --emit-c $(BUILDDIR)/matrixgen.c
 	$(CC) $(CFLAGS) -o $(BUILDDIR)/matrixgen $(BUILDDIR)/matrixgen.c $(call ZLINKOF,$(BUILDDIR)/matrixgen.c) -lm
 
-# regen-matrix -- rewrite the matrix fixtures from tests/fixtures/matrix_expect.txt.
+# regen-matrix -- rewrite the matrix fixtures from tests/fixtures/matrix_expect.zd.
 regen-matrix: out/matrixgen
 	$(BUILDDIR)/matrixgen --root .
 
@@ -1032,10 +1032,10 @@ regen-matrix: out/matrixgen
 # under a scratch root, with none left over that it no longer writes.
 matrix-guard: out/matrixgen
 	@d=$$(mktemp -d); mkdir -p $$d/tests/fixtures; \
-	cp tests/fixtures/matrix_expect.txt tests/fixtures/run_cases.txt $$d/tests/fixtures/; \
+	cp tests/fixtures/matrix_expect.zd tests/fixtures/run_cases.txt $$d/tests/fixtures/; \
 	$(BUILDDIR)/matrixgen --root $$d > $$d/gen.log 2>&1 || { cat $$d/gen.log; rm -rf $$d; exit 1; }; \
 	bad=0; n=0; \
-	for f in $$(cd $$d && find tests/fixtures -type f ! -name matrix_expect.txt); do \
+	for f in $$(cd $$d && find tests/fixtures -type f ! -name matrix_expect.zd); do \
 	  n=$$((n+1)); \
 	  if ! cmp -s $$d/$$f $$f; then echo "matrix-guard FAIL: $$f differs from matrixgen's output"; bad=1; fi; \
 	done; \
