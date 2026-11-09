@@ -41463,14 +41463,18 @@ bindForBorrowedElement: function {
     cond: argref
     elem: ztypes.tid
     nm: StringView
+    # the element is a reference into the container's storage (an OptionView's
+    # payload), not a view value of its own
+    aliasesStorage: bool
 } is {
     vid: st.reg.newVariable ztypeId: elem ownership: ztypes.zownership.borrowed
     # the element borrows from the iterator it came from, named or called
     st.reg.setVariableBorrowOrigin id: vid origin: (forElementIteratorName :ast nid: cond.operation)
     nmId: cond.name
     st.defineVar nameId: nmId :vid
-    condNid: nodeId n: (ast.nodes.get i: cond.operation)
-    st.typing.setDefVariable nid: condNid :vid
+    # the element is the header's variable whatever shape the header is: an
+    # `if` or a `match` over iterators included, which nodeId reads as none
+    st.typing.setDefVariable nid: cond.operation :vid
     # `for each x: xs` has no iterator binding to carry
     # the container's lock, so the element carries it: the
     # reference the loop hands out points into the
@@ -41481,7 +41485,7 @@ bindForBorrowedElement: function {
     takePendingPins :st dst: fpins
     if fpins.length > 0 then {
         fcn: ast.nodes.get i: cond.operation
-        fnd: nodeId n: fcn
+        fnd: zast.nodeIdOf n: fcn
         fln: nodeLine n: fcn
         fcl: nodeCol n: fcn
         (
@@ -41519,18 +41523,21 @@ bindForBorrowedElement: function {
     # holder has on the container, so it inherits that
     # lock's strength: a SHARED pin (a `view` iterator
     # receiver) yields READONLY elements, an exclusive one
-    # yields writable ones. The binding-free form knows its
+    # yields writable ones. An element that is a view value of
+    # its own (`split`'s StringView) points into nothing it could
+    # write: it holds the pins, as a view bound by a let does, and
+    # stays an ordinary binding. The binding-free form knows its
     # own strength; a walk of an iterator binding -- `for each
     # e: it`, or the plain `for e: it.call`, whose pins are the
     # call's on the iterator -- asks the binding.
     elr: false
     if fpins.length > 0 when (pinsAllShared pins: fpins) then elr = true
     if elr.not then elr = iterElementIsReadonly :st iterName: iterNm
-    if elr then {
+    if elr when aliasesStorage then {
         erm: readonlySelfLock :st :ast name: nm :vid
         if erm.length > 0 then {
             ecn: ast.nodes.get i: cond.operation
-            end: nodeId n: ecn
+            end: zast.nodeIdOf n: ecn
             eln: nodeLine n: ecn
             ecl: nodeCol n: ecn
             addError :st nodeid: end lineno: eln colno: ecl e: zast.err.ownerError msg: erm
@@ -41776,8 +41783,18 @@ bindForIteration: function {
         refuseUnwalkableBinding :st :ast :cond :vt :isEach
         return
     }
-    if fe.isView then {
-        bindForBorrowedElement :st :ast :cond elem: fe.elem :nm
+    # an element that is itself a view (`split`'s and `lines`' StringView, in a
+    # plain Option) is a reference into what the iteration reads, as an
+    # OptionView's payload is: it holds the iteration's pins for the body. A
+    # view the header left no pins for (a static list's element) holds no lock
+    # and is the loop's own value, as a lock-free view bound by a let is. Only
+    # an `each` header's iterator is a temporary no name holds; a plain `for`
+    # over a bound iterator leaves the pins to the binding.
+    pinned: st.walk.pendingPins.length > 0
+    lockedView: isEach and (isViewFamilyTid :ast :st tid: fe.elem) and pinned
+    viewElem: fe.isView or lockedView
+    if viewElem then {
+        bindForBorrowedElement :st :ast :cond elem: fe.elem :nm aliasesStorage: fe.isView
     } else {
         bindForOwnedElement :st :cond elem: fe.elem
     }
