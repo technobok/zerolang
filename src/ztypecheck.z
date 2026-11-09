@@ -39183,10 +39183,14 @@ stashArmValuePins: function {st: zenv.ZSymbolTable ast: Ast.view lineId: zast.no
 stashValuePins: function {st: zenv.ZSymbolTable ast: Ast.view valNid: zast.nodeid} is {
     if valNid.isZero then return
     bn: zast.atomNameIdOf n: (ast.nodes.get i: valNid)
+    # an OWNED local the scope declared, handed back, moves out with its locks:
+    # what binds it owns it, as it owns an `outx` result
+    movedOut: false
     if bn.isZero.not when (st.scopeBindsHere nameId: bn) then {
         hv: st.lookupVarId nameId: bn
         if hv.some then {
             st.heldLockPaths holder: ztypes.zlockholder.var hv dst: st.walk.pendingPins
+            movedOut = (st.reg.variableOwnershipOf id: hv) == ztypes.zownership.owned
         }
     }
     n: st.walk.pendingPins.length
@@ -39211,7 +39215,7 @@ stashValuePins: function {st: zenv.ZSymbolTable ast: Ast.view valNid: zast.nodei
             ztyping.pinspan
             start: start.u32.orPanic
             len: n.u32.orPanic
-            owned: st.walk.pendingBorrowOwned
+            owned: st.walk.pendingBorrowOwned or movedOut
         )
     )
 }

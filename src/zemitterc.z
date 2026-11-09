@@ -22498,8 +22498,19 @@ emitExprArms: function {
         # grammar.pdoc: "`with` can be used as an expression. The result will be
         # the value of the `do` expression." It reaches C the way an `if` or a
         # `match` does -- no C expression spells a scope with a binding in it
+        if (controlValueIsReference :ast :reg :typing :ctx n: (ast.nodes.get i: n.nodeid)) then {
+            return (emitControlRef :ast :reg :typing :ctx n: (ast.nodes.get i: n.nodeid) :facts)
+        }
         wcx: emitControlExpr :ast :reg :typing :ctx n: (ast.nodes.get i: n.nodeid)
         if wcx.length > 0 then return (stating :facts from: callFacts text: wcx)
+        return (stating :facts from: failedFacts text: (unhandledExpr :ctx line: n.lineno))
+    } case doexpr then {
+        # a block used as a value: its statements run ahead, as a `with`'s do
+        if (controlValueIsReference :ast :reg :typing :ctx n: (ast.nodes.get i: n.nodeid)) then {
+            return (emitControlRef :ast :reg :typing :ctx n: (ast.nodes.get i: n.nodeid) :facts)
+        }
+        dcx: emitControlExpr :ast :reg :typing :ctx n: (ast.nodes.get i: n.nodeid)
+        if dcx.length > 0 then return (stating :facts from: callFacts text: dcx)
         return (stating :facts from: failedFacts text: (unhandledExpr :ctx line: n.lineno))
     } else {
         return (
@@ -22540,11 +22551,12 @@ ifIsTernary: function {ast: Ast.view n: astnode.view} out bool is {
     return (ztypecheck.armLeaves :ast :n inLoop: false).not
 }
 
-# controlValueIsReference -- an `if` or a `match` used as a value whose type owns
-# something and one of whose arms is a place (armLeafIsPlace): what it yields is
-# storage something else owns on that arm's path, so it is emitted as a reference
-# to the arm's value (emitControlRef) rather than as a value of its own, which
-# every use would free.
+# controlValueIsReference -- an `if`, a `match`, a block or a `with` used as a
+# value whose type owns something and one of whose arms (a block's or a `with`'s
+# one body) is a place (armLeafIsPlace): what it yields is storage something
+# else owns on that arm's path, so it is emitted as a reference to the arm's
+# value (emitControlRef) rather than as a value of its own, which every use
+# would free.
 controlValueIsReference: function {
     ast: Ast.view
     reg: ztypes.ZTypeRegistry.view
@@ -22552,7 +22564,7 @@ controlValueIsReference: function {
     ctx: Ctx.view
     n: astnode.view
 } out bool is {
-    isCtl: n.ifexpr or n.caseexpr
+    isCtl: n.ifexpr or n.caseexpr or n.doexpr or n.withexpr
     if isCtl.not then return false
     nid: zast.nodeIdOf :n
     vt: bindingStampOf :typing :ctx :nid
@@ -25680,6 +25692,7 @@ emitControlCollectionBind: function {
             :ind
             :tmp
             :buf
+            owes: true
         )
     } else null
     if isDo then return
@@ -26030,6 +26043,7 @@ emitStringBind: function {
             :ind
             :tmp
             :buf
+            owes: true
         )
     }
     if btid == ctx.svTid then {
@@ -26541,6 +26555,7 @@ emitControlBind: function {
         :ind
         :tmp
         :buf
+        owes: true
     )
 }
 
@@ -28295,6 +28310,18 @@ emitWithBody: function {
                 :buf
             )
         }
+        (
+            zeroWithOwnMove
+            :reg
+            :typing
+            :ctx
+            :n
+            wvb: (withValueBlock n: wbody)
+            wnm: wnm.stringView
+            :wsid
+            :ind
+            :buf
+        )
     } else {
         emitBodyNode :ast :reg :typing :ctx n: wbody :ind :tmp :buf
     }
@@ -28310,6 +28337,30 @@ emitWithBody: function {
         :ind
         :buf
     )
+}
+
+# zeroWithOwnMove -- a `with` whose body hands back the `with`'s own OWNED value
+# moves it into what binds the `with`: the local is zeroed, so the destroy the
+# `with`'s end owes it no-ops, as a block's own local moved out is
+# (zeroBranchLocalMove).
+zeroWithOwnMove: function {
+    reg: ztypes.ZTypeRegistry.view
+    typing: ztyping.ZTyping.view
+    ctx: Ctx
+    n: zast.withrow.view
+    # the node the body yields
+    wvb: zast.nodeid
+    wnm: StringView
+    wsid: ztypes.tid
+    ind: StringView
+    buf: String.borrow
+} is {
+    if ctx.genActive then return
+    wvid: defVid :ctx :typing nid: n.nodeid
+    if (varOwnsHere :reg vid: wvid).not then return
+    if (atomVid :typing nid: wvb) != wvid then return
+    mz: movedZeroC :reg :typing :ctx tid: wsid
+    if mz.length > 0 then buf.append "\{ind}\{wnm} = \{mz};\n"
 }
 
 # emitCaseStmt -- a `match` in statement position, delegated to the shared arm
@@ -30165,7 +30216,9 @@ emitBranchAssignOptional: function {
 # emitDoBindValue -- `x: { ... }` (a do block): declare the local and emit the
 # block. A do block whose own body breaks yields an optionval (default `none`,
 # `some(last)` on normal completion, in a do/while(0) so a break exits to none);
-# a breakless do block is a plain scoped block assigning the last value.
+# a breakless do block is a plain scoped block assigning the last value. A
+# binding's local `owes` its destroy at scope exit; a block inside an expression
+# owes nothing here, as an `if`'s or a `match`'s value does not.
 emitDoBindValue: function {
     ast: Ast.view
     reg: ztypes.ZTypeRegistry.view
@@ -30179,6 +30232,7 @@ emitDoBindValue: function {
     ind: StringView
     tmp: TmpCtr
     buf: String.borrow
+    owes: bool
 } out bool is {
     match (
         n
@@ -30211,7 +30265,12 @@ emitDoBindValue: function {
                 l0b: "\{ind}\{nm}.data = NULL;\n"
                 buf.append l0b
                 ldc: destroyLineC :reg :typing :ctx :tid :nm ind: "    "
-                if ldc.length > 0 then tmp.oweList stmt: ldc.take name: nm.string vid: nmVid
+                if owes when ldc.length > 0 then (
+                    tmp.oweList
+                    stmt: ldc.take
+                    name: nm.string
+                    vid: nmVid
+                )
             }
             l1: "\{ind}do {\n"
             buf.append l1
@@ -30246,7 +30305,7 @@ emitDoBindValue: function {
             # an owned destructible block value is destroyed at scope exit
             # (the binding path returns before its own registration).
             pldf: hoistDestroyLine :reg :typing :ctx :tid :nm
-            if pldf.length > 0 then tmp.oweList stmt: pldf.copy name: nm.string vid: nmVid
+            if owes when pldf.length > 0 then tmp.oweList stmt: pldf.copy name: nm.string vid: nmVid
             l3: "\{ind}{\n"
             buf.append l3
             innerInd: "\{ind}    "
@@ -34032,6 +34091,22 @@ emitControlBindValue: function {
     if (emitIfBindValue :ast :reg :typing :ctx n: vn :nm :ct :ind :tmp :buf) then return true
     if (emitMatchBindValue :ast :reg :typing :ctx n: vn :nm :ct :ind :tmp :buf) then return true
     if (emitWithBindValue :ast :reg :typing :ctx n: vn :rtid :nm :ct :ind :tmp :buf
+    ) then return true
+    if (
+        emitDoBindValue
+        :ast
+        :reg
+        :typing
+        :ctx
+        n: vn
+        :nm
+        nmVid: ztypes.vid
+        :ct
+        tid: rtid
+        :ind
+        :tmp
+        :buf
+        owes: false
     ) then return true
     if (forexprValue n: vn).not then return false
     lcb: spelledCname :ctx tid: rtid
