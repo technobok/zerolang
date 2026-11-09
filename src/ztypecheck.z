@@ -11631,6 +11631,15 @@ staticListElemValue: function {
     # an element whose evaluation reported why it has no value -- the
     # definition it names failed -- has its one error already
     if st.typing.errors.length > errA then return ztypes.noConst
+    # one that recorded no reason says why through the part of it that has
+    # none, as a definition does; the walk must not drop the failure an
+    # enclosing fold holds
+    if cv.kind.none then {
+        visiting: ListVal zast.nodeid
+        said: unfoldedPartWhy :st :scope :ast :unitDecl nid: opRef :visiting
+        st.walk.constFail = held
+        if said then return ztypes.noConst
+    }
     msg: "a list element must be a compile-time constant".string
     hint: "an element is a literal, a unit constant, or an expression over them".string
     (
@@ -65972,6 +65981,14 @@ staticArgValue: function {
             av = constOfFnRef :st :scope :ast :unitDecl nid: a.operation
         } else {
             av = evalConstNode :st :scope :ast :unitDecl nid: a.operation
+            # one with no value and no recorded reason says why through the
+            # part of it that has none, as a definition does
+            unsaid: st.typing.errors.length == errA
+            if av.kind.none when st.walk.constFail.kind.none when unsaid then {
+                visiting: ListVal zast.nodeid
+                said: unfoldedPartWhy :st :scope :ast :unitDecl nid: a.operation :visiting
+                if said then return ztypes.noConst
+            }
         }
         # a value whose own fold was reported (a cycle through it) is not
         # reported again here
@@ -68877,6 +68894,27 @@ unfoldedWhy: function {
     constFailClear :st
     if v.kind.none.not then return false
     if recorded then return true
+    if (unfoldedPartWhy :st :scope :ast :unitDecl :nid :visiting) then return true
+    msg: "not a compile-time constant".string
+    hint: "a unit constant is built from literals, other constants, operators, `if` and `match`".string
+    reportUnfolded :st :ast :nid width: 1 :msg :hint
+    return true
+}
+
+# unfoldedPartWhy -- node `nid`, which has no value and recorded no reason: the
+# part of it that says why -- an `if` or `match` branch, an operand, a name, a
+# call, a member read -- reported (or, for a template's constant over its
+# numeric parameter, deliberately not). False, nothing reported, when no part
+# says more than that the node is not a constant: the caller reports in its own
+# words -- a definition, a data argument and a list element each have theirs.
+unfoldedPartWhy: function {
+    ast: Ast
+    st: zenv.ZSymbolTable
+    unitDecl: ztypes.declid
+    scope: ztypes.declid
+    nid: zast.nodeid
+    visiting: ListVal zast.nodeid
+} out bool is {
     plan: evalConstPlan :ast :nid
     if plan.arm == 7 then return (unfoldedIfWhy :st :scope :ast :unitDecl :nid :visiting)
     if plan.arm == 8 then return (unfoldedMatchWhy :st :scope :ast :unitDecl :nid :visiting)
@@ -68898,10 +68936,7 @@ unfoldedWhy: function {
         childId: plan.childId
     ) then return true
     if plan.arm == 4 when (checkConstantMethodShape :st :scope :ast :unitDecl :nid) then return true
-    msg: "not a compile-time constant".string
-    hint: "a unit constant is built from literals, other constants, operators, `if` and `match`".string
-    reportUnfolded :st :ast :nid width: 1 :msg :hint
-    return true
+    return false
 }
 
 # constNameClosesRing -- the constant `nameId` read at `nid` is defined by a
