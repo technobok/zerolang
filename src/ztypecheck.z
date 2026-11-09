@@ -38868,6 +38868,14 @@ armLeafLocal: function {st: zenv.ZSymbolTable ast: Ast.view nid: zast.nodeid} ou
     return cur
 }
 
+# armLeafBorrowed -- an arm's bare-name value reads a borrowed variable: the
+# name is a reference, whichever scope declared it
+armLeafBorrowed: function {st: zenv.ZSymbolTable.view nid: zast.nodeid} out bool is {
+    av: st.typing.atomVariableId.get key: nid
+    if av.none then return false
+    return (st.reg.variableOwnershipOf id: av) == ztypes.zownership.borrowed
+}
+
 # armLeafIsPartial -- whether a control value one of whose arm values
 # (`leaves`) yields the local `from` has another that yields something else: a
 # path reaches past the `if` or `match` still holding the local, so moving it
@@ -40965,13 +40973,18 @@ reportNotAddressable: function {
 # withValueOwnership -- the with-binding's ownership from the bound value's
 # syntactic shape, the same rules as a function argument: a bare
 # name bound to a runtime variable or a field read through names borrows;
-# `.take` transfers; calls -- an auto-called member among them -- literals and
-# constructions are fresh owned values.
+# `.take` transfers; a value whose storage belongs to something else
+# (valueIsLent: a control value an arm of which yields a place, a call that
+# lends) borrows; other calls -- an auto-called member among them -- literals
+# and constructions are fresh owned values.
 withValueOwnership: function {
-    ast: Ast.view
-    st: zenv.ZSymbolTable.view
-    v: astnode.view
+    ast: Ast
+    st: zenv.ZSymbolTable
+    nid: zast.nodeid
 } out ztypes.zownership is {
+    lent: (isControlValue :ast :nid) and (valueIsLent :st :ast :nid)
+    if lent then return ztypes.zownership.borrowed
+    v: ast.nodes.get i: nid
     match (
         v
     ) case atomid then {
@@ -41042,7 +41055,7 @@ checkWith: function {
         st.defineVar nameId: withnode.name vid: vh
     }
     if vt.isZero.not then {
-        own: withValueOwnership :ast :st v: (ast.nodes.get i: withnode.value)
+        own: withValueOwnership :ast :st nid: withnode.value
         # The borrow target: a BORROW-returning auto-call reported the receiver
         # source; a plain-path value pins its full dotted tuple, EXCLUSIVE since
         # the alias may write through itself.
@@ -41127,6 +41140,8 @@ checkWith: function {
         drainPendingBorrow :st
     }
     st.popTo marker: withMarker
+    # a `with` used as a value answers whether it hands back a place
+    if outerStmt != withnode.nid then recordControlPlaceLeaves :st :ast nid: withnode.nid
     return dt
 }
 
@@ -41387,6 +41402,8 @@ checkDo: function {
     if broke.not then st.markUnconditional marker: doMarker
     st.popTo marker: doMarker
     st.closeBreakScope
+    # a block used as a value answers whether it hands back a place
+    if st.walk.stmtExprNid != donode.nid then recordControlPlaceLeaves :st :ast nid: donode.nid
     if broke then settleDoBreakTakes :st :brkMark :endTook
     result = wrapDoBreakValue :ast :st :unitDecl :donode :result
     if result.isZero.not then {
@@ -43188,12 +43205,14 @@ valueArmsTid: function {
     return governing.tid
 }
 
-# recordControlPlaceLeaves -- the arms of a value `if` or `match` that read
-# storage something else owns -- a local of an enclosing scope, a field, an
-# element a call hands back -- by the node id of the arm's value. The emitter
-# reads them: such a value is a reference to that storage on that arm's path,
-# not a value of its own. A local the arm itself declared is the arm's own value
-# and is not one of these; nor is a leaf a destination moves (armLeafMoves).
+# recordControlPlaceLeaves -- the arms of a control value (an `if`, a `match`, a
+# block, a `with`) that read storage something else owns -- a local of an
+# enclosing scope, a borrowed local the arm declared (a reference into storage
+# outside it), a field, an element a call hands back -- by the node id of the
+# arm's value. The emitter reads them: such a value is a reference to that
+# storage on that arm's path, not a value of its own. An owned local the arm
+# itself declared is the arm's own value and is not one of these; nor is a leaf
+# a destination moves (armLeafMoves).
 recordControlPlaceLeaves: function {st: zenv.ZSymbolTable ast: Ast nid: zast.nodeid} is {
     leaves: ListVal zast.nodeid
     armValueLeaves :st :ast :nid into: leaves
@@ -43201,7 +43220,7 @@ recordControlPlaceLeaves: function {st: zenv.ZSymbolTable ast: Ast nid: zast.nod
         ln: ast.nodes.get i: lf
         place: false
         if (zast.atomNameIdOf n: ln).isZero.not then {
-            place = (armLeafLocal :st :ast nid: lf).isZero.not
+            place = (armLeafLocal :st :ast nid: lf).isZero.not or (armLeafBorrowed :st nid: lf)
         } else if (localFieldPath :st :ast n: ln) then {
             place = true
         } else if (zast.markerKindOf :ast n: ln).borrowMarker then {
