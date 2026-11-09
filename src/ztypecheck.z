@@ -45324,6 +45324,14 @@ receiverPinsNothing: function {ast: Ast st: zenv.ZSymbolTable recvT: ztypes.tid}
     return recvT == (stdTid :ast :st wk: zast.wellKnown.slot.tyText)
 }
 
+# calleeIsFieldFunction -- the callable at `nid` is a function stored in a field
+# (`hk.f v: x`): a call through it reads the field and passes no receiver.
+calleeIsFieldFunction: function {st: zenv.ZSymbolTable.view nid: zast.nodeid} out bool is {
+    md: (st.typing.refDecl.get key: nid).or d: ztypes.declid
+    if md.isZero then return false
+    return (st.typing.decls.get i: md).fnptrField
+}
+
 # receiverResultPath -- the receiver path a method call's result pins: the
 # receiver's variable tuple when its root is a variable (a unit-qualified free
 # function reached through this path has none, and pins its arguments alone);
@@ -45341,6 +45349,9 @@ receiverResultPath: function {
     dst: ListVal zast.nameid
 } is {
     if (resultPins :st :funcId).not then return
+    # a function stored in a field takes no receiver: what it hands back is
+    # its own, not a view of the object that holds it
+    if (calleeIsFieldFunction :st nid: call.callable) then return
     rcvT: walkTypeOf :st nid: (dottedParentNodeId :ast n: (ast.nodes.get i: call.callable))
     if (receiverPinsNothing :ast :st recvT: rcvT) then return
     methodReceiverTuple :ast n: (ast.nodes.get i: call.callable) :dst
