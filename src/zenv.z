@@ -2338,6 +2338,51 @@ ZSymbolTable: class {
         }
     }
 
+    # holderPhrase -- how a diagnostic names a lock's holder: the variable quoted,
+    # or "a temporary" for one no source line declares, as lockRootPhrase names
+    # a lock's root
+    holderPhrase: function {
+        t: this.view
+        pool: zast.StringPool.view
+        holder: ztypes.zlockholder
+    } out String is {
+        match (
+            holder
+        ) case var then {
+            return (t.varHolderPhrase :pool vid: holder)
+        } case call then {
+            return "'call:\{holder}'"
+        }
+    }
+
+    # varHolderPhrase -- holderPhrase for a variable holding the lock
+    varHolderPhrase: function {
+        t: this.view pool: zast.StringPool.view vid: ztypes.vid
+    } out String is {
+        if (t.holderIsTemporary :vid) then return "a temporary".string
+        nm: t.formatVarHolder :pool :vid
+        return "'\{nm}'"
+    }
+
+    # lockHolderIsTemporary -- the holder is a variable that is a compiler
+    # temporary (holderIsTemporary); a call is not
+    lockHolderIsTemporary: function {t: this.view holder: ztypes.zlockholder} out bool is {
+        match (
+            holder
+        ) case var then {
+            return (t.holderIsTemporary vid: holder)
+        } case call then {
+            return false
+        }
+    }
+
+    # holderIsTemporary -- the variable holding a lock is a compiler temporary,
+    # an unnamed local no source line declares (defineTemp lists it; its origin
+    # alone does not say so: an origin never set reads as `synth`)
+    holderIsTemporary: function {t: this.view vid: ztypes.vid} out bool is {
+        return (t.walk.tempVars.has item: vid)
+    }
+
     # the variable holding a lock, by its local's name
     formatVarHolder: function {
         t: this.view pool: zast.StringPool.view vid: ztypes.vid
@@ -2379,7 +2424,8 @@ ZSymbolTable: class {
         if holderName.stringView == rootView when existingType == ztypes.zlockstate.shared then {
             return "Cannot take \{reqKind} lock on '\{rootView}'\{reqDetail}: '\{rootView}' is readonly here"
         }
-        return "Cannot take \{reqKind} lock on '\{rootView}'\{reqDetail}: already has \{heldKind} lock\{heldDetail} held by '\{holderName}'"
+        holderPh: t.varHolderPhrase :pool vid: existingHolder
+        return "Cannot take \{reqKind} lock on '\{rootView}'\{reqDetail}: already has \{heldKind} lock\{heldDetail} held by \{holderPh}"
     }
 
     # --- locks ---

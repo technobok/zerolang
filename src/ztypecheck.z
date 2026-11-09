@@ -33928,9 +33928,9 @@ checkDropMarkerVar: function {
         if rlk.some then {
             relBlocked = true
             heldByOther = true
-            rhn: st.formatLockHolder pool: ast.names holder: rlk.holder
+            rhn: st.holderPhrase pool: ast.names holder: rlk.holder
             lsn: zenv.zlockstateNameLower t: rlk.state
-            mrel: "Cannot drop '\{mkRoot}': \{lsn} lock held by '\{rhn}'"
+            mrel: "Cannot drop '\{mkRoot}': \{lsn} lock held by \{rhn}"
             (
                 addError
                 :st
@@ -33949,11 +33949,11 @@ checkDropMarkerVar: function {
             elh: st.findExclusiveLock path: rpath
             if elh.some then {
                 relBlocked = true
-                ahn: st.formatLockHolder pool: ast.names holder: elh
-                macc: "Cannot access: '\{mkRoot}' has exclusive lock held by '\{ahn}'"
+                ahp: st.holderPhrase pool: ast.names holder: elh
+                macc: "Cannot access: '\{mkRoot}' has exclusive lock held by \{ahp}"
                 ahint: String
                 if elh.var then {
-                    ahint = "read through '\{ahn}' instead, or end '\{ahn}'s scope first to release the lock"
+                    ahint = throughHint :st pool: ast.names vid: elh verb: "read"
                 }
                 aen: String
                 aid: nodeId n: (ast.nodes.get i: dp.parent)
@@ -36515,9 +36515,11 @@ refuseReadUnderPin: function {
     xh: st.findExclusiveVarLock path: rp
     if xh.some when (xh == (ztypes.zlockholder.var rvo)).not then {
         hn: st.formatLockHolder pool: ast.names holder: xh
+        hph: st.holderPhrase pool: ast.names holder: xh
         pp: zenv.formatPath pool: ast.names path: rp.listView
-        mr: "Cannot read '\{pp}': exclusive lock held by '\{hn}'"
+        mr: "Cannot read '\{pp}': exclusive lock held by \{hph}"
         hr: "read through '\{hn}' instead, or end '\{hn}'s scope first to release the lock"
+        if (st.lockHolderIsTemporary holder: xh) then hr = temporaryHint
         nr: String
         (
             addErrorH
@@ -45201,6 +45203,40 @@ nameIsSynthVariable: function {st: zenv.ZSymbolTable.view nameId: zast.nameid} o
     return (st.reg.variableOriginOf id: vo) == ztypes.zvarorigin.synth
 }
 
+# temporaryHint -- what releases a lock a compiler temporary holds: whatever
+# holds the temporary (the release cascade frees it with that holder).
+temporaryHint: function out String is {
+    return "end what holds the temporary first to release it".string
+}
+
+# throughHint -- the remedy for a lock the variable `vid` holds: `verb` through
+# it, or end its scope; for a temporary, end what holds it.
+throughHint: function {
+    st: zenv.ZSymbolTable.view pool: zast.StringPool.view vid: ztypes.vid verb: StringView
+} out String is {
+    if (st.holderIsTemporary :vid) then return temporaryHint
+    hn: st.formatVarHolder :pool :vid
+    return "\{verb} through '\{hn}' instead, or end '\{hn}'s scope first to release the lock"
+}
+
+# pathReaderHint -- why a write under the reader `rn`'s shared lock is refused,
+# and its remedy; a temporary is named as one.
+pathReaderHint: function {rn: StringView temporary: bool} out String is {
+    if temporary then {
+        return "a temporary reads this path -- writing it would invalidate what it points at; \{temporaryHint}"
+    }
+    return "'\{rn}' reads this path -- writing it would invalidate what '\{rn}' points at; end its scope first"
+}
+
+# movedReaderHint -- why moving `name` out from under the reader `phn` is
+# refused, and its remedy; a temporary is named as one.
+movedReaderHint: function {phn: StringView name: StringView temporary: bool} out String is {
+    if temporary then {
+        return "a temporary reads '\{name}' -- moving it would leave the temporary pointing at freed memory; \{temporaryHint}, or copy with '.copy'"
+    }
+    return "'\{phn}' reads '\{name}' -- moving it would leave '\{phn}' pointing at freed memory; end its scope first, or copy with '.copy'"
+}
+
 # lockRootPhrase -- how a diagnostic names the root of a lock: the variable
 # quoted, or "a temporary" for an unnamed local no source line declares.
 lockRootPhrase: function {
@@ -46301,6 +46337,8 @@ pinnedMoveError: function {
     if pvo.none then return false
     byCall: st.argLockQueued nameId: pnid
     phn: String
+    php: String
+    phTemp: false
     plsn: String
     if byCall.not then {
         plk: st.findLock nameId: pnid
@@ -46314,6 +46352,8 @@ pinnedMoveError: function {
             byCall = true
         } else {
             phn = st.formatVarHolder pool: ast.names vid: plh
+            php = st.varHolderPhrase pool: ast.names vid: plh
+            phTemp = st.holderIsTemporary vid: plh
             plsn = zenv.zlockstateNameLower t: plk
         }
     }
@@ -46325,8 +46365,8 @@ pinnedMoveError: function {
         pm = "Cannot move '\{name}' \{verb}: this call already passes '\{name}'"
         pht = "the callee would hold '\{name}' beside the value moved out of it; bind or copy the value first"
     } else {
-        pm = "Cannot move '\{name}' \{verb}: \{plsn} lock held by '\{phn}'"
-        pht = "'\{phn}' reads '\{name}' -- moving it would leave '\{phn}' pointing at freed memory; end its scope first, or copy with '.copy'"
+        pm = "Cannot move '\{name}' \{verb}: \{plsn} lock held by \{php}"
+        pht = movedReaderHint phn: phn.stringView :name temporary: phTemp
     }
     pen: String
     (
@@ -46581,9 +46621,9 @@ checkWriteLock: function {
             reportCallPassesRoot :st :n :verb :moving path: pp.stringView root: wr.stringView
             return
         }
-        hn: st.formatVarHolder pool: ast.names vid: wh
-        mw: "Cannot \{verb} '\{pp}': exclusive lock held by '\{hn}'"
-        wht: "write through '\{hn}' instead, or end '\{hn}'s scope first to release the lock"
+        hph: st.varHolderPhrase pool: ast.names vid: wh
+        mw: "Cannot \{verb} '\{pp}': exclusive lock held by \{hph}"
+        wht: throughHint :st pool: ast.names vid: wh verb: "write"
         wen: String
         (
             addErrorH
@@ -46607,11 +46647,12 @@ checkWriteLock: function {
     }
     rn: st.formatVarHolder pool: ast.names vid: rh
     selfRo: rn.stringView == wr
-    mr: "Cannot \{verb} '\{pp}': shared lock held by '\{rn}'"
+    rph: st.varHolderPhrase pool: ast.names vid: rh
+    mr: "Cannot \{verb} '\{pp}': shared lock held by \{rph}"
     if selfRo then mr = "Cannot \{verb} '\{pp}': '\{wr}' is readonly here"
     rht: String
     if selfRo.not then {
-        rht = "'\{rn}' reads this path -- writing it would invalidate what '\{rn}' points at; end its scope first"
+        rht = pathReaderHint rn: rn.stringView temporary: (st.holderIsTemporary vid: rh)
     }
     if selfRo then {
         # `view` is not owned, `hold` is -- the self-lock is the same, so the
