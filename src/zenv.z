@@ -396,16 +396,20 @@ pinmark: record {
 WalkState: class {
     # the next synthesised name's number, so two temps never collide
     nextTempId: u64
-    # owned argument temps a pinning call's result keeps locked, by name, with
-    # their variable: once the call's own scope has popped, each is defined again
-    # -- the same variable -- as an unnamed local of the enclosing scope, so the
-    # lock has something to name
-    pinnedArgTemps: (IdMapV zast.nameid v: ztypes.vid)
-    # the same temps by VARIABLE, while they still await that second definition.
-    # A TEMPORARY HAS ONE DEATH: the call's own scope must not list one its
-    # result keeps locked, because the pin makes it outlive the call and the
-    # adopting scope lists it instead. Cleared as each is adopted, so exactly
-    # one scope ever names it.
+    # the temporaries a result may keep past the call scope they were bound in,
+    # by name, with their variable: an owned argument temp a pinning call's
+    # result keeps locked, and a receiver's temp (a value's own storage, whose
+    # view the call's arguments may carry out). Once the call's own scope has
+    # popped, one a result keeps is defined again -- the same variable -- as an
+    # unnamed local of the enclosing scope, so the lock has something to name
+    adoptableTemps: (IdMapV zast.nameid v: ztypes.vid)
+    # the argument temps by VARIABLE, while they still await that second
+    # definition. A TEMPORARY HAS ONE DEATH: the call's own scope must not list
+    # one its result keeps locked, because the pin makes it outlive the call and
+    # the adopting scope lists it instead. Cleared as each is adopted, so exactly
+    # one scope ever names it. A receiver's temp is known to escape only once the
+    # call has popped: the popped scope listed it, and adoption retires that
+    # listing (retireTempListing).
     pinnedTempPending: (IdMapV ztypes.vid v: bool)
     # the unnamed locals the statement line being walked has made, by name:
     # read, and dropped, when the line ends
@@ -833,7 +837,7 @@ newWalkState: function out WalkState is {
     return (
         WalkState
         nextTempId: 0
-        pinnedArgTemps: (IdMapV zast.nameid v: ztypes.vid)
+        adoptableTemps: (IdMapV zast.nameid v: ztypes.vid)
         pinnedTempPending: (IdMapV ztypes.vid v: bool)
         lineUnnamedLocals: ListVal zast.nameid
         synthLabel: "".string
@@ -1471,6 +1475,28 @@ ZSymbolTable: class {
             if nd.isZero.not then this.typing.tempScopeOf.set key: vid value: nd
         }
         this.defineVar :nameId :vid
+    }
+
+    # retireTempListing -- the temporary `vid` moves to the scope adopting it:
+    # the popped scope that bound it listed it as owned at its end, and that
+    # listing now reads moved, so exactly one scope's end owns it. Asked before
+    # the temporary is defined again, while `tempScopeOf` still names the scope
+    # it leaves.
+    retireTempListing: function {:this vid: ztypes.vid} is {
+        if this.recording.not then return
+        so: this.typing.tempScopeOf.get key: vid
+        if so.none then return
+        rg: this.typing.scopeTempDestroy.get key: so
+        if rg.none then return
+        k: u64
+        for k < rg.len loop {
+            i: rg.start.u64 + k
+            k = k + 1
+            if (this.typing.destroyItems.get :i).vid == vid then {
+                this.typing.destroyItems.set :i val: (ztyping.destroyitem :vid state: 1)
+                return
+            }
+        }
     }
 
     # scopeBindsHere -- does the INNERMOST open scope already bind `nameId`?

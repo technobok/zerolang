@@ -13440,6 +13440,25 @@ emitInterpArgExpr: function {
     }
 }
 
+# interpStorageNid -- the node whose temporary owns the String an interpolated
+# argument builds (emitInterpArgExpr). An argument that views the interpolation
+# (`"x=\{n}".stringView`) is a view: the String is its receiver's, which the
+# checker holds in a temporary of the receiver's own (tempOf), and that
+# temporary says whether, and how long, the String is owned. Any other argument
+# is the String itself.
+interpStorageNid: function {
+    ast: Ast.view typing: ztyping.ZTyping.view n: astnode.view
+} out zast.nodeid is {
+    match (
+        n
+    ) case dottedpath then {
+        cm: aliasOrChildId :ast :typing aliasId: n.nodeid childId: n.child
+        held: (typing.tempOf.get key: n.parent).some
+        if (ztypecheck.isStringViewMember nameId: cm) when held then return n.parent
+    } else null
+    return (zast.nodeIdOf :n)
+}
+
 # emitInterpStmtValue -- like emitInterpArgExpr, but emits the interp build chain
 # as PRIOR statements into buf (so a referenced local is read at THIS point) and
 # returns the owned-String temp's name; "" otherwise. Used where the build
@@ -13592,7 +13611,7 @@ emitColInterpArg: function {
         :ctx
         av: sx.stringView
         tid: ctx.strTid
-        argNid: (zast.nodeIdOf :n)
+        argNid: (interpStorageNid :ast :typing :n)
     )
 }
 
@@ -13628,7 +13647,7 @@ emitInterpArgForParam: function {
         :ctx
         av: sx.stringView
         tid: ctx.strTid
-        argNid: (zast.nodeIdOf :n)
+        argNid: (interpStorageNid :ast :typing :n)
     )
     retx: String
     retF: pathFacts

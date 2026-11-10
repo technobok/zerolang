@@ -13447,7 +13447,7 @@ attachDeclaredField: function {
     # a refused field is still the type's field, as written: a construction
     # naming it is not refused again for an unknown argument
     if (st.reg.isStaticOf tid: rid) then {
-        refuseNonStaticMember :st :ast :fm tid: cid name: fname
+        refuseNonStaticMember :st :ast :fm tid: cid
     } else {
         (
             refuseReftypeMember
@@ -14817,7 +14817,6 @@ refuseArmPayload: function {
         :ast
         :fm
         tid: cid
-        name: (zast.nameTextAt :ast ref: fm.name).stringView
         arm: true
     )
     return (
@@ -14874,9 +14873,9 @@ refuseStaticShape: function {
 refuseNonStaticMember: function {
     st: zenv.ZSymbolTable
     ast: Ast
+    # the member, whose name the report quotes
     fm: argref
     tid: ztypes.tid
-    name: StringView
     # the member is a choice's arm rather than a data field
     arm: false
 } out bool is {
@@ -14889,6 +14888,7 @@ refuseNonStaticMember: function {
         hint = "a data field's string is text: declare it `text`".string
         if arm then hint = "a choice arm's string is text: declare it `text`".string
     }
+    name: zast.nameTextAt :ast ref: fm.name
     what: "data field '\{name}' holds a '\{tn}': a data field holds"
     if arm then what = "choice arm '\{name}' carries a '\{tn}': a choice arm carries"
 
@@ -40651,7 +40651,7 @@ refuseRepointOutlives: function {
             mo: "Cannot re-point '\{xn}' at '\{rn}': '\{xn}' outlives '\{rn}'"
             # a call's argument the result keeps locked has no name of the
             # program's
-            if (st.walk.pinnedArgTemps.get key: root).some then {
+            if (st.walk.adoptableTemps.get key: root).some then {
                 mo = "Cannot re-point '\{xn}' at a value that locks a temporary: '\{xn}' outlives the temporary"
             }
             (
@@ -45340,8 +45340,14 @@ installPins: function {
 # field, which has no `create` to say `outx this`: the result is OWNED and
 # keeps every borrowed-field argument (and anything a moved-in argument
 # carried) locked, exactly as the `outx this` a written create would declare.
-pinConstructionResult: function {st: zenv.ZSymbolTable pins: (List ztyping.PinPath).view} is {
+pinConstructionResult: function {
+    st: zenv.ZSymbolTable
+    # the names the adopted temporaries' locks are spelt in
+    pool: zast.StringPool.view
+    pins: (List ztyping.PinPath).view
+} is {
     drainPendingBorrow :st
+    adoptKeptTemps :st :pool :pins
     for each p: pins loop {
         pinsPush :st path: p.path shared: p.shared mutable: p.mutable
     }
@@ -45767,6 +45773,9 @@ mintReceiverTemp: function {
     vid: st.reg.newVariable ztypeId: recvT ownership: rown
     tnId: zast.poolSet pool: ast.names text: tname.stringView
     st.defineTemp nameId: tnId :vid
+    # a view of it may leave the scope it is bound in -- an argument carrying
+    # it out of a call -- and the result that keeps it adopts it there
+    st.walk.adoptableTemps.set key: tnId value: vid
     st.walk.tempNameOf.set key: recvNid value: tnId
     if st.recording then st.typing.tempOf.set key: recvNid value: vid
     return tnId
@@ -45790,22 +45799,34 @@ ownedReceiverTemp: function {
     mintReceiverTemp :st :ast :recvT :recvNid
 }
 
-# adoptPinnedArgTemps -- the argument temps a pinning call's result keeps locked
-# left the scope with the call: each is defined again -- the same variable, so
-# it is one temporary however far it is promoted -- as an unnamed local of the
-# scope the call is in, so the pin names a live variable.
-adoptPinnedArgTemps: function {
+# adoptKeptTemps -- the temporaries a call's result keeps locked -- an argument
+# temp a pinning callee's result pins, a receiver's temp whose view an argument
+# carried out -- left the scope with the call: each is defined again -- the same
+# variable, so it is one temporary however far it is promoted -- as an unnamed
+# local of the scope the call is in, so the pin names a live variable.
+adoptKeptTemps: function {
     st: zenv.ZSymbolTable
     pool: zast.StringPool.view
     pins: (List ztyping.PinPath).view
+    # only the pins a moved-in argument carried: what a result that pins
+    # nothing of its own still keeps
+    carriedOnly: false
 } is {
     roots: ListVal zast.nameid
-    for each p: pins loop roots.append (p.path.get i: 0)
+    for each p: pins loop {
+        if carriedOnly.not or p.carried then roots.append (p.path.get i: 0)
+    }
     for each r: roots loop {
         # a temp's name is unique to the run, so an entry is never asked twice
-        ato: st.walk.pinnedArgTemps.get key: r
+        ato: st.walk.adoptableTemps.get key: r
         if ato.some then {
             if (st.lookupVarId nameId: r).none then {
+                # a temporary the popped scope listed (a receiver's) moves out of
+                # that list: it dies once, here
+                if ((st.walk.pinnedTempPending.get key: ato).or d: false).not then (
+                    st.retireTempListing
+                    vid: ato
+                )
                 # defineTemp, not defineVar: the temporary is now THIS scope's,
                 # and `tempScopeOf` is the key its destroy list is under -- left
                 # pointing at the popped call scope, scopeOwnsTemp looks it up
@@ -45873,7 +45894,7 @@ relayTempPins: function {st: zenv.ZSymbolTable pool: zast.StringPool.view vid: z
     appendRecordPins :st vp: tp dst: run
     # a temporary it views lives on with it: the chain of hoists is adopted
     # whole, innermost first
-    adoptPinnedArgTemps :st :pool pins: run
+    adoptKeptTemps :st :pool pins: run
     (
         installPins
         :st
@@ -45943,7 +45964,7 @@ pinCallResult: function {
     # pushes below re-establish one
     drainPendingBorrow :st
     if doPins then {
-        adoptPinnedArgTemps :st :pool :pins
+        adoptKeptTemps :st :pool :pins
         pinsPush :st path: recvPath shared: recvShared mutable: recvShared.not
         for each p: pins loop {
             pinsPush :st path: p.path shared: p.shared mutable: p.mutable
@@ -45952,7 +45973,8 @@ pinCallResult: function {
         if marker == ztypes.zparamownership.viewMode then setPendingMarker :st :marker
     } else {
         # the locks a moved-in argument carried travel to the result whatever
-        # the callee declares
+        # the callee declares, and the temporaries they are on with them
+        adoptKeptTemps :st :pool :pins carriedOnly: true
         pushCarriedPins :st :pins
     }
     # `hold`: owned and READONLY with no pin, so it is set after the drain
@@ -47442,8 +47464,13 @@ lockBorrowedArgPath: function {
     if seen.isZero then return
     # residue left by an EARLIER argument of this call must not stand in for
     # THIS argument's source: keep a pending path only when it is rooted at
-    # this argument's own base
-    if st.walk.pendingPins.length > 0 when (pinsRoot :st) != seen then drainPendingBorrow :st
+    # this argument's own base. A base that names no variable -- a method read
+    # off a call's result, `(xs.get i: 0).stringView` -- is a value whose
+    # pins are what its own walk left, as hoistArg keeps them
+    seenVar: (st.lookupVarId nameId: seen).some
+    if seenVar when st.walk.pendingPins.length > 0 when (pinsRoot :st) != seen then {
+        drainPendingBorrow :st
+    }
     src: ListVal zast.nameid
     fresh: argPinTuple :st :ast n: an dst: src
     if fresh.not when src.length > 0 then {
@@ -47658,7 +47685,7 @@ lockNonTrivialArg: function {
         pinsAppendOne :pins nameId: tnId shared: isViewArg mutable: isViewArg.not
         tvo: st.lookupVarId nameId: tnId
         if tvo.some then {
-            st.walk.pinnedArgTemps.set key: tnId value: tvo
+            st.walk.adoptableTemps.set key: tnId value: tvo
             # the call's own scope pops before the result is judged, and it must
             # not list a temporary that result keeps locked
             st.walk.pinnedTempPending.set key: tvo value: true
@@ -53364,7 +53391,7 @@ pinConstructionSources: function {
             # a create that does not say `outx this` on a type declaring a
             # non-owned field is the SYNTHESISED one (a written one is
             # refused): the construction pins as `outx this` would
-            pinConstructionResult :st :pins
+            pinConstructionResult :st pool: ast.names :pins
         } else {
             pinCallResult :st pool: ast.names funcId: cxO :pins recvPath: noRecvC recvShared: true
         }
@@ -53372,7 +53399,12 @@ pinConstructionSources: function {
         # no `create` written: the construction IS the constructor, and a
         # type declaring a non-owned field is built `outx this` -- every
         # borrowed-field argument stays pinned under the result
-        if (typeHasNonOwnedField :st :ast :tid) then pinConstructionResult :st :pins
+        if (typeHasNonOwnedField :st :ast :tid) then (
+            pinConstructionResult
+            :st
+            pool: ast.names
+            :pins
+        )
     }
 }
 
