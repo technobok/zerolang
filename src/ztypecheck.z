@@ -39294,7 +39294,9 @@ armLeafPins: function {
     }
     if borrowing then fieldReadPin :st :ast :vt nid: leaf :writes :dst
     vp: valuePinsOf :st nid: leaf
-    if borrowing.not when vp.owned.not then return none
+    # a lent view's copy views what it viewed: it hands its pins on as an
+    # owned value does
+    if borrowing.not when vp.owned.not when (isViewFamilyTid :ast :st tid: vt).not then return none
     pinned: armRecordPins :st :ast :leaf :vp :verb :dst
     return (pinread owned: pinned and vp.owned marker: vp.marker)
 }
@@ -41085,8 +41087,10 @@ consumeReassignPins: function {
     # a lent value keeps no pins in a field -- a plain one is copied there, any
     # other refused (refuseBorrowedReassign) -- nor in a name when it is plain:
     # it is copied into the name's own storage, or through it to the place the
-    # name was bound to, whose locks the name keeps
-    if owned.not when hbNmId.isZero or (isPlainValue :st :ast tid: rvt) then return
+    # name was bound to, whose locks the name keeps. A VIEW is the exception: its
+    # copy views what it viewed, so its pins go wherever a copy of it does
+    keepsNone: hbNmId.isZero or (isPlainValue :st :ast tid: rvt)
+    if owned.not when (isViewFamilyTid :ast :st tid: rvt).not when keepsNone then return
     tgtNm: hbNmId
     if tgtNm.isZero then {
         tgtNm = rootNameIdOf :ast n: (ast.nodes.get i: rasgn.topath)
@@ -47728,8 +47732,9 @@ lockNonTrivialArg: function {
     hadPending: false
     if st.walk.pendingPins.length > 0 then hadPending = true
     # an OWNED value holding locks (a construction, an `outx` result); a
-    # borrowed one is refused at a taking slot on its own account
-    ownsPins: hadPending and st.walk.pendingBorrowOwned
+    # borrowed one is refused at a taking slot on its own account -- but a view
+    # is moved as a copy that views what it viewed, lent or owned
+    ownsPins: hadPending and (st.walk.pendingBorrowOwned or (isViewFamilyTid :ast :st tid: vt))
     tnm: (
         hoistArg
         :ast
