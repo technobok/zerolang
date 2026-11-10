@@ -79,6 +79,9 @@ OrderPend: class {
 LoopFrame: class {
     id: u64
     isDo: bool
+    # the loop tests its postconditions after its continue label (emitPostTest):
+    # a `continue` jumps there, and leaves the payload's destroy to after the test
+    postTest: bool
     freesMark: u64
     listMark: u64
     cleanup: String
@@ -9560,13 +9563,14 @@ tmpNext: function {ctx: Ctx tmp: TmpCtr} out u64 is {
 # A zerolang `break` inside the loop emits `goto __zbrk_<id>`: a bare C `break`
 # would only leave an enclosing match->switch, not the loop. The label is
 # emitted after the loop by popLoopLabel, but only if a break referenced it.
-pushLoopLabel: function {ctx: Ctx tmp: TmpCtr.view isDo: bool} out u64 is {
+pushLoopLabel: function {ctx: Ctx tmp: TmpCtr.view isDo: bool postTest: bool} out u64 is {
     id: ctx.breakLabelCtr
     ctx.breakLabelCtr = id + 1
     ctx.loops.append (
         LoopFrame
         :id
         :isDo
+        :postTest
         freesMark: tmp.frees.length
         listMark: tmp.listFrees.length
         cleanup: String
@@ -26787,7 +26791,7 @@ emitContinueStmt: function {
             {
                 cf: ctx.loops.get i: loopIdx
                 cid = cf.id
-                if cf.cleanup.length > 0 then {
+                if cf.cleanup.length > 0 when cf.postTest.not then {
                     lcc: "\{ind}\{cf.cleanup}"
                     buf.append lcc
                 }
@@ -26798,15 +26802,25 @@ emitContinueStmt: function {
             ctx.contLabelUsed.set key: cid value: ucn
         } else {
             emitBreakFrees :reg :typing :ctx :tmp :ind :buf
+            postId: u64
+            post: false
             if ctx.loops.length > 0 then {
                 pf0: ctx.loops.get i: ctx.loops.length - 1
-                if pf0.cleanup.length > 0 then {
+                post = pf0.postTest
+                postId = pf0.id
+                if pf0.cleanup.length > 0 when post.not then {
                     lpc: "\{ind}\{pf0.cleanup}"
                     buf.append lpc
                 }
             }
-            lct: "\{ind}continue;\n"
-            buf.append lct
+            # a C `continue` would skip the postconditions' test
+            if post then {
+                buf.append "\{ind}goto __zcont_\{postId};\n"
+                ctx.contLabelUsed.set key: postId value: true
+            } else {
+                lct: "\{ind}continue;\n"
+                buf.append lct
+            }
         }
     } else {
         ueF: cfacts
@@ -27432,7 +27446,7 @@ emitForStmt: function {
     # header scope's to emit and to pop, not the enclosing block's
     fLh: tmp.frees.length
     lLh: tmp.listFrees.length
-    lidW: pushLoopLabel :ctx :tmp isDo: false
+    lidW: pushLoopLabel :ctx :tmp isDo: false postTest: n.postconditions.count.u64 > 0
     bodyInd: "\{ind}    "
     if stepped then {
         emitSteppedWhileHead :ast :reg :typing :ctx :n :ind bodyInd: bodyInd.stringView :tmp :buf
@@ -27449,6 +27463,7 @@ emitForStmt: function {
     }
     closeScopeBlock :reg :typing :ctx :tmp fL: fLw lL: lLw diverged: dvG node: n.body :buf
     emitContLabel :ctx id: lidW ind: bodyInd.stringView :buf
+    emitPostTest :ast :reg :typing :ctx m: n cleanup: "" ind: bodyInd.stringView :tmp :buf
     lwc: "\{ind}}\n"
     buf.append lwc
     popLoopLabel :ctx id: lidW :ind :buf
@@ -27479,7 +27494,7 @@ emitDoWhileFor: function {
     # the do-while opening, its body and its trailing test all append here
     buf: String.borrow
 } is {
-    lidDW: pushLoopLabel :ctx :tmp isDo: false
+    lidDW: pushLoopLabel :ctx :tmp isDo: false postTest: false
     # a postcondition that moves, or holds a control value, computes into a
     # guard the trailing test reads, declared where that test can see it
     stepped: condsNeedSteps :ast :reg :typing :ctx suspends: false conds: n.postconditions
@@ -27557,6 +27572,55 @@ doWhileCondText: function {
     }
     if pcond.length == 0 then pcond.append "0"
     return pcond
+}
+
+# emitPostTest -- a loop's postconditions, tested after its body at its
+# continue label, which every `continue` of such a loop jumps to (LoopFrame
+# postTest): the loop goes on only when each holds. `cleanup` is the owned
+# payload's destroy the iteration owes, run after the test on both of its ways
+# out, since the test may read the payload. A do-while tests them in its own
+# trailing test instead.
+emitPostTest: function {
+    ast: Ast.view
+    reg: ztypes.ZTypeRegistry.view
+    typing: ztyping.ZTyping.view
+    ctx: Ctx
+    m: zast.forrow.view
+    cleanup: StringView
+    ind: StringView
+    tmp: TmpCtr
+    buf: String.borrow
+} is {
+    if m.postconditions.count.u64 == 0 then return
+    test: String
+    if (condsNeedSteps :ast :reg :typing :ctx suspends: false conds: m.postconditions) then {
+        gv: newCondGuard :ctx :ind :buf
+        (
+            emitSteppedCond
+            :ast
+            :reg
+            :typing
+            :ctx
+            conds: m.postconditions
+            gvar: gv.stringView
+            inLoop: true
+            :ind
+            :tmp
+            :buf
+        )
+        test = gv.take
+    } else {
+        pcond: doWhileCondText :ast :reg :typing :ctx n: m
+        # the test assigns and releases its hoists itself
+        flushArgHoists :ctx :ind :tmp :buf
+        test = condInParens cond: pcond.stringView
+    }
+    if cleanup.length == 0 then {
+        buf.append "\{ind}if (!\{test}) break;\n"
+        return
+    }
+    buf.append "\{ind}if (!\{test}) {\n\{ind}    \{cleanup}\{ind}    break;\n\{ind}}\n"
+    buf.append "\{ind}\{cleanup}"
 }
 
 # forArmCond -- the text of a loop's `while:` arms: every condition that is
@@ -28490,7 +28554,7 @@ emitDoStmt: function {
         # the block is its own break target: a break inside frees the
         # block's owned temps (since these marks) and lands after the
         # block, not on an enclosing loop's label
-        sdoId: pushLoopLabel :ctx :tmp isDo: true
+        sdoId: pushLoopLabel :ctx :tmp isDo: true postTest: false
         sfL: tmp.frees.length
         slL: tmp.listFrees.length
         dst: ast.nodes.get i: n.statement
@@ -30301,7 +30365,7 @@ emitDoBindValue: function {
             # the block is its own break target: a break inside frees the
             # block's owned temps (since these marks) and lands after the
             # block, not on an enclosing loop's label
-            doId: pushLoopLabel :ctx :tmp isDo: true
+            doId: pushLoopLabel :ctx :tmp isDo: true postTest: false
             fLd: tmp.frees.length
             lLd: tmp.listFrees.length
             (
@@ -31034,7 +31098,7 @@ emitObjIterLoop: function {
         :tmp
         :buf
     )
-    lidO: pushLoopLabel :ctx :tmp isDo: false
+    lidO: pushLoopLabel :ctx :tmp isDo: false postTest: m.postconditions.count.u64 > 0
     payCleanup: objIterPayCleanup :reg :typing :ctx :ovid :lbl :lblV
     l0: "\{ind}while (1) {\n"
     buf.append l0
@@ -31145,14 +31209,17 @@ emitOptionLoopTail: function {
     }
     # the fall-through copy of the per-iteration cleanup; a body whose last
     # statement jumps (break, continue, return) never reaches it, and the jump
-    # site carries its own copy from the break-label slot
-    if payCleanup.length > 0 when dvG.not then {
+    # site carries its own copy from the break-label slot. A loop with
+    # postconditions runs it after their test instead, which may read the payload
+    posts: m.postconditions.count.u64 > 0
+    if payCleanup.length > 0 when dvG.not when posts.not then {
         l3od: "\{ind}    \{payCleanup}"
         buf.append l3od
     }
     closeScopeBlock :reg :typing :ctx :tmp fL: fLO lL: lLO diverged: dvG node: m.body :buf
     indO: "\{ind}    "
     emitContLabel :ctx id: lidO ind: indO.stringView :buf
+    emitPostTest :ast :reg :typing :ctx :m cleanup: payCleanup ind: indO.stringView :tmp :buf
     l: "\{ind}}\n"
     buf.append l
     popLoopLabel :ctx id: lidO :ind :buf
@@ -31245,7 +31312,7 @@ emitPlainBindingFor: function {
     if ovid.isZero then return false
     ovc: spelledCname :ctx tid: ovid
     mN: tmpNext :ctx :tmp
-    lidO: pushLoopLabel :ctx :tmp isDo: false
+    lidO: pushLoopLabel :ctx :tmp isDo: false postTest: m.postconditions.count.u64 > 0
     payCleanup: objIterPayCleanup :reg :typing :ctx :ovid lbl: lbl.stringView :lblV
     buf.append "\{ind}while (1) {\n"
     bodyInd: "\{ind}    "
@@ -31422,7 +31489,7 @@ emitCountedRangeFor: function {
     flushArgHoists :ctx :ind :tmp :buf
     d0: "\{ind}uint64_t \{fn} = \{cnt};\n"
     buf.append d0
-    lidR: pushLoopLabel :ctx :tmp isDo: false
+    lidR: pushLoopLabel :ctx :tmp isDo: false postTest: m.postconditions.count.u64 > 0
     # A suspension inside the body RETURNS from `.call`, and the resume `goto`
     # lands inside the loop, PAST the C for-init -- so the counter and the
     # count, which live only in the header, are indeterminate on the next call
@@ -31480,6 +31547,7 @@ emitCountedRangeFor: function {
     }
     closeScopeBlock :reg :typing :ctx :tmp fL: fLR lL: lLR diverged: dvR node: m.body :buf
     emitContLabel :ctx id: lidR ind: bodyInd.stringView :buf
+    emitPostTest :ast :reg :typing :ctx :m cleanup: "" ind: bodyInd.stringView :tmp :buf
     lc: "\{ind}}\n"
     buf.append lc
     popLoopLabel :ctx id: lidR :ind :buf
@@ -31559,7 +31627,7 @@ emitClosedRangeFor: function {
         re: "_re\{mN}"
         fn: "_fn\{mN}"
         cnt: closedRangeCountExpr from: rs.stringView to: re.stringView :down
-        lidR: pushLoopLabel :ctx :tmp isDo: false
+        lidR: pushLoopLabel :ctx :tmp isDo: false postTest: m.postconditions.count.u64 > 0
         startx: emitExpr :ast :reg :typing :ctx n: (ast.nodes.get i: startNid)
         flushArgHoists :ctx :ind :tmp :buf
         d0: "\{ind}\{ctR} \{rs} = \{startx};\n"
@@ -31623,6 +31691,7 @@ emitClosedRangeFor: function {
         }
         closeScopeBlock :reg :typing :ctx :tmp fL: fLR lL: lLR diverged: dvR node: m.body :buf
         emitContLabel :ctx id: lidR ind: bodyInd.stringView :buf
+        emitPostTest :ast :reg :typing :ctx :m cleanup: "" ind: bodyInd.stringView :tmp :buf
         lc: "\{ind}}\n"
         buf.append lc
         popLoopLabel :ctx id: lidR :ind :buf

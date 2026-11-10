@@ -1,0 +1,85 @@
+# A loop's postcondition (`loop { .. } while C`) is tested after every
+# iteration in every loop form: beside a precondition, over a counted range,
+# over an iterator, and with a plain binding. A `continue` reaches it as the end
+# of the body does, and it can read the loop's variable: an owned payload is
+# destroyed after the test, once, on every path.
+Tags: generator { base: String  n: u64 } as {
+    call: function out String is {
+        i: 0.u64
+        for i < this.n loop {
+            yield "\{this.base}\{i}"
+            i = i + 1
+        }
+    }
+}
+
+Evens: generator { n: i64 } as {
+    call: function out i64 is {
+        i: 0
+        for i < 100 loop {
+            yield i
+            i = i + 2
+        } while i < this.n
+    }
+}
+
+mks: function {n: i64} out String is {
+    return "n=\{n}"
+}
+
+main: function is {
+    j: 0
+    for j < 10 loop {
+        j = j + 1
+    } while j < 3
+    print "pre: \{j}"
+    c: 0
+    for c < 10 loop {
+        c = c + 1
+        if c == 1 then continue
+        print "body \{c}"
+    } while c < 3
+    print "continue: \{c}"
+    d: 0
+    for d < 10 loop {
+        d = d + 1
+        {
+            if d == 2 then continue
+            print "block \{d}"
+        }
+    } while (with t: d do {
+        t < 3
+    })
+    print "stepped: \{d}"
+    last: 0
+    for each i: (0.upto to: 9) loop {
+        last = i
+    } while i < 4
+    print "range: \{last}"
+    seen: 0.u64
+    for each s: (Tags base: "e".string n: 6) loop {
+        seen = seen + 1
+        if seen == 2 then continue
+        print "each \{s}"
+    } while s != "e3"
+    print "each seen: \{seen}"
+    g: Tags base: "p".string n: 6
+    m: 0.u64
+    for s: g loop {
+        m = m + 1
+    } while s != "p2"
+    print "plain: \{m}"
+    b: 0.u64
+    for each s: (Tags base: "b".string n: 6) loop {
+        b = b + 1
+        if s == "b1" then break
+        print "break \{s}"
+    } while b < 100
+    print "break: \{b}"
+    h: 0
+    for h < 100 loop {
+        h = h * 10 + 1
+    } while (mks n: h).length < 6
+    print "hoist: \{h}"
+    for each e: (Evens n: 7) loop print "even \{e}"
+}
