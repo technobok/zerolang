@@ -1,0 +1,128 @@
+# The twins of errors/cond_release_holds_on_its_path: the holder is released on
+# every path before the source is written -- in the first condition, which runs
+# whenever the statement does, or dropped after the statement -- or the write
+# sits on the release's own path: in the condition after the release, or in a
+# loop body that runs only after the condition that released. Each is called
+# down both paths.
+LfBox: class {
+    name: StringView
+}
+
+firstConjunctReassignWriteAfter: function {k: bool} is {
+    s: "abc".string
+    o: "ooo".string
+    w: LfBox name: s.stringView
+    if (with t: k do {
+        w = LfBox name: o.stringView
+        t
+    }) when k then print "then"
+    s = "zzz".string
+    print "w \{w.name} \{s}"
+}
+
+whenReassignDropAfter: function {k: bool} is {
+    s: "abc".string
+    o: "ooo".string
+    w: LfBox name: s.stringView
+    if k when (with t: k do {
+        w = LfBox name: o.stringView
+        t
+    }) then print "then \{w.name}"
+    w.drop
+    s = "zzz".string
+    print "after \{s}"
+}
+
+whenReassignWriteWithin: function {k: bool} is {
+    s: "abc".string
+    o: "ooo".string
+    w: LfBox name: s.stringView
+    if k when (with t: k do {
+        w = LfBox name: o.stringView
+        s = "zzz".string
+        print "within \{w.name} \{s}"
+        t
+    }) then print "then"
+}
+
+firstCondReassignWriteAfter: function {k: bool} is {
+    s: "abc".string
+    o: "ooo".string
+    w: LfBox name: s.stringView
+    n: 0
+    if k then n = 1
+    for (with t: n do {
+        w = LfBox name: o.stringView
+        t > 0
+    }) loop {
+        n = n - 1
+    }
+    s = "zzz".string
+    print "w \{w.name} \{s}"
+}
+
+secondCondReassignBodyWrite: function {k: bool} is {
+    s: "abc".string
+    o: "ooo".string
+    w: LfBox name: s.stringView
+    n: 0
+    if k then n = 1
+    for n > 0 while (with t: n do {
+        w = LfBox name: o.stringView
+        t > 0
+    }) loop {
+        s = "zzz".string
+        print "body \{w.name} \{s}"
+        n = n - 1
+    }
+}
+
+postcondReassignDropAfter: function {k: bool} is {
+    s: "abc".string
+    o: "ooo".string
+    w: LfBox name: s.stringView
+    n: 0
+    if k then n = 1
+    for loop {
+        n = n - 1
+    } while (with t: n do {
+        w = LfBox name: o.stringView
+        t > 0
+    })
+    w.drop
+    s = "zzz".string
+    print "after \{s}"
+}
+
+postcondReassignWriteWithin: function {k: bool} is {
+    s: "abc".string
+    o: "ooo".string
+    w: LfBox name: s.stringView
+    n: 0
+    if k then n = 1
+    for loop {
+        n = n - 1
+    } while (with t: n do {
+        w = LfBox name: o.stringView
+        s = "zzz".string
+        print "within \{w.name} \{s}"
+        t > 0
+    })
+}
+
+main: function is {
+    firstConjunctReassignWriteAfter k: true
+    firstConjunctReassignWriteAfter k: false
+    whenReassignDropAfter k: true
+    whenReassignDropAfter k: false
+    whenReassignWriteWithin k: true
+    whenReassignWriteWithin k: false
+    firstCondReassignWriteAfter k: true
+    firstCondReassignWriteAfter k: false
+    secondCondReassignBodyWrite k: true
+    secondCondReassignBodyWrite k: false
+    postcondReassignDropAfter k: true
+    postcondReassignDropAfter k: false
+    postcondReassignWriteWithin k: true
+    postcondReassignWriteWithin k: false
+}

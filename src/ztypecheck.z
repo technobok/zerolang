@@ -38747,7 +38747,9 @@ checkClauseCondition: function {
 }
 
 # checkClauseConditions -- walk one if-clause's conditions (each must be bool
-# or a 2-arm sum type) and the predicate facts they establish.
+# or a 2-arm sum type) and the predicate facts they establish. Answers the
+# releaseMark after the first conjunct: the conjuncts after it run only where
+# those before them held, so what they release is released on those paths alone.
 checkClauseConditions: function {
     st: zenv.ZSymbolTable
     unitDecl: ztypes.declid
@@ -38755,8 +38757,9 @@ checkClauseConditions: function {
     clause: ifclauseref
     factsOut: List ArmPredFact
     boolId: ztypes.tid
-} is {
-    if clause.nid.isZero then return
+} out u64 is {
+    firstRel: st.releaseMark
+    if clause.nid.isZero then return firstRel
     k: u64
     for k < clause.nconds loop {
         condId: zast.ifCondAt :ast nid: clause.nid i: k
@@ -38767,6 +38770,7 @@ checkClauseConditions: function {
             checkClauseCondition :st :unitDecl :ast :cond :boolId
             # a conjunct after the first runs only when those before it hold
             if k > 1 then st.markTakesMaybeFrom from: condMark
+            if k == 1 then firstRel = st.releaseMark
             # the fact a conjunct establishes holds for the conjuncts after it,
             # not only for the body: `when` short-circuits, so a later conjunct
             # runs only where this one held. Applying it here is what makes
@@ -38779,6 +38783,7 @@ checkClauseConditions: function {
             }
         }
     }
+    return firstRel
 }
 
 # checkClauseBody -- walk one if-clause's statement block, its conditions
@@ -42722,7 +42727,7 @@ checkForPostcondition: function {
 
 # checkFor -- walk a for-loop: push the `for` scope, define break/continue (entry
 # position placeholders with unregistered type ids, so they never join the dump),
-# then walk the conditions, postconditions, and body, and pop. A named condition
+# then walk the conditions, the body and the postconditions, and pop. A named condition
 # is a binding: define the loop var with the condition value's type (the value of
 # a bare literal init stays the literal pseudo-type, keeping the entry out of the
 # dump joins). Iterator-wrapper element extraction needs monomorphization and is
@@ -42749,28 +42754,7 @@ checkFor: function {
     if st.walk.currentGenTid.isZero.not then {
         spillFor = (zast.yieldCountIn :ast nid: fornode.body) > 0
     }
-    kC: u64
-    for kC < fornode.nconds loop {
-        condId: zast.forCondAt :ast nid: fornode.nid i: kC
-        kC = kC + 1
-        onceMark: st.entryMark
-        checkForCondition :st :unitDecl :ast :condId :spillFor isEach: fornode.isEach
-        # an `each` binding runs once, before the loop: what it moved is not
-        # moved again by the next iteration. A plain one runs at every
-        # iteration, so what it moves is a move in the loop.
-        if fornode.isEach when (forCondBindsName :ast :condId) then (
-            st.recordOnceTakes
-            from: onceMark
-        )
-        # a condition after the first runs only when those before it hold
-        if kC > 1 then st.markTakesMaybeFrom from: onceMark
-    }
-    kP: u64
-    for kP < fornode.nposts loop {
-        pcId: zast.forPostAt :ast nid: fornode.nid i: kP
-        kP = kP + 1
-        checkForPostcondition :st :unitDecl :ast :pcId
-    }
+    checkForConditions :st :unitDecl :ast :fornode :spillFor :forMarker
     st.walk.draft.clear
     bodyMark: st.entryMark
     # THE BODY IS ITS OWN SCOPE. The `for` scope brackets the HEADER: what a
@@ -42814,8 +42798,11 @@ checkFor: function {
     # error -- as is one at any `continue`, which the walk recorded there.
     k: st.unreachableKind
     if k == zenv.divkind.exit then st.discardTakenFrom start: bodyMark
-    st.popTo marker: forMarker
+    st.popTo marker: bodyMarker
     st.closeBreakScope
+    checkForPostconditions :st :unitDecl :ast :fornode
+    st.walk.draft.clear
+    st.popTo marker: forMarker
     run: st.closeLoopRun
     if k == zenv.divkind.none then reportLoopMoves :st :ast :fornode :run
     reportContinueMoves :st :ast :fornode :run
@@ -42825,6 +42812,52 @@ checkFor: function {
     # a statement loop discards its body's value, so it has no List to mint
     if (st.walk.stmtBlocks.has item: fornode.body) then return ztypes.tid
     return (forComprehensionTid :st :unitDecl :ast :fornode :elemT)
+}
+
+# checkForConditions -- walk a loop's conditions, in order. A condition after the
+# first runs only when those before it hold, so what it takes is taken on some
+# paths only, and the `for` scope at `forMarker` is a path from it on: what it
+# releases, as what the body and the postconditions release, is released on
+# those paths alone.
+checkForConditions: function {
+    st: zenv.ZSymbolTable
+    unitDecl: ztypes.declid
+    ast: Ast
+    fornode: forref
+    spillFor: bool
+    forMarker: zenv.openpos
+} is {
+    if fornode.nconds == 0 then st.markPath marker: forMarker since: st.releaseMark
+    kC: u64
+    for kC < fornode.nconds loop {
+        condId: zast.forCondAt :ast nid: fornode.nid i: kC
+        kC = kC + 1
+        onceMark: st.entryMark
+        checkForCondition :st :unitDecl :ast :condId :spillFor isEach: fornode.isEach
+        # an `each` binding runs once, before the loop: what it moved is not
+        # moved again by the next iteration. A plain one runs at every
+        # iteration, so what it moves is a move in the loop.
+        if fornode.isEach when (forCondBindsName :ast :condId) then (
+            st.recordOnceTakes
+            from: onceMark
+        )
+        if kC > 1 then st.markTakesMaybeFrom from: onceMark
+        if kC == 1 then st.markPath marker: forMarker since: st.releaseMark
+    }
+}
+
+# checkForPostconditions -- walk a loop's postconditions. A POSTCONDITION RUNS
+# AFTER THE BODY, so the walk reaches it after the body: walked before, a lock it
+# released was released for the body's first iteration too, which runs first.
+checkForPostconditions: function {
+    st: zenv.ZSymbolTable unitDecl: ztypes.declid ast: Ast fornode: forref
+} is {
+    kP: u64
+    for kP < fornode.nposts loop {
+        pcId: zast.forPostAt :ast nid: fornode.nid i: kP
+        kP = kP + 1
+        checkForPostcondition :st :unitDecl :ast :pcId
+    }
 }
 
 # endLoopWriteNarrowing -- a name the loop writes, anywhere in its conditions or
@@ -43418,14 +43451,15 @@ checkIfClauses: function {
         for each pf: accFacts loop applyPredFact :ast :st f: pf holds: false
         cfacts: List ArmPredFact
         cStart: st.entryMark
-        checkClauseConditions :st :unitDecl :ast :clause factsOut: cfacts boolId: pBool
+        firstRel: checkClauseConditions :st :unitDecl :ast :clause factsOut: cfacts boolId: pBool
         cEnd: st.entryMark
         # the arm runs on some paths only, so a lock its body releases is
         # released on its path alone (markPath) -- unless the fold made it
-        # the only path. The first clause's conditions run on every path that
-        # reaches the statement; a later clause's only where those before it
-        # failed, which makes them the clause's own
-        if kC == 1 then bmRel = st.releaseMark
+        # the only path. The first clause's first conjunct runs on every path
+        # that reaches the statement, and its later conjuncts only where those
+        # before them held; a later clause's conditions run only where those
+        # before it failed, which makes them the clause's own
+        if kC == 1 then bmRel = firstRel
         if skipDead.not then st.markPath marker: bm since: bmRel
         bt: checkClauseBody :st :unitDecl :ast :clause
         # what the conditions moved is not the arm's: they ran before it on

@@ -478,9 +478,12 @@ lfDests: list {
 lfSinks: list { "reassign" "mutate" "take" "drop" }
 
 # lfarm -- the release tier's statement: what it needs first (`before`) and its
-# shape over the releasing arm `@A` and the sibling arm `@B`. `sibling`: it has
-# one; `loop`: a body that runs zero or more times, which may not move a local
-# from outside it
+# shape over the releasing part `@A` and the sibling arm `@B`. The releasing part
+# runs on some paths only: an arm, a loop body, or a block in a condition that
+# runs only when the one before it held, or in a loop's postcondition. `sibling`:
+# it has a sibling arm; `guard`: the sibling arm may run after the releasing part
+# too; `loop`: the part runs zero or more times, so it may not move a local from
+# outside the loop
 lfarm: data {
     key: ""
     before: ""
@@ -526,6 +529,27 @@ lfArms: list {
         tags: " loop "
     )
     (lfarm key: "dobreak" before: "k: lfFlag" shape: "{\n        if k then break\n        @A\n    }"
+    )
+    (
+        lfarm
+        key: "ifwhen"
+        before: "k: lfFlag"
+        shape: "if k.not when (with z: 0 do {\n        @A\n        true\n    }) then {\n        r = r + 1\n    } else {\n        @B\n    }"
+        tags: " sibling guard "
+    )
+    (
+        lfarm
+        key: "whilecond"
+        before: "n: 0"
+        shape: "for n > 0 while (with z: 0 do {\n        @A\n        true\n    }) loop {\n        n = n - 1\n    }"
+        tags: " loop "
+    )
+    (
+        lfarm
+        key: "whilepost"
+        before: "n: 0"
+        shape: "for n > 0 loop {\n        n = n - 1\n    } while (with z: 0 do {\n        @A\n        true\n    })"
+        tags: " loop "
     )
 }
 
@@ -773,7 +797,12 @@ lfReleaseWhyNot: function {words: zast.Vocab.view cl: LfCell.view} out String is
         lfHas
         tags: rl.tags.stringView
         tag: "spends"
-    ) then return "a loop body may not move a local from outside it".string
+    ) then return "a loop may not move a local from outside it".string
+    if (lfHas tags: arm.tags.stringView tag: "guard") when (
+        lfHas
+        tags: rl.tags.stringView
+        tag: "spends"
+    ) then return "the sibling arm, which reads the holder, may run after it moved".string
     if (lfHas tags: rl.tags.stringView tag: "initial") when (
         p.initial.length == 0
     ) then return "the producer offers no second value".string
