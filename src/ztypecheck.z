@@ -32751,6 +32751,7 @@ checkMemberAutoCall: function {
             tup: ListVal zast.nameid
             if (receiverPinsNothing :ast :st recvT: bt).not then {
                 appendValueTuple :ast n: (ast.nodes.get i: dp.parent) dst: tup
+                cutAtViewingMethod :st :ast recv: dp.parent dst: tup
             }
             recvPins: List ztyping.PinPath
             if (receiverPinsNothing :ast :st recvT: bt).not then (
@@ -42193,6 +42194,9 @@ bindForIteration: function {
         refuseUnwalkableBinding :st :ast :cond :vt :isEach
         return
     }
+    # an if or match header hands over what its arms keep (pinsOfArms): their
+    # lines' walks left nothing pending
+    pendArmPins :st :ast :vt nid: cond.operation borrowing: false writes: false verb: "iterate"
     # an element that is itself a view (`split`'s and `lines`' StringView, in a
     # plain Option) is a reference into what the iteration reads, as an
     # OptionView's payload is: it holds the iteration's pins for the body. A
@@ -45561,6 +45565,13 @@ receiverResultPath: function {
     rcvT: walkTypeOf :st nid: (dottedParentNodeId :ast n: (ast.nodes.get i: call.callable))
     if (receiverPinsNothing :ast :st recvT: rcvT) then return
     methodReceiverTuple :ast n: (ast.nodes.get i: call.callable) :dst
+    (
+        cutAtViewingMethod
+        :st
+        :ast
+        recv: (dottedParentNodeId :ast n: (ast.nodes.get i: call.callable))
+        :dst
+    )
     if dst.length > 0 then {
         rvb: st.lookupVarId nameId: (dst.get i: 0)
         if rvb.none then for dst.length > 0 loop dst.pop
@@ -45578,6 +45589,72 @@ receiverResultPath: function {
         path: dst
         :pins
     )
+}
+
+# cutAtViewingMethod -- `dst`, the path a result pins on its receiver `recv`, cut
+# where it passes through a method that hands back a view of its base -- `first`
+# in `s.first.trim`: what the result keeps is that base, not a path through the
+# method, which no write to the base would meet (argPinTuple, which cuts an
+# argument's path the same way). A path ending in a fresh value is left whole.
+cutAtViewingMethod: function {
+    st: zenv.ZSymbolTable.view ast: Ast.view recv: zast.nodeid dst: ListVal zast.nameid
+} is {
+    if dst.length <= 1 then return
+    k: viewingMethodPrefix :st :ast nid: recv
+    if (k == 0) or (k >= dst.length) then return
+    for dst.length > k loop dst.pop
+}
+
+# viewingMethodPrefix -- how many names of the dotted read `nid` come before the
+# first member that is a method (`s` before `first` in `s.first.trim`), when that
+# method hands back a view of its base (readReturnsBorrow); zero when the read
+# passes through no method, or the first one makes a value of its own. Walks the
+# tree, building nothing.
+viewingMethodPrefix: function {
+    st: zenv.ZSymbolTable.view ast: Ast.view nid: zast.nodeid
+} out u64 is {
+    # the root counts one name, each member one more, from the leaf down
+    depth: u64
+    cur: nid
+    for cur.isZero.not loop {
+        n: ast.nodes.get i: cur
+        par: zast.nodeid
+        match (
+            n
+        ) case dottedpath then {
+            par = n.parent
+        } else null
+        depth = depth + 1
+        cur = par
+    }
+    first: u64
+    borrows: false
+    idx: depth
+    cur = nid
+    for cur.isZero.not loop {
+        n: ast.nodes.get i: cur
+        par: zast.nodeid
+        mem: zast.nameid
+        match (
+            n
+        ) case dottedpath then {
+            par = n.parent
+            mem = dottedMemberId :st :ast nid: n.nodeid child: n.child
+        } else null
+        if par.isZero.not when mem.isZero.not when (isStripMarkerId nameId: mem).not when (
+            memberReadIsField
+            :st
+            parentNid: par
+            nameId: mem
+        ).not then {
+            first = idx
+            borrows = readReturnsBorrow :st nid: cur
+        }
+        idx = idx - 1
+        cur = par
+    }
+    if (first == 0) or borrows.not then return 0
+    return first - 1
 }
 
 # captureValueReceiver -- a call on a receiver that is a value rather than a
@@ -51006,6 +51083,7 @@ recordReturnedOwnedLocal: function {
 # returned borrowed name is: the owner still frees what the return hands back.
 refuseReturnedArms: function {st: zenv.ZSymbolTable ast: Ast nid: zast.nodeid} is {
     if st.walk.currentReturnMarker.isReference then return
+    refuseReturnedArmReferences :st :ast :nid
     leaves: ListVal zast.nodeid
     armBorrowedLeaves :st :ast :nid into: leaves
     for each lf: leaves loop {
@@ -51029,6 +51107,28 @@ refuseReturnedArms: function {st: zenv.ZSymbolTable ast: Ast nid: zast.nodeid} i
     }
 }
 
+# refuseReturnedArmReferences -- an arm or `with` that ends on a name IT
+# declared which borrows -- `with w: s do w` -- returns that reference as an
+# owned result, as `w: s; return w` would: the storage stays its source's, which
+# the return would hand the caller a second owner of. Refused alike.
+refuseReturnedArmReferences: function {st: zenv.ZSymbolTable ast: Ast nid: zast.nodeid} is {
+    leaves: ListVal zast.nodeid
+    armValueLeaves :st :ast :nid into: leaves
+    for each lf: leaves loop {
+        ln: ast.nodes.get i: lf
+        if (zast.atomNameIdOf n: ln).isZero.not when (armLeafLocal :st :ast nid: lf).isZero when (
+            armLeafBorrowed
+            :st
+            nid: lf
+        ) when (returnHandsOnStorage :st tid: (walkTypeOf :st nid: lf)) then (
+            reportReturnedBorrowedName
+            :st
+            :ast
+            nid: lf
+        )
+    }
+}
+
 # returnOwnedLocal -- the local `vid` of type `tid`, read by the atom `nid`,
 # returned as an owned result.
 returnOwnedLocal: function {
@@ -51038,30 +51138,45 @@ returnOwnedLocal: function {
     vid: ztypes.vid
     tid: ztypes.tid
 } is {
-    # a borrowed user CLASS is the caller's whether or not it has anything to
-    # destroy: it is passed by reference, and returning it bare takes it, as
-    # `return p.take` would (a destructor-less one reached the C as a pointer
-    # returned for a struct). A view, or a by-value sum with nothing to
-    # destroy, owns nothing, and handing it on copies nothing that matters.
+    # a borrowed name returned bare hands the caller storage its source still
+    # owns (returnHandsOnStorage)
+    lends: st.walk.currentReturnMarker.isReference
+    if (returnHandsOnStorage :st :tid) when lends.not when (isBorrowedVar :st :vid) then (
+        reportReturnedBorrowedName
+        :st
+        :ast
+        :nid
+    )
+    st.typing.variableMoved.add item: vid
+}
+
+# returnHandsOnStorage -- a value of `tid` returned bare hands the caller storage:
+# a user class is passed by reference, and returning it bare takes it, as
+# `return p.take` would (a destructor-less one reached the C as a pointer
+# returned for a struct); anything else when it has something to destroy. A view,
+# or a by-value sum with nothing to destroy, owns nothing, and handing it on
+# copies nothing that matters.
+returnHandsOnStorage: function {st: zenv.ZSymbolTable.view tid: ztypes.tid} out bool is {
     isClass: (st.reg.typetypeOf typeId: tid) == ztypes.ztypetype.classType
     # a native class that owns storage has a destructor; one without is a view
     if isClass then isClass = (st.reg.isNativeOf :tid).not
-    ownsSomething: isClass or (st.reg.needsDestructor typeId: tid)
-    lends: st.walk.currentReturnMarker.isReference
-    if ownsSomething when lends.not when (isBorrowedVar :st :vid) then {
-        rbNm: zast.nameTextAt :ast ref: (zast.atomNameIdOf n: (ast.nodes.get i: nid))
-        mbr: "Cannot return borrowed variable '\{rbNm}' as an owned result — the caller still owns it; return '\{rbNm}.copy' (duplicate), declare the source '.take' (transfer ownership in), or declare the return '.borrow'"
-        (
-            addError
-            :st
-            nodeid: (zast.nodeIdOf n: (ast.nodes.get i: nid))
-            lineno: (nodeLine n: (ast.nodes.get i: nid))
-            colno: (nodeCol n: (ast.nodes.get i: nid))
-            e: zast.err.ownerError
-            msg: mbr
-        )
-    }
-    st.typing.variableMoved.add item: vid
+    return isClass or (st.reg.needsDestructor typeId: tid)
+}
+
+# reportReturnedBorrowedName -- the borrowed name read by the atom `nid`,
+# returned as an owned result: the caller still owns what it names.
+reportReturnedBorrowedName: function {st: zenv.ZSymbolTable ast: Ast.view nid: zast.nodeid} is {
+    rbNm: zast.nameTextAt :ast ref: (zast.atomNameIdOf n: (ast.nodes.get i: nid))
+    mbr: "Cannot return borrowed variable '\{rbNm}' as an owned result — the caller still owns it; return '\{rbNm}.copy' (duplicate), declare the source '.take' (transfer ownership in), or declare the return '.borrow'"
+    (
+        addError
+        :st
+        nodeid: (zast.nodeIdOf n: (ast.nodes.get i: nid))
+        lineno: (nodeLine n: (ast.nodes.get i: nid))
+        colno: (nodeCol n: (ast.nodes.get i: nid))
+        e: zast.err.ownerError
+        msg: mbr
+    )
 }
 
 # numberLandsInNumber -- a number where a number is declared: the value a
