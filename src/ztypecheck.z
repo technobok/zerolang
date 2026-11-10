@@ -40585,9 +40585,8 @@ mintRepointCompanion: function {
 # place unmarked or `.borrow`, or a call that hands one back; a `.take` or
 # `.hold` is refused as a mode change, and so is an owned value. The storage
 # `v` borrows must live as long as `x`, and a writable `x` cannot take a
-# readonly borrow. Written in `x`'s own scope, the re-point ends the borrow `x`
-# held; written deeper -- a branch, a loop, a block -- it adds to it, so the
-# old source stays locked until the scope ends on the paths that kept it.
+# readonly borrow. The re-point ends the borrow `x` held on the path it is
+# written on: written in an arm or a loop body, the other paths keep it.
 checkRepoint: function {
     st: zenv.ZSymbolTable
     unitDecl: ztypes.declid
@@ -40663,11 +40662,7 @@ checkRepoint: function {
     xpins: List ztyping.PinPath
     for each bp: bpins loop appendFollowedPin :st p: bp dst: xpins depth: 0 holder: xVid
     if (refuseRepointOutlives :st :ast :rasgn :xVid pins: xpins) then return
-    if (st.innermostOpenIs scope: (st.scopeOfVar vid: xVid)) then (
-        releaseCascade
-        :st
-        holder: ztypes.zlockholder.var xVid
-    )
+    releaseCascade :st holder: ztypes.zlockholder.var xVid
     (
         installPins
         :st
@@ -40744,11 +40739,7 @@ repointOwned: function {
         lineno: rasgn.lineno
         colno: rasgn.colno
     )
-    if (st.innermostOpenIs scope: (st.scopeOfVar vid: xVid)) then (
-        releaseCascade
-        :st
-        holder: ztypes.zlockholder.var xVid
-    )
+    releaseCascade :st holder: ztypes.zlockholder.var xVid
     checkNarrowedTargetWrite :st :ast :rasgn
     st.typing.repoints.add item: rasgn.nid
     st.typing.ownedRepoints.add item: rasgn.nid
@@ -41187,7 +41178,10 @@ consumeReassignPins: function {
         verb: "store"
         dst: rpins
     )
-    if rpins.length == 0 then return
+    if rpins.length == 0 then {
+        releaseRefilledName :st nameId: hbNmId
+        return
+    }
     # An OWNED value holding locks -- a construction or an `outx` result over a
     # moved lock-holder -- lands in the target, so the target must be able to
     # hold them; a field store (`h.w = Option.some w`) keeps them under the
@@ -41239,6 +41233,24 @@ consumeReassignPins: function {
             colno: rasgn.colno
         )
     }
+}
+
+# releaseRefilledName -- a value that keeps nothing locked replaced the value
+# the bare name `nameId` held: the old value's locks end with it. A borrowed
+# name is written through, to the place it refers to, and keeps its borrow; a
+# `hold` binding's own readonly lock is retaken over its new value
+# (retakeHoldLock).
+releaseRefilledName: function {st: zenv.ZSymbolTable nameId: zast.nameid} is {
+    if nameId.isZero then return
+    tvo: st.writeTargetVarId :nameId
+    if tvo.none then return
+    th: ztypes.zlockholder.var tvo
+    # most names written hold no lock at all
+    if (st.holdsAnyLock holder: th).not then return
+    if (isBorrowedVar :st vid: tvo) then return
+    hlh: st.findLockHolder :nameId
+    if hlh.some when hlh == th then return
+    releaseCascade :st holder: th
 }
 
 # checkSwap -- `lhs swap rhs` writes BOTH sides, so each is walked as a write
