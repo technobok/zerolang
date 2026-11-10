@@ -37075,7 +37075,7 @@ checkReturnRooting: function {
     # the symbol table the reports go to
     st: zenv.ZSymbolTable
     # the tree the returned expression is read from
-    ast: Ast.view
+    ast: Ast
     # the returned argument
     arg: argref
     # its type
@@ -37085,7 +37085,9 @@ checkReturnRooting: function {
     cid: callNodeIdOf n: (ast.nodes.get i: arg.operation)
     if st.walk.currentReturnMarker.isReference then {
         okRef: false
-        if cid.isZero.not then {
+        # a call, and a control value (what its arms keep, pendReturnedPins), is
+        # rooted where its pins are
+        if cid.isZero.not or (isControlValue :ast nid: arg.operation) then {
             okRef = pinsAllParamRooted :st
         } else {
             okRef = rootIsBorrowedParam :st :ast n: (ast.nodes.get i: arg.operation)
@@ -37179,12 +37181,16 @@ checkBorrowResultSource: function {
     # where the refusal lands
     st: zenv.ZSymbolTable
     # the tree the return's path is read out of
-    ast: Ast.view
+    ast: Ast
     # the return's argument, whose source is judged
     arg: argref
     # the returned call's node, zero when the return is a path
     cid: zast.nodeid
 } is {
+    if (isControlValue :ast nid: arg.operation) then {
+        checkArmBorrowSources :st :ast :arg
+        return
+    }
     if cid.isZero.not then {
         if st.walk.pendingMarker == ztypes.zparamownership.viewMode then {
             (
@@ -37230,6 +37236,31 @@ checkBorrowResultSource: function {
         m = "a `.borrow` result cannot be lent through the readonly field '\{fnm}': a view converts to no other ownership -- declare `outx T.view`"
     }
     addError :st nodeid: arg.nid lineno: arg.lineno colno: arg.colno e: zast.err.ownerError msg: m
+}
+
+# checkArmBorrowSources -- checkBorrowResultSource for a control value: it
+# lends what each arm lends, so one arm read out of a readonly source refuses
+# the value, once.
+checkArmBorrowSources: function {st: zenv.ZSymbolTable ast: Ast arg: argref} is {
+    leaves: ListVal zast.nodeid
+    armValueLeaves :st :ast nid: arg.operation into: leaves
+    errs: st.typing.errors.length
+    for each lf: leaves loop {
+        if st.typing.errors.length == errs then (
+            checkBorrowResultSource
+            :st
+            :ast
+            arg: (
+                argref
+                nid: arg.nid
+                name: arg.name
+                operation: lf
+                lineno: arg.lineno
+                colno: arg.colno
+            )
+            cid: (callNodeIdOf n: (ast.nodes.get i: lf))
+        )
+    }
 }
 
 # reportReturnKeepsDyingStorage -- a returned value keeps its pending pins
@@ -39535,6 +39566,8 @@ dyingReference: function {
     if holder.isZero when (st.scopeBindsHere :nameId).not then return ztypes.vid
     rv: (st.lookupVarId :nameId).or d: ztypes.vid
     if rv.isZero then return rv
+    # a parameter is the caller's storage: no scope of the body's ends it
+    if (st.reg.variableOriginOf id: rv) == ztypes.zvarorigin.param then return ztypes.vid
     if holder.isZero.not when (
         st.scopeEncloses
         outer: (st.scopeOfVar vid: rv)
