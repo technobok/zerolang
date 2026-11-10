@@ -39113,6 +39113,25 @@ pendReturnedPins: function {st: zenv.ZSymbolTable ast: Ast arg: argref argT: zty
         pendArmPins :st :ast vt: argT :nid borrowing: retBorrows writes: true verb: "return"
         return
     }
+    pendValueRecord :st :nid
+}
+
+# pendRootlessArgRecord -- an argument no variable roots -- a call's result read
+# on, an auto-called function -- has no root to tell its pins from what an
+# enclosing walk left pending beside them (a receiver's): its pins are its
+# record (pendValueRecord). A control value's arms hand theirs over already.
+pendRootlessArgRecord: function {st: zenv.ZSymbolTable ast: Ast.view nid: zast.nodeid} is {
+    if (isControlValue :ast :nid) then return
+    rt: rootNameIdOf :ast n: (ast.nodes.get i: nid)
+    if rt.isZero.not when (st.lookupVarId nameId: rt).some then return
+    pendValueRecord :st :nid
+}
+
+# pendValueRecord -- the value at `nid` is what its walk recorded and nothing
+# else: the side channel is drained of anything an enclosing walk left beside it
+# and holds the node's record (pins and flags) for the readers that still read
+# the channel.
+pendValueRecord: function {st: zenv.ZSymbolTable nid: zast.nodeid} is {
     vp: valuePinsOf :st :nid
     drainPendingBorrow :st
     if vp.len > 0 then pinsTouched :st
@@ -47785,6 +47804,7 @@ lockNonTrivialArg: function {
     arg: argref
 } is {
     pendArmPins :st :ast :vt nid: arg.operation borrowing: true writes: true verb: "pass"
+    pendRootlessArgRecord :st :ast nid: arg.operation
     refuseViewToWriter :st :ast :vt :isLockish :isViewArg :isTake :arg
     # A construction or take parameter consumes the hoisted
     # temp inside the call scope; a lock/borrow parameter
