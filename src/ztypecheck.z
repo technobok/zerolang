@@ -35992,7 +35992,11 @@ dottedBaseTid: function {
     if baseIsName then st.mode.suppressBareCtor = true
     if childIsRef then st.mode.suppressFnAutoCall = true
     errsBase: st.typing.errors.length
+    baseGen: st.walk.pinGen
     bt: checkValueAt :st :unitDecl :ast nid: dp.parent
+    # a member read off a value keeps what the value keeps (a member that makes
+    # a value of its own drops it)
+    composeChildRecord :st nid: dp.parent gen: baseGen
     st.mode = savedMode
     if baseIsName then readSingletonBase :st :ast :unitDecl base: dp.parent :bt
     # a base refused as a call missing its arguments has no value to read a
@@ -36900,7 +36904,7 @@ typeOfBareName: function {
         ) when st.mode.suppressFnAutoCall.not when st.mode.allowBareFnRef.not then {
             if (fnAutoCallable :st mid: fo) then {
                 rewriteReadAsCall :ast :node
-                return (checkValueAt :st :unitDecl :ast nid: node.nid)
+                return (checkValueRowAt :st :unitDecl :ast nid: node.nid)
             }
             wdtG: u32
             nmG: zast.nameTextAt :ast ref: node.name
@@ -37938,12 +37942,12 @@ checkAtomid: function {
         # a variable holding a callable object is called when read bare: the
         # read becomes `x.call` in the tree (rewriteReadAsObjectCall)
         if (callsObjectBare :st :ast :node t: result) then {
-            return (checkValueAt :st :unitDecl :ast nid: node.nid)
+            return (checkValueRowAt :st :unitDecl :ast nid: node.nid)
         }
         if (readsFnRefAsCall :st t: result) then {
             if (fnAutoCallable :st mid: result) then {
                 rewriteReadAsCall :ast :node
-                return (checkValueAt :st :unitDecl :ast nid: node.nid)
+                return (checkValueRowAt :st :unitDecl :ast nid: node.nid)
             }
             result = bareFnCall :st :ast :node fid: result
         }
@@ -38115,7 +38119,7 @@ checkUnboundAtom: function {
     # checked, or one moved out of, asked off one lookup
     if (refuseUnreadableLocal :st :ast :node) then return ztypes.tid
     if (bodyMemberAsPath :st :ast nameId: node.name nid: node.nid) then {
-        return (checkValueAt :st :unitDecl :ast nid: node.nid)
+        return (checkValueRowAt :st :unitDecl :ast nid: node.nid)
     }
     if (refuseBodyFieldRead :st :ast nameId: node.name nid: node.nid) then return ztypes.tid
     ncr: checkNarrowedConstRead :st :unitDecl :ast :node
@@ -52380,7 +52384,10 @@ checkGenericTypeCall: function {
                         from: (typeArgTid :st :ast :unitDecl opId: farg.operation baseId: etn)
                     )
                 } else {
+                    payGen: st.walk.pinGen
                     argTid: checkMovedValueAt :st :unitDecl :ast nid: farg.operation owning: true
+                    # the value built keeps what its payload keeps
+                    composeChildRecord :st nid: farg.operation gen: payGen
                     materialisedTid: materialiseLiteral :ast :st t: argTid
                     subT = materialisedTid
                     (
@@ -52552,7 +52559,10 @@ checkTaggedCtorArg: function {
                 msg: uum
             )
         }
+        payGen: st.walk.pinGen
         uvt: checkMovedValueAt :st :unitDecl :ast nid: arg.operation owning: true
+        # the value built keeps what its payload keeps
+        composeChildRecord :st nid: arg.operation gen: payGen
         (
             movePayloadIntoArm
             :st
@@ -58293,12 +58303,12 @@ checkLabelValueAt: function {
         # forward hands the parameter on as it is.
         fwd: zast.isForwardingLabel n: (ast.nodes.get i: lv.nid)
         if fwd.not when (callsObjectBare :st :ast node: lv t: lvt) then {
-            return (checkValueAt :st :unitDecl :ast nid: lv.nid)
+            return (checkValueRowAt :st :unitDecl :ast nid: lv.nid)
         }
         if fwd.not when (readsFnRefAsCall :st t: lvt) then {
             if (fnAutoCallable :st mid: lvt) then {
                 rewriteReadAsCall :ast node: lv
-                return (checkValueAt :st :unitDecl :ast nid: lv.nid)
+                return (checkValueRowAt :st :unitDecl :ast nid: lv.nid)
             }
             lvt = bareFnCall :st :ast node: lv fid: lvt
         }
@@ -58399,10 +58409,10 @@ checkValueAt: function {
     ast: Ast
     nid: zast.nodeid
 } out ztypes.tid is {
-    # THE NODE'S PINS ARE ITS OWN WALK'S. What an enclosing walk left pending is
-    # set aside for the node's walk and laid back after it, ahead of what the
-    # node leaves: no drain the node's walk runs reaches it, and none of it
-    # stands in for the node's own
+    # THE NODE'S PINS ARE ITS OWN WALK'S, AND ITS RECORD. What an enclosing walk
+    # has pending is set aside for the node's walk and comes back as it was; the
+    # node's own pins go to its record (recordValuePins), which a value composed
+    # from the node reads (composeChildRecord)
     held: (
         (st.walk.pendingPins.length > 0) or
         st.walk.pendingBorrowOwned or
@@ -58414,7 +58424,8 @@ checkValueAt: function {
     outerOwned: st.walk.pendingBorrowOwned
     outerMarker: st.walk.pendingMarker
     if held then {
-        # exchanged, not copied: the outer pins wait in `outer` as they are
+        # exchanged, not copied; with nothing pending the node walks in the
+        # buffer as it is, emptied after
         outer swap st.walk.pendingPins
         st.walk.pendingBorrowOwned = false
         st.walk.pendingMarker = ztypes.zparamownership.noneMode
@@ -58422,40 +58433,38 @@ checkValueAt: function {
     gen: st.walk.pinGen
     t: checkValueRowAt :st :unitDecl :ast :nid
     if st.walk.pinGen != gen then recordValuePins :st :nid
-    if held then restoreOuterPins :st outer: outer.take :outerOwned :outerMarker
+    for st.walk.pendingPins.length > 0 loop st.walk.pendingPins.pop
+    if held then outer swap st.walk.pendingPins
+    st.walk.pendingBorrowOwned = outerOwned
+    st.walk.pendingMarker = outerMarker
     return t
 }
 
-# restoreOuterPins -- checkValueAt lays back what an enclosing walk had pending
-# before a node's walk: its pins ahead of the node's, and its flags where the
-# node left none of its own.
-restoreOuterPins: function {
-    st: zenv.ZSymbolTable
-    outer: (List ztyping.PinPath).take
-    outerOwned: bool
-    outerMarker: ztypes.zparamownership
-} is {
-    nodeLeft: (
-        (st.walk.pendingPins.length > 0) or
-        st.walk.pendingBorrowOwned or
-        (
-            st.walk.pendingMarker != ztypes.zparamownership.noneMode
+# composeChildRecord -- a value composed from its child at `nid` takes the
+# child's record: its pins after the ones the value's walk has so far, and its
+# flags when it left any. Asked only when the child's walk just changed
+# something (`gen`, the pinGen before that walk): an older record is another
+# walk's.
+composeChildRecord: function {st: zenv.ZSymbolTable nid: zast.nodeid gen: u64} is {
+    if st.walk.pinGen == gen then return
+    none: ztyping.valuepins start: 0 len: 0 owned: false marker: ztypes.zparamownership.noneMode
+    vp: (st.walk.pinsAt.get key: nid).or d: none
+    if vp.len == 0 when vp.owned.not when vp.marker == ztypes.zparamownership.noneMode then return
+    if vp.len > 0 then pinsTouched :st
+    k: u64
+    for k < vp.len loop {
+        p: st.walk.valuePins.get i: vp.start.u64 + k
+        k = k + 1
+        st.walk.pendingPins.append (
+            ztyping.PinPath
+            path: p.path.copy
+            shared: p.shared
+            mutable: p.mutable
+            carried: p.carried
         )
-    )
-    # the node's pins step aside, the outer ones come back whole, and the
-    # node's follow them in order
-    mine: List ztyping.PinPath
-    mine swap st.walk.pendingPins
-    outer swap st.walk.pendingPins
-    if mine.length > 0 then {
-        rev: List ztyping.PinPath
-        for mine.length > 0 loop rev.append mine.pop
-        for rev.length > 0 loop st.walk.pendingPins.append rev.pop
     }
-    if nodeLeft.not then {
-        st.walk.pendingBorrowOwned = outerOwned
-        st.walk.pendingMarker = outerMarker
-    }
+    setPendingOwned :st owned: vp.owned
+    setPendingMarker :st marker: vp.marker
 }
 
 # recordValuePins -- what the value at `nid` keeps locked is what its walk left
