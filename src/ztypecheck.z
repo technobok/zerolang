@@ -31072,7 +31072,7 @@ consumeProjectionSource: function {
 } is {
     if (argIsTrivial :ast op: (ast.nodes.get i: arg.operation)).not then {
         hp: List ztyping.PinPath
-        takePendingPins :st dst: hp
+        appendRecordPins :st vp: (valuePinsOf :st nid: arg.operation) dst: hp
         (
             hoistArg
             :ast
@@ -31325,7 +31325,7 @@ consumeCastFromArg: function {
         }
     } else {
         hp: List ztyping.PinPath
-        takePendingPins :st dst: hp
+        appendRecordPins :st vp: (valuePinsOf :st nid: aOpId) dst: hp
         (
             hoistArg
             :ast
@@ -31906,8 +31906,9 @@ pinTypedefBorrowSource: function {st: zenv.ZSymbolTable ast: Ast src: zast.nodei
     ) then {
         srcN = so.parent
     }
-    if srcN != src then drainPendingBorrow :st
-    if st.walk.pendingPins.length > 0 then return
+    if srcN != src then {
+        drainPendingBorrow :st
+    } else if (valuePinsOf :st nid: src).len > 0 then return
     tup: ListVal zast.nameid
     appendValueTuple :ast n: (ast.nodes.get i: srcN) dst: tup
     pinsPush :st path: tup shared: false mutable: true
@@ -32724,7 +32725,12 @@ checkMemberAutoCall: function {
         aShr: callReadsReceiver :st mid: mo nid: dp.nid
         # a receiver that is a `.view` result is read-only, written as a member
         # read (`(xs.get i: 0).pop`) exactly as written as a call
-        if aShr.not when st.walk.pendingMarker == ztypes.zparamownership.viewMode when (
+        bnid: dottedParentNodeId :ast n: (ast.nodes.get i: dp.nid)
+        bro: (
+            bnid.isZero.not and
+            ((valuePinsOf :st nid: bnid).marker == ztypes.zparamownership.viewMode)
+        )
+        if aShr.not when bro when (
             dottedBaseIsValue
             :st
             :ast
@@ -37034,11 +37040,14 @@ localHasBorrowSource: function {st: zenv.ZSymbolTable.view vid: ztypes.vid} out 
     return (st.reg.variableBorrowOriginOf id: vid).isZero.not
 }
 
-# pinsAllParamRooted -- every pending pin (a just-typed call's) is rooted at a
-# `.borrow`/`.view` parameter or the receiver; false when nothing is pending.
-pinsAllParamRooted: function {st: zenv.ZSymbolTable.view} out bool is {
-    if st.walk.pendingPins.length == 0 then return false
-    for each p: st.walk.pendingPins loop {
+# pinsAllParamRooted -- every pin of a returned value (a just-typed call's) is
+# rooted at a `.borrow`/`.view` parameter or the receiver; false when it has
+# none.
+pinsAllParamRooted: function {
+    st: zenv.ZSymbolTable.view pins: (List ztyping.PinPath).view
+} out bool is {
+    if pins.length == 0 then return false
+    for each p: pins loop {
         vo: st.lookupVarId nameId: (p.path.get i: 0)
         match (
             vo
@@ -37087,6 +37096,9 @@ checkReturnRooting: function {
     arg: argref
     # its type
     argT: ztypes.tid
+    # what it keeps locked (returnedPins), and its marker
+    rpins: (List ztyping.PinPath).view
+    marker: ztypes.zparamownership
 } out bool is {
     if argT.isZero then return false
     cid: callNodeIdOf n: (ast.nodes.get i: arg.operation)
@@ -37095,7 +37107,7 @@ checkReturnRooting: function {
         # a call, and a control value (what its arms keep, pendReturnedPins), is
         # rooted where its pins are
         if cid.isZero.not or (isControlValue :ast nid: arg.operation) then {
-            okRef = pinsAllParamRooted :st
+            okRef = pinsAllParamRooted :st pins: rpins
         } else {
             okRef = rootIsBorrowedParam :st :ast n: (ast.nodes.get i: arg.operation)
         }
@@ -37116,7 +37128,7 @@ checkReturnRooting: function {
             )
         }
         if okRef when (st.walk.currentReturnMarker == ztypes.zparamownership.viewMode).not then {
-            checkBorrowResultSource :st :ast :arg :cid
+            checkBorrowResultSource :st :ast :arg :cid :marker
         }
         return okRef.not
     }
@@ -37193,13 +37205,15 @@ checkBorrowResultSource: function {
     arg: argref
     # the returned call's node, zero when the return is a path
     cid: zast.nodeid
+    # the returned value's marker (returnedPins)
+    marker: ztypes.zparamownership
 } is {
     if (isControlValue :ast nid: arg.operation) then {
-        checkArmBorrowSources :st :ast :arg
+        checkArmBorrowSources :st :ast :arg :marker
         return
     }
     if cid.isZero.not then {
-        if st.walk.pendingMarker == ztypes.zparamownership.viewMode then {
+        if marker == ztypes.zparamownership.viewMode then {
             (
                 addError
                 :st
@@ -37248,7 +37262,9 @@ checkBorrowResultSource: function {
 # checkArmBorrowSources -- checkBorrowResultSource for a control value: it
 # lends what each arm lends, so one arm read out of a readonly source refuses
 # the value, once.
-checkArmBorrowSources: function {st: zenv.ZSymbolTable ast: Ast arg: argref} is {
+checkArmBorrowSources: function {
+    st: zenv.ZSymbolTable ast: Ast arg: argref marker: ztypes.zparamownership
+} is {
     leaves: ListVal zast.nodeid
     armValueLeaves :st :ast nid: arg.operation into: leaves
     errs: st.typing.errors.length
@@ -37266,6 +37282,7 @@ checkArmBorrowSources: function {st: zenv.ZSymbolTable ast: Ast arg: argref} is 
                 colno: arg.colno
             )
             cid: (callNodeIdOf n: (ast.nodes.get i: lf))
+            :marker
         )
     }
 }
@@ -37281,9 +37298,11 @@ reportReturnKeepsDyingStorage: function {
     ast: Ast.view
     # the returned argument
     arg: argref
+    # what it keeps locked (returnedPins)
+    rpins: (List ztyping.PinPath).view
 } out bool is {
     roots: ListVal zast.nameid
-    for each p: st.walk.pendingPins loop roots.append (p.path.get i: 0)
+    for each p: rpins loop roots.append (p.path.get i: 0)
     deadNm: zast.nameid
     for each rn: roots loop {
         if deadNm.isZero when (pinRootDiesWithCall :st nameId: rn depth: 0) then deadNm = rn
@@ -37319,6 +37338,8 @@ checkReturnCarries: function {
     arg: argref
     # its type
     argT: ztypes.tid
+    # what it keeps locked (returnedPins)
+    rpins: (List ztyping.PinPath).view
 } is {
     if argT.isZero then return
     if (st.reg.isReftypeOf tid: argT).not then return
@@ -37401,17 +37422,17 @@ checkReturnCarries: function {
     }
     # a returned `if`, `match` or block keeps what its arms hand back
     ctlRet: isControlValue :ast nid: arg.operation
-    if (reportReturnKeepsDyingStorage :st :ast :arg) then return
+    if (reportReturnKeepsDyingStorage :st :ast :arg :rpins) then return
     # a returned call: its pending pins are what the result keeps locked
     if (callNodeIdOf n: an).isZero when ctlRet.not then return
     if st.walk.currentFnPins then return
     if st.walk.currentReturnMarker.isReference then return
-    if st.walk.pendingPins.length == 0 then return
+    if rpins.length == 0 then return
     # found first, reported after: the report takes `st` while the pins are
     # being read through it
     badPn: zast.nameid
     roots: ListVal zast.nameid
-    for each p: st.walk.pendingPins loop roots.append (p.path.get i: 0)
+    for each p: rpins loop roots.append (p.path.get i: 0)
     for each rt: roots loop {
         if badPn.isZero then badPn = paramReachedFrom :st nameId: rt depth: 0
     }
@@ -39108,18 +39129,37 @@ pinsOfValue: function {
     return (pinread owned: vp.owned marker: vp.marker)
 }
 
-# pendReturnedPins -- what a returned value keeps locked, pending for the return
-# checks: an `if`, `match` or block's arms (pendArmPins; an arm's place is handed
+# returnedPins -- what a returned value keeps locked, onto `dst` for the return
+# checks: an `if`, `match` or block's arms (pinsOfArms; an arm's place is handed
 # back only by a reference or a view), any other value's record -- a tail's
-# line has drained its own by the time the body's end checks it.
-pendReturnedPins: function {st: zenv.ZSymbolTable ast: Ast arg: argref argT: ztypes.tid} is {
+# line has drained its own by the time the body's end checks it. The side
+# channel holds the same until it goes (pendValueRecord).
+returnedPins: function {
+    st: zenv.ZSymbolTable
+    ast: Ast
+    arg: argref
+    argT: ztypes.tid
+    dst: List ztyping.PinPath
+} out pinread is {
     nid: arg.operation
     if (isControlValue :ast :nid) then {
         retBorrows: (isViewFamilyTid :ast :st tid: argT) or st.walk.currentReturnMarker.isReference
-        pendArmPins :st :ast vt: argT :nid borrowing: retBorrows writes: true verb: "return"
-        return
+        return (
+            readValuePins
+            :st
+            :ast
+            vt: argT
+            :nid
+            borrowing: retBorrows
+            writes: true
+            verb: "return"
+            :dst
+        )
     }
     pendValueRecord :st :nid
+    vp: valuePinsOf :st :nid
+    appendRecordPins :st :vp :dst
+    return (pinread owned: vp.owned marker: vp.marker)
 }
 
 # pendRootlessArgRecord -- an argument no variable roots -- a call's result read
@@ -39189,6 +39229,15 @@ pendArmPins: function {
     }
     setPendingOwned :st owned: ar.owned
     setPendingMarker :st marker: ar.marker
+}
+
+# recordRootAt -- the root of pin `i` of the record `vp`, zero past its end.
+recordRootAt: function {
+    st: zenv.ZSymbolTable.view vp: ztyping.valuepins i: u64
+} out zast.nameid is {
+    if i >= vp.len then return zast.nameid
+    p: st.walk.valuePins.get i: vp.start.u64 + i
+    return (p.path.get i: 0)
 }
 
 # appendRecordPins -- a copy of each pin of the record `vp` onto `dst`.
@@ -40861,7 +40910,13 @@ argTextOf: function {ast: Ast.view arg: argref dst: String} is {
 # hands back pinned to its source (`l.get i: 0`) -- and its type has something to
 # destroy; "" otherwise. Moving such a value gives its storage a second owner.
 borrowedValueText: function {
-    st: zenv.ZSymbolTable ast: Ast.view n: astnode.view vt: ztypes.tid
+    st: zenv.ZSymbolTable
+    ast: Ast.view
+    n: astnode.view
+    vt: ztypes.tid
+    # a value whose walk left pins and owns nothing is borrowed (its record);
+    # false where the caller judges those pins itself
+    byPins: true
 } out String is {
     none: String
     if vt.isZero then return none
@@ -40877,8 +40932,10 @@ borrowedValueText: function {
         exprTextOf :ast :n dst: txt
         return txt
     }
-    if st.walk.pendingPins.length == 0 then return none
-    if st.walk.pendingBorrowOwned then return none
+    if byPins.not then return none
+    vp: valuePinsOf :st nid: (zast.nodeIdOf :n)
+    if vp.len == 0 then return none
+    if vp.owned then return none
     exprTextOf :ast :n dst: txt
     return txt
 }
@@ -41068,9 +41125,14 @@ refuseBorrowedReassign: function {
 # an element a call hands back -- cannot be taken by a parameter
 # (refuseBorrowedMove).
 refuseBorrowedTake: function {
-    st: zenv.ZSymbolTable ast: Ast.view n: astnode.view vt: ztypes.tid
+    st: zenv.ZSymbolTable
+    ast: Ast.view
+    n: astnode.view
+    vt: ztypes.tid
+    # borrowedValueText's
+    byPins: true
 } is {
-    refuseBorrowedMove :st :ast :n :vt verb: "into a `.take` parameter"
+    refuseBorrowedMove :st :ast :n :vt verb: "into a `.take` parameter" :byPins
 }
 
 # refuseBorrowedMove -- a borrowed value (borrowedValueText) moved `verb` into
@@ -41081,8 +41143,10 @@ refuseBorrowedMove: function {
     n: astnode.view
     vt: ztypes.tid
     verb: StringView
+    # borrowedValueText's
+    byPins: true
 } out bool is {
-    bt: borrowedValueText :st :ast :n :vt
+    bt: borrowedValueText :st :ast :n :vt :byPins
     if bt.length == 0 then return false
     borrowedMoveError :st :ast :n text: bt.stringView :verb
     return true
@@ -42724,7 +42788,8 @@ checkComprehensionValue: function {
         )
     }
     errsBefore: st.typing.errors.length
-    refuseBorrowedTake :st :ast n: vn9 vt: elemT
+    # the element's own pins are judged below, as a lock the list cannot keep
+    refuseBorrowedTake :st :ast n: vn9 vt: elemT byPins: false
     if st.typing.errors.length == errsBefore when (isMarkedMove :ast n: vn9).not then {
         checkFieldMove :st :ast n: vn9
     }
@@ -50319,7 +50384,7 @@ bindBoxedArgument: function {
 } is {
     if (argIsTrivial :ast op: (ast.nodes.get i: arg.operation)).not then {
         hp: List ztyping.PinPath
-        takePendingPins :st dst: hp
+        appendRecordPins :st vp: (valuePinsOf :st nid: arg.operation) dst: hp
         (
             hoistArg
             :ast
@@ -51028,8 +51093,8 @@ refuseYieldedLocks: function {st: zenv.ZSymbolTable ast: Ast arg: argref argT: z
     }
     root: zast.nameid
     if held.length > 0 then root = pinRootAt pins: held i: 0
-    pending: st.walk.pendingPins.length > 0
-    if root.isZero when pending then root = pinRootAt pins: st.walk.pendingPins i: 0
+    yp: valuePinsOf :st nid: arg.operation
+    if root.isZero when yp.len > 0 then root = recordRootAt :st vp: yp i: 0
     if root.isZero then return
     rp: lockRootPhrase :st :ast nameId: root
     (
@@ -51482,8 +51547,16 @@ checkReturnedValue: function {
     }
     reportReturnedBareField :st :ast :arg
     recordReturnedOwnedLocal :st :ast :arg :argT
-    pendReturnedPins :st :ast :arg :argT
-    if (checkReturnRooting :st :ast :arg :argT).not then checkReturnCarries :st :ast :arg :argT
+    rpins: List ztyping.PinPath
+    rr: returnedPins :st :ast :arg :argT dst: rpins
+    if (checkReturnRooting :st :ast :arg :argT :rpins marker: rr.marker).not then (
+        checkReturnCarries
+        :st
+        :ast
+        :arg
+        :argT
+        :rpins
+    )
     checkReturnTypeMatch :st :ast :arg :argT
 }
 
@@ -58831,7 +58904,8 @@ recordDiscard: function {st: zenv.ZSymbolTable ast: Ast innerId: zast.nodeid} is
     if tt.isReferenceData.not then return
     # a result that keeps a borrow of its inputs is a reference to them, an
     # `outx` one a value of its own (checkAssignment's rule)
-    if st.walk.pendingPins.length > 0 when st.walk.pendingBorrowOwned.not then return
+    dp: valuePinsOf :st nid: innerId
+    if dp.len > 0 when dp.owned.not then return
     if (isViewFamilyTid :ast :st :tid) then return
     vid: st.reg.newVariable ztypeId: tid ownership: ztypes.zownership.owned
     st.reg.setVariableSynthOrigin id: vid origin: "discard".string
@@ -59911,8 +59985,16 @@ checkImplicitReturn: function {
     )
     reportReturnedBareField :st :ast :arg
     recordReturnedOwnedLocal :st :ast :arg :argT
-    pendReturnedPins :st :ast :arg :argT
-    if (checkReturnRooting :st :ast :arg :argT).not then checkReturnCarries :st :ast :arg :argT
+    rpins: List ztyping.PinPath
+    rr: returnedPins :st :ast :arg :argT dst: rpins
+    if (checkReturnRooting :st :ast :arg :argT :rpins marker: rr.marker).not then (
+        checkReturnCarries
+        :st
+        :ast
+        :arg
+        :argT
+        :rpins
+    )
     checkReturnTypeMatch :st :ast :arg :argT
     if (isAnyLiteralTid :st tid: argT) then stampGate :st nid: lsid tid: expR
     recordTailExit :st :ast lineId: lsid :valId
