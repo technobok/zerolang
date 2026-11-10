@@ -23785,9 +23785,6 @@ checkString: function {
         ) case stringchunk then null else {
             hasInterp = true
             checkInterpPart :st :unitDecl :ast :partId
-            # each part is appended before the next is evaluated, so what it
-            # keeps locked ends with it
-            drainPendingBorrow :st
         }
     }
     # the runtime value is always the SYSTEM String/StringView (the interp
@@ -23804,7 +23801,6 @@ checkString: function {
         setk: result
         stampGate :st nid: node.nid tid: setk
     }
-    drainPendingBorrow :st
     return result
 }
 
@@ -31055,7 +31051,6 @@ pinProjectionBorrow: function {
     if pbr.isZero then return
     rootVid: st.lookupVarId nameId: pbr
     if rootVid.some then {
-        drainPendingBorrow :st
         pinsPushOne :st nameId: pbr shared: false mutable: true
     }
 }
@@ -31894,10 +31889,9 @@ checkCastFromType: function {
     )
 }
 
-# pinTypedefBorrowSource -- a borrowed typedef locks its source EXCLUSIVELY. A
-# `.borrow` source left its marker's pin pending, and the binding takes the path
-# under it in its place; a source that is itself a borrowed view (a call's
-# result) already pinned what it reads.
+# pinTypedefBorrowSource -- a borrowed typedef locks its source EXCLUSIVELY: a
+# `.borrow` source by the path under the marker; a source that is itself a
+# borrowed view (a call's result) already pinned what it reads.
 pinTypedefBorrowSource: function {st: zenv.ZSymbolTable ast: Ast src: zast.nodeid} is {
     srcN: src
     so: ast.nodes.get i: src
@@ -31906,9 +31900,7 @@ pinTypedefBorrowSource: function {st: zenv.ZSymbolTable ast: Ast src: zast.nodei
     ) then {
         srcN = so.parent
     }
-    if srcN != src then {
-        drainPendingBorrow :st
-    } else if (valuePinsOf :st nid: src).len > 0 then return
+    if srcN == src when (valuePinsOf :st nid: src).len > 0 then return
     tup: ListVal zast.nameid
     appendValueTuple :ast n: (ast.nodes.get i: srcN) dst: tup
     pinsPush :st path: tup shared: false mutable: true
@@ -32856,7 +32848,6 @@ checkMemberProjections: function {
         if pjroot.length > 0 then {
             pjvo: st.lookupVarId nameId: (nameIdOf :ast name: pjroot.stringView)
             if pjvo.some then {
-                drainPendingBorrow :st
                 (
                     pinsPushOne
                     :st
@@ -35457,7 +35448,6 @@ checkMarkerMember: function {
             btup: ListVal zast.nameid
             appendValueTuple :ast n: (ast.nodes.get i: dp.parent) dst: btup
             if btup.length > 0 when (st.lookupVarId nameId: (btup.get i: 0)).none.not then {
-                drainPendingBorrow :st
                 pinsPush :st path: btup shared: true mutable: true
             }
         }
@@ -38784,9 +38774,6 @@ checkClauseBody: function {
     st: zenv.ZSymbolTable unitDecl: ztypes.declid ast: Ast clause: ifclauseref
 } out ztypes.tid is {
     if clause.nid.isZero then return ztypes.tid.zero
-    # a condition's borrow residue is dead once the condition value is
-    # consumed -- it must not leak into the block's argument lock seeds
-    drainPendingBorrow :st
     checkStatement :st :unitDecl :ast blockId: clause.statement
     return (lastStmtType :st :ast block: (ast.nodes.get i: clause.statement))
 }
@@ -39251,7 +39238,6 @@ readValuePins: function {
     }
     ap: List ztyping.PinPath
     ar: pinsOfArms :st :ast :vt :nid :borrowing :writes :verb dst: ap
-    drainPendingBorrow :st
     if ap.length > 0 then pinsTouched :st
     for each p: ap loop {
         (
@@ -39940,7 +39926,6 @@ checkAssignmentIn: function {
     asgn: asgnref
     grey: ztypes.declid
 } is {
-    drainPendingBorrow :st
     errsBefore: st.typing.errors.length
     # an `if` or a `match` that is the whole value runs as statements, so its
     # arms may leave
@@ -39960,7 +39945,6 @@ checkAssignmentIn: function {
     if vt.isZero.not then {
         bpins: List ztyping.PinPath
         bread: pinsOfValue :st :ast :vt nid: asgn.value borrowing: true verb: "bind" dst: bpins
-        drainPendingBorrow :st
         own: ztypes.zownership.owned
         # An `outx` result is pinned like a borrow but OWNED like a take, so
         # the pins must not demote it. `pendingBorrowOwned` tells them apart.
@@ -40631,17 +40615,12 @@ checkRepoint: function {
         )
         return
     }
-    drainPendingBorrow :st
     errR: st.typing.errors.length
     rvt: checkValueAt :st :unitDecl :ast nid: rasgn.value
-    if rvt.isZero or (st.typing.errors.length != errR) then {
-        drainPendingBorrow :st
-        return
-    }
+    if rvt.isZero or (st.typing.errors.length != errR) then return
     checkReassignedType :st :ast :rasgn :lvt :rvt
     bpins: List ztyping.PinPath
     rread: pinsOfValue :st :ast vt: rvt nid: rasgn.value borrowing: true verb: "bind" dst: bpins
-    drainPendingBorrow :st
     # an `outx` result is pinned and owned, unless it is a view -- the
     # reference itself, as its binding would be. A view a call hands back is a
     # value with no storage of its own, which `x` cannot refer to: it is kept
@@ -41604,7 +41583,6 @@ checkWith: function {
         # Valtype borrows are copies -- no lock.
         wpins: List ztyping.PinPath
         wread: pinsOfValue :st :ast :vt nid: withnode.value borrowing: false verb: "bind" dst: wpins
-        drainPendingBorrow :st
         pboW: wread.owned
         if wpins.length == 0 then {
             # a borrow pins the path it aliases; an auto-called member's result
@@ -41940,7 +41918,6 @@ checkDo: function {
     dbk: st.reg.ctlPlaceholder
     st.define nameId: zast.wellKnown.slot.wkBreak ztypeId: dbk
     brkMark: st.loopBreakTakes.length
-    drainPendingBorrow :st
     checkStatement :st :unitDecl :ast blockId: donode.statement
     result: lastStmtType :st :ast block: (ast.nodes.get i: donode.statement)
     broke: st.breakLeavesInnermost
@@ -45706,7 +45683,6 @@ pinConstructionResult: function {
     pool: zast.StringPool.view
     pins: (List ztyping.PinPath).view
 } is {
-    drainPendingBorrow :st
     adoptKeptTemps :st :pool :pins
     for each p: pins loop {
         pinsPush :st path: p.path shared: p.shared mutable: p.mutable
@@ -51093,7 +51069,6 @@ checkYieldCall: function {
         yvo
     ) case some then {
         if (st.reg.isReftypeOf tid: yvo) then {
-            drainPendingBorrow :st
             pinsPushOne :st nameId: yvn shared: false mutable: true
         }
         # the CALL wears the resumed type. A yield in expression position is
@@ -56934,7 +56909,6 @@ checkCaseArms: function {
     isSum: bool
     matchMarker: zenv.openpos
 } out ztypes.tid is {
-    drainPendingBorrow :st
     restMark: st.restoreMark
     targetName: String
     if isSum then {
