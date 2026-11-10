@@ -41915,6 +41915,11 @@ checkDo: function {
     donode: doref
 } out ztypes.tid is {
     doMarker: st.pushBlock node: donode.nid
+    # a `break` leaves part of the block unrun on some paths: a lock it
+    # releases is released on the paths that ran it only
+    doPath: blockHasBreak :ast n: (ast.nodes.get i: donode.statement)
+    if doPath then st.markPath marker: doMarker since: st.releaseMark
+    restMark: st.restoreMark
     st.openBreakScope
     dbk: st.reg.ctlPlaceholder
     st.define nameId: zast.wellKnown.slot.wkBreak ztypeId: dbk
@@ -41931,6 +41936,7 @@ checkDo: function {
     # a block used as a value answers whether it hands back a place
     if st.walk.stmtExprNid != donode.nid then recordControlPlaceLeaves :st :ast nid: donode.nid
     if broke then settleDoBreakTakes :st :brkMark :endTook
+    if doPath then settleRestoredLocks :st since: restMark
     result = wrapDoBreakValue :ast :st :unitDecl :donode :result
     if result.isZero.not then {
         setk: result
@@ -42965,7 +42971,11 @@ checkFor: function {
     # iteration. One scope for both put a header binding's destroy inside the
     # loop, which frees it and then iterates again over freed storage.
     # `popTo marker: forMarker` below pops this with it.
-    st.pushBlock node: fornode.body
+    bodyMarker: st.pushBlock node: fornode.body
+    # the body runs zero or more times: a lock it releases is released on its
+    # path alone
+    st.markPath marker: bodyMarker since: st.releaseMark
+    restMark: st.restoreMark
     # A `break` LEAVES THE BODY, NOT THE HEADER. It jumps to a label that sits
     # inside the header's C extent -- the header's destroys are emitted after
     # it -- so listing the header's locals at the break frees them twice.
@@ -43009,6 +43019,7 @@ checkFor: function {
     if k == zenv.divkind.none then reportLoopMoves :st :ast :fornode :run
     reportContinueMoves :st :ast :fornode :run
     relayBreakTakes :st :run
+    settleRestoredLocks :st since: restMark
     st.forgetOnceTakes :run
     # a statement loop discards its body's value, so it has no List to mint
     if (st.walk.stmtBlocks.has item: fornode.body) then return ztypes.tid
@@ -43353,6 +43364,11 @@ ArmTakes: class {
     refilled: IdSet ztypes.declid
     # how many reaching arms refilled each
     refillCounts: (IdMapV ztypes.declid v: u64)
+    # the lock rows of the scopes outside that reaching arms released, by id,
+    # and how many reaching arms released each: one every reaching arm of an
+    # exhaustive statement released stays released after it
+    relRows: ListVal ztypes.entryid
+    relCounts: ListVal u64
 }
 
 # settleArmTakes -- an arm's takes once its walk ends. A path that leaves the
@@ -43391,6 +43407,7 @@ settleArmTakes: function {
     }
     if k == zenv.divkind.none then {
         taken.reached = taken.reached + 1
+        noteArmReleases :st :taken
         # a local moved out before the statement that this arm refilled
         refilled: ListVal ztypes.declid
         st.refilledInInnermost into: refilled
@@ -43402,6 +43419,61 @@ settleArmTakes: function {
     return k
 }
 
+# noteArmReleases -- the lock rows of the scopes outside that this reaching
+# arm released, each counted once for the arm (ArmTakes.relRows). Its close
+# lays them again for the other paths; after the statement, one every reaching
+# arm released goes (invalidateTakenAcross).
+noteArmReleases: function {st: zenv.ZSymbolTable taken: ArmTakes} is {
+    rows: ListVal u64
+    st.innermostReleases into: rows
+    seen: ListVal ztypes.entryid
+    for each ri: rows loop {
+        id: st.rowEntryId i: ri
+        if (entryIdIn ids: seen :id).not then {
+            seen.append id
+            j: u64
+            found: false
+            for j < taken.relRows.length loop {
+                if (taken.relRows.get i: j) == id then {
+                    taken.relCounts.set i: j val: (taken.relCounts.get i: j) + 1
+                    found = true
+                }
+                j = j + 1
+            }
+            if found.not then {
+                taken.relRows.append id
+                taken.relCounts.append 1
+            }
+        }
+    }
+}
+
+# entryIdIn -- whether the arm counted the row `id` already: a row an inner
+# path laid again and the arm released once more is still one release.
+entryIdIn: function {ids: (ListVal ztypes.entryid).view id: ztypes.entryid} out bool is {
+    for each x: ids loop {
+        if x == id then return true
+    }
+    return false
+}
+
+# settleRestoredLocks -- once an `if`, a `match`, a loop or a `do` a `break`
+# left is done: a lock row one of its paths released, which that path's close
+# laid again for the others (restored from `since`), goes after all when its
+# holder is spent here -- moved out on some path, so nothing reads it again.
+settleRestoredLocks: function {st: zenv.ZSymbolTable since: u64} is {
+    any: false
+    k: since
+    for k < st.restoredRows.length loop {
+        id: st.restoredRows.get i: k
+        k = k + 1
+        if (st.releaseIfSpent :id) then any = true
+    }
+    # a temporary a line kept to the block's end that only those rows' holders
+    # held lets go in turn
+    if any then st.releaseUnheldTemps
+}
+
 # invalidateTakenAcross -- after the whole if, mark every local taken in some arm
 # as taken in the enclosing scope (it is consumed on at least one path, so a later
 # use is use-after-take), by declaration: moved when every arm reaching the end of
@@ -43411,6 +43483,19 @@ invalidateTakenAcross: function {st: zenv.ZSymbolTable decls: ArmTakes.view exha
         c: (decls.counts.get key: vd).or d: 0
         every: exhaustive and (decls.reached > 0) and (c == decls.reached)
         st.invalidateDeclAs declId: vd loc: takenHere maybe: every.not
+    }
+    # a lock every arm reaching the end of an exhaustive statement released is
+    # released after it: each arm's close laid it again for the paths that did
+    # not run that arm, and there are none
+    if exhaustive when decls.reached > 0 then {
+        ri: u64
+        for ri < decls.relRows.length loop {
+            if (decls.relCounts.get i: ri) == decls.reached then (
+                st.hideLockRowById
+                id: (decls.relRows.get i: ri)
+            )
+            ri = ri + 1
+        }
     }
     # a local moved out before it and refilled by every arm that reaches the end
     # of an exhaustive statement holds a value after it
@@ -43528,11 +43613,19 @@ checkIfClauses: function {
             continue
         }
         bm: st.pushBlock node: clause.nid
+        bmRel: st.releaseMark
         for each pf: accFacts loop applyPredFact :ast :st f: pf holds: false
         cfacts: List ArmPredFact
         cStart: st.entryMark
         checkClauseConditions :st :unitDecl :ast :clause factsOut: cfacts boolId: pBool
         cEnd: st.entryMark
+        # the arm runs on some paths only, so a lock its body releases is
+        # released on its path alone (markPath) -- unless the fold made it
+        # the only path. The first clause's conditions run on every path that
+        # reaches the statement; a later clause's only where those before it
+        # failed, which makes them the clause's own
+        if kC == 1 then bmRel = st.releaseMark
+        if skipDead.not then st.markPath marker: bm since: bmRel
         bt: checkClauseBody :st :unitDecl :ast :clause
         # what the conditions moved is not the arm's: they ran before it on
         # every path that reached this clause, the next clause's among them
@@ -44086,6 +44179,7 @@ checkIf: function {
     skipDead: false
     if fbr.known when (eagerAt :st declId: unitDecl).not then skipDead = true
     ifMarker: st.pushBlock node: ifnode.nid
+    restMark: st.restoreMark
     armEnds: st.openArmNarrowingEnds
     liveBefore: st.getLiveOwnedVars
     takenAcross: (
@@ -44095,6 +44189,8 @@ checkIf: function {
         reached: 0
         refilled: IdSet ztypes.declid
         refillCounts: (IdMapV ztypes.declid v: u64)
+        relRows: ListVal ztypes.entryid
+        relCounts: ListVal u64
     )
     nvId: stdTid :ast :st wk: zast.wellKnown.slot.tyNever
     nullId: stdTid :ast :st wk: zast.wellKnown.slot.tyNull
@@ -44131,6 +44227,7 @@ checkIf: function {
         if skipDead when ifnode.elseclause != fbr.stmt then elseDead = true
         if elseDead.not then {
             ebm: st.pushBlock node: ifnode.elseclause
+            if skipDead.not then st.markPath marker: ebm since: st.releaseMark
             for each ef: accFacts loop applyPredFact :ast :st f: ef holds: false
             walkBodyAt :st :unitDecl :ast bodyId: ifnode.elseclause
             et: lastStmtType :st :ast block: (ast.nodes.get i: ifnode.elseclause)
@@ -44174,6 +44271,7 @@ checkIf: function {
         postGuardRecord :st stmtNid: ifnode.nid subject: pgSubj fullTid: pgTid
     }
     invalidateTakenAcross :st decls: takenAcross exhaustive: hasElse
+    settleRestoredLocks :st since: restMark
     # after the guard facts: a write in an arm that completes wins over what a
     # diverging arm let the rest of the scope assume
     st.closeArmNarrowingEnds marker: armEnds
@@ -56354,6 +56452,8 @@ checkCaseClause: function {
     takenAcross: ArmTakes
     # the match folds to another arm: this one's body is not walked
     dead: bool
+    # the match folds to one arm: the one walked is the only path
+    folded: bool
 } out casearmfacts is {
     anyEmpty: false
     allDiverge: true
@@ -56377,6 +56477,8 @@ checkCaseClause: function {
         }
     }
     armMarker: st.pushBlock node: clause.nid
+    # a lock the arm releases is released on its path alone
+    if folded.not then st.markPath marker: armMarker since: st.releaseMark
     # Every arm of a sum subject must name one of its declared arms.
     armo: optionval.none ztypes.tid
     forceMemberOf :st :ast parentTypeId: (partialTemplateOf :st tid: subjT) nameId: armId
@@ -56662,6 +56764,14 @@ checkCaseElse: function {
     if (isEmptyBody :st :ast :unitDecl n: (ast.nodes.get i: casenode.elseclause)
     ) then anyEmpty = true
     elseMarker: st.pushBlock node: casenode.elseclause
+    # a lock the else releases is released on its path alone, unless the
+    # match folds to it
+    efb: st.typing.foldedBranchIn mono: st.typing.curMonoStamp nid: casenode.nid
+    if efb.known.not or (eagerAt :st declId: unitDecl) then (
+        st.markPath
+        marker: elseMarker
+        since: st.releaseMark
+    )
     if targetName.length > 0 when subjT.isZero.not then {
         for each en2: covered loop {
             (
@@ -56740,6 +56850,7 @@ walkCaseClauses: function {
                 :liveBefore
                 :takenAcross
                 dead: skipDead and (clause.statement != fb.stmt)
+                folded: skipDead
             )
             if cf.empty then anyEmpty = true
             if cf.diverges.not then allDiverge = false
@@ -56802,6 +56913,7 @@ checkCaseArms: function {
     matchMarker: zenv.openpos
 } out ztypes.tid is {
     drainPendingBorrow :st
+    restMark: st.restoreMark
     targetName: String
     if isSum then {
         tn: subjectAtomName :ast n: (ast.nodes.get i: casenode.subject)
@@ -56825,6 +56937,8 @@ checkCaseArms: function {
         reached: 0
         refilled: IdSet ztypes.declid
         refillCounts: (IdMapV ztypes.declid v: u64)
+        relRows: ListVal ztypes.entryid
+        relCounts: ListVal u64
     )
     st.pushBlock node: zast.nodeid
     if targetName.length > 0 then st.resetNarrowing nameId: (
@@ -56897,6 +57011,7 @@ checkCaseArms: function {
     st.closeArmNarrowingEnds marker: armEnds
     # a match is exhaustive, or refused (caseIsExhaustive)
     invalidateTakenAcross :st decls: takenAcross exhaustive: true
+    settleRestoredLocks :st since: restMark
     return result
 }
 
@@ -58983,8 +59098,11 @@ forwardTail: function {st: zenv.ZSymbolTable ast: Ast.view innerId: zast.nodeid}
 
 # noteDropReleasedTemps -- a `.drop` released its binding's holds: an unnamed
 # local a binding held that nothing holds now dies at the drop, for a
-# temporary belongs to the borrows of it and lives no longer than they do.
+# temporary belongs to the borrows of it and lives no longer than they do. A
+# drop in an arm or a loop body frees it on that path only: it stays held for
+# the other paths, where a later release frees it in turn.
 noteDropReleasedTemps: function {st: zenv.ZSymbolTable dropNid: zast.nodeid} is {
+    onPath: st.inPath
     kept: ListVal zast.nameid
     for st.walk.heldTemps.length > 0 loop {
         nm: st.walk.heldTemps.pop
@@ -58994,6 +59112,7 @@ noteDropReleasedTemps: function {st: zenv.ZSymbolTable dropNid: zast.nodeid} is 
             kept.append nm
         } else {
             st.typing.dropTemps.append (ztyping.droptemp :dropNid temp: nm)
+            if onPath then kept.append nm
         }
     }
     for kept.length > 0 loop st.walk.heldTemps.append kept.pop

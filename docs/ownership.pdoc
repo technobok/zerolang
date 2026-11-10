@@ -1323,6 +1323,33 @@ holds on other variables are
 released. If the variable is borrowed, the borrow ends. If the variable is
 owned, it is destroyed (reftypes) or forgotten (valtypes).
 
+#---: Lock Release on One Path
+
+A #~".drop", a #~".take" or a reassignment of a variable releases the locks the
+variable holds. When the release is in an arm of an #~"if" or a #~"match", or
+in the body of a loop, it releases them on that path only. The other arms still
+find the locks held, and so does the code after the statement while the
+variable can still be read there:
+
+#code language=zerolang expect=E0200: """
+  Box: class { name: StringView }
+
+  pick: function {k: bool} is {
+      s: "abc".string
+      w: Box name: s.stringView
+      if k then {
+          w.drop
+      } else {
+          s = "zzz".string      # error: on this path 'w' still holds a lock on 's'
+          print "\{w.name}"
+      }
+  }
+  """
+
+After the statement, the locks end when the variable was moved out on some
+path, because the program cannot read it again. They also end when every arm
+that reaches the end of the statement released them.
+
 #---: Temporary Expressions in Lock Context
 
 A value no name holds -- a call's result -- is a #_+"temporary". An ownership

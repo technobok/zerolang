@@ -1,0 +1,146 @@
+# The twins of errors/arm_release_holds_on_its_path: the holder is released on
+# every path before the source is written -- dropped after the statement, or
+# moved out in the arm (nothing reads it after), or reassigned in every arm --
+# so the write runs. Each is called down both paths.
+LfBox: class {
+    name: StringView
+}
+
+LfSide: variant {
+    left: null
+    right: null
+}
+
+lfSide: function {k: bool} out LfSide is {
+    if k then return LfSide.left
+    return LfSide.right
+}
+
+thenWithTakeWriteAfter: function {k: bool} is {
+    s: "abc".string
+    w: LfBox name: s.stringView
+    if k then {
+        with v: w.take do print "with \{v.name}"
+    }
+    s = "zzz".string
+    print "after \{s}"
+}
+
+thenBindTakeElseDrop: function {k: bool} is {
+    s: "abc".string
+    w: LfBox name: s.stringView
+    if k then {
+        v: w.take
+        print "bind \{v.name}"
+    } else {
+        print "else \{w.name}"
+        w.drop
+    }
+    s = "zzz".string
+    print "after \{s}"
+}
+
+thenDropWriteAfter: function {k: bool} is {
+    s: "abc".string
+    w: LfBox name: s.stringView
+    if k then w.drop
+    s = "zzz".string
+    print "after \{s}"
+}
+
+thenReassignDropAfter: function {k: bool} is {
+    s: "abc".string
+    o: "ooo".string
+    w: LfBox name: s.stringView
+    if k then {
+        w = LfBox name: o.stringView
+    } else {
+        print "else \{w.name}"
+    }
+    print "w \{w.name}"
+    w.drop
+    s = "zzz".string
+    print "after \{s}"
+}
+
+reassignEveryArmWriteAfter: function {k: bool} is {
+    s: "abc".string
+    a: "aaa".string
+    b: "bbb".string
+    w: LfBox name: s.stringView
+    if k then {
+        w = LfBox name: a.stringView
+    } else {
+        w = LfBox name: b.stringView
+    }
+    s = "zzz".string
+    print "w \{w.name} \{s}"
+}
+
+matchArmDropOtherArmDrop: function {k: bool} is {
+    s: "abc".string
+    w: LfBox name: s.stringView
+    match (lfSide :k) case left then {
+        w.drop
+    } case right then {
+        print "right \{w.name}"
+        w.drop
+    }
+    s = "zzz".string
+    print "after \{s}"
+}
+
+loopReassignDropAfter: function {k: bool} is {
+    s: "abc".string
+    o: "ooo".string
+    w: LfBox name: s.stringView
+    none: ListVal i64
+    if k then none.append 1
+    for each q: none loop w = LfBox name: o.stringView
+    print "w \{w.name}"
+    w.drop
+    s = "zzz".string
+    print "after \{s}"
+}
+
+viewDropInArmWriteAfter: function {k: bool} is {
+    s: "abc".string
+    v: s.stringView
+    if k then {
+        print "v \{v}"
+        v.drop
+    }
+    s = "zzz".string
+    print "after \{s}"
+}
+
+innerBindTakeWriteAfter: function is {
+    s: "abc".string
+    w: LfBox name: s.stringView
+    {
+        v: w.take
+        print "inner \{v.name}"
+    }
+    s = "zzz".string
+    print "after \{s}"
+}
+
+main: function is {
+    thenWithTakeWriteAfter k: true
+    thenWithTakeWriteAfter k: false
+    thenBindTakeElseDrop k: true
+    thenBindTakeElseDrop k: false
+    thenDropWriteAfter k: true
+    thenDropWriteAfter k: false
+    thenReassignDropAfter k: true
+    thenReassignDropAfter k: false
+    reassignEveryArmWriteAfter k: true
+    reassignEveryArmWriteAfter k: false
+    matchArmDropOtherArmDrop k: true
+    matchArmDropOtherArmDrop k: false
+    loopReassignDropAfter k: true
+    loopReassignDropAfter k: false
+    viewDropInArmWriteAfter k: true
+    viewDropInArmWriteAfter k: false
+    innerBindTakeWriteAfter
+}

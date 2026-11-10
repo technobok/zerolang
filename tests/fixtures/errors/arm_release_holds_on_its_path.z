@@ -1,0 +1,135 @@
+# A lock its holder releases inside an arm or a loop body -- a drop, a take, a
+# reassignment -- is released on that path only. The sibling arm, and the code
+# after the statement when the holder lives on, still find the source locked:
+# writing it there and reading the holder after would read freed memory. Each
+# refusal names the holder, `w`.
+LfBox: class {
+    name: StringView
+}
+
+LfSide: variant {
+    left: null
+    right: null
+}
+
+lfSide: function {k: bool} out LfSide is {
+    if k then return LfSide.left
+    return LfSide.right
+}
+
+thenWithTakeElseWrite: function {k: bool} is {
+    s: "abc".string
+    w: LfBox name: s.stringView
+    if k then {
+        with v: w.take do print "\{v.name}"
+    } else {
+        s = "zzzzzzzzzzzzzzzz".string
+        print "\{w.name}"
+    }
+}
+
+thenBindTakeElseWrite: function {k: bool} is {
+    s: "abc".string
+    w: LfBox name: s.stringView
+    if k then {
+        v: w.take
+        print "\{v.name}"
+    } else {
+        s = "zzzzzzzzzzzzzzzz".string
+        print "\{w.name}"
+    }
+}
+
+thenDropElseWrite: function {k: bool} is {
+    s: "abc".string
+    w: LfBox name: s.stringView
+    if k then {
+        w.drop
+    } else {
+        s = "zzzzzzzzzzzzzzzz".string
+        print "\{w.name}"
+    }
+}
+
+thenReassignElseWrite: function {k: bool} is {
+    s: "abc".string
+    o: "ooo".string
+    w: LfBox name: s.stringView
+    if k then {
+        w = LfBox name: o.stringView
+    } else {
+        s = "zzzzzzzzzzzzzzzz".string
+        print "\{w.name}"
+    }
+}
+
+thenReassignWriteAfter: function {k: bool} is {
+    s: "abc".string
+    o: "ooo".string
+    w: LfBox name: s.stringView
+    if k then w = LfBox name: o.stringView
+    s = "zzzzzzzzzzzzzzzz".string
+    print "\{w.name}"
+}
+
+matchArmDropOtherArmWrite: function {k: bool} is {
+    s: "abc".string
+    w: LfBox name: s.stringView
+    match (lfSide :k) case left then {
+        w.drop
+    } case right then {
+        s = "zzzzzzzzzzzzzzzz".string
+        print "\{w.name}"
+    }
+}
+
+loopReassignWriteAfter: function {k: bool} is {
+    s: "abc".string
+    o: "ooo".string
+    w: LfBox name: s.stringView
+    none: ListVal i64
+    if k then none.append 1
+    for each q: none loop w = LfBox name: o.stringView
+    s = "zzzzzzzzzzzzzzzz".string
+    print "\{w.name}"
+}
+
+whileReassignWriteAfter: function {k: bool} is {
+    s: "abc".string
+    o: "ooo".string
+    w: LfBox name: s.stringView
+    n: 0
+    if k then n = 1
+    for n > 0 loop {
+        w = LfBox name: o.stringView
+        n = n - 1
+    }
+    s = "zzzzzzzzzzzzzzzz".string
+    print "\{w.name}"
+}
+
+thenMoveElseDropTarget: function {k: bool} is {
+    s: "abc".string
+    o: "ooo".string
+    v: LfBox name: o.stringView
+    w: LfBox name: s.stringView
+    if k then {
+        v = w.take
+    } else {
+        v.drop
+        s = "zzzzzzzzzzzzzzzz".string
+        print "\{w.name}"
+    }
+}
+
+main: function is {
+    thenWithTakeElseWrite k: false
+    thenBindTakeElseWrite k: false
+    thenDropElseWrite k: false
+    thenReassignElseWrite k: false
+    thenReassignWriteAfter k: false
+    matchArmDropOtherArmWrite k: false
+    loopReassignWriteAfter k: false
+    whileReassignWriteAfter k: false
+    thenMoveElseDropTarget k: false
+}

@@ -11,7 +11,12 @@
 # a lock, so its twin is the same cell made by the static producer, whose view
 # holds none. The generator itself says why a cell it cannot write is not
 # written (the manifest's NA); the table's `lockflow` rows give the verdict of
-# every written form.
+# every written form. The RELEASE tier ends the HOLDER instead, inside an arm or
+# a loop body: a lock it releases there is released on that path only, so the
+# sibling arm, and the code after when the holder lives on, still find the
+# source locked; its cells cross a producer and place with the statement (an
+# ARM form, on the carrier axis), the position of the write (on the
+# destination axis) and the release (on the sink axis).
 # ---------------- the axes ----------------
 
 # lfpiece -- one top-level declaration a cell names; a program writes each
@@ -166,7 +171,7 @@ lfproducer: data {
 }
 
 lfProducers: list {
-    (lfproducer key: "stringview" make: "@SRC.stringView")
+    (lfproducer key: "stringview" make: "@SRC.stringView" tags: " sv rel ")
     (lfproducer key: "substring" make: "(@SRC.substring from: 0 to: 3)" tags: " sv sinks ")
     (lfproducer key: "userfn" make: "(lfFirst s: @SRC)" pieces: "lfFirst")
     (lfproducer key: "genericfn" make: "(lfGFirst s: @SRC)" pieces: "lfGFirst")
@@ -181,7 +186,7 @@ lfProducers: list {
         initial: "(LfBox name: \"init\")"
         method: ""
         container: "List LfBox"
-        tags: " owned "
+        tags: " owned rel "
         pieces: "LfBox"
     )
     (
@@ -193,7 +198,7 @@ lfProducers: list {
         initial: "(LfBox name: \"init\")"
         method: ""
         container: "List LfBox"
-        tags: " owned "
+        tags: " owned rel "
         pieces: "LfBox lfMk"
     )
     (
@@ -472,6 +477,127 @@ lfDests: list {
 # sinkOf (reassign, a mutating write, a move, a drop)
 lfSinks: list { "reassign" "mutate" "take" "drop" }
 
+# lfarm -- the release tier's statement: what it needs first (`before`) and its
+# shape over the releasing arm `@A` and the sibling arm `@B`. `sibling`: it has
+# one; `loop`: a body that runs zero or more times, which may not move a local
+# from outside it
+lfarm: data {
+    key: ""
+    before: ""
+    shape: ""
+    tags: ""
+}
+
+lfArms: list {
+    (
+        lfarm
+        key: "ifthen"
+        before: "k: lfFlag"
+        shape: "if k then {\n        @A\n    } else {\n        @B\n    }"
+        tags: " sibling "
+    )
+    (
+        lfarm
+        key: "ifelse"
+        before: "k: lfFlag"
+        shape: "if k then {\n        @B\n    } else {\n        @A\n    }"
+        tags: " sibling "
+    )
+    (lfarm key: "ifonly" before: "k: lfFlag" shape: "if k then {\n        @A\n    }")
+    (
+        lfarm
+        key: "match"
+        before: "kv: lfSide"
+        shape: "match (kv) case left then {\n        @A\n    } case right then {\n        @B\n    }"
+        tags: " sibling "
+    )
+    (
+        lfarm
+        key: "foreach"
+        before: "one: ListVal i64\n    one.append 1"
+        shape: "for each q: one loop {\n        @A\n    }"
+        tags: " loop "
+    )
+    (
+        lfarm
+        key: "while"
+        before: "n: 1"
+        shape: "for n > 0 loop {\n        @A\n        n = n - 1\n    }"
+        tags: " loop "
+    )
+    (lfarm key: "dobreak" before: "k: lfFlag" shape: "{\n        if k then break\n        @A\n    }"
+    )
+}
+
+# lfrelpos -- where the release tier writes the source: in the sibling arm,
+# after the statement, or in the releasing arm after the release. Each form's
+# releasing arm (`a`), sibling arm (`b`) and code after, over the release @REL,
+# the write @SINK, the read @RD[x] and @KILL, the end of a holder that lives on
+# after the statement; `sibling`: only a statement with a sibling arm has it
+lfrelpos: data {
+    key: ""
+    tags: ""
+    a: ""
+    b: ""
+    after: ""
+    ta: ""
+    tb: ""
+    tafter: ""
+}
+
+lfRelPositions: list {
+    (
+        lfrelpos
+        key: "sibling"
+        tags: " sibling "
+        a: "@REL"
+        b: "@SINK\n        r = r + @RD[v]"
+        after: "return 7"
+        ta: "@REL"
+        tb: "r = r + @RD[v]\n        v.drop\n        @SINK"
+        tafter: "return 7"
+    )
+    (
+        lfrelpos
+        key: "after"
+        a: "@REL"
+        b: "r = r + @RD[v]"
+        after: "@SINK\n    r = r + @RD[v]\n    return 7"
+        ta: "@REL"
+        tb: "r = r + @RD[v]"
+        tafter: "@KILL@SINK\n    return 7"
+    )
+    (
+        lfrelpos
+        key: "within"
+        a: "@REL\n        @SINK"
+        b: "r = r + @RD[v]"
+        after: "return 7"
+        ta: "r = r + @RD[v]\n        @REL\n        @SINK"
+        tb: "r = r + @RD[v]"
+        tafter: "return 7"
+    )
+}
+
+# lfrelease -- how the release tier's holder `v` lets go of what it views: the
+# statement, at an arm's depth (`rel`), and what ends the holder after the
+# statement when the release leaves it alive (`kill`). `take`: only an owned
+# value is taken; `spends`: the holder is moved out, so nothing reads it after;
+# `initial`: the producer must offer a second value
+lfrelease: data {
+    key: ""
+    rel: ""
+    kill: ""
+    tags: ""
+}
+
+lfReleases: list {
+    (lfrelease key: "drop" rel: "v.drop" tags: " spends ")
+    (lfrelease key: "withtake" rel: "with u: v.take do r = r + @RD[u]" tags: " take spends ")
+    (lfrelease key: "bindtake" rel: "u: v.take\n        r = r + @RD[u]" tags: " take spends ")
+    (lfrelease key: "reassign" rel: "v = @INIT" kill: "v.drop\n    " tags: " initial ")
+}
+
 # ---------------- cells ----------------
 
 # lfWord -- the words this subunit reads off its tables and the matrix table,
@@ -482,6 +608,7 @@ lfWord: list {
     wTwin: "twin"
     wFlow: "flow"
     wSink: "sink"
+    wRelease: "release"
     wLocal: "local"
     wParam: "param"
     wHost: "host"
@@ -497,8 +624,10 @@ lfWord: list {
     wTail: "tail"
 } out staticlist StringView
 
-# LfCell -- one cell: its tier (1 flow, 2 sink), its axis values by index (the
-# sink is 0 in the flow tier), why it cannot be written ("" -- it can), the
+# LfCell -- one cell: its tier (1 flow, 2 sink, 3 release), its axis values by
+# index (the sink is 0 in the flow tier; the release tier's carrier, destination
+# and sink index lfArms, lfRelPositions and lfReleases), why it cannot be
+# written ("" -- it can), the
 # outcome of each form and the row that set it (-1 -- the default)
 LfCell: class {
     tier: u64
@@ -593,7 +722,7 @@ lfNeedMet: function {words: zast.Vocab.view d: lfdest p: lfproducer st: lfsource
 # the place's own write in the flow tier, sink `s` in the sink tier; "" -- the
 # place cannot end its source that way
 lfSinkText: function {words: zast.Vocab.view tier: u64 pl: lfplace s: u64} out String is {
-    if tier == 1 then return pl.write.string
+    if tier != 2 then return pl.write.string
     sw: words.slotOf text: (lfSinks.get i: s).stringView
     kw: words.slotOf text: pl.kind.stringView
     if sw == lfWord.slot.wReassign then {
@@ -617,9 +746,49 @@ lfSinkText: function {words: zast.Vocab.view tier: u64 pl: lfplace s: u64} out S
 # lfWhyNot -- why a cell's forms cannot be written, "" when they can: what the
 # carrier, the destination and the place each demand of the producer
 lfWhyNot: function {words: zast.Vocab.view cl: LfCell.view} out String is {
+    if cl.tier == 3 then return (lfReleaseWhyNot :words :cl)
     why: lfCarrierWhyNot :cl
     if why.length > 0 then return why
     return (lfPlaceWhyNot :words :cl)
+}
+
+# lfReleaseWhyNot -- what a release tier cell's statement, position and release
+# demand of the producer and the place
+lfReleaseWhyNot: function {words: zast.Vocab.view cl: LfCell.view} out String is {
+    p: lfProducers.get i: cl.p
+    arm: lfArms.get i: cl.c
+    pos: lfRelPositions.get i: cl.d
+    rl: lfReleases.get i: cl.s
+    if (lfHas tags: pos.tags.stringView tag: "sibling") when (
+        lfHas
+        tags: arm.tags.stringView
+        tag: "sibling"
+    ).not then return "the statement has no sibling arm".string
+    if (lfHas tags: rl.tags.stringView tag: "take") when (
+        lfHas
+        tags: p.tags.stringView
+        tag: "owned"
+    ).not then return "only an owned value is taken".string
+    if (lfHas tags: arm.tags.stringView tag: "loop") when (
+        lfHas
+        tags: rl.tags.stringView
+        tag: "spends"
+    ) then return "a loop body may not move a local from outside it".string
+    if (lfHas tags: rl.tags.stringView tag: "initial") when (
+        p.initial.length == 0
+    ) then return "the producer offers no second value".string
+    st: lfSources.get i: (lfSourceIndex pi: cl.p)
+    pl: lfPlaces.get i: cl.pl
+    kw: words.slotOf text: pl.kind.stringView
+    if kw == lfWord.slot.wParam when st.mutate.length == 0 then {
+        return "the source has no write through a parameter".string
+    }
+    if (lfHas tags: pl.tags.stringView tag: "element") when (
+        lfHas
+        tags: st.tags.stringView
+        tag: "listable"
+    ).not then return "a list element is a String or a class".string
+    return "".string
 }
 
 # lfCarrierWhyNot -- what the carrier and the destination demand of the producer
@@ -786,6 +955,30 @@ lfBody: function {
     return b8
 }
 
+# lfReleaseBody -- form `twin` of release tier cell `cl` as a cell's body: the
+# holder `v` bound to the view `e`, the statement with the position's arms, the
+# code after, the release and the write `sink` filled in
+lfReleaseBody: function {
+    cl: LfCell.view twin: bool p: lfproducer env: LfEnv.view e: StringView sink: StringView
+} out String is {
+    arm: lfArms.get i: cl.c
+    pos: lfRelPositions.get i: cl.d
+    rl: lfReleases.get i: cl.s
+    a: if twin then pos.ta.stringView else pos.a.stringView
+    b: if twin then pos.tb.stringView else pos.b.stringView
+    after: if twin then pos.tafter.stringView else pos.after.stringView
+    s0: arm.shape.replace needle: "@A" replacement: a
+    s1: s0.stringView.replace needle: "@B" replacement: b
+    body: "r: 0\n    v: @E\n    \{arm.before}\n    \{s1}\n    \{after}"
+    b0: body.stringView.replace needle: "@REL" replacement: rl.rel.stringView
+    b1: b0.stringView.replace needle: "@KILL" replacement: rl.kill.stringView
+    b2: b1.stringView.replace needle: "@SINK" replacement: sink
+    b3: b2.stringView.replace needle: "@E" replacement: e
+    b4: lfExpand text: b3.stringView key: "@RD" tmpl: p.rd.stringView
+    b5: lfFill t: b4.stringView :env
+    return (b5.stringView.replace needle: "@SRC" replacement: env.src)
+}
+
 # lfCap -- `k` with its first byte upper case
 lfCap: function {k: StringView} out String is {
     buf: (k.substring from: 0 to: 1).toUpperAscii
@@ -796,11 +989,11 @@ lfCap: function {k: StringView} out String is {
 # lfCellName -- the function a cell's form is: `lf`, each axis value, H or T
 lfCellName: function {cl: LfCell.view twin: bool} out String is {
     buf: "lf".string
-    buf.append (lfCap k: (lfProducers.get i: cl.p).key.stringView)
-    buf.append (lfCap k: (lfCarriers.get i: cl.c).key.stringView)
-    buf.append (lfCap k: (lfPlaces.get i: cl.pl).key.stringView)
-    buf.append (lfCap k: (lfDests.get i: cl.d).key.stringView)
-    if cl.tier == 2 then buf.append (lfCap k: (lfSinks.get i: cl.s).stringView)
+    buf.append (lfCap k: (lfAxisKey tier: cl.tier axis: 0 k: cl.p).stringView)
+    buf.append (lfCap k: (lfAxisKey tier: cl.tier axis: 1 k: cl.c).stringView)
+    buf.append (lfCap k: (lfAxisKey tier: cl.tier axis: 2 k: cl.pl).stringView)
+    buf.append (lfCap k: (lfAxisKey tier: cl.tier axis: 3 k: cl.d).stringView)
+    if cl.tier != 1 then buf.append (lfCap k: (lfAxisKey tier: cl.tier axis: 4 k: cl.s).stringView)
     if twin then {
         buf.append "T"
     } else buf.append "H"
@@ -827,16 +1020,21 @@ lfCellText: function {
     words: zast.Vocab.view cl: LfCell.view twin: bool n: StringView
 } out LfText is {
     p: lfProducers.get i: cl.p
-    c: lfCarriers.get i: cl.c
     pl: lfPlaces.get i: cl.pl
-    d: lfDests.get i: cl.d
     st: lfSources.get i: (lfSourceIndex pi: cl.p)
     env: lfEnvOf :cl
     madeOf: p.make.replace needle: "@SRC" replacement: pl.src.stringView
-    e: c.carry.replace needle: "@E" replacement: madeOf
-    pre: c.before.replace needle: "@E" replacement: madeOf
     sink: lfSinkText :words tier: cl.tier :pl s: cl.s
     t: LfText name: (lfCellName :cl :twin) helper: String method: String fn: String
+    if cl.tier == 3 then {
+        rbody: lfReleaseBody :cl :twin :p :env e: madeOf.stringView sink: sink.stringView
+        lfPlaceText :words :n :pl :st :env body: rbody.stringView :t
+        return t
+    }
+    c: lfCarriers.get i: cl.c
+    d: lfDests.get i: cl.d
+    e: c.carry.replace needle: "@E" replacement: madeOf
+    pre: c.before.replace needle: "@E" replacement: madeOf
     if d.special.length > 0 then {
         (
             lfSpecialText
@@ -857,6 +1055,22 @@ lfCellText: function {
     }
     tmpl: if twin then d.twin.stringView else d.hazard.stringView
     body: lfBody :tmpl :p :env pre: pre.stringView e: e.stringView sink: sink.stringView
+    lfPlaceText :words :n :pl :st :env body: body.stringView :t
+    return t
+}
+
+# lfPlaceText -- a cell's body placed where its source lives: the function
+# itself (a local), a helper taking the source (a parameter), or a method of
+# LfHost, whose field it is
+lfPlaceText: function {
+    words: zast.Vocab.view
+    n: StringView
+    pl: lfplace
+    st: lfsource
+    env: LfEnv.view
+    body: StringView
+    t: LfText
+} is {
     kw: words.slotOf text: pl.kind.stringView
     if kw == lfWord.slot.wLocal then {
         setup: lfFill t: pl.setup.stringView :env
@@ -867,11 +1081,10 @@ lfCellText: function {
     } else {
         t.method = "    run\{n}: function {t: this.borrow} out i64 is {\n        \{(
             lfIndent
-            body: body.stringView
+            :body
         )}\n    }\n"
         t.fn = "\{t.name}: function out i64 is {\n    o: LfHost s: \{st.mk}\n    return o.run\{n}\n}\n"
     }
-    return t
 }
 
 # lfSpecialText -- a value that leaves a helper (return, tail): its source is
@@ -925,12 +1138,15 @@ lfCellPieces: function {cl: LfCell.view used: ListVal bool} is {
     names.append " "
     names.append (lfProducers.get i: cl.p).pieces.stringView
     names.append " "
-    names.append (lfCarriers.get i: cl.c).pieces.stringView
-    names.append " "
     names.append (lfPlaces.get i: cl.pl).pieces.stringView
     names.append " "
-    names.append (lfDests.get i: cl.d).pieces.stringView
-    names.append " "
+    # the release tier's statements and releases name no piece
+    if cl.tier != 3 then {
+        names.append (lfCarriers.get i: cl.c).pieces.stringView
+        names.append " "
+        names.append (lfDests.get i: cl.d).pieces.stringView
+        names.append " "
+    }
     pi: u64
     for pi < lfPieces.length loop {
         if (lfHas tags: names.stringView tag: (lfPieces.get i: pi).key.stringView) then (
@@ -991,58 +1207,74 @@ lfCheckRow: function {words: zast.Vocab.view row: LfRow.view} is {
     if fw != lfWord.slot.wAny when fw != lfWord.slot.wHazard when fw != lfWord.slot.wTwin then {
         fail msg: "\{row.where}: form '\{row.form}' is not *, hazard or twin"
     }
-    if tw != lfWord.slot.wAny when tw != lfWord.slot.wFlow when tw != lfWord.slot.wSink then {
-        fail msg: "\{row.where}: tier '\{row.tier}' is not *, flow or sink"
+    if tw != lfWord.slot.wAny when tw != lfWord.slot.wFlow when tw != lfWord.slot.wSink when (
+        tw != lfWord.slot.wRelease
+    ) then {
+        fail msg: "\{row.where}: tier '\{row.tier}' is not *, flow, sink or release"
     }
-    lfCheckAxis :words :row sel: row.producer.stringView axis: 0
-    lfCheckAxis :words :row sel: row.carrier.stringView axis: 1
-    lfCheckAxis :words :row sel: row.place.stringView axis: 2
-    lfCheckAxis :words :row sel: row.destination.stringView axis: 3
-    lfCheckAxis :words :row sel: row.sink.stringView axis: 4
+    # a release row names the release tier's statements, positions and releases
+    tier: if tw == lfWord.slot.wRelease then 3.u64 else 1.u64
+    lfCheckAxis :words :row :tier sel: row.producer.stringView axis: 0
+    lfCheckAxis :words :row :tier sel: row.carrier.stringView axis: 1
+    lfCheckAxis :words :row :tier sel: row.place.stringView axis: 2
+    lfCheckAxis :words :row :tier sel: row.destination.stringView axis: 3
+    lfCheckAxis :words :row :tier sel: row.sink.stringView axis: 4
 }
 
 # lfCheckAxis -- selector `sel` names at least one value of axis `axis`
-lfCheckAxis: function {words: zast.Vocab.view row: LfRow.view sel: StringView axis: u64} is {
-    n: lfAxisLength :axis
+lfCheckAxis: function {
+    words: zast.Vocab.view row: LfRow.view tier: u64 sel: StringView axis: u64
+} is {
+    n: lfAxisLength :tier :axis
     k: u64
     for k < n loop {
-        if (
-            lfSelects
-            :words
-            :sel
-            key: (lfAxisKey :axis :k).stringView
-            tags: (lfAxisTags :axis :k).stringView
-        ) then return
+        if (lfAxisSelects :words :sel :tier :axis :k) then return
         k = k + 1
     }
     fail msg: "\{row.where}: selector '\{sel}' names nothing on its axis"
 }
 
-# lfAxisLength -- how many values axis `axis` has: 0 producer, 1 carrier,
-# 2 place, 3 destination, 4 sink
-lfAxisLength: function {axis: u64} out u64 is {
+# lfAxisLength -- how many values axis `axis` has in tier `tier`: 0 producer,
+# 1 carrier, 2 place, 3 destination, 4 sink; the release tier's carrier,
+# destination and sink are its statements, positions and releases
+lfAxisLength: function {tier: u64 axis: u64} out u64 is {
     if axis == 0 then return lfProducers.length
-    if axis == 1 then return lfCarriers.length
     if axis == 2 then return lfPlaces.length
+    if tier == 3 then {
+        if axis == 1 then return lfArms.length
+        if axis == 3 then return lfRelPositions.length
+        return lfReleases.length
+    }
+    if axis == 1 then return lfCarriers.length
     if axis == 3 then return lfDests.length
     return lfSinks.length
 }
 
 # lfAxisKey -- the key of value `k` of axis `axis` (axes as lfAxisLength numbers
 # them)
-lfAxisKey: function {axis: u64 k: u64} out String is {
+lfAxisKey: function {tier: u64 axis: u64 k: u64} out String is {
     if axis == 0 then return (lfProducers.get i: k).key.string
-    if axis == 1 then return (lfCarriers.get i: k).key.string
     if axis == 2 then return (lfPlaces.get i: k).key.string
+    if tier == 3 then {
+        if axis == 1 then return (lfArms.get i: k).key.string
+        if axis == 3 then return (lfRelPositions.get i: k).key.string
+        return (lfReleases.get i: k).key.string
+    }
+    if axis == 1 then return (lfCarriers.get i: k).key.string
     if axis == 3 then return (lfDests.get i: k).key.string
     return (lfSinks.get i: k).string
 }
 
 # lfAxisTags -- the tags of value `k` of axis `axis`; a sink has none
-lfAxisTags: function {axis: u64 k: u64} out String is {
+lfAxisTags: function {tier: u64 axis: u64 k: u64} out String is {
     if axis == 0 then return (lfProducers.get i: k).tags.string
-    if axis == 1 then return (lfCarriers.get i: k).tags.string
     if axis == 2 then return (lfPlaces.get i: k).tags.string
+    if tier == 3 then {
+        if axis == 1 then return (lfArms.get i: k).tags.string
+        if axis == 3 then return (lfRelPositions.get i: k).tags.string
+        return (lfReleases.get i: k).tags.string
+    }
+    if axis == 1 then return (lfCarriers.get i: k).tags.string
     if axis == 3 then return (lfDests.get i: k).tags.string
     return "".string
 }
@@ -1069,53 +1301,49 @@ lfSelects: function {
 lfRowSelects: function {
     words: zast.Vocab.view r: LfRow.view cl: LfCell.view twin: bool
 } out bool is {
+    if (lfRowTierFits :words :r :cl :twin).not then return false
+    if (lfAxisSelects :words sel: r.producer.stringView tier: cl.tier axis: 0 k: cl.p
+    ).not then return false
+    if (lfAxisSelects :words sel: r.carrier.stringView tier: cl.tier axis: 1 k: cl.c
+    ).not then return false
+    if (lfAxisSelects :words sel: r.place.stringView tier: cl.tier axis: 2 k: cl.pl
+    ).not then return false
+    if (lfAxisSelects :words sel: r.destination.stringView tier: cl.tier axis: 3 k: cl.d
+    ).not then return false
+    if cl.tier == 1 then return true
+    return (lfAxisSelects :words sel: r.sink.stringView tier: cl.tier axis: 4 k: cl.s)
+}
+
+# lfRowTierFits -- whether row `r`'s form and tier admit form `twin` of cell
+# `cl`, before its axes are asked
+lfRowTierFits: function {
+    words: zast.Vocab.view r: LfRow.view cl: LfCell.view twin: bool
+} out bool is {
     fw: words.slotOf text: r.form.stringView
     if fw == lfWord.slot.wHazard when twin then return false
     if fw == lfWord.slot.wTwin when twin.not then return false
     tw: words.slotOf text: r.tier.stringView
     if tw == lfWord.slot.wFlow when cl.tier != 1 then return false
     if tw == lfWord.slot.wSink when cl.tier != 2 then return false
-    if cl.tier == 1 when (
-        (words.slotOf text: r.sink.stringView) != lfWord.slot.wAny
-    ) then return false
-    if (
+    # a release cell is decided by release rows alone: another row's axes are
+    # other tables'
+    if tw == lfWord.slot.wRelease != (cl.tier == 3) then return false
+    # a flow cell has no sink to select
+    return (cl.tier != 1) or ((words.slotOf text: r.sink.stringView) == lfWord.slot.wAny)
+}
+
+# lfAxisSelects -- whether selector `sel` names value `k` of axis `axis` in tier
+# `tier`
+lfAxisSelects: function {
+    words: zast.Vocab.view sel: StringView tier: u64 axis: u64 k: u64
+} out bool is {
+    return (
         lfSelects
         :words
-        sel: r.producer.stringView
-        key: (lfAxisKey axis: 0 k: cl.p).stringView
-        tags: (lfAxisTags axis: 0 k: cl.p).stringView
-    ).not then return false
-    if (
-        lfSelects
-        :words
-        sel: r.carrier.stringView
-        key: (lfAxisKey axis: 1 k: cl.c).stringView
-        tags: (lfAxisTags axis: 1 k: cl.c).stringView
-    ).not then return false
-    if (
-        lfSelects
-        :words
-        sel: r.place.stringView
-        key: (lfAxisKey axis: 2 k: cl.pl).stringView
-        tags: (lfAxisTags axis: 2 k: cl.pl).stringView
-    ).not then return false
-    if (
-        lfSelects
-        :words
-        sel: r.destination.stringView
-        key: (lfAxisKey axis: 3 k: cl.d).stringView
-        tags: (lfAxisTags axis: 3 k: cl.d).stringView
-    ).not then return false
-    if cl.tier == 2 then {
-        return (
-            lfSelects
-            :words
-            sel: r.sink.stringView
-            key: (lfAxisKey axis: 4 k: cl.s).stringView
-            tags: ""
-        )
-    }
-    return true
+        :sel
+        key: (lfAxisKey :tier :axis :k).stringView
+        tags: (lfAxisTags :tier :axis :k).stringView
+    )
 }
 
 # lfVerdict -- the outcome of form `twin` of a cell and the row that set it:
@@ -1172,6 +1400,19 @@ lfCellsOf: function {rows: (List LfRow).view} out List LfCell is {
         lfAddTier :words :rows :used :cells tier: 2 p: lfStaticIndex s: si
         si = si + 1
     }
+    # the release tier: each producer tagged `rel`
+    rp: u64
+    for rp < lfProducers.length loop {
+        if (lfHas tags: (lfProducers.get i: rp).tags.stringView tag: "rel") then (
+            lfAddReleaseTier
+            :words
+            :rows
+            :used
+            :cells
+            p: rp
+        )
+        rp = rp + 1
+    }
     ri: u64
     for ri < rows.length loop {
         if (used.get i: ri).not then fail msg: "\{(rows.get i: ri).where}: the row selects no cell"
@@ -1198,6 +1439,30 @@ lfAddTier: function {
             di: u64
             for di < lfDests.length loop {
                 cells.append (lfCellAt :words :rows :used :tier :p c: ci pl: pli d: di :s)
+                di = di + 1
+            }
+            pli = pli + 1
+        }
+        ci = ci + 1
+    }
+}
+
+# lfAddReleaseTier -- producer `p`'s release tier cells: every statement, place,
+# position and release
+lfAddReleaseTier: function {
+    words: zast.Vocab.view rows: (List LfRow).view used: ListVal bool cells: List LfCell p: u64
+} is {
+    ci: u64
+    for ci < lfArms.length loop {
+        pli: u64
+        for pli < lfPlaces.length loop {
+            di: u64
+            for di < lfRelPositions.length loop {
+                si: u64
+                for si < lfReleases.length loop {
+                    cells.append (lfCellAt :words :rows :used tier: 3 :p c: ci pl: pli d: di s: si)
+                    si = si + 1
+                }
                 di = di + 1
             }
             pli = pli + 1
@@ -1236,6 +1501,13 @@ lfCellAt: function {
         twinStatic: false
     )
     cl.na = lfWhyNot :words :cl
+    if tier == 3 then {
+        # a release cell writes its own twin
+        if cl.na.length > 0 then return cl
+        lfVerdict :words :rows :used :cl twin: false
+        lfVerdict :words :rows :used :cl twin: true
+        return cl
+    }
     dest: lfDests.get i: d
     pk: words.slotOf text: (lfPlaces.get i: pl).kind.stringView
     escapes: (dest.special.length > 0) and (pk == lfWord.slot.wLocal)
@@ -1281,10 +1553,12 @@ lfDetail: function {rows: (List LfRow).view row: i64 cl: LfCell.view} out String
 }
 
 # lfStem -- the fixture stem of a program: `matrix_lf_<producer>_<place>` in the
-# flow tier, `matrix_lf_sink_<producer>_<place>` in the sink tier
+# flow tier, `matrix_lf_sink_<producer>_<place>` in the sink tier,
+# `matrix_lf_release_<producer>_<place>` in the release tier
 lfStem: function {tier: u64 p: u64 pl: u64} out String is {
     buf: "matrix_lf_".string
     if tier == 2 then buf.append "sink_"
+    if tier == 3 then buf.append "release_"
     buf.append (lfProducers.get i: p).key.stringView
     buf.append "_"
     buf.append (lfPlaces.get i: pl).key.stringView
@@ -1442,6 +1716,17 @@ lfWriteFixtures: function {
         lfWriteProgram :words :root :cells :rows tier: 2 p: lfStaticIndex pl: pli :cases
         pli = pli + 1
     }
+    rp: u64
+    for rp < lfProducers.length loop {
+        if (lfHas tags: (lfProducers.get i: rp).tags.stringView tag: "rel") then {
+            rpl: u64
+            for rpl < lfPlaces.length loop {
+                lfWriteProgram :words :root :cells :rows tier: 3 p: rp pl: rpl :cases
+                rpl = rpl + 1
+            }
+        }
+        rp = rp + 1
+    }
 }
 
 # lfWriteCells -- one program per written cell form (a hazard and its own twin;
@@ -1471,18 +1756,20 @@ lfManifestAxes: function {cl: LfCell.view} out String is {
     buf: String
     if cl.tier == 1 then {
         buf.append "flow "
-    } else buf.append "sink "
-    buf.append (lfAxisKey axis: 0 k: cl.p)
+    } else if cl.tier == 2 then {
+        buf.append "sink "
+    } else buf.append "release "
+    buf.append (lfAxisKey tier: cl.tier axis: 0 k: cl.p)
     buf.append " "
-    buf.append (lfAxisKey axis: 1 k: cl.c)
+    buf.append (lfAxisKey tier: cl.tier axis: 1 k: cl.c)
     buf.append " "
-    buf.append (lfAxisKey axis: 2 k: cl.pl)
+    buf.append (lfAxisKey tier: cl.tier axis: 2 k: cl.pl)
     buf.append " "
-    buf.append (lfAxisKey axis: 3 k: cl.d)
+    buf.append (lfAxisKey tier: cl.tier axis: 3 k: cl.d)
     buf.append " "
     if cl.tier == 1 then {
         buf.append "-"
-    } else buf.append (lfAxisKey axis: 4 k: cl.s)
+    } else buf.append (lfAxisKey tier: cl.tier axis: 4 k: cl.s)
     return buf
 }
 

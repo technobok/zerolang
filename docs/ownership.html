@@ -161,6 +161,8 @@ Table of Contents</div>
 </li>
 <li><a href="#lock-release-on-scope-exit">Lock Release on Scope Exit</a>
 </li>
+<li><a href="#lock-release-on-one-path">Lock Release on One Path</a>
+</li>
 <li><a href="#temporary-expressions-in-lock-context">Temporary Expressions in Lock Context</a>
 </li>
 <li><a href="#binding-aliases">Binding Aliases</a>
@@ -1364,7 +1366,28 @@ transferred from non-owned fields of the bound value -- are released.</p>
 holds on other variables are
 released. If the variable is borrowed, the borrow ends. If the variable is
 owned, it is destroyed (reftypes) or forgotten (valtypes).</p>
-<h3 id="temporary-expressions-in-lock-context"><a href="#temporary-expressions-in-lock-context">8.8. Temporary Expressions in Lock Context</a></h3>
+<h3 id="lock-release-on-one-path"><a href="#lock-release-on-one-path">8.8. Lock Release on One Path</a></h3>
+<p>A <code>.drop</code>, a <code>.take</code> or a reassignment of a variable releases the locks the
+variable holds. When the release is in an arm of an <code>if</code> or a <code>match</code>, or
+in the body of a loop, it releases them on that path only. The other arms still
+find the locks held, and so does the code after the statement while the
+variable can still be read there:</p>
+<pre><code class="language-zerolang">Box: class { name: StringView }
+
+pick: function {k: bool} is {
+    s: "abc".string
+    w: Box name: s.stringView
+    if k then {
+        w.drop
+    } else {
+        s = "zzz".string      # error: on this path 'w' still holds a lock on 's'
+        print "\{w.name}"
+    }
+}</code></pre>
+<p>After the statement, the locks end when the variable was moved out on some
+path, because the program cannot read it again. They also end when every arm
+that reaches the end of the statement released them.</p>
+<h3 id="temporary-expressions-in-lock-context"><a href="#temporary-expressions-in-lock-context">8.9. Temporary Expressions in Lock Context</a></h3>
 <p>A value no name holds -- a call's result -- is a temporary. An ownership
 marker on one (<code>.borrow</code>, <code>.take</code>, <code>.hold</code>) is refused: a marker states
 what happens to a named place, and a temporary's disposition is already fixed.</p>
@@ -1411,7 +1434,7 @@ a field, an element, a borrowed parameter -- is, where its value is only borrowe
 value of its own is a temporary released at the end of the statement.
 <code>peek s: (if c then h.p else (mks n: 1))</code> reads <code>h.p</code> in place when <code>c</code>
 holds and frees the made String afterwards when it does not.</p>
-<h3 id="binding-aliases"><a href="#binding-aliases">8.9. Binding Aliases</a></h3>
+<h3 id="binding-aliases"><a href="#binding-aliases">8.10. Binding Aliases</a></h3>
 <p>Certain bindings do not produce a new storage location at all &#x2014; the
 compiler emits the new name as an alias for the source expression. The
 existing Borrow-scoped Lock guarantees the source slot stays valid and

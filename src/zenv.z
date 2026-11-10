@@ -303,6 +303,12 @@ openscope: record {
     # every path out of the scope that reaches the code after it ran all of it:
     # a `do` block no `break` left. A refill it made is then made on every path
     unconditional: bool
+    # the scope runs on some paths only -- an arm, a loop's body, a `do` block
+    # a `break` left: a lock it released from a scope outside it is released
+    # on its path alone, and laid again when it closes (markPath)
+    path: bool
+    # where the releases it made begin in the table's releasedRows
+    relMark: u64
 }
 
 # one scope entry, flattened for the SQL dump. It is a snapshot: entries are
@@ -362,6 +368,19 @@ queuedarglock: record {
     nodeid: zast.nodeid
     lineno: u32
     colno: u32
+}
+
+# lockrowfacts -- what one lock row locks, copied out of the table so a row
+# can be laid from it while the table changes
+lockrowfacts: record {
+    # the local the path is rooted at
+    declId: ztypes.declid
+    # shared or exclusive
+    lockType: ztypes.zlockstate
+    # the path itself, or a prefix of it
+    lockScope: ztypes.zlockscope
+    # the holder may write through it
+    mutable: bool
 }
 
 # heldlock -- one lock row's strength and holder, read off the overlay.
@@ -1032,6 +1051,14 @@ ZSymbolTable: class {
     # the scope stack as one flat list; a scope is a RANGE of it, which is why
     # popping is an index and not a structure
     entries: List ZEntry
+    # the lock rows a release hid below the innermost scope, by index, oldest
+    # first. Nothing below the innermost scope moves while it is open, so the
+    # index holds until a scope's close settles the row (settleReleases)
+    releasedRows: ListVal u64
+    # the lock rows a path's close laid again (settleReleases), by id, in
+    # order: the statement the path belongs to asks, once it is done, whether
+    # their holders are spent (releaseIfSpent)
+    restoredRows: ListVal ztypes.entryid
     # scopes the walk proved unreachable, so nothing inside one is reported
     # twice
     unreachableScopes: IdSet ztypes.declid
@@ -1133,6 +1160,8 @@ ZSymbolTable: class {
             defs: 0
             firstVid: this.reg.nextVid
             unconditional: false
+            path: false
+            relMark: this.releasedRows.length
         )
         if this.mode.suppressParamStamps then this.scopeHidden.add item: f
         this.curScope = f
@@ -1155,6 +1184,8 @@ ZSymbolTable: class {
             defs: 0
             firstVid: this.reg.nextVid
             unconditional: false
+            path: false
+            relMark: this.releasedRows.length
         )
     }
 
@@ -1165,6 +1196,22 @@ ZSymbolTable: class {
         if marker >= this.open.length then return
         fr: this.open.getMut i: marker
         fr.unconditional = true
+    }
+
+    # markPath -- the open scope at `marker` runs on some paths only: a lock
+    # it releases from `since` on (a releaseMark) from a scope outside it is
+    # released on its path alone, and its close lays it again
+    markPath: function {:this marker: openpos since: u64} is {
+        if marker >= this.open.length then return
+        fr: this.open.getMut i: marker
+        fr.path = true
+        fr.relMark = since
+    }
+
+    # releaseMark -- where the next release of a lock row from a scope outside
+    # the innermost one is noted, for markPath
+    releaseMark: function {t: this.view} out u64 is {
+        return t.releasedRows.length
     }
 
     # openIndexOf -- where the open scope `scope` sits in `open`, none when it is
@@ -1271,6 +1318,7 @@ ZSymbolTable: class {
     pop: function {:this} out ztypes.declid is {
         n: this.open.length
         if n == 0 then return ztypes.declid
+        this.settleReleases
         fr: this.open.get i: n - 1
         top: fr.id
         start: fr.start
@@ -1454,6 +1502,9 @@ ZSymbolTable: class {
     popDiscard: function {:this} is {
         n: this.open.length
         if n == 0 then return
+        # what a dry run released it gives back: it leaves no trace
+        rm: (this.open.get i: n - 1).relMark
+        for this.releasedRows.length > rm loop this.unhideLockRow i: this.releasedRows.pop
         this.dropTail start: (this.open.get i: n - 1).start
         this.open.pop
         if this.genBorrowPositions.length > 0 then this.dropGenBorrows
@@ -1688,7 +1739,8 @@ ZSymbolTable: class {
         for j > lowest loop {
             j2: j - 1
             e: t.entries.get i: j2
-            if e.declId == declId then return (optionval.some j2)
+            # a released lock row is no row of the local's: it says nothing
+            if e.declId == declId when e.lockReleased.not then return (optionval.some j2)
             j = j - 1
         }
         return (optionval.none u64)
@@ -2345,19 +2397,9 @@ ZSymbolTable: class {
     # scopeOfVar -- the open scope that binds `vid`, climbing from the innermost;
     # zero when no open scope binds it.
     scopeOfVar: function {t: this.view vid: ztypes.vid} out ztypes.declid is {
-        cur: t.curScope
-        for cur.isZero.not loop {
-            if (t.typing.declIsScope declId: cur).not then return ztypes.declid
-            kn: t.typing.declChildSlots declId: cur
-            ki: kn
-            for ki > 0 loop {
-                ki = ki - 1
-                kd: t.typing.declChildAt declId: cur index: ki
-                if (t.typing.declLocalVarOf declId: kd) == vid then return cur
-            }
-            cur = t.typing.declParentOf declId: cur
-        }
-        return ztypes.declid
+        d: t.declOfVar :vid
+        if d.isZero then return ztypes.declid
+        return (t.typing.declParentOf declId: d)
     }
 
     # scopeEncloses -- `outer` is `inner` or one of the scopes enclosing it, so
@@ -2416,17 +2458,52 @@ ZSymbolTable: class {
     }
 
     # reholdLocks -- every lock row `from` holds is held by `to` instead: the
-    # value moved, and its locks moved with it.
+    # value moved, and its locks moved with it. A row of the innermost scope
+    # changes holder in place. One of a scope outside is laid again for `to`
+    # here and released by `from` (hideLockRow): the move is made on this path
+    # only, and the scope close carries the new row out as long as `to` lives.
     reholdLocks: function {:this from: ztypes.vid to: ztypes.vid} is {
+        fh: ztypes.zlockholder.var from
+        th: ztypes.zlockholder.var to
+        floor: this.innermostStart
         n: this.entries.length
         i: u64
         for i < n loop {
-            e: this.entries.getMut :i
-            if e.hasLock when e.lockHolder == (ztypes.zlockholder.var from) then {
-                e.lockHolder = ztypes.zlockholder.var to
+            if (this.rowHeldBy :i holder: fh) then {
+                if i >= floor then {
+                    e: this.entries.getMut :i
+                    e.lockHolder = th
+                } else {
+                    p: ListVal zast.nameid
+                    f: this.lockRowFacts :i path: p
+                    (
+                        this.layLockRow
+                        d: f.declId
+                        path: p.listView
+                        lockType: f.lockType
+                        lockScope: f.lockScope
+                        holder: th
+                        mutable: f.mutable
+                    )
+                    this.hideLockRow :i
+                }
             }
             i = i + 1
         }
+    }
+
+    # lockRowFacts -- what the lock row at `i` locks, its path copied into
+    # `path`, for a row laid from it.
+    lockRowFacts: function {t: this.view i: u64 path: ListVal zast.nameid} out lockrowfacts is {
+        e: t.entries.get :i
+        for each seg: e.lockPath loop path.append seg
+        return (
+            lockrowfacts
+            declId: e.declId
+            lockType: e.lockType
+            lockScope: e.lockScope
+            mutable: e.lockMutable
+        )
     }
 
     # render what holds a lock, so a conflict names the holder rather than only
@@ -2942,35 +3019,197 @@ ZSymbolTable: class {
         return false
     }
 
-    # Release all locks held by `holder` (rebuild omitting them). Most
-    # calls release nothing (their locks died with an inner scope), so scan
-    # first and skip the rebuild when no row names the holder; when it does
-    # run, the scratch list is sized once (a compile churns thousands of
-    # these over row tables hundreds long -- the doubling chain was a top-5
-    # allocation site).
+    # Release all locks held by `holder`: each of its rows is hidden in place
+    # (hideLockRow), so nothing in the table moves. Most calls release nothing
+    # (their locks died with an inner scope), so a first scan finds where the
+    # holder's rows begin, and none at all is the common answer.
     releaseHeldLocks: function {:this holder: ztypes.zlockholder} is {
-        # Rows below the first one this holder locked keep their places;
-        # the rebuild starts there.
         first: this.entries.length
         idx: u64
         for each e: this.entries loop {
             if e.hasLock when (holderEq a: e.lockHolder b: holder) when idx < first then first = idx
             idx = idx + 1
         }
-        if first >= this.entries.length then return
-        rev: (List ZEntry) capacity: this.entries.length - first
-        for this.entries.length > first loop rev.append this.entries.pop
-        for rev.length > 0 loop {
-            e: rev.pop
-            released: false
-            if e.hasLock when (holderEq a: e.lockHolder b: holder) then released = true
-            if released.not then {
-                this.entries.append e
-            } else {
-                this.typing.declRowsAdd declId: e.declId delta: -1
-                this.shiftOpenStarts pos: this.entries.length
+        n: this.entries.length
+        i: first
+        for i < n loop {
+            if (this.rowHeldBy :i :holder) then this.hideLockRow :i
+            i = i + 1
+        }
+    }
+
+    # rowHeldBy -- the row at `i` is a lock `holder` holds.
+    rowHeldBy: function {t: this.view i: u64 holder: ztypes.zlockholder} out bool is {
+        e: t.entries.get :i
+        if e.hasLock.not then return false
+        return (holderEq a: e.lockHolder b: holder)
+    }
+
+    # innermostStart -- where the innermost open scope's rows begin: a row
+    # below it belongs to a scope outside, which may run on more paths.
+    innermostStart: function {t: this.view} out u64 is {
+        n: t.open.length
+        if n == 0 then return 0
+        return (t.open.get i: n - 1).start
+    }
+
+    # hideLockRow -- release the lock row at `i`. It stays where it is with its
+    # lock off (`lockReleased`), so no index into the table moves. A row of a
+    # scope outside the innermost one is noted (releasedRows): a scope between
+    # that runs on some paths only lays it again at its close, since the paths
+    # that did not run the release still hold it (settleReleases).
+    hideLockRow: function {:this i: u64} is {
+        floor: this.innermostStart
+        e: this.entries.getMut :i
+        e.hasLock = false
+        e.lockReleased = true
+        if i < floor then this.releasedRows.append i
+    }
+
+    # inPath -- an open scope runs on some paths only (markPath): what is
+    # released now is released on those paths alone.
+    inPath: function {t: this.view} out bool is {
+        for each fr: t.open loop {
+            if fr.path then return true
+        }
+        return false
+    }
+
+    # unhideLockRow -- the row at `i` holds its lock again.
+    unhideLockRow: function {:this i: u64} is {
+        e: this.entries.getMut :i
+        e.hasLock = true
+        e.lockReleased = false
+    }
+
+    # settleReleases -- the innermost scope is closing: the lock rows it
+    # released from the scopes outside it (releasedRows from its relMark) are
+    # settled. A scope that ran on some paths only (`path`) lays every one
+    # again, for the paths that did not run it. Any other ran wherever the
+    # scope around it ran: its release of that scope's own rows now stands,
+    # and one of a scope further out stays noted for the scopes between.
+    settleReleases: function {:this} is {
+        n: this.open.length
+        # the last scope closing takes every row the restored list names
+        if n == 1 then {
+            for this.restoredRows.length > 0 loop this.restoredRows.pop
+        }
+        fr: this.open.get i: n - 1
+        if this.releasedRows.length <= fr.relMark then return
+        if fr.path then {
+            for this.releasedRows.length > fr.relMark loop {
+                ri: this.releasedRows.pop
+                this.unhideLockRow i: ri
+                this.restoredRows.append (this.rowEntryId i: ri)
+            }
+            return
+        }
+        floor: u64
+        if n >= 2 then floor = (this.open.get i: n - 2).start
+        keep: ListVal u64
+        k: fr.relMark
+        for k < this.releasedRows.length loop {
+            ri: this.releasedRows.get i: k
+            if ri < floor then keep.append ri
+            k = k + 1
+        }
+        for this.releasedRows.length > fr.relMark loop this.releasedRows.pop
+        for each kr: keep loop this.releasedRows.append kr
+    }
+
+    # rowEntryId -- the id of the row at `i`, which no move of the table changes.
+    rowEntryId: function {t: this.view i: u64} out ztypes.entryid is {
+        return (t.entries.get :i).entryId
+    }
+
+    # rowHolder -- what holds, or held, the lock row at `i`.
+    rowHolder: function {t: this.view i: u64} out ztypes.zlockholder is {
+        return (t.entries.get :i).lockHolder
+    }
+
+    # hideLockRowById -- release the lock row `id`, when it still holds its lock.
+    hideLockRowById: function {:this id: ztypes.entryid} is {
+        j: this.entries.length
+        for j > 0 loop {
+            j = j - 1
+            if (this.rowIsLiveLock i: j :id) then {
+                this.hideLockRow i: j
+                return
             }
         }
+    }
+
+    # restoreMark -- where the next row a path's close lays again is noted,
+    # for the statement the path belongs to (releaseIfSpent)
+    restoreMark: function {t: this.view} out u64 is {
+        return t.restoredRows.length
+    }
+
+    # releaseIfSpent -- the lock row `id` that a path's close laid again goes
+    # after all when its holder is spent here: moved out on some path, so
+    # nothing reads it again (holderIsSpent). Answers whether it went.
+    releaseIfSpent: function {:this id: ztypes.entryid} out bool is {
+        j: this.entries.length
+        for j > 0 loop {
+            j = j - 1
+            if (this.rowIsLiveLock i: j :id) then {
+                if (this.holderIsSpent holder: (this.rowHolder i: j)).not then return false
+                this.hideLockRow i: j
+                return true
+            }
+        }
+        return false
+    }
+
+    # innermostReleases -- the lock rows the innermost open scope released from
+    # the scopes outside it, by index: the rows its close lays again when it is
+    # a path
+    innermostReleases: function {t: this.view into: ListVal u64} is {
+        n: t.open.length
+        if n == 0 then return
+        k: (t.open.get i: n - 1).relMark
+        for k < t.releasedRows.length loop {
+            into.append (t.releasedRows.get i: k)
+            k = k + 1
+        }
+    }
+
+    # rowIsLiveLock -- the row at `i` is the lock row `id`, its lock held.
+    rowIsLiveLock: function {t: this.view i: u64 id: ztypes.entryid} out bool is {
+        e: t.entries.get :i
+        if e.hasLock.not then return false
+        return e.entryId == id
+    }
+
+    # holderIsSpent -- `holder` is a local whose value moved out on some path
+    # to here: nothing reads it again, so nothing it locks needs to stay locked.
+    holderIsSpent: function {t: this.view holder: ztypes.zlockholder} out bool is {
+        match (
+            holder
+        ) case var then {
+            d: t.declOfVar vid: holder
+            if d.isZero then return false
+            return (t.stateOfDecl declId: d) != 0
+        } else {
+            return false
+        }
+    }
+
+    # declOfVar -- the local, in an open scope, that `vid` is the variable of.
+    declOfVar: function {t: this.view vid: ztypes.vid} out ztypes.declid is {
+        cur: t.curScope
+        for cur.isZero.not loop {
+            if (t.typing.declIsScope declId: cur).not then return ztypes.declid
+            kn: t.typing.declChildSlots declId: cur
+            ki: kn
+            for ki > 0 loop {
+                ki = ki - 1
+                kd: t.typing.declChildAt declId: cur index: ki
+                if (t.typing.declLocalVarOf declId: kd) == vid then return kd
+            }
+            cur = t.typing.declParentOf declId: cur
+        }
+        return ztypes.declid
     }
 
     # --- narrowing ---
@@ -3556,6 +3795,11 @@ ZSymbolTable: class {
             for ri < endIdx loop {
                 e: this.entries.get i: ri
                 if e.defSeq > ki then break
+                # a released lock row is gone as far as the dump is concerned
+                if e.lockReleased then {
+                    ri = ri + 1
+                    continue
+                }
                 exs: ListVal zast.nameid
                 for each xn: e.excludedSubtypes loop exs.append xn
                 nsc: e.narrowedSubtype
@@ -3643,6 +3887,8 @@ newSymbolTable: function {reg: ztypes.ZTypeRegistry.take typing: ZTyping.take} o
         exitLog: ListVal exitrec
         curScope: ztypes.declid
         entries: List ZEntry
+        releasedRows: ListVal u64
+        restoredRows: ListVal ztypes.entryid
         unreachableScopes: IdSet ztypes.declid
         unreachableKinds: (IdMapV ztypes.declid v: u8)
         loopRuns: ListVal looprun
