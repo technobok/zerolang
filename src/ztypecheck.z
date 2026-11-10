@@ -39305,7 +39305,7 @@ armRecordPins: function {
         was: st.walk.valuePinRoots.get :i
         now: (st.lookupVarId nameId: root).or d: ztypes.vid
         if was.isZero.not when now != was then {
-            reportArmKeepsDyingStorage :st :ast :leaf :root :verb
+            reportArmKeepsDyingStorage :st :ast :leaf :root rootVid: was :verb
             return false
         }
     }
@@ -39378,9 +39378,16 @@ valuePinRoot: function {st: zenv.ZSymbolTable.view i: u64} out zast.nameid is {
 # reportArmKeepsDyingStorage -- the arm value `leaf` keeps `root` locked, and
 # `root` is storage the arm, block or `with` declared, which dies as it ends.
 reportArmKeepsDyingStorage: function {
-    st: zenv.ZSymbolTable ast: Ast.view leaf: zast.nodeid root: zast.nameid verb: StringView
+    st: zenv.ZSymbolTable
+    ast: Ast.view
+    leaf: zast.nodeid
+    root: zast.nameid
+    # the variable `root` named where the value was made, which died with the
+    # arm and resolves no more
+    rootVid: ztypes.vid
+    verb: StringView
 } is {
-    dn: lockRootPhrase :st :ast nameId: root
+    dn: lockRootPhrase :st :ast nameId: root :rootVid
     m: "Cannot \{verb} this value: it keeps \{dn} locked, which dies with the scope that declares it"
     ln: ast.nodes.get i: leaf
     (
@@ -45240,9 +45247,16 @@ movedReaderHint: function {phn: StringView name: StringView temporary: bool} out
 # lockRootPhrase -- how a diagnostic names the root of a lock: the variable
 # quoted, or "a temporary" for an unnamed local no source line declares.
 lockRootPhrase: function {
-    st: zenv.ZSymbolTable.view ast: Ast.view nameId: zast.nameid
+    st: zenv.ZSymbolTable.view
+    ast: Ast.view
+    nameId: zast.nameid
+    # the variable the root named where the lock was laid, when the caller has
+    # it: a scope that has closed since no longer resolves the name
+    rootVid: ztypes.vid.zero
 } out String is {
-    if (nameIsSynthVariable :st :nameId) then return "a temporary".string
+    if rootVid.isZero.not then {
+        if (st.holderIsTemporary vid: rootVid) then return "a temporary".string
+    } else if (nameIsSynthVariable :st :nameId) then return "a temporary".string
     return "'\{zast.nameTextAt :ast ref: nameId}'"
 }
 
