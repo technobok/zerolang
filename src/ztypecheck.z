@@ -35663,11 +35663,14 @@ checkTransferMarker: function {
             )
             if relBlocked.not then {
                 # a `.take` moved whole into a place that disposes of its
-                # locks (takeKeepsLocksAt) keeps them for that place; a
-                # `.drop`, and a take consumed anywhere else, releases them
+                # locks (takeKeepsLocksAt) keeps them for that place; any other
+                # take hands them to the value it makes (takeHeldLocks), and a
+                # `.drop` releases them
                 keepAt: st.walk.takeKeepsLocksAt
                 keepL: (isMoveMarkerId nameId: cnId) and keepAt.isZero.not and (dp.nid == keepAt)
-                if keepL.not then {
+                if keepL.not when (isMoveMarkerId nameId: cnId) then {
+                    takeHeldLocks :st from: mvo
+                } else if keepL.not then {
                     mh: ztypes.zlockholder.var mvo
                     releaseCascade :st holder: mh
                     if (isDropMarkerId nameId: cnId) then noteDropReleasedTemps :st dropNid: dp.nid
@@ -45095,6 +45098,27 @@ carryHeldLocks: function {
     return true
 }
 
+# takeHeldLocks -- `w.take` moves w's value out, and the locks w holds go with
+# it (Q2, user 2026-11-09): they leave w and are pending as the taken value's,
+# carried, for whatever receives it -- a with name, an argument's temporary, a
+# for header -- to keep. A take nothing receives drops them with the value at
+# its line's end.
+takeHeldLocks: function {st: zenv.ZSymbolTable from: ztypes.vid} is {
+    carried: List ztyping.PinPath
+    if (carryHeldLocks :st :from pins: carried).not then return
+    pinsTouched :st
+    for each cp: carried loop {
+        st.walk.pendingPins.append (
+            ztyping.PinPath
+            path: cp.path.copy
+            shared: cp.shared
+            mutable: cp.mutable
+            carried: true
+        )
+    }
+    setPendingOwned :st owned: true
+}
+
 # pathLeafIsTake -- the value is `name.take`: a move of the whole binding.
 pathLeafIsTake: function {ast: Ast.view n: astnode.view} out bool is {
     match (
@@ -45949,24 +45973,7 @@ relayTempPins: function {st: zenv.ZSymbolTable pool: zast.StringPool.view vid: z
 # temporaries only it held.
 releaseCascade: function {st: zenv.ZSymbolTable holder: ztypes.zlockholder} is {
     st.releaseHeldLocks :holder
-    names: ListVal zast.nameid
-    for each nm: st.walk.heldTemps loop names.append nm
-    released: true
-    for released loop {
-        released = false
-        for each nm: names loop {
-            tv: st.lookupVarId nameId: nm
-            if tv.some then {
-                p: ListVal zast.nameid
-                p.append nm
-                th: ztypes.zlockholder.var tv
-                if (st.isPathLocked path: p).not when (st.holdsAnyLock holder: th) then {
-                    st.releaseHeldLocks holder: th
-                    released = true
-                }
-            }
-        }
-    }
+    st.releaseUnheldTemps
 }
 
 # pinCallResult -- what a call's result keeps locked. An `outx` result and a

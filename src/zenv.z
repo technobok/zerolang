@@ -1322,9 +1322,16 @@ ZSymbolTable: class {
         # scope holds -- a value that moved out of this scope with its locks --
         # survives the close, laid again over its root, which is still open
         mLocks: List ztypes.ZEntry
+        # whether a lock on a temporary a line kept dies with the scope: only
+        # then can one have lost the last hold on it (releaseUnheldTemps)
+        droppedTempLock: false
         p3: start
         for p3 < endIdx loop {
             e: this.entries.get i: p3
+            if e.hasLock when droppedTempLock.not when (
+                this.heldTempNamed
+                nameId: (this.typing.declNameOf declId: e.declId)
+            ) then droppedTempLock = true
             # a holder minted while this scope was open dies with it -- the
             # common case, answered by its id; only an older holder is asked
             # which scope binds it
@@ -1385,7 +1392,51 @@ ZSymbolTable: class {
         }
         # laid last, so no row re-laid above narrows the local again
         for each md: mEnds loop this.layNarrowingEnd declId: md
+        # a holder that died here held its locks to here: a temporary only it
+        # locked lets go of its own now
+        if droppedTempLock then this.releaseUnheldTemps
         return top
+    }
+
+    # heldTempNamed -- `nameId` is a temporary a line kept to its block's end
+    # (heldTemps).
+    heldTempNamed: function {t: this.view nameId: zast.nameid} out bool is {
+        k: u64
+        for k < t.walk.heldTemps.length loop {
+            if (t.walk.heldTemps.get i: k) == nameId then return true
+            k = k + 1
+        }
+        return false
+    }
+
+    # releaseUnheldTemps -- every temporary a line kept (heldTemps) that nothing
+    # locks any more releases its own locks, in turn freeing the temporaries only
+    # it held: a temporary lives no longer than the holds on it (Q1). Asked after
+    # a holder lets go -- a release (releaseCascade), the close of the scope it
+    # was bound in.
+    releaseUnheldTemps: function {:this} is {
+        if this.walk.heldTemps.length == 0 then return
+        # one path, re-aimed at each temporary in turn
+        p: ListVal zast.nameid
+        p.append zast.nameid
+        released: true
+        for released loop {
+            released = false
+            k: u64
+            for k < this.walk.heldTemps.length loop {
+                nm: this.walk.heldTemps.get i: k
+                k = k + 1
+                tv: this.lookupVarId nameId: nm
+                if tv.some then {
+                    p.set i: 0 val: nm
+                    th: ztypes.zlockholder.var tv
+                    if (this.isPathLocked path: p).not when (this.holdsAnyLock holder: th) then {
+                        this.releaseHeldLocks holder: th
+                        released = true
+                    }
+                }
+            }
+        }
     }
 
     # pushDryRun -- open a scope for a dry run: its rows are discarded whole
