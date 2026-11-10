@@ -39122,9 +39122,7 @@ pinsOfValue: function {
 
 # returnedPins -- what a returned value keeps locked, onto `dst` for the return
 # checks: an `if`, `match` or block's arms (pinsOfArms; an arm's place is handed
-# back only by a reference or a view), any other value's record -- a tail's
-# line has drained its own by the time the body's end checks it. The side
-# channel holds the same until it goes (pendValueRecord).
+# back only by a reference or a view), any other value's record.
 returnedPins: function {
     st: zenv.ZSymbolTable
     ast: Ast
@@ -39147,45 +39145,9 @@ returnedPins: function {
             :dst
         )
     }
-    pendValueRecord :st :nid
     vp: valuePinsOf :st :nid
     appendRecordPins :st :vp :dst
     return (pinread owned: vp.owned marker: vp.marker)
-}
-
-# pendRootlessArgRecord -- an argument no variable roots -- a call's result read
-# on, an auto-called function -- has no root to tell its pins from what an
-# enclosing walk left pending beside them (a receiver's): its pins are its
-# record (pendValueRecord). A control value's arms hand theirs over already.
-pendRootlessArgRecord: function {st: zenv.ZSymbolTable ast: Ast.view nid: zast.nodeid} is {
-    if (isControlValue :ast :nid) then return
-    rt: rootNameIdOf :ast n: (ast.nodes.get i: nid)
-    if rt.isZero.not when (st.lookupVarId nameId: rt).some then return
-    pendValueRecord :st :nid
-}
-
-# pendValueRecord -- the value at `nid` is what its walk recorded and nothing
-# else: the side channel is drained of anything an enclosing walk left beside it
-# and holds the node's record (pins and flags) for the readers that still read
-# the channel.
-pendValueRecord: function {st: zenv.ZSymbolTable nid: zast.nodeid} is {
-    vp: valuePinsOf :st :nid
-    drainPendingBorrow :st
-    if vp.len > 0 then pinsTouched :st
-    k: u64
-    for k < vp.len loop {
-        p: st.walk.valuePins.get i: vp.start.u64 + k
-        k = k + 1
-        st.walk.pendingPins.append (
-            ztyping.PinPath
-            path: p.path.copy
-            shared: p.shared
-            mutable: p.mutable
-            carried: p.carried
-        )
-    }
-    setPendingOwned :st owned: vp.owned
-    setPendingMarker :st marker: vp.marker
 }
 
 # recordRootAt -- the root of pin `i` of the record `vp`, zero past its end.
@@ -39218,9 +39180,8 @@ appendRecordPins: function {
 # readValuePins -- what the value at `nid`, of type `vt`, keeps locked, for a
 # destination that reads it whole, appended to `dst`: an `if`, `match` or
 # block's arms hand over theirs (pinsOfArms, which reports a pin on storage that
-# dies with an arm), any other value its record. An arms' value is left pending
-# as well, where the side channel's drains expect it until they go. `borrowing` and
-# `writes` are pinsOfArms'.
+# dies with an arm), any other value its record. `borrowing` and `writes` are
+# pinsOfArms'.
 readValuePins: function {
     st: zenv.ZSymbolTable
     ast: Ast
@@ -39236,23 +39197,7 @@ readValuePins: function {
         appendRecordPins :st :vp :dst
         return (pinread owned: vp.owned marker: vp.marker)
     }
-    ap: List ztyping.PinPath
-    ar: pinsOfArms :st :ast :vt :nid :borrowing :writes :verb dst: ap
-    if ap.length > 0 then pinsTouched :st
-    for each p: ap loop {
-        (
-            pinsAppend
-            pins: st.walk.pendingPins
-            path: p.path
-            shared: p.shared
-            mutable: p.mutable
-            carried: p.carried
-        )
-        pinsAppend pins: dst path: p.path shared: p.shared mutable: p.mutable carried: p.carried
-    }
-    setPendingOwned :st owned: ar.owned
-    setPendingMarker :st marker: ar.marker
-    return ar
+    return (pinsOfArms :st :ast :vt :nid :borrowing :writes :verb :dst)
 }
 
 # placePins -- `b: h.p` or `b: a`, a reftype read whole from a field or a name:
@@ -39533,7 +39478,6 @@ recordArmValueLocks: function {st: zenv.ZSymbolTable ast: Ast.view lineId: zast.
 # over the locks it holds: they end with the scope, and what binds the value
 # keeps them instead, after what its own walk keeps (the record). An OWNED local
 # moves out with its locks: what binds it owns it, as it owns an `outx` result.
-# The locks are pending again for the line's own readers.
 recordHandedBackLocks: function {st: zenv.ZSymbolTable ast: Ast.view valNid: zast.nodeid} is {
     if valNid.isZero then return
     handBackLocalLocks :st :ast :valNid
@@ -39552,8 +39496,6 @@ handBackLocalLocks: function {st: zenv.ZSymbolTable ast: Ast.view valNid: zast.n
         st.heldLockPaths holder: ztypes.zlockholder.var hv dst: held
         movedOut: (st.reg.variableOwnershipOf id: hv) == ztypes.zownership.owned
         recordWithLocks :st :valNid :held :movedOut
-        if held.length > 0 then pinsTouched :st
-        st.heldLockPaths holder: ztypes.zlockholder.var hv dst: st.walk.pendingPins
     }
 }
 
@@ -41182,7 +41124,6 @@ consumeReassignPins: function {
         tgtNm = rootNameIdOf :ast n: (ast.nodes.get i: rasgn.topath)
         if tgtNm.isZero then return
     }
-    dropPendingPins :st
     # a bare name whose value moved out is refilled here: its variable holds
     # what the new value keeps locked, though the row saying it holds a value
     # again is laid after (endNarrowingByWrite)
@@ -41655,10 +41596,12 @@ checkWith: function {
     st.walk.stmtExprNid = outerStmt
     # a body that is one expression is the with's one arm: what its value pins is
     # kept for the destination, as an arm line's is, before the binding dies
-    if (ast.nodes.get i: withnode.body).doexpr.not then {
-        recordHandedBackLocks :st :ast valNid: withnode.body
-        drainPendingBorrow :st
-    }
+    if (ast.nodes.get i: withnode.body).doexpr.not then (
+        recordHandedBackLocks
+        :st
+        :ast
+        valNid: withnode.body
+    )
     st.popTo marker: withMarker
     # a `with` used as a value answers whether it hands back a place
     if outerStmt != withnode.nid then recordControlPlaceLeaves :st :ast nid: withnode.nid
@@ -45097,14 +45040,20 @@ readReturnsBorrow: function {st: zenv.ZSymbolTable.view nid: zast.nodeid} out bo
     return (resultPins :st funcId: fid)
 }
 
-# drainPendingBorrow / takePendingPins -- clear the pin side-channel / move
-# its pins into a local list (call order preserved: the receiver's pin first,
-# then the arguments' in order).
+# drainPendingBorrow -- clear the pending pins and what describes their value
+# (the marker, whether it stays owned).
 drainPendingBorrow: function {st: zenv.ZSymbolTable} is {
     if st.walk.pendingPins.length > 0 then pinsTouched :st
     for st.walk.pendingPins.length > 0 loop st.walk.pendingPins.pop
     setPendingMarker :st marker: ztypes.zparamownership.noneMode
     setPendingOwned :st owned: false
+}
+
+# pinsPending -- the walk has pins pending, or a flag about their value.
+pinsPending: function {st: zenv.ZSymbolTable.view} out bool is {
+    if st.walk.pendingPins.length > 0 then return true
+    if st.walk.pendingBorrowOwned then return true
+    return st.walk.pendingMarker != ztypes.zparamownership.noneMode
 }
 
 # pinsTouched -- the pending pins changed: the value being walked made pins of
@@ -45131,7 +45080,7 @@ setPendingOwned: function {st: zenv.ZSymbolTable owned: bool} is {
 
 # dropPendingPins -- the pending pins go unread: the destination that takes the
 # value read them off its record (readValuePins). What describes the value (the
-# marker, whether it stays owned) stays, as takePendingPins leaves it.
+# marker, whether it stays owned) stays.
 dropPendingPins: function {st: zenv.ZSymbolTable} is {
     if st.walk.pendingPins.length > 0 then pinsTouched :st
     for st.walk.pendingPins.length > 0 loop st.walk.pendingPins.pop
@@ -45142,15 +45091,6 @@ dropPendingPins: function {st: zenv.ZSymbolTable} is {
 movePins: function {from: List ztyping.PinPath dst: List ztyping.PinPath} is {
     rev: List ztyping.PinPath
     for from.length > 0 loop rev.append from.pop
-    for rev.length > 0 loop dst.append rev.pop
-}
-
-# takePendingPins -- move the pending pins into `dst`, keeping what describes
-# the value they came with (the marker, whether it stays owned).
-takePendingPins: function {st: zenv.ZSymbolTable dst: List ztyping.PinPath} is {
-    if st.walk.pendingPins.length > 0 then pinsTouched :st
-    rev: List ztyping.PinPath
-    for st.walk.pendingPins.length > 0 loop rev.append st.walk.pendingPins.pop
     for rev.length > 0 loop dst.append rev.pop
 }
 
@@ -48063,7 +48003,6 @@ lockNonTrivialArg: function {
         verb: "pass"
         dst: av
     )
-    pendRootlessArgRecord :st :ast nid: arg.operation
     refuseViewToWriter :st :ast :vt :isLockish :isViewArg :isTake :arg marker: ar.marker
     # A construction or take parameter consumes the hoisted
     # temp inside the call scope; a lock/borrow parameter
@@ -58937,7 +58876,8 @@ checkStmtLine: function {
     if last then recordArmValueLocks :st :ast lineId: slnId
     recordTempHoldingLine :st lineId: slnId from: ul0
     if discarded when dk == zenv.divkind.none then recordDiscard :st :ast :innerId
-    drainPendingBorrow :st
+    # a line is no scope of pins: each value on it kept its own to its record
+    if (pinsPending :st) then panic msg: "ztypecheck: a statement line left pins pending"
     if dk > 0 then st.markUnreachable kind: dk
     if dk == zenv.divkind.cont then st.recordContinueTakes
 }
@@ -60279,14 +60219,11 @@ checkFunctionBody: function {
     st.mode.allowBareFnRef = false
     st.walk.calleeDottedNid = zast.nodeid
     st.walk.callArgNode = zast.nodeid
-    # Nor are the pins an argument's value left pending for its call the body's:
-    # read inside it, a caller's `.view` result made the body's own receiver a
-    # view's, and whether that happened hung on which body was walked first.
-    callerPins: List ztyping.PinPath
-    takePendingPins :st dst: callerPins
+    # A body walked on demand inside a caller's argument leaves what the caller
+    # has pending as it found it: every value in it keeps its pins to its record
+    callerPinCount: st.walk.pendingPins.length
     callerMarker: st.walk.pendingMarker
     callerOwned: st.walk.pendingBorrowOwned
-    drainPendingBorrow :st
     errsBefore: st.typing.errors.length
     chargedBefore: st.walk.bodyErrorsCharged
     (
@@ -60305,13 +60242,16 @@ checkFunctionBody: function {
     st.mode = savedMode
     st.walk.calleeDottedNid = prevCallee
     st.walk.callArgNode = prevArg
-    drainPendingBorrow :st
-    back: List ztyping.PinPath
-    for callerPins.length > 0 loop back.append callerPins.pop
-    if back.length > 0 then pinsTouched :st
-    for back.length > 0 loop st.walk.pendingPins.append back.pop
-    setPendingMarker :st marker: callerMarker
-    setPendingOwned :st owned: callerOwned
+    if (
+        (st.walk.pendingPins.length != callerPinCount) or
+        (
+            st.walk.pendingMarker != callerMarker
+        ) or
+        (st.walk.pendingBorrowOwned != callerOwned)
+    ) then (
+        panic
+        msg: "ztypecheck: a function body changed the pins its caller has pending"
+    )
     # a body walked on demand inside this one was charged its own errors
     added: st.typing.errors.length - errsBefore
     own: added - (st.walk.bodyErrorsCharged - chargedBefore)
