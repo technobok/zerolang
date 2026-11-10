@@ -39203,6 +39203,47 @@ appendRecordPins: function {
     }
 }
 
+# readValuePins -- what the value at `nid`, of type `vt`, keeps locked, for a
+# destination that reads it whole, appended to `dst`: an `if`, `match` or
+# block's arms hand over theirs (pinsOfArms, which reports a pin on storage that
+# dies with an arm), any other value its record. An arms' value is left pending
+# as well, for the readers that still read the side channel. `borrowing` and
+# `writes` are pinsOfArms'.
+readValuePins: function {
+    st: zenv.ZSymbolTable
+    ast: Ast
+    vt: ztypes.tid
+    nid: zast.nodeid
+    borrowing: bool
+    writes: bool
+    verb: StringView
+    dst: List ztyping.PinPath
+} out pinread is {
+    if (isControlValue :ast :nid).not then {
+        vp: valuePinsOf :st :nid
+        appendRecordPins :st :vp :dst
+        return (pinread owned: vp.owned marker: vp.marker)
+    }
+    ap: List ztyping.PinPath
+    ar: pinsOfArms :st :ast :vt :nid :borrowing :writes :verb dst: ap
+    drainPendingBorrow :st
+    if ap.length > 0 then pinsTouched :st
+    for each p: ap loop {
+        (
+            pinsAppend
+            pins: st.walk.pendingPins
+            path: p.path
+            shared: p.shared
+            mutable: p.mutable
+            carried: p.carried
+        )
+        pinsAppend pins: dst path: p.path shared: p.shared mutable: p.mutable carried: p.carried
+    }
+    setPendingOwned :st owned: ar.owned
+    setPendingMarker :st marker: ar.marker
+    return ar
+}
+
 # placePins -- `b: h.p` or `b: a`, a reftype read whole from a field or a name:
 # the binding is a SECOND NAME for that place, not a transfer of it, so it pins
 # the path exactly as `b: h.p.borrow` does -- a write to it, a move out of it or
@@ -41097,13 +41138,24 @@ consumeReassignPins: function {
     rvt: ztypes.tid
 } is {
     if rvt.isZero then return
-    pendArmPins :st :ast vt: rvt nid: rasgn.value borrowing: false writes: false verb: "store"
-    if st.walk.pendingPins.length == 0 then return
+    rpins: List ztyping.PinPath
+    rr: (
+        readValuePins
+        :st
+        :ast
+        vt: rvt
+        nid: rasgn.value
+        borrowing: false
+        writes: false
+        verb: "store"
+        dst: rpins
+    )
+    if rpins.length == 0 then return
     # An OWNED value holding locks -- a construction or an `outx` result over a
     # moved lock-holder -- lands in the target, so the target must be able to
     # hold them; a field store (`h.w = Option.some w`) keeps them under the
     # target's root, as a moved local's are kept (moveLocksToTarget).
-    owned: st.walk.pendingBorrowOwned
+    owned: rr.owned
     # a lent value keeps no pins in a field -- a plain one is copied there, any
     # other refused (refuseBorrowedReassign) -- nor in a name when it is plain:
     # it is copied into the name's own storage, or through it to the place the
@@ -41116,8 +41168,7 @@ consumeReassignPins: function {
         tgtNm = rootNameIdOf :ast n: (ast.nodes.get i: rasgn.topath)
         if tgtNm.isZero then return
     }
-    rpins: List ztyping.PinPath
-    takePendingPins :st dst: rpins
+    dropPendingPins :st
     tvo: st.lookupVarId nameId: tgtNm
     if tvo.some then {
         if owned when (
@@ -44919,6 +44970,22 @@ setPendingOwned: function {st: zenv.ZSymbolTable owned: bool} is {
     pinsTouched :st
 }
 
+# dropPendingPins -- the pending pins go unread: the destination that takes the
+# value read them off its record (readValuePins). What describes the value (the
+# marker, whether it stays owned) stays, as takePendingPins leaves it.
+dropPendingPins: function {st: zenv.ZSymbolTable} is {
+    if st.walk.pendingPins.length > 0 then pinsTouched :st
+    for st.walk.pendingPins.length > 0 loop st.walk.pendingPins.pop
+}
+
+# movePins -- every pin of `from` onto the end of `dst`, in order; `from` is
+# left empty.
+movePins: function {from: List ztyping.PinPath dst: List ztyping.PinPath} is {
+    rev: List ztyping.PinPath
+    for from.length > 0 loop rev.append from.pop
+    for rev.length > 0 loop dst.append rev.pop
+}
+
 # takePendingPins -- move the pending pins into `dst`, keeping what describes
 # the value they came with (the marker, whether it stays owned).
 takePendingPins: function {st: zenv.ZSymbolTable dst: List ztyping.PinPath} is {
@@ -45522,9 +45589,12 @@ takeValueReceiver: function {
 } out ztypes.tid is {
     if recvVal.not then return ztypes.tid
     # a receiver that is a `.view` result is read-only: a method that writes its
-    # receiver cannot take one, as no `.borrow` can be lent from it. Read before
-    # the capture, which drains the flag with pins the call does not keep
-    rvRo: st.walk.pendingMarker == ztypes.zparamownership.viewMode
+    # receiver cannot take one, as no `.borrow` can be lent from it
+    rvNid: dottedParentNodeId :ast n: (ast.nodes.get i: call.callable)
+    rvRo: (
+        rvNid.isZero.not and
+        ((valuePinsOf :st nid: rvNid).marker == ztypes.zparamownership.viewMode)
+    )
     rvT: captureValueReceiver :st :ast :unitDecl :call :funcId :pins
     if rvRo when (callReadsReceiver :st mid: funcId nid: call.nid).not then {
         (
@@ -45693,8 +45763,10 @@ captureValueReceiver: function {
     pins: List ztyping.PinPath
 } out ztypes.tid is {
     rcv: dottedParentNodeId :ast n: (ast.nodes.get i: call.callable)
-    if rcv.isZero.not then (
-        pendArmPins
+    if rcv.isZero then return ztypes.tid
+    rpins: List ztyping.PinPath
+    (
+        readValuePins
         :st
         :ast
         vt: (walkTypeOf :st nid: rcv)
@@ -45702,27 +45774,27 @@ captureValueReceiver: function {
         borrowing: true
         writes: (methodReceiverIsView :st mid: funcId).not
         verb: "pass"
+        dst: rpins
     )
     if (resultPins :st :funcId).not then {
-        if st.walk.pendingPins.length == 0 then {
+        if rpins.length == 0 then {
             ownedValueReceiver :st :ast :unitDecl :call
             return ztypes.tid
         }
-        rpv: dottedParentNodeId :ast n: (ast.nodes.get i: call.callable)
-        if rpv.isZero or (receiverIsValue :st :ast :unitDecl nid: rpv).not then return ztypes.tid
+        if (receiverIsValue :st :ast :unitDecl nid: rcv).not then return ztypes.tid
         # the result keeps nothing, so the flags that describe what it would
         # keep go with the pins
-        takePendingPins :st dst: pins
+        movePins from: rpins dst: pins
         drainPendingBorrow :st
         return ztypes.tid
     }
-    rpid: dottedParentNodeId :ast n: (ast.nodes.get i: call.callable)
-    if (receiverRootIsVar :st :ast :call) when (receiverIsFreshValue :st :ast nid: rpid
+    if (receiverRootIsVar :st :ast :call) when (receiverIsFreshValue :st :ast nid: rcv
     ).not then return ztypes.tid
-    if rpid.isZero or (receiverIsValue :st :ast :unitDecl nid: rpid).not then return ztypes.tid
-    takePendingPins :st dst: pins
+    if (receiverIsValue :st :ast :unitDecl nid: rcv).not then return ztypes.tid
+    dropPendingPins :st
+    movePins from: rpins dst: pins
     if pins.length > 0 then return ztypes.tid
-    return (walkTypeOf :st nid: rpid)
+    return (walkTypeOf :st nid: rcv)
 }
 
 # receiverIsFreshValue -- a receiver path rooted in a variable that still ends
@@ -45883,8 +45955,9 @@ valueReceiverPins: function {
 } is {
     if path.length > 0 when (st.lookupVarId nameId: (path.get i: 0)).none.not then return
     if (receiverIsValue :st :ast :unitDecl nid: recvNid).not then return
+    rpins: List ztyping.PinPath
     (
-        pendArmPins
+        readValuePins
         :st
         :ast
         vt: recvT
@@ -45892,17 +45965,19 @@ valueReceiverPins: function {
         borrowing: true
         writes: (methodReceiverIsView :st mid: funcId).not
         verb: "pass"
+        dst: rpins
     )
     if (resultPins :st :funcId).not then {
         # nothing keeps the receiver locked, but it is still a value that owns
         # its storage; a receiver whose own walk left pins owns nothing and
         # hands those on instead.
-        if st.walk.pendingPins.length == 0 then ownedReceiverTemp :st :ast :recvT :recvNid
+        if rpins.length == 0 then ownedReceiverTemp :st :ast :recvT :recvNid
         return
     }
     for path.length > 0 loop path.pop
-    if st.walk.pendingPins.length > 0 then {
-        takePendingPins :st dst: pins
+    if rpins.length > 0 then {
+        dropPendingPins :st
+        movePins from: rpins dst: pins
         return
     }
     unnamedReceiverLocal :st :ast :recvT :recvNid dst: path
