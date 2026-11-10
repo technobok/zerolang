@@ -39488,9 +39488,12 @@ appendFollowedPin: function {
     p: ztyping.PinPath.view
     dst: List ztyping.PinPath
     depth: u64
+    # the variable that will hold the pins, when the reference is followed for
+    # outliving IT rather than for dying with this scope (dyingReference)
+    holder: ztypes.vid.zero
 } out bool is {
     rn: p.path.get i: 0
-    rv: dyingReference :st nameId: rn :depth
+    rv: dyingReference :st nameId: rn :depth :holder
     if rv.isZero then {
         dst.append (
             ztyping.PinPath
@@ -39506,22 +39509,34 @@ appendFollowedPin: function {
     # a readonly self-lock marks the reference itself; it borrows nothing
     for each hp: held loop {
         if (hp.path.get i: 0) != rn then {
-            appendFollowedPin :st p: hp :dst depth: depth + 1
+            appendFollowedPin :st p: hp :dst depth: depth + 1 :holder
         }
     }
     return true
 }
 
 # dyingReference -- the variable `nameId` names when it is a reference -- a
-# borrowed local, a hoisted temporary -- that this scope declares, so it dies
-# with it while what it borrows does not; zero for anything else.
+# borrowed local, a hoisted temporary -- that dies while what it borrows does
+# not: one this scope declares, or, given a `holder`, one whose scope does not
+# enclose the holder's (a re-point in an arm at the arm's reference); zero for
+# anything else.
 dyingReference: function {
-    st: zenv.ZSymbolTable.view nameId: zast.nameid depth: u64
+    st: zenv.ZSymbolTable.view
+    nameId: zast.nameid
+    depth: u64
+    # when set, the reference dies before THIS variable: its scope does not
+    # enclose the holder's, wherever it is declared
+    holder: ztypes.vid.zero
 } out ztypes.vid is {
     if depth >= 8 then return ztypes.vid
-    if (st.scopeBindsHere :nameId).not then return ztypes.vid
+    if holder.isZero when (st.scopeBindsHere :nameId).not then return ztypes.vid
     rv: (st.lookupVarId :nameId).or d: ztypes.vid
     if rv.isZero then return rv
+    if holder.isZero.not when (
+        st.scopeEncloses
+        outer: (st.scopeOfVar vid: rv)
+        inner: (st.scopeOfVar vid: holder)
+    ) then return ztypes.vid
     if (st.reg.variableOwnershipOf id: rv) != ztypes.zownership.borrowed then return ztypes.vid
     return rv
 }
@@ -40521,7 +40536,12 @@ checkRepoint: function {
         return
     }
     if (refuseRepointReadonly :st :ast :rasgn :xVid :lvt pins: bpins :roV) then return
-    if (refuseRepointOutlives :st :ast :rasgn :xVid pins: bpins) then return
+    # a REFERENCE that dies before `x` -- a borrowed local of an arm `x` is
+    # re-pointed in -- owns nothing: `x` borrows what it borrows instead, as a
+    # value the arm hands back does (followDyingReferences)
+    xpins: List ztyping.PinPath
+    for each bp: bpins loop appendFollowedPin :st p: bp dst: xpins depth: 0 holder: xVid
+    if (refuseRepointOutlives :st :ast :rasgn :xVid pins: xpins) then return
     if (st.innermostOpenIs scope: (st.scopeOfVar vid: xVid)) then (
         releaseCascade
         :st
@@ -40531,7 +40551,7 @@ checkRepoint: function {
         installPins
         :st
         pool: ast.names
-        pins: bpins
+        pins: xpins
         vid: xVid
         onlyRoot: zast.nameid
         forceShared: false
@@ -40539,7 +40559,7 @@ checkRepoint: function {
         lineno: rasgn.lineno
         colno: rasgn.colno
     )
-    st.reg.setVariableBorrowOrigin id: xVid origin: (pinRootAt pins: bpins i: 0)
+    st.reg.setVariableBorrowOrigin id: xVid origin: (pinRootAt pins: xpins i: 0)
     checkNarrowedTargetWrite :st :ast :rasgn
     st.typing.repoints.add item: rasgn.nid
 }
