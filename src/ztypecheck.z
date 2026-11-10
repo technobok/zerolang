@@ -39197,40 +39197,6 @@ pendValueRecord: function {st: zenv.ZSymbolTable nid: zast.nodeid} is {
     setPendingMarker :st marker: vp.marker
 }
 
-# pendArmPins -- an `if`, `match` or block argument hands over what its arms keep
-# locked (pinsOfArms), pending for the argument checks that read the side
-# channel: their lines' walks left nothing pending. Any other value is left as
-# its walk left it.
-pendArmPins: function {
-    st: zenv.ZSymbolTable
-    ast: Ast
-    vt: ztypes.tid
-    nid: zast.nodeid
-    # the destination is a second name for a place an arm yields
-    borrowing: bool
-    # ... and may write through it
-    writes: bool
-    verb: StringView
-} is {
-    if (isControlValue :ast :nid).not then return
-    ap: List ztyping.PinPath
-    ar: pinsOfArms :st :ast :vt :nid :borrowing :writes :verb dst: ap
-    drainPendingBorrow :st
-    if ap.length > 0 then pinsTouched :st
-    for each p: ap loop {
-        (
-            pinsAppend
-            pins: st.walk.pendingPins
-            path: p.path
-            shared: p.shared
-            mutable: p.mutable
-            carried: p.carried
-        )
-    }
-    setPendingOwned :st owned: ar.owned
-    setPendingMarker :st marker: ar.marker
-}
-
 # recordRootAt -- the root of pin `i` of the record `vp`, zero past its end.
 recordRootAt: function {
     st: zenv.ZSymbolTable.view vp: ztyping.valuepins i: u64
@@ -39262,7 +39228,7 @@ appendRecordPins: function {
 # destination that reads it whole, appended to `dst`: an `if`, `match` or
 # block's arms hand over theirs (pinsOfArms, which reports a pin on storage that
 # dies with an arm), any other value its record. An arms' value is left pending
-# as well, for the readers that still read the side channel. `borrowing` and
+# as well, where the side channel's drains expect it until they go. `borrowing` and
 # `writes` are pinsOfArms'.
 readValuePins: function {
     st: zenv.ZSymbolTable
@@ -42017,6 +41983,8 @@ bindForBorrowedElement: function {
     # the element is a reference into the container's storage (an OptionView's
     # payload), not a view value of its own
     aliasesStorage: bool
+    # what the header keeps locked (bindForIteration)
+    fpins: List ztyping.PinPath
 } is {
     vid: st.reg.newVariable ztypeId: elem ownership: ztypes.zownership.borrowed
     # the element borrows from the iterator it came from, named or called
@@ -42032,8 +42000,7 @@ bindForBorrowedElement: function {
     # container's storage, and a write through the
     # container reallocates it. The `with` form leaves
     # nothing pending here -- its binding took the lock.
-    fpins: List ztyping.PinPath
-    takePendingPins :st dst: fpins
+    dropPendingPins :st
     if fpins.length > 0 then {
         fcn: ast.nodes.get i: cond.operation
         fnd: zast.nodeIdOf n: fcn
@@ -42310,6 +42277,10 @@ bindForIteration: function {
     isEach: bool
 } is {
     fe: forelem elem: ztypes.tid.zero wrapper: vt isView: false
+    # what the header's iterator calls pin (its implicit `iterate`, the probe of
+    # its per-iteration call) is the header's value too: it is recorded under
+    # the header's value node with what the header's walk left
+    hdrGen: st.walk.pinGen
     if isEach then {
         # a type with `iterate` is walked through what it returns: from here on
         # the condition's value IS the `E.iterate` node minted for it
@@ -42330,13 +42301,25 @@ bindForIteration: function {
     } else {
         fe = forOptionElementOf :st :ast :vt
     }
+    if st.walk.pinGen != hdrGen then recordValuePins :st nid: cond.operation
     if fe.elem.isZero then {
         refuseUnwalkableBinding :st :ast :cond :vt :isEach
         return
     }
     # an if or match header hands over what its arms keep (pinsOfArms): their
     # lines' walks left nothing pending
-    pendArmPins :st :ast :vt nid: cond.operation borrowing: false writes: false verb: "iterate"
+    hpins: List ztyping.PinPath
+    (
+        readValuePins
+        :st
+        :ast
+        :vt
+        nid: cond.operation
+        borrowing: false
+        writes: false
+        verb: "iterate"
+        dst: hpins
+    )
     # an element that is itself a view (`split`'s and `lines`' StringView, in a
     # plain Option) is a reference into what the iteration reads, as an
     # OptionView's payload is: it holds the iteration's pins for the body. A
@@ -42344,11 +42327,20 @@ bindForIteration: function {
     # and is the loop's own value, as a lock-free view bound by a let is. Only
     # an `each` header's iterator is a temporary no name holds; a plain `for`
     # over a bound iterator leaves the pins to the binding.
-    pinned: st.walk.pendingPins.length > 0
+    pinned: hpins.length > 0
     lockedView: isEach and (isViewFamilyTid :ast :st tid: fe.elem) and pinned
     viewElem: fe.isView or lockedView
     if viewElem then {
-        bindForBorrowedElement :st :ast :cond elem: fe.elem :nm aliasesStorage: fe.isView
+        (
+            bindForBorrowedElement
+            :st
+            :ast
+            :cond
+            elem: fe.elem
+            :nm
+            aliasesStorage: fe.isView
+            fpins: hpins
+        )
     } else {
         bindForOwnedElement :st :cond elem: fe.elem
     }
@@ -47131,8 +47123,7 @@ hoistArg: function {
     paramType: ztypes.tid
     consumes: bool
     viewParam: bool
-    # what the argument keeps locked: the pending pins its value left (C7c: its
-    # record)
+    # what the argument keeps locked: its record, and the path it is read from
     argPins: List ztyping.PinPath
     # the call holds the argument's path itself (lockFieldArgForCall)
     callHolds: false
