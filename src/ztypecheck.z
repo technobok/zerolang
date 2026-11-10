@@ -32714,6 +32714,10 @@ checkMemberAutoCall: function {
     suppressed: st.mode.suppressFnAutoCall
     if suppressed then suppressed = (readsMethodThroughInstance :st :ast :unitDecl :dp :bt :mo).not
     if coerce when suppressed.not when (fnAutoCallable :st mid: mo) then {
+        # the read's value is the method's result, not the base's: what the
+        # base's record gave the read goes, and the receiver's record is read
+        # where the call needs it (valueReceiverPins)
+        drainPendingBorrow :st
         aShr: callReadsReceiver :st mid: mo nid: dp.nid
         # a receiver that is a `.view` result is read-only, written as a member
         # read (`(xs.get i: 0).pop`) exactly as written as a call
@@ -35984,9 +35988,9 @@ dottedBaseTid: function {
     errsBase: st.typing.errors.length
     baseGen: st.walk.pinGen
     bt: checkValueAt :st :unitDecl :ast nid: dp.parent
-    # a member read off a value keeps what the value keeps (a member that makes
-    # a value of its own drops it)
-    composeChildRecord :st nid: dp.parent gen: baseGen
+    # a member read off a value keeps what the value keeps; a method a call
+    # calls makes a value of its own, and reads its receiver's record itself
+    if st.walk.calleeDottedNid != dp.nid then composeChildRecord :st nid: dp.parent gen: baseGen
     st.mode = savedMode
     if baseIsName then readSingletonBase :st :ast :unitDecl base: dp.parent :bt
     # a base refused as a call missing its arguments has no value to read a
@@ -45873,16 +45877,12 @@ captureValueReceiver: function {
             return ztypes.tid
         }
         if (receiverIsValue :st :ast :unitDecl nid: rcv).not then return ztypes.tid
-        # the result keeps nothing, so the flags that describe what it would
-        # keep go with the pins
         movePins from: rpins dst: pins
-        drainPendingBorrow :st
         return ztypes.tid
     }
     if (receiverRootIsVar :st :ast :call) when (receiverIsFreshValue :st :ast nid: rcv
     ).not then return ztypes.tid
     if (receiverIsValue :st :ast :unitDecl nid: rcv).not then return ztypes.tid
-    dropPendingPins :st
     movePins from: rpins dst: pins
     if pins.length > 0 then return ztypes.tid
     return (walkTypeOf :st nid: rcv)
@@ -46067,7 +46067,6 @@ valueReceiverPins: function {
     }
     for path.length > 0 loop path.pop
     if rpins.length > 0 then {
-        dropPendingPins :st
         movePins from: rpins dst: pins
         return
     }
@@ -46299,10 +46298,6 @@ pinCallResult: function {
     marker: st.typing.returnMarkerOf tid: funcId
     isRef: marker.isReference
     if isRef then doPins = true
-    # argument evaluation may leave residue (an inner marked-return call, e.g.
-    # the get in `(xs.get i).copy`): the outer call consumes it, and only the
-    # pushes below re-establish one
-    drainPendingBorrow :st
     if doPins then {
         adoptKeptTemps :st :pool :pins
         pinsPush :st path: recvPath shared: recvShared mutable: recvShared.not
@@ -46317,7 +46312,7 @@ pinCallResult: function {
         adoptKeptTemps :st :pool :pins carriedOnly: true
         pushCarriedPins :st :pins
     }
-    # `hold`: owned and READONLY with no pin, so it is set after the drain
+    # `hold`: owned and READONLY with no pin, whichever leg ran
     if marker == ztypes.zparamownership.holdMode then setPendingMarker :st :marker
 }
 
@@ -47814,11 +47809,7 @@ lockBorrowedArgPath: function {
     # pins are what its own walk left, as hoistArg keeps them
     seenVar: (st.lookupVarId nameId: seen).some
     got: ar
-    if seenVar when av.length > 0 when (pinRootAt pins: av i: 0) != seen then got = (
-        dropArgPins
-        :st
-        :av
-    )
+    if seenVar when av.length > 0 when (pinRootAt pins: av i: 0) != seen then got = dropArgPins :av
     src: ListVal zast.nameid
     fresh: argPinTuple :st :ast n: an dst: src
     if fresh.not when src.length > 0 then {
@@ -47826,7 +47817,7 @@ lockBorrowedArgPath: function {
         if av.length == 0 then {
             rvo: st.lookupVarId nameId: rt
             if rvo.some then {
-                got = dropArgPins :st :av
+                got = dropArgPins :av
                 pinsPush :st path: src shared: true mutable: isViewArg.not
                 pinsAppend pins: av path: src shared: true mutable: isViewArg.not carried: false
                 # the call's result keeps this pin: a path-shaped argument
@@ -47840,10 +47831,9 @@ lockBorrowedArgPath: function {
     return got
 }
 
-# dropArgPins -- an argument's pins go, from the side channel too, and with them
-# what describes their value: the argument is its path alone.
-dropArgPins: function {st: zenv.ZSymbolTable av: List ztyping.PinPath} out pinread is {
-    drainPendingBorrow :st
+# dropArgPins -- an argument's pins go, and with them what describes their
+# value: the argument is its path alone.
+dropArgPins: function {av: List ztyping.PinPath} out pinread is {
     for av.length > 0 loop av.pop
     return (pinread owned: false marker: ztypes.zparamownership.noneMode)
 }
@@ -56021,12 +56011,6 @@ checkGenericCall: function {
     )
     substituteGenericReturn :st :funcId :mid :subs
     healGenericReturn :st :unitDecl :ast :funcId :mid :gparams :subs
-    # The arg walk above (bindCallParams) can leave a pending
-    # borrow from a projection argument (s.stringView): drain it -- the
-    # call's result is an OWNED value, so a binding of it must not borrow
-    # the argument's source. A view-returning generic native would need to
-    # propagate its own borrow here instead.
-    drainPendingBorrow :st
     for each ge: subs.iterateItems loop {
         gk: ztyping.callslot call: call.nid param: ge.key
         st.typing.callGenericBinding.set key: gk value: ge.value
