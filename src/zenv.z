@@ -23,6 +23,7 @@
 # other top-level definitions are private to this unit.
 public: unit {
     :ZSymbolTable
+    :ValueDraft
     :openpos
     :divkind
     :sumArmNames
@@ -370,6 +371,42 @@ queuedarglock: record {
     colno: u32
 }
 
+# ValueDraft -- what the value whose walk is running keeps locked so far.
+# checkValueAt gives each value node a draft of its own and records it
+# (recordDraft); a value composed from a child reads the child's record.
+ValueDraft: class {
+    # the locks the value keeps on its inputs (an `outx` result, a reference
+    # return, a moved-in value's carried ones), each at its own strength
+    pins: List ztyping.PinPath
+    # the marker on the return the value came from. `.view`: the binding it
+    # lands on is READONLY as well as pinned. `.hold`: the binding is READONLY
+    # while staying OWNED -- a property of the value, not of a reference
+    marker: ztypes.zparamownership
+    # the value is OWNED though it pins its sources (an owned `outx` result):
+    # its binding carries a destructor and may be moved, where the pin alone
+    # would make it a borrow
+    owned: bool
+} as {
+    # holds -- the draft has a pin, or a flag about its value.
+    holds: function {d: this.view} out bool is {
+        if d.pins.length > 0 then return true
+        if d.owned then return true
+        return d.marker != ztypes.zparamownership.noneMode
+    }
+
+    # clear -- the draft holds nothing: no pin, no flag.
+    clear: function {:this} is {
+        for this.pins.length > 0 loop this.pins.pop
+        this.marker = ztypes.zparamownership.noneMode
+        this.owned = false
+    }
+
+    # dropPins -- the draft's pins go; what describes the value stays.
+    dropPins: function {:this} is {
+        for this.pins.length > 0 loop this.pins.pop
+    }
+}
+
 # heldlock -- one lock row's strength and holder, read off the overlay.
 heldlock: record {
     # the lock's strength
@@ -450,24 +487,12 @@ WalkState: class {
     # the fn whose body is being walked declares no `out` type, so a `return`
     # in it carries no value
     currentReturnsNothing: bool
-    # the locks a just-typed call's result keeps on its inputs (`outx`, or a
-    # reference return), each at its own strength; consumed by the binding
-    # sites, drained at statement and call boundaries.
-    pendingPins: List ztyping.PinPath
+    # what the value whose walk is running keeps locked so far (ValueDraft)
+    draft: ValueDraft
     # the node of the call argument being typed (0 outside one): a reftype
     # argument is judged by the lock the call takes on it, not by the
     # field-read rule
     callArgNode: zast.nodeid
-    # the marker on the return the pending result came from. `.view`: the
-    # binding it lands on is READONLY as well as pinned. `.hold`: the binding
-    # is READONLY while staying OWNED -- a property of the value, not of a
-    # reference, so it holds where the binding did not come out borrowed.
-    pendingMarker: ztypes.zparamownership
-    # the pending pins came from an owned `outx` return: the SOURCES are pinned
-    # for the binding's life, but the binding itself stays OWNED -- it carries a
-    # destructor and may be moved. Without this the pin would demote it to a
-    # borrow, which is what `borrow`/`view` mean and an owned `outx` does not.
-    pendingBorrowOwned: bool
     # namespace / subunit bodies the demand path owes a walk, and the unit
     # ops already walked -- a subunit of the MAIN unit is walked by the main
     # tree walk and must not be walked twice.
@@ -642,9 +667,6 @@ WalkState: class {
     # start: popDiscard puts every record back
     pinsJournal: ListVal pinjournal
     pinMarks: ListVal pinmark
-    # bumped whenever the pending pins, their marker or their owned flag
-    # change: a value whose walk changed none of them made no pins of its own
-    pinGen: u64
     # the blocks whose last line's value nothing receives: a function body, and
     # the arms and bodies of an `if`, `match`, loop, `do` or `with` written as a
     # statement
@@ -848,10 +870,13 @@ newWalkState: function out WalkState is {
         currentReturnMarker: ztypes.zparamownership.noneMode
         currentFnPins: false
         currentReturnsNothing: false
-        pendingPins: List ztyping.PinPath
+        draft: (
+            ValueDraft
+            pins: List ztyping.PinPath
+            marker: ztypes.zparamownership.noneMode
+            owned: false
+        )
         callArgNode: zast.nodeid
-        pendingMarker: ztypes.zparamownership.noneMode
-        pendingBorrowOwned: false
         nsBodiesOwed: ListVal ztyping.nsbody
         nsBodiesWalked: IdSet zast.nodeid
         nsConstsWalked: IdSet zast.nodeid
@@ -907,7 +932,6 @@ newWalkState: function out WalkState is {
         tempPins: (IdMapV ztypes.vid v: ztyping.valuepins)
         pinsJournal: ListVal pinjournal
         pinMarks: ListVal pinmark
-        pinGen: 0
         stmtBlocks: IdSet zast.nodeid
         aliasFoldsOpen: ListVal ztypes.declid
         aliasCyclesReported: IdSet ztypes.declid
