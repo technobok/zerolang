@@ -370,19 +370,6 @@ queuedarglock: record {
     colno: u32
 }
 
-# lockrowfacts -- what one lock row locks, copied out of the table so a row
-# can be laid from it while the table changes
-lockrowfacts: record {
-    # the local the path is rooted at
-    declId: ztypes.declid
-    # shared or exclusive
-    lockType: ztypes.zlockstate
-    # the path itself, or a prefix of it
-    lockScope: ztypes.zlockscope
-    # the holder may write through it
-    mutable: bool
-}
-
 # heldlock -- one lock row's strength and holder, read off the overlay.
 heldlock: record {
     # the lock's strength
@@ -452,12 +439,6 @@ WalkState: class {
     # Zero for a generic mono instance walk, which has no declaration of its
     # own to name.
     currentFnTid: ztypes.tid
-    # the `w.take` node a place being walked moves in whole and whose locks
-    # it disposes of itself -- a binding or reassignment (`b: w.take`), a
-    # taking argument, an arm payload, a returned value, a comprehension's
-    # element: that take keeps the value's locks for the place rather than
-    # releasing them. Zero when no place is waiting for one
-    takeKeepsLocksAt: zast.nodeid
     # the marker on the return of the fn whose body is being walked. A
     # reference return (`.borrow`, `.view`) makes bare field returns its
     # contract (the lock/borrow source outlives); what a `.view` lends is
@@ -864,7 +845,6 @@ newWalkState: function out WalkState is {
         synthOwnerName: zast.nameid
         currentThisTid: ztypes.tid
         currentFnTid: ztypes.tid
-        takeKeepsLocksAt: zast.nodeid
         currentReturnMarker: ztypes.zparamownership.noneMode
         currentFnPins: false
         currentReturnsNothing: false
@@ -2455,55 +2435,6 @@ ZSymbolTable: class {
             if e.hasLock when (holderEq a: e.lockHolder b: holder) then return true
         }
         return false
-    }
-
-    # reholdLocks -- every lock row `from` holds is held by `to` instead: the
-    # value moved, and its locks moved with it. A row of the innermost scope
-    # changes holder in place. One of a scope outside is laid again for `to`
-    # here and released by `from` (hideLockRow): the move is made on this path
-    # only, and the scope close carries the new row out as long as `to` lives.
-    reholdLocks: function {:this from: ztypes.vid to: ztypes.vid} is {
-        fh: ztypes.zlockholder.var from
-        th: ztypes.zlockholder.var to
-        floor: this.innermostStart
-        n: this.entries.length
-        i: u64
-        for i < n loop {
-            if (this.rowHeldBy :i holder: fh) then {
-                if i >= floor then {
-                    e: this.entries.getMut :i
-                    e.lockHolder = th
-                } else {
-                    p: ListVal zast.nameid
-                    f: this.lockRowFacts :i path: p
-                    (
-                        this.layLockRow
-                        d: f.declId
-                        path: p.listView
-                        lockType: f.lockType
-                        lockScope: f.lockScope
-                        holder: th
-                        mutable: f.mutable
-                    )
-                    this.hideLockRow :i
-                }
-            }
-            i = i + 1
-        }
-    }
-
-    # lockRowFacts -- what the lock row at `i` locks, its path copied into
-    # `path`, for a row laid from it.
-    lockRowFacts: function {t: this.view i: u64 path: ListVal zast.nameid} out lockrowfacts is {
-        e: t.entries.get :i
-        for each seg: e.lockPath loop path.append seg
-        return (
-            lockrowfacts
-            declId: e.declId
-            lockType: e.lockType
-            lockScope: e.lockScope
-            mutable: e.lockMutable
-        )
     }
 
     # render what holds a lock, so a conflict names the holder rather than only

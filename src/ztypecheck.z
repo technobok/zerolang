@@ -35669,15 +35669,12 @@ checkTransferMarker: function {
                 blocked: relBlocked
             )
             if relBlocked.not then {
-                # a `.take` moved whole into a place that disposes of its
-                # locks (takeKeepsLocksAt) keeps them for that place; any other
-                # take hands them to the value it makes (takeHeldLocks), and a
-                # `.drop` releases them
-                keepAt: st.walk.takeKeepsLocksAt
-                keepL: (isMoveMarkerId nameId: cnId) and keepAt.isZero.not and (dp.nid == keepAt)
-                if keepL.not when (isMoveMarkerId nameId: cnId) then {
+                # a `.take` hands the locks to the value it makes
+                # (takeHeldLocks), whose record the place it moves into
+                # installs; a `.drop` releases them
+                if (isMoveMarkerId nameId: cnId) then {
                     takeHeldLocks :st from: mvo
-                } else if keepL.not then {
+                } else {
                     mh: ztypes.zlockholder.var mvo
                     releaseCascade :st holder: mh
                     if (isDropMarkerId nameId: cnId) then noteDropReleasedTemps :st dropNid: dp.nid
@@ -37345,10 +37342,15 @@ checkReturnCarries: function {
     rbn: zast.atomNameIdOf n: an
     rvo: ztypes.vid
     if rbn.isZero.not then rvo = (st.lookupVarId nameId: rbn).or d: ztypes.vid
-    # `return w.take`: the take kept w's locks for this check (checkMovedValueAt)
+    # `return w.take`: the take moved w's locks into its value's record, which
+    # the return reads (rpins)
+    taken: false
     if rbn.isZero then {
         rbn = takenBareName :ast nid: (valueCoreNid :ast nid: arg.operation)
-        if rbn.isZero.not then rvo = takenLocalVar :st :ast nid: arg.operation
+        if rbn.isZero.not then {
+            rvo = takenLocalVar :st :ast nid: arg.operation
+            taken = true
+        }
     }
     if rbn.isZero.not then {
         if rvo.isZero.not then {
@@ -37375,7 +37377,16 @@ checkReturnCarries: function {
                 return
             }
             held: List ztyping.PinPath
-            st.heldLockPaths holder: ztypes.zlockholder.var rvo dst: held
+            if taken then {
+                for each rp: rpins loop (
+                    pinsAppend
+                    pins: held
+                    path: rp.path
+                    shared: rp.shared
+                    mutable: rp.mutable
+                    carried: rp.carried
+                )
+            } else st.heldLockPaths holder: ztypes.zlockholder.var rvo dst: held
             if held.length > 0 then {
                 wn: zast.nameTextAt :ast ref: rbn
                 rootPhrase: lockRootPhrase :st :ast nameId: (pinRootAt pins: held i: 0)
@@ -38963,36 +38974,6 @@ markLeafTakeMaybe: function {st: zenv.ZSymbolTable ast: Ast.view leaf: zast.node
     st.markTakeMaybe declId: (st.findLocal nameId: (zast.atomNameIdOf n: (ast.nodes.get i: leaf)))
 }
 
-# transferTakeIntoBinding -- `b: w.take`: the take kept the value's locks for
-# this site to move into the new binding.
-transferTakeIntoBinding: function {
-    # the symbol table holding the taken value's locks
-    st: zenv.ZSymbolTable
-    # the tree the value is spelt in
-    ast: Ast.view
-    # the binding
-    asgn: asgnref
-    # the bound type
-    vt: ztypes.tid
-    # the new binding's variable
-    boundVid: ztypes.vid
-} is {
-    if (st.reg.isReftypeOf tid: vt).not then return
-    tv5: takenLocalVar :st :ast nid: asgn.value
-    if tv5.isZero then return
-    (
-        transferHeldLocks
-        :st
-        :ast
-        from: tv5
-        to: boundVid
-        verb: "into an owned binding"
-        nodeid: asgn.nid
-        lineno: asgn.lineno
-        colno: asgn.colno
-    )
-}
-
 # checkReadonlyBindSource -- the readonly and take bookkeeping a binding's SOURCE
 # earns. Readonly is DEEP: a reftype read out of a readonly path is itself
 # readonly and takes the same self-lock, or the binding would be a laundering
@@ -39005,7 +38986,6 @@ checkReadonlyBindSource: function {
     vt: ztypes.tid
     boundVid: ztypes.vid
 } is {
-    transferTakeIntoBinding :st :ast :asgn :vt :boundVid
     # Readonly is deep: a reftype read out of a readonly path is itself
     # readonly, and takes the same self-lock. Without this the binding is
     # a laundering step -- `i: c.sub` off a `view` receiver would hand back
@@ -39644,11 +39624,8 @@ recordWithLocks: function {
 
 # checkMovedValueAt -- type the value a place moves in whole: a binding or a
 # reassignment, or an owning place (a `.take` parameter, an arm payload, a
-# returned value), walked as checkOwnedValueAt walks one. A `w.take` written as
-# the whole value keeps its locks for the place to move on -- transferHeldLocks
-# for a binding, moveHeldLocksIntoSlot for the others -- exactly as it would a
-# bare `w`'s, which the take marker reads off takeKeepsLocksAt: a take that
-# released them would let the value outlive what they lock.
+# returned value), walked as checkOwnedValueAt walks one. A `w.take` moves w's
+# locks into its value's record, which the place installs as any value's.
 checkMovedValueAt: function {
     # the symbol table the moved value's locks are kept in
     st: zenv.ZSymbolTable
@@ -39661,24 +39638,8 @@ checkMovedValueAt: function {
     # the place owns what it is handed (checkOwnedValueAt)
     owning: bool
 } out ztypes.tid is {
-    prev: st.walk.takeKeepsLocksAt
-    st.walk.takeKeepsLocksAt = takeNodeOf :ast :nid
-    vt: ztypes.tid
-    if owning then {
-        vt = checkOwnedValueAt :st :unitDecl :ast :nid
-    } else {
-        vt = checkValueAt :st :unitDecl :ast :nid
-    }
-    st.walk.takeKeepsLocksAt = prev
-    return vt
-}
-
-# takeNodeOf -- the `w.take` node a value is, under its parentheses; zero when
-# the value is no whole-binding take
-takeNodeOf: function {ast: Ast.view nid: zast.nodeid} out zast.nodeid is {
-    cn: valueCoreNid :ast :nid
-    if (pathLeafIsTake :ast n: (ast.nodes.get i: cn)).not then return zast.nodeid
-    return cn
+    if owning then return (checkOwnedValueAt :st :unitDecl :ast :nid)
+    return (checkValueAt :st :unitDecl :ast :nid)
 }
 
 # takenNameText -- the name `w` of a value written `w.take`, as a report spells
@@ -39688,7 +39649,7 @@ takenNameText: function {ast: Ast.view nid: zast.nodeid} out String is {
 }
 
 # takenLocalVar -- the local a value written `w.take` moves out of, zero when
-# the value is not one: the variable whose locks the take kept for its place.
+# the value is not one.
 takenLocalVar: function {
     st: zenv.ZSymbolTable.view ast: Ast.view nid: zast.nodeid
 } out ztypes.vid is {
@@ -39991,64 +39952,6 @@ checkAssignmentIn: function {
         if ucArm.isZero.not then {
             st.narrow nameId: asgn.name toTypeId: vt subtypeName: ucArm shadow: false
         }
-    }
-}
-
-# moveTakeLocksToTarget -- `x = w.take`: the take kept the value's locks for
-# this site to move into the target.
-moveTakeLocksToTarget: function {
-    # the symbol table the target's locks are re-laid in
-    st: zenv.ZSymbolTable
-    # the tree the value is spelt in
-    ast: Ast.view
-    # the reassignment
-    rasgn: reasgref
-    # the assigned type
-    rvt: ztypes.tid
-} is {
-    if rvt.isZero then return
-    if (pathLeafIsTake :ast n: (ast.nodes.get i: rasgn.value)).not then return
-    if (st.reg.isReftypeOf tid: rvt).not then return
-    tbR: markerPeeledBase :ast n: (ast.nodes.get i: rasgn.value)
-    if tbR.length == 0 then return
-    tdR: st.findLocal nameId: (nameIdOf :ast name: tbR.stringView)
-    if tdR.isZero then return
-    tvR: st.typing.declLocalVarOf declId: tdR
-    if tvR.isZero.not then moveLocksToTarget :st :ast :rasgn from: tvR
-}
-
-# moveLocksToTarget -- a lock-holding value reassigned into a target moves its
-# locks to the target's root variable: a bare target's old value is destroyed
-# first, and the locks it held with it; a field store keeps the root's.
-moveLocksToTarget: function {
-    # the symbol table the reassigned value's locks move within
-    st: zenv.ZSymbolTable
-    # the tree the target is spelt in
-    ast: Ast.view
-    # the reassignment
-    rasgn: reasgref
-    # the value moving in
-    from: ztypes.vid
-} is {
-    tgtRoot: rootNameIdOf :ast n: (ast.nodes.get i: rasgn.topath)
-    if tgtRoot.isZero then return
-    tvo: st.lookupVarId nameId: tgtRoot
-    if tvo.some then {
-        bareT: (zast.atomNameIdOf n: (ast.nodes.get i: rasgn.topath)).isZero.not
-        if bareT then {
-            releaseCascade :st holder: ztypes.zlockholder.var tvo
-        }
-        (
-            transferHeldLocks
-            :st
-            :ast
-            :from
-            to: tvo
-            verb: "by reassignment"
-            nodeid: rasgn.nid
-            lineno: rasgn.lineno
-            colno: rasgn.colno
-        )
     }
 }
 
@@ -40478,7 +40381,6 @@ checkReassignment: function {
     checkReassignedType :st :ast :rasgn :lvt :rvt
     checkNarrowedTargetWrite :st :ast :rasgn
     checkMethodRefTarget :st :ast :rasgn
-    moveTakeLocksToTarget :st :ast :rasgn :rvt
 }
 
 # mintRepointCompanion -- the companion of the borrowed reftype local or
@@ -41114,7 +41016,7 @@ consumeReassignPins: function {
     # An OWNED value holding locks -- a construction or an `outx` result over a
     # moved lock-holder -- lands in the target, so the target must be able to
     # hold them; a field store (`h.w = Option.some w`) keeps them under the
-    # target's root, as a moved local's are kept (moveLocksToTarget).
+    # target's root.
     owned: rr.owned
     # a lent value keeps no pins in a field -- a plain one is copied there, any
     # other refused (refuseBorrowedReassign) -- nor in a name when it is plain:
@@ -41133,13 +41035,15 @@ consumeReassignPins: function {
     # again is laid after (endNarrowingByWrite)
     tvo: st.lookupVarId nameId: tgtNm
     if hbNmId.isZero.not then tvo = st.writeTargetVarId nameId: hbNmId
+    # a `w.take` is reported as w
+    movedNm: takenNameText :ast nid: rasgn.value
     if tvo.some then {
         if owned when (
             refuseLockHolder
             :st
             :ast
             held: rpins
-            fromNm: ""
+            fromNm: movedNm.stringView
             movedT: rvt
             to: tvo
             verb: "by reassignment"
@@ -41147,7 +41051,10 @@ consumeReassignPins: function {
             lineno: rasgn.lineno
             colno: rasgn.colno
         ) then return
-        if hbNmId.isZero.not then releaseCascade :st holder: ztypes.zlockholder.var tvo
+        # the old value's locks go before the new value's are laid, and a
+        # temporary nothing holds after both lets go: one the new value views
+        # (a `w.take`'s) is held by then
+        if hbNmId.isZero.not then st.releaseHeldLocks holder: ztypes.zlockholder.var tvo
         (
             installPins
             :st
@@ -41160,6 +41067,7 @@ consumeReassignPins: function {
             lineno: rasgn.lineno
             colno: rasgn.colno
         )
+        if hbNmId.isZero.not then st.releaseUnheldTemps
     }
 }
 
@@ -42641,25 +42549,6 @@ forValueNode: function {
     }
 }
 
-# forTakeNode -- the `w.take` a `for` body ends on, read off the tree before the
-# walk types it (forValueNode asks the types); zero when it ends on anything
-# else
-forTakeNode: function {ast: Ast.view block: astnode.view} out zast.nodeid is {
-    match (
-        block
-    ) case statement then {
-        ne: block.statements.count.u64
-        if ne == 0 then return zast.nodeid
-        last: ast.nodes.get i: (zast.kidAt kids: ast.kids span: block.statements i: ne - 1)
-        innerId: zast.nodeid
-        if last.statementline then innerId = last.statementline
-        if innerId.isZero then return innerId
-        return (takeNodeOf :ast nid: innerId)
-    } else {
-        return (takeNodeOf :ast nid: (nodeId n: block))
-    }
-}
-
 # checkComprehensionValue -- A FOR-EXPRESSION APPENDS ITS BODY'S VALUE, so that
 # value answers to `.append`'s own contract: a reftype element is TAKEN
 # (`ListRef.append from: T.take`) and a valtype is COPIED (`ListVal.append
@@ -42710,26 +42599,6 @@ checkComprehensionValue: function {
             return
         }
     }
-    # a `w.take` kept its locks for this place (forTakeNode): they are
-    # refused, as a bare `w`'s are
-    takenVid: takenLocalVar :st :ast nid: valueNid
-    if takenVid.isZero.not then {
-        takenName: takenNameText :ast nid: valueNid
-        takenPins: List ztyping.PinPath
-        (
-            moveHeldLocksIntoSlot
-            :st
-            :ast
-            name: takenName.stringView
-            vid: takenVid
-            keeper: fornode.nid
-            calleePins: false
-            pins: takenPins
-            nodeid: valueNid
-            lineno: (nodeLine n: vn9)
-            colno: (nodeCol n: vn9)
-        )
-    }
     errsBefore: st.typing.errors.length
     # the element's own pins are judged below, as a lock the list cannot keep
     refuseBorrowedTake :st :ast n: vn9 vt: elemT byPins: false
@@ -42742,11 +42611,12 @@ checkComprehensionValue: function {
     held: List ztyping.PinPath
     pinsOfValue :st :ast vt: elemT nid: valueNid borrowing: false verb: "store" dst: held
     if held.length == 0 then return
+    heldNm: takenNameText :ast nid: valueNid
     (
         reportHeldIntoSlot
         :st
         :ast
-        name: ""
+        name: heldNm.stringView
         :held
         movedT: elemT
         keeper: fornode.nid
@@ -42920,14 +42790,7 @@ checkFor: function {
     # inside the header's C extent -- the header's destroys are emitted after
     # it -- so listing the header's locals at the break frees them twice.
     st.openBreakScope
-    # a comprehension APPENDS its element, so a `w.take` there keeps its locks
-    # for checkComprehensionValue to dispose of as a bare `w`'s
-    keepPrev: st.walk.takeKeepsLocksAt
-    if fornode.body.isZero.not when (st.walk.stmtBlocks.has item: fornode.body).not then {
-        st.walk.takeKeepsLocksAt = forTakeNode :ast block: (ast.nodes.get i: fornode.body)
-    }
     walkBodyAt :st :unitDecl :ast bodyId: fornode.body
-    st.walk.takeKeepsLocksAt = keepPrev
     elemT: ztypes.tid
     # a body whose last statement DIVERGES -- a bare `return`, a return call,
     # a panic -- yields nothing, and the loop is a statement, not a
@@ -44874,9 +44737,9 @@ consumeBareArgOwnership: function {
 # it holds along: into the call's result when the callee's result holds the
 # value (an `outx` callee, a construction), and refused otherwise. A method's
 # receiver never takes them: it could store the value and later hand it out
-# without them, so a lock-holding value cannot be moved into one. A bare `w`, a
-# `w.take` (whose take kept them) and the hoisted temporary of an unnamed value
-# (`name` empty) all come here.
+# without them, so a lock-holding value cannot be moved into one. A bare `w` and
+# the hoisted temporary of an unnamed value -- a `w.take`'s among them, its
+# locks carried in its record -- come here.
 moveHeldLocksIntoSlot: function {
     st: zenv.ZSymbolTable
     ast: Ast.view
@@ -45134,51 +44997,6 @@ varNameText: function {st: zenv.ZSymbolTable.view ast: Ast.view vid: ztypes.vid}
     return (zast.nameTextCopy :ast ref: nm)
 }
 
-# transferHeldLocks -- a lock-holding value moves from `from` to `to`, and its
-# locks move with it when `to` may hold them (refuseLockHolder). On success the
-# rows are held by `to`; on failure the move is refused. Answers whether the
-# move went through.
-transferHeldLocks: function {
-    # the symbol table the rows live in
-    st: zenv.ZSymbolTable
-    # the tree the names are spelt in
-    ast: Ast.view
-    # the value moving out
-    from: ztypes.vid
-    # the value it moves into
-    to: ztypes.vid
-    # how the move is written, for the report
-    verb: StringView
-    # the node the report is attached to
-    nodeid: zast.nodeid
-    # the line of the report
-    lineno: u32
-    # the column of the report
-    colno: u32
-} out bool is {
-    held: List ztyping.PinPath
-    st.heldLockPaths holder: ztypes.zlockholder.var from dst: held
-    if held.length == 0 then return true
-    # a hoisted argument's temporary is no name the program wrote
-    fromNm: String
-    if (st.walk.tempVars.has item: from).not then fromNm = varNameText :st :ast vid: from
-    if (
-        refuseLockHolder
-        :st
-        :ast
-        :held
-        fromNm: fromNm.stringView
-        movedT: (st.reg.variableTypeOf id: from)
-        :to
-        :verb
-        :nodeid
-        :lineno
-        :colno
-    ) then return false
-    st.reholdLocks :from :to
-    return true
-}
-
 # refuseLockHolder -- whether `to` may not hold the locks `held` names, which
 # a value moving into it carries: reported, and true, when it may not. A
 # parameter cannot hold them (they would be handed to the caller unseen); a
@@ -45347,17 +45165,6 @@ takeHeldLocks: function {st: zenv.ZSymbolTable from: ztypes.vid} is {
         )
     }
     setPendingOwned :st owned: true
-}
-
-# pathLeafIsTake -- the value is `name.take`: a move of the whole binding.
-pathLeafIsTake: function {ast: Ast.view n: astnode.view} out bool is {
-    match (
-        n
-    ) case dottedpath then {
-        return (atomNameId :ast n: (ast.nodes.get i: n.child)) == zast.wellKnown.slot.wkTake
-    } else {
-        return false
-    }
 }
 
 # pinsPush / pinsPushOne -- record a pin the pending result keeps. Appended
@@ -47906,11 +47713,13 @@ moveTakenTempLocks: function {
     tkd: st.findLocal nameId: (nameIdOf :ast name: tnm.stringView)
     tkv: st.typing.declLocalVarOf declId: tkd
     if tkv.isZero then return
+    # a `w.take` argument is reported as w
+    movedNm: takenNameText :ast nid: arg.operation
     (
         moveHeldLocksIntoSlot
         :st
         :ast
-        name: ""
+        name: movedNm.stringView
         vid: tkv
         :keeper
         :calleePins
@@ -49749,25 +49558,6 @@ checkTypedCallArg: function {
     if isCtor.not when isTake then keeper = methodKeeperOf :st :call :funcId
     pinMark: pins.length
     if isTake then moveArmLeavesIntoArgument :st :ast :arg :keeper :calleePins :pins
-    # a `w.take` kept its locks for this place (checkMovedValueAt): they go
-    # where a bare `w`'s go
-    tkv: takenLocalVar :st :ast nid: arg.operation
-    if tkv.isZero.not then {
-        tkn: takenNameText :ast nid: arg.operation
-        (
-            moveHeldLocksIntoSlot
-            :st
-            :ast
-            name: tkn.stringView
-            vid: tkv
-            :keeper
-            :calleePins
-            :pins
-            nodeid: arg.nid
-            lineno: arg.lineno
-            colno: arg.colno
-        )
-    }
     (
         hoistAndLockArg
         :st
@@ -52340,10 +52130,10 @@ checkGenericTypeCall: function {
 }
 
 # movePayloadIntoArm -- an owned arm stores its payload OWNED: a bare-name
-# reftype payload moves in, and a `w.take` one has already moved. Either way the
-# locks the value held now belong to the value being built, which keeps them as
-# a construction keeps a moved-in field's (pushCarriedPins). A non-owned arm
-# pins its payload instead (pinPayloadOfArm).
+# reftype payload moves in, its locks with it, which the value being built
+# keeps as a construction keeps a moved-in field's (pushCarriedPins); any other
+# payload's locks come in its record (composeChildRecord). A non-owned arm pins
+# its payload instead (pinPayloadOfArm).
 movePayloadIntoArm: function {
     st: zenv.ZSymbolTable
     ast: Ast
@@ -52387,9 +52177,6 @@ movePayloadIntoArm: function {
             )
             stampArgDisposition :st :ast :op own: ztypes.zparamownership.takeMode
         }
-    } else {
-        tkv: takenLocalVar :st :ast nid: op
-        if tkv.isZero.not then carryHeldLocks :st from: tkv pins: carry
     }
     pushCarriedPins :st pins: carry
 }
