@@ -31071,6 +31071,8 @@ consumeProjectionSource: function {
     consumes: bool
 } is {
     if (argIsTrivial :ast op: (ast.nodes.get i: arg.operation)).not then {
+        hp: List ztyping.PinPath
+        takePendingPins :st dst: hp
         (
             hoistArg
             :ast
@@ -31080,6 +31082,7 @@ consumeProjectionSource: function {
             paramType: ztypes.tid.zero
             :consumes
             viewParam: false
+            argPins: hp
         )
         return
     }
@@ -31321,6 +31324,8 @@ consumeCastFromArg: function {
             }
         }
     } else {
+        hp: List ztyping.PinPath
+        takePendingPins :st dst: hp
         (
             hoistArg
             :ast
@@ -31330,6 +31335,7 @@ consumeCastFromArg: function {
             paramType: ztypes.tid.zero
             consumes: true
             viewParam: false
+            argPins: hp
         )
     }
 }
@@ -45299,13 +45305,6 @@ pinsPushOne: function {
     )
 }
 
-# pinsRoot -- the root of the first pending pin, zero when none is pending.
-pinsRoot: function {st: zenv.ZSymbolTable.view} out zast.nameid is {
-    if st.walk.pendingPins.length == 0 then return zast.nameid
-    p0: st.walk.pendingPins.get i: 0
-    return (p0.path.get i: 0)
-}
-
 # pinRootDiesWithCall -- whether a returned value's pin rooted at `nameId` points
 # at storage that dies with this call. An owned local, temporary or `.take`
 # parameter does and a borrowed parameter does not; a borrowed local does only
@@ -47067,6 +47066,9 @@ hoistArg: function {
     paramType: ztypes.tid
     consumes: bool
     viewParam: bool
+    # what the argument keeps locked: the pending pins its value left (C7c: its
+    # record)
+    argPins: List ztyping.PinPath
     # the call holds the argument's path itself (lockFieldArgForCall)
     callHolds: false
 } out String is {
@@ -47090,8 +47092,7 @@ hoistArg: function {
         t: argType
     )
     assignId: hoistRows :ast :st argType: tempType :paramType :ln :co
-    argPins: List ztyping.PinPath
-    takePendingPins :st dst: argPins
+    dropPendingPins :st
     # A borrow path whose LEAF is a method describes a CALL, and a call's
     # result ownership is its signature's business: `.copy` hands back a fresh
     # value, so the temp OWNS it and locking `x.copy` as though it were a field
@@ -47707,47 +47708,64 @@ lockBorrowedArgPath: function {
     # the call's result keeps the lock (an `outx` callee, a construction):
     # only then is the path recorded as a pin
     calleePins: bool
-} is {
+    # what the argument keeps locked (readValuePins), and its flags; the path
+    # it is read from joins them when it keeps nothing else
+    av: List ztyping.PinPath
+    ar: pinread
+} out pinread is {
     an: ast.nodes.get i: arg.operation
     seen: valueTupleRoot :ast n: an
-    if seen.isZero then return
+    if seen.isZero then return ar
     # residue left by an EARLIER argument of this call must not stand in for
     # THIS argument's source: keep a pending path only when it is rooted at
     # this argument's own base. A base that names no variable -- a method read
     # off a call's result, `(xs.get i: 0).stringView` -- is a value whose
     # pins are what its own walk left, as hoistArg keeps them
     seenVar: (st.lookupVarId nameId: seen).some
-    if seenVar when st.walk.pendingPins.length > 0 when (pinsRoot :st) != seen then {
-        drainPendingBorrow :st
-    }
+    got: ar
+    if seenVar when av.length > 0 when (pinRootAt pins: av i: 0) != seen then got = (
+        dropArgPins
+        :st
+        :av
+    )
     src: ListVal zast.nameid
     fresh: argPinTuple :st :ast n: an dst: src
     if fresh.not when src.length > 0 then {
         rt: src.get i: 0
-        if st.walk.pendingPins.length == 0 then {
+        if av.length == 0 then {
             rvo: st.lookupVarId nameId: rt
             if rvo.some then {
-                drainPendingBorrow :st
+                got = dropArgPins :st :av
                 pinsPush :st path: src shared: true mutable: isViewArg.not
+                pinsAppend pins: av path: src shared: true mutable: isViewArg.not carried: false
                 # the call's result keeps this pin: a path-shaped argument
                 # pins exactly as a bare one does
                 if calleePins then {
                     pinsAppend :pins path: src shared: true mutable: isViewArg.not carried: false
                 }
             }
-        } else if calleePins then pinsFromPending :st :pins :isViewArg
+        } else if calleePins then pinsFromArg :av :pins :isViewArg
     }
+    return got
 }
 
-# pinsFromPending -- the pins an argument's own read left pending (a call
-# returning a view of its base, `b.sv`), onto `pins`: the call's result keeps
-# them as it would the argument's path
-pinsFromPending: function {
-    st: zenv.ZSymbolTable.view
+# dropArgPins -- an argument's pins go, from the side channel too, and with them
+# what describes their value: the argument is its path alone.
+dropArgPins: function {st: zenv.ZSymbolTable av: List ztyping.PinPath} out pinread is {
+    drainPendingBorrow :st
+    for av.length > 0 loop av.pop
+    return (pinread owned: false marker: ztypes.zparamownership.noneMode)
+}
+
+# pinsFromArg -- the pins an argument's own read left (a call returning a view
+# of its base, `b.sv`), onto `pins`: the call's result keeps them as it would
+# the argument's path
+pinsFromArg: function {
+    av: (List ztyping.PinPath).view
     pins: List ztyping.PinPath
     isViewArg: bool
 } is {
-    for each pp: st.walk.pendingPins loop {
+    for each pp: av loop {
         pinsAppend :pins path: pp.path shared: true mutable: isViewArg.not carried: false
     }
 }
@@ -47836,9 +47854,11 @@ refuseViewToWriter: function {
     isViewArg: bool
     isTake: bool
     arg: argref
+    # the argument's marker (readValuePins)
+    marker: ztypes.zparamownership
 } is {
     if isLockish.not or isViewArg or isTake then return
-    if st.walk.pendingMarker != ztypes.zparamownership.viewMode then return
+    if marker != ztypes.zparamownership.viewMode then return
     if (st.reg.isReftypeOf tid: vt).not then return
     target: "this parameter".string
     if arg.name.isZero.not then target = "'\{zast.nameTextAt :ast ref: arg.name}'"
@@ -47878,9 +47898,22 @@ lockNonTrivialArg: function {
     calleePins: bool
     arg: argref
 } is {
-    pendArmPins :st :ast :vt nid: arg.operation borrowing: true writes: true verb: "pass"
+    # what the argument keeps locked: an if/match/block's arms' pins, any other
+    # value's record; the place it is read from joins them (lockBorrowedArgPath)
+    av: List ztyping.PinPath
+    ar: (
+        readValuePins
+        :st
+        :ast
+        :vt
+        nid: arg.operation
+        borrowing: true
+        writes: true
+        verb: "pass"
+        dst: av
+    )
     pendRootlessArgRecord :st :ast nid: arg.operation
-    refuseViewToWriter :st :ast :vt :isLockish :isViewArg :isTake :arg
+    refuseViewToWriter :st :ast :vt :isLockish :isViewArg :isTake :arg marker: ar.marker
     # A construction or take parameter consumes the hoisted
     # temp inside the call scope; a lock/borrow parameter
     # locks it there.
@@ -47896,17 +47929,16 @@ lockNonTrivialArg: function {
     pinsLike: byRef or (valByPointer and calleePins)
     callHolds: false
     if isLockish when pinsLike then {
-        lockBorrowedArgPath :st :ast :arg :isViewArg :pins :calleePins
+        ar = lockBorrowedArgPath :st :ast :arg :isViewArg :pins :calleePins :av :ar
         callHolds = lockFieldArgForCall :st :ast :call :arg :isViewArg
     } else if isLockish when valByPointer then {
         callHolds = lockFieldArgForCall :st :ast :call :arg :isViewArg
     }
-    hadPending: false
-    if st.walk.pendingPins.length > 0 then hadPending = true
+    hadPending: av.length > 0
     # an OWNED value holding locks (a construction, an `outx` result); a
     # borrowed one is refused at a taking slot on its own account -- but a view
     # is moved as a copy that views what it viewed, lent or owned
-    ownsPins: hadPending and (st.walk.pendingBorrowOwned or (isViewFamilyTid :ast :st tid: vt))
+    ownsPins: hadPending and (ar.owned or (isViewFamilyTid :ast :st tid: vt))
     tnm: (
         hoistArg
         :ast
@@ -47916,6 +47948,7 @@ lockNonTrivialArg: function {
         paramType: pt
         :consumes
         viewParam: isViewArg
+        argPins: av
         :callHolds
     )
     moveTakenTempLocks :st :ast :tnm taken: isTake and ownsPins :keeper :calleePins :pins :arg
@@ -50285,6 +50318,8 @@ bindBoxedArgument: function {
     argT: ztypes.tid
 } is {
     if (argIsTrivial :ast op: (ast.nodes.get i: arg.operation)).not then {
+        hp: List ztyping.PinPath
+        takePendingPins :st dst: hp
         (
             hoistArg
             :ast
@@ -50294,6 +50329,7 @@ bindBoxedArgument: function {
             paramType: ztypes.tid.zero
             consumes: true
             viewParam: false
+            argPins: hp
         )
         return
     }
