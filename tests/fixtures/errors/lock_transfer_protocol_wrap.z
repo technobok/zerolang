@@ -1,0 +1,79 @@
+# An owned protocol instance (`Shape.create from: p`, `Shape p`) takes its
+# source, and the source's locks move with it: the instance keeps what the
+# source borrowed locked. So it cannot be returned past that storage, stored in
+# a list that outlives it, or handed to a thread nothing waits for; and the
+# source stays unwritable while the instance lives.
+
+# Shape -- something to look at
+Shape: protocol {
+    # the first element
+    peek: function {t: this.view} out i64
+}
+
+# Peek -- looks at a list its owner keeps
+Peek: class {
+    # the borrowed list
+    xs: (ListVal i64).borrow
+} as {
+    shape: Shape.implement
+    peek: function {t: this.view} out i64 is { return (t.xs.get i: 0) }
+}
+
+# Holder -- owns a Shape
+Holder: class {
+    # the instance
+    s: Shape
+}
+
+# Looker -- a task that owns a Shape
+Looker: class {
+    # the instance
+    s: Shape
+} as {
+    task: (thread.Task null).implement
+    call: function {:this} is { print "\{this.s.peek}" }
+}
+
+# returned -- a wrapped temporary, returned past the list it borrows
+returned: function out Shape is {
+    a: ListVal i64
+    a.append 7
+    return (Shape.create from: (Peek xs: a))
+}
+
+# returnedNamed -- a wrapped local, by the bare-name form
+returnedNamed: function out Shape is {
+    a: ListVal i64
+    a.append 7
+    p: Peek xs: a
+    return (Shape p)
+}
+
+# returnedInField -- a wrapped local inside another value
+returnedInField: function out Holder is {
+    a: ListVal i64
+    a.append 7
+    p: Peek xs: a
+    return (Holder s: (Shape.create from: p))
+}
+
+main: function is {
+    r1: returned
+    r2: returnedNamed
+    r3: returnedInField
+    keep: List Shape
+    a: ListVal i64
+    a.append 7
+    {
+        b: ListVal i64
+        b.append 8
+        s: Shape.create from: (Peek xs: b)
+        keep.append s.take
+    }
+    {
+        s: Shape.create from: (Peek xs: a)
+        a.append 9
+        print "\{s.peek}"
+    }
+    thread.spawnDetached task: (Looker s: (Shape.create from: (Peek xs: a)))
+}

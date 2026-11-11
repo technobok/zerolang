@@ -31068,6 +31068,10 @@ consumeProjectionSource: function {
     if (argIsTrivial :ast op: (ast.nodes.get i: arg.operation)).not then {
         hp: List ztyping.PinPath
         appendRecordPins :st vp: (valuePinsOf :st nid: arg.operation) dst: hp
+        # a consumed source moves into the instance, and its locks with it: the
+        # temporary it leaves holds nothing
+        kept: List ztyping.PinPath
+        if consumes.not then appendRecordPins :st vp: (valuePinsOf :st nid: arg.operation) dst: kept
         (
             hoistArg
             :ast
@@ -31077,8 +31081,9 @@ consumeProjectionSource: function {
             paramType: ztypes.tid.zero
             :consumes
             viewParam: false
-            argPins: hp
+            argPins: kept
         )
+        if consumes then carryPinsIntoDraft :st pins: hp
         return
     }
     if consumes.not then return
@@ -31086,8 +31091,25 @@ consumeProjectionSource: function {
     if pbn.length == 0 then return
     pbv: st.lookupVarId nameId: (nameIdOf :ast name: pbn.stringView)
     if pbv.some then {
+        takeHeldLocks :st from: pbv
         st.invalidate nameId: (nameIdOf :ast name: pbn.stringView) loc: takenHere
     }
+}
+
+# carryPinsIntoDraft -- the locks `pins` name join the pending value's, as
+# carried.
+carryPinsIntoDraft: function {st: zenv.ZSymbolTable pins: (List ztyping.PinPath).view} is {
+    if pins.length == 0 then return
+    for each cp: pins loop {
+        st.walk.draft.pins.append (
+            ztyping.PinPath
+            path: cp.path.copy
+            shared: cp.shared
+            mutable: cp.mutable
+            carried: true
+        )
+    }
+    st.walk.draft.owned = true
 }
 
 # projectionCallKind -- which projection a `F.create` / `P.borrow` is: a facet
