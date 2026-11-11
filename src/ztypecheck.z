@@ -49503,6 +49503,24 @@ argOwnershipOf: function {
     return (argownership :isTake :isLockish :isViewArg :isHold :pt)
 }
 
+# reportDottedNoParameters -- reportNoParameters for a call through a dotted
+# path (`u.one 5`, `os.pid x: 5`), at its first argument: the argument was
+# dropped without a word. `return` and `yield` declare no parameter and take
+# the value they hand back, whatever path names them.
+reportDottedNoParameters: function {
+    st: zenv.ZSymbolTable
+    ast: Ast.view
+    call: callref
+    funcId: ztypes.tid
+} is {
+    if call.nargs == 0 then return
+    nm: dottedChildNameId :ast n: (ast.nodes.get i: call.callable)
+    if (nm == zast.wellKnown.slot.wkReturn) or (nm == zast.wellKnown.slot.wkYield) then return
+    arg: argRefAt :ast nid: (zast.callArgAt :ast nid: call.nid i: 0)
+    if arg.nid.isZero then return
+    reportNoParameters :st :ast :funcId :arg
+}
+
 # reportNoParameters -- an argument, labelled or not, to a function that
 # declares no parameters: say so at the argument. A function whose definition
 # writes a parameter the check refused has no member for it, and is not
@@ -51702,6 +51720,7 @@ checkResolvedMethodCall: function {
         recvImplicit: recvVal
     )
     checkMissingCallArgs :ast :st :call funcId: dro isCtor: false recvImplicit: recvVal
+    reportDottedNoParameters :st :ast :call funcId: dro
     # The receiver locks for the call's duration too, after
     # the args; the strength it took is the strength the result's pin
     # keeps on it.
@@ -53525,7 +53544,72 @@ reportValueCalledWithArgs: function {
         vt = checkValueAt :st :unitDecl :ast nid: call.callable
         if st.typing.errors.length != errC then return
     }
+    if vt.isZero then {
+        # said only of a program nothing else is wrong with: what left the
+        # callee untyped has usually been reported already
+        if st.recording when st.typing.errors.length == 0 then (
+            refuseUncallable
+            :st
+            :ast
+            :call
+            :nameId
+        )
+        return
+    }
     refuseValueCallArgs :st :ast :call :vt :nameId
+}
+
+# refuseNullArguments -- `null` written with an argument (`null 5`): the type
+# has one value and no field, so there is nothing an argument could be. True
+# when it refused.
+refuseNullArguments: function {
+    st: zenv.ZSymbolTable
+    ast: Ast
+    call: callref
+    tid: ztypes.tid
+} out bool is {
+    if call.nargs == 0 then return false
+    if tid != (stdTid :ast :st wk: zast.wellKnown.slot.tyNull) then return false
+    arg: argRefAt :ast nid: (zast.callArgAt :ast nid: call.nid i: 0)
+    (
+        addError
+        :st
+        nodeid: arg.nid
+        lineno: arg.lineno
+        colno: arg.colno
+        e: zast.err.callError
+        msg: "too many arguments: `null` is a value with no fields, not a function".string
+    )
+    return true
+}
+
+# refuseUncallable -- a call with arguments whose callee has no type at all: a
+# unit's name, `meta`, a block. Nothing there takes an argument, and nothing
+# else would say so before the emitter met the call.
+refuseUncallable: function {
+    st: zenv.ZSymbolTable
+    ast: Ast
+    call: callref
+    nameId: zast.nameid
+} is {
+    cn: ast.nodes.get i: call.callable
+    msg: "too many arguments: the callee is not a function".string
+    if nameId.isZero.not then {
+        nm: zast.nameTextAt :ast ref: nameId
+        what: "not a function".string
+        if (unitDeclOfName typing: st.typing :nameId
+        ).isZero.not then what = "a unit, not a function".string
+        msg = "too many arguments: '\{nm}' is \{what}"
+    }
+    (
+        addError
+        :st
+        nodeid: call.callable
+        lineno: (nodeLine n: cn)
+        colno: (nodeCol n: cn)
+        e: zast.err.callError
+        :msg
+    )
 }
 
 # refuseValueCallArgs -- refuse the arguments of a call whose callee is a value
@@ -53700,6 +53784,7 @@ checkTypeConstruction: function {
     if pjtt.isInterface then {
         return (checkProjectionCreate :st :unitDecl :ast :call pjId: tid)
     }
+    if (refuseNullArguments :st :ast :call :tid) then return tid
     if (
         refuseNameConstruction
         :ast
@@ -54334,6 +54419,7 @@ checkDottedCallableCall: function {
                 checkValueAt :st :unitDecl :ast nid: uwa.operation
             }
         }
+        reportUntypedCallBase :st :unitDecl :ast :call
         return (callleg handled: true tid: ztypes.tid.zero)
     } else {
         # A non-generic FUNCTION member dispatches as a user method
@@ -54363,6 +54449,60 @@ checkDottedCallableCall: function {
     return (callleg handled: false tid: result)
 }
 
+
+# reportUntypedCallBase -- an unresolved dotted call whose base has no type
+# either: the base is walked as the value it is written as, which reports what
+# is wrong with it (`(y.f n: 1).g` with no `y`), and a base that walks without
+# a word and still has no type is refused here. Without this the call reached
+# the emitter with nothing said.
+reportUntypedCallBase: function {
+    st: zenv.ZSymbolTable
+    unitDecl: ztypes.declid
+    ast: Ast
+    call: callref
+} is {
+    # a template's walk leaves what its parameters decide untyped: each
+    # instance's walk types it, and is asked again here
+    if st.recording.not then return
+    cn: ast.nodes.get i: call.callable
+    if cn.dottedpath.not then return
+    base: cn.parent
+    if (walkTypeOf :st nid: base).isZero.not then return
+    bn: ast.nodes.get i: base
+    unknown: unresolvedBareCallable :ast :st :unitDecl nid: base
+    if unknown.length > 0 then {
+        (
+            addErrorH
+            :st
+            nodeid: base
+            lineno: (nodeLine n: bn)
+            colno: (nodeCol n: bn)
+            e: zast.err.badReference
+            msg: "Unknown reference '\{unknown}'"
+            note: String
+            hint: String
+            width: unknown.length.u32.orPanic
+        )
+        return
+    }
+    # a name that resolves and has no type here is a template's own: its
+    # instances type it
+    if (zast.atomNameIdOf n: bn).isZero.not then return
+    bt: checkValueAt :st :unitDecl :ast nid: base
+    # said only of a program nothing else is wrong with: what left the base
+    # untyped has usually been reported already
+    if bt.isZero.not or (st.typing.errors.length > 0) then return
+    mn: zast.nameTextAt :ast ref: (zast.atomNameIdOf n: (ast.nodes.get i: cn.child))
+    (
+        addError
+        :st
+        nodeid: base
+        lineno: (nodeLine n: bn)
+        colno: (nodeCol n: bn)
+        e: zast.err.typeError
+        msg: "'\{mn}' is called on an expression that has no value"
+    )
+}
 
 # resultViaPartialBase -- a call's result, reached through a partial instance
 # (`pu.second ..` with `pu: (pairs u: t)`), whose function was read off the
