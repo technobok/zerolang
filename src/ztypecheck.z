@@ -39754,6 +39754,38 @@ namesItsOwnType: function {st: zenv.ZSymbolTable.view nid: zast.nodeid vt: ztype
     return (st.typing.declTypeOf declId: rd) == vt
 }
 
+# nameIsUnitHere -- `nameId` names a unit where the walk stands: a unit has
+# that name, and no local and no definition of a nearer scope takes it first
+# (`io: io.print` makes `io` the program's own).
+nameIsUnitHere: function {st: zenv.ZSymbolTable.view nameId: zast.nameid} out bool is {
+    if nameId.isZero then return false
+    ud: unitDeclOfName typing: st.typing :nameId
+    if ud.isZero then return false
+    if (st.lookupVarId :nameId).some then return false
+    hit: envLookup :st scope: st.curScope :nameId
+    return hit.declId.isZero or (hit.declId == ud)
+}
+
+# refuseUnitNameValue -- a unit's name written where a value is read -- an
+# argument, a condition, a statement of its own: it names a unit and is no
+# value. Said in a recorded walk; a template's walk is asked again per
+# instance.
+refuseUnitNameValue: function {st: zenv.ZSymbolTable ast: Ast.view nid: zast.nodeid} is {
+    if st.recording.not then return
+    vn: ast.nodes.get i: nid
+    nameId: zast.atomNameIdOf n: vn
+    if (nameIsUnitHere :st :nameId).not then return
+    (
+        addError
+        :st
+        nodeid: nid
+        lineno: (nodeLine n: vn)
+        colno: (nodeCol n: vn)
+        e: zast.err.typeError
+        msg: "'\{zast.nameTextAt :ast ref: nameId}' is a unit, not a value"
+    )
+}
+
 # refuseUntypedValue -- a value a binding or an interpolation reads that has
 # no type and that nothing has reported: a unit's name (`n: io`), or an
 # expression that produces no value at all (`x: for i < 3 loop ..`, a member
@@ -39764,7 +39796,7 @@ refuseUntypedValue: function {st: zenv.ZSymbolTable ast: Ast.view nid: zast.node
     vn: ast.nodes.get i: nid
     msg: "the expression produces no value, so it cannot be used as one".string
     nameId: zast.atomNameIdOf n: vn
-    if nameId.isZero.not when (unitDeclOfName typing: st.typing :nameId).isZero.not then {
+    if (nameIsUnitHere :st :nameId) then {
         msg = "'\{zast.nameTextAt :ast ref: nameId}' is a unit, not a value"
     }
     (
@@ -50841,7 +50873,10 @@ reportUnresolvedValue: function {
     # absent from the scope table, where the negative proof would reject
     # a real name (`lx.advance` in zlexer's Lexer).
     if ubU.length == 0 when isDotted then ubU = unresolvedBareName :ast :st :unitDecl nameId: ubD
-    if ubU.length == 0 then return
+    if ubU.length == 0 then {
+        refuseUnitNameValue :st :ast :nid
+        return
+    }
     umU: "Unknown reference '\{ubU}'"
     enU: String
     ehU: String
@@ -59130,6 +59165,7 @@ checkStmtLine: function {
         st.walk.boundSiteLine = nodeLine n: inode
         st.walk.boundSiteCol = nodeCol n: inode
         dk = checkStmtInner :st :unitDecl :ast :innerId lineId: slnId
+        refuseUnitNameValue :st :ast nid: innerId
         st.mode = savedMode
         st.walk.boundSiteNid = bsPrev
         st.walk.boundSiteLine = blPrev
@@ -59908,6 +59944,31 @@ deferBody: function {
     st.walk.deferredScopes.append from: scope
     st.walk.deferredUnits.append from: unitDecl
     st.walk.deferredMonos.append from: st.typing.curMonoStamp
+}
+
+# walkStaticFnRefs -- walk the body of each function a static value refers to
+# (constOfFnRef) that nothing has walked yet; true when any was walked. A walk
+# can evaluate a static value that names another, so the list is read to its
+# end as it grows.
+walkStaticFnRefs: function {st: zenv.ZSymbolTable scope: ztypes.declid ast: Ast} out bool is {
+    walked: false
+    i: u64
+    for i < st.walk.staticFnRefs.length loop {
+        fd: st.walk.staticFnRefs.get :i
+        i = i + 1
+        if (st.typing.declIsWalked declId: fd) then continue
+        (
+            walkDeclaredDef
+            :st
+            :scope
+            :ast
+            unitDecl: (unitRootOfDecl typing: st.typing declId: fd)
+            nameId: (st.typing.decls.get i: fd).name
+            declId: fd
+        )
+        walked = true
+    }
+    return walked
 }
 
 # walkLateUsedBodies -- walk each deferred member a use reached after its
@@ -61175,6 +61236,7 @@ checkBodies: function {st: zenv.ZSymbolTable scope: ztypes.declid program: Ast} 
         # turn, so the completion passes run until a round walks nothing
         more: true
         for more loop {
+            walkStaticFnRefs :st :scope ast: program
             markGeneratedEqParts :st ast: program
             for (walkLateUsedBodies :st ast: program) loop {
                 resolveDemandedDefs :st ast: program
@@ -61186,7 +61248,11 @@ checkBodies: function {st: zenv.ZSymbolTable scope: ztypes.declid program: Ast} 
             # use it or a late walk finds after that is the next round's
             stampUnitMonoTemplates :st :scope :program
             markGeneratedEqParts :st ast: program
-            more = (lateBodyPending :st) or st.walk.instanceUseOwed
+            more = (
+                (lateBodyPending :st) or
+                st.walk.instanceUseOwed or
+                (walkStaticFnRefs :st :scope ast: program)
+            )
         }
     }
 }
@@ -67947,16 +68013,9 @@ constOfFnRef: function {
         )
         return ztypes.noConst
     }
-    # the function is used: its body is walked, so the emitter writes it
-    (
-        walkDeclaredDef
-        :st
-        :scope
-        :ast
-        unitDecl: (unitRootOfDecl typing: st.typing declId: fd)
-        nameId: (st.typing.decls.get i: fd).name
-        declId: fd
-    )
+    # the function is used: the body pass walks it (walkStaticFnRefs), so the
+    # emitter writes it
+    st.walk.staticFnRefs.append fd
     return (ztypes.makeFnConst decl: fd)
 }
 
