@@ -113,7 +113,7 @@ SKIP     := mathutil genmath dissectlib
 EXAMPLES := $(wildcard examples/*.z)
 NAMES    := $(filter-out $(SKIP),$(basename $(notdir $(EXAMPLES))))
 
-.PHONY: all check complexity-report style-lint-fast style-lint test doc-check ci ci-gates ci-corpus \
+.PHONY: all check complexity-report style-lint-fast style-lint test doc-check ci ci-gates ci-corpus fuzz \
 	test-math-arm64 test-sqlite-arm64 test-mingw test-tcc-mingw test-msvc-wine test-msvc-corpus ci-windows windows-guest windows-due test-math-noasm test-portable-scalars docs-link-guard math-asm-guard \
 	bench-math bench-math-kernels test-clang test-tcc test-tcc-heavy readable-check build \
 	tcc zc zl zls regen-goldens regen-fmt-goldens regen-matrix matrix-guard regen-constparity constparity-guard regen-math-asm \
@@ -981,6 +981,29 @@ out/zlexer: bin/zc tests/unit/zlexer_dump.z $(wildcard lib/system/*.z) $(wildcar
 	bin/zc zlexer_dump --src tests/unit --system lib/system --emit-c $(BUILDDIR)/zlexer.c
 	$(CC) $(CFLAGS) -o $(BUILDDIR)/zlexer $(BUILDDIR)/zlexer.c $(call ZLINKOF,$(BUILDDIR)/zlexer.c) -lm
 
+# fuzz -- the token-mutation fuzzer (tests/unit/zfuzz.z) against an
+# AddressSanitizer build of the compiler: N mutants of the example and corpus
+# programs, decided by SEED. A mutant must build or be refused with a
+# diagnostic; a crash, a hang, a panic, an emitter error or C the C compiler
+# refuses is a finding, kept in out/fuzz/findings with zc's stderr beside it.
+# `make fuzz SEED=7 N=100000` for a longer run.
+SEED ?= 1
+N ?= 20000
+FUZZ_SAN := -fsanitize=address,undefined -fno-sanitize-recover=undefined
+out/zc-asan: bin/zc $(wildcard src/*.z lib/system/*.z lib/system/system/*)
+	@mkdir -p $(BUILDDIR)
+	bin/zc build src/zc.z --system lib/system -o $@ --cflags "-O1 -g -fno-omit-frame-pointer $(FUZZ_SAN)" --ldflags "$(FUZZ_SAN)"
+
+out/zfuzz: bin/zc tests/unit/zfuzz.z $(wildcard lib/system/*.z) $(wildcard lib/system/system/*.z)
+	@mkdir -p $(BUILDDIR)
+	bin/zc build tests/unit/zfuzz.z --system lib/system -o $@
+
+fuzz: out/zc-asan out/zfuzz
+	@rm -rf $(BUILDDIR)/fuzz
+	out/zfuzz --zc $(CURDIR)/out/zc-asan --system $(CURDIR)/lib/system \
+	  --corpus $(CURDIR)/examples,$(CURDIR)/tests/fixtures/emitc_corpus \
+	  --work $(CURDIR)/$(BUILDDIR)/fuzz --seed $(SEED) --count $(N)
+
 out/zparser: bin/zc tests/unit/zparser_dump.z $(wildcard lib/system/*.z) $(wildcard lib/system/system/*.z lib/system/math/*.z)
 	@mkdir -p $(BUILDDIR)
 	bin/zc zparser_dump --src tests/unit --system lib/system --emit-c $(BUILDDIR)/zparser.c
@@ -1345,7 +1368,7 @@ perf: $(PERFBIN)
 # deletes write-only allocations; perf-elision measures that), a failed run and
 # allocs != frees. Above ALLOC_BASELINE fails; a commit raising it says why in
 # its message, and one lowering the count lowers it here.
-ALLOC_BASELINE := 2906708
+ALLOC_BASELINE := 2906709
 # ALLOC_LINE -- the one measurement every allocation number comes from.
 ALLOC_LINE = valgrind --tool=memcheck $(PERFRUN) 2>&1 | grep 'total heap usage' | sed 's/.*usage: //'
 

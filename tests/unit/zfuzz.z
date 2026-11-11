@@ -1,0 +1,495 @@
+# zfuzz -- the token-mutation fuzzer for zc. Each case takes one program of the
+# corpus, edits its tokens (delete, duplicate, swap, replace or insert tokens of
+# another program), and builds the result with the compiler under test, which
+# is meant to be an AddressSanitizer build. A case passes when zc builds it, or
+# refuses it with a diagnostic. Anything else is a finding: a crash or a
+# sanitizer report, a hang, a panic, an emitter error (the checker let through
+# what the emitter cannot write), or C the C compiler refuses. A mutant is only
+# ever compiled, never run.
+#
+# Usage: zfuzz --zc <zc> --system <dir> --corpus <dir>[,<dir>...] --work <dir>
+#              [--seed N] [--count N] [--jobs N] [--timeout SECS]
+# A case is decided by (seed, case number) alone, so a run repeats exactly, and
+# `--count` cases split over `--jobs` threads give the same cases whatever the
+# number of threads. Findings are kept in <work>/findings; exit status 1 when
+# there is one.
+
+public: unit {
+    :main
+}
+
+# slurp -- file content as an owned String, or "" when unreadable.
+slurp: function {path: StringView} out String is {
+    r: io.readText :path
+    match (
+        r
+    ) case ok then {
+        return r.copy
+    } case err then {
+        return "".string
+    }
+    return "".string
+}
+
+# Rng -- splitmix64: a sequence decided by its seed alone
+Rng: class {
+    # the state
+    s: u64
+} as {
+    # the next 64 bits
+    next: function {:this} out u64 is {
+        this.s = this.s + 0x9E3779B97F4A7C15
+        z: this.s
+        z = (z ^ (z >> 30)) * 0xBF58476D1CE4E5B9
+        z = (z ^ (z >> 27)) * 0x94D049BB133111EB
+        return z ^ (z >> 31)
+    }
+
+    # a number below `n`, 0 when `n` is 0
+    below: function {:this n: u64} out u64 is {
+        v: this.next
+        if n == 0 then return 0
+        return v % n
+    }
+}
+
+# Tokens -- a source text cut at its token starts: piece `i` runs from
+# `starts[i]` to `starts[i + 1]`, and `words` lists the pieces that are not
+# white space, line ends or comments
+Tokens: class {
+    # the text
+    src: String
+    # each token's first byte, then the text's length
+    starts: ListVal u64
+    # the pieces a mutation picks from
+    words: ListVal u64
+} as {
+    # cut `text` at its tokens
+    create: function {text: String.take} out this is {
+        starts: ListVal u64
+        words: ListVal u64
+        pool: zast.StringPool.create
+        tok: zlexer.Tokenizer.create source: text.copy fsno: zvfs.fsno
+        last: u64
+        for true loop {
+            t: tok.nextToken :pool
+            if t.toktype == zlexer.toktype.eofTok then break
+            # a token that does not advance would loop for ever on a text the
+            # lexer cannot leave
+            if (starts.length > 0) and (t.offset < last) then break
+            if t.toktype != zlexer.toktype.bofTok then {
+                trivia: (
+                    (t.toktype == zlexer.toktype.wsTok) or
+                    (t.toktype == zlexer.toktype.eolTok) or
+                    (t.toktype == zlexer.toktype.commentTok)
+                )
+                if trivia.not then words.append starts.length
+                starts.append t.offset
+                last = t.offset
+            }
+        }
+        starts.append text.length
+        return (meta.create src: text.take :starts :words)
+    }
+
+    # how many pieces there are
+    count: function {t: this.view} out u64 is {
+        return t.starts.length - 1
+    }
+
+    # piece `i`
+    piece: function {t: this.view i: u64} outx StringView is {
+        return (t.src.substring from: (t.starts.get :i) to: (t.starts.get i: i + 1))
+    }
+}
+
+# mutate -- one edit of `base`'s tokens, with `donor` to take tokens from
+mutate: function {base: Tokens.view donor: Tokens.view rng: Rng} out String is {
+    result: String
+    n: base.count
+    if (base.words.length == 0) or (donor.words.length == 0) then return base.src.copy
+    at: base.words.get i: (rng.below n: base.words.length)
+    other: base.words.get i: (rng.below n: base.words.length)
+    from: rng.below n: donor.words.length
+    run: 1 + (rng.below n: 6)
+    kind: rng.below n: 7
+    i: u64
+    for i < n loop {
+        p: base.piece :i
+        if i == at then {
+            if kind == 0 then {
+                # delete the token
+                null
+            } else if kind == 1 then {
+                # duplicate it
+                result.append p
+                result.append " "
+                result.append p
+            } else if kind == 2 then {
+                # swap it with another
+                result.append (base.piece i: other)
+            } else if kind == 3 then {
+                # replace it with one of the donor's
+                result.append (donor.piece i: (donor.words.get i: from))
+            } else if kind == 4 then {
+                # insert a run of the donor's before it
+                appendRun :result :donor :from :run
+                result.append p
+            } else if kind == 5 then {
+                # delete a run: this token and the ones after it
+                i = i + (run * 2 - 1)
+            } else {
+                # replace it with a run of the donor's
+                appendRun :result :donor :from :run
+            }
+        } else if (i == other) and (kind == 2) then {
+            result.append (base.piece i: at)
+        } else {
+            result.append p
+        }
+        i = i + 1
+    }
+    return result
+}
+
+# appendRun -- `run` of the donor's tokens from its word `from`, each with the
+# white space after it, onto `result`
+appendRun: function {result: String donor: Tokens.view from: u64 run: u64} is {
+    first: donor.words.get i: from
+    k: u64
+    for (k < (run * 2)) and ((first + k) < donor.count) loop {
+        result.append (donor.piece i: first + k)
+        k = k + 1
+    }
+    result.append " "
+}
+
+# normalise -- `line` with every run of digits written as `N` and cut to 160
+# bytes: two reports of one defect read alike whatever ids and positions they
+# carry
+normalise: function {line: StringView} out String is {
+    r: String
+    inDigits: false
+    i: u64
+    for (i < line.length) and (r.length < 160) loop {
+        b: (line.byteAt :i).or d: 32
+        if (b >= 48) and (b <= 57) then {
+            if inDigits.not then r.append "N"
+            inDigits = true
+        } else {
+            inDigits = false
+            r.appendByte :b
+        }
+        i = i + 1
+    }
+    return r
+}
+
+# firstLineWith -- the first line of `text` holding `needle`, normalised; ""
+# when none does
+firstLineWith: function {text: StringView needle: StringView} out String is {
+    for each ln: text.lines loop {
+        if ln.contains needle then return (normalise line: ln)
+    }
+    return "".string
+}
+
+# verdict -- what a build that ended with `status` and wrote `errText` to
+# stderr was: "" for a pass (built, or refused with a diagnostic), else the
+# finding's kind and its signature
+verdict: function {status: i32 errText: StringView} out String is {
+    if status == 124 then return "hang: no answer within the time limit".string
+    san: firstLineWith text: errText needle: "ERROR: AddressSanitizer"
+    if san.length > 0 then return "crash: \{san}"
+    leak: firstLineWith text: errText needle: "ERROR: LeakSanitizer"
+    if leak.length > 0 then {
+        where: firstLineWith text: errText needle: "    #1 "
+        return "leak: \{where}"
+    }
+    ub: firstLineWith text: errText needle: "runtime error:"
+    if ub.length > 0 then return "crash: \{ub}"
+    pn: firstLineWith text: errText needle: "zpanic"
+    if pn.length > 0 then return "panic: \{pn}"
+    em: firstLineWith text: errText needle: "error[E0500]"
+    if em.length > 0 then return "emitter: \{em}"
+    diag: (errText.contains "error[E") or (errText.contains "error: ")
+    cc: firstLineWith text: errText needle: " error: "
+    if (cc.length > 0) and (errText.contains "error[E").not then return "bad C: \{cc}"
+    if status == 0 then return "".string
+    if (status == 1) and diag then return "".string
+    if (status == 2) and diag then return "".string
+    return "crash: exit status \{status} with no diagnostic"
+}
+
+# Report -- what one worker found
+Report: class {
+    # cases run
+    cases: u64
+    # cases zc built
+    built: u64
+    # each finding's kind and signature
+    findings: List String
+    # the case that showed each finding, and the program it was made from
+    shown: List String
+}
+
+# Worker -- the task of one thread: every case whose number is `lane` modulo
+# `lanes`
+Worker: class {
+    # the compiler under test
+    zc: String
+    # its --system directory
+    system: String
+    # the corpus directories
+    dirs: List String
+    # where mutants and their outputs go
+    work: String
+    # the run's seed
+    seed: u64
+    # how many cases the run has in all
+    count: u64
+    # this worker's lane, and how many there are
+    lane: u64
+    lanes: u64
+    # seconds a build may take
+    timeout: i32
+} as {
+    task: (thread.Task Report).implement
+
+    call: function {:this} out Report is {
+        rep: Report cases: 0 built: 0 findings: List String shown: List String
+        files: List String
+        fdirs: List String
+        for each d: this.dirs loop {
+            ls: io.listDir path: d
+            if ls.err then continue
+            for each e: ls loop {
+                if e.stringView.endsWith ".z" then {
+                    files.append "\{d}/\{e}"
+                    fdirs.append d.copy
+                }
+            }
+        }
+        if files.length == 0 then return rep
+        k: this.lane
+        for k < this.count loop {
+            this.runCase :files :fdirs :k :rep
+            k = k + this.lanes
+        }
+        return rep
+    }
+
+    # runCase -- case `k`: mutate, build, judge, and record a finding
+    runCase: function {
+        w: this.view
+        files: (List String).view
+        fdirs: (List String).view
+        k: u64
+        rep: Report
+    } is {
+        rng: Rng s: (w.seed * 0x2545F4914F6CDD1D) ^ (k * 0x9E3779B97F4A7C15)
+        bi: rng.below n: files.length
+        di: rng.below n: files.length
+        text: slurp path: (files.get i: bi).stringView
+        edits: 1 + (rng.below n: 3)
+        donor: Tokens.create text: (slurp path: (files.get i: di).stringView)
+        e: u64
+        for e < edits loop {
+            base: Tokens.create text: text.take
+            text = mutate :base :donor :rng
+            e = e + 1
+        }
+        name: "fz\{k}"
+        src: "\{w.work}/\{name}.z"
+        io.writeText path: src content: text
+        errPath: "\{w.work}/\{name}.err"
+        argv: List String
+        argv.append w.zc.copy
+        argv.append "build".string
+        argv.append name.copy
+        argv.append "--src".string
+        argv.append w.work.copy
+        argv.append "--src".string
+        argv.append (fdirs.get i: bi).copy
+        argv.append "--system".string
+        argv.append w.system.copy
+        argv.append "-o".string
+        argv.append "\{w.work}/\{name}.bin"
+        argv.append "--cflags".string
+        argv.append "-O0 -w".string
+        status: (
+            os.spawn
+            :argv
+            cwd: w.work.stringView
+            outPath: os.nullDevice.stringView
+            errPath: errPath.stringView
+            timeoutSecs: w.timeout
+        )
+        rep.cases = rep.cases + 1
+        if status == 0 then rep.built = rep.built + 1
+        errText: slurp path: errPath.stringView
+        v: verdict :status errText: errText.stringView
+        if v.length > 0 then {
+            keep: "\{w.work}/findings"
+            io.writeText path: "\{keep}/\{name}.z" content: text
+            io.writeText path: "\{keep}/\{name}.err" content: errText
+            rep.findings.append v.take
+            rep.shown.append "\{name} (from \{files.get i: bi})"
+        }
+        io.remove path: src
+        io.remove path: errPath
+        io.remove path: "\{w.work}/\{name}.bin"
+    }
+}
+
+# optionOr -- the option `name` of the command line, or `d`
+optionOr: function {p: cli.Parsed.view name: StringView d: StringView} out String is {
+    o: p.option :name
+    match (
+        o
+    ) case some then {
+        return o.copy
+    } case none then {
+        return d.string
+    }
+    return d.string
+}
+
+main: function is {
+    sp: cli.Spec.create programName: "zfuzz".string summary: "token-mutation fuzzer for zc".string
+    (
+        cli.addOption
+        spec: sp
+        name: "--zc".string
+        shortName: "".string
+        help: "the compiler under test".string
+        required: true
+    )
+    (
+        cli.addOption
+        spec: sp
+        name: "--system".string
+        shortName: "".string
+        help: "its --system directory".string
+        required: true
+    )
+    (
+        cli.addOption
+        spec: sp
+        name: "--corpus".string
+        shortName: "".string
+        help: "corpus directories, comma separated".string
+        required: true
+    )
+    (
+        cli.addOption
+        spec: sp
+        name: "--work".string
+        shortName: "".string
+        help: "scratch directory".string
+        required: true
+    )
+    (
+        cli.addOption
+        spec: sp
+        name: "--seed".string
+        shortName: "".string
+        help: "the run's seed (1)".string
+        required: false
+    )
+    (
+        cli.addOption
+        spec: sp
+        name: "--count".string
+        shortName: "".string
+        help: "cases to run (1000)".string
+        required: false
+    )
+    (
+        cli.addOption
+        spec: sp
+        name: "--jobs".string
+        shortName: "".string
+        help: "threads (the cpu count)".string
+        required: false
+    )
+    (
+        cli.addOption
+        spec: sp
+        name: "--timeout".string
+        shortName: "".string
+        help: "seconds a build may take (20)".string
+        required: false
+    )
+    parsed: cli.parse spec: sp args: os.args
+    match (
+        parsed
+    ) case ok then {
+        run p: parsed
+    } case err then {
+        io.eprintln (cli.helpText spec: sp)
+        os.exit code: 2
+    }
+}
+
+# run -- the fuzz run the command line `p` asks for
+run: function {p: cli.Parsed.view} is {
+    seed: (optionOr :p name: "--seed" d: "1").stringView.parseU64.or d: 1
+    count: (optionOr :p name: "--count" d: "1000").stringView.parseU64.or d: 1000
+    jobs: (optionOr :p name: "--jobs" d: "0").stringView.parseU64.or d: 0
+    timeout: (optionOr :p name: "--timeout" d: "20").stringView.parseU64.or d: 20
+    if jobs == 0 then jobs = os.cpuCount.u64.or d: 1
+    work: optionOr :p name: "--work" d: ""
+    io.mkdirp path: "\{work}/findings"
+    corpus: optionOr :p name: "--corpus" d: ""
+    handles: List (thread.JoinHandle Report)
+    lane: u64
+    for lane < jobs loop {
+        dirs: List String
+        for each d: (corpus.stringView.split sep: ",") loop dirs.append d.string
+        handles.append (
+            thread.spawn
+            task: (
+                Worker
+                zc: (optionOr :p name: "--zc" d: "")
+                system: (optionOr :p name: "--system" d: "")
+                :dirs
+                work: work.copy
+                :seed
+                :count
+                :lane
+                lanes: jobs
+                timeout: (timeout.i32.or d: 20)
+            )
+        )
+        lane = lane + 1
+    }
+    cases: u64
+    built: u64
+    kinds: List String
+    shown: List String
+    total: u64
+    for handles.length > 0 loop {
+        h: handles.pop
+        rep: h.join
+        cases = cases + rep.cases
+        built = built + rep.built
+        fi: u64
+        for fi < rep.findings.length loop {
+            total = total + 1
+            sig: rep.findings.get i: fi
+            if (kinds.contains item: sig).not then {
+                kinds.append sig.copy
+                shown.append (rep.shown.get i: fi).copy
+            }
+            fi = fi + 1
+        }
+    }
+    si: u64
+    for si < kinds.length loop {
+        print "FINDING \{kinds.get i: si} -- \{shown.get i: si}"
+        si = si + 1
+    }
+    print "zfuzz: seed \{seed}, \{cases} cases, \{built} built, \{cases - built - total} refused, \{total} findings (\{kinds.length} distinct)"
+    if total > 0 then os.exit code: 1
+}
