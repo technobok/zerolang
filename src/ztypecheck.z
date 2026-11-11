@@ -6191,6 +6191,23 @@ checkReturnNamesType: function {
     oId: zast.nodeid
 } is {
     if (ztyping.nodeTypeAt tbl: st.typing.nodeType nid: oId).isZero.not then return
+    # three words in a row read as an operator between two operands
+    # (`out String String String`), which is no type
+    oc: callRefAt :ast nid: oId
+    if oc.nid.isZero.not when oc.infix then {
+        outNode: ast.nodes.get i: oId
+        (
+            addResolveErrorH
+            :st
+            nodeid: oId
+            lineno: (nodeLine n: outNode)
+            colno: (nodeCol n: outNode)
+            e: zast.err.typeError
+            msg: "an `out` type is one type: this reads as an operator between two values, which names none".string
+            width: 1
+        )
+        return
+    }
     parentId: zast.nodeid
     leafId: zast.nameid
     {
@@ -23773,6 +23790,7 @@ checkInterpPart: function {
     partId: zast.nodeid
 } is {
     en0: st.typing.errors.length
+    if (refuseBlockPart :st :ast :partId) then return
     ptid: checkValueAt :st :unitDecl :ast nid: partId
     if st.typing.errors.length != en0 then return
     if ptid.isZero then {
@@ -23811,6 +23829,27 @@ checkInterpPart: function {
         return
     }
     reportNotPrintable :st :ast :partId :ptid
+}
+
+# refuseBlockPart -- an interpolation part written as a block (`"\{ { n } }"`):
+# a part is one expression, spliced where it stands, and a block's statements
+# have nowhere to run there. True when it refused.
+refuseBlockPart: function {st: zenv.ZSymbolTable ast: Ast.view partId: zast.nodeid} out bool is {
+    part: ast.nodes.get i: partId
+    if part.doexpr.not then return false
+    (
+        addErrorH
+        :st
+        nodeid: partId
+        lineno: part.lineno
+        colno: part.colno
+        e: zast.err.typeError
+        msg: "a block cannot be an interpolation part".string
+        note: String
+        hint: "bind the block to a name first and interpolate the name".string
+        width: 1
+    )
+    return true
 }
 
 # reportNotPrintable -- an interpolation part of type `ptid`, which has no
@@ -48874,6 +48913,16 @@ spelledAsSignature: function {st: zenv.ZSymbolTable.view tid: ztypes.tid} out bo
     return ((st.walk.fnHasBody.get key: tid).or d: false)
 }
 
+# typeArgWrittenName -- a type argument as an application spells it. A function
+# type is named, not spelled out: its signature can name this very application
+# (`held: function {xs: (List held)}`), and would be spelled without end.
+typeArgWrittenName: function {
+    st: zenv.ZSymbolTable.view ast: Ast.view tid: ztypes.tid
+} out String is {
+    if (spelledAsSignature :st :tid) then return (st.reg.nameOf :tid)
+    return (specWrittenName :st :ast :tid)
+}
+
 # declWrittenName -- a declaration as a program names it: its name, or for an
 # instance of a generic one the application that names it, `(Getter v: i64)`.
 # A message naming a function itself says this; the function's TYPE, as a
@@ -48913,7 +48962,7 @@ declWrittenName: function {st: zenv.ZSymbolTable.view ast: Ast.view tid: ztypes.
         ) case valueArg then {
             at = st.reg.valueArgText :tdecl paramName: (st.reg.genericParamNameAt :tdecl :i) bits: a
         } case typeArg then {
-            at = specWrittenName :st :ast tid: a
+            at = typeArgWrittenName :st :ast tid: a
         }
         if i < pns.length then {
             pt: zast.nameTextAt :ast ref: (pns.get :i)
@@ -54624,8 +54673,8 @@ reportUnresolvedMemberCall: function {
     baseT: ztypes.tid
 } is {
     if st.typing.errors.length > 0 then return
-    if (callableReadsStaticList :st :ast :call) then return
     cn: ast.nodes.get i: call.callable
+    if (callableReadsStaticList :st :ast :call) then return
     mn: zast.nameTextAt :ast ref: (dottedChildNameId :ast n: cn)
     bn: specWrittenName :st :ast tid: baseT
     (
