@@ -42841,10 +42841,12 @@ checkFor: function {
     # error -- as is one at any `continue`, which the walk recorded there.
     k: st.unreachableKind
     if k == zenv.divkind.exit then st.discardTakenFrom start: bodyMark
+    # walked only for its type, a loop that never runs moves nothing
+    if entry == ztyping.loopentry.never then st.discardTakenFrom start: entryStart
     st.popTo marker: bodyMarker
     broke: st.breakLeavesInnermost
     st.closeBreakScope
-    checkForPostconditions :st :unitDecl :ast :fornode
+    checkForPostconditions :st :unitDecl :ast :fornode :end
     st.walk.draft.clear
     st.popTo marker: forMarker
     run: st.closeLoopRun
@@ -42900,13 +42902,25 @@ checkForConditions: function {
 # AFTER THE BODY, so the walk reaches it after the body: walked before, a lock it
 # released was released for the body's first iteration too, which runs first.
 checkForPostconditions: function {
-    st: zenv.ZSymbolTable unitDecl: ztypes.declid ast: Ast fornode: forref
+    st: zenv.ZSymbolTable unitDecl: ztypes.declid ast: Ast fornode: forref end: ztyping.loopend
 } is {
     kP: u64
     for kP < fornode.nposts loop {
         pcId: zast.forPostAt :ast nid: fornode.nid i: kP
         kP = kP + 1
         checkForPostcondition :st :unitDecl :ast :pcId
+        # a false one ends the loop, and the ones after it never run
+        if end == ztyping.loopend.once when (
+            (
+                foldLoopPost
+                :st
+                scope: st.curScope
+                :ast
+                :unitDecl
+                :pcId
+            ) ==
+            2
+        ) then return
     }
 }
 
@@ -64974,7 +64988,8 @@ foldReadsLocal: function {
 
 # foldLoopEntry -- a loop's preconditions read in the order they run: a true one
 # is passed over, a false one means the body never runs and nothing after it is
-# read, and one that does not fold, a binding among them, stops the fold.
+# read, and one that does not fold, a binding among them, stops the fold. A later
+# one that folds true needs no test wherever it stands, so each is read for that.
 foldLoopEntry: function {
     ast: Ast
     st: zenv.ZSymbolTable
@@ -64982,15 +64997,31 @@ foldLoopEntry: function {
     scope: ztypes.declid
     fornode: forref
 } out ztyping.loopentry is {
+    answer: ztyping.loopentry.always
     kC: u64
     for kC < fornode.nconds loop {
         condId: zast.forCondAt :ast nid: fornode.nid i: kC
         kC = kC + 1
         v: foldIfCond :st :scope :ast :unitDecl :condId
-        if v == 0 then return ztyping.loopentry.runtime
-        if v == 2 then return ztyping.loopentry.never
+        stampCondFoldsTrue :st nid: condId :v
+        if v == 0 then answer = ztyping.loopentry.runtime
+        if v == 2 when answer == ztyping.loopentry.always then return ztyping.loopentry.never
     }
-    return ztyping.loopentry.always
+    return answer
+}
+
+# foldLoopPost -- the truth of one postcondition, as foldTruth answers it.
+foldLoopPost: function {
+    ast: Ast
+    st: zenv.ZSymbolTable
+    unitDecl: ztypes.declid
+    scope: ztypes.declid
+    pcId: zast.nodeid
+} out u32 is {
+    opId: pcId
+    pc: argRefAt :ast nid: pcId
+    if pc.nid.isZero.not then opId = pc.operation
+    return (foldTruth :st :scope :ast :unitDecl :opId)
 }
 
 # foldLoopEnd -- a loop's postconditions read in the order they run, as its
@@ -65003,18 +65034,31 @@ foldLoopEnd: function {
     fornode: forref
 } out ztyping.loopend is {
     if fornode.nposts == 0 then return ztyping.loopend.unwritten
+    answer: ztyping.loopend.always
     kP: u64
     for kP < fornode.nposts loop {
         pcId: zast.forPostAt :ast nid: fornode.nid i: kP
         kP = kP + 1
-        opId: pcId
-        pc: argRefAt :ast nid: pcId
-        if pc.nid.isZero.not then opId = pc.operation
-        v: foldTruth :st :scope :ast :unitDecl :opId
-        if v == 0 then return ztyping.loopend.runtime
-        if v == 2 then return ztyping.loopend.once
+        v: foldLoopPost :st :scope :ast :unitDecl :pcId
+        stampCondFoldsTrue :st nid: pcId :v
+        if v == 0 then answer = ztyping.loopend.runtime
+        if v == 2 when answer == ztyping.loopend.always then return ztyping.loopend.once
     }
-    return ztyping.loopend.always
+    return answer
+}
+
+# stampCondFoldsTrue -- keep whether a loop's condition, read as `v` (a foldTruth
+# answer), folds true, the way setNodeConstIn keeps a value.
+stampCondFoldsTrue: function {st: zenv.ZSymbolTable nid: zast.nodeid v: u32} is {
+    (
+        ztyping.setFirstOrPerMono
+        perMono: st.typing.monoCondFoldsTrue
+        shared: st.typing.condFoldsTrue
+        copies: st.typing.instanceCopies
+        mono: st.typing.curMonoStamp
+        :nid
+        value: v == 1
+    )
 }
 
 # stampFoldedLoop -- keep a loop's fold the way setNodeConstIn keeps a value.

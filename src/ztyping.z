@@ -789,6 +789,9 @@ ZTyping: class {
     monoFoldedBranch: (MapVV monostamp v: foldedbranch)
     # a loop's fold in one mono's walk, where it differs from the shared one
     monoFoldedLoop: (MapVV monostamp v: foldedloop)
+    # whether a loop's condition folds true in one mono's walk, where that
+    # differs from the shared answer
+    monoCondFoldsTrue: (MapVV monostamp v: bool)
     # the use sites that read a numeric generic parameter, bare or through a
     # value or a type, to the parameter's name
     numericParamRead: (IdMapV zast.nodeid v: zast.nameid)
@@ -1068,6 +1071,8 @@ ZTyping: class {
     foldedBranch: (IdMapV zast.nodeid v: foldedbranch)
     # forexpr nodeid -> what the fold read of its conditions
     foldedLoop: (IdMapV zast.nodeid v: foldedloop)
+    # a loop's condition node -> it folds true, so it writes no test
+    condFoldsTrue: (IdMapV zast.nodeid v: bool)
 
     # aggregate typecheck state
     # every recorded implementation, indexed by its confid: row 0 is the sentinel
@@ -2440,6 +2445,18 @@ ZTyping: class {
         return ((t.foldedBranch.get key: nid).or d: (foldedbranch known: false stmt: zast.nodeid))
     }
 
+    # condFoldsTrueIn -- a loop's condition folds true as the walk of `mono` sees
+    # it, so it writes no test.
+    condFoldsTrueIn: function {t: this.view mono: ztypes.tid nid: zast.nodeid} out bool is {
+        if mono.isZero.not then {
+            mg: t.monoCondFoldsTrue.get key: (monostamp :mono node: nid)
+            if mg.some then {
+                return mg
+            }
+        }
+        return ((t.condFoldsTrue.get key: nid).or d: false)
+    }
+
     # foldedLoopIn -- the loop's fold as the walk of `mono` sees it: run-time
     # conditions, none at the end, when no walk stamped one.
     foldedLoopIn: function {t: this.view mono: ztypes.tid nid: zast.nodeid} out foldedloop is {
@@ -2954,6 +2971,7 @@ newTyping: function {nodeEst: 0.u64} out ZTyping is {
         monoNodeConst: (MapVV monostamp v: ztypes.cval)
         monoFoldedBranch: (MapVV monostamp v: foldedbranch)
         monoFoldedLoop: (MapVV monostamp v: foldedloop)
+        monoCondFoldsTrue: (MapVV monostamp v: bool)
         numericParamRead: (IdMapV zast.nodeid v: zast.nameid)
         unnamedLocalOfNode: (IdMapV zast.nodeid v: zast.nameid)
         unheldTemps: IdSet zast.nameid
@@ -3040,6 +3058,7 @@ newTyping: function {nodeEst: 0.u64} out ZTyping is {
         constAggIndex: (ConstIndex heads: (MapVV u64 v: u32) next: ListVal u32)
         foldedBranch: (IdMapV zast.nodeid v: foldedbranch)
         foldedLoop: (IdMapV zast.nodeid v: foldedloop)
+        condFoldsTrue: (IdMapV zast.nodeid v: bool)
         implementation: (List ztypes.ZImplementation i: ztypes.confid)
         standInOf: (IdMapV zast.nodeid v: specstandin)
         eagerAll: false

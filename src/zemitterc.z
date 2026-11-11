@@ -15977,6 +15977,12 @@ foldedBranchOf: function {
     return (typing.foldedBranchIn mono: ctx.curThisTid :nid)
 }
 
+# condFoldsTrue -- the checker's fold read this loop condition as true, so it
+# writes no test.
+condFoldsTrue: function {typing: ztyping.ZTyping.view ctx: Ctx.view nid: zast.nodeid} out bool is {
+    return (typing.condFoldsTrueIn mono: ctx.curThisTid :nid)
+}
+
 # foldedLoopOf -- what the typechecker's constant fold read of a loop's
 # conditions, and whether that leaves the loop any normal way out.
 foldedLoopOf: function {
@@ -27413,7 +27419,11 @@ emitForStmt: function {
     # It cannot capture a container: emitIntRangeFor bails unless rangeCType
     # answers, and that is the RECEIVER's integer width, which a List or a Map
     # does not have.
-    if (emitIntRangeFor :ast :reg :typing :ctx m: n :ind :tmp :buf) then {
+    #
+    # A loop the fold stops after one iteration skips it: a C `for` whose body
+    # always breaks has a step no path reaches.
+    runsOnce: (foldedLoopOf :typing :ctx nid: n.nodeid).end == ztyping.loopend.once
+    if runsOnce.not when (emitIntRangeFor :ast :reg :typing :ctx m: n :ind :tmp :buf) then {
         ctx.condDepth = ctx.condDepth - 1
         return
     }
@@ -27491,8 +27501,12 @@ emitDoWhileFor: function {
 } is {
     lidDW: pushLoopLabel :ctx :tmp isDo: false postTest: false
     # a postcondition that moves, or holds a control value, computes into a
-    # guard the trailing test reads, declared where that test can see it
-    stepped: condsNeedSteps :ast :reg :typing :ctx suspends: false conds: n.postconditions
+    # guard the trailing test reads, declared where that test can see it. One
+    # the fold settled writes a constant test instead, and runs none of them
+    stepped: (
+        ((foldedLoopOf :typing :ctx nid: n.nodeid).end == ztyping.loopend.runtime) and
+        (condsNeedSteps :ast :reg :typing :ctx suspends: false conds: n.postconditions)
+    )
     gvD: String
     if stepped then gvD = newCondGuard :ctx :ind :buf
     # the body is written into its own buffer: the trailing test is built after
@@ -27539,7 +27553,8 @@ emitDoWhileFor: function {
     popLoopLabel :ctx id: lidDW :ind :buf
 }
 
-# doWhileCondText -- a do-while's trailing test as one `&&` chain.
+# doWhileCondText -- a do-while's trailing test as one `&&` chain, a condition
+# that folds true writing nothing. A constant when the fold settled the test.
 doWhileCondText: function {
     ast: Ast.view
     reg: ztypes.ZTypeRegistry.view
@@ -27548,22 +27563,35 @@ doWhileCondText: function {
     n: zast.forrow.view
 } out String is {
     pcond: String
+    end: (foldedLoopOf :typing :ctx nid: n.nodeid).end
+    if end == ztyping.loopend.always then return "1".string
+    if end == ztyping.loopend.once then return "0".string
     i: u64
     for i < n.postconditions.count loop {
         pk: zast.kidAt kids: ast.kids span: n.postconditions :i
         i = i + 1
-        pkn: ast.nodes.get i: pk
-        # the checker stamps the OPERATION node, so unwrap the same way
-        pkop: pk
-        if pkn.namedoperation then pkop = pkn.operation
-        # the trailing test runs at every iteration, so it is evaluated in place
-        mk8: openInPlace :ctx guarded: true
-        pcvF: cfacts
-        pcv: valueExprC :ast :reg :typing :ctx n: pkn facts: pcvF
-        tw8: truthyCondText :ast :reg :typing :ctx n: (ast.nodes.get i: pkop) raw: pcv.stringView
-        if tw8.length > 0 then pcv = tw8.take
-        if pcond.length > 0 then pcond.append " && "
-        appendInPlaceCond :ctx mark: mk8 text: pcv.stringView dst: pcond
+        if (condFoldsTrue :typing :ctx nid: pk).not then {
+            pkn: ast.nodes.get i: pk
+            # the checker stamps the OPERATION node, so unwrap the same way
+            pkop: pk
+            if pkn.namedoperation then pkop = pkn.operation
+            # the trailing test runs at every iteration, so it is evaluated in place
+            mk8: openInPlace :ctx guarded: true
+            pcvF: cfacts
+            pcv: valueExprC :ast :reg :typing :ctx n: pkn facts: pcvF
+            tw8: (
+                truthyCondText
+                :ast
+                :reg
+                :typing
+                :ctx
+                n: (ast.nodes.get i: pkop)
+                raw: pcv.stringView
+            )
+            if tw8.length > 0 then pcv = tw8.take
+            if pcond.length > 0 then pcond.append " && "
+            appendInPlaceCond :ctx mark: mk8 text: pcv.stringView dst: pcond
+        }
     }
     if pcond.length == 0 then pcond.append "0"
     return pcond
@@ -27587,6 +27615,16 @@ emitPostTest: function {
     buf: String.borrow
 } is {
     if m.postconditions.count.u64 == 0 then return
+    end: (foldedLoopOf :typing :ctx nid: m.nodeid).end
+    if end == ztyping.loopend.always then {
+        if cleanup.length > 0 then buf.append "\{ind}\{cleanup}"
+        return
+    }
+    if end == ztyping.loopend.once then {
+        if cleanup.length > 0 then buf.append "\{ind}\{cleanup}"
+        buf.append "\{ind}break;\n"
+        return
+    }
     test: String
     if (condsNeedSteps :ast :reg :typing :ctx suspends: false conds: m.postconditions) then {
         gv: newCondGuard :ctx :ind :buf
@@ -31935,6 +31973,7 @@ emitForCond: function {
 } is {
     if n.namedoperation then {
         if (zast.nameTextAt :ast ref: n.name).length > 0 then return
+        if (condFoldsTrue :typing :ctx nid: n.nodeid) then return
         # a loop's test runs at every iteration, so it is evaluated in place
         mk7: openInPlace :ctx guarded: true
         cvF: cfacts
@@ -33357,6 +33396,7 @@ emitSteppedCond: function {
         cId: zast.kidAt kids: ast.kids span: conds i: ci
         ci = ci + 1
         if inLoop when (forCondIsNamed :ast kId: cId) then continue
+        if inLoop when (condFoldsTrue :typing :ctx nid: cId) then continue
         if seen > 0 then {
             buf.append "\{indK}if (\{gvar}) {\n"
             indK.append "    "

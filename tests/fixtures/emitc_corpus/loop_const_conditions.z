@@ -1,0 +1,144 @@
+# loop_const_conditions.z -- every loop form with a constant condition that
+# folds to clean C: a condition that folds true writes no test, a postcondition
+# that folds false stops the loop after one iteration, and statements after a
+# loop that never exits are dropped.
+
+NEVER: false
+ALWAYS: true
+
+Count: class {
+    n: i64
+} as {
+    tick: function {:this} out bool is {
+        this.n = this.n + 1
+        return true
+    }
+}
+
+Tick: class {
+    n: i64
+    lim: i64
+} as {
+    next: function {:this} out optionval i64 is {
+        if this.n >= this.lim then return (optionval.none i64)
+        this.n = this.n + 1
+        return (optionval.some this.n)
+    }
+}
+
+Gen: generator { limit: i64 } as {
+    call: function out i64 is {
+        i: 0
+        for ALWAYS while i < this.limit loop {
+            yield i
+            i = i + 1
+        } while ALWAYS
+        for NEVER loop {
+            yield 99
+        }
+        for loop {
+            yield 7
+        } while NEVER
+    }
+}
+
+spin: function out u32 is {
+    n: 0
+    for loop {
+        n = n + 1
+        if n > 3 then return 8
+    }
+}
+
+spinThenDropped: function is {
+    n: 0
+    for loop {
+        n = n + 1
+        if n > 3 then return
+    }
+    print "dropped"
+}
+
+spinTrue: function out u32 is {
+    n: 0
+    for ALWAYS loop {
+        n = n + 1
+        if n > 3 then return 9
+    } while ALWAYS
+}
+
+main: function is {
+    c: Count n: 0
+    i: 0
+    # a true precondition beside a run-time one
+    for ALWAYS while i < 2 loop {
+        i = i + 1
+    }
+    print "a \{i}"
+    for i < 4 while ALWAYS loop {
+        i = i + 1
+    }
+    print "b \{i}"
+    # postcondition true, beside a precondition and on a do-while
+    for i < 6 loop {
+        i = i + 1
+    } while ALWAYS
+    print "c \{i}"
+    for loop {
+        i = i + 1
+        if i > 7 then break
+    } while ALWAYS
+    print "d \{i}"
+    # postcondition false: one iteration, beside a precondition and on a do-while
+    for i < 100 loop {
+        i = i + 1
+    } while NEVER
+    print "e \{i}"
+    for loop {
+        i = i + 1
+    } while NEVER
+    print "f \{i}"
+    # a continue still reaches the postcondition
+    for i < 100 loop {
+        i = i + 1
+        if i > 0 then continue
+        print "skipped"
+    } while NEVER
+    print "g \{i}"
+    # a run-time postcondition after a true one
+    for loop {
+        i = i + 1
+    } while ALWAYS while i < 15
+    print "h \{i}"
+    # a false postcondition after a true one
+    for loop {
+        i = i + 1
+    } while ALWAYS while NEVER while c.tick
+    print "i \{i} ticks \{c.n}"
+    # an `each` binding with a true arm
+    for each x: 3.times while ALWAYS loop {
+        print "each \{x}"
+    }
+    # a plain binding with a true arm
+    t: Tick n: 0 lim: 2
+    for v: t.next while ALWAYS loop {
+        print "plain \{v}"
+    }
+    # a named binding with a false postcondition: one element
+    for each x: 3.times loop {
+        print "once \{x}"
+    } while NEVER
+    # a loop that never runs moves nothing, though it is walked for its type
+    s: "kept".string
+    ys: for NEVER loop {
+        t: s.take
+        t.length
+    }
+    print "\{s} \{ys.length}"
+    print "spin \{spin}"
+    spinThenDropped
+    print "spinTrue \{spinTrue}"
+    for each g: (Gen limit: 2) loop {
+        print "gen \{g}"
+    }
+}
