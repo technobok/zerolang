@@ -14,6 +14,7 @@
 #            outside tests/known-leaks.txt. The spelling is proved to work on a
 #            deliberate leak before any verdict is trusted (proveSanitizer).
 #   error    errors/<n>.z must fail with the error[Exxxx] lines of <n>.err
+#   errcode  every error zast.errFacts lists is reported by some golden
 #   lone     every run case, with one unrelated error written at the top of
 #            `main`, reports that error and no other
 #   dump     dump_cases.txt -> `zc dump --canon` matches dump_golden/<n>.canon
@@ -1099,6 +1100,51 @@ runArchCases: function {r: Runner} is {
         ji = ji + 1
     }
     if (ratchetStale kind: "arch" :baseKeys :baseCounts :seen) then anyFail = true
+    if anyFail then {
+        r.fails = r.fails + 1
+    } else {
+        r.passN = r.passN + 1
+    }
+}
+
+# appendGoldens -- the text of every `<name><suffix>` file in `dir`, appended
+# to `all`.
+appendGoldens: function {dir: StringView suffix: StringView all: String} is {
+    for each nm: (fixtureNames :dir :suffix) loop {
+        g: slurp path: "\{dir}/\{nm}\{suffix}".stringView
+        all.append g
+    }
+}
+
+# runErrCodeCases -- the ERRCODE ratchet: every error the compiler can report
+# (a row of zast.errFacts) is the error of at least one golden -- an ERROR
+# fixture's `.err`, a PROJECT case's expected.err or a ZDATA case's `.err`. An
+# error no fixture raises is untested, or nothing raises it and its arm goes.
+# `fileNotFound` is the one row with no golden: the parser's own answer for a
+# unit with no file, which it reports as an unknown reference where the unit
+# was named.
+runErrCodeCases: function {r: Runner} is {
+    all: String
+    appendGoldens dir: r.errors.stringView suffix: ".err" :all
+    appendGoldens dir: "\{r.root.stringView}/tests/fixtures/zdata".stringView suffix: ".err" :all
+    pdir: "\{r.root.stringView}/tests/fixtures/project"
+    cases: io.listDir path: pdir
+    if cases.err.not then {
+        for each cs: cases loop {
+            g: slurp path: "\{pdir}/\{cs}/expected.err".stringView
+            all.append g
+        }
+    }
+    anyFail: false
+    for each f: zast.errFacts loop {
+        if f.arm == zast.err.fileNotFound then continue
+        code: zdiag.ecodeString code: f.code
+        head: "error[\{code}]"
+        if (all.stringView.contains head).not then {
+            print "FAIL(errcode) \{code} \{f.label.stringView}: no golden reports it -- add an error fixture that does, or delete the arm when nothing raises it"
+            anyFail = true
+        }
+    }
     if anyFail then {
         r.fails = r.fails + 1
     } else {
@@ -3368,12 +3414,13 @@ copyUnits: function {from: StringView to: StringView} is {
     for each fe: files loop {
         fv: fe.stringView
         fsrc: "\{from}/\{fv}"
-        if (fv.endsWith ".z") or (fv.endsWith ".zd") then {
-            fc: slurp path: fsrc.stringView
-            io.writeText path: "\{to}/\{fv}" content: fc
-        } else if (zcheck.pathKindIs path: fsrc.stringView want: io.filekind.dir) then {
+        # a folder first: one may be named as a unit file is
+        if (zcheck.pathKindIs path: fsrc.stringView want: io.filekind.dir) then {
             sub: "\{to}/\{fv}"
             copyUnits from: fsrc.stringView to: sub.stringView
+        } else if (fv.endsWith ".z") or (fv.endsWith ".zd") then {
+            fc: slurp path: fsrc.stringView
+            io.writeText path: "\{to}/\{fv}" content: fc
         }
     }
 }
@@ -4162,6 +4209,7 @@ main: function is {
         runDifferentialCases :r
         runVfsCases :r
         runProjectCases :r
+        runErrCodeCases :r
         runSmokeCases :r
         runFmtCases :r
         runDoccodeCases :r

@@ -52,6 +52,8 @@ public: unit {
     :callkindname
     :err
     :errCode
+    :errFacts
+    :errfacts
     :errorLine
     :explainText
     :armName
@@ -129,7 +131,7 @@ public: unit {
     :wellKnown
 }
 
-# Error codes. Numeric E0xxx values are assigned by errCode, not by arm
+# Error codes. Each arm's numeric E0xxx value is its row in errFacts, not its
 # position, so arms may be added anywhere.
 
 # parse/AST error variants; the diagnostics layer maps each arm to a code.
@@ -142,8 +144,6 @@ err: variant {
     badUnitName: null
     # the unit header itself did not parse
     badUnit: null
-    # a function definition did not parse
-    badFunction: null
     # the source could not be read at all
     ioError: null
     # a definition was required at this position
@@ -158,12 +158,8 @@ err: variant {
     expectedStatement: null
     # one argument did not parse
     badArgument: null
-    # the argument list as a whole did not parse
-    badArgumentBlock: null
     # an expression was begun and could not be finished
     badExpression: null
-    # the thing a name was bound to did not parse
-    badOperation: null
     # a string literal did not parse -- an unterminated quote, or an escape the
     # lexer does not know
     badString: null
@@ -171,8 +167,6 @@ err: variant {
     badPath: null
     # a reference did not parse
     badReference: null
-    # a call did not parse
-    badCall: null
     # one parameter did not parse
     badParameter: null
     # the parameter list as a whole did not parse
@@ -183,8 +177,6 @@ err: variant {
     badItem: null
     # the `then` branch did not parse
     badThen: null
-    # the `else` branch did not parse
-    badElse: null
     # a match arm did not parse
     badCase: null
     # a for header did not parse
@@ -195,17 +187,12 @@ err: variant {
     badStatement: null
     # the types do not agree where they must
     typeError: null
-    # a name resolved to nothing in any reachable scope
-    refNotFound: null
     # an ownership rule was broken -- a use after transfer, or a second take
     ownerError: null
     # the call does not match the declaration it resolved to
     callError: null
     # a generic could not be instantiated for the arguments given
     genericError: null
-    # the compiler reached a state it does not handle. A BUG rather than bad
-    # input, so it names itself as one
-    compilerError: null
     # a word the language reserves was used as an identifier
     reservedName: null
     # a match leaves an arm the subject can still hold uncovered
@@ -462,111 +449,322 @@ errorDataOf: function {ast: Ast.view row: errorrow} out ErrorData is {
     )
 }
 
+# errfacts -- what one error is outside the compiler: its code, its name in a
+# dump, and what `zc explain` says about it
+errfacts: data {
+    # the error
+    arm: err
+    # the number in `E0xxx`
+    code: u32
+    # the name a tree dump prints
+    label: text
+    # the explanation: a title, a blank line, the body
+    explain: text
+}
+
+# errFacts -- each error's facts. A code is assigned here, not by an arm's
+# position, so arms may be added anywhere.
+errFacts: list {
+    fileNotFound: (
+        errfacts
+        arm: err.fileNotFound
+        code: 2
+        label: "FILENOTFOUND"
+        explain: "file not found\n\nThe source file for a unit (<unit>.z) could not be located under --src or the system library."
+    )
+    duplicateDef: (
+        errfacts
+        arm: err.duplicateDef
+        code: 3
+        label: "DUPLICATEDEF"
+        explain: "duplicate definition\n\nTwo definitions share the same name in the same scope. Rename or remove one."
+    )
+    badUnitName: (
+        errfacts
+        arm: err.badUnitName
+        code: 4
+        label: "BADUNITNAME"
+        explain: "bad unit name\n\nA unit name is malformed or does not match its file. Unit names are identifiers with no extension."
+    )
+    badUnit: (
+        errfacts
+        arm: err.badUnit
+        code: 5
+        label: "BADUNIT"
+        explain: "malformed unit\n\nThe unit could not be parsed as a sequence of top-level definitions."
+    )
+    ioError: (
+        errfacts
+        arm: err.ioError
+        code: 7
+        label: "IOERROR"
+        explain: "I/O error\n\nReading or writing a file failed. Check the path and permissions."
+    )
+    expectedDef: (
+        errfacts
+        arm: err.expectedDef
+        code: 10
+        label: "EXPECTEDDEF"
+        explain: "expected a definition\n\nA top-level definition (name: function / record / class / ...) was expected here."
+    )
+    expectedExp: (
+        errfacts
+        arm: err.expectedExp
+        code: 12
+        label: "EXPECTEDEXP"
+        explain: "expected an expression\n\nAn expression was expected here but something else was found."
+    )
+    expectedOp: (
+        errfacts
+        arm: err.expectedOp
+        code: 13
+        label: "EXPECTEDOP"
+        explain: "expected an operator\n\nAn operator was expected between two operands. Operators must be surrounded by whitespace."
+    )
+    expectedTypeDef: (
+        errfacts
+        arm: err.expectedTypeDef
+        code: 14
+        label: "EXPECTEDTYPEDEF"
+        explain: "expected a type definition\n\nA type definition (record / variant / facet / class / union / protocol) was expected here."
+    )
+    expectedStatement: (
+        errfacts
+        arm: err.expectedStatement
+        code: 15
+        label: "EXPECTEDSTATEMENT"
+        explain: "expected a statement\n\nA statement was expected inside this block."
+    )
+    badArgument: (
+        errfacts
+        arm: err.badArgument
+        code: 17
+        label: "BADARGUMENT"
+        explain: "malformed argument\n\nA call argument is not well formed. Named arguments take the form name: value."
+    )
+    badExpression: (
+        errfacts
+        arm: err.badExpression
+        code: 19
+        label: "BADEXPRESSION"
+        explain: "malformed expression\n\nThe expression could not be parsed."
+    )
+    badString: (
+        errfacts
+        arm: err.badString
+        code: 21
+        label: "BADSTRING"
+        explain: "malformed string\n\nA string literal is unterminated or contains an invalid escape or interpolation."
+    )
+    badPath: (
+        errfacts
+        arm: err.badPath
+        code: 22
+        label: "BADPATH"
+        explain: "malformed path\n\nA dotted path (a.b.c) is not well formed."
+    )
+    badReference: (
+        errfacts
+        arm: err.badReference
+        code: 23
+        label: "BADREFERENCE"
+        explain: "malformed reference\n\nA reference to a name or member is not well formed."
+    )
+    badParameter: (
+        errfacts
+        arm: err.badParameter
+        code: 25
+        label: "BADPARAMETER"
+        explain: "malformed parameter\n\nA parameter declaration is not well formed. Parameters take the form name: type."
+    )
+    badParameterBlock: (
+        errfacts
+        arm: err.badParameterBlock
+        code: 26
+        label: "BADPARAMETERBLOCK"
+        explain: "malformed parameter block\n\nThe parameter list of a function could not be parsed."
+    )
+    badObjectBlock: (
+        errfacts
+        arm: err.badObjectBlock
+        code: 27
+        label: "BADOBJECTBLOCK"
+        explain: "malformed object block\n\nThe body of a type definition could not be parsed."
+    )
+    badItem: (
+        errfacts
+        arm: err.badItem
+        code: 28
+        label: "BADITEM"
+        explain: "malformed item\n\nAn item inside a block or list is not well formed."
+    )
+    badThen: (
+        errfacts
+        arm: err.badThen
+        code: 29
+        label: "BADTHEN"
+        explain: "malformed then clause\n\nAn if or for expression is missing a well-formed 'then' clause."
+    )
+    badCase: (
+        errfacts
+        arm: err.badCase
+        code: 31
+        label: "BADCASE"
+        explain: "malformed case clause\n\nA match 'case' arm is not well formed; it must follow the closing brace on the same line."
+    )
+    badFor: (
+        errfacts
+        arm: err.badFor
+        code: 32
+        label: "BADFOR"
+        explain: "malformed for header\n\nA for loop header is not well formed (for <var>: <iter> loop, or for while <cond> loop)."
+    )
+    badList: (
+        errfacts
+        arm: err.badList
+        code: 34
+        label: "BADDATA"
+        explain: "malformed list\n\nA list definition is not well formed."
+    )
+    badStatement: (
+        errfacts
+        arm: err.badStatement
+        code: 35
+        label: "BADSTATEMENT"
+        explain: "malformed statement\n\nThe statement could not be parsed."
+    )
+    typeError: (
+        errfacts
+        arm: err.typeError
+        code: 100
+        label: "TYPEERROR"
+        explain: "type error\n\nA value's type does not match what is required here: a mismatch, an undefined type, or an incompatible assignment."
+    )
+    ownerError: (
+        errfacts
+        arm: err.ownerError
+        code: 200
+        label: "OWNERERROR"
+        explain: "ownership error\n\nA value's ownership was used incorrectly: used after a take/move, a borrow outliving its lock, a reftype aliased while locked, or a reassignment in another mode than the name was bound with -- an owned name takes an owned value (`x = d.take`), a borrow is re-pointed (`b = d`). See docs/ownership."
+    )
+    callError: (
+        errfacts
+        arm: err.callError
+        code: 300
+        label: "CALLERROR"
+        explain: "call error\n\nA call's arguments do not match the callee: wrong count, an unknown named argument, or an argument type mismatch. Also raised for a bare type name in value position that cannot construct its zero value: required fields missing, or a family with no zero-argument create (unions/variants select an arm, views bind from an owner, generic templates need type arguments)."
+    )
+    genericError: (
+        errfacts
+        arm: err.genericError
+        code: 400
+        label: "GENERICERROR"
+        explain: "generic error\n\nA generic type could not be resolved: a missing type argument, failed inference, or an unsatisfied constraint."
+    )
+    reservedName: (
+        errfacts
+        arm: err.reservedName
+        code: 33
+        label: "RESERVEDNAME"
+        explain: "reserved word used as a name\n\nA reserved keyword (unit, function, match, ...) or a future-reserved word (enum, goto, ...) cannot be used as a definition, parameter, field, binding or argument name, spelled `word:` or as the `:word` shorthand. Rename it."
+    )
+    nonExhaustive: (
+        errfacts
+        arm: err.nonExhaustive
+        code: 36
+        label: "NONEXHAUSTIVE"
+        explain: "non-exhaustive match\n\nA `match` over a variant or union does not cover every arm and has no `else`. Add the missing case(s), or an `else` clause."
+    )
+    reservedMember: (
+        errfacts
+        arm: err.reservedMember
+        code: 37
+        label: "RESERVEDMEMBER"
+        explain: "reserved member name\n\nA type body declares a member named `public` or `tag`, or a unit declares a definition named `public`. `public` names the visibility block, so `public: unit { ... }` is the only declaration it may introduce; `tag` is the arm tag every sum type carries. Rename it."
+    )
+    notPublic: (
+        errfacts
+        arm: err.notPublic
+        code: 101
+        label: "NOTPUBLIC"
+        explain: "member not public\n\nThe member exists but is not in the type's `public:` interface. Access it from within the type's own methods (`this`), or through a `.private` friend handle the type handed out."
+    )
+    privateEscape: (
+        errfacts
+        arm: err.privateEscape
+        code: 102
+        label: "PRIVATEESCAPE"
+        explain: "private escape\n\nA `.private` view may only be taken by the value's own type, or by a holder of an existing `.private` handle (a friend the type passed it to). External code holding only a public value cannot produce one."
+    )
+    constError: (
+        errfacts
+        arm: err.constError
+        code: 600
+        label: "CONSTERROR"
+        explain: "compile-time evaluation error\n\nThe compiler was asked for a value at compile time and could not produce one: a division by a constant zero, a result outside the range the evaluator works in, a constant defined in terms of itself, or an expression it cannot evaluate: a call, an operator it does not fold, or a unit-level `if` whose condition or selected branch does not fold. Distinct from E0500, which is the emitter reporting a construct it cannot emit."
+    )
+    userError: (
+        errfacts
+        arm: err.userError
+        code: 601
+        label: "USERERROR"
+        explain: "compile-time error\n\nAn `error` call the compiler proved reachable. The message is the one the program's author wrote; the compiler is reporting it, not diagnosing it."
+    )
+    noMain: (
+        errfacts
+        arm: err.noMain
+        code: 39
+        label: "NOMAIN"
+        explain: "no main\n\nThe unit being compiled declares no `main: function is { ... }`, so the compiler has no entry point to start from. Compilation is demand-driven: `main` is the root, and what it reaches is what gets checked and emitted. A unit with no `main` is a library -- compile the program that opens it instead, or add a `main`. `--eager` resolves every definition rather than what a root reaches, so it does not require one."
+    )
+    badToken: (
+        errfacts
+        arm: err.badToken
+        code: 9
+        label: "BADTOKEN"
+        explain: "unexpected characters\n\nThe characters form no token of the language -- a two-dot run, an unknown escape, a byte no token may contain. This is the lexer's own diagnosis, reported where the parser met the characters."
+    )
+    badMain: (
+        errfacts
+        arm: err.badMain
+        code: 40
+        label: "BADMAIN"
+        explain: "malformed main\n\n`main` is the program's entry point, written `main: function is { ... }`. It takes no parameters, because the runtime has none to pass it, and declares no result, because there is no caller to return one to. Read the command line with `os.args`, and end with a status through `os.exit code: n`."
+    )
+    dataFile: (
+        errfacts
+        arm: err.dataFile
+        code: 41
+        label: "DATAFILE"
+        explain: "not data in a data file\n\nA data file (`.zd`) holds values -- numbers, strings, bools, lists, data and choice values, references to other definitions -- and the `data` and `choice` types they are built from, in units that nest with `unit { }`. A function, any other kind of type, an `as` block, a `public:` block, an operator, an interpolated string and an `if` or `match` compute or declare behaviour, so a data file cannot hold them. Write the value itself, or move the code to a source file."
+    )
+    emitterError: (
+        errfacts
+        arm: err.emitterError
+        code: 500
+        label: "EMITTERERROR"
+        explain: "emitter error\n\nType checking succeeded but the C emitter met a construct it cannot emit. Nothing is written; the message names the construct. This is a compiler gap, not an error in your program."
+    )
+    noNativeImpl: (
+        errfacts
+        arm: err.noNativeImpl
+        code: 501
+        label: "NONATIVEIMPL"
+        explain: "no native implementation\n\nA declaration says `is native` -- that the backend supplies its body -- and the backend has none for it. The program is wrong, not the compiler: write the body, or give the runtime the build uses an implementation of it. Checked at the declaration, whether or not anything calls it."
+    )
+    useBeforeInit: (
+        errfacts
+        arm: err.useBeforeInit
+        code: 103
+        label: "USEBEFOREINIT"
+        explain: "used before it is initialised\n\nCode runs top to bottom: a local is in scope from the statement that declares it, and holds a value once that statement is done. A use inside its own value (`n: n + 1`, `point: point x: 10`), or inside a binding's own expression (`for each xs: xs`, `with s: s`), finds the local -- the nearest declaration of the name -- before it holds anything. Name the local differently, or reach the outer declaration through its unit (`system.u64`, `myunit.n`)."
+    )
+} out staticlist errfacts
+
 # errCode -- the numeric E-code for an err variant.
 errCode: function {c: err} out u32 is {
-    r: 1.u32
-    match (
-        c
-    ) case fileNotFound then {
-        r = 2
-    } case duplicateDef then {
-        r = 3
-    } case badUnitName then {
-        r = 4
-    } case badUnit then {
-        r = 5
-    } case badFunction then {
-        r = 6
-    } case ioError then {
-        r = 7
-    } case expectedDef then {
-        r = 10
-    } case expectedExp then {
-        r = 12
-    } case expectedOp then {
-        r = 13
-    } case expectedTypeDef then {
-        r = 14
-    } case expectedStatement then {
-        r = 15
-    } case badArgument then {
-        r = 17
-    } case badArgumentBlock then {
-        r = 18
-    } case badExpression then {
-        r = 19
-    } case badOperation then {
-        r = 20
-    } case badString then {
-        r = 21
-    } case badPath then {
-        r = 22
-    } case badReference then {
-        r = 23
-    } case badCall then {
-        r = 24
-    } case badParameter then {
-        r = 25
-    } case badParameterBlock then {
-        r = 26
-    } case badObjectBlock then {
-        r = 27
-    } case badItem then {
-        r = 28
-    } case badThen then {
-        r = 29
-    } case badElse then {
-        r = 30
-    } case badCase then {
-        r = 31
-    } case badFor then {
-        r = 32
-    } case badList then {
-        r = 34
-    } case badStatement then {
-        r = 35
-    } case reservedName then {
-        r = 33
-    } case nonExhaustive then {
-        r = 36
-    } case reservedMember then {
-        r = 37
-    } case noMain then {
-        r = 39
-    } case dataFile then {
-        r = 41
-    } case badToken then {
-        r = 9
-    } case badMain then {
-        r = 40
-    } case emitterError then {
-        r = 500
-    } case noNativeImpl then {
-        r = 501
-    } case typeError then {
-        r = 100
-    } case notPublic then {
-        r = 101
-    } case privateEscape then {
-        r = 102
-    } case useBeforeInit then {
-        r = 103
-    } case refNotFound then {
-        r = 8
-    } case ownerError then {
-        r = 200
-    } case callError then {
-        r = 300
-    } case genericError then {
-        r = 400
-    } case constError then {
-        r = 600
-    } case userError then {
-        r = 601
-    } case compilerError then {
-        r = 1
-    }
-    return r
+    for each f: errFacts loop if f.arm == c then return f.code
+    return 0
 }
 
 # errorLine -- the one-line diagnostic for an error node: error[Exxxx]: <message>.
@@ -585,108 +783,10 @@ errorLine: function {e: ErrorData.view} out String is {
 }
 
 # explainText -- a human-readable explanation for a numeric error code, or ""
-# when the code is unknown. Keyed by the same E-codes errCode assigns, so the
-# `zc explain Exxxx` command and the emitted diagnostics stay in sync.
+# when the code is unknown.
 explainText: function {code: u32} out String is {
-    r: String
-    if code == 1 then {
-        r = "internal compiler error\n\nThe compiler hit an unexpected internal condition. This is a compiler bug, not an error in your program.".string
-    } else if code == 2 then {
-        r = "file not found\n\nThe source file for a unit (<unit>.z) could not be located under --src or the system library.".string
-    } else if code == 3 then {
-        r = "duplicate definition\n\nTwo definitions share the same name in the same scope. Rename or remove one.".string
-    } else if code == 4 then {
-        r = "bad unit name\n\nA unit name is malformed or does not match its file. Unit names are identifiers with no extension.".string
-    } else if code == 5 then {
-        r = "malformed unit\n\nThe unit could not be parsed as a sequence of top-level definitions.".string
-    } else if code == 6 then {
-        r = "malformed function\n\nA function definition is not well formed. Check the parameter block, return clause, and body.".string
-    } else if code == 7 then {
-        r = "I/O error\n\nReading or writing a file failed. Check the path and permissions.".string
-    } else if code == 8 then {
-        r = "undefined identifier\n\nA name was used that is not defined in any visible scope. Check spelling and imports.".string
-    } else if code == 9 then {
-        r = "unexpected characters\n\nThe characters form no token of the language -- a two-dot run, an unknown escape, a byte no token may contain. This is the lexer's own diagnosis, reported where the parser met the characters.".string
-    } else if code == 10 then {
-        r = "expected a definition\n\nA top-level definition (name: function / record / class / ...) was expected here.".string
-    } else if code == 12 then {
-        r = "expected an expression\n\nAn expression was expected here but something else was found.".string
-    } else if code == 13 then {
-        r = "expected an operator\n\nAn operator was expected between two operands. Operators must be surrounded by whitespace.".string
-    } else if code == 14 then {
-        r = "expected a type definition\n\nA type definition (record / variant / facet / class / union / protocol) was expected here.".string
-    } else if code == 15 then {
-        r = "expected a statement\n\nA statement was expected inside this block.".string
-    } else if code == 17 then {
-        r = "malformed argument\n\nA call argument is not well formed. Named arguments take the form name: value.".string
-    } else if code == 18 then {
-        r = "malformed argument block\n\nThe argument list of a call could not be parsed.".string
-    } else if code == 19 then {
-        r = "malformed expression\n\nThe expression could not be parsed.".string
-    } else if code == 20 then {
-        r = "malformed operation\n\nAn operator expression is not well formed.".string
-    } else if code == 21 then {
-        r = "malformed string\n\nA string literal is unterminated or contains an invalid escape or interpolation.".string
-    } else if code == 22 then {
-        r = "malformed path\n\nA dotted path (a.b.c) is not well formed.".string
-    } else if code == 23 then {
-        r = "malformed reference\n\nA reference to a name or member is not well formed.".string
-    } else if code == 24 then {
-        r = "malformed call\n\nA function or method call is not well formed.".string
-    } else if code == 25 then {
-        r = "malformed parameter\n\nA parameter declaration is not well formed. Parameters take the form name: type.".string
-    } else if code == 26 then {
-        r = "malformed parameter block\n\nThe parameter list of a function could not be parsed.".string
-    } else if code == 27 then {
-        r = "malformed object block\n\nThe body of a type definition could not be parsed.".string
-    } else if code == 28 then {
-        r = "malformed item\n\nAn item inside a block or list is not well formed.".string
-    } else if code == 29 then {
-        r = "malformed then clause\n\nAn if or for expression is missing a well-formed 'then' clause.".string
-    } else if code == 30 then {
-        r = "malformed else clause\n\nThe 'else' / 'else if' continuation is not well formed; it must follow the closing brace on the same line.".string
-    } else if code == 31 then {
-        r = "malformed case clause\n\nA match 'case' arm is not well formed; it must follow the closing brace on the same line.".string
-    } else if code == 32 then {
-        r = "malformed for header\n\nA for loop header is not well formed (for <var>: <iter> loop, or for while <cond> loop).".string
-    } else if code == 33 then {
-        r = "reserved word used as a name\n\nA reserved keyword (unit, function, match, ...) or a future-reserved word (enum, goto, ...) cannot be used as a definition, parameter, field, binding or argument name, spelled `word:` or as the `:word` shorthand. Rename it.".string
-    } else if code == 34 then {
-        r = "malformed list\n\nA list definition is not well formed.".string
-    } else if code == 35 then {
-        r = "malformed statement\n\nThe statement could not be parsed.".string
-    } else if code == 36 then {
-        r = "non-exhaustive match\n\nA `match` over a variant or union does not cover every arm and has no `else`. Add the missing case(s), or an `else` clause.".string
-    } else if code == 37 then {
-        r = "reserved member name\n\nA type body declares a member named `public` or `tag`, or a unit declares a definition named `public`. `public` names the visibility block, so `public: unit { ... }` is the only declaration it may introduce; `tag` is the arm tag every sum type carries. Rename it.".string
-    } else if code == 39 then {
-        r = "no main\n\nThe unit being compiled declares no `main: function is { ... }`, so the compiler has no entry point to start from. Compilation is demand-driven: `main` is the root, and what it reaches is what gets checked and emitted. A unit with no `main` is a library -- compile the program that opens it instead, or add a `main`. `--eager` resolves every definition rather than what a root reaches, so it does not require one.".string
-    } else if code == 41 then {
-        r = "not data in a data file\n\nA data file (`.zd`) holds values -- numbers, strings, bools, lists, data and choice values, references to other definitions -- and the `data` and `choice` types they are built from, in units that nest with `unit { }`. A function, any other kind of type, an `as` block, a `public:` block, an operator, an interpolated string and an `if` or `match` compute or declare behaviour, so a data file cannot hold them. Write the value itself, or move the code to a source file.".string
-    } else if code == 100 then {
-        r = "type error\n\nA value's type does not match what is required here: a mismatch, an undefined type, or an incompatible assignment.".string
-    } else if code == 101 then {
-        r = "member not public\n\nThe member exists but is not in the type's `public:` interface. Access it from within the type's own methods (`this`), or through a `.private` friend handle the type handed out.".string
-    } else if code == 102 then {
-        r = "private escape\n\nA `.private` view may only be taken by the value's own type, or by a holder of an existing `.private` handle (a friend the type passed it to). External code holding only a public value cannot produce one.".string
-    } else if code == 103 then {
-        r = "used before it is initialised\n\nCode runs top to bottom: a local is in scope from the statement that declares it, and holds a value once that statement is done. A use inside its own value (`n: n + 1`, `point: point x: 10`), or inside a binding's own expression (`for each xs: xs`, `with s: s`), finds the local -- the nearest declaration of the name -- before it holds anything. Name the local differently, or reach the outer declaration through its unit (`system.u64`, `myunit.n`).".string
-    } else if code == 200 then {
-        r = "ownership error\n\nA value's ownership was used incorrectly: used after a take/move, a borrow outliving its lock, a reftype aliased while locked, or a reassignment in another mode than the name was bound with -- an owned name takes an owned value (`x = d.take`), a borrow is re-pointed (`b = d`). See docs/ownership.".string
-    } else if code == 300 then {
-        r = "call error\n\nA call's arguments do not match the callee: wrong count, an unknown named argument, or an argument type mismatch. Also raised for a bare type name in value position that cannot construct its zero value: required fields missing, or a family with no zero-argument create (unions/variants select an arm, views bind from an owner, generic templates need type arguments).".string
-    } else if code == 400 then {
-        r = "generic error\n\nA generic type could not be resolved: a missing type argument, failed inference, or an unsatisfied constraint.".string
-    } else if code == 500 then {
-        r = "emitter error\n\nType checking succeeded but the C emitter met a construct it cannot emit. Nothing is written; the message names the construct. This is a compiler gap, not an error in your program.".string
-    } else if code == 501 then {
-        r = "no native implementation\n\nA declaration says `is native` -- that the backend supplies its body -- and the backend has none for it. The program is wrong, not the compiler: write the body, or give the runtime the build uses an implementation of it. Checked at the declaration, whether or not anything calls it.".string
-    } else if code == 601 then {
-        r = "compile-time error\n\nAn `error` call the compiler proved reachable. The message is the one the program's author wrote; the compiler is reporting it, not diagnosing it.".string
-    } else if code == 600 then {
-        r = "compile-time evaluation error\n\nThe compiler was asked for a value at compile time and could not produce one: a division by a constant zero, a result outside the range the evaluator works in, a constant defined in terms of itself, or an expression it cannot evaluate: a call, an operator it does not fold, or a unit-level `if` whose condition or selected branch does not fold. Distinct from E0500, which is the emitter reporting a construct it cannot emit.".string
-    }
-    return r
+    for each f: errFacts loop if f.code == code then return f.explain.string
+    return "".string
 }
 
 # an atom node (a bare identifier reference): position + interned name id.
@@ -1976,110 +2076,11 @@ programrow: record {
     colno: u32
 }
 
-# Arm-name dumpers: return the canonical uppercase label for an
-# enum arm. Used by printNode and the smoke harness.
+# errname -- the uppercase label of an error, as printNode and the smoke
+# harness print it.
 errname: function {e: err} out String is {
-    match (
-        e
-    ) case fileNotFound then {
-        return "FILENOTFOUND".string
-    } case duplicateDef then {
-        return "DUPLICATEDEF".string
-    } case badUnitName then {
-        return "BADUNITNAME".string
-    } case badUnit then {
-        return "BADUNIT".string
-    } case badFunction then {
-        return "BADFUNCTION".string
-    } case ioError then {
-        return "IOERROR".string
-    } case expectedDef then {
-        return "EXPECTEDDEF".string
-    } case expectedExp then {
-        return "EXPECTEDEXP".string
-    } case expectedOp then {
-        return "EXPECTEDOP".string
-    } case expectedTypeDef then {
-        return "EXPECTEDTYPEDEF".string
-    } case expectedStatement then {
-        return "EXPECTEDSTATEMENT".string
-    } case badArgument then {
-        return "BADARGUMENT".string
-    } case badArgumentBlock then {
-        return "BADARGUMENTBLOCK".string
-    } case badExpression then {
-        return "BADEXPRESSION".string
-    } case badOperation then {
-        return "BADOPERATION".string
-    } case badString then {
-        return "BADSTRING".string
-    } case badPath then {
-        return "BADPATH".string
-    } case badReference then {
-        return "BADREFERENCE".string
-    } case badCall then {
-        return "BADCALL".string
-    } case badParameter then {
-        return "BADPARAMETER".string
-    } case badParameterBlock then {
-        return "BADPARAMETERBLOCK".string
-    } case badObjectBlock then {
-        return "BADOBJECTBLOCK".string
-    } case badItem then {
-        return "BADITEM".string
-    } case badThen then {
-        return "BADTHEN".string
-    } case badElse then {
-        return "BADELSE".string
-    } case badCase then {
-        return "BADCASE".string
-    } case badFor then {
-        return "BADFOR".string
-    } case badList then {
-        return "BADDATA".string
-    } case badStatement then {
-        return "BADSTATEMENT".string
-    } case typeError then {
-        return "TYPEERROR".string
-    } case refNotFound then {
-        return "REFNOTFOUND".string
-    } case ownerError then {
-        return "OWNERERROR".string
-    } case callError then {
-        return "CALLERROR".string
-    } case genericError then {
-        return "GENERICERROR".string
-    } case compilerError then {
-        return "COMPILERERROR".string
-    } case reservedName then {
-        return "RESERVEDNAME".string
-    } case nonExhaustive then {
-        return "NONEXHAUSTIVE".string
-    } case reservedMember then {
-        return "RESERVEDMEMBER".string
-    } case notPublic then {
-        return "NOTPUBLIC".string
-    } case privateEscape then {
-        return "PRIVATEESCAPE".string
-    } case constError then {
-        return "CONSTERROR".string
-    } case userError then {
-        return "USERERROR".string
-    } case noMain then {
-        return "NOMAIN".string
-    } case dataFile then {
-        return "DATAFILE".string
-    } case badToken then {
-        return "BADTOKEN".string
-    } case badMain then {
-        return "BADMAIN".string
-    } case emitterError then {
-        return "EMITTERERROR".string
-    } case noNativeImpl then {
-        return "NONATIVEIMPL".string
-    } case useBeforeInit then {
-        return "USEBEFOREINIT".string
-    }
+    for each f: errFacts loop if f.arm == e then return f.label.string
+    return "".string
 }
 
 # the printable name of an `objectkind`.
