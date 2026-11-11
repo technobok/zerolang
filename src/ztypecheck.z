@@ -5778,6 +5778,14 @@ recordTyperef: function {
             :nid
         )
         recordTyperefArgs :st :scope :ast :unitDecl :thisName :callableId :argIds
+        if (ast.nodes.get i: callableId).dottedpath then (
+            refuseUnknownPathHead
+            :st
+            :scope
+            :ast
+            :unitDecl
+            :callableId
+        )
         return
     }
     if arm == 3 then {
@@ -7475,6 +7483,57 @@ resolveTyperefCallShell: function {
         return (plainHeadOrShell :st :scope :ast :unitDecl :callableId suffix: suffix.stringView)
     }
     return (st.reg.newType name: suffix.stringView typetype: ztypes.ztypetype.recordType)
+}
+
+# refuseUnknownPathHead -- the head of a type application is a path that names
+# nothing: its root is no name at all (`s.substring i64`), or its base is a unit
+# that declares no such member (`io.nosuch i64`). A bare name may be defined
+# further down; a path names what its base holds now, so nothing later gives it
+# a meaning. Asked where a declaration writes a type (recordTyperef). True when
+# it reported.
+refuseUnknownPathHead: function {
+    st: zenv.ZSymbolTable
+    scope: ztypes.declid
+    ast: Ast
+    unitDecl: ztypes.declid
+    callableId: zast.nodeid
+} out bool is {
+    parentId: zast.nodeid
+    leafId: zast.nameid
+    {
+        cn: ast.nodes.get i: callableId
+        if cn.dottedpath then {
+            parentId = cn.parent
+            leafId = atomNameId :ast n: (ast.nodes.get i: cn.child)
+        }
+    }
+    if parentId.isZero or leafId.isZero then return false
+    if (leafNamesNoMember :leafId) then return false
+    # an operator's operand is a value, which the value walk answers for
+    if (isOperatorName name: (zast.nameTextAt :ast ref: leafId).stringView) then return false
+    unknown: (unknownPathRoot :st :ast nid: callableId rf: scope origin: unitDecl).isZero.not
+    if unknown.not then {
+        ud: qualifierUnitDecl :st :scope :ast nid: parentId
+        if ud.isZero then return false
+        head: typeApplicationTemplate :st :scope :ast :unitDecl callableNid: callableId
+        unknown = head.isZero
+    }
+    if unknown.not then return false
+    pos: zast.posOf n: (ast.nodes.get i: callableId)
+    spelled: typeExprText :ast nid: callableId
+    (
+        addErrorH
+        :st
+        nodeid: callableId
+        lineno: pos.line
+        colno: pos.col
+        e: zast.err.badReference
+        msg: "Unknown type '\{spelled}'"
+        note: String
+        hint: "the head of a type application names a type".string
+        width: spelled.length.u32.orPanic
+    )
+    return true
 }
 
 # plainHeadOrShell -- the type a call-shaped reference names when its head is
@@ -65553,8 +65612,11 @@ constValueOfMemberAt: function {
     }
     if opid.isZero then return ztypes.noConst
     if evalState == 1 then {
+        # settled before the question is asked: asking whether the value is
+        # computed looks its head up, and a head of the constant's own name
+        # (`foundation: (foundation n: 3)`) comes back here
+        st.walk.constEvalState.set key: k value: 2.u8
         if (constDefIsComputed :st scope: ownerDecl :ast :unitDecl nid: opid).not then {
-            st.walk.constEvalState.set key: k value: 2.u8
             return ztypes.noConst
         }
         # the only place the NAME's text is wanted: a cycle names itself in
