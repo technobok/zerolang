@@ -64779,9 +64779,11 @@ foldIfCond: function {
 
 # foldIfBranch -- which clause of an `if` the constant fold selects, stamped on
 # the If so every consumer reads ONE answer instead of recomputing its own.
-# Every condition of a clause must fold and be true for that clause to win; the
-# first winner takes it and the else clause is the fallback. `known` false means
-# a condition did not fold: this is a runtime `if` and nothing may be elided.
+# A clause's conditions are read in the order they run: a true one is passed
+# over, a false one loses the clause before anything after it is read, and one
+# that does not fold stops the fold. The first winner takes it and the else
+# clause is the fallback. `known` false means a condition that runs did not
+# fold: this is a runtime `if` and nothing may be elided.
 foldIfBranch: function {
     ast: Ast
     st: zenv.ZSymbolTable
@@ -64836,6 +64838,7 @@ foldIfBranch: function {
                     v: foldIfCond :st :scope :ast :unitDecl :condId
                     if v == 0 then undecided = true
                     if v == 2 then allTrue = false
+                    if undecided or allTrue.not then break
                 }
                 if undecided then {
                     known = false
@@ -70279,9 +70282,9 @@ unfoldedClauseWhy: function {
     return 2
 }
 
-# unfoldedCondsWhy -- every condition of one clause, asked the way the fold asks
-# them, all of them: 0 = the reason was found in one, 1 = all hold, 2 = one
-# does not.
+# unfoldedCondsWhy -- the conditions of one clause, asked the way the fold asks
+# them, in order, up to the first that decides: 0 = the reason was found in one,
+# 1 = all hold, 2 = one does not, and what follows it never runs.
 unfoldedCondsWhy: function {
     ast: Ast
     st: zenv.ZSymbolTable
@@ -70290,18 +70293,12 @@ unfoldedCondsWhy: function {
     condIds: (ListVal zast.nodeid).view
     visiting: ListVal zast.nodeid
 } out u32 is {
-    found: false
-    allTrue: true
     for each condId: condIds loop {
-        if found.not then {
-            cw: unfoldedCondWhy :st :scope :ast :unitDecl :condId :visiting
-            if cw == 0 then found = true
-            if cw == 2 then allTrue = false
-        }
+        cw: unfoldedCondWhy :st :scope :ast :unitDecl :condId :visiting
+        if cw == 0 then return 0
+        if cw == 2 then return 2
     }
-    if found then return 0
-    if allTrue then return 1
-    return 2
+    return 1
 }
 
 # unfoldedCondWhy -- one condition of a compile-time `if`, as foldIfCond asks it:
