@@ -52670,9 +52670,15 @@ refuseCrossingArg: function {
 } is {
     st.walk.crossingArgCallee.set key: arg.nid value: funcId
     if at.isZero then return
+    # the thread calls the protocol's members through the argument's
+    # implementation, which no member reference spells: they are used here. An
+    # instance of a generic type gets its implementation row only at the end
+    # of the check, after the bodies the program uses have been walked.
+    markSpecMembersUsed :st impl: at spec: pro
     via: crossingCallName :st :funcId
     quoted: "`\{via}`"
     if (refuseThreadBoundArg :st :ast :arg :at :pro quotedCall: quoted.stringView) then return
+    if (refuseProtocolValueArg :st :ast :arg :at :pro quotedCall: quoted.stringView) then return
     sr: threadMarkerTid :st nameId: zast.wellKnown.slot.tySharedReads
     un: threadMarkerTid :st nameId: zast.wellKnown.slot.tyUnshareable
     if sr.isZero or un.isZero then return
@@ -52723,6 +52729,102 @@ refuseThreadBoundArg: function {
         }
     }
     return false
+}
+
+# refuseProtocolValueArg -- refuseCrossingArg's protocol half: the argument,
+# or the result its task answers, holding a protocol value at any depth. A
+# protocol value shows nothing of what it holds, so what may not cross -- a
+# lock guard behind it -- cannot be told at the crossing: it never crosses. A
+# type parameter bounded by the protocol keeps the type in sight. True when it
+# refused.
+refuseProtocolValueArg: function {
+    st: zenv.ZSymbolTable
+    ast: Ast
+    arg: argref
+    at: ztypes.tid
+    pro: ztypes.tid
+    quotedCall: StringView
+} out bool is {
+    seen: IdSet ztypes.tid
+    pv: protocolValueIn :st :ast tid: at :seen
+    if pv.isZero.not then {
+        protocolValueError :st :ast :arg :at held: pv result: false :quotedCall
+        return true
+    }
+    inst: implementedInstanceOf :st impl: at origin: pro
+    if inst.isZero when (st.reg.genericOriginOf tid: at) == pro then inst = at
+    k: u64
+    for k < (st.reg.genericArgCount specId: inst) loop {
+        ga: st.reg.genericTypeArgAt specId: inst ordinal: k
+        k = k + 1
+        rv: ga
+        if (isProtocolValueType :st tid: ga).not then {
+            rseen: IdSet ztypes.tid
+            rv = protocolValueIn :st :ast tid: ga seen: rseen
+        }
+        if rv.isZero.not then {
+            protocolValueError :st :ast :arg :at held: rv result: true :quotedCall
+            return true
+        }
+    }
+    return false
+}
+
+# isProtocolValueType -- whether `tid` is a protocol, or an instance of a
+# generic one: the type of a value that hides the type behind it.
+isProtocolValueType: function {st: zenv.ZSymbolTable.view tid: ztypes.tid} out bool is {
+    if tid.isZero then return false
+    if (st.reg.typetypeOf typeId: tid) == ztypes.ztypetype.protocolType then return true
+    o: st.reg.genericOriginOf :tid
+    if o.isZero then return false
+    return (st.reg.typetypeOf typeId: o) == ztypes.ztypetype.protocolType
+}
+
+# protocolValueIn -- the first protocol type `tid` holds at any depth
+# (heldTypes); zero for none. `seen` ends a walk that meets a type again.
+protocolValueIn: function {
+    st: zenv.ZSymbolTable
+    ast: Ast
+    tid: ztypes.tid
+    seen: IdSet ztypes.tid
+} out ztypes.tid is {
+    if tid.isZero or (seen.has item: tid) then return ztypes.tid.zero
+    seen.add item: tid
+    held: ListVal ztypes.tid
+    heldTypes :st :ast :tid :held
+    for each h: held loop {
+        if (isProtocolValueType :st tid: h) then return h
+        inner: protocolValueIn :st :ast tid: h :seen
+        if inner.isZero.not then return inner
+    }
+    return ztypes.tid.zero
+}
+
+# protocolValueError -- the refusal of the crossing argument `arg`, of type
+# `at`, that holds a value of the protocol `held`, or whose task answers a
+# result that does (`result`), at the crossing call `quotedCall` names
+protocolValueError: function {
+    st: zenv.ZSymbolTable
+    ast: Ast
+    arg: argref
+    at: ztypes.tid
+    held: ztypes.tid
+    result: bool
+    quotedCall: StringView
+} is {
+    att: at
+    ao: st.reg.genericOriginOf tid: at
+    if ao.isZero.not then att = ao
+    an: specWrittenName :st :ast tid: att
+    ht: held
+    ho: st.reg.genericOriginOf tid: held
+    if ho.isZero.not then ht = ho
+    hn: specWrittenName :st :ast tid: ht
+    msg: "Cannot hand '\{an}' to another thread with \{quotedCall}: it holds a value of the protocol '\{hn}', and a protocol value does not show what it holds, so it never crosses to another thread; give the type a parameter bounded by the protocol instead (`T: \{hn}.generic`)"
+    if result then {
+        msg = "Cannot start a thread with \{quotedCall} whose result holds a value of the protocol '\{hn}': `join` would hand it to another thread, and a protocol value does not show what it holds, so it never crosses to one"
+    }
+    addError :st nodeid: arg.nid lineno: arg.lineno colno: arg.colno e: zast.err.ownerError :msg
 }
 
 # threadMarkerTid -- the type of the thread unit's marker `nameId`

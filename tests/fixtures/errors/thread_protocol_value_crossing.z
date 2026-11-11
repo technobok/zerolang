@@ -1,0 +1,78 @@
+# A protocol value does not show what it holds, so what may not cross to
+# another thread -- a lock guard behind it -- cannot be told where the thread
+# starts. It never crosses: a task holding one, owned, borrowed or inside a
+# list, is refused at `thread.spawn`, and so is a task whose result holds one.
+# A type parameter bounded by the protocol keeps the type in sight
+# (emitc_corpus/thread_protocol_bounded_task).
+
+# Shape -- something to poke
+Shape: protocol {
+    # poke it
+    poke: function {:this}
+}
+
+# Locker -- a Shape holding a lock guard, which unlocks on the thread that
+# locked
+Locker: class {
+    # the guard
+    g: sync.MutexGuard (ListVal i64)
+} as {
+    shape: Shape.implement
+    poke: function {:this} is { print "poked" }
+}
+
+# Owned -- a task that owns a Shape
+Owned: class {
+    # the instance
+    s: Shape
+} as {
+    task: (thread.Task null).implement
+    call: function {:this} is { this.s.poke }
+}
+
+# Borrowed -- a task that borrows a Shape
+Borrowed: class {
+    # the instance, borrowed
+    s: Shape.borrow
+} as {
+    task: (thread.Task null).implement
+    call: function {:this} is { this.s.poke }
+}
+
+# Listed -- a task that owns a list of Shapes
+Listed: class {
+    # the instances
+    ss: List Shape
+} as {
+    task: (thread.Task null).implement
+    call: function {:this} is { print "ran" }
+}
+
+# Maker -- a task whose result is a Shape
+Maker: class {
+    # how many it made
+    n: i64
+} as {
+    task: (thread.Task Shape).implement
+    call: function {:this} out Shape is {
+        panic msg: "never runs: the spawn is refused"
+    }
+}
+
+main: function is {
+    m: (sync.Mutex (ListVal i64)).create value: (ListVal i64)
+    {
+        h: thread.spawn task: (Owned s: (Shape.create from: (Locker g: m.lock)))
+    }
+    {
+        lk: Locker g: m.lock
+        h: thread.spawn task: (Borrowed s: lk)
+    }
+    {
+        ss: List Shape
+        h: thread.spawn task: (Listed :ss)
+    }
+    {
+        h: thread.spawn task: (Maker n: 0)
+    }
+}

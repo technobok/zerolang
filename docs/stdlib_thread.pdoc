@@ -195,6 +195,49 @@ handle and whatever they carry go over inside one, so a Sender of guards is
 refused where the task holding it is spawned, by the same check: the check
 reads a type's type arguments as part of what it holds.
 
+A protocol value never crosses either. It does not show what it holds, so a
+guard behind one could not be told where the thread starts: a task holding a
+value typed by a protocol, at any depth and by any marker, is refused, and so
+is a task whose result holds one. Give the task a type parameter the protocol
+bounds instead, which keeps the type in sight:
+
+#code language=zerolang: """
+  # Shape -- something to poke
+  Shape: protocol {
+      # poke it, answering how often it has been poked
+      poke: function {:this} out i64
+  }
+
+  # Counter -- a Shape that counts its pokes
+  Counter: class {
+      # the pokes so far
+      n: i64
+  } as {
+      shape: Shape.implement
+      poke: function {:this} out i64 is {
+          this.n = this.n + 1
+          return this.n
+      }
+  }
+
+  # Poker -- a task that pokes a Shape of any type
+  Poker: class {
+      # the shape; `s: Shape` here would be refused at the spawn
+      s: T
+  } as {
+      T: Shape.generic
+      task: (thread.TaskVal i64).implement
+      call: function {:this} out i64 is {
+          return this.s.poke
+      }
+  }
+
+  main: function is {
+      h: thread.spawnVal task: (Poker s: (Counter n: 0))
+      print "\{h.join}"
+  }
+"""
+
 What makes a call a crossing is its parameter, not its name: a value moved
 into a parameter typed or bounded by a protocol that implements
 #~"thread.Crossing" is handed to another thread, and is checked there.
