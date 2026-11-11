@@ -4577,8 +4577,8 @@ blockDiverges: function {
 
 # stmtDiverges -- one statement leaves its block on every path: a `never` stamp
 # (panic, unreachable, break, continue, an all-arms-diverge match), a `return`
-# valued or bare, an if/else chain whose every arm diverges, or a `for true loop`
-# with no break.
+# valued or bare, an if/else chain whose every arm diverges, or a loop that never
+# exits.
 stmtDiverges: function {
     ast: Ast.view
     reg: ztypes.ZTypeRegistry.view
@@ -4599,7 +4599,7 @@ stmtDiverges: function {
         if (matchDiverges :ctx :reg :typing nid: sid) then return true
         if (matchDiverges :ctx :reg :typing nid: sn.statementline) then return true
         if (isBareReturn n: inn) then return true
-        if (loopNeverExits :ctx :ast :typing n: inn) then return true
+        if (loopNeverExits :ctx :typing n: inn) then return true
         return (ifDiverges :ast :reg :typing :ctx n: inn)
     } else {
         return false
@@ -4618,12 +4618,10 @@ isBareReturn: function {n: astnode.view} out bool is {
     }
 }
 
-# loopNeverExits -- a `for true loop` with no break: its only exits are the
-# return/panic statements inside it, so anything after the loop is unreachable.
-# The condition is checked as the literal `true`; a computed condition, a
-# postcondition, or any break leaves a normal exit and the answer is false.
+# loopNeverExits -- the checker found no condition that can stop this loop and
+# no `break` that leaves it: its only ways out leave the function, so anything
+# after the loop is unreachable.
 loopNeverExits: function {
-    ast: Ast.view
     typing: ztyping.ZTyping.view
     ctx: Ctx.view
     n: astnode.view
@@ -4631,23 +4629,7 @@ loopNeverExits: function {
     match (
         n
     ) case forexpr then {
-        if n.body.isZero then return false
-        if n.postconditions.count.u64 > 0 then return false
-        if n.conditions.count.u64 != 1 then return false
-        firstCondNode: ast.nodes.get i: (zast.kidAt kids: ast.kids span: n.conditions i: 0)
-        alwaysT: false
-        if firstCondNode.namedoperation when firstCondNode.name.isZero then {
-            cop: ast.nodes.get i: firstCondNode.operation
-            if (boolArmSideOf :ctx :typing n: cop).truthy then alwaysT = true
-            # `true` also arrives as the dotted tag bool.true
-            if cop.dottedpath then {
-                chn: aliasOrChildId :ast :typing aliasId: cop.nodeid childId: cop.child
-                chs: armSideAtNode :ctx :typing nid: cop.nodeid nameId: chn
-                if chs.truthy then alwaysT = true
-            }
-        }
-        if alwaysT.not then return false
-        return (ztypecheck.blockHasBreak :ast n: (ast.nodes.get i: n.body)).not
+        return (foldedLoopOf :typing :ctx nid: n.nodeid).neverExits
     } else {
         return false
     }
@@ -15993,6 +15975,16 @@ foldedBranchOf: function {
     nid: zast.nodeid
 } out ztyping.foldedbranch is {
     return (typing.foldedBranchIn mono: ctx.curThisTid :nid)
+}
+
+# foldedLoopOf -- what the typechecker's constant fold read of a loop's
+# conditions, and whether that leaves the loop any normal way out.
+foldedLoopOf: function {
+    typing: ztyping.ZTyping.view
+    ctx: Ctx.view
+    nid: zast.nodeid
+} out ztyping.foldedloop is {
+    return (typing.foldedLoopIn mono: ctx.curThisTid :nid)
 }
 
 # nodeConstText -- the C literal for a node carrying a compile-time const
@@ -27402,6 +27394,9 @@ emitForStmt: function {
     tmp: TmpCtr
     buf: String.borrow
 } is {
+    # a precondition the fold proved false: the loop never runs, and its body
+    # was not walked
+    if (foldedLoopOf :typing :ctx nid: n.nodeid).entry == ztyping.loopentry.never then return
     ctx.condDepth = ctx.condDepth + 1
     # a plain binding is evaluated at every iteration; everything below is an
     # `each` binding's walk or a loop with no binding
@@ -34850,10 +34845,14 @@ emitListComprehension: function {
     tmp: TmpCtr
     buf: String.borrow
 } is {
-    noteMemberUse :ctx mono: listTid member: memberWord.slot.append
     match (
         forNode
     ) case forexpr then {
+        # a precondition the fold proved false: the list stays empty
+        if (
+            (foldedLoopOf :typing :ctx nid: forNode.nodeid).entry == ztyping.loopentry.never
+        ) then return
+        noteMemberUse :ctx mono: listTid member: memberWord.slot.append
         ctx.comprehendTo.append (
             ComprehendTo
             body: forNode.body

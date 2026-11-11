@@ -42738,6 +42738,39 @@ checkFor: function {
     ast: Ast
     fornode: forref
 } out ztypes.tid is {
+    # what the constant fold reads of the conditions, for the emitter and for
+    # whether the code after the loop is reached
+    entry: foldLoopEntry :st scope: st.curScope :ast :unitDecl :fornode
+    end: ztyping.loopend.unwritten
+    if entry != ztyping.loopentry.never then end = (
+        foldLoopEnd
+        :st
+        scope: st.curScope
+        :ast
+        :unitDecl
+        :fornode
+    )
+    constFailClear :st
+    # A loop the fold proved never runs is reached by no use site, as a dead
+    # clause of an `if` is: its body and conditions are not walked. A loop in
+    # value position is walked all the same, for its list's element type, and
+    # `--eager` walks everything.
+    deadStatement: (
+        (entry == ztyping.loopentry.never) and
+        (
+            st.walk.stmtBlocks.has
+            item: fornode.body
+        )
+    )
+    if deadStatement when (eagerAt :st declId: unitDecl).not then {
+        (
+            stampFoldedLoop
+            :st
+            nid: fornode.nid
+            fold: (ztyping.foldedloop :entry :end neverExits: false)
+        )
+        return ztypes.tid
+    }
     entryStart: st.entryMark
     forMarker: st.pushBlock node: fornode.nid
     st.openLoopRun :entryStart
@@ -42799,6 +42832,7 @@ checkFor: function {
     k: st.unreachableKind
     if k == zenv.divkind.exit then st.discardTakenFrom start: bodyMark
     st.popTo marker: bodyMarker
+    broke: st.breakLeavesInnermost
     st.closeBreakScope
     checkForPostconditions :st :unitDecl :ast :fornode
     st.walk.draft.clear
@@ -42809,6 +42843,12 @@ checkFor: function {
     relayBreakTakes :st :run
     settleRestoredLocks :st since: restMark
     st.forgetOnceTakes :run
+    # no condition can stop the loop and no `break` left it: its only ways out
+    # leave the function
+    endless: (end == ztyping.loopend.unwritten) or (end == ztyping.loopend.always)
+    neverExits: (entry == ztyping.loopentry.always) and endless and broke.not
+    stampFoldedLoop :st nid: fornode.nid fold: (ztyping.foldedloop :entry :end :neverExits)
+    if neverExits then st.markUnreachable kind: zenv.divkind.exit
     # a statement loop discards its body's value, so it has no List to mint
     if (st.walk.stmtBlocks.has item: fornode.body) then return ztypes.tid
     return (forComprehensionTid :st :unitDecl :ast :fornode :elemT)
@@ -43448,6 +43488,7 @@ checkIfClauses: function {
         }
         bm: st.pushBlock node: clause.nid
         bmRel: st.releaseMark
+        brokeBefore: st.breakLeavesInnermost
         for each pf: accFacts loop applyPredFact :ast :st f: pf holds: false
         cfacts: List ArmPredFact
         cStart: st.entryMark
@@ -43462,6 +43503,7 @@ checkIfClauses: function {
         if kC == 1 then bmRel = firstRel
         if skipDead.not then st.markPath marker: bm since: bmRel
         bt: checkClauseBody :st :unitDecl :ast :clause
+        if fbr.known when clause.statement != fbr.stmt then st.restoreBreakSeen seen: brokeBefore
         # what the conditions moved is not the arm's: they ran before it on
         # every path that reached this clause, the next clause's among them
         cDecls: ListVal ztypes.declid
@@ -44064,7 +44106,12 @@ checkIf: function {
             ebm: st.pushBlock node: ifnode.elseclause
             if skipDead.not then st.markPath marker: ebm since: st.releaseMark
             for each ef: accFacts loop applyPredFact :ast :st f: ef holds: false
+            brokeBefore: st.breakLeavesInnermost
             walkBodyAt :st :unitDecl :ast bodyId: ifnode.elseclause
+            if fbr.known when ifnode.elseclause != fbr.stmt then (
+                st.restoreBreakSeen
+                seen: brokeBefore
+            )
             et: lastStmtType :st :ast block: (ast.nodes.get i: ifnode.elseclause)
             if st.isUnreachable then elseDvg = true
             etc: et
@@ -56475,7 +56522,9 @@ checkCaseElse: function {
     fb: st.typing.foldedBranchIn mono: st.typing.curMonoStamp nid: casenode.nid
     et: neverId
     if fb.known.not or (eagerAt :st declId: unitDecl) or (fb.stmt == casenode.elseclause) then {
+        brokeBefore: st.breakLeavesInnermost
         walkBodyAt :st :unitDecl :ast bodyId: casenode.elseclause
+        if fb.known when fb.stmt != casenode.elseclause then st.restoreBreakSeen seen: brokeBefore
         et = lastStmtType :st :ast block: (ast.nodes.get i: casenode.elseclause)
         armTypes.append et
     }
@@ -56521,6 +56570,7 @@ walkCaseClauses: function {
         kC = kC + 1
         clause: caseClauseRefAt :ast nid: clauseId
         if clause.nid.isZero.not then {
+            brokeBefore: st.breakLeavesInnermost
             cf: (
                 checkCaseClause
                 :st
@@ -56540,6 +56590,7 @@ walkCaseClauses: function {
                 dead: skipDead and (clause.statement != fb.stmt)
                 folded: skipDead
             )
+            if fb.known when clause.statement != fb.stmt then st.restoreBreakSeen seen: brokeBefore
             if cf.empty then anyEmpty = true
             if cf.diverges.not then allDiverge = false
         }
@@ -64767,6 +64818,18 @@ foldIfCond: function {
     }
     if isOther then return 0
     if isGuard.not then return 3
+    return (foldTruth :st :scope :ast :unitDecl :opId)
+}
+
+# foldTruth -- the truth of the expression `opId` when it has a compile-time
+# value: 1 = true, 2 = false, 0 = undecided.
+foldTruth: function {
+    ast: Ast
+    st: zenv.ZSymbolTable
+    unitDecl: ztypes.declid
+    scope: ztypes.declid
+    opId: zast.nodeid
+} out u32 is {
     cv: evalConstNode :st :scope :ast :unitDecl nid: opId
     # by the DISCRIMINATOR, not by arm position: a data-sourced tag names its
     # own values.
@@ -64807,6 +64870,64 @@ foldReadsLocal: function {
         }
     }
     return false
+}
+
+# foldLoopEntry -- a loop's preconditions read in the order they run: a true one
+# is passed over, a false one means the body never runs and nothing after it is
+# read, and one that does not fold, a binding among them, stops the fold.
+foldLoopEntry: function {
+    ast: Ast
+    st: zenv.ZSymbolTable
+    unitDecl: ztypes.declid
+    scope: ztypes.declid
+    fornode: forref
+} out ztyping.loopentry is {
+    kC: u64
+    for kC < fornode.nconds loop {
+        condId: zast.forCondAt :ast nid: fornode.nid i: kC
+        kC = kC + 1
+        v: foldIfCond :st :scope :ast :unitDecl :condId
+        if v == 0 then return ztyping.loopentry.runtime
+        if v == 2 then return ztyping.loopentry.never
+    }
+    return ztyping.loopentry.always
+}
+
+# foldLoopEnd -- a loop's postconditions read in the order they run, as its
+# preconditions are.
+foldLoopEnd: function {
+    ast: Ast
+    st: zenv.ZSymbolTable
+    unitDecl: ztypes.declid
+    scope: ztypes.declid
+    fornode: forref
+} out ztyping.loopend is {
+    if fornode.nposts == 0 then return ztyping.loopend.unwritten
+    kP: u64
+    for kP < fornode.nposts loop {
+        pcId: zast.forPostAt :ast nid: fornode.nid i: kP
+        kP = kP + 1
+        opId: pcId
+        pc: argRefAt :ast nid: pcId
+        if pc.nid.isZero.not then opId = pc.operation
+        v: foldTruth :st :scope :ast :unitDecl :opId
+        if v == 0 then return ztyping.loopend.runtime
+        if v == 2 then return ztyping.loopend.once
+    }
+    return ztyping.loopend.always
+}
+
+# stampFoldedLoop -- keep a loop's fold the way setNodeConstIn keeps a value.
+stampFoldedLoop: function {st: zenv.ZSymbolTable nid: zast.nodeid fold: ztyping.foldedloop} is {
+    (
+        ztyping.setFirstOrPerMono
+        perMono: st.typing.monoFoldedLoop
+        shared: st.typing.foldedLoop
+        copies: st.typing.instanceCopies
+        mono: st.typing.curMonoStamp
+        :nid
+        value: fold
+    )
 }
 
 # foldIfBranch -- which clause of an `if` the constant fold selects, stamped on

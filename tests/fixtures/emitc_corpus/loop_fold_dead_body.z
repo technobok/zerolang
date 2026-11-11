@@ -1,0 +1,120 @@
+# loop_fold_dead_body.z -- a loop whose precondition folds false never runs: its
+# body and later conditions are not walked and write no C. A loop no condition
+# can stop runs until something inside it leaves, and the code after it is dead
+# unless a `break` leaves that very loop -- wherever the `break` is written.
+
+NEVER: false
+ALWAYS: true
+N: 3
+
+Count: class {
+    n: i64
+} as {
+    tick: function {:this} out bool is {
+        this.n = this.n + 1
+        return true
+    }
+}
+
+Gate: class {
+    n: u32
+    run: function {:this} is {
+        for cap == 4 loop {
+            print "cap is four"
+            break
+        }
+        for cap != 4 while this.n < 2 loop {
+            this.n = this.n + 1
+            print "cap is not four \{this.n}"
+        }
+    }
+} as { cap: u32.generic }
+
+# a `break` in a binding's value leaves the loop
+breakInValue: function {k: bool} is {
+    for true loop {
+        v: if k then { break } else { 3 }
+        print "value \{v}"
+        return
+    }
+    print "after breakInValue"
+}
+
+# a `break` in a `do` leaves the `do`, not the loop
+breakInDo: function {k: bool} out u32 is {
+    for ALWAYS loop {
+        with z: 1 do {
+            if k then break
+            print "in do \{z}"
+        }
+        return 5
+    }
+}
+
+# a `break` in a nested loop leaves that loop
+breakInInner: function out u32 is {
+    for loop {
+        for loop {
+            break
+        }
+        return 6
+    }
+}
+
+neverRuns: function out u32 is {
+    for NEVER loop {
+        return 1
+    }
+    return 2
+}
+
+main: function is {
+    c: Count n: 0
+    for false loop {
+        print "never"
+    }
+    for NEVER loop {
+        print "never"
+    }
+    for N == 4 loop {
+        print "never"
+    }
+    # the false stops the walk: the condition after it never runs
+    for NEVER while c.tick loop {
+        print "never"
+    }
+    print "ticks \{c.n}"
+    # a true is passed over and the false stops it
+    for ALWAYS while NEVER while c.tick loop {
+        print "never"
+    }
+    print "ticks \{c.n}"
+    # a postcondition after a dead body is not read
+    for NEVER loop {
+        print "never"
+    } while c.tick
+    print "ticks \{c.n}"
+    # as a value: an empty list of the body's element type
+    xs: for NEVER loop {
+        3
+    }
+    print "length \{xs.length}"
+    breakInValue k: true
+    breakInValue k: false
+    print "do \{breakInDo k: true}"
+    print "do \{breakInDo k: false}"
+    print "inner \{breakInInner}"
+    print "never runs \{neverRuns}"
+    # a local of the same name as a constant is no constant
+    NEVER: true
+    spins: 0
+    for NEVER loop {
+        spins = spins + 1
+        if spins > 1 then break
+    }
+    print "spins \{spins}"
+    g4: (Gate cap: 4) n: 0
+    g4.run
+    g5: (Gate cap: 5) n: 0
+    g5.run
+}

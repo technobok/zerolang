@@ -26,6 +26,9 @@ public: unit {
     :constaggkind
     :defaultval
     :foldedbranch
+    :foldedloop
+    :loopentry
+    :loopend
     :specstandin
     :typedefclash
     :unmetbound
@@ -78,6 +81,42 @@ foldedbranch: record {
     # the one branch that survives, when the condition folded. The others are
     # not emitted
     stmt: zast.nodeid
+}
+
+# loopentry -- what the constant fold knows of a loop's preconditions, read in
+# the order they run.
+loopentry: variant {
+    # a condition is decided at run time, or binds a name
+    runtime: null
+    # one folds false before any decided at run time: the body never runs
+    never: null
+    # none can fail: none is written, or every one folds true
+    always: null
+}
+
+# loopend -- what the constant fold knows of a loop's postconditions, read in
+# the order they run.
+loopend: variant {
+    # none is written
+    unwritten: null
+    # one is decided at run time
+    runtime: null
+    # one folds false before any decided at run time: one iteration is all
+    once: null
+    # every one folds true: none can stop the loop
+    always: null
+}
+
+# foldedloop -- what the constant fold read of a loop's conditions, and whether
+# that leaves the loop any normal way out. Stamped on the for node.
+foldedloop: record {
+    # the preconditions' answer
+    entry: loopentry
+    # the postconditions' answer
+    end: loopend
+    # no condition can stop the loop and no `break` leaves it: its only ways
+    # out leave the function, so the code after it is unreachable
+    neverExits: bool
 }
 
 # One typecheck-synthesised AST row for the dump: a node minted during the
@@ -748,6 +787,8 @@ ZTyping: class {
     # the branch a fold selected in one mono's walk, where it differs from the
     # shared one
     monoFoldedBranch: (MapVV monostamp v: foldedbranch)
+    # a loop's fold in one mono's walk, where it differs from the shared one
+    monoFoldedLoop: (MapVV monostamp v: foldedloop)
     # the use sites that read a numeric generic parameter, bare or through a
     # value or a type, to the parameter's name
     numericParamRead: (IdMapV zast.nodeid v: zast.nameid)
@@ -1025,6 +1066,8 @@ ZTyping: class {
     constAggIndex: ConstIndex
     # ifexpr nodeid -> the clause the fold selected
     foldedBranch: (IdMapV zast.nodeid v: foldedbranch)
+    # forexpr nodeid -> what the fold read of its conditions
+    foldedLoop: (IdMapV zast.nodeid v: foldedloop)
 
     # aggregate typecheck state
     # every recorded implementation, indexed by its confid: row 0 is the sentinel
@@ -2397,6 +2440,21 @@ ZTyping: class {
         return ((t.foldedBranch.get key: nid).or d: (foldedbranch known: false stmt: zast.nodeid))
     }
 
+    # foldedLoopIn -- the loop's fold as the walk of `mono` sees it: run-time
+    # conditions, none at the end, when no walk stamped one.
+    foldedLoopIn: function {t: this.view mono: ztypes.tid nid: zast.nodeid} out foldedloop is {
+        if mono.isZero.not then {
+            mg: t.monoFoldedLoop.get key: (monostamp :mono node: nid)
+            if mg.some then {
+                return mg
+            }
+        }
+        return (
+            (t.foldedLoop.get key: nid).or
+            d: (foldedloop entry: loopentry.runtime end: loopend.unwritten neverExits: false)
+        )
+    }
+
     # aggLabelPos -- the position of row `id`'s item labelled `label`, none when
     # no item has that label (or there is no row).
     aggLabelPos: function {t: this.view id: u32 label: zast.nameid} out optionval u64 is {
@@ -2895,6 +2953,7 @@ newTyping: function {nodeEst: 0.u64} out ZTyping is {
         instanceOrigin: (IdMapV zast.nodeid v: zast.nodeid)
         monoNodeConst: (MapVV monostamp v: ztypes.cval)
         monoFoldedBranch: (MapVV monostamp v: foldedbranch)
+        monoFoldedLoop: (MapVV monostamp v: foldedloop)
         numericParamRead: (IdMapV zast.nodeid v: zast.nameid)
         unnamedLocalOfNode: (IdMapV zast.nodeid v: zast.nameid)
         unheldTemps: IdSet zast.nameid
@@ -2980,6 +3039,7 @@ newTyping: function {nodeEst: 0.u64} out ZTyping is {
         constBigFloatIndex: (ConstIndex heads: (MapVV u64 v: u32) next: ListVal u32)
         constAggIndex: (ConstIndex heads: (MapVV u64 v: u32) next: ListVal u32)
         foldedBranch: (IdMapV zast.nodeid v: foldedbranch)
+        foldedLoop: (IdMapV zast.nodeid v: foldedloop)
         implementation: (List ztypes.ZImplementation i: ztypes.confid)
         standInOf: (IdMapV zast.nodeid v: specstandin)
         eagerAll: false
