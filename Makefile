@@ -1961,7 +1961,7 @@ static-tcc-guard: bin/zc bin/zl bin/zls
 # Windows target whatever the host: a unit's library goes to the programs that
 # reach it and no others. The sets differ by system -- pthread for sync and
 # thread on Linux; advapi32 and shell32 for os, ws2_32 for net on Windows.
-ZLINK_BASELINE := 32
+ZLINK_BASELINE := 33
 ZLINK_BASELINE_WINDOWS := 39
 
 zlink-guard: bin/zc
