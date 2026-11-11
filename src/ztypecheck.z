@@ -10073,7 +10073,7 @@ reportUnknownAsHead: function {
     }
     if headNid.isZero then return false
     # an operator's call (`cap * 2`) has a path for its head, and no name in it
-    if (zast.infixPartsOf :ast n: (ast.nodes.get i: item.operation)).found then return false
+    if (operatorPartsAt :ast nid: item.operation).found then return false
     # a head through a unit (`sch.row`) is checked at its root, then at its member
     rootNid: headNid
     {
@@ -16112,7 +16112,7 @@ valueDeclares: function {ast: Ast.view node: zast.nodeid} out bool is {
     if (zast.atomNameIdOf :n).isZero.not then return true
     if n.atomstring or n.ifexpr or n.caseexpr or n.listblock then return true
     if (convertsExpression :ast :node) then return true
-    return (zast.infixPartsOf :ast :n).found
+    return (operatorPartsAt :ast nid: node).found
 }
 
 # convertsExpression -- the declaration's value is a conversion written on an
@@ -16126,7 +16126,7 @@ convertsExpression: function {ast: Ast.view node: zast.nodeid} out bool is {
     ) case dottedpath then {
         pn: ast.nodes.get i: n.parent
         if pn.atomstring or pn.ifexpr or pn.caseexpr then return true
-        return (zast.infixPartsOf :ast n: pn).found
+        return (operatorPartsAt :ast nid: n.parent).found
     } else {
         return false
     }
@@ -34381,7 +34381,7 @@ constReadsNumericParamVia: function {
         n: ast.nodes.get i: opId
         # a bare name, or a pun's labelled one
         nameId = atomNameId :ast :n
-        ip: zast.infixPartsOf :ast :n
+        ip: operatorPartsAt :ast nid: opId
         if ip.found then {
             kids.append from: ip.lhs
             kids.append from: ip.rhs
@@ -51049,7 +51049,7 @@ unresolvedBareCallable: function {
         # an INFIX call hides the unresolvable name in EITHER operand
         # (`1 + ghost`), and the callable alone reaches only the left one.
         # Read ahead of the match: an arm narrows `n` to its own row.
-        ipu: zast.infixPartsOf :ast :n
+        ipu: operatorPartsAt :ast :nid
         match (
             n
         ) case call then {
@@ -58407,11 +58407,12 @@ binref: record {
 # binRefAt -- a binary operation at `nid` as plain values (all zero for any
 # other arm). AN INFIX CALL IS A BINARY OPERATION: `a op b` parses to the call
 # form, so its operands and operator live in the callable's dotted path and its
-# one unlabelled argument. Every walk that reads a binary operation reads it
+# one unlabelled argument. The same operation written as a call (`a.+ rhs: b`)
+# is read alike. Every walk that reads a binary operation reads it
 # through here, so the layout is described once rather than per walk.
 binRefAt: function {ast: Ast.view nid: zast.nodeid} out binref is {
     n: ast.nodes.get i: nid
-    ip: zast.infixPartsOf :ast :n
+    ip: operatorPartsAt :ast :nid
     if ip.found then {
         p: zast.posOf :n
         return (
@@ -58426,6 +58427,28 @@ binRefAt: function {ast: Ast.view nid: zast.nodeid} out binref is {
     }
     zn: zast.nodeid
     return (binref nid: zn lhs: zn operator: zn rhs: zn lineno: 0 colno: 0)
+}
+
+# operatorPartsAt -- the operands and the operator of the binary operation at
+# `nid`, in either spelling: written between its operands (`a + b`), or as a
+# call of a symbol-named member with one argument (`a.+ rhs: b`). The two name
+# one method, so every walk that asks what an operation is asks here. Not
+# found for any other row.
+operatorPartsAt: function {ast: Ast.view nid: zast.nodeid} out zast.infixparts is {
+    zn: zast.nodeid
+    ip: zast.infixPartsOf :ast n: (ast.nodes.get i: nid)
+    if ip.found then return ip
+    n: ast.nodes.get i: nid
+    absent: zast.infixparts found: false lhs: zn operator: zn rhs: zn
+    if n.call.not then return absent
+    if n.arguments.count.u64 != 1 then return absent
+    cb: ast.nodes.get i: n.callable
+    if cb.dottedpath.not then return absent
+    opText: zast.nameTextAt :ast ref: (zast.atomNameIdOf n: (ast.nodes.get i: cb.child))
+    if (isOperatorName name: opText.stringView).not then return absent
+    an: ast.nodes.get i: (zast.kidAt kids: ast.kids span: n.arguments i: 0)
+    if an.namedoperation.not then return absent
+    return (zast.infixparts found: true lhs: cb.parent operator: cb.child rhs: an.operation)
 }
 
 # atomref -- what the bare-name walk reads of its row: the name id and the
@@ -63097,7 +63120,7 @@ constantOperandType: function {
         # `a op b` parses to the call form, and a unit-level constant built
         # from one folds exactly as the same expression written any other way.
         if arm == 0 then {
-            ip: zast.infixPartsOf :ast :n
+            ip: operatorPartsAt :ast :nid
             if ip.found then {
                 arm = 3
                 lhsId = ip.lhs
@@ -65266,7 +65289,7 @@ constDefIsComputed: function {
     callableId: zast.nodeid
     {
         n: ast.nodes.get i: nid
-        if (zast.infixPartsOf :ast :n).found or n.listblock then return true
+        if (operatorPartsAt :ast :nid).found or n.listblock then return true
         if n.call then callableId = n.callable
     }
     if callableId.isZero then return false
@@ -66263,7 +66286,7 @@ checkConstantMethodShapeAt: function {
     isIf: false
     {
         ipn: ast.nodes.get i: nid
-        ip: zast.infixPartsOf :ast n: ipn
+        ip: operatorPartsAt :ast :nid
         if ip.found then {
             lhsId = ip.lhs
             rhsId = ip.rhs
@@ -66304,11 +66327,7 @@ checkConstantOperator: function {
     nid: zast.nodeid
     lhsId: zast.nodeid
 } out bool is {
-    opIdN: zast.nodeid
-    {
-        node: ast.nodes.get i: nid
-        opIdN = (zast.infixPartsOf :ast n: node).operator
-    }
+    opIdN: (operatorPartsAt :ast :nid).operator
     call: callRefAt :ast :nid
     opSite: constmethodsite pathId: call.callable recvId: lhsId childId: opIdN isCall: true :call
     errsOp: st.typing.errors.length
@@ -69052,10 +69071,11 @@ evalConstPlan: function {ast: Ast.view nid: zast.nodeid} out constplan is {
             ln = n.lineno
             co = n.colno
         } case call then {
-            # an INFIX call folds as the binary operation it is; every other
+            # an operator folds as the binary operation it is, written infix
+            # or as a call; every other
             # call takes the call arm, which folds string static methods only
             arm = 6
-            if n.infix then arm = 5
+            if (operatorPartsAt :ast :nid).found then arm = 5
         } case ifexpr then {
             arm = 7
         } case caseexpr then {
@@ -70519,8 +70539,7 @@ resolveConstantDef: function {
     # AN INFIX CALL IS A BINARY OPERATION, NOT A CONSTRUCTION. `COMBINED:
     # OFFSET + SCALE` folds like the same expression written any other way,
     # and the call arm below would report it as a construction instead.
-    dnI: ast.nodes.get i: defnId
-    ipI: zast.infixPartsOf :ast n: dnI
+    ipI: operatorPartsAt :ast nid: defnId
     if ipI.found then {
         if (refuseNumericOperator :st :ast call: (callRefAt :ast nid: defnId)) then {
             # the one mistake: the evaluator's own answer for the shape is not asked
@@ -71090,7 +71109,7 @@ constDefNeedsValue: function {
 isComputedConstantDef: function {ast: Ast.view nid: zast.nodeid} out bool is {
     n: ast.nodes.get i: nid
     if n.ifexpr or n.caseexpr then return true
-    return (zast.infixPartsOf :ast :n).found
+    return (operatorPartsAt :ast :nid).found
 }
 
 # unfoldedWhy -- why `nid` has no compile-time value: true once the walk has
