@@ -48650,17 +48650,50 @@ standInNeedsBox: function {
 # declares it -- the function, or a function field's signature -- and that name
 # says nothing about what it takes.
 signatureText: function {st: zenv.ZSymbolTable.view ast: Ast.view tid: ztypes.tid} out String is {
+    seen: ListVal ztypes.tid
+    return (signatureTextWithin :st :ast :tid :seen)
+}
+
+# signatureTextWithin -- signatureText inside the signatures `seen` lists. A
+# function type one of its own members names again -- `f: function {s: f}` --
+# is spelled by its name there, as its signature has no end.
+signatureTextWithin: function {
+    st: zenv.ZSymbolTable.view
+    ast: Ast.view
+    tid: ztypes.tid
+    seen: ListVal ztypes.tid
+} out String is {
+    seen.append tid
     r: "function".string
-    ps: signatureParamsText :st :ast :tid
+    ps: signatureParamsText :st :ast :tid :seen
     if ps.length > 0 then r.append " {\{ps}}"
-    r.append (signatureReturnText :st :ast :tid)
+    r.append (signatureReturnText :st :ast :tid :seen)
+    seen.pop
     return r
+}
+
+# signatureMemberName -- the type of a signature's parameter or return as the
+# signature spells it: specWrittenName, but a function type already being
+# spelled (`seen`) by its name.
+signatureMemberName: function {
+    st: zenv.ZSymbolTable.view
+    ast: Ast.view
+    tid: ztypes.tid
+    seen: ListVal ztypes.tid
+} out String is {
+    if (spelledAsSignature :st :tid).not then return (declWrittenName :st :ast :tid)
+    if (seen.contains item: tid) then return (declWrittenName :st :ast :tid)
+    return (signatureTextWithin :st :ast :tid :seen)
 }
 
 # signatureParamsText -- a function type's parameters as its signature writes
 # them, each with its marker: `x: i64 v: String.view`
 signatureParamsText: function {
-    st: zenv.ZSymbolTable.view ast: Ast.view tid: ztypes.tid
+    st: zenv.ZSymbolTable.view
+    ast: Ast.view
+    tid: ztypes.tid
+    # the signatures being spelled, this one last
+    seen: ListVal ztypes.tid
 } out String is {
     ps: String
     ns: st.typing.declRowSlots ownerTid: tid
@@ -48673,7 +48706,7 @@ signatureParamsText: function {
             if row.name == zast.wellKnown.slot.wkThis then {
                 ps.append ":this"
             } else {
-                ptn: specWrittenName :st :ast tid: row.tid
+                ptn: signatureMemberName :st :ast tid: row.tid :seen
                 ps.append "\{zast.nameTextAt :ast ref: row.name}: \{ptn}"
                 pm: st.typing.declOwnershipOfId parentTypeId: tid nameId: row.name
                 if pm.some then {
@@ -48689,7 +48722,11 @@ signatureParamsText: function {
 # signatureReturnText -- a function type's return as its signature writes it,
 # ` out T` or ` outx T` with the return's marker, "" for none
 signatureReturnText: function {
-    st: zenv.ZSymbolTable.view ast: Ast.view tid: ztypes.tid
+    st: zenv.ZSymbolTable.view
+    ast: Ast.view
+    tid: ztypes.tid
+    # the signatures being spelled, this one last
+    seen: ListVal ztypes.tid
 } out String is {
     r: String
     ro: methodReturnOf reg: st.reg typing: st.typing mid: tid
@@ -48697,7 +48734,7 @@ signatureReturnText: function {
     if (st.typing.funcPins.has item: tid) then {
         r.append " outx "
     } else r.append " out "
-    r.append (specWrittenName :st :ast tid: ro)
+    r.append (signatureMemberName :st :ast tid: ro :seen)
     rm: markerText o: (st.typing.returnMarkerOf :tid)
     if rm.length > 0 then {
         r.append "."
@@ -62328,6 +62365,13 @@ collectOwedUnitFns: function {
             # an instance's walk marks the member it takes; one the instance
             # does not declare would be owed again by every visit
             if (st.typing.declMemberIdOf parentTypeId: monoId nameId: bm.name).isZero then {
+                # an instantiation that was refused -- an argument labelled
+                # with no parameter of the unit -- leaves an instance with no
+                # members: its error is reported, and there is nothing to walk
+                if st.typing.errors.length > 0 then {
+                    di = di + 1
+                    continue
+                }
                 mn: st.reg.nameOf tid: monoId
                 fnm: zast.nameTextAt :ast ref: bm.name
                 (
