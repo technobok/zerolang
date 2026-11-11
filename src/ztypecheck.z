@@ -6183,8 +6183,38 @@ recordReturnType: function {
         :thisName
         nid: oId
     )
+    if (refuseLiteralReturn :st :ast :oId) then return
     recordTyperef :st :scope :ast :unitDecl :thisName nid: oId
     checkReturnNamesType :st :scope :ast :unitDecl :thisName :oId
+}
+
+# refuseLiteralReturn -- an `out` clause that writes a literal, or a member of
+# one, where a type belongs (`out 5`, `out "abc".string`). A literal is a
+# value, and unreported the function returned nothing. True when it reported.
+refuseLiteralReturn: function {st: zenv.ZSymbolTable ast: Ast.view oId: zast.nodeid} out bool is {
+    root: oId
+    isLiteral: false
+    for root.isZero.not loop {
+        rn: ast.nodes.get i: root
+        next: zast.nodeid
+        if rn.dottedpath then next = rn.parent
+        if rn.atomstring then isLiteral = true
+        if rn.atomid when (isNumericLiteralNameAt :ast ref: rn.name) then isLiteral = true
+        root = next
+    }
+    if isLiteral.not then return false
+    outNode: ast.nodes.get i: oId
+    (
+        addResolveErrorH
+        :st
+        nodeid: oId
+        lineno: (nodeLine n: outNode)
+        colno: (nodeCol n: outNode)
+        e: zast.err.typeError
+        msg: "an `out` type names a type: this is a literal, which is a value".string
+        width: 1
+    )
+    return true
 }
 
 # checkReturnNamesType -- a dotted `out` type the typeref pass left untyped: its
@@ -55096,7 +55126,8 @@ checkSpecialFormCall: function {
 
 # refuseMetaMember -- a path through `meta` that names anything but `create`,
 # called or read: `meta` holds the enclosing type's raw constructor and nothing
-# else, so `meta.make` names nothing. A local named `meta` is an ordinary value.
+# else, so `meta.make` names nothing. `meta.create` itself is refused where no
+# type encloses the code. A local named `meta` is an ordinary value.
 # True when the path was refused.
 refuseMetaMember: function {
     st: zenv.ZSymbolTable
@@ -55112,7 +55143,20 @@ refuseMetaMember: function {
     if bId.isZero or (bId == zast.wellKnown.slot.wkMeta).not then return false
     if (st.lookupVarId nameId: bId).some then return false
     mId: atomNameId :ast n: (ast.nodes.get i: pn.child)
-    if mId.isZero or (mId == zast.wellKnown.slot.wkCreate) then return false
+    if mId.isZero then return false
+    if mId == zast.wellKnown.slot.wkCreate then {
+        if st.walk.currentThisTid.isZero.not or st.recording.not then return false
+        (
+            addError
+            :st
+            :nodeid
+            :lineno
+            :colno
+            e: zast.err.badReference
+            msg: "'meta.create' is the constructor of the type a method belongs to, and this code belongs to no type".string
+        )
+        return true
+    }
     mn: zast.nameTextAt :ast ref: mId
     (
         addError
