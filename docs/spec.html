@@ -1546,6 +1546,14 @@ that related <code>then</code> block.</p>
 do not short-circuit: an operation is a call, and a call evaluates every
 argument. Write <code>if a when b then</code> when <code>b</code> must not run unless <code>a</code> held,
 and <code>if a and b then</code> when both are safe to evaluate.</p>
+<p>A condition with a compile-time value folds, in that same order. A constant
+true is passed over. A constant false reached before any condition decided at
+run time loses the clause, and nothing after it is evaluated. The first
+condition decided at run time stops the fold, and a clause after a run-time
+clause is not folded either, since it runs only after that test. With
+<code>DEBUG</code> false, <code>if DEBUG when k then</code> folds to its <code>else</code>, while
+<code>if k when DEBUG then</code> stays a run-time <code>if</code>. Only the selected branch of a
+folded <code>if</code> is checked and emitted.</p>
 <p>If no blocks of conditions completely succeed, the <code>else</code> block will execute,
 if present.</p>
 <p>A successful clause will exit the <code>if</code> expression -- at most, one <code>then</code> or
@@ -1927,6 +1935,16 @@ variable.</p>
 single <code>for</code>.</p>
 <p>Order matters, conditions/bindings can short-circuit on failure and will stop
 processing subsequent tests.</p>
+<p>A condition with a compile-time value folds in that order, as for an
+<a href="#if">if</a>, and a binding is decided at run time. A precondition that folds
+false before any decided at run time means the loop never runs: its body and
+later conditions are not checked or emitted, and in value position the loop
+yields an empty list, its body checked only for the element type. A condition
+that folds true writes no test. A postcondition that folds false before any
+decided at run time ends the loop after one iteration.</p>
+<p>A loop that no condition can stop and no <code>break</code> leaves never finishes: no
+precondition can fail and no postcondition can stop it. Its only way out leaves
+the function, so a statement after it is unreachable and is dropped.</p>
 <p><code>for</code> requires at least one argument (condition or <code>loop</code>). <code>for &lt;condition&gt;</code>
 will loop until condition is false; <code>for x: operation</code> will loop until
 operation produces <code>none</code>; <code>for each x: operation</code> will loop until the
@@ -4177,6 +4195,17 @@ written after it and checks it against the <code>out</code>. The system unit dec
 <code>return: function out never is native</code>.</p>
 <pre><code class="language-zerolang">: answer: function out i64 is {
 :     return 0
+: }</code></pre>
+<p>Every path through a function with an <code>out</code> type returns a value. A body that
+ends on an <code>if</code>, a <code>match</code>, a loop or a block some path falls out of, with no
+value of its own, is a compile-time error. Each instance of a generic function
+answers for itself.</p>
+<pre><code class="language-zerolang">: pick: function {k: bool} out i64 is {
+:     if k then return 7
+: }
+:
+: main: function is {
+:     v: pick k: false
 : }</code></pre>
 <h4 id="public"><a href="#public">5.4.15. public</a></h4>
 <p>Defaults to all contents of the current item.</p>
@@ -7395,9 +7424,15 @@ can report.</p>
 unit-level integer constants, and arithmetic / comparison expressions
 over them, in statement-position <code>if</code> chains and <code>match</code> statements
 with literal arms. An <code>error</code> behind a guard that does not fold (a
-runtime value, a loop, a field read) is not provably reachable:
+runtime value, a field read) is not provably reachable:
 it stays in the generated C as a runtime trap that panics with the
 message if execution ever reaches it.</p>
+<p>An <code>error</code> is proved only when every path through its function reaches it,
+assuming each loop ends. An early <code>return</code> before it, or a <code>break</code> or
+<code>continue</code> of a loop or block around it, can skip it, so it too stays a
+run-time trap. The first iteration of a loop that no precondition can stop is
+reached as a winning branch is: <code>for loop { error "todo" }</code> is a compile-time
+error.</p>
 <pre><code class="language-zerolang">MODE: 1
 
 main: function is {

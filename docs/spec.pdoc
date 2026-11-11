@@ -1599,6 +1599,15 @@ do not short-circuit: an operation is a call, and a call evaluates every
 argument. Write #~"if a when b then" when #~"b" must not run unless #~"a" held,
 and #~"if a and b then" when both are safe to evaluate.
 
+A condition with a compile-time value folds, in that same order. A constant
+true is passed over. A constant false reached before any condition decided at
+run time loses the clause, and nothing after it is evaluated. The first
+condition decided at run time stops the fold, and a clause after a run-time
+clause is not folded either, since it runs only after that test. With
+#~"DEBUG" false, #~"if DEBUG when k then" folds to its #~"else", while
+#~"if k when DEBUG then" stays a run-time #~"if". Only the selected branch of a
+folded #~"if" is checked and emitted.
+
 If no blocks of conditions completely succeed, the #~"else" block will execute,
 if present.
 
@@ -2025,6 +2034,18 @@ single #~"for".
 
 Order matters, conditions/bindings can short-circuit on failure and will stop
 processing subsequent tests.
+
+A condition with a compile-time value folds in that order, as for an
+[#> to=if: if], and a binding is decided at run time. A precondition that folds
+false before any decided at run time means the loop never runs: its body and
+later conditions are not checked or emitted, and in value position the loop
+yields an empty list, its body checked only for the element type. A condition
+that folds true writes no test. A postcondition that folds false before any
+decided at run time ends the loop after one iteration.
+
+A loop that no condition can stop and no #~"break" leaves never finishes: no
+precondition can fail and no postcondition can stop it. Its only way out leaves
+the function, so a statement after it is unreachable and is dropped.
 
 #~"for" requires at least one argument (condition or #~"loop"). #~"for <condition>"
 will loop until condition is false; #~"for x: operation" will loop until
@@ -4724,6 +4745,20 @@ written after it and checks it against the #~"out". The system unit declares it 
 #code language=zerolang:
   : answer: function out i64 is {
   :     return 0
+  : }
+
+Every path through a function with an #~"out" type returns a value. A body that
+ends on an #~"if", a #~"match", a loop or a block some path falls out of, with no
+value of its own, is a compile-time error. Each instance of a generic function
+answers for itself.
+
+#code language=zerolang expect=E0100:
+  : pick: function {k: bool} out i64 is {
+  :     if k then return 7
+  : }
+  :
+  : main: function is {
+  :     v: pick k: false
   : }
 
 
@@ -8552,9 +8587,16 @@ Provability is bounded by what the emitter can fold: integer literals,
 unit-level integer constants, and arithmetic / comparison expressions
 over them, in statement-position #~"if" chains and #~"match" statements
 with literal arms. An #~"error" behind a guard that does not fold (a
-runtime value, a loop, a field read) is not provably reachable:
+runtime value, a field read) is not provably reachable:
 it stays in the generated C as a runtime trap that panics with the
 message if execution ever reaches it.
+
+An #~"error" is proved only when every path through its function reaches it,
+assuming each loop ends. An early #~"return" before it, or a #~"break" or
+#~"continue" of a loop or block around it, can skip it, so it too stays a
+run-time trap. The first iteration of a loop that no precondition can stop is
+reached as a winning branch is: #~"for loop { error \"todo\" }" is a compile-time
+error.
 
 #code language=zerolang: """
   MODE: 1

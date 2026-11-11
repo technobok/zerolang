@@ -318,6 +318,42 @@ lineLeavesBlock: function {ast: Ast.view id: zast.nodeid} out bool is {
     return false
 }
 
+# lineIsEndlessLoop -- the statement at `id` is a bare `for loop`: no condition,
+# no postcondition and no `break` that leaves it, so it never finishes. A loop
+# with a constant condition is the checker's to know; this tier reads syntax.
+lineIsEndlessLoop: function {ast: Ast.view id: zast.nodeid} out bool is {
+    loopId: id
+    line: ast.nodes.get i: id
+    if line.statementline then loopId = line.statementline
+    n: ast.nodes.get i: loopId
+    if n.forexpr.not then return false
+    if (n.conditions.count.u64 > 0) or (n.postconditions.count.u64 > 0) then return false
+    return (bodyBreaksOut :ast body: n.body).not
+}
+
+# bodyBreaksOut -- a `break` under `body` leaves the loop it is the body of,
+# wherever it is written: one inside a nested loop or a block leaves that.
+bodyBreaksOut: function {ast: Ast.view body: zast.nodeid} out bool is {
+    work: ListVal zast.nodeid capacity: 32
+    work.append body
+    wi: u64
+    for wi < work.length loop {
+        wid: work.get i: wi
+        wi = wi + 1
+        if wid.isZero.not then {
+            wn: ast.nodes.get i: wid
+            if (zast.atomNameIdOf n: wn) == zast.wellKnown.slot.wkBreak then return true
+            if (wn.forexpr or wn.doexpr or wn.functiondef).not then (
+                zast.childIdsInto
+                :ast
+                n: wn
+                acc: work
+            )
+        }
+    }
+    return false
+}
+
 # bodyKeyInto -- the shape of the subtree at `id`, appended to `buf`: every arm
 # name, each binary operator and each literal chunk kept, every other name
 # folded away. Two bodies with the same key differ only in what they call
@@ -2301,25 +2337,28 @@ Analysis: class {
     }
 
     # checkUnreachable -- L026: a statement after one that leaves its block
-    # (`return`, `break`, `continue`) can never run. Reported once per block,
-    # at the first statement past the exit.
+    # (`return`, `break`, `continue`), or after a bare `for loop` nothing breaks
+    # out of, can never run. Reported once per block, at the first statement
+    # past it.
     checkUnreachable: function {:this ast: Ast.view stmts: zast.kidspan} is {
         i: u64
         n: stmts.count.u64
         for i < n loop {
             sid: zast.kidAt kids: ast.kids span: stmts :i
             i = i + 1
-            if i < n when (lineLeavesBlock :ast id: sid) then {
-                p: zast.posOf n: (ast.nodes.get i: (zast.kidAt kids: ast.kids span: stmts :i))
-                (
-                    this.warn
-                    code: "L026"
-                    msg: "unreachable statement: the block has already returned or jumped".string
-                    line: p.line
-                    col: p.col
-                    width: 1
-                )
-                return
+            if i < n then {
+                msg: String
+                if (lineLeavesBlock :ast id: sid) then {
+                    msg = "unreachable statement: the block has already returned or jumped".string
+                }
+                if (lineIsEndlessLoop :ast id: sid) then {
+                    msg = "unreachable statement: the loop before it never finishes".string
+                }
+                if msg.length > 0 then {
+                    p: zast.posOf n: (ast.nodes.get i: (zast.kidAt kids: ast.kids span: stmts :i))
+                    this.warn code: "L026" :msg line: p.line col: p.col width: 1
+                    return
+                }
             }
         }
     }
