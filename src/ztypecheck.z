@@ -40652,6 +40652,7 @@ checkReassignment: function {
     refuseBorrowedArms :st :ast nid: rasgn.value verb: "by reassignment"
     consumeReassignPins :st :ast :rasgn :hbNmId :rvt
     valueTid: materialiseLiteral :ast :st t: rvt
+    if valueTid.isZero then refuseUntypedValue :st :ast nid: rasgn.value
     if (refuseNullValue :st :ast vt: valueTid nid: rasgn.value) then return
     # A literal RHS at a concretely-typed target coerces: restamp the RHS. A
     # literal-typed target (a literal-init loop binding) keeps the pseudo.
@@ -49788,6 +49789,70 @@ argOwnershipOf: function {
     return (argownership :isTake :isLockish :isViewArg :isHold :pt)
 }
 
+# checkNativeTemplateArgs -- the arguments of a method of a NATIVE generic
+# type whose parameters are typed by the type's own parameters
+# (`(sync.MutexVal i64).create value: "x"`, `m.set value: ..`). A native
+# template's methods are shared by its instances and keep the parameter in
+# their signature, which fits anything, so the argument went unchecked: it is
+# compared here with what the instance the call is made on takes for that
+# parameter.
+checkNativeTemplateArgs: function {
+    st: zenv.ZSymbolTable
+    ast: Ast
+    call: callref
+    funcId: ztypes.tid
+    recvImplicit: bool
+} is {
+    cn: ast.nodes.get i: call.callable
+    if cn.dottedpath.not then return
+    inst: walkTypeOf :st nid: cn.parent
+    tpl: st.reg.genericOriginOf tid: inst
+    if tpl.isZero or (st.reg.isNativeOf tid: tpl).not then return
+    tdecl: st.typing.declIdOfType typeId: tpl
+    pos: u64
+    k: u64
+    for k < call.nargs loop {
+        arg: argRefAt :ast nid: (zast.callArgAt :ast nid: call.nid i: k)
+        k = k + 1
+        if arg.nid.isZero then continue
+        pnId: arg.name
+        if pnId.isZero then {
+            pnId = positionalParamNameId :st :funcId idx: pos skipRecv: recvImplicit
+            pos = pos + 1
+        }
+        if pnId.isZero then continue
+        pt: (st.typing.declChildOfId parentTypeId: funcId nameId: pnId).or d: ztypes.tid.zero
+        want: instanceArgFor :st :tdecl :inst param: pt
+        if want.isZero then continue
+        checkArgTypeMismatch :st :ast ptid: want vt: (walkTypeOf :st nid: arg.operation) :pnId :arg
+    }
+}
+
+# instanceArgFor -- the type the instance `inst` of the template `tdecl` takes
+# for the template's type parameter `param`; 0 when `param` is no type
+# parameter of it.
+instanceArgFor: function {
+    st: zenv.ZSymbolTable.view
+    tdecl: ztypes.declid
+    inst: ztypes.tid
+    param: ztypes.tid
+} out ztypes.tid is {
+    if param.isZero then return param
+    if (
+        (st.reg.typetypeOf typeId: param) != ztypes.ztypetype.genericParam
+    ) then return ztypes.tid.zero
+    pn: st.reg.genericParamNameOfTid :tdecl ptid: param
+    if pn.isZero then return ztypes.tid.zero
+    i: u64
+    for i < (st.reg.genericParamCountOf :tdecl) loop {
+        if (st.reg.genericParamNameAt :tdecl :i) == pn then {
+            return (st.reg.genericTypeArgAt specId: inst ordinal: i)
+        }
+        i = i + 1
+    }
+    return ztypes.tid.zero
+}
+
 # reportDottedNoParameters -- reportNoParameters for a call through a dotted
 # path (`u.one 5`, `os.pid x: 5`), at its first argument: the argument was
 # dropped without a word. `return` and `yield` declare no parameter and take
@@ -52019,6 +52084,7 @@ checkResolvedMethodCall: function {
     )
     checkMissingCallArgs :ast :st :call funcId: dro isCtor: false recvImplicit: recvVal
     reportDottedNoParameters :st :ast :call funcId: dro
+    checkNativeTemplateArgs :st :ast :call funcId: dro recvImplicit: recvVal
     # The receiver locks for the call's duration too, after
     # the args; the strength it took is the strength the result's pin
     # keeps on it.
