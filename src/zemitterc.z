@@ -49444,6 +49444,27 @@ argBaseNodeId: function {ast: Ast.view n: astnode.view} out zast.nodeid is {
     return zast.nodeid
 }
 
+# argBoundTo -- the position in the call of the argument that binds parameter
+# slot `slot` (argSlotList's answer per argument); the list's length when none
+# does.
+argBoundTo: function {slots: (ListVal u64).view slot: u64} out u64 is {
+    i: u64
+    for i < slots.length loop {
+        if (slots.get :i) == slot then return i
+        i = i + 1
+    }
+    return slots.length
+}
+
+# callArgOperationAt -- the value node of the call's argument at position `i`;
+# 0 past the end.
+callArgOperationAt: function {ast: Ast.view call: zast.callrow.view i: u64} out zast.nodeid is {
+    if i >= call.arguments.count.u64 then return zast.nodeid
+    a: ast.nodes.get i: (zast.kidAt kids: ast.kids span: call.arguments :i)
+    if a.namedoperation then return a.operation
+    return zast.nodeid
+}
+
 # nativeCreateArg -- one argument of a native create, by its parameter's type: a
 # protocol parameter takes the argument boxed as that protocol; a borrowed
 # class parameter takes the argument's address; any other takes it as written
@@ -49457,6 +49478,9 @@ nativeCreateArg: function {
     # the create function, whose parameter `label` is
     create: ztypes.tid
     label: zast.nameid
+    # the call argument that binds the parameter, by its position in the call
+    # (argBoundTo): its label's, or an unlabelled one's by its place
+    argAt: u64
     ptid: ztypes.tid
     facts: cfacts.borrow
 } out String is {
@@ -49466,7 +49490,7 @@ nativeCreateArg: function {
         aId: zast.kidAt kids: ast.kids span: call.arguments :i
         i = i + 1
         a: ast.nodes.get i: aId
-        if a.namedoperation when a.name == label then {
+        if a.namedoperation when (i - 1) == argAt then {
             if (reg.typetypeOf typeId: prtid) == ztypes.ztypetype.protocolType then {
                 # an implementer is boxed as the protocol it stands in for, as at
                 # any other slot (standInText); a value that already is the
@@ -49557,6 +49581,7 @@ emitNativeCreate: function {
     recFieldLists :ast :reg :typing tid: crid names: pnames ids: pids nameIds: pidsNm
     pn: pnames.length
     wbase: orderPositions :ast :ctx :call nameIds: pidsNm labelsOnly: true
+    slots: argSlotList :ast :call fpNameIds: pidsNm
     ord: orderBegin :ctx slots: pn
     k: u64
     for k < pn loop {
@@ -49564,6 +49589,7 @@ emitNativeCreate: function {
         k = k + 1
         mk: pendingHoistMark :ctx
         astrF: cfacts
+        argAt: argBoundTo :slots slot: pi
         astr: (
             nativeCreateArg
             :ast
@@ -49573,10 +49599,11 @@ emitNativeCreate: function {
             :call
             create: crid
             label: (pidsNm.get i: pi)
+            :argAt
             ptid: (pids.get i: pi)
             facts: astrF
         )
-        anid: ctorArgNodeByLabel :ast :call label: (pidsNm.get i: pi)
+        anid: callArgOperationAt :ast :call i: argAt
         (
             orderArgAtWith
             :ast
