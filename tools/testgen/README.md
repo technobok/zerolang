@@ -1,7 +1,8 @@
 # testgen
 
-Python scripts that write math's table-driven test fixtures. Their output is
-committed under `tests/fixtures/emitc_corpus/math/`; nothing in a build or in
+Python scripts that write table-driven test fixtures: math's, and the integer
+overflow methods'. Their output is committed under
+`tests/fixtures/emitc_corpus/`; nothing in a build or in
 `make test` / `make ci` runs them, and the tree builds and tests with a C
 toolchain alone. Run one only to change what a fixture covers, then review the
 diff, run the program for its new golden, and commit both.
@@ -19,6 +20,7 @@ format their output with `bin/zl`, so build it first (`make bin/zl`).
 | Script | Writes | Oracle |
 |---|---|---|
 | `kerneltables.py [ROOT]` | `math_kernel_shapes.z` | Python ints |
+| `overflowmethods.py` (run in the repository root) | `emitc_corpus/overflow_methods.z` and its golden | Python ints |
 | `mathtables.py OPS` | rows for `math_bigint_tables.z` (`add,sub,mul`), `math_bigint_division.z` (`div,mod`), `math_bigint_text.z` (`text`), on stdout | Python ints |
 | `fixedtables.py [ROOT [OUT]]` | `math_fixedint.z` | Python ints mod 2^(64N) |
 | `decimaltables.py [ROOT [OUT]]` | `math_decimal.z` | Python ints, `Fraction` |
