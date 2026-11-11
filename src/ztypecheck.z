@@ -31322,10 +31322,8 @@ checkProjectionCreate: function {
         # consumes or re-views, so it owns what it holds
         pErrs: st.typing.errors.length
         pvt: checkOwnedValueAt :st :unitDecl :ast nid: arg.operation
-        if pvt.isZero then {
-            reportUnresolvedCastArg :st :unitDecl :ast argId: arg.operation vt: pvt errMark: pErrs
-            continue
-        }
+        if (projectionSourceRefused :st :unitDecl :ast :pjId value: pvt :arg errMark: pErrs
+        ) then continue
         # the source must implement, as an argument at a spec parameter must; a
         # typedef implementing through its base takes the base's row as its own
         # there (recordInheritedImplementation), which is what the helper is built
@@ -31363,6 +31361,54 @@ checkProjectionCreate: function {
     stampGate :st nid: call.nid tid: pjT
     st.typing.callKind.set key: call.nid value: (projectionCallKind :st pjId: pjT :borrows)
     return pjT
+}
+
+# projectionSourceRefused -- a projection's source that cannot be one: a value
+# with no type, reported as the unknown name it is when nothing else said so
+# (`errMark`), or a value that is already an instance of the protocol
+# (refuseProjectionOfItself). True when the projection stops there.
+projectionSourceRefused: function {
+    st: zenv.ZSymbolTable
+    unitDecl: ztypes.declid
+    ast: Ast
+    pjId: ztypes.tid
+    value: ztypes.tid
+    arg: argref
+    errMark: u64
+} out bool is {
+    if value.isZero then {
+        reportUnresolvedCastArg :st :unitDecl :ast argId: arg.operation vt: value :errMark
+        return true
+    }
+    return (refuseProjectionOfItself :st :ast :pjId :value :arg)
+}
+
+# refuseProjectionOfItself -- a protocol instance written from a value that is
+# already one (`Provider x` with `x: m.prov`): there is no implementer to wrap,
+# and nothing to build. True when it refused.
+refuseProjectionOfItself: function {
+    st: zenv.ZSymbolTable
+    ast: Ast
+    pjId: ztypes.tid
+    value: ztypes.tid
+    arg: argref
+} out bool is {
+    if value != pjId then return false
+    if (st.reg.typetypeOf typeId: pjId) != ztypes.ztypetype.protocolType then return false
+    pn: specWrittenName :st :ast tid: pjId
+    (
+        addErrorH
+        :st
+        nodeid: arg.nid
+        lineno: arg.lineno
+        colno: arg.colno
+        e: zast.err.typeError
+        msg: "the value is already a '\{pn}': there is nothing for '\{pn}' to wrap"
+        note: String
+        hint: "use the value as it is".string
+        width: 1
+    )
+    return true
 }
 
 # metaCreateBaseId -- the base atom's node id when a callable is the dotted
