@@ -31299,7 +31299,8 @@ typedefBaseOf: function {st: zenv.ZSymbolTable.view tid: ztypes.tid} out ztypes.
     return b
 }
 
-# reportUnresolvedCastArg -- a typedef cast's from-argument that resolved to
+# reportUnresolvedCastArg -- an argument walked as a value -- a typedef cast's
+# from-argument, an arm's payload, what a `yield` hands out -- that resolved to
 # nothing and raised nothing is an unknown reference, as at a read. Without this
 # the value types to 0, every check on that argument is skipped, and the emitter
 # writes the bare name into the C: zc exits 0 and only the C compiler catches
@@ -50896,7 +50897,17 @@ checkYieldCall: function {
             kYa = kYa + 1
             ya: argRefAt :ast nid: yaId
             if ya.nid.isZero.not then {
+                yErrs: st.typing.errors.length
                 yaT: checkOwnedValueAt :st :unitDecl :ast nid: ya.operation
+                (
+                    reportUnresolvedCastArg
+                    :st
+                    :unitDecl
+                    :ast
+                    argId: ya.operation
+                    vt: yaT
+                    errMark: yErrs
+                )
                 checkYieldedValue :st :ast arg: ya argT: yaT
                 refuseYieldedLocks :st :ast arg: ya argT: yaT
             }
@@ -52376,7 +52387,9 @@ checkTaggedCtorArg: function {
                 msg: uum
             )
         }
+        uErrs: st.typing.errors.length
         uvt: checkMovedValueAt :st :unitDecl :ast nid: arg.operation owning: true
+        reportUnresolvedCastArg :st :unitDecl :ast argId: arg.operation vt: uvt errMark: uErrs
         # the value built keeps what its payload keeps
         composeChildRecord :st nid: arg.operation
         (
@@ -70602,9 +70615,9 @@ operandConstantType: function {
 }
 
 # constDefNeedsValue -- a unit-level definition REQUIRED to fold: a computed one
-# (isComputedConstantDef), or a call of a function or of a method of a
-# constant, which the classifier takes as a call rather than a construction or
-# a type's instance
+# (isComputedConstantDef), or a call of a function, of a constant or of a
+# method of a constant, which the classifier takes as a call rather than a
+# construction or a type's instance
 constDefNeedsValue: function {
     st: zenv.ZSymbolTable
     scope: ztypes.declid
@@ -70618,9 +70631,12 @@ constDefNeedsValue: function {
     if (calleeFieldFnTid :st :scope :ast :unitDecl callableId: call.callable
     ).isZero.not then return true
     cn: ast.nodes.get i: call.callable
-    if cn.dottedpath.not then return false
+    # a constant written with arguments (`C 1`, `1 1`) is a call of a value,
+    # which has none
+    base: call.callable
+    if cn.dottedpath then base = cn.parent
     held: st.walk.constFail
-    rv: evalConstNode :st :scope :ast :unitDecl nid: cn.parent
+    rv: evalConstNode :st :scope :ast :unitDecl nid: base
     st.walk.constFail = held
     return rv.kind.none.not
 }
