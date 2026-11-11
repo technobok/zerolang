@@ -41518,9 +41518,14 @@ checkWith: function {
         :ast
         valNid: withnode.body
     )
+    # a body that leaves on every path leaves the `with`, and takes the code
+    # after it out of reach
+    wk: st.unreachableKind
+    if wk == zenv.divkind.none then wk = exprDivKind :st :ast valueId: withnode.body
     st.popTo marker: withMarker
     # a `with` used as a value answers whether it hands back a place
     if outerStmt != withnode.nid then recordControlPlaceLeaves :st :ast nid: withnode.nid
+    if wk > 0 then st.markUnreachable kind: wk
     return dt
 }
 
@@ -41783,8 +41788,13 @@ checkDo: function {
     endTook: ListVal ztypes.declid
     if broke then st.takenDeclsInScope into: endTook
     if broke.not then st.markUnconditional marker: doMarker
+    # a `break` lands just after the block, so only a block none leaves takes
+    # the code after it out of reach
+    doKind: zenv.divkind.none
+    if broke.not then doKind = st.unreachableKind
     st.popTo marker: doMarker
     st.closeBreakScope
+    if doKind > 0 then st.markUnreachable kind: doKind
     # a block used as a value answers whether it hands back a place
     if st.walk.stmtExprNid != donode.nid then recordControlPlaceLeaves :st :ast nid: donode.nid
     if broke then settleDoBreakTakes :st :brkMark :endTook
@@ -43503,7 +43513,9 @@ checkIfClauses: function {
         if kC == 1 then bmRel = firstRel
         if skipDead.not then st.markPath marker: bm since: bmRel
         bt: checkClauseBody :st :unitDecl :ast :clause
-        if fbr.known when clause.statement != fbr.stmt then st.restoreBreakSeen seen: brokeBefore
+        # a clause the fold rules out, walked for the editor, decides nothing
+        foldedOut: fbr.known and (clause.statement != fbr.stmt)
+        if foldedOut then st.restoreBreakSeen seen: brokeBefore
         # what the conditions moved is not the arm's: they ran before it on
         # every path that reached this clause, the next clause's among them
         cDecls: ListVal ztypes.declid
@@ -43521,8 +43533,10 @@ checkIfClauses: function {
         btc: bt
         branchTypes.append btc
         ak: settleArmTakes :st :liveBefore taken: takenAcross
-        if ak > kindAcc then kindAcc = ak
-        if ak == zenv.divkind.none then allDiverge = false
+        if foldedOut.not then {
+            if ak > kindAcc then kindAcc = ak
+            if ak == zenv.divkind.none then allDiverge = false
+        }
         if ak == zenv.divkind.none then st.collectArmNarrowingEnds
         st.popTo marker: bm
         layConditionTakes :st decls: cDecls maybes: cMaybes locs: cLocs later: kC > 1
@@ -44117,13 +44131,17 @@ checkIf: function {
             etc: et
             branchTypes.append etc
             ak2: settleArmTakes :st :liveBefore taken: takenAcross
-            if ak2 > kindAcc then kindAcc = ak2
-            if ak2 == zenv.divkind.none then allDiverge = false
+            # an else the fold rules out, walked for the editor, decides nothing
+            if fbr.known.not or (ifnode.elseclause == fbr.stmt) then {
+                if ak2 > kindAcc then kindAcc = ak2
+                if ak2 == zenv.divkind.none then allDiverge = false
+            }
             if ak2 == zenv.divkind.none then st.collectArmNarrowingEnds
             st.popTo marker: ebm
         }
     } else {
-        allDiverge = false
+        # with no else, the end is reached unless the fold selected a clause
+        if fbr.known.not or fbr.stmt.isZero then allDiverge = false
     }
     result: ifExpressionType :st :ifnode :branchTypes :allDiverge :hasElse :anyEmpty :nvId :nullId
     result = consumedIfTid :st :ast :ifnode :hasElse :result :allDiverge :anyEmpty
@@ -56048,6 +56066,8 @@ casearmfacts: record {
     # every path out of the arm diverges, which is what lets the REST of the
     # scope narrow
     diverges: bool
+    # how it does, a `divkind`
+    kind: u8
 }
 
 # narrowCaseArmSubject -- inside an arm, the subject IS the arm's payload: narrow
@@ -56189,6 +56209,8 @@ checkCaseClause: function {
     dead: bool
     # the match folds to one arm: the one walked is the only path
     folded: bool
+    # the fold selected another arm, whether or not this one is walked
+    ruledOut: bool
 } out casearmfacts is {
     anyEmpty: false
     allDiverge: true
@@ -56243,6 +56265,7 @@ checkCaseClause: function {
     # an arm the fold rules out is not walked: it neither completes nor is
     # seen to diverge, so it gives the match no type and the code after it no
     # narrowing
+    brokeBefore: st.breakLeavesInnermost
     if dead.not then {
         allDiverge = (
             walkCaseArmBody
@@ -56272,7 +56295,12 @@ checkCaseClause: function {
     ak: settleArmTakes :st :liveBefore taken: takenAcross
     if ak == zenv.divkind.none then st.collectArmNarrowingEnds
     st.popTo marker: armMarker
-    return (casearmfacts empty: anyEmpty diverges: allDiverge)
+    # an arm the fold rules out decides nothing, walked or not
+    if ruledOut then {
+        st.restoreBreakSeen seen: brokeBefore
+        return (casearmfacts empty: anyEmpty diverges: true kind: zenv.divkind.none)
+    }
+    return (casearmfacts empty: anyEmpty diverges: allDiverge kind: ak)
 }
 
 # walkCaseArmBody -- walk a `case` arm's body: its value type joins the
@@ -56518,16 +56546,7 @@ checkCaseElse: function {
         }
         shadowCollapseIfSingle :ast :st name: (nameIdOf :ast name: targetName) fullTid: subjT
     }
-    # a match folded to one of its arms never runs its else (walkCaseClauses)
-    fb: st.typing.foldedBranchIn mono: st.typing.curMonoStamp nid: casenode.nid
-    et: neverId
-    if fb.known.not or (eagerAt :st declId: unitDecl) or (fb.stmt == casenode.elseclause) then {
-        brokeBefore: st.breakLeavesInnermost
-        walkBodyAt :st :unitDecl :ast bodyId: casenode.elseclause
-        if fb.known when fb.stmt != casenode.elseclause then st.restoreBreakSeen seen: brokeBefore
-        et = lastStmtType :st :ast block: (ast.nodes.get i: casenode.elseclause)
-        armTypes.append et
-    }
+    et: walkCaseElseBody :st :unitDecl :ast :casenode :neverId :armTypes
     # the else is an arm: it decides `allDiverge` like any other. Leaving it
     # out stamped `never` on a match whose else completes -- and `never` is
     # read downstream as "control does not continue", so the emitter dropped
@@ -56536,7 +56555,39 @@ checkCaseElse: function {
     ek: settleArmTakes :st :liveBefore taken: takenAcross
     if ek == zenv.divkind.none then st.collectArmNarrowingEnds
     st.popTo marker: elseMarker
-    return (casearmfacts empty: anyEmpty diverges: allDiverge)
+    # an else the fold rules out decides nothing, walked or not
+    if (caseElseRuledOut :st :casenode) then {
+        return (casearmfacts empty: anyEmpty diverges: true kind: zenv.divkind.none)
+    }
+    return (casearmfacts empty: anyEmpty diverges: allDiverge kind: ek)
+}
+
+# caseElseRuledOut -- the fold selected one of this match's arms, so its else
+# never runs.
+caseElseRuledOut: function {st: zenv.ZSymbolTable.view casenode: caseref} out bool is {
+    fb: st.typing.foldedBranchIn mono: st.typing.curMonoStamp nid: casenode.nid
+    return fb.known and (fb.stmt != casenode.elseclause)
+}
+
+# walkCaseElseBody -- walk a match's `else` body and answer its type, `neverId`
+# when the fold ruled it out (walkCaseClauses) and it is not walked. Walked for
+# the editor all the same, a `break` in it leaves nothing.
+walkCaseElseBody: function {
+    st: zenv.ZSymbolTable
+    unitDecl: ztypes.declid
+    ast: Ast
+    casenode: caseref
+    neverId: ztypes.tid
+    armTypes: ListVal ztypes.tid
+} out ztypes.tid is {
+    ruledOut: caseElseRuledOut :st :casenode
+    if ruledOut when (eagerAt :st declId: unitDecl).not then return neverId
+    brokeBefore: st.breakLeavesInnermost
+    walkBodyAt :st :unitDecl :ast bodyId: casenode.elseclause
+    if ruledOut then st.restoreBreakSeen seen: brokeBefore
+    et: lastStmtType :st :ast block: (ast.nodes.get i: casenode.elseclause)
+    armTypes.append et
+    return et
 }
 
 # walkCaseClauses -- walk every `case` arm of a match, accumulating the arm
@@ -56559,6 +56610,7 @@ walkCaseClauses: function {
 } out casearmfacts is {
     anyEmpty: false
     allDiverge: true
+    kindAcc: zenv.divkind.none
     armsPublic: caseArmsArePublic :st :ast subject: casenode.subject :subjT
     # a match folded to one arm walks that arm alone, as a folded `if` does
     # (checkIfClauses); `--eager` walks every arm
@@ -56570,7 +56622,6 @@ walkCaseClauses: function {
         kC = kC + 1
         clause: caseClauseRefAt :ast nid: clauseId
         if clause.nid.isZero.not then {
-            brokeBefore: st.breakLeavesInnermost
             cf: (
                 checkCaseClause
                 :st
@@ -56589,13 +56640,14 @@ walkCaseClauses: function {
                 :takenAcross
                 dead: skipDead and (clause.statement != fb.stmt)
                 folded: skipDead
+                ruledOut: fb.known and (clause.statement != fb.stmt)
             )
-            if fb.known when clause.statement != fb.stmt then st.restoreBreakSeen seen: brokeBefore
             if cf.empty then anyEmpty = true
             if cf.diverges.not then allDiverge = false
+            if cf.kind > kindAcc then kindAcc = cf.kind
         }
     }
-    return (casearmfacts empty: anyEmpty diverges: allDiverge)
+    return (casearmfacts empty: anyEmpty diverges: allDiverge kind: kindAcc)
 }
 
 # finishCaseMatch -- close a match once its arms are walked: pop the match
@@ -56707,6 +56759,7 @@ checkCaseArms: function {
     )
     if cf0.empty then anyEmpty = true
     if cf0.diverges.not then allDiverge = false
+    kindAcc: cf0.kind
     hasElse: casenode.elseclause.isZero.not
     if hasElse then {
         ef: (
@@ -56725,6 +56778,7 @@ checkCaseArms: function {
         )
         if ef.empty then anyEmpty = true
         if ef.diverges.not then allDiverge = false
+        if ef.kind > kindAcc then kindAcc = ef.kind
     }
     result: (
         finishCaseMatch
@@ -56750,6 +56804,10 @@ checkCaseArms: function {
     # a match is exhaustive, or refused (caseIsExhaustive)
     invalidateTakenAcross :st decls: takenAcross exhaustive: true
     settleRestoredLocks :st since: restMark
+    if result.isZero.not when result == neverId when kindAcc > 0 then (
+        st.markUnreachable
+        kind: kindAcc
+    )
     return result
 }
 
@@ -57036,7 +57094,10 @@ checkDissectedArm: function {
     armMarker: st.pushBlock node: armBlock
     checkStatement :st :unitDecl :ast blockId: armBlock
     at: lastStmtType :st :ast block: (ast.nodes.get i: win)
+    # the one arm that runs: where it leaves, the match does
+    armKind: st.unreachableKind
     st.popTo marker: armMarker
+    if armKind > 0 then st.markUnreachable kind: armKind
     if st.walk.stmtExprNid == casenode.nid then return at
     if at.isZero or (at == st.typing.nullTypeId) then return at
     if (st.reg.typetypeOf typeId: at) == ztypes.ztypetype.neverType then return at
@@ -58511,12 +58572,8 @@ checkStmtExpression: function {
         refuseUnitValue :st :ast vt: et0 nid: valueId
     }
     if et0.isZero.not then stampGate :st nid: lineId tid: et0
-    callKindOpt: st.typing.callKind.get key: valueId
-    isReturn: isReturnCallKind o: callKindOpt
-    bn0: zast.atomNameIdOf n: (ast.nodes.get i: valueId)
-    k0: ctlDivKind bn: bn0
-    isControl: k0 > 0
-    if isControl.not when isReturn then k0 = zenv.divkind.exit
+    k0: exprDivKind :st :ast :valueId
+    isControl: (ctlDivKind bn: (zast.atomNameIdOf n: (ast.nodes.get i: valueId))) > 0
     recordControlDestroy :st :ast :valueId kind: k0
     # a statement whose value resolved to nothing and raised nothing:
     # an unresolvable root name is an unknown reference (the emitter
@@ -58531,6 +58588,15 @@ checkStmtExpression: function {
         }
     }
     return k0
+}
+
+# exprDivKind -- how the expression `valueId`, once walked, leaves: a control
+# word's own kind, `exit` for a return or panic call, `none` when it does not.
+exprDivKind: function {st: zenv.ZSymbolTable.view ast: Ast.view valueId: zast.nodeid} out u8 is {
+    k: ctlDivKind bn: (zast.atomNameIdOf n: (ast.nodes.get i: valueId))
+    if k > 0 then return k
+    if (isReturnCallKind o: (st.typing.callKind.get key: valueId)) then return zenv.divkind.exit
+    return zenv.divkind.none
 }
 
 # recordControlDestroy -- what the control statement `valueId` destroys as it
@@ -59794,9 +59860,9 @@ bindFunctionParam: function {
 # return, as the value handed to `return` is: it is asked every question a
 # returned value is, and a literal takes the declared type on the line. A body
 # that ends on a binding, a write, or an expression with no value returns
-# nothing it declared. A control construct with no value of its own is not
-# judged here: whether every path through it returns is not this walk's to
-# answer.
+# nothing it declared. A control construct with no value of its own returns on
+# each of its paths or it is refused: the walk marks the end unreachable when
+# none of them gets there.
 checkImplicitReturn: function {
     st: zenv.ZSymbolTable
     ast: Ast
@@ -59820,8 +59886,7 @@ checkImplicitReturn: function {
         lineType: (walkTypeOf :st nid: lsid)
     )
     if valId.isZero then {
-        if lsid.isZero.not when (tailIsControl :st :ast lineId: lsid) then return
-        if st.typing.errors.length == bodyErrs then reportNoTailValue :st :ast :defn :lsid :expR
+        if st.typing.errors.length == bodyErrs then reportValuelessTail :st :ast :defn :lsid :expR
         return
     }
     argT: walkTypeOf :st nid: valId
@@ -59918,6 +59983,41 @@ tailIsControl: function {st: zenv.ZSymbolTable.view ast: Ast.view lineId: zast.n
     ltt: st.reg.typetypeOf typeId: lt
     if lt.isZero.not when ltt == ztypes.ztypetype.neverType then return true
     return (ctlDivKind bn: (zast.atomNameIdOf n: (ast.nodes.get i: innerId))) > 0
+}
+
+# reportValuelessTail -- an `out`-typed function body whose last line has no
+# value: a control construct is refused only when some path falls out of it,
+# anything else always is.
+reportValuelessTail: function {
+    st: zenv.ZSymbolTable ast: Ast defn: fnref lsid: zast.nodeid expR: ztypes.tid
+} is {
+    if lsid.isZero.not when (tailIsControl :st :ast lineId: lsid) then {
+        # a template's walk has not read what each instance folds: they answer
+        if st.isUnreachable.not when st.recording then reportTailFallsOut :st :ast :lsid :expR
+        return
+    }
+    reportNoTailValue :st :ast :defn :lsid :expR
+}
+
+# reportTailFallsOut -- an `out`-typed function body ending on a control construct
+# that some path falls out of, with no value to return. Reported at the construct.
+reportTailFallsOut: function {
+    st: zenv.ZSymbolTable ast: Ast.view lsid: zast.nodeid expR: ztypes.tid
+} is {
+    en: specWrittenName :st :ast tid: expR
+    lnode: ast.nodes.get i: lsid
+    (
+        addErrorH
+        :st
+        nodeid: lsid
+        lineno: (nodeLine n: lnode)
+        colno: (nodeCol n: lnode)
+        e: zast.err.typeError
+        msg: "missing return value: function expects '\{en}', and a path through its body reaches the end without one"
+        note: "".string
+        hint: "return a value on every path: add the missing `else`, or end the body on a `return`".string
+        width: 1
+    )
 }
 
 # reportNoTailValue -- an `out`-typed function body that ends on no value.
