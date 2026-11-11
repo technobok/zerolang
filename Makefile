@@ -113,7 +113,7 @@ SKIP     := mathutil genmath dissectlib
 EXAMPLES := $(wildcard examples/*.z)
 NAMES    := $(filter-out $(SKIP),$(basename $(notdir $(EXAMPLES))))
 
-.PHONY: all check complexity-report style-lint-fast style-lint test doc-check ci ci-gates ci-corpus fuzz \
+.PHONY: all check complexity-report style-lint-fast style-lint test doc-check ci ci-gates ci-corpus fuzz fuzz-ci fuzz-known \
 	test-math-arm64 test-sqlite-arm64 test-mingw test-tcc-mingw test-msvc-wine test-msvc-corpus ci-windows windows-guest windows-due test-math-noasm test-portable-scalars docs-link-guard math-asm-guard \
 	bench-math bench-math-kernels test-clang test-tcc test-tcc-heavy readable-check build \
 	tcc zc zl zls regen-goldens regen-fmt-goldens regen-matrix matrix-guard regen-constparity constparity-guard regen-math-asm \
@@ -261,7 +261,7 @@ ci:
 	@$(MAKE) --no-print-directory windows-due
 
 # ci-gates -- the gates ci runs in parallel, after perf-strict.
-ci-gates: style-lint zl-full-guard complexity-report warn-check pedantic-check emitter-guard typename-guard frontend-guard lifetime-guard native-guard alias-label-guard fwd-shape-guard generic-param-guard const-row-guard view-guard fallback-guard highlight-guard any-guard deadcode-guard cdead-guard cc-unused-guard piece-guard static-value-guard eager-guard eager-lib-guard case-guard user-native-guard shim-guard thread-tsan-guard cobj-guard sqlite-decls-guard zlink-guard zlink-rules-guard require-guard static-tcc-guard refusal-guard fmt-raw-guard nativec-agree-guard natives-show-guard prelude-share-guard readable-check test-tcc-heavy test-clang test-signed-ub test-math-arm64 test-sqlite-arm64 test-math-noasm test-portable-scalars test-mingw test-tcc-mingw test-msvc-wine test-msvc-corpus math-asm-guard matrix-guard constparity-guard docs-link-guard mode-parity ci-corpus
+ci-gates: style-lint zl-full-guard complexity-report warn-check pedantic-check emitter-guard typename-guard frontend-guard lifetime-guard native-guard alias-label-guard fwd-shape-guard generic-param-guard const-row-guard view-guard fallback-guard highlight-guard any-guard deadcode-guard cdead-guard cc-unused-guard piece-guard static-value-guard eager-guard eager-lib-guard case-guard user-native-guard shim-guard thread-tsan-guard cobj-guard sqlite-decls-guard zlink-guard zlink-rules-guard require-guard static-tcc-guard refusal-guard fmt-raw-guard nativec-agree-guard natives-show-guard prelude-share-guard readable-check test-tcc-heavy test-clang test-signed-ub test-math-arm64 test-sqlite-arm64 test-math-noasm test-portable-scalars test-mingw test-tcc-mingw test-msvc-wine test-msvc-corpus math-asm-guard matrix-guard constparity-guard docs-link-guard mode-parity fuzz-ci ci-corpus
 
 ci-corpus: bin/zc bin/zl $(BUILDDIR)/ztestrunner
 	$(BUILDDIR)/ztestrunner --zc bin/zc --cc $(CC) --root . --heavy --jobs $(NPROC)
@@ -1003,6 +1003,24 @@ fuzz: out/zc-asan out/zfuzz
 	out/zfuzz --zc $(CURDIR)/out/zc-asan --system $(CURDIR)/lib/system \
 	  --corpus $(CURDIR)/examples,$(CURDIR)/tests/fixtures/emitc_corpus \
 	  --work $(CURDIR)/$(BUILDDIR)/fuzz --seed $(SEED) --count $(N)
+
+# fuzz-ci -- the fixed-seed fuzz run of `make ci`. It fails on a finding whose
+# signature tests/fuzz-known-findings.txt does not list, and on a listed one
+# the run no longer shows. `make fuzz-known` writes that file from the run.
+FUZZ_CI_SEED := 11
+FUZZ_CI_N := 5000
+FUZZ_KNOWN := tests/fuzz-known-findings.txt
+FUZZ_CI_RUN = out/zfuzz --zc $(CURDIR)/out/zc-asan --system $(CURDIR)/lib/system \
+	  --corpus $(CURDIR)/examples,$(CURDIR)/tests/fixtures/emitc_corpus \
+	  --work $(CURDIR)/$(BUILDDIR)/fuzz-ci --seed $(FUZZ_CI_SEED) --count $(FUZZ_CI_N) \
+	  --known $(FUZZ_KNOWN)
+fuzz-ci: out/zc-asan out/zfuzz
+	@rm -rf $(BUILDDIR)/fuzz-ci
+	$(FUZZ_CI_RUN)
+
+fuzz-known: out/zc-asan out/zfuzz
+	@rm -rf $(BUILDDIR)/fuzz-ci
+	$(FUZZ_CI_RUN) --write-known
 
 out/zparser: bin/zc tests/unit/zparser_dump.z $(wildcard lib/system/*.z) $(wildcard lib/system/system/*.z lib/system/math/*.z)
 	@mkdir -p $(BUILDDIR)

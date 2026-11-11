@@ -9,10 +9,17 @@
 #
 # Usage: zfuzz --zc <zc> --system <dir> --corpus <dir>[,<dir>...] --work <dir>
 #              [--seed N] [--count N] [--jobs N] [--timeout SECS]
-# A case is decided by (seed, case number) alone, so a run repeats exactly, and
-# `--count` cases split over `--jobs` threads give the same cases whatever the
-# number of threads. Findings are kept in <work>/findings; exit status 1 when
-# there is one.
+#              [--known FILE] [--write-known]
+# A case is decided by the seed, the NAME of the program it edits and a round
+# number, and the program it takes tokens from by name too. So a run repeats
+# exactly whatever the number of threads, and a program added to the corpus
+# adds cases of its own and leaves nearly every other case as it was.
+# Findings are kept in <work>/findings; exit status 1 when there is one.
+#
+# `--known FILE` names the signatures a run is known to show, one a line, `#`
+# for a comment. The run then fails on a signature the file does not list, and
+# on a listed one it no longer shows: a fixed defect leaves the list in the
+# same change. `--write-known` writes the file from the run instead.
 
 public: unit {
     :main
@@ -51,6 +58,35 @@ Rng: class {
         if n == 0 then return 0
         return v % n
     }
+}
+
+# nameHash -- a number decided by the bytes of `name` alone (FNV-1a)
+nameHash: function {name: StringView} out u64 is {
+    h: 0xCBF29CE484222325.u64
+    i: u64
+    for i < name.length loop {
+        h = (h ^ ((name.byteAt :i).or d: 0)) * 0x100000001B3
+        i = i + 1
+    }
+    return h
+}
+
+# nearestAbove -- the position in `hashes` of the number nearest above `v`,
+# going round from the highest to the lowest. A number added to `hashes` moves
+# the answer only for a `v` just below it.
+nearestAbove: function {hashes: (ListVal u64).view v: u64} out u64 is {
+    best: u64
+    gap: 0xFFFFFFFFFFFFFFFF.u64
+    i: u64
+    for i < hashes.length loop {
+        g: (hashes.get :i) - v
+        if g <= gap then {
+            gap = g
+            best = i
+        }
+        i = i + 1
+    }
+    return best
 }
 
 # Tokens -- a source text cut at its token starts: piece `i` runs from
@@ -260,6 +296,7 @@ Worker: class {
         rep: Report cases: 0 built: 0 findings: List String shown: List String
         files: List String
         fdirs: List String
+        hashes: ListVal u64
         for each d: this.dirs loop {
             ls: io.listDir path: d
             if ls.err then continue
@@ -267,29 +304,37 @@ Worker: class {
                 if e.stringView.endsWith ".z" then {
                     files.append "\{d}/\{e}"
                     fdirs.append d.copy
+                    hashes.append (nameHash name: e.stringView)
                 }
             }
         }
         if files.length == 0 then return rep
         k: this.lane
         for k < this.count loop {
-            this.runCase :files :fdirs :k :rep
+            this.runCase :files :fdirs :hashes :k :rep
             k = k + this.lanes
         }
         return rep
     }
 
-    # runCase -- case `k`: mutate, build, judge, and record a finding
+    # runCase -- case `k`: mutate, build, judge, and record a finding. The
+    # case edits program `k` modulo the corpus size, in round `k` divided by it;
+    # `hashes` holds each program's name hash.
     runCase: function {
         w: this.view
         files: (List String).view
         fdirs: (List String).view
+        hashes: (ListVal u64).view
         k: u64
         rep: Report
     } is {
-        rng: Rng s: (w.seed * 0x2545F4914F6CDD1D) ^ (k * 0x9E3779B97F4A7C15)
-        bi: rng.below n: files.length
-        di: rng.below n: files.length
+        bi: k % files.length
+        round: k / files.length
+        rng: (
+            Rng
+            s: (w.seed * 0x2545F4914F6CDD1D) ^ (hashes.get i: bi) ^ (round * 0x9E3779B97F4A7C15)
+        )
+        di: nearestAbove :hashes v: rng.next
         text: slurp path: (files.get i: bi).stringView
         edits: 1 + (rng.below n: 3)
         donor: Tokens.create text: (slurp path: (files.get i: di).stringView)
@@ -421,6 +466,21 @@ main: function is {
         help: "seconds a build may take (20)".string
         required: false
     )
+    (
+        cli.addOption
+        spec: sp
+        name: "--known".string
+        shortName: "".string
+        help: "the file of signatures the run is known to show".string
+        required: false
+    )
+    (
+        cli.addFlag
+        spec: sp
+        name: "--write-known".string
+        shortName: "".string
+        help: "write the --known file from this run".string
+    )
     parsed: cli.parse spec: sp args: os.args
     match (
         parsed
@@ -485,11 +545,99 @@ run: function {p: cli.Parsed.view} is {
             fi = fi + 1
         }
     }
+    print "zfuzz: seed \{seed}, \{cases} cases, \{built} built, \{cases - built - total} refused, \{total} findings (\{kinds.length} distinct)"
+    report :p :kinds :shown :seed :count :total
+}
+
+# report -- say what the run found and end it: every finding, or, with
+# `--known`, the differences from the listed ones; `--write-known` writes the
+# list instead. `total` counts the findings, `kinds` the distinct ones.
+report: function {
+    p: cli.Parsed.view
+    kinds: List String
+    shown: (List String).view
+    seed: u64
+    count: u64
+    total: u64
+} is {
+    knownPath: optionOr :p name: "--known" d: ""
+    if knownPath.length == 0 then {
+        si: u64
+        for si < kinds.length loop {
+            print "FINDING \{kinds.get i: si} -- \{shown.get i: si}"
+            si = si + 1
+        }
+        if total > 0 then os.exit code: 1
+        return
+    }
+    if (p.hasFlag name: "--write-known") then {
+        writeKnown path: knownPath.stringView :kinds :seed :count
+        print "zfuzz: wrote \{kinds.length} signatures to \{knownPath}"
+        return
+    }
+    if (judgeAgainstKnown path: knownPath.stringView :kinds :shown).not then os.exit code: 1
+}
+
+# knownHeader -- the comment that heads a file of known signatures
+knownHeader: function {seed: u64 count: u64} out String is {
+    h: String
+    h.append "# The findings the fixed-seed fuzz run of `make ci` is known to show, one\n"
+    h.append "# signature a line. Each is a defect of zc that is not fixed yet. The run\n"
+    h.append "# fails on a signature that is not listed here, and on a listed one it no\n"
+    h.append "# longer shows: fix the defect and delete its line in the same change.\n"
+    h.append "# `make fuzz-known` writes this file from a run.\n"
+    h.append "#\n"
+    h.append "# seed \{seed}, \{count} cases\n"
+    return h
+}
+
+# writeKnown -- write the signatures `kinds` to `path`, in order
+writeKnown: function {path: StringView kinds: List String seed: u64 count: u64} is {
+    kinds.sort
+    text: knownHeader :seed :count
+    for each k: kinds loop {
+        text.append k.stringView.trimEnd
+        text.append "\n"
+    }
+    io.writeText :path content: text
+}
+
+# judgeAgainstKnown -- compare the signatures a run showed, `kinds`, with the
+# ones `path` lists, and report each difference: a signature that is not
+# listed, with the case in `shown` that showed it, and a listed one the run did
+# not show. True when there is no difference.
+judgeAgainstKnown: function {
+    path: StringView
+    kinds: (List String).view
+    shown: (List String).view
+} out bool is {
+    known: List String
+    listed: slurp :path
+    for each ln: listed.stringView.lines loop {
+        t: ln.trimEnd
+        if (t.length > 0) and (t.startsWith "#").not then known.append t.string
+    }
+    fresh: u64
     si: u64
     for si < kinds.length loop {
-        print "FINDING \{kinds.get i: si} -- \{shown.get i: si}"
+        sig: (kinds.get i: si).stringView.trimEnd
+        if (known.contains item: sig.string).not then {
+            print "FINDING \{sig} -- \{shown.get i: si}"
+            fresh = fresh + 1
+        }
         si = si + 1
     }
-    print "zfuzz: seed \{seed}, \{cases} cases, \{built} built, \{cases - built - total} refused, \{total} findings (\{kinds.length} distinct)"
-    if total > 0 then os.exit code: 1
+    gone: u64
+    for each k: known loop {
+        seen: false
+        for each s: kinds loop {
+            if s.stringView.trimEnd == k then seen = true
+        }
+        if seen.not then {
+            print "GONE \{k} -- the run no longer shows it; delete its line from \{path}"
+            gone = gone + 1
+        }
+    }
+    print "zfuzz: \{kinds.length - fresh} known, \{fresh} not listed, \{gone} listed but gone"
+    return (fresh == 0) and (gone == 0)
 }
