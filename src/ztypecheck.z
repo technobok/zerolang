@@ -54463,6 +54463,33 @@ checkDottedCallableCall: function {
 }
 
 
+# reportUnresolvedMemberCall -- an unresolved dotted call on a base of type
+# `baseT`: the name after the dot is no function the call could run (a
+# generic parameter of the base, `SetVal k i64` read as `SetVal.k i64`). A
+# static list's label is read this way and is no call; anything else that is
+# still unreported is refused here, in a program with no other error.
+reportUnresolvedMemberCall: function {
+    st: zenv.ZSymbolTable
+    ast: Ast
+    call: callref
+    baseT: ztypes.tid
+} is {
+    if st.typing.errors.length > 0 then return
+    if (callableReadsStaticList :st :ast :call) then return
+    cn: ast.nodes.get i: call.callable
+    mn: zast.nameTextAt :ast ref: (dottedChildNameId :ast n: cn)
+    bn: specWrittenName :st :ast tid: baseT
+    (
+        addError
+        :st
+        nodeid: call.callable
+        lineno: (nodeLine n: cn)
+        colno: (nodeCol n: cn)
+        e: zast.err.callError
+        msg: "'\{mn}' cannot be called: '\{bn}' declares no function of that name"
+    )
+}
+
 # reportUntypedCallBase -- an unresolved dotted call whose base has no type
 # either: the base is walked as the value it is written as, which reports what
 # is wrong with it (`(y.f n: 1).g` with no `y`), and a base that walks without
@@ -54480,7 +54507,11 @@ reportUntypedCallBase: function {
     cn: ast.nodes.get i: call.callable
     if cn.dottedpath.not then return
     base: cn.parent
-    if (walkTypeOf :st nid: base).isZero.not then return
+    baseT: walkTypeOf :st nid: base
+    if baseT.isZero.not then {
+        reportUnresolvedMemberCall :st :ast :call :baseT
+        return
+    }
     bn: ast.nodes.get i: base
     unknown: unresolvedBareCallable :ast :st :unitDecl nid: base
     if unknown.length > 0 then {
