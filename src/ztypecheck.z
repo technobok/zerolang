@@ -31233,8 +31233,12 @@ checkProjectionCreate: function {
         found = true
         # a projection or construction as the source is a temporary this one
         # consumes or re-views, so it owns what it holds
+        pErrs: st.typing.errors.length
         pvt: checkOwnedValueAt :st :unitDecl :ast nid: arg.operation
-        if pvt.isZero then continue
+        if pvt.isZero then {
+            reportUnresolvedCastArg :st :unitDecl :ast argId: arg.operation vt: pvt errMark: pErrs
+            continue
+        }
         # the source must implement, as an argument at a spec parameter must; a
         # typedef implementing through its base takes the base's row as its own
         # there (recordInheritedImplementation), which is what the helper is built
@@ -39749,6 +39753,30 @@ namesItsOwnType: function {st: zenv.ZSymbolTable.view nid: zast.nodeid vt: ztype
     return (st.typing.declTypeOf declId: rd) == vt
 }
 
+# refuseUntypedBinding -- a binding whose value has no type and that nothing
+# has reported: a unit's name (`n: io`), or an expression that produces no
+# value at all (`x: for i < 3 loop ..`). Without this the binding reached the
+# emitter untyped. Said in a recorded walk -- a template leaves what its
+# parameters decide untyped -- of a program with no other error.
+refuseUntypedBinding: function {st: zenv.ZSymbolTable ast: Ast.view nid: zast.nodeid} is {
+    if st.recording.not or (st.typing.errors.length > 0) then return
+    vn: ast.nodes.get i: nid
+    msg: "the expression produces no value, so it cannot be used as one".string
+    nameId: zast.atomNameIdOf n: vn
+    if nameId.isZero.not when (unitDeclOfName typing: st.typing :nameId).isZero.not then {
+        msg = "'\{zast.nameTextAt :ast ref: nameId}' is a unit, not a value"
+    }
+    (
+        addError
+        :st
+        nodeid: nid
+        lineno: (nodeLine n: vn)
+        colno: (nodeCol n: vn)
+        e: zast.err.typeError
+        :msg
+    )
+}
+
 # refuseNullValue -- a value of type `null` or `never` bound or assigned, `vt`
 # its type: the type `null` written as a value has none until a union or
 # variant wraps it, any other expression typed `null` produces none, and one of
@@ -39895,6 +39923,7 @@ checkAssignmentIn: function {
     vt = mvt
     if vt.isZero when st.typing.errors.length == errsBefore then {
         reportUnresolvedValue :st :unitDecl :ast nid: asgn.value
+        refuseUntypedBinding :st :ast nid: asgn.value
     }
     if (refuseNullValue :st :ast :vt nid: asgn.value) then return
     vt = staticListAsValue :st :ast :vt nid: asgn.value
