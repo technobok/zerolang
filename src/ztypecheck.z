@@ -13830,6 +13830,7 @@ recordTypedefBase: function {
         st.typing.typedefBase.set key: rid value: named
     }
     tdt: objectTypedefBaseTid :st :scope :ast :unitDecl ownerTid: rid onode: rnode
+    if (refuseTypedefOfItself :st own: rid base: tdt onode: rnode) then return
     if tdt.isZero.not then {
         st.typing.typedefBase.set key: rid value: (ztyping.typedefbase name: tdb tid: tdt)
     }
@@ -16777,11 +16778,41 @@ resolveClassTypedefBase: function {
     baseTid: objectTypedefBaseTid :st :scope :ast :unitDecl ownerTid: cid onode: cnode
     # the base the typedef resolved to answers for itself -- one reached through
     # its unit (`(pr.GBox t: i64)`) included
+    if (refuseTypedefOfItself :st own: cid base: baseTid onode: cnode) then return false
     if (fieldTypeNeedsCleanup :st tid: baseTid isBorrowed: false) then needsDtor = true
     if tdbase.isZero.not or baseTid.isZero.not then {
         st.typing.typedefBase.set key: cid value: (ztyping.typedefbase name: tdbase tid: baseTid)
     }
     return needsDtor
+}
+
+# refuseTypedefOfItself -- a typedef whose base is the typedef, directly or
+# through other typedefs (`tag: typedef tag`): there is no type at the end of
+# the chain, and every walk down it would never finish. Refused, and the base
+# is not recorded. True when it refused.
+refuseTypedefOfItself: function {
+    st: zenv.ZSymbolTable
+    own: ztypes.tid
+    base: ztypes.tid
+    onode: objref
+} out bool is {
+    t: base
+    steps: u64
+    for t.isZero.not while t != own while steps < 64 loop {
+        t = st.typing.typedefBaseTidOf tid: t
+        steps = steps + 1
+    }
+    if t != own then return false
+    (
+        addError
+        :st
+        nodeid: onode.nid
+        lineno: onode.lineno
+        colno: 1
+        e: zast.err.typeError
+        msg: "'\{st.reg.nameOf tid: own}' is a typedef of itself: a typedef wraps another type"
+    )
+    return true
 }
 
 # finishClassDef -- the class walk's tail: the as-block methods, the create
@@ -19720,6 +19751,16 @@ checkMainSignature: function {
             msg: "'main' declares no result: there is no caller to return one to"
             note: "the process exit status is set explicitly, not returned from the entry point"
             hint: "drop the `out` clause and exit with `os.exit code: n`"
+        )
+    }
+    if fn.body.isZero when fn.isNative.not then {
+        (
+            badMainError
+            :st
+            :at
+            msg: "'main' has no body: the program starts in it"
+            note: "a function written without `is { ... }` names a shape, and has nothing to run"
+            hint: "write `main: function is { ... }`"
         )
     }
 }
@@ -70570,14 +70611,11 @@ instantiatedAliasFold: function {
     dnm: zast.nameTextCopy :ast ref: (st.typing.declNameOf :declId)
     if dnm.length == 0 then return false
     tdc: callRefAt :ast nid: opId
-    if (appliesNoTemplate :st :ast unitDecl: unm scope: own call: tdc) then return false
-    # a function's call is a call, never an instance
-    if tdc.infix.not when (calleeFnTid :st scope: own :ast unitDecl: unm callableId: tdc.callable
-    ).isZero.not then return false
     # a value that names its own definition, directly or through another
-    # (`foo: bar foo`, `Strs: (List Strs)`), re-enters here while its
-    # arguments resolve: that is a cycle, reported once, and the re-entry is
-    # answered as a constant would be
+    # (`foo: bar foo`, `Strs: (List Strs)`, `foo: (foo n: 3)`), re-enters here
+    # while its head or its arguments resolve: that is a cycle, reported once,
+    # and the re-entry is answered as a constant would be. The definition is
+    # open from here on, so a head that names it is caught as an argument is.
     open: false
     for each od: st.walk.aliasFoldsOpen loop {
         if od == declId then open = true
@@ -70587,6 +70625,16 @@ instantiatedAliasFold: function {
         return false
     }
     st.walk.aliasFoldsOpen.append declId
+    noTemplate: appliesNoTemplate :st :ast unitDecl: unm scope: own call: tdc
+    # a function's call is a call, never an instance
+    isFnCall: (
+        tdc.infix.not and
+        (calleeFnTid :st scope: own :ast unitDecl: unm callableId: tdc.callable).isZero.not
+    )
+    if noTemplate or isFnCall then {
+        st.walk.aliasFoldsOpen.pop
+        return false
+    }
     cdr: callRefAt :ast nid: opId
     folded: (
         resolveInstantiatedAlias
