@@ -64772,9 +64772,41 @@ foldIfCond: function {
     # own values.
     fa: ztyping.sumPairFalsyArmOf ty: st.typing reg: st.reg tid: cv.armTid
     ta: ztyping.sumPairTruthyArmOf ty: st.typing reg: st.reg tid: cv.armTid
-    if fa.isZero.not when cv.armName == fa then return 2
-    if ta.isZero.not when cv.armName == ta then return 1
-    return 0
+    held: u32
+    if fa.isZero.not when cv.armName == fa then held = 2
+    if ta.isZero.not when cv.armName == ta then held = 1
+    # asked last: almost no condition has a value to doubt
+    if held > 0 when (foldReadsLocal :st :ast :scope nid: opId) then return 0
+    return held
+}
+
+# foldReadsLocal -- the expression at `nid` reads a name an open scope of `scope`
+# defines, which is no constant whatever a unit definition of that name says. A
+# condition folds BEFORE its walk, so the record evalConstNode asks of which atoms
+# read a variable has nothing on it yet. A `scope` that is not a body's has no
+# locals, so a unit-level fold answers the same during a body's walk.
+foldReadsLocal: function {
+    st: zenv.ZSymbolTable.view ast: Ast.view scope: ztypes.declid nid: zast.nodeid
+} out bool is {
+    work: ListVal zast.nodeid capacity: 16
+    work.append nid
+    wi: u64
+    for wi < work.length loop {
+        wid: work.get i: wi
+        wi = wi + 1
+        if wid.isZero.not then {
+            wn: ast.nodes.get i: wid
+            nm: zast.atomNameIdOf n: wn
+            if (st.typing.declFindLocal :scope nameId: nm).isZero.not then return true
+            # the member of a path is the root's to answer for
+            if wn.dottedpath then {
+                work.append from: wn.parent
+            } else {
+                zast.childIdsInto :ast n: wn acc: work
+            }
+        }
+    }
+    return false
 }
 
 # foldIfBranch -- which clause of an `if` the constant fold selects, stamped on
