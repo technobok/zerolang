@@ -6578,7 +6578,42 @@ peeledTyperef: function {
         return pathTid
     }
     reportPeeledLeaf :st :scope :ast :unitDecl :nid :leafId
-    return (resolveTyperefShell :st :scope :ast :unitDecl nid: parentId :thisName)
+    pt: resolveTyperefShell :st :scope :ast :unitDecl nid: parentId :thisName
+    reportAppliedLeaf :st :ast :nid :parentId :leafId tid: pt
+    return pt
+}
+
+# reportAppliedLeaf -- reportPeeledLeaf's missing-member half for a parent that
+# is an application (`(ListVal i64).zork`): reportMissingTypeMember reads a
+# parent by its name, and an application has none, so the leaf went unasked.
+# `tid` is what the parent resolved to.
+reportAppliedLeaf: function {
+    st: zenv.ZSymbolTable
+    ast: Ast
+    nid: zast.nodeid
+    parentId: zast.nodeid
+    leafId: zast.nameid
+    tid: ztypes.tid
+} is {
+    if tid.isZero or leafId.isZero then return
+    if (ast.nodes.get i: parentId).call.not then return
+    # a parent that resolved to no declared type -- an expression written
+    # where a type goes -- has its own report
+    if (st.reg.genericOriginOf :tid).isZero when (st.typing.declIdOfType typeId: tid
+    ).isZero then return
+    if (leafNamesNoMember :leafId) then return
+    if (st.typing.declChildOfId parentTypeId: tid nameId: leafId).none.not then return
+    n: ast.nodes.get i: nid
+    tn: specWrittenName :st :ast :tid
+    (
+        addError
+        :st
+        nodeid: nid
+        lineno: (nodeLine :n)
+        colno: (nodeCol :n)
+        e: zast.err.typeError
+        msg: "type '\{tn}' has no member '\{zast.nameTextAt :ast ref: leafId}'"
+    )
 }
 
 # reportPathLeaf -- reportPeeledLeaf for a dotted type-ref whose parent is
@@ -7438,6 +7473,18 @@ plainHeadOrShell: function {
 } out ztypes.tid is {
     plain: typeApplicationTemplate :st :scope :ast :unitDecl callableNid: callableId
     if plain.isZero then {
+        # a number is no name a later definition could give a type to
+        cn: ast.nodes.get i: callableId
+        hn: atomNameId :ast n: cn
+        if hn.isZero.not when (isNumericLiteralNameAt :ast ref: hn) then (
+            addError
+            :st
+            nodeid: callableId
+            lineno: (nodeLine n: cn)
+            colno: (nodeCol n: cn)
+            e: zast.err.typeError
+            msg: "'\{zast.nameTextAt :ast ref: hn}' is a number, not a type: it takes no arguments"
+        )
         return (st.reg.newType name: suffix typetype: ztypes.ztypetype.recordType)
     }
     refuseNonGenericApplication :st :ast tplId: plain at: callableId
@@ -71621,8 +71668,35 @@ validateGeneratorDef: function {
                     width: 4
                 )
             }
+            refuseYieldlessCall :st :ast :defName :callId
         }
     }
+}
+
+# refuseYieldlessCall -- a generator's `call` with a body that holds no
+# `yield`: it hands out nothing, and the lowering has no element to build its
+# state around (the emitter then asked for a member that does not exist).
+refuseYieldlessCall: function {
+    st: zenv.ZSymbolTable
+    ast: Ast
+    defName: StringView
+    callId: zast.nodeid
+} is {
+    cf: ast.nodes.get i: callId
+    if cf.functiondef.not then return
+    if cf.body.isZero or ((zast.yieldCountIn :ast nid: cf.body) > 0) then return
+    (
+        addErrorH
+        :st
+        nodeid: cf.nodeid
+        lineno: cf.lineno
+        colno: cf.colno
+        e: zast.err.typeError
+        msg: "'\{defName}' never yields: a generator's `call` hands out each element with `yield`"
+        note: String
+        hint: "add a `yield <value>` to the body".string
+        width: 4
+    )
 }
 
 # paramNamesReceiver -- the parameter `pId` of a function definition names its
