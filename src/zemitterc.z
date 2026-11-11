@@ -18609,6 +18609,39 @@ emitListSlotRead: function {
     return "".string
 }
 
+# nativeNoArgCallC -- the call of `fnTid` when it is a native function taking
+# no parameters, reached by a name of its own or by an alias (`stdin`,
+# `pidOf: os.pid`): the unit's symbol, as the qualified read spells it
+# (emitDottedNativeMarker). A native has no C function under its type's name.
+# "" for any other function.
+nativeNoArgCallC: function {
+    ast: Ast.view
+    reg: ztypes.ZTypeRegistry.view
+    typing: ztyping.ZTyping.view
+    ctx: Ctx
+    fnTid: ztypes.tid
+} out String is {
+    if (reg.isNativeOf tid: fnTid).not then return "".string
+    pi: ListVal ztypes.tid
+    pnm: ListVal zast.nameid
+    recFieldIds :reg :typing tid: fnTid ids: pi nameIds: pnm
+    if pi.length > 0 then return "".string
+    un: definedInUnitName :reg :typing tid: fnTid
+    if un.length == 0 then return "".string
+    fd: typing.declIdOfType typeId: fnTid
+    if fd.isZero then return "".string
+    mn: zast.nameTextAt :ast ref: (typing.decls.get i: fd).name
+    return (nativeUnitCallC :ctx uname: un member: mn.stringView)
+}
+
+# nativeUnitCallC -- the call of the unit `uname`'s native `member` that takes
+# no parameters, by the unit's symbol, with what it needs noted.
+nativeUnitCallC: function {ctx: Ctx uname: StringView member: StringView} out String is {
+    needsAddM :ctx :uname memb: "@unit"
+    needsAddM :ctx :uname memb: member
+    return "z_\{uname}_\{member}()"
+}
+
 # fnRefOrCallC -- the C text for a resolved function a bare atom or a dotted
 # path names: a node still stamped FUNCTION is a REFERENCE (a `.take` peel
 # delegates here) and keeps the bare cname; anything else is the zero-argument
@@ -18633,6 +18666,8 @@ fnRefOrCallC: function {
     ) then return (stating :facts from: pathFacts text: cname.string)
     fad: emitAllDefaultedCall :ast :reg :typing :ctx :fnTid fcn: cname
     if fad.length > 0 then return (stating :facts from: callFacts text: fad)
+    nat: nativeNoArgCallC :ast :reg :typing :ctx :fnTid
+    if nat.length > 0 then return (stating :facts from: callFacts text: nat)
     if requireNoParams then {
         fpi: ListVal ztypes.tid
         fpiNm: ListVal zast.nameid
@@ -21992,9 +22027,12 @@ emitDottedNativeMarker: function {
     )
     if nnu.length > 0 then {
         mn2n: zast.nameTextAt :ast ref: mn2Id
-        needsAddM :ctx uname: nnu.stringView memb: "@unit"
-        needsAddM :ctx uname: nnu.stringView memb: mn2n.stringView
-        return (stating :facts from: callFacts text: "z_\{nnu}_\{mn2n}()")
+        return (
+            stating
+            :facts
+            from: callFacts
+            text: (nativeUnitCallC :ctx uname: nnu.stringView member: mn2n.stringView)
+        )
     }
     # `.private` is a compile-time friend marker -- it emits the receiver itself.
     if (zast.markerKindOfName id: mn2Id).privateMarker then {
