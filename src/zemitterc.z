@@ -87,6 +87,9 @@ LoopFrame: class {
     cleanup: String
     cleanupVar: String
     cleanupVid: ztypes.vid
+    # a `break` or `continue` of this frame was emitted: code later in it may
+    # be skipped
+    leftEarly: bool
 }
 
 # OwedFree -- one destructor owed at the end of a block: the C name of the
@@ -5039,6 +5042,9 @@ Ctx: class {
     # how deep in nested conditions the emit is, which decides whether a temp
     # can be hoisted out
     condDepth: u64
+    # a `return` has been emitted in this function: what comes later does not
+    # run on every path
+    returnEmitted: bool
     # the constructs the emitter could not handle and the `error` calls it
     # proved reachable, collected rather than thrown so one run reports all of
     # them
@@ -9558,8 +9564,24 @@ pushLoopLabel: function {ctx: Ctx tmp: TmpCtr.view isDo: bool postTest: bool} ou
         cleanup: String
         cleanupVar: String
         cleanupVid: ztypes.vid
+        leftEarly: false
     )
     return id
+}
+
+# noteFrameLeft -- a `break` or `continue` of the frame at `idx` is being emitted.
+noteFrameLeft: function {ctx: Ctx idx: u64} is {
+    lf: ctx.loops.getMut i: idx
+    lf.leftEarly = true
+}
+
+# anyFrameLeft -- an open loop or block has already been left by a `break` or
+# `continue`, so what comes later in it does not run on every path.
+anyFrameLeft: function {ctx: Ctx.view} out bool is {
+    for each lf: ctx.loops loop {
+        if lf.leftEarly then return true
+    }
+    return false
 }
 
 # emitContLabel -- the loop-body continue target: a `continue` inside a
@@ -24821,7 +24843,12 @@ emitErrorStmt: function {
         ef: "\{ind}z_panic(\"(compile-time error)\");\n"
         buf.append ef
     }
-    if ctx.condDepth == 0 when ctx.genActive.not then {
+    # proved: every path through the function reaches it, assuming each loop
+    # ends. An early exit before it can skip it, so it stays a run-time trap
+    if ctx.condDepth == 0 when ctx.genActive.not when ctx.returnEmitted.not when (
+        anyFrameLeft
+        :ctx
+    ).not then {
         em: lit.copy
         if em.length == 0 then em = "compile-time error".string
         cn: ast.nodes.get i: call.callable
@@ -25557,6 +25584,7 @@ emitCallStmt: function {
         return
     }
     if sfnId == zast.wellKnown.slot.wkReturn then {
+        ctx.returnEmitted = true
         outerExit: ctx.exitNode
         ctx.exitNode = call.nodeid
         hasArg: false
@@ -26728,6 +26756,7 @@ emitBreakStmt: function {
 } is {
     emitBreakFrees :reg :typing :ctx :tmp :ind :buf
     if ctx.loops.length > 0 then {
+        noteFrameLeft :ctx idx: ctx.loops.length - 1
         bid: u64
         {
             bf: ctx.loops.get i: ctx.loops.length - 1
@@ -26783,6 +26812,7 @@ emitContinueStmt: function {
                 }
             }
         }
+        if hasLoop then noteFrameLeft :ctx idx: loopIdx
         if inDo when hasLoop then {
             emitContinueFrees :reg :typing :ctx :tmp idx: loopIdx :ind :buf
             cid: u64
@@ -26941,6 +26971,7 @@ emitReturnStmt: function {
     outerExit: ctx.exitNode
     ctx.exitNode = interpPartNodeId :n
     if bkwId == zast.wellKnown.slot.wkReturn then {
+        ctx.returnEmitted = true
         if ctx.genActive then {
             emitExitDestroy :reg :typing :ctx :tmp retExpr: "" keepRefd: false :ind :buf
             lgd: "\{ind}goto L_done;\n"
@@ -27402,12 +27433,17 @@ emitForStmt: function {
 } is {
     # a precondition the fold proved false: the loop never runs, and its body
     # was not walked
-    if (foldedLoopOf :typing :ctx nid: n.nodeid).entry == ztyping.loopentry.never then return
-    ctx.condDepth = ctx.condDepth + 1
+    entry: (foldedLoopOf :typing :ctx nid: n.nodeid).entry
+    if entry == ztyping.loopentry.never then return
+    # a loop no precondition can stop runs its body as surely as a winning
+    # branch does, so an `error` in its first iteration is reached
+    condBump: 1.u64
+    if entry == ztyping.loopentry.always then condBump = 0
+    ctx.condDepth = ctx.condDepth + condBump
     # a plain binding is evaluated at every iteration; everything below is an
     # `each` binding's walk or a loop with no binding
     if (emitPlainBindingFor :ast :reg :typing :ctx m: n :ind :tmp :buf) then {
-        ctx.condDepth = ctx.condDepth - 1
+        ctx.condDepth = ctx.condDepth - condBump
         return
     }
     # THE COUNTED RANGE IS ASKED FIRST. An integer range is an ordinary
@@ -27424,17 +27460,17 @@ emitForStmt: function {
     # always breaks has a step no path reaches.
     runsOnce: (foldedLoopOf :typing :ctx nid: n.nodeid).end == ztyping.loopend.once
     if runsOnce.not when (emitIntRangeFor :ast :reg :typing :ctx m: n :ind :tmp :buf) then {
-        ctx.condDepth = ctx.condDepth - 1
+        ctx.condDepth = ctx.condDepth - condBump
         return
     }
     if (emitObjIterFor :ast :reg :typing :ctx m: n :ind :tmp :buf) then {
-        ctx.condDepth = ctx.condDepth - 1
+        ctx.condDepth = ctx.condDepth - condBump
         return
     }
     # do-while: no pre-conditions, a post-condition (`for loop {...} while C`).
     if n.conditions.count.u64 == 0 when n.postconditions.count.u64 > 0 then {
         emitDoWhileFor :ast :reg :typing :ctx :n :ind :tmp :buf
-        ctx.condDepth = ctx.condDepth - 1
+        ctx.condDepth = ctx.condDepth - condBump
         return
     }
     # a condition that SUSPENDS, or that MOVES an owned local, cannot be
@@ -27477,7 +27513,7 @@ emitForStmt: function {
     # `break` no longer lists the header's locals of its own (it leaves the
     # BODY's scope), so each is destroyed exactly once.
     closeScopeBlock :reg :typing :ctx :tmp fL: fLh lL: lLh diverged: false node: n.nodeid :buf
-    ctx.condDepth = ctx.condDepth - 1
+    ctx.condDepth = ctx.condDepth - condBump
 }
 
 # emitDoWhileFor -- `for loop { .. } while C`: no pre-conditions and at
@@ -38890,6 +38926,8 @@ emitFnBody: function {
     ctx.tmpHigh = 0
     outerOrderCtr: ctx.orderCtr
     ctx.orderCtr = 0
+    outerReturned: ctx.returnEmitted
+    ctx.returnEmitted = false
     oweTakeParamFrees :ast :reg :typing :ctx :op :fid :tmp
     pcx: u64
     for pcx < op.parameters.count loop {
@@ -38920,6 +38958,7 @@ emitFnBody: function {
     }
     ctx.tmpHigh = outerTmpHigh
     ctx.orderCtr = outerOrderCtr
+    ctx.returnEmitted = outerReturned
     # a body that diverges on every path never reaches this flush; the
     # return/break cleanups already freed the same locals on those paths
     if endsRet then return
@@ -40167,6 +40206,7 @@ emitC: function {
         fieldNameIds: ListVal zast.nameid
         mainUnitId: ztypes.declid
         condDepth: 0
+        returnEmitted: false
         emitErrors: List zast.ErrorData
         demands: zemitrows.DemandSet.create
         condEpoch: 0
