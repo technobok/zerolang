@@ -85,7 +85,6 @@ LoopFrame: class {
     freesMark: u64
     listMark: u64
     cleanup: String
-    cleanupVar: String
     cleanupVid: ztypes.vid
     # a `break` or `continue` of this frame was emitted: code later in it may
     # be skipped
@@ -6217,7 +6216,7 @@ emitArmTakeZero: function {
 # passed as a construction/call arg). The un-shadowed narrowed subject is freed by the
 # return cleanup; its `.take` moved the payload out as a shallow struct copy sharing the
 # heap buffer, so the box must read {0} when the destructor walks it, else that buffer is
-# double-freed. Non-narrowed takes are kept live by refsLocal and are not touched here.
+# double-freed. Non-narrowed takes are not touched here.
 emitNarrowedTakeZero: function {
     ast: Ast.view
     reg: ztypes.ZTypeRegistry.view
@@ -9539,7 +9538,6 @@ pushLoopLabel: function {ctx: Ctx tmp: TmpCtr.view isDo: bool postTest: bool} ou
         freesMark: tmp.frees.length
         listMark: tmp.listFrees.length
         cleanup: String
-        cleanupVar: String
         cleanupVid: ztypes.vid
         leftEarly: false
     )
@@ -25345,7 +25343,7 @@ emitStringReturnValue: function {
                 strNid: n.nodeid
                 ops: unusedOps
             )
-            emitReturnCleanup :reg :typing :ctx :tmp retExpr: sB.stringView keepRefd: true :ind :buf
+            emitReturnCleanup :reg :typing :ctx :tmp :ind :buf
             lst: "\{ind}return \{sB};\n"
             buf.append lst
             return true
@@ -25449,11 +25447,11 @@ emitCallStmt: function {
         }
         if hasArg.not then {
             if ctx.genActive then {
-                emitExitDestroy :reg :typing :ctx :tmp retExpr: "" keepRefd: false :ind :buf
+                emitExitDestroy :reg :typing :ctx :tmp :ind :buf
                 lgd: "\{ind}goto L_done;\n"
                 buf.append lgd
             } else {
-                emitReturnCleanup :reg :typing :ctx :tmp retExpr: "" keepRefd: true :ind :buf
+                emitReturnCleanup :reg :typing :ctx :tmp :ind :buf
                 lr2: "\{ind}return;\n"
                 buf.append lr2
             }
@@ -26817,11 +26815,11 @@ emitReturnStmt: function {
     if bkwId == zast.wellKnown.slot.wkReturn then {
         ctx.returnEmitted = true
         if ctx.genActive then {
-            emitExitDestroy :reg :typing :ctx :tmp retExpr: "" keepRefd: false :ind :buf
+            emitExitDestroy :reg :typing :ctx :tmp :ind :buf
             lgd: "\{ind}goto L_done;\n"
             buf.append lgd
         } else {
-            emitReturnCleanup :reg :typing :ctx :tmp retExpr: "" keepRefd: true :ind :buf
+            emitReturnCleanup :reg :typing :ctx :tmp :ind :buf
             lrt: "\{ind}return;\n"
             buf.append lrt
         }
@@ -29809,7 +29807,7 @@ emitContinueFrees: function {
             allRows or nm.vid.isZero
         ) then buf.append "\{ind}\{ctx.strC}_free(&\{nm.name});\n"
     }
-    if allRows.not then emitExitDestroy :reg :typing :ctx :tmp retExpr: "" keepRefd: false :ind :buf
+    if allRows.not then emitExitDestroy :reg :typing :ctx :tmp :ind :buf
 }
 
 # emitExitDestroy -- what the checker recorded the exit being emitted
@@ -29817,15 +29815,11 @@ emitContinueFrees: function {
 # destroy its binding registered, which stays owed -- the path that does not
 # take the exit destroys it too -- and a local that registered none by its
 # type (emitUnownedDestroy). A local moved on every path here is skipped.
-# A `return` whose value is `retExpr` keeps a local that value reads
-# (`keepRefd`).
 emitExitDestroy: function {
     reg: ztypes.ZTypeRegistry.view
     typing: ztyping.ZTyping.view
     ctx: Ctx
     tmp: TmpCtr.view
-    retExpr: StringView
-    keepRefd: bool
     ind: StringView
     buf: String.borrow
 } is {
@@ -29836,22 +29830,19 @@ emitExitDestroy: function {
         it: typing.destroyItems.get i: rg.start.u64 + k
         k = k + 1
         if it.state == 1 then continue
-        emitExitItem :reg :typing :ctx :tmp vid: it.vid :retExpr :keepRefd :ind :buf
+        emitExitItem :reg :typing :ctx :tmp vid: it.vid :ind :buf
     }
 }
 
 # emitExitItem -- the destroy an exit owes the local `vid`: the unspent row its
-# binding registered, newest first, unless the returned value reads it
-# (`keepRefd`) or the local names another's storage (ctx.aliases); by its type
-# when its binding registered none.
+# binding registered, newest first, unless the local names another's storage
+# (ctx.aliases); by its type when its binding registered none.
 emitExitItem: function {
     reg: ztypes.ZTypeRegistry.view
     typing: ztyping.ZTyping.view
     ctx: Ctx
     tmp: TmpCtr.view
     vid: ztypes.vid
-    retExpr: StringView
-    keepRefd: bool
     ind: StringView
     buf: String.borrow
 } is {
@@ -29860,8 +29851,7 @@ emitExitItem: function {
         i = i - 1
         lf: tmp.listFrees.get :i
         if lf.vid == vid when lf.spent.not then {
-            if (exitKeeps :ctx :vid name: lf.name.stringView :retExpr :keepRefd
-            ).not then buf.append lf.stmt
+            if (vvHas xs: ctx.aliases :vid).not then buf.append lf.stmt
             return
         }
     }
@@ -29870,7 +29860,7 @@ emitExitItem: function {
         j = j - 1
         ff: tmp.frees.get i: j
         if ff.vid == vid when ff.spent.not then {
-            if (exitKeeps :ctx :vid name: ff.name.stringView :retExpr :keepRefd).not then {
+            if (vvHas xs: ctx.aliases :vid).not then {
                 preludeNeed :ctx memb: "@String_free"
                 buf.append "\{ind}\{ctx.strC}_free(&\{ff.name});\n"
             }
@@ -29878,16 +29868,6 @@ emitExitItem: function {
         }
     }
     emitUnownedDestroy :reg :typing :ctx :vid :ind :buf
-}
-
-# exitKeeps -- whether an exit leaves the registered local `vid` (C name
-# `name`) alone: the returned value `retExpr` reads it (`keepRefd`), or it
-# names another's storage (ctx.aliases).
-exitKeeps: function {
-    ctx: Ctx.view vid: ztypes.vid name: StringView retExpr: StringView keepRefd: bool
-} out bool is {
-    if keepRefd when (refsLocal expr: retExpr :name) then return true
-    return (vvHas xs: ctx.aliases :vid)
 }
 
 # seedUnionArmAlias -- narrow match subject `sname` to union `vtid`'s arm `arm`:
@@ -30956,7 +30936,6 @@ objIterPayCleanup: function {
     if payCleanup.length > 0 then {
         lf: ctx.loops.getMut i: ctx.loops.length - 1
         lf.cleanup = payCleanup.copy
-        lf.cleanupVar = lbl.string
         lf.cleanupVid = lblV
     }
     return payCleanup
@@ -33751,9 +33730,8 @@ emitElse: function {
 
 # emitHoistedReturn -- a return whose value is materialised into a temp
 # FIRST, then the sources it moved out of are zeroed, then the owned locals are
-# freed, then the temp is returned. When an owned local is named in the value
-# (leakFix), ALL owned locals are freed (clFull): a read-from local is reclaimed
-# and a moved-in local's free is a no-op.
+# freed (`cleanup`), then the temp is returned: a local the value read is
+# reclaimed, and a moved-in local's free is a no-op.
 emitHoistedReturn: function {
     ctx: Ctx
     # the value's C text and C type
@@ -33761,10 +33739,7 @@ emitHoistedReturn: function {
     retCt: StringView
     # the zeroing of the sources the value moved out of
     moved: StringView
-    leakFix: bool
-    # the cleanup that keeps referenced locals, and the one that frees all
-    clProbe: StringView
-    clFull: StringView
+    cleanup: StringView
     ind: StringView
     tmp: TmpCtr
     buf: String.borrow
@@ -33773,7 +33748,7 @@ emitHoistedReturn: function {
     retNm: "_ret\{rtmpN}"
     buf.append "\{ind}\{retCt} \{retNm} = \{rv};\n"
     buf.append moved
-    if leakFix then buf.append clFull else buf.append clProbe
+    buf.append cleanup
     buf.append "\{ind}return \{retNm};\n"
 }
 
@@ -33793,8 +33768,8 @@ refReturnText: function {
     return "&\{rv}"
 }
 
-# emitDirectReturn -- a return of the value as it stands, after the cleanup
-# that keeps referenced locals. A reference return hands back the address,
+# emitDirectReturn -- a return of the value as it stands, after the cleanup.
+# A reference return hands back the address,
 # not a copy of the struct (without the `&` the caller writes through a
 # temporary); a pointer-held valtype is loaded.
 emitDirectReturn: function {
@@ -33804,11 +33779,11 @@ emitDirectReturn: function {
     ctx: Ctx
     vid: zast.nodeid
     rv: StringView
-    clProbe: StringView
+    cleanup: StringView
     ind: StringView
     buf: String.borrow
 } is {
-    buf.append clProbe
+    buf.append cleanup
     rvOut: "\{rv}"
     if ctx.refBorrowRet then rvOut = refReturnText :ast :reg :typing :ctx :vid :rv
     if ctx.refBorrowRet.not when (
@@ -33828,8 +33803,8 @@ emitDirectReturn: function {
 # would free -- a borrowed element or view (e.g. `container.get idx`, or a
 # StringView into a local String) -- so it is hoisted into a temp before the
 # frees. Pointer returns (protocol / Map / Set / by-ref class) arrive as bare
-# temps; hoisting a shallow pointer copy then freeing it would dangle, so
-# they keep the referenced-locals cleanup inline.
+# temps and are returned as they stand: the checker's exit list does not hold
+# what the return hands over.
 emitPlainReturn: function {
     ast: Ast.view
     reg: ztypes.ZTypeRegistry.view
@@ -33852,11 +33827,8 @@ emitPlainReturn: function {
         facts: rvF
     )
     flushArgHoists :ctx :ind :tmp :buf
-    clProbe: String
-    emitReturnCleanup :reg :typing :ctx :tmp retExpr: rv.stringView keepRefd: true :ind buf: clProbe
-    clFull: String
-    emitReturnCleanup :reg :typing :ctx :tmp retExpr: rv.stringView keepRefd: false :ind buf: clFull
-    leakFix: clFull.length > clProbe.length
+    cleanup: String
+    emitReturnCleanup :reg :typing :ctx :tmp :ind buf: cleanup
     rtid: stampIdOf :typing nid: (interpPartNodeId n: (ast.nodes.get i: vid))
     # an implementer returned as the spec is its box, of the spec's type
     so: typing.standInOf.get key: vid
@@ -33877,7 +33849,7 @@ emitPlainReturn: function {
         trivial.not and
         isPtr.not and
         (retCt.length > 0) and
-        ((clProbe.length > 0) or leakFix or (moved.length > 0))
+        ((cleanup.length > 0) or (moved.length > 0))
     )
     # a heap collection the return MOVES out of a source -- a `.take`, a
     # narrowed payload -- or that an `if` or `match` yields from arms that own
@@ -33895,9 +33867,7 @@ emitPlainReturn: function {
             rv: rv.stringView
             retCt: hpc.stringView
             moved: moved.stringView
-            leakFix: true
-            clProbe: clProbe.stringView
-            clFull: clFull.stringView
+            cleanup: cleanup.stringView
             :ind
             :tmp
             :buf
@@ -33915,9 +33885,7 @@ emitPlainReturn: function {
             rv: rr.stringView
             retCt: rrCt.stringView
             moved: moved.stringView
-            :leakFix
-            clProbe: clProbe.stringView
-            clFull: clFull.stringView
+            cleanup: cleanup.stringView
             :ind
             :tmp
             :buf
@@ -33929,9 +33897,7 @@ emitPlainReturn: function {
             rv: rv.stringView
             retCt: retCt.stringView
             moved: moved.stringView
-            :leakFix
-            clProbe: clProbe.stringView
-            clFull: clFull.stringView
+            cleanup: cleanup.stringView
             :ind
             :tmp
             :buf
@@ -33945,7 +33911,7 @@ emitPlainReturn: function {
             :ctx
             :vid
             rv: rv.stringView
-            clProbe: clProbe.stringView
+            cleanup: cleanup.stringView
             :ind
             :buf
         )
@@ -33974,14 +33940,14 @@ emitReturnOfNode: function {
             flushArgHoists :ctx :ind :tmp :buf
             buf.append "\{ind}(void)(\{nre});\n"
         }
-        emitReturnCleanup :reg :typing :ctx :tmp retExpr: "" keepRefd: true :ind :buf
+        emitReturnCleanup :reg :typing :ctx :tmp :ind :buf
         buf.append "\{ind}return;\n"
         return
     }
     bx: emitOptionBoxHoist :ast :reg :typing :ctx n: (ast.nodes.get i: vid) :ind :tmp :buf
     if bx.length > 0 then {
         emitValueTakeInvalidations :ast :reg :typing :ctx n: (ast.nodes.get i: vid) :ind :buf
-        emitReturnCleanup :reg :typing :ctx :tmp retExpr: bx.stringView keepRefd: true :ind :buf
+        emitReturnCleanup :reg :typing :ctx :tmp :ind :buf
         buf.append "\{ind}return \{bx};\n"
         return
     }
@@ -34061,7 +34027,7 @@ emitTailValue: function {
     )
     if bound.not then return false
     cl: String
-    emitReturnCleanup :reg :typing :ctx :tmp retExpr: nm.stringView keepRefd: false :ind buf: cl
+    emitReturnCleanup :reg :typing :ctx :tmp :ind buf: cl
     buf.append cl
     buf.append "\{ind}return \{nm};\n"
     return true
@@ -38517,40 +38483,6 @@ isIdChar: function {b: u8} out bool is {
     )
 }
 
-# refsLocal -- true if `name` occurs in `expr` as a maximal C identifier (bounded
-# by non-identifier bytes). A local referenced in the return expression is part of
-# (or borrowed by) the return value, so it must NOT be freed before the return.
-refsLocal: function {expr: StringView name: StringView} out bool is {
-    nl: name.length
-    el: expr.length
-    if nl == 0 then return false
-    if nl > el then return false
-    i: u64
-    for (i + nl) <= el loop {
-        eq: true
-        k: u64
-        for k < nl loop {
-            ebv: (expr.byteAt i + k).or d: 0
-            nbv: (name.byteAt k).or d: 1
-            if ebv != nbv then {
-                eq = false
-                break
-            }
-            k = k + 1
-        }
-        if eq then {
-            beforeOk: true
-            if i > 0 when (isIdChar b: ((expr.byteAt i - 1).or d: 0)) then beforeOk = false
-            afterOk: true
-            ep: i + nl
-            if ep < el when (isIdChar b: ((expr.byteAt ep).or d: 0)) then afterOk = false
-            if beforeOk when afterOk then return true
-        }
-        i = i + 1
-    }
-    return false
-}
-
 # isRegisteredOwned -- true if `name` is a registered owned local (a String in
 # tmp.frees or a collection/class in tmp.listFrees). Decides whether a value
 # moved into an inline construction must be zeroed so its scope-cleanup destructor
@@ -38571,9 +38503,8 @@ isRegisteredOwned: function {tmp: TmpCtr.view name: StringView} out bool is {
 # the function-end destroys never reach: the emitter's own temporaries
 # registered in the function, then the locals the checker recorded the return
 # destroys (emitExitDestroy), then every enclosing loop's payload. Does NOT pop
-# (other returns and the end still owe them). Skips a temporary or payload the
-# return expression `retExpr` REFERENCES (it is part of, or borrowed by, the
-# returned value) and any non-owning alias (`ctx.aliases`). A return the
+# (other returns and the end still owe them). Skips a non-owning alias
+# (`ctx.aliases`). A return the
 # checker recorded nothing for (ctx.exitNode 0) is refused: a local it moved
 # is zeroed only where the checker says a path still destroys it.
 emitReturnCleanup: function {
@@ -38581,8 +38512,6 @@ emitReturnCleanup: function {
     typing: ztyping.ZTyping.view
     ctx: Ctx
     tmp: TmpCtr.view
-    retExpr: StringView
-    keepRefd: bool
     ind: StringView
     buf: String.borrow
 } is {
@@ -38597,9 +38526,7 @@ emitReturnCleanup: function {
     for fRi < tmp.frees.length loop {
         fvR: tmp.frees.get i: fRi
         fRi = fRi + 1
-        keepF: (
-            fvR.spent or (exitKeeps :ctx vid: fvR.vid name: fvR.name.stringView :retExpr :keepRefd)
-        ).not
+        keepF: (fvR.spent or (vvHas xs: ctx.aliases vid: fvR.vid)).not
         if keepF when allRows or fvR.vid.isZero then {
             preludeNeed :ctx memb: "@String_free"
             lfR: "\{ind}\{ctx.strC}_free(&\{fvR.name});\n"
@@ -38610,29 +38537,19 @@ emitReturnCleanup: function {
     nL: tmp.listFrees.length
     for li < nL loop {
         owed: tmp.listFrees.get i: li
-        keepL: (
-            owed.spent or
-            (exitKeeps :ctx vid: owed.vid name: owed.name.stringView :retExpr :keepRefd)
-        ).not
+        keepL: (owed.spent or (vvHas xs: ctx.aliases vid: owed.vid)).not
         if keepL when allRows or owed.vid.isZero then buf.append owed.stmt
         li = li + 1
     }
-    if allRows.not then emitExitDestroy :reg :typing :ctx :tmp :retExpr :keepRefd :ind :buf
+    if allRows.not then emitExitDestroy :reg :typing :ctx :tmp :ind :buf
     # a return exits every enclosing loop: emit each owned-payload loop's
     # per-iteration cleanup (empty for plain loops and do entries), unless
-    # the payload is part of the return value or a non-owning alias.
+    # the payload is a non-owning alias.
     ci: u64
     cn: ctx.loops.length
     for ci < cn loop {
         cf0: ctx.loops.get i: ci
-        if cf0.cleanup.length > 0 when (
-            exitKeeps
-            :ctx
-            vid: cf0.cleanupVid
-            name: cf0.cleanupVar.stringView
-            :retExpr
-            :keepRefd
-        ).not then {
+        if cf0.cleanup.length > 0 when (vvHas xs: ctx.aliases vid: cf0.cleanupVid).not then {
             lcr: "\{ind}\{cf0.cleanup}"
             buf.append lcr
         }
