@@ -48925,6 +48925,23 @@ checkBareGenericReturnAt: function {ast: Ast st: zenv.ZSymbolTable slot: u64} is
     }
 }
 
+# recordDeclaredReturns -- record, on each function whose type does not say
+# what it returns, the type its written return resolved to. Every type-ref
+# stamp is final here, so from here on a function's type answers for its
+# return alone: the emitter reads no return node.
+recordDeclaredReturns: function {st: zenv.ZSymbolTable} is {
+    ri: u64
+    for ri < st.typing.funcReturnNode.length loop {
+        fk: st.typing.funcReturnNode.keyAt i: ri
+        rn: (st.typing.funcReturnNode.valueAt i: ri).or d: zast.nodeid
+        ri = ri + 1
+        if rn.isZero.not when (st.reg.returnTypeOf tid: fk).isZero then {
+            nt: ztyping.nodeTypeAt tbl: st.typing.nodeType nid: rn
+            if nt.isZero.not then st.reg.setReturnType typeId: fk value: nt
+        }
+    }
+}
+
 # checkSpecStandIns -- every value noted where a spec value is expected
 # implements the spec: an implementation row names its type, or the template it
 # was instantiated from. Anything else would typecheck and then fail in the
@@ -74200,6 +74217,7 @@ typecheck: function {
         checkHashKeys ast: program :st
         checkSpecStandIns ast: program :st
         checkBareGenericReturns ast: program :st
+        recordDeclaredReturns :st
         reportTypedefClashes ast: program :st
         checkWideConstants ast: program :st
         markAggsReached ast: program :st

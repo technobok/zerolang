@@ -24751,14 +24751,7 @@ stampIdDeep: function {
     sid: stampIdOf :ctx :typing :nid
     if sid.isZero.not then {
         if (reg.typetypeOf typeId: sid) == ztypes.ztypetype.functionType then {
-            rto: fnReturnTidOf :reg tid: sid
-            if rto.isZero.not then return rto
-            rno: typing.funcReturnNode.get key: sid
-            if rno.some then {
-                rrt: stampIdOf :ctx :typing nid: rno
-                if rrt.isZero.not then return rrt
-            }
-            return ztypes.tid.zero
+            return (fnReturnTidOf :reg tid: sid)
         }
         return sid
     }
@@ -24772,8 +24765,6 @@ stampIdDeep: function {
 # and its width is the method's return.
 tidDeep: function {
     reg: ztypes.ZTypeRegistry.view
-    typing: ztyping.ZTyping.view
-    ctx: Ctx.view
     sid: ztypes.tid
 } out ztypes.tid is {
     if sid.isZero then return ztypes.tid
@@ -24782,11 +24773,6 @@ tidDeep: function {
     if (reg.typetypeOf typeId: sid) == ztypes.ztypetype.functionType then {
         rto: fnReturnTidOf :reg tid: sid
         if rto.isZero.not then return rto
-        rno: typing.funcReturnNode.get key: sid
-        if rno.some then {
-            rrt: stampIdOf :ctx :typing nid: rno
-            if rrt.isZero.not then return rrt
-        }
     }
     return sid
 }
@@ -24798,7 +24784,7 @@ stampTidDeep: function {
     ctx: Ctx.view
     n: astnode.view
 } out ztypes.tid is {
-    return (tidDeep :ctx :reg :typing sid: (stampIdOf :ctx :typing nid: (interpPartNodeId :n)))
+    return (tidDeep :reg sid: (stampIdOf :ctx :typing nid: (interpPartNodeId :n)))
 }
 
 # emitPrintStmt -- a statement-position print call.
@@ -32013,7 +31999,7 @@ rangeTid: function {
         callableNode: ast.nodes.get i: n.callable
         if (isClosedRangeMemberId id: (aliasChildNameId :ast :typing n: callableNode)) then {
             rsid: dottedReceiverStampId :ctx :ast :typing callable: callableNode
-            return (tidDeep :ctx :reg :typing sid: rsid)
+            return (tidDeep :reg sid: rsid)
         }
         return ztypes.tid.zero
     } case dottedpath then {
@@ -35002,30 +34988,6 @@ emitListComprehension: function {
 }
 
 
-# fnReturnTypeId -- the stamped type id of a function's return-type node (the
-# typecheck stamps `op.returntype`, even for concrete fns whose registry
-# returnTypeId is unset). 0 when the fn has no return type.
-fnReturnTypeId: function {
-    ast: Ast.view
-    typing: ztyping.ZTyping.view
-    ctx: Ctx.view
-    op: astnode.view
-} out ztypes.tid is {
-    match (
-        op
-    ) case functiondef then {
-        rtId: op.returntype
-        if rtId.isZero.not then {
-            rt: ast.nodes.get i: rtId
-            return (stampIdOf :ctx :typing nid: (interpPartNodeId n: rt))
-        } else {
-            return ztypes.tid.zero
-        }
-    } else {
-        return ztypes.tid.zero
-    }
-}
-
 # isUserGenericMonoTid -- a specialization of a non-native USER generic type, as
 # opposed to a collection mono or a runtime-owned one. Every family whose method
 # bodies this emitter writes qualifies: a record, a variant and a facet carry
@@ -35413,16 +35375,13 @@ paramTypeIsPointer: function {
 # fnReturnPointerC -- how a non-void return is passed back: a heap collection by
 # pointer, a ref-borrow by the borrow's pointer form.
 fnReturnPointerC: function {
-    ast: Ast.view
     reg: ztypes.ZTypeRegistry.view
     typing: ztyping.ZTyping.view
     ctx: Ctx
     fid: ztypes.tid
-    op: astnode.view
     ret: StringView
 } out String is {
     retColId: fnReturnTidOf :reg tid: fid
-    if retColId.isZero then retColId = fnReturnTypeId :ctx :ast :typing :op
     retC: ret.string
     if retColId.isZero.not when (
         isHeapPtrCollection
@@ -35438,24 +35397,20 @@ fnReturnPointerC: function {
     return retC
 }
 
-# fnReturnC -- a user function's C return type: what the registry records it
-# returns (an instance's own, for a function minted from a template), else its
-# return node's stamp; `void` when neither names one. The pointer forms apply
-# last.
+# fnReturnC -- a user function's C return type: what its type records it
+# returns, `void` when it returns nothing. The pointer forms apply last.
 fnReturnC: function {
     ast: Ast.view
     reg: ztypes.ZTypeRegistry.view
     typing: ztyping.ZTyping.view
     ctx: Ctx
     fid: ztypes.tid
-    op: astnode.view
 } out String is {
     rt: fnReturnTidOf :reg tid: fid
-    if rt.isZero then rt = fnReturnTypeId :ctx :ast :typing :op
     if rt.isZero then return "void".string
     ret: typeRefC :ast :reg :typing :ctx tid: rt
     if ret.length == 0 then return "void".string
-    return (fnReturnPointerC :ast :reg :typing :ctx :fid :op ret: ret.stringView)
+    return (fnReturnPointerC :reg :typing :ctx :fid ret: ret.stringView)
 }
 
 # paramReadsOnly -- a parameter passed by reference that the function only
@@ -35544,7 +35499,7 @@ fnSignature: function {
     op: astnode.view
 } out String is {
     if (isEntryMain :typing :ctx :fid) then return "void z_main(void)".string
-    ret: fnReturnC :ast :reg :typing :ctx :fid :op
+    ret: fnReturnC :ast :reg :typing :ctx :fid
     params: fnParamsC :ast :reg :typing :ctx :fid :op
     fc: ctxCnameView :ctx tid: fid
     sig: "\{ret} \{fc}(\{params})"
@@ -38969,7 +38924,6 @@ emitFnBody: function {
     buf: String.borrow
 } is {
     rbt: fnReturnTidOf :reg tid: fid
-    if rbt.isZero then rbt = fnReturnTypeId :ctx :ast :typing :op
     ctx.refBorrowRet = fnReturnsRefBorrow :reg :typing :ctx :fid retTid: rbt
     if op.functiondef.not then return
     tmp: TmpCtr n: 0 frees: List OwedFree listFrees: List OwedFree
@@ -45883,13 +45837,12 @@ fnptrTypedefEligible: function {
     ast: Ast.view
     reg: ztypes.ZTypeRegistry.view
     typing: ztyping.ZTyping.view
-    ctx: Ctx.view
     tid: ztypes.tid
 } out bool is {
     if (reg.isGenericOf :tid) then return false
     mo: originTidOf :reg :tid
     if mo.isZero.not then return (instanceFnField :reg :typing :tid)
-    if (signatureNamesTemplate :ctx :reg :typing :tid) then return false
+    if (signatureNamesTemplate :reg :typing :tid) then return false
     return (stdFnRefEmittable :ast :reg :typing fid: tid)
 }
 
@@ -45910,16 +45863,9 @@ instanceFnField: function {
 # TEMPLATE (a generic unit's function over a type the unit declares) is the
 # template's own; its instances carry the concrete signature.
 signatureNamesTemplate: function {
-    reg: ztypes.ZTypeRegistry.view typing: ztyping.ZTyping.view ctx: Ctx.view tid: ztypes.tid
+    reg: ztypes.ZTypeRegistry.view typing: ztyping.ZTyping.view tid: ztypes.tid
 } out bool is {
     rt: reg.returnTypeOf :tid
-    {
-        rno: typing.funcReturnNode.get key: tid
-        if rno.some then {
-            rs: stampIdOf :ctx :typing nid: rno
-            if rs.isZero.not then rt = rs
-        }
-    }
     if rt.isZero.not when (reg.isGenericOf tid: rt) then return true
     pi: u64
     pn: typing.declRowSlots ownerTid: tid
@@ -45931,28 +45877,8 @@ signatureNamesTemplate: function {
     return false
 }
 
-# fnptrReturnTid -- the type function `tid` returns, for its `_ft` typedef; 0
-# when it returns nothing. An instance's function returns what the instance's
-# arguments make of the template's return, which its own type records: its
-# return node is the template's. Any other function's return is read from the
-# node's stamp, then from its type.
-fnptrReturnTid: function {
-    reg: ztypes.ZTypeRegistry.view
-    typing: ztyping.ZTyping.view
-    ctx: Ctx.view
-    tid: ztypes.tid
-} out ztypes.tid is {
-    rtid: ztypes.tid
-    if (originTidOf :reg :tid).isZero.not then rtid = reg.returnTypeOf :tid
-    rno: typing.funcReturnNode.get key: tid
-    if rtid.isZero when rno.some then rtid = stampIdOf :ctx :typing nid: rno
-    if rtid.isZero then rtid = reg.returnTypeOf :tid
-    return rtid
-}
-
-# fnptrRetTypeC -- C return type for a FUNCTION's `_ft` typedef. The return type
-# is read from funcReturnNode (the registry returnTypeId is not populated for
-# top-level functions) via the node stamp, mirroring fnReturnTypeId.
+# fnptrRetTypeC -- the C return type of function `tid`'s `_ft` typedef; `void`
+# when it returns nothing.
 fnptrRetTypeC: function {
     ast: Ast.view
     reg: ztypes.ZTypeRegistry.view
@@ -45960,7 +45886,7 @@ fnptrRetTypeC: function {
     ctx: Ctx
     tid: ztypes.tid
 } out String is {
-    rtid: fnptrReturnTid :reg :typing :ctx :tid
+    rtid: reg.returnTypeOf :tid
     if rtid.isZero then return "void".string
     baseC: String
     if rtid == ctx.strTid then {
@@ -46165,12 +46091,6 @@ emitOneFnptrTypedef: function {
         ri = ri + 1
     }
     srt: reg.returnTypeOf :tid
-    if srt.isZero then {
-        srno: typing.funcReturnNode.get key: tid
-        if srno.some then {
-            srt = stampIdOf :ctx :typing nid: srno
-        }
-    }
     # a spec or a variant in the signature is declared by its tag before the
     # test below asks whether the typedef can name it
     fj: u64
@@ -46275,7 +46195,7 @@ emitFnptrTypedefs: function {
         if (reg.typetypeOf typeId: t0) == ztypes.ztypetype.functionType when (
             ctx.fnptrDemand.has
             item: t0
-        ) when (fnptrTypedefEligible :ctx :ast :reg :typing tid: t0) then {
+        ) when (fnptrTypedefEligible :ast :reg :typing tid: t0) then {
             emitOneFnptrTypedef :ast :reg :typing :ctx tid: t0 :seen :fnOwner :buf
         }
         t0 = t0.next
