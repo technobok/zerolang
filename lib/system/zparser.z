@@ -2002,6 +2002,54 @@ Parser: class {
         }
     }
 
+    # ifWhenTail -- ifClausesTail at a `when`: the condition after it joins
+    # the clause's `conditions`, and the tail goes on from there. A condition
+    # after another is a level: each is read inside the one before.
+    ifWhenTail: function {
+        :this
+        lex: zlexer.Lexer
+        clauses: (ListVal zast.nodeid).take
+        conditions: (ListVal zast.nodeid).take
+        clauseLine: u32
+        clauseCol: u32
+        ifLine: u32
+        ifCol: u32
+    } out astnode is {
+        lex.advance pool: this.ast.names
+        lex.accept tt: zlexer.toktype.eolTok pool: this.ast.names
+        vbase: this.operationPaths :lex
+        n: this.pathCount base: vbase
+        if n == 0 then {
+            bad: lex.acceptAny pool: this.ast.names
+            return (
+                this.mkError
+                tok: bad
+                code: zast.err.expectedOp
+                msg: "Expected operation (condition) for 'if'".string
+            )
+        }
+        cond: this.operationFromBase base: vbase :lex
+        cErr: Parser.isError node: cond
+        if cErr then return cond
+        cp: zast.posOf n: cond
+        no: this.mkNamedOp name: zast.nameid.zero operation: cond line: cp.line col: cp.col
+        conditions.append (this.intern n: no)
+        if this.depth >= nestingLimit then return (this.tooDeepAt pos: lex.peekPos)
+        this.depth = this.depth + 1
+        rest: (
+            this.ifClausesTail
+            :lex
+            :clauses
+            :conditions
+            :clauseLine
+            :clauseCol
+            :ifLine
+            :ifCol
+        )
+        this.depth = this.depth - 1
+        return rest
+    }
+
     # Tail of the if-clause loop. Threads the clauses list and the current
     # clause's conditions list through recursion (so the conditions list is
     # moved into the IfClause and a fresh one passed on, never reassigned).
@@ -2019,37 +2067,16 @@ Parser: class {
     } out astnode is {
         tPos: lex.peekPos
         tt: lex.peekType
-        if tt == zlexer.toktype.whenTok then {
-            lex.advance pool: this.ast.names
-            lex.accept tt: zlexer.toktype.eolTok pool: this.ast.names
-            vbase: this.operationPaths :lex
-            n: this.pathCount base: vbase
-            if n == 0 then {
-                bad: lex.acceptAny pool: this.ast.names
-                return (
-                    this.mkError
-                    tok: bad
-                    code: zast.err.expectedOp
-                    msg: "Expected operation (condition) for 'if'".string
-                )
-            }
-            cond: this.operationFromBase base: vbase :lex
-            cErr: Parser.isError node: cond
-            if cErr then return cond
-            cp: zast.posOf n: cond
-            no: this.mkNamedOp name: zast.nameid.zero operation: cond line: cp.line col: cp.col
-            conditions.append (this.intern n: no)
-            return (
-                this.ifClausesTail
-                :lex
-                :clauses
-                :conditions
-                :clauseLine
-                :clauseCol
-                :ifLine
-                :ifCol
-            )
-        }
+        if tt == zlexer.toktype.whenTok then return (
+            this.ifWhenTail
+            :lex
+            :clauses
+            :conditions
+            :clauseLine
+            :clauseCol
+            :ifLine
+            :ifCol
+        )
         if tt == zlexer.toktype.thenTok then {
             lex.advance pool: this.ast.names
             stmt: this.acceptClauseBody :lex
@@ -2163,12 +2190,10 @@ Parser: class {
         }
     }
 
-    # Tail of the case-clause loop. Threads the subject and the clauses
-    # list through recursion (each clause's owned pieces move into the
-    # CaseClause, the list moves on), so neither is held across a loop
-    # body -- mirrors ifClausesTail. `case` adds a clause; anything else
-    # ends the clauses and parses an optional `else`.
-    caseClausesTail: function {
+    # The clauses of a match, then its optional `else`: each `case` adds a
+    # clause to `clauses`, and anything else ends them. A loop, so a match
+    # may have any number of arms.
+    caseClauses: function {
         :this
         lex: zlexer.Lexer
         subjectId: zast.nodeid
@@ -2176,60 +2201,10 @@ Parser: class {
         mLine: u32
         mCol: u32
     } out astnode is {
-        isCase: lex.peekType == zlexer.toktype.caseTok
-        if isCase then {
-            clausePos: lex.peekPos
-            cLine: clausePos.lineno
-            cCol: clausePos.colno
-            lex.advance pool: this.ast.names
-            lex.accept tt: zlexer.toktype.eolTok pool: this.ast.names
-            idOpt: lex.accept tt: zlexer.toktype.refIdTok pool: this.ast.names
-            match (
-                idOpt
-            ) case some then {
-                nm: idOpt.text
-                armNode: astnode.atomid (
-                    zast.atomidrow
-                    nodeid: this.nextId
-                    lineno: idOpt.lineno
-                    colno: idOpt.colno
-                    name: idOpt.text
-                )
-                isThen: lex.peekType == zlexer.toktype.thenTok
-                if isThen then {
-                    lex.advance pool: this.ast.names
-                    body: this.acceptClauseBody :lex
-                    bErr: Parser.isError node: body
-                    if bErr then return body
-                    clause: astnode.caseclause (
-                        zast.caseclauserow
-                        nodeid: this.nextId
-                        lineno: cLine
-                        colno: cCol
-                        name: nm
-                        matcharm: (this.intern n: armNode)
-                        statement: (this.intern n: body)
-                    )
-                    clauses.append (this.intern n: clause)
-                    return (this.caseClausesTail :lex :subjectId :clauses :mLine :mCol)
-                } else {
-                    bad: lex.acceptAny pool: this.ast.names
-                    return (
-                        this.mkError
-                        tok: bad
-                        code: zast.err.badCase
-                        msg: "Expected then keyword for case".string
-                    )
-                }
-            } case none then {
-                bad: lex.acceptAny pool: this.ast.names
-                return (
-                    this.mkError
-                    tok: bad
-                    code: zast.err.badReference
-                    msg: "Case match expression expected (simple id)".string
-                )
-            }
+        for lex.peekType == zlexer.toktype.caseTok loop {
+            clause: this.parseCaseClause :lex
+            if (Parser.isError node: clause) then return clause
+            clauses.append (this.intern n: clause)
         }
         elseOpt: lex.accept tt: zlexer.toktype.elseTok pool: this.ast.names
         match (
@@ -2262,12 +2237,66 @@ Parser: class {
         }
     }
 
+    # case-clause -> "case" id "then" primary. The caller has peeked the
+    # `case` keyword. Answers the clause, or the error that ended it.
+    parseCaseClause: function {:this lex: zlexer.Lexer} out astnode is {
+        clausePos: lex.peekPos
+        cLine: clausePos.lineno
+        cCol: clausePos.colno
+        lex.advance pool: this.ast.names
+        lex.accept tt: zlexer.toktype.eolTok pool: this.ast.names
+        idOpt: lex.accept tt: zlexer.toktype.refIdTok pool: this.ast.names
+        match (
+            idOpt
+        ) case some then {
+            nm: idOpt.text
+            armNode: astnode.atomid (
+                zast.atomidrow
+                nodeid: this.nextId
+                lineno: idOpt.lineno
+                colno: idOpt.colno
+                name: idOpt.text
+            )
+            isThen: lex.peekType == zlexer.toktype.thenTok
+            if isThen then {
+                lex.advance pool: this.ast.names
+                body: this.acceptClauseBody :lex
+                bErr: Parser.isError node: body
+                if bErr then return body
+                return (astnode.caseclause (
+                    zast.caseclauserow
+                    nodeid: this.nextId
+                    lineno: cLine
+                    colno: cCol
+                    name: nm
+                    matcharm: (this.intern n: armNode)
+                    statement: (this.intern n: body)
+                )
+                )
+            } else {
+                bad: lex.acceptAny pool: this.ast.names
+                return (
+                    this.mkError
+                    tok: bad
+                    code: zast.err.badCase
+                    msg: "Expected then keyword for case".string
+                )
+            }
+        } case none then {
+            bad: lex.acceptAny pool: this.ast.names
+            return (
+                this.mkError
+                tok: bad
+                code: zast.err.badReference
+                msg: "Case match expression expected (simple id)".string
+            )
+        }
+    }
+
     # match-expression -> "match" [ "on" ] op
     #                     { "case" id "then" primary }* [ "else" primary ]
     # The subject is a bare operation; each clause binds the matched id's
-    # name plus the AtomId arm being matched. The clause loop is a
-    # recursive tail (caseClausesTail) so the subject/clauses are never
-    # held across a loop body. Narrowing the subject and rejecting `.take`
+    # name plus the AtomId arm being matched (caseClauses). Narrowing the subject and rejecting `.take`
     # on it are typecheck concerns, not parse ones.
     acceptMatchExpression: function {:this lex: zlexer.Lexer} out astnode is {
         startPos: lex.peekPos
@@ -2301,7 +2330,7 @@ Parser: class {
             if sErr then return subject
             clauses: ListVal zast.nodeid
             return (
-                this.caseClausesTail
+                this.caseClauses
                 :lex
                 subjectId: (this.intern n: subject)
                 :clauses
@@ -2356,7 +2385,10 @@ Parser: class {
                 no: this.mkNamedOp name: zast.nameid.zero operation: op line: cp.line col: cp.col
                 conditions.append (this.intern n: no)
             }
-            return (
+            # a condition after another is a level, as an `if`'s is
+            if this.depth >= nestingLimit then return (this.tooDeepAt pos: lex.peekPos)
+            this.depth = this.depth + 1
+            rest: (
                 this.forClausesTail
                 :lex
                 :conditions
@@ -2368,6 +2400,8 @@ Parser: class {
                 :forLine
                 :forCol
             )
+            this.depth = this.depth - 1
+            return rest
         }
         if tt == zlexer.toktype.eachTok then {
             lex.advance pool: this.ast.names

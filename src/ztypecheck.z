@@ -14303,7 +14303,8 @@ attachSumMethods: function {
 }
 
 # recordTagBase -- the storage a variant or union's `as` block declares for its
-# discriminator (`k: u16.tag`), for the backend to honour.
+# discriminator (`k: u16.tag`), for the backend to honour. The type has `arms`
+# arms, which that storage must be able to number.
 recordTagBase: function {
     st: zenv.ZSymbolTable
     scope: ztypes.declid
@@ -14311,13 +14312,55 @@ recordTagBase: function {
     unitDecl: ztypes.declid
     objId: zast.nodeid
     ownerId: ztypes.tid
+    arms: u64
 } is {
     # none when nothing is declared: distinct from tid.zero, a data-sourced tag,
     # whose constants set their own width and whose enum must stay the storage
     tb: variantTagBaseTid :st :scope :ast :unitDecl :objId
+    declared: ztypes.tid
+    listSourced: false
     if tb.some then {
         st.typing.variantTagBase.set key: ownerId value: tb
+        declared = tb
+        listSourced = declared.isZero
     }
+    if listSourced.not then refuseTagTooNarrow :st :ast :objId :arms :declared
+}
+
+# refuseTagTooNarrow -- a variant or union with more arms than its tag has
+# values: the arms are numbered from 0 in the tag's type, `declared`, or in u8
+# when the type declares none (the zero tid). Unreported, the numbers wrapped
+# and two arms shared one.
+refuseTagTooNarrow: function {
+    st: zenv.ZSymbolTable
+    ast: Ast.view
+    objId: zast.nodeid
+    arms: u64
+    declared: ztypes.tid
+} is {
+    bits: 8.u64
+    tagName: "u8".string
+    if declared.isZero.not then {
+        nk: numKindOfTid typing: st.typing tid: declared
+        if nk.has.not then return
+        bits = ztypes.intKindBits k: nk.kind
+        if (ztypes.isSignedIntKind k: nk.kind) then bits = bits - 1
+        tagName = st.reg.nameOf tid: declared
+    }
+    if bits >= 64 then return
+    room: 1.u64 << bits
+    if arms <= room then return
+    pos: zast.posOf n: (ast.nodes.get i: objId)
+    (
+        addResolveErrorH
+        :st
+        nodeid: objId
+        lineno: pos.line
+        colno: pos.col
+        e: zast.err.typeError
+        msg: "the type has \{arms} arms, and its tag, a \{tagName}, numbers \{room}: declare a wider tag in the `as` section, as in `tag: u16.tag`"
+        width: 1
+    )
 }
 
 # tagAccessorOwner -- the type whose tag accessor `tid` answers with: its own,
@@ -14576,7 +14619,7 @@ resolveVariant: function {
     }
     # the discriminator's declared storage, so a backend can honour it; a
     # generic template's is its instances'
-    recordTagBase :st :scope :ast :unitDecl objId: vnode.nid ownerId: variantTid
+    recordTagBase :st :scope :ast :unitDecl objId: vnode.nid ownerId: variantTid arms: armCountV
     if isgen.not then {
         (
             attachVariantTag
@@ -15441,7 +15484,7 @@ resolveUnion: function {
     }
     # the discriminator's declared storage, so a backend can honour it; a
     # generic template's is its instances'
-    recordTagBase :st :scope :ast :unitDecl objId: vnode.nid ownerId: uid
+    recordTagBase :st :scope :ast :unitDecl objId: vnode.nid ownerId: uid arms: armCountU
     if isgen.not then {
         tagId: (
             mintSumTag

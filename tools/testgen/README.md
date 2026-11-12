@@ -22,6 +22,7 @@ format their output with `bin/zl`, so build it first (`make bin/zl`).
 | `kerneltables.py [ROOT]` | `math_kernel_shapes.z` | Python ints |
 | `overflowmethods.py` (run in the repository root) | `emitc_corpus/overflow_methods.z` and its golden | Python ints |
 | `nesting.py tests/fixtures` | `errors/nesting_limit.z`, `emitc_corpus/nesting_deep.z` and its golden | the limit and the depth |
+| `sumtag.py tests/fixtures` | `errors/sum_tag_too_narrow.z`, `emitc_corpus/sum_tag_wide.z` and its golden | the arm numbers |
 | `callchain.py tests/fixtures` | `emitc_corpus/demand_chain_deep.z` and its golden | the chain's length |
 | `mathtables.py OPS` | rows for `math_bigint_tables.z` (`add,sub,mul`), `math_bigint_division.z` (`div,mod`), `math_bigint_text.z` (`text`), on stdout | Python ints |
 | `fixedtables.py [ROOT [OUT]]` | `math_fixedint.z` | Python ints mod 2^(64N) |
