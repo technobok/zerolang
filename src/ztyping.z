@@ -61,7 +61,7 @@ public: unit {
     :armSuffixSideOf
     :nodeTypeAt
     :nodeTypeSet
-    :setFirstOrPerMono
+    :setAgreed
     :rowIsInstanceOwn
 }
 
@@ -535,23 +535,6 @@ destroyrange: record {
     len: u32
 }
 
-# monoVariableIn -- node `nid`'s variable as the walk of `mono` bound it: that
-# instance's own answer (`perMono`), else the one every other walk shares.
-monoVariableIn: function {
-    perMono: (MapVV monostamp v: ztypes.vid).view
-    shared: (IdMapV zast.nodeid v: ztypes.vid).view
-    mono: ztypes.tid
-    nid: zast.nodeid
-} out optionval ztypes.vid is {
-    if mono.isZero.not then {
-        mg: perMono.get key: (monostamp :mono node: nid)
-        if mg.some then {
-            return (optionval.some mg)
-        }
-    }
-    return (shared.get key: nid)
-}
-
 # rowspan -- a run of node rows, `first` to `last`, both included
 rowspan: record {
     first: zast.nodeid
@@ -583,45 +566,25 @@ rowIsInstanceOwn: function {
     return false
 }
 
-# setFirstOrPerMono -- record `value` for node `nid` as the walk of `mono` (0
-# for a walk of no mono) found it. A template node is walked once per mono: the
-# first value any walk finds is the shared one, and a walk that finds another
-# keeps it per mono. A row made in an instance's walk (`spans`, `open`:
-# rowIsInstanceOwn) is the instance's alone, so its value is the shared one.
-setFirstOrPerMono: function as { t: anyval.generic } in {
-    perMono: (MapVV monostamp v: t)
+# setAgreed -- record `value` for row `nid` in `shared`. `foreign` says an
+# instance is being walked and the row is not its own (ZTyping.rowIsForeign).
+# Such a row -- a template's, outside any function an instance copies -- has
+# one answer for every instance: a walk that finds another is a defect of the
+# compiler, and stops it.
+setAgreed: function as { t: anyval.generic } in {
     shared: (IdMapV zast.nodeid v: t)
-    spans: (ListVal rowspan).view
-    open: zast.nodeid
-    mono: ztypes.tid
+    foreign: bool
     nid: zast.nodeid
     value: t
 } is {
-    if mono.isZero.not when (rowIsInstanceOwn :spans :open :nid).not then {
+    if foreign then {
         got: shared.get key: nid
         if got.some then {
             if got == value then return
-            perMono.set key: (monostamp :mono node: nid) :value
-            return
+            panic msg: "ztyping: two generic instances disagree about a row neither owns"
         }
     }
     shared.set key: nid :value
-}
-
-# setMonoVariable -- record node `nid`'s variable for the walk of `mono`: an
-# instance walk in its own map, every other walk in the shared one.
-setMonoVariable: function {
-    perMono: (MapVV monostamp v: ztypes.vid)
-    shared: (IdMapV zast.nodeid v: ztypes.vid)
-    mono: ztypes.tid
-    nid: zast.nodeid
-    vid: ztypes.vid
-} is {
-    if mono.isZero.not then {
-        perMono.set key: (monostamp :mono node: nid) value: vid
-        return
-    }
-    shared.set key: nid value: vid
 }
 
 # nsbody -- a namespace or hidden subunit whose member BODIES are owed a walk.
@@ -777,12 +740,6 @@ ZTyping: class {
     # inputs locked for the binding's life. An OWNED result stays owned -- the
     # binding keeps its destructor -- so it is tracked apart from the marker.
     funcPins: IdSet ztypes.tid
-    # per-mono template stamps, written by the post-sweep instance walk when
-    # curMonoStamp is set; the emitter's mono re-walks read these where the
-    # global table is param-suppressed.
-    # monoParamSubst maps the CURRENT mono's generic-param tids to its args
-    # (flat substitution at stamp time); live only during the instance walk.
-    monoNodeType: (MapVV monostamp v: ztypes.tid)
     # each generic instance's own copy of a template function it walks, keyed
     # by (instance, template function node): the instance is checked and
     # emitted from the copy, so no node carries another instance's answer
@@ -803,18 +760,6 @@ ZTyping: class {
     # the checker records on a template's function -- that it is a generator's
     # `call`, its state fields -- a copy answers through it
     instanceOrigin: (IdMapV zast.nodeid v: zast.nodeid)
-    # a use site's compile-time value from one mono's walk, where it differs
-    # from the value the walks share: a numeric generic parameter read in a
-    # template body folds to each mono's own argument
-    monoNodeConst: (MapVV monostamp v: ztypes.cval)
-    # the branch a fold selected in one mono's walk, where it differs from the
-    # shared one
-    monoFoldedBranch: (MapVV monostamp v: foldedbranch)
-    # a loop's fold in one mono's walk, where it differs from the shared one
-    monoFoldedLoop: (MapVV monostamp v: foldedloop)
-    # whether a loop's condition folds true in one mono's walk, where that
-    # differs from the shared answer
-    monoCondFoldsTrue: (MapVV monostamp v: bool)
     # the use sites that read a numeric generic parameter, bare or through a
     # value or a type, to the parameter's name
     numericParamRead: (IdMapV zast.nodeid v: zast.nameid)
@@ -1046,11 +991,6 @@ ZTyping: class {
     funcReturnNode: (IdMapV ztypes.tid v: zast.nodeid)
     # the variable a definition owns, where it owns one
     defVariableId: (IdMapV zast.nodeid v: ztypes.vid)
-    # the variable an INSTANCE walk bound on a parameter of the template's
-    # signature, by instance and node: every instance mints its own variables
-    # there, while its body is its own copy (instanceBody), whose variables are
-    # the shared maps' (monoVariableIn)
-    monoDefVariableId: (MapVV monostamp v: ztypes.vid)
     # --- compile-time constant values ---
     # The value domain, keyed two ways. nodeConst answers "what does this
     # node evaluate to" for a use site; memberConst answers it for a named
@@ -2351,29 +2291,15 @@ ZTyping: class {
         this.memberConst.set key: k :value
     }
 
-    # setNodeConstIn -- a use site's value from the walk of `mono` (0 for a walk
-    # of no mono). A template body is walked once per mono, and a value that
-    # differs between monos -- a numeric generic parameter's -- is kept per
-    # mono; the first value any walk finds is the shared one.
-    setNodeConstIn: function {:this mono: ztypes.tid nid: zast.nodeid value: ztypes.cval} is {
-        (
-            setFirstOrPerMono
-            perMono: this.monoNodeConst
-            shared: this.nodeConst
-            spans: this.instanceRows
-            open: this.instanceRowsOpen
-            :mono
-            :nid
-            :value
-        )
+    # setNodeConst -- the compile-time value of the use site `nid` (setAgreed).
+    setNodeConst: function {:this nid: zast.nodeid value: ztypes.cval} is {
+        foreign: this.rowIsForeign :nid
+        setAgreed shared: this.nodeConst :foreign :nid :value
     }
 
-    # defVariableIn -- the variable the definition `nid` owns, as the walk of
-    # `mono` bound it (monoVariableIn).
-    defVariableIn: function {
-        t: this.view mono: ztypes.tid nid: zast.nodeid
-    } out optionval ztypes.vid is {
-        return (monoVariableIn perMono: t.monoDefVariableId shared: t.defVariableId :mono :nid)
+    # defVariableAt -- the variable the definition `nid` owns.
+    defVariableAt: function {t: this.view nid: zast.nodeid} out optionval ztypes.vid is {
+        return (t.defVariableId.get key: nid)
     }
 
     # setAtomVariable -- the atom `nid` names `vid`. An atom is a body's, and an
@@ -2382,16 +2308,13 @@ ZTyping: class {
         this.atomVariableId.set key: nid value: vid
     }
 
-    # setDefVariable -- the definition `nid` owns `vid`, for the walk in progress.
+    # setDefVariable -- the definition `nid` owns `vid`. An instance's walk binds
+    # variables on its own rows alone.
     setDefVariable: function {:this nid: zast.nodeid vid: ztypes.vid} is {
-        (
-            setMonoVariable
-            perMono: this.monoDefVariableId
-            shared: this.defVariableId
-            mono: (this.walkMonoOf :nid)
-            :nid
-            :vid
-        )
+        if (this.rowIsForeign :nid) then {
+            panic msg: "ztyping: an instance's walk bound a variable on a row that is not its own"
+        }
+        this.defVariableId.set key: nid value: vid
     }
 
     # setPostGuardVar -- the guard statement `nid` narrows `vid`. A guard is a
@@ -2426,38 +2349,17 @@ ZTyping: class {
         this.instanceRows.append (rowspan :first last: (zast.nodeid from: next.u32 - 1))
     }
 
-    # walkMonoOf -- the instance whose own table an answer the walk records on
-    # `nid` goes to: the instance being walked, unless the row was made in an
-    # instance's walk, whose answers are the plain tables'. 0 outside an
-    # instance walk.
-    walkMonoOf: function {t: this.view nid: zast.nodeid} out ztypes.tid is {
-        if t.curMonoStamp.isZero then return ztypes.tid.zero
-        if (t.isInstanceRow :nid) then return ztypes.tid.zero
-        return t.curMonoStamp
+    # rowIsForeign -- an instance is being walked and row `nid` is not one its
+    # walk, or any instance's, made: a template's row. What a walk records on
+    # one is every instance's answer.
+    rowIsForeign: function {t: this.view nid: zast.nodeid} out bool is {
+        if t.curMonoStamp.isZero then return false
+        return (t.isInstanceRow :nid).not
     }
 
-    # nodeTypeIn -- a node's type as the walk of `mono` stamped it: the mono's
-    # own, else the shared one. An instance walk stamps only its own table, so a
-    # checker reading an arm it has just walked asks here.
-    nodeTypeIn: function {t: this.view mono: ztypes.tid nid: zast.nodeid} out ztypes.tid is {
-        if mono.isZero.not then {
-            mg: t.monoNodeType.get key: (monostamp :mono node: nid)
-            if mg.some then {
-                return mg
-            }
-        }
-        return (nodeTypeAt tbl: t.nodeType :nid)
-    }
-
-    # nodeConstIn -- a use site's value as the walk of `mono` sees it: the
-    # mono's own, else the shared one; `none` when it has neither.
-    nodeConstIn: function {t: this.view mono: ztypes.tid nid: zast.nodeid} out ztypes.cval is {
-        if mono.isZero.not then {
-            mg: t.monoNodeConst.get key: (monostamp :mono node: nid)
-            if mg.some then {
-                return mg
-            }
-        }
+    # nodeConstAt -- the compile-time value of the use site `nid`; `none` when
+    # it has none.
+    nodeConstAt: function {t: this.view nid: zast.nodeid} out ztypes.cval is {
         return ((t.nodeConst.get key: nid).or d: ztypes.noConst)
     }
 
@@ -2477,39 +2379,21 @@ ZTyping: class {
         return v.fval == 0.0
     }
 
-    # foldedBranchIn --the branch a fold selected as the walk of `mono` sees it;
-    # `known` false when no fold decided one.
-    foldedBranchIn: function {t: this.view mono: ztypes.tid nid: zast.nodeid} out foldedbranch is {
-        if mono.isZero.not then {
-            mg: t.monoFoldedBranch.get key: (monostamp :mono node: nid)
-            if mg.some then {
-                return mg
-            }
-        }
+    # foldedBranchAt -- the branch a fold selected at `nid`; `known` false when
+    # no fold decided one.
+    foldedBranchAt: function {t: this.view nid: zast.nodeid} out foldedbranch is {
         return ((t.foldedBranch.get key: nid).or d: (foldedbranch known: false stmt: zast.nodeid))
     }
 
-    # condFoldsTrueIn -- a loop's condition folds true as the walk of `mono` sees
-    # it, so it writes no test.
-    condFoldsTrueIn: function {t: this.view mono: ztypes.tid nid: zast.nodeid} out bool is {
-        if mono.isZero.not then {
-            mg: t.monoCondFoldsTrue.get key: (monostamp :mono node: nid)
-            if mg.some then {
-                return mg
-            }
-        }
+    # condFoldsTrueAt -- the condition of the loop `nid` folds true, so it writes
+    # no test.
+    condFoldsTrueAt: function {t: this.view nid: zast.nodeid} out bool is {
         return ((t.condFoldsTrue.get key: nid).or d: false)
     }
 
-    # foldedLoopIn -- the loop's fold as the walk of `mono` sees it: run-time
-    # conditions, none at the end, when no walk stamped one.
-    foldedLoopIn: function {t: this.view mono: ztypes.tid nid: zast.nodeid} out foldedloop is {
-        if mono.isZero.not then {
-            mg: t.monoFoldedLoop.get key: (monostamp :mono node: nid)
-            if mg.some then {
-                return mg
-            }
-        }
+    # foldedLoopAt -- the fold of the loop `nid`: run-time conditions, none at
+    # the end, when no walk stamped one.
+    foldedLoopAt: function {t: this.view nid: zast.nodeid} out foldedloop is {
         return (
             (t.foldedLoop.get key: nid).or
             d: (foldedloop entry: loopentry.runtime end: loopend.unwritten neverExits: false)
@@ -3008,17 +2892,12 @@ newTyping: function {nodeEst: 0.u64} out ZTyping is {
         tempHoldingLines: IdSet zast.nodeid
         funcReturnMarker: (IdMapV ztypes.tid v: ztypes.zparamownership)
         funcPins: IdSet ztypes.tid
-        monoNodeType: (MapVV monostamp v: ztypes.tid)
         instanceBody: (MapVV monostamp v: zast.nodeid)
         instanceFunctions: ListVal zast.nodeid
         instanceRows: ListVal rowspan
         instanceRowsOpen: zast.nodeid
         instanceWalkDepth: 0
         instanceOrigin: (IdMapV zast.nodeid v: zast.nodeid)
-        monoNodeConst: (MapVV monostamp v: ztypes.cval)
-        monoFoldedBranch: (MapVV monostamp v: foldedbranch)
-        monoFoldedLoop: (MapVV monostamp v: foldedloop)
-        monoCondFoldsTrue: (MapVV monostamp v: bool)
         numericParamRead: (IdMapV zast.nodeid v: zast.nameid)
         unnamedLocalOfNode: (IdMapV zast.nodeid v: zast.nameid)
         unheldTemps: IdSet zast.nameid
@@ -3086,7 +2965,6 @@ newTyping: function {nodeEst: 0.u64} out ZTyping is {
         implicitCreate: (IdMapV zast.nodeid v: ztypes.tid)
         funcReturnNode: (IdMapV ztypes.tid v: zast.nodeid)
         defVariableId: (IdMapV zast.nodeid v: ztypes.vid)
-        monoDefVariableId: (MapVV monostamp v: ztypes.vid)
         nodeConst: (IdMapV zast.nodeid v: ztypes.cval)
         memberConst: (MapVV constslot v: ztypes.cval)
         listSlotTid: ztypes.tid

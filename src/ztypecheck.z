@@ -224,27 +224,22 @@ monoSubstTid: function {st: zenv.ZSymbolTable.view tid: ztypes.tid} out ztypes.t
     return ((st.walk.monoParamSubst.get key: tid).or d: tid)
 }
 
-# stampParamSuppressed -- a TEMPLATE walk drops a GENERIC_PARAM answer: an
-# instance clones only the template's body and shares its signature nodes, so a
-# template-time param stamp on one would reach the instance's emission.
+# stampParamSuppressed -- a TEMPLATE walk keeps a GENERIC_PARAM answer to
+# itself (templateStamps): the shared stamp table names no parameter.
 stampParamSuppressed: function {st: zenv.ZSymbolTable.view tid: ztypes.tid} out bool is {
     if st.mode.suppressParamStamps.not then return false
     return (st.reg.typetypeOf typeId: tid) == ztypes.ztypetype.genericParam
 }
 
-# stampGate -- a body-walk node stamp, routed: an instance walk writes the
-# mono table under the substituted tid, a template walk keeps a param answer to
+# stampGate -- a body-walk node stamp, routed: an instance's walk writes the
+# substituted type on its own row, a template walk keeps a parameter answer to
 # itself, and every other walk writes the plain node type.
 stampGate: function {st: zenv.ZSymbolTable nid: zast.nodeid tid: ztypes.tid} is {
     if st.typing.curMonoStamp.isZero.not then {
-        # a node of the instance's own copy of the body is the instance's alone
-        wm: st.typing.walkMonoOf :nid
-        if wm.isZero then {
-            ztyping.nodeTypeSet tbl: st.typing.nodeType :nid tid: (monoSubstTid :st :tid)
-            return
+        if (st.typing.rowIsForeign :nid) then {
+            panic msg: "ztypecheck: an instance's walk typed a row that is not its own"
         }
-        mk: ztyping.monostamp mono: wm node: nid
-        st.typing.monoNodeType.set key: mk value: (monoSubstTid :st :tid)
+        ztyping.nodeTypeSet tbl: st.typing.nodeType :nid tid: (monoSubstTid :st :tid)
         return
     }
     if (stampParamSuppressed :st :tid) then {
@@ -545,7 +540,7 @@ readSingletonValue: function {st: zenv.ZSymbolTable nid: zast.nodeid tid: ztypes
         if ws.isZero.not then sg = ws
     }
     v: st.typing.singletonValueOf tid: sg
-    if v.kind.none.not then st.typing.setNodeConstIn mono: st.typing.curMonoStamp :nid value: v
+    if v.kind.none.not then st.typing.setNodeConst :nid value: v
     stampGate :st :nid tid: sg
     st.typing.numericParamRead.set key: nid value: row.param
     return true
@@ -32241,8 +32236,7 @@ checkSingletonCreate: function {
     }
     stampGate :st nid: call.nid tid: tdId
     (
-        st.typing.setNodeConstIn
-        mono: st.typing.curMonoStamp
+        st.typing.setNodeConst
         nid: call.nid
         value: (st.typing.singletonValueOf tid: tdId)
     )
@@ -34084,7 +34078,7 @@ memberIsList: function {
 # listRowOfNode -- the list row the node at `nid` folded to in the walk in
 # progress: a list reached by a compile-time path. 0 for any other node.
 listRowOfNode: function {st: zenv.ZSymbolTable.view nid: zast.nodeid} out u32 is {
-    v: st.typing.nodeConstIn mono: st.typing.curMonoStamp :nid
+    v: st.typing.nodeConstAt :nid
     if v.kind.aggKind.not then return 0
     if (st.typing.constAggs.get i: v.aggId.u64).kind.staticList.not then return 0
     return v.aggId
@@ -34760,7 +34754,7 @@ checkInstanceConstant: function {
         vt = vto.or d: ztypes.tid.zero
     }
     if vt.isZero then return miss
-    st.typing.setNodeConstIn mono: st.typing.curMonoStamp nid: dp.nid value: v
+    st.typing.setNodeConst nid: dp.nid value: v
     stampGate :st nid: dp.nid tid: vt
     stampRefDecl :st nid: dp.nid declId: cd
     return (callleg handled: true tid: vt)
@@ -34845,8 +34839,7 @@ checkNumericParamMember: function {
     if origin.isZero.not when (st.reg.isPartialOf tid: bt).not then {
         v: monoNumericArg :st mono: bt nameId: cnId
         if v.kind.none.not then (
-            st.typing.setNodeConstIn
-            mono: st.typing.curMonoStamp
+            st.typing.setNodeConst
             nid: dp.nid
             value: v
         )
@@ -35537,8 +35530,7 @@ checkResolvedMember: function {
         # template's value may read a numeric generic parameter
         acv: constValueOfMemberTidId :ast :st unitTid: bt nameId: cnId
         if acv.kind.none.not then (
-            st.typing.setNodeConstIn
-            mono: st.typing.curMonoStamp
+            st.typing.setNodeConst
             nid: dp.nid
             value: acv
         )
@@ -36284,7 +36276,7 @@ checkUntypedConstantCast: function {
     dp: dpref
 } out callleg is {
     notCast: callleg handled: false tid: ztypes.tid.zero
-    v: st.typing.nodeConstIn mono: st.typing.curMonoStamp nid: dp.parent
+    v: st.typing.nodeConstAt nid: dp.parent
     if (v.kind.ivalKind or v.kind.fvalKind).not or v.numTid.isZero.not then return notCast
     childId: atomNameId :ast n: (ast.nodes.get i: dp.child)
     if (isScalarNameId id: childId).not then return notCast
@@ -36316,7 +36308,7 @@ checkUntypedConstantCast: function {
 # carry the target type.
 checkUntypedTextCast: function {st: zenv.ZSymbolTable ast: Ast dp: dpref} out callleg is {
     notCast: callleg handled: false tid: ztypes.tid.zero
-    v: st.typing.nodeConstIn mono: st.typing.curMonoStamp nid: dp.parent
+    v: st.typing.nodeConstAt nid: dp.parent
     if v.kind.svalKind.not or v.numTid.isZero.not then return notCast
     target: textLiteralCastTarget :ast :st nameId: (atomNameId :ast n: (ast.nodes.get i: dp.child))
     if target.isZero then return notCast
@@ -36676,8 +36668,7 @@ checkSingletonCreateRead: function {
     if (st.typing.numericParamRead.has key: dp.parent).not then return miss
     stampGate :st nid: dp.nid tid: bt
     if (st.typing.isSingletonType tid: bt) then (
-        st.typing.setNodeConstIn
-        mono: st.typing.curMonoStamp
+        st.typing.setNodeConst
         nid: dp.nid
         value: (st.typing.singletonValueOf tid: bt)
     )
@@ -38057,11 +38048,10 @@ checkWideConstants: function {ast: Ast.view st: zenv.ZSymbolTable} is {
         ms: st.walk.wideConsts.get :i
         i = i + 1
         nid: ms.node
-        mono: ms.mono
         taken: (st.walk.wideConstTaken.get key: ms).or d: 0
-        t: st.typing.nodeTypeIn :mono :nid
+        t: ztyping.nodeTypeAt tbl: st.typing.nodeType :nid
         if taken == 0 when (st.reg.typetypeOf typeId: t) != ztypes.ztypetype.genericParam then {
-            v: st.typing.nodeConstIn :mono :nid
+            v: st.typing.nodeConstAt :nid
             tk: wideConstKind :st :t
             sp: wideConstSpelling :ast :nid
             m: constFitsKindMessage :st :v k: tk.kind spelling: sp.stringView
@@ -38100,7 +38090,7 @@ markAggsReached: function {ast: Ast.view st: zenv.ZSymbolTable} is {
             markAggReached
             :ast
             :st
-            id: (st.typing.nodeConstIn mono: ms.mono nid: ms.node).aggId
+            id: (st.typing.nodeConstAt nid: ms.node).aggId
             at: ms.node
         )
     }
@@ -38207,11 +38197,10 @@ checkClosedRangeSpans: function {ast: Ast.view st: zenv.ZSymbolTable} is {
         ms: st.walk.closedRanges.get :i
         i = i + 1
         nid: ms.node
-        mono: ms.mono
         ends: closedRangeEnds :ast :nid
         if ends.from.isZero.not when ends.to.isZero.not then {
-            lo: st.typing.nodeConstIn :mono nid: ends.from
-            hi: st.typing.nodeConstIn :mono nid: ends.to
+            lo: st.typing.nodeConstAt nid: ends.from
+            hi: st.typing.nodeConstAt nid: ends.to
             if lo.kind.ivalKind when hi.kind.ivalKind then {
                 reportClosedRangeSpan :st :ast :nid :lo :hi down: ends.down
             }
@@ -38602,8 +38591,7 @@ checkNarrowedConstRead: function {
     pv: constArmPayload :st :v :arm
     st.typing.narrowedConstReads.set key: node.nid value: pv
     if pv.kind.none.not then (
-        st.typing.setNodeConstIn
-        mono: st.typing.curMonoStamp
+        st.typing.setNodeConst
         nid: node.nid
         value: pv
     )
@@ -38667,13 +38655,11 @@ recordConstMatchFold: function {
         if cl.name == held then stmt = cl.statement
     }
     if stmt.isZero then return
+    foreign: st.typing.rowIsForeign nid: casenode.nid
     (
-        ztyping.setFirstOrPerMono
-        perMono: st.typing.monoFoldedBranch
+        ztyping.setAgreed
         shared: st.typing.foldedBranch
-        spans: st.typing.instanceRows
-        open: st.typing.instanceRowsOpen
-        mono: st.typing.curMonoStamp
+        :foreign
         nid: casenode.nid
         value: (ztyping.foldedbranch known: true :stmt)
     )
@@ -44212,7 +44198,7 @@ armValueOf: function {st: zenv.ZSymbolTable ast: Ast blockId: zast.nodeid} out a
     vt: walkTypeOf :st nid: lineId
     if (isControlValue :ast nid: valId) then vt = valueArmsTid :st :ast nid: valId first: vt
     if vt.isZero or ((st.reg.typetypeOf typeId: vt) == ztypes.ztypetype.neverType) then return none
-    cf: st.typing.nodeConstIn mono: st.typing.curMonoStamp nid: valId
+    cf: st.typing.nodeConstAt nid: valId
     num: cf.kind.ivalKind or cf.kind.fvalKind
     # a nested `if` or `match` of literal arms yields the literal type itself
     untypedConst: num and cf.numTid.isZero
@@ -49599,7 +49585,7 @@ recordHelperScalarTarget: function {
     valueNid: zast.nodeid
 } is {
     if st.typing.curMonoStamp.isZero.not then return
-    cf: st.typing.nodeConstIn mono: st.typing.curMonoStamp nid: valueNid
+    cf: st.typing.nodeConstAt nid: valueNid
     if cf.numTid.isZero.not then return
     if cf.kind.ivalKind.not and cf.kind.fvalKind.not then return
     # the destination's kind, through any typedef, by declaration
@@ -49624,7 +49610,7 @@ checkUntypedConstFits: function {
     lineno: u32
     colno: u32
 } out bool is {
-    cf: st.typing.nodeConstIn mono: st.typing.curMonoStamp nid: valueNid
+    cf: st.typing.nodeConstAt nid: valueNid
     num: cf.kind.ivalKind or cf.kind.fvalKind
     if num.not or cf.numTid.isZero.not then return false
     # A VALUE OUTSIDE I64 TAKES THE DESTINATION'S TYPE and is settled after the
@@ -56874,16 +56860,11 @@ genericParamSubjectTid: function {
         # direct write, NOT stampGate: this genericParam stamp IS
         # the dissection marker the emitter dispatches on -- it
         # must survive the template walk's param-stamp suppression
-        # AND override any substituted per-mono stamp the general
-        # subject walk wrote (the canonical param tid is in
-        # monoParamSubst now, so stampGate substitutes it)
+        # AND replace the substituted stamp the general subject walk
+        # wrote (the canonical param tid is in monoParamSubst now, so
+        # stampGate substitutes it)
         setgs: subjT
         ztyping.nodeTypeSet tbl: st.typing.nodeType nid: gsnid tid: setgs
-        gwm: st.typing.walkMonoOf nid: gsnid
-        if gwm.isZero.not then {
-            gmk: ztyping.monostamp mono: gwm node: gsnid
-            st.typing.monoNodeType.set key: gmk value: setgs
-        }
     }
     return subjT
 }
@@ -57457,7 +57438,7 @@ checkCaseElse: function {
     elseMarker: st.pushBlock node: casenode.elseclause
     # a lock the else releases is released on its path alone, unless the
     # match folds to it
-    efb: st.typing.foldedBranchIn mono: st.typing.curMonoStamp nid: casenode.nid
+    efb: st.typing.foldedBranchAt nid: casenode.nid
     if efb.known.not or (eagerAt :st declId: unitDecl) then (
         st.markPath
         marker: elseMarker
@@ -57493,7 +57474,7 @@ checkCaseElse: function {
 # caseElseRuledOut -- the fold selected one of this match's arms, so its else
 # never runs.
 caseElseRuledOut: function {st: zenv.ZSymbolTable.view casenode: caseref} out bool is {
-    fb: st.typing.foldedBranchIn mono: st.typing.curMonoStamp nid: casenode.nid
+    fb: st.typing.foldedBranchAt nid: casenode.nid
     return fb.known and (fb.stmt != casenode.elseclause)
 }
 
@@ -57542,7 +57523,7 @@ walkCaseClauses: function {
     armsPublic: caseArmsArePublic :st :ast subject: casenode.subject :subjT
     # a match folded to one arm walks that arm alone, as a folded `if` does
     # (checkIfClauses); `--eager` walks every arm
-    fb: st.typing.foldedBranchIn mono: st.typing.curMonoStamp nid: casenode.nid
+    fb: st.typing.foldedBranchAt nid: casenode.nid
     skipDead: fb.known and (eagerAt :st declId: unitDecl).not
     kC: u64
     for kC < casenode.nclauses loop {
@@ -58042,7 +58023,7 @@ checkDissectedArm: function {
 markInstanceDissection: function {st: zenv.ZSymbolTable ast: Ast.view casenode: caseref} is {
     sn: nodeId n: (ast.nodes.get i: casenode.subject)
     if sn.isZero then return
-    if (st.typing.walkMonoOf nid: sn).isZero.not then return
+    if (st.typing.rowIsForeign nid: sn) then return
     dsn: subjectAtomName :ast n: (ast.nodes.get i: casenode.subject)
     if dsn.length == 0 then return
     orig: st.reg.genericOriginOf tid: st.typing.curMonoStamp
@@ -58115,17 +58096,12 @@ checkCase: function {
     if subjT.isZero.not when (st.reg.isTypeParamOf tid: subjT) then {
         # a genericParam subject IS a compile-time dissection: write the
         # marker stamp directly (stampGate suppresses param stamps in
-        # template walks, and the per-mono slot must carry the param,
+        # template walks, and an instance's row must carry the param,
         # not its substitution, for the emitter's dispatch gate)
         gmn: nodeId n: (ast.nodes.get i: casenode.subject)
         if gmn.isZero.not then {
             gmv: subjT
             ztyping.nodeTypeSet tbl: st.typing.nodeType nid: gmn tid: gmv
-            walkMono: st.typing.walkMonoOf nid: gmn
-            if walkMono.isZero.not then {
-                monoKey: ztyping.monostamp mono: walkMono node: gmn
-                st.typing.monoNodeType.set key: monoKey value: gmv
-            }
         }
     }
     isSum: false
@@ -59109,14 +59085,14 @@ staticListRefAt: function {ast: Ast.view nid: zast.nodeid} out staticlistref is 
     return (staticlistref nid: zn nelems: 0 outType: zn lineno: 0 colno: 0)
 }
 
-# walkTypeOf -- the type the walk in progress stamped on body node `nid`. An
-# instance walk stamps only its own table, and a template walk keeps its
-# generic-parameter answers to itself (stampGate), so a read of a node the walk
-# has just checked asks there first; otherwise, the shared stamp.
+# walkTypeOf -- the type the walk in progress stamped on body node `nid`. A
+# template walk keeps its generic-parameter answers to itself (stampGate), so a
+# read of a node that walk has just checked asks there first; otherwise, the
+# shared stamp.
 walkTypeOf: function {st: zenv.ZSymbolTable.view nid: zast.nodeid} out ztypes.tid is {
-    # routed as stampGate writes: an instance walk's own table first
+    # routed as stampGate writes: an instance's walk reads the plain stamp
     if st.typing.curMonoStamp.isZero.not then {
-        return (st.typing.nodeTypeIn mono: (st.typing.walkMonoOf :nid) :nid)
+        return (ztyping.nodeTypeAt tbl: st.typing.nodeType :nid)
     }
     if st.mode.suppressParamStamps then {
         ts: st.templateStamps.get key: nid
@@ -59306,7 +59282,7 @@ untypedNameReadTid: function {st: zenv.ZSymbolTable ast: Ast nid: zast.nodeid} o
         k: (st.typing.decls.get i: rd).kind
         if k.methodDecl or k.funcDecl then return ztypes.tid.zero
     }
-    v: st.typing.nodeConstIn mono: st.typing.curMonoStamp :nid
+    v: st.typing.nodeConstAt :nid
     if v.numTid.isZero.not then return ztypes.tid.zero
     if v.kind.ivalKind then return st.reg.literalIntTid
     if v.kind.fvalKind then return st.reg.literalFloatTid
@@ -59318,8 +59294,7 @@ untypedNameReadTid: function {st: zenv.ZSymbolTable ast: Ast nid: zast.nodeid} o
 # intliteral, a string of the receiver's type), so `"abc".toUpperAscii` is a
 # textliteral and no String. 0 when the node is no such fold.
 textFoldType: function {st: zenv.ZSymbolTable ast: Ast nid: zast.nodeid} out ztypes.tid is {
-    mono: st.typing.curMonoStamp
-    cv: st.typing.nodeConstIn :mono :nid
+    cv: st.typing.nodeConstAt :nid
     if cv.kind.none then return ztypes.tid.zero
     path: nid
     {
@@ -59338,7 +59313,7 @@ textFoldType: function {st: zenv.ZSymbolTable ast: Ast nid: zast.nodeid} out zty
         } else return ztypes.tid.zero
     }
     if (textFoldOp :nameId) == textfold.none then return ztypes.tid.zero
-    rv: st.typing.nodeConstIn :mono nid: recvId
+    rv: st.typing.nodeConstAt nid: recvId
     if rv.kind.svalKind.not or rv.numTid.isZero.not then return ztypes.tid.zero
     if cv.kind.ivalKind when cv.numTid.isZero then return st.reg.literalIntTid
     if cv.kind.svalKind when cv.numTid.isZero then return st.reg.literalTextTid
@@ -59370,7 +59345,7 @@ markFoldedFnFieldCall: function {st: zenv.ZSymbolTable ast: Ast nid: zast.nodeid
     }
     if field.isZero then return
     mono: st.typing.curMonoStamp
-    bv: st.typing.nodeConstIn :mono nid: baseId
+    bv: st.typing.nodeConstAt nid: baseId
     if bv.kind.aggKind.not then return
     if (st.typing.constAggs.get i: bv.aggId.u64).kind.staticData.not then return
     if (constAggField :st :ast v: bv nameId: field).kind.fnKind.not then return
@@ -59385,7 +59360,7 @@ markStaticListIndexRead: function {st: zenv.ZSymbolTable ast: Ast.view nid: zast
     baseId: staticListIndexedAt :st :ast :nid
     if baseId.isZero then return
     mono: st.typing.curMonoStamp
-    if (st.typing.nodeConstIn :mono :nid).kind.none then return
+    if (st.typing.nodeConstAt :nid).kind.none then return
     st.walk.wideConstTaken.set key: (ztyping.monostamp :mono node: baseId) value: 1
 }
 
@@ -66115,29 +66090,25 @@ foldLoopEnd: function {
 }
 
 # stampCondFoldsTrue -- keep whether a loop's condition, read as `v` (a foldTruth
-# answer), folds true, the way setNodeConstIn keeps a value.
+# answer), folds true, the way setNodeConst keeps a value.
 stampCondFoldsTrue: function {st: zenv.ZSymbolTable nid: zast.nodeid v: u32} is {
+    foreign: st.typing.rowIsForeign :nid
     (
-        ztyping.setFirstOrPerMono
-        perMono: st.typing.monoCondFoldsTrue
+        ztyping.setAgreed
         shared: st.typing.condFoldsTrue
-        spans: st.typing.instanceRows
-        open: st.typing.instanceRowsOpen
-        mono: st.typing.curMonoStamp
+        :foreign
         :nid
         value: v == 1
     )
 }
 
-# stampFoldedLoop -- keep a loop's fold the way setNodeConstIn keeps a value.
+# stampFoldedLoop -- keep a loop's fold the way setNodeConst keeps a value.
 stampFoldedLoop: function {st: zenv.ZSymbolTable nid: zast.nodeid fold: ztyping.foldedloop} is {
+    foreign: st.typing.rowIsForeign :nid
     (
-        ztyping.setFirstOrPerMono
-        perMono: st.typing.monoFoldedLoop
+        ztyping.setAgreed
         shared: st.typing.foldedLoop
-        spans: st.typing.instanceRows
-        open: st.typing.instanceRowsOpen
-        mono: st.typing.curMonoStamp
+        :foreign
         :nid
         value: fold
     )
@@ -66220,14 +66191,12 @@ foldIfBranch: function {
     }
     if decided.not then stmt = elseId
     fb: ztyping.foldedbranch :known :stmt
-    # the branch is kept the way setNodeConstIn keeps a value
+    # the branch is kept the way setNodeConst keeps a value
+    foreign: st.typing.rowIsForeign :nid
     (
-        ztyping.setFirstOrPerMono
-        perMono: st.typing.monoFoldedBranch
+        ztyping.setAgreed
         shared: st.typing.foldedBranch
-        spans: st.typing.instanceRows
-        open: st.typing.instanceRowsOpen
-        mono: st.typing.curMonoStamp
+        :foreign
         :nid
         value: fb
     )
@@ -66435,13 +66404,11 @@ foldCaseArm: function {
     }
     if known.not then return
     if decided.not then stmt = n.elseclause
+    foreign: st.typing.rowIsForeign nid: n.nid
     (
-        ztyping.setFirstOrPerMono
-        perMono: st.typing.monoFoldedBranch
+        ztyping.setAgreed
         shared: st.typing.foldedBranch
-        spans: st.typing.instanceRows
-        open: st.typing.instanceRowsOpen
-        mono: st.typing.curMonoStamp
+        :foreign
         nid: n.nid
         value: (ztyping.foldedbranch known: true :stmt)
     )
@@ -69862,7 +69829,7 @@ numericParamThroughName: function {
     childId: zast.nodeid
 } out ztypes.cval is {
     if (st.typing.numericParamRead.has key: nid) then {
-        cv: st.typing.nodeConstIn mono: st.typing.curMonoStamp :nid
+        cv: st.typing.nodeConstAt :nid
         if cv.kind.none.not then return cv
     }
     # asked before the body's check reaches the path (a folding `if`): a type
@@ -69981,14 +69948,14 @@ monoNumericArg: function {
 # or a literal read at a use site, whose methods (`W.length`, `"abc".substring
 # from: 1 to: 2`) fold too.
 foldedToString: function {st: zenv.ZSymbolTable.view nid: zast.nodeid} out bool is {
-    g: st.typing.nodeConstIn mono: st.typing.curMonoStamp :nid
+    g: st.typing.nodeConstAt :nid
     return g.kind.svalKind
 }
 
 # foldedToNumber -- the node already carries a folded number: a conversion of
 # it (`N.u8`, `L.u32`, `TENTH.f32`) folds too.
 foldedToNumber: function {st: zenv.ZSymbolTable.view nid: zast.nodeid} out bool is {
-    v: st.typing.nodeConstIn mono: st.typing.curMonoStamp :nid
+    v: st.typing.nodeConstAt :nid
     return v.kind.ivalKind or v.kind.fvalKind
 }
 
@@ -70007,7 +69974,7 @@ callOnFoldedValue: function {
     }
     if recvId.isZero then return false
     if (foldedToString :st nid: recvId) then return true
-    rv: st.typing.nodeConstIn mono: st.typing.curMonoStamp nid: recvId
+    rv: st.typing.nodeConstAt nid: recvId
     return (optionPayloadTid :st :ast v: rv).isZero.not
 }
 
@@ -70059,7 +70026,7 @@ stampConstAt: function {
         return
     }
     mono: st.typing.curMonoStamp
-    st.typing.setNodeConstIn :mono :nid value: cv
+    st.typing.setNodeConst :nid value: cv
     markOperandsTaken :st :ast :mono :nid
     if cv.kind.aggKind then {
         st.walk.aggUses.append (ztyping.monostamp :mono node: nid)
@@ -70152,9 +70119,8 @@ refuseZeroDivisor: function {st: zenv.ZSymbolTable ast: Ast.view nid: zast.nodei
     if br.nid.isZero then return
     op: arithOpOf opnId: (atomNameId :ast n: (ast.nodes.get i: br.operator))
     if (op.div or op.rem).not then return
-    mono: st.typing.curMonoStamp
-    if (st.typing.nodeConstIn :mono nid: br.lhs).kind.none.not then return
-    rv: st.typing.nodeConstIn :mono nid: br.rhs
+    if (st.typing.nodeConstAt nid: br.lhs).kind.none.not then return
+    rv: st.typing.nodeConstAt nid: br.rhs
     if rv.kind.ivalKind.not then return
     if (st.typing.constIsZero v: rv).not then return
     nk: numKindOfTid typing: st.typing tid: (walkTypeOf :st nid: br.lhs)
@@ -70179,8 +70145,7 @@ integerDivision: function {
 } out bool is {
     br: binRefAt :ast nid: f.nodeid
     if br.nid.isZero then return true
-    mono: st.typing.curMonoStamp
-    return (st.typing.nodeConstIn :mono nid: br.lhs).kind.ivalKind
+    return (st.typing.nodeConstAt nid: br.lhs).kind.ivalKind
 }
 
 # useSiteAsks -- whether a use site's row is worth asking the evaluator about.
@@ -70219,10 +70184,9 @@ useSiteAsks: function {
 } out bool is {
     if plan.arm == 5 then {
         br: binRefAt :ast :nid
-        mono: st.typing.curMonoStamp
-        lv: st.typing.nodeConstIn :mono nid: br.lhs
+        lv: st.typing.nodeConstAt nid: br.lhs
         if lv.kind.none then return false
-        rv: st.typing.nodeConstIn :mono nid: br.rhs
+        rv: st.typing.nodeConstAt nid: br.rhs
         return rv.kind.none.not
     }
     if plan.arm == 6 then {
@@ -70237,7 +70201,7 @@ useSiteAsks: function {
     # `first.key` reads a field of a folded data value, `o.none` an arm
     # predicate of a folded option
     {
-        pv: st.typing.nodeConstIn mono: st.typing.curMonoStamp nid: plan.parentId
+        pv: st.typing.nodeConstAt nid: plan.parentId
         if pv.kind.aggKind then return true
         if (optionPayloadTid :st :ast v: pv).isZero.not then return true
     }

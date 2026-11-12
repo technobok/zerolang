@@ -41,34 +41,6 @@ boolNum: function {b: bool} out String is {
     }
 }
 
-# loopEntryText -- a loop fold's answer for its preconditions, as a dump column.
-loopEntryText: function {e: ztyping.loopentry} out StringView is {
-    match (
-        e
-    ) case runtime then {
-        return "runtime"
-    } case never then {
-        return "never"
-    } case always then {
-        return "always"
-    }
-}
-
-# loopEndText -- a loop fold's answer for its postconditions, as a dump column.
-loopEndText: function {e: ztyping.loopend} out StringView is {
-    match (
-        e
-    ) case unwritten then {
-        return "unwritten"
-    } case runtime then {
-        return "runtime"
-    } case once then {
-        return "once"
-    } case always then {
-        return "always"
-    }
-}
-
 # constValueText -- a compile-time value as the dump's const_value column:
 # kind-tagged, payload by id rather than by text, so no user string ever
 # reaches the SQL and nothing needs quoting.
@@ -512,30 +484,10 @@ schemaSql: function {} out String is {
     return acc
 }
 
-# monoSchemaSql -- DDL for the tables of what a generic instance's walk
-# records, and an instance's numeric parameters as types.
+# monoSchemaSql -- DDL for the tables of a generic instance's numeric
+# parameters: where one is read, and each one as a type.
 monoSchemaSql: function {} out String is {
     acc: String
-    (
-        acc.append
-        s: "CREATE TABLE IF NOT EXISTS mono_node_type (mono_id INTEGER NOT NULL, node_id INTEGER NOT NULL, type_id INTEGER NOT NULL, PRIMARY KEY (mono_id, node_id));\n"
-    )
-    (
-        acc.append
-        s: "CREATE TABLE IF NOT EXISTS mono_node_const (mono_id INTEGER NOT NULL, node_id INTEGER NOT NULL, value TEXT NOT NULL, PRIMARY KEY (mono_id, node_id));\n"
-    )
-    (
-        acc.append
-        s: "CREATE TABLE IF NOT EXISTS mono_folded_branch (mono_id INTEGER NOT NULL, node_id INTEGER NOT NULL, known INTEGER NOT NULL, stmt_id INTEGER NOT NULL, PRIMARY KEY (mono_id, node_id));\n"
-    )
-    (
-        acc.append
-        s: "CREATE TABLE IF NOT EXISTS mono_folded_loop (mono_id INTEGER NOT NULL, node_id INTEGER NOT NULL, entry TEXT NOT NULL, end_test TEXT NOT NULL, never_exits INTEGER NOT NULL, PRIMARY KEY (mono_id, node_id));\n"
-    )
-    (
-        acc.append
-        s: "CREATE TABLE IF NOT EXISTS mono_cond_folds_true (mono_id INTEGER NOT NULL, node_id INTEGER NOT NULL, folds_true INTEGER NOT NULL, PRIMARY KEY (mono_id, node_id));\n"
-    )
     (
         acc.append
         s: "CREATE TABLE IF NOT EXISTS numeric_param_read (node_id INTEGER PRIMARY KEY, name_id INTEGER NOT NULL);\n"
@@ -1090,49 +1042,9 @@ ZDumper: class {
             rowCg: "INSERT INTO call_generic_binding VALUES (\{cg.key.call}, \{cg.key.param}, \{cg.value});\n"
             this.acc.append s: rowCg
         }
-        this.appendMonoStamps :typing
         for each np: typing.numericParamRead.iterateItems loop {
             rowNp: "INSERT INTO numeric_param_read VALUES (\{np.key}, \{np.value});\n"
             this.acc.append s: rowNp
-        }
-    }
-
-    # appendMonoStamps -- the answers an instance walk keeps per instance: a
-    # template node stamps once per instantiation, so the monostamp's two ids
-    # are the two columns that tell those answers apart.
-    appendMonoStamps: function {:this typing: ztyping.ZTyping} is {
-        for each mn: typing.monoNodeType.iterateItems loop {
-            rowMn: "INSERT INTO mono_node_type VALUES (\{mn.key.mono}, \{mn.key.node}, \{mn.value});\n"
-            this.acc.append s: rowMn
-        }
-        # an instance walk binds its own variables for the template's atoms
-        # a numeric generic parameter's read folds to each mono's own argument,
-        # so a value or branch that differs from the shared one is kept per mono
-        for each mc: typing.monoNodeConst.iterateItems loop {
-            rowMc: "INSERT INTO mono_node_const VALUES (\{mc.key.mono}, \{mc.key.node}, '\{(constValueText
-                v: mc.value
-            )}');\n"
-            this.acc.append s: rowMc
-        }
-        for each mb: typing.monoFoldedBranch.iterateItems loop {
-            kn: 0
-            if mb.value.known then kn = 1
-            rowMb: "INSERT INTO mono_folded_branch VALUES (\{mb.key.mono}, \{mb.key.node}, \{kn}, \{mb.value.stmt.u64});\n"
-            this.acc.append s: rowMb
-        }
-        for each ml: typing.monoFoldedLoop.iterateItems loop {
-            ne: 0
-            if ml.value.neverExits then ne = 1
-            en: loopEntryText e: ml.value.entry
-            et: loopEndText e: ml.value.end
-            rowMl: "INSERT INTO mono_folded_loop VALUES (\{ml.key.mono}, \{ml.key.node}, '\{en}', '\{et}', \{ne});\n"
-            this.acc.append s: rowMl
-        }
-        for each mt: typing.monoCondFoldsTrue.iterateItems loop {
-            ft: 0
-            if mt.value then ft = 1
-            rowMt: "INSERT INTO mono_cond_folds_true VALUES (\{mt.key.mono}, \{mt.key.node}, \{ft});\n"
-            this.acc.append s: rowMt
         }
     }
 
