@@ -18,6 +18,8 @@
 #   lone     every run case, with one unrelated error written at the top of
 #            `main`, reports that error and no other
 #   dump     dump_cases.txt -> `zc dump --canon` matches dump_golden/<n>.canon
+#   docpage  docs/*.html is what the renderer writes from its .pdoc, and a
+#            link between pages names a page and an anchor that exist
 #   lexer / parser / program goldens for every example
 #   vfs      zvfs script dispatch
 #   smoke    per-unit no-arg binaries against <unit>_z/smoke.expected
@@ -1306,8 +1308,9 @@ appendPrograms: function {progs: List String dir: StringView} is {
 # that parses -- every one but an expect= of a syntax error (E00xx) -- must also
 # be laid out as `zl fmt` lays it. The skipped and the unformatted are counted
 # per page and ratcheted, exactly, against tests/fixtures/doccode_baseline.txt
-# as the arch kind's findings are. It never runs the C compiler, so it runs
-# once and not again under --cc-forward (test-clang, test-tcc).
+# as the arch kind's findings are. The C each emit writes is compiled, and not
+# linked, by the runner's C compiler. The kind runs once, and not again under
+# --cc-forward (test-clang, test-tcc): the emit is nearly all of its time.
 runDoccodeCases: function {r: Runner} is {
     if r.ccFwdOn then return
     # owned: a view into r would lock r for the whole kind
@@ -1666,6 +1669,136 @@ listUnformatted: function {
         }
         bi = bi + 1
     }
+}
+
+# runDocPageCases -- the DOCPAGE kind, over the rendered pages docs/*.html. A
+# link from one page to another names a page that exists and an anchor that
+# page defines; the renderer checks a link inside a page, and not these. And
+# each page is what the renderer writes from its .pdoc now, so a source edited
+# without `make docs` fails. The renderer is a program beside the repository
+# (`<root>/../picodoc-c/picodoc`); where it is absent that half is skipped.
+runDocPageCases: function {r: Runner} is {
+    if r.ccFwdOn then return
+    rootS: r.root.copy
+    root: rootS.stringView
+    docsDir: "\{root}/docs"
+    names: fixtureNames dir: docsDir.stringView suffix: ".html"
+    names.sort
+    texts: List String
+    for each n: names loop {
+        htmlPath: "\{docsDir}/\{n}.html"
+        texts.append (slurp path: htmlPath.stringView)
+    }
+    pi: u64
+    for pi < names.length loop {
+        broken: docPageBrokenLinks :names :texts at: pi dir: docsDir.stringView
+        if broken == 0 then r.passN = r.passN + 1
+        r.fails = r.fails + broken
+        pi = pi + 1
+    }
+    picodoc: "\{root}/../picodoc-c/picodoc"
+    if (io.exists path: picodoc).not then {
+        r.skip = r.skip + 1
+        return
+    }
+    outDir: "\{r.tmp.stringView}/docpage"
+    io.mkdirp path: outDir
+    pi = 0
+    for pi < names.length loop {
+        n: names.get i: pi
+        fresh: "\{outDir}/\{n}.html"
+        argv: List String
+        argv.append picodoc.copy
+        argv.append "\{docsDir}/\{n}.pdoc"
+        argv.append "-o".string
+        argv.append fresh.copy
+        rc: os.spawn :argv cwd: "" outPath: os.nullDevice.stringView errPath: "" timeoutSecs: 0
+        current: (rc == 0) and ((slurp path: fresh.stringView) == (texts.get i: pi))
+        if current then {
+            r.passN = r.passN + 1
+        } else {
+            print "FAIL(docpage) docs/\{n}.html is not what the renderer writes from docs/\{n}.pdoc -- run `make docs` and commit it"
+            r.fails = r.fails + 1
+        }
+        pi = pi + 1
+    }
+}
+
+# docPageBrokenLinks -- how many links of page `at` point at nothing, each
+# reported: a page that is not in `dir`, or an anchor its page does not define.
+# A link to another site is not followed.
+docPageBrokenLinks: function {
+    names: (List String).view
+    texts: (List String).view
+    at: u64
+    dir: StringView
+} out u64 is {
+    broken: u64
+    text: (texts.get i: at).stringView
+    pos: u64
+    for pos < text.length loop {
+        rest: text.substring from: pos to: text.length
+        found: rest.indexOf "href=\""
+        if found.none then break
+        start: pos + found + 6
+        tail: text.substring from: start to: text.length
+        close: (tail.indexOf "\"").or d: tail.length
+        link: tail.substring from: 0 to: close
+        pos = start + close
+        if (link.contains "://") or (link.startsWith "mailto:") then continue
+        why: docLinkProblem :names :texts :at :dir :link
+        if why.length > 0 then {
+            print "FAIL(docpage) docs/\{names.get i: at}.html: the link to \{link} \{why}"
+            broken = broken + 1
+        }
+    }
+    return broken
+}
+
+# docLinkProblem -- what is wrong with `link`, written on page `at`: "" when
+# its page exists and defines its anchor.
+docLinkProblem: function {
+    names: (List String).view
+    texts: (List String).view
+    at: u64
+    dir: StringView
+    link: StringView
+} out String is {
+    hashAt: link.length
+    hash: link.indexOf "#"
+    if hash.some then hashAt = hash
+    pageFrom: u64
+    if link.startsWith "./" when hashAt >= 2 then pageFrom = 2
+    page: (link.substring from: pageFrom to: hashAt).string
+    target: at
+    if page.length > 0 then {
+        stem: page.stringView.stripSuffix s: ".html"
+        if stem.none then return (docFileProblem :dir file: page.stringView)
+        slot: docPageSlot :names name: stem
+        if slot.none then return "names a page that does not exist".string
+        target = slot
+    }
+    if hashAt >= link.length then return "".string
+    anchor: (link.substring from: hashAt + 1 to: link.length).string
+    if (texts.get i: target).stringView.contains " id=\"\{anchor}\"" then return "".string
+    return "names an anchor that page does not define".string
+}
+
+# docFileProblem -- what is wrong with a link to `file`, which is no page: ""
+# when it is a file of `dir`.
+docFileProblem: function {dir: StringView file: StringView} out String is {
+    if (io.exists path: "\{dir}/\{file}") then return "".string
+    return "names a file that does not exist".string
+}
+
+# docPageSlot -- where the page `name` is in `names`, none when it is no page.
+docPageSlot: function {names: (List String).view name: StringView} out optionval u64 is {
+    i: u64
+    for i < names.length loop {
+        if (names.get :i).stringView == name then return (optionval.some i)
+        i = i + 1
+    }
+    return (optionval.none u64)
 }
 
 # docPages -- the pages the doccode kind reads: docs/*.pdoc in name order, then
@@ -4239,6 +4372,7 @@ main: function is {
     }
     if r.doccodeOnly then {
         runDoccodeCases :r
+        runDocPageCases :r
     } else if r.agreeOnly then {
         runAgreeCases :r
     } else if r.runOnly then {
@@ -4258,6 +4392,7 @@ main: function is {
         runSmokeCases :r
         runFmtCases :r
         runDoccodeCases :r
+        runDocPageCases :r
         runSelfhostAsan :r
         runFixpoint :r
         runArchCases :r
