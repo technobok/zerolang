@@ -234,6 +234,13 @@ isValidUnitName: function {name: StringView} out bool is {
     return true
 }
 
+# nestingLimit -- how deep an expression may be nested or chained: a pair of
+# parentheses or a block inside another is a level, and so is each link of a
+# chain, a `.name` after a value or an operator after an operand. The checker
+# and the emitter follow a tree level by level, so this is what bounds the
+# stack every later pass uses.
+nestingLimit: 500.u32
+
 # the recursive-descent parser: consumes a token stream and builds the AST.
 Parser: class {
     # the unit file whose body is being read: the file every row minted now
@@ -269,6 +276,15 @@ Parser: class {
     # first parse to share a PreludeStore hands them to it (parseShared)
     looks: Lookups
     recording: bool
+    # how many expressions are open, one inside another, where the parser is
+    # reading: the levels of nestingLimit that nesting itself has used
+    depth: u32
+    # the deepest level reached since the path or operation being read began,
+    # the links of a chain counted on top of what the chain is written round
+    peak: u32
+    # `peak` over the operands of the operation operationPaths last read, which
+    # the fold that follows it at once counts its links on
+    opPeak: u32
 } as {
     # a parser with an empty tree: the node table holds only its sentinel row,
     # and the name pool only the empty text. It reads unit files named
@@ -285,6 +301,20 @@ Parser: class {
             ext: ext.string
             looks: (Lookups.create root: zvfs.fsno)
             recording: false
+            depth: 0
+            peak: 0
+            opPeak: 0
+        )
+    }
+
+    # tooDeepAt -- the error for an expression nested or chained past
+    # nestingLimit, at `pos`
+    tooDeepAt: function {:this pos: zlexer.tokpos} out astnode is {
+        return (
+            this.mkErrorAt
+            :pos
+            code: zast.err.tooDeep
+            msg: "nested or chained deeper than \{nestingLimit} levels"
         )
     }
 
@@ -628,6 +658,16 @@ Parser: class {
     # selectors, folded left into nested DottedPath ast.nodes. Used by the
     # greedy operation-path collector, which appends owned ast.nodes.
     parsePath: function {:this lex: zlexer.Lexer} out astnode is {
+        outer: this.peak
+        this.peak = this.depth
+        node: this.parsePathLinks :lex
+        if outer > this.peak then this.peak = outer
+        return node
+    }
+
+    # parsePathLinks -- parsePath's atom and selectors. Each selector is a
+    # level on top of the deepest one the atom reached (`peak`).
+    parsePathLinks: function {:this lex: zlexer.Lexer} out astnode is {
         startPos: lex.peekPos
         sLine: startPos.lineno
         sCol: startPos.colno
@@ -664,6 +704,8 @@ Parser: class {
             match (
                 idOpt
             ) case some then {
+                this.peak = this.peak + 1
+                if this.peak > nestingLimit then return (this.tooDeepAt pos: lex.peekPos)
                 np: this.pathSegment :parent tok: idOpt :startLine :startCol
                 return (this.parsePathTail :lex parent: np :startLine :startCol)
             } case none then {
@@ -1299,6 +1341,8 @@ Parser: class {
     # check the tail before dispatching on the count).
     operationPaths: function {:this lex: zlexer.Lexer} out u64 is {
         base: this.opStack.length
+        outer: this.peak
+        this.peak = this.depth
         for (this.atomLookahead :lex) loop {
             node: this.parsePath :lex
             errored: Parser.isError :node
@@ -1306,6 +1350,8 @@ Parser: class {
             this.opStack.append nid
             if errored then break
         }
+        this.opPeak = this.peak
+        if outer > this.peak then this.peak = outer
         return base
     }
 
@@ -1377,6 +1423,11 @@ Parser: class {
                 )
             }
             rhs: stack.pop
+            # one more operator over the operands: a level on top of the
+            # deepest of them
+            this.opPeak = this.opPeak + 1
+            if this.opPeak > nestingLimit then return (this.tooDeepAt pos: lex.peekPos)
+            if this.opPeak > this.peak then this.peak = this.opPeak
             nb: this.mkInfixCall recv: acc operator: op :rhs :line :col
             return (this.foldBinopTail :stack acc: (this.intern n: nb) :line :col :lex)
         } else {
@@ -3625,6 +3676,21 @@ Parser: class {
     acceptTypeDefinition: function {
         :this lex: zlexer.Lexer unitKind: zast.unitkind
     } out astnode is {
+        # a definition inside another -- a unit in a unit, a type in a type --
+        # is a level, as an expression inside another is
+        if this.depth >= nestingLimit then return (this.tooDeepAt pos: lex.peekPos)
+        this.depth = this.depth + 1
+        if this.depth > this.peak then this.peak = this.depth
+        node: this.acceptTypeDefinitionForm :lex :unitKind
+        this.depth = this.depth - 1
+        return node
+    }
+
+    # acceptTypeDefinitionForm -- acceptTypeDefinition's dispatch on the
+    # keyword that starts here
+    acceptTypeDefinitionForm: function {
+        :this lex: zlexer.Lexer unitKind: zast.unitkind
+    } out astnode is {
         startPos: lex.peekPos
         tt: lex.peekType
         match (
@@ -4116,6 +4182,17 @@ Parser: class {
     # an expression, required: a failure here yields an error node rather than
     # nothing, so the caller always has a node to hang position on
     parseExpression: function {:this lex: zlexer.Lexer} out astnode is {
+        if this.depth >= nestingLimit then return (this.tooDeepAt pos: lex.peekPos)
+        this.depth = this.depth + 1
+        if this.depth > this.peak then this.peak = this.depth
+        node: this.parseExpressionForm :lex
+        this.depth = this.depth - 1
+        return node
+    }
+
+    # parseExpressionForm -- parseExpression's dispatch on the form that starts
+    # here
+    parseExpressionForm: function {:this lex: zlexer.Lexer} out astnode is {
         match (
             lex.peekType
         ) case ifTok then {
