@@ -5764,6 +5764,7 @@ recordTyperef: function {
         } else null
     }
     if arm == 2 then {
+        if (refuseAppliedTwice :st :ast :nid :callableId) then return
         # a parameterized type ref resolves to its mono now, and the call
         # carries the instance stamp
         (
@@ -5803,6 +5804,36 @@ recordTyperef: function {
     if arm == 5 then {
         recordResolvedName :st :scope :ast :unitDecl :thisName :nameId :nid recScope: scope
     }
+}
+
+# refuseAppliedTwice -- the type reference `nid` gives arguments to a head
+# that is an application already (`(Box i64) 5`, or `(Box i64)` with a stray
+# word on the line below it). A type takes its arguments once, and unreported
+# the reference named a type nothing declares. True when it reported.
+refuseAppliedTwice: function {
+    st: zenv.ZSymbolTable
+    ast: Ast.view
+    nid: zast.nodeid
+    callableId: zast.nodeid
+} out bool is {
+    if (ast.nodes.get i: callableId).call.not then return false
+    if (operatorPartsAt :ast :nid).found then return false
+    pos: zast.posOf n: (ast.nodes.get i: callableId)
+    head: typeExprText :ast nid: callableId
+    (
+        addErrorH
+        :st
+        nodeid: nid
+        lineno: pos.line
+        colno: pos.col
+        e: zast.err.genericError
+        msg: "'\{head}' is a type already: it takes no further arguments"
+        note: String
+        hint: "a word written after the type, on its line or the next, reads as one more argument".string
+        width: 1
+    )
+    st.typing.refusedValues.add item: nid
+    return true
 }
 
 # returnParamTid -- when a return typeref names one of the enclosing
