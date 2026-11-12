@@ -1303,9 +1303,10 @@ appendPrograms: function {progs: List String dir: StringView} is {
 
 # runDoccodeCases -- the DOCCODE kind: every zerolang example of docs/*.pdoc and
 # README.md (zdocblocks) is wrapped into a program and emitted with `zc emit
-# --eager`. An unmarked block must compile; an `expect=` block must fail, its
-# first error that code; a `check=none` block is not compiled. A checked block
-# that parses -- every one but an expect= of a syntax error (E00xx) -- must also
+# --eager`. An unmarked block must compile; an `error=` block must fail, its
+# first error that code; a `check=none` block is not compiled; an `expect=`
+# block is also built and run, and must print that text. A checked block
+# that parses -- every one but an error= of a syntax error (E00xx) -- must also
 # be laid out as `zl fmt` lays it. The skipped and the unformatted are counted
 # per page and ratcheted, exactly, against tests/fixtures/doccode_baseline.txt
 # as the arch kind's findings are. The C each emit writes is compiled, and not
@@ -1410,9 +1411,16 @@ doccodeJobs: function {
             }
             emitAt.set i: bi val: pool.length.i64.orPanic
             progPath: stem.stringView.concat ext
-            pool.append (doccodeJob :r path: progPath.stringView content: prog.stringView :tool)
+            pool.append (
+                doccodeJob
+                :r
+                path: progPath.stringView
+                content: prog.stringView
+                :tool
+                runs: b.hasExpect
+            )
             # a syntax error lays nothing out
-            if (b.expect.stringView.startsWith "E00").not then {
+            if (b.errorCode.stringView.startsWith "E00").not then {
                 fmtAt.set i: bi val: pool.length.i64.orPanic
                 fmtName: "_fmt".string
                 fmtName.append ext
@@ -1423,6 +1431,7 @@ doccodeJobs: function {
                     path: ownPath.stringView
                     content: own.stringView
                     tool: zl.stringView
+                    runs: false
                 )
             }
         }
@@ -1451,10 +1460,11 @@ blockAt: function {b: zdocblocks.DocBlock.view} out String is {
 
 # doccodeJob -- write `content` to `path` and the job that checks it: `zc emit
 # --eager` when tool is "emit", and then the C compiler over the C it wrote,
-# compiled and not linked; else the zl at `tool` as `fmt --check`. A step's
-# exit is data, read by the verdicts: an emit that fails ends its job there.
+# compiled and not linked; else the zl at `tool` as `fmt --check`. An example
+# that `runs` is then built and run (doccodeRunSteps). A step's exit is data,
+# read by the verdicts: a step that fails ends its job there.
 doccodeJob: function {
-    r: Runner.view path: StringView content: StringView tool: StringView
+    r: Runner.view path: StringView content: StringView tool: StringView runs: bool
 } out PoolJob is {
     wr: io.writeText :path :content
     if wr.err then print "FAIL(doccode) could not write \{path}"
@@ -1502,11 +1512,51 @@ doccodeJob: function {
             outPath: os.nullDevice.stringView
             errPath: ccErrPath.stringView
             timeoutSecs: r.timeoutSecs
-            allowFail: true
+            allowFail: runs.not
             zlinkFrom: ""
         )
+        if runs then doccodeRunSteps :r :path :steps
     }
     return (mkJob name: path :steps)
+}
+
+# doccodeRunSteps -- the two steps that run the example at `path`, onto
+# `steps`: `zc build` makes its program, and the program runs, its output kept
+# in `<path>.out` for the verdict.
+doccodeRunSteps: function {r: Runner.view path: StringView steps: List PoolStep} is {
+    bin: "\{path}.bin"
+    build: List String
+    build.append from: r.zc.copy
+    build.append from: "build".string
+    build.append from: path.string
+    build.append from: "--system".string
+    build.append from: r.sys.copy
+    build.append from: "-o".string
+    build.append from: bin.copy
+    buildErr: "\{path}.build.err"
+    steps.append (
+        mkStep
+        argv: build
+        cwd: ""
+        outPath: os.nullDevice.stringView
+        errPath: buildErr.stringView
+        timeoutSecs: r.timeoutSecs
+        allowFail: false
+        zlinkFrom: ""
+    )
+    run: List String
+    run.append from: bin.copy
+    outPath: "\{path}.out"
+    steps.append (
+        mkStep
+        argv: run
+        cwd: ""
+        outPath: outPath.stringView
+        errPath: os.nullDevice.stringView
+        timeoutSecs: r.timeoutSecs
+        allowFail: true
+        zlinkFrom: ""
+    )
 }
 
 # doccodeCcArgv -- the command that compiles, and does not link, the C `zc
@@ -1550,11 +1600,14 @@ doccodeVerdict: function {
         errPath: stem.stringView.concat errExt
         errText: slurp path: errPath.stringView
         status: statuses.get i: emitAt.u64.orPanic
-        problem = emitVerdict :status errText: errText.stringView expect: b.expect.stringView
-        # an emit that wrote no error ran, and what failed is the C compiler
+        problem = emitVerdict :status errText: errText.stringView want: b.errorCode.stringView
+        # an emit that wrote no error ran, and what failed is a later step
         if status != 0 when (errText.stringView.contains "error[").not then {
-            ccSaid: doccodeCcProblem stem: stem.stringView
-            if ccSaid.length > 0 then problem = ccSaid.take
+            later: doccodeLaterProblem stem: stem.stringView :status runs: b.hasExpect
+            if later.length > 0 then problem = later.take
+        }
+        if problem.length == 0 when b.hasExpect then {
+            problem = doccodeOutputProblem stem: stem.stringView want: (zdocblocks.expectText :b)
         }
     }
     if problem.length > 0 then {
@@ -1563,6 +1616,45 @@ doccodeVerdict: function {
     } else {
         r.passN = r.passN + 1
     }
+}
+
+# doccodeLaterProblem -- what went wrong after an emit that worked, for the
+# example whose files start with `stem` and whose job ended with `status`: the
+# C compiler's error, and for an example that `runs`, `zc build`'s error or the
+# program's own exit status. "" when none of them says anything.
+doccodeLaterProblem: function {stem: StringView status: i32 runs: bool} out String is {
+    ccSaid: doccodeCcProblem :stem
+    if (ccSaid.length > 0) or runs.not then return ccSaid
+    buildPath: stem.concat ".z.build.err"
+    buildText: slurp path: buildPath.stringView
+    for each bl: buildText.stringView.lines loop {
+        if bl.contains "error" then return "it does not build: \{bl}"
+    }
+    return "it runs and exits with status \{status}, not 0"
+}
+
+# doccodeOutputProblem -- how what the example printed differs from `want`, the
+# text its `expect=` gives: the first line that differs, "" when none does.
+doccodeOutputProblem: function {stem: StringView want: String} out String is {
+    outPath: stem.concat ".z.out"
+    got: slurp path: outPath.stringView
+    if got.stringView == want then return "".string
+    gotLines: List String
+    for each gl: got.stringView.lines loop gotLines.append from: gl.string
+    n: u64
+    for each wl: want.stringView.lines loop {
+        if (
+            n >= gotLines.length
+        ) then return "it prints \{gotLines.length} lines, and expect= has more: '\{wl}'"
+        if (gotLines.get i: n).stringView != wl then {
+            return "line \{n + 1} of what it prints is '\{(
+                gotLines.get
+                i: n
+            )}', and expect= says '\{wl}'"
+        }
+        n = n + 1
+    }
+    return "it prints more than expect= says: '\{gotLines.get i: n}'"
 }
 
 # doccodeCcProblem -- what the C compiler said of the C written for the
@@ -1577,21 +1669,21 @@ doccodeCcProblem: function {stem: StringView} out String is {
 }
 
 # emitVerdict -- what is wrong with a checked block's emit, "" when nothing: an
-# unmarked block must compile, an expect= block must fail with that code as its
+# unmarked block must compile, an error= block must fail with that code as its
 # first error.
-emitVerdict: function {status: i32 errText: StringView expect: StringView} out String is {
+emitVerdict: function {status: i32 errText: StringView want: StringView} out String is {
     first: String
     for each el: errText.lines loop {
         if first.length == 0 when el.startsWith "error[" then first = el.string
     }
-    if expect.length == 0 then {
+    if want.length == 0 then {
         if status == 0 then return "".string
         if first.length == 0 then return "zc emit failed (status \{status}) with no error line"
         return first
     }
-    if status == 0 then return "it compiles, but expect=\{expect}"
+    if status == 0 then return "it compiles, but error=\{want}"
     got: first.stringView.substring from: 6 to: 11
-    if got != expect then return "its first error is \{first.stringView}, but expect=\{expect}"
+    if got != want then return "its first error is \{first.stringView}, but error=\{want}"
     return "".string
 }
 

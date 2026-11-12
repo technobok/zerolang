@@ -5,11 +5,16 @@
 # into. The arguments ride on the block and the renderer ignores them, so a
 # reader never sees them:
 #   (none)          the block must compile
-#   expect=E0400    it must fail, and its first error is E0400
+#   error=E0400     it must fail, and its first error is E0400
+#   expect="..."    it is built and run, and prints this text; the renderer
+#                   shows the text to the reader, in a block after the code
 #   check=none      it is not compiled (a proposal, a grammar outline)
 #   name=x          later blocks on the page may build on it
 #   after=x         the program is block x's code (and its own after= chain)
 #                   followed by this block's
+# A `#code` call is read as the renderer reads it: arguments in any order, a
+# value that is a word, a string or a raw string of several lines, and the code
+# as the call's body or as its `body` argument.
 # Pure text in, text out: reading the files and running the compiler are the
 # runner's.
 
@@ -20,6 +25,7 @@ public: unit {
     :programOf
     :wrapProgram
     :fileText
+    :expectText
 }
 
 # DocBlock -- one example: where it is, its arguments, and its code as the
@@ -32,14 +38,18 @@ DocBlock: class {
     line: u64
     # `check=`: "none" skips it, "" checks it
     check: String
-    # `expect=`: the code its first error must be, "" when it must compile
-    expect: String
+    # `error=`: the code its first error must be, "" when it must compile
+    errorCode: String
     # `name=`: the label later blocks build on, "" for none
     name: String
     # `after=`: the earlier block on the page whose code comes first, "" for none
     after: String
     # the code, one entry per line
     code: List String
+    # `expect=`: what the program prints, one entry per line; read only when
+    # `hasExpect`, since a program may be expected to print nothing
+    expect: List String
+    hasExpect: bool
     # what is wrong with the block itself, "" when nothing is
     problem: String
     # the block is a whole data file (`language=zdata`, docs/zdata.pdoc), read
@@ -101,35 +111,169 @@ scanFence: function {
     return j
 }
 
-# scanCode -- a picodoc `#code` at `at`. Only `language=zerolang` is taken;
-# answers the line after the block.
+# scanCode -- a picodoc `#code` call at `at`, read argument by argument. Only
+# `language=zerolang` (and a `language=zdata` file) is taken; answers the line
+# after the call.
 scanCode: function {
     page: StringView
     lines: (List String).view
     at: u64
     into: List DocBlock
 } out u64 is {
-    head: lines.get i: at
-    hv: head.stringView.trimStart
-    colon: hv.indexOf ":"
-    match colon case some then null case none then return at + 1
-    args: hv.substring from: 5 to: colon
-    isData: hasWord text: args word: "language=zdata"
-    if (hasWord text: args word: "language=zerolang").not when isData.not then return at + 1
-    tail: (hv.substring from: colon + 1 to: hv.length).trim
     b: newBlock :page line: at + 1
-    b.dataFile = isData
-    readArgs :b :args
+    language: String
+    head: (lines.get i: at).stringView
+    pos: docpos line: at col: head.length - head.trimStart.length + 5
     next: at + 1
-    if tail.startsWith "\"\"\"" then {
-        next = readQuoted :b :lines from: at + 1 fence: (quoteRun text: tail).stringView
-    } else if tail.length == 0 then {
-        next = readIndented :b :lines from: at + 1
-    } else {
-        b.problem = "a zerolang block is a \"\"\" body or indented lines".string
+    done: false
+    for done.not loop {
+        line: (lines.get i: pos.line).stringView
+        col: pos.col
+        for ((line.byteAt i: col).or d: 0) == 32 loop col = col + 1
+        rest: line.substring from: col to: line.length
+        if rest.length == 0 then {
+            next = pos.line + 1
+            done = true
+        } else if rest.startsWith ":" then {
+            next = readColonBody :b :lines line: pos.line col: col + 1
+            done = true
+        } else if rest.startsWith "\"" then {
+            after: readValue :lines line: pos.line :col into: b.code
+            next = after.line + 1
+            done = true
+        } else {
+            eq: rest.indexOf "="
+            if eq.none then {
+                b.problem = "an argument is key=value, not '\{rest}'"
+                next = pos.line + 1
+                done = true
+            } else {
+                key: (rest.substring from: 0 to: eq).string
+                value: List String
+                pos = readValue :lines line: pos.line col: col + eq + 1 into: value
+                takeArg :b key: key.stringView :value :language
+            }
+        }
     }
-    into.append from: b
+    words: zast.Vocab.create block: docWord
+    lang: words.slotOf text: language.stringView
+    b.dataFile = lang == docWord.slot.vZdata
+    if (lang == docWord.slot.vZerolang) or b.dataFile then {
+        checkArgs :b
+        into.append from: b
+    }
     return next
+}
+
+# docpos -- a place in a page: a line of it and a byte of that line
+docpos: record {
+    line: u64
+    col: u64
+}
+
+# readColonBody -- the body after the colon at `col` of `line`: a string, or
+# when the line ends there the lines indented under it. Answers the line after
+# the body.
+readColonBody: function {b: DocBlock lines: (List String).view line: u64 col: u64} out u64 is {
+    text: (lines.get i: line).stringView
+    tail: (text.substring from: col to: text.length).trim
+    if tail.length == 0 then return (readIndented :b :lines from: line + 1)
+    if (tail.startsWith "\"").not then {
+        b.problem = "a zerolang block is a \"\"\" body or indented lines".string
+        return line + 1
+    }
+    quote: col
+    for ((text.byteAt i: quote).or d: 0) == 32 loop quote = quote + 1
+    after: readValue :lines :line col: quote into: b.code
+    return after.line + 1
+}
+
+# readValue -- the argument value that starts at `col` of `line`, its text
+# appended to `into` one entry a line: a raw string of three or more quotes,
+# which may run over several lines and is dedented; a string in one pair of
+# quotes, where `\n` ends a line; or a word, which ends at a space or a colon.
+# Answers the place after the value.
+readValue: function {lines: (List String).view line: u64 col: u64 into: List String} out docpos is {
+    text: (lines.get i: line).stringView
+    rest: text.substring from: col to: text.length
+    if rest.startsWith "\"\"\"" then return (readRaw :lines :line :col :into)
+    if rest.startsWith "\"" then {
+        cur: String
+        i: 1.u64
+        closed: false
+        for (i < rest.length) and closed.not loop {
+            c: (rest.byteAt :i).or d: 0
+            if c == 34 then {
+                closed = true
+            } else if (c == 92) and ((i + 1) < rest.length) then {
+                e: (rest.byteAt i: i + 1).or d: 0
+                if e == 110 then {
+                    into.append from: cur.copy
+                    cur = "".string
+                } else {
+                    cur.appendByte b: e
+                }
+                i = i + 1
+            } else {
+                cur.appendByte b: c
+            }
+            i = i + 1
+        }
+        into.append from: cur
+        return (docpos :line col: col + i)
+    }
+    n: u64
+    for (
+        (n < rest.length) and
+        (((rest.byteAt i: n).or d: 0) != 32) and
+        (((rest.byteAt i: n).or d: 0) != 58)
+    ) loop n = n + 1
+    into.append from: (rest.substring from: 0 to: n).string
+    return (docpos :line col: col + n)
+}
+
+# readRaw -- the raw string that opens at `col` of `line` with a run of three or
+# more quotes and closes at the next run as long: on the same line, or on a
+# later one, the lines between them dedented by their common indent. Answers
+# the place after the closing run, the end of the page when it is never closed.
+readRaw: function {lines: (List String).view line: u64 col: u64 into: List String} out docpos is {
+    text: (lines.get i: line).stringView
+    fence: quoteRun text: (text.substring from: col to: text.length)
+    open: text.substring from: col + fence.length to: text.length
+    same: open.indexOf fence
+    if same.some then {
+        into.append from: (open.substring from: 0 to: same).string
+        return (docpos :line col: col + fence.length + same + fence.length)
+    }
+    raw: List String
+    if open.trim.length > 0 then raw.append from: open.string
+    j: line + 1
+    for j < lines.length loop {
+        lj: (lines.get i: j).stringView
+        close: lj.indexOf fence
+        if close.some then {
+            last: lj.substring from: 0 to: close
+            if last.trim.length > 0 then raw.append from: last.string
+            appendDedented :raw :into
+            return (docpos line: j col: close + fence.length)
+        }
+        raw.append from: lj.string
+        j = j + 1
+    }
+    return (docpos line: lines.length - 1 col: (lines.get i: lines.length - 1).length)
+}
+
+# appendDedented -- the lines `raw` onto `into`, without the indent they all
+# share
+appendDedented: function {raw: (List String).view into: List String} is {
+    ind: commonIndent lines: raw
+    for each rl: raw loop {
+        if rl.length >= ind then {
+            into.append from: (rl.stringView.substring from: ind to: rl.length).string
+        } else {
+            into.append from: "".string
+        }
+    }
 }
 
 # quoteRun -- the run of `"` that `text` opens with: a body opened by more than
@@ -138,36 +282,6 @@ quoteRun: function {text: StringView} out String is {
     n: u64
     for ((text.byteAt i: n).or d: 0) == 34 loop n = n + 1
     return (text.substring from: 0 to: n).string
-}
-
-# readQuoted -- the lines up to the one holding the closing `fence` (the
-# opening run of quotes), dedented by their common indent. Answers the line
-# after the closer.
-readQuoted: function {
-    b: DocBlock lines: (List String).view from: u64 fence: StringView
-} out u64 is {
-    raw: List String
-    j: from
-    closed: false
-    for (j < lines.length) and closed.not loop {
-        lj: lines.get i: j
-        if lj.stringView.contains fence then {
-            closed = true
-        } else {
-            raw.append from: lj.copy
-        }
-        j = j + 1
-    }
-    if closed.not then b.problem = "the \"\"\" body is never closed".string
-    ind: commonIndent lines: raw
-    for each rl: raw loop {
-        if rl.length >= ind then {
-            b.code.append from: (rl.stringView.substring from: ind to: rl.length).string
-        } else {
-            b.code.append from: "".string
-        }
-    }
-    return j
 }
 
 # readIndented -- the lines indented two spaces under the header, each with an
@@ -214,56 +328,53 @@ newBlock: function {page: StringView line: u64} out DocBlock is {
         page: page.string
         :line
         check: "".string
-        expect: "".string
+        errorCode: "".string
         name: "".string
         after: "".string
         code: List String
+        expect: List String
+        hasExpect: false
         problem: "".string
         dataFile: false
     )
 }
 
-# hasWord -- `word` is one of the space-separated words of `text`.
-hasWord: function {text: StringView word: StringView} out bool is {
-    for each w: (text.split sep: " ") loop {
-        if w == word then return true
-    }
-    return false
-}
-
-# readArgs -- the block's `key=value` words. `language` is the renderer's; an
-# unknown key, a check other than none, or an expect that is no error code is
-# the block's problem.
-readArgs: function {b: DocBlock args: StringView} is {
+# takeArg -- one argument of the call onto the block. `body` and `expect` take
+# every line of their value; any other takes its first, a word. `language` is
+# the renderer's, kept in `language` for the caller.
+takeArg: function {b: DocBlock key: StringView value: List String language: String} is {
     words: zast.Vocab.create block: docWord
-    for each w: (args.split sep: " ") loop {
-        if w.length > 0 then readArg :b :words :w
-    }
-    if b.check.length > 0 when b.expect.length > 0 then {
-        b.problem = "check=none and expect= together: a skipped block expects nothing".string
-    }
-}
-
-# readArg -- one `key=value` word onto the block.
-readArg: function {b: DocBlock words: zast.Vocab.view w: StringView} is {
-    eq: w.splitOnce sep: "="
-    match (
-        eq
-    ) case some then null case none then {
-        b.problem = "an argument is key=value, not '\{w}'"
+    k: words.slotOf text: key
+    if k == docWord.slot.aBody then {
+        if b.code.length > 0 then b.problem = "the body is given twice".string
+        for each cl: value loop b.code.append from: cl.copy
         return
     }
-    k: words.slotOf text: (w.substring from: 0 to: eq)
-    v: w.substring from: eq + 1 to: w.length
-    if k == docWord.slot.aLanguage then return
+    if k == docWord.slot.aExpect then {
+        b.hasExpect = true
+        for each el: value loop b.expect.append from: el.copy
+        return
+    }
+    v: String
+    if value.length > 0 then v = (value.get i: 0).copy
+    if k == docWord.slot.aLanguage then {
+        language.append v
+        return
+    }
+    takeWordArg :b :words :k :key v: v.stringView
+}
+
+# takeWordArg -- an argument whose value is the one word `v`: `k` is the slot
+# of its key among the words, and `key` its spelling, for the report.
+takeWordArg: function {b: DocBlock words: zast.Vocab.view k: u64 key: StringView v: StringView} is {
     if k == docWord.slot.aCheck then {
         b.check = v.string
         isNone: (words.slotOf text: v) == docWord.slot.vNone
         if isNone.not then b.problem = "check= takes none alone, not '\{v}'"
-    } else if k == docWord.slot.aExpect then {
-        b.expect = v.string
+    } else if k == docWord.slot.aError then {
+        b.errorCode = v.string
         isCode: isErrorCode text: v
-        if isCode.not then b.problem = "expect= takes an error code such as E0400, not '\{v}'"
+        if isCode.not then b.problem = "error= takes an error code such as E0400, not '\{v}'"
     } else if k == docWord.slot.aName then {
         b.name = v.string
         isName: isLabel text: v
@@ -273,8 +384,39 @@ readArg: function {b: DocBlock words: zast.Vocab.view w: StringView} is {
         isAfter: isLabel text: v
         if isAfter.not then b.problem = "after= takes a lowercase identifier, not '\{v}'"
     } else {
-        b.problem = "unknown argument '\{w}'"
+        b.problem = "unknown argument '\{key}'"
     }
+}
+
+# checkArgs -- the rules between a block's arguments: a block that is skipped
+# or refused runs nothing, so it expects no output, and a data file prints
+# none.
+checkArgs: function {b: DocBlock} is {
+    if b.problem.length > 0 then return
+    if b.check.length > 0 when b.errorCode.length > 0 then {
+        b.problem = "check=none and error= together: a skipped block is not compiled".string
+    }
+    if b.hasExpect when (b.check.length > 0) or (b.errorCode.length > 0) or b.dataFile then {
+        b.problem = "expect= is what a program prints: a skipped or refused block, or a data file, prints nothing".string
+    }
+}
+
+# readArgs -- the `key=value` words of a README fence onto its block.
+readArgs: function {b: DocBlock args: StringView} is {
+    language: String
+    for each w: (args.split sep: " ") loop {
+        if w.length > 0 then {
+            eq: w.indexOf "="
+            if eq.none then {
+                b.problem = "an argument is key=value, not '\{w}'"
+            } else {
+                value: List String
+                value.append from: (w.substring from: eq + 1 to: w.length).string
+                takeArg :b key: (w.substring from: 0 to: eq) :value :language
+            }
+        }
+    }
+    checkArgs :b
 }
 
 # isErrorCode -- `E` and four digits.
@@ -372,6 +514,17 @@ programOf: function {blocks: (List DocBlock).view at: u64} out List String is {
     }
     for each l: b.code loop prog.append from: l.copy
     return prog
+}
+
+# expectText -- what a block with `expect=` must print: its lines, each ended
+# by a newline, as `print` ends each line it writes.
+expectText: function {b: DocBlock.view} out String is {
+    text: String
+    for each el: b.expect loop {
+        text.append el
+        text.append "\n"
+    }
+    return text
 }
 
 # fileText -- a data block's code as the file it is
@@ -499,11 +652,15 @@ isDeclLine: function {line: StringView words: zast.Vocab.view} out bool is {
 # is classified by its slot here (zast.Vocab), never by comparing its text.
 docWord: list {
     aLanguage: "language"
-    aCheck: "check"
+    aBody: "body"
     aExpect: "expect"
+    aCheck: "check"
+    aError: "error"
     aName: "name"
     aAfter: "after"
     vNone: "none"
+    vZerolang: "zerolang"
+    vZdata: "zdata"
     kFunction: "function"
     kClass: "class"
     kRecord: "record"
