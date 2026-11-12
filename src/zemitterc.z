@@ -44905,8 +44905,8 @@ monoDependsOnUser: function {
 }
 
 # monoIsLate -- the mono embeds a user type by value (a fresh seen per query),
-# holds a mono the collection pass writes, or holds a templated class, which the
-# late group writes.
+# holds a mono the collection pass writes, holds a function in a field, or
+# holds a templated class, which the late group writes.
 monoIsLate: function {
     ast: Ast.view
     reg: ztypes.ZTypeRegistry.view
@@ -44918,7 +44918,24 @@ monoIsLate: function {
     seen: ListVal ztypes.tid
     if (monoDependsOnUser :ast :reg :typing :ctx :monoId :userList :seen) then return true
     if (monoHoldsTmplClass :reg :typing :ctx :monoId) then return true
+    if (monoHoldsFunctionField :typing :monoId) then return true
     return (monoHoldsCollectionPassMono :reg :typing :ctx :monoId)
+}
+
+# monoHoldsFunctionField -- the instance holds a function in a field: its
+# struct names the function's type, whose typedef is written after the
+# collection pass and before the late group.
+monoHoldsFunctionField: function {typing: ztyping.ZTyping.view monoId: ztypes.tid} out bool is {
+    i: u64
+    n: typing.declRowSlots ownerTid: monoId
+    for i < n loop {
+        row: typing.declRowAt ownerTid: monoId membersOnly: true slot: i
+        i = i + 1
+        if row.keep when (typing.declIsFnptrFieldId parentTypeId: monoId nameId: row.name) then {
+            return true
+        }
+    }
+    return false
 }
 
 # monoHoldsTmplClass -- an element, key or value of the mono is a templated
@@ -45855,7 +45872,8 @@ stdFnRefEmittable: function {
 
 # fnptrTypedefEligible -- a FUNCTION type worth a `_ft` typedef: a real spec /
 # free function / method whose C this emitter writes. Synthetic create/==/!=
-# carry no declaration; generic templates and monos are skipped.
+# carry no declaration; generic templates are skipped, and an instance's
+# function unless the instance holds it in a field.
 fnptrTypedefEligible: function {
     ast: Ast.view
     reg: ztypes.ZTypeRegistry.view
@@ -45865,9 +45883,22 @@ fnptrTypedefEligible: function {
 } out bool is {
     if (reg.isGenericOf :tid) then return false
     mo: originTidOf :reg :tid
-    if mo.isZero.not then return false
+    if mo.isZero.not then return (instanceFnField :reg :typing :tid)
     if (signatureNamesTemplate :ctx :reg :typing :tid) then return false
     return (stdFnRefEmittable :ast :reg :typing fid: tid)
+}
+
+# instanceFnField -- `tid` is the function a generic type's instance holds in
+# a field: the instance's own copy of a function its template writes in the
+# `is` section. Its struct names the function's type, so it needs the typedef.
+instanceFnField: function {
+    reg: ztypes.ZTypeRegistry.view typing: ztyping.ZTyping.view tid: ztypes.tid
+} out bool is {
+    owner: reg.ownerTidOf :tid
+    if owner.isZero or (reg.isPartialOf tid: owner) then return false
+    fd: typing.declIdOfType typeId: tid
+    if fd.isZero then return false
+    return (typing.declIsFnptrFieldId parentTypeId: owner nameId: (typing.decls.get i: fd).name)
 }
 
 # signatureNamesTemplate -- a function whose return or a parameter is a generic
@@ -45895,6 +45926,25 @@ signatureNamesTemplate: function {
     return false
 }
 
+# fnptrReturnTid -- the type function `tid` returns, for its `_ft` typedef; 0
+# when it returns nothing. An instance's function returns what the instance's
+# arguments make of the template's return, which its own type records: its
+# return node is the template's. Any other function's return is read from the
+# node's stamp, then from its type.
+fnptrReturnTid: function {
+    reg: ztypes.ZTypeRegistry.view
+    typing: ztyping.ZTyping.view
+    ctx: Ctx.view
+    tid: ztypes.tid
+} out ztypes.tid is {
+    rtid: ztypes.tid
+    if (originTidOf :reg :tid).isZero.not then rtid = reg.returnTypeOf :tid
+    rno: typing.funcReturnNode.get key: tid
+    if rtid.isZero when rno.some then rtid = stampIdOf :ctx :typing nid: rno
+    if rtid.isZero then rtid = reg.returnTypeOf :tid
+    return rtid
+}
+
 # fnptrRetTypeC -- C return type for a FUNCTION's `_ft` typedef. The return type
 # is read from funcReturnNode (the registry returnTypeId is not populated for
 # top-level functions) via the node stamp, mirroring fnReturnTypeId.
@@ -45905,12 +45955,7 @@ fnptrRetTypeC: function {
     ctx: Ctx
     tid: ztypes.tid
 } out String is {
-    rtid: ztypes.tid
-    rno: typing.funcReturnNode.get key: tid
-    if rno.some then {
-        rtid = stampIdOf :ctx :typing nid: rno
-    }
-    if rtid.isZero then rtid = reg.returnTypeOf :tid
+    rtid: fnptrReturnTid :reg :typing :ctx :tid
     if rtid.isZero then return "void".string
     baseC: String
     if rtid == ctx.strTid then {
@@ -46001,9 +46046,10 @@ ensureFwdStruct: function {
     if isStruct when (ctx.fwdDeclaredTypes.has item: tid).not then {
         # a mono is declared on the terms its own pass declares it: an iterator
         # cursor is an anonymous typedef no forward declaration can name, and a
-        # Box is a pointer
+        # Box is a pointer. An instance of a user's own generic type is declared
+        # as a type a unit declares is: its body is written after this pass
         mo: originTidOf :reg :tid
-        if mo.isZero.not then {
+        if mo.isZero.not when (isUserInstance :reg :ctx tcl: tid).not then {
             emitMonoFwdDecl :reg :typing :ctx :tid origin: mo :buf
             return
         }
