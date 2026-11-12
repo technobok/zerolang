@@ -1028,9 +1028,14 @@ FUZZ_CI_RUN = out/zfuzz --zc $(CURDIR)/out/zc-asan --system $(CURDIR)/lib/system
 	  --corpus $(CURDIR)/examples,$(CURDIR)/tests/fixtures/emitc_corpus \
 	  --work $(CURDIR)/$(BUILDDIR)/fuzz-ci --seed $(FUZZ_CI_SEED) --count $(FUZZ_CI_N) \
 	  --known $(FUZZ_KNOWN)
+ifdef WINDOWS_HOST
+fuzz-ci:
+	@echo "fuzz-ci: skipped (Linux only: it fuzzes a compiler built with AddressSanitizer, which no UCRT64 gcc has; the Linux run fuzzes the same source)"
+else
 fuzz-ci: out/zc-asan out/zfuzz
 	@rm -rf $(BUILDDIR)/fuzz-ci
 	$(FUZZ_CI_RUN)
+endif
 
 fuzz-known: out/zc-asan out/zfuzz
 	@rm -rf $(BUILDDIR)/fuzz-ci
