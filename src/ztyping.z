@@ -43,7 +43,7 @@ public: unit {
     :armkey
     :datafield
     :fieldspan
-    :bodycopy
+    :rowspan
     :destroyitem
     :destroyrange
     :valuepins
@@ -62,7 +62,7 @@ public: unit {
     :nodeTypeAt
     :nodeTypeSet
     :setFirstOrPerMono
-    :nodeInCopies
+    :rowIsInstanceOwn
 }
 
 ZType: ztypes.ZType
@@ -552,37 +552,52 @@ monoVariableIn: function {
     return (shared.get key: nid)
 }
 
-# bodycopy -- a generic instance's own copy of a template function: the rows
-# from its function row, which the copy takes first, to the cloned body's root,
-# which it takes last
-bodycopy: record {
-    functionRow: zast.nodeid
+# rowspan -- a run of node rows, `first` to `last`, both included
+rowspan: record {
+    first: zast.nodeid
     last: zast.nodeid
 }
 
-# nodeInCopies -- `nid` lies inside one of the instances' own copies of a
-# template function (instanceCopies).
-nodeInCopies: function {copies: (ListVal bodycopy).view nid: zast.nodeid} out bool is {
-    for each c: copies loop {
-        if nid >= c.functionRow when nid <= c.last then return true
+# rowIsInstanceOwn -- row `nid` was made while a generic instance was walked: in
+# a walk that ended (`spans`, in row order and apart) or in the one in
+# progress, which began at row `open` (0 when none is). Such a row -- the
+# instance's copy of a template function, and every row its walk made after
+# -- is walked by that instance alone.
+rowIsInstanceOwn: function {
+    spans: (ListVal rowspan).view open: zast.nodeid nid: zast.nodeid
+} out bool is {
+    if open.isZero.not when nid >= open then return true
+    lo: u64
+    hi: spans.length
+    for lo < hi loop {
+        width: hi - lo
+        mid: lo + (width / 2)
+        s: spans.get i: mid
+        if nid >= s.first when nid <= s.last then return true
+        if nid >= s.first then {
+            lo = mid + 1
+        } else {
+            hi = mid
+        }
     }
     return false
 }
 
 # setFirstOrPerMono -- record `value` for node `nid` as the walk of `mono` (0
-# for a walk of no mono) found it. A template body is walked once per mono: the
+# for a walk of no mono) found it. A template node is walked once per mono: the
 # first value any walk finds is the shared one, and a walk that finds another
-# keeps it per mono. A node of an instance's own copy of the body (`copies`)
-# is the instance's alone, so its value is the shared one.
+# keeps it per mono. A row made in an instance's walk (`spans`, `open`:
+# rowIsInstanceOwn) is the instance's alone, so its value is the shared one.
 setFirstOrPerMono: function as { t: anyval.generic } in {
     perMono: (MapVV monostamp v: t)
     shared: (IdMapV zast.nodeid v: t)
-    copies: (ListVal bodycopy).view
+    spans: (ListVal rowspan).view
+    open: zast.nodeid
     mono: ztypes.tid
     nid: zast.nodeid
     value: t
 } is {
-    if mono.isZero.not when (nodeInCopies :copies :nid).not then {
+    if mono.isZero.not when (rowIsInstanceOwn :spans :open :nid).not then {
         got: shared.get key: nid
         if got.some then {
             if got == value then return
@@ -772,10 +787,18 @@ ZTyping: class {
     # by (instance, template function node): the instance is checked and
     # emitted from the copy, so no node carries another instance's answer
     instanceBody: (MapVV monostamp v: zast.nodeid)
-    # the rows those copies occupy, in the order they were made: what an
-    # instance walk records on a node inside one is that instance's alone, so
-    # it goes to the plain tables
-    instanceCopies: ListVal bodycopy
+    # the function row of each of those copies, in the order they were made
+    instanceFunctions: ListVal zast.nodeid
+    # the rows made while an instance was walked, in row order: its copy of a
+    # template function and every row its walk made after. What an instance
+    # walk records on one is that instance's alone, so it goes to the plain
+    # tables (rowIsInstanceOwn)
+    instanceRows: ListVal rowspan
+    # the first row of the instance walk in progress, whose rows are not in
+    # instanceRows yet; 0 between walks
+    instanceRowsOpen: zast.nodeid
+    # how many instance walks are in progress, one inside the other
+    instanceWalkDepth: u32
     # the template function node each copy in instanceBody was made from: what
     # the checker records on a template's function -- that it is a generator's
     # `call`, its state fields -- a copy answers through it
@@ -2337,7 +2360,8 @@ ZTyping: class {
             setFirstOrPerMono
             perMono: this.monoNodeConst
             shared: this.nodeConst
-            copies: this.instanceCopies
+            spans: this.instanceRows
+            open: this.instanceRowsOpen
             :mono
             :nid
             :value
@@ -2376,19 +2400,39 @@ ZTyping: class {
         this.postGuardVarId.set key: nid value: vid
     }
 
-    # nodeInInstanceBody -- `nid` lies inside an instance's own copy of a
-    # template function (instanceBody).
-    nodeInInstanceBody: function {t: this.view nid: zast.nodeid} out bool is {
-        return (nodeInCopies copies: t.instanceCopies :nid)
+    # isInstanceRow -- row `nid` was made while an instance was walked, the walk
+    # in progress included (rowIsInstanceOwn).
+    isInstanceRow: function {t: this.view nid: zast.nodeid} out bool is {
+        return (rowIsInstanceOwn spans: t.instanceRows open: t.instanceRowsOpen :nid)
+    }
+
+    # beginInstanceWalk -- an instance's walk begins; `next` is the next row the
+    # tree will make. Every row from it on is that instance's own until the
+    # walk ends (endInstanceWalk). A walk begun inside another adds nothing: its
+    # rows lie in the outer walk's run.
+    beginInstanceWalk: function {:this next: zast.nodeid} is {
+        if this.instanceWalkDepth == 0 then this.instanceRowsOpen = next
+        this.instanceWalkDepth = this.instanceWalkDepth + 1
+    }
+
+    # endInstanceWalk -- the instance walk that began last ends; `next` is the
+    # next row the tree will make. The outermost walk's rows join instanceRows.
+    endInstanceWalk: function {:this next: zast.nodeid} is {
+        this.instanceWalkDepth = this.instanceWalkDepth - 1
+        if this.instanceWalkDepth != 0 then return
+        first: this.instanceRowsOpen
+        this.instanceRowsOpen = zast.nodeid
+        if next == first then return
+        this.instanceRows.append (rowspan :first last: (zast.nodeid from: next.u32 - 1))
     }
 
     # walkMonoOf -- the instance whose own table an answer the walk records on
-    # `nid` goes to: the instance being walked, unless the node lies in its own
-    # copy of the body, whose answers are the plain tables'. 0 outside an
+    # `nid` goes to: the instance being walked, unless the row was made in an
+    # instance's walk, whose answers are the plain tables'. 0 outside an
     # instance walk.
     walkMonoOf: function {t: this.view nid: zast.nodeid} out ztypes.tid is {
         if t.curMonoStamp.isZero then return ztypes.tid.zero
-        if (t.nodeInInstanceBody :nid) then return ztypes.tid.zero
+        if (t.isInstanceRow :nid) then return ztypes.tid.zero
         return t.curMonoStamp
     }
 
@@ -2966,7 +3010,10 @@ newTyping: function {nodeEst: 0.u64} out ZTyping is {
         funcPins: IdSet ztypes.tid
         monoNodeType: (MapVV monostamp v: ztypes.tid)
         instanceBody: (MapVV monostamp v: zast.nodeid)
-        instanceCopies: ListVal bodycopy
+        instanceFunctions: ListVal zast.nodeid
+        instanceRows: ListVal rowspan
+        instanceRowsOpen: zast.nodeid
+        instanceWalkDepth: 0
         instanceOrigin: (IdMapV zast.nodeid v: zast.nodeid)
         monoNodeConst: (MapVV monostamp v: ztypes.cval)
         monoFoldedBranch: (MapVV monostamp v: foldedbranch)

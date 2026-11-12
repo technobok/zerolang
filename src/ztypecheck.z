@@ -38671,7 +38671,8 @@ recordConstMatchFold: function {
         ztyping.setFirstOrPerMono
         perMono: st.typing.monoFoldedBranch
         shared: st.typing.foldedBranch
-        copies: st.typing.instanceCopies
+        spans: st.typing.instanceRows
+        open: st.typing.instanceRowsOpen
         mono: st.typing.curMonoStamp
         nid: casenode.nid
         value: (ztyping.foldedbranch known: true :stmt)
@@ -60588,6 +60589,7 @@ walkDeferredBody: function {
     st.mode.suppressFnAutoCall = false
     forceOwnerMember :st :ast :ownerDecl :memberId
     qn: methodLabel :ast typeName: typeName.stringView :memberId
+    if mono.isZero.not then st.typing.beginInstanceWalk next: (nextRowOf :ast)
     (
         checkFunctionBody
         :st
@@ -60601,6 +60603,7 @@ walkDeferredBody: function {
         :ast
         :declId
     )
+    if mono.isZero.not then st.typing.endInstanceWalk next: (nextRowOf :ast)
     markMemberWalked :st :declId
     st.typing.curMonoStamp = prevMono
     st.mode = savedMode
@@ -62063,6 +62066,7 @@ stampOneFnMono: function {
     prevT: st.walk.currentThisTid
     origin: st.reg.genericOriginOf tid: monoId
     fnTemplateDecl: st.typing.declIdOfType typeId: origin
+    st.typing.beginInstanceWalk next: (nextRowOf :ast)
     cfbFr: fnRefAt :ast nid: (instanceBodyAt :st :ast mono: monoId opId: fnOpId)
     errsBefore: st.typing.errors.length
     (
@@ -62078,6 +62082,7 @@ stampOneFnMono: function {
         :ast
         declId: fnTemplateDecl
     )
+    st.typing.endInstanceWalk next: (nextRowOf :ast)
     noteInstanceErrors :st :ast mono: monoId from: errsBefore
     st.walk.synthLabel = prevL.take
     st.walk.synthOwnerUnit = prevOwnerUnit
@@ -62315,6 +62320,7 @@ stampOneClassMono: function {
                 st.typing.curMonoStamp = monoId
                 continue
             }
+            st.typing.beginInstanceWalk next: (nextRowOf :ast)
             cfbFr: fnRefAt :ast nid: (instanceBodyAt :st :ast mono: monoId opId: mop)
             (
                 checkFunctionBody
@@ -62329,6 +62335,7 @@ stampOneClassMono: function {
                 :ast
                 declId: classTemplateDecl
             )
+            st.typing.endInstanceWalk next: (nextRowOf :ast)
         }
         mNames = ListVal zast.nameid
         mOps = ListVal zast.nodeid
@@ -62371,6 +62378,7 @@ stampMemberFnMonos: function {
         st.typing.curMonoStamp = t
         st.walk.curMonoFnTid = t
         q: st.reg.nameOf tid: t
+        st.typing.beginInstanceWalk next: (nextRowOf :ast)
         cfbFr: fnRefAt :ast nid: (instanceBodyAt :st :ast mono: t opId: mop)
         errsBefore: st.typing.errors.length
         (
@@ -62386,6 +62394,7 @@ stampMemberFnMonos: function {
             :ast
             declId: methodDecl
         )
+        st.typing.endInstanceWalk next: (nextRowOf :ast)
         noteInstanceErrors :st :ast mono: t from: errsBefore
         recordMintedBy :st monoId: t :minted
     }
@@ -62731,10 +62740,15 @@ instanceBodyAt: function {
         }
     }
     cid: zast.tableAdd :ast n: row
-    st.typing.instanceCopies.append (ztyping.bodycopy functionRow: cid last: bcId)
+    st.typing.instanceFunctions.append from: cid
     st.typing.instanceBody.set key: k value: cid
     st.typing.instanceOrigin.set key: cid value: opId
     return cid
+}
+
+# nextRowOf -- the id the next row made in `ast` takes.
+nextRowOf: function {ast: Ast.view} out zast.nodeid is {
+    return (zast.nodeid from: ast.nodes.length.u32.orPanic)
 }
 
 # generatorCallOf -- the generator `call` whose recorded answers (`yield` in
@@ -63210,6 +63224,7 @@ walkUnitMonoFns: function {
                 }
                 origin: st.reg.genericOriginOf tid: monoId
                 unitTemplateDecl: st.typing.declIdOfType typeId: origin
+                st.typing.beginInstanceWalk next: (nextRowOf :ast)
                 cfbFr: fnRefAt :ast nid: (instanceBodyAt :st :ast mono: monoId opId: bm2.operation)
                 (
                     checkFunctionBody
@@ -63224,6 +63239,7 @@ walkUnitMonoFns: function {
                     :ast
                     declId: unitTemplateDecl
                 )
+                st.typing.endInstanceWalk next: (nextRowOf :ast)
             }
         }
         idxs = ListVal u64
@@ -66096,7 +66112,8 @@ stampCondFoldsTrue: function {st: zenv.ZSymbolTable nid: zast.nodeid v: u32} is 
         ztyping.setFirstOrPerMono
         perMono: st.typing.monoCondFoldsTrue
         shared: st.typing.condFoldsTrue
-        copies: st.typing.instanceCopies
+        spans: st.typing.instanceRows
+        open: st.typing.instanceRowsOpen
         mono: st.typing.curMonoStamp
         :nid
         value: v == 1
@@ -66109,7 +66126,8 @@ stampFoldedLoop: function {st: zenv.ZSymbolTable nid: zast.nodeid fold: ztyping.
         ztyping.setFirstOrPerMono
         perMono: st.typing.monoFoldedLoop
         shared: st.typing.foldedLoop
-        copies: st.typing.instanceCopies
+        spans: st.typing.instanceRows
+        open: st.typing.instanceRowsOpen
         mono: st.typing.curMonoStamp
         :nid
         value: fold
@@ -66198,7 +66216,8 @@ foldIfBranch: function {
         ztyping.setFirstOrPerMono
         perMono: st.typing.monoFoldedBranch
         shared: st.typing.foldedBranch
-        copies: st.typing.instanceCopies
+        spans: st.typing.instanceRows
+        open: st.typing.instanceRowsOpen
         mono: st.typing.curMonoStamp
         :nid
         value: fb
@@ -66411,7 +66430,8 @@ foldCaseArm: function {
         ztyping.setFirstOrPerMono
         perMono: st.typing.monoFoldedBranch
         shared: st.typing.foldedBranch
-        copies: st.typing.instanceCopies
+        spans: st.typing.instanceRows
+        open: st.typing.instanceRowsOpen
         mono: st.typing.curMonoStamp
         nid: n.nid
         value: (ztyping.foldedbranch known: true :stmt)
