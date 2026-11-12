@@ -1015,9 +1015,9 @@ walkmode: record {
     # whether the walk is inside a containment check, which is what stops a
     # valtype cycle from recursing forever
     inContainmentEdge: false
-    # stop stamping parameters, for the walks that re-visit a signature without
-    # re-binding it
-    suppressParamStamps: false
+    # the walk is a generic's: a template's, checked for its diagnostics alone,
+    # or one of its instances'. Its scopes stay out of the dump (snapshotScope)
+    genericWalk: false
     # stop reading a bare type name as a construction
     suppressBareCtor: false
     # stop reading a bare function reference as a zero-argument call, which is
@@ -1126,13 +1126,6 @@ ZSymbolTable: class {
     # itself the last line of one; 0 when neither
     tailBody: zast.nodeid
     tailBlock: zast.nodeid
-    # the generic-parameter answers a TEMPLATE walk keeps out of the shared stamp
-    # table, by node, so that walk can still read what it just checked
-    templateStamps: (IdMapV zast.nodeid v: ztypes.tid)
-    # the arm predicates a TEMPLATE walk found on a partial (`o.some` on an
-    # `optionval_t`), by node: the if-narrowing reads them there, and the shared
-    # dpArmPredicate the emitter reads keeps each instance's own
-    templateArmPreds: (IdMapV zast.nodeid v: ztypes.tid)
     # dump scaffolding: the root scopes of a walk the dump leaves out (a
     # diagnostics-only template walk, an instance walk, a dry run) -- every
     # scope under one is left out with it -- and the rows snapshotted when a
@@ -1184,7 +1177,7 @@ ZSymbolTable: class {
             path: false
             relMark: this.releasedRows.length
         )
-        if this.mode.suppressParamStamps then this.scopeHidden.add item: f
+        if this.mode.genericWalk then this.scopeHidden.add item: f
         this.curScope = f
         return f
     }
@@ -1937,7 +1930,7 @@ ZSymbolTable: class {
     # instance's copy of it is emitted from.
     recording: function {t: this.view} out bool is {
         if t.dryRunDepth > 0 then return false
-        return (t.mode.suppressParamStamps and t.typing.curMonoStamp.isZero).not
+        return (t.mode.genericWalk and t.typing.curMonoStamp.isZero).not
     }
 
     # appendOwnedTempsOf -- the TEMPORARIES `scope` binds that own something at
@@ -3759,12 +3752,11 @@ ZSymbolTable: class {
     # --- dump ---
 
     # snapshotScope -- the scope's locals and overlay rows, in the order they
-    # were laid, as dump rows. A generic template body walk is
-    # diagnostics-only: its scopes stay out of the dump (the emitter re-walks
-    # per instance).
+    # were laid, as dump rows. A generic's walk, a template's or an
+    # instance's, keeps its scopes out of the dump.
     snapshotScope: function {:this scope: ztypes.declid start: u64} is {
         if this.typing.dumpRows.not then return
-        if this.mode.suppressParamStamps then return
+        if this.mode.genericWalk then return
         kn: this.typing.declChildSlots declId: scope
         endIdx: this.entries.length
         pos: u64
@@ -3885,8 +3877,6 @@ newSymbolTable: function {reg: ztypes.ZTypeRegistry.take typing: ZTyping.take} o
         breakSeen: ListVal bool
         tailBody: zast.nodeid
         tailBlock: zast.nodeid
-        templateStamps: (IdMapV zast.nodeid v: ztypes.tid)
-        templateArmPreds: (IdMapV zast.nodeid v: ztypes.tid)
         scopeHidden: IdSet ztypes.declid
         entryDump: List ZEntryDumpRow
         argLocks: ListVal queuedarglock

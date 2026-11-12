@@ -224,26 +224,15 @@ monoSubstTid: function {st: zenv.ZSymbolTable.view tid: ztypes.tid} out ztypes.t
     return ((st.walk.monoParamSubst.get key: tid).or d: tid)
 }
 
-# stampParamSuppressed -- a TEMPLATE walk keeps a GENERIC_PARAM answer to
-# itself (templateStamps): the shared stamp table names no parameter.
-stampParamSuppressed: function {st: zenv.ZSymbolTable.view tid: ztypes.tid} out bool is {
-    if st.mode.suppressParamStamps.not then return false
-    return (st.reg.typetypeOf typeId: tid) == ztypes.ztypetype.genericParam
-}
-
-# stampGate -- a body-walk node stamp, routed: an instance's walk writes the
-# substituted type on its own row, a template walk keeps a parameter answer to
-# itself, and every other walk writes the plain node type.
+# stampGate -- a body-walk node stamp: an instance's walk writes the
+# substituted type, on a row of its own; every other walk writes the type as
+# it is.
 stampGate: function {st: zenv.ZSymbolTable nid: zast.nodeid tid: ztypes.tid} is {
     if st.typing.curMonoStamp.isZero.not then {
         if (st.typing.rowIsForeign :nid) then {
             panic msg: "ztypecheck: an instance's walk typed a row that is not its own"
         }
         ztyping.nodeTypeSet tbl: st.typing.nodeType :nid tid: (monoSubstTid :st :tid)
-        return
-    }
-    if (stampParamSuppressed :st :tid) then {
-        st.templateStamps.set key: nid value: tid
         return
     }
     ztyping.nodeTypeSet tbl: st.typing.nodeType :nid :tid
@@ -20553,7 +20542,7 @@ resolveDemandedDefs: function {st: zenv.ZSymbolTable ast: Ast} is {
     pMs: st.typing.curMonoStamp
     pMf: st.walk.curMonoFnTid
     st.mode.inContainmentEdge = false
-    st.mode.suppressParamStamps = false
+    st.mode.genericWalk = false
     st.typing.curMonoStamp = ztypes.tid.zero
     st.walk.curMonoFnTid = ztypes.tid
     i: u64
@@ -23764,7 +23753,7 @@ stampPendingTyperefs: function {
     prevMono: st.typing.curMonoStamp
     savedMode: st.mode
     st.typing.curMonoStamp = ztypes.tid.zero
-    st.mode.suppressParamStamps = false
+    st.mode.genericWalk = false
     stampPendingTyperefsIn :st :ast :unitDecl
     st.typing.curMonoStamp = prevMono
     st.mode = savedMode
@@ -32859,9 +32848,9 @@ namesFailedConstant: function {
 }
 
 # reportUnknownMember -- an unknown member on a type whose member set is
-# complete is a hard error; memberStrictType says which types those are. The
-# param-stamp suppression a template body is walked under does not gate this: a
-# member's EXISTENCE is settled by the declarations, not by what the walk stamps.
+# complete is a hard error; memberStrictType says which types those are. A
+# template's walk reports it as any walk does: a member's EXISTENCE is settled
+# by the declarations, not by what the walk stamps.
 reportUnknownMember: function {
     st: zenv.ZSymbolTable
     ast: Ast
@@ -33515,7 +33504,7 @@ checkTaggedMemberPath: function {
             if gtpl when ptSelf then {
                 pbool: stdTid :ast :st wk: zast.wellKnown.slot.wkBool
                 if pbool.isZero.not then {
-                    st.templateArmPreds.set key: dp.nid value: ptb
+                    st.typing.dpArmPredicate.set key: dp.nid value: ptb
                     stampGate :st nid: dp.nid tid: pbool
                     return (callleg handled: true tid: pbool)
                 }
@@ -35056,7 +35045,7 @@ checkUnresolvedMember: function {
     # strict unknown-member check says so, but a generic instance is
     # lenient there, so unstamped it reached the emitter as an unhandled
     # binding (E0500, no location) -- diagnose it on every base.
-    if cnId == zast.wellKnown.slot.wkView when st.mode.suppressParamStamps.not then {
+    if cnId == zast.wellKnown.slot.wkView when st.mode.genericWalk.not then {
         cn: zast.nameTextAt :ast ref: cnId
         btnVw: specWrittenName :st :ast tid: bt
         mVw: "type '\{btnVw}' has no member 'view'"
@@ -38794,10 +38783,6 @@ predDottedCore: function {
     negated: bool
 } out Option ArmPredFact is {
     ptid: (st.typing.dpArmPredicate.get key: nid).or d: ztypes.tid
-    # a template walk reads its own, which a partial's predicate is kept in
-    if st.mode.suppressParamStamps when st.typing.curMonoStamp.isZero then {
-        ptid = (st.templateArmPreds.get key: nid).or d: ptid
-    }
     if ptid.isZero then return (Option.none ArmPredFact)
     if ptid == boolId then return (Option.none ArmPredFact)
     sn: zast.atomNameIdOf n: parent
@@ -56859,8 +56844,7 @@ genericParamSubjectTid: function {
     if gsnid.isZero.not when subjT.isZero.not then {
         # direct write, NOT stampGate: this genericParam stamp IS
         # the dissection marker the emitter dispatches on -- it
-        # must survive the template walk's param-stamp suppression
-        # AND replace the substituted stamp the general subject walk
+        # must replace the substituted stamp the general subject walk
         # wrote (the canonical param tid is in monoParamSubst now, so
         # stampGate substitutes it)
         setgs: subjT
@@ -58095,9 +58079,8 @@ checkCase: function {
     }
     if subjT.isZero.not when (st.reg.isTypeParamOf tid: subjT) then {
         # a genericParam subject IS a compile-time dissection: write the
-        # marker stamp directly (stampGate suppresses param stamps in
-        # template walks, and an instance's row must carry the param,
-        # not its substitution, for the emitter's dispatch gate)
+        # marker stamp directly (an instance's row must carry the
+        # param, not its substitution, for the emitter's dispatch gate)
         gmn: nodeId n: (ast.nodes.get i: casenode.subject)
         if gmn.isZero.not then {
             gmv: subjT
@@ -59085,21 +59068,8 @@ staticListRefAt: function {ast: Ast.view nid: zast.nodeid} out staticlistref is 
     return (staticlistref nid: zn nelems: 0 outType: zn lineno: 0 colno: 0)
 }
 
-# walkTypeOf -- the type the walk in progress stamped on body node `nid`. A
-# template walk keeps its generic-parameter answers to itself (stampGate), so a
-# read of a node that walk has just checked asks there first; otherwise, the
-# shared stamp.
+# walkTypeOf -- the type the walk in progress stamped on body node `nid`.
 walkTypeOf: function {st: zenv.ZSymbolTable.view nid: zast.nodeid} out ztypes.tid is {
-    # routed as stampGate writes: an instance's walk reads the plain stamp
-    if st.typing.curMonoStamp.isZero.not then {
-        return (ztyping.nodeTypeAt tbl: st.typing.nodeType :nid)
-    }
-    if st.mode.suppressParamStamps then {
-        ts: st.templateStamps.get key: nid
-        if ts.some then {
-            return ts
-        }
-    }
     return (ztyping.nodeTypeAt tbl: st.typing.nodeType :nid)
 }
 
@@ -60146,7 +60116,7 @@ walkDemandedDef: function {
     savedMode: st.mode
     st.typing.curMonoStamp = ztypes.tid.zero
     st.walk.curMonoFnTid = ztypes.tid
-    st.mode.suppressParamStamps = false
+    st.mode.genericWalk = false
     st.mode.inContainmentEdge = false
     # walkOwnerMethods only ever walked a TYPE's methods; a free function
     # reaching it was marked and declined, and its unit's own free-function walk
@@ -60775,7 +60745,7 @@ bindFunctionParam: function {
         }
     }
     # a template's own bare param carries no stamp; bind the canonical param tid
-    # from the FUNCTION child so the walk types it (stampGate suppresses the stamp)
+    # from the FUNCTION child so the walk types it
     if ptid.isZero when isGenDef when fnTid.isZero.not then {
         paramChild: st.typing.declChildOfId parentTypeId: fnTid nameId: pm.name
         if paramChild.some when (
@@ -61260,12 +61230,12 @@ checkFunctionBodyIn: function {
     # `mathops_i64`, never an interned name).
     if fnTid.isZero.not when (st.reg.isGenericOf tid: fnTid) then isGenDef = true
     if hasBody then {
-        # A generic template body is checked ONCE, for diagnostics; each
-        # instance walks its own clone of the body (instanceBodyAt), so
-        # GENERIC_PARAM-valued stamps are suppressed for the walk (and
-        # its scopes/entries stay out of the dump log).
+        # A generic template's body is checked ONCE, for its diagnostics;
+        # each instance walks its own copy of the function
+        # (instanceBodyAt). The walk is marked a generic's, which keeps
+        # its scopes and entries out of the dump log.
         savedMode: st.mode
-        if isGenDef then st.mode.suppressParamStamps = true
+        if isGenDef then st.mode.genericWalk = true
         st.pushScope parent: rf node: fn.nid
         st.fnScopes.append (zenv.openpos.create from: st.open.length - 1)
         exitMark: st.exitLog.length
@@ -61411,7 +61381,7 @@ walkUnitTemplateBodies: function {
     # (instanceBodyAt), which the emitter emits with the instance's stamps (the rule every template walk
     # follows; the `match t` marker writes past it on purpose)
     savedMode: st.mode
-    st.mode.suppressParamStamps = true
+    st.mode.genericWalk = true
     bn: bodyIds.count.u64
     bi: u64
     for bi < bn loop {
@@ -62027,7 +61997,7 @@ stampOneFnMono: function {
     minted: st.reg.nextTid
     monoNm: st.reg.nameOf tid: monoId
     savedMode: st.mode
-    st.mode.suppressParamStamps = true
+    st.mode.genericWalk = true
     st.pushScope parent: scope node: zast.nodeid
     st.walk.monoParamSubst = IdMapV ztypes.tid v: ztypes.tid
     {
@@ -62245,7 +62215,7 @@ stampOneClassMono: function {
     minted: st.reg.nextTid
     monoNm: st.reg.nameOf tid: monoId
     savedMode: st.mode
-    st.mode.suppressParamStamps = true
+    st.mode.genericWalk = true
     st.pushScope parent: scope node: zast.nodeid
     st.walk.monoParamSubst = IdMapV ztypes.tid v: ztypes.tid
     {
@@ -62586,13 +62556,11 @@ stampUnitMonoMembers: function {
 }
 
 # stampUnitMonoTemplates -- post-sweep: re-walk each generic-unit template's
-# method bodies once per monomorphised instance, instance type args bound in
-# scope, every stamp routed into the mono side table (stampGate's
-# curMonoStamp mode, flat param->arg substitution via monoParamSubst). The
-# emitter's per-instance template re-walk reads the table (monoStampIdOf)
-# where the global table is param-suppressed. Runs under suppressParamStamps
-# so its scopes/entries stay out of the dump log. It runs when the program has
-# errors as well: an instance's walk reports what holds only for its
+# method bodies once per monomorphised instance, each from the instance's own
+# copy, instance type args bound in scope (stampGate's curMonoStamp mode, flat
+# param->arg substitution via monoParamSubst). Runs as a generic's walk
+# (genericWalk), so its scopes/entries stay out of the dump log. It runs when
+# the program has errors as well: an instance's walk reports what holds only for its
 # arguments, which no other walk sees. An instance walk can mint an instance of a
 # template this sweep has already enumerated -- a generic function called from
 # a generic body with the body's own parameter, and a walk can use another
@@ -63146,7 +63114,7 @@ walkUnitMonoFns: function {
     errsBefore: st.typing.errors.length
     monoNm: st.reg.nameOf tid: monoId
     savedMode: st.mode
-    st.mode.suppressParamStamps = true
+    st.mode.genericWalk = true
     st.pushScope parent: scope node: zast.nodeid
     st.walk.monoParamSubst = IdMapV ztypes.tid v: ztypes.tid
     {
