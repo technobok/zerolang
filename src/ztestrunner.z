@@ -1446,9 +1446,10 @@ blockAt: function {b: zdocblocks.DocBlock.view} out String is {
     return s
 }
 
-# doccodeJob -- write `content` to `path` and the one-step job that checks it:
-# `zc emit --eager` when tool is "emit", else the zl at `tool` as `fmt --check`.
-# Either step's exit is data, read by the verdicts.
+# doccodeJob -- write `content` to `path` and the job that checks it: `zc emit
+# --eager` when tool is "emit", and then the C compiler over the C it wrote,
+# compiled and not linked; else the zl at `tool` as `fmt --check`. A step's
+# exit is data, read by the verdicts: an emit that fails ends its job there.
 doccodeJob: function {
     r: Runner.view path: StringView content: StringView tool: StringView
 } out PoolJob is {
@@ -1470,13 +1471,14 @@ doccodeJob: function {
         argv.append from: "--system".string
         argv.append from: r.sys.copy
         argv.append from: "-o".string
-        argv.append from: os.nullDevice
+        argv.append from: "\{path}.c"
     } else {
         argv.append from: tool.string
         argv.append from: "fmt".string
         argv.append from: "--check".string
         argv.append from: path.string
     }
+    compiles: (tool.endsWith "emit") and (zcc.ccFamilyOf ccPath: r.cc.stringView).msvc.not
     steps: List PoolStep
     steps.append (
         mkStep
@@ -1485,10 +1487,41 @@ doccodeJob: function {
         outPath: os.nullDevice.stringView
         errPath: errPath.stringView
         timeoutSecs: r.timeoutSecs
-        allowFail: true
+        allowFail: compiles.not
         zlinkFrom: ""
     )
+    if compiles then {
+        ccErrPath: "\{path}.c.err"
+        steps.append (
+            mkStep
+            argv: (doccodeCcArgv :r :path)
+            cwd: ""
+            outPath: os.nullDevice.stringView
+            errPath: ccErrPath.stringView
+            timeoutSecs: r.timeoutSecs
+            allowFail: true
+            zlinkFrom: ""
+        )
+    }
     return (mkJob name: path :steps)
+}
+
+# doccodeCcArgv -- the command that compiles, and does not link, the C `zc
+# emit` wrote for the example at `path`: an example's C must be C the compiler
+# takes, and whether it links is its program's business.
+doccodeCcArgv: function {r: Runner.view path: StringView} out List String is {
+    a: List String
+    a.append from: r.cc.copy
+    for each ccFlag: (r.ccflags.stringView.split sep: " ") loop {
+        if ccFlag.length > 0 then a.append from: ccFlag.string
+    }
+    a.append from: "-std=c17".string
+    a.append from: "-w".string
+    a.append from: "-c".string
+    a.append from: "\{path}.c"
+    a.append from: "-o".string
+    a.append from: "\{path}.o"
+    return a
 }
 
 # doccodeVerdict -- one block that is not skipped: its argument or naming
@@ -1513,12 +1546,13 @@ doccodeVerdict: function {
         if b.dataFile then errExt = ".zd.err"
         errPath: stem.stringView.concat errExt
         errText: slurp path: errPath.stringView
-        problem = (
-            emitVerdict
-            status: (statuses.get i: emitAt.u64.orPanic)
-            errText: errText.stringView
-            expect: b.expect.stringView
-        )
+        status: statuses.get i: emitAt.u64.orPanic
+        problem = emitVerdict :status errText: errText.stringView expect: b.expect.stringView
+        # an emit that wrote no error ran, and what failed is the C compiler
+        if status != 0 when (errText.stringView.contains "error[").not then {
+            ccSaid: doccodeCcProblem stem: stem.stringView
+            if ccSaid.length > 0 then problem = ccSaid.take
+        }
     }
     if problem.length > 0 then {
         print "FAIL(doccode) \{at.stringView}: \{problem.stringView}"
@@ -1526,6 +1560,17 @@ doccodeVerdict: function {
     } else {
         r.passN = r.passN + 1
     }
+}
+
+# doccodeCcProblem -- what the C compiler said of the C written for the
+# example whose files start with `stem`: its first error, "" when it wrote none.
+doccodeCcProblem: function {stem: StringView} out String is {
+    ccPath: stem.concat ".z.c.err"
+    ccText: slurp path: ccPath.stringView
+    for each cl: ccText.stringView.lines loop {
+        if cl.contains "error" then return "the C written for it does not compile: \{cl}"
+    }
+    return "".string
 }
 
 # emitVerdict -- what is wrong with a checked block's emit, "" when nothing: an
