@@ -62668,12 +62668,11 @@ firstInstanceWalk: function {
 }
 
 # instanceBodyAt -- the function node instance `mono` walks for template
-# function `opId`: the template's signature over the instance's own copy of the
-# body, made at the instance's first walk of it (zast.cloneTreeAt). The instance
-# is checked and emitted from it and never from the template's body, so no body
-# node carries another instance's answer. The signature is the template's: the
-# instance's types are its FUNCTION's substituted children, and what its walk
-# binds on a parameter stays the instance's own (walkMonoOf).
+# function `opId`: the instance's own copy of the function -- its return type,
+# its parameters and its body -- made at the instance's first walk of it
+# (zast.cloneTreeAt). The instance is checked and emitted from the copy and
+# never from the template's nodes, so no node of a signature or a body carries
+# another instance's answer.
 instanceBodyAt: function {
     st: zenv.ZSymbolTable ast: Ast mono: ztypes.tid opId: zast.nodeid
 } out zast.nodeid is {
@@ -62691,6 +62690,26 @@ instanceBodyAt: function {
     # the copy's own function row first, so the copy is the rows from it to the
     # cloned body's root, the last row the clone takes
     myId: zast.tableReserve :ast from: opId
+    returnSrc: zast.nodeid
+    paramSrc: ListVal zast.nodeid
+    {
+        fv: ast.nodes.get i: opId
+        if fv.functiondef then {
+            returnSrc = fv.returntype
+            zast.appendSpan kids: ast.kids acc: paramSrc span: fv.parameters
+        }
+    }
+    returnId: zast.nodeid
+    if returnSrc.isZero.not then {
+        rc: zast.cloneTreeAt :ast nid: returnSrc
+        returnId = zast.tableAdd :ast n: rc
+    }
+    paramIds: ListVal zast.nodeid
+    for each src: paramSrc loop {
+        pc: zast.cloneTreeAt :ast nid: src
+        paramIds.append from: (zast.tableAdd :ast n: pc)
+    }
+    paramSpan: zast.kidsAdd kids: ast.kids xs: paramIds
     bc: zast.cloneTreeAt :ast nid: bodyId
     bcId: zast.tableAdd :ast n: bc
     row: astnode.placeholder
@@ -62702,8 +62721,8 @@ instanceBodyAt: function {
                 nodeid: myId
                 lineno: fv.lineno
                 colno: fv.colno
-                returntype: fv.returntype
-                parameters: fv.parameters
+                returntype: returnId
+                parameters: paramSpan
                 body: bcId
                 isNative: fv.isNative
                 pins: fv.pins
