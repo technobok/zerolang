@@ -2386,7 +2386,8 @@ runLspCases: function {r: Runner} is {
 
 # lspListenCase -- `zls --listen 0` end to end over a socket: the server
 # takes a free port and says which on its stdout, a client connects to that
-# port, `shutdown` is answered, and `exit` ends the server with status 0. A
+# port and starts a session, `shutdown` is answered, and `exit` ends the server
+# with status 0. A
 # server that kept the port to itself could never be reached, and the
 # transcript cases all go through --replay.
 lspListenCase: function {r: Runner zlsB: StringView} is {
@@ -2414,12 +2415,12 @@ lspListenCase: function {r: Runner zlsB: StringView} is {
     port: awaitListenPort path: outP.stringView :deadline
     want: frameLsp src: "{\"jsonrpc\":\"2.0\",\"id\":1,\"result\":null}"
     got: String
-    if port != 0 then got = listenExchange :port :deadline n: want.length
+    if port != 0 then got = listenExchange :port :deadline
     st: reapWithin :children :deadline
-    if got.stringView == want when st == 0 then {
+    if got.stringView.endsWith want when st == 0 then {
         r.passN = r.passN + 1
     } else {
-        print "FAIL(lsp) listen (port \{port}: answered \{got.length} of \{want.length} bytes, exit \{st})"
+        print "FAIL(lsp) listen (port \{port}: the \{got.length} bytes answered do not end with the reply to shutdown, exit \{st})"
         r.fails = r.fails + 1
     }
 }
@@ -2451,20 +2452,20 @@ listenPort: function {path: StringView} out u16 is {
     return 0
 }
 
-# listenExchange -- connect to `port`, send `shutdown` then `exit`, and read
-# until `n` bytes of answer have come, the server closes, or `deadline`
-listenExchange: function {port: u16 deadline: i64 n: u64} out String is {
+# listenExchange -- connect to `port`, send `initialize`, `shutdown` and
+# `exit`, and read what the server answers until it closes, or `deadline`
+listenExchange: function {port: u16 deadline: i64} out String is {
     got: String
     cr: net.connect :port
     match cr case ok then null case err then return got
     req: (
         frameLsp
-        src: "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"shutdown\"}\n{\"jsonrpc\":\"2.0\",\"method\":\"exit\"}"
+        src: "{\"jsonrpc\":\"2.0\",\"id\":0,\"method\":\"initialize\",\"params\":{}}\n{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"shutdown\"}\n{\"jsonrpc\":\"2.0\",\"method\":\"exit\"}"
     )
     wr: cr.write from: req.byteView
     if wr.err then return got
     buf: Bytes
-    for (buf.length < n) and (os.monotonicMillis <= deadline) loop {
+    for os.monotonicMillis <= deadline loop {
         pr: cr.pollReadable timeoutMillis: 100
         if pr.err then break
         if pr then {

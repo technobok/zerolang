@@ -699,6 +699,7 @@ Server: class {
     # dispatch one decoded message to its handler, and answer it where the
     # protocol requires an answer
     handleMessage: function {:this msg: Value.view} is {
+        if (this.refuseMessage :msg) then return
         mo: json.textAt v: msg path: "method"
         hasId: json.hasAt v: msg path: "id"
         match (
@@ -753,6 +754,64 @@ Server: class {
         } case none then {
             io.eprintln "zls: message without method"
         }
+    }
+
+    # refuseMessage -- whether `msg` is one the protocol does not let the
+    # server act on, answered here as the protocol says:
+    #   - no request at all (not an object, no `method` that is a string, an
+    #     `id` that is neither a number, a string nor null): invalid request,
+    #     -32600, under the id when it has a usable one;
+    #   - a request before `initialize`: server not initialized, -32002;
+    #   - a request after `shutdown`: invalid request, -32600.
+    # A notification in the last two states is dropped, `exit` excepted, and so
+    # is a reply to something the server asked. True when it was refused.
+    refuseMessage: function {:this msg: Value.view} out bool is {
+        idKind: (json.at v: msg path: "id").kind
+        methodKind: (json.at v: msg path: "method").kind
+        if methodKind.missing when (
+            (json.hasAt v: msg path: "result") or
+            (
+                json.hasAt
+                v: msg
+                path: "error"
+            )
+        ) then return true
+        idOk: idKind.missing or idKind.nul or idKind.intval or idKind.text
+        if methodKind.text.not or idOk.not then {
+            (
+                sendError
+                id: (idValueOf :msg)
+                code: -32600
+                message: "invalid request"
+                tp: this.transport
+            )
+            return true
+        }
+        mv: u64
+        mo: json.textAt v: msg path: "method"
+        match mo case some then mv = this.words.slotOf text: mo.stringView case none then null
+        if mv == zlsWord.slot.mExit then return false
+        early: this.initialized.not and (mv != zlsWord.slot.mInitialize)
+        if early.not when this.shutdownReq.not then return false
+        if idKind.missing then return true
+        if early then {
+            (
+                sendError
+                id: (idValueOf :msg)
+                code: -32002
+                message: "server not initialized"
+                tp: this.transport
+            )
+        } else {
+            (
+                sendError
+                id: (idValueOf :msg)
+                code: -32600
+                message: "invalid request"
+                tp: this.transport
+            )
+        }
+        return true
     }
 
     # the handshake: resolve the project roots, negotiate position encoding, and
@@ -9465,7 +9524,8 @@ serve: function {srv: Server} is {
             ) case ok then {
                 srv.handleMessage msg: pr
             } case err then {
-                io.eprintln "zls: bad JSON payload"
+                # a body that is no JSON: parse error, under a null id
+                sendError id: Value.nul code: -32700 message: "parse error" tp: srv.transport
             }
             if srv.debounce when srv.hasDirty when (srv.inputQuiet millis: DEBOUNCE_MS
             ) then srv.flushDirty
