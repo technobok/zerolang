@@ -1723,9 +1723,9 @@ shim-guard: $(BUILDDIR)/tcc $(BUILDDIR)/wineprefix/.ready $(NATIVEC_INC)/zthread
 	  $(MINGW_CC) -std=c17 -Wall -Wextra -Wno-unused-function -O2 $(MINGW_CFLAGS) $$si -o $$d/shim.exe $$t > $$d/cc.log 2>&1 \
 	    || { echo "shim-guard FAIL: mingw-w64 did not build the shim test"; grep -m3 error $$d/cc.log; fail=1; }; \
 	  if [ -f $$d/shim.exe ]; then \
-	    $(WINE_ENV) timeout 300 wine $$d/shim.exe > $$d/run.log 2>&1 \
-	      || { echo "shim-guard FAIL: the Win32 backend under wine"; tail -20 $$d/run.log; fail=1; }; \
-	    grep -q "zthread shim OK" $$d/run.log || { echo "shim-guard FAIL: the Win32 run did not report OK"; tail -20 $$d/run.log; fail=1; }; \
+	    $(WINE_ENV) timeout 300 wine $$d/shim.exe > $$d/run.log 2>&1; wrc=$$?; \
+	    [ $$wrc = 0 ] || { echo "shim-guard FAIL: the Win32 backend under wine exited $$wrc"; tail -20 $$d/run.log; fail=1; }; \
+	    grep -q "zthread shim OK" $$d/run.log || { echo "shim-guard FAIL: the Win32 run did not report OK (wine exited $$wrc and wrote $$(wc -c < $$d/run.log) bytes)"; tail -20 $$d/run.log; fail=1; }; \
 	  fi; \
 	  win=", and the Win32 backend (mingw-w64 under wine)"; \
 	fi; \
@@ -1737,6 +1737,9 @@ shim-guard: $(BUILDDIR)/tcc $(BUILDDIR)/wineprefix/.ready $(NATIVEC_INC)/zthread
 # ThreadSanitizer, built by $(CC) and by clang: no report, and the stdout and exit
 # status its goldens hold. TSan is proved first on tests/c/tsan_probe.c, which
 # races on purpose, so a sanitizer that reports nothing cannot pass the rest.
+# A race shows only in some schedules, so each program then runs TSAN_REPEAT
+# more times, $(NPROC) at once, and every run must hold.
+TSAN_REPEAT ?= 20
 ifdef WINDOWS_HOST
 thread-tsan-guard:
 	@echo "thread-tsan-guard: skipped (Linux only: ThreadSanitizer, which no Windows toolchain has)"
@@ -1758,6 +1761,9 @@ thread-tsan-guard: bin/zc
 	    if grep -q "ThreadSanitizer" $$d/err.txt; then echo "thread-tsan-guard FAIL: $$b under $$cc:"; head -20 $$d/err.txt; fail=1; fi; \
 	    [ "$$rc" = "$$want" ] || { echo "thread-tsan-guard FAIL: $$b under $$cc exited $$rc, want $$want"; fail=1; }; \
 	    cmp -s $$d/out.txt tests/fixtures/run_golden/$$b.out || { echo "thread-tsan-guard FAIL: $$b under $$cc printed other than its golden"; fail=1; }; \
+	    bad=$$(seq $(TSAN_REPEAT) | xargs -P $(NPROC) -I{} sh -c '"$$0" > "$$1.{}.out" 2> "$$1.{}.err"; rc=$$?; if grep -q ThreadSanitizer "$$1.{}.err" || [ "$$rc" != "$$2" ] || ! cmp -s "$$1.{}.out" "$$3"; then echo bad; fi' $$d/$$b-$$cc $$d/rep $$want tests/fixtures/run_golden/$$b.out | grep -c bad); \
+	    n=$$((n+$(TSAN_REPEAT))); \
+	    [ "$$bad" = 0 ] || { echo "thread-tsan-guard FAIL: $$b under $$cc: $$bad of $(TSAN_REPEAT) repeated runs raced, exited other than $$want or printed other than the golden"; fail=1; }; \
 	  done; \
 	done; \
 	rm -rf $$d; \
