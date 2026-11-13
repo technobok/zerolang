@@ -3883,8 +3883,8 @@ rowNeedAddBare: function {ctx: Ctx uname: StringView need: StringView cond: Cond
 # for a name it does not declare
 condBitOf: function {ctx: Ctx name: StringView} out u64 is {
     k: u64
-    for k < ctx.condNames.length loop {
-        if (ctx.condNames.get i: k).stringView == name then return 1.u64 << k
+    for k < ctx.conds.length loop {
+        if (ctx.conds.get i: k).name.stringView == name then return 1.u64 << k
         k = k + 1
     }
     (
@@ -3905,16 +3905,23 @@ recordCondition: function {ctx: Ctx name: StringView expression: StringView} is 
     if (
         (nm.length == 0) or (ex.length == 0)
     ) then bad = "a condition needs a name and a C expression".string
-    for each c: ctx.condNames loop {
-        if c.stringView == nm then bad = "the condition '\{nm}' is declared twice"
+    for each c: ctx.conds loop {
+        if c.name.stringView == nm then bad = "the condition '\{nm}' is declared twice"
     }
-    if ctx.condNames.length == 64 then bad = "more than 64 conditions".string
+    if ctx.conds.length == 64 then bad = "more than 64 conditions".string
     if bad.length > 0 then {
         emitFail :ctx what: "nativec: \{bad}" line: 0
         return
     }
-    ctx.condNames.append from: nm.string
-    ctx.condExprs.append from: ex.string
+    ctx.conds.append (CondDecl name: nm.string expr: ex.string)
+}
+
+# CondDecl -- one condition the foundation declares: its name, which a need
+# `X?NAME` holds under, and the C expression the written C tests it by. Its
+# place in ctx.conds is its bit (Cond).
+CondDecl: class {
+    name: String
+    expr: String
 }
 
 # emitFail -- record an emission failure for an unhandled construct. zc
@@ -4882,7 +4889,7 @@ Ctx: class {
     rowCondEpochAt: u64
     rowCondKey: (IdMapR u64 V: String)
     # the foundation's conditions, by bit (Cond)
-    condNames: List String
+    conds: List CondDecl
     # the Set and Map instances whose kept text spells their key's `==` /
     # `hash` (tmplKeptSpells): member uses only grow, so a yes is final
     keyEqKept: IdSet ztypes.tid
@@ -4891,7 +4898,6 @@ Ctx: class {
     # member use was added
     keyEqNoAt: (IdMapV ztypes.tid v: u64)
     keyHashNoAt: (IdMapV ztypes.tid v: u64)
-    condExprs: List String
     # each function's "RET cname(PARAMS)", by its type: the forward
     # declaration and the definition write the same text, built once
     fnSigs: (IdMapR ztypes.tid V: String)
@@ -5097,8 +5103,7 @@ Ctx: class {
     # str mono handed to a StringViewable. The runtime supplies such an impl's struct, so
     # no unit pass writes its helpers: every box site asks for them here, and
     # emitC writes them once the last body is out
-    nativeBoxImpls: ListVal ztypes.tid
-    nativeBoxProtos: ListVal ztypes.tid
+    nativeBoxes: ListVal nativebox
     # the native texts zc carries -- each fixed file, row fragment and
     # template -- by kind and name (textkey), and the names by id (row 0 the
     # sentinel "")
@@ -5164,8 +5169,7 @@ Ctx: class {
     memberUses: IdSet u64
     # a member used only under conditions has terms here (memberCond); one
     # used in every configuration after that is in memberAlways
-    memberCondKey: ListVal u64
-    memberCondMask: ListVal u64
+    memberConds: ListVal membercond
     memberAlways: IdSet u64
     # the template members' vocabulary
     memberWords: zast.Vocab
@@ -5195,8 +5199,7 @@ Ctx: class {
     # (writeDemandedAggs), and whether the written set is fixed
     aggUses: IdSet u64
     aggWritten: IdSet u64
-    aggTexts: List String
-    aggRows: ListVal u64
+    aggsOut: List WrittenAgg
     aggsFixed: bool
     # the static list rows whose reader `_zag<row>_at` written C calls
     # (noteAggReaderUse)
@@ -35635,15 +35638,9 @@ demandWrittenDestroys: function {
         k: ownedBoxKey implTid: row.implTypeId protoTid: row.specTypeId
         if (ctx.ownedBoxUses.has item: k) then impls.append row.implTypeId
     }
-    ni: u64
-    for ni < ctx.nativeBoxImpls.length loop {
-        k: (
-            ownedBoxKey
-            implTid: (ctx.nativeBoxImpls.get i: ni)
-            protoTid: (ctx.nativeBoxProtos.get i: ni)
-        )
-        if (ctx.ownedBoxUses.has item: k) then impls.append (ctx.nativeBoxImpls.get i: ni)
-        ni = ni + 1
+    for each nb: ctx.nativeBoxes loop {
+        k: ownedBoxKey implTid: nb.impl protoTid: nb.proto
+        if (ctx.ownedBoxUses.has item: k) then impls.append nb.impl
     }
     for each impl: impls loop {
         dt: destroyTargetTid :reg :typing :ctx tid: impl
@@ -38541,7 +38538,7 @@ memberUsed: function {ctx: Ctx.view mono: ztypes.tid member: u64} out bool is {
 noteMemberUse: function {ctx: Ctx mono: ztypes.tid member: u64} is {
     k: memberKey :mono :member
     if (ctx.memberUses.has item: k) then {
-        if (ctx.memberCondKey.contains item: k) then ctx.memberAlways.add item: k
+        if (memberHasCond :ctx key: k) then ctx.memberAlways.add item: k
         return
     }
     addMemberUse :ctx :mono :k
@@ -38577,23 +38574,15 @@ noteMemberUseCond: function {ctx: Ctx mono: ztypes.tid member: u64 cond: Cond.vi
     if (condMerge dst: cur src: cond).not when (ctx.memberUses.has item: k) then return
     w: u64
     j: u64
-    for j < ctx.memberCondKey.length loop {
-        kk: ctx.memberCondKey.get i: j
-        mm: ctx.memberCondMask.get i: j
+    for j < ctx.memberConds.length loop {
+        mc: ctx.memberConds.get i: j
         j = j + 1
-        if kk == k then continue
-        ctx.memberCondKey.set i: w val: kk
-        ctx.memberCondMask.set i: w val: mm
+        if mc.key == k then continue
+        ctx.memberConds.set i: w val: mc
         w = w + 1
     }
-    for ctx.memberCondKey.length > w loop {
-        ctx.memberCondKey.pop
-        ctx.memberCondMask.pop
-    }
-    for each t: cur.terms loop {
-        ctx.memberCondKey.append k
-        ctx.memberCondMask.append t
-    }
+    for ctx.memberConds.length > w loop ctx.memberConds.pop
+    for each t: cur.terms loop ctx.memberConds.append (membercond key: k mask: t)
     if (ctx.memberUses.has item: k).not then addMemberUse :ctx :mono :k
 }
 
@@ -38601,13 +38590,20 @@ noteMemberUseCond: function {ctx: Ctx mono: ztypes.tid member: u64 cond: Cond.vi
 memberCondOf: function {ctx: Ctx.view key: u64} out Cond is {
     if (ctx.memberAlways.has item: key) then return condAlways
     c: Cond always: false terms: ListVal u64
-    j: u64
-    for j < ctx.memberCondKey.length loop {
-        if (ctx.memberCondKey.get i: j) == key then c.terms.append (ctx.memberCondMask.get i: j)
-        j = j + 1
+    for each mc: ctx.memberConds loop {
+        if mc.key == key then c.terms.append mc.mask
     }
     if c.terms.length == 0 then return condAlways
     return c
+}
+
+# memberHasCond -- member key `key` has a term: some use of it holds under a
+# condition.
+memberHasCond: function {ctx: Ctx.view key: u64} out bool is {
+    for each mc: ctx.memberConds loop {
+        if mc.key == key then return true
+    }
+    return false
 }
 
 # RtPlan -- which member sections of an instance's parsed template are written,
@@ -39013,8 +39009,8 @@ rtOptionKeys: function {
 # monoCondMembers -- some member of instance `mono` is used only under a
 # condition
 monoCondMembers: function {ctx: Ctx.view mono: ztypes.tid} out bool is {
-    for each k: ctx.memberCondKey loop {
-        if (k / 128) == mono.u64 when (ctx.memberAlways.has item: k).not then return true
+    for each mc: ctx.memberConds loop {
+        if (mc.key / 128) == mono.u64 when (ctx.memberAlways.has item: mc.key).not then return true
     }
     return false
 }
@@ -39425,12 +39421,11 @@ emitC: function {
         condEpoch: 0
         rowCondEpochAt: 0
         rowCondKey: (IdMapR u64 V: String)
-        condNames: List String
+        conds: List CondDecl
         keyEqKept: IdSet ztypes.tid
         keyHashKept: IdSet ztypes.tid
         keyEqNoAt: (IdMapV ztypes.tid v: u64)
         keyHashNoAt: (IdMapV ztypes.tid v: u64)
-        condExprs: List String
         fnSigs: (IdMapR ztypes.tid V: String)
         opBindIds: ListVal zast.nameid
         opBindVals: List String
@@ -39492,8 +39487,7 @@ emitC: function {
         fnJobAt: (IdMapV ztypes.tid v: u64)
         fnClosed: false
         fnSpelled: IdSet ztypes.tid
-        nativeBoxImpls: ListVal ztypes.tid
-        nativeBoxProtos: ListVal ztypes.tid
+        nativeBoxes: ListVal nativebox
         texts: (MapVR textkey V: String)
         textIds: (MapRV String v: u32)
         textNames: List String
@@ -39521,8 +39515,7 @@ emitC: function {
         rowsInPlace: IdSet u64
         piecedFrags: Set String
         memberUses: IdSet u64
-        memberCondKey: ListVal u64
-        memberCondMask: ListVal u64
+        memberConds: ListVal membercond
         memberAlways: IdSet u64
         memberWords: (zast.Vocab.create block: memberWord)
         membersLeftOut: IdSet u64
@@ -39535,8 +39528,7 @@ emitC: function {
         borrowBoxUses: IdSet u64
         aggUses: IdSet u64
         aggWritten: IdSet u64
-        aggTexts: List String
-        aggRows: ListVal u64
+        aggsOut: List WrittenAgg
         aggsFixed: false
         aggReaderUses: IdSet u64
         markerValues: (IdMapV ztypes.tid v: bool)
@@ -39672,7 +39664,7 @@ emitC: function {
     if (needsOutsidePrelude :ctx from: needsAt) then {
         emitRuntimeUnits ast: program :reg :typing :ctx buf: lateBuf
     }
-    if ctx.nativeBoxImpls.length > 0 then {
+    if ctx.nativeBoxes.length > 0 then {
         emitNativeImplementationImpls ast: program :reg :typing :ctx buf: lateBuf
     }
     if lateBuf.length > 0 then {
@@ -42965,12 +42957,12 @@ condExprC: function {ctx: Ctx.view c: Cond.view} out String is {
         e.append "("
         first: true
         k: u64
-        for k < ctx.condNames.length loop {
+        for k < ctx.conds.length loop {
             if (t & (1.u64 << k)) != 0 then {
                 if first.not then e.append " && "
                 first = false
                 e.append "("
-                e.append (ctx.condExprs.get i: k)
+                e.append (ctx.conds.get i: k).expr
                 e.append ")"
             }
             k = k + 1
@@ -46569,8 +46561,7 @@ writeDemandedAggs: function {
         } else {
             emitStaticRecord :ast :reg :typing :ctx :id :tid :start :count :buf
         }
-        ctx.aggTexts.append buf.take
-        ctx.aggRows.append id
+        ctx.aggsOut.append (WrittenAgg row: id text: buf.take)
     }
     return wrote
 }
@@ -46611,15 +46602,33 @@ emitStaticRecord: function {
     buf.append " };\n"
 }
 
+# WrittenAgg -- a static aggregate row whose C is written, and that text.
+WrittenAgg: class {
+    row: u64
+    text: String
+}
+
+# nativebox -- an (implementer, protocol) pair a native implementer is boxed
+# as.
+nativebox: record {
+    impl: ztypes.tid
+    proto: ztypes.tid
+}
+
+# membercond -- one term of the condition a template member is used under: the
+# member's key (memberKey) and the term's mask of condition bits.
+membercond: record {
+    key: u64
+    mask: u64
+}
+
 # appendWrittenAggs -- the written static aggregates' text, in row order.
 appendWrittenAggs: function {typing: ztyping.ZTyping.view ctx: Ctx.view buf: String.borrow} is {
     i: 1.u64
     for i < typing.constAggs.length loop {
         if (ctx.aggWritten.has item: i) then {
-            k: u64
-            for k < ctx.aggRows.length loop {
-                if (ctx.aggRows.get i: k) == i then buf.append (ctx.aggTexts.get i: k)
-                k = k + 1
+            for each wa: ctx.aggsOut loop {
+                if wa.row == i then buf.append wa.text
             }
         }
         i = i + 1
@@ -47749,17 +47758,10 @@ boxLabelFor: function {
         ctx.typeUses.add item: protoTid
     }
     seen: false
-    bi: u64
-    for bi < ctx.nativeBoxImpls.length loop {
-        if (ctx.nativeBoxImpls.get i: bi) == implTid when (
-            (ctx.nativeBoxProtos.get i: bi) == protoTid
-        ) then seen = true
-        bi = bi + 1
+    for each nb: ctx.nativeBoxes loop {
+        if nb.impl == implTid when nb.proto == protoTid then seen = true
     }
-    if seen.not then {
-        ctx.nativeBoxImpls.append implTid
-        ctx.nativeBoxProtos.append protoTid
-    }
+    if seen.not then ctx.nativeBoxes.append (nativebox impl: implTid proto: protoTid)
     return lbl
 }
 
@@ -47802,9 +47804,9 @@ emitNativeImplementationImpls: function {
     buf: String.borrow
 } is {
     ni: u64
-    for ni < ctx.nativeBoxImpls.length loop {
-        implT: ctx.nativeBoxImpls.get i: ni
-        protoT: ctx.nativeBoxProtos.get i: ni
+    for ni < ctx.nativeBoxes.length loop {
+        implT: (ctx.nativeBoxes.get i: ni).impl
+        protoT: (ctx.nativeBoxes.get i: ni).proto
         ni = ni + 1
         nrow: nativeImplementerRow :reg tid: implT
         lbl: implementationLabelFor :typing implTid: nrow protoTid: protoT
