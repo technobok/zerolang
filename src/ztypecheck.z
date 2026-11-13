@@ -43186,7 +43186,7 @@ checkFor: function {
     if entry == ztyping.loopentry.never then st.discardTakenFrom start: entryStart
     st.popTo marker: bodyMarker
     broke: st.breakLeavesInnermost
-    checkForPostconditions :st :unitDecl :ast :fornode :end
+    checkForPostconditions :st :unitDecl :ast :fornode :end :bodyMark
     st.walk.draft.clear
     st.popTo marker: forMarker
     st.closeBreakScope
@@ -43208,11 +43208,14 @@ checkFor: function {
 }
 
 # relayContinueTakes -- in a loop that tests postconditions, a `continue` lands
-# on their test, inside the iteration's scope: what a path that took one had
-# moved of that scope's locals -- the element the binding holds -- is moved on
-# some of the paths that reach the test, and the iteration's end. Asked with
-# the body's scope closed and the iteration's still open.
-relayContinueTakes: function {st: zenv.ZSymbolTable} is {
+# on their test, inside the iteration's scope, where the path that fell out of
+# the body arrives too. So a local of that scope -- the element the binding
+# holds -- that either path moved is moved on some of the paths that reach the
+# test, and the iteration's end: what a `continue` path had moved is laid
+# here, and every take since the body began (`bodyMark`) is one of some paths.
+# Asked with the body's scope closed and the iteration's still open.
+relayContinueTakes: function {st: zenv.ZSymbolTable bodyMark: u64} is {
+    if st.loopContinued.not then return
     i: st.continueTakesStart
     for i < st.loopContinueTakes.length loop {
         d: st.loopContinueTakes.get :i
@@ -43224,6 +43227,7 @@ relayContinueTakes: function {st: zenv.ZSymbolTable} is {
             maybe: true
         )
     }
+    st.markTakesMaybeFrom from: bodyMark
 }
 
 # checkForConditions -- walk a loop's conditions, in order. A condition after the
@@ -43265,9 +43269,15 @@ checkForConditions: function {
 # released was released for the body's first iteration too, which runs first. A
 # `continue` reaches it too (relayContinueTakes).
 checkForPostconditions: function {
-    st: zenv.ZSymbolTable unitDecl: ztypes.declid ast: Ast fornode: forref end: ztyping.loopend
+    st: zenv.ZSymbolTable
+    unitDecl: ztypes.declid
+    ast: Ast
+    fornode: forref
+    end: ztyping.loopend
+    # where the body's rows began
+    bodyMark: u64
 } is {
-    if fornode.nposts > 0 then relayContinueTakes :st
+    if fornode.nposts > 0 then relayContinueTakes :st :bodyMark
     kP: u64
     for kP < fornode.nposts loop {
         pcId: zast.forPostAt :ast nid: fornode.nid i: kP
