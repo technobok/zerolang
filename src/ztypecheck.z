@@ -41889,6 +41889,7 @@ checkWith: function {
     # after it out of reach
     wk: st.unreachableKind
     if wk == zenv.divkind.none then wk = exprDivKind :st :ast valueId: withnode.body
+    moveWithValue :st :ast body: withnode.body used: outerStmt != withnode.nid kind: wk
     st.popTo marker: withMarker
     # a `with` used as a value answers whether it hands back a place
     if outerStmt != withnode.nid then recordControlPlaceLeaves :st :ast nid: withnode.nid
@@ -59590,11 +59591,7 @@ checkStmtLine: function {
 # moveYieldedLocals -- a block's value that is a local of the block's own is
 # moved out of it where the block ends: the local leaves scope there, and the
 # value goes on to whatever receives the block's. `lineId` is the block's last
-# line, walked, its scope still open. Each value the line yields is asked, an
-# `if`'s or a `match`'s arm by arm: the local is moved on every path when every
-# one of them is that local, and on some otherwise. A local of an enclosing
-# scope outlives the block, and what receives the value decides whether it
-# moves.
+# line, walked, its scope still open.
 moveYieldedLocals: function {st: zenv.ZSymbolTable ast: Ast lineId: zast.nodeid} is {
     valueNid: (
         implicitReturnValue
@@ -59604,7 +59601,25 @@ moveYieldedLocals: function {st: zenv.ZSymbolTable ast: Ast lineId: zast.nodeid}
         :lineId
         lineType: (walkTypeOf :st nid: lineId)
     )
-    if valueNid.isZero then return
+    if valueNid.isZero.not then moveYieldedValue :st :ast :valueNid
+}
+
+# moveWithValue -- a `with` whose value is `used` and whose body reaches its
+# end (`kind` none) hands out what the body yields: the value the `with` binds,
+# when the body yields that (moveYieldedValue). Asked with the `with`'s scope
+# still open.
+moveWithValue: function {st: zenv.ZSymbolTable ast: Ast body: zast.nodeid used: bool kind: u8} is {
+    if used when kind == zenv.divkind.none then moveYieldedValue :st :ast valueNid: body
+}
+
+# moveYieldedValue -- the value `valueNid` leaves the innermost open scope as
+# that scope's value: each owned local of the scope it yields is moved out.
+# Each value it yields is asked, an `if`'s or a `match`'s arm by arm and a
+# block's through its last line: the local is moved on every path when every
+# one of them is that local, and on some otherwise. A local of an enclosing
+# scope outlives this one, and what receives the value decides whether it
+# moves.
+moveYieldedValue: function {st: zenv.ZSymbolTable ast: Ast valueNid: zast.nodeid} is {
     leaves: ListVal zast.nodeid
     if (isControlValue :ast nid: valueNid) then {
         armValueLeaves :st :ast nid: valueNid into: leaves
