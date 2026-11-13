@@ -1102,21 +1102,18 @@ ZSymbolTable: class {
     # one did not, so it keeps the narrowing, while the code after the
     # statement runs after either
     armNarrowingEnds: ListVal ztypes.declid
-    # the names a generator body bound to a borrow, in binding order, and the
-    # position in `open` of the scope each was bound in: a yield refuses every
-    # one still in scope, and each leaves with the scope that bound it
-    genBorrowNames: ListVal zast.nameid
-    genBorrowPositions: ListVal openpos
+    # the names a generator body bound to a borrow, in binding order: a yield
+    # refuses every one still in scope, and each leaves with the scope that
+    # bound it
+    genBorrows: ListVal genborrow
     # how many dry runs are open: nothing a dry run walks is recorded
     dryRunDepth: u64
     # the place in `open` of each function body open, innermost last: a
     # `return` leaves every scope from there up
     fnScopes: ListVal openpos
-    # the place in `open` of each scope a `break` leaves, innermost last: a
-    # loop's, or a `do` block's, which binds `break` to itself -- and whether
-    # a `break` leaves it
-    breakScopes: ListVal openpos
-    breakSeen: ListVal bool
+    # each scope a `break` leaves, innermost last: a loop's, or a `do`
+    # block's, which binds `break` to itself
+    breakScopes: ListVal breakscope
     # the function body a value-returning walk is in, and the block whose last
     # line is in return position: the body, or a `with` or `do` block that is
     # itself the last line of one; 0 when neither
@@ -1413,7 +1410,7 @@ ZSymbolTable: class {
         }
         this.dropTail :start
         this.open.pop
-        if this.genBorrowPositions.length > 0 then this.dropGenBorrows
+        if this.genBorrows.length > 0 then this.dropGenBorrows
         this.curScope = this.innermostScope
         for mLocks.length > 0 loop {
             le2: mLocks.pop
@@ -1517,7 +1514,7 @@ ZSymbolTable: class {
         for this.releasedRows.length > rm loop this.unhideLockRow i: this.releasedRows.pop
         this.dropTail start: (this.open.get i: n - 1).start
         this.open.pop
-        if this.genBorrowPositions.length > 0 then this.dropGenBorrows
+        if this.genBorrows.length > 0 then this.dropGenBorrows
         this.curScope = this.innermostScope
         if this.dryRunDepth > 0 then this.dryRunDepth = this.dryRunDepth - 1
         this.discardDryRunPins
@@ -1770,17 +1767,19 @@ ZSymbolTable: class {
     # noteGenBorrow -- a generator body bound `nameId` to a borrow in the
     # innermost open scope: it may not be in scope at a yield.
     noteGenBorrow: function {:this nameId: zast.nameid} is {
-        this.genBorrowNames.append nameId
-        this.genBorrowPositions.append (openpos.create from: this.open.length - 1)
+        this.genBorrows.append (
+            genborrow
+            name: nameId
+            scope: (openpos.create from: this.open.length - 1)
+        )
     }
 
     # dropGenBorrows -- forget the borrows whose scopes have closed.
     dropGenBorrows: function {:this} is {
         n: this.open.length
-        for this.genBorrowPositions.length > 0 loop {
-            if (this.genBorrowPositions.get i: this.genBorrowPositions.length - 1) < n then return
-            this.genBorrowPositions.pop
-            this.genBorrowNames.pop
+        for this.genBorrows.length > 0 loop {
+            if (this.genBorrows.get i: this.genBorrows.length - 1).scope < n then return
+            this.genBorrows.pop
         }
     }
 
@@ -2046,40 +2045,45 @@ ZSymbolTable: class {
     recordBreakDestroy: function {:this nid: zast.nodeid} is {
         n: this.breakScopes.length
         if n == 0 then return
-        this.recordExitDestroy :nid downTo: (this.breakScopes.get i: n - 1) except: ztypes.vid
+        b: this.breakScopes.get i: n - 1
+        this.recordExitDestroy :nid downTo: b.scope except: ztypes.vid
     }
 
     # openBreakScope -- the innermost open scope is one a `break` leaves.
     openBreakScope: function {:this} is {
-        this.breakScopes.append (openpos.create from: this.open.length - 1)
-        this.breakSeen.append false
+        this.breakScopes.append (
+            breakscope
+            scope: (openpos.create from: this.open.length - 1)
+            left: false
+        )
     }
 
     # closeBreakScope -- that scope is closing.
     closeBreakScope: function {:this} is {
         if this.breakScopes.length > 0 then this.breakScopes.pop
-        if this.breakSeen.length > 0 then this.breakSeen.pop
     }
 
     # noteBreak -- a `break` leaves the innermost break scope.
     noteBreak: function {:this} is {
-        n: this.breakSeen.length
-        if n > 0 then this.breakSeen.set i: n - 1 val: true
+        this.restoreBreakSeen seen: true
     }
 
     # restoreBreakSeen -- forget the `break`s since `breakLeavesInnermost` read
     # `seen`: a clause the fold proved dead, walked only for the editor, runs
     # none of them.
     restoreBreakSeen: function {:this seen: bool} is {
-        n: this.breakSeen.length
-        if n > 0 then this.breakSeen.set i: n - 1 val: seen
+        n: this.breakScopes.length
+        if n == 0 then return
+        b: this.breakScopes.get i: n - 1
+        b.left = seen
+        this.breakScopes.set i: n - 1 val: b
     }
 
     # breakLeavesInnermost -- whether a `break` left the innermost break scope.
     breakLeavesInnermost: function {t: this.view} out bool is {
-        n: t.breakSeen.length
+        n: t.breakScopes.length
         if n == 0 then return false
-        return (t.breakSeen.get i: n - 1)
+        return (t.breakScopes.get i: n - 1).left
     }
 
     # takenDeclsInScope -- the declarations the innermost scope's rows take,
@@ -3853,6 +3857,20 @@ ZSymbolTable: class {
     }
 }
 
+# genborrow -- a name a generator body bound to a borrow, and the position in
+# `open` of the scope it was bound in.
+genborrow: record {
+    name: zast.nameid
+    scope: openpos
+}
+
+# breakscope -- a scope a `break` leaves: its position in `open`, and whether
+# a `break` that leaves it was walked.
+breakscope: record {
+    scope: openpos
+    left: bool
+}
+
 # walkjob -- a definition whose body is still to walk, and where: the scope
 # and the unit the walk runs in, and the instance being walked when it was
 # put off, 0 for none.
@@ -3915,12 +3933,10 @@ newSymbolTable: function {reg: ztypes.ZTypeRegistry.take typing: ZTyping.take} o
         loopOnceTakes: ListVal ztypes.declid
         loopMoveReported: IdSet ztypes.declid
         armNarrowingEnds: ListVal ztypes.declid
-        genBorrowNames: ListVal zast.nameid
-        genBorrowPositions: ListVal openpos
+        genBorrows: ListVal genborrow
         dryRunDepth: 0
         fnScopes: ListVal openpos
-        breakScopes: ListVal openpos
-        breakSeen: ListVal bool
+        breakScopes: ListVal breakscope
         tailBody: zast.nodeid
         tailBlock: zast.nodeid
         scopeHidden: IdSet ztypes.declid
