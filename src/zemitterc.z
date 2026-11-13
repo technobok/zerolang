@@ -33865,7 +33865,6 @@ emitBranchAssign: function {
                 :typing
                 :ctx
                 lineId: lastId
-                :scope
                 :target
                 :ind
                 :tmp
@@ -33900,8 +33899,6 @@ emitBranchLastAssign: function {
     typing: ztyping.ZTyping.view
     ctx: Ctx
     lineId: zast.nodeid
-    # the checker scope the branch is
-    scope: zast.nodeid
     target: StringView
     ind: StringView
     tmp: TmpCtr
@@ -33922,48 +33919,6 @@ emitBranchLastAssign: function {
     appendArmAssign :ast :reg :typing :ctx n: sx :target vx: vx.stringView :vxF :ind :buf
     emitArmTakeZero :ast :reg :typing :ctx n: sx rv: vx.stringView :ind :buf
     emitValueTakeInvalidations :ast :reg :typing :ctx n: sx :ind :buf
-    zeroBranchOwnLocal :ast :reg :typing :ctx line: sx :scope :ind :buf
-    return false
-}
-
-# zeroBranchOwnLocal -- a branch's value that is a bare local the branch's own
-# scope destroys at its end (scopeEndDestroys) moved into the target: the
-# local is zeroed, so that destroy frees nothing.
-zeroBranchOwnLocal: function {
-    ast: Ast.view
-    reg: ztypes.ZTypeRegistry.view
-    typing: ztyping.ZTyping.view
-    ctx: Ctx
-    line: astnode.view
-    scope: zast.nodeid
-    ind: StringView
-    buf: String.borrow
-} is {
-    if line.statementline.not then return
-    vn: ast.nodes.get i: line.statementline
-    if (isBareNameValue n: vn).not then return
-    vid: atomVid :typing nid: (interpPartNodeId n: vn)
-    if (scopeEndDestroys :typing node: scope :vid).not then return
-    src: implicitTakeSource :ast :reg :typing :ctx n: vn
-    if src.length == 0 then return
-    mz: movedZeroC :reg :typing :ctx tid: (stampIdOf :typing nid: (zast.nodeIdOf n: vn))
-    if mz.length > 0 then buf.append "\{ind}\{src} = \{mz};\n"
-}
-
-# scopeEndDestroys -- the end of checker scope `node` destroys the local `vid`:
-# its list names it, not as moved on every path.
-scopeEndDestroys: function {
-    typing: ztyping.ZTyping.view node: zast.nodeid vid: ztypes.vid
-} out bool is {
-    if vid.isZero then return false
-    rg: typing.scopeDestroy.get key: node
-    if rg.none then return false
-    k: u64
-    for k < rg.len loop {
-        it: typing.destroyItems.get i: rg.start.u64 + k
-        k = k + 1
-        if it.vid == vid when it.state != 1 then return true
-    }
     return false
 }
 

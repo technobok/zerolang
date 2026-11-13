@@ -39203,14 +39203,17 @@ armsYieldAPlace: function {st: zenv.ZSymbolTable ast: Ast nid: zast.nodeid} out 
     if (isControlValue :ast :nid).not then return false
     leaves: ListVal zast.nodeid
     armValueLeaves :st :ast :nid into: leaves
-    place: false
     for each lf: leaves loop {
-        if (st.typing.armLeafMoves.has item: lf).not when (
-            st.typing.armLeafPlaces.has
-            item: lf
-        ) then place = true
+        if (armLeafStaysPlace :st :lf) then return true
     }
-    return place
+    return false
+}
+
+# armLeafStaysPlace -- the arm value `lf` reads storage something else owns and
+# nothing moves it out: what it yields is a reference to that storage.
+armLeafStaysPlace: function {st: zenv.ZSymbolTable.view lf: zast.nodeid} out bool is {
+    if (st.typing.armLeafMoves.has item: lf) then return false
+    return (st.typing.armLeafPlaces.has item: lf)
 }
 
 # armBorrowedLeaves -- the arm values read out of storage something else owns: a
@@ -43155,7 +43158,11 @@ checkFor: function {
     # inside the header's C extent -- the header's destroys are emitted after
     # it -- so listing the header's locals at the break frees them twice.
     st.openBreakScope
+    abPrev: st.walk.appendedBody
+    st.walk.appendedBody = zast.nodeid
+    if (st.walk.stmtBlocks.has item: fornode.body).not then st.walk.appendedBody = fornode.body
     walkBodyAt :st :unitDecl :ast bodyId: fornode.body
+    st.walk.appendedBody = abPrev
     elemT: ztypes.tid
     # a body whose last statement DIVERGES -- a bare `return`, a return call,
     # a panic -- yields nothing, and the loop is a statement, not a
@@ -44175,14 +44182,11 @@ parkOwnedArmLeaves: function {
 } is {
     place: false
     for each lf: leaves loop {
-        if (st.typing.armLeafPlaces.has item: lf) then place = true
+        if (armLeafStaysPlace :st :lf) then place = true
     }
     if place.not then return
     for each lf: leaves loop {
-        if (st.typing.armLeafPlaces.has item: lf).not when (
-            st.typing.armLeafMoves.has
-            item: lf
-        ).not then parkedArmTemp :st :ast :lf
+        if (armLeafStaysPlace :st :lf).not then parkedArmTemp :st :ast :lf
     }
 }
 
@@ -59546,12 +59550,51 @@ checkStmtLine: function {
     # a block's value takes over what its line's references hold before the
     # line's unheld temporaries release theirs
     if last then recordArmValueLocks :st :ast lineId: slnId
+    yields: last and discarded.not and tailLine.not and (blockId != st.walk.appendedBody)
+    if yields when dk == zenv.divkind.none then moveYieldedLocals :st :ast lineId: slnId
     recordTempHoldingLine :st lineId: slnId from: ul0
     if discarded when dk == zenv.divkind.none then recordDiscard :st :ast :innerId
     # a line is no scope of pins: each value on it kept its own to its record
     if st.walk.draft.holds then panic msg: "ztypecheck: a statement line left pins pending"
     if dk > 0 then st.markUnreachable kind: dk
     if dk == zenv.divkind.cont then st.recordContinueTakes
+}
+
+# moveYieldedLocals -- a block's value that is a local of the block's own is
+# moved out of it where the block ends: the local leaves scope there, and the
+# value goes on to whatever receives the block's. `lineId` is the block's last
+# line, walked, its scope still open. Each value the line yields is asked, an
+# `if`'s or a `match`'s arm by arm: the local is moved on every path when every
+# one of them is that local, and on some otherwise. A local of an enclosing
+# scope outlives the block, and what receives the value decides whether it
+# moves.
+moveYieldedLocals: function {st: zenv.ZSymbolTable ast: Ast lineId: zast.nodeid} is {
+    valueNid: (
+        implicitReturnValue
+        reg: st.reg
+        typing: st.typing
+        :ast
+        :lineId
+        lineType: (walkTypeOf :st nid: lineId)
+    )
+    if valueNid.isZero then return
+    leaves: ListVal zast.nodeid
+    if (isControlValue :ast nid: valueNid) then {
+        armValueLeaves :st :ast nid: valueNid into: leaves
+    } else {
+        leaves.append from: valueNid
+    }
+    for each lf: leaves loop {
+        from: armLeafLocal :st :ast nid: lf
+        if from.isZero then continue
+        d: st.findLocal nameId: (zast.atomNameIdOf n: (ast.nodes.get i: lf))
+        if d.isZero then continue
+        if (st.innermostOpenIs scope: (st.typing.declParentOf declId: d)).not then continue
+        if (st.ownsDestroy vid: from).not then continue
+        partial: armLeafIsPartial :st :ast :leaves :from
+        st.invalidateDeclAs declId: d loc: takenHere maybe: partial
+        st.typing.armLeafMoves.add item: lf
+    }
 }
 
 # noteStatementBlocks -- the row `innerId` of a line whose value nothing
