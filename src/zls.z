@@ -2083,6 +2083,13 @@ casearm: record {
     fn: zast.nodeid
 }
 
+# genericparam -- a generic parameter in scope of a walk: its name, and its
+# declaring arm's operation.
+genericparam: record {
+    name: zast.nameid
+    op: zast.nodeid
+}
+
 # the table of hit-testable spans a request builds: fileSpans for one unit's
 # file, programSpans for every file.
 Spans: class {
@@ -2113,9 +2120,8 @@ Spans: class {
     # the function the walk is in, 0 outside one
     curFn: zast.nodeid
     # the generic parameters the walk is inside the template of, innermost
-    # last: each one's name, and its declaring arm's operation
-    genNames: ListVal zast.nameid
-    genOps: ListVal zast.nodeid
+    # last
+    generics: ListVal genericparam
     # each atom spelled as a generic parameter in scope, keyed to that
     # parameter's declaring operation, which genericParamDecl keys. The checker
     # notes only the spellings the paths that read them stop for.
@@ -2134,8 +2140,7 @@ Spans: class {
             forArm: (IdMapV zast.nodeid v: zast.nodeid)
             caseArm: (IdMapV zast.nodeid v: casearm)
             curFn: zast.nodeid
-            genNames: ListVal zast.nameid
-            genOps: ListVal zast.nodeid
+            generics: ListVal genericparam
             genUse: (IdMapV zast.nodeid v: zast.nodeid)
         )
     }
@@ -2254,7 +2259,7 @@ Spans: class {
             return
         } case functiondef then {
             outerFn: this.curFn
-            mark: this.genNames.length
+            mark: this.generics.length
             this.pushGenerics :ast items: n.asItems
             this.curFn = n.nodeid
             this.walkIds :ast ids: kids
@@ -2262,13 +2267,13 @@ Spans: class {
             this.popGenerics to: mark
             return
         } case objectdef then {
-            mark: this.genNames.length
+            mark: this.generics.length
             this.pushGenerics :ast items: n.asItems
             this.walkIds :ast ids: kids
             this.popGenerics to: mark
             return
         } case unitdef then {
-            mark: this.genNames.length
+            mark: this.generics.length
             if n.isGeneric then this.pushGenerics :ast items: n.body
             this.walkIds :ast ids: kids
             this.popGenerics to: mark
@@ -2344,8 +2349,7 @@ Spans: class {
                 :ast
                 op: arm.operation
             ) then {
-                this.genNames.append arm.name
-                this.genOps.append arm.operation
+                this.generics.append (genericparam name: arm.name op: arm.operation)
             }
         }
     }
@@ -2353,21 +2357,18 @@ Spans: class {
     # popGenerics -- leave the template whose parameters were pushed after
     # `to` were in scope
     popGenerics: function {:this to: u64} is {
-        for this.genNames.length > to loop {
-            this.genNames.pop
-            this.genOps.pop
-        }
+        for this.generics.length > to loop this.generics.pop
     }
 
     # noteGenericUse -- an atom spelled as a generic parameter in scope, the
     # innermost first, names it
     noteGenericUse: function {:this id: zast.nodeid name: zast.nameid} is {
-        gi: this.genNames.length
+        gi: this.generics.length
         for gi > 0 loop {
             gi = gi - 1
-            if (this.genNames.get i: gi) == name then {
-                op: this.genOps.get i: gi
-                if op != id then this.genUse.set key: id value: op
+            g: this.generics.get i: gi
+            if g.name == name then {
+                if g.op != id then this.genUse.set key: id value: g.op
                 return
             }
         }
@@ -7604,14 +7605,20 @@ opensStatement: function {tt: zlexer.toktype} out bool is {
     }
 }
 
+# openblock -- one block open at a point of a token walk (DotScan).
+openblock: record {
+    place: dotplace
+    # it was opened by a `(`, where a line end is no statement boundary
+    paren: bool
+    # the declarator of the block around it, back in force when it ends
+    outerDecl: zlexer.toktype
+}
+
 # DotScan -- the blocks open at each point of a token walk, and the tokens just
 # behind it: what dotSiteOf reads a `.`'s site from
 DotScan: class {
     # the open blocks, innermost last
-    places: ListVal dotplace
-    # beside each place: it was opened by a `(`, where a line end is no
-    # statement boundary
-    parens: ListVal bool
+    blocks: ListVal openblock
     # the last token taken
     prev: zlexer.toktype
     # the one before it
@@ -7621,9 +7628,6 @@ DotScan: class {
     # the declarator keyword last taken in the innermost block: the
     # definition an `as` there belongs to
     decl: zlexer.toktype
-    # beside each place: the declarator of the block around it, back in force
-    # when the place ends
-    outerDecls: ListVal zlexer.toktype
 } as {
     # take one token that is not whitespace, a comment or a label's colon. A
     # `{` opens the place its keyword names -- an interpolation's `\{` lexes as
@@ -7632,13 +7636,9 @@ DotScan: class {
         match (
             tt
         ) case braceOpenTok then {
-            this.places.append (placeOpenedBy prev: this.prevCode decl: this.decl)
-            this.parens.append false
-            this.enterDecl
+            this.open place: (placeOpenedBy prev: this.prevCode decl: this.decl) paren: false
         } case parenOpenTok then {
-            this.places.append this.innermost
-            this.parens.append true
-            this.enterDecl
+            this.open place: this.innermost paren: true
         } case braceCloseTok then {
             this.close
         } case parenCloseTok then {
@@ -7651,29 +7651,27 @@ DotScan: class {
     }
 
     # a block opens: no definition has been declared in it yet
-    enterDecl: function {:this} is {
-        this.outerDecls.append this.decl
+    open: function {:this place: dotplace paren: bool} is {
+        this.blocks.append (openblock :place :paren outerDecl: this.decl)
         this.decl = zlexer.toktype.bofTok
     }
 
     # end the innermost block, ignoring a stray closer
     close: function {:this} is {
-        if this.places.length == 0 then return
-        this.places.pop
-        this.parens.pop
-        this.decl = this.outerDecls.pop
+        if this.blocks.length == 0 then return
+        this.decl = this.blocks.pop.outerDecl
     }
 
     # the innermost open place; a body when none is open
     innermost: function {t: this.view} out dotplace is {
-        if t.places.length == 0 then return dotplace.body
-        return (t.places.get i: t.places.length - 1)
+        if t.blocks.length == 0 then return dotplace.body
+        return (t.blocks.get i: t.blocks.length - 1).place
     }
 
     # the innermost block was opened by a `(`
     inParen: function {t: this.view} out bool is {
-        if t.parens.length == 0 then return false
-        return (t.parens.get i: t.parens.length - 1)
+        if t.blocks.length == 0 then return false
+        return (t.blocks.get i: t.blocks.length - 1).paren
     }
 }
 
@@ -7687,13 +7685,11 @@ dotSiteOf: function {docText: StringView line: u32 col: u32} out dotsite is {
     tk.keepTrivia = false
     sc: (
         DotScan
-        places: ListVal dotplace
-        parens: ListVal bool
+        blocks: ListVal openblock
         prev: zlexer.toktype.bofTok
         prev2: zlexer.toktype.bofTok
         prevCode: zlexer.toktype.bofTok
         decl: zlexer.toktype.bofTok
-        outerDecls: ListVal zlexer.toktype
     )
     for true loop {
         t: tk.nextToken :pool
