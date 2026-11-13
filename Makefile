@@ -1479,6 +1479,7 @@ any-guard:
 # a comparison against a zast.wellKnown ty* name is allowed only in TYPENAME_OK,
 # each where the name is not a type identity (system-gated declarations, member and
 # suffix vocabulary, bound families, the `null` an as-block opt-out is spelled with,
+# the `null` an empty body is spelled with where A013 reads statements (hwQuietName),
 # a template's own name picking the one collection family it could be, whose id
 # then decides: templateIsCollection, templateNeedsMonoDtor).
 TYPENAME_OK := src/ztypecheck.z:resolveClass src/ztypecheck.z:resolveProtocol \
@@ -1489,7 +1490,8 @@ TYPENAME_OK := src/ztypecheck.z:resolveClass src/ztypecheck.z:resolveProtocol \
 	src/zsource.z:bareZeroTypeName src/ztypecheck.z:constraintKindForId \
 	src/ztypecheck.z:isConformanceMarker src/ztypecheck.z:declareCanonicalTypeId \
 	src/ztypecheck.z:textLiteralCastTarget src/ztypecheck.z:isIterFamilyName \
-	src/ztypecheck.z:isCollectionFamilyName src/ztypecheck.z:isHeapCollectionName
+	src/ztypecheck.z:isCollectionFamilyName src/ztypecheck.z:isHeapCollectionName \
+	src/zsource.z:hwQuietName
 typename-guard:
 	@fail=0; n=0; \
 	for e in $$(awk '/^[A-Za-z_][A-Za-z0-9_]*: function/ {fn=$$1; sub(":", "", fn)} \
@@ -2817,7 +2819,9 @@ generic-param-guard: bin/zl
 # zl-full-guard -- `zl lint --full` never passes a file it did not check: it runs
 # with no flags from a foreign cwd, says why when it cannot, reports a dependency's error at that file, reports a generic body once,
 # lints a subunit as itself, places L003/L011 only in the --full tier, and
-# reports A012 for a file unit with no public block, never for a subunit.
+# reports A012 for a file unit with no public block, never for a subunit. It
+# also checks A013 and --counts: of handwalk.z's four walks, only the one
+# written out by hand is reported, and its row is `A013 <file> 1`.
 ZLFULL_FIX := tests/fixtures/zl_full/tiered.z
 ZLFULL_DEP := tests/fixtures/zl_full/depunit/depmain.z
 ZLFULL_ONCE := tests/fixtures/zl_full/generic_once.z
@@ -2826,6 +2830,7 @@ ZLFULL_PUB := tests/fixtures/zl_full/pubhost.z
 ZLFULL_ELIDE := tests/fixtures/zl_full/elide.z
 ZLFULL_BZ := tests/fixtures/zl_full/bare_zero.z
 ZLFULL_BZS := tests/fixtures/zl_full/bare_zero_shadow.z
+ZLFULL_WALK := tests/fixtures/zl_full/handwalk.z
 zl-full-guard: bin/zl
 	@d=$$(mktemp -d); fail=0; \
 	out=$$(cd $$d && $(CURDIR)/bin/zl lint --full $(CURDIR)/$(ZLFULL_FIX) 2>&1); \
@@ -2888,7 +2893,15 @@ zl-full-guard: bin/zl
 	if printf '%s\n' "$$out" | grep -q 'A012'; then \
 	  echo "zl-full-guard FAIL: A012 reported a subunit, or a unit that has a public block:"; \
 	  printf '%s\n' "$$out" | sed 's/^/    /'; fail=1; fi; \
+	out=$$(cd $$d && $(CURDIR)/bin/zl lint --arch $(CURDIR)/$(ZLFULL_WALK) 2>&1); \
+	if [ "$$(printf '%s\n' "$$out" | grep -c 'A013')" != 1 ] || ! printf '%s\n' "$$out" | grep -q 'function `countDots` has 5 match arms'; then \
+	  echo "zl-full-guard FAIL: A013 did not report countDots, and only countDots, with its five arms:"; \
+	  printf '%s\n' "$$out" | sed 's/^/    /'; fail=1; fi; \
+	out=$$(cd $$d && $(CURDIR)/bin/zl lint --arch --counts $(CURDIR)/$(ZLFULL_WALK) 2>/dev/null); \
+	if [ "$$out" != "A013 $(CURDIR)/$(ZLFULL_WALK) 1" ]; then \
+	  echo "zl-full-guard FAIL: --counts did not print the one row 'A013 <file> 1':"; \
+	  printf '%s\n' "$$out" | sed 's/^/    /'; fail=1; fi; \
 	rm -rf $$d; \
 	if [ $$fail -ne 0 ]; then exit 1; fi; \
-	echo "zl-full-guard OK: --full runs without flags from a foreign cwd, says why when it cannot, places a dependency's error in its own file, and lints a subunit as itself"
+	echo "zl-full-guard OK: --full runs without flags from a foreign cwd, says why when it cannot, places a dependency's error in its own file, and lints a subunit as itself; A013 and --counts report the hand-written walk"
 

@@ -654,6 +654,256 @@ ccVisit: function {ast: Ast.view id: zast.nodeid nesting: u32 fnName: zast.namei
     }
 }
 
+# The match arms that only recurse, from which A013 reports a function. Fewer
+# can be a deliberate step into the one child that matters for a kind, not a
+# walk written out by hand.
+handWalkArms: 5.u64
+
+# HwArm -- what hwStmt finds in one match arm
+HwArm: class {
+    # the arm calls its function again
+    recurses: bool
+    # a statement in the arm does work of its own: a call other than the
+    # recursion, a write through a path, or a returned value that is not made
+    # of recursions, names and literals
+    own: bool
+}
+
+# hwPassedOn -- whether the call argument `a` passes on the caller's own value
+# of that name, `:name`
+hwPassedOn: function {ast: Ast.view a: astnode.view} out bool is {
+    match (
+        a
+    ) case namedoperation then {
+        v: ast.nodes.get i: a.operation
+        match (
+            v
+        ) case labelvalue then {
+            return v.name == a.name
+        } else null
+    } else null
+    return false
+}
+
+# hwSelfCall -- whether the node at `id` is a call of the function `fnName`,
+# marking `arm` as recursing when it is. A recursion that changes more than one
+# argument, where a walk changes only the part it walks into and passes the
+# rest on (`:name`), does work of the arm's own: `inLoop: true`, `nesting + 1`
+hwSelfCall: function {ast: Ast.view id: zast.nodeid fnName: zast.nameid arm: HwArm} out bool is {
+    n: ast.nodes.get i: id
+    match (
+        n
+    ) case call then {
+        if (ccSelfRef :ast id: n.callable :fnName).not then return false
+        arm.recurses = true
+        changed: u64
+        i: u64
+        for i < n.arguments.count loop {
+            a: ast.nodes.get i: (zast.kidAt kids: ast.kids span: n.arguments :i)
+            i = i + 1
+            if (hwPassedOn :ast :a).not then changed = changed + 1
+        }
+        if changed > 1 then arm.own = true
+        return true
+    } else return false
+}
+
+# hwRecurses -- mark `arm` as recursing when the expression at `id` calls the
+# function `fnName` anywhere in it
+hwRecurses: function {ast: Ast.view id: zast.nodeid fnName: zast.nameid arm: HwArm} is {
+    if id.isZero then return
+    isCall: hwSelfCall :ast :id :fnName :arm
+    if isCall.not when (ccSelfRef :ast :id :fnName) then arm.recurses = true
+    n: ast.nodes.get i: id
+    kids: zast.childIds :ast :n
+    for each k: kids loop {
+        hwRecurses :ast id: k :fnName :arm
+    }
+}
+
+# hwRecursesSpan -- hwRecurses over every node of a span
+hwRecursesSpan: function {ast: Ast.view span: zast.kidspan fnName: zast.nameid arm: HwArm} is {
+    i: u64
+    for i < span.count loop {
+        kid: zast.kidAt kids: ast.kids :span :i
+        i = i + 1
+        hwRecurses :ast id: kid :fnName :arm
+    }
+}
+
+# hwReturned -- whether the value a `return` hands back at `id` is made only of
+# recursions, names and literals, joined by operators: what a walk returns is
+# what its recursions found
+hwReturned: function {ast: Ast.view id: zast.nodeid fnName: zast.nameid arm: HwArm} out bool is {
+    n: ast.nodes.get i: id
+    match (
+        n
+    ) case atomid then {
+        return true
+    } case atomstring then {
+        return true
+    } case namedoperation then {
+        return (hwReturned :ast id: n.operation :fnName :arm)
+    } case call then {
+        if (hwSelfCall :ast :id :fnName :arm) then return true
+        if n.infix.not then return false
+        return (
+            hwOperandsReturned
+            :ast
+            callable: n.callable
+            arguments: n.arguments
+            :fnName
+            :arm
+        )
+    } else return false
+}
+
+# hwOperandsReturned -- whether both sides of an operator, the left in the
+# dotted `callable` and the right in `arguments`, are values hwReturned accepts
+hwOperandsReturned: function {
+    ast: Ast.view callable: zast.nodeid arguments: zast.kidspan fnName: zast.nameid arm: HwArm
+} out bool is {
+    c: ast.nodes.get i: callable
+    if c.dottedpath.not then return false
+    if (hwReturned :ast id: c.parent :fnName :arm).not then return false
+    i: u64
+    for i < arguments.count loop {
+        a: zast.kidAt kids: ast.kids span: arguments :i
+        i = i + 1
+        if (hwReturned :ast id: a :fnName :arm).not then return false
+    }
+    return true
+}
+
+# hwQuietName -- whether a name alone as a statement does nothing of its own:
+# `break`, `continue`, `null`, or a `return` with no value
+hwQuietName: function {name: zast.nameid} out bool is {
+    if name == zast.wellKnown.slot.wkBreak then return true
+    if name == zast.wellKnown.slot.wkContinue then return true
+    if name == zast.wellKnown.slot.tyNull then return true
+    return name == zast.wellKnown.slot.wkReturn
+}
+
+# hwStmtSpan -- hwStmt over every node of a span
+hwStmtSpan: function {ast: Ast.view span: zast.kidspan fnName: zast.nameid arm: HwArm} is {
+    i: u64
+    for i < span.count loop {
+        kid: zast.kidAt kids: ast.kids :span :i
+        i = i + 1
+        hwStmt :ast id: kid :fnName :arm
+    }
+}
+
+# hwStmt -- read the statement at `id` into `arm`. A binding, a reassigned
+# local, `break`, `continue`, `null` and a bare `return` do no work of their
+# own; an `if`, `for` or `match` does what its bodies do; a call is the
+# recursion, a `return` of a value hwReturned accepts, or work of its own.
+# A recursion anywhere, a condition included, marks the arm as recursing
+hwStmt: function {ast: Ast.view id: zast.nodeid fnName: zast.nameid arm: HwArm} is {
+    if id.isZero then return
+    n: ast.nodes.get i: id
+    match (
+        n
+    ) case statement then {
+        hwStmtSpan :ast span: n.statements :fnName :arm
+    } case statementline then {
+        hwStmt :ast id: n.statementline :fnName :arm
+    } case assignment then {
+        hwRecurses :ast id: n.value :fnName :arm
+    } case reassignment then {
+        if (ast.nodes.get i: n.topath).atomid.not then arm.own = true
+        hwRecurses :ast id: n.value :fnName :arm
+    } case ifexpr then {
+        hwStmtSpan :ast span: n.clauses :fnName :arm
+        hwStmt :ast id: n.elseclause :fnName :arm
+    } case ifclause then {
+        hwRecursesSpan :ast span: n.conditions :fnName :arm
+        hwStmt :ast id: n.statement :fnName :arm
+    } case forexpr then {
+        hwRecursesSpan :ast span: n.conditions :fnName :arm
+        hwStmt :ast id: n.body :fnName :arm
+        hwRecursesSpan :ast span: n.postconditions :fnName :arm
+    } case caseexpr then {
+        hwRecurses :ast id: n.subject :fnName :arm
+        hwStmtSpan :ast span: n.clauses :fnName :arm
+        hwStmt :ast id: n.elseclause :fnName :arm
+    } case caseclause then {
+        hwStmt :ast id: n.statement :fnName :arm
+    } case atomid then {
+        if n.name == fnName then {
+            arm.recurses = true
+        } else if (hwQuietName name: n.name).not then {
+            arm.own = true
+        }
+    } case call then {
+        cl: ast.nodes.get i: n.callable
+        isReturn: false
+        if cl.atomid then isReturn = cl.name == zast.wellKnown.slot.wkReturn
+        if (hwSelfCall :ast :id :fnName :arm) then {
+            null
+        } else if isReturn then {
+            i: u64
+            for i < n.arguments.count loop {
+                a: zast.kidAt kids: ast.kids span: n.arguments :i
+                i = i + 1
+                if (hwReturned :ast id: a :fnName :arm).not then arm.own = true
+            }
+        } else {
+            arm.own = true
+        }
+    } case dottedpath then {
+        if (ccSelfRef :ast :id :fnName) then {
+            arm.recurses = true
+        } else {
+            arm.own = true
+        }
+    } else {
+        arm.own = true
+    }
+}
+
+# hwRecursingArms -- how many of a match's arms only recurse: each calls
+# `fnName` again and does no work of its own (hwStmt)
+hwRecursingArms: function {ast: Ast.view clauses: zast.kidspan fnName: zast.nameid} out u64 is {
+    count: u64
+    k: u64
+    for k < clauses.count loop {
+        c: ast.nodes.get i: (zast.kidAt kids: ast.kids span: clauses i: k)
+        k = k + 1
+        match (
+            c
+        ) case caseclause then {
+            arm: HwArm recurses: false own: false
+            hwStmt :ast id: c.statement :fnName :arm
+            if arm.recurses when arm.own.not then count = count + 1
+        } else null
+    }
+    return count
+}
+
+# hwMostArms -- the most arms of any one match in the subtree at `id` that
+# only recurse: each calls `fnName` again and does no work of its own. The
+# `else` is not counted, since a walk over the children belongs there; a
+# nested function literal is a function of its own and is not searched
+hwMostArms: function {ast: Ast.view id: zast.nodeid fnName: zast.nameid} out u64 is {
+    if id.isZero then return 0
+    n: ast.nodes.get i: id
+    most: u64
+    match (
+        n
+    ) case functiondef then {
+        return 0
+    } case caseexpr then {
+        most = hwRecursingArms :ast clauses: n.clauses :fnName
+    } else null
+    kids: zast.childIds :ast :n
+    for each kid: kids loop {
+        m: hwMostArms :ast id: kid :fnName
+        if m > most then most = m
+    }
+    return most
+}
+
 # isComposedParts -- a string literal's parts shaped like a composed key: two
 # or more interpolation holes joined by a short separator with no space
 # (`"\{a}.\{b}"`, `"\{unit}_\{name}"`). A message with holes reads as prose
@@ -1856,6 +2106,9 @@ Analysis: class {
             if this.opts.complexity > 0 when this.funcDepth == 0 then {
                 this.checkComplexity :ast nameId: n.name opId: n.operation
             }
+            if this.opts.arch when this.funcDepth == 0 then {
+                this.checkHandWalk :ast nameId: n.name opId: n.operation
+            }
         } case forexpr then {
             this.checkImpliedIterate :ast :n
         } case ifexpr then {
@@ -2483,6 +2736,32 @@ Analysis: class {
                     col: op.colno
                     width: 1
                     weight: sc - th
+                )
+            }
+        } else null
+    }
+
+    # checkHandWalk -- A013: a function with a match of handWalkArms or more
+    # arms that only recurse (hwMostArms). Such a function walks the children of
+    # a value kind by kind, by hand, where one walk over the children serves
+    # every kind with no work of its own. The definition names it, as for A008.
+    checkHandWalk: function {:this ast: Ast.view nameId: zast.nameid opId: zast.nodeid} is {
+        if opId.isZero then return
+        op: ast.nodes.get i: opId
+        match (
+            op
+        ) case functiondef then {
+            if op.body.isZero then return
+            most: hwMostArms :ast id: op.body fnName: nameId
+            if most >= handWalkArms then {
+                nm: zast.poolTextAt pool: ast.names ref: nameId
+                (
+                    this.info
+                    code: "A013"
+                    msg: "function `\{nm}` has \{most} match arms that only recurse into parts of the value; walk the children in one arm (zast.childIds lists a node's) and keep arms only for the kinds that do work of their own or skip a child"
+                    line: op.lineno
+                    col: op.colno
+                    width: 1
                 )
             }
         } else null
