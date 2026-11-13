@@ -51365,7 +51365,7 @@ checkYieldCall: function {
                     errMark: yErrs
                 )
                 checkYieldedValue :st :ast arg: ya argT: yaT
-                refuseYieldedLocks :st :ast arg: ya argT: yaT
+                refuseYieldedBorrow :st :ast arg: ya argT: yaT
             }
         }
     }
@@ -51503,6 +51503,21 @@ refuseYieldedLocks: function {st: zenv.ZSymbolTable ast: Ast arg: argref argT: z
         e: zast.err.ownerError
         msg: "Cannot yield this value: it keeps \{rp} locked, and a generator hands out owned values only"
     )
+}
+
+# refuseYieldedBorrow -- a yield moves its value out to the caller, as a
+# `return` through `out` does. A value that keeps something locked is refused
+# (refuseYieldedLocks). So is one read out of storage something else owns -- a
+# field, a borrowed name, a value a call lends -- whether it is the value
+# itself or an arm of an `if` or a `match`.
+refuseYieldedBorrow: function {st: zenv.ZSymbolTable ast: Ast arg: argref argT: ztypes.tid} is {
+    if argT.isZero then return
+    errs: st.typing.errors.length
+    refuseYieldedLocks :st :ast :arg :argT
+    if st.typing.errors.length != errs then return
+    verb: "as a yielded value"
+    refuseBorrowedMove :st :ast n: (ast.nodes.get i: arg.operation) vt: argT :verb
+    refuseBorrowedArms :st :ast nid: arg.operation :verb
 }
 
 # checkYieldedValue -- a yielded value against the generator's element type, as
