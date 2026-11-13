@@ -1,0 +1,88 @@
+# generator_with_value.z -- what a `with` in a generator's `call` body owns is
+# destroyed at the end of the `with`'s block, once, whatever the block does:
+# it runs through without a `yield` (the value is a local of the call), it
+# suspends (the value is kept in a field of the instance, and the field is left
+# empty), it moves the value out, it is left early by a `break`, or the consumer
+# stops before it ends (the instance frees what the field still holds).
+#
+# Each generator yields the same values whatever is freed, so the leak and
+# memory checks of the corpus runner are what this fixture is for.
+mk: function {n: u64} out String is {
+    if n > 3.u64 then return "abcd".string
+    return "ab".string
+}
+
+sink: function {s: String.take} out u64 is {
+    return s.length
+}
+
+NoYield: generator as {
+    call: function out u64 is {
+        n: 0.u64
+        with s: (mk n: 9.u64) do {
+            n = s.length
+        }
+        yield n
+        yield n + 1
+    }
+}
+
+Suspends: generator as {
+    call: function out u64 is {
+        with s: (mk n: 9.u64) do {
+            yield 2.u64
+            yield s.length
+        }
+        yield 7.u64
+        yield 8.u64
+    }
+}
+
+MovesOut: generator as {
+    call: function out u64 is {
+        with s: (mk n: 9.u64) do {
+            yield 1.u64
+            yield (sink s: s.take)
+        }
+        yield 9.u64
+    }
+}
+
+LeftEarly: generator as {
+    call: function out u64 is {
+        i: 0.u64
+        for i < 3.u64 loop {
+            i = i + 1
+            with s: (mk n: i) do {
+                yield s.length
+                if i == 2.u64 then break
+                yield 100.u64 + i
+            }
+        }
+        yield 50.u64
+    }
+}
+
+Abandoned: generator as {
+    call: function out u64 is {
+        with s: (mk n: 9.u64) do {
+            yield 1.u64
+            yield s.length
+            yield 3.u64
+        }
+    }
+}
+
+main: function is {
+    for each n: (NoYield) loop print "noyield: \{n}"
+    for each s: (Suspends) loop print "suspends: \{s}"
+    for each m: (MovesOut) loop print "moves: \{m}"
+    for each e: (LeftEarly) loop print "early: \{e}"
+    seen: 0.u64
+    for each a: (Abandoned) loop {
+        seen = seen + 1
+        print "abandoned: \{a}"
+        if seen == 2.u64 then break
+    }
+    print "done"
+}

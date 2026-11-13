@@ -27793,26 +27793,22 @@ emitWithLocal: function {
 }
 
 # emitWithField -- a `with` value that lives in the state class (the checker
-# minted the field for a value that crosses a suspension): assigned where the
-# header's local was, aliased to the binding's name for the body, destroyed
-# by the instance -- and destroyed first when a loop re-enters the header
-# with the previous value still in it.
+# minted the field for a value that crosses a suspension, genLocalFieldOf):
+# assigned where the header's local was and aliased to the binding's name for
+# the body. It is destroyed where the checker lists it, as any generator local
+# is, and its field left empty.
 emitWithField: function {
     ast: Ast.view
     reg: ztypes.ZTypeRegistry.view
     typing: ztyping.ZTyping.view
     ctx: Ctx
     n: zast.withrow.view
-    wsid: ztypes.tid
     wf: zast.nameid
     wv: StringView
     ind: StringView
     buf: String.borrow
 } is {
     fld: genFieldC :ast :reg :typing :ctx nameId: wf
-    if (structDestroyNontrivial :reg :typing :ctx tid: wsid) then {
-        buf.append (destroyLineC :reg :typing :ctx tid: wsid nm: fld.stringView :ind)
-    }
     la: "\{ind}\{fld} = \{wv};\n"
     buf.append la
     (
@@ -28038,11 +28034,11 @@ emitWithBody: function {
     # while that expression was built; declare it before the line that reads
     # it, as the plain-binding path does
     flushArgHoists :ctx :ind :tmp :buf
-    wfO: typing.withValueField.get key: n.nodeid
+    wfO: typing.genLocalFieldOf.get key: (defVid :typing nid: n.nodeid)
     match (
         wfO
     ) case some then {
-        emitWithField :ast :reg :typing :ctx :n :wsid wf: wfO wv: wv.stringView :ind :buf
+        emitWithField :ast :reg :typing :ctx :n wf: wfO wv: wv.stringView :ind :buf
     } case none then {
         (
             emitWithLocal
@@ -29467,8 +29463,7 @@ emitLocalDestroy: function {
         buf.append "\{ind}\{fld} = \{movedZeroC :reg :typing :ctx :tid};\n"
         return
     }
-    # storage another owner frees: what a borrow aliases, or a `with` value a
-    # generator keeps in a field of its instance
+    # storage another owner frees: what a borrow aliases
     if (vvHas xs: ctx.aliases :vid) then return
     if (loopOwnsPayload :ctx :vid) then return
     nm: varCName :ctx :ast :reg :vid
