@@ -5090,9 +5090,6 @@ Ctx: class {
     # (planFns), and each one's job by its type id
     fnJobs: ListVal fnjob
     fnJobAt: (IdMapV ztypes.tid v: u64)
-    # parallel to fnJobs: spelled by written C, and written
-    fnQueued: ListVal bool
-    fnWritten: ListVal bool
     # the written functions are fixed: a function spelled after must be one
     fnClosed: bool
     # every function written C spells, whether or not it is a job: a generated
@@ -37318,6 +37315,10 @@ fnjob: record {
     protoEnd: u64
     bodyAt: u64
     bodyEnd: u64
+    # written C spells it (noteFnUse)
+    queued: bool
+    # it is written, or being written (writeFnJob)
+    written: bool
 }
 
 # planFnJob -- record one function the walk met, under the unit binding and
@@ -37365,10 +37366,10 @@ addFnJob: function {
         protoEnd: 0
         bodyAt: 0
         bodyEnd: 0
+        queued: false
+        written: false
     )
     if fid.isZero.not then ctx.fnJobAt.set key: fid value: k
-    ctx.fnQueued.append false
-    ctx.fnWritten.append false
 }
 
 # noteFnUse -- written C spells the function `tid`: queue its job, if it has
@@ -37378,7 +37379,8 @@ noteFnUse: function {ctx: Ctx tid: ztypes.tid} is {
     ctx.fnSpelled.add item: tid
     at: ctx.fnJobAt.get key: tid
     if at.none then return
-    if (ctx.fnQueued.get i: at) then return
+    j: ctx.fnJobs.get i: at
+    if j.queued then return
     if ctx.fnClosed then {
         cn: ctxCname :ctx :tid
         (
@@ -37389,7 +37391,8 @@ noteFnUse: function {ctx: Ctx tid: ztypes.tid} is {
         )
         return
     }
-    ctx.fnQueued.set i: at val: true
+    j.queued = true
+    ctx.fnJobs.set i: at val: j
 }
 
 # drainFnJobs -- write every queued job not yet written, lowest first, until a
@@ -37412,7 +37415,8 @@ drainFnJobs: function {
         more = false
         k: u64
         for k < ctx.fnJobs.length loop {
-            if (ctx.fnQueued.get i: k) when (ctx.fnWritten.get i: k).not then {
+            jk: ctx.fnJobs.get i: k
+            if jk.queued when jk.written.not then {
                 writeFnJob :ast :reg :typing :ctx :k :protos :bodies
                 more = true
             }
@@ -37436,8 +37440,9 @@ writeFnJob: function {
     protos: String.borrow
     bodies: String.borrow
 } is {
-    ctx.fnWritten.set i: k val: true
     j: ctx.fnJobs.get i: k
+    j.written = true
+    ctx.fnJobs.set i: k val: j
     if j.unitDecl != ctx.mainUnitId then {
         un: zast.poolTextAt pool: ast.names ref: (typing.declNameOf declId: j.unitDecl)
         ctxBindMain :ctx name: un.stringView unitDecl: j.unitDecl
@@ -37484,25 +37489,11 @@ writeFnJob: function {
         ctx.curThisTid = ztypes.tid.zero
         bodies.append "}\n\n"
     }
-    (
-        ctx.fnJobs.set
-        i: k
-        val: (
-            fnjob
-            fid: j.fid
-            nid: j.nid
-            unitDecl: j.unitDecl
-            nsTid: j.nsTid
-            mono: j.mono
-            method: j.method
-            owner: j.owner
-            withMethods: j.withMethods
-            protoAt: pa
-            protoEnd: protos.length
-            bodyAt: ba
-            bodyEnd: bodies.length
-        )
-    )
+    j.protoAt = pa
+    j.protoEnd = protos.length
+    j.bodyAt = ba
+    j.bodyEnd = bodies.length
+    ctx.fnJobs.set i: k val: j
 }
 
 # writeDemanded -- write every function, method and static value written C
@@ -37672,14 +37663,14 @@ demandListElemCalls: function {
 fnJobUnwritten: function {ctx: Ctx.view tid: ztypes.tid} out bool is {
     at: ctx.fnJobAt.get key: tid
     if at.none then return false
-    return (ctx.fnWritten.get i: at).not
+    return (ctx.fnJobs.get i: at).written.not
 }
 
 # queuedFnCount -- the function jobs written C has spelled so far.
 queuedFnCount: function {ctx: Ctx.view} out u64 is {
     n: u64
-    for each q: ctx.fnQueued loop {
-        if q then n = n + 1
+    for each j: ctx.fnJobs loop {
+        if j.queued then n = n + 1
     }
     return n
 }
@@ -39491,8 +39482,6 @@ emitC: function {
         reachFixed: false
         fnJobs: ListVal fnjob
         fnJobAt: (IdMapV ztypes.tid v: u64)
-        fnQueued: ListVal bool
-        fnWritten: ListVal bool
         fnClosed: false
         fnSpelled: IdSet ztypes.tid
         nativeBoxImpls: ListVal ztypes.tid
