@@ -31718,70 +31718,29 @@ remainingArm: function {
     return rem
 }
 
-# bodyReassigns -- true when the body (at any depth through the common
-# statement containers) reassigns `name`, which would stale a narrowBox
-# alias for it.
+# bodyReassigns -- true when `n` rebinds the bare name `name` anywhere in it,
+# by a reassignment or a swap, which would stale a narrowBox alias for it. The
+# whole subtree counts: a rebind in a binding's value, a condition or a call's
+# argument writes the variable as surely as one in a statement. A write
+# THROUGH the name (`s.field = x`) goes through the alias and leaves it standing.
 bodyReassigns: function {ast: Ast.view n: astnode.view name: StringView} out bool is {
     match (
         n
-    ) case statement then {
-        hit: false
-        i: u64
-        for i < n.statements.count loop {
-            stmtId: zast.kidAt kids: ast.kids span: n.statements :i
-            i = i + 1
-            if (bodyReassigns :ast n: (ast.nodes.get i: stmtId) :name) then hit = true
-        }
-        return hit
-    } case statementline then {
-        sln: ast.nodes.get i: n.statementline
-        return (bodyReassigns :ast n: sln :name)
-    } case reassignment then {
-        # a write THROUGH the subject (`s.field = x`) goes through the alias
-        # and leaves it standing; only a rebind of the bare name stales it
-        tpn: ast.nodes.get i: n.topath
-        rb: atomTextOf :ast n: tpn
-        return rb == name
+    ) case reassignment then {
+        if (atomTextOf :ast n: (ast.nodes.get i: n.topath)) == name then return true
     } case swapstmt then {
         sl: atomTextOf :ast n: (ast.nodes.get i: n.lhs)
         sr: atomTextOf :ast n: (ast.nodes.get i: n.rhs)
-        return (sl == name) or (sr == name)
-    } case ifexpr then {
-        hif: false
-        j: u64
-        for j < n.clauses.count loop {
-            c: zast.kidAt kids: ast.kids span: n.clauses i: j
-            j = j + 1
-            if (bodyReassigns :ast n: (ast.nodes.get i: c) :name) then hif = true
-        }
-        if hif then return true
-        if n.elseclause.isZero then return false
-        return (bodyReassigns :ast n: (ast.nodes.get i: n.elseclause) :name)
-    } case ifclause then {
-        return (bodyReassigns :ast n: (ast.nodes.get i: n.statement) :name)
-    } case caseexpr then {
-        hce: false
-        m: u64
-        for m < n.clauses.count loop {
-            k: zast.kidAt kids: ast.kids span: n.clauses i: m
-            m = m + 1
-            if (bodyReassigns :ast n: (ast.nodes.get i: k) :name) then hce = true
-        }
-        if hce then return true
-        if n.elseclause.isZero then return false
-        return (bodyReassigns :ast n: (ast.nodes.get i: n.elseclause) :name)
-    } case caseclause then {
-        return (bodyReassigns :ast n: (ast.nodes.get i: n.statement) :name)
-    } case forexpr then {
-        if n.body.isZero then return false
-        return (bodyReassigns :ast n: (ast.nodes.get i: n.body) :name)
-    } case doexpr then {
-        return (bodyReassigns :ast n: (ast.nodes.get i: n.statement) :name)
-    } case withexpr then {
-        return (bodyReassigns :ast n: (ast.nodes.get i: n.body) :name)
-    } else {
-        return false
+        if (sl == name) or (sr == name) then return true
+    } else null
+    nk: zast.childCount :ast :n
+    i: u64
+    for i < nk loop {
+        k: zast.childAt :ast :n :i
+        i = i + 1
+        if (bodyReassigns :ast n: (ast.nodes.get i: k) :name) then return true
     }
+    return false
 }
 
 # seedFromPredicate -- one POSITIVE bare arm predicate dotted node: admit a
