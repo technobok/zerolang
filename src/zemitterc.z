@@ -6386,6 +6386,28 @@ movedSourceNeedsZero: function {
     return (moveNeedsZero :typing vid: (atomVid :typing nid: src))
 }
 
+# emitDroppedZero -- a `<local>.drop`, or a `<local>.take` nothing receives,
+# at `n` has destroyed what the local held, of type `tid`: the local, whose C
+# text is `rcv`, is zeroed where a later destroy of it still runs
+# (moveNeedsZero). Any other receiver -- a field -- names no variable, and is
+# zeroed as ever.
+emitDroppedZero: function {
+    ast: Ast.view
+    reg: ztypes.ZTypeRegistry.view
+    typing: ztyping.ZTyping.view
+    ctx: Ctx
+    n: astnode.view
+    tid: ztypes.tid
+    rcv: StringView
+    ind: StringView
+    buf: String.borrow
+} is {
+    base: ast.nodes.get i: (dottedParentNodeId :n)
+    if (moveNeedsZero :typing vid: (atomVid :typing nid: (atomNodeId n: base))).not then return
+    zero: movedZeroC :reg :typing :ctx :tid
+    if zero.length > 0 then buf.append "\{ind}\{rcv} = \{zero};\n"
+}
+
 # emitExplicitTakeZero -- an explicit `<atom>.take` argument: the source is
 # zeroed (movedZeroC) so its scope-exit destructor no-ops, the move having
 # transferred ownership -- when a destroy of it still runs (movedSourceNeedsZero).
@@ -6399,8 +6421,24 @@ emitExplicitTakeZero: function {
     ind: StringView
     buf: String.borrow
 } is {
-    if (movedSourceNeedsZero :ast :typing n: (ast.nodes.get i: a.operation)).not then return
-    etid: stampIdOf :typing nid: (interpPartNodeId n: (ast.nodes.get i: a.operation))
+    emitTakenSourceZero :ast :reg :typing :ctx n: (ast.nodes.get i: a.operation) :ts :ind :buf
+}
+
+# emitTakenSourceZero -- the value `n` is a `<local>.take`, whose C text is
+# `ts`: the local is zeroed where a destroy of it still runs
+# (movedSourceNeedsZero).
+emitTakenSourceZero: function {
+    ast: Ast.view
+    reg: ztypes.ZTypeRegistry.view
+    typing: ztyping.ZTyping.view
+    ctx: Ctx
+    n: astnode.view
+    ts: StringView
+    ind: StringView
+    buf: String.borrow
+} is {
+    if (movedSourceNeedsZero :ast :typing :n).not then return
+    etid: stampIdOf :typing nid: (interpPartNodeId :n)
     ez: movedZeroC :reg :typing :ctx tid: etid
     if ez.length > 0 then buf.append "\{ind}\{ts} = \{ez};\n"
 }
@@ -25677,25 +25715,22 @@ emitListBind: function {
                 lb0: "\{ind}\{lcb}_t \{nm} = \{valueC};\n"
                 buf.append lb0
                 emitValueTakeInvalidations :ast :reg :typing :ctx n: avn :ind :buf
-                # a binding from a bare owned local is a MOVE: zero the
-                # source so its scope-exit free no-ops now that this
-                # binding owns the buffer. A BORROW takes the alias leg
-                # before reaching here, and must never zero its source.
-                if nbrw.not when (isBareNameValue n: avn) then {
-                    takeSource: implicitTakeSource :ast :reg :typing :ctx n: avn
-                    if takeSource.length > 0 then buf.append "\{ind}\{takeSource} = \{(movedZeroC
-                        :reg :typing
-                        :ctx
-                        tid: ltid
-                    )};\n"
-                }
-                # a take out of a local moves the buffer the same way: the
-                # source is zeroed so its own destroy no-ops
-                if (isLocalTake :ast :typing n: avn) then buf.append "\{ind}\{valueC} = \{(movedZeroC
-                    :reg :typing
+                # a binding from a bare owned local, or from a take out of
+                # one, is a MOVE: the source is zeroed where a destroy of it
+                # still runs. A BORROW takes the alias leg before reaching
+                # here, and must never zero its source.
+                if nbrw.not then emitMovedSourceZero :ast :reg :typing :ctx n: avn :ind :buf
+                if (isLocalTake :ast :typing n: avn) then (
+                    emitTakenSourceZero
+                    :ast
+                    :reg
+                    :typing
                     :ctx
-                    tid: ltid
-                )};\n"
+                    n: avn
+                    ts: valueC.stringView
+                    :ind
+                    :buf
+                )
             } else {
                 # THE LAST LEG IS A CONSTRUCTION, and it accepts anything: a
                 # `withexpr` RHS reaches it and builds an EMPTY LIST, so
@@ -25740,25 +25775,22 @@ emitHeapColBind: function {
         hbc: "\{ind}\{cb}_t* \{nm} = \{hvr};\n"
         buf.append hbc
         emitValueTakeInvalidations :ast :reg :typing :ctx n: avn :ind :buf
-        # a heap collection binding from a bare owned local is a MOVE:
-        # clear the source so its scope-exit destroy no-ops now that
-        # this binding owns the allocation. A BORROW of one is a second
-        # pointer to the same allocation and must leave the source standing.
-        if nbrw.not when (isBareNameValue n: avn) then {
-            takeSource: implicitTakeSource :ast :reg :typing :ctx n: avn
-            if takeSource.length > 0 then buf.append "\{ind}\{takeSource} = \{(movedZeroC
-                :reg :typing
-                :ctx
-                tid: ltid
-            )};\n"
-        }
-        # a take out of a local moves the allocation the same way: the
-        # source is cleared so its own destroy no-ops
-        if (isLocalTake :ast :typing n: avn) then buf.append "\{ind}\{hvr} = \{(movedZeroC
-            :reg :typing
+        # a heap collection binding from a bare owned local, or from a take
+        # out of one, is a MOVE: the source is cleared where a destroy of it
+        # still runs. A BORROW of one is a second pointer to the same
+        # allocation and must leave the source standing.
+        if nbrw.not then emitMovedSourceZero :ast :reg :typing :ctx n: avn :ind :buf
+        if (isLocalTake :ast :typing n: avn) then (
+            emitTakenSourceZero
+            :ast
+            :reg
+            :typing
             :ctx
-            tid: ltid
-        )};\n"
+            n: avn
+            ts: hvr.stringView
+            :ind
+            :buf
+        )
     } else {
         hcap: listCapArg :ast :reg :typing :ctx n: avn
         flushArgHoists :ctx :ind :tmp :buf
@@ -26433,8 +26465,7 @@ emitDottedAutoCallStmt: function {
         # a type with nothing to destroy still reads the name once
         if dsl.length == 0 when isDrop then buf.append "\{ind}(void)(\{rcvV});\n"
         buf.append dsl
-        riv: movedZeroC :reg :typing :ctx tid: rrid
-        if riv.length > 0 then buf.append "\{ind}\{rcvV} = \{riv};\n"
+        emitDroppedZero :ast :reg :typing :ctx :n tid: rrid rcv: rcvV.stringView :ind :buf
         return
     }
     if (readsNullField :ast :reg :typing :n) then return
