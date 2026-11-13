@@ -41908,51 +41908,28 @@ withValueCrossesSuspension: function {
     return (zast.yieldCountIn :ast nid: withnode.body) > 0
 }
 
-# blockHasBreak -- a bare `break` statement somewhere in this block's own
-# control flow (descending if/match/with bodies but NOT nested do/for, whose
-# breaks bind to them). Drives the do-block's optionval wrapping.
+# blockHasBreak -- a bare `break` somewhere in this block's own control flow:
+# in any node, a binding's value and a condition included, but not inside a
+# nested `do` or `for`, whose breaks bind to them. Drives the do-block's
+# optionval wrapping and its own break target.
 blockHasBreak: function {ast: Ast.view n: astnode.view} out bool is {
     match (
         n
-    ) case statement then {
-        i: u64
-        for i < n.statements.count loop {
-            s0Id: zast.kidAt kids: ast.kids span: n.statements :i
-            i = i + 1
-            if (blockHasBreak :ast n: (ast.nodes.get i: s0Id)) then return true
-        }
-        return false
-    } case statementline then {
-        return (blockHasBreak :ast n: (ast.nodes.get i: n.statementline))
-    } case atomid then {
+    ) case atomid then {
         return n.name == zast.wellKnown.slot.wkBreak
-    } case ifexpr then {
-        j: u64
-        for j < n.clauses.count loop {
-            cl0Id: zast.kidAt kids: ast.kids span: n.clauses i: j
-            j = j + 1
-            cl0: ast.nodes.get i: cl0Id
-            if cl0.ifclause when (blockHasBreak :ast n: (ast.nodes.get i: cl0.statement)
-            ) then return true
-        }
-        if n.elseclause.isZero then return false
-        return (blockHasBreak :ast n: (ast.nodes.get i: n.elseclause))
-    } case caseexpr then {
-        k: u64
-        for k < n.clauses.count loop {
-            ml0Id: zast.kidAt kids: ast.kids span: n.clauses i: k
-            k = k + 1
-            ml0: ast.nodes.get i: ml0Id
-            if ml0.caseclause when (blockHasBreak :ast n: (ast.nodes.get i: ml0.statement)
-            ) then return true
-        }
-        if n.elseclause.isZero then return false
-        return (blockHasBreak :ast n: (ast.nodes.get i: n.elseclause))
-    } case withexpr then {
-        return (blockHasBreak :ast n: (ast.nodes.get i: n.body))
-    } else {
+    } case doexpr then {
         return false
+    } case forexpr then {
+        return false
+    } else null
+    nk: zast.childCount :ast :n
+    i: u64
+    for i < nk loop {
+        k: zast.childAt :ast :n :i
+        i = i + 1
+        if (blockHasBreak :ast n: (ast.nodes.get i: k)) then return true
     }
+    return false
 }
 
 # armLeaves -- an arm of this `if` or `match` holds a `return`, a `break` or a
