@@ -11200,7 +11200,7 @@ fnReturnsRefBorrow: function {
     return (isReftypeParam :reg :typing :ctx tid: retTid)
 }
 
-# callRhsIsBorrow -- the call-shaped leg of bindingRhsIsBorrow: the callee's
+# callRhsIsBorrow -- a call whose result is a reference: the callee's
 # declared return carries the `.borrow` marker (funcReturnMarker, recorded
 # from the signature). Dotted method calls whose callable stamp missed probe
 # the receiver mono's method child -- fully signature-driven (List/ListView
@@ -11301,9 +11301,8 @@ colArgAsStringViewExpr: function {
 }
 
 # refBorrowCalleeFid -- the CALLEE behind a borrow-returning binding RHS, or 0.
-# Deliberately narrower than bindingRhsIsBorrow, which also answers true for a
-# plain field read: only a declared `.borrow`/`.view` RETURN makes the binding a
-# reference, and a field read keeps its existing shallow-copy leg.
+# Only a declared `.borrow`/`.view` RETURN makes the binding a reference; a
+# plain field read answers 0 and keeps its shallow-copy leg.
 refBorrowCalleeFid: function {
     ast: Ast.view
     reg: ztypes.ZTypeRegistry.view
@@ -11357,87 +11356,6 @@ refBorrowCalleeFid: function {
         }
     } else {
         return ztypes.tid.zero
-    }
-}
-
-# bindingRhsIsBorrow -- the binding RHS yields a non-owning borrow, so the bound
-# String local must NOT be freed at scope exit (its owner -- the list or the
-# struct -- frees it; a premature free is a use-after-free / double-free). Two
-# shapes: a `<list>.get i:` over a List/ListView (a shallow element view), and a
-# plain field access `<base>.<field>` (the field's String is owned by `<base>`).
-# A no-arg method call (the child resolves to a FUNCTION) returns an owned value
-# and is NOT a borrow. (Map.get returns an owned Option, handled elsewhere;
-# `.copy` / `.string` / `.take` are owned and handled before this check.)
-bindingRhsIsBorrow: function {
-    ast: Ast.view
-    reg: ztypes.ZTypeRegistry.view
-    typing: ztyping.ZTyping.view
-    ctx: Ctx.view
-    n: astnode.view
-} out bool is {
-    match (
-        n
-    ) case statementline then {
-        sln: ast.nodes.get i: n.statementline
-        return (bindingRhsIsBorrow :ast :reg :typing :ctx n: sln)
-    } case ifexpr then {
-        return (controlValueIsReference :ast :reg :typing :ctx n: (ast.nodes.get i: n.nodeid))
-    } case caseexpr then {
-        return (controlValueIsReference :ast :reg :typing :ctx n: (ast.nodes.get i: n.nodeid))
-    } case call then {
-        return (callRhsIsBorrow :ast :reg :typing :ctx call: n)
-    } case dottedpath then {
-        # a stamped implicit zero-create CONSTRUCTS its value rather than
-        # reading one, so it aliases nothing and the binding owns what it gets
-        izb: typing.implicitCreate.get key: n.nodeid
-        if izb.some then {
-            return false
-        }
-        chId: aliasOrChildId :ast :typing aliasId: n.nodeid childId: n.child
-        # a `.borrow` value is a reference by definition
-        if chId == zast.wellKnown.slot.wkBorrow then return true
-        bnmV: atomVid :typing nid: (atomNodeId n: (ast.nodes.get i: n.parent))
-        if (vvHas xs: ctx.narrowBox vid: bnmV) then {
-            # a field read off a narrowed subject is a shallow-copy borrow (it aliases
-            # the subject's heap); an ownership builtin yields an owned value, and so
-            # does a method auto-call (FUNCTION child) on the narrowed payload.
-            if (ztypecheck.isMoveMarkerId nameId: chId) then return false
-            if chId == zast.wellKnown.slot.wkCopy then return false
-            if chId == zast.wellKnown.slot.wkString then return false
-            narrowedTid: vtGet xs: ctx.narrowTid vid: bnmV
-            if narrowedTid.some then {
-                ncc: typing.declChildOfId parentTypeId: narrowedTid nameId: chId
-                if ncc.some when (
-                    (reg.typetypeOf typeId: ncc) == ztypes.ztypetype.functionType
-                ) then return false
-            }
-            return true
-        }
-        ptid: stampIdOf :typing nid: (interpPartNodeId n: (ast.nodes.get i: n.parent))
-        cco: typing.declChildOfId parentTypeId: ptid nameId: chId
-        match (
-            cco
-        ) case some then {
-            # A zero-arg method auto-call reads as a dotted path, so this is the
-            # only place its RETURN is consulted: a `.borrow` / `.view` return
-            # aliases the receiver and must not be freed with the binding, the
-            # same answer callRhsIsBorrow gives the parenthesised form.
-            if (reg.typetypeOf typeId: cco) == ztypes.ztypetype.functionType then {
-                return (typing.returnsReference tid: cco)
-            }
-            return true
-        } case none then {
-            # `.borrow` on a value is the ownership marker, not a member --
-            # no type declares one, which is exactly why the lookup missed. The binding ALIASES its source, so the source's owner
-            # frees the buffer and the binding must not free it again. A
-            # protocol or facet declaring a real `borrow` projection resolves
-            # above and never reaches here.
-            chId: aliasOrChildId :ast :typing aliasId: n.nodeid childId: n.child
-            if (zast.markerKindOfName id: chId).borrowMarker then return true
-            return false
-        }
-    } else {
-        return false
     }
 }
 
@@ -25642,9 +25560,10 @@ controlValueOwnsArms: function {
     return owned
 }
 
-# armValueOwned -- the value the arm body `blockId` yields is not a borrowed
-# read: its last line's value, or the body itself when it is an expression. An
-# arm that yields nothing (it leaves) hands over nothing to borrow.
+# armValueOwned -- the value the arm body `blockId` yields is not a place the
+# checker recorded (armLeafIsPlace): its last line's value, or the body itself
+# when it is an expression. An arm that yields nothing (it leaves) hands over
+# nothing to borrow.
 armValueOwned: function {
     ast: Ast.view
     reg: ztypes.ZTypeRegistry.view
@@ -25672,7 +25591,7 @@ armValueOwned: function {
     vn: ast.nodes.get i: valId
     nested: vn.ifexpr or vn.caseexpr or vn.doexpr or vn.withexpr
     if nested then return (controlValueOwnsArms :ast :reg :typing :ctx n: vn)
-    return (bindingRhsIsBorrow :ast :reg :typing :ctx n: vn).not
+    return (armLeafIsPlace :ast :reg :typing :ctx n: vn).not
 }
 
 # emitListBind -- the List leg of emitCollectionBind: a no-argument native's

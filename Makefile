@@ -1405,7 +1405,7 @@ perf: $(PERFBIN)
 # deletes write-only allocations; perf-elision measures that), a failed run and
 # allocs != frees. Above ALLOC_BASELINE fails; a commit raising it says why in
 # its message, and one lowering the count lowers it here.
-ALLOC_BASELINE := 2903224
+ALLOC_BASELINE := 2901793
 # ALLOC_LINE -- the one measurement every allocation number comes from.
 ALLOC_LINE = valgrind --tool=memcheck $(PERFRUN) 2>&1 | grep 'total heap usage' | sed 's/.*usage: //'
 
@@ -1551,10 +1551,11 @@ frontend-guard:
 	echo "frontend-guard OK: no C spelling, no triple parse and no target in the front end's code"
 
 # lifetime-guard -- places the emitter still decides a lifetime itself rather than
-# reading the checker's destroy lists. bindingRhsIsBorrow is a floor, not a
-# target: it answers a C-shape question, not when anything dies. factsOfText
-# counts the places that read an expression's facts off its C text rather than
-# from its producer: none do, and the row keeps it so.
+# reading the checker's destroy lists. refsLocal searched a returned value's C
+# text for a local's name, and bindingRhsIsBorrow judged a borrow by the value's
+# shape where the checker records it (armLeafPlaces): both are gone, and their
+# rows keep it so. factsOfText counts the places that read an expression's
+# facts off its C text rather than from its producer: none do.
 lifetime-guard:
 	@l1=$$(grep -c 'registerScopeDestroy' src/zemitterc.z); \
 	l2=$$(grep -c 'refsLocal' src/zemitterc.z); \
@@ -1567,7 +1568,7 @@ lifetime-guard:
 	chk "registerScopeDestroy" "$$l1" 5; \
 	chk "refsLocal" "$$l2" 0; \
 	chk "factsOfText" "$$l3" 0; \
-	chk "bindingRhsIsBorrow" "$$l4" 6; \
+	chk "bindingRhsIsBorrow" "$$l4" 0; \
 	chk "'_ah{' argument hoists" "$$l5" 0; \
 	if [ "$$fail" = "1" ]; then \
 	  echo "  The emitter decided a lifetime on its own again. Read the checker's destroy"; \
