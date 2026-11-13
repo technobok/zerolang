@@ -2006,8 +2006,22 @@ ZSymbolTable: class {
     }
 
     # recordLoopExitDestroy -- what the `continue` at `nid` destroys: every scope
-    # inside its loop, the loop's own among them.
+    # inside its loop, the loop's own among them -- but not in a loop that
+    # tests postconditions, whose test reads that scope's locals after the
+    # `continue` and whose end destroys them.
     recordLoopExitDestroy: function {:this nid: zast.nodeid} is {
+        n: this.loopRuns.length
+        if n == 0 then return
+        run: this.loopRuns.get i: n - 1
+        downTo: run.scopeIndex
+        if run.postTest then downTo = openpos.create from: run.scopeIndex.u64 + 1
+        this.recordExitDestroy :nid :downTo except: ztypes.vid
+    }
+
+    # recordLoopArmDestroy -- what the loop `nid` destroys where one of its
+    # `while` arms fails, which leaves it after its binding answered: the
+    # loop's own scope, keyed by the loop.
+    recordLoopArmDestroy: function {:this nid: zast.nodeid} is {
         n: this.loopRuns.length
         if n == 0 then return
         (
@@ -2016,6 +2030,14 @@ ZSymbolTable: class {
             downTo: (this.loopRuns.get i: n - 1).scopeIndex
             except: ztypes.vid
         )
+    }
+
+    # continueTakesStart -- where the innermost loop's `continue`s begin in
+    # loopContinueTakes.
+    continueTakesStart: function {t: this.view} out u64 is {
+        n: t.loopRuns.length
+        if n == 0 then return t.loopContinueTakes.length
+        return (t.loopRuns.get i: n - 1).contStart
     }
 
     # recordBreakDestroy -- what the `break` at `nid` destroys: every scope inside
@@ -3592,7 +3614,7 @@ ZSymbolTable: class {
 
     # openLoopRun -- a loop's walk begins: mark its runs, with the scope
     # stack's height at its entry
-    openLoopRun: function {:this entryStart: u64} is {
+    openLoopRun: function {:this entryStart: u64 postTest: bool} is {
         this.loopRuns.append (
             looprun
             :entryStart
@@ -3600,6 +3622,7 @@ ZSymbolTable: class {
             contStart: this.loopContinueTakes.length
             onceStart: this.loopOnceTakes.length
             scopeIndex: (openpos.create from: this.open.length - 1)
+            :postTest
         )
     }
 
@@ -3840,9 +3863,12 @@ looprun: record {
     contStart: u64
     # into loopOnceTakes
     onceStart: u64
-    # the place in `open` of the loop's own scope: a `break` or a `continue`
-    # leaves every scope from there up
+    # the place in `open` of the loop's own scope, which is one iteration's: a
+    # `break` or a `continue` leaves every scope from there up
     scopeIndex: openpos
+    # the loop tests postconditions: a `continue` lands on their test, which
+    # is still inside the loop's own scope
+    postTest: bool
 }
 
 # divkind -- how a scope's walk ended, when it did not fall through: `exit`

@@ -72,19 +72,15 @@ OrderPend: class {
 
 # LoopFrame -- one loop, or do{}while(0) block, open around the code being
 # emitted: its break label's number, whether it is a do-block (whose
-# `continue` targets the loop around it), the frees marks at its entry (so a
-# jump out frees exactly the body's locals, and its collections), and the
-# per-iteration cleanup a jump out runs -- an owned payload's destroy, empty
-# for none -- with the variable it destroys.
+# `continue` targets the loop around it), and the frees mark at its entry (so
+# a jump out frees exactly the temporaries the emitter registered since).
 LoopFrame: class {
     id: u64
     isDo: bool
-    # the loop tests its postconditions after its continue label (emitPostTest):
-    # a `continue` jumps there, and leaves the payload's destroy to after the test
+    # the loop tests its postconditions after its continue label
+    # (emitIterationEnd): a `continue` jumps there
     postTest: bool
     listMark: u64
-    cleanup: String
-    cleanupVid: ztypes.vid
     # a `break` or `continue` of this frame was emitted: code later in it may
     # be skipped
     leftEarly: bool
@@ -9560,8 +9556,6 @@ pushLoopLabel: function {ctx: Ctx tmp: TmpCtr.view isDo: bool postTest: bool} ou
         :isDo
         :postTest
         listMark: tmp.listFrees.length
-        cleanup: String
-        cleanupVid: ztypes.vid
         leftEarly: false
     )
     return id
@@ -26467,8 +26461,8 @@ emitDottedAutoCallStmt: function {
     return
 }
 
-# emitBreakStmt -- `break`: the block frees, then the owned-payload dtor the
-# jump would skip, then the goto. A do-block entry carries an empty cleanup.
+# emitBreakStmt -- `break`: the destroys it owes (emitBreakFrees), then the
+# goto.
 emitBreakStmt: function {
     ast: Ast.view
     reg: ztypes.ZTypeRegistry.view
@@ -26481,18 +26475,7 @@ emitBreakStmt: function {
     emitBreakFrees :ast :reg :typing :ctx :tmp :ind :buf
     if ctx.loops.length > 0 then {
         noteFrameLeft :ctx idx: ctx.loops.length - 1
-        bid: u64
-        {
-            bf: ctx.loops.get i: ctx.loops.length - 1
-            bid = bf.id
-            # an owned-payload loop's per-iteration dtor: the jump
-            # skips the fall-through line, so emit its copy here (a
-            # do-block entry carries an empty cleanup).
-            if bf.cleanup.length > 0 then {
-                lbc: "\{ind}\{bf.cleanup}"
-                buf.append lbc
-            }
-        }
+        bid: (ctx.loops.get i: ctx.loops.length - 1).id
         lbkg: "\{ind}goto __zbrk_\{bid};\n"
         buf.append lbkg
         ubk: true
@@ -26539,15 +26522,7 @@ emitContinueStmt: function {
         if hasLoop then noteFrameLeft :ctx idx: loopIdx
         if inDo when hasLoop then {
             emitContinueFrees :ast :reg :typing :ctx :tmp idx: loopIdx :ind :buf
-            cid: u64
-            {
-                cf: ctx.loops.get i: loopIdx
-                cid = cf.id
-                if cf.cleanup.length > 0 when cf.postTest.not then {
-                    lcc: "\{ind}\{cf.cleanup}"
-                    buf.append lcc
-                }
-            }
+            cid: (ctx.loops.get i: loopIdx).id
             lcg: "\{ind}goto __zcont_\{cid};\n"
             buf.append lcg
             ucn: true
@@ -26560,10 +26535,6 @@ emitContinueStmt: function {
                 pf0: ctx.loops.get i: ctx.loops.length - 1
                 post = pf0.postTest
                 postId = pf0.id
-                if pf0.cleanup.length > 0 when post.not then {
-                    lpc: "\{ind}\{pf0.cleanup}"
-                    buf.append lpc
-                }
             }
             # a C `continue` would skip the postconditions' test
             if post then {
@@ -27223,16 +27194,26 @@ emitForStmt: function {
         dvG = blockDiverges :ast :reg :typing :ctx n: fbw
     }
     closeScopeBlock :ast :reg :typing :ctx :tmp lL: lLw diverged: dvG node: n.body :buf
-    emitContLabel :ctx id: lidW ind: bodyInd.stringView :buf
-    emitPostTest :ast :reg :typing :ctx m: n cleanup: "" ind: bodyInd.stringView :tmp :buf
+    (
+        emitIterationEnd
+        :ast
+        :reg
+        :typing
+        :ctx
+        m: n
+        id: lidW
+        diverged: dvG
+        ind: bodyInd.stringView
+        :tmp
+        :buf
+    )
     lwc: "\{ind}}\n"
     buf.append lwc
     popLoopLabel :ctx id: lidW :ind :buf
-    # the HEADER's scope ends where the loop does, AFTER the break label: both
-    # the path that falls out and the path that jumps reach it there, and a
-    # `break` no longer lists the header's locals of its own (it leaves the
-    # BODY's scope), so each is destroyed exactly once.
-    closeScopeBlock :ast :reg :typing :ctx :tmp lL: lLh diverged: false node: n.nodeid :buf
+    # the temporaries the conditions registered are released where the loop
+    # ends, AFTER the break label: both the path that falls out and the path
+    # that jumps reach it there
+    flushBlockFrees :tmp lL: lLh diverged: false :buf
     ctx.condDepth = ctx.condDepth - condBump
 }
 
@@ -27352,31 +27333,41 @@ doWhileCondText: function {
     return pcond
 }
 
-# emitPostTest -- a loop's postconditions, tested after its body at its
-# continue label, which every `continue` of such a loop jumps to (LoopFrame
-# postTest): the loop goes on only when each holds. `cleanup` is the owned
-# payload's destroy the iteration owes, run after the test on both of its ways
-# out, since the test may read the payload. A do-while tests them in its own
-# trailing test instead.
-emitPostTest: function {
+# emitIterationEnd -- where one iteration of the loop `m` ends: what the checker
+# recorded the `for` scope's end destroys (scopeDestroy) -- the element an
+# owning binding holds -- and the continue label `id`. A loop without
+# postconditions destroys first, on the path that falls out of its body
+# (`diverged` says there is none): its `continue` destroyed what it listed and
+# jumps past. A loop with postconditions tests them at the label, which every
+# `continue` of it jumps to, and destroys after the test on both of its ways
+# out, since the test may read the element.
+emitIterationEnd: function {
     ast: Ast.view
     reg: ztypes.ZTypeRegistry.view
     typing: ztyping.ZTyping.view
     ctx: Ctx
     m: zast.forrow.view
-    cleanup: StringView
+    id: u64
+    diverged: bool
     ind: StringView
     tmp: TmpCtr
     buf: String.borrow
 } is {
-    if m.postconditions.count.u64 == 0 then return
+    if m.postconditions.count.u64 == 0 then {
+        if diverged.not then emitScopeDestroy :ast :reg :typing :ctx node: m.nodeid :ind :buf
+        emitContLabel :ctx :id :ind :buf
+        return
+    }
+    emitContLabel :ctx :id :ind :buf
+    owed: String
+    emitScopeDestroy :ast :reg :typing :ctx node: m.nodeid :ind buf: owed
     end: (foldedLoopOf :typing nid: m.nodeid).end
     if end == ztyping.loopend.always then {
-        if cleanup.length > 0 then buf.append "\{ind}\{cleanup}"
+        buf.append owed
         return
     }
     if end == ztyping.loopend.once then {
-        if cleanup.length > 0 then buf.append "\{ind}\{cleanup}"
+        buf.append owed
         buf.append "\{ind}break;\n"
         return
     }
@@ -27403,12 +27394,15 @@ emitPostTest: function {
         flushArgHoists :ctx :ind :tmp :buf
         test = condInParens cond: pcond.stringView
     }
-    if cleanup.length == 0 then {
+    if owed.length == 0 then {
         buf.append "\{ind}if (!\{test}) break;\n"
         return
     }
-    buf.append "\{ind}if (!\{test}) {\n\{ind}    \{cleanup}\{ind}    break;\n\{ind}}\n"
-    buf.append "\{ind}\{cleanup}"
+    inner: "\{ind}    "
+    buf.append "\{ind}if (!\{test}) {\n"
+    emitScopeDestroy :ast :reg :typing :ctx node: m.nodeid ind: inner.stringView :buf
+    buf.append "\{inner}break;\n\{ind}}\n"
+    buf.append owed
 }
 
 # forArmCond -- the text of a loop's `while:` arms: every condition that is
@@ -27440,12 +27434,32 @@ forArmCond: function {
     return cond
 }
 
-# emitForArmBreak -- the arms' test, as the loop's first statement: `if (!(c))
-# break;`. Nothing when the loop has no arms.
-emitForArmBreak: function {armc: StringView ind: StringView buf: String.borrow} is {
+# emitForArmBreak -- the arms' test `armc` of the loop `node`, as the loop's
+# first statement after its binding: `if (!(c)) break;`, the break after what
+# the checker recorded a failing arm destroys (exitDestroy of the loop): the
+# element the binding answered. Nothing when the loop has no arms.
+emitForArmBreak: function {
+    ast: Ast.view
+    reg: ztypes.ZTypeRegistry.view
+    typing: ztyping.ZTyping.view
+    ctx: Ctx
+    node: zast.nodeid
+    armc: StringView
+    ind: StringView
+    buf: String.borrow
+} is {
     if armc.length == 0 then return
-    l: "\{ind}if (!(\{armc})) break;\n"
-    buf.append l
+    inner: "\{ind}    "
+    owed: String
+    outerExit: ctx.exitNode
+    ctx.exitNode = node
+    emitExitDestroy :ast :reg :typing :ctx ind: inner.stringView buf: owed
+    ctx.exitNode = outerExit
+    if owed.length == 0 then {
+        buf.append "\{ind}if (!(\{armc})) break;\n"
+        return
+    }
+    buf.append "\{ind}if (!(\{armc})) {\n\{owed}\{inner}break;\n\{ind}}\n"
 }
 
 # emitPlainWhileHead -- the ordinary `while (c) {` opening, where no condition
@@ -29467,20 +29481,8 @@ emitLocalDestroy: function {
     }
     # storage another owner frees: what a borrow aliases
     if (vvHas xs: ctx.aliases :vid) then return
-    if (loopOwnsPayload :ctx :vid) then return
     nm: varCName :ctx :ast :reg :vid
     buf.append (destroyLineC :reg :typing :ctx :tid nm: nm.stringView :ind)
-}
-
-# loopOwnsPayload -- `vid` is the payload of a loop being emitted, which the
-# loop releases itself: at the end of each iteration, after its postconditions
-# are tested, and where a `break`, a `continue` or a `return` leaves it
-# (LoopFrame.cleanup).
-loopOwnsPayload: function {ctx: Ctx.view vid: ztypes.vid} out bool is {
-    for each lf: ctx.loops loop {
-        if lf.cleanupVid == vid when lf.cleanup.length > 0 then return true
-    }
-    return false
 }
 
 # emitBreakFrees -- the destroys a `break`, or a `continue` that jumps no
@@ -30595,32 +30597,6 @@ pushPayloadSpill: function {
     }
 }
 
-# objIterPayCleanup -- an owned payload needs a per-iteration destroy. The
-# fall-through copy is emitted at the end of the loop body; continue, break and
-# return jump PAST that line, so the jump sites need their own copy -- which is
-# what the break-label cleanup slot carries. Returns the line, "" when the yield
-# owns nothing.
-objIterPayCleanup: function {
-    reg: ztypes.ZTypeRegistry.view
-    typing: ztyping.ZTyping.view
-    ctx: Ctx
-    ovid: ztypes.tid
-    lbl: StringView
-    lblV: ztypes.vid
-} out String is {
-    payCleanup: String
-    if (originIsTid :reg tid: ovid originTid: (ctx.origins.get i: family.slot.option)) then {
-        pfree: payloadDestructor :reg :typing :ctx tid: ovid arm: zast.wellKnown.slot.wkSome
-        if pfree.length > 0 then payCleanup = "\{pfree}(&\{lbl});\n"
-    }
-    if payCleanup.length > 0 then {
-        lf: ctx.loops.getMut i: ctx.loops.length - 1
-        lf.cleanup = payCleanup.copy
-        lf.cleanupVid = lblV
-    }
-    return payCleanup
-}
-
 # emitObjIterLoop -- the `while (1) { T _iter = C_call(&recv); ... }` an object
 # iterator becomes: the yield type, the receiver, its destroy registration, the
 # per-iteration payload bind, the body, and the loop labels.
@@ -30666,7 +30642,6 @@ emitObjIterLoop: function {
         :buf
     )
     lidO: pushLoopLabel :ctx :tmp isDo: false postTest: m.postconditions.count.u64 > 0
-    payCleanup: objIterPayCleanup :reg :typing :ctx :ovid :lbl :lblV
     l0: "\{ind}while (1) {\n"
     buf.append l0
     l1: "\{ind}    \{ovc}_t _iter\{mN} = \{callC}(&\{iterRecv});\n"
@@ -30685,7 +30660,6 @@ emitObjIterLoop: function {
         :lblV
         :mN
         :lidO
-        payCleanup: payCleanup.stringView
         :ind
         :tmp
         :buf
@@ -30695,9 +30669,9 @@ emitObjIterLoop: function {
 
 # emitOptionLoopTail -- the rest of a loop whose binding answers an option into
 # `_iterN` at the top of every iteration: the `none` break, the payload bind
-# and its spill, the `while:` arms, the body, the payload's per-iteration
-# cleanup and the loop's close. The caller has opened `while (1) {`, written
-# the `_iterN` line, pushed the loop label and taken the payload cleanup.
+# and its spill, the `while:` arms, the body, the iteration's end and the
+# loop's close. The caller has opened `while (1) {`, written the `_iterN` line
+# and pushed the loop label.
 emitOptionLoopTail: function {
     ast: Ast.view
     reg: ztypes.ZTypeRegistry.view
@@ -30712,7 +30686,6 @@ emitOptionLoopTail: function {
     lblV: ztypes.vid
     mN: u64
     lidO: u64
-    payCleanup: StringView
     ind: StringView
     tmp: TmpCtr
     buf: String.borrow
@@ -30766,26 +30739,37 @@ emitOptionLoopTail: function {
     # conditions are written in
     armO: forArmCond :ast :reg :typing :ctx n: m
     flushArgHoists :ctx ind: bodyInd.stringView :tmp :buf
-    emitForArmBreak armc: armO.stringView ind: bodyInd.stringView :buf
+    (
+        emitForArmBreak
+        :ast
+        :reg
+        :typing
+        :ctx
+        node: m.nodeid
+        armc: armO.stringView
+        ind: bodyInd.stringView
+        :buf
+    )
     dvG: false
     if m.body.isZero.not then {
         mb: ast.nodes.get i: m.body
         emitBodyNode :ast :reg :typing :ctx n: mb ind: bodyInd.stringView :tmp :buf
         dvG = blockDiverges :ast :reg :typing :ctx n: mb
     }
-    # the fall-through copy of the per-iteration cleanup; a body whose last
-    # statement jumps (break, continue, return) never reaches it, and the jump
-    # site carries its own copy from the break-label slot. A loop with
-    # postconditions runs it after their test instead, which may read the payload
-    posts: m.postconditions.count.u64 > 0
-    if payCleanup.length > 0 when dvG.not when posts.not then {
-        l3od: "\{ind}    \{payCleanup}"
-        buf.append l3od
-    }
     closeScopeBlock :ast :reg :typing :ctx :tmp lL: lLO diverged: dvG node: m.body :buf
-    indO: "\{ind}    "
-    emitContLabel :ctx id: lidO ind: indO.stringView :buf
-    emitPostTest :ast :reg :typing :ctx :m cleanup: payCleanup ind: indO.stringView :tmp :buf
+    (
+        emitIterationEnd
+        :ast
+        :reg
+        :typing
+        :ctx
+        :m
+        id: lidO
+        diverged: dvG
+        ind: bodyInd.stringView
+        :tmp
+        :buf
+    )
     l: "\{ind}}\n"
     buf.append l
     popLoopLabel :ctx id: lidO :ind :buf
@@ -30879,7 +30863,6 @@ emitPlainBindingFor: function {
     ovc: spelledCname :ctx tid: ovid
     mN: tmpNext :ctx :tmp
     lidO: pushLoopLabel :ctx :tmp isDo: false postTest: m.postconditions.count.u64 > 0
-    payCleanup: objIterPayCleanup :reg :typing :ctx :ovid lbl: lbl.stringView :lblV
     buf.append "\{ind}while (1) {\n"
     bodyInd: "\{ind}    "
     lL: tmp.listFrees.length
@@ -30902,7 +30885,6 @@ emitPlainBindingFor: function {
         :lblV
         :mN
         :lidO
-        payCleanup: payCleanup.stringView
         :ind
         :tmp
         :buf
@@ -31103,7 +31085,17 @@ emitCountedRangeFor: function {
     bodyInd: "\{ind}    "
     armC: forArmCond :ast :reg :typing :ctx n: m
     flushArgHoists :ctx ind: bodyInd.stringView :tmp :buf
-    emitForArmBreak armc: armC.stringView ind: bodyInd.stringView :buf
+    (
+        emitForArmBreak
+        :ast
+        :reg
+        :typing
+        :ctx
+        node: m.nodeid
+        armc: armC.stringView
+        ind: bodyInd.stringView
+        :buf
+    )
     # the body is a BLOCK: whatever it registers -- an argument hoisted to an
     # `_ah` temp, an owned local -- is declared per iteration and has to be
     # freed per iteration. Without the mark those frees stayed pending and
@@ -31116,8 +31108,19 @@ emitCountedRangeFor: function {
         dvR = blockDiverges :ast :reg :typing :ctx n: bodyNode
     }
     closeScopeBlock :ast :reg :typing :ctx :tmp lL: lLR diverged: dvR node: m.body :buf
-    emitContLabel :ctx id: lidR ind: bodyInd.stringView :buf
-    emitPostTest :ast :reg :typing :ctx :m cleanup: "" ind: bodyInd.stringView :tmp :buf
+    (
+        emitIterationEnd
+        :ast
+        :reg
+        :typing
+        :ctx
+        :m
+        id: lidR
+        diverged: dvR
+        ind: bodyInd.stringView
+        :tmp
+        :buf
+    )
     lc: "\{ind}}\n"
     buf.append lc
     popLoopLabel :ctx id: lidR :ind :buf
@@ -31250,7 +31253,17 @@ emitClosedRangeFor: function {
         bodyInd: "\{ind}    "
         armX: forArmCond :ast :reg :typing :ctx n: m
         flushArgHoists :ctx ind: bodyInd.stringView :tmp :buf
-        emitForArmBreak armc: armX.stringView ind: bodyInd.stringView :buf
+        (
+            emitForArmBreak
+            :ast
+            :reg
+            :typing
+            :ctx
+            node: m.nodeid
+            armc: armX.stringView
+            ind: bodyInd.stringView
+            :buf
+        )
         lLR: tmp.listFrees.length
         dvR: false
         if m.body.isZero.not then {
@@ -31259,8 +31272,19 @@ emitClosedRangeFor: function {
             dvR = blockDiverges :ast :reg :typing :ctx n: bodyNode
         }
         closeScopeBlock :ast :reg :typing :ctx :tmp lL: lLR diverged: dvR node: m.body :buf
-        emitContLabel :ctx id: lidR ind: bodyInd.stringView :buf
-        emitPostTest :ast :reg :typing :ctx :m cleanup: "" ind: bodyInd.stringView :tmp :buf
+        (
+            emitIterationEnd
+            :ast
+            :reg
+            :typing
+            :ctx
+            :m
+            id: lidR
+            diverged: dvR
+            ind: bodyInd.stringView
+            :tmp
+            :buf
+        )
         lc: "\{ind}}\n"
         buf.append lc
         popLoopLabel :ctx id: lidR :ind :buf
@@ -34216,11 +34240,9 @@ forexprValue: function {n: astnode.view} out bool is {
 }
 
 # emitAppendedValueMoves -- THE APPEND IS A MOVE, so what it consumed is zeroed
-# where a statement's would be: the local a bare owned value came out of, and
-# the sources any taking call inside it moved from. Without it a loop payload
-# moved into the list is freed twice, once by the list and once by the loop's
-# own per-iteration cleanup -- measured as a double free on
-# `ys: for each e: g loop e` over a generator of Strings.
+# where a statement's would be: the local a bare owned value came out of, when
+# a destroy still reaches it (emitMovedSourceZero), and the sources any taking
+# call inside it moved from.
 emitAppendedValueMoves: function {
     ast: Ast.view
     reg: ztypes.ZTypeRegistry.view
@@ -38093,7 +38115,7 @@ boxedLocalNeedsZero: function {
 # emitReturnCleanup -- the destroys owed BEFORE a return, on the diverging path
 # the function-end destroys never reach: the emitter's own temporaries
 # registered in the function, then the locals the checker recorded the return
-# destroys (emitExitDestroy), then every enclosing loop's payload. Does NOT pop
+# destroys (emitExitDestroy). Does NOT pop
 # (other returns and the end still owe them). A return the checker recorded
 # nothing for (ctx.exitNode 0) is refused: a local it moved is zeroed only
 # where the checker says a path still destroys it.
@@ -38115,19 +38137,6 @@ emitReturnCleanup: function {
     )
     for each owed: tmp.listFrees loop buf.append owed.stmt
     if allRows.not then emitExitDestroy :ast :reg :typing :ctx :ind :buf
-    # a return exits every enclosing loop: emit each owned-payload loop's
-    # per-iteration cleanup (empty for plain loops and do entries), unless
-    # the payload is a non-owning alias.
-    ci: u64
-    cn: ctx.loops.length
-    for ci < cn loop {
-        cf0: ctx.loops.get i: ci
-        if cf0.cleanup.length > 0 when (vvHas xs: ctx.aliases vid: cf0.cleanupVid).not then {
-            lcr: "\{ind}\{cf0.cleanup}"
-            buf.append lcr
-        }
-        ci = ci + 1
-    }
 }
 
 # emit a function's body.

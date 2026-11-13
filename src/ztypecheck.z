@@ -42555,28 +42555,24 @@ bindForIteration: function {
             fpins: hpins
         )
     } else {
-        bindForOwnedElement :st :cond elem: fe.elem
+        bindForOwnedElement :st :cond elem: fe.elem kept: spillFor
     }
     if spillFor then mintForSpillFields :st :ast :cond :fe :vt :facId :isEach
 }
 
 # bindForOwnedElement -- bind a `for` loop name to an element it owns (or
-# copies) for the iteration.
-bindForOwnedElement: function {st: zenv.ZSymbolTable cond: argref elem: ztypes.tid} is {
-    # THE ELEMENT IS A VARIABLE. Bound with no vid it sat outside every
-    # destroy list and every take overlay -- `scopeDestroy` cannot name
-    # what has no variable -- so no rule that reads one could reach it,
-    # and the readonly lock below has nothing to hold.
+# copies) for the iteration: a local of the iteration's scope, destroyed where
+# that scope's lists name it, as any local is. `kept` says the loop suspends
+# inside a generator body, which keeps the element in the instance.
+bindForOwnedElement: function {st: zenv.ZSymbolTable cond: argref elem: ztypes.tid kept: bool} is {
     evid: st.reg.newVariable ztypeId: elem ownership: ztypes.zownership.owned
     st.reg.setVariableOrigin id: evid origin: ztypes.zvarorigin.local
     st.defineVar nameId: cond.name vid: evid
     st.typing.setDefVariable nid: cond.operation vid: evid
-    # A MOVE OUT OF IT MUST ZERO IT. The element's destroy is the
-    # EMITTER's -- one unconditional cleanup per iteration, which no
-    # destroy point of the checker's lists -- so nothing here would
-    # record the state that makes a move zero its source, and
-    # `xs.append t` would hand the list a value the loop then frees.
-    st.typing.zeroOnMove.add item: evid
+    # the instance saves the element at every suspension, and its destructor
+    # frees what it saved when the iterator is abandoned: a move out of the
+    # element zeroes it, so the copy saved after the move holds nothing
+    if kept then st.typing.zeroOnMove.add item: evid
 }
 
 # refuseUnwalkableBinding -- A NAMED `for` BINDING IS WHAT ENDS THE LOOP: an
@@ -43125,8 +43121,13 @@ checkFor: function {
         return ztypes.tid
     }
     entryStart: st.entryMark
+    # THE `for` SCOPE IS ONE ITERATION'S. What a named condition binds is bound
+    # afresh at the top of every iteration, and is read by the `while` arms,
+    # the body and the postconditions of that iteration. So the scope's end is
+    # the iteration's end, and a `break` or a `continue` leaves it.
     forMarker: st.pushBlock node: fornode.nid
-    st.openLoopRun :entryStart
+    st.openLoopRun :entryStart postTest: fornode.nposts > 0
+    st.openBreakScope
     endLoopWriteNarrowing :st :ast :fornode
     bk: st.reg.ctlPlaceholder
     st.define nameId: zast.wellKnown.slot.wkBreak ztypeId: bk
@@ -43143,21 +43144,14 @@ checkFor: function {
     checkForConditions :st :unitDecl :ast :fornode :spillFor :forMarker
     st.walk.draft.clear
     bodyMark: st.entryMark
-    # THE BODY IS ITS OWN SCOPE. The `for` scope brackets the HEADER: what a
-    # named condition binds is declared ONCE, before the loop, and lives until
-    # the loop is done. The body's own locals are gone at the end of every
-    # iteration. One scope for both put a header binding's destroy inside the
-    # loop, which frees it and then iterates again over freed storage.
-    # `popTo marker: forMarker` below pops this with it.
+    # THE BODY IS ITS OWN SCOPE, inside the iteration's: the postconditions run
+    # after it and do not see its locals. `popTo marker: forMarker` below pops
+    # this with it.
     bodyMarker: st.pushBlock node: fornode.body
     # the body runs zero or more times: a lock it releases is released on its
     # path alone
     st.markPath marker: bodyMarker since: st.releaseMark
     restMark: st.restoreMark
-    # A `break` LEAVES THE BODY, NOT THE HEADER. It jumps to a label that sits
-    # inside the header's C extent -- the header's destroys are emitted after
-    # it -- so listing the header's locals at the break frees them twice.
-    st.openBreakScope
     abPrev: st.walk.appendedBody
     st.walk.appendedBody = zast.nodeid
     if (st.walk.stmtBlocks.has item: fornode.body).not then st.walk.appendedBody = fornode.body
@@ -43192,10 +43186,10 @@ checkFor: function {
     if entry == ztyping.loopentry.never then st.discardTakenFrom start: entryStart
     st.popTo marker: bodyMarker
     broke: st.breakLeavesInnermost
-    st.closeBreakScope
     checkForPostconditions :st :unitDecl :ast :fornode :end
     st.walk.draft.clear
     st.popTo marker: forMarker
+    st.closeBreakScope
     run: st.closeLoopRun
     if k == zenv.divkind.none then reportLoopMoves :st :ast :fornode :run
     reportContinueMoves :st :ast :fornode :run
@@ -43211,6 +43205,25 @@ checkFor: function {
     # a statement loop discards its body's value, so it has no List to mint
     if (st.walk.stmtBlocks.has item: fornode.body) then return ztypes.tid
     return (forComprehensionTid :st :unitDecl :ast :fornode :elemT)
+}
+
+# relayContinueTakes -- in a loop that tests postconditions, a `continue` lands
+# on their test, inside the iteration's scope: what a path that took one had
+# moved of that scope's locals -- the element the binding holds -- is moved on
+# some of the paths that reach the test, and the iteration's end. Asked with
+# the body's scope closed and the iteration's still open.
+relayContinueTakes: function {st: zenv.ZSymbolTable} is {
+    i: st.continueTakesStart
+    for i < st.loopContinueTakes.length loop {
+        d: st.loopContinueTakes.get :i
+        i = i + 1
+        if (st.innermostOpenIs scope: (st.typing.declParentOf declId: d)) then (
+            st.invalidateDeclAs
+            declId: d
+            loc: takenHere
+            maybe: true
+        )
+    }
 }
 
 # checkForConditions -- walk a loop's conditions, in order. A condition after the
@@ -43243,14 +43256,18 @@ checkForConditions: function {
         if kC > 1 then st.markTakesMaybeFrom from: onceMark
         if kC == 1 then st.markPath marker: forMarker since: st.releaseMark
     }
+    # a `while` arm that fails leaves the loop with the binding answered
+    if fornode.nconds > 1 then st.recordLoopArmDestroy nid: fornode.nid
 }
 
 # checkForPostconditions -- walk a loop's postconditions. A POSTCONDITION RUNS
 # AFTER THE BODY, so the walk reaches it after the body: walked before, a lock it
-# released was released for the body's first iteration too, which runs first.
+# released was released for the body's first iteration too, which runs first. A
+# `continue` reaches it too (relayContinueTakes).
 checkForPostconditions: function {
     st: zenv.ZSymbolTable unitDecl: ztypes.declid ast: Ast fornode: forref end: ztyping.loopend
 } is {
+    if fornode.nposts > 0 then relayContinueTakes :st
     kP: u64
     for kP < fornode.nposts loop {
         pcId: zast.forPostAt :ast nid: fornode.nid i: kP

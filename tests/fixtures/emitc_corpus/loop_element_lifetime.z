@@ -1,0 +1,116 @@
+# The element a loop's binding owns is a local of one iteration: it is
+# destroyed where that iteration ends, and nowhere else. An iteration ends at
+# the end of the body (after the postconditions, which may read the element),
+# at a `continue`, at a `break`, at a `return`, and where a `while` arm fails
+# after the binding answered. An element the iteration moved out is not
+# destroyed, and one it returns is handed to the caller.
+Tags: generator { base: String  n: u64 } as {
+    call: function out String is {
+        i: 0.u64
+        for i < this.n loop {
+            yield "\{this.base}\{i}"
+            i = i + 1
+        }
+    }
+}
+
+keep: function {s: String.take} out u64 is {
+    return s.length
+}
+
+# the element itself is returned
+firstLong: function {min: u64} out String is {
+    for each s: (Tags base: "ret".string n: 4) loop {
+        if s.length > min then return s
+    }
+    return "none".string
+}
+
+# a return inside two owning loops
+nested: function out u64 is {
+    for each a: (Tags base: "outer".string n: 3) loop {
+        for each b: (Tags base: "in".string n: 3) loop {
+            if b == "in1" when a == "outer1" then return a.length + b.length
+        }
+    }
+    return 0
+}
+
+# the elements a suspending loop holds, moved out or read
+Lengths: generator { n: u64 } as {
+    call: function out u64 is {
+        for each s: (Tags base: "g".string n: this.n) loop {
+            yield s.length
+            if s == "g1" then yield (keep :s)
+        }
+    }
+}
+
+main: function is {
+    # a `while` arm fails after the element is bound
+    n: 0.u64
+    for each s: (Tags base: "arm".string n: 4) while n < 2 loop {
+        n = n + 1
+        print "arm \{s}"
+    }
+    # an arm that reads the element
+    for each s: (Tags base: "armread".string n: 4) while s != "armread2" loop print "read \{s}"
+    xs: List String
+    # moved on one path, which ends the iteration
+    for each s: (Tags base: "mc".string n: 4) loop {
+        if s == "mc1" then {
+            xs.append s
+            continue
+        }
+        print "kept"
+    }
+    # moved on one path, which leaves the loop
+    for each s: (Tags base: "mb".string n: 4) loop {
+        if s == "mb2" then {
+            xs.append s
+            break
+        }
+    }
+    # moved on one path that falls through
+    for each s: (Tags base: "mf".string n: 3) loop {
+        if s == "mf0" then xs.append s
+    }
+    # moved on every path
+    t: 0.u64
+    for each s: (Tags base: "all".string n: 3) loop {
+        t = t + (keep :s)
+    }
+    # held to the end, left by `break` and by `continue`
+    for each s: (Tags base: "held".string n: 5) loop {
+        if s == "held1" then continue
+        if s == "held3" then break
+        t = t + s.length
+    }
+    # a postcondition reads the element after a `continue`
+    for each s: (Tags base: "pc".string n: 5) loop {
+        if s == "pc0" then continue
+        t = t + 1
+    } while s != "pc2"
+    # a `continue` after the move, in a loop with a postcondition
+    for each s: (Tags base: "pm".string n: 4) loop {
+        if s == "pm1" then {
+            xs.append s
+            continue
+        }
+    } while t < 1000
+    # a plain binding answers the element afresh at every iteration
+    g: Tags base: "plain".string n: 3
+    for s: g loop {
+        if s == "plain1" then xs.append s
+    }
+    # a suspending loop, walked to its end and abandoned
+    for each k: (Lengths n: 3) loop t = t + k
+    with it: (Lengths n: 3) do {
+        a: it.call
+        b: it.call
+        match b case some then t = t + b case none then t = t + 100
+    }
+    print "xs \{xs.length} t \{t}"
+    print "first \{firstLong min: 2} \{firstLong min: 9}"
+    print "nested \{nested}"
+}
