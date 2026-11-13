@@ -329,9 +329,20 @@ test-sqlite-arm64: bin/zc
 # create it. Without wine there is nothing to create and no stamp is left.
 WINE_PREFIX := $(abspath $(BUILDDIR))/wineprefix
 WINE_ENV := DISPLAY= WINEDEBUG=-all WINEPREFIX=$(WINE_PREFIX)
+# WINE_SERVER_UP -- a shell command that starts the prefix's wine server, to
+# stay 30 seconds after its last client. A leg runs it before its first Windows
+# program. Left to itself, wine starts a server with the first client and the
+# server stops moments after the last one. A leg that runs many short programs
+# has such moments, and a program that starts while the server stops fails
+# with no output ("wine client error: recvmsg: Connection reset by peer"). A
+# server that is up already answers 2, which is not a failure. Where
+# wineserver is not on PATH it sits beside wine's own libraries.
+WINE_SERVER_UP = { ws=$$(command -v wineserver || ls /usr/lib/*/wine/wineserver /usr/lib*/wine/wineserver 2> /dev/null | head -1); \
+  if [ -n "$$ws" ]; then $(WINE_ENV) "$$ws" -p30 > /dev/null 2>&1 || true; \
+  else echo "note: no wineserver found, so wine stops and starts its own: a Windows program may fail to start"; fi; }
 $(BUILDDIR)/wineprefix/.ready:
 	@if command -v wine >/dev/null 2>&1; then \
-	  mkdir -p $(WINE_PREFIX) && $(WINE_ENV) timeout 300 wineboot -i > /dev/null 2>&1 && touch $@; \
+	  mkdir -p $(WINE_PREFIX) && $(WINE_SERVER_UP) && $(WINE_ENV) timeout 300 wineboot -i > /dev/null 2>&1 && touch $@; \
 	fi
 
 # test-mingw -- the RUN corpus built for Windows by mingw-w64 against the UCRT
@@ -357,6 +368,7 @@ test-mingw: bin/zc $(BUILDDIR)/ztestrunner $(BUILDDIR)/wineprefix/.ready
 	  echo "test-mingw: skipped (needs $(MINGW_CC) and wine: sudo apt install gcc-mingw-w64-x86-64 wine; see tools/windows/README.md)"; exit 0; fi; \
 	if ! $(MINGW_UCRT_CHECK); then \
 	  echo "test-mingw: skipped ($(MINGW_CC) cannot target the UCRT: $(MINGW_UCRT_FIX); see tools/windows/README.md)"; exit 0; fi; \
+	$(WINE_SERVER_UP); \
 	$(WINE_ENV) $(BUILDDIR)/ztestrunner --zc bin/zc --cc $(MINGW_CC) --ccflags "$(MINGW_CFLAGS)" --target x86_64-w64-mingw32 \
 	   --exec wine --run-only --root . --jobs $(NPROC) > $(BUILDDIR)/mingw-run.log 2>&1; \
 	awk '/^FAIL/ || /^SKIP\(run\) .* \(posix\)$$/ { k = $$1; sub(/^FAIL\(/, "", k); sub(/\)$$/, "", k); \
@@ -385,6 +397,7 @@ test-tcc-mingw: bin/zc $(BUILDDIR)/ztestrunner $(BUILDDIR)/wineprefix/.ready
 	  echo "test-tcc-mingw: skipped (needs wine: sudo apt install wine; see tools/windows/README.md)"; exit 0; fi; \
 	$(MAKE) --no-print-directory $(BUILDDIR)/x86_64-win32-tcc > $(BUILDDIR)/tcc-mingw-build.log 2>&1 \
 	  || { tail -20 $(BUILDDIR)/tcc-mingw-build.log; echo "test-tcc-mingw FAIL: the cross tcc did not build"; exit 1; }; \
+	$(WINE_SERVER_UP); \
 	$(WINE_ENV) $(BUILDDIR)/ztestrunner --zc bin/zc --cc $(BUILDDIR)/x86_64-win32-tcc --cc-forward \
 	   --ccflags "-B $(TCCW_LIB)" --target x86_64-w64-mingw32 \
 	   --exec wine --run-only --root . --jobs $(NPROC) > $(BUILDDIR)/tcc-mingw-run.log 2>&1; \
@@ -412,6 +425,7 @@ test-msvc-wine: bin/zc $(BUILDDIR)/wineprefix/.ready $(NATIVEC_INC)/zthread_shim
 	if [ -z "$(MSVC_WINE)" ] || [ ! -x "$(MSVC_WINE)/cl" ] || ! command -v wine > /dev/null 2>&1; then \
 	  echo "test-msvc-wine: skipped (needs wine and MSVC_WINE=<dir>/msvc/bin/x64 from tools/windows/msvc-wine.sh; see tools/windows/README.md)"; exit 0; fi; \
 	d=$(BUILDDIR)/msvc; rm -rf $$d; mkdir -p $$d; \
+	$(WINE_SERVER_UP); \
 	$(WINE_ENV) $(MSVC_WINE)/cl -nologo -std:c17 -experimental:c11atomics -W3 -O2 -I$(NATIVEC_INC) \
 	  tests/c/zthread_shim_test.c -Fe:$$d/shim.exe -Fo:$$d/ > $$d/cl.log 2>&1 \
 	  || { echo "test-msvc-wine FAIL: cl did not build the shim test"; grep -m5 -E 'error|fatal' $$d/cl.log; exit 1; }; \
@@ -453,6 +467,7 @@ test-msvc-corpus: bin/zc $(BUILDDIR)/ztestrunner $(BUILDDIR)/wineprefix/.ready
 	    echo "test-msvc-corpus: skipped (no cl on PATH: run from a shell set up by MSVC's vcvars64.bat; see tools/windows/README.md)"; exit 0; fi; \
 	elif [ -z "$(MSVC_WINE)" ] || [ ! -x "$(MSVC_WINE)/cl" ] || ! command -v wine > /dev/null 2>&1; then \
 	  echo "test-msvc-corpus: skipped (needs wine and MSVC_WINE=<dir>/msvc/bin/x64 from tools/windows/msvc-wine.sh; see tools/windows/README.md)"; exit 0; fi; \
+	[ -n "$(WINDOWS_HOST)" ] || $(WINE_SERVER_UP); \
 	$(MSVC_CORPUS_RUN) --run-only --root . --jobs $(NPROC) > $(BUILDDIR)/msvc-run.log 2>&1; \
 	awk '/^FAIL/ || /^SKIP\(run\) .* \(posix\)$$/ { k = $$1; sub(/^FAIL\(/, "", k); sub(/\)$$/, "", k); \
 	       print $$2, (NF >= 3 ? $$3 : "(" k ")") }' $(BUILDDIR)/msvc-run.log \
@@ -491,6 +506,7 @@ ci-windows: bin/zc $(BUILDDIR)/ztestrunner $(BUILDDIR)/wineprefix/.ready
 	if ! $(MINGW_UCRT_CHECK); then \
 	  echo "ci-windows FAIL: the corpus is built for Windows against the UCRT, which $(MINGW_CC) cannot target: $(MINGW_UCRT_FIX)"; exit 1; fi; \
 	rm -rf $(WINDOWS_DIR); mkdir -p $(WINDOWS_DIR); \
+	$(WINE_SERVER_UP); \
 	$(WINE_ENV) $(BUILDDIR)/ztestrunner --zc bin/zc --cc $(MINGW_CC) --ccflags "$(MINGW_CFLAGS)" --target x86_64-w64-mingw32 \
 	   --exec wine --run-only --root . --jobs $(NPROC) --save-temps --tmp $(abspath $(WINDOWS_DIR))/build \
 	   > $(WINDOWS_DIR)/build.log 2>&1; \
@@ -1738,6 +1754,7 @@ shim-guard: $(BUILDDIR)/tcc $(BUILDDIR)/wineprefix/.ready $(NATIVEC_INC)/zthread
 	  $(MINGW_CC) -std=c17 -Wall -Wextra -Wno-unused-function -O2 $(MINGW_CFLAGS) $$si -o $$d/shim.exe $$t > $$d/cc.log 2>&1 \
 	    || { echo "shim-guard FAIL: mingw-w64 did not build the shim test"; grep -m3 error $$d/cc.log; fail=1; }; \
 	  if [ -f $$d/shim.exe ]; then \
+	    $(WINE_SERVER_UP); \
 	    $(WINE_ENV) timeout 300 wine $$d/shim.exe > $$d/run.log 2>&1; wrc=$$?; \
 	    [ $$wrc = 0 ] || { echo "shim-guard FAIL: the Win32 backend under wine exited $$wrc"; tail -20 $$d/run.log; fail=1; }; \
 	    grep -q "zthread shim OK" $$d/run.log || { echo "shim-guard FAIL: the Win32 run did not report OK (wine exited $$wrc and wrote $$(wc -c < $$d/run.log) bytes)"; tail -20 $$d/run.log; fail=1; }; \
