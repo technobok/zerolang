@@ -1405,7 +1405,7 @@ perf: $(PERFBIN)
 # deletes write-only allocations; perf-elision measures that), a failed run and
 # allocs != frees. Above ALLOC_BASELINE fails; a commit raising it says why in
 # its message, and one lowering the count lowers it here.
-ALLOC_BASELINE := 2901773
+ALLOC_BASELINE := 2902538
 # ALLOC_LINE -- the one measurement every allocation number comes from.
 ALLOC_LINE = valgrind --tool=memcheck $(PERFRUN) 2>&1 | grep 'total heap usage' | sed 's/.*usage: //'
 
@@ -1516,7 +1516,7 @@ emitter-guard:
 	chk "'z_t{' literals in src/zemitterc.z" "$$g2" 3; \
 	chk "ztypecheck.walkLookupTyperef" "$$e2" 1; \
 	chk "a type's name TEXT (reg.nameOf; compare by id)" "$$e6" 4; \
-	chk "mangleVarName (inside varCName)" "$$e7" 1; \
+	chk "mangleVarName (inside nameCName)" "$$e7" 1; \
 	chk "io.readText (the emitter reads no file: zc carries its texts)" "$$e8" 0; \
 	chk "literal arm members (.data.<arm>; memberC spells them)" "$$e10" 0; \
 	chk "poolFind (a re-intern of a name the emitter held as an id, or table text)" "$$e11" 11; \

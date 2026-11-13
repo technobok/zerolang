@@ -317,6 +317,7 @@ atomVidIfPlain: function {
         atomVarId: atomVid :typing nid: n.nodeid
         if (
             localAtomNameIsAt
+            :ast
             :reg
             :typing
             :ctx
@@ -332,7 +333,16 @@ atomVidIfPlain: function {
         # the `:name` shorthand names a binding just as a bare atom does
         lv: zast.nameTextAt :ast ref: n.name
         lvv: atomVid :typing nid: n.nodeid
-        if (localAtomNameIsAt :reg :typing :ctx nid: n.nodeid name: lv.stringView vid: lvv :text
+        if (
+            localAtomNameIsAt
+            :ast
+            :reg
+            :typing
+            :ctx
+            nid: n.nodeid
+            name: lv.stringView
+            vid: lvv
+            :text
         ) then {
             return lvv
         }
@@ -345,7 +355,16 @@ atomVidIfPlain: function {
         if db.length == 0 then return ztypes.vid.zero
         dbv: atomVid :typing nid: (atomNodeId n: dbn)
         atomNode: atomNodeId n: dbn
-        if (localAtomNameIsAt :reg :typing :ctx nid: atomNode name: db.stringView vid: dbv :text
+        if (
+            localAtomNameIsAt
+            :ast
+            :reg
+            :typing
+            :ctx
+            nid: atomNode
+            name: db.stringView
+            vid: dbv
+            :text
         ) then return dbv
         return ztypes.vid.zero
     } else {
@@ -6068,7 +6087,14 @@ takeStringSource: function {
         bt: stampIdOf :typing nid: bnid
         if (reg.typetypeOf typeId: bt) == ztypes.ztypetype.functionType then return "".string
         baseName: zast.nameTextAt :ast ref: (zast.atomNameIdOf n: (ast.nodes.get i: n.parent))
-        return (emitLocalAtomName :ctx name: baseName.stringView vid: (atomVid :typing nid: bnid))
+        return (
+            emitLocalAtomName
+            :ast
+            :reg
+            :ctx
+            name: baseName.stringView
+            vid: (atomVid :typing nid: bnid)
+        )
     } else {
         return "".string
     }
@@ -6246,7 +6272,7 @@ emitNarrowedTakeZero: function {
             baseVid: atomVid :typing nid: (atomNodeId n: (ast.nodes.get i: n.parent))
             if (vvHas xs: ctx.narrowBox vid: baseVid) then {
                 bn: zast.nameTextAt :ast ref: (zast.atomNameIdOf n: (ast.nodes.get i: n.parent))
-                box: emitLocalAtomName :ctx name: bn.stringView vid: baseVid
+                box: emitLocalAtomName :ast :reg :ctx name: bn.stringView vid: baseVid
                 tido: vtGet xs: ctx.narrowTid vid: baseVid
                 if tido.some then {
                     zc: movedZeroC :reg :typing :ctx tid: tido
@@ -6283,6 +6309,8 @@ emitNarrowedTakeZero: function {
 # stamped as neither (a loop payload, which binds a name and no variable) is a
 # plain value and IS a move source.
 implicitTakeSourceAtom: function {
+    ast: Ast.view
+    reg: ztypes.ZTypeRegistry.view
     typing: ztyping.ZTyping.view
     ctx: Ctx
     nid: zast.nodeid
@@ -6290,13 +6318,13 @@ implicitTakeSourceAtom: function {
 } out String is {
     avo: typing.atomVariableId.get key: nid
     if avo.some then {
-        return (emitLocalAtomName :ctx name: nm vid: avo)
+        return (emitLocalAtomName :ast :reg :ctx name: nm vid: avo)
     }
     udo: typing.refDecl.get key: nid
     if udo.some then {
         return "".string
     }
-    return (emitLocalAtomName :ctx name: nm vid: ztypes.vid.zero)
+    return (emitLocalAtomName :ast :reg :ctx name: nm vid: ztypes.vid.zero)
 }
 
 # moveMarkerBase -- the base node id of an explicit `<x>.take` / `<x>.hold`; 0
@@ -6330,6 +6358,7 @@ isBareNameValue: function {n: astnode.view} out bool is {
 # the source path an implicit `.take` moves from, if any.
 implicitTakeSource: function {
     ast: Ast.view
+    reg: ztypes.ZTypeRegistry.view
     typing: ztyping.ZTyping.view
     ctx: Ctx
     n: astnode.view
@@ -6338,10 +6367,10 @@ implicitTakeSource: function {
         n
     ) case atomid then {
         itA: ast.names.texts.get i: n.name
-        return (implicitTakeSourceAtom :typing :ctx nid: n.nodeid nm: itA.stringView)
+        return (implicitTakeSourceAtom :ast :reg :typing :ctx nid: n.nodeid nm: itA.stringView)
     } case labelvalue then {
         itL: ast.names.texts.get i: n.name
-        return (implicitTakeSourceAtom :typing :ctx nid: n.nodeid nm: itL.stringView)
+        return (implicitTakeSourceAtom :ast :reg :typing :ctx nid: n.nodeid nm: itL.stringView)
     } else {
         return "".string
     }
@@ -6413,7 +6442,7 @@ emitMovedSourceZero: function {
     buf: String.borrow
 } is {
     if (movedSourceNeedsZero :ast :typing :n).not then return
-    isrc: implicitTakeSource :ast :typing :ctx :n
+    isrc: implicitTakeSource :ast :reg :typing :ctx :n
     if isrc.length == 0 then return
     iz: movedZeroC :reg :typing :ctx tid: (stampIdOf :typing nid: (interpPartNodeId :n))
     if iz.length > 0 then buf.append "\{ind}\{isrc} = \{iz};\n"
@@ -7183,7 +7212,7 @@ svArgAddr: function {
         # A String arg to a StringLike param projects to a by-value view.
         anV: atomVid :typing nid: n.nodeid
         anEF: cfacts
-        anE: emitLocalAtomNameAtWith :reg :typing :ctx nid: n.nodeid name: an vid: anV facts: anEF
+        anE: emitLocalAtomNameAt :ast :reg :typing :ctx nid: n.nodeid name: an vid: anV facts: anEF
         if (stampIsStr :typing :ctx nid: n.nodeid) then {
             svs: (
                 svValueForm
@@ -7216,7 +7245,8 @@ svArgAddr: function {
         anlV: atomVid :typing nid: n.nodeid
         anlEF: cfacts
         anlE: (
-            emitLocalAtomNameAtWith
+            emitLocalAtomNameAt
+            :ast
             :reg
             :typing
             :ctx
@@ -7785,7 +7815,7 @@ emitDottedCall: function {
         baseVid: atomVid :typing nid: bnid
         bnA: aliasResolveAt :reg :typing :ctx nid: bnid name: bn0 vid: baseVid
         if bnA.stringView == bn0 then dcbV = atomVid :typing nid: bnid
-        bn = emitLocalAtomNameAtWith :reg :typing :ctx nid: bnid name: bn0 vid: baseVid facts: bnF
+        bn = emitLocalAtomNameAt :ast :reg :typing :ctx nid: bnid name: bn0 vid: baseVid facts: bnF
         if bnA.stringView == bn0 when (textHeldByPtr :reg :ctx vid: baseVid) then {
             bn = "(*\{bn})"
             bnF = derefFacts
@@ -9919,7 +9949,7 @@ hoistForAddress: function {
     # the checker's unnamed local this temp realises, 0 for none
     tag: zast.nameid.zero
 } out String is {
-    nm: argHoistName :typing :ctx :argNid fallback: "_ah"
+    nm: argHoistName :ast :reg :typing :ctx :argNid fallback: "_ah"
     owes: hoistOwes :typing :argNid :ptr
     if tag.isZero.not when owes then ctx.hoistTags.set key: nm.copy value: tag
     dt: String
@@ -12387,7 +12417,7 @@ emitListMethodCall: function {
     if mnId == zast.wellKnown.slot.wkExtend then {
         eaa: listTakeArgBase :ast :call label: zast.wellKnown.slot.wkFrom
         eaV: atomVid :typing nid: (listTakeArgBaseNid :ast :call label: zast.wellKnown.slot.wkFrom)
-        ea: emitLocalAtomName :ctx name: eaa vid: eaV
+        ea: emitLocalAtomName :ast :reg :ctx name: eaa vid: eaV
         noteMemberUse :ctx mono: bt member: memberWord.slot.extend
         e5: "\{cb}_extend(\{recvR}, &\{ea})"
         return (stating :facts from: callFacts text: e5)
@@ -13413,6 +13443,8 @@ emitInterpStmtValue: function {
 # anything else gets the emitter's own `_ahN`. WHEN it dies is the hoist list's
 # business.
 argHoistName: function {
+    ast: Ast.view
+    reg: ztypes.ZTypeRegistry.view
     typing: ztyping.ZTyping.view
     ctx: Ctx
     argNid: zast.nodeid
@@ -13421,7 +13453,7 @@ argHoistName: function {
 } out String is {
     if argNid.isZero.not then {
         tv: typing.tempOf.get key: argNid
-        if tv.some then return (varCName :ctx vid: tv name: "")
+        if tv.some then return (varCName :ctx :ast :reg vid: tv)
     }
     hn: ctx.argHoistCtr
     ctx.argHoistCtr = ctx.argHoistCtr + 1
@@ -16827,7 +16859,8 @@ emitFnptrLocalCall: function {
     if (reg.typetypeOf typeId: cTid) != ztypes.ztypetype.functionType then return "".string
     # a bare atom that is no variable names a top-level function, called as one
     if cnVid.isZero then return "".string
-    fcm: wholeLocalName :ctx vid: cnVid name: cn0
+    fcmF: cfacts
+    fcm: wholeLocalName :ast :reg :ctx vid: cnVid name: cn0 facts: fcmF
     # a name narrowed to an arm that carries a function calls that function
     nbx: vvGet xs: ctx.narrowBox vid: cnVid
     if nbx.length > 0 then {
@@ -17948,28 +17981,46 @@ emitStringMethod: function {
     return "".string
 }
 
-# varCName -- a local's emitted C identifier. Its variable id already names it
-# uniquely, so no C-keyword mangling is needed; a site no id reached falls back
-# to the mangled source name. --readable-names puts the source name in front of
-# the id (`n_5`): the id keeps two bindings of one name apart when a bare block
-# is flattened into its enclosing C block, and keeps a local clear of every
-# macro a system header defines (`near`, `FAR`, `stdin`, `errno`), which no
-# list could enumerate.
-varCName: function {ctx: Ctx.view vid: ztypes.vid name: StringView} out String is {
-    if vid.isZero then return (mangleVarName :name cw: ctx.cWords)
-    if ctx.readableNames then {
-        rn: name.string
-        rn.append "_\{vid}"
-        return rn
-    }
-    return "z_v\{vid}"
+# varCName -- the C identifier of the local behind variable `vid`: `z_v<id>`.
+# The id names it uniquely, so no C keyword can collide. --readable-names puts
+# the name the variable is bound to in front of the id (`n_5`): the id keeps two
+# bindings of one name apart when a bare block is flattened into its enclosing
+# C block, and keeps a local clear of every macro a system header defines
+# (`near`, `FAR`, `stdin`, `errno`), which no list could enumerate.
+varCName: function {
+    ctx: Ctx.view
+    ast: Ast.view
+    reg: ztypes.ZTypeRegistry.view
+    vid: ztypes.vid
+} out String is {
+    if ctx.readableNames.not then return "z_v\{vid}"
+    rn: String
+    nm: reg.variableNameOf id: vid
+    if nm.isZero.not then rn = zast.nameTextCopy :ast ref: nm
+    rn.append "_\{vid}"
+    return rn
 }
 
-# varCNameIs -- whether `text` is exactly varCName's spelling, decided without
-# composing it in the default scheme: `z_v` and the id's decimal digits, with
-# no leading zero, as varCName writes them.
-varCNameIs: function {ctx: Ctx.view vid: ztypes.vid name: StringView text: StringView} out bool is {
-    if ctx.readableNames or vid.isZero then return (varCName :ctx :vid :name).stringView == text
+# nameCName -- the C identifier of a name no variable stands behind: the source
+# name, kept clear of the C keywords.
+nameCName: function {ctx: Ctx.view name: StringView} out String is {
+    return (mangleVarName :name cw: ctx.cWords)
+}
+
+# varCNameIs -- whether `text` is exactly the spelling of the local `vid`, or of
+# `name` when no variable stands behind it, decided without composing it in the
+# default scheme: `z_v` and the id's decimal digits, with no leading zero, as
+# varCName writes them.
+varCNameIs: function {
+    ast: Ast.view
+    reg: ztypes.ZTypeRegistry.view
+    ctx: Ctx.view
+    vid: ztypes.vid
+    name: StringView
+    text: StringView
+} out bool is {
+    if vid.isZero then return (nameCName :ctx :name).stringView == text
+    if ctx.readableNames then return (varCName :ctx :ast :reg :vid).stringView == text
     if (text.length < 4) or (text.startsWith prefix: "z_v").not then return false
     digits: text.substring from: 3 to: text.length
     if ((digits.byteAt 0).or d: 0) == 48 then return false
@@ -18176,13 +18227,21 @@ slotOrdinalOf: function {
 # emitLocalAtomName -- a local variable's C spelling: the alias or narrowing
 # cast in scope for it, else its own identifier. Shared by the atomid and
 # labelvalue (:name shorthand) value legs.
-emitLocalAtomName: function {ctx: Ctx name: StringView vid: ztypes.vid} out String is {
+emitLocalAtomName: function {
+    ast: Ast.view
+    reg: ztypes.ZTypeRegistry.view
+    ctx: Ctx
+    name: StringView
+    vid: ztypes.vid
+} out String is {
     facts: cfacts
-    return (emitLocalAtomNameWith :ctx :name :vid :facts)
+    return (emitLocalAtomNameWith :ast :reg :ctx :name :vid :facts)
 }
 
 # emitLocalAtomNameWith -- emitLocalAtomName, its facts stated into `facts`.
 emitLocalAtomNameWith: function {
+    ast: Ast.view
+    reg: ztypes.ZTypeRegistry.view
     ctx: Ctx
     name: StringView
     vid: ztypes.vid
@@ -18198,19 +18257,27 @@ emitLocalAtomNameWith: function {
     }
     al: vidFind xs: ctx.aliases :vid
     if al > 0 then return (entryText xs: ctx.aliases at: al - 1 :facts)
-    return (localNameText :ctx :vid :name :facts)
+    return (localNameText :ast :reg :ctx :vid :name :facts)
 }
 
 # localNameText -- a local's own C spelling, and its facts: a variable's name is
 # a path. With no variable behind it (vid 0) the spelling is the text the
 # caller handed in -- a literal, a definition's name, or nothing.
 localNameText: function {
+    ast: Ast.view
+    reg: ztypes.ZTypeRegistry.view
     ctx: Ctx.view
     vid: ztypes.vid
     name: StringView
     facts: cfacts.borrow
 } out String is {
-    t: varCName :ctx :vid :name
+    if vid.isZero.not then return (
+        stating
+        :facts
+        from: pathFacts
+        text: (varCName :ctx :ast :reg :vid)
+    )
+    t: nameCName :ctx :name
     if vid.isZero then {
         # a number literal is a constant; any other name with no variable behind
         # it is a definition's -- a unit, a function, a type -- a designator
@@ -18253,14 +18320,10 @@ narrowingEndedAt: function {
 }
 
 # wholeLocalName -- the local's own storage: a take alias where one stands,
-# never the payload a narrowing aliased it to.
-wholeLocalName: function {ctx: Ctx.view name: StringView vid: ztypes.vid} out String is {
-    facts: cfacts
-    return (wholeLocalNameWith :ctx :name :vid :facts)
-}
-
-# wholeLocalNameWith -- wholeLocalName, its facts stated into `facts`.
-wholeLocalNameWith: function {
+# never the payload a narrowing aliased it to; its facts are stated into `facts`.
+wholeLocalName: function {
+    ast: Ast.view
+    reg: ztypes.ZTypeRegistry.view
     ctx: Ctx.view
     name: StringView
     vid: ztypes.vid
@@ -18268,25 +18331,13 @@ wholeLocalNameWith: function {
 } out String is {
     al: vidFind xs: ctx.aliases :vid
     if al > 0 then return (entryText xs: ctx.aliases at: al - 1 :facts)
-    return (localNameText :ctx :vid :name :facts)
+    return (localNameText :ast :reg :ctx :vid :name :facts)
 }
 
-# emitLocalAtomNameAt -- emitLocalAtomName for the read at `nid`, which sees the
-# whole local once a write ended its narrowing.
+# emitLocalAtomNameAt -- emitLocalAtomNameWith for the read at `nid`, which sees
+# the whole local once a write ended its narrowing.
 emitLocalAtomNameAt: function {
-    reg: ztypes.ZTypeRegistry.view
-    typing: ztyping.ZTyping.view
-    ctx: Ctx
-    nid: zast.nodeid
-    name: StringView
-    vid: ztypes.vid
-} out String is {
-    facts: cfacts
-    return (emitLocalAtomNameAtWith :reg :typing :ctx :nid :name :vid :facts)
-}
-
-# emitLocalAtomNameAtWith -- emitLocalAtomNameAt, its facts stated into `facts`.
-emitLocalAtomNameAtWith: function {
+    ast: Ast.view
     reg: ztypes.ZTypeRegistry.view
     typing: ztyping.ZTyping.view
     ctx: Ctx
@@ -18296,9 +18347,9 @@ emitLocalAtomNameAtWith: function {
     facts: cfacts.borrow
 } out String is {
     if (narrowingEndedAt :reg :typing :ctx :nid :vid) then {
-        return (wholeLocalNameWith :ctx :name :vid :facts)
+        return (wholeLocalName :ast :reg :ctx :name :vid :facts)
     }
-    return (emitLocalAtomNameWith :ctx :name :vid :facts)
+    return (emitLocalAtomNameWith :ast :reg :ctx :name :vid :facts)
 }
 
 # localAtomNameIsAt -- whether `text` is exactly emitLocalAtomNameAt's spelling
@@ -18306,6 +18357,7 @@ emitLocalAtomNameAtWith: function {
 # the same order -- the narrowing's alias unless a write ended it, the take
 # alias, the variable's own name -- each compared where it stands.
 localAtomNameIsAt: function {
+    ast: Ast.view
     reg: ztypes.ZTypeRegistry.view
     typing: ztyping.ZTyping.view
     ctx: Ctx.view
@@ -18320,7 +18372,7 @@ localAtomNameIsAt: function {
     }
     al: vidFind xs: ctx.aliases :vid
     if al > 0 then return (ctx.aliases.get i: al - 1).val.stringView == text
-    return (varCNameIs :ctx :vid :name :text)
+    return (varCNameIs :ast :reg :ctx :vid :name :text)
 }
 
 # aliasResolveAt -- aliasResolve for the read at `nid`: past a narrowing a
@@ -18825,9 +18877,9 @@ emitAtom: function {
     avo: typing.atomVariableId.get key: n.nodeid
     if avo.some then {
         if (narrowingEndedAt :reg :typing :ctx nid: n.nodeid vid: avo) then {
-            return (wholeLocalNameWith :ctx name: av vid: avo :facts)
+            return (wholeLocalName :ast :reg :ctx name: av vid: avo :facts)
         }
-        return (emitLocalAtomNameWith :ctx name: av vid: avo :facts)
+        return (emitLocalAtomNameWith :ast :reg :ctx name: av vid: avo :facts)
     }
     nsc: namespaceConstText :ast :reg :typing :ctx nameId: n.name :facts
     if nsc.length > 0 then return nsc
@@ -18874,7 +18926,8 @@ emitAtom: function {
     if ((av.byteAt i: 0).or d: 0) <= 57 then return (stating :facts from: constFacts text: av.string
     )
     return (
-        emitLocalAtomNameAtWith
+        emitLocalAtomNameAt
+        :ast
         :reg
         :typing
         :ctx
@@ -22059,7 +22112,8 @@ emitDottedMemberRead: function {
     bn2v: unaliasedVid :reg :typing :ctx nid: baseAtomNid name: bn2r.stringView vid: baseAtomVid
     bn2F: cfacts
     bn2: (
-        emitLocalAtomNameAtWith
+        emitLocalAtomNameAt
+        :ast
         :reg
         :typing
         :ctx
@@ -22249,7 +22303,8 @@ emitExprArms: function {
         lvC: ast.names.texts.get i: n.name
         lvv: atomVid :typing nid: n.nodeid
         return (
-            emitLocalAtomNameAtWith
+            emitLocalAtomNameAt
+            :ast
             :reg
             :typing
             :ctx
@@ -22580,7 +22635,7 @@ armRefLeaf: function {
         return (stating :facts from: (addrFacts e: textF) text: "((\{ct}*)&(\{text}))")
     }
     # declared zero by the statement and assigned where the arm runs
-    nm: argHoistName :typing :ctx argNid: lf fallback: "_ah"
+    nm: argHoistName :ast :reg :typing :ctx argNid: lf fallback: "_ah"
     dt: String
     if (hoistOwes :typing argNid: lf ptr: false) then dt = (
         hoistDestroyLine
@@ -23690,6 +23745,8 @@ emitInterpBuild: function {
     # numbers from `ctx.argHoistCtr` here rather than from the TmpCtr
     sNm: (
         argHoistName
+        :ast
+        :reg
         :typing
         :ctx
         argNid: strNid
@@ -24100,7 +24157,7 @@ appendStringPart: function {
     }
     # a fallback here may NOT be spelled `_h<n>`: that prefix is the TmpCtr's,
     # and this name comes from `ctx.argHoistCtr`, so two counters would collide
-    hNm: argHoistName :typing :ctx argNid: (interpPartNodeId :n) fallback: "_hp"
+    hNm: argHoistName :ast :reg :typing :ctx argNid: (interpPartNodeId :n) fallback: "_hp"
     strT: strTypeC :ctx
     interpLocal :ctx :expr ctype: strT.stringView name: hNm.stringView init: val :ind :buf :ops
     preludeNeed :ctx memb: "@String_append"
@@ -24753,7 +24810,18 @@ emitPrintAtom: function {
     if anm.stringView == an then anv = nameVid
     # anm stays the SOURCE name (the alias/narrow lookups key on it); anmE
     # is what reaches the C
-    anmE: emitLocalAtomNameAt :reg :typing :ctx nid: n.nodeid name: an vid: nameVid
+    anmF: cfacts
+    anmE: (
+        emitLocalAtomNameAt
+        :ast
+        :reg
+        :typing
+        :ctx
+        nid: n.nodeid
+        name: an
+        vid: nameVid
+        facts: anmF
+    )
     # a unit string CONSTANT reaching print by name. emitExpr answers for a
     # constant on its own first line; print resolves atoms itself and never
     # goes through it, so without this the NAME reaches the C undeclared.
@@ -25300,7 +25368,7 @@ emitDiscardedResult: function {
         buf.append "\{ind}(void)(\{ce});\n"
         return
     }
-    dnm: varCName :ctx vid: dv name: ""
+    dnm: varCName :ctx :ast :reg vid: dv
     strT: strTypeC :ctx
     dct: if rtid == ctx.strTid then strT.copy else typeRefC :ast :reg :typing :ctx tid: rtid
     buf.append "\{ind}\{dct} \{dnm} = \{ce};\n"
@@ -25650,7 +25718,7 @@ emitListBind: function {
                 # binding owns the buffer. A BORROW takes the alias leg
                 # before reaching here, and must never zero its source.
                 if nbrw.not when (isBareNameValue n: avn) then {
-                    takeSource: implicitTakeSource :ast :typing :ctx n: avn
+                    takeSource: implicitTakeSource :ast :reg :typing :ctx n: avn
                     if takeSource.length > 0 then buf.append "\{ind}\{takeSource} = \{(movedZeroC
                         :reg :typing
                         :ctx
@@ -25719,7 +25787,7 @@ emitHeapColBind: function {
         # this binding owns the allocation. A BORROW of one is a second
         # pointer to the same allocation and must leave the source standing.
         if nbrw.not when (isBareNameValue n: avn) then {
-            takeSource: implicitTakeSource :ast :typing :ctx n: avn
+            takeSource: implicitTakeSource :ast :reg :typing :ctx n: avn
             if takeSource.length > 0 then buf.append "\{ind}\{takeSource} = \{(movedZeroC
                 :reg :typing
                 :ctx
@@ -25878,7 +25946,7 @@ emitStringBind: function {
             acc: ".".string
             svbV: atomVid :typing nid: (stringviewOfBaseNid :ast :reg :typing n: avn)
             if (isPtrVid :ctx vid: svbV) then acc = "->".string
-            svbC: emitLocalAtomName :ctx name: svb.stringView vid: svbV
+            svbC: emitLocalAtomName :ast :reg :ctx name: svb.stringView vid: svbV
             svT: svTypeC :ctx
             literalLine: "\{ind}\{svT} \{nm} = (\{svT}){ .data = \{svbC}\{acc}data, .size = \{svbC}\{acc}size };\n"
             buf.append literalLine
@@ -25930,7 +25998,7 @@ emitStringBind: function {
                 # that this binding owns the buffer.
                 szs: takeStringSource :ast :reg :typing :ctx n: avn
                 if szs.length == 0 when (isBareNameValue n: avn) then {
-                    szs = implicitTakeSource :ast :typing :ctx n: avn
+                    szs = implicitTakeSource :ast :reg :typing :ctx n: avn
                 }
                 if szs.length > 0 when (movedSourceNeedsZero :ast :typing n: avn) then {
                     szz: movedZeroC :reg :typing :ctx tid: btid
@@ -26009,7 +26077,7 @@ emitBindSourceZero: function {
     if (isBareNameValue n: avn).not then return
     if (destroyTargetTid :reg :typing :ctx tid: bzt).isZero then return
     if (bindingVarIsBorrowed :reg :typing n: abind) then return
-    bzs: implicitTakeSource :ast :typing :ctx n: avn
+    bzs: implicitTakeSource :ast :reg :typing :ctx n: avn
     if bzs.length == 0 then return
     buf.append "\{ind}\{bzs} = \{movedZeroC :reg :typing :ctx tid: bzt};\n"
 }
@@ -26087,7 +26155,7 @@ emitNarrowedTakeBind: function {
         ntO: vtGet xs: ctx.narrowTid vid: tabAV
         if ntO.some then {
             ctB: typeRefC :ast :reg :typing :ctx tid: ntO
-            valB: emitLocalAtomName :ctx name: tabA.stringView vid: tabAV
+            valB: emitLocalAtomName :ast :reg :ctx name: tabA.stringView vid: tabAV
             bindLine: "\{ind}\{ctB} \{nm} = \{valB};\n"
             buf.append bindLine
             zcB: movedZeroC :reg :typing :ctx tid: ntO
@@ -26180,9 +26248,8 @@ emitAssignment: function {
     avn: ast.nodes.get i: n.value
     btid: bindingStampOf :typing nid: n.nodeid
     ct: bindDeclaredCType :ast :reg :typing :ctx :n :btid
-    anmC: zast.poolTextAt pool: ast.names ref: n.name
     nameVid: defVid :typing nid: n.nodeid
-    nm: varCName :ctx vid: nameVid name: anmC.stringView
+    nm: varCName :ctx :ast :reg vid: nameVid
     dropStaleBorrowAlias :ctx vid: nameVid
     nbrw: bindingVarIsBorrowed :reg :typing :n
     ctx.borrowedVars.set key: (defVid :typing nid: n.nodeid) value: nbrw
@@ -26857,15 +26924,16 @@ zeroValueC: function {
 # reassignment's bare local is a borrow the checker refused.
 reassignMoveSource: function {
     ast: Ast.view
+    reg: ztypes.ZTypeRegistry.view
     typing: ztyping.ZTyping.view
     ctx: Ctx
     valueNode: astnode.view
 } out String is {
-    zsrc: implicitTakeSource :ast :typing :ctx n: valueNode
+    zsrc: implicitTakeSource :ast :reg :typing :ctx n: valueNode
     if zsrc.length > 0 then return zsrc
     mmb: moveMarkerBase :ast n: valueNode
     if mmb.isZero then return zsrc
-    return (implicitTakeSource :ast :typing :ctx n: (ast.nodes.get i: mmb))
+    return (implicitTakeSource :ast :reg :typing :ctx n: (ast.nodes.get i: mmb))
 }
 
 # emitMovedArgZeroing -- args moved into a construction/call RHS (e.g.
@@ -26958,7 +27026,7 @@ emitRepointCompanion: function {
     if co.none then return
     cv: co
     tid: chaseAggregateTypedef :reg :typing :ctx tid: (reg.variableTypeOf id: cv)
-    nm: companionCName :ctx :cv
+    nm: companionCName :ctx :ast :reg :cv
     ct: companionCType :ast :reg :typing :ctx :tid
     buf.append "\{ind}\{ct} \{nm} = \{zeroValueC :ast :reg :typing :ctx :tid};\n"
     if tid == ctx.strTid then {
@@ -27046,9 +27114,13 @@ emitRepointStmt: function {
 # companionCName -- the C name of a borrow's re-point companion: one per
 # borrow, so a function with two holds two, and the readable scheme spells
 # each with its own id
-companionCName: function {ctx: Ctx.view cv: ztypes.vid} out String is {
-    nm: "_c\{cv}"
-    return (varCName :ctx vid: cv name: nm.stringView)
+companionCName: function {
+    ctx: Ctx.view
+    ast: Ast.view
+    reg: ztypes.ZTypeRegistry.view
+    cv: ztypes.vid
+} out String is {
+    return (varCName :ctx :ast :reg vid: cv)
 }
 
 # emitOwnedRepoint -- `x = v` re-pointing the borrowed `x` at an owned value
@@ -27076,7 +27148,7 @@ emitOwnedRepoint: function {
     if co.none then return
     cv: co
     tid: chaseAggregateTypedef :reg :typing :ctx tid: (reg.variableTypeOf id: cv)
-    cn: companionCName :ctx :cv
+    cn: companionCName :ctx :ast :reg :cv
     valueNode: ast.nodes.get i: n.value
     facts: cfacts
     rv: reassignRhsText :ast :reg :typing :ctx :valueNode :ind :tmp :buf :facts
@@ -27169,7 +27241,7 @@ emitStoreTo: function {
     # its scope-exit free no-ops (the lvalue -- a local or a struct field
     # appended into a container -- now owns the heap). Scalars/valtypes have
     # no destructor and are left untouched.
-    zsrc: reassignMoveSource :ast :typing :ctx :valueNode
+    zsrc: reassignMoveSource :ast :reg :typing :ctx :valueNode
     if zsrc.length > 0 when (movedSourceNeedsZero :ast :typing n: valueNode) then {
         zid: stampIdOf :typing nid: rftnid
         zt: movedZeroC :reg :typing :ctx tid: zid
@@ -28124,8 +28196,7 @@ emitWithBody: function {
     tmp: TmpCtr
     buf: String.borrow
 } is {
-    wnmR: zast.nameTextAt :ast ref: n.name
-    wnm: varCName :ctx vid: (defVid :typing nid: n.nodeid) name: wnmR.stringView
+    wnm: varCName :ctx :ast :reg vid: (defVid :typing nid: n.nodeid)
     wsid: stampIdDeep :reg :typing n: (ast.nodes.get i: n.value)
     wct: withValueCType :ast :reg :typing :ctx n: (ast.nodes.get i: n.value) :wsid
     wv: emitExpr :ast :reg :typing :ctx n: (ast.nodes.get i: n.value)
@@ -28698,7 +28769,8 @@ emitReassignLvalue: function {
         if rbNm.length > 0 then {
             rbVid: atomVid :typing nid: (atomNodeId :n)
             if rbVid.isZero.not when (vvGet xs: ctx.narrowBox vid: rbVid).length > 0 then {
-                return (wholeLocalName :ctx vid: rbVid name: rbNm)
+                rbF: cfacts
+                return (wholeLocalName :ast :reg :ctx vid: rbVid name: rbNm facts: rbF)
             }
         }
     }
@@ -28737,14 +28809,17 @@ emitReassignLvalue: function {
                 rfn: atomNodeId n: (ast.nodes.get i: n.parent)
                 rfv: atomVid :typing nid: rfn
                 if (isPtrVid :ctx vid: rfv) then accFpL = "->".string
+                rfF: cfacts
                 recvFpC = (
                     emitLocalAtomNameAt
+                    :ast
                     :reg
                     :typing
                     :ctx
                     nid: rfn
                     name: recvFp.stringView
                     vid: rfv
+                    facts: rfF
                 )
             } else {
                 # a field reached through a path (`this.inner.zero`): the path
@@ -29900,7 +29975,7 @@ emitMatchClause: function {
                 }
                 didSeed = true
             } else {
-                snE: varCName :ctx vid: snameVid name: sname
+                snE: varCName :ctx :ast :reg vid: snameVid
                 armMP: memberC :ast :reg :typing :ctx owner: vtid kind: memberkind.arm nameId: arm
                 l3: "\{ind}    \{pc} \{snE} = _m\{mN}.data.\{armMP};\n"
                 buf.append l3
@@ -31054,7 +31129,7 @@ objIterForNamed: function {
     # emitted from the `E.iterate` node it minted, as the written call would be
     cOp = (typing.forImplicitIterate.get key: cNid).or d: cOp
     lblV: defVid :typing nid: (interpPartNodeId n: (ast.nodes.get i: cOp))
-    lbl: varCName :ctx vid: lblV name: lblR.stringView
+    lbl: varCName :ctx :ast :reg vid: lblV
     tids: objIterIterableTid :ast :reg :typing :cOp
     if tids.itid.isZero then return false
     itid: tids.itid
@@ -31111,7 +31186,7 @@ emitPlainBindingFor: function {
     if lblR.length == 0 then return false
     opN: ast.nodes.get i: c0.operation
     lblV: defVid :typing nid: (interpPartNodeId n: opN)
-    lbl: varCName :ctx vid: lblV name: lblR.stringView
+    lbl: varCName :ctx :ast :reg vid: lblV
     ovid: stampTidDeep :reg :typing n: opN
     if ovid.isZero then return false
     ovc: spelledCname :ctx tid: ovid
@@ -31216,7 +31291,13 @@ emitIntRangeFor: function {
         labelText: zast.nameTextAt :ast ref: c0.name
         if labelText.length == 0 then return false
         labelVid: defVid :typing nid: (interpPartNodeId n: (ast.nodes.get i: c0.operation))
-        lbl: varCName :ctx vid: labelVid name: labelText.stringView
+        lbl: if labelVid.isZero then nameCName :ctx name: labelText.stringView else (
+            varCName
+            :ctx
+            :ast
+            :reg
+            vid: labelVid
+        )
         # THE CLOSED FAMILY FIRST, because rangeBoundExpr answers "" for it: a
         # closed range's receiver is its start, not its bound, so it has no
         # bound to read and the half-open leg would decline the header and hand
@@ -34062,8 +34143,7 @@ emitTailStmt: function {
         # emitTailValue binds and returns it
         if (ztypecheck.withForwardsTail :ast n: (ast.nodes.get i: n.nodeid)).not then return false
         # an owned copy: the with-binding's emission below lends ast
-        withName: zast.nameTextAt :ast ref: n.name
-        wnmT: varCName :ctx vid: (defVid :typing nid: n.nodeid) name: withName.stringView
+        wnmT: varCName :ctx :ast :reg vid: (defVid :typing nid: n.nodeid)
         wsidT: stampIdDeep :reg :typing n: (ast.nodes.get i: n.value)
         wctT: withValueCType :ast :reg :typing :ctx n: (ast.nodes.get i: n.value) wsid: wsidT
         wvT: emitExpr :ast :reg :typing :ctx n: (ast.nodes.get i: n.value)
@@ -34260,7 +34340,7 @@ zeroBranchLocalMove: function {
     if tmp.frees.length == fL when tmp.listFrees.length == lL then return
     if line.statementline.not then return
     vn: ast.nodes.get i: line.statementline
-    src: implicitTakeSource :ast :typing :ctx n: vn
+    src: implicitTakeSource :ast :reg :typing :ctx n: vn
     if src.length == 0 then return
     owed: false
     fi: fL
@@ -34346,7 +34426,7 @@ seedPostGuardAlias: function {
     armId: (typing.postGuardArm.get key: pgid).or d: zast.nameid
     if armId.isZero then return
     pgRecvF: cfacts
-    pgRecv: wholeLocalNameWith :ctx vid: pgrv name: pgRawN.stringView facts: pgRecvF
+    pgRecv: wholeLocalName :ast :reg :ctx vid: pgrv name: pgRawN.stringView facts: pgRecvF
     acc: ".".string
     if (isPtrVid :ctx vid: pgrv) then acc = "->".string
     # a subject an enclosing narrowing still holds at the guard's type -- an
@@ -35143,8 +35223,6 @@ fnParamsC: function {
     pn: cNmIds.length
     for pi < pn loop {
         pnmId: cNmIds.get i: pi
-        pnameB: zast.poolTextAt pool: ast.names ref: pnmId
-        pname: pnameB.stringView
         ct: paramCType :ast :reg :typing :ctx :fid pnameId: pnmId pid: (cIds.get i: pi)
         if pi > 0 then params.append ", "
         if ct.length > 0 then {
@@ -35154,7 +35232,7 @@ fnParamsC: function {
         }
         params.append " "
         pmnV: paramVidByNameId :ast :typing :op nameId: pnmId
-        pmnDecl: varCName :ctx vid: pmnV name: pname
+        pmnDecl: varCName :ctx :ast :reg vid: pmnV
         params.append pmnDecl
         pi = pi + 1
     }
@@ -38521,7 +38599,7 @@ oweTakeParamFrees: function {
         pj = pj + 1
         if (paramTakesArg :typing :fid pnameId: ppnId) then {
             pmnB: paramVidIn :ast :typing params: op.parameters nameId: ppnId
-            pmn: varCName :ctx vid: pmnB name: (zast.nameTextAt :ast ref: ppnId).stringView
+            pmn: varCName :ctx :ast :reg vid: pmnB
             if ppid == ctx.strTid then {
                 tmp.oweFree name: pmn.copy vid: pmnB
             } else {
@@ -48602,7 +48680,18 @@ nativeCallRecvExpr: function {
     recv: aliasResolveAt :reg :typing :ctx nid: bnid name: bn vid: recvVid
     recvV: ztypes.vid
     if recv.stringView == bn then recvV = recvVid
-    recvC: emitLocalAtomNameAt :reg :typing :ctx nid: bnid name: bn vid: recvVid
+    recvF: cfacts
+    recvC: (
+        emitLocalAtomNameAt
+        :ast
+        :reg
+        :typing
+        :ctx
+        nid: bnid
+        name: bn
+        vid: recvVid
+        facts: recvF
+    )
     if (isPtrVid :ctx vid: recvV) then return recvC
     return "&\{recvC}"
 }
@@ -49131,7 +49220,8 @@ nativeCreateArg: function {
                 if argBaseC.stringView == ab2 then ab2v = argBaseVid
                 abr2F: cfacts
                 abr2C: (
-                    emitLocalAtomNameAtWith
+                    emitLocalAtomNameAt
+                    :ast
                     :reg
                     :typing
                     :ctx
@@ -49905,7 +49995,18 @@ emitUserIterCall: function {
     recvText: aliasResolveAt :reg :typing :ctx nid: bnid name: bn vid: recvVid
     recvV: ztypes.vid
     if recvText.stringView == bn then recvV = recvVid
-    recvC: emitLocalAtomNameAt :reg :typing :ctx nid: bnid name: bn vid: recvVid
+    recvF: cfacts
+    recvC: (
+        emitLocalAtomNameAt
+        :ast
+        :reg
+        :typing
+        :ctx
+        nid: bnid
+        name: bn
+        vid: recvVid
+        facts: recvF
+    )
     recvExpr: "&\{recvC}"
     if (isPtrVid :ctx vid: recvV) then recvExpr = recvC.take
     # `.call` takes at most ONE argument -- the per-call input -- so the first
@@ -50368,7 +50469,7 @@ emitProtocolCreateCall: function {
             valVar: aliasResolve :ctx name: fromBase vid: valueVid
             vvv: ztypes.vid
             if valVar.stringView == fromBase then vvv = valueVid
-            valVarC: emitLocalAtomName :ctx name: fromBase vid: valueVid
+            valVarC: emitLocalAtomName :ast :reg :ctx name: fromBase vid: valueVid
             refPfx: "&".string
             if (isPtrVid :ctx vid: vvv) then refPfx = "".string
             # the source is a NAME of a VARIABLE in every spelling the
@@ -52135,8 +52236,7 @@ setupGenCtx: function {
     gpi: u64
     for gpi < gnm.length loop {
         gv: paramVidByNameId :ast :typing :op nameId: (gnm.get i: gpi)
-        gnB: zast.poolTextAt pool: ast.names ref: (gnm.get i: gpi)
-        gc: varCName :ctx vid: gv name: gnB.stringView
+        gc: varCName :ctx :ast :reg vid: gv
         if gpi == 0 then ctx.genRecvC = gc.copy
         if gpi == 1 then ctx.genValC = gc.copy
         gpi = gpi + 1
