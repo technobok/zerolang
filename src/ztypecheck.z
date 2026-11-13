@@ -2909,60 +2909,28 @@ isLabelValue: function {op: astnode.view} out bool is {
     }
 }
 
-# collectMentions -- every bare name a subtree references (atom reads, call
-# callables and arguments, dotted bases), added to `into` by id. One walk
-# answers what each member's name would otherwise rescan the body for: the
-# implementer-context gate asks it of `main`'s body once per unit, not once per
-# member.
+# collectMentions -- every bare name a subtree reads, added to `into` by id: an
+# atom, a `:name` argument (`name: name`), and the base of a dotted path. The
+# selector after a dot names a member, not something in scope, and a match
+# arm's payload binding is a name bound, not read; every other node is walked
+# through its children (zast.childIds). The implementer-context gate asks it of
+# `main`'s body once per unit, and checkTypedefShape of a typedef's base.
 collectMentions: function {ast: Ast.view n: astnode.view into: (IdSet zast.nameid).borrow} is {
     match (
         n
     ) case atomid then {
         into.add item: n.name
+    } case labelvalue then {
+        into.add item: n.name
     } case dottedpath then {
         collectMentions :ast n: (ast.nodes.get i: n.parent) :into
-    } case call then {
-        collectMentions :ast n: (ast.nodes.get i: n.callable) :into
-        i: u64
-        for i < n.arguments.count loop {
-            arg: ast.nodes.get i: (zast.kidAt kids: ast.kids span: n.arguments :i)
-            i = i + 1
-            if arg.namedoperation then {
-                collectMentions :ast n: (ast.nodes.get i: arg.operation) :into
-            }
-        }
-    } case statement then {
-        collectMentionsIn :ast span: n.statements :into
-    } case statementline then {
-        collectMentions :ast n: (ast.nodes.get i: n.statementline) :into
-    } case assignment then {
-        collectMentions :ast n: (ast.nodes.get i: n.value) :into
-    } case reassignment then {
-        collectMentions :ast n: (ast.nodes.get i: n.value) :into
-    } case caseexpr then {
-        collectMentions :ast n: (ast.nodes.get i: n.subject) :into
-        collectMentionsIn :ast span: n.clauses :into
     } case caseclause then {
         collectMentions :ast n: (ast.nodes.get i: n.statement) :into
-    } case ifexpr then {
-        collectMentionsIn :ast span: n.clauses :into
-    } case forexpr then {
-        if n.body.isZero.not then collectMentions :ast n: (ast.nodes.get i: n.body) :into
-    } case withexpr then {
-        collectMentions :ast n: (ast.nodes.get i: n.value) :into
-        collectMentions :ast n: (ast.nodes.get i: n.body) :into
-    } case doexpr then {
-        collectMentions :ast n: (ast.nodes.get i: n.statement) :into
-    } else null
-}
-
-# collectMentionsIn -- collectMentions over every node in `span`.
-collectMentionsIn: function {ast: Ast.view span: zast.kidspan into: (IdSet zast.nameid).borrow} is {
-    i: u64
-    for i < span.count loop {
-        kid: zast.kidAt kids: ast.kids :span :i
-        i = i + 1
-        collectMentions :ast n: (ast.nodes.get i: kid) :into
+    } else {
+        kids: zast.childIds :ast :n
+        for each k: kids loop {
+            collectMentions :ast n: (ast.nodes.get i: k) :into
+        }
     }
 }
 
