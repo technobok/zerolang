@@ -5218,17 +5218,12 @@ Ctx: class {
     # the next `_ah` number
     argHoistCtr: u64
     # the parts of the calls being built, in the order they are evaluated: the
-    # assignments that run ahead of each call, and, per call, the part last read
-    # that is not constant and not yet given a temp -- its text, the slot it
-    # fills, and the function, parameter type and parameter name its temp's C
-    # type is spelled from. A call keeps the stretch above the marks it took.
-    orderPieceVals: List String
-    orderPieceNames: List String
-    orderPieceTemps: ListVal u64
-    # when each piece's part was built, and whether settleAhead already made it
-    # a statement
-    orderPieceSeq: ListVal u64
-    orderPieceDone: ListVal bool
+    # assignments that run ahead of each call (orderPieces), and, per call, the
+    # part last read that is not constant and not yet given a temp -- its text,
+    # the slot it fills, and the function, parameter type and parameter name
+    # its temp's C type is spelled from. A call keeps the stretch above the
+    # marks it took.
+    orderPieces: List OrderPiece
     # the counter every part and piece is numbered from, in the order built;
     # settleAhead touches only those at or above the floor
     orderSeq: u64
@@ -8720,7 +8715,7 @@ orderBegin: function {ctx: Ctx slots: u64} out orderstate is {
     for ctx.orderValFacts.length < (base + slots) loop ctx.orderValFacts.append cfacts
     return (
         orderstate
-        pieceMark: ctx.orderPieceVals.length
+        pieceMark: ctx.orderPieces.length
         valBase: base
         live: false
         pendMark: ctx.orderPends.length
@@ -9094,11 +9089,22 @@ orderSettle: function {
 # `temp` - 1, or to the hoist `name` when `temp` is 0. `seq` is when its part
 # was built.
 orderAddPiece: function {ctx: Ctx name: String.take temp: u64 val: String.take seq: u64} is {
-    ctx.orderPieceNames.append name
-    ctx.orderPieceTemps.append temp
-    ctx.orderPieceVals.append val
-    ctx.orderPieceSeq.append seq
-    ctx.orderPieceDone.append false
+    ctx.orderPieces.append (OrderPiece :name :temp :val :seq done: false)
+}
+
+# OrderPiece -- one assignment that runs ahead of the call it belongs to
+# (orderAddPiece).
+OrderPiece: class {
+    # the hoist it assigns, when `temp` is 0
+    name: String
+    # the ordered temp it assigns, plus one; 0 for a hoist
+    temp: u64
+    # the value's C text; empty once settleAhead made the piece a statement
+    val: String
+    # when its part was built
+    seq: u64
+    # settleAhead already made it a statement
+    done: bool
 }
 
 # orderNextSeq -- the next number on the order counter.
@@ -9129,9 +9135,9 @@ settleAhead: function {
         if pe.isPend then {
             # settled into its temp, the part is a piece at the end of the list
             # -- or, with no C type for a temp, stays in its call
-            np: ctx.orderPieceVals.length
+            np: ctx.orderPieces.length
             orderSettle :ast :reg :typing :ctx i: pe.at
-            if ctx.orderPieceVals.length > np then settlePieceAhead :ctx i: np
+            if ctx.orderPieces.length > np then settlePieceAhead :ctx i: np
         } else {
             settlePieceAhead :ctx i: pe.at
         }
@@ -9162,10 +9168,10 @@ earliestUnsettled: function {ctx: Ctx.view} out unsettled is {
         pi = pi + 1
     }
     ci: u64
-    for ci < ctx.orderPieceVals.length loop {
-        cs: ctx.orderPieceSeq.get i: ci
-        if (ctx.orderPieceDone.get i: ci).not when cs >= fl when (seqBeats :r seq: cs) then {
-            r = unsettled found: true isPend: false at: ci seq: cs
+    for ci < ctx.orderPieces.length loop {
+        cp: ctx.orderPieces.get i: ci
+        if cp.done.not when cp.seq >= fl when (seqBeats :r seq: cp.seq) then {
+            r = unsettled found: true isPend: false at: ci seq: cp.seq
         }
         ci = ci + 1
     }
@@ -9181,18 +9187,18 @@ seqBeats: function {r: unsettled seq: u64} out bool is {
 # settlePieceAhead -- piece `i`'s assignment as a statement ahead of the one
 # being built, and off its call's comma prefix.
 settlePieceAhead: function {ctx: Ctx i: u64} is {
-    tnum: ctx.orderPieceTemps.get :i
+    p: ctx.orderPieces.getMut :i
     lhs: String
-    if tnum > 0 then {
+    if p.temp > 0 then {
         lhs.append "_o"
-        appendDecimal buf: lhs n: tnum - 1
+        appendDecimal buf: lhs n: p.temp - 1
     } else {
-        lhs.append (ctx.orderPieceNames.get :i)
+        lhs.append p.name
     }
     v: String
-    v.append (ctx.orderPieceVals.get :i)
-    ctx.orderPieceVals.set :i val: String
-    ctx.orderPieceDone.set :i val: true
+    v.append p.val
+    p.val = String
+    p.done = true
     ctx.argHoistRaw.append (
         RawHoist
         text: "\{lhs} = \{v};\n"
@@ -9227,30 +9233,24 @@ orderFinish: function {ctx: Ctx st: orderstate} out String is {
     orderDropWaiting :ctx :st
     prefix: String
     i: st.pieceMark
-    for i < ctx.orderPieceVals.length loop {
+    for i < ctx.orderPieces.length loop {
+        p: ctx.orderPieces.get :i
         # a piece settleAhead made a statement has run already
-        if (ctx.orderPieceDone.get :i).not then {
+        if p.done.not then {
             if prefix.length == 0 then prefix.append "("
-            tnum: ctx.orderPieceTemps.get :i
-            if tnum > 0 then {
+            if p.temp > 0 then {
                 prefix.append "_o"
-                appendDecimal buf: prefix n: tnum - 1
+                appendDecimal buf: prefix n: p.temp - 1
             } else {
-                prefix.append (ctx.orderPieceNames.get :i)
+                prefix.append p.name
             }
             prefix.append " = "
-            prefix.append (ctx.orderPieceVals.get :i)
+            prefix.append p.val
             prefix.append ", "
         }
         i = i + 1
     }
-    for ctx.orderPieceVals.length > st.pieceMark loop {
-        ctx.orderPieceVals.pop
-        ctx.orderPieceNames.pop
-        ctx.orderPieceTemps.pop
-        ctx.orderPieceSeq.pop
-        ctx.orderPieceDone.pop
-    }
+    for ctx.orderPieces.length > st.pieceMark loop ctx.orderPieces.pop
     return prefix
 }
 
@@ -39545,11 +39545,7 @@ emitC: function {
         argHoists: List ArgHoist
         argHoistRaw: List RawHoist
         argHoistCtr: 0
-        orderPieceVals: List String
-        orderPieceNames: List String
-        orderPieceTemps: ListVal u64
-        orderPieceSeq: ListVal u64
-        orderPieceDone: ListVal bool
+        orderPieces: List OrderPiece
         orderSeq: 0
         orderSeqFloor: 0
         guardDepth: 0
