@@ -529,7 +529,7 @@ readSingletonValue: function {st: zenv.ZSymbolTable nid: zast.nodeid tid: ztypes
         if ws.notZero then sg = ws
     }
     v: st.typing.singletonValueOf tid: sg
-    if v.kind.none.not then st.typing.setNodeConst :nid value: v
+    if v.isConst then st.typing.setNodeConst :nid value: v
     stampGate :st :nid tid: sg
     st.typing.numericParamRead.set key: nid value: row.param
     return true
@@ -11821,7 +11821,7 @@ staticListElemValue: function {
     if cv.kind.ivalKind or cv.kind.fvalKind or cv.kind.svalKind then return cv
     if cv.kind.armKind or cv.kind.aggKind then return cv
     en: ast.nodes.get i: opRef
-    if got.kind.none.not when cv.kind.none then {
+    if got.failed when cv.kind.none then {
         # a block read from its own elements fails where nothing is written
         if got.kind.cycle then {
             got.nodeid = opRef
@@ -12012,7 +12012,7 @@ staticListFirstValueTid: function {
     ast: Ast st: zenv.ZSymbolTable scope: ztypes.declid vals: (ListVal ztypes.cval).view
 } out ztypes.tid is {
     for each cv: vals loop {
-        if cv.kind.none.not then {
+        if cv.isConst then {
             if (staticListValueKind :cv) < 4 then return ztypes.tid.zero
             return (constValueTid :ast :st :scope v: cv)
         }
@@ -12690,7 +12690,7 @@ resolveStaticListInto: function {
             # it is the discriminator a tagged type using this list will be
             # emitted with, and a backend reading it has no unit to fold under.
             cv: vals.get i: ordinal
-            if typed when cv.kind.none.not when (isNumericTid :st tid: elemTid) then {
+            if typed when cv.isConst when (isNumericTid :st tid: elemTid) then {
                 cv = ztypes.typedConst c: cv numTid: elemTid
             }
             # a typed string list's element is a TYPED constant too: it reads
@@ -12698,7 +12698,7 @@ resolveStaticListInto: function {
             if typed when cv.kind.svalKind when (isStaticStringTid :ast :st tid: elemTid) then {
                 cv = ztypes.typedConst c: cv numTid: elemTid
             }
-            if kindsOk when cv.kind.none.not when (
+            if kindsOk when cv.isConst when (
                 staticListElemFits
                 :ast
                 :st
@@ -18048,7 +18048,7 @@ resolveAliasKey: function {
     }
     constFoldDecl :st :ast :declId
     cvA: constValueOfDecl :st :declId
-    if cvA.kind.none.not then return (st.typing.declTypeOf :declId)
+    if cvA.isConst then return (st.typing.declTypeOf :declId)
     # an alias of a numeric generic parameter (`SAME: cap`) in the template
     # names the parameter's singleton type
     if (aliasIsBareForm :st :ast :declId) then {
@@ -22216,7 +22216,7 @@ mintUnitAliasInstances: function {
             :ast
             declId: ad
         )
-        if at.isZero or (constValueOfDecl :st declId: ad).kind.none.not then continue
+        if at.isZero or (constValueOfDecl :st declId: ad).isConst then continue
         inst: unitMonoTypeOf :st :ast :rf :tplId :monoId subs: allSubs tid: at
         (
             st.typing.declSynthMember
@@ -24553,7 +24553,7 @@ respecialize: function {
         if cdm.numKind.has then {
             # an instance's singleton type passes its one value
             sv: st.typing.singletonValueOf tid: mt
-            if sv.kind.none.not then bits = constBits64 :st v: sv
+            if sv.isConst then bits = constBits64 :st v: sv
             rvSubs.set key: mp value: bits
             appendNumericArgSuffix :sfx :bits cd: cdm
         } else {
@@ -30137,7 +30137,7 @@ numericArgFold: function {
     v: evalConstNode :st :unitDecl :scope :ast nid: argOp
     f: st.walk.constFail
     st.walk.constFail = held
-    if v.kind.none when f.kind.none.not then {
+    if v.kind.none when f.failed then {
         renderConstFail :st :f
         return (argfold v: ztypes.noConst reported: true)
     }
@@ -30159,7 +30159,7 @@ numericArgHasInteger: function {
     v: ztypes.cval
 } out bool is {
     if v.kind.ivalKind then return true
-    if v.kind.none.not then {
+    if v.isConst then {
         reportNumericArg :ast :st :tdecl :param :argOp :nameId why: "is not an integer"
         return false
     }
@@ -34754,7 +34754,7 @@ checkNumericParamMember: function {
     }
     if origin.notZero when (st.reg.isPartialOf tid: bt).not then {
         v: monoNumericArg :st mono: bt nameId: cnId
-        if v.kind.none.not then (
+        if v.isConst then (
             st.typing.setNodeConst
             nid: dp.nid
             value: v
@@ -35445,7 +35445,7 @@ checkResolvedMember: function {
         # an instantiation's constant is folded for it when first read: its
         # template's value may read a numeric generic parameter
         acv: constValueOfMemberTidId :ast :st unitTid: bt nameId: cnId
-        if acv.kind.none.not then (
+        if acv.isConst then (
             st.typing.setNodeConst
             nid: dp.nid
             value: acv
@@ -35457,7 +35457,7 @@ checkResolvedMember: function {
         # give each instance a value of another type, which the template's
         # member cannot know
         rt: mo
-        if acv.kind.none.not when (instanceConstantRead :st :ast :bt :memberDecl) then {
+        if acv.isConst when (instanceConstantRead :st :ast :bt :memberDecl) then {
             vt: constValueTid :ast :st scope: unitDecl v: acv
             if vt.notZero then rt = vt
         }
@@ -36047,7 +36047,7 @@ literalFitsMessage: function {
     # a literal with a value is settled by it, as every landing is; the lexeme
     # path below reads what has none -- a hex, octal or binary one past i64
     v: constLiteralValue :st name: lit
-    if v.kind.none.not then {
+    if v.isConst then {
         tk: ztypes.numkindByName name: target
         return (constFitsKindMessage :st :v k: tk.kind spelling: lit)
     }
@@ -38506,7 +38506,7 @@ checkNarrowedConstRead: function {
     tid: st.currentTypeOf declId: d
     pv: constArmPayload :st :v :arm
     st.typing.narrowedConstReads.set key: node.nid value: pv
-    if pv.kind.none.not then (
+    if pv.isConst then (
         st.typing.setNodeConst
         nid: node.nid
         value: pv
@@ -63749,7 +63749,7 @@ constFailRecord: function {
     width: u32
     strId: 0.u32
 } is {
-    if st.walk.constFail.kind.none.not then return
+    if st.walk.constFail.failed then return
     st.walk.constFail = ztypes.constfail :kind :nodeid :lineno :colno :width :strId
 }
 
@@ -64941,7 +64941,7 @@ constOfMatch: function {
     stmt: constMatchArm :st :ast :cr subject: sv
     if stmt.isZero then return ztypes.noConst
     sn: atomNameId :ast n: (ast.nodes.get i: cr.subject)
-    narrows: payload.kind.none.not and sn.notZero
+    narrows: payload.isConst and sn.notZero
     if narrows then {
         st.walk.constNarrows.append (ztyping.constnarrow name: sn value: payload)
     }
@@ -65816,7 +65816,7 @@ constValueOfMemberAt: function {
     if evalMono.notZero then st.typing.endInstanceWalk next: (nextRowOf :ast)
     st.walk.constMono = prevMono
     st.walk.constEvalState.set key: k value: 2.u8
-    if valFound.kind.none.not then {
+    if valFound.isConst then {
         st.typing.setMemberConst parentTypeId: utid nameId: nid value: valFound
     }
     return valFound
@@ -66562,7 +66562,7 @@ checkConstantOperator: function {
     lv: evalConstNode :st :scope :ast :unitDecl nid: lhsId
     st.walk.constFail = held
     # an operand with no value is the evaluator's to explain
-    if lv.kind.none.not then constantMemberTid :st :scope :ast :unitDecl site: opSite rv: lv
+    if lv.isConst then constantMemberTid :st :scope :ast :unitDecl site: opSite rv: lv
     if st.typing.errors.length == errsOp then return false
     st.walk.constShapesReported.add item: nid
     return true
@@ -66614,8 +66614,7 @@ checkConstantInterpParts: function {
             pv: evalConstNode :st :scope :ast :unitDecl nid: partId
             st.walk.constFail = held
             pt: constArgTid :st :scope :ast v: pv
-            if pv.kind.none.not when pt.notZero when (printableInterpTid :ast :st tid: pt
-            ).not then {
+            if pv.isConst when pt.notZero when (printableInterpTid :ast :st tid: pt).not then {
                 reportNotPrintable :st :ast :partId ptid: pt
             }
         }
@@ -67478,7 +67477,7 @@ constOfBinopFold: function {
     # arms have no order -- except bool's, which also fold `and` and `or`.
     if lv.kind.armKind when rv.kind.armKind then {
         bl: constBoolLogic :st :ast :lv :rv :opnId
-        if bl.kind.none.not then return bl
+        if bl.isConst then return bl
         same: false
         if lv.armTid == rv.armTid when lv.armName == rv.armName then same = true
         if cop.eq then return (boolConst :st :ast v: same)
@@ -67912,7 +67911,7 @@ constOfValueCall: function {
     co: u32
 } out ztypes.cval is {
     sm: constOfMethodCall :st :scope :ast :unitDecl :nid :callableId :args :ln :co
-    if sm.kind.none.not then return sm
+    if sm.isConst then return sm
     return (constOfNumericTypedef :st :scope :ast :unitDecl :callableId :args)
 }
 
@@ -67959,9 +67958,9 @@ constOfCall: function {
     # dotted path, so atomName is "" for it and the `error` test below would
     # bail before ever looking at the receiver. Intercept first.
     sm: constOfValueCall :st :scope :ast :unitDecl :nid :callableId args: argIds :ln :co
-    if sm.kind.none.not then return sm
+    if sm.isConst then return sm
     dx: constOfStaticListIndex :st :scope :ast :unitDecl :nid :callableId args: argIds :ln :co
-    if dx.kind.none.not then return dx
+    if dx.isConst then return dx
     sct: staticCtorHead :st :scope :ast :unitDecl :callableId
     if sct.notZero then return (
         constOfStaticFields
@@ -67976,7 +67975,7 @@ constOfCall: function {
         :co
     )
     ch: constOfStaticChoice :st :scope :ast :unitDecl :callableId args: argIds at: nid :ln :co
-    if ch.kind.none.not then return ch
+    if ch.isConst then return ch
     return (constOfErrorCall :st :scope :ast :unitDecl :nid :callableId args: argIds :ln :co)
 }
 
@@ -68352,7 +68351,7 @@ staticFieldValue: function {
     if (isStaticMemberTid :st :ast tid: ftid).not then return ztypes.noConst
     if argNid.notZero then return (staticArgValue :st :scope :ast :unitDecl :ftid :name :argNid)
     dv: constOfFieldDefault :st :ast :ownerTid :ftid :name
-    if dv.kind.none.not then return (constFitToField :st :scope :ast v: dv :ftid :name :at :ln :co)
+    if dv.isConst then return (constFitToField :st :scope :ast v: dv :ftid :name :at :ln :co)
     missingFieldError :st :ast :ftid :name :at :ln :co
     return ztypes.noConst
 }
@@ -68381,14 +68380,14 @@ staticFieldRowValue: function {
     # refused where it is declared (refuseNonStaticMember), as in staticFieldValue
     if fr.isStatic.not then return ztypes.noConst
     if argNid.notZero then return (staticArgValue :st :scope :ast :unitDecl :ftid :name :argNid)
-    if fr.defaultVal.kind.none.not then return fr.defaultVal
+    if fr.defaultVal.isConst then return fr.defaultVal
     dv: constOfFieldDefault :st :ast :ownerTid :ftid :name
     if dv.kind.none then {
         missingFieldError :st :ast :ftid :name :at :ln :co
         return ztypes.noConst
     }
     fv: constFitToField :st :scope :ast v: dv :ftid :name :at :ln :co
-    if fv.kind.none.not then {
+    if fv.isConst then {
         (
             st.typing.fieldRows.set
             i: row.u64
@@ -68721,7 +68720,7 @@ constFitToField: function {
 } out ztypes.cval is {
     if v.kind.none then {
         # the fold's own reason, when it recorded one (a cycle, an overflow)
-        if st.walk.constFail.kind.none.not then {
+        if st.walk.constFail.failed then {
             reportPendingConstFail :st
             return ztypes.noConst
         }
@@ -68852,7 +68851,7 @@ constFitNumber: function {
     r: v
     bn: nameIdOf :ast name: (st.reg.nameOf tid: base).stringView
     cv: constOfConversion :st :scope :ast v: (singletonAsBound :st :v) targetId: bn nid: at :ln :co
-    if cv.kind.none.not then r = cv
+    if cv.isConst then r = cv
     return (ztypes.typedConst c: r numTid: ftid)
 }
 
@@ -69097,7 +69096,7 @@ constOfDottedHead: function {
         atLine: ln
         atCol: co
     )
-    if sc.kind.none.not or ptId.isZero then return sc
+    if sc.isConst or ptId.isZero then return sc
     return (constOfNamedBase :st :scope :unitDecl :ast atNid: nid atLine: ln atCol: co :ptId :ncId)
 }
 
@@ -69145,7 +69144,7 @@ constOfNamedBase: function {
             # a unit instance's own constant (`wi.primes`, `wi: (wrap t: i64)`)
             # is read off the instance, below
             if (
-                uv.kind.none.not or
+                uv.isConst or
                 (st.reg.genericOriginOf tid: (resolvedTidOr :st :ast :unitDecl name: ptId)).isZero
             ) then return uv
         }
@@ -69157,7 +69156,7 @@ constOfNamedBase: function {
             if au.notZero when au != ah.declId when ah.declId.notZero then {
                 aowner: qualifiedMemberScope :st unitRoot: au memberId: ncId
                 av: constValueOfMemberId :st scope: aowner :ast unitDecl: au nameId: ncId
-                if av.kind.none.not then return av
+                if av.isConst then return av
             }
         }
         # A nested namespace (`m: unit { NUM: 7 }`) is a definition of THIS
@@ -69169,7 +69168,7 @@ constOfNamedBase: function {
                 nst: nso
                 if (st.reg.typetypeOf typeId: nst) == ztypes.ztypetype.unitType then {
                     nsv: constValueOfMemberTidId :st :ast unitTid: nst nameId: ncId
-                    if nsv.kind.none.not then return nsv
+                    if nsv.isConst then return nsv
                 }
             }
         }
@@ -69188,7 +69187,7 @@ constOfNamedBase: function {
             sst: nestedUnitTidOf :st :ast ownerDeclId: sro :nestedNameId
             if sst.notZero then {
                 ssv: constValueOfMemberTidId :st :ast unitTid: sst nameId: ncId
-                if ssv.kind.none.not then return ssv
+                if ssv.isConst then return ssv
             }
         }
         # A same-unit name can be a CONSTANT or a TYPE, and the two read
@@ -69202,7 +69201,7 @@ constOfNamedBase: function {
         if pcv.kind.aggKind then return (constAggField :st :ast v: pcv nameId: ncId)
         # a constant whose fold failed with a reason (a cycle) is no type
         # either: the type walk below would fold other declarations and lose it
-        if pcv.kind.none when st.walk.constFail.kind.none.not then return ztypes.noConst
+        if pcv.kind.none when st.walk.constFail.failed then return ztypes.noConst
         if pcv.kind.svalKind then {
             return (
                 constStringDotted
@@ -69533,10 +69532,10 @@ evalConstDotted: function {
         }
     }
     tsv: constOfSelfTypeMember :st :scope :ast :unitDecl :ptId :ncId
-    if tsv.kind.none.not then return tsv
+    if tsv.isConst then return tsv
     ptId = selfTypeNameIn :st :scope nameId: ptId
     hv: constOfDottedHead :st :scope :ast :unitDecl :nid :parentId :ptId :ncId :ln :co
-    if hv.kind.none.not then return hv
+    if hv.isConst then return hv
     # `z.build.os.linux` -- the ARM-PREDICATE form, asked FIRST for the
     # same reason the atomid case asks the constant first: `tsrc.os` is a
     # constant whose TYPE is a variant, so reading it as a qualified type
@@ -69586,7 +69585,7 @@ evalConstDotted: function {
     # `z.build.os` -- a constant of a unit reached through a path of units: a
     # subunit is no file unit, so no bare base names it
     iv: constOfInstanceMember :st :ast :parentId :ncId
-    if iv.kind.none.not then return iv
+    if iv.isConst then return iv
     if parentIsDotted then {
         return (evalConstViaDottedParent :st :scope :ast :unitDecl :parentId :gpId :gcId :ncId)
     }
@@ -69663,9 +69662,9 @@ evalConstViaDottedParent: function {
     ncId: zast.nameid
 } out ztypes.cval is {
     sl: constStaticListSlotRead :st :scope :ast :unitDecl :gpId :gcId labelId: ncId
-    if sl.kind.none.not then return sl
+    if sl.isConst then return sl
     qa: evalConstArmViaUnit :st :scope :ast :gpId :gcId nameCountId: ncId
-    if qa.kind.none.not then return qa
+    if qa.isConst then return qa
     return (constOfUnitPathMember :st :scope :ast :parentId :ncId)
 }
 
@@ -69717,7 +69716,7 @@ evalConstNode: function {
         }
         if st.walk.constMono.notZero or st.typing.curMonoStamp.notZero then {
             gv: monoNumericParamValue :st nameId: plan.nameId
-            if gv.kind.none.not then return gv
+            if gv.isConst then return gv
         }
         return (constValueOfMemberId :st :scope :ast :unitDecl nameId: plan.nameId)
     }
@@ -69743,7 +69742,7 @@ evalConstNode: function {
             parentId: plan.parentId
             childId: plan.childId
         )
-        if vp.kind.none.not then return vp
+        if vp.isConst then return vp
         if (st.typing.atomVariableId.get key: plan.parentId).some then return ztypes.noConst
         return (
             evalConstDotted
@@ -69785,7 +69784,7 @@ numericParamThroughName: function {
 } out ztypes.cval is {
     if (st.typing.numericParamRead.has key: nid) then {
         cv: st.typing.nodeConstAt :nid
-        if cv.kind.none.not then return cv
+        if cv.isConst then return cv
     }
     # asked before the body's check reaches the path (a folding `if`): a type
     # application's parameter is the argument it is given there,
@@ -69855,7 +69854,7 @@ monoNumericParamValue: function {
     m: st.walk.constMono
     if m.isZero then m = st.typing.curMonoStamp
     v: monoNumericArg :st mono: m :nameId
-    if v.kind.none.not or st.walk.constMono.notZero then return v
+    if v.isConst or st.walk.constMono.notZero then return v
     own: walkOwnerMono :st
     if own == m then return v
     return (monoNumericArg :st mono: own :nameId)
@@ -70074,7 +70073,7 @@ refuseZeroDivisor: function {st: zenv.ZSymbolTable ast: Ast.view nid: zast.nodei
     if br.nid.isZero then return
     op: arithOpOf opnId: (atomNameId :ast n: (ast.nodes.get i: br.operator))
     if (op.div or op.rem).not then return
-    if (st.typing.nodeConstAt nid: br.lhs).kind.none.not then return
+    if (st.typing.nodeConstAt nid: br.lhs).isConst then return
     rv: st.typing.nodeConstAt nid: br.rhs
     if rv.kind.ivalKind.not then return
     if (st.typing.constIsZero v: rv).not then return
@@ -70142,7 +70141,7 @@ useSiteAsks: function {
         lv: st.typing.nodeConstAt nid: br.lhs
         if lv.kind.none then return false
         rv: st.typing.nodeConstAt nid: br.rhs
-        return rv.kind.none.not
+        return rv.isConst
     }
     if plan.arm == 6 then {
         return (callOnFoldedValue :st :ast :nid) or (staticListIndexedAt :st :ast :nid).notZero
@@ -70344,7 +70343,7 @@ resolveDottedConstantDef: function {
         # value is no answer: its typedef element builds a value.
         if isCtor when ldr == 0 then {
             pcs: constValueOfMember :st :scope :ast :unitDecl defName: sfLit
-            if pcs.kind.none.not then isCtor = false
+            if pcs.isConst then isCtor = false
         }
         # a member read through a function's name is the function's, and the
         # shape check asks it as a body does
@@ -70594,7 +70593,7 @@ resolveCalledConstantDef: function {
             # -- and a call of a function, is a call: the shape check asks it
             # as a body does, and a value or "no compile-time value" is the
             # evaluator's answer
-            if crv.kind.none.not or (isNumericLiteralName name: cbn.stringView) then cbu = true
+            if crv.isConst or (isNumericLiteralName name: cbn.stringView) then cbu = true
             if (calleeFnTid :st :scope :ast :unitDecl callableId: defn.callable
             ).notZero then cbu = true
         }
@@ -71322,7 +71321,7 @@ constDefNeedsValue: function {
     held: st.walk.constFail
     rv: evalConstNode :st :scope :ast :unitDecl nid: base
     st.walk.constFail = held
-    return rv.kind.none.not
+    return rv.isConst
 }
 
 # isComputedConstantDef -- the definition COMPUTES its value: an operator or a
@@ -71352,9 +71351,9 @@ unfoldedWhy: function {
 } out bool is {
     constFailClear :st
     v: evalConstNode :st :scope :ast :unitDecl :nid
-    recorded: st.walk.constFail.kind.none.not
+    recorded: st.walk.constFail.failed
     constFailClear :st
-    if v.kind.none.not then return false
+    if v.isConst then return false
     if recorded then return true
     if (unfoldedPartWhy :st :scope :ast :unitDecl :nid :visiting) then return true
     msg: "not a compile-time constant".string
@@ -71479,7 +71478,7 @@ unfoldedCallWhy: function {
         held: st.walk.constFail
         rv: evalConstNode :st :scope :ast :unitDecl nid: cn.parent
         st.walk.constFail = held
-        if rv.kind.none.not then named = constValueTid :st :scope :ast v: rv
+        if rv.isConst then named = constValueTid :st :scope :ast v: rv
     }
     if named.isZero then {
         (
