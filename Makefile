@@ -1405,7 +1405,7 @@ perf: $(PERFBIN)
 # deletes write-only allocations; perf-elision measures that), a failed run and
 # allocs != frees. Above ALLOC_BASELINE fails; a commit raising it says why in
 # its message, and one lowering the count lowers it here.
-ALLOC_BASELINE := 2902538
+ALLOC_BASELINE := 2878868
 # ALLOC_LINE -- the one measurement every allocation number comes from.
 ALLOC_LINE = valgrind --tool=memcheck $(PERFRUN) 2>&1 | grep 'total heap usage' | sed 's/.*usage: //'
 
@@ -1550,11 +1550,12 @@ frontend-guard:
 	fi; \
 	echo "frontend-guard OK: no C spelling, no triple parse and no target in the front end's code"
 
-# lifetime-guard -- places the emitter still decides a lifetime itself rather than
-# reading the checker's destroy lists. refsLocal searched a returned value's C
-# text for a local's name, and bindingRhsIsBorrow judged a borrow by the value's
-# shape where the checker records it (armLeafPlaces): both are gone, and their
-# rows keep it so. factsOfText counts the places that read an expression's
+# lifetime-guard -- places the emitter decided a lifetime itself rather than
+# reading the checker's destroy lists; each is gone, and its row keeps it so.
+# registerScopeDestroy recorded a local's destroy where it was bound, refsLocal
+# searched a returned value's C text for a local's name, and bindingRhsIsBorrow
+# judged a borrow by the value's shape where the checker records it
+# (armLeafPlaces). factsOfText counts the places that read an expression's
 # facts off its C text rather than from its producer: none do.
 lifetime-guard:
 	@l1=$$(grep -c 'registerScopeDestroy' src/zemitterc.z); \
@@ -1565,7 +1566,7 @@ lifetime-guard:
 	fail=0; \
 	chk() { if [ "$$2" -gt "$$3" ]; then echo "lifetime-guard FAIL: $$1 = $$2 (baseline $$3)"; fail=1; \
 	  elif [ "$$2" -lt "$$3" ]; then echo "lifetime-guard: $$1 = $$2 < baseline $$3 -- lower the baseline here"; fi; }; \
-	chk "registerScopeDestroy" "$$l1" 5; \
+	chk "registerScopeDestroy" "$$l1" 0; \
 	chk "refsLocal" "$$l2" 0; \
 	chk "factsOfText" "$$l3" 0; \
 	chk "bindingRhsIsBorrow" "$$l4" 0; \

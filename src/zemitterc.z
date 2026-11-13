@@ -82,7 +82,6 @@ LoopFrame: class {
     # the loop tests its postconditions after its continue label (emitPostTest):
     # a `continue` jumps there, and leaves the payload's destroy to after the test
     postTest: bool
-    freesMark: u64
     listMark: u64
     cleanup: String
     cleanupVid: ztypes.vid
@@ -91,20 +90,14 @@ LoopFrame: class {
     leftEarly: bool
 }
 
-# OwedFree -- one destructor owed at the end of a block: the C name of the
-# local it destroys, the statement that destroys it (empty for a plain String,
-# whose free is composed where it is emitted so it can take that site's
-# indent), and the variable behind it -- the alias table is keyed by variable,
-# so only this can probe it; 0 for a synthesized temp, which is never a binding
-# and so never aliased. One row, so the three cannot drift apart when a block
-# flush pops them.
+# OwedFree -- one destroy the emitter owes a temporary of its own: the C name it
+# destroys and the statement that destroys it. A local's destroy is not here:
+# it is written where the checker lists the local (emitLocalDestroy).
 OwedFree: class {
     # the C identifier the destructor takes
     name: String
-    # the full destructor statement, or empty for a plain String free
+    # the full destructor statement
     stmt: String
-    # the variable the local binds, 0 for a temp
-    vid: ztypes.vid
     # an argument's temporary, released at the end of its statement rather
     # than of the block
     temp: bool
@@ -114,20 +107,14 @@ OwedFree: class {
     # the statement that zeroes the temporary, which an early destroy leaves
     # behind so the block's own destroy of it is a no-op
     zero: String
-    # the destroy was emitted already, where the checker's list for the local's
-    # scope said (emitScopeDestroy): no later flush or exit emits it again
-    spent: false
 }
 
-# TmpCtr -- per-function temp name counter, and the destructors owed at the
-# end of each open block.
+# TmpCtr -- per-function temp name counter, and the destroys owed the emitter's
+# own temporaries at the end of each open block.
 TmpCtr: class {
     # the next temp number, so two temps in one function never collide
     n: u64
-    # plain String frees owed at the end of the current block
-    frees: List OwedFree
-    # collection destructor calls owed at block end, kept apart because they are
-    # emitted in the other order
+    # the destroys owed at block end, in the order registered
     listFrees: List OwedFree
 } as {
     # the next temp number, taken and consumed. Numbers are per FUNCTION, not
@@ -138,19 +125,14 @@ TmpCtr: class {
         return v
     }
 
-    # oweFree -- a String local to free at block end
-    oweFree: function {:this name: String.take vid: ztypes.vid} is {
-        this.frees.append (OwedFree :name stmt: String :vid temp: false zero: String)
-    }
-
-    # oweList -- a collection or class local to destroy at block end
-    oweList: function {:this stmt: String.take name: String.take vid: ztypes.vid} is {
-        this.listFrees.append (OwedFree :name :stmt :vid temp: false zero: String)
+    # oweList -- a temporary to destroy at block end
+    oweList: function {:this stmt: String.take name: String.take} is {
+        this.listFrees.append (OwedFree :name :stmt temp: false zero: String)
     }
 
     # oweTemp -- an argument's temporary to destroy at the end of its statement
     oweTemp: function {:this stmt: String.take name: String.take} is {
-        this.listFrees.append (OwedFree :name :stmt vid: ztypes.vid.zero temp: true zero: String)
+        this.listFrees.append (OwedFree :name :stmt temp: true zero: String)
     }
 }
 
@@ -9318,7 +9300,7 @@ flushArgHoists: function {
         appendArgHoistDecl :ah :ind :buf
         dto: ah.dtor.stringView
         if dto.length > 0 when ctx.hoistsToBlock then {
-            tmp.oweList stmt: ah.dtor.copy name: ah.name.copy vid: ztypes.vid.zero
+            tmp.oweList stmt: ah.dtor.copy name: ah.name.copy
         } else if dto.length > 0 then {
             tmp.oweTemp stmt: ah.dtor.copy name: ah.name.copy
         }
@@ -9529,7 +9511,7 @@ assignInPlaceTest: function {ctx: Ctx mark: hoistmark cond: StringView} out Stri
         r.append ")"
         return r
     }
-    ltmp: TmpCtr n: 0 frees: List OwedFree listFrees: List OwedFree
+    ltmp: TmpCtr n: 0 listFrees: List OwedFree
     cc: "_cc\{tmpNext :ctx tmp: ltmp}"
     ctx.argHoists.append (ArgHoist name: cc.copy val: String ctype: "bool".string dtor: String)
     closeInPlace :ctx :mark
@@ -9543,13 +9525,13 @@ assignInPlaceTest: function {ctx: Ctx mark: hoistmark cond: StringView} out Stri
 # statement expression that declares them, computes the test, releases what
 # they owed and yields the test.
 wrapInPlace: function {ctx: Ctx mark: hoistmark cond: StringView} out String is {
-    ltmp: TmpCtr n: 0 frees: List OwedFree listFrees: List OwedFree
+    ltmp: TmpCtr n: 0 listFrees: List OwedFree
     ccN: tmpNext :ctx tmp: ltmp
     lbuf: String
     flushArgHoists :ctx ind: " " tmp: ltmp buf: lbuf
     cw: condInParens :cond
     lbuf.append " bool _cc\{ccN} = \{cw};"
-    flushBlockFrees :ctx tmp: ltmp fL: 0 lL: 0 diverged: false buf: lbuf
+    flushBlockFrees tmp: ltmp lL: 0 diverged: false buf: lbuf
     closeInPlace :ctx :mark
     return "({\{lbuf} _cc\{ccN}; })"
 }
@@ -9575,7 +9557,6 @@ pushLoopLabel: function {ctx: Ctx tmp: TmpCtr.view isDo: bool postTest: bool} ou
         :id
         :isDo
         :postTest
-        freesMark: tmp.frees.length
         listMark: tmp.listFrees.length
         cleanup: String
         cleanupVid: ztypes.vid
@@ -13322,7 +13303,7 @@ emitInterpArgExpr: function {
             # the build runs where the value is read: its locals are declared by
             # the enclosing statement, and what its parts hoisted is assigned and
             # released inside it, so the statement owes none of them
-            ltmp: TmpCtr n: 0 frees: List OwedFree listFrees: List OwedFree
+            ltmp: TmpCtr n: 0 listFrees: List OwedFree
             unused: String
             ops: String
             sM: (
@@ -22707,7 +22688,7 @@ emitControlPtrExpr: function {
     ct: typeRefC :ast :reg :typing :ctx tid: vt
     if (ct.length == 0) or (ztypecheck.armLeaves :ast :n inLoop: false) then return "".string
     settleAhead :ast :reg :typing :ctx
-    ltmp: TmpCtr n: 0 frees: List OwedFree listFrees: List OwedFree
+    ltmp: TmpCtr n: 0 listFrees: List OwedFree
     cvN: tmpNext :ctx tmp: ltmp
     cv: "_cv\{cvN}"
     pct: "\{ct}*"
@@ -22730,7 +22711,7 @@ emitControlPtrExpr: function {
         tmp: ltmp
         buf: lbuf
     )
-    flushBlockFrees :ctx tmp: ltmp fL: 0 lL: 0 diverged: false buf: lbuf
+    flushBlockFrees tmp: ltmp lL: 0 diverged: false buf: lbuf
     ctx.armRefDepth = ctx.armRefDepth - 1
     ctx.armRefCv = outerCv
     closeControlArms :ctx :outer
@@ -22805,7 +22786,7 @@ emitControlExpr: function {
     # statement is building
     if (ct.length == 0) or (ztypecheck.armLeaves :ast :n inLoop: false) then return "".string
     settleAhead :ast :reg :typing :ctx
-    ltmp: TmpCtr n: 0 frees: List OwedFree listFrees: List OwedFree
+    ltmp: TmpCtr n: 0 listFrees: List OwedFree
     cvN: tmpNext :ctx tmp: ltmp
     cv: "_cv\{cvN}"
     lbuf: String
@@ -22824,7 +22805,7 @@ emitControlExpr: function {
         tmp: ltmp
         buf: lbuf
     )
-    flushBlockFrees :ctx tmp: ltmp fL: 0 lL: 0 diverged: false buf: lbuf
+    flushBlockFrees tmp: ltmp lL: 0 diverged: false buf: lbuf
     closeControlArms :ctx :outer
     recordRawHoist :ctx text: lbuf
     return cv
@@ -25172,7 +25153,6 @@ emitStringBindValue: function {
             strT: strTypeC :ctx
             lst: "\{ind}\{strT} \{nm} = \{sB};\n"
             buf.append lst
-            tmp.oweFree name: nm.string vid: nmVid
             return true
         } else {
             return false
@@ -25209,7 +25189,6 @@ emitStringBindValue: function {
                     strT: strTypeC :ctx
                     lc: "\{ind}\{strT} \{nm} = \{ctx.strC}_copy(&\{tnm});\n"
                     buf.append lc
-                    tmp.oweFree name: nm.string vid: nmVid
                     return true
                 }
             }
@@ -25247,6 +25226,7 @@ emitOptionBoxHoist: function {
             return "".string
         }
         av: "0".string
+        avNid: zast.nodeid
         got: false
         i: u64
         for i < n.arguments.count loop {
@@ -25256,6 +25236,7 @@ emitOptionBoxHoist: function {
             if a.namedoperation when got.not then {
                 got = true
                 aOpNode: ast.nodes.get i: a.operation
+                avNid = a.operation
                 av = emitExpr :ast :reg :typing :ctx n: aOpNode
             }
         }
@@ -25277,7 +25258,7 @@ emitOptionBoxHoist: function {
         buf.append "\{ind}\{b3}\n"
         b4: armCellFill box: bx.stringView value: tv.stringView
         buf.append "\{ind}\{b4}\n"
-        if (isBareCName s: av.stringView) when (isRegisteredOwned :tmp name: av.stringView) then {
+        if (boxedLocalNeedsZero :ast :typing nid: avNid) then {
             payT: (
                 (typing.declChildOfId parentTypeId: mid nameId: zast.wellKnown.slot.wkSome).or
                 d: ztypes.tid.zero
@@ -25327,7 +25308,7 @@ emitStringReturnValue: function {
                 strNid: n.nodeid
                 ops: unusedOps
             )
-            emitReturnCleanup :reg :typing :ctx :tmp :ind :buf
+            emitReturnCleanup :ast :reg :typing :ctx :tmp :ind :buf
             lst: "\{ind}return \{sB};\n"
             buf.append lst
             return true
@@ -25431,11 +25412,11 @@ emitCallStmt: function {
         }
         if hasArg.not then {
             if ctx.genActive then {
-                emitExitDestroy :reg :typing :ctx :tmp :ind :buf
+                emitExitDestroy :ast :reg :typing :ctx :ind :buf
                 lgd: "\{ind}goto L_done;\n"
                 buf.append lgd
             } else {
-                emitReturnCleanup :reg :typing :ctx :tmp :ind :buf
+                emitReturnCleanup :ast :reg :typing :ctx :tmp :ind :buf
                 lr2: "\{ind}return;\n"
                 buf.append lr2
             }
@@ -25477,7 +25458,6 @@ emitCollectionBind: function {
     tmp: TmpCtr
     buf: String.borrow
     nm: StringView
-    nameVid: ztypes.vid
 } out bool is {
     avn: ast.nodes.get i: n.value
     nbrw: bindingVarIsBorrowed :reg :typing :n
@@ -25497,14 +25477,13 @@ emitCollectionBind: function {
             :tmp
             :buf
             :nm
-            :nameVid
             :ltid
             :isHeap
         )
         return true
     }
     if isList then {
-        emitListBind :ast :reg :typing :ctx :avn :ind :tmp :buf :nm :nameVid :ltid :nbrw
+        emitListBind :ast :reg :typing :ctx :avn :ind :tmp :buf :nm :ltid :nbrw
         return true
     }
     if isHeap then {
@@ -25520,7 +25499,6 @@ emitCollectionBind: function {
             :tmp
             :buf
             :nm
-            :nameVid
             cb: hcb.stringView
             :ltid
             :nbrw
@@ -25544,24 +25522,18 @@ emitControlCollectionBind: function {
     tmp: TmpCtr
     buf: String.borrow
     nm: StringView
-    nameVid: ztypes.vid
     ltid: ztypes.tid
     # a Set or Map, held and destroyed through its pointer
     isHeap: bool
 } is {
     cb: spelledCname :ctx tid: ltid
     ct: "\{cb}_t"
-    free: "    \{cb}_destroy(&\{nm});\n"
-    if isHeap then {
-        ct = "\{cb}_t*"
-        free = "    \{cb}_destroy(\{nm});\n"
-    }
+    if isHeap then ct = "\{cb}_t*"
     isDo: false
     match (
         avn
     ) case doexpr then {
         isDo = true
-        # the do block's own leg registers the cleanup
         (
             emitDoBindValue
             :ast
@@ -25570,13 +25542,11 @@ emitControlCollectionBind: function {
             :ctx
             n: (ast.nodes.get i: avn.nodeid)
             :nm
-            nmVid: nameVid
             ct: ct.stringView
             tid: ltid
             :ind
             :tmp
             :buf
-            owes: true
         )
     } else null
     if isDo then return
@@ -25594,7 +25564,6 @@ emitControlCollectionBind: function {
         :tmp
         :buf
     )
-    tmp.oweList stmt: free.copy name: nm.string vid: nameVid
 }
 
 # controlValueOwnsArms -- an `if`, a `match`, a `with` or a breakless do block
@@ -25675,7 +25644,6 @@ emitListBind: function {
     tmp: TmpCtr
     buf: String.borrow
     nm: StringView
-    nameVid: ztypes.vid
     ltid: ztypes.tid
     nbrw: bool
 } is {
@@ -25749,11 +25717,6 @@ emitListBind: function {
             }
         }
     }
-    if nbrw.not then {
-        lfree: "    \{lcb}_destroy(&\{nm});\n"
-        lfsv: lfree.stringView
-        tmp.oweList stmt: lfsv.string name: nm.string vid: nameVid
-    }
 }
 
 # emitHeapColBind -- the Set and Map leg of emitCollectionBind, one body for
@@ -25770,7 +25733,6 @@ emitHeapColBind: function {
     tmp: TmpCtr
     buf: String.borrow
     nm: StringView
-    nameVid: ztypes.vid
     cb: StringView
     # the collection's type
     ltid: ztypes.tid
@@ -25808,11 +25770,6 @@ emitHeapColBind: function {
         hb0: "\{ind}\{cb}_t* \{nm} = \{cb}_create((uint64_t)\{hcap});\n"
         buf.append hb0
     }
-    if nbrw.not then {
-        hfree: "    \{cb}_destroy(\{nm});\n"
-        hfsv: hfree.stringView
-        tmp.oweList stmt: hfsv.string name: nm.string vid: nameVid
-    }
 }
 
 # emitStringLikeBind -- a String or StringView binding: a `match` value, then
@@ -25830,8 +25787,7 @@ emitStringLikeBind: function {
     nameVid: ztypes.vid
     btid: ztypes.tid
 } out bool is {
-    if (emitStringMatchBind :ast :reg :typing :ctx :n :ind :tmp :buf :nm :nameVid :btid
-    ) then return true
+    if (emitStringMatchBind :ast :reg :typing :ctx :n :ind :tmp :buf :nm :btid) then return true
     return (emitStringBind :ast :reg :typing :ctx :n :ind :tmp :buf :nm :nameVid :btid)
 }
 
@@ -25848,7 +25804,6 @@ emitStringMatchBind: function {
     tmp: TmpCtr
     buf: String.borrow
     nm: StringView
-    nameVid: ztypes.vid
     btid: ztypes.tid
 } out bool is {
     isStr: btid == ctx.strTid
@@ -25884,9 +25839,7 @@ emitStringMatchBind: function {
             :buf
         )
     }
-    if bound.not then return false
-    if isStr then tmp.oweFree name: nm.string vid: nameVid
-    return true
+    return bound
 }
 
 # emitStringBind -- binding a StringView or a String. A view aliases its source and
@@ -25922,13 +25875,11 @@ emitStringBind: function {
             :ctx
             n: (ast.nodes.get i: n.value)
             :nm
-            nmVid: nameVid
             ct: dct.stringView
             tid: btid
             :ind
             :tmp
             :buf
-            owes: true
         )
     }
     if btid == ctx.svTid then {
@@ -25972,7 +25923,6 @@ emitStringBind: function {
             strT: strTypeC :ctx
             lsc: "\{ind}\{strT} \{nm} = \{ctx.strC}_from_view(\{fvv});\n"
             buf.append lsc
-            tmp.oweFree name: nm.string vid: nameVid
             return true
         }
         did: emitStringBindValue :ast :reg :typing :ctx n: avn :nm nmVid: nameVid :ind :tmp :buf
@@ -25991,7 +25941,6 @@ emitStringBind: function {
             # branch does
             emitValueTakeInvalidations :ast :reg :typing :ctx n: avn :ind :buf
             if (varOwnsHere :reg vid: nameVid) then {
-                tmp.oweFree name: nm.string vid: nameVid
                 # a binding from a bare owned local, or from an explicit
                 # `<local>.take`, is a MOVE, exactly as a reassignment from
                 # one is: zero the source so its scope-exit free no-ops now
@@ -26122,9 +26071,6 @@ emitTypedBind: function {
     buf.append la
     emitValueTakeInvalidations :ast :reg :typing :ctx n: avn :ind :buf
     emitBindSourceZero :ast :reg :typing :ctx abind: n :avn rv: rv.stringView :ind :buf
-    # an owned class/record local with heap fields is destroyed at scope
-    # exit (String/collection locals returned earlier; take-aliases too).
-    registerScopeDestroy :reg :typing :ctx tid: ltid :nm :nameVid valueNode: avn :tmp
 }
 
 # emitNarrowedTakeBind -- `x: <subject>.take` over a match subject narrowed to
@@ -26139,10 +26085,8 @@ emitNarrowedTakeBind: function {
     ctx: Ctx
     n: zast.assignmentrow.view
     ind: StringView
-    tmp: TmpCtr
     buf: String.borrow
     nm: StringView
-    nameVid: ztypes.vid
 } out bool is {
     avn: ast.nodes.get i: n.value
     # owned: the base's name outlives the ctx writes below
@@ -26160,24 +26104,6 @@ emitNarrowedTakeBind: function {
             buf.append bindLine
             zcB: movedZeroC :reg :typing :ctx tid: ntO
             if zcB.length > 0 then buf.append "\{ind}\{valB} = \{zcB};\n"
-            # a String payload is freed by the string runtime, which
-            # has no `_destroy`: it rides the scope's String free list
-            # like any other owned String local.
-            ldcbC: spelledCname :ctx tid: ntO
-            if ldcbC.stringView == ctx.strC then {
-                tmp.oweFree name: nm.string vid: nameVid
-            } else {
-                ldcB: (
-                    destroyLineC
-                    :reg
-                    :typing
-                    :ctx
-                    tid: ntO
-                    :nm
-                    ind: "    "
-                )
-                if ldcB.length > 0 then tmp.oweList stmt: ldcB.take name: nm.string vid: nameVid
-            }
             return true
         }
     }
@@ -26296,10 +26222,8 @@ emitAssignment: function {
         :ctx
         :n
         :ind
-        :tmp
         :buf
         nm: nm.stringView
-        :nameVid
     ) then return
     if (
         emitBorrowAliasBind
@@ -26326,7 +26250,6 @@ emitAssignment: function {
         :tmp
         :buf
         nm: nm.stringView
-        :nameVid
     ) then return
     ltid: bindChasedTid :reg :typing :ctx :n :avn
     if (
@@ -26352,9 +26275,7 @@ emitAssignment: function {
         :avn
         nm: nm.stringView
         ct: ct.stringView
-        :btid
         :ltid
-        :nameVid
         :ind
         :tmp
         :buf
@@ -26376,24 +26297,6 @@ emitAssignment: function {
     )
 }
 
-# oweControlBinding -- a local an `if` or a `match` bound earns the cleanup any
-# owned binding of its type does. Whether it does is the CHECKER's answer about
-# the binding's own variable, not a walk of the arms: an arm yielding a borrowed
-# read is why the checker made the binding borrowed in the first place.
-oweControlBinding: function {
-    reg: ztypes.ZTypeRegistry.view
-    typing: ztyping.ZTyping.view
-    ctx: Ctx
-    tid: ztypes.tid
-    nm: StringView
-    nameVid: ztypes.vid
-    tmp: TmpCtr
-} is {
-    if (varOwnsHere :reg vid: nameVid).not then return
-    dl: hoistDestroyLine :reg :typing :ctx :tid :nm
-    if dl.length > 0 then tmp.oweList stmt: dl.copy name: nm.string vid: nameVid
-}
-
 # emitControlBind -- a local bound from an `if`, a `match` or a do block: the arms
 # assign it, and it earns the cleanup its type's binding owes
 # (oweControlBinding); the do block's own leg registers its. True when it handled
@@ -26406,10 +26309,7 @@ emitControlBind: function {
     avn: astnode.view
     nm: StringView
     ct: StringView
-    # the binding's stamp, and the value's chased collection type
-    btid: ztypes.tid
     ltid: ztypes.tid
-    nameVid: ztypes.vid
     ind: StringView
     tmp: TmpCtr
     buf: String.borrow
@@ -26417,10 +26317,7 @@ emitControlBind: function {
     if ct.length == 0 then return false
     dm: emitMatchBindValue :ast :reg :typing :ctx n: avn :nm :ct :ind :tmp :buf
     if dm.not then dm = emitIfBindValue :ast :reg :typing :ctx n: avn :nm :ct :ind :tmp :buf
-    if dm then {
-        oweControlBinding :reg :typing :ctx tid: btid :nm :nameVid :tmp
-        return true
-    }
+    if dm then return true
     return (
         emitDoBindValue
         :ast
@@ -26429,13 +26326,11 @@ emitControlBind: function {
         :ctx
         n: avn
         :nm
-        nmVid: nameVid
         :ct
         tid: ltid
         :ind
         :tmp
         :buf
-        owes: true
     )
 }
 
@@ -26573,6 +26468,7 @@ emitDottedAutoCallStmt: function {
 # emitBreakStmt -- `break`: the block frees, then the owned-payload dtor the
 # jump would skip, then the goto. A do-block entry carries an empty cleanup.
 emitBreakStmt: function {
+    ast: Ast.view
     reg: ztypes.ZTypeRegistry.view
     typing: ztyping.ZTyping.view
     ctx: Ctx
@@ -26580,7 +26476,7 @@ emitBreakStmt: function {
     tmp: TmpCtr.view
     buf: String.borrow
 } is {
-    emitBreakFrees :reg :typing :ctx :tmp :ind :buf
+    emitBreakFrees :ast :reg :typing :ctx :tmp :ind :buf
     if ctx.loops.length > 0 then {
         noteFrameLeft :ctx idx: ctx.loops.length - 1
         bid: u64
@@ -26640,7 +26536,7 @@ emitContinueStmt: function {
         }
         if hasLoop then noteFrameLeft :ctx idx: loopIdx
         if inDo when hasLoop then {
-            emitContinueFrees :reg :typing :ctx :tmp idx: loopIdx :ind :buf
+            emitContinueFrees :ast :reg :typing :ctx :tmp idx: loopIdx :ind :buf
             cid: u64
             {
                 cf: ctx.loops.get i: loopIdx
@@ -26655,7 +26551,7 @@ emitContinueStmt: function {
             ucn: true
             ctx.contLabelUsed.set key: cid value: ucn
         } else {
-            emitBreakFrees :reg :typing :ctx :tmp :ind :buf
+            emitBreakFrees :ast :reg :typing :ctx :tmp :ind :buf
             postId: u64
             post: false
             if ctx.loops.length > 0 then {
@@ -26799,17 +26695,17 @@ emitReturnStmt: function {
     if bkwId == zast.wellKnown.slot.wkReturn then {
         ctx.returnEmitted = true
         if ctx.genActive then {
-            emitExitDestroy :reg :typing :ctx :tmp :ind :buf
+            emitExitDestroy :ast :reg :typing :ctx :ind :buf
             lgd: "\{ind}goto L_done;\n"
             buf.append lgd
         } else {
-            emitReturnCleanup :reg :typing :ctx :tmp :ind :buf
+            emitReturnCleanup :ast :reg :typing :ctx :tmp :ind :buf
             lrt: "\{ind}return;\n"
             buf.append lrt
         }
     } else {
         if bkwId == zast.wellKnown.slot.wkBreak then {
-            emitBreakStmt :reg :typing :ctx :ind :tmp :buf
+            emitBreakStmt :ast :reg :typing :ctx :ind :tmp :buf
         } else {
             emitContinueStmt :ast :reg :typing :ctx :n :bkwId :ind :tmp :buf
         }
@@ -27018,7 +26914,6 @@ emitRepointCompanion: function {
     ctx: Ctx
     vid: ztypes.vid
     ind: StringView
-    tmp: TmpCtr
     buf: String.borrow
 } is {
     if vid.isZero then return
@@ -27029,12 +26924,6 @@ emitRepointCompanion: function {
     nm: companionCName :ctx :ast :reg :cv
     ct: companionCType :ast :reg :typing :ctx :tid
     buf.append "\{ind}\{ct} \{nm} = \{zeroValueC :ast :reg :typing :ctx :tid};\n"
-    if tid == ctx.strTid then {
-        tmp.oweFree name: nm.copy vid: cv
-        return
-    }
-    dc: destroyLineC :reg :typing :ctx :tid nm: nm.stringView :ind
-    if dc.length > 0 then tmp.oweList stmt: dc.take name: nm.copy vid: cv
 }
 
 # companionCType -- the C type a companion of type `tid` is held as: the String
@@ -27316,7 +27205,6 @@ emitForStmt: function {
     # the HEADER's scope owns what its conditions register: the marks are
     # taken before them and closed after the loop, so those rows are the
     # header scope's to emit and to pop, not the enclosing block's
-    fLh: tmp.frees.length
     lLh: tmp.listFrees.length
     lidW: pushLoopLabel :ctx :tmp isDo: false postTest: n.postconditions.count.u64 > 0
     bodyInd: "\{ind}    "
@@ -27325,7 +27213,6 @@ emitForStmt: function {
     } else {
         emitPlainWhileHead :ast :reg :typing :ctx :n :ind :tmp :buf
     }
-    fLw: tmp.frees.length
     lLw: tmp.listFrees.length
     dvG: false
     if n.body.isZero.not then {
@@ -27333,7 +27220,7 @@ emitForStmt: function {
         emitBodyNode :ast :reg :typing :ctx n: fbw ind: bodyInd.stringView :tmp :buf
         dvG = blockDiverges :ast :reg :typing :ctx n: fbw
     }
-    closeScopeBlock :reg :typing :ctx :tmp fL: fLw lL: lLw diverged: dvG node: n.body :buf
+    closeScopeBlock :ast :reg :typing :ctx :tmp lL: lLw diverged: dvG node: n.body :buf
     emitContLabel :ctx id: lidW ind: bodyInd.stringView :buf
     emitPostTest :ast :reg :typing :ctx m: n cleanup: "" ind: bodyInd.stringView :tmp :buf
     lwc: "\{ind}}\n"
@@ -27343,7 +27230,7 @@ emitForStmt: function {
     # the path that falls out and the path that jumps reach it there, and a
     # `break` no longer lists the header's locals of its own (it leaves the
     # BODY's scope), so each is destroyed exactly once.
-    closeScopeBlock :reg :typing :ctx :tmp fL: fLh lL: lLh diverged: false node: n.nodeid :buf
+    closeScopeBlock :ast :reg :typing :ctx :tmp lL: lLh diverged: false node: n.nodeid :buf
     ctx.condDepth = ctx.condDepth - condBump
 }
 
@@ -27381,7 +27268,6 @@ emitDoWhileFor: function {
     # a while loop's are ahead of `while`
     body: String
     ind2d: "\{ind}    "
-    fLd: tmp.frees.length
     lLd: tmp.listFrees.length
     dvG: false
     if n.body.isZero.not then {
@@ -27389,7 +27275,7 @@ emitDoWhileFor: function {
         emitBodyNode :ast :reg :typing :ctx n: fbd ind: ind2d.stringView :tmp buf: body
         dvG = blockDiverges :ast :reg :typing :ctx n: fbd
     }
-    closeScopeBlock :reg :typing :ctx :tmp fL: fLd lL: lLd diverged: dvG node: n.body buf: body
+    closeScopeBlock :ast :reg :typing :ctx :tmp lL: lLd diverged: dvG node: n.body buf: body
     emitContLabel :ctx id: lidDW ind: ind2d.stringView buf: body
     tail: String
     if stepped then {
@@ -27681,18 +27567,17 @@ emitIfStmt: function {
             lfo: "\{ind}{\n"
             buf.append lfo
             indE: "\{ind}    "
-            fLE: tmp.frees.length
             lLE: tmp.listFrees.length
             ewn: ast.nodes.get i: ewb
             emitBodyNode :ast :reg :typing :ctx n: ewn ind: indE.stringView :tmp :buf
             dvF: blockDiverges :ast :reg :typing :ctx n: ewn
             (
                 closeScopeBlock
+                :ast
                 :reg
                 :typing
                 :ctx
                 :tmp
-                fL: fLE
                 lL: lLE
                 diverged: dvF
                 node: (branchScopeOf :ast clauses: n.clauses elseclause: n.elseclause stmt: ewb)
@@ -27780,57 +27665,6 @@ emitIfStmt: function {
         buf.append le
     }
     ctx.condDepth = ctx.condDepth - 1
-}
-
-# registerScopeDestroy -- record the scope-exit cleanup a freshly bound OWNED
-# local earns: a String rides the block's String free list, and anything else
-# carrying a destructor gets its `_destroy` registered against the same block.
-# A BORROW registers nothing -- whoever owns the value frees it, and freeing it
-# here would be the second free.
-#
-# Asked by every path that binds a name to a value, so no two of them can
-# disagree about what a binding owes at scope exit. `with` did not ask at all,
-# and leaked whatever it bound.
-registerScopeDestroy: function {
-    # the symbol table the type and the ownership question are asked of
-    reg: ztypes.ZTypeRegistry.view
-    typing: ztyping.ZTyping.view
-    # the emit context, for the C name and the box test
-    ctx: Ctx
-    # the bound value's type
-    tid: ztypes.tid
-    # the binding's emitted C name
-    nm: StringView
-    # the binding's variable id: what the flush matches against, and what the
-    # checker's answer about the binding is read off
-    nameVid: ztypes.vid
-    # the value node, for the arm-tag carve-out below
-    valueNode: astnode.view
-    # the block's pending-cleanup lists
-    tmp: TmpCtr
-} is {
-    if (varOwnsHere :reg vid: nameVid).not then {
-        # an arm named as a value CONSTRUCTS its tag and holds nothing, so it
-        # owes nothing -- until a write gives the local a payload to free
-        if (valueIsArmTag :typing n: valueNode).not then return
-        if (typing.variableRebound.has item: nameVid).not then return
-    }
-    if tid == ctx.strTid then {
-        tmp.oweFree name: nm.string vid: nameVid
-        return
-    }
-    dc: destroyLineC :reg :typing :ctx :tid :nm ind: "    "
-    if dc.length > 0 then tmp.oweList stmt: dc.take name: nm.string vid: nameVid
-}
-
-# valueIsArmTag -- the value names a sum type's arm (`U.none`): the checker
-# resolved the path to the arm's declaration.
-valueIsArmTag: function {typing: ztyping.ZTyping.view n: astnode.view} out bool is {
-    if n.dottedpath.not then return false
-    ad: (typing.refDecl.get key: n.nodeid).or d: ztypes.declid
-    if ad.isZero then return false
-    ado: typing.decls.get i: ad
-    return ado.kind.armDecl
 }
 
 # withValueCType -- the C type of a `with` binding's value, as a binding's is:
@@ -28225,35 +28059,11 @@ emitWithBody: function {
             :buf
         )
     }
-    # a `with` binds a value exactly as an ordinary binding does, and owes the
-    # same two things -- neither of which it did. The value may be a call that
-    # took ownership of an argument, so the caller zeroes that source here; and
-    # an OWNED value earns its scope-exit destroy, which is what registerScopeDestroy
-    # records for every other binding.
-    #
-    # THE TWO OMISSIONS CANCELLED IN ONE SHAPE. `with b: (Bag s: src)` was clean
-    # only because the un-zeroed `src` freed the buffer the un-destroyed `b`
-    # should have, so adding the destroy alone turns that program into a double
-    # free. They belong together.
+    # a `with` binds a value as an ordinary binding does: the value may be a
+    # call that took ownership of an argument, so that source is zeroed here.
+    # What the `with` owns is destroyed where the checker lists it, at the
+    # `with`'s end (emitScopeDestroy).
     emitValueTakeInvalidations :ast :reg :typing :ctx n: (ast.nodes.get i: n.value) :ind :buf
-    # INSIDE A GENERATOR an owned value whose block suspends lives in the state
-    # field the checker minted for it (emitWithField) and is destroyed with the
-    # instance; one whose block does not suspend, or a borrowed one, is a
-    # header local that nothing may free at scope exit: the free site would be
-    # reachable through a resume `goto` that jumped past the declaration. That
-    # is the rule every other name in a resumable body obeys -- a C local does
-    # not survive a suspension.
-    if ctx.genActive.not then (
-        registerScopeDestroy
-        :reg
-        :typing
-        :ctx
-        tid: wsid
-        nm: wnm.stringView
-        nameVid: (defVid :typing nid: n.nodeid)
-        valueNode: (ast.nodes.get i: n.value)
-        :tmp
-    )
     wbody: ast.nodes.get i: n.body
     if bindTo.length > 0 then {
         wvb: withValueBlock n: wbody
@@ -28313,10 +28123,10 @@ emitWithBody: function {
     # block: what the checker recorded the `with`'s end destroys is spent here
     if (blockDiverges :ast :reg :typing :ctx n: wbody).not then (
         emitScopeDestroy
+        :ast
         :reg
         :typing
         :ctx
-        :tmp
         node: n.nodeid
         :ind
         :buf
@@ -28325,8 +28135,7 @@ emitWithBody: function {
 
 # zeroWithOwnMove -- a `with` whose body hands back the `with`'s own OWNED value
 # moves it into what binds the `with`: the local is zeroed, so the destroy the
-# `with`'s end owes it no-ops, as a block's own local moved out is
-# (zeroBranchLocalMove).
+# `with`'s end owes it no-ops.
 zeroWithOwnMove: function {
     reg: ztypes.ZTypeRegistry.view
     typing: ztyping.ZTyping.view
@@ -28368,18 +28177,17 @@ emitCaseStmt: function {
             lmo: "\{ind}{\n"
             buf.append lmo
             indM: "\{ind}    "
-            fLM: tmp.frees.length
             lLM: tmp.listFrees.length
             mwn: ast.nodes.get i: mwb
             emitBodyNode :ast :reg :typing :ctx n: mwn ind: indM.stringView :tmp :buf
             dvF: blockDiverges :ast :reg :typing :ctx n: mwn
             (
                 closeScopeBlock
+                :ast
                 :reg
                 :typing
                 :ctx
                 :tmp
-                fL: fLM
                 lL: lLM
                 diverged: dvF
                 node: (branchScopeOf :ast clauses: n.clauses elseclause: n.elseclause stmt: mwb)
@@ -28452,12 +28260,11 @@ emitDoStmt: function {
         # block's owned temps (since these marks) and lands after the
         # block, not on an enclosing loop's label
         sdoId: pushLoopLabel :ctx :tmp isDo: true postTest: false
-        sfL: tmp.frees.length
         slL: tmp.listFrees.length
         dst: ast.nodes.get i: n.statement
         emitBodyNode :ast :reg :typing :ctx n: dst ind: indd.stringView :tmp :buf
         dvF: blockDiverges :ast :reg :typing :ctx n: dst
-        closeScopeBlock :reg :typing :ctx :tmp fL: sfL lL: slL diverged: dvF node: n.nodeid :buf
+        closeScopeBlock :ast :reg :typing :ctx :tmp lL: slL diverged: dvF node: n.nodeid :buf
         lwh: "\{ind}} while (0);\n"
         buf.append lwh
         popLoopLabel :ctx id: sdoId :ind :buf
@@ -28470,10 +28277,10 @@ emitDoStmt: function {
         emitBodyNode :ast :reg :typing :ctx n: body :ind :tmp :buf
         if (blockDiverges :ast :reg :typing :ctx n: body).not when ctx.tailReturned.not then (
             emitScopeDestroy
+            :ast
             :reg
             :typing
             :ctx
-            :tmp
             node: n.nodeid
             :ind
             :buf
@@ -28656,7 +28463,6 @@ emitStmtParts: function {
             :ctx
             vid: (defVid :typing nid: n.nodeid)
             :ind
-            :tmp
             :buf
         )
     } case reassignment then {
@@ -28896,12 +28702,11 @@ emitGenericDissect: function {
         } else {
             # a local the arm declares is freed at the arm's end, where it is
             # still in C scope
-            fL: tmp.frees.length
             lL: tmp.listFrees.length
             wst: ast.nodes.get i: win
             emitBodyNode :ast :reg :typing :ctx n: wst :ind :tmp :buf
             dv: blockDiverges :ast :reg :typing :ctx n: wst
-            closeScopeBlock :reg :typing :ctx :tmp :fL :lL diverged: dv node: win :buf
+            closeScopeBlock :ast :reg :typing :ctx :tmp :lL diverged: dv node: win :buf
         }
         buf.append ind
         buf.append "}\n"
@@ -29200,7 +29005,6 @@ emitMatchStmt: function {
         mscope: branchScopeOf :ast clauses: m.clauses elseclause: m.elseclause stmt: mfb.stmt
         buf.append "\{ind}{\n"
         indM: "\{ind}    "
-        fLM: tmp.frees.length
         lLM: tmp.listFrees.length
         if assignTo.length > 0 then {
             (
@@ -29216,16 +29020,16 @@ emitMatchStmt: function {
                 :tmp
                 :buf
             )
-            flushBlockFrees :ctx :tmp fL: fLM lL: lLM diverged: false :buf
+            flushBlockFrees :tmp lL: lLM diverged: false :buf
         } else {
             emitBodyNode :ast :reg :typing :ctx n: mwn ind: indM.stringView :tmp :buf
             (
                 closeScopeBlock
+                :ast
                 :reg
                 :typing
                 :ctx
                 :tmp
-                fL: fLM
                 lL: lLM
                 diverged: (blockDiverges :ast :reg :typing :ctx n: mwn)
                 node: mscope
@@ -29471,18 +29275,17 @@ emitOrdinalPairMatch: function {
                     :buf
                 )
             } else {
-                fLB: tmp.frees.length
                 lLB: tmp.listFrees.length
                 cstB: ast.nodes.get i: c.statement
                 emitBodyNode :ast :reg :typing :ctx n: cstB ind: indB.stringView :tmp :buf
                 dvF: blockDiverges :ast :reg :typing :ctx n: cstB
                 (
                     closeScopeBlock
+                    :ast
                     :reg
                     :typing
                     :ctx
                     :tmp
-                    fL: fLB
                     lL: lLB
                     diverged: dvF
                     node: c.nodeid
@@ -29531,11 +29334,10 @@ emitBoolElse: function {
                 :buf
             )
         } else {
-            fLE: tmp.frees.length
             lLE: tmp.listFrees.length
             emitBodyNode :ast :reg :typing :ctx n: o ind: indE.stringView :tmp :buf
             dvF: blockDiverges :ast :reg :typing :ctx n: o
-            closeScopeBlock :reg :typing :ctx :tmp fL: fLE lL: lLE diverged: dvF node: oId :buf
+            closeScopeBlock :ast :reg :typing :ctx :tmp lL: lLE diverged: dvF node: oId :buf
         }
         lceB: "\{ind}}\n"
         buf.append lceB
@@ -29552,85 +29354,44 @@ emitBoolElse: function {
     }
 }
 
-# flushBlockFrees -- emit + reclaim the heap/collection destructors registered
-# since (fL, lL) so a local declared inside a block (a match arm) is freed at
-# block end, not function end (where it is out of C scope). LIFO order.
+# flushBlockFrees -- the destroys owed the emitter's own temporaries registered
+# since `lL`, newest first, each leaving the list: a temporary declared inside a
+# block is released at the block's end, where it is still in C scope. A block
+# that diverges on every path released them at its exits (emitReturnCleanup,
+# emitBreakFrees): they leave the list and nothing is written, or the destroys
+# would land after the diverging statement as unreachable code.
 flushBlockFrees: function {
-    ctx: Ctx
     tmp: TmpCtr
-    fL: u64
     lL: u64
     diverged: bool
     buf: String.borrow
 } is {
-    # a block that diverges on every path already freed these -- through
-    # emitReturnCleanup on a return, emitBreakFrees on a break -- so pop them
-    # (the locals leave C scope either way) but emit nothing, or the frees land
-    # after the diverging statement as unreachable code
-    live: diverged.not
     for tmp.listFrees.length > lL loop {
         lvo: tmp.listFrees.pop
-        if live when lvo.spent.not then buf.append lvo.stmt
-    }
-    for tmp.frees.length > fL loop {
-        fvo: tmp.frees.pop
-        if live when fvo.spent.not then {
-            preludeNeed :ctx memb: "@String_free"
-            ff: "    \{ctx.strC}_free(&\{fvo.name});\n"
-            buf.append ff
-        }
+        if diverged.not then buf.append lvo.stmt
     }
 }
 
 # closeScopeBlock -- the destroys owed where the C block of checker scope `node`
-# closes: the emitter's own temporaries registered since (fL, lL), newest
-# first -- a local may be what one of them walks -- then the locals the checker
-# recorded the scope's end destroys (emitScopeDestroy), then a local registered
-# here that a construct not yet reading the checker's lists owns, freed as the
-# block always freed it. Every row since the marks leaves the lists; a block
-# that diverges on every path emits nothing, its exits having freed what it
-# held.
+# closes: the emitter's own temporaries registered since `lL`, newest first -- a
+# local may be what one of them walks -- then the locals the checker recorded
+# the scope's end destroys (emitScopeDestroy). A block that diverges on every
+# path writes nothing, its exits having freed what it held.
 closeScopeBlock: function {
+    ast: Ast.view
     reg: ztypes.ZTypeRegistry.view
     typing: ztyping.ZTyping.view
     ctx: Ctx
     tmp: TmpCtr
-    fL: u64
     lL: u64
     diverged: bool
     node: zast.nodeid
     buf: String.borrow
 } is {
-    if diverged.not then {
-        emitRowsSince :ctx :tmp :fL :lL temps: true :buf
-        emitScopeDestroy :reg :typing :ctx :tmp :node ind: "    " :buf
-    }
-    for tmp.listFrees.length > lL loop tmp.listFrees.pop
-    for tmp.frees.length > fL loop tmp.frees.pop
+    flushBlockFrees :tmp :lL :diverged :buf
+    if diverged.not then emitScopeDestroy :ast :reg :typing :ctx :node ind: "    " :buf
 }
 
-# emitRowsSince -- the unspent rows registered since (fL, lL), newest first,
-# collection destroys before String frees: the emitter's own temporaries
-# (`temps`) or the locals.
-emitRowsSince: function {
-    ctx: Ctx tmp: TmpCtr.view fL: u64 lL: u64 temps: bool buf: String.borrow
-} is {
-    i: tmp.listFrees.length
-    for i > lL loop {
-        i = i - 1
-        lr: tmp.listFrees.get :i
-        if lr.vid.isZero == temps when lr.spent.not then buf.append lr.stmt
-    }
-    j: tmp.frees.length
-    for j > fL loop {
-        j = j - 1
-        fr: tmp.frees.get i: j
-        preludeNeed :ctx memb: "@String_free"
-        if (
-            fr.vid.isZero == temps
-        ) when fr.spent.not then buf.append "    \{ctx.strC}_free(&\{fr.name});\n"
-    }
-}
 
 # branchScopeOf -- the checker scope of the `if` or `match` branch whose body
 # is `stmt`: the clause among `clauses` it belongs to, or the else body itself.
@@ -29657,17 +29418,14 @@ branchScopeOf: function {
 }
 
 # emitScopeDestroy -- what the checker recorded the end of scope `node` destroys
-# (scopeDestroy), in its order: each local by the destroy its binding registered,
-# which is spent so no later flush or exit emits it again, and a local that
-# registered none -- a generator's local kept in the instance -- by its type,
-# the field zeroed after so the instance's destructor finds it empty. A local
-# moved on every path here holds nothing and is skipped; one moved on
+# (scopeDestroy), in its order, each local by its variable (emitLocalDestroy). A
+# local moved on every path here holds nothing and is skipped; one moved on
 # some was zeroed where it moved, and its destroy frees nothing there.
 emitScopeDestroy: function {
+    ast: Ast.view
     reg: ztypes.ZTypeRegistry.view
     typing: ztyping.ZTyping.view
     ctx: Ctx
-    tmp: TmpCtr
     node: zast.nodeid
     ind: StringView
     buf: String.borrow
@@ -29679,53 +29437,17 @@ emitScopeDestroy: function {
         it: typing.destroyItems.get i: rg.start.u64 + k
         k = k + 1
         if it.state == 1 then continue
-        if (spendOwedFree :ctx :tmp vid: it.vid :ind :buf).not then (
-            emitUnownedDestroy
-            :reg
-            :typing
-            :ctx
-            vid: it.vid
-            :ind
-            :buf
-        )
+        emitLocalDestroy :ast :reg :typing :ctx vid: it.vid :ind :buf
     }
 }
 
-# spendOwedFree -- emit the destroy the binding of `vid` registered, newest
-# registration first, and mark it spent; false when it registered none.
-spendOwedFree: function {
-    ctx: Ctx tmp: TmpCtr vid: ztypes.vid ind: StringView buf: String.borrow
-} out bool is {
-    i: tmp.listFrees.length
-    for i > 0 loop {
-        i = i - 1
-        lf: tmp.listFrees.getMut :i
-        if lf.vid == vid when lf.spent.not then {
-            lf.spent = true
-            buf.append lf.stmt
-            return true
-        }
-    }
-    j: tmp.frees.length
-    for j > 0 loop {
-        j = j - 1
-        ff: tmp.frees.getMut i: j
-        if ff.vid == vid when ff.spent.not then {
-            ff.spent = true
-            preludeNeed :ctx memb: "@String_free"
-            buf.append "\{ind}\{ctx.strC}_free(&\{ff.name});\n"
-            return true
-        }
-    }
-    return false
-}
-
-# emitUnownedDestroy -- the destroy of a local the checker lists and whose
-# binding registered none: a generator's local, which lives in a field of the
-# instance (genLocalFieldOf), freed by its type and then zeroed so the
-# instance's own destructor finds it empty. Nothing for a type that frees
-# nothing, or a local bound elsewhere.
-emitUnownedDestroy: function {
+# emitLocalDestroy -- the destroy of the local `vid`, where the checker lists
+# it: by the variable's type, of the variable's own C name. A generator's local
+# lives in a field of the instance (genLocalFieldOf): it is freed there and the
+# field zeroed, so the instance's own destructor finds it empty. Nothing for a
+# type that frees nothing.
+emitLocalDestroy: function {
+    ast: Ast.view
     reg: ztypes.ZTypeRegistry.view
     typing: ztyping.ZTyping.view
     ctx: Ctx
@@ -29733,22 +29455,42 @@ emitUnownedDestroy: function {
     ind: StringView
     buf: String.borrow
 } is {
-    gf: typing.genLocalFieldOf.get key: vid
-    if gf.none then return
-    al: vidFind xs: ctx.aliases :vid
-    if al == 0 then return
-    fld: (ctx.aliases.get i: al - 1).val.copy
     tid: reg.variableTypeOf id: vid
-    dc: destroyLineC :reg :typing :ctx :tid nm: fld.stringView :ind
-    if dc.length == 0 then return
-    buf.append dc
-    buf.append "\{ind}\{fld} = \{movedZeroC :reg :typing :ctx :tid};\n"
+    gf: typing.genLocalFieldOf.get key: vid
+    if gf.some then {
+        al: vidFind xs: ctx.aliases :vid
+        if al == 0 then return
+        fld: (ctx.aliases.get i: al - 1).val.copy
+        dc: destroyLineC :reg :typing :ctx :tid nm: fld.stringView :ind
+        if dc.length == 0 then return
+        buf.append dc
+        buf.append "\{ind}\{fld} = \{movedZeroC :reg :typing :ctx :tid};\n"
+        return
+    }
+    # storage another owner frees: what a borrow aliases, or a `with` value a
+    # generator keeps in a field of its instance
+    if (vvHas xs: ctx.aliases :vid) then return
+    if (loopOwnsPayload :ctx :vid) then return
+    nm: varCName :ctx :ast :reg :vid
+    buf.append (destroyLineC :reg :typing :ctx :tid nm: nm.stringView :ind)
+}
+
+# loopOwnsPayload -- `vid` is the payload of a loop being emitted, which the
+# loop releases itself: at the end of each iteration, after its postconditions
+# are tested, and where a `break`, a `continue` or a `return` leaves it
+# (LoopFrame.cleanup).
+loopOwnsPayload: function {ctx: Ctx.view vid: ztypes.vid} out bool is {
+    for each lf: ctx.loops loop {
+        if lf.cleanupVid == vid when lf.cleanup.length > 0 then return true
+    }
+    return false
 }
 
 # emitBreakFrees -- the destroys a `break`, or a `continue` that jumps no
 # `do` block, owes: those of the innermost loop or `do` entry's scopes
 # (emitContinueFrees).
 emitBreakFrees: function {
+    ast: Ast.view
     reg: ztypes.ZTypeRegistry.view
     typing: ztyping.ZTyping.view
     ctx: Ctx
@@ -29757,7 +29499,7 @@ emitBreakFrees: function {
     buf: String.borrow
 } is {
     if ctx.loops.length == 0 then return
-    emitContinueFrees :reg :typing :ctx :tmp idx: ctx.loops.length - 1 :ind :buf
+    emitContinueFrees :ast :reg :typing :ctx :tmp idx: ctx.loops.length - 1 :ind :buf
 }
 
 # emitContinueFrees -- the destroys owed where an exit leaves the scopes since
@@ -29767,6 +29509,7 @@ emitBreakFrees: function {
 # does not take the exit still owes them. An exit the checker recorded nothing
 # for (ctx.exitNode 0) is refused.
 emitContinueFrees: function {
+    ast: Ast.view
     reg: ztypes.ZTypeRegistry.view
     typing: ztyping.ZTyping.view
     ctx: Ctx
@@ -29782,36 +29525,24 @@ emitContinueFrees: function {
         what: "an exit whose destroys the checker did not record".string
         line: 0
     )
-    fMark: (ctx.loops.get i: idx).freesMark
     lMark: (ctx.loops.get i: idx).listMark
     i: tmp.listFrees.length
     for i > lMark loop {
         i = i - 1
-        st: tmp.listFrees.get :i
-        if st.spent.not when allRows or st.vid.isZero then buf.append st.stmt
+        buf.append (tmp.listFrees.get :i).stmt
     }
-    j: tmp.frees.length
-    for j > fMark loop {
-        j = j - 1
-        nm: tmp.frees.get i: j
-        preludeNeed :ctx memb: "@String_free"
-        if nm.spent.not when (
-            allRows or nm.vid.isZero
-        ) then buf.append "\{ind}\{ctx.strC}_free(&\{nm.name});\n"
-    }
-    if allRows.not then emitExitDestroy :reg :typing :ctx :tmp :ind :buf
+    if allRows.not then emitExitDestroy :ast :reg :typing :ctx :ind :buf
 }
 
 # emitExitDestroy -- what the checker recorded the exit being emitted
-# (ctx.exitNode) destroys (exitDestroy), in its order: each local by the
-# destroy its binding registered, which stays owed -- the path that does not
-# take the exit destroys it too -- and a local that registered none by its
-# type (emitUnownedDestroy). A local moved on every path here is skipped.
+# (ctx.exitNode) destroys (exitDestroy), in its order, each local by its
+# variable (emitLocalDestroy); the path that does not take the exit destroys
+# it too. A local moved on every path here is skipped.
 emitExitDestroy: function {
+    ast: Ast.view
     reg: ztypes.ZTypeRegistry.view
     typing: ztyping.ZTyping.view
     ctx: Ctx
-    tmp: TmpCtr.view
     ind: StringView
     buf: String.borrow
 } is {
@@ -29822,44 +29553,8 @@ emitExitDestroy: function {
         it: typing.destroyItems.get i: rg.start.u64 + k
         k = k + 1
         if it.state == 1 then continue
-        emitExitItem :reg :typing :ctx :tmp vid: it.vid :ind :buf
+        emitLocalDestroy :ast :reg :typing :ctx vid: it.vid :ind :buf
     }
-}
-
-# emitExitItem -- the destroy an exit owes the local `vid`: the unspent row its
-# binding registered, newest first, unless the local names another's storage
-# (ctx.aliases); by its type when its binding registered none.
-emitExitItem: function {
-    reg: ztypes.ZTypeRegistry.view
-    typing: ztyping.ZTyping.view
-    ctx: Ctx
-    tmp: TmpCtr.view
-    vid: ztypes.vid
-    ind: StringView
-    buf: String.borrow
-} is {
-    i: tmp.listFrees.length
-    for i > 0 loop {
-        i = i - 1
-        lf: tmp.listFrees.get :i
-        if lf.vid == vid when lf.spent.not then {
-            if (vvHas xs: ctx.aliases :vid).not then buf.append lf.stmt
-            return
-        }
-    }
-    j: tmp.frees.length
-    for j > 0 loop {
-        j = j - 1
-        ff: tmp.frees.get i: j
-        if ff.vid == vid when ff.spent.not then {
-            if (vvHas xs: ctx.aliases :vid).not then {
-                preludeNeed :ctx memb: "@String_free"
-                buf.append "\{ind}\{ctx.strC}_free(&\{ff.name});\n"
-            }
-            return
-        }
-    }
-    emitUnownedDestroy :reg :typing :ctx :vid :ind :buf
 }
 
 # seedUnionArmAlias -- narrow match subject `sname` to union `vtid`'s arm `arm`:
@@ -30021,12 +29716,11 @@ emitMatchClause: function {
                 :buf
             )
         } else {
-            fL: tmp.frees.length
             lL: tmp.listFrees.length
             cst: ast.nodes.get i: c.statement
             emitBodyNode :ast :reg :typing :ctx n: cst ind: bodyInd.stringView :tmp :buf
             dv = blockDiverges :ast :reg :typing :ctx n: cst
-            closeScopeBlock :reg :typing :ctx :tmp :fL :lL diverged: dv node: c.nodeid :buf
+            closeScopeBlock :ast :reg :typing :ctx :tmp :lL diverged: dv node: c.nodeid :buf
         }
         if didSeed then {
             (
@@ -30084,11 +29778,10 @@ emitMatchElse: function {
                 :buf
             )
         } else {
-            fLe: tmp.frees.length
             lLe: tmp.listFrees.length
             emitBodyNode :ast :reg :typing :ctx n: o ind: bodyInd.stringView :tmp :buf
             dv8 = blockDiverges :ast :reg :typing :ctx n: o
-            closeScopeBlock :reg :typing :ctx :tmp fL: fLe lL: lLe diverged: dv8 node: oId :buf
+            closeScopeBlock :ast :reg :typing :ctx :tmp lL: lLe diverged: dv8 node: oId :buf
         }
         if dv8.not then {
             l8: "\{ind}    break;\n"
@@ -30195,13 +29888,11 @@ emitDoBindValue: function {
     ctx: Ctx
     n: astnode.view
     nm: StringView
-    nmVid: ztypes.vid
     ct: StringView
     tid: ztypes.tid
     ind: StringView
     tmp: TmpCtr
     buf: String.borrow
-    owes: bool
 } out bool is {
     match (
         n
@@ -30233,13 +29924,6 @@ emitDoBindValue: function {
             if boxedC.length > 0 then {
                 l0b: "\{ind}\{nm}.data = NULL;\n"
                 buf.append l0b
-                ldc: destroyLineC :reg :typing :ctx :tid :nm ind: "    "
-                if owes when ldc.length > 0 then (
-                    tmp.oweList
-                    stmt: ldc.take
-                    name: nm.string
-                    vid: nmVid
-                )
             }
             l1: "\{ind}do {\n"
             buf.append l1
@@ -30248,7 +29932,6 @@ emitDoBindValue: function {
             # block's owned temps (since these marks) and lands after the
             # block, not on an enclosing loop's label
             doId: pushLoopLabel :ctx :tmp isDo: true postTest: false
-            fLd: tmp.frees.length
             lLd: tmp.listFrees.length
             (
                 emitBranchAssignOptional
@@ -30266,19 +29949,14 @@ emitDoBindValue: function {
                 :buf
             )
             dvO: blockDiverges :ast :reg :typing :ctx n: (ast.nodes.get i: n.statement)
-            closeScopeBlock :reg :typing :ctx :tmp fL: fLd lL: lLd diverged: dvO node: n.nodeid :buf
+            closeScopeBlock :ast :reg :typing :ctx :tmp lL: lLd diverged: dvO node: n.nodeid :buf
             l2: "\{ind}} while (0);\n"
             buf.append l2
             popLoopLabel :ctx id: doId :ind :buf
         } else {
-            # an owned destructible block value is destroyed at scope exit
-            # (the binding path returns before its own registration).
-            pldf: hoistDestroyLine :reg :typing :ctx :tid :nm
-            if owes when pldf.length > 0 then tmp.oweList stmt: pldf.copy name: nm.string vid: nmVid
             l3: "\{ind}{\n"
             buf.append l3
             innerInd: "\{ind}    "
-            fLe: tmp.frees.length
             lLe: tmp.listFrees.length
             (
                 emitBranchAssign
@@ -30293,7 +29971,7 @@ emitDoBindValue: function {
                 :tmp
                 :buf
             )
-            flushBlockFrees :ctx :tmp fL: fLe lL: lLe diverged: false :buf
+            flushBlockFrees :tmp lL: lLe diverged: false :buf
             l4: "\{ind}}\n"
             buf.append l4
         }
@@ -30728,7 +30406,7 @@ emitObjIterRecv: function {
         noteDestroyUse :reg :typing :ctx tid: itid
         gdt: "    \{itCb}_destroy(&_git\{mN});\n"
         gdn: "_git\{mN}"
-        tmp.oweList stmt: gdt name: gdn vid: ztypes.vid.zero
+        tmp.oweList stmt: gdt name: gdn
     }
     return iterRecv
 }
@@ -31072,7 +30750,6 @@ emitOptionLoopTail: function {
         :payTid
     )
     bodyInd: "\{ind}    "
-    fLO: tmp.frees.length
     lLO: tmp.listFrees.length
     # the arms are tested AFTER the payload binds, so one may read the loop
     # variable; the iterator has already advanced, which is the order the
@@ -31095,7 +30772,7 @@ emitOptionLoopTail: function {
         l3od: "\{ind}    \{payCleanup}"
         buf.append l3od
     }
-    closeScopeBlock :reg :typing :ctx :tmp fL: fLO lL: lLO diverged: dvG node: m.body :buf
+    closeScopeBlock :ast :reg :typing :ctx :tmp lL: lLO diverged: dvG node: m.body :buf
     indO: "\{ind}    "
     emitContLabel :ctx id: lidO ind: indO.stringView :buf
     emitPostTest :ast :reg :typing :ctx :m cleanup: payCleanup ind: indO.stringView :tmp :buf
@@ -31195,12 +30872,11 @@ emitPlainBindingFor: function {
     payCleanup: objIterPayCleanup :reg :typing :ctx :ovid lbl: lbl.stringView :lblV
     buf.append "\{ind}while (1) {\n"
     bodyInd: "\{ind}    "
-    fL: tmp.frees.length
     lL: tmp.listFrees.length
     ev: emitExpr :ast :reg :typing :ctx n: opN
     flushArgHoists :ctx ind: bodyInd.stringView :tmp :buf
     buf.append "\{bodyInd}\{ovc}_t _iter\{mN} = \{ev};\n"
-    flushBlockFrees :ctx :tmp :fL :lL diverged: false :buf
+    flushBlockFrees :tmp :lL diverged: false :buf
     emitValueTakeInvalidations :ast :reg :typing :ctx n: opN ind: bodyInd.stringView :buf
     (
         emitOptionLoopTail
@@ -31422,7 +31098,6 @@ emitCountedRangeFor: function {
     # `_ah` temp, an owned local -- is declared per iteration and has to be
     # freed per iteration. Without the mark those frees stayed pending and
     # landed after the loop, naming a temp that had left C scope.
-    fLR: tmp.frees.length
     lLR: tmp.listFrees.length
     dvR: false
     if m.body.isZero.not then {
@@ -31430,7 +31105,7 @@ emitCountedRangeFor: function {
         emitBodyNode :ast :reg :typing :ctx n: bodyNode ind: bodyInd.stringView :tmp :buf
         dvR = blockDiverges :ast :reg :typing :ctx n: bodyNode
     }
-    closeScopeBlock :reg :typing :ctx :tmp fL: fLR lL: lLR diverged: dvR node: m.body :buf
+    closeScopeBlock :ast :reg :typing :ctx :tmp lL: lLR diverged: dvR node: m.body :buf
     emitContLabel :ctx id: lidR ind: bodyInd.stringView :buf
     emitPostTest :ast :reg :typing :ctx :m cleanup: "" ind: bodyInd.stringView :tmp :buf
     lc: "\{ind}}\n"
@@ -31566,7 +31241,6 @@ emitClosedRangeFor: function {
         armX: forArmCond :ast :reg :typing :ctx n: m
         flushArgHoists :ctx ind: bodyInd.stringView :tmp :buf
         emitForArmBreak armc: armX.stringView ind: bodyInd.stringView :buf
-        fLR: tmp.frees.length
         lLR: tmp.listFrees.length
         dvR: false
         if m.body.isZero.not then {
@@ -31574,7 +31248,7 @@ emitClosedRangeFor: function {
             emitBodyNode :ast :reg :typing :ctx n: bodyNode ind: bodyInd.stringView :tmp :buf
             dvR = blockDiverges :ast :reg :typing :ctx n: bodyNode
         }
-        closeScopeBlock :reg :typing :ctx :tmp fL: fLR lL: lLR diverged: dvR node: m.body :buf
+        closeScopeBlock :ast :reg :typing :ctx :tmp lL: lLR diverged: dvR node: m.body :buf
         emitContLabel :ctx id: lidR ind: bodyInd.stringView :buf
         emitPostTest :ast :reg :typing :ctx :m cleanup: "" ind: bodyInd.stringView :tmp :buf
         lc: "\{ind}}\n"
@@ -33116,12 +32790,11 @@ emitSteppedConjunct: function {
     ct: String
     appendCondText :ast :reg :typing :ctx :kId cond: ct
     if ct.length == 0 then ct.append "1"
-    fL: tmp.frees.length
     lL: tmp.listFrees.length
     flushArgHoists :ctx :ind :tmp :buf
     cw: condInParens cond: ct.stringView
     buf.append "\{ind}\{gvar} = \{cw} ? 1 : 0;\n"
-    flushBlockFrees :ctx :tmp :fL :lL diverged: false :buf
+    flushBlockFrees :tmp :lL diverged: false :buf
     condNode: ast.nodes.get i: kId
     emitValueTakeInvalidations :ast :reg :typing :ctx n: condNode :ind :buf
 }
@@ -33352,11 +33025,10 @@ emitPlainIfHead: function {
     buf.append "\{ind}} else {\n"
     indN: "\{ind}    "
     gv: newCondGuard :ctx ind: indN.stringView :buf
-    fL: tmp.frees.length
     lL: tmp.listFrees.length
     flushArgHoists :ctx ind: indN.stringView :tmp :buf
     buf.append "\{indN}\{gv} = \{cw} ? 1 : 0;\n"
-    flushBlockFrees :ctx :tmp :fL :lL diverged: false :buf
+    flushBlockFrees :tmp :lL diverged: false :buf
     buf.append "\{indN}if (\{gv}) {\n"
     return 1
 }
@@ -33481,11 +33153,10 @@ emitIfClause: function {
                 :buf
             )
         } else {
-            fLi: tmp.frees.length
             lLi: tmp.listFrees.length
             emitBodyNode :ast :reg :typing :ctx n: cst ind: bodyInd.stringView :tmp :buf
             dvF: blockDiverges :ast :reg :typing :ctx n: cst
-            closeScopeBlock :reg :typing :ctx :tmp fL: fLi lL: lLi diverged: dvF node: n.nodeid :buf
+            closeScopeBlock :ast :reg :typing :ctx :tmp lL: lLi diverged: dvF node: n.nodeid :buf
         }
         restoreNarrowSeeds :ctx svids: sVid prevV: sPrevV prevF: sPrevF prevT: sPrevT
         restoreCondExclusions :ctx mark: xMark
@@ -33716,11 +33387,10 @@ emitElse: function {
             :buf
         )
     } else {
-        fLe: tmp.frees.length
         lLe: tmp.listFrees.length
         emitBodyNode :ast :reg :typing :ctx n: o ind: bodyInd.stringView :tmp :buf
         dvF: blockDiverges :ast :reg :typing :ctx n: o
-        closeScopeBlock :reg :typing :ctx :tmp fL: fLe lL: lLe diverged: dvF node: oId :buf
+        closeScopeBlock :ast :reg :typing :ctx :tmp lL: lLe diverged: dvF node: oId :buf
     }
     restoreNarrowSeeds :ctx svids: sVid prevV: sPrevV prevF: sPrevF prevT: sPrevT
     restoreCondExclusions :ctx mark: xMark
@@ -33826,7 +33496,7 @@ emitPlainReturn: function {
     )
     flushArgHoists :ctx :ind :tmp :buf
     cleanup: String
-    emitReturnCleanup :reg :typing :ctx :tmp :ind buf: cleanup
+    emitReturnCleanup :ast :reg :typing :ctx :tmp :ind buf: cleanup
     rtid: stampIdOf :typing nid: (interpPartNodeId n: (ast.nodes.get i: vid))
     # an implementer returned as the spec is its box, of the spec's type
     so: typing.standInOf.get key: vid
@@ -33938,14 +33608,14 @@ emitReturnOfNode: function {
             flushArgHoists :ctx :ind :tmp :buf
             buf.append "\{ind}(void)(\{nre});\n"
         }
-        emitReturnCleanup :reg :typing :ctx :tmp :ind :buf
+        emitReturnCleanup :ast :reg :typing :ctx :tmp :ind :buf
         buf.append "\{ind}return;\n"
         return
     }
     bx: emitOptionBoxHoist :ast :reg :typing :ctx n: (ast.nodes.get i: vid) :ind :tmp :buf
     if bx.length > 0 then {
         emitValueTakeInvalidations :ast :reg :typing :ctx n: (ast.nodes.get i: vid) :ind :buf
-        emitReturnCleanup :reg :typing :ctx :tmp :ind :buf
+        emitReturnCleanup :ast :reg :typing :ctx :tmp :ind :buf
         buf.append "\{ind}return \{bx};\n"
         return
     }
@@ -34025,7 +33695,7 @@ emitTailValue: function {
     )
     if bound.not then return false
     cl: String
-    emitReturnCleanup :reg :typing :ctx :tmp :ind buf: cl
+    emitReturnCleanup :ast :reg :typing :ctx :tmp :ind buf: cl
     buf.append cl
     buf.append "\{ind}return \{nm};\n"
     return true
@@ -34059,13 +33729,11 @@ emitControlBindValue: function {
         :ctx
         n: vn
         :nm
-        nmVid: ztypes.vid
         :ct
         tid: rtid
         :ind
         :tmp
         :buf
-        owes: false
     ) then return true
     if (forexprValue n: vn).not then return false
     lcb: spelledCname :ctx tid: rtid
@@ -34210,7 +33878,6 @@ emitBranchAssign: function {
     ) case statement then {
         # a local the branch declares is freed at the branch's end, where it is
         # still in C scope
-        fL: tmp.frees.length
         lL: tmp.listFrees.length
         cnt: n.statements.count.u64
         si: u64
@@ -34229,15 +33896,14 @@ emitBranchAssign: function {
                 :typing
                 :ctx
                 lineId: lastId
+                :scope
                 :target
-                :fL
-                :lL
                 :ind
                 :tmp
                 :buf
             )
         }
-        closeScopeBlock :reg :typing :ctx :tmp :fL :lL diverged: dv node: scope :buf
+        closeScopeBlock :ast :reg :typing :ctx :tmp :lL diverged: dv node: scope :buf
     } else {
         if (matchDiverges :reg :typing nid: (zast.nodeIdOf :n)) then {
             emitStmt :ast :reg :typing :ctx :n :ind :tmp :buf
@@ -34247,13 +33913,12 @@ emitBranchAssign: function {
         vx2: emitExprWith :ast :reg :typing :ctx :n facts: vx2F
         # an argument the value hoisted is declared in the arm, which runs it
         # only when selected, and freed at the arm's end
-        freesMark: tmp.frees.length
         listFreesMark: tmp.listFrees.length
         flushArgHoists :ctx :ind :tmp :buf
         appendArmAssign :ast :reg :typing :ctx :n :target vx: vx2.stringView vxF: vx2F :ind :buf
         emitArmTakeZero :ast :reg :typing :ctx :n rv: vx2.stringView :ind :buf
         emitValueTakeInvalidations :ast :reg :typing :ctx :n :ind :buf
-        flushBlockFrees :ctx :tmp fL: freesMark lL: listFreesMark diverged: false :buf
+        flushBlockFrees :tmp lL: listFreesMark diverged: false :buf
     }
 }
 
@@ -34266,10 +33931,9 @@ emitBranchLastAssign: function {
     typing: ztyping.ZTyping.view
     ctx: Ctx
     lineId: zast.nodeid
+    # the checker scope the branch is
+    scope: zast.nodeid
     target: StringView
-    # the branch's frees as it began, which a moved local is looked for past
-    fL: u64
-    lL: u64
     ind: StringView
     tmp: TmpCtr
     buf: String.borrow
@@ -34289,7 +33953,48 @@ emitBranchLastAssign: function {
     appendArmAssign :ast :reg :typing :ctx n: sx :target vx: vx.stringView :vxF :ind :buf
     emitArmTakeZero :ast :reg :typing :ctx n: sx rv: vx.stringView :ind :buf
     emitValueTakeInvalidations :ast :reg :typing :ctx n: sx :ind :buf
-    zeroBranchLocalMove :ast :reg :typing :ctx line: sx :fL :lL :ind :tmp :buf
+    zeroBranchOwnLocal :ast :reg :typing :ctx line: sx :scope :ind :buf
+    return false
+}
+
+# zeroBranchOwnLocal -- a branch's value that is a bare local the branch's own
+# scope destroys at its end (scopeEndDestroys) moved into the target: the
+# local is zeroed, so that destroy frees nothing.
+zeroBranchOwnLocal: function {
+    ast: Ast.view
+    reg: ztypes.ZTypeRegistry.view
+    typing: ztyping.ZTyping.view
+    ctx: Ctx
+    line: astnode.view
+    scope: zast.nodeid
+    ind: StringView
+    buf: String.borrow
+} is {
+    if line.statementline.not then return
+    vn: ast.nodes.get i: line.statementline
+    if (isBareNameValue n: vn).not then return
+    vid: atomVid :typing nid: (interpPartNodeId n: vn)
+    if (scopeEndDestroys :typing node: scope :vid).not then return
+    src: implicitTakeSource :ast :reg :typing :ctx n: vn
+    if src.length == 0 then return
+    mz: movedZeroC :reg :typing :ctx tid: (stampIdOf :typing nid: (zast.nodeIdOf n: vn))
+    if mz.length > 0 then buf.append "\{ind}\{src} = \{mz};\n"
+}
+
+# scopeEndDestroys -- the end of checker scope `node` destroys the local `vid`:
+# its list names it, not as moved on every path.
+scopeEndDestroys: function {
+    typing: ztyping.ZTyping.view node: zast.nodeid vid: ztypes.vid
+} out bool is {
+    if vid.isZero then return false
+    rg: typing.scopeDestroy.get key: node
+    if rg.none then return false
+    k: u64
+    for k < rg.len loop {
+        it: typing.destroyItems.get i: rg.start.u64 + k
+        k = k + 1
+        if it.vid == vid when it.state != 1 then return true
+    }
     return false
 }
 
@@ -34319,43 +34024,6 @@ emitNestedMatchAssign: function {
     } else {
         return false
     }
-}
-
-# zeroBranchLocalMove -- a branch's value that is a local the branch itself
-# declared moves into the target: the local is zeroed so the free the branch
-# end owes it no-ops.
-zeroBranchLocalMove: function {
-    ast: Ast.view
-    reg: ztypes.ZTypeRegistry.view
-    typing: ztyping.ZTyping.view
-    ctx: Ctx
-    line: astnode.view
-    fL: u64
-    lL: u64
-    ind: StringView
-    tmp: TmpCtr
-    buf: String.borrow
-} is {
-    # a branch that declared nothing owed is the common case, and asks nothing
-    if tmp.frees.length == fL when tmp.listFrees.length == lL then return
-    if line.statementline.not then return
-    vn: ast.nodes.get i: line.statementline
-    src: implicitTakeSource :ast :reg :typing :ctx n: vn
-    if src.length == 0 then return
-    owed: false
-    fi: fL
-    for fi < tmp.frees.length loop {
-        if (tmp.frees.get i: fi).name.stringView == src then owed = true
-        fi = fi + 1
-    }
-    li: lL
-    for li < tmp.listFrees.length loop {
-        if (tmp.listFrees.get i: li).name.stringView == src then owed = true
-        li = li + 1
-    }
-    if owed.not then return
-    mz: movedZeroC :reg :typing :ctx tid: (stampIdOf :typing nid: (zast.nodeIdOf n: vn))
-    if mz.length > 0 then buf.append "\{ind}\{src} = \{mz};\n"
 }
 
 # postGuardStmtId -- the node id of a guarding if/match statement that
@@ -38478,31 +38146,28 @@ isIdChar: function {b: u8} out bool is {
     )
 }
 
-# isRegisteredOwned -- true if `name` is a registered owned local (a String in
-# tmp.frees or a collection/class in tmp.listFrees). Decides whether a value
-# moved into an inline construction must be zeroed so its scope-cleanup destructor
-# becomes a no-op.
-isRegisteredOwned: function {tmp: TmpCtr.view name: StringView} out bool is {
-    fit: tmp.frees.iterate
-    for fv: fit loop {
-        if fv.name.stringView == name then return true
-    }
-    vit: tmp.listFrees.iterate
-    for vv: vit loop {
-        if vv.name.stringView == name then return true
-    }
-    return false
+# boxedLocalNeedsZero -- the value at `nid`, moved into an option's box, is a
+# bare local of the checker's that a destroy still reaches
+# (movedSourceNeedsZero): it is zeroed, so that destroy frees nothing.
+boxedLocalNeedsZero: function {
+    ast: Ast.view typing: ztyping.ZTyping.view nid: zast.nodeid
+} out bool is {
+    if nid.isZero then return false
+    n: ast.nodes.get i: nid
+    if (isBareNameValue :n).not then return false
+    if (atomVid :typing nid: (interpPartNodeId :n)).isZero then return false
+    return (movedSourceNeedsZero :ast :typing :n)
 }
 
 # emitReturnCleanup -- the destroys owed BEFORE a return, on the diverging path
 # the function-end destroys never reach: the emitter's own temporaries
 # registered in the function, then the locals the checker recorded the return
 # destroys (emitExitDestroy), then every enclosing loop's payload. Does NOT pop
-# (other returns and the end still owe them). Skips a non-owning alias
-# (`ctx.aliases`). A return the
-# checker recorded nothing for (ctx.exitNode 0) is refused: a local it moved
-# is zeroed only where the checker says a path still destroys it.
+# (other returns and the end still owe them). A return the checker recorded
+# nothing for (ctx.exitNode 0) is refused: a local it moved is zeroed only
+# where the checker says a path still destroys it.
 emitReturnCleanup: function {
+    ast: Ast.view
     reg: ztypes.ZTypeRegistry.view
     typing: ztyping.ZTyping.view
     ctx: Ctx
@@ -38517,26 +38182,8 @@ emitReturnCleanup: function {
         what: "a return whose destroys the checker did not record".string
         line: 0
     )
-    fRi: u64
-    for fRi < tmp.frees.length loop {
-        fvR: tmp.frees.get i: fRi
-        fRi = fRi + 1
-        keepF: (fvR.spent or (vvHas xs: ctx.aliases vid: fvR.vid)).not
-        if keepF when allRows or fvR.vid.isZero then {
-            preludeNeed :ctx memb: "@String_free"
-            lfR: "\{ind}\{ctx.strC}_free(&\{fvR.name});\n"
-            buf.append lfR
-        }
-    }
-    li: u64
-    nL: tmp.listFrees.length
-    for li < nL loop {
-        owed: tmp.listFrees.get i: li
-        keepL: (owed.spent or (vvHas xs: ctx.aliases vid: owed.vid)).not
-        if keepL when allRows or owed.vid.isZero then buf.append owed.stmt
-        li = li + 1
-    }
-    if allRows.not then emitExitDestroy :reg :typing :ctx :tmp :ind :buf
+    for each owed: tmp.listFrees loop buf.append owed.stmt
+    if allRows.not then emitExitDestroy :ast :reg :typing :ctx :ind :buf
     # a return exits every enclosing loop: emit each owned-payload loop's
     # per-iteration cleanup (empty for plain loops and do entries), unless
     # the payload is a non-owning alias.
@@ -38549,67 +38196,6 @@ emitReturnCleanup: function {
             buf.append lcr
         }
         ci = ci + 1
-    }
-}
-
-# takeParamDestroyTid -- the type whose destructor an owned `.take` parameter
-# owes at function exit, zero when it owes none. A Set or a Map owes one like
-# any other owned parameter: it arrives as the heap pointer it is, and
-# destroyOperand spells the call for that. (It was skipped while such a
-# parameter was declared BY VALUE, which no destructor fits -- the declaration
-# is the pointer now, so the skip would leak what the callee took.) A
-# collection typedef destroys as its chased mono; a type with no destructor
-# of its own may still have a canonical one that has.
-takeParamDestroyTid: function {
-    reg: ztypes.ZTypeRegistry.view
-    typing: ztyping.ZTyping.view
-    ctx: Ctx
-    ppid: ztypes.tid
-} out ztypes.tid is {
-    pt: ppid
-    puse: chaseAggregateTypedef :reg :typing :ctx tid: pt
-    if (ownsResources :reg :ctx tid: puse).not then {
-        prbn: canonTypeId :reg :typing tid: pt
-        if prbn.isZero.not then puse = prbn
-    }
-    if (ownsResources :reg :ctx tid: puse).not then return ztypes.tid
-    return puse
-}
-
-# oweTakeParamFrees -- every owned `.take` parameter is freed at function
-# exit: a String by its free, a destructor-bearing value by its destructor.
-oweTakeParamFrees: function {
-    ast: Ast.view
-    reg: ztypes.ZTypeRegistry.view
-    typing: ztyping.ZTyping.view
-    ctx: Ctx
-    # the function definition
-    op: zast.functionrow.view
-    fid: ztypes.tid
-    tmp: TmpCtr
-} is {
-    pids: ListVal ztypes.tid
-    paramNameIds: ListVal zast.nameid
-    recFieldIds :reg :typing tid: fid ids: pids nameIds: paramNameIds
-    pj: u64
-    pn: paramNameIds.length
-    for pj < pn loop {
-        ppnId: paramNameIds.get i: pj
-        ppid: pids.get i: pj
-        pj = pj + 1
-        if (paramTakesArg :typing :fid pnameId: ppnId) then {
-            pmnB: paramVidIn :ast :typing params: op.parameters nameId: ppnId
-            pmn: varCName :ctx :ast :reg vid: pmnB
-            if ppid == ctx.strTid then {
-                tmp.oweFree name: pmn.copy vid: pmnB
-            } else {
-                puse: takeParamDestroyTid :reg :typing :ctx :ppid
-                if puse.isZero.not then {
-                    pdc: destroyLineC :reg :typing :ctx tid: puse nm: pmn.stringView ind: "    "
-                    tmp.oweList stmt: pdc.take name: pmn.copy vid: pmnB
-                }
-            }
-        }
     }
 }
 
@@ -38626,7 +38212,7 @@ emitFnBody: function {
     rbt: fnReturnTidOf :reg tid: fid
     ctx.refBorrowRet = fnReturnsRefBorrow :reg :typing :ctx :fid retTid: rbt
     if op.functiondef.not then return
-    tmp: TmpCtr n: 0 frees: List OwedFree listFrees: List OwedFree
+    tmp: TmpCtr n: 0 listFrees: List OwedFree
     # temp numbers are the function's: a body emitted while another is under
     # way counts from zero and hands the outer one's count back
     outerTmpHigh: ctx.tmpHigh
@@ -38635,7 +38221,6 @@ emitFnBody: function {
     ctx.orderCtr = 0
     outerReturned: ctx.returnEmitted
     ctx.returnEmitted = false
-    oweTakeParamFrees :ast :reg :typing :ctx :op :fid :tmp
     pcx: u64
     for pcx < op.parameters.count loop {
         pcm: ast.nodes.get i: (zast.kidAt kids: ast.kids span: op.parameters i: pcx)
@@ -38648,7 +38233,6 @@ emitFnBody: function {
             :ctx
             vid: (paramVidIn :ast :typing params: op.parameters nameId: pcm.name)
             ind: "    "
-            :tmp
             :buf
         )
     }
@@ -38669,14 +38253,14 @@ emitFnBody: function {
     # a body that diverges on every path never reaches this flush; the
     # return/break cleanups already freed the same locals on those paths
     if endsRet then return
-    emitBodyEndFrees :reg :typing :ctx :tmp node: op.nodeid :buf
+    emitBodyEndFrees :ast :reg :typing :ctx :tmp node: op.nodeid :buf
 }
 
 # emitBodyEndFrees -- what a function body's fall-through end frees: the
 # emitter's own temporaries, then the locals the checker recorded the body's end
-# destroys (emitScopeDestroy), then a local registered here that a construct not
-# yet reading the checker's lists owns, freed as the body always freed it.
+# destroys (emitScopeDestroy).
 emitBodyEndFrees: function {
+    ast: Ast.view
     reg: ztypes.ZTypeRegistry.view
     typing: ztyping.ZTyping.view
     ctx: Ctx
@@ -38684,22 +38268,8 @@ emitBodyEndFrees: function {
     node: zast.nodeid
     buf: String.borrow
 } is {
-    emitOwedRows :ctx :tmp temps: true :buf
-    emitScopeDestroy :reg :typing :ctx :tmp :node ind: "    " :buf
-}
-
-# emitOwedRows -- the rows still owed, in registration order: the emitter's own
-# temporaries (`temps`) or the locals, and never one already spent.
-emitOwedRows: function {ctx: Ctx tmp: TmpCtr.view temps: bool buf: String.borrow} is {
-    for each fv: tmp.frees loop {
-        preludeNeed :ctx memb: "@String_free"
-        if (
-            fv.vid.isZero == temps
-        ) when fv.spent.not then buf.append "    \{ctx.strC}_free(&\{fv.name});\n"
-    }
-    for each lfs: tmp.listFrees loop {
-        if lfs.vid.isZero == temps when lfs.spent.not then buf.append lfs.stmt
-    }
+    for each owed: tmp.listFrees loop buf.append owed.stmt
+    emitScopeDestroy :ast :reg :typing :ctx :node ind: "    " :buf
 }
 
 # collectUnitLiterals -- pool the plain literals of every main-unit
@@ -52564,7 +52134,7 @@ emitYieldStmt: function {
     if ve.length == 0 then ve = emitExprWith :ast :reg :typing :ctx n: yx facts: veF
     # what the value hoisted is declared ahead of it and released once the value
     # is in the box, before the suspension
-    ytmp: TmpCtr n: 0 frees: List OwedFree listFrees: List OwedFree
+    ytmp: TmpCtr n: 0 listFrees: List OwedFree
     flushArgHoists :ctx :ind tmp: ytmp :buf
     stI: genSynthField :typing :ctx which: gensynth.state k: 0
     stC: genFieldC :ast :reg :typing :ctx nameId: stI
@@ -52588,7 +52158,7 @@ emitYieldStmt: function {
         :ind
         :buf
     )
-    flushBlockFrees :ctx tmp: ytmp fL: 0 lL: 0 diverged: false :buf
+    flushBlockFrees tmp: ytmp lL: 0 diverged: false :buf
     # what the value moved out of is zeroed before the suspension returns
     emitValueTakeInvalidations :ast :reg :typing :ctx n: yx :ind :buf
     # a boxed yield MOVES an lvalue operand (a local the instance keeps):
