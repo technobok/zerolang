@@ -2913,8 +2913,8 @@ isLabelValue: function {op: astnode.view} out bool is {
 # atom, a `:name` argument (`name: name`), and the base of a dotted path. The
 # selector after a dot names a member, not something in scope, and a match
 # arm's payload binding is a name bound, not read; every other node is walked
-# through its children (zast.childIds). The implementer-context gate asks it of
-# `main`'s body once per unit, and checkTypedefShape of a typedef's base.
+# through its children (zast.childIds). checkTypedefShape asks it for the names
+# a typedef's base reads.
 collectMentions: function {ast: Ast.view n: astnode.view into: (IdSet zast.nameid).borrow} is {
     match (
         n
@@ -2930,41 +2930,6 @@ collectMentions: function {ast: Ast.view n: astnode.view into: (IdSet zast.namei
         kids: zast.childIds :ast :n
         for each k: kids loop {
             collectMentions :ast n: (ast.nodes.get i: k) :into
-        }
-    }
-}
-
-# recordImplementerContexts -- pre-record each as-block marker target's first
-# implementing type (body order) so a demand-resolved protocol binds its spec
-# receiver to the implementer, whatever order the two resolve in.
-recordImplementerContexts: function {
-    ast: Ast.view
-    st: zenv.ZSymbolTable
-    unitDecl: ztypes.declid
-    dk0: zast.nameid
-    op: astnode.view
-} is {
-    if op.objectdef then {
-        i: u64
-        for i < op.asItems.count loop {
-            amId: zast.kidAt kids: ast.kids span: op.asItems :i
-            i = i + 1
-            am: ast.nodes.get i: amId
-            if am.namedoperation then {
-                cn: zast.nameTextAt :ast ref: (atomNameId :ast n: (ast.nodes.get i: am.operation))
-                skipIt: (cn.length == 0) or (isNumericLiteralName name: cn.stringView)
-                if skipIt.not then {
-                    ro8: unitDecl
-                    if ro8.isZero.not then {
-                        md: (
-                            st.typing.declFindChild
-                            parentDeclId: ro8
-                            nameId: (zast.poolFind pool: ast.names text: cn.stringView)
-                        )
-                        st.typing.declSetImplementer declId: md nameId: dk0
-                    }
-                }
-            }
         }
     }
 }
@@ -19632,66 +19597,6 @@ registerUnitGenericParams: function {
 }
 
 
-# recordUnitImplementerContexts -- record, for each of this unit's definitions
-# that its own `main` names, the implementer its as-block markers bind their spec
-# `this` to. A spec receiver binds only when the implementer's resolution triggers
-# the protocol's; a main body that never names the implementer resolves the
-# protocol context-free (e.g. through a function signature). A property of the
-# unit's own declarations, not of whether its body is walked eagerly -- so it
-# runs for every unit. A unit with no `main` of its own has nothing to record.
-recordUnitImplementerContexts: function {
-    st: zenv.ZSymbolTable
-    ast: Ast.view
-    unitDecl: ztypes.declid
-    unitdefId: zast.nodeid
-} is {
-    bodyIds: zast.unitBodyIdsAt :ast unitId: unitdefId
-    mainOp: zast.nodeid
-    vx79: u64
-    for vx79 < bodyIds.count loop {
-        memberId: zast.kidAt kids: ast.kids span: bodyIds i: vx79
-        vx79 = vx79 + 1
-        if mainOp.isZero then {
-            memberNode: ast.nodes.get i: memberId
-            if memberNode.namedoperation when (
-                memberNode.name == zast.wellKnown.slot.wkMain
-            ) then mainOp = memberNode.operation
-        }
-    }
-    if mainOp.isZero then return
-    # the names main's body reads, collected once for every member to ask
-    mentioned: IdSet zast.nameid
-    mainFn: ast.nodes.get i: mainOp
-    match (
-        mainFn
-    ) case functiondef then {
-        if mainFn.body.isZero.not then (
-            collectMentions
-            :ast
-            n: (ast.nodes.get i: mainFn.body)
-            into: mentioned
-        )
-    } else null
-    uid: unitNameIdOf :st :unitDecl
-    cci: u64
-    for cci < bodyIds.count loop {
-        mem2Id: zast.kidAt kids: ast.kids span: bodyIds i: cci
-        cci = cci + 1
-        member: ast.nodes.get i: mem2Id
-        if member.namedoperation when (mentioned.has item: member.name) then {
-            memberUnit: unitDeclOfName typing: st.typing nameId: uid
-            (
-                recordImplementerContexts
-                :st
-                :ast
-                unitDecl: memberUnit
-                dk0: member.name
-                op: (ast.nodes.get i: member.operation)
-            )
-        }
-    }
-}
-
 # resolveUnitBody -- resolve every top-level definition signature in a unit.
 # resolveUnitBody -- resolve a unit's definition signatures. Signature-only
 # resolves every member; the full body-walk mode mirrors check()'s eager set
@@ -20006,17 +19911,8 @@ registerAndResolveMain: function {
                 nmId = mu.name
             }
             if opId.isZero.not then {
-                # what a unit's own `main` names about its implementers is a
-                # property of its declarations too, recorded for every unit:
-                # only the main unit's body is eagerly resolved.
                 unitOfName: unitDeclOfNameOrOwn :st :scope nameId: nmId
-                (
-                    recordUnitImplementerContexts
-                    :st
-                    ast: program
-                    unitDecl: unitOfName
-                    unitdefId: opId
-                )
+                # only the main unit's body is eagerly resolved
                 eager: unitOfName == unitDecl
                 if eager then {
                     # read before the call: `.not` is a receiver call on the
