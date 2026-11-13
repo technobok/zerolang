@@ -4218,9 +4218,19 @@ armInPlace: function {
     vxF: cfacts
     vx: armValueExpr :ast :reg :typing :ctx :n facts: vxF
     if (hoistsGrew :ctx mark: mk) then {
-        av: assignInPlace :ctx mark: mk text: vx.stringView
-        if ref.not or (av.length == 0) then return (stating :facts from: callFacts text: av)
-        return (armRefLeaf :ast :reg :typing :ctx :n text: av.stringView textF: callFacts :facts)
+        # the address is taken of the value itself, which may be a place; the
+        # hoists the value reads are assigned ahead of it
+        part: vx.copy
+        if ref when ctx.argHoistRaw.length == mk.raw then {
+            rfF: cfacts
+            part = armRefLeaf :ast :reg :typing :ctx :n text: vx.stringView textF: vxF facts: rfF
+        }
+        return (
+            stating
+            :facts
+            from: callFacts
+            text: (assignInPlace :ctx mark: mk text: part.stringView)
+        )
     }
     closeInPlace :ctx mark: mk
     if ref then return (armRefLeaf :ast :reg :typing :ctx :n text: vx.stringView textF: vxF :facts)
@@ -22466,7 +22476,7 @@ controlValueIsReference: function {
     isCtl: n.ifexpr or n.caseexpr or n.doexpr or n.withexpr
     if isCtl.not then return false
     nid: zast.nodeIdOf :n
-    vt: bindingStampOf :typing :nid
+    vt: bindingStampOf :typing nid: (controlValueStampNid :ast :reg :typing :n)
     if vt.isZero then return false
     owns: vt == ctx.strTid
     if owns.not then owns = isHeapPtrCollection :reg :typing :ctx tid: vt
@@ -22540,6 +22550,10 @@ armLeafIsPlace: function {
         return (controlValueIsReference :ast :reg :typing :ctx n: (ast.nodes.get i: n.nodeid))
     } case caseexpr then {
         return (controlValueIsReference :ast :reg :typing :ctx n: (ast.nodes.get i: n.nodeid))
+    } case doexpr then {
+        return (controlValueIsReference :ast :reg :typing :ctx n: (ast.nodes.get i: n.nodeid))
+    } case withexpr then {
+        return (controlValueIsReference :ast :reg :typing :ctx n: (ast.nodes.get i: n.nodeid))
     } else {
         if (armTakeLeaf :ast :typing :n).isZero.not then return false
         if (typing.armLeafMoves.has item: (zast.nodeIdOf :n)) then return false
@@ -22595,7 +22609,7 @@ emitControlRef: function {
         text: (unhandledExpr :ctx line: (ztypecheck.nodeLine :n))
     )
     # a Set or Map value already is the pointer to what it holds
-    vt: bindingStampOf :typing nid: (zast.nodeIdOf :n)
+    vt: bindingStampOf :typing nid: (controlValueStampNid :ast :reg :typing :n)
     if (isHeapPtrCollection :reg :typing :ctx tid: vt) then return (
         stating
         :facts
@@ -22716,7 +22730,7 @@ emitControlPtrExpr: function {
     n: astnode.view
 } out String is {
     nid: zast.nodeIdOf :n
-    vt: bindingStampOf :typing :nid
+    vt: bindingStampOf :typing nid: (controlValueStampNid :ast :reg :typing :n)
     ct: typeRefC :ast :reg :typing :ctx tid: vt
     if (ct.length == 0) or (ztypecheck.armLeaves :ast :n inLoop: false) then return "".string
     settleAhead :ast :reg :typing :ctx
@@ -26468,9 +26482,9 @@ emitReferenceBind: function {
     rv: emitExpr :ast :reg :typing :ctx n: avn
     flushArgHoists :ctx :ind :tmp :buf
     ctx.hoistsToBlock = prevBlock
-    vt: bindingStampOf :typing nid: (zast.nodeIdOf n: avn)
+    vt: bindingStampOf :typing nid: (controlValueStampNid :ast :reg :typing n: avn)
     if (isHeapPtrCollection :reg :typing :ctx tid: vt) then {
-        buf.append "\{ind}\{ct} \{nm} = \{rv};\n"
+        buf.append "\{ind}\{ct}* \{nm} = \{rv};\n"
         return true
     }
     buf.append "\{ind}\{ct}* __borrow_\{nm} = &\{rv};\n"

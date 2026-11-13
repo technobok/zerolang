@@ -1,0 +1,133 @@
+# A List, a Set or a Map bound from an `if`, a `match` or a `with` whose arm
+# reads storage something else owns -- a field, a local, what a method lends --
+# is a second name for that storage: a read sees the owner's elements, a write
+# through the name reaches the owner, and the owner alone frees it. An arm that
+# is a call lending a reference is such a read too, whatever it lends.
+Holder: class {
+    names: List String
+    tags: Set String
+    kv: (Map String V: String)
+    title: String
+} as {
+    lent: function {:this} outx (List String).borrow is {
+        return this.names
+    }
+    lentTitle: function {:this} outx String.borrow is {
+        return this.title
+    }
+}
+
+Mode: variant {
+    first: null
+    second: null
+}
+
+mk: function {tag: StringView} out Holder is {
+    h: (Holder names: (List String) tags: (Set String) kv: (Map String V: String) title: "\{tag}")
+    h.names.append from: "\{tag}-n"
+    h.tags.add item: "\{tag}-t"
+    h.kv.set key: "\{tag}-k" value: "\{tag}-v"
+    return h
+}
+
+withList: function {h: Holder} out u64 is {
+    r: with x: 1 do {
+        h.names
+    }
+    return r.length
+}
+
+withSet: function {h: Holder} out u64 is {
+    r: with x: 1 do {
+        h.tags
+    }
+    return r.length
+}
+
+withMap: function {h: Holder} out u64 is {
+    r: with x: 1 do {
+        h.kv
+    }
+    return r.length
+}
+
+withNested: function {c: bool h: Holder g: Holder} out u64 is {
+    r: with x: 1 do {
+        if c then h.names else g.names
+    }
+    return r.length
+}
+
+withLent: function {h: Holder} out u64 is {
+    r: with x: 1 do {
+        h.lent
+    }
+    return r.length
+}
+
+withLocal: function {} out u64 is {
+    l: List String
+    l.append from: "a".string
+    n: 0.u64
+    {
+        r: with x: 1 do {
+            l
+        }
+        n = r.length
+    }
+    return n + l.length
+}
+
+ifSet: function {c: bool h: Holder g: Holder} out u64 is {
+    r: if c then h.tags else g.tags
+    return r.length
+}
+
+ifMap: function {c: bool h: Holder g: Holder} out u64 is {
+    r: if c then h.kv else g.kv
+    return r.length
+}
+
+matchSet: function {m: Mode h: Holder g: Holder} out u64 is {
+    r: match (m) case first then h.tags case second then g.tags
+    return r.length
+}
+
+ifLent: function {c: bool h: Holder g: Holder} out u64 is {
+    r: if c then (h.lent) else (g.lent)
+    return r.length
+}
+
+ifLentTitle: function {c: bool h: Holder g: Holder} out u64 is {
+    r: if c then (h.lentTitle) else (g.lentTitle)
+    return r.length
+}
+
+writeSet: function {c: bool h: Holder g: Holder} is {
+    r: if c then h.tags else g.tags
+    r.add item: "more".string
+}
+
+writeWithList: function {h: Holder} is {
+    r: with x: 1 do {
+        h.names
+    }
+    r.append from: "more".string
+}
+
+main: function is {
+    h: mk tag: "h"
+    g: mk tag: "longer"
+    g.names.append from: "g2".string
+    g.tags.add item: "g2".string
+    g.kv.set key: "g2".string value: "v".string
+    print "with: \{(withList :h)} \{(withSet :h)} \{(withMap :h)} \{(withLent h: g)} \{(withLocal)}"
+    print "nested: \{(withNested c: true :h :g)} \{(withNested c: false :h :g)}"
+    print "if: \{(ifSet c: true :h :g)} \{(ifSet c: false :h :g)} \{(ifMap c: true :h :g)} \{(ifMap c: false :h :g)}"
+    print "match: \{(matchSet m: Mode.first :h :g)} \{(matchSet m: Mode.second :h :g)}"
+    print "lent: \{(ifLent c: true :h :g)} \{(ifLent c: false :h :g)} \{(ifLentTitle c: true :h :g)} \{(ifLentTitle c: false :h :g)}"
+    writeSet c: true :h :g
+    writeSet c: false :h :g
+    writeWithList :h
+    print "written: \{h.tags.length} \{g.tags.length} \{h.names.length} \{g.names.length}"
+}
