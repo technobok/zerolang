@@ -60071,30 +60071,18 @@ walkDeclaredDef: function {
     # outermost demand walks what its body and theirs asked for, one after
     # another. A chain of calls then costs no stack, however long it is.
     if st.walk.demandDraining then {
-        st.walk.demandDecls.append from: dd
-        st.walk.demandScopes.append from: rf
-        st.walk.demandUnits.append from: unitDecl
+        st.walk.demands.append (zenv.walkjob decl: dd scope: rf :unitDecl mono: ztypes.tid)
         return
     }
     st.walk.demandDraining = true
     walkDemandedDef :st :ast :unitDecl scope: rf declId: dd
     i: u64
-    for i < st.walk.demandDecls.length loop {
-        (
-            walkDemandedDef
-            :st
-            :ast
-            unitDecl: (st.walk.demandUnits.get :i)
-            scope: (st.walk.demandScopes.get :i)
-            declId: (st.walk.demandDecls.get :i)
-        )
+    for i < st.walk.demands.length loop {
+        dj: st.walk.demands.get :i
+        walkDemandedDef :st :ast unitDecl: dj.unitDecl scope: dj.scope declId: dj.decl
         i = i + 1
     }
-    for st.walk.demandDecls.length > 0 loop {
-        st.walk.demandDecls.pop
-        st.walk.demandScopes.pop
-        st.walk.demandUnits.pop
-    }
+    for st.walk.demands.length > 0 loop st.walk.demands.pop
     st.walk.demandDraining = false
 }
 
@@ -60442,10 +60430,13 @@ deferBody: function {
     declId: ztypes.declid
 } is {
     if declId.isZero then return
-    st.walk.deferredDecls.append from: declId
-    st.walk.deferredScopes.append from: scope
-    st.walk.deferredUnits.append from: unitDecl
-    st.walk.deferredMonos.append from: st.typing.curMonoStamp
+    st.walk.deferred.append (
+        zenv.walkjob
+        decl: declId
+        :scope
+        :unitDecl
+        mono: st.typing.curMonoStamp
+    )
 }
 
 # walkStaticFnRefs -- walk the body of each function a static value refers to
@@ -60481,17 +60472,17 @@ walkLateUsedBodies: function {st: zenv.ZSymbolTable ast: Ast} out bool is {
     walked: false
     i: u64
     # a walk can defer more, so the length is read each round
-    for i < st.walk.deferredDecls.length loop {
-        d: st.walk.deferredDecls.get :i
-        if (lateBodyOwed :st :d) then {
+    for i < st.walk.deferred.length loop {
+        dj: st.walk.deferred.get :i
+        if (lateBodyOwed :st d: dj.decl) then {
             (
                 walkDeferredBody
                 :st
                 :ast
-                declId: d
-                scope: (st.walk.deferredScopes.get :i)
-                unitDecl: (st.walk.deferredUnits.get :i)
-                mono: (st.walk.deferredMonos.get :i)
+                declId: dj.decl
+                scope: dj.scope
+                unitDecl: dj.unitDecl
+                mono: dj.mono
             )
             walked = true
         }
@@ -61762,8 +61753,8 @@ checkBodies: function {st: zenv.ZSymbolTable scope: ztypes.declid program: Ast} 
 
 # lateBodyPending -- a deferred member a use has reached and nothing has walked.
 lateBodyPending: function {st: zenv.ZSymbolTable.view} out bool is {
-    for each d: st.walk.deferredDecls loop {
-        if (lateBodyOwed :st :d) then return true
+    for each dj: st.walk.deferred loop {
+        if (lateBodyOwed :st d: dj.decl) then return true
     }
     return false
 }

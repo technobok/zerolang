@@ -26,6 +26,7 @@ public: unit {
     :ValueDraft
     :openpos
     :divkind
+    :walkjob
     :sumArmNames
     :sumArmNameIds
     :isImplementationLabelOf
@@ -819,22 +820,17 @@ WalkState: class {
     # body is walked with the others once the body pass runs (a static value
     # is built while definitions resolve, before any body can be judged)
     staticFnRefs: ListVal ztypes.declid
-    # the definitions a demanded body demanded in its turn, in the order met,
-    # each with the scope and the unit it is walked in: the outermost demand
-    # walks them one after another, so a chain of calls costs no stack
-    demandDecls: ListVal ztypes.declid
-    demandScopes: ListVal ztypes.declid
-    demandUnits: ListVal ztypes.declid
+    # the definitions a demanded body demanded in its turn, in the order met:
+    # the outermost demand walks them one after another, so a chain of calls
+    # costs no stack
+    demands: ListVal walkjob
     # a demanded body is being walked: a demand met now is queued
     demandDraining: bool
     # the bodied members their owner's walk deferred (bodiedMemberDeferred), in
-    # the order deferred, and beside each the scope, unit and instance that
-    # walk ran in: a use can reach one after its owner walked, and the member
-    # is then walked on its own, unless another walk has walked it (Decl.walked)
-    deferredDecls: ListVal ztypes.declid
-    deferredScopes: ListVal ztypes.declid
-    deferredUnits: ListVal ztypes.declid
-    deferredMonos: ListVal ztypes.tid
+    # the order deferred, each with the scope, unit and instance that walk ran
+    # in: a use can reach one after its owner walked, and the member is then
+    # walked on its own, unless another walk has walked it (Decl.walked)
+    deferred: ListVal walkjob
     # the type ids below this one have had their generated `==` swept for the
     # written part comparisons it calls (markGeneratedEqParts)
     eqPartsSwept: ztypes.tid
@@ -989,14 +985,9 @@ newWalkState: function out WalkState is {
         aliasRefOwner: (IdMapV zast.nodeid v: ztypes.declid)
         usedMemberDecl: IdSet ztypes.declid
         staticFnRefs: ListVal ztypes.declid
-        demandDecls: ListVal ztypes.declid
-        demandScopes: ListVal ztypes.declid
-        demandUnits: ListVal ztypes.declid
+        demands: ListVal walkjob
         demandDraining: false
-        deferredDecls: ListVal ztypes.declid
-        deferredScopes: ListVal ztypes.declid
-        deferredUnits: ListVal ztypes.declid
-        deferredMonos: ListVal ztypes.tid
+        deferred: ListVal walkjob
         eqPartsSwept: ztypes.tid
         gpNames: IdSet zast.nameid
         gpNamesSwept: ztypes.tid
@@ -3860,6 +3851,16 @@ ZSymbolTable: class {
             ki = ki + 1
         }
     }
+}
+
+# walkjob -- a definition whose body is still to walk, and where: the scope
+# and the unit the walk runs in, and the instance being walked when it was
+# put off, 0 for none.
+walkjob: record {
+    decl: ztypes.declid
+    scope: ztypes.declid
+    unitDecl: ztypes.declid
+    mono: ztypes.tid
 }
 
 # looprun -- where one open loop's runs start in the symbol table's shared
