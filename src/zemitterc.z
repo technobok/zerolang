@@ -30039,134 +30039,149 @@ emitIfBindValue: function {
     match (
         n
     ) case ifexpr then {
-        # every condition folds: declare the local and assign the one live
-        # branch, rather than emitting a runtime if whose other arms are dead
+        # every condition folds to one live branch that is one value: declare
+        # the local with that value, rather than emitting a runtime if whose
+        # other arms are dead
         bfb: foldedBranchOf :typing nid: n.nodeid
-        if bfb.known then {
-            bwb: bfb.stmt
-            if bwb.isZero.not then {
-                bwn: ast.nodes.get i: bwb
-                if (isSimpleValueNode :ast n: bwn) then {
-                    bvx: emitExpr :ast :reg :typing :ctx n: bwn
-                    flushArgHoists :ctx :ind :tmp :buf
-                    lbf: "\{ind}\{ct} \{nm} = \{bvx};\n"
-                    buf.append lbf
-                    emitArmTakeZero :ast :reg :typing :ctx n: bwn rv: bvx.stringView :ind :buf
-                    return true
-                }
-                # a multi-statement live branch: declare, then run the body
-                # through the same assign helper the clause path uses, inside a
-                # bare block rather than under a runtime `if`
-                lbd: "\{ind}\{ct} \{nm};\n"
-                buf.append lbd
-                lbo: "\{ind}{\n"
-                buf.append lbo
-                indB: "\{ind}    "
-                (
-                    emitBranchAssign
-                    :ast
-                    :reg
-                    :typing
-                    :ctx
-                    n: bwn
-                    target: nm
-                    scope: (
-                        branchScopeOf
-                        :ast
-                        clauses: n.clauses
-                        elseclause: n.elseclause
-                        stmt: bwb
-                    )
-                    ind: indB.stringView
-                    :tmp
-                    :buf
-                )
-                lbc: "\{ind}}\n"
-                buf.append lbc
+        if bfb.known when bfb.stmt.isZero.not then {
+            bwn: ast.nodes.get i: bfb.stmt
+            if (isSimpleValueNode :ast n: bwn) then {
+                bvx: emitExpr :ast :reg :typing :ctx n: bwn
+                flushArgHoists :ctx :ind :tmp :buf
+                lbf: "\{ind}\{ct} \{nm} = \{bvx};\n"
+                buf.append lbf
+                emitArmTakeZero :ast :reg :typing :ctx n: bwn rv: bvx.stringView :ind :buf
                 return true
             }
         }
         ld: "\{ind}\{ct} \{nm};\n"
         buf.append ld
-        # each branch runs only when selected, as a statement if's branches do
-        ctx.condDepth = ctx.condDepth + 1
-        first: true
-        opened: u64
-        i: u64
-        for i < n.clauses.count loop {
-            cId: zast.kidAt kids: ast.kids span: n.clauses :i
-            i = i + 1
-            isFirst: first
-            first = false
-            opened = (
-                opened +
-                (
-                    emitIfClause
-                    :ast
-                    :reg
-                    :typing
-                    :ctx
-                    n: (ast.nodes.get i: cId)
-                    :isFirst
-                    assignTo: nm
-                    :ind
-                    :tmp
-                    :buf
-                )
-            )
-        }
-        chS: List String
-        chV: ListVal ztypes.vid
-        chA: ListVal zast.nameid
-        chT: ListVal ztypes.tid
-        chN: ListVal bool
-        chR: List String
-        chRF: ListVal cfacts
-        (
-            chainFactsOfClauses
-            :ast
-            :reg
-            :typing
-            :ctx
-            clauses: n.clauses
-            subjects: chS
-            svids: chV
-            arms: chA
-            tids: chT
-            negs: chN
-            recvs: chR
-            recvFs: chRF
-        )
-        (
-            emitElse
-            :ast
-            :reg
-            :typing
-            :ctx
-            oId: n.elseclause
-            assignTo: nm
-            :ind
-            :tmp
-            chSubjects: chS
-            chSubjectVids: chV
-            chArms: chA
-            chTids: chT
-            chNegs: chN
-            chRecvs: chR
-            chRecvFs: chRF
-            :buf
-        )
-        le: "\{ind}}\n"
-        buf.append le
-        for opened > 0 loop {
-            opened = opened - 1
-            buf.append le
-        }
-        ctx.condDepth = ctx.condDepth - 1
+        emitIfAssign :ast :reg :typing :ctx :n target: nm :ind :tmp :buf
         return true
     } else {
         return false
     }
+}
+
+# emitIfAssign -- assign `target`, already declared, from an `if`'s value in
+# statements: the live branch alone, in a bare block, when every condition
+# folds; otherwise an if-statement each of whose branches assigns it. A branch
+# that leaves (`return`, `break`, `continue`) runs as the statement it is and
+# assigns nothing.
+emitIfAssign: function {
+    ast: Ast.view
+    reg: ztypes.ZTypeRegistry.view
+    typing: ztyping.ZTyping.view
+    ctx: Ctx
+    n: zast.ifrow.view
+    target: StringView
+    ind: StringView
+    tmp: TmpCtr
+    buf: String.borrow
+} is {
+    bfb: foldedBranchOf :typing nid: n.nodeid
+    if bfb.known when bfb.stmt.isZero.not then {
+        lbo: "\{ind}{\n"
+        buf.append lbo
+        indB: "\{ind}    "
+        (
+            emitBranchAssign
+            :ast
+            :reg
+            :typing
+            :ctx
+            n: (ast.nodes.get i: bfb.stmt)
+            :target
+            scope: (
+                branchScopeOf
+                :ast
+                clauses: n.clauses
+                elseclause: n.elseclause
+                stmt: bfb.stmt
+            )
+            ind: indB.stringView
+            :tmp
+            :buf
+        )
+        lbc: "\{ind}}\n"
+        buf.append lbc
+        return
+    }
+    # each branch runs only when selected, as a statement if's branches do
+    ctx.condDepth = ctx.condDepth + 1
+    first: true
+    opened: u64
+    i: u64
+    for i < n.clauses.count loop {
+        cId: zast.kidAt kids: ast.kids span: n.clauses :i
+        i = i + 1
+        isFirst: first
+        first = false
+        opened = (
+            opened +
+            (
+                emitIfClause
+                :ast
+                :reg
+                :typing
+                :ctx
+                n: (ast.nodes.get i: cId)
+                :isFirst
+                assignTo: target
+                :ind
+                :tmp
+                :buf
+            )
+        )
+    }
+    chS: List String
+    chV: ListVal ztypes.vid
+    chA: ListVal zast.nameid
+    chT: ListVal ztypes.tid
+    chN: ListVal bool
+    chR: List String
+    chRF: ListVal cfacts
+    (
+        chainFactsOfClauses
+        :ast
+        :reg
+        :typing
+        :ctx
+        clauses: n.clauses
+        subjects: chS
+        svids: chV
+        arms: chA
+        tids: chT
+        negs: chN
+        recvs: chR
+        recvFs: chRF
+    )
+    (
+        emitElse
+        :ast
+        :reg
+        :typing
+        :ctx
+        oId: n.elseclause
+        assignTo: target
+        :ind
+        :tmp
+        chSubjects: chS
+        chSubjectVids: chV
+        chArms: chA
+        chTids: chT
+        chNegs: chN
+        chRecvs: chR
+        chRecvFs: chRF
+        :buf
+    )
+    le: "\{ind}}\n"
+    buf.append le
+    for opened > 0 loop {
+        opened = opened - 1
+        buf.append le
+    }
+    ctx.condDepth = ctx.condDepth - 1
 }
 
 # iterableNodeId -- the stamped node id of a for-loop iterable: peel expression
@@ -33895,7 +33910,7 @@ emitBranchLastAssign: function {
         emitStmt :ast :reg :typing :ctx n: sx :ind :tmp :buf
         return true
     }
-    if (emitNestedMatchAssign :ast :reg :typing :ctx line: sx :target :ind :tmp :buf
+    if (emitNestedControlAssign :ast :reg :typing :ctx line: sx :target :ind :tmp :buf
     ) then return false
     vxF: cfacts
     vx: emitExprWith :ast :reg :typing :ctx n: sx facts: vxF
@@ -33950,10 +33965,11 @@ scopeEndDestroys: function {
     return false
 }
 
-# emitNestedMatchAssign -- a branch whose value is itself a `match` assigns the
-# target from that match's arms, which no single C expression can spell; false
-# for any other value.
-emitNestedMatchAssign: function {
+# emitNestedControlAssign -- a branch whose value is itself a `match`, or an
+# `if` one of whose arms leaves, assigns the target from that construct's arms
+# in statements, since no single C expression can spell it; false for any other
+# value.
+emitNestedControlAssign: function {
     ast: Ast.view
     reg: ztypes.ZTypeRegistry.view
     typing: ztyping.ZTyping.view
@@ -33972,6 +33988,12 @@ emitNestedMatchAssign: function {
         ctx.condDepth = ctx.condDepth + 1
         emitMatchStmt :ast :reg :typing :ctx m: mn assignTo: target :ind :tmp :buf
         ctx.condDepth = ctx.condDepth - 1
+        return true
+    } case ifexpr then {
+        if (ztypecheck.armLeaves :ast n: (ast.nodes.get i: mn.nodeid) inLoop: false).not then {
+            return false
+        }
+        emitIfAssign :ast :reg :typing :ctx n: mn :target :ind :tmp :buf
         return true
     } else {
         return false
