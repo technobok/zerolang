@@ -898,6 +898,7 @@ runnerWord: list {
     fRegenLsp: "--regen-lsp"
     fDoccodeOnly: "--doccode-only"
     fAgreeOnly: "--agree-only"
+    fArchOnly: "--arch-only"
     fRunOnly: "--run-only"
     fZc: "--zc"
     fCc: "--cc"
@@ -957,6 +958,8 @@ Runner: class {
     doccodeOnly: bool
     # run the agree kind alone (`make nativec-agree-guard`)
     agreeOnly: bool
+    # run the arch kind alone (`make arch-check`)
+    archOnly: bool
     # run the RUN kind alone (`make test-mingw`): the only kind whose programs
     # can be built for another target
     runOnly: bool
@@ -1025,6 +1028,7 @@ runArchCases: function {r: Runner} is {
         argv.append from: "lint".string
         argv.append from: "--full".string
         argv.append from: "--arch".string
+        argv.append from: "--counts".string
         # both project roots: A007's read evidence is the whole project, and a
         # smoke harness under tests/unit is a real consumer of src's exports
         argv.append from: "--src".string
@@ -1036,14 +1040,15 @@ runArchCases: function {r: Runner} is {
         argv.append from: "\{r.root.stringView}/\{f.stringView}"
         oname: f.stringView.replace needle: "/" replacement: "_"
         opath: "\{r.tmp.stringView}/A_\{oname}.out"
+        epath: "\{r.tmp.stringView}/A_\{oname}.err"
         steps: List PoolStep
-        # diagnostics go to zl's stderr
+        # the count rows go to zl's stdout, anything else it says to its stderr
         steps.append (
             mkStep
             :argv
             cwd: ""
-            outPath: os.nullDevice.stringView
-            errPath: opath.stringView
+            outPath: opath.stringView
+            errPath: epath.stringView
             timeoutSecs: r.timeoutSecs
             allowFail: true
             zlinkFrom: ""
@@ -1071,20 +1076,19 @@ runArchCases: function {r: Runner} is {
         outName: fnm.replace needle: "/" replacement: "_"
         outPath: "\{r.tmp.stringView}/A_\{outName}.out"
         outC: slurp path: outPath.stringView
-        # count per code
         codes: List String
         counts: ListVal u64
-        for each ol: outC.stringView.lines loop {
-            if (ol.startsWith prefix: "info[A") then {
-                archCount :codes :counts code: (ol.substring from: 5 to: 9)
-            } else if (ol.startsWith prefix: "warning[A") then {
-                archCount :codes :counts code: (ol.substring from: 8 to: 12)
-            }
+        if (countRows text: outC.stringView :codes :counts).not then {
+            print "FAIL(arch) \{fnm}: a line zl lint --counts wrote is not a count row"
+            anyFail = true
         }
         ci: u64
         for ci < codes.length loop {
             code: codes.get i: ci
             c: counts.get i: ci
+            ci = ci + 1
+            # the A codes; --full adds the typecheck tier's own
+            if (code.stringView.startsWith prefix: "A").not then continue
             key: "\{code.stringView} \{fnm}"
             failed: (
                 ratchetCheck
@@ -1094,10 +1098,9 @@ runArchCases: function {r: Runner} is {
                 :baseKeys
                 :baseCounts
                 :seen
-                above: "a new finding; fix it or justify raising the baseline"
+                above: "a new finding, or a function over A008's threshold that grew; fix it or justify raising the baseline"
             )
             if failed then anyFail = true
-            ci = ci + 1
         }
         ji = ji + 1
     }
@@ -2015,6 +2018,7 @@ runDocCases: function {r: Runner} is {
         argv.append from: zl.copy
         argv.append from: "lint".string
         argv.append from: "--docs-all".string
+        argv.append from: "--counts".string
         argv.append from: "--src".string
         argv.append from: "\{r.root.stringView}/src"
         argv.append from: "--system".string
@@ -2022,14 +2026,15 @@ runDocCases: function {r: Runner} is {
         argv.append from: "\{r.root.stringView}/\{f.stringView}"
         oname: f.stringView.replace needle: "/" replacement: "_"
         opath: "\{r.tmp.stringView}/D_\{oname}.out"
+        epath: "\{r.tmp.stringView}/D_\{oname}.err"
         steps: List PoolStep
-        # diagnostics go to zl's stderr
+        # the count rows go to zl's stdout, anything else it says to its stderr
         steps.append (
             mkStep
             :argv
             cwd: ""
-            outPath: os.nullDevice.stringView
-            errPath: opath.stringView
+            outPath: opath.stringView
+            errPath: epath.stringView
             timeoutSecs: r.timeoutSecs
             allowFail: true
             zlinkFrom: ""
@@ -2059,16 +2064,16 @@ runDocCases: function {r: Runner} is {
         outC: slurp path: outPath.stringView
         codes: List String
         counts: ListVal u64
-        for each ol: outC.stringView.lines loop {
-            if (ol.startsWith prefix: "warning[L") then {
-                dc: ol.substring from: 8 to: 12
-                if (docRatchetCode code: dc) then archCount :codes :counts code: dc
-            }
+        if (countRows text: outC.stringView :codes :counts).not then {
+            print "FAIL(docs) \{fnm}: a line zl lint --counts wrote is not a count row"
+            anyFail = true
         }
         ci: u64
         for ci < codes.length loop {
             code: codes.get i: ci
             c: counts.get i: ci
+            ci = ci + 1
+            if (docRatchetCode code: code.stringView).not then continue
             key: "\{code.stringView} \{fnm}"
             failed: (
                 ratchetCheck
@@ -2081,7 +2086,6 @@ runDocCases: function {r: Runner} is {
                 above: "a new undocumented member, or a doc that only re-says its declaration; write the doc or justify the baseline"
             )
             if failed then anyFail = true
-            ci = ci + 1
         }
         ji = ji + 1
     }
@@ -2121,11 +2125,11 @@ ratchetCheck: function {
         bi = bi + 1
     }
     if c > base then {
-        print "FAIL(\{kind}) \{key}: \{c} findings, baseline \{base} -- \{above}"
+        print "FAIL(\{kind}) \{key}: \{c} against a baseline of \{base} -- \{above}"
         return true
     }
     if c < base then {
-        print "FAIL(\{kind}) \{key}: \{c} findings, baseline \{base} -- the count fell: lower the row to \{c} in this commit"
+        print "FAIL(\{kind}) \{key}: \{c} against a baseline of \{base} -- the count fell: lower the row to \{c} in this commit"
         return true
     }
     return false
@@ -2154,19 +2158,38 @@ ratchetStale: function {
     return stale
 }
 
-# archCount -- bump the count of `code` in the parallel code / count lists.
-archCount: function {codes: List String counts: ListVal u64 code: StringView} is {
+# archCount -- add `by` to the count of `code` in the parallel code / count
+# lists.
+archCount: function {codes: List String counts: ListVal u64 code: StringView by: u64} is {
     i: u64
     for i < codes.length loop {
         c: codes.get :i
         if c.stringView == code then {
-            counts.set :i val: (counts.get :i) + 1
+            counts.set :i val: (counts.get :i) + by
             return
         }
         i = i + 1
     }
     codes.append from: code.string
-    counts.append from: 1
+    counts.append from: by
+}
+
+# countRows -- add each `<code> <file> <count>` row that `zl lint --counts`
+# wrote into `text` to the parallel code / count lists. False when a line is
+# not such a row: the rows are a ratchet's input, so a line it cannot read must
+# fail the ratchet and never count as nothing.
+countRows: function {text: StringView codes: List String counts: ListVal u64} out bool is {
+    for each ln: text.lines loop {
+        first: ln.indexOf needle: " "
+        if first.none then return false
+        last: ln.lastIndexOf needle: " "
+        if last.none then return false
+        if last <= first then return false
+        n: (ln.substring from: last + 1 to: ln.length).parseU64
+        if n.err then return false
+        archCount :codes :counts code: (ln.substring from: 0 to: first) by: n
+    }
+    return true
 }
 
 # runRunCases -- the RUN cases kind.
@@ -4273,6 +4296,7 @@ newRunner: function out Runner is {
         regenLsp: false
         doccodeOnly: false
         agreeOnly: false
+        archOnly: false
         runOnly: false
         target: String
         exec: String
@@ -4322,6 +4346,10 @@ takeFlag: function {r: Runner w: u64} out bool is {
     }
     if w == runnerWord.slot.fAgreeOnly then {
         r.agreeOnly = true
+        return true
+    }
+    if w == runnerWord.slot.fArchOnly then {
+        r.archOnly = true
         return true
     }
     if w == runnerWord.slot.fRunOnly then {
@@ -4468,6 +4496,8 @@ main: function is {
         runDocPageCases :r
     } else if r.agreeOnly then {
         runAgreeCases :r
+    } else if r.archOnly then {
+        runArchCases :r
     } else if r.runOnly then {
         runRunCases :r
     } else {

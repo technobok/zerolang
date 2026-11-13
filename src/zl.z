@@ -45,6 +45,7 @@ printUsage: function is {
     io.eprintln "  --arch    report architecture findings: string-literal compares, composed keys, long functions, and under --full unit/type-name compares and write-only fields (advisory)"
     io.eprintln "  --line-length N  report lines over N columns (advisory; default off)"
     io.eprintln "  --complexity N  report functions whose cognitive complexity exceeds N (advisory; --arch implies 15)"
+    io.eprintln "  --counts  print one `<code> <file> <count>` row per code to stdout, the findings' weights added up, in place of the diagnostics"
 }
 
 # reportAnalysis -- render every collected diagnostic for one file to stderr,
@@ -170,13 +171,48 @@ fileOwnRoots: function {file: StringView into: List String} is {
     into.append from: ".".string
 }
 
-# runLint -- lint each target file at the tier `opts` asks for. Exit 1 if any
+# CodeTotal -- one code's findings in one file, as --counts prints them
+CodeTotal: class {
+    # the rule or error code
+    code: String
+    # the findings' weights added up
+    total: u64
+}
+
+# reportCounts -- the file's findings as rows to stdout, the form of a row in a
+# ratchet baseline: `<code> <file> <count>`, one per code in the order the code
+# first appears. The count adds the findings' weights, which is their number
+# except where a rule measures how far over a limit a finding is (A008).
+reportCounts: function {a: zsource.Analysis.view} is {
+    rows: List CodeTotal
+    for each d: a.diags loop {
+        at: rows.length
+        j: u64
+        for j < rows.length loop {
+            if (rows.get i: j).code.stringView == d.code then {
+                at = j
+                break
+            }
+            j = j + 1
+        }
+        if at == rows.length then rows.append (CodeTotal code: d.code.copy total: 0)
+        row: rows.getMut i: at
+        row.total = row.total + d.weight
+    }
+    for each r: rows loop {
+        print "\{r.code} \{a.path} \{r.total}"
+    }
+}
+
+# runLint -- lint each target file at the tier `opts` asks for, and report its
+# diagnostics, or its count rows when `counts` is set. Exit 1 if any
 # diagnostics fail the gate.
 runLint: function {
     paths: (List String).borrow
     srcdirs: (List String).view
     systemdir: StringView
     opts: zsource.lintopts
+    counts: bool
 } out i32 is {
     if paths.length == 0 then {
         io.eprintln "zl lint: no input files"
@@ -210,7 +246,11 @@ runLint: function {
             :opts
             :prelude
         )
-        reportAnalysis :a
+        if counts then {
+            reportCounts :a
+        } else {
+            reportAnalysis :a
+        }
         total = total + a.failCount
     }
     if total > 0 then return 1
@@ -483,6 +523,7 @@ zlWord: list {
     fSystem: "--system"
     fLineLength: "--line-length"
     fComplexity: "--complexity"
+    fCounts: "--counts"
 } out staticlist StringView
 
 # CliFlags -- what `zl`'s command line sets: the lint options a run threads
@@ -514,6 +555,8 @@ CliFlags: class {
     llSet: bool
     # whether --complexity was given, which is what suppresses --arch's default
     fcSet: bool
+    # --counts: print each file's count rows in place of its diagnostics
+    counts: bool
 } as {
     # setLintSwitch -- the lint tier switches. True when `w` named one.
     setLintSwitch: function {:this w: u64} out bool is {
@@ -555,6 +598,10 @@ CliFlags: class {
         }
         if w == zlWord.slot.fArch then {
             this.opts.arch = true
+            return true
+        }
+        if w == zlWord.slot.fCounts then {
+            this.counts = true
             return true
         }
         return false
@@ -661,6 +708,7 @@ parseArgs: function {
         collapse: false
         llSet: false
         fcSet: false
+        counts: false
     )
     i: from
     for i < n loop {
@@ -726,6 +774,7 @@ main: function is {
             srcdirs: cf.srcdirs
             systemdir: cf.systemdir.stringView
             opts: lintOpts
+            counts: cf.counts
         )
         os.exit code: rc
     }

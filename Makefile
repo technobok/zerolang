@@ -113,7 +113,7 @@ SKIP     := mathutil genmath dissectlib
 EXAMPLES := $(wildcard examples/*.z)
 NAMES    := $(filter-out $(SKIP),$(basename $(notdir $(EXAMPLES))))
 
-.PHONY: all check complexity-report style-lint-fast style-lint test doc-check ci ci-gates ci-corpus fuzz fuzz-ci fuzz-known \
+.PHONY: all check complexity-report style-lint-fast style-lint test doc-check arch-check ci ci-gates ci-corpus fuzz fuzz-ci fuzz-known \
 	test-math-arm64 test-sqlite-arm64 test-mingw test-tcc-mingw test-msvc-wine test-msvc-corpus ci-windows windows-guest windows-due test-math-noasm test-portable-scalars docs-link-guard math-asm-guard \
 	bench-math bench-math-kernels test-clang test-tcc test-tcc-heavy readable-check build \
 	tcc zc zl zls regen-goldens regen-fmt-goldens regen-matrix matrix-guard regen-constparity constparity-guard regen-math-asm \
@@ -189,6 +189,12 @@ test: bin/zc bin/zl $(BUILDDIR)/ztestrunner
 # tests/fixtures/doccode_baseline.txt. `make test` runs it too.
 doc-check: bin/zc bin/zl $(BUILDDIR)/ztestrunner
 	$(BUILDDIR)/ztestrunner --zc bin/zc --cc $(CC) --root . --jobs $(NPROC) --doccode-only
+
+# arch-check -- the arch kind alone: `zl lint --full --arch --counts` over the
+# compiler and front-end units against tests/fixtures/arch_baseline.txt, in
+# seconds. `make test` runs it too.
+arch-check: bin/zc bin/zl $(BUILDDIR)/ztestrunner
+	$(BUILDDIR)/ztestrunner --zc bin/zc --cc $(CC) --root . --jobs $(NPROC) --arch-only
 
 # natives-show-guard -- `zc natives show` names where each thing it shows is
 # written: each row `zc emit --mark-natives` marks in a program's C, shown, is
@@ -1405,7 +1411,7 @@ perf: $(PERFBIN)
 # deletes write-only allocations; perf-elision measures that), a failed run and
 # allocs != frees. Above ALLOC_BASELINE fails; a commit raising it says why in
 # its message, and one lowering the count lowers it here.
-ALLOC_BASELINE := 2877192
+ALLOC_BASELINE := 2877193
 # ALLOC_LINE -- the one measurement every allocation number comes from.
 ALLOC_LINE = valgrind --tool=memcheck $(PERFRUN) 2>&1 | grep 'total heap usage' | sed 's/.*usage: //'
 

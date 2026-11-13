@@ -1347,13 +1347,23 @@ Analysis: class {
         this.walk :ast n: o
     }
 
-    # warn -- append a WARNING lint diagnostic (fast tier: no fsno; the single-file
-    # reporter resolves the source line from the line table).
-    warn: function {:this code: StringView msg: String.take line: u32 col: u32 width: u32} is {
+    # addDiag -- append a lint diagnostic of severity `sev` (fast tier: no fsno;
+    # the single-file reporter resolves the source line from the line table).
+    # `weight` is what it adds to its rule's ratchet row (zdiag.Diagnostic).
+    addDiag: function {
+        :this
+        sev: zdiag.severity
+        code: StringView
+        msg: String.take
+        line: u32
+        col: u32
+        width: u32
+        weight: u32
+    } is {
         d: (
             zdiag.Diagnostic
             code: code.string
-            sev: zdiag.severity.warning
+            :sev
             fsno: zvfs.fsno
             lineno: line
             colno: col
@@ -1361,25 +1371,21 @@ Analysis: class {
             :msg
             note: "".string
             hint: "".string
+            :weight
         )
         this.diags.append d
     }
 
+    # warn -- append a WARNING lint diagnostic, which fails the gate.
+    warn: function {
+        :this code: StringView msg: String.take line: u32 col: u32 width: u32 weight: 1.u32
+    } is {
+        this.addDiag sev: zdiag.severity.warning :code :msg :line :col :width :weight
+    }
+
     # info -- append an advisory INFO diagnostic (does not fail the gate; carries no fix).
     info: function {:this code: StringView msg: String.take line: u32 col: u32 width: u32} is {
-        d: (
-            zdiag.Diagnostic
-            code: code.string
-            sev: zdiag.severity.info
-            fsno: zvfs.fsno
-            lineno: line
-            colno: col
-            :width
-            :msg
-            note: "".string
-            hint: "".string
-        )
-        this.diags.append d
+        this.addDiag sev: zdiag.severity.info :code :msg :line :col :width weight: 1
     }
 
     # checkLineLength -- W005 (advisory): a line wider than `width` codepoints. INFO severity, so it
@@ -2476,6 +2482,7 @@ Analysis: class {
                     line: op.lineno
                     col: op.colno
                     width: 1
+                    weight: sc - th
                 )
             }
         } else null
