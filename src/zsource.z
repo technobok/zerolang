@@ -469,11 +469,75 @@ ccVisitSpan: function {
     }
 }
 
-# ccArms -- ccVisit over each match arm's body, the arm names skipped: an arm
+# CcArms -- the arms of one match as ccArm scores them
+CcArms: class {
+    # every arm's score added up
+    total: u32
+    # the highest score one arm reached
+    worst: u32
+    # the locals an arm reassigns without declaring them, each once
+    outer: ListVal zast.nameid
+}
+
+# ccWrites -- the names the subtree at `id` binds, into `declared`, and the
+# bare names it reassigns, into `written`
+ccWrites: function {
+    ast: Ast.view id: zast.nodeid declared: ListVal zast.nameid written: ListVal zast.nameid
+} is {
+    if id.isZero then return
+    n: ast.nodes.get i: id
+    match (
+        n
+    ) case assignment then {
+        declared.append n.name
+    } case reassignment then {
+        t: ast.nodes.get i: n.topath
+        match (
+            t
+        ) case atomid then {
+            written.append t.name
+        } else null
+    } else null
+    kids: zast.childIds :ast :n
+    for each k: kids loop {
+        ccWrites :ast id: k :declared :written
+    }
+}
+
+# ccArm -- score one arm's body on its own at `nesting` into `arms`, with the
+# outer locals it reassigns
+ccArm: function {
+    ast: Ast.view bodyId: zast.nodeid nesting: u32 fnName: zast.nameid arms: CcArms
+} is {
+    one: CcState score: 0
+    ccVisit :ast id: bodyId :nesting :fnName acc: one
+    arms.total = arms.total + one.score
+    if one.score > arms.worst then arms.worst = one.score
+    declared: ListVal zast.nameid
+    written: ListVal zast.nameid
+    ccWrites :ast id: bodyId :declared :written
+    for each w: written loop {
+        if (declared.contains item: w).not when (arms.outer.contains item: w).not then {
+            arms.outer.append w
+        }
+    }
+}
+
+# ccArms -- the arms' share of a match's score: the worst arm, plus one for
+# each local an arm reassigns that the arm does not declare, never more than
+# the arms' sum. A match runs one arm, so a reader follows one arm at a time;
+# the locals the arms write are what the code after the match must keep in
+# mind. The `else` is one more arm, and the arm names are skipped: an arm
 # named like the function is not a call
 ccArms: function {
-    ast: Ast.view span: zast.kidspan nesting: u32 fnName: zast.nameid acc: CcState
+    ast: Ast.view
+    span: zast.kidspan
+    elseclause: zast.nodeid
+    nesting: u32
+    fnName: zast.nameid
+    acc: CcState
 } is {
+    arms: CcArms total: 0 worst: 0 outer: ListVal zast.nameid
     i: u64
     for i < span.count loop {
         kid: zast.kidAt kids: ast.kids :span :i
@@ -482,9 +546,13 @@ ccArms: function {
         match (
             c
         ) case caseclause then {
-            ccVisit :ast id: c.statement :nesting :fnName :acc
+            ccArm :ast bodyId: c.statement :nesting :fnName :arms
         } else null
     }
+    if elseclause.isZero.not then ccArm :ast bodyId: elseclause :nesting :fnName :arms
+    share: arms.worst + arms.outer.length.u32.orPanic
+    if share > arms.total then share = arms.total
+    acc.score = acc.score + share
 }
 
 # ccIf -- an `if`: one plus its nesting for the first clause, unless it
@@ -545,9 +613,9 @@ ccIf: function {
 
 # ccVisit -- add `id`'s contribution at `nesting` to `acc`, then its
 # children's: an `if`, `for` or `match` costs one plus its nesting and nests
-# its bodies, a chained header condition costs one, a recursive call costs
-# one, a nested function literal nests its body and costs nothing, and
-# everything else is walked through
+# its bodies (a match's arms add what ccArms says), a chained header
+# condition costs one, a recursive call costs one, a nested function literal
+# nests its body and costs nothing, and everything else is walked through
 ccVisit: function {ast: Ast.view id: zast.nodeid nesting: u32 fnName: zast.nameid acc: CcState} is {
     if id.isZero then return
     n: ast.nodes.get i: id
@@ -564,8 +632,7 @@ ccVisit: function {ast: Ast.view id: zast.nodeid nesting: u32 fnName: zast.namei
     } case caseexpr then {
         acc.score = acc.score + 1 + nesting
         ccVisit :ast id: n.subject :nesting :fnName :acc
-        ccArms :ast span: n.clauses nesting: nesting + 1 :fnName :acc
-        ccVisit :ast id: n.elseclause nesting: nesting + 1 :fnName :acc
+        ccArms :ast span: n.clauses elseclause: n.elseclause nesting: nesting + 1 :fnName :acc
     } case functiondef then {
         ccVisit :ast id: n.body nesting: nesting + 1 :fnName :acc
     } case call then {
