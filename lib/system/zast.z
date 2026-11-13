@@ -71,6 +71,8 @@ public: unit {
     :appendSpan
     :childIds
     :childIdsInto
+    :childCount
+    :childAt
     :cloneTreeAt
     :childIdsAt
     :spanEndLineAt
@@ -2579,8 +2581,9 @@ tableSet: function {ast: Ast id: nodeid child: astnode} is {
 
 # childIds -- the child node ids of `n`, in canonical order: the order every
 # walk and the dump visit them in. A walk that needs no per-arm semantics
-# recurses over this list; a walk that binds names or skips a child keeps its
-# own arm for that child and takes the rest from here. Absent optional
+# recurses over a node's children, read through childCount and childAt so no
+# list is built per node; a walk that binds names or skips a child keeps its
+# own arm for that child and takes the rest from there. Absent optional
 # children (an if without else, a function without a body) are omitted, and a
 # program's children are the program's units.
 childIds: function {ast: Ast.view n: astnode.view} out ListVal nodeid is {
@@ -2594,68 +2597,188 @@ childIds: function {ast: Ast.view n: astnode.view} out ListVal nodeid is {
 # driving the same walk from one list it both reads and appends to allocates
 # one per WALK. The list is not cleared, so it doubles as the walk's worklist.
 childIdsInto: function {ast: Ast.view n: astnode.view acc: ListVal nodeid} is {
+    if n.program then {
+        appendIds :acc ids: ast.units
+        return
+    }
+    cp: childPartsOf :n
+    appendPart kids: ast.kids :acc p: cp.p0
+    appendPart kids: ast.kids :acc p: cp.p1
+    appendPart kids: ast.kids :acc p: cp.p2
+    appendPart kids: ast.kids :acc p: cp.p3
+}
+
+# childCount -- how many children childIds lists for `n`, counted without
+# building the list. With childAt it walks a node's children in canonical
+# order and allocates nothing, which is the shape for a recursive walk:
+# `for i < (childCount :ast :n) loop` over `childAt :ast :n :i`.
+childCount: function {ast: Ast.view n: astnode.view} out u64 is {
+    if n.program then return ast.units.length
+    cp: childPartsOf :n
+    n0: partLength p: cp.p0
+    n1: partLength p: cp.p1
+    n2: partLength p: cp.p2
+    n3: partLength p: cp.p3
+    return n0 + n1 + n2 + n3
+}
+
+# childAt -- the child at `i` of the ones childIds lists for `n`, in the same
+# order, found without building the list; 0 past the last child.
+childAt: function {ast: Ast.view n: astnode.view i: u64} out nodeid is {
+    if n.program then {
+        if i < ast.units.length then return (ast.units.get :i)
+        return nodeid
+    }
+    cp: childPartsOf :n
+    k: i
+    l0: partLength p: cp.p0
+    if k < l0 then return (partAt kids: ast.kids p: cp.p0 i: k)
+    k = k - l0
+    l1: partLength p: cp.p1
+    if k < l1 then return (partAt kids: ast.kids p: cp.p1 i: k)
+    k = k - l1
+    l2: partLength p: cp.p2
+    if k < l2 then return (partAt kids: ast.kids p: cp.p2 i: k)
+    k = k - l2
+    if k < (partLength p: cp.p3) then return (partAt kids: ast.kids p: cp.p3 i: k)
+    return nodeid
+}
+
+# childpart -- one run of a node's children as childIds lists them: a span of
+# the kids table, or one id. An id childIds lists only when present (an if's
+# else, a function's body) is no part at all when it is zero.
+childpart: record {
+    # the children when the part is a span; empty for one id
+    span: kidspan
+    # the child when the part is one id
+    one: nodeid
+    # the part is `one`, listed even when it is zero (a payload-less arm's
+    # binding)
+    single: bool
+}
+
+# childparts -- a node's children as up to four parts, in childIds' order; a
+# part no kind needs is empty. Every node's children except a program's are in
+# the kids table; a program's are its units.
+childparts: record {
+    # the first part
+    p0: childpart
+    # the second part
+    p1: childpart
+    # the third part
+    p2: childpart
+    # the fourth part, which only a function definition uses
+    p3: childpart
+}
+
+# childPartsOf -- the parts childIds, childCount and childAt read a node's
+# children from: the one place each kind's children and their order are named
+childPartsOf: function {n: astnode.view} out childparts is {
+    cp: childparts p0: noPart p1: noPart p2: noPart p3: noPart
     match (
         n
     ) case atomstring then {
-        appendSpan kids: ast.kids :acc span: n.stringparts
+        cp.p0 = partSpan span: n.stringparts
     } case dottedpath then {
-        acc.append from: n.parent
-        acc.append from: n.child
+        cp.p0 = partOne id: n.parent
+        cp.p1 = partOne id: n.child
     } case call then {
-        acc.append from: n.callable
-        appendSpan kids: ast.kids :acc span: n.arguments
+        cp.p0 = partOne id: n.callable
+        cp.p1 = partSpan span: n.arguments
     } case namedoperation then {
-        acc.append from: n.operation
+        cp.p0 = partOne id: n.operation
     } case listblock then {
-        appendSpan kids: ast.kids :acc span: n.elements
-        appendOptId :acc id: n.outType
+        cp.p0 = partSpan span: n.elements
+        cp.p1 = partOpt id: n.outType
     } case statement then {
-        appendSpan kids: ast.kids :acc span: n.statements
+        cp.p0 = partSpan span: n.statements
     } case statementline then {
-        acc.append from: n.statementline
+        cp.p0 = partOne id: n.statementline
     } case assignment then {
-        acc.append from: n.value
+        cp.p0 = partOne id: n.value
     } case reassignment then {
-        acc.append from: n.topath
-        acc.append from: n.value
+        cp.p0 = partOne id: n.topath
+        cp.p1 = partOne id: n.value
     } case swapstmt then {
-        acc.append from: n.lhs
-        acc.append from: n.rhs
+        cp.p0 = partOne id: n.lhs
+        cp.p1 = partOne id: n.rhs
     } case ifexpr then {
-        appendSpan kids: ast.kids :acc span: n.clauses
-        appendOptId :acc id: n.elseclause
+        cp.p0 = partSpan span: n.clauses
+        cp.p1 = partOpt id: n.elseclause
     } case ifclause then {
-        appendSpan kids: ast.kids :acc span: n.conditions
-        acc.append from: n.statement
+        cp.p0 = partSpan span: n.conditions
+        cp.p1 = partOne id: n.statement
     } case forexpr then {
-        appendSpan kids: ast.kids :acc span: n.conditions
-        appendOptId :acc id: n.body
-        appendSpan kids: ast.kids :acc span: n.postconditions
+        cp.p0 = partSpan span: n.conditions
+        cp.p1 = partOpt id: n.body
+        cp.p2 = partSpan span: n.postconditions
     } case doexpr then {
-        acc.append from: n.statement
+        cp.p0 = partOne id: n.statement
     } case withexpr then {
-        acc.append from: n.value
-        acc.append from: n.body
+        cp.p0 = partOne id: n.value
+        cp.p1 = partOne id: n.body
     } case caseexpr then {
-        acc.append from: n.subject
-        appendSpan kids: ast.kids :acc span: n.clauses
-        appendOptId :acc id: n.elseclause
+        cp.p0 = partOne id: n.subject
+        cp.p1 = partSpan span: n.clauses
+        cp.p2 = partOpt id: n.elseclause
     } case caseclause then {
-        acc.append from: n.matcharm
-        acc.append from: n.statement
+        cp.p0 = partOne id: n.matcharm
+        cp.p1 = partOne id: n.statement
     } case functiondef then {
-        appendOptId :acc id: n.returntype
-        appendSpan kids: ast.kids :acc span: n.parameters
-        appendOptId :acc id: n.body
-        appendSpan kids: ast.kids :acc span: n.asItems
+        cp.p0 = partOpt id: n.returntype
+        cp.p1 = partSpan span: n.parameters
+        cp.p2 = partOpt id: n.body
+        cp.p3 = partSpan span: n.asItems
     } case objectdef then {
-        appendSpan kids: ast.kids :acc span: n.isItems
-        appendSpan kids: ast.kids :acc span: n.asItems
+        cp.p0 = partSpan span: n.isItems
+        cp.p1 = partSpan span: n.asItems
     } case unitdef then {
-        appendSpan kids: ast.kids :acc span: n.body
-    } case program then {
-        appendIds :acc ids: ast.units
+        cp.p0 = partSpan span: n.body
     } else null
+    return cp
+}
+
+# noPart -- a part that lists nothing
+noPart: function {} out childpart is {
+    return (childpart span: (kidspan first: 0 count: 0) one: nodeid single: false)
+}
+
+# partSpan -- a part that is a span of the kids table
+partSpan: function {span: kidspan} out childpart is {
+    return (childpart :span one: nodeid single: false)
+}
+
+# partOne -- a part that is one id, listed even when it is zero
+partOne: function {id: nodeid} out childpart is {
+    return (childpart span: (kidspan first: 0 count: 0) one: id single: true)
+}
+
+# partOpt -- a part that is one id when it is present, and no part when it is
+# zero
+partOpt: function {id: nodeid} out childpart is {
+    if id.isZero then return noPart
+    return (partOne :id)
+}
+
+# partLength -- how many children a part lists
+partLength: function {p: childpart} out u64 is {
+    if p.single then return 1
+    return p.span.count
+}
+
+# partAt -- the child at `i` of a part, which is below its partLength
+partAt: function {kids: (ListVal nodeid).view p: childpart i: u64} out nodeid is {
+    if p.single then return p.one
+    return (kidAt :kids span: p.span :i)
+}
+
+# appendPart -- append a part's children to `acc`
+appendPart: function {kids: (ListVal nodeid).view acc: ListVal nodeid p: childpart} is {
+    if p.single then {
+        acc.append from: p.one
+        return
+    }
+    appendSpan :kids :acc span: p.span
 }
 
 # cloneTreeAt -- a deep copy of the subtree the row `nid` names: every row a
@@ -3436,12 +3559,6 @@ appendSpan: function {kids: (ListVal nodeid).view acc: ListVal nodeid span: kids
 # where the per-visit lists went.
 appendIds: function {acc: ListVal nodeid ids: (ListVal nodeid).view} is {
     for each i: ids loop acc.append from: i
-}
-
-# appendOptId -- append `id` unless it is the zero sentinel, so a caller
-# collecting an OPTIONAL child needs no test of its own.
-appendOptId: function {acc: ListVal nodeid id: nodeid} is {
-    if id.isZero.not then acc.append from: id
 }
 
 # atomNameText -- a bare atom's name as owned text; "" for any other node.

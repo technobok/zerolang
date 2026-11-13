@@ -200,6 +200,21 @@ runSmoke: function is {
     runPath label: "streol" src: "(\"\"\"\n    abc\n    def\n    \"\"\")".string
 }
 
+# checkChildAt -- the parser goldens' check that childCount and childAt read
+# every node's children as childIds lists them, in the same order. It prints
+# only a disagreement, so each golden stands as it is while the three agree.
+checkChildAt: function {ast: zast.Ast.view n: zast.astnode.view} is {
+    kids: zast.childIds :ast :n
+    nid: (zast.nodeIdOf :n).u32
+    if (zast.childCount :ast :n) != kids.length then print "childCount disagrees at node \{nid}"
+    i: u64
+    for each k: kids loop {
+        if (zast.childAt :ast :n :i) != k then print "childAt disagrees at node \{nid} child \{i}"
+        i = i + 1
+        if k.isZero.not then checkChildAt :ast n: (ast.nodes.get i: k)
+    }
+}
+
 main: function is {
     words: zast.Vocab.create block: parserDumpWord
     # Three modes: no argument -> inline smoke harness; a single `.z` path
@@ -261,6 +276,7 @@ main: function is {
                     body: bodySpan
                     isGeneric: (zast.itemsHaveGenericParam ast: p.ast items: bodySpan)
                 )
+                checkChildAt ast: p.ast n: root
                 zast.printNodeCanonical ast: p.ast n: root
             } case err then {
                 io.eprintln "zparser: could not read source file"
