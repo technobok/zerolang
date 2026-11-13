@@ -32880,7 +32880,7 @@ checkMemberAutoCall: function {
         aShr: callReadsReceiver :st mid: mo nid: dp.nid
         # a receiver that is a `.view` result is read-only, written as a member
         # read (`(xs.get i: 0).pop`) exactly as written as a call
-        bnid: dottedParentNodeId :ast n: (ast.nodes.get i: dp.nid)
+        bnid: dottedReceiverNodeId :ast n: (ast.nodes.get i: dp.nid)
         bro: (
             bnid.notZero and ((valuePinsOf :st nid: bnid).marker == ztypes.zparamownership.viewMode)
         )
@@ -40991,7 +40991,7 @@ callHandsBackBorrow: function {st: zenv.ZSymbolTable ast: Ast.view n: astnode.vi
         if ft.notZero when (st.typing.returnsReference tid: ft) then return true
         ch: dottedChildNameId :ast n: cal
         if ch.isZero then return false
-        rt: walkTypeOf :st nid: (dottedParentNodeId :ast n: cal)
+        rt: walkTypeOf :st nid: (dottedReceiverNodeId :ast n: cal)
         if rt.isZero then return false
         mo: st.typing.declChildOfId parentTypeId: rt nameId: ch
         match (
@@ -44458,9 +44458,9 @@ methodReceiverTuple: function {ast: Ast.view n: astnode.view dst: ListVal zast.n
     }
 }
 
-# dottedParentNodeId -- the nodeid of a dotted callable's receiver expression
+# dottedReceiverNodeId -- the nodeid of a dotted callable's receiver expression
 # (its stamped type is the immediate receiver type); 0 otherwise.
-dottedParentNodeId: function {ast: Ast.view n: astnode.view} out zast.nodeid is {
+dottedReceiverNodeId: function {ast: Ast.view n: astnode.view} out zast.nodeid is {
     match (
         n
     ) case dottedpath then {
@@ -45721,7 +45721,7 @@ ownedValueReceiver: function {
     unitDecl: ztypes.declid
     call: callref
 } is {
-    rpn: dottedParentNodeId :ast n: (ast.nodes.get i: call.callable)
+    rpn: dottedReceiverNodeId :ast n: (ast.nodes.get i: call.callable)
     if rpn.isZero then return
     if (receiverIsValue :st :ast :unitDecl nid: rpn).not then return
     if (receiverRootIsVar :st :ast :call) when (
@@ -45753,7 +45753,7 @@ takeValueReceiver: function {
     if recvVal.not then return ztypes.tid
     # a receiver that is a `.view` result is read-only: a method that writes its
     # receiver cannot take one, as no `.borrow` can be lent from it
-    rvNid: dottedParentNodeId :ast n: (ast.nodes.get i: call.callable)
+    rvNid: dottedReceiverNodeId :ast n: (ast.nodes.get i: call.callable)
     rvRo: (
         rvNid.notZero and ((valuePinsOf :st nid: rvNid).marker == ztypes.zparamownership.viewMode)
     )
@@ -45813,14 +45813,14 @@ receiverResultPath: function {
     # a function stored in a field takes no receiver: what it hands back is
     # its own, not a view of the object that holds it
     if (calleeIsFieldFunction :st nid: call.callable) then return
-    rcvT: walkTypeOf :st nid: (dottedParentNodeId :ast n: (ast.nodes.get i: call.callable))
+    rcvT: walkTypeOf :st nid: (dottedReceiverNodeId :ast n: (ast.nodes.get i: call.callable))
     if (receiverPinsNothing :ast :st recvT: rcvT) then return
     methodReceiverTuple :ast n: (ast.nodes.get i: call.callable) :dst
     (
         cutAtViewingMethod
         :st
         :ast
-        recv: (dottedParentNodeId :ast n: (ast.nodes.get i: call.callable))
+        recv: (dottedReceiverNodeId :ast n: (ast.nodes.get i: call.callable))
         :dst
     )
     if dst.length > 0 then {
@@ -45835,7 +45835,7 @@ receiverResultPath: function {
         :st
         :ast
         :rvT
-        recvNid: (dottedParentNodeId :ast n: (ast.nodes.get i: call.callable))
+        recvNid: (dottedReceiverNodeId :ast n: (ast.nodes.get i: call.callable))
         :rvPins
         path: dst
         :pins
@@ -45924,7 +45924,7 @@ captureValueReceiver: function {
     # receives the pins a borrowed receiver left
     pins: List ztyping.PinPath
 } out ztypes.tid is {
-    rcv: dottedParentNodeId :ast n: (ast.nodes.get i: call.callable)
+    rcv: dottedReceiverNodeId :ast n: (ast.nodes.get i: call.callable)
     if rcv.isZero then return ztypes.tid
     rpins: List ztyping.PinPath
     (
@@ -51931,7 +51931,7 @@ lockNestedMethodReceiver: function {
         rvoN: st.lookupVarId nameId: (rtupC.get i: 0)
         if rvoN.some then {
             callableNode: ast.nodes.get i: call.callable
-            rpidN: dottedParentNodeId :ast n: callableNode
+            rpidN: dottedReceiverNodeId :ast n: callableNode
             rvtN: walkTypeOf :st nid: rpidN
             if rvtN.notZero then {
                 recvShared = callReadsReceiver :st mid: dro nid: call.callable
@@ -52032,7 +52032,7 @@ checkResolvedMethodCall: function {
     if mro.some then {
         # a self-type return reached on an instance is the instance, as the
         # dotted auto-call answers it
-        recvTid: walkTypeOf :st nid: (dottedParentNodeId :ast n: (ast.nodes.get i: call.callable))
+        recvTid: walkTypeOf :st nid: (dottedReceiverNodeId :ast n: (ast.nodes.get i: call.callable))
         mres = selfReturnOnInstance :st :recvTid ret: mro
         setmr: mres
         stampGate :st nid: call.nid tid: setmr
@@ -69085,9 +69085,9 @@ evalConstPlan: function {ast: Ast.view nid: zast.nodeid} out constplan is {
     return (constplan :arm :innerId :nameId :parts :parentId :childId :ln :co)
 }
 
-# plainStringLiteral -- string literal `nid` is text chunks only, with no
+# isPlainStringLiteral -- string literal `nid` is text chunks only, with no
 # interpolation: a constant wherever it is written
-plainStringLiteral: function {ast: Ast.view nid: zast.nodeid} out bool is {
+isPlainStringLiteral: function {ast: Ast.view nid: zast.nodeid} out bool is {
     sn: ast.nodes.get i: nid
     if sn.atomstring then {
         for each partId: (zast.kidsOf :ast span: sn.stringparts) loop {
@@ -69919,7 +69919,7 @@ useSiteAsks: function {
     }
     if (plan.arm == 7) or (plan.arm == 8) or (plan.arm == 9) then return false
     # a literal with no interpolation, its escapes chunks of their own
-    if plan.arm == 3 then return (plainStringLiteral :ast :nid)
+    if plan.arm == 3 then return (isPlainStringLiteral :ast :nid)
     if plan.arm != 4 then return true
     if (foldedToString :st nid: plan.parentId) then return true
     if (foldedToNumber :st nid: plan.parentId) then return true
