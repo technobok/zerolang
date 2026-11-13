@@ -9358,6 +9358,87 @@ forceMemberDecl: function {
     return (optionval.none ztypes.tid)
 }
 
+# nativeMethodForInstance -- give `inst`, an instance of a native generic that is
+# no builtin collection, its own function for the method `nameId`: the
+# template's method with the type's parameters replaced by the instance's
+# arguments, in what it answers and in what it takes (cloneMethodInto). Made
+# where the member is demanded by name, which a use of it does. Nothing for any
+# other owner, for a member the instance already owns, and for a method whose
+# signature names no parameter of the type: the template's own function serves
+# every instance.
+nativeMethodForInstance: function {
+    st: zenv.ZSymbolTable
+    ast: Ast
+    inst: ztypes.tid
+    nameId: zast.nameid
+} is {
+    og: st.reg.genericOriginOf tid: inst
+    if og.isZero or (st.reg.isPartialOf tid: inst) then return
+    if (st.reg.isNativeOf tid: og).not then return
+    tf: (st.typing.declChildOfId parentTypeId: og :nameId).or d: ztypes.tid.zero
+    if tf.isZero then return
+    # the instance's member is still the template's own function
+    if (
+        ((st.typing.declChildOfId parentTypeId: inst :nameId).or d: ztypes.tid.zero) != tf
+    ) then return
+    if (st.reg.typetypeOf typeId: tf) != ztypes.ztypetype.functionType then return
+    if (signatureNamesParams :st fn: tf).not then return
+    iterOut: ListVal bool
+    if (templateIsCollection :ast :st templateId: og :iterOut) then return
+    tdecl: st.typing.declIdOfType typeId: og
+    if tdecl.isZero then return
+    pn: st.reg.genericParamNamesOf :tdecl
+    n: st.reg.genericArgCount specId: inst
+    if pn.length < n then n = pn.length
+    idSubs: IdMapV ztypes.tid v: ztypes.genericarg
+    i: u64
+    for i < n loop {
+        ta: st.reg.genericTypeArgAt specId: inst ordinal: i
+        p: pn.get :i
+        i = i + 1
+        if ta.isZero then continue
+        (
+            idSubs.set
+            key: (genericParamTidMint :st :ast :tdecl nameId: p)
+            value: ztypes.genericarg.typeArg ta
+        )
+    }
+    if idSubs.length == 0 then return
+    m: zast.nameTextCopy :ast ref: nameId
+    (
+        cloneMethodInto
+        :ast
+        :st
+        unitDecl: (unitDeclOfTid reg: st.reg typing: st.typing tid: inst)
+        scope: tdecl
+        specId: inst
+        tplClassId: og
+        m: m.stringView
+        tplFnId: tf
+        :idSubs
+    )
+}
+
+# signatureNamesParams -- the function `fn` answers, or takes, a generic
+# parameter or a type built over one (a partial): what an instance sees
+# differently from its template.
+signatureNamesParams: function {st: zenv.ZSymbolTable.view fn: ztypes.tid} out bool is {
+    if (
+        (st.reg.typetypeOf typeId: (st.reg.returnTypeOf tid: fn)) == ztypes.ztypetype.genericParam
+    ) then {
+        return true
+    }
+    slot: u64
+    for slot < (st.typing.declRowSlots ownerTid: fn) loop {
+        rw: st.typing.declRowAt ownerTid: fn membersOnly: true :slot
+        slot = slot + 1
+        if rw.keep when (
+            (st.reg.typetypeOf typeId: rw.tid) == ztypes.ztypetype.genericParam
+        ) then return true
+    }
+    return false
+}
+
 # stampForcedTyperef -- stamp one type-ref node that resolved AFTER stampTyperefs
 # ran. recordFuncReturnNode routes a call site's return type through the node
 # stamp, and stampTyperefs fills those before the body walk -- so a member forced
@@ -9466,6 +9547,7 @@ forceMemberOf: function {
     md: st.typing.declMemberIdOf :parentTypeId :nameId
     if md.isZero then return
     forceMemberDecl :st :ast memberDeclId: md
+    nativeMethodForInstance :st :ast inst: parentTypeId :nameId
 }
 
 # forceOwnerMember -- force one member of the type `ownerDecl` declares, found
@@ -28069,8 +28151,13 @@ typeIsNumberOf: function {
 }
 
 # completeSpecChildren -- finish a spec that the trie already carries: the
-# per-instance collection children its template cannot express. Name-keyed
-# mints (sized records, empty-subs chains) make the same call themselves.
+# per-instance collection children its template cannot express, and a native
+# class's own `create`. Name-keyed mints (sized records, empty-subs chains)
+# make the first call themselves.
+#
+# `create` says what an instance is made from, and so what it holds: the
+# instance owns that signature from the start (nativeMethodForInstance), where
+# it owns any other method's from the method's first use.
 completeSpecChildren: function {
     ast: Ast
     st: zenv.ZSymbolTable
@@ -28078,6 +28165,7 @@ completeSpecChildren: function {
     mid8: ztypes.tid
 } is {
     mintCollectionChildren :st :ast monoId: mid8 :templateId
+    nativeMethodForInstance :st :ast inst: mid8 nameId: zast.wellKnown.slot.wkCreate
 }
 
 # mintSpecUnderTemplate -- build the spec's children, LAST, and the trie edge laid
@@ -30905,24 +30993,6 @@ selfReturnOnInstance: function {
     return ret
 }
 
-# nativeReturnOnInstance -- a NATIVE method's answer read through an instance:
-# the method is the template's (natives are not cloned per instance), so an
-# answer built over the template's parameters (`lock: ... outx (MutexGuard T)`)
-# is respecialized with the instance's arguments; any other answer is itself
-nativeReturnOnInstance: function {
-    st: zenv.ZSymbolTable
-    ast: Ast
-    unitDecl: ztypes.declid
-    recvTid: ztypes.tid
-    ret: ztypes.tid
-} out ztypes.tid is {
-    if recvTid.isZero or ret.isZero then return ret
-    if (st.reg.isPartialOf tid: ret).not then return ret
-    if (st.reg.genericOriginOf tid: recvTid).isZero then return ret
-    if (st.reg.isPartialOf tid: recvTid) then return ret
-    return (partialSubstituted :st :ast :unitDecl partial: recvTid tid: ret)
-}
-
 # methodReturnOf -- a method FUNCTION type's return type id: the synthesized
 # returnTypeId link when set, else the AST method's recorded `out T` ref node
 # (funcReturnNode) read through the post-demand stamp.
@@ -33134,7 +33204,6 @@ checkMemberAutoCall: function {
             ro
         ) case some then {
             result = selfReturnOnInstance :st recvTid: bt ret: ro
-            result = nativeReturnOnInstance :st :ast :unitDecl recvTid: bt ret: result
             # an auto-call's only input is its receiver: the pin its result
             # keeps, if any, is the receiver path at the strength the reader
             # took. Built locally, then pushed through the full field path (a
@@ -42419,7 +42488,6 @@ forOptionElementOf: function {
 forIteratorElementOf: function {
     st: zenv.ZSymbolTable
     ast: Ast
-    unitDecl: ztypes.declid
     vt: ztypes.tid
 } out forelem is {
     fe: forelem elem: ztypes.tid.zero wrapper: vt isView: false
@@ -42429,13 +42497,11 @@ forIteratorElementOf: function {
     if c1.isZero.not then {
         rv0: methodReturnOf reg: st.reg typing: st.typing mid: c1
         if rv0.some then {
-            # a native's answer is its template's, read through the instance
-            rv: nativeReturnOnInstance :st :ast :unitDecl recvTid: vt ret: rv0
-            w2: iterWrapperElem :ast :st wid: rv
+            w2: iterWrapperElem :ast :st wid: rv0
             if w2.some then {
                 fe.elem = w2
-                fe.wrapper = rv
-                fe.isView = isViewUnionMono :ast :st wid: rv
+                fe.wrapper = rv0
+                fe.isView = isViewUnionMono :ast :st wid: rv0
             }
         }
     }
@@ -42600,7 +42666,7 @@ bindForIteration: function {
         if (isCallNode n: (ast.nodes.get i: cond.operation)) then {
             probeForCallIteration :st :ast :vt
         }
-        fe = forIteratorElementOf :st :ast :unitDecl :vt
+        fe = forIteratorElementOf :st :ast :vt
     } else {
         fe = forOptionElementOf :st :ast :vt
     }
