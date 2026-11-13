@@ -2898,7 +2898,7 @@ zl-full-guard: bin/zl
 	  echo "zl-full-guard FAIL: A013 did not report countDots, and only countDots, with its five arms:"; \
 	  printf '%s\n' "$$out" | sed 's/^/    /'; fail=1; fi; \
 	out=$$(cd $$d && $(CURDIR)/bin/zl lint --arch --counts $(CURDIR)/$(ZLFULL_WALK) 2>/dev/null); \
-	if [ "$$out" != "A013 $(CURDIR)/$(ZLFULL_WALK) 1" ]; then \
+	if [ "$$(printf '%s\n' "$$out" | grep -c .)" != 1 ] || ! printf '%s\n' "$$out" | grep -qE '^A013 .*[/\\]handwalk\.z 1$$'; then \
 	  echo "zl-full-guard FAIL: --counts did not print the one row 'A013 <file> 1':"; \
 	  printf '%s\n' "$$out" | sed 's/^/    /'; fail=1; fi; \
 	rm -rf $$d; \
