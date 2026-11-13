@@ -3968,6 +3968,52 @@ Analysis: class {
         } else null
     }
 
+    # negatedTwin -- L033: a negated test whose type has the positive twin.
+    # `x.isZero.not` where the type of `x` declares `notZero`, and `o.none.not`
+    # on an option, whose other arm is `some`. The fix writes the twin over the
+    # two names; it is offered only when one dot on one line joins them.
+    negatedTwin: function {:this ast: Ast.view n: zast.dottedpathrow st: zenv.ZSymbolTable} is {
+        notAtom: ast.nodes.get i: n.child
+        if (zast.atomNameIdOf n: notAtom) != zast.wellKnown.slot.wkNot then return
+        inner: ast.nodes.get i: n.parent
+        if inner.dottedpath.not then return
+        testAtom: ast.nodes.get i: inner.child
+        testId: zast.atomNameIdOf n: testAtom
+        baseTid: ztyping.nodeTypeAt tbl: st.typing.nodeType nid: inner.parent
+        if baseTid.isZero then return
+        twin: ""
+        if testId == zast.wellKnown.slot.wkNone when (isOptionTid :ast :st tid: baseTid) then {
+            twin = "some"
+        }
+        if testId == zast.wellKnown.slot.wkIsZero when (
+            st.typing.declMemberIdOf
+            parentTypeId: baseTid
+            nameId: zast.wellKnown.slot.wkNotZero
+        ).notZero then {
+            twin = "notZero"
+        }
+        if twin.length == 0 then return
+        testText: zast.poolTextAt pool: ast.names ref: testId
+        testLen: testText.length.u32.orPanic
+        tp: zast.posOf n: testAtom
+        np: zast.posOf n: notAtom
+        msg: "`\{testText}.not` has a positive twin: write `\{twin}`"
+        if (np.line != tp.line) or (np.col != (tp.col + testLen + 1)) then {
+            this.warn code: "L033" :msg line: tp.line col: tp.col width: testLen
+            return
+        }
+        lo: (
+            tokByteStart
+            lineStart: this.lineStart
+            srcLines: this.lines
+            lineno: tp.line
+            colno: tp.col
+        )
+        width: testLen + 4
+        hi: lo + width
+        this.warnFix code: "L033" :msg line: tp.line col: tp.col :width :lo :hi repl: twin.string
+    }
+
     # walkSuf -- preorder over the subtree running the typecheck-based suffix check, threading
     # the enclosing function's return type for `return`s. The arms a check reads are spelled;
     # every child is visited through zast.childIds.
@@ -4040,6 +4086,8 @@ Analysis: class {
                 value: (ast.nodes.get i: n.value)
                 :st
             )
+        } case dottedpath then {
+            this.negatedTwin :ast :n :st
         } case functiondef then {
             # the function's own return type is the funcret for everything below it
             this.walkSufRet :ast retId: n.returntype :uname :st
@@ -5797,6 +5845,23 @@ nodeinfo: record {
     line: u32
     # the source column, paired with line
     col: u32
+}
+
+# isOptionTid -- `tid` is an instance of one of the option templates, the sum
+# types whose two arms are `none` and `some`.
+isOptionTid: function {ast: Ast.view st: zenv.ZSymbolTable tid: ztypes.tid} out bool is {
+    origin: st.reg.genericOriginOf :tid
+    if origin.isZero then return false
+    if origin == (ztypecheck.stdTidRo :ast :st wk: zast.wellKnown.slot.tyOptionval) then return true
+    if origin == (ztypecheck.stdTidRo :ast :st wk: zast.wellKnown.slot.tyOption) then return true
+    if (
+        origin == (ztypecheck.stdTidRo :ast :st wk: zast.wellKnown.slot.tyOptionView)
+    ) then return true
+    if (
+        origin == (ztypecheck.stdTidRo :ast :st wk: zast.wellKnown.slot.tyOptionViewVal)
+    ) then return true
+    if origin == (ztypecheck.stdTidRo :ast :st wk: zast.wellKnown.slot.tyOptionMut) then return true
+    return origin == (ztypecheck.stdTidRo :ast :st wk: zast.wellKnown.slot.tyOptionMutVal)
 }
 
 # nodeInfoOf -- the id and source position of any AST node.

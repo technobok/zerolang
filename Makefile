@@ -1427,7 +1427,7 @@ perf: $(PERFBIN)
 # deletes write-only allocations; perf-elision measures that), a failed run and
 # allocs != frees. Above ALLOC_BASELINE fails; a commit raising it says why in
 # its message, and one lowering the count lowers it here.
-ALLOC_BASELINE := 2863298
+ALLOC_BASELINE := 2863316
 # ALLOC_LINE -- the one measurement every allocation number comes from.
 ALLOC_LINE = valgrind --tool=memcheck $(PERFRUN) 2>&1 | grep 'total heap usage' | sed 's/.*usage: //'
 
@@ -2838,7 +2838,9 @@ generic-param-guard: bin/zl
 # lints a subunit as itself, places L003/L011 only in the --full tier, and
 # reports A012 for a file unit with no public block, never for a subunit. It
 # also checks A013 and --counts: of handwalk.z's four walks, only the one
-# written out by hand is reported, and its row is `A013 <file> 1`.
+# written out by hand is reported, and its row is `A013 <file> 1`. L033
+# reports a negated test only where the type has the positive twin, and its
+# fix writes the twin.
 ZLFULL_FIX := tests/fixtures/zl_full/tiered.z
 ZLFULL_DEP := tests/fixtures/zl_full/depunit/depmain.z
 ZLFULL_ONCE := tests/fixtures/zl_full/generic_once.z
@@ -2848,6 +2850,7 @@ ZLFULL_ELIDE := tests/fixtures/zl_full/elide.z
 ZLFULL_BZ := tests/fixtures/zl_full/bare_zero.z
 ZLFULL_BZS := tests/fixtures/zl_full/bare_zero_shadow.z
 ZLFULL_WALK := tests/fixtures/zl_full/handwalk.z
+ZLFULL_TWIN := tests/fixtures/zl_full/negated_twin.z
 zl-full-guard: bin/zl
 	@d=$$(mktemp -d); fail=0; \
 	out=$$(cd $$d && $(CURDIR)/bin/zl lint --full $(CURDIR)/$(ZLFULL_FIX) 2>&1); \
@@ -2902,6 +2905,16 @@ zl-full-guard: bin/zl
 	  printf '%s\n' "$$out" | sed 's/^/    /'; fail=1; fi; \
 	if $(CURDIR)/bin/zl lint $(CURDIR)/$(ZLFULL_BZ) 2>&1 | grep -q 'L011'; then \
 	  echo "zl-full-guard FAIL: the parse tier reported L011, which needs the checker"; fail=1; fi; \
+	out=$$(cd $$d && $(CURDIR)/bin/zl lint --full $(CURDIR)/$(ZLFULL_TWIN) 2>&1); \
+	if [ "$$(printf '%s\n' "$$out" | grep -c 'L033')" != 4 ] || [ "$$(printf '%s\n' "$$out" | grep -c 'write `notZero`')" != 2 ] || [ "$$(printf '%s\n' "$$out" | grep -c 'write `some`')" != 2 ]; then \
+	  echo "zl-full-guard FAIL: L033 did not report the fixture's two isZero.not and two option none.not, and only those:"; \
+	  printf '%s\n' "$$out" | sed 's/^/    /'; fail=1; fi; \
+	out=$$(cd $$d && $(CURDIR)/bin/zl fmt --full --stdout $(CURDIR)/$(ZLFULL_TWIN) 2>&1); \
+	if [ "$$(printf '%s\n' "$$out" | grep -c 'if r.notZero then\|if row.id.notZero then\|if row.next.some then\|if (pick i: 0).some then')" != 4 ] || [ "$$(printf '%s\n' "$$out" | grep -c '\.not then')" != 2 ]; then \
+	  echo "zl-full-guard FAIL: L033's fix did not write the four twins and leave the two tests that have none:"; \
+	  printf '%s\n' "$$out" | sed 's/^/    /'; fail=1; fi; \
+	if $(CURDIR)/bin/zl lint $(CURDIR)/$(ZLFULL_TWIN) 2>&1 | grep -q 'L033'; then \
+	  echo "zl-full-guard FAIL: the parse tier reported L033, which needs the checker"; fail=1; fi; \
 	out=$$(cd $$d && $(CURDIR)/bin/zl lint --full --arch $(CURDIR)/$(ZLFULL_SUB).z 2>&1); \
 	if [ "$$(printf '%s\n' "$$out" | grep -c 'A012')" != 1 ]; then \
 	  echo "zl-full-guard FAIL: A012 did not report the unit with no public block once:"; \
