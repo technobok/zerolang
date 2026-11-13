@@ -4932,12 +4932,10 @@ Ctx: class {
     exclTids: List VidTid
     # the save stack for exclusions layered by an `if` clause's conjuncts. One
     # stack for the whole emission, indexed per clause, because a clause layers
-    # nothing at all in the ordinary case and three lists per clause is three
-    # allocations per clause for an empty answer. Entries are popped in reverse,
+    # nothing at all in the ordinary case and a list per clause is an
+    # allocation per clause for an empty answer. Entries are popped in reverse,
     # so a nested clause restores before the one enclosing it.
-    exSaveVid: ListVal ztypes.vid
-    exSaveV: List VidArms
-    exSaveT: ListVal ztypes.tid
+    exSaves: List ExclSave
     # whether a generator body is being emitted, which changes what a return
     # means
     genActive: bool
@@ -5748,6 +5746,17 @@ VidArms: class {
     vid: ztypes.vid
     # the arms, by name
     arms: ListVal zast.nameid
+}
+
+# ExclSave -- what the exclusion tables held for one variable before an `if`
+# clause's conjunct layered an exclusion on it (pushExclusion), which
+# restoreCondExclusions puts back.
+ExclSave: class {
+    vid: ztypes.vid
+    # the arms excluded for it, empty for none
+    arms: ListVal zast.nameid
+    # the type those arms belong to, 0 for none
+    owner: ztypes.tid
 }
 
 # vaGet -- the arms recorded for `vid`, none when absent.
@@ -32212,9 +32221,12 @@ pushExclusion: function {
     pv0: vaGet xs: ctx.exclArms :vid
     nx: pv0.copy
     nx.append arm
-    ctx.exSaveVid.append vid
-    ctx.exSaveV.append (VidArms :vid arms: pv0)
-    ctx.exSaveT.append ((vtGet xs: ctx.exclTids :vid).or d: ztypes.tid.zero)
+    ctx.exSaves.append (
+        ExclSave
+        :vid
+        arms: pv0
+        owner: ((vtGet xs: ctx.exclTids :vid).or d: ztypes.tid.zero)
+    )
     vaSet xs: ctx.exclArms :vid arms: nx
     vtSet xs: ctx.exclTids :vid tid: owner
 }
@@ -32223,19 +32235,17 @@ pushExclusion: function {
 # before it, newest first, and drop those entries so the enclosing clause's mark
 # still points where it did.
 restoreCondExclusions: function {ctx: Ctx mark: u64} is {
-    for ctx.exSaveVid.length > mark loop {
-        rv: ctx.exSaveVid.pop
-        pv: ctx.exSaveV.pop
-        pt: ctx.exSaveT.pop
-        if pv.arms.length > 0 then {
-            vaSet xs: ctx.exclArms vid: rv arms: pv.arms
+    for ctx.exSaves.length > mark loop {
+        sv: ctx.exSaves.pop
+        if sv.arms.length > 0 then {
+            vaSet xs: ctx.exclArms vid: sv.vid arms: sv.arms
         } else {
-            vidRemove xs: ctx.exclArms vid: rv
+            vidRemove xs: ctx.exclArms vid: sv.vid
         }
-        if pt.isZero.not then {
-            vtSet xs: ctx.exclTids vid: rv tid: pt
+        if sv.owner.isZero.not then {
+            vtSet xs: ctx.exclTids vid: sv.vid tid: sv.owner
         } else {
-            vidRemove xs: ctx.exclTids vid: rv
+            vidRemove xs: ctx.exclTids vid: sv.vid
         }
     }
 }
@@ -33054,7 +33064,7 @@ emitIfClause: function {
         sPrevV: List String
         sPrevF: ListVal cfacts
         sPrevT: ListVal ztypes.tid
-        xMark: ctx.exSaveVid.length
+        xMark: ctx.exSaves.length
         suspends: whenCondSuspends :ast :ctx :n
         guarded: condsNeedSteps :ast :reg :typing :ctx :suspends conds: n.conditions
         opened: u64
@@ -33332,7 +33342,7 @@ emitElse: function {
     lh: "\{ind}} else {\n"
     buf.append lh
     bodyInd: "\{ind}    "
-    xMark: ctx.exSaveVid.length
+    xMark: ctx.exSaves.length
     layerChainExclusions :ctx svids: chSubjectVids arms: chArms tids: chTids negs: chNegs
     sVid: ListVal ztypes.vid
     sPrevV: List String
@@ -39436,9 +39446,7 @@ emitC: function {
         narrowTid: List VidTid
         exclArms: List VidArms
         exclTids: List VidTid
-        exSaveVid: ListVal ztypes.vid
-        exSaveV: List VidArms
-        exSaveT: ListVal ztypes.tid
+        exSaves: List ExclSave
         genActive: false
         genTid: ztypes.tid.zero
         genFieldsRow: 0
