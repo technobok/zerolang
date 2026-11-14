@@ -245,7 +245,7 @@ OpenResult: union {
 ZVfsProvider: protocol {
     # resolve one path component `name` under `parent`, answering this
     # provider's own node id, or 0 for NOTFOUND
-    walk: function {:this name: StringView parent: u32} out u32
+    walk: function {t: this name: StringView parent: u32} out u32
     # read the item: a file's contents, a folder's entry names, or why it could
     # not be read
     open: function {t: this.view item: u32} out OpenResult
@@ -255,7 +255,7 @@ ZVfsProvider: protocol {
     path: function {t: this.view item: u32} out String
     # add a file to this provider. Only the writable providers do anything with
     # it
-    addFile: function {:this fpath: String.take content: String.take}
+    addFile: function {t: this fpath: String.take content: String.take}
 }
 
 # NullProvider -- the stateless default. walk always returns
@@ -269,7 +269,7 @@ NullProvider: class {
 } as {
     zvfsProvider: ZVfsProvider.implement
     # always NOTFOUND: the null provider resolves nothing
-    walk: function {:this name: StringView parent: u32} out u32 is {
+    walk: function {t: this name: StringView parent: u32} out u32 is {
         name.drop
         parent.drop
         return 1
@@ -296,7 +296,7 @@ NullProvider: class {
         return "[NULL]".string
     }
     # discards it: the null provider stores nothing
-    addFile: function {:this fpath: String.take content: String.take} is {
+    addFile: function {t: this fpath: String.take content: String.take} is {
         fpath.drop
         content.drop
         panic "NullProvider has no file storage"
@@ -382,36 +382,36 @@ StringProvider: class {
     zvfsProvider: ZVfsProvider.implement
 
     # Internal: append a node, return its assigned id.
-    appendNode: function {:this fpath: String.take k: nodekind c: String.take} out u32 is {
-        idx: this.nodes.length.u32.orPanic
+    appendNode: function {t: this fpath: String.take k: nodekind c: String.take} out u32 is {
+        idx: t.nodes.length.u32.orPanic
         n: StringNode path: fpath.take kind: k content: c.take kids: ListVal u32
-        this.nodes.append n.take
+        t.nodes.append n.take
         return idx
     }
 
     # Internal: record a parent->child edge in the children map and the
     # parent's kids. Builds the composite "<parentid>:<name>" key directly.
-    addChild: function {:this parentid: u32 name: StringView childid: u32.take} is {
+    addChild: function {t: this parentid: u32 name: StringView childid: u32.take} is {
         key: "\{parentid.u64}:\{name}"
-        this.children.set key: key.take value: childid
-        (this.nodes.getMut i: parentid).kids.append childid
+        t.children.set key: key.take value: childid
+        (t.nodes.getMut i: parentid).kids.append childid
     }
 
     # resolve `name` under `parent` through the children map -- no filesystem is
     # touched
-    walk: function {:this name: StringView parent: u32} out u32 is {
+    walk: function {t: this name: StringView parent: u32} out u32 is {
         key: "\{parent}:\{name}"
-        r: this.children.get key: key.copy
+        r: t.children.get key: key.copy
         match (
             r
         ) case some then {
             return r
         } case none then {
             # append a NOTFOUND node, record the edge, return the new id.
-            childpath: "\{(this.nodes.get i: parent).path}/\{name}"
+            childpath: "\{(t.nodes.get i: parent).path}/\{name}"
             empty: String
-            newid: this.appendNode fpath: childpath.take k: nodekind.notfound c: empty.take
-            this.addChild parentid: parent :name childid: newid.u32
+            newid: t.appendNode fpath: childpath.take k: nodekind.notfound c: empty.take
+            t.addChild parentid: parent :name childid: newid.u32
             return newid
         }
     }
@@ -457,7 +457,7 @@ StringProvider: class {
     # `fpath` shapes accepted: "/a/b.txt" splits to ["a", "b.txt"]
     # (leading "/" produces an empty leading piece, ignored). A
     # path of "/" or "" is rejected (no file to attach to).
-    addFile: function {:this fpath: String.take content: String.take} is {
+    addFile: function {t: this fpath: String.take content: String.take} is {
         sv: fpath.stringView
         currentid: u32
         # iterate by re-splitting and counting non-empty pieces
@@ -472,22 +472,22 @@ StringProvider: class {
             if piece.length > 0 then {
                 seen = seen + 1
                 key: "\{currentid}:\{piece}"
-                r: this.children.get key: key.copy
+                r: t.children.get key: key.copy
                 match (
                     r
                 ) case some then {
                     currentid = r
                 } case none then {
-                    childpath: "\{(this.nodes.get i: currentid).path}/\{piece}"
+                    childpath: "\{(t.nodes.get i: currentid).path}/\{piece}"
                     if seen == total then {
                         c: content.copy
-                        newid: this.appendNode fpath: childpath.take k: nodekind.file c: c.take
-                        this.addChild parentid: currentid name: piece childid: newid.u32
+                        newid: t.appendNode fpath: childpath.take k: nodekind.file c: c.take
+                        t.addChild parentid: currentid name: piece childid: newid.u32
                         currentid = newid
                     } else {
                         empty: String
-                        newid: this.appendNode fpath: childpath.take k: nodekind.dir c: empty.take
-                        this.addChild parentid: currentid name: piece childid: newid.u32
+                        newid: t.appendNode fpath: childpath.take k: nodekind.dir c: empty.take
+                        t.addChild parentid: currentid name: piece childid: newid.u32
                         currentid = newid
                     }
                 }
@@ -525,19 +525,19 @@ FSProvider: class {
     zvfsProvider: ZVfsProvider.implement
 
     # Internal: append a node, return its assigned id.
-    appendPath: function {:this fpath: String.take k: nodekind} out u32 is {
-        idx: this.pathtable.length.u32.orPanic
+    appendPath: function {t: this fpath: String.take k: nodekind} out u32 is {
+        idx: t.pathtable.length.u32.orPanic
         n: FSNode path: fpath.take kind: k
-        this.pathtable.append n.take
+        t.pathtable.append n.take
         return idx
     }
 
     # resolve `name` under `parent` against the real filesystem, caching the
     # answer so the syscall happens once
-    walk: function {:this name: StringView parent: u32} out u32 is {
-        rel: joinPath parent: (this.pathtable.get i: parent).path.stringView :name
+    walk: function {t: this name: StringView parent: u32} out u32 is {
+        rel: joinPath parent: (t.pathtable.get i: parent).path.stringView :name
         # Cache lookup first; repeat walks short-circuit here.
-        cached: this.pathcache.get key: rel.copy
+        cached: t.pathcache.get key: rel.copy
         match (
             cached
         ) case some then {
@@ -545,7 +545,7 @@ FSProvider: class {
         } case none then {
             # Stat the full path on disk and translate filekind ->
             # nodekind. Any io.stat error collapses to NOTFOUND.
-            full: joinPath parent: this.rootpath.stringView name: rel.stringView
+            full: joinPath parent: t.rootpath.stringView name: rel.stringView
             k: nodekind.notfound
             sr: io.stat full
             match (
@@ -563,8 +563,8 @@ FSProvider: class {
                     k = nodekind.notfound
                 }
             } case err then null
-            newid: this.appendPath fpath: rel.copy :k
-            this.pathcache.set key: rel.take value: newid.u32
+            newid: t.appendPath fpath: rel.copy :k
+            t.pathcache.set key: rel.take value: newid.u32
             return newid
         }
     }
@@ -615,7 +615,7 @@ FSProvider: class {
     }
 
     # write the file to disk under this provider's root
-    addFile: function {:this fpath: String.take content: String.take} is {
+    addFile: function {t: this fpath: String.take content: String.take} is {
         fpath.drop
         content.drop
         panic "FSProvider is read-only"
@@ -706,15 +706,15 @@ ZVfs: class {
     # registerNull -- append a NullProvider to the provider list and
     # create its root directory dentry. Returns the new dentryid.
     #py:280-300 with NullProvider as the body.
-    registerNull: function {:this} out fsno is {
+    registerNull: function {t: this} out fsno is {
         np: NullProvider _unused: false
         prov: ZVfsProvider.create from: np.take
         box: ProviderBox p: prov
-        pid: this.providers.length.u32.orPanic
-        this.providers.append box.take
+        pid: t.providers.length.u32.orPanic
+        t.providers.append box.take
         d: dentry.directory (dirdata parentid: fsno providerid: pid nodeid: 0)
-        did: this.entrytable.append entry: d
-        this.fileNames.append "".string
+        did: t.entrytable.append entry: d
+        t.fileNames.append "".string
         return did
     }
     # registerString -- append a fresh StringProvider (empty) and
@@ -723,49 +723,49 @@ ZVfs: class {
     # the underlying provider ( The provider
     # is reachable via this.providers; the dispatcher's `addFile`
     # currently goes through ProviderTable, not ZVfs.providers.
-    registerString: function {:this} out fsno is {
+    registerString: function {t: this} out fsno is {
         sp: StringProvider nodes: List StringNode children: (MapRV String v: u32)
         root: StringNode path: "".string kind: nodekind.dir content: "".string kids: ListVal u32
         sp.nodes.append root.take
         prov: ZVfsProvider.create from: sp.take
         box: ProviderBox p: prov
-        pid: this.providers.length.u32.orPanic
-        this.providers.append box.take
+        pid: t.providers.length.u32.orPanic
+        t.providers.append box.take
         d: dentry.directory (dirdata parentid: fsno providerid: pid nodeid: 0)
-        did: this.entrytable.append entry: d
-        this.fileNames.append "".string
+        did: t.entrytable.append entry: d
+        t.fileNames.append "".string
         return did
     }
     # registerFS -- append an FSProvider rooted at <rootpath>/<parentpath>
     # (newFSProvider) and create its root dentry: a directory entry for a
     # directory root, a file entry for a file root, which belongs nowhere until
     # `bind` hangs it at a name.
-    registerFS: function {:this rootpath: String.take parentpath: String.take} out fsno is {
+    registerFS: function {t: this rootpath: String.take parentpath: String.take} out fsno is {
         fp: newFSProvider rootpath: rootpath.take parentpath: parentpath.take
         rpCopy: fp.rootpath.copy
         isFile: (fp.stat item: 0) == nodekind.file
         prov: ZVfsProvider.create from: fp.take
         box: ProviderBox p: prov
-        pid: this.providers.length.u32.orPanic
-        this.providers.append box.take
-        this.providerRoot.set key: pid value: rpCopy
+        pid: t.providers.length.u32.orPanic
+        t.providers.append box.take
+        t.providerRoot.set key: pid value: rpCopy
         d: dentry.directory (dirdata parentid: fsno providerid: pid nodeid: 0)
         if isFile then d = dentry.file (filedata parentid: fsno providerid: pid nodeid: 0)
-        did: this.entrytable.append entry: d
-        this.fileNames.append "".string
+        did: t.entrytable.append entry: d
+        t.fileNames.append "".string
         return did
     }
     # registerFile -- append `p`, a provider whose root (node 0) is one file, and
     # create its file entry, which belongs nowhere until `bind` hangs it at a
     # name. The provider says what the file holds when it is read, so a file no
     # walk reaches is never made.
-    registerFile: function {:this p: ZVfsProvider.take} out fsno is {
+    registerFile: function {t: this p: ZVfsProvider.take} out fsno is {
         box: ProviderBox p: p.take
-        pid: this.providers.length.u32.orPanic
-        this.providers.append box.take
+        pid: t.providers.length.u32.orPanic
+        t.providers.append box.take
         d: dentry.file (filedata parentid: fsno providerid: pid nodeid: 0)
-        did: this.entrytable.append entry: d
-        this.fileNames.append "".string
+        did: t.entrytable.append entry: d
+        t.fileNames.append "".string
         return did
     }
     # walk -- single-step VFS walk. Composite cache key avoids
@@ -775,10 +775,10 @@ ZVfs: class {
     # arms panic. On a cache miss: ask provider.walk +
     # provider.stat, translate to a file/directory/notfound dentry,
     # append to the entry table, record the name + cache.
-    walk: function {:this parent: fsno name: StringView} out fsno is {
+    walk: function {t: this parent: fsno name: StringView} out fsno is {
         # cache lookup
         cachekey: "\{parent}:\{name}"
-        cached: this.walkCache.get key: cachekey
+        cached: t.walkCache.get key: cachekey
         match (
             cached
         ) case some then {
@@ -791,22 +791,22 @@ ZVfs: class {
         # `_extractMount` so the entrytable borrow is released
         # before we recurse (recursive `this.walk` will WRITE to
         # entrytable on a cache miss).
-        mi: this._extractMount dentryid: parent
+        mi: t._extractMount dentryid: parent
         if mi.isMount then {
-            r1: this.walk parent: mi.first :name
+            r1: t.walk parent: mi.first :name
             if mi.hasSecond then {
-                r1Nf: this._dentryIsNotFound dentryid: r1
+                r1Nf: t._dentryIsNotFound dentryid: r1
                 if r1Nf then {
-                    r2: this.walk parent: mi.second :name
-                    this.walkCache.set key: cachekey.take value: r2
+                    r2: t.walk parent: mi.second :name
+                    t.walkCache.set key: cachekey.take value: r2
                     return r2
                 }
             }
-            this.walkCache.set key: cachekey.take value: r1
+            t.walkCache.set key: cachekey.take value: r1
             return r1
         }
         # extract parent's provider+nodeid
-        pe: this.entrytable.entries.get i: parent
+        pe: t.entrytable.entries.get i: parent
         ppid: u32
         pnid: u32
         match (
@@ -826,7 +826,7 @@ ZVfs: class {
             panic "ZVfs.walk: unreachable (mount handled above)"
         }
         # ask provider
-        box: this.providers.getMut i: ppid
+        box: t.providers.getMut i: ppid
         newnid: box.p.walk :name parent: pnid
         kind: box.p.stat item: newnid
         # construct new dentry
@@ -838,9 +838,9 @@ ZVfs: class {
         } case dir then {
             newd = dentry.directory (dirdata parentid: parent providerid: ppid nodeid: newnid)
         } case notfound then null
-        newdid: this.entrytable.append entry: newd
-        this.fileNames.append name.string
-        this.walkCache.set key: cachekey.take value: newdid
+        newdid: t.entrytable.append entry: newd
+        t.fileNames.append name.string
+        t.walkCache.set key: cachekey.take value: newdid
         return newdid
     }
     # arm -- coarse-grained "what kind of thing is this VFS entry"
@@ -1014,8 +1014,8 @@ ZVfs: class {
 
     # shadowOver -- record that the overlay rooted at `top` shadows the tree
     # rooted at `base`, so `siblingDir` treats the two as one tree.
-    shadowOver: function {:this top: fsno base: fsno} is {
-        this.shadow = shadowpair active: true :top :base
+    shadowOver: function {t: this top: fsno base: fsno} is {
+        t.shadow = shadowpair active: true :top :base
     }
 
     # siblingDir -- the entry `name` beside the file `fileid`, walked from the
@@ -1023,27 +1023,27 @@ ZVfs: class {
     # same-named entry in another root cannot stand in for it. Under a shadow
     # pair the same directory in the partner tree is searched too; when both
     # hold it, the answer is a mount over the two, the overlay first.
-    siblingDir: function {:this fileid: fsno name: StringView} out fsno is {
-        par: this.parentOf dentryid: fileid
-        near: this.walk parent: par :name
-        if this.shadow.active.not then return near
+    siblingDir: function {t: this fileid: fsno name: StringView} out fsno is {
+        par: t.parentOf dentryid: fileid
+        near: t.walk parent: par :name
+        if t.shadow.active.not then return near
         partner: fsno
         nearIsTop: false
-        if (this._sameProvider a: par b: this.shadow.top) then {
-            partner = this.shadow.base
+        if (t._sameProvider a: par b: t.shadow.top) then {
+            partner = t.shadow.base
             nearIsTop = true
-        } else if (this._sameProvider a: par b: this.shadow.base) then {
-            partner = this.shadow.top
+        } else if (t._sameProvider a: par b: t.shadow.base) then {
+            partner = t.shadow.top
         } else {
             return near
         }
-        rel: this.pathfromprovider dentryid: par
+        rel: t.pathfromprovider dentryid: par
         for each piece: (rel.stringView.split sep: "/") loop {
-            if piece.length > 0 then partner = this.walk parent: partner name: piece
+            if piece.length > 0 then partner = t.walk parent: partner name: piece
         }
-        far: this.walk parent: partner :name
-        nearDir: (this.arm dentryid: near) == nodekind.dir
-        farDir: (this.arm dentryid: far) == nodekind.dir
+        far: t.walk parent: partner :name
+        nearDir: (t.arm dentryid: near) == nodekind.dir
+        farDir: (t.arm dentryid: far) == nodekind.dir
         if nearDir.not then {
             if farDir then return far
             return near
@@ -1051,8 +1051,8 @@ ZVfs: class {
         if farDir.not then return near
         md: mountdata parentid: par first: far second: near hasSecond: true
         if nearIsTop then md = mountdata parentid: par first: near second: far hasSecond: true
-        mid: this.entrytable.append entry: dentry.mount md
-        this.fileNames.append name.string
+        mid: t.entrytable.append entry: dentry.mount md
+        t.fileNames.append name.string
         return mid
     }
 
@@ -1255,8 +1255,8 @@ ZVfs: class {
     # the old root. INSTEAD overlays exclusively (no second arm); BEFORE
     # / AFTER preserve the old root as the union's second / first arm
     # respectively.
-    bindRoot: function {:this newid: fsno kind: bindkind} out fsno is {
-        old: this.rootid
+    bindRoot: function {t: this newid: fsno kind: bindkind} out fsno is {
+        old: t.rootid
         md: mountdata parentid: old first: fsno second: fsno hasSecond: false
         match (
             kind
@@ -1268,9 +1268,9 @@ ZVfs: class {
             md = mountdata parentid: old first: old second: newid hasSecond: true
         }
         newDentry: dentry.mount md
-        newId: this.entrytable.append entry: newDentry
-        this.fileNames.append "".string
-        this.rootid = newId
+        newId: t.entrytable.append entry: newDentry
+        t.fileNames.append "".string
+        t.rootid = newId
         return newId
     }
 
@@ -1280,11 +1280,13 @@ ZVfs: class {
     # respectively. The walkCache entry for `<parentid>:<name>` is
     # overwritten so future walks route to the new mount. A FILE root
     # (registerFS on a file) is bound by `_bindFile` instead.
-    bind: function {:this parentid: fsno name: StringView newid: fsno kind: bindkind} out fsno is {
-        if (this.arm dentryid: newid) == nodekind.file then {
-            return (this._bindFile :parentid :name fileid: newid :kind)
+    bind: function {
+        t: this parentid: fsno name: StringView newid: fsno kind: bindkind
+    } out fsno is {
+        if (t.arm dentryid: newid) == nodekind.file then {
+            return (t._bindFile :parentid :name fileid: newid :kind)
         }
-        old: this.walk parent: parentid :name
+        old: t.walk parent: parentid :name
         zf: fsno
         md: mountdata :parentid first: zf second: zf hasSecond: false
         match (
@@ -1297,25 +1299,25 @@ ZVfs: class {
             md = mountdata :parentid first: old second: newid hasSecond: true
         }
         newDentry: dentry.mount md
-        newId: this.entrytable.append entry: newDentry
-        this.fileNames.append name.string
-        this._cacheWalk parent: parentid :name at: newId
-        this._noteBound parent: parentid :name
+        newId: t.entrytable.append entry: newDentry
+        t.fileNames.append name.string
+        t._cacheWalk parent: parentid :name at: newId
+        t._noteBound parent: parentid :name
         return newId
     }
 
     # _cacheWalk -- route every later walk of parent/name to `at`: a bind
     # overrides whatever was resolved there before.
-    _cacheWalk: function {:this parent: fsno name: StringView at: fsno} is {
+    _cacheWalk: function {t: this parent: fsno name: StringView at: fsno} is {
         cachekey: "\{parent}:\{name}"
-        this.walkCache.set key: cachekey.take value: at
+        t.walkCache.set key: cachekey.take value: at
     }
 
     # _noteBound -- record `name` as bound under `parent`, so a read of the
     # parent lists it
-    _noteBound: function {:this parent: fsno name: StringView} is {
-        if (this.bound.has key: parent).not then this.bound.set key: parent value: List String
-        got: this.bound.getMut key: parent
+    _noteBound: function {t: this parent: fsno name: StringView} is {
+        if (t.bound.has key: parent).not then t.bound.set key: parent value: List String
+        got: t.bound.getMut key: parent
         match (
             got
         ) case some then {
@@ -1328,10 +1330,10 @@ ZVfs: class {
     # now IS the file. The file takes the parent and the name it is bound at,
     # so its path, and a sibling lookup beside it, read from there.
     _bindFile: function {
-        :this parentid: fsno name: StringView fileid: fsno kind: bindkind
+        t: this parentid: fsno name: StringView fileid: fsno kind: bindkind
     } out fsno is {
         if kind.instead.not then panic "ZVfs.bind: a file is bound `instead`; it has no entries to layer"
-        e: this.entrytable.entries.get i: fileid
+        e: t.entrytable.entries.get i: fileid
         pid: u32
         nid: u32
         match (
@@ -1343,13 +1345,13 @@ ZVfs: class {
             panic "ZVfs.bind: not a file"
         }
         (
-            this.entrytable.entries.set
+            t.entrytable.entries.set
             i: fileid
             val: dentry.file (filedata :parentid providerid: pid nodeid: nid)
         )
-        this.fileNames.set i: fileid val: name.string
-        this._cacheWalk parent: parentid :name at: fileid
-        this._noteBound parent: parentid :name
+        t.fileNames.set i: fileid val: name.string
+        t._cacheWalk parent: parentid :name at: fileid
+        t._noteBound parent: parentid :name
         return fileid
     }
 }

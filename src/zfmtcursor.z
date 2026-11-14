@@ -267,9 +267,9 @@ Cursor: class {
     }
 
     # peekTextIs -- whether the next significant token spells `s`
-    peekTextIs: function {:this s: StringView} out bool is {
-        this.skipTrivia
-        return (this.textEq k: this.i :s)
+    peekTextIs: function {t: this s: StringView} out bool is {
+        t.skipTrivia
+        return (t.textEq k: t.i :s)
     }
 
     # rawLo -- the first byte of raw token `k`
@@ -288,48 +288,48 @@ Cursor: class {
     }
 
     # skipTrivia -- move past the trivia before the next significant token
-    skipTrivia: function {:this} is {
-        n: this.toks.length
-        for (this.i + 1) < n loop {
-            tt: (this.toks.get i: this.i).toktype
+    skipTrivia: function {t: this} is {
+        n: t.toks.length
+        for (t.i + 1) < n loop {
+            tt: (t.toks.get i: t.i).toktype
             if (isTrivia :tt).not then break
-            this.i = this.i + 1
+            t.i = t.i + 1
         }
     }
 
     # peekIndex -- the raw index of the next significant token
-    peekIndex: function {:this} out u64 is {
-        this.skipTrivia
-        return this.i
+    peekIndex: function {t: this} out u64 is {
+        t.skipTrivia
+        return t.i
     }
 
     # peekKind -- the kind of the next significant token
-    peekKind: function {:this} out zlexer.toktype is {
-        this.skipTrivia
-        return (this.toks.get i: this.i).toktype
+    peekKind: function {t: this} out zlexer.toktype is {
+        t.skipTrivia
+        return (t.toks.get i: t.i).toktype
     }
 
     # atEof -- whether every significant token was consumed
-    atEof: function {:this} out bool is {
-        return this.peekKind == zlexer.toktype.eofTok
+    atEof: function {t: this} out bool is {
+        return t.peekKind == zlexer.toktype.eofTok
     }
 
     # note -- record the first lockstep failure at the next raw token
-    note: function {:this msg: String.take} is {
-        if this.failed then return
-        this.failed = true
-        t: this.toks.get i: this.i
-        this.failLine = t.lineno
-        this.failCol = t.colno
-        this.failMsg = msg.take
+    note: function {t: this msg: String.take} is {
+        if t.failed then return
+        t.failed = true
+        tok: t.toks.get i: t.i
+        t.failLine = tok.lineno
+        t.failCol = tok.colno
+        t.failMsg = msg.take
     }
 
     # consume -- the raw token at the cursor, as its index
-    consume: function {:this} out u64 is {
-        k: this.i
-        n: this.toks.length
+    consume: function {t: this} out u64 is {
+        k: t.i
+        n: t.toks.length
         if (k + 1) >= n then return n
-        this.i = k + 1
+        t.i = k + 1
         return k
     }
 
@@ -338,10 +338,10 @@ Cursor: class {
     # becomes the last consumed one, so a gap read after the literal starts
     # past its closing delimiter and the newlines inside it are never counted
     # as blank lines
-    takeRaw: function {:this} out u64 is {
-        k: this.consume
-        this.prev = k
-        this.hasPrev = true
+    takeRaw: function {t: this} out u64 is {
+        k: t.consume
+        t.prev = k
+        t.hasPrev = true
         return k
     }
 
@@ -367,12 +367,12 @@ Cursor: class {
     # takeHoleRaw -- consume the interpolation hole at the cursor raw, through
     # its matching `}`: the caller copies it as written, so the comments in it
     # are placed, not lost. Answers the `}`'s index
-    takeHoleRaw: function {:this} out u64 is {
+    takeHoleRaw: function {t: this} out u64 is {
         depth: u64
-        last: this.i
-        for this.i < this.toks.length loop {
-            tt: (this.toks.get i: this.i).toktype
-            last = this.takeRaw
+        last: t.i
+        for t.i < t.toks.length loop {
+            tt: (t.toks.get i: t.i).toktype
+            last = t.takeRaw
             if tt == zlexer.toktype.braceOpenTok then depth = depth + 1
             if tt == zlexer.toktype.braceCloseTok then {
                 if depth <= 1 then break
@@ -380,89 +380,89 @@ Cursor: class {
             }
             if tt == zlexer.toktype.eofTok then break
         }
-        this.reported = this.i
+        t.reported = t.i
         return last
     }
 
     # expect -- consume the next significant token, which must be `tt`; on a
     # mismatch the failure is recorded and the EOF index answers, so the
     # builder can finish and the caller can refuse the file
-    expect: function {:this tt: zlexer.toktype} out u64 is {
-        this.skipTrivia
-        n: this.toks.length
-        got: (this.toks.get i: this.i).toktype
+    expect: function {t: this tt: zlexer.toktype} out u64 is {
+        t.skipTrivia
+        n: t.toks.length
+        got: (t.toks.get i: t.i).toktype
         if got != tt then {
             en: kindName :tt
             gn: kindName tt: got
-            this.note msg: "expected \{en}, found \{gn}"
+            t.note msg: "expected \{en}, found \{gn}"
             return n
         }
-        this.countLost
-        k: this.consume
-        this.prev = k
-        this.hasPrev = true
+        t.countLost
+        k: t.consume
+        t.prev = k
+        t.hasPrev = true
         return k
     }
 
     # countLost -- comments between the last report and the cursor that no
     # gap request covered
-    countLost: function {:this} is {
-        k: this.reported
-        for k < this.i loop {
-            if (this.toks.get i: k).toktype == zlexer.toktype.commentTok then {
-                this.lostComments = this.lostComments + 1
+    countLost: function {t: this} is {
+        k: t.reported
+        for k < t.i loop {
+            if (t.toks.get i: k).toktype == zlexer.toktype.commentTok then {
+                t.lostComments = t.lostComments + 1
             }
             k = k + 1
         }
-        this.reported = this.i
+        t.reported = t.i
     }
 
     # gap -- the trivia between the last consumed significant token and the
     # next one, its comments appended to gapComments / gapEols
-    gap: function {:this} out gapinfo is {
-        this.skipTrivia
-        stop: this.i
-        k: this.reported
-        if this.hasPrev when (this.prev + 1) > k then k = this.prev + 1
+    gap: function {t: this} out gapinfo is {
+        t.skipTrivia
+        stop: t.i
+        k: t.reported
+        if t.hasPrev when (t.prev + 1) > k then k = t.prev + 1
         info: (
             gapinfo
             newlineFirst: false
             trailing: false
-            first: this.gapComments.length.u32.orPanic
+            first: t.gapComments.length.u32.orPanic
             count: 0
             eolsEnd: 0
         )
         eols: u32
         sawNonWs: false
         for k < stop loop {
-            tt: (this.toks.get i: k).toktype
+            tt: (t.toks.get i: k).toktype
             if tt == zlexer.toktype.eolTok then {
                 if sawNonWs.not then info.newlineFirst = true
                 sawNonWs = true
                 eols = eols + 1
             } else if tt == zlexer.toktype.commentTok then {
-                if info.count == 0 when eols == 0 when this.hasPrev then info.trailing = true
+                if info.count == 0 when eols == 0 when t.hasPrev then info.trailing = true
                 sawNonWs = true
-                this.gapComments.append k
-                this.gapEols.append eols
+                t.gapComments.append k
+                t.gapEols.append eols
                 info.count = info.count + 1
                 eols = 0
             } else if tt == zlexer.toktype.semicolonTok then sawNonWs = true
             k = k + 1
         }
         info.eolsEnd = eols
-        this.reported = stop
+        t.reported = stop
         return info
     }
 
     # gapHasComment -- whether a comment sits between the last consumed
     # significant token and the next one, read without reporting the gap
-    gapHasComment: function {:this} out bool is {
-        this.skipTrivia
-        k: this.reported
-        if this.hasPrev when (this.prev + 1) > k then k = this.prev + 1
-        for k < this.i loop {
-            if (this.toks.get i: k).toktype == zlexer.toktype.commentTok then return true
+    gapHasComment: function {t: this} out bool is {
+        t.skipTrivia
+        k: t.reported
+        if t.hasPrev when (t.prev + 1) > k then k = t.prev + 1
+        for k < t.i loop {
+            if (t.toks.get i: k).toktype == zlexer.toktype.commentTok then return true
             k = k + 1
         }
         return false

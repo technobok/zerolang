@@ -1390,8 +1390,8 @@ ZTypeRegistry: class {
     # allocType -- an id with no ZType behind it, for an expression that has
     # no type: the result of auto-calling a method declared without `out`.
     # Staying unregistered is what keeps the stamp out of the dump's type join.
-    allocType: function {:this} out tid is {
-        return (this.typeById.append holeType)
+    allocType: function {t: this} out tid is {
+        return (t.typeById.append holeType)
     }
 
     # nextTid -- the id the next type minted takes. A walk records it before
@@ -1408,18 +1408,18 @@ ZTypeRegistry: class {
     # has a slot, and every reader dispatches on the name instead. One id
     # rather than one per loop keeps the id space dense. Minted on first use;
     # 0 is the notype sentinel, so it doubles as "not minted yet".
-    ctlPlaceholder: function {:this} out tid is {
-        if this.ctlPlaceholderTid.notZero then return this.ctlPlaceholderTid
-        t: this.allocType
-        this.ctlPlaceholderTid = t
-        return t
+    ctlPlaceholder: function {t: this} out tid is {
+        if t.ctlPlaceholderTid.notZero then return t.ctlPlaceholderTid
+        made: t.allocType
+        t.ctlPlaceholderTid = made
+        return made
     }
     # --- carrier factories: the single construction site for each
     # carrier, filling sensible field defaults. Callers mutate specific
     # fields afterward. They are registry methods (not free functions)
     # so the row they append persists through the `:this` receiver.
-    newType: function {:this name: StringView typetype: ztypetype ownerTid: tid.zero} out tid is {
-        t: (
+    newType: function {t: this name: StringView typetype: ztypetype ownerTid: tid.zero} out tid is {
+        made: (
             ZType
             isHole: false
             name: name.string
@@ -1442,7 +1442,7 @@ ZTypeRegistry: class {
             isTrieNode: false
             :ownerTid
         )
-        return (this.typeById.append t)
+        return (t.typeById.append made)
     }
 
     # nextVid -- the id the next variable minted takes. A scope or an exit
@@ -1455,8 +1455,8 @@ ZTypeRegistry: class {
 
     # newVariable -- mint a runtime variable: its row is appended to
     # variableById and its id returned.
-    newVariable: function {:this ztypeId: tid ownership: zownership} out vid is {
-        return (this.variableById.append (
+    newVariable: function {t: this ztypeId: tid ownership: zownership} out vid is {
+        return (t.variableById.append (
             ZVariable
             name: zast.nameid
             :ztypeId
@@ -1518,43 +1518,43 @@ ZTypeRegistry: class {
     }
 
     # record the name the variable is bound to
-    setVariableName: function {:this id: vid name: zast.nameid} is {
-        got: this.variableById.getMut i: id
+    setVariableName: function {t: this id: vid name: zast.nameid} is {
+        got: t.variableById.getMut i: id
         got.name = name
     }
 
     # record the root a borrow came from, so a conflict can name the source and
     # not just the borrow
-    setVariableBorrowOrigin: function {:this id: vid origin: zast.nameid} is {
-        got: this.variableById.getMut i: id
+    setVariableBorrowOrigin: function {t: this id: vid origin: zast.nameid} is {
+        got: t.variableById.getMut i: id
         got.borrowOrigin = origin
     }
 
     # record what the variable was synthesised for, which is all a diagnostic
     # can say about a name no one wrote
-    setVariableSynthOrigin: function {:this id: vid origin: String.take} is {
-        got: this.variableById.getMut i: id
+    setVariableSynthOrigin: function {t: this id: vid origin: String.take} is {
+        got: t.variableById.getMut i: id
         got.synthOrigin = Option.some origin
     }
 
     # mark it able to reach private members, which a `this` receiver is and an
     # outside binding is not
-    setVariablePrivate: function {:this id: vid} is {
-        got: this.variableById.getMut i: id
+    setVariablePrivate: function {t: this id: vid} is {
+        got: t.variableById.getMut i: id
         got.isPrivateAccess = true
     }
 
     # record how the variable came to be
-    setVariableOrigin: function {:this id: vid origin: zvarorigin} is {
-        got: this.variableById.getMut i: id
+    setVariableOrigin: function {t: this id: vid origin: zvarorigin} is {
+        got: t.variableById.getMut i: id
         got.origin = origin
     }
 
     # mint a scope entry for `ztypeId` and answer it. An entry is where
     # narrowing, locks and ownership are tracked -- the type alone is not enough
-    newEntry: function {:this ztypeId: tid} out ZEntry is {
-        id: this.nextEntryId
-        this.nextEntryId = this.nextEntryId.next
+    newEntry: function {t: this ztypeId: tid} out ZEntry is {
+        id: t.nextEntryId
+        t.nextEntryId = t.nextEntryId.next
         return (
             ZEntry
             entryId: id
@@ -1611,30 +1611,30 @@ ZTypeRegistry: class {
 
     # --- post-construction metadata stamps: mutate the stored ZType in
     # place through the by-id table. ---
-    setNeedsDestructor: function {:this typeId: tid} is {
-        if typeId >= this.nextTid then return
-        got: this.typeById.getMut i: typeId
+    setNeedsDestructor: function {t: this typeId: tid} is {
+        if typeId >= t.nextTid then return
+        got: t.typeById.getMut i: typeId
         got.needsDestructor = true
     }
 
     # mark it a box: a valtype wrapped so a reftype slot can hold it
-    setIsBox: function {:this typeId: tid} is {
-        if typeId >= this.nextTid then return
-        got: this.typeById.getMut i: typeId
+    setIsBox: function {t: this typeId: tid} is {
+        if typeId >= t.nextTid then return
+        got: t.typeById.getMut i: typeId
         got.isBox = true
     }
 
     # mark its storage as living on the heap rather than in the binding
-    setIsHeapAllocated: function {:this typeId: tid} is {
-        if typeId >= this.nextTid then return
-        got: this.typeById.getMut i: typeId
+    setIsHeapAllocated: function {t: this typeId: tid} is {
+        if typeId >= t.nextTid then return
+        got: t.typeById.getMut i: typeId
         got.isHeapAllocated = true
     }
 
     # mark it the origin of a tag generic
-    setTagGenericOrigin: function {:this typeId: tid} is {
-        if typeId >= this.nextTid then return
-        got: this.typeById.getMut i: typeId
+    setTagGenericOrigin: function {t: this typeId: tid} is {
+        if typeId >= t.nextTid then return
+        got: t.typeById.getMut i: typeId
         got.isTagGenericOrigin = true
     }
 
@@ -1648,63 +1648,63 @@ ZTypeRegistry: class {
     # setOwnerTid -- record `owner` as the type owning `typeId` as a member, for a
     # type minted before its owner was known: a generic unit's nested unit
     # instance, found on the trie and owned by the enclosing unit's instance
-    setOwnerTid: function {:this typeId: tid owner: tid} is {
-        if typeId >= this.nextTid then return
-        got: this.typeById.getMut i: typeId
+    setOwnerTid: function {t: this typeId: tid owner: tid} is {
+        if typeId >= t.nextTid then return
+        got: t.typeById.getMut i: typeId
         got.ownerTid = owner
     }
 
     # record whether it passes by value, which also decides whether it may hold
     # a reftype at all
-    setValtype: function {:this typeId: tid value: bool} is {
-        if typeId >= this.nextTid then return
-        got: this.typeById.getMut i: typeId
+    setValtype: function {t: this typeId: tid value: bool} is {
+        if typeId >= t.nextTid then return
+        got: t.typeById.getMut i: typeId
         got.isValtype = optionval.some value
     }
 
     # record whether it is a template rather than an instance
-    setGeneric: function {:this typeId: tid value: bool} is {
-        if typeId >= this.nextTid then return
-        got: this.typeById.getMut i: typeId
+    setGeneric: function {t: this typeId: tid value: bool} is {
+        if typeId >= t.nextTid then return
+        got: t.typeById.getMut i: typeId
         got.isgeneric = value
     }
 
     # record that the runtime owns its layout, so no struct is emitted for it
-    setNative: function {:this typeId: tid value: bool} is {
-        if typeId >= this.nextTid then return
-        got: this.typeById.getMut i: typeId
+    setNative: function {t: this typeId: tid value: bool} is {
+        if typeId >= t.nextTid then return
+        got: t.typeById.getMut i: typeId
         got.isNative = value
     }
 
     # record that its values are static (a `data` type)
-    setStatic: function {:this typeId: tid value: bool} is {
-        if typeId >= this.nextTid then return
-        got: this.typeById.getMut i: typeId
+    setStatic: function {t: this typeId: tid value: bool} is {
+        if typeId >= t.nextTid then return
+        got: t.typeById.getMut i: typeId
         got.isStatic = value
     }
 
     # record that the specialization is PARTIAL -- one of its arguments is a
     # generic parameter, so it carries no members and completes per instance
-    setPartial: function {:this typeId: tid value: bool} is {
-        if typeId >= this.nextTid then return
-        got: this.typeById.getMut i: typeId
+    setPartial: function {t: this typeId: tid value: bool} is {
+        if typeId >= t.nextTid then return
+        got: t.typeById.getMut i: typeId
         got.isPartial = value
     }
 
     # record that the row is an interior node of the specialization trie --
     # bookkeeping that parents the next key, not a type any program named
-    setTrieNode: function {:this typeId: tid value: bool} is {
-        if typeId >= this.nextTid then return
-        got: this.typeById.getMut i: typeId
+    setTrieNode: function {t: this typeId: tid value: bool} is {
+        if typeId >= t.nextTid then return
+        got: t.typeById.getMut i: typeId
         got.isTrieNode = value
     }
 
     # file an instantiation under its template, keyed by its argument trie --
     # which is what makes the same arguments find the same mono instead of
     # minting a twin
-    setGenericChild: function {:this parentId: tid key: genericarg child: tid} is {
-        if parentId >= this.nextTid then return
-        got: this.typeById.getMut i: parentId
+    setGenericChild: function {t: this parentId: tid key: genericarg child: tid} is {
+        if parentId >= t.nextTid then return
+        got: t.typeById.getMut i: parentId
         match (
             key
         ) case typeArg then {
@@ -1728,9 +1728,9 @@ ZTypeRegistry: class {
     }
 
     # appendGenericArg -- one argument of an instance, in declaration order
-    appendGenericArg: function {:this specId: tid arg: genericarg} is {
-        if specId >= this.nextTid then return
-        got: this.typeById.getMut i: specId
+    appendGenericArg: function {t: this specId: tid arg: genericarg} is {
+        if specId >= t.nextTid then return
+        got: t.typeById.getMut i: specId
         got.genericArgs.append arg
     }
 
@@ -1946,29 +1946,29 @@ ZTypeRegistry: class {
     }
 
     # record the template an instance came from
-    setGenericOrigin: function {:this typeId: tid value: tid} is {
-        if typeId >= this.nextTid then return
-        got: this.typeById.getMut i: typeId
+    setGenericOrigin: function {t: this typeId: tid value: tid} is {
+        if typeId >= t.nextTid then return
+        got: t.typeById.getMut i: typeId
         got.genericOriginId = optionval.some value
     }
 
     # record a function type's return
-    setReturnType: function {:this typeId: tid value: tid} is {
-        if typeId >= this.nextTid then return
-        got: this.typeById.getMut i: typeId
+    setReturnType: function {t: this typeId: tid value: tid} is {
+        if typeId >= t.nextTid then return
+        got: t.typeById.getMut i: typeId
         got.returnTypeId = optionval.some value
     }
 
     # record a method's receiver name
-    setThisParamName: function {:this typeId: tid nameId: zast.nameid} is {
-        if typeId >= this.nextTid then return
-        got: this.typeById.getMut i: typeId
+    setThisParamName: function {t: this typeId: tid nameId: zast.nameid} is {
+        if typeId >= t.nextTid then return
+        got: t.typeById.getMut i: typeId
         got.thisParamNameId = nameId
     }
 
     # setMainUnit -- the program's main unit, by its interned name.
-    setMainUnit: function {:this nameId: zast.nameid} is {
-        this.regMainUnitId = nameId
+    setMainUnit: function {t: this nameId: zast.nameid} is {
+        t.regMainUnitId = nameId
     }
 
     # addGenericParam / isGenericParamOf -- a template's generic-param
@@ -2030,7 +2030,7 @@ ZTypeRegistry: class {
     # so a miss is a compiler bug rather than anything a program can provoke,
     # and the panic names it at the write instead of somewhere downstream.
     setGenericParamTid: function {
-        :this
+        t: this
         # the template the parameter belongs to
         tdecl: declid
         # the parameter whose type is being recorded
@@ -2038,11 +2038,11 @@ ZTypeRegistry: class {
         # the canonical GENERIC_PARAM type minted for it
         :tid
     } is {
-        po: this.paramOrdinalOf :tdecl :paramName
+        po: t.paramOrdinalOf :tdecl :paramName
         match (
             po
         ) case some then {
-            plo: this.genericParams.getMut key: tdecl
+            plo: t.genericParams.getMut key: tdecl
             match (
                 plo
             ) case some then {
@@ -2066,7 +2066,7 @@ ZTypeRegistry: class {
     # declare one generic parameter on a template, with its constraint
     # classified now so later checks compare an arm
     addGenericParam: function {
-        :this
+        t: this
         tdecl: declid
         paramName: zast.nameid
         kind: constraintkind
@@ -2081,7 +2081,7 @@ ZTypeRegistry: class {
     } is {
         found: false
         {
-            plo: this.genericParams.getMut key: tdecl
+            plo: t.genericParams.getMut key: tdecl
             if plo.some then {
                 found = true
                 has: false
@@ -2124,19 +2124,19 @@ ZTypeRegistry: class {
                 paramTid: tid
                 defaultTid: tid
             )
-            this.genericParams.set key: tdecl value: np
+            t.genericParams.set key: tdecl value: np
         }
     }
 
     # instancesOf -- every FUNCTION minted from the generic function or method
     # `origin`, in minting order
-    instancesOf: function {v: this.view origin: tid} out ListVal tid is {
+    instancesOf: function {t: this.view origin: tid} out ListVal tid is {
         found: ListVal tid
-        t: tid
-        for t < v.nextTid loop {
-            isFn: (v.typeById.get i: t).typetype == ztypetype.functionType
-            if isFn when (v.genericOriginOf tid: t) == origin then found.append t
-            t = t.next
+        cur: tid
+        for cur < t.nextTid loop {
+            isFn: (t.typeById.get i: cur).typetype == ztypetype.functionType
+            if isFn when (t.genericOriginOf tid: cur) == origin then found.append cur
+            cur = cur.next
         }
         return found
     }
@@ -2145,10 +2145,10 @@ ZTypeRegistry: class {
     # the same names, bounds and canonical GENERIC_PARAM types, so a clone of a
     # generic declaration -- a generic method copied onto an instance of its
     # type -- is a template over the same parameters its signature names
-    copyGenericParams: function {:this from: declid to: declid} is {
+    copyGenericParams: function {t: this from: declid to: declid} is {
         np: ParamList params: List ParamDesc
         {
-            plo: this.genericParams.get key: from
+            plo: t.genericParams.get key: from
             match (
                 plo
             ) case some then {
@@ -2163,7 +2163,7 @@ ZTypeRegistry: class {
                 }
             } case none then return
         }
-        this.genericParams.set key: to value: np
+        t.genericParams.set key: to value: np
     }
 
     # whether `name` is one of `tdecl`'s generic parameters
@@ -2268,7 +2268,7 @@ ZTypeRegistry: class {
     # setGenericParamDefaultTid -- record the type `paramName`'s default named,
     # for a default that names no other parameter of `tdecl`.
     setGenericParamDefaultTid: function {
-        :this
+        t: this
         # the template whose parameter's default was resolved
         tdecl: declid
         # the parameter whose default was resolved
@@ -2276,11 +2276,11 @@ ZTypeRegistry: class {
         # the type the default named
         :tid
     } is {
-        po: this.paramOrdinalOf :tdecl :paramName
+        po: t.paramOrdinalOf :tdecl :paramName
         match (
             po
         ) case some then {
-            plo: this.genericParams.getMut key: tdecl
+            plo: t.genericParams.getMut key: tdecl
             match (
                 plo
             ) case some then {

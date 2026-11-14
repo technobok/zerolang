@@ -1285,15 +1285,15 @@ RtTexts: class {
 
     # parse -- cut `text` into its stretches, and keep it: its id (rtNextMark
     # finds each hole and key)
-    parse: function {:this text: StringView} out rtid is {
-        this.infos.append (this.cut :text)
-        this.heads.append "".string
-        return (this.texts.append text.string)
+    parse: function {t: this text: StringView} out rtid is {
+        t.infos.append (t.cut :text)
+        t.heads.append "".string
+        return (t.texts.append text.string)
     }
 
     # parsePieced -- `x`'s text cut into its stretches and kept with its pieces
     # and their heads, as its reader cut it: its id
-    parsePieced: function {:this x: PiecedText.take} out rtid is {
+    parsePieced: function {t: this x: PiecedText.take} out rtid is {
         # a stretch never crosses a piece's edge: each is written or not with
         # its piece
         edges: ListVal u64
@@ -1301,23 +1301,23 @@ RtTexts: class {
             edges.append p.at
             edges.append p.next
         }
-        inf: this.cutAt text: x.text.stringView :edges
-        inf.pieceFrom = this.pieces.length
-        for each p: x.pieces loop this.pieces.append p
-        inf.pieceTo = this.pieces.length
-        this.infos.append inf
+        inf: t.cutAt text: x.text.stringView :edges
+        inf.pieceFrom = t.pieces.length
+        for each p: x.pieces loop t.pieces.append p
+        inf.pieceTo = t.pieces.length
+        t.infos.append inf
         hd: String
         hd swap x.heads
-        this.heads.append hd.take
+        t.heads.append hd.take
         tx: String
         tx swap x.text
-        return (this.texts.append tx.take)
+        return (t.texts.append tx.take)
     }
 
     # defer -- keep `text` uncut: its id, which `ready` cuts on first use. A
     # row's body is kept so, as most rows go unused by a program
-    defer: function {:this text: StringView} out rtid is {
-        this.infos.append (
+    defer: function {t: this text: StringView} out rtid is {
+        t.infos.append (
             rtinfo
             segFrom: 0
             segTo: 0
@@ -1328,30 +1328,30 @@ RtTexts: class {
             members: false
             parsed: false
         )
-        this.heads.append "".string
-        return (this.texts.append text.string)
+        t.heads.append "".string
+        return (t.texts.append text.string)
     }
 
     # ready -- text `id` cut, if it was deferred
-    ready: function {:this id: rtid} is {
-        if (this.infos.get i: id).parsed then return
+    ready: function {t: this id: rtid} is {
+        if (t.infos.get i: id).parsed then return
         # cut where it stands: moved out of the list for the cut, which appends
         # to the other lists, then moved back
-        t: this.texts.set i: id val: String
-        this.infos.set i: id val: (this.cut text: t.stringView)
-        this.texts.set i: id val: t.take
+        owned: t.texts.set i: id val: String
+        t.infos.set i: id val: (t.cut text: owned.stringView)
+        t.texts.set i: id val: owned.take
     }
 
     # cut -- `text`'s stretches appended, and where they lie
-    cut: function {:this text: StringView} out rtinfo is {
-        return (this.cutAt :text edges: ListVal u64)
+    cut: function {t: this text: StringView} out rtinfo is {
+        return (t.cutAt :text edges: ListVal u64)
     }
 
     # cutAt -- cut, with no literal stretch crossing any of `edges` (offsets in
     # rising order)
-    cutAt: function {:this text: StringView edges: (ListVal u64).view} out rtinfo is {
-        segFrom: this.segs.length
-        pieceFrom: this.pieces.length
+    cutAt: function {t: this text: StringView edges: (ListVal u64).view} out rtinfo is {
+        segFrom: t.segs.length
+        pieceFrom: t.pieces.length
         open: false
         # what the holes and keys spell (addMark)
         spells: u64
@@ -1362,17 +1362,17 @@ RtTexts: class {
                 open = m.open
                 break
             }
-            this.addLiterals from: lit to: m.at :edges
-            spells = spells | (this.addMark :text :m)
+            t.addLiterals from: lit to: m.at :edges
+            spells = spells | (t.addMark :text :m)
             lit = m.to
         }
-        this.addLiterals from: lit to: text.length :edges
+        t.addLiterals from: lit to: text.length :edges
         return (
             rtinfo
             :segFrom
-            segTo: this.segs.length
+            segTo: t.segs.length
             :pieceFrom
-            pieceTo: this.pieces.length
+            pieceTo: t.pieces.length
             :open
             arms: (spells & 1) != 0
             members: (spells & 2) != 0
@@ -1382,40 +1382,40 @@ RtTexts: class {
 
     # addMark -- the hole or key `m` of `text` as a stretch, its name interned:
     # 1 when it is an ARM hole, 2 a MEMBER hole
-    addMark: function {:this text: StringView m: rtmark} out u64 is {
+    addMark: function {t: this text: StringView m: rtmark} out u64 is {
         spells: u64
         hid: zast.nameid.zero
         k: rtsegkind.hole
         if m.key then {
             k = rtsegkind.key
-            hid = this.keys.set s: (text.substring from: m.at + 2 to: m.to - 2)
+            hid = t.keys.set s: (text.substring from: m.at + 2 to: m.to - 2)
         } else {
             nm: text.substring from: m.at + 1 to: m.to - 1
             if (nm.startsWith prefix: "ARM_") then spells = 1
             if (nm.startsWith prefix: "MEMBER_") then spells = 2
-            hid = this.holes.pool.set s: nm
+            hid = t.holes.pool.set s: nm
         }
-        this.segs.append (rtseg kind: k from: m.at to: m.to name: hid)
+        t.segs.append (rtseg kind: k from: m.at to: m.to name: hid)
         return spells
     }
 
     # addLiterals -- the text from `from` to `to` as literal stretches, cut at
     # each of `edges` inside it
-    addLiterals: function {:this from: u64 to: u64 edges: (ListVal u64).view} is {
+    addLiterals: function {t: this from: u64 to: u64 edges: (ListVal u64).view} is {
         at: from
         for each e: edges loop {
             if e > at when e < to then {
-                this.addLiteral from: at to: e
+                t.addLiteral from: at to: e
                 at = e
             }
         }
-        this.addLiteral from: at :to
+        t.addLiteral from: at :to
     }
 
     # addLiteral -- the text from `from` to `to` as a literal stretch, when there
     # is any
-    addLiteral: function {:this from: u64 to: u64} is {
-        if to > from then this.segs.append (
+    addLiteral: function {t: this from: u64 to: u64} is {
+        if to > from then t.segs.append (
             rtseg
             kind: rtsegkind.literal
             :from
@@ -1478,7 +1478,7 @@ RtTexts: class {
     # (rtAppendHole), and a hole bound to nothing a failure added to `fails`
     # naming `path`. Every other key and hole is written as it stands.
     fillSpan: function {
-        v: this.view
+        t: this.view
         id: rtid
         from: u64
         to: u64
@@ -1492,13 +1492,13 @@ RtTexts: class {
         fails: List String
         buf: String.borrow
     } is {
-        t: v.texts.get i: id
-        tv: t.stringView
-        inf: v.infos.get i: id
+        whole: t.texts.get i: id
+        tv: whole.stringView
+        inf: t.infos.get i: id
         k: inf.segFrom
-        if from > 0 then k = v.segAt :inf at: from
+        if from > 0 then k = t.segAt :inf at: from
         for k < inf.segTo loop {
-            sg: v.segs.get i: k
+            sg: t.segs.get i: k
             if sg.from >= to then break
             k = k + 1
             if (sg.from < from) or (sg.to > to) then {
@@ -2873,51 +2873,51 @@ RowWalk: class {
     # unit's declaration (RowTable.fileOf) when the program reaches the unit,
     # and its rows found by name then only (nameRow)
     file: function {
-        :this ctx: Ctx ast: Ast.view typing: ztyping.ZTyping.view owner: StringView
+        t: this ctx: Ctx ast: Ast.view typing: ztyping.ZTyping.view owner: StringView
     } is {
         ctx.rows.fileUnits.append (ctx.demands.names.intern s: owner)
-        this.impl = ctx.rows.fileUnits.length - 1
+        t.impl = ctx.rows.fileUnits.length - 1
         ud: unitDeclByName :typing :ast name: owner
-        this.reached = ud.notZero
-        if this.reached then ctx.rows.fileOf.set key: ud value: this.impl
+        t.reached = ud.notZero
+        if t.reached then ctx.rows.fileOf.set key: ud value: t.impl
     }
 
     # fact -- a unit's fact: declared, and held when any of `reach`'s paths
     # (comma-separated) is reached
     fact: function {
-        :this
+        t: this
         ast: Ast.view
         typing: ztyping.ZTyping.view
         name: StringView
         reach: StringView
     } is {
-        this.rf.settle :ast :typing :name :reach
+        t.rf.settle :ast :typing :name :reach
     }
 
     # fragment -- one of the row's fragments, cached under a name of its own
-    fragment: function {:this ctx: Ctx owner: StringView key: StringView text: String.take} is {
-        spelledBoxes text: text.stringView into: this.boxes
-        nm: this.fragmentName :owner :key
+    fragment: function {t: this ctx: Ctx owner: StringView key: StringView text: String.take} is {
+        spelledBoxes text: text.stringView into: t.boxes
+        nm: t.fragmentName :owner :key
         servedFragment :ctx name: nm.stringView text: text.take
-        this.markFragment :ctx name: nm.stringView
-        if this.frags.length > 0 then this.frags.append ","
-        this.frags.append nm
+        t.markFragment :ctx name: nm.stringView
+        if t.frags.length > 0 then t.frags.append ","
+        t.frags.append nm
     }
 
     # pieces -- the row's fragment as pieces (servedPieces), in place of its
     # fragments: written a piece at a time
-    pieces: function {:this ctx: Ctx owner: StringView key: StringView text: PiecedText.take} is {
-        nm: this.fragmentName :owner :key
+    pieces: function {t: this ctx: Ctx owner: StringView key: StringView text: PiecedText.take} is {
+        nm: t.fragmentName :owner :key
         ctx.piecedTexts.set key: (fragKey :ctx name: nm.stringView) value: text.take
         ctx.piecedFrags.add item: nm.copy
-        this.frags = nm.copy
+        t.frags = nm.copy
     }
 
     # classRow -- a class whose C struct the runtime writes, recorded in the
     # order read (the order the structs are written in): its destroy fragment,
     # when it has one, cached under a name of its own
     classRow: function {
-        :this
+        t: this
         ctx: Ctx
         owner: StringView
         key: StringView
@@ -2929,9 +2929,9 @@ RowWalk: class {
         dn: String
         if destroy.length > 0 then {
             dkey: "\{key}.@destroy"
-            dn = this.fragmentName :owner key: dkey.stringView
+            dn = t.fragmentName :owner key: dkey.stringView
             servedFragment :ctx name: dn.stringView text: "\{destroy}\n"
-            this.markFragment :ctx name: dn.stringView
+            t.markFragment :ctx name: dn.stringView
         }
         (
             ctx.classRows.append
@@ -2963,25 +2963,25 @@ RowWalk: class {
     # `fact` ("" for none), is recorded (RowFacts.applies); the owner is read
     # where its run of rows begins
     admits: function {
-        :this ctx: Ctx owner: StringView key: StringView fact: StringView
+        t: this ctx: Ctx owner: StringView key: StringView fact: StringView
     } out bool is {
-        if owner != this.ownerText then {
-            this.ownerText = owner.string
-            this.owner = zast.nameid.zero
-            if owner.length > 0 then this.owner = ctx.demands.names.intern s: owner
-            this.rf.beginFile
+        if owner != t.ownerText then {
+            t.ownerText = owner.string
+            t.owner = zast.nameid.zero
+            if owner.length > 0 then t.owner = ctx.demands.names.intern s: owner
+            t.rf.beginFile
         }
-        return (this.rf.applies :ctx :fact :owner :key)
+        return (t.rf.applies :ctx :fact :owner :key)
     }
 
     # requirement -- a link, source or refusal a reader read: a link or a
     # source recorded when it holds (RowFacts.requirementHolds), a refusal always
-    requirement: function {:this ctx: Ctx req: UnitReq.take fact: StringView} is {
+    requirement: function {t: this ctx: Ctx req: UnitReq.take fact: StringView} is {
         holds: true
         if req.link.length > 0 then {
-            holds = this.rf.requirementHolds :ctx link: true path: req.path.stringView :fact
+            holds = t.rf.requirementHolds :ctx link: true path: req.path.stringView :fact
         } else if req.csrc.length > 0 then {
-            holds = this.rf.requirementHolds :ctx link: false path: req.path.stringView :fact
+            holds = t.rf.requirementHolds :ctx link: false path: req.path.stringView :fact
         }
         if holds then ctx.unitReqs.append req.take
     }
@@ -2992,7 +2992,7 @@ RowWalk: class {
     # (comma-separated); a helper (`@name`) by its owner and name; a structural
     # row by its shape; a row of a file the program reaches by its key's names
     place: function {
-        :this
+        t: this
         ctx: Ctx
         ast: Ast.view
         r: zemitrows.nativerow
@@ -3003,19 +3003,19 @@ RowWalk: class {
         x: r
         rid: u64
         if x.fragment then {
-            if this.frags.length > 0 then {
-                ctx.rows.fragTexts.append from: this.frags.copy
+            if t.frags.length > 0 then {
+                ctx.rows.fragTexts.append from: t.frags.copy
                 x.fragText = ctx.rows.fragTexts.length
-                this.frags = String
+                t.frags = String
             }
             if members.length > 0 then {
                 ctx.rows.memberTexts.append from: members.string
                 x.members = ctx.rows.memberTexts.length
             }
-            if this.boxes.length > 0 then {
-                ctx.rows.boxTexts.append from: this.boxes.copy
+            if t.boxes.length > 0 then {
+                ctx.rows.boxTexts.append from: t.boxes.copy
                 x.boxes = ctx.rows.boxTexts.length
-                this.boxes = String
+                t.boxes = String
             }
             rid = appendFragmentRow :ctx r: x
             if pulls.length > 0 then recordRowPulls :ctx row: rid :pulls
@@ -3034,11 +3034,11 @@ RowWalk: class {
                 value: rid
             )
         }
-        if this.reached then (
+        if t.reached then (
             nameRow
             :ctx
             :ast
-            impl: this.impl
+            impl: t.impl
             :key
             row: rid
             constant: x.constMask != 0
@@ -3047,7 +3047,7 @@ RowWalk: class {
 
     # fragmentName -- the name of a row's fragment, `_Z_<UNIT>_<KEY>`, each byte
     # that is no letter or digit `_`, suffixed until it is unused
-    fragmentName: function {:this owner: StringView key: StringView} out String is {
+    fragmentName: function {t: this owner: StringView key: StringView} out String is {
         base: "_Z_\{owner.toUpperAscii}_"
         k: key
         if k.startsWith "@" then k = k.substring from: 1 to: k.length
@@ -3065,11 +3065,11 @@ RowWalk: class {
         }
         nm: base.copy
         n: 2.u64
-        for (this.used.has item: nm) loop {
+        for (t.used.has item: nm) loop {
             nm = "\{base}_\{n}"
             n = n + 1
         }
-        this.used.add item: nm.copy
+        t.used.add item: nm.copy
         return nm
     }
 }

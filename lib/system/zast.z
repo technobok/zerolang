@@ -1301,24 +1301,24 @@ Ast: class {
     # exclusive lock on `this` for the call, so no node view (this.nodes.get)
     # may be live at the call site -- mint sites hold none (the ordinal site
     # drops its view first).
-    internString: function {:this text: StringView} out nameid is {
-        return (poolSet pool: this.names :text)
+    internString: function {t: this text: StringView} out nameid is {
+        return (poolSet pool: t.names :text)
     }
 
     # literalAdd -- a string literal's run of text, stored as a new row
-    literalAdd: function {:this text: StringView} out litid is {
-        from: this.literalBytes.length
-        this.literalBytes.append text
-        return (this.literalClose :from)
+    literalAdd: function {t: this text: StringView} out litid is {
+        from: t.literalBytes.length
+        t.literalBytes.append text
+        return (t.literalClose :from)
     }
 
     # literalClose -- the bytes appended to literalBytes since `from` as a new
     # row; 0 when there are none
-    literalClose: function {:this from: u64} out litid is {
-        size: this.literalBytes.length - from
+    literalClose: function {t: this from: u64} out litid is {
+        size: t.literalBytes.length - from
         if size == 0 then return (litid 0)
-        id: litid this.literals.length.u32.orPanic
-        this.literals.append from: (litspan :from :size)
+        id: litid t.literals.length.u32.orPanic
+        t.literals.append from: (litspan :from :size)
         return id
     }
 
@@ -1596,19 +1596,19 @@ StringPool: class {
     }
 
     # reserve -- grow the slot table when empty or at 2/3 load.
-    reserve: function {:this} is {
-        if this.slots.length == 0 then {
-            this.rebuild ncap: 16
+    reserve: function {t: this} is {
+        if t.slots.length == 0 then {
+            t.rebuild ncap: 16
             return
         }
-        if (this.used + 1 * 3) >= (this.slots.length * 2) then {
-            this.rebuild ncap: this.slots.length * 2
+        if (t.used + 1 * 3) >= (t.slots.length * 2) then {
+            t.rebuild ncap: t.slots.length * 2
         }
     }
 
     # rebuild -- swap in a slot table of ncap (a power of two), re-probing
     # every interned text.
-    rebuild: function {:this ncap: u64} is {
+    rebuild: function {t: this ncap: u64} is {
         ns: ListVal nameid capacity: ncap
         i: u64
         for i < ncap loop {
@@ -1618,13 +1618,13 @@ StringPool: class {
         mask: ncap - 1
         k: nameid
         k = k.next
-        for k.u64 < this.texts.length loop {
-            idx: (this.hashes.get i: k) & mask
+        for k.u64 < t.texts.length loop {
+            idx: (t.hashes.get i: k) & mask
             for (ns.get i: idx).notZero loop idx = (idx + 1) & mask
             ns.set i: idx val: k
             k = k.next
         }
-        this.slots = ns.take
+        t.slots = ns.take
     }
 
     # probeSlot -- the slot index for s, whose hash is h: either holds s's id
@@ -1648,47 +1648,47 @@ StringPool: class {
     # set -- intern s, copying the bytes only on first sight. A one-byte text is
     # answered from `byteIds` once it has been seen, so the ids are the ones the
     # probe would have given, in the same order.
-    set: function {:this s: StringView} out nameid is {
+    set: function {t: this s: StringView} out nameid is {
         if s.length == 1 then {
-            if this.byteIds.length == 0 then this.byteIds.resize to: 256
+            if t.byteIds.length == 0 then t.byteIds.resize to: 256
             b: ((s.byteAt 0).or d: 0).u64
-            known: this.byteIds.get i: b
+            known: t.byteIds.get i: b
             if known.notZero then return known
-            nid: this.intern :s
-            this.byteIds.set i: b val: nid
+            nid: t.intern :s
+            t.byteIds.set i: b val: nid
             return nid
         }
-        return (this.intern :s)
+        return (t.intern :s)
     }
 
     # intern -- set's probe and insert, for any text.
-    intern: function {:this s: StringView} out nameid is {
-        this.reserve
+    intern: function {t: this s: StringView} out nameid is {
+        t.reserve
         h: s.fastHash
-        si: this.probeSlot :s :h
-        sid: this.slots.get i: si
+        si: t.probeSlot :s :h
+        sid: t.slots.get i: si
         if sid.notZero then return sid
-        nid: this.texts.append s.string
-        this.hashes.append h
-        this.wordClass.append 0
-        this.slots.set i: si val: nid
-        this.used = this.used + 1
+        nid: t.texts.append s.string
+        t.hashes.append h
+        t.wordClass.append 0
+        t.slots.set i: si val: nid
+        t.used = t.used + 1
         return nid
     }
 
     # setOwned -- intern a donated owned string: moved in on first sight,
     # dropped when the text is already interned.
-    setOwned: function {:this s: String.take} out nameid is {
-        this.reserve
+    setOwned: function {t: this s: String.take} out nameid is {
+        t.reserve
         h: s.stringView.fastHash
-        si: this.probeSlot s: s.stringView :h
-        sid: this.slots.get i: si
+        si: t.probeSlot s: s.stringView :h
+        sid: t.slots.get i: si
         if sid.notZero then return sid
-        nid: this.texts.append s
-        this.hashes.append h
-        this.wordClass.append 0
-        this.slots.set i: si val: nid
-        this.used = this.used + 1
+        nid: t.texts.append s
+        t.hashes.append h
+        t.wordClass.append 0
+        t.slots.set i: si val: nid
+        t.used = t.used + 1
         return nid
     }
 
@@ -1698,8 +1698,8 @@ StringPool: class {
     }
 
     # setClass -- store id's classification byte.
-    setClass: function {:this id: nameid c: u8} is {
-        this.wordClass.set i: id val: c
+    setClass: function {t: this id: nameid c: u8} is {
+        t.wordClass.set i: id val: c
     }
 
     # find -- the id of an already-interned text (0 when absent).

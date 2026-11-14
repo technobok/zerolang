@@ -220,103 +220,103 @@ Builder: class {
 
     # rawCopy -- in raw mode, the bytes from the last copied token through
     # token `k`
-    rawCopy: function {:this k: u64} is {
-        if this.raw.not then return
-        if k >= this.c.count then return
-        lo: this.c.rawLo k: this.rawNext
-        hi: this.c.rawHi :k
-        if hi > lo then this.rawOut.append (this.d.source.substring from: lo to: hi)
-        this.rawNext = k + 1
+    rawCopy: function {t: this k: u64} is {
+        if t.raw.not then return
+        if k >= t.c.count then return
+        lo: t.c.rawLo k: t.rawNext
+        hi: t.c.rawHi :k
+        if hi > lo then t.rawOut.append (t.d.source.substring from: lo to: hi)
+        t.rawNext = k + 1
     }
 
     # tok -- the next significant token, which must be `tt`, as a text row
-    tok: function {:this tt: zlexer.toktype} out u32 is {
-        k: this.c.expect :tt
-        if k >= this.c.count then return 0
-        this.rawCopy :k
-        return (this.d.text lo: (this.c.rawLo :k) hi: (this.c.rawHi :k))
+    tok: function {t: this tt: zlexer.toktype} out u32 is {
+        k: t.c.expect :tt
+        if k >= t.c.count then return 0
+        t.rawCopy :k
+        return (t.d.text lo: (t.c.rawLo :k) hi: (t.c.rawHi :k))
     }
 
     # skipTok -- the next significant token, which must be `tt`, consumed
     # with no row: a parenthesis the layout re-inserts on its own
-    skipTok: function {:this tt: zlexer.toktype} is {
-        k: this.c.expect :tt
-        this.rawCopy :k
+    skipTok: function {t: this tt: zlexer.toktype} is {
+        k: t.c.expect :tt
+        t.rawCopy :k
     }
 
     # tokLabel -- a `label:` pair as `label: ` (the colon spaced), whose text
     # must be `name`
-    tokLabel: function {:this name: zast.nameid} out u32 is {
+    tokLabel: function {t: this name: zast.nameid} out u32 is {
         xs: ListVal u32
-        k: this.c.expect tt: zlexer.toktype.labelTok
-        if k < this.c.count then {
+        k: t.c.expect tt: zlexer.toktype.labelTok
+        if k < t.c.count then {
             same: true
-            nm: zast.nameTextAt ast: this.ast ref: name
-            same = this.c.textEq :k s: nm.stringView
+            nm: zast.nameTextAt ast: t.ast ref: name
+            same = t.c.textEq :k s: nm.stringView
             nm.drop
-            if same.not then this.c.note msg: "label does not name the definition".string
-            this.rawCopy :k
-            xs.append (this.d.text lo: (this.c.rawLo :k) hi: (this.c.rawHi :k))
+            if same.not then t.c.note msg: "label does not name the definition".string
+            t.rawCopy :k
+            xs.append (t.d.text lo: (t.c.rawLo :k) hi: (t.c.rawHi :k))
         }
-        this.skipTok tt: zlexer.toktype.colonTok
-        xs.append this.idColonSpace
-        return (this.d.concat xs)
+        t.skipTok tt: zlexer.toktype.colonTok
+        xs.append t.idColonSpace
+        return (t.d.concat xs)
     }
 
     # tokShorthand -- a `:name` pair, whose name must be `name`
-    tokShorthand: function {:this name: zast.nameid} out u32 is {
+    tokShorthand: function {t: this name: zast.nameid} out u32 is {
         xs: ListVal u32
-        xs.append (this.tok tt: zlexer.toktype.colonTok)
-        k: this.c.expect tt: zlexer.toktype.labelPreTok
-        if k < this.c.count then {
+        xs.append (t.tok tt: zlexer.toktype.colonTok)
+        k: t.c.expect tt: zlexer.toktype.labelPreTok
+        if k < t.c.count then {
             same: true
-            nm: zast.nameTextAt ast: this.ast ref: name
-            same = this.c.textEq :k s: nm.stringView
+            nm: zast.nameTextAt ast: t.ast ref: name
+            same = t.c.textEq :k s: nm.stringView
             nm.drop
-            if same.not then this.c.note msg: "shorthand does not name the definition".string
-            this.rawCopy :k
-            xs.append (this.d.text lo: (this.c.rawLo :k) hi: (this.c.rawHi :k))
+            if same.not then t.c.note msg: "shorthand does not name the definition".string
+            t.rawCopy :k
+            xs.append (t.d.text lo: (t.c.rawLo :k) hi: (t.c.rawHi :k))
         }
-        return (this.d.concat xs)
+        return (t.d.concat xs)
     }
 
     # peekIs -- whether the next significant token is `tt`
-    peekIs: function {:this tt: zlexer.toktype} out bool is {
-        return this.c.peekKind == tt
+    peekIs: function {t: this tt: zlexer.toktype} out bool is {
+        return t.c.peekKind == tt
     }
 
     # commentText -- comment token `k` as a text row, its trailing spaces
     # dropped
-    commentText: function {:this k: u64} out u32 is {
-        lo: this.c.rawLo :k
-        hi: this.c.rawHi :k
-        sv: this.d.source.stringView
+    commentText: function {t: this k: u64} out u32 is {
+        lo: t.c.rawLo :k
+        hi: t.c.rawHi :k
+        sv: t.d.source.stringView
         for hi > lo loop {
             b: (sv.byteAt i: hi - 1).or d: 0
             if b != 32 when b != 9 then break
             hi = hi - 1
         }
         sv.drop
-        return (this.d.text :lo :hi)
+        return (t.d.text :lo :hi)
     }
 
     # trailingText -- comment token `k` with the author's spaces before it,
     # as one text row for a lineSuffix
-    trailingText: function {:this k: u64} out u32 is {
-        lo: this.c.rawLo :k
-        if k > 0 when (this.c.rawKind k: k - 1) == zlexer.toktype.wsTok then lo = (
-            this.c.rawLo
+    trailingText: function {t: this k: u64} out u32 is {
+        lo: t.c.rawLo :k
+        if k > 0 when (t.c.rawKind k: k - 1) == zlexer.toktype.wsTok then lo = (
+            t.c.rawLo
             k: k - 1
         )
-        hi: this.c.rawHi :k
-        sv: this.d.source.stringView
+        hi: t.c.rawHi :k
+        sv: t.d.source.stringView
         for hi > lo loop {
             b: (sv.byteAt i: hi - 1).or d: 0
             if b != 32 when b != 9 then break
             hi = hi - 1
         }
         sv.drop
-        return (this.d.text :lo :hi)
+        return (t.d.text :lo :hi)
     }
 
     # gapDocs -- the trivia before the next significant token, placed: a
@@ -324,13 +324,13 @@ Builder: class {
     # comments become lines of their own, blank lines are counted against
     # `cap` -- except one between two comments, which is kept even at cap 0.
     # `marker` reads the newline that opens the gap
-    gapDocs: function {:this cap: u32} out gapdocs is {
-        info: this.c.gap
-        return (this.placeGap :info :cap)
+    gapDocs: function {t: this cap: u32} out gapdocs is {
+        info: t.c.gap
+        return (t.placeGap :info :cap)
     }
 
     # placeGap -- gapDocs over a gap already read from the cursor
-    placeGap: function {:this info: zfmtcursor.gapinfo cap: u32} out gapdocs is {
+    placeGap: function {t: this info: zfmtcursor.gapinfo cap: u32} out gapdocs is {
         g: (
             gapdocs
             trailing: 0
@@ -348,13 +348,13 @@ Builder: class {
         lead: ListVal u32
         dang: ListVal u32
         for j < info.count loop {
-            k: this.c.commentAt :info :j
-            eols: this.c.commentEols :info :j
+            k: t.c.commentAt :info :j
+            eols: t.c.commentEols :info :j
             if j == 0 when info.trailing then {
                 ts: ListVal u32
-                ts.append (this.d.lineSuffix (this.trailingText :k))
-                ts.append this.idBreak
-                g.trailing = this.d.concat ts
+                ts.append (t.d.lineSuffix (t.trailingText :k))
+                ts.append t.idBreak
+                g.trailing = t.d.concat ts
             } else {
                 # a blank between two comments is the comment block's own
                 # paragraph break: one survives even where the position keeps
@@ -372,23 +372,23 @@ Builder: class {
                     # a line break after the own-line comment before this one;
                     # after the line's trailing comment the enclosing block
                     # already ends the line
-                    if dang.length > 0 then dang.append this.idHard
+                    if dang.length > 0 then dang.append t.idHard
                     b: u32
                     for b < blanks loop {
-                        lead.append this.idHard
-                        dang.append this.idHard
+                        lead.append t.idHard
+                        dang.append t.idHard
                         b = b + 1
                     }
                 }
-                ct: this.commentText :k
+                ct: t.commentText :k
                 lead.append ct
-                lead.append this.idHard
+                lead.append t.idHard
                 dang.append ct
                 if info.eolsEnd > 1 when (j + 1) == info.count then {
                     e: u32
                     ex: capped n: info.eolsEnd - 1 :cap
                     for e < ex loop {
-                        lead.append this.idHard
+                        lead.append t.idHard
                         e = e + 1
                     }
                 }
@@ -400,8 +400,8 @@ Builder: class {
         if info.count == 1 when info.trailing when info.eolsEnd > 1 then {
             g.blanks = capped n: info.eolsEnd - 1 :cap
         }
-        if lead.length > 0 then g.lead = this.d.concat lead
-        if dang.length > 0 then g.dangling = this.d.concat dang
+        if lead.length > 0 then g.lead = t.d.concat lead
+        if dang.length > 0 then g.dangling = t.d.concat dang
         return g
     }
 
@@ -417,50 +417,50 @@ Builder: class {
     # ---- the unit ----
 
     # formatUnit -- the whole source as one document: the root unit's body
-    formatUnit: function {:this} out u32 is {
-        rootId: this.ast.root
-        if this.ast.units.length == 0 then return 0
-        un: this.node id: (this.ast.units.get i: 0)
+    formatUnit: function {t: this} out u32 is {
+        rootId: t.ast.root
+        if t.ast.units.length == 0 then return 0
+        un: t.node id: (t.ast.units.get i: 0)
         xs: ListVal u32
         match (
             un
         ) case namedoperation then {
-            ud: this.node id: un.operation
+            ud: t.node id: un.operation
             match (
                 ud
             ) case unitdef then {
-                this.visitItems :xs span: ud.body topLevel: true
+                t.visitItems :xs span: ud.body topLevel: true
             } else null
         } else null
         rootId.drop
         # the trivia after the last definition: comments kept, blanks dropped
-        g: this.gapDocs cap: 2
+        g: t.gapDocs cap: 2
         if g.trailing > 0 then xs.append g.trailing
         if g.dangling > 0 then {
-            xs.append this.idHard
-            this.appendBlanks :xs n: g.blanks
+            xs.append t.idHard
+            t.appendBlanks :xs n: g.blanks
             xs.append g.dangling
         }
-        if this.raw.not when this.c.atEof.not then (
-            this.c.note
+        if t.raw.not when t.c.atEof.not then (
+            t.c.note
             msg: "tokens remain after the last definition".string
         )
         # every file ends with exactly one newline
-        xs.append this.idHard
-        return (this.d.concat xs)
+        xs.append t.idHard
+        return (t.d.concat xs)
     }
 
     # visitItems -- the `name: value` / `:name` items of a unit body or an
     # object body, one per line, with the blank-line policy between them
-    visitItems: function {:this xs: ListVal u32 span: zast.kidspan topLevel: bool} is {
+    visitItems: function {t: this xs: ListVal u32 span: zast.kidspan topLevel: bool} is {
         cap: 1.u32
         if topLevel then cap = 2
         i: u64
         prevMulti: false
         for i < span.count loop {
-            itemId: this.kid :span :i
+            itemId: t.kid :span :i
             i = i + 1
-            g: this.gapDocs :cap
+            g: t.gapDocs :cap
             if g.trailing > 0 then xs.append g.trailing
             first: i == 1
             blanks: g.blanks
@@ -468,62 +468,62 @@ Builder: class {
             # block, gets a blank line even when the author left none
             if first.not when topLevel when prevMulti when blanks == 0 then blanks = 1
             if first.not when topLevel when g.lead > 0 when blanks == 0 then blanks = 1
-            if first.not then xs.append this.idHard
-            if first.not then this.appendBlanks :xs n: blanks
+            if first.not then xs.append t.idHard
+            if first.not then t.appendBlanks :xs n: blanks
             if first when g.lead > 0 when blanks > 0 when topLevel.not then (
-                this.appendBlanks
+                t.appendBlanks
                 :xs
                 n: blanks
             )
             if g.lead > 0 then xs.append g.lead
-            startLine: this.c.rawLine k: this.c.peekIndex
-            xs.append (this.visitItem id: itemId)
-            endLine: this.c.rawLine k: this.c.prev
+            startLine: t.c.rawLine k: t.c.peekIndex
+            xs.append (t.visitItem id: itemId)
+            endLine: t.c.rawLine k: t.c.prev
             prevMulti = endLine > startLine
         }
     }
 
     # visitItem -- one `name: value` or `:name` item
-    visitItem: function {:this id: zast.nodeid} out u32 is {
-        n: this.node :id
+    visitItem: function {t: this id: zast.nodeid} out u32 is {
+        n: t.node :id
         match (
             n
         ) case namedoperation then {
-            op: this.node id: n.operation
+            op: t.node id: n.operation
             match (
                 op
             ) case labelvalue then {
-                return (this.tokShorthand name: n.name)
+                return (t.tokShorthand name: n.name)
             } else null
             xs: ListVal u32
-            xs.append (this.tokLabel name: n.name)
-            xs.append (this.visitDefinition id: n.operation)
-            return (this.d.concat xs)
+            xs.append (t.tokLabel name: n.name)
+            xs.append (t.visitDefinition id: n.operation)
+            return (t.d.concat xs)
         } case error then {
-            this.c.note msg: "the tree holds a parse error".string
+            t.c.note msg: "the tree holds a parse error".string
             return 0
         } else {
-            this.c.note msg: "an item that is not a definition".string
+            t.c.note msg: "an item that is not a definition".string
             return 0
         }
     }
 
     # visitDefinition -- the value of a definition: a function, a type, a
     # unit, or a bare operation
-    visitDefinition: function {:this id: zast.nodeid} out u32 is {
-        n: this.node :id
+    visitDefinition: function {t: this id: zast.nodeid} out u32 is {
+        n: t.node :id
         match (
             n
         ) case functiondef then {
-            return (this.visitFunction :id)
+            return (t.visitFunction :id)
         } case objectdef then {
-            return (this.visitObject :id)
+            return (t.visitObject :id)
         } case unitdef then {
-            return (this.visitUnit :id)
+            return (t.visitUnit :id)
         } case listblock then {
-            return (this.visitValue :id slot: slotkind.bare wrapped: false)
+            return (t.visitValue :id slot: slotkind.bare wrapped: false)
         } else {
-            return (this.visitValue :id slot: slotkind.clause wrapped: false)
+            return (t.visitValue :id slot: slotkind.clause wrapped: false)
         }
     }
 
@@ -545,19 +545,19 @@ Builder: class {
     # ending leaves undelimited -- a call inserts its own, and an if, match,
     # for, with, block or list carries braces. That pair shows only when
     # the value breaks, and never inside an interpolation hole.
-    visitValue: function {:this id: zast.nodeid slot: u8 wrapped: bool} out u32 is {
-        wp: this.openWritten
-        needed: this.parensRequired inner: id :slot
-        innerNode: this.node :id
+    visitValue: function {t: this id: zast.nodeid slot: u8 wrapped: bool} out u32 is {
+        wp: t.openWritten
+        needed: t.parensRequired inner: id :slot
+        innerNode: t.node :id
         # an INFIX call is not call-shaped: its parentheses are the layout pair
         # a binary operation owns, not the pair a call fills when it breaks
         isCall: innerNode.call
-        if (this.isBinop :id) then isCall = false
+        if (t.isBinop :id) then isCall = false
         # a value inside a pair is a group of its own: a chain breaks at its
         # operators rather than inside its operands. Whether a pair is coming
         # is known before the body is built, so the body is told
         onBreak: false
-        if (this.isBinop :id) then onBreak = pairsOnBreak :slot
+        if (t.isBinop :id) then onBreak = pairsOnBreak :slot
         paired: needed
         if paired.not then paired = onBreak
         inPair: wrapped
@@ -568,34 +568,34 @@ Builder: class {
             # open: the call breaks as a call does, after its callable, where the
             # next pass reads it as the call's own marker. A pair that goes takes
             # its marker with it
-            kept: wp.before.marker and this.keepMarkers and needed
-            body = this.visitCall :id inParens: needed :kept
+            kept: wp.before.marker and t.keepMarkers and needed
+            body = t.visitCall :id inParens: needed :kept
         } else {
-            body = this.visitValueArm :id wrapped: inPair
+            body = t.visitValueArm :id wrapped: inPair
         }
-        h: this.closeWritten p: wp
-        v: this.pairDoc :body :needed :onBreak :isCall before: wp.before after: h
-        t: this.closerTail entry: wp.entry
+        h: t.closeWritten p: wp
+        v: t.pairDoc :body :needed :onBreak :isCall before: wp.before after: h
+        tail: t.closerTail entry: wp.entry
         # a comment in front of the enclosing pair's closer ends that pair's
         # argument list, as one closeWritten takes does
-        if (t.dangling > 0) or (t.trailing > 0) then this.closerCommentAt = this.c.openParens
-        return (this.withComments body: v before: emptyGap after: t)
+        if (tail.dangling > 0) or (tail.trailing > 0) then t.closerCommentAt = t.c.openParens
+        return (t.withComments body: v before: emptyGap after: tail)
     }
 
     # openWritten -- skip the openers written at the cursor and count them open.
     # Trivia inside a written pair belongs to that pair and is read here; where
     # none was written the surrounding gaps already own it, and asking would take
     # it from them
-    openWritten: function {:this} out writtenpair is {
-        entry: this.c.openParens
+    openWritten: function {t: this} out writtenpair is {
+        entry: t.c.openParens
         opened: u32
-        for (this.peekIs tt: zlexer.toktype.parenOpenTok) loop {
-            this.skipTok tt: zlexer.toktype.parenOpenTok
+        for (t.peekIs tt: zlexer.toktype.parenOpenTok) loop {
+            t.skipTok tt: zlexer.toktype.parenOpenTok
             opened = opened + 1
         }
-        this.c.openParens = this.c.openParens + opened
+        t.c.openParens = t.c.openParens + opened
         before: emptyGap
-        if opened > 0 then before = this.gapDocs cap: 0
+        if opened > 0 then before = t.gapDocs cap: 0
         return (writtenpair :entry :opened :before)
     }
 
@@ -613,18 +613,18 @@ Builder: class {
     # in front of a closer the value did not open -- on a line of its own or
     # trailing the value's -- ends the enclosing pair's argument list, which
     # closerCommentAt tells argDoc.
-    closeWritten: function {:this p: writtenpair} out gapdocs is {
-        stolen: this.c.openParens < (p.entry + p.opened)
+    closeWritten: function {t: this p: writtenpair} out gapdocs is {
+        stolen: t.c.openParens < (p.entry + p.opened)
         willClose: false
-        if this.c.openParens > 0 then willClose = this.peekIs tt: zlexer.toktype.parenCloseTok
+        if t.c.openParens > 0 then willClose = t.peekIs tt: zlexer.toktype.parenCloseTok
         takeH: p.opened > 0
         if takeH.not then takeH = willClose
         if stolen then takeH = false
         h: emptyGap
-        if takeH then h = this.gapDocs cap: 0
+        if takeH then h = t.gapDocs cap: 0
         commented: (h.dangling > 0) or (h.trailing > 0)
-        if p.opened == 0 when commented then this.closerCommentAt = this.c.openParens
-        this.closeParens
+        if p.opened == 0 when commented then t.closerCommentAt = t.c.openParens
+        t.closeParens
         return h
     }
 
@@ -633,11 +633,11 @@ Builder: class {
     # (`entry`): the value ends there and the comment follows it, inside the
     # enclosing pair, where it lands when the value carries no parentheses of
     # its own. An empty gap otherwise
-    closerTail: function {:this entry: u32} out gapdocs is {
-        if this.c.openParens == entry when entry > 0 when this.c.gapHasComment when (
-            this.peekIs
+    closerTail: function {t: this entry: u32} out gapdocs is {
+        if t.c.openParens == entry when entry > 0 when t.c.gapHasComment when (
+            t.peekIs
             tt: zlexer.toktype.parenCloseTok
-        ) then return (this.gapDocs cap: 0)
+        ) then return (t.gapDocs cap: 0)
         return emptyGap
     }
 
@@ -645,7 +645,7 @@ Builder: class {
     # grammar's (`needed`), the pair a breaking binary operation takes
     # (`onBreak`), or none, with the comments of the gaps on either side
     pairDoc: function {
-        :this
+        t: this
         body: u32
         needed: bool
         onBreak: bool
@@ -655,22 +655,22 @@ Builder: class {
     } out u32 is {
         if needed then {
             return (
-                this.parenGroup
+                t.parenGroup
                 :body
-                open: this.idOpen
-                close: this.idClose
+                open: t.idOpen
+                close: t.idClose
                 marker: before.marker
                 :before
                 :after
                 callShape: isCall
             )
         }
-        if onBreak.not then return (this.withComments :body :before :after)
+        if onBreak.not then return (t.withComments :body :before :after)
         return (
-            this.parenGroup
+            t.parenGroup
             :body
-            open: (this.d.ifBreak brk: this.idOpen flat: 0)
-            close: (this.d.ifBreak brk: this.idClose flat: 0)
+            open: (t.d.ifBreak brk: t.idOpen flat: 0)
+            close: (t.d.ifBreak brk: t.idClose flat: 0)
             marker: before.marker
             :before
             :after
@@ -682,59 +682,59 @@ Builder: class {
     # as many as sit at the cursor. One with a comment in front of it is left
     # standing: taking it would step over the comment, which no gap request
     # then covers. The value that ends before it places the comment
-    closeParens: function {:this} is {
-        for (this.peekIs tt: zlexer.toktype.parenCloseTok) loop {
-            if this.c.openParens == 0 then break
-            if this.c.gapHasComment then break
-            this.skipTok tt: zlexer.toktype.parenCloseTok
-            this.c.openParens = this.c.openParens - 1
+    closeParens: function {t: this} is {
+        for (t.peekIs tt: zlexer.toktype.parenCloseTok) loop {
+            if t.c.openParens == 0 then break
+            if t.c.gapHasComment then break
+            t.skipTok tt: zlexer.toktype.parenCloseTok
+            t.c.openParens = t.c.openParens - 1
         }
     }
 
     # visitValueArm -- a value below every wrapper, by its arm. It needs no slot:
     # the slot decides parentheses and nothing else, and visitValue has already
     # settled those before it calls here
-    visitValueArm: function {:this id: zast.nodeid wrapped: bool} out u32 is {
-        n: this.node :id
+    visitValueArm: function {t: this id: zast.nodeid wrapped: bool} out u32 is {
+        n: t.node :id
         match (
             n
         ) case call then {
             # printed in the spelling it was written in: the operator sits
             # between its operands and the dot was never typed, so the dotted
             # printer would both invent a `.` and desync the token cursor
-            if n.infix then return (this.visitBinop :id :wrapped)
-            return (this.visitCall :id inParens: false kept: false)
+            if n.infix then return (t.visitBinop :id :wrapped)
+            return (t.visitCall :id inParens: false kept: false)
         } case dottedpath then {
-            return (this.visitPath :id)
+            return (t.visitPath :id)
         } case atomid then {
-            return (this.tok tt: zlexer.toktype.refIdTok)
+            return (t.tok tt: zlexer.toktype.refIdTok)
         } case labelvalue then {
-            return (this.tokShorthand name: n.name)
+            return (t.tokShorthand name: n.name)
         } case atomstring then {
-            return (this.visitString :id)
+            return (t.visitString :id)
         } case ifexpr then {
-            return (this.visitIf :id)
+            return (t.visitIf :id)
         } case forexpr then {
-            return (this.visitFor :id)
+            return (t.visitFor :id)
         } case caseexpr then {
-            return (this.visitMatch :id)
+            return (t.visitMatch :id)
         } case doexpr then {
-            return (this.visitBlock id: n.statement)
+            return (t.visitBlock id: n.statement)
         } case withexpr then {
-            return (this.visitWith :id)
+            return (t.visitWith :id)
         } case listblock then {
-            return (this.visitList :id)
+            return (t.visitList :id)
         } case reassignment then {
-            return (this.visitReassign :id)
+            return (t.visitReassign :id)
         } case swapstmt then {
-            return (this.visitSwap :id)
+            return (t.visitSwap :id)
         } case functiondef then {
-            return (this.visitFunction :id)
+            return (t.visitFunction :id)
         } case error then {
-            this.c.note msg: "the tree holds a parse error".string
+            t.c.note msg: "the tree holds a parse error".string
             return 0
         } else {
-            this.c.note msg: "a value the formatter does not print".string
+            t.c.note msg: "a value the formatter does not print".string
             return 0
         }
     }
@@ -847,7 +847,7 @@ Builder: class {
     # one step in, the closer on its own line; a call-shaped body already
     # carries its own indent
     parenGroup: function {
-        :this
+        t: this
         body: u32
         open: u32
         close: u32
@@ -860,53 +860,53 @@ Builder: class {
         xs.append open
         # a call-shaped body takes the marker itself (visitCall's `kept`): the
         # pair has no line after its opener to keep
-        if marker when this.keepMarkers when callShape.not then xs.append this.idBreak
+        if marker when t.keepMarkers when callShape.not then xs.append t.idBreak
         if before.trailing > 0 then xs.append before.trailing
         if callShape then {
             xs.append body
         } else {
             mid: ListVal u32
-            mid.append this.idSoft
+            mid.append t.idSoft
             if before.lead > 0 then mid.append before.lead
             mid.append body
             if after.trailing > 0 then mid.append after.trailing
             if after.dangling > 0 then {
-                mid.append this.idHard
+                mid.append t.idHard
                 mid.append after.dangling
             }
-            xs.append (this.d.indent (this.d.concat mid))
+            xs.append (t.d.indent (t.d.concat mid))
         }
         if callShape when after.trailing > 0 then xs.append after.trailing
         if callShape when after.dangling > 0 then {
             dg: ListVal u32
-            dg.append this.idHard
+            dg.append t.idHard
             dg.append after.dangling
-            xs.append (this.d.indent (this.d.concat dg))
+            xs.append (t.d.indent (t.d.concat dg))
         }
-        xs.append this.idSoft
+        xs.append t.idSoft
         xs.append close
-        return (this.d.group (this.d.concat xs))
+        return (t.d.group (t.d.concat xs))
     }
 
     # withComments -- `body` with a gap's comments around it, for a place that
     # has no delimiters of its own to hang them on
-    withComments: function {:this body: u32 before: gapdocs after: gapdocs} out u32 is {
+    withComments: function {t: this body: u32 before: gapdocs after: gapdocs} out u32 is {
         if before.trailing == 0 when before.lead == 0 when after.trailing == 0 when (
             after.lead == 0
         ) then return body
         xs: ListVal u32
         if before.trailing > 0 then xs.append before.trailing
         if before.lead > 0 then {
-            xs.append this.idHard
+            xs.append t.idHard
             xs.append before.lead
         }
         xs.append body
         if after.trailing > 0 then xs.append after.trailing
         if after.dangling > 0 then {
-            xs.append this.idHard
+            xs.append t.idHard
             xs.append after.dangling
         }
-        return (this.d.concat xs)
+        return (t.d.concat xs)
     }
 
     # visitBinop -- a left-deep chain flattened: operands with their trailing
@@ -916,14 +916,14 @@ Builder: class {
     # different kind starts -- `(x == y) + 1` keeps its parentheses, though the
     # chain would group the same without them (ztypes.operatorKindOf; the
     # linter's L032 asks for them)
-    visitBinop: function {:this id: zast.nodeid wrapped: bool} out u32 is {
+    visitBinop: function {t: this id: zast.nodeid wrapped: bool} out u32 is {
         operands: ListVal zast.nodeid
         operators: ListVal zast.nodeid
         cur: id
         mixed: false
         for true loop {
-            n: this.node id: cur
-            ip: zast.infixPartsOf ast: this.ast :n
+            n: t.node id: cur
+            ip: zast.infixPartsOf ast: t.ast :n
             if ip.found.not then {
                 operands.append cur
                 break
@@ -931,20 +931,20 @@ Builder: class {
             operands.append ip.rhs
             operators.append ip.operator
             cur = ip.lhs
-            if (this.kindChangesAt outerOp: ip.operator lhs: cur) then {
+            if (t.kindChangesAt outerOp: ip.operator lhs: cur) then {
                 operands.append cur
                 mixed = true
                 break
             }
         }
-        return (this.printChain :operands :operators :mixed :wrapped)
+        return (t.printChain :operands :operators :mixed :wrapped)
     }
 
     # printChain -- visitBinop's operands and operators, collected outermost
     # first, printed leftmost first. A leftmost operand of another kind
     # (`mixed`) keeps its parentheses
     printChain: function {
-        :this
+        t: this
         operands: (ListVal zast.nodeid).view
         operators: (ListVal zast.nodeid).view
         mixed: bool
@@ -960,28 +960,28 @@ Builder: class {
                 # a left operand of another kind is printed in its parentheses
                 fslot: slotkind.juxta
                 if mixed then fslot = slotkind.called
-                xs.append (this.visitValue id: oid slot: fslot wrapped: false)
+                xs.append (t.visitValue id: oid slot: fslot wrapped: false)
             } else {
-                xs.append this.idSpace
+                xs.append t.idSpace
                 xs.append (
-                    this.visitValue
+                    t.visitValue
                     id: (operators.get i: idx)
                     slot: slotkind.tight
                     wrapped: false
                 )
                 if wrapped then {
-                    xs.append this.idLine
+                    xs.append t.idLine
                 } else {
-                    xs.append this.idSpace
+                    xs.append t.idSpace
                 }
-                xs.append (this.visitValue id: oid slot: slotkind.tight wrapped: false)
+                xs.append (t.visitValue id: oid slot: slotkind.tight wrapped: false)
             }
             first = false
         }
         # a wrapped chain is a group of its own: it stays on one line when it
         # fits, and breaks at its operators only when it does not
-        if wrapped then return (this.d.group (this.d.concat xs))
-        return (this.d.concat xs)
+        if wrapped then return (t.d.group (t.d.concat xs))
+        return (t.d.concat xs)
     }
 
     # kindChangesAt -- `lhs` is itself an operator chain whose operator is of
@@ -1015,18 +1015,18 @@ Builder: class {
     # on its own (an expanded construction, a block) is hugged: the call stays
     # on its line and the argument breaks inside its own delimiters. The
     # callable continues the parenthesis budget of the chain
-    visitCall: function {:this id: zast.nodeid inParens: bool kept: bool} out u32 is {
-        n: this.node :id
+    visitCall: function {t: this id: zast.nodeid inParens: bool kept: bool} out u32 is {
+        n: t.node :id
         if n.call.not then return 0
-        callable: this.visitValue id: n.callable slot: slotkind.tight wrapped: false
+        callable: t.visitValue id: n.callable slot: slotkind.tight wrapped: false
         args: ListVal u32
         trails: ListVal u32
         forced: kept
         i: u64
         for i < n.arguments.count loop {
-            aid: this.kid span: n.arguments :i
+            aid: t.kid span: n.arguments :i
             i = i + 1
-            ad: this.argDoc id: aid first: i == 1
+            ad: t.argDoc id: aid first: i == 1
             if ad.doc == 0 then continue
             forced = forced or ad.forced
             trails.append ad.trailing
@@ -1042,32 +1042,32 @@ Builder: class {
         # keep the call's own pair below. A forced break is the call's own --
         # a comment around the argument is not the argument breaking -- so
         # that call breaks one argument per line too.
-        if forced.not when args.length == 1 when (this.soleUnnamedArg n: (this.node :id)) then {
-            return (this.joinArgs :callable :args :trails sep: this.idSpace)
+        if forced.not when args.length == 1 when (t.soleUnnamedArg n: (t.node :id)) then {
+            return (t.joinArgs :callable :args :trails sep: t.idSpace)
         }
         # hug the last argument when it alone carries a forced break
-        if forced.not when (this.hugsLast :args) then {
-            return (this.joinArgs :callable :args :trails sep: this.idSpace)
+        if forced.not when (t.hugsLast :args) then {
+            return (t.joinArgs :callable :args :trails sep: t.idSpace)
         }
         # broken, the call opens like a brace: the opener alone, the callable
         # and each argument a line of the body one step in
         body: ListVal u32
-        inner: this.joinArgs callable: 0 :args :trails sep: this.idLine
+        inner: t.joinArgs callable: 0 :args :trails sep: t.idLine
         innerXs: ListVal u32
-        innerXs.append this.idSoft
+        innerXs.append t.idSoft
         innerXs.append callable
         innerXs.append inner
-        if forced then innerXs.append this.idBreak
-        body.append (this.d.indent (this.d.concat innerXs))
+        if forced then innerXs.append t.idBreak
+        body.append (t.d.indent (t.d.concat innerXs))
         # inside written parentheses the call is a group of its own, so it
         # stays flat when it fits however the parentheses break
-        if inParens then return (this.d.group (this.d.concat body))
+        if inParens then return (t.d.group (t.d.concat body))
         outer: ListVal u32
-        outer.append (this.d.ifBreak brk: this.idOpen flat: 0)
-        outer.append (this.d.concat body)
-        outer.append this.idSoft
-        outer.append (this.d.ifBreak brk: this.idClose flat: 0)
-        return (this.d.group (this.d.concat outer))
+        outer.append (t.d.ifBreak brk: t.idOpen flat: 0)
+        outer.append (t.d.concat body)
+        outer.append t.idSoft
+        outer.append (t.d.ifBreak brk: t.idClose flat: 0)
+        return (t.d.group (t.d.concat outer))
     }
 
     # argDoc -- one argument of a call as a doc: its lead comment, then the
@@ -1078,29 +1078,29 @@ Builder: class {
     # line's or a line of its own), which would otherwise read as a last
     # argument breaking on its own and be hugged, or leave the arguments
     # bunched on the call's line above a closer on its own.
-    argDoc: function {:this id: zast.nodeid first: bool} out argdoc is {
-        a: this.node :id
+    argDoc: function {t: this id: zast.nodeid first: bool} out argdoc is {
+        a: t.node :id
         if a.namedoperation.not then return (argdoc doc: 0 trailing: 0 forced: false)
-        g: this.gapDocs cap: 0
-        forced: first and g.marker and this.keepMarkers or g.hasComment
-        depth: this.c.openParens
-        this.closerCommentAt = 0
+        g: t.gapDocs cap: 0
+        forced: first and g.marker and t.keepMarkers or g.hasComment
+        depth: t.c.openParens
+        t.closerCommentAt = 0
         one: ListVal u32
         if g.lead > 0 then one.append g.lead
         if a.name.isZero then {
-            one.append (this.visitValue id: a.operation slot: slotkind.juxta wrapped: false)
+            one.append (t.visitValue id: a.operation slot: slotkind.juxta wrapped: false)
         } else {
-            op: this.node id: a.operation
+            op: t.node id: a.operation
             if op.labelvalue then {
-                one.append (this.tokShorthand name: a.name)
+                one.append (t.tokShorthand name: a.name)
             } else {
-                one.append (this.tokLabel name: a.name)
-                one.append (this.visitValue id: a.operation slot: slotkind.clause wrapped: false)
+                one.append (t.tokLabel name: a.name)
+                one.append (t.visitValue id: a.operation slot: slotkind.clause wrapped: false)
             }
         }
-        if depth > 0 when this.closerCommentAt == depth then forced = true
-        this.closerCommentAt = 0
-        return (argdoc doc: this.d.concat one trailing: g.trailing :forced)
+        if depth > 0 when t.closerCommentAt == depth then forced = true
+        t.closerCommentAt = 0
+        return (argdoc doc: t.d.concat one trailing: g.trailing :forced)
     }
 
     # hugsLast -- whether the LAST argument is the only one that breaks: then
@@ -1122,7 +1122,7 @@ Builder: class {
     # preceded by its trailing comment when it has one and by `sep`: a space
     # for the one-line forms, a line for the one-per-line form.
     joinArgs: function {
-        :this
+        t: this
         callable: u32
         args: (ListVal u32).view
         trails: (ListVal u32).view
@@ -1132,13 +1132,13 @@ Builder: class {
         if callable > 0 then xs.append callable
         aj: u64
         for aj < args.length loop {
-            t: trails.get i: aj
-            if t > 0 then xs.append t
+            trail: trails.get i: aj
+            if trail > 0 then xs.append trail
             xs.append sep
             xs.append (args.get i: aj)
             aj = aj + 1
         }
-        return (this.d.concat xs)
+        return (t.d.concat xs)
     }
 
     # soleUnnamedArg -- whether the call's one argument carries no label, and
@@ -1162,93 +1162,93 @@ Builder: class {
     }
 
     # visitPath -- `parent.child`, never broken
-    visitPath: function {:this id: zast.nodeid} out u32 is {
-        n: this.node :id
+    visitPath: function {t: this id: zast.nodeid} out u32 is {
+        n: t.node :id
         xs: ListVal u32
         match (
             n
         ) case dottedpath then {
             pslot: slotkind.tight
-            called: zast.callsBeforeMarker ast: this.ast parent: n.parent child: n.child
+            called: zast.callsBeforeMarker ast: t.ast parent: n.parent child: n.child
             if called then pslot = slotkind.called
-            xs.append (this.visitValue id: n.parent slot: pslot wrapped: false)
-            xs.append (this.tok tt: zlexer.toktype.dotTok)
+            xs.append (t.visitValue id: n.parent slot: pslot wrapped: false)
+            xs.append (t.tok tt: zlexer.toktype.dotTok)
             childTt: zlexer.toktype.refIdTok
-            if (zlexer.isMarkerTok tt: this.c.peekKind) then childTt = this.c.peekKind
-            xs.append (this.tok tt: childTt)
+            if (zlexer.isMarkerTok tt: t.c.peekKind) then childTt = t.c.peekKind
+            xs.append (t.tok tt: childTt)
         } else null
-        return (this.d.concat xs)
+        return (t.d.concat xs)
     }
 
     # visitString -- a string literal walked token by token: chunks and
     # escapes as text, each hole's expression through the tree; a literal
     # holding a newline is printed verbatim
-    visitString: function {:this id: zast.nodeid} out u32 is {
-        n: this.node :id
+    visitString: function {t: this id: zast.nodeid} out u32 is {
+        n: t.node :id
         parts: zast.kidspan first: 0 count: 0
         match (
             n
         ) case atomstring then {
             parts = n.stringparts
         } else null
-        begK: this.c.expect tt: zlexer.toktype.strBegTok
-        if begK >= this.c.count then return 0
-        this.rawCopy k: begK
+        begK: t.c.expect tt: zlexer.toktype.strBegTok
+        if begK >= t.c.count then return 0
+        t.rawCopy k: begK
         xs: ListVal u32
-        xs.append (this.d.text lo: (this.c.rawLo k: begK) hi: (this.c.rawHi k: begK))
+        xs.append (t.d.text lo: (t.c.rawLo k: begK) hi: (t.c.rawHi k: begK))
         multi: false
         partIdx: u64
         endK: begK
         for true loop {
-            if this.c.failed then break
-            kind: this.c.rawKind k: this.c.i
+            if t.c.failed then break
+            kind: t.c.rawKind k: t.c.i
             if kind == zlexer.toktype.strEndTok then {
-                endK = this.c.takeRaw
-                this.rawCopy k: endK
-                xs.append (this.d.text lo: (this.c.rawLo k: endK) hi: (this.c.rawHi k: endK))
+                endK = t.c.takeRaw
+                t.rawCopy k: endK
+                xs.append (t.d.text lo: (t.c.rawLo k: endK) hi: (t.c.rawHi k: endK))
                 break
             }
             if kind == zlexer.toktype.eofTok then {
-                this.c.note msg: "unterminated string literal".string
+                t.c.note msg: "unterminated string literal".string
                 break
             }
             if kind == zlexer.toktype.strExprBegTok then {
-                bk: this.c.takeRaw
-                this.rawCopy k: bk
-                hole: this.holePart :parts from: partIdx
+                bk: t.c.takeRaw
+                t.rawCopy k: bk
+                hole: t.holePart :parts from: partIdx
                 partIdx = hole + 1
                 # a hole laid out over lines, or holding a comment, is kept as
                 # written: the literal is copied verbatim, as one holding a
                 # newline is
-                if this.c.holeSpansLines then {
+                if t.c.holeSpansLines then {
                     multi = true
-                    this.rawCopy k: this.c.takeHoleRaw
+                    t.rawCopy k: t.c.takeHoleRaw
                     continue
                 }
-                xs.append (this.d.text lo: (this.c.rawLo k: bk) hi: (this.c.rawHi k: bk))
-                xs.append (this.tok tt: zlexer.toktype.braceOpenTok)
+                xs.append (t.d.text lo: (t.c.rawLo k: bk) hi: (t.c.rawHi k: bk))
+                xs.append (t.tok tt: zlexer.toktype.braceOpenTok)
                 if hole < parts.count then {
                     xs.append (
-                        this.visitValue
-                        id: (this.kid span: parts i: hole)
+                        t.visitValue
+                        id: (t.kid span: parts i: hole)
                         slot: slotkind.hole
                         wrapped: false
                     )
                 }
-                xs.append (this.tok tt: zlexer.toktype.braceCloseTok)
+                xs.append (t.tok tt: zlexer.toktype.braceCloseTok)
                 continue
             }
-            ck: this.c.takeRaw
-            this.rawCopy k: ck
+            ck: t.c.takeRaw
+            t.rawCopy k: ck
             if kind == zlexer.toktype.eolTok then multi = true
-            xs.append (this.d.text lo: (this.c.rawLo k: ck) hi: (this.c.rawHi k: ck))
+            xs.append (t.d.text lo: (t.c.rawLo k: ck) hi: (t.c.rawHi k: ck))
         }
         if multi then {
-            lo: this.c.rawLo k: begK
-            hi: this.c.rawHi k: endK
-            return (this.d.verbatim :lo :hi origIndent: 0 shift: false)
+            lo: t.c.rawLo k: begK
+            hi: t.c.rawHi k: endK
+            return (t.d.verbatim :lo :hi origIndent: 0 shift: false)
         }
-        return (this.d.concat xs)
+        return (t.d.concat xs)
     }
 
     # holePart -- the index of the next interpolation expression among the
@@ -1264,45 +1264,45 @@ Builder: class {
     }
 
     # visitReassign -- `path = value`
-    visitReassign: function {:this id: zast.nodeid} out u32 is {
-        n: this.node :id
+    visitReassign: function {t: this id: zast.nodeid} out u32 is {
+        n: t.node :id
         xs: ListVal u32
         match (
             n
         ) case reassignment then {
-            xs.append (this.visitValue id: n.topath slot: slotkind.tight wrapped: false)
-            xs.append this.idSpace
-            xs.append (this.tok tt: zlexer.toktype.equalsTok)
-            xs.append this.idSpace
-            xs.append (this.rhsValue id: n.value)
+            xs.append (t.visitValue id: n.topath slot: slotkind.tight wrapped: false)
+            xs.append t.idSpace
+            xs.append (t.tok tt: zlexer.toktype.equalsTok)
+            xs.append t.idSpace
+            xs.append (t.rhsValue id: n.value)
         } else null
-        return (this.d.concat xs)
+        return (t.d.concat xs)
     }
 
     # visitSwap -- `path swap path`
-    visitSwap: function {:this id: zast.nodeid} out u32 is {
-        n: this.node :id
+    visitSwap: function {t: this id: zast.nodeid} out u32 is {
+        n: t.node :id
         xs: ListVal u32
         match (
             n
         ) case swapstmt then {
-            xs.append (this.visitValue id: n.lhs slot: slotkind.tight wrapped: false)
-            xs.append this.idSpace
-            xs.append (this.tok tt: zlexer.toktype.swapTok)
-            xs.append this.idSpace
-            xs.append (this.visitValue id: n.rhs slot: slotkind.tight wrapped: false)
+            xs.append (t.visitValue id: n.lhs slot: slotkind.tight wrapped: false)
+            xs.append t.idSpace
+            xs.append (t.tok tt: zlexer.toktype.swapTok)
+            xs.append t.idSpace
+            xs.append (t.visitValue id: n.rhs slot: slotkind.tight wrapped: false)
         } else null
-        return (this.d.concat xs)
+        return (t.d.concat xs)
     }
 
     # rhsValue -- the value of a binding or a reassignment
-    rhsValue: function {:this id: zast.nodeid} out u32 is {
-        return (this.visitValue :id slot: slotkind.line wrapped: false)
+    rhsValue: function {t: this id: zast.nodeid} out u32 is {
+        return (t.visitValue :id slot: slotkind.line wrapped: false)
     }
 
     # condValue -- a condition, which its context never wraps
-    condValue: function {:this id: zast.nodeid} out u32 is {
-        return (this.visitValue :id slot: slotkind.clause wrapped: false)
+    condValue: function {t: this id: zast.nodeid} out u32 is {
+        return (t.visitValue :id slot: slotkind.clause wrapped: false)
     }
 
     # ---- statements ----
@@ -1310,97 +1310,97 @@ Builder: class {
     # visitBlock -- `{ statements }`: one statement written on one line may
     # stay so; two or more are one per line; a block written across lines
     # stays across lines
-    visitBlock: function {:this id: zast.nodeid} out u32 is {
-        n: this.node :id
+    visitBlock: function {t: this id: zast.nodeid} out u32 is {
+        n: t.node :id
         stmts: zast.kidspan first: 0 count: 0
         match (
             n
         ) case statement then {
             stmts = n.statements
         } else null
-        openK: this.c.peekIndex
-        openLine: this.c.rawLine k: openK
+        openK: t.c.peekIndex
+        openLine: t.c.rawLine k: openK
         xs: ListVal u32
-        xs.append (this.tok tt: zlexer.toktype.braceOpenTok)
+        xs.append (t.tok tt: zlexer.toktype.braceOpenTok)
         inner: ListVal u32
         count: stmts.count.u64
         i: u64
         forced: false
         for i < count loop {
-            sid: this.kid span: stmts :i
-            g: this.gapDocs cap: 1
+            sid: t.kid span: stmts :i
+            g: t.gapDocs cap: 1
             if g.trailing > 0 then inner.append g.trailing
             if i == 0 then {
-                inner.append this.idLine
+                inner.append t.idLine
             } else {
-                inner.append this.idHard
-                this.appendBlanks xs: inner n: g.blanks
+                inner.append t.idHard
+                t.appendBlanks xs: inner n: g.blanks
             }
             if g.lead > 0 then {
                 if i == 0 then forced = true
                 inner.append g.lead
             }
-            inner.append (this.visitStatement id: sid)
+            inner.append (t.visitStatement id: sid)
             i = i + 1
         }
-        g: this.gapDocs cap: 1
+        g: t.gapDocs cap: 1
         if g.trailing > 0 then inner.append g.trailing
         if g.dangling > 0 then {
-            inner.append this.idHard
-            this.appendBlanks xs: inner n: g.blanks
+            inner.append t.idHard
+            t.appendBlanks xs: inner n: g.blanks
             inner.append g.dangling
             forced = true
         }
-        closeK: this.c.peekIndex
-        closeLine: this.c.rawLine k: closeK
+        closeK: t.c.peekIndex
+        closeLine: t.c.rawLine k: closeK
         if count > 1 then forced = true
         if closeLine > openLine then forced = true
         if inner.length > 0 then {
-            xs.append (this.d.indent (this.d.concat inner))
-            xs.append this.idLine
+            xs.append (t.d.indent (t.d.concat inner))
+            xs.append t.idLine
         }
-        if forced then xs.append this.idBreak
-        xs.append (this.tok tt: zlexer.toktype.braceCloseTok)
-        return (this.d.group (this.d.concat xs))
+        if forced then xs.append t.idBreak
+        xs.append (t.tok tt: zlexer.toktype.braceCloseTok)
+        return (t.d.group (t.d.concat xs))
     }
 
     # visitStatement -- one statement line: a binding, or a value
-    visitStatement: function {:this id: zast.nodeid} out u32 is {
-        n: this.node :id
+    visitStatement: function {t: this id: zast.nodeid} out u32 is {
+        n: t.node :id
         match (
             n
         ) case statementline then {
-            inner: this.node id: n.statementline
+            inner: t.node id: n.statementline
             match (
                 inner
             ) case assignment then {
-                return (this.visitAssignment id: n.statementline)
+                return (t.visitAssignment id: n.statementline)
             } else {
-                return (this.visitValue id: n.statementline slot: slotkind.line wrapped: false)
+                return (t.visitValue id: n.statementline slot: slotkind.line wrapped: false)
             }
         } case assignment then {
-            return (this.visitAssignment :id)
+            return (t.visitAssignment :id)
         } else {
-            return (this.visitValue :id slot: slotkind.line wrapped: false)
+            return (t.visitValue :id slot: slotkind.line wrapped: false)
         }
     }
 
     # visitAssignment -- `name: value` or `:name`
-    visitAssignment: function {:this id: zast.nodeid} out u32 is {
-        n: this.node :id
+    visitAssignment: function {t: this id: zast.nodeid} out u32 is {
+        n: t.node :id
         match (
             n
         ) case assignment then {
-            v: this.node id: n.value
+            v: t.node id: n.value
             match (
                 v
             ) case labelvalue then {
-                return (this.tokShorthand name: n.name)
+                return (t.tokShorthand name: n.name)
             } else null
             xs: ListVal u32
-            xs.append (this.tokLabel name: n.name)
-            xs.append (this.rhsValue id: n.value)
-            return (this.d.concat xs)
+            xs.append (t.tokLabel name: n.name)
+            xs.append (t.rhsValue id: n.value)
+            return (t.d.concat xs)
         } else {
             return 0
         }
@@ -1411,38 +1411,38 @@ Builder: class {
     # written, which a layout cannot know), or a bare statement -- `null` among
     # them, an ordinary name
     visitBody: function {
-        :this
+        t: this
         id: zast.nodeid
         # a `then` or `case` body, which a following `else` could continue
         arm: false
     } out u32 is {
-        n: this.node :id
+        n: t.node :id
         count: u64
         match (
             n
         ) case statement then {
             count = n.statements.count
         } else null
-        if (this.peekIs tt: zlexer.toktype.braceOpenTok) then return (this.visitBlock :id)
+        if (t.peekIs tt: zlexer.toktype.braceOpenTok) then return (t.visitBlock :id)
         # a bare body: the one statement. An `if` or a `match` as an arm's body
         # is in parentheses: written bare, a following `else` would bind to it
         match (
             n
         ) case statement then {
             if count == 1 then {
-                sid: this.kid span: n.statements i: 0
+                sid: t.kid span: n.statements i: 0
                 vid: zast.nodeid
-                if arm then vid = this.bareControlValue id: sid
+                if arm then vid = t.bareControlValue id: sid
                 if vid.notZero then return (
-                    this.visitValue
+                    t.visitValue
                     id: vid
                     slot: slotkind.clause
                     wrapped: false
                 )
-                return (this.visitStatement id: sid)
+                return (t.visitStatement id: sid)
             }
         } else null
-        this.c.note msg: "a clause body the formatter does not print".string
+        t.c.note msg: "a clause body the formatter does not print".string
         return 0
     }
 
@@ -1471,146 +1471,146 @@ Builder: class {
     # ---- control flow ----
 
     # visitIf -- `if` conditions `then` body, `when` chains, `else`
-    visitIf: function {:this id: zast.nodeid} out u32 is {
-        n: this.node :id
+    visitIf: function {t: this id: zast.nodeid} out u32 is {
+        n: t.node :id
         xs: ListVal u32
         match (
             n
         ) case ifexpr then {
-            xs.append (this.tok tt: zlexer.toktype.ifTok)
+            xs.append (t.tok tt: zlexer.toktype.ifTok)
             ci: u64
             for ci < n.clauses.count loop {
-                cl: this.node id: (this.kid span: n.clauses i: ci)
+                cl: t.node id: (t.kid span: n.clauses i: ci)
                 ci = ci + 1
                 match (
                     cl
                 ) case ifclause then {
                     k: u64
                     for k < cl.conditions.count loop {
-                        cond: this.node id: (this.kid span: cl.conditions i: k)
+                        cond: t.node id: (t.kid span: cl.conditions i: k)
                         k = k + 1
-                        if (this.peekIs tt: zlexer.toktype.whenTok) then {
-                            xs.append this.idSpace
-                            xs.append (this.tok tt: zlexer.toktype.whenTok)
+                        if (t.peekIs tt: zlexer.toktype.whenTok) then {
+                            xs.append t.idSpace
+                            xs.append (t.tok tt: zlexer.toktype.whenTok)
                         }
-                        xs.append this.idSpace
+                        xs.append t.idSpace
                         match (
                             cond
                         ) case namedoperation then {
-                            xs.append (this.condValue id: cond.operation)
+                            xs.append (t.condValue id: cond.operation)
                         } else null
                     }
-                    xs.append this.idSpace
-                    xs.append (this.tok tt: zlexer.toktype.thenTok)
-                    xs.append this.idSpace
-                    xs.append (this.visitBody id: cl.statement arm: true)
+                    xs.append t.idSpace
+                    xs.append (t.tok tt: zlexer.toktype.thenTok)
+                    xs.append t.idSpace
+                    xs.append (t.visitBody id: cl.statement arm: true)
                 } else null
             }
             if n.elseclause.notZero then {
-                xs.append this.idSpace
-                xs.append (this.tok tt: zlexer.toktype.elseTok)
-                xs.append this.idSpace
-                xs.append (this.visitElse id: n.elseclause)
+                xs.append t.idSpace
+                xs.append (t.tok tt: zlexer.toktype.elseTok)
+                xs.append t.idSpace
+                xs.append (t.visitElse id: n.elseclause)
             }
         } else null
-        return (this.d.concat xs)
+        return (t.d.concat xs)
     }
 
     # visitElse -- an else body: `null`, a block, a bare `if` (`else if`), or a
     # bare statement
-    visitElse: function {:this id: zast.nodeid} out u32 is {
-        if (this.peekIs tt: zlexer.toktype.ifTok) then {
-            n: this.node :id
+    visitElse: function {t: this id: zast.nodeid} out u32 is {
+        if (t.peekIs tt: zlexer.toktype.ifTok) then {
+            n: t.node :id
             match (
                 n
             ) case statement then {
-                if n.statements.count == 1 then return (this.visitStatement id: (
-                    this.kid
+                if n.statements.count == 1 then return (t.visitStatement id: (
+                    t.kid
                     span: n.statements
                     i: 0
                 )
                 )
             } else null
         }
-        return (this.visitBody :id)
+        return (t.visitBody :id)
     }
 
     # visitFor -- the loop header in the order it was written, then the body
-    visitFor: function {:this id: zast.nodeid} out u32 is {
-        n: this.node :id
+    visitFor: function {t: this id: zast.nodeid} out u32 is {
+        n: t.node :id
         xs: ListVal u32
         match (
             n
         ) case forexpr then {
-            xs.append (this.tok tt: zlexer.toktype.forTok)
+            xs.append (t.tok tt: zlexer.toktype.forTok)
             ci: u64
             pi: u64
             sawBody: false
             for true loop {
-                if this.c.failed then break
-                kind: this.c.peekKind
+                if t.c.failed then break
+                kind: t.c.peekKind
                 if kind == zlexer.toktype.whileTok then {
-                    xs.append this.idSpace
-                    xs.append (this.tok tt: zlexer.toktype.whileTok)
-                    xs.append this.idSpace
+                    xs.append t.idSpace
+                    xs.append (t.tok tt: zlexer.toktype.whileTok)
+                    xs.append t.idSpace
                     if sawBody then {
                         if pi < n.postconditions.count then {
-                            xs.append (this.condValue id: (this.kid span: n.postconditions i: pi))
+                            xs.append (t.condValue id: (t.kid span: n.postconditions i: pi))
                             pi = pi + 1
                         }
                     } else {
-                        xs.append (this.forCondition :n index: ci)
+                        xs.append (t.forCondition :n index: ci)
                         ci = ci + 1
                     }
                 } else if kind == zlexer.toktype.eachTok when sawBody.not when (
                     ci < n.conditions.count
                 ) then {
-                    xs.append this.idSpace
-                    xs.append (this.tok tt: zlexer.toktype.eachTok)
-                    xs.append this.idSpace
-                    xs.append (this.forCondition :n index: ci)
+                    xs.append t.idSpace
+                    xs.append (t.tok tt: zlexer.toktype.eachTok)
+                    xs.append t.idSpace
+                    xs.append (t.forCondition :n index: ci)
                     ci = ci + 1
                 } else if kind == zlexer.toktype.labelTok when sawBody.not when (
                     ci < n.conditions.count
                 ) then {
-                    xs.append this.idSpace
-                    xs.append (this.forCondition :n index: ci)
+                    xs.append t.idSpace
+                    xs.append (t.forCondition :n index: ci)
                     ci = ci + 1
                 } else if kind == zlexer.toktype.loopTok then {
-                    xs.append this.idSpace
-                    xs.append (this.tok tt: zlexer.toktype.loopTok)
-                    xs.append this.idSpace
-                    xs.append (this.visitBody id: n.body)
+                    xs.append t.idSpace
+                    xs.append (t.tok tt: zlexer.toktype.loopTok)
+                    xs.append t.idSpace
+                    xs.append (t.visitBody id: n.body)
                     sawBody = true
                 } else if ci == 0 when sawBody.not when n.conditions.count > 0 then {
                     # the leading condition, spelled without `while`
-                    xs.append this.idSpace
-                    xs.append (this.forCondition :n index: ci)
+                    xs.append t.idSpace
+                    xs.append (t.forCondition :n index: ci)
                     ci = ci + 1
                 } else {
                     break
                 }
             }
         } else null
-        return (this.d.concat xs)
+        return (t.d.concat xs)
     }
 
     # forCondition -- condition `index` of a loop header: a `label: value`
     # binding, or a bare condition
-    forCondition: function {:this n: zast.forrow index: u64} out u32 is {
+    forCondition: function {t: this n: zast.forrow index: u64} out u32 is {
         if index >= n.conditions.count then {
-            this.c.note msg: "a loop condition the tree does not hold".string
+            t.c.note msg: "a loop condition the tree does not hold".string
             return 0
         }
-        cond: this.node id: (this.kid span: n.conditions i: index)
+        cond: t.node id: (t.kid span: n.conditions i: index)
         match (
             cond
         ) case namedoperation then {
-            if cond.name.isZero then return (this.condValue id: cond.operation)
+            if cond.name.isZero then return (t.condValue id: cond.operation)
             xs: ListVal u32
-            xs.append (this.tokLabel name: cond.name)
-            xs.append (this.visitValue id: cond.operation slot: slotkind.clause wrapped: false)
-            return (this.d.concat xs)
+            xs.append (t.tokLabel name: cond.name)
+            xs.append (t.visitValue id: cond.operation slot: slotkind.clause wrapped: false)
+            return (t.d.concat xs)
         } else {
             return 0
         }
@@ -1620,44 +1620,44 @@ Builder: class {
     # one group: flat on one line with the subject bare, else the subject in
     # parentheses on their own lines with the arms aligned under them. A
     # subject that needs its parentheses keeps them in both shapes
-    visitMatch: function {:this id: zast.nodeid} out u32 is {
-        n: this.node :id
+    visitMatch: function {t: this id: zast.nodeid} out u32 is {
+        n: t.node :id
         xs: ListVal u32
         match (
             n
         ) case caseexpr then {
-            xs.append (this.tok tt: zlexer.toktype.matchTok)
-            xs.append this.idSpace
-            if (this.peekIs tt: zlexer.toktype.onTok) then {
-                xs.append (this.tok tt: zlexer.toktype.onTok)
-                xs.append this.idSpace
+            xs.append (t.tok tt: zlexer.toktype.matchTok)
+            xs.append t.idSpace
+            if (t.peekIs tt: zlexer.toktype.onTok) then {
+                xs.append (t.tok tt: zlexer.toktype.onTok)
+                xs.append t.idSpace
             }
-            this.matchSubject :xs id: n.subject
+            t.matchSubject :xs id: n.subject
             ci: u64
             for ci < n.clauses.count loop {
-                cl: this.node id: (this.kid span: n.clauses i: ci)
+                cl: t.node id: (t.kid span: n.clauses i: ci)
                 ci = ci + 1
                 match (
                     cl
                 ) case caseclause then {
-                    xs.append this.idSpace
-                    xs.append (this.tok tt: zlexer.toktype.caseTok)
-                    xs.append this.idSpace
-                    xs.append (this.tok tt: zlexer.toktype.refIdTok)
-                    xs.append this.idSpace
-                    xs.append (this.tok tt: zlexer.toktype.thenTok)
-                    xs.append this.idSpace
-                    xs.append (this.visitBody id: cl.statement arm: true)
+                    xs.append t.idSpace
+                    xs.append (t.tok tt: zlexer.toktype.caseTok)
+                    xs.append t.idSpace
+                    xs.append (t.tok tt: zlexer.toktype.refIdTok)
+                    xs.append t.idSpace
+                    xs.append (t.tok tt: zlexer.toktype.thenTok)
+                    xs.append t.idSpace
+                    xs.append (t.visitBody id: cl.statement arm: true)
                 } else null
             }
             if n.elseclause.notZero then {
-                xs.append this.idSpace
-                xs.append (this.tok tt: zlexer.toktype.elseTok)
-                xs.append this.idSpace
-                xs.append (this.visitElse id: n.elseclause)
+                xs.append t.idSpace
+                xs.append (t.tok tt: zlexer.toktype.elseTok)
+                xs.append t.idSpace
+                xs.append (t.visitElse id: n.elseclause)
             }
         } else null
-        return (this.d.group (this.d.concat xs))
+        return (t.d.group (t.d.concat xs))
     }
 
     # matchSubject -- the subject's pieces appended to the match group: an
@@ -1665,215 +1665,215 @@ Builder: class {
     # closer. The pair is inserted when the subject is bare or its
     # parentheses are layout only, and written when it needs them; a call
     # keeps its callable on the opener's line
-    matchSubject: function {:this xs: ListVal u32 id: zast.nodeid} is {
-        wp: this.openWritten
+    matchSubject: function {t: this xs: ListVal u32 id: zast.nodeid} is {
+        wp: t.openWritten
         g: wp.before
-        needed: this.parensRequired inner: id slot: slotkind.clause
-        innerNode: this.node :id
+        needed: t.parensRequired inner: id slot: slotkind.clause
+        innerNode: t.node :id
         isCall: innerNode.call
         core: u32
         if isCall then {
-            core = this.visitCall :id inParens: true kept: false
+            core = t.visitCall :id inParens: true kept: false
         } else {
-            core = this.visitValueArm :id wrapped: true
+            core = t.visitValueArm :id wrapped: true
         }
-        h: this.closeWritten p: wp
+        h: t.closeWritten p: wp
         hard: needed
         if isCall then hard = true
         if hard then {
-            xs.append this.idOpen
+            xs.append t.idOpen
         } else {
-            xs.append (this.d.ifBreak brk: this.idOpen flat: 0)
+            xs.append (t.d.ifBreak brk: t.idOpen flat: 0)
         }
-        if g.marker when this.keepMarkers then xs.append this.idBreak
+        if g.marker when t.keepMarkers then xs.append t.idBreak
         if g.trailing > 0 then xs.append g.trailing
         mid: ListVal u32
-        mid.append this.idSoft
+        mid.append t.idSoft
         if g.lead > 0 then mid.append g.lead
         mid.append core
         if h.trailing > 0 then mid.append h.trailing
         if h.dangling > 0 then {
-            mid.append this.idHard
+            mid.append t.idHard
             mid.append h.dangling
         }
-        xs.append (this.d.indent (this.d.concat mid))
-        xs.append this.idSoft
+        xs.append (t.d.indent (t.d.concat mid))
+        xs.append t.idSoft
         if hard then {
-            xs.append this.idClose
+            xs.append t.idClose
         } else {
-            xs.append (this.d.ifBreak brk: this.idClose flat: 0)
+            xs.append (t.d.ifBreak brk: t.idClose flat: 0)
         }
     }
 
     # visitWith -- `with name: value do body`
-    visitWith: function {:this id: zast.nodeid} out u32 is {
-        n: this.node :id
+    visitWith: function {t: this id: zast.nodeid} out u32 is {
+        n: t.node :id
         xs: ListVal u32
         match (
             n
         ) case withexpr then {
-            xs.append (this.tok tt: zlexer.toktype.withTok)
-            xs.append this.idSpace
-            xs.append (this.tokLabel name: n.name)
-            xs.append (this.visitValue id: n.value slot: slotkind.clause wrapped: false)
-            xs.append this.idSpace
-            xs.append (this.tok tt: zlexer.toktype.doTok)
-            xs.append this.idSpace
-            xs.append (this.visitValue id: n.body slot: slotkind.line wrapped: false)
+            xs.append (t.tok tt: zlexer.toktype.withTok)
+            xs.append t.idSpace
+            xs.append (t.tokLabel name: n.name)
+            xs.append (t.visitValue id: n.value slot: slotkind.clause wrapped: false)
+            xs.append t.idSpace
+            xs.append (t.tok tt: zlexer.toktype.doTok)
+            xs.append t.idSpace
+            xs.append (t.visitValue id: n.body slot: slotkind.line wrapped: false)
         } else null
-        return (this.d.concat xs)
+        return (t.d.concat xs)
     }
 
     # visitList -- a list definition, `list [is] { elements } [out type]`
-    visitList: function {:this id: zast.nodeid} out u32 is {
-        n: this.node :id
+    visitList: function {t: this id: zast.nodeid} out u32 is {
+        n: t.node :id
         xs: ListVal u32
         match (
             n
         ) case listblock then {
-            xs.append (this.tok tt: zlexer.toktype.listTok)
-            xs.append this.idSpace
-            if (this.peekIs tt: zlexer.toktype.isTok) then {
-                xs.append (this.tok tt: zlexer.toktype.isTok)
-                xs.append this.idSpace
+            xs.append (t.tok tt: zlexer.toktype.listTok)
+            xs.append t.idSpace
+            if (t.peekIs tt: zlexer.toktype.isTok) then {
+                xs.append (t.tok tt: zlexer.toktype.isTok)
+                xs.append t.idSpace
             }
-            xs.append (this.visitDelimited span: n.elements kind: blockkind.elements)
+            xs.append (t.visitDelimited span: n.elements kind: blockkind.elements)
             if n.outType.notZero then {
-                xs.append this.idSpace
-                xs.append (this.tok tt: zlexer.toktype.outTok)
-                xs.append this.idSpace
-                xs.append (this.visitValue id: n.outType slot: slotkind.clause wrapped: false)
+                xs.append t.idSpace
+                xs.append (t.tok tt: zlexer.toktype.outTok)
+                xs.append t.idSpace
+                xs.append (t.visitValue id: n.outType slot: slotkind.clause wrapped: false)
             }
         } else null
-        return (this.d.concat xs)
+        return (t.d.concat xs)
     }
 
     # ---- definitions ----
 
     # visitFunction -- `function` and its clauses in the order written
-    visitFunction: function {:this id: zast.nodeid} out u32 is {
-        n: this.node :id
+    visitFunction: function {t: this id: zast.nodeid} out u32 is {
+        n: t.node :id
         xs: ListVal u32
         match (
             n
         ) case functiondef then {
-            xs.append (this.tok tt: zlexer.toktype.functionTok)
+            xs.append (t.tok tt: zlexer.toktype.functionTok)
             for true loop {
-                if this.c.failed then break
-                kind: this.c.peekKind
+                if t.c.failed then break
+                kind: t.c.peekKind
                 if kind == zlexer.toktype.braceOpenTok then {
-                    xs.append this.idSpace
-                    xs.append (this.visitParamLadder span: n.parameters)
+                    xs.append t.idSpace
+                    xs.append (t.visitParamLadder span: n.parameters)
                 } else if kind == zlexer.toktype.inTok then {
-                    xs.append this.idSpace
-                    xs.append (this.tok tt: zlexer.toktype.inTok)
-                    xs.append this.idSpace
-                    xs.append (this.visitParamLadder span: n.parameters)
+                    xs.append t.idSpace
+                    xs.append (t.tok tt: zlexer.toktype.inTok)
+                    xs.append t.idSpace
+                    xs.append (t.visitParamLadder span: n.parameters)
                 } else if kind == zlexer.toktype.outTok then {
-                    xs.append this.idSpace
-                    xs.append (this.tok tt: zlexer.toktype.outTok)
-                    xs.append this.idSpace
-                    rt: this.visitValue id: n.returntype slot: slotkind.clause wrapped: false
+                    xs.append t.idSpace
+                    xs.append (t.tok tt: zlexer.toktype.outTok)
+                    xs.append t.idSpace
+                    rt: t.visitValue id: n.returntype slot: slotkind.clause wrapped: false
                     xs.append rt
                 } else if kind == zlexer.toktype.outxTok then {
-                    xs.append this.idSpace
-                    xs.append (this.tok tt: zlexer.toktype.outxTok)
-                    xs.append this.idSpace
-                    rt: this.visitValue id: n.returntype slot: slotkind.clause wrapped: false
+                    xs.append t.idSpace
+                    xs.append (t.tok tt: zlexer.toktype.outxTok)
+                    xs.append t.idSpace
+                    rt: t.visitValue id: n.returntype slot: slotkind.clause wrapped: false
                     xs.append rt
                 } else if kind == zlexer.toktype.isTok then {
-                    xs.append this.idSpace
-                    xs.append (this.tok tt: zlexer.toktype.isTok)
-                    xs.append this.idSpace
-                    if (this.peekIs tt: zlexer.toktype.nativeTok) then {
-                        xs.append (this.tok tt: zlexer.toktype.nativeTok)
+                    xs.append t.idSpace
+                    xs.append (t.tok tt: zlexer.toktype.isTok)
+                    xs.append t.idSpace
+                    if (t.peekIs tt: zlexer.toktype.nativeTok) then {
+                        xs.append (t.tok tt: zlexer.toktype.nativeTok)
                     } else {
-                        xs.append (this.visitBlock id: n.body)
+                        xs.append (t.visitBlock id: n.body)
                     }
                 } else if kind == zlexer.toktype.asTok then {
-                    xs.append this.idSpace
-                    xs.append (this.tok tt: zlexer.toktype.asTok)
-                    xs.append this.idSpace
-                    xs.append (this.visitDelimited span: n.asItems kind: blockkind.body)
+                    xs.append t.idSpace
+                    xs.append (t.tok tt: zlexer.toktype.asTok)
+                    xs.append t.idSpace
+                    xs.append (t.visitDelimited span: n.asItems kind: blockkind.body)
                 } else {
                     break
                 }
             }
         } else null
-        return (this.d.concat xs)
+        return (t.d.concat xs)
     }
 
     # visitObject -- a type definition and its clauses in the order written
-    visitObject: function {:this id: zast.nodeid} out u32 is {
-        n: this.node :id
+    visitObject: function {t: this id: zast.nodeid} out u32 is {
+        n: t.node :id
         xs: ListVal u32
         match (
             n
         ) case objectdef then {
-            first: this.c.peekKind
-            xs.append (this.tok tt: first)
+            first: t.c.peekKind
+            xs.append (t.tok tt: first)
             # a typedef's base is one type reference, written where a clause's
             # value is
             if first == zlexer.toktype.typedefTok then {
-                xs.append this.idSpace
-                if (this.peekIs tt: zlexer.toktype.isTok) then {
-                    xs.append (this.tok tt: zlexer.toktype.isTok)
-                    xs.append this.idSpace
+                xs.append t.idSpace
+                if (t.peekIs tt: zlexer.toktype.isTok) then {
+                    xs.append (t.tok tt: zlexer.toktype.isTok)
+                    xs.append t.idSpace
                 }
                 xs.append (
-                    this.visitValue
-                    id: (this.kid span: n.isItems i: 0)
+                    t.visitValue
+                    id: (t.kid span: n.isItems i: 0)
                     slot: slotkind.clause
                     wrapped: false
                 )
             }
             for true loop {
-                if this.c.failed then break
-                kind: this.c.peekKind
+                if t.c.failed then break
+                kind: t.c.peekKind
                 if kind == zlexer.toktype.isTok then {
-                    xs.append this.idSpace
-                    xs.append (this.tok tt: zlexer.toktype.isTok)
-                    xs.append this.idSpace
-                    if (this.peekIs tt: zlexer.toktype.nativeTok) then {
-                        xs.append (this.tok tt: zlexer.toktype.nativeTok)
+                    xs.append t.idSpace
+                    xs.append (t.tok tt: zlexer.toktype.isTok)
+                    xs.append t.idSpace
+                    if (t.peekIs tt: zlexer.toktype.nativeTok) then {
+                        xs.append (t.tok tt: zlexer.toktype.nativeTok)
                     } else {
-                        xs.append (this.visitDelimited span: n.isItems kind: blockkind.body)
+                        xs.append (t.visitDelimited span: n.isItems kind: blockkind.body)
                     }
                 } else if kind == zlexer.toktype.braceOpenTok then {
-                    xs.append this.idSpace
-                    xs.append (this.visitDelimited span: n.isItems kind: blockkind.body)
+                    xs.append t.idSpace
+                    xs.append (t.visitDelimited span: n.isItems kind: blockkind.body)
                 } else if kind == zlexer.toktype.nativeTok then {
-                    xs.append this.idSpace
-                    xs.append (this.tok tt: zlexer.toktype.nativeTok)
+                    xs.append t.idSpace
+                    xs.append (t.tok tt: zlexer.toktype.nativeTok)
                 } else if kind == zlexer.toktype.asTok then {
-                    xs.append this.idSpace
-                    xs.append (this.tok tt: zlexer.toktype.asTok)
-                    xs.append this.idSpace
-                    xs.append (this.visitDelimited span: n.asItems kind: blockkind.body)
+                    xs.append t.idSpace
+                    xs.append (t.tok tt: zlexer.toktype.asTok)
+                    xs.append t.idSpace
+                    xs.append (t.visitDelimited span: n.asItems kind: blockkind.body)
                 } else {
                     break
                 }
             }
         } else null
-        return (this.d.concat xs)
+        return (t.d.concat xs)
     }
 
     # visitUnit -- `unit [as] { items }`
-    visitUnit: function {:this id: zast.nodeid} out u32 is {
-        n: this.node :id
+    visitUnit: function {t: this id: zast.nodeid} out u32 is {
+        n: t.node :id
         xs: ListVal u32
         match (
             n
         ) case unitdef then {
-            xs.append (this.tok tt: zlexer.toktype.unitTok)
-            xs.append this.idSpace
-            if (this.peekIs tt: zlexer.toktype.asTok) then {
-                xs.append (this.tok tt: zlexer.toktype.asTok)
-                xs.append this.idSpace
+            xs.append (t.tok tt: zlexer.toktype.unitTok)
+            xs.append t.idSpace
+            if (t.peekIs tt: zlexer.toktype.asTok) then {
+                xs.append (t.tok tt: zlexer.toktype.asTok)
+                xs.append t.idSpace
             }
-            xs.append (this.visitDelimited span: n.body kind: blockkind.body)
+            xs.append (t.visitDelimited span: n.body kind: blockkind.body)
         } else null
-        return (this.d.concat xs)
+        return (t.d.concat xs)
     }
 
     # visitParamLadder -- a function's `{ params }` as the signature ladder:
@@ -1881,49 +1881,49 @@ Builder: class {
     # line. Parameters the author spread over lines, a comment, or a
     # parameter spanning lines force the last rung (a newline after `{`
     # alone is the second rung's own shape, not a marker)
-    visitParamLadder: function {:this span: zast.kidspan} out u32 is {
-        openTok: this.tok tt: zlexer.toktype.braceOpenTok
+    visitParamLadder: function {t: this span: zast.kidspan} out u32 is {
+        openTok: t.tok tt: zlexer.toktype.braceOpenTok
         items: ListVal u32
         trails: ListVal u32
         forced: false
         prevEnd: u32
         i: u64
         for i < span.count loop {
-            itemId: this.kid :span :i
-            g: this.gapDocs cap: 0
+            itemId: t.kid :span :i
+            g: t.gapDocs cap: 0
             if g.hasComment then forced = true
             trails.append g.trailing
             one: ListVal u32
             if g.lead > 0 then one.append g.lead
-            startLine: this.c.rawLine k: this.c.peekIndex
-            if i > 0 when startLine > prevEnd when this.keepMarkers then forced = true
-            one.append (this.visitParam id: itemId)
-            endLine: this.c.rawLine k: this.c.prev
+            startLine: t.c.rawLine k: t.c.peekIndex
+            if i > 0 when startLine > prevEnd when t.keepMarkers then forced = true
+            one.append (t.visitParam id: itemId)
+            endLine: t.c.rawLine k: t.c.prev
             if endLine > startLine then forced = true
             prevEnd = endLine
-            items.append (this.d.concat one)
+            items.append (t.d.concat one)
             i = i + 1
         }
-        g: this.gapDocs cap: 0
+        g: t.gapDocs cap: 0
         if g.hasComment then forced = true
         tail: ListVal u32
         if g.trailing > 0 then tail.append g.trailing
         if g.dangling > 0 then {
-            tail.append this.idHard
+            tail.append t.idHard
             tail.append g.dangling
         }
-        tailDoc: this.d.concat tail
-        closeTok: this.tok tt: zlexer.toktype.braceCloseTok
+        tailDoc: t.d.concat tail
+        closeTok: t.tok tt: zlexer.toktype.braceCloseTok
         if items.length == 0 then {
             xs: ListVal u32
             xs.append openTok
-            if forced then xs.append this.idBreak
+            if forced then xs.append t.idBreak
             xs.append tailDoc
             xs.append closeTok
-            return (this.d.concat xs)
+            return (t.d.concat xs)
         }
-        spaced: this.joined :items :trails sep: this.idSpace
-        lined: this.joined :items :trails sep: this.idLine
+        spaced: t.joined :items :trails sep: t.idSpace
+        lined: t.joined :items :trails sep: t.idLine
         # rung one: on the header line
         v1: ListVal u32
         v1.append openTok
@@ -1934,90 +1934,90 @@ Builder: class {
         v2: ListVal u32
         v2.append openTok
         v2in: ListVal u32
-        v2in.append this.idLine
+        v2in.append t.idLine
         v2in.append spaced
         v2in.append tailDoc
-        v2.append (this.d.indent (this.d.concat v2in))
-        v2.append this.idLine
+        v2.append (t.d.indent (t.d.concat v2in))
+        v2.append t.idLine
         v2.append closeTok
         # rung three: one parameter per line
         v3: ListVal u32
         v3.append openTok
         v3in: ListVal u32
-        v3in.append this.idLine
+        v3in.append t.idLine
         v3in.append lined
         v3in.append tailDoc
-        v3.append (this.d.indent (this.d.concat v3in))
-        v3.append this.idLine
-        if forced then v3.append this.idBreak
+        v3.append (t.d.indent (t.d.concat v3in))
+        v3.append t.idLine
+        if forced then v3.append t.idBreak
         v3.append closeTok
         vs: ListVal u32
-        vs.append (this.d.concat v1)
-        vs.append (this.d.concat v2)
-        vs.append (this.d.concat v3)
-        return (this.d.bestFitting vs)
+        vs.append (t.d.concat v1)
+        vs.append (t.d.concat v2)
+        vs.append (t.d.concat v3)
+        return (t.d.bestFitting vs)
     }
 
     # joined -- `items` with `sep` between them, each item's trailing comment
     # (if any) placed before the separator that follows it
-    joined: function {:this items: ListVal u32 trails: ListVal u32 sep: u32} out u32 is {
+    joined: function {t: this items: ListVal u32 trails: ListVal u32 sep: u32} out u32 is {
         xs: ListVal u32
         i: u64
         for i < items.length loop {
             if i > 0 then {
-                t: trails.get :i
-                if t > 0 then xs.append t
+                trail: trails.get :i
+                if trail > 0 then xs.append trail
                 xs.append sep
             }
             xs.append (items.get :i)
             i = i + 1
         }
-        return (this.d.concat xs)
+        return (t.d.concat xs)
     }
 
     # visitDelimited -- `{ items }` for an object or unit body or for a list:
     # flat when written so and
     # fitting, else one item per line; a newline or comment right after `{`
     # keeps it open
-    visitDelimited: function {:this span: zast.kidspan kind: blockkind} out u32 is {
+    visitDelimited: function {t: this span: zast.kidspan kind: blockkind} out u32 is {
         xs: ListVal u32
-        xs.append (this.tok tt: zlexer.toktype.braceOpenTok)
+        xs.append (t.tok tt: zlexer.toktype.braceOpenTok)
         inner: ListVal u32
         forced: false
         # a list of bare elements fills its rows, the author's own row
         # breaks kept; anything else is one item per line when broken
-        filling: kind.elements and (span.count > 1) and (this.allUnlabelled :span)
+        filling: kind.elements and (span.count > 1) and (t.allUnlabelled :span)
         fillKids: ListVal u32
         prevEnd: u32
         i: u64
         for i < span.count loop {
-            itemId: this.kid :span :i
-            g: this.gapDocs cap: 1
-            forced = forced or ((i == 0) and g.marker and this.keepMarkers) or g.hasComment
+            itemId: t.kid :span :i
+            g: t.gapDocs cap: 1
+            forced = forced or ((i == 0) and g.marker and t.keepMarkers) or g.hasComment
             if filling then {
-                if i == 0 then inner.append this.idLine
-                prevEnd = this.fillItem :g :itemId first: i == 0 :prevEnd dst: fillKids
+                if i == 0 then inner.append t.idLine
+                prevEnd = t.fillItem :g :itemId first: i == 0 :prevEnd dst: fillKids
             } else {
-                forced = forced or (this.lineItem :g :itemId first: i == 0 :kind dst: inner)
+                forced = forced or (t.lineItem :g :itemId first: i == 0 :kind dst: inner)
             }
             i = i + 1
         }
-        if filling then inner.append (this.d.fill fillKids)
-        g: this.gapDocs cap: 1
-        forced = forced or g.hasComment or ((span.count == 0) and g.marker and this.keepMarkers)
+        if filling then inner.append (t.d.fill fillKids)
+        g: t.gapDocs cap: 1
+        forced = forced or g.hasComment or ((span.count == 0) and g.marker and t.keepMarkers)
         if g.trailing > 0 then inner.append g.trailing
         if g.dangling > 0 then {
-            inner.append this.idHard
-            this.appendBlanks xs: inner n: g.blanks
+            inner.append t.idHard
+            t.appendBlanks xs: inner n: g.blanks
             inner.append g.dangling
         }
         if inner.length > 0 then {
-            xs.append (this.d.indent (this.d.concat inner))
-            xs.append this.idLine
+            xs.append (t.d.indent (t.d.concat inner))
+            xs.append t.idLine
         }
-        if forced then xs.append this.idBreak
-        xs.append (this.tok tt: zlexer.toktype.braceCloseTok)
-        return (this.d.group (this.d.concat xs))
+        if forced then xs.append t.idBreak
+        xs.append (t.tok tt: zlexer.toktype.braceCloseTok)
+        return (t.d.group (t.d.concat xs))
     }
 
     # fillItem -- one element of a filled list, as the fill's next separator
@@ -2029,7 +2029,7 @@ Builder: class {
     # flat however long it was. Answers the source line the element ended
     # on, which is what the next element's row test reads.
     fillItem: function {
-        :this
+        t: this
         g: gapdocs
         itemId: zast.nodeid
         first: bool
@@ -2043,18 +2043,18 @@ Builder: class {
         } else {
             sep: ListVal u32
             if g.trailing > 0 then sep.append g.trailing
-            startRawLine: this.c.rawLine k: this.c.peekIndex
+            startRawLine: t.c.rawLine k: t.c.peekIndex
             if startRawLine > prevEnd then {
-                sep.append this.idHard
+                sep.append t.idHard
             } else {
-                sep.append this.idLine
+                sep.append t.idLine
             }
-            dst.append (this.d.concat sep.take)
+            dst.append (t.d.concat sep.take)
         }
         if g.lead > 0 then content.append g.lead
-        content.append (this.visitElement id: itemId)
-        dst.append (this.d.concat content.take)
-        return (this.c.rawLine k: this.c.prev)
+        content.append (t.visitElement id: itemId)
+        dst.append (t.d.concat content.take)
+        return (t.c.rawLine k: t.c.prev)
     }
 
     # lineItem -- one item of a block laid out one per line: its trailing
@@ -2062,7 +2062,7 @@ Builder: class {
     # lead comment, then the item by the block's kind. Answers whether the
     # item spanned lines in the source, which forces the block open.
     lineItem: function {
-        :this
+        t: this
         g: gapdocs
         itemId: zast.nodeid
         first: bool
@@ -2070,20 +2070,20 @@ Builder: class {
         dst: ListVal u32
     } out bool is {
         if g.trailing > 0 then dst.append g.trailing
-        dst.append this.idLine
-        if first.not then this.appendBlanks xs: dst n: g.blanks
+        dst.append t.idLine
+        if first.not then t.appendBlanks xs: dst n: g.blanks
         if g.lead > 0 then dst.append g.lead
-        startLine: this.c.rawLine k: this.c.peekIndex
-        dst.append (this.visitByKind :kind id: itemId)
-        endLine: this.c.rawLine k: this.c.prev
+        startLine: t.c.rawLine k: t.c.peekIndex
+        dst.append (t.visitByKind :kind id: itemId)
+        endLine: t.c.rawLine k: t.c.prev
         return endLine > startLine
     }
 
     # visitByKind -- an item of a delimited block by the block's kind: an
     # element of a list, or an object or unit item.
-    visitByKind: function {:this kind: blockkind id: zast.nodeid} out u32 is {
-        if kind.elements then return (this.visitElement :id)
-        return (this.visitItem :id)
+    visitByKind: function {t: this kind: blockkind id: zast.nodeid} out u32 is {
+        if kind.elements then return (t.visitElement :id)
+        return (t.visitItem :id)
     }
 
     # allUnlabelled -- whether every element of a list is a bare term
@@ -2104,51 +2104,51 @@ Builder: class {
     }
 
     # visitParam -- `name: type` or `:name`
-    visitParam: function {:this id: zast.nodeid} out u32 is {
-        n: this.node :id
+    visitParam: function {t: this id: zast.nodeid} out u32 is {
+        n: t.node :id
         match (
             n
         ) case namedoperation then {
-            op: this.node id: n.operation
+            op: t.node id: n.operation
             match (
                 op
             ) case labelvalue then {
-                return (this.tokShorthand name: n.name)
+                return (t.tokShorthand name: n.name)
             } else null
             xs: ListVal u32
-            xs.append (this.tokLabel name: n.name)
-            xs.append (this.visitValue id: n.operation slot: slotkind.clause wrapped: false)
-            return (this.d.concat xs)
+            xs.append (t.tokLabel name: n.name)
+            xs.append (t.visitValue id: n.operation slot: slotkind.clause wrapped: false)
+            return (t.d.concat xs)
         } else {
-            this.c.note msg: "a parameter the formatter does not print".string
+            t.c.note msg: "a parameter the formatter does not print".string
             return 0
         }
     }
 
     # visitElement -- a list element: `term`, `name: term` or `:name`
-    visitElement: function {:this id: zast.nodeid} out u32 is {
-        n: this.node :id
+    visitElement: function {t: this id: zast.nodeid} out u32 is {
+        n: t.node :id
         match (
             n
         ) case namedoperation then {
-            op: this.node id: n.operation
+            op: t.node id: n.operation
             match (
                 op
             ) case labelvalue then {
-                return (this.tokShorthand name: n.name)
+                return (t.tokShorthand name: n.name)
             } else null
             if n.name.isZero then return (
-                this.visitValue
+                t.visitValue
                 id: n.operation
                 slot: slotkind.tight
                 wrapped: false
             )
             xs: ListVal u32
-            xs.append (this.tokLabel name: n.name)
-            xs.append (this.visitValue id: n.operation slot: slotkind.tight wrapped: false)
-            return (this.d.concat xs)
+            xs.append (t.tokLabel name: n.name)
+            xs.append (t.visitValue id: n.operation slot: slotkind.tight wrapped: false)
+            return (t.d.concat xs)
         } else {
-            this.c.note msg: "a list element the formatter does not print".string
+            t.c.note msg: "a list element the formatter does not print".string
             return 0
         }
     }

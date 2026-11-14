@@ -598,12 +598,12 @@ Server: class {
 
     # one byte from the transport, refilling the buffer when it runs dry. none
     # means the connection ended
-    needByte: function {:this} out optionval u8 is {
-        for this.inpos >= this.inbuf.length loop {
+    needByte: function {t: this} out optionval u8 is {
+        for t.inpos >= t.inbuf.length loop {
             fresh: Bytes
-            this.inbuf = fresh.take
-            this.inpos = 0
-            rr: transportRead tp: this.transport into: this.inbuf
+            t.inbuf = fresh.take
+            t.inpos = 0
+            rr: transportRead tp: t.transport into: t.inbuf
             match (
                 rr
             ) case ok then {
@@ -612,17 +612,17 @@ Server: class {
                 return (optionval.none u8)
             }
         }
-        b: this.inbuf.get i: this.inpos
-        this.inpos = this.inpos + 1
+        b: t.inbuf.get i: t.inpos
+        t.inpos = t.inpos + 1
         return (optionval.some b)
     }
 
     # one LSP header line, up to its CRLF. none when the connection ended mid-
     # header
-    readHeaderLine: function {:this} out Option String is {
+    readHeaderLine: function {t: this} out Option String is {
         line: String
         for true loop {
-            bo: this.needByte
+            bo: t.needByte
             match (
                 bo
             ) case some then {
@@ -647,12 +647,12 @@ Server: class {
 
     # exactly `n` bytes of message body, which Content-Length has already told
     # us to expect
-    readBody: function {:this n: u64} out Option String is {
+    readBody: function {t: this n: u64} out Option String is {
         body: String
         body.reserve :n
         i: u64
         for i < n loop {
-            bo: this.needByte
+            bo: t.needByte
             match (
                 bo
             ) case some then {
@@ -666,10 +666,10 @@ Server: class {
     }
 
     # readMessage -- one framed JSON-RPC payload; none at end of input.
-    readMessage: function {:this} out Option String is {
+    readMessage: function {t: this} out Option String is {
         clen: u64
         for true loop {
-            lo: this.readHeaderLine
+            lo: t.readHeaderLine
             match (
                 lo
             ) case some then {
@@ -685,54 +685,54 @@ Server: class {
             io.eprintln "zls: message without Content-Length"
             return (Option.none String)
         }
-        return (this.readBody n: clen)
+        return (t.readBody n: clen)
     }
 
     # ---- dispatch ----
 
     # dispatch one decoded message to its handler, and answer it where the
     # protocol requires an answer
-    handleMessage: function {:this msg: Value.view} is {
-        if (this.refuseMessage :msg) then return
+    handleMessage: function {t: this msg: Value.view} is {
+        if (t.refuseMessage :msg) then return
         mo: json.textAt v: msg path: "method"
         hasId: json.hasAt v: msg path: "id"
         match (
             mo
         ) case some then {
-            mv: this.words.slotOf text: mo.stringView
+            mv: t.words.slotOf text: mo.stringView
             # the handshake's acknowledgement: a notification, with nothing to answer
             if mv == zlsWord.slot.mInitialized then return
             if mv == zlsWord.slot.mInitialize then {
-                this.handleInitialize :msg
+                t.handleInitialize :msg
             } else if mv == zlsWord.slot.mShutdown then {
-                this.shutdownReq = true
+                t.shutdownReq = true
                 idv: idValueOf :msg
-                sendResult id: idv result: Value.nul tp: this.transport
+                sendResult id: idv result: Value.nul tp: t.transport
             } else if mv == zlsWord.slot.mExit then {
-                this.running = false
-                if this.shutdownReq.not then this.exitCode = 1
+                t.running = false
+                if t.shutdownReq.not then t.exitCode = 1
             } else if mv == zlsWord.slot.mDidOpen then {
-                this.handleDidOpen :msg
+                t.handleDidOpen :msg
             } else if mv == zlsWord.slot.mDidChange then {
-                this.handleDidChange :msg
+                t.handleDidChange :msg
             } else if mv == zlsWord.slot.mDidClose then {
-                this.handleDidClose :msg
+                t.handleDidClose :msg
             } else if mv == zlsWord.slot.mDefinition then {
-                this.handleNav :msg mode: navmode.definition
+                t.handleNav :msg mode: navmode.definition
             } else if mv == zlsWord.slot.mHover then {
-                this.handleNav :msg mode: navmode.hover
+                t.handleNav :msg mode: navmode.hover
             } else if mv == zlsWord.slot.mReferences then {
-                this.handleNav :msg mode: navmode.references
+                t.handleNav :msg mode: navmode.references
             } else if mv == zlsWord.slot.mCompletion then {
-                this.handleNav :msg mode: navmode.completion
+                t.handleNav :msg mode: navmode.completion
             } else if mv == zlsWord.slot.mResolve then {
-                this.handleResolve :msg
+                t.handleResolve :msg
             } else if mv == zlsWord.slot.mSignatureHelp then {
-                this.handleNav :msg mode: navmode.signatureHelp
+                t.handleNav :msg mode: navmode.signatureHelp
             } else if mv == zlsWord.slot.mFormatting then {
-                this.handleFormatting :msg
+                t.handleFormatting :msg
             } else if mv == zlsWord.slot.mDocumentSymbol then {
-                this.handleDocSymbol :msg
+                t.handleDocSymbol :msg
             } else {
                 if hasId then {
                     idValue: idValueOf :msg
@@ -741,7 +741,7 @@ Server: class {
                         id: idValue
                         code: -32601
                         message: "method not found"
-                        tp: this.transport
+                        tp: t.transport
                     )
                 }
             }
@@ -759,7 +759,7 @@ Server: class {
     #   - a request after `shutdown`: invalid request, -32600.
     # A notification in the last two states is dropped, `exit` excepted, and so
     # is a reply to something the server asked. True when it was refused.
-    refuseMessage: function {:this msg: Value.view} out bool is {
+    refuseMessage: function {t: this msg: Value.view} out bool is {
         idKind: (json.at v: msg path: "id").kind
         methodKind: (json.at v: msg path: "method").kind
         if methodKind.missing when (
@@ -777,16 +777,16 @@ Server: class {
                 id: (idValueOf :msg)
                 code: -32600
                 message: "invalid request"
-                tp: this.transport
+                tp: t.transport
             )
             return true
         }
         mv: u64
         mo: json.textAt v: msg path: "method"
-        match mo case some then mv = this.words.slotOf text: mo.stringView case none then null
+        match mo case some then mv = t.words.slotOf text: mo.stringView case none then null
         if mv == zlsWord.slot.mExit then return false
-        early: this.initialized.not and (mv != zlsWord.slot.mInitialize)
-        if early.not when this.shutdownReq.not then return false
+        early: t.initialized.not and (mv != zlsWord.slot.mInitialize)
+        if early.not when t.shutdownReq.not then return false
         if idKind.missing then return true
         if early then {
             (
@@ -794,7 +794,7 @@ Server: class {
                 id: (idValueOf :msg)
                 code: -32002
                 message: "server not initialized"
-                tp: this.transport
+                tp: t.transport
             )
         } else {
             (
@@ -802,7 +802,7 @@ Server: class {
                 id: (idValueOf :msg)
                 code: -32600
                 message: "invalid request"
-                tp: this.transport
+                tp: t.transport
             )
         }
         return true
@@ -810,7 +810,7 @@ Server: class {
 
     # the handshake: resolve the project roots, negotiate position encoding, and
     # report what this server can do
-    handleInitialize: function {:this msg: Value.view} is {
+    handleInitialize: function {t: this msg: Value.view} is {
         # position encoding: utf-32 when the client offers it
         i: u64
         for true loop {
@@ -821,8 +821,8 @@ Server: class {
             match (
                 k
             ) case text then {
-                if (this.words.slotOf text: f.s.stringView) == zlsWord.slot.encUtf32 then {
-                    this.encUtf32 = true
+                if (t.words.slotOf text: f.s.stringView) == zlsWord.slot.encUtf32 then {
+                    t.encUtf32 = true
                 }
             } else {
                 done = true
@@ -849,8 +849,8 @@ Server: class {
         }
         rr: (
             resolveRoots
-            srcFlags: this.srcFlags
-            sysFlag: this.sysFlag.stringView
+            srcFlags: t.srcFlags
+            sysFlag: t.sysFlag.stringView
             optSrc: optSrc.stringView
             optSys: optSys.stringView
             rootPath: rootPath.stringView
@@ -860,17 +860,17 @@ Server: class {
         # was resolved and which channel decided it, every session, on STDERR:
         # stdout is the protocol channel, and an editor keeps server stderr in
         # its LSP log (`:LspLog` in nvim).
-        this.baseSrcDirs = List String
+        t.baseSrcDirs = List String
         for each rd: rr.srcDirs loop {
             io.eprintln "zls: srcDir=\{rd} [\{rr.srcWhy}]"
-            this.baseSrcDirs.append from: rd.copy
+            t.baseSrcDirs.append from: rd.copy
         }
         io.eprintln "zls: systemDir=\{rr.systemDir} [\{rr.systemWhy}]"
-        this.srcDir = (rr.srcDirs.get i: 0).copy
-        this.systemDir = rr.systemDir.copy
-        this.baseSystemDir = rr.systemDir.copy
-        this.srcExplicit = rr.srcExplicit
-        this.systemExplicit = rr.systemExplicit
+        t.srcDir = (rr.srcDirs.get i: 0).copy
+        t.systemDir = rr.systemDir.copy
+        t.baseSystemDir = rr.systemDir.copy
+        t.srcExplicit = rr.srcExplicit
+        t.systemExplicit = rr.systemExplicit
         # response
         caps: newObj
         caps.set key: "textDocumentSync".string value: Value.intval 1
@@ -898,7 +898,7 @@ Server: class {
         caps.set key: "referencesProvider".string value: Value.boolean true
         caps.set key: "documentSymbolProvider".string value: Value.boolean true
         encName: "utf-16"
-        if this.encUtf32 then encName = "utf-32"
+        if t.encUtf32 then encName = "utf-32"
         caps.set key: "positionEncoding".string value: Value.text encName.string
         info: newObj
         info.set key: "name".string value: Value.text "zls".string
@@ -908,8 +908,8 @@ Server: class {
         res.set key: "serverInfo".string value: Value.object info
         idv: idValueOf :msg
         resv: Value.object res
-        sendResult id: idv result: resv tp: this.transport
-        this.initialized = true
+        sendResult id: idv result: resv tp: t.transport
+        t.initialized = true
     }
 
     # enterProjectOf -- make the project `file` belongs to the one
@@ -918,18 +918,18 @@ Server: class {
     # unit is generated -- the same writer zc uses, so the editor has the
     # unit, on disk, before any build. A file in no project takes the
     # session's roots and a cache-directory `z`.
-    enterProjectOf: function {:this file: StringView} is {
+    enterProjectOf: function {t: this file: StringView} is {
         # the document's own root first: its relpath, and the open buffers,
         # are relative to it. No root at all before `initialize`.
-        this.srcDirs = zproject.holderFirst roots: this.baseSrcDirs path: file
-        this.srcDir = "".string
-        if this.srcDirs.length > 0 then this.srcDir = (this.srcDirs.get i: 0).copy
-        this.systemDir = this.baseSystemDir.copy
+        t.srcDirs = zproject.holderFirst roots: t.baseSrcDirs path: file
+        t.srcDir = "".string
+        if t.srcDirs.length > 0 then t.srcDir = (t.srcDirs.get i: 0).copy
+        t.systemDir = t.baseSystemDir.copy
         start: path.dirname p: file
         pf: (
             zproject.discoverProject
             start: start.stringView
-            systemdir: this.baseSystemDir.stringView
+            systemdir: t.baseSystemDir.stringView
             prelude: zparser.PreludeStore.create
         )
         if pf.found when pf.error.length > 0 then {
@@ -937,52 +937,52 @@ Server: class {
             pf = zproject.ProjectFile.create
         }
         if pf.found then {
-            if this.srcExplicit.not then {
-                this.srcDirs = pf.sourceRootsFor path: file
-                if this.srcDirs.length > 0 then this.srcDir = (this.srcDirs.get i: 0).copy
+            if t.srcExplicit.not then {
+                t.srcDirs = pf.sourceRootsFor path: file
+                if t.srcDirs.length > 0 then t.srcDir = (t.srcDirs.get i: 0).copy
             }
             sysp: zproject.inProject dir: pf.dir.stringView rel: pf.systemDir.stringView
-            if this.systemExplicit.not when sysp.length > 0 then {
-                this.systemDir = zcheck.resolveSystemDir flagVal: sysp.stringView
+            if t.systemExplicit.not when sysp.length > 0 then {
+                t.systemDir = zcheck.resolveSystemDir flagVal: sysp.stringView
             }
         }
-        if this.srcDirs.length == 0 then this.srcDirs.append from: this.srcDir.copy
+        if t.srcDirs.length == 0 then t.srcDirs.append from: t.srcDir.copy
         un: zsource.unitNameOf :file
         facts: (
             zproject.BuildFacts.create
-            srcdirs: this.srcDirs
-            systemdir: this.systemDir.stringView
+            srcdirs: t.srcDirs
+            systemdir: t.systemDir.stringView
             main: un.stringView
         )
         facts.triple = pf.target.copy
-        this.layer = zproject.zLayer :pf :facts
-        zproject.writeLayer layer: this.layer
-        this.enterPrograms :pf path: file
+        t.layer = zproject.zLayer :pf :facts
+        zproject.writeLayer layer: t.layer
+        t.enterPrograms :pf path: file
     }
 
     # enterPrograms -- the programs project `pf` lists, and the `z` layer each
     # reads, when the project holds the file at `path`; none otherwise
-    enterPrograms: function {:this pf: zproject.ProjectFile.view path: StringView} is {
-        this.projPrograms = List String
-        this.entryLayers = Map String V: zcheck.GenLayer
+    enterPrograms: function {t: this pf: zproject.ProjectFile.view path: StringView} is {
+        t.projPrograms = List String
+        t.entryLayers = Map String V: zcheck.GenLayer
         if pf.found.not or (pf.holdsSource :path).not then return
         for each pg: pf.programs loop {
-            this.projPrograms.append from: pg.copy
+            t.projPrograms.append from: pg.copy
             ef: (
                 zproject.BuildFacts.create
-                srcdirs: this.srcDirs
-                systemdir: this.systemDir.stringView
+                srcdirs: t.srcDirs
+                systemdir: t.systemDir.stringView
                 main: pg.stringView
             )
             ef.triple = pf.target.copy
-            this.entryLayers.set key: pg.copy value: (zproject.zLayer :pf facts: ef)
+            t.entryLayers.set key: pg.copy value: (zproject.zLayer :pf facts: ef)
         }
     }
 
     # ---- document sync (full text) ----
 
     # the editor opened a buffer; record its text and check it
-    handleDidOpen: function {:this msg: Value.view} is {
+    handleDidOpen: function {t: this msg: Value.view} is {
         uo: json.textAt v: msg path: "params/textDocument/uri"
         to: json.textAt v: msg path: "params/textDocument/text"
         vo: json.intAt v: msg path: "params/textDocument/version"
@@ -992,14 +992,14 @@ Server: class {
         }
         if uo.some when to.some then {
             pth: uriToPath uri: uo.stringView
-            this.enterProjectOf file: pth.stringView
+            t.enterProjectOf file: pth.stringView
             rel: (
                 relPathBest
                 path: pth.stringView
-                srcDir: this.srcDir.stringView
-                systemDir: this.systemDir.stringView
+                srcDir: t.srcDir.stringView
+                systemDir: t.systemDir.stringView
             )
-            docSrc: this.srcDir.copy
+            docSrc: t.srcDir.copy
             # a data file is a unit of its own directory first (zdata.open),
             # so that is the root its relpath is relative to
             if (zsource.isDataFile file: pth.stringView) then {
@@ -1026,24 +1026,24 @@ Server: class {
                 path: pth
                 relpath: rel
                 srcDir: docSrc
-                systemDir: this.systemDir.copy
+                systemDir: t.systemDir.copy
                 text: to.copy
                 version: ver
             )
             key: uo.copy
-            this.docs.set :key value: d
-            this.syncDoc uri: uo.stringView
+            t.docs.set :key value: d
+            t.syncDoc uri: uo.stringView
         }
     }
 
     # the editor edited a buffer; replace the text and mark it dirty rather than
     # re-checking immediately
-    handleDidChange: function {:this msg: Value.view} is {
+    handleDidChange: function {t: this msg: Value.view} is {
         uo: json.textAt v: msg path: "params/textDocument/uri"
         to: json.textAt v: msg path: "params/contentChanges/0/text"
         vo: json.intAt v: msg path: "params/textDocument/version"
         if uo.some when to.some then {
-            rem: this.docs.remove key: uo
+            rem: t.docs.remove key: uo
             changed: false
             if rem.some then {
                 d: rem.take
@@ -1052,23 +1052,23 @@ Server: class {
                     d.version = vo
                 }
                 key: uo.copy
-                this.docs.set :key value: d
+                t.docs.set :key value: d
                 changed = true
             }
-            if changed then this.syncDoc uri: uo.stringView
+            if changed then t.syncDoc uri: uo.stringView
         }
     }
 
     # the editor closed a buffer; drop it, since the file on disk is
     # authoritative again
-    handleDidClose: function {:this msg: Value.view} is {
+    handleDidClose: function {t: this msg: Value.view} is {
         uo: json.textAt v: msg path: "params/textDocument/uri"
         if uo.some then {
-            rem: this.docs.remove key: uo
+            rem: t.docs.remove key: uo
             match (
                 rem
             ) case some then null case none then null
-            this.forgetChecks uri: uo.stringView
+            t.forgetChecks uri: uo.stringView
             # clear this uri's diagnostics
             empty: newArr
             p: newObj
@@ -1079,7 +1079,7 @@ Server: class {
                 sendNotification
                 method: "textDocument/publishDiagnostics"
                 params: pv
-                tp: this.transport
+                tp: t.transport
             )
         }
     }
@@ -1087,23 +1087,23 @@ Server: class {
     # forgetChecks -- closing document `uri`: its group's check goes with the
     # group's last open document, and the entry's program, which read its
     # buffer, goes too
-    forgetChecks: function {:this uri: StringView} is {
-        gone: this.docCheck.remove key: uri.string
+    forgetChecks: function {t: this uri: StringView} is {
+        gone: t.docCheck.remove key: uri.string
         if gone.some then {
             gk: gone.take
-            if (this.groupInUse key: gk.stringView).not then {
-                dropped: this.snapshots.remove key: gk.copy
+            if (t.groupInUse key: gk.stringView).not then {
+                dropped: t.snapshots.remove key: gk.copy
                 match (
                     dropped
                 ) case some then null case none then null
-                dm: this.snapMain.remove key: gk
+                dm: t.snapMain.remove key: gk
                 match (
                     dm
                 ) case some then null case none then null
             }
         }
-        this.entrySnap = Map String V: zcheck.CheckResult
-        de: this.docPrograms.remove key: uri.string
+        t.entrySnap = Map String V: zcheck.CheckResult
+        de: t.docPrograms.remove key: uri.string
         match (
             de
         ) case some then null case none then null
@@ -1116,14 +1116,14 @@ Server: class {
     # ---- debounce ----
 
     # bring one document's analysis up to date with its current text
-    syncDoc: function {:this uri: StringView} is {
-        if this.debounce then this.markDirty :uri else this.recomputeFor :uri
+    syncDoc: function {t: this uri: StringView} is {
+        if t.debounce then t.markDirty :uri else t.recomputeFor :uri
     }
 
     # note that a document changed. Checking is deferred so a burst of
     # keystrokes costs one analysis rather than one each
-    markDirty: function {:this uri: StringView} is {
-        this.dirty.set key: uri.string value: true
+    markDirty: function {t: this uri: StringView} is {
+        t.dirty.set key: uri.string value: true
     }
 
     # whether any document is waiting to be re-checked
@@ -1135,16 +1135,16 @@ Server: class {
     # GROUP, since a unit and its subunits share it. The dirty uris are copied
     # out first: recomputeFor locks `this`, which would conflict with a live
     # iterator over this.dirty.
-    flushDirty: function {:this} is {
+    flushDirty: function {t: this} is {
         uris: List String
-        for each e: this.dirty.iterateItems loop uris.append e.key.copy
+        for each e: t.dirty.iterateItems loop uris.append e.key.copy
         fresh: MapRV String v: bool
-        this.dirty = fresh.take
+        t.dirty = fresh.take
         checked: Set String
         for each u: uris loop {
-            g: this.groupOf uri: u.stringView
+            g: t.groupOf uri: u.stringView
             if (checked.has item: g).not then {
-                this.recomputeFor uri: u.stringView
+                t.recomputeFor uri: u.stringView
                 checked.add item: g.take
             }
         }
@@ -1166,13 +1166,13 @@ Server: class {
     }
 
     # re-analyse one document and publish its diagnostics
-    recomputeFor: function {:this uri: StringView} is {
-        if this.initialized.not then return
+    recomputeFor: function {t: this uri: StringView} is {
+        if t.initialized.not then return
         mp: String
         drel: String
         found: false
         {
-            dgo: this.docs.get key: uri.asString
+            dgo: t.docs.get key: uri.asString
             if dgo.some then {
                 mp = dgo.path.copy
                 drel = dgo.relpath.copy
@@ -1180,40 +1180,40 @@ Server: class {
             }
         }
         if found.not then return
-        this.enterProjectOf file: mp.stringView
+        t.enterProjectOf file: mp.stringView
         if (zsource.isDataFile file: mp.stringView) then {
-            this.recomputeData :uri mp: mp.stringView
+            t.recomputeData :uri mp: mp.stringView
             return
         }
-        this.entrySnap = Map String V: zcheck.CheckResult
+        t.entrySnap = Map String V: zcheck.CheckResult
         pgs: List String
-        for each pg: this.projPrograms loop pgs.append from: pg.copy
-        this.docPrograms.set key: uri.string value: pgs.take
-        ovs: this.overlaysOf
+        for each pg: t.projPrograms loop pgs.append from: pg.copy
+        t.docPrograms.set key: uri.string value: pgs.take
+        ovs: t.overlaysOf
         # a subunit's document is checked inside its topmost unit, which the
         # parse starts from; that unit's relpath keys the group's shared check
         topRel: (
-            this.topRelOf
+            t.topRelOf
             rel: drel.stringView
-            srcDir: this.srcDir.stringView
-            systemDir: this.systemDir.stringView
+            srcDir: t.srcDir.stringView
+            systemDir: t.systemDir.stringView
         )
         mu: zsource.unitNameOf file: topRel.stringView
-        gk: path.join a: this.srcDir.stringView b: topRel.stringView
+        gk: path.join a: t.srcDir.stringView b: topRel.stringView
         r: (
             zcheck.check
-            srcdirs: this.srcDirs
-            systemdir: this.systemDir.stringView
+            srcdirs: t.srcDirs
+            systemdir: t.systemDir.stringView
             mainUnit: mu.stringView
             overlays: ovs
-            layer: this.layer
+            layer: t.layer
         )
         rows: ListVal zcheck.diagrow
         msgs: List String
         zcheck.diagsOf :r :rows :msgs
-        sd: this.srcDir.copy
+        sd: t.srcDir.copy
         (
-            this.publishAll
+            t.publishAll
             :r
             :rows
             :msgs
@@ -1225,9 +1225,9 @@ Server: class {
         if r.parseOk then {
             # the check answers for every open document of the group, so an
             # edit to any of them refreshes navigation for all
-            this.bindGroup :uri topRel: topRel.stringView key: gk.stringView
-            this.snapshots.set key: gk.copy value: r
-            this.snapMain.set key: gk.copy value: mu.copy
+            t.bindGroup :uri topRel: topRel.stringView key: gk.stringView
+            t.snapshots.set key: gk.copy value: r
+            t.snapMain.set key: gk.copy value: mu.copy
         }
     }
 
@@ -1235,26 +1235,26 @@ Server: class {
     # does: its own directory the first root, served from its buffer there,
     # then the project's roots, the unit files `.zd`. Its check is a group of
     # its own, keyed by the file.
-    recomputeData: function {:this uri: StringView mp: StringView} is {
+    recomputeData: function {t: this uri: StringView mp: StringView} is {
         dd: path.dirname p: mp
         base: path.baseName p: mp
         roots: List String
         roots.append from: dd.copy
-        for each sd: this.srcDirs loop roots.append from: sd.copy
+        for each sd: t.srcDirs loop roots.append from: sd.copy
         own: Map String V: String
         {
-            dgo: this.docs.get key: uri.asString
+            dgo: t.docs.get key: uri.asString
             if dgo.some then {
                 own.set key: base.copy value: dgo.text.copy
             }
         }
-        ovs: this.overlaysOf
+        ovs: t.overlaysOf
         ovs.insert from: own.take at: 0
         mu: zsource.unitNameOf file: mp
         r: (
             zcheck.check
             srcdirs: roots
-            systemdir: this.systemDir.stringView
+            systemdir: t.systemDir.stringView
             mainUnit: mu.stringView
             overlays: ovs
             layer: zcheck.noLayer
@@ -1264,7 +1264,7 @@ Server: class {
         msgs: List String
         zcheck.diagsOf :r :rows :msgs
         (
-            this.publishAll
+            t.publishAll
             :r
             :rows
             :msgs
@@ -1274,19 +1274,19 @@ Server: class {
             dataCheck: true
         )
         if r.parseOk then {
-            this.bindGroup :uri topRel: base.stringView key: mp
-            this.snapshots.set key: mp.string value: r
-            this.snapMain.set key: mp.string value: mu.copy
+            t.bindGroup :uri topRel: base.stringView key: mp
+            t.snapshots.set key: mp.string value: r
+            t.snapMain.set key: mp.string value: mu.copy
         }
     }
 
     # overlaysOf -- the open buffers of the project in hand -- in any of its
     # source roots -- which shadow its files on disk, each under its own root
-    overlaysOf: function {:this} out List (Map String V: String) is {
+    overlaysOf: function {t: this} out List (Map String V: String) is {
         ovs: List (Map String V: String)
-        for each r: this.srcDirs loop {
+        for each r: t.srcDirs loop {
             ov: Map String V: String
-            for each e: this.docs.iterateItems loop {
+            for each e: t.docs.iterateItems loop {
                 if e.value.relpath.length > 0 when e.value.srcDir.stringView == r then {
                     k: e.value.relpath.copy
                     v: e.value.text.copy
@@ -1370,13 +1370,13 @@ Server: class {
 
     # bindGroup -- point every open document of the group `topRel` of the
     # project in hand at its check, `key`, the one just run for `uri` included.
-    bindGroup: function {:this uri: StringView topRel: StringView key: StringView} is {
+    bindGroup: function {t: this uri: StringView topRel: StringView key: StringView} is {
         # the documents are copied out first: the climb reads `this.docs` too
         uris: List String
         rels: List String
-        for each k: this.docs loop {
-            dgo: this.docs.get key: k
-            if dgo.some when dgo.srcDir.stringView == this.srcDir then {
+        for each k: t.docs loop {
+            dgo: t.docs.get key: k
+            if dgo.some when dgo.srcDir.stringView == t.srcDir then {
                 uris.append k.copy
                 rels.append dgo.relpath.copy
             }
@@ -1386,16 +1386,16 @@ Server: class {
         i: u64
         for i < uris.length loop {
             top: (
-                this.topRelOf
+                t.topRelOf
                 rel: (rels.get :i).stringView
-                srcDir: this.srcDir.stringView
-                systemDir: this.systemDir.stringView
+                srcDir: t.srcDir.stringView
+                systemDir: t.systemDir.stringView
             )
             if top.stringView == topRel then members.append (uris.get :i).copy
             i = i + 1
         }
         for each m: members loop {
-            this.docCheck.set key: m.copy value: key.string
+            t.docCheck.set key: m.copy value: key.string
         }
     }
 
@@ -1423,7 +1423,7 @@ Server: class {
     # source check for the source files of the project's root, so neither
     # clears what the other found.
     publishAll: function {
-        :this
+        t: this
         r: zcheck.CheckResult
         rows: (ListVal zcheck.diagrow).view
         msgs: List String
@@ -1439,7 +1439,7 @@ Server: class {
             if row.fsno.notZero then pp = r.vfs.pathfromprovider dentryid: row.fsno
             paths.append pp
         }
-        for each e: this.docs.iterateItems loop {
+        for each e: t.docs.iterateItems loop {
             # a document of another root or kind is not this check's to clear
             if e.value.srcDir.stringView != root then continue
             if (zsource.isDataFile file: e.value.path.stringView) != dataCheck then continue
@@ -1471,7 +1471,7 @@ Server: class {
                         :row
                         msg: m.stringView
                         lineText: lineText.stringView
-                        utf32: this.encUtf32
+                        utf32: t.encUtf32
                     )
                     arr.items.append dv
                 }
@@ -1493,13 +1493,13 @@ Server: class {
                     :arr
                     text: e.value.text.copy
                     relpath: drel.stringView
-                    utf32: this.encUtf32
+                    utf32: t.encUtf32
                     prog: r.prog
                     :self
                     sto: r.st
                 )
             } else {
-                lintInto :arr text: e.value.text.copy relpath: drel.stringView utf32: this.encUtf32
+                lintInto :arr text: e.value.text.copy relpath: drel.stringView utf32: t.encUtf32
             }
             p: newObj
             p.set key: "uri".string value: Value.text durl
@@ -1513,7 +1513,7 @@ Server: class {
                 sendNotification
                 method: "textDocument/publishDiagnostics"
                 params: pv
-                tp: this.transport
+                tp: t.transport
             )
         }
     }
@@ -1522,7 +1522,7 @@ Server: class {
 
     # answer a format request with the edits `zl fmt` would make, as byte ranges
     # the editor can apply
-    handleFormatting: function {:this msg: Value.view} is {
+    handleFormatting: function {t: this msg: Value.view} is {
         idv: idValueOf :msg
         uo: json.textAt v: msg path: "params/textDocument/uri"
         answer: Value.nul
@@ -1531,7 +1531,7 @@ Server: class {
             drel: String
             found: false
             {
-                dgo: this.docs.get key: uo
+                dgo: t.docs.get key: uo
                 if dgo.some then {
                     dtext = dgo.text.copy
                     drel = dgo.relpath.copy
@@ -1543,15 +1543,15 @@ Server: class {
                 answer = res.take
             }
         }
-        sendResult id: idv result: answer tp: this.transport
+        sendResult id: idv result: answer tp: t.transport
     }
 
     # ---- navigation requests ----
 
     # handleNav -- definition (mode 1), hover (mode 2), references
     # (mode 3): shared request decode + snapshot lookup.
-    handleNav: function {:this msg: Value.view mode: navmode} is {
-        if this.debounce when this.hasDirty then this.flushDirty
+    handleNav: function {t: this msg: Value.view mode: navmode} is {
+        if t.debounce when t.hasDirty then t.flushDirty
         idv: idValueOf :msg
         uo: json.textAt v: msg path: "params/textDocument/uri"
         lo: json.intAt v: msg path: "params/position/line"
@@ -1573,7 +1573,7 @@ Server: class {
             dpath: String
             found: false
             {
-                dgo: this.docs.get key: uo
+                dgo: t.docs.get key: uo
                 if dgo.some then {
                     dtext = dgo.text.copy
                     drel = dgo.relpath.copy
@@ -1585,11 +1585,11 @@ Server: class {
             }
             if found then {
                 # the document's own project answers for it
-                this.srcDir = dsrc.take
-                this.systemDir = dsys.take
-                ck: this.checkKeyOf uri: uo.stringView
+                t.srcDir = dsrc.take
+                t.systemDir = dsys.take
+                ck: t.checkKeyOf uri: uo.stringView
                 {
-                    sno: this.snapshots.getMut key: ck
+                    sno: t.snapshots.getMut key: ck
                     if sno.some then {
                         res: Value.nul
                         trigCh: String
@@ -1613,9 +1613,9 @@ Server: class {
                                 docText: dtext.stringView
                                 :line0
                                 ch: ch0
-                                utf32: this.encUtf32
+                                utf32: t.encUtf32
                                 trig: trigCh.stringView
-                                words: this.words
+                                words: t.words
                             )
                         } else if mode.signatureHelp then {
                             res = (
@@ -1625,7 +1625,7 @@ Server: class {
                                 docText: dtext.stringView
                                 :line0
                                 ch: ch0
-                                utf32: this.encUtf32
+                                utf32: t.encUtf32
                             )
                         } else {
                             res = (
@@ -1633,12 +1633,12 @@ Server: class {
                                 snap: sno
                                 docRel: drel.stringView
                                 docUri: uo.stringView
-                                srcDir: this.srcDir.stringView
-                                systemDir: this.systemDir.stringView
+                                srcDir: t.srcDir.stringView
+                                systemDir: t.systemDir.stringView
                                 docText: dtext.stringView
                                 :line0
                                 ch: ch0
-                                utf32: this.encUtf32
+                                utf32: t.encUtf32
                                 :mode
                                 :inclDecl
                             )
@@ -1646,10 +1646,10 @@ Server: class {
                         answer = res.take
                     }
                 }
-                if mode.references when (this.searchesElsewhere uri: uo.stringView ck: ck.stringView
+                if mode.references when (t.searchesElsewhere uri: uo.stringView ck: ck.stringView
                 ) then {
                     m3: (
-                        this.referencesElsewhere
+                        t.referencesElsewhere
                         :msg
                         own: answer
                         ck: ck.stringView
@@ -1665,7 +1665,7 @@ Server: class {
                 }
             }
         }
-        sendResult id: idv result: answer tp: this.transport
+        sendResult id: idv result: answer tp: t.transport
     }
 
     # referencesElsewhere -- the references `own` answered from the document's
@@ -1675,7 +1675,7 @@ Server: class {
     # own program holds none of the units that use it. A program without the
     # file answers nothing; a location already listed is listed once.
     referencesElsewhere: function {
-        :this
+        t: this
         msg: Value.view
         own: Value.view
         # the document's own check
@@ -1695,45 +1695,45 @@ Server: class {
             inclDecl = ido
         }
         keys: List String
-        for each k: this.snapshots loop {
+        for each k: t.snapshots loop {
             if k.stringView != ck then keys.append from: k.copy
         }
         for each k: keys loop {
-            so: this.snapshots.getMut key: k
+            so: t.snapshots.getMut key: k
             if so.some then {
                 r: (
                     navAnswer
                     snap: so
                     :docRel
                     :docUri
-                    srcDir: this.srcDir.stringView
-                    systemDir: this.systemDir.stringView
+                    srcDir: t.srcDir.stringView
+                    systemDir: t.systemDir.stringView
                     :docText
                     :line0
                     :ch
-                    utf32: this.encUtf32
+                    utf32: t.encUtf32
                     mode: navmode.references
                     :inclDecl
                 )
                 acc = mergeLocations a: acc b: r
             }
         }
-        for each ent: (this.programsOf :uri) loop {
-            if (this.entryOpen entry: ent.stringView).not then {
-                this.checkEntry entry: ent.stringView :docPath
-                eo: this.entrySnap.getMut key: ent.copy
+        for each ent: (t.programsOf :uri) loop {
+            if (t.entryOpen entry: ent.stringView).not then {
+                t.checkEntry entry: ent.stringView :docPath
+                eo: t.entrySnap.getMut key: ent.copy
                 if eo.some then {
                     r: (
                         navAnswer
                         snap: eo
                         :docRel
                         :docUri
-                        srcDir: this.srcDir.stringView
-                        systemDir: this.systemDir.stringView
+                        srcDir: t.srcDir.stringView
+                        systemDir: t.systemDir.stringView
                         :docText
                         :line0
                         :ch
-                        utf32: this.encUtf32
+                        utf32: t.encUtf32
                         mode: navmode.references
                         :inclDecl
                     )
@@ -1791,21 +1791,21 @@ Server: class {
     # checkEntry -- check program `entry`, the open buffers shadowing the
     # disk, unless it is checked already. The project is entered from the
     # document asking, which the program's layer is read for.
-    checkEntry: function {:this entry: StringView docPath: StringView} is {
-        if (this.entrySnap.has key: entry.string) then return
-        this.enterProjectOf file: docPath
-        ovs: this.overlaysOf
-        lo: this.entryLayers.get key: entry.string
+    checkEntry: function {t: this entry: StringView docPath: StringView} is {
+        if (t.entrySnap.has key: entry.string) then return
+        t.enterProjectOf file: docPath
+        ovs: t.overlaysOf
+        lo: t.entryLayers.get key: entry.string
         if lo.some then {
             r: (
                 zcheck.check
-                srcdirs: this.srcDirs
-                systemdir: this.systemDir.stringView
+                srcdirs: t.srcDirs
+                systemdir: t.systemDir.stringView
                 mainUnit: entry
                 overlays: ovs
                 layer: lo
             )
-            if r.parseOk then this.entrySnap.set key: entry.string value: r
+            if r.parseOk then t.entrySnap.set key: entry.string value: r
         }
     }
 
@@ -1816,8 +1816,8 @@ Server: class {
     # redraw the highlighted row, and could re-sort the list under the cursor.
     # An item with no data, or one that no longer names anything, comes back
     # as it was.
-    handleResolve: function {:this msg: Value.view} is {
-        if this.debounce when this.hasDirty then this.flushDirty
+    handleResolve: function {t: this msg: Value.view} is {
+        if t.debounce when t.hasDirty then t.flushDirty
         idv: idValueOf :msg
         item: paramsCopy :msg
         lbl: String
@@ -1839,7 +1839,7 @@ Server: class {
         ) case object then {
             if uo.some when lo.some then {
                 (
-                    this.resolveInto
+                    t.resolveInto
                     it: item
                     uri: uo.stringView
                     line0: lo
@@ -1848,13 +1848,13 @@ Server: class {
                 )
             }
         } else null
-        sendResult id: idv result: item tp: this.transport
+        sendResult id: idv result: item tp: t.transport
     }
 
     # resolveInto -- fill `it` with the card of `label` as completed at `line0`
     # of the document `uri`, after the member base `base` ("" for a bare name)
     resolveInto: function {
-        :this
+        t: this
         it: Obj
         uri: StringView
         line0: i64
@@ -1865,7 +1865,7 @@ Server: class {
         dsrc: String
         found: false
         {
-            dgo: this.docs.get key: uri.string
+            dgo: t.docs.get key: uri.string
             if dgo.some then {
                 drel = dgo.relpath.copy
                 dsrc = dgo.srcDir.copy
@@ -1873,9 +1873,9 @@ Server: class {
             }
         }
         if found.not then return
-        this.srcDir = dsrc.take
-        ck: this.checkKeyOf :uri
-        sno: this.snapshots.getMut key: ck
+        t.srcDir = dsrc.take
+        ck: t.checkKeyOf :uri
+        sno: t.snapshots.getMut key: ck
         if sno.some then {
             card: completionCard snap: sno docRel: drel.stringView :line0 :base :label
             md: String
@@ -1894,8 +1894,8 @@ Server: class {
 
     # answer a document-symbol request with the file's definitions, which is
     # what an outline view shows
-    handleDocSymbol: function {:this msg: Value.view} is {
-        if this.debounce when this.hasDirty then this.flushDirty
+    handleDocSymbol: function {t: this msg: Value.view} is {
+        if t.debounce when t.hasDirty then t.flushDirty
         idv: idValueOf :msg
         uo: json.textAt v: msg path: "params/textDocument/uri"
         answer: Value.nul
@@ -1906,7 +1906,7 @@ Server: class {
             dsys: String
             found: false
             {
-                dgo: this.docs.get key: uo
+                dgo: t.docs.get key: uo
                 if dgo.some then {
                     drel = dgo.relpath.copy
                     dtext = dgo.text.copy
@@ -1916,23 +1916,23 @@ Server: class {
                 }
             }
             if found then {
-                this.srcDir = dsrc.take
-                this.systemDir = dsys.take
-                ck: this.checkKeyOf uri: uo.stringView
-                sno: this.snapshots.get key: ck
+                t.srcDir = dsrc.take
+                t.systemDir = dsys.take
+                ck: t.checkKeyOf uri: uo.stringView
+                sno: t.snapshots.get key: ck
                 if sno.some then {
                     res: (
                         symbolsAnswer
                         snap: sno
                         unitOp: (docUnitOp r: sno rel: drel.stringView)
                         docText: dtext.stringView
-                        utf32: this.encUtf32
+                        utf32: t.encUtf32
                     )
                     answer = res.take
                 }
             }
         }
-        sendResult id: idv result: answer tp: this.transport
+        sendResult id: idv result: answer tp: t.transport
     }
 }
 
@@ -2176,14 +2176,14 @@ Spans: class {
     }
 
     # a node's position was seen, so the enclosing range reaches at least that far
-    note: function {:this line: u32 col: u32} is {
+    note: function {t: this line: u32 col: u32} is {
         v: zast.nodepos :line :col
-        if v > this.lastPos then this.lastPos = v
+        if v > t.lastPos then t.lastPos = v
     }
 
     # record a node's span and the name written there
     addRow: function {
-        :this
+        t: this
         ast: Ast.view
         id: zast.nodeid
         line: u32
@@ -2193,15 +2193,15 @@ Spans: class {
     } is {
         txt: zast.nameTextAt :ast ref: name
         hi: col + txt.count.u32.orPanic
-        this.rows.append (spanrow nodeid: id :line :name colLo: col colHi: hi :kind)
-        this.names.append txt.copy
+        t.rows.append (spanrow nodeid: id :line :name colLo: col colHi: hi :kind)
+        t.names.append txt.copy
     }
 
     # record the span of a dotted path's MEMBER half, so hovering `a.b` answers
     # about `b` and not about `a`
-    memberRow: function {:this ast: Ast.view dpid: zast.nodeid c: zast.astnode.view} is {
+    memberRow: function {t: this ast: Ast.view dpid: zast.nodeid c: zast.astnode.view} is {
         if c.atomid then (
-            this.addRow
+            t.addRow
             :ast
             id: dpid
             line: c.lineno
@@ -2251,77 +2251,77 @@ Spans: class {
     # them. A loaded unit's wrapper (here, or a subunit's in its parent's body)
     # holds the FILE's name at the file's first token, where no such text is
     # written, so it adds no row: the first definition's own name sits there.
-    walkProgram: function {:this prog: Ast.view} is {
-        this.wholeProgram = true
+    walkProgram: function {t: this prog: Ast.view} is {
+        t.wholeProgram = true
         for each wpid: prog.units loop {
             wp: prog.nodes.get i: wpid
             if wp.namedoperation then {
-                this.walkAt ast: prog nId: wp.operation
-            } else this.walk ast: prog n: wp
+                t.walkAt ast: prog nId: wp.operation
+            } else t.walk ast: prog n: wp
         }
     }
 
     # walkAt -- the id-taking entry: the row view is this frame's, so a
     # caller can lend the table in the same call.
-    walkAt: function {:this ast: Ast.view nId: zast.nodeid} is {
+    walkAt: function {t: this ast: Ast.view nId: zast.nodeid} is {
         n: ast.nodes.get i: nId
-        this.walk :ast :n
+        t.walk :ast :n
     }
 
     # walk -- note every node's position in pre-order (the navigation index),
     # add the rows names and members contribute, and bracket calls and matches
     # as ranges; children come from zast.childIds.
-    walk: function {:this ast: Ast.view n: zast.astnode.view} is {
+    walk: function {t: this ast: Ast.view n: zast.astnode.view} is {
         if n.placeholder then return
         pos: zast.posOf :n
-        this.note line: pos.line col: pos.col
+        t.note line: pos.line col: pos.col
         kids: zast.childIds :ast :n
         match (
             n
         ) case atomid then {
-            this.addRow :ast id: n.nodeid line: n.lineno col: n.colno name: n.name kind: hitkind.use
-            this.noteGenericUse id: n.nodeid name: n.name
+            t.addRow :ast id: n.nodeid line: n.lineno col: n.colno name: n.name kind: hitkind.use
+            t.noteGenericUse id: n.nodeid name: n.name
         } case labelvalue then {
-            this.addRow :ast id: n.nodeid line: n.lineno col: n.colno name: n.name kind: hitkind.use
+            t.addRow :ast id: n.nodeid line: n.lineno col: n.colno name: n.name kind: hitkind.use
         } case dottedpath then {
             # the member selector is a row of its own, not a node walk
-            this.walk :ast n: (ast.nodes.get i: n.parent)
-            this.memberRow :ast dpid: n.nodeid c: (ast.nodes.get i: n.child)
+            t.walk :ast n: (ast.nodes.get i: n.parent)
+            t.memberRow :ast dpid: n.nodeid c: (ast.nodes.get i: n.child)
             return
         } case call then {
-            this.noteArguments :ast callId: n.nodeid args: n.arguments
-            this.walkRange :ast nodeid: n.nodeid startPos: pos :kids kind: rangekind.call
+            t.noteArguments :ast callId: n.nodeid args: n.arguments
+            t.walkRange :ast nodeid: n.nodeid startPos: pos :kids kind: rangekind.call
             return
         } case functiondef then {
-            outerFn: this.curFn
-            mark: this.generics.length
-            this.pushGenerics :ast items: n.asItems
-            this.curFn = n.nodeid
-            this.walkIds :ast ids: kids
-            this.curFn = outerFn
-            this.popGenerics to: mark
+            outerFn: t.curFn
+            mark: t.generics.length
+            t.pushGenerics :ast items: n.asItems
+            t.curFn = n.nodeid
+            t.walkIds :ast ids: kids
+            t.curFn = outerFn
+            t.popGenerics to: mark
             return
         } case objectdef then {
-            mark: this.generics.length
-            this.pushGenerics :ast items: n.asItems
-            this.walkIds :ast ids: kids
-            this.popGenerics to: mark
+            mark: t.generics.length
+            t.pushGenerics :ast items: n.asItems
+            t.walkIds :ast ids: kids
+            t.popGenerics to: mark
             return
         } case unitdef then {
-            mark: this.generics.length
-            if n.isGeneric then this.pushGenerics :ast items: n.body
-            this.walkIds :ast ids: kids
-            this.popGenerics to: mark
+            mark: t.generics.length
+            if n.isGeneric then t.pushGenerics :ast items: n.body
+            t.walkIds :ast ids: kids
+            t.popGenerics to: mark
             return
         } case caseexpr then {
-            this.noteCaseArms :ast subject: n.subject clauses: n.clauses
-            this.walkRange :ast nodeid: n.nodeid startPos: pos :kids kind: rangekind.caseexpr
+            t.noteCaseArms :ast subject: n.subject clauses: n.clauses
+            t.walkRange :ast nodeid: n.nodeid startPos: pos :kids kind: rangekind.caseexpr
             return
         } case forexpr then {
-            this.noteBindings :ast conds: n.conditions
+            t.noteBindings :ast conds: n.conditions
         } case assignment then {
             (
-                this.addRow
+                t.addRow
                 :ast
                 id: n.nodeid
                 line: n.lineno
@@ -2339,13 +2339,13 @@ Spans: class {
             # read as though navigation were dead. Kind 6 is ranked last in
             # navAnswer so it can only fill an answer, never displace one.
             isSub: zast.unitOpKindIs :ast opId: n.operation k: zast.unitkind.subunit
-            if isSub when this.wholeProgram.not then return
+            if isSub when t.wholeProgram.not then return
             if n.name.notZero when isSub.not then {
                 # keyed by the OPERATION node, not the arm: the arm carries
                 # the name and the position, the operation carries the
                 # definition's stamps. Same split memberRow makes.
                 (
-                    this.addRow
+                    t.addRow
                     :ast
                     id: n.operation
                     line: n.lineno
@@ -2355,16 +2355,16 @@ Spans: class {
                 )
             }
         } else null
-        this.walkIds :ast ids: kids
+        t.walkIds :ast ids: kids
     }
 
     # noteArguments -- record call `callId` against each of its labelled
     # arguments
-    noteArguments: function {:this ast: Ast.view callId: zast.nodeid args: zast.kidspan} is {
+    noteArguments: function {t: this ast: Ast.view callId: zast.nodeid args: zast.kidspan} is {
         for each armId: (zast.kidsOf :ast span: args) loop {
             arm: ast.nodes.get i: armId
             if arm.namedoperation when arm.name.notZero then (
-                this.argCall.set
+                t.argCall.set
                 key: arm.operation
                 value: callId
             )
@@ -2372,11 +2372,11 @@ Spans: class {
     }
 
     # noteBindings -- record the arm of each of a `for`'s named conditions
-    noteBindings: function {:this ast: Ast.view conds: zast.kidspan} is {
+    noteBindings: function {t: this ast: Ast.view conds: zast.kidspan} is {
         for each armId: (zast.kidsOf :ast span: conds) loop {
             arm: ast.nodes.get i: armId
             if arm.namedoperation when arm.name.notZero then (
-                this.forArm.set
+                t.forArm.set
                 key: arm.operation
                 value: arm.nodeid
             )
@@ -2386,7 +2386,7 @@ Spans: class {
     # pushGenerics -- bring into scope the generic parameters a template's
     # `as` block declares: each arm whose operation is `X.generic`, or the call
     # `(X.generic default: ...)`
-    pushGenerics: function {:this ast: Ast.view items: zast.kidspan} is {
+    pushGenerics: function {t: this ast: Ast.view items: zast.kidspan} is {
         for each armId: (zast.kidsOf :ast span: items) loop {
             arm: ast.nodes.get i: armId
             if arm.namedoperation when arm.name.notZero when (
@@ -2394,39 +2394,39 @@ Spans: class {
                 :ast
                 op: arm.operation
             ) then {
-                this.generics.append (genericparam name: arm.name op: arm.operation)
+                t.generics.append (genericparam name: arm.name op: arm.operation)
             }
         }
     }
 
     # popGenerics -- leave the template whose parameters were pushed after
     # `to` were in scope
-    popGenerics: function {:this to: u64} is {
-        for this.generics.length > to loop this.generics.pop
+    popGenerics: function {t: this to: u64} is {
+        for t.generics.length > to loop t.generics.pop
     }
 
     # noteGenericUse -- an atom spelled as a generic parameter in scope, the
     # innermost first, names it
-    noteGenericUse: function {:this id: zast.nodeid name: zast.nameid} is {
-        gi: this.generics.length
+    noteGenericUse: function {t: this id: zast.nodeid name: zast.nameid} is {
+        gi: t.generics.length
         for gi > 0 loop {
             gi = gi - 1
-            g: this.generics.get i: gi
+            g: t.generics.get i: gi
             if g.name == name then {
-                if g.op != id then this.genUse.set key: id value: g.op
+                if g.op != id then t.genUse.set key: id value: g.op
                 return
             }
         }
     }
 
     # noteCaseArms -- record each clause's arm against its match's subject
-    noteCaseArms: function {:this ast: Ast.view subject: zast.nodeid clauses: zast.kidspan} is {
+    noteCaseArms: function {t: this ast: Ast.view subject: zast.nodeid clauses: zast.kidspan} is {
         for each clId: (zast.kidsOf :ast span: clauses) loop {
             cl: ast.nodes.get i: clId
             if cl.caseclause when cl.matcharm.notZero then (
-                this.caseArm.set
+                t.caseArm.set
                 key: cl.matcharm
-                value: (casearm :subject fn: this.curFn)
+                value: (casearm :subject fn: t.curFn)
             )
         }
     }
@@ -2447,23 +2447,23 @@ Spans: class {
     # walkRange -- walk a call's or a match's children and record its range,
     # which ends at the latest position inside it
     walkRange: function {
-        :this
+        t: this
         ast: Ast.view
         nodeid: zast.nodeid
         startPos: zast.nodepos
         kids: (ListVal zast.nodeid).view
         kind: rangekind
     } is {
-        outer: this.lastPos
-        this.lastPos = startPos
-        this.walkIds :ast ids: kids
-        this.ranges.append (rangerow :nodeid :startPos endPos: this.lastPos :kind)
-        if outer > this.lastPos then this.lastPos = outer
+        outer: t.lastPos
+        t.lastPos = startPos
+        t.walkIds :ast ids: kids
+        t.ranges.append (rangerow :nodeid :startPos endPos: t.lastPos :kind)
+        if outer > t.lastPos then t.lastPos = outer
     }
 
     # record spans for a list of child nodes in order
-    walkIds: function {:this ast: Ast.view ids: (ListVal zast.nodeid).view} is {
-        for each c: ids loop this.walk :ast n: (ast.nodes.get i: c)
+    walkIds: function {t: this ast: Ast.view ids: (ListVal zast.nodeid).view} is {
+        for each c: ids loop t.walk :ast n: (ast.nodes.get i: c)
     }
 }
 
@@ -7640,34 +7640,34 @@ DotScan: class {
     # take one token that is not whitespace, a comment or a label's colon. A
     # `{` opens the place its keyword names -- an interpolation's `\{` lexes as
     # one too, opening a body -- and a `(` keeps the place around it
-    step: function {:this tt: zlexer.toktype} is {
+    step: function {t: this tt: zlexer.toktype} is {
         match (
             tt
         ) case braceOpenTok then {
-            this.open place: (placeOpenedBy prev: this.prevCode decl: this.decl) paren: false
+            t.open place: (placeOpenedBy prev: t.prevCode decl: t.decl) paren: false
         } case parenOpenTok then {
-            this.open place: this.innermost paren: true
+            t.open place: t.innermost paren: true
         } case braceCloseTok then {
-            this.close
+            t.close
         } case parenCloseTok then {
-            this.close
+            t.close
         } else null
-        if (isDeclaratorTok :tt) then this.decl = tt
-        this.prev2 = this.prev
-        this.prev = tt
-        if tt.eolTok.not then this.prevCode = tt
+        if (isDeclaratorTok :tt) then t.decl = tt
+        t.prev2 = t.prev
+        t.prev = tt
+        if tt.eolTok.not then t.prevCode = tt
     }
 
     # a block opens: no definition has been declared in it yet
-    open: function {:this place: dotplace paren: bool} is {
-        this.blocks.append (openblock :place :paren outerDecl: this.decl)
-        this.decl = zlexer.toktype.bofTok
+    open: function {t: this place: dotplace paren: bool} is {
+        t.blocks.append (openblock :place :paren outerDecl: t.decl)
+        t.decl = zlexer.toktype.bofTok
     }
 
     # end the innermost block, ignoring a stray closer
-    close: function {:this} is {
-        if this.blocks.length == 0 then return
-        this.decl = this.blocks.pop.outerDecl
+    close: function {t: this} is {
+        if t.blocks.length == 0 then return
+        t.decl = t.blocks.pop.outerDecl
     }
 
     # the innermost open place; a body when none is open
