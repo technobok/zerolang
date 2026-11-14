@@ -1721,80 +1721,44 @@ Analysis: class {
         }
     }
 
-    # checkForWhile -- L004 token tier: a `for` immediately followed by `while`.
-    # Re-tokenizes the source (parse-free; immune to strings and comments).
-    checkForWhile: function {:this} is {
-        srcOwned: this.source.copy
-        sv: srcOwned.stringView
+    # checkLeadingLabel -- L004 token tier: a construct word directly followed
+    # by the label its first argument may leave out (isLeadingLabel).
+    # `is native` is one spelling and is left alone. Re-tokenizes the source
+    # (parse-free; immune to strings and comments).
+    checkLeadingLabel: function {:this} is {
         scanPool: zast.StringPool.create
-        toks: tokenize.scan source: srcOwned.copy pool: scanPool
-        lineStart: lineStartIndex src: sv
-        srcLines: linesOf src: sv
-        m: toks.length
-        prevFor: false
-        i: u64
-        for i < m loop {
-            t: toks.get :i
-            match (
-                t.toktype
-            ) case wsTok then null case eolTok then null case commentTok then null case forTok then {
-                prevFor = true
-            } case whileTok then {
-                if prevFor then {
-                    whileStart: tokByteStart :lineStart :srcLines lineno: t.lineno colno: t.colno
-                    condStart: whileStart + t.width
-                    foundCond: false
-                    j: i + 1
-                    scanning: true
-                    for scanning loop {
-                        if j >= m then {
-                            scanning = false
-                        } else {
-                            tj: toks.get i: j
-                            triv: false
-                            match (
-                                tj.toktype
-                            ) case wsTok then {
-                                triv = true
-                            } case eolTok then {
-                                triv = true
-                            } case commentTok then {
-                                triv = true
-                            } else null
-                            if triv then {
-                                j = j + 1
-                            } else {
-                                condStart = (
-                                    tokByteStart
-                                    :lineStart
-                                    :srcLines
-                                    lineno: tj.lineno
-                                    colno: tj.colno
-                                )
-                                foundCond = true
-                                scanning = false
-                            }
-                        }
-                    }
-                    if foundCond then {
-                        (
-                            this.warnFix
-                            code: "L004"
-                            msg: "redundant `while`: a for loop's leading condition omits `while`".string
-                            line: t.lineno
-                            col: t.colno
-                            width: t.width
-                            lo: whileStart
-                            hi: condStart
-                            repl: "".string
-                        )
-                    }
+        toks: tokenize.scan source: this.source.copy pool: scanPool
+        # the last token that is not trivia, and before it the construct word
+        # whose label that token is, when it is one. The scan ends in the EOF
+        # token, so there is a first token to start both from.
+        prev: toks.get i: 0
+        word: prev
+        pending: false
+        for each t: toks loop {
+            trivia: t.toktype.wsTok or t.toktype.eolTok or t.toktype.commentTok
+            if trivia then continue
+            if pending when (prev.toktype.isTok and t.toktype.nativeTok).not then {
+                em: String
+                {
+                    lt: zast.poolTextAt pool: scanPool ref: prev.text
+                    wt: zast.poolTextAt pool: scanPool ref: word.text
+                    em = "redundant `\{lt}`: the first argument of `\{wt}` leaves out its name"
                 }
-                prevFor = false
-            } else {
-                prevFor = false
+                (
+                    this.warnFix
+                    code: "L004"
+                    msg: em
+                    line: prev.lineno
+                    col: prev.colno
+                    width: prev.width
+                    lo: prev.offset
+                    hi: t.offset
+                    repl: "".string
+                )
             }
-            i = i + 1
+            pending = isLeadingLabel word: prev.toktype label: t.toktype
+            word = prev
+            prev = t
         }
     }
 
@@ -3366,7 +3330,7 @@ Analysis: class {
         this.fastToks = tokenize.scan source: this.source.copy pool: scanPool
         this.walkProgram prog: n
         this.checkPublicPosProgram prog: n
-        this.checkForWhile
+        this.checkLeadingLabel
     }
 
     # sortEditsInPlace -- reorder the collected edits by byteLo so the applier and the diff
@@ -6062,6 +6026,45 @@ colToByteInLine: function {lineText: StringView colno: u32} out u64 is {
         cp = cp + 1
     }
     return b
+}
+
+# isLeadingLabel -- whether `label` is the name the first argument of the
+# construct `word` may leave out: `for while`, `match on`, `function in`,
+# `unit as`, and `is` after a type declarator.
+isLeadingLabel: function {word: zlexer.toktype label: zlexer.toktype} out bool is {
+    match (
+        word
+    ) case forTok then {
+        return label.whileTok
+    } case matchTok then {
+        return label.onTok
+    } case functionTok then {
+        return label.inTok
+    } case unitTok then {
+        return label.asTok
+    } case recordTok then {
+        return label.isTok
+    } case classTok then {
+        return label.isTok
+    } case variantTok then {
+        return label.isTok
+    } case unionTok then {
+        return label.isTok
+    } case facetTok then {
+        return label.isTok
+    } case protocolTok then {
+        return label.isTok
+    } case dataTok then {
+        return label.isTok
+    } case choiceTok then {
+        return label.isTok
+    } case generatorTok then {
+        return label.isTok
+    } case typedefTok then {
+        return label.isTok
+    } else {
+        return false
+    }
 }
 
 # tokByteStart -- absolute byte offset of a token from its 1-based (lineno, colno): the line's
