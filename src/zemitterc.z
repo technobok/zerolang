@@ -105,9 +105,9 @@ OwedFree: class {
     zero: String
 }
 
-# TmpCtr -- per-function temp name counter, and the destroys owed the emitter's
+# FnTemps -- per-function temp name counter, and the destroys owed the emitter's
 # own temporaries at the end of each open block.
-TmpCtr: class {
+FnTemps: class {
     # the next temp number, so two temps in one function never collide
     n: u64
     # the destroys owed at block end, in the order registered
@@ -4885,9 +4885,9 @@ Ctx: class {
     refBorrowRet: bool
     # variables that are aliases of another's storage, so a write through one is
     # a write through both
-    aliases: List VidVal
+    aliases: List VarEntry
     # the box a narrowed variable projects out of
-    narrowBox: List VidVal
+    narrowBox: List VarEntry
     # the types each narrowBox text spells, recorded when the text is read
     aliasHeld: List AliasHeld
     # while an arm alias is built: noteTypeUse holds its types in heldTypeUses
@@ -5663,13 +5663,13 @@ ComprehendTo: class {
     lvar: String
 }
 
-# VidVal / VidTid -- assoc-list entries for the per-function narrowing and alias
+# VarEntry / VidTid -- assoc-list entries for the per-function narrowing and alias
 # state, keyed by VARIABLE ID. A name conflates two bindings that happen to share
 # it, and it is not a key a declaration site and a use site can both produce -- a
 # variable id is both. A vid of 0 means "no variable here" and never keys an
 # entry. A handful of entries at most, so a linear probe beats a map's per-probe
 # owned-key allocation and hash.
-VidVal: class {
+VarEntry: class {
     # the variable
     vid: ztypes.vid
     # the text recorded for it
@@ -5749,7 +5749,7 @@ idListHas: function {xs: (ListVal zast.nameid).view id: zast.nameid} out bool is
 }
 
 # vidFind -- the 1-based index of `vid`'s entry in `xs`, an assoc list keyed by
-# variable id (VidVal, VidTid, VidArms), 0 when absent. The
+# variable id (VarEntry, VidTid, VidArms), 0 when absent. The
 # value is copied only on a hit, so a miss allocates nothing at all. vvGet's
 # empty-String sentinel cost 277,711 one-byte allocations on a self-compile
 # (2.9% of every allocation the compiler makes) because the miss is the common
@@ -5766,51 +5766,51 @@ vidFind: function as { T: AnyRef.generic } in {xs: (List T).view vid: ztypes.vid
 }
 
 # vvGet -- the value recorded for `vid`, "" when absent (values never empty).
-vvGet: function {xs: (List VidVal).view vid: ztypes.vid} out String is {
+vvGet: function {xs: (List VarEntry).view vid: ztypes.vid} out String is {
     f: vidFind :xs :vid
     if f == 0 then return "".string
     return (xs.get i: f - 1).val.copy
 }
 
 # true when list `xs` has an entry for `vid`.
-vvHas: function {xs: (List VidVal).view vid: ztypes.vid} out bool is {
+vvHas: function {xs: (List VarEntry).view vid: ztypes.vid} out bool is {
     return (vidFind :xs :vid) > 0
 }
 
 # vvFactsOf -- the facts recorded for `vid`'s value; none stated when absent.
-vvFactsOf: function {xs: (List VidVal).view vid: ztypes.vid} out exprfacts is {
+vvFactsOf: function {xs: (List VarEntry).view vid: ztypes.vid} out exprfacts is {
     f: vidFind :xs :vid
     if f == 0 then return exprfacts
     return (xs.get i: f - 1).facts
 }
 
 # vvSet -- replace-or-append: one entry per variable (map.set semantics).
-vvSet: function {xs: List VidVal vid: ztypes.vid val: StringView facts: exprfacts} is {
+vvSet: function {xs: List VarEntry vid: ztypes.vid val: StringView facts: exprfacts} is {
     vvPut :xs :vid :val :facts ptr: String
 }
 
 # vvPut -- vvSet for an entry that records the pointer `ptr` it reads through.
 vvPut: function {
-    xs: List VidVal vid: ztypes.vid val: StringView facts: exprfacts ptr: String.take
+    xs: List VarEntry vid: ztypes.vid val: StringView facts: exprfacts ptr: String.take
 } is {
     if vid.isZero then return
     f: vidFind :xs :vid
     if f > 0 then {
-        xs.set i: f - 1 val: (VidVal :vid val: val.string :facts :ptr)
+        xs.set i: f - 1 val: (VarEntry :vid val: val.string :facts :ptr)
     } else {
-        xs.append (VidVal :vid val: val.string :facts :ptr)
+        xs.append (VarEntry :vid val: val.string :facts :ptr)
     }
 }
 
 # vvHasPtr -- `vid`'s entry reads through a pointer (a borrow alias).
-vvHasPtr: function {xs: (List VidVal).view vid: ztypes.vid} out bool is {
+vvHasPtr: function {xs: (List VarEntry).view vid: ztypes.vid} out bool is {
     f: vidFind :xs :vid
     if f == 0 then return false
     return (xs.get i: f - 1).ptr.length > 0
 }
 
 # vvPtrOf -- the pointer `vid`'s entry reads through, "" when it has none.
-vvPtrOf: function {xs: (List VidVal).view vid: ztypes.vid} out String is {
+vvPtrOf: function {xs: (List VarEntry).view vid: ztypes.vid} out String is {
     f: vidFind :xs :vid
     if f == 0 then return "".string
     return (xs.get i: f - 1).ptr.copy
@@ -9260,7 +9260,7 @@ orderConstantWith: function {
 flushArgHoists: function {
     ctx: Ctx
     ind: StringView
-    tmp: TmpCtr
+    tmp: FnTemps
     buf: String.borrow
     floor: 0.u64
     rawFloor: 0.u64
@@ -9493,7 +9493,7 @@ assignInPlaceTest: function {ctx: Ctx mark: hoistmark cond: StringView} out Stri
         r.append ")"
         return r
     }
-    ltmp: TmpCtr n: 0 listFrees: List OwedFree
+    ltmp: FnTemps n: 0 listFrees: List OwedFree
     cc: "_cc\{tmpNext :ctx tmp: ltmp}"
     ctx.argHoists.append (ArgHoist name: cc.copy val: String ctype: "bool".string dtor: String)
     closeInPlace :ctx :mark
@@ -9507,7 +9507,7 @@ assignInPlaceTest: function {ctx: Ctx mark: hoistmark cond: StringView} out Stri
 # statement expression that declares them, computes the test, releases what
 # they owed and yields the test.
 wrapInPlace: function {ctx: Ctx mark: hoistmark cond: StringView} out String is {
-    ltmp: TmpCtr n: 0 listFrees: List OwedFree
+    ltmp: FnTemps n: 0 listFrees: List OwedFree
     ccN: tmpNext :ctx tmp: ltmp
     lbuf: String
     flushArgHoists :ctx ind: " " tmp: ltmp buf: lbuf
@@ -9520,7 +9520,7 @@ wrapInPlace: function {ctx: Ctx mark: hoistmark cond: StringView} out String is 
 
 # tmpNext -- the next temp number of the function being emitted, from `tmp` or
 # from a statement expression's own counter, whichever has counted further.
-tmpNext: function {ctx: Ctx tmp: TmpCtr} out u64 is {
+tmpNext: function {ctx: Ctx tmp: FnTemps} out u64 is {
     if ctx.tmpHigh > tmp.n then tmp.n = ctx.tmpHigh
     v: tmp.next
     ctx.tmpHigh = tmp.n
@@ -9531,7 +9531,7 @@ tmpNext: function {ctx: Ctx tmp: TmpCtr} out u64 is {
 # A zerolang `break` inside the loop emits `goto __zbrk_<id>`: a bare C `break`
 # would only leave an enclosing match->switch, not the loop. The label is
 # emitted after the loop by popLoopLabel, but only if a break referenced it.
-pushLoopLabel: function {ctx: Ctx tmp: TmpCtr.view isDo: bool postTest: bool} out u64 is {
+pushLoopLabel: function {ctx: Ctx tmp: FnTemps.view isDo: bool postTest: bool} out u64 is {
     id: ctx.breakLabelCtr
     ctx.breakLabelCtr = id + 1
     ctx.loops.append (
@@ -9928,7 +9928,7 @@ hoistForAddress: function {
 # tagOwedTemps -- the statement temporaries just owed from `from` on that
 # realise one of the checker's unnamed locals carry its name id, and the
 # statement that zeroes them once destroyed early.
-tagOwedTemps: function {ctx: Ctx tmp: TmpCtr from: u64} is {
+tagOwedTemps: function {ctx: Ctx tmp: FnTemps from: u64} is {
     k: from
     for k < tmp.listFrees.length loop {
         o: tmp.listFrees.getMut i: k
@@ -11531,7 +11531,7 @@ emitBorrowAliasBind: function {
     # the value's C type
     ct: StringView
     ind: StringView
-    tmp: TmpCtr
+    tmp: FnTemps
     buf: String.borrow
 } out bool is {
     avn: ast.nodes.get i: n.value
@@ -13265,7 +13265,7 @@ emitInterpArgExpr: function {
             # the build runs where the value is read: its locals are declared by
             # the enclosing statement, and what its parts hoisted is assigned and
             # released inside it, so the statement owes none of them
-            ltmp: TmpCtr n: 0 listFrees: List OwedFree
+            ltmp: FnTemps n: 0 listFrees: List OwedFree
             unused: String
             ops: String
             sM: (
@@ -13338,7 +13338,7 @@ emitInterpStmtValue: function {
     ctx: Ctx
     n: astnode.view
     ind: StringView
-    tmp: TmpCtr
+    tmp: FnTemps
     buf: String.borrow
     facts: exprfacts.borrow
 } out String is {
@@ -18189,7 +18189,7 @@ localNameText: function {
 
 # entryText -- the text an alias or narrowing entry records for a variable, and
 # its facts.
-entryText: function {xs: (List VidVal).view at: u64 facts: exprfacts.borrow} out String is {
+entryText: function {xs: (List VarEntry).view at: u64 facts: exprfacts.borrow} out String is {
     e: xs.get i: at
     return (stating :facts from: e.facts text: e.val.copy)
 }
@@ -22602,7 +22602,7 @@ emitControlPtrExpr: function {
     ct: typeRefC :ast :reg :typing :ctx tid: vt
     if (ct.length == 0) or (ztypecheck.armLeaves :ast :n inLoop: false) then return "".string
     settleAhead :ast :reg :typing :ctx
-    ltmp: TmpCtr n: 0 listFrees: List OwedFree
+    ltmp: FnTemps n: 0 listFrees: List OwedFree
     cvN: tmpNext :ctx tmp: ltmp
     cv: "_cv\{cvN}"
     pct: "\{ct}*"
@@ -22700,7 +22700,7 @@ emitControlExpr: function {
     # statement is building
     if (ct.length == 0) or (ztypecheck.armLeaves :ast :n inLoop: false) then return "".string
     settleAhead :ast :reg :typing :ctx
-    ltmp: TmpCtr n: 0 listFrees: List OwedFree
+    ltmp: FnTemps n: 0 listFrees: List OwedFree
     cvN: tmpNext :ctx tmp: ltmp
     cv: "_cv\{cvN}"
     lbuf: String
@@ -23582,7 +23582,7 @@ emitInterpPrint: function {
     ctx: Ctx
     parts: zast.kidspan
     ind: StringView
-    tmp: TmpCtr
+    tmp: FnTemps
     buf: String.borrow
     # the interpolated literal's own node, 0 when unknown here
     strNid: zast.nodeid.zero
@@ -23611,7 +23611,7 @@ emitInterpBuild: function {
     ctx: Ctx
     parts: zast.kidspan
     ind: StringView
-    tmp: TmpCtr
+    tmp: FnTemps
     buf: String.borrow
     # the interpolated literal's own node when the buffer IS the value the
     # checker holds a temporary for -- a print's argument. 0 when the buffer is
@@ -23634,7 +23634,7 @@ emitInterpBuild: function {
         if isC.not then est = est + 16
     }
     # `_s<n>` is this buffer's own prefix and nothing else mints one now, but it
-    # numbers from `ctx.argHoistCtr` here rather than from the TmpCtr
+    # numbers from `ctx.argHoistCtr` here rather than from the FnTemps
     sNm: (
         argHoistName
         :ast
@@ -23949,7 +23949,7 @@ appendViewPart: function {
     sNm: StringView
     expr: bool
     ind: StringView
-    tmp: TmpCtr
+    tmp: FnTemps
     buf: String.borrow
     ops: String.borrow
 } is {
@@ -23977,7 +23977,7 @@ appendStrPart: function {
     sNm: StringView
     expr: bool
     ind: StringView
-    tmp: TmpCtr
+    tmp: FnTemps
     buf: String.borrow
     ops: String.borrow
 } is {
@@ -24044,7 +24044,7 @@ appendStringPart: function {
         interpStep :expr text: sa.stringView :ind :buf :ops
         return
     }
-    # a fallback here may NOT be spelled `_h<n>`: that prefix is the TmpCtr's,
+    # a fallback here may NOT be spelled `_h<n>`: that prefix is the FnTemps's,
     # and this name comes from `ctx.argHoistCtr`, so two counters would collide
     hNm: argHoistName :ast :reg :typing :ctx argNid: (interpPartNodeId :n) fallback: "_hp"
     strT: strTypeC :ctx
@@ -24142,7 +24142,7 @@ interpScalarPart: function {
     sNm: StringView
     expr: bool
     ind: StringView
-    tmp: TmpCtr
+    tmp: FnTemps
     buf: String.borrow
     ops: String.borrow
 } out bool is {
@@ -24266,7 +24266,7 @@ emitInterpPart: function {
     sNm: StringView
     expr: bool
     ind: StringView
-    tmp: TmpCtr
+    tmp: FnTemps
     buf: String.borrow
     ops: String.borrow
 } is {
@@ -24466,7 +24466,7 @@ emitPrintStmt: function {
     ctx: Ctx
     call: zast.callrow.view
     ind: StringView
-    tmp: TmpCtr
+    tmp: FnTemps
     buf: String.borrow
 } is {
     emitted: false
@@ -24513,7 +24513,7 @@ emitErrorStmt: function {
     ctx: Ctx
     call: zast.callrow.view
     ind: StringView
-    tmp: TmpCtr
+    tmp: FnTemps
     buf: String.borrow
 } is {
     av: String
@@ -24571,7 +24571,7 @@ emitPanicStmt: function {
     ctx: Ctx
     call: zast.callrow.view
     ind: StringView
-    tmp: TmpCtr
+    tmp: FnTemps
     buf: String.borrow
 } is {
     av: String
@@ -24609,7 +24609,7 @@ emitPrintStringLiteral: function {
     ctx: Ctx
     n: zast.atomstringrow.view
     ind: StringView
-    tmp: TmpCtr
+    tmp: FnTemps
     buf: String.borrow
 } is {
     if (isInterp :ast parts: n.stringparts) then {
@@ -24766,7 +24766,7 @@ emitPrintValueExpr: function {
     ctx: Ctx
     n: astnode.view
     ind: StringView
-    tmp: TmpCtr
+    tmp: FnTemps
     buf: String.borrow
 } is {
     eid: interpPartNodeId :n
@@ -24820,7 +24820,7 @@ emitPrintCallValue: function {
     ctx: Ctx
     call: zast.callrow.view
     ind: StringView
-    tmp: TmpCtr
+    tmp: FnTemps
     buf: String.borrow
 } is {
     ceF: exprfacts
@@ -24867,7 +24867,7 @@ emitPrintArg: function {
     ctx: Ctx
     n: astnode.view
     ind: StringView
-    tmp: TmpCtr
+    tmp: FnTemps
     buf: String.borrow
 } is {
     # a name that calls a function prints what the call returns
@@ -25028,7 +25028,7 @@ emitStringBindValue: function {
     nm: StringView
     nmVid: ztypes.vid
     ind: StringView
-    tmp: TmpCtr
+    tmp: FnTemps
     buf: String.borrow
 } out bool is {
     match (
@@ -25109,7 +25109,7 @@ emitOptionBoxHoist: function {
     ctx: Ctx
     n: astnode.view
     ind: StringView
-    tmp: TmpCtr
+    tmp: FnTemps
     buf: String.borrow
 } out String is {
     match (
@@ -25183,7 +25183,7 @@ emitStringReturnValue: function {
     ctx: Ctx
     n: astnode.view
     ind: StringView
-    tmp: TmpCtr
+    tmp: FnTemps
     buf: String.borrow
 } out bool is {
     match (
@@ -25260,7 +25260,7 @@ emitCallStmt: function {
     ctx: Ctx
     call: zast.callrow.view
     ind: StringView
-    tmp: TmpCtr
+    tmp: FnTemps
     buf: String.borrow
 } is {
     # an operation the compiler computed (`100 - 250`) has nothing left to run
@@ -25348,7 +25348,7 @@ emitCollectionBind: function {
     ctx: Ctx
     n: zast.assignmentrow.view
     ind: StringView
-    tmp: TmpCtr
+    tmp: FnTemps
     buf: String.borrow
     nm: StringView
 } out bool is {
@@ -25412,7 +25412,7 @@ emitControlCollectionBind: function {
     ctx: Ctx
     avn: astnode.view
     ind: StringView
-    tmp: TmpCtr
+    tmp: FnTemps
     buf: String.borrow
     nm: StringView
     ltid: ztypes.tid
@@ -25534,7 +25534,7 @@ emitListBind: function {
     ctx: Ctx
     avn: astnode.view
     ind: StringView
-    tmp: TmpCtr
+    tmp: FnTemps
     buf: String.borrow
     nm: StringView
     ltid: ztypes.tid
@@ -25620,7 +25620,7 @@ emitHeapColBind: function {
     ctx: Ctx
     avn: astnode.view
     ind: StringView
-    tmp: TmpCtr
+    tmp: FnTemps
     buf: String.borrow
     nm: StringView
     cb: StringView
@@ -25668,7 +25668,7 @@ emitStringLikeBind: function {
     ctx: Ctx
     n: zast.assignmentrow.view
     ind: StringView
-    tmp: TmpCtr
+    tmp: FnTemps
     buf: String.borrow
     nm: StringView
     nameVid: ztypes.vid
@@ -25688,7 +25688,7 @@ emitStringMatchBind: function {
     ctx: Ctx
     n: zast.assignmentrow.view
     ind: StringView
-    tmp: TmpCtr
+    tmp: FnTemps
     buf: String.borrow
     nm: StringView
     btid: ztypes.tid
@@ -25739,7 +25739,7 @@ emitStringBind: function {
     ctx: Ctx
     n: zast.assignmentrow.view
     ind: StringView
-    tmp: TmpCtr
+    tmp: FnTemps
     buf: String.borrow
     nm: StringView
     nameVid: ztypes.vid
@@ -25928,7 +25928,7 @@ emitTypedBind: function {
     ctx: Ctx
     n: zast.assignmentrow.view
     ind: StringView
-    tmp: TmpCtr
+    tmp: FnTemps
     buf: String.borrow
     nm: StringView
     nameVid: ztypes.vid
@@ -26055,7 +26055,7 @@ emitAssignment: function {
     ctx: Ctx
     n: zast.assignmentrow.view
     ind: StringView
-    tmp: TmpCtr
+    tmp: FnTemps
     buf: String.borrow
 } is {
     avn: ast.nodes.get i: n.value
@@ -26198,7 +26198,7 @@ emitControlBind: function {
     ct: StringView
     ltid: ztypes.tid
     ind: StringView
-    tmp: TmpCtr
+    tmp: FnTemps
     buf: String.borrow
 } out bool is {
     if ct.length == 0 then return false
@@ -26236,7 +26236,7 @@ emitReferenceBind: function {
     ctx: Ctx
     avn: astnode.view
     ind: StringView
-    tmp: TmpCtr
+    tmp: FnTemps
     buf: String.borrow
     nm: StringView
     ct: StringView
@@ -26292,7 +26292,7 @@ emitDottedAutoCallStmt: function {
     ctx: Ctx
     n: astnode.view
     ind: StringView
-    tmp: TmpCtr
+    tmp: FnTemps
     buf: String.borrow
 } is {
     # `.drop` on a protocol is a transfer marker (scope-exit destroy
@@ -26359,7 +26359,7 @@ emitBreakStmt: function {
     typing: ztyping.ZTyping.view
     ctx: Ctx
     ind: StringView
-    tmp: TmpCtr.view
+    tmp: FnTemps.view
     buf: String.borrow
 } is {
     emitBreakFrees :ast :reg :typing :ctx :tmp :ind :buf
@@ -26387,7 +26387,7 @@ emitContinueStmt: function {
     # the keyword's name id
     bkwId: zast.nameid
     ind: StringView
-    tmp: TmpCtr
+    tmp: FnTemps
     buf: String.borrow
 } is {
     if bkwId == zast.wellKnown.slot.wkContinue then {
@@ -26501,7 +26501,7 @@ emitReturnStmt: function {
     ctx: Ctx
     n: astnode.view
     ind: StringView
-    tmp: TmpCtr
+    tmp: FnTemps
     buf: String.borrow
 } is {
     # the null value as a statement (`then null`, a bare `null` line) does nothing
@@ -26585,7 +26585,7 @@ reassignRhsText: function {
     ctx: Ctx
     valueNode: astnode.view
     ind: StringView
-    tmp: TmpCtr
+    tmp: FnTemps
     buf: String.borrow
     facts: exprfacts.borrow
 } out String is {
@@ -26722,7 +26722,7 @@ emitReassignStmt: function {
     ctx: Ctx
     n: zast.reassignmentrow.view
     ind: StringView
-    tmp: TmpCtr
+    tmp: FnTemps
     buf: String.borrow
 } is {
     if (typing.repoints.has item: n.nodeid) then {
@@ -26819,7 +26819,7 @@ emitRepointStmt: function {
     ctx: Ctx
     n: zast.reassignmentrow.view
     ind: StringView
-    tmp: TmpCtr
+    tmp: FnTemps
     buf: String.borrow
 } is {
     topathNode: ast.nodes.get i: n.topath
@@ -26893,7 +26893,7 @@ emitOwnedRepoint: function {
     # the borrow's lvalue
     tgt: StringView
     ind: StringView
-    tmp: TmpCtr
+    tmp: FnTemps
     buf: String.borrow
 } is {
     co: typing.repointCompanion.get key: xv
@@ -26946,7 +26946,7 @@ emitStoreTo: function {
     valueNode: astnode.view
     destroyOld: bool
     ind: StringView
-    tmp: TmpCtr
+    tmp: FnTemps
     buf: String.borrow
 } is {
     rv2F: exprfacts
@@ -27011,7 +27011,7 @@ emitForStmt: function {
     ctx: Ctx
     n: zast.forrow.view
     ind: StringView
-    tmp: TmpCtr
+    tmp: FnTemps
     buf: String.borrow
 } is {
     # a precondition the fold proved false: the loop never runs, and its body
@@ -27122,7 +27122,7 @@ emitDoWhileFor: function {
     # the indent the loop is written at
     ind: StringView
     # the temp counter the body's frees are registered against
-    tmp: TmpCtr
+    tmp: FnTemps
     # the do-while opening, its body and its trailing test all append here
     buf: String.borrow
 } is {
@@ -27237,7 +27237,7 @@ emitIterationEnd: function {
     id: u64
     diverged: bool
     ind: StringView
-    tmp: TmpCtr
+    tmp: FnTemps
     buf: String.borrow
 } is {
     if m.postconditions.count.u64 == 0 then {
@@ -27361,7 +27361,7 @@ emitPlainWhileHead: function {
     # the indent the loop is written at
     ind: StringView
     # the frees of the hoists the header declares
-    tmp: TmpCtr
+    tmp: FnTemps
     # the `while (c) {` line appends here
     buf: String.borrow
 } is {
@@ -27416,7 +27416,7 @@ emitSteppedWhileHead: function {
     # the indent inside it, where the conditions and the test go
     bodyInd: StringView
     # the free list the conditions' temps ride
-    tmp: TmpCtr
+    tmp: FnTemps
     # the loop opening, the conditions and the break test all append here
     buf: String.borrow
 } is {
@@ -27448,7 +27448,7 @@ emitIfStmt: function {
     ctx: Ctx
     n: zast.ifrow.view
     ind: StringView
-    tmp: TmpCtr
+    tmp: FnTemps
     buf: String.borrow
 } is {
     # constant guards: when every clause folds at emit time, only the
@@ -27744,7 +27744,7 @@ emitGenLocalBind: function {
     nameVid: ztypes.vid
     field: zast.nameid
     ind: StringView
-    tmp: TmpCtr
+    tmp: FnTemps
     buf: String.borrow
 } is {
     fld: genFieldC :ast :reg :typing :ctx nameId: field
@@ -27801,7 +27801,7 @@ emitWithStmt: function {
     ctx: Ctx
     n: zast.withrow.view
     ind: StringView
-    tmp: TmpCtr
+    tmp: FnTemps
     buf: String.borrow
 } is {
     wnoTid: ztypes.tid
@@ -27884,7 +27884,7 @@ emitWithBindValue: function {
     nm: StringView
     ct: StringView
     ind: StringView
-    tmp: TmpCtr
+    tmp: FnTemps
     buf: String.borrow
 } out bool is {
     match (
@@ -27914,7 +27914,7 @@ emitWithBody: function {
     bindCt: StringView
     bindTid: ztypes.tid
     ind: StringView
-    tmp: TmpCtr
+    tmp: FnTemps
     buf: String.borrow
 } is {
     wnm: varCName :ctx :ast :reg vid: (defVid :typing nid: n.nodeid)
@@ -28017,7 +28017,7 @@ emitCaseStmt: function {
     ctx: Ctx
     n: zast.caserow.view
     ind: StringView
-    tmp: TmpCtr
+    tmp: FnTemps
     buf: String.borrow
 } is {
     # constant subject over literal arms: emit only the matching arm, as
@@ -28064,7 +28064,7 @@ emitSwapStmt: function {
     ctx: Ctx
     n: zast.swapstmtrow.view
     ind: StringView
-    tmp: TmpCtr
+    tmp: FnTemps
     buf: String.borrow
 } is {
     lhn: ast.nodes.get i: n.lhs
@@ -28101,7 +28101,7 @@ emitDoStmt: function {
     ctx: Ctx
     n: zast.dorow.view
     ind: StringView
-    tmp: TmpCtr
+    tmp: FnTemps
     buf: String.borrow
 } is {
     if (ztypecheck.blockHasBreak :ast n: (ast.nodes.get i: n.statement)) then {
@@ -28149,7 +28149,7 @@ emitStmt: function {
     ctx: Ctx
     n: astnode.view
     ind: StringView
-    tmp: TmpCtr
+    tmp: FnTemps
     buf: String.borrow
 } is {
     tL: tmp.listFrees.length
@@ -28168,7 +28168,7 @@ releaseStatementTemps: function {
     typing: ztyping.ZTyping.view
     ctx: Ctx.view
     n: astnode.view
-    tmp: TmpCtr
+    tmp: FnTemps
     # the block's releases owed before the statement began
     from: u64
     buf: String.borrow
@@ -28212,7 +28212,7 @@ releaseStatementTemps: function {
 # kept.
 emitUnheldTempFrees: function {
     typing: ztyping.ZTyping.view
-    tmp: TmpCtr
+    tmp: FnTemps
     from: u64
     buf: String.borrow
 } is {
@@ -28233,7 +28233,7 @@ emitUnheldTempFrees: function {
 # destroy of it does nothing.
 emitDropReleasedTemps: function {
     typing: ztyping.ZTyping.view
-    tmp: TmpCtr
+    tmp: FnTemps
     dropNid: zast.nodeid
     ind: StringView
     buf: String.borrow
@@ -28259,7 +28259,7 @@ emitStmtParts: function {
     ctx: Ctx
     n: astnode.view
     ind: StringView
-    tmp: TmpCtr
+    tmp: FnTemps
     buf: String.borrow
 } is {
     # a suspension point is a CALL now, so it is intercepted before the match
@@ -28526,7 +28526,7 @@ emitGenericDissect: function {
     paramName: zast.nameid
     assignTo: StringView
     ind: StringView
-    tmp: TmpCtr
+    tmp: FnTemps
     buf: String.borrow
 } is {
     darg: ztypecheck.dissectedArgOf :reg :typing :ownerTid :paramName
@@ -28601,7 +28601,7 @@ matchOrdinalPairRoute: function {
     # the subject's stamped type name
     assignTo: StringView
     ind: StringView
-    tmp: TmpCtr
+    tmp: FnTemps
     buf: String.borrow
 } out bool is {
     sTid: stampIdDeep :reg :typing n: (ast.nodes.get i: m.subject)
@@ -28650,7 +28650,7 @@ matchGenericRoute: function {
     m: zast.caserow.view
     assignTo: StringView
     ind: StringView
-    tmp: TmpCtr
+    tmp: FnTemps
     buf: String.borrow
 } out bool is {
     # the SHARED stamp says the subject is a generic parameter; an instance's
@@ -28810,7 +28810,7 @@ emitMatchSubjectTemp: function {
     vc: StringView
     mN: u64
     ind: StringView
-    tmp: TmpCtr
+    tmp: FnTemps
     buf: String.borrow
 } is {
     subjT: ast.nodes.get i: m.subject
@@ -28844,7 +28844,7 @@ emitMatchStmt: function {
     m: zast.caserow.view
     assignTo: StringView
     ind: StringView
-    tmp: TmpCtr
+    tmp: FnTemps
     buf: String.borrow
 } is {
     # a match on a unit constant runs the one arm the constant holds
@@ -29081,7 +29081,7 @@ emitOrdinalPairMatch: function {
     tid: ztypes.tid
     assignTo: StringView
     ind: StringView
-    tmp: TmpCtr
+    tmp: FnTemps
     buf: String.borrow
 } is {
     falseArm: ordinalPairFirstArmId :typing :tid
@@ -29149,7 +29149,7 @@ emitBoolElse: function {
     oId: zast.nodeid
     assignTo: StringView
     ind: StringView
-    tmp: TmpCtr
+    tmp: FnTemps
     diverges: bool
     buf: String.borrow
 } is {
@@ -29201,7 +29201,7 @@ emitBoolElse: function {
 # emitBreakFrees): they leave the list and nothing is written, or the destroys
 # would land after the diverging statement as unreachable code.
 flushBlockFrees: function {
-    tmp: TmpCtr
+    tmp: FnTemps
     lL: u64
     diverged: bool
     buf: String.borrow
@@ -29222,7 +29222,7 @@ closeScopeBlock: function {
     reg: ztypes.ZTypeRegistry.view
     typing: ztyping.ZTyping.view
     ctx: Ctx
-    tmp: TmpCtr
+    tmp: FnTemps
     lL: u64
     diverged: bool
     node: zast.nodeid
@@ -29318,7 +29318,7 @@ emitBreakFrees: function {
     reg: ztypes.ZTypeRegistry.view
     typing: ztyping.ZTyping.view
     ctx: Ctx
-    tmp: TmpCtr.view
+    tmp: FnTemps.view
     ind: StringView
     buf: String.borrow
 } is {
@@ -29337,7 +29337,7 @@ emitContinueFrees: function {
     reg: ztypes.ZTypeRegistry.view
     typing: ztyping.ZTyping.view
     ctx: Ctx
-    tmp: TmpCtr.view
+    tmp: FnTemps.view
     idx: u64
     ind: StringView
     buf: String.borrow
@@ -29438,7 +29438,7 @@ emitMatchClause: function {
     snameVid: ztypes.vid
     assignTo: StringView
     ind: StringView
-    tmp: TmpCtr
+    tmp: FnTemps
     buf: String.borrow
 } is {
     if c.caseclause then {
@@ -29576,7 +29576,7 @@ emitMatchElse: function {
     oId: zast.nodeid
     assignTo: StringView
     ind: StringView
-    tmp: TmpCtr
+    tmp: FnTemps
     diverges: bool
     buf: String.borrow
 } is {
@@ -29665,7 +29665,7 @@ emitBranchAssignOptional: function {
     someC: StringView
     payC: StringView
     ind: StringView
-    tmp: TmpCtr
+    tmp: FnTemps
     buf: String.borrow
 } is {
     match (
@@ -29715,7 +29715,7 @@ emitDoBindValue: function {
     ct: StringView
     tid: ztypes.tid
     ind: StringView
-    tmp: TmpCtr
+    tmp: FnTemps
     buf: String.borrow
 } out bool is {
     match (
@@ -29816,7 +29816,7 @@ emitMatchBindValue: function {
     nm: StringView
     ct: StringView
     ind: StringView
-    tmp: TmpCtr
+    tmp: FnTemps
     buf: String.borrow
 } out bool is {
     match (
@@ -29862,7 +29862,7 @@ emitIfBindValue: function {
     nm: StringView
     ct: StringView
     ind: StringView
-    tmp: TmpCtr
+    tmp: FnTemps
     buf: String.borrow
 } out bool is {
     match (
@@ -29905,7 +29905,7 @@ emitIfAssign: function {
     n: zast.ifrow.view
     target: StringView
     ind: StringView
-    tmp: TmpCtr
+    tmp: FnTemps
     buf: String.borrow
 } is {
     bfb: foldedBranchOf :typing nid: n.nodeid
@@ -30174,7 +30174,7 @@ emitObjIterRecv: function {
     itCb: StringView
     mN: u64
     ind: StringView
-    tmp: TmpCtr
+    tmp: FnTemps
     buf: String.borrow
 } out String is {
     giO: typing.forIterableField.get key: cNid
@@ -30260,7 +30260,7 @@ emitObjIterField: function {
     itCb: StringView
     gi: zast.nameid
     ind: StringView
-    tmp: TmpCtr
+    tmp: FnTemps
     buf: String.borrow
 } out String is {
     recv: genFieldC :ast :reg :typing :ctx nameId: gi
@@ -30436,7 +30436,7 @@ emitObjIterLoop: function {
     lbl: StringView
     lblV: ztypes.vid
     ind: StringView
-    tmp: TmpCtr
+    tmp: FnTemps
     buf: String.borrow
 } out bool is {
     ovid: objIterYieldTid :reg :typing :cco
@@ -30509,7 +30509,7 @@ emitOptionLoopTail: function {
     mN: u64
     lidO: u64
     ind: StringView
-    tmp: TmpCtr
+    tmp: FnTemps
     buf: String.borrow
 } is {
     ovNone: spelledTagConst :ast :ctx :reg :typing tid: ovid armId: zast.wellKnown.slot.wkNone
@@ -30613,7 +30613,7 @@ objIterForNamed: function {
     cName: zast.nameid
     cOp: zast.nodeid
     ind: StringView
-    tmp: TmpCtr
+    tmp: FnTemps
     buf: String.borrow
 } out bool is {
     lblR: zast.nameTextAt :ast ref: cName
@@ -30667,7 +30667,7 @@ emitPlainBindingFor: function {
     ctx: Ctx
     m: zast.forrow.view
     ind: StringView
-    tmp: TmpCtr
+    tmp: FnTemps
     buf: String.borrow
 } out bool is {
     if m.isEach then return false
@@ -30726,7 +30726,7 @@ emitObjIterFor: function {
     ctx: Ctx
     m: zast.forrow.view
     ind: StringView
-    tmp: TmpCtr
+    tmp: FnTemps
     buf: String.borrow
 } out bool is {
     if m.conditions.count.u64 == 0 then return false
@@ -30769,7 +30769,7 @@ emitIntRangeFor: function {
     ctx: Ctx
     m: zast.forrow.view
     ind: StringView
-    tmp: TmpCtr
+    tmp: FnTemps
     buf: String.borrow
 } out bool is {
     if m.conditions.count.u64 == 0 then return false
@@ -30844,7 +30844,7 @@ emitCountedRangeFor: function {
     n: astnode.view
     lbl: StringView
     ind: StringView
-    tmp: TmpCtr
+    tmp: FnTemps
     buf: String.borrow
 } out bool is {
     bound: rangeBoundExpr :ast :reg :typing :ctx :n
@@ -31000,7 +31000,7 @@ emitClosedRangeFor: function {
     lbl: StringView
     down: bool
     ind: StringView
-    tmp: TmpCtr
+    tmp: FnTemps
     buf: String.borrow
 } out bool is {
     # asked of the WHOLE node, before the match below narrows it to the call
@@ -32590,7 +32590,7 @@ emitSteppedConjunct: function {
     # the indent of this conjunct's nesting level
     ind: StringView
     # the free list a hoisted temp is registered on and released from
-    tmp: TmpCtr
+    tmp: FnTemps
     # the statements append here
     buf: String.borrow
 } is {
@@ -32710,7 +32710,7 @@ emitSteppedCond: function {
     # the indent the first condition is written at
     ind: StringView
     # the free list the conjuncts' temps ride
-    tmp: TmpCtr
+    tmp: FnTemps
     # the statements append here
     buf: String.borrow
 } is {
@@ -32751,7 +32751,7 @@ openSteppedHead: function {
     isFirst: bool
     # the clause's own indent
     ind: StringView
-    tmp: TmpCtr
+    tmp: FnTemps
     # the statements and the header append here
     buf: String.borrow
 } out u64 is {
@@ -32812,7 +32812,7 @@ emitPlainIfHead: function {
     # the header's condition text
     cond: StringView
     ind: StringView
-    tmp: TmpCtr
+    tmp: FnTemps
     # the header line appends here
     buf: String.borrow
 } out u64 is {
@@ -32856,7 +32856,7 @@ emitIfClause: function {
     isFirst: bool
     assignTo: StringView
     ind: StringView
-    tmp: TmpCtr
+    tmp: FnTemps
     buf: String.borrow
 } out u64 is {
     if n.ifclause then {
@@ -33132,7 +33132,7 @@ emitElse: function {
     oId: zast.nodeid
     assignTo: StringView
     ind: StringView
-    tmp: TmpCtr
+    tmp: FnTemps
     chSubjects: (List String).view
     chSubjectVids: (ListVal ztypes.vid).view
     chArms: (ListVal zast.nameid).view
@@ -33210,7 +33210,7 @@ emitHoistedReturn: function {
     moved: StringView
     cleanup: StringView
     ind: StringView
-    tmp: TmpCtr
+    tmp: FnTemps
     buf: String.borrow
 } is {
     rtmpN: tmpNext :ctx :tmp
@@ -33281,7 +33281,7 @@ emitPlainReturn: function {
     ctx: Ctx
     vid: zast.nodeid
     ind: StringView
-    tmp: TmpCtr
+    tmp: FnTemps
     buf: String.borrow
 } is {
     rvF: exprfacts
@@ -33398,7 +33398,7 @@ emitReturnOfNode: function {
     ctx: Ctx
     vid: zast.nodeid
     ind: StringView
-    tmp: TmpCtr
+    tmp: FnTemps
     buf: String.borrow
 } is {
     # a value typed `null` -- `null` itself, a call answering nothing -- is
@@ -33439,7 +33439,7 @@ emitTailValue: function {
     ctx: Ctx
     lineId: zast.nodeid
     ind: StringView
-    tmp: TmpCtr
+    tmp: FnTemps
     buf: String.borrow
 } out bool is {
     vid: (
@@ -33514,7 +33514,7 @@ emitControlBindValue: function {
     nm: StringView
     ct: StringView
     ind: StringView
-    tmp: TmpCtr
+    tmp: FnTemps
     buf: String.borrow
 } out bool is {
     vn: ast.nodes.get i: vid
@@ -33569,7 +33569,7 @@ emitTailStmt: function {
     ctx: Ctx
     n: astnode.view
     ind: StringView
-    tmp: TmpCtr
+    tmp: FnTemps
     buf: String.borrow
 } out bool is {
     match (
@@ -33671,7 +33671,7 @@ emitBranchAssign: function {
     # the checker scope the branch is, whose recorded list its end prints
     scope: zast.nodeid
     ind: StringView
-    tmp: TmpCtr
+    tmp: FnTemps
     buf: String.borrow
 } is {
     match (
@@ -33733,7 +33733,7 @@ emitBranchLastAssign: function {
     lineId: zast.nodeid
     target: StringView
     ind: StringView
-    tmp: TmpCtr
+    tmp: FnTemps
     buf: String.borrow
 } out bool is {
     sx: ast.nodes.get i: lineId
@@ -33766,7 +33766,7 @@ emitNestedControlAssign: function {
     line: astnode.view
     target: StringView
     ind: StringView
-    tmp: TmpCtr
+    tmp: FnTemps
     buf: String.borrow
 } out bool is {
     if line.statementline.not then return false
@@ -33943,7 +33943,7 @@ emitStatementBlock: function {
     ctx: Ctx
     stmts: zast.kidspan
     ind: StringView
-    tmp: TmpCtr
+    tmp: FnTemps
     buf: String.borrow
 } is {
     trTail: ctx.tailRetActive
@@ -33996,7 +33996,7 @@ emitBodyNode: function {
     ctx: Ctx
     n: astnode.view
     ind: StringView
-    tmp: TmpCtr
+    tmp: FnTemps
     buf: String.borrow
 } is {
     # A FOR-EXPRESSION'S BODY APPENDS ITS VALUE, and this is the one point all
@@ -34090,7 +34090,7 @@ emitComprehensionNode: function {
     listCb: StringView
     listVar: StringView
     ind: StringView
-    tmp: TmpCtr
+    tmp: FnTemps
     buf: String.borrow
 } is {
     match (
@@ -34142,7 +34142,7 @@ emitListComprehension: function {
     listCb: StringView
     listVar: StringView
     ind: StringView
-    tmp: TmpCtr
+    tmp: FnTemps
     buf: String.borrow
 } is {
     match (
@@ -34391,8 +34391,8 @@ isListPtrParam: function {
 # body's alias, narrowing or exclusion answer for a name in this one.
 resetFnEmitState: function {ctx: Ctx} is {
     ctx.ptrVids = ListVal ztypes.vid
-    ctx.aliases = List VidVal
-    ctx.narrowBox = List VidVal
+    ctx.aliases = List VarEntry
+    ctx.narrowBox = List VarEntry
     ctx.aliasHeld = List AliasHeld
     ctx.narrowTid = List VidTid
     ctx.exclArms = List VidArms
@@ -37871,7 +37871,7 @@ emitReturnCleanup: function {
     reg: ztypes.ZTypeRegistry.view
     typing: ztyping.ZTyping.view
     ctx: Ctx
-    tmp: TmpCtr.view
+    tmp: FnTemps.view
     ind: StringView
     buf: String.borrow
 } is {
@@ -37899,7 +37899,7 @@ emitFnBody: function {
     rbt: fnReturnTidOf :reg tid: fid
     ctx.refBorrowRet = fnReturnsRefBorrow :reg :typing :ctx :fid retTid: rbt
     if op.functiondef.not then return
-    tmp: TmpCtr n: 0 listFrees: List OwedFree
+    tmp: FnTemps n: 0 listFrees: List OwedFree
     # temp numbers are the function's: a body emitted while another is under
     # way counts from zero and hands the outer one's count back
     outerTmpHigh: ctx.tmpHigh
@@ -37949,7 +37949,7 @@ emitBodyEndFrees: function {
     reg: ztypes.ZTypeRegistry.view
     typing: ztyping.ZTyping.view
     ctx: Ctx
-    tmp: TmpCtr
+    tmp: FnTemps
     node: zast.nodeid
     buf: String.borrow
 } is {
@@ -39170,8 +39170,8 @@ emitC: function {
         staticVids: IdSet ztypes.vid
         staticTids: IdSet ztypes.tid
         refBorrowRet: false
-        aliases: List VidVal
-        narrowBox: List VidVal
+        aliases: List VarEntry
+        narrowBox: List VarEntry
         aliasHeld: List AliasHeld
         narrowTid: List VidTid
         exclArms: List VidArms
@@ -51581,7 +51581,7 @@ emitYieldStmt: function {
     if ve.length == 0 then ve = emitExprWith :ast :reg :typing :ctx n: yx facts: veF
     # what the value hoisted is declared ahead of it and released once the value
     # is in the box, before the suspension
-    ytmp: TmpCtr n: 0 listFrees: List OwedFree
+    ytmp: FnTemps n: 0 listFrees: List OwedFree
     flushArgHoists :ctx :ind tmp: ytmp :buf
     stI: genSynthField :typing :ctx which: gensynth.state k: 0
     stC: genFieldC :ast :reg :typing :ctx nameId: stI
