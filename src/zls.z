@@ -186,11 +186,12 @@ relPathBest: function {
 # only way to tell a `$ZEROLANG_SYSTEM` pointing at another checkout from the
 # auto-detected one is to ask the server which channel it used.
 ResolvedRoots: class {
-    # the project's src directory as resolved
-    srcDir: String
+    # the session's src directories as resolved, the first searched first;
+    # never empty
+    srcDirs: List String
     # the stdlib directory as resolved
     systemDir: String
-    # HOW srcDir was chosen -- a flag, an environment variable, a guess from the
+    # HOW srcDirs was chosen -- a flag, an environment variable, a guess from the
     # workspace. A wrong root is the most common reason an editor sees errors a
     # build does not, so the answer has to be reportable
     srcWhy: String
@@ -204,42 +205,43 @@ ResolvedRoots: class {
 }
 
 # resolveRoots -- the session's roots, resolved once at `initialize`.
-# Precedence: CLI flags > initializationOptions > rootUri itself > cwd. A
+# Precedence: CLI flags > initializationOptions > rootUri itself > cwd. Only
+# the command line names several src roots (--src, once for each). A
 # document inside a project (a project.zd at or above its directory) is checked
 # against that project's roots instead, wherever no flag or option named them
 # (Server.enterProjectOf).
 resolveRoots: function {
-    srcFlag: StringView
+    srcFlags: (List String).view
     sysFlag: StringView
     optSrc: StringView
     optSys: StringView
     rootPath: StringView
 } out ResolvedRoots is {
-    sd: String
+    sds: List String
     syd: String
     sw: String
     yw: String
-    if srcFlag.length > 0 then {
-        sd = srcFlag.string
+    for each sf: srcFlags loop {
+        sds.append from: sf.copy
         sw = "--src flag".string
     }
     if sysFlag.length > 0 then {
         syd = sysFlag.string
         yw = "--system flag".string
     }
-    if sd.length == 0 when optSrc.length > 0 then {
-        sd = optSrc.string
+    if sds.length == 0 when optSrc.length > 0 then {
+        sds.append from: optSrc.string
         sw = "initializationOptions.srcDir".string
     }
     if syd.length == 0 when optSys.length > 0 then {
         syd = optSys.string
         yw = "initializationOptions.systemDir".string
     }
-    srcExplicit: sd.length > 0
+    srcExplicit: sds.length > 0
     systemExplicit: syd.length > 0
-    if sd.length == 0 then {
+    if sds.length == 0 then {
         if rootPath.length > 0 then {
-            sd = rootPath.string
+            sds.append from: rootPath.string
             sw = "rootUri itself, for a document in no project".string
         } else {
             # the literal "." cannot work: relPathOf tests a "./" prefix
@@ -249,10 +251,10 @@ resolveRoots: function {
             match (
                 cw
             ) case ok then {
-                sd = cw.copy
+                sds.append from: cw.copy
                 sw = "cwd (the client sent no rootUri)".string
             } case err then {
-                sd = ".".string
+                sds.append from: ".".string
                 sw = "cwd unreadable (the client sent no rootUri)".string
             }
         }
@@ -274,7 +276,7 @@ resolveRoots: function {
     }
     return (
         ResolvedRoots
-        srcDir: sd.take
+        srcDirs: sds.take
         systemDir: syd.take
         srcWhy: sw.take
         systemWhy: yw.take
@@ -530,8 +532,8 @@ Server: class {
     srcDirs: List String
     # the stdlib root of the project in hand
     systemDir: String
-    # the session's src root (resolveRoots), for a document in no project
-    baseSrcDir: String
+    # the session's src roots (resolveRoots), for a document in no project
+    baseSrcDirs: List String
     # the session's stdlib root
     baseSystemDir: String
     # whether a flag or initializationOptions named srcDir, which no project
@@ -541,9 +543,9 @@ Server: class {
     systemExplicit: bool
     # the generated `z` unit of the project in hand
     layer: zcheck.GenLayer
-    # the src root as given on the command line, kept apart from the resolved
-    # one so the resolution can be explained
-    srcFlag: String
+    # every --src of the command line, in the order given, kept apart from the
+    # resolved roots so the resolution can be explained
+    srcFlags: List String
     # the stdlib root as given on the command line
     sysFlag: String
     # whether the client negotiated UTF-32 positions. LSP counts in UTF-16 by
@@ -847,7 +849,7 @@ Server: class {
         }
         rr: (
             resolveRoots
-            srcFlag: this.srcFlag.stringView
+            srcFlags: this.srcFlags
             sysFlag: this.sysFlag.stringView
             optSrc: optSrc.stringView
             optSys: optSys.stringView
@@ -858,11 +860,14 @@ Server: class {
         # was resolved and which channel decided it, every session, on STDERR:
         # stdout is the protocol channel, and an editor keeps server stderr in
         # its LSP log (`:LspLog` in nvim).
-        io.eprintln "zls: srcDir=\{rr.srcDir} [\{rr.srcWhy}]"
+        this.baseSrcDirs = List String
+        for each rd: rr.srcDirs loop {
+            io.eprintln "zls: srcDir=\{rd} [\{rr.srcWhy}]"
+            this.baseSrcDirs.append from: rd.copy
+        }
         io.eprintln "zls: systemDir=\{rr.systemDir} [\{rr.systemWhy}]"
-        this.srcDir = rr.srcDir.copy
+        this.srcDir = (rr.srcDirs.get i: 0).copy
         this.systemDir = rr.systemDir.copy
-        this.baseSrcDir = rr.srcDir.copy
         this.baseSystemDir = rr.systemDir.copy
         this.srcExplicit = rr.srcExplicit
         this.systemExplicit = rr.systemExplicit
@@ -914,8 +919,11 @@ Server: class {
     # unit, on disk, before any build. A file in no project takes the
     # session's roots and a cache-directory `z`.
     enterProjectOf: function {:this file: StringView} is {
-        this.srcDir = this.baseSrcDir.copy
-        this.srcDirs = List String
+        # the document's own root first: its relpath, and the open buffers,
+        # are relative to it. No root at all before `initialize`.
+        this.srcDirs = zproject.holderFirst roots: this.baseSrcDirs path: file
+        this.srcDir = "".string
+        if this.srcDirs.length > 0 then this.srcDir = (this.srcDirs.get i: 0).copy
         this.systemDir = this.baseSystemDir.copy
         start: path.dirname p: file
         pf: (
@@ -930,8 +938,6 @@ Server: class {
         }
         if pf.found then {
             if this.srcExplicit.not then {
-                # the document's own root first: its relpath, and the open
-                # buffers, are relative to it
                 this.srcDirs = pf.sourceRootsFor path: file
                 if this.srcDirs.length > 0 then this.srcDir = (this.srcDirs.get i: 0).copy
             }
@@ -9534,7 +9540,7 @@ serve: function {srv: Server} is {
 # print the zls usage to stderr.
 printUsage: function is {
     io.eprintln "usage: zls [--stdio] [--replay <file>] [--listen <port>]"
-    io.eprintln "           [--src <dir>] [--system <dir>] [-h | --help] [-V | --version]"
+    io.eprintln "           [--src <dir>]... [--system <dir>] [-h | --help] [-V | --version]"
 }
 
 
@@ -9563,7 +9569,7 @@ opt: list {
 wrongUsage: 2
 
 # addValue -- declares an option on `sp` that a command line may leave out
-addValue: function {sp: cli.Spec.borrow name: StringView} is {
+addValue: function {sp: cli.Spec.borrow name: StringView repeats: bool} is {
     (
         cli.addOption
         spec: sp
@@ -9571,6 +9577,7 @@ addValue: function {sp: cli.Spec.borrow name: StringView} is {
         shortName: "".string
         help: "".string
         required: false
+        :repeats
     )
 }
 
@@ -9581,10 +9588,10 @@ zlsSpec: function out cli.Spec is {
     cli.addFlag spec: sp name: opt.stdio.string shortName: "".string help: "".string
     cli.addFlag spec: sp name: opt.help.string shortName: "-h".string help: "".string
     cli.addFlag spec: sp name: opt.version.string shortName: "-V".string help: "".string
-    addValue :sp name: opt.replay
-    addValue :sp name: opt.listen
-    addValue :sp name: opt.src
-    addValue :sp name: opt.system
+    addValue :sp name: opt.replay repeats: false
+    addValue :sp name: opt.listen repeats: false
+    addValue :sp name: opt.src repeats: true
+    addValue :sp name: opt.system repeats: false
     return sp
 }
 
@@ -9640,7 +9647,7 @@ serveFrom: function {p: cli.Parsed.view} is {
     }
     replay: textOf v: (p.option name: opt.replay)
     listenArg: textOf v: (p.option name: opt.listen)
-    srcFlag: textOf v: (p.option name: opt.src)
+    srcFlags: p.optionAll name: opt.src
     sysFlag: textOf v: (p.option name: opt.system)
     words: zast.Vocab.create block: zlsWord
     ib: Bytes
@@ -9651,12 +9658,12 @@ serveFrom: function {p: cli.Parsed.view} is {
         srcDir: "".string
         srcDirs: List String
         systemDir: "".string
-        baseSrcDir: "".string
+        baseSrcDirs: List String
         baseSystemDir: "".string
         srcExplicit: false
         systemExplicit: false
         layer: zcheck.noLayer
-        :srcFlag
+        :srcFlags
         :sysFlag
         encUtf32: false
         initialized: false

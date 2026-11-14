@@ -2537,7 +2537,9 @@ reapWithin: function {children: List os.Child deadline: i64} out i32 is {
 
 # lspCase -- one transcript, framed (`.msgs`) or raw (`.raw`), replayed
 # through the server and its deframed output compared with the golden --
-# or written AS the golden under --regen-lsp. A missing golden is a skip.
+# or written AS the golden under --regen-lsp. A missing golden is a skip. A
+# file `<case>.args` beside the transcript holds flags the server is started
+# with for that case alone.
 lspCase: function {
     r: Runner
     zlsB: StringView
@@ -2568,10 +2570,14 @@ lspCase: function {
         r.fails = r.fails + 1
     }
     outP: "\{r.tmp.stringView}/lsp_\{nm}.raw"
-    ba: List String
-    ba.append zlsB.string
-    ba.append "--replay".string
-    ba.append inP.copy
+    argsP: "\{lspCases}/\{nm}.args"
+    ba: (
+        lspArgv
+        :zlsB
+        inP: inP.stringView
+        argsPath: argsP.stringView
+        root: uris.dir.stringView
+    )
     rc: (
         os.spawn
         argv: ba
@@ -2608,6 +2614,26 @@ lspCase: function {
             r.fails = r.fails + 1
         }
     }
+}
+
+# lspArgv -- the command that replays the transcript at `inP` through the
+# server `zlsB`, with the case's own flags after it when the case has a file at
+# `argsPath`: one line, in which `{ROOT}` stands for the run's root `root`
+lspArgv: function {
+    zlsB: StringView
+    inP: StringView
+    argsPath: StringView
+    root: StringView
+} out List String is {
+    argv: List String
+    argv.append zlsB.string
+    argv.append "--replay".string
+    argv.append inP.string
+    extra: slurp path: argsPath
+    for each tok: (extra.stringView.trim.split sep: " ") loop {
+        if tok.length > 0 then argv.append (tok.replace needle: "{ROOT}" replacement: root)
+    }
+    return argv
 }
 
 # LspUris -- the run's root as a transcript spells it: `dir`, the absolute

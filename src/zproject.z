@@ -19,6 +19,7 @@ public: unit {
     :BuildFacts
     :ProjectFile
     :discoverProject
+    :holderFirst
     :initProject
     :inProject
     :writeLayer
@@ -133,16 +134,9 @@ ProjectFile: class {
     }
 
     # sourceRootsFor -- the source roots, the one the file at `path` lies under
-    # first: what a file is checked against, its own root being the one its
-    # relpath is relative to
+    # first (holderFirst)
     sourceRootsFor: function {t: this.view path: StringView} out List String is {
-        held: t.rootHolding :path
-        r: List String
-        if held.length > 0 then r.append from: held.copy
-        for each sr: t.sourceRoots loop {
-            if sr.stringView != held then r.append from: sr.copy
-        }
-        return r
+        return (holderFirst roots: t.sourceRoots :path)
     }
 
     # holdsSource -- whether the file at `path` lies under one of the project's
@@ -155,6 +149,29 @@ ProjectFile: class {
     found: function {t: this.view} out bool is {
         return t.dir.length > 0
     }
+}
+
+# holderFirst -- the source roots `roots` in the order given, with the first one
+# the file at `path` lies under moved to the front: what a file is checked
+# against, its own root being the one its relpath is relative to. A file under
+# none of them leaves the order as it is.
+holderFirst: function {roots: (List String).view path: StringView} out List String is {
+    held: roots.length
+    i: u64
+    for each sr: roots loop {
+        if held == roots.length when (relativeTo base: sr.stringView p: path).length > 0 then {
+            held = i
+        }
+        i = i + 1
+    }
+    r: List String
+    if held < roots.length then r.append from: (roots.get i: held).copy
+    i = 0
+    for each sr: roots loop {
+        if i != held then r.append from: sr.copy
+        i = i + 1
+    }
+    return r
 }
 
 # dotsOnly -- whether path component `p` is exactly `n` dots: `.` or `..`
