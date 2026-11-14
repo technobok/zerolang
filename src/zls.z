@@ -514,14 +514,6 @@ zlsWord: list {
     mFormatting: "textDocument/formatting"
     mDocumentSymbol: "textDocument/documentSymbol"
     encUtf32: "utf-32"
-    fV: "-V"
-    fVersion: "--version"
-    fStdio: "--stdio"
-    fReplay: "--replay"
-    fSrc: "--src"
-    fSystem: "--system"
-    fListen: "--listen"
-    fHelp: "--help"
     trigSpace: " "
 } out staticlist StringView
 
@@ -9542,7 +9534,7 @@ serve: function {srv: Server} is {
 # print the zls usage to stderr.
 printUsage: function is {
     io.eprintln "usage: zls [--stdio] [--replay <file>] [--listen <port>]"
-    io.eprintln "           [--src <dir>] [--system <dir>]"
+    io.eprintln "           [--src <dir>] [--system <dir>] [-h | --help] [-V | --version]"
 }
 
 
@@ -9554,54 +9546,103 @@ announcePort: function {port: u16} is {
     print "zls: listening on 127.0.0.1:\{port}"
 }
 
-# language-server entry point: dispatch on the transport flag
-# (--stdio / --replay / --listen) and serve LSP requests.
-main: function is {
-    argv: os.args
-    n: argv.length
-    replay: String
-    listenArg: String
-    srcFlag: String
-    sysFlag: String
-    words: zast.Vocab.create block: zlsWord
-    i: 1.u64
-    for i < n loop {
-        arg: argv.get :i
-        av: words.slotOf text: arg.stringView
-        if (av == zlsWord.slot.fV) or (av == zlsWord.slot.fVersion) then {
-            v: zversion.versionLine tool: "zls"
-            print "\{v}\n"
-            os.exit code: 0
-        } else if av == zlsWord.slot.fStdio then null else if av == zlsWord.slot.fReplay then {
-            if (i + 1) < n then {
-                i = i + 1
-                replay = (argv.get :i).copy
-            }
-        } else if av == zlsWord.slot.fSrc then {
-            if (i + 1) < n then {
-                i = i + 1
-                srcFlag = (argv.get :i).copy
-            }
-        } else if av == zlsWord.slot.fSystem then {
-            if (i + 1) < n then {
-                i = i + 1
-                sysFlag = (argv.get :i).copy
-            }
-        } else if av == zlsWord.slot.fListen then {
-            if (i + 1) < n then {
-                i = i + 1
-                listenArg = (argv.get :i).copy
-            }
-        } else if av == zlsWord.slot.fHelp then {
-            printUsage
-            os.exit code: 0
-        } else {
-            io.eprintln "zls: unknown argument"
-            printUsage
-            os.exit code: 2
-        }
-        i = i + 1
+# opt -- the name of each flag and option zls takes, as it is written on the
+# command line. The spec declares them and serveFrom reads them back by the
+# same names.
+opt: list {
+    stdio: "--stdio"
+    replay: "--replay"
+    listen: "--listen"
+    src: "--src"
+    system: "--system"
+    help: "--help"
+    version: "--version"
+} out staticlist StringView
+
+# wrongUsage -- the exit code of a command line zls does not accept
+wrongUsage: 2
+
+# addValue -- declares an option on `sp` that a command line may leave out
+addValue: function {sp: cli.Spec.borrow name: StringView} is {
+    (
+        cli.addOption
+        spec: sp
+        name: name.string
+        shortName: "".string
+        help: "".string
+        required: false
+    )
+}
+
+# zlsSpec -- the command line of zls: the transport, the project's roots, and
+# the two flags that only print. The usage is written by hand (printUsage).
+zlsSpec: function out cli.Spec is {
+    sp: cli.Spec.create programName: "zls".string summary: "".string
+    cli.addFlag spec: sp name: opt.stdio.string shortName: "".string help: "".string
+    cli.addFlag spec: sp name: opt.help.string shortName: "-h".string help: "".string
+    cli.addFlag spec: sp name: opt.version.string shortName: "-V".string help: "".string
+    addValue :sp name: opt.replay
+    addValue :sp name: opt.listen
+    addValue :sp name: opt.src
+    addValue :sp name: opt.system
+    return sp
+}
+
+# textOf -- the value `v` holds, empty when it holds none: an option that was
+# not written
+textOf: function {v: (Option String).view} out String is {
+    match (
+        v
+    ) case some then {
+        return v.copy
+    } case none then {
+        return "".string
     }
+}
+
+# refusePort -- stops zls on a --listen value that names no port
+refusePort: function is {
+    io.eprintln "zls: --listen needs a port number, 0 to 65535"
+    os.exit code: wrongUsage
+}
+
+# language-server entry point: read the command line, then serve LSP requests
+# over the transport it names (--stdio / --replay / --listen). A command line
+# zls does not accept is refused on stderr with exit 2.
+main: function is {
+    sp: zlsSpec
+    pr: cli.parse spec: sp args: os.args
+    match (
+        pr
+    ) case ok then {
+        serveFrom p: pr
+    } case err then {
+        io.eprintln (cli.errorText spec: sp e: pr)
+        os.exit code: wrongUsage
+    }
+}
+
+# serveFrom -- answer --version or --help, else serve over the transport the
+# command line `p` names, and end zls with the session's exit code
+serveFrom: function {p: cli.Parsed.view} is {
+    if (p.hasFlag name: opt.version) then {
+        v: zversion.versionLine tool: "zls"
+        print "\{v}\n"
+        os.exit code: 0
+    }
+    if (p.hasFlag name: opt.help) then {
+        printUsage
+        os.exit code: 0
+    }
+    if p.extraArgs.length > 0 then {
+        io.eprintln "zls: unexpected argument '\{p.extraArgs.get i: 0}'"
+        os.exit code: wrongUsage
+    }
+    replay: textOf v: (p.option name: opt.replay)
+    listenArg: textOf v: (p.option name: opt.listen)
+    srcFlag: textOf v: (p.option name: opt.src)
+    sysFlag: textOf v: (p.option name: opt.system)
+    words: zast.Vocab.create block: zlsWord
     ib: Bytes
     srv: (
         Server
@@ -9635,15 +9676,12 @@ main: function is {
         entryLayers: (Map String V: zcheck.GenLayer)
         entrySnap: (Map String V: zcheck.CheckResult)
     )
-    if listenArg.length > 0 then {
+    if (p.given name: opt.listen) then {
         pr: listenArg.stringView.parseU64
         match (
             pr
         ) case ok then {
-            if pr > 65535 then {
-                io.eprintln "zls: --listen port out of range (0-65535)"
-                os.exit code: 2
-            }
+            if pr > 65535 then refusePort
             port: pr.u16.orPanic
             lo: net.listen :port
             match (
@@ -9665,8 +9703,7 @@ main: function is {
                 os.exit code: 3
             }
         } case err then {
-            io.eprintln "zls: --listen expects a port number"
-            os.exit code: 2
+            refusePort
         }
     } else if replay.length > 0 then {
         fo: io.open path: replay mode: io.openmode.read
