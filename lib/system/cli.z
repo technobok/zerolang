@@ -22,12 +22,14 @@ public: unit {
     :PositionalDef
     :CliError
     :Spec
+    :OptionValue
     :Parsed
     :addFlag
     :addOption
     :addPositional
     :parse
     :helpText
+    :errorText
 }
 
 # FlagDef -- one registered long flag (plus optional short alias).
@@ -52,6 +54,9 @@ OptionDef: class {
     help: String
     # whether omitting it is an error rather than a default
     required: bool
+    # whether every value written is kept, and not only the last
+    # (`Parsed.optionAll`)
+    repeats: bool
 }
 
 # PositionalDef -- one registered positional slot, named for lookup.
@@ -93,6 +98,10 @@ Spec: class {
     options: List OptionDef
     # the declared positional slots, IN ORDER -- position is what binds them
     positionals: List PositionalDef
+    # true to end the reading at the first operand past the declared
+    # positionals: it and every token after it go to `extraArgs` unread, as
+    # the arguments of a program this one starts
+    stopAtOperand: false
 } as {
     # an empty spec; the addFlag / addOption / addPositional calls fill it
     create: function {programName: String.take summary: String.take} out this is {
@@ -107,6 +116,14 @@ Spec: class {
     }
 }
 
+# OptionValue -- one value written for an option that repeats
+OptionValue: class {
+    # the option's long name
+    name: String
+    # the value as written
+    value: String
+}
+
 # Parsed -- successful parse result. Opaque; inspect via the
 # accessor methods below.
 Parsed: class {
@@ -115,6 +132,9 @@ Parsed: class {
     flagSet: List String
     # each option's value by long name; an absent option is simply not a key
     optionValues: (Map String V: String)
+    # every value written for an option declared `repeats:`, in the order
+    # written
+    repeatValues: List OptionValue
     # each positional's value by its declared name, position having been
     # resolved already
     positionalValues: (Map String V: String)
@@ -134,6 +154,31 @@ Parsed: class {
     # Value of a positional, or none.
     positional: function {t: this.view name: StringView} out Option String is {
         return (valueOf m: t.positionalValues :name)
+    }
+
+    # Every value kept for an option, in the order written: all of them for
+    # an option declared `repeats:`, the last for any other. Empty when the
+    # option was not written.
+    optionAll: function {t: this.view name: StringView} out List String is {
+        all: List String
+        for each rv: t.repeatValues loop {
+            if rv.name == name then all.append rv.value.copy
+        }
+        if all.length > 0 then return all
+        v: t.optionValues.get key: name.asString
+        match (
+            v
+        ) case some then {
+            all.append v.copy
+        } case none then null
+        return all
+    }
+
+    # Was the name written: as a flag, as an option or as a positional?
+    given: function {t: this.view name: StringView} out bool is {
+        if (t.flagSet.contains item: name.asString) then return true
+        if (t.optionValues.has key: name.asString) then return true
+        return (t.positionalValues.has key: name.asString)
     }
 }
 
@@ -177,8 +222,10 @@ addOption: function {
     help: String.take
     # true to make omitting it a missingRequired error
     required: bool
+    # true to keep every value written, for `Parsed.optionAll`
+    repeats: false
 } is {
-    spec.options.append (OptionDef :name :shortName :help :required)
+    spec.options.append (OptionDef :name :shortName :help :required :repeats)
 }
 
 # register a positional argument on `spec`.
@@ -217,7 +264,7 @@ step: variant {
     two: null
     # the token went to a positional slot, or to the extra arguments past them
     placed: null
-    # the token was `--`: every token after it is an extra argument
+    # the reading ends here: the tokens left are extra arguments
     rest: null
     # no flag and no option has the token's name
     unknown: null
@@ -256,9 +303,11 @@ setFlag: function {spec: Spec.view p: Parsed.borrow i: u64} is {
 }
 
 # setOption -- records `value` for the option at `i`, under its long name. A
-# value given earlier is replaced.
+# value given earlier is replaced; an option that repeats keeps it as well.
 setOption: function {spec: Spec.view p: Parsed.borrow i: u64 value: String.take} is {
-    p.optionValues.set key: (spec.options.get :i).name.copy :value
+    o: spec.options.get :i
+    if o.repeats then p.repeatValues.append (OptionValue name: o.name.copy value: value.copy)
+    p.optionValues.set key: o.name.copy :value
 }
 
 # nextValue -- gives the option at `i` the token after `at` as its value,
@@ -349,6 +398,16 @@ readShort: function {
     }
 }
 
+# restFrom -- the tokens of `args` from index `from` on are extra arguments,
+# unread
+restFrom: function {args: (List String).view p: Parsed.borrow from: u64} is {
+    i: from
+    for i < args.length loop {
+        p.extraArgs.append (args.get :i).copy
+        i = i + 1
+    }
+}
+
 # readToken -- reads the token at `at` into `p`. `slot` is how many tokens were
 # placed before it: the index of the positional it takes when it is one.
 readToken: function {
@@ -361,27 +420,29 @@ readToken: function {
     tok: (args.get i: at).stringView
     if (tok.startsWith prefix: "--") then {
         if tok.length > 2 then return (readLong :spec :args :at :p)
-        i: at + 1
-        for i < args.length loop {
-            p.extraArgs.append (args.get :i).copy
-            i = i + 1
-        }
+        restFrom :args :p from: at + 1
         return step.rest
     }
     if tok.length > 1 when (tok.startsWith prefix: "-") then return (readShort :spec :args :at :p)
     if slot < spec.positionals.length then {
         p.positionalValues.set key: (spec.positionals.get i: slot).name.copy value: tok.string
-    } else {
-        p.extraArgs.append tok.string
+        return step.placed
     }
+    if spec.stopAtOperand then {
+        restFrom :args :p from: at
+        return step.rest
+    }
+    p.extraArgs.append tok.string
     return step.placed
 }
 
-# walk -- reads every token of `args` after position 0 into `p`. Answers the
-# error of the first token it refuses, which carries that token.
-walk: function {spec: Spec.view args: (List String).view p: Parsed.borrow} out Option CliError is {
+# walk -- reads every token of `args` from position `first` on into `p`.
+# Answers the error of the first token it refuses, which carries that token.
+walk: function {
+    spec: Spec.view args: (List String).view first: u64 p: Parsed.borrow
+} out Option CliError is {
     slot: u64
-    i: 1.u64
+    i: first
     for i < args.length loop {
         s: readToken :spec :args at: i :p :slot
         match (
@@ -424,19 +485,22 @@ missingName: function {spec: Spec.view p: Parsed.view} out Option String is {
 # Parse argv against the registered spec. Consumes argv.
 parse: function {
     # the declarations parsing is checked against
-    spec: Spec.borrow
-    # the whole argument vector as `os.args` returns it; position 0, the program
-    # name, is skipped
+    spec: Spec.view
+    # the whole argument vector as `os.args` returns it
     args: (List String).take
+    # the position reading starts at. Position 0 is the program name; a program
+    # that reads its command at position 1 itself gives 2
+    first: 1.u64
 } out (Result Parsed E: CliError) is {
     p: (
         Parsed
         flagSet: List String
         optionValues: (Map String V: String)
+        repeatValues: List OptionValue
         positionalValues: (Map String V: String)
         extraArgs: List String
     )
-    refused: walk :spec :args :p
+    refused: walk :spec :args :first :p
     match (
         refused
     ) case some then {
@@ -461,7 +525,7 @@ helpLine: function {r: String.borrow alias: StringView name: StringView help: St
 }
 
 # Render the usage + help block from the spec.
-helpText: function {spec: Spec.borrow} out String is {
+helpText: function {spec: Spec.view} out String is {
     r: "usage: \{spec.programName} [options]"
     for each s: spec.positionals loop r.append " <\{s.name}>"
     if spec.summary.length > 0 then r.append "\n\n\{spec.summary}"
@@ -496,4 +560,42 @@ helpText: function {spec: Spec.borrow} out String is {
         }
     }
     return r
+}
+
+# slotNamed -- whether `name` is a positional of `spec`, and no option's name
+slotNamed: function {spec: Spec.view name: StringView} out bool is {
+    for each o: spec.options loop {
+        if o.name == name then return false
+    }
+    for each s: spec.positionals loop {
+        if s.name == name then return true
+    }
+    return false
+}
+
+# The sentence that says `e` to the person who wrote the command line:
+# `prog: unknown option '-q'`. One line, with no newline at its end. A program
+# that has a help command appends its own pointer to it.
+errorText: function {
+    # the spec `e` came from: it gives the program name, and says whether a
+    # missing name is a positional, which is written `<name>`
+    spec: Spec.view
+    e: CliError.view
+} out String is {
+    prog: spec.programName.stringView
+    match (
+        e
+    ) case unknownFlag then {
+        return "\{prog}: unknown option '\{e}'"
+    } case missingValue then {
+        return "\{prog}: \{e} needs a value"
+    } case missingRequired then {
+        if (slotNamed :spec name: e.stringView) then return "\{prog}: missing <\{e}>"
+        return "\{prog}: missing \{e}"
+    } case unexpectedArg then {
+        tok: e.stringView
+        eq: tok.indexOf needle: "="
+        name: tok.substring from: 0 to: (eq.or d: tok.length)
+        return "\{prog}: \{name} takes no value"
+    }
 }

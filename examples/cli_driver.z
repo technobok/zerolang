@@ -1,0 +1,108 @@
+# cli_driver.z -- what a program with commands needs from cli. The command is
+# position 1, so reading starts at 2 (`first:`). `--src` repeats: `optionAll`
+# answers every value in the order written, and `option` the last. `given` says
+# whether a name was written at all. With `stopAtOperand` the first operand
+# past the declared positionals ends the reading: it and every token after it
+# are extra arguments, read or not, as the arguments of a program that `run`
+# starts. `errorText` is the sentence for an error.
+
+# valueText -- an accessor's answer: the value in brackets, or `none`
+valueText: function {o: (Option String).view} out String is {
+    match (
+        o
+    ) case some then {
+        return "[\{o}]"
+    } case none then {
+        return "none".string
+    }
+}
+
+# listText -- each value in brackets, nothing for an empty list
+listText: function {xs: (List String).view} out String is {
+    r: String
+    for each x: xs loop r.append "[\{x}]"
+    return r
+}
+
+# show -- reads the tokens of `line`, split at each `,`, as the arguments of
+# `prog run`. The four answers after `given=` are for --src, --out, unit and
+# the undeclared --nope.
+show: function {sp: cli.Spec.view line: StringView} is {
+    args: List String
+    args.append "prog".string
+    args.append "run".string
+    if line.length > 0 then {
+        for each t: (line.split sep: ",") loop args.append t.string
+    }
+    pr: cli.parse spec: sp :args first: 2
+    match (
+        pr
+    ) case ok then {
+        r: "\{line} => verbose=\{pr.given name: "--verbose"}"
+        r.append " src=\{listText xs: (pr.optionAll name: "--src")}"
+        r.append " last=\{valueText o: (pr.option name: "--src")}"
+        r.append " out=\{listText xs: (pr.optionAll name: "--out")}"
+        r.append " unit=\{valueText o: (pr.positional name: "unit")}"
+        r.append " given=\{pr.given name: "--src"},\{pr.given name: "--out"}"
+        r.append ",\{pr.given name: "unit"},\{pr.given name: "--nope"}"
+        r.append " extra=\{listText xs: pr.extraArgs}"
+        print r
+    } case err then {
+        print "\{line} => \{cli.errorText spec: sp e: pr}"
+    }
+}
+
+main: function is {
+    sp: cli.Spec.create programName: "prog".string summary: "".string
+    sp.stopAtOperand = true
+    cli.addFlag spec: sp name: "--verbose".string shortName: "-v".string help: "".string
+    (
+        cli.addOption
+        spec: sp
+        name: "--src".string
+        shortName: "-s".string
+        help: "".string
+        required: false
+        repeats: true
+    )
+    (
+        cli.addOption
+        spec: sp
+        name: "--out".string
+        shortName: "-o".string
+        help: "".string
+        required: false
+    )
+    cli.addPositional spec: sp name: "unit".string help: "".string required: true
+    show :sp line: "--src,a,--src=b,-sc,u"
+    show :sp line: "-o,x,-o,y,u"
+    show :sp line: "u"
+    show :sp line: "-v,u,--src,a,x,-y,--src,b"
+    show :sp line: "u,--,-v"
+    show :sp line: "u,x,--,y"
+    show :sp line: "--src"
+    show :sp line: "-vs"
+    show :sp line: ""
+    show :sp line: "--nope,u"
+    show :sp line: "--verbose=1,u"
+
+    needs: cli.Spec.create programName: "prog".string summary: "".string
+    (
+        cli.addOption
+        spec: needs
+        name: "--level".string
+        shortName: "".string
+        help: "".string
+        required: true
+    )
+    just: List String
+    just.append "prog".string
+    pn: cli.parse spec: needs args: just
+    match (
+        pn
+    ) case ok then {
+        print "ok"
+    } case err then {
+        print (cli.errorText spec: needs e: pn)
+    }
+}
