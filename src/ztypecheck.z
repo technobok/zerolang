@@ -2204,31 +2204,28 @@ asValueNamesType: function {
     depth: u64
 } out bool is {
     if op.isZero or (depth > asAliasDepth) then return false
-    # 1 a name, 2 a path, 3 an application
-    shape: u8
+    kind: zast.nodekind.placeholder
     nm: zast.nameid
     par: zast.nodeid
     chd: zast.nodeid
     cal: zast.nodeid
     {
         n: ast.nodes.get i: op
+        kind = zast.kindOf :n
         if n.atomid then {
-            shape = 1
             nm = n.name
         }
         if n.dottedpath then {
-            shape = 2
             par = n.parent
             chd = n.child
         }
         if n.call then {
-            shape = 3
             cal = n.callable
         }
     }
-    if shape == 1 then return (asNameNamesType :st :ast :tdecl :item :nm :depth)
-    if shape == 2 then return (asPathNamesType :st :ast :tdecl :op :par :chd :depth)
-    if shape == 3 then {
+    if kind.atomid then return (asNameNamesType :st :ast :tdecl :item :nm :depth)
+    if kind.dottedpath then return (asPathNamesType :st :ast :tdecl :op :par :chd :depth)
+    if kind.call then {
         tpl: (
             typeApplicationTemplate
             :st
@@ -3860,24 +3857,24 @@ resolveMonoRefInline: function {
     opNid: zast.nodeid
     nid: zast.nodeid
 } out ztypes.tid is {
-    # the row is read through a view scoped to this block (2 call, 0 anything
-    # else): the resolution below lends ast exclusively
-    arm: u32
+    # the row is read through a view scoped to this block: the resolution below
+    # lends ast exclusively
+    kind: zast.nodekind.placeholder
     callableId: zast.nodeid
     argIds: ListVal zast.nodeid
     {
         op: ast.nodes.get i: opNid
+        kind = zast.kindOf n: op
         match (
             op
         ) case call then {
-            arm = 2
             callableId = op.callable
             for each a: (zast.kidsOf :ast span: op.arguments) loop {
                 argIds.append from: a
             }
         } else null
     }
-    if arm == 2 then {
+    if kind.call then {
         rm: (
             resolveMonoRefParts
             :st
@@ -5639,34 +5636,29 @@ recordTyperef: function {
     thisName: StringView
     nid: zast.nodeid
 } is {
-    # the row is read through a view scoped to this block (2 call, 3 dottedpath,
-    # 4 atomid, 5 labelvalue, 0 anything else): the recordings below lend ast
-    # exclusively
-    arm: u32
+    # the row is read through a view scoped to this block: the recordings below
+    # lend ast exclusively
+    kind: zast.nodekind.placeholder
     callableId: zast.nodeid
     argIds: ListVal zast.nodeid
     nameId: zast.nameid
     {
         node: ast.nodes.get i: nid
+        kind = zast.kindOf n: node
         match (
             node
         ) case call then {
-            arm = 2
             callableId = node.callable
             for each a: (zast.kidsOf :ast span: node.arguments) loop {
                 argIds.append from: a
             }
-        } case dottedpath then {
-            arm = 3
-        } case atomid then {
-            arm = 4
+        } case dottedpath then {} case atomid then {
             nameId = node.name
         } case labelvalue then {
-            arm = 5
             nameId = node.name
         } else null
     }
-    if arm == 2 then {
+    if kind.call then {
         if (refuseAppliedTwice :st :ast :nid :callableId) then return
         # a parameterized type ref resolves to its mono now, and the call
         # carries the instance stamp
@@ -5692,19 +5684,19 @@ recordTyperef: function {
         )
         return
     }
-    if arm == 3 then {
+    if kind.dottedpath then {
         recordDottedTyperef :st :ast :unitDecl :scope :thisName :nid
         return
     }
-    if (arm == 4) or (arm == 5) when st.mode.typerefHead.not then (
+    if kind.atomid or kind.labelvalue when st.mode.typerefHead.not then (
         st.walk.bareTyperefNodes.add
         item: nid
     )
-    if arm == 4 then {
+    if kind.atomid then {
         recordResolvedName :st :scope :ast :unitDecl :thisName :nameId :nid recScope: scope
         return
     }
-    if arm == 5 then {
+    if kind.labelvalue then {
         recordResolvedName :st :scope :ast :unitDecl :thisName :nameId :nid recScope: scope
     }
 }
@@ -7243,42 +7235,47 @@ resolveTyperefShell: function {
 } out ztypes.tid is {
     # a declaration refused where it is written declares no type
     if (nodeRefused :st :nid) then return ztypes.tid
-    # the row is read through a view scoped to this block (1 atomid,
-    # 2 labelvalue, 4 call, 5 dottedpath, 0 anything else): the resolutions
+    # the row is read through a view scoped to this block: the resolutions
     # below lend ast exclusively
-    arm: u32
+    kind: zast.nodekind.placeholder
     nameId: zast.nameid
     callableId: zast.nodeid
     argIds: ListVal zast.nodeid
     {
         typeExpr: ast.nodes.get i: nid
+        kind = zast.kindOf n: typeExpr
         match (
             typeExpr
         ) case atomid then {
-            arm = 1
             nameId = typeExpr.name
         } case labelvalue then {
-            arm = 2
             nameId = typeExpr.name
         } case call then {
-            arm = 4
             callableId = typeExpr.callable
             for each a: (zast.kidsOf :ast span: typeExpr.arguments) loop {
                 argIds.append from: a
             }
-        } case dottedpath then {
-            arm = 5
-        } else null
+        } case dottedpath then {} else null
     }
-    if (arm == 1) or (arm == 2) then {
-        r: resolveTyperefAtomShell :st :scope :ast :unitDecl :nameId :thisName demand: arm == 1 :nid
+    if kind.atomid or kind.labelvalue then {
+        r: (
+            resolveTyperefAtomShell
+            :st
+            :scope
+            :ast
+            :unitDecl
+            :nameId
+            :thisName
+            demand: kind.atomid
+            :nid
+        )
         # a receiver's `this` is the type being declared
         if nameId != zast.wellKnown.slot.wkThis then {
             return (bareGenericType :st :ast :unitDecl tid: r :nid :scope :thisName)
         }
         return r
     }
-    if arm == 4 then return (
+    if kind.call then return (
         resolveTyperefCallShell
         :st
         :scope
@@ -7289,7 +7286,7 @@ resolveTyperefShell: function {
         :argIds
         :nid
     )
-    if arm == 5 then {
+    if kind.dottedpath then {
         return (dottedTyperefShell :st :ast :unitDecl :scope :nid :thisName)
     }
     # anything else is a value, not a type: its fold has said why it is
@@ -51000,10 +50997,10 @@ unresolvedBareCallable: function {
     unitDecl: ztypes.declid
     nid: zast.nodeid
 } out String is {
-    # the row is read through a view scoped to this block (2 call, 3 infix,
-    # 4 atomid, 5 dottedpath, 0 anything else): the name probe below lends ast
-    # exclusively
-    arm: u32
+    # the row is read through a view scoped to this block: the name probe below
+    # lends ast exclusively. An operator's call is told apart from any other.
+    kind: zast.nodekind.placeholder
+    isOperator: false
     callableId: zast.nodeid
     lhsId: zast.nodeid
     rhsId: zast.nodeid
@@ -51011,6 +51008,7 @@ unresolvedBareCallable: function {
     nameId: zast.nameid
     {
         n: ast.nodes.get i: nid
+        kind = zast.kindOf :n
         # an INFIX call hides the unresolvable name in EITHER operand
         # (`1 + ghost`), and the callable alone reaches only the left one.
         # Read ahead of the match: an arm narrows `n` to its own row.
@@ -51018,22 +51016,25 @@ unresolvedBareCallable: function {
         match (
             n
         ) case call then {
-            arm = 2
             callableId = n.callable
             if ipu.found then {
-                arm = 3
+                isOperator = true
                 lhsId = ipu.lhs
                 rhsId = ipu.rhs
             }
         } case atomid then {
-            arm = 4
             nameId = n.name
         } case dottedpath then {
-            arm = 5
             parentId = n.parent
         } else null
     }
-    if arm == 2 then {
+    if isOperator then {
+        # an operand may carry the unresolvable name (`ghost + 1`)
+        ubl: unresolvedBareCallable :ast :st :unitDecl nid: lhsId
+        if ubl.length > 0 then return ubl
+        return (unresolvedBareCallable :ast :st :unitDecl nid: rhsId)
+    }
+    if kind.call then {
         ubc: zast.nameid
         rootName: zast.nameid
         cnode: ast.nodes.get i: callableId
@@ -51042,14 +51043,8 @@ unresolvedBareCallable: function {
         if ubc.notZero then return (unresolvedBareName :ast :st :unitDecl nameId: ubc)
         return (unresolvedBareName :ast :st :unitDecl nameId: rootName)
     }
-    if arm == 3 then {
-        # an operand may carry the unresolvable name (`ghost + 1`)
-        ubl: unresolvedBareCallable :ast :st :unitDecl nid: lhsId
-        if ubl.length > 0 then return ubl
-        return (unresolvedBareCallable :ast :st :unitDecl nid: rhsId)
-    }
-    if arm == 4 then return (unresolvedBareName :ast :st :unitDecl :nameId)
-    if arm == 5 then {
+    if kind.atomid then return (unresolvedBareName :ast :st :unitDecl :nameId)
+    if kind.dottedpath then {
         # a path is no better than its root (`b.n` with no `b`)
         ubd: zast.nameid
         pn: ast.nodes.get i: parentId
@@ -63144,46 +63139,46 @@ constantOperandType: function {
     # the row is read through a view scoped to this block (2 atomid, 3 infix,
     # 0 anything else): the lookups and operand walks below lend ast
     # exclusively
-    arm: u32
+    kind: zast.nodekind.placeholder
+    isConversion: false
+    isOperator: false
     nameId: zast.nameid
     lhsId: zast.nodeid
     rhsId: zast.nodeid
     opId: zast.nodeid
     {
         n: ast.nodes.get i: nid
+        kind = zast.kindOf :n
         match (
             n
         ) case atomid then {
-            arm = 2
             nameId = n.name
-        } case ifexpr then {
-            arm = 4
         } case dottedpath then {
             # a numeric conversion (`10.u64`, `N.u8`) has the type it names,
             # which is what it folds to
             cn: atomNameId :ast n: (ast.nodes.get i: n.child)
             if (isScalarNameId id: cn) then {
-                arm = 5
+                isConversion = true
                 nameId = cn
             }
         } else null
         # AN INFIX CALL IS THE OPERATOR SHAPE THIS WALK ALREADY UNDERSTANDS.
         # `a op b` parses to the call form, and a unit-level constant built
         # from one folds exactly as the same expression written any other way.
-        if arm == 0 then {
+        if kind.atomid.not when kind.ifexpr.not when isConversion.not then {
             ip: operatorPartsAt :ast :nid
             if ip.found then {
-                arm = 3
+                isOperator = true
                 lhsId = ip.lhs
                 rhsId = ip.rhs
                 opId = ip.operator
             }
         }
     }
-    if arm == 2 then return (constantAtomType :st :scope :ast :unitDecl :nid :nameId)
-    if arm == 3 then return (constantBinopType :st :scope :ast :unitDecl :nid :lhsId :rhsId :opId)
-    if arm == 4 then return (constantIfType :st :scope :ast :unitDecl :nid)
-    if arm == 5 then return (scalarTidOf :st :scope :ast :nameId)
+    if kind.atomid then return (constantAtomType :st :scope :ast :unitDecl :nid :nameId)
+    if isOperator then return (constantBinopType :st :scope :ast :unitDecl :nid :lhsId :rhsId :opId)
+    if kind.ifexpr then return (constantIfType :st :scope :ast :unitDecl :nid)
+    if isConversion then return (scalarTidOf :st :scope :ast :nameId)
     return ztypes.tid.zero
 }
 
@@ -69064,12 +69059,35 @@ constOfNamedBase: function {
 }
 
 
-# constplan -- what evaluating one row needs once its view is gone: the arm
-# (2 atomid, 3 atomstring, 4 dottedpath, 5 infix, 6 call, 7 ifexpr, 8 caseexpr,
-# 9 listblock, 0 anything else) and the ids and scalars that arm reads.
+# constshape -- the shape of an expression as the constant evaluator reads it.
+# Most arms are a node's own arm; two are not: a pun (`:n`) is the name it
+# labels, and an operator's call is told apart from every other call.
+constshape: variant {
+    # nothing the evaluator folds
+    other: null
+    # a name, written bare or as a pun
+    name: null
+    # a string literal
+    atomstring: null
+    # a dotted path
+    dottedpath: null
+    # an operator and its two operands, written infix or as a call
+    operator: null
+    # a function or a method applied, which is no operator
+    call: null
+    # an `if` read as a value
+    ifexpr: null
+    # a `match` read as a value
+    caseexpr: null
+    # a list block
+    listblock: null
+} as { tag: u8.tag }
+
+# constplan -- what evaluating one row needs once its view is gone: its shape,
+# and the ids and scalars that shape reads.
 constplan: record {
-    # the arm the constant names, when it names one
-    arm: u32
+    # which of the evaluator's shapes the row has
+    shape: constshape
     # a one-part string's single part
     innerId: zast.nodeid
     # the name being folded
@@ -69089,7 +69107,7 @@ constplan: record {
 # evalConstPlan -- read-only: the plan for row `nid`; the row view is this
 # frame's and dies here.
 evalConstPlan: function {ast: Ast.view nid: zast.nodeid} out constplan is {
-    arm: u32
+    shape: constshape.other
     innerId: zast.nodeid
     nameId: zast.nameid
     parts: u64
@@ -69102,20 +69120,20 @@ evalConstPlan: function {ast: Ast.view nid: zast.nodeid} out constplan is {
         match (
             n
         ) case atomid then {
-            arm = 2
+            shape = constshape.name
             nameId = n.name
         } case labelvalue then {
             # a pun (`:n`) is the name it labels
-            arm = 2
+            shape = constshape.name
             nameId = n.name
         } case atomstring then {
-            arm = 3
+            shape = constshape.atomstring
             parts = n.stringparts.count
             if parts == 1 then innerId = zast.kidAt kids: ast.kids span: n.stringparts i: 0
             ln = n.lineno
             co = n.colno
         } case dottedpath then {
-            arm = 4
+            shape = constshape.dottedpath
             parentId = n.parent
             childId = n.child
             ln = n.lineno
@@ -69124,17 +69142,17 @@ evalConstPlan: function {ast: Ast.view nid: zast.nodeid} out constplan is {
             # an operator folds as the binary operation it is, written infix
             # or as a call; every other
             # call takes the call arm, which folds string static methods only
-            arm = 6
-            if (operatorPartsAt :ast :nid).found then arm = 5
+            shape = constshape.call
+            if (operatorPartsAt :ast :nid).found then shape = constshape.operator
         } case ifexpr then {
-            arm = 7
+            shape = constshape.ifexpr
         } case caseexpr then {
-            arm = 8
+            shape = constshape.caseexpr
         } case listblock then {
-            arm = 9
+            shape = constshape.listblock
         } else null
     }
-    return (constplan :arm :innerId :nameId :parts :parentId :childId :ln :co)
+    return (constplan :shape :innerId :nameId :parts :parentId :childId :ln :co)
 }
 
 # isPlainStringLiteral -- string literal `nid` is text chunks only, with no
@@ -69511,7 +69529,7 @@ evalConstNode: function {
     # answer for the wrong binding. The checker has already recorded which
     # atoms read a variable -- the two guards below are that record, one for a
     # bare name and one for the root of a path.
-    if plan.arm == 2 then {
+    if plan.shape.name then {
         if (st.typing.atomVariableId.get key: nid).some then return ztypes.noConst
         # a literal never needs an OWNED name, and every numeric literal in the
         # program reaches this arm. The member pull below takes the id.
@@ -69543,7 +69561,7 @@ evalConstNode: function {
         }
         return (constValueOfMemberId :st :scope :ast :unitDecl nameId: plan.nameId)
     }
-    if plan.arm == 3 then {
+    if plan.shape.atomstring then {
         return (
             evalConstString
             :st
@@ -69555,7 +69573,7 @@ evalConstNode: function {
             co: plan.co
         )
     }
-    if plan.arm == 4 then {
+    if plan.shape.dottedpath then {
         vp: (
             numericParamThroughName
             :st
@@ -69580,16 +69598,17 @@ evalConstNode: function {
             co: plan.co
         )
     }
-    if plan.arm == 5 then return (constOfBinop :st :scope :ast :unitDecl :nid)
-    if plan.arm == 6 then return (constOfCall :st :scope :ast :unitDecl :nid)
-    if plan.arm == 7 then {
+    if plan.shape.operator then return (constOfBinop :st :scope :ast :unitDecl :nid)
+    if plan.shape.call then return (constOfCall :st :scope :ast :unitDecl :nid)
+    if plan.shape.ifexpr then {
         fb: foldIfBranch :st :scope :ast :unitDecl :nid
         if fb.known.not then return ztypes.noConst
         if fb.stmt.isZero then return ztypes.noConst
         return (constBlockValue :st :scope :ast :unitDecl nid: fb.stmt)
     }
-    if plan.arm == 8 then return (constOfMatch :st :scope :ast :unitDecl :nid)
-    if plan.arm == 9 then return (constOfList :st :scope :ast :unitDecl :nid want: ztypes.tid)
+    if plan.shape.caseexpr then return (constOfMatch :st :scope :ast :unitDecl :nid)
+    if plan.shape.listblock then return (constOfList :st :scope :ast :unitDecl :nid want: ztypes.tid
+    )
     return ztypes.noConst
 }
 
@@ -69779,8 +69798,8 @@ stampConstAt: function {
 } is {
     if nid.isZero then return
     plan: evalConstPlan :ast :nid
-    if plan.arm == 0 then return
-    if plan.arm == 5 then refuseZeroDivisor :st :ast :nid
+    if plan.shape.other then return
+    if plan.shape.operator then refuseZeroDivisor :st :ast :nid
     if (useSiteAsks :st :ast :nid :plan).not then return
     held: st.walk.constFail
     constFailClear :st
@@ -69959,20 +69978,20 @@ useSiteAsks: function {
     nid: zast.nodeid
     plan: constplan
 } out bool is {
-    if plan.arm == 5 then {
+    if plan.shape.operator then {
         br: binRefAt :ast :nid
         lv: st.typing.nodeConstAt nid: br.lhs
         if lv.kind.none then return false
         rv: st.typing.nodeConstAt nid: br.rhs
         return rv.isConst
     }
-    if plan.arm == 6 then {
+    if plan.shape.call then {
         return (callOnFoldedValue :st :ast :nid) or (staticListIndexedAt :st :ast :nid).notZero
     }
-    if (plan.arm == 7) or (plan.arm == 8) or (plan.arm == 9) then return false
+    if plan.shape.ifexpr or plan.shape.caseexpr or plan.shape.listblock then return false
     # a literal with no interpolation, its escapes chunks of their own
-    if plan.arm == 3 then return (isPlainStringLiteral :ast :nid)
-    if plan.arm != 4 then return true
+    if plan.shape.atomstring then return (isPlainStringLiteral :ast :nid)
+    if plan.shape.dottedpath.not then return true
     if (foldedToString :st nid: plan.parentId) then return true
     if (foldedToNumber :st nid: plan.parentId) then return true
     # `first.key` reads a field of a folded data value, `o.none` an arm
@@ -71200,18 +71219,18 @@ unfoldedPartWhy: function {
     visiting: ListVal zast.nodeid
 } out bool is {
     plan: evalConstPlan :ast :nid
-    if plan.arm == 7 then return (unfoldedIfWhy :st :scope :ast :unitDecl :nid :visiting)
-    if plan.arm == 8 then return (unfoldedMatchWhy :st :scope :ast :unitDecl :nid :visiting)
-    if plan.arm == 5 then return (unfoldedBinopWhy :st :scope :ast :unitDecl :nid :visiting)
-    if plan.arm == 2 then {
+    if plan.shape.ifexpr then return (unfoldedIfWhy :st :scope :ast :unitDecl :nid :visiting)
+    if plan.shape.caseexpr then return (unfoldedMatchWhy :st :scope :ast :unitDecl :nid :visiting)
+    if plan.shape.operator then return (unfoldedBinopWhy :st :scope :ast :unitDecl :nid :visiting)
+    if plan.shape.name then {
         return (unfoldedNameWhy :st :scope :ast :unitDecl :nid nameId: plan.nameId :visiting)
     }
-    if plan.arm == 6 then {
+    if plan.shape.call then {
         # a call whose shape was reported needs no second reason
         if (checkConstantMethodShape :st :scope :ast :unitDecl :nid) then return true
         return (unfoldedCallWhy :st :scope :ast :unitDecl :nid :visiting)
     }
-    if plan.arm == 4 when (
+    if plan.shape.dottedpath when (
         unfoldedMemberWhy
         :st
         :scope
@@ -71219,7 +71238,8 @@ unfoldedPartWhy: function {
         parentId: plan.parentId
         childId: plan.childId
     ) then return true
-    if plan.arm == 4 when (checkConstantMethodShape :st :scope :ast :unitDecl :nid) then return true
+    if plan.shape.dottedpath when (checkConstantMethodShape :st :scope :ast :unitDecl :nid
+    ) then return true
     return false
 }
 
