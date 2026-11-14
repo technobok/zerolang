@@ -20,6 +20,13 @@ public: unit {
 # the parser's unit, which a Builder's own `ast` field hides inside its methods
 astunit: ast
 
+# blockkind -- what a delimited block holds: the items of an object or unit
+# body, or the elements of a list.
+blockkind: variant {
+    body: null
+    elements: null
+} as { tag: u8.tag }
+
 # slotkind -- where a value sits, written as the LOWEST `shapeRank` that takes
 # parentheses there, so `parensRequired` is one comparison. Measured by parsing
 # every shape in every position both ways and comparing the trees: the two
@@ -1730,7 +1737,7 @@ Builder: class {
                 xs.append (this.tok tt: zlexer.toktype.isTok)
                 xs.append this.idSpace
             }
-            xs.append (this.visitDelimited span: n.elements kind: 3)
+            xs.append (this.visitDelimited span: n.elements kind: blockkind.elements)
             if n.outType.notZero then {
                 xs.append this.idSpace
                 xs.append (this.tok tt: zlexer.toktype.outTok)
@@ -1787,7 +1794,7 @@ Builder: class {
                     xs.append this.idSpace
                     xs.append (this.tok tt: zlexer.toktype.asTok)
                     xs.append this.idSpace
-                    xs.append (this.visitDelimited span: n.asItems kind: 2)
+                    xs.append (this.visitDelimited span: n.asItems kind: blockkind.body)
                 } else {
                     break
                 }
@@ -1830,11 +1837,11 @@ Builder: class {
                     if (this.peekIs tt: zlexer.toktype.nativeTok) then {
                         xs.append (this.tok tt: zlexer.toktype.nativeTok)
                     } else {
-                        xs.append (this.visitDelimited span: n.isItems kind: 2)
+                        xs.append (this.visitDelimited span: n.isItems kind: blockkind.body)
                     }
                 } else if kind == zlexer.toktype.braceOpenTok then {
                     xs.append this.idSpace
-                    xs.append (this.visitDelimited span: n.isItems kind: 2)
+                    xs.append (this.visitDelimited span: n.isItems kind: blockkind.body)
                 } else if kind == zlexer.toktype.nativeTok then {
                     xs.append this.idSpace
                     xs.append (this.tok tt: zlexer.toktype.nativeTok)
@@ -1842,7 +1849,7 @@ Builder: class {
                     xs.append this.idSpace
                     xs.append (this.tok tt: zlexer.toktype.asTok)
                     xs.append this.idSpace
-                    xs.append (this.visitDelimited span: n.asItems kind: 2)
+                    xs.append (this.visitDelimited span: n.asItems kind: blockkind.body)
                 } else {
                     break
                 }
@@ -1864,7 +1871,7 @@ Builder: class {
                 xs.append (this.tok tt: zlexer.toktype.asTok)
                 xs.append this.idSpace
             }
-            xs.append (this.visitDelimited span: n.body kind: 2)
+            xs.append (this.visitDelimited span: n.body kind: blockkind.body)
         } else null
         return (this.d.concat xs)
     }
@@ -1968,18 +1975,18 @@ Builder: class {
         return (this.d.concat xs)
     }
 
-    # visitDelimited -- `{ items }` for a parameter block (kind 1), an object
-    # or unit body (kind 2) or a list (kind 3): flat when written so and
+    # visitDelimited -- `{ items }` for an object or unit body or for a list:
+    # flat when written so and
     # fitting, else one item per line; a newline or comment right after `{`
     # keeps it open
-    visitDelimited: function {:this span: zast.kidspan kind: u8} out u32 is {
+    visitDelimited: function {:this span: zast.kidspan kind: blockkind} out u32 is {
         xs: ListVal u32
         xs.append (this.tok tt: zlexer.toktype.braceOpenTok)
         inner: ListVal u32
         forced: false
         # a list of bare elements fills its rows, the author's own row
         # breaks kept; anything else is one item per line when broken
-        filling: (kind == 3) and (span.count > 1) and (this.allUnlabelled :span)
+        filling: kind.elements and (span.count > 1) and (this.allUnlabelled :span)
         fillKids: ListVal u32
         prevEnd: u32
         i: u64
@@ -2006,19 +2013,11 @@ Builder: class {
         }
         if inner.length > 0 then {
             xs.append (this.d.indent (this.d.concat inner))
-            xs.append (this.itemSep :kind first: true)
+            xs.append this.idLine
         }
         if forced then xs.append this.idBreak
         xs.append (this.tok tt: zlexer.toktype.braceCloseTok)
         return (this.d.group (this.d.concat xs))
-    }
-
-    # itemSep -- the separator before an item, and before the closing brace: a
-    # parameter block's first item and its close are soft (the block may stay
-    # on its line), every other item takes a line.
-    itemSep: function {t: this.view kind: u8 first: bool} out u32 is {
-        if kind == 1 when first then return t.idSoft
-        return t.idLine
     }
 
     # fillItem -- one element of a filled list, as the fill's next separator
@@ -2067,11 +2066,11 @@ Builder: class {
         g: gapdocs
         itemId: zast.nodeid
         first: bool
-        kind: u8
+        kind: blockkind
         dst: ListVal u32
     } out bool is {
         if g.trailing > 0 then dst.append g.trailing
-        dst.append (this.itemSep :kind :first)
+        dst.append this.idLine
         if first.not then this.appendBlanks xs: dst n: g.blanks
         if g.lead > 0 then dst.append g.lead
         startLine: this.c.rawLine k: this.c.peekIndex
@@ -2081,10 +2080,9 @@ Builder: class {
     }
 
     # visitByKind -- an item of a delimited block by the block's kind: an
-    # element of a list, a parameter, or an object or unit item.
-    visitByKind: function {:this kind: u8 id: zast.nodeid} out u32 is {
-        if kind == 3 then return (this.visitElement :id)
-        if kind == 1 then return (this.visitParam :id)
+    # element of a list, or an object or unit item.
+    visitByKind: function {:this kind: blockkind id: zast.nodeid} out u32 is {
+        if kind.elements then return (this.visitElement :id)
         return (this.visitItem :id)
     }
 

@@ -1085,8 +1085,9 @@ constValueOfDeclLate: function {
     dk: (st.typing.decls.get i: declId).kind
     k: st.typing.memberConstKey parentTypeId: otid nameId: (st.typing.declNameOf :declId)
     if dk.constDecl or dk.reexportDecl or dk.staticListDecl when (
-        ((st.walk.constEvalState.get key: k).or d: 0) != 2
-    ) then {
+        (st.walk.constEvalState.get key: k).or
+        d: ztyping.constevalstate.unvisited
+    ).done.not then {
         constFoldDecl :ast :st :declId
         stampResolvedOnDemand :st :ast
     }
@@ -22136,7 +22137,7 @@ mintUnitStaticListInstances: function {
         if nm.nid.isZero or (ast.nodes.get i: nm.operation).listblock.not then continue
         k: st.typing.memberConstKey parentTypeId: monoId nameId: nm.name
         if (st.walk.constEvalState.has key: k) then continue
-        st.walk.constEvalState.set key: k value: 1.u8
+        st.walk.constEvalState.set key: k value: ztyping.constevalstate.evaluating
         from: st.typing.errors.length
         row: (
             resolveStaticListInto
@@ -22151,7 +22152,7 @@ mintUnitStaticListInstances: function {
             want: ztypes.tid
         )
         noteInstanceErrors :st :ast mono: monoId :from
-        st.walk.constEvalState.set key: k value: 2.u8
+        st.walk.constEvalState.set key: k value: ztyping.constevalstate.done
         if row == 0 then continue
         (
             st.typing.setMemberConst
@@ -43529,7 +43530,7 @@ settleArmTakes: function {
             taken.taken.add item: vd
             # an arm that moved it on only some of its paths does not count: a
             # path through it reaches the end still holding the local
-            if k == zenv.divkind.none when (st.stateOfDecl declId: vd) != 2 then (
+            if k == zenv.divkind.none when (st.stateOfDecl declId: vd).maybe.not then (
                 taken.counts.set
                 key: vd
                 value: ((taken.counts.get key: vd).or d: 0) + 1
@@ -65396,7 +65397,7 @@ constValueOfMemberTidId: function {
     }
     k: st.typing.memberConstKey parentTypeId: readTid nameId: nid
     sg: st.walk.constEvalState.get key: k
-    if sg.some when sg == 2 then return (st.typing.memberConstOf parentTypeId: readTid nameId: nid)
+    if sg.some when sg.done then return (st.typing.memberConstOf parentTypeId: readTid nameId: nid)
     # not folded yet -- READING a constant is what folds it, so descend into
     # the owner's declaration and fold there, then read back. Without this a
     # constant that names another unit's constant sees a memo that nothing
@@ -65444,7 +65445,7 @@ constFoldOpen: function {
     match (
         sg
     ) case some then {
-        return sg == 1
+        return sg.evaluating
     } case none then return false
 }
 
@@ -65576,14 +65577,12 @@ constValueOfMemberAt: function {
     evalMono: activeConstMono :st :ownerDecl
     if evalMono.notZero then utid = evalMono
     k: st.typing.memberConstKey parentTypeId: utid nameId: nid
-    # u64 because that is what the state table holds, and a binding's type IS
-    # its initializer
-    evalState: u64
+    evalState: ztyping.constevalstate.unvisited
     sg: st.walk.constEvalState.get key: k
     if sg.some then {
         evalState = sg
     }
-    if evalState == 2 then return (st.typing.memberConstOf parentTypeId: utid nameId: nid)
+    if evalState.done then return (st.typing.memberConstOf parentTypeId: utid nameId: nid)
     dnid: defNodeId
     if dnid.isZero then return ztypes.noConst
     opid: zast.nodeid
@@ -65600,11 +65599,11 @@ constValueOfMemberAt: function {
         }
     }
     if opid.isZero then return ztypes.noConst
-    if evalState == 1 then {
+    if evalState.evaluating then {
         # settled before the question is asked: asking whether the value is
         # computed looks its head up, and a head of the constant's own name
         # (`foundation: (foundation n: 3)`) comes back here
-        st.walk.constEvalState.set key: k value: 2.u8
+        st.walk.constEvalState.set key: k value: ztyping.constevalstate.done
         if (constDefIsComputed :st scope: ownerDecl :ast :unitDecl nid: opid).not then {
             return ztypes.noConst
         }
@@ -65622,10 +65621,10 @@ constValueOfMemberAt: function {
             width: cycName.length
             strId: cycleText
         )
-        st.walk.constEvalState.set key: k value: 2.u8
+        st.walk.constEvalState.set key: k value: ztyping.constevalstate.done
         return ztypes.noConst
     }
-    st.walk.constEvalState.set key: k value: 1.u8
+    st.walk.constEvalState.set key: k value: ztyping.constevalstate.evaluating
     # the value is evaluated in the scope of the unit that owns the member --
     # the owner itself, which the caller already holds -- and its names are
     # that unit's: core's `text: system.text` reads the system unit, whatever
@@ -65645,7 +65644,7 @@ constValueOfMemberAt: function {
     valFound: evalConstNode :st scope: ownerDecl :ast unitDecl: evalUnit nid: evalNid
     if evalMono.notZero then st.typing.endInstanceWalk next: (nextRowOf :ast)
     st.walk.constMono = prevMono
-    st.walk.constEvalState.set key: k value: 2.u8
+    st.walk.constEvalState.set key: k value: ztyping.constevalstate.done
     if valFound.isConst then {
         st.typing.setMemberConst parentTypeId: utid nameId: nid value: valFound
     }

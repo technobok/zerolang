@@ -368,11 +368,18 @@ fixtureNames: function {dir: StringView suffix: StringView} out List String is {
     return names
 }
 
+# buildstep -- how far buildTool got: the tool is built, or the step that
+# failed.
+buildstep: variant {
+    built: null
+    emit: null
+    compile: null
+} as { tag: u8.tag }
+
 # buildTool -- the two-step ladder every driver-building kind climbs: emit
 # `name` with the zc at `zc` into `csrc`, then compile that C to `bin` with
-# the runner's C compiler. Answers which step failed -- 0 built, 1 the emit,
-# 2 the C compile -- so a kind names the stage in its own FAIL line, as each
-# did when it carried the ladder itself. `srcdirs` are the source roots, in
+# the runner's C compiler. Answers how far it got, so a kind names the failed
+# step in its own FAIL line. `srcdirs` are the source roots, in
 # order.
 buildTool: function {
     r: Runner.view
@@ -382,7 +389,7 @@ buildTool: function {
     csrc: StringView
     bin: StringView
     asan: bool
-} out u64 is {
+} out buildstep is {
     ea: zcArgv :zc ccFwd: r.ccFwd.stringView :name :srcdirs sys: r.sys.stringView outc: csrc
     if (
         (
@@ -394,7 +401,7 @@ buildTool: function {
             timeoutSecs: 0
         ) !=
         0
-    ) then return 1
+    ) then return buildstep.emit
     ga: (
         withZlink
         argv: (
@@ -419,8 +426,8 @@ buildTool: function {
             timeoutSecs: 0
         ) !=
         0
-    ) then return 2
-    return 0
+    ) then return buildstep.compile
+    return buildstep.built
 }
 
 # ccArgv -- the C build command argv; `asan` selects the SANITIZED build over
@@ -2378,15 +2385,15 @@ runLspCases: function {r: Runner} is {
         bin: zlsB.stringView
         asan: false
     )
-    if stage == 1 then {
+    if stage.emit then {
         print "FAIL(lsp) zls (zc)"
         r.fails = r.fails + 1
     }
-    if stage == 2 then {
+    if stage.compile then {
         print "FAIL(lsp) zls (cc)"
         r.fails = r.fails + 1
     }
-    if stage != 0 then return
+    if stage.built.not then return
     names: List String
     for each fn: lspLs loop {
         keep: fn.endsWith ".msgs"
@@ -3439,31 +3446,25 @@ runDifferentialCases: function {r: Runner} is {
     lexOk: false
     parseOk: false
     if (
-        (
-            buildTool
-            :r
-            zc: r.zc.stringView
-            name: "zlexer_dump"
-            srcdirs: (oneDir d: r.unitDir.stringView)
-            csrc: zlxC.stringView
-            bin: zlxB.stringView
-            asan: false
-        ) ==
-        0
-    ) then lexOk = true
+        buildTool
+        :r
+        zc: r.zc.stringView
+        name: "zlexer_dump"
+        srcdirs: (oneDir d: r.unitDir.stringView)
+        csrc: zlxC.stringView
+        bin: zlxB.stringView
+        asan: false
+    ).built then lexOk = true
     if (
-        (
-            buildTool
-            :r
-            zc: r.zc.stringView
-            name: "zparser_dump"
-            srcdirs: (oneDir d: r.unitDir.stringView)
-            csrc: zpsC.stringView
-            bin: zpsB.stringView
-            asan: false
-        ) ==
-        0
-    ) then parseOk = true
+        buildTool
+        :r
+        zc: r.zc.stringView
+        name: "zparser_dump"
+        srcdirs: (oneDir d: r.unitDir.stringView)
+        csrc: zpsC.stringView
+        bin: zpsB.stringView
+        asan: false
+    ).built then parseOk = true
     if lexOk.not then {
         print "FAIL(diff-build) zlexer"
         r.fails = r.fails + 1
@@ -3575,18 +3576,15 @@ runVfsCases: function {r: Runner} is {
     zvfB: "\{r.tmp.stringView}/D_zvfs.bin"
     vfsOk: false
     if (
-        (
-            buildTool
-            :r
-            zc: r.zc.stringView
-            name: "zvfs_script"
-            srcdirs: (oneDir d: r.unitDir.stringView)
-            csrc: zvfC.stringView
-            bin: zvfB.stringView
-            asan: false
-        ) ==
-        0
-    ) then vfsOk = true
+        buildTool
+        :r
+        zc: r.zc.stringView
+        name: "zvfs_script"
+        srcdirs: (oneDir d: r.unitDir.stringView)
+        csrc: zvfC.stringView
+        bin: zvfB.stringView
+        asan: false
+    ).built then vfsOk = true
     if vfsOk.not then {
         print "FAIL(vfs-build) zvfs"
         r.fails = r.fails + 1
@@ -3911,18 +3909,15 @@ runFmtCases: function {r: Runner} is {
     srcs.append from: r.srcDir.copy
     built: false
     if (
-        (
-            buildTool
-            :r
-            zc: r.zc.stringView
-            name: "zfmt_dump"
-            srcdirs: srcs
-            csrc: zfC.stringView
-            bin: zfB.stringView
-            asan: false
-        ) ==
-        0
-    ) then built = true
+        buildTool
+        :r
+        zc: r.zc.stringView
+        name: "zfmt_dump"
+        srcdirs: srcs
+        csrc: zfC.stringView
+        bin: zfB.stringView
+        asan: false
+    ).built then built = true
     if built.not then {
         print "FAIL(fmt-build) zfmt_dump"
         r.fails = r.fails + 1
@@ -4128,18 +4123,15 @@ runSelfhostAsan: function {r: Runner} is {
         zcaB: "\{r.tmp.stringView}/zca.bin"
         zcaOk: false
         if (
-            (
-                buildTool
-                :r
-                zc: r.zc.stringView
-                name: "zc"
-                srcdirs: (oneDir d: r.srcDir.stringView)
-                csrc: zcaC.stringView
-                bin: zcaB.stringView
-                asan: true
-            ) ==
-            0
-        ) then zcaOk = true
+            buildTool
+            :r
+            zc: r.zc.stringView
+            name: "zc"
+            srcdirs: (oneDir d: r.srcDir.stringView)
+            csrc: zcaC.stringView
+            bin: zcaB.stringView
+            asan: true
+        ).built then zcaOk = true
         if zcaOk.not then {
             print "FAIL(selfhost-asan-build) zc"
             r.fails = r.fails + 1
@@ -4225,18 +4217,15 @@ runFixpoint: function {r: Runner} is {
         fp2: "\{r.tmp.stringView}/fp2.c"
         fpOk: false
         if (
-            (
-                buildTool
-                :r
-                zc: r.zc.stringView
-                name: "zc"
-                srcdirs: (oneDir d: r.srcDir.stringView)
-                csrc: fp1.stringView
-                bin: fp1bin.stringView
-                asan: false
-            ) ==
-            0
-        ) then {
+            buildTool
+            :r
+            zc: r.zc.stringView
+            name: "zc"
+            srcdirs: (oneDir d: r.srcDir.stringView)
+            csrc: fp1.stringView
+            bin: fp1bin.stringView
+            asan: false
+        ).built then {
             e2: (
                 zcArgv
                 zc: fp1bin.stringView

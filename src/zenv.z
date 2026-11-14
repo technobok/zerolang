@@ -703,10 +703,9 @@ WalkState: class {
     # the next ordinal for a field minted on currentGenTid, so two loops in
     # one body never share a slot
     genSpillNext: u64
-    # evaluation state per memberConst key: 0 unvisited, 1 evaluating, 2 done.
-    # Constants are not written in dependency order, so the evaluator pulls
-    # rather than pushes and this is its cycle guard.
-    constEvalState: (MapVV ztyping.constslot v: u8)
+    # evaluation state per memberConst key, the evaluator's cycle guard; a key
+    # with no entry is unvisited
+    constEvalState: (MapVV ztyping.constslot v: ztyping.constevalstate)
     # each list-sourced tag's list, by its declaration, which a report names
     tagSourceDecls: (IdMapV ztypes.tid v: ztypes.declid)
     # the type-ref nodes in a static position, where a literal type may be
@@ -953,7 +952,7 @@ newWalkState: function out WalkState is {
         tempNameOf: (IdMapV zast.nodeid v: zast.nameid)
         currentGenTid: ztypes.tid
         genSpillNext: 0
-        constEvalState: (MapVV ztyping.constslot v: u8)
+        constEvalState: (MapVV ztyping.constslot v: ztyping.constevalstate)
         tagSourceDecls: (IdMapV ztypes.tid v: ztypes.declid)
         staticLiteralTyperefs: IdSet zast.nodeid
         constFail: ztypes.noConstFail
@@ -1276,7 +1275,7 @@ ZSymbolTable: class {
                 this.typing.destroyItems.append (ztyping.destroyitem vid: it.vid state: it.state)
             }
         }
-        this.typing.destroyItems.append (ztyping.destroyitem :vid state: 0)
+        this.typing.destroyItems.append (ztyping.destroyitem :vid state: ztyping.destroystate.owned)
         this.closeExitRange :nid :start
     }
 
@@ -1339,8 +1338,8 @@ ZSymbolTable: class {
         mDecls: ListVal ztypes.declid
         mTypes: ListVal ztypes.tid
         mLocs: ListVal (optionval ztypes.zsrcpos)
-        # 0 a take, 1 a maybe take, 2 a refill, 4 replaced by a later row
-        mFlags: ListVal u8
+        # what each row says of its local
+        mFlags: ListVal moveflag
         mRefilled: false
         mEnds: ListVal ztypes.declid
         p2: start
@@ -1357,15 +1356,15 @@ ZSymbolTable: class {
                 for j < mDecls.length loop {
                     if (mDecls.get i: j) == e.declId then {
                         jf: mFlags.get i: j
-                        if e.refills or (jf == 2) then mFlags.set i: j val: 4
+                        if e.refills or jf.refilled then mFlags.set i: j val: moveflag.replaced
                     }
                     j = j + 1
                 }
             }
-            fl: u8
-            if e.takenMaybe then fl = 1
+            fl: moveflag.taken
+            if e.takenMaybe then fl = moveflag.maybeTaken
             if e.refills then {
-                fl = 2
+                fl = moveflag.refilled
                 mRefilled = true
             }
             mDecls.append e.declId
@@ -1423,16 +1422,16 @@ ZSymbolTable: class {
             d: mDecls.get i: mi
             fl: mFlags.get i: mi
             mi = mi + 1
-            if fl == 4 then continue
+            if fl.replaced then continue
             already: this.isTakenDecl declId: d
             # a refill of a local that came in taken leaves it maybe taken; a
             # take of one that came in taken is laid again only to weaken a
             # certain take to a maybe, which a refill further in makes it
-            if fl == 2 when already.not then continue
-            if fl == 0 when already then continue
-            if fl == 1 when already when (this.stateOfDecl declId: d) == 2 then continue
+            if fl.refilled when already.not then continue
+            if fl.taken when already then continue
+            if fl.maybeTaken when already when (this.stateOfDecl declId: d).maybe then continue
             # a refill every path through here made refills the local here too
-            if fl == 2 when fr.unconditional then {
+            if fl.refilled when fr.unconditional then {
                 re: this.reg.newEntry ztypeId: (mTypes.get i: mi - 1)
                 re.refills = true
                 this.appendRow row: re declId: d
@@ -1440,9 +1439,9 @@ ZSymbolTable: class {
             }
             te: this.reg.newEntry ztypeId: (mTypes.get i: mi - 1)
             te.isTaken = true
-            te.takenMaybe = fl != 0
+            te.takenMaybe = fl.taken.not
             te.takenAt = mLocs.get i: mi - 1
-            if fl == 2 then te.takenAt = this.takenAtOfDecl declId: d
+            if fl.refilled then te.takenAt = this.takenAtOfDecl declId: d
             this.appendRow row: te declId: d
         }
         # laid last, so no row re-laid above narrows the local again
@@ -1603,7 +1602,11 @@ ZSymbolTable: class {
             i: rg.start.u64 + k
             k = k + 1
             if (this.typing.destroyItems.get :i).vid == vid then {
-                this.typing.destroyItems.set :i val: (ztyping.destroyitem :vid state: 1)
+                (
+                    this.typing.destroyItems.set
+                    :i
+                    val: (ztyping.destroyitem :vid state: ztyping.destroystate.moved)
+                )
                 return
             }
         }
@@ -1899,16 +1902,15 @@ ZSymbolTable: class {
     # --- destruction ---
 
     # stateOfDecl -- the state a destroy point here records the local `declId`
-    # in (destroyitem): 0 it holds its value, 1 it was moved on every path here,
-    # 2 on some.
-    stateOfDecl: function {t: this.view declId: ztypes.declid} out u8 is {
+    # in (destroyitem).
+    stateOfDecl: function {t: this.view declId: ztypes.declid} out ztyping.destroystate is {
         ro: t.rowOf :declId
         if ro.some then {
             e: t.entries.get i: ro
-            if e.isTaken when e.takenMaybe then return 2
-            if e.isTaken then return 1
+            if e.isTaken when e.takenMaybe then return ztyping.destroystate.maybe
+            if e.isTaken then return ztyping.destroystate.moved
         }
-        return 0
+        return ztyping.destroystate.owned
     }
 
     # ownsDestroy -- `vid` is a variable a destroy point lists: one that owns
@@ -1966,7 +1968,7 @@ ZSymbolTable: class {
             if v != except when (this.ownsDestroy vid: v) then {
                 vs: this.stateOfDecl declId: kd
                 this.typing.destroyItems.append (ztyping.destroyitem vid: v state: vs)
-                if vs == 2 then this.typing.zeroOnMove.add item: v
+                if vs.maybe then this.typing.zeroOnMove.add item: v
             }
         }
     }
@@ -2110,7 +2112,7 @@ ZSymbolTable: class {
         start: this.typing.destroyItems.length
         vs: this.stateOfDecl declId: d
         this.typing.destroyItems.append (ztyping.destroyitem vid: v state: vs)
-        if vs == 2 then this.typing.zeroOnMove.add item: v
+        if vs.maybe then this.typing.zeroOnMove.add item: v
         this.closeExitRange :nid :start
     }
 
@@ -3194,7 +3196,7 @@ ZSymbolTable: class {
         ) case var then {
             d: t.declOfVar vid: holder
             if d.isZero then return false
-            return (t.stateOfDecl declId: d) != 0
+            return (t.stateOfDecl declId: d).owned.not
         } else {
             return false
         }
@@ -3902,6 +3904,18 @@ looprun: record {
     # a `continue` of the loop was walked
     continued: bool
 }
+
+# moveflag -- what a row a closing scope hands outward says of its local.
+moveflag: variant {
+    # the local was taken
+    taken: null
+    # it was taken on some path
+    maybeTaken: null
+    # it was given a value again
+    refilled: null
+    # a later row of the same local stands for this one
+    replaced: null
+} as { tag: u8.tag }
 
 # divkind -- how a scope's walk ended, when it did not fall through: `exit`
 # leaves the function (`return`, `panic`), `brk` leaves the loop, `cont` ends
