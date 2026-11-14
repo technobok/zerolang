@@ -9,7 +9,6 @@
 # Public interface -- the definitions other units may reference; all
 # other top-level definitions are private to this unit.
 public: unit {
-    :ascii
     :Lexer
     :toktype
     :token
@@ -19,47 +18,6 @@ public: unit {
     :isMarkerTok
     :kwOfId
 }
-
-# ASCII byte constants used by the scanner. Control bytes keep their
-# two/three-letter mnemonics (nul/bs/ht/lf/cr/del); other names are
-# full words.
-ascii: list {
-    nul: 0
-    bs: 8
-    ht: 9
-    lf: 10
-    cr: 13
-    space: 32
-    doubleQuote: 34
-    hash: 35
-    parenOpen: 40
-    parenClose: 41
-    plus: 43
-    comma: 44
-    minus: 45
-    dot: 46
-    zero: 48
-    nine: 57
-    colon: 58
-    semicolon: 59
-    upperA: 65
-    upperF: 70
-    bracketOpen: 91
-    backslash: 92
-    bracketClose: 93
-    backtick: 96
-    lowerA: 97
-    lowerB: 98
-    lowerF: 102
-    lowerN: 110
-    lowerR: 114
-    lowerT: 116
-    lowerU: 117
-    lowerX: 120
-    braceOpen: 123
-    braceClose: 125
-    del: 127
-} out staticlist u8
 
 # token type, used by Tokenizer + Lexer to classify each emitted
 # token. Each member name ends in `Tok`, which keeps it apart from the
@@ -240,7 +198,7 @@ spanWidth: function {s: u64 e: u64} out u32 is {
 # source form, not the value it failed to become.
 escapeErrText: function {specifier: u8 digits: String.view} out String is {
     err: String
-    err.appendByte ascii.backslash
+    err.appendByte 0c\\
     err.appendByte specifier
     dsv: digits.stringView
     j: u64
@@ -379,20 +337,15 @@ isdigit: function {b: u8} out bool is {
 
 # true when byte `b` is a hex digit (0-9, a-f, A-F).
 ishexdigit: function {b: u8} out bool is {
-    return (
-        (b >= ascii.zero) and
-        (b <= ascii.nine) or
-        ((b >= ascii.upperA) and (b <= ascii.upperF)) or
-        ((b >= ascii.lowerA) and (b <= ascii.lowerF))
-    )
+    return (b >= 0c0) and (b <= 0c9) or ((b >= 0cA) and (b <= 0cF)) or ((b >= 0ca) and (b <= 0cf))
 }
 
 # Decode a single hex digit byte into its numeric value (0-15).
 # Caller must have already checked `ishexdigit`.
 hexvalue: function {b: u8} out u8 is {
-    if b <= ascii.nine then return b - ascii.zero
-    if b <= ascii.upperF then return b - ascii.upperA + 10
-    return b - ascii.lowerA + 10
+    if b <= 0c9 then return b - 0c0
+    if b <= 0cF then return b - 0cA + 10
+    return b - 0ca + 10
 }
 
 # Encode a Unicode codepoint as 1-4 UTF-8 bytes appended to `dst`.
@@ -592,7 +545,7 @@ Tokenizer: class {
         line: t.lineno
         col: t.colno
         c: t.atchar
-        if c == ascii.backslash then return (t.acceptcharescape :pool)
+        if c == 0c\\ then return (t.acceptcharescape :pool)
         s0: t.tokpos
         t.acceptRun cls: charflag.stringBody
         if t.tokpos > s0 then {
@@ -700,7 +653,7 @@ Tokenizer: class {
         col: t.colno
         at: t.tokpos
         c: t.atchar
-        if c != ascii.backslash then {
+        if c != 0c\\ then {
             err: String
             err.appendByte c
             return (t.textTok :pool tt: toktype.errTok s: err :at :line :col)
@@ -710,20 +663,20 @@ Tokenizer: class {
 
         namedByte: u8
         namedFound: false
-        if c == ascii.lowerN then {
-            namedByte = ascii.lf
+        if c == 0cn then {
+            namedByte = 0c\n
             namedFound = true
         }
-        if c == ascii.lowerT then {
-            namedByte = ascii.ht
+        if c == 0ct then {
+            namedByte = 0c\t
             namedFound = true
         }
-        if c == ascii.lowerB then {
-            namedByte = ascii.bs
+        if c == 0cb then {
+            namedByte = 0c\b
             namedFound = true
         }
-        if c == ascii.backslash then {
-            namedByte = ascii.backslash
+        if c == 0c\\ then {
+            namedByte = 0c\\
             namedFound = true
         }
         if c == ascii.doubleQuote then {
@@ -737,22 +690,22 @@ Tokenizer: class {
             return (t.textTok :pool tt: toktype.strChrTok s: sc :at :line :col)
         }
 
-        if c == ascii.lowerX then {
-            return (t.accepthexescape :pool n: 2 specifier: ascii.lowerX :at :line :col)
+        if c == 0cx then {
+            return (t.accepthexescape :pool n: 2 specifier: 0cx :at :line :col)
         }
-        if c == ascii.lowerU then {
-            return (t.accepthexescape :pool n: 6 specifier: ascii.lowerU :at :line :col)
+        if c == 0cu then {
+            return (t.accepthexescape :pool n: 6 specifier: 0cu :at :line :col)
         }
 
         if c == ascii.braceOpen then {
             bs: String
-            bs.appendByte ascii.backslash
+            bs.appendByte 0c\\
             t.statepush s: tokstatetype.stringexpr
             return (t.textTok :pool tt: toktype.strExprBegTok s: bs :at :line :col)
         }
 
         err: String
-        err.appendByte ascii.backslash
+        err.appendByte 0c\\
         err.appendByte c
         return (t.textTok :pool tt: toktype.errTok s: err :at :line :col)
     }
@@ -805,7 +758,7 @@ Tokenizer: class {
             j = j + 1
         }
 
-        if specifier == ascii.lowerU then {
+        if specifier == 0cu then {
             if val > 1114111 then {
                 et: escapeErrText :specifier :digits
                 return (t.textTok :pool tt: toktype.errTok s: et :at :line :col)
@@ -1106,7 +1059,7 @@ Tokenizer: class {
     # nextIsLf -- the byte after .atchar is a linefeed: a CR there is the CRLF
     # spelling of a line end, and anywhere else whitespace.
     nextIsLf: function {t: this.view} out bool is {
-        return ((t.source.stringView.byteAt t.pos).or d: 0) == ascii.lf
+        return ((t.source.stringView.byteAt t.pos).or d: 0) == 0c\n
     }
 
     # eolToken -- an end of line, either spelling. CR consumes the LF that
@@ -1116,7 +1069,7 @@ Tokenizer: class {
     # ends are.
     eolToken: function {t: this pool: zast.StringPool c: u8 line: u32 col: u32} out token is {
         t.accept
-        if c == ascii.cr when t.atchar == ascii.lf then t.accept
+        if c == ascii.cr when t.atchar == 0c\n then t.accept
         t.lineno = t.lineno + 1
         t.colno = 1
         return (t.spanTok :pool tt: toktype.eolTok s: t.tokpos - 1 e: t.tokpos :line :col)
@@ -1254,7 +1207,7 @@ Tokenizer: class {
     # own pre-advance position rather than joined to the word.
     scanWordSpan: function {t: this pool: zast.StringPool c: u8} out u64 is {
         cw: c
-        if (cw == ascii.plus) or (cw == ascii.minus) then {
+        if (cw == 0c+) or (cw == 0c-) then {
             t.accept
             cw = t.atchar
         }
@@ -1487,7 +1440,7 @@ Tokenizer: class {
             )
         }
 
-        if c == ascii.lf then return (t.eolToken :pool :c :line :col)
+        if c == 0c\n then return (t.eolToken :pool :c :line :col)
         if c == ascii.cr when t.nextIsLf then return (t.eolToken :pool :c :line :col)
 
         # State-aware dispatch: when the top of the state stack is
