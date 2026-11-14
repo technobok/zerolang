@@ -2002,6 +2002,18 @@ Parser: class {
         }
     }
 
+    # ifNeedsCondition -- the error at the token that stands where a clause of
+    # an `if` needs its condition.
+    ifNeedsCondition: function {:this lex: zlexer.Lexer} out astnode is {
+        bad: lex.acceptAny pool: this.ast.names
+        return (
+            this.mkError
+            tok: bad
+            code: zast.err.expectedOp
+            msg: "Expected operation (condition) for 'if'".string
+        )
+    }
+
     # ifWhenTail -- ifClausesTail at a `when`: the condition after it joins
     # the clause's `conditions`, and the tail goes on from there. A condition
     # after another is a level: each is read inside the one before.
@@ -2019,15 +2031,7 @@ Parser: class {
         lex.accept tt: zlexer.toktype.eolTok pool: this.ast.names
         vbase: this.operationPaths :lex
         n: this.pathCount base: vbase
-        if n == 0 then {
-            bad: lex.acceptAny pool: this.ast.names
-            return (
-                this.mkError
-                tok: bad
-                code: zast.err.expectedOp
-                msg: "Expected operation (condition) for 'if'".string
-            )
-        }
+        if n == 0 then return (this.ifNeedsCondition :lex)
         cond: this.operationFromBase base: vbase :lex
         cErr: Parser.isError node: cond
         if cErr then return cond
@@ -2078,6 +2082,9 @@ Parser: class {
             :ifCol
         )
         if tt == zlexer.toktype.thenTok then {
+            # every clause after the first opens with `when`: a `then` with no
+            # condition before it has no clause to close
+            if conditions.length == 0 then return (this.ifNeedsCondition :lex)
             lex.advance pool: this.ast.names
             stmt: this.acceptClauseBody :lex
             sErr: Parser.isError node: stmt
@@ -2160,15 +2167,7 @@ Parser: class {
             cCol: clausePos.colno
             vbase: this.operationPaths :lex
             n: this.pathCount base: vbase
-            if n == 0 then {
-                bad: lex.acceptAny pool: this.ast.names
-                return (
-                    this.mkError
-                    tok: bad
-                    code: zast.err.expectedOp
-                    msg: "Expected operation (condition) for 'if'".string
-                )
-            }
+            if n == 0 then return (this.ifNeedsCondition :lex)
             cond: this.operationFromBase base: vbase :lex
             cErr: Parser.isError node: cond
             if cErr then return cond
@@ -2192,7 +2191,7 @@ Parser: class {
 
     # The clauses of a match, then its optional `else`: each `case` adds a
     # clause to `clauses`, and anything else ends them. A loop, so a match
-    # may have any number of arms.
+    # may have any number of arms; it has at least one.
     caseClauses: function {
         :this
         lex: zlexer.Lexer
@@ -2205,6 +2204,15 @@ Parser: class {
             clause: this.parseCaseClause :lex
             if (Parser.isError node: clause) then return clause
             clauses.append (this.intern n: clause)
+        }
+        if clauses.length == 0 then {
+            bad: lex.acceptAny pool: this.ast.names
+            return (
+                this.mkError
+                tok: bad
+                code: zast.err.badCase
+                msg: "Expected case for match".string
+            )
         }
         elseOpt: lex.accept tt: zlexer.toktype.elseTok pool: this.ast.names
         match (
@@ -2294,7 +2302,7 @@ Parser: class {
     }
 
     # match-expression -> "match" [ "on" ] op
-    #                     { "case" id "then" primary }* [ "else" primary ]
+    #                     ( "case" id "then" primary )+ [ "else" expression ]
     # The subject is a bare operation; each clause binds the matched id's
     # name plus the AtomId arm being matched (caseClauses). Narrowing the subject and rejecting `.take`
     # on it are typecheck concerns, not parse ones.
@@ -2508,7 +2516,8 @@ Parser: class {
     }
 
     # forBinding -- the header's binding, `label op`, with `each` already
-    # consumed when it was written: at most one, and none after the body.
+    # consumed when it was written: at most one, the header's first condition,
+    # and none after the body.
     forBinding: function {
         :this
         lex: zlexer.Lexer
@@ -2536,6 +2545,14 @@ Parser: class {
                 pos: tPos
                 code: zast.err.badFor
                 msg: "for accepts at most one binding".string
+            )
+        }
+        if conditions.length > 0 then {
+            return (
+                this.mkErrorAt
+                pos: tPos
+                code: zast.err.badFor
+                msg: "Binding label not allowed after a condition".string
             )
         }
         lblTok: lex.acceptAny pool: this.ast.names
@@ -2571,8 +2588,8 @@ Parser: class {
         )
     }
 
-    # for-expression -> "for" [op] { "while" op } [ ["each"] label op ] { "while" op }
-    #                   [ "loop" primary ] { "while" op }
+    # for-expression -> "for" [ ( ["each"] label op ) | op ] { "while" op }
+    #                   [ "loop" expression ] { "while" op }
     # -> forexpr (conditions: namedoperation arms [named=binding,
     # unnamed=while/leading], body, postconditions: bare op Nodes). The
     # optional leading naked operation is an unnamed precondition; the rest
@@ -4019,11 +4036,23 @@ Parser: class {
         )
     }
 
-    # Reorderable `is { ... }` / `as { ... }` / `is native` / bare `native`
-    # clause loop for an item definition. Recursive tail threading the two
-    # owned member lists (like functionClausesTail) -- a leading bare `{`
-    # defaults to the is-body. An item must carry an is-body or `native`;
-    # otherwise the body is malformed. Builds the objectdef at the terminal.
+    # isNameNeeded -- the error at an is-clause written without `is` after the
+    # `as` clause: the name is left out only when the clause comes first.
+    isNameNeeded: function {:this pos: zlexer.tokpos} out astnode is {
+        return (
+            this.mkErrorAt
+            :pos
+            code: zast.err.badItem
+            msg: "an is-clause written after `as` needs its `is`".string
+        )
+    }
+
+    # Reorderable `is { ... }` / `as { ... }` / `is native` clause loop for an
+    # item definition. Recursive tail threading the two owned member lists
+    # (like functionClausesTail) -- a leading bare `{` or `native` is the
+    # is-clause with its name left out. An item must carry an is-body or
+    # `native`; otherwise the body is malformed. Builds the objectdef at the
+    # terminal.
     acceptItemBodiesTail: function {
         :this
         lex: zlexer.Lexer
@@ -4038,16 +4067,11 @@ Parser: class {
     } out astnode is {
         tPos: lex.peekPos
         tt: lex.peekType
+        hasClause: hasIs or isNative
+        nameless: (tt == zlexer.toktype.braceOpenTok) or (tt == zlexer.toktype.nativeTok)
+        if nameless when hasAs when hasClause.not then return (this.isNameNeeded pos: tPos)
         if tt == zlexer.toktype.isTok then {
-            if hasIs then {
-                return (
-                    this.mkErrorAt
-                    pos: tPos
-                    code: zast.err.badItem
-                    msg: "Duplicate is clause".string
-                )
-            }
-            if isNative then {
+            if hasClause then {
                 return (
                     this.mkErrorAt
                     pos: tPos
@@ -4096,23 +4120,20 @@ Parser: class {
                 )
             }
         }
-        if tt == zlexer.toktype.nativeTok then {
-            noBodyYet: (hasIs or isNative).not
-            if noBodyYet then {
-                lex.advance pool: this.ast.names
-                return (
-                    this.acceptItemBodiesTail
-                    :lex
-                    :isItems
-                    :asItems
-                    isNative: true
-                    :hasIs
-                    :hasAs
-                    :kind
-                    :startLine
-                    :startCol
-                )
-            }
+        if tt == zlexer.toktype.nativeTok when hasClause.not then {
+            lex.advance pool: this.ast.names
+            return (
+                this.acceptItemBodiesTail
+                :lex
+                :isItems
+                :asItems
+                isNative: true
+                :hasIs
+                :hasAs
+                :kind
+                :startLine
+                :startCol
+            )
         }
         if tt == zlexer.toktype.asTok then {
             if hasAs then {
@@ -4158,9 +4179,7 @@ Parser: class {
                     msg: "a definition has one is-clause: `is native` or an is-block, not both".string
                 )
             }
-            noBodyYet: true
-            if hasIs then noBodyYet = false
-            if noBodyYet then {
+            if hasIs.not then {
                 ib: this.getObjectBody :lex typeBody: true
                 ibn: ib.length
                 if ibn > 0 then {
@@ -4184,7 +4203,7 @@ Parser: class {
                 )
             }
         }
-        hasBody: hasIs or isNative
+        hasBody: hasClause
         # a generator's `is` block declares its construction fields, and one
         # that captures nothing has none to write. Its body is `call`, which
         # lives in `as`, so `as` alone is a complete definition -- for this kind
