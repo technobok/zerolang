@@ -116,9 +116,10 @@ printPhases: function {t0: i64 t1: i64 t2: i64 t3: i64} is {
     io.eprintln "zc --time: parse=\{t1 - t0}ms typecheck=\{t2 - t1}ms emit=\{t3 - t2}ms total=\{t3 - t0}ms"
 }
 
-# zcWord -- every word zc reads off its command line: the verbs, the flags, the
-# values a flag validates and `-` for standard output. A word is classified by
-# its slot here (zast.Vocab), never by comparing its text.
+# zcWord -- every word zc classifies on its command line: the verbs, the
+# print-and-stop flags that may stand in a verb's place, the `natives`
+# subcommands, the two compiler modes and `-` for standard output. A word is
+# classified by its slot here (zast.Vocab), never by comparing its text.
 zcWord: list {
     vBuild: "build"
     vRun: "run"
@@ -139,34 +140,10 @@ zcWord: list {
     fHelp: "--help"
     fV: "-V"
     fVersion: "--version"
-    fProgArgs: "--"
-    fCanon: "--canon"
-    fRelease: "--release"
-    fSaveTemps: "--save-temps"
-    fTime: "--time"
-    fFastHash: "--fast-hash"
-    fReadableNames: "--readable-names"
-    fNativecFiles: "--nativec-files"
-    fMarkNatives: "--mark-natives"
-    fEmitter: "--emitter"
-    fRegister: "--register"
-    fEager: "--eager"
-    fSrc: "--src"
-    fSystem: "--system"
     nShow: "show"
     nCheck: "check"
     nConversions: "conversions"
     nSource: "source"
-    fOnlyC: "--c"
-    fEmitC: "--emit-c"
-    fDumpSql: "--dump-sql"
-    fOut: "-o"
-    fCc: "--cc"
-    fCcMode: "--cc-mode"
-    fTccLib: "--tcc-lib"
-    fTarget: "--target"
-    fCflags: "--cflags"
-    fLdflags: "--ldflags"
     mSpawn: "spawn"
     mInproc: "inproc"
     stdoutPath: "-"
@@ -181,6 +158,256 @@ isPipelineVerb: function {w: u64} out bool is {
     if w == zcWord.slot.vEmit then return true
     if w == zcWord.slot.vCobj then return true
     return (w == zcWord.slot.vDump) or (w == zcWord.slot.vEnv)
+}
+
+# opt -- the name of each flag and option zc's commands take, as it is written
+# on the command line. A command's spec declares its own, and the command reads
+# them back by the same names.
+opt: list {
+    help: "--help"
+    version: "--version"
+    canon: "--canon"
+    release: "--release"
+    saveTemps: "--save-temps"
+    timed: "--time"
+    fastHash: "--fast-hash"
+    readableNames: "--readable-names"
+    nativecFiles: "--nativec-files"
+    markNatives: "--mark-natives"
+    eager: "--eager"
+    src: "--src"
+    system: "--system"
+    emitC: "--emit-c"
+    dumpSql: "--dump-sql"
+    output: "-o"
+    cc: "--cc"
+    ccMode: "--cc-mode"
+    tccLib: "--tcc-lib"
+    target: "--target"
+    cflags: "--cflags"
+    ldflags: "--ldflags"
+    onlyC: "--c"
+    emitter: "--emitter"
+    register: "--register"
+} out staticlist StringView
+
+# operand -- the name of each operand a command takes, as its usage line and a
+# refusal write it
+operand: list {
+    src: "src"
+    cFile: "file.c"
+    dataFile: "file.zd"
+    code: "code"
+    dir: "dir"
+    what: "WHAT"
+    check: "CHECK"
+    unitDir: "UNITDIR"
+    file: "FILE"
+} out staticlist StringView
+
+# wrongUsage -- the exit code of a command line zc does not accept
+wrongUsage: 2
+
+# newSpec -- a spec for the command a refusal names as `prog`, holding the two
+# flags every command answers wherever they stand: -h / --help and
+# -V / --version. It has no help text: zc's usage is written by hand.
+newSpec: function {prog: StringView} out cli.Spec is {
+    sp: cli.Spec.create programName: prog.string summary: "".string
+    cli.addFlag spec: sp name: opt.help.string shortName: "-h".string help: "".string
+    cli.addFlag spec: sp name: opt.version.string shortName: "-V".string help: "".string
+    return sp
+}
+
+# addSwitch -- declares a flag on `sp`
+addSwitch: function {sp: cli.Spec.borrow name: StringView} is {
+    cli.addFlag spec: sp name: name.string shortName: "".string help: "".string
+}
+
+# addValue -- declares an option on `sp` that a command line may leave out
+addValue: function {sp: cli.Spec.borrow name: StringView repeats: bool} is {
+    (
+        cli.addOption
+        spec: sp
+        name: name.string
+        shortName: "".string
+        help: "".string
+        required: false
+        :repeats
+    )
+}
+
+# addOperand -- declares an operand on `sp`. cli never requires it: a command
+# asks for its own (missing), after -h and -V have had their answer.
+addOperand: function {sp: cli.Spec.borrow name: StringView} is {
+    cli.addPositional spec: sp name: name.string help: "".string required: false
+}
+
+# addToolchain -- declares on `sp` what picks the standard library, the C
+# toolchain and the target: every command that reads the project does
+addToolchain: function {sp: cli.Spec.borrow} is {
+    addValue :sp name: opt.system repeats: false
+    addValue :sp name: opt.cc repeats: false
+    addValue :sp name: opt.ccMode repeats: false
+    addValue :sp name: opt.tccLib repeats: false
+    addValue :sp name: opt.target repeats: false
+}
+
+# compileSpec -- what every command that compiles a unit takes: the unit, its
+# roots, the toolchain, -o, and the settings the generated `z` unit records
+# for the build, which a program may read whatever the command writes
+compileSpec: function out cli.Spec is {
+    sp: newSpec prog: "zc"
+    addToolchain :sp
+    addValue :sp name: opt.src repeats: true
+    addValue :sp name: opt.cflags repeats: false
+    addValue :sp name: opt.ldflags repeats: false
+    # -o has no long form: its name and its short alias are the same word
+    (
+        cli.addOption
+        spec: sp
+        name: opt.output.string
+        shortName: opt.output.string
+        help: "".string
+        required: false
+    )
+    addSwitch :sp name: opt.release
+    addSwitch :sp name: opt.fastHash
+    addSwitch :sp name: opt.readableNames
+    addSwitch :sp name: opt.eager
+    addOperand :sp name: operand.src
+    return sp
+}
+
+# addEmitSwitches -- declares on `sp` what only a command that writes C reads
+addEmitSwitches: function {sp: cli.Spec.borrow} is {
+    addSwitch :sp name: opt.timed
+    addSwitch :sp name: opt.nativecFiles
+    addSwitch :sp name: opt.markNatives
+}
+
+# buildSpec -- what `zc build` takes: compileSpec's members, the switches of a
+# command that writes C, and --save-temps for the C a build removes
+buildSpec: function out cli.Spec is {
+    sp: compileSpec
+    addEmitSwitches :sp
+    addSwitch :sp name: opt.saveTemps
+    return sp
+}
+
+# runSpec -- the command line of `zc run`: build's, read up to the first
+# operand after the unit. That operand and everything after it are the
+# program's arguments.
+runSpec: function out cli.Spec is {
+    sp: buildSpec
+    sp.stopAtOperand = true
+    return sp
+}
+
+# emitSpec -- what `zc emit` takes: compileSpec's members and the switches of
+# a command that writes C. --emit-c names the file, as -o does.
+emitSpec: function out cli.Spec is {
+    sp: compileSpec
+    addEmitSwitches :sp
+    addValue :sp name: opt.emitC repeats: false
+    return sp
+}
+
+# dumpSpec -- what `zc dump` takes: compileSpec's members and --canon, which
+# asks for the id-normalized model. --dump-sql names the file, as -o does.
+dumpSpec: function out cli.Spec is {
+    sp: compileSpec
+    addSwitch :sp name: opt.canon
+    addValue :sp name: opt.dumpSql repeats: false
+    return sp
+}
+
+# bareSpec -- the command line with no command: a unit, and --emit-c or
+# --dump-sql to say what to write
+bareSpec: function out cli.Spec is {
+    sp: compileSpec
+    addEmitSwitches :sp
+    addValue :sp name: opt.emitC repeats: false
+    addValue :sp name: opt.dumpSql repeats: false
+    return sp
+}
+
+# envSpec -- the command line of `zc env`: only what its report resolves
+envSpec: function out cli.Spec is {
+    sp: newSpec prog: "zc"
+    addToolchain :sp
+    return sp
+}
+
+# cobjSpec -- the command line of `zc cobj`: the emitted file and the compiler
+# that will link it
+cobjSpec: function out cli.Spec is {
+    sp: newSpec prog: "zc"
+    addToolchain :sp
+    addValue :sp name: opt.cflags repeats: false
+    addOperand :sp name: operand.cFile
+    return sp
+}
+
+# commandSpec -- the spec of the command whose slot in zcWord is `subW`; the
+# one with no command for any other slot
+commandSpec: function {subW: u64} out cli.Spec is {
+    if subW == zcWord.slot.vBuild then return buildSpec
+    if subW == zcWord.slot.vRun then return runSpec
+    if subW == zcWord.slot.vEmit then return emitSpec
+    if subW == zcWord.slot.vDump then return dumpSpec
+    if subW == zcWord.slot.vEnv then return envSpec
+    if subW == zcWord.slot.vCobj then return cobjSpec
+    return bareSpec
+}
+
+# refused -- says why `spec` refuses the command line, in cli's sentence for
+# `e`, and where the options are listed when it names one zc does not know;
+# answers wrongUsage
+refused: function {spec: cli.Spec.view e: cli.CliError.view} out i32 is {
+    why: cli.errorText :spec :e
+    if e.unknownFlag then why.append "; `zc help` lists the options"
+    io.eprintln why
+    return wrongUsage
+}
+
+# missing -- refuses a command line that leaves out the operand `name`, in
+# cli's sentence; answers wrongUsage
+missing: function {spec: cli.Spec.view name: StringView} out i32 is {
+    return (refused :spec e: cli.CliError.missingRequired name.string)
+}
+
+# surplusRefused -- says that `p` holds an operand its command does not take;
+# false when it holds none
+surplusRefused: function {spec: cli.Spec.view p: cli.Parsed.view} out bool is {
+    if p.extraArgs.length == 0 then return false
+    io.eprintln "\{spec.programName}: unexpected argument '\{p.extraArgs.get i: 0}'"
+    return true
+}
+
+# textOf -- the value `v` holds, empty when it holds none: an option or an
+# operand that was not written
+textOf: function {v: (Option String).view} out String is {
+    match (
+        v
+    ) case some then {
+        return v.copy
+    } case none then {
+        return "".string
+    }
+}
+
+# answerInline -- -h / --help and -V / --version written after a command: the
+# help of the command `sub` names (the general usage when it names none), or
+# the version, and stop
+answerInline: function {p: cli.Parsed.view zv: zast.Vocab.view sub: StringView} is {
+    if (p.hasFlag name: opt.help) then {
+        if sub.length > 0 then printCommandHelp :zv cmd: sub else printUsage
+        os.exit code: 0
+    }
+    if (p.hasFlag name: opt.version) then {
+        printVersion
+        os.exit code: 0
+    }
 }
 
 # printUsage -- the general help text (stderr): command groups, then flags.
@@ -219,6 +446,8 @@ printUsage: function is {
     io.eprintln "  --cflags STR  --ldflags STR  --save-temps  --time  --fast-hash"
     io.eprintln "  --readable-names  --mark-natives  --eager"
     io.eprintln "  --system DIR  --tcc-lib DIR  -h/--help  -V/--version"
+    io.eprintln "A command takes its own flags only (zc help <command>). A value is"
+    io.eprintln "written `--name VALUE` or `--name=VALUE`."
 }
 
 # printCommandHelp -- detailed help for one command (stderr).
@@ -229,13 +458,17 @@ printCommandHelp: function {zv: zast.Vocab.view cmd: StringView} is {
         io.eprintln "Compile <src> to a native executable."
         io.eprintln "Output goes to -o OUT, else <unit> (<unit>.exe for windows targets) in the"
         io.eprintln "project's directory (project.zd's outputDir moves it), or outside a project in ."
-        io.eprintln "Flags: --release --cc CC --cc-mode spawn|inproc --target TRIPLE"
-        io.eprintln "       --save-temps"
-        io.eprintln "       --cflags STR --ldflags STR --src DIR --tcc-lib DIR"
+        io.eprintln "Flags: --src DIR (may repeat) --system DIR --release"
+        io.eprintln "       --cc CC --cc-mode spawn|inproc --tcc-lib DIR --target TRIPLE"
+        io.eprintln "       --cflags STR --ldflags STR --save-temps --time"
+        io.eprintln "       --fast-hash --readable-names --eager"
+        io.eprintln "       --nativec-files --mark-natives"
     } else if w == zcWord.slot.vRun then {
-        io.eprintln "usage: zc run <src> [args] [flags]"
-        io.eprintln "Build <src>, then run it. Flags before <src> configure the build;"
-        io.eprintln "args after <src> (or after --) are passed to the program."
+        io.eprintln "usage: zc run <src> [flags] [args]"
+        io.eprintln "Build <src>, then run it. It takes the flags of build, before <src> or"
+        io.eprintln "after it. The first argument after <src> that is no flag starts the"
+        io.eprintln "program's arguments, and so does `--`: everything from there on is"
+        io.eprintln "passed to the program, a flag of its own among them."
         io.eprintln "The program's own exit code is propagated."
     } else if w == zcWord.slot.vEmit then {
         io.eprintln "usage: zc emit <src> [flags]"
@@ -244,10 +477,14 @@ printCommandHelp: function {zv: zast.Vocab.view cmd: StringView} is {
         io.eprintln "--mark-natives writes a comment line before each piece of C a unit's"
         io.eprintln "nativec.zd rendered, naming the row and the file and line it is written"
         io.eprintln "at; without those lines the C is the same."
+        io.eprintln "It takes the flags of build, without --save-temps."
     } else if w == zcWord.slot.vDump then {
         io.eprintln "usage: zc dump <src> [--canon] [flags]"
         io.eprintln "Dump the typecheck model as SQL to -o FILE (or stdout)."
         io.eprintln "--canon emits the id-normalized model instead."
+        io.eprintln "Flags: --src DIR (may repeat) --system DIR --release --eager"
+        io.eprintln "       --cc CC --cc-mode spawn|inproc --tcc-lib DIR --target TRIPLE"
+        io.eprintln "       --cflags STR --ldflags STR --fast-hash --readable-names"
     } else if w == zcWord.slot.vNatives then {
         io.eprintln "usage: zc natives show WHAT [--c] [--system DIR]"
         io.eprintln "       zc natives check rows [UNITDIR] [--system DIR]"
@@ -287,15 +524,21 @@ printCommandHelp: function {zv: zast.Vocab.view cmd: StringView} is {
         io.eprintln "usage: zc explain <code>"
         io.eprintln "Explain a diagnostic error code, e.g. zc explain E0200."
     } else if w == zcWord.slot.vEnv then {
-        io.eprintln "usage: zc env"
+        io.eprintln "usage: zc env [--system DIR] [--cc CC] [--cc-mode MODE] [--tcc-lib DIR]"
+        io.eprintln "              [--target TRIPLE]"
         io.eprintln "Print resolved tool paths and settings: the system and tcc dirs,"
         io.eprintln "the C compiler, the target triple, and the version."
     } else if w == zcWord.slot.vCobj then {
-        io.eprintln "usage: zc cobj <file.c> [--cc CC] [--target TRIPLE] [--cc-mode MODE] [--tcc-lib DIR] [--cflags STR]"
+        io.eprintln "usage: zc cobj <file.c> [--cc CC] [--target TRIPLE] [--cc-mode MODE] [--tcc-lib DIR]"
+        io.eprintln "               [--cflags STR] [--system DIR]"
         io.eprintln "Compile each C source the emitted file's `/* zcsrc: */` header names (a unit's"
         io.eprintln "vendored library) with the compiler that will link it, into the object cache,"
         io.eprintln "and print each object's path: link them after the .c file. Cached by source,"
         io.eprintln "compiler, target and defines; $ZC_OBJ_CACHE moves the cache."
+    } else if w == zcWord.slot.vInit then {
+        io.eprintln "usage: zc init [dir]"
+        io.eprintln "Make dir (default .) a project: write its project.zd, and a main.z when"
+        io.eprintln "it holds no unit."
     } else if w == zcWord.slot.vVersion then {
         io.eprintln "usage: zc version"
         io.eprintln "Print the compiler version."
@@ -765,18 +1008,6 @@ runExplain: function {codeArg: StringView} is {
     }
 }
 
-# flagValue -- the value a value-taking flag consumes. A flag that ends the
-# command line is a usage error and exits 2 naming the flag; without this the
-# argument loop reads one past the end and the runtime aborts with an index
-# message that names nothing the caller can act on.
-flagValue: function {argv: (List String).view i: u64 n: u64 flagName: StringView} out String is {
-    if (i + 1) < n then return (argv.get i: i + 1).copy
-    fm: "zc: \{flagName} needs a value"
-    io.eprintln fm
-    os.exit code: 2
-    return "".string
-}
-
 # dispatchHelpVerb -- the verbs that only print and stop: -h, --help,
 # help [command], -V, --version and version. Anything else returns.
 dispatchHelpVerb: function {argv: (List String).view n: u64 zv: zast.Vocab.view w: u64} is {
@@ -811,35 +1042,13 @@ dispatchHelpVerb: function {argv: (List String).view n: u64 zv: zast.Vocab.view 
 }
 
 # dispatchToolVerb -- the verbs that do work of their own before any unit is
-# named: `explain`, the natives table, and the three that shim through to zl.
-# Anything else returns.
-dispatchToolVerb: function {argv: (List String).borrow n: u64 w: u64 zv: zast.Vocab.view} is {
-    if w == zcWord.slot.vExplain then {
-        if n > 2 then {
-            ec: argv.get i: 2
-            runExplain codeArg: ec.stringView
-        } else {
-            io.eprintln "zc explain: missing error code (e.g. zc explain E0200)"
-            os.exit code: 2
-        }
-        os.exit code: 0
-    }
-    if w == zcWord.slot.vInit then {
-        idir: ".".string
-        if n > 2 then idir = (argv.get i: 2).copy
-        ir: zproject.initProject dir: idir.stringView
-        if ir.ok.not then {
-            io.eprintln ir.text
-            os.exit code: 2
-        }
-        print ir.text.stringView.trim
-        os.exit code: 0
-    }
-    if w == zcWord.slot.vNatives then os.exit code: (runNatives :argv :n :zv)
-    if w == zcWord.slot.vData then {
-        rcd: runData :argv :n :zv
-        os.exit code: rcd
-    }
+# named: `explain`, `init`, the natives table, `data`, and the three that shim
+# through to zl. Anything else returns.
+dispatchToolVerb: function {argv: (List String).borrow w: u64 zv: zast.Vocab.view} is {
+    if w == zcWord.slot.vExplain then os.exit code: (explainCommand :zv)
+    if w == zcWord.slot.vInit then os.exit code: (initCommand :zv)
+    if w == zcWord.slot.vNatives then os.exit code: (nativesCommand :argv :zv)
+    if w == zcWord.slot.vData then os.exit code: (dataCommand :zv)
     if w == zcWord.slot.vFmt then {
         rcf: runZlShim verb: "fmt" :argv
         os.exit code: rcf
@@ -854,145 +1063,155 @@ dispatchToolVerb: function {argv: (List String).borrow n: u64 w: u64 zv: zast.Vo
     }
 }
 
-# NativesArgs -- `zc natives`' arguments, as nativesArgs reads them
-NativesArgs: class {
-    # the subcommand's word (zcWord): show, check, conversions or source
-    sub: u64
-    # show's WHAT, check's check, source's FILE
-    what: String
-    # check rows' UNITDIR: a unit's folder holding its nativec.zd
-    unitDir: String
-    # --c: show prints only the C
-    onlyC: bool
-    # --system DIR
-    sysFlag: String
-    # --emitter FILE: the emitter's source, which `check needs` and `check views`
-    # read
-    emitter: String
-    # --register FILE: the register `check views` reads
-    register: String
-    # an argument none of these is, already reported
-    bad: bool
+# explainCommand -- `zc explain <code>`; answers the exit code
+explainCommand: function {zv: zast.Vocab.view} out i32 is {
+    sp: newSpec prog: "zc explain"
+    addOperand :sp name: operand.code
+    pr: cli.parse spec: sp args: os.args first: 2
+    match (
+        pr
+    ) case ok then {
+        answerInline p: pr :zv sub: "explain"
+        if (surplusRefused spec: sp p: pr) then return wrongUsage
+        if (pr.given name: operand.code).not then return (missing spec: sp name: operand.code)
+        code: textOf v: (pr.positional name: operand.code)
+        runExplain codeArg: code.stringView
+        return 0
+    } case err then {
+        return (refused spec: sp e: pr)
+    }
 }
 
-# nativesArgs -- `zc natives`' arguments after the command: the subcommand,
-# the word it takes (show's WHAT, check's check, source's FILE), check rows'
-# UNITDIR, then flags
-nativesArgs: function {argv: (List String).view n: u64 zv: zast.Vocab.view} out NativesArgs is {
-    r: (
-        NativesArgs
-        sub: (zv.slotOf text: (argv.get i: 2).stringView)
-        what: String
-        unitDir: String
-        onlyC: false
-        sysFlag: String
-        emitter: String
-        register: String
-        bad: false
-    )
-    i: nativesWords :argv :n :r
-    if r.bad then return r
-    for i < n loop {
-        a: (argv.get :i).copy
-        i = i + 1
-        fw: zv.slotOf text: a.stringView
-        if fw == zcWord.slot.fOnlyC then {
-            r.onlyC = true
-            continue
+# initCommand -- `zc init [dir]`: make `dir`, the working directory when none
+# is named, a project; answers the exit code
+initCommand: function {zv: zast.Vocab.view} out i32 is {
+    sp: newSpec prog: "zc init"
+    addOperand :sp name: operand.dir
+    pr: cli.parse spec: sp args: os.args first: 2
+    match (
+        pr
+    ) case ok then {
+        answerInline p: pr :zv sub: "init"
+        if (surplusRefused spec: sp p: pr) then return wrongUsage
+        idir: ".".string
+        if (pr.given name: operand.dir) then idir = textOf v: (pr.positional name: operand.dir)
+        ir: zproject.initProject dir: idir.stringView
+        if ir.ok.not then {
+            io.eprintln ir.text
+            return wrongUsage
         }
-        if i >= n then {
-            io.eprintln "zc natives: unexpected argument '\{a}'"
-            r.bad = true
-            return r
-        }
-        v: (argv.get :i).copy
-        i = i + 1
-        if fw == zcWord.slot.fSystem then {
-            r.sysFlag = v.take
-        } else if fw == zcWord.slot.fEmitter then {
-            r.emitter = v.take
-        } else if fw == zcWord.slot.fRegister then {
-            r.register = v.take
-        } else {
-            io.eprintln "zc natives: unexpected argument '\{a}'"
-            r.bad = true
-            return r
-        }
+        print ir.text.stringView.trim
+        return 0
+    } case err then {
+        return (refused spec: sp e: pr)
     }
-    return r
 }
 
-# nativesWords -- the word `r`'s subcommand takes (show's WHAT, check's check,
-# source's FILE) and check rows' UNITDIR, read onto `r`; where the flags begin
-nativesWords: function {argv: (List String).view n: u64 r: NativesArgs} out u64 is {
-    i: 3.u64
-    takesWord: (
-        (r.sub == zcWord.slot.nShow) or
-        (r.sub == zcWord.slot.nCheck) or
-        (r.sub == zcWord.slot.nSource)
-    )
-    if takesWord.not then return i
-    if i >= n then {
-        io.eprintln "zc natives \{argv.get i: 2}: missing its argument (zc help natives)"
-        r.bad = true
-        return i
-    }
-    r.what = (argv.get :i).copy
-    i = i + 1
-    # check rows' optional unit folder
-    if r.sub == zcWord.slot.nCheck when i < n when ((argv.get :i).stringView.startsWith "--"
-    ).not then {
-        r.unitDir = (argv.get :i).copy
-        i = i + 1
-    }
-    return i
+# nativesOperand -- the name of the operand the `zc natives` subcommand `sub`
+# (its slot in zcWord) needs: show's WHAT, check's CHECK, source's FILE; empty
+# for `conversions`, which takes none
+nativesOperand: function {sub: u64} out StringView is {
+    if sub == zcWord.slot.nShow then return operand.what
+    if sub == zcWord.slot.nCheck then return operand.check
+    if sub == zcWord.slot.nSource then return operand.file
+    return ""
 }
 
-# runNatives -- `zc natives SUB ...`: `show WHAT`, what zc carries for WHAT;
-# `check WHAT`, a check of the rows (of a user unit's with UNITDIR);
-# `conversions`, the conversion rows the numeric rule gives
-# (znativecheck.nativeConvRows); `source FILE`, the generated unit the nativec
-# files under the system directory make (znativec.servedText). Bare, the
-# usage. Answers the exit code.
-runNatives: function {argv: (List String).view n: u64 zv: zast.Vocab.view} out i32 is {
-    if n <= 2 then {
+# nativesSpec -- the command line of the `zc natives` subcommand `sub` (its
+# slot in zcWord), after the subcommand's own word
+nativesSpec: function {sub: u64} out cli.Spec is {
+    sp: newSpec prog: "zc natives"
+    if sub == zcWord.slot.nConversions then return sp
+    addValue :sp name: opt.system repeats: false
+    addOperand :sp name: (nativesOperand :sub)
+    if sub == zcWord.slot.nShow then addSwitch :sp name: opt.onlyC
+    if sub == zcWord.slot.nCheck then {
+        addOperand :sp name: operand.unitDir
+        addValue :sp name: opt.emitter repeats: false
+        addValue :sp name: opt.register repeats: false
+    }
+    return sp
+}
+
+# nativesCommand -- `zc natives SUB ...`: `show WHAT`, what zc carries for
+# WHAT; `check CHECK`, a check of the rows (of a user unit's with UNITDIR);
+# `conversions`, the conversion rows the numeric rule gives; `source FILE`,
+# the generated unit the nativec files under the system directory make. Bare,
+# the usage. Answers the exit code.
+nativesCommand: function {argv: (List String).view zv: zast.Vocab.view} out i32 is {
+    if argv.length <= 2 then {
         printCommandHelp :zv cmd: "natives"
-        return 2
+        return wrongUsage
     }
-    na: nativesArgs :argv :n :zv
-    if na.bad then return 2
-    sysdir: zcheck.resolveSystemDir flagVal: na.sysFlag.stringView
-    if na.sub == zcWord.slot.nCheck then return (
-        znativecheck.checkNatives
-        what: na.what.stringView
-        systemdir: sysdir.stringView
-        emitter: na.emitter.stringView
-        register: na.register.stringView
-        unitdir: na.unitDir.stringView
+    sub: zv.slotOf text: (argv.get i: 2).stringView
+    if (sub == zcWord.slot.fH) or (sub == zcWord.slot.fHelp) then {
+        printCommandHelp :zv cmd: "natives"
+        return 0
+    }
+    known: (
+        (sub == zcWord.slot.nShow) or
+        (sub == zcWord.slot.nCheck) or
+        (sub == zcWord.slot.nConversions) or
+        (sub == zcWord.slot.nSource)
     )
-    if na.sub == zcWord.slot.nShow then {
-        t: znativec.showNative what: na.what.stringView systemdir: sysdir.stringView c: na.onlyC
+    if known.not then {
+        io.eprintln "zc natives: unknown subcommand '\{(
+            argv.get
+            i: 2
+        )}' (show, check, conversions, source)"
+        return wrongUsage
+    }
+    sp: nativesSpec :sub
+    pr: cli.parse spec: sp args: os.args first: 3
+    match (
+        pr
+    ) case ok then {
+        answerInline p: pr :zv sub: "natives"
+        if (surplusRefused spec: sp p: pr) then return wrongUsage
+        needs: nativesOperand :sub
+        if needs.length > 0 when (pr.given name: needs).not then {
+            return (missing spec: sp name: needs)
+        }
+        return (runNatives :sub p: pr what: (textOf v: (pr.positional name: needs)).stringView)
+    } case err then {
+        return (refused spec: sp e: pr)
+    }
+}
+
+# runNatives -- the `zc natives` subcommand `sub` (its slot in zcWord) on its
+# command line `p`; `what` is the operand it needs. Answers the exit code.
+runNatives: function {sub: u64 p: cli.Parsed.view what: StringView} out i32 is {
+    sysFlag: textOf v: (p.option name: opt.system)
+    sysdir: zcheck.resolveSystemDir flagVal: sysFlag.stringView
+    if sub == zcWord.slot.nCheck then return (
+        znativecheck.checkNatives
+        :what
+        systemdir: sysdir.stringView
+        emitter: (textOf v: (p.option name: opt.emitter)).stringView
+        register: (textOf v: (p.option name: opt.register)).stringView
+        unitdir: (textOf v: (p.positional name: operand.unitDir)).stringView
+    )
+    if sub == zcWord.slot.nShow then {
+        t: (
+            znativec.showNative
+            :what
+            systemdir: sysdir.stringView
+            c: (p.hasFlag name: opt.onlyC)
+        )
         if t.length == 0 then {
-            io.eprintln "zc natives: '\{na.what}' names no unit, row (unit.key), template or file zc carries"
+            io.eprintln "zc natives: '\{what}' names no unit, row (unit.key), template or file zc carries"
             return 1
         }
         print (t.stringView.substring from: 0 to: t.length - 1)
         return 0
     }
-    if na.sub == zcWord.slot.nConversions then {
-        print znativecheck.nativeConvRows
-        return 0
-    }
-    if na.sub == zcWord.slot.nSource then return (
+    if sub == zcWord.slot.nSource then return (
         writeServedSource
-        file: na.what.stringView
+        file: what
         systemdir: sysdir.stringView
     )
-    io.eprintln "zc natives: unknown subcommand '\{(
-        argv.get
-        i: 2
-    )}' (show, check, conversions, source)"
-    return 2
+    print znativecheck.nativeConvRows
+    return 0
 }
 
 # writeServedSource -- `zc natives source FILE`: the generated `nativec`
@@ -1012,69 +1231,39 @@ writeServedSource: function {file: StringView systemdir: StringView} out i32 is 
     } case ok then return 0
 }
 
-# runData -- `zc data <file.zd> [--src DIR]... [--system DIR]`: check the data
-# file and print its values (zdata.dumpText), or its errors and the count.
+# dataCommand -- `zc data <file.zd> [--src DIR]... [--system DIR]`: check the
+# data file and print its values (zdata.dumpText), or its errors and the count.
 # Answers the exit code.
-runData: function {argv: (List String).view n: u64 zv: zast.Vocab.view} out i32 is {
-    file: String
-    srcdirs: List String
-    sysFlag: String
-    i: 2.u64
-    for i < n loop {
-        a: (argv.get :i).copy
-        i = i + 1
-        fw: zv.slotOf text: a.stringView
-        if fw == zcWord.slot.fSrc when i < n then {
-            srcdirs.append from: (argv.get :i).copy
-            i = i + 1
-        } else if fw == zcWord.slot.fSystem when i < n then {
-            sysFlag = (argv.get :i).copy
-            i = i + 1
-        } else if file.length == 0 then {
-            file = a.copy
-        } else {
-            io.eprintln "zc data: unexpected argument '\{a}'"
-            return 2
+dataCommand: function {zv: zast.Vocab.view} out i32 is {
+    sp: newSpec prog: "zc data"
+    addValue :sp name: opt.src repeats: true
+    addValue :sp name: opt.system repeats: false
+    addOperand :sp name: operand.dataFile
+    pr: cli.parse spec: sp args: os.args first: 2
+    match (
+        pr
+    ) case ok then {
+        answerInline p: pr :zv sub: "data"
+        if (surplusRefused spec: sp p: pr) then return wrongUsage
+        if (pr.given name: operand.dataFile).not then {
+            return (missing spec: sp name: operand.dataFile)
         }
+        file: textOf v: (pr.positional name: operand.dataFile)
+        sysFlag: textOf v: (pr.option name: opt.system)
+        df: (
+            zdata.open
+            file: file.stringView
+            srcdirs: (pr.optionAll name: opt.src)
+            systemdir: (zcheck.resolveSystemDir flagVal: sysFlag.stringView).stringView
+        )
+        reportDataErrors :df
+        # one line a definition, each ending its line; print ends the last
+        t: zdata.dumpText f: df
+        if t.length > 0 then print (t.stringView.substring from: 0 to: t.length - 1)
+        return 0
+    } case err then {
+        return (refused spec: sp e: pr)
     }
-    if file.length == 0 then {
-        io.eprintln "zc data: missing the data file (e.g. zc data settings.zd)"
-        return 2
-    }
-    df: (
-        zdata.open
-        file: file.stringView
-        :srcdirs
-        systemdir: (zcheck.resolveSystemDir flagVal: sysFlag.stringView).stringView
-    )
-    reportDataErrors :df
-    # one line a definition, each ending its line; print ends the last
-    t: zdata.dumpText f: df
-    if t.length > 0 then print (t.stringView.substring from: 0 to: t.length - 1)
-    return 0
-}
-
-# dispatchInlineVerb -- the print-and-stop flags accepted anywhere on the line,
-# after the subcommand rather than instead of it. Nothing returns true: each
-# one exits, and the caller reads the result like any other flag group.
-dispatchInlineVerb: function {zv: zast.Vocab.view w: u64 sub: StringView} out bool is {
-    if w == zcWord.slot.fH then {
-        printCommandHelp :zv cmd: sub
-        os.exit code: 0
-    }
-    if w == zcWord.slot.fHelp then {
-        printCommandHelp :zv cmd: sub
-        os.exit code: 0
-    }
-    if w == zcWord.slot.fV then {
-        printVersion
-        os.exit code: 0
-    }
-    if w == zcWord.slot.fVersion then {
-        printVersion
-        os.exit code: 0
-    }
-    return false
 }
 
 # refuseUnknownCcMode -- the one value-taking flag that validates its VALUE and
@@ -1089,15 +1278,6 @@ refuseUnknownCcMode: function {zv: zast.Vocab.view mode: StringView named: Strin
     mm: "zc: \{named} must be 'spawn' or 'inproc', not '\{mode}'"
     io.eprintln mm
     os.exit code: 2
-}
-
-# argstep -- what reading one command-line argument decided.
-argstep: record {
-    # false when the argument named no flag, so the caller must judge it itself
-    taken: bool
-    # the index of the last argument consumed, one past the flag when the flag
-    # took a value
-    at: u64
 }
 
 # outmode -- what a run produces, which the subcommand and the flags decide
@@ -1193,156 +1373,56 @@ ZcFlags: class {
     markNatives: bool
     # --eager: typecheck every definition, not only what main reaches
     eagerCheck: bool
-    # the arguments after `--`, which belong to the program and not to zc
+    # under `run`, the arguments that belong to the program and not to zc:
+    # everything after `--`, or from the first operand after the unit on
     progArgs: List String
-    # whether `--` has been seen
-    inProgArgs: bool
 } as {
-    # takeProgArg -- once `--` has been seen, every remaining argument belongs
-    # to the program rather than to zc.
-    takeProgArg: function {:this w: u64 arg: String.view} out bool is {
-        if this.inProgArgs then {
-            this.progArgs.append from: arg.copy
-            return true
+    # read -- what the command line `p` set. A name the command's spec does not
+    # declare was not written, so one reading serves every command. `named` is
+    # the name of the operand that names the unit, or the file `cobj` reads.
+    read: function {p: cli.Parsed.view named: StringView} out this is {
+        progArgs: List String
+        for each a: p.extraArgs loop progArgs.append from: a.copy
+        return (
+            meta.create
+            unitname: (textOf v: (p.positional name: named))
+            srcdirs: (p.optionAll name: opt.src)
+            systemFlag: (textOf v: (p.option name: opt.system))
+            emitTarget: (textOf v: (p.option name: opt.emitC))
+            dumpSqlTarget: (textOf v: (p.option name: opt.dumpSql))
+            outPath: (textOf v: (p.option name: opt.output))
+            outputDir: String
+            ccFlag: (textOf v: (p.option name: opt.cc))
+            ccModeFlag: (textOf v: (p.option name: opt.ccMode))
+            tccLibFlag: (textOf v: (p.option name: opt.tccLib))
+            targetTriple: (textOf v: (p.option name: opt.target))
+            cflags: (textOf v: (p.option name: opt.cflags))
+            ldflags: (textOf v: (p.option name: opt.ldflags))
+            canon: (p.hasFlag name: opt.canon)
+            release: (p.hasFlag name: opt.release)
+            saveTemps: (p.hasFlag name: opt.saveTemps)
+            timed: (p.hasFlag name: opt.timed)
+            fastHash: (p.hasFlag name: opt.fastHash)
+            readableNames: (p.hasFlag name: opt.readableNames)
+            nativecFiles: (p.hasFlag name: opt.nativecFiles)
+            markNatives: (p.hasFlag name: opt.markNatives)
+            eagerCheck: (p.hasFlag name: opt.eager)
+            :progArgs
+        )
+    }
+
+    # refusesSurplus -- says that `p` holds an operand its command does not
+    # take: one unit is all a command compiles, and only `run` passes operands
+    # on. False when it holds none.
+    refusesSurplus: function {t: this.view p: cli.Parsed.view} out bool is {
+        if p.extraArgs.length == 0 then return false
+        tok: p.extraArgs.get i: 0
+        if t.unitname.length > 0 then {
+            io.eprintln "zc: unexpected argument '\{tok}': the unit is already '\{t.unitname}'"
+        } else {
+            io.eprintln "zc: unexpected argument '\{tok}'"
         }
-        if w != zcWord.slot.fProgArgs then return false
-        this.inProgArgs = true
         return true
-    }
-
-    # setSwitch -- the flags that take no value. True when `w` named one.
-    setSwitch: function {:this w: u64} out bool is {
-        if w == zcWord.slot.fCanon then {
-            this.canon = true
-            return true
-        }
-        if w == zcWord.slot.fRelease then {
-            this.release = true
-            return true
-        }
-        if w == zcWord.slot.fSaveTemps then {
-            this.saveTemps = true
-            return true
-        }
-        if w == zcWord.slot.fTime then {
-            this.timed = true
-            return true
-        }
-        if w == zcWord.slot.fFastHash then {
-            this.fastHash = true
-            return true
-        }
-        if w == zcWord.slot.fReadableNames then {
-            this.readableNames = true
-            return true
-        }
-        if w == zcWord.slot.fNativecFiles then {
-            this.nativecFiles = true
-            return true
-        }
-        if w == zcWord.slot.fMarkNatives then {
-            this.markNatives = true
-            return true
-        }
-        if w == zcWord.slot.fEager then {
-            this.eagerCheck = true
-            return true
-        }
-        return false
-    }
-
-    # takePathFlag -- the flags naming a file or a directory.
-    takePathFlag: function {
-        :this
-        # the argument's slot in zcWord
-        w: u64
-        argv: (List String).view
-        i: u64
-        n: u64
-    } out argstep is {
-        if w == zcWord.slot.fSrc then {
-            this.srcdirs.append from: (flagValue :argv :i :n flagName: "--src")
-            return (argstep taken: true at: i + 1)
-        }
-        if w == zcWord.slot.fSystem then {
-            this.systemFlag = flagValue :argv :i :n flagName: "--system"
-            return (argstep taken: true at: i + 1)
-        }
-        if w == zcWord.slot.fEmitC then {
-            this.emitTarget = flagValue :argv :i :n flagName: "--emit-c"
-            return (argstep taken: true at: i + 1)
-        }
-        if w == zcWord.slot.fDumpSql then {
-            this.dumpSqlTarget = flagValue :argv :i :n flagName: "--dump-sql"
-            return (argstep taken: true at: i + 1)
-        }
-        if w == zcWord.slot.fOut then {
-            this.outPath = flagValue :argv :i :n flagName: "-o"
-            return (argstep taken: true at: i + 1)
-        }
-        return (argstep taken: false at: i)
-    }
-
-    # takeToolFlag -- the flags naming the C toolchain and what to hand it.
-    takeToolFlag: function {
-        :this
-        zv: zast.Vocab.view
-        # the argument's slot in zcWord
-        w: u64
-        argv: (List String).view
-        i: u64
-        n: u64
-    } out argstep is {
-        if w == zcWord.slot.fCc then {
-            this.ccFlag = flagValue :argv :i :n flagName: "--cc"
-            return (argstep taken: true at: i + 1)
-        }
-        if w == zcWord.slot.fCcMode then {
-            this.ccModeFlag = flagValue :argv :i :n flagName: "--cc-mode"
-            refuseUnknownCcMode :zv mode: this.ccModeFlag.stringView named: "--cc-mode"
-            return (argstep taken: true at: i + 1)
-        }
-        if w == zcWord.slot.fTccLib then {
-            this.tccLibFlag = flagValue :argv :i :n flagName: "--tcc-lib"
-            return (argstep taken: true at: i + 1)
-        }
-        if w == zcWord.slot.fTarget then {
-            this.targetTriple = flagValue :argv :i :n flagName: "--target"
-            return (argstep taken: true at: i + 1)
-        }
-        if w == zcWord.slot.fCflags then {
-            this.cflags = flagValue :argv :i :n flagName: "--cflags"
-            return (argstep taken: true at: i + 1)
-        }
-        if w == zcWord.slot.fLdflags then {
-            this.ldflags = flagValue :argv :i :n flagName: "--ldflags"
-            return (argstep taken: true at: i + 1)
-        }
-        return (argstep taken: false at: i)
-    }
-
-    # takeOperand -- an argument naming no flag: the unit, and after it (under
-    # `run`) the program's own arguments. Anything else is refused, never
-    # dropped: an option zc does not know, or a second operand where one unit
-    # is all a command takes.
-    takeOperand: function {:this arg: String.view isRun: bool} is {
-        named: this.unitname.length > 0
-        if named when isRun then {
-            this.progArgs.append from: arg.copy
-            this.inProgArgs = true
-            return
-        }
-        if (arg.length > 1) and (arg.stringView.startsWith prefix: "-") then {
-            uo: "zc: unknown option '\{arg}'; `zc help` lists the options"
-            io.eprintln uo
-            os.exit code: 2
-        }
-        if named then {
-            ua: "zc: unexpected argument '\{arg}': the unit is already '\{this.unitname}'"
-            io.eprintln ua
-            os.exit code: 2
-        }
-        this.unitname = arg.copy
     }
 
     # unitIsPath -- the unit was named by its file (`hello.z`, `sub/hello`)
@@ -1452,68 +1532,6 @@ ZcFlags: class {
         }
         if this.srcdirs.length == 0 then this.srcdirs.append from: ".".string
     }
-}
-
-# parseZcArgs -- every argument after the subcommand, read into a fresh
-# ZcFlags: the print-and-stop flags first, then the switches, then the two
-# groups of value-taking flags, and anything left is the unit or the program's
-# own argument.
-parseZcArgs: function {
-    argv: (List String).view
-    n: u64
-    zv: zast.Vocab.view
-    sub: StringView
-    unitname: String.view
-    isRun: bool
-} out ZcFlags is {
-    cf: (
-        ZcFlags
-        unitname: unitname.copy
-        srcdirs: List String
-        systemFlag: String
-        emitTarget: String
-        dumpSqlTarget: String
-        outPath: String
-        outputDir: String
-        ccFlag: String
-        ccModeFlag: String
-        tccLibFlag: String
-        targetTriple: String
-        cflags: String
-        ldflags: String
-        canon: false
-        release: false
-        saveTemps: false
-        timed: false
-        fastHash: false
-        readableNames: false
-        nativecFiles: false
-        markNatives: false
-        eagerCheck: false
-        progArgs: List String
-        inProgArgs: false
-    )
-    i: 2.u64
-    for i < n loop {
-        a: argv.get :i
-        w: zv.slotOf text: a.stringView
-        known: cf.takeProgArg :w arg: a
-        if known.not then known = dispatchInlineVerb :zv :w :sub
-        if known.not then known = cf.setSwitch :w
-        if known.not then {
-            sp: cf.takePathFlag :w :argv :i :n
-            known = sp.taken
-            i = sp.at
-        }
-        if known.not then {
-            st9: cf.takeToolFlag :zv :w :argv :i :n
-            known = st9.taken
-            i = st9.at
-        }
-        if known.not then cf.takeOperand arg: a :isRun
-        i = i + 1
-    }
-    return cf
 }
 
 # reportDataErrors -- a data file's parse error, or every error its check
@@ -2061,32 +2079,92 @@ mountBuild: function {
     return roots.root
 }
 
-# CLI entry point: read the verbs answered before any flag, parse the rest of
-# the command line, then produce what the subcommand and the flags asked for --
-# C, a model dump, or a native executable, run when `run` asked for it.
+# CLI entry point: read the verbs answered before any flag, then hand the
+# command line to the command that compiles.
 main: function is {
     argv: os.args
     n: argv.length
     if n < 2 then {
         printUsage
-        os.exit code: 2
+        os.exit code: wrongUsage
     }
     firstArg: (argv.get i: 1).copy
     zv: zast.Vocab.create block: zcWord
     w1: zv.slotOf text: firstArg.stringView
     dispatchHelpVerb :argv :n :zv w: w1
-    dispatchToolVerb :argv :n w: w1 :zv
-    sub: String
-    subW: zv.none
-    unitname: String
+    dispatchToolVerb :argv w: w1 :zv
+    rc: i32
     if (isPipelineVerb w: w1) then {
-        sub = firstArg.copy
-        subW = w1
+        rc = compileCommand :zv sub: firstArg.stringView subW: w1 first: 2
     } else {
-        unitname = firstArg.copy
+        # with no command the unit stands where the command would
+        rc = compileCommand :zv sub: "" subW: zv.none first: 1
     }
-    isRun: subW == zcWord.slot.vRun
-    cf: parseZcArgs :argv :n :zv sub: sub.stringView :unitname :isRun
+    # a command that did its work ends by returning, so everything it and
+    # this function hold is released; os.exit releases nothing
+    if rc != 0 then os.exit code: rc
+}
+
+# compileCommand -- `build`, `run`, `emit`, `dump`, `env`, `cobj`, or a unit
+# with no command: read the command line by the command's own spec, then
+# produce what the command and the flags ask for. `sub` is the command as
+# written, empty when there is none, and `subW` its slot in zcWord; the
+# arguments start at `first`. Answers the exit code of a refused command line;
+# anything later stops zc itself.
+compileCommand: function {
+    zv: zast.Vocab.view
+    sub: StringView
+    subW: u64
+    first: u64
+} out i32 is {
+    sp: commandSpec :subW
+    pr: cli.parse spec: sp args: os.args :first
+    match (
+        pr
+    ) case ok then {
+        answerInline p: pr :zv :sub
+        named: operand.src
+        if subW == zcWord.slot.vCobj then named = operand.cFile
+        cf: ZcFlags.read p: pr :named
+        isRun: subW == zcWord.slot.vRun
+        if isRun.not when (cf.refusesSurplus p: pr) then return wrongUsage
+        if sub.length == 0 when (bareDumpRefused spec: sp p: pr) then return wrongUsage
+        if subW == zcWord.slot.vCobj when cf.unitname.length == 0 then {
+            return (missing spec: sp name: operand.cFile)
+        }
+        if (pr.given name: opt.ccMode) then {
+            refuseUnknownCcMode :zv mode: cf.ccModeFlag.stringView named: opt.ccMode
+        }
+        compileUnits :cf :zv :sub :subW
+        return 0
+    } case err then {
+        return (refused spec: sp e: pr)
+    }
+}
+
+# bareDumpRefused -- with no command, --dump-sql asks for the model: says that
+# the command line also asks for C (--emit-c), or holds a flag only a command
+# that writes C reads. False when it does neither.
+bareDumpRefused: function {spec: cli.Spec.view p: cli.Parsed.view} out bool is {
+    if (p.given name: opt.dumpSql).not then return false
+    if (p.given name: opt.emitC) then {
+        io.eprintln "zc: --emit-c and --dump-sql name two different outputs"
+        return true
+    }
+    unread: List String
+    if (p.hasFlag name: opt.timed) then unread.append from: opt.timed.string
+    if (p.hasFlag name: opt.nativecFiles) then unread.append from: opt.nativecFiles.string
+    if (p.hasFlag name: opt.markNatives) then unread.append from: opt.markNatives.string
+    if unread.length == 0 then return false
+    refused :spec e: cli.CliError.unknownFlag (unread.get i: 0).copy
+    return true
+}
+
+# compileUnits -- what the command `sub` (its slot in zcWord `subW`) and the
+# flags `cf` ask for: find the project, then C, a model dump, or a native
+# executable, run when `run` asked for it -- for the unit the command line
+# names, else for the project's programs.
+compileUnits: function {cf: ZcFlags zv: zast.Vocab.view sub: StringView subW: u64} is {
     # project.zd is checked against this zc's own stdlib, the --system the
     # command names or the one installed with it. The prelude read for it is
     # kept for each program, which reads on from it where it finds the same
@@ -2104,13 +2182,14 @@ main: function is {
     if subW == zcWord.slot.vCobj then printObjectsAndExit :cf :zv
     mode: (
         resolveOutMode
-        sub: sub.stringView
+        :sub
         :subW
         unitname: cf.unitname.stringView
         canon: cf.canon
         emitTarget: cf.emitTarget.stringView
         dumpSqlTarget: cf.dumpSqlTarget.stringView
     )
+    isRun: subW == zcWord.slot.vRun
     units: unitsToCompile :cf :pf :subW
     k: u64
     for each u: units loop {

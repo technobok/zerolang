@@ -1427,7 +1427,7 @@ perf: $(PERFBIN)
 # deletes write-only allocations; perf-elision measures that), a failed run and
 # allocs != frees. Above ALLOC_BASELINE fails; a commit raising it says why in
 # its message, and one lowering the count lowers it here.
-ALLOC_BASELINE := 2852417
+ALLOC_BASELINE := 2866340
 # ALLOC_LINE -- the one measurement every allocation number comes from.
 ALLOC_LINE = valgrind --tool=memcheck $(PERFRUN) 2>&1 | grep 'total heap usage' | sed 's/.*usage: //'
 
@@ -1909,9 +1909,11 @@ zlink-rules-guard:
 
 # refusal-guard -- zc refuses what it cannot honour, exit 2 and naming it, and the
 # honoured counterpart still works: --ldflags under inproc, bad or ambiguous
-# --target, tcc cross, f128 off x86-64, a trailing value flag, `zc explain` of a
-# foreign code, a missing root, a missing unit. Not error fixtures: those only
-# ever run --emit-c, which never reaches these paths.
+# --target, tcc cross, f128 off x86-64, a missing root, a missing unit. Not error
+# fixtures: those only ever run --emit-c, which never reaches these paths. A
+# command line zc refuses before it starts any work (an unknown option, an
+# option with no value, a surplus operand, `zc explain` of a foreign code) is a
+# case of the runner's usage kind, under tests/fixtures/usage.
 refusal-guard: bin/zc $(BUILDDIR)/tcc
 	@d=$(BUILDDIR)/refusal; rm -rf $$d; mkdir -p $$d; bad=0; \
 	bin/zc build hello --src examples --system lib/system --cc tcc --cc-mode spawn \
@@ -1969,27 +1971,6 @@ refusal-guard: bin/zc $(BUILDDIR)/tcc
 	  echo "refusal-guard FAIL: a HOST --target must still build and fold to the host (exit $$rc)"; \
 	  cat $$d/g.log; bad=1; \
 	fi; \
-	for fl in --src --system --emit-c --dump-sql -o --cc --cc-mode --tcc-lib --target --cflags --ldflags; do \
-	  bin/zc build hello --src examples --system lib/system $$fl > $$d/m.log 2>&1; rc=$$?; \
-	  if [ $$rc -ne 2 ] || ! grep -q -- "zc: $$fl needs a value" $$d/m.log; then \
-	    echo "refusal-guard FAIL: a trailing $$fl must exit 2 naming the flag, got $$rc"; \
-	    cat $$d/m.log; bad=1; \
-	  fi; \
-	done; \
-	for c in A001 L013; do \
-	  bin/zc explain $$c > $$d/x.log 2>&1; rc=$$?; \
-	  if [ $$rc -ne 2 ] || ! grep -q "run \`zl explain $$c\`" $$d/x.log; then \
-	    echo "refusal-guard FAIL: zc explain $$c must exit 2 pointing at zl explain, got $$rc"; \
-	    cat $$d/x.log; bad=1; \
-	  fi; \
-	done; \
-	for c in X0200 E02x0 E; do \
-	  bin/zc explain $$c > $$d/x.log 2>&1; rc=$$?; \
-	  if [ $$rc -ne 2 ] || ! grep -q "not an error code: $$c" $$d/x.log; then \
-	    echo "refusal-guard FAIL: zc explain $$c must be refused as no error code, got $$rc"; \
-	    cat $$d/x.log; bad=1; \
-	  fi; \
-	done; \
 	for c in E0200 e0200 0200 200; do \
 	  if [ "$$(bin/zc explain $$c 2>&1 | head -1)" != "ownership error" ]; then \
 	    echo "refusal-guard FAIL: zc explain $$c must explain E0200"; bad=1; \
@@ -2009,18 +1990,6 @@ refusal-guard: bin/zc $(BUILDDIR)/tcc
 	    cat $$d/u.log; bad=1; \
 	  fi; \
 	done; \
-	for arg in --output-dir --bogus-flag; do \
-	  bin/zc build hello --src examples --system lib/system $$arg x -o $$d/unk > $$d/unk.log 2>&1; rc=$$?; \
-	  if [ $$rc -ne 2 ] || [ -e $$d/unk ] || ! grep -q "unknown option '$$arg'" $$d/unk.log; then \
-	    echo "refusal-guard FAIL: an unknown option ($$arg) must be refused with exit 2, got $$rc"; \
-	    cat $$d/unk.log; bad=1; \
-	  fi; \
-	done; \
-	bin/zc emit hello --src examples --system lib/system extra -o $$d/opnd.c > $$d/opnd.log 2>&1; rc=$$?; \
-	if [ $$rc -ne 2 ] || [ -e $$d/opnd.c ] || ! grep -q "unexpected argument 'extra'" $$d/opnd.log; then \
-	  echo "refusal-guard FAIL: a second operand to zc emit must be refused with exit 2, got $$rc"; \
-	  cat $$d/opnd.log; bad=1; \
-	fi; \
 	if [ $$bad -ne 0 ]; then \
 	  echo "  zc never accepts a flag it will ignore: it names what it resolved and exits 2."; \
 	  exit 1; \
