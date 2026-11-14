@@ -23,9 +23,14 @@
 #   lexer / parser / program goldens for every example
 #   vfs      zvfs script dispatch
 #   smoke    per-unit no-arg binaries against <unit>_z/smoke.expected
+#   usage    a driver (zl, the runner itself) refuses a command line: what it
+#            says on stderr and its exit code match the case's expected files
 #   --heavy adds the self-host ASan run and the byte-identity fixpoint.
 #
 # Usage: ztestrunner --zc <zc> --cc gcc --root <repo> [--jobs N] [--heavy] [--report]
+#   `ztestrunner --help` lists every flag. The command line is read by `cli`:
+#   an option the runner does not declare, an option with no value, a number
+#   that is none and an operand are each refused on stderr with exit 2.
 #   --jobs defaults to os.cpuCount, so it follows the machine it runs on.
 #   --regen-lsp rewrites every tests/fixtures/lsp_golden/*.out from this run's
 #   answers instead of comparing against them.
@@ -892,35 +897,45 @@ deframeLsp: function {raw: StringView} out String is {
     return result
 }
 
-# runnerWord -- every word the runner reads off outside text: its flags, the
-# LSP frame header and the emitted C's `zlink:` comment. A word is classified by
-# its slot here (zast.Vocab), never by comparing its text.
+# runnerWord -- every word the runner reads off outside text: the LSP frame
+# header, the emitted C's `zlink:` comment, a case list's marker and its own
+# name. A word is classified by its slot here (zast.Vocab), never by comparing
+# its text.
 runnerWord: list {
     # a C compiler's flag naming tcc's runtime payload
     ccPayload: "-B"
-    fCcForward: "--cc-forward"
-    fReport: "--report"
-    fHeavy: "--heavy"
-    fSaveTemps: "--save-temps"
-    fRegenLsp: "--regen-lsp"
-    fDoccodeOnly: "--doccode-only"
-    fAgreeOnly: "--agree-only"
-    fArchOnly: "--arch-only"
-    fRunOnly: "--run-only"
-    fZc: "--zc"
-    fCc: "--cc"
-    fCcflags: "--ccflags"
-    fRoot: "--root"
-    fJobs: "--jobs"
-    fTimeout: "--timeout"
-    fTarget: "--target"
-    fExec: "--exec"
-    fTmp: "--tmp"
     lspHeader: "Content-Length: "
     zlinkOpen: "zlink:"
     zlinkClose: "*/"
     # a run case's third word: it checks something only POSIX has
     casePosix: "posix"
+    # the driver a USAGE case names when it runs the runner itself
+    ownName: "ztestrunner"
+} out staticlist StringView
+
+# opt -- the name of each flag and option the runner takes, as it is written
+# on the command line. The spec declares them and runnerFrom reads them back by
+# the same names.
+opt: list {
+    ccForward: "--cc-forward"
+    report: "--report"
+    heavy: "--heavy"
+    saveTemps: "--save-temps"
+    regenLsp: "--regen-lsp"
+    doccodeOnly: "--doccode-only"
+    agreeOnly: "--agree-only"
+    archOnly: "--arch-only"
+    runOnly: "--run-only"
+    help: "--help"
+    zc: "--zc"
+    cc: "--cc"
+    ccflags: "--ccflags"
+    root: "--root"
+    jobs: "--jobs"
+    timeout: "--timeout"
+    target: "--target"
+    exec: "--exec"
+    tmp: "--tmp"
 } out staticlist StringView
 
 # test-runner entry point: build the compiler, run the
@@ -3632,7 +3647,7 @@ runVfsCases: function {r: Runner} is {
 
 # runUsageCases -- the USAGE cases kind: a driver refusing a command line. Each
 # directory under tests/fixtures/usage is one case. Its `args` file is one
-# line: the driver's name (`zl`), then the arguments. The driver runs in the
+# line: the driver's name (`zl`, `ztestrunner`), then the arguments. The driver runs in the
 # repository root. What it printed on stderr is compared with expected.err, and
 # its exit code with the number in expected.exit.
 runUsageCases: function {r: Runner} is {
@@ -3673,20 +3688,37 @@ runUsageCase: function {r: Runner.view dir: StringView name: StringView} out boo
 }
 
 # usageArgv -- the command a USAGE case's `args` line gives. Its first word
-# names a driver, which is that program in the `bin` directory under `root`.
+# names a driver: that program in the `bin` directory under `root`, or, for
+# `ztestrunner`, the running runner itself.
 usageArgv: function {root: StringView caseDir: StringView} out List String is {
     argsP: "\{caseDir}/args"
     argsLine: slurp path: argsP.stringView
+    words: zast.Vocab.create block: runnerWord
     argv: List String
     for each tok: (argsLine.stringView.trim.split sep: " ") loop {
         if tok.length == 0 then continue
-        if argv.length == 0 then {
-            argv.append from: "\{root}/bin/\{tok}"
-        } else {
+        if argv.length > 0 then {
             argv.append from: tok.string
+        } else if (words.slotOf text: tok) == runnerWord.slot.ownName then {
+            argv.append from: ownPath
+        } else {
+            argv.append from: "\{root}/bin/\{tok}"
         }
     }
     return argv
+}
+
+# ownPath -- the running runner's own file, for a USAGE case that runs it; its
+# bare name where the system does not tell
+ownPath: function out String is {
+    ep: os.exePath
+    match (
+        ep
+    ) case ok then {
+        return ep.copy
+    } case err then {
+        return runnerWord.ownName.string
+    }
 }
 
 # runProjectCases -- the PROJECT cases kind: zc run inside a project. Each
@@ -4319,32 +4351,199 @@ runFixpoint: function {r: Runner} is {
     }
 }
 
-# newRunner -- a Runner at its defaults, before the command line is read:
-# `out/zc` under the current directory, built with gcc, one job per core, a
-# minute per case. The paths under the root are derived once the root is known.
-newRunner: function out Runner is {
+# wrongUsage -- the exit code of a command line the runner does not accept
+wrongUsage: 2
+
+# printUsage -- the runner's flags, to STDERR, as the other drivers print theirs
+printUsage: function is {
+    io.eprintln "usage: ztestrunner [flags]"
+    io.eprintln "  --zc ZC         the compiler under test (default out/zc)"
+    io.eprintln "  --cc CC         the C compiler its output is built with (default gcc)"
+    io.eprintln "  --ccflags STR   flags passed to that C compiler"
+    io.eprintln "  --cc-forward    pass --cc on to zc, which then runs that compiler itself"
+    io.eprintln "  --root DIR      the repository root (default .)"
+    io.eprintln "  --jobs N        how many cases run at once (default: one per processor)"
+    io.eprintln "  --timeout N     the seconds one step of a case may take (default 60)"
+    io.eprintln "  --tmp DIR       the scratch directory (default: its own, under the system's)"
+    io.eprintln "  --save-temps    keep the scratch directory"
+    io.eprintln "  --heavy         add the self-host ASan run, the fixpoint and the doc ratchet"
+    io.eprintln "  --report        exit 0 whatever failed"
+    io.eprintln "  --regen-lsp     rewrite the LSP goldens from this run's answers"
+    io.eprintln "one kind alone:"
+    io.eprintln "  --run-only      the run cases; --target TRIPLE builds them for another system"
+    io.eprintln "                  and --exec PROGRAM runs each one under that program"
+    io.eprintln "  --doccode-only  the examples and the pages of the documentation"
+    io.eprintln "  --agree-only    the nativec agreement check"
+    io.eprintln "  --arch-only     the architecture ratchet"
+    io.eprintln "A value is written `--name VALUE` or `--name=VALUE`."
+}
+
+# addSwitch -- declares a flag on `sp`. It has no short alias and no help text:
+# the usage is written by hand (printUsage).
+addSwitch: function {sp: cli.Spec.borrow name: StringView} is {
+    cli.addFlag spec: sp name: name.string shortName: "".string help: "".string
+}
+
+# addValue -- declares an option on `sp` that a command line may leave out
+addValue: function {sp: cli.Spec.borrow name: StringView} is {
+    (
+        cli.addOption
+        spec: sp
+        name: name.string
+        shortName: "".string
+        help: "".string
+        required: false
+    )
+}
+
+# runnerSpec -- the runner's command line: switches and options, no operand
+runnerSpec: function out cli.Spec is {
+    sp: cli.Spec.create programName: "ztestrunner".string summary: "".string
+    addSwitch :sp name: opt.ccForward
+    addSwitch :sp name: opt.report
+    addSwitch :sp name: opt.heavy
+    addSwitch :sp name: opt.saveTemps
+    addSwitch :sp name: opt.regenLsp
+    addSwitch :sp name: opt.doccodeOnly
+    addSwitch :sp name: opt.agreeOnly
+    addSwitch :sp name: opt.archOnly
+    addSwitch :sp name: opt.runOnly
+    cli.addFlag spec: sp name: opt.help.string shortName: "-h".string help: "".string
+    addValue :sp name: opt.zc
+    addValue :sp name: opt.cc
+    addValue :sp name: opt.ccflags
+    addValue :sp name: opt.root
+    addValue :sp name: opt.jobs
+    addValue :sp name: opt.timeout
+    addValue :sp name: opt.target
+    addValue :sp name: opt.exec
+    addValue :sp name: opt.tmp
+    return sp
+}
+
+# refuse -- says on stderr why the command line is not accepted, and stops the
+# runner before it has made anything
+refuse: function {why: StringView} is {
+    io.eprintln why
+    os.exit code: wrongUsage
+}
+
+# textOr -- the option `name` as written, `d` when it was not
+textOr: function {p: cli.Parsed.view name: StringView d: StringView} out String is {
+    v: p.option :name
+    match (
+        v
+    ) case some then {
+        return v.copy
+    } case none then {
+        return d.string
+    }
+}
+
+# numberOf -- the option `name` read as a number; -1 when it was not written,
+# or when what was written is no number an i32 holds
+numberOf: function {p: cli.Parsed.view name: StringView} out i32 is {
+    v: p.option :name
+    match (
+        v
+    ) case some then {
+        pv: v.stringView.parseU64
+        match (
+            pv
+        ) case ok then {
+            n: pv.i32
+            match (
+                n
+            ) case ok then {
+                return n
+            } case err then null
+        } case err then null
+    } case none then null
+    return -1
+}
+
+# jobsOf -- --jobs: how many cases run at once. One per processor when it was
+# not written, so the count follows the machine: a fixed default of 1 would be
+# silently serial on a many-core one.
+jobsOf: function {p: cli.Parsed.view} out u64 is {
+    if (p.given name: opt.jobs).not then return os.cpuCount.u64.orPanic
+    n: numberOf :p name: opt.jobs
+    if n < 1 then refuse "ztestrunner: --jobs needs a number, 1 or more"
+    return n.u64.orPanic
+}
+
+# timeoutOf -- --timeout: the seconds one step may take; a minute when it was
+# not written
+timeoutOf: function {p: cli.Parsed.view} out i32 is {
+    if (p.given name: opt.timeout).not then return 60
+    n: numberOf :p name: opt.timeout
+    if n < 0 then refuse "ztestrunner: --timeout needs a number"
+    return n
+}
+
+# onlyFlags -- the switches of `p` that each ask for one kind alone
+onlyFlags: function {p: cli.Parsed.view} out List String is {
+    names: List String
+    if (p.hasFlag name: opt.doccodeOnly) then names.append from: opt.doccodeOnly.string
+    if (p.hasFlag name: opt.agreeOnly) then names.append from: opt.agreeOnly.string
+    if (p.hasFlag name: opt.archOnly) then names.append from: opt.archOnly.string
+    if (p.hasFlag name: opt.runOnly) then names.append from: opt.runOnly.string
+    return names
+}
+
+# refuseMisuse -- stops the runner on a command line cli reads and the runner
+# cannot honour: an operand, two kinds each asked for alone, or a foreign
+# target or compiler outside the one kind that builds for one
+refuseMisuse: function {r: Runner.view p: cli.Parsed.view} is {
+    if p.extraArgs.length > 0 then {
+        surplus: "ztestrunner: unexpected argument '\{p.extraArgs.get i: 0}'"
+        refuse surplus.stringView
+    }
+    only: onlyFlags :p
+    if only.length > 1 then {
+        both: "ztestrunner: \{only.get i: 0} and \{only.get i: 1} name two different runs"
+        refuse both.stringView
+    }
+    if (r.target.length > 0) or (r.exec.length > 0) when r.runOnly.not then {
+        refuse "ztestrunner: --target and --exec need --run-only; no other kind runs a foreign binary"
+    }
+    if (zcc.ccFamilyOf ccPath: r.cc.stringView).msvc when r.runOnly.not then {
+        refuse "ztestrunner: --cc cl needs --run-only; the other kinds build with gcc's command line"
+    }
+}
+
+# runnerFrom -- the Runner the command line `p` asks for. What `p` leaves out
+# keeps its default: `out/zc` under the current directory, built with gcc, one
+# job per processor, a minute per step. `ccFwd` is `cc` when --cc-forward was
+# written, wherever on the line the two stand. The paths under the root are
+# derived once the root is known (runnerPathsUnderRoot).
+runnerFrom: function {p: cli.Parsed.view} out Runner is {
+    cc: textOr :p name: opt.cc d: "gcc"
+    ccFwdOn: p.hasFlag name: opt.ccForward
+    ccFwd: String
+    if ccFwdOn then ccFwd = cc.copy
     return (
         Runner
-        root: ".".string
-        zc: "out/zc".string
-        cc: "gcc".string
-        ccflags: String
-        ccFwd: String
-        ccFwdOn: false
+        root: (textOr :p name: opt.root d: ".")
+        zc: (textOr :p name: opt.zc d: "out/zc")
+        :cc
+        ccflags: (textOr :p name: opt.ccflags d: "")
+        :ccFwd
+        :ccFwdOn
         sys: String
-        tmp: String
-        jobsMax: os.cpuCount.u64.orPanic
-        timeoutSecs: 60
-        heavy: false
-        report: false
-        saveTemps: false
-        regenLsp: false
-        doccodeOnly: false
-        agreeOnly: false
-        archOnly: false
-        runOnly: false
-        target: String
-        exec: String
+        tmp: (textOr :p name: opt.tmp d: "")
+        jobsMax: (jobsOf :p)
+        timeoutSecs: (timeoutOf :p)
+        heavy: (p.hasFlag name: opt.heavy)
+        report: (p.hasFlag name: opt.report)
+        saveTemps: (p.hasFlag name: opt.saveTemps)
+        regenLsp: (p.hasFlag name: opt.regenLsp)
+        doccodeOnly: (p.hasFlag name: opt.doccodeOnly)
+        agreeOnly: (p.hasFlag name: opt.agreeOnly)
+        archOnly: (p.hasFlag name: opt.archOnly)
+        runOnly: (p.hasFlag name: opt.runOnly)
+        target: (textOr :p name: opt.target d: "")
+        exec: (textOr :p name: opt.exec d: "")
         errors: String
         rungold: String
         runcases: String
@@ -4361,113 +4560,6 @@ newRunner: function out Runner is {
         skip: 0
         fails: 0
     )
-}
-
-# takeFlag -- a bare switch: set it and answer true; false when `w` is not one.
-takeFlag: function {r: Runner w: u64} out bool is {
-    if w == runnerWord.slot.fCcForward then {
-        r.ccFwdOn = true
-        return true
-    }
-    if w == runnerWord.slot.fReport then {
-        r.report = true
-        return true
-    }
-    if w == runnerWord.slot.fHeavy then {
-        r.heavy = true
-        return true
-    }
-    if w == runnerWord.slot.fSaveTemps then {
-        r.saveTemps = true
-        return true
-    }
-    if w == runnerWord.slot.fRegenLsp then {
-        r.regenLsp = true
-        return true
-    }
-    if w == runnerWord.slot.fDoccodeOnly then {
-        r.doccodeOnly = true
-        return true
-    }
-    if w == runnerWord.slot.fAgreeOnly then {
-        r.agreeOnly = true
-        return true
-    }
-    if w == runnerWord.slot.fArchOnly then {
-        r.archOnly = true
-        return true
-    }
-    if w == runnerWord.slot.fRunOnly then {
-        r.runOnly = true
-        return true
-    }
-    return false
-}
-
-# takeValue -- a switch that consumes the argument after it (`val`): set it and
-# answer true; false when `w` is not one. A --jobs value counts only when it
-# is a positive number; an unparsable --timeout keeps the default.
-takeValue: function {r: Runner w: u64 val: StringView} out bool is {
-    if w == runnerWord.slot.fZc then {
-        r.zc = val.string
-        return true
-    }
-    if w == runnerWord.slot.fCc then {
-        r.cc = val.string
-        return true
-    }
-    if w == runnerWord.slot.fCcflags then {
-        r.ccflags = val.string
-        return true
-    }
-    if w == runnerWord.slot.fRoot then {
-        r.root = val.string
-        return true
-    }
-    if w == runnerWord.slot.fJobs then {
-        jv: val.parseI64
-        if jv.ok when jv > 0 then r.jobsMax = jv.u64.orPanic
-        return true
-    }
-    if w == runnerWord.slot.fTimeout then {
-        tv: val.parseI64
-        if tv.ok then r.timeoutSecs = tv.i32.orPanic
-        return true
-    }
-    if w == runnerWord.slot.fTarget then {
-        r.target = val.string
-        return true
-    }
-    if w == runnerWord.slot.fExec then {
-        r.exec = val.string
-        return true
-    }
-    if w == runnerWord.slot.fTmp then {
-        r.tmp = val.string
-        return true
-    }
-    return false
-}
-
-# parseRunnerArgs -- the command line, first argument onward, onto the Runner.
-# An unknown argument is ignored, and so is a value switch with nothing after
-# it. `ccFwd` is resolved after the loop, not inside the --cc-forward arm: the
-# flags may arrive in either order, and reading `cc` early would make
-# `--cc-forward --cc X` forward the default instead of X.
-parseRunnerArgs: function {r: Runner argv: (List String).view} is {
-    words: zast.Vocab.create block: runnerWord
-    n: argv.length
-    i: 1.u64
-    for i < n loop {
-        a: argv.get :i
-        w: words.slotOf text: a.stringView
-        if (takeFlag :r :w).not when (i + 1) < n then {
-            v: argv.get i: i + 1
-            if (takeValue :r :w val: v.stringView) then i = i + 1
-        }
-        i = i + 1
-    }
-    if r.ccFwdOn then r.ccFwd = r.cc.copy
 }
 
 # runnerPathsUnderRoot -- the stdlib, fixture and source directories, all
@@ -4507,12 +4599,9 @@ sweepStaleTmp: function {tmp: StringView myPidS: StringView} is {
     }
 }
 
-# parse the flags, build a Runner, and run every case kind in turn. The exit
-# status is `fails`, nothing else
-main: function is {
-    r: newRunner
-    parseRunnerArgs :r argv: os.args
-    runnerPathsUnderRoot :r
+# runKinds -- make the scratch directory, run every case kind `r` asks for in
+# turn, and report the counts. The exit status is `fails`, nothing else.
+runKinds: function {r: Runner} is {
     if r.tmp.length == 0 then {
         mypid: os.pid
         myPidS: "\{mypid}"
@@ -4528,14 +4617,6 @@ main: function is {
     # symbols come from the binaries' own DWARF.
     os.setEnv key: "DEBUGINFOD_URLS" value: ""
 
-    if (r.target.length > 0) or (r.exec.length > 0) when r.runOnly.not then {
-        print "ztestrunner: --target and --exec need --run-only; no other kind runs a foreign binary"
-        os.exit code: 2
-    }
-    if (zcc.ccFamilyOf ccPath: r.cc.stringView).msvc when r.runOnly.not then {
-        print "ztestrunner: --cc cl needs --run-only; the other kinds build with gcc's command line"
-        os.exit code: 2
-    }
     if r.doccodeOnly then {
         runDoccodeCases :r
         runDocPageCases :r
@@ -4585,5 +4666,28 @@ main: function is {
     } else {
         print "CORPUS GATE FAILED (\{r.fails})"
         os.exit code: 1
+    }
+}
+
+# read the command line, build the Runner it asks for, and run its kinds. A
+# command line the runner does not accept is refused on stderr with exit 2,
+# before anything is made or run.
+main: function is {
+    sp: runnerSpec
+    pr: cli.parse spec: sp args: os.args
+    match (
+        pr
+    ) case ok then {
+        if (pr.hasFlag name: opt.help) then {
+            printUsage
+            os.exit code: 0
+        }
+        r: runnerFrom p: pr
+        refuseMisuse :r p: pr
+        runnerPathsUnderRoot :r
+        runKinds :r
+    } case err then {
+        io.eprintln (cli.errorText spec: sp e: pr)
+        os.exit code: wrongUsage
     }
 }
