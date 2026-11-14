@@ -95,7 +95,16 @@ Spec: class {
     positionals: List PositionalDef
 } as {
     # an empty spec; the addFlag / addOption / addPositional calls fill it
-    create: function {programName: String.take summary: String.take} out this is native
+    create: function {programName: String.take summary: String.take} out this is {
+        return (
+            meta.create
+            :programName
+            :summary
+            flags: List FlagDef
+            options: List OptionDef
+            positionals: List PositionalDef
+        )
+    }
 }
 
 # Parsed -- successful parse result. Opaque; inspect via the
@@ -113,13 +122,31 @@ Parsed: class {
     extraArgs: List String
 } as {
     # Was the flag with this name present?
-    hasFlag: function {t: this.view name: StringView} out bool is native
+    hasFlag: function {t: this.view name: StringView} out bool is {
+        return (t.flagSet.contains item: name.asString)
+    }
 
     # Value of an option, or none.
-    option: function {t: this.view name: StringView} out Option String is native
+    option: function {t: this.view name: StringView} out Option String is {
+        return (valueOf m: t.optionValues :name)
+    }
 
     # Value of a positional, or none.
-    positional: function {t: this.view name: StringView} out Option String is native
+    positional: function {t: this.view name: StringView} out Option String is {
+        return (valueOf m: t.positionalValues :name)
+    }
+}
+
+# valueOf -- an owned copy of the value `m` holds under `name`, or none
+valueOf: function {m: (Map String V: String).view name: StringView} out Option String is {
+    v: m.get key: name.asString
+    match (
+        v
+    ) case some then {
+        return (Option.some v.copy)
+    } case none then {
+        return (Option.none String)
+    }
 }
 
 # Registration. Each pushes a fresh def into the spec's list.
@@ -134,7 +161,9 @@ addFlag: function {
     shortName: String.take
     # the description the new flag carries into usage
     help: String.take
-} is native
+} is {
+    spec.flags.append (FlagDef :name :shortName :help)
+}
 
 # register a value-taking option (`--name VALUE`) on `spec`.
 addOption: function {
@@ -148,7 +177,9 @@ addOption: function {
     help: String.take
     # true to make omitting it a missingRequired error
     required: bool
-} is native
+} is {
+    spec.options.append (OptionDef :name :shortName :help :required)
+}
 
 # register a positional argument on `spec`.
 addPositional: function {
@@ -160,7 +191,235 @@ addPositional: function {
     help: String.take
     # true to make omitting it a missingRequired error
     required: bool
-} is native
+} is {
+    spec.positionals.append (PositionalDef :name :help :required)
+}
+
+# dash -- the byte `-`
+dash: 45
+
+# member -- what a name on the command line is declared as. A flag is looked
+# for before an option, so a name both declare is the flag's.
+member: variant {
+    # the flag at this index of the spec's flags
+    flagAt: u64
+    # the option at this index of the spec's options
+    optionAt: u64
+    # no flag and no option has the name
+    unknown: null
+}
+
+# step -- what reading one token did
+step: variant {
+    # the token was read by itself
+    one: null
+    # the token was an option and the token after it its value
+    two: null
+    # the token went to a positional slot, or to the extra arguments past them
+    placed: null
+    # the token was `--`: every token after it is an extra argument
+    rest: null
+    # no flag and no option has the token's name
+    unknown: null
+    # the option has no token after it to be its value
+    noValue: null
+    # a flag was written with a value, `--name=value`
+    flagValue: null
+}
+
+# spelled -- whether a declared member answers to `name`: by its short alias
+# when `short`, by its long name otherwise
+spelled: function {long: String.view alias: String.view name: StringView short: bool} out bool is {
+    if short then return alias == name
+    return long == name
+}
+
+# declared -- the member of `spec` that `name` names
+declared: function {spec: Spec.view name: StringView short: bool} out member is {
+    i: u64
+    for each f: spec.flags loop {
+        if (spelled long: f.name alias: f.shortName :name :short) then return (member.flagAt i)
+        i = i + 1
+    }
+    i = 0
+    for each o: spec.options loop {
+        if (spelled long: o.name alias: o.shortName :name :short) then return (member.optionAt i)
+        i = i + 1
+    }
+    return member.unknown
+}
+
+# setFlag -- records that the flag at `i` was given, under its long name. A
+# flag given twice is recorded twice.
+setFlag: function {spec: Spec.view p: Parsed.borrow i: u64} is {
+    p.flagSet.append (spec.flags.get :i).name.copy
+}
+
+# setOption -- records `value` for the option at `i`, under its long name. A
+# value given earlier is replaced.
+setOption: function {spec: Spec.view p: Parsed.borrow i: u64 value: String.take} is {
+    p.optionValues.set key: (spec.options.get :i).name.copy :value
+}
+
+# nextValue -- gives the option at `i` the token after `at` as its value,
+# whatever that token looks like
+nextValue: function {
+    spec: Spec.view
+    args: (List String).view
+    at: u64
+    p: Parsed.borrow
+    i: u64
+} out step is {
+    if (at + 1) >= args.length then return step.noValue
+    setOption :spec :p :i value: (args.get i: at + 1).copy
+    return step.two
+}
+
+# readLong -- the token at `at` is `--name` or `--name=value`
+readLong: function {spec: Spec.view args: (List String).view at: u64 p: Parsed.borrow} out step is {
+    tok: (args.get i: at).stringView
+    eq: tok.indexOf needle: "="
+    m: declared :spec name: (tok.substring from: 0 to: (eq.or d: tok.length)) short: false
+    match (
+        m
+    ) case flagAt then {
+        if eq.some then return step.flagValue
+        setFlag :spec :p i: m
+        return step.one
+    } case optionAt then {
+        match (
+            eq
+        ) case some then {
+            setOption :spec :p i: m value: (tok.substring from: eq + 1 to: tok.length).string
+            return step.one
+        } case none then {
+            return (nextValue :spec :args :at :p i: m)
+        }
+    } case unknown then {
+        return step.unknown
+    }
+}
+
+# readBundle -- the token at `at` is short names behind one dash, `-xvf`. Each
+# letter must be a flag's, until an option's ends the bundle: what is left of
+# the token is its value (`-ofile`), or the next token is (`-vo file`).
+readBundle: function {
+    spec: Spec.view args: (List String).view at: u64 p: Parsed.borrow
+} out step is {
+    tok: (args.get i: at).stringView
+    k: 1.u64
+    for k < tok.length loop {
+        alias: String
+        alias.appendByte b: dash
+        alias.appendByte b: ((tok.byteAt i: k).or d: 0)
+        m: declared :spec name: alias.stringView short: true
+        match (
+            m
+        ) case flagAt then {
+            setFlag :spec :p i: m
+        } case optionAt then {
+            if (k + 1) == tok.length then return (nextValue :spec :args :at :p i: m)
+            setOption :spec :p i: m value: (tok.substring from: k + 1 to: tok.length).string
+            return step.one
+        } case unknown then {
+            return step.unknown
+        }
+        k = k + 1
+    }
+    return step.one
+}
+
+# readShort -- the token at `at` starts with one dash. The whole token is tried
+# as a short alias first, so an alias may be longer than one letter.
+readShort: function {
+    spec: Spec.view args: (List String).view at: u64 p: Parsed.borrow
+} out step is {
+    tok: (args.get i: at).stringView
+    m: declared :spec name: tok short: true
+    match (
+        m
+    ) case flagAt then {
+        setFlag :spec :p i: m
+        return step.one
+    } case optionAt then {
+        return (nextValue :spec :args :at :p i: m)
+    } case unknown then {
+        if tok.length == 2 then return step.unknown
+        return (readBundle :spec :args :at :p)
+    }
+}
+
+# readToken -- reads the token at `at` into `p`. `slot` is how many tokens were
+# placed before it: the index of the positional it takes when it is one.
+readToken: function {
+    spec: Spec.view
+    args: (List String).view
+    at: u64
+    p: Parsed.borrow
+    slot: u64
+} out step is {
+    tok: (args.get i: at).stringView
+    if (tok.startsWith prefix: "--") then {
+        if tok.length > 2 then return (readLong :spec :args :at :p)
+        i: at + 1
+        for i < args.length loop {
+            p.extraArgs.append (args.get :i).copy
+            i = i + 1
+        }
+        return step.rest
+    }
+    if tok.length > 1 when (tok.startsWith prefix: "-") then return (readShort :spec :args :at :p)
+    if slot < spec.positionals.length then {
+        p.positionalValues.set key: (spec.positionals.get i: slot).name.copy value: tok.string
+    } else {
+        p.extraArgs.append tok.string
+    }
+    return step.placed
+}
+
+# walk -- reads every token of `args` after position 0 into `p`. Answers the
+# error of the first token it refuses, which carries that token.
+walk: function {spec: Spec.view args: (List String).view p: Parsed.borrow} out Option CliError is {
+    slot: u64
+    i: 1.u64
+    for i < args.length loop {
+        s: readToken :spec :args at: i :p :slot
+        match (
+            s
+        ) case one then {
+            i = i + 1
+        } case two then {
+            i = i + 2
+        } case placed then {
+            slot = slot + 1
+            i = i + 1
+        } case rest then {
+            break
+        } case unknown then {
+            return (Option.some (CliError.unknownFlag (args.get :i).copy))
+        } case noValue then {
+            return (Option.some (CliError.missingValue (args.get :i).copy))
+        } case flagValue then {
+            return (Option.some (CliError.unexpectedArg (args.get :i).copy))
+        }
+    }
+    return (Option.none CliError)
+}
+
+# missingName -- the name of the first required member that has no value:
+# the options in declaration order, then the positionals
+missingName: function {spec: Spec.view p: Parsed.view} out Option String is {
+    for each o: spec.options loop {
+        if o.required when (p.optionValues.has key: o.name).not then return (Option.some o.name.copy
+        )
+    }
+    for each s: spec.positionals loop {
+        if s.required when (p.positionalValues.has key: s.name).not then {
+            return (Option.some s.name.copy)
+        }
+    }
+    return (Option.none String)
+}
 
 # Parse argv against the registered spec. Consumes argv.
 parse: function {
@@ -169,7 +428,72 @@ parse: function {
     # the whole argument vector as `os.args` returns it; position 0, the program
     # name, is skipped
     args: (List String).take
-} out (Result Parsed E: CliError) is native
+} out (Result Parsed E: CliError) is {
+    p: (
+        Parsed
+        flagSet: List String
+        optionValues: (Map String V: String)
+        positionalValues: (Map String V: String)
+        extraArgs: List String
+    )
+    refused: walk :spec :args :p
+    match (
+        refused
+    ) case some then {
+        return ((Result Parsed E: CliError).err refused.take)
+    } case none then null
+    missing: missingName :spec :p
+    match (
+        missing
+    ) case some then {
+        return ((Result Parsed E: CliError).err (CliError.missingRequired missing.take))
+    } case none then null
+    return ((Result Parsed E: CliError).ok p.take)
+}
+
+# helpLine -- one member's line of the help text: `  -n, --name    help`, the
+# alias and the help left out when empty
+helpLine: function {r: String.borrow alias: StringView name: StringView help: StringView} is {
+    r.append "\n  "
+    if alias.length > 0 then r.append "\{alias}, "
+    r.append name
+    if help.length > 0 then r.append "    \{help}"
+}
 
 # Render the usage + help block from the spec.
-helpText: function {spec: Spec.borrow} out String is native
+helpText: function {spec: Spec.borrow} out String is {
+    r: "usage: \{spec.programName} [options]"
+    for each s: spec.positionals loop r.append " <\{s.name}>"
+    if spec.summary.length > 0 then r.append "\n\n\{spec.summary}"
+    if spec.flags.length > 0 then {
+        r.append "\n\nFlags:"
+        for each f: spec.flags loop {
+            (
+                helpLine
+                :r
+                alias: f.shortName.stringView
+                name: f.name.stringView
+                help: f.help.stringView
+            )
+        }
+    }
+    if spec.options.length > 0 then {
+        r.append "\n\nOptions:"
+        for each o: spec.options loop {
+            (
+                helpLine
+                :r
+                alias: o.shortName.stringView
+                name: o.name.stringView
+                help: o.help.stringView
+            )
+        }
+    }
+    if spec.positionals.length > 0 then {
+        r.append "\n\nPositionals:"
+        for each s: spec.positionals loop {
+            helpLine :r alias: "" name: s.name.stringView help: s.help.stringView
+        }
+    }
+    return r
+}

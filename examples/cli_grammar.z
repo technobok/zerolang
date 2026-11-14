@@ -1,0 +1,94 @@
+# cli_grammar.z -- the rules of cli's grammar that the cli_errors example does not
+# show. An option takes the next token as its value whatever it looks like, and
+# `--name=` gives it an empty one. A repeated option keeps its last value; a
+# repeated flag is counted again. Tokens past the declared positionals are extra
+# arguments, and a flag after them is still read. `--` sends the rest to the
+# extra arguments, read or not. An empty token is a positional. A token the
+# spec refuses is reported before a required member that is missing; of those,
+# the options are checked first. A name the spec does not declare has no value.
+
+# valueText -- an accessor's answer: the value in brackets, or `none`
+valueText: function {o: (Option String).view} out String is {
+    match (
+        o
+    ) case some then {
+        return "[\{o}]"
+    } case none then {
+        return "none".string
+    }
+}
+
+# show -- parses the tokens of `line`, split at each `,`, after a program name
+show: function {sp: cli.Spec.borrow line: StringView} is {
+    args: List String
+    args.append "prog".string
+    if line.length > 0 then {
+        for each t: (line.split sep: ",") loop args.append t.string
+    }
+    pr: cli.parse spec: sp :args
+    match (
+        pr
+    ) case ok then {
+        r: "\{line} => verbose x\{pr.flagSet.length} \{pr.hasFlag name: "--verbose"}"
+        r.append " output=\{valueText o: (pr.option name: "--output")}"
+        r.append " level=\{valueText o: (pr.option name: "--level")}"
+        r.append " src=\{valueText o: (pr.positional name: "src")}"
+        r.append " dst=\{valueText o: (pr.positional name: "dst")}"
+        r.append " extra="
+        for each x: pr.extraArgs loop r.append "[\{x}]"
+        r.append " undeclared=\{pr.hasFlag name: "--nope"}"
+        r.append ",\{valueText o: (pr.option name: "-o")}"
+        r.append ",\{valueText o: (pr.positional name: "--output")}"
+        print r
+    } case err then {
+        match (
+            pr
+        ) case unknownFlag then {
+            print "\{line} => unknownFlag \{pr}"
+        } case missingValue then {
+            print "\{line} => missingValue \{pr}"
+        } case missingRequired then {
+            print "\{line} => missingRequired \{pr}"
+        } case unexpectedArg then {
+            print "\{line} => unexpectedArg \{pr}"
+        }
+    }
+}
+
+main: function is {
+    sp: cli.Spec.create programName: "prog".string summary: "".string
+    cli.addFlag spec: sp name: "--verbose".string shortName: "-v".string help: "".string
+    (
+        cli.addOption
+        spec: sp
+        name: "--output".string
+        shortName: "-o".string
+        help: "".string
+        required: false
+    )
+    (
+        cli.addOption
+        spec: sp
+        name: "--level".string
+        shortName: "-l".string
+        help: "".string
+        required: true
+    )
+    cli.addPositional spec: sp name: "src".string help: "".string required: true
+    cli.addPositional spec: sp name: "dst".string help: "".string required: false
+    show :sp line: "-l,1,--output,--verbose,a"
+    show :sp line: "-l,1,--output=,a"
+    show :sp line: "-l,1,-o,x,-o,y,--output=z,a"
+    show :sp line: "-l,1,-v,-v,--verbose,a"
+    show :sp line: "-l,1,a,b,c,-v,d"
+    show :sp line: "-l,1,a,--,-o,x,--nope"
+    show :sp line: "-l,1,-,"
+    show :sp line: "--level=3=4,a"
+    show :sp line: "-vvl,5,a"
+    show :sp line: "-vvl5,-ox,a"
+    show :sp line: "--nope"
+    show :sp line: ""
+    show :sp line: "a"
+    show :sp line: "-l,1"
+    show :sp line: "-l,1,--"
+}
