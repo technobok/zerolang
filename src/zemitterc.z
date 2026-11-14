@@ -1229,7 +1229,8 @@ rtHoleId: function {slot: u64} out zast.nameid is {
 }
 
 # RtTexts -- the runtime text the emitter fills, each text parsed once: a
-# row's body when the row is recorded. A text is cut into literal
+# row's body when the row is recorded. `rt` in a name of this unit (rtseg,
+# rtFillKeys, RtPlan) stands for runtime text. A text is cut into literal
 # stretches, holes and keys, so a fill walks the stretches once, appending, and
 # a question about the holes a text spells (does it spell @T@, does it name @L@
 # twice) reads its holes instead of searching its bytes on every use. A value a
@@ -4895,11 +4896,11 @@ Ctx: class {
     typeUseHold: bool
     heldTypeUses: ListVal ztypes.tid
     # the type a variable is currently narrowed to
-    narrowTid: List VidTid
+    narrowTid: List VarTid
     # the arms ruled out for a variable, which lets a switch omit them
-    exclArms: List VidArms
+    exclArms: List VarArms
     # the types behind those exclusions
-    exclTids: List VidTid
+    exclTids: List VarTid
     # the save stack for exclusions layered by an `if` clause's conjuncts. One
     # stack for the whole emission, indexed per clause, because a clause layers
     # nothing at all in the ordinary case and a list per clause is an
@@ -5307,10 +5308,10 @@ isPtrVid: function {ctx: Ctx.view vid: ztypes.vid} out bool is {
     if vid.isZero then return false
     if (ctx.staticVids.has item: vid) then return true
     # narrowed to a data value: the payload is a handle
-    nt: (vtGet xs: ctx.narrowTid :vid).or d: ztypes.tid.zero
+    nt: (varTidGet xs: ctx.narrowTid :vid).or d: ztypes.tid.zero
     if nt.notZero when (ctx.staticTids.has item: nt) then return true
     if (ctx.ptrVids.contains item: vid).not then return false
-    return (vvHas xs: ctx.narrowBox :vid).not
+    return (varEntryHas xs: ctx.narrowBox :vid).not
 }
 
 # needsValueDeref -- a pointer-valued expression standing where a VALUE is
@@ -5663,7 +5664,7 @@ ComprehendTo: class {
     lvar: String
 }
 
-# VarEntry / VidTid -- assoc-list entries for the per-function narrowing and alias
+# VarEntry / VarTid -- assoc-list entries for the per-function narrowing and alias
 # state, keyed by VARIABLE ID. A name conflates two bindings that happen to share
 # it, and it is not a key a declaration site and a use site can both produce -- a
 # variable id is both. A vid of 0 means "no variable here" and never keys an
@@ -5694,7 +5695,7 @@ AliasHeld: class {
 # a variable paired with a type, for the side lists that record what a
 # variable was narrowed or excluded to. A pair rather than a map: the lists
 # are short and scanned, never indexed
-VidTid: class {
+VarTid: class {
     # the variable
     vid: ztypes.vid
     # the type recorded for it
@@ -5703,7 +5704,7 @@ VidTid: class {
 
 # a variable paired with the arms recorded for it, by name: the arms an `if`
 # clause's conjuncts ruled out for it
-VidArms: class {
+VarArms: class {
     # the variable
     vid: ztypes.vid
     # the arms, by name
@@ -5721,22 +5722,22 @@ ExclSave: class {
     owner: ztypes.tid
 }
 
-# vaGet -- the arms recorded for `vid`, none when absent.
-vaGet: function {xs: (List VidArms).view vid: ztypes.vid} out ListVal zast.nameid is {
+# varArmsGet -- the arms recorded for `vid`, none when absent.
+varArmsGet: function {xs: (List VarArms).view vid: ztypes.vid} out ListVal zast.nameid is {
     f: vidFind :xs :vid
     if f > 0 then return (xs.get i: f - 1).arms.copy
     none: ListVal zast.nameid
     return none
 }
 
-# vaSet -- replace-or-append: one entry per variable.
-vaSet: function {xs: List VidArms vid: ztypes.vid arms: (ListVal zast.nameid).view} is {
+# varArmsSet -- replace-or-append: one entry per variable.
+varArmsSet: function {xs: List VarArms vid: ztypes.vid arms: (ListVal zast.nameid).view} is {
     if vid.isZero then return
     f: vidFind :xs :vid
     if f > 0 then {
-        xs.set i: f - 1 val: (VidArms :vid arms: arms.copy)
+        xs.set i: f - 1 val: (VarArms :vid arms: arms.copy)
     } else {
-        xs.append (VidArms :vid arms: arms.copy)
+        xs.append (VarArms :vid arms: arms.copy)
     }
 }
 
@@ -5749,11 +5750,11 @@ idListHas: function {xs: (ListVal zast.nameid).view id: zast.nameid} out bool is
 }
 
 # vidFind -- the 1-based index of `vid`'s entry in `xs`, an assoc list keyed by
-# variable id (VarEntry, VidTid, VidArms), 0 when absent. The
-# value is copied only on a hit, so a miss allocates nothing at all. vvGet's
+# variable id (VarEntry, VarTid, VarArms), 0 when absent. The
+# value is copied only on a hit, so a miss allocates nothing at all. varEntryGet's
 # empty-String sentinel cost 277,711 one-byte allocations on a self-compile
 # (2.9% of every allocation the compiler makes) because the miss is the common
-# case: read through this, not vvGet, on any hot path.
+# case: read through this, not varEntryGet, on any hot path.
 vidFind: function as { T: AnyRef.generic } in {xs: (List T).view vid: ztypes.vid} out u64 is {
     if vid.isZero then return 0
     i: u64
@@ -5765,32 +5766,32 @@ vidFind: function as { T: AnyRef.generic } in {xs: (List T).view vid: ztypes.vid
     return 0
 }
 
-# vvGet -- the value recorded for `vid`, "" when absent (values never empty).
-vvGet: function {xs: (List VarEntry).view vid: ztypes.vid} out String is {
+# varEntryGet -- the value recorded for `vid`, "" when absent (values never empty).
+varEntryGet: function {xs: (List VarEntry).view vid: ztypes.vid} out String is {
     f: vidFind :xs :vid
     if f == 0 then return "".string
     return (xs.get i: f - 1).val.copy
 }
 
 # true when list `xs` has an entry for `vid`.
-vvHas: function {xs: (List VarEntry).view vid: ztypes.vid} out bool is {
+varEntryHas: function {xs: (List VarEntry).view vid: ztypes.vid} out bool is {
     return (vidFind :xs :vid) > 0
 }
 
-# vvFactsOf -- the facts recorded for `vid`'s value; none stated when absent.
-vvFactsOf: function {xs: (List VarEntry).view vid: ztypes.vid} out exprfacts is {
+# varEntryFactsOf -- the facts recorded for `vid`'s value; none stated when absent.
+varEntryFactsOf: function {xs: (List VarEntry).view vid: ztypes.vid} out exprfacts is {
     f: vidFind :xs :vid
     if f == 0 then return exprfacts
     return (xs.get i: f - 1).facts
 }
 
-# vvSet -- replace-or-append: one entry per variable (map.set semantics).
-vvSet: function {xs: List VarEntry vid: ztypes.vid val: StringView facts: exprfacts} is {
-    vvPut :xs :vid :val :facts ptr: String
+# varEntrySet -- replace-or-append: one entry per variable (map.set semantics).
+varEntrySet: function {xs: List VarEntry vid: ztypes.vid val: StringView facts: exprfacts} is {
+    varEntryPut :xs :vid :val :facts ptr: String
 }
 
-# vvPut -- vvSet for an entry that records the pointer `ptr` it reads through.
-vvPut: function {
+# varEntryPut -- varEntrySet for an entry that records the pointer `ptr` it reads through.
+varEntryPut: function {
     xs: List VarEntry vid: ztypes.vid val: StringView facts: exprfacts ptr: String.take
 } is {
     if vid.isZero then return
@@ -5802,15 +5803,15 @@ vvPut: function {
     }
 }
 
-# vvHasPtr -- `vid`'s entry reads through a pointer (a borrow alias).
-vvHasPtr: function {xs: (List VarEntry).view vid: ztypes.vid} out bool is {
+# varEntryHasPtr -- `vid`'s entry reads through a pointer (a borrow alias).
+varEntryHasPtr: function {xs: (List VarEntry).view vid: ztypes.vid} out bool is {
     f: vidFind :xs :vid
     if f == 0 then return false
     return (xs.get i: f - 1).ptr.length > 0
 }
 
-# vvPtrOf -- the pointer `vid`'s entry reads through, "" when it has none.
-vvPtrOf: function {xs: (List VarEntry).view vid: ztypes.vid} out String is {
+# varEntryPtrOf -- the pointer `vid`'s entry reads through, "" when it has none.
+varEntryPtrOf: function {xs: (List VarEntry).view vid: ztypes.vid} out String is {
     f: vidFind :xs :vid
     if f == 0 then return "".string
     return (xs.get i: f - 1).ptr.copy
@@ -5822,7 +5823,7 @@ vvPtrOf: function {xs: (List VarEntry).view vid: ztypes.vid} out String is {
 bindBorrowAlias: function {ctx: Ctx vid: ztypes.vid nm: StringView} is {
     p: "__borrow_\{nm}"
     bal: "(*\{p})"
-    vvPut xs: ctx.aliases :vid val: bal.stringView facts: derefFacts ptr: p.take
+    varEntryPut xs: ctx.aliases :vid val: bal.stringView facts: derefFacts ptr: p.take
 }
 
 # vidRemove -- drop `vid`'s entry from an assoc list keyed by variable id
@@ -5835,7 +5836,7 @@ vidRemove: function as { T: AnyRef.generic } in {xs: List T vid: ztypes.vid} is 
 }
 
 # the type id bound to `vid` in `xs`, or none.
-vtGet: function {xs: (List VidTid).view vid: ztypes.vid} out optionval ztypes.tid is {
+varTidGet: function {xs: (List VarTid).view vid: ztypes.vid} out optionval ztypes.tid is {
     f: vidFind :xs :vid
     if f == 0 then return (optionval.none ztypes.tid)
     return (optionval.some (xs.get i: f - 1).tid)
@@ -5853,12 +5854,12 @@ restoreNarrow: function {
     prevTid: ztypes.tid
 } is {
     if prevVal.length > 0 then {
-        vvSet xs: ctx.narrowBox :vid val: prevVal facts: prevFacts
+        varEntrySet xs: ctx.narrowBox :vid val: prevVal facts: prevFacts
     } else {
         vidRemove xs: ctx.narrowBox :vid
     }
     if prevTid.notZero then {
-        vtSet xs: ctx.narrowTid :vid tid: prevTid
+        varTidSet xs: ctx.narrowTid :vid tid: prevTid
     } else {
         vidRemove xs: ctx.narrowTid :vid
     }
@@ -5877,12 +5878,12 @@ pushNarrow: function {
     prevF: ListVal exprfacts
     prevT: ListVal ztypes.tid
 } is {
-    pv: vvGet xs: ctx.narrowBox :vid
+    pv: varEntryGet xs: ctx.narrowBox :vid
     prevV.append pv
-    prevF.append (vvFactsOf xs: ctx.narrowBox :vid)
-    prevT.append ((vtGet xs: ctx.narrowTid :vid).or d: ztypes.tid.zero)
-    vvSet xs: ctx.narrowBox :vid :val facts: valF
-    vtSet xs: ctx.narrowTid :vid :tid
+    prevF.append (varEntryFactsOf xs: ctx.narrowBox :vid)
+    prevT.append ((varTidGet xs: ctx.narrowTid :vid).or d: ztypes.tid.zero)
+    varEntrySet xs: ctx.narrowBox :vid :val facts: valF
+    varTidSet xs: ctx.narrowTid :vid :tid
 }
 
 # restoreNarrowSeeds -- put back every narrowing a scope's seeds displaced, one
@@ -5911,13 +5912,13 @@ restoreNarrowSeeds: function {
 }
 
 # bind `vid` to type id `tid` in `xs`.
-vtSet: function {xs: List VidTid vid: ztypes.vid tid: ztypes.tid} is {
+varTidSet: function {xs: List VarTid vid: ztypes.vid tid: ztypes.tid} is {
     if vid.isZero then return
     f: vidFind :xs :vid
     if f > 0 then {
-        xs.set i: f - 1 val: (VidTid :vid :tid)
+        xs.set i: f - 1 val: (VarTid :vid :tid)
     } else {
-        xs.append (VidTid :vid :tid)
+        xs.append (VarTid :vid :tid)
     }
 }
 
@@ -6218,10 +6219,10 @@ emitNarrowedTakeZero: function {
     } case dottedpath then {
         if (leafMoves :ast leaf: n.child) then {
             baseVid: atomVid :typing nid: (atomNodeId n: (ast.nodes.get i: n.parent))
-            if (vvHas xs: ctx.narrowBox vid: baseVid) then {
+            if (varEntryHas xs: ctx.narrowBox vid: baseVid) then {
                 bn: zast.nameTextAt :ast ref: (zast.atomNameIdOf n: (ast.nodes.get i: n.parent))
                 box: emitLocalAtomName :ast :reg :ctx name: bn.stringView vid: baseVid
-                tido: vtGet xs: ctx.narrowTid vid: baseVid
+                tido: varTidGet xs: ctx.narrowTid vid: baseVid
                 if tido.some then {
                     zc: movedZeroC :reg :typing :ctx tid: tido
                     if zc.length > 0 then buf.append "\{ind}\{box} = \{zc};\n"
@@ -16763,7 +16764,7 @@ emitFnptrLocalCall: function {
     fcmF: exprfacts
     fcm: wholeLocalName :ast :reg :ctx vid: cnVid name: cn0 facts: fcmF
     # a name narrowed to an arm that carries a function calls that function
-    nbx: vvGet xs: ctx.narrowBox vid: cnVid
+    nbx: varEntryGet xs: ctx.narrowBox vid: cnVid
     if nbx.length > 0 then {
         noteAliasRead :ctx vid: cnVid
         fcm = nbx.take
@@ -18208,7 +18209,7 @@ narrowingEndedAt: function {
     nid: zast.nodeid
     vid: ztypes.vid
 } out bool is {
-    if (vvHas xs: ctx.narrowBox :vid).not then return false
+    if (varEntryHas xs: ctx.narrowBox :vid).not then return false
     stamped: stampIdOf :typing :nid
     if stamped.isZero then return false
     return stamped == (reg.variableTypeOf id: vid)
@@ -25982,8 +25983,8 @@ emitNarrowedTakeBind: function {
     # a narrowed-subject `.take` binding MOVES the payload out of
     # the match arm's box: real storage from the narrowed cast plus
     # payload zeroing, so the subject's destroy frees only the box
-    if tabA.length > 0 when (vvHas xs: ctx.narrowBox vid: tabAV) then {
-        ntO: vtGet xs: ctx.narrowTid vid: tabAV
+    if tabA.length > 0 when (varEntryHas xs: ctx.narrowBox vid: tabAV) then {
+        ntO: varTidGet xs: ctx.narrowTid vid: tabAV
         if ntO.some then {
             ctB: typeRefC :ast :reg :typing :ctx tid: ntO
             valB: emitLocalAtomName :ast :reg :ctx name: tabA.stringView vid: tabAV
@@ -26002,7 +26003,7 @@ emitNarrowedTakeBind: function {
 # variable that is out of scope here. Drop it before the binding legs
 # re-establish one; anything that is not a borrow alias is left alone.
 dropStaleBorrowAlias: function {ctx: Ctx vid: ztypes.vid} is {
-    if (vvHasPtr xs: ctx.aliases :vid) then vidRemove xs: ctx.aliases :vid
+    if (varEntryHasPtr xs: ctx.aliases :vid) then vidRemove xs: ctx.aliases :vid
 }
 
 # bindingStampOf -- the type a binding was stamped with, as the body being
@@ -26828,7 +26829,7 @@ emitRepointStmt: function {
     ptr: String
     tv: tgt.stringView
     # a borrow alias re-points the pointer it reads through
-    ap: vvPtrOf xs: ctx.aliases vid: xv
+    ap: varEntryPtrOf xs: ctx.aliases vid: xv
     if ap.length > 0 then {
         ptr.append ap
     } else if (isPtrVid :ctx vid: xv) then {
@@ -27703,7 +27704,7 @@ emitWithField: function {
     la: "\{ind}\{fld} = \{wv};\n"
     buf.append la
     (
-        vvSet
+        varEntrySet
         xs: ctx.aliases
         vid: (defVid :typing nid: n.nodeid)
         val: fld.stringView
@@ -27726,7 +27727,7 @@ genSubjectFieldC: function {
     gf: typing.genLocalFieldOf.get key: tv
     if gf.none then return "".string
     fld: genFieldC :ast :reg :typing :ctx nameId: gf
-    vvSet xs: ctx.aliases vid: tv val: fld.stringView facts: (memberFacts b: pathFacts)
+    varEntrySet xs: ctx.aliases vid: tv val: fld.stringView facts: (memberFacts b: pathFacts)
     return fld
 }
 
@@ -27771,7 +27772,13 @@ emitGenLocalBind: function {
             :tmp
             :buf
         )
-        vvSet xs: ctx.aliases vid: nameVid val: fld.stringView facts: (memberFacts b: pathFacts)
+        (
+            varEntrySet
+            xs: ctx.aliases
+            vid: nameVid
+            val: fld.stringView
+            facts: (memberFacts b: pathFacts)
+        )
         return
     }
     (
@@ -27790,7 +27797,7 @@ emitGenLocalBind: function {
         :tmp
         :buf
     )
-    vvSet xs: ctx.aliases vid: nameVid val: fld.stringView facts: (memberFacts b: pathFacts)
+    varEntrySet xs: ctx.aliases vid: nameVid val: fld.stringView facts: (memberFacts b: pathFacts)
 }
 
 # emitWithStmt -- `with x: <value> do <body>` as a statement.
@@ -28423,7 +28430,7 @@ emitReassignLvalue: function {
         rbNm: atomTextOf :ast :n
         if rbNm.length > 0 then {
             rbVid: atomVid :typing nid: (atomNodeId :n)
-            if rbVid.notZero when (vvGet xs: ctx.narrowBox vid: rbVid).length > 0 then {
+            if rbVid.notZero when (varEntryGet xs: ctx.narrowBox vid: rbVid).length > 0 then {
                 rbF: exprfacts
                 return (wholeLocalName :ast :reg :ctx vid: rbVid name: rbNm facts: rbF)
             }
@@ -28433,7 +28440,7 @@ emitReassignLvalue: function {
         ba: zast.nameTextAt :ast ref: (zast.atomNameIdOf n: (ast.nodes.get i: n.parent))
         if ba.length > 0 then {
             baseVid: atomVid :typing nid: (atomNodeId n: (ast.nodes.get i: n.parent))
-            nbo: vvGet xs: ctx.narrowBox vid: baseVid
+            nbo: varEntryGet xs: ctx.narrowBox vid: baseVid
             if nbo.length > 0 then {
                 memC: (
                     memberC
@@ -28441,7 +28448,7 @@ emitReassignLvalue: function {
                     :reg
                     :typing
                     :ctx
-                    owner: ((vtGet xs: ctx.narrowTid vid: baseVid).or d: ztypes.tid.zero)
+                    owner: ((varTidGet xs: ctx.narrowTid vid: baseVid).or d: ztypes.tid.zero)
                     kind: memberkind.field
                     nameId: (aliasOrChildId :ast :typing aliasId: n.nodeid childId: n.child)
                 )
@@ -29027,15 +29034,15 @@ emitMatchStmt: function {
     mePrevF: exprfacts
     mePrevT: ztypes.tid
     if meSeed then {
-        pv: vvGet xs: ctx.narrowBox vid: snameV
+        pv: varEntryGet xs: ctx.narrowBox vid: snameV
         mePrevV = pv.take
-        mePrevF = vvFactsOf xs: ctx.narrowBox vid: snameV
+        mePrevF = varEntryFactsOf xs: ctx.narrowBox vid: snameV
         mePrevT = (
-            (vtGet xs: ctx.narrowTid vid: snameV).or
+            (varTidGet xs: ctx.narrowTid vid: snameV).or
             d: ztypes.tid.zero
         )
-        vvSet xs: ctx.narrowBox vid: snameV val: meV.stringView facts: meVF
-        vtSet xs: ctx.narrowTid vid: snameV tid: meT
+        varEntrySet xs: ctx.narrowBox vid: snameV val: meV.stringView facts: meVF
+        varTidSet xs: ctx.narrowTid vid: snameV tid: meT
     }
     mdvg: matchDiverges :reg :typing nid: m.nodeid
     (
@@ -29305,7 +29312,7 @@ emitLocalDestroy: function {
         return
     }
     # storage another owner frees: what a borrow aliases
-    if (vvHas xs: ctx.aliases :vid) then return
+    if (varEntryHas xs: ctx.aliases :vid) then return
     nm: varCName :ctx :ast :reg :vid
     buf.append (destroyLineC :reg :typing :ctx :tid nm: nm.stringView :ind)
 }
@@ -29408,7 +29415,7 @@ seedUnionArmAlias: function {
     cmt: "\{ind}    /* alias: \{sname} => \{nbv} */\n"
     buf.append cmt
     (
-        vvSet
+        varEntrySet
         xs: ctx.narrowBox
         vid: snameVid
         val: nbv.stringView
@@ -29416,7 +29423,7 @@ seedUnionArmAlias: function {
     )
     co: typing.declChildOfId parentTypeId: vtid nameId: arm
     if co.some then {
-        vtSet xs: ctx.narrowTid vid: snameVid tid: co
+        varTidSet xs: ctx.narrowTid vid: snameVid tid: co
     }
 }
 
@@ -29456,9 +29463,9 @@ emitMatchClause: function {
         # the narrowing an enclosing scope gave the subject, put back when the
         # arm ends: a match on a name an `if` narrowed must not end that `if`'s
         # narrowing for the statements after the match
-        prevV: vvGet xs: ctx.narrowBox vid: snameVid
-        prevF: vvFactsOf xs: ctx.narrowBox vid: snameVid
-        prevT: (vtGet xs: ctx.narrowTid vid: snameVid).or d: ztypes.tid.zero
+        prevV: varEntryGet xs: ctx.narrowBox vid: snameVid
+        prevF: varEntryFactsOf xs: ctx.narrowBox vid: snameVid
+        prevT: (varTidGet xs: ctx.narrowTid vid: snameVid).or d: ztypes.tid.zero
         if pc.length > 0 when sname.length > 0 then {
             if isUni then {
                 (
@@ -29487,10 +29494,10 @@ emitMatchClause: function {
                 # by its stamp
                 armMV: memberC :ast :reg :typing :ctx owner: vtid kind: memberkind.arm nameId: arm
                 nbvV: "_m\{mN}.data.\{armMV}"
-                vvSet xs: ctx.narrowBox vid: snameVid val: nbvV.stringView facts: pathFacts
+                varEntrySet xs: ctx.narrowBox vid: snameVid val: nbvV.stringView facts: pathFacts
                 cov: typing.declChildOfId parentTypeId: vtid nameId: arm
                 if cov.some then {
-                    vtSet xs: ctx.narrowTid vid: snameVid tid: cov
+                    varTidSet xs: ctx.narrowTid vid: snameVid tid: cov
                 }
                 didSeed = true
             } else {
@@ -31566,7 +31573,7 @@ remainingArm: function {
     tid: ztypes.tid
     extra: zast.nameid
 } out zast.nameid is {
-    exv: vaGet xs: ctx.exclArms vid: subjVid
+    exv: varArmsGet xs: ctx.exclArms vid: subjVid
     all: ListVal zast.nameid
     zenv.sumArmNameIds ty: typing :reg :tid ids: all
     remN: u64
@@ -32038,17 +32045,17 @@ pushExclusion: function {
     arm: zast.nameid
     owner: ztypes.tid
 } is {
-    pv0: vaGet xs: ctx.exclArms :vid
+    pv0: varArmsGet xs: ctx.exclArms :vid
     nx: pv0.copy
     nx.append arm
     ctx.exSaves.append (
         ExclSave
         :vid
         arms: pv0
-        owner: ((vtGet xs: ctx.exclTids :vid).or d: ztypes.tid.zero)
+        owner: ((varTidGet xs: ctx.exclTids :vid).or d: ztypes.tid.zero)
     )
-    vaSet xs: ctx.exclArms :vid arms: nx
-    vtSet xs: ctx.exclTids :vid tid: owner
+    varArmsSet xs: ctx.exclArms :vid arms: nx
+    varTidSet xs: ctx.exclTids :vid tid: owner
 }
 
 # restoreCondExclusions -- put back what each vid this clause layered held
@@ -32058,12 +32065,12 @@ restoreCondExclusions: function {ctx: Ctx mark: u64} is {
     for ctx.exSaves.length > mark loop {
         sv: ctx.exSaves.pop
         if sv.arms.length > 0 then {
-            vaSet xs: ctx.exclArms vid: sv.vid arms: sv.arms
+            varArmsSet xs: ctx.exclArms vid: sv.vid arms: sv.arms
         } else {
             vidRemove xs: ctx.exclArms vid: sv.vid
         }
         if sv.owner.notZero then {
-            vtSet xs: ctx.exclTids vid: sv.vid tid: sv.owner
+            varTidSet xs: ctx.exclTids vid: sv.vid tid: sv.owner
         } else {
             vidRemove xs: ctx.exclTids vid: sv.vid
         }
@@ -33864,11 +33871,11 @@ seedPostGuardAlias: function {
     # option narrowed to `some`, then guarded on its payload's arm -- is read
     # through that narrowing: the arm is the payload's, not the local's. The
     # narrowed value is the payload itself, read with `.`
-    if ((vtGet xs: ctx.narrowTid vid: pgrv).or d: ztypes.tid.zero) == owner then {
-        nb: vvGet xs: ctx.narrowBox vid: pgrv
+    if ((varTidGet xs: ctx.narrowTid vid: pgrv).or d: ztypes.tid.zero) == owner then {
+        nb: varEntryGet xs: ctx.narrowBox vid: pgrv
         if nb.length > 0 then {
             pgRecv = nb.take
-            pgRecvF = vvFactsOf xs: ctx.narrowBox vid: pgrv
+            pgRecvF = varEntryFactsOf xs: ctx.narrowBox vid: pgrv
             acc = ".".string
         }
     }
@@ -34394,9 +34401,9 @@ resetFnEmitState: function {ctx: Ctx} is {
     ctx.aliases = List VarEntry
     ctx.narrowBox = List VarEntry
     ctx.aliasHeld = List AliasHeld
-    ctx.narrowTid = List VidTid
-    ctx.exclArms = List VidArms
-    ctx.exclTids = List VidTid
+    ctx.narrowTid = List VarTid
+    ctx.exclArms = List VarArms
+    ctx.exclTids = List VarTid
 }
 
 # registerReftypeParams -- add a top-level function's reftype (class/union)
@@ -39173,9 +39180,9 @@ emitC: function {
         aliases: List VarEntry
         narrowBox: List VarEntry
         aliasHeld: List AliasHeld
-        narrowTid: List VidTid
-        exclArms: List VidArms
-        exclTids: List VidTid
+        narrowTid: List VarTid
+        exclArms: List VarArms
+        exclTids: List VarTid
         exSaves: List ExclSave
         genActive: false
         genTid: ztypes.tid.zero
@@ -51420,7 +51427,13 @@ emitExprFormYield: function {
         if slotted then {
             lp3: "\{ind}/* alias: \{nm} => \{srcC} */\n"
             buf.append lp3
-            vvSet xs: ctx.aliases vid: nmVid val: srcC.stringView facts: (memberFacts b: pathFacts)
+            (
+                varEntrySet
+                xs: ctx.aliases
+                vid: nmVid
+                val: srcC.stringView
+                facts: (memberFacts b: pathFacts)
+            )
         } else {
             lp2: "\{ind}\{cTypeText} \{nm} = \{srcC};\n"
             buf.append lp2
