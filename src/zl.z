@@ -451,51 +451,9 @@ runFormat: function {
     return rc
 }
 
-# argstep -- what reading one command-line argument decided.
-argstep: record {
-    # false when the argument named no flag, so the caller must judge it itself
-    taken: bool
-    # the index of the last argument consumed, which is one past the flag when
-    # the flag took a value
-    at: u64
-}
-
-# flagValue -- the argument after `i`, which is `opt`'s value. An option with no
-# argument left is a refusal, named by what it wanted: there is no default that
-# would be right to guess.
-flagValue: function {
-    opt: StringView
-    noun: StringView
-    argv: (List String).view
-    i: u64
-    n: u64
-} out String is {
-    if (i + 1) < n then return (argv.get i: i + 1).copy
-    ev: "zl: \{opt} needs a \{noun}"
-    io.eprintln ev
-    os.exit code: 2
-    return "".string
-}
-
-# flagU32 -- `opt`'s value read as a number. A value that is not one is the
-# same refusal as no value at all.
-flagU32: function {opt: StringView argv: (List String).view i: u64 n: u64} out u32 is {
-    v: flagValue :opt noun: "number" :argv :i :n
-    pv: v.stringView.parseU64
-    match (
-        pv
-    ) case ok then {
-        return pv.u32.orPanic
-    } case err then null
-    ev: "zl: \{opt} needs a number"
-    io.eprintln ev
-    os.exit code: 2
-    return 0
-}
-
-# zlWord -- every word zl reads off its command line: the commands and the
-# flags. A word is classified by its slot here (zast.Vocab), never by comparing
-# its text.
+# zlWord -- the words zl reads at position 1 of its command line: the commands,
+# and the flags that only print and stop. A word is classified by its slot here
+# (zast.Vocab), never by comparing its text.
 zlWord: list {
     vLint: "lint"
     vFmt: "fmt"
@@ -506,25 +464,148 @@ zlWord: list {
     fHelp: "--help"
     fV: "-V"
     fVersion: "--version"
-    fFull: "--full"
-    fCasing: "--casing"
-    fDocs: "--docs"
-    fDocsParams: "--docs-params"
-    fDocsFields: "--docs-fields"
-    fDocsPrivate: "--docs-private"
-    fDocsQuality: "--docs-quality"
-    fDocsAll: "--docs-all"
-    fArch: "--arch"
-    fCheck: "--check"
-    fStdout: "--stdout"
-    fDiff: "--diff"
-    fCollapse: "--collapse"
-    fSrc: "--src"
-    fSystem: "--system"
-    fLineLength: "--line-length"
-    fComplexity: "--complexity"
-    fCounts: "--counts"
 } out staticlist StringView
+
+# opt -- the name of each flag and option a command takes, as it is written on
+# the command line. A command's spec declares its own, and CliFlags reads them
+# back by the same names.
+opt: list {
+    full: "--full"
+    casing: "--casing"
+    docs: "--docs"
+    docsParams: "--docs-params"
+    docsFields: "--docs-fields"
+    docsPrivate: "--docs-private"
+    docsQuality: "--docs-quality"
+    docsAll: "--docs-all"
+    arch: "--arch"
+    counts: "--counts"
+    check: "--check"
+    stdout: "--stdout"
+    diff: "--diff"
+    collapse: "--collapse"
+    src: "--src"
+    system: "--system"
+    lineLength: "--line-length"
+    complexity: "--complexity"
+} out staticlist StringView
+
+# addSwitch -- declares a flag on `sp`. It has no short alias and no help text:
+# zl's usage is written by hand (printUsage).
+addSwitch: function {sp: cli.Spec.borrow name: StringView} is {
+    cli.addFlag spec: sp name: name.string shortName: "".string help: "".string
+}
+
+# addValue -- declares an option on `sp` that a command line may leave out
+addValue: function {sp: cli.Spec.borrow name: StringView repeats: bool} is {
+    (
+        cli.addOption
+        spec: sp
+        name: name.string
+        shortName: "".string
+        help: "".string
+        required: false
+        :repeats
+    )
+}
+
+# projectSpec -- a spec with what `lint` and `fmt` both take: the tier, the
+# project's roots and the width. Their files are the extra arguments.
+projectSpec: function out cli.Spec is {
+    sp: cli.Spec.create programName: "zl".string summary: "".string
+    addSwitch :sp name: opt.full
+    addValue :sp name: opt.src repeats: true
+    addValue :sp name: opt.system repeats: false
+    addValue :sp name: opt.lineLength repeats: false
+    return sp
+}
+
+# lintSpec -- the command line of `zl lint`
+lintSpec: function out cli.Spec is {
+    sp: projectSpec
+    addSwitch :sp name: opt.casing
+    addSwitch :sp name: opt.docs
+    addSwitch :sp name: opt.docsParams
+    addSwitch :sp name: opt.docsFields
+    addSwitch :sp name: opt.docsPrivate
+    addSwitch :sp name: opt.docsQuality
+    addSwitch :sp name: opt.docsAll
+    addSwitch :sp name: opt.arch
+    addSwitch :sp name: opt.counts
+    addValue :sp name: opt.complexity repeats: false
+    return sp
+}
+
+# formatSpec -- the command line of `zl fmt`
+formatSpec: function out cli.Spec is {
+    sp: projectSpec
+    addSwitch :sp name: opt.check
+    addSwitch :sp name: opt.stdout
+    addSwitch :sp name: opt.diff
+    addSwitch :sp name: opt.collapse
+    return sp
+}
+
+# explainSpec -- the command line of `zl explain`: the one code to describe
+explainSpec: function out cli.Spec is {
+    sp: cli.Spec.create programName: "zl".string summary: "".string
+    cli.addPositional spec: sp name: "code".string help: "".string required: true
+    return sp
+}
+
+# wrongUsage -- the exit code of a command line zl does not accept
+wrongUsage: 2
+
+# refused -- says why `spec` refuses the command line, in cli's sentence for
+# `e`; answers wrongUsage
+refused: function {spec: cli.Spec.view e: cli.CliError.view} out i32 is {
+    io.eprintln (cli.errorText :spec :e)
+    return wrongUsage
+}
+
+# numberOf -- the option `name` read as a number, 0 when it was not written. A
+# value that is no number, or one too large to be a width or a threshold, is a
+# refusal.
+numberOf: function {p: cli.Parsed.view name: StringView} out u32 is {
+    v: p.option :name
+    match (
+        v
+    ) case some then {
+        pv: v.stringView.parseU64
+        match (
+            pv
+        ) case ok then {
+            n: pv.u32
+            match (
+                n
+            ) case ok then {
+                return n
+            } case err then null
+        } case err then null
+        io.eprintln "zl: \{name} needs a number"
+        os.exit code: wrongUsage
+    } case none then null
+    return 0
+}
+
+# textOf -- the value `v` holds, empty when it holds none: an option or a
+# positional that was not written
+textOf: function {v: (Option String).view} out String is {
+    match (
+        v
+    ) case some then {
+        return v.copy
+    } case none then {
+        return "".string
+    }
+}
+
+# filesOf -- the files a command line names: its operands, in the order given
+filesOf: function {p: cli.Parsed.view} out List String is {
+    files: List String
+    for each x: p.extraArgs loop files.append x.copy
+    return files
+}
 
 # CliFlags -- what `zl`'s command line sets: the lint options a run threads
 # through every rule, the formatter's own switches, and the roots a unit name
@@ -541,7 +622,7 @@ CliFlags: class {
     # --system as given, empty when absent: each file's roots resolve it as zc
     # does, after its project's systemDir (rootsFor)
     systemdir: String
-    # the lint options, filled in place as the flags are read
+    # the lint options
     opts: zsource.lintopts
     # --check: report what would change and write nothing
     check: bool
@@ -558,119 +639,35 @@ CliFlags: class {
     # --counts: print each file's count rows in place of its diagnostics
     counts: bool
 } as {
-    # setLintSwitch -- the lint tier switches. True when `w` named one.
-    setLintSwitch: function {:this w: u64} out bool is {
-        if w == zlWord.slot.fFull then {
-            this.opts.full = true
-            return true
-        }
-        if w == zlWord.slot.fCasing then {
-            this.opts.casing = true
-            return true
-        }
-        if w == zlWord.slot.fDocs then {
-            this.opts.docs = true
-            return true
-        }
-        if w == zlWord.slot.fDocsParams then {
-            this.opts.docParams = true
-            return true
-        }
-        if w == zlWord.slot.fDocsFields then {
-            this.opts.docFields = true
-            return true
-        }
-        if w == zlWord.slot.fDocsPrivate then {
-            this.opts.docsPrivate = true
-            return true
-        }
-        if w == zlWord.slot.fDocsQuality then {
-            this.opts.docsQuality = true
-            return true
-        }
-        if w == zlWord.slot.fDocsAll then {
-            this.opts.docs = true
-            this.opts.docParams = true
-            this.opts.docFields = true
-            this.opts.docsPrivate = true
-            this.opts.docsQuality = true
-            return true
-        }
-        if w == zlWord.slot.fArch then {
-            this.opts.arch = true
-            return true
-        }
-        if w == zlWord.slot.fCounts then {
-            this.counts = true
-            return true
-        }
-        return false
-    }
-
-    # setFormatSwitch -- the formatter switches. True when `w` named one.
-    setFormatSwitch: function {:this w: u64} out bool is {
-        if w == zlWord.slot.fCheck then {
-            this.check = true
-            return true
-        }
-        if w == zlWord.slot.fStdout then {
-            this.stdout = true
-            return true
-        }
-        if w == zlWord.slot.fDiff then {
-            this.diff = true
-            return true
-        }
-        if w == zlWord.slot.fCollapse then {
-            this.collapse = true
-            return true
-        }
-        return false
-    }
-
-    # takeValueFlag -- the flags whose value is the next argument. The step says
-    # whether one matched and where to continue from.
-    takeValueFlag: function {
-        :this
-        av: StringView
-        # the argument's slot in zlWord
-        w: u64
-        argv: (List String).view
-        i: u64
-        n: u64
-    } out argstep is {
-        if w == zlWord.slot.fSrc then {
-            this.srcdirs.append from: (flagValue opt: av noun: "directory" :argv :i :n)
-            return (argstep taken: true at: i + 1)
-        }
-        if w == zlWord.slot.fSystem then {
-            this.systemdir = flagValue opt: av noun: "directory" :argv :i :n
-            return (argstep taken: true at: i + 1)
-        }
-        if w == zlWord.slot.fLineLength then {
-            this.opts.lineLength = flagU32 opt: av :argv :i :n
-            this.llSet = true
-            return (argstep taken: true at: i + 1)
-        }
-        if w == zlWord.slot.fComplexity then {
-            this.opts.complexity = flagU32 opt: av :argv :i :n
-            this.fcSet = true
-            return (argstep taken: true at: i + 1)
-        }
-        return (argstep taken: false at: i)
-    }
-
-    # takeOperand -- an argument that named no flag: a target file, unless it is
-    # spelled like a flag, which is a refusal rather than a filename.
-    takeOperand: function {:this av: StringView arg: String.view} is {
-        if (av.startsWith prefix: "-") then {
-            eu: "zl: unknown flag \{av}"
-            io.eprintln eu
-            os.exit code: 2
-        }
-        # `av` views `arg` for the whole branch chain, so the list takes its own
-        # copy rather than moving the buffer out from under it
-        this.paths.append arg.copy
+    # read -- what the command line `p` set. A name the command's spec does not
+    # declare was not written, so one reading serves `lint` and `fmt`.
+    read: function {p: cli.Parsed.view} out this is {
+        o: zsource.defaultOpts
+        docsAll: p.hasFlag name: opt.docsAll
+        o.full = p.hasFlag name: opt.full
+        o.lineLength = numberOf :p name: opt.lineLength
+        o.casing = p.hasFlag name: opt.casing
+        o.docs = docsAll or (p.hasFlag name: opt.docs)
+        o.docParams = docsAll or (p.hasFlag name: opt.docsParams)
+        o.docFields = docsAll or (p.hasFlag name: opt.docsFields)
+        o.docsPrivate = docsAll or (p.hasFlag name: opt.docsPrivate)
+        o.docsQuality = docsAll or (p.hasFlag name: opt.docsQuality)
+        o.arch = p.hasFlag name: opt.arch
+        o.complexity = numberOf :p name: opt.complexity
+        return (
+            meta.create
+            paths: (filesOf :p)
+            srcdirs: (p.optionAll name: opt.src)
+            systemdir: (textOf v: (p.option name: opt.system))
+            opts: o
+            check: (p.hasFlag name: opt.check)
+            stdout: (p.hasFlag name: opt.stdout)
+            diff: (p.hasFlag name: opt.diff)
+            collapse: (p.hasFlag name: opt.collapse)
+            llSet: (p.given name: opt.lineLength)
+            fcSet: (p.given name: opt.complexity)
+            counts: (p.hasFlag name: opt.counts)
+        )
     }
 
     # lintOpts -- the options a lint run threads through every rule. --arch
@@ -690,56 +687,84 @@ CliFlags: class {
     }
 }
 
-# parseArgs -- every argument from `from` on, read into a fresh CliFlags: the
-# lint switches first, then the formatter's, then the value-taking flags, and
-# anything left is a target file.
-parseArgs: function {
-    argv: (List String).view zv: zast.Vocab.view from: u64 n: u64
-} out CliFlags is {
-    cf: (
-        CliFlags
-        paths: List String
-        srcdirs: List String
-        systemdir: String
-        opts: zsource.defaultOpts
-        check: false
-        stdout: false
-        diff: false
-        collapse: false
-        llSet: false
-        fcSet: false
-        counts: false
-    )
-    i: from
-    for i < n loop {
-        arg: argv.get :i
-        av: arg.stringView
-        w: zv.slotOf text: av
-        known: cf.setLintSwitch :w
-        if known.not then known = cf.setFormatSwitch :w
-        if known.not then {
-            step: cf.takeValueFlag :av :w :argv :i :n
-            known = step.taken
-            i = step.at
-        }
-        if known.not then cf.takeOperand :av :arg
-        i = i + 1
+# lintCommand -- `zl lint`; answers the exit code
+lintCommand: function out i32 is {
+    sp: lintSpec
+    pr: cli.parse spec: sp args: os.args first: 2
+    match (
+        pr
+    ) case ok then {
+        cf: CliFlags.read p: pr
+        lintOpts: cf.lintOpts
+        return (
+            runLint
+            paths: cf.paths
+            srcdirs: cf.srcdirs
+            systemdir: cf.systemdir.stringView
+            opts: lintOpts
+            counts: cf.counts
+        )
+    } case err then {
+        return (refused spec: sp e: pr)
     }
-    return cf
 }
 
-# CLI entry point for the zl linter/formatter: parse the subcommand
-# (lint / fmt / explain) and flags, then run it.
+# formatCommand -- `zl fmt`; answers the exit code
+formatCommand: function out i32 is {
+    sp: formatSpec
+    pr: cli.parse spec: sp args: os.args first: 2
+    match (
+        pr
+    ) case ok then {
+        cf: CliFlags.read p: pr
+        lineLength: cf.formatWidth
+        # --system stays as given: each file's roots resolve it, after its
+        # project's systemDir, by zc's own precedence (rootsFor)
+        return (
+            runFormat
+            paths: cf.paths
+            check: cf.check
+            stdout: cf.stdout
+            diff: cf.diff
+            full: cf.opts.full
+            srcdirs: cf.srcdirs
+            systemdir: cf.systemdir.stringView
+            :lineLength
+            collapse: cf.collapse
+        )
+    } case err then {
+        return (refused spec: sp e: pr)
+    }
+}
+
+# explainCommand -- `zl explain <code>`; answers the exit code
+explainCommand: function out i32 is {
+    sp: explainSpec
+    pr: cli.parse spec: sp args: os.args first: 2
+    match (
+        pr
+    ) case ok then {
+        if pr.extraArgs.length > 0 then {
+            io.eprintln "zl: unexpected argument '\{pr.extraArgs.get i: 0}'"
+            return wrongUsage
+        }
+        code: textOf v: (pr.positional name: "code")
+        return (zrule.explain code: code.stringView)
+    } case err then {
+        return (refused spec: sp e: pr)
+    }
+}
+
+# CLI entry point for the zl linter/formatter: read the command at position 1
+# (lint / fmt / explain), then run it on the arguments after it.
 main: function is {
     argv: os.args
-    n: argv.length
-    if n < 2 then {
+    if argv.length < 2 then {
         printUsage
-        os.exit code: 2
+        os.exit code: wrongUsage
     }
-    sub: argv.get i: 1
     zv: zast.Vocab.create block: zlWord
-    sw: zv.slotOf text: sub.stringView
+    sw: zv.slotOf text: (argv.get i: 1).stringView
 
     if sw == zlWord.slot.fH then {
         printUsage
@@ -763,50 +788,12 @@ main: function is {
         os.exit code: 0
     }
 
-    # --system stays as given: each file's roots resolve it, after its
-    # project's systemDir, by zc's own precedence (rootsFor)
-    cf: parseArgs :argv :zv from: 2 :n
-    if sw == zlWord.slot.vLint then {
-        lintOpts: cf.lintOpts
-        rc: (
-            runLint
-            paths: cf.paths
-            srcdirs: cf.srcdirs
-            systemdir: cf.systemdir.stringView
-            opts: lintOpts
-            counts: cf.counts
-        )
-        os.exit code: rc
-    }
-    isFmt: sw == zlWord.slot.vFmt
-    if sw == zlWord.slot.vFormat then isFmt = true
-    if isFmt then {
-        lineLength: cf.formatWidth
-        rc: (
-            runFormat
-            paths: cf.paths
-            check: cf.check
-            stdout: cf.stdout
-            diff: cf.diff
-            full: cf.opts.full
-            srcdirs: cf.srcdirs
-            systemdir: cf.systemdir.stringView
-            :lineLength
-            collapse: cf.collapse
-        )
-        os.exit code: rc
-    }
-    if sw == zlWord.slot.vExplain then {
-        if n < 3 then {
-            io.eprintln "usage: zl explain <code>"
-            os.exit code: 2
-        }
-        code: argv.get i: 2
-        rc: zrule.explain code: code.stringView
-        os.exit code: rc
-    }
+    if sw == zlWord.slot.vLint then os.exit code: lintCommand
+    if sw == zlWord.slot.vFmt then os.exit code: formatCommand
+    if sw == zlWord.slot.vFormat then os.exit code: formatCommand
+    if sw == zlWord.slot.vExplain then os.exit code: explainCommand
 
     io.eprintln "zl: unknown command"
     printUsage
-    os.exit code: 2
+    os.exit code: wrongUsage
 }

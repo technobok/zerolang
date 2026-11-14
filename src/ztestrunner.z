@@ -3630,6 +3630,65 @@ runVfsCases: function {r: Runner} is {
     }
 }
 
+# runUsageCases -- the USAGE cases kind: a driver refusing a command line. Each
+# directory under tests/fixtures/usage is one case. Its `args` file is one
+# line: the driver's name (`zl`), then the arguments. The driver runs in the
+# repository root. What it printed on stderr is compared with expected.err, and
+# its exit code with the number in expected.exit.
+runUsageCases: function {r: Runner} is {
+    udir: "\{r.root.stringView}/tests/fixtures/usage"
+    ls: io.listDir path: udir
+    if ls.err then return
+    for each cs: ls loop {
+        if (runUsageCase :r dir: udir.stringView name: cs.stringView) then {
+            r.passN = r.passN + 1
+        } else {
+            print "FAIL(usage) \{cs}"
+            r.fails = r.fails + 1
+        }
+    }
+}
+
+# runUsageCase -- one USAGE case: run the driver, compare. True when its stderr
+# and its exit code are what the case states.
+runUsageCase: function {r: Runner.view dir: StringView name: StringView} out bool is {
+    src: "\{dir}/\{name}"
+    outP: "\{r.tmp.stringView}/U_\{name}.out"
+    errP: "\{r.tmp.stringView}/U_\{name}.err"
+    rootAbs: absoluteFrom base: workingDir.stringView p: r.root.stringView
+    rc: (
+        os.spawn
+        argv: (usageArgv root: rootAbs.stringView caseDir: src.stringView)
+        cwd: rootAbs.stringView
+        outPath: outP.stringView
+        errPath: errP.stringView
+        timeoutSecs: r.timeoutSecs
+    )
+    exitP: "\{src}/expected.exit"
+    wantExit: slurp path: exitP.stringView
+    gotExit: "\{rc}"
+    if gotExit.stringView != wantExit.stringView.trim then return false
+    wantErr: "\{src}/expected.err"
+    return (projectOutDiffers want: wantErr.stringView got: errP.stringView).not
+}
+
+# usageArgv -- the command a USAGE case's `args` line gives. Its first word
+# names a driver, which is that program in the `bin` directory under `root`.
+usageArgv: function {root: StringView caseDir: StringView} out List String is {
+    argsP: "\{caseDir}/args"
+    argsLine: slurp path: argsP.stringView
+    argv: List String
+    for each tok: (argsLine.stringView.trim.split sep: " ") loop {
+        if tok.length == 0 then continue
+        if argv.length == 0 then {
+            argv.append from: "\{root}/bin/\{tok}"
+        } else {
+            argv.append from: tok.string
+        }
+    }
+    return argv
+}
+
 # runProjectCases -- the PROJECT cases kind: zc run inside a project. Each
 # directory under tests/fixtures/project is one case: its files (a project.z,
 # the units) are copied to a scratch directory of their own, zc runs THERE with
@@ -4497,6 +4556,7 @@ main: function is {
         runDifferentialCases :r
         runVfsCases :r
         runProjectCases :r
+        runUsageCases :r
         runErrCodeCases :r
         runSmokeCases :r
         runFmtCases :r
