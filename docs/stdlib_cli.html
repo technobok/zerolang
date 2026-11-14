@@ -95,6 +95,8 @@ Table of Contents</div>
 </li>
 <li><a href="#parsed">parsed</a>
 </li>
+<li><a href="#optionvalue">optionvalue</a>
+</li>
 <li><a href="#clierror">clierror</a>
 </li>
 <li><a href="#add-flag">add_flag</a>
@@ -106,6 +108,8 @@ Table of Contents</div>
 <li><a href="#parse">parse</a>
 </li>
 <li><a href="#help-text">help_text</a>
+</li>
+<li><a href="#error-text">error_text</a>
 </li>
 </ul>
 </li>
@@ -144,21 +148,22 @@ auto-generated from the spec.</p>
 declarative calls against a mutable spec; the whole parse is
 one function call. No stateful builder objects to juggle</li>
 <li><strong>One argv shape.</strong> <code>cli.parse</code> takes the whole vector
-as <code>os.args</code> returns it and skips position 0, the program
-name. Callers who want to parse a different token vector
-build a <code>List String</code> with a stand-in at position 0 and pass
-it in place</li>
+as <code>os.args</code> returns it and reads it from position
+<code>first</code>, which is 1 when not given: position 0 is the
+program name. A program that reads its command at position 1
+itself gives <code>first: 2</code></li>
 <li><strong>Fail fast, fail whole.</strong> Parse either returns a fully
 validated <code>Parsed</code> or an early <code>err</code> with a descriptive
 payload. No partial results; no mutable error list</li>
 <li><strong>Help is a property of the Spec.</strong> <code>cli.helpText</code>
 takes the same spec that parsed the args, so the rendered
 usage never drifts from the registered behaviour</li>
+<li><strong>One wording for an error.</strong> <code>cli.errorText</code> gives the
+sentence for a <code>CliError</code>, so every program that uses the
+unit refuses a command line in the same words</li>
 </ul>
 <p><strong>Not shipped yet.</strong></p>
 <ul>
-<li>Multi-value options (<code>--include a --include b</code>):
-    repeats overwrite the map entry today</li>
 <li>Long-option prefix abbreviation (<code>--ver</code> for
     <code>--verbose</code>): v1 is exact-match only</li>
 </ul>
@@ -166,13 +171,14 @@ usage never drifts from the registered behaviour</li>
 <p><strong>Registration types</strong></p>
 <ul>
 <li><a href="#flagdef"><strong>FlagDef</strong></a> -- <code>class { name: String  shortName: String  help: String }</code></li>
-<li><a href="#optiondef"><strong>OptionDef</strong></a> -- <code>class { name: String  shortName: String  help: String  required: bool }</code></li>
+<li><a href="#optiondef"><strong>OptionDef</strong></a> -- <code>class { name: String  shortName: String  help: String  required: bool  repeats: bool }</code></li>
 <li><a href="#positionaldef"><strong>PositionalDef</strong></a> -- <code>class { name: String  help: String  required: bool }</code></li>
 </ul>
 <p><strong>Spec + Parsed handle</strong></p>
 <ul>
-<li><a href="#spec"><strong>Spec</strong></a> -- <code>class { programName: String  summary: String  flags: ... options: ... positionals: ... }</code></li>
-<li><a href="#parsed"><strong>Parsed</strong></a> -- <code>class { flagSet ...  optionValues ...  positionalValues ...  extraArgs ... }</code></li>
+<li><a href="#spec"><strong>Spec</strong></a> -- <code>class { programName: String  summary: String  flags: ... options: ... positionals: ...  stopAtOperand: false }</code></li>
+<li><a href="#parsed"><strong>Parsed</strong></a> -- <code>class { flagSet ...  optionValues ...  repeatValues ...  positionalValues ...  extraArgs ... }</code></li>
+<li><a href="#optionvalue"><strong>OptionValue</strong></a> -- <code>class { name: String  value: String }</code></li>
 </ul>
 <p><strong>Errors</strong></p>
 <ul>
@@ -181,13 +187,14 @@ usage never drifts from the registered behaviour</li>
 <p><strong>Registration</strong></p>
 <ul>
 <li><a href="#add-flag"><strong>cli.addFlag</strong></a> -- <code>function {spec: Spec.borrow name: String.take shortName: String.take help: String.take}</code></li>
-<li><a href="#add-option"><strong>cli.addOption</strong></a> -- <code>function {spec: Spec.borrow name: String.take shortName: String.take help: String.take required: bool}</code></li>
+<li><a href="#add-option"><strong>cli.addOption</strong></a> -- <code>function {spec: Spec.borrow name: String.take shortName: String.take help: String.take required: bool repeats: false}</code></li>
 <li><a href="#add-positional"><strong>cli.addPositional</strong></a> -- <code>function {spec: Spec.borrow name: String.take help: String.take required: bool}</code></li>
 </ul>
 <p><strong>Parse + render</strong></p>
 <ul>
-<li><a href="#parse"><strong>cli.parse</strong></a> -- <code>function {spec: Spec.borrow args: (List String).take} out (Result Parsed E: CliError)</code></li>
-<li><a href="#help-text"><strong>cli.helpText</strong></a> -- <code>function {spec: Spec.borrow} out String</code></li>
+<li><a href="#parse"><strong>cli.parse</strong></a> -- <code>function {spec: Spec.view args: (List String).take first: 1.u64} out (Result Parsed E: CliError)</code></li>
+<li><a href="#help-text"><strong>cli.helpText</strong></a> -- <code>function {spec: Spec.view} out String</code></li>
+<li><a href="#error-text"><strong>cli.errorText</strong></a> -- <code>function {spec: Spec.view e: CliError.view} out String</code></li>
 </ul>
 <h2 id="flagdef"><a href="#flagdef">3. flagdef</a></h2>
 <p>One registered long flag plus optional short alias. Class
@@ -197,7 +204,8 @@ reftypes.</p>
 <code>cli.addFlag</code> helper does it for you.</p>
 <h2 id="optiondef"><a href="#optiondef">4. optiondef</a></h2>
 <p>One registered option (long + optional short alias), with a
-required-presence flag. Constructed via <code>cli.addOption</code>.</p>
+required-presence flag and a <code>repeats</code> flag. Constructed via
+<code>cli.addOption</code>.</p>
 <h2 id="positionaldef"><a href="#positionaldef">5. positionaldef</a></h2>
 <p>One registered positional slot, named for lookup. Constructed
 via <code>cli.addPositional</code>.</p>
@@ -209,6 +217,32 @@ fields are owned; list fields hold the registered defs in
 insertion order (which is also help-text output order).</p>
 <pre><code class="language-zerolang">  sp: cli.Spec.create programName: "zgrep".string summary: "search files for a pattern".string</code></pre>
 <p>The three list fields are initialised empty.</p>
+<p><strong>#~"stopAtOperand"</strong> is for a program that starts another one and
+hands it arguments. Set it to <code>true</code>, and the first operand past the
+declared positionals ends the reading: that token and every token after
+it go to <code>extraArgs</code> as written, whatever they look like. A flag
+written before that operand is still read. <code>--</code> ends the reading as
+it always does.</p>
+<pre><code class="language-zerolang">main: function is {
+    sp: cli.Spec.create programName: "tool".string summary: "".string
+    sp.stopAtOperand = true
+    cli.addFlag spec: sp name: "--verbose".string shortName: "-v".string help: "".string
+    cli.addPositional spec: sp name: "unit".string help: "".string required: true
+    args: List String
+    for each t: ("tool hello -v one --two -v".split sep: " ") loop args.append t.string
+    pr: cli.parse spec: sp :args
+    match (
+        pr
+    ) case ok then {
+        print "verbose \{pr.hasFlag name: "--verbose"}"
+        for each x: pr.extraArgs loop print "extra \{x}"
+    } case err then {
+        print (cli.errorText spec: sp e: pr)
+    }
+}</code></pre><pre class="expect"><code>verbose true
+extra one
+extra --two
+extra -v</code></pre>
 <h2 id="parsed"><a href="#parsed">7. parsed</a></h2>
 <p>Successful parse result. Opaque; inspect via the accessor
 methods.</p>
@@ -221,14 +255,26 @@ alias</li>
 <code>Option.none</code> if absent</li>
 <li><code>positional name</code> -- value of this positional, or
 <code>Option.none</code> if absent</li>
+<li><code>optionAll name</code> -- every value kept for this option, in
+the order written: all of them for an option declared
+<code>repeats: true</code>, the last for any other. An empty list if
+absent</li>
+<li><code>given name</code> -- was this name written at all, as a flag,
+as an option or as a positional? It tells a value the command
+line gave from a default the program fills in</li>
 </ul>
 <p><strong>#~"extraArgs"</strong> holds every token after a bare <code>--</code> (the
 end-of-options terminator) and every token beyond the declared
 positionals, in order. There is no accessor -- read the field
 directly.</p>
 <p><strong>Ownership.</strong> <code>option</code> / <code>positional</code> each return a
-fresh <code>Option String</code> -- scope-exit frees the boxed string.</p>
-<h2 id="clierror"><a href="#clierror">8. clierror</a></h2>
+fresh <code>Option String</code> -- scope-exit frees the boxed string.
+<code>optionAll</code> returns a fresh <code>List String</code>.</p>
+<h2 id="optionvalue"><a href="#optionvalue">8. optionvalue</a></h2>
+<p>One value written for an option that repeats: the option's long
+name and the value. <code>Parsed.repeatValues</code> holds them in the order
+written; read them through <code>optionAll</code>.</p>
+<h2 id="clierror"><a href="#clierror">9. clierror</a></h2>
 <p>Parse-time failures. Each arm carries a descriptive <code>String</code>
 so callers can compose diagnostics or print the offending token
 directly. Union (not variant) because every arm carries a
@@ -248,7 +294,7 @@ given (<code>--output</code>, <code>-o</code> or <code>-vo</code>)</li>
 <li><code>unexpectedArg</code> -- a flag given an embedded value
 (<code>--verbose=1</code>); flags take none. Payload is the token</li>
 </ul>
-<h2 id="add-flag"><a href="#add-flag">9. add_flag</a></h2>
+<h2 id="add-flag"><a href="#add-flag">10. add_flag</a></h2>
 <p>Register a flag on <code>Spec</code>. The spec is borrowed so mutations
 propagate to the caller's spec. Name conventions: pass the full
 long form (<code>--verbose</code>) and optional short alias
@@ -260,10 +306,12 @@ long form (<code>--verbose</code>) and optional short alias
       shortName: "-v".string
       help: "verbose output".string
   )</code></pre>
-<h2 id="add-option"><a href="#add-option">10. add_option</a></h2>
+<h2 id="add-option"><a href="#add-option">11. add_option</a></h2>
 <p>Register a value-carrying option on <code>Spec</code>. <code>required: true</code>
 causes a <code>missingRequired</code> error from <code>parse</code> when the
-option is absent.</p>
+option is absent. <code>repeats: true</code> keeps every value the command
+line gives, for <code>optionAll</code>; it is <code>false</code> when not given, and
+<code>option</code> answers the last value either way.</p>
 <pre><code class="language-zerolang">  (
       cli.addOption
       spec: sp
@@ -271,13 +319,22 @@ option is absent.</p>
       shortName: "-o".string
       help: "out file".string
       required: false
+  )
+  (
+      cli.addOption
+      spec: sp
+      name: "--include".string
+      shortName: "-I".string
+      help: "a directory to search; may be given again".string
+      required: false
+      repeats: true
   )</code></pre>
-<h2 id="add-positional"><a href="#add-positional">11. add_positional</a></h2>
+<h2 id="add-positional"><a href="#add-positional">12. add_positional</a></h2>
 <p>Register a positional slot on <code>Spec</code>. Positionals are
 consumed in registration order as argv tokens arrive.</p>
 <pre><code class="language-zerolang">  cli.addPositional spec: sp name: "pattern".string help: "regex".string required: true
   cli.addPositional spec: sp name: "file".string help: "input".string required: true</code></pre>
-<h2 id="parse"><a href="#parse">12. parse</a></h2>
+<h2 id="parse"><a href="#parse">13. parse</a></h2>
 <p>Parse <code>args</code> against the registered <code>Spec</code>. <code>args</code> is the
 whole argument vector as <code>os.args</code> returns it; position 0, the
 program name, is skipped. Typical call site:</p>
@@ -295,11 +352,39 @@ program name, is skipped. Typical call site:</p>
 <p>Accessors look up by the registered long name, not the short
 alias -- use the long name throughout for both registration and
 lookup.</p>
+<p><strong>A program with commands</strong> reads its command at position 1
+itself, picks that command's spec, and gives <code>first: 2</code> so that
+<code>parse</code> reads what follows the command.</p>
+<pre><code class="language-zerolang">main: function is {
+    sp: cli.Spec.create programName: "tool".string summary: "".string
+    (
+        cli.addOption
+        spec: sp
+        name: "--src".string
+        shortName: "".string
+        help: "".string
+        required: false
+        repeats: true
+    )
+    args: List String
+    for each t: ("tool build --src a --src=b main".split sep: " ") loop args.append t.string
+    pr: cli.parse spec: sp :args first: 2
+    match (
+        pr
+    ) case ok then {
+        for each d: (pr.optionAll name: "--src") loop print "src \{d}"
+        for each x: pr.extraArgs loop print "extra \{x}"
+    } case err then {
+        print (cli.errorText spec: sp e: pr)
+    }
+}</code></pre><pre class="expect"><code>src a
+src b
+extra main</code></pre>
 <p><strong>Ownership.</strong> <code>parse</code> consumes <code>args</code> (the argument list
 may be freed during parsing). Callers who need to retain the
-argv vector should pass a copy. <code>Spec</code> is borrowed, not
-consumed -- the same spec can parse multiple argv vectors.</p>
-<h2 id="help-text"><a href="#help-text">13. help_text</a></h2>
+argv vector should pass a copy. <code>Spec</code> is only read -- the
+same spec can parse multiple argv vectors.</p>
+<h2 id="help-text"><a href="#help-text">14. help_text</a></h2>
 <p>Render the usage + help block from the spec. Returns a
 freshly-allocated <code>String</code>.</p>
 <pre><code class="language-text">  usage: zgrep [options] &lt;pattern&gt; &lt;file&gt;
@@ -316,6 +401,42 @@ freshly-allocated <code>String</code>.</p>
     pattern    regex
     file    input</code></pre>
 <p>Layout is deterministic: registration order is preserved.</p>
+<h2 id="error-text"><a href="#error-text">15. error_text</a></h2>
+<p>The sentence that says a <code>CliError</code> to the person who wrote the
+command line. It starts with the spec's <code>programName</code>, is one line,
+and has no newline at its end.</p>
+<table>
+<colgroup>
+<col style="width: 28%">
+<col style="width: 71%">
+</colgroup>
+<thead>
+<tr><th style="text-align: left">Error</th><th style="text-align: left">Sentence</th></tr>
+</thead>
+<tbody>
+<tr><td><code>unknownFlag</code></td><td><code>tool: unknown option '--quiet'</code></td></tr>
+<tr><td><code>missingValue</code></td><td><code>tool: --output needs a value</code></td></tr>
+<tr><td><code>missingRequired</code></td><td><code>tool: missing --level</code> for an option, <code>tool: missing &lt;file&gt;</code> for a positional</td></tr>
+<tr><td><code>unexpectedArg</code></td><td><code>tool: --verbose takes no value</code></td></tr>
+</tbody>
+</table>
+<p>A program that has a help command appends its own pointer to it;
+<code>errorText</code> does not know that one exists.</p>
+<pre><code class="language-zerolang">main: function is {
+    sp: cli.Spec.create programName: "tool".string summary: "".string
+    cli.addPositional spec: sp name: "file".string help: "".string required: true
+    args: List String
+    args.append "tool".string
+    pr: cli.parse spec: sp :args
+    match (
+        pr
+    ) case ok then {
+        print "ok"
+    } case err then {
+        io.eprintln "\{cli.errorText spec: sp e: pr}; `tool help` lists the options"
+        print (cli.errorText spec: sp e: pr)
+    }
+}</code></pre><pre class="expect"><code>tool: missing &lt;file&gt;</code></pre>
 </main>
 </body>
 </html>

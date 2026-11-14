@@ -71,22 +71,23 @@ Accessed via qualified names only -- #~"cli.Spec.create",
     declarative calls against a mutable spec; the whole parse is
     one function call. No stateful builder objects to juggle]
   [#*: #b:"One argv shape." #~"cli.parse" takes the whole vector
-    as #~"os.args" returns it and skips position 0, the program
-    name. Callers who want to parse a different token vector
-    build a #~"List String" with a stand-in at position 0 and pass
-    it in place]
+    as #~"os.args" returns it and reads it from position
+    #~"first", which is 1 when not given: position 0 is the
+    program name. A program that reads its command at position 1
+    itself gives #~"first: 2"]
   [#*: #b:"Fail fast, fail whole." Parse either returns a fully
     validated #~"Parsed" or an early #~"err" with a descriptive
     payload. No partial results; no mutable error list]
   [#*: #b:"Help is a property of the Spec." #~"cli.helpText"
     takes the same spec that parsed the args, so the rendered
     usage never drifts from the registered behaviour]
+  [#*: #b:"One wording for an error." #~"cli.errorText" gives the
+    sentence for a #~"CliError", so every program that uses the
+    unit refuses a command line in the same words]
 
 #b:"Not shipped yet."
 
 #ul:
-  [#*: Multi-value options (#~"--include a --include b"):
-    repeats overwrite the map entry today]
   [#*: Long-option prefix abbreviation (#~"--ver" for
     #~"--verbose"): v1 is exact-match only]
 
@@ -97,14 +98,15 @@ Accessed via qualified names only -- #~"cli.Spec.create",
 
 #ul:
   [#*: [#> to=flagdef: #b:"FlagDef"] -- #~"class { name: String  shortName: String  help: String }"]
-  [#*: [#> to=optiondef: #b:"OptionDef"] -- #~"class { name: String  shortName: String  help: String  required: bool }"]
+  [#*: [#> to=optiondef: #b:"OptionDef"] -- #~"class { name: String  shortName: String  help: String  required: bool  repeats: bool }"]
   [#*: [#> to=positionaldef: #b:"PositionalDef"] -- #~"class { name: String  help: String  required: bool }"]
 
 #p: #b:"Spec + Parsed handle"
 
 #ul:
-  [#*: [#> to=spec: #b:"Spec"] -- #~"class { programName: String  summary: String  flags: ... options: ... positionals: ... }"]
-  [#*: [#> to=parsed: #b:"Parsed"] -- #~"class { flagSet ...  optionValues ...  positionalValues ...  extraArgs ... }"]
+  [#*: [#> to=spec: #b:"Spec"] -- #~"class { programName: String  summary: String  flags: ... options: ... positionals: ...  stopAtOperand: false }"]
+  [#*: [#> to=parsed: #b:"Parsed"] -- #~"class { flagSet ...  optionValues ...  repeatValues ...  positionalValues ...  extraArgs ... }"]
+  [#*: [#> to=optionvalue: #b:"OptionValue"] -- #~"class { name: String  value: String }"]
 
 #p: #b:"Errors"
 
@@ -115,14 +117,15 @@ Accessed via qualified names only -- #~"cli.Spec.create",
 
 #ul:
   [#*: [#> to=add-flag: #b:"cli.addFlag"] -- #~"function {spec: Spec.borrow name: String.take shortName: String.take help: String.take}"]
-  [#*: [#> to=add-option: #b:"cli.addOption"] -- #~"function {spec: Spec.borrow name: String.take shortName: String.take help: String.take required: bool}"]
+  [#*: [#> to=add-option: #b:"cli.addOption"] -- #~"function {spec: Spec.borrow name: String.take shortName: String.take help: String.take required: bool repeats: false}"]
   [#*: [#> to=add-positional: #b:"cli.addPositional"] -- #~"function {spec: Spec.borrow name: String.take help: String.take required: bool}"]
 
 #p: #b:"Parse + render"
 
 #ul:
-  [#*: [#> to=parse: #b:"cli.parse"] -- #~"function {spec: Spec.borrow args: (List String).take} out (Result Parsed E: CliError)"]
-  [#*: [#> to=help-text: #b:"cli.helpText"] -- #~"function {spec: Spec.borrow} out String"]
+  [#*: [#> to=parse: #b:"cli.parse"] -- #~"function {spec: Spec.view args: (List String).take first: 1.u64} out (Result Parsed E: CliError)"]
+  [#*: [#> to=help-text: #b:"cli.helpText"] -- #~"function {spec: Spec.view} out String"]
+  [#*: [#> to=error-text: #b:"cli.errorText"] -- #~"function {spec: Spec.view e: CliError.view} out String"]
 
 
 #--: flagdef
@@ -140,7 +143,8 @@ Users rarely construct #~"FlagDef" directly -- the
 
 
 One registered option (long + optional short alias), with a
-required-presence flag. Constructed via #~"cli.addOption".
+required-presence flag and a #~"repeats" flag. Constructed via
+#~"cli.addOption".
 
 
 #--: positionaldef
@@ -165,6 +169,38 @@ insertion order (which is also help-text output order).
 
 The three list fields are initialised empty.
 
+#b:"#~\"stopAtOperand\"" is for a program that starts another one and
+hands it arguments. Set it to #~"true", and the first operand past the
+declared positionals ends the reading: that token and every token after
+it go to #~"extraArgs" as written, whatever they look like. A flag
+written before that operand is still read. #~"--" ends the reading as
+it always does.
+
+#code language=zerolang body="""
+  main: function is {
+      sp: cli.Spec.create programName: "tool".string summary: "".string
+      sp.stopAtOperand = true
+      cli.addFlag spec: sp name: "--verbose".string shortName: "-v".string help: "".string
+      cli.addPositional spec: sp name: "unit".string help: "".string required: true
+      args: List String
+      for each t: ("tool hello -v one --two -v".split sep: " ") loop args.append t.string
+      pr: cli.parse spec: sp :args
+      match (
+          pr
+      ) case ok then {
+          print "verbose \{pr.hasFlag name: "--verbose"}"
+          for each x: pr.extraArgs loop print "extra \{x}"
+      } case err then {
+          print (cli.errorText spec: sp e: pr)
+      }
+  }
+  """ expect="""
+  verbose true
+  extra one
+  extra --two
+  extra -v
+  """
+
 
 #--: parsed
 
@@ -182,6 +218,13 @@ methods.
     #~"Option.none" if absent]
   [#*: #~"positional name" -- value of this positional, or
     #~"Option.none" if absent]
+  [#*: #~"optionAll name" -- every value kept for this option, in
+    the order written: all of them for an option declared
+    #~"repeats: true", the last for any other. An empty list if
+    absent]
+  [#*: #~"given name" -- was this name written at all, as a flag,
+    as an option or as a positional? It tells a value the command
+    line gave from a default the program fills in]
 
 #b:"#~\"extraArgs\"" holds every token after a bare #~"--" (the
 end-of-options terminator) and every token beyond the declared
@@ -190,6 +233,15 @@ directly.
 
 #b:"Ownership." #~"option" / #~"positional" each return a
 fresh #~"Option String" -- scope-exit frees the boxed string.
+#~"optionAll" returns a fresh #~"List String".
+
+
+#--: optionvalue
+
+
+One value written for an option that repeats: the option's long
+name and the value. #~"Parsed.repeatValues" holds them in the order
+written; read them through #~"optionAll".
 
 
 #--: clierror
@@ -241,7 +293,9 @@ long form (#~"--verbose") and optional short alias
 
 Register a value-carrying option on #~"Spec". #~"required: true"
 causes a #~"missingRequired" error from #~"parse" when the
-option is absent.
+option is absent. #~"repeats: true" keeps every value the command
+line gives, for #~"optionAll"; it is #~"false" when not given, and
+#~"option" answers the last value either way.
 
 #code language=zerolang after=spec: """
   (
@@ -251,6 +305,15 @@ option is absent.
       shortName: "-o".string
       help: "out file".string
       required: false
+  )
+  (
+      cli.addOption
+      spec: sp
+      name: "--include".string
+      shortName: "-I".string
+      help: "a directory to search; may be given again".string
+      required: false
+      repeats: true
   )
 """
 
@@ -292,10 +355,44 @@ Accessors look up by the registered long name, not the short
 alias -- use the long name throughout for both registration and
 lookup.
 
+#b:"A program with commands" reads its command at position 1
+itself, picks that command's spec, and gives #~"first: 2" so that
+#~"parse" reads what follows the command.
+
+#code language=zerolang body="""
+  main: function is {
+      sp: cli.Spec.create programName: "tool".string summary: "".string
+      (
+          cli.addOption
+          spec: sp
+          name: "--src".string
+          shortName: "".string
+          help: "".string
+          required: false
+          repeats: true
+      )
+      args: List String
+      for each t: ("tool build --src a --src=b main".split sep: " ") loop args.append t.string
+      pr: cli.parse spec: sp :args first: 2
+      match (
+          pr
+      ) case ok then {
+          for each d: (pr.optionAll name: "--src") loop print "src \{d}"
+          for each x: pr.extraArgs loop print "extra \{x}"
+      } case err then {
+          print (cli.errorText spec: sp e: pr)
+      }
+  }
+  """ expect="""
+  src a
+  src b
+  extra main
+  """
+
 #b:"Ownership." #~"parse" consumes #~"args" (the argument list
 may be freed during parsing). Callers who need to retain the
-argv vector should pass a copy. #~"Spec" is borrowed, not
-consumed -- the same spec can parse multiple argv vectors.
+argv vector should pass a copy. #~"Spec" is only read -- the
+same spec can parse multiple argv vectors.
 
 
 #--: help_text
@@ -321,3 +418,41 @@ freshly-allocated #~"String".
 """
 
 Layout is deterministic: registration order is preserved.
+
+
+#--: error_text
+
+
+The sentence that says a #~"CliError" to the person who wrote the
+command line. It starts with the spec's #~"programName", is one line,
+and has no newline at its end.
+
+#table cols="2 5":
+  Error                |Sentence
+  #~"unknownFlag"      |#~"tool: unknown option '--quiet'"
+  #~"missingValue"     |#~"tool: --output needs a value"
+  #~"missingRequired"  |#~"tool: missing --level" for an option, #~"tool: missing <file>" for a positional
+  #~"unexpectedArg"    |#~"tool: --verbose takes no value"
+
+A program that has a help command appends its own pointer to it;
+#~"errorText" does not know that one exists.
+
+#code language=zerolang body="""
+  main: function is {
+      sp: cli.Spec.create programName: "tool".string summary: "".string
+      cli.addPositional spec: sp name: "file".string help: "".string required: true
+      args: List String
+      args.append "tool".string
+      pr: cli.parse spec: sp :args
+      match (
+          pr
+      ) case ok then {
+          print "ok"
+      } case err then {
+          io.eprintln "\{cli.errorText spec: sp e: pr}; `tool help` lists the options"
+          print (cli.errorText spec: sp e: pr)
+      }
+  }
+  """ expect="""
+  tool: missing <file>
+  """
