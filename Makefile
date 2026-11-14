@@ -179,8 +179,9 @@ $(BUILDDIR)/ztestrunner: bin/zc src/ztestrunner.z src/zdocblocks.z src/zcc.z src
 	$(CC) $(CFLAGS) $(MAINSTACK) -o $(BUILDDIR)/ztestrunner $(BUILDDIR)/ztestrunner.c $(call ZLINKOF,$(BUILDDIR)/ztestrunner.c) -lm
 
 # test -- the fast corpus gate. The arch and docs kinds run bin/zl, so it must be
-# built: without it those kinds count nothing and every ratchet reads zero.
-test: bin/zc bin/zl $(BUILDDIR)/ztestrunner
+# built: without it those kinds count nothing and every ratchet reads zero. The
+# usage kind runs each driver from bin/, bin/zls among them.
+test: bin/zc bin/zl bin/zls $(BUILDDIR)/ztestrunner
 	$(BUILDDIR)/ztestrunner --zc bin/zc --cc $(CC) --root . --jobs $(NPROC)
 
 # doc-check -- the doccode kind alone: every zerolang example in docs/*.pdoc and
@@ -269,7 +270,7 @@ ci:
 # ci-gates -- the gates ci runs in parallel, after perf-strict.
 ci-gates: style-lint zl-full-guard complexity-report warn-check pedantic-check emitter-guard typename-guard frontend-guard lifetime-guard native-guard alias-label-guard fwd-shape-guard generic-param-guard const-row-guard view-guard fallback-guard highlight-guard any-guard deadcode-guard cdead-guard cc-unused-guard piece-guard static-value-guard eager-guard eager-lib-guard case-guard user-native-guard shim-guard thread-tsan-guard cobj-guard sqlite-decls-guard zlink-guard zlink-rules-guard require-guard static-tcc-guard refusal-guard fmt-raw-guard nativec-agree-guard natives-show-guard prelude-share-guard readable-check test-tcc-heavy test-clang test-ub test-o2 test-math-arm64 test-sqlite-arm64 test-math-noasm test-portable-scalars test-mingw test-tcc-mingw test-msvc-wine test-msvc-corpus math-asm-guard matrix-guard constparity-guard docs-link-guard mode-parity fuzz-ci ci-corpus
 
-ci-corpus: bin/zc bin/zl $(BUILDDIR)/ztestrunner
+ci-corpus: bin/zc bin/zl bin/zls $(BUILDDIR)/ztestrunner
 	$(BUILDDIR)/ztestrunner --zc bin/zc --cc $(CC) --root . --heavy --jobs $(NPROC)
 
 # test-math-arm64 -- the math corpus cross-built for aarch64 and run under qemu
@@ -715,7 +716,7 @@ bench-math-kernels: bin/zc $(if $(BENCH_TCC),$(BUILDDIR)/tcc)
 
 # test-clang -- the corpus under clang. Only clang shows an f128 helper the
 # prelude forgot to declare (gcc reads quadmath.h).
-test-clang: bin/zc bin/zl $(BUILDDIR)/ztestrunner
+test-clang: bin/zc bin/zl bin/zls $(BUILDDIR)/ztestrunner
 	$(BUILDDIR)/ztestrunner --zc bin/zc --cc clang --cc-forward --root . --jobs $(NPROC)
 
 # test-ub -- the run corpus with C's undefined behaviour trapping: every check
@@ -753,7 +754,7 @@ test-o2: bin/zc bin/zl $(BUILDDIR)/ztestrunner
 	done
 
 # what a corpus run under the vendored tcc needs built first.
-TCC_RUN_DEPS := bin/zc bin/zl $(BUILDDIR)/tcc $(BUILDDIR)/ztestrunner
+TCC_RUN_DEPS := bin/zc bin/zl bin/zls $(BUILDDIR)/tcc $(BUILDDIR)/ztestrunner
 
 # test-tcc -- the corpus under the vendored tcc, as a backend (--cc-forward), so
 # units tcc cannot build are refused by name. tests/tcc-known-failures.txt is
@@ -1183,7 +1184,7 @@ fmt-raw-guard: out/zfmt
 	echo "fmt-raw-guard OK: $$n file(s) byte-identical through a RAW round trip"
 
 # regen-lsp-goldens -- rewrite the lsp goldens (a full runner pass).
-regen-lsp-goldens: bin/zc $(BUILDDIR)/ztestrunner
+regen-lsp-goldens: bin/zc bin/zl bin/zls $(BUILDDIR)/ztestrunner
 	$(BUILDDIR)/ztestrunner --zc bin/zc --cc $(CC) --root . --jobs $(NPROC) --regen-lsp
 
 # bump-seed -- regenerate the committed seed from bin/zc; review the diff.
