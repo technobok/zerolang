@@ -724,17 +724,17 @@ Server: class {
             } else if mv == zlsWord.slot.mDidClose then {
                 this.handleDidClose :msg
             } else if mv == zlsWord.slot.mDefinition then {
-                this.handleNav :msg mode: 1
+                this.handleNav :msg mode: navmode.definition
             } else if mv == zlsWord.slot.mHover then {
-                this.handleNav :msg mode: 2
+                this.handleNav :msg mode: navmode.hover
             } else if mv == zlsWord.slot.mReferences then {
-                this.handleNav :msg mode: 3
+                this.handleNav :msg mode: navmode.references
             } else if mv == zlsWord.slot.mCompletion then {
-                this.handleNav :msg mode: 4
+                this.handleNav :msg mode: navmode.completion
             } else if mv == zlsWord.slot.mResolve then {
                 this.handleResolve :msg
             } else if mv == zlsWord.slot.mSignatureHelp then {
-                this.handleNav :msg mode: 5
+                this.handleNav :msg mode: navmode.signatureHelp
             } else if mv == zlsWord.slot.mFormatting then {
                 this.handleFormatting :msg
             } else if mv == zlsWord.slot.mDocumentSymbol then {
@@ -1547,7 +1547,7 @@ Server: class {
 
     # handleNav -- definition (mode 1), hover (mode 2), references
     # (mode 3): shared request decode + snapshot lookup.
-    handleNav: function {:this msg: Value.view mode: u8} is {
+    handleNav: function {:this msg: Value.view mode: navmode} is {
         if this.debounce when this.hasDirty then this.flushDirty
         idv: idValueOf :msg
         uo: json.textAt v: msg path: "params/textDocument/uri"
@@ -1601,7 +1601,7 @@ Server: class {
                         if tco.some then {
                             trigCh = tco.copy
                         }
-                        if mode == 4 then {
+                        if mode.completion then {
                             res = (
                                 completionAnswer
                                 snap: sno
@@ -1614,7 +1614,7 @@ Server: class {
                                 trig: trigCh.stringView
                                 words: this.words
                             )
-                        } else if mode == 5 then {
+                        } else if mode.signatureHelp then {
                             res = (
                                 signatureHelpAnswer
                                 snap: sno
@@ -1643,7 +1643,7 @@ Server: class {
                         answer = res.take
                     }
                 }
-                if mode == 3 when (this.searchesElsewhere uri: uo.stringView ck: ck.stringView
+                if mode.references when (this.searchesElsewhere uri: uo.stringView ck: ck.stringView
                 ) then {
                     m3: (
                         this.referencesElsewhere
@@ -1709,7 +1709,7 @@ Server: class {
                     :line0
                     :ch
                     utf32: this.encUtf32
-                    mode: 3
+                    mode: navmode.references
                     :inclDecl
                 )
                 acc = mergeLocations a: acc b: r
@@ -1731,7 +1731,7 @@ Server: class {
                         :line0
                         :ch
                         utf32: this.encUtf32
-                        mode: 3
+                        mode: navmode.references
                         :inclDecl
                     )
                     acc = mergeLocations a: acc b: r
@@ -2009,9 +2009,10 @@ codeOf: function {n: u32} out String is {
 
 # ---- span collection (per-request AST index) ------------------------
 # Positions are start-only in the AST; name-bearing leaves get a span
-# [colLo, colHi) in 1-based codepoint columns. Row kinds: 1 = bare atom
-# use, 2 = member access (nodeid is the DOTTED PATH's id, the
-# refDecl member declaration; the name is the child atom's), 3 = binding name.
+# [colLo, colHi) in 1-based codepoint columns. Row kinds (hitkind): a bare
+# atom's use, a member access (nodeid is the DOTTED PATH's id, the refDecl
+# member declaration; the name is the child atom's), a binding's name, a
+# declaration.
 # A table covers one unit's file, or every file for references. A node's own
 # position is read off the node (nodePosOf), never from the table.
 
@@ -2030,8 +2031,31 @@ spanrow: record {
     colHi: u32
     # what sort of thing it is, which decides whether a hover or a goto answers
     # from it
-    kind: u8
+    kind: hitkind
 }
+
+# hitkind -- what a span row marks, and so what a hit on it means.
+hitkind: variant {
+    # no row: what a hit test holds before it finds one
+    none: null
+    # a name read
+    use: null
+    # a member read off a value
+    member: null
+    # a name a binding introduces
+    binding: null
+    # a name a definition declares
+    declaration: null
+} as { tag: u8.tag }
+
+# navmode -- which request a position is answered for.
+navmode: variant {
+    definition: null
+    hover: null
+    references: null
+    completion: null
+    signatureHelp: null
+} as { tag: u8.tag }
 
 # spanKindRank -- how strongly a row's kind claims a hit, so the three hit
 # tests share one preference rule instead of three sequences of ifs. A member
@@ -2040,15 +2064,21 @@ spanrow: record {
 # and never displaces a reference row; everything else sits between. A row is
 # taken only when it outranks the best so far, so the first row wins a tie and
 # walk order decides.
-spanKindRank: function {kind: u8} out u8 is {
-    if kind == 2 then return 2
-    if kind == 6 then return 0
+spanKindRank: function {kind: hitkind} out u8 is {
+    if kind.member then return 2
+    if kind.declaration then return 0
     return 1
 }
 
-# rangerow -- an enclosing-node span, start..end as source positions; kind
-# 4 = call, 5 = caseexpr. endPos is the latest start in the node's subtree (an
-# extent good enough to find the node enclosing a cursor).
+# rangekind -- the kind of node an enclosing-node span belongs to.
+rangekind: variant {
+    call: null
+    caseexpr: null
+} as { tag: u8.tag }
+
+# rangerow -- an enclosing-node span, start..end as source positions. endPos
+# is the latest start in the node's subtree (an extent good enough to find the
+# node enclosing a cursor).
 rangerow: record {
     # the node this range belongs to
     nodeid: zast.nodeid
@@ -2057,7 +2087,7 @@ rangerow: record {
     # where its last descendant starts
     endPos: zast.nodepos
     # what sort of thing it is
-    kind: u8
+    kind: rangekind
 }
 
 # namesGenericBound -- `op` declares a generic parameter: `X.generic`, or the
@@ -2156,7 +2186,7 @@ Spans: class {
         line: u32
         col: u32
         name: zast.nameid
-        kind: u8
+        kind: hitkind
     } is {
         txt: zast.nameTextAt :ast ref: name
         hi: col + txt.count.u32.orPanic
@@ -2167,7 +2197,15 @@ Spans: class {
     # record the span of a dotted path's MEMBER half, so hovering `a.b` answers
     # about `b` and not about `a`
     memberRow: function {:this ast: Ast.view dpid: zast.nodeid c: zast.astnode.view} is {
-        if c.atomid then this.addRow :ast id: dpid line: c.lineno col: c.colno name: c.name kind: 2
+        if c.atomid then (
+            this.addRow
+            :ast
+            id: dpid
+            line: c.lineno
+            col: c.colno
+            name: c.name
+            kind: hitkind.member
+        )
     }
 
     # innerRangeOfKind -- the innermost recorded range of `kind` in the file
@@ -2176,7 +2214,7 @@ Spans: class {
     innerRangeOfKind: function {
         t: this.view
         curPos: zast.nodepos
-        kind: u8
+        kind: rangekind
         slack: u32
         prog: Ast.view
         wantFsno: zvfs.fsno
@@ -2238,10 +2276,10 @@ Spans: class {
         match (
             n
         ) case atomid then {
-            this.addRow :ast id: n.nodeid line: n.lineno col: n.colno name: n.name kind: 1
+            this.addRow :ast id: n.nodeid line: n.lineno col: n.colno name: n.name kind: hitkind.use
             this.noteGenericUse id: n.nodeid name: n.name
         } case labelvalue then {
-            this.addRow :ast id: n.nodeid line: n.lineno col: n.colno name: n.name kind: 1
+            this.addRow :ast id: n.nodeid line: n.lineno col: n.colno name: n.name kind: hitkind.use
         } case dottedpath then {
             # the member selector is a row of its own, not a node walk
             this.walk :ast n: (ast.nodes.get i: n.parent)
@@ -2249,7 +2287,7 @@ Spans: class {
             return
         } case call then {
             this.noteArguments :ast callId: n.nodeid args: n.arguments
-            this.walkRange :ast nodeid: n.nodeid startPos: pos :kids kind: 4
+            this.walkRange :ast nodeid: n.nodeid startPos: pos :kids kind: rangekind.call
             return
         } case functiondef then {
             outerFn: this.curFn
@@ -2274,12 +2312,20 @@ Spans: class {
             return
         } case caseexpr then {
             this.noteCaseArms :ast subject: n.subject clauses: n.clauses
-            this.walkRange :ast nodeid: n.nodeid startPos: pos :kids kind: 5
+            this.walkRange :ast nodeid: n.nodeid startPos: pos :kids kind: rangekind.caseexpr
             return
         } case forexpr then {
             this.noteBindings :ast conds: n.conditions
         } case assignment then {
-            this.addRow :ast id: n.nodeid line: n.lineno col: n.colno name: n.name kind: 3
+            (
+                this.addRow
+                :ast
+                id: n.nodeid
+                line: n.lineno
+                col: n.colno
+                name: n.name
+                kind: hitkind.binding
+            )
         } case namedoperation then {
             # the DECLARATION's own name. A definition's name lives on the
             # namedoperation arm that holds it -- functionrow and
@@ -2295,7 +2341,15 @@ Spans: class {
                 # keyed by the OPERATION node, not the arm: the arm carries
                 # the name and the position, the operation carries the
                 # definition's stamps. Same split memberRow makes.
-                this.addRow :ast id: n.operation line: n.lineno col: n.colno name: n.name kind: 6
+                (
+                    this.addRow
+                    :ast
+                    id: n.operation
+                    line: n.lineno
+                    col: n.colno
+                    name: n.name
+                    kind: hitkind.declaration
+                )
             }
         } else null
         this.walkIds :ast ids: kids
@@ -2395,7 +2449,7 @@ Spans: class {
         nodeid: zast.nodeid
         startPos: zast.nodepos
         kids: (ListVal zast.nodeid).view
-        kind: u8
+        kind: rangekind
     } is {
         outer: this.lastPos
         this.lastPos = startPos
@@ -4147,9 +4201,8 @@ refAnnotation: function {
 navhit: record {
     # the span row's index, which is also its index in the Spans' name list
     idx: u64
-    # the row kind that won the hit test (1 use, 2 member, 3 binding, 6
-    # declaration, 7 operator)
-    kind: u8
+    # the kind of the row that won the hit test
+    kind: hitkind
     # the hit span's width in columns, which a Location needs
     width: u32
     # the node the hit resolves through: the row's own, or, for a call label,
@@ -4181,7 +4234,7 @@ bestSpanRow: function {
     cp1: u32
 } out i64 is {
     bestIdx: -1
-    bestKind: u8
+    bestKind: hitkind.none
     nr: sp.rows.length
     ri: u64
     for ri < nr loop {
@@ -4218,13 +4271,15 @@ navtarget: record {
 # falls back to its def tid); a binding is its variable; a declaration is its
 # type, then a unit, then its own variable, until defOwnTarget makes a
 # parameter, a field or an arm its own. The Decl comes from refDecl.
-navTargetByKind: function {snap: zcheck.CheckResult hnid: zast.nodeid kind: u8} out navtarget is {
-    if kind == 2 then return (memberNavTarget :snap :hnid)
-    if kind == 1 then return (useNavTarget :snap :hnid)
+navTargetByKind: function {
+    snap: zcheck.CheckResult hnid: zast.nodeid kind: hitkind
+} out navtarget is {
+    if kind.member then return (memberNavTarget :snap :hnid)
+    if kind.use then return (useNavTarget :snap :hnid)
     refVid: ztypes.vid
     refTid: ztypes.tid
-    if kind == 3 then refVid = defVarIdOf o: snap.st nid: hnid
-    if kind == 6 then {
+    if kind.binding then refVid = defVarIdOf o: snap.st nid: hnid
+    if kind.declaration then {
         refTid = nodeTypeAt o: snap.st nid: hnid
         if refTid.isZero then refTid = useUnitDef o: snap.st nid: hnid
         if refTid.isZero then refVid = defVarIdOf o: snap.st nid: hnid
@@ -4271,10 +4326,10 @@ defOwnTarget: function {
     # the definition's name
     hnm: StringView
     # the hit's row kind; 6 is a definition's
-    kind: u8
+    kind: hitkind
     t: navtarget
 } out navtarget is {
-    if kind != 6 then return t
+    if kind.declaration.not then return t
     dd: declOfDefOp o: snap.st prog: snap.prog opId: hnid name: hnm
     # a parameter's own declaration, never the Decl its type's node resolves
     # to -- a generic parameter's, at `v: t`
@@ -4449,7 +4504,7 @@ listOfDeclOpt: function {
 listMemberHit: function {snap: zcheck.CheckResult hit: navhit} out bool is {
     ld: listOfDeclOpt o: snap.st declId: hit.declId
     if ld.isZero then return false
-    return (ld != hit.declId) or (hit.kind == 2)
+    return (ld != hit.declId) or hit.kind.member
 }
 
 # listMemberPrefix -- the path a list member's hit is spelled through: its
@@ -4582,12 +4637,16 @@ navTargetRefine: function {
     hnid: zast.nodeid
     # the hit's name text
     hnm: StringView
-    kind: u8
+    kind: hitkind
     base: navtarget
 } out navtarget is {
     refTid: base.tid
     refDeclId: base.declId
-    if kind == 6 when refDeclId.isZero then refDeclId = genericParamDeclOf o: snap.st nid: hnid
+    if kind.declaration when refDeclId.isZero then refDeclId = (
+        genericParamDeclOf
+        o: snap.st
+        nid: hnid
+    )
     own: (
         defOwnTarget
         :snap
@@ -4598,11 +4657,11 @@ navTargetRefine: function {
     )
     refDeclId = own.declId
     refTid = own.tid
-    if kind == 6 when own.vid.isZero when own.owner.isZero when refDeclId.notZero then {
+    if kind.declaration when own.vid.isZero when own.owner.isZero when refDeclId.notZero then {
         dt9: declTypeIdOf o: snap.st declId: refDeclId
         if (isLiteralTid o: snap.st tid: dt9) then refTid = dt9
     }
-    if kind == 1 when refDeclId.isZero when (ztypecheck.isNumericLiteralName name: hnm) then {
+    if kind.use when refDeclId.isZero when (ztypecheck.isNumericLiteralName name: hnm) then {
         refDeclId = (
             surfaceDeclOfType
             o: snap.st
@@ -4613,7 +4672,7 @@ navTargetRefine: function {
     if own.vid.isZero when refTid.isZero when own.owner.isZero when refDeclId.notZero then {
         refTid = declOnlyTid :snap declId: refDeclId
     }
-    if kind == 1 when own.vid.isZero when refDeclId.isZero then {
+    if kind.use when own.vid.isZero when refDeclId.isZero then {
         ct9: calleeTypeOf o: snap.st nid: hnid name: hnm
         if ct9.notZero then {
             refTid = ct9
@@ -4669,7 +4728,7 @@ navResolve: function {
         argNode = sp.bindingArmOf nid: hit.nodeid
     }
     # a generic parameter's use is the parameter
-    if hit.kind == 1 when base.vid.isZero then {
+    if hit.kind.use when base.vid.isZero then {
         gp: genericUseDecl :snap :sp nid: hit.nodeid name: hit.name
         if gp.notZero then base = (
             navtarget
@@ -4735,8 +4794,8 @@ staticValuePartDecl: function {
 } out ztypes.declid is {
     ud: docUnitDecl r: snap rel: docRel
     if ud.isZero then return ud
-    if row.kind == 1 then return (staticTypeDeclNamed :snap unitDecl: ud nameId: row.name)
-    if row.kind == 2 then {
+    if row.kind.use then return (staticTypeDeclNamed :snap unitDecl: ud nameId: row.name)
+    if row.kind.member then {
         pid: zast.nodeid
         {
             dp: snap.prog.nodes.get i: row.nodeid
@@ -4746,7 +4805,7 @@ staticValuePartDecl: function {
         if td.isZero then return td
         return (declChildOf :snap declId: td nameId: row.name)
     }
-    if row.kind != 6 then return ztypes.declid.zero
+    if row.kind.declaration.not then return ztypes.declid.zero
     cg: sp.argCall.get key: row.nodeid
     callId: zast.nodeid
     match cg case some then callId = cg case none then return ztypes.declid.zero
@@ -4894,7 +4953,7 @@ dissectArmDecl: function {
 # walked through its type's `iterate`, on the `E.iterate` node it mints for the
 # binding's arm; the value node's own stamps are the collection's.
 loopVarOf: function {snap: zcheck.CheckResult sp: Spans.view row: spanrow} out ztypes.vid is {
-    if row.kind != 6 then return ztypes.vid.zero
+    if row.kind.declaration.not then return ztypes.vid.zero
     arm: sp.bindingArmOf nid: row.nodeid
     if arm == row.nodeid then return ztypes.vid.zero
     v: defVarIdOf o: snap.st nid: row.nodeid
@@ -4913,7 +4972,7 @@ loopVarOf: function {snap: zcheck.CheckResult sp: Spans.view row: spanrow} out z
 # label's is the operation of the parameter or field it names, so the label
 # answers as that declaration's own row does; any other row's is its own.
 labelSubject: function {snap: zcheck.CheckResult sp: Spans.view row: spanrow} out zast.nodeid is {
-    if row.kind != 6 then return row.nodeid
+    if row.kind.declaration.not then return row.nodeid
     lab: labelDeclOf :snap :sp :row
     if lab.isZero then return row.nodeid
     o: snap.st
@@ -4940,7 +4999,7 @@ genericParamHoverCard: function {
     # the card's site
     site: ztypes.declid
 } out Value is {
-    if (hit.kind == 2) or hit.vid.notZero then return Value.nul
+    if hit.kind.member or hit.vid.notZero then return Value.nul
     gpd: hit.declId
     if gpd.isZero then return Value.nul
     gop: declOperationOf o: snap.st prog: snap.prog declId: gpd
@@ -4970,7 +5029,7 @@ hitReadsConstOpt: function {
     name: StringView
 } out bool is {
     # a list's element or length, read through the list
-    if hit.kind == 2 when (listOfDeclOpt :o declId: hit.declId).notZero then {
+    if hit.kind.member when (listOfDeclOpt :o declId: hit.declId).notZero then {
         match (
             o
         ) case some then {
@@ -4979,7 +5038,7 @@ hitReadsConstOpt: function {
             return false
         }
     }
-    if hit.kind != 1 then return false
+    if hit.kind.use.not then return false
     if hit.vid.notZero then return false
     # a literal folds too, and is no constant's name
     if (ztypecheck.isNumericLiteralName :name) then return false
@@ -5274,7 +5333,11 @@ hoverDoc: function {snap: zcheck.CheckResult nid: zast.nodeid} out String is {
 # A declaration that binds a variable shows the variable's: a `for` binding's
 # node is the collection.
 hoverSigTid: function {snap: zcheck.CheckResult hit: navhit} out ztypes.tid is {
-    if hit.kind == 6 when hit.vid.notZero then return (variableTypeOpt o: snap.st vid: hit.vid)
+    if hit.kind.declaration when hit.vid.notZero then return (
+        variableTypeOpt
+        o: snap.st
+        vid: hit.vid
+    )
     t: nodeTypeAt o: snap.st nid: hit.nodeid
     ud: useUnitDef o: snap.st nid: hit.nodeid
     sigTid: t
@@ -5376,11 +5439,15 @@ navHoverAnswer: function {
 # is declared with a literal type, which the fold rewrote the stamp from.
 hoverValueTid: function {snap: zcheck.CheckResult hit: navhit} out ztypes.tid is {
     if hit.nodeid.isZero then return hit.tid
-    if hit.kind == 6 when hit.vid.notZero then return (variableTypeOpt o: snap.st vid: hit.vid)
+    if hit.kind.declaration when hit.vid.notZero then return (
+        variableTypeOpt
+        o: snap.st
+        vid: hit.vid
+    )
     nt: nodeTypeAt o: snap.st nid: hit.nodeid
     # a declaration, and a name with no stamp of its own -- a `case`'s arm --
     # are what is declared
-    if (hit.kind == 6) or nt.isZero when hit.tid.isZero then {
+    if hit.kind.declaration or nt.isZero when hit.tid.isZero then {
         dt: declTypeIdOf o: snap.st declId: hit.declId
         if nt.isZero or (isLiteralTid o: snap.st tid: dt) then return dt
     }
@@ -5443,7 +5510,7 @@ hoverCallNotes: function {
     callId: (
         sp.innerRangeOfKind
         curPos: hpos
-        kind: 4
+        kind: rangekind.call
         slack: 0
         prog: snap.prog
         wantFsno: (snap.prog.fsnoForNode nodeid: hit.argNode)
@@ -5539,10 +5606,10 @@ referencesTargetOf: function {
     vid: hit.vid
     owner: hit.owner
     dd: hit.declId
-    if hit.kind == 1 when vid.isZero when (snap.prog.nodes.get i: hit.nodeid).labelvalue then {
+    if hit.kind.use when vid.isZero when (snap.prog.nodes.get i: hit.nodeid).labelvalue then {
         vid = defVarIdOf o: snap.st nid: hit.nodeid
     }
-    if hit.kind == 6 then {
+    if hit.kind.declaration then {
         dr: declRowTarget :snap :sp :hit :name
         vid = dr.vid
         dd = dr.declId
@@ -5550,7 +5617,7 @@ referencesTargetOf: function {
     }
     # a `:x` that reads no variable labels its callee's parameter, or the field
     # it builds; a written label resolved through what it names already
-    if vid.isZero when hit.kind == 1 then {
+    if vid.isZero when hit.kind.use then {
         lab: labelDeclOf :snap :sp row: (sp.rows.get i: hit.idx)
         if lab.notZero then {
             dd = lab
@@ -5650,9 +5717,9 @@ reexportOriginStep: function {
 # own rows share the argument's node and are no label. An operator's operand is
 # labelled by no written name.
 labelDeclOf: function {snap: zcheck.CheckResult sp: Spans.view row: spanrow} out ztypes.declid is {
-    if row.kind == 1 then {
+    if row.kind.use then {
         if (snap.prog.nodes.get i: row.nodeid).labelvalue.not then return ztypes.declid.zero
-    } else if row.kind != 6 then return ztypes.declid.zero
+    } else if row.kind.declaration.not then return ztypes.declid.zero
     callId: zast.nodeid
     cg: sp.argCall.get key: row.nodeid
     match (
@@ -5740,7 +5807,7 @@ declKindIsParam: function {snap: zcheck.CheckResult.view declId: ztypes.declid} 
 rowNamesDecl: function {snap: zcheck.CheckResult row: spanrow declId: ztypes.declid} out bool is {
     o: snap.st
     rd: refDeclOf :o nid: row.nodeid
-    if rd.isZero when row.kind == 1 when (useVarId :o nid: row.nodeid).isZero then {
+    if rd.isZero when row.kind.use when (useVarId :o nid: row.nodeid).isZero then {
         nm: zast.nameTextAt ast: snap.prog ref: row.name
         ct: calleeTypeOf :o nid: row.nodeid name: nm.stringView
         if ct.notZero then rd = surfaceDeclOfType :o prog: snap.prog tid: ct
@@ -5853,7 +5920,7 @@ rowRefersTo: function {
         if rv > 0 then return rv
     }
     if row.name != tg.name then return 0
-    if row.kind == 6 when (ops.contains item: row.nodeid) then return 2
+    if row.kind.declaration when (ops.contains item: row.nodeid) then return 2
     if tg.vid.isZero when (rowUsesDecl :snap :sp :tg :row) then return 1
     if tg.declId.isZero or (sp.argCall.has key: row.nodeid).not then return 0
     if (labelDeclOf :snap :sp :row) == tg.declId then return 1
@@ -5867,18 +5934,18 @@ rowRefersTo: function {
 rowUsesDecl: function {
     snap: zcheck.CheckResult sp: Spans.view tg: reftarget row: spanrow
 } out bool is {
-    if row.kind == 2 when tg.owner.notZero then {
+    if row.kind.member when tg.owner.notZero then {
         return (memberOwnerOf o: snap.st nid: row.nodeid) == tg.owner
     }
-    use: (row.kind == 1) or (row.kind == 2)
+    use: row.kind.use or row.kind.member
     if use.not or tg.declId.isZero then return false
     # a list's element is named as its list declares it
-    if row.kind == 2 when (memberOwnerOf o: snap.st nid: row.nodeid).isZero then {
+    if row.kind.member when (memberOwnerOf o: snap.st nid: row.nodeid).isZero then {
         lm: listMemberDecl :snap dpid: row.nodeid
         if lm.notZero then return lm == tg.declId
     }
     ca: caseArmDecl :snap :sp nid: row.nodeid
-    if ca.isZero when row.kind == 1 then ca = (
+    if ca.isZero when row.kind.use then ca = (
         genericUseDecl
         :snap
         :sp
@@ -5944,11 +6011,11 @@ rowReadsVar: function {
     vid: ztypes.vid
     name: zast.nameid
 } out u8 is {
-    if row.kind != 2 when row.name == name then {
+    if row.kind.member.not when row.name == name then {
         if (defVarIdOf o: snap.st nid: row.nodeid) == vid then return 2
         if (loopVarOf :snap :sp :row) == vid then return 2
     }
-    if row.kind == 1 when (useVarId o: snap.st nid: row.nodeid) == vid then return 1
+    if row.kind.use when (useVarId o: snap.st nid: row.nodeid) == vid then return 1
     return 0
 }
 
@@ -6083,7 +6150,7 @@ navAnswer: function {
     line0: i64
     ch: i64
     utf32: bool
-    mode: u8
+    mode: navmode
     # references: list the target's declarations too
     inclDecl: bool
 } out Value is {
@@ -6093,7 +6160,7 @@ navAnswer: function {
     cp1: cpColOf lineText: lt.stringView :ch :utf32
     # references search every file; the rest read the document's own
     sp: Spans.create
-    if mode == 3 then {
+    if mode.references then {
         sp = programSpans prog: snap.prog
     } else {
         sp = fileSpans prog: snap.prog fsno: (docFsnoOf r: snap rel: docRel)
@@ -6102,7 +6169,7 @@ navAnswer: function {
     if hitOpt.none then return Value.nul
     hit: hitOpt
     hname: (sp.names.get i: hit.idx).copy
-    if mode == 2 then return (
+    if mode.hover then return (
         navHoverAnswer
         :snap
         :sp
@@ -6110,7 +6177,7 @@ navAnswer: function {
         :hname
         site: (docUnitDecl r: snap rel: docRel)
     )
-    if mode == 1 then {
+    if mode.definition then {
         return (
             navDefinitionAnswer
             :snap
@@ -6831,7 +6898,7 @@ addScopeCompletions: function {
         ri: u64
         for ri < nr loop {
             row: sp.rows.get i: ri
-            if row.kind == 3 when row.line >= defStart when row.line <= l1u then {
+            if row.kind.binding when row.line >= defStart when row.line <= l1u then {
                 fs: zcheck.fsnoFor r: snap nodeid: row.nodeid
                 pp: snap.vfs.pathfromprovider dentryid: fs
                 if (pathMatches pv: pp.stringView rel: docRel) then {
@@ -7101,7 +7168,7 @@ baseVarInScope: function {
             (sp.names.get i: ri).stringView == base
         ) then {
             v: useVarId o: snap.st nid: row.nodeid
-            if row.kind == 3 then v = defVarIdOf o: snap.st nid: row.nodeid
+            if row.kind.binding then v = defVarIdOf o: snap.st nid: row.nodeid
             if v.notZero then result = v
         }
         ri = ri + 1
@@ -7145,8 +7212,8 @@ localRowType: function {
     row: spanrow
     docRel: StringView
 } out ztypes.tid is {
-    isLocal: row.kind == 3
-    if row.kind == 1 then isLocal = (useVarId o: snap.st nid: row.nodeid).notZero
+    isLocal: row.kind.binding
+    if row.kind.use then isLocal = (useVarId o: snap.st nid: row.nodeid).notZero
     if isLocal.not then return ztypes.tid.zero
     fs: zcheck.fsnoFor r: snap nodeid: row.nodeid
     pp: snap.vfs.pathfromprovider dentryid: fs
@@ -8372,7 +8439,14 @@ caseArmComplete: function {
 } out bool is {
     if (caseWordBefore :prog :ltv :ps).not then return false
     sp: fileSpans :prog fsno: docFs
-    caseId: sp.innerRangeOfKind curPos: cursorPos kind: 5 slack: 1 :prog wantFsno: docFs
+    caseId: (
+        sp.innerRangeOfKind
+        curPos: cursorPos
+        kind: rangekind.caseexpr
+        slack: 1
+        :prog
+        wantFsno: docFs
+    )
     if caseId.isZero then return false
     clauseIds: ListVal zast.nodeid
     subjIdx: caseClauseIds :prog :caseId dst: clauseIds
@@ -8477,7 +8551,7 @@ leafNidAt: function {
     name: StringView
 } out zast.nodeid is {
     leafNid: zast.nodeid
-    bk: u8
+    bk: hitkind.none
     found: false
     rix: u64
     for rix < sp.rows.length loop {
@@ -8585,7 +8659,14 @@ argLabelComplete: function {
     }
     if badPos then return false
     sp: fileSpans :prog fsno: docFs
-    callId: sp.innerRangeOfKind curPos: cursorPos kind: 4 slack: 1 :prog wantFsno: docFs
+    callId: (
+        sp.innerRangeOfKind
+        curPos: cursorPos
+        kind: rangekind.call
+        slack: 1
+        :prog
+        wantFsno: docFs
+    )
     supplied: List String
     # a bare function/method name (no label yet) has no call node; on a fresh
     # arg position (empty prefix) resolve the identifier just before the cursor
@@ -9220,7 +9301,7 @@ itemHit: function {
     hit: (
         navhit
         idx: 0
-        kind: 6
+        kind: hitkind.declaration
         width: 0
         nodeid: zast.nodeid
         argNode: zast.nodeid

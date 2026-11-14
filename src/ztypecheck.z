@@ -11891,7 +11891,7 @@ staticListKindsAgree: function {
     vals: ListVal ztypes.cval
     elemTid: ztypes.tid
 } out bool is {
-    first: u8
+    first: ztypes.zconstkind.none
     firstTid: ztypes.tid
     k: u64
     for k < dnode.nelems loop {
@@ -11899,10 +11899,10 @@ staticListKindsAgree: function {
         elId: zast.listElemAt :ast nid: dnode.nid i: k
         k = k + 1
         kind: staticListValueKind :cv
-        if kind == 0 then continue
+        if kind.none then continue
         vt: ztypes.tid
-        if kind >= 4 then vt = constValueTid :ast :st :scope v: cv
-        if first == 0 then {
+        if (staticListKindHasType :kind) then vt = constValueTid :ast :st :scope v: cv
+        if first.none then {
             first = kind
             firstTid = vt
         }
@@ -11933,41 +11933,45 @@ staticListKindsAgree: function {
 staticListElemMismatch: function {
     ast: Ast
     st: zenv.ZSymbolTable
-    kind: u8
+    kind: ztypes.zconstkind
     vt: ztypes.tid
-    first: u8
+    first: ztypes.zconstkind
     firstTid: ztypes.tid
     elemTid: ztypes.tid
 } out String is {
+    typed: staticListKindHasType :kind
+    firstTyped: staticListKindHasType kind: first
     kt: staticListKindText :kind
-    if kind >= 4 then kt = specWrittenName :st :ast tid: vt
+    if typed then kt = specWrittenName :st :ast tid: vt
     # an arm and a value of one choice are elements of one type
-    sameKind: (kind == first) or ((kind >= 4) and (first >= 4))
+    sameKind: (kind == first) or (typed and firstTyped)
     if sameKind.not or (vt != firstTid) then {
         ft: staticListKindText kind: first
-        if first >= 4 then ft = specWrittenName :st :ast tid: firstTid
+        if firstTyped then ft = specWrittenName :st :ast tid: firstTid
         # numbers and strings differ in kind, anything else in type
         what: "type"
-        if kind < 4 when first < 4 then what = "kind"
+        if typed.not when firstTyped.not then what = "kind"
         return "list elements are of one \{what}: this one is \{kt}, the first \{ft}"
     }
-    if kind >= 4 then {
+    if typed then {
         if (vt == elemTid) or (staticListFits :ast :st have: vt want: elemTid) then return "".string
         return "\{kt} cannot be an element of a list of \{specWrittenName :st :ast tid: elemTid}"
     }
-    if kind == 3 == (isStaticStringTid :ast :st tid: elemTid) then return "".string
+    if kind.svalKind == (isStaticStringTid :ast :st tid: elemTid) then return "".string
     return "\{kt} cannot be an element of a list of \{st.reg.nameOf tid: elemTid}"
 }
 
-# staticListValueKind -- a list element's kind: 1 an integer, 2 a float, 3 a
-# string, 4 an arm, 5 a data value, a choice value or a list, 0 no value.
-staticListValueKind: function {cv: ztypes.cval} out u8 is {
-    if cv.kind.ivalKind then return 1
-    if cv.kind.fvalKind then return 2
-    if cv.kind.svalKind then return 3
-    if cv.kind.armKind then return 4
-    if cv.kind.aggKind then return 5
-    return 0
+# staticListValueKind -- a list element's kind: its constant's kind, and none
+# for a function reference, which is no element value.
+staticListValueKind: function {cv: ztypes.cval} out ztypes.zconstkind is {
+    if cv.kind.fnKind then return ztypes.zconstkind.none
+    return cv.kind
+}
+
+# staticListKindHasType -- an arm or an aggregate: an element that has a type
+# of its own, where a number or a string has only a kind.
+staticListKindHasType: function {kind: ztypes.zconstkind} out bool is {
+    return kind.armKind or kind.aggKind
 }
 
 # staticListFirstValueTid -- the type of a list's first element with a value
@@ -11978,7 +11982,8 @@ staticListFirstValueTid: function {
 } out ztypes.tid is {
     for each cv: vals loop {
         if cv.isConst then {
-            if (staticListValueKind :cv) < 4 then return ztypes.tid.zero
+            if (staticListKindHasType kind: (staticListValueKind :cv)
+            ).not then return ztypes.tid.zero
             return (constValueTid :ast :st :scope v: cv)
         }
     }
@@ -11986,9 +11991,9 @@ staticListFirstValueTid: function {
 }
 
 # staticListKindText -- a list element kind as a diagnostic names it.
-staticListKindText: function {kind: u8} out String is {
-    if kind == 1 then return "an integer".string
-    if kind == 2 then return "a float".string
+staticListKindText: function {kind: ztypes.zconstkind} out String is {
+    if kind.ivalKind then return "an integer".string
+    if kind.fvalKind then return "a float".string
     return "a string".string
 }
 

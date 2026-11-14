@@ -12849,7 +12849,7 @@ emitWindowSlice: function {
 keyIsString: function {
     reg: ztypes.ZTypeRegistry.view typing: ztyping.ZTyping.view ctx: Ctx.view tid: ztypes.tid
 } out bool is {
-    return (keyHashKind :reg :typing :ctx :tid) == 1
+    return (keyHashKind :reg :typing :ctx :tid).nativeString
 }
 
 # stringKeyArgPointer -- a String-keyed mono's view-mode key/item argument as a C
@@ -37402,7 +37402,7 @@ demandKeyCalls: function {
         if hashK then demandHashCalls :ast :reg :typing :ctx tid: k seen: seenHash
         return
     }
-    if kind != 0 then return
+    if kind.scalarOrPointer.not then return
     dh: declaredKeyFnId :reg :typing :ctx keyTid: k nid: zast.wellKnown.slot.wkHash
     de: declaredKeyFnId :reg :typing :ctx keyTid: k nid: zast.wellKnown.slot.wkOpEq
     if dh.notZero when de.notZero then {
@@ -41226,37 +41226,47 @@ keyFnProtosC: function {
     return "static uint64_t \{dh}(\{hq}\{keyT}*);\nstatic bool \{de}(\{eq}\{keyT}*, \{rq}\{rhsT});\n"
 }
 
+# keykind -- how a Set element or a Map key is hashed and compared.
+keykind: variant {
+    # a scalar or a pointer: hashed by a cast, compared with C `==`
+    scalarOrPointer: null
+    # a native String: hashed over its bytes
+    nativeString: null
+    # a view of text: hashed by the view's own hash function
+    stringView: null
+    # a record or variant held by value: hashed over its contents
+    byValueStruct: null
+} as { tag: u8.tag }
+
 # keyHashKind -- classify a Set element / Map key by canonical id (never by
-# name, so a user shadow is handled by its nature): 1 native String, 2
-# StringView, 3 by-value struct (record/variant -> byte hash over contents), 0
-# scalar or pointer (cast hash + C `==`). A builtin numeric/bool/char is a
-# record whose C type is a scalar, so it classifies 0 with the pointers --
+# name, so a user shadow is handled by its nature). A builtin numeric/bool/char is a
+# record whose C type is a scalar, so it classifies scalarOrPointer with the pointers --
 # scalarCTypeFor is the shadow-safe gate (a user type shadowing a scalar name
 # stays a struct). A record holds value data only, so a struct's `_eq` is
 # total: the typechecker refuses a reftype member at the declaration.
 keyHashKind: function {
     reg: ztypes.ZTypeRegistry.view typing: ztyping.ZTyping.view ctx: Ctx.view tid: ztypes.tid
-} out u64 is {
+} out keykind is {
     ktid: ztypecheck.typedefChaseTid :typing :tid
-    if ktid == ctx.strTid then return 1
-    if (isViewLaid :ctx tid: ktid) then return 2
+    if ktid == ctx.strTid then return keykind.nativeString
+    if (isViewLaid :ctx tid: ktid) then return keykind.stringView
     tt: reg.typetypeOf typeId: ktid
     isRv: tt == ztypes.ztypetype.recordType
     if isRv.not then isRv = tt == ztypes.ztypetype.variantType
     if isRv then {
         sc: scalarCTypeFor :typing tid: ktid
-        if sc.length > 0 then return 0
-        return 3
+        if sc.length > 0 then return keykind.scalarOrPointer
+        return keykind.byValueStruct
     }
-    return 0
+    return keykind.scalarOrPointer
 }
 
 # the C body of a Set's hash function.
-setHashBody: function {ctx: Ctx kind: u64} out String is {
+setHashBody: function {ctx: Ctx kind: keykind} out String is {
     # a String key arrives BY POINTER (the probe never copies the header)
-    if kind == 1 then return "\{hashBytesFn :ctx}(_key->data, _key->size)"
-    if kind == 2 then return "\{hashViewFn :ctx}(_key)"
-    if kind == 3 then return "\{hashBytesFn :ctx}(&_key, sizeof(_key))"
+    if kind.nativeString then return "\{hashBytesFn :ctx}(_key->data, _key->size)"
+    if kind.stringView then return "\{hashViewFn :ctx}(_key)"
+    if kind.byValueStruct then return "\{hashBytesFn :ctx}(&_key, sizeof(_key))"
     return (hashU64C :ctx v: "(uint64_t)_key")
 }
 
@@ -41288,14 +41298,10 @@ hashU64C: function {ctx: Ctx v: StringView} out String is {
 }
 
 # the C body of a Set's element-equality function.
-setEqBody: function {kind: u64} out String is {
-    if (
-        kind == 1
-    ) then return "_a->size == _b->size && (_a->size == 0 || memcmp(_a->data, _b->data, _a->size) == 0)".string
-    if (
-        kind == 2
-    ) then return "_a.size == _b.size && (_a.size == 0 || memcmp(_a.data, _b.data, _a.size) == 0)".string
-    if kind == 3 then return "memcmp(&_a, &_b, sizeof(_a)) == 0".string
+setEqBody: function {kind: keykind} out String is {
+    if kind.nativeString then return "_a->size == _b->size && (_a->size == 0 || memcmp(_a->data, _b->data, _a->size) == 0)".string
+    if kind.stringView then return "_a.size == _b.size && (_a.size == 0 || memcmp(_a.data, _b.data, _a.size) == 0)".string
+    if kind.byValueStruct then return "memcmp(&_a, &_b, sizeof(_a)) == 0".string
     return "_a == _b".string
 }
 
@@ -41434,7 +41440,7 @@ emitSetMono: function {
     elemTid: setElemType :typing :monoId
     itemT: cTypeForNameTid :ast :reg :typing :ctx tid: elemTid
     ekind: keyHashKind :reg :typing :ctx tid: elemTid
-    isStr: ekind == 1
+    isStr: ekind.nativeString
     siId: monoMethodReturn :reg :typing :monoId nameId: zast.wellKnown.slot.wkIterate
     if siId.isZero then return
     ovId: monoMethodReturn :reg :typing monoId: siId nameId: zast.wellKnown.slot.wkCall
@@ -41520,7 +41526,7 @@ setKeyBodies: function {
     typing: ztyping.ZTyping.view
     ctx: Ctx
     elemTid: ztypes.tid
-    ekind: u64
+    ekind: keykind
     itemT: StringView
     needHash: bool
     needEq: bool
@@ -41554,7 +41560,7 @@ setKeyBodies: function {
     {
         dh: String
         de: String
-        if ekind == 0 when valElem.not when needHash or needEq then {
+        if ekind.scalarOrPointer when valElem.not when needHash or needEq then {
             dh = declaredKeyFnC :reg :typing :ctx tid: elemTid memberId: zast.wellKnown.slot.wkHash
             de = declaredKeyFnC :reg :typing :ctx tid: elemTid memberId: zast.wellKnown.slot.wkOpEq
         }
@@ -41861,7 +41867,7 @@ emitMapMono: function {
     keyTid: mapKeyType :typing :monoId
     keyT: cTypeForNameTid :ast :reg :typing :ctx tid: keyTid
     kkind: keyHashKind :reg :typing :ctx tid: keyTid
-    keyIsStr: kkind == 1
+    keyIsStr: kkind.nativeString
     keyArgT: keyT.copy
     keyRef: String
     if keyIsStr then {
@@ -41885,7 +41891,14 @@ emitMapMono: function {
         buf: gm
     )
     vp: String
-    if kkind == 1 then mapViewProbes :ctx :monoId nm: nm.stringView ov: ov.stringView buf: vp
+    if kkind.nativeString then (
+        mapViewProbes
+        :ctx
+        :monoId
+        nm: nm.stringView
+        ov: ov.stringView
+        buf: vp
+    )
     # the instance's text as this program writes it (rtSectionPlan), so the
     # key hash and `==` are spelled only where a written section holds them
     p: tmplKey :ctx name: "Map"
@@ -41928,7 +41941,7 @@ emitMapMono: function {
         # them by emitted name links to nothing.
         dhm: String
         dem: String
-        if kkind == 0 when valKey.not when needHash or needEq then {
+        if kkind.scalarOrPointer when valKey.not when needHash or needEq then {
             dhm = declaredKeyFnC :reg :typing :ctx tid: keyTid memberId: zast.wellKnown.slot.wkHash
             dem = declaredKeyFnC :reg :typing :ctx tid: keyTid memberId: zast.wellKnown.slot.wkOpEq
         }
@@ -50840,8 +50853,8 @@ valKeyEqBody: function {
 # isValKey -- a Set element or Map key hashed and compared with its own
 # members (valKeyHashBody, valKeyEqBody): a value type. A String and a
 # StringView keep their native pair, a reference its declared one.
-isValKey: function {reg: ztypes.ZTypeRegistry.view key: ztypes.tid kind: u64} out bool is {
-    if (kind == 1) or (kind == 2) then return false
+isValKey: function {reg: ztypes.ZTypeRegistry.view key: ztypes.tid kind: keykind} out bool is {
+    if kind.nativeString or kind.stringView then return false
     return (reg.isValtypeOf tid: key)
 }
 
