@@ -285,21 +285,13 @@ addEmitSwitches: function {sp: cli.Spec.borrow} is {
     addSwitch :sp name: opt.markNatives
 }
 
-# buildSpec -- what `zc build` takes: compileSpec's members, the switches of a
-# command that writes C, and --save-temps for the C a build removes
+# buildSpec -- what `zc build` and `zc run` take: compileSpec's members, the
+# switches of a command that writes C, and --save-temps for the C a build
+# removes. What follows `--` is not read: `run` hands it to the program.
 buildSpec: function out cli.Spec is {
     sp: compileSpec
     addEmitSwitches :sp
     addSwitch :sp name: opt.saveTemps
-    return sp
-}
-
-# runSpec -- the command line of `zc run`: build's, read up to the first
-# operand after the unit. That operand and everything after it are the
-# program's arguments.
-runSpec: function out cli.Spec is {
-    sp: buildSpec
-    sp.stopAtOperand = true
     return sp
 }
 
@@ -352,7 +344,7 @@ cobjSpec: function out cli.Spec is {
 # one with no command for any other slot
 commandSpec: function {subW: u64} out cli.Spec is {
     if subW == zcWord.slot.vBuild then return buildSpec
-    if subW == zcWord.slot.vRun then return runSpec
+    if subW == zcWord.slot.vRun then return buildSpec
     if subW == zcWord.slot.vEmit then return emitSpec
     if subW == zcWord.slot.vDump then return dumpSpec
     if subW == zcWord.slot.vEnv then return envSpec
@@ -416,7 +408,8 @@ printUsage: function is {
     io.eprintln ""
     io.eprintln "build commands:"
     io.eprintln "  build <src>          compile <src> to a native executable"
-    io.eprintln "  run   <src> [args]   build, then run it, forwarding [args]"
+    io.eprintln "  run   <src> [-- args]"
+    io.eprintln "                       build, then run it; args go to the program as written"
     io.eprintln "  emit  <src>          emit standalone C (-o FILE, else stdout)"
     io.eprintln ""
     io.eprintln "project:"
@@ -464,11 +457,10 @@ printCommandHelp: function {zv: zast.Vocab.view cmd: StringView} is {
         io.eprintln "       --fast-hash --readable-names --eager"
         io.eprintln "       --nativec-files --mark-natives"
     } else if w == zcWord.slot.vRun then {
-        io.eprintln "usage: zc run <src> [flags] [args]"
+        io.eprintln "usage: zc run <src> [flags] [-- args]"
         io.eprintln "Build <src>, then run it. It takes the flags of build, before <src> or"
-        io.eprintln "after it. The first argument after <src> that is no flag starts the"
-        io.eprintln "program's arguments, and so does `--`: everything from there on is"
-        io.eprintln "passed to the program, a flag of its own among them."
+        io.eprintln "after it. Everything after `--` is passed to the program as written, a"
+        io.eprintln "flag of its own among them; nothing before `--` is."
         io.eprintln "The program's own exit code is propagated."
     } else if w == zcWord.slot.vEmit then {
         io.eprintln "usage: zc emit <src> [flags]"
@@ -1374,7 +1366,7 @@ ZcFlags: class {
     # --eager: typecheck every definition, not only what main reaches
     eagerCheck: bool
     # under `run`, the arguments that belong to the program and not to zc:
-    # everything after `--`, or from the first operand after the unit on
+    # everything after `--`
     progArgs: List String
 } as {
     # read -- what the command line `p` set. A name the command's spec does not
@@ -1382,7 +1374,11 @@ ZcFlags: class {
     # the name of the operand that names the unit, or the file `cobj` reads.
     read: function {p: cli.Parsed.view named: StringView} out this is {
         progArgs: List String
-        for each a: p.extraArgs loop progArgs.append from: a.copy
+        i: p.extraOperands
+        for i < p.extraArgs.length loop {
+            progArgs.append from: (p.extraArgs.get :i).copy
+            i = i + 1
+        }
         return (
             meta.create
             unitname: (textOf v: (p.positional name: named))
@@ -1411,17 +1407,19 @@ ZcFlags: class {
         )
     }
 
-    # refusesSurplus -- says that `p` holds an operand its command does not
-    # take: one unit is all a command compiles, and only `run` passes operands
-    # on. False when it holds none.
-    refusesSurplus: function {t: this.view p: cli.Parsed.view} out bool is {
-        if p.extraArgs.length == 0 then return false
+    # refusesSurplus -- says that `p` holds an argument its command does not
+    # take: one unit is all a command compiles. `passesRest` is true for
+    # `run`, which hands what follows `--` to the program; a second operand
+    # before `--` is refused there too. False when `p` holds none.
+    refusesSurplus: function {t: this.view p: cli.Parsed.view passesRest: bool} out bool is {
+        surplus: p.extraArgs.length
+        if passesRest then surplus = p.extraOperands
+        if surplus == 0 then return false
         tok: p.extraArgs.get i: 0
-        if t.unitname.length > 0 then {
-            io.eprintln "zc: unexpected argument '\{tok}': the unit is already '\{t.unitname}'"
-        } else {
-            io.eprintln "zc: unexpected argument '\{tok}'"
-        }
+        said: "zc: unexpected argument '\{tok}'"
+        if t.unitname.length > 0 then said.append ": the unit is already '\{t.unitname}'"
+        if passesRest then said.append "; the program's arguments go after `--`"
+        io.eprintln said
         return true
     }
 
@@ -2127,7 +2125,7 @@ compileCommand: function {
         if subW == zcWord.slot.vCobj then named = operand.cFile
         cf: ZcFlags.read p: pr :named
         isRun: subW == zcWord.slot.vRun
-        if isRun.not when (cf.refusesSurplus p: pr) then return wrongUsage
+        if (cf.refusesSurplus p: pr passesRest: isRun) then return wrongUsage
         if sub.length == 0 when (bareDumpRefused spec: sp p: pr) then return wrongUsage
         if subW == zcWord.slot.vCobj when cf.unitname.length == 0 then {
             return (missing spec: sp name: operand.cFile)

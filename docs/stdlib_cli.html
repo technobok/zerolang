@@ -177,7 +177,7 @@ unit refuses a command line in the same words</li>
 <p><strong>Spec + Parsed handle</strong></p>
 <ul>
 <li><a href="#spec"><strong>Spec</strong></a> -- <code>class { programName: String  summary: String  flags: ... options: ... positionals: ...  stopAtOperand: false }</code></li>
-<li><a href="#parsed"><strong>Parsed</strong></a> -- <code>class { flagSet ...  optionValues ...  repeatValues ...  positionalValues ...  extraArgs ... }</code></li>
+<li><a href="#parsed"><strong>Parsed</strong></a> -- <code>class { flagSet ...  optionValues ...  repeatValues ...  positionalValues ...  extraArgs ...  extraOperands: u64 }</code></li>
 <li><a href="#optionvalue"><strong>OptionValue</strong></a> -- <code>class { name: String  value: String }</code></li>
 </ul>
 <p><strong>Errors</strong></p>
@@ -263,10 +263,36 @@ absent</li>
 as an option or as a positional? It tells a value the command
 line gave from a default the program fills in</li>
 </ul>
-<p><strong>#~"extraArgs"</strong> holds every token after a bare <code>--</code> (the
-end-of-options terminator) and every token beyond the declared
-positionals, in order. There is no accessor -- read the field
-directly.</p>
+<p><strong>#~"extraArgs"</strong> holds every token beyond the declared
+positionals, then every token after a bare <code>--</code> (the
+end-of-options terminator), in order. There is no accessor -- read the
+field directly.</p>
+<p><strong>#~"extraOperands"</strong> is how many of <code>extraArgs</code> are operands
+beyond the declared positionals. The tokens from that index on were not
+read: they followed <code>--</code>, or the first of them ended the reading under
+<code>stopAtOperand</code>. A program that hands the tokens after <code>--</code> to
+another program, and takes no operand of its own before it, reads the
+two parts apart:</p>
+<pre><code class="language-zerolang">main: function is {
+    sp: cli.Spec.create programName: "tool".string summary: "".string
+    cli.addPositional spec: sp name: "unit".string help: "".string required: true
+    args: List String
+    for each t: ("tool hello stray -- one --two".split sep: " ") loop args.append t.string
+    pr: cli.parse spec: sp :args
+    match (
+        pr
+    ) case ok then {
+        i: 0.u64
+        for each x: pr.extraArgs loop {
+            if i &lt; pr.extraOperands then print "operand \{x}" else print "passed on \{x}"
+            i = i + 1
+        }
+    } case err then {
+        print (cli.errorText spec: sp e: pr)
+    }
+}</code></pre><pre class="expect"><code>operand stray
+passed on one
+passed on --two</code></pre>
 <p><strong>Ownership.</strong> <code>option</code> / <code>positional</code> each return a
 fresh <code>Option String</code> -- scope-exit frees the boxed string.
 <code>optionAll</code> returns a fresh <code>List String</code>.</p>

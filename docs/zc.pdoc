@@ -76,9 +76,9 @@ an error — use #~"zc build <src>".
     #~"project.zd" lists #~"programs", #~"<src>" may be left out: every
     program is built, in the order listed, stopping at the first that
     fails.]
-  [#*: #b:"run" #~"<src> [args...]" — build to a temporary file, then run it
-    with an inherited terminal, forwarding the trailing #~"args" and
-    propagating the program's exit code.]
+  [#*: #b:"run" #~"<src> [-- args...]" — build to a temporary file, then run it
+    with an inherited terminal, passing it the #~"args" written after #~"--"
+    and propagating the program's exit code.]
   [#*: #b:"emit" #~"<src>" — emit standalone C source to #~"-o OUT" (or stdout).]
   [#*: #b:"dump" #~"<src>" — write the typecheck model as SQL (#~"-o" or
     stdout); #~"--canon" writes the id-normalized model instead. It reads no
@@ -162,17 +162,24 @@ an error — use #~"zc build <src>".
     [#> to=the-version-line: The version line]).]
   [#*: #b:"help" #~"[command]" — print usage, or detailed help for one command.]
 
-For #~"run", the flags of #~"build" stand before the unit or after it. The
-first argument after the unit that is no flag starts the program's arguments,
-and so does a #~"--" separator: everything from there on is passed to the
-program. A flag of the program's own goes after #~"--", or after the program's
-first plain argument. Before that point #~"zc" reads every flag as its own, and
-refuses one it does not know.
+For #~"run", a #~"--" separator starts the program's arguments: everything
+after it is passed to the program as written, a flag of the program's own
+among them. Nothing before #~"--" is passed. There #~"zc" reads every flag as
+its own, before the unit or after it, and refuses a flag it does not know and
+a second plain argument:
+
+#code: """
+  $ zc run hello arg1
+  zc: unexpected argument 'arg1': the unit is already 'hello'; the program's arguments go after `--`
+  """
+
+In a project, where #~"run" needs no unit, #~"zc run name" runs the unit
+#~"name" and #~"zc run -- name" passes #~"name" to the project's program.
 
 #code: """
   zc build hello                # build ./hello
-  zc run hello arg1 arg2        # build + run, forwarding arg1 arg2
-  zc run hello --release arg1   # --release is zc's flag
+  zc run hello -- arg1 arg2     # build + run, passing arg1 arg2
+  zc run hello --release -- a   # --release is zc's flag, a is hello's argument
   zc run hello -- --verbose     # --verbose goes to hello
   zc build hello --release -o hello
   zc emit hello -o hello.c
@@ -280,8 +287,7 @@ These are accepted in any position.
 
 #ul:
   [#*: #~"-h" / #~"--help" — print usage; after a command, print that
-    command's help. Under #~"run" they are #~"zc"'s only before the program's
-    arguments start.]
+    command's help. Under #~"run" they are #~"zc"'s only before #~"--".]
   [#*: #~"-V" / #~"--version" — print the version line (see
     [#> to=the-version-line: The version line]).]
 
@@ -289,8 +295,8 @@ These are accepted in any position.
 
 A command takes its own flags only. An option the command does not read, an
 option with no value and a second unit are each refused with exit 2 and one
-sentence on stderr; only under #~"run" do the arguments after the unit go to
-the program. A value is written #~"--name VALUE" or #~"--name=VALUE", and
+sentence on stderr; only under #~"run" do the arguments after #~"--" go to
+the program, and every other command refuses them. A value is written #~"--name VALUE" or #~"--name=VALUE", and
 #~"-o OUT" or #~"-oOUT".
 
 #ul:
@@ -530,7 +536,7 @@ by name.
 
 #b:"run" builds the same way to a temporary location, then spawns the
 executable with the parent's stdin / stdout / stderr (a live terminal),
-forwards the trailing program arguments, and exits with the program's own
+passes it the arguments written after #~"--", and exits with the program's own
 exit code.
 
 

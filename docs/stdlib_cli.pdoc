@@ -105,7 +105,7 @@ Accessed via qualified names only -- #~"cli.Spec.create",
 
 #ul:
   [#*: [#> to=spec: #b:"Spec"] -- #~"class { programName: String  summary: String  flags: ... options: ... positionals: ...  stopAtOperand: false }"]
-  [#*: [#> to=parsed: #b:"Parsed"] -- #~"class { flagSet ...  optionValues ...  repeatValues ...  positionalValues ...  extraArgs ... }"]
+  [#*: [#> to=parsed: #b:"Parsed"] -- #~"class { flagSet ...  optionValues ...  repeatValues ...  positionalValues ...  extraArgs ...  extraOperands: u64 }"]
   [#*: [#> to=optionvalue: #b:"OptionValue"] -- #~"class { name: String  value: String }"]
 
 #p: #b:"Errors"
@@ -226,10 +226,42 @@ methods.
     as an option or as a positional? It tells a value the command
     line gave from a default the program fills in]
 
-#b:"#~\"extraArgs\"" holds every token after a bare #~"--" (the
-end-of-options terminator) and every token beyond the declared
-positionals, in order. There is no accessor -- read the field
-directly.
+#b:"#~\"extraArgs\"" holds every token beyond the declared
+positionals, then every token after a bare #~"--" (the
+end-of-options terminator), in order. There is no accessor -- read the
+field directly.
+
+#b:"#~\"extraOperands\"" is how many of #~"extraArgs" are operands
+beyond the declared positionals. The tokens from that index on were not
+read: they followed #~"--", or the first of them ended the reading under
+#~"stopAtOperand". A program that hands the tokens after #~"--" to
+another program, and takes no operand of its own before it, reads the
+two parts apart:
+
+#code language=zerolang body="""
+  main: function is {
+      sp: cli.Spec.create programName: "tool".string summary: "".string
+      cli.addPositional spec: sp name: "unit".string help: "".string required: true
+      args: List String
+      for each t: ("tool hello stray -- one --two".split sep: " ") loop args.append t.string
+      pr: cli.parse spec: sp :args
+      match (
+          pr
+      ) case ok then {
+          i: 0.u64
+          for each x: pr.extraArgs loop {
+              if i < pr.extraOperands then print "operand \{x}" else print "passed on \{x}"
+              i = i + 1
+          }
+      } case err then {
+          print (cli.errorText spec: sp e: pr)
+      }
+  }
+  """ expect="""
+  operand stray
+  passed on one
+  passed on --two
+  """
 
 #b:"Ownership." #~"option" / #~"positional" each return a
 fresh #~"Option String" -- scope-exit frees the boxed string.
