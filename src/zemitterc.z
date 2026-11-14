@@ -189,15 +189,15 @@ cnameOf: function {
         for biter < n loop {
             bo: name.byteAt i: biter
             if bo.some then {
-                if bo == 46 then {
+                if bo == ascii.dot then {
                     flat.append "_"
                 } else {
                     identB: (
-                        (bo >= 97) and
-                        (bo <= 122) or
-                        ((bo >= 65) and (bo <= 90)) or
-                        ((bo >= 48) and (bo <= 57)) or
-                        (bo == 95)
+                        (bo >= 0ca) and
+                        (bo <= 0cz) or
+                        ((bo >= 0cA) and (bo <= 0cZ)) or
+                        ((bo >= 0c0) and (bo <= 0c9)) or
+                        (bo == 0c_)
                     )
                     if identB then {
                         flat.appendByte b: bo
@@ -661,7 +661,7 @@ literalDefaultC: function {lex: StringView ctx: Ctx} out String is {
 wideLiteralC: function {ctx: Ctx lex: StringView} out String is {
     if lex.length < 19 then return "".string
     b0: (lex.byteAt i: 0).or d: 0
-    if b0 != 45 when (b0 < 48) or (b0 > 57) then return "".string
+    if b0 != 0c- when (b0 < 0c0) or (b0 > 0c9) then return "".string
     bo: ztypecheck.constLiteralBig :lex
     if bo.some then {
         if bo.i64.ok then return "".string
@@ -684,8 +684,8 @@ castLitVal: function {val: StringView dst: ztypes.suffixinfo} out String is {
     for i < n loop {
         bo: val.byteAt :i
         if bo.some then {
-            if bo < 48 then allDig = false
-            if bo > 57 then allDig = false
+            if bo < 0c0 then allDig = false
+            if bo > 0c9 then allDig = false
         }
         i = i + 1
     }
@@ -914,8 +914,8 @@ cUpperOf: function {text: StringView} out String is {
     for i < n loop {
         bo: text.byteAt :i
         if bo.some then {
-            if bo >= 97 then {
-                if bo <= 122 then {
+            if bo >= 0ca then {
+                if bo <= 0cz then {
                     buf.appendByte b: bo - 32
                 } else {
                     buf.appendByte b: bo
@@ -939,20 +939,20 @@ cEscape: function {text: StringView} out String is {
     n: text.length
     for i < n loop {
         bo: (text.byteAt :i).or d: 0
-        if bo == 92 then {
+        if bo == 0c\\ then {
             buf.append "\\\\"
-        } else if bo == 34 then {
+        } else if bo == ascii.doubleQuote then {
             buf.append "\\\""
-        } else if bo == 10 then {
+        } else if bo == 0c\n then {
             buf.append "\\n"
-        } else if bo == 9 then {
+        } else if bo == 0c\t then {
             buf.append "\\t"
-        } else if (bo < 32) or (bo == 127) then {
-            buf.appendByte b: 92
-            buf.appendByte b: 48 + (bo >> 6)
-            buf.appendByte b: 48 + ((bo >> 3) & 7)
-            buf.appendByte b: 48 + (bo & 7)
-        } else if bo == 63 when i > 0 when ((text.byteAt i: i - 1).or d: 0) == 63 then {
+        } else if (bo < ascii.space) or (bo == 127) then {
+            buf.append "\\"
+            buf.appendByte b: 0c0 + (bo >> 6)
+            buf.appendByte b: 0c0 + ((bo >> 3) & 7)
+            buf.appendByte b: 0c0 + (bo & 7)
+        } else if bo == 0c? when i > 0 when ((text.byteAt i: i - 1).or d: 0) == 0c? then {
             buf.append "\\?"
         } else {
             buf.appendByte b: bo
@@ -1180,7 +1180,7 @@ rtNextMark: function {text: StringView from: u64} out rtmark is {
         ao: (text.substring from: pos to: total).indexOf needle: "@"
         if ao.none then return m
         at: pos + ao
-        if ((text.byteAt i: at + 1).or d: 0) != 64 then {
+        if ((text.byteAt i: at + 1).or d: 0) != 0c@ then {
             ho: (text.substring from: at + 1 to: total).indexOf needle: "@"
             m.found = true
             m.at = at
@@ -11814,8 +11814,8 @@ allDigits: function {s: StringView} out bool is {
         match (
             bo
         ) case some then {
-            if bo < 48 then return false
-            if bo > 57 then return false
+            if bo < 0c0 then return false
+            if bo > 0c9 then return false
         } case none then {
             return false
         }
@@ -15576,7 +15576,7 @@ constScalarKindForTid: function {
 # rendering keeps to the node's type itself.
 narrowConstToKind: function {v: i64 k: ztypes.numkind} out i64 is {
     b: ztypes.intKindBits :k
-    if (b == 0) or (b >= 64) then return v
+    if (b == 0) or (b >= 0c@) then return v
     span: 1 << (b.i64.or d: 0)
     t: v & (span - 1)
     if (ztypes.isSignedIntKind :k) when t >= (span / 2) then return t - span
@@ -17916,7 +17916,7 @@ varCNameIs: function {
     if ctx.readableNames then return (varCName :ctx :ast :reg :vid).stringView == text
     if (text.length < 4) or (text.startsWith prefix: "z_v").not then return false
     digits: text.substring from: 3 to: text.length
-    if ((digits.byteAt 0).or d: 0) == 48 then return false
+    if ((digits.byteAt 0).or d: 0) == 0c0 then return false
     parsed: digits.parseU64
     match (
         parsed
@@ -18174,7 +18174,7 @@ localNameText: function {
     if vid.isZero then {
         # a number literal is a constant; any other name with no variable behind
         # it is a definition's -- a unit, a function, a type -- a designator
-        if ((t.stringView.byteAt i: 0).or d: 0) <= 57 then return (
+        if ((t.stringView.byteAt i: 0).or d: 0) <= 0c9 then return (
             stating
             :facts
             from: constFacts
@@ -18740,7 +18740,7 @@ emitAtom: function {
     # an integer literal outside i64 is spelled by its value, which the checker
     # settled in the type it landed in: C has no token for one past u64, and
     # none in binary or octal at all
-    if av.length >= 19 when ((av.byteAt i: 0).or d: 0) <= 57 then {
+    if av.length >= 19 when ((av.byteAt i: 0).or d: 0) <= 0c9 then {
         wc: nodeConstText :ast :reg :typing :ctx nid: n.nodeid :facts
         if wc.length > 0 then return wc
     }
@@ -18819,7 +18819,11 @@ emitAtom: function {
     if iso.some when iso == ctx.strTid then return (emitExprStrZero :ctx :facts)
     # a numeric lexeme no leg above respelled is C text as written: identifiers
     # never start with a digit
-    if ((av.byteAt i: 0).or d: 0) <= 57 then return (stating :facts from: constFacts text: av.string
+    if ((av.byteAt i: 0).or d: 0) <= 0c9 then return (
+        stating
+        :facts
+        from: constFacts
+        text: av.string
     )
     return (
         emitLocalAtomNameAt
@@ -20722,7 +20726,7 @@ dottedAtomNumericBase: function {
     ctx: Ctx
 } out String is {
     b1: bn2.byteAt i: 0
-    if b1.some when b1 >= 48 when b1 <= 57 then {
+    if b1.some when b1 >= 0c0 when b1 <= 0c9 then {
         # A LITERAL SUFFIX NAMES A BUILTIN SCALAR, always: it is a
         # conversion the literal type declares, and the literal types
         # declare only the sixteen. Chasing a scalar typedef to its base
@@ -32407,13 +32411,13 @@ chainCondFact: function {
 # with `(` and that paren closes only at the very end.
 wrappedInOneParen: function {cond: StringView} out bool is {
     n: cond.length
-    if ((cond.byteAt 0.u64).or d: 0) != 40 then return false
+    if ((cond.byteAt 0.u64).or d: 0) != ascii.parenOpen then return false
     depth: u64
     i: u64
     for i < n loop {
         bo: (cond.byteAt i).or d: 0
-        if bo == 40 then depth = depth + 1
-        if bo == 41 then {
+        if bo == ascii.parenOpen then depth = depth + 1
+        if bo == ascii.parenClose then {
             depth = depth - 1
             if depth == 0 when i < (n - 1) then return false
         }
@@ -37782,11 +37786,11 @@ isBareCName: function {s: StringView} out bool is {
             bo
         ) case some then {
             ok: (
-                (bo >= 48) and
-                (bo <= 57) or
-                ((bo >= 65) and (bo <= 90)) or
-                ((bo >= 97) and (bo <= 122)) or
-                (bo == 95)
+                (bo >= 0c0) and
+                (bo <= 0c9) or
+                ((bo >= 0cA) and (bo <= 0cZ)) or
+                ((bo >= 0ca) and (bo <= 0cz)) or
+                (bo == 0c_)
             )
             if ok.not then return false
         } case none then {
@@ -37826,19 +37830,19 @@ slotReadableName: function {name: StringView ow: zast.Vocab.view} out String is 
 ctEndsWithStar: function {ct: StringView} out bool is {
     if ct.length == 0 then return false
     lb: (ct.byteAt ct.length - 1).or d: 0
-    if lb == 42 then return true
+    if lb == 0c* then return true
     return false
 }
 
 # isIdChar -- a C-identifier byte [A-Za-z0-9_].
 isIdChar: function {b: u8} out bool is {
     return (
-        (b >= 48) and
-        (b <= 57) or
-        ((b >= 65) and (b <= 90)) or
-        ((b >= 97) and (b <= 122)) or
+        (b >= 0c0) and
+        (b <= 0c9) or
+        ((b >= 0cA) and (b <= 0cZ)) or
+        ((b >= 0ca) and (b <= 0cz)) or
         (
-            b == 95
+            b == 0c_
         )
     )
 }

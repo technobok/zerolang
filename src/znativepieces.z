@@ -635,11 +635,11 @@ instanceCalls: function {code: StringView kw: zast.Vocab.view} out List String i
         e: wordEnd text: code from: s
         if (
             (e == s) or
-            (((code.byteAt i: e).or d: 0) != 64) or
-            (((code.byteAt i: e + 1).or d: 0) != 95)
+            (((code.byteAt i: e).or d: 0) != 0c@) or
+            (((code.byteAt i: e + 1).or d: 0) != 0c_)
         ) then continue
         m: wordEnd text: code from: e + 2
-        if (m == (e + 2)) or (((code.byteAt i: m).or d: 0) != 40) then continue
+        if (m == (e + 2)) or (((code.byteAt i: m).or d: 0) != ascii.parenOpen) then continue
         declared: followsVoid text: code at: s - 3
         canon: code.substring from: s to: e
         member: code.substring from: e + 2 to: m
@@ -794,7 +794,7 @@ emitterItems: function {text: StringView} out List EmitterItem is {
         b: (l.byteAt i: 0).or d: 0
         isTop: (b >= 0ca) and (b <= 0cz) or ((b >= 0cA) and (b <= 0cZ))
         we: wordEnd text: l from: 0
-        if isTop when ((l.byteAt i: we).or d: 0) == 58 then (
+        if isTop when ((l.byteAt i: we).or d: 0) == ascii.colon then (
             r.append
             (EmitterItem line: ln name: (l.substring from: 0 to: we).string code: String)
         )
@@ -907,7 +907,7 @@ quotedAfter: function {code: StringView needle: StringView into: Set String} is 
         s: at + o + needle.length
         e: s
         for e < code.length while (isNameByte b: ((code.byteAt i: e).or d: 0)) loop e = e + 1
-        if e > s when ((code.byteAt i: e).or d: 0) == 34 then (
+        if e > s when ((code.byteAt i: e).or d: 0) == ascii.doubleQuote then (
             into.add
             item: (code.substring from: s to: e).string
         )
@@ -926,7 +926,7 @@ emitterIdents: function {code: StringView} out List String is {
         startOk: (isWordByte :b) and (isDigit :b).not
         if startOk when i > 0 then {
             pb: (code.byteAt i: i - 1).or d: 0
-            if (isNameByte b: pb) or (pb == 92) then startOk = false
+            if (isNameByte b: pb) or (pb == 0c\\) then startOk = false
         }
         if startOk.not then {
             i = i + 1
@@ -963,19 +963,19 @@ stripC: function {text: StringView} out String is {
 stripOne: function {text: StringView from: u64 r: String.borrow} out u64 is {
     b: (text.byteAt i: from).or d: 0
     nb: (text.byteAt i: from + 1).or d: 0
-    if (b == 34) or (b == 39) then {
+    if (b == ascii.doubleQuote) or (b == 0c') then {
         e: literalEnd :text :from quote: b
         if e == 0 then return from
         r.append "\"\""
         return e
     }
-    if b != 47 then return from
-    if nb == 47 then {
+    if b != 0c/ then return from
+    if nb == 0c/ then {
         i: from
-        for i < text.length while ((text.byteAt :i).or d: 0) != 10 loop i = i + 1
+        for i < text.length while ((text.byteAt :i).or d: 0) != 0c\n loop i = i + 1
         return i
     }
-    if nb != 42 then return from
+    if nb != 0c* then return from
     c: (text.substring from: from + 2 to: text.length).indexOf needle: "*/"
     if c.none then return from
     e: from + 2 + c + 2
@@ -995,8 +995,8 @@ literalEnd: function {text: StringView from: u64 quote: u8} out u64 is {
     for j < text.length loop {
         b: (text.byteAt i: j).or d: 0
         if b == quote then return j + 1
-        if b == 10 then return 0
-        if b == 92 then {
+        if b == 0c\n then return 0
+        if b == 0c\\ then {
             j = j + 2
         } else {
             j = j + 1
@@ -1057,9 +1057,9 @@ loneHole: function {text: StringView} out bool is {
         cv: c.stringView
         i: u64
         for i < cv.length loop {
-            if ((cv.byteAt :i).or d: 0) == 64 then {
-                before: (i > 0) and (((cv.byteAt i: i - 1).or d: 0) == 64)
-                after: ((cv.byteAt i: i + 1).or d: 0) == 64
+            if ((cv.byteAt :i).or d: 0) == 0c@ then {
+                before: (i > 0) and (((cv.byteAt i: i - 1).or d: 0) == 0c@)
+                after: ((cv.byteAt i: i + 1).or d: 0) == 0c@
                 if before.not when after.not then return true
             }
             i = i + 1
@@ -1110,12 +1110,12 @@ wordEnd: function {text: StringView from: u64} out u64 is {
 
 # isWordByte -- a letter, a digit or `_`
 isWordByte: function {b: u8} out bool is {
-    return (b >= 0ca) and (b <= 0cz) or ((b >= 0cA) and (b <= 0cZ)) or (isDigit :b) or (b == 95)
+    return (b >= 0ca) and (b <= 0cz) or ((b >= 0cA) and (b <= 0cZ)) or (isDigit :b) or (b == 0c_)
 }
 
 # isNameByte -- a letter, a digit, `_` or `@`
 isNameByte: function {b: u8} out bool is {
-    return (isWordByte :b) or (b == 64)
+    return (isWordByte :b) or (b == 0c@)
 }
 
 # isDigit -- an ASCII digit
@@ -1250,16 +1250,16 @@ protoAt: function {line: StringView from: u64 kw: zast.Vocab.view} out String is
     if flow or storage then return "".string
     p: te
     for p < line.length while (
-        (((line.byteAt i: p).or d: 0) == 32) or
-        (((line.byteAt i: p).or d: 0) == 42) or
-        (((line.byteAt i: p).or d: 0) == 9)
+        (((line.byteAt i: p).or d: 0) == ascii.space) or
+        (((line.byteAt i: p).or d: 0) == 0c*) or
+        (((line.byteAt i: p).or d: 0) == 0c\t)
     ) loop p = p + 1
     if p == te then return "".string
     b1: (line.byteAt i: p).or d: 0
     if (isWordByte b: b1).not or (isDigit b: b1) then return "".string
     ne: wordEnd text: line from: p
     q: skipSpaces text: line from: ne
-    if ((line.byteAt i: q).or d: 0) != 40 then return "".string
+    if ((line.byteAt i: q).or d: 0) != ascii.parenOpen then return "".string
     head: line.substring from: 0 to: line.length - 1
     trimmedHead: head.trimEnd
     if (trimmedHead.endsWith ")").not then return "".string
@@ -1271,7 +1271,7 @@ protoAt: function {line: StringView from: u64 kw: zast.Vocab.view} out String is
 skipSpaces: function {text: StringView from: u64} out u64 is {
     i: from
     for i < text.length while (
-        (((text.byteAt :i).or d: 0) == 32) or (((text.byteAt :i).or d: 0) == 9)
+        (((text.byteAt :i).or d: 0) == ascii.space) or (((text.byteAt :i).or d: 0) == 0c\t)
     ) loop i = i + 1
     return i
 }
@@ -1295,7 +1295,7 @@ closeName: function {line: StringView} out String is {
     for e < line.length while (isNameByte b: ((line.byteAt i: e).or d: 0)) loop e = e + 1
     if e == p then return "".string
     q: skipSpaces text: line from: e
-    if ((line.byteAt i: q).or d: 0) != 59 then return "".string
+    if ((line.byteAt i: q).or d: 0) != ascii.semicolon then return "".string
     return (line.substring from: p to: e).string
 }
 
@@ -1305,13 +1305,13 @@ structTypedefName: function {line: StringView} out String is {
     if (countByte text: line b: 123) != (countByte text: line b: 125) then return "".string
     if (line.endsWith ";").not then return "".string
     j: line.length - 1
-    for j > 0 while ((line.byteAt i: j - 1).or d: 0) == 32 loop j = j - 1
+    for j > 0 while ((line.byteAt i: j - 1).or d: 0) == ascii.space loop j = j - 1
     e: j
     for j > 0 while (isNameByte b: ((line.byteAt i: j - 1).or d: 0)) loop j = j - 1
     if j == e then return "".string
     s: j
-    for j > 0 while ((line.byteAt i: j - 1).or d: 0) == 32 loop j = j - 1
-    if (j == 0) or (((line.byteAt i: j - 1).or d: 0) != 125) then return "".string
+    for j > 0 while ((line.byteAt i: j - 1).or d: 0) == ascii.space loop j = j - 1
+    if (j == 0) or (((line.byteAt i: j - 1).or d: 0) != ascii.braceClose) then return "".string
     return (line.substring from: s to: e).string
 }
 
@@ -1326,17 +1326,19 @@ macroStaticName: function {line: StringView} out String is {
     }
     c: o + 1
     for c < line.length while (
-        (((line.byteAt i: c).or d: 0) != 40) and (((line.byteAt i: c).or d: 0) != 41)
+        (((line.byteAt i: c).or d: 0) != ascii.parenOpen) and
+        (((line.byteAt i: c).or d: 0) != ascii.parenClose)
     ) loop c = c + 1
-    if ((line.byteAt i: c).or d: 0) != 41 then return "".string
+    if ((line.byteAt i: c).or d: 0) != ascii.parenClose then return "".string
     p: skipSpaces text: line from: c + 1
     e: p
     for e < line.length while (isNameByte b: ((line.byteAt i: e).or d: 0)) loop e = e + 1
     if e == p then return "".string
     q: skipSpaces text: line from: e
     b: (line.byteAt i: q).or d: 0
-    if b == 59 when q == (line.length - 1) then return (line.substring from: p to: e).string
-    if b == 61 when line.endsWith ";" then return (line.substring from: p to: e).string
+    if b == ascii.semicolon when q == (line.length - 1) then return (line.substring from: p to: e
+    ).string
+    if b == 0c= when line.endsWith ";" then return (line.substring from: p to: e).string
     return "".string
 }
 
@@ -1354,7 +1356,7 @@ typedefName: function {line: StringView} out String is {
 pointerName: function {line: StringView} out String is {
     i: u64
     for i < line.length loop {
-        if ((line.byteAt :i).or d: 0) == 40 then {
+        if ((line.byteAt :i).or d: 0) == ascii.parenOpen then {
             n: pointerAt :line open: i
             if n.length > 0 then return n
         }
@@ -1370,12 +1372,12 @@ pointerAt: function {line: StringView open: u64} out String is {
     we: wordEnd text: line from: p
     if we > p then {
         q: skipSpaces text: line from: we
-        if q > we when ((line.byteAt i: q).or d: 0) == 42 then {
+        if q > we when ((line.byteAt i: q).or d: 0) == 0c* then {
             n: starName :line from: q
             if n.length > 0 then return n
         }
     }
-    if ((line.byteAt i: p).or d: 0) != 42 then return "".string
+    if ((line.byteAt i: p).or d: 0) != 0c* then return "".string
     return (starName :line from: p)
 }
 
@@ -1387,7 +1389,7 @@ starName: function {line: StringView from: u64} out String is {
     for e < line.length while (isNameByte b: ((line.byteAt i: e).or d: 0)) loop e = e + 1
     if e == p then return "".string
     q: skipSpaces text: line from: e
-    if ((line.byteAt i: q).or d: 0) != 41 then return "".string
+    if ((line.byteAt i: q).or d: 0) != ascii.parenClose then return "".string
     return (line.substring from: p to: e).string
 }
 
@@ -1400,7 +1402,7 @@ declName: function {line: StringView} out String is {
     o: beforeSemi.indexOf needle: "("
     pointer: false
     if o.some then {
-        pointer = ((beforeSemi.byteAt i: (skipSpaces text: beforeSemi from: o + 1)).or d: 0) == 42
+        pointer = ((beforeSemi.byteAt i: (skipSpaces text: beforeSemi from: o + 1)).or d: 0) == 0c*
     }
     if pointer.not then {
         fnName: calledName text: beforeSemi
@@ -1416,10 +1418,11 @@ declName: function {line: StringView} out String is {
 calledName: function {text: StringView} out String is {
     i: u64
     for i < text.length loop {
-        if ((text.byteAt :i).or d: 0) == 40 then {
+        if ((text.byteAt :i).or d: 0) == ascii.parenOpen then {
             j: i
             for j > 0 while (
-                (((text.byteAt i: j - 1).or d: 0) == 32) or (((text.byteAt i: j - 1).or d: 0) == 9)
+                (((text.byteAt i: j - 1).or d: 0) == ascii.space) or
+                (((text.byteAt i: j - 1).or d: 0) == 0c\t)
             ) loop j = j - 1
             e: j
             for j > 0 while (isNameByte b: ((text.byteAt i: j - 1).or d: 0)) loop j = j - 1

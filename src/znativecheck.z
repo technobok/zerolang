@@ -490,8 +490,10 @@ isOperator: function {words: zast.Vocab.view text: StringView} out bool is {
 # isOperatorByte -- a byte a symbolic operator's name is made of (`- + * / % &
 # < > = ! | ^`); the operators spelt as words are checkWord's
 isOperatorByte: function {b: u8} out bool is {
-    if (b == 45) or (b == 43) or (b == 42) or (b == 47) or (b == 37) or (b == 38) then return true
-    return (b == 60) or (b == 62) or (b == 61) or (b == 33) or (b == 124) or (b == 94)
+    if (
+        (b == 0c-) or (b == 0c+) or (b == 0c*) or (b == 0c/) or (b == 0c%) or (b == 0c&)
+    ) then return true
+    return (b == 0c<) or (b == 0c>) or (b == 0c=) or (b == 0c!) or (b == 0c|) or (b == 0c^)
 }
 
 # isConversion -- method `name` of type `type` is a conversion: both name
@@ -928,9 +930,11 @@ nextPrefixed: function {text: StringView from: u64 pre: StringView} out prefixed
     r.canonFrom = r.at + pre.length
     r.next = r.canonFrom
     r.canonTo = identEnd :text from: r.canonFrom
-    if (r.canonTo == r.canonFrom) or (((text.byteAt i: r.canonTo).or d: 0) != 46) then return r
+    if (
+        (r.canonTo == r.canonFrom) or (((text.byteAt i: r.canonTo).or d: 0) != ascii.dot)
+    ) then return r
     r.nameTo = identEnd :text from: r.canonTo + 1
-    if (r.nameTo == (r.canonTo + 1)) or (((text.byteAt i: r.nameTo).or d: 0) != 64) then return r
+    if (r.nameTo == (r.canonTo + 1)) or (((text.byteAt i: r.nameTo).or d: 0) != 0c@) then return r
     r.whole = true
     r.next = r.nameTo + 1
     return r
@@ -1044,7 +1048,7 @@ plainHoles: function {text: StringView} out List String is {
         s: at + o + 3
         at = s
         e: identEnd :text from: s
-        if e > s when ((text.byteAt i: e).or d: 0) == 64 then {
+        if e > s when ((text.byteAt i: e).or d: 0) == 0c@ then {
             r.append from: (text.substring from: s to: e).string
             at = e + 1
         }
@@ -1067,7 +1071,7 @@ identEnd: function {text: StringView from: u64} out u64 is {
 
 # isIdentByte -- a letter, a digit or `_`
 isIdentByte: function {b: u8} out bool is {
-    return (isUpper :b) or (isDigit :b) or ((b >= 0ca) and (b <= 0cz)) or (b == 95)
+    return (isUpper :b) or (isDigit :b) or ((b >= 0ca) and (b <= 0cz)) or (b == 0c_)
 }
 
 # isUpper -- an ASCII capital letter
@@ -1094,7 +1098,7 @@ spellsTagConstant: function {text: StringView} out bool is {
         p: s
         for (p + 3) <= t loop {
             if ((text.byteAt i: p).or d: 0) == 0cZ when (
-                ((text.byteAt i: p + 1).or d: 0) == 95
+                ((text.byteAt i: p + 1).or d: 0) == 0c_
             ) then return true
             p = p + 1
         }
@@ -1104,7 +1108,7 @@ spellsTagConstant: function {text: StringView} out bool is {
 
 # isUpperIdentByte -- a capital letter, a digit or `_`
 isUpperIdentByte: function {b: u8} out bool is {
-    return (isUpper :b) or (isDigit :b) or (b == 95)
+    return (isUpper :b) or (isDigit :b) or (b == 0c_)
 }
 
 # spellsGeneratedMember -- whether `text` holds `.data.<x>`, `.in_<x>`,
@@ -1124,7 +1128,7 @@ followedByIdent: function {text: StringView needle: StringView} out bool is {
         if o.none then return false
         e: at + o + needle.length
         b: (text.byteAt i: e).or d: 0
-        if (isUpper :b) or ((b >= 0ca) and (b <= 0cz)) or (b == 95) then return true
+        if (isUpper :b) or ((b >= 0ca) and (b <= 0cz)) or (b == 0c_) then return true
         at = at + o + 1
     }
     return false
@@ -1138,7 +1142,8 @@ bodyCalls: function {body: StringView} out bool is {
     if (bv.contains needle: "({") then return true
     i: u64
     for i < bv.length loop {
-        if ((bv.byteAt :i).or d: 0) == 40 when (namedBefore text: bv at: i) then return true
+        if ((bv.byteAt :i).or d: 0) == ascii.parenOpen when (namedBefore text: bv at: i
+        ) then return true
         i = i + 1
     }
     return false
@@ -1148,7 +1153,7 @@ bodyCalls: function {body: StringView} out bool is {
 # between: a run of letters, digits and `_` that is not all digits
 namedBefore: function {text: StringView at: u64} out bool is {
     j: at
-    for j > 0 while ((text.byteAt i: j - 1).or d: 0) == 32 loop j = j - 1
+    for j > 0 while ((text.byteAt i: j - 1).or d: 0) == ascii.space loop j = j - 1
     for j > 0 while (isIdentByte b: ((text.byteAt i: j - 1).or d: 0)) loop {
         j = j - 1
         if (isDigit b: ((text.byteAt i: j).or d: 0)).not then return true
@@ -1184,11 +1189,11 @@ castEnd: function {text: StringView from: u64} out u64 is {
     i: from + 1
     for i < text.length loop {
         b: (text.byteAt :i).or d: 0
-        if (isIdentByte :b).not when b != 32 then break
+        if (isIdentByte :b).not when b != ascii.space then break
         i = i + 1
     }
-    if ((text.byteAt :i).or d: 0) == 42 then i = i + 1
-    if ((text.byteAt :i).or d: 0) != 41 then return 0
+    if ((text.byteAt :i).or d: 0) == 0c* then i = i + 1
+    if ((text.byteAt :i).or d: 0) != ascii.parenClose then return 0
     return i + 1
 }
 
@@ -1716,7 +1721,7 @@ convRowText: function {
 zdataQuoted: function {text: StringView} out String is {
     r: "\"".string
     for each b: text.byteView loop {
-        if (b == 34) or (b == 92) then r.appendByte 92
+        if (b == ascii.doubleQuote) or (b == 0c\\) then r.append "\\"
         r.appendByte b
     }
     r.append "\""

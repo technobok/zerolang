@@ -129,7 +129,7 @@ scanCode: function {
     for done.not loop {
         line: (lines.get i: pos.line).stringView
         col: pos.col
-        for ((line.byteAt i: col).or d: 0) == 32 loop col = col + 1
+        for ((line.byteAt i: col).or d: 0) == ascii.space loop col = col + 1
         rest: line.substring from: col to: line.length
         if rest.length == 0 then {
             next = pos.line + 1
@@ -183,7 +183,7 @@ readColonBody: function {b: DocBlock lines: (List String).view line: u64 col: u6
         return line + 1
     }
     quote: col
-    for ((text.byteAt i: quote).or d: 0) == 32 loop quote = quote + 1
+    for ((text.byteAt i: quote).or d: 0) == ascii.space loop quote = quote + 1
     after: readValue :lines :line col: quote into: b.code
     return after.line + 1
 }
@@ -203,11 +203,11 @@ readValue: function {lines: (List String).view line: u64 col: u64 into: List Str
         closed: false
         for (i < rest.length) and closed.not loop {
             c: (rest.byteAt :i).or d: 0
-            if c == 34 then {
+            if c == ascii.doubleQuote then {
                 closed = true
-            } else if (c == 92) and ((i + 1) < rest.length) then {
+            } else if (c == 0c\\) and ((i + 1) < rest.length) then {
                 e: (rest.byteAt i: i + 1).or d: 0
-                if e == 110 then {
+                if e == 0cn then {
                     into.append from: cur.copy
                     cur = "".string
                 } else {
@@ -225,8 +225,8 @@ readValue: function {lines: (List String).view line: u64 col: u64 into: List Str
     n: u64
     for (
         (n < rest.length) and
-        (((rest.byteAt i: n).or d: 0) != 32) and
-        (((rest.byteAt i: n).or d: 0) != 58)
+        (((rest.byteAt i: n).or d: 0) != ascii.space) and
+        (((rest.byteAt i: n).or d: 0) != ascii.colon)
     ) loop n = n + 1
     into.append from: (rest.substring from: 0 to: n).string
     return (docpos :line col: col + n)
@@ -280,7 +280,7 @@ appendDedented: function {raw: (List String).view into: List String} is {
 # three closes at as many, so it may hold `"""` itself
 quoteRun: function {text: StringView} out String is {
     n: u64
-    for ((text.byteAt i: n).or d: 0) == 34 loop n = n + 1
+    for ((text.byteAt i: n).or d: 0) == ascii.doubleQuote loop n = n + 1
     return (text.substring from: 0 to: n).string
 }
 
@@ -426,7 +426,7 @@ isErrorCode: function {text: StringView} out bool is {
     i: 1.u64
     for i < 5 loop {
         c: (text.byteAt i).or d: 0.u8
-        if (c < 48) or (c > 57) then return false
+        if (c < 0c0) or (c > 0c9) then return false
         i = i + 1
     }
     return true
@@ -438,10 +438,10 @@ isLabel: function {text: StringView} out bool is {
     i: u64
     for i < text.length loop {
         c: (text.byteAt i).or d: 0.u8
-        lower: (c >= 97) and (c <= 122)
-        digit: (c >= 48) and (c <= 57)
+        lower: (c >= 0ca) and (c <= 0cz)
+        digit: (c >= 0c0) and (c <= 0c9)
         if i == 0 when lower.not then return false
-        if lower.not when digit.not when c != 95 then return false
+        if lower.not when digit.not when c != 0c_ then return false
         i = i + 1
     }
     return true
@@ -615,7 +615,13 @@ endsInBlank: function {lines: (List String).view} out bool is {
 # before).
 isLineStart: function {b: u8} out bool is {
     # space, tab, `#`, `}`, `)`
-    return (b != 32) and (b != 9) and (b != 35) and (b != 125) and (b != 41)
+    return (
+        (b != ascii.space) and
+        (b != 0c\t) and
+        (b != ascii.hash) and
+        (b != ascii.braceClose) and
+        (b != ascii.parenClose)
+    )
 }
 
 # isDeclLine -- `name: <kind>` where kind is one of the declaration keywords
@@ -684,7 +690,7 @@ isIdentifier: function {text: StringView} out bool is {
     for i < text.length loop {
         c: (text.byteAt i).or d: 0.u8
         if (isIdentByte b: c).not then return false
-        if i == 0 when c >= 48 when c <= 57 then return false
+        if i == 0 when c >= 0c0 when c <= 0c9 then return false
         i = i + 1
     }
     return true
@@ -692,10 +698,10 @@ isIdentifier: function {text: StringView} out bool is {
 
 # isIdentByte -- a letter, a digit or `_`.
 isIdentByte: function {b: u8} out bool is {
-    upper: (b >= 65) and (b <= 90)
-    lower: (b >= 97) and (b <= 122)
-    digit: (b >= 48) and (b <= 57)
-    return upper or lower or digit or (b == 95)
+    upper: (b >= 0cA) and (b <= 0cZ)
+    lower: (b >= 0ca) and (b <= 0cz)
+    digit: (b >= 0c0) and (b <= 0c9)
+    return upper or lower or digit or (b == 0c_)
 }
 
 # trimBlankEnds -- the lines without the blank ones at either end.

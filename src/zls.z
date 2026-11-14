@@ -48,9 +48,9 @@ newArr: function out Arr is {
 
 # the value of hex-digit byte `b`, or -1 when not a hex digit.
 hexNibble: function {b: u8} out i64 is {
-    if b >= 48 when b <= 57 then return b - 48
-    if b >= 97 when b <= 102 then return b - 87
-    if b >= 65 when b <= 70 then return b - 55
+    if b >= 0c0 when b <= 0c9 then return b - 0c0
+    if b >= 0ca when b <= 0cf then return b - 87
+    if b >= 0cA when b <= 0cF then return b - 55
     return -1
 }
 
@@ -69,7 +69,7 @@ uriToPath: function {uri: StringView} out String is {
     for i < n loop {
         bo: uri.byteAt :i
         if bo.some then {
-            if bo == 37 when (i + 2) < n then {
+            if bo == 0c% when (i + 2) < n then {
                 h1: i64
                 h2: i64
                 b1: uri.byteAt i: i + 1
@@ -105,7 +105,7 @@ windowsPathOfUri: function {p: StringView} out String is {
         share: "//\{p}"
         return (path.clean p: share.stringView)
     }
-    if ((p.byteAt i: 2).or d: 0) != 58 then return p.string
+    if ((p.byteAt i: 2).or d: 0) != ascii.colon then return p.string
     drive: p.substring from: 1 to: p.length
     return (path.clean p: drive)
 }
@@ -133,7 +133,7 @@ pathToUri: function {file: StringView} out String is {
             r.append share
             return r
         }
-        if ((v.byteAt i: 1).or d: 0) == 58 then r.append "/"
+        if ((v.byteAt i: 1).or d: 0) == ascii.colon then r.append "/"
         r.append v
         return r
     }
@@ -391,10 +391,10 @@ writeAll: function {s: StringView tp: Transport} is {
 frameAndSend: function {body: String tp: Transport} is {
     blen: body.length
     m: "Content-Length: \{blen}"
-    m.appendByte b: 13
-    m.appendByte b: 10
-    m.appendByte b: 13
-    m.appendByte b: 10
+    m.appendByte b: ascii.cr
+    m.append "\n"
+    m.appendByte b: ascii.cr
+    m.append "\n"
     m.append body
     writeAll s: m.stringView :tp
 }
@@ -626,12 +626,12 @@ Server: class {
             match (
                 bo
             ) case some then {
-                if bo == 10 then {
+                if bo == 0c\n then {
                     n: line.length
                     if n > 0 then {
                         lv: line.stringView
                         lb: lv.byteAt i: n - 1
-                        if lb.some when lb == 13 then {
+                        if lb.some when lb == ascii.cr then {
                             s2: (lv.substring from: 0 to: n - 1).string
                             return (Option.some s2)
                         }
@@ -2498,7 +2498,7 @@ docLine: function {text: StringView lineno: u32} out String is {
     n: text.length
     for i < n loop {
         b: text.byteAt :i
-        if b.some when b == 10 then {
+        if b.some when b == 0c\n then {
             if cur == lineno then return (text.substring from: start to: i).string
             cur = cur + 1
             start = i + 1
@@ -3179,7 +3179,7 @@ defaultDisplay: function {
             arm: declNameText :ast :st declId: da
             if arm.length == 0 then return "".string
             r: typeName.string
-            r.appendByte b: 46
+            r.append "."
             r.append arm
             return r
         }
@@ -3202,14 +3202,14 @@ defaultDisplay: function {
     isFloat: fk.has and (ztypes.isFloatKind k: fk.kind)
     rr: String
     if isFloat then {
-        rr.appendByte b: 40
+        rr.append "("
         rr.append dtext
-        rr.appendByte b: 41
-        rr.appendByte b: 46
+        rr.append ")"
+        rr.append "."
         rr.append typeName
     } else {
         rr.append dtext
-        rr.appendByte b: 46
+        rr.append "."
         rr.append typeName
     }
     return rr
@@ -3538,14 +3538,14 @@ sigOneLine: function {name: StringView pdisp: (List String).view rets: StringVie
 # in place of every newline inside it.
 docPrefixed: function {block: StringView} out String is {
     r: String
-    r.appendByte b: 10
+    r.append "\n"
     r.append "    # "
     wbj: u64
     for wbj < block.length loop {
         wcb: block.byteAt i: wbj
         if wcb.some then {
             if wcb == 10 then {
-                r.appendByte b: 10
+                r.append "\n"
                 r.append "    # "
             } else {
                 r.appendByte b: wcb
@@ -3572,7 +3572,7 @@ sigWrapped: function {
     for wi < pdisp.length loop {
         wlb: pleads.get i: wi
         if wlb.length > 0 then wrap.append (docPrefixed block: wlb.stringView)
-        wrap.appendByte b: 10
+        wrap.append "\n"
         wrap.append "    "
         wrap.append (pdisp.get i: wi)
         wpdc: pdocs.get i: wi
@@ -3582,7 +3582,7 @@ sigWrapped: function {
         }
         wi = wi + 1
     }
-    wrap.appendByte b: 10
+    wrap.append "\n"
     wrap.append "}"
     wrap.append rets
     return wrap
@@ -3691,19 +3691,19 @@ fnParamDisplays: function {
 # prose. `code` may be multi-line (a hand-wrapped signature).
 hoverMarkdown: function {code: StringView doc: StringView} out Value is {
     v: String
-    v.appendByte b: 96
-    v.appendByte b: 96
-    v.appendByte b: 96
+    v.append "`"
+    v.append "`"
+    v.append "`"
     v.append "zerolang"
-    v.appendByte b: 10
+    v.append "\n"
     v.append code
-    v.appendByte b: 10
-    v.appendByte b: 96
-    v.appendByte b: 96
-    v.appendByte b: 96
+    v.append "\n"
+    v.append "`"
+    v.append "`"
+    v.append "`"
     if doc.length > 0 then {
-        v.appendByte b: 10
-        v.appendByte b: 10
+        v.append "\n"
+        v.append "\n"
         v.append doc
     }
     mk: newObj
@@ -3874,8 +3874,8 @@ trailingDocOf: function {vfs: zvfs.ZVfs fsno: zvfs.fsno line1: u32} out String i
         for i < n loop {
             b: lv.byteAt :i
             if b.some then {
-                if b == 34 then inStr = inStr.not
-                if b == 35 when inStr.not when found.not then {
+                if b == ascii.doubleQuote then inStr = inStr.not
+                if b == ascii.hash when inStr.not when found.not then {
                     hashAt = i
                     found = true
                 }
@@ -3926,7 +3926,7 @@ docBlockAboveOf: function {vfs: zvfs.ZVfs fsno: zvfs.fsno line1: u32} out String
     ai: acc.length
     for ai > 0 loop {
         ai = ai - 1
-        if result.length > 0 then result.appendByte b: 10
+        if result.length > 0 then result.append "\n"
         dl: acc.get i: ai
         result.append dl
     }
@@ -4028,7 +4028,7 @@ unitDocComment: function {snap: zcheck.CheckResult fsno: zvfs.fsno} out String i
                 sb: tl.byteAt i: 1
                 if sb.some when sb == 32 then st = 2
                 ds: tl.substring from: st to: tl.length
-                if result.length > 0 then result.appendByte b: 10
+                if result.length > 0 then result.append "\n"
                 result.append ds
             } else {
                 stop = true
@@ -4109,7 +4109,7 @@ inferredGenericLines: function {
         hi: u64
         for hi < holders.length loop {
             tn: displayTypeNameSt st: o tid: (tids.get i: hi) :site
-            if r.length > 0 then r.appendByte b: 10
+            if r.length > 0 then r.append "\n"
             r.append "# "
             r.append (holders.get i: hi)
             r.append " = "
@@ -4536,7 +4536,7 @@ listPathOpt: function {snap: zcheck.CheckResult declId: ztypes.declid} out Strin
     if o.some then {
         up: ztypecheck.unitPathOfDecl st: o declId: ld
         nm: zast.nameTextAt ast: snap.prog ref: (o.typing.decls.get i: ld).name
-        if up.length > 0 then up.appendByte b: 46
+        if up.length > 0 then up.append "."
         up.append nm
         return up
     }
@@ -5015,7 +5015,7 @@ genericParamHoverCard: function {
     if gown.length > 0 then {
         gdoc.append "generic parameter of `"
         gdoc.append gown
-        gdoc.appendByte b: 96
+        gdoc.append "`"
     }
     return (hoverMarkdown code: gcard.stringView doc: gdoc.stringView)
 }
@@ -5153,7 +5153,7 @@ constHoverText: function {
         }
         if v.kind.armKind then {
             arm: displayTypeNameSt st: o tid: v.armTid :site
-            arm.appendByte b: 46
+            arm.append "."
             arm.append (zast.poolTextAt pool: prog.names ref: v.armName)
             return arm
         }
@@ -5177,7 +5177,7 @@ typedNumberText: function {
     if (st.typing.typedefBase.has key: v.numTid) then return "\{tn} \{num}"
     # display text, not a key: the literal, its dot and its type
     r: num.take
-    r.appendByte b: 46
+    r.append "."
     r.append tn
     return r
 }
@@ -5204,7 +5204,7 @@ constCard: function {
     pre: constPathPrefix :snap :hit :site
     if pre.length > 0 then {
         card.append pre
-        card.appendByte b: 46
+        card.append "."
     }
     card.append hname
     card.append ": "
@@ -5299,7 +5299,7 @@ hoverTypeFence: function {
     if lp.length > 0 then own = lp.take
     if own.length > 0 then {
         fence.append own
-        fence.appendByte b: 46
+        fence.append "."
     }
     fence.append hname
     fence.append ": "
@@ -5473,8 +5473,8 @@ variableTypeOpt: function {o: (Option zenv.ZSymbolTable).view vid: ztypes.vid} o
 appendNote: function {docBody: String.borrow note: StringView} is {
     if note.length == 0 then return
     if docBody.length > 0 then {
-        docBody.appendByte b: 10
-        docBody.appendByte b: 10
+        docBody.append "\n"
+        docBody.append "\n"
     }
     docBody.append note
 }
@@ -5523,7 +5523,7 @@ hoverCallNotes: function {
     if callPos == hpos then {
         gl: inferredGenericLines o: snap.st prog: snap.prog :callId :site
         if gl.length > 0 then {
-            body.appendByte b: 10
+            body.append "\n"
             body.append gl
         }
         return
@@ -5874,7 +5874,7 @@ RefFile: class {
         i: u64
         for i < n loop {
             b: tv.byteAt :i
-            if b.some when b == 10 then f.starts.append i + 1
+            if b.some when b == 0c\n then f.starts.append i + 1
             i = i + 1
         }
         return f
@@ -6383,7 +6383,7 @@ appendLintDiags: function {arr: Arr la: zsource.Analysis.view utf32: bool} is {
             if c1 <= c0 then c1 = c0 + 1
             m: d.msg.copy
             if d.hint.length > 0 then {
-                m.appendByte b: 10
+                m.append "\n"
                 m.append "hint: "
                 m.append d.hint
             }
@@ -6447,7 +6447,7 @@ formatAnswer: function {text: StringView relpath: StringView} out Value is {
         n: text.length
         for i < n loop {
             b: text.byteAt :i
-            if b.some when b == 10 then nl = nl + 1
+            if b.some when b == 0c\n then nl = nl + 1
             i = i + 1
         }
         st: newObj
@@ -6514,7 +6514,7 @@ skipSpacesFrom: function {s: StringView from: u64} out u64 is {
     n: s.length
     for j < n loop {
         b: byteOr :s i: j d: 0
-        if b != 32 when b != 9 then return j
+        if b != ascii.space when b != 0c\t then return j
         j = j + 1
     }
     return j
@@ -6546,12 +6546,12 @@ identStartBack: function {s: StringView from: u64 floor: u64} out u64 is {
 # true when byte `b` may appear in an identifier.
 isIdentByte: function {b: u8} out bool is {
     return (
-        (b >= 97) and
-        (b <= 122) or
-        ((b >= 65) and (b <= 90)) or
-        ((b >= 48) and (b <= 57)) or
+        (b >= 0ca) and
+        (b <= 0cz) or
+        ((b >= 0cA) and (b <= 0cZ)) or
+        ((b >= 0c0) and (b <= 0c9)) or
         (
-            b == 95
+            b == 0c_
         )
     )
 }
@@ -7233,8 +7233,8 @@ parenOpenOf: function {ltv: StringView close: u64} out u64 is {
         i = i - 1
         b: ltv.byteAt :i
         if b.some then {
-            if b == 41 then depth = depth + 1
-            if b == 40 then {
+            if b == ascii.parenClose then depth = depth + 1
+            if b == ascii.parenOpen then {
                 if depth == 0 then return close
                 depth = depth - 1
                 if depth == 0 then return i
@@ -7272,7 +7272,7 @@ memberBaseOf: function {ltv: StringView dot: u64} out baserange is {
     if bs < dot then return (baserange lo: bs hi: dot)
     if dot == 0 then return (baserange lo: dot hi: dot)
     cb: ltv.byteAt i: dot - 1
-    if cb.some when cb == 41 then {
+    if cb.some when cb == ascii.parenClose then {
         close: dot - 1
         op: parenOpenOf :ltv :close
         if (op + 1) < close then return (baserange lo: op + 1 hi: close)
@@ -7294,13 +7294,13 @@ numberEnd: function {base: StringView} out u64 is {
         match (
             b
         ) case some then {
-            if b == 46 then {
+            if b == ascii.dot then {
                 nb: base.byteAt i: i + 1
                 match (
                     nb
                 ) case some then {
                     isD: false
-                    if nb >= 48 when nb <= 57 then isD = true
+                    if nb >= 0c0 when nb <= 0c9 then isD = true
                     if isD.not then stop = true
                 } case none then {
                     stop = true
@@ -7365,7 +7365,7 @@ dotFrom: function {base: StringView start: u64} out u64 is {
     i: start
     for i < n loop {
         b: base.byteAt :i
-        if b.some when b == 46 then return i
+        if b.some when b == ascii.dot then return i
         i = i + 1
     }
     return n
@@ -8351,7 +8351,7 @@ backOverBlanks: function {ltv: StringView pos: u64} out u64 is {
     p: pos
     for p > 0 loop {
         b: (ltv.byteAt i: p - 1).or d: 0
-        if b != 32 when b != 9 then break
+        if b != ascii.space when b != 0c\t then break
         p = p - 1
     }
     return p
@@ -9046,7 +9046,7 @@ completionAnswer: function {
     # member position: a '.' before the prefix -> complete the base's members
     if ps > 0 then {
         pb: ltv.byteAt i: ps - 1
-        if pb.some when pb == 46 then {
+        if pb.some when pb == ascii.dot then {
             memberMode = true
             be: ps - 1
             br: memberBaseOf :ltv dot: be
