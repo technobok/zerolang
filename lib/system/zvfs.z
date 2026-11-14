@@ -162,11 +162,11 @@ mountdata: record {
     parentid: fsno
     # the root searched first
     first: fsno
-    # the root searched after `first`; meaningful only when has_second
+    # the root searched after `first`; meaningful only when hasSecond
     second: fsno
     # whether `second` holds a root at all. An `instead` bind leaves it unset,
     # which is the whole difference between it and the other two
-    has_second: bool
+    hasSecond: bool
 }
 
 # shadowpair -- an overlay and the provider tree it shadows (zls's open buffers
@@ -183,12 +183,12 @@ shadowpair: record {
 
 # mountinfo -- value-type carrier used by ZVfs.walk to drop the
 # entrytable borrow before recursing into the mount's first/second
-# arms. `is_mount` distinguishes the mount-vs-non-mount case at the
+# arms. `isMount` distinguishes the mount-vs-non-mount case at the
 # helper boundary; the rest mirrors mountdata.
 mountinfo: record {
     # whether the entry asked about is a mount. The three below mean nothing
     # when this is false
-    is_mount: bool
+    isMount: bool
     # the mount's first root, copied out for a caller that must not hold the
     # table
     first: fsno
@@ -196,7 +196,7 @@ mountinfo: record {
     second: fsno
     # whether `second` is meaningful, mirroring the mountdata field it was
     # copied from
-    has_second: bool
+    hasSecond: bool
 }
 
 # a VFS directory entry -- one of root / notfound / file / directory / mount.
@@ -692,9 +692,9 @@ ZVfs: class {
     # the dentries, which is where resolution actually caches its answers
     entrytable: DentryTable
     # the file names seen, so a name can be reported without re-deriving it
-    file_names: (List String i: fsno)
+    fileNames: (List String i: fsno)
     # resolved path to fsno. A path walked twice does not descend twice
-    walk_cache: (MapRV String v: fsno)
+    walkCache: (MapRV String v: fsno)
     # the entry every absolute walk starts from
     rootid: fsno
     # the overlay a sibling lookup treats as one tree with what it shadows
@@ -714,7 +714,7 @@ ZVfs: class {
         this.providers.append box.take
         d: dentry.directory (dirdata parentid: fsno providerid: pid nodeid: 0)
         did: this.entrytable.append entry: d
-        this.file_names.append "".string
+        this.fileNames.append "".string
         return did
     }
     # registerString -- append a fresh StringProvider (empty) and
@@ -733,7 +733,7 @@ ZVfs: class {
         this.providers.append box.take
         d: dentry.directory (dirdata parentid: fsno providerid: pid nodeid: 0)
         did: this.entrytable.append entry: d
-        this.file_names.append "".string
+        this.fileNames.append "".string
         return did
     }
     # registerFS -- append an FSProvider rooted at <rootpath>/<parentpath>
@@ -752,7 +752,7 @@ ZVfs: class {
         d: dentry.directory (dirdata parentid: fsno providerid: pid nodeid: 0)
         if isFile then d = dentry.file (filedata parentid: fsno providerid: pid nodeid: 0)
         did: this.entrytable.append entry: d
-        this.file_names.append "".string
+        this.fileNames.append "".string
         return did
     }
     # registerFile -- append `p`, a provider whose root (node 0) is one file, and
@@ -765,7 +765,7 @@ ZVfs: class {
         this.providers.append box.take
         d: dentry.file (filedata parentid: fsno providerid: pid nodeid: 0)
         did: this.entrytable.append entry: d
-        this.file_names.append "".string
+        this.fileNames.append "".string
         return did
     }
     # walk -- single-step VFS walk. Composite cache key avoids
@@ -778,7 +778,7 @@ ZVfs: class {
     walk: function {:this parent: fsno name: StringView} out fsno is {
         # cache lookup
         cachekey: "\{parent}:\{name}"
-        cached: this.walk_cache.get key: cachekey
+        cached: this.walkCache.get key: cachekey
         match (
             cached
         ) case some then {
@@ -787,22 +787,22 @@ ZVfs: class {
         } case none then null
         # Mount-arm fast path: if parent is a UNION-mount dentry,
         # recurse into `first`, then `second` if first returned a
-        # notfound dentry AND has_second is true. Extracted via
+        # notfound dentry AND hasSecond is true. Extracted via
         # `_extractMount` so the entrytable borrow is released
         # before we recurse (recursive `this.walk` will WRITE to
         # entrytable on a cache miss).
         mi: this._extractMount dentryid: parent
-        if mi.is_mount then {
+        if mi.isMount then {
             r1: this.walk parent: mi.first :name
-            if mi.has_second then {
-                r1_nf: this._dentryIsNotFound dentryid: r1
-                if r1_nf then {
+            if mi.hasSecond then {
+                r1Nf: this._dentryIsNotFound dentryid: r1
+                if r1Nf then {
                     r2: this.walk parent: mi.second :name
-                    this.walk_cache.set key: cachekey.take value: r2
+                    this.walkCache.set key: cachekey.take value: r2
                     return r2
                 }
             }
-            this.walk_cache.set key: cachekey.take value: r1
+            this.walkCache.set key: cachekey.take value: r1
             return r1
         }
         # extract parent's provider+nodeid
@@ -839,8 +839,8 @@ ZVfs: class {
             newd = dentry.directory (dirdata parentid: parent providerid: ppid nodeid: newnid)
         } case notfound then null
         newdid: this.entrytable.append entry: newd
-        this.file_names.append name.string
-        this.walk_cache.set key: cachekey.take value: newdid
+        this.fileNames.append name.string
+        this.walkCache.set key: cachekey.take value: newdid
         return newdid
     }
     # arm -- coarse-grained "what kind of thing is this VFS entry"
@@ -868,7 +868,7 @@ ZVfs: class {
     # fileTable -- (file-id, bare-name) for every FILE dentry, filled
     # into parallel out-lists. Only `file` arms are included so that
     # directories and not-found entries (which also carry a name in
-    # file_names) are excluded.
+    # fileNames) are excluded.
     fileTable: function {t: this.view outIds: ListVal fsno outPaths: List String} is {
         n: t.entrytable.entries.length
         i: fsno
@@ -878,14 +878,14 @@ ZVfs: class {
                 e
             ) case file then {
                 outIds.append from: i
-                nm: t.file_names.get :i
+                nm: t.fileNames.get :i
                 outPaths.append nm.copy
             } case root then null case notfound then null case directory then null case mount then null
             i = i.next
         }
     }
     # path -- reconstruct a "/"-separated path by following parentid
-    # pointers back to root, gathering names from file_names. The
+    # pointers back to root, gathering names from fileNames. The
     # root dentry's name is empty; the dispatcher's "/" prefix comes
     # from the join itself. If the chain hits a root arm we stop;
     # anything else (notfound, file, dir, mount) keeps going. Up to
@@ -901,12 +901,12 @@ ZVfs: class {
         active: true
         for active loop {
             e: t.entrytable.entries.get i: curid
-            at_root: false
+            atRoot: false
             par: fsno
             match (
                 e
             ) case root then {
-                at_root = true
+                atRoot = true
             } case notfound then {
                 par = e.parentid
             } case file then {
@@ -920,10 +920,10 @@ ZVfs: class {
             # or self-pointing synthetic root from registerNull etc.) --
             # the root carries no name. The leading "/" comes from the
             # assembly loop below.
-            if at_root or (curid == par) then {
+            if atRoot or (curid == par) then {
                 active = false
             } else {
-                nm: t.file_names.get i: curid
+                nm: t.fileNames.get i: curid
                 names.append nm.copy
                 curid = par
                 steps = steps + 1
@@ -931,16 +931,16 @@ ZVfs: class {
             }
         }
         # Assemble: reversed names joined by "/", with a leading "/"
-        out_str: String
+        outStr: String
         i: names.length
         for i > 0 loop {
             i = i - 1
             nm: names.get :i
-            out_str.append s: "/"
-            out_str.append s: nm
+            outStr.append s: "/"
+            outStr.append s: nm
         }
-        if out_str.length == 0 then return "/".string
-        return out_str
+        if outStr.length == 0 then return "/".string
+        return outStr
     }
     # pathfromprovider -- ask the dentry's provider for its native
     # path representation. For mount arms returns "[UNION]" (no
@@ -1049,10 +1049,10 @@ ZVfs: class {
             return near
         }
         if farDir.not then return near
-        md: mountdata parentid: par first: far second: near has_second: true
-        if nearIsTop then md = mountdata parentid: par first: near second: far has_second: true
+        md: mountdata parentid: par first: far second: near hasSecond: true
+        if nearIsTop then md = mountdata parentid: par first: near second: far hasSecond: true
         mid: this.entrytable.append entry: dentry.mount md
-        this.file_names.append name.string
+        this.fileNames.append name.string
         return mid
     }
 
@@ -1121,8 +1121,8 @@ ZVfs: class {
     }
 
     # _extractMount -- read the dentry at `dentryid`, return a value-type
-    # mountinfo carrier. For mount arms: is_mount=true + first/second/
-    # has_second fields. For other arms: is_mount=false. Used by walk to
+    # mountinfo carrier. For mount arms: isMount=true + first/second/
+    # hasSecond fields. For other arms: isMount=false. Used by walk to
     # release the entrytable borrow before recursing into the mount arms.
     _extractMount: function {t: this.view dentryid: fsno} out mountinfo is {
         e: t.entrytable.entries.get i: dentryid
@@ -1131,13 +1131,13 @@ ZVfs: class {
         ) case mount then {
             return (
                 mountinfo
-                is_mount: true
+                isMount: true
                 first: e.first
                 second: e.second
-                has_second: e.has_second
+                hasSecond: e.hasSecond
             )
         } case root then null case notfound then null case file then null case directory then null
-        return (mountinfo is_mount: false first: fsno second: fsno has_second: false)
+        return (mountinfo isMount: false first: fsno second: fsno hasSecond: false)
     }
 
     # _dentryIsNotFound -- true iff the dentry at `dentryid` is the
@@ -1198,9 +1198,9 @@ ZVfs: class {
     # entry. Anything else holds no names
     _listInto: function {t: this.view dentryid: fsno names: List String} is {
         mi: t._extractMount :dentryid
-        if mi.is_mount then {
+        if mi.isMount then {
             t._listInto dentryid: mi.first :names
-            if mi.has_second then t._listInto dentryid: mi.second :names
+            if mi.hasSecond then t._listInto dentryid: mi.second :names
         } else {
             t._providerNamesInto :dentryid :names
         }
@@ -1257,27 +1257,27 @@ ZVfs: class {
     # respectively.
     bindRoot: function {:this newid: fsno kind: bindkind} out fsno is {
         old: this.rootid
-        md: mountdata parentid: old first: fsno second: fsno has_second: false
+        md: mountdata parentid: old first: fsno second: fsno hasSecond: false
         match (
             kind
         ) case instead then {
-            md = mountdata parentid: old first: newid second: fsno has_second: false
+            md = mountdata parentid: old first: newid second: fsno hasSecond: false
         } case before then {
-            md = mountdata parentid: old first: newid second: old has_second: true
+            md = mountdata parentid: old first: newid second: old hasSecond: true
         } case after then {
-            md = mountdata parentid: old first: old second: newid has_second: true
+            md = mountdata parentid: old first: old second: newid hasSecond: true
         }
-        new_dentry: dentry.mount md
-        new_id: this.entrytable.append entry: new_dentry
-        this.file_names.append "".string
-        this.rootid = new_id
-        return new_id
+        newDentry: dentry.mount md
+        newId: this.entrytable.append entry: newDentry
+        this.fileNames.append "".string
+        this.rootid = newId
+        return newId
     }
 
     # bind -- mount `newid` at parent/name, replacing whatever was
     # walked there. INSTEAD discards the old entry; BEFORE / AFTER
     # layer the new mount as the union's first / second arm
-    # respectively. The walk_cache entry for `<parentid>:<name>` is
+    # respectively. The walkCache entry for `<parentid>:<name>` is
     # overwritten so future walks route to the new mount. A FILE root
     # (registerFS on a file) is bound by `_bindFile` instead.
     bind: function {:this parentid: fsno name: StringView newid: fsno kind: bindkind} out fsno is {
@@ -1286,29 +1286,29 @@ ZVfs: class {
         }
         old: this.walk parent: parentid :name
         zf: fsno
-        md: mountdata :parentid first: zf second: zf has_second: false
+        md: mountdata :parentid first: zf second: zf hasSecond: false
         match (
             kind
         ) case instead then {
-            md = mountdata :parentid first: newid second: zf has_second: false
+            md = mountdata :parentid first: newid second: zf hasSecond: false
         } case before then {
-            md = mountdata :parentid first: newid second: old has_second: true
+            md = mountdata :parentid first: newid second: old hasSecond: true
         } case after then {
-            md = mountdata :parentid first: old second: newid has_second: true
+            md = mountdata :parentid first: old second: newid hasSecond: true
         }
-        new_dentry: dentry.mount md
-        new_id: this.entrytable.append entry: new_dentry
-        this.file_names.append name.string
-        this._cacheWalk parent: parentid :name at: new_id
+        newDentry: dentry.mount md
+        newId: this.entrytable.append entry: newDentry
+        this.fileNames.append name.string
+        this._cacheWalk parent: parentid :name at: newId
         this._noteBound parent: parentid :name
-        return new_id
+        return newId
     }
 
     # _cacheWalk -- route every later walk of parent/name to `at`: a bind
     # overrides whatever was resolved there before.
     _cacheWalk: function {:this parent: fsno name: StringView at: fsno} is {
         cachekey: "\{parent}:\{name}"
-        this.walk_cache.set key: cachekey.take value: at
+        this.walkCache.set key: cachekey.take value: at
     }
 
     # _noteBound -- record `name` as bound under `parent`, so a read of the
@@ -1347,7 +1347,7 @@ ZVfs: class {
             i: fileid
             val: dentry.file (filedata :parentid providerid: pid nodeid: nid)
         )
-        this.file_names.set i: fileid val: name.string
+        this.fileNames.set i: fileid val: name.string
         this._cacheWalk parent: parentid :name at: fileid
         this._noteBound parent: parentid :name
         return fileid
