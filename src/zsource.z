@@ -135,7 +135,7 @@ typedefCasingKind: function {ast: Ast.view baseId: zast.nodeid} out zast.objectk
     if nm.isZero then return zast.objectkind.recordDef
     tx: zast.nameTextAt :ast ref: nm
     fb: tx.stringView.byteAt i: 0
-    if fb.some when fb >= 0cA when fb <= 0cZ then return zast.objectkind.classDef
+    if fb.some when (ascii.isUpper b: fb) then return zast.objectkind.classDef
     return zast.objectkind.recordDef
 }
 
@@ -1217,8 +1217,8 @@ casingSuggest: function {name: StringView} out String is {
             cap = true
         } else {
             c: bo
-            if c >= 0cA when c <= 0cZ then c = c + 32
-            if cap when buf.length > 0 when c >= 0ca when c <= 0cz then c = c - 32
+            if (ascii.isUpper b: c) then c = c + 32
+            if cap when buf.length > 0 when (ascii.isLower b: c) then c = c - 32
             buf.appendByte b: c
             cap = false
         }
@@ -1289,15 +1289,10 @@ simplePathLastAtom: function {ast: Ast.view id: zast.nodeid} out zast.nodeid is 
 trimBackWs: function {s: StringView hi: u64} out u64 is {
     h: hi
     for h > 0 loop {
-        if (byteIsWs b: (docByteAt :s i: h - 1)).not then return h
+        if (ascii.isSpace b: (docByteAt :s i: h - 1)).not then return h
         h = h - 1
     }
     return h
-}
-
-# byteIsWs -- a space, tab or line-end byte.
-byteIsWs: function {b: u8} out bool is {
-    return (b == ascii.space) or (b == 0c\t) or (b == 0c\n) or (b == ascii.cr)
 }
 
 # parenGroupStart -- the index of the `(` matching the `)` at `close - 1`; 0 when
@@ -1325,7 +1320,7 @@ onlyOpensBetween: function {s: StringView lo: u64 hi: u64} out bool is {
     i: lo
     for i < hi loop {
         b: docByteAt :s :i
-        if b != ascii.parenOpen when (byteIsWs :b).not then return false
+        if b != ascii.parenOpen when (ascii.isSpace :b).not then return false
         i = i + 1
     }
     return true
@@ -1334,7 +1329,7 @@ onlyOpensBetween: function {s: StringView lo: u64 hi: u64} out bool is {
 # docByteIsWord -- true for the ASCII letters and digits a word is made of. Everything
 # else -- punctuation, backticks, the `--` dash, path separators -- is a boundary.
 docByteIsWord: function {b: u8} out bool is {
-    return (b >= 0ca) and (b <= 0cz) or ((b >= 0cA) and (b <= 0cZ)) or ((b >= 0c0) and (b <= 0c9))
+    return (ascii.isLetter :b) or (ascii.isDigit :b)
 }
 
 # docIsStopword -- true for a function word every doc shares, which therefore says
@@ -1356,7 +1351,7 @@ docWordsInto: function {s: StringView into: List String} is {
     for i < n loop {
         c: docByteAt :s :i
         if (docByteIsWord b: c) then {
-            if c >= 0cA when c <= 0cZ then c = c + 32
+            if (ascii.isUpper b: c) then c = c + 32
             run.appendByte b: c
         } else {
             if run.length > 0 then {
@@ -1380,7 +1375,7 @@ docAddRun: function {run: StringView into: List String} is {
     for i < n loop {
         c: docByteAt s: run :i
         isUp: false
-        if c >= 0cA when c <= 0cZ then isUp = true
+        if (ascii.isUpper b: c) then isUp = true
         if isUp when seg.length > 0 then {
             into.append from: seg.copy
             seg = "".string
@@ -1452,7 +1447,7 @@ docHasDigit: function {w: StringView} out bool is {
     n: w.length
     for i < n loop {
         c: docByteAt s: w :i
-        if c >= 0c0 when c <= 0c9 then return true
+        if (ascii.isDigit b: c) then return true
         i = i + 1
     }
     return false
@@ -1556,7 +1551,7 @@ byteIsUpper: function {b: optionval u8} out bool is {
     match (
         b
     ) case some then {
-        if b >= 0cA when b <= 0cZ then return true
+        if (ascii.isUpper :b) then return true
         return false
     } case none then {
         return false
@@ -1576,8 +1571,8 @@ flipFirstCase: function {s: StringView} out String is {
             c: bo
             if i == 0 then {
                 d: c
-                if c >= 0cA when c <= 0cZ then d = c + 32
-                if c >= 0ca when c <= 0cz then d = c - 32
+                if (ascii.isUpper b: c) then d = c + 32
+                if (ascii.isLower b: c) then d = c - 32
                 c = d
             }
             buf.appendByte b: c
@@ -2045,11 +2040,11 @@ Analysis: class {
         nm: zast.nameTextAt :ast ref: nameRef
         hasUpper: false
         for each cb: nm.byteView loop {
-            if cb >= 0cA when cb <= 0cZ then hasUpper = true
+            if (ascii.isUpper b: cb) then hasUpper = true
         }
         firstUpper: false
         fb: nm.stringView.byteAt i: 0
-        if fb.some when fb >= 0cA when fb <= 0cZ then firstUpper = true
+        if fb.some when (ascii.isUpper b: fb) then firstUpper = true
         bad: false
         msg: String
         if isVal when hasUpper then {
@@ -2445,7 +2440,7 @@ Analysis: class {
         srcOwned: t.source.copy
         sv: srcOwned.stringView
         endB: opB
-        for endB > lhsB while (isSpaceByte c: (docByteAt s: sv i: endB - 1)) loop endB = endB - 1
+        for endB > lhsB while (ascii.isSpace b: (docByteAt s: sv i: endB - 1)) loop endB = endB - 1
         if (groupedSpan :sv lo: lhsB hi: endB) then return
         outerNm: zast.nameTextAt :ast ref: (zast.atomNameIdOf n: (ast.nodes.get i: opId))
         inn: zast.nameTextAt :ast ref: (zast.atomNameIdOf n: (ast.nodes.get i: inner.operator))
@@ -2968,7 +2963,7 @@ Analysis: class {
                 nm: zast.nameTextAt :ast ref: item.name
                 fb: nm.stringView.byteAt i: 0
                 up: false
-                if fb.some when fb >= 0cA when fb <= 0cZ then up = true
+                if fb.some when (ascii.isUpper b: fb) then up = true
                 if up when isTypeRef.not then {
                     sug: casingSuggest name: nm.stringView
                     (
@@ -6099,7 +6094,7 @@ litShapedSuf: function {ast: Ast.view n: astnode.view} out bool is {
         an: zast.nameTextAt :ast ref: n.name
         d: false
         b: an.stringView.byteAt 0
-        if b.some when b >= 0c0 when b <= 0c9 then d = true
+        if b.some when (ascii.isDigit :b) then d = true
         return d
     } case dottedpath then {
         return (litShapedSuf :ast n: (ast.nodes.get i: n.parent))
@@ -6930,11 +6925,6 @@ operatorKind: function {ast: Ast.view nid: zast.nodeid} out u8 is {
     return (ztypes.operatorKindOf nameId: (zast.atomNameIdOf n: (ast.nodes.get i: nid)))
 }
 
-# isSpaceByte -- a space, a tab or a line end.
-isSpaceByte: function {c: u8} out bool is {
-    return (c == ascii.space) or (c == 0c\t) or (c == 0c\n) or (c == ascii.cr)
-}
-
 # groupedSpan -- the source between `lo` and `hi` is one parenthesised group:
 # it ends in a `)` whose matching `(` opens before `lo`, with nothing between
 # them but space and the opening parentheses of the operand's own first term.
@@ -6947,7 +6937,7 @@ groupedSpan: function {sv: StringView lo: u64 hi: u64} out bool is {
     if i >= lo then return false
     k: i + 1
     for k < lo while (
-        (isSpaceByte c: (docByteAt s: sv i: k)) or ((docByteAt s: sv i: k) == ascii.parenOpen)
+        (ascii.isSpace b: (docByteAt s: sv i: k)) or ((docByteAt s: sv i: k) == ascii.parenOpen)
     ) loop {
         k = k + 1
     }

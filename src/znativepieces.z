@@ -792,7 +792,7 @@ emitterItems: function {text: StringView} out List EmitterItem is {
     for each l: text.lines loop {
         ln = ln + 1
         b: (l.byteAt i: 0).or d: 0
-        isTop: (b >= 0ca) and (b <= 0cz) or ((b >= 0cA) and (b <= 0cZ))
+        isTop: (ascii.isLower :b) or (ascii.isUpper :b)
         we: wordEnd text: l from: 0
         if isTop when ((l.byteAt i: we).or d: 0) == ascii.colon then (
             r.append
@@ -882,7 +882,7 @@ spellsStrC: function {code: StringView} out bool is {
         o: (code.substring from: at to: code.length).indexOf needle: ".append ctx.strC"
         if o.none then return false
         e: at + o + 16
-        if (isWordByte b: ((code.byteAt i: e).or d: 0)).not then return true
+        if (ascii.isWord b: ((code.byteAt i: e).or d: 0)).not then return true
         at = e
     }
     return false
@@ -923,7 +923,7 @@ emitterIdents: function {code: StringView} out List String is {
     i: u64
     for i < code.length loop {
         b: (code.byteAt :i).or d: 0
-        startOk: (isWordByte :b) and (isDigit :b).not
+        startOk: (ascii.isWord :b) and (ascii.isDigit :b).not
         if startOk when i > 0 then {
             pb: (code.byteAt i: i - 1).or d: 0
             if (isNameByte b: pb) or (pb == 0c\\) then startOk = false
@@ -1012,7 +1012,7 @@ identsOf: function {text: StringView} out List String is {
     i: u64
     for i < text.length loop {
         b: (text.byteAt :i).or d: 0
-        if (isNameByte :b).not or (isDigit :b) then {
+        if (isNameByte :b).not or (ascii.isDigit :b) then {
             i = i + 1
             continue
         }
@@ -1104,23 +1104,13 @@ dropKeys: function {line: StringView} out String is {
 # wordEnd -- where the run of letters, digits and `_` from `from` ends
 wordEnd: function {text: StringView from: u64} out u64 is {
     i: from
-    for i < text.length while (isWordByte b: ((text.byteAt :i).or d: 0)) loop i = i + 1
+    for i < text.length while (ascii.isWord b: ((text.byteAt :i).or d: 0)) loop i = i + 1
     return i
-}
-
-# isWordByte -- a letter, a digit or `_`
-isWordByte: function {b: u8} out bool is {
-    return (b >= 0ca) and (b <= 0cz) or ((b >= 0cA) and (b <= 0cZ)) or (isDigit :b) or (b == 0c_)
 }
 
 # isNameByte -- a letter, a digit, `_` or `@`
 isNameByte: function {b: u8} out bool is {
-    return (isWordByte :b) or (b == 0c@)
-}
-
-# isDigit -- an ASCII digit
-isDigit: function {b: u8} out bool is {
-    return (b >= 0c0) and (b <= 0c9)
+    return (ascii.isWord :b) or (b == 0c@)
 }
 
 # definedNames -- the names a piece's C defines: its functions and prototypes,
@@ -1201,7 +1191,7 @@ extensionTypedef: function {line: StringView} out bool is {
 # startsWord -- whether `line` opens with `word` and no letter, digit or `_` after it
 startsWord: function {line: StringView word: StringView} out bool is {
     if (line.startsWith word).not then return false
-    return (isWordByte b: ((line.byteAt i: word.length).or d: 0)).not
+    return (ascii.isWord b: ((line.byteAt i: word.length).or d: 0)).not
 }
 
 # prototypeName -- `[const ][unsigned ]T[ *]+NAME (...) ;` with T no keyword and
@@ -1238,7 +1228,7 @@ afterWord: function {line: StringView from: u64 word: StringView} out u64 is {
 # more spaces or `*`, NAME, spaces, `(`, anything, `)`, spaces, `;` at the end
 protoAt: function {line: StringView from: u64 kw: zast.Vocab.view} out String is {
     b0: (line.byteAt i: from).or d: 0
-    if (isWordByte b: b0).not or (isDigit b: b0) then return "".string
+    if (ascii.isWord b: b0).not or (ascii.isDigit b: b0) then return "".string
     te: wordEnd text: line :from
     w: kw.slotOf text: (line.substring :from to: te)
     flow: (w == pieceWord.slot.kReturn) or (w == pieceWord.slot.kElse)
@@ -1256,7 +1246,7 @@ protoAt: function {line: StringView from: u64 kw: zast.Vocab.view} out String is
     ) loop p = p + 1
     if p == te then return "".string
     b1: (line.byteAt i: p).or d: 0
-    if (isWordByte b: b1).not or (isDigit b: b1) then return "".string
+    if (ascii.isWord b: b1).not or (ascii.isDigit b: b1) then return "".string
     ne: wordEnd text: line from: p
     q: skipSpaces text: line from: ne
     if ((line.byteAt i: q).or d: 0) != ascii.parenOpen then return "".string
