@@ -428,29 +428,36 @@ soleIfOf: function {ast: Ast.view bodyId: zast.nodeid} out zast.nodeid is {
     return zero
 }
 
+# fnself -- the function a walk is scoring: its name and the name of its
+# receiver, zero when it has none.
+fnself: record {
+    name: zast.nameid
+    recv: zast.nameid
+}
+
 # ccSelfRef -- whether `id` spells the function being scored: its bare name,
-# or `this.` followed by it. A reference to a function calls it, so either is
-# a recursive call.
-ccSelfRef: function {ast: Ast.view id: zast.nodeid fnName: zast.nameid} out bool is {
+# or its receiver, a dot and that name. A reference to a function calls it, so
+# either is a recursive call.
+ccSelfRef: function {ast: Ast.view id: zast.nodeid fn: fnself} out bool is {
     n: ast.nodes.get i: id
     match (
         n
     ) case atomid then {
-        return n.name == fnName
+        return n.name == fn.name
     } case dottedpath then {
         p: ast.nodes.get i: n.parent
-        isThis: false
+        onRecv: false
         match (
             p
         ) case atomid then {
-            if p.name == zast.wellKnown.slot.wkThis then isThis = true
+            if p.name == fn.recv then onRecv = true
         } else null
-        if isThis then {
+        if onRecv then {
             c: ast.nodes.get i: n.child
             match (
                 c
             ) case atomid then {
-                return c.name == fnName
+                return c.name == fn.name
             } else null
         }
     } else null
@@ -458,11 +465,9 @@ ccSelfRef: function {ast: Ast.view id: zast.nodeid fnName: zast.nameid} out bool
 }
 
 # ccVisitSpan -- ccVisit over every node of a span
-ccVisitSpan: function {
-    ast: Ast.view span: zast.kidspan nesting: u32 fnName: zast.nameid acc: CcState
-} is {
+ccVisitSpan: function {ast: Ast.view span: zast.kidspan nesting: u32 fn: fnself acc: CcState} is {
     for each kid: (zast.kidsOf :ast :span) loop {
-        ccVisit :ast id: kid :nesting :fnName :acc
+        ccVisit :ast id: kid :nesting :fn :acc
     }
 }
 
@@ -503,11 +508,9 @@ ccWrites: function {
 
 # ccArm -- score one arm's body on its own at `nesting` into `arms`, with the
 # outer locals it reassigns
-ccArm: function {
-    ast: Ast.view bodyId: zast.nodeid nesting: u32 fnName: zast.nameid arms: CcArms
-} is {
+ccArm: function {ast: Ast.view bodyId: zast.nodeid nesting: u32 fn: fnself arms: CcArms} is {
     one: CcState score: 0
-    ccVisit :ast id: bodyId :nesting :fnName acc: one
+    ccVisit :ast id: bodyId :nesting :fn acc: one
     arms.total = arms.total + one.score
     if one.score > arms.worst then arms.worst = one.score
     declared: ListVal zast.nameid
@@ -531,7 +534,7 @@ ccArms: function {
     span: zast.kidspan
     elseclause: zast.nodeid
     nesting: u32
-    fnName: zast.nameid
+    fn: fnself
     acc: CcState
 } is {
     arms: CcArms total: 0 worst: 0 outer: ListVal zast.nameid
@@ -540,10 +543,10 @@ ccArms: function {
         match (
             c
         ) case caseclause then {
-            ccArm :ast bodyId: c.statement :nesting :fnName :arms
+            ccArm :ast bodyId: c.statement :nesting :fn :arms
         } else null
     }
-    if elseclause.notZero then ccArm :ast bodyId: elseclause :nesting :fnName :arms
+    if elseclause.notZero then ccArm :ast bodyId: elseclause :nesting :fn :arms
     share: arms.worst + arms.outer.length.u32.orPanic
     if share > arms.total then share = arms.total
     acc.score = acc.score + share
@@ -560,7 +563,7 @@ ccIf: function {
     elseclause: zast.nodeid
     chained: bool
     nesting: u32
-    fnName: zast.nameid
+    fn: fnself
     acc: CcState
 } is {
     ci: u64
@@ -577,15 +580,15 @@ ccIf: function {
                 acc.score = acc.score + 1
             }
             if c.conditions.count > 1 then acc.score = acc.score + 1
-            ccVisitSpan :ast span: c.conditions :nesting :fnName :acc
-            ccVisit :ast id: c.statement nesting: nesting + 1 :fnName :acc
+            ccVisitSpan :ast span: c.conditions :nesting :fn :acc
+            ccVisit :ast id: c.statement nesting: nesting + 1 :fn :acc
         } else null
     }
     if elseclause.isZero then return
     inner: soleIfOf :ast bodyId: elseclause
     acc.score = acc.score + 1
     if inner.isZero then {
-        ccVisit :ast id: elseclause nesting: nesting + 1 :fnName :acc
+        ccVisit :ast id: elseclause nesting: nesting + 1 :fn :acc
     } else {
         m: ast.nodes.get i: inner
         match (
@@ -598,7 +601,7 @@ ccIf: function {
                 elseclause: m.elseclause
                 chained: true
                 :nesting
-                :fnName
+                :fn
                 :acc
             )
         } else null
@@ -610,40 +613,40 @@ ccIf: function {
 # its bodies (a match's arms add what ccArms says), a chained header
 # condition costs one, a recursive call costs one, a nested function literal
 # nests its body and costs nothing, and everything else is walked through
-ccVisit: function {ast: Ast.view id: zast.nodeid nesting: u32 fnName: zast.nameid acc: CcState} is {
+ccVisit: function {ast: Ast.view id: zast.nodeid nesting: u32 fn: fnself acc: CcState} is {
     if id.isZero then return
     n: ast.nodes.get i: id
     match (
         n
     ) case ifexpr then {
-        ccIf :ast clauses: n.clauses elseclause: n.elseclause chained: false :nesting :fnName :acc
+        ccIf :ast clauses: n.clauses elseclause: n.elseclause chained: false :nesting :fn :acc
     } case forexpr then {
         acc.score = acc.score + 1 + nesting
         if (n.conditions.count + n.postconditions.count) > 1 then acc.score = acc.score + 1
-        ccVisitSpan :ast span: n.conditions :nesting :fnName :acc
-        ccVisit :ast id: n.body nesting: nesting + 1 :fnName :acc
-        ccVisitSpan :ast span: n.postconditions :nesting :fnName :acc
+        ccVisitSpan :ast span: n.conditions :nesting :fn :acc
+        ccVisit :ast id: n.body nesting: nesting + 1 :fn :acc
+        ccVisitSpan :ast span: n.postconditions :nesting :fn :acc
     } case caseexpr then {
         acc.score = acc.score + 1 + nesting
-        ccVisit :ast id: n.subject :nesting :fnName :acc
-        ccArms :ast span: n.clauses elseclause: n.elseclause nesting: nesting + 1 :fnName :acc
+        ccVisit :ast id: n.subject :nesting :fn :acc
+        ccArms :ast span: n.clauses elseclause: n.elseclause nesting: nesting + 1 :fn :acc
     } case functiondef then {
-        ccVisit :ast id: n.body nesting: nesting + 1 :fnName :acc
+        ccVisit :ast id: n.body nesting: nesting + 1 :fn :acc
     } case call then {
-        if (ccSelfRef :ast id: n.callable :fnName) then acc.score = acc.score + 1
-        ccVisitSpan :ast span: n.arguments :nesting :fnName :acc
+        if (ccSelfRef :ast id: n.callable :fn) then acc.score = acc.score + 1
+        ccVisitSpan :ast span: n.arguments :nesting :fn :acc
     } case atomid then {
-        if n.name == fnName then acc.score = acc.score + 1
+        if n.name == fn.name then acc.score = acc.score + 1
     } case dottedpath then {
-        if (ccSelfRef :ast :id :fnName) then {
+        if (ccSelfRef :ast :id :fn) then {
             acc.score = acc.score + 1
         } else {
-            ccVisit :ast id: n.parent :nesting :fnName :acc
+            ccVisit :ast id: n.parent :nesting :fn :acc
         }
     } else {
         kids: zast.childIds :ast :n
         for each k: kids loop {
-            ccVisit :ast id: k :nesting :fnName :acc
+            ccVisit :ast id: k :nesting :fn :acc
         }
     }
 }
@@ -679,16 +682,16 @@ hwPassedOn: function {ast: Ast.view a: astnode.view} out bool is {
     return false
 }
 
-# hwSelfCall -- whether the node at `id` is a call of the function `fnName`,
+# hwSelfCall -- whether the node at `id` is a call of the function `fn`,
 # marking `arm` as recursing when it is. A recursion that changes more than one
 # argument, where a walk changes only the part it walks into and passes the
 # rest on (`:name`), does work of the arm's own: `inLoop: true`, `nesting + 1`
-hwSelfCall: function {ast: Ast.view id: zast.nodeid fnName: zast.nameid arm: HwArm} out bool is {
+hwSelfCall: function {ast: Ast.view id: zast.nodeid fn: fnself arm: HwArm} out bool is {
     n: ast.nodes.get i: id
     match (
         n
     ) case call then {
-        if (ccSelfRef :ast id: n.callable :fnName).not then return false
+        if (ccSelfRef :ast id: n.callable :fn).not then return false
         arm.recurses = true
         changed: u64
         for each aId: (zast.kidsOf :ast span: n.arguments) loop {
@@ -701,29 +704,29 @@ hwSelfCall: function {ast: Ast.view id: zast.nodeid fnName: zast.nameid arm: HwA
 }
 
 # hwRecurses -- mark `arm` as recursing when the expression at `id` calls the
-# function `fnName` anywhere in it
-hwRecurses: function {ast: Ast.view id: zast.nodeid fnName: zast.nameid arm: HwArm} is {
+# function `fn` anywhere in it
+hwRecurses: function {ast: Ast.view id: zast.nodeid fn: fnself arm: HwArm} is {
     if id.isZero then return
-    isCall: hwSelfCall :ast :id :fnName :arm
-    if isCall.not when (ccSelfRef :ast :id :fnName) then arm.recurses = true
+    isCall: hwSelfCall :ast :id :fn :arm
+    if isCall.not when (ccSelfRef :ast :id :fn) then arm.recurses = true
     n: ast.nodes.get i: id
     kids: zast.childIds :ast :n
     for each k: kids loop {
-        hwRecurses :ast id: k :fnName :arm
+        hwRecurses :ast id: k :fn :arm
     }
 }
 
 # hwRecursesSpan -- hwRecurses over every node of a span
-hwRecursesSpan: function {ast: Ast.view span: zast.kidspan fnName: zast.nameid arm: HwArm} is {
+hwRecursesSpan: function {ast: Ast.view span: zast.kidspan fn: fnself arm: HwArm} is {
     for each kid: (zast.kidsOf :ast :span) loop {
-        hwRecurses :ast id: kid :fnName :arm
+        hwRecurses :ast id: kid :fn :arm
     }
 }
 
 # hwReturned -- whether the value a `return` hands back at `id` is made only of
 # recursions, names and literals, joined by operators: what a walk returns is
 # what its recursions found
-hwReturned: function {ast: Ast.view id: zast.nodeid fnName: zast.nameid arm: HwArm} out bool is {
+hwReturned: function {ast: Ast.view id: zast.nodeid fn: fnself arm: HwArm} out bool is {
     n: ast.nodes.get i: id
     match (
         n
@@ -732,16 +735,16 @@ hwReturned: function {ast: Ast.view id: zast.nodeid fnName: zast.nameid arm: HwA
     } case atomstring then {
         return true
     } case namedoperation then {
-        return (hwReturned :ast id: n.operation :fnName :arm)
+        return (hwReturned :ast id: n.operation :fn :arm)
     } case call then {
-        if (hwSelfCall :ast :id :fnName :arm) then return true
+        if (hwSelfCall :ast :id :fn :arm) then return true
         if n.infix.not then return false
         return (
             hwOperandsReturned
             :ast
             callable: n.callable
             arguments: n.arguments
-            :fnName
+            :fn
             :arm
         )
     } else return false
@@ -750,13 +753,13 @@ hwReturned: function {ast: Ast.view id: zast.nodeid fnName: zast.nameid arm: HwA
 # hwOperandsReturned -- whether both sides of an operator, the left in the
 # dotted `callable` and the right in `arguments`, are values hwReturned accepts
 hwOperandsReturned: function {
-    ast: Ast.view callable: zast.nodeid arguments: zast.kidspan fnName: zast.nameid arm: HwArm
+    ast: Ast.view callable: zast.nodeid arguments: zast.kidspan fn: fnself arm: HwArm
 } out bool is {
     c: ast.nodes.get i: callable
     if c.dottedpath.not then return false
-    if (hwReturned :ast id: c.parent :fnName :arm).not then return false
+    if (hwReturned :ast id: c.parent :fn :arm).not then return false
     for each a: (zast.kidsOf :ast span: arguments) loop {
-        if (hwReturned :ast id: a :fnName :arm).not then return false
+        if (hwReturned :ast id: a :fn :arm).not then return false
     }
     return true
 }
@@ -771,9 +774,9 @@ hwQuietName: function {name: zast.nameid} out bool is {
 }
 
 # hwStmtSpan -- hwStmt over every node of a span
-hwStmtSpan: function {ast: Ast.view span: zast.kidspan fnName: zast.nameid arm: HwArm} is {
+hwStmtSpan: function {ast: Ast.view span: zast.kidspan fn: fnself arm: HwArm} is {
     for each kid: (zast.kidsOf :ast :span) loop {
-        hwStmt :ast id: kid :fnName :arm
+        hwStmt :ast id: kid :fn :arm
     }
 }
 
@@ -782,38 +785,38 @@ hwStmtSpan: function {ast: Ast.view span: zast.kidspan fnName: zast.nameid arm: 
 # own; an `if`, `for` or `match` does what its bodies do; a call is the
 # recursion, a `return` of a value hwReturned accepts, or work of its own.
 # A recursion anywhere, a condition included, marks the arm as recursing
-hwStmt: function {ast: Ast.view id: zast.nodeid fnName: zast.nameid arm: HwArm} is {
+hwStmt: function {ast: Ast.view id: zast.nodeid fn: fnself arm: HwArm} is {
     if id.isZero then return
     n: ast.nodes.get i: id
     match (
         n
     ) case statement then {
-        hwStmtSpan :ast span: n.statements :fnName :arm
+        hwStmtSpan :ast span: n.statements :fn :arm
     } case statementline then {
-        hwStmt :ast id: n.statementline :fnName :arm
+        hwStmt :ast id: n.statementline :fn :arm
     } case assignment then {
-        hwRecurses :ast id: n.value :fnName :arm
+        hwRecurses :ast id: n.value :fn :arm
     } case reassignment then {
         if (ast.nodes.get i: n.topath).atomid.not then arm.own = true
-        hwRecurses :ast id: n.value :fnName :arm
+        hwRecurses :ast id: n.value :fn :arm
     } case ifexpr then {
-        hwStmtSpan :ast span: n.clauses :fnName :arm
-        hwStmt :ast id: n.elseclause :fnName :arm
+        hwStmtSpan :ast span: n.clauses :fn :arm
+        hwStmt :ast id: n.elseclause :fn :arm
     } case ifclause then {
-        hwRecursesSpan :ast span: n.conditions :fnName :arm
-        hwStmt :ast id: n.statement :fnName :arm
+        hwRecursesSpan :ast span: n.conditions :fn :arm
+        hwStmt :ast id: n.statement :fn :arm
     } case forexpr then {
-        hwRecursesSpan :ast span: n.conditions :fnName :arm
-        hwStmt :ast id: n.body :fnName :arm
-        hwRecursesSpan :ast span: n.postconditions :fnName :arm
+        hwRecursesSpan :ast span: n.conditions :fn :arm
+        hwStmt :ast id: n.body :fn :arm
+        hwRecursesSpan :ast span: n.postconditions :fn :arm
     } case caseexpr then {
-        hwRecurses :ast id: n.subject :fnName :arm
-        hwStmtSpan :ast span: n.clauses :fnName :arm
-        hwStmt :ast id: n.elseclause :fnName :arm
+        hwRecurses :ast id: n.subject :fn :arm
+        hwStmtSpan :ast span: n.clauses :fn :arm
+        hwStmt :ast id: n.elseclause :fn :arm
     } case caseclause then {
-        hwStmt :ast id: n.statement :fnName :arm
+        hwStmt :ast id: n.statement :fn :arm
     } case atomid then {
-        if n.name == fnName then {
+        if n.name == fn.name then {
             arm.recurses = true
         } else if (hwQuietName name: n.name).not then {
             arm.own = true
@@ -822,17 +825,17 @@ hwStmt: function {ast: Ast.view id: zast.nodeid fnName: zast.nameid arm: HwArm} 
         cl: ast.nodes.get i: n.callable
         isReturn: false
         if cl.atomid then isReturn = cl.name == zast.wellKnown.slot.wkReturn
-        if (hwSelfCall :ast :id :fnName :arm) then {
+        if (hwSelfCall :ast :id :fn :arm) then {
             null
         } else if isReturn then {
             for each a: (zast.kidsOf :ast span: n.arguments) loop {
-                if (hwReturned :ast id: a :fnName :arm).not then arm.own = true
+                if (hwReturned :ast id: a :fn :arm).not then arm.own = true
             }
         } else {
             arm.own = true
         }
     } case dottedpath then {
-        if (ccSelfRef :ast :id :fnName) then {
+        if (ccSelfRef :ast :id :fn) then {
             arm.recurses = true
         } else {
             arm.own = true
@@ -843,8 +846,8 @@ hwStmt: function {ast: Ast.view id: zast.nodeid fnName: zast.nameid arm: HwArm} 
 }
 
 # hwRecursingArms -- how many of a match's arms only recurse: each calls
-# `fnName` again and does no work of its own (hwStmt)
-hwRecursingArms: function {ast: Ast.view clauses: zast.kidspan fnName: zast.nameid} out u64 is {
+# `fn` again and does no work of its own (hwStmt)
+hwRecursingArms: function {ast: Ast.view clauses: zast.kidspan fn: fnself} out u64 is {
     count: u64
     for each cId: (zast.kidsOf :ast span: clauses) loop {
         c: ast.nodes.get i: cId
@@ -852,7 +855,7 @@ hwRecursingArms: function {ast: Ast.view clauses: zast.kidspan fnName: zast.name
             c
         ) case caseclause then {
             arm: HwArm recurses: false own: false
-            hwStmt :ast id: c.statement :fnName :arm
+            hwStmt :ast id: c.statement :fn :arm
             if arm.recurses when arm.own.not then count = count + 1
         } else null
     }
@@ -860,10 +863,10 @@ hwRecursingArms: function {ast: Ast.view clauses: zast.kidspan fnName: zast.name
 }
 
 # hwMostArms -- the most arms of any one match in the subtree at `id` that
-# only recurse: each calls `fnName` again and does no work of its own. The
+# only recurse: each calls `fn` again and does no work of its own. The
 # `else` is not counted, since a walk over the children belongs there; a
 # nested function literal is a function of its own and is not searched
-hwMostArms: function {ast: Ast.view id: zast.nodeid fnName: zast.nameid} out u64 is {
+hwMostArms: function {ast: Ast.view id: zast.nodeid fn: fnself} out u64 is {
     if id.isZero then return 0
     n: ast.nodes.get i: id
     most: u64
@@ -872,11 +875,11 @@ hwMostArms: function {ast: Ast.view id: zast.nodeid fnName: zast.nameid} out u64
     ) case functiondef then {
         return 0
     } case caseexpr then {
-        most = hwRecursingArms :ast clauses: n.clauses :fnName
+        most = hwRecursingArms :ast clauses: n.clauses :fn
     } else null
     kids: zast.childIds :ast :n
     for each kid: kids loop {
-        m: hwMostArms :ast id: kid :fnName
+        m: hwMostArms :ast id: kid :fn
         if m > most then most = m
     }
     return most
@@ -987,6 +990,167 @@ flagbind: record {
     lit: zast.nameid
 }
 
+# recvuse -- one method's receiver: the function, the parameter that declares
+# it and the name it is declared with (`this` for the `:this` shorthand).
+# `param` is zero for a function that has no receiver.
+recvuse: record {
+    fn: zast.nodeid
+    param: zast.nodeid
+    name: zast.nameid
+    body: zast.nodeid
+    # declared by the `:this` shorthand
+    shorthand: bool
+}
+
+# typedThis -- whether a parameter's type is the enclosing type: `this`,
+# `this` under an ownership marker, or the `:this` shorthand.
+typedThis: function {ast: Ast.view opId: zast.nodeid} out bool is {
+    wkThis: zast.wellKnown.slot.wkThis
+    o: ast.nodes.get i: opId
+    match (
+        o
+    ) case labelvalue then {
+        return o.name == wkThis
+    } case atomid then {
+        return o.name == wkThis
+    } case dottedpath then {
+        mk: zast.markerKindOfName id: (zast.atomNameIdOf n: (ast.nodes.get i: o.child))
+        owns: mk.viewMarker or mk.borrowMarker or (mk.takeMarker or mk.holdMarker)
+        return owns and ((zast.atomNameIdOf n: (ast.nodes.get i: o.parent)) == wkThis)
+    } else {
+        return false
+    }
+}
+
+# receiverOf -- the receiver of the function `fnId`: its first parameter typed
+# `this`. A node that is no function, or a function with no such parameter,
+# answers a recvuse whose `param` is zero.
+receiverOf: function {ast: Ast.view fnId: zast.nodeid} out recvuse is {
+    none: recvuse fn: fnId param: zast.nodeid name: zast.nameid body: zast.nodeid shorthand: false
+    f: ast.nodes.get i: fnId
+    match (
+        f
+    ) case functiondef then {
+        for each pId: (zast.kidsOf :ast span: f.parameters) loop {
+            p: ast.nodes.get i: pId
+            if p.namedoperation when (typedThis :ast opId: p.operation) then {
+                sh: (ast.nodes.get i: p.operation).labelvalue
+                return (recvuse fn: fnId param: pId name: p.name body: f.body shorthand: sh)
+            }
+        }
+        return none
+    } else {
+        return none
+    }
+}
+
+# declaresName -- whether the function `fnId` declares `name` itself, as a
+# parameter or as a member of its `as` clause.
+declaresName: function {ast: Ast.view fnId: zast.nodeid name: zast.nameid} out bool is {
+    f: ast.nodes.get i: fnId
+    match (
+        f
+    ) case functiondef then {
+        for each pId: (zast.kidsOf :ast span: f.parameters) loop {
+            p: ast.nodes.get i: pId
+            if p.namedoperation when p.name == name then return true
+        }
+        for each aId: (zast.kidsOf :ast span: f.asItems) loop {
+            a: ast.nodes.get i: aId
+            if a.namedoperation when a.name == name then return true
+        }
+        return false
+    } else {
+        return false
+    }
+}
+
+# bindsEither -- whether the node `n` binds the name `a` or the name `b`: a
+# definition, a `with`, or a `for` header's binding.
+bindsEither: function {ast: Ast.view n: astnode.view a: zast.nameid b: zast.nameid} out bool is {
+    match (
+        n
+    ) case assignment then {
+        return (n.name == a) or (n.name == b)
+    } case withexpr then {
+        return (n.name == a) or (n.name == b)
+    } case forexpr then {
+        for each cId: (zast.kidsOf :ast span: n.conditions) loop {
+            c: ast.nodes.get i: cId
+            if c.namedoperation when (c.name == a) or (c.name == b) then return true
+        }
+        return false
+    } else {
+        return false
+    }
+}
+
+# receiverScan -- gather into `uses` each atom under `id` that reads the name
+# `old`, and answer whether the tree holds what makes renaming `old` to
+# `target` unsafe: a read of `target`, a binding of either name, either name
+# as a shorthand argument, or a function of its own. A member name and a
+# `case` arm's name are not reads.
+receiverScan: function {
+    ast: Ast.view
+    id: zast.nodeid
+    old: zast.nameid
+    target: zast.nameid
+    uses: ListVal zast.nodeid
+} out bool is {
+    n: ast.nodes.get i: id
+    if (bindsEither :ast :n a: old b: target) then return true
+    match (
+        n
+    ) case atomid then {
+        if n.name == old then uses.append id
+        return n.name == target
+    } case labelvalue then {
+        return (n.name == old) or (n.name == target)
+    } case functiondef then {
+        return true
+    } case dottedpath then {
+        return (receiverScan :ast id: n.parent :old :target :uses)
+    } case caseclause then {
+        return (receiverScan :ast id: n.statement :old :target :uses)
+    } else null
+    for each c: (zast.childIds :ast :n) loop {
+        if (receiverScan :ast id: c :old :target :uses) then return true
+    }
+    return false
+}
+
+# gatherReceivers -- append to `recvs` the receiver of each method among a
+# type's `members`.
+gatherReceivers: function {ast: Ast.view members: zast.kidspan recvs: ListVal recvuse} is {
+    for each mId: (zast.kidsOf :ast span: members) loop {
+        m: ast.nodes.get i: mId
+        if m.namedoperation then {
+            r: receiverOf :ast fnId: m.operation
+            if r.param.notZero then recvs.append from: r
+        }
+    }
+}
+
+# receiverNameOf -- the name a type's methods give their receiver: the one
+# most of `recvs` declare, `this` aside, and the first of them on a tie. Zero
+# when every method writes `:this`.
+receiverNameOf: function {recvs: (ListVal recvuse).view} out zast.nameid is {
+    best: zast.nameid
+    bestN: 0
+    for each r: recvs loop {
+        if r.name == zast.wellKnown.slot.wkThis then continue
+        n: 0
+        for each o: recvs loop {
+            if o.name == r.name then n = n + 1
+        }
+        if n > bestN then {
+            best = r.name
+            bestN = n
+        }
+    }
+    return best
+}
+
 # innerNodeIdOf -- `id` with its statement line peeled: the node a statement
 # line actually holds.
 innerNodeIdOf: function {ast: Ast.view id: zast.nodeid} out zast.nodeid is {
@@ -1081,6 +1245,12 @@ casingClash: function {s: StringView} out bool is {
 }
 
 # ---- L024/L025 doc-quality helpers (parse tier) ----
+
+# textAt -- whether the bytes of `s` from `at` on spell `text`.
+textAt: function {s: StringView at: u64 text: StringView} out bool is {
+    if (at + text.length) > s.length then return false
+    return (s.substring from: at to: at + text.length) == text
+}
 
 # docByteAt -- the byte at `i`, 0 past the end. The rules below index bytes constantly
 # and none of them can act on an absent one.
@@ -1548,7 +1718,7 @@ Analysis: class {
     # warnFix -- append a WARNING diagnostic AND its single safe fix edit (a
     # replacement of source[lo, hi) with `repl`). Used by the format rules.
     warnFix: function {
-        :this
+        t: this
         code: StringView
         msg: String.take
         line: u32
@@ -1558,22 +1728,22 @@ Analysis: class {
         hi: u64
         repl: String.take
     } is {
-        this.warn :code :msg :line :col :width
-        this.edits.append (zfix.Edit byteLo: lo byteHi: hi replacement: repl)
+        t.warn :code :msg :line :col :width
+        t.edits.append (zfix.Edit byteLo: lo byteHi: hi replacement: repl)
     }
 
     # walkOptAt -- the id-taking entry (0 = absent).
-    walkOptAt: function {:this ast: Ast.view oId: zast.nodeid} is {
+    walkOptAt: function {t: this ast: Ast.view oId: zast.nodeid} is {
         if oId.isZero then return
         o: ast.nodes.get i: oId
-        this.walk :ast n: o
+        t.walk :ast n: o
     }
 
     # addDiag -- append a lint diagnostic of severity `sev` (fast tier: no fsno;
     # the single-file reporter resolves the source line from the line table).
     # `weight` is what it adds to its rule's ratchet row (zdiag.Diagnostic).
     addDiag: function {
-        :this
+        t: this
         sev: zdiag.severity
         code: StringView
         msg: String.take
@@ -1595,32 +1765,32 @@ Analysis: class {
             hint: "".string
             :weight
         )
-        this.diags.append d
+        t.diags.append d
     }
 
     # warn -- append a WARNING lint diagnostic, which fails the gate.
     warn: function {
-        :this code: StringView msg: String.take line: u32 col: u32 width: u64 weight: 1.u32
+        t: this code: StringView msg: String.take line: u32 col: u32 width: u64 weight: 1.u32
     } is {
-        this.addDiag sev: zdiag.severity.warning :code :msg :line :col :width :weight
+        t.addDiag sev: zdiag.severity.warning :code :msg :line :col :width :weight
     }
 
     # info -- append an advisory INFO diagnostic (does not fail the gate; carries no fix).
-    info: function {:this code: StringView msg: String.take line: u32 col: u32 width: u64} is {
-        this.addDiag sev: zdiag.severity.info :code :msg :line :col :width weight: 1
+    info: function {t: this code: StringView msg: String.take line: u32 col: u32 width: u64} is {
+        t.addDiag sev: zdiag.severity.info :code :msg :line :col :width weight: 1
     }
 
     # checkLineLength -- W005 (advisory): a line wider than `width` codepoints. INFO severity, so it
     # reports but never fails the gate; runs only when a width is set (--line-length). No fix.
-    checkLineLength: function {:this width: u32} is {
+    checkLineLength: function {t: this width: u32} is {
         if width == 0 then return
-        lls: linesOf src: this.source.stringView
+        lls: linesOf src: t.source.stringView
         lno: 1.u32
         for each ln: lls loop {
             cl: codepointLen s: ln.stringView
             if cl > width then {
                 (
-                    this.info
+                    t.info
                     code: "W005"
                     msg: "line exceeds \{width} columns (\{cl})"
                     line: lno
@@ -1634,13 +1804,15 @@ Analysis: class {
 
     # checkEmpty -- L001 empty `else {}` and, for a backwards single-condition `if`,
     # the empty `then {}` (via checkEmptyThen). Receives an ifexpr's else + clauses.
-    checkEmpty: function {:this ast: Ast.view elseclauseId: zast.nodeid clauses: zast.kidspan} is {
+    checkEmpty: function {
+        t: this ast: Ast.view elseclauseId: zast.nodeid clauses: zast.kidspan
+    } is {
         if elseclauseId.isZero then return
         elseNode: ast.nodes.get i: elseclauseId
         if (isEmptyBlock n: elseNode) then {
             p: stmtPos n: elseNode
             (
-                this.warn
+                t.warn
                 code: "L001"
                 msg: "empty `else { }` clause".string
                 line: p.line
@@ -1653,19 +1825,19 @@ Analysis: class {
             n: elseNode
         ).not then {
             for each c0Id: (zast.kidsOf :ast span: clauses) loop {
-                this.checkEmptyThen :ast clause: (ast.nodes.get i: c0Id)
+                t.checkEmptyThen :ast clause: (ast.nodes.get i: c0Id)
             }
         }
     }
 
     # checkEmptyThen -- L002 a single-condition clause whose `then {}` is empty.
-    checkEmptyThen: function {:this ast: Ast.view clause: astnode.view} is {
+    checkEmptyThen: function {t: this ast: Ast.view clause: astnode.view} is {
         if clause.ifclause then {
             cst: ast.nodes.get i: clause.statement
             if (isEmptyBlock n: cst) when clause.conditions.count.u64 == 1 then {
                 p: stmtPos n: (ast.nodes.get i: clause.statement)
                 (
-                    this.warn
+                    t.warn
                     code: "L002"
                     msg: "empty `then { }` clause".string
                     line: p.line
@@ -1680,8 +1852,8 @@ Analysis: class {
     # value collapses to the `:name` shorthand (same atomVariableId stamp -- codegen-neutral once
     # the emitter treats labelvalue == atomid). Fires on atomid values only, so it is idempotent:
     # a `:name` parses to a labelvalue and zast.atomNameText returns "".
-    checkCollapseName: function {:this ast: Ast.view arguments: zast.kidspan} is {
-        if this.lineStart.length == 0 then return
+    checkCollapseName: function {t: this ast: Ast.view arguments: zast.kidspan} is {
+        if t.lineStart.length == 0 then return
         for each aId: (zast.kidsOf :ast span: arguments) loop {
             a: ast.nodes.get i: aId
             if a.namedoperation then {
@@ -1692,21 +1864,21 @@ Analysis: class {
                 if lsv.length > 0 when vsv.length > 0 when lsv == vsv then {
                     lo: (
                         tokByteStart
-                        lineStart: this.lineStart
-                        srcLines: this.lines
+                        lineStart: t.lineStart
+                        srcLines: t.lines
                         lineno: a.lineno
                         colno: a.colno
                     )
                     vi: nodeInfoOf n: (ast.nodes.get i: a.operation)
                     hi: (
                         tokByteStart
-                        lineStart: this.lineStart
-                        srcLines: this.lines
+                        lineStart: t.lineStart
+                        srcLines: t.lines
                         lineno: vi.line
                         colno: vi.col
                     )
                     (
-                        this.warnFix
+                        t.warnFix
                         code: "L006"
                         msg: "redundant label repeating its value; use the :name shorthand".string
                         line: a.lineno
@@ -1725,19 +1897,19 @@ Analysis: class {
     # by the label its first argument may leave out (isLeadingLabel).
     # `is native` is one spelling and is left alone. Re-tokenizes the source
     # (parse-free; immune to strings and comments).
-    checkLeadingLabel: function {:this} is {
+    checkLeadingLabel: function {t: this} is {
         scanPool: zast.StringPool.create
-        toks: tokenize.scan source: this.source.copy pool: scanPool
+        toks: tokenize.scan source: t.source.copy pool: scanPool
         # the last token that is not trivia, and before it the construct word
         # whose label that token is, when it is one. The scan ends in the EOF
         # token, so there is a first token to start both from.
         prev: toks.get i: 0
         word: prev
         pending: false
-        for each t: toks loop {
-            trivia: t.toktype.wsTok or t.toktype.eolTok or t.toktype.commentTok
+        for each tok: toks loop {
+            trivia: tok.toktype.wsTok or tok.toktype.eolTok or tok.toktype.commentTok
             if trivia then continue
-            if pending when (prev.toktype.isTok and t.toktype.nativeTok).not then {
+            if pending when (prev.toktype.isTok and tok.toktype.nativeTok).not then {
                 em: String
                 {
                     lt: zast.poolTextAt pool: scanPool ref: prev.text
@@ -1745,29 +1917,29 @@ Analysis: class {
                     em = "redundant `\{lt}`: the first argument of `\{wt}` leaves out its name"
                 }
                 (
-                    this.warnFix
+                    t.warnFix
                     code: "L004"
                     msg: em
                     line: prev.lineno
                     col: prev.colno
                     width: prev.width
                     lo: prev.offset
-                    hi: t.offset
+                    hi: tok.offset
                     repl: "".string
                 )
             }
-            pending = isLeadingLabel word: prev.toktype label: t.toktype
+            pending = isLeadingLabel word: prev.toktype label: tok.toktype
             word = prev
-            prev = t
+            prev = tok
         }
     }
 
     # walkProgram -- root entry of the parse-tier rule visitor: the table
     # rides inside the program node.
-    walkProgram: function {:this prog: Ast.view} is {
+    walkProgram: function {t: this prog: Ast.view} is {
         {
             for each unitRoot: prog.units loop {
-                this.walk ast: prog n: (prog.nodes.get i: unitRoot)
+                t.walk ast: prog n: (prog.nodes.get i: unitRoot)
             }
         }
     }
@@ -1775,18 +1947,20 @@ Analysis: class {
     # reportDuplicateBodies -- A006: a function body, eight lines or longer,
     # whose shape (bodyKeyInto) another function in this file already has. The
     # first site is the original; each later one is reported against it.
-    reportDuplicateBodies: function {:this prog: Ast.view} is {
+    reportDuplicateBodies: function {t: this prog: Ast.view} is {
         firstAt: MapRV String v: u64
         {
             for each uid: prog.units loop {
-                this.dupBodyWalk ast: prog id: uid :firstAt
+                t.dupBodyWalk ast: prog id: uid :firstAt
             }
         }
     }
 
     # dupBodyWalk -- one node of the duplicate-body pass: a function's body is
     # keyed and looked up; every child is visited.
-    dupBodyWalk: function {:this ast: Ast.view id: zast.nodeid firstAt: (MapRV String v: u64)} is {
+    dupBodyWalk: function {
+        t: this ast: Ast.view id: zast.nodeid firstAt: (MapRV String v: u64)
+    } is {
         n: ast.nodes.get i: id
         if n.functiondef when n.body.notZero then {
             # the body's own lines: a documented parameter list is not body
@@ -1800,7 +1974,7 @@ Analysis: class {
                     seen
                 ) case some then {
                     (
-                        this.info
+                        t.info
                         code: "A006"
                         msg: "this body has the shape of the one at line \{seen}; one function, with the difference as an argument"
                         line: n.lineno
@@ -1813,28 +1987,28 @@ Analysis: class {
             }
         }
         kids: zast.childIdsAt :ast :id
-        for each k: kids loop this.dupBodyWalk :ast id: k :firstAt
+        for each k: kids loop t.dupBodyWalk :ast id: k :firstAt
     }
 
     # walkTypeCasingProgram / walkTypeCasingAt -- L021 (default-on): a type
     # definition's name casing follows its kind -- record/variant/facet
     # lowercase, class/union/protocol/generator PascalCase (styleguide Naming).
-    walkTypeCasingProgram: function {:this prog: Ast.view} is {
+    walkTypeCasingProgram: function {t: this prog: Ast.view} is {
         {
             for each tcid: prog.units loop {
-                this.walkTypeCasingAt ast: prog nId: tcid
+                t.walkTypeCasingAt ast: prog nId: tcid
             }
         }
     }
 
     # the id-taking entry to the type-casing walk, so the caller can lend the
     # tree without holding a node view
-    walkTypeCasingAt: function {:this ast: Ast.view nId: zast.nodeid} is {
+    walkTypeCasingAt: function {t: this ast: Ast.view nId: zast.nodeid} is {
         n: ast.nodes.get i: nId
         match (
             n
         ) case namedoperation then {
-            this.walkTypeCasingAt :ast nId: n.operation
+            t.walkTypeCasingAt :ast nId: n.operation
         } case unitdef then {
             for each bId: (zast.kidsOf :ast span: n.body) loop {
                 bm: ast.nodes.get i: bId
@@ -1842,7 +2016,7 @@ Analysis: class {
                     op: ast.nodes.get i: bm.operation
                     if op.objectdef then {
                         (
-                            this.checkTypeNameCasing
+                            t.checkTypeNameCasing
                             :ast
                             nameRef: bm.name
                             line: bm.lineno
@@ -1858,7 +2032,7 @@ Analysis: class {
     # checkTypeNameCasing -- flag a valtype name carrying a capital, or a
     # reftype name that does not start with one.
     checkTypeNameCasing: function {
-        :this ast: Ast.view nameRef: zast.nameid line: u32 col: u32 kind: zast.objectkind
+        t: this ast: Ast.view nameRef: zast.nameid line: u32 col: u32 kind: zast.objectkind
     } is {
         isVal: (
             (kind == zast.objectkind.recordDef) or
@@ -1898,7 +2072,7 @@ Analysis: class {
         }
         if bad then {
             (
-                this.warn
+                t.warn
                 code: "L021"
                 :msg
                 :line
@@ -1914,7 +2088,7 @@ Analysis: class {
     # table rather than a descent: a parameter sits in an objectdef's as-block,
     # a functiondef's as-block or a unit body, and a walk taught only some of
     # those carriers would pass the rest in silence.
-    walkGenericParamCasingProgram: function {:this prog: Ast.view} is {
+    walkGenericParamCasingProgram: function {t: this prog: Ast.view} is {
         {
             gi: zast.nodeid
             gn: prog.nodes.length
@@ -1923,7 +2097,7 @@ Analysis: class {
                 if gm.namedoperation when (zast.isGenericParamOp ast: prog opId: gm.operation
                 ) then {
                     (
-                        this.checkGenericParamCasing
+                        t.checkGenericParamCasing
                         ast: prog
                         nameRef: gm.name
                         opId: gm.operation
@@ -1941,7 +2115,7 @@ Analysis: class {
     # than guessed at: answering for a shape the reader could not read would be
     # reporting a check that never ran.
     checkGenericParamCasing: function {
-        :this ast: Ast.view nameRef: zast.nameid opId: zast.nodeid line: u32 col: u32
+        t: this ast: Ast.view nameRef: zast.nameid opId: zast.nodeid line: u32 col: u32
     } is {
         bnd: genericBoundBase :ast :opId
         if bnd.length == 0 then return
@@ -1953,7 +2127,7 @@ Analysis: class {
         want: flipFirstCase s: nm.stringView
         msg: "generic parameter '\{nm}' should be '\{want}' -- a parameter's case matches the case of its bound, and the bound is '\{bnd}'"
         (
-            this.warn
+            t.warn
             code: "L023"
             :msg
             :line
@@ -1963,26 +2137,26 @@ Analysis: class {
     }
 
     # the root entry to the member-casing walk
-    walkCasingProgram: function {:this prog: Ast.view} is {
+    walkCasingProgram: function {t: this prog: Ast.view} is {
         {
             for each wcid: prog.units loop {
-                this.walkCasingAt ast: prog nId: wcid
+                t.walkCasingAt ast: prog nId: wcid
             }
         }
     }
 
     # walk -- the parse-tier rule visitor: the arms a rule reads are spelled,
     # then every child is visited through zast.childIds.
-    walk: function {:this ast: Ast.view n: astnode.view} is {
+    walk: function {t: this ast: Ast.view n: astnode.view} is {
         # AN INFIX CALL IS THE OPERATOR SHAPE THESE RULES ARE WRITTEN FOR.
         # Read ahead of the match: an arm narrows `n` to its own row, and the
         # call arm cannot ask the node it came from.
         ipW: zast.infixPartsOf :ast :n
         if ipW.found then {
-            this.checkMixedOperators :ast opId: ipW.operator lhsId: ipW.lhs
-            this.checkBoolLiteralCompare :ast opId: ipW.operator lhsId: ipW.lhs rhsId: ipW.rhs
-            if this.opts.arch then {
-                this.checkLiteralCompare :ast opId: ipW.operator lhsId: ipW.lhs rhsId: ipW.rhs
+            t.checkMixedOperators :ast opId: ipW.operator lhsId: ipW.lhs
+            t.checkBoolLiteralCompare :ast opId: ipW.operator lhsId: ipW.lhs rhsId: ipW.rhs
+            if t.opts.arch then {
+                t.checkLiteralCompare :ast opId: ipW.operator lhsId: ipW.lhs rhsId: ipW.rhs
             }
         }
         match (
@@ -1999,65 +2173,67 @@ Analysis: class {
                 note: (zast.poolTextCopy pool: ast.names ref: n.note)
                 hint: (zast.poolTextCopy pool: ast.names ref: n.hint)
             )
-            this.diags.append d
+            t.diags.append d
         } case call then {
-            this.checkCollapseName :ast arguments: n.arguments
+            t.checkCollapseName :ast arguments: n.arguments
             (
-                this.checkLiteralLookup
+                t.checkLiteralLookup
                 :ast
                 callable: (ast.nodes.get i: n.callable)
                 arguments: n.arguments
             )
         } case atomstring then {
-            if this.opts.arch then (
-                this.checkComposedKey
+            if t.opts.arch then (
+                t.checkComposedKey
                 :ast
                 parts: n.stringparts
                 line: n.lineno
                 col: n.colno
             )
         } case namedoperation then {
-            if this.opts.complexity > 0 when this.funcDepth == 0 then {
-                this.checkComplexity :ast nameId: n.name opId: n.operation
+            if t.opts.complexity > 0 when t.funcDepth == 0 then {
+                t.checkComplexity :ast nameId: n.name opId: n.operation
             }
-            if this.opts.arch when this.funcDepth == 0 then {
-                this.checkHandWalk :ast nameId: n.name opId: n.operation
+            if t.opts.arch when t.funcDepth == 0 then {
+                t.checkHandWalk :ast nameId: n.name opId: n.operation
             }
         } case forexpr then {
-            this.checkImpliedIterate :ast :n
+            t.checkImpliedIterate :ast :n
+        } case objectdef then {
+            t.checkReceiverNames :ast :n
         } case ifexpr then {
-            this.checkEmpty :ast elseclauseId: n.elseclause clauses: n.clauses
-            this.checkNestedIf :ast clauses: n.clauses elseclauseId: n.elseclause
+            t.checkEmpty :ast elseclauseId: n.elseclause clauses: n.clauses
+            t.checkNestedIf :ast clauses: n.clauses elseclauseId: n.elseclause
         } case statement then {
-            this.checkUnreachable :ast stmts: n.statements
-            this.checkFlagAccumulator :ast stmts: n.statements
+            t.checkUnreachable :ast stmts: n.statements
+            t.checkFlagAccumulator :ast stmts: n.statements
         } case functiondef then {
-            if this.opts.arch then (
-                this.checkLongFunction
+            if t.opts.arch then (
+                t.checkLongFunction
                 :ast
                 bodyId: n.body
                 line: n.lineno
                 col: n.colno
             )
             # the body is walked one function deeper; the signature is not
-            this.walkOptAt :ast oId: n.returntype
-            this.walkIds :ast ids: n.parameters
-            this.funcDepth = this.funcDepth + 1
-            this.walkOptAt :ast oId: n.body
-            this.funcDepth = this.funcDepth - 1
-            this.walkIds :ast ids: n.asItems
+            t.walkOptAt :ast oId: n.returntype
+            t.walkIds :ast ids: n.parameters
+            t.funcDepth = t.funcDepth + 1
+            t.walkOptAt :ast oId: n.body
+            t.funcDepth = t.funcDepth - 1
+            t.walkIds :ast ids: n.asItems
             return
         } else null
         kl9: zast.childIds :ast :n
         for each c9: kl9 loop {
-            this.walk :ast n: (ast.nodes.get i: c9)
+            t.walk :ast n: (ast.nodes.get i: c9)
         }
     }
 
     # walk a list of child nodes in order
-    walkIds: function {:this ast: Ast.view ids: zast.kidspan} is {
+    walkIds: function {t: this ast: Ast.view ids: zast.kidspan} is {
         for each c: (zast.kidsOf :ast span: ids) loop {
-            this.walk :ast n: (ast.nodes.get i: c)
+            t.walk :ast n: (ast.nodes.get i: c)
         }
     }
 
@@ -2067,7 +2243,7 @@ Analysis: class {
     # are matched by pool id; when both operands are literals the right one is
     # the literal, as it is when only the right one is.
     checkBoolLiteralCompare: function {
-        :this ast: Ast.view opId: zast.nodeid lhsId: zast.nodeid rhsId: zast.nodeid
+        t: this ast: Ast.view opId: zast.nodeid lhsId: zast.nodeid rhsId: zast.nodeid
     } is {
         opNm: zast.atomNameIdOf n: (ast.nodes.get i: opId)
         isEq: opNm == zast.wellKnown.slot.wkOpEq
@@ -2075,21 +2251,21 @@ Analysis: class {
         if isEq.not when isNe.not then return
         litNm: zast.atomNameIdOf n: (ast.nodes.get i: rhsId)
         reversed: false
-        if (this.isBoolLiteralId nm: litNm).not then {
+        if (t.isBoolLiteralId nm: litNm).not then {
             litNm = zast.atomNameIdOf n: (ast.nodes.get i: lhsId)
-            if (this.isBoolLiteralId nm: litNm).not then return
+            if (t.isBoolLiteralId nm: litNm).not then return
             reversed = true
         }
-        isTrue: litNm == this.trueId
-        isFalse: litNm == this.falseId
+        isTrue: litNm == t.trueId
+        isFalse: litNm == t.falseId
         neg: isEq and isFalse or (isNe and isTrue)
         litLen: 4.u64
         if isFalse then litLen = 5
         if reversed then {
-            this.reportBoolLiteralCompareReversed :ast litId: lhsId operandId: rhsId :neg
+            t.reportBoolLiteralCompareReversed :ast litId: lhsId operandId: rhsId :neg
             return
         }
-        this.reportBoolLiteralCompare :ast :lhsId :opId :rhsId :neg :litLen
+        t.reportBoolLiteralCompare :ast :lhsId :opId :rhsId :neg :litLen
     }
 
     # isBoolLiteralId -- the name id is `true` or `false`.
@@ -2105,7 +2281,7 @@ Analysis: class {
     # extent the tree gives exactly (its first atom's start to its last atom's
     # end); any other operand is reported without a fix.
     reportBoolLiteralCompareReversed: function {
-        :this
+        t: this
         ast: Ast.view
         litId: zast.nodeid
         operandId: zast.nodeid
@@ -2116,46 +2292,46 @@ Analysis: class {
         if neg then what = "`== false` / `!= true` negates: write `.not`".string
         firstId: simplePathFirstAtom :ast id: operandId
         if firstId.isZero then {
-            this.warn code: "L028" msg: what line: lp.line col: lp.col width: 1
+            t.warn code: "L028" msg: what line: lp.line col: lp.col width: 1
             return
         }
         lastN: ast.nodes.get i: (simplePathLastAtom :ast id: operandId)
         fp: zast.posOf n: (ast.nodes.get i: firstId)
         ep: zast.posOf n: lastN
         lastLen: (zast.poolTextAt pool: ast.names ref: (zast.atomNameIdOf n: lastN)).length.u64
-        srcOwned: this.source.copy
+        srcOwned: t.source.copy
         srcv: srcOwned.stringView
         litLo: (
             tokByteStart
-            lineStart: this.lineStart
-            srcLines: this.lines
+            lineStart: t.lineStart
+            srcLines: t.lines
             lineno: lp.line
             colno: lp.col
         )
         xLo: (
             tokByteStart
-            lineStart: this.lineStart
-            srcLines: this.lines
+            lineStart: t.lineStart
+            srcLines: t.lines
             lineno: fp.line
             colno: fp.col
         )
         lastLo: (
             tokByteStart
-            lineStart: this.lineStart
-            srcLines: this.lines
+            lineStart: t.lineStart
+            srcLines: t.lines
             lineno: ep.line
             colno: ep.col
         )
         xHi: lastLo + lastLen
         if (xHi > srcv.length) or (xHi <= xLo) or (xLo <= litLo) then {
-            this.warn code: "L028" msg: what line: lp.line col: lp.col width: 1
+            t.warn code: "L028" msg: what line: lp.line col: lp.col width: 1
             return
         }
         xText: (srcv.substring from: xLo to: xHi).string
         suffix: ".not"
         if neg.not then suffix = ""
         (
-            this.warnFix
+            t.warnFix
             code: "L028"
             msg: what
             line: lp.line
@@ -2174,7 +2350,7 @@ Analysis: class {
     # against the tree; when they do not delimit, the finding is reported
     # without a fix so the gate still names the site.
     reportBoolLiteralCompare: function {
-        :this
+        t: this
         ast: Ast.view
         lhsId: zast.nodeid
         opId: zast.nodeid
@@ -2186,26 +2362,26 @@ Analysis: class {
         lp: zast.posOf n: lhsN
         op: zast.posOf n: (ast.nodes.get i: opId)
         rp: zast.posOf n: (ast.nodes.get i: rhsId)
-        srcOwned: this.source.copy
+        srcOwned: t.source.copy
         srcv: srcOwned.stringView
         xStart: (
             tokByteStart
-            lineStart: this.lineStart
-            srcLines: this.lines
+            lineStart: t.lineStart
+            srcLines: t.lines
             lineno: lp.line
             colno: lp.col
         )
         opLo: (
             tokByteStart
-            lineStart: this.lineStart
-            srcLines: this.lines
+            lineStart: t.lineStart
+            srcLines: t.lines
             lineno: op.line
             colno: op.col
         )
         litLo: (
             tokByteStart
-            lineStart: this.lineStart
-            srcLines: this.lines
+            lineStart: t.lineStart
+            srcLines: t.lines
             lineno: rp.line
             colno: rp.col
         )
@@ -2224,7 +2400,7 @@ Analysis: class {
         what: "`== true` / `!= false` is the value itself: drop the comparison".string
         if neg then what = "`== false` / `!= true` negates: write `.not`".string
         if ok.not then {
-            this.warn code: "L028" msg: what line: lp.line col: lp.col width: 1
+            t.warn code: "L028" msg: what line: lp.line col: lp.col width: 1
             return
         }
         xText: (srcv.substring from: xLo to: xHi).string
@@ -2234,7 +2410,7 @@ Analysis: class {
         suffix: ".not"
         if neg.not then suffix = ""
         (
-            this.warnFix
+            t.warnFix
             code: "L028"
             msg: what
             line: lp.line
@@ -2253,30 +2429,30 @@ Analysis: class {
     # parentheses, so the source says whether they are there: the operand is
     # grouped when the text before op2 ends in a `)` whose `(` opens just
     # before the operand.
-    checkMixedOperators: function {:this ast: Ast.view opId: zast.nodeid lhsId: zast.nodeid} is {
+    checkMixedOperators: function {t: this ast: Ast.view opId: zast.nodeid lhsId: zast.nodeid} is {
         inner: zast.infixPartsOf :ast n: (ast.nodes.get i: lhsId)
         if inner.found.not then return
         outerK: operatorKind :ast nid: opId
         innerK: operatorKind :ast nid: inner.operator
         if (outerK == 0) or (innerK == 0) or (outerK == innerK) then return
-        if this.lineStart.length == 0 then return
+        if t.lineStart.length == 0 then return
         op: zast.posOf n: (ast.nodes.get i: opId)
         lp: zast.posOf n: (ast.nodes.get i: lhsId)
         opB: (
             tokByteStart
-            lineStart: this.lineStart
-            srcLines: this.lines
+            lineStart: t.lineStart
+            srcLines: t.lines
             lineno: op.line
             colno: op.col
         )
         lhsB: (
             tokByteStart
-            lineStart: this.lineStart
-            srcLines: this.lines
+            lineStart: t.lineStart
+            srcLines: t.lines
             lineno: lp.line
             colno: lp.col
         )
-        srcOwned: this.source.copy
+        srcOwned: t.source.copy
         sv: srcOwned.stringView
         endB: opB
         for endB > lhsB while (isSpaceByte c: (docByteAt s: sv i: endB - 1)) loop endB = endB - 1
@@ -2284,16 +2460,16 @@ Analysis: class {
         outerNm: zast.nameTextAt :ast ref: (zast.atomNameIdOf n: (ast.nodes.get i: opId))
         inn: zast.nameTextAt :ast ref: (zast.atomNameIdOf n: (ast.nodes.get i: inner.operator))
         what: "`\{inn}` and `\{outerNm}` chained without parentheses: operators group left to right, so the `\{inn}` is taken first"
-        this.warn code: "L032" msg: what line: op.line col: op.col width: outerNm.length
-        this.edits.append (zfix.Edit byteLo: lhsB byteHi: lhsB replacement: "(".string)
-        this.edits.append (zfix.Edit byteLo: endB byteHi: endB replacement: ")".string)
+        t.warn code: "L032" msg: what line: op.line col: op.col width: outerNm.length
+        t.edits.append (zfix.Edit byteLo: lhsB byteHi: lhsB replacement: "(".string)
+        t.edits.append (zfix.Edit byteLo: endB byteHi: endB replacement: ")".string)
     }
 
     # checkImpliedIterate -- L029: `for each x: E.iterate` writes the call `each`
     # implies. The fix deletes `.iterate`: `each` asks a type's `iterate` before
     # anything else, so the header still walks the same member. When the byte
     # before the member is not its `.`, the finding is reported without a fix.
-    checkImpliedIterate: function {:this ast: Ast.view n: zast.forrow.view} is {
+    checkImpliedIterate: function {t: this ast: Ast.view n: zast.forrow.view} is {
         if n.isEach.not then return
         if n.conditions.count.u64 == 0 then return
         c0: ast.nodes.get i: (zast.kidAt kids: ast.kids span: n.conditions i: 0)
@@ -2326,12 +2502,12 @@ Analysis: class {
         what: "`each` implies `.iterate`: drop it".string
         lo: (
             tokByteStart
-            lineStart: this.lineStart
-            srcLines: this.lines
+            lineStart: t.lineStart
+            srcLines: t.lines
             lineno: cp.line
             colno: cp.col
         )
-        srcOwned: this.source.copy
+        srcOwned: t.source.copy
         srcv: srcOwned.stringView
         hi: lo + 7
         # the tree matched the member by id; the bytes need only the `.` before
@@ -2339,11 +2515,11 @@ Analysis: class {
         ok: false
         if lo > 0 when hi <= srcv.length then ok = (docByteAt s: srcv i: lo - 1) == 46
         if ok.not then {
-            this.warn code: "L029" msg: what line: cp.line col: cp.col width: 7
+            t.warn code: "L029" msg: what line: cp.line col: cp.col width: 7
             return
         }
         (
-            this.warnFix
+            t.warnFix
             code: "L029"
             msg: what
             line: cp.line
@@ -2355,27 +2531,104 @@ Analysis: class {
         )
     }
 
+    # checkReceiverNames -- L034: the methods of one type name their receiver
+    # alike. The type's name for it is the one most of them declare (`:this`
+    # aside); a method that declares another is reported.
+    checkReceiverNames: function {t: this ast: Ast.view n: zast.objectdefrow.view} is {
+        recvs: ListVal recvuse
+        gatherReceivers :ast members: n.isItems :recvs
+        gatherReceivers :ast members: n.asItems :recvs
+        target: receiverNameOf :recvs
+        if target.isZero then return
+        for each r: recvs loop {
+            if r.name != target then t.reportReceiver :ast :r :target
+        }
+    }
+
+    # reportReceiver -- L034 for one method, whose receiver is declared `r.name`
+    # where its type's methods say `target`. The fix is for the `:this`
+    # shorthand only: it writes `target: this` and renames every read of `this`
+    # in the body. A receiver with a name of its own is left to its author,
+    # since a call may pass it by that name. The fix is also left out when the
+    # rename could change what a name means (receiverScan, declaresName), and
+    # when the text at a position is not the name the tree holds there.
+    reportReceiver: function {t: this ast: Ast.view r: recvuse target: zast.nameid} is {
+        pp: zast.posOf n: (ast.nodes.get i: r.param)
+        oldTxt: zast.nameTextCopy :ast ref: r.name
+        newTxt: zast.nameTextCopy :ast ref: target
+        msg: "receiver `\{oldTxt}`: the other methods of this type name it `\{newTxt}`"
+        width: oldTxt.length
+        uses: ListVal zast.nodeid
+        fixable: r.shorthand and (declaresName :ast fnId: r.fn name: target).not
+        if fixable when r.body.notZero then {
+            fixable = (receiverScan :ast id: r.body old: r.name :target :uses).not
+        }
+        # the byte offset of each read, checked against the source
+        spots: ListVal u64
+        plo: tokByteStart lineStart: t.lineStart srcLines: t.lines lineno: pp.line colno: pp.col
+        if fixable then {
+            srcv: t.source.stringView
+            fixable = textAt s: srcv at: plo text: oldTxt.stringView
+            for each uId: uses loop {
+                up: zast.posOf n: (ast.nodes.get i: uId)
+                ulo: (
+                    tokByteStart
+                    lineStart: t.lineStart
+                    srcLines: t.lines
+                    lineno: up.line
+                    colno: up.col
+                )
+                if (textAt s: srcv at: ulo text: oldTxt.stringView).not then fixable = false
+                spots.append from: ulo
+            }
+        }
+        if fixable.not then {
+            t.warn code: "L034" :msg line: pp.line col: pp.col :width
+            return
+        }
+        # the shorthand is rewritten from its colon: `:this` to `t: this`
+        (
+            t.warnFix
+            code: "L034"
+            :msg
+            line: pp.line
+            col: pp.col
+            :width
+            lo: plo - 1
+            hi: plo + width
+            repl: "\{newTxt}: \{oldTxt}"
+        )
+        for each at: spots loop {
+            t.edits.append (
+                zfix.Edit
+                byteLo: at
+                byteHi: at + oldTxt.length
+                replacement: newTxt.copy
+            )
+        }
+    }
+
     # ---- architecture rules (zl lint --arch) ----
 
     # checkFlagAccumulator -- A009: a bool local bound to a literal and then set
     # to the other literal by two or more consecutive single-clause `if`
     # statements: a disjunction (or, from `true`, a conjunction) written as a
     # flag. Reported at the binding.
-    checkFlagAccumulator: function {:this ast: Ast.view stmts: zast.kidspan} is {
-        if this.opts.arch.not then return
+    checkFlagAccumulator: function {t: this ast: Ast.view stmts: zast.kidspan} is {
+        if t.opts.arch.not then return
         n: stmts.count.u64
         i: u64
         for i < n loop {
             sid: zast.kidAt kids: ast.kids span: stmts :i
             i = i + 1
-            fb: this.flagBindingAt :ast :sid
+            fb: t.flagBindingAt :ast :sid
             if fb.name.isZero then continue
-            other: this.trueId
-            if fb.lit == this.trueId then other = this.falseId
+            other: t.trueId
+            if fb.lit == t.trueId then other = t.falseId
             sets: u64
             j: i
             for j < n while (
-                this.flagSetAt
+                t.flagSetAt
                 :ast
                 sid: (zast.kidAt kids: ast.kids span: stmts i: j)
                 name: fb.name
@@ -2388,7 +2641,7 @@ Analysis: class {
                 p: zast.posOf n: (ast.nodes.get i: sid)
                 fn: zast.nameTextAt :ast ref: fb.name
                 (
-                    this.info
+                    t.info
                     code: "A009"
                     msg: "flag accumulator: `\{fn}` is bound to a literal and then set by \{sets} `if` statements; bind the `or` chain instead"
                     line: p.line
@@ -2462,9 +2715,9 @@ Analysis: class {
     # block holding exactly one `if` with one clause and no else: the two
     # conditions are one `when` chain. Reported at the inner `if`.
     checkNestedIf: function {
-        :this ast: Ast.view clauses: zast.kidspan elseclauseId: zast.nodeid
+        t: this ast: Ast.view clauses: zast.kidspan elseclauseId: zast.nodeid
     } is {
-        if this.opts.arch.not then return
+        if t.opts.arch.not then return
         if elseclauseId.notZero then return
         if clauses.count.u64 != 1 then return
         innerId: singleLineBodyOf :ast clauseId: (zast.kidAt kids: ast.kids span: clauses i: 0)
@@ -2476,7 +2729,7 @@ Analysis: class {
             if inner.elseclause.notZero then return
             if inner.clauses.count.u64 != 1 then return
             (
-                this.info
+                t.info
                 code: "A010"
                 msg: "nested `if` with nothing else in the outer body: chain the conditions with `when`".string
                 line: inner.lineno
@@ -2490,24 +2743,24 @@ Analysis: class {
     # compiler compares by id -- a name id, a declaration, a type id -- and a
     # literal here is a name the code resolves by spelling.
     checkLiteralCompare: function {
-        :this ast: Ast.view opId: zast.nodeid lhsId: zast.nodeid rhsId: zast.nodeid
+        t: this ast: Ast.view opId: zast.nodeid lhsId: zast.nodeid rhsId: zast.nodeid
     } is {
         op: zast.atomNameIdOf n: (ast.nodes.get i: opId)
         isCmp: (op == zast.wellKnown.slot.wkOpEq) or (op == zast.wellKnown.slot.wkOpNe)
         if isCmp.not then return
-        this.literalCompareSide :ast id: lhsId
-        this.literalCompareSide :ast id: rhsId
+        t.literalCompareSide :ast id: lhsId
+        t.literalCompareSide :ast id: rhsId
     }
 
     # one side of a comparison, answering whether it is a string literal --
     # which is what A001 reports
-    literalCompareSide: function {:this ast: Ast.view id: zast.nodeid} is {
+    literalCompareSide: function {t: this ast: Ast.view id: zast.nodeid} is {
         n: ast.nodes.get i: id
         txt: plainLiteralText :ast :n
         if txt.some then {
             p: zast.posOf :n
             (
-                this.info
+                t.info
                 code: "A001"
                 msg: "string literal `\{txt}` compared by spelling; compare an id (name id, declaration, type id)"
                 line: p.line
@@ -2521,22 +2774,22 @@ Analysis: class {
     # of the compiler's name-lookup functions (lookupFn): the name is looked up
     # by its spelling where the compiler should read a well-known id.
     checkLiteralLookup: function {
-        :this ast: Ast.view callable: astnode.view arguments: zast.kidspan
+        t: this ast: Ast.view callable: astnode.view arguments: zast.kidspan
     } is {
-        if this.opts.arch.not then return
+        if t.opts.arch.not then return
         leaf: zast.atomNameIdOf n: callable
         if callable.dottedpath then leaf = zast.atomNameIdOf n: (ast.nodes.get i: callable.child)
         if leaf.isZero then return
-        fw: this.lookupWords.slotOf text: (zast.nameTextAt :ast ref: leaf).stringView
-        if fw == this.lookupWords.none then return
+        fw: t.lookupWords.slotOf text: (zast.nameTextAt :ast ref: leaf).stringView
+        if fw == t.lookupWords.none then return
         for each aId: (zast.kidsOf :ast span: arguments) loop {
-            this.literalLookupArg :ast :aId
+            t.literalLookupArg :ast :aId
         }
     }
 
     # literalLookupArg -- one argument of a name lookup: A011 when its value is a
     # string literal
-    literalLookupArg: function {:this ast: Ast.view aId: zast.nodeid} is {
+    literalLookupArg: function {t: this ast: Ast.view aId: zast.nodeid} is {
         a: ast.nodes.get i: aId
         vId: aId
         if a.namedoperation then vId = a.operation
@@ -2545,7 +2798,7 @@ Analysis: class {
         if txt.some then {
             p: zast.posOf n: v
             (
-                this.info
+                t.info
                 code: "A011"
                 msg: "string literal `\{txt}` looked up by spelling; read its well-known id (zast.wellKnown) or the declaration"
                 line: p.line
@@ -2558,10 +2811,10 @@ Analysis: class {
     # checkComposedKey -- A002: a string literal shaped like a composed key
     # (holes joined by a separator) -- a spelling that stands in for a tree
     # walk or a pair key.
-    checkComposedKey: function {:this ast: Ast.view parts: zast.kidspan line: u32 col: u32} is {
+    checkComposedKey: function {t: this ast: Ast.view parts: zast.kidspan line: u32 col: u32} is {
         if (isComposedParts :ast :parts).not then return
         (
-            this.info
+            t.info
             code: "A002"
             msg: "composed string :key the table by ids (a pair record, or walk the tree)".string
             :line
@@ -2574,7 +2827,7 @@ Analysis: class {
     # (`return`, `break`, `continue`), or after a bare `for loop` nothing breaks
     # out of, can never run. Reported once per block, at the first statement
     # past it.
-    checkUnreachable: function {:this ast: Ast.view stmts: zast.kidspan} is {
+    checkUnreachable: function {t: this ast: Ast.view stmts: zast.kidspan} is {
         i: u64
         n: stmts.count.u64
         for i < n loop {
@@ -2590,7 +2843,7 @@ Analysis: class {
                 }
                 if msg.length > 0 then {
                     p: zast.posOf n: (ast.nodes.get i: (zast.kidAt kids: ast.kids span: stmts :i))
-                    this.warn code: "L026" :msg line: p.line col: p.col width: 1
+                    t.warn code: "L026" :msg line: p.line col: p.col width: 1
                     return
                 }
             }
@@ -2602,14 +2855,14 @@ Analysis: class {
     # deepest statement it reaches (one line above the closing brace). A body
     # that is one `match` is exempt: splitting a dispatcher hides the shape it
     # exists to show.
-    checkLongFunction: function {:this ast: Ast.view bodyId: zast.nodeid line: u32 col: u32} is {
+    checkLongFunction: function {t: this ast: Ast.view bodyId: zast.nodeid line: u32 col: u32} is {
         if bodyId.isZero then return
         if (bodyIsOneMatch :ast :bodyId) then return
         lastLine: zast.spanEndLineAt :ast id: bodyId
         span: lastLine - line + 1
         if span > longFunctionLines then {
             (
-                this.info
+                t.info
                 code: "A005"
                 msg: "function spans \{span} lines; split it into named helpers"
                 :line
@@ -2623,7 +2876,7 @@ Analysis: class {
     # the threshold, scored over its whole body with nested literals folded
     # in. The definition names it: unit-level functions and methods, which the
     # walk reaches at function depth zero.
-    checkComplexity: function {:this ast: Ast.view nameId: zast.nameid opId: zast.nodeid} is {
+    checkComplexity: function {t: this ast: Ast.view nameId: zast.nameid opId: zast.nodeid} is {
         if opId.isZero then return
         op: ast.nodes.get i: opId
         match (
@@ -2631,13 +2884,14 @@ Analysis: class {
         ) case functiondef then {
             if op.body.isZero then return
             acc: CcState score: 0
-            ccVisit :ast id: op.body nesting: 0 fnName: nameId :acc
-            if acc.score > this.opts.complexity then {
+            fn: fnself name: nameId recv: (receiverOf :ast fnId: opId).name
+            ccVisit :ast id: op.body nesting: 0 :fn :acc
+            if acc.score > t.opts.complexity then {
                 nm: zast.poolTextAt pool: ast.names ref: nameId
                 sc: acc.score
-                th: this.opts.complexity
+                th: t.opts.complexity
                 (
-                    this.warn
+                    t.warn
                     code: "A008"
                     msg: "function `\{nm}` has cognitive complexity \{sc} (threshold \{th})"
                     line: op.lineno
@@ -2653,18 +2907,19 @@ Analysis: class {
     # arms that only recurse (hwMostArms). Such a function walks the children of
     # a value kind by kind, by hand, where one walk over the children serves
     # every kind with no work of its own. The definition names it, as for A008.
-    checkHandWalk: function {:this ast: Ast.view nameId: zast.nameid opId: zast.nodeid} is {
+    checkHandWalk: function {t: this ast: Ast.view nameId: zast.nameid opId: zast.nodeid} is {
         if opId.isZero then return
         op: ast.nodes.get i: opId
         match (
             op
         ) case functiondef then {
             if op.body.isZero then return
-            most: hwMostArms :ast id: op.body fnName: nameId
+            fn: fnself name: nameId recv: (receiverOf :ast fnId: opId).name
+            most: hwMostArms :ast id: op.body :fn
             if most >= handWalkArms then {
                 nm: zast.poolTextAt pool: ast.names ref: nameId
                 (
-                    this.info
+                    t.info
                     code: "A013"
                     msg: "function `\{nm}` has \{most} match arms that only recurse into parts of the value; walk the children in one arm (zast.childCount and zast.childAt read a node's) and keep arms only for the kinds that do work of their own or skip a child"
                     line: op.lineno
@@ -2676,33 +2931,35 @@ Analysis: class {
     }
 
     # walkCasingAt -- the id-taking entry for the casing visitor.
-    walkCasingAt: function {:this ast: Ast.view nId: zast.nodeid} is {
+    walkCasingAt: function {t: this ast: Ast.view nId: zast.nodeid} is {
         n: ast.nodes.get i: nId
-        this.walkCasing :ast :n
+        t.walkCasing :ast :n
     }
 
     # walkCasing -- opt-in (L009): recurse to every type definition and check the member
     # casing of `variant` / `union` declarations. Runs only under `zl lint --casing`.
-    walkCasing: function {:this ast: Ast.view n: astnode.view} is {
+    walkCasing: function {t: this ast: Ast.view n: astnode.view} is {
         match (
             n
         ) case program then {
             it: ast.units.iterate
-            for uId: it loop this.walkCasing :ast n: (ast.nodes.get i: uId)
+            for uId: it loop t.walkCasing :ast n: (ast.nodes.get i: uId)
         } case unitdef then {
             for each bId: (zast.kidsOf :ast span: n.body) loop {
-                this.walkCasing :ast n: (ast.nodes.get i: bId)
+                t.walkCasing :ast n: (ast.nodes.get i: bId)
             }
         } case namedoperation then {
-            this.walkCasing :ast n: (ast.nodes.get i: n.operation)
+            t.walkCasing :ast n: (ast.nodes.get i: n.operation)
         } case objectdef then {
-            this.checkMemberCasing :ast kind: n.kind items: n.isItems
+            t.checkMemberCasing :ast kind: n.kind items: n.isItems
         } else null
     }
 
     # checkMemberCasing -- flag each variant/union arm whose name starts with an uppercase
     # letter (not lowerCamelCase), with a suggested rename (see casingSuggest/casingMessage).
-    checkMemberCasing: function {:this ast: Ast.view kind: zast.objectkind items: zast.kidspan} is {
+    checkMemberCasing: function {
+        t: this ast: Ast.view kind: zast.objectkind items: zast.kidspan
+    } is {
         isVU: (
             (kind == zast.objectkind.variantDef) or
             (kind == zast.objectkind.unionDef) or
@@ -2725,7 +2982,7 @@ Analysis: class {
                 if up when isTypeRef.not then {
                     sug: casingSuggest name: nm.stringView
                     (
-                        this.warn
+                        t.warn
                         code: "L009"
                         msg: (casingMessage orig: nm.stringView sug: sug.stringView)
                         line: item.lineno
@@ -2738,17 +2995,17 @@ Analysis: class {
     }
 
     # checkPublicPosProgram -- L019 entry: check every unit's `public:` block placement.
-    checkPublicPosProgram: function {:this prog: Ast.view} is {
+    checkPublicPosProgram: function {t: this prog: Ast.view} is {
         {
             for each cuid: prog.units loop {
-                this.checkPublicPosAt ast: prog nId: cuid
+                t.checkPublicPosAt ast: prog nId: cuid
             }
         }
     }
 
     # checkPublicPosAt -- L019: a unit's `public:` block must sit at the top,
     # before any definition (only the file header comment may precede it).
-    checkPublicPosAt: function {:this ast: Ast.view nId: zast.nodeid} is {
+    checkPublicPosAt: function {t: this ast: Ast.view nId: zast.nodeid} is {
         wn: ast.nodes.get i: nId
         if wn.namedoperation then {
             ud: ast.nodes.get i: wn.operation
@@ -2760,7 +3017,7 @@ Analysis: class {
                         isPub: zast.unitOpKindIs :ast opId: mn.operation k: zast.unitkind.publicNs
                         if isPub when sawDef then {
                             (
-                                this.warn
+                                t.warn
                                 code: "L019"
                                 msg: "the public interface block must be at the top of the unit, before any definition".string
                                 line: mn.lineno
@@ -2791,11 +3048,11 @@ Analysis: class {
 
     # reportUndocDef -- warn L016 when a definition (type / function / method) has
     # no leading `#` doc block. `nameRef` gives the underline width.
-    reportUndocDef: function {:this ast: Ast.view nameRef: zast.nameid line: u32 col: u32} is {
-        if (this.hasDocAbove line1: line) then return
+    reportUndocDef: function {t: this ast: Ast.view nameRef: zast.nameid line: u32 col: u32} is {
+        if (t.hasDocAbove line1: line) then return
         nm: zast.nameTextAt :ast ref: nameRef
         (
-            this.warn
+            t.warn
             code: "L016"
             msg: "missing doc comment: add a `#` comment above this definition".string
             :line
@@ -2807,22 +3064,22 @@ Analysis: class {
     # checkDocsMember -- a parameter or field counts as documented by a leading
     # `#` block or a trailing `#` on its own line; warn `code`/`kind` otherwise.
     checkDocsMember: function {
-        :this ast: Ast.view member: astnode.view code: StringView kind: StringView
+        t: this ast: Ast.view member: astnode.view code: StringView kind: StringView
     } is {
         if member.namedoperation when member.name != zast.wellKnown.slot.wkThis then {
             documented: false
-            if (this.hasDocAbove line1: member.lineno) then documented = true
+            if (t.hasDocAbove line1: member.lineno) then documented = true
             if documented.not then {
                 li: (member.lineno - 1).u64
-                if li < this.lines.length then {
-                    mline: this.lines.get i: li
+                if li < t.lines.length then {
+                    mline: t.lines.get i: li
                     if (hasHash line: mline.stringView) then documented = true
                 }
             }
             if documented.not then {
                 msg: "missing doc comment: add a `#` comment above this \{kind}"
                 (
-                    this.warn
+                    t.warn
                     :code
                     :msg
                     line: member.lineno
@@ -2830,8 +3087,8 @@ Analysis: class {
                     width: (zast.nameTextAt :ast ref: member.name).length
                 )
             }
-            if documented when this.opts.docsQuality then {
-                this.reportDocEcho :ast nameRef: member.name line: member.lineno col: member.colno
+            if documented when t.opts.docsQuality then {
+                t.reportDocEcho :ast nameRef: member.name line: member.lineno col: member.colno
             }
         }
     }
@@ -2839,12 +3096,12 @@ Analysis: class {
     # docBlockAbove -- the contiguous `#` block directly above `line1`, markers dropped
     # and lines joined by spaces; "" when there is none. This is the same block hover
     # renders, so a rule reading it judges what a reader actually sees.
-    docBlockAbove: function {v: this.view line1: u32} out String is {
+    docBlockAbove: function {t: this.view line1: u32} out String is {
         buf: String
         if line1 < 2 then return buf
         lo: (line1 - 2).u64
-        if lo >= v.lines.length then return buf
-        last: v.lines.get i: lo
+        if lo >= t.lines.length then return buf
+        last: t.lines.get i: lo
         if (docLineIsComment ln: last.stringView).not then return buf
         top: lo
         more: true
@@ -2852,7 +3109,7 @@ Analysis: class {
             if top == 0 then {
                 more = false
             } else {
-                prev: v.lines.get i: top - 1
+                prev: t.lines.get i: top - 1
                 if (docLineIsComment ln: prev.stringView) then {
                     top = top - 1
                 } else more = false
@@ -2860,9 +3117,9 @@ Analysis: class {
         }
         i: top
         for i <= lo loop {
-            ln: v.lines.get :i
-            t: ln.stringView.trim
-            body: t.substring from: 1 to: t.length
+            ln: t.lines.get :i
+            trimmed: ln.stringView.trim
+            body: trimmed.substring from: 1 to: trimmed.length
             if buf.length > 0 then buf.appendByte b: 32
             buf.append s: body.trim
             i = i + 1
@@ -2875,13 +3132,13 @@ Analysis: class {
     # saying why the thing exists. That is the bar a comment has to clear, made
     # mechanical, and it is also the cheapest way to satisfy a coverage ratchet -- the
     # corpus writes these without one, so the ratchet ships paired with this.
-    reportDocEcho: function {:this ast: Ast.view nameRef: zast.nameid line: u32 col: u32} is {
+    reportDocEcho: function {t: this ast: Ast.view nameRef: zast.nameid line: u32 col: u32} is {
         li: (line - 1).u64
-        if li >= this.lines.length then return
-        doc: this.docBlockAbove line1: line
+        if li >= t.lines.length then return
+        doc: t.docBlockAbove line1: line
         # own the line: a live view into this.lines would hold a shared lock across the
         # warn below, which needs the receiver exclusively.
-        decl: (this.lines.get i: li).copy
+        decl: (t.lines.get i: li).copy
         if (docStartsLine ln: decl.stringView :col).not then return
         if doc.length == 0 then doc = docTrailingComment ln: decl.stringView
         if doc.length == 0 then return
@@ -2897,7 +3154,7 @@ Analysis: class {
         if novel > 0 then return
         nm: zast.nameTextAt :ast ref: nameRef
         (
-            this.warn
+            t.warn
             code: "L024"
             msg: "this doc only re-says the declaration below it; say why it exists, or rename it so no comment is needed".string
             :line
@@ -2909,14 +3166,14 @@ Analysis: class {
     # docBlockBody -- the comment block starting at line `from`: each line's text
     # after its `#`, trimmed, joined by single spaces into `into`. Answers the
     # index of the first line after the block.
-    docBlockBody: function {v: this.view from: u64 into: String.borrow} out u64 is {
+    docBlockBody: function {t: this.view from: u64 into: String.borrow} out u64 is {
         i: from
-        n: v.lines.length
+        n: t.lines.length
         for i < n loop {
-            ln: v.lines.get :i
-            t: ln.stringView.trim
-            if (t.startsWith "#").not then return i
-            body: t.substring from: 1 to: t.length
+            ln: t.lines.get :i
+            trimmed: ln.stringView.trim
+            if (trimmed.startsWith "#").not then return i
+            body: trimmed.substring from: 1 to: trimmed.length
             if into.length > 0 then into.appendByte b: 32
             into.append s: body.trim
             i = i + 1
@@ -2943,22 +3200,22 @@ Analysis: class {
     # four words are section markers and separators, not docs, and are not counted.
     # Bodies are compared with the declaration's own words and every width folded
     # out, so "u8 to i16: every u8 fits i16" and its u16 twin are one body.
-    reportDuplicateDocs: function {:this} is {
+    reportDuplicateDocs: function {t: this} is {
         keys: List String
         starts: ListVal u64
         counts: MapRV String v: u64
         i: u64
-        n: this.lines.length
+        n: t.lines.length
         for i < n loop {
-            head: this.lines.get :i
+            head: t.lines.get :i
             if (docLineIsComment ln: head.stringView) then {
                 st: i
                 buf: String
-                i = this.docBlockBody from: i into: buf
+                i = t.docBlockBody from: i into: buf
                 ws: List String
                 docWordsInto s: buf.stringView into: ws
                 if ws.length >= 4 then {
-                    key: this.docBlockKey :ws declAt: i
+                    key: t.docBlockKey :ws declAt: i
                     counts.set key: key.copy value: ((counts.get :key).or d: 0) + 1
                     keys.append from: key.copy
                     starts.append from: st
@@ -2972,7 +3229,7 @@ Analysis: class {
             if c2 > 2 then {
                 s2: starts.get i: j
                 (
-                    this.warn
+                    t.warn
                     code: "L025"
                     msg: "this doc body appears \{c2} times in this file; state it once, in the unit header, and leave the sites bare"
                     line: (s2 + 1).u32.orPanic
@@ -2989,7 +3246,7 @@ Analysis: class {
     # is a nested definition to descend into. Both carriers of an as-block, a type's
     # and a function's, hand their members here.
     walkDocsAsItem: function {
-        :this
+        t: this
         ast: Ast.view
         m: astnode.view
         docs: bool
@@ -3000,7 +3257,7 @@ Analysis: class {
         if m.namedoperation when (zast.isGenericParamOp :ast opId: m.operation) then isGP = true
         if isGP then {
             if docFields then (
-                this.checkDocsMember
+                t.checkDocsMember
                 :ast
                 member: m
                 code: "L018"
@@ -3008,16 +3265,16 @@ Analysis: class {
             )
             return
         }
-        this.walkDocs :ast n: m :docs :docParams :docFields
+        t.walkDocs :ast n: m :docs :docParams :docFields
     }
 
     # reportDefDocs -- a definition's own two doc judgements: L016 when it
     # carries no doc block, and L024 when the block it carries only re-says the
     # declaration.
-    reportDefDocs: function {:this ast: Ast.view site: zast.namedsite docs: bool} is {
-        if docs then this.reportUndocDef :ast nameRef: site.name line: site.line col: site.col
-        if this.opts.docsQuality then (
-            this.reportDocEcho
+    reportDefDocs: function {t: this ast: Ast.view site: zast.namedsite docs: bool} is {
+        if docs then t.reportUndocDef :ast nameRef: site.name line: site.line col: site.col
+        if t.opts.docsQuality then (
+            t.reportDocEcho
             :ast
             nameRef: site.name
             line: site.line
@@ -3029,7 +3286,7 @@ Analysis: class {
     # is the same walk for a parameter, a field and an arm; only the code and
     # the noun differ.
     checkDocsMembersIn: function {
-        :this
+        t: this
         ast: Ast.view
         span: zast.kidspan
         code: StringView
@@ -3037,35 +3294,35 @@ Analysis: class {
     } is {
         ids: zast.kidIds :ast :span
         for each mId: ids loop {
-            this.checkDocsMember :ast member: (ast.nodes.get i: mId) :code :kind
+            t.checkDocsMember :ast member: (ast.nodes.get i: mId) :code :kind
         }
     }
 
     # walkDocsAsItems -- walkDocsAsItem over every member of `span`.
     walkDocsAsItems: function {
-        :this ast: Ast.view span: zast.kidspan docs: bool docParams: bool docFields: bool
+        t: this ast: Ast.view span: zast.kidspan docs: bool docParams: bool docFields: bool
     } is {
         ids: zast.kidIds :ast :span
         for each mId: ids loop {
-            this.walkDocsAsItem :ast m: (ast.nodes.get i: mId) :docs :docParams :docFields
+            t.walkDocsAsItem :ast m: (ast.nodes.get i: mId) :docs :docParams :docFields
         }
     }
 
     # walkDocsIn -- descend into every member of `span` as a definition of its
     # own.
     walkDocsIn: function {
-        :this ast: Ast.view span: zast.kidspan docs: bool docParams: bool docFields: bool
+        t: this ast: Ast.view span: zast.kidspan docs: bool docParams: bool docFields: bool
     } is {
         ids: zast.kidIds :ast :span
         for each mId: ids loop {
-            this.walkDocsAt :ast nId: mId :docs :docParams :docFields
+            t.walkDocsAt :ast nId: mId :docs :docParams :docFields
         }
     }
 
     # walkDocsFunction -- a function definition: its own docs, its parameters'
     # docs, and each member of its `as` block.
     walkDocsFunction: function {
-        :this
+        t: this
         ast: Ast.view
         site: zast.namedsite
         params: zast.kidspan
@@ -3074,22 +3331,22 @@ Analysis: class {
         docParams: bool
         docFields: bool
     } is {
-        this.reportDefDocs :ast :site :docs
+        t.reportDefDocs :ast :site :docs
         if docParams then (
-            this.checkDocsMembersIn
+            t.checkDocsMembersIn
             :ast
             span: params
             code: "L017"
             kind: "parameter"
         )
-        this.walkDocsAsItems :ast span: asItems :docs :docParams :docFields
+        t.walkDocsAsItems :ast span: asItems :docs :docParams :docFields
     }
 
     # walkDocsObject -- a type definition: its own docs, then its is-block read
     # according to what the kind keeps there, then each member of its `as`
     # block.
     walkDocsObject: function {
-        :this
+        t: this
         ast: Ast.view
         site: zast.namedsite
         okind: zast.objectkind
@@ -3099,7 +3356,7 @@ Analysis: class {
         docParams: bool
         docFields: bool
     } is {
-        this.reportDefDocs :ast :site :docs
+        t.reportDefDocs :ast :site :docs
         isRC: (
             (okind == zast.objectkind.recordDef) or
             (okind == zast.objectkind.classDef) or
@@ -3108,7 +3365,7 @@ Analysis: class {
         isVU: (okind == zast.objectkind.variantDef) or (okind == zast.objectkind.unionDef)
         isPF: (okind == zast.objectkind.protocolDef) or (okind == zast.objectkind.facetDef)
         if docFields when isRC then (
-            this.checkDocsMembersIn
+            t.checkDocsMembersIn
             :ast
             span: isItems
             code: "L018"
@@ -3117,7 +3374,7 @@ Analysis: class {
         # an arm reaches a reader the same way a field does -- hovered, one line
         # of prose -- so it is the same code with its own noun.
         if docFields when isVU then (
-            this.checkDocsMembersIn
+            t.checkDocsMembersIn
             :ast
             span: isItems
             code: "L018"
@@ -3126,21 +3383,21 @@ Analysis: class {
         # a protocol's and a facet's members are METHOD DECLARATIONS, which sit
         # in the is-block where a record keeps its fields. They are definitions,
         # so they descend to L016 rather than reporting as members.
-        if isPF then this.walkDocsIn :ast span: isItems :docs :docParams :docFields
-        this.walkDocsAsItems :ast span: asItems :docs :docParams :docFields
+        if isPF then t.walkDocsIn :ast span: isItems :docs :docParams :docFields
+        t.walkDocsAsItems :ast span: asItems :docs :docParams :docFields
     }
 
     # walkDocsNamed -- a named definition, dispatched on what the name labels: a
     # function, a type, or a nested unit.
     walkDocsNamed: function {
-        :this ast: Ast.view site: zast.namedsite docs: bool docParams: bool docFields: bool
+        t: this ast: Ast.view site: zast.namedsite docs: bool docParams: bool docFields: bool
     } is {
         op: ast.nodes.get i: site.operation
         match (
             op
         ) case functiondef then {
             (
-                this.walkDocsFunction
+                t.walkDocsFunction
                 :ast
                 :site
                 params: op.parameters
@@ -3151,7 +3408,7 @@ Analysis: class {
             )
         } case objectdef then {
             (
-                this.walkDocsObject
+                t.walkDocsObject
                 :ast
                 :site
                 okind: op.kind
@@ -3162,14 +3419,14 @@ Analysis: class {
                 :docFields
             )
         } case unitdef then {
-            this.walkDocsUnit :ast body: op.body :docs :docParams :docFields
+            t.walkDocsUnit :ast body: op.body :docs :docParams :docFields
         } else null
     }
 
     # walkDocsUnit -- a unit definition: its public surface first, then every
     # member that surface admits.
     walkDocsUnit: function {
-        :this ast: Ast.view body: zast.kidspan docs: bool docParams: bool docFields: bool
+        t: this ast: Ast.view body: zast.kidspan docs: bool docParams: bool docFields: bool
     } is {
         pubSet: IdSet zast.nameid
         hasPub: unitPublicNames :ast :body into: pubSet
@@ -3177,12 +3434,12 @@ Analysis: class {
         # has no public surface to filter BY, so every member is walked. The
         # compiler's units export a handful of names each -- zemitterc.z exports 2
         # of 741 -- so without this the pass reports 0 and means nothing.
-        if this.opts.docsPrivate then hasPub = false
+        if t.opts.docsPrivate then hasPub = false
         ids: zast.kidIds :ast span: body
         for each bId: ids loop {
             bsite: zast.namedSiteAt :ast nid: bId
             if (unitMemberIsWalkable :ast site: bsite :pubSet :hasPub) then (
-                this.walkDocsAt
+                t.walkDocsAt
                 :ast
                 nId: bId
                 :docs
@@ -3196,20 +3453,20 @@ Analysis: class {
     # no leading `#` block; L017 an undocumented parameter; L018 an undocumented
     # record/class field. Each tier is gated by its own flag.
     walkDocs: function {
-        :this ast: Ast.view n: astnode.view docs: bool docParams: bool docFields: bool
+        t: this ast: Ast.view n: astnode.view docs: bool docParams: bool docFields: bool
     } is {
         match (
             n
         ) case program then {
             wit: ast.units.iterate
             for uId: wit loop {
-                this.walkDocsAt :ast nId: uId :docs :docParams :docFields
+                t.walkDocsAt :ast nId: uId :docs :docParams :docFields
             }
         } case unitdef then {
-            this.walkDocsUnit :ast body: n.body :docs :docParams :docFields
+            t.walkDocsUnit :ast body: n.body :docs :docParams :docFields
         } case namedoperation then {
             (
-                this.walkDocsNamed
+                t.walkDocsNamed
                 :ast
                 site: (
                     zast.namedsite
@@ -3228,17 +3485,19 @@ Analysis: class {
     # walkDocsAt -- the id-taking entry: the node view is this frame's, so the
     # program loop can lend prog without an outstanding view lock.
     walkDocsAt: function {
-        :this ast: Ast.view nId: zast.nodeid docs: bool docParams: bool docFields: bool
+        t: this ast: Ast.view nId: zast.nodeid docs: bool docParams: bool docFields: bool
     } is {
         n: ast.nodes.get i: nId
-        this.walkDocs :ast :n :docs :docParams :docFields
+        t.walkDocs :ast :n :docs :docParams :docFields
     }
 
     # walkDocsProgram -- root entry for the doc-coverage pass.
-    walkDocsProgram: function {:this prog: Ast.view docs: bool docParams: bool docFields: bool} is {
+    walkDocsProgram: function {
+        t: this prog: Ast.view docs: bool docParams: bool docFields: bool
+    } is {
         {
             for each wdid: prog.units loop {
-                this.walkDocsAt ast: prog nId: wdid :docs :docParams :docFields
+                t.walkDocsAt ast: prog nId: wdid :docs :docParams :docFields
             }
         }
     }
@@ -3253,15 +3512,15 @@ Analysis: class {
     # own `String` or `u64` takes it -- so the rule says nothing elsewhere. The
     # replacement span is byte-verified against the expected source spelling
     # before any edit is recorded.
-    tryBareZeroInit: function {:this ast: Ast.view value: astnode.view st: zenv.ZSymbolTable} is {
+    tryBareZeroInit: function {t: this ast: Ast.view value: astnode.view st: zenv.ZSymbolTable} is {
         match (
             value
         ) case statementline then {
-            this.tryBareZeroInit :ast value: (ast.nodes.get i: value.statementline) :st
+            t.tryBareZeroInit :ast value: (ast.nodes.get i: value.statementline) :st
         } case statement then {
             if value.statements.count.u64 == 1 then {
                 s0Id: zast.kidAt kids: ast.kids span: value.statements i: 0
-                this.tryBareZeroInit :ast value: (ast.nodes.get i: s0Id) :st
+                t.tryBareZeroInit :ast value: (ast.nodes.get i: s0Id) :st
             }
         } case dottedpath then {
             repl: bareZeroTypeName :ast n: (ast.nodes.get i: value.child)
@@ -3278,23 +3537,23 @@ Analysis: class {
             if isStrRepl.not then sysId = zast.atomNameIdOf n: (ast.nodes.get i: value.child)
             sysT: ztypecheck.stdTidRo :ast :st wk: sysId
             if sysT.isZero then return
-            if (ztypecheck.bareNameReaches :st site: this.sufSite base: sysT).not then return
+            if (ztypecheck.bareNameReaches :st site: t.sufSite base: sysT).not then return
             pin: nodeInfoOf n: (ast.nodes.get i: value.parent)
             cin: nodeInfoOf n: (ast.nodes.get i: value.child)
             if pin.line != cin.line then return
-            srcOwned: this.source.copy
+            srcOwned: t.source.copy
             srcv: srcOwned.stringView
             lo: (
                 tokByteStart
-                lineStart: this.lineStart
-                srcLines: this.lines
+                lineStart: t.lineStart
+                srcLines: t.lines
                 lineno: pin.line
                 colno: pin.col
             )
             cs: (
                 tokByteStart
-                lineStart: this.lineStart
-                srcLines: this.lines
+                lineStart: t.lineStart
+                srcLines: t.lines
                 lineno: cin.line
                 colno: cin.col
             )
@@ -3307,7 +3566,7 @@ Analysis: class {
             if actual != expect then return
             wm: "zero/empty initializer: write the bare type name `\{repl}`"
             (
-                this.warnFix
+                t.warnFix
                 code: "L011"
                 msg: wm
                 line: pin.line
@@ -3322,28 +3581,28 @@ Analysis: class {
 
     # runFastChecks -- the fast-tier passes: parse-error/AST rules over the tree,
     # then the token rules over the source.
-    runFastChecks: function {:this n: Ast.view} is {
-        this.lineStart = lineStartIndex src: this.source.stringView
-        this.trueId = zast.wellKnown.slot.wkTrue
-        this.falseId = zast.wellKnown.slot.wkFalse
+    runFastChecks: function {t: this n: Ast.view} is {
+        t.lineStart = lineStartIndex src: t.source.stringView
+        t.trueId = zast.wellKnown.slot.wkTrue
+        t.falseId = zast.wellKnown.slot.wkFalse
         scanPool: zast.StringPool.create
-        this.fastToks = tokenize.scan source: this.source.copy pool: scanPool
-        this.walkProgram prog: n
-        this.checkPublicPosProgram prog: n
-        this.checkLeadingLabel
+        t.fastToks = tokenize.scan source: t.source.copy pool: scanPool
+        t.walkProgram prog: n
+        t.checkPublicPosProgram prog: n
+        t.checkLeadingLabel
     }
 
     # sortEditsInPlace -- reorder the collected edits by byteLo so the applier and the diff
     # renderer see sorted, overlap-resolvable input.
-    sortEditsInPlace: function {:this} is {
-        se: sortEdits edits: this.edits
-        this.edits = se.take
+    sortEditsInPlace: function {t: this} is {
+        se: sortEdits edits: t.edits
+        t.edits = se.take
     }
 
     # emitSuf -- L005: a redundant numeric suffix. The safe fix removes the `.` and the type
     # name (e.g. `5.i32` -> `5`); the context already pins the type.
-    emitSuf: function {:this ln: u32 col: u32 tname: StringView} is {
-        srcOwned: this.source.copy
+    emitSuf: function {t: this ln: u32 col: u32 tname: StringView} is {
+        srcOwned: t.source.copy
         sv: srcOwned.stringView
         lineStart: lineStartIndex src: sv
         srcLines: linesOf src: sv
@@ -3352,7 +3611,7 @@ Analysis: class {
         if byteStart > 0 then lo = byteStart - 1
         hi: byteStart + tname.length
         (
-            this.warnFix
+            t.warnFix
             code: "L005"
             msg: "redundant numeric suffix `.\{tname}`"
             line: ln
@@ -3368,7 +3627,7 @@ Analysis: class {
     # operand makes redundant.
     sufBinop: function {
         ast: Ast.view
-        :this
+        t: this
         lhs: astnode.view
         rhs: astnode.view
         isCmp: bool
@@ -3381,19 +3640,19 @@ Analysis: class {
         if isCmp then {
             ls: operandSuffix :ast n: lhs
             if ls.tname.length > 0 when (isAnchor :ast n: rhs tname: ls.tname.stringView :st) then {
-                this.emitSuf ln: ls.line col: ls.col tname: ls.tname.stringView
+                t.emitSuf ln: ls.line col: ls.col tname: ls.tname.stringView
             }
         }
         rs: operandSuffix :ast n: rhs
         if rs.tname.length > 0 when (isAnchor :ast n: lhs tname: rs.tname.stringView :st) then {
-            this.emitSuf ln: rs.line col: rs.col tname: rs.tname.stringView
+            t.emitSuf ln: rs.line col: rs.col tname: rs.tname.stringView
         }
     }
 
     # sufReassign -- a reassignment value whose suffix the target's type fixes.
     sufReassign: function {
         ast: Ast.view
-        :this
+        t: this
         topath: astnode.view
         value: astnode.view
         st: zenv.ZSymbolTable.view
@@ -3402,7 +3661,7 @@ Analysis: class {
         if vs.tname.length > 0 then {
             tn: typeNameOfNode n: topath :st
             if tn.length > 0 when tn.stringView == vs.tname then {
-                this.emitSuf ln: vs.line col: vs.col tname: vs.tname.stringView
+                t.emitSuf ln: vs.line col: vs.col tname: vs.tname.stringView
             }
         }
     }
@@ -3410,14 +3669,14 @@ Analysis: class {
     # emitConv -- L015 / L031 caret + safe fix: delete the `.member` conversion
     # span.
     emitConv: function {
-        :this
+        t: this
         ln: u32
         col: u32
         mname: StringView
         msg: String.take
         code: StringView
     } is {
-        srcOwned: this.source.copy
+        srcOwned: t.source.copy
         sv: srcOwned.stringView
         lineStart: lineStartIndex src: sv
         srcLines: linesOf src: sv
@@ -3426,7 +3685,7 @@ Analysis: class {
         if byteStart > 0 then lo = byteStart - 1
         hi: byteStart + mname.length
         (
-            this.warnFix
+            t.warnFix
             :code
             :msg
             line: ln
@@ -3445,7 +3704,7 @@ Analysis: class {
     # one. A typedef does not widen implicitly and is never reported; neither is
     # a suffixed literal (`5.u32`), which is a literal's type, not a conversion.
     wideningRedundant: function {
-        :this
+        t: this
         ast: Ast.view
         opId: zast.nodeid
         destTid: ztypes.tid
@@ -3478,7 +3737,7 @@ Analysis: class {
         # types as a numeric -- `.bits`, `.length` -- is not one
         if (st.reg.nameOf tid: destTid).stringView != mname then return
         (
-            this.emitConv
+            t.emitConv
             ln: cln
             col: ccl
             mname: mname.stringView
@@ -3490,7 +3749,7 @@ Analysis: class {
     # convReturned -- wideningRedundant for a `return`, against the enclosing
     # function's declared return type.
     convReturned: function {
-        :this
+        t: this
         ast: Ast.view
         arguments: zast.kidspan
         st: zenv.ZSymbolTable
@@ -3500,7 +3759,7 @@ Analysis: class {
         rarg: ast.nodes.get i: (zast.kidAt kids: ast.kids span: arguments i: 0)
         if rarg.namedoperation.not then return
         rt: ztyping.nodeTypeAt tbl: st.typing.nodeType nid: funcretId
-        this.wideningRedundant :ast opId: rarg.operation destTid: rt :st
+        t.wideningRedundant :ast opId: rarg.operation destTid: rt :st
     }
 
     # slConvArg -- one call argument: flag a redundant StringLike conversion.
@@ -3510,7 +3769,7 @@ Analysis: class {
     # is a generic constrained StringLike (either string form is accepted
     # directly); B is skipped for a `.take` parameter (it keeps the value).
     slConvArg: function {
-        :this
+        t: this
         ast: Ast.view
         opId: zast.nodeid
         originTid: ztypes.tid
@@ -3556,7 +3815,7 @@ Analysis: class {
         if bt.isZero then return
         if (ztypecheck.isStringViewMember nameId: cnId) when bt == strTid then {
             (
-                this.emitConv
+                t.emitConv
                 ln: cln
                 col: ccl
                 mname: "stringView"
@@ -3574,7 +3833,7 @@ Analysis: class {
             own: ztypes.zparamownership.takeMode
         ).not then {
             (
-                this.emitConv
+                t.emitConv
                 ln: cln
                 col: ccl
                 mname: cn.stringView
@@ -3623,7 +3882,7 @@ Analysis: class {
     # slConvCall -- L015 over one call: resolve the callee's template and
     # check each argument's conversion shape against its parameter.
     slConvCall: function {
-        :this
+        t: this
         ast: Ast.view
         callNid: zast.nodeid
         callable: astnode.view
@@ -3634,7 +3893,7 @@ Analysis: class {
     } is {
         ck: st.typing.callKind.get key: callNid
         if ck.some when ck.returnCall then {
-            this.convReturned :ast :arguments :st :funcretId
+            t.convReturned :ast :arguments :st :funcretId
             return
         }
         callee: ztypes.tid
@@ -3671,16 +3930,16 @@ Analysis: class {
             an: zast.nameTextAt :ast ref: arg.name
             pidx: optionval.none u64
             if an.length > 0 then {
-                pidx = this.paramIndexByLabel :names label: an.stringView
+                pidx = t.paramIndexByLabel :names label: an.stringView
             } else if firstArg then {
                 # the elided first label binds the first non-receiver param
-                pidx = this.firstNonReceiverParam :names :nameIds thisPn: thisPn.stringView
+                pidx = t.firstNonReceiverParam :names :nameIds thisPn: thisPn.stringView
             }
             firstArg = false
             if pidx.none then continue
-            this.wideningRedundant :ast opId: arg.operation destTid: (ids.get i: pidx) :st
+            t.wideningRedundant :ast opId: arg.operation destTid: (ids.get i: pidx) :st
             (
-                this.slConvArg
+                t.slConvArg
                 :ast
                 opId: arg.operation
                 originTid: origin
@@ -3696,7 +3955,7 @@ Analysis: class {
     # sufNamedArg -- a named call/constructor argument whose suffix the parameter / field type
     # fixes.
     sufNamedArg: function {
-        :this ast: Ast.view arg: astnode.view calleeType: ztypes.tid st: zenv.ZSymbolTable.view
+        t: this ast: Ast.view arg: astnode.view calleeType: ztypes.tid st: zenv.ZSymbolTable.view
     } is {
         if arg.namedoperation then {
             an: zast.nameTextAt :ast ref: arg.name
@@ -3717,7 +3976,7 @@ Analysis: class {
                     if pto.some then {
                         ptn: st.reg.nameOf tid: pto
                         if ptn.stringView == s.tname then {
-                            this.emitSuf ln: s.line col: s.col tname: s.tname.stringView
+                            t.emitSuf ln: s.line col: s.col tname: s.tname.stringView
                         }
                     }
                 }
@@ -3727,18 +3986,18 @@ Analysis: class {
 
     # sufNamedArgReturn -- a return value whose suffix the enclosing function's return type
     # fixes.
-    sufNamedArgReturn: function {:this ast: Ast.view arg: astnode.view rtName: StringView} is {
+    sufNamedArgReturn: function {t: this ast: Ast.view arg: astnode.view rtName: StringView} is {
         match (
             arg
         ) case namedoperation then {
             s: operandSuffix :ast n: (ast.nodes.get i: arg.operation)
             if s.tname.length > 0 when s.tname.stringView == rtName then {
-                this.emitSuf ln: s.line col: s.col tname: s.tname.stringView
+                t.emitSuf ln: s.line col: s.col tname: s.tname.stringView
             }
         } else {
             s8: operandSuffix :ast n: arg
             if s8.tname.length > 0 when s8.tname.stringView == rtName then {
-                this.emitSuf ln: s8.line col: s8.col tname: s8.tname.stringView
+                t.emitSuf ln: s8.line col: s8.col tname: s8.tname.stringView
             }
         }
     }
@@ -3746,7 +4005,7 @@ Analysis: class {
     # sufCall -- redundant suffixes in a call: a `return` uses the enclosing function's return
     # type; otherwise each named argument's parameter type.
     sufCall: function {
-        :this
+        t: this
         ast: Ast.view
         callNid: zast.nodeid
         callable: astnode.view
@@ -3762,7 +4021,7 @@ Analysis: class {
             if rtName.length > 0 then {
                 for each aId: (zast.kidsOf :ast span: arguments) loop {
                     (
-                        this.sufNamedArgReturn
+                        t.sufNamedArgReturn
                         :ast
                         arg: (ast.nodes.get i: aId)
                         rtName: rtName.stringView
@@ -3774,7 +4033,7 @@ Analysis: class {
             co: ztyping.nodeTypeAt tbl: st.typing.nodeType nid: cInfo.id
             if co.notZero then {
                 for each aId: (zast.kidsOf :ast span: arguments) loop {
-                    this.sufNamedArg :ast arg: (ast.nodes.get i: aId) calleeType: co :st
+                    t.sufNamedArg :ast arg: (ast.nodes.get i: aId) calleeType: co :st
                 }
             }
         }
@@ -3788,7 +4047,7 @@ Analysis: class {
     # result happens to be an instance -- is not a generic reference. The safe
     # fix deletes the label up to its value.
     elideCall: function {
-        :this
+        t: this
         # the project tree the linted unit was checked in
         ast: Ast.view
         # the call node, whose stamp is the instance the reference names
@@ -3814,20 +4073,20 @@ Analysis: class {
             arg
         ) case namedoperation then {
             if arg.name != first then return
-            if this.lineStart.length == 0 then this.lineStart = (
+            if t.lineStart.length == 0 then t.lineStart = (
                 lineStartIndex
-                src: this.source.stringView
+                src: t.source.stringView
             )
             label: zast.nameTextAt :ast ref: arg.name
             # the edit is the label, its colon and the spaces after it, read
             # from the source: the value may open with a paren its node does
             # not start at
-            srcOwned: this.source.copy
+            srcOwned: t.source.copy
             sv: srcOwned.stringView
             lo: (
                 tokByteStart
-                lineStart: this.lineStart
-                srcLines: this.lines
+                lineStart: t.lineStart
+                srcLines: t.lines
                 lineno: arg.lineno
                 colno: arg.colno
             )
@@ -3837,7 +4096,7 @@ Analysis: class {
             if (sv.substring from: lo to: hi) != expect then return
             for hi < sv.length while ((sv.byteAt i: hi).or d: 0) == 32 loop hi = hi + 1
             (
-                this.warnFix
+                t.warnFix
                 code: "L003"
                 msg: "redundant `\{label}:` label on a generic reference's first argument"
                 line: arg.lineno
@@ -3854,7 +4113,7 @@ Analysis: class {
     # `x.isZero.not` where the type of `x` declares `notZero`, and `o.none.not`
     # on an option, whose other arm is `some`. The fix writes the twin over the
     # two names; it is offered only when one dot on one line joins them.
-    negatedTwin: function {:this ast: Ast.view n: zast.dottedpathrow st: zenv.ZSymbolTable} is {
+    negatedTwin: function {t: this ast: Ast.view n: zast.dottedpathrow st: zenv.ZSymbolTable} is {
         notAtom: ast.nodes.get i: n.child
         if (zast.atomNameIdOf n: notAtom) != zast.wellKnown.slot.wkNot then return
         inner: ast.nodes.get i: n.parent
@@ -3881,26 +4140,26 @@ Analysis: class {
         np: zast.posOf n: notAtom
         msg: "`\{testText}.not` has a positive twin: write `\{twin}`"
         if (np.line != tp.line) or (np.col != (tp.col + testLen + 1)) then {
-            this.warn code: "L033" :msg line: tp.line col: tp.col width: testLen
+            t.warn code: "L033" :msg line: tp.line col: tp.col width: testLen
             return
         }
         lo: (
             tokByteStart
-            lineStart: this.lineStart
-            srcLines: this.lines
+            lineStart: t.lineStart
+            srcLines: t.lines
             lineno: tp.line
             colno: tp.col
         )
         width: testLen + 4
         hi: lo + width
-        this.warnFix code: "L033" :msg line: tp.line col: tp.col :width :lo :hi repl: twin.string
+        t.warnFix code: "L033" :msg line: tp.line col: tp.col :width :lo :hi repl: twin.string
     }
 
     # walkSuf -- preorder over the subtree running the typecheck-based suffix check, threading
     # the enclosing function's return type for `return`s. The arms a check reads are spelled;
     # every child is visited through zast.childIds.
     walkSuf: function {
-        :this
+        t: this
         ast: Ast.view
         n: astnode.view
         uname: StringView
@@ -3914,7 +4173,7 @@ Analysis: class {
                 blS: ast.nodes.get i: ipS.lhs
                 brS: ast.nodes.get i: ipS.rhs
                 (
-                    this.sufBinop
+                    t.sufBinop
                     :ast
                     lhs: blS
                     rhs: brS
@@ -3930,7 +4189,7 @@ Analysis: class {
             n
         ) case call then {
             (
-                this.sufCall
+                t.sufCall
                 :ast
                 callNid: n.nodeid
                 callable: (ast.nodes.get i: n.callable)
@@ -3939,7 +4198,7 @@ Analysis: class {
                 :funcretId
             )
             (
-                this.slConvCall
+                t.slConvCall
                 :ast
                 callNid: n.nodeid
                 callable: (ast.nodes.get i: n.callable)
@@ -3948,7 +4207,7 @@ Analysis: class {
                 :funcretId
             )
             (
-                this.elideCall
+                t.elideCall
                 :ast
                 callNid: n.nodeid
                 callable: (ast.nodes.get i: n.callable)
@@ -3958,37 +4217,37 @@ Analysis: class {
         } case reassignment then {
             tpn: ast.nodes.get i: n.topath
             rvn: ast.nodes.get i: n.value
-            this.sufReassign :ast topath: tpn value: rvn :st
+            t.sufReassign :ast topath: tpn value: rvn :st
             rtt: ztyping.nodeTypeAt tbl: st.typing.nodeType nid: n.topath
-            this.wideningRedundant :ast opId: n.value destTid: rtt :st
+            t.wideningRedundant :ast opId: n.value destTid: rtt :st
         } case assignment then {
-            if this.sufFnDepth > 0 then (
-                this.tryBareZeroInit
+            if t.sufFnDepth > 0 then (
+                t.tryBareZeroInit
                 :ast
                 value: (ast.nodes.get i: n.value)
                 :st
             )
         } case dottedpath then {
-            this.negatedTwin :ast :n :st
+            t.negatedTwin :ast :n :st
         } case functiondef then {
             # the function's own return type is the funcret for everything below it
-            this.walkSufRet :ast retId: n.returntype :uname :st
-            this.walkSufIds :ast ids: n.parameters :uname :st funcretId: n.returntype
-            this.sufFnDepth = this.sufFnDepth + 1
-            this.walkSufOptAt :ast oId: n.body :uname :st funcretId: n.returntype
-            this.sufFnDepth = this.sufFnDepth - 1
-            this.walkSufIds :ast ids: n.asItems :uname :st funcretId: n.returntype
+            t.walkSufRet :ast retId: n.returntype :uname :st
+            t.walkSufIds :ast ids: n.parameters :uname :st funcretId: n.returntype
+            t.sufFnDepth = t.sufFnDepth + 1
+            t.walkSufOptAt :ast oId: n.body :uname :st funcretId: n.returntype
+            t.sufFnDepth = t.sufFnDepth - 1
+            t.walkSufIds :ast ids: n.asItems :uname :st funcretId: n.returntype
             return
         } else null
         sl9: zast.childIds :ast :n
         for each s9: sl9 loop {
-            this.walkSuf :ast n: (ast.nodes.get i: s9) :uname :st :funcretId
+            t.walkSuf :ast n: (ast.nodes.get i: s9) :uname :st :funcretId
         }
     }
 
     # walk a list of children for the numeric-suffix rule
     walkSufIds: function {
-        :this
+        t: this
         ast: Ast.view
         ids: zast.kidspan
         uname: StringView
@@ -3996,13 +4255,13 @@ Analysis: class {
         funcretId: zast.nodeid
     } is {
         for each c: (zast.kidsOf :ast span: ids) loop {
-            this.walkSuf :ast n: (ast.nodes.get i: c) :uname :st :funcretId
+            t.walkSuf :ast n: (ast.nodes.get i: c) :uname :st :funcretId
         }
     }
 
     # walkSufOptAt -- the id-taking entry (0 = absent).
     walkSufOptAt: function {
-        :this
+        t: this
         ast: Ast.view
         oId: zast.nodeid
         uname: StringView
@@ -4011,32 +4270,32 @@ Analysis: class {
     } is {
         if oId.isZero then return
         o: ast.nodes.get i: oId
-        this.walkSuf :ast n: o :uname :st :funcretId
+        t.walkSuf :ast n: o :uname :st :funcretId
     }
 
     # a functiondef returntype doubles as its own funcret: this frame lets
     # the two arguments share one root without aliasing one source path
     walkSufRet: function {
-        :this ast: Ast.view retId: zast.nodeid uname: StringView st: zenv.ZSymbolTable
+        t: this ast: Ast.view retId: zast.nodeid uname: StringView st: zenv.ZSymbolTable
     } is {
         if retId.isZero then return
         r: ast.nodes.get i: retId
-        this.walkSuf :ast n: r :uname :st funcretId: retId
+        t.walkSuf :ast n: r :uname :st funcretId: retId
     }
 
     # lintSuffixUnit -- run the suffix check over the linted unit.
-    lintSuffixUnit: function {:this prog: Ast.view lu: LintedUnit.view st: zenv.ZSymbolTable} is {
+    lintSuffixUnit: function {t: this prog: Ast.view lu: LintedUnit.view st: zenv.ZSymbolTable} is {
         uk: ztypecheck.unitdefNodeId ast: prog nId: lu.op
         ut: (st.typing.unitTypesById.get key: uk).or d: ztypes.tid.zero
-        this.sufSite = ztypes.declid
-        if ut.notZero then this.sufSite = (
+        t.sufSite = ztypes.declid
+        if ut.notZero then t.sufSite = (
             ztypecheck.templateDeclOf
             reg: st.reg
             typing: st.typing
             tid: ut
         )
         (
-            this.walkSuf
+            t.walkSuf
             ast: prog
             n: (prog.nodes.get i: lu.op)
             uname: lu.name.stringView
@@ -4050,7 +4309,7 @@ Analysis: class {
     # cannot run -- a root that is not a directory, a unit not found, a dependency that does not
     # parse -- is reported as an error naming why: `--full` never passes a file it did not check.
     checkSuffix: function {
-        :this
+        t: this
         srcdirs: (List String).view
         systemdir: StringView
         layer: zcheck.GenLayer.view
@@ -4061,28 +4320,28 @@ Analysis: class {
         # the prelude the parse shares (zparser.PreludeStore)
         prelude: zparser.PreludeStore
     } is {
-        if (this.rootsReady :srcdirs :systemdir).not then return
+        if (t.rootsReady :srcdirs :systemdir).not then return
         vfs: zcheck.newVfs
         # the roots as zc binds them, the first --src searched first
-        own: suffixRoots :srcdirs file: this.path.stringView :dataFile
+        own: suffixRoots :srcdirs file: t.path.stringView :dataFile
         roots: zcheck.buildRoots :vfs :systemdir srcdirs: own :layer
         rootid: roots.root
-        p: zparser.Parser.create ext: (unitFileExt file: this.path.stringView)
+        p: zparser.Parser.create ext: (unitFileExt file: t.path.stringView)
         prog: p.parseShared :vfs :rootid mainUnitName: uname.string store: prelude
         # a failed parse names its error as the tree's root row. The test is a
         # call so no lock outlives it: typecheck below takes the tree.
         if (zast.isErrorAt ast: prog id: prog.root) then {
-            this.reportUnparsedProject :prog :vfs :srcdirs :uname
+            t.reportUnparsedProject :prog :vfs :srcdirs :uname
         } else {
             # the unit this FILE is, found by the file and never by name: a
             # subunit is found inside its parent, and a same-named unit another
             # root answers is not this file
-            self: this.selfFsnoOf :vfs :prog
+            self: t.selfFsnoOf :vfs :prog
             lu: lintedUnitOf :prog :self
             if lu.op.isZero then {
                 mw: "no unit the roots load for '\{uname}' comes from this file (a subunit loads only when its parent names it)"
                 (
-                    this.reportTierSkipped
+                    t.reportTierSkipped
                     errv: zast.err.badReference
                     cause: mw.stringView
                     note: String
@@ -4101,29 +4360,29 @@ Analysis: class {
                 filePaths: (ztypecheck.filePathsOf :vfs ast: prog)
             )
             if dataFile then zcheck.dataRefusals :prog :vfs :st
-            this.reportTypeErrors :st :prog
-            this.placeForeignDiags :vfs :self
+            t.reportTypeErrors :st :prog
+            t.placeForeignDiags :vfs :self
             # the rules below read what the typecheck STAMPED. On a failed
             # typecheck that evidence is partial, so they would report from it
             # rather than about it. A data file's definitions are read by the
             # program that opens it, which no check here sees: none is unused
             if st.typing.errors.length == 0 then {
-                this.lintSuffixUnit :prog :lu :st
-                if dataFile.not then this.reportUnusedDefs :prog :lu :st
-                this.reportUnusedVars :prog :lu :st
-                this.reportViewableLocals :prog :lu :st
-                if this.opts.arch then this.reportArch :prog :lu :st :srcdirs :systemdir
+                t.lintSuffixUnit :prog :lu :st
+                if dataFile.not then t.reportUnusedDefs :prog :lu :st
+                t.reportUnusedVars :prog :lu :st
+                t.reportViewableLocals :prog :lu :st
+                if t.opts.arch then t.reportArch :prog :lu :st :srcdirs :systemdir
             }
         }
     }
 
     # rootsReady -- whether every root the typecheck tier registers is a
     # directory; a missing one is reported as the reason the tier did not run.
-    rootsReady: function {:this srcdirs: (List String).view systemdir: StringView} out bool is {
+    rootsReady: function {t: this srcdirs: (List String).view systemdir: StringView} out bool is {
         cause: zcheck.missingRootCause :systemdir :srcdirs
         if cause.length == 0 then return true
         (
-            this.reportTierSkipped
+            t.reportTierSkipped
             errv: zast.err.ioError
             cause: cause.stringView
             note: String
@@ -4136,13 +4395,13 @@ Analysis: class {
     # did not run: this unit is under no src root, or a unit it loads does not
     # parse. A parse error in the file itself is already the fast tier's report.
     reportUnparsedProject: function {
-        :this
+        t: this
         prog: Ast.view
         vfs: zvfs.ZVfs
         srcdirs: (List String).view
         uname: StringView
     } is {
-        if this.parseErrorCount > 0 then return
+        if t.parseErrorCount > 0 then return
         progRoot: prog.nodes.get i: prog.root
         match (
             progRoot
@@ -4156,7 +4415,7 @@ Analysis: class {
                 }
                 mu: "unit '\{uname}' is under none of the src roots (\{roots})"
                 (
-                    this.reportTierSkipped
+                    t.reportTierSkipped
                     errv: e.err
                     cause: mu.stringView
                     note: String
@@ -4172,7 +4431,7 @@ Analysis: class {
             }
             where.append (zast.errorLine :e)
             (
-                this.reportTierSkipped
+                t.reportTierSkipped
                 errv: e.err
                 cause: "a unit it loads does not parse"
                 note: where.take
@@ -4184,7 +4443,7 @@ Analysis: class {
     # reportTierSkipped -- the typecheck tier did not run for this file: an
     # error naming why, and what names the piece it could not find.
     reportTierSkipped: function {
-        :this
+        t: this
         errv: zast.err
         cause: StringView
         note: String.take
@@ -4203,18 +4462,18 @@ Analysis: class {
             :note
             hint: hint.string
         )
-        this.diags.append d
+        t.diags.append d
     }
 
     # placeForeignDiags -- a diagnostic the typecheck found in another file than
     # this one names that file and shows its line. The project's file system
     # is gone once the tier returns, so each is placed now.
-    placeForeignDiags: function {:this vfs: zvfs.ZVfs.view self: zvfs.fsno} is {
-        n: this.diags.length
+    placeForeignDiags: function {t: this vfs: zvfs.ZVfs.view self: zvfs.fsno} is {
+        n: t.diags.length
         i: u64
         for i < n loop {
-            f: (this.diags.get :i).fsno
-            ln: (this.diags.get :i).lineno
+            f: (t.diags.get :i).fsno
+            ln: (t.diags.get :i).lineno
             if f.notZero when (f == self).not then {
                 fp: vfs.displayPath dentryid: f
                 srcLine: String
@@ -4227,7 +4486,7 @@ Analysis: class {
                     }
                 }
                 at: DiagSrc path: fp.take line: srcLine.take :hasLine
-                this.elsewhere.set key: i.u32.orPanic value: at.take
+                t.elsewhere.set key: i.u32.orPanic value: at.take
             }
             i = i + 1
         }
@@ -4255,7 +4514,7 @@ Analysis: class {
     # on a unit that is not a program.
     # A typecheck error stamps fsno 0, so its file is the one its node is in,
     # as zc reads it; 0 still (this file) when it names no node.
-    reportTypeErrors: function {:this st: zenv.ZSymbolTable.view prog: Ast.view} is {
+    reportTypeErrors: function {t: this st: zenv.ZSymbolTable.view prog: Ast.view} is {
         for each er: st.typing.errors loop {
             ef: er.fsno
             if ef.isZero when er.nodeid.notZero then ef = prog.fsnoForNode nodeid: er.nodeid
@@ -4270,7 +4529,7 @@ Analysis: class {
                 note: er.note.copy
                 hint: er.hint.copy
             )
-            this.diags.append d
+            t.diags.append d
         }
     }
 
@@ -4286,14 +4545,14 @@ Analysis: class {
     # is by name: conservative, so a same-named field elsewhere hides a hit
     # rather than inventing one.
     reportArch: function {
-        :this
+        t: this
         prog: Ast.view
         lu: LintedUnit.view
         st: zenv.ZSymbolTable.view
         srcdirs: (List String).view
         systemdir: StringView
     } is {
-        this.reportMissingPublic ast: prog :lu
+        t.reportMissingPublic ast: prog :lu
         {
             mainOp: lu.op
             uname: lu.name.stringView
@@ -4309,7 +4568,7 @@ Analysis: class {
                     di = di.next
                 }
             }
-            this.archWalk ast: prog nId: mainOp :namedIds
+            t.archWalk ast: prog nId: mainOp :namedIds
             # A007 speaks only for a top-level unit that lives under one of the
             # roots; a subunit exports nothing past its parent
             inSrc: false
@@ -4319,7 +4578,7 @@ Analysis: class {
                 if (du.contains item: uname.string) then inSrc = true
             }
             if inSrc.not then return
-            this.reportUnusedExports ast: prog unitId: mainOp :uname :srcdirs
+            t.reportUnusedExports ast: prog unitId: mainOp :uname :srcdirs
             readNames: Set String
             for each d2: srcdirs loop {
                 projectReadNames dir: d2.stringView into: readNames
@@ -4330,7 +4589,7 @@ Analysis: class {
                 m: prog.nodes.get i: mId
                 if m.namedoperation then {
                     tn: zast.poolTextAt pool: prog.names ref: m.name
-                    this.archFields ast: prog opId: m.operation :readNames typeName: tn.stringView
+                    t.archFields ast: prog opId: m.operation :readNames typeName: tn.stringView
                 }
             }
         }
@@ -4340,7 +4599,7 @@ Analysis: class {
     # surface is then every top-level definition, so L012 can judge none of
     # them unused. A subunit, hidden or inline, exports nothing past its
     # parent and is not asked.
-    reportMissingPublic: function {:this ast: Ast.view lu: LintedUnit.view} is {
+    reportMissingPublic: function {t: this ast: Ast.view lu: LintedUnit.view} is {
         if lu.names.length != 1 then return
         bodyIds: zast.unitBodyIdsAt :ast unitId: lu.op
         for each mId: (zast.kidsOf :ast span: bodyIds) loop {
@@ -4348,7 +4607,7 @@ Analysis: class {
             if m.namedoperation when m.name == zast.wellKnown.slot.wkPublic then return
         }
         (
-            this.info
+            t.info
             code: "A012"
             msg: "unit `\{lu.name}` has no `public:` block, so every definition is public; list what other units read, and L012 judges the rest"
             line: 1
@@ -4365,7 +4624,7 @@ Analysis: class {
     # of them under --src. The read evidence is by name: conservative, so a
     # same-named read elsewhere hides a hit rather than inventing one.
     reportUnusedExports: function {
-        :this
+        t: this
         ast: Ast.view
         unitId: zast.nodeid
         uname: StringView
@@ -4386,7 +4645,7 @@ Analysis: class {
                 opId: m.operation
                 k: zast.unitkind.publicNs
             ) then {
-                this.reportUnreadExportsIn :ast opId: m.operation :reads :mainId
+                t.reportUnreadExportsIn :ast opId: m.operation :reads :mainId
             }
         }
     }
@@ -4394,7 +4653,7 @@ Analysis: class {
     # reportUnreadExportsIn -- each `:name` of one public block that `reads` lacks;
     # the block's items are the labels' named operations.
     reportUnreadExportsIn: function {
-        :this
+        t: this
         ast: Ast.view
         opId: zast.nodeid
         reads: (Set String).view
@@ -4408,7 +4667,7 @@ Analysis: class {
                     nm: zast.poolTextAt pool: ast.names ref: lv.name
                     if (reads.has item: nm).not when lv.name != mainId then {
                         (
-                            this.info
+                            t.info
                             code: "A007"
                             msg: "export `\{nm}` is read by no other unit under --src; make it private and let L012 judge it"
                             line: lv.lineno
@@ -4423,7 +4682,7 @@ Analysis: class {
 
     # archFields -- A004 over one record / class definition of this unit.
     archFields: function {
-        :this ast: Ast.view opId: zast.nodeid readNames: (Set String).view typeName: StringView
+        t: this ast: Ast.view opId: zast.nodeid readNames: (Set String).view typeName: StringView
     } is {
         n: ast.nodes.get i: opId
         if n.objectdef then {
@@ -4439,7 +4698,7 @@ Analysis: class {
                     fnm: zast.poolTextAt pool: ast.names ref: m.name
                     if mop.functiondef.not when (readNames.has item: fnm).not then {
                         (
-                            this.warn
+                            t.warn
                             code: "A004"
                             msg: "field `\{typeName}.\{fnm}` is written and never read anywhere in the project"
                             line: m.lineno
@@ -4454,7 +4713,7 @@ Analysis: class {
 
     # archWalk -- A003 at every literal compare of the unit's subtree.
     archWalk: function {
-        :this ast: Ast.view nId: zast.nodeid namedIds: (IdSet zast.nameid).view
+        t: this ast: Ast.view nId: zast.nodeid namedIds: (IdSet zast.nameid).view
     } is {
         n: ast.nodes.get i: nId
         if (hiddenSubunitAt :ast :n) then return
@@ -4464,20 +4723,20 @@ Analysis: class {
             if ipA.found then {
                 opA: zast.atomNameIdOf n: (ast.nodes.get i: ipA.operator)
                 if (opA == zast.wellKnown.slot.wkOpEq) or (opA == zast.wellKnown.slot.wkOpNe) then {
-                    this.archNamedLiteral :ast id: ipA.lhs :namedIds
-                    this.archNamedLiteral :ast id: ipA.rhs :namedIds
+                    t.archNamedLiteral :ast id: ipA.lhs :namedIds
+                    t.archNamedLiteral :ast id: ipA.rhs :namedIds
                 }
             }
         }
         for each c: kids loop {
-            this.archWalk :ast nId: c :namedIds
+            t.archWalk :ast nId: c :namedIds
         }
     }
 
     # a named argument whose value is a literal, which the composed-key rule
     # reads
     archNamedLiteral: function {
-        :this ast: Ast.view id: zast.nodeid namedIds: (IdSet zast.nameid).view
+        t: this ast: Ast.view id: zast.nodeid namedIds: (IdSet zast.nameid).view
     } is {
         n: ast.nodes.get i: id
         txt: plainLiteralText :ast :n
@@ -4486,7 +4745,7 @@ Analysis: class {
             if nid.notZero when (namedIds.has item: nid) then {
                 p: zast.posOf :n
                 (
-                    this.warn
+                    t.warn
                     code: "A003"
                     msg: "`\{txt}` names a unit or a type of the program; compare its declaration or type id, not its spelling"
                     line: p.line
@@ -4552,7 +4811,7 @@ Analysis: class {
     # argument) and `checkWriteLock` (assignment and swap targets) -- so this
     # agrees with the lock rules by construction.
     reportUnmutatedParam: function {
-        :this
+        t: this
         ast: Ast.view
         st: zenv.ZSymbolTable
         fnOp: zast.nodeid
@@ -4565,7 +4824,7 @@ Analysis: class {
         vt: st.reg.variableTypeOf id: vid
         if vt.isZero then return
         if (st.reg.isReftypeOf tid: vt).not then return
-        if (this.isBuiltinCarrierTid :ast :st tid: vt) then return
+        if (t.isBuiltinCarrierTid :ast :st tid: vt) then return
         ftid: ztyping.nodeTypeAt tbl: st.typing.nodeType nid: fnOp
         if ftid.isZero then return
         own: st.typing.declOwnershipOfId parentTypeId: ftid nameId: nameRef
@@ -4574,7 +4833,7 @@ Analysis: class {
         if mutable.not then return
         pnm: zast.poolTextAt pool: ast.names ref: nameRef
         (
-            this.info
+            t.info
             code: "L020"
             msg: "parameter '\{pnm}' is never mutated -- declare it `.view` so callers may keep reading the argument across the call"
             :line
@@ -4591,7 +4850,7 @@ Analysis: class {
     # `.borrow` parameter too (markValtypeBorrowArg). A generic parameter is
     # not asked: its `.borrow` follows the type it is instantiated with.
     reportValtypeBorrowParam: function {
-        :this
+        t: this
         ast: Ast.view
         st: zenv.ZSymbolTable.view
         fnOp: zast.nodeid
@@ -4612,7 +4871,7 @@ Analysis: class {
         if ownM != ztypes.zparamownership.borrowMode then return
         pnm: zast.poolTextAt pool: ast.names ref: nameRef
         (
-            this.warn
+            t.warn
             code: "L030"
             msg: "parameter '\{pnm}' is a value type the body never mutates -- drop `.borrow` to take a copy, or write `.view`"
             :line
@@ -4631,7 +4890,7 @@ Analysis: class {
     # neither is a method implementing a spec member: its receiver is the
     # spec's.
     reportUnmutatedReceiver: function {
-        :this
+        t: this
         ast: Ast.view
         st: zenv.ZSymbolTable.view
         fnOp: zast.nodeid
@@ -4650,7 +4909,7 @@ Analysis: class {
             vt: (st.reg.variableTypeOf id: vo).u64
             if vt == 0 then return
             (
-                this.warn
+                t.warn
                 code: "L027"
                 msg: "receiver `this` is never mutated -- declare it `t: this.view` so callers may keep reading the object across the call".string
                 :line
@@ -4661,10 +4920,10 @@ Analysis: class {
     }
 
     # warnUnusedParam -- L014: a parameter no read reaches.
-    warnUnusedParam: function {:this prog: Ast.view site: zast.namedsite} is {
+    warnUnusedParam: function {t: this prog: Ast.view site: zast.namedsite} is {
         pnm: zast.poolTextAt pool: prog.names ref: site.name
         (
-            this.warn
+            t.warn
             code: "L014"
             msg: "parameter '\{pnm}' is never used (drop it with `\{pnm}.drop` if intentional)"
             line: site.line
@@ -4678,7 +4937,7 @@ Analysis: class {
     # use; every other parameter takes L020 when it is read but never written
     # and L014 when no read reaches it at all.
     reportParamAt: function {
-        :this
+        t: this
         prog: Ast.view
         st: zenv.ZSymbolTable
         used: (IdSet ztypes.vid).view
@@ -4693,7 +4952,7 @@ Analysis: class {
         if isRecv.not then isRecv = ztypecheck.paramIsThisReceiverId ast: prog opId: pOpId
         if isRecv then {
             (
-                this.reportUnmutatedReceiver
+                t.reportUnmutatedReceiver
                 ast: prog
                 :st
                 fnOp: fop
@@ -4708,7 +4967,7 @@ Analysis: class {
             umut: st.typing.variableMutated.has item: vo
             if (used.has item: vo) when umut.not then {
                 (
-                    this.reportValtypeBorrowParam
+                    t.reportValtypeBorrowParam
                     ast: prog
                     :st
                     fnOp: fop
@@ -4718,7 +4977,7 @@ Analysis: class {
                     col: site.col
                 )
                 (
-                    this.reportUnmutatedParam
+                    t.reportUnmutatedParam
                     ast: prog
                     :st
                     fnOp: fop
@@ -4728,13 +4987,13 @@ Analysis: class {
                     col: site.col
                 )
             }
-            if (used.has item: vo).not then this.warnUnusedParam :prog :site
+            if (used.has item: vo).not then t.warnUnusedParam :prog :site
         }
     }
 
     # reportParamsOf -- every parameter of one function definition.
     reportParamsOf: function {
-        :this
+        t: this
         prog: Ast.view
         st: zenv.ZSymbolTable
         used: (IdSet ztypes.vid).view
@@ -4742,7 +5001,7 @@ Analysis: class {
     } is {
         paramIds: fnParamIds :prog :fop
         for each pid: paramIds loop {
-            this.reportParamAt :prog :st :used :fop site: (zast.namedSiteAt ast: prog nid: pid)
+            t.reportParamAt :prog :st :used :fop site: (zast.namedSiteAt ast: prog nid: pid)
         }
     }
 
@@ -4754,7 +5013,7 @@ Analysis: class {
     # by its own walk, and lending the table under that pin is the shape
     # usedDeclSet was rewritten to avoid.
     reportUnusedLocalAt: function {
-        :this
+        t: this
         prog: Ast.view
         used: (IdSet ztypes.vid).view
         mainFsno: zvfs.fsno
@@ -4802,7 +5061,7 @@ Analysis: class {
         }
         if okL.not then return
         (
-            this.warn
+            t.warn
             code: "L013"
             msg: "local '\{nm}' is never used (drop it with `\{nm}.drop` if intentional)"
             line: ln
@@ -4817,19 +5076,21 @@ Analysis: class {
     # assignment bindings in this file and the bindings a `for` writes. The opt-out is to end the
     # variable with `x.drop` on its own line (a name that owns nothing lowers to `(void)(x);`),
     # which stamps a use.
-    reportUnusedVars: function {:this prog: Ast.view lu: LintedUnit.view st: zenv.ZSymbolTable} is {
+    reportUnusedVars: function {
+        t: this prog: Ast.view lu: LintedUnit.view st: zenv.ZSymbolTable
+    } is {
         used: usedVarSet :st wtgt: (writeTargetAtoms :prog)
         mainOp: lu.op
         fnOps: collectFnOps :prog :mainOp
         for each fop: fnOps loop {
-            this.reportParamsOf :prog :st :used :fop
+            t.reportParamsOf :prog :st :used :fop
         }
         if fnOps.length == 0 then return
         mainFsno: prog.fsnoForNode nodeid: (fnOps.get i: 0)
         loopBinds: loopBindingIds :prog
         for each dv: st.typing.defVariableId.iterateItems loop {
             (
-                this.reportUnusedLocalAt
+                t.reportUnusedLocalAt
                 :prog
                 :used
                 :mainFsno
@@ -4927,7 +5188,7 @@ Analysis: class {
     # source path (`ctx.mainName.copy` -> `ctx`), or the zero vid when the source
     # is not rooted at a name.
     convSourceRootVid: function {
-        :this
+        t: this
         ast: Ast.view
         st: zenv.ZSymbolTable.view
         rhsId: zast.nodeid
@@ -4938,9 +5199,9 @@ Analysis: class {
         match (
             rn
         ) case dottedpath then {
-            return (this.convSourceRootVid :ast :st rhsId: rn.parent)
+            return (t.convSourceRootVid :ast :st rhsId: rn.parent)
         } case call then {
-            return (this.convSourceRootVid :ast :st rhsId: rn.callable)
+            return (t.convSourceRootVid :ast :st rhsId: rn.callable)
         } case atomid then {
             avo: st.typing.atomVariableId.get key: rn.nodeid
             if avo.some then {
@@ -4962,7 +5223,7 @@ Analysis: class {
     # the copy is load-bearing (the save/restore idiom around a rebinding
     # setter, and a loop whose tail reassigns the source).
     viewableLocalKind: function {
-        :this
+        t: this
         prog: Ast.view
         st: zenv.ZSymbolTable
         # every variable some atom reads
@@ -4980,8 +5241,8 @@ Analysis: class {
         if (fs == mainFsno).not then return String
         nodeL: prog.nodes.get i: nid
         if nodeL.assignment.not then return String
-        kind: this.owningConvKind ast: prog :st rhsId: nodeL.value
-        rvid: this.convSourceRootVid ast: prog :st rhsId: nodeL.value
+        kind: t.owningConvKind ast: prog :st rhsId: nodeL.value
+        rvid: t.convSourceRootVid ast: prog :st rhsId: nodeL.value
         if rvid.notZero when (st.typing.variableMutated.has item: rvid) then return String
         return kind
     }
@@ -4991,7 +5252,7 @@ Analysis: class {
     # view serves and the allocation is avoidable (`.stringView` at the uses,
     # `asString` at a container probe).
     reportViewableLocals: function {
-        :this prog: Ast.view lu: LintedUnit.view st: zenv.ZSymbolTable
+        t: this prog: Ast.view lu: LintedUnit.view st: zenv.ZSymbolTable
     } is {
         mainOp: lu.op
         mainFsno: unitAnchorFsno :prog :mainOp
@@ -5016,12 +5277,12 @@ Analysis: class {
             nid: dvNodes.get i: dpi
             vid: dvVars.get i: dpi
             dpi = dpi + 1
-            kind: this.viewableLocalKind :prog :st :used :nid :vid :mainFsno
+            kind: t.viewableLocalKind :prog :st :used :nid :vid :mainFsno
             nodeL: prog.nodes.get i: nid
             if kind.length > 0 when nodeL.assignment then {
                 nm: zast.poolTextAt pool: prog.names ref: nodeL.name
                 (
-                    this.info
+                    t.info
                     code: "L022"
                     msg: "local '\{nm}' is an owned copy (\{kind}) that is never mutated -- a borrowed view serves every use (`.stringView`, or `asString` at a probe)"
                     line: nodeL.lineno
@@ -5040,7 +5301,7 @@ Analysis: class {
     # as a fallback, every atom name in the unit's own file segment -- then the unit's
     # members and each type's members are judged against it.
     reportUnusedDefs: function {
-        :this prog: Ast.view lu: LintedUnit.view st: zenv.ZSymbolTable.view
+        t: this prog: Ast.view lu: LintedUnit.view st: zenv.ZSymbolTable.view
     } is {
         mainTid: unitTidOf :prog names: lu.names :st
         if mainTid.isZero then return
@@ -5055,23 +5316,23 @@ Analysis: class {
         usedE: usedDeclSet :prog :st :mainTid :file :um
         refNames: unitAtomNames :prog :file :um
         ev: UnusedEvidence :mainTid :usedE :refNames :memIds
-        this.reportUnusedUnitDefs :prog :st :ev
-        this.reportUnusedTypeMembers :prog :st :ev
+        t.reportUnusedUnitDefs :prog :st :ev
+        t.reportUnusedTypeMembers :prog :st :ev
     }
 
     # reportUnusedUnitDefs -- L012 over the unit's own members
     reportUnusedUnitDefs: function {
-        :this prog: Ast.view st: zenv.ZSymbolTable.view ev: UnusedEvidence.view
+        t: this prog: Ast.view st: zenv.ZSymbolTable.view ev: UnusedEvidence.view
     } is {
         for each mid: ev.memIds loop {
-            this.reportIfUnusedDef :prog :st :ev :mid
+            t.reportIfUnusedDef :prog :st :ev :mid
         }
     }
 
     # reportIfUnusedDef -- L012 for one unit-level member: private, reached by
     # no recorded reference, and named by no atom in the unit's own segment
     reportIfUnusedDef: function {
-        :this prog: Ast.view st: zenv.ZSymbolTable.view ev: UnusedEvidence.view mid: zast.nodeid
+        t: this prog: Ast.view st: zenv.ZSymbolTable.view ev: UnusedEvidence.view mid: zast.nodeid
     } is {
         m: zast.namedSiteAt ast: prog nid: mid
         if m.name.isZero then return
@@ -5082,7 +5343,7 @@ Analysis: class {
         if (ztypecheck.declMemberIsPrivate :st tid: ev.mainTid nameId: m.name) then {
             dnm: zast.poolTextAt pool: prog.names ref: m.name
             (
-                this.warn
+                t.warn
                 code: "L012"
                 msg: "private definition '\{dnm}' is never used"
                 line: m.line
@@ -5095,10 +5356,10 @@ Analysis: class {
     # reportUnusedTypeMembers -- L012 over the `is`/`as` members of each type
     # the unit defines
     reportUnusedTypeMembers: function {
-        :this prog: Ast.view st: zenv.ZSymbolTable.view ev: UnusedEvidence.view
+        t: this prog: Ast.view st: zenv.ZSymbolTable.view ev: UnusedEvidence.view
     } is {
         for each tmid: ev.memIds loop {
-            this.reportUnusedMembersOf :prog :st :ev site: (zast.namedSiteAt ast: prog nid: tmid)
+            t.reportUnusedMembersOf :prog :st :ev site: (zast.namedSiteAt ast: prog nid: tmid)
         }
     }
 
@@ -5106,7 +5367,11 @@ Analysis: class {
     # member defines, a private edge no recorded reference reaches; nothing
     # when the member defines no type
     reportUnusedMembersOf: function {
-        :this prog: Ast.view st: zenv.ZSymbolTable.view ev: UnusedEvidence.view site: zast.namedsite
+        t: this
+        prog: Ast.view
+        st: zenv.ZSymbolTable.view
+        ev: UnusedEvidence.view
+        site: zast.namedsite
     } is {
         typeTid: definedTypeTidOf :prog :st mainTid: ev.mainTid :site
         if typeTid.isZero then return
@@ -5130,7 +5395,7 @@ Analysis: class {
                 ) then {
                     tmnm: zast.poolTextAt pool: prog.names ref: member.name
                     (
-                        this.warn
+                        t.warn
                         code: "L012"
                         msg: "private member '\{tnm}.\{tmnm}' is never used"
                         line: member.line
