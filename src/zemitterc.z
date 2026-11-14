@@ -11216,10 +11216,7 @@ callRhsIsBorrow: function {
     return (typing.returnsReference tid: mfid)
 }
 
-# isSvAsStringNode -- the node is `sv.asString` on a StringView-typed base:
-# the result is a `const String*` cast of the view's address, so a binding or
-# hoist of it is a POINTER local (a 24-byte value copy would read `capacity`
-# past the end of the view).
+# isSvAsStringNode -- the node is `sv.asString` on a StringView-typed base.
 isSvAsStringNode: function {
     ast: Ast.view
     typing: ztyping.ZTyping.view
@@ -20804,15 +20801,13 @@ emitSvAtomBase: function {
             return (stating :facts from: (memberFacts b: bn2F) text: "\{bn2}.size")
         }
         if mnId == zast.wellKnown.slot.wkAsString then {
-            # the cast IS the emission: {size, data} is a prefix of
-            # String, so the view's address is a readonly String
-            accA: "&".string
-            if (isPtrVid :ctx vid: bn2v) then accA = "".string
-            avsF: operandFacts e: bn2F place: false
-            if accA.length > 0 then avsF = addrFacts e: bn2F
+            # a String header over the view's bytes, by value: it owns no
+            # buffer and is only read, so nothing frees or grows it
+            base: bn2.string
+            if (isPtrVid :ctx vid: bn2v) then base = "(*\{bn2})"
             strT: strTypeC :ctx
-            cast: "(const \{strT}*)"
-            return (stating :facts from: avsF text: "(\{cast}\{accA}\{bn2})")
+            hdr: "((\{strT}){ .size = \{base}.size, .data = (char*)\{base}.data, .capacity = 0 })"
+            return (stating :facts from: literalFacts text: hdr)
         }
         if mnId == zast.wellKnown.slot.wkCount then {
             demandSvMember :reg :typing :ctx nameId: zast.wellKnown.slot.wkCount
@@ -25852,8 +25847,7 @@ emitStringBind: function {
 # accounted for. A reference-returning callee hands back `T*`: the binding
 # aliases the source, so it is declared as a pointer and its vid registered,
 # which is what makes every later use emit `->`. Binding it by value would copy
-# the struct and silently lose writes through it. A StringView read as a String
-# is the same shape. Both are asked, in that order, because either may apply.
+# the struct and silently lose writes through it.
 bindAliasCType: function {
     ast: Ast.view
     reg: ztypes.ZTypeRegistry.view
@@ -25868,10 +25862,6 @@ bindAliasCType: function {
     rbf8: refBorrowCalleeFid :ast :reg :typing :ctx n: avn
     if rbf8.notZero when (fnReturnsRefBorrow :reg :typing :ctx fid: rbf8 retTid: ltid) then {
         ctText = refPtrC :typing tid: rbf8 base: ct
-        ctx.ptrVids.append nameVid
-    }
-    if (isSvAsStringNode :ast :typing :ctx n: avn) then {
-        ctText = "const \{ct}*"
         ctx.ptrVids.append nameVid
     }
     return ctText
