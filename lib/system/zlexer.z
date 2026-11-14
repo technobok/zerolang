@@ -398,7 +398,7 @@ hexvalue: function {b: u8} out u8 is {
 # Encode a Unicode codepoint as 1-4 UTF-8 bytes appended to `dst`.
 # Caller is responsible for ensuring cp <= 0x10FFFF -- the \uHHHHHH
 # decoder rejects out-of-range values before invoking this helper.
-utf8_encode_append: function {cp: u64 dst: String} is {
+utf8EncodeAppend: function {cp: u64 dst: String} is {
     if cp < 128 then {
         dst.appendByte cp.u8.orPanic
         return
@@ -638,11 +638,11 @@ Tokenizer: class {
 
     # acceptstringrawtoken -- one run of a raw string's content: RAWC bytes and
     # `"` runs shorter than the delimiter, which are content too, so the run is
-    # one span of the source. A run as long as `delim_len` closes the string. EOL
+    # one span of the source. A run as long as `delimLen` closes the string. EOL
     # and EOF are NOT consumed here; the outer dispatcher routes them to the EOF
     # / EOL branches in `token` on the next call, which re-enters this method
     # afterwards.
-    acceptstringrawtoken: function {:this pool: zast.StringPool delim_len: u8} out token is {
+    acceptstringrawtoken: function {:this pool: zast.StringPool delimLen: u8} out token is {
         line: this.lineno
         col: this.colno
         s0: this.tokpos
@@ -653,11 +653,11 @@ Tokenizer: class {
             dcol: this.colno
             dpos: this.tokpos
             run: u8
-            for this.atchar == ascii.doubleQuote while run < delim_len loop {
+            for this.atchar == ascii.doubleQuote while run < delimLen loop {
                 this.accept
                 run = run + 1
             }
-            if run == delim_len then return (
+            if run == delimLen then return (
                 this.rawRunClose
                 :pool
                 :s0
@@ -708,32 +708,32 @@ Tokenizer: class {
         this.accept
         c = this.atchar
 
-        named_byte: u8
-        named_found: false
+        namedByte: u8
+        namedFound: false
         if c == ascii.lowerN then {
-            named_byte = ascii.lf
-            named_found = true
+            namedByte = ascii.lf
+            namedFound = true
         }
         if c == ascii.lowerT then {
-            named_byte = ascii.ht
-            named_found = true
+            namedByte = ascii.ht
+            namedFound = true
         }
         if c == ascii.lowerB then {
-            named_byte = ascii.bs
-            named_found = true
+            namedByte = ascii.bs
+            namedFound = true
         }
         if c == ascii.backslash then {
-            named_byte = ascii.backslash
-            named_found = true
+            namedByte = ascii.backslash
+            namedFound = true
         }
         if c == ascii.doubleQuote then {
-            named_byte = ascii.doubleQuote
-            named_found = true
+            namedByte = ascii.doubleQuote
+            namedFound = true
         }
-        if named_found then {
+        if namedFound then {
             this.accept
             sc: String
-            sc.appendByte named_byte
+            sc.appendByte namedByte
             return (this.textTok :pool tt: toktype.strChrTok s: sc :at :line :col)
         }
 
@@ -811,7 +811,7 @@ Tokenizer: class {
                 return (this.textTok :pool tt: toktype.errTok s: et :at :line :col)
             }
             sc: String
-            utf8_encode_append cp: val dst: sc
+            utf8EncodeAppend cp: val dst: sc
             return (this.textTok :pool tt: toktype.strChrTok s: sc :at :line :col)
         }
 
@@ -936,15 +936,15 @@ Tokenizer: class {
     stagedToken: function {:this} out token is {
         # EOF stays staged so subsequent calls keep returning it;
         # everything else gets cleared.
-        is_eof: false
+        isEof: false
         match (
             this.nexttok.toktype
         ) case eofTok then {
-            is_eof = true
+            isEof = true
         } else {
-            is_eof = false
+            isEof = false
         }
-        if is_eof then {
+        if isEof then {
             # EOF's staged text is always empty
             return (
                 token
@@ -1033,18 +1033,18 @@ Tokenizer: class {
         # opens a nested brace scope that must be tracked so the
         # matching `}` returns us to STRING (rather than ending the
         # interpolation).
-        push_brace: false
+        pushBrace: false
         match (
             this.statecurrent
         ) case stringexpr then {
-            push_brace = true
+            pushBrace = true
         } case stringexprbrace then {
-            push_brace = true
+            pushBrace = true
         } else {
-            push_brace = false
+            pushBrace = false
         }
         this.accept
-        if push_brace then this.statepush s: tokstatetype.stringexprbrace
+        if pushBrace then this.statepush s: tokstatetype.stringexprbrace
         return (this.byteTok :pool tt: toktype.braceOpenTok s: s0 :line :col)
     }
 
@@ -1058,26 +1058,26 @@ Tokenizer: class {
         # STRINGEXPRBRACE; if that was the last brace under
         # STRINGEXPR, pop STRINGEXPR too so the next byte goes back
         # into STRING.
-        pop_brace: false
+        popBrace: false
         match (
             this.statecurrent
         ) case stringexprbrace then {
-            pop_brace = true
+            popBrace = true
         } else {
-            pop_brace = false
+            popBrace = false
         }
         this.accept
-        if pop_brace then {
+        if popBrace then {
             this.statepop
-            pop_expr: false
+            popExpr: false
             match (
                 this.statecurrent
             ) case stringexpr then {
-                pop_expr = true
+                popExpr = true
             } else {
-                pop_expr = false
+                popExpr = false
             }
-            if pop_expr then this.statepop
+            if popExpr then this.statepop
         }
         return (this.byteTok :pool tt: toktype.braceCloseTok s: s0 :line :col)
     }
@@ -1139,19 +1139,19 @@ Tokenizer: class {
         # under no pushed state the bytes are code
         if this.statestack.length == 0 then return (optionval.none token)
         kind: this.statecurrent
-        in_string: false
-        raw_delim: u8
+        isString: false
+        rawDelim: u8
         match (
             kind
         ) case string then {
-            in_string = true
+            isString = true
         } case stringraw then {
             # narrowed -- `kind` becomes the u8 payload value
-            raw_delim = kind
+            rawDelim = kind
         } else {
-            in_string = false
+            isString = false
         }
-        if in_string then {
+        if isString then {
             if c == ascii.doubleQuote then {
                 this.accept
                 this.statepop
@@ -1159,8 +1159,8 @@ Tokenizer: class {
             }
             return (optionval.some (this.acceptstringtoken :pool))
         }
-        if raw_delim > 0 then {
-            return (optionval.some (this.acceptstringrawtoken :pool delim_len: raw_delim))
+        if rawDelim > 0 then {
+            return (optionval.some (this.acceptstringrawtoken :pool delimLen: rawDelim))
         }
         return (optionval.none token)
     }
@@ -1263,30 +1263,30 @@ Tokenizer: class {
         numbershaped: false
         if isdigit cw then numbershaped = true
         this.acceptRun cls: charflag.identifier
-        e_word: this.tokpos
+        eWord: this.tokpos
         if numbershaped when this.atchar == ascii.dot then {
-            dot_line: this.lineno
-            dot_col: this.colno
-            dot_at: this.tokpos
+            dotLine: this.lineno
+            dotCol: this.colno
+            dotAt: this.tokpos
             this.accept
             if isdigit this.atchar then {
                 this.acceptRun cls: charflag.identifier
-                e_word = this.tokpos
+                eWord = this.tokpos
             } else {
                 this.nexttok = (
                     token
                     toktype: toktype.dotTok
                     width: 1
                     text: (pool.set s: ".")
-                    offset: dot_at
+                    offset: dotAt
                     fsno: this.fsno
-                    lineno: dot_line
-                    colno: dot_col
+                    lineno: dotLine
+                    colno: dotCol
                 )
                 this.hasnext = true
             }
         }
-        return e_word
+        return eWord
     }
 
     # emptyWordToken -- nothing was consumed. After a leading colon that lone
@@ -1296,25 +1296,25 @@ Tokenizer: class {
         :this
         pool: zast.StringPool
         s0: u64
-        s_word: u64
-        has_colonpre: bool
-        colonpre_line: u32
-        colonpre_col: u32
+        sWord: u64
+        hasColonpre: bool
+        colonpreLine: u32
+        colonpreCol: u32
         line: u32
         col: u32
     } out token is {
-        if has_colonpre then {
+        if hasColonpre then {
             return (
                 this.byteTok
                 :pool
                 tt: toktype.errTok
                 s: s0
-                line: colonpre_line
-                col: colonpre_col
+                line: colonpreLine
+                col: colonpreCol
             )
         }
         this.accept
-        return (this.byteTok :pool tt: toktype.errTok s: s_word :line :col)
+        return (this.byteTok :pool tt: toktype.errTok s: sWord :line :col)
     }
 
     # colonPreWordToken -- a word that FOLLOWED a colon. The colon is the token
@@ -1324,25 +1324,25 @@ Tokenizer: class {
         :this
         pool: zast.StringPool
         wid: zast.nameid
-        s_word: u64
-        e_word: u64
+        sWord: u64
+        eWord: u64
         kwfound: bool
         reservedfound: bool
-        word_line: u32
-        word_col: u32
-        colonpre_line: u32
-        colonpre_col: u32
+        wordLine: u32
+        wordCol: u32
+        colonpreLine: u32
+        colonpreCol: u32
     } out token is {
-        stage_tt: toktype.labelPreTok
-        if kwfound or reservedfound then stage_tt = toktype.reservedLabelPreTok
+        stageTt: toktype.labelPreTok
+        if kwfound or reservedfound then stageTt = toktype.reservedLabelPreTok
         this.nexttok = (
             this.idTok
-            tt: stage_tt
+            tt: stageTt
             id: wid
-            s: s_word
-            e: e_word
-            line: word_line
-            col: word_col
+            s: sWord
+            e: eWord
+            line: wordLine
+            col: wordCol
         )
         this.hasnext = true
         return (
@@ -1350,10 +1350,10 @@ Tokenizer: class {
             toktype: toktype.colonTok
             width: 1
             text: (this.colonText :pool)
-            offset: s_word - 1
+            offset: sWord - 1
             fsno: this.fsno
-            lineno: colonpre_line
-            colno: colonpre_col
+            lineno: colonpreLine
+            colno: colonpreCol
         )
     }
 
@@ -1365,30 +1365,30 @@ Tokenizer: class {
     wordToken: function {
         :this pool: zast.StringPool c: u8 s0: u64 line: u32 col: u32
     } out token is {
-        has_colonpre: false
-        colonpre_line: line
-        colonpre_col: col
+        hasColonpre: false
+        colonpreLine: line
+        colonpreCol: col
         cw: c
         if c == ascii.colon then {
-            has_colonpre = true
-            colonpre_line = this.lineno
-            colonpre_col = this.colno
+            hasColonpre = true
+            colonpreLine = this.lineno
+            colonpreCol = this.colno
             this.accept
             cw = this.atchar
         }
-        word_line: this.lineno
-        word_col: this.colno
-        s_word: this.tokpos
-        e_word: this.scanWordSpan :pool c: cw
-        if e_word == s_word then {
+        wordLine: this.lineno
+        wordCol: this.colno
+        sWord: this.tokpos
+        eWord: this.scanWordSpan :pool c: cw
+        if eWord == sWord then {
             return (
                 this.emptyWordToken
                 :pool
                 :s0
-                :s_word
-                :has_colonpre
-                :colonpre_line
-                :colonpre_col
+                :sWord
+                :hasColonpre
+                :colonpreLine
+                :colonpreCol
                 :line
                 :col
             )
@@ -1396,14 +1396,14 @@ Tokenizer: class {
         # the word is interned once, and what it is -- a keyword, a reserved
         # word, a name -- is asked once per distinct text and kept in the
         # pool; the views stay scoped so no lock outlives the lookups
-        wid: this.tokSpanId :pool s: s_word e: e_word
+        wid: this.tokSpanId :pool s: sWord e: eWord
         wcls: pool.classOf id: wid
         kwfound: false
         kwtt: toktype.errTok
         if (wcls == 0) or (wcls == wordclass.keyword) then {
-            kw_res: kwOfId id: wid
-            kwfound = kw_res.found
-            kwtt = kw_res.tt
+            kwRes: kwOfId id: wid
+            kwfound = kwRes.found
+            kwtt = kwRes.tt
             if wcls == 0 then {
                 wcls = wordclass.name
                 if kwfound then {
@@ -1413,26 +1413,26 @@ Tokenizer: class {
             }
         }
         reservedfound: wcls == wordclass.reserved
-        if has_colonpre then {
+        if hasColonpre then {
             return (
                 this.colonPreWordToken
                 :pool
                 :wid
-                :s_word
-                :e_word
+                :sWord
+                :eWord
                 :kwfound
                 :reservedfound
-                :word_line
-                :word_col
-                :colonpre_line
-                :colonpre_col
+                :wordLine
+                :wordCol
+                :colonpreLine
+                :colonpreCol
             )
         }
         # a trailing colon makes the word a LABEL, with the colon stashed -- a
         # RESERVEDLABEL when the word is a keyword or reserved
         if this.atchar == ascii.colon then {
-            lbl_tt: toktype.labelTok
-            if kwfound or reservedfound then lbl_tt = toktype.reservedLabelTok
+            lblTt: toktype.labelTok
+            if kwfound or reservedfound then lblTt = toktype.reservedLabelTok
             this.nexttok = (
                 token
                 toktype: toktype.colonTok
@@ -1445,12 +1445,12 @@ Tokenizer: class {
             )
             this.hasnext = true
             this.accept
-            return (this.idTok tt: lbl_tt id: wid s: s_word e: e_word line: word_line col: word_col)
+            return (this.idTok tt: lblTt id: wid s: sWord e: eWord line: wordLine col: wordCol)
         }
-        ret_tt: toktype.refIdTok
-        if kwfound then ret_tt = kwtt
-        if reservedfound then ret_tt = toktype.errTok
-        return (this.idTok tt: ret_tt id: wid s: s_word e: e_word line: word_line col: word_col)
+        retTt: toktype.refIdTok
+        if kwfound then retTt = kwtt
+        if reservedfound then retTt = toktype.errTok
+        return (this.idTok tt: retTt id: wid s: sWord e: eWord line: wordLine col: wordCol)
     }
 
     # the next token, advancing past it
