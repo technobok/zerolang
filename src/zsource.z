@@ -135,7 +135,7 @@ typedefCasingKind: function {ast: Ast.view baseId: zast.nodeid} out zast.objectk
     if nm.isZero then return zast.objectkind.recordDef
     tx: zast.nameTextAt :ast ref: nm
     fb: tx.stringView.byteAt i: 0
-    if fb.some when fb >= 65 when fb <= 90 then return zast.objectkind.classDef
+    if fb.some when fb >= 0cA when fb <= 0cZ then return zast.objectkind.classDef
     return zast.objectkind.recordDef
 }
 
@@ -365,16 +365,16 @@ bodyKeyInto: function {ast: Ast.view id: zast.nodeid buf: String.borrow} is {
     match (
         n
     ) case stringchunk then {
-        buf.appendByte b: 34
+        buf.append "\""
         buf.append s: (zast.literalTextAt :ast ref: n.text)
     } else null
-    buf.appendByte b: 40
+    buf.append "("
     kids: zast.childIdsAt :ast :id
     for each k: kids loop {
         bodyKeyInto :ast id: k :buf
-        buf.appendByte b: 44
+        buf.append ","
     }
-    buf.appendByte b: 41
+    buf.append ")"
 }
 
 # bodyIsOneMatch -- the body is a single statement and that statement is a
@@ -1217,12 +1217,12 @@ casingSuggest: function {name: StringView} out String is {
     for i < n loop {
         bo: name.byteAt :i
         if bo.some then {
-            if bo == 95 then {
+            if bo == 0c_ then {
                 cap = true
             } else {
                 c: bo
-                if c >= 65 when c <= 90 then c = c + 32
-                if cap when buf.length > 0 when c >= 97 when c <= 122 then c = c - 32
+                if c >= 0cA when c <= 0cZ then c = c + 32
+                if cap when buf.length > 0 when c >= 0ca when c <= 0cz then c = c - 32
                 buf.appendByte b: c
                 cap = false
             }
@@ -1303,21 +1303,21 @@ trimBackWs: function {s: StringView hi: u64} out u64 is {
 
 # byteIsWs -- a space, tab or line-end byte.
 byteIsWs: function {b: u8} out bool is {
-    return (b == 32) or (b == 9) or (b == 10) or (b == 13)
+    return (b == ascii.space) or (b == 0c\t) or (b == 0c\n) or (b == ascii.cr)
 }
 
 # parenGroupStart -- the index of the `(` matching the `)` at `close - 1`; 0 when
 # that byte is not a `)` or nothing matches it (no operand starts at byte 0).
 parenGroupStart: function {s: StringView close: u64} out u64 is {
     if close == 0 then return 0
-    if (docByteAt :s i: close - 1) != 41 then return 0
+    if (docByteAt :s i: close - 1) != ascii.parenClose then return 0
     depth: 0
     i: close
     for i > 0 loop {
         i = i - 1
         b: docByteAt :s :i
-        if b == 41 then depth = depth + 1
-        if b == 40 then {
+        if b == ascii.parenClose then depth = depth + 1
+        if b == ascii.parenOpen then {
             depth = depth - 1
             if depth == 0 then return i
         }
@@ -1331,7 +1331,7 @@ onlyOpensBetween: function {s: StringView lo: u64 hi: u64} out bool is {
     i: lo
     for i < hi loop {
         b: docByteAt :s :i
-        if b != 40 when (byteIsWs :b).not then return false
+        if b != ascii.parenOpen when (byteIsWs :b).not then return false
         i = i + 1
     }
     return true
@@ -1340,7 +1340,7 @@ onlyOpensBetween: function {s: StringView lo: u64 hi: u64} out bool is {
 # docByteIsWord -- true for the ASCII letters and digits a word is made of. Everything
 # else -- punctuation, backticks, the `--` dash, path separators -- is a boundary.
 docByteIsWord: function {b: u8} out bool is {
-    return (b >= 97) and (b <= 122) or ((b >= 65) and (b <= 90)) or ((b >= 48) and (b <= 57))
+    return (b >= 0ca) and (b <= 0cz) or ((b >= 0cA) and (b <= 0cZ)) or ((b >= 0c0) and (b <= 0c9))
 }
 
 # docIsStopword -- true for a function word every doc shares, which therefore says
@@ -1362,7 +1362,7 @@ docWordsInto: function {s: StringView into: List String} is {
     for i < n loop {
         c: docByteAt :s :i
         if (docByteIsWord b: c) then {
-            if c >= 65 when c <= 90 then c = c + 32
+            if c >= 0cA when c <= 0cZ then c = c + 32
             run.appendByte b: c
         } else {
             if run.length > 0 then {
@@ -1386,7 +1386,7 @@ docAddRun: function {run: StringView into: List String} is {
     for i < n loop {
         c: docByteAt s: run :i
         isUp: false
-        if c >= 65 when c <= 90 then isUp = true
+        if c >= 0cA when c <= 0cZ then isUp = true
         if isUp when seg.length > 0 then {
             into.append from: seg.copy
             seg = "".string
@@ -1458,7 +1458,7 @@ docHasDigit: function {w: StringView} out bool is {
     n: w.length
     for i < n loop {
         c: docByteAt s: w :i
-        if c >= 48 when c <= 57 then return true
+        if c >= 0c0 when c <= 0c9 then return true
         i = i + 1
     }
     return false
@@ -1470,7 +1470,7 @@ docHasDigit: function {w: StringView} out bool is {
 docJoinWords: function {xs: (List String).view} out String is {
     buf: String
     for each w: xs loop {
-        if buf.length > 0 then buf.appendByte b: 32
+        if buf.length > 0 then buf.append " "
         buf.append s: w
     }
     return buf
@@ -1483,7 +1483,7 @@ docStripComment: function {ln: StringView} outx StringView is {
     n: ln.length
     for i < n loop {
         c: docByteAt s: ln :i
-        if c == 35 then return (ln.substring from: 0 to: i)
+        if c == ascii.hash then return (ln.substring from: 0 to: i)
         i = i + 1
     }
     return ln
@@ -1497,7 +1497,7 @@ docTrailingComment: function {ln: StringView} out String is {
     n: ln.length
     for i < n loop {
         c: docByteAt s: ln :i
-        if c == 35 then {
+        if c == ascii.hash then {
             t: ln.substring from: i + 1 to: n
             return t.trim.string
         }
@@ -1517,7 +1517,7 @@ docStartsLine: function {ln: StringView col: u32} out bool is {
     i: u64
     for i < n loop {
         c: docByteAt s: ln :i
-        isSpace: (c == 32) or (c == 9)
+        isSpace: (c == ascii.space) or (c == 0c\t)
         if isSpace.not then return false
         i = i + 1
     }
@@ -1562,7 +1562,7 @@ byteIsUpper: function {b: optionval u8} out bool is {
     match (
         b
     ) case some then {
-        if b >= 65 when b <= 90 then return true
+        if b >= 0cA when b <= 0cZ then return true
         return false
     } case none then {
         return false
@@ -1582,8 +1582,8 @@ flipFirstCase: function {s: StringView} out String is {
             c: bo
             if i == 0 then {
                 d: c
-                if c >= 65 when c <= 90 then d = c + 32
-                if c >= 97 when c <= 122 then d = c - 32
+                if c >= 0cA when c <= 0cZ then d = c + 32
+                if c >= 0ca when c <= 0cz then d = c - 32
                 c = d
             }
             buf.appendByte b: c
@@ -1610,7 +1610,7 @@ endsWithNewline: function {src: StringView} out bool is {
     match (
         bo
     ) case some then {
-        if bo == 10 then return true
+        if bo == 0c\n then return true
         return false
     } case none then {
         return true
@@ -2054,12 +2054,12 @@ Analysis: class {
         cln: nm.length
         for ci < cln loop {
             cb: nm.stringView.byteAt i: ci
-            if cb.some when cb >= 65 when cb <= 90 then hasUpper = true
+            if cb.some when cb >= 0cA when cb <= 0cZ then hasUpper = true
             ci = ci + 1
         }
         firstUpper: false
         fb: nm.stringView.byteAt i: 0
-        if fb.some when fb >= 65 when fb <= 90 then firstUpper = true
+        if fb.some when fb >= 0cA when fb <= 0cZ then firstUpper = true
         bad: false
         msg: String
         if isVal when hasUpper then {
@@ -2513,7 +2513,7 @@ Analysis: class {
         # the tree matched the member by id; the bytes need only the `.` before
         # it, where the header's value ends and the call begins
         ok: false
-        if lo > 0 when hi <= srcv.length then ok = (docByteAt s: srcv i: lo - 1) == 46
+        if lo > 0 when hi <= srcv.length then ok = (docByteAt s: srcv i: lo - 1) == ascii.dot
         if ok.not then {
             t.warn code: "L029" msg: what line: cp.line col: cp.col width: 7
             return
@@ -2978,7 +2978,7 @@ Analysis: class {
                 nm: zast.nameTextAt :ast ref: item.name
                 fb: nm.stringView.byteAt i: 0
                 up: false
-                if fb.some when fb >= 65 when fb <= 90 then up = true
+                if fb.some when fb >= 0cA when fb <= 0cZ then up = true
                 if up when isTypeRef.not then {
                     sug: casingSuggest name: nm.stringView
                     (
@@ -3120,7 +3120,7 @@ Analysis: class {
             ln: t.lines.get :i
             trimmed: ln.stringView.trim
             body: trimmed.substring from: 1 to: trimmed.length
-            if buf.length > 0 then buf.appendByte b: 32
+            if buf.length > 0 then buf.append " "
             buf.append s: body.trim
             i = i + 1
         }
@@ -3174,7 +3174,7 @@ Analysis: class {
             trimmed: ln.stringView.trim
             if (trimmed.startsWith "#").not then return i
             body: trimmed.substring from: 1 to: trimmed.length
-            if into.length > 0 then into.appendByte b: 32
+            if into.length > 0 then into.append " "
             into.append s: body.trim
             i = i + 1
         }
@@ -4094,7 +4094,7 @@ Analysis: class {
             if hi > sv.length then return
             expect: "\{label}:"
             if (sv.substring from: lo to: hi) != expect then return
-            for hi < sv.length while ((sv.byteAt i: hi).or d: 0) == 32 loop hi = hi + 1
+            for hi < sv.length while ((sv.byteAt i: hi).or d: 0) == ascii.space loop hi = hi + 1
             (
                 t.warnFix
                 code: "L003"
@@ -6109,7 +6109,7 @@ litShapedSuf: function {ast: Ast.view n: astnode.view} out bool is {
         an: zast.nameTextAt :ast ref: n.name
         d: false
         b: an.stringView.byteAt 0
-        if b.some when b >= 48 when b <= 57 then d = true
+        if b.some when b >= 0c0 when b <= 0c9 then d = true
         return d
     } case dottedpath then {
         return (litShapedSuf :ast n: (ast.nodes.get i: n.parent))
@@ -6910,7 +6910,7 @@ hasHash: function {line: StringView} out bool is {
     n: u64
     for n < line.length loop {
         bo: line.byteAt i: n
-        if bo.some when bo == 35 then return true
+        if bo.some when bo == ascii.hash then return true
         n = n + 1
     }
     return false
@@ -6945,14 +6945,14 @@ operatorKind: function {ast: Ast.view nid: zast.nodeid} out u8 is {
 
 # isSpaceByte -- a space, a tab or a line end.
 isSpaceByte: function {c: u8} out bool is {
-    return (c == 32) or (c == 9) or (c == 10) or (c == 13)
+    return (c == ascii.space) or (c == 0c\t) or (c == 0c\n) or (c == ascii.cr)
 }
 
 # groupedSpan -- the source between `lo` and `hi` is one parenthesised group:
 # it ends in a `)` whose matching `(` opens before `lo`, with nothing between
 # them but space and the opening parentheses of the operand's own first term.
 groupedSpan: function {sv: StringView lo: u64 hi: u64} out bool is {
-    if (hi == 0) or ((docByteAt s: sv i: hi - 1) != 41) then return false
+    if (hi == 0) or ((docByteAt s: sv i: hi - 1) != ascii.parenClose) then return false
     op: matchingOpenParen :sv close: hi - 1
     if op == 0 then return false
     i: op - 1
@@ -6960,7 +6960,7 @@ groupedSpan: function {sv: StringView lo: u64 hi: u64} out bool is {
     if i >= lo then return false
     k: i + 1
     for k < lo while (
-        (isSpaceByte c: (docByteAt s: sv i: k)) or ((docByteAt s: sv i: k) == 40)
+        (isSpaceByte c: (docByteAt s: sv i: k)) or ((docByteAt s: sv i: k) == ascii.parenOpen)
     ) loop {
         k = k + 1
     }
@@ -6975,8 +6975,8 @@ matchingOpenParen: function {sv: StringView close: u64} out u64 is {
     for i > 0 loop {
         i = i - 1
         c: docByteAt s: sv :i
-        if c == 41 then depth = depth + 1
-        if c == 40 then {
+        if c == ascii.parenClose then depth = depth + 1
+        if c == ascii.parenOpen then {
             depth = depth - 1
             if depth == 0 then return i + 1
         }

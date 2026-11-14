@@ -357,98 +357,83 @@ writeValue: function {v: Value.view buf: String} is {
 # writeArray -- `[`, the elements separated by commas, `]`. The separator goes
 # BEFORE each element but the first, so an empty array writes `[]`.
 writeArray: function {a: Arr.view buf: String} is {
-    buf.appendByte b: 91
+    buf.append "["
     first: true
     for each item: a.items loop {
-        if first.not then buf.appendByte b: 44
+        if first.not then buf.append ","
         first = false
         writeValue v: item :buf
     }
-    buf.appendByte b: 93
+    buf.append "]"
 }
 
 # writeObject -- `{`, the members in DOCUMENT order, `}`. The keys carry the
 # order and the entries carry the values, so a key with no entry behind it
 # writes nothing and does not consume a separator.
 writeObject: function {o: Obj.view buf: String} is {
-    buf.appendByte b: 123
+    buf.append "{"
     first: true
     for each k: o.keys loop {
         e: o.entries.get key: k
         match (
             e
         ) case some then {
-            if first.not then buf.appendByte b: 44
+            if first.not then buf.append ","
             first = false
             writeString sv: k.stringView :buf
-            buf.appendByte b: 58
+            buf.append ":"
             writeValue v: e :buf
         } case none then null
     }
-    buf.appendByte b: 125
+    buf.append "}"
 }
 
 # the ASCII hex digit for a nibble `n` (0..15).
 hexDigit: function {n: u8} out u8 is {
-    if n < 10 then return n + 48
-    return n + 87
+    if n < 10 then return n + 0c0
+    return n - 10 + 0ca
 }
 
 # append `sv` to `buf` as a quoted, escaped JSON string.
 writeString: function {sv: StringView buf: String} is {
-    buf.appendByte b: 34
-    n: sv.length
-    i: u64
-    for i < n loop {
-        b: sv.byteAt i
-        match (
-            b
-        ) case some then {
-            if b == 34 then {
-                buf.appendByte b: 92
-                buf.appendByte b: 34
-            } else if b == 92 then {
-                buf.appendByte b: 92
-                buf.appendByte b: 92
-            } else if b == 10 then {
-                buf.appendByte b: 92
-                buf.appendByte b: 0cn
-            } else if b == 13 then {
-                buf.appendByte b: 92
-                buf.appendByte b: 0cr
-            } else if b == 9 then {
-                buf.appendByte b: 92
-                buf.appendByte b: 0ct
-            } else if b == 8 then {
-                buf.appendByte b: 92
-                buf.appendByte b: 0cb
-            } else if b == 12 then {
-                buf.appendByte b: 92
-                buf.appendByte b: 0cf
-            } else if b < 32 then {
-                buf.append "\\u00"
-                buf.appendByte b: (hexDigit n: b >> 4)
-                buf.appendByte b: (hexDigit n: b & 15)
-            } else {
-                buf.appendByte :b
-            }
-        } case none then null
-        i = i + 1
+    buf.append "\""
+    for each b: sv.byteView loop {
+        if b == ascii.doubleQuote then {
+            buf.append "\\\""
+        } else if b == 0c\\ then {
+            buf.append "\\\\"
+        } else if b == 0c\n then {
+            buf.append "\\n"
+        } else if b == ascii.cr then {
+            buf.append "\\r"
+        } else if b == 0c\t then {
+            buf.append "\\t"
+        } else if b == 0c\b then {
+            buf.append "\\b"
+        } else if b == 0c\x0c then {
+            buf.append "\\f"
+        } else if b < ascii.space then {
+            buf.append "\\u00"
+            buf.appendByte b: (hexDigit n: b >> 4)
+            buf.appendByte b: (hexDigit n: b & 15)
+        } else {
+            buf.appendByte :b
+        }
     }
-    buf.appendByte b: 34
+    buf.append "\""
 }
 
 # ---- parser -------------------------------------------------------
 
 # true when byte `b` is an ASCII digit 0-9.
 isDigit: function {b: u8} out bool is {
-    if b >= 48 when b <= 57 then return true
+    if b >= 0c0 when b <= 0c9 then return true
     return false
 }
 
 # true when byte `b` is JSON insignificant whitespace.
 isWs: function {b: u8} out bool is {
-    return (b == 32) or (b == 9) or (b == 10) or (b == 13)
+    return (b == ascii.space) or (b == 0c\t) or (b == 0c\n) or (b == ascii.cr)
 }
 
 # appendCodepoint -- UTF-8 encode `cp` onto `buf`. Codepoints beyond
@@ -533,7 +518,7 @@ Cursor: class {
         t.skipWs
         if t.failed then return Value.nul
         b: t.peek
-        if b == 123 then {
+        if b == ascii.braceOpen then {
             t.depth = t.depth + 1
             if t.depth > 128 then {
                 t.fail msg: "nesting too deep"
@@ -543,7 +528,7 @@ Cursor: class {
             t.depth = t.depth - 1
             return r
         }
-        if b == 91 then {
+        if b == ascii.bracketOpen then {
             t.depth = t.depth + 1
             if t.depth > 128 then {
                 t.fail msg: "nesting too deep"
@@ -553,14 +538,14 @@ Cursor: class {
             t.depth = t.depth - 1
             return r
         }
-        if b == 34 then {
+        if b == ascii.doubleQuote then {
             s: t.parseString
             return (Value.text s)
         }
         if b == 0ct then return (t.parseWord w: "true" v: Value.boolean true)
         if b == 0cf then return (t.parseWord w: "false" v: Value.boolean false)
         if b == 0cn then return (t.parseWord w: "null" v: Value.nul)
-        if b == 45 then return t.parseNumber
+        if b == 0c- then return t.parseNumber
         if (isDigit :b) then return t.parseNumber
         t.fail msg: "unexpected character"
         return Value.nul
@@ -592,20 +577,20 @@ Cursor: class {
         t.advance
         o: Obj entries: (Map String V: Value) keys: List String
         t.skipWs
-        if t.peek == 125 then {
+        if t.peek == ascii.braceClose then {
             t.advance
             return (Value.object o)
         }
         for true loop {
             t.skipWs
-            if (t.peek == 34).not then {
+            if (t.peek == ascii.doubleQuote).not then {
                 t.fail msg: "expected object key"
                 return (Value.object o)
             }
             k: t.parseString
             if t.failed then return (Value.object o)
             t.skipWs
-            if t.peek == 58 then {
+            if t.peek == ascii.colon then {
                 t.advance
             } else {
                 t.fail msg: "expected ':'"
@@ -616,9 +601,9 @@ Cursor: class {
             o.set key: k value: v
             t.skipWs
             b: t.peek
-            if b == 44 then {
+            if b == ascii.comma then {
                 t.advance
-            } else if b == 125 then {
+            } else if b == ascii.braceClose then {
                 t.advance
                 return (Value.object o)
             } else {
@@ -633,7 +618,7 @@ Cursor: class {
         t.advance
         a: Arr items: List Value
         t.skipWs
-        if t.peek == 93 then {
+        if t.peek == ascii.bracketClose then {
             t.advance
             return (Value.array a)
         }
@@ -643,9 +628,9 @@ Cursor: class {
             a.items.append v
             t.skipWs
             b: t.peek
-            if b == 44 then {
+            if b == ascii.comma then {
                 t.advance
-            } else if b == 93 then {
+            } else if b == ascii.bracketClose then {
                 t.advance
                 return (Value.array a)
             } else {
@@ -662,15 +647,15 @@ Cursor: class {
         buf: String
         for true loop {
             b: t.peek
-            if b == 0 then {
+            if b == ascii.nul then {
                 t.fail msg: "unterminated string"
                 return buf
             }
-            if b == 34 then {
+            if b == ascii.doubleQuote then {
                 t.advance
                 return buf
             }
-            if b == 92 then {
+            if b == 0c\\ then {
                 t.advance
                 e: t.peek
                 t.advance
@@ -678,7 +663,7 @@ Cursor: class {
                 if t.failed then return buf
                 continue
             }
-            if b < 32 then {
+            if b < ascii.space then {
                 t.fail msg: "control character in string"
                 return buf
             }
@@ -692,22 +677,22 @@ Cursor: class {
     # rather than a result, because a failure has to stop the whole parse and
     # the flag already carries that.
     escapeBody: function {t: this buf: String e: u8} is {
-        if e == 34 then {
-            buf.appendByte b: 34
-        } else if e == 92 then {
-            buf.appendByte b: 92
-        } else if e == 47 then {
-            buf.appendByte b: 47
+        if e == ascii.doubleQuote then {
+            buf.append "\""
+        } else if e == 0c\\ then {
+            buf.append "\\"
+        } else if e == 0c/ then {
+            buf.append "/"
         } else if e == 0cb then {
-            buf.appendByte b: 8
+            buf.appendByte b: 0c\b
         } else if e == 0cf then {
-            buf.appendByte b: 12
+            buf.appendByte b: 0c\x0c
         } else if e == 0cn then {
-            buf.appendByte b: 10
+            buf.append "\n"
         } else if e == 0cr then {
-            buf.appendByte b: 13
+            buf.appendByte b: ascii.cr
         } else if e == 0ct then {
-            buf.appendByte b: 9
+            buf.append "\t"
         } else if e == 0cu then {
             t.escapeUnicode :buf
         } else {
@@ -736,7 +721,7 @@ Cursor: class {
     # `\u` escape, and the one codepoint the pair encodes. Anything else after
     # a high surrogate leaves the pair unpaired.
     surrogateTail: function {t: this buf: String hi: u32} is {
-        if t.peek != 92 then {
+        if t.peek != 0c\\ then {
             t.fail msg: "unpaired surrogate"
             return
         }
@@ -765,9 +750,9 @@ Cursor: class {
             d: u32
             if (isDigit :b) then {
                 d = b.u32 - 48
-            } else if b >= 97 when b <= 102 then {
+            } else if b >= 0ca when b <= 0cf then {
                 d = b.u32 - 87
-            } else if b >= 65 when b <= 70 then {
+            } else if b >= 0cA when b <= 0cF then {
                 d = b.u32 - 55
             } else {
                 t.fail msg: "bad unicode escape"
@@ -787,15 +772,15 @@ Cursor: class {
         isFloat: false
         for true loop {
             b: t.peek
-            if (b == 45) or (b == 43) then {
+            if (b == 0c-) or (b == 0c+) then {
                 t.advance
-            } else if b == 46 then {
+            } else if b == ascii.dot then {
                 isFloat = true
                 t.advance
             } else if b == 0ce then {
                 isFloat = true
                 t.advance
-            } else if b == 69 then {
+            } else if b == 0cE then {
                 isFloat = true
                 t.advance
             } else if (isDigit :b) then {
