@@ -563,7 +563,7 @@ resolveMonoRefInline: function {
             arguments: argIds
             :nid
         )
-        if rm.notZero when (st.walk.typedefClash.has key: rm) then {
+        if rm.notZero when (st.walk.resolve.typedefClash.has key: rm) then {
             opn: ast.nodes.get i: opNid
             (
                 reportTypedefClash
@@ -2440,7 +2440,7 @@ resolveAliasKeyIn: function {
         if dnid.notZero then {
             notePendingTyperef :st nid: dnid nameId: altK.unitName
             # the alias resolves in the scope it is written in
-            st.walk.pendingTyperefScope.set key: dnid value: aParent
+            st.walk.resolve.pendingTyperefScope.set key: dnid value: aParent
         }
     }
     return atid
@@ -3065,8 +3065,8 @@ enterUnitOnce: function {
 } is {
     if unitDecl == st.typing.coreUnitRoot then return
     if unitDecl.isZero then return
-    if (st.walk.enteredUnits.has item: unitDecl) then return
-    st.walk.enteredUnits.add item: unitDecl
+    if (st.walk.resolve.enteredUnits.has item: unitDecl) then return
+    st.walk.resolve.enteredUnits.add item: unitDecl
     if unitDecl == st.typing.mainUnitRoot then return
     ro: unitDecl
     if ro.notZero then {
@@ -3184,7 +3184,7 @@ demandDecl: function {st: zenv.ZSymbolTable declId: ztypes.declid} is {
     if decl.parent == st.typing.coreUnitRoot when decl.typeId.notZero then return
     decl.drop
     st.typing.declSetPending :declId mark: true
-    st.walk.pendingDefs.append from: declId
+    st.walk.resolve.pendingDefs.append from: declId
 }
 
 # demandDefinition -- a bare name written in `scope` demands the definition
@@ -3344,7 +3344,7 @@ resolveDemandedNamespace: function {
     )
     # Signatures are resolved; the member bodies are owed a walk, which the
     # top-level drain does.
-    st.walk.nsBodiesOwed.append (ztyping.nsbody unitName: puNm unitOp: opId)
+    st.walk.resolve.nsBodiesOwed.append (ztyping.nsbody unitName: puNm unitOp: opId)
     # The members just resolved recorded their signature type-refs the way
     # every definition does, and a unit materialises at whatever point
     # something first asks for it -- which can be after the post-demand
@@ -3490,7 +3490,7 @@ resolveDemandedDecl: function {
 # reads its return type as nothing at every call site. Before the type-ref pass
 # has run, and inside a drain, the stamping waits for them.
 stampResolvedOnDemand: function {st: zenv.ZSymbolTable ast: Ast} is {
-    if st.walk.typerefPassRan.not or st.walk.drainingDefs then return
+    if st.walk.resolve.typerefPassRan.not or st.walk.resolve.drainingDefs then return
     stampPendingTyperefs :st :ast unitDecl: st.typing.mainUnitRoot
 }
 
@@ -3500,9 +3500,9 @@ stampResolvedOnDemand: function {st: zenv.ZSymbolTable ast: Ast} is {
 # resolved inside its caller's grey window. A drain that is already running
 # resolves whatever a nested request queued, so the nested call returns.
 resolveDemandedDefs: function {st: zenv.ZSymbolTable ast: Ast} is {
-    if st.walk.drainingDefs then return
-    if st.walk.pendingDefs.length == 0 then return
-    st.walk.drainingDefs = true
+    if st.walk.resolve.drainingDefs then return
+    if st.walk.resolve.pendingDefs.length == 0 then return
+    st.walk.resolve.drainingDefs = true
     # a drain runs in a neutral resolution context: it may be requested from
     # inside a body walk, whose template / containment state belongs to that
     # body, not to the definitions resolved here (each of which resolves in
@@ -3515,20 +3515,20 @@ resolveDemandedDefs: function {st: zenv.ZSymbolTable ast: Ast} is {
     st.typing.curMonoStamp = ztypes.tid.zero
     st.walk.fn.curMonoFnTid = ztypes.tid
     i: u64
-    for i < st.walk.pendingDefs.length loop {
-        d: st.walk.pendingDefs.get :i
+    for i < st.walk.resolve.pendingDefs.length loop {
+        d: st.walk.resolve.pendingDefs.get :i
         i = i + 1
         resolveDemandedDecl :st :ast declId: d
     }
-    st.walk.pendingDefs = ListVal ztypes.declid
+    st.walk.resolve.pendingDefs = ListVal ztypes.declid
     # after the post-demand stamp pass, a drain stamps what it recorded
-    if st.walk.typerefPassRan then {
+    if st.walk.resolve.typerefPassRan then {
         stampPendingTyperefs :st :ast unitDecl: st.typing.mainUnitRoot
     }
     st.mode = savedMode
     st.typing.curMonoStamp = pMs
     st.walk.fn.curMonoFnTid = pMf
-    st.walk.drainingDefs = false
+    st.walk.resolve.drainingDefs = false
 }
 
 # scanCallsInNode -- the body-walk pre-pass: every name a subtree references
@@ -4301,8 +4301,8 @@ scanTemplateBodyDemands: function {
     templateOpId: zast.nodeid
 } is {
     if templateOpId.isZero then return
-    if (st.walk.templateBodiesScanned.has item: templateOpId) then return
-    st.walk.templateBodiesScanned.add item: templateOpId
+    if (st.walk.resolve.templateBodiesScanned.has item: templateOpId) then return
+    st.walk.resolve.templateBodiesScanned.add item: templateOpId
     rf: scope
     if tmplDeclId.notZero then rf = tmplDeclId
     scanUnitCalls :st scope: rf :ast unitdefId: templateOpId rootOnly: false
@@ -4365,7 +4365,7 @@ nameClaimedByScopeId: function {
 stampTyperefs: function {st: zenv.ZSymbolTable program: Ast} is {
     {
         stampPendingTyperefs :st ast: program unitDecl: st.typing.mainUnitRoot
-        st.walk.typerefPassRan = true
+        st.walk.resolve.typerefPassRan = true
     }
 }
 
@@ -4396,7 +4396,7 @@ typerefExcused: function {
             (st.typing.declIsResolving declId: dh.declId)
         )
         if dhWait then {
-            st.walk.typerefRetry.append from: uk
+            st.walk.resolve.typerefRetry.append from: uk
             return true
         }
     }
@@ -4437,7 +4437,7 @@ stampOnePendingTyperef: function {
     # a declaration refused where it is written is no type-ref to resolve
     if (nodeRefused :st nid: uk) then return
     # the type-ref resolves in the scope it was written in
-    rf: (st.walk.pendingTyperefScope.get key: uk).or d: ztypes.declid
+    rf: (st.walk.resolve.pendingTyperefScope.get key: uk).or d: ztypes.declid
     # the scope's unit, as the label the surface / claim probes take
     origin: unitDecl
     originId: zast.nameid
@@ -4496,7 +4496,9 @@ stampPendingTyperefs: function {
 } is {
     # nothing recorded or deferred since the last pass: a definition resolved
     # on demand asks after each one, and most add nothing
-    if st.walk.typerefRetry.length == 0 when st.walk.typerefNew.length == 0 then return
+    if st.walk.resolve.typerefRetry.length == 0 when (
+        st.walk.resolve.typerefNew.length == 0
+    ) then return
     # a declaration's type-refs belong to no instance and no template walk,
     # whichever walk asked for them
     prevMono: st.typing.curMonoStamp
@@ -4516,7 +4518,7 @@ stampPendingTyperefs: function {
 # way resolve as a type PARAMETER. Ask the flags: the name shape must not be
 # what decides this, which is the whole reason the flags exist.
 sweepGenericParamNames: function {st: zenv.ZSymbolTable ast: Ast} is {
-    t: st.walk.gpNamesSwept
+    t: st.walk.resolve.gpNamesSwept
     if t.isZero then t = t.next
     last: st.reg.nextTid
     for t < last loop {
@@ -4528,7 +4530,7 @@ sweepGenericParamNames: function {st: zenv.ZSymbolTable ast: Ast} is {
         }
         t = t.next
     }
-    st.walk.gpNamesSwept = t
+    st.walk.resolve.gpNamesSwept = t
 }
 
 # stampPendingTyperefsIn -- stampPendingTyperefs' pass, in the declaration
@@ -4542,22 +4544,22 @@ stampPendingTyperefsIn: function {
     pvals: ListVal zast.nameid
     # entries an earlier pass deferred (their declaration was still
     # unresolved) come first, then the entries recorded since the last pass
-    for each rk: st.walk.typerefRetry loop {
+    for each rk: st.walk.resolve.typerefRetry loop {
         rv: st.walk.pendingTyperef.get key: rk
         if rv.some then {
             pkeys.append rk
             pvals.append rv
         }
     }
-    st.walk.typerefRetry = ListVal zast.nodeid
-    for each nk: st.walk.typerefNew loop {
+    st.walk.resolve.typerefRetry = ListVal zast.nodeid
+    for each nk: st.walk.resolve.typerefNew loop {
         nv: st.walk.pendingTyperef.get key: nk
         if nv.some then {
             pkeys.append nk
             pvals.append nv
         }
     }
-    st.walk.typerefNew = ListVal zast.nodeid
+    st.walk.resolve.typerefNew = ListVal zast.nodeid
     sweepGenericParamNames :st :ast
     pi: u64
     pcnt: pkeys.length
@@ -4580,12 +4582,12 @@ reportTypedefClash: function {
     lineno: u32
     colno: u32
 } is {
-    co: st.walk.typedefClash.get key: tid
+    co: st.walk.resolve.typedefClash.get key: tid
     if co.some then {
         if co.reported then return
         cl: co
         cl.reported = true
-        st.walk.typedefClash.set key: tid value: cl
+        st.walk.resolve.typedefClash.set key: tid value: cl
         m: (
             conform.constraintUnmetText
             :ast
@@ -4604,7 +4606,7 @@ reportTypedefClash: function {
 # reportTypedefClashes -- every recorded base refusal no site reported.
 reportTypedefClashes: function {ast: Ast st: zenv.ZSymbolTable} is {
     ks: ListVal ztypes.tid
-    for each ce: st.walk.typedefClash.iterateItems loop {
+    for each ce: st.walk.resolve.typedefClash.iterateItems loop {
         if ce.value.reported.not then ks.append from: ce.key
     }
     for each k: ks loop {
@@ -4823,7 +4825,7 @@ declNamesInstantiation: function {
     ast: Ast.view
     declId: ztypes.declid
 } out bool is {
-    if (st.walk.instantiatedAliases.has item: declId) then return true
+    if (st.walk.resolve.instantiatedAliases.has item: declId) then return true
     dt: ztypes.tid
     isCall: false
     ddo: st.typing.decls.get i: declId
@@ -4895,7 +4897,7 @@ checkBareGenericReturnAt: function {ast: Ast st: zenv.ZSymbolTable slot: u64} is
     # method's `n: anynumber.generic` would resolve as a constant
     fd: st.typing.declIdOfType typeId: fk
     if fd.notZero when (st.reg.genericParamTidOf tdecl: fd paramName: root).some then return
-    rsc: (st.walk.pendingTyperefScope.get key: rn).or d: ztypes.declid
+    rsc: (st.walk.resolve.pendingTyperefScope.get key: rn).or d: ztypes.declid
     rtd: ztyping.nodeTypeAt tbl: st.typing.nodeType nid: rn
     rtb: (
         instantiate.bareGenericType
@@ -5050,8 +5052,8 @@ walkLateUsedBodies: function {st: zenv.ZSymbolTable ast: Ast} out bool is {
     walked: false
     i: u64
     # a walk can defer more, so the length is read each round
-    for i < st.walk.deferred.length loop {
-        dj: st.walk.deferred.get :i
+    for i < st.walk.resolve.deferred.length loop {
+        dj: st.walk.resolve.deferred.get :i
         if (lateBodyOwed :st d: dj.decl) then {
             (
                 bodies.walkDeferredBody
@@ -5301,7 +5303,7 @@ checkBodies: function {st: zenv.ZSymbolTable scope: ztypes.declid program: Ast} 
 
 # lateBodyPending -- a deferred member a use has reached and nothing has walked.
 lateBodyPending: function {st: zenv.ZSymbolTable.view} out bool is {
-    for each dj: st.walk.deferred loop {
+    for each dj: st.walk.resolve.deferred loop {
         if (lateBodyOwed :st d: dj.decl) then return true
     }
     return false
@@ -5317,7 +5319,7 @@ lateBodyOwed: function {st: zenv.ZSymbolTable.view d: ztypes.declid} out bool is
 # generated `==`, which calls each part's own; a part's written `==` is used by
 # it. Swept once per type, from the watermark the last sweep left.
 markGeneratedEqParts: function {st: zenv.ZSymbolTable ast: Ast.view} is {
-    t: st.walk.eqPartsSwept
+    t: st.walk.resolve.eqPartsSwept
     last: st.reg.nextTid
     for t < last loop {
         isVal: (st.reg.isValtypeOf tid: t) and (st.reg.isGenericOf tid: t).not
@@ -5330,7 +5332,7 @@ markGeneratedEqParts: function {st: zenv.ZSymbolTable ast: Ast.view} is {
         }
         t = t.next
     }
-    st.walk.eqPartsSwept = t
+    st.walk.resolve.eqPartsSwept = t
 }
 
 # walkOwedNamespaceBodies -- walk the member bodies of every namespace or
@@ -5343,9 +5345,11 @@ markGeneratedEqParts: function {st: zenv.ZSymbolTable ast: Ast.view} is {
 # resolves what the last one demanded, so a subunit of a subunit is walked by
 # the round after its parent, to any depth. Deterministic: demand order.
 walkOwedNamespaceBodies: function {st: zenv.ZSymbolTable scope: ztypes.declid ast: Ast} is {
-    for st.walk.nsBodiesOwed.length > 0 loop {
+    for st.walk.resolve.nsBodiesOwed.length > 0 loop {
         round: ListVal ztyping.nsbody
-        for st.walk.nsBodiesOwed.length > 0 loop round.append st.walk.nsBodiesOwed.pop
+        for (
+            st.walk.resolve.nsBodiesOwed.length > 0
+        ) loop round.append st.walk.resolve.nsBodiesOwed.pop
         for each rec: round loop {
             unitDecl: unitDeclOfNameOrOwn :st :scope nameId: rec.unitName
             bodies.checkNamespaceBodies :ast :st :scope :unitDecl unitdefId: rec.unitOp
@@ -5546,7 +5550,7 @@ resolveInstantiatedAlias: function {
     adecl: declOfUnitDef :st :scope :unitDecl nameId: (nameIdOf :ast name: defName)
     if adecl.notZero then {
         st.typing.declSetType declId: adecl typeId: mtid
-        st.walk.instantiatedAliases.add item: adecl
+        st.walk.resolve.instantiatedAliases.add item: adecl
     }
     cu: st.typing.declTypeOf declId: (statics.constOwnerDeclFor :st :scope :ast :unitDecl :defName)
     if cu.notZero then {
@@ -5568,8 +5572,8 @@ reportAliasCycle: function {
     declId: ztypes.declid
     dnode: zast.nodeid
 } is {
-    if (st.walk.aliasCyclesReported.has item: declId) then return
-    st.walk.aliasCyclesReported.add item: declId
+    if (st.walk.resolve.aliasCyclesReported.has item: declId) then return
+    st.walk.resolve.aliasCyclesReported.add item: declId
     dn: ast.nodes.get i: dnode
     nm: zast.nameTextAt :ast ref: (st.typing.declNameOf :declId)
     mc: "'\{nm}' is defined in terms of itself"
@@ -5615,8 +5619,8 @@ resolveConstantDefsIn: function {
     unitdefId: zast.nodeid
     ownerDeclId: ztypes.declid
 } is {
-    if (st.walk.nsConstsWalked.has item: unitdefId) then return
-    st.walk.nsConstsWalked.add item: unitdefId
+    if (st.walk.resolve.nsConstsWalked.has item: unitdefId) then return
+    st.walk.resolve.nsConstsWalked.add item: unitdefId
     rf: scope
     if ownerDeclId.notZero then rf = ownerDeclId
     bodyIds: zast.unitBodyIdsAt :ast unitId: unitdefId

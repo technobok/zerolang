@@ -672,6 +672,59 @@ PendingDefault: class {
     name: (IdMapV zast.nodeid v: zast.nameid)
 }
 
+# ResolveState -- resolving definitions on demand: what is owed, deferred and
+# done. A part of WalkState (`resolve`).
+ResolveState: class {
+    # namespace / subunit bodies the demand path owes a walk, and the unit
+    # ops already walked -- a subunit of the MAIN unit is walked by the main
+    # tree walk and must not be walked twice.
+    nsBodiesOwed: ListVal ztyping.nsbody
+    # the unit ops whose constant definitions have been materialised, so a
+    # namespace reached twice -- once as a demanded definition, once as an
+    # alias target -- evaluates and reports them once
+    nsConstsWalked: IdSet zast.nodeid
+    # the generic template ops whose method bodies have been scanned for
+    # demands from the template's own scope (once per template)
+    templateBodiesScanned: IdSet zast.nodeid
+    # the declarations already reported as defined in terms of themselves
+    aliasCyclesReported: IdSet ztypes.declid
+    # the unit-level definitions whose value instantiates a generic template
+    # (`Strs: (List String)`): each names that instance, a type. A call-shaped
+    # constant (`AT: G.indexOf "#"`) is a value, whatever type it has
+    instantiatedAliases: IdSet ztypes.declid
+    # each generic typedef instance whose base refuses its argument
+    typedefClash: (IdMapV ztypes.tid v: ztyping.typedefclash)
+    # the environment scope the type-ref was written in (curScope at record
+    # time), so the post-demand stamp resolves it where it was written
+    pendingTyperefScope: (IdMapV zast.nodeid v: ztypes.declid)
+    # the bodied members their owner's walk deferred (bodiedMemberDeferred), in
+    # the order deferred, each with the scope, unit and instance that walk ran
+    # in: a use can reach one after its owner walked, and the member is then
+    # walked on its own, unless another walk has walked it (Decl.walked)
+    deferred: ListVal walkjob
+    # the type ids below this one have had their generated `==` swept for the
+    # written part comparisons it calls (markGeneratedEqParts)
+    eqPartsSwept: ztypes.tid
+    gpNamesSwept: ztypes.tid
+    # declarations a reference found and demanded, in discovery order,
+    # awaiting resolution (resolveDemandedDefs drains it)
+    pendingDefs: ListVal ztypes.declid
+    # dependency units in which a demanded definition has resolved (by unit
+    # name id): each runs its implementation pass once, on first entry
+    enteredUnits: IdSet ztypes.declid
+    # a drain of pendingDefs is running (a nested request returns to it)
+    drainingDefs: bool
+    # the pendingTyperef nodes recorded since stampPendingTyperefs last ran, in
+    # the order recorded: what its next pass stamps
+    typerefNew: ListVal zast.nodeid
+    # whether the type-reference pass has run, since what is legal to ask
+    # changes after it
+    typerefPassRan: bool
+    # type-ref nodes a stamp pass could not stamp because their declaration
+    # had not resolved yet; the next pass takes them first
+    typerefRetry: ListVal zast.nodeid
+}
+
 # WalkState -- the body walk's working state: what the checker records while
 # it walks and reads back itself. Nothing downstream reads it; the output is
 # ZTyping's.
@@ -680,17 +733,11 @@ WalkState: class {
     value: ValueState
     # the function being walked
     fn: FunctionState
-    # namespace / subunit bodies the demand path owes a walk, and the unit
-    # ops already walked -- a subunit of the MAIN unit is walked by the main
-    # tree walk and must not be walked twice.
-    nsBodiesOwed: ListVal ztyping.nsbody
+    # resolving definitions on demand: what is owed, deferred and done
+    resolve: ResolveState
     # the unit bodies already walked, so a demand-driven walk does not repeat
     # one
     nsBodiesWalked: IdSet zast.nodeid
-    # the unit ops whose constant definitions have been materialised, so a
-    # namespace reached twice -- once as a demanded definition, once as an
-    # alias target -- evaluates and reports them once
-    nsConstsWalked: IdSet zast.nodeid
     # constant evaluation
     consts: ConstState
     # the (instance, name) pairs of the template constants over a numeric
@@ -723,9 +770,6 @@ WalkState: class {
     # set while a construction's arguments are read, when one depends on an
     # enclosing numeric generic parameter the walk has no value for
     numericArgDependent: bool
-    # the generic template ops whose method bodies have been scanned for
-    # demands from the template's own scope (once per template)
-    templateBodiesScanned: IdSet zast.nodeid
     # the instances the post-sweep has visited: the sweep repeats while walks
     # mint new instances or owe an instance member, and an instance is asked
     # whether instantiating it ends on its first visit only
@@ -795,12 +839,6 @@ WalkState: class {
     # bar foo`) re-enters it, and is answered as a constant instead, whose
     # channel reports the cycle
     aliasFoldsOpen: ListVal ztypes.declid
-    # the declarations already reported as defined in terms of themselves
-    aliasCyclesReported: IdSet ztypes.declid
-    # the unit-level definitions whose value instantiates a generic template
-    # (`Strs: (List String)`): each names that instance, a type. A call-shaped
-    # constant (`AT: G.indexOf "#"`) is a value, whatever type it has
-    instantiatedAliases: IdSet ztypes.declid
     # each list-sourced tag's list, by its declaration, which a report names
     tagSourceDecls: (IdMapV ztypes.tid v: ztypes.declid)
     # the type-ref nodes in a static position, where a literal type may be
@@ -809,8 +847,6 @@ WalkState: class {
     staticLiteralTyperefs: IdSet zast.nodeid
     # every value placed where a spec value is expected, checked at the end
     specStandIns: ListVal ztyping.specstandin
-    # each generic typedef instance whose base refuses its argument
-    typedefClash: (IdMapV ztypes.tid v: ztyping.typedefclash)
     # every unmet bound reported so far: one error per refused instance
     unmetBounds: ListVal ztyping.unmetbound
     # the node id of the value a binding takes whole, or 0. An `if` or a
@@ -834,9 +870,6 @@ WalkState: class {
     # one-shot guard: the native link-target descend runs once per program
     # type-ref node id -> base type name; resolved to its real type post-demand
     pendingTyperef: (IdMapV zast.nodeid v: zast.nameid)
-    # the environment scope the type-ref was written in (curScope at record
-    # time), so the post-demand stamp resolves it where it was written
-    pendingTyperefScope: (IdMapV zast.nodeid v: ztypes.declid)
     # a field's type-ref that names a member of the field's own type, by the
     # ref's node, with that type's declaration: the ref waits in the scope the
     # type is written in, where the type's members are not seen, so the stamp
@@ -870,32 +903,6 @@ WalkState: class {
     demands: ListVal walkjob
     # a demanded body is being walked: a demand met now is queued
     demandDraining: bool
-    # the bodied members their owner's walk deferred (bodiedMemberDeferred), in
-    # the order deferred, each with the scope, unit and instance that walk ran
-    # in: a use can reach one after its owner walked, and the member is then
-    # walked on its own, unless another walk has walked it (Decl.walked)
-    deferred: ListVal walkjob
-    # the type ids below this one have had their generated `==` swept for the
-    # written part comparisons it calls (markGeneratedEqParts)
-    eqPartsSwept: ztypes.tid
-    gpNamesSwept: ztypes.tid
-    # declarations a reference found and demanded, in discovery order,
-    # awaiting resolution (resolveDemandedDefs drains it)
-    pendingDefs: ListVal ztypes.declid
-    # dependency units in which a demanded definition has resolved (by unit
-    # name id): each runs its implementation pass once, on first entry
-    enteredUnits: IdSet ztypes.declid
-    # a drain of pendingDefs is running (a nested request returns to it)
-    drainingDefs: bool
-    # the pendingTyperef nodes recorded since stampPendingTyperefs last ran, in
-    # the order recorded: what its next pass stamps
-    typerefNew: ListVal zast.nodeid
-    # whether the type-reference pass has run, since what is legal to ask
-    # changes after it
-    typerefPassRan: bool
-    # type-ref nodes a stamp pass could not stamp because their declaration
-    # had not resolved yet; the next pass takes them first
-    typerefRetry: ListVal zast.nodeid
 }
 
 # newWalkState -- a walk state with nothing recorded yet
@@ -948,9 +955,26 @@ newWalkState: function out WalkState is {
             currentReturnTypeId: ztypes.tid
             currentYieldInputTid: ztypes.tid
         )
-        nsBodiesOwed: ListVal ztyping.nsbody
+        resolve: (
+            ResolveState
+            nsBodiesOwed: ListVal ztyping.nsbody
+            nsConstsWalked: IdSet zast.nodeid
+            templateBodiesScanned: IdSet zast.nodeid
+            aliasCyclesReported: IdSet ztypes.declid
+            instantiatedAliases: IdSet ztypes.declid
+            typedefClash: (IdMapV ztypes.tid v: ztyping.typedefclash)
+            pendingTyperefScope: (IdMapV zast.nodeid v: ztypes.declid)
+            deferred: ListVal walkjob
+            eqPartsSwept: ztypes.tid
+            gpNamesSwept: ztypes.tid
+            pendingDefs: ListVal ztypes.declid
+            enteredUnits: IdSet ztypes.declid
+            drainingDefs: false
+            typerefNew: ListVal zast.nodeid
+            typerefPassRan: false
+            typerefRetry: ListVal zast.nodeid
+        )
         nsBodiesWalked: IdSet zast.nodeid
-        nsConstsWalked: IdSet zast.nodeid
         consts: (
             ConstState
             diagnosed: IdSet zast.nodeid
@@ -986,7 +1010,6 @@ newWalkState: function out WalkState is {
         singletonPaths: (IdMapV zast.nodeid v: ztypes.tid)
         valuePartialAt: (IdMapV zast.nodeid v: ztypes.tid)
         numericArgDependent: false
-        templateBodiesScanned: IdSet zast.nodeid
         monosWalked: IdSet ztypes.tid
         instanceUseOwed: false
         monoMintedBy: (IdMapV ztypes.tid v: ztypes.tid)
@@ -1015,12 +1038,9 @@ newWalkState: function out WalkState is {
         collectionChildrenBuilt: IdSet ztypes.tid
         stmtBlocks: IdSet zast.nodeid
         aliasFoldsOpen: ListVal ztypes.declid
-        aliasCyclesReported: IdSet ztypes.declid
-        instantiatedAliases: IdSet ztypes.declid
         tagSourceDecls: (IdMapV ztypes.tid v: ztypes.declid)
         staticLiteralTyperefs: IdSet zast.nodeid
         specStandIns: ListVal ztyping.specstandin
-        typedefClash: (IdMapV ztypes.tid v: ztyping.typedefclash)
         unmetBounds: ListVal ztyping.unmetbound
         formValueNid: zast.nodeid
         defNodeIndexBuilt: false
@@ -1028,7 +1048,6 @@ newWalkState: function out WalkState is {
         fieldSpans: (IdMapV ztypes.tid v: ztyping.fieldspan)
         threadUnitRoot: ztypes.declid
         pendingTyperef: (IdMapV zast.nodeid v: zast.nameid)
-        pendingTyperefScope: (IdMapV zast.nodeid v: ztypes.declid)
         fieldRefOwner: (IdMapV zast.nodeid v: ztypes.declid)
         asAliasTarget: (IdMapV ztypes.declid v: ztypes.tid)
         asTypeShapedNames: IdSet zast.nameid
@@ -1037,15 +1056,6 @@ newWalkState: function out WalkState is {
         staticFnRefs: ListVal ztypes.declid
         demands: ListVal walkjob
         demandDraining: false
-        deferred: ListVal walkjob
-        eqPartsSwept: ztypes.tid
-        gpNamesSwept: ztypes.tid
-        pendingDefs: ListVal ztypes.declid
-        enteredUnits: IdSet ztypes.declid
-        drainingDefs: false
-        typerefNew: ListVal zast.nodeid
-        typerefPassRan: false
-        typerefRetry: ListVal zast.nodeid
     )
 }
 
