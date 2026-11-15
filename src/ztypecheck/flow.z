@@ -238,7 +238,7 @@ checkClauseConditions: function {
         cond: argRefAt :ast nid: condId
         if cond.nid.notZero then {
             condMark: st.entryMark
-            checkClauseCondition :st :unitDecl :ast :cond :boolId
+            valuechecks.checkClauseCondition :st :unitDecl :ast :cond :boolId
             # a conjunct after the first runs only when those before it hold
             if k > 1 then st.markTakesMaybeFrom from: condMark
             if k == 1 then firstRel = st.releaseMark
@@ -344,7 +344,7 @@ checkAssignment: function {
     # the local is in scope from its statement on, grey while its value is
     # checked (zenv.beginLocal)
     grey: st.beginLocal nameId: asgn.name
-    checkAssignmentIn :st :unitDecl :ast :asgn :grey
+    valuechecks.checkAssignmentIn :st :unitDecl :ast :asgn :grey
     # one whose value failed binds a typeless variable (endLocal), which the
     # binding names too: a generic unit's template walk runs after its
     # instances' and re-binds every read, so a binding left naming an instance
@@ -642,7 +642,7 @@ checkFor: function {
     if entry == ztyping.loopentry.never then st.discardTakenFrom start: entryStart
     st.popTo marker: bodyMarker
     broke: st.breakLeavesInnermost
-    checkForPostconditions :st :unitDecl :ast :fornode :end :bodyMark
+    valuechecks.checkForPostconditions :st :unitDecl :ast :fornode :end :bodyMark
     st.walk.draft.clear
     st.popTo marker: forMarker
     st.closeBreakScope
@@ -682,7 +682,7 @@ checkForConditions: function {
         condId: zast.forCondAt :ast nid: fornode.nid i: kC
         kC = kC + 1
         onceMark: st.entryMark
-        checkForCondition :st :unitDecl :ast :condId :spillFor isEach: fornode.isEach
+        valuechecks.checkForCondition :st :unitDecl :ast :condId :spillFor isEach: fornode.isEach
         # an `each` binding runs once, before the loop: what it moved is not
         # moved again by the next iteration. A plain one runs at every
         # iteration, so what it moves is a move in the loop.
@@ -2827,7 +2827,7 @@ checkCase: function {
     constFailClear :st
     matchMarker: st.pushBlock node: casenode.nid
     # a typedef over a union or variant is matched on its base's arms
-    subjT: typedefSumBase :st tid: (caseSubjectTid :st :unitDecl :ast :casenode)
+    subjT: typedefSumBase :st tid: (valuechecks.caseSubjectTid :st :unitDecl :ast :casenode)
     # per-mono instance walk: a subject that is a bare TYPE name (resolved
     # by the instance's scope define, not a value) is a compile-time
     # dissection -- only the arm this instance selects is walked
@@ -3020,8 +3020,14 @@ checkStmtExpression: function {
         unknown: true
         if lineTid.notZero then unknown = false
         if unknown then {
-            unresolved: unresolvedBareCallable :ast :st :unitDecl nid: valueId
-            if unresolved.length > 0 then reportUnknownNameAt :st :ast nid: valueId name: unresolved
+            unresolved: valuechecks.unresolvedBareCallable :ast :st :unitDecl nid: valueId
+            if unresolved.length > 0 then (
+                valuechecks.reportUnknownNameAt
+                :st
+                :ast
+                nid: valueId
+                name: unresolved
+            )
         }
     }
     return k0
@@ -3154,7 +3160,7 @@ checkStmtLine: function {
         st.walk.boundSiteLine = nodeLine n: inode
         st.walk.boundSiteCol = nodeCol n: inode
         dk = checkStmtInner :st :unitDecl :ast :innerId lineId: slnId
-        refuseUnitNameValue :st :ast nid: innerId
+        valuechecks.refuseUnitNameValue :st :ast nid: innerId
         st.mode = savedMode
         st.walk.boundSiteNid = bsPrev
         st.walk.boundSiteLine = blPrev
@@ -3182,7 +3188,7 @@ checkStmtLine: function {
     if last then moves.recordArmValueLocks :st :ast lineId: slnId
     yields: last and discarded.not and tailLine.not and (blockId != st.walk.appendedBody)
     if yields when dk == zenv.divkind.none then moves.moveYieldedLocals :st :ast lineId: slnId
-    recordTempHoldingLine :st lineId: slnId from: ul0
+    valuechecks.recordTempHoldingLine :st lineId: slnId from: ul0
     if discarded when dk == zenv.divkind.none then recordDiscard :st :ast :innerId
     # a line is no scope of pins: each value on it kept its own to its record
     if st.walk.draft.holds then panic msg: "ztypecheck: a statement line left pins pending"
@@ -3253,7 +3259,7 @@ recordDiscard: function {st: zenv.ZSymbolTable ast: Ast innerId: zast.nodeid} is
     # `outx` one a value of its own (checkAssignment's rule)
     dp: moves.valuePinsOf :st nid: innerId
     if dp.len > 0 when dp.owned.not then return
-    if (isViewFamilyTid :ast :st :tid) then return
+    if (valuechecks.isViewFamilyTid :ast :st :tid) then return
     vid: st.reg.newVariable ztypeId: tid ownership: ztypes.zownership.owned
     st.reg.setVariableSynthOrigin id: vid origin: ztypes.zsynthorigin.discard
     if st.recording then st.typing.discardTemp.set key: innerId value: vid
@@ -3397,7 +3403,7 @@ foldLoopEnd: function {
     for kP < fornode.nposts loop {
         pcId: zast.forPostAt :ast nid: fornode.nid i: kP
         kP = kP + 1
-        v: foldLoopPost :st :scope :ast :unitDecl :pcId
+        v: valuechecks.foldLoopPost :st :scope :ast :unitDecl :pcId
         stampCondFoldsTrue :st nid: pcId :v
         if v == 0 then answer = ztyping.loopend.runtime
         if v == 2 when answer == ztyping.loopend.always then return ztyping.loopend.once

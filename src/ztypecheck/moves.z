@@ -151,8 +151,8 @@ checkInterpPart: function {
     ptid: checkValueAt :st :unitDecl :ast nid: partId
     if st.typing.errors.length != en0 then return
     if ptid.isZero then {
-        reportUnresolvedValue :st :unitDecl :ast nid: partId
-        refuseUntypedValue :st :ast nid: partId
+        valuechecks.reportUnresolvedValue :st :unitDecl :ast nid: partId
+        valuechecks.refuseUntypedValue :st :ast nid: partId
         return
     }
     # a FUNCTION value is not printable, but a LOCAL holding one after an earlier
@@ -169,7 +169,7 @@ checkInterpPart: function {
         pn2: ast.nodes.get i: partId
         refuseReadUnderPin :st :ast nid: partId lineno: (nodeLine n: pn2) colno: (nodeCol n: pn2)
     }
-    if (printableInterpTid :ast :st tid: ptid) then {
+    if (valuechecks.printableInterpTid :ast :st tid: ptid) then {
         # A PART IS A VALUE HELD WHILE IT IS SPLICED. A part no name binds -- a
         # call's result, a path that auto-calls one -- is built, appended to the
         # string being assembled and then released, and every value the
@@ -595,7 +595,7 @@ checkMemberAutoCall: function {
     # stop the call: the marker applies to what the method returns
     suppressed: st.mode.suppressFnAutoCall
     if suppressed then suppressed = (readsMethodThroughInstance :st :ast :unitDecl :dp :bt :mo).not
-    if coerce when suppressed.not when (fnAutoCallable :st mid: mo) then {
+    if coerce when suppressed.not when (valuechecks.fnAutoCallable :st mid: mo) then {
         # the read's value is the method's result, not the base's: what the
         # base's record gave the read goes, and the receiver's record is read
         # where the call needs it (valueReceiverPins)
@@ -624,7 +624,7 @@ checkMemberAutoCall: function {
                 msg: "a method that writes its receiver cannot be called on a `.view` result: a view converts to no other ownership".string
             )
         }
-        noteStatementAutoCall :st nid: dp.nid
+        valuechecks.noteStatementAutoCall :st nid: dp.nid
         lockAutoCallReceiver :ast :st :dp shared: aShr
         landLiteralReceiver :st :ast recv: dp.parent method: mo instance: ztypes.tid.zero
         ro: conform.methodReturnOf reg: st.reg typing: st.typing mid: mo
@@ -1064,7 +1064,7 @@ reportBareMemberRef: function {
     appendValueTuple :ast n: (ast.nodes.get i: dp.nid) dst: wtp
     wpath: zenv.formatPath pool: ast.names path: wtp.listView
     (
-        bareFnRefErrorFor
+        valuechecks.bareFnRefErrorFor
         :ast
         :st
         nodeid: dp.nid
@@ -1117,7 +1117,7 @@ refuseMarkerWithoutStorage: function {
     # a function with no reference form at all is refused in those words
     if isFn when (refuseNativeReference :st :ast :dp :bt) then return true
     if isFn when (refuseBoundMethodReference :st :ast :dp :bt :cnId) then return true
-    if (isAddressableTarget :ast :st nid: dp.parent) then return false
+    if (valuechecks.isAddressableTarget :ast :st nid: dp.parent) then return false
     tp: ListVal zast.nameid
     appendValueTuple :ast n: (ast.nodes.get i: dp.parent) dst: tp
     what: "this value".string
@@ -1158,7 +1158,7 @@ refuseNativeReference: function {
     dp: dpref
     bt: ztypes.tid
 } out bool is {
-    if (isNativeFnTid :st tid: bt).not then return false
+    if (valuechecks.isNativeFnTid :st tid: bt).not then return false
     ntp: ListVal zast.nameid
     appendValueTuple :ast n: (ast.nodes.get i: dp.parent) dst: ntp
     pth: zenv.formatPath pool: ast.names path: ntp.listView
@@ -1352,7 +1352,7 @@ checkTransferMarker: function {
                     takeHeldLocks :st from: mvo
                 } else {
                     mh: ztypes.zlockholder.var mvo
-                    releaseCascade :st holder: mh
+                    valuechecks.releaseCascade :st holder: mh
                     if (isDropMarkerId nameId: cnId) then noteDropReleasedTemps :st dropNid: dp.nid
                 }
                 if (isDropMarkerId nameId: cnId) then (
@@ -1435,7 +1435,7 @@ dottedBaseTid: function {
     # calls makes a value of its own, and reads its receiver's record itself
     if st.walk.calleeDottedNid != dp.nid then callchecks.composeChildRecord :st nid: dp.parent
     st.mode = savedMode
-    if baseIsName then readSingletonBase :st :ast :unitDecl base: dp.parent :bt
+    if baseIsName then valuechecks.readSingletonBase :st :ast :unitDecl base: dp.parent :bt
     # a base refused as a call missing its arguments has no value to read a
     # member of: that refusal is the one error
     if st.typing.errors.length > errsBase when (
@@ -1481,7 +1481,12 @@ dottedBaseTid: function {
     # off, which is the box and not the element inside it -- and a string
     # literal as the StringView it is at run time
     holdT: bt
-    if (numerics.isTextLiteralTid :st tid: bt) then holdT = materialiseLiteral :ast :st t: bt
+    if (numerics.isTextLiteralTid :st tid: bt) then holdT = (
+        valuechecks.materialiseLiteral
+        :ast
+        :st
+        t: bt
+    )
     isOpB: boxMemberDelegates nameId: (atomNameId :ast n: (ast.nodes.get i: dp.child))
     if isOpB when (st.reg.isBoxOf tid: bt) when (st.reg.genericArgCount specId: bt) == 1 then {
         bxE: st.reg.genericTypeArgAt specId: bt ordinal: 0
@@ -1920,7 +1925,7 @@ checkReturnCarries: function {
             # a view PARAMETER holds no locks of its own: what it views is the
             # caller's, which a plain `out` result would leave unlocked
             if (st.reg.variableOriginOf id: rvo) == ztypes.zvarorigin.param when (
-                isViewFamilyTid
+                valuechecks.isViewFamilyTid
                 :ast
                 :st
                 tid: argT
@@ -1952,7 +1957,7 @@ checkReturnCarries: function {
             } else st.heldLockPaths holder: ztypes.zlockholder.var rvo dst: held
             if held.length > 0 then {
                 wn: zast.nameTextAt :ast ref: rbn
-                rootPhrase: lockRootPhrase :st :ast nameId: (pinRootAt pins: held i: 0)
+                rootPhrase: lockRootPhrase :st :ast nameId: (valuechecks.pinRootAt pins: held i: 0)
                 if st.walk.currentFnPins.not then {
                     fnNm: declWrittenName :st :ast tid: st.walk.currentFnTid
                     m1: "Cannot return '\{wn}': it holds locks on \{rootPhrase}, which the caller cannot see because '\{fnNm}' is `out`, not `outx`"
@@ -1987,7 +1992,7 @@ checkReturnCarries: function {
                 }
                 # the locks travel with the value: the caller's binding installs
                 # the callee's pins, which name these very parameters
-                releaseCascade :st holder: ztypes.zlockholder.var rvo
+                valuechecks.releaseCascade :st holder: ztypes.zlockholder.var rvo
             }
         }
         return
@@ -2033,7 +2038,7 @@ armValueLeaves: function {
 } is {
     if (isControlValue :ast :nid).not then return
     blocks: ListVal zast.nodeid
-    controlArmBlocks :ast :nid into: blocks
+    valuechecks.controlArmBlocks :ast :nid into: blocks
     for each blk: blocks loop {
         av: armValueOf :st :ast blockId: blk
         if av.nid.notZero then {
@@ -2200,7 +2205,10 @@ returnedPins: function {
 } out pinread is {
     nid: arg.operation
     if (isControlValue :ast :nid) then {
-        retBorrows: (isViewFamilyTid :ast :st tid: argT) or st.walk.currentReturnMarker.isReference
+        retBorrows: (
+            (valuechecks.isViewFamilyTid :ast :st tid: argT) or
+            st.walk.currentReturnMarker.isReference
+        )
         return (
             readValuePins
             :st
@@ -2372,7 +2380,8 @@ armLeafPins: function {
     vp: valuePinsOf :st nid: leaf
     # a lent view's copy views what it viewed: it hands its pins on as an
     # owned value does
-    if borrowing.not when vp.owned.not when (isViewFamilyTid :ast :st tid: vt).not then return none
+    if borrowing.not when vp.owned.not when (valuechecks.isViewFamilyTid :ast :st tid: vt
+    ).not then return none
     pinned: armRecordPins :st :ast :leaf :vp :verb :dst
     return (pinread owned: pinned and vp.owned marker: vp.marker)
 }
@@ -3279,7 +3288,7 @@ valueArmsTid: function {
     first: ztypes.tid
 } out ztypes.tid is {
     blocks: ListVal zast.nodeid
-    controlArmBlocks :ast :nid into: blocks
+    valuechecks.controlArmBlocks :ast :nid into: blocks
     arms: ListVal armvalue
     for each blk: blocks loop {
         av: armValueOf :st :ast blockId: blk
@@ -3884,7 +3893,7 @@ reportHeldIntoSlot: function {
     lineno: u32
     colno: u32
 } is {
-    root: lockRootPhrase :st :ast nameId: (pinRootAt pins: held i: 0)
+    root: lockRootPhrase :st :ast nameId: (valuechecks.pinRootAt pins: held i: 0)
     what: "the value".string
     if name.length > 0 then what = "'\{name}'"
     rem: lockFreeRemedy :st :ast tid: movedT
@@ -4589,7 +4598,7 @@ receiverIsValue: function {
     if isName then return (
         (baseRunsCall :st :ast :nid) or (st.typing.numericParamRead.get key: nid).some
     )
-    if (namesTypeApplication :st :ast :unitDecl :nid) then return false
+    if (valuechecks.namesTypeApplication :st :ast :unitDecl :nid) then return false
     if isPath.not then return true
     rdo: st.typing.refDecl.get key: nid
     if rdo.none then return false
@@ -4690,7 +4699,7 @@ unnamedReceiverLocal: function {
     dst: ListVal zast.nameid
 } is {
     if recvT.isZero then return
-    if (isViewFamilyTid :ast :st tid: recvT) then return
+    if (valuechecks.isViewFamilyTid :ast :st tid: recvT) then return
     tnId: mintReceiverTemp :st :ast :recvT :recvNid
     if tnId.isZero then return
     st.walk.lineUnnamedLocals.append tnId
@@ -4711,7 +4720,7 @@ mintReceiverTemp: function {
     recvNid: zast.nodeid
 } out zast.nameid is {
     if recvT.isZero then return zast.nameid
-    if (isViewFamilyTid :ast :st tid: recvT) then return zast.nameid
+    if (valuechecks.isViewFamilyTid :ast :st tid: recvT) then return zast.nameid
     # ONE VALUE, ONE TEMPORARY. A receiver is reached twice -- as the base of
     # its dotted path, and by the call leg that pins its result -- and a second
     # mint would leave two variables claiming one value, which a destroy list
@@ -4851,7 +4860,7 @@ relayTempPins: function {st: zenv.ZSymbolTable pool: zast.StringPool.view vid: z
     # whole, innermost first
     adoptKeptTemps :st :pool pins: run
     (
-        installPins
+        valuechecks.installPins
         :st
         :pool
         pins: run
@@ -5458,7 +5467,7 @@ hoistArg: function {
     # variable
     tempType: argType
     if (isLiteralTypeId reg: st.reg tid: argType) then tempType = (
-        materialiseLiteral
+        valuechecks.materialiseLiteral
         :ast
         :st
         t: argType
@@ -5492,7 +5501,7 @@ hoistArg: function {
     if hown == ztypes.zownership.borrowed then (
         st.reg.setVariableBorrowOrigin
         id: vid
-        origin: (pinRootAt pins: hpins i: 0)
+        origin: (valuechecks.pinRootAt pins: hpins i: 0)
     )
     tnId: zast.poolSet pool: ast.names text: tname.stringView
     st.defineTemp nameId: tnId :vid
@@ -5532,7 +5541,7 @@ hoistArg: function {
             # readonly holder, while the identical value hoisted to a local by
             # hand was accepted.
             (
-                installPins
+                valuechecks.installPins
                 :st
                 pool: ast.names
                 pins: hpins
@@ -5619,7 +5628,10 @@ lockBorrowedArgPath: function {
     # pins are what its own walk left, as hoistArg keeps them
     seenVar: (st.lookupVarId nameId: seen).some
     got: ar
-    if seenVar when av.length > 0 when (pinRootAt pins: av i: 0) != seen then got = dropArgPins :av
+    if seenVar when av.length > 0 when (valuechecks.pinRootAt pins: av i: 0) != seen then got = (
+        dropArgPins
+        :av
+    )
     src: ListVal zast.nameid
     fresh: argPinTuple :st :ast n: an dst: src
     if fresh.not when src.length > 0 then {
@@ -5830,7 +5842,7 @@ lockNonTrivialArg: function {
     # an OWNED value holding locks (a construction, an `outx` result); a
     # borrowed one is refused at a taking slot on its own account -- but a view
     # is moved as a copy that views what it viewed, lent or owned
-    ownsPins: hadPending and (ar.owned or (isViewFamilyTid :ast :st tid: vt))
+    ownsPins: hadPending and (ar.owned or (valuechecks.isViewFamilyTid :ast :st tid: vt))
     tnm: (
         hoistArg
         :ast
@@ -6320,8 +6332,8 @@ landLiteralReceiver: function {
     if method.isZero or (st.reg.isNativeOf tid: method).not then return
     if recv.isZero then return
     rt: walkTypeOf :st nid: recv
-    target: literalLandingTid :st :ast :rt :method :instance
-    if target.isZero or (isAnyLiteralTid :st tid: target) then return
+    target: valuechecks.literalLandingTid :st :ast :rt :method :instance
+    if target.isZero or (valuechecks.isAnyLiteralTid :st tid: target) then return
     if (st.reg.typetypeOf typeId: target) == ztypes.ztypetype.genericParam then return
     rn: ast.nodes.get i: recv
     (
@@ -6509,7 +6521,7 @@ returnedBareFieldName: function {
 refuseYieldedBorrow: function {st: zenv.ZSymbolTable ast: Ast arg: argref argT: ztypes.tid} is {
     if argT.isZero then return
     errs: st.typing.errors.length
-    refuseYieldedLocks :st :ast :arg :argT
+    valuechecks.refuseYieldedLocks :st :ast :arg :argT
     if st.typing.errors.length != errs then return
     verb: "as a yielded value"
     refuseBorrowedMove :st :ast n: (ast.nodes.get i: arg.operation) vt: argT :verb
@@ -6725,7 +6737,7 @@ checkReturnedValue: function {
     if st.walk.currentReturnMarker.isReference then {
         argT = checkValueAt :st :unitDecl :ast nid: arg.operation
     } else {
-        argT = checkMovedValueAt :st :unitDecl :ast nid: arg.operation owning: true
+        argT = valuechecks.checkMovedValueAt :st :unitDecl :ast nid: arg.operation owning: true
     }
     # A returned value that typed to nothing and raised nothing is an
     # unresolvable name -- but ONLY where this walk knows the enclosing
@@ -6737,7 +6749,7 @@ checkReturnedValue: function {
     if argT.u64 == 0 when (
         st.typing.errors.length == errR
     ) when st.walk.currentReturnTypeId.notZero then {
-        reportUnresolvedValue :st :unitDecl :ast nid: arg.operation
+        valuechecks.reportUnresolvedValue :st :unitDecl :ast nid: arg.operation
     }
     reportReturnedBareField :st :ast :arg
     recordReturnedOwnedLocal :st :ast :arg :argT
@@ -7408,7 +7420,7 @@ checkImplicitReturn: function {
         :rpins
     )
     numerics.checkReturnTypeMatch :st :ast :arg :argT
-    if (isAnyLiteralTid :st tid: argT) then stampGate :st nid: lsid tid: expR
+    if (valuechecks.isAnyLiteralTid :st tid: argT) then stampGate :st nid: lsid tid: expR
     recordTailExit :st :ast lineId: lsid :valId
 }
 
