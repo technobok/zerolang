@@ -24,7 +24,7 @@ numericArgStandsIn: function {
     # an untyped literal is settled by its value against the bound's kind; only
     # a typed constant needs the bound's type to ask about loss
     if v.numTid.isZero when (constFitsKind :st :v k: cd.numKind.kind) then return true
-    boundTid: numericBoundTid :ast :st :scope :cd
+    boundTid: statics.numericBoundTid :ast :st :scope :cd
     if boundTid.isZero then return true
     sm: constStandsInMessage :ast :st :v target: boundTid
     if sm.length == 0 then return true
@@ -508,7 +508,7 @@ binref: record {
 # through here, so the layout is described once rather than per walk.
 binRefAt: function {ast: Ast.view nid: zast.nodeid} out binref is {
     n: ast.nodes.get i: nid
-    ip: operatorPartsAt :ast :nid
+    ip: statics.operatorPartsAt :ast :nid
     if ip.found then {
         p: zast.posOf :n
         return (
@@ -1485,7 +1485,7 @@ constOfConversion: function {
 } out ztypes.cval is {
     if v.kind.ivalKind.not when v.kind.fvalKind.not then return ztypes.noConst
     if (memberaccess.isScalarNameId id: targetId).not then return ztypes.noConst
-    target: scalarTidOf :st :scope :ast nameId: targetId
+    target: statics.scalarTidOf :st :scope :ast nameId: targetId
     if target.isZero then return ztypes.noConst
     # a float literal declares conversions to the float types alone
     litTid: st.reg.literalIntTid
@@ -1607,7 +1607,7 @@ literalDefaultTid: function {
 } out ztypes.tid is {
     dflt: zast.wellKnown.slot.tyI64
     if v.kind.fvalKind then dflt = zast.wellKnown.slot.tyF64
-    return (scalarTidOf :st :scope :ast nameId: dflt)
+    return (statics.scalarTidOf :st :scope :ast nameId: dflt)
 }
 
 # constMatchArm -- the arm a compile-time `match` selects, its arms checked on
@@ -2127,7 +2127,7 @@ constStrArgAt: function {
                 # a positional argument at `idx`, or the one labelled `label`
                 hit: an.name.isZero and (i == idx) or (an.name == label)
                 if hit then {
-                    res = evalConstNode :st :scope :ast :unitDecl nid: an.operation
+                    res = statics.evalConstNode :st :scope :ast :unitDecl nid: an.operation
                     found = true
                 }
                 i = i + 1
@@ -2418,11 +2418,11 @@ constTextPiece: function {
 # constOptionSome -- the option constant `some item`: a choice-shaped value of
 # the optionval over the item's own type, its arm `some`.
 constOptionSome: function {st: zenv.ZSymbolTable ast: Ast item: ztypes.cval} out ztypes.cval is {
-    ot: optionvalOver :st :ast elem: (constValueTid :ast :st scope: ztypes.declid v: item)
+    ot: optionvalOver :st :ast elem: (statics.constValueTid :ast :st scope: ztypes.declid v: item)
     items: ListVal ztypes.cval
     items.append item
     id: (
-        constInternAgg
+        statics.constInternAgg
         :st
         shape: (
             ztyping.aggshape
@@ -2791,7 +2791,7 @@ constOfMethodCall: function {
         methodId = cnode.child
     }
     if recvId.isZero then return ztypes.noConst
-    rcv: evalConstNode :st :scope :ast :unitDecl nid: recvId
+    rcv: statics.evalConstNode :st :scope :ast :unitDecl nid: recvId
     if (
         rcv.kind.svalKind.not and (optionPayloadTid :st :ast v: rcv).isZero
     ) then return ztypes.noConst
@@ -2884,9 +2884,9 @@ constOfCall: function {
     if sm.isConst then return sm
     dx: constOfStaticListIndex :st :scope :ast :unitDecl :nid :callableId args: argIds :ln :co
     if dx.isConst then return dx
-    sct: staticCtorHead :st :scope :ast :unitDecl :callableId
+    sct: statics.staticCtorHead :st :scope :ast :unitDecl :callableId
     if sct.notZero then return (
-        constOfStaticFields
+        statics.constOfStaticFields
         :st
         :scope
         :ast
@@ -2897,7 +2897,18 @@ constOfCall: function {
         :ln
         :co
     )
-    ch: constOfStaticChoice :st :scope :ast :unitDecl :callableId args: argIds at: nid :ln :co
+    ch: (
+        statics.constOfStaticChoice
+        :st
+        :scope
+        :ast
+        :unitDecl
+        :callableId
+        args: argIds
+        at: nid
+        :ln
+        :co
+    )
     if ch.isConst then return ch
     return (constOfErrorCall :st :scope :ast :unitDecl :nid :callableId args: argIds :ln :co)
 }
@@ -2953,7 +2964,7 @@ constOfErrorCall: function {
             if an.namedoperation then opId = an.operation
         }
         if opId.notZero then {
-            av: evalConstNode :st :scope :ast :unitDecl nid: opId
+            av: statics.evalConstNode :st :scope :ast :unitDecl nid: opId
             if av.kind.svalKind then umsg = constStringAt :st id: av.strId
         }
     }
@@ -2997,11 +3008,11 @@ constOfStaticListIndex: function {
     }
     if baseId.isZero or opId.isZero then return ztypes.noConst
     if (st.typing.atomVariableId.get key: baseId).some then return ztypes.noConst
-    lv: evalConstNode :st :scope :ast :unitDecl nid: baseId
+    lv: statics.evalConstNode :st :scope :ast :unitDecl nid: baseId
     if lv.kind.aggKind.not then return ztypes.noConst
     row: lv.aggId
     if (st.typing.constAggs.get i: row.u64).kind.staticList.not then return ztypes.noConst
-    kv: evalConstNode :st :scope :ast :unitDecl nid: opId
+    kv: statics.evalConstNode :st :scope :ast :unitDecl nid: opId
     if kv.kind.ivalKind.not then return ztypes.noConst
     count: (st.typing.constAggs.get i: row.u64).itemCount.i64
     if (kv.bigId != 0) or (kv.ival < 0) or (kv.ival >= count) then {
@@ -3020,7 +3031,7 @@ constOfStaticListIndex: function {
         return ztypes.noConst
     }
     g: st.typing.constAggs.get i: row.u64
-    if (staticListElemFolds :ast :st elemTid: g.elem).not then return ztypes.noConst
+    if (statics.staticListElemFolds :ast :st elemTid: g.elem).not then return ztypes.noConst
     return (st.typing.constAggItems.get i: g.itemStart.u64 + kv.ival.u64.orPanic)
 }
 
@@ -3108,7 +3119,7 @@ evalConstPlan: function {ast: Ast.view nid: zast.nodeid} out constplan is {
             # or as a call; every other
             # call takes the call arm, which folds string static methods only
             shape = constshape.call
-            if (operatorPartsAt :ast :nid).found then shape = constshape.operator
+            if (statics.operatorPartsAt :ast :nid).found then shape = constshape.operator
         } case ifexpr then {
             shape = constshape.ifexpr
         } case caseexpr then {
@@ -3254,8 +3265,8 @@ stampConstAt: function {
     if plan.shape.operator then refuseZeroDivisor :st :ast :nid
     if (useSiteAsks :st :ast :nid :plan).not then return
     held: st.walk.constFail
-    constFailClear :st
-    cv: evalConstNode :st :unitDecl scope: st.curScope :ast :nid
+    statics.constFailClear :st
+    cv: statics.evalConstNode :st :unitDecl scope: st.curScope :ast :nid
     got: st.walk.constFail
     st.walk.constFail = held
     # a function a static value holds is called where it is read in a body: the
@@ -3466,5 +3477,5 @@ useSiteAsks: function {
     # (`unit.CONST.u8`) folds
     if (memberaccess.rootNamesAnyUnit :st scope: st.curScope nameId: pn) then return true
     pv: zast.nameTextAt :ast ref: pn
-    return (isNumericLiteralName name: pv.stringView)
+    return (statics.isNumericLiteralName name: pv.stringView)
 }

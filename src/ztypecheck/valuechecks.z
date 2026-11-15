@@ -222,7 +222,7 @@ readSingletonValue: function {st: zenv.ZSymbolTable nid: zast.nodeid tid: ztypes
     sg: tid
     # the template's own parameter type is each instance's own in its walk
     if row.instance.isZero then {
-        ws: monoSingletonOf :st nameId: row.param
+        ws: statics.monoSingletonOf :st nameId: row.param
         if ws.notZero then sg = ws
     }
     v: st.typing.singletonValueOf tid: sg
@@ -365,7 +365,7 @@ reportUnknownBareAliasTarget: function {
     if (nameDeclaredOutward :st from: adp :nameId) then return false
     unknown: unresolvedBareName :ast :st :unitDecl :nameId
     if unknown.length == 0 then return false
-    at: aliasValueSite :st :ast :adecl
+    at: statics.aliasValueSite :st :ast :adecl
     st.typing.refusedValues.add item: at.nid
     (
         addErrorWithHint
@@ -501,7 +501,7 @@ nodeNamesType: function {
     if (memberaccess.enclosingAsAliasTid :st :ast scope: st.curScope :nameId
     ).notZero then return true
     if (isNumericLiteralNameAt :ast ref: nameId) then return false
-    return (nameNamesType :st :ast :unitDecl :nameId)
+    return (statics.nameNamesType :st :ast :unitDecl :nameId)
 }
 
 # methodHasNoUserArgs -- true when a method type has no user-visible parameters
@@ -819,7 +819,7 @@ checkUnitMemberValue: function {
     # member's own name reaches it through an alias as readily as through the
     # type's registry name; the suppress flag keeps dotted-path bases out
     if coerce when isFn.not when st.mode.suppressBareCtor.not when (
-        bareNameDenotesType
+        statics.bareNameDenotesType
         :ast
         :st
         unitDecl: memberUnit
@@ -849,7 +849,7 @@ checkUnitMemberValue: function {
     if udR.notZero then {
         cnRef: cnId
         # the unit's root, or its public block when the block defines it
-        udO: qualifiedMemberScope :st unitRoot: udR memberId: cnRef
+        udO: statics.qualifiedMemberScope :st unitRoot: udR memberId: cnRef
         udD = st.typing.declFindChild parentDeclId: udO nameId: cnRef
     }
     if udD.isZero then udD = templateDeclOf reg: st.reg typing: st.typing tid: memberDecl
@@ -902,7 +902,7 @@ callFieldObject: function {
         :st
         :unitDecl
         :ast
-        dp: (dpRefAt :ast nid: dp.nid)
+        dp: (statics.dpRefAt :ast nid: dp.nid)
         bt: result
         coerce: true
     )
@@ -997,7 +997,7 @@ checkBareTypeValue: function {
     fo: ztypes.tid
 } is {
     if (
-        bareNameDenotesType
+        statics.bareNameDenotesType
         :ast
         :st
         :unitDecl
@@ -1577,9 +1577,9 @@ checkUnboundAtom: function {
     # it is told first
     isLit: false
     ndNm: zast.nameTextAt :ast ref: node.name
-    isLit = isNumericLiteralName name: ndNm.stringView
+    isLit = statics.isNumericLiteralName name: ndNm.stringView
     ndNm.drop
-    if isLit then return (checkLiteralAtom :st :ast :node)
+    if isLit then return (statics.checkLiteralAtom :st :ast :node)
     # a local the lookup answered none for: one whose statement is still being
     # checked, or one moved out of, asked off one lookup
     if (refuseUnreadableLocal :st :ast :node) then return ztypes.tid
@@ -1593,7 +1593,7 @@ checkUnboundAtom: function {
     if (refuseStrayControl :st :unitDecl :ast :node) then return ztypes.tid
     # the parameter is the innermost scope's: a unit template declares it as a
     # member, where a type lookup would find it as a name
-    result: checkNumericParamAtom :st :ast :node
+    result: statics.checkNumericParamAtom :st :ast :node
     if result.isZero then result = typeOfBareName :st :unitDecl :ast :node
     return result
 }
@@ -1660,7 +1660,7 @@ checkNarrowedConstRead: function {
     if (
         memberaccess.armCarriesPayload
         :st
-        armTid: (constValueTid :st scope: st.curScope :ast :v)
+        armTid: (statics.constValueTid :st scope: st.curScope :ast :v)
         armName: arm
     ).not then return ztypes.tid.zero
     tid: st.currentTypeOf declId: d
@@ -1763,7 +1763,7 @@ materialiseLiteral: function {
     # demands its own default scalar, the way the suffixed form and the
     # literal-NAME form (resolveNamedType) already do. Without this nothing
     # demands i64 for `x: 42` -- a literal names nothing.
-    dn: literalTypeDefaultTid :st scope: st.curScope :ast :t
+    dn: statics.literalTypeDefaultTid :st scope: st.curScope :ast :t
     if dn.isZero then return t
     return dn
 }
@@ -3933,7 +3933,7 @@ namesTypeApplication: function {
     if bn.call then headId = bn.callable
     if headId.isZero then return false
     if (nodeNamesType :st :ast :unitDecl nid: headId).not then return false
-    call: callRefAt :ast :nid
+    call: statics.callRefAt :ast :nid
     k: u64
     for k < call.nargs loop {
         arg: argRefAt :ast nid: (zast.callArgAt :ast :nid i: k)
@@ -4155,7 +4155,7 @@ callableDottedResultAt: function {
     match (
         arm
     ) case dottedpath then {
-        dr: dpRefAt :ast :nid
+        dr: statics.dpRefAt :ast :nid
         # `Type.arm` is one path whether an argument follows or not, so the
         # arm read is told it is a CALLABLE here -- the only place that knows
         cdPrev: st.walk.calleeDottedNid
@@ -4267,7 +4267,7 @@ unresolvedBareCallable: function {
         # an INFIX call hides the unresolvable name in EITHER operand
         # (`1 + ghost`), and the callable alone reaches only the left one.
         # Read ahead of the match: an arm narrows `n` to its own row.
-        ipu: operatorPartsAt :ast :nid
+        ipu: statics.operatorPartsAt :ast :nid
         match (
             n
         ) case call then {
@@ -4816,7 +4816,7 @@ checkValueRowAt: function {
         return ult
     }
     markStaticListIndexRead :st :ast :nid
-    markFoldedFnFieldCall :st :ast :nid
+    statics.markFoldedFnFieldCall :st :ast :nid
     ft: textFoldType :st :ast :nid
     if ft.notZero then {
         stampGate :st :nid tid: ft
@@ -4927,16 +4927,16 @@ checkValueArmAt: function {
     match (
         arm
     ) case call then {
-        cr: callRefAt :ast :nid
+        cr: statics.callRefAt :ast :nid
         return (memberaccess.checkCall :st :unitDecl :ast call: cr)
     } case dottedpath then {
-        dr: dpRefAt :ast :nid
+        dr: statics.dpRefAt :ast :nid
         return (checkDotted :st :unitDecl :ast dp: dr coerce: true)
     } case atomid then {
         ar: atomRefAt :ast :nid
         return (checkAtomid :st :unitDecl :ast node: ar)
     } case atomstring then {
-        str: strRefAt :ast :nid
+        str: statics.strRefAt :ast :nid
         return (declare.checkString :st :unitDecl :ast node: str)
     } case swapstmt then {
         sr: swapRefAt :ast :nid
@@ -4953,7 +4953,7 @@ checkValueArmAt: function {
         checkReassignment :st :unitDecl :ast rasgn: rr
         return ztypes.tid.zero
     } case caseexpr then {
-        csr: caseRefAt :ast :nid
+        csr: statics.caseRefAt :ast :nid
         return (flow.checkCase :st :unitDecl :ast casenode: csr)
     } case ifexpr then {
         ifr: ifRefAt :ast :nid
@@ -5068,7 +5068,7 @@ foldLoopPost: function {
     opId: pcId
     pc: argRefAt :ast nid: pcId
     if pc.nid.notZero then opId = pc.operation
-    return (foldTruth :st :scope :ast :unitDecl :opId)
+    return (statics.foldTruth :st :scope :ast :unitDecl :opId)
 }
 
 # textFoldOp -- the fold the text method `nameId` has, textfold.none for a

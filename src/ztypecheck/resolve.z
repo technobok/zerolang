@@ -353,7 +353,7 @@ aliasOrShellTypeId: function {
     # declares itself when READ, the same door a constant takes in
     # descendNamed -- a signature mentioning it may be resolved before the pass
     # that walks its definition.
-    if defDecl.notZero when (instantiatedAliasFold :ast :st declId: defDecl) then {
+    if defDecl.notZero when (statics.instantiatedAliasFold :ast :st declId: defDecl) then {
         it7: st.typing.declTypeOf declId: defDecl
         if it7.notZero then return it7
     }
@@ -493,7 +493,7 @@ resolveDottedArgTid: function {
     ast: Ast
     nid: zast.nodeid
 } out ztypes.tid is {
-    dr: dpRefAt :ast :nid
+    dr: statics.dpRefAt :ast :nid
     if dr.nid.isZero then return ztypes.tid.zero
     # a unit the declarations name, however deep and through any alias
     cqId: atomNameId :ast n: (ast.nodes.get i: dr.child)
@@ -802,7 +802,7 @@ resolveTyperefAtomShell: function {
     demand: bool
     nid: zast.nodeid.zero
 } out ztypes.tid is {
-    npO: numericParamTypeOwner :st :ast :unitDecl :scope :nameId :thisName
+    npO: statics.numericParamTypeOwner :st :ast :unitDecl :scope :nameId :thisName
     if npO.notZero then return (typeref.numericParamBoundOf :st :ast :scope owner: npO :nameId)
     if demand then {
         walkScope: typeargs.scopeFor typing: st.typing :scope :unitDecl
@@ -1173,7 +1173,7 @@ qualifiedMemberTid: function {
     memberId: zast.nameid
 } out ztypes.tid is {
     if memberId.isZero then return ztypes.tid.zero
-    ud: qualifierUnitDecl :st :scope :ast nid: qualNid
+    ud: statics.qualifierUnitDecl :st :scope :ast nid: qualNid
     if ud.isZero then return ztypes.tid.zero
     owner: st.typing.declParentOf declId: ud
     if owner == st.typing.programRoot then {
@@ -1306,7 +1306,7 @@ unionCustomTagOfArm: function {
     if pnId.isZero then return none
     ld: memberaccess.declInScope :st scopeDeclId: scope nameId: pnId
     if ld.notZero when (st.typing.decls.get i: ld).kind.staticListDecl then {
-        lv: evalConstNode :st :scope :ast :unitDecl nid: baseId
+        lv: statics.evalConstNode :st :scope :ast :unitDecl nid: baseId
         if lv.kind.aggKind then return (tagsource row: lv.aggId decl: ld)
         return none
     }
@@ -1717,23 +1717,26 @@ resolveAliasKey: function {
     # falls through to the chase below, unchanged. A path to an instance's
     # numeric generic parameter (`X: B5.cap`) folds too, and names its
     # singleton type: an alias.
-    sgp: singletonPathAlias :st :ast :declId scope: ascope
+    sgp: statics.singletonPathAlias :st :ast :declId scope: ascope
     if sgp.notZero then {
         registerAliasTarget :st :declId scope: ascope tid: sgp
         return sgp
     }
-    constFoldDecl :st :ast :declId
-    cvA: constValueOfDecl :st :declId
+    statics.constFoldDecl :st :ast :declId
+    cvA: statics.constValueOfDecl :st :declId
     if cvA.isConst then return (st.typing.declTypeOf :declId)
     # an alias of a numeric generic parameter (`SAME: cap`) in the template
     # names the parameter's singleton type
     if (aliasIsBareForm :st :ast :declId) then {
         npa: (
-            numericParamAliasTarget
+            statics.numericParamAliasTarget
             :st
             :ast
             scope: ascope
-            nameId: (zast.atomNameIdOf n: (ast.nodes.get i: (declOperationOf :st :ast :declId)))
+            nameId: (
+                zast.atomNameIdOf
+                n: (ast.nodes.get i: (statics.declOperationOf :st :ast :declId))
+            )
         )
         if npa.notZero then {
             registerAliasTarget :st :declId scope: ascope tid: npa
@@ -1743,7 +1746,7 @@ resolveAliasKey: function {
     r: fileUnitAliasTid :st :ast adecl: declId
     if r.isZero then r = resolveAliasKeyIn :st scope: ascope :ast :declId
     if r.isZero then r = resolveAppliedMemberAlias :st :ast scope: ascope :declId
-    if r.isZero then r = resolveDeepAlias :st :ast scope: ascope :declId
+    if r.isZero then r = statics.resolveDeepAlias :st :ast scope: ascope :declId
     refuseArmAliasPayload :st :ast :declId tid: r
     return r
 }
@@ -1811,11 +1814,11 @@ valueHeadDecl: function {
             # a qualifier naming a unit is no definition by value: the head is
             # the member it reaches, so a ring through a unit's name -- the
             # definition's own unit or another -- is still a ring
-            qu: qualifierUnitDecl :st :scope :ast nid: n.parent
+            qu: statics.qualifierUnitDecl :st :scope :ast nid: n.parent
             if qu.notZero then {
                 cn: atomNameId :ast n: (ast.nodes.get i: n.child)
                 if cn.isZero then return ztypes.declid.zero
-                own: qualifiedMemberScope :st unitRoot: qu memberId: cn
+                own: statics.qualifiedMemberScope :st unitRoot: qu memberId: cn
                 return (st.typing.declFindChild parentDeclId: own nameId: cn)
             }
             nid = n.parent
@@ -2190,7 +2193,7 @@ reportMissingAliasTarget: function {
     }
     if what == 2 then msg = "type '\{root}' has no member '\{member}'"
     if what != 3 then code = zast.err.typeError
-    at: aliasValueSite :st :ast :adecl
+    at: statics.aliasValueSite :st :ast :adecl
     st.typing.refusedValues.add item: at.nid
     (
         addErrorWithHint
@@ -2237,7 +2240,7 @@ aliasRootScope: function {
         if isType.not then return (aliasroot unitDecl: none other: true)
         return (aliasroot unitDecl: none other: false)
     }
-    if (nameDenotesUnit :st :scope :nameId) then {
+    if (statics.nameDenotesUnit :st :scope :nameId) then {
         return (aliasroot unitDecl: (unitDeclOfNameOrOwn :st :scope :nameId) other: false)
     }
     return (aliasroot unitDecl: none other: false)
@@ -2393,7 +2396,7 @@ resolveAliasKeyIn: function {
             :st
             scope: aParent
             :ast
-            qualNid: (dpRefAt :ast nid: avn).parent
+            qualNid: (statics.dpRefAt :ast nid: avn).parent
             memberId: altK.defName
         )
     }
@@ -2511,7 +2514,7 @@ descendNamedId: function {
         if ddo.kind.constDecl or ddo.kind.staticListDecl when ddo.typeId.isZero then dcC = true
         isConst: ddo.kind.constDecl
         ddo.drop
-        if dcC then constFoldDecl :st :ast declId: ddec
+        if dcC then statics.constFoldDecl :st :ast declId: ddec
         # a definition that instantiates a generic (`F2: (fx n: 2)`) names that
         # instance, a type, once folded -- reached through its unit's path as
         # through its bare name
@@ -2637,7 +2640,7 @@ resolveDottedDef: function {
     # return types and value uses resolve. Replicates resolveTyperefShell's
     # cross-unit leg.
     apId: atomNameId :ast n: (ast.nodes.get i: defn.parent)
-    if (nameDenotesUnit :st scope: rf nameId: apId) then {
+    if (statics.nameDenotesUnit :st scope: rf nameId: apId) then {
         acId: atomNameId :ast n: (ast.nodes.get i: defn.child)
         demandUnitMember :st unitNameId: apId nameId: acId
         # The alias target is read off the re-export Decl's node on demand
@@ -2760,14 +2763,14 @@ resolveDef: function {
     } case listblock then {
         # a list is a constant: folding it registers its type, its value's
         ld: st.typing.declFindChild parentDeclId: rf nameId: defNameId
-        constFoldDecl :ast :st declId: ld
+        statics.constFoldDecl :ast :st declId: ld
         dbt: st.typing.declTypeOf declId: ld
         if dbt.notZero then ztyping.nodeTypeSet tbl: st.typing.nodeType nid: defnId tid: dbt
     } case objectdef then {
         orf: declare.objRefAt :ast nid: defnId
         declare.resolveObjectDef :st :ast :unitDecl :rf :defName nameId: defNameId defn: orf
     } case dottedpath then {
-        ddr: dpRefAt :ast nid: defnId
+        ddr: statics.dpRefAt :ast nid: defnId
         resolveDottedDef :st :ast :unitDecl :rf :defName defn: ddr
     } case atomid then {
         # a bare name (`Text: String`, `n: LIMIT`) resolves as its use would:
@@ -3275,7 +3278,15 @@ resolveDemandedReexport: function {
     # walks every definition of every unit instead, so exactly one of the
     # two speaks.
     if st.typing.eagerAll then return
-    resolveConstantMember :st scope: rf :ast unitDecl: puDecl defName: defNameText defnId: opId
+    (
+        statics.resolveConstantMember
+        :st
+        scope: rf
+        :ast
+        unitDecl: puDecl
+        defName: defNameText
+        defnId: opId
+    )
 }
 
 # resolveDemandedNamespace -- a demanded `unit { … }` resolves as the namespace it
@@ -3549,7 +3560,7 @@ scanCallsInNode: function {
         # bare body identifiers demand main-unit definitions (unit constants,
         # lists); non-definition names never match a demanded def.
         scN: ast.names.texts.get i: node.name
-        if (isNumericLiteralName name: scN.stringView).not then {
+        if (statics.isNumericLiteralName name: scN.stringView).not then {
             aFr: unitScopeOf typing: st.typing declId: scope
             demandDefinition :st scope: aFr nameId: node.name
         }
@@ -3682,7 +3693,7 @@ demandPathNames: function {
     if bn.length == 0 then return
     fr: unitScopeOf typing: st.typing declId: scope
     demandDefinition :st scope: fr nameId: rootId
-    if (nameDenotesUnit :st :scope nameId: rootId).not then return
+    if (statics.nameDenotesUnit :st :scope nameId: rootId).not then return
     membId: atomNameId :ast n: (ast.nodes.get i: childId)
     mn: zast.nameTextAt :ast ref: membId
     if mn.length > 0 then demandUnitMember :st unitNameId: rootId nameId: membId
@@ -4327,7 +4338,7 @@ nameClaimedByScopeId: function {
     # the name asked about, interned
     nameId: zast.nameid
 } out bool is {
-    if (nameDenotesUnit :st :scope :nameId) then return true
+    if (statics.nameDenotesUnit :st :scope :nameId) then return true
     # a name the unit DECLARES is claimed whether or not it resolved: a
     # failed declaration is reported once, at the declaration
     declared: st.typing.declFindChild parentDeclId: unitDecl :nameId
@@ -4436,7 +4447,7 @@ stampOnePendingTyperef: function {
     # an alias of the type the ref is written in, which the scope it waits in
     # does not see
     if (memberaccess.stampAliasRef :st :ast :uk :pval :origin) then return
-    r: walkLookupTyperefFrom :st :ast scope: rf baseId: pval
+    r: statics.walkLookupTyperefFrom :st :ast scope: rf baseId: pval
     if r.some then {
         rt: r
         # a generic type named bare in a type position is its defaults' instance
@@ -4899,7 +4910,7 @@ checkBareGenericReturnAt: function {ast: Ast st: zenv.ZSymbolTable slot: u64} is
     # a generic type's name, stamped with its defaults' instance: that
     # instance is what the function returns
     if rtb != rtd then ztyping.nodeTypeSet tbl: st.typing.nodeType nid: rn tid: rtb
-    nameT: (walkLookupTyperefFrom :st :ast scope: rsc baseId: root).or d: ztypes.tid.zero
+    nameT: (statics.walkLookupTyperefFrom :st :ast scope: rsc baseId: root).or d: ztypes.tid.zero
     if nameT.notZero when (st.reg.genericOriginOf tid: rtb) == nameT when fk.notZero then {
         st.reg.setReturnType typeId: fk value: rtb
     }
@@ -5537,7 +5548,7 @@ resolveInstantiatedAlias: function {
         st.typing.declSetType declId: adecl typeId: mtid
         st.walk.instantiatedAliases.add item: adecl
     }
-    cu: st.typing.declTypeOf declId: (constOwnerDeclFor :st :scope :ast :unitDecl :defName)
+    cu: st.typing.declTypeOf declId: (statics.constOwnerDeclFor :st :scope :ast :unitDecl :defName)
     if cu.notZero then {
         (
             st.typing.setMemberType
@@ -5673,7 +5684,12 @@ resolveConstantDefsIn: function {
                     # a constant whose fold is under way further up the stack
                     # is left to that fold: the walk only makes sure each
                     # member folds, and is no read that could close a cycle
-                    if isEdge.not when (constFoldOpen :st scope: rf :unitDecl nameId: bmNode.name
+                    if isEdge.not when (
+                        statics.constFoldOpen
+                        :st
+                        scope: rf
+                        :unitDecl
+                        nameId: bmNode.name
                     ) then isEdge = true
                     if isEdge.not when (
                         declare.isGenericParam
@@ -5681,7 +5697,7 @@ resolveConstantDefsIn: function {
                         op: (ast.nodes.get i: bmNode.operation)
                     ).not then {
                         (
-                            resolveConstantMember
+                            statics.resolveConstantMember
                             :st
                             scope: rf
                             :ast
@@ -6113,7 +6129,7 @@ declProbeUnitChildRoot: function {
         return (resolveAliasKey :st :ast declId: cid)
     }
     if isC then {
-        constFoldDecl :st :ast declId: cid
+        statics.constFoldDecl :st :ast declId: cid
         rt: st.typing.declTypeOf declId: unitRoot
         if rt.notZero then {
             co: st.typing.declChildOfId parentTypeId: rt :nameId
@@ -6812,7 +6828,7 @@ typecheck: function {
         canonUnit: unitDeclOfNameOrOwn :st scope: rf nameId: st.reg.regMainUnitId
         canonicalizeShellChildren ast: program :st scope: rf unitDecl: canonUnit
         canonicalizeShellNodeStamps ast: program :st scope: rf unitDecl: canonUnit
-        foldInstanceConstants ast: program :st
+        statics.foldInstanceConstants ast: program :st
         checkGenericBounds ast: program :st
         numerics.checkUnionArmSlots ast: program :st
         checkImplementations ast: program :st

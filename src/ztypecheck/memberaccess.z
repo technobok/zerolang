@@ -212,8 +212,8 @@ memberFailedWhereWritten: function {
     # an implementation holds no value either, and is refused as what it is
     if (zast.implementBaseOf :ast opId: item.operation).notZero then return false
     # a constant that does not fold says why where it is written (attachAsConstant)
-    constFoldDecl :ast :st declId: md
-    return (constValueOfDecl :st declId: md).kind.none
+    statics.constFoldDecl :ast :st declId: md
+    return (statics.constValueOfDecl :st declId: md).kind.none
 }
 
 # refuseMemberAsType -- E0100 at the type-ref `nid` that names the `as` member
@@ -303,7 +303,7 @@ declNamesType: function {st: zenv.ZSymbolTable.view ast: Ast.view d: ztypes.decl
     if tto.some then {
         return (tto != ztypes.ztypetype.functionType) and (tto != ztypes.ztypetype.unitType)
     }
-    if k.reexportDecl then return (aliasNamesType :st :ast declId: d)
+    if k.reexportDecl then return (statics.aliasNamesType :st :ast declId: d)
     return false
 }
 
@@ -339,7 +339,7 @@ pathTypeDecl: function {
         return none
     }
     if par.isZero then return none
-    ud: qualifierUnitDecl :st :scope :ast nid: par
+    ud: statics.qualifierUnitDecl :st :scope :ast nid: par
     if ud.isZero then return none
     m: st.typing.declFindChild parentDeclId: ud nameId: (atomNameId :ast n: (ast.nodes.get i: chd))
     if (declNamesType :st :ast d: m) then return m
@@ -517,7 +517,7 @@ asAliasTargetOf: function {
     op: (argRefAt :ast nid: (st.typing.decls.get i: md).node).operation
     tn: zast.nameTextCopy :ast ref: (st.typing.decls.get i: tdecl).name
     sgt: (
-        numericParamAliasTarget
+        statics.numericParamAliasTarget
         :st
         :ast
         scope: tdecl
@@ -1032,7 +1032,7 @@ checkParamTypeShape: function {
             # a dotted numeric literal (0.u64) is a typed numeric
             # default, not a variant arm (mirrors the field
             # classifiers' rootNameOf guard)
-            if (isNumericLiteralName name: prn.stringView) then {
+            if (statics.isNumericLiteralName name: prn.stringView) then {
                 # a refused default keeps its place, so the member is not
                 # reported as required as well
                 refuseLiteralMember :st :ast nid: pm.operation
@@ -1144,7 +1144,7 @@ registerValueParam: function {
     # it could answer.
     # a partial specialisation answers only for a typeref; a value that folds
     # (`n: 2 * 3`) is no typeref, whatever shell the partial walk made of it
-    folded: foldParamValue :st :ast :fid :pm partialTid: cid
+    folded: statics.foldParamValue :st :ast :fid :pm partialTid: cid
     if folded.notZero then cid = folded
     if cid.isZero then cid = (
         typeref.resolveTyperefShell
@@ -1245,7 +1245,7 @@ instanceOnlyConstantNamed: function {
         dn: ast.nodes.get i: dnode
         if dn.namedoperation then opId = dn.operation
     }
-    return (constReadsNumericParam :st :ast owner: tdecl :opId)
+    return (statics.constReadsNumericParam :st :ast owner: tdecl :opId)
 }
 
 # foldReadInstanceConstant -- a read of member `cnId` of `bt`: when it is a
@@ -1265,10 +1265,10 @@ foldReadInstanceConstant: function {
     tdecl: st.typing.declIdOfType typeId: tpl
     if tdecl.isZero or ((st.reg.genericNumericParamCountOf :tdecl) == 0) then return
     mono: bt
-    if org.isZero then mono = activeConstMono :st ownerDecl: tdecl
+    if org.isZero then mono = statics.activeConstMono :st ownerDecl: tdecl
     if mono.isZero or (st.reg.isPartialOf tid: mono) then return
     (
-        foldInstanceConstant
+        statics.foldInstanceConstant
         :st
         :ast
         :mono
@@ -1372,7 +1372,7 @@ declaredFieldTid: function {
     folded: ztypes.tid
 } out ztypes.tid is {
     if folded.notZero then return folded
-    refuseUnfoldedConversion :st :ast what: "field" dm: fm
+    statics.refuseUnfoldedConversion :st :ast what: "field" dm: fm
     noteFieldRefOwner :st :ast ownerTid: rid :fm
     return (
         fieldSlotTid
@@ -1428,7 +1428,7 @@ attachDeclaredField: function {
     fm: argref
     fname: StringView
 } is {
-    folded: foldedDeclType :st :ast ownerTid: rid dm: fm
+    folded: statics.foldedDeclType :st :ast ownerTid: rid dm: fm
     cid: declaredFieldTid :st :scope :ast :unitDecl :defName :rid :fm :folded
     # a list that did not fold declares nothing; its fold said why
     if (ast.nodes.get i: fm.operation).listblock when folded.isZero then return
@@ -1478,7 +1478,7 @@ attachDeclaredField: function {
     )
     dcn1Id: dottedChildNameId :ast n: (ast.nodes.get i: fm.operation)
     rdnr: zast.nameTextAt :ast ref: (rootNameIdOf :ast n: (ast.nodes.get i: fm.operation))
-    if (isNumericLiteralName name: rdnr.stringView) then {
+    if (statics.isNumericLiteralName name: rdnr.stringView) then {
         refuseWideDefault :st :ast nid: fm.operation
         refuseLiteralMember :st :ast nid: fm.operation
         (
@@ -1770,7 +1770,7 @@ refuseNonStaticMember: function {
     # the member is a choice's arm rather than a data field
     arm: false
 } out bool is {
-    if tid.isZero or (isStaticMemberTid :st :ast :tid) then return false
+    if tid.isZero or (statics.isStaticMemberTid :st :ast :tid) then return false
     # a type parameter: the data type itself is refused (refuseDataShape)
     if (st.reg.typetypeOf typeId: tid) == ztypes.ztypetype.genericParam then return false
     tn: specWrittenName :st :ast :tid
@@ -1819,7 +1819,7 @@ refuseReftypeMember: function {
     if (st.reg.isReftypeOf :tid).not then return false
     # the type the author WROTE: a mono's minted name (`ListRef_String`) is
     # not a name the program spells anywhere
-    tn: typeExprText :ast nid: fm.operation
+    tn: statics.typeExprText :ast nid: fm.operation
     if tn.length == 0 then tn = st.reg.nameOf :tid
     mr: "a \{what} holds valtypes; make '\{owner}' a \{remedy} to hold '\{tn}'"
     (
@@ -1940,7 +1940,7 @@ recordFieldDefault: function {
 } is {
     dcn0Id: dottedChildNameId :ast n: (ast.nodes.get i: fm.operation)
     rdnc: zast.nameTextAt :ast ref: (rootNameIdOf :ast n: (ast.nodes.get i: fm.operation))
-    if (isNumericLiteralName name: rdnc.stringView) then {
+    if (statics.isNumericLiteralName name: rdnc.stringView) then {
         refuseWideDefault :st :ast nid: fm.operation
         refuseLiteralMember :st :ast nid: fm.operation
         (
@@ -1999,7 +1999,7 @@ namesAsAlias: function {
         md: st.typing.declFindChild parentDeclId: cur nameId: nm
         if md.notZero then {
             # a unit's definition aliases a type, as a type's `as` item does
-            if (aliasNamesType :st :ast declId: md) then return true
+            if (statics.aliasNamesType :st :ast declId: md) then return true
             return (asMemberIsAlias :st :ast tdecl: cur :md)
         }
         cur = st.typing.declParentOf declId: cur
@@ -2159,7 +2159,7 @@ armDefaultLeaf: function {
     n: ast.nodes.get i: node
     leaf: dottedChildNameId :ast :n
     if leaf.isZero or (isStripMarkerId nameId: leaf) then return none
-    if (pathNamesTypeConstant :st :ast :ownerTid :node) then return none
+    if (statics.pathNamesTypeConstant :st :ast :ownerTid :node) then return none
     if (rootNamesAnyUnit :st :scope nameId: (rootNameIdOf :ast :n)) then {
         pathParent: zast.nodeid
         match n case dottedpath then pathParent = n.parent else null
@@ -2187,7 +2187,7 @@ valueStampsTyperef: function {
     if folded.isZero then {
         rootId: rootNameIdOf :ast n: (ast.nodes.get i: node)
         ownerDecl: st.typing.declIdOfType typeId: ownerTid
-        return (numericParamOwnerFrom :st scope: ownerDecl nameId: rootId).isZero
+        return (statics.numericParamOwnerFrom :st scope: ownerDecl nameId: rootId).isZero
     }
     vnId: zast.atomNameIdOf n: (ast.nodes.get i: node)
     if vnId.isZero then return false
@@ -2213,7 +2213,7 @@ recordFoldedDefault: function {
     rootName: rootNameIdOf :ast n: (ast.nodes.get i: dm.operation)
     if (isNumericLiteralNameAt :ast ref: rootName) then return
     fdc: st.typing.declMemberIdOf parentTypeId: ownerTid nameId: dm.name
-    cv: constValueOfDecl :st declId: fdc
+    cv: statics.constValueOfDecl :st declId: fdc
     isList: false
     if cv.kind.aggKind then isList = (st.typing.constAggs.get i: cv.aggId.u64).kind.staticList
     if cv.kind.ivalKind or cv.kind.fvalKind or cv.kind.svalKind or isList then {
@@ -2261,7 +2261,7 @@ recordFoldedArmDefault: function {
     dm: argref
 } is {
     fdc: st.typing.declMemberIdOf parentTypeId: ownerTid nameId: dm.name
-    cvF: constValueOfDecl :st declId: fdc
+    cvF: statics.constValueOfDecl :st declId: fdc
     if cvF.kind.armKind.not then return
     (
         recordArmDefault
@@ -2298,7 +2298,7 @@ resolveNamedFieldSlot: function {
     # declared by one is a constant declaration in the same sense a unit-level
     # `x: -1` is, so it takes the same door -- the fold -- and only a
     # declaration that names no constant falls through to the type-ref path.
-    foldTid: foldedDeclType :st :ast ownerTid: cid dm: fm
+    foldTid: statics.foldedDeclType :st :ast ownerTid: cid dm: fm
     cidf: foldTid
     if cidf.isZero then cidf = (
         fieldSlotTid
@@ -2513,7 +2513,7 @@ paramTypeId: function {
         # block-scoped borrows.
         isSfx: isScalarNameId id: dcnId
         if (isNumericLiteralNameAt :ast ref: bnId) when isSfx then {
-            return (scalarTidOf :st scope: st.curScope :ast nameId: dcnId)
+            return (statics.scalarTidOf :st scope: st.curScope :ast nameId: dcnId)
         }
         # a path from a unit (`shade.hue.red`) names no type at its root:
         # bindFunctionParam takes the type its registration resolved
@@ -2604,14 +2604,14 @@ pathNamesType: function {st: zenv.ZSymbolTable ast: Ast nid: zast.nodeid} out bo
     # kind.a`) or a constant -- is a VALUE alias, as nameNamesType reads a bare
     # one, so `u.k.b` is the arm predicate and not a construction of `kind.b`
     pcv: (
-        constValueOfMemberId
+        statics.constValueOfMemberId
         :st
         scope: (st.typing.declParentOf declId: rd)
         :ast
         unitDecl: (owningUnitDecl :st declId: rd)
         nameId: (st.typing.declNameOf declId: rd)
     )
-    constFailClear :st
+    statics.constFailClear :st
     return pcv.kind.none
 }
 
@@ -3502,7 +3502,7 @@ refuseTemplateOnlyConstant: function {
     if (st.reg.genericOriginOf tid: bt).notZero then return false
     tdecl: st.typing.declIdOfType typeId: bt
     if (st.reg.genericParamCountOf :tdecl) == 0 then return false
-    if (activeConstMono :st ownerDecl: tdecl).notZero then return false
+    if (statics.activeConstMono :st ownerDecl: tdecl).notZero then return false
     # inside the template each instance's walk values it
     if (scopeIsWithin typing: st.typing scope: st.curScope root: tdecl) then return false
     cd: st.typing.declFindChild parentDeclId: tdecl nameId: cnId
@@ -3513,7 +3513,7 @@ refuseTemplateOnlyConstant: function {
     if dn.namedoperation then opId = dn.operation
     cdo.drop
     if opId.isZero then return false
-    if (constReadsNumericParam :st :ast owner: tdecl :opId).not then return false
+    if (statics.constReadsNumericParam :st :ast owner: tdecl :opId).not then return false
     cn: zast.nameTextAt :ast ref: cnId
     tn: specWrittenName :st :ast tid: bt
     (
@@ -3600,7 +3600,7 @@ checkInstanceConstant: function {
     vt: consteval.constNumTidOf :ast :st scope: st.curScope :v
     # a value that is no number -- text, an arm, an aggregate -- is typed by what
     # it is, as the instance's own: the template's member has no type for it
-    if vt.isZero then vt = constValueTid :ast :st scope: st.curScope :v
+    if vt.isZero then vt = statics.constValueTid :ast :st scope: st.curScope :v
     if vt.isZero then {
         vto: st.typing.declChildOfId parentTypeId: origin nameId: cnId
         vt = vto.or d: ztypes.tid.zero
@@ -3657,7 +3657,7 @@ checkNumericParamMember: function {
     tdecl: st.typing.declIdOfType typeId: owner
     cd: st.reg.genericParamConstraintOf :tdecl paramName: cnId
     if cd.numKind.has.not then return miss
-    bound: numericBoundTid :ast :st scope: st.curScope :cd
+    bound: statics.numericBoundTid :ast :st scope: st.curScope :cd
     if bound.isZero then return miss
     tb: templateNamedBase :st :ast :dp :bt :cnId :tdecl
     if tb.none then return (callleg handled: true tid: ztypes.tid)
@@ -3748,7 +3748,7 @@ templateNamedBase: function {
 walkedInstanceOf: function {
     st: zenv.ZSymbolTable.view template: ztypes.tid param: zast.nameid
 } out ztypes.tid is {
-    sg: monoSingletonOf :st nameId: param
+    sg: statics.monoSingletonOf :st nameId: param
     if sg.isZero then return ztypes.tid
     row: st.typing.singletons.get key: sg
     if row.none then return ztypes.tid
@@ -3769,7 +3769,7 @@ refuseTemplateOnlyParam: function {
     tdecl: ztypes.declid
 } out bool is {
     if (st.reg.genericOriginOf tid: bt).notZero then return false
-    if (activeConstMono :st ownerDecl: tdecl).notZero then return false
+    if (statics.activeConstMono :st ownerDecl: tdecl).notZero then return false
     if (scopeIsWithin typing: st.typing scope: st.curScope root: tdecl) then return false
     cn: zast.nameTextAt :ast ref: cnId
     tn: specWrittenName :st :ast tid: bt
@@ -4214,7 +4214,7 @@ checkDottedOn: function {
 } out ztypes.tid is {
     ucc: checkUntypedConstantCast :st :ast :dp
     if ucc.handled then return ucc.tid
-    utc: checkUntypedTextCast :st :ast :dp
+    utc: statics.checkUntypedTextCast :st :ast :dp
     if utc.handled then return utc.tid
     cnId: atomNameId :ast n: (ast.nodes.get i: dp.child)
     if cnId.isZero then return ztypes.tid.zero
@@ -4702,7 +4702,7 @@ bodyMemberIsConstant: function {st: zenv.ZSymbolTable ast: Ast md: ztypes.declid
 refuseBodyFieldRead: function {
     st: zenv.ZSymbolTable ast: Ast nameId: zast.nameid nid: zast.nodeid
 } out bool is {
-    md: bodyMemberDecl :st :nameId
+    md: statics.bodyMemberDecl :st :nameId
     if md.isZero then return false
     td: (st.typing.decls.get i: md).parent
     if (asMemberIsAsItem :st :ast tdecl: td :md) then return false
@@ -4816,7 +4816,7 @@ implicitIterate: function {
     # callable with no arguments, as the written `E.iterate` must be to auto-call
     if (valuechecks.fnAutoCallable :st mid: mt).not then return none
     dn: implicitIterateNode :st :ast :cond
-    rt: checkDottedOn :st :unitDecl :ast dp: (dpRefAt :ast nid: dn) bt: vt coerce: true
+    rt: checkDottedOn :st :unitDecl :ast dp: (statics.dpRefAt :ast nid: dn) bt: vt coerce: true
     return (iterwalk nid: dn tid: rt)
 }
 
@@ -5042,7 +5042,9 @@ fieldRefusedWhereWritten: function {
 refuseNumericOperator: function {st: zenv.ZSymbolTable ast: Ast call: callref} out bool is {
     if call.infix.not then return false
     opLit: zast.nameTextAt :ast ref: (dottedChildNameId :ast n: (ast.nodes.get i: call.callable))
-    if (opLit.length == 0) or (isNumericLiteralName name: opLit.stringView).not then return false
+    if (
+        (opLit.length == 0) or (statics.isNumericLiteralName name: opLit.stringView).not
+    ) then return false
     opNode: ast.nodes.get i: call.callable
     opChild: zast.nodeid
     if opNode.dottedpath then opChild = opNode.child
@@ -5290,7 +5292,7 @@ bindFunctionParam: function {
             ptid = paramChild
         }
     }
-    fpt: foldedParamTid :st :ast :fnTid :pm
+    fpt: statics.foldedParamTid :st :ast :fnTid :pm
     if fpt.notZero then ptid = fpt
     if ptid.isZero when (unitRootedPath :st :ast scope: rf node: pm.operation) then {
         # an arm default through a unit (`m: math.roundingmode.toZero`) names no
@@ -5440,7 +5442,7 @@ numericParamThroughName: function {
     # `(Box cap: 5).cap`; a base that names an instance -- an alias of one, a
     # unit instance -- by name
     leaf: atomNameId :ast n: (ast.nodes.get i: childId)
-    pcall: callRefAt :ast nid: parentId
+    pcall: statics.callRefAt :ast nid: parentId
     if pcall.nid.notZero then return (
         typeApplicationArgValue
         :st
@@ -5482,7 +5484,7 @@ typeApplicationArgValue: function {
         arg: argRefAt :ast nid: (zast.callArgAt :ast nid: call.nid i: k)
         k = k + 1
         if arg.nid.notZero when arg.name == param then return (
-            evalConstNode
+            statics.evalConstNode
             :st
             scope: st.curScope
             :ast
@@ -5504,7 +5506,7 @@ monoNumericParamValue: function {
     if m.isZero then m = st.typing.curMonoStamp
     v: monoNumericArg :st mono: m :nameId
     if v.isConst or st.walk.constMono.notZero then return v
-    own: walkOwnerMono :st
+    own: statics.walkOwnerMono :st
     if own == m then return v
     return (monoNumericArg :st mono: own :nameId)
 }
@@ -5952,7 +5954,7 @@ rootNamesAnyUnit: function {
     scope: ztypes.declid
     nameId: zast.nameid
 } out bool is {
-    if (nameDenotesUnit :st :scope :nameId) then return true
+    if (statics.nameDenotesUnit :st :scope :nameId) then return true
     h: envLookup :st :scope :nameId
     if h.declId.isZero then return false
     return (st.typing.decls.get i: h.declId).kind.unitDecl
