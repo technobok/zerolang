@@ -247,9 +247,15 @@ ctxCname: function {ctx: Ctx.view tid: ztypes.tid} out String is {
 # fixed, the type it names is a use they are closed from (closeReachedTypes),
 # and a function it names is written (noteFnUse).
 spelledCname: function {ctx: Ctx tid: ztypes.tid} out String is {
+    noteSpelled :ctx :tid
+    return (listCname cnames: ctx.cnames :tid)
+}
+
+# noteSpelled -- what spelledCname records, for a caller that reads the name
+# as a view (ctxCnameView) once its writes to `ctx` are done.
+noteSpelled: function {ctx: Ctx tid: ztypes.tid} is {
     if ctx.reachFixed.not then ctx.typeUses.add item: tid
     noteFnUse :ctx :tid
-    return (listCname cnames: ctx.cnames :tid)
 }
 
 # atomVid -- the variable a reference node resolves to, or 0.
@@ -16194,19 +16200,18 @@ emitFnCallWithFid: function {
     fid: ztypes.tid
     facts: exprfacts.borrow
 } out String is {
-    fc: spelledCname :ctx tid: fid
-    fpNames: List String
+    noteSpelled :ctx tid: fid
     fpIds: ListVal ztypes.tid
     paramNameIds: ListVal zast.nameid
-    recFieldLists :ast :reg :typing tid: fid names: fpNames ids: fpIds nameIds: paramNameIds
+    recFieldIds :reg :typing tid: fid ids: fpIds nameIds: paramNameIds
     argSlots: argSlotList :ast :call fpNameIds: paramNameIds
-    ord: orderBegin :ctx slots: fpNames.length
+    ord: orderBegin :ctx slots: paramNameIds.length
     ai: u64
     for each argId: (zast.kidsOf :ast span: call.arguments) loop {
         a: ast.nodes.get i: argId
         if a.namedoperation then {
             argSlot: argSlots.get i: ai
-            if argSlot < fpNames.length then {
+            if argSlot < paramNameIds.length then {
                 (
                     orderUserFnArg
                     :ast
@@ -16228,7 +16233,7 @@ emitFnCallWithFid: function {
     orderPrefix: orderFinish :ctx st: ord
     argTids: String
     pi: u64
-    paramCount: fpNames.length
+    paramCount: paramNameIds.length
     for pi < paramCount loop {
         (
             appendSlotOrDefault
@@ -16250,7 +16255,12 @@ emitFnCallWithFid: function {
         stating
         :facts
         from: callFacts
-        text: (orderClose prefix: orderPrefix callee: fc.stringView args: argTids.stringView)
+        text: (
+            orderClose
+            prefix: orderPrefix
+            callee: (ctxCnameView :ctx tid: fid)
+            args: argTids.stringView
+        )
     )
 }
 

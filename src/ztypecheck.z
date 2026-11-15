@@ -33427,7 +33427,6 @@ unitMemberEffectiveName: function {
     dp: dpref
     bt: ztypes.tid
     cnId: zast.nameid
-    un: StringView
 } out zast.nameid is {
     # public-interface visibility: from ANOTHER unit, translate a public
     # alias to the internal def it exposes, and reject a reference to a
@@ -33449,6 +33448,7 @@ unitMemberEffectiveName: function {
         }
         if aliasHitU.not when (declMemberIsPrivate :st tid: bt nameId: cnId) then {
             cn: zast.nameTextAt :ast ref: cnId
+            un: st.reg.nameOf tid: bt
             ucnid: nodeId n: (ast.nodes.get i: dp.child)
             ucln: nodeLine n: (ast.nodes.get i: dp.child)
             uccl: nodeCol n: (ast.nodes.get i: dp.child)
@@ -33479,9 +33479,9 @@ reportUnknownUnitMember: function {
     dp: dpref
     bt: ztypes.tid
     cnId: zast.nameid
-    un: StringView
 } is {
     cn: zast.nameTextAt :ast ref: cnId
+    un: st.reg.nameOf tid: bt
     m3: "unit '\{un}' has no member '\{cn}'"
     suggestion: suggestSimilar :ast :st parentTypeId: bt name: cn.stringView
     h3: String
@@ -33521,7 +33521,8 @@ checkUnitMemberValue: function {
     ast: Ast
     dp: dpref
     cnId: zast.nameid
-    un: StringView
+    # the unit's type: its name finds the unit when `memberUnit` is zero
+    unitTid: ztypes.tid
     memberUnit: ztypes.declid
     memberDecl: ztypes.tid
     coerce: bool
@@ -33584,11 +33585,14 @@ checkUnitMemberValue: function {
     # `u.sub.k2.a` constructed an arm rather than testing one.
     udD: ztypes.declid
     udR: memberUnit
-    if udR.isZero then udR = (
-        st.typing.declFindChild
-        parentDeclId: st.typing.programRoot
-        nameId: (nameIdOf :ast name: un)
-    )
+    if udR.isZero then {
+        un: st.reg.nameOf tid: unitTid
+        udR = (
+            st.typing.declFindChild
+            parentDeclId: st.typing.programRoot
+            nameId: (nameIdOf :ast name: un.stringView)
+        )
+    }
     if udR.notZero then {
         cnRef: cnId
         # the unit's root, or its public block when the block defines it
@@ -33660,11 +33664,10 @@ checkUnitQualifiedMember: function {
     # unit's namespace; a no-arg FUNCTION member auto-calls in value
     # position (its return is the path's value).
     if (st.reg.typetypeOf typeId: bt) == ztypes.ztypetype.unitType then {
-        un: st.reg.nameOf tid: bt
         # the unit a dotted base names, by id: two units may share a spelling,
         # so the DECLARATION that minted the unit type is the identity here
         btUd: templateDeclOf reg: st.reg typing: st.typing tid: bt
-        effUcn: unitMemberEffectiveName :st :unitDecl :ast :dp :bt :cnId un: un.stringView
+        effUcn: unitMemberEffectiveName :st :unitDecl :ast :dp :bt :cnId
         if effUcn.isZero then return (callleg handled: true tid: ztypes.tid.zero)
         foldReadInstanceConstant :st :ast :bt cnId: effUcn
         memberDecl: unitMemberTypeOf :st :ast unitTid: bt unitDecl: btUd memberId: effUcn
@@ -33679,6 +33682,7 @@ checkUnitQualifiedMember: function {
             pubU: publicNsOf reg: st.reg typing: st.typing tid: bt
             if btUd != unitDecl when pubU.isZero then {
                 cn: zast.nameTextAt :ast ref: cnId
+                un: st.reg.nameOf tid: bt
                 sbl: nodeLine n: (ast.nodes.get i: dp.child)
                 sbc: nodeCol n: (ast.nodes.get i: dp.child)
                 (
@@ -33710,7 +33714,7 @@ checkUnitQualifiedMember: function {
                 :ast
                 :dp
                 :cnId
-                un: un.stringView
+                unitTid: bt
                 memberUnit: btUd
                 :memberDecl
                 :coerce
@@ -33726,7 +33730,6 @@ checkUnitQualifiedMember: function {
                 memberUnit: btUd
                 :cnId
                 memberId: effUcn
-                un: un.stringView
             )
         }
     }
@@ -34485,7 +34488,6 @@ checkUnitUndeclaredMember: function {
     memberUnit: ztypes.declid
     cnId: zast.nameid
     memberId: zast.nameid
-    un: StringView
 } out callleg is {
     if (
         memberDefinitionFailed
@@ -34502,7 +34504,7 @@ checkUnitUndeclaredMember: function {
         refuseTemplateOnlyConstant :st :ast :dp :bt :cnId
         return (callleg handled: true tid: ztypes.tid)
     }
-    reportUnknownUnitMember :st :ast :dp :bt :cnId :un
+    reportUnknownUnitMember :st :ast :dp :bt :cnId
     return (callleg handled: true tid: ztypes.tid)
 }
 
