@@ -1929,21 +1929,62 @@ Analysis: class {
     }
 
     # reportDuplicateBodies -- A006: a function body, eight lines or longer,
-    # whose shape (bodyKeyInto) another function in this file already has. The
-    # first site is the original; each later one is reported against it.
+    # whose shape (bodyKeyInto) another function of the unit family already
+    # has. The first site in family order (familyFilesOf) is the original; each
+    # later one is reported against it, in the file that holds it. So the
+    # files before this one are read for their shapes, and this one is judged.
     reportDuplicateBodies: function {t: this prog: Ast.view} is {
-        firstAt: MapRV String v: u64
+        firstAt: MapRV String v: bodysite
+        family: familyFilesOf file: t.path.stringView
+        own: familyIndexOf :family file: t.path.stringView
+        k: u64
+        for k < own loop {
+            rd: io.readText path: (family.get i: k)
+            match (
+                rd
+            ) case ok then {
+                earlier: ast.parseSource source: rd.take
+                for each eid: earlier.units loop {
+                    t.dupBodyWalk ast: earlier id: eid :firstAt file: k :family judged: false
+                }
+            } case err then null
+            k = k + 1
+        }
         {
             for each uid: prog.units loop {
-                t.dupBodyWalk ast: prog id: uid :firstAt
+                t.dupBodyWalk ast: prog id: uid :firstAt file: own :family judged: true
             }
         }
     }
 
-    # dupBodyWalk -- one node of the duplicate-body pass: a function's body is
-    # keyed and looked up; every child is visited.
+    # reportDuplicateBody -- A006 at `line`, `col` of family file `file`: the
+    # function there has the body shape first seen at `first`
+    reportDuplicateBody: function {
+        t: this first: bodysite file: u64 family: (List String).view line: u32 col: u32
+    } is {
+        at: "line \{first.line}"
+        if first.file != file then at = "line \{first.line} of \{family.get i: first.file}"
+        (
+            t.info
+            code: "A006"
+            msg: "this body has the shape of the one at \{at}; one function, with the difference as an argument"
+            :line
+            :col
+            width: 1
+        )
+    }
+
+    # dupBodyWalk -- one node of the duplicate-body pass over family file
+    # `file`: a function's body is keyed and looked up; every child is visited.
+    # A file that is not `judged` only records its shapes.
     dupBodyWalk: function {
-        t: this ast: Ast.view id: zast.nodeid firstAt: (MapRV String v: u64)
+        t: this
+        ast: Ast.view
+        id: zast.nodeid
+        firstAt: (MapRV String v: bodysite)
+        file: u64
+        family: (List String).view
+        judged: bool
     } is {
         n: ast.nodes.get i: id
         if n.functiondef when n.body.notZero then {
@@ -1957,21 +1998,21 @@ Analysis: class {
                 match (
                     seen
                 ) case some then {
-                    (
-                        t.info
-                        code: "A006"
-                        msg: "this body has the shape of the one at line \{seen}; one function, with the difference as an argument"
+                    if judged then (
+                        t.reportDuplicateBody
+                        first: seen
+                        :file
+                        :family
                         line: n.lineno
                         col: n.colno
-                        width: 1
                     )
                 } case none then {
-                    firstAt.set key: key.copy value: n.lineno.u64
+                    firstAt.set key: key.copy value: (bodysite :file line: n.lineno)
                 }
             }
         }
         kids: zast.childIdsAt :ast :id
-        for each k: kids loop t.dupBodyWalk :ast id: k :firstAt
+        for each k: kids loop t.dupBodyWalk :ast id: k :firstAt :file :family :judged
     }
 
     # walkTypeCasingProgram / walkTypeCasingAt -- L021 (default-on): a type
@@ -3143,64 +3184,40 @@ Analysis: class {
         )
     }
 
-    # docBlockBody -- the comment block starting at line `from`: each line's text
-    # after its `#`, trimmed, joined by single spaces into `into`. Answers the
-    # index of the first line after the block.
-    docBlockBody: function {t: this.view from: u64 into: String.borrow} out u64 is {
-        i: from
-        n: t.lines.length
-        for i < n loop {
-            ln: t.lines.get :i
-            trimmed: ln.stringView.trim
-            if (trimmed.startsWith "#").not then return i
-            body: trimmed.substring from: 1 to: trimmed.length
-            if into.length > 0 then into.append " "
-            into.append s: body.trim
-            i = i + 1
-        }
-        return i
-    }
-
-    # docBlockKey -- a doc body's comparison key: its words with the vocabulary
-    # of the declaration at `declAt` (the line after the block) and every
-    # width folded out, joined.
-    docBlockKey: function {t: this.view ws: List String declAt: u64} out String is {
-        vocab: List String
-        if declAt < t.lines.length then {
-            decl: (t.lines.get i: declAt).copy
-            docVocabInto s: (docStripComment ln: decl.stringView) into: vocab
-        }
-        folded: docFoldTemplate words: ws :vocab
-        return (docJoinWords xs: folded)
-    }
-
-    # reportDuplicateDocs -- L025: the same doc body on more than two definitions in one
-    # file. A real invariant stated at forty sites is one invariant and thirty-nine
-    # copies: state it once, in the unit header, and leave the sites bare. Blocks under
-    # four words are section markers and separators, not docs, and are not counted.
-    # Bodies are compared with the declaration's own words and every width folded
-    # out, so "u8 to i16: every u8 fits i16" and its u16 twin are one body.
+    # reportDuplicateDocs -- L025: the same doc body on more than two definitions of
+    # one unit family (familyFilesOf). A real invariant stated at forty sites is one
+    # invariant and thirty-nine copies: state it once, in the unit header, and leave
+    # the sites bare. Blocks under four words are section markers and separators, not
+    # docs, and are not counted. Bodies are compared with the declaration's own words
+    # and every width folded out, so "u8 to i16: every u8 fits i16" and its u16 twin
+    # are one body. Each file reports the copies it holds.
     reportDuplicateDocs: function {t: this} is {
         keys: List String
         starts: ListVal u64
+        docKeysOf lines: t.lines :keys :starts
         counts: MapRV String v: u64
-        i: u64
-        n: t.lines.length
-        for i < n loop {
-            head: t.lines.get :i
-            if (docLineIsComment ln: head.stringView) then {
-                st: i
-                buf: String
-                i = t.docBlockBody from: i into: buf
-                ws: List String
-                docWordsInto s: buf.stringView into: ws
-                if ws.length >= 4 then {
-                    key: t.docBlockKey :ws declAt: i
-                    counts.set key: key.copy value: ((counts.get :key).or d: 0) + 1
-                    keys.append from: key.copy
-                    starts.append from: st
-                }
-            } else i = i + 1
+        tallyDocKeys :keys into: counts
+        family: familyFilesOf file: t.path.stringView
+        own: familyIndexOf :family file: t.path.stringView
+        fi: u64
+        for fi < family.length loop {
+            if fi != own then {
+                rd: io.readText path: (family.get i: fi)
+                match (
+                    rd
+                ) case ok then {
+                    others: List String
+                    otherStarts: ListVal u64
+                    docKeysOf lines: (linesOf src: rd.stringView) keys: others starts: otherStarts
+                    tallyDocKeys keys: others into: counts
+                } case err then null
+            }
+            fi = fi + 1
+        }
+        where: "in this file".string
+        if family.length > 1 then {
+            topName: unitNameOf file: (family.get i: 0).stringView
+            where = "in the files of unit `\{topName}`"
         }
         j: u64
         for j < keys.length loop {
@@ -3211,7 +3228,7 @@ Analysis: class {
                 (
                     t.warn
                     code: "L025"
-                    msg: "this doc body appears \{c2} times in this file; state it once, in the unit header, and leave the sites bare"
+                    msg: "this doc body appears \{c2} times \{where}; state it once, in the unit header, and leave the sites bare"
                     line: (s2 + 1).u32.orPanic
                     col: 1
                     width: 1
@@ -5297,8 +5314,11 @@ Analysis: class {
         file: prog.fsnoForNode nodeid: probe
         um: unitMembersOf :prog :st :mainTid :memIds :file
         usedE: usedDeclSet :prog :st :mainTid :file :um
-        refNames: unitAtomNames :prog :file :um
-        ev: UnusedEvidence :mainTid :usedE :refNames :memIds
+        family: ListVal zvfs.fsno
+        if lu.top.notZero then appendFamilyFsnos :prog unitOp: lu.top into: family
+        refNames: unitAtomNames :prog :file :family :um
+        hidden: unitIsHidden :prog :lu :st
+        ev: UnusedEvidence :mainTid :usedE :refNames :memIds :hidden
         t.reportUnusedUnitDefs :prog :st :ev
         t.reportUnusedTypeMembers :prog :st :ev
     }
@@ -5313,7 +5333,7 @@ Analysis: class {
     }
 
     # reportIfUnusedDef -- L012 for one unit-level member: private, reached by
-    # no recorded reference, and named by no atom in the unit's own segment
+    # no recorded reference, and named by no atom of the unit family's files
     reportIfUnusedDef: function {
         t: this prog: Ast.view st: zenv.ZSymbolTable.view ev: UnusedEvidence.view mid: zast.nodeid
     } is {
@@ -5323,7 +5343,7 @@ Analysis: class {
         if dmD.isZero then return
         if (ev.usedE.has item: dmD) then return
         if (ev.refNames.has item: m.name) then return
-        if (ztypecheck.declMemberIsPrivate :st tid: ev.mainTid nameId: m.name) then {
+        if ev.hidden or (ztypecheck.declMemberIsPrivate :st tid: ev.mainTid nameId: m.name) then {
             dnm: zast.poolTextAt pool: prog.names ref: m.name
             (
                 t.warn
@@ -5604,11 +5624,14 @@ UnusedEvidence: class {
     mainTid: ztypes.tid
     # every declaration a recorded reference reaches from OUTSIDE itself
     usedE: IdSet ztypes.declid
-    # every atom name in the unit's own file segment that is not a definition
-    # naming itself, the syntactic fallback
+    # every atom name in the files of the unit's family that is not a
+    # definition naming itself, the syntactic fallback
     refNames: IdSet zast.nameid
     # the unit body's member nodes, in order
     memIds: ListVal zast.nodeid
+    # the unit is a hidden subunit (unitIsHidden): every definition of it is
+    # private to its family
+    hidden: bool
 }
 
 # UnitMembers -- the unit's members as three parallel columns in declaration
@@ -5717,6 +5740,9 @@ unitTidOf: function {
 LintedUnit: class {
     # the unit's unitdef node
     op: zast.nodeid
+    # the unitdef node of the top-level unit it belongs to: itself, or the
+    # unit whose folder holds its file
+    top: zast.nodeid
     # its own name, the last of `names`
     name: String
     # the names from the top-level unit down, which spell its declaration
@@ -5727,11 +5753,15 @@ LintedUnit: class {
 # top-level units and, inside each, its subunits, searched by the FILE each
 # body came from and never by name.
 lintedUnitOf: function {prog: Ast.view self: zvfs.fsno} out LintedUnit is {
-    lu: LintedUnit op: zast.nodeid name: String names: List String
+    lu: LintedUnit op: zast.nodeid top: zast.nodeid name: String names: List String
     if self.isZero then return lu
     trail: List String
     for each uId: prog.units loop {
-        if lu.op.isZero then findUnitIn :prog :self namedOpId: uId :trail into: lu
+        if lu.op.isZero then {
+            findUnitIn :prog :self namedOpId: uId :trail into: lu
+            topNode: prog.nodes.get i: uId
+            if lu.op.notZero when topNode.namedoperation then lu.top = topNode.operation
+        }
     }
     return lu
 }
@@ -5740,7 +5770,7 @@ lintedUnitOf: function {prog: Ast.view self: zvfs.fsno} out LintedUnit is {
 # last of several winning: for zls, whose compile pass roots the program at
 # the open document's unit by that name.
 lintedUnitNamed: function {prog: Ast.view uname: StringView} out LintedUnit is {
-    lu: LintedUnit op: zast.nodeid name: uname.string names: List String
+    lu: LintedUnit op: zast.nodeid top: zast.nodeid name: uname.string names: List String
     for each uId: prog.units loop {
         un: prog.nodes.get i: uId
         if un.namedoperation then {
@@ -5748,6 +5778,7 @@ lintedUnitNamed: function {prog: Ast.view uname: StringView} out LintedUnit is {
             if unm.stringView == uname then lu.op = un.operation
         }
     }
+    lu.top = lu.op
     lu.names.append uname.string
     return lu
 }
@@ -5776,6 +5807,45 @@ findUnitIn: function {
         }
     }
     trail.pop
+}
+
+# appendFamilyFsnos -- the file the unit `unitOp` is written in, then those of
+# its hidden subunits and theirs: the files of a unit family, as the parse
+# numbers them
+appendFamilyFsnos: function {prog: Ast.view unitOp: zast.nodeid into: ListVal zvfs.fsno} is {
+    into.append from: (unitAnchorFsno :prog mainOp: unitOp)
+    for each mid: (unitMemberIds :prog :unitOp) loop {
+        m: prog.nodes.get i: mid
+        if m.namedoperation when (
+            zast.unitOpKindIs
+            ast: prog
+            opId: m.operation
+            k: zast.unitkind.subunit
+        ) then appendFamilyFsnos :prog unitOp: m.operation :into
+    }
+}
+
+# unitIsHidden -- the linted unit is a hidden subunit: a file of its parent's
+# folder that the parent's `public:` block does not list. Nothing outside the
+# family reaches a definition of it, so each one is private to the family.
+unitIsHidden: function {prog: Ast.view lu: LintedUnit.view st: zenv.ZSymbolTable.view} out bool is {
+    if lu.names.length < 2 then return false
+    above: List String
+    n: lu.names.length - 1
+    i: u64
+    for i < n loop {
+        above.append from: (lu.names.get :i).copy
+        i = i + 1
+    }
+    parentTid: unitTidOf :prog names: above :st
+    if parentTid.isZero then return false
+    if (ztypecheck.publicNsOf reg: st.reg typing: st.typing tid: parentTid).isZero then return true
+    return (
+        ztypecheck.declMemberIsPrivate
+        :st
+        tid: parentTid
+        nameId: (zast.poolFind pool: prog.names text: lu.name.stringView)
+    )
 }
 
 # unitAnchorFsno -- the file a unit's body lives in: the file its unitdef node
@@ -5876,29 +5946,35 @@ rootAtomNames: function {prog: Ast.view into: IdSet zast.nameid} is {
 }
 
 # unitAtomNames -- the syntactic fallback evidence: every atom name the
-# unit's own file holds. Stamps exist only for the bodies the demand walk
-# checked, so a private def used only inside an unchecked body (a construction
-# in a never-demanded factory) would otherwise read as dead.
+# files of the unit's family (`family`, the unit's own `file` among them)
+# hold. Stamps exist only for the bodies the demand walk checked, so a private
+# def used only inside an unchecked body (a construction in a never-demanded
+# factory) would otherwise read as dead.
 unitAtomNames: function {
     prog: Ast.view
     file: zvfs.fsno
+    family: (ListVal zvfs.fsno).view
     um: UnitMembers.view
 } out IdSet zast.nameid is {
     names: IdSet zast.nameid
     if file.notZero then {
-        atomNamesOutsideSelf :prog :file :um into: names
+        atomNamesOutsideSelf :prog :file :family :um into: names
     } else {
         rootAtomNames :prog into: names
     }
     return names
 }
 
-# atomNamesOutsideSelf -- every atom name in the file `file` except where the
-# atom names the member it sits inside. A self-recursive definition
-# spells its own name, and counting that as a use is what kept L012 silent
-# about two dead emitter helpers for three months.
+# atomNamesOutsideSelf -- every atom name in the files `family` except, in the
+# unit's own file `file`, where the atom names the member it sits inside. A
+# self-recursive definition spells its own name, and counting that as a use is
+# what kept L012 silent about two dead emitter helpers for three months.
 atomNamesOutsideSelf: function {
-    prog: Ast.view file: zvfs.fsno um: UnitMembers.view into: IdSet zast.nameid
+    prog: Ast.view
+    file: zvfs.fsno
+    family: (ListVal zvfs.fsno).view
+    um: UnitMembers.view
+    into: IdSet zast.nameid
 } is {
     totN: prog.nodes.length
     ndI: zast.nodeid
@@ -5912,6 +5988,9 @@ atomNamesOutsideSelf: function {
             isSelf: false
             if k < um.names.length when (um.names.get i: k) == nd0.name then isSelf = true
             if isSelf.not then into.add item: nd0.name
+        }
+        if nd0.atomid when (inFile == file).not when (family.contains item: inFile) then {
+            into.add item: nd0.name
         }
     }
 }
@@ -6126,6 +6205,114 @@ isAnchor: function {
     } else {
         return false
     }
+}
+
+# bodysite -- where A006 first saw a body's shape
+bodysite: record {
+    # the file, as its place in the unit family (familyFilesOf)
+    file: u64
+    # the line of the function
+    line: u64
+}
+
+# docBlockBody -- the comment block of `lines` starting at line `from`: each
+# line's text after its `#`, trimmed, joined by single spaces into `into`.
+# Answers the index of the first line after the block.
+docBlockBody: function {lines: (List String).view from: u64 into: String.borrow} out u64 is {
+    i: from
+    n: lines.length
+    for i < n loop {
+        ln: lines.get :i
+        trimmed: ln.stringView.trim
+        if (trimmed.startsWith "#").not then return i
+        body: trimmed.substring from: 1 to: trimmed.length
+        if into.length > 0 then into.append " "
+        into.append s: body.trim
+        i = i + 1
+    }
+    return i
+}
+
+# docBlockKey -- a doc body's comparison key: its words with the vocabulary
+# of the declaration at `declAt` (the line after the block) and every
+# width folded out, joined.
+docBlockKey: function {lines: (List String).view ws: List String declAt: u64} out String is {
+    vocab: List String
+    if declAt < lines.length then {
+        decl: (lines.get i: declAt).copy
+        docVocabInto s: (docStripComment ln: decl.stringView) into: vocab
+    }
+    folded: docFoldTemplate words: ws :vocab
+    return (docJoinWords xs: folded)
+}
+
+# docKeysOf -- the doc bodies of a file's `lines` that L025 compares: the key
+# of each comment block of four words or more into `keys`, and the index of
+# its first line into `starts`.
+docKeysOf: function {lines: (List String).view keys: List String starts: ListVal u64} is {
+    i: u64
+    n: lines.length
+    for i < n loop {
+        head: lines.get :i
+        if (docLineIsComment ln: head.stringView) then {
+            st: i
+            buf: String
+            i = docBlockBody :lines from: i into: buf
+            ws: List String
+            docWordsInto s: buf.stringView into: ws
+            if ws.length >= 4 then {
+                keys.append from: (docBlockKey :lines :ws declAt: i)
+                starts.append from: st
+            }
+        } else i = i + 1
+    }
+}
+
+# tallyDocKeys -- each of a file's doc keys (docKeysOf) counted into `into`,
+# which holds how often a doc body stands in the unit family
+tallyDocKeys: function {keys: (List String).view into: (MapRV String v: u64)} is {
+    for each k: keys loop into.set key: k.copy value: ((into.get key: k).or d: 0) + 1
+}
+
+# familyFilesOf -- the files of the unit family `file` belongs to, in family
+# order: the topmost unit's file, then the files of the folder of its name, by
+# name, each followed by its own folder's. A unit with no folder, and a data
+# file, is a family of one.
+familyFilesOf: function {file: StringView} out List String is {
+    files: List String
+    if (isDataFile :file) then {
+        files.append from: file.string
+        return files
+    }
+    top: topUnitPathOf :file
+    appendFamilyFiles unitFile: top.stringView into: files
+    return files
+}
+
+# appendFamilyFiles -- `unitFile`, then each `.z` file of the folder of its
+# name with that file's own folder, by name
+appendFamilyFiles: function {unitFile: StringView into: List String} is {
+    into.append from: unitFile.string
+    dir: (unitFile.substring from: 0 to: unitFile.length - (unitFileExt file: unitFile).length
+    ).string
+    names: unitNamesIn dir: dir.stringView
+    names.sort
+    for each nm: names loop {
+        sub: "\{dir}/\{nm}.z"
+        appendFamilyFiles unitFile: sub.stringView :into
+    }
+}
+
+# familyIndexOf -- the place of `file` in its family's list, by the file it
+# names and not its spelling; 0 when the list does not hold it, which judges
+# the file as a family of its own
+familyIndexOf: function {family: (List String).view file: StringView} out u64 is {
+    i: u64
+    for i < family.length loop {
+        if (sameFile a: (family.get :i).stringView b: file) then return i
+        i = i + 1
+    }
+    return 0
 }
 
 # topUnitPathOf -- the file of the topmost unit `file` belongs to. A file in a

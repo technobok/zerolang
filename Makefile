@@ -1428,7 +1428,7 @@ perf: $(PERFBIN)
 # deletes write-only allocations; perf-elision measures that), a failed run and
 # allocs != frees. Above ALLOC_BASELINE fails; a commit raising it says why in
 # its message, and one lowering the count lowers it here.
-ALLOC_BASELINE := 2793319
+ALLOC_BASELINE := 2793122
 # ALLOC_LINE -- the one measurement every allocation number comes from.
 ALLOC_LINE = valgrind --tool=memcheck $(PERFRUN) 2>&1 | grep 'total heap usage' | sed 's/.*usage: //'
 
@@ -2821,6 +2821,7 @@ ZLFULL_BZ := tests/fixtures/zl_full/bare_zero.z
 ZLFULL_BZS := tests/fixtures/zl_full/bare_zero_shadow.z
 ZLFULL_WALK := tests/fixtures/zl_full/handwalk.z
 ZLFULL_TWIN := tests/fixtures/zl_full/negated_twin.z
+ZLFULL_FAM := tests/fixtures/zl_full/family/host
 zl-full-guard: bin/zl
 	@d=$$(mktemp -d); fail=0; \
 	out=$$(cd $$d && $(CURDIR)/bin/zl lint --full $(CURDIR)/$(ZLFULL_FIX) 2>&1); \
@@ -2900,6 +2901,22 @@ zl-full-guard: bin/zl
 	out=$$(cd $$d && $(CURDIR)/bin/zl lint --arch --counts $(CURDIR)/$(ZLFULL_WALK) 2>/dev/null); \
 	if [ "$$(printf '%s\n' "$$out" | grep -c .)" != 1 ] || ! printf '%s\n' "$$out" | grep -qE '^A013 .*[/\\]handwalk\.z 1$$'; then \
 	  echo "zl-full-guard FAIL: --counts did not print the one row 'A013 <file> 1':"; \
+	  printf '%s\n' "$$out" | sed 's/^/    /'; fail=1; fi; \
+	out=$$(cd $$d && $(CURDIR)/bin/zl lint --full $(CURDIR)/$(ZLFULL_FAM).z $(CURDIR)/$(ZLFULL_FAM)/alpha.z $(CURDIR)/$(ZLFULL_FAM)/beta.z 2>&1); \
+	if [ "$$(printf '%s\n' "$$out" | grep -c 'L012')" != 1 ] || ! printf '%s\n' "$$out" | grep -q "private definition 'neverRead' is never used"; then \
+	  echo "zl-full-guard FAIL: L012 did not report the one definition of a hidden subunit that no file of its unit names, and only it:"; \
+	  printf '%s\n' "$$out" | sed 's/^/    /'; fail=1; fi; \
+	out=$$(cd $$d && $(CURDIR)/bin/zl lint --arch $(CURDIR)/$(ZLFULL_FAM)/beta.z 2>&1); \
+	if [ "$$(printf '%s\n' "$$out" | grep -c 'A006')" != 1 ] || ! printf '%s\n' "$$out" | grep -qE 'the one at line 5 of .*host[/\\]alpha\.z'; then \
+	  echo "zl-full-guard FAIL: A006 did not report a subunit's body against its first copy, in a sibling file:"; \
+	  printf '%s\n' "$$out" | sed 's/^/    /'; fail=1; fi; \
+	out=$$(cd $$d && $(CURDIR)/bin/zl lint --arch $(CURDIR)/$(ZLFULL_FAM).z $(CURDIR)/$(ZLFULL_FAM)/alpha.z 2>&1); \
+	if printf '%s\n' "$$out" | grep -q 'A006'; then \
+	  echo "zl-full-guard FAIL: A006 reported the first copy of a body, or a file that holds none:"; \
+	  printf '%s\n' "$$out" | sed 's/^/    /'; fail=1; fi; \
+	out=$$(cd $$d && $(CURDIR)/bin/zl lint --docs-all $(CURDIR)/$(ZLFULL_FAM).z $(CURDIR)/$(ZLFULL_FAM)/alpha.z $(CURDIR)/$(ZLFULL_FAM)/beta.z 2>&1); \
+	if [ "$$(printf '%s\n' "$$out" | grep -c 'L025.*appears 3 times in the files of unit `host`')" != 3 ]; then \
+	  echo "zl-full-guard FAIL: L025 did not report a doc body that stands once in each of a unit's three files, once a file:"; \
 	  printf '%s\n' "$$out" | sed 's/^/    /'; fail=1; fi; \
 	rm -rf $$d; \
 	if [ $$fail -ne 0 ]; then exit 1; fi; \
