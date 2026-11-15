@@ -994,20 +994,20 @@ walkDeclaredDef: function {
     # as it is for a body that calls itself, so nothing asks twice; the
     # outermost demand walks what its body and theirs asked for, one after
     # another. A chain of calls then costs no stack, however long it is.
-    if st.walk.demandDraining then {
-        st.walk.demands.append (zenv.walkjob decl: dd scope: rf :unitDecl mono: ztypes.tid)
+    if st.walk.bodies.demandDraining then {
+        st.walk.bodies.demands.append (zenv.walkjob decl: dd scope: rf :unitDecl mono: ztypes.tid)
         return
     }
-    st.walk.demandDraining = true
+    st.walk.bodies.demandDraining = true
     walkDemandedDef :st :ast :unitDecl scope: rf declId: dd
     i: u64
-    for i < st.walk.demands.length loop {
-        dj: st.walk.demands.get :i
+    for i < st.walk.bodies.demands.length loop {
+        dj: st.walk.bodies.demands.get :i
         walkDemandedDef :st :ast unitDecl: dj.unitDecl scope: dj.scope declId: dj.decl
         i = i + 1
     }
-    for st.walk.demands.length > 0 loop st.walk.demands.pop
-    st.walk.demandDraining = false
+    for st.walk.bodies.demands.length > 0 loop st.walk.bodies.demands.pop
+    st.walk.bodies.demandDraining = false
 }
 
 # walkDemandedDef -- walk the definition `declId`, which walkDeclaredDef marked:
@@ -1444,7 +1444,7 @@ checkFunctionBody: function {
     callerMarker: st.walk.value.draft.marker
     callerOwned: st.walk.value.draft.owned
     errsBefore: st.typing.errors.length
-    chargedBefore: st.walk.bodyErrorsCharged
+    chargedBefore: st.walk.bodies.bodyErrorsCharged
     (
         checkFunctionBodyIn
         :st
@@ -1473,9 +1473,9 @@ checkFunctionBody: function {
     )
     # a body walked on demand inside this one was charged its own errors
     added: st.typing.errors.length - errsBefore
-    own: added - (st.walk.bodyErrorsCharged - chargedBefore)
-    if own > 0 when st.typing.curMonoStamp.isZero then st.walk.refusedBodies.add item: fn.nid
-    st.walk.bodyErrorsCharged = chargedBefore + added
+    own: added - (st.walk.bodies.bodyErrorsCharged - chargedBefore)
+    if own > 0 when st.typing.curMonoStamp.isZero then st.walk.bodies.refusedBodies.add item: fn.nid
+    st.walk.bodies.bodyErrorsCharged = chargedBefore + added
 }
 
 # walkedReturnMarker / walkedFnPins -- what the walked function's signature
@@ -1722,8 +1722,8 @@ checkNamespaceBodies: function {
 } is {
     # Once per unit op: the main tree walk and the demand drain can both reach
     # the same namespace, and a second walk would re-report every diagnostic.
-    if (st.walk.nsBodiesWalked.has item: unitdefId) then return
-    st.walk.nsBodiesWalked.add item: unitdefId
+    if (st.walk.bodies.nsBodiesWalked.has item: unitdefId) then return
+    st.walk.bodies.nsBodiesWalked.add item: unitdefId
     rf: scope
     nsDecl: ztypes.declid
     {
@@ -2085,7 +2085,7 @@ collectOwedIn: function {
             o: (ast.nodes.get i: m.operation)
         ) when (instanceMemberOwed :st :monoId nameId: m.name) then {
             markInstanceMemberWalked :st :monoId nameId: m.name
-            if (st.walk.refusedBodies.has item: m.operation).not then {
+            if (st.walk.bodies.refusedBodies.has item: m.operation).not then {
                 names.append m.name
                 ops.append m.operation
             }
@@ -2161,7 +2161,7 @@ stampOneClassMono: function {
 } is {
     # an instance is revisited for the members a use reached since its last
     # walk; only its first visit asks whether instantiating it ends
-    if (st.walk.monosWalked.has item: monoId).not when (
+    if (st.walk.bodies.monosWalked.has item: monoId).not when (
         firstInstanceWalk
         :st
         :ast
@@ -2551,16 +2551,16 @@ firstInstanceWalk: function {
     monoId: ztypes.tid
     opId: zast.nodeid
 } out bool is {
-    if (st.walk.monosWalked.has item: monoId) then return false
+    if (st.walk.bodies.monosWalked.has item: monoId) then return false
     # a walk of a body its own check refused, or of an instance a call made
     # from arguments it refused, would only report that error again
-    if (st.walk.refusedBodies.has item: opId) then return false
+    if (st.walk.bodies.refusedBodies.has item: opId) then return false
     if ((st.walk.refusedInstances.get key: monoId).or d: false) then return false
-    st.walk.monosWalked.add item: monoId
+    st.walk.bodies.monosWalked.add item: monoId
     if (templateRepeatsInMints :st :monoId) < instanceRepeatLimit then return true
     org: st.reg.genericOriginOf tid: monoId
-    if (st.walk.monoRecursionReported.has item: org) then return false
-    st.walk.monoRecursionReported.add item: org
+    if (st.walk.bodies.monoRecursionReported.has item: org) then return false
+    st.walk.bodies.monoRecursionReported.add item: org
     tn: specWrittenName :st :ast tid: org
     mn: specWrittenName :st :ast tid: monoId
     m: "instantiating '\{tn}' does not end: each instance instantiates it again, at a larger type argument ('\{mn}')"
@@ -2672,10 +2672,10 @@ instanceRepeatLimit: 8
 templateRepeatsInMints: function {st: zenv.ZSymbolTable.view monoId: ztypes.tid} out u64 is {
     org: st.reg.genericOriginOf tid: monoId
     n: u64
-    p: (st.walk.monoMintedBy.get key: monoId).or d: ztypes.tid.zero
+    p: (st.walk.bodies.monoMintedBy.get key: monoId).or d: ztypes.tid.zero
     for p.notZero loop {
         if (st.reg.genericOriginOf tid: p) == org then n = n + 1
-        p = (st.walk.monoMintedBy.get key: p).or d: ztypes.tid.zero
+        p = (st.walk.bodies.monoMintedBy.get key: p).or d: ztypes.tid.zero
     }
     return n
 }
@@ -2771,7 +2771,7 @@ recordMintedBy: function {st: zenv.ZSymbolTable monoId: ztypes.tid minted: ztype
     t: minted
     last: st.reg.nextTid
     for t < last loop {
-        st.walk.monoMintedBy.set key: t value: monoId
+        st.walk.bodies.monoMintedBy.set key: t value: monoId
         t = t.next
     }
 }
@@ -2926,7 +2926,7 @@ collectOwedUnitFns: function {
                 )
             }
             markInstanceMemberWalked :st :monoId nameId: bm.name
-            if (st.walk.refusedBodies.has item: bm.operation).not then idxs.append from: di
+            if (st.walk.bodies.refusedBodies.has item: bm.operation).not then idxs.append from: di
         }
         di = di + 1
     }
@@ -2945,7 +2945,7 @@ stampOneUnitMono: function {
 } is {
     # an instance is revisited for the functions a use reached since its last
     # walk; only its first visit asks whether instantiating it ends
-    if (st.walk.monosWalked.has item: monoId).not when (
+    if (st.walk.bodies.monosWalked.has item: monoId).not when (
         firstInstanceWalk
         :st
         :ast

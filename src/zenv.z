@@ -725,6 +725,35 @@ ResolveState: class {
     typerefRetry: ListVal zast.nodeid
 }
 
+# BodyState -- the bodies walked and the demands queued. A part of WalkState
+# (`bodies`).
+BodyState: class {
+    # the unit bodies already walked, so a demand-driven walk does not repeat
+    # one
+    nsBodiesWalked: IdSet zast.nodeid
+    # the instances the post-sweep has visited: the sweep repeats while walks
+    # mint new instances or owe an instance member, and an instance is asked
+    # whether instantiating it ends on its first visit only
+    monosWalked: IdSet ztypes.tid
+    # the instance whose walk minted each type id (instances minted outside
+    # the post-sweep have no entry)
+    monoMintedBy: (IdMapV ztypes.tid v: ztypes.tid)
+    # the templates reported as instantiating themselves without end
+    monoRecursionReported: IdSet ztypes.tid
+    # the function bodies whose own check, outside an instance walk, reported
+    # an error: an instance walk of one would only report it again
+    refusedBodies: IdSet zast.nodeid
+    # the errors the function-body checks under way have charged so far: a
+    # body is charged only the errors its own lines raised (checkFunctionBody)
+    bodyErrorsCharged: u64
+    # the definitions a demanded body demanded in its turn, in the order met:
+    # the outermost demand walks them one after another, so a chain of calls
+    # costs no stack
+    demands: ListVal walkjob
+    # a demanded body is being walked: a demand met now is queued
+    demandDraining: bool
+}
+
 # WalkState -- the body walk's working state: what the checker records while
 # it walks and reads back itself. Nothing downstream reads it; the output is
 # ZTyping's.
@@ -735,9 +764,8 @@ WalkState: class {
     fn: FunctionState
     # resolving definitions on demand: what is owed, deferred and done
     resolve: ResolveState
-    # the unit bodies already walked, so a demand-driven walk does not repeat
-    # one
-    nsBodiesWalked: IdSet zast.nodeid
+    # the bodies walked and the demands queued
+    bodies: BodyState
     # constant evaluation
     consts: ConstState
     # the (instance, name) pairs of the template constants over a numeric
@@ -770,28 +798,13 @@ WalkState: class {
     # set while a construction's arguments are read, when one depends on an
     # enclosing numeric generic parameter the walk has no value for
     numericArgDependent: bool
-    # the instances the post-sweep has visited: the sweep repeats while walks
-    # mint new instances or owe an instance member, and an instance is asked
-    # whether instantiating it ends on its first visit only
-    monosWalked: IdSet ztypes.tid
     # a use reached an instance member of an author-declared generic type
     # that no instance walk has walked: the instance sweep owes another round
     instanceUseOwed: bool
-    # the instance whose walk minted each type id (instances minted outside
-    # the post-sweep have no entry)
-    monoMintedBy: (IdMapV ztypes.tid v: ztypes.tid)
-    # the templates reported as instantiating themselves without end
-    monoRecursionReported: IdSet ztypes.tid
-    # the function bodies whose own check, outside an instance walk, reported
-    # an error: an instance walk of one would only report it again
-    refusedBodies: IdSet zast.nodeid
     # the instances a generic call made from arguments it refused, true until
     # a call that refused none reaches one: a walk of one would only repeat
     # the refusal inside it
     refusedInstances: (IdMapV ztypes.tid v: bool)
-    # the errors the function-body checks under way have charged so far: a
-    # body is charged only the errors its own lines raised (checkFunctionBody)
-    bodyErrorsCharged: u64
     # true once any member has been marked private (gates cross-unit checks)
     privacySeen: bool
     # the names choices are declared under: a call builds a choice value only
@@ -897,12 +910,6 @@ WalkState: class {
     # body is walked with the others once the body pass runs (a static value
     # is built while definitions resolve, before any body can be judged)
     staticFnRefs: ListVal ztypes.declid
-    # the definitions a demanded body demanded in its turn, in the order met:
-    # the outermost demand walks them one after another, so a chain of calls
-    # costs no stack
-    demands: ListVal walkjob
-    # a demanded body is being walked: a demand met now is queued
-    demandDraining: bool
 }
 
 # newWalkState -- a walk state with nothing recorded yet
@@ -974,7 +981,17 @@ newWalkState: function out WalkState is {
             typerefPassRan: false
             typerefRetry: ListVal zast.nodeid
         )
-        nsBodiesWalked: IdSet zast.nodeid
+        bodies: (
+            BodyState
+            nsBodiesWalked: IdSet zast.nodeid
+            monosWalked: IdSet ztypes.tid
+            monoMintedBy: (IdMapV ztypes.tid v: ztypes.tid)
+            monoRecursionReported: IdSet ztypes.tid
+            refusedBodies: IdSet zast.nodeid
+            bodyErrorsCharged: 0
+            demands: ListVal walkjob
+            demandDraining: false
+        )
         consts: (
             ConstState
             diagnosed: IdSet zast.nodeid
@@ -1010,13 +1027,8 @@ newWalkState: function out WalkState is {
         singletonPaths: (IdMapV zast.nodeid v: ztypes.tid)
         valuePartialAt: (IdMapV zast.nodeid v: ztypes.tid)
         numericArgDependent: false
-        monosWalked: IdSet ztypes.tid
         instanceUseOwed: false
-        monoMintedBy: (IdMapV ztypes.tid v: ztypes.tid)
-        monoRecursionReported: IdSet ztypes.tid
-        refusedBodies: IdSet zast.nodeid
         refusedInstances: (IdMapV ztypes.tid v: bool)
-        bodyErrorsCharged: 0
         privacySeen: false
         choiceNames: IdSet zast.nameid
         boxedArms: SetVal ztyping.armkey
@@ -1054,8 +1066,6 @@ newWalkState: function out WalkState is {
         aliasRefOwner: (IdMapV zast.nodeid v: ztypes.declid)
         usedMemberDecl: IdSet ztypes.declid
         staticFnRefs: ListVal ztypes.declid
-        demands: ListVal walkjob
-        demandDraining: false
     )
 }
 
