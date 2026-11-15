@@ -221,22 +221,6 @@ nodeCol: function {n: astnode.view} out u32 is {
     return (zast.posOf :n).col
 }
 
-# atomName -- the name of an atom astnode (atomid / labelvalue) as an owned String,
-# "" for anything else. Matching the astnode param narrows it cleanly (the proven
-# simple-param pattern), so callers pass a field/arg projection without worrying
-# about path-subject narrowing.
-atomName: function {ast: Ast.view n: astnode.view} out String is {
-    match (
-        n
-    ) case atomid then {
-        return (zast.nameTextCopy :ast ref: n.name)
-    } case labelvalue then {
-        return (zast.nameTextCopy :ast ref: n.name)
-    } else {
-        return "".string
-    }
-}
-
 # atomNameId -- the Ast.names pool id of an atomid/labelvalue node's name
 # (0 when the node is neither; no pool id is 0, so lookups by it miss).
 atomNameId: function {ast: Ast.view n: astnode.view} out zast.nameid is {
@@ -1063,7 +1047,7 @@ definingSiteForId: function {
     # the looked-up name, interned
     nameId: zast.nameid
 } out defsite is {
-    hit: envLookup :st scope: (scopeFor typing: st.typing :scope :unitDecl) :nameId
+    hit: envLookup :st scope: (typeargs.scopeFor typing: st.typing :scope :unitDecl) :nameId
     if hit.declId.isZero then return noDefSite
     # a definition of this unit, or of a namespace written inside it: both
     # resolve in this unit, the namespace member in its namespace's scope
@@ -1549,7 +1533,7 @@ asValueNamesType: function {
     if kind.dottedpath then return (asPathNamesType :st :ast :tdecl :op :par :chd :depth)
     if kind.call then {
         tpl: (
-            typeApplicationTemplate
+            typeargs.typeApplicationTemplate
             :st
             scope: tdecl
             :ast
@@ -2365,7 +2349,7 @@ selfApplicationTid: function {
         if (st.reg.genericParamConstraintOf :tdecl paramName: pn).numKind.has then {
             sfx.append s: (zast.nameTextAt :ast ref: pn)
         } else {
-            sfx.append s: (monoValName :st :ast tid: pt)
+            sfx.append s: (typeargs.monoValName :st :ast tid: pt)
             if firstA.isZero then firstA = pt
         }
         typeSubs.set key: pn value: pt
@@ -2534,7 +2518,7 @@ resolveMonoRefInline: function {
     }
     if kind.call then {
         rm: (
-            resolveMonoRefParts
+            typeargs.resolveMonoRefParts
             :st
             :scope
             :ast
@@ -2706,214 +2690,6 @@ namedTypeArg: function {
     return (bareGenericType :st :ast :unitDecl tid: aid nid: argNid :scope :thisName)
 }
 
-# collectMonoRefArgs -- read a mono type-reference's arguments into the type and
-# value substitutions, building the mangled suffix that names the instance.
-# Answers false when an argument names nothing resolvable.
-collectMonoRefArgs: function {
-    st: zenv.ZSymbolTable
-    ast: Ast
-    unitDecl: ztypes.declid
-    scope: ztypes.declid
-    thisName: StringView
-    enclDecl: ztypes.declid
-    # the template the arguments are written for
-    tdecl: ztypes.declid
-    arguments: (ListVal zast.nodeid).view
-    sfx: String
-    typeSubs: (IdMapV zast.nameid v: ztypes.tid)
-    valSubsR: (IdMapV zast.nameid v: u64)
-    firstOut: ListVal ztypes.tid
-} out bool is {
-    allOk: true
-    firstA: ztypes.tid
-    h21x9: u64
-    for h21x9 < arguments.length loop {
-        argId: arguments.get i: h21x9
-        h21x9 = h21x9 + 1
-        arg: argRefAt :ast nid: argId
-        if arg.nid.notZero then {
-            an: atomName :ast n: (ast.nodes.get i: arg.operation)
-            pnR: numericLeadingParam :st :tdecl label: arg.name argIdx: h21x9 - 1
-            cdR: st.reg.genericParamConstraintOf :tdecl paramName: pnR
-            if pnR.notZero when cdR.numKind.has then {
-                if (
-                    collectNumericMonoRefArg
-                    :st
-                    :ast
-                    :unitDecl
-                    :scope
-                    :thisName
-                    :enclDecl
-                    :tdecl
-                    :arg
-                    param: pnR
-                    an: an.stringView
-                    :sfx
-                    :typeSubs
-                    :valSubsR
-                ).not then allOk = false
-            } else if (isNumericLiteralName name: an.stringView) then {
-                sfx.append s: "_"
-                sfx.append s: an
-            } else if (
-                refuseSingletonTypeArg
-                :st
-                :ast
-                :scope
-                :enclDecl
-                :arg
-                :sfx
-                :typeSubs
-            ) then {
-                null
-            } else {
-                okOut: ListVal bool
-                aid: (
-                    monoRefArgTid
-                    :st
-                    :ast
-                    :unitDecl
-                    :scope
-                    :thisName
-                    :enclDecl
-                    :arg
-                    an: an.stringView
-                    :okOut
-                )
-                if (okOut.get i: 0).not then allOk = false
-                if aid.notZero then {
-                    sfx.append s: "_"
-                    vn: monoValName :st :ast tid: aid
-                    sfx.append s: vn
-                    if firstA.isZero then firstA = aid
-                    sv: aid
-                    typeSubs.set key: arg.name value: sv
-                }
-            }
-        }
-    }
-    firstOut.append firstA
-    return allOk
-}
-
-
-# refuseSingletonTypeArg -- a type parameter's argument in a type reference that
-# names a numeric generic parameter (`(List t: cap)`), refused
-# (refuseSingletonTypeRef); the reference takes the parameter's bound in its
-# place, so it names a type its uses can check against. True when it refused.
-refuseSingletonTypeArg: function {
-    st: zenv.ZSymbolTable
-    ast: Ast
-    scope: ztypes.declid
-    enclDecl: ztypes.declid
-    arg: argref
-    sfx: String
-    typeSubs: (IdMapV zast.nameid v: ztypes.tid)
-} out bool is {
-    anId: atomNameId :ast n: (ast.nodes.get i: arg.operation)
-    if anId.isZero then return false
-    from: enclDecl
-    if from.isZero then from = scope
-    owner: numericParamOwnerFrom :st scope: from nameId: anId
-    if owner.isZero then return false
-    refuseSingletonTypeRef :st :ast :owner nameId: anId nid: arg.operation
-    # a reference that falls back to a shell is refused whole, as one with a
-    # refused numeric argument is, and the name resolves no further
-    st.walk.numericArgsRefused.add item: arg.operation
-    st.walk.noStampNode.set key: arg.operation value: true
-    bound: typeref.numericParamBoundOf :st :ast :scope :owner nameId: anId
-    sfx.append s: "_"
-    sfx.append s: (monoValName :st :ast tid: bound)
-    typeSubs.set key: arg.name value: bound
-    return true
-}
-
-# validateMonoRefLabels -- reject a label that names no generic parameter of the
-# template, at a TYPE REFERENCE rather than a construction. The construction
-# path has validateGenericTypeArgs; a field type, a return type, a parameter
-# type and a nested type argument reach a mono through here instead, and an
-# unlabelled fallback there is not harmless: collectMonoRefArgs keys the
-# substitution by whatever the label says, so a wrong one mints a SECOND mono
-# that prints under the same name as the right one -- the "expected X, got X"
-# mismatch. Shares reportBadGenericArgLabel so there is one message and one set
-# of exemptions. Silent while the template has no registered parameters: this
-# runs on the shell path too, before registration has necessarily happened.
-validateMonoRefLabels: function {
-    ast: Ast
-    st: zenv.ZSymbolTable
-    arguments: (ListVal zast.nodeid).view
-    tplId: ztypes.tid
-} is {
-    # a generic typedef's unlabelled argument is its `from:` value: reported,
-    # and the position resolves as spelled so nothing downstream repeats it
-    refuseTypedefTypePositionFrom :st :ast :arguments :tplId
-    tk: st.typing.declIdOfType typeId: tplId
-    pnames: st.reg.genericParamNamesOf tdecl: tk
-    if pnames.length == 0 then return
-    tname: st.reg.nameOf tid: tplId
-    if tname.length == 0 then return
-    childNames: ListVal zast.nameid
-    {
-        otmri: tplId
-        mri: u64
-        mrn: st.typing.declRowSlots ownerTid: otmri
-        for mri < mrn loop {
-            rwmri: st.typing.declRowAt ownerTid: otmri membersOnly: false slot: mri
-            mri = mri + 1
-            if rwmri.keep then {
-                mrnid: rwmri.name
-                childNames.append mrnid
-            }
-        }
-    }
-    for each argVId: arguments loop {
-        arg: argRefAt :ast nid: argVId
-        if arg.nid.notZero then {
-            pk: arg.name
-            if pk.notZero when (st.reg.isGenericParamOf tdecl: tk name: pk).not then {
-                (
-                    reportBadGenericArgLabel
-                    :ast
-                    :st
-                    :arg
-                    :tplId
-                    :pk
-                    :childNames
-                    tname: tname.stringView
-                    :tk
-                )
-            }
-        }
-    }
-}
-
-# reportDependentTypeArg -- a type reference's numeric argument computed from a
-# generic parameter (`(array t: i64 to: cap + 1)`): an instance completes a
-# reference over the parameter itself, not over an expression of it.
-reportDependentTypeArg: function {
-    st: zenv.ZSymbolTable
-    ast: Ast.view
-    tdecl: ztypes.declid
-    param: zast.nameid
-    argOp: zast.nodeid
-} is {
-    st.walk.numericArgsRefused.add item: argOp
-    pn: zast.nameTextAt :ast ref: param
-    tn: specWrittenName :st :ast tid: (st.typing.declTypeOf declId: tdecl)
-    n: ast.nodes.get i: argOp
-    (
-        addErrorWithHint
-        :st
-        nodeid: (nodeId :n)
-        lineno: (nodeLine :n)
-        colno: (nodeCol :n)
-        e: zast.err.constError
-        msg: "generic parameter '\{pn}' of '\{tn}' is computed from a generic parameter in a type: only the parameter itself completes per instance there"
-        note: String
-        hint: "name the parameter (`\{pn}: cap`), or build the value in the body, where an expression of it is allowed"
-        width: 1
-    )
-}
 
 # bareArgNamesNothing -- a type reference's argument that is a bare name no type
 # and no constant in scope declares.
@@ -2931,146 +2707,6 @@ bareArgNamesNothing: function {
     if (walkLookupTyperefById :st :scope :ast :unitDecl baseId: nameId).some then return false
     od: constOwnerDeclForId :st :scope :unitDecl :nameId
     return (st.typing.declFindChild parentDeclId: od :nameId).isZero
-}
-
-# collectNumericMonoRefArg -- a type reference's argument for a numeric generic
-# parameter: the enclosing template's own parameter makes the reference a
-# partial each instance completes; any other compile-time integer is its value.
-# false when the reference does not settle here.
-collectNumericMonoRefArg: function {
-    st: zenv.ZSymbolTable
-    ast: Ast
-    unitDecl: ztypes.declid
-    scope: ztypes.declid
-    thisName: StringView
-    enclDecl: ztypes.declid
-    tdecl: ztypes.declid
-    arg: argref
-    # the numeric parameter the argument is for: its label, or the template's
-    # first parameter when the leading argument is written unlabelled
-    param: zast.nameid
-    an: StringView
-    sfx: String
-    typeSubs: (IdMapV zast.nameid v: ztypes.tid)
-    valSubsR: (IdMapV zast.nameid v: u64)
-} out bool is {
-    depR: declare.numericParamRefTid :st :ast :unitDecl :scope :thisName :enclDecl :arg
-    if depR.notZero then {
-        sfx.append s: "_"
-        sfx.append s: an
-        typeSubs.set key: param value: depR
-        return true
-    }
-    # re-resolved without its enclosing declaration (a recorded signature ref):
-    # a template's parameter is not visible here, and the resolution that has
-    # the declaration answers
-    if enclDecl.isZero when (bareArgNamesNothing :st :ast :unitDecl :scope :arg) then return false
-    naR: (
-        numericGenericArg
-        :ast
-        :st
-        :unitDecl
-        :scope
-        :tdecl
-        :param
-        argOp: arg.operation
-        inBody: false
-    )
-    if naR.state.dependent then {
-        reportDependentTypeArg :st :ast :tdecl :param argOp: arg.operation
-        return false
-    }
-    if naR.state.refused then return false
-    (
-        appendNumericArgSuffix
-        :sfx
-        bits: naR.bits
-        cd: (st.reg.genericParamConstraintOf :tdecl paramName: param)
-    )
-    valSubsR.set key: param value: naR.bits
-    return true
-}
-
-# typeApplicationHeadNameId -- the name a type application's head spells: a
-# bare name (`GBox`), or the member a path through a unit reaches (`pr.GBox`);
-# zero for any other head.
-typeApplicationHeadNameId: function {ast: Ast.view callableNid: zast.nodeid} out zast.nameid is {
-    c: ast.nodes.get i: callableNid
-    match (
-        c
-    ) case dottedpath then {
-        return (atomNameId :ast n: (ast.nodes.get i: c.child))
-    } else null
-    return (atomNameId :ast n: c)
-}
-
-# typeApplicationHeadName -- typeApplicationHeadNameId's text, "" for none.
-typeApplicationHeadName: function {ast: Ast.view callableNid: zast.nodeid} out String is {
-    return (zast.nameTextCopy :ast ref: (typeApplicationHeadNameId :ast :callableNid))
-}
-
-# typeApplicationTemplate -- the template a type application's head names: a
-# bare name as monoRefTemplateTid finds it, a path through a unit as a dotted
-# type reference is found (resolveDottedArgTid). The one answer every position
-# resolving a type application gives; zero when the head names none.
-typeApplicationTemplate: function {
-    st: zenv.ZSymbolTable
-    scope: ztypes.declid
-    ast: Ast
-    unitDecl: ztypes.declid
-    callableNid: zast.nodeid
-} out ztypes.tid is {
-    if (ast.nodes.get i: callableNid).dottedpath then {
-        im: instanceMemberTemplate :st :ast :unitDecl :scope :callableNid
-        if im.notZero then return im
-        return (resolveDottedArgTid :st :scope :ast nid: callableNid)
-    }
-    return (
-        monoRefTemplateTidById
-        :st
-        :scope
-        :ast
-        :unitDecl
-        nameId: (typeApplicationHeadNameId :ast :callableNid)
-    )
-}
-
-# instanceMemberTemplate -- a type application's head written through an
-# instance of a generic unit (`wi.pairs`, `(wrap t: i64).Cell`): the template
-# the instance's member names, whose application takes the unit's parameters
-# from that instance (bindInheritedParams). Written through the generic unit
-# itself (`wrap.pairs`), the template its own member names, which the
-# application refuses. 0 for any other head.
-instanceMemberTemplate: function {
-    st: zenv.ZSymbolTable
-    ast: Ast
-    unitDecl: ztypes.declid
-    scope: ztypes.declid
-    callableNid: zast.nodeid
-} out ztypes.tid is {
-    q: applicationQualifier :st :ast :unitDecl :scope at: callableNid
-    # an instance (an origin, no parameters) or the generic unit itself
-    if q.isZero then return ztypes.tid.zero
-    isInstance: (st.reg.genericOriginOf tid: q).notZero
-    if (st.reg.isGenericOf tid: q) == isInstance then return ztypes.tid.zero
-    dr: dpRefAt :ast nid: callableNid
-    mn: atomNameId :ast n: (ast.nodes.get i: dr.child)
-    m: (st.typing.declChildOfId parentTypeId: q nameId: mn).or d: ztypes.tid.zero
-    # a unit the template declares is its declaration's member, resolved on
-    # demand
-    if m.isZero then {
-        qd: templateDeclOf reg: st.reg typing: st.typing tid: q
-        md: st.typing.declFindChild parentDeclId: qd nameId: mn
-        if md.notZero when (st.typing.declTypeOf declId: md).isZero then (
-            resolveDemandedDecl
-            :st
-            :ast
-            declId: md
-        )
-        m = st.typing.declTypeOf declId: md
-    }
-    if m.isZero or (st.reg.isGenericOf tid: m).not then return ztypes.tid.zero
-    return m
 }
 
 # monoRefTemplateTid -- the template a mono type-reference names: a name the
@@ -3118,109 +2754,6 @@ monoRefTemplateTidById: function {
         }
     }
     return tplId
-}
-
-# numericLeadingParam -- the parameter an argument is for when its label says
-# or a numeric first parameter decides it: the label, or -- for an unlabelled
-# leading argument, whose label is optional -- the template's first parameter
-# when that takes a value. 0 otherwise: an unlabelled leading TYPE argument is
-# bound by the caller's own test that it names a type.
-numericLeadingParam: function {
-    # the symbol table holding the template's parameter constraints
-    st: zenv.ZSymbolTable.view
-    # the template's declaration
-    tdecl: ztypes.declid
-    # the argument's label, 0 when unlabelled
-    label: zast.nameid
-    # the argument's position, 0 for the leading one
-    argIdx: u64
-} out zast.nameid is {
-    if label.notZero or (argIdx != 0) then return label
-    if (st.reg.genericParamCountOf :tdecl) == 0 then return label
-    p0: st.reg.genericParamNameAt :tdecl i: 0
-    if (st.reg.genericParamConstraintOf :tdecl paramName: p0).numKind.has then return p0
-    return label
-}
-
-# leadingArgIsValue -- the application's first argument is unlabelled and a
-# value, not a type: a numeric literal, or a bare name declared as a constant.
-# Its label is optional, so it is the template's first parameter's, which only
-# the template knows.
-leadingArgIsValue: function {
-    # the symbol table whose declarations a bare name is looked up in
-    st: zenv.ZSymbolTable
-    # the tree the application is written in
-    ast: Ast
-    # the unit the application is written in
-    unitDecl: ztypes.declid
-    # the scope the application is written in
-    scope: ztypes.declid
-    # the application's arguments
-    arguments: (ListVal zast.nodeid).view
-} out bool is {
-    if arguments.length == 0 then return false
-    arg: argRefAt :ast nid: (arguments.get i: 0)
-    if arg.nid.isZero or arg.name.notZero then return false
-    nameId: zast.atomNameIdOf n: (ast.nodes.get i: arg.operation)
-    if nameId.isZero then return false
-    if (isNumericLiteralNameAt :ast ref: nameId) then return true
-    # a bare name is a value when its nearest declaration is a constant, read
-    # from the declarations so nothing resolves ahead of the arguments
-    hit: envLookup :st scope: (scopeFor typing: st.typing :scope :unitDecl) :nameId
-    if hit.declId.isZero then return false
-    return (st.typing.decls.get i: hit.declId).kind.constDecl
-}
-
-# anyLabelledArg -- whether any of a call-shaped reference's arguments carries a
-# label.
-anyLabelledArg: function {ast: Ast.view arguments: (ListVal zast.nodeid).view} out bool is {
-    ai: u64
-    for ai < arguments.length loop {
-        arg: argRefAt :ast nid: (arguments.get i: ai)
-        if arg.name.notZero then return true
-        ai = ai + 1
-    }
-    return false
-}
-
-# refuseTypedefTypePositionFrom -- a generic typedef in a type position takes
-# its type arguments labelled (`(Bag T: String)`): its unlabelled argument is
-# `from:`, a value, so `(Bag String)` is refused as the grammar reads it.
-refuseTypedefTypePositionFrom: function {
-    st: zenv.ZSymbolTable
-    ast: Ast
-    arguments: (ListVal zast.nodeid).view
-    tplId: ztypes.tid
-} is {
-    if (isGenericTypedef :st tid: tplId).not then return
-    for each a: arguments loop {
-        arg: argRefAt :ast nid: a
-        if arg.nid.notZero when arg.name.isZero then {
-            # a name in a type position names a type
-            isName: false
-            opn: ast.nodes.get i: arg.operation
-            isName = opn.atomid or opn.dottedpath
-            tpn: specWrittenName :st :ast tid: tplId
-            m: "a type position holds no value, and argument 'from' of '\{tpn}' is one"
-            if isName then {
-                tn: argOperandName :ast :arg
-                m = "argument 'from' takes a value, and '\{tn}' is a type"
-            }
-            (
-                addErrorWithHint
-                :st
-                nodeid: arg.nid
-                lineno: arg.lineno
-                colno: arg.colno
-                e: zast.err.callError
-                msg: m
-                note: "a generic typedef's unlabelled argument is 'from:', the value of its base; its type arguments are labelled".string
-                hint: String
-                width: 1
-            )
-            return
-        }
-    }
 }
 
 # refuseZerolessArray -- an array is filled with its element's zero value, and
@@ -3346,49 +2879,6 @@ refuseSingletonWrite: function {st: zenv.ZSymbolTable ast: Ast target: zast.node
     return true
 }
 
-# refuseNonGenericApplication -- a type application whose head is no generic
-# template names nothing: an instance of a type with no parameters is not a
-# type. True, with the error laid at the head, when `tplId` is not generic;
-# the application then answers the head itself, so nothing downstream reads
-# a phantom instance of it.
-refuseNonGenericApplication: function {
-    st: zenv.ZSymbolTable
-    ast: Ast.view
-    tplId: ztypes.tid
-    at: zast.nodeid
-} out bool is {
-    if (st.reg.isGenericOf tid: tplId) then return false
-    name: specWrittenName :st :ast tid: tplId
-    n: ast.nodes.get i: at
-    (
-        addError
-        :st
-        nodeid: at
-        lineno: (nodeLine :n)
-        colno: (nodeCol :n)
-        e: zast.err.genericError
-        msg: "'\{name}' is not generic: it takes no type arguments"
-    )
-    return true
-}
-
-# anyUnknownParamLabel -- an argument of the application is labelled with a
-# name that is no parameter of the template.
-anyUnknownParamLabel: function {
-    st: zenv.ZSymbolTable.view
-    ast: Ast.view
-    arguments: (ListVal zast.nodeid).view
-    tplId: ztypes.tid
-} out bool is {
-    tdecl: st.typing.declIdOfType typeId: tplId
-    for each aId: arguments loop {
-        arg: argRefAt :ast nid: aId
-        if arg.nid.isZero or arg.name.isZero then continue
-        if (st.reg.isGenericParamOf :tdecl name: arg.name).not then return true
-    }
-    return false
-}
-
 # bindInheritedParams -- a template written in a generic unit takes that unit's
 # parameters after its own (registerUnitParamsOn), and an application names only
 # its own: the unit's are bound by what the application reaches the template
@@ -3432,7 +2922,18 @@ bindInheritedParams: function {
         }
     }
     for each pn: inherited loop {
-        bound: bindInheritedParam :st :ast :ud param: pn :via :walked :typeSubs :valSubs :sfx
+        bound: (
+            typeargs.bindInheritedParam
+            :st
+            :ast
+            :ud
+            param: pn
+            :via
+            :walked
+            :typeSubs
+            :valSubs
+            :sfx
+        )
         if bound.not then return true
     }
     return true
@@ -3458,51 +2959,6 @@ applicationQualifier: function {
     }
     if par.isZero then return ztypes.tid.zero
     return (qualifierUnitTid :st :ast :unitDecl :scope nid: par)
-}
-
-# bindInheritedParam -- bindInheritedParams for the unit `ud`'s parameter
-# `param`: the argument the instance `via` took for it, or with no instance the
-# parameter itself (as the explicit `t: t` reads), which a walked construction
-# reads as its walk's argument. False when there is nothing to bind it to.
-bindInheritedParam: function {
-    st: zenv.ZSymbolTable
-    ast: Ast
-    ud: ztypes.declid
-    param: zast.nameid
-    via: ztypes.tid
-    walked: bool
-    typeSubs: (IdMapV zast.nameid v: ztypes.tid)
-    valSubs: (IdMapV zast.nameid v: u64)
-    sfx: String
-} out bool is {
-    if via.isZero then {
-        ptid: (st.reg.genericParamTidOf tdecl: ud paramName: param).or d: ztypes.tid.zero
-        if ptid.isZero then return false
-        arg: ptid
-        if walked then arg = (st.walk.monoParamSubst.get key: ptid).or d: ptid
-        typeSubs.set key: param value: arg
-        sfx.append s: "_"
-        sfx.append s: (monoValName :st :ast tid: arg)
-        return true
-    }
-    viaDecl: st.typing.declIdOfType typeId: (st.reg.genericOriginOf tid: via)
-    viaNames: st.reg.genericParamNamesOf tdecl: viaDecl
-    oi: u64
-    for oi < viaNames.length while (viaNames.get i: oi) != param loop oi = oi + 1
-    if oi == viaNames.length then return false
-    cd: st.reg.genericParamConstraintOf tdecl: ud paramName: param
-    vg: st.reg.genericValueArgAt specId: via ordinal: oi
-    if cd.numKind.has when vg.some then {
-        valSubs.set key: param value: vg
-        appendNumericArgSuffix :sfx bits: vg :cd
-        return true
-    }
-    av: st.reg.genericTypeArgAt specId: via ordinal: oi
-    if av.isZero then return false
-    typeSubs.set key: param value: av
-    sfx.append s: "_"
-    sfx.append s: (monoValName :st :ast tid: av)
-    return true
 }
 
 # qualifierUnitTid -- the unit a type application's qualifier names: a name
@@ -3671,36 +3127,6 @@ refuseTemplateReachedThroughTemplate: function {
     )
 }
 
-# completeApplication -- a type application of a generic template (one of a
-# type that is not generic is refused), its labels checked, and its
-# parameters every one bound: a parameter it leaves out takes its default, and one with none is refused
-# (refuseIncompleteApplication) -- unless a label naming no parameter, which
-# has been reported, is why it is missing. False once refused.
-completeApplication: function {
-    st: zenv.ZSymbolTable
-    ast: Ast
-    unitDecl: ztypes.declid
-    scope: ztypes.declid
-    tplId: ztypes.tid
-    arguments: (ListVal zast.nodeid).view
-    typeSubs: (IdMapV zast.nameid v: ztypes.tid)
-    valSubsR: (IdMapV zast.nameid v: u64)
-    sfx: String
-    firstA: ztypes.tid
-    at: zast.nodeid
-} out bool is {
-    if (refuseNonGenericApplication :st :ast :tplId :at) then return false
-    validateMonoRefLabels :ast :st :arguments :tplId
-    if (bindInheritedParams :st :ast :unitDecl :scope :tplId :typeSubs valSubs: valSubsR :sfx :at
-    ).not then return false
-    if (fillApplicationDefaults :st :ast :tplId :typeSubs valSubs: valSubsR :sfx :firstA).not then {
-        return false
-    }
-    if (refuseZerolessArray :st :ast :tplId elemTid: firstA :at) then return false
-    if (anyUnknownParamLabel :st :ast :arguments :tplId) then return true
-    return (refuseIncompleteApplication :st :ast :tplId :typeSubs :valSubsR :firstA :at).not
-}
-
 # fillApplicationDefaults -- a type application's parameters it leaves out,
 # from their defaults. An unlabelled leading argument binds the first
 # parameter, so it is recorded as that parameter's before any default is
@@ -3740,222 +3166,6 @@ templateHasDefaults: function {st: zenv.ZSymbolTable.view tdecl: ztypes.declid} 
     return false
 }
 
-# refuseIncompleteApplication -- a type application that leaves one of the
-# template's parameters out names no instance: the missing one would stay a
-# parameter, and each application would mint an instance of its own. A
-# one-parameter template takes its single unlabelled argument whole. True once
-# reported.
-refuseIncompleteApplication: function {
-    st: zenv.ZSymbolTable
-    ast: Ast.view
-    tplId: ztypes.tid
-    typeSubs: (IdMapV zast.nameid v: ztypes.tid).view
-    valSubsR: (IdMapV zast.nameid v: u64).view
-    firstA: ztypes.tid
-    at: zast.nodeid
-} out bool is {
-    tdecl: st.typing.declIdOfType typeId: tplId
-    npar: st.reg.genericParamCountOf :tdecl
-    if npar == 1 when firstA.notZero then return false
-    pi: u64
-    for pi < npar loop {
-        pn: st.reg.genericParamNameAt :tdecl i: pi
-        pi = pi + 1
-        if (typeSubs.has key: pn) or (valSubsR.has key: pn) then continue
-        # an unlabelled leading argument binds the first parameter; it is kept
-        # under no name. A labelled one binds its own, and leaves the first
-        # unbound (`MapRV v: u64` names no key type)
-        if pi == 1 when firstA.notZero when (typeSubs.has key: zast.nameid) then continue
-        pnT: zast.nameTextAt :ast ref: pn
-        tname: specWrittenName :st :ast tid: tplId
-        n: ast.nodes.get i: at
-        (
-            addErrorWithHint
-            :st
-            nodeid: at
-            lineno: (nodeLine :n)
-            colno: (nodeCol :n)
-            e: zast.err.genericError
-            msg: "'\{tname}' is applied without its parameter '\{pnT}'"
-            note: "an application names every parameter of the type".string
-            hint: "write it with the others: '\{pnT}: <type>'"
-            width: 0
-        )
-        return true
-    }
-    return false
-}
-
-# resolveMonoRefParts -- resolveMonoRefInline's call-shaped core, taking the
-# callable and argument list directly so narrowed call subjects can feed it.
-# A type written outside a statement -- a signature, a field, an alias -- has
-# no statement to report an unmet bound at: the type-ref itself is the site,
-# for the instance and for the members minting it reaches.
-resolveMonoRefParts: function {
-    st: zenv.ZSymbolTable
-    ast: Ast
-    unitDecl: ztypes.declid
-    scope: ztypes.declid
-    thisName: StringView
-    enclDecl: ztypes.declid
-    callableNid: zast.nodeid
-    arguments: (ListVal zast.nodeid).view
-    nid: zast.nodeid
-} out ztypes.tid is {
-    if st.walk.boundSiteLine > 0 then {
-        return (
-            mintMonoRefParts
-            :st
-            :scope
-            :ast
-            :unitDecl
-            :thisName
-            :enclDecl
-            :callableNid
-            :arguments
-            :nid
-        )
-    }
-    cn: ast.nodes.get i: callableNid
-    st.walk.boundSiteNid = callableNid
-    st.walk.boundSiteLine = nodeLine n: cn
-    st.walk.boundSiteCol = nodeCol n: cn
-    st.walk.boundSiteFailArg = ztypes.tid.zero
-    r: mintMonoRefParts :st :scope :ast :unitDecl :thisName :enclDecl :callableNid :arguments :nid
-    st.walk.boundSiteNid = zast.nodeid
-    st.walk.boundSiteLine = 0
-    st.walk.boundSiteCol = 0
-    st.walk.boundSiteFailArg = ztypes.tid.zero
-    return r
-}
-
-# mintMonoRefParts -- resolveMonoRefParts once the site is set.
-mintMonoRefParts: function {
-    st: zenv.ZSymbolTable
-    ast: Ast
-    unitDecl: ztypes.declid
-    scope: ztypes.declid
-    thisName: StringView
-    enclDecl: ztypes.declid
-    callableNid: zast.nodeid
-    arguments: (ListVal zast.nodeid).view
-    nid: zast.nodeid
-} out ztypes.tid is {
-    {
-        # the callee's name, an owned copy read through a view scoped to this
-        # block: the lookups below lend ast
-        tname: typeApplicationHeadName :ast :callableNid
-        if tname.length == 0 then return ztypes.tid.zero
-        # a LABELLED argument may be a numeric parameter's, read as a value of
-        # the parameter's bound, which only the template knows: the template is
-        # found first then. Otherwise it is found only once the arguments
-        # resolve, as a type reference that does not settle is common while
-        # definitions are still resolving
-        tplId: ztypes.tid
-        if (
-            (anyLabelledArg :ast :arguments) or
-            (leadingArgIsValue :st :ast :unitDecl :scope :arguments)
-        ) then {
-            tplId = typeApplicationTemplate :st :scope :ast :unitDecl :callableNid
-            if tplId.isZero then return ztypes.tid.zero
-        }
-        sfx: String
-        typeSubs: IdMapV zast.nameid v: ztypes.tid
-        valSubsR: IdMapV zast.nameid v: u64
-        firstOut: ListVal ztypes.tid
-        allOk: (
-            collectMonoRefArgs
-            :st
-            :ast
-            :unitDecl
-            :scope
-            :thisName
-            :enclDecl
-            tdecl: (st.typing.declIdOfType typeId: tplId)
-            :arguments
-            :sfx
-            :typeSubs
-            :valSubsR
-            :firstOut
-        )
-        firstA: firstOut.get i: 0
-        if allOk.not then return ztypes.tid.zero
-        if sfx.length == 0 then return ztypes.tid.zero
-        if tplId.isZero then tplId = typeApplicationTemplate :st :scope :ast :unitDecl :callableNid
-        if tplId.isZero then return ztypes.tid.zero
-        if (
-            completeApplication
-            :st
-            :ast
-            :unitDecl
-            :scope
-            :tplId
-            :arguments
-            :typeSubs
-            :valSubsR
-            :sfx
-            :firstA
-            at: callableNid
-        ).not then {
-            return tplId
-        }
-        # the synth `.call` return's wrapper is the one its element takes
-        # (generatorWrapperOf)
-        tn: tname.copy
-        gwv: (st.walk.generatorWrapper.get key: nid).or d: false
-        if gwv when firstA.notZero then {
-            # a `.borrow`/`.view` yield leaf asks for a VIEW into what the
-            # generator captured. Nothing implements that: the wrapper below is
-            # owned either way, and a yield of a borrowed field would be moved
-            # out as if it were owned. Refused, rather than accepted and
-            # miscompiled.
-            ovTpl: stdTid :ast :st wk: zast.wellKnown.slot.tyOptionView
-            if tplId == ovTpl when (st.reg.isValtypeOf tid: firstA).not then {
-                gwn: ast.nodes.get i: nid
-                (
-                    addError
-                    :st
-                    nodeid: nid
-                    lineno: (nodeLine n: gwn)
-                    colno: (nodeCol n: gwn)
-                    e: zast.err.ownerError
-                    msg: "a generator cannot yield a reference: its `call` hands back an OWNED element, so the return is `out T` and each yield is an owned value (`.copy` what the generator captured)".string
-                )
-            }
-            gwt: generatorWrapperOf :st :ast :scope elem: firstA
-            if gwt.notZero then tplId = gwt
-        }
-        mainName: st.typing.mainUnitRoot
-        uat: unitAppliedTypeRef :st :scope :ast :tplId :typeSubs :valSubsR :tn :sfx :nid
-        if uat.notZero then return uat
-
-        # firstA rides as the fallback: when a template's param name differs
-        # from the call label (Option's `t` vs the conventional `of:`), the
-        # clone fallback leg types native-union arms from it -- a spec first
-        # minted from a TYPE-position ref must carry real arm payloads.
-        memberIdAt: (
-            getOrMintSpec
-            :st
-            :scope
-            :ast
-            unitDecl: mainName
-            sfx: sfx.stringView
-            templateId: tplId
-            subs: typeSubs
-            valSubs: valSubsR
-            fallbackArg: firstA
-        )
-        if memberIdAt.isZero then return ztypes.tid.zero
-        # backstop for a sized record whose size literal did not parse as a
-        # decimal (the value-keyed trie path arms sized specs centrally)
-        if (stdtypes.isSizedTemplate :ast :st tid: tplId) then {
-            stdtypes.mintCollectionChildren :st :ast monoId: memberIdAt templateId: tplId
-        }
-        recordMonoRef :st :ast mono: memberIdAt :nid at: callableNid :unitDecl
-        return memberIdAt
-    }
-}
-
 
 # qualifiedMemberScope -- the scope a qualified type-ref's member `unit.member`
 # is looked up from: the unit's root, or its `public:` block when the block
@@ -3978,128 +3188,6 @@ qualifiedMemberScope: function {
     return pb
 }
 
-# returnParamTid -- when a return typeref names one of the enclosing
-# template's generic parameters, its canonical parameter type id; else 0.
-returnParamTid: function {
-    st: zenv.ZSymbolTable
-    enclDecl: ztypes.declid
-    ast: Ast.view
-    oId: zast.nodeid
-} out ztypes.tid is {
-    if oId.isZero then return ztypes.tid.zero
-    o: ast.nodes.get i: oId
-    bnId: atomNameId :ast n: o
-    # a marker-suffixed generic return (`of.take` / `of.borrow`) reads its
-    # base name through the peeled parent.
-    if bnId.isZero then bnId = markerPeeledBaseId :ast n: o
-    if (genericParamIsType :st tdecl: enclDecl name: bnId) then {
-        declare.recordGenericParamRef :st nid: oId scope: enclDecl name: bnId
-        return (declare.genericParamTidMint :st :ast tdecl: enclDecl nameId: bnId)
-    }
-
-    return ztypes.tid.zero
-}
-
-
-# partialTyperefTid -- resolve a composite parameterized typeref inside a
-# template method signature to a spec through the shared disassembly
-# (resolveMonoRefParts with the template's enclDecl). Returns the spec only
-# when it is PARTIAL (an argument named a generic param); a fully-concrete
-# composite stays 0, preserving the caller's eager-path behavior.
-# `stampNid` is the OUTERMOST typeref node and stays fixed while `nid` descends
-# through markers -- the same split recordTyperef makes. It has to
-# be carried: a generator's synthesised wrapper return collapses `Option` to
-# `optionval` over a valtype element, and that collapse is keyed on this very
-# node. Resolving without it re-mints `Option i64`, which its own AnyRef
-# constraint then refuses.
-partialTyperefTid: function {
-    st: zenv.ZSymbolTable
-    ast: Ast
-    unitDecl: ztypes.declid
-    scope: ztypes.declid
-    enclDecl: ztypes.declid
-    nid: zast.nodeid
-    stampNid: zast.nodeid
-} out ztypes.tid is {
-    arm: declare.rowArmAt :ast :nid
-    match (
-        arm
-    ) case dottedpath then {
-        dr: dpRefAt :ast :nid
-        isStrip: isStripMarkerId nameId: (atomNameId :ast n: (ast.nodes.get i: dr.child))
-        if isStrip then return (
-            partialTyperefTid
-            :st
-            :scope
-            :ast
-            :unitDecl
-            :enclDecl
-            nid: dr.parent
-            :stampNid
-        )
-        return ztypes.tid.zero
-    } case call then {
-        # the arguments as an owned list: the resolver below lends ast
-        cr: callRefAt :ast :nid
-        argNodes: ListVal zast.nodeid
-        k6: u64
-        for k6 < cr.nargs loop {
-            argNodes.append from: (zast.callArgAt :ast nid: cr.nid i: k6)
-            k6 = k6 + 1
-        }
-        partial: (
-            resolveMonoRefParts
-            :st
-            :scope
-            :ast
-            :unitDecl
-            thisName: ""
-            :enclDecl
-            callableNid: cr.callable
-            arguments: argNodes
-            nid: stampNid
-        )
-        if partial.notZero when (st.reg.isPartialOf tid: partial) then return partial
-        return ztypes.tid.zero
-    } else null
-    return ztypes.tid.zero
-}
-
-# partialUnderDecl -- partialTyperefTid under one enclosing declaration, and the
-# declaration is the whole of it: `(Cell :t)` names `t` in the template that owns
-# it, so a resolution given none cannot see `t` as a parameter at all and mints a
-# fresh record shell under the composed name instead. Answers 0 for a declaration
-# that owns no generic parameters, which is the cheap question and keeps every
-# ordinary typeref on the path it already took.
-partialUnderDecl: function {
-    st: zenv.ZSymbolTable
-    ast: Ast
-    unitDecl: ztypes.declid
-    scope: ztypes.declid
-    enclDecl: ztypes.declid
-    oId: zast.nodeid
-} out ztypes.tid is {
-    if oId.isZero then return ztypes.tid.zero
-    if enclDecl.isZero then return ztypes.tid.zero
-    if (st.reg.genericParamCountOf tdecl: enclDecl) == 0 then return ztypes.tid.zero
-    return (partialTyperefTid :st :scope :ast :unitDecl :enclDecl nid: oId stampNid: oId)
-}
-
-# partialFieldTid -- partialUnderDecl over a FIELD's typeref, under the
-# declaration of the type that owns the field.
-partialFieldTid: function {
-    st: zenv.ZSymbolTable
-    ast: Ast
-    unitDecl: ztypes.declid
-    scope: ztypes.declid
-    ownerTid: ztypes.tid
-    oId: zast.nodeid
-} out ztypes.tid is {
-    if ownerTid.isZero then return ztypes.tid.zero
-    od9: st.typing.declIdOfType typeId: ownerTid
-    pu9: partialUnderDecl :st :ast :unitDecl :scope enclDecl: od9 :oId
-    return pu9
-}
 
 # fieldSlotTid -- a field's declared type: the partial specialisation when the
 # typeref's argument names a generic parameter of the owning template, and the
@@ -4114,7 +3202,7 @@ fieldSlotTid: function {
     oId: zast.nodeid
     thisName: StringView
 } out ztypes.tid is {
-    pt9: partialFieldTid :st :ast :unitDecl :scope :ownerTid :oId
+    pt9: typeargs.partialFieldTid :st :ast :unitDecl :scope :ownerTid :oId
     if pt9.notZero then return pt9
     # THE OWNER IS ON THE CONTAINMENT PATH for the width of this typeref, and
     # only for it. A layout cycle is a field edge that reaches a type already
@@ -4138,224 +3226,6 @@ fieldSlotTid: function {
     r7: typeref.resolveFieldTyperef :st :ast :unitDecl :scope nid: oId :thisName
     if od7.notZero then st.typing.declSetContaining declId: od7 mark: prevOn
     return r7
-}
-
-# partialParamTid -- partialUnderDecl over a PARAMETER's typeref. A function's
-# own generic parameters win over the receiver's, the order
-# recordFunctionReturn uses for the same reason.
-partialParamTid: function {
-    st: zenv.ZSymbolTable
-    ast: Ast
-    unitDecl: ztypes.declid
-    scope: ztypes.declid
-    fnDecl: ztypes.declid
-    receiverEnclDecl: ztypes.declid
-    isgen: bool
-    oId: zast.nodeid
-} out ztypes.tid is {
-    ppt: ztypes.tid
-    if isgen then ppt = partialUnderDecl :st :ast :unitDecl :scope enclDecl: fnDecl :oId
-    if ppt.isZero then ppt = (
-        partialUnderDecl
-        :st
-        :ast
-        :unitDecl
-        :scope
-        enclDecl: receiverEnclDecl
-        :oId
-    )
-    return ppt
-}
-
-# partialReturnTid -- partialTyperefTid over a function's return typeref.
-partialReturnTid: function {
-    st: zenv.ZSymbolTable
-    ast: Ast
-    unitDecl: ztypes.declid
-    scope: ztypes.declid
-    enclDecl: ztypes.declid
-    oId: zast.nodeid
-} out ztypes.tid is {
-    if oId.isZero then return ztypes.tid.zero
-    return (partialTyperefTid :st :scope :ast :unitDecl :enclDecl nid: oId stampNid: oId)
-}
-
-# markerPeeledBase -- the base atom name under a strip-marker dotted path
-# (`of.take` -> "of"); "" for any other shape.
-markerPeeledBase: function {ast: Ast.view n: astnode.view} out String is {
-    match (
-        n
-    ) case dottedpath then {
-        if (isStripMarkerId nameId: (atomNameId :ast n: (ast.nodes.get i: n.child))) then {
-            return (atomName :ast n: (ast.nodes.get i: n.parent))
-        }
-        return "".string
-    } else {
-        return "".string
-    }
-}
-
-# markerPeeledBaseId -- markerPeeledBase as the base atom's name id (zero for
-# any other shape), for a caller that holds ids.
-markerPeeledBaseId: function {ast: Ast.view n: astnode.view} out zast.nameid is {
-    match (
-        n
-    ) case dottedpath then {
-        if (isStripMarkerId nameId: (atomNameId :ast n: (ast.nodes.get i: n.child))) then {
-            return (atomNameId :ast n: (ast.nodes.get i: n.parent))
-        }
-        return zast.nameid
-    } else {
-        return zast.nameid
-    }
-}
-
-# stampGenericParamRef -- a return typeref naming one of the enclosing
-# template's generic params stamps the unit's generic-param type directly
-# (generic params live outside the name-resolution table).
-stampGenericParamRef: function {
-    st: zenv.ZSymbolTable
-    enclDecl: ztypes.declid
-    ast: Ast.view
-    oId: zast.nodeid
-} is {
-    if oId.isZero then return
-    o: ast.nodes.get i: oId
-    bnId: atomNameId :ast n: o
-    # a marker-suffixed generic return (`of.take` / `of.borrow`) reads its
-    # base name through the peeled parent; the marker dp wears the stamp,
-    # matching recordTyperef's convention for concrete marked returns.
-    if bnId.isZero then bnId = markerPeeledBaseId :ast n: o
-    if (genericParamIsType :st tdecl: enclDecl name: bnId) then {
-        paramTid: declare.genericParamTidMint :st :ast tdecl: enclDecl nameId: bnId
-        nodeIdOfRef: nodeId n: o
-        ztyping.nodeTypeSet tbl: st.typing.nodeType nid: nodeIdOfRef tid: paramTid
-    }
-}
-
-# recordGenericMarkerReturn -- a marker-suffixed generic-param return
-# (`out of.take` / `out of.borrow`) records its peeled base name at the
-# dotted node (pendingTyperef) so the mono-return substitution finds it:
-# the plain-atom leg records inside recordTyperef, while the marker leg
-# only resolution-stamps.
-recordGenericMarkerReturn: function {
-    st: zenv.ZSymbolTable
-    scope: ztypes.declid
-    enclDecl: ztypes.declid
-    ast: Ast.view
-    oId: zast.nodeid
-} is {
-    if oId.isZero then return
-    o: ast.nodes.get i: oId
-    peeledBase: markerPeeledBase :ast n: o
-    if peeledBase.length > 0 when (
-        genericParamIsType
-        :st
-        tdecl: enclDecl
-        name: (nameIdOf :ast name: peeledBase.stringView)
-    ) then {
-        markerNid: nodeId n: o
-        typeref.recordNodeName :ast :st name: peeledBase.stringView nid: markerNid :scope
-        # the entry feeds mono-return substitution (the pending MAP is the
-        # consumer); it names a template param, so it never name-resolves
-        stampKey: markerNid
-        stampValue: true
-        st.walk.noStampNode.set key: stampKey value: stampValue
-    }
-}
-
-# recordFuncReturnNode -- map a function type id to its return type-ref's node id
-# so a call site can read the resolved return type (node_type, post stampTyperefs).
-recordFuncReturnNode: function {
-    st: zenv.ZSymbolTable
-    fid: ztypes.tid
-    ast: Ast.view
-    oId: zast.nodeid
-} is {
-    if oId.isZero then return
-    o: ast.nodes.get i: oId
-    rn: nodeId n: o
-    fidc: fid
-    st.typing.funcReturnNode.set key: fidc value: rn
-}
-
-# demandTyperefNames -- demand every name a type-expr references (the head
-# and, transitively, parameter-arg names), so a signature's full closure
-# resolves. Creates no types.
-demandTyperefNames: function {
-    st: zenv.ZSymbolTable
-    ast: Ast.view
-    unitDecl: ztypes.declid
-    scope: ztypes.declid
-    typeExpr: astnode.view
-} is {
-    match (
-        typeExpr
-    ) case atomid then {
-        teN: ast.names.texts.get i: typeExpr.name
-        if (isNumericLiteralName name: teN.stringView).not then {
-            walkScope: scopeFor typing: st.typing :scope :unitDecl
-            demandDefinition :st scope: walkScope nameId: typeExpr.name
-        }
-    } case call then {
-        hn: zast.nameTextAt :ast ref: (atomNameId :ast n: (ast.nodes.get i: typeExpr.callable))
-        if hn.length > 0 then {
-            walkScope: scopeFor typing: st.typing :scope :unitDecl
-            (
-                demandDefinition
-                :st
-                scope: walkScope
-                nameId: (atomNameId :ast n: (ast.nodes.get i: typeExpr.callable))
-            )
-        }
-        for each argId: (zast.kidsOf :ast span: typeExpr.arguments) loop {
-            arg: ast.nodes.get i: argId
-            if arg.namedoperation then {
-                (
-                    demandTyperefNames
-                    :st
-                    :scope
-                    :ast
-                    :unitDecl
-                    typeExpr: (ast.nodes.get i: arg.operation)
-                )
-            }
-        }
-    } case dottedpath then {
-        demandTyperefNames :st :scope :ast :unitDecl typeExpr: (ast.nodes.get i: typeExpr.parent)
-    } else null
-}
-
-# typeArgSuffixName -- the suffix component a collection type-arg contributes to a
-# shell mono name. A bare atom gives its name; a cross-unit dotted ref gives its
-# MEMBER name (ztypes.zparamownership -> zparamownership) so the shell's mono name
-# matches the construction path's nameOf-based name. Without this the dotted
-# arg's atomName is "" and the shell mints `Map_u64_` (empty value), a distinct id
-# from the constructed `Map_u64_zparamownership`, and the field and its create
-# would disagree on the type.
-typeArgSuffixName: function {
-    st: zenv.ZSymbolTable.view
-    scope: ztypes.declid
-    ast: Ast.view
-    op: astnode.view
-} out String is {
-    match (
-        op
-    ) case dottedpath then {
-        if (
-            typeref.qualifierNamesUnit
-            :st
-            :scope
-            qualId: (atomNameId :ast n: (ast.nodes.get i: op.parent))
-            memberId: (atomNameId :ast n: (ast.nodes.get i: op.child))
-        ) then {
-            return (atomName :ast n: (ast.nodes.get i: op.child))
-        } else {
-            return "".string
-        }
-    } else {
-        return (atomName :ast n: op)
-    }
 }
 
 # pathMemberTypeTid -- the type a path's member names: a member of a unit the
@@ -4737,14 +3607,17 @@ enclosingInstanceOf: function {
             vo
         ) case some then {
             (
-                appendNumericArgSuffix
+                typeargs.appendNumericArgSuffix
                 sfx: lbl
                 bits: vo
                 cd: (st.reg.genericParamConstraintOf tdecl: ud paramName: pn)
             )
         } case none then {
             lbl.append s: "_"
-            lbl.append s: (monoValName :st :ast tid: ((subs.get key: pn).or d: ztypes.tid.zero))
+            (
+                lbl.append
+                s: (typeargs.monoValName :st :ast tid: ((subs.get key: pn).or d: ztypes.tid.zero))
+            )
         }
     }
     return (ensureUnitInstanceMono :st :scope :ast tplId: utpl tdecl: ud :subs :valSubs label: lbl)
@@ -4813,7 +3686,7 @@ resolveTyperefAtomShell: function {
     npO: numericParamTypeOwner :st :ast :unitDecl :scope :nameId :thisName
     if npO.notZero then return (typeref.numericParamBoundOf :st :ast :scope owner: npO :nameId)
     if demand then {
-        walkScope: scopeFor typing: st.typing :scope :unitDecl
+        walkScope: typeargs.scopeFor typing: st.typing :scope :unitDecl
         demandDefinition :st scope: walkScope :nameId
     }
     return (resolveAtomType :st :scope :ast :unitDecl :nameId :thisName :nid)
@@ -4845,82 +3718,6 @@ numericParamTypeOwner: function {
     return owner
 }
 
-# refuseSingletonTypeRef -- a type-ref that names a numeric generic parameter of
-# `owner` where only a field's or a local's type may (`n: cap`, `out cap`,
-# `n: cap.hold`, `(List t: cap)`): as a type the parameter has one value, the
-# instance's argument, which a field or a local holds; a parameter, a return,
-# a marker or a type argument would carry it into code every instance shares.
-# The declaration keeps the bound's type, so its uses say nothing more.
-refuseSingletonTypeRef: function {
-    st: zenv.ZSymbolTable
-    ast: Ast.view
-    owner: ztypes.declid
-    nameId: zast.nameid
-    nid: zast.nodeid
-} is {
-    if nid.isZero then return
-    nn: zast.nameTextAt :ast ref: nameId
-    bn: (
-        ztypes.numkindName
-        k: (st.reg.genericParamConstraintOf tdecl: owner paramName: nameId).numKind.kind
-    )
-    (
-        reportSingletonPlacement
-        :st
-        :ast
-        :nid
-        written: nn.stringView
-        bound: bn.stringView
-        width: nn.length
-    )
-}
-
-# reportSingletonPlacement -- the refusal of a numeric generic parameter's
-# singleton type, named `written`, where only a field's or a local's type may
-# name it; `bound` is the parameter's bound, which the declaration takes instead.
-reportSingletonPlacement: function {
-    st: zenv.ZSymbolTable
-    ast: Ast.view
-    nid: zast.nodeid
-    written: StringView
-    bound: StringView
-    # the underline: the name's length, or 1 for a path
-    width: u64
-} is {
-    n: ast.nodes.get i: nid
-    (
-        addErrorWithHint
-        :st
-        nodeid: nid
-        lineno: (nodeLine :n)
-        colno: (nodeCol :n)
-        e: zast.err.typeError
-        msg: "'\{written}' is a numeric generic parameter: as a type it has one value, so it types only a field or a local"
-        note: "".string
-        hint: "take or return its bound, `\{bound}`, and read `\{written}` for the value"
-        :width
-    )
-}
-
-# refuseSingletonPathType -- a parameter's or a return's type-ref `nid` that
-# names a numeric generic parameter's singleton type through a path (`x: B5.cap`,
-# `out (Box cap: 5).cap`, `x: B5.cap.hold`), refused as the bare name is
-# (refuseSingletonTypeRef): the declaration takes the bound. `tid` itself for
-# any other type.
-refuseSingletonPathType: function {
-    st: zenv.ZSymbolTable
-    ast: Ast.view
-    nid: zast.nodeid
-    tid: ztypes.tid
-} out ztypes.tid is {
-    if (st.typing.isSingletonType :tid).not then return tid
-    bound: st.typing.typedefBaseTidOf :tid
-    tw: specWrittenName :st :ast :tid
-    bn: st.reg.nameOf tid: bound
-    reportSingletonPlacement :st :ast :nid written: tw.stringView bound: bn.stringView width: 1
-    return bound
-}
-
 # refuseSingletonDeclType -- a declaration of `ownerDecl` typed by a numeric
 # generic parameter of it or of a definition enclosing it, in a place only a
 # field's or a local's type may name one: a function's parameter (`n: cap`,
@@ -4945,185 +3742,7 @@ refuseSingletonDeclType: function {
     }
     if an.isZero then return
     owner: numericParamOwnerFrom :st scope: ownerDecl nameId: an
-    if owner.notZero then refuseSingletonTypeRef :st :ast :owner nameId: an nid: baseNid
-}
-
-# shellHeadIsGeneric -- whether a type-reference shell's head names a generic
-# template, found the way resolveMonoRefParts finds it: a name the CURRENT unit
-# defines wins over a same-named one up the ladder.
-shellHeadIsGeneric: function {
-    st: zenv.ZSymbolTable
-    scope: ztypes.declid
-    ast: Ast
-    unitDecl: ztypes.declid
-    callableNid: zast.nodeid
-} out bool is {
-    headTemplate: typeApplicationTemplate :st :scope :ast :unitDecl :callableNid
-    if headTemplate.isZero then return false
-    return (st.reg.isGenericOf tid: headTemplate)
-}
-
-# anyNumericArgRefused -- whether a type reference's arguments include a numeric
-# generic argument already refused.
-anyNumericArgRefused: function {
-    st: zenv.ZSymbolTable.view
-    ast: Ast.view
-    argIds: (ListVal zast.nodeid).view
-} out bool is {
-    for each argId: argIds loop {
-        arg: ast.nodes.get i: argId
-        if arg.namedoperation when (st.walk.numericArgsRefused.has item: arg.operation
-        ) then return true
-    }
-    return false
-}
-
-# resolveTyperefCallShell -- a parameterized type ref: the mono it names
-# when resolution knows one, else a fresh record shell named by the head
-# and its argument suffixes, each argument's type names demanded on the way;
-# 0 when a numeric argument was refused.
-resolveTyperefCallShell: function {
-    st: zenv.ZSymbolTable
-    ast: Ast
-    unitDecl: ztypes.declid
-    scope: ztypes.declid
-    thisName: StringView
-    callableId: zast.nodeid
-    argIds: (ListVal zast.nodeid).view
-    # the type reference itself
-    nid: zast.nodeid
-} out ztypes.tid is {
-    imid8: (
-        resolveMonoRefParts
-        :st
-        :scope
-        :ast
-        :unitDecl
-        :thisName
-        enclDecl: ztypes.declid
-        callableNid: callableId
-        arguments: argIds
-        nid: zast.nodeid
-    )
-    if imid8.notZero then return imid8
-    suffix: atomName :ast n: (ast.nodes.get i: callableId)
-    walkScope: scopeFor typing: st.typing :scope :unitDecl
-    (
-        demandDefinition
-        :st
-        scope: walkScope
-        nameId: (atomNameId :ast n: (ast.nodes.get i: callableId))
-    )
-    argRefused: anyNumericArgRefused :st :ast :argIds
-    for each argId: argIds loop {
-        # the argument's operation, when it is a named one
-        opId: zast.nodeid
-        arg: ast.nodes.get i: argId
-        if arg.namedoperation then opId = arg.operation
-        if opId.notZero then {
-            an: typeArgSuffixName :st :scope :ast op: (ast.nodes.get i: opId)
-            suffix.append "_"
-            suffix.append an
-            demandTyperefNames :st :scope :ast :unitDecl typeExpr: (ast.nodes.get i: opId)
-        }
-    }
-    # The shell is a NAME, not a definition: nothing ever gives it members or a
-    # layout, so if it survives to the emitter the C is invalid -- an incomplete
-    # type, or one no translation unit declares. That is fine for the shapes it
-    # exists for (a forward reference, a sized record's value key), and a lie
-    # for a GENERIC template whose arguments did not settle: `(Cell :t)` written
-    # where nothing owns a `t` reaches here, and would compile to a struct
-    # field of a type that is never defined. Say so instead.
-    hn9: String
-    hl9: u32
-    hc9: u32
-    cn9: ast.nodes.get i: callableId
-    hn9 = atomName :ast n: cn9
-    hl9 = nodeLine n: cn9
-    hc9 = nodeCol n: cn9
-    headIsGeneric: false
-    if hn9.length > 0 when argRefused.not then {
-        headIsGeneric = shellHeadIsGeneric :st :scope :ast :unitDecl callableNid: callableId
-    }
-    unknownArg: zast.nodeid
-    if headIsGeneric then unknownArg = unknownTypeArgAtom :st :ast :unitDecl :scope :argIds
-    if unknownArg.notZero then {
-        # the argument names nothing at all: say which, as a bare type-ref does
-        un9: ast.nodes.get i: unknownArg
-        ut9: (zast.nameTextAt :ast ref: (atomNameId :ast n: un9)).copy
-        (
-            addErrorWithHint
-            :st
-            nodeid: unknownArg
-            lineno: (nodeLine n: un9)
-            colno: (nodeCol n: un9)
-            e: zast.err.badReference
-            msg: "Unknown type '\{ut9}'"
-            note: String
-            hint: "a type argument names a type, or a generic parameter the enclosing declaration owns".string
-            width: ut9.length
-        )
-    } else if headIsGeneric then {
-        m9: "type argument of generic type '\{hn9}' does not name a type here"
-        h9: "a `:name` argument is `name: name`, and the VALUE must name a type or a generic parameter the enclosing declaration owns".string
-        nt9: String
-        (
-            addErrorWithHint
-            :st
-            nodeid: callableId
-            lineno: hl9
-            colno: hc9
-            e: zast.err.genericError
-            msg: m9
-            note: nt9
-            hint: h9
-            width: hn9.length
-        )
-    }
-    # a refused numeric argument is reported where it is written: the
-    # reference names no type, and the member it declares is refused there
-    # (memberTyperefRefused), so no value is compared with a shell named for it
-    if argRefused then {
-        st.typing.refusedValues.add item: nid
-        return ztypes.tid.zero
-    }
-    if headIsGeneric.not when hn9.length > 0 then {
-        return (plainHeadOrShell :st :scope :ast :unitDecl :callableId suffix: suffix.stringView)
-    }
-    return (st.reg.newType name: suffix.stringView typetype: ztypes.ztypetype.recordType)
-}
-
-# plainHeadOrShell -- the type a call-shaped reference names when its head is
-# no generic template. A head that resolves takes no arguments at all,
-# whatever is written for one (`i64 "s"`): it is refused, and the head
-# answers, as where the arguments settle (completeApplication). A head that
-# does not resolve yet is the shell named `suffix`.
-plainHeadOrShell: function {
-    st: zenv.ZSymbolTable
-    scope: ztypes.declid
-    ast: Ast
-    unitDecl: ztypes.declid
-    callableId: zast.nodeid
-    suffix: StringView
-} out ztypes.tid is {
-    plain: typeApplicationTemplate :st :scope :ast :unitDecl callableNid: callableId
-    if plain.isZero then {
-        # a number is no name a later definition could give a type to
-        cn: ast.nodes.get i: callableId
-        hn: atomNameId :ast n: cn
-        if hn.notZero when (isNumericLiteralNameAt :ast ref: hn) then (
-            addError
-            :st
-            nodeid: callableId
-            lineno: (nodeLine n: cn)
-            colno: (nodeCol n: cn)
-            e: zast.err.typeError
-            msg: "'\{zast.nameTextAt :ast ref: hn}' is a number, not a type: it takes no arguments"
-        )
-        return (st.reg.newType name: suffix typetype: ztypes.ztypetype.recordType)
-    }
-    refuseNonGenericApplication :st :ast tplId: plain at: callableId
-    return plain
+    if owner.notZero then typeargs.refuseSingletonTypeRef :st :ast :owner nameId: an nid: baseNid
 }
 
 # refuseLiteralTyperef -- a literal type names what a lexeme wears until context
@@ -5144,7 +3763,7 @@ refuseLiteralTyperef: function {
     # only where the NAME was written. A literal type's own conversions take an
     # elided `:this`, whose type legitimately IS the literal type -- there is no
     # written name there to refuse, and refusing it breaks system.z itself.
-    wn9: paramTypeBaseNameId :ast op: (ast.nodes.get i: nid)
+    wn9: typeargs.paramTypeBaseNameId :ast op: (ast.nodes.get i: nid)
     if wn9.isZero then return
     wroteLiteral: false
     wt9: zast.nameTextAt :ast ref: wn9
@@ -5187,40 +3806,6 @@ paramIsThisReceiver: function {ast: Ast.view op: astnode.view} out bool is {
 # that hold no outstanding view into ast.nodes.
 paramIsThisReceiverId: function {ast: Ast.view opId: zast.nodeid} out bool is {
     return (paramIsThisReceiver :ast op: (ast.nodes.get i: opId))
-}
-
-# the base type name of parameter operation `op`.
-# paramTypeBaseNameId -- the base type name of a (possibly parameterized) param
-# type expression, as its name id: an atom name directly, or the callable of a
-# parenthesized `(List of: i64)` form (a call). Zero for
-# anything else.
-paramTypeBaseNameId: function {ast: Ast.view op: astnode.view} out zast.nameid is {
-    match (
-        op
-    ) case atomid then {
-        return op.name
-    } case labelvalue then {
-        return op.name
-    } case call then {
-        return (typeApplicationHeadNameId :ast callableNid: op.callable)
-    } else {
-        return zast.nameid.zero
-    }
-}
-
-# demandReturnType -- demand a function's return-type names (`out (Result t:
-# u64 e: IoError)` -> Result), so a type named only in a return position is
-# resolved.
-demandReturnType: function {
-    st: zenv.ZSymbolTable
-    ast: Ast.view
-    unitDecl: ztypes.declid
-    scope: ztypes.declid
-    oId: zast.nodeid
-} is {
-    if oId.isZero then return
-    o: ast.nodes.get i: oId
-    demandTyperefNames :st :scope :ast :unitDecl typeExpr: o
 }
 
 # typeHasNonOwnedField -- the type declares at least one field the instance does
@@ -5362,85 +3947,6 @@ declaresFunctionWithBody: function {
     return (bodies.isFunctionDefWithBody o: (ast.nodes.get i: n.operation))
 }
 
-# declaredFunctionNode -- the functiondef row `baseId` declares, looked up
-# outward from `scope` through the declarations themselves -- so it answers
-# before the function's type has resolved (a field is resolved on demand, often
-# before a function it names). 0 when the name declares no function there.
-declaredFunctionNode: function {
-    st: zenv.ZSymbolTable
-    ast: Ast.view
-    unitDecl: ztypes.declid
-    scope: ztypes.declid
-    baseId: zast.nameid
-} out zast.nodeid is {
-    cur: scopeFor typing: st.typing :scope :unitDecl
-    for cur.notZero loop {
-        d: st.typing.declFindChild parentDeclId: cur nameId: baseId
-        if d.notZero then {
-            dn: (st.typing.decls.get i: d).node
-            if dn.isZero then return zast.nodeid
-            op: zast.nodeid
-            n: ast.nodes.get i: dn
-            if n.namedoperation then op = n.operation
-            if op.isZero then return zast.nodeid
-            if (ast.nodes.get i: op).functiondef then return op
-            return zast.nodeid
-        }
-        cur = st.typing.declParentOf declId: cur
-    }
-    return zast.nodeid
-}
-
-# namesSpec -- `baseId` declares a SPEC: a function with no body that is not
-# native. A spec names a type -- of a parameter, a field, a return -- and has no
-# value: nothing to call, and nothing to reference.
-namesSpec: function {
-    st: zenv.ZSymbolTable
-    ast: Ast.view
-    unitDecl: ztypes.declid
-    scope: ztypes.declid
-    baseId: zast.nameid
-} out bool is {
-    fn: declaredFunctionNode :st :ast :unitDecl :scope :baseId
-    if fn.isZero then return false
-    n: ast.nodes.get i: fn
-    match (
-        n
-    ) case functiondef then {
-        return n.body.isZero and n.isNative.not
-    } else {
-        return false
-    }
-}
-
-# refuseSpecValue -- a spec's name used as a value: called, read bare, or
-# copied. True when it reported (when `baseId` names a spec).
-refuseSpecValue: function {
-    st: zenv.ZSymbolTable
-    ast: Ast
-    unitDecl: ztypes.declid
-    baseId: zast.nameid
-    nodeid: zast.nodeid
-    lineno: u32
-    colno: u32
-} out bool is {
-    if (namesSpec :st :ast :unitDecl scope: st.curScope :baseId).not then return false
-    sn: zast.nameTextCopy :ast ref: baseId
-    (
-        addErrorWithHint
-        :st
-        :nodeid
-        :lineno
-        :colno
-        e: zast.err.typeError
-        msg: "'\{sn}' is a spec, a function with no body: it names a type, and has no value to call or copy"
-        note: "a spec types a parameter, a field or a return, and a function with a body and its signature is passed there".string
-        hint: String
-        width: sn.length
-    )
-    return true
-}
-
 # refuseMarkedFunctionType -- a declaration's type written as a function's NAME
 # with a marker (`f: double.take`). A function with a body declares both the type
 # and the default (`f: double`); a type with no default is declared by a SPEC, a
@@ -5550,7 +4056,7 @@ registerValueParam: function {
         :thisName
     )
     refuseLiteralTyperef :st :ast nid: pm.operation tid: cid
-    if folded.isZero then cid = refuseSingletonPathType :st :ast nid: pm.operation tid: cid
+    if folded.isZero then cid = typeargs.refuseSingletonPathType :st :ast nid: pm.operation tid: cid
     st.typing.setMemberType parentTypeId: fid nameId: pm.name childTypeId: cid
     if folded.notZero then {
         pnmA: zast.nameTextCopy :ast ref: pm.name
@@ -5604,297 +4110,6 @@ registerValueParam: function {
             )
         }
     }
-}
-
-
-# resolveFunctionParam -- resolve one parameter of a function signature: its
-# type and ownership, and the generic or receiver role that exempts it from
-# being an ordinary parameter.
-resolveFunctionParam: function {
-    st: zenv.ZSymbolTable
-    ast: Ast
-    unitDecl: ztypes.declid
-    rf: ztypes.declid
-    fid: ztypes.tid
-    fnDecl: ztypes.declid
-    receiverEnclDecl: ztypes.declid
-    isgen: bool
-    thisName: StringView
-    skipThisType: bool
-    pmId: zast.nodeid
-} is {
-    pm: argRefAt :ast nid: pmId
-    refuseThisNamedReceiver :st :ast :pm
-    if pm.nid.notZero then {
-        skipParam: false
-        genParam: false
-        fnParam: false
-        ptn: atomNameId :ast n: (ast.nodes.get i: pm.operation)
-        # a MARKED type (`s: T.view`) is a dotted path with no atom name; its
-        # head is the path's root, which the generic-parameter tests must see
-        # so the parameter binds `T` itself rather than a shell named after it
-        gpn: ptn
-        if gpn.isZero then {
-            pOp: ast.nodes.get i: pm.operation
-            if (isStripMarkerId nameId: (dottedChildNameId :ast n: pOp)) then {
-                gpn = rootNameIdOf :ast n: pOp
-            }
-        }
-        # A MARKED receiver is an alias, so its type is `this.view` rather
-        # than the bare `this` an atom name reports. Ask the shared
-        # predicate, which knows every marker form.
-        isRecvP: paramIsThisReceiver :ast op: (ast.nodes.get i: pm.operation)
-        if skipThisType then {
-            # BOTH tests are load-bearing. The atom-name test catches the
-            # bare `:this` shorthand, whose operation node does not carry
-            # the well-known `this` name id that paramIsThisReceiver checks;
-            # the predicate catches every MARKED form, whose type is a
-            # dotted path and so has no atom name at all. Dropping either
-            # leaves that family of receivers as ordinary parameters.
-            if ptn == zast.wellKnown.slot.wkThis then skipParam = true
-            if isRecvP then skipParam = true
-        }
-        if skipParam.not when isgen when (genericParamIsType :st tdecl: fnDecl name: gpn) then {
-            skipParam = true
-            fnParam = true
-        }
-        if skipParam.not when (genericParamIsType :st tdecl: receiverEnclDecl name: gpn) then {
-            skipParam = true
-            genParam = true
-        }
-        if skipParam then {
-            (
-                declare.registerGenericOrReceiverParam
-                :st
-                :ast
-                :fid
-                :fnDecl
-                :receiverEnclDecl
-                :thisName
-                :genParam
-                :fnParam
-                ptn: gpn
-                :isRecvP
-                :pm
-            )
-        } else {
-            paramTid: (
-                partialParamTid
-                :st
-                :ast
-                :unitDecl
-                scope: rf
-                :fnDecl
-                :receiverEnclDecl
-                :isgen
-                oId: pm.operation
-            )
-            registerValueParam :st :ast :unitDecl :rf :fid :thisName :ptn partialTid: paramTid :pm
-        }
-    }
-}
-
-# genericParamIsType -- whether `name` is a generic parameter of `tdecl` that stands
-# for a type. A numeric one is no type parameter of a signature: a parameter
-# or return it types is refused (refuseSingletonDeclType) and keeps the bound's
-# type.
-genericParamIsType: function {
-    st: zenv.ZSymbolTable.view
-    tdecl: ztypes.declid
-    name: zast.nameid
-} out bool is {
-    if (st.reg.isGenericParamOf :tdecl :name).not then return false
-    return (st.reg.genericParamConstraintOf :tdecl paramName: name).numKind.has.not
-}
-
-# markNativeRecordClone -- a member of a sized native RECORD (array, str) whose
-# return is a partial specialisation is a clone candidate, as a member returning
-# a bare parameter is: nothing else rebuilds its instance's members, so each
-# clone respecializes the partial to the instance's arguments. A collection
-# class has its own mono slice that heals it, and a non-native method is marked
-# where it is resolved.
-markNativeRecordClone: function {
-    st: zenv.ZSymbolTable
-    fid: ztypes.tid
-    enclDecl: ztypes.declid
-    # the partial return, 0 when the return is not one
-    partial: ztypes.tid
-} is {
-    if partial.isZero then return
-    if (isNativeRecordDecl :st declId: enclDecl) then st.reg.setGeneric typeId: fid value: true
-}
-
-# isNativeRecordDecl -- the declaration is a template the runtime lays out as a
-# VALUE: a `record is native`.
-isNativeRecordDecl: function {st: zenv.ZSymbolTable.view declId: ztypes.declid} out bool is {
-    if declId.isZero then return false
-    rt: st.typing.declTypeOf :declId
-    if rt.isZero then return false
-    if (st.reg.typetypeOf typeId: rt) != ztypes.ztypetype.recordType then return false
-    return (st.reg.isNativeOf tid: rt)
-}
-
-# markParamReturnClone -- a method whose return is a generic param (its own OR
-# the enclosing type's) is a per-instance clone candidate: mintMono's clone loop
-# (gated on isgeneric) must substitute the return for each mono. A generic FILE
-# unit's function is none: each instance of the unit has its own copy
-# (buildUnitMono), as an inline template's function does.
-markParamReturnClone: function {
-    st: zenv.ZSymbolTable
-    ast: Ast
-    fid: ztypes.tid
-    receiverEnclDecl: ztypes.declid
-} is {
-    if (declIsGenericFileUnit :st :ast declId: receiverEnclDecl) then return
-    st.reg.setGeneric typeId: fid value: true
-}
-
-# recordFunctionReturn -- record what a function returns on its type: the
-# declared return, the partial specialisation a collection template declares
-# instead, and whether the result pins (`outx`).
-recordFunctionReturn: function {
-    st: zenv.ZSymbolTable
-    ast: Ast
-    unitDecl: ztypes.declid
-    rf: ztypes.declid
-    fid: ztypes.tid
-    isgen: bool
-    fnDecl: ztypes.declid
-    receiverEnclDecl: ztypes.declid
-    fnode: fnref
-} is {
-    returnTid: ztypes.tid
-    frOpt: fnode.returntype
-    # a numeric generic parameter as the return (`out cap`, `out k.hold`)
-    if (numericParamsInScope :st scope: fnDecl) then (
-        refuseSingletonDeclType
-        :st
-        :ast
-        ownerDecl: fnDecl
-        isFunction: true
-        typeNid: frOpt
-    )
-    if isgen then {
-        returnTid = returnParamTid :st :ast enclDecl: fnDecl oId: frOpt
-    }
-    if returnTid.isZero then {
-        returnNode: fnode.returntype
-        returnTid = returnParamTid :st :ast enclDecl: receiverEnclDecl oId: returnNode
-    }
-    if returnTid.notZero then {
-        st.reg.setReturnType typeId: fid value: returnTid
-        markParamReturnClone :st :ast :fid :receiverEnclDecl
-    }
-    if returnTid.isZero then {
-        # a composite parameterized return whose argument names a generic
-        # parameter -- `(ListIter :of).borrow`, `(Cell :t)` -- resolves to a
-        # partial spec, which the clone heals through respecialize. Concrete
-        # composites answer 0 here and keep the caller's eager-path behaviour,
-        # so this asks every unit: collection templates were only ever the
-        # first callers, never the rule.
-        # a generic function's own parameters are declared on it, an enclosing
-        # type's on the receiver's declaration
-        peeledReturnTid: ztypes.tid
-        if isgen then {
-            peeledReturnTid = (
-                partialReturnTid
-                :st
-                scope: rf
-                :ast
-                :unitDecl
-                enclDecl: fnDecl
-                oId: fnode.returntype
-            )
-        }
-        if peeledReturnTid.isZero then {
-            peeledReturnTid = (
-                partialReturnTid
-                :st
-                scope: rf
-                :ast
-                :unitDecl
-                enclDecl: receiverEnclDecl
-                oId: fnode.returntype
-            )
-        }
-        if peeledReturnTid.notZero then st.reg.setReturnType typeId: fid value: peeledReturnTid
-        markNativeRecordClone :st :fid enclDecl: receiverEnclDecl partial: peeledReturnTid
-    }
-    marker: declare.returnMarkerAt :ast oId: fnode.returntype
-    if (marker == ztypes.zparamownership.noneMode).not then {
-        st.typing.funcReturnMarker.set key: fid value: marker
-    }
-    if fnode.pins then st.typing.funcPins.add item: fid
-    # one named through a path (`out B5.cap`), which recordDottedTyperef resolved
-    rnt: ztyping.nodeTypeAt tbl: st.typing.nodeType nid: frOpt
-    if frOpt.notZero when (st.typing.isSingletonType tid: rnt) then (
-        st.reg.setReturnType
-        typeId: fid
-        value: (refuseSingletonPathType :st :ast nid: frOpt tid: rnt)
-    )
-}
-
-# finishFunctionSignature -- close a function's signature once its parameters
-# are recorded: demand and record the return, check the borrow-return lock, and
-# mark the declaration resolved.
-finishFunctionSignature: function {
-    st: zenv.ZSymbolTable
-    ast: Ast
-    unitDecl: ztypes.declid
-    rf: ztypes.declid
-    fid: ztypes.tid
-    dfid: ztypes.tid
-    isgen: bool
-    fnDecl: ztypes.declid
-    receiverEnclDecl: ztypes.declid
-    defName: StringView
-    thisName: StringView
-    fnode: fnref
-} is {
-    demandReturnType :st scope: rf :ast :unitDecl oId: fnode.returntype
-    typeref.recordReturnType :st scope: rf :ast :unitDecl :thisName oId: fnode.returntype
-    recordFuncReturnNode :st :ast :fid oId: fnode.returntype
-    stampGenericParamRef :st :ast enclDecl: receiverEnclDecl oId: fnode.returntype
-    recordGenericMarkerReturn :st scope: rf :ast enclDecl: receiverEnclDecl oId: fnode.returntype
-    recordFunctionReturn :st :ast :unitDecl :rf :fid :isgen :fnDecl :receiverEnclDecl :fnode
-    declare.checkReturnPins :st :ast :fnode :fid :defName
-    # every owned return, through its resolved type: a value holding a
-    # reference into an input is declared `outx` or refused
-    # every owned return through its resolved type: a value holding a
-    # reference into an input is declared `outx` or refused. Known this early
-    # only for a registered return (a native's, a collection template's),
-    # whose type's members are attached with the unit; a user function's is
-    # asked where its body is walked, with its type's members forced first.
-    rtH: conform.methodReturnOf reg: st.reg typing: st.typing mid: fid
-    if rtH.some then {
-        declare.checkPinHonesty :st :ast :fnode retTid: rtH :defName defNameId: zast.nameid
-    }
-    if fnDecl.notZero then st.typing.declSetType declId: fnDecl typeId: dfid
-}
-
-
-# refuseThisNamedReceiver -- a parameter NAMED `this` (`this: this.view`): its
-# own name is in scope in its type, where `this` would name the parameter
-# being declared, which is no type. A receiver is given a name (`t: this.view`);
-# the `:this` shorthand names the type as it is named outside.
-refuseThisNamedReceiver: function {st: zenv.ZSymbolTable ast: Ast.view pm: argref} is {
-    if pm.nid.isZero then return
-    if pm.name != zast.wellKnown.slot.wkThis then return
-    if pm.operation.isZero then return
-    if (ast.nodes.get i: pm.operation).labelvalue then return
-    n: ast.nodes.get i: pm.nid
-    (
-        addErrorWithHint
-        :st
-        nodeid: pm.nid
-        lineno: (nodeLine :n)
-        colno: (nodeCol :n)
-        e: zast.err.typeError
-        msg: "only the `:this` receiver is named `this`; this parameter needs a name of its own".string
-        note: "".string
-        hint: "name it, as `t: this.view`: written `this: this.view`, the name is in scope in its own type, where it would name the parameter".string
-        width: 4
-    )
 }
 
 
@@ -6589,7 +4804,7 @@ staticListElemParts: function {ast: Ast.view opId: zast.nodeid} out staticlistel
     match (
         n
     ) case dottedpath then {
-        pt: atomName :ast n: (ast.nodes.get i: n.parent)
+        pt: typeargs.atomName :ast n: (ast.nodes.get i: n.parent)
         if (isNumericLiteralName name: pt.stringView).not then return miss
         return (staticlistelem litId: n.parent tagId: n.child ok: true)
     } case atomid then {
@@ -7853,7 +6068,7 @@ dottedParentName: function {ast: Ast.view n: astnode.view} out String is {
     match (
         n
     ) case dottedpath then {
-        return (atomName :ast n: (ast.nodes.get i: n.parent))
+        return (typeargs.atomName :ast n: (ast.nodes.get i: n.parent))
     } else {
         return "".string
     }
@@ -9118,7 +7333,7 @@ declOfUnitDef: function {
     # child of that unit), each enclosing unit scope outward, the unit's root
     # -- and no further: this names a DEFINITION of the unit, not a
     # reference, so the prelude is not consulted.
-    cur: scopeFor typing: st.typing :scope :unitDecl
+    cur: typeargs.scopeFor typing: st.typing :scope :unitDecl
     for cur.notZero loop {
         if cur == st.typing.coreUnitRoot then return ztypes.declid.zero
         nd: st.typing.declFindChild parentDeclId: cur :nameId
@@ -9165,7 +7380,7 @@ typedefBaseDecl: function {
         if du.isZero then return zd
         return (declOfUnitDef :st scope: du unitDecl: du nameId: dk.defName)
     }
-    hn: paramTypeBaseNameId :ast op: bn
+    hn: typeargs.paramTypeBaseNameId :ast op: bn
     if hn.isZero then return zd
     scope: st.typing.declParentOf :declId
     ud: unitScopeOf typing: st.typing declId: scope
@@ -12294,7 +10509,7 @@ fillUnitArgs: function {ast: Ast.view r: InstReq op: astnode.view} is {
         for each argId: (zast.kidsOf :ast span: op.arguments) loop {
             a: ast.nodes.get i: argId
             if a.namedoperation then {
-                anm: atomName :ast n: (ast.nodes.get i: a.operation)
+                anm: typeargs.atomName :ast n: (ast.nodes.get i: a.operation)
                 aid: instArgAtomId op: (ast.nodes.get i: a.operation)
                 r.argLabels.append a.name
                 r.argNames.append anm
@@ -13392,11 +11607,11 @@ unitNestedInstance: function {
         vg: valSubs.get key: pn
         if av.notZero then {
             sfx.append s: "_"
-            sfx.append s: (monoValName :st :ast tid: av)
+            sfx.append s: (typeargs.monoValName :st :ast tid: av)
         } else if vg.some then {
             vs.set key: pn value: vg
             cdP: st.reg.genericParamConstraintOf tdecl: td paramName: pn
-            appendNumericArgSuffix :sfx bits: vg cd: cdP
+            typeargs.appendNumericArgSuffix :sfx bits: vg cd: cdP
         }
     }
     own: IdMapV zast.nameid v: ztypes.tid
@@ -13524,32 +11739,6 @@ recordInstanceGenericArgs: function {
             specId: mono
             arg: (a.or d: ztypes.genericarg.typeArg ztypes.tid.zero)
         )
-    }
-}
-
-# appendInstNumericLabel -- a numeric argument's label component: the value
-# keyed at its parameter's ordinal.
-appendInstNumericLabel: function {
-    st: zenv.ZSymbolTable.view
-    r: InstReq.view
-    args: (ListVal ztypes.genericarg).view
-    pn: (ListVal zast.nameid).view
-    lbl: zast.nameid
-    mn: String
-} is {
-    cd: st.reg.genericParamConstraintOf tdecl: r.tmplDeclId paramName: lbl
-    signed: ztypes.isSignedIntKind k: cd.numKind.kind
-    pi: u64
-    for pi < pn.length loop {
-        if (pn.get i: pi) == lbl when pi < args.length then {
-            a: args.get i: pi
-            match (
-                a
-            ) case valueArg then {
-                mn.append (numericArgText bits: a :signed)
-            } case typeArg then null
-        }
-        pi = pi + 1
     }
 }
 
@@ -13886,7 +12075,7 @@ stampOnePendingTyperef: function {
         stampResolvedTyperef :st :ast nid: uk :pval :origin tid: rt
         return
     }
-    if (stampQualifiedTyperef :st :ast unitDecl: origin scope: rf :uk) then return
+    if (typeargs.stampQualifiedTyperef :st :ast unitDecl: origin scope: rf :uk) then return
     if (typerefExcused :st :ast :uk :rf :origin :pval) then return
     # a field's ref naming a member of its own type whose definition failed and
     # said why where it is written is no unknown name: the ref is refused with
@@ -13933,95 +12122,6 @@ stampAliasRef: function {
         return true
     }
     stampResolvedTyperef :st :ast nid: uk :pval :origin tid: aot
-    return true
-}
-
-# stampQualifiedTyperef -- a deferred type-ref spelled with its unit
-# (`zproject.BuildFacts`): the pending entry carries the LEAF name, which a
-# lookup in the writing scope does not find -- or finds as some other unit's
-# type of that name -- so the path is resolved as a forced signature's is
-# (stampForcedTyperef). Under --eager a method's signature is minted with its
-# class, never forced, and this is the one stamp its return gets: without it a
-# call of the method typed to nothing, and the emitter was first to notice.
-# True when it stamped the node.
-stampQualifiedTyperef: function {
-    st: zenv.ZSymbolTable
-    ast: Ast
-    unitDecl: ztypes.declid
-    scope: ztypes.declid
-    uk: zast.nodeid
-} out bool is {
-    if (ast.nodes.get i: uk).dottedpath.not then return false
-    # a bare name under strip markers (`Crate.private.view`) is not qualified:
-    # its base resolved nowhere, and forcing it would mint a shell of that
-    # name -- two such shells then meet as "expected Crate, got Crate"
-    if (markedBareAtom :ast nid: uk).notZero then return false
-    stampForcedTyperef :st :ast :unitDecl :scope thisName: "" nid: uk
-    return (ztyping.nodeTypeAt tbl: st.typing.nodeType nid: uk).notZero
-}
-
-# markedBareAtom -- the bare name a type-ref is, under any strip markers
-# (`T`, `T.view`, `T.private.borrow`): its atom's node, or 0 when peeling the
-# markers leaves a qualified path or anything else.
-markedBareAtom: function {ast: Ast.view nid: zast.nodeid} out zast.nodeid is {
-    cur: nid
-    for cur.notZero loop {
-        n: ast.nodes.get i: cur
-        if n.atomid or n.labelvalue then return cur
-        if n.dottedpath.not then return zast.nodeid.zero
-        leafId: atomNameId :ast n: (ast.nodes.get i: n.child)
-        if (isStripMarkerId nameId: leafId).not then return zast.nodeid.zero
-        cur = n.parent
-    }
-    return zast.nodeid.zero
-}
-
-# unknownTypeArgAtom -- the first type argument of a generic application whose
-# bare name resolves nowhere: no type, no generic parameter, no declaration in
-# scope or in any loaded unit. Its atom's node, or 0 when every argument names
-# something (which may still not fit the template).
-unknownTypeArgAtom: function {
-    st: zenv.ZSymbolTable
-    ast: Ast
-    unitDecl: ztypes.declid
-    scope: ztypes.declid
-    argIds: (ListVal zast.nodeid).view
-} out zast.nodeid is {
-    for each argId: argIds loop {
-        opId: zast.nodeid
-        {
-            arg: ast.nodes.get i: argId
-            if arg.namedoperation then opId = arg.operation
-        }
-        # a pun (`:t`) is answered with the `name: name` hint instead
-        if opId.notZero when (ast.nodes.get i: opId).labelvalue then continue
-        atomNid: markedBareAtom :ast nid: opId
-        if atomNid.notZero then {
-            nameId: atomNameId :ast n: (ast.nodes.get i: atomNid)
-            if (typeNameResolvesNowhere :st :ast :unitDecl :scope :nameId) then return atomNid
-        }
-    }
-    return zast.nodeid.zero
-}
-
-# typeNameResolvesNowhere -- a bare type name no lookup answers: not a type or
-# a generic parameter in scope, not a declaration in scope, and not a member of
-# any loaded unit (the closure-wide search typerefExcused makes too). A generic
-# parameter some other template owns is no answer: which templates have been
-# minted by now is an order, and the wording of an error must not follow it.
-typeNameResolvesNowhere: function {
-    st: zenv.ZSymbolTable
-    ast: Ast
-    unitDecl: ztypes.declid
-    scope: ztypes.declid
-    nameId: zast.nameid
-} out bool is {
-    if nameId.isZero then return false
-    if (walkLookupTyperefById :ast :st :unitDecl :scope baseId: nameId).some then return false
-    if (envLookup :st :scope :nameId).declId.notZero then return false
-    for each ud: (programUnitDecls :st) loop {
-        if (resolvedByIds :ast :st unitDecl: ud name: nameId).some then return false
-    }
     return true
 }
 
@@ -14554,7 +12654,7 @@ generatorCallWrap: function {
         value: elem
     )
     noVals: IdMapV zast.nameid v: u64
-    sfx: "_\{monoValName :ast :st tid: elem}"
+    sfx: "_\{typeargs.monoValName :ast :st tid: elem}"
     return (
         getOrMintSpec
         :st
@@ -14826,11 +12926,11 @@ respecialize: function {
             sv: st.typing.singletonValueOf tid: mt
             if sv.isConst then bits = constBits64 :st v: sv
             rvSubs.set key: mp value: bits
-            appendNumericArgSuffix :sfx :bits cd: cdm
+            typeargs.appendNumericArgSuffix :sfx :bits cd: cdm
         } else {
             sfx.append s: "_"
             typeSubs.set key: mp value: mt
-            vn: monoValName :st :ast tid: mt
+            vn: typeargs.monoValName :st :ast tid: mt
             sfx.append s: vn
         }
         mi = mi + 1
@@ -15925,52 +14025,6 @@ mintSpecUnderTemplate: function {
     return mid8
 }
 
-# defaultsTailLength -- how much of an instance's label its trailing default
-# arguments' components take, which the label leaves out: `ListVal_u8`, not
-# `ListVal_u8_u64`, the name a runtime fragment spells whatever index
-# parameter the list has. From
-# the last parameter back, while the key is the type its parameter's default
-# named (defaultTypeTid recorded it) and the label ends in that type's
-# component; never the first parameter's, so an instance is not labelled as
-# its template is (`Holder` over its default is `Holder_i64`). A label whose
-# builder wrote the components in another order keeps them.
-defaultsTailLength: function {
-    st: zenv.ZSymbolTable
-    ast: Ast
-    tk8: ztypes.declid
-    args: (ListVal ztypes.genericarg).view
-    label: StringView
-} out u64 is {
-    end: label.length
-    ki: args.length
-    for ki > 1 loop {
-        ki = ki - 1
-        d: st.reg.genericParamDefaultTidAt tdecl: tk8 i: ki
-        if d.isZero then break
-        if ((args.get i: ki) == (ztypes.genericarg.typeArg d)).not then break
-        cut: defaultComponentLength :st :ast :d head: (label.substring from: 0 to: end)
-        if cut == 0 then break
-        end = end - cut
-    }
-    return label.length - end
-}
-
-# defaultComponentLength -- the length of the `_<type>` component a default
-# `d` adds that `head` ends in, spelled as the instantiating scope or the
-# declaration names it; 0 when it ends in neither.
-defaultComponentLength: function {
-    st: zenv.ZSymbolTable
-    ast: Ast
-    d: ztypes.tid
-    head: StringView
-} out u64 is {
-    c1: "_\{monoValName :st :ast tid: d}"
-    if (head.endsWith suffix: c1) then return c1.length
-    c2: "_\{monoValName :st :ast tid: d}"
-    if (head.endsWith suffix: c2) then return c2.length
-    return 0
-}
-
 # bindSpecDefaults -- getOrMintSpec's arguments completed for a template with
 # defaults, so its instance keys on EVERY parameter: `fallbackArg` binds the
 # first unbound parameter with no default (the one argument an internal mint
@@ -16411,7 +14465,7 @@ getOrMintSpec: function {
     # decided once, where the spec is minted
     mn8: "\{st.reg.nameOf tid: templateId}\{sfx}\{defaultSuffix}"
     if trieOk then {
-        defaultsCut: defaultsTailLength :st :ast :tk8 :args label: mn8.stringView
+        defaultsCut: typeargs.defaultsTailLength :st :ast :tk8 :args label: mn8.stringView
         if defaultsCut > 0 then mn8 = "\{mn8.substring from: 0 to: mn8.length - defaultsCut}"
     }
     idSubs: IdMapV ztypes.tid v: ztypes.genericarg
@@ -16546,27 +14600,6 @@ materialTid: function {ast: Ast st: zenv.ZSymbolTable isElem: bool float: bool} 
     return (stdTid :ast :st wk: zast.wellKnown.slot.tyI64)
 }
 
-# monoValName -- the value-type name component of a get-wrapper mono name. A type
-# SHADOWING a builtin -- its name resolves through the prelude to a DIFFERENT
-# canonical id -- appends its own id, so its wrapper mono is distinct from the
-# builtin's same-named wrapper (a user i64 -> "i64_7" vs system "i64"); otherwise
-# the bare name. Without this the get-wrapper mono name (optionval_i64) collides
-# under the shared system key and the shadow reuses the system instance (wrong
-# `some`-arm type). Asked of the ids, from any unit: whoever defines it.
-monoValName: function {
-    ast: Ast
-    st: zenv.ZSymbolTable
-    tid: ztypes.tid
-} out String is {
-    tn: st.reg.nameOf :tid
-    # the prelude's type of that name, by id: never a program's own
-    nid: zast.poolFind pool: ast.names text: tn.stringView
-    if nid.isZero then return tn
-    bt: (walkLookupTyperefFrom :st :ast scope: ztypes.declid baseId: nid).or d: ztypes.tid.zero
-    if bt.notZero when (bt == tid).not then return "\{tn}_\{tid}"
-    return tn
-}
-
 
 # firstGenericParamId -- the primary (first-declared) generic parameter name
 # of a template as a pool id, 0 when it has none. Binds an elided leading type
@@ -16632,37 +14665,6 @@ constructionArgTid: function {
         )
     }
     return (instanceTypeOf :st :ast :unitDecl tid: named)
-}
-
-# refuseLocalAsType -- a type written in a body naming a local or a parameter:
-# the nearest declaration of the name is that value, which is no type, refused
-# as what it is. Once per node.
-refuseLocalAsType: function {
-    st: zenv.ZSymbolTable ast: Ast.view nameId: zast.nameid nid: zast.nodeid
-} is {
-    if nid.isZero then return
-    if (st.typing.refusedValues.has item: nid) then return
-    fid: st.walk.currentFnTid
-    what: "a local".string
-    if fid.notZero when (st.typing.declChildOfId parentTypeId: fid :nameId).some then {
-        what = "a parameter".string
-    }
-    nn: zast.nameTextAt :ast ref: nameId
-    fnm: st.reg.nameOf tid: fid
-    n: ast.nodes.get i: nid
-    (
-        addErrorWithHint
-        :st
-        nodeid: nid
-        lineno: (nodeLine :n)
-        colno: (nodeCol :n)
-        e: zast.err.typeError
-        msg: "'\{nn}' is \{what} of '\{fnm}', not a type"
-        note: "".string
-        hint: "".string
-        width: nn.length
-    )
-    st.typing.refusedValues.add item: nid
 }
 
 # bodyTypeNameTid -- the type a bare name denotes as a type argument written in
@@ -16792,19 +14794,6 @@ bindMonoValueParams: function {
     }
 }
 
-# elidedPrimaryTypeArg -- an unnamed leading argument that names a TYPE binds the
-# primary generic param (`(List String)`, `(intrange system.u8 ..)`); a value
-# first argument (`(box 5)`) does not and is left to value inference. Whether
-# it names one is explicitPrimaryArgTid's answer, which the argument scan binds.
-elidedPrimaryTypeArg: function {
-    st: zenv.ZSymbolTable
-    unitDecl: ztypes.declid
-    ast: Ast
-    opId: zast.nodeid
-} out bool is {
-    return (explicitPrimaryArgTid :ast :st :unitDecl :opId).notZero
-}
-
 # dottedArgAliasTid -- the target of the alias a body's type argument names
 # through its type (`ListVal t: Tree.Node`); 0 for any other argument.
 dottedArgAliasTid: function {st: zenv.ZSymbolTable ast: Ast opId: zast.nodeid} out ztypes.tid is {
@@ -16827,298 +14816,6 @@ dottedArgAliasTid: function {st: zenv.ZSymbolTable ast: Ast opId: zast.nodeid} o
         leafId: (atomNameId :ast n: (ast.nodes.get i: chd))
         nid: opId
     )
-}
-
-# argNamesNothing -- a construction's argument is a bare name (under any strip
-# markers) that no lookup answers: no local or parameter, no type, no
-# declaration in scope (typeNameResolvesNowhere), and no member of any loaded
-# unit. A local written as a type argument is a value in the wrong place, which
-# refuseValueTypeArg says.
-argNamesNothing: function {
-    st: zenv.ZSymbolTable
-    ast: Ast
-    unitDecl: ztypes.declid
-    opId: zast.nodeid
-} out bool is {
-    atomNid: markedBareAtom :ast nid: opId
-    if atomNid.isZero then return false
-    nameId: atomNameId :ast n: (ast.nodes.get i: atomNid)
-    if (st.findLocal :nameId).notZero then return false
-    return (typeNameResolvesNowhere :st :ast :unitDecl scope: st.curScope :nameId)
-}
-
-# reportUnknownTypeArg -- E0023 at a construction's type argument that names
-# nothing (argNamesNothing), worded as a bare type-ref's is.
-reportUnknownTypeArg: function {st: zenv.ZSymbolTable ast: Ast opId: zast.nodeid} is {
-    atomNid: markedBareAtom :ast nid: opId
-    an: ast.nodes.get i: atomNid
-    tn: (zast.nameTextAt :ast ref: (atomNameId :ast n: an)).copy
-    (
-        addErrorWithHint
-        :st
-        nodeid: atomNid
-        lineno: (nodeLine n: an)
-        colno: (nodeCol n: an)
-        e: zast.err.badReference
-        msg: "Unknown type '\{tn}'"
-        note: String
-        hint: String
-        width: tn.length
-    )
-}
-
-# bindTypeArgSub -- a label naming a generic param carries its argument
-# directly: a numeric parameter's value spells itself into the mono suffix and
-# binds the parameter's value, anything else resolves to the type id that
-# becomes the substitution. A refused numeric argument is bound with no value,
-# which is how the caller knows it was refused.
-bindTypeArgSub: function {
-    st: zenv.ZSymbolTable
-    unitDecl: ztypes.declid
-    ast: Ast
-    arg: argref
-    pk: zast.nameid
-    sfx: String
-    subs: (IdMapV zast.nameid v: ztypes.tid)
-    valueSubs: (IdMapV zast.nameid v: u64)
-    boundParams: IdSet zast.nameid
-    tk: ztypes.declid
-} is {
-    opId: arg.operation
-    cdB: st.reg.genericParamConstraintOf tdecl: tk paramName: pk
-    if cdB.numKind.has then {
-        boundParams.add item: pk
-        naB: (
-            numericGenericArg
-            :ast
-            :st
-            :unitDecl
-            scope: st.curScope
-            tdecl: tk
-            param: pk
-            argOp: opId
-            inBody: true
-        )
-        if naB.state.refused then return
-        appendNumericArgSuffix :sfx bits: naB.bits cd: cdB
-        valueSubs.set key: pk value: naB.bits
-        return
-    }
-    anId: paramTypeBaseNameId :ast op: (ast.nodes.get i: opId)
-    if (isNumericLiteralNameAt :ast ref: anId) then {
-        sfx.append s: "_"
-        sfx.append s: (zast.nameTextAt :ast ref: anId)
-        boundParams.add item: pk
-        return
-    }
-    argTid: typeArgTid :st :ast :unitDecl :opId baseId: anId
-    # one named through a path takes the bound
-    if argTid.isZero then argTid = (
-        typeref.singletonPathArg
-        :st
-        :ast
-        :unitDecl
-        scope: st.curScope
-        thisName: ""
-        nid: opId
-    )
-    if argTid.isZero then {
-        # a numeric generic parameter is no type argument (`(List t: cap)`)
-        npO: numericParamOwnerFrom :st scope: st.curScope nameId: anId
-        if npO.notZero when (st.findLocal nameId: anId).isZero then {
-            (
-                refuseSingletonTypeRef
-                :st
-                :ast
-                owner: npO
-                nameId: anId
-                nid: (markedBareAtom :ast nid: opId)
-            )
-            return
-        }
-        # a type argument naming nothing at all, or naming a local, is its own
-        # error; inference stops there (inferGenericConstruction)
-        if (argNamesNothing :st :ast :unitDecl :opId) then {
-            reportUnknownTypeArg :st :ast :opId
-            return
-        }
-        lv: (st.lookup nameId: anId).or d: ztypes.tid.zero
-        if lv.notZero then refuseValueTypeArg :st :unitDecl :ast :arg vt: lv
-        return
-    }
-    atn: monoValName :st :ast tid: argTid
-    sfx.append s: "_"
-    sfx.append s: atn
-    pv2: argTid
-    subs.set key: pk value: pv2
-    boundParams.add item: pk
-}
-
-# fieldParamIndexOf -- where `name` sits in the generic-bound field-name list,
-# none when the label names no such field.
-fieldParamIndexOf: function {
-    names: (ListVal zast.nameid).view
-    name: zast.nameid
-} out optionval u64 is {
-    fi: u64
-    for fi < names.length loop {
-        if (names.get i: fi) == name then return (optionval.some fi)
-        fi = fi + 1
-    }
-    return (optionval.none u64)
-}
-
-# bindValueArgSub -- a label naming a FIELD infers that field's generic param
-# from the value it is given: the value walks, a literal materialises and
-# restamps its own node, and the first binding for a param wins.
-bindValueArgSub: function {
-    st: zenv.ZSymbolTable
-    unitDecl: ztypes.declid
-    ast: Ast
-    opId: zast.nodeid
-    pk: zast.nameid
-    fNames: (ListVal zast.nameid).view
-    fParams: (ListVal zast.nameid).view
-    ptNames: (ListVal zast.nameid).view
-    ptTids: (ListVal ztypes.tid).view
-    sfx: String
-    subs: (IdMapV zast.nameid v: ztypes.tid)
-    boundParams: IdSet zast.nameid
-    tk: ztypes.declid
-} is {
-    vt0: checkValueAt :st :unitDecl :ast nid: opId
-    gio: fieldParamIndexOf names: fNames name: pk
-    gidx: u64
-    gfound: false
-    if gio.some then {
-        gidx = gio
-        gfound = true
-    }
-    if vt0.isZero then return
-    if gfound.not then {
-        bindPartialRowArg :st :ast :pk :ptNames :ptTids argTid: vt0 :sfx :subs :boundParams :tk
-        return
-    }
-    mv0: materialiseLiteral :ast :st t: vt0
-    if mv0 != vt0 then {
-        argNid: nodeId n: (ast.nodes.get i: opId)
-        if argNid.notZero then {
-            stamped: mv0
-            stampGate :st nid: argNid tid: stamped
-        }
-    }
-    gp0: fParams.get i: gidx
-    already: (subs.get key: gp0).or d: ztypes.tid.zero
-    if already.notZero then return
-    vtn: monoValName :st :ast tid: mv0
-    sfx.append s: "_"
-    sfx.append s: vtn
-    gpv: mv0
-    subs.set key: gp0 value: gpv
-    boundParams.add item: gp0
-}
-
-# bindPartialRowArg -- a label naming a row typed OVER the template's params
-# (`v: (ListVal t: t)`, a field `c: (slot t: t)`) infers them from the value's
-# own arguments, as a generic function's parameter of that shape does
-# (bindPartialParamSubs); each newly bound param joins the instance's name.
-bindPartialRowArg: function {
-    st: zenv.ZSymbolTable
-    ast: Ast
-    pk: zast.nameid
-    ptNames: (ListVal zast.nameid).view
-    ptTids: (ListVal ztypes.tid).view
-    argTid: ztypes.tid
-    sfx: String
-    subs: (IdMapV zast.nameid v: ztypes.tid)
-    boundParams: IdSet zast.nameid
-    tk: ztypes.declid
-} is {
-    pio: fieldParamIndexOf names: ptNames name: pk
-    if pio.none then return
-    gparams: st.reg.genericParamNamesOf tdecl: tk
-    bindPartialParamSubs :st :ast :gparams paramTid: (ptTids.get i: pio) :argTid :subs
-    for each gp: gparams loop {
-        if (boundParams.has item: gp) then continue
-        bv: (subs.get key: gp).or d: ztypes.tid.zero
-        if bv.isZero then continue
-        bvn: monoValName :st :ast tid: bv
-        sfx.append s: "_"
-        sfx.append s: bvn
-        boundParams.add item: gp
-    }
-}
-
-# inferConstructionArg -- what one construction argument binds. An unnamed
-# argument binds nothing; a label naming a generic param carries a type
-# argument, and a label naming a field infers its param from the value.
-inferConstructionArg: function {
-    st: zenv.ZSymbolTable
-    unitDecl: ztypes.declid
-    ast: Ast
-    argId: zast.nodeid
-    argIdx: u64
-    primaryName: zast.nameid
-    fNames: (ListVal zast.nameid).view
-    fParams: (ListVal zast.nameid).view
-    ptNames: (ListVal zast.nameid).view
-    ptTids: (ListVal ztypes.tid).view
-    sfx: String
-    subs: (IdMapV zast.nameid v: ztypes.tid)
-    valueSubs: (IdMapV zast.nameid v: u64)
-    boundParams: IdSet zast.nameid
-    tk: ztypes.declid
-} is {
-    # the argument's label and operation
-    pk: zast.nameid
-    opId: zast.nodeid
-    arg: argRefAt :ast nid: argId
-    if arg.nid.isZero then return
-    pk = numericLeadingParam :st tdecl: tk label: arg.name :argIdx
-    opId = arg.operation
-    if pk.isZero when argIdx == 0 when (
-        elidedPrimaryTypeArg
-        :st
-        :unitDecl
-        :ast
-        :opId
-    ) when primaryName.notZero then pk = primaryName
-    isP: false
-    if pk.notZero then {
-        isP = st.reg.isGenericParamOf tdecl: tk name: pk
-    }
-    # a leading argument naming nothing at all is reported as any value naming
-    # nothing is; inference stops there (inferGenericConstruction)
-    if pk.isZero when argIdx == 0 when primaryName.notZero when (
-        argNamesNothing
-        :st
-        :ast
-        :unitDecl
-        :opId
-    ) then {
-        reportUnresolvedValue :st :unitDecl :ast nid: opId
-        return
-    }
-    if isP then {
-        bindTypeArgSub :st :unitDecl :ast :arg :pk :sfx :subs :valueSubs :boundParams :tk
-    } else {
-        (
-            bindValueArgSub
-            :st
-            :unitDecl
-            :ast
-            :opId
-            :pk
-            :fNames
-            :fParams
-            :ptNames
-            :ptTids
-            :sfx
-            :subs
-            :boundParams
-            :tk
-        )
-    }
 }
 
 # inferConstructionSubs -- infer a generic construction's type arguments from the
@@ -17148,7 +14845,7 @@ inferConstructionSubs: function {
     for kAiter < call.nargs loop {
         argId: zast.callArgAt :ast nid: call.nid i: kAiter
         (
-            inferConstructionArg
+            typeargs.inferConstructionArg
             :st
             :unitDecl
             :ast
@@ -17169,23 +14866,6 @@ inferConstructionSubs: function {
     }
 }
 
-# writtenTemplateCreate -- the `create` a template WRITES (its function type), 0
-# when its create is synthesised or it has none.
-writtenTemplateCreate: function {
-    st: zenv.ZSymbolTable.view templateId: ztypes.tid
-} out ztypes.tid is {
-    co: (
-        (st.typing.declChildOfId parentTypeId: templateId nameId: zast.wellKnown.slot.wkCreate).or
-        d: ztypes.tid.zero
-    )
-    if co.isZero then return ztypes.tid
-    if (st.typing.declMemberIsSynth parentTypeId: templateId nameId: zast.wellKnown.slot.wkCreate
-    ) then {
-        return ztypes.tid
-    }
-    return co
-}
-
 # stageRowsOf -- the names and types of the member rows of `ownerTid` (none when
 # 0).
 stageRowsOf: function {
@@ -17204,20 +14884,6 @@ stageRowsOf: function {
             names.append rw.name
             tids.append rw.tid
         }
-    }
-}
-
-# appendRowNames -- the names of the member rows of `ownerTid` (none when 0).
-appendRowNames: function {
-    st: zenv.ZSymbolTable.view ownerTid: ztypes.tid dst: ListVal zast.nameid
-} is {
-    if ownerTid.isZero then return
-    ri: u64
-    rn: st.typing.declRowSlots :ownerTid
-    for ri < rn loop {
-        rw: st.typing.declRowAt :ownerTid membersOnly: true slot: ri
-        ri = ri + 1
-        if rw.keep then dst.append rw.name
     }
 }
 
@@ -17252,75 +14918,6 @@ classifyInferenceRows: function {
     }
 }
 
-# constructionParamMissing -- a generic construction leaves a parameter
-# neither written, inferred nor defaulted: reported (when `reportMissing`) as
-# the first such parameter, or as the whole type when nothing was bound.
-# Counts a parameter bound in `subs` or `valueSubs` as bound.
-constructionParamMissing: function {
-    st: zenv.ZSymbolTable
-    ast: Ast.view
-    call: callref
-    tdecl: ztypes.declid
-    subs: (IdMapV zast.nameid v: ztypes.tid).view
-    valueSubs: (IdMapV zast.nameid v: u64).view
-    boundParams: IdSet zast.nameid
-    sfx: String.view
-    tname: StringView
-    reportMissing: bool
-} out bool is {
-    firstMissing: zast.nameid
-    pmi: u64
-    for pmi < (st.reg.genericParamCountOf :tdecl) loop {
-        pmName: st.reg.genericParamNameAt :tdecl i: pmi
-        pmi = pmi + 1
-        if (subs.has key: pmName) or (valueSubs.has key: pmName) then boundParams.add item: pmName
-        if (boundParams.has item: pmName).not when firstMissing.isZero then firstMissing = pmName
-    }
-    if firstMissing.isZero then return false
-    if reportMissing.not then return true
-    primary: st.reg.genericParamNameAt :tdecl i: 0
-    if firstMissing == primary when (refuseLeadingLocalArg :st :ast :call) then return true
-    mmsg: "cannot infer type arguments for generic type '\{tname}'"
-    if sfx.length > 0 then {
-        fmT: zast.nameTextAt :ast ref: firstMissing
-        mmsg = "cannot infer generic parameter '\{fmT}' for '\{tname}'"
-    }
-    (
-        addErrorWithHint
-        :st
-        nodeid: call.nid
-        lineno: call.lineno
-        colno: call.colno
-        e: zast.err.genericError
-        msg: mmsg
-        note: String
-        hint: String
-        width: 0
-    )
-    return true
-}
-
-# refuseLeadingLocalArg -- a construction left its primary type parameter
-# unbound, and its leading unlabelled argument, where that parameter is
-# written, names a local or a parameter: the name is that value, which is no
-# type. True when it refused.
-refuseLeadingLocalArg: function {st: zenv.ZSymbolTable ast: Ast.view call: callref} out bool is {
-    if call.nargs == 0 then return false
-    first: zast.callArgAt :ast nid: call.nid i: 0
-    op: first
-    ar: argRefAt :ast nid: first
-    if ar.nid.notZero then {
-        if ar.name.notZero then return false
-        op = ar.operation
-    }
-    atomNid: markedBareAtom :ast nid: op
-    if atomNid.isZero then return false
-    nameId: atomNameId :ast n: (ast.nodes.get i: atomNid)
-    if (st.findLocal :nameId).isZero then return false
-    refuseLocalAsType :st :ast :nameId nid: atomNid
-    return true
-}
-
 # inferGenericConstruction -- a generic class/record template called with
 # field-bound value arguments: labels naming generic params resolve as
 # explicit type args; other args walk as values and bind their field's
@@ -17349,7 +14946,7 @@ inferGenericConstruction: function {
     (
         stageRowsOf
         :st
-        ownerTid: (writtenTemplateCreate :st templateId: tplId)
+        ownerTid: (typeargs.writtenTemplateCreate :st templateId: tplId)
         names: childNames
         tids: rowTids
     )
@@ -17413,7 +15010,7 @@ inferGenericConstruction: function {
         return ztypes.tid.zero
     }
     if (
-        constructionParamMissing
+        typeargs.constructionParamMissing
         :st
         :ast
         :call
@@ -17477,58 +15074,6 @@ inferGenericConstruction: function {
     return mid
 }
 
-# templateTakesCapacity -- the template is a builtin container whose `create`
-# takes a `capacity:` argument. `capacity:` on one of these is a create
-# argument rather than a field, which is what both the skip and the bad-label
-# report have to know; the eleven are the container families collections.z
-# declares with a sized create.
-templateTakesCapacity: function {
-    ast: Ast
-    st: zenv.ZSymbolTable
-    tplId: ztypes.tid
-} out bool is {
-    sized: (
-        (tplId == (stdTid :ast :st wk: zast.wellKnown.slot.tyListRef)) or
-        (tplId == (stdTid :ast :st wk: zast.wellKnown.slot.tyListVal)) or
-        (tplId == (stdTid :ast :st wk: zast.wellKnown.slot.tyMapRR)) or
-        (tplId == (stdTid :ast :st wk: zast.wellKnown.slot.tyMapRV)) or
-        (tplId == (stdTid :ast :st wk: zast.wellKnown.slot.tyMapVR)) or
-        (tplId == (stdTid :ast :st wk: zast.wellKnown.slot.tyMapVV)) or
-        (tplId == (stdTid :ast :st wk: zast.wellKnown.slot.tySetRef)) or
-        (tplId == (stdTid :ast :st wk: zast.wellKnown.slot.tySetVal)) or
-        (tplId == (stdTid :ast :st wk: zast.wellKnown.slot.tyIdMapR)) or
-        (tplId == (stdTid :ast :st wk: zast.wellKnown.slot.tyIdMapV)) or
-        (tplId == (stdTid :ast :st wk: zast.wellKnown.slot.tyIdSet))
-    )
-    return sized
-}
-
-# skipCapacityArg -- `capacity:` on a builtin container is a create argument riding
-# the construction sugar: it must not reach the spec key or the substitutions, and
-# failing it over to field inference would type the whole call wrong. A skipped
-# argument is still a VALUE, and still create's argument: it is walked for its
-# atoms' stamps and checked as a call's argument is.
-skipCapacityArg: function {
-    ast: Ast
-    st: zenv.ZSymbolTable
-    unitDecl: ztypes.declid
-    argId: zast.nodeid
-    argOpId: zast.nodeid
-    tplId: ztypes.tid
-    pk0: zast.nameid
-    isPrimary: bool
-} out bool is {
-    skipCr: false
-    if isPrimary.not when pk0 == zast.wellKnown.slot.wkCapacity when (
-        templateTakesCapacity
-        :st
-        :ast
-        :tplId
-    ) then skipCr = true
-    if skipCr then checkCapacityArg :st :unitDecl :ast :argId :argOpId
-    return skipCr
-}
-
 # checkCapacityArg -- `capacity:` written inside a container's type application is
 # create's argument, so it is checked as one: a name nothing declares, and a
 # value that does not fit create's `capacity: u64`, are the call's diagnostics.
@@ -17560,39 +15105,6 @@ checkCapacityArg: function {
 }
 
 
-# argscan -- what reading one explicit type argument answers: the running
-# "an argument failed to resolve" flag, and the type id this argument resolved
-# to (0 when it resolved to none).
-argscan: record {
-    miss: bool
-    tid: ztypes.tid
-}
-
-# explicitPrimaryArgTid -- the type an unnamed leading argument names, 0 when it
-# names none. Both spellings resolve: a bare atom through the scope's typerefs
-# (`(List zvfs.ProviderBox)`), a cross-unit dotted path through its own lookup.
-explicitPrimaryArgTid: function {
-    ast: Ast
-    st: zenv.ZSymbolTable
-    unitDecl: ztypes.declid
-    opId: zast.nodeid
-} out ztypes.tid is {
-    # a type application names the template its head does
-    callee: zast.nodeid
-    op0: ast.nodes.get i: opId
-    if op0.call then callee = op0.callable
-    if callee.notZero then {
-        tpa: typeApplicationTemplate :st scope: st.curScope :ast :unitDecl callableNid: callee
-        return tpa
-    }
-    anP: paramTypeBaseNameId :ast op: (ast.nodes.get i: opId)
-    if (isNumericLiteralNameAt :ast ref: anP) then return ztypes.tid.zero
-    primaryTid: bodyTypeNameTid :st :ast :unitDecl nameId: anP nid: opId
-    if primaryTid.notZero then return primaryTid
-    dop: ast.nodes.get i: opId
-    return (dottedTyperefId :ast :st op: dop)
-}
-
 # numargstate -- what reading a numeric generic argument found.
 numargstate: variant {
     # a compile-time integer that stands in for the parameter's type
@@ -17610,25 +15122,6 @@ numarg: record {
     state: numargstate
     # the value as two's-complement bits, read by the bound's signedness
     bits: u64
-}
-
-# numericGenericArg -- the value written for numeric generic parameter `param`
-# of the template `tdecl`: the ONE reader every instantiation path asks, which
-# remembers a refused argument's node. The value is numericGenericArgRead's.
-numericGenericArg: function {
-    ast: Ast
-    st: zenv.ZSymbolTable
-    unitDecl: ztypes.declid
-    scope: ztypes.declid
-    tdecl: ztypes.declid
-    param: zast.nameid
-    argOp: zast.nodeid
-    # the argument is written in a body, where a name can read a local
-    inBody: bool
-} out numarg is {
-    na: numericGenericArgRead :ast :st :unitDecl :scope :tdecl :param :argOp :inBody
-    if na.state.refused then st.walk.numericArgsRefused.add item: argOp
-    return na
 }
 
 # numericGenericArgRead -- the value written for numeric generic parameter
@@ -17808,221 +15301,6 @@ reportNumericArg: function {
     )
 }
 
-# bindNumericArg -- a read numeric generic argument bound: its suffix component
-# and its value substitution. false when it was refused.
-bindNumericArg: function {
-    sfx: String
-    valSubs: (IdMapV zast.nameid v: u64)
-    param: zast.nameid
-    na: numarg
-    cd: ztypes.constraintdesc
-} out bool is {
-    if na.state.refused then return false
-    appendNumericArgSuffix :sfx bits: na.bits :cd
-    valSubs.set key: param value: na.bits
-    return true
-}
-
-# appendNumericArgSuffix -- a numeric generic argument's `_value` component of a
-# mono's suffix.
-appendNumericArgSuffix: function {sfx: String bits: u64 cd: ztypes.constraintdesc} is {
-    sfx.append s: "_"
-    sfx.append s: (numericArgText :bits signed: (ztypes.isSignedIntKind k: cd.numKind.kind))
-}
-
-# numericArgText -- a numeric generic argument's value as it spells a mono's
-# name: its decimal digits, a negative one's magnitude after `neg`.
-numericArgText: function {bits: u64 signed: bool} out String is {
-    if signed when bits > 9223372036854775807 then {
-        return "neg\{ztypes.absI64 v: (ztypes.bitsI64 b: bits)}"
-    }
-    return "\{bits}"
-}
-
-# bindNumericTypeArg -- a numeric generic parameter's argument read to its
-# value, which spells itself into the mono suffix and binds that param's VALUE:
-# what the trie keys and a later array bound reads. false when it was refused.
-bindNumericTypeArg: function {
-    ast: Ast
-    st: zenv.ZSymbolTable
-    unitDecl: ztypes.declid
-    tdecl: ztypes.declid
-    pk0: zast.nameid
-    opId: zast.nodeid
-    sfx: String
-    valueSubs: (IdMapV zast.nameid v: u64)
-} out bool is {
-    na: (
-        numericGenericArg
-        :ast
-        :st
-        :unitDecl
-        scope: st.curScope
-        :tdecl
-        param: pk0
-        argOp: opId
-        inBody: true
-    )
-    if na.state.refused then return false
-    if na.state.dependent then {
-        st.walk.numericArgDependent = true
-        return true
-    }
-    cd: st.reg.genericParamConstraintOf :tdecl paramName: pk0
-    appendNumericArgSuffix :sfx bits: na.bits :cd
-    valueSubs.set key: pk0 value: na.bits
-    return true
-}
-
-# typeArgTid -- the type a construction's type argument names, spelled `baseId`
-# when it is a bare name: an instantiation, a name, or a unit-qualified path.
-# 0 when it names none.
-typeArgTid: function {
-    st: zenv.ZSymbolTable
-    ast: Ast
-    unitDecl: ztypes.declid
-    opId: zast.nodeid
-    baseId: zast.nameid
-} out ztypes.tid is {
-    aid: constructionArgTid :st :ast :unitDecl :opId :baseId
-    if aid.notZero then return aid
-    return (dottedTyperefId :ast :st op: (ast.nodes.get i: opId))
-}
-
-# bindResolvedTypeArg -- a type argument that resolves adds its mono name to the
-# suffix and, when it carries a label, becomes that param's substitution. Answers
-# the id it resolved to, 0 when it resolved to none.
-bindResolvedTypeArg: function {
-    ast: Ast
-    st: zenv.ZSymbolTable
-    unitDecl: ztypes.declid
-    opId: zast.nodeid
-    baseId: zast.nameid
-    pk0: zast.nameid
-    sfx: String
-    subs: (IdMapV zast.nameid v: ztypes.tid)
-} out ztypes.tid is {
-    aid: typeArgTid :st :ast :unitDecl :opId :baseId
-    if aid.isZero then return ztypes.tid.zero
-    atn: monoValName :st :ast tid: aid
-    asfx: "_\{atn}"
-    sfx.append s: asfx
-    if pk0.notZero then {
-        pv: aid
-        subs.set key: pk0 value: pv
-    }
-    return aid
-}
-
-# collectTypeArgAt -- read one explicit type argument. Only generic-param labels
-# construct here; a value argument means the field-bound inference leg owns the
-# call, and says so by answering `miss`. Once an argument has missed the suffix
-# stops growing, but the arguments after it are still read.
-collectTypeArgAt: function {
-    ast: Ast
-    st: zenv.ZSymbolTable
-    unitDecl: ztypes.declid
-    argId: zast.nodeid
-    argIdx: u64
-    tplId: ztypes.tid
-    primaryName: zast.nameid
-    tk0: ztypes.declid
-    sfx: String
-    subs: (IdMapV zast.nameid v: ztypes.tid)
-    valueSubs: (IdMapV zast.nameid v: u64)
-    miss: bool
-} out argscan is {
-    anyMiss: miss
-    # the argument's label and operation
-    pk0: zast.nameid
-    opId: zast.nodeid
-    arg: argRefAt :ast nid: argId
-    if arg.nid.isZero then return (argscan miss: anyMiss tid: ztypes.tid.zero)
-    pk0 = numericLeadingParam :st tdecl: tk0 label: arg.name :argIdx
-    opId = arg.operation
-    if pk0.isZero when argIdx == 0 when primaryName.notZero when (
-        explicitPrimaryArgTid
-        :ast
-        :st
-        :unitDecl
-        :opId
-    ).notZero then pk0 = primaryName
-    isPrimary: false
-    if pk0.notZero then {
-        isPrimary = st.reg.isGenericParamOf tdecl: tk0 name: pk0
-    }
-    skipCr: skipCapacityArg :ast :st :unitDecl :argId argOpId: opId :tplId :pk0 :isPrimary
-    if isPrimary.not when skipCr.not then anyMiss = true
-    baseNameId: paramTypeBaseNameId :ast op: (ast.nodes.get i: opId)
-    if anyMiss then return (argscan miss: anyMiss tid: ztypes.tid.zero)
-    if skipCr then return (argscan miss: anyMiss tid: ztypes.tid.zero)
-    if isPrimary when (st.reg.genericParamConstraintOf tdecl: tk0 paramName: pk0).numKind.has then {
-        if (
-            bindNumericTypeArg
-            :ast
-            :st
-            :unitDecl
-            tdecl: tk0
-            :pk0
-            :opId
-            :sfx
-            :valueSubs
-        ).not then anyMiss = true
-        return (argscan miss: anyMiss tid: ztypes.tid.zero)
-    }
-    if (isNumericLiteralNameAt :ast ref: baseNameId) then {
-        sfx.append s: "_"
-        sfx.append s: (zast.nameTextAt :ast ref: baseNameId)
-        return (argscan miss: anyMiss tid: ztypes.tid.zero)
-    }
-    argTid: bindResolvedTypeArg :ast :st :unitDecl :opId baseId: baseNameId :pk0 :sfx :subs
-    if argTid.isZero then anyMiss = true
-    return (argscan miss: anyMiss tid: argTid)
-}
-
-# collectGenericTypeArgs -- read one generic construction's arguments into the type
-# and value substitutions, building the mangled suffix that names the instance.
-collectGenericTypeArgs: function {
-    ast: Ast
-    st: zenv.ZSymbolTable
-    unitDecl: ztypes.declid
-    call: callref
-    tplId: ztypes.tid
-    primaryName: zast.nameid
-    sfx: String
-    subs: (IdMapV zast.nameid v: ztypes.tid)
-    valueSubs: (IdMapV zast.nameid v: u64)
-    tk0: ztypes.declid
-    firstOut: ListVal ztypes.tid
-} out bool is {
-    firstA: ztypes.tid
-    anyMiss: false
-    kAiter: u64
-    for kAiter < call.nargs loop {
-        argId: zast.callArgAt :ast nid: call.nid i: kAiter
-        r0: (
-            collectTypeArgAt
-            :ast
-            :st
-            :unitDecl
-            :argId
-            argIdx: kAiter
-            :tplId
-            :primaryName
-            :tk0
-            :sfx
-            :subs
-            :valueSubs
-            miss: anyMiss
-        )
-        anyMiss = r0.miss
-        if firstA.isZero then firstA = r0.tid
-        kAiter = kAiter + 1
-    }
-    firstOut.append firstA
-    return anyMiss
-}
-
 
 # genericTypeConstruction -- a generic TYPE template in callable position
 # with type-name arguments constructs its mono in place (`(List of: String)`
@@ -18047,7 +15325,7 @@ genericTypeConstruction: function {
     prevDep: st.walk.numericArgDependent
     st.walk.numericArgDependent = false
     anyMiss: (
-        collectGenericTypeArgs
+        typeargs.collectGenericTypeArgs
         :ast
         :st
         :unitDecl
@@ -18094,7 +15372,7 @@ genericTypeConstruction: function {
         return ztypes.tid.zero
     }
     if (
-        refuseIncompleteApplication
+        typeargs.refuseIncompleteApplication
         :st
         :ast
         :tplId
@@ -18181,200 +15459,6 @@ valuePartialConstruction: function {
     return mid
 }
 
-# reportBadGenericArgLabel -- a label that names no generic parameter of this
-# template. It may still be a legitimate FIELD label riding the construction
-# sugar, or a builtin container's own create argument, so those are exempted
-# before the error is raised.
-reportBadGenericArgLabel: function {
-    ast: Ast
-    st: zenv.ZSymbolTable
-    arg: argref
-    tplId: ztypes.tid
-    pk: zast.nameid
-    childNames: (ListVal zast.nameid).view
-    tname: StringView
-    tk: ztypes.declid
-} out bool is {
-    ok: true
-    isField: false
-    ci: u64
-    cn: childNames.length
-    for ci < cn loop {
-        if (childNames.get i: ci) == pk then isField = true
-        ci = ci + 1
-    }
-    # `capacity:` on a builtin container construction is a
-    # create argument (`Type arg:` is `Type.create arg:`);
-    # native create params carry no modeled children, so
-    # the label is admitted by template identity.
-    if isField.not when pk == zast.wellKnown.slot.wkCapacity when (
-        templateTakesCapacity
-        :st
-        :ast
-        :tplId
-    ) then isField = true
-    if isField.not then {
-        labelText: zast.nameTextAt :ast ref: pk
-        m2: "unknown type argument '\{labelText}' for generic type '\{tname}'"
-        plist: st.reg.genericParamNamesOf tdecl: tk
-        note: "valid type parameters: ".string
-        pi: u64
-        pn2: plist.length
-        for pi < pn2 loop {
-            if pi > 0 then note.append s: ", "
-            pnmT: zast.nameTextAt :ast ref: (plist.get i: pi)
-            note.append s: pnmT
-            pi = pi + 1
-        }
-        eh2: String
-        (
-            addErrorWithHint
-            :st
-            nodeid: arg.nid
-            lineno: arg.lineno
-            colno: arg.colno
-            e: zast.err.genericError
-            msg: m2
-            :note
-            hint: eh2
-            width: labelText.length
-        )
-        ok = false
-    }
-    return ok
-}
-
-# validateOneGenericArg -- one labelled generic argument: the label must name a
-# parameter of this template, must not repeat, and its value must satisfy the
-# parameter's declared constraint.
-validateOneGenericArg: function {
-    ast: Ast
-    st: zenv.ZSymbolTable
-    arg: argref
-    tplId: ztypes.tid
-    tk: ztypes.declid
-    pk: zast.nameid
-    seen: IdSet zast.nameid
-    allowFrom: bool
-    childNames: (ListVal zast.nameid).view
-    tname: StringView
-} out bool is {
-    ok: true
-    isP: st.reg.isGenericParamOf tdecl: tk name: pk
-    if isP then {
-        if (seen.has item: pk) when allowFrom.not then {
-            pkT: zast.nameTextAt :ast ref: pk
-            m1: "duplicate type argument '\{pkT}'"
-            en1: String
-            eh1: String
-            (
-                addErrorWithHint
-                :st
-                nodeid: arg.nid
-                lineno: arg.lineno
-                colno: arg.colno
-                e: zast.err.genericError
-                msg: m1
-                note: en1
-                hint: eh1
-                width: pkT.length
-            )
-            ok = false
-        } else {
-            seen.add item: pk
-        }
-    } else {
-        ok = reportBadGenericArgLabel :ast :st :arg :tplId :pk :childNames :tname :tk
-    }
-    return ok
-}
-
-
-# validateGenericTypeArgs -- reject unknown / duplicate generic TYPE arguments
-# at a settled construction site. A named arg matching neither a declared
-# generic param nor a declared field (child) is an unknown type argument; a
-# generic param supplied twice (e.g. an elided leading arg plus an explicit
-# label) is a duplicate. Returns false when an error was emitted.
-validateGenericTypeArgs: function {
-    ast: Ast
-    st: zenv.ZSymbolTable
-    unitDecl: ztypes.declid
-    call: callref
-    tplId: ztypes.tid
-    allowFrom: bool
-} out bool is {
-    tname: st.reg.nameOf tid: tplId
-    if tname.length == 0 then return true
-    tk: st.typing.declIdOfType typeId: tplId
-    childNames: ListVal zast.nameid
-    {
-        otvgi: tplId
-        vgi: u64
-        vgn: st.typing.declRowSlots ownerTid: otvgi
-        for vgi < vgn loop {
-            rwvgi: st.typing.declRowAt ownerTid: otvgi membersOnly: false slot: vgi
-            vgi = vgi + 1
-            if rwvgi.keep then {
-                vgnid: rwvgi.name
-                childNames.append vgnid
-            }
-        }
-    }
-    # a create the template writes: its parameters are the construction's
-    # labels, not type arguments
-    appendRowNames :st ownerTid: (writtenTemplateCreate :st templateId: tplId) dst: childNames
-    primaryName: firstGenericParamId :st templateId: tplId
-    fromId: zast.wellKnown.slot.wkFrom
-    seen: IdSet zast.nameid
-    ok: true
-    argIdx: u64
-    kAiter: u64
-    for kAiter < call.nargs loop {
-        argId: zast.callArgAt :ast nid: call.nid i: kAiter
-        kAiter = kAiter + 1
-        arg: argRefAt :ast nid: argId
-        if arg.nid.notZero then {
-            pk: numericLeadingParam :st tdecl: tk label: arg.name :argIdx
-            if pk.isZero when argIdx == 0 when primaryName.notZero then {
-                anP: paramTypeBaseNameId :ast op: (ast.nodes.get i: arg.operation)
-                paramTid: ztypes.tid
-                if (isNumericLiteralNameAt :ast ref: anP).not then {
-                    paramArg: (
-                        walkLookupTyperefById
-                        :st
-                        scope: st.curScope
-                        :ast
-                        :unitDecl
-                        baseId: anP
-                    )
-                    paramTid = paramArg.or d: ztypes.tid.zero
-                    if paramTid.isZero then {
-                        dop: ast.nodes.get i: arg.operation
-                        paramTid = dottedTyperefId :ast :st op: dop
-                    }
-                }
-                if paramTid.notZero then pk = primaryName
-            }
-            skipFrom: false
-            if allowFrom when pk == fromId then skipFrom = true
-            if pk.notZero when skipFrom.not when (
-                validateOneGenericArg
-                :ast
-                :st
-                :arg
-                :tplId
-                :tk
-                :pk
-                :seen
-                :allowFrom
-                :childNames
-                tname: tname.stringView
-            ).not then ok = false
-        }
-        argIdx = argIdx + 1
-    }
-    return ok
-}
 
 # selfReturnOnInstance -- A MEMBER'S SELF-TYPE RETURN ON AN INSTANCE IS THE
 # INSTANCE. A member declared `out type` names the type that DECLARES it, so one
@@ -18467,7 +15551,14 @@ callBuildsInstance: function {
     nid: zast.nodeid
 } out bool is {
     call: callRefAt :ast :nid
-    tpl: typeApplicationTemplate :st scope: st.curScope :ast :unitDecl callableNid: call.callable
+    tpl: (
+        typeargs.typeApplicationTemplate
+        :st
+        scope: st.curScope
+        :ast
+        :unitDecl
+        callableNid: call.callable
+    )
     tk: st.typing.declIdOfType typeId: tpl
     k: u64
     for k < call.nargs loop {
@@ -18654,7 +15745,7 @@ dottedChildName: function {ast: Ast.view n: astnode.view} out String is {
     match (
         n
     ) case dottedpath then {
-        return (atomName :ast n: (ast.nodes.get i: n.child))
+        return (typeargs.atomName :ast n: (ast.nodes.get i: n.child))
     } else {
         return "".string
     }
@@ -19165,363 +16256,6 @@ isTypedefTypeArg: function {
     og: st.reg.genericOriginOf tid: tdId
     if (isGenericTypedef :st tid: og).not then return false
     return (st.reg.isGenericParamOf tdecl: (st.typing.declIdOfType typeId: og) :name)
-}
-
-# checkGenericTypedefCall -- a GENERIC typedef applied to arguments. Its
-# unlabelled argument is `from:`, the value of its base, and each type argument
-# is labelled: `Bag l` and `Bag from: l` take `t` from the type of `l`, and
-# `Bag l t: String` also pins it, which must agree. The instance is then built
-# from the value as any typedef is. Not handled without a value (`Bag t:
-# String` is a type application, the empty instance).
-checkGenericTypedefCall: function {
-    st: zenv.ZSymbolTable
-    unitDecl: ztypes.declid
-    ast: Ast
-    call: callref
-    tplId: ztypes.tid
-} out callleg is {
-    fromArgId: typedefFromArgId :ast :call
-    if fromArgId.isZero then return (callleg handled: false tid: ztypes.tid)
-    fArg: argRefAt :ast nid: fromArgId
-    if (refuseTypedefFromType :st :unitDecl :ast arg: fArg) then {
-        return (typedefCallFailed :st :call :tplId)
-    }
-    subs: IdMapV zast.nameid v: ztypes.tid
-    valSubs: IdMapV zast.nameid v: u64
-    if (typedefInstanceSubs :st :unitDecl :ast :call :tplId :fArg :subs :valSubs).not then {
-        return (typedefCallFailed :st :call :tplId)
-    }
-    tk: st.typing.declIdOfType typeId: tplId
-    sfx: String
-    missing: typedefInstanceSuffix :st :ast :tk :subs :valSubs :sfx
-    if missing.notZero then {
-        reportTypedefMissingParam :st :ast :call :tplId :tk :missing bound: sfx.length > 0
-        return (typedefCallFailed :st :call :tplId)
-    }
-    mid: (
-        getOrMintSpec
-        :st
-        scope: st.curScope
-        :ast
-        :unitDecl
-        sfx: sfx.stringView
-        templateId: tplId
-        :subs
-        :valSubs
-        fallbackArg: ztypes.tid.zero
-    )
-    if mid.isZero then return (typedefCallFailed :st :call :tplId)
-    reportTypedefClash :ast :st tid: mid at: call.nid lineno: call.lineno colno: call.colno
-    gcal: nodeId n: (ast.nodes.get i: call.callable)
-    if gcal.notZero then {
-        setga: mid
-        stampGate :st nid: gcal tid: setga
-    }
-    r: checkTypedefCreate :st :unitDecl :ast :call tdId: mid
-    return (callleg handled: true tid: r)
-}
-
-# typedefFromArgId -- a generic typedef construction's value argument: the
-# first unlabelled one, or `from:`; zero when there is none.
-typedefFromArgId: function {ast: Ast call: callref} out zast.nodeid is {
-    kAiter: u64
-    for kAiter < call.nargs loop {
-        argId: zast.callArgAt :ast nid: call.nid i: kAiter
-        kAiter = kAiter + 1
-        arg: argRefAt :ast nid: argId
-        if arg.nid.notZero when (
-            arg.name.isZero or (arg.name == zast.wellKnown.slot.wkFrom)
-        ) then return argId
-    }
-    return zast.nodeid
-}
-
-# typedefInstanceSubs -- the arguments of the instance a generic typedef
-# construction builds: the value's type binds the template's parameters (a
-# dry run of the value, as a generic construction's inference makes), then the
-# labelled type arguments pin them. False when the value is no instance of the
-# base's template or a pin is refused, each reported.
-typedefInstanceSubs: function {
-    st: zenv.ZSymbolTable
-    unitDecl: ztypes.declid
-    ast: Ast
-    call: callref
-    tplId: ztypes.tid
-    fArg: argref
-    subs: (IdMapV zast.nameid v: ztypes.tid)
-    valSubs: (IdMapV zast.nameid v: u64)
-} out bool is {
-    st.pushDryRun
-    vt: checkValueAt :st :unitDecl :ast nid: fArg.operation
-    st.popDiscard
-    if vt.isZero then return false
-    tk: st.typing.declIdOfType typeId: tplId
-    gparams: st.reg.genericParamNamesOf tdecl: tk
-    if (bindTypedefFromSubs :st :ast :tplId :gparams :vt :subs).not then {
-        bo: st.reg.genericOriginOf tid: (st.typing.typedefBaseTidOf tid: tplId)
-        en: specWrittenName :st :ast tid: bo
-        an: specWrittenName :st :ast tid: vt
-        (
-            addErrorWithHint
-            :st
-            nodeid: fArg.nid
-            lineno: fArg.lineno
-            colno: fArg.colno
-            e: zast.err.callError
-            msg: "argument 'from' type mismatch: expected an instance of \{en}, got \{an}"
-            note: "a generic typedef is constructed from an instance of its base".string
-            hint: String
-            width: 1
-        )
-        return false
-    }
-    return (applyTypedefTypePins :st :unitDecl :ast :call :tk :subs :valSubs)
-}
-
-# typedefInstanceSuffix -- the instance name's argument suffix, in the
-# template's parameter order: a type argument's name, a numeric one's value.
-# The first parameter nothing bound, or zero.
-typedefInstanceSuffix: function {
-    st: zenv.ZSymbolTable
-    ast: Ast
-    tk: ztypes.declid
-    subs: (IdMapV zast.nameid v: ztypes.tid).view
-    valSubs: (IdMapV zast.nameid v: u64).view
-    sfx: String
-} out zast.nameid is {
-    missing: zast.nameid
-    gparams: st.reg.genericParamNamesOf tdecl: tk
-    for each gp: gparams loop {
-        got: subs.get key: gp
-        gotV: valSubs.get key: gp
-        if got.some then {
-            sfx.append s: "_"
-            sfx.append s: (monoValName :st :ast tid: got)
-        } else if gotV.some then {
-            (
-                appendNumericArgSuffix
-                :sfx
-                bits: gotV
-                cd: (st.reg.genericParamConstraintOf tdecl: tk paramName: gp)
-            )
-        } else if missing.isZero then {
-            missing = gp
-        }
-    }
-    return missing
-}
-
-# reportTypedefMissingParam -- a generic typedef construction that leaves a
-# parameter unbound, worded as a generic construction's is: nothing inferred,
-# one parameter not inferred, or a numeric one, which is never inferred.
-reportTypedefMissingParam: function {
-    st: zenv.ZSymbolTable
-    ast: Ast
-    call: callref
-    tplId: ztypes.tid
-    tk: ztypes.declid
-    missing: zast.nameid
-    bound: bool
-} is {
-    tname: specWrittenName :st :ast tid: tplId
-    mn: zast.nameTextAt :ast ref: missing
-    mm: "cannot infer type arguments for generic type '\{tname}'"
-    me: zast.err.genericError
-    if bound then mm = "cannot infer generic parameter '\{mn}' for '\{tname}'"
-    if (st.reg.genericParamConstraintOf tdecl: tk paramName: missing).numKind.has then {
-        mm = "missing required argument '\{mn}': generic parameter '\{mn}' of '\{tname}' takes a compile-time integer, which is never inferred"
-        me = zast.err.callError
-    }
-    (
-        addErrorWithHint
-        :st
-        nodeid: call.nid
-        lineno: call.lineno
-        colno: call.colno
-        e: me
-        msg: mm
-        note: String
-        hint: String
-        width: 0
-    )
-}
-
-# typedefCallFailed -- a generic typedef construction that was refused: the
-# call is the template, so the one diagnostic stands without a cascade.
-typedefCallFailed: function {st: zenv.ZSymbolTable call: callref tplId: ztypes.tid} out callleg is {
-    stt: tplId
-    stampGate :st nid: call.nid tid: stt
-    return (callleg handled: true tid: tplId)
-}
-
-# argOperandName -- the type name an argument's operand spells (`String` in
-# `Bag String`), as an owned copy.
-argOperandName: function {ast: Ast.view arg: argref} out String is {
-    return (
-        zast.nameTextCopy
-        :ast
-        ref: (paramTypeBaseNameId :ast op: (ast.nodes.get i: arg.operation))
-    )
-}
-
-# refuseTypedefFromType -- the `from:` slot of a generic typedef takes a value;
-# a bare type name written there (`Bag String`) is refused, as the grammar
-# reads it. A call there constructs a value (`Bag (List String)`).
-refuseTypedefFromType: function {
-    st: zenv.ZSymbolTable
-    unitDecl: ztypes.declid
-    ast: Ast
-    arg: argref
-} out bool is {
-    isName: false
-    opn: ast.nodes.get i: arg.operation
-    isName = opn.atomid or opn.dottedpath
-    if isName.not then return false
-    if (elidedPrimaryTypeArg :st :unitDecl :ast opId: arg.operation).not then return false
-    tn: argOperandName :ast :arg
-    (
-        addErrorWithHint
-        :st
-        nodeid: arg.nid
-        lineno: arg.lineno
-        colno: arg.colno
-        e: zast.err.callError
-        msg: "argument 'from' takes a value, and '\{tn}' is a type"
-        note: "a generic typedef's unlabelled argument is 'from:', the value of its base; its type arguments are labelled".string
-        hint: String
-        width: 1
-    )
-    return true
-}
-
-# bindTypedefFromSubs -- bind a generic typedef's parameters from the type of
-# the value it is built from: the value's own typedef chain is followed to an
-# instance of the base's template, whose arguments meet the template's partial
-# base (`List t` met by `List_String` binds t = String), or to an instance of
-# the typedef itself, whose arguments are its own. False when the chain reaches
-# neither.
-bindTypedefFromSubs: function {
-    st: zenv.ZSymbolTable
-    ast: Ast
-    tplId: ztypes.tid
-    gparams: (ListVal zast.nameid).view
-    vt: ztypes.tid
-    subs: (IdMapV zast.nameid v: ztypes.tid)
-} out bool is {
-    pb: st.typing.typedefBaseTidOf tid: tplId
-    if pb.isZero then return false
-    bo: st.reg.genericOriginOf tid: pb
-    if bo.isZero then bo = pb
-    cur: vt
-    depth: u64
-    for depth < 64 loop {
-        depth = depth + 1
-        co: st.reg.genericOriginOf tid: cur
-        if co == tplId then {
-            bindTypedefOwnArgs :st inst: cur :gparams :subs
-            return true
-        }
-        if (co == bo) or (cur == bo) then {
-            bindPartialParamSubs :st :ast :gparams paramTid: pb argTid: cur :subs
-            return true
-        }
-        nxt: st.typing.typedefBaseTidOf tid: cur
-        if nxt.isZero then return false
-        cur = nxt
-    }
-    return false
-}
-
-# bindTypedefOwnArgs -- a value of the typedef itself binds each parameter to
-# its own instance's argument, in order.
-bindTypedefOwnArgs: function {
-    st: zenv.ZSymbolTable
-    inst: ztypes.tid
-    gparams: (ListVal zast.nameid).view
-    subs: (IdMapV zast.nameid v: ztypes.tid)
-} is {
-    n: st.reg.genericArgCount specId: inst
-    if gparams.length < n then n = gparams.length
-    i: u64
-    for i < n loop {
-        ta: st.reg.genericTypeArgAt specId: inst ordinal: i
-        if ta.notZero then subs.set key: (gparams.get :i) value: ta
-        i = i + 1
-    }
-}
-
-# applyTypedefTypePins -- the labelled type arguments of a generic typedef's
-# construction (`Bag l T: String`): each binds its parameter, and a type must
-# agree with what the value already bound. A numeric parameter is never
-# inferred and binds only here (`Label raw n: 8`). False when one is refused or
-# contradicts the value.
-applyTypedefTypePins: function {
-    st: zenv.ZSymbolTable
-    unitDecl: ztypes.declid
-    ast: Ast
-    call: callref
-    tk: ztypes.declid
-    subs: (IdMapV zast.nameid v: ztypes.tid)
-    valSubs: (IdMapV zast.nameid v: u64)
-} out bool is {
-    ok: true
-    kAiter: u64
-    for kAiter < call.nargs loop {
-        argId: zast.callArgAt :ast nid: call.nid i: kAiter
-        kAiter = kAiter + 1
-        arg: argRefAt :ast nid: argId
-        if arg.nid.isZero or arg.name.isZero then continue
-        if (st.reg.isGenericParamOf tdecl: tk name: arg.name).not then continue
-        psfx: String
-        pins: IdMapV zast.nameid v: ztypes.tid
-        pvals: IdMapV zast.nameid v: u64
-        pbound: IdSet zast.nameid
-        (
-            bindTypeArgSub
-            :st
-            :unitDecl
-            :ast
-            :arg
-            pk: arg.name
-            sfx: psfx
-            subs: pins
-            valueSubs: pvals
-            boundParams: pbound
-            :tk
-        )
-        pvv: pvals.get key: arg.name
-        if pvv.some then {
-            valSubs.set key: arg.name value: pvv
-            continue
-        }
-        pv: (pins.get key: arg.name).or d: ztypes.tid.zero
-        if pv.isZero then {
-            ok = false
-            continue
-        }
-        had: (subs.get key: arg.name).or d: ztypes.tid.zero
-        if had.notZero when had != pv then {
-            pn: zast.nameTextAt :ast ref: arg.name
-            pinned: specWrittenName :st :ast tid: pv
-            made: specWrittenName :st :ast tid: had
-            (
-                addErrorWithHint
-                :st
-                nodeid: arg.nid
-                lineno: arg.lineno
-                colno: arg.colno
-                e: zast.err.genericError
-                msg: "type argument '\{pn}' is \{pinned}, but the value makes it \{made}"
-                note: String
-                hint: String
-                width: 1
-            )
-            ok = false
-            continue
-        }
-        subs.set key: arg.name value: pv
-    }
-    return ok
 }
 
 # checkTypedefCreate -- `T.create from: expr` / bare `T expr` on a typedef: a
@@ -22817,7 +19551,7 @@ refuseMarkerWithoutStorage: function {
     isFn: btt == ztypes.ztypetype.functionType
     # a spec's name was refused as a value by the base walk (refuseSpecValue)
     if isFn when (
-        namesSpec
+        typeargs.namesSpec
         :st
         :ast
         :unitDecl
@@ -23053,7 +19787,7 @@ refuseBoundMethodReference: function {
     cnId: zast.nameid
 } out bool is {
     if (methodHasThisReceiver :st mid: bt).not then return false
-    rootNm: dottedRootName :ast n: (ast.nodes.get i: dp.parent)
+    rootNm: typeargs.dottedRootName :ast n: (ast.nodes.get i: dp.parent)
     baseIsValue: false
     if rootNm.length > 0 then {
         rvo: st.lookupVarId nameId: (nameIdOf :ast name: rootNm.stringView)
@@ -24349,7 +21083,7 @@ typeOfBareName: function {
             )
         }
         if isAutoFn when (
-            refuseSpecValue
+            typeargs.refuseSpecValue
             :st
             :ast
             :unitDecl
@@ -34005,7 +30739,14 @@ walkOneCallArg: function {
         # one written with its unit (`system.u8`) is that type, and walked as a
         # value it would be a construction of it
         if isTypeArg when tpa.isZero when (ast.nodes.get i: arg.operation).dottedpath then {
-            tpa = typeArgTid :st :ast :unitDecl opId: arg.operation baseId: zast.nameid.zero
+            tpa = (
+                typeargs.typeArgTid
+                :st
+                :ast
+                :unitDecl
+                opId: arg.operation
+                baseId: zast.nameid.zero
+            )
         }
         if tpa.notZero then {
             vt = tpa
@@ -34028,7 +30769,14 @@ walkOneCallArg: function {
             }
             st.mode = savedMode
             st.walk.callArgNode = caPrev
-            if isTypeArg when vt.notZero then refuseValueTypeArg :st :unitDecl :ast :arg :vt
+            if isTypeArg when vt.notZero then (
+                typeargs.refuseValueTypeArg
+                :st
+                :unitDecl
+                :ast
+                :arg
+                :vt
+            )
         }
         if vt.u64 == 0 when st.typing.errors.length == errV then {
             reportUnresolvedValue :st :unitDecl :ast nid: arg.operation
@@ -34335,32 +31083,7 @@ ctorLeadingTypeArg: function {
     og: st.reg.genericOriginOf tid: tplId
     if og.notZero then tpl = og
     if (firstGenericParamId :st templateId: tpl).isZero then return false
-    return (elidedPrimaryTypeArg :st :unitDecl :ast opId: arg.operation)
-}
-
-# refuseValueTypeArg -- a construction's type argument that the walk typed as
-# the value `vt` and that names no type: refused at the argument.
-refuseValueTypeArg: function {
-    st: zenv.ZSymbolTable
-    unitDecl: ztypes.declid
-    ast: Ast
-    arg: argref
-    vt: ztypes.tid
-} is {
-    baseId: paramTypeBaseNameId :ast op: (ast.nodes.get i: arg.operation)
-    if (typeArgTid :st :ast :unitDecl opId: arg.operation :baseId).notZero then return
-    # a local or a parameter is a declaration of the body's, and says so
-    if baseId.notZero when (st.findLocal nameId: baseId).notZero then {
-        refuseLocalAsType :st :ast nameId: baseId nid: arg.operation
-        return
-    }
-    tn: specWrittenName :st :ast tid: (materialiseLiteral :ast :st t: vt)
-    msg: "the type argument is a value of type '\{tn}', not a type"
-    if baseId.notZero then {
-        nm: zast.nameTextAt :ast ref: baseId
-        msg = "'\{nm}' is a value of type '\{tn}', not a type"
-    }
-    addError :st nodeid: arg.nid lineno: arg.lineno colno: arg.colno e: zast.err.genericError :msg
+    return (typeargs.elidedPrimaryTypeArg :st :unitDecl :ast opId: arg.operation)
 }
 
 # ctorTypeArgParamTid -- the type of a construction's type argument when it
@@ -34374,7 +31097,7 @@ ctorTypeArgParamTid: function {
     unitDecl: ztypes.declid
     arg: argref
 } out ztypes.tid is {
-    pn: paramTypeBaseNameId :ast op: (ast.nodes.get i: arg.operation)
+    pn: typeargs.paramTypeBaseNameId :ast op: (ast.nodes.get i: arg.operation)
     if (declare.genericParamInScope :st :ast scope: st.curScope nameId: pn nid: zast.nodeid
     ).isZero then {
         return ztypes.tid
@@ -34821,18 +31544,6 @@ nameDeclaredOutward: function {
 declIsTypeMember: function {st: zenv.ZSymbolTable.view declId: ztypes.declid} out bool is {
     k: (st.typing.decls.get i: declId).kind
     return k.fieldDecl or k.methodDecl
-}
-
-# dottedRootName -- the root atom name of a dotted path ("" when the
-# root is not a bare atom).
-dottedRootName: function {ast: Ast.view n: astnode.view} out String is {
-    match (
-        n
-    ) case dottedpath then {
-        return (dottedRootName :ast n: (ast.nodes.get i: n.parent))
-    } else {
-        return (atomName :ast :n)
-    }
 }
 
 # unresolvedBareCallable -- the bare-atom callable name of a call-shaped
@@ -35713,204 +32424,10 @@ fillGenericDefaults: function {
     for pi < (st.reg.genericParamCountOf :tdecl) loop {
         pn: st.reg.genericParamNameAt :tdecl i: pi
         pi = pi + 1
-        if (fillOneDefault :st :ast :tdecl :pn :subs :valSubs :sfx :grey).not then return false
+        if (typeargs.fillOneDefault :st :ast :tdecl :pn :subs :valSubs :sfx :grey
+        ).not then return false
     }
     return true
-}
-
-# fillOneDefault -- fillGenericDefaults for the one parameter `pn`: nothing
-# when it is bound or has no default, its default otherwise. `grey` holds the
-# parameters whose defaults are being resolved, so a default that reaches back
-# to one of them is a cycle.
-fillOneDefault: function {
-    st: zenv.ZSymbolTable
-    ast: Ast
-    tdecl: ztypes.declid
-    pn: zast.nameid
-    subs: (IdMapV zast.nameid v: ztypes.tid)
-    valSubs: (IdMapV zast.nameid v: u64)
-    sfx: String
-    grey: IdSet zast.nameid
-} out bool is {
-    if (subs.has key: pn) or (valSubs.has key: pn) then return true
-    cd: st.reg.genericParamConstraintOf :tdecl paramName: pn
-    if cd.defaultNode.isZero then return true
-    dn: cd.defaultNode
-    if (grey.has item: pn) then {
-        (
-            reportDefaultRefused
-            :st
-            :ast
-            :pn
-            :dn
-            why: "its default names itself, through the defaults it names"
-        )
-        return false
-    }
-    grey.add item: pn
-    # the default resolves where it is written: in the declaration's own unit,
-    # not the instantiating one's -- a program's own `u64` record is not the
-    # `u64` collections.ListVal defaults its index to
-    dUnit: unitRootOfDecl typing: st.typing declId: tdecl
-    if cd.numKind.has then {
-        na: (
-            numericGenericArg
-            :ast
-            :st
-            unitDecl: dUnit
-            scope: tdecl
-            :tdecl
-            param: pn
-            argOp: dn
-            inBody: false
-        )
-        return (bindNumericArg :sfx :valSubs param: pn :na :cd)
-    }
-    dt: defaultTypeTid :st :ast unitDecl: dUnit :tdecl :pn :dn :subs :valSubs :sfx :grey
-    if dt.isZero then return false
-    # the default is a member of the parameter's constraint, checked where it
-    # is written; one that is not stops the instance there
-    if (conform.constraintAdmits :ast :st :tdecl paramName: pn argTid: dt).not then {
-        (
-            conform.checkConstraintSat
-            :st
-            :ast
-            :tdecl
-            paramName: pn
-            argTid: dt
-            at: dn
-            lineno: (nodeLine n: (ast.nodes.get i: dn))
-            colno: (nodeCol n: (ast.nodes.get i: dn))
-        )
-        return false
-    }
-    subs.set key: pn value: dt
-    # a literal default leaves the parameter untyped, and the instance holds the
-    # run-time type it materialises to (materialiseStaticListArgs): it adds no part to
-    # the instance's name
-    if (isLiteralTypeId reg: st.reg tid: dt) then return true
-    an: monoValName :st :ast tid: dt
-    sfx.append s: "_"
-    sfx.append s: an
-    return true
-}
-
-# defaultTypeTid -- the type parameter `pn`'s default `dn` names, with the
-# declaration's other parameters it names bound (filled first, through
-# fillOneDefault). 0 once refused, which is reported at the default.
-defaultTypeTid: function {
-    st: zenv.ZSymbolTable
-    ast: Ast
-    unitDecl: ztypes.declid
-    tdecl: ztypes.declid
-    pn: zast.nameid
-    dn: zast.nodeid
-    subs: (IdMapV zast.nameid v: ztypes.tid)
-    valSubs: (IdMapV zast.nameid v: u64)
-    sfx: String
-    grey: IdSet zast.nameid
-} out ztypes.tid is {
-    # the default resolves in the declaration's own scope, where its
-    # parameters are names
-    dt: ztypes.tid
-    {
-        prevScope: st.curScope
-        st.curScope = tdecl
-        dt = typeArgTid :st :ast :unitDecl opId: dn baseId: (
-            paramTypeBaseNameId
-            :ast
-            op: (ast.nodes.get i: dn)
-        )
-        st.curScope = prevScope
-    }
-    if dt.isZero then {
-        dnm: zast.nameTextAt :ast ref: (paramTypeBaseNameId :ast op: (ast.nodes.get i: dn))
-        why: "its default '\{dnm}' names no type"
-        reportDefaultRefused :st :ast :pn :dn why: why.stringView
-        return ztypes.tid.zero
-    }
-    # another parameter of the same declaration: its binding, filled first
-    other: st.reg.genericParamNameOfTid :tdecl ptid: dt
-    if other.notZero then {
-        if (fillOneDefault :st :ast :tdecl pn: other :subs :valSubs :sfx :grey
-        ).not then return ztypes.tid.zero
-        ov: (subs.get key: other).or d: ztypes.tid.zero
-        if ov.isZero then {
-            (
-                reportDefaultRefused
-                :st
-                :ast
-                :pn
-                :dn
-                why: "its default names a parameter with no argument and no default"
-            )
-        }
-        return ov
-    }
-    if (st.reg.isPartialOf tid: dt) then {
-        return (defaultOverParams :st :ast :unitDecl :tdecl :dt :subs :valSubs :sfx :grey)
-    }
-    # names no parameter: every instance takes this type, which the read-only
-    # lookup completes an argument list with
-    st.reg.setGenericParamDefaultTid :tdecl paramName: pn tid: dt
-    return dt
-}
-
-# defaultOverParams -- a default that is an instance over the declaration's
-# parameters (`(List t)`): those filled first, then the instance re-specialised
-# with their bindings. 0 once one of them was refused.
-defaultOverParams: function {
-    st: zenv.ZSymbolTable
-    ast: Ast
-    unitDecl: ztypes.declid
-    tdecl: ztypes.declid
-    dt: ztypes.tid
-    subs: (IdMapV zast.nameid v: ztypes.tid)
-    valSubs: (IdMapV zast.nameid v: u64)
-    sfx: String
-    grey: IdSet zast.nameid
-} out ztypes.tid is {
-    idSubs: IdMapV ztypes.tid v: ztypes.genericarg
-    qi: u64
-    for qi < (st.reg.genericParamCountOf :tdecl) loop {
-        q: st.reg.genericParamNameAt :tdecl i: qi
-        qi = qi + 1
-        if (typeMentionsParam :st :tdecl tid: dt param: q).not then continue
-        if (fillOneDefault :st :ast :tdecl pn: q :subs :valSubs :sfx :grey
-        ).not then return ztypes.tid.zero
-        qv: (subs.get key: q).or d: ztypes.tid.zero
-        qt: (st.reg.genericParamTidOf :tdecl paramName: q).or d: ztypes.tid.zero
-        if qv.notZero when qt.notZero then (
-            idSubs.set
-            key: qt
-            value: ztypes.genericarg.typeArg qv
-        )
-    }
-    rs: respecialize :st scope: tdecl :ast :unitDecl specTid: dt :idSubs
-    if rs.notZero then return rs
-    return dt
-}
-
-# reportDefaultRefused -- a parameter's default that cannot stand in for it,
-# reported at the default.
-reportDefaultRefused: function {
-    st: zenv.ZSymbolTable
-    ast: Ast.view
-    pn: zast.nameid
-    dn: zast.nodeid
-    why: StringView
-} is {
-    pnT: zast.nameTextAt :ast ref: pn
-    n: ast.nodes.get i: dn
-    (
-        addError
-        :st
-        nodeid: dn
-        lineno: (nodeLine :n)
-        colno: (nodeCol :n)
-        e: zast.err.genericError
-        msg: "generic parameter '\{pnT}' cannot take its default: \{why}"
-    )
 }
 
 # refuseUninferredArmParam -- an arm constructed without the type's arguments
@@ -36015,7 +32532,15 @@ mintSumArmInstance: function {
             armSubs.set key: ppn value: subT
         } else {
             gparams: st.reg.genericParamNamesOf :tdecl
-            bindPartialParamSubs :st :ast :gparams paramTid: payId argTid: subT subs: armSubs
+            (
+                typeargs.bindPartialParamSubs
+                :st
+                :ast
+                :gparams
+                paramTid: payId
+                argTid: subT
+                subs: armSubs
+            )
         }
     }
     vsH: IdMapV zast.nameid v: u64
@@ -36056,125 +32581,6 @@ mintSumArmInstance: function {
         return (callleg handled: true tid: mintedT)
     }
     return (callleg handled: false tid: ztypes.tid)
-}
-
-# armBaseIsApplication -- the arm construction's base is written as a type
-# application (`(Either t: i64).pick`), not the bare type.
-armBaseIsApplication: function {ast: Ast.view call: callref} out bool is {
-    cq: ast.nodes.get i: call.callable
-    if cq.dottedpath.not then return false
-    return (ast.nodes.get i: cq.parent).call
-}
-
-# writtenPartialBase -- the partial of template `dtp` that an arm construction's
-# base application names (`(resultval t: t e: bool)` in a generic body); 0 when
-# the base is no application or its type is no such partial.
-writtenPartialBase: function {
-    st: zenv.ZSymbolTable.view
-    ast: Ast.view
-    call: callref
-    dtp: ztypes.tid
-} out ztypes.tid is {
-    none: ztypes.tid
-    baseId: zast.nodeid
-    cq: ast.nodes.get i: call.callable
-    if cq.dottedpath when (ast.nodes.get i: cq.parent).call then baseId = cq.parent
-    if baseId.isZero then return none
-    bt: walkTypeOf :st nid: baseId
-    if (st.reg.isPartialOf tid: bt).not then return none
-    if (st.reg.genericOriginOf tid: bt) != dtp then return none
-    return bt
-}
-
-# checkGenericTypeCall -- the callable named a GENERIC type, so the call is an
-# instantiation: bind the type arguments, mint the mono, and answer its id.
-checkGenericTypeCall: function {
-    st: zenv.ZSymbolTable
-    unitDecl: ztypes.declid
-    ast: Ast
-    call: callref
-    dtp: ztypes.tid
-} out callleg is {
-    result: ztypes.tid
-    validateGenericTypeArgs :ast :st :unitDecl :call tplId: dtp allowFrom: true
-    # Generic template: infer the mono (mirrors
-    # _infer_generic_union_construction). A NULL-payload
-    # arm with an argument names the type EXPLICITLY
-    # (resolved as a type, never value-walked); a
-    # param-payload arm infers from the value's type.
-    armnId: dottedChildNameId :ast n: (ast.nodes.get i: call.callable)
-    forceMemberOf :st :ast parentTypeId: dtp nameId: armnId
-    co: st.typing.declChildOfId parentTypeId: dtp nameId: armnId
-    payId: co.or d: ztypes.tid.zero
-    if payId.notZero then {
-        isNullPay: conform.isNullTid reg: st.reg tid: payId
-        subT: ztypes.tid
-        argFound: false
-        kArgIter: u64
-        for kArgIter < call.nargs loop {
-            fargId: zast.callArgAt :ast nid: call.nid i: kArgIter
-            kArgIter = kArgIter + 1
-            farg: argRefAt :ast nid: fargId
-            if farg.nid.notZero when argFound.not then {
-                argFound = true
-                if isNullPay then {
-                    # the argument names the payload type: a name, a
-                    # unit-qualified path (optionval.none ztypes.zlockstate) or
-                    # an instantiation ((array t: i64 to: 2)) as a whole
-                    etn: paramTypeBaseNameId :ast op: (ast.nodes.get i: farg.operation)
-                    subT = (
-                        ztypes.tid.create
-                        from: (typeArgTid :st :ast :unitDecl opId: farg.operation baseId: etn)
-                    )
-                } else {
-                    argTid: checkMovedValueAt :st :unitDecl :ast nid: farg.operation owning: true
-                    # the value built keeps what its payload keeps
-                    composeChildRecord :st nid: farg.operation
-                    materialisedTid: materialiseLiteral :ast :st t: argTid
-                    subT = materialisedTid
-                    (
-                        movePayloadIntoArm
-                        :st
-                        :ast
-                        op: farg.operation
-                        vt: materialisedTid
-                        nodeid: farg.nid
-                        lineno: farg.lineno
-                        colno: farg.colno
-                        :dtp
-                        armId: armnId
-                    )
-                }
-            }
-        }
-        # the type written with its arguments, one still a parameter
-        # (`(resultval t: t e: bool).ok v`), is the partial its application built
-        appT: writtenPartialBase :st :ast :call :dtp
-        if appT.notZero then {
-            stampGate :st nid: call.nid tid: appT
-            st.typing.callKind.set key: call.nid value: zast.callkind.unionCreate
-            return (callleg handled: true tid: appT)
-        }
-        # written with its arguments and still the template: the application
-        # was refused where it is written
-        if (armBaseIsApplication :ast :call) then return (callleg handled: true tid: ztypes.tid)
-        if subT.notZero then {
-            sleg: (
-                mintSumArmInstance
-                :st
-                :unitDecl
-                :ast
-                :call
-                :dtp
-                :subT
-                :isNullPay
-                :payId
-                armId: armnId
-            )
-            if sleg.handled then return sleg
-        }
-    }
-    return (callleg handled: false tid: result)
 }
 
 # movePayloadIntoArm -- an owned arm stores its payload OWNED: a bare-name
@@ -36563,11 +32969,11 @@ checkDottedTypeApplication: function {
     tplId: ztypes.tid
 } out callleg is {
     if (isGenericTypedef :st tid: tplId) then {
-        gtdD: checkGenericTypedefCall :st :unitDecl :ast :call :tplId
+        gtdD: typeargs.checkGenericTypedefCall :st :unitDecl :ast :call :tplId
         if gtdD.handled then return gtdD
     }
     errD: st.typing.errors.length
-    vokD: validateGenericTypeArgs :ast :st :unitDecl :call :tplId allowFrom: false
+    vokD: typeargs.validateGenericTypeArgs :ast :st :unitDecl :call :tplId allowFrom: false
     gres: genericTypeConstruction :ast :st :unitDecl :call :tplId
     namesType: pathNamesType :st :ast nid: call.callable
     if gres.notZero then {
@@ -36604,7 +33010,7 @@ checkResolvedValueCall: function {
         isGeneric: st.reg.isGenericOf tid: dtp
         if isGeneric when (unitNestedSelf :st :ast tid: dtp).isZero then isGenT = true
         if isGenT then {
-            gleg: checkGenericTypeCall :st :unitDecl :ast :call :dtp
+            gleg: typeargs.checkGenericTypeCall :st :unitDecl :ast :call :dtp
             if gleg.handled then return gleg
             result = gleg.tid
         } else {
@@ -36863,11 +33269,19 @@ checkBareGenericCall: function {
     }
     if gtt != ztypes.ztypetype.functionType then {
         if (isGenericTypedef :st tid: funcId) then {
-            gtd: checkGenericTypedefCall :st :unitDecl :ast :call tplId: funcId
+            gtd: typeargs.checkGenericTypedefCall :st :unitDecl :ast :call tplId: funcId
             if gtd.handled then return gtd
         }
         errB: st.typing.errors.length
-        vok: validateGenericTypeArgs :ast :st :unitDecl :call tplId: funcId allowFrom: false
+        vok: (
+            typeargs.validateGenericTypeArgs
+            :ast
+            :st
+            :unitDecl
+            :call
+            tplId: funcId
+            allowFrom: false
+        )
         gres: genericTypeConstruction :ast :st :unitDecl :call tplId: funcId
         if gres.notZero then {
             checkTypeApplicationValue :ast :st :call tid: gres
@@ -37502,7 +33916,7 @@ typeDefinesConstruction: function {st: zenv.ZSymbolTable.view tid: ztypes.tid} o
 wrappedCalleeIsContainer: function {ast: Ast st: zenv.ZSymbolTable wcv: ztypes.tid} out bool is {
     wgi: st.reg.genericOriginOf tid: wcv
     if wgi.isZero then return false
-    return (templateTakesCapacity :ast :st tplId: wgi)
+    return (typeargs.templateTakesCapacity :ast :st tplId: wgi)
 }
 
 # wrappedCalleeIsCallResult -- the parenthesised callee is an ordinary call, so
@@ -38290,7 +34704,7 @@ checkCall: function {
     }
     # a spec has no body to call; a local holding a reference of its type does
     if cnId.notZero when (st.lookupVarId nameId: cnId).none when (
-        refuseSpecValue
+        typeargs.refuseSpecValue
         :st
         :ast
         :unitDecl
@@ -38366,84 +34780,6 @@ healGenericReturn: function {
                 st.reg.setReturnType typeId: mid value: rt
             }
         }
-    }
-}
-
-# bindPartialParamSubs -- a parameter declared as a partial specialisation binds
-# its template's parameters POSITIONALLY against the argument's own arguments:
-# `(Cell :t)` met by a `Cell_i64` binds `t` to i64. A bare parameter binds by
-# name, which is what the caller's holder list already does; this is the case
-# where the name is buried one or more levels inside a composite, so there is no
-# holder to read. The two types must share an origin and an arity, and an
-# argument that is itself a partial recurses -- that is what makes
-# `(Pair t: (Cell :t))` bind at all. A parameter over a generic PROTOCOL met by
-# a type that implements an instance of it (`(Job R)` met by a `Name` declaring
-# `job: (Job String)`) binds against that instance's arguments.
-bindPartialParamSubs: function {
-    st: zenv.ZSymbolTable
-    ast: Ast
-    gparams: (ListVal zast.nameid).view
-    paramTid: ztypes.tid
-    argTid: ztypes.tid
-    subs: (IdMapV zast.nameid v: ztypes.tid)
-} is {
-    if (st.reg.isPartialOf tid: paramTid).not then return
-    po9: st.reg.genericOriginOf tid: paramTid
-    if po9.isZero then return
-    if (st.reg.genericOriginOf tid: argTid) != po9 then {
-        conf: conform.implementedInstanceOf :st impl: argTid origin: po9
-        if conf.notZero then bindPartialParamSubs :st :ast :gparams :paramTid argTid: conf :subs
-        return
-    }
-    n9: st.reg.genericArgCount specId: paramTid
-    if (st.reg.genericArgCount specId: argTid) != n9 then return
-    i9: u64
-    for i9 < n9 loop {
-        pa9: st.reg.genericTypeArgAt specId: paramTid ordinal: i9
-        aa9: st.reg.genericTypeArgAt specId: argTid ordinal: i9
-        # a numeric argument binds no parameter: a numeric parameter is written,
-        # never inferred
-        if (st.reg.genericValueArgAt specId: argTid ordinal: i9).some then {
-            i9 = i9 + 1
-            continue
-        }
-        if (st.reg.isPartialOf tid: pa9) then {
-            bindPartialParamSubs :st :ast :gparams paramTid: pa9 argTid: aa9 :subs
-        } else {
-            bindOneGenericParam :st :ast :gparams paramTid: pa9 argTid: aa9 :subs
-        }
-        i9 = i9 + 1
-    }
-}
-
-# bindOneGenericParam -- bind ONE of the template's generic parameters, named by
-# the spelling its canonical GENERIC_PARAM type carries, to the type that met it.
-# A name the template does not declare is not a binding, and a name already bound
-# keeps its first answer.
-bindOneGenericParam: function {
-    st: zenv.ZSymbolTable
-    ast: Ast
-    gparams: (ListVal zast.nameid).view
-    paramTid: ztypes.tid
-    argTid: ztypes.tid
-    subs: (IdMapV zast.nameid v: ztypes.tid)
-} is {
-    if argTid.isZero then return
-    pn9: st.reg.nameOf tid: paramTid
-    if pn9.length == 0 then return
-    nm9: nameIdOf :ast name: pn9.stringView
-    if nm9.isZero then return
-    isParam: false
-    for each gp9: gparams loop {
-        if gp9 == nm9 then isParam = true
-    }
-    if isParam.not then return
-    bound: subs.get key: nm9
-    match (
-        bound
-    ) case some then null case none then {
-        sv9: argTid
-        subs.set key: nm9 value: sv9
     }
 }
 
@@ -38921,7 +35257,15 @@ bindValueArg: function {
     # a composite parameter buries the template's parameter name one or more
     # levels down, so there is no holder to read: unify the declared partial
     # against the argument's own arguments instead
-    if mat.notZero then bindPartialParamSubs :st :ast :gparams paramTid: ptid argTid: mat :subs
+    if mat.notZero then (
+        typeargs.bindPartialParamSubs
+        :st
+        :ast
+        :gparams
+        paramTid: ptid
+        argTid: mat
+        :subs
+    )
     if (isGenericParamLabel :gparams label: holder).not then {
         checkConcreteGenericArg :st :ast :arg :ptid :pnId vt: avt
         return
@@ -38929,245 +35273,6 @@ bindValueArg: function {
     if mat.notZero then {
         bindOrConflict :st :ast :arg :subs :holder argTid: mat walkedTid: avt
     }
-}
-
-# bindCallNumericParam -- a generic call's numeric parameter bound: the value
-# the call writes, else its default (`dvs`), else refused -- a numeric
-# parameter is never inferred. False when refused.
-bindCallNumericParam: function {
-    st: zenv.ZSymbolTable
-    unitDecl: ztypes.declid
-    ast: Ast
-    call: callref
-    tdecl: ztypes.declid
-    param: zast.nameid
-    cd: ztypes.constraintdesc
-    dvs: (IdMapV zast.nameid v: u64).view
-    sfx: String
-    vsI: (IdMapV zast.nameid v: u64)
-} out bool is {
-    dnv: dvs.get key: param
-    if (callWritesLabel :ast :call label: param).not when dnv.some then {
-        appendNumericArgSuffix :sfx bits: dnv :cd
-        vsI.set key: param value: dnv
-        return true
-    }
-    na: genericCallNumericArg :st :unitDecl :ast :call :tdecl :param
-    return (bindNumericArg :sfx valSubs: vsI :param :na :cd)
-}
-
-# callWritesLabel -- the call writes an argument labelled `label`.
-callWritesLabel: function {ast: Ast.view call: callref label: zast.nameid} out bool is {
-    k: u64
-    for k < call.nargs loop {
-        arg: argRefAt :ast nid: (zast.callArgAt :ast nid: call.nid i: k)
-        k = k + 1
-        if arg.nid.notZero when arg.name == label then return true
-    }
-    return false
-}
-
-# genericCallNumericArg -- the value a generic function call writes for its
-# numeric parameter `param`. A numeric parameter is not inferred from the other
-# arguments, so an unwritten one is refused.
-genericCallNumericArg: function {
-    st: zenv.ZSymbolTable
-    unitDecl: ztypes.declid
-    ast: Ast
-    call: callref
-    tdecl: ztypes.declid
-    param: zast.nameid
-} out numarg is {
-    kAiter: u64
-    for kAiter < call.nargs loop {
-        argId: zast.callArgAt :ast nid: call.nid i: kAiter
-        kAiter = kAiter + 1
-        arg: argRefAt :ast nid: argId
-        if arg.nid.notZero when arg.name == param then {
-            return (
-                numericGenericArg
-                :ast
-                :st
-                :unitDecl
-                scope: st.curScope
-                :tdecl
-                :param
-                argOp: arg.operation
-                inBody: true
-            )
-        }
-    }
-    pn: zast.nameTextAt :ast ref: param
-    tn: specWrittenName :st :ast tid: (st.typing.declTypeOf declId: tdecl)
-    (
-        addErrorWithHint
-        :st
-        nodeid: call.nid
-        lineno: call.lineno
-        colno: call.colno
-        e: zast.err.callError
-        msg: "missing required argument '\{pn}': generic parameter '\{pn}' of '\{tn}' takes a compile-time integer, which is never inferred"
-        note: String
-        hint: String
-        width: 0
-    )
-    return (numarg state: numargstate.refused bits: 0)
-}
-
-# typeMentionsParam -- whether `tid` is the template's parameter `param`, or an
-# instance with it among its arguments (`(List T)`), at any depth.
-typeMentionsParam: function {
-    st: zenv.ZSymbolTable.view
-    tdecl: ztypes.declid
-    tid: ztypes.tid
-    param: zast.nameid
-} out bool is {
-    if (st.reg.genericParamNameOfTid :tdecl ptid: tid) == param then return true
-    if (st.reg.isPartialOf :tid).not then return false
-    ai: u64
-    for ai < (st.reg.genericArgCount specId: tid) loop {
-        at: st.reg.genericTypeArgAt specId: tid ordinal: ai
-        ai = ai + 1
-        if at.notZero when (typeMentionsParam :st :tdecl tid: at :param) then return true
-    }
-    return false
-}
-
-# holdersMention -- whether a parameter of the function is declared over the
-# generic parameter `param`.
-holdersMention: function {
-    st: zenv.ZSymbolTable.view
-    tdecl: ztypes.declid
-    pHolderIds: (ListVal ztypes.tid).view
-    param: zast.nameid
-} out bool is {
-    for each hid: pHolderIds loop {
-        if (typeMentionsParam :st :tdecl tid: hid :param) then return true
-    }
-    return false
-}
-
-# callArgsTyped -- whether every value argument of the call walked to a type.
-callArgsTyped: function {st: zenv.ZSymbolTable ast: Ast.view call: callref} out bool is {
-    k: u64
-    for k < call.nargs loop {
-        aId: zast.callArgAt :ast nid: call.nid i: k
-        k = k + 1
-        arg: argRefAt :ast nid: aId
-        if arg.nid.isZero then continue
-        if (walkTypeOf :st nid: arg.operation).isZero then return false
-    }
-    return true
-}
-
-# reportUninferredCallParam -- a generic function's parameter that no argument
-# names and none is written for: the call has no instance to reach. A
-# parameter declared over it whose argument is missing, or an argument that did
-# not type (an error since `errI`), has said why already.
-reportUninferredCallParam: function {
-    st: zenv.ZSymbolTable
-    ast: Ast.view
-    call: callref
-    param: zast.nameid
-    fname: StringView
-    tdecl: ztypes.declid
-    pHolderIds: (ListVal ztypes.tid).view
-    errI: u64
-} is {
-    if st.typing.errors.length != errI then return
-    if (callArgsTyped :st :ast :call).not then return
-    if (holdersMention :st :tdecl :pHolderIds :param) then return
-    pnT: zast.nameTextAt :ast ref: param
-    (
-        addErrorWithHint
-        :st
-        nodeid: call.nid
-        lineno: call.lineno
-        colno: call.colno
-        e: zast.err.genericError
-        msg: "cannot infer generic parameter '\{pnT}' for '\{fname}'"
-        note: "no argument is declared as '\{pnT}', so no value names it"
-        hint: "write the type argument: '\{pnT}: <type>'"
-        width: 0
-    )
-}
-
-# bindCallParams -- a generic call's parameters bound, in declaration order:
-# a numeric one from what the call writes or its default, any other from the
-# inference (`subs`, defaults filled) with its bound checked; each adds its
-# component to `sfx`. A parameter nothing binds is reported
-# (reportUninferredCallParam). False when any is unbound.
-bindCallParams: function {
-    st: zenv.ZSymbolTable
-    unitDecl: ztypes.declid
-    ast: Ast
-    call: callref
-    tdecl: ztypes.declid
-    gparams: (ListVal zast.nameid).view
-    subs: (IdMapV zast.nameid v: ztypes.tid).view
-    dvs: (IdMapV zast.nameid v: u64).view
-    sfx: String
-    vsI: (IdMapV zast.nameid v: u64)
-    fname: StringView
-    pHolderIds: (ListVal ztypes.tid).view
-    errI: u64
-} out bool is {
-    allOk: true
-    genericParamIter: gparams.iterate
-    for gp3: genericParamIter loop {
-        cd4: st.reg.genericParamConstraintOf :tdecl paramName: gp3
-        if cd4.numKind.has then {
-            if (
-                bindCallNumericParam
-                :st
-                :unitDecl
-                :ast
-                :call
-                :tdecl
-                param: gp3
-                cd: cd4
-                :dvs
-                :sfx
-                :vsI
-            ).not then allOk = false
-            continue
-        }
-        ggot: subs.get key: gp3
-        match (
-            ggot
-        ) case some then {
-            (
-                conform.checkConstraintSat
-                :st
-                :ast
-                :tdecl
-                paramName: gp3
-                argTid: ggot
-                at: call.nid
-                lineno: call.lineno
-                colno: call.colno
-            )
-            an4: monoValName :st :ast tid: ggot
-            sfx.append s: "_"
-            sfx.append s: an4
-        } case none then {
-            if allOk then {
-                (
-                    reportUninferredCallParam
-                    :st
-                    :ast
-                    :call
-                    param: gp3
-                    :fname
-                    :tdecl
-                    :pHolderIds
-                    :errI
-                )
-            }
-            allOk = false
-        }
-    }
-    return allOk
 }
 
 
@@ -41940,7 +38045,7 @@ constOwnerDeclForId: function {
     # file unit. Asking only the innermost left a constant of an enclosing
     # inline unit unreachable from a unit nested inside it.
     dnm: nameId
-    cur: scopeFor typing: st.typing :scope :unitDecl
+    cur: typeargs.scopeFor typing: st.typing :scope :unitDecl
     for cur.notZero loop {
         if cur == st.typing.coreUnitRoot then {
             cur = ztypes.declid
@@ -45209,8 +41314,8 @@ resolveCalledConstantDef: function {
     # the callee's root name
     cbn: String
     ccn: ast.nodes.get i: defn.callable
-    cbn = atomName :ast n: ccn
-    if cbn.length == 0 then cbn = dottedRootName :ast n: ccn
+    cbn = typeargs.atomName :ast n: ccn
+    if cbn.length == 0 then cbn = typeargs.dottedRootName :ast n: ccn
     if cbn.length > 0 then {
         # a unit declared in THIS file has no registry entry yet, and
         # a generic-unit binding is no file unit at all: the Decl tree
@@ -45265,7 +41370,14 @@ resolveCalledConstantDef: function {
             ctpl: monoRefTemplateTid :st :scope :ast :unitDecl name: cbn.stringView
             # a head that is a type application's -- a path through a unit
             # (`pr.Pair`) included -- names its template by the one answer
-            htpl: typeApplicationTemplate :st :scope :ast :unitDecl callableNid: defn.callable
+            htpl: (
+                typeargs.typeApplicationTemplate
+                :st
+                :scope
+                :ast
+                :unitDecl
+                callableNid: defn.callable
+            )
             if htpl.notZero then ctpl = htpl
             ckn: ctpl.notZero
             # a GENERIC template is the one callee shape that can be
@@ -45643,7 +41755,7 @@ appliesNoTemplate: function {
     # a choice value (constOfStaticChoice) names an arm, not a template
     chHead: staticChoiceHead :st :scope :ast :unitDecl callableId: call.callable
     if chHead.notZero then return true
-    htpl: typeApplicationTemplate :st :scope :ast :unitDecl callableNid: call.callable
+    htpl: typeargs.typeApplicationTemplate :st :scope :ast :unitDecl callableNid: call.callable
     if htpl.isZero or (st.reg.isGenericOf tid: htpl) then return false
     return (st.reg.typetypeOf typeId: htpl).isUserFamily
 }
@@ -47346,25 +43458,6 @@ unitDeclOfName: function {
     return (typing.declFindChild parentDeclId: typing.programRoot :nameId)
 }
 
-# scopeFor -- the scope a name written in unit `unitDecl` resolves from:
-# `scope`'s unit scope when `scope` lies inside that unit (a body, a nested
-# unit, a template), else the unit's root -- a caller naming another unit is
-# a qualified probe (`core`'s `i64` for a literal's default, from a unit that
-# shadows `i64`) and starts there. 0 for no unit (a prelude-only probe).
-scopeFor: function {
-    typing: ztyping.ZTyping.view
-    unitDecl: ztypes.declid
-    scope: ztypes.declid
-} out ztypes.declid is {
-    if unitDecl.isZero then return ztypes.declid.zero
-    # the scope's nearest unit scope first: it lies within the unit's root
-    # exactly when the scope does, and the climb from a unit scope to the
-    # root is a hop or two where the climb from a body scope is many
-    uf: unitScopeOf :typing declId: scope
-    if (scopeIsWithin :typing scope: uf root: unitDecl) then return uf
-    return unitDecl
-}
-
 # nsScopeOf -- the NESTED unit scope a name written in unit `unitDecl`
 # resolves from -- scopeFor's answer when it is not the unit's own root --
 # or 0 at the top level of the unit. The scope the members of a namespace or
@@ -47374,7 +43467,7 @@ nsScopeOf: function {
     unitDecl: ztypes.declid
     scope: ztypes.declid
 } out ztypes.declid is {
-    f: scopeFor typing: st.typing :scope :unitDecl
+    f: typeargs.scopeFor typing: st.typing :scope :unitDecl
     if f.isZero then return f
     if f == unitDecl then return ztypes.declid.zero
     return f
@@ -47535,7 +43628,12 @@ bareNameReaches: function {
     bd: templateDeclOf reg: st.reg typing: st.typing tid: base
     if bd.isZero then return true
     nameId: (st.typing.decls.get i: bd).name
-    hit: envLookup :st scope: (scopeFor typing: st.typing scope: site unitDecl: site) :nameId
+    hit: (
+        envLookup
+        :st
+        scope: (typeargs.scopeFor typing: st.typing scope: site unitDecl: site)
+        :nameId
+    )
     if hit.declId == bd then return true
     if hit.declId.isZero then return false
     hd: st.typing.decls.get i: hit.declId
@@ -47791,7 +43889,7 @@ walkLookupTyperefByIdRo: function {
     baseId: zast.nameid
 } out optionval ztypes.tid is {
     if baseId.isZero then return (optionval.none ztypes.tid)
-    at: nearestScopeOf :typing scope: (scopeFor :typing :scope :unitDecl) :baseId
+    at: nearestScopeOf :typing scope: (typeargs.scopeFor :typing :scope :unitDecl) :baseId
     if at.isZero then return (optionval.none ztypes.tid)
     r: probeScopeTyperefRo :ast :typing root: at nameId: baseId depth: 0
     if r.isZero then return (optionval.none ztypes.tid)
@@ -47974,7 +44072,7 @@ walkLookupTyperefById: function {
     # an alias of a type enclosing the scope is nearer than any unit's name
     ea: enclosingAsAliasTid :st :ast :scope nameId: baseId
     if ea.notZero then return (optionval.some ea)
-    walkScope: scopeFor typing: st.typing :scope :unitDecl
+    walkScope: typeargs.scopeFor typing: st.typing :scope :unitDecl
     return (walkLookupTyperefFrom :st :ast scope: walkScope :baseId)
 }
 
