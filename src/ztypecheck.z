@@ -46,7 +46,9 @@ public: unit {
     :dissectedArgOf
     :dissectedArmOf
     :dissectedArgText
-    :stdTidRo
+    # stdTid for a caller holding only a view of the tree: the memoised or already-resolved
+    # id, 0 when the type has not been resolved
+    stdTidRo: stdtypes.stdTidRo
     :stdDeclRo
     :firstGenericParamId
     :bareNameReaches
@@ -654,7 +656,7 @@ isNativeIteratorTid: function {ast: Ast st: zenv.ZSymbolTable tid: ztypes.tid} o
 # SHARED for a readonly view, EXCLUSIVE for a window -- and the payload cannot
 # be moved out.
 isViewFamilyTid: function {ast: Ast st: zenv.ZSymbolTable tid: ztypes.tid} out bool is {
-    if (isMutableViewTid :ast :st :tid) then return true
+    if (stdtypes.isMutableViewTid :ast :st :tid) then return true
     if tid.isZero then return false
     if tid == (stdTid :ast :st wk: zast.wellKnown.slot.tyStringView) then return true
     if tid == (stdTid :ast :st wk: zast.wellKnown.slot.tyByteView) then return true
@@ -664,51 +666,13 @@ isViewFamilyTid: function {ast: Ast st: zenv.ZSymbolTable tid: ztypes.tid} out b
     if vog.isZero then return false
     if vog == (stdTid :ast :st wk: zast.wellKnown.slot.tyOptionView) then return true
     if vog == (stdTid :ast :st wk: zast.wellKnown.slot.tyOptionViewVal) then return true
-    if vog == (stdTidRo :ast :st wk: zast.wellKnown.slot.tyStaticView) then return true
+    if vog == (stdtypes.stdTidRo :ast :st wk: zast.wellKnown.slot.tyStaticView) then return true
     if vog == (stdTid :ast :st wk: zast.wellKnown.slot.tyListView) then return true
     if vog == (stdTid :ast :st wk: zast.wellKnown.slot.tyListViewVal) then return true
     if vog == (stdTid :ast :st wk: zast.wellKnown.slot.tyMapEntry) then return true
     if vog == (stdTid :ast :st wk: zast.wellKnown.slot.tyMapEntryRV) then return true
     if vog == (stdTid :ast :st wk: zast.wellKnown.slot.tyMapEntryVR) then return true
     if vog == (stdTid :ast :st wk: zast.wellKnown.slot.tyMapEntryVV) then return true
-    return false
-}
-
-# isMutableViewTid -- a view that WRITES: a SpanVal window, the SpanPair of two
-# a split answers, or an OptionMut (either family) a writable reader hands back.
-# It borrows like every view, but the storage it reaches is written through it.
-isMutableViewTid: function {ast: Ast st: zenv.ZSymbolTable tid: ztypes.tid} out bool is {
-    if tid.isZero then return false
-    vog: st.reg.genericOriginOf :tid
-    if vog.isZero then return false
-    if vog == (stdTid :ast :st wk: zast.wellKnown.slot.tySpanVal) then return true
-    if vog == (stdTidRo :ast :st wk: zast.wellKnown.slot.tyOptionMut) then return true
-    if vog == (stdTidRo :ast :st wk: zast.wellKnown.slot.tyOptionMutVal) then return true
-    return vog == (stdTid :ast :st wk: zast.wellKnown.slot.tySpanPair)
-}
-
-# refBearingContainer -- a container that can hold a REFERENCE on at least one
-# side: a list of references, a map with a reference key or value, a set of
-# references, an id map with a reference value. Those six declare no `.copy`
-# and never will -- a bitwise element copy would give the reference two owners,
-# and anything else is a judgement about a layout the compiler did not write.
-# The five all-valtype containers declare one, so they resolve it as an
-# ordinary member and never reach the refusal this answers for.
-refBearingContainer: function {
-    ast: Ast.view
-    st: zenv.ZSymbolTable
-    tid: ztypes.tid
-} out bool is {
-    if tid.isZero then return false
-    baseRb: tid
-    rgRb: st.reg.genericOriginOf :tid
-    if rgRb.notZero then baseRb = rgRb
-    if baseRb == (stdTidRo :ast :st wk: zast.wellKnown.slot.tyListRef) then return true
-    if baseRb == (stdTidRo :ast :st wk: zast.wellKnown.slot.tyMapRR) then return true
-    if baseRb == (stdTidRo :ast :st wk: zast.wellKnown.slot.tyMapRV) then return true
-    if baseRb == (stdTidRo :ast :st wk: zast.wellKnown.slot.tyMapVR) then return true
-    if baseRb == (stdTidRo :ast :st wk: zast.wellKnown.slot.tySetRef) then return true
-    if baseRb == (stdTidRo :ast :st wk: zast.wellKnown.slot.tyIdMapR) then return true
     return false
 }
 
@@ -4613,7 +4577,7 @@ refuseZerolessArray: function {
     at: zast.nodeid
 } out bool is {
     if st.typing.staticTypesSeen.not then return false
-    if tplId != (stdTidRo :ast :st wk: zast.wellKnown.slot.tyArray) then return false
+    if tplId != (stdtypes.stdTidRo :ast :st wk: zast.wellKnown.slot.tyArray) then return false
     seen: ListVal ztypes.tid
     if (lacksZero :st tid: elemTid :seen).not then return false
     tn: specWrittenName :st :ast tid: elemTid
@@ -5352,8 +5316,8 @@ mintMonoRefParts: function {
         if memberIdAt.isZero then return ztypes.tid.zero
         # backstop for a sized record whose size literal did not parse as a
         # decimal (the value-keyed trie path arms sized specs centrally)
-        if (isSizedTemplate :ast :st tid: tplId) then {
-            mintCollectionChildren :st :ast monoId: memberIdAt templateId: tplId
+        if (stdtypes.isSizedTemplate :ast :st tid: tplId) then {
+            stdtypes.mintCollectionChildren :st :ast monoId: memberIdAt templateId: tplId
         }
         recordMonoRef :st :ast mono: memberIdAt :nid at: callableNid :unitDecl
         return memberIdAt
@@ -7617,32 +7581,6 @@ paramTypeBaseNameId: function {ast: Ast.view op: astnode.view} out zast.nameid i
     }
 }
 
-# isBorrowReftypeCollection -- the parameter type is an instance of a system
-# collection whose mono is a non-heap-allocated reftype, which takes the
-# reftype-param BORROW default: List and ListView (stack struct + heap buffer),
-# and the id-keyed containers (a header plus two heap arrays, created BY VALUE).
-# Set/Map monos are heap-allocated (no BORROW); the native iterator views have
-# no destructor (no BORROW); str/array are valtypes. Asked of the instance's
-# template, so a program's own `List` is its own type.
-isBorrowReftypeCollection: function {
-    # the tree the system's templates are looked up through
-    ast: Ast.view
-    # the table holding the instance and its template
-    st: zenv.ZSymbolTable
-    # the parameter's type
-    tid: ztypes.tid
-} out bool is {
-    o: st.reg.genericOriginOf :tid
-    if o.isZero then return false
-    if o == (stdTidRo :ast :st wk: zast.wellKnown.slot.tyListRef) then return true
-    if o == (stdTidRo :ast :st wk: zast.wellKnown.slot.tyListVal) then return true
-    if o == (stdTidRo :ast :st wk: zast.wellKnown.slot.tyListView) then return true
-    if o == (stdTidRo :ast :st wk: zast.wellKnown.slot.tyListViewVal) then return true
-    if o == (stdTidRo :ast :st wk: zast.wellKnown.slot.tyIdMapR) then return true
-    if o == (stdTidRo :ast :st wk: zast.wellKnown.slot.tyIdMapV) then return true
-    return o == (stdTidRo :ast :st wk: zast.wellKnown.slot.tyIdSet)
-}
-
 # demandReturnType -- demand a function's return-type names (`out (Result t:
 # u64 e: IoError)` -> Result), so a type named only in a return position is
 # resolved.
@@ -8243,7 +8181,7 @@ registerValueParam: function {
     ) case some then {
         st.typing.setChildOwnershipId parentTypeId: fid nameId: pm.name ownership: pown
     } case none then {
-        if (paramIsBorrowReftype :ast :st tid: cid) then {
+        if (stdtypes.paramIsBorrowReftype :ast :st tid: cid) then {
             (
                 st.typing.setChildOwnershipId
                 parentTypeId: fid
@@ -8846,35 +8784,6 @@ refuseThisNamedReceiver: function {st: zenv.ZSymbolTable ast: Ast.view pm: argre
 }
 
 
-# paramIsBorrowReftype -- the ownership a parameter with no explicit marker
-# takes, asked of its resolved type: a class or an owning union borrows, as
-# String and the borrow-default collections do, whichever unit declared it and
-# however the parameter spells it (an application, a typedef, a dotted path).
-# StringView, the view unions (OptionView, OptionMut), a native class and every valtype do not. A
-# typedef answers as the end of its chain, an instance as its template.
-paramIsBorrowReftype: function {
-    ast: Ast
-    st: zenv.ZSymbolTable
-    # the parameter's resolved type
-    tid: ztypes.tid
-} out bool is {
-    cid: typedefChaseTid typing: st.typing :tid
-    if cid.isZero then return false
-    if cid == (stdTidRo :ast :st wk: zast.wellKnown.slot.tyString) then return true
-    if cid == (stdTidRo :ast :st wk: zast.wellKnown.slot.tyStringView) then return false
-    if (isBorrowReftypeCollection :ast :st tid: cid) then return true
-    o: st.reg.genericOriginOf tid: cid
-    if o.notZero then cid = o
-    if cid == (stdTidRo :ast :st wk: zast.wellKnown.slot.tyOptionView) then return false
-    if cid == (stdTidRo :ast :st wk: zast.wellKnown.slot.tyOptionViewVal) then return false
-    if cid == (stdTidRo :ast :st wk: zast.wellKnown.slot.tyOptionMut) then return false
-    if cid == (stdTidRo :ast :st wk: zast.wellKnown.slot.tyOptionMutVal) then return false
-    if cid == (stdTidRo :ast :st wk: zast.wellKnown.slot.tyStaticView) then return false
-    if (st.reg.isNativeOf tid: cid) then return false
-    tt: st.reg.typetypeOf typeId: cid
-    return (tt == ztypes.ztypetype.classType) or (tt == ztypes.ztypetype.unionType)
-}
-
 # typedefChaseTid -- the chain-end base tid of a typedef (tid itself when it
 # is not one): a typedef behaves exactly as its base wherever its ownership,
 # equality, casts or C layout are asked.
@@ -9132,87 +9041,6 @@ forceMemberDecl: function {
     return (optionval.none ztypes.tid)
 }
 
-# nativeMethodForInstance -- give `inst`, an instance of a native generic that is
-# no builtin collection, its own function for the method `nameId`: the
-# template's method with the type's parameters replaced by the instance's
-# arguments, in what it answers and in what it takes (cloneMethodInto). Made
-# where the member is demanded by name, which a use of it does. Nothing for any
-# other owner, for a member the instance already owns, and for a method whose
-# signature names no parameter of the type: the template's own function serves
-# every instance.
-nativeMethodForInstance: function {
-    st: zenv.ZSymbolTable
-    ast: Ast
-    inst: ztypes.tid
-    nameId: zast.nameid
-} is {
-    og: st.reg.genericOriginOf tid: inst
-    if og.isZero or (st.reg.isPartialOf tid: inst) then return
-    if (st.reg.isNativeOf tid: og).not then return
-    tf: (st.typing.declChildOfId parentTypeId: og :nameId).or d: ztypes.tid.zero
-    if tf.isZero then return
-    # the instance's member is still the template's own function
-    if (
-        ((st.typing.declChildOfId parentTypeId: inst :nameId).or d: ztypes.tid.zero) != tf
-    ) then return
-    if (st.reg.typetypeOf typeId: tf) != ztypes.ztypetype.functionType then return
-    if (signatureNamesParams :st fn: tf).not then return
-    iterOut: ListVal bool
-    if (templateIsCollection :ast :st templateId: og :iterOut) then return
-    tdecl: st.typing.declIdOfType typeId: og
-    if tdecl.isZero then return
-    pn: st.reg.genericParamNamesOf :tdecl
-    n: st.reg.genericArgCount specId: inst
-    if pn.length < n then n = pn.length
-    idSubs: IdMapV ztypes.tid v: ztypes.genericarg
-    i: u64
-    for i < n loop {
-        ta: st.reg.genericTypeArgAt specId: inst ordinal: i
-        p: pn.get :i
-        i = i + 1
-        if ta.isZero then continue
-        (
-            idSubs.set
-            key: (genericParamTidMint :st :ast :tdecl nameId: p)
-            value: ztypes.genericarg.typeArg ta
-        )
-    }
-    if idSubs.length == 0 then return
-    m: zast.nameTextCopy :ast ref: nameId
-    (
-        cloneMethodInto
-        :ast
-        :st
-        unitDecl: (unitDeclOfTid reg: st.reg typing: st.typing tid: inst)
-        scope: tdecl
-        specId: inst
-        tplClassId: og
-        m: m.stringView
-        tplFnId: tf
-        :idSubs
-    )
-}
-
-# signatureNamesParams -- the function `fn` answers, or takes, a generic
-# parameter or a type built over one (a partial): what an instance sees
-# differently from its template.
-signatureNamesParams: function {st: zenv.ZSymbolTable.view fn: ztypes.tid} out bool is {
-    if (
-        (st.reg.typetypeOf typeId: (st.reg.returnTypeOf tid: fn)) == ztypes.ztypetype.genericParam
-    ) then {
-        return true
-    }
-    slot: u64
-    for slot < (st.typing.declRowSlots ownerTid: fn) loop {
-        rw: st.typing.declRowAt ownerTid: fn membersOnly: true :slot
-        slot = slot + 1
-        if rw.keep when (
-            (st.reg.typetypeOf typeId: rw.tid) == ztypes.ztypetype.genericParam
-        ) then return true
-    }
-    return false
-}
-
 # stampForcedTyperef -- stamp one type-ref node that resolved AFTER stampTyperefs
 # ran. recordFuncReturnNode routes a call site's return type through the node
 # stamp, and stampTyperefs fills those before the body walk -- so a member forced
@@ -9321,7 +9149,7 @@ forceMemberOf: function {
     md: st.typing.declMemberIdOf :parentTypeId :nameId
     if md.isZero then return
     forceMemberDecl :st :ast memberDeclId: md
-    nativeMethodForInstance :st :ast inst: parentTypeId :nameId
+    stdtypes.nativeMethodForInstance :st :ast inst: parentTypeId :nameId
 }
 
 # forceUnitDef -- resolve ONE top-level TYPE definition of a unit now, and
@@ -12144,7 +11972,7 @@ staticListFits: function {
     have: ztypes.tid
     want: ztypes.tid
 } out bool is {
-    tpl: stdTidRo :ast :st wk: zast.wellKnown.slot.tyStaticlist
+    tpl: stdtypes.stdTidRo :ast :st wk: zast.wellKnown.slot.tyStaticlist
     if tpl.isZero then return false
     if (st.reg.genericOriginOf tid: have) != tpl then return false
     if (st.reg.genericOriginOf tid: want) != tpl then return false
@@ -13242,7 +13070,7 @@ fieldHeadMemberTid: function {
     if hmd.isZero or (st.typing.decls.get i: hmd).kind.methodDecl.not then {
         return (optionval.none ztypes.tid)
     }
-    markMemberUsed :st :ownerTid :nameId
+    stdtypes.markMemberUsed :st :ownerTid :nameId
     return (
         resolvedByIdsMember
         :st
@@ -13507,7 +13335,7 @@ synthValueMembers: function {
     hashOk: bool
 } is {
     if pairOk when (eqNullOptOut :st :ast :ownerDecl :asItems).not then (
-        synthComparisonPair
+        stdtypes.synthComparisonPair
         :st
         :ownerTid
         :eqDecl
@@ -13515,134 +13343,7 @@ synthValueMembers: function {
     )
     if hashOk.not then return
     h: asBindingOf :st :ast :ownerDecl :asItems nameId: zast.wellKnown.slot.wkHash
-    if h.struck.not when h.declared.not then synthHashMember :st rid: ownerTid
-}
-
-# synthHashMember -- the generated `hash` a value type carries by default, as a
-# real member of `rid`. A hash READS its receiver, like the synthesised comparison:
-# the receiver is recorded `.view` so `k.hash` on a view-held key locks shared.
-synthHashMember: function {st: zenv.ZSymbolTable rid: ztypes.tid} is {
-    hshR: (
-        st.reg.newType
-        name: "hash"
-        ownerTid: rid
-        typetype: ztypes.ztypetype.functionType
-    )
-    (
-        st.typing.declSynthMemberTyped
-        parentTypeId: rid
-        nameId: zast.wellKnown.slot.wkHash
-        kind: ztyping.declkind.methodDecl
-        childTypeId: hshR
-    )
-    hft: hshR
-    st.typing.setMemberType parentTypeId: hft nameId: zast.wellKnown.slot.wkThis childTypeId: rid
-    (
-        st.typing.setChildOwnershipId
-        parentTypeId: hft
-        nameId: zast.wellKnown.slot.wkThis
-        ownership: ztypes.zparamownership.viewMode
-    )
-    st.reg.setThisParamName typeId: hft nameId: zast.wellKnown.slot.wkThis
-}
-
-# synthComparisonMember -- ONE structural comparison member (`==` or `!=`) as a
-# REAL member of `ownerTid`: a receiver, an `rhs` of the owner's type, and
-# `out bool`. Parameters ARE members of the function type, the same shape
-# materializeCreateParams gives a synthesized `create`.
-#
-# A synth comparison minted with no parameters and no return type at all still
-# serves `a == b`, because the binop path never asks the member for a
-# signature -- but `a.== rhs: b`, the SAME method spelled as a call, types to
-# nothing and dies in the emitter as an unhandled binding. That divergence is
-# the whole reason a synthesized method has to be a real record on the type
-# rather than something inserted at the binop check.
-#
-# Yields to an author's own member: the presence test here, and
-# declSynthMemberTyped's again underneath, so neither half can overwrite it.
-synthComparisonMember: function {
-    st: zenv.ZSymbolTable
-    ownerTid: ztypes.tid
-    nameId: zast.nameid
-    opName: StringView
-    declared: bool
-} is {
-    # `declared` is read from the SOURCE, not from the decl tree: the as-block
-    # and is-block members are not registered yet when this runs, so the decl
-    # tree answers "absent" for a member the author plainly wrote. Trusting it
-    # alone synthesised a `==` on top of f128's native one and the `library:`
-    # fold in quadfloat's require block then had a second definition to walk.
-    # The decl-tree test below still runs, for the members that ARE registered.
-    if declared then return
-    ot: ownerTid
-    have: st.typing.declChildOfId parentTypeId: ot :nameId
-    if have.some then return
-    fid: st.reg.newType name: opName :ownerTid typetype: ztypes.ztypetype.functionType
-    (
-        st.typing.declSynthMemberTyped
-        parentTypeId: ot
-        :nameId
-        kind: ztyping.declkind.methodDecl
-        childTypeId: fid
-    )
-    ft: fid
-    (
-        st.typing.setMemberType
-        parentTypeId: ft
-        nameId: zast.wellKnown.slot.wkThis
-        childTypeId: ownerTid
-    )
-    # a comparison READS its receiver: the synthesised member says `.view`, as
-    # every declared comparison does, so the binop's receiver lock is shared
-    # and `e.kind == x` on a view-held `e` conflicts with nothing
-    (
-        st.typing.setChildOwnershipId
-        parentTypeId: ft
-        nameId: zast.wellKnown.slot.wkThis
-        ownership: ztypes.zparamownership.viewMode
-    )
-    st.reg.setThisParamName typeId: ft nameId: zast.wellKnown.slot.wkThis
-    (
-        st.typing.setMemberType
-        parentTypeId: ft
-        nameId: zast.wellKnown.slot.wkRhs
-        childTypeId: ownerTid
-    )
-    # NO RETURN TYPE HERE. Resolving `bool` at this point means MINTING it --
-    # stdTid resolves as a side effect -- and minting during every record
-    # and variant resolution pulled `bool` ahead of the demand order, leaving
-    # quadfloat's `library:` fold with a definition it could not evaluate and
-    # rejecting three unrelated programs under --eager. The tid is recorded
-    # instead, and methodReturnOf answers `bool` for it once bool is known.
-    st.typing.synthCmpTids.add item: fid
-}
-
-# synthComparisonPair -- `==` and `!=` together, each yielding independently:
-# either declaration suppresses exactly itself and generates its partner. A
-# type declaring only `!=` keeps its own operator, and one declaring only `==`
-# gets a real `!=` member, which `a.!= rhs: b` reaches as `a != b` does.
-synthComparisonPair: function {
-    st: zenv.ZSymbolTable
-    ownerTid: ztypes.tid
-    eqDecl: bool
-    neDecl: bool
-} is {
-    (
-        synthComparisonMember
-        :st
-        :ownerTid
-        nameId: zast.wellKnown.slot.wkOpEq
-        opName: "=="
-        declared: eqDecl
-    )
-    (
-        synthComparisonMember
-        :st
-        :ownerTid
-        nameId: zast.wellKnown.slot.wkOpNe
-        opName: "!="
-        declared: neDecl
-    )
+    if h.struck.not when h.declared.not then stdtypes.synthHashMember :st rid: ownerTid
 }
 
 # checkTypedefShape -- what a typedef's as-block may not declare. It has no
@@ -15065,7 +14766,7 @@ attachUnionArm: function {
         )
         isBx: false
         if ct.notZero when (
-            ct == (stdTidRo :ast :st wk: zast.wellKnown.slot.tyBox)
+            ct == (stdtypes.stdTidRo :ast :st wk: zast.wellKnown.slot.tyBox)
         ) then isBx = true
         if isBx then {
             kB: u64
@@ -22353,13 +22054,6 @@ stdTidOr: function {
     return t
 }
 
-# stdTidOpt -- stdTid as an optional: none when the program has no such type
-stdTidOpt: function {ast: Ast st: zenv.ZSymbolTable wk: zast.nameid} out optionval ztypes.tid is {
-    t: stdTid :ast :st :wk
-    if t.isZero then return (optionval.none ztypes.tid)
-    return (optionval.some t)
-}
-
 # stdDeclRo -- the declaration `member` of standard unit `stdUnit`, both
 # well-known name ids, read only: what a backend lowers by hand (io's streams,
 # os's arguments) asked by declaration, never by spelling. 0 when the program
@@ -22370,18 +22064,6 @@ stdDeclRo: function {
     ud: unitDeclOfName :typing nameId: stdUnit
     if ud.isZero then return ztypes.tid.zero
     return ((resolveUnitChildRo :ast :typing unitDecl: ud nameId: member).or d: ztypes.tid.zero)
-}
-
-# stdTidRo -- stdTid for a caller holding only a view of the tree: the memoised
-# or already-resolved id, 0 when the type has not been resolved. It never mints a
-# type, and it memoises what it finds, which saves the next asker the walk (about
-# 0.1% of a self-compile's instructions); stdTidPeek is the same read for a
-# caller that cannot store. A comparison against a tid that already exists is
-# exact, because the stdlib type it could equal is resolved whenever that tid is.
-stdTidRo: function {ast: Ast.view st: zenv.ZSymbolTable wk: zast.nameid} out ztypes.tid is {
-    r: stdTidPeek :ast typing: st.typing :wk
-    if r.notZero then st.typing.stdTidMemo.set key: wk value: r
-    return r
 }
 
 # stdTidPeek -- stdTidRo for a reader holding only a view of the table, the
@@ -23095,7 +22777,7 @@ checkString: function {
     # canonical even in a unit that shadows the name
     tyOpt: optionval.none ztypes.tid
     if hasInterp then {
-        tyOpt = stdTidOpt :ast :st wk: zast.wellKnown.slot.tyString
+        tyOpt = stdtypes.stdTidOpt :ast :st wk: zast.wellKnown.slot.tyString
     } else {
         tyOpt = optionval.some st.reg.literalTextTid
     }
@@ -23931,14 +23613,6 @@ mintMonoMember: function {
     return monoNeedsDtor
 }
 
-# isSizedTemplate -- `tid` is one of the stdlib's SIZED record templates, `str`
-# or `array`, whose instances are keyed by a numeric value parameter. Never
-# resolves either: `tid` exists, so the template it could be does too.
-isSizedTemplate: function {ast: Ast.view st: zenv.ZSymbolTable tid: ztypes.tid} out bool is {
-    if tid == (stdTidRo :ast :st wk: zast.wellKnown.slot.tyStr) then return true
-    return tid == (stdTidRo :ast :st wk: zast.wellKnown.slot.tyArray)
-}
-
 # isBoxTemplate -- `tid` is the system Box template: the class the system unit
 # declares as `Box`, which declares no members (its instances do). Asked of the
 # declaration, so a program's own `Box` is never it; the system's Box is never
@@ -23971,7 +23645,7 @@ mintMonoRecordShape: function {
         ((st.reg.isNativeOf tid: templateId).not or (isBoxTemplate :st tid: templateId))
     )
     if (tt == ztypes.ztypetype.recordType) or isUserClass then {
-        isSized: isSizedTemplate :ast :st tid: templateId
+        isSized: stdtypes.isSizedTemplate :ast :st tid: templateId
         # a `create` the TEMPLATE writes was cloned onto the instance; a record
         # template's synthesised one names the template's own field types and
         # is replaced
@@ -24011,51 +23685,6 @@ mintMonoRecordShape: function {
             materializeCreateParams :st :ast typeTid: mid createId: crId
         }
     }
-}
-
-# templateNeedsMonoDtor -- whether a mono of this builtin template owns heap
-# its destructor must release. The list is the collection families that carry
-# one; a user template's answer comes from its substituted fields instead. The
-# template's own name says which family it could be, and its id is compared
-# with that family's, read without resolving it (templateIsCollection).
-templateNeedsMonoDtor: function {
-    ast: Ast
-    st: zenv.ZSymbolTable
-    templateId: ztypes.tid
-} out bool is {
-    nm: templateNameId :st :templateId
-    if (isHeapCollectionName :nm).not then return false
-    return templateId == (stdTidRo :ast :st wk: nm)
-}
-
-# isHeapCollectionName -- whether `nm` names a builtin collection family whose
-# instances own heap: the lists, Option and Result, the maps and sets, the id
-# maps and the id set
-isHeapCollectionName: function {nm: zast.nameid} out bool is {
-    if (
-        (nm == zast.wellKnown.slot.tyListRef) or (nm == zast.wellKnown.slot.tyListVal)
-    ) then return true
-    if (nm == zast.wellKnown.slot.tyOption) or (nm == zast.wellKnown.slot.tyResult) then return true
-    if (nm == zast.wellKnown.slot.tyMapRR) or (nm == zast.wellKnown.slot.tyMapRV) then return true
-    if (nm == zast.wellKnown.slot.tyMapVR) or (nm == zast.wellKnown.slot.tyMapVV) then return true
-    if (nm == zast.wellKnown.slot.tySetRef) or (nm == zast.wellKnown.slot.tySetVal) then return true
-    if (nm == zast.wellKnown.slot.tyIdMapR) or (nm == zast.wellKnown.slot.tyIdMapV) then return true
-    return nm == zast.wellKnown.slot.tyIdSet
-}
-
-# unionMonoNeedsDtor -- an instance of a generic union owns the cell each arm is
-# held in, as its template does (resolveUnion flags every union with a
-# non-null arm), so it takes the template's flag. The view unions are the
-# exception (isViewUnionOrigin): their arm points at a value they do not own.
-unionMonoNeedsDtor: function {
-    ast: Ast
-    st: zenv.ZSymbolTable
-    templateId: ztypes.tid
-    tt: ztypes.ztypetype
-} out bool is {
-    if tt != ztypes.ztypetype.unionType then return false
-    if (st.reg.needsDestructor typeId: templateId).not then return false
-    return (isViewUnionOrigin :ast :st origin: templateId).not
 }
 
 # mintMonoTagShape -- give a monomorphised sum type its discriminator: the tag
@@ -24247,8 +23876,8 @@ mintMono: function {
     # heap-pointer destroy), and IdMap/IdSet own their two arrays but not their
     # header, so they free like a List does. Views (ListView/OptionView) own no
     # heap -- excluded.
-    needsDtorM: templateNeedsMonoDtor :ast :st :templateId
-    if needsDtorM or (unionMonoNeedsDtor :ast :st :templateId :tt) then {
+    needsDtorM: stdtypes.templateNeedsMonoDtor :ast :st :templateId
+    if needsDtorM or (stdtypes.unionMonoNeedsDtor :ast :st :templateId :tt) then {
         st.reg.setNeedsDestructor typeId: mid
     }
     # An elided leading type argument stages under the empty name; rebind it
@@ -24482,26 +24111,6 @@ templateAsItems: function {
     return (objAsItemsOf :ast nid: ar.operation)
 }
 
-
-# mintCollectionMethod -- one synthesized `{mono}.{m}` FUNCTION child; returns
-# the method's type id so callers can link its return type.
-mintCollectionMethod: function {
-    ast: Ast.view
-    st: zenv.ZSymbolTable
-    monoId: ztypes.tid
-    m: StringView
-} out ztypes.tid is {
-    fid: st.reg.newType name: m ownerTid: monoId typetype: ztypes.ztypetype.functionType
-    st.reg.setNative typeId: fid value: true
-    mnid: zast.poolFind pool: ast.names text: m
-    # declare before typing: setMemberType claims the method's own function type
-    # for its declaration, and the parameter writes that follow need it. Typing
-    # first leaves the method undeclared, so nothing claims it and every
-    # parameter has nowhere to land.
-    st.typing.declSynthMember parentTypeId: monoId nameId: mnid kind: ztyping.declkind.methodDecl
-    st.typing.setMemberType parentTypeId: monoId nameId: mnid childTypeId: fid
-    return fid
-}
 
 # specLookup -- the existing specialization of `templateId` over the ordered
 # concrete arguments `args`, read straight off the id trie getOrMintSpec builds.
@@ -25079,7 +24688,8 @@ sumArmTypeNode: function {
     cd: sumArmHeadDecl :st :ast :scope :unitDecl op: acr.callable
     if cd.isZero then return op
     if (
-        cd != (st.typing.declIdOfType typeId: (stdTidRo :ast :st wk: zast.wellKnown.slot.tyBox))
+        cd !=
+        (st.typing.declIdOfType typeId: (stdtypes.stdTidRo :ast :st wk: zast.wellKnown.slot.tyBox))
     ) then return op
     ba: argRefAt :ast nid: (zast.callArgAt :ast nid: acr.nid i: 0)
     if ba.nid.isZero then return op
@@ -26055,26 +25665,6 @@ isValOpName: function {cnId: zast.nameid} out bool is {
     return (cnId == zast.wellKnown.slot.wkHash) or (cnId == zast.wellKnown.slot.wkCompare)
 }
 
-# markMemberUsed -- member `nameId` of `ownerTid` is used: the receiver's own
-# member, which is the INSTANCE's for a generic one, and the template's as
-# well, whose walk is the one that reports on its body. Nothing when there is
-# no such member.
-markMemberUsed: function {st: zenv.ZSymbolTable ownerTid: ztypes.tid nameId: zast.nameid} is {
-    if ownerTid.isZero or nameId.isZero then return
-    md: st.typing.declMemberIdOf parentTypeId: ownerTid :nameId
-    if md.notZero then st.walk.usedMemberDecl.add item: md
-    og: st.reg.genericOriginOf tid: ownerTid
-    if og.isZero then return
-    # an author-declared generic's instance method no instance walk has taken
-    owedHere: md.notZero and (st.reg.isNativeOf tid: og).not
-    isMethod: st.typing.declIsMethodId parentTypeId: ownerTid :nameId
-    if owedHere when isMethod when (st.typing.declIsWalked declId: md).not then {
-        st.walk.instanceUseOwed = true
-    }
-    od: st.typing.declMemberIdOf parentTypeId: og :nameId
-    if od.notZero then st.walk.usedMemberDecl.add item: od
-}
-
 # specIsMarker -- `spec` is a MARKER protocol: it specifies no method, so its
 # only member is the `create` every protocol is given
 specIsMarker: function {st: zenv.ZSymbolTable.view spec: ztypes.tid} out bool is {
@@ -26108,7 +25698,7 @@ markSpecMembersUsed: function {st: zenv.ZSymbolTable impl: ztypes.tid spec: ztyp
             mn: (st.typing.decls.get i: did).name
             t: impl
             for t.notZero loop {
-                markMemberUsed :st ownerTid: t nameId: mn
+                stdtypes.markMemberUsed :st ownerTid: t nameId: mn
                 t = st.typing.typedefBaseTidOf tid: t
             }
         }
@@ -26622,24 +26212,6 @@ typeIsNumberOf: function {
     nk: numerics.numKindOfTid typing: st.typing tid: ktd
     if nk.has.not then return false
     return (ztypes.isFloatKind k: nk.kind) == float
-}
-
-# completeSpecChildren -- finish a spec that the trie already carries: the
-# per-instance collection children its template cannot express, and a native
-# class's own `create`. Name-keyed mints (sized records, empty-subs chains)
-# make the first call themselves.
-#
-# `create` says what an instance is made from, and so what it holds: the
-# instance owns that signature from the start (nativeMethodForInstance), where
-# it owns any other method's from the method's first use.
-completeSpecChildren: function {
-    ast: Ast
-    st: zenv.ZSymbolTable
-    templateId: ztypes.tid
-    mid8: ztypes.tid
-} is {
-    mintCollectionChildren :st :ast monoId: mid8 :templateId
-    nativeMethodForInstance :st :ast inst: mid8 nameId: zast.wellKnown.slot.wkCreate
 }
 
 # mintSpecUnderTemplate -- build the spec's children, LAST, and the trie edge laid
@@ -27262,7 +26834,7 @@ getOrMintSpec: function {
     if hasParamKey then completes = false
     if mid8.isZero then completes = false
     if completes then {
-        completeSpecChildren :ast :st :templateId :mid8
+        stdtypes.completeSpecChildren :ast :st :templateId :mid8
         recordNumericDefaults :st ownerTid: mid8 :templateId
     }
     return mid8
@@ -27285,7 +26857,7 @@ materialiseStaticListArgs: function {
     if pnames.length == 0 then return
     # READ, not resolved: every instance of every template passes here, and a
     # template no program named cannot be this one
-    if templateId != (stdTidRo :ast :st wk: zast.wellKnown.slot.tyStaticlist) then return
+    if templateId != (stdtypes.stdTidRo :ast :st wk: zast.wellKnown.slot.tyStaticlist) then return
     k: u64
     for k < pnames.length loop {
         pn: pnames.get i: k
@@ -27327,222 +26899,6 @@ monoValName: function {
     bt: (walkLookupTyperefFrom :st :ast scope: ztypes.declid baseId: nid).or d: ztypes.tid.zero
     if bt.notZero when (bt == tid).not then return "\{tn}_\{tid}"
     return tn
-}
-
-# mintEntryAndSizedChildren -- the members that depend on the instance's ARGUMENTS
-# rather than on the template's own methods: a map entry's key/value pair, and the
-# value-dependent members of the sized `str` and `array` records, which are
-# REPLACED in place (setMemberType keeps positions).
-mintEntryAndSizedChildren: function {
-    ast: Ast
-    st: zenv.ZSymbolTable
-    monoId: ztypes.tid
-    templateId: ztypes.tid
-} is {
-    strTid: stdTid :ast :st wk: zast.wellKnown.slot.tyStr
-    arrayTid: stdTid :ast :st wk: zast.wellKnown.slot.tyArray
-    # `==`, `!=` and `hash` are the generated members every value type has: a
-    # receiver and an `rhs` of this very instance, so an array of another length
-    # or element type is refused as an argument like any other mismatch
-    if templateId == arrayTid then {
-        mintCollectionMethod :st :ast :monoId m: "create"
-        synthComparisonPair :st ownerTid: monoId eqDecl: false neDecl: false
-        synthHashMember :st rid: monoId
-    }
-    if templateId == strTid then {
-        tstId: mintCollectionMethod :st :ast :monoId m: "string"
-        sgid: stdTid :ast :st wk: zast.wellKnown.slot.tyString
-        if sgid.notZero then st.reg.setReturnType typeId: tstId value: sgid
-        mintCollectionMethod :st :ast :monoId m: "create"
-        synthComparisonPair :st ownerTid: monoId eqDecl: false neDecl: false
-        synthHashMember :st rid: monoId
-        mintStrCompare :ast :st :monoId
-    }
-}
-
-# mintStrCompare -- a str instance's native `compare`, taking an `rhs` of this
-# very instance. The template's is a native, which is not cloned per instance,
-# so its `rhs: type` would still name the template.
-mintStrCompare: function {
-    ast: Ast
-    st: zenv.ZSymbolTable
-    monoId: ztypes.tid
-} is {
-    cmpId: mintCollectionMethod :st :ast :monoId m: "compare"
-    cft: cmpId
-    st.typing.setMemberType parentTypeId: cft nameId: zast.wellKnown.slot.wkThis childTypeId: monoId
-    (
-        st.typing.setChildOwnershipId
-        parentTypeId: cft
-        nameId: zast.wellKnown.slot.wkThis
-        ownership: ztypes.zparamownership.viewMode
-    )
-    st.reg.setThisParamName typeId: cft nameId: zast.wellKnown.slot.wkThis
-    st.typing.setMemberType parentTypeId: cft nameId: zast.wellKnown.slot.wkRhs childTypeId: monoId
-    i32id: stdTid :ast :st wk: zast.wellKnown.slot.tyI32
-    if i32id.notZero then st.reg.setReturnType typeId: cft value: i32id
-}
-
-# templateIsCollection -- whether a template is one of the builtin collection
-# families, and (through iterOut) whether it is one of the ITERATOR families.
-# The template's own name says which family it could be, and its id is then
-# compared with that family's: comparing tids rather than names is what makes
-# this shadow-proof (a user type spelled `ListRef` is not this ListRef), and
-# reading the family's id without resolving it (stdTidRo) is exact, since the
-# stdlib type is resolved whenever a tid equal to it exists.
-templateIsCollection: function {
-    ast: Ast
-    st: zenv.ZSymbolTable
-    templateId: ztypes.tid
-    iterOut: ListVal bool
-} out bool is {
-    nm: templateNameId :st :templateId
-    isIter: isIterFamilyName :nm
-    if isIter.not when (isCollectionFamilyName :nm).not then {
-        iterOut.append false
-        return false
-    }
-    if templateId != (stdTidRo :ast :st wk: nm) then {
-        iterOut.append false
-        return false
-    }
-    iterOut.append isIter
-    return true
-}
-
-# templateNameId -- the name a template is declared with; 0 for none
-templateNameId: function {st: zenv.ZSymbolTable.view templateId: ztypes.tid} out zast.nameid is {
-    td: templateDeclOf reg: st.reg typing: st.typing tid: templateId
-    if td.isZero then return zast.nameid
-    return (st.typing.declNameOf declId: td)
-}
-
-# isIterFamilyName -- whether `nm` names one of the builtin iterator families
-isIterFamilyName: function {nm: zast.nameid} out bool is {
-    if (
-        (nm == zast.wellKnown.slot.tyListIter) or (nm == zast.wellKnown.slot.tyListIterVal)
-    ) then return true
-    if (
-        (nm == zast.wellKnown.slot.tyListIterMut) or (nm == zast.wellKnown.slot.tyListIterMutVal)
-    ) then return true
-    if (
-        (nm == zast.wellKnown.slot.tyStaticIter) or (nm == zast.wellKnown.slot.tySetIter)
-    ) then return true
-    if (
-        (nm == zast.wellKnown.slot.tySetIterVal) or (nm == zast.wellKnown.slot.tyIdSetIter)
-    ) then return true
-    if (
-        (nm == zast.wellKnown.slot.tyIdMapItemIterR) or (nm == zast.wellKnown.slot.tyIdMapItemIterV)
-    ) then return true
-    if (
-        (nm == zast.wellKnown.slot.tyMapKeyIter) or (nm == zast.wellKnown.slot.tyMapItemIter)
-    ) then return true
-    if (
-        (nm == zast.wellKnown.slot.tyMapKeyIterRV) or (nm == zast.wellKnown.slot.tyMapKeyIterVR)
-    ) then return true
-    if (
-        (nm == zast.wellKnown.slot.tyMapKeyIterVV) or (nm == zast.wellKnown.slot.tyMapItemIterRV)
-    ) then return true
-    return (
-        (nm == zast.wellKnown.slot.tyMapItemIterVR) or (nm == zast.wellKnown.slot.tyMapItemIterVV)
-    )
-}
-
-# isCollectionFamilyName -- whether `nm` names one of the builtin collection
-# families that is not an iterator: the lists and their views, the span, the
-# sets, maps and id maps and their entries, str and Array
-isCollectionFamilyName: function {nm: zast.nameid} out bool is {
-    if (
-        (nm == zast.wellKnown.slot.tyListRef) or (nm == zast.wellKnown.slot.tyListVal)
-    ) then return true
-    if (
-        (nm == zast.wellKnown.slot.tyListView) or (nm == zast.wellKnown.slot.tyListViewVal)
-    ) then return true
-    if (
-        (nm == zast.wellKnown.slot.tySpanVal) or (nm == zast.wellKnown.slot.tySetRef)
-    ) then return true
-    if (nm == zast.wellKnown.slot.tySetVal) or (nm == zast.wellKnown.slot.tyMapRR) then return true
-    if (nm == zast.wellKnown.slot.tyMapRV) or (nm == zast.wellKnown.slot.tyMapVR) then return true
-    if (nm == zast.wellKnown.slot.tyMapVV) or (nm == zast.wellKnown.slot.tyIdMapR) then return true
-    if (nm == zast.wellKnown.slot.tyIdMapV) or (nm == zast.wellKnown.slot.tyIdSet) then return true
-    if (
-        (nm == zast.wellKnown.slot.tyIdMapEntryR) or (nm == zast.wellKnown.slot.tyIdMapEntryV)
-    ) then return true
-    if (
-        (nm == zast.wellKnown.slot.tyMapEntry) or (nm == zast.wellKnown.slot.tyMapEntryRV)
-    ) then return true
-    if (
-        (nm == zast.wellKnown.slot.tyMapEntryVR) or (nm == zast.wellKnown.slot.tyMapEntryVV)
-    ) then return true
-    return (nm == zast.wellKnown.slot.tyStr) or (nm == zast.wellKnown.slot.tyArray)
-}
-
-# mintCollectionCreate -- the `create` child a ListView, Set or iterator
-# instance needs, once per mono: its template's `create` is not produced. Every
-# other member -- the `length`/`capacity` counters included -- is produced and
-# cloned from the template, its composite returns healed by respecialize.
-mintCollectionCreate: function {
-    ast: Ast
-    st: zenv.ZSymbolTable
-    monoId: ztypes.tid
-    templateId: ztypes.tid
-    isIter: bool
-} is {
-    listViewTid: stdTid :ast :st wk: zast.wellKnown.slot.tyListView
-    listViewValTid: stdTid :ast :st wk: zast.wellKnown.slot.tyListViewVal
-    setTid: stdTid :ast :st wk: zast.wellKnown.slot.tySetRef
-    setValTid: stdTid :ast :st wk: zast.wellKnown.slot.tySetVal
-    isLViewTpl: (templateId == listViewTid) or (templateId == listViewValTid)
-    isSetTpl: (templateId == setTid) or (templateId == setValTid)
-    if isLViewTpl or isSetTpl or isIter then mintCollectionMethod :st :ast :monoId m: "create"
-}
-
-
-# mintCollectionChildren -- the per-instance collection children the
-# produced templates cannot express: the create child (except List and Map,
-# which have their own create paths), the Map get/remove value-kind wrapper returns, MapEntry's
-# key/value accessors, and the sized str/array member tables. Method
-# signatures and composite returns come from the cloned template methods
-# (healed by respecialize). No-op for other templates or when the
-# instance already has children (re-mint dedup).
-mintCollectionChildren: function {
-    ast: Ast
-    st: zenv.ZSymbolTable
-    monoId: ztypes.tid
-    templateId: ztypes.tid
-} is {
-    iterOut: ListVal bool
-    isColl: templateIsCollection :ast :st :templateId :iterOut
-    isIter: iterOut.get i: 0
-    if isColl.not then return
-    listTid: stdTid :ast :st wk: zast.wellKnown.slot.tyListRef
-    listValTid: stdTid :ast :st wk: zast.wellKnown.slot.tyListVal
-    # every List child comes from the produced template methods cloned per
-    # instance (composite returns healed by respecialize)
-    isListTpl: (templateId == listTid) or (templateId == listValTid)
-    if isListTpl then return
-    # One build per instance: a spec can reach this arm from several mint
-    # paths, and the str/array rebuild below would mint fresh member types
-    # per invocation (their instances copy template children at mint time,
-    # so a member count cannot signal "already built").
-    if (st.walk.collectionChildrenBuilt.has item: monoId) then return
-    bk0: monoId
-    st.walk.collectionChildrenBuilt.add item: bk0
-    mintCollectionCreate :ast :st :monoId :templateId :isIter
-    isSized: isSizedTemplate :ast :st tid: templateId
-    # str/array are PERMANENT materializer arms: sized RECORDs are keyed by
-    # a numeric value parameter that rides the trie as a literal VALUE key
-    # (a `valueArg` genericarg marks the ordinal); it never enters idSubs, so
-    # produce+clone has nothing to substitute. Their templates resolve from source (record
-    # attachMethods runs regardless of genericity) and copy their children
-    # at mint time; the branches below REPLACE the value-dependent members
-    # in place (setMemberType keeps positions) -- element-typed get/set returns, String-returning string, and the ==/!=
-    # that resolveRecord and mintMono both skip for sized records. The
-    # emitter builds the structs from the z_str/z_array tmpls by name-parsed
-    # size and reads only the == child's presence. The dedup guard below
-    # applies only to the from-scratch families.
-    if isSized.not when (st.typing.declMemberCount ownerTid: monoId) > 0 then return
-    mintEntryAndSizedChildren :ast :st :monoId :templateId
 }
 
 
@@ -29199,8 +28555,8 @@ genericTypeConstruction: function {
     if mid.isZero then return ztypes.tid.zero
     noteMonoSite :st mono: mid :call :unitDecl
     reportTypedefClash :ast :st tid: mid at: call.nid lineno: call.lineno colno: call.colno
-    if (isSizedTemplate :ast :st tid: tplId) then {
-        mintCollectionChildren :st :ast monoId: mid templateId: tplId
+    if (stdtypes.isSizedTemplate :ast :st tid: tplId) then {
+        stdtypes.mintCollectionChildren :st :ast monoId: mid templateId: tplId
     }
     # Only a bare-atom callable restamps to the instance; a dotted callable
     # (the .str conversion form) leaves the path unstamped.
@@ -29487,68 +28843,6 @@ methodReturnOf: function {
         if (typing.refusedValues.has item: rn) then return (optionval.some ztypes.tid.zero)
     }
     return (optionval.none ztypes.tid)
-}
-
-# iterWrapperElem -- when a type is an Option / optionval instance or one of the
-# view unions (isViewUnionOrigin), its element (`some` child) type id.
-iterWrapperElem: function {
-    ast: Ast
-    st: zenv.ZSymbolTable
-    wid: ztypes.tid
-} out optionval ztypes.tid is {
-    origin: ztypes.tid
-    goo: st.reg.genericOriginOf tid: wid
-    if goo.notZero then origin = goo
-    if origin.isZero then return (optionval.none ztypes.tid)
-    isWrapper: false
-    oo: stdTidOpt :ast :st wk: zast.wellKnown.slot.tyOption
-    if oo.some when origin == oo then isWrapper = true
-    vo: stdTidOpt :ast :st wk: zast.wellKnown.slot.tyOptionval
-    if vo.some when origin == vo then isWrapper = true
-    if (isViewUnionOrigin :ast :st :origin) then isWrapper = true
-    forceMemberOf :st :ast parentTypeId: wid nameId: zast.wellKnown.slot.wkSome
-    if isWrapper then return (
-        st.typing.declChildOfId
-        parentTypeId: wid
-        nameId: zast.wellKnown.slot.wkSome
-    )
-    return (optionval.none ztypes.tid)
-}
-
-# isViewUnionMono -- true when a type is an instance of a view union whose
-# per-iteration values are borrowed references, so the loop var binds BORROWED.
-# A StaticView's element is static storage, which nothing frees or writes: the
-# loop var owns it.
-isViewUnionMono: function {
-    ast: Ast
-    st: zenv.ZSymbolTable
-    wid: ztypes.tid
-} out bool is {
-    origin: ztypes.tid
-    goo: st.reg.genericOriginOf tid: wid
-    if goo.notZero then origin = goo
-    if origin.isZero then return false
-    if origin == (stdTidRo :ast :st wk: zast.wellKnown.slot.tyStaticView) then return false
-    return (isViewUnionOrigin :ast :st :origin)
-}
-
-# isViewUnionOrigin -- `origin` is one of the five view unions: OptionView and
-# OptionMut, each with its valtype twin, and StaticView. Their arm points at a
-# value they do not own; they differ only in what that arm lets the holder do.
-# `origin` is never 0, so a template the program lacks (stdTid 0) matches
-# nothing. The OptionMut pair and StaticView are READ (stdTidRo), not resolved:
-# a template no program named cannot be `origin`, and resolving it would mint it
-# into every program.
-isViewUnionOrigin: function {
-    ast: Ast
-    st: zenv.ZSymbolTable
-    origin: ztypes.tid
-} out bool is {
-    if origin == (stdTid :ast :st wk: zast.wellKnown.slot.tyOptionView) then return true
-    if origin == (stdTid :ast :st wk: zast.wellKnown.slot.tyOptionViewVal) then return true
-    if origin == (stdTidRo :ast :st wk: zast.wellKnown.slot.tyOptionMut) then return true
-    if origin == (stdTidRo :ast :st wk: zast.wellKnown.slot.tyStaticView) then return true
-    return origin == (stdTidRo :ast :st wk: zast.wellKnown.slot.tyOptionMutVal)
 }
 
 # createDottedBaseId -- the base atom's node id when a dotted path's child is
@@ -31552,7 +30846,7 @@ checkCopyMember: function {
         if bt == (stdTid :ast :st wk: zast.wellKnown.slot.tyStringView) then {
             mCp = "type 'StringView' has no '.copy': a view has no owned duplicate; '.string' makes an owned String (allocates)".string
         }
-        if (refBearingContainer :ast :st tid: bt) then {
+        if (stdtypes.refBearingContainer :ast :st tid: bt) then {
             mCp = "type '\{btnCp}' has no '.copy': a container holding REFERENCES has no duplicate to make -- each element would end up owned twice. Build a new one and move the elements with '.take', or '.copy' them one by one"
         }
         (
@@ -31748,7 +31042,7 @@ checkMemberProjections: function {
         :st
         tid: bt
     ).not then {
-        if (appliedTemplateBase :st :ast :bt base: dp.parent) then return (
+        if (stdtypes.appliedTemplateBase :st :ast :bt base: dp.parent) then return (
             callleg
             handled: true
             tid: ztypes.tid.zero
@@ -32415,7 +31709,7 @@ checkUnitQualifiedMember: function {
         foldReadInstanceConstant :st :ast :bt cnId: effUcn
         memberDecl: unitMemberTypeOf :st :ast unitTid: bt unitDecl: btUd memberId: effUcn
         # a unit instance walks the functions read through it
-        markMemberUsed :st ownerTid: bt nameId: effUcn
+        stdtypes.markMemberUsed :st ownerTid: bt nameId: effUcn
         # A hidden subunit is private to its parent BY DEFAULT: it is read
         # only because the parent named it, so it was never declared surface.
         # A `public:` block is the one visibility mechanism -- when the unit
@@ -32537,7 +31831,7 @@ checkStaticListMember: function {
     isArray: cnId == zast.wellKnown.slot.tyArray
     row: listRowOfNode :st nid: dp.parent
     if row == 0 then {
-        if (refuseStaticListValueMember :st :ast :dp :bt :cnId :isArray) then return (
+        if (stdtypes.refuseStaticListValueMember :st :ast :dp :bt :cnId :isArray) then return (
             callleg
             handled: true
             tid: ztypes.tid.zero
@@ -32545,7 +31839,7 @@ checkStaticListMember: function {
         return (callleg handled: false tid: ztypes.tid.zero)
     }
     g: st.typing.constAggs.get i: row.u64
-    if isArray then return (checkListArray :st :ast :unitDecl :dp :row)
+    if isArray then return (stdtypes.checkListArray :st :ast :unitDecl :dp :row)
     if cnId == zast.wellKnown.slot.wkSlot then {
         if g.slot.isZero then {
             pp: ListVal zast.nameid
@@ -32677,70 +31971,6 @@ listMemberType: function {
     return ztypes.tid.zero
 }
 
-# checkListArray -- `.array` on a list reached by a compile-time path: its
-# elements copied into the sized array instance (array_{elem}_{count}), minted
-# on first access. An empty list has none.
-checkListArray: function {
-    st: zenv.ZSymbolTable
-    ast: Ast
-    unitDecl: ztypes.declid
-    dp: dpref
-    row: u32
-} out callleg is {
-    g: st.typing.constAggs.get i: row.u64
-    if g.itemCount == 0 then {
-        (
-            addErrorWithHint
-            :st
-            nodeid: dp.nid
-            lineno: dp.lineno
-            colno: dp.colno
-            e: zast.err.typeError
-            msg: "an empty list has no '.array': an array holds at least one element".string
-            note: String
-            hint: "read its `length`, or walk it with `iterate`".string
-            width: 5
-        )
-        return (callleg handled: true tid: ztypes.tid.zero)
-    }
-    # the array holds the run-time element: an untyped one is its i64 / f64
-    elo: st.reg.genericTypeArgAt specId: g.tid ordinal: 0
-    if elo.isZero then return (callleg handled: false tid: ztypes.tid.zero)
-    ecnt: g.itemCount.u64
-    ato: stdTidOpt :ast :st wk: zast.wellKnown.slot.tyArray
-    if ato.some then {
-        eno: st.reg.nameOf tid: elo
-        amn: "_\{eno}_\{ecnt}"
-        # `array` declares its element parameter then its count; asking
-        # the template for both names keeps this site correct across a
-        # rename. Two names or the leg declines: a zero key is the ELIDED
-        # key, and getOrMintSpec rebinds that to the FIRST parameter --
-        # which would bind the count to the element slot.
-        aNames: st.reg.genericParamNamesOf tdecl: (st.typing.declIdOfType typeId: ato)
-        if aNames.length < 2 then return (callleg handled: false tid: ztypes.tid.zero)
-        asubs: IdMapV zast.nameid v: ztypes.tid
-        asubs.set key: (aNames.get i: 0) value: elo
-        vsE: IdMapV zast.nameid v: u64
-        vsE.set key: (aNames.get i: 1) value: ecnt
-        amid: (
-            getOrMintSpec
-            :st
-            scope: st.curScope
-            :ast
-            :unitDecl
-            sfx: amn.stringView
-            templateId: ato
-            subs: asubs
-            valSubs: vsE
-            fallbackArg: ztypes.tid.zero
-        )
-        mintCollectionChildren :st :ast monoId: amid templateId: ato
-        stampGate :st nid: dp.nid tid: amid
-        return (callleg handled: true tid: amid)
-    }
-    return (callleg handled: false tid: ztypes.tid.zero)
-}
-
 # checkListSlotRead -- `P.slot.label`: the position of the list's element so
 # labelled, typed as its `slot` (the list's index, or untyped). A name that is
 # no label of the list is refused: `slot` holds the labels' positions and
@@ -32777,39 +32007,6 @@ checkListSlotRead: function {
     return (callleg handled: true tid: ztypes.tid.zero)
 }
 
-# refuseStaticListValueMember -- `.array` or `.tag` read through a list VALUE: both are
-# the block's, reached through its name -- `array t to: N` needs the count, which
-# a value does not carry, and a tag is declared in an `as` block. True when
-# refused.
-refuseStaticListValueMember: function {
-    st: zenv.ZSymbolTable
-    ast: Ast
-    dp: dpref
-    bt: ztypes.tid
-    cnId: zast.nameid
-    isArray: bool
-} out bool is {
-    isSlot: cnId == zast.wellKnown.slot.wkSlot
-    if isArray.not and (cnId != zast.wellKnown.slot.wkTag) and isSlot.not then return false
-    og: st.reg.genericOriginOf tid: bt
-    if og.isZero then og = bt
-    if og != (stdTidRo :ast :st wk: zast.wellKnown.slot.tyStaticlist) then return false
-    mn: zast.nameTextAt :ast ref: cnId
-    (
-        addErrorWithHint
-        :st
-        nodeid: dp.nid
-        lineno: dp.lineno
-        colno: dp.colno
-        e: zast.err.typeError
-        msg: "'\{mn}' is read through a list's name, not through its value"
-        note: "a list value is the list's elements and length; the count an array type needs is the list's".string
-        hint: "use the list's name: `blk.\{mn}`"
-        width: mn.length
-    )
-    return true
-}
-
 # checkArrayIndexMember -- a compile-time numeric index on an array instance
 # projects the element type (`a.0` reads / reassigns element zero).
 checkArrayIndexMember: function {
@@ -32827,7 +32024,7 @@ checkArrayIndexMember: function {
         baseOrigin: st.reg.genericOriginOf tid: bt
         if baseOrigin.notZero then elemTid = baseOrigin
         if elemTid.notZero then isArr = (
-            elemTid == (stdTidRo :ast :st wk: zast.wellKnown.slot.tyArray)
+            elemTid == (stdtypes.stdTidRo :ast :st wk: zast.wellKnown.slot.tyArray)
         )
         if isArr then {
             forceMemberOf :st :ast parentTypeId: bt nameId: zast.wellKnown.slot.wkGet
@@ -33511,21 +32708,6 @@ refuseTypeMemberThroughValue: function {
     )
 }
 
-# appliedTemplateBase -- `(C U).create` in a template's own walk: the type
-# arguments ARE written (the base is an application), but they are the
-# template's parameters, so no instance is minted and the application stays the
-# generic template. Each instance's walk constructs its own instance; this one
-# has nothing to refuse, and its value's type is unknown here.
-appliedTemplateBase: function {
-    st: zenv.ZSymbolTable.view
-    ast: Ast.view
-    bt: ztypes.tid
-    base: zast.nodeid
-} out bool is {
-    if (st.reg.isGenericOf tid: bt).not then return false
-    return (isCallNode n: (ast.nodes.get i: base))
-}
-
 # checkUnresolvedMember -- the member did not resolve on the base type. On a
 # type parameter nothing is diagnosed: every member use -- a method, a field,
 # an operator -- is the instance's to resolve; everything else is diagnosed
@@ -33551,7 +32733,12 @@ checkUnresolvedMember: function {
     # type, a generic sum template: the construction is refused by the rule it
     # breaks, in the words every other spelling of it uses, not as a missing
     # member
-    if cnId == zast.wellKnown.slot.wkCreate when (appliedTemplateBase :st :ast :bt base: dp.parent
+    if cnId == zast.wellKnown.slot.wkCreate when (
+        stdtypes.appliedTemplateBase
+        :st
+        :ast
+        :bt
+        base: dp.parent
     ) then return ztypes.tid.zero
     if cnId == zast.wellKnown.slot.wkCreate when (
         refuseNameConstruction
@@ -34043,7 +33230,7 @@ checkResolvedMember: function {
         # and the member of the RECEIVER's own type. declMemberOf walks a mono
         # to the template that minted it, so mD names the template's member;
         # the emitter needs to know which INSTANCE was used
-        markMemberUsed :st ownerTid: bt nameId: cnId
+        stdtypes.markMemberUsed :st ownerTid: bt nameId: cnId
         # a generated comparison or hash reaches its parts' own
         if (isValOpName :cnId) then markValOpUsed :ast :st tid: bt nameId: cnId depth: 0
         # a typedef's view conversion (`Bytes.byteView`) IS its base's listView,
@@ -34368,7 +33555,7 @@ checkMarkerMember: function {
             ) then isStrBase = true
         }
         if isStrBase then {
-            sto: stdTidOpt :ast :st wk: zast.wellKnown.slot.tyStr
+            sto: stdtypes.stdTidOpt :ast :st wk: zast.wellKnown.slot.tyStr
             if sto.some then {
                 return (callleg handled: true tid: sto)
             }
@@ -35610,30 +34797,6 @@ declaresIterate: function {st: zenv.ZSymbolTable ast: Ast t: ztypes.tid} out boo
     return (fnAutoCallable :st mid: mt)
 }
 
-# objectCallOf -- the `call` METHOD a value of type `t` answers to, when it has
-# one: the member that makes an object callable. An arm or a field named `call`
-# does not. 0 for a function type and for any type without one.
-objectCallOf: function {st: zenv.ZSymbolTable ast: Ast t: ztypes.tid} out ztypes.tid is {
-    if t.isZero then return t
-    tt: st.reg.typetypeOf typeId: t
-    if tt == ztypes.ztypetype.functionType then return ztypes.tid
-    if tt == ztypes.ztypetype.genericParam then return ztypes.tid
-    forceMemberOf :st :ast parentTypeId: t nameId: zast.wellKnown.slot.wkCall
-    co: st.typing.declChildOfId parentTypeId: t nameId: zast.wellKnown.slot.wkCall
-    match (
-        co
-    ) case some then {
-        ct: co
-        if (st.reg.typetypeOf typeId: ct) != ztypes.ztypetype.functionType then return ztypes.tid
-        fnField: st.typing.declIsFnptrFieldId parentTypeId: t nameId: zast.wellKnown.slot.wkCall
-        if fnField then return ztypes.tid
-        markMemberUsed :st ownerTid: t nameId: zast.wellKnown.slot.wkCall
-        return ct
-    } case none then {
-        return ztypes.tid
-    }
-}
-
 # readsObjectAsCall -- a bare read `nid` of a value of type `t` is a call of the
 # object's `call`: the type has one, and nothing asks for the object itself --
 # no marker after it (suppressFnAutoCall), not a dotted path's base
@@ -35646,7 +34809,7 @@ readsObjectAsCall: function {
     if st.mode.suppressFnAutoCall or st.mode.suppressBareCtor then return ztypes.tid
     if st.mode.inAssignTarget then return ztypes.tid
     if nid == st.walk.eachSubjectNid when (declaresIterate :st :ast :t) then return ztypes.tid
-    return (objectCallOf :st :ast :t)
+    return (stdtypes.objectCallOf :st :ast :t)
 }
 
 # callsObjectBare -- the bare read `node`, of type `t`, of a callable object is
@@ -39339,7 +38502,7 @@ refuseRepointReadonly: function {
     pins: (List ztyping.PinPath).view
     roV: bool
 } out bool is {
-    if (isViewFamilyTid :ast :st tid: lvt) when (isMutableViewTid :ast :st tid: lvt
+    if (isViewFamilyTid :ast :st tid: lvt) when (stdtypes.isMutableViewTid :ast :st tid: lvt
     ).not then return false
     xName: varNameText :st :ast vid: xVid
     if (nameIsReadonly :st :ast name: xName.stringView) then return false
@@ -40518,7 +39681,7 @@ wrapDoBreakValue: function {
     # type spelled like one does not capture the value
     wrapWk: zast.wellKnown.slot.tyOptionval
     if (st.reg.isReftypeOf tid: payloadTid) then wrapWk = zast.wellKnown.slot.tyOption
-    optionTemplate: stdTidOpt :ast :st wk: wrapWk
+    optionTemplate: stdtypes.stdTidOpt :ast :st wk: wrapWk
     if optionTemplate.none then return payloadTid
     # `ovo0` is whichever of Option / optionval the payload's family selected,
     # and each names its own parameter. A zero id stages under the elided key,
@@ -40585,18 +39748,6 @@ checkDo: function {
         stampGate :st nid: donode.nid tid: setk
     }
     return result
-}
-
-# isCallNode -- a call test that keeps the caller's un-narrowed handle, where a
-# `match` would narrow it to the call row.
-isCallNode: function {n: astnode.view} out bool is {
-    match (
-        n
-    ) case call then {
-        return true
-    } else {
-        return false
-    }
 }
 
 # headerIsPlace -- the value a `for each` header walks is storage that already
@@ -40716,19 +39867,6 @@ bindForBorrowedElement: function {
     }
 }
 
-# probeForCallIteration -- a call-shaped iterator init that is not an iterator
-# wrapper has its `call` member forced, so its per-iteration call is typed
-# before the loop binds an element.
-probeForCallIteration: function {
-    st: zenv.ZSymbolTable
-    ast: Ast
-    vt: ztypes.tid
-} is {
-    if (iterWrapperElem :ast :st wid: vt).some then return
-    forceMemberOf :st :ast parentTypeId: vt nameId: zast.wellKnown.slot.wkCall
-    markMemberUsed :st ownerTid: vt nameId: zast.wellKnown.slot.wkCall
-}
-
 
 # forelem -- what a `for` header's binding yields, as forOptionElementOf or
 # forIteratorElementOf reads it.
@@ -40742,84 +39880,6 @@ forelem: record {
     # whether the wrapper is an OptionView: the element is then a borrowed
     # view into the container rather than an owned or copied value
     isView: bool
-}
-
-# forOptionElementOf -- the element a PLAIN `for` binding yields: its value is
-# evaluated at every iteration and must itself answer an option. 0 when it
-# does not. A function NAME is a call there, as anywhere, so it answers its
-# return; a function REFERENCE is a value, as anywhere, and answers no option.
-forOptionElementOf: function {
-    st: zenv.ZSymbolTable
-    ast: Ast
-    vt: ztypes.tid
-} out forelem is {
-    fe: forelem elem: ztypes.tid.zero wrapper: vt isView: false
-    w1: iterWrapperElem :ast :st wid: vt
-    if w1.some then {
-        fe.elem = w1
-        fe.isView = isViewUnionMono :ast :st wid: vt
-    }
-    return fe
-}
-
-# forIteratorElementOf -- the element an `each` binding yields. Its value is
-# evaluated once and is the ITERATOR: the element is read off the return of
-# its `call` member. 0 when it has no `call` answering an option.
-forIteratorElementOf: function {
-    st: zenv.ZSymbolTable
-    ast: Ast
-    vt: ztypes.tid
-} out forelem is {
-    fe: forelem elem: ztypes.tid.zero wrapper: vt isView: false
-    # the iterator's `call` METHOD: a field or an arm named `call` is no
-    # iterator's
-    c1: objectCallOf :st :ast t: vt
-    if c1.notZero then {
-        rv0: methodReturnOf reg: st.reg typing: st.typing mid: c1
-        if rv0.some then {
-            w2: iterWrapperElem :ast :st wid: rv0
-            if w2.some then {
-                fe.elem = w2
-                fe.wrapper = rv0
-                fe.isView = isViewUnionMono :ast :st wid: rv0
-            }
-        }
-    }
-    if fe.elem.isZero when (st.reg.isPartialOf tid: vt) then {
-        return (partialForElement :st :ast :vt)
-    }
-    return fe
-}
-
-# partialForElement -- a template walk's iterator over its own type parameter
-# (`ListIter_T` of `(List T).view`): the partial instance carries no members,
-# so the element is read off its TEMPLATE's `call` -- the parameter its option
-# wraps -- and taken from the partial's type arguments. The instance walk
-# checks the loop on the concrete iterator.
-partialForElement: function {
-    st: zenv.ZSymbolTable
-    ast: Ast
-    vt: ztypes.tid
-} out forelem is {
-    fe: forelem elem: ztypes.tid.zero wrapper: vt isView: false
-    og: st.reg.genericOriginOf tid: vt
-    if og.isZero then return fe
-    markMemberUsed :st ownerTid: vt nameId: zast.wellKnown.slot.wkCall
-    c1: objectCallOf :st :ast t: og
-    if c1.isZero then return fe
-    rv: (methodReturnOf reg: st.reg typing: st.typing mid: c1).or d: ztypes.tid
-    if rv.isZero or ((st.reg.genericArgCount specId: rv) == 0) then return fe
-    et: st.reg.genericTypeArgAt specId: rv ordinal: 0
-    if (st.reg.typetypeOf typeId: et) != ztypes.ztypetype.genericParam then return fe
-    otd: st.typing.declIdOfType typeId: og
-    pn: st.reg.genericParamNameOfTid tdecl: otd ptid: et
-    ordo: st.reg.paramOrdinalOf tdecl: otd paramName: pn
-    if ordo.some then {
-        fe.elem = st.reg.genericTypeArgAt specId: vt ordinal: ordo
-        fe.wrapper = rv
-        fe.isView = isViewUnionMono :ast :st wid: rv
-    }
-    return fe
 }
 
 # mintGenField -- a state field the generator class needs for something a C
@@ -40909,162 +39969,6 @@ mintForSpillFields: function {
     st.typing.forIterableField.set key: cond.nid value: gf
 }
 
-# bindForIteration -- bind a `for` header's loop name to what its binding
-# yields: the element type and ownership, and the lock the iteration holds
-# for the body's duration. An `each` binding is evaluated once and walked as
-# an iterator; a plain one is evaluated at every iteration and answers the
-# option itself. Inside a generator body whose loop suspends, the loop's
-# state fields are minted here too.
-bindForIteration: function {
-    st: zenv.ZSymbolTable
-    unitDecl: ztypes.declid
-    ast: Ast
-    cond: argref
-    vt: ztypes.tid
-    nm: StringView
-    facId: ztypes.tid
-    spillFor: bool
-    isEach: bool
-} is {
-    fe: forelem elem: ztypes.tid.zero wrapper: vt isView: false
-    # what the header's iterator calls pin (its implicit `iterate`, the probe of
-    # its per-iteration call) is the header's value too: it is recorded under
-    # the header's value node with what the header's walk left
-    if isEach then {
-        # a type with `iterate` is walked through what it returns: from here on
-        # the condition's value IS the `E.iterate` node minted for it
-        if facId.isZero then {
-            iw: implicitIterate :st :unitDecl :ast :cond :vt
-            if iw.nid.notZero then {
-                cond.operation = iw.nid
-                vt = iw.tid
-            }
-        }
-        # A call-shaped iterator init probes its per-iteration call
-        # in an empty call scope; gated on the value being an iterator
-        # wrapper.
-        if (isCallNode n: (ast.nodes.get i: cond.operation)) then {
-            probeForCallIteration :st :ast :vt
-        }
-        fe = forIteratorElementOf :st :ast :vt
-    } else {
-        fe = forOptionElementOf :st :ast :vt
-    }
-    if st.walk.draft.holds then recordDraft :st nid: cond.operation
-    if fe.elem.isZero then {
-        refuseUnwalkableBinding :st :ast :cond :vt :isEach
-        return
-    }
-    # an if or match header hands over what its arms keep (pinsOfArms): their
-    # lines' walks left nothing pending
-    hpins: List ztyping.PinPath
-    (
-        readValuePins
-        :st
-        :ast
-        :vt
-        nid: cond.operation
-        borrowing: false
-        writes: false
-        verb: "iterate"
-        dst: hpins
-    )
-    # an element that is itself a view (`split`'s and `lines`' StringView, in a
-    # plain Option) is a reference into what the iteration reads, as an
-    # OptionView's payload is: it holds the iteration's pins for the body. A
-    # view the header left no pins for (a static list's element) holds no lock
-    # and is the loop's own value, as a lock-free view bound by a let is. Only
-    # an `each` header's iterator is a temporary no name holds; a plain `for`
-    # over a bound iterator leaves the pins to the binding.
-    pinned: hpins.length > 0
-    lockedView: isEach and (isViewFamilyTid :ast :st tid: fe.elem) and pinned
-    viewElem: fe.isView or lockedView
-    if viewElem then {
-        (
-            bindForBorrowedElement
-            :st
-            :ast
-            :cond
-            elem: fe.elem
-            :nm
-            aliasesStorage: fe.isView
-            fpins: hpins
-        )
-    } else {
-        bindForOwnedElement :st :cond elem: fe.elem kept: spillFor
-    }
-    if spillFor then mintForSpillFields :st :ast :cond :fe :vt :facId :isEach
-}
-
-# bindForOwnedElement -- bind a `for` loop name to an element it owns (or
-# copies) for the iteration: a local of the iteration's scope, destroyed where
-# that scope's lists name it, as any local is. `kept` says the loop suspends
-# inside a generator body, which keeps the element in the instance.
-bindForOwnedElement: function {st: zenv.ZSymbolTable cond: argref elem: ztypes.tid kept: bool} is {
-    evid: st.reg.newVariable ztypeId: elem ownership: ztypes.zownership.owned
-    st.reg.setVariableOrigin id: evid origin: ztypes.zvarorigin.local
-    st.defineVar nameId: cond.name vid: evid
-    st.typing.setDefVariable nid: cond.operation vid: evid
-    # the instance saves the element at every suspension, and its destructor
-    # frees what it saved when the iterator is abandoned: a move out of the
-    # element zeroes it, so the copy saved after the move holds nothing
-    if kept then st.typing.zeroOnMove.add item: evid
-}
-
-# refuseUnwalkableBinding -- A NAMED `for` BINDING IS WHAT ENDS THE LOOP: an
-# option answering `none`, read off the binding itself (plain) or off its
-# iterator's `call` (`each`, after an implied `iterate`). Nothing else ends a
-# loop by itself, so a binding that yields no element is refused -- and bound
-# typeless all the same, so the body's reads of it are not each an unknown
-# reference on top of the one error.
-refuseUnwalkableBinding: function {
-    st: zenv.ZSymbolTable
-    ast: Ast
-    cond: argref
-    vt: ztypes.tid
-    isEach: bool
-} is {
-    itn: specWrittenName :st :ast tid: vt
-    im: "a 'for' binding must answer an option, got '\{itn}'"
-    h: String
-    if isEach then {
-        im = "'for each' needs a type with 'iterate' or an iterator 'call', got '\{itn}'"
-        # an option answers once; a plain `for` reads it again at every
-        # iteration, which is how a bound iterator or a method answering an
-        # option is walked
-        if (forOptionElementOf :st :ast :vt).elem.notZero then {
-            vn: zast.nameTextAt :ast ref: cond.name
-            # the read as written, before its implied `.call`
-            srcNid: cond.operation
-            {
-                rn: ast.nodes.get i: srcNid
-                match (
-                    rn
-                ) case dottedpath then {
-                    cid: zast.atomNameIdOf n: (ast.nodes.get i: rn.child)
-                    if cid == zast.wellKnown.slot.wkCall then srcNid = rn.parent
-                } else null
-            }
-            src: typeExprText :ast nid: srcNid
-            im = "'for each' evaluates '\{src}' once, and it answers an option, which has no walk"
-            h = "a plain `for` reads it again at every iteration: `for \{vn}: \{src}`"
-        }
-    }
-    (
-        addErrorWithHint
-        :st
-        nodeid: cond.nid
-        lineno: (nodeLine n: (ast.nodes.get i: cond.operation))
-        colno: (nodeCol n: (ast.nodes.get i: cond.operation))
-        e: zast.err.typeError
-        msg: im
-        note: String
-        hint: h
-        width: 0
-    )
-    st.define nameId: cond.name ztypeId: ztypes.tid
-}
-
 # forFactoryTid -- the type id of a bare 0-arg function in a `for` header that
 # returns an iterator class, and so auto-invokes; 0 when the condition names
 # no such function. Its walk runs in a call scope, so the atom keeps the
@@ -41086,7 +39990,7 @@ forFactoryTid: function {
         ) then {
             fro: methodReturnOf reg: st.reg typing: st.typing mid: ffo
             if fro.some when (st.reg.typetypeOf typeId: fro) == ztypes.ztypetype.classType when (
-                objectCallOf
+                stdtypes.objectCallOf
                 :st
                 :ast
                 t: fro
@@ -41298,7 +40202,18 @@ checkForConditionIn: function {
         checkBareForCondition :st :ast :cond :vt
     }
     if nm.length > 0 when vt.notZero then {
-        bindForIteration :st :unitDecl :ast :cond :vt nm: nm.stringView :facId :spillFor :isEach
+        (
+            stdtypes.bindForIteration
+            :st
+            :unitDecl
+            :ast
+            :cond
+            :vt
+            nm: nm.stringView
+            :facId
+            :spillFor
+            :isEach
+        )
     }
     # an iterable that failed still binds its loop name, typeless, so
     # the body's reads of it are not each an unknown reference
@@ -41434,7 +40349,7 @@ forComprehensionTid: function {
             # one does not capture the loop
             ltWk: zast.wellKnown.slot.tyListRef
             if (st.reg.isValtypeOf tid: elemT) then ltWk = zast.wellKnown.slot.tyListVal
-            lto: stdTidOpt :ast :st wk: ltWk
+            lto: stdtypes.stdTidOpt :ast :st wk: ltWk
             if lto.some then {
                 lsubs: IdMapV zast.nameid v: ztypes.tid
                 lv: elemT
@@ -41488,7 +40403,7 @@ checkForPostcondition: function {
     # A `for loop { ... } while <cond>` post-condition must be boolean, the
     # same rule the pre-condition carries above: a non-bool value is a type
     # error rather than the invalid C a struct in a `while` head emits.
-    pbId: stdTidRo :ast :st wk: zast.wellKnown.slot.wkBool
+    pbId: stdtypes.stdTidRo :ast :st wk: zast.wellKnown.slot.wkBool
     if pbId.notZero when pcVt.notZero when pcVt != pbId then {
         pTt: st.reg.typetypeOf typeId: pcVt
         pPair: ztyping.isSumPair ty: st.typing reg: st.reg tid: pcVt
@@ -47566,7 +46481,7 @@ landLiteralReceiver: function {
     nm: (st.typing.decls.get i: (st.typing.declIdOfType typeId: method)).name
     owner: typedefMemberOwner :st :ast bt: target cnId: nm
     forceMemberOf :st :ast parentTypeId: owner nameId: nm
-    markMemberUsed :st ownerTid: owner nameId: nm
+    stdtypes.markMemberUsed :st ownerTid: owner nameId: nm
 }
 
 
@@ -49357,47 +48272,6 @@ refuseYieldedBorrow: function {st: zenv.ZSymbolTable ast: Ast arg: argref argT: 
     refuseBorrowedArms :st :ast nid: arg.operation :verb
 }
 
-# reportReturnLabelledArg -- `return` is itself a call, so a LABELLED argument
-# binds to RETURN and not to the expression being returned: `return f a: 1`
-# hands `a: 1` to return and leaves `f` bare. Say that, and say it ONCE --
-# walking the arguments as return values instead blames the bare callee for the
-# argument it was denied and then the return type for the function value,
-# neither of which names the real mistake. True when one was reported, which is
-# the caller's cue not to walk them as values.
-reportReturnLabelledArg: function {
-    st: zenv.ZSymbolTable
-    ast: Ast
-    call: callref
-} out bool is {
-    rLbl: false
-    kLIter: u64
-    for kLIter < call.nargs loop {
-        lArgId: zast.callArgAt :ast nid: call.nid i: kLIter
-        kLIter = kLIter + 1
-        lArg: argRefAt :ast nid: lArgId
-        if lArg.nid.notZero when lArg.name.notZero when rLbl.not then {
-            rLbl = true
-            lNm: zast.poolTextAt pool: ast.names ref: lArg.name
-            lMsg: "'return' has no argument '\{lNm}'"
-            lNote: "'return' is itself a call, so a labelled argument binds to it".string
-            lHint: "wrap the returned call in parentheses so '\{lNm}:' binds to it"
-            (
-                addErrorWithHint
-                :st
-                nodeid: lArg.nid
-                lineno: lArg.lineno
-                colno: lArg.colno
-                e: zast.err.callError
-                msg: lMsg
-                note: lNote
-                hint: lHint
-                width: lNm.length
-            )
-        }
-    }
-    return rLbl
-}
-
 # reportReturnedBareField -- a bare field read returned as an owned result: the
 # owner still frees it, so returning it hands the caller a second owner of the
 # same storage.
@@ -49658,40 +48532,6 @@ checkReturnedValue: function {
         :rpins
     )
     numerics.checkReturnTypeMatch :st :ast :arg :argT
-}
-
-# checkControlBuiltinCall -- `return`, and the control builtins that share its
-# shape: check the value against what the enclosing function declares, and
-# stamp the call with the type it yields.
-checkControlBuiltinCall: function {
-    st: zenv.ZSymbolTable
-    unitDecl: ztypes.declid
-    ast: Ast
-    call: callref
-} out ztypes.tid is {
-    result: ztypes.tid
-    rtOpt: stdTidOpt :ast :st wk: zast.wellKnown.slot.wkReturn
-    if rtOpt.some then {
-        calid: nodeId n: (ast.nodes.get i: call.callable)
-        stampGate :st nid: calid tid: rtOpt
-    }
-    st.typing.callKind.set key: call.nid value: zast.callkind.returnCall
-    if (reportReturnLabelledArg :st :ast :call).not then {
-        kAiter: u64
-        for kAiter < call.nargs loop {
-            argId: zast.callArgAt :ast nid: call.nid i: kAiter
-            kAiter = kAiter + 1
-            arg: argRefAt :ast nid: argId
-            if arg.nid.notZero then checkReturnedValue :st :unitDecl :ast :arg
-        }
-    }
-    nvOpt: stdTidOpt :ast :st wk: zast.wellKnown.slot.tyNever
-    if nvOpt.some then {
-        result = nvOpt
-        setk: result
-        stampGate :st nid: call.nid tid: setk
-    }
-    return result
 }
 
 # one call-checking leg's answer: whether it handled the call at all, and
@@ -51825,7 +50665,7 @@ refuseValueCallArgs: function {
     }
     # an object that declares `call` is called where it is read bare, and
     # takes its arguments through the member
-    if (objectCallOf :st :ast t: vt).notZero then {
+    if (stdtypes.objectCallOf :st :ast t: vt).notZero then {
         msg = "too many arguments: a value of type '\{tn}' is called by reading it bare; pass arguments to its `call` member (`.call ...`)"
     }
     (
@@ -52912,7 +51752,7 @@ bareCalleeKind: function {
         # instance owning it
         usedOn: st.reg.ownerTidOf tid: funcId
         if (st.reg.genericOriginOf tid: usedOn).isZero then usedOn = walkOwnerMono :st
-        markMemberUsed :st ownerTid: usedOn nameId: cnId
+        stdtypes.markMemberUsed :st ownerTid: usedOn nameId: cnId
     }
     if funcId.isZero then {
         return (calleekind fid: funcId isUser: false isGen: false isCtor: false unknown: false)
@@ -53058,7 +51898,7 @@ checkCall: function {
     if (refuseNumericOperator :st :ast :call) then return ztypes.tid.zero
     cnId: bodySelfTypeNameId :st nameId: (atomNameId :ast n: (ast.nodes.get i: call.callable))
     if cnId == zast.wellKnown.slot.wkReturn then {
-        return (checkControlBuiltinCall :st :unitDecl :ast :call)
+        return (stdtypes.checkControlBuiltinCall :st :unitDecl :ast :call)
     }
     if cnId == zast.wellKnown.slot.wkYield when (numerics.yieldIsInScope :st) then {
         return (checkYieldCall :st :unitDecl :ast :call)
@@ -55190,7 +54030,7 @@ checkCaseArms: function {
         targetName = tn.take
     }
     neverId: ztypes.tid
-    nvOpt: stdTidOpt :ast :st wk: zast.wellKnown.slot.tyNever
+    nvOpt: stdtypes.stdTidOpt :ast :st wk: zast.wellKnown.slot.tyNever
     if nvOpt.some then {
         neverId = nvOpt
     }
@@ -56649,32 +55489,10 @@ checkValueAt: function {
     # has under way waits for the node's walk and comes back as it was
     # (checkValueAside); the node's draft goes to its record (recordDraft),
     # which a value composed from the node reads (composeChildRecord)
-    if st.walk.draft.holds then return (checkValueAside :st :unitDecl :ast :nid)
+    if st.walk.draft.holds then return (stdtypes.checkValueAside :st :unitDecl :ast :nid)
     t: checkValueRowAt :st :unitDecl :ast :nid
-    recordDraft :st :nid
+    stdtypes.recordDraft :st :nid
     st.walk.draft.clear
-    return t
-}
-
-# checkValueAside -- checkValueAt under an enclosing draft that holds
-# something: the node walks in a draft of its own, and the enclosing one comes
-# back after it, as it was.
-checkValueAside: function {
-    st: zenv.ZSymbolTable
-    unitDecl: ztypes.declid
-    ast: Ast
-    nid: zast.nodeid
-} out ztypes.tid is {
-    outer: (
-        zenv.ValueDraft
-        pins: List ztyping.PinPath
-        marker: ztypes.zparamownership.noneMode
-        owned: false
-    )
-    outer swap st.walk.draft
-    t: checkValueRowAt :st :unitDecl :ast :nid
-    recordDraft :st :nid
-    outer swap st.walk.draft
     return t
 }
 
@@ -56699,53 +55517,6 @@ composeChildRecord: function {st: zenv.ZSymbolTable nid: zast.nodeid} is {
     }
     st.walk.draft.owned = vp.owned
     st.walk.draft.marker = vp.marker
-}
-
-# recordDraft -- what the value at `nid` keeps locked is its walk's draft: kept
-# under its node, with the variable each pin's root names here, for whatever
-# receives the value (pinsOfValue). An empty draft clears a record an earlier
-# walk of the node left.
-recordDraft: function {st: zenv.ZSymbolTable nid: zast.nodeid} is {
-    n: st.walk.draft.pins.length
-    if n == 0 when (
-        st.walk.draft.marker == ztypes.zparamownership.noneMode
-    ) when st.walk.draft.owned.not then {
-        if (st.walk.pinsAt.has key: nid) then (
-            st.setValuePins
-            :nid
-            vp: (
-                ztyping.valuepins
-                start: 0
-                len: 0
-                owned: false
-                marker: ztypes.zparamownership.noneMode
-            )
-        )
-        return
-    }
-    start: st.walk.valuePins.length
-    for each p: st.walk.draft.pins loop {
-        rv: (st.lookupVarId nameId: (p.path.get i: 0)).or d: ztypes.vid
-        st.walk.valuePinRoots.append rv
-        st.walk.valuePins.append (
-            ztyping.PinPath
-            path: p.path.copy
-            shared: p.shared
-            mutable: p.mutable
-            carried: p.carried
-        )
-    }
-    (
-        st.setValuePins
-        :nid
-        vp: (
-            ztyping.valuepins
-            start: start.u32.orPanic
-            len: n.u32.orPanic
-            owned: st.walk.draft.owned
-            marker: st.walk.draft.marker
-        )
-    )
 }
 
 # appendValuePin -- a copy of pin `p` onto the value-pin arena, with the variable
@@ -58707,7 +57478,7 @@ constantCompareType: function {
         }
     }
     bres: ztypes.tid
-    bo: stdTidOpt :ast :st wk: zast.wellKnown.slot.wkBool
+    bo: stdtypes.stdTidOpt :ast :st wk: zast.wellKnown.slot.wkBool
     if bo.some then {
         bres = bo
         ztyping.nodeTypeSet tbl: st.typing.nodeType :nid tid: bres
