@@ -2102,7 +2102,7 @@ emitFnBody: function {
         opb: prog.ast.nodes.get i: op.body
         # a declared result puts the last statement in return position, whatever
         # form the type is written in -- `u8` and `(ListVal u64)` alike
-        if op.returntype.notZero when ctx.genActive.not then ctx.tailRetActive = true
+        if op.returntype.notZero when ctx.gen.active.not then ctx.tailRetActive = true
         ctx.tailReturned = false
         stmtblocks.emitBodyNode :prog :ctx n: opb ind: "    " :tmp :buf
         ctx.tailRetActive = false
@@ -2505,24 +2505,27 @@ emitC: function {
         exclArms: List VarArms
         exclTids: List VarTid
         exSaves: List ExclSave
-        genActive: false
-        genTid: ztypes.tid.zero
-        genFieldsRow: 0
+        gen: (
+            GeneratorState
+            active: false
+            tid: ztypes.tid.zero
+            fieldsRow: 0
+            recvC: "this".string
+            valC: "value".string
+            yieldCount: 0
+            yieldNext: 0
+            forNext: 0
+            forSpills: List ForSpill
+            yieldTempK: (IdMapV zast.nodeid v: u64)
+            wrap: "".string
+            someTag: "".string
+            someC: "".string
+            noneTag: "".string
+            payC: "".string
+            hasValue: false
+        )
         exitNode: zast.nodeid
-        genRecvC: "this".string
-        genValC: "value".string
-        genYieldCount: 0
-        genYieldNext: 0
-        genForNext: 0
-        genForSpills: List ForSpill
         comprehendTo: List ComprehendTo
-        yieldTempK: (IdMapV zast.nodeid v: u64)
-        genWrap: "".string
-        genSomeTag: "".string
-        genSomeC: "".string
-        genNoneTag: "".string
-        genPayC: "".string
-        genHasValue: false
         curThisTid: ztypes.tid
         emittedUserTypes: IdSet ztypes.tid
         eqAsked: IdSet ztypes.tid
@@ -3814,7 +3817,7 @@ setupGenCtx: function {
 } out bool is {
     gyc: fnYieldCount :prog :op
     if gyc == 0 then {
-        ctx.genActive = false
+        ctx.gen.active = false
         return false
     }
     rid: fnReturnTidOf :prog tid: mid
@@ -3825,26 +3828,26 @@ setupGenCtx: function {
         }
     }
     if rid.isZero then {
-        ctx.genActive = false
+        ctx.gen.active = false
         return false
     }
     rc: spelledCname :ctx tid: rid
-    ctx.genFieldsRow = genFieldsRowOf :prog :op
-    ctx.genActive = true
-    ctx.genTid = owner
-    ctx.genYieldCount = gyc
-    ctx.genYieldNext = 1
-    ctx.genForNext = 0
-    for ctx.genForSpills.length > 0 loop ctx.genForSpills.pop
-    ctx.genWrap = "\{rc}_t"
-    ctx.genSomeTag = (
+    ctx.gen.fieldsRow = genFieldsRowOf :prog :op
+    ctx.gen.active = true
+    ctx.gen.tid = owner
+    ctx.gen.yieldCount = gyc
+    ctx.gen.yieldNext = 1
+    ctx.gen.forNext = 0
+    for ctx.gen.forSpills.length > 0 loop ctx.gen.forSpills.pop
+    ctx.gen.wrap = "\{rc}_t"
+    ctx.gen.someTag = (
         spelledTagConst
         :prog
         :ctx
         tid: rid
         armId: zast.wellKnown.slot.wkSome
     )
-    ctx.genSomeC = (
+    ctx.gen.someC = (
         memberC
         :prog
         :ctx
@@ -3852,7 +3855,7 @@ setupGenCtx: function {
         kind: memberkind.arm
         nameId: zast.wellKnown.slot.wkSome
     )
-    ctx.genNoneTag = (
+    ctx.gen.noneTag = (
         spelledTagConst
         :prog
         :ctx
@@ -3865,7 +3868,7 @@ setupGenCtx: function {
     if (originIsTid :prog tid: rid originTid: (ctx.origins.get i: family.slot.option)) then {
         gp = values.armPayloadC :prog :ctx tid: rid arm: zast.wellKnown.slot.wkSome
     }
-    ctx.genPayC = gp.take
+    ctx.gen.payC = gp.take
     # a `.call` that receives a per-call input is one with a SECOND parameter --
     # the receiver is first. Asked by position rather than by the label, because
     # the label belongs to the author: the function form always spelled it
@@ -3879,7 +3882,7 @@ setupGenCtx: function {
         }
         if pcnt > 1 then hasVal = true
     }
-    ctx.genHasValue = hasVal
+    ctx.gen.hasValue = hasVal
     # the C names the state machine reads the receiver and the input through
     gids: ListVal ztypes.tid
     gnm: ListVal zast.nameid
@@ -3888,8 +3891,8 @@ setupGenCtx: function {
     for gpi < gnm.length loop {
         gv: paramVidByNameId :prog :op nameId: (gnm.get i: gpi)
         gc: localnames.varCName :ctx :prog vid: gv
-        if gpi == 0 then ctx.genRecvC = gc.copy
-        if gpi == 1 then ctx.genValC = gc.copy
+        if gpi == 0 then ctx.gen.recvC = gc.copy
+        if gpi == 1 then ctx.gen.valC = gc.copy
         gpi = gpi + 1
     }
     return true
@@ -3944,7 +3947,7 @@ emitOneMethod: function {
         ctx.curThisTid = ztypes.tid.zero
         if isGen then {
             forloops.emitGenEpilogue :prog :ctx :buf
-            ctx.genActive = false
+            ctx.gen.active = false
         }
         buf.append "}\n\n"
     }

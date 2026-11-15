@@ -1173,6 +1173,55 @@ Program: class {
     typing: ztyping.ZTyping.view
 }
 
+# GeneratorState -- the generator function being written. A part of Ctx
+# (`gen`).
+GeneratorState: class {
+    # whether a generator body is being emitted, which changes what a return
+    # means
+    active: bool
+    # the generator class whose `call` is being emitted: the owner of its state
+    # fields
+    tid: ztypes.tid
+    # that generator's row of synthesized state fields (typing.genFields)
+    fieldsRow: u64
+    # the emitted C name of the generator receiver, for the state-machine
+    # prologue: it is a renamed parameter, not the literal `this`
+    recvC: String
+    # and the emitted name of its resume-value parameter
+    valC: String
+    # how many yields the generator has, so the state machine knows its arms
+    yieldCount: u64
+    # the next yield's number as the body is walked
+    yieldNext: u64
+    # the last `#fc_<k>` loop-counter field handed to a counted `for` whose
+    # body suspends. Which field a loop gets does not matter, only that each
+    # gets its own: they are all i64, and the lowering allocated at least this
+    # many by the same walk
+    forNext: u64
+    # the counted `for` loops currently open around the statement being
+    # emitted, innermost last. Every suspension spills all of them and every
+    # resume label reloads them
+    forSpills: List ForSpill
+    # the yield number of each yield HOISTED out of expression position, by
+    # call node id. The suspension runs as its own statement and the resume
+    # value lands in `#yv_<k>`; the expression emitter then renders that yield
+    # as a plain read of it
+    yieldTempK: (IdMapV zast.nodeid v: u64)
+    # the wrapper type the generator's `.call` returns
+    wrap: String
+    # that wrapper's some tag
+    someTag: String
+    # and its some arm's C member name
+    someC: String
+    # the wrapper's none tag, which the generator returns once it is exhausted
+    noneTag: String
+    # the payload's C type
+    payC: String
+    # whether the generator yields a value at all, as against yielding only to
+    # suspend
+    hasValue: bool
+}
+
 # Ctx -- the per-program emission context (anchor cnames, main unit name,
 # the literal pool, and the resolved-name map access).
 Ctx: class {
@@ -1272,59 +1321,17 @@ Ctx: class {
     # allocation per clause for an empty answer. Entries are popped in reverse,
     # so a nested clause restores before the one enclosing it.
     exSaves: List ExclSave
-    # whether a generator body is being emitted, which changes what a return
-    # means
-    genActive: bool
-    # the generator class whose `call` is being emitted: the owner of its state
-    # fields
-    genTid: ztypes.tid
-    # that generator's row of synthesized state fields (typing.genFields)
-    genFieldsRow: u64
+    # the generator function being written
+    gen: GeneratorState
     # the `return`, `break` or `continue` statement being emitted, whose
     # destroys the checker recorded (exitDestroy); 0 at a tail value, which
     # records none
     exitNode: zast.nodeid
-    # the emitted C name of the generator receiver, for the state-machine
-    # prologue: it is a renamed parameter, not the literal `this`
-    genRecvC: String
-    # and the emitted name of its resume-value parameter
-    genValC: String
-    # how many yields the generator has, so the state machine knows its arms
-    genYieldCount: u64
-    # the next yield's number as the body is walked
-    genYieldNext: u64
-    # the last `#fc_<k>` loop-counter field handed to a counted `for` whose
-    # body suspends. Which field a loop gets does not matter, only that each
-    # gets its own: they are all i64, and the lowering allocated at least this
-    # many by the same walk
-    genForNext: u64
-    # the counted `for` loops currently open around the statement being
-    # emitted, innermost last. Every suspension spills all of them and every
-    # resume label reloads them
-    genForSpills: List ForSpill
     # the for-EXPRESSION append targets open around the statement being
     # emitted, innermost last: a comprehension records one, and the loop's own
     # body takes it (emitBodyNode). Nested only through a comprehension inside
     # another's body, which is why it is a stack rather than a slot
     comprehendTo: List ComprehendTo
-    # the yield number of each yield HOISTED out of expression position, by
-    # call node id. The suspension runs as its own statement and the resume
-    # value lands in `#yv_<k>`; the expression emitter then renders that yield
-    # as a plain read of it
-    yieldTempK: (IdMapV zast.nodeid v: u64)
-    # the wrapper type the generator's `.call` returns
-    genWrap: String
-    # that wrapper's some tag
-    genSomeTag: String
-    # and its some arm's C member name
-    genSomeC: String
-    # the wrapper's none tag, which the generator returns once it is exhausted
-    genNoneTag: String
-    # the payload's C type
-    genPayC: String
-    # whether the generator yields a value at all, as against yielding only to
-    # suspend
-    genHasValue: bool
     # the receiver type being emitted into, which decides what a bare member
     # resolves against
     curThisTid: ztypes.tid

@@ -834,7 +834,7 @@ emitErrorStmt: function {
     }
     # proved: every path through the function reaches it, assuming each loop
     # ends. An early exit before it can skip it, so it stays a run-time trap
-    if ctx.condDepth == 0 when ctx.genActive.not when ctx.returnEmitted.not when (
+    if ctx.condDepth == 0 when ctx.gen.active.not when ctx.returnEmitted.not when (
         anyFrameLeft
         :ctx
     ).not then {
@@ -964,7 +964,7 @@ emitCallStmt: function {
             }
         }
         if hasArg.not then {
-            if ctx.genActive then {
+            if ctx.gen.active then {
                 emitExitDestroy :prog :ctx :ind :buf
                 lgd: "\{ind}goto L_done;\n"
                 buf.append lgd
@@ -1103,7 +1103,7 @@ emitAssignment: function {
     narrowfacts.dropStaleBorrowAlias :ctx vid: nameVid
     nbrw: localnames.bindingVarIsBorrowed :prog :n
     ctx.borrowedVars.set key: (localnames.defVid :prog nid: n.nodeid) value: nbrw
-    if ctx.genActive when (isYieldNode :prog n: avn) then {
+    if ctx.gen.active when (isYieldNode :prog n: avn) then {
         (
             forloops.emitExprFormYield
             :prog
@@ -1430,7 +1430,7 @@ emitReturnStmt: function {
     ctx.exitNode = interpPartNodeId :n
     if bkwId == zast.wellKnown.slot.wkReturn then {
         ctx.returnEmitted = true
-        if ctx.genActive then {
+        if ctx.gen.active then {
             emitExitDestroy :prog :ctx :ind :buf
             lgd: "\{ind}goto L_done;\n"
             buf.append lgd
@@ -1756,7 +1756,7 @@ emitPlainWhileHead: function {
 # forCondSuspends -- one of a loop's conditions holds a suspension point, so
 # the header has to be written as a body test instead.
 forCondSuspends: function {prog: Program.view ctx: Ctx.view n: zast.forrow.view} out bool is {
-    if ctx.genActive.not then return false
+    if ctx.gen.active.not then return false
     for each kyId: (zast.kidsOf ast: prog.ast span: n.conditions) loop {
         if (zast.yieldCountIn ast: prog.ast nid: kyId) > 0 then return true
     }
@@ -2379,7 +2379,7 @@ emitStmtParts: function {
     # a suspension point is a CALL now, so it is intercepted before the match
     # rather than owning an arm -- adding a `call` arm here would re-route
     # every ordinary call away from the tail leg that handles them.
-    if ctx.genActive when (isYieldNode :prog :n) then {
+    if ctx.gen.active when (isYieldNode :prog :n) then {
         ycs: zast.yieldCallIdAt ast: prog.ast nid: (zast.nodeIdOf :n)
         # this yield's OPERAND may itself contain yields, and they evaluate
         # before it does -- so they suspend first
@@ -2397,7 +2397,7 @@ emitStmtParts: function {
     # a yield written in EXPRESSION position suspends the function, so it
     # cannot stay inside the C expression: hoist each one to its own statement
     # first and leave a temp behind for the expression emitter to read.
-    if ctx.genActive then {
+    if ctx.gen.active then {
         hnid: zast.nodeIdOf :n
         forloops.hoistExprYields :prog :ctx nid: hnid :ind :buf
     }
@@ -4003,7 +4003,7 @@ emitOptionLoopTail: function {
     popLoopLabel :ctx id: lidO :ind :buf
     # the payload leaves C scope with the loop, so a suspension after it must
     # not spill it
-    if pushedO then ctx.genForSpills.pop
+    if pushedO then ctx.gen.forSpills.pop
 }
 
 # emitPlainBindingFor -- `for x: E loop`, a binding written without `each`: E is
@@ -4320,7 +4320,7 @@ appendCondText: function {
 # is guarded by the ones before -- `when` short-circuits -- so its suspension
 # cannot be lifted above the `if` without running on a path never taken.
 whenCondSuspends: function {prog: Program.view ctx: Ctx.view n: zast.ifclauserow} out bool is {
-    if ctx.genActive.not then return false
+    if ctx.gen.active.not then return false
     wi: 1.u64
     for wi < n.conditions.count loop {
         cwi: zast.kidAt kids: prog.ast.kids span: n.conditions i: wi
@@ -4451,7 +4451,7 @@ hoistCondYields: function {
     # the hoisted statements append here
     buf: String.borrow
 } is {
-    if ctx.genActive.not then return
+    if ctx.gen.active.not then return
     forloops.hoistExprYields :prog :ctx nid: kId :ind :buf
 }
 
