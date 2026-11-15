@@ -1446,6 +1446,85 @@ PieceState: class {
     unitOrder: List String
 }
 
+# ReachState -- what the program uses: types, members and functions. A part of
+# Ctx (`reach`).
+ReachState: class {
+    liveClasses: IdSet ztypes.tid
+    # the types whose generated `==` has been asked about, and those that have
+    # one, so a C `_eq`
+    eqAsked: IdSet ztypes.tid
+    eqHasBody: IdSet ztypes.tid
+    # the types whose generated `_eq` written C calls: only these are written
+    # (noteEqUse)
+    eqUsed: IdSet ztypes.tid
+    # the types whose destructor written C calls: a record's or a class's is
+    # written only then (noteDestroyUse)
+    destroyUsed: IdSet ztypes.tid
+    # the types written C builds field by field: a record's or a class's
+    # `_meta_create` is written only then (noteCreateUse)
+    createUsed: IdSet ztypes.tid
+    # those whose `<rc>_create` name written C calls: only these get the
+    # `#define` that names `_meta_create` so (noteCreateAliasUse)
+    createAliasUsed: IdSet ztypes.tid
+    # the types whose generated `_hash` is written, in the order they were
+    # demanded
+    hashAsked: IdSet ztypes.tid
+    hashOrder: ListVal ztypes.tid
+    # the function types whose `_ft` typedef the program needs: every one a
+    # written signature names before the typedef pass, and every one a field,
+    # parameter, variable or return declares
+    fnptrDemand: IdSet ztypes.tid
+    # the function types whose `_ft` typedef the pass wrote
+    fnptrWritten: IdSet ztypes.tid
+    # the typedef pass has run: a function type met after it must be one it wrote
+    fnptrPassDone: bool
+    # the struct types the generated code spells (typeRefC, a fragment's
+    # holes) while it is generated, which is before any type is written
+    typeUses: IdSet ztypes.tid
+    # the ordinal variants written C spells a tag constant of (spelledTagConst):
+    # their enum is written, but their type name only where it is spelled
+    ordinalTagUses: IdSet ztypes.tid
+    # the ordinal variants reached only through their tag constants: written
+    # as their enum alone, with no type name (closeReachedTypes)
+    tagOnlyTypes: IdSet ztypes.tid
+    # the other variants whose tag enum written C spells -- a tag constant, or
+    # the `_tag_t` type a fragment names: only these, and a variant whose struct
+    # stores its tag as the enum, write it (tagEnumWritten)
+    tagEnumUses: IdSet ztypes.tid
+    # those closed over what each one's C spells in turn: its fields, arm
+    # payloads, elements and the signatures of its used members. Only these
+    # types are written
+    reachedTypes: IdSet ztypes.tid
+    # the reached set is closed: a struct type spelled after it must be in it
+    fixed: bool
+    # the template members written C calls, each keyed by its instance and its
+    # memberWord slot (memberKey): a template's member section is written for an
+    # instance only where its member is here (rtSectionPlan)
+    memberUses: IdSet u64
+    # the members an instance was written without: spelling one after is late
+    membersLeftOut: IdSet u64
+    # the type ids those rows gate, and the ones the program actually built
+    demandGatedTids: IdSet ztypes.tid
+    # the types something actually referenced, which is what decides emission
+    usedTypeIds: IdSet ztypes.tid
+    # each (impl, protocol) pair written C boxes as an OWNED protocol value
+    # (noteOwnedBoxUse): only these get `_create_owned` and `_owned_destroy`
+    ownedBoxUses: IdSet u64
+    # each (impl, protocol or facet) pair written C boxes as a BORROWED value,
+    # or copies into a facet (noteBorrowBoxUse): only these get `_create`
+    borrowBoxUses: IdSet u64
+    # the static aggregate rows written C spells `_zag<row>` of (noteAggUse),
+    # those written, each one's text and its row in the order written
+    # (writeDemandedAggs), and whether the written set is fixed
+    aggUses: IdSet u64
+    # the static list rows whose reader `_zag<row>_at` written C calls
+    # (noteAggReaderUse)
+    aggReaderUses: IdSet u64
+    # which continue labels were actually jumped to, so an unused one is not
+    # emitted
+    contLabelUsed: (IdMapV u64 v: bool)
+}
+
 # Ctx -- the per-program emission context (anchor cnames, main unit name,
 # the literal pool, and the resolved-name map access).
 Ctx: class {
@@ -1521,7 +1600,8 @@ Ctx: class {
     readableNames: bool
     # which unit each definition came from
     defUnitId: (IdMapV ztypes.tid v: ztypes.declid)
-    liveClasses: IdSet ztypes.tid
+    # what the program uses: types, members and functions
+    reach: ReachState
     # where each record's or class's data-field list starts in fieldNameIds, read
     # once per type (fieldOrdinalOf)
     fieldListAt: (IdMapV ztypes.tid v: u64)
@@ -1536,26 +1616,6 @@ Ctx: class {
     # the user types whose struct is already out, so a second demand does not
     # emit it twice
     emittedUserTypes: IdSet ztypes.tid
-    # the types whose generated `==` has been asked about, and those that have
-    # one, so a C `_eq`
-    eqAsked: IdSet ztypes.tid
-    eqHasBody: IdSet ztypes.tid
-    # the types whose generated `_eq` written C calls: only these are written
-    # (noteEqUse)
-    eqUsed: IdSet ztypes.tid
-    # the types whose destructor written C calls: a record's or a class's is
-    # written only then (noteDestroyUse)
-    destroyUsed: IdSet ztypes.tid
-    # the types written C builds field by field: a record's or a class's
-    # `_meta_create` is written only then (noteCreateUse)
-    createUsed: IdSet ztypes.tid
-    # those whose `<rc>_create` name written C calls: only these get the
-    # `#define` that names `_meta_create` so (noteCreateAliasUse)
-    createAliasUsed: IdSet ztypes.tid
-    # the types whose generated `_hash` is written, in the order they were
-    # demanded
-    hashAsked: IdSet ztypes.tid
-    hashOrder: ListVal ztypes.tid
     # the generated helpers that call a method the author wrote: their bodies,
     # written after every function prototype
     lateDefs: String
@@ -1563,33 +1623,6 @@ Ctx: class {
     # the same as asking whether the body is out, and conflating them emits
     # invalid C
     fwdDeclaredTypes: IdSet ztypes.tid
-    # the function types whose `_ft` typedef the program needs: every one a
-    # written signature names before the typedef pass, and every one a field,
-    # parameter, variable or return declares
-    fnptrDemand: IdSet ztypes.tid
-    # the function types whose `_ft` typedef the pass wrote
-    fnptrWritten: IdSet ztypes.tid
-    # the typedef pass has run: a function type met after it must be one it wrote
-    fnptrPassDone: bool
-    # the struct types the generated code spells (typeRefC, a fragment's
-    # holes) while it is generated, which is before any type is written
-    typeUses: IdSet ztypes.tid
-    # the ordinal variants written C spells a tag constant of (spelledTagConst):
-    # their enum is written, but their type name only where it is spelled
-    ordinalTagUses: IdSet ztypes.tid
-    # the ordinal variants reached only through their tag constants: written
-    # as their enum alone, with no type name (closeReachedTypes)
-    tagOnlyTypes: IdSet ztypes.tid
-    # the other variants whose tag enum written C spells -- a tag constant, or
-    # the `_tag_t` type a fragment names: only these, and a variant whose struct
-    # stores its tag as the enum, write it (tagEnumWritten)
-    tagEnumUses: IdSet ztypes.tid
-    # those closed over what each one's C spells in turn: its fields, arm
-    # payloads, elements and the signatures of its used members. Only these
-    # types are written
-    reachedTypes: IdSet ztypes.tid
-    # the reached set is closed: a struct type spelled after it must be in it
-    reachFixed: bool
     # every function the units could write, in the order the C writes them
     # (planFns), and each one's job by its type id
     fnJobs: ListVal fnjob
@@ -1614,46 +1647,20 @@ Ctx: class {
     # the user units whose C implementation file (`<unit>/nativec.zd`) was
     # read (UserImplementation), by name
     implementedUnits: Set String
-    # the template members written C calls, each keyed by its instance and its
-    # memberWord slot (memberKey): a template's member section is written for an
-    # instance only where its member is here (rtSectionPlan)
-    memberUses: IdSet u64
-    # the members an instance was written without: spelling one after is late
-    membersLeftOut: IdSet u64
-    # the type ids those rows gate, and the ones the program actually built
-    demandGatedTids: IdSet ztypes.tid
-    # the types something actually referenced, which is what decides emission
-    usedTypeIds: IdSet ztypes.tid
     # implementation rows whose helper set is already in the buffer, by row id
     emittedImplementation: IdSet ztypes.confid
     # implementation rows written C makes a value of -- an impl boxed as its
     # protocol or facet (noteBoxUse): only these rows' helpers are written
     boxedImplementation: IdSet ztypes.confid
-    # each (impl, protocol) pair written C boxes as an OWNED protocol value
-    # (noteOwnedBoxUse): only these get `_create_owned` and `_owned_destroy`
-    ownedBoxUses: IdSet u64
-    # each (impl, protocol or facet) pair written C boxes as a BORROWED value,
-    # or copies into a facet (noteBorrowBoxUse): only these get `_create`
-    borrowBoxUses: IdSet u64
-    # the static aggregate rows written C spells `_zag<row>` of (noteAggUse),
-    # those written, each one's text and its row in the order written
-    # (writeDemandedAggs), and whether the written set is fixed
-    aggUses: IdSet u64
     aggWritten: IdSet u64
     aggsOut: List WrittenAgg
     aggsFixed: bool
-    # the static list rows whose reader `_zag<row>_at` written C calls
-    # (noteAggReaderUse)
-    aggReaderUses: IdSet u64
     # each marker protocol (one with no members) asked about, to whether the
     # program makes a value of it (markerValueMade)
     markerValues: (IdMapV ztypes.tid v: bool)
     # ListIter monos whose cursor is already in the buffer. A List and a view
     # of it resolve `iterate` to ONE mono, so both reach the same typedef
     emittedListIters: IdSet ztypes.tid
-    # which continue labels were actually jumped to, so an unused one is not
-    # emitted
-    contLabelUsed: (IdMapV u64 v: bool)
     # String's type id
     strTid: ztypes.tid
     # StringView's type id
@@ -2460,11 +2467,11 @@ typeRefC: function {
 # before the typedef pass it is a demand the pass answers; after it, the
 # typedef must be one the pass wrote, or the C names a type that does not exist.
 noteFnptrUse: function {ctx: Ctx tid: ztypes.tid} is {
-    if ctx.fnptrPassDone.not then {
-        ctx.fnptrDemand.add item: tid
+    if ctx.reach.fnptrPassDone.not then {
+        ctx.reach.fnptrDemand.add item: tid
         return
     }
-    if (ctx.fnptrWritten.has item: tid) then return
+    if (ctx.reach.fnptrWritten.has item: tid) then return
     (
         emitFail
         :ctx
@@ -2528,7 +2535,7 @@ fnjob: record {
 # instance was already written without names a function the C never defines.
 noteMemberUse: function {ctx: Ctx mono: ztypes.tid member: u64} is {
     k: nativepieces.memberKey :mono :member
-    if (ctx.memberUses.has item: k) then {
+    if (ctx.reach.memberUses.has item: k) then {
         if (memberHasCond :ctx key: k) then ctx.pieces.memberAlways.add item: k
         return
     }

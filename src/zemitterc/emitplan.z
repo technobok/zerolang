@@ -93,7 +93,7 @@ ctxCname: function {ctx: Ctx.view tid: ztypes.tid} out String is {
 # noteSpelled -- what spelledCname records, for a caller that reads the name
 # as a view (ctxCnameView) once its writes to `ctx` are done.
 noteSpelled: function {ctx: Ctx tid: ztypes.tid} is {
-    if ctx.reachFixed.not then ctx.typeUses.add item: tid
+    if ctx.reach.fixed.not then ctx.reach.typeUses.add item: tid
     noteFnUse :ctx :tid
 }
 
@@ -776,15 +776,15 @@ appendFnSignature: function {
 # closed it is a use the set starts from; after, the type must be one the set
 # holds, or the C names a struct that is never written.
 noteTypeUse: function {ctx: Ctx tid: ztypes.tid} is {
-    if ctx.reachFixed.not then {
+    if ctx.reach.fixed.not then {
         if ctx.stmt.typeUseHold then {
             ctx.stmt.heldTypeUses.append tid
             return
         }
-        ctx.typeUses.add item: tid
+        ctx.reach.typeUses.add item: tid
         return
     }
-    if (ctx.reachedTypes.has item: tid) then return
+    if (ctx.reach.reachedTypes.has item: tid) then return
     cn: ctxCname :ctx :tid
     (
         emitFail
@@ -800,17 +800,17 @@ noteTypeUse: function {ctx: Ctx tid: ztypes.tid} is {
 # before the first type is written; a type outside the set is not written.
 closeReachedTypes: function {prog: Program.view ctx: Ctx} is {
     todo: ListVal ztypes.tid
-    for each u: ctx.typeUses loop todo.append u
+    for each u: ctx.reach.typeUses loop todo.append u
     drainReach :prog :ctx :todo
     # an ordinal variant reached only through its tag constants is written as
     # its enum alone
-    for each o: ctx.ordinalTagUses loop {
-        if (ctx.reachedTypes.has item: o).not then {
-            ctx.reachedTypes.add item: o
-            ctx.tagOnlyTypes.add item: o
+    for each o: ctx.reach.ordinalTagUses loop {
+        if (ctx.reach.reachedTypes.has item: o).not then {
+            ctx.reach.reachedTypes.add item: o
+            ctx.reach.tagOnlyTypes.add item: o
         }
     }
-    ctx.reachFixed = true
+    ctx.reach.fixed = true
     demandTemplateEqs :prog :ctx
     types.demandWrittenDestroys :prog :ctx
 }
@@ -826,11 +826,11 @@ closeTmplDestroys: function {
     prog: Program.view
     ctx: Ctx
 } is {
-    seen: ctx.memberUses.length + 1
-    for seen != ctx.memberUses.length loop {
-        seen = ctx.memberUses.length
+    seen: ctx.reach.memberUses.length + 1
+    for seen != ctx.reach.memberUses.length loop {
+        seen = ctx.reach.memberUses.length
         monos: ListVal ztypes.tid
-        for each r: ctx.reachedTypes loop {
+        for each r: ctx.reach.reachedTypes loop {
             if (nativerows.tmplClassRowOf :prog :ctx tid: r) != 0 then monos.append r
         }
         for each m: monos loop nativerows.tmplSectionDestroys :prog :ctx mono: m
@@ -842,7 +842,7 @@ closeTmplDestroys: function {
 # the element's own struct.
 demandTemplateEqs: function {prog: Program.view ctx: Ctx} is {
     rs: ListVal ztypes.tid
-    for each r: ctx.reachedTypes loop rs.append r
+    for each r: ctx.reach.reachedTypes loop rs.append r
     for each m: rs loop {
         el: types.templateEqElem :prog :ctx tid: m
         if el.notZero when (prog.reg.isValtypeOf tid: el) when (
@@ -857,7 +857,7 @@ demandTemplateEqs: function {prog: Program.view ctx: Ctx} is {
 # without fixing it.
 reachSoFar: function {prog: Program.view ctx: Ctx} is {
     todo: ListVal ztypes.tid
-    for each u: ctx.typeUses loop todo.append u
+    for each u: ctx.reach.typeUses loop todo.append u
     drainReach :prog :ctx :todo
 }
 
@@ -865,11 +865,11 @@ reachSoFar: function {prog: Program.view ctx: Ctx} is {
 drainReach: function {prog: Program.view ctx: Ctx todo: ListVal ztypes.tid} is {
     for todo.length > 0 loop {
         t: todo.pop
-        if (ctx.reachedTypes.has item: t) then continue
-        ctx.reachedTypes.add item: t
+        if (ctx.reach.reachedTypes.has item: t) then continue
+        ctx.reach.reachedTypes.add item: t
         at: todo.length
         types.typeReachEdges :prog :ctx tid: t acc: todo
-        keepReachEdges :prog reached: ctx.reachedTypes :todo from: at
+        keepReachEdges :prog reached: ctx.reach.reachedTypes :todo from: at
     }
 }
 
@@ -1681,10 +1681,10 @@ demandHelperCalls: function {
         types.demandContainerCalls :prog :ctx tid: r :seen :seenHash
     }
     es: ListVal ztypes.tid
-    for each e: ctx.eqUsed loop es.append e
+    for each e: ctx.reach.eqUsed loop es.append e
     for each e: es loop demandEqCalls :prog :ctx tid: e :seen
     hs: ListVal ztypes.tid
-    for each h: ctx.hashAsked loop hs.append h
+    for each h: ctx.reach.hashAsked loop hs.append h
     for each h: hs loop demandHashCalls :prog :ctx tid: h seen: seenHash
     ri: ztypes.confid
     for ri.next < prog.typing.nextConf loop {
@@ -1741,7 +1741,7 @@ reachPreview: function {
 } out ListVal ztypes.tid is {
     added: ListVal ztypes.tid
     todo: ListVal ztypes.tid
-    for each u: ctx.typeUses loop {
+    for each u: ctx.reach.typeUses loop {
         if (seen.has item: u).not then todo.append u
     }
     for todo.length > 0 loop {
@@ -2258,7 +2258,7 @@ panicRow: function {ctx: Ctx.view} out u64 is {
 # addMemberUse -- record member key `k` of instance `mono` as used. A member its
 # instance was already written without names a function the C never defines.
 addMemberUse: function {ctx: Ctx mono: ztypes.tid k: u64} is {
-    if (ctx.membersLeftOut.has item: k) then {
+    if (ctx.reach.membersLeftOut.has item: k) then {
         cn: ctxCname :ctx tid: mono
         (
             emitFail
@@ -2268,7 +2268,7 @@ addMemberUse: function {ctx: Ctx mono: ztypes.tid k: u64} is {
         )
         return
     }
-    ctx.memberUses.add item: k
+    ctx.reach.memberUses.add item: k
 }
 
 # the runtime types the emitter must name before anything else: String,
@@ -2533,7 +2533,36 @@ emitC: function {
             :markNatives
             unitOrder: List String
         )
-        liveClasses: IdSet ztypes.tid
+        reach: (
+            ReachState
+            liveClasses: IdSet ztypes.tid
+            eqAsked: IdSet ztypes.tid
+            eqHasBody: IdSet ztypes.tid
+            eqUsed: IdSet ztypes.tid
+            destroyUsed: IdSet ztypes.tid
+            createUsed: IdSet ztypes.tid
+            createAliasUsed: IdSet ztypes.tid
+            hashAsked: IdSet ztypes.tid
+            hashOrder: ListVal ztypes.tid
+            fnptrDemand: IdSet ztypes.tid
+            fnptrWritten: IdSet ztypes.tid
+            fnptrPassDone: false
+            typeUses: IdSet ztypes.tid
+            ordinalTagUses: IdSet ztypes.tid
+            tagOnlyTypes: IdSet ztypes.tid
+            tagEnumUses: IdSet ztypes.tid
+            reachedTypes: IdSet ztypes.tid
+            fixed: false
+            memberUses: IdSet u64
+            membersLeftOut: IdSet u64
+            demandGatedTids: IdSet ztypes.tid
+            usedTypeIds: IdSet ztypes.tid
+            ownedBoxUses: IdSet u64
+            borrowBoxUses: IdSet u64
+            aggUses: IdSet u64
+            aggReaderUses: IdSet u64
+            contLabelUsed: (IdMapV u64 v: bool)
+        )
         fieldListAt: (IdMapV ztypes.tid v: u64)
         fieldNameIds: ListVal zast.nameid
         mainUnitId: ztypes.declid
@@ -2597,25 +2626,8 @@ emitC: function {
         )
         curThisTid: ztypes.tid
         emittedUserTypes: IdSet ztypes.tid
-        eqAsked: IdSet ztypes.tid
-        eqHasBody: IdSet ztypes.tid
-        eqUsed: IdSet ztypes.tid
-        destroyUsed: IdSet ztypes.tid
-        createUsed: IdSet ztypes.tid
-        createAliasUsed: IdSet ztypes.tid
-        hashAsked: IdSet ztypes.tid
-        hashOrder: ListVal ztypes.tid
         lateDefs: String
         fwdDeclaredTypes: IdSet ztypes.tid
-        fnptrDemand: IdSet ztypes.tid
-        fnptrWritten: IdSet ztypes.tid
-        fnptrPassDone: false
-        typeUses: IdSet ztypes.tid
-        ordinalTagUses: IdSet ztypes.tid
-        tagOnlyTypes: IdSet ztypes.tid
-        tagEnumUses: IdSet ztypes.tid
-        reachedTypes: IdSet ztypes.tid
-        reachFixed: false
         fnJobs: ListVal fnjob
         fnJobAt: (IdMapV ztypes.tid v: u64)
         fnClosed: false
@@ -2625,22 +2637,13 @@ emitC: function {
         cWords: (zast.Vocab.create block: cReserved)
         opWords: (zast.Vocab.create block: opSpelling)
         implementedUnits: Set String
-        memberUses: IdSet u64
-        membersLeftOut: IdSet u64
-        demandGatedTids: IdSet ztypes.tid
-        usedTypeIds: IdSet ztypes.tid
         emittedImplementation: IdSet ztypes.confid
         boxedImplementation: IdSet ztypes.confid
-        ownedBoxUses: IdSet u64
-        borrowBoxUses: IdSet u64
-        aggUses: IdSet u64
         aggWritten: IdSet u64
         aggsOut: List WrittenAgg
         aggsFixed: false
-        aggReaderUses: IdSet u64
         markerValues: (IdMapV ztypes.tid v: bool)
         emittedListIters: IdSet ztypes.tid
-        contLabelUsed: (IdMapV u64 v: bool)
         strTid: strId
         svTid: svId
         textTid: rtids.text
@@ -3191,7 +3194,10 @@ bindFragTypeTids: function {prog: Program.view ctx: Ctx} is {
             )
             ctx.pieces.rows.rows.set i: row val: r
             # a destructor's row gates no type: the type is written when reached
-            if r.typeTid.notZero when r.destroys.not then ctx.demandGatedTids.add item: r.typeTid
+            if r.typeTid.notZero when r.destroys.not then (
+                ctx.reach.demandGatedTids.add
+                item: r.typeTid
+            )
         }
     }
 }
@@ -3400,7 +3406,7 @@ emitFnptrTypedefs: function {
     t0: ztypes.tid
     for t0 < last loop {
         if (prog.reg.typetypeOf typeId: t0) == ztypes.ztypetype.functionType when (
-            ctx.fnptrDemand.has
+            ctx.reach.fnptrDemand.has
             item: t0
         ) when (fnptrTypedefEligible :prog tid: t0) then {
             types.emitOneFnptrTypedef :prog :ctx tid: t0 :seen :fnOwner :buf
@@ -3408,7 +3414,7 @@ emitFnptrTypedefs: function {
         t0 = t0.next
     }
     parttexts.emitHashMemberFnptrs :prog :ctx :buf
-    ctx.fnptrPassDone = true
+    ctx.reach.fnptrPassDone = true
 }
 
 # appendWrittenAggs -- the written static aggregates' text, in row order.
@@ -3435,7 +3441,7 @@ emitStaticListReaders: function {
     for i < prog.typing.constAggs.length loop {
         id: i
         i = i + 1
-        if (ctx.aggReaderUses.has item: id).not then continue
+        if (ctx.reach.aggReaderUses.has item: id).not then continue
         count: (prog.typing.constAggs.get i: id).itemCount
         emitStaticListReader :prog :ctx :id :count :buf
     }
@@ -3757,13 +3763,13 @@ noteEqUse: function {
     # String's and StringView's `==` are pieces of their runtime fragments
     if t == ctx.strTid then preludeNeed :ctx memb: "@String_eq"
     if (parttexts.isViewLaid :ctx tid: t) then preludeNeed :ctx memb: "@StringView_eq"
-    if (ctx.eqUsed.has item: t) then return
+    if (ctx.reach.eqUsed.has item: t) then return
     if (ctx.emittedUserTypes.has item: t) then {
         cn: ctxCname :ctx tid: t
         emitFail :ctx what: "the `==` of \{cn} called after its type was written" line: 0
         return
     }
-    ctx.eqUsed.add item: t
+    ctx.reach.eqUsed.add item: t
     parts: ListVal ztypes.tid
     ztypecheck.valPartTids reg: prog.reg typing: prog.typing tid: t :parts
     for each p: parts loop {

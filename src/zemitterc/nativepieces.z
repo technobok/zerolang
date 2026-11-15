@@ -1915,7 +1915,7 @@ needsAddPullsIn: function {ctx: Ctx pulls: StringView cond: Cond.view} is {
 # typeIsUsed -- the program constructed this type, so the rows its
 # construction reaches have fired.
 typeIsUsed: function {ctx: Ctx.view tid: ztypes.tid} out bool is {
-    return (ctx.usedTypeIds.has item: tid)
+    return (ctx.reach.usedTypeIds.has item: tid)
 }
 
 # typeDemandMet -- may this type's body be emitted? A type no fragment row
@@ -1924,14 +1924,14 @@ typeIsUsed: function {ctx: Ctx.view tid: ztypes.tid} out bool is {
 # that is itself demand-loaded (typeRowDemanded). The gating set comes from
 # the rows, not from a list here.
 typeDemandMet: function {ctx: Ctx.view tid: ztypes.tid} out bool is {
-    if (ctx.demandGatedTids.has item: tid).not then return true
+    if (ctx.reach.demandGatedTids.has item: tid).not then return true
     return (typeRowDemanded :ctx :tid)
 }
 
 # typeRowDemanded -- a `uses_<Type>` row's demand: written C spells or reaches
 # the type (ctx.typeUses, ctx.reachedTypes), or constructs it.
 typeRowDemanded: function {ctx: Ctx.view tid: ztypes.tid} out bool is {
-    if (ctx.typeUses.has item: tid) or (ctx.reachedTypes.has item: tid) then return true
+    if (ctx.reach.typeUses.has item: tid) or (ctx.reach.reachedTypes.has item: tid) then return true
     return (typeIsUsed :ctx :tid)
 }
 
@@ -2001,10 +2001,10 @@ holeParamArg: function {
 # type name is a use of its own -- and of the enum (noteTagEnumUse).
 noteTagConstUse: function {ctx: Ctx prog: Program.view tid: ztypes.tid} is {
     if (narrowfacts.isOrdinalVariant :prog :tid) then {
-        if ctx.reachFixed.not then ctx.ordinalTagUses.add item: tid
+        if ctx.reach.fixed.not then ctx.reach.ordinalTagUses.add item: tid
         return
     }
-    if ctx.reachFixed.not then ctx.typeUses.add item: tid
+    if ctx.reach.fixed.not then ctx.reach.typeUses.add item: tid
     noteTagEnumUse :ctx :prog :tid
 }
 
@@ -2015,14 +2015,14 @@ noteTagConstUse: function {ctx: Ctx prog: Program.view tid: ztypes.tid} is {
 # collection templates spell their options' tags after the types are fixed.
 noteTagEnumUse: function {ctx: Ctx prog: Program.view tid: ztypes.tid} is {
     if (prog.reg.typetypeOf typeId: tid) != ztypes.ztypetype.variantType then return
-    if ctx.reachFixed.not then {
-        ctx.tagEnumUses.add item: tid
+    if ctx.reach.fixed.not then {
+        ctx.reach.tagEnumUses.add item: tid
         return
     }
-    if (ctx.tagEnumUses.has item: tid) then return
+    if (ctx.reach.tagEnumUses.has item: tid) then return
     # a type that is not written is spelled only by template text its writer
     # drops (a stand-in's options)
-    if (ctx.reachedTypes.has item: tid).not then return
+    if (ctx.reach.reachedTypes.has item: tid).not then return
     cn: emitplan.ctxCname :ctx :tid
     (
         emitFail
@@ -2357,10 +2357,10 @@ noteMemberUseCond: function {ctx: Ctx mono: ztypes.tid member: u64 cond: Cond.vi
         return
     }
     k: memberKey :mono :member
-    if (ctx.memberUses.has item: k) when (memberCondOf :ctx key: k).always then return
+    if (ctx.reach.memberUses.has item: k) when (memberCondOf :ctx key: k).always then return
     cur: memberCondOf :ctx key: k
-    if (ctx.memberUses.has item: k).not then cur = Cond always: false terms: ListVal u64
-    if (condMerge dst: cur src: cond).not when (ctx.memberUses.has item: k) then return
+    if (ctx.reach.memberUses.has item: k).not then cur = Cond always: false terms: ListVal u64
+    if (condMerge dst: cur src: cond).not when (ctx.reach.memberUses.has item: k) then return
     w: u64
     j: u64
     for j < ctx.pieces.memberConds.length loop {
@@ -2372,7 +2372,7 @@ noteMemberUseCond: function {ctx: Ctx mono: ztypes.tid member: u64 cond: Cond.vi
     }
     for ctx.pieces.memberConds.length > w loop ctx.pieces.memberConds.pop
     for each t: cur.terms loop ctx.pieces.memberConds.append (membercond key: k mask: t)
-    if (ctx.memberUses.has item: k).not then emitplan.addMemberUse :ctx :mono :k
+    if (ctx.reach.memberUses.has item: k).not then emitplan.addMemberUse :ctx :mono :k
 }
 
 # memberCondOf -- the condition member key `key` is used under
@@ -2442,7 +2442,7 @@ planNeeds: function {
                 ctx.pieces.memberWords.slotOf
                 text: (text.substring from: (marks.get i: i * 4) to: (marks.get i: i * 4 + 1))
             )
-            ctx.membersLeftOut.add item: (memberKey :mono member: slot)
+            ctx.reach.membersLeftOut.add item: (memberKey :mono member: slot)
         }
         i = i + 1
     }
@@ -2635,7 +2635,11 @@ sectionConds: function {
             text: (text.substring from: (marks.get i: k * 4) to: (marks.get i: k * 4 + 1))
         )
         mk: memberKey :mono member: slot
-        if (kept.get i: k) when (ctx.memberUses.has item: mk) then c = memberCondOf :ctx key: mk
+        if (kept.get i: k) when (ctx.reach.memberUses.has item: mk) then c = (
+            memberCondOf
+            :ctx
+            key: mk
+        )
         conds.append c
         k = k + 1
     }
@@ -2774,7 +2778,7 @@ stemCname: function {
     if found then return cached
     # a hole names the type it is filled with, as a spelling does
     t: stemTid :prog :ctx :canon
-    if t.notZero when ctx.reachFixed.not then ctx.typeUses.add item: t
+    if t.notZero when ctx.reach.fixed.not then ctx.reach.typeUses.add item: t
     r: String
     if t.notZero then r = emitplan.ctxCname :ctx tid: t
     ctx.pieces.stemCnames.set key: canon.string value: r.copy
@@ -3015,7 +3019,7 @@ rowDemandFired: function {ctx: Ctx.view row: u64} out bool is {
     r: ctx.pieces.rows.rows.get i: row
     if r.typeTid.notZero then {
         if r.destroys then {
-            if (ctx.destroyUsed.has item: r.typeTid) then return true
+            if (ctx.reach.destroyUsed.has item: r.typeTid) then return true
         } else if (typeRowDemanded :ctx tid: r.typeTid) then return true
     }
     k: r.demandFrom
@@ -3299,7 +3303,7 @@ markLiveClasses: function {prog: Program.view ctx: Ctx} is {
             for each c: (lv.stringView.split sep: ",") loop {
                 if c.length > 0 when (stemTid :prog :ctx canon: c).isZero then live = false
             }
-            if live then ctx.liveClasses.add item: cid
+            if live then ctx.reach.liveClasses.add item: cid
         }
         i = i + 1
     }
@@ -3414,9 +3418,9 @@ noteBoxUse: function {prog: Program.view ctx: Ctx implTid: ztypes.tid protoTid: 
         if hit.not then continue
         if (ctx.boxedImplementation.has item: ri) then return
         ctx.boxedImplementation.add item: ri
-        if ctx.reachFixed.not then {
-            ctx.typeUses.add item: implTid
-            ctx.typeUses.add item: protoTid
+        if ctx.reach.fixed.not then {
+            ctx.reach.typeUses.add item: implTid
+            ctx.reach.typeUses.add item: protoTid
         }
         return
     }

@@ -92,13 +92,13 @@ typeStructEmitted: function {ctx: Ctx.view tid: ztypes.tid} out bool is {
 # before the first type is written. A record's destructor called after its
 # type was written names a function that is never written.
 noteDestroyUse: function {prog: Program.view ctx: Ctx tid: ztypes.tid} is {
-    if (ctx.destroyUsed.has item: tid) then return
+    if (ctx.reach.destroyUsed.has item: tid) then return
     if (destroyGated :prog :ctx :tid) when (ctx.emittedUserTypes.has item: tid) then {
         cn: emitplan.ctxCname :ctx :tid
         emitFail :ctx what: "the destructor of \{cn} called after its type was written" line: 0
         return
     }
-    ctx.destroyUsed.add item: tid
+    ctx.reach.destroyUsed.add item: tid
     # an instance's destructor is a member of its template
     noteMemberUse :ctx mono: tid member: memberWord.slot.destroy
     parts: ListVal ztypes.tid
@@ -165,7 +165,7 @@ destroyGated: function {prog: Program.view ctx: Ctx.view tid: ztypes.tid} out bo
 # written C calls it (noteDestroyUse); any other is written with its type.
 destroyWritten: function {prog: Program.view ctx: Ctx.view tid: ztypes.tid} out bool is {
     if (destroyGated :prog :ctx :tid).not then return true
-    return (ctx.destroyUsed.has item: tid)
+    return (ctx.reach.destroyUsed.has item: tid)
 }
 
 # destroyTargetTid -- the type whose cleanup frees a value of tid, zero when the
@@ -195,7 +195,7 @@ ownsResources: function {prog: Program.view ctx: Ctx.view tid: ztypes.tid} out b
     # an instance of a templated class: its template supplies the destructor
     if (nativerows.tmplClassRowOf :prog :ctx :tid) > 0 then return true
     if (ctx.pieces.classRowTids.contains item: tid).not then return false
-    return (ctx.liveClasses.has item: tid) or (nativepieces.typeIsUsed :ctx :tid)
+    return (ctx.reach.liveClasses.has item: tid) or (nativepieces.typeIsUsed :ctx :tid)
 }
 
 # destroyFnC -- the C function that frees a value of tid, handed destroyOperand's
@@ -1377,7 +1377,7 @@ isCollectionOriginTid: function {ctx: Ctx.view originTid: ztypes.tid} out bool i
 # protocol box written C makes (emitImplementationImpl's `_owned_destroy`).
 demandWrittenDestroys: function {prog: Program.view ctx: Ctx} is {
     rs: ListVal ztypes.tid
-    for each r: ctx.reachedTypes loop rs.append r
+    for each r: ctx.reach.reachedTypes loop rs.append r
     for each m: rs loop {
         if (destroyGated :prog :ctx tid: m).not when (destroyTargetTid :prog :ctx tid: m
         ).notZero then {
@@ -1390,11 +1390,11 @@ demandWrittenDestroys: function {prog: Program.view ctx: Ctx} is {
         ri = ri.next
         row: prog.typing.implementation.get i: ri
         k: ownedBoxKey implTid: row.implTypeId protoTid: row.specTypeId
-        if (ctx.ownedBoxUses.has item: k) then impls.append row.implTypeId
+        if (ctx.reach.ownedBoxUses.has item: k) then impls.append row.implTypeId
     }
     for each nb: ctx.nativeBoxes loop {
         k: ownedBoxKey implTid: nb.impl protoTid: nb.proto
-        if (ctx.ownedBoxUses.has item: k) then impls.append nb.impl
+        if (ctx.reach.ownedBoxUses.has item: k) then impls.append nb.impl
     }
     for each impl: impls loop {
         dt: destroyTargetTid :prog :ctx tid: impl
@@ -1430,7 +1430,7 @@ templateEqElem: function {prog: Program.view ctx: Ctx tid: ztypes.tid} out ztype
 # key's `==` is called
 keyEqSpelled: function {prog: Program.view ctx: Ctx tid: ztypes.tid} out bool is {
     if (ctx.keyEqKept.has item: tid) then return true
-    if ((ctx.keyEqNoAt.get key: tid).or d: 0) == (ctx.memberUses.length + 1) then return false
+    if ((ctx.keyEqNoAt.get key: tid).or d: 0) == (ctx.reach.memberUses.length + 1) then return false
     sp: false
     if (isSetOriginOf :prog :ctx :tid) then sp = (
         tmplKeptSpells
@@ -1445,7 +1445,7 @@ keyEqSpelled: function {prog: Program.view ctx: Ctx tid: ztypes.tid} out bool is
     if sp then {
         ctx.keyEqKept.add item: tid
     } else {
-        ctx.keyEqNoAt.set key: tid value: ctx.memberUses.length + 1
+        ctx.keyEqNoAt.set key: tid value: ctx.reach.memberUses.length + 1
     }
     return sp
 }
@@ -1453,7 +1453,9 @@ keyEqSpelled: function {prog: Program.view ctx: Ctx tid: ztypes.tid} out bool is
 # keyHashSpelled -- keyEqSpelled for the key's `hash`
 keyHashSpelled: function {prog: Program.view ctx: Ctx tid: ztypes.tid} out bool is {
     if (ctx.keyHashKept.has item: tid) then return true
-    if ((ctx.keyHashNoAt.get key: tid).or d: 0) == (ctx.memberUses.length + 1) then return false
+    if (
+        ((ctx.keyHashNoAt.get key: tid).or d: 0) == (ctx.reach.memberUses.length + 1)
+    ) then return false
     sp: false
     if (isSetOriginOf :prog :ctx :tid) then sp = (
         tmplKeptSpells
@@ -1468,7 +1470,7 @@ keyHashSpelled: function {prog: Program.view ctx: Ctx tid: ztypes.tid} out bool 
     if sp then {
         ctx.keyHashKept.add item: tid
     } else {
-        ctx.keyHashNoAt.set key: tid value: ctx.memberUses.length + 1
+        ctx.keyHashNoAt.set key: tid value: ctx.reach.memberUses.length + 1
     }
     return sp
 }
@@ -1645,11 +1647,11 @@ tagEnumWritten: function {
     tid: ztypes.tid
     tsc: StringView
 } out bool is {
-    if tsc.length == 0 then ctx.tagEnumUses.add item: tid
-    if (ctx.eqUsed.has item: tid) when (eqGenerated :prog :ctx :tid) then {
-        ctx.tagEnumUses.add item: tid
+    if tsc.length == 0 then ctx.reach.tagEnumUses.add item: tid
+    if (ctx.reach.eqUsed.has item: tid) when (eqGenerated :prog :ctx :tid) then {
+        ctx.reach.tagEnumUses.add item: tid
     }
-    return (ctx.tagEnumUses.has item: tid)
+    return (ctx.reach.tagEnumUses.has item: tid)
 }
 
 # armOrdinalOf -- the position of the arm named `armId` among sum `tid`'s arms
@@ -2091,7 +2093,7 @@ emitClassRowStructs: function {
 # `_meta_create`: written C calls it (noteCreateAliasUse), and the record is
 # the main unit's and constructed by its fields, not by a native create.
 recordCreateAlias: function {prog: Program.view ctx: Ctx.view tid: ztypes.tid} out bool is {
-    if (ctx.createAliasUsed.has item: tid).not then return false
+    if (ctx.reach.createAliasUsed.has item: tid).not then return false
     if (definedInNonMain :ctx :tid) then return false
     return (typeHasNativeCreate :prog :tid).not
 }
@@ -2157,7 +2159,7 @@ emitClassRowStruct: function {
     }
     if (typeHasNativeCreate :prog tid: cid) then return
     # the constructor is written where written C builds one (noteCreateUse)
-    if (ctx.createUsed.has item: cid).not then return
+    if (ctx.reach.createUsed.has item: cid).not then return
     params: String
     inits: String
     (
@@ -2177,7 +2179,7 @@ emitClassRowStruct: function {
         rc: fc.stringView
         params: params.stringView
         inits: inits.stringView
-        alias: (ctx.createAliasUsed.has item: cid)
+        alias: (ctx.reach.createAliasUsed.has item: cid)
     )
 }
 
@@ -3000,7 +3002,7 @@ emitOneFnptrTypedef: function {
     }
     if pn == 0 then params.append "void"
     retc: values.fnptrRetTypeC :prog :ctx :tid
-    ctx.fnptrWritten.add item: tid
+    ctx.reach.fnptrWritten.add item: tid
     cb: ctxCnameView :ctx :tid
     line: "typedef \{retc} (*\{cb}_ft)(\{params});\n"
     buf.append line
@@ -4446,7 +4448,7 @@ emitImplementationImpl: function {
         mj = mj + 1
     }
     buf.append "};\n\n"
-    borrows: ctx.borrowBoxUses.has item: (ownedBoxKey :implTid protoTid: specTid)
+    borrows: ctx.reach.borrowBoxUses.has item: (ownedBoxKey :implTid protoTid: specTid)
     if isFacet then {
         if borrows.not then return
         fc0: "static \{specCtype} \{wbase}_create(const \{implCtype}* val) {\n    \{specCtype} facet = {0};\n    facet.vtable = &\{wbase}_vtable;\n    facet.data._i\{implTid} = *val;\n    return facet;\n}\n\n"
@@ -4455,7 +4457,7 @@ emitImplementationImpl: function {
     }
     bc0: "static \{specCtype} \{wbase}_create(const \{implCtype}* val) {\n    \{specCtype} proto = {0};\n    proto.data = (void*)val;\n    proto.vtable = &\{wbase}_vtable;\n    proto.destroy = NULL;\n    return proto;\n}\n\n"
     if borrows then buf.append bc0
-    if (ctx.ownedBoxUses.has item: (ownedBoxKey :implTid protoTid: specTid)).not then return
+    if (ctx.reach.ownedBoxUses.has item: (ownedBoxKey :implTid protoTid: specTid)).not then return
     od0: "static void \{wbase}_owned_destroy(void* p) {\n"
     buf.append od0
     ofn: destroyFnC :prog :ctx tid: implTid
@@ -4486,7 +4488,7 @@ nativeImplementerRow: function {prog: Program.view tid: ztypes.tid} out ztypes.t
 # value, or copies it into a `protoTid` facet (`_create`): the pair's create is
 # written (emitImplementationImpl)
 noteBorrowBoxUse: function {ctx: Ctx implTid: ztypes.tid protoTid: ztypes.tid} is {
-    ctx.borrowBoxUses.add item: (ownedBoxKey :implTid :protoTid)
+    ctx.reach.borrowBoxUses.add item: (ownedBoxKey :implTid :protoTid)
 }
 
 # ownedBoxKey -- the (impl, protocol) pair as one ownedBoxUses key
@@ -4510,9 +4512,9 @@ boxLabelFor: function {
     }
     lbl: implementationLabelFor :prog implTid: nrow :protoTid
     if lbl.length == 0 then return lbl
-    if ctx.reachFixed.not then {
-        ctx.typeUses.add item: implTid
-        ctx.typeUses.add item: protoTid
+    if ctx.reach.fixed.not then {
+        ctx.reach.typeUses.add item: implTid
+        ctx.reach.typeUses.add item: protoTid
     }
     seen: false
     for each nb: ctx.nativeBoxes loop {
@@ -4871,7 +4873,7 @@ emitVariantEnum: function {
         return
     }
     buf.append "};\n"
-    if (ctx.tagOnlyTypes.has item: tid).not then {
+    if (ctx.reach.tagOnlyTypes.has item: tid).not then {
         lo: "typedef \{ctype} \{cn}_t;\n"
         buf.append lo
     }
@@ -4936,7 +4938,7 @@ emitOneVariant: function {
     }
     if haveP then buf.append "    } data;\n"
     closeStructBody :ctx :tid cn: vc.stringView :buf
-    if (ctx.eqUsed.has item: tid) when (eqGenerated :prog :ctx :tid) then {
+    if (ctx.reach.eqUsed.has item: tid) when (eqGenerated :prog :ctx :tid) then {
         (
             parttexts.emitVariantEq
             :prog
@@ -5181,9 +5183,9 @@ eqGenerated: function {
     ctx: Ctx
     tid: ztypes.tid
 } out bool is {
-    if (ctx.eqAsked.has item: tid) then return (ctx.eqHasBody.has item: tid)
+    if (ctx.reach.eqAsked.has item: tid) then return (ctx.reach.eqHasBody.has item: tid)
     # a valtype cannot hold itself; asking first keeps a malformed chain finite
-    ctx.eqAsked.add item: tid
+    ctx.reach.eqAsked.add item: tid
     src: (
         ztypecheck.valOpSource
         ast: prog.ast
@@ -5201,7 +5203,7 @@ eqGenerated: function {
         ok = partHasEq :prog :ctx tid: (parts.get :i)
         i = i + 1
     }
-    if ok then ctx.eqHasBody.add item: tid
+    if ok then ctx.reach.eqHasBody.add item: tid
     return ok
 }
 
@@ -5268,7 +5270,7 @@ emitOneRecord: function {
     }
     # a data value is built only by the compiler: no constructor at run time;
     # any other is written only when written C builds one
-    if (argforms.isStaticHandle :prog :tid).not when (ctx.createUsed.has item: tid) then {
+    if (argforms.isStaticHandle :prog :tid).not when (ctx.reach.createUsed.has item: tid) then {
         params: String
         inits: String
         (
@@ -5291,7 +5293,7 @@ emitOneRecord: function {
             alias: (recordCreateAlias :prog :ctx :tid)
         )
     }
-    if (ctx.eqUsed.has item: tid) when (eqGenerated :prog :ctx :tid) then (
+    if (ctx.reach.eqUsed.has item: tid) when (eqGenerated :prog :ctx :tid) then (
         parttexts.emitRecordEq
         :prog
         :ctx
