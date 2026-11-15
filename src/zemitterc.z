@@ -1566,23 +1566,19 @@ KnownNames: class {
     boolTid: ztypes.tid
 }
 
-# Ctx -- the per-program emission context (anchor cnames, main unit name,
-# the literal pool, and the resolved-name map access).
-Ctx: class {
-    # the well-known types, their C spellings, and the program's own names
-    known: KnownNames
-    # type id -> C name base, composed once at emit start; "" for a hole
-    cnames: List String
+# LiteralState -- the literals and static data written. A part of Ctx
+# (`literals`).
+LiteralState: class {
     # the literal pool's ids in emission order
-    litIds: ListVal zast.nodeid
+    ids: ListVal zast.nodeid
     # a literal's node id -> its 1-based place in litIds
-    litIndex: (IdMapV zast.nodeid v: u64)
+    index: (IdMapV zast.nodeid v: u64)
     # each pooled literal's byte count, parallel to litIds: the `.size` its view
     # is built with where it is used
-    litSizes: ListVal u64
+    sizes: ListVal u64
     # which literals were actually referenced, so the unused ones are not
     # emitted
-    usedLits: IdSet zast.nodeid
+    used: IdSet zast.nodeid
     # the FOLDED-string pool, beside the AST-literal one. A folded value has no
     # literal to point at -- a concatenation and a selected branch were never
     # written anywhere -- so litIndexOf cannot serve it. Its bytes are `_zcsN_d`
@@ -1591,6 +1587,20 @@ Ctx: class {
     # entry exists only because something asked to emit it, so unlike usedLits
     # there is no separate mark.
     constLits: List String
+    aggWritten: IdSet u64
+    aggsOut: List WrittenAgg
+    aggsFixed: bool
+}
+
+# Ctx -- the per-program emission context (anchor cnames, main unit name,
+# the literal pool, and the resolved-name map access).
+Ctx: class {
+    # the well-known types, their C spellings, and the program's own names
+    known: KnownNames
+    # type id -> C name base, composed once at emit start; "" for a hole
+    cnames: List String
+    # the literals and static data written
+    literals: LiteralState
     # the native pieces: rows, conditions, marks and texts
     pieces: PieceState
     # the Set and Map instances whose kept text spells their key's `==` /
@@ -1667,9 +1677,6 @@ Ctx: class {
     # implementation rows written C makes a value of -- an impl boxed as its
     # protocol or facet (noteBoxUse): only these rows' helpers are written
     boxedImplementation: IdSet ztypes.confid
-    aggWritten: IdSet u64
-    aggsOut: List WrittenAgg
-    aggsFixed: bool
     # each marker protocol (one with no members) asked about, to whether the
     # program makes a value of it (markerValueMade)
     markerValues: (IdMapV ztypes.tid v: bool)

@@ -588,11 +588,11 @@ cvalStrText: function {
     if v.strId == 0 then return "".string
     t: prog.typing.constStrings.get i: v.strId
     i: u64
-    n: ctx.constLits.length
+    n: ctx.literals.constLits.length
     hit: u64
     for i < n loop {
         if hit == 0 then {
-            e: ctx.constLits.get :i
+            e: ctx.literals.constLits.get :i
             if e.stringView == t then hit = i + 1
         }
         i = i + 1
@@ -600,8 +600,13 @@ cvalStrText: function {
     if hit > 0 then {
         return (stating :facts from: pathFacts text: (constLitView :ctx ci: hit))
     }
-    ctx.constLits.append t.copy
-    return (stating :facts from: pathFacts text: (constLitView :ctx ci: ctx.constLits.length))
+    ctx.literals.constLits.append t.copy
+    return (
+        stating
+        :facts
+        from: pathFacts
+        text: (constLitView :ctx ci: ctx.literals.constLits.length)
+    )
 }
 
 # nodeConstText -- the C literal for a node carrying a compile-time const
@@ -1620,7 +1625,7 @@ unitConstTextOf: function {
 # constLitView -- folded-string pool entry `ci` (1-based) as a C value, built in
 # place as litView builds a source literal
 constLitView: function {ctx: Ctx ci: u64} out String is {
-    sz: (ctx.constLits.get i: ci - 1).length
+    sz: (ctx.literals.constLits.get i: ci - 1).length
     svT: values.svTypeC :ctx
     return "((\{svT}){ .data = _zcs\{ci}_d, .size = \{sz} })"
 }
@@ -1635,10 +1640,10 @@ emitLiteralPools: function {
     poolBuf: String.borrow
 } is {
     pi: u64
-    pn: ctx.litIds.length
+    pn: ctx.literals.ids.length
     for pi < pn loop {
-        plid: ctx.litIds.get i: pi
-        if (ctx.usedLits.has item: plid) then {
+        plid: ctx.literals.ids.get i: pi
+        if (ctx.literals.used.has item: plid) then {
             pt: litTexts.get i: pi
             ptv: pt.stringView
             pesc: cEscape text: ptv
@@ -1652,9 +1657,9 @@ emitLiteralPools: function {
     # buffer, so both precede the code. Every entry here was minted BY an
     # emission that asked for it, so there is nothing unused to skip.
     ci: u64
-    constCount: ctx.constLits.length
+    constCount: ctx.literals.constLits.length
     for ci < constCount loop {
-        cTypeText: ctx.constLits.get i: ci
+        cTypeText: ctx.literals.constLits.get i: ci
         ctv: cTypeText.stringView
         cesc: cEscape text: ctv
         cidx: ci + 1
@@ -1678,7 +1683,9 @@ writeDemandedAggs: function {prog: Program.view ctx: Ctx} out bool is {
     for i < prog.typing.constAggs.length loop {
         id: i
         i = i + 1
-        if (ctx.reach.aggUses.has item: id).not or (ctx.aggWritten.has item: id) then continue
+        if (
+            (ctx.reach.aggUses.has item: id).not or (ctx.literals.aggWritten.has item: id)
+        ) then continue
         tid: ztypes.tid
         start: u64
         count: u64
@@ -1693,7 +1700,7 @@ writeDemandedAggs: function {prog: Program.view ctx: Ctx} out bool is {
             start = g.itemStart
             count = g.itemCount
         }
-        ctx.aggWritten.add item: id
+        ctx.literals.aggWritten.add item: id
         wrote = true
         buf: String
         emitStaticFnProtos :prog :ctx row: id :buf
@@ -1705,7 +1712,7 @@ writeDemandedAggs: function {prog: Program.view ctx: Ctx} out bool is {
         } else {
             emitStaticRecord :prog :ctx :id :tid :start :count :buf
         }
-        ctx.aggsOut.append (WrittenAgg row: id text: buf.take)
+        ctx.literals.aggsOut.append (WrittenAgg row: id text: buf.take)
     }
     return wrote
 }
@@ -1811,7 +1818,7 @@ emitStaticListArray: function {
 # is never written.
 noteAggUse: function {ctx: Ctx row: u64} is {
     if (ctx.reach.aggUses.has item: row) then return
-    if ctx.aggsFixed then {
+    if ctx.literals.aggsFixed then {
         (
             emitFail
             :ctx
@@ -1827,7 +1834,7 @@ noteAggUse: function {ctx: Ctx row: u64} is {
 # `_zag<row>_at`: it is written with the row it reads, which are fixed together.
 noteAggReaderUse: function {ctx: Ctx row: u64} is {
     noteAggUse :ctx :row
-    if ctx.aggsFixed.not then ctx.reach.aggReaderUses.add item: row
+    if ctx.literals.aggsFixed.not then ctx.reach.aggReaderUses.add item: row
 }
 
 # listItemText -- the C constant for element `slot` of list row `row`, rendered
