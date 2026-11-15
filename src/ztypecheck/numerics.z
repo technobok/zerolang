@@ -1,0 +1,1727 @@
+# numerics -- numeric types, literal coercion and layout. An implementation
+# subunit of ztypecheck.
+
+# isNumericTid -- a concrete integer/float type id (literal-coercion target):
+# one of the system's scalars (numKindOfTid).
+isNumericTid: function {st: zenv.ZSymbolTable.view tid: ztypes.tid} out bool is {
+    return (numKindOfTid typing: st.typing :tid).has
+}
+
+# typesCompatible -- compare two type ids: identity, never (divergent) actual,
+# generic-param pairs, literal/numeric coercion (intliteral/floatliteral -> concrete
+# numerics), and an asymmetric typedef-base walk on `a`. The walk follows each
+# base INSTANCE (`Bytes` is a `ListVal u8`) and answers for its template too.
+typesCompatible: function {
+    ast: Ast
+    st: zenv.ZSymbolTable
+    a: ztypes.tid
+    b: ztypes.tid
+} out bool is {
+    if a == b then return true
+    if (st.reg.typetypeOf typeId: a) == ztypes.ztypetype.neverType then return true
+    if (staticListFits :ast :st have: a want: b) then return true
+    if (st.reg.typetypeOf typeId: a) == ztypes.ztypetype.genericParam when (
+        (st.reg.typetypeOf typeId: b) == ztypes.ztypetype.genericParam
+    ) then {
+        # Any two type parameters are template-compatible: params resolve to
+        # canonical per-(template,param) tids and the per-instance clone
+        # checks are the concrete backstop.
+        return true
+    }
+    aLit: isLiteralTypeId reg: st.reg tid: a
+    bLit: isLiteralTypeId reg: st.reg tid: b
+    if aLit when bLit then return true
+    if aLit when (isNumericTid :st tid: b) then return true
+    if bLit when (isNumericTid :st tid: a) then return true
+    if (isTextLiteralTid :st tid: a) when (textLiteralLands :ast :st dst: b) then return true
+    if (isTextLiteralTid :st tid: b) when (textLiteralLands :ast :st dst: a) then return true
+    cur: a
+    for cur.notZero loop {
+        nb: st.typing.typedefBaseTidOf tid: cur
+        if nb.isZero then {
+            cur = ztypes.tid.zero
+        } else {
+            if nb == b then return true
+            if (typedefBaseOf :st tid: cur) == b then return true
+            cur = nb
+        }
+    }
+    return false
+}
+
+# staticListElemFits -- the element's value lies in the block's element type, else the
+# report, where the element is written. A literal is checked by its lexeme, as a
+# literal is everywhere; a folded value by its value.
+staticListElemFits: function {
+    ast: Ast
+    st: zenv.ZSymbolTable
+    dnode: staticlistref
+    opRef: zast.nodeid
+    cv: ztypes.cval
+    # the element type's numeric kind, through any typedef, by declaration
+    ek: ztypes.suffixinfo
+    fitTid: ztypes.tid
+} out bool is {
+    de: staticListElemParts :ast opId: opRef
+    if de.ok then {
+        if ek.has.not then return true
+        lt: zast.nameTextAt :ast ref: (atomNameId :ast n: (ast.nodes.get i: de.litId))
+        pn: ztypes.parseNumberAs numstr: lt.stringView k: ek.kind
+        if pn.err.length == 0 then return true
+        (
+            addError
+            :st
+            nodeid: dnode.nid
+            lineno: (nodeLine n: (ast.nodes.get i: de.litId))
+            colno: (nodeCol n: (ast.nodes.get i: de.litId))
+            e: zast.err.typeError
+            msg: pn.err
+        )
+        return false
+    }
+    fm: constFitsType :st v: cv target: fitTid
+    if fm.length == 0 then return true
+    en: ast.nodes.get i: opRef
+    (
+        addError
+        :st
+        nodeid: dnode.nid
+        lineno: (nodeLine n: en)
+        colno: (nodeCol n: en)
+        e: zast.err.typeError
+        msg: fm
+    )
+    return false
+}
+
+# refuseTagTooNarrow -- a variant or union with more arms than its tag has
+# values: the arms are numbered from 0 in the tag's type, `declared`, or in u8
+# when the type declares none (the zero tid). Unreported, the numbers wrapped
+# and two arms shared one.
+refuseTagTooNarrow: function {
+    st: zenv.ZSymbolTable
+    ast: Ast.view
+    objId: zast.nodeid
+    arms: u64
+    declared: ztypes.tid
+} is {
+    bits: 8.u64
+    tagName: "u8".string
+    if declared.notZero then {
+        nk: numKindOfTid typing: st.typing tid: declared
+        if nk.has.not then return
+        bits = ztypes.intKindBits k: nk.kind
+        if (ztypes.isSignedIntKind k: nk.kind) then bits = bits - 1
+        tagName = st.reg.nameOf tid: declared
+    }
+    if bits >= 64 then return
+    room: 1.u64 << bits
+    if arms <= room then return
+    pos: zast.posOf n: (ast.nodes.get i: objId)
+    (
+        addResolveErrorAt
+        :st
+        nodeid: objId
+        lineno: pos.line
+        colno: pos.col
+        e: zast.err.typeError
+        msg: "the type has \{arms} arms, and its tag, a \{tagName}, numbers \{room}: declare a wider tag in the `as` section, as in `tag: u16.tag`"
+        width: 1
+    )
+}
+
+# valtypelayout -- a value type's size and alignment in bytes, by the language's
+# own layout rules -- each scalar its width, aligned to itself; a record its
+# fields in order, padded to each one's alignment; a function reference
+# unionSlotBytes -- which no target changes; `known` false where the checker
+# cannot say (a facet, a native it does not model), which no union slot
+# admits.
+valtypelayout: record {
+    # in bytes, a whole number of `align`s, as a value of the type is stored
+    size: u64
+    # in bytes: the boundary a value of the type sits on, and its padding
+    align: u64
+    # whether size and align were computed
+    known: bool
+    # the measure ran into a type containing itself, which the containment
+    # check has refused already
+    cyclic: bool
+}
+
+# unknownLayout -- the layout of a type the checker does not measure.
+unknownLayout: function out valtypelayout is {
+    return (valtypelayout size: 0 align: 1 known: false cyclic: false)
+}
+
+# alignUp -- `n` rounded up to a multiple of `a`.
+alignUp: function {n: u64 a: u64} out u64 is {
+    if a <= 1 then return n
+    r: n % a
+    if r == 0 then return n
+    return n + (a - r)
+}
+
+# numericLayout -- a native numeric's layout: its width, aligned to itself.
+numericLayout: function {k: ztypes.numkind} out valtypelayout is {
+    bits: ztypes.intKindBits :k
+    if bits == 0 then {
+        match (
+            k
+        ) case f16Type then {
+            bits = 16
+        } case f32Type then {
+            bits = 32
+        } case f64Type then {
+            bits = 64
+        } case f128Type then {
+            bits = 128
+        } else return unknownLayout
+    }
+    return (fixedLayout n: bits / 8)
+}
+
+# fixedLayout -- an `n`-byte scalar's layout, aligned to its own width.
+fixedLayout: function {n: u64} out valtypelayout is {
+    return (valtypelayout size: n align: n known: true cyclic: false)
+}
+
+# valtypeLayout -- a value type's size and alignment by the language's layout
+# rules, shape by shape: a typedef its base; an ordinal variant its one-byte
+# discriminator; a data value, a handle, `refBytes`; a record its fields in
+# order with padding, a function reference `refBytes`; any other variant its tag and the union of its
+# payloads; a native as nativeLayout says. A facet (a vtable and a copy) and a
+# native the checker does not model are not measured. A backend lays an inline
+# arm out in the slot however it likes, but must hold every arm these rules
+# admit -- the C backend asserts each one's fit in the C.
+valtypeLayout: function {
+    ast: Ast.view
+    st: zenv.ZSymbolTable.view
+    tid: ztypes.tid
+    refBytes: u64
+    depth: u64
+} out valtypelayout is {
+    if tid.isZero then return unknownLayout
+    if depth > 32 then return (valtypelayout size: 0 align: 1 known: false cyclic: true)
+    tb: st.typing.typedefBaseTidOf :tid
+    if tb.notZero then return (valtypeLayout :ast :st tid: tb :refBytes depth: depth + 1)
+    if (st.typing.ordinalVariant.has key: tid) then return (fixedLayout n: 1)
+    # the runtime's shapes first: a `str` or an `array` instance is a record by
+    # its typetype, and is not laid out as its declared fields
+    nl: nativeLayout :ast :st :tid :refBytes :depth
+    if nl.known or nl.cyclic then return nl
+    tt: st.reg.typetypeOf typeId: tid
+    # a data value is held as a handle to its static object
+    if tt == ztypes.ztypetype.recordType when (st.reg.isStaticOf :tid) then return (
+        valtypelayout
+        size: refBytes
+        align: refBytes
+        known: true
+        cyclic: false
+    )
+    if tt == ztypes.ztypetype.recordType then return (recordLayout :ast :st :tid :refBytes :depth)
+    if tt == ztypes.ztypetype.variantType then return (variantLayout :ast :st :tid :refBytes :depth)
+    return unknownLayout
+}
+
+# nativeLayout -- the value types the runtime lays out: a numeric its width,
+# `str N` its length field (1, 2 or 4 bytes, as the emitter's capLenT picks)
+# and N chars, `array t to: N` N elements. Any other native is not measured.
+nativeLayout: function {
+    ast: Ast.view
+    st: zenv.ZSymbolTable.view
+    tid: ztypes.tid
+    refBytes: u64
+    depth: u64
+} out valtypelayout is {
+    if (st.reg.isNativeOf :tid) then {
+        nk: numKindOfTid typing: st.typing :tid
+        if nk.has then return (numericLayout k: nk.kind)
+    }
+    if (valIsMonoOf reg: st.reg typing: st.typing :tid wk: zast.wellKnown.slot.tyStr) then {
+        cap: st.reg.sizedLength specId: tid
+        w: 4.u64
+        if cap <= 65535 then w = 2
+        if cap <= 255 then w = 1
+        return (valtypelayout size: (alignUp n: w + cap a: w) align: w known: true cyclic: false)
+    }
+    if (valIsMonoOf reg: st.reg typing: st.typing :tid wk: zast.wellKnown.slot.tyArray) then {
+        el: valtypeLayout :ast :st tid: (arrayElemTid reg: st.reg :tid) :refBytes depth: depth + 1
+        if el.known.not then return el
+        n: st.reg.sizedLength specId: tid
+        return (valtypelayout size: el.size * n align: el.align known: true cyclic: false)
+    }
+    return unknownLayout
+}
+
+# recordLayout -- a record's fields laid out in order, each at its alignment,
+# the whole rounded to the widest.
+recordLayout: function {
+    ast: Ast.view
+    st: zenv.ZSymbolTable.view
+    tid: ztypes.tid
+    refBytes: u64
+    depth: u64
+} out valtypelayout is {
+    ids: ListVal ztypes.tid
+    nameIds: ListVal zast.nameid
+    dataFieldIds reg: st.reg typing: st.typing :tid :ids :nameIds
+    off: u64
+    al: 1.u64
+    for each ft: ids loop {
+        fl: valtypelayout size: refBytes align: refBytes known: true cyclic: false
+        fid: ft
+        if (st.reg.typetypeOf typeId: fid) != ztypes.ztypetype.functionType then {
+            fl = valtypeLayout :ast :st tid: fid :refBytes depth: depth + 1
+        }
+        if fl.known.not then return fl
+        off = (alignUp n: off a: fl.align) + fl.size
+        if fl.align > al then al = fl.align
+    }
+    return (valtypelayout size: (alignUp n: off a: al) align: al known: true cyclic: false)
+}
+
+# variantLayout -- a tagged variant: its discriminator, then the union of its
+# payloads at the widest payload's alignment.
+variantLayout: function {
+    ast: Ast.view
+    st: zenv.ZSymbolTable.view
+    tid: ztypes.tid
+    refBytes: u64
+    depth: u64
+} out valtypelayout is {
+    tag: variantTagLayout :ast :st :tid :refBytes :depth
+    if tag.known.not then return tag
+    usz: u64
+    ual: 1.u64
+    names: ListVal zast.nameid
+    zenv.sumArmNameIds ty: st.typing reg: st.reg :tid ids: names
+    for each an: names loop {
+        anId: an
+        pt: (st.typing.declChildOfId parentTypeId: tid nameId: anId).or d: ztypes.tid.zero
+        if pt.isZero or (pt == st.typing.nullTypeId) then continue
+        pl: valtypeLayout :ast :st tid: pt :refBytes depth: depth + 1
+        if pl.known.not then return pl
+        if pl.size > usz then usz = pl.size
+        if pl.align > ual then ual = pl.align
+    }
+    if usz == 0 then return tag
+    al: tag.align
+    if ual > al then al = ual
+    off: (alignUp n: tag.size a: ual) + (alignUp n: usz a: ual)
+    return (valtypelayout size: (alignUp n: off a: al) align: al known: true cyclic: false)
+}
+
+# variantTagLayout -- where a variant's discriminator lives, as the emitter's
+# tagStorageCType stores it: the declared base, an `int` enum for a
+# data-sourced tag, or the u8 default. An instance stores it as its template
+# declared it.
+variantTagLayout: function {
+    ast: Ast.view
+    st: zenv.ZSymbolTable.view
+    tid: ztypes.tid
+    refBytes: u64
+    depth: u64
+} out valtypelayout is {
+    key: tid
+    go: st.reg.genericOriginOf :tid
+    if go.notZero when (st.typing.variantTagBase.get key: tid).none then key = go
+    tb: st.typing.variantTagBase.get :key
+    match (
+        tb
+    ) case some then {
+        if tb.isZero then return (fixedLayout n: 4)
+        btid: tb
+        return (valtypeLayout :ast :st tid: btid :refBytes depth: depth + 1)
+    } case none then {
+        return (fixedLayout n: 1)
+    }
+}
+
+# unionSlotBytes -- a union's payload slot, in bytes, on every target: the
+# language fixes it, so whether an arm is held inline is a fact about the
+# program and never about the machine it is built for.
+unionSlotBytes: 8.u64
+
+# checkUnionArmSlots -- a union's arm layout is what its declaration writes
+# (spec §union). A bare value-type arm -- a payload with no ownership marker,
+# not written `(Box T)` -- is stored in the union's 8-byte slot when its
+# size and alignment fit, and refused when they do not, with the hint to box
+# it; a reference-type arm and a boxed one are a heap cell. Every registered
+# union that is not a template is checked: an instance by its own arm types,
+# its error placed at the template's arm and naming the instance. The
+# refusals are reported in the order the arms are written.
+checkUnionArmSlots: function {ast: Ast st: zenv.ZSymbolTable} is {
+    slotB: unionSlotBytes
+    # the arms the slot cannot hold: each one's declaration node, and its armKey
+    wideNodes: ListVal zast.nodeid
+    wideKeys: ListVal ztyping.armkey
+    last: st.reg.nextTid
+    t: ztypes.tid 1
+    for t < last loop {
+        uid: t
+        t = t.next
+        if (st.reg.typetypeOf typeId: uid) != ztypes.ztypetype.unionType then continue
+        if (st.reg.isGenericOf tid: uid) then continue
+        if (st.reg.isPartialOf tid: uid) then continue
+        checkUnionSlotArms :ast :st :uid :slotB :wideNodes :wideKeys
+    }
+    reportWideArms :ast :st :wideNodes :wideKeys :slotB
+}
+
+# checkUnionSlotArms -- checkUnionArmSlots for one union.
+checkUnionSlotArms: function {
+    ast: Ast
+    st: zenv.ZSymbolTable
+    uid: ztypes.tid
+    slotB: u64
+    wideNodes: ListVal zast.nodeid
+    wideKeys: ListVal ztyping.armkey
+} is {
+    names: ListVal zast.nameid
+    zenv.sumArmNameIds ty: st.typing reg: st.reg tid: uid ids: names
+    # a static list's element is static storage, never boxed: the view a walk
+    # yields holds it whole, whatever its size
+    staticView: (
+        valIsMonoOf
+        reg: st.reg
+        typing: st.typing
+        tid: uid
+        wk: zast.wellKnown.slot.tyStaticView
+    )
+    for each an: names loop {
+        nm: an
+        pt: (st.typing.declChildOfId parentTypeId: uid nameId: nm).or d: ztypes.tid.zero
+        if pt.isZero or (pt == st.typing.nullTypeId) then continue
+        ptid: pt
+        if (st.reg.isValtypeOf tid: ptid).not then continue
+        key: st.typing.armKey parentTypeId: uid nameId: nm
+        if (st.walk.boxedArms.has item: key) then continue
+        if (st.typing.declOwnershipOfId parentTypeId: uid nameId: nm).some then continue
+        if staticView then {
+            st.typing.inlineArms.add item: key
+            continue
+        }
+        lay: valtypeLayout :ast :st tid: ptid refBytes: slotB depth: 0
+        if lay.known when lay.size <= slotB when lay.align <= slotB then {
+            st.typing.inlineArms.add item: key
+        } else if lay.cyclic.not then {
+            wideNodes.append (wideArmNode :st :uid :nm)
+            wideKeys.append key
+        }
+    }
+}
+
+# wideArmNode -- the node an arm's refusal is placed at: its declaration, the
+# template's for an instance; 0 for none.
+wideArmNode: function {
+    st: zenv.ZSymbolTable.view uid: ztypes.tid nm: zast.nameid
+} out zast.nodeid is {
+    owner: uid
+    go: st.reg.genericOriginOf tid: uid
+    if go.notZero then owner = go
+    md: st.typing.declMemberIdOf parentTypeId: owner nameId: nm
+    if md.isZero then return zast.nodeid
+    nd: zast.nodeid
+    mo: st.typing.decls.get i: md
+    nd = mo.node
+    return nd
+}
+
+# armKeyNotAfter -- `a` sorts no later than `b`: by union, then by arm name.
+armKeyNotAfter: function {a: ztyping.armkey b: ztyping.armkey} out bool is {
+    if (a.owner == b.owner).not then return a.owner < b.owner
+    return a.name <= b.name
+}
+
+# reportWideArms -- the collected refusals in the order their arms are
+# written (node, then armKey, whose high half is the union), each through
+# reportWideArm.
+reportWideArms: function {
+    ast: Ast
+    st: zenv.ZSymbolTable
+    wideNodes: ListVal zast.nodeid
+    wideKeys: ListVal ztyping.armkey
+    slotB: u64
+} is {
+    n: wideNodes.length
+    i: 1.u64
+    for i < n loop {
+        j: i
+        for j > 0 loop {
+            an: wideNodes.get i: j - 1
+            bn: wideNodes.get i: j
+            ak: wideKeys.get i: j - 1
+            bk: wideKeys.get i: j
+            if (an < bn) or ((an == bn) and (armKeyNotAfter a: ak b: bk)) then break
+            wideNodes.set i: j - 1 val: bn
+            wideNodes.set i: j val: an
+            wideKeys.set i: j - 1 val: bk
+            wideKeys.set i: j val: ak
+            j = j - 1
+        }
+        i = i + 1
+    }
+    k: u64
+    for k < n loop {
+        nd: wideNodes.get i: k
+        key: wideKeys.get i: k
+        k = k + 1
+        if nd.isZero then continue
+        reportWideArm :ast :st uid: key.owner nm: key.name :nd :slotB
+    }
+}
+
+# reportWideArm -- a bare value-type arm the slot cannot hold, refused at the
+# arm's declaration `nd` -- or, for an instance, where the program instantiated
+# it, naming the template's arm -- with its size, the slot's and the target,
+# and the `(Box T)` that makes it a cell.
+reportWideArm: function {
+    ast: Ast
+    st: zenv.ZSymbolTable
+    uid: ztypes.tid
+    # the arm's name id
+    nm: zast.nameid
+    # the arm's declaration node (wideArmNode)
+    nd: zast.nodeid
+    slotB: u64
+} is {
+    ptid: (
+        ztypes.tid.create
+        from: ((st.typing.declChildOfId parentTypeId: uid nameId: nm).or d: ztypes.tid.zero)
+    )
+    lay: valtypeLayout :ast :st tid: ptid refBytes: slotB depth: 0
+    an: zast.nameTextCopy :ast ref: nm
+    un: specWrittenName :st :ast tid: uid
+    pn: specWrittenName :st :ast tid: ptid
+    msg: "arm `\{an}` of `\{un}` holds `\{pn}` (\{lay.size} bytes), wider than a union's \{slotB}-byte slot; write `(Box \{pn})`"
+    if (st.reg.typetypeOf typeId: ptid) == ztypes.ztypetype.facetType then {
+        msg = "arm `\{an}` of `\{un}` holds the facet `\{pn}` (a vtable and a copy), which no union slot holds; write `(Box \{pn})`"
+    } else if lay.known.not then {
+        msg = "arm `\{an}` of `\{un}` holds `\{pn}`, whose size the checker cannot measure against a union's slot; write `(Box \{pn})`"
+    }
+    # an instance's refusal stands where the program instantiated it: the
+    # template may be another unit's, the system's among them, and the
+    # argument that made the arm wide is the instantiation's
+    so: st.walk.monoSite.get key: uid
+    if so.some then {
+        org: st.reg.genericOriginOf tid: uid
+        if org.notZero then {
+            # a Box argument is refused by the value bound, so the cure is the
+            # template's: its arm written boxed
+            tat: (st.typing.declChildOfId parentTypeId: org nameId: nm).or d: ztypes.tid.zero
+            tan: specWrittenName :st :ast tid: tat
+            if lay.known then {
+                msg = "arm `\{an}` of `\{un}` holds `\{pn}` (\{lay.size} bytes), wider than a union's \{slotB}-byte slot; an instance this wide needs the template's arm written `(Box \{tan})`"
+            }
+            und: (st.typing.decls.get i: so.unitDecl).node
+            st.typing.errors.append (
+                zast.ErrorData
+                nodeid: zast.nodeid
+                lineno: so.lineno
+                colno: so.colno
+                width: 1
+                err: zast.err.typeError
+                msg: msg.copy
+                fsno: (ast.fsnoForNode nodeid: und)
+                note: String
+                hint: String
+            )
+            st.typing.isError = true
+            return
+        }
+    }
+    nn: ast.nodes.get i: nd
+    (
+        addResolveErrorAt
+        :st
+        nodeid: (zast.nodeIdOf n: nn)
+        lineno: (nodeLine n: nn)
+        colno: (nodeCol n: nn)
+        e: zast.err.typeError
+        :msg
+        width: an.length
+    )
+}
+
+# valIsMonoOf -- `tid` is an instance of the builtin template named `base`.
+valIsMonoOf: function {
+    reg: ztypes.ZTypeRegistry.view
+    typing: ztyping.ZTyping.view
+    tid: ztypes.tid
+    # the stdlib template's well-known name
+    wk: zast.nameid
+} out bool is {
+    org: reg.genericOriginOf :tid
+    if org.isZero then return false
+    at: typing.stdTidMemo.get key: wk
+    match (
+        at
+    ) case some then {
+        return org == at
+    } case none then {
+        return false
+    }
+}
+
+# reportMissingReturnValue -- a bare `return` in a function that declares a
+# value: reported at the atom.
+reportMissingReturnValue: function {st: zenv.ZSymbolTable node: atomref} is {
+    # inside a generator a bare `return` TERMINATES the iteration -- the
+    # emitter already jumps it to the terminal state. What the body declares as
+    # its return type there is the synthesised `.call` wrapper, which the
+    # program never writes and must not be asked for.
+    if (yieldIsInScope :st) then return
+    mrt: st.walk.currentReturnTypeId
+    if mrt.notZero then {
+        mtt: st.reg.typetypeOf typeId: mrt
+        isVoidRet: (mtt == ztypes.ztypetype.nullType) or (mtt == ztypes.ztypetype.neverType)
+        if isVoidRet.not then {
+            rtn: st.reg.nameOf tid: mrt
+            mm: "missing return value: function expects '\{rtn}'"
+            en6: String
+            eh6: String
+            (
+                addErrorWithHint
+                :st
+                nodeid: node.nid
+                lineno: node.lineno
+                colno: node.colno
+                e: zast.err.typeError
+                msg: mm
+                note: en6
+                hint: eh6
+                width: 6
+            )
+        }
+    }
+}
+
+# checkWideConstants -- each untyped integer outside i64 the walk evaluated (a
+# literal or a fold of them), settled where it lands once the walk has typed
+# that: in the type a destination gave it, or in i64 when none did. One an
+# untyped fold consumed lands nowhere itself, and one typed by a generic
+# parameter is its instances' to settle. A destination that already refused
+# the value reports it in the same words, which addError keeps once.
+checkWideConstants: function {ast: Ast.view st: zenv.ZSymbolTable} is {
+    i: u64
+    for i < st.walk.wideConsts.length loop {
+        ms: st.walk.wideConsts.get :i
+        i = i + 1
+        nid: ms.node
+        taken: (st.walk.wideConstTaken.get key: ms).or d: 0
+        t: ztyping.nodeTypeAt tbl: st.typing.nodeType :nid
+        if taken == 0 when (st.reg.typetypeOf typeId: t) != ztypes.ztypetype.genericParam then {
+            v: st.typing.nodeConstAt :nid
+            tk: wideConstKind :st :t
+            sp: wideConstSpelling :ast :nid
+            m: constFitsKindMessage :st :v k: tk.kind spelling: sp.stringView
+            if m.length > 0 then {
+                n: ast.nodes.get i: nid
+                h: String
+                if tk.kind.i64Type then h = "an i64 cannot hold it: convert it to a wider type where one is meant".string
+                (
+                    addErrorWithHint
+                    :st
+                    nodeid: nid
+                    lineno: (nodeLine :n)
+                    colno: (nodeCol :n)
+                    e: zast.err.typeError
+                    msg: m
+                    note: String
+                    hint: h
+                    width: 1
+                )
+            }
+        }
+    }
+}
+
+# wideConstSpelling -- the literal a wide constant was written as, or "" when
+# it is a fold, which is named by its value.
+wideConstSpelling: function {ast: Ast.view nid: zast.nodeid} out String is {
+    n: ast.nodes.get i: nid
+    nm: atomNameId :ast :n
+    if nm.isZero then return "".string
+    if (isNumericLiteralNameAt :ast ref: nm).not then return "".string
+    return (zast.nameTextCopy :ast ref: nm)
+}
+
+# wideConstKind -- the numeric kind a constant stamped `t` lands in: its
+# typedef's base, or the literal's default (i64 for one nothing typed).
+wideConstKind: function {st: zenv.ZSymbolTable.view t: ztypes.tid} out ztypes.suffixinfo is {
+    kind: ztypes.numkind.i64Type
+    if t == st.reg.literalFloatTid then {
+        kind = ztypes.numkind.f64Type
+    } else if t.notZero when t != st.reg.literalIntTid then {
+        return (baseNumKind :st tid: t)
+    }
+    return (ztypes.suffixinfo has: true :kind len: 0)
+}
+
+# checkReassignedType -- the RHS value must be assignable to the target's DECLARED
+# type. Numeric coercion (a literal, or concrete-to-concrete) is permitted exactly
+# as at a call argument; a non-numeric mismatch is an error rather than invalid C
+# downstream. A narrowed bare-name target accepts a fresh value of its whole type
+# -- reassignment resets narrowing -- while a field target keeps lvt.
+checkReassignedType: function {
+    st: zenv.ZSymbolTable
+    ast: Ast
+    rasgn: reasgref
+    lvt: ztypes.tid
+    rvt: ztypes.tid
+} is {
+    # The RHS value must be assignable to the target's declared type. Numeric
+    # coercion (a literal, or a concrete-to-concrete numeric) is permitted here
+    # exactly as at a call argument; a non-numeric type mismatch -- a resultval
+    # where a scalar is expected, a String into a numeric field -- is an error
+    # rather than invalid C downstream.
+    if lvt.notZero when rvt.notZero then {
+        # Validate against the target's declared type: a narrowed bare-name
+        # target accepts a fresh value of its whole type (reassignment resets
+        # narrowing). A field target has no bare name and keeps lvt.
+        chkT: lvt
+        {
+            nmId: atomNameId :ast n: (ast.nodes.get i: rasgn.topath)
+            if nmId.notZero then {
+                dtoC: st.declaredTypeOf nameId: nmId
+                if dtoC.some then {
+                    chkT = dtoC
+                }
+            }
+        }
+        if (numberLandsInNumber :st srcTid: rvt dstTid: chkT) then {
+            (
+                checkNumericCoercion
+                :st
+                :ast
+                dstTid: chkT
+                srcTid: rvt
+                valueNid: rasgn.value
+                nodeid: rasgn.nid
+                lineno: rasgn.lineno
+                colno: rasgn.colno
+            )
+            return
+        }
+        if (typesCompatible :ast :st a: rvt b: chkT).not then {
+            skipR: false
+            lttR: st.reg.typetypeOf typeId: chkT
+            if lttR == ztypes.ztypetype.protocolType then skipR = true
+            if lttR == ztypes.ztypetype.facetType then skipR = true
+            (
+                noteSpecStandIn
+                :st
+                value: rvt
+                spec: chkT
+                nid: rasgn.nid
+                lineno: rasgn.lineno
+                colno: rasgn.colno
+                valueNid: rasgn.value
+                owning: true
+            )
+            if lttR == ztypes.ztypetype.genericParam then skipR = true
+            if lttR == ztypes.ztypetype.functionType when (
+                functionSignaturesMatch
+                :ast
+                :st
+                a: rvt
+                b: chkT
+            ) then {
+                skipR = true
+            }
+            if skipR.not then {
+                enR: specWrittenName :st :ast tid: chkT
+                anR: specWrittenName :st :ast tid: rvt
+                mmR: "cannot assign value of type '\{anR}' to '\{enR}' target"
+                (
+                    addError
+                    :st
+                    nodeid: rasgn.nid
+                    lineno: rasgn.lineno
+                    colno: rasgn.colno
+                    e: zast.err.callError
+                    msg: mmR
+                )
+            }
+        }
+    }
+}
+
+# coerceLiteralArms -- each untyped literal arm lands in the typed arms' type: a
+# number must fit it, and a type that is no number takes no literal at all.
+coerceLiteralArms: function {
+    st: zenv.ZSymbolTable
+    ast: Ast
+    nid: zast.nodeid
+    arms: (ListVal armvalue).view
+    governing: armvalue
+} is {
+    numeric: isNumericTid :st tid: governing.tid
+    for each av: arms loop {
+        if av.untyped when numeric.not then reportArmTypes :st :ast :nid a: governing b: av
+        if av.untyped when numeric then {
+            an: ast.nodes.get i: av.nid
+            (
+                checkNumericCoercion
+                :st
+                :ast
+                dstTid: governing.tid
+                srcTid: av.tid
+                valueNid: av.nid
+                nodeid: av.nid
+                lineno: (nodeLine n: an)
+                colno: (nodeCol n: an)
+            )
+        }
+    }
+}
+
+# typedArmsAgree -- the first typed arm, which the other typed arms must agree
+# with. A disagreement is reported, and answered with `untyped` set as the
+# caller's signal to stop; no typed arm answers with a zero node.
+typedArmsAgree: function {
+    st: zenv.ZSymbolTable
+    ast: Ast
+    nid: zast.nodeid
+    arms: (ListVal armvalue).view
+} out armvalue is {
+    governing: armvalue nid: zast.nodeid tid: ztypes.tid untyped: false
+    for each av: arms loop {
+        if av.untyped.not then {
+            if governing.nid.isZero then {
+                governing = av
+            } else {
+                if (armTypesAgree :st :ast a: governing.tid b: av.tid).not then {
+                    reportArmTypes :st :ast :nid a: governing b: av
+                    governing.untyped = true
+                    return governing
+                }
+            }
+        }
+    }
+    return governing
+}
+
+# checkArmsFitFloat -- the integer literal arms beside a float literal one,
+# each of which must be exactly a float.
+checkArmsFitFloat: function {
+    st: zenv.ZSymbolTable
+    ast: Ast
+    arms: (ListVal armvalue).view
+    float: armvalue
+} is {
+    for each av: arms loop {
+        if (isFloatLiteralTid :st tid: av.tid).not then {
+            an: ast.nodes.get i: av.nid
+            (
+                checkNumericCoercion
+                :st
+                :ast
+                dstTid: float.tid
+                srcTid: av.tid
+                valueNid: av.nid
+                nodeid: av.nid
+                lineno: (nodeLine n: an)
+                colno: (nodeCol n: an)
+            )
+        }
+    }
+}
+
+# isFloatLiteralTid -- the type an untyped float literal carries: the float
+# literal type before it materialises, a float after.
+isFloatLiteralTid: function {st: zenv.ZSymbolTable.view tid: ztypes.tid} out bool is {
+    if tid == st.reg.literalFloatTid then return true
+    k: numKindOfTid typing: st.typing :tid
+    return k.has and (ztypes.isFloatKind k: k.kind)
+}
+
+# armTypesAgree -- two arms yield the same type: the same numeric kind (a
+# scalar can be reached under more than one id), or types that each stand in for
+# the other.
+armTypesAgree: function {st: zenv.ZSymbolTable ast: Ast a: ztypes.tid b: ztypes.tid} out bool is {
+    if a == b then return true
+    ka: numKindOfTid typing: st.typing tid: a
+    kb: numKindOfTid typing: st.typing tid: b
+    if ka.has or kb.has then {
+        if ka.has.not or kb.has.not then return false
+        an: st.reg.nameViewOf tid: a
+        bn: st.reg.nameViewOf tid: b
+        return an == bn
+    }
+    return (typesCompatible :ast :st :a :b) and (typesCompatible :ast :st a: b b: a)
+}
+
+# reportArmTypes -- two arms of a value-producing `if` or `match` yield
+# different types.
+reportArmTypes: function {
+    st: zenv.ZSymbolTable
+    ast: Ast.view
+    nid: zast.nodeid
+    a: armvalue
+    b: armvalue
+} is {
+    what: "an `if`"
+    if (ast.nodes.get i: nid).caseexpr then what = "a `match`"
+    an: specWrittenName :st :ast tid: a.tid
+    bn: specWrittenName :st :ast tid: b.tid
+    bnode: ast.nodes.get i: b.nid
+    (
+        addErrorWithHint
+        :st
+        nodeid: b.nid
+        lineno: (nodeLine n: bnode)
+        colno: (nodeCol n: bnode)
+        e: zast.err.typeError
+        msg: "the arms of \{what} yield '\{an}' and '\{bn}', and \{what} used as a value yields one type"
+        note: "".string
+        hint: "make every arm yield the same type, converting where the loss is visible".string
+        width: 1
+    )
+}
+
+# isTextLiteralTid -- a string literal's pseudo-type, textliteral. Not one of
+# isLiteralTypeId's, which are the NUMERIC literals: a number converts to any
+# number, and a textliteral only to text or a StringView.
+isTextLiteralTid: function {st: zenv.ZSymbolTable.view tid: ztypes.tid} out bool is {
+    return tid == st.reg.literalTextTid
+}
+
+# textLiteralLands -- a textliteral fits the place typed `dst`: text,
+# StringView, or textliteral itself.
+textLiteralLands: function {ast: Ast st: zenv.ZSymbolTable dst: ztypes.tid} out bool is {
+    if dst == st.reg.literalTextTid then return true
+    if dst == (stdTid :ast :st wk: zast.wellKnown.slot.tyText) then return true
+    return dst == (stdTid :ast :st wk: zast.wellKnown.slot.tyStringView)
+}
+
+# coercePositionalArg -- a positional argument takes the parameter at its own
+# index, and is then THE SAME CHECK a labelled argument gets.
+#
+# One call form, one argument check: a copy with its own skip list drifts, and
+# one that skipped every numeric pair would accept `5 < big.i128` while it
+# refuses `5.< rhs: big.i128`.
+coercePositionalArg: function {
+    st: zenv.ZSymbolTable
+    ast: Ast
+    effId: ztypes.tid
+    vt: ztypes.tid
+    # the positional slot's parameter name
+    pnId: zast.nameid
+    arg: argref
+} is {
+    cpidP: (st.typing.declChildOfId parentTypeId: effId nameId: pnId).or d: ztypes.tid.zero
+    if cpidP.isZero then return
+    checkArgTypeMismatch :st :ast ptid: cpidP :vt :pnId :arg
+}
+
+# coerceArgToParam -- check a named argument against the parameter it binds to:
+# that the types are compatible, and that a literal coerces to the parameter's
+# width rather than carrying its own default.
+coerceArgToParam: function {
+    st: zenv.ZSymbolTable
+    ast: Ast
+    effId: ztypes.tid
+    vt: ztypes.tid
+    # the parameter's name (the label's, or the positional slot's)
+    pnId: zast.nameid
+    boundArgIds: ListVal zast.nameid
+    reportUnknown: bool
+    wasPos: bool
+    arg: argref
+} is {
+    if effId.isZero then return
+    if pnId.isZero then return
+    # the parameter's pool id is identity enough: effId is
+    # fixed across this call's argument walk, so two args
+    # collide exactly when they name the same parameter
+    dcnid: pnId
+    dupSeen: false
+    for each bId: boundArgIds loop {
+        if bId == dcnid then dupSeen = true
+    }
+    if dupSeen when reportUnknown then {
+        pn: zast.nameTextAt :ast ref: pnId
+        dmm: "argument '\{pn}' specified more than once"
+        (
+            addError
+            :st
+            nodeid: arg.nid
+            lineno: arg.lineno
+            colno: arg.colno
+            e: zast.err.callError
+            msg: dmm
+        )
+    } else {
+        boundArgIds.append dcnid
+    }
+    if wasPos then coercePositionalArg :st :ast :effId :vt :pnId :arg
+}
+
+# argMismatchSkipped -- the argument/parameter pairs a plain type compare does
+# not decide: two numerics coerce, and a spec, a generic parameter and a
+# function type each carry their own implementation rule.
+argMismatchSkipped: function {
+    st: zenv.ZSymbolTable
+    ast: Ast
+    vt: ztypes.tid
+    ptid: ztypes.tid
+} out bool is {
+    if (isNumericTid :st tid: vt) when (isNumericTid :st tid: ptid) then return true
+    ptt: st.reg.typetypeOf typeId: ptid
+    if ptt == ztypes.ztypetype.functionType then {
+        return (functionSignaturesMatch :ast :st a: vt b: ptid)
+    }
+    # a template walk's place typed by a generic template itself takes any
+    # specialisation of it
+    if (st.reg.isGenericOf tid: ptid) when (st.reg.genericOriginOf tid: vt) == ptid then return true
+    # a template walk's value whose type a generic parameter leaves partial --
+    # a window over `(array t: u64 to: n)` for the template's own `n` -- is
+    # judged in each instance's walk, where the type is concrete
+    if (st.reg.isPartialOf tid: vt) then return true
+    return (
+        (ptt == ztypes.ztypetype.protocolType) or
+        (ptt == ztypes.ztypetype.facetType) or
+        (ptt == ztypes.ztypetype.genericParam)
+    )
+}
+
+# noteSpecStandIn -- a value of type `value` written where a `spec` value is
+# expected. A plain type compare cannot decide it (an implementer is not the
+# spec), and an implementation row is recorded only when its marker is reached, so
+# the question waits for checkSpecStandIns at the end. Nothing is noted for a
+# place that is not typed by a protocol or facet.
+noteSpecStandIn: function {
+    st: zenv.ZSymbolTable
+    value: ztypes.tid
+    spec: ztypes.tid
+    nid: zast.nodeid
+    lineno: u32
+    colno: u32
+    valueNid: zast.nodeid
+    owning: bool
+} is {
+    stt: st.reg.typetypeOf typeId: spec
+    if stt != ztypes.ztypetype.protocolType when stt != ztypes.ztypetype.facetType then return
+    su: ztyping.specstandin :value :spec :nid :lineno :colno :valueNid :owning
+    st.walk.specStandIns.append su
+    # a typedef standing in on its base's implementation is boxed with a vtable of
+    # its own, whose slots call the members the spec names
+    markSpecMembersUsed :st impl: value :spec
+}
+
+# argLiteralLexeme -- the numeric lexeme an argument is written as, or "" when
+# the argument is not a bare numeric literal. A folded expression (`(0 - 5)`)
+# has no lexeme of its own and answers "".
+argLiteralLexeme: function {ast: Ast.view nid: zast.nodeid} out String is {
+    nmId: atomNameId :ast n: (ast.nodes.get i: nid)
+    if nmId.isZero then return "".string
+    if (isNumericLiteralNameAt :ast ref: nmId).not then return "".string
+    return (zast.nameTextCopy :ast ref: nmId)
+}
+
+# checkNumericCoercion -- the two questions a numeric value answers at a TYPED
+# DESTINATION, wherever one appears. A LITERAL is settled against its own value:
+# this is the third place a literal is resolved against a type -- the other two
+# are the suffixed forms, in a body and at unit level, and both ask
+# checkLiteralFits -- and the one place nobody asked, so `300.u8` was refused
+# while `n: 300` at a u8 folded to 44 and RAN. A NON-literal carries no value to
+# check, so the question is the one the declarations answer: does a lossless
+# conversion exist at all?
+#
+# Shared by the call-argument, assignment and return sites, which skipped for
+# the same reason: each read any numeric as standing in for any other.
+checkNumericCoercion: function {
+    # where a value that does not survive the conversion is reported
+    st: zenv.ZSymbolTable
+    # the tree the type names are read from
+    ast: Ast
+    # the destination's type
+    dstTid: ztypes.tid
+    # the value's own type
+    srcTid: ztypes.tid
+    # the node carrying the value: its folded constant or its literal lexeme
+    # settles it
+    valueNid: zast.nodeid
+    # the node the report points at
+    nodeid: zast.nodeid
+    # the line the report points at
+    lineno: u32
+    # the column the report points at
+    colno: u32
+} is {
+    if dstTid.isZero then return
+    if srcTid.isZero then return
+    # AN UNTYPED FOLDED CONSTANT IS SETTLED BY ITS VALUE, exactly as a written
+    # literal is. The compiler already computed `(0 - 24)` or read `N: 5`, so
+    # asking whether i64 converts to i32 asks the wrong question: the VALUE is
+    # what has to fit, and it is known here. A constant that carries a type --
+    # a suffix, a typed operand -- stands in only where that type converts
+    # without loss, as any value of the type would.
+    vn9: valueNid
+    wn9: ast.nodes.get i: vn9
+    if wn9.namedoperation then vn9 = wn9.operation
+    recordHelperScalarTarget :st :dstTid valueNid: vn9
+    # an `if` or a `match` lands each arm's value in the destination
+    if (isControlValue :ast nid: vn9) then {
+        checkArmsCoercion :st :ast :dstTid nid: vn9
+        return
+    }
+    if (checkUntypedConstFits :st :dstTid valueNid: vn9 :nodeid :lineno :colno) then return
+    if (isLiteralTypeId reg: st.reg tid: srcTid) then {
+        lex: argLiteralLexeme :ast nid: vn9
+        if lex.length == 0 then return
+        dstName: st.reg.nameOf tid: dstTid
+        checkLiteralFits :st :nodeid :lineno :colno lit: lex.stringView target: dstName.stringView
+        return
+    }
+    if (isNumericTid :st tid: srcTid).not then return
+    if (isNumericTid :st tid: dstTid).not then return
+    if (losslessConvTo :st :ast from: srcTid to: dstTid) then return
+    srcSpelled: specWrittenName :st :ast tid: srcTid
+    dstSpelled: specWrittenName :st :ast tid: dstTid
+    msg: "'\{srcSpelled}' does not convert to '\{dstSpelled}' without loss, so it cannot stand in for one"
+    hint: "convert it where the loss is visible -- `\{dstSpelled}` returns a result: `v.\{dstSpelled}.or d: <fallback>`"
+    note: String
+    addErrorWithHint :st :nodeid :lineno :colno e: zast.err.typeError :msg :note :hint width: 1
+}
+
+# checkArmsCoercion -- each arm of the `if` or `match` at `nid` lands its value
+# in the destination, as checkNumericCoercion lands one value.
+checkArmsCoercion: function {
+    st: zenv.ZSymbolTable
+    ast: Ast
+    dstTid: ztypes.tid
+    nid: zast.nodeid
+} is {
+    armIds: ListVal zast.nodeid
+    controlArmBlocks :ast :nid into: armIds
+    for each armBlock: armIds loop {
+        av: armValueOf :st :ast blockId: armBlock
+        if av.nid.notZero then {
+            an: ast.nodes.get i: av.nid
+            (
+                checkNumericCoercion
+                :st
+                :ast
+                :dstTid
+                srcTid: av.tid
+                valueNid: av.nid
+                nodeid: av.nid
+                lineno: (nodeLine n: an)
+                colno: (nodeCol n: an)
+            )
+        }
+    }
+}
+
+# recordHelperScalarTarget -- an untyped numeric constant landing in an i128,
+# u128 or f16 destination (a scalar typedef over one included) is recorded with
+# it, for the emitter (ZTyping.helperScalarTarget). Not inside a generic
+# instance's walk: the node is the template's, and the table keys on the node
+# alone.
+recordHelperScalarTarget: function {
+    st: zenv.ZSymbolTable
+    dstTid: ztypes.tid
+    valueNid: zast.nodeid
+} is {
+    if st.typing.curMonoStamp.notZero then return
+    cf: st.typing.nodeConstAt nid: valueNid
+    if cf.numTid.notZero then return
+    if cf.kind.ivalKind.not and cf.kind.fvalKind.not then return
+    # the destination's kind, through any typedef, by declaration
+    nk: baseNumKind :st tid: dstTid
+    if nk.has.not then return
+    wide: (
+        (nk.kind == ztypes.numkind.i128Type) or
+        (nk.kind == ztypes.numkind.u128Type) or
+        (nk.kind == ztypes.numkind.f16Type)
+    )
+    if wide then st.typing.helperScalarTarget.set key: valueNid value: dstTid
+}
+
+# checkUntypedConstFits -- an untyped folded constant at `valueNid` is settled by
+# its value, which must fit the destination; true when the value was one.
+checkUntypedConstFits: function {
+    st: zenv.ZSymbolTable
+    dstTid: ztypes.tid
+    valueNid: zast.nodeid
+    nodeid: zast.nodeid
+    lineno: u32
+    colno: u32
+} out bool is {
+    cf: st.typing.nodeConstAt nid: valueNid
+    num: cf.kind.ivalKind or cf.kind.fvalKind
+    if num.not or cf.numTid.notZero then return false
+    # A VALUE OUTSIDE I64 TAKES THE DESTINATION'S TYPE and is settled after the
+    # walk, by checkWideConstants: the i64 its operator gave it cannot hold it,
+    # and an operator's own operand is a destination only when no untyped fold
+    # consumes it -- which is decided after this, when the operator folds.
+    if cf.bigId != 0 then {
+        stampGate :st nid: valueNid tid: dstTid
+        return true
+    }
+    fm: constFitsType :st v: cf target: dstTid
+    if fm.length > 0 then addError :st :nodeid :lineno :colno e: zast.err.typeError msg: fm
+    return true
+}
+
+# losslessConvTo -- does `from` declare a LOSSLESS conversion to `to`? The
+# DECLARATION is the authority, and system.z draws the line exactly there: a
+# lossless conversion returns the target type itself (`i64.i128` is `out i128`),
+# while one that can lose data returns `(resultval t: X e: converror)` for the
+# caller to handle. 81 plain against 159 result-bearing across the fourteen
+# numeric types, so nothing here needs to know which pairs widen.
+losslessConvTo: function {
+    st: zenv.ZSymbolTable
+    ast: Ast
+    from: ztypes.tid
+    to: ztypes.tid
+} out bool is {
+    if from == to then return true
+    # THE NAME IS LOOKED UP, NOT KEPT, so it is a VIEW. `nameOf` copies, and
+    # this asks once per numeric argument and per numeric assignment in the
+    # tree -- 52,479 copies of a name whose only use is the pool lookup on the
+    # next line. The view pins the registry for its binding's scope, so it is
+    # scoped to die before `forceMemberOf` mints anything.
+    convNameId: zast.nameid
+    toName: st.reg.nameViewOf tid: to
+    if toName.length > 0 then convNameId = zast.poolFind pool: ast.names text: toName
+    toName.drop
+    if convNameId.isZero then return false
+    forceMemberOf :st :ast parentTypeId: from nameId: convNameId
+    conv: st.typing.declChildOfId parentTypeId: from nameId: convNameId
+    if conv.some then {
+        convReturn: methodReturnOf reg: st.reg typing: st.typing mid: conv
+        if convReturn.some then {
+            return convReturn.u64 == to.u64
+        }
+    }
+    return false
+}
+
+# checkArgTypeMismatch -- the argument's type must fit the parameter it binds.
+# An unresolved value is reported only when no earlier error already explains
+# it, and a literal only when its parameter's type resolved.
+checkArgTypeMismatch: function {
+    st: zenv.ZSymbolTable
+    ast: Ast
+    ptid: ztypes.tid
+    vt: ztypes.tid
+    pnId: zast.nameid
+    arg: argref
+} is {
+    if ptid.isZero then return
+    if vt.isZero then return
+    # BEFORE the compatibility legs, because a numeric value is COMPATIBLE with
+    # every numeric type -- that is what coercion means -- and the question here
+    # is not whether it may convert but whether it survives the conversion.
+    {
+        (
+            checkNumericCoercion
+            :st
+            :ast
+            dstTid: ptid
+            srcTid: vt
+            valueNid: arg.nid
+            nodeid: arg.nid
+            lineno: arg.lineno
+            colno: arg.colno
+        )
+    }
+    if (typesCompatible :ast :st a: vt b: ptid) then return
+    (
+        noteSpecStandIn
+        :st
+        value: vt
+        spec: ptid
+        nid: arg.nid
+        lineno: arg.lineno
+        colno: arg.colno
+        valueNid: arg.operation
+        owning: false
+    )
+    if (argMismatchSkipped :st :ast :vt :ptid) then return
+    en7: specWrittenName :st :ast tid: ptid
+    an7: specWrittenName :st :ast tid: vt
+    emit: true
+    if an7.length == 0 then {
+        if st.typing.errors.length > 0 then emit = false
+        an7 = "an unresolved value".string
+    }
+    # a literal would have fitted had its parameter's type resolved: an expected
+    # type with no declaration is the shell an earlier refusal left, and that
+    # refusal is the one error. Any other literal that does not fit is a
+    # mistake of its own, reported whatever else was.
+    ptDecl: templateDeclOf reg: st.reg typing: st.typing tid: ptid
+    if (isLiteralTypeId reg: st.reg tid: vt) when ptDecl.isZero then emit = false
+    if emit.not then return
+    # two types of the same name say nothing to the reader: each is spelled
+    # with the unit that declares it
+    if en7 == an7 then {
+        qp7: qualifiedTypePair :st expected: ptid got: vt name: en7.stringView
+        if qp7.ok then {
+            en7 = qp7.expected.copy
+            an7 = qp7.got.copy
+        }
+    }
+    pn: zast.nameTextAt :ast ref: pnId
+    mm7: "argument '\{pn}' type mismatch: expected \{en7}, got \{an7}"
+    en7b: String
+    eh7: String
+    # a static list is no collection built at run time: it is written once
+    if (valIsMonoOf reg: st.reg typing: st.typing tid: ptid wk: zast.wellKnown.slot.tyStaticlist
+    ) when (
+        valIsMonoOf
+        reg: st.reg
+        typing: st.typing
+        tid: vt
+        wk: zast.wellKnown.slot.tyStaticlist
+    ).not then eh7 = "a static list is written `list { ... }` at unit level, and passed by its name".string
+    (
+        addErrorWithHint
+        :st
+        nodeid: arg.nid
+        lineno: arg.lineno
+        colno: arg.colno
+        e: zast.err.callError
+        msg: mm7
+        note: en7b
+        hint: eh7
+        width: pn.length
+    )
+}
+
+# checkNamedArgParam -- a labelled argument must name a parameter the callee
+# has, and its value must fit that parameter's type.
+checkNamedArgParam: function {
+    st: zenv.ZSymbolTable
+    ast: Ast
+    effId: ztypes.tid
+    # the label's name, zero for a positional argument
+    pnId: zast.nameid
+    vt: ztypes.tid
+    arg: argref
+} is {
+    if pnId.isZero then return
+    if effId.isZero then return
+    if (st.typing.declMemberCount ownerTid: effId) == 0 then return
+    pcidX: (st.typing.declChildOfId parentTypeId: effId nameId: pnId).or d: ztypes.tid.zero
+    if pcidX.isZero then {
+        reportUnknownArgument :st :ast ownerTid: effId label: pnId :arg
+        return
+    }
+    checkArgTypeMismatch :st :ast ptid: pcidX :vt :pnId :arg
+}
+
+# yieldIsInScope -- `yield` here names the binding a generator body's scope
+# defines, and not a user name that happens to be spelled that way. The name is
+# looked up like any other; wearing the control placeholder -- the same
+# unregistered id `break` and `continue` wear -- is what marks it as the
+# compiler's. A user binding resolves to a real type and is an ordinary call.
+yieldIsInScope: function {st: zenv.ZSymbolTable.view} out bool is {
+    if st.reg.ctlPlaceholderTid.isZero then return false
+    yo: st.lookup nameId: zast.wellKnown.slot.wkYield
+    match (
+        yo
+    ) case some then {
+        return yo == st.reg.ctlPlaceholderTid
+    } case none then {
+        return false
+    }
+}
+
+# checkYieldedValue -- a yielded value against the generator's element type, as
+# a returned value is checked against a function's declared return
+# (checkReturnTypeMatch): a number must land in it, and any other value must be
+# of it. The element is what the `call` wrapper carries.
+checkYieldedValue: function {
+    st: zenv.ZSymbolTable
+    ast: Ast
+    arg: argref
+    argT: ztypes.tid
+} is {
+    if argT.isZero then return
+    wr: st.walk.currentReturnTypeId
+    if wr.isZero then return
+    elem: ztypes.tid
+    eo: iterWrapperElem :ast :st wid: wr
+    match (
+        eo
+    ) case some then {
+        elem = eo
+    } case none then return
+    # an instance over a template's parameters is checked per instance
+    if (st.reg.isPartialOf tid: elem) then return
+    if (numberLandsInNumber :st srcTid: argT dstTid: elem) then {
+        (
+            checkNumericCoercion
+            :st
+            :ast
+            dstTid: elem
+            srcTid: argT
+            valueNid: arg.nid
+            nodeid: arg.nid
+            lineno: arg.lineno
+            colno: arg.colno
+        )
+        return
+    }
+    if (typesCompatible :ast :st a: argT b: elem) then return
+    en: specWrittenName :st :ast tid: elem
+    an: specWrittenName :st :ast tid: argT
+    (
+        addError
+        :st
+        nodeid: (zast.nodeIdOf n: (ast.nodes.get i: arg.operation))
+        lineno: (nodeLine n: (ast.nodes.get i: arg.operation))
+        colno: (nodeCol n: (ast.nodes.get i: arg.operation))
+        e: zast.err.typeError
+        msg: "yield type mismatch: the generator yields \{en}, got \{an}"
+    )
+}
+
+# numberLandsInNumber -- a number where a number is declared: the value a
+# literal or a numeric type, the destination a numeric type. Such a value is
+# checkNumericCoercion's question, not a type-compatibility one.
+numberLandsInNumber: function {
+    st: zenv.ZSymbolTable
+    srcTid: ztypes.tid
+    dstTid: ztypes.tid
+} out bool is {
+    if (isNumericTid :st tid: dstTid).not then return false
+    if (isLiteralTypeId reg: st.reg tid: srcTid) then return true
+    return (isNumericTid :st tid: srcTid)
+}
+
+# checkReturnTypeMatch -- the returned value against what the enclosing
+# function declares. In a GENERATOR the declared return is the synthesised
+# `.call` wrapper, a type the program never wrote and cannot satisfy, so naming
+# it would blame the compiler's own machinery for the user's mistake -- which
+# is that a generator produces values by yielding them.
+checkReturnTypeMatch: function {
+    st: zenv.ZSymbolTable
+    ast: Ast
+    arg: argref
+    argT: ztypes.tid
+} is {
+    expR: st.walk.currentReturnTypeId
+    if expR.isZero then return
+    if argT.isZero then return
+    # an instance over a template's parameters is checked per instance, as a
+    # bare parameter is: the template cannot say which instance it is
+    if (st.reg.isPartialOf tid: expR) then return
+    # a generic unit's own type, returned on the template's walk, is any
+    # specialisation of it
+    if (st.reg.isGenericOf tid: expR) when (st.reg.genericOriginOf tid: argT) == expR then return
+    # a returned number lands in the declared type as an argument lands in its
+    # parameter: a literal or an untyped constant must fit it, a typed value
+    # must convert without loss
+    if (numberLandsInNumber :st srcTid: argT dstTid: expR) then {
+        (
+            checkNumericCoercion
+            :st
+            :ast
+            dstTid: expR
+            srcTid: argT
+            valueNid: arg.nid
+            nodeid: arg.nid
+            lineno: arg.lineno
+            colno: arg.colno
+        )
+        # a returned literal is the declared type, as an argument is its
+        # parameter's
+        if (isAnyLiteralTid :st tid: argT) then stampGate :st nid: arg.operation tid: expR
+        return
+    }
+    if (typesCompatible :ast :st a: argT b: expR) then {
+        # a returned string literal is the declared type, as a number is
+        if (isTextLiteralTid :st tid: argT) then stampGate :st nid: arg.operation tid: expR
+        return
+    }
+    # a value returned as a protocol is judged with every other stand-in, as
+    # an owning place: the caller owns what a function returns
+    retIsProto: (st.reg.typetypeOf typeId: expR) == ztypes.ztypetype.protocolType
+    if retIsProto when (yieldIsInScope :st).not then {
+        (
+            noteSpecStandIn
+            :st
+            value: argT
+            spec: expR
+            nid: (nodeId n: (ast.nodes.get i: arg.operation))
+            lineno: (nodeLine n: (ast.nodes.get i: arg.operation))
+            colno: (nodeCol n: (ast.nodes.get i: arg.operation))
+            valueNid: arg.operation
+            owning: true
+        )
+        return
+    }
+    en: specWrittenName :st :ast tid: expR
+    an: specWrittenName :st :ast tid: argT
+    m4: "return type mismatch: function expects \{en}, got \{an}"
+    n4: String
+    h4: String
+    if (yieldIsInScope :st) then {
+        m4 = "a generator returns no value".string
+        n4 = "the values a generator produces come from `yield`; its `out` type is the type of each one, not of a value its body returns".string
+        h4 = "yield the value instead, or use a bare `return` to end the iteration".string
+    }
+    (
+        addErrorWithHint
+        :st
+        nodeid: (zast.nodeIdOf n: (ast.nodes.get i: arg.operation))
+        lineno: (nodeLine n: (ast.nodes.get i: arg.operation))
+        colno: (nodeCol n: (ast.nodes.get i: arg.operation))
+        e: zast.err.typeError
+        msg: m4
+        note: n4
+        hint: h4
+        width: 1
+    )
+}
+
+# numKindOfTid -- the numeric kind of a scalar type: one the SYSTEM declares, by
+# the name its declaration was given -- system.z's own `u8`, or wideint's `i128`.
+# `has` false for any other type: a program's own type spelled `u8` is that
+# program's type, and no spelling decides what a type is.
+numKindOfTid: function {typing: ztyping.ZTyping.view tid: ztypes.tid} out ztypes.suffixinfo is {
+    none: ztypes.suffixinfo has: false kind: ztypes.numkind.i64Type len: 0
+    if tid.isZero then return none
+    d: typing.declIdOfType typeId: tid
+    if d.isZero then return none
+    nm: zast.nameid
+    {
+        decl: typing.decls.get i: d
+        nm = decl.name
+    }
+    first: zast.wellKnown.slot.tyI8
+    if (nm < first) or (nm > zast.wellKnown.slot.tyF128) then return none
+    if (declaredBySystem :typing declId: d).not then return none
+    return (ztypes.numkindAt k: nm.u64 - first.u64)
+}
+
+# baseNumKind -- numKindOfTid of the type under every typedef over
+# `tid`: a block of `w: typedef u8` holds u8 values.
+baseNumKind: function {st: zenv.ZSymbolTable.view tid: ztypes.tid} out ztypes.suffixinfo is {
+    b: tid
+    for (st.typing.typedefBaseTidOf tid: b).notZero loop b = st.typing.typedefBaseTidOf tid: b
+    return (numKindOfTid typing: st.typing tid: b)
+}
+
+# declaredBySystem -- whether a declaration sits in the system unit or one of the
+# implementation subunits it loads (wideint, halffloat, quadfloat).
+declaredBySystem: function {typing: ztyping.ZTyping.view declId: ztypes.declid} out bool is {
+    if typing.systemUnitRoot.isZero then return false
+    cur: declId
+    for cur.notZero loop {
+        if cur == typing.systemUnitRoot then return true
+        cur = typing.declParentOf declId: cur
+    }
+    return false
+}
+
+# constFitsType -- whether the untyped number `v` fits the numeric type
+# `target`, in the words a body uses for a written literal: "" when it does. The
+# one value check every landing makes -- an argument, an assignment, a return, a
+# conversion, a default -- and its message names the DESTINATION. Asked by
+# value: a folded value has no lexeme of its own, and the most negative i64 has
+# none a literal reader accepts.
+constFitsType: function {
+    st: zenv.ZSymbolTable.view
+    v: ztypes.cval
+    target: ztypes.tid
+} out String is {
+    tk: numKindOfTid typing: st.typing tid: target
+    if tk.has.not then return "".string
+    return (constFitsKindMessage :st :v k: tk.kind spelling: "")
+}
+
+# checkConstantArgKind -- one argument's VALUE against its parameter, as a body
+# checks it (checkArgTypeMismatch, with the type the body sees: constArgTid).
+# An untyped constant read by name (`N`) fits by its value, as a written
+# literal does by its lexeme. An argument with no value is the evaluator's to
+# explain.
+checkConstantArgKind: function {
+    st: zenv.ZSymbolTable
+    scope: ztypes.declid
+    ast: Ast
+    unitDecl: ztypes.declid
+    fid: ztypes.tid
+    paramName: zast.nameid
+    arg: argref
+} is {
+    po: (st.typing.declChildOfId parentTypeId: fid nameId: paramName).or d: ztypes.tid.zero
+    pt: po
+    if pt.isZero then return
+    held: st.walk.constFail
+    constFailClear :st
+    av: evalConstNode :st :scope :ast :unitDecl nid: arg.operation
+    st.walk.constFail = held
+    if av.kind.none then return
+    if (st.reg.typetypeOf typeId: pt) == ztypes.ztypetype.genericParam then {
+        if av.kind.svalKind.not then reportConstantConstraintArg :st :ast :fid :pt :av :arg
+        return
+    }
+    if (argLiteralLexeme :ast nid: arg.operation).length == 0 when (isNumericTid :st tid: pt
+    ) when av.kind.ivalKind then checkConstantArgFits :st :av :pt :arg
+    (
+        checkArgTypeMismatch
+        :st
+        :ast
+        ptid: pt
+        vt: (constArgTid :st :scope :ast v: av)
+        pnId: paramName
+        :arg
+    )
+}
+
+# checkConstantArgFits -- an untyped integer argument `av` fits its numeric
+# parameter's type `pt`, as a literal written there must; a typed one is the
+# parameter's kind already.
+checkConstantArgFits: function {
+    st: zenv.ZSymbolTable av: ztypes.cval pt: ztypes.tid arg: argref
+} is {
+    if av.numTid.notZero then return
+    fm: constFitsType :st v: av target: pt
+    if fm.length == 0 then return
+    addError :st nodeid: arg.nid lineno: arg.lineno colno: arg.colno e: zast.err.typeError msg: fm
+}
+
+# constAsPayload -- the constant `v` as a value of type `tid`, as an argument
+# lands there: an untyped integer that fits takes the type, an untyped string is
+# text, and a value of the type is itself. noConst for anything else.
+constAsPayload: function {
+    st: zenv.ZSymbolTable scope: ztypes.declid ast: Ast v: ztypes.cval tid: ztypes.tid
+} out ztypes.cval is {
+    if v.kind.none then return v
+    if v.kind.ivalKind when v.numTid.isZero then {
+        if (numKindOfTid typing: st.typing :tid).has.not then return ztypes.noConst
+        if (constFitsType :st :v target: tid).length > 0 then return ztypes.noConst
+        return (ztypes.typedConst c: v numTid: tid)
+    }
+    txT: stdTid :ast :st wk: zast.wellKnown.slot.tyText
+    if v.kind.svalKind when v.numTid.isZero when tid == txT then {
+        return (ztypes.typedConst c: v numTid: txT)
+    }
+    if (constValueTid :ast :st :scope :v) == tid then return v
+    return ztypes.noConst
+}
+
+# QualifiedPair -- two spellings of one name, and whether they say anything.
+QualifiedPair: class {
+    # the expected type's spelling
+    expected: String
+    # the value's own
+    got: String
+    # both name a unit, and the two differ: only then is the pair worth
+    # printing. One side qualified and the other not reads as two unrelated
+    # types, and a shell that names no unit qualifies neither
+    ok: bool
+}
+
+# qualifiedTypePair -- the two types of a report that share `name`, each
+# spelled with the unit that declares it.
+qualifiedTypePair: function {
+    st: zenv.ZSymbolTable.view
+    expected: ztypes.tid
+    got: ztypes.tid
+    name: StringView
+} out QualifiedPair is {
+    eq: qualifiedTypeName :st tid: expected :name
+    aq: qualifiedTypeName :st tid: got :name
+    good: false
+    if eq.stringView != name when aq.stringView != name when (
+        eq != aq
+    ) then good = true
+    return (QualifiedPair expected: eq.copy got: aq.copy ok: good)
+}
+
+# qualifiedTypeName -- `name` prefixed with the path of units that declares the
+# type (unitPathOfTid), for a report where the bare name would appear twice and
+# name two types.
+qualifiedTypeName: function {
+    st: zenv.ZSymbolTable.view
+    tid: ztypes.tid
+    name: StringView
+} out String is {
+    # an instance is minted in no unit: what tells two of them apart is the
+    # type argument each was minted with, or else the template each is an
+    # instance of
+    if (st.reg.genericArgCount specId: tid) == 0 then {
+        un: unitPathOfTid :st :tid
+        if un.length > 0 then return (pathQualified path: un.stringView :name)
+    } else {
+        a0: st.reg.genericTypeArgAt specId: tid ordinal: 0
+        au: unitPathOfTid :st tid: a0
+        if au.length > 0 then {
+            r2: name.string
+            r2.append " over "
+            r2.append au
+            r2.append "."
+            r2.append (st.reg.nameOf tid: a0)
+            return r2
+        }
+        ou: unitPathOfTid :st tid: (st.reg.genericOriginOf :tid)
+        if ou.length > 0 then return (pathQualified path: ou.stringView :name)
+    }
+    return name.string
+}
+
+# pathQualified -- a written type name reached through the units `path`:
+# `io.File`, and for an application the path inside its parentheses,
+# `(ua.Fixed n: 8)`.
+pathQualified: function {path: StringView name: StringView} out String is {
+    r: String
+    open: name.startsWith prefix: "("
+    if open then r.append "("
+    r.append path
+    r.append "."
+    if open then r.append (name.substring from: 1 to: name.length) else r.append name
+    return r
+}
+
+# unitPathOfTid -- the path of units a program spells to reach `tid`, file unit
+# first: `io`, `armal.deep`, `z.build`. Every enclosing unit is in it, a subunit
+# and a nested namespace alike; a `public:` block is not, a type it declares
+# being spelled through its unit. "" when the type has no declaration. The file
+# unit alone (unitNameOfTid) dropped every level between, and the innermost
+# alone named a path nothing could write.
+unitPathOfTid: function {st: zenv.ZSymbolTable.view tid: ztypes.tid} out String is {
+    return (unitPathOfDecl :st declId: (st.typing.declIdOfType typeId: tid) self: tid)
+}
+
+# unitPathOfDecl -- unitPathOfTid's walk from a declaration: the units a program
+# spells to reach what `declId` declares (a unit constant's `nav`). `self` is
+# the declared type, whose own unit, when it IS one, is not on its path.
+unitPathOfDecl: function {
+    st: zenv.ZSymbolTable.view
+    declId: ztypes.declid
+    self: ztypes.tid.zero
+} out String is {
+    names: List String
+    cur: declId
+    for cur.notZero loop {
+        par: ztypes.declid
+        isU: false
+        selfT: ztypes.tid
+        decl: st.typing.decls.get i: cur
+        par = decl.parent
+        isU = decl.kind.unitDecl
+        selfT = decl.typeId
+        decl.drop
+        isBlock: false
+        if par.notZero then isBlock = (st.typing.declPublicNsOf owner: par) == cur
+        if isU when isBlock.not when selfT.notZero when (selfT == self).not then {
+            names.append (st.reg.nameOf tid: selfT)
+        }
+        cur = par
+    }
+    r: String
+    i: names.length
+    for i > 0 loop {
+        i = i - 1
+        if r.length > 0 then r.append "."
+        r.append (names.get :i)
+    }
+    return r
+}
