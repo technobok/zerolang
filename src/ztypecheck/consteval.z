@@ -120,8 +120,8 @@ refuseWideAggItem: function {
 # the counted lowering alike.
 checkClosedRangeSpans: function {ast: Ast.view st: zenv.ZSymbolTable} is {
     i: u64
-    for i < st.walk.closedRanges.length loop {
-        ms: st.walk.closedRanges.get :i
+    for i < st.walk.consts.closedRanges.length loop {
+        ms: st.walk.consts.closedRanges.get :i
         i = i + 1
         nid: ms.node
         ends: closedRangeEnds :ast :nid
@@ -582,8 +582,8 @@ constFailRecord: function {
     width: u64
     strId: 0.u32
 } is {
-    if st.walk.constFail.failed then return
-    st.walk.constFail = (
+    if st.walk.consts.fail.failed then return
+    st.walk.consts.fail = (
         ztypes.constfail
         :kind
         :nodeid
@@ -3264,11 +3264,11 @@ stampConstAt: function {
     if plan.shape.other then return
     if plan.shape.operator then refuseZeroDivisor :st :ast :nid
     if (useSiteAsks :st :ast :nid :plan).not then return
-    held: st.walk.constFail
+    held: st.walk.consts.fail
     statics.constFailClear :st
     cv: statics.evalConstNode :st :unitDecl scope: st.curScope :ast :nid
-    got: st.walk.constFail
-    st.walk.constFail = held
+    got: st.walk.consts.fail
+    st.walk.consts.fail = held
     # a function a static value holds is called where it is read in a body: the
     # read is the call, and its value is the call's, at run time. The call
     # names the function (the emitter's foldedFnRefC), so a data value at the
@@ -3288,10 +3288,10 @@ stampConstAt: function {
     st.typing.setNodeConst :nid value: cv
     markOperandsTaken :st :ast :mono :nid
     if cv.kind.aggKind then {
-        st.walk.aggUses.append (ztyping.monostamp :mono node: nid)
+        st.walk.consts.aggUses.append (ztyping.monostamp :mono node: nid)
     }
     if (cv.bigId != 0) or (constPastF64 :st v: cv) when cv.numTid.isZero then {
-        st.walk.wideConsts.append (ztyping.monostamp :mono node: nid)
+        st.walk.consts.wideConsts.append (ztyping.monostamp :mono node: nid)
     }
 }
 
@@ -3345,8 +3345,8 @@ markOperandsTaken: function {
 } is {
     br: binRefAt :ast :nid
     if br.nid.notZero then {
-        st.walk.wideConstTaken.set key: (ztyping.monostamp :mono node: br.lhs) value: 1
-        st.walk.wideConstTaken.set key: (ztyping.monostamp :mono node: br.rhs) value: 1
+        st.walk.consts.wideConstTaken.set key: (ztyping.monostamp :mono node: br.lhs) value: 1
+        st.walk.consts.wideConstTaken.set key: (ztyping.monostamp :mono node: br.rhs) value: 1
         return
     }
     callable: zast.nodeid
@@ -3355,7 +3355,7 @@ markOperandsTaken: function {
         match (
             n
         ) case dottedpath then {
-            st.walk.wideConstTaken.set key: (ztyping.monostamp :mono node: n.parent) value: 1
+            st.walk.consts.wideConstTaken.set key: (ztyping.monostamp :mono node: n.parent) value: 1
         } case call then {
             callable = n.callable
         } else null
@@ -3363,7 +3363,7 @@ markOperandsTaken: function {
     if callable.isZero then return
     cn: ast.nodes.get i: callable
     if cn.dottedpath then (
-        st.walk.wideConstTaken.set
+        st.walk.consts.wideConstTaken.set
         key: (ztyping.monostamp :mono node: cn.parent)
         value: 1
     )

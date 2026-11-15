@@ -569,6 +569,53 @@ ValueState: class {
     tempVars: IdSet ztypes.vid
 }
 
+# ConstState -- constant evaluation. A part of WalkState (`consts`).
+ConstState: class {
+    # the computed constant definitions already asked why they have no value.
+    # Both constant doors ask, and asking can demand another definition whose
+    # own asking demands this one back, so each is asked once
+    diagnosed: IdSet zast.nodeid
+    # the unit-level nodes whose shape -- a member, a call's arguments, an
+    # operator -- was reported as a body would report it: the evaluator's own
+    # reason for the same node is not the one to show
+    shapesReported: IdSet zast.nodeid
+    # the untyped integers outside i64, and the untyped floats past f64 --
+    # a literal or a fold of them -- each by its node and the mono whose walk
+    # evaluated it: one lands in its default unless an untyped fold consumes
+    # it or a typed destination takes it, which wideConstTaken records and
+    # checkWideConstants settles after the walk
+    wideConsts: ListVal ztyping.monostamp
+    # the wide untyped integers something took: 1 an untyped fold consumed it
+    # as an operand, 2 a typed destination took it
+    wideConstTaken: (MapVV ztyping.monostamp v: u8)
+    # the nodes the walk folded to a data value, each with the mono whose walk
+    # it was: one no fold consumed (wideConstTaken) is a run-time use, and
+    # markAggsReached marks its value reached after the walk
+    aggUses: ListVal ztyping.monostamp
+    # the `upto` / `downto` calls, each by its node and the mono whose walk
+    # checked it: a closed range whose two ends fold is refused after the walk
+    # when it holds more values than its trip count can (checkClosedRangeSpans)
+    closedRanges: ListVal ztyping.monostamp
+    # the instantiation a constant is being evaluated for, when it is read
+    # through one (`a.BIG` on a unit instance); 0 otherwise. A template's
+    # constant over a numeric generic parameter has a value per instantiation
+    mono: ztypes.tid
+    # a compile-time `match` arm's narrowing, innermost last: inside the arm a
+    # choice value's subject name reads the value its arm carries
+    narrows: ListVal ztyping.constnarrow
+    # types some site actually constructs, which is what makes construction a
+    # DEMAND the emitter must satisfy
+    constructedTypes: (IdMapV ztypes.tid v: bool)
+    # evaluation state per memberConst key, the evaluator's cycle guard; a key
+    # with no entry is unvisited
+    evalState: (MapVV ztyping.constslot v: ztyping.constevalstate)
+    # the pending evaluation failure, recorded by the evaluator and rendered by
+    # whichever caller REQUIRED a value. One slot, not a table: evaluation is a
+    # synchronous recursive pull, so at most one is live, and the caller either
+    # drains it or clears it before the next pull.
+    fail: ztypes.constfail
+}
+
 # WalkState -- the body walk's working state: what the checker records while
 # it walks and reads back itself. Nothing downstream reads it; the output is
 # ZTyping's.
@@ -588,17 +635,11 @@ WalkState: class {
     # namespace reached twice -- once as a demanded definition, once as an
     # alias target -- evaluates and reports them once
     nsConstsWalked: IdSet zast.nodeid
-    # the computed constant definitions already asked why they have no value.
-    # Both constant doors ask, and asking can demand another definition whose
-    # own asking demands this one back, so each is asked once
-    constsDiagnosed: IdSet zast.nodeid
+    # constant evaluation
+    consts: ConstState
     # the (instance, name) pairs of the template constants over a numeric
     # parameter that an instance has folded and asked why (foldInstanceConstant)
     instanceConstsChecked: SetVal ztyping.constslot
-    # the unit-level nodes whose shape -- a member, a call's arguments, an
-    # operator -- was reported as a body would report it: the evaluator's own
-    # reason for the same node is not the one to show
-    constShapesReported: IdSet zast.nodeid
     # the numeric generic arguments refused as no compile-time integer, by
     # argument node: the type-reference shell the refusal leaves behind is not a
     # second mistake to report
@@ -606,23 +647,6 @@ WalkState: class {
     # the unit a QUALIFIED generic bound names (`io` in `io.Reader.generic`),
     # by the bound atom's node: the bound resolves in that unit and nowhere else
     genericBoundQual: (IdMapV zast.nodeid v: zast.nameid)
-    # the untyped integers outside i64, and the untyped floats past f64 --
-    # a literal or a fold of them -- each by its node and the mono whose walk
-    # evaluated it: one lands in its default unless an untyped fold consumes
-    # it or a typed destination takes it, which wideConstTaken records and
-    # checkWideConstants settles after the walk
-    wideConsts: ListVal ztyping.monostamp
-    # the wide untyped integers something took: 1 an untyped fold consumed it
-    # as an operand, 2 a typed destination took it
-    wideConstTaken: (MapVV ztyping.monostamp v: u8)
-    # the nodes the walk folded to a data value, each with the mono whose walk
-    # it was: one no fold consumed (wideConstTaken) is a run-time use, and
-    # markAggsReached marks its value reached after the walk
-    aggUses: ListVal ztyping.monostamp
-    # the `upto` / `downto` calls, each by its node and the mono whose walk
-    # checked it: a closed range whose two ends fold is refused after the walk
-    # when it holds more values than its trip count can (checkClosedRangeSpans)
-    closedRanges: ListVal ztyping.monostamp
     # the type applications, by node, that name their type rather than build a
     # value of it: the callable of a call supplying the fields (`(Box cap: 8)
     # used: "x"`) and the base of a member path (`(slot t: i64).empty`)
@@ -669,18 +693,11 @@ WalkState: class {
     # the errors the function-body checks under way have charged so far: a
     # body is charged only the errors its own lines raised (checkFunctionBody)
     bodyErrorsCharged: u64
-    # the instantiation a constant is being evaluated for, when it is read
-    # through one (`a.BIG` on a unit instance); 0 otherwise. A template's
-    # constant over a numeric generic parameter has a value per instantiation
-    constMono: ztypes.tid
     # true once any member has been marked private (gates cross-unit checks)
     privacySeen: bool
     # the names choices are declared under: a call builds a choice value only
     # when its head names one, so no other head's type is resolved to ask
     choiceNames: IdSet zast.nameid
-    # a compile-time `match` arm's narrowing, innermost last: inside the arm a
-    # choice value's subject name reads the value its arm carries
-    constNarrows: ListVal ztyping.constnarrow
     # boxedArms -- the union arms written `(Box T)`, or whose instance's
     # argument is a Box, by armKey: a heap cell whatever the payload's size
     boxedArms: SetVal ztyping.armkey
@@ -717,9 +734,6 @@ WalkState: class {
     pendingDefaultId: (IdMapV zast.nodeid v: ztypes.tid)
     # its name, interned
     pendingDefaultName: (IdMapV zast.nodeid v: zast.nameid)
-    # types some site actually constructs, which is what makes construction a
-    # DEMAND the emitter must satisfy
-    constructedTypes: (IdMapV ztypes.tid v: bool)
     # collections whose child types have been minted, so minting runs once
     # the type-ref nodes written as a bare name in a type position -- not an
     # application's head -- which name a generic type's defaults' instance
@@ -740,20 +754,12 @@ WalkState: class {
     # (`Strs: (List String)`): each names that instance, a type. A call-shaped
     # constant (`AT: G.indexOf "#"`) is a value, whatever type it has
     instantiatedAliases: IdSet ztypes.declid
-    # evaluation state per memberConst key, the evaluator's cycle guard; a key
-    # with no entry is unvisited
-    constEvalState: (MapVV ztyping.constslot v: ztyping.constevalstate)
     # each list-sourced tag's list, by its declaration, which a report names
     tagSourceDecls: (IdMapV ztypes.tid v: ztypes.declid)
     # the type-ref nodes in a static position, where a literal type may be
     # written: a list's `out` arguments (`out (staticlist intliteral)`) and a
     # data type's field types. A declared type may not name one anywhere else
     staticLiteralTyperefs: IdSet zast.nodeid
-    # the pending evaluation failure, recorded by the evaluator and rendered by
-    # whichever caller REQUIRED a value. One slot, not a table: evaluation is a
-    # synchronous recursive pull, so at most one is live, and the caller either
-    # drains it or clears it before the next pull.
-    constFail: ztypes.constfail
     # every value placed where a spec value is expected, checked at the end
     specStandIns: ListVal ztyping.specstandin
     # each generic typedef instance whose base refuses its argument
@@ -931,15 +937,23 @@ newWalkState: function out WalkState is {
         nsBodiesOwed: ListVal ztyping.nsbody
         nsBodiesWalked: IdSet zast.nodeid
         nsConstsWalked: IdSet zast.nodeid
-        constsDiagnosed: IdSet zast.nodeid
+        consts: (
+            ConstState
+            diagnosed: IdSet zast.nodeid
+            shapesReported: IdSet zast.nodeid
+            wideConsts: ListVal ztyping.monostamp
+            wideConstTaken: (MapVV ztyping.monostamp v: u8)
+            aggUses: ListVal ztyping.monostamp
+            closedRanges: ListVal ztyping.monostamp
+            mono: ztypes.tid.zero
+            narrows: ListVal ztyping.constnarrow
+            constructedTypes: (IdMapV ztypes.tid v: bool)
+            evalState: (MapVV ztyping.constslot v: ztyping.constevalstate)
+            fail: ztypes.noConstFail
+        )
         instanceConstsChecked: SetVal ztyping.constslot
-        constShapesReported: IdSet zast.nodeid
         numericArgsRefused: IdSet zast.nodeid
         genericBoundQual: (IdMapV zast.nodeid v: zast.nameid)
-        wideConsts: ListVal ztyping.monostamp
-        wideConstTaken: (MapVV ztyping.monostamp v: u8)
-        aggUses: ListVal ztyping.monostamp
-        closedRanges: ListVal ztyping.monostamp
         typeAppsNamed: IdSet zast.nodeid
         refusedParamCopies: IdSet ztypes.declid
         singletonPaths: (IdMapV zast.nodeid v: ztypes.tid)
@@ -953,10 +967,8 @@ newWalkState: function out WalkState is {
         refusedBodies: IdSet zast.nodeid
         refusedInstances: (IdMapV ztypes.tid v: bool)
         bodyErrorsCharged: 0
-        constMono: ztypes.tid.zero
         privacySeen: false
         choiceNames: IdSet zast.nameid
-        constNarrows: ListVal ztyping.constnarrow
         boxedArms: SetVal ztyping.armkey
         generatorWrapper: (IdMapV zast.nodeid v: bool)
         noStampNode: (IdMapV zast.nodeid v: bool)
@@ -970,17 +982,14 @@ newWalkState: function out WalkState is {
         pendingDefaultOwner: (IdMapV zast.nodeid v: ztypes.tid)
         pendingDefaultId: (IdMapV zast.nodeid v: ztypes.tid)
         pendingDefaultName: (IdMapV zast.nodeid v: zast.nameid)
-        constructedTypes: (IdMapV ztypes.tid v: bool)
         bareTyperefNodes: IdSet zast.nodeid
         collectionChildrenBuilt: IdSet ztypes.tid
         stmtBlocks: IdSet zast.nodeid
         aliasFoldsOpen: ListVal ztypes.declid
         aliasCyclesReported: IdSet ztypes.declid
         instantiatedAliases: IdSet ztypes.declid
-        constEvalState: (MapVV ztyping.constslot v: ztyping.constevalstate)
         tagSourceDecls: (IdMapV ztypes.tid v: ztypes.declid)
         staticLiteralTyperefs: IdSet zast.nodeid
-        constFail: ztypes.noConstFail
         specStandIns: ListVal ztyping.specstandin
         typedefClash: (IdMapV ztypes.tid v: ztyping.typedefclash)
         genericBoundName: (IdMapV zast.nodeid v: zast.nameid)
