@@ -21,7 +21,10 @@
 # Public interface -- the definitions other units may reference; all
 # other top-level definitions are private to this unit.
 public: unit {
-    :generatorCallOf
+    # the generator `call` whose recorded answers (`yield` in scope, the state fields) the
+    # function node `nid` takes: the node itself, or for an instance's copy of a generic
+    # generator's `call`, the template's
+    generatorCallOf: bodies.generatorCallOf
     :indexAddedUnits
     :resolveUnitMemberLate
     :constValueOfDeclLate
@@ -32,7 +35,9 @@ public: unit {
     :floatLexemeBits
     :constLiteralBig
     :boxMemberDelegates
-    :isFunctionDefWithBody
+    # true when a node is a functiondef carrying a non-empty body (a real method, not a
+    # facet/protocol spec signature whose body is none)
+    isFunctionDefWithBody: bodies.isFunctionDefWithBody
     :truthyCondArmOf
     :blockEndsInReturn
     :blockHasBreak
@@ -48,7 +53,10 @@ public: unit {
     :unitdefNodeId
     :stdTidPeek
     :isOperatorName
-    :instancesWithin
+    # the instances of `tplId`, a template with parameters of its own written in a generic
+    # unit, that belong to that unit's instance `owner`: those whose arguments for the unit's
+    # parameters are `owner`'s (bindInheritedParams), in the order they were minted
+    instancesWithin: bodies.instancesWithin
     :dataFieldIds
     :knownFieldSpan
     :isNullTid
@@ -2700,7 +2708,7 @@ resolveNamedTypeId: function {
     literalTid: literalNameTypeId :st :ast :scope :nameId
     if literalTid.notZero then return literalTid
     # a name its signature's parameter declares is refused, and the node with it
-    refuseParamAsType :st :ast :nameId :nid
+    bodies.refuseParamAsType :st :ast :nameId :nid
     gp7: genericParamTypeId :st :ast :unitDecl :scope :nameId :thisName :nid
     # a name refused as the member it names has no type of that spelling either
     if gp7.notZero or (nodeRefused :st :nid) then return gp7
@@ -3616,7 +3624,7 @@ recordResolvedName: function {
                     recordNodeName :ast :st name: "i64" :nid scope: recScope
                 }
             } else {
-                if (refuseParamAsType :st :ast :nameId :nid) then return
+                if (bodies.refuseParamAsType :st :ast :nameId :nid) then return
                 # a numeric generic parameter as a type is refused where the
                 # declaration is written (refuseSingletonDeclType) and keeps
                 # its bound's type, known now and in no scope the deferred
@@ -4011,7 +4019,7 @@ monoRefArgTid: function {
                 aid = descendNamed :st :scope :ast unitDecl: duo name: anc.stringView
             }
             if aid.isZero then {
-                ao: walkLookupTyperef :st :scope :ast :unitDecl base: anc.stringView
+                ao: bodies.walkLookupTyperef :st :scope :ast :unitDecl base: anc.stringView
                 aid = ao.or d: ztypes.tid.zero
             }
             if aid.isZero when duo.notZero then {
@@ -4393,7 +4401,7 @@ numericParamRefTid: function {
     owner: enclDecl
     if owner.isZero then owner = numericParamOwnerFrom :st :scope :nameId
     if owner.isZero when thisName.length > 0 then {
-        tto: walkLookupTyperef :st :scope :ast :unitDecl base: thisName
+        tto: bodies.walkLookupTyperef :st :scope :ast :unitDecl base: thisName
         if tto.some then {
             owner = st.typing.declIdOfType typeId: tto
         }
@@ -6945,7 +6953,7 @@ ensureUnitInstanceMono: function {
     args: ListVal ztypes.genericarg
     if (unitInstanceKeys :st :tdecl :subs :valSubs :args).not then return ztypes.tid
     mono: ztypes.tid
-    got: unitMonoOnTrie :st tplTid: tplId :args
+    got: bodies.unitMonoOnTrie :st tplTid: tplId :args
     match (
         got
     ) case some then {
@@ -6970,7 +6978,7 @@ ensureUnitInstanceMono: function {
         if own.notZero then st.reg.setOwnerTid typeId: mono owner: own
         # a copy: the join grows the registry the name would be a view into
         tplNm: st.reg.nameOf tid: tplId
-        unitMonoJoinTrie :st tplTid: tplId tplName: tplNm.stringView :args monoId: mono
+        bodies.unitMonoJoinTrie :st tplTid: tplId tplName: tplNm.stringView :args monoId: mono
         for each a: args loop st.reg.appendGenericArg specId: mono arg: a
         recordNumericArgConsts :ast :st :scope monoId: mono :tdecl
         shareUnitSingletons :st :tdecl encl: own monoId: mono
@@ -8042,7 +8050,7 @@ declaresFunctionWithBody: function {
     if dn.isZero then return false
     n: ast.nodes.get i: dn
     if n.namedoperation.not then return false
-    return (isFunctionDefWithBody o: (ast.nodes.get i: n.operation))
+    return (bodies.isFunctionDefWithBody o: (ast.nodes.get i: n.operation))
 }
 
 # declaredFunctionNode -- the functiondef row `baseId` declares, looked up
@@ -8072,19 +8080,6 @@ declaredFunctionNode: function {
         cur = st.typing.declParentOf declId: cur
     }
     return zast.nodeid
-}
-
-# namesFunctionWithBody -- `baseId` declares a function WITH a body, not a spec.
-namesFunctionWithBody: function {
-    st: zenv.ZSymbolTable
-    ast: Ast.view
-    unitDecl: ztypes.declid
-    scope: ztypes.declid
-    baseId: zast.nameid
-} out bool is {
-    fn: declaredFunctionNode :st :ast :unitDecl :scope :baseId
-    if fn.isZero then return false
-    return (isFunctionDefWithBody o: (ast.nodes.get i: fn))
 }
 
 # namesSpec -- `baseId` declares a SPEC: a function with no body that is not
@@ -8164,7 +8159,7 @@ refuseMarkedFunctionType: function {
     if baseId.isZero or childId.isZero then return false
     k: zast.markerKindOfName id: childId
     if (k.takeMarker or k.borrowMarker or k.viewMarker or k.holdMarker).not then return false
-    if (namesFunctionWithBody :st :ast :unitDecl :scope :baseId).not then return false
+    if (bodies.namesFunctionWithBody :st :ast :unitDecl :scope :baseId).not then return false
     bn: zast.nameTextCopy :ast ref: baseId
     cn: zast.nameTextAt :ast ref: childId
     # composed with append, not interpolation: a dotted path built inline reads
@@ -8782,7 +8777,7 @@ resolveFunction: function {
         name: defName
         typetype: ztypes.ztypetype.functionType
     )
-    fnode: fnRefAt :ast nid: fnId
+    fnode: bodies.fnRefAt :ast nid: fnId
     st.reg.setNative typeId: fid value: fnode.isNative
     recordFnBodyPresence :st :fid :fnode
     dfid: fid
@@ -8891,97 +8886,6 @@ refuseThisNamedReceiver: function {st: zenv.ZSymbolTable ast: Ast.view pm: argre
         hint: "name it, as `t: this.view`: written `this: this.view`, the name is in scope in its own type, where it would name the parameter".string
         width: 4
     )
-}
-
-# signatureDeclaresParam -- the function `fnId`'s signature declares a value
-# parameter `nameId`, which is in scope throughout it
-signatureDeclaresParam: function {ast: Ast.view fnId: zast.nodeid nameId: zast.nameid} out bool is {
-    if nameId == zast.wellKnown.slot.wkThis then return false
-    fnode: fnRefAt :ast nid: fnId
-    k: u64
-    for k < fnode.nparams loop {
-        pm: argRefAt :ast nid: (zast.fnParamAt :ast nid: fnId i: k)
-        k = k + 1
-        if pm.name == nameId then return true
-    }
-    return false
-}
-
-# signatureTypeHolds -- `nid` is one of the nodes of `fnId`'s signature where a
-# name is looked up as a type: a parameter's or the return's head, the root of
-# a marked or qualified path (`u8.view`, `zast.nodeid`), or a part of an
-# application. A qualified path's leaf is its unit's, and is none of them.
-signatureTypeHolds: function {ast: Ast.view fnId: zast.nodeid nid: zast.nodeid} out bool is {
-    fnode: fnRefAt :ast nid: fnId
-    k: u64
-    for k < fnode.nparams loop {
-        pm: argRefAt :ast nid: (zast.fnParamAt :ast nid: fnId i: k)
-        k = k + 1
-        if (typeRefHolds :ast root: pm.operation :nid) then return true
-    }
-    return (typeRefHolds :ast root: (fnReturnTyperefOf op: (ast.nodes.get i: fnId)) :nid)
-}
-
-# typeRefHolds -- `nid` is `root` or a node of it where a name is looked up as
-# a type (signatureTypeHolds)
-typeRefHolds: function {ast: Ast.view root: zast.nodeid nid: zast.nodeid} out bool is {
-    if root.isZero then return false
-    if root == nid then return true
-    n: ast.nodes.get i: root
-    match (
-        n
-    ) case dottedpath then {
-        return (typeRefHolds :ast root: n.parent :nid)
-    } case call then {
-        if (typeRefHolds :ast root: n.callable :nid) then return true
-        for each aId: (zast.kidsOf :ast span: n.arguments) loop {
-            if (typeRefHolds :ast root: (argRefAt :ast nid: aId).operation :nid) then return true
-        }
-        return false
-    } else {
-        return false
-    }
-}
-
-# refuseParamAsType -- a type-ref inside a signature that names one of the
-# function's parameters: the nearest declaration of the name is the parameter,
-# which is no type. A `:x` shorthand names x from outside its own declaration.
-# True when it refused (once per node).
-refuseParamAsType: function {
-    st: zenv.ZSymbolTable
-    ast: Ast.view
-    nameId: zast.nameid
-    nid: zast.nodeid
-} out bool is {
-    if nid.isZero or nameId.isZero then return false
-    fn: st.walk.sigFnNode
-    if fn.isZero then return false
-    if (signatureDeclaresParam :ast fnId: fn :nameId).not then return false
-    if (signatureTypeHolds :ast fnId: fn :nid).not then return false
-    n: ast.nodes.get i: nid
-    if n.labelvalue then return false
-    # the name the node looks up first: its own, or its path's root
-    if n.dottedpath when (rootNameIdOf :ast n: (ast.nodes.get i: nid)) != nameId then return false
-    if (st.typing.refusedValues.has item: nid) then return true
-    nn: zast.nameTextAt :ast ref: nameId
-    fnm: zast.nameTextAt :ast ref: st.walk.sigFnName
-    (
-        addErrorWithHint
-        :st
-        nodeid: nid
-        lineno: (nodeLine :n)
-        colno: (nodeCol :n)
-        e: zast.err.typeError
-        msg: "'\{nn}' is a parameter of '\{fnm}', not a type"
-        note: "".string
-        hint: "".string
-        width: nn.length
-    )
-    st.typing.refusedValues.add item: nid
-    nsk: nid
-    nsv: true
-    st.walk.noStampNode.set key: nsk value: nsv
-    return true
 }
 
 
@@ -9122,7 +9026,7 @@ stampMemberSignature: function {
         stampForcedTyperef :st scope: rf :ast :unitDecl :thisName nid: rn
     }
     if fnNodeId.isZero then return
-    fr: fnRefAt :ast nid: fnNodeId
+    fr: bodies.fnRefAt :ast nid: fnNodeId
     if fr.nid.notZero then {
         kP: u64
         for kP < fr.nparams loop {
@@ -9463,23 +9367,6 @@ forceMemberOf: function {
     nativeMethodForInstance :st :ast inst: parentTypeId :nameId
 }
 
-# forceOwnerMember -- force one member of the type `ownerDecl` declares, found
-# through the owner's declaration rather than its name: a type a nested unit
-# declares has another type's name in the file unit, or none. Body checking
-# reaches here before the member's signature has been resolved.
-forceOwnerMember: function {
-    st: zenv.ZSymbolTable
-    ast: Ast
-    ownerDecl: ztypes.declid
-    memberId: zast.nameid
-} is {
-    if st.typing.eagerAll then return
-    if ownerDecl.isZero then return
-    md: st.typing.declFindChild parentDeclId: ownerDecl nameId: memberId
-    if md.isZero then return
-    forceMemberDecl :st :ast memberDeclId: md
-}
-
 # forceUnitDef -- resolve ONE top-level TYPE definition of a unit now, and
 # answer its type id (0 when it does not resolve). Every other `force*` resolves
 # a MEMBER, and every resolver of a DEFINITION is a whole-unit loop, so a caller
@@ -9503,7 +9390,7 @@ forceUnitDef: function {
         opId = mm.operation
     }
     if nmId.isZero then return ztypes.tid.zero
-    uId: unitNameIdOf :st :unitDecl
+    uId: bodies.unitNameIdOf :st :unitDecl
     targetUnit: unitDeclOfName typing: st.typing nameId: uId
     got: resolvedByIds :st :ast unitDecl: targetUnit name: nmId
     if got.some then {
@@ -10013,7 +9900,7 @@ foldInstanceConstant: function {
     from: st.typing.errors.length
     constFoldDecl :ast :st :declId
     st.walk.constMono = prev
-    noteInstanceErrors :st :ast :mono :from
+    bodies.noteInstanceErrors :st :ast :mono :from
     # the instance's member has the type of the instance's value: it has none
     # of its own, or the parameter's stand-in when the definition is the
     # parameter itself (`K: cap`), which a unit indexes as a re-export
@@ -10761,7 +10648,7 @@ checkInstanceImplementations: function {
         if instSpec.isZero then continue
         checkImplementationSignature :st :ast implTid: mono specTid: instSpec :markerOp :implName
         if st.typing.errors.length > errsBefore then {
-            noteInstanceErrors :st :ast :mono from: errsBefore
+            bodies.noteInstanceErrors :st :ast :mono from: errsBefore
         } else {
             # a failure another instance already reported is deduped away, so
             # this instance may still read as implementing; nothing is emitted
@@ -14697,7 +14584,7 @@ tagBaseIsU8: function {
     scope: ztypes.declid
     bn: StringView
 } out bool is {
-    rr: walkLookupTyperef :st :scope :ast :unitDecl base: bn
+    rr: bodies.walkLookupTyperef :st :scope :ast :unitDecl base: bn
     if rr.none then return false
     u8t: stdTid :ast :st wk: zast.wellKnown.slot.tyU8
     if u8t.isZero then return false
@@ -19160,7 +19047,7 @@ descendNamedId: function {
             if cycV when (declDefIsNative :st :ast declId: ddecl) then cycV = false
             if cycV then {
                 name: zast.nameTextAt :ast ref: nameId
-                cem: "containment cycle: value type '\{(unitNameTextOf
+                cem: "containment cycle: value type '\{(bodies.unitNameTextOf
                     :st
                     :ast
                     :unitDecl
@@ -19713,101 +19600,6 @@ demandAllDefs: function {st: zenv.ZSymbolTable program: Ast.view} is {
     }
 }
 
-# noMainError -- the target unit declares no `main`, so demand has no root.
-# Positioned on the unit's own definition: there is no node to point at, the
-# absence IS the error.
-noMainError: function {
-    st: zenv.ZSymbolTable
-    ast: Ast.view
-    unitDecl: ztypes.declid
-    unitdefId: zast.nodeid
-} is {
-    unc: unitNameTextOf :st :ast :unitDecl
-    em: "unit '\{unc}' declares no 'main': there is nothing to compile it from"
-    en: "compilation is demand-driven -- `main` is the root, and what it reaches is what gets checked and emitted".string
-    eh: "add `main: function is { ... }`, or compile the program that opens this unit instead".string
-    un: ast.nodes.get i: unitdefId
-    st.typing.errors.append (
-        zast.ErrorData
-        nodeid: (zast.nodeIdOf n: un)
-        lineno: (nodeLine n: un)
-        colno: (nodeCol n: un)
-        width: unc.length.u32.orPanic
-        err: zast.err.noMain
-        msg: em
-        fsno: zvfs.fsno
-        note: en
-        hint: eh
-    )
-    st.typing.isError = true
-}
-
-# badMainError -- `main` declares a shape the entry point cannot have. The
-# runtime calls it with no arguments and reads no result, so a parameter or an
-# `out` type is a promise the emitter cannot keep: it writes `void z_main(void)`
-# either way, and the C compiler then rejects the body that reads the parameter
-# or returns the value. Refusing here is what keeps zc from accepting a
-# signature it cannot honour.
-badMainError: function {
-    st: zenv.ZSymbolTable
-    at: argref
-    msg: StringView
-    note: StringView
-    hint: StringView
-} is {
-    (
-        addErrorWithHint
-        :st
-        nodeid: at.nid
-        lineno: at.lineno
-        colno: at.colno
-        e: zast.err.badMain
-        msg: msg.string
-        note: note.string
-        hint: hint.string
-        width: 4
-    )
-}
-
-# checkMainSignature -- refuse a `main` that declares parameters or a result.
-# `at` positions the diagnostic on the definition; `fn` carries the shape.
-checkMainSignature: function {
-    st: zenv.ZSymbolTable
-    at: argref
-    fn: fnref
-} is {
-    if fn.nparams > 0 then {
-        (
-            badMainError
-            :st
-            :at
-            msg: "'main' takes no parameters: the runtime has none to pass it"
-            note: "a program reads its command line through `os.args`, not through a parameter"
-            hint: "write `main: function is { ... }` and bind `argv: os.args` in the body"
-        )
-    }
-    if fn.returntype.notZero then {
-        (
-            badMainError
-            :st
-            :at
-            msg: "'main' declares no result: there is no caller to return one to"
-            note: "the process exit status is set explicitly, not returned from the entry point"
-            hint: "drop the `out` clause and exit with `os.exit code: n`"
-        )
-    }
-    if fn.body.isZero when fn.isNative.not then {
-        (
-            badMainError
-            :st
-            :at
-            msg: "'main' has no body: the program starts in it"
-            note: "a function written without `is { ... }` names a shape, and has nothing to run"
-            hint: "write `main: function is { ... }`"
-        )
-    }
-}
-
 # register and resolve the program's main unit.
 registerAndResolveMain: function {
     st: zenv.ZSymbolTable
@@ -20035,25 +19827,13 @@ exprCallIsReturn: function {ast: Ast.view op: astnode.view} out bool is {
     }
 }
 
-# isFunctionDefWithBody -- true when a node is a functiondef carrying a non-empty body
-# (a real method, not a facet/protocol spec signature whose body is none).
-isFunctionDefWithBody: function {o: astnode.view} out bool is {
-    match (
-        o
-    ) case functiondef then {
-        return o.body.notZero
-    } else {
-        return false
-    }
-}
-
 # unitHasObjectMethodBody -- true when a unit body holds an objectdef with a method-body.
 unitHasObjectMethodBody: function {ast: Ast.view defId: zast.nodeid} out bool is {
     bodyIds: zast.unitBodyIdsAt :ast unitId: defId
     for each bm: (zast.kidsOf :ast span: bodyIds) loop {
         bmNode: ast.nodes.get i: bm
         if bmNode.namedoperation when (
-            objectdefHasMethodBodies
+            bodies.objectdefHasMethodBodies
             :ast
             op: (ast.nodes.get i: bmNode.operation)
         ) then return true
@@ -22173,7 +21953,7 @@ mintUnitStaticListInstances: function {
             subs: allSubs
             want: ztypes.tid
         )
-        noteInstanceErrors :st :ast mono: monoId :from
+        bodies.noteInstanceErrors :st :ast mono: monoId :from
         st.walk.constEvalState.set key: k value: ztyping.constevalstate.done
         if row == 0 then continue
         (
@@ -22504,61 +22284,6 @@ buildInstanceMono: function {
     )
 }
 
-# resolveInstArgSubs -- resolve one request's generic arguments into the type and
-# value substitution maps. The arguments resolve where the instantiation is
-# WRITTEN, so a request that carries its own scope binds there rather than in
-# the scope the pass is walking.
-resolveInstArgSubs: function {
-    st: zenv.ZSymbolTable
-    scope: ztypes.declid
-    program: Ast
-    r: InstReq.view
-    subs: (IdMapV zast.nameid v: ztypes.tid)
-    valSubs: (IdMapV zast.nameid v: u64)
-} is {
-    ru: r.declUnit
-    rscope: r.scopeDeclId
-    naR: r.argLabels.length
-    aiR: u64
-    # the arguments resolve where the instantiation is written
-    rf: scope
-    if rscope.notZero then rf = rscope
-    for aiR < naR loop {
-        lblR: r.argLabels.get i: aiR
-        anmR: r.argNames.get i: aiR
-        aidR: r.argAtomIds.get i: aiR
-        if (instNumericParam :st :r label: lblR) then {
-            numericArg: instNumericArg :st scope: rf ast: program :r i: aiR
-            if numericArg.state.value then valSubs.set key: lblR value: numericArg.bits
-        } else {
-            aoR: optionval.none ztypes.tid
-            {
-                if anmR.length > 0 then {
-                    aoR = (
-                        walkLookupTyperef
-                        :st
-                        scope: rf
-                        ast: program
-                        unitDecl: ru
-                        base: anmR.stringView
-                    )
-                } else {
-                    # a call-shaped argument: the specialisation it names
-                    atR: instArgTypeOf :st scope: rf ast: program :r i: aiR
-                    if atR.notZero then aoR = optionval.some atR
-                }
-            }
-            if aoR.some then {
-                subs.set key: lblR value: aoR
-                if aidR.notZero then {
-                    ztyping.nodeTypeSet tbl: st.typing.nodeType nid: aidR tid: aoR
-                }
-            }
-        }
-        aiR = aiR + 1
-    }
-}
-
 # recordInstanceGenericArgs -- record a mono's arguments in DECLARATION order, the
 # order the generic_arg rows keep and the order that keys its level of the id
 # trie. A parameter with no substitution keys as 0 rather than being skipped, so
@@ -22580,316 +22305,6 @@ recordInstanceGenericArgs: function {
             arg: (a.or d: ztypes.genericarg.typeArg ztypes.tid.zero)
         )
     }
-}
-
-# completeOneInstance -- finish one instantiation whose mono the mint pass already
-# laid on the trie. The binding's own Decl carries the instantiated unit's type
-# wherever the binding is written, a binding inside a namespace is also a member
-# of it, and the template settles here -- the trie join needs it as its root.
-completeOneInstance: function {
-    st: zenv.ZSymbolTable
-    scope: ztypes.declid
-    program: Ast
-    r: InstReq.view
-    mgo: ztypes.tid
-    subs: (IdMapV zast.nameid v: ztypes.tid).view
-    valSubs: (IdMapV zast.nameid v: u64).view
-} is {
-    rbId: r.bindId
-    rtId: r.tmplId
-    rc: r.callId
-    rl: r.calId
-    rtu: r.tmplUnit
-    rtop: r.tmplOpId
-    rtid: r.tmplTid
-    rtdecl: r.tmplDeclId
-    rscope: r.scopeDeclId
-    memberIdAt: mgo
-    # the binding's own Decl carries the instantiated unit's type
-    # WHEREVER the binding is written: that is what makes `intmath` a
-    # unit to a reader, without asking a bare-name index.
-    bDecl: st.typing.declFindChild parentDeclId: rscope nameId: rbId
-    if bDecl.notZero then {
-        st.typing.declSetType declId: bDecl typeId: memberIdAt
-    }
-    # A binding written inside a NAMESPACE is ALSO a member of that
-    # namespace -- `outer.intmath` -- and a qualified read finds it on
-    # the namespace's own type id. A top-level binding has no such
-    # owner: the file unit's members are not indexed that way.
-    rsp: st.typing.declParentOf declId: rscope
-    if (declAtProgramTop typing: st.typing parentDeclId: rsp).not then {
-        sTid: st.typing.declTypeOf declId: rscope
-        if sTid.notZero then {
-            st.typing.setMemberType parentTypeId: sTid nameId: rbId childTypeId: memberIdAt
-        }
-    }
-    # the template the request resolved at COLLECTION, through the scope the
-    # instantiation is written in. A name probed anywhere else finds a file
-    # unit, or another scope's template, of the same spelling.
-    tplId: st.typing.declTypeOf declId: rtdecl
-    if tplId.isZero then tplId = rtid
-    tplDecl: rtdecl
-    recordInstanceGenericArgs :st :tplDecl :memberIdAt :subs :valSubs
-    buildInstanceMono :st :scope :program :rtId :rtu :rtop :tplId :memberIdAt :subs
-    if rc.notZero then {
-        cv: memberIdAt
-        ztyping.nodeTypeSet tbl: st.typing.nodeType nid: rc tid: cv
-    }
-    if rl.notZero when tplId.notZero then {
-        ztyping.nodeTypeSet tbl: st.typing.nodeType nid: rl tid: tplId
-    }
-}
-
-# completeUnitInstantiations -- post-demand pass: with system types
-# resolved, finish each generic-unit instantiation (substituted children +
-# clone stash), register the binding name, and stamp the instantiation's
-# expression/call/callable/arg nodes.
-completeUnitInstantiations: function {
-    st: zenv.ZSymbolTable
-    scope: ztypes.declid
-    program: Ast
-} is {
-    reqs: List InstReq
-    scanMainForInstantiations :st :scope :program :reqs
-    i: u64
-    for i < reqs.length loop {
-        r: reqs.get :i
-        rtdecl: r.tmplDeclId
-        # the collector gathers every call-shaped unit definition; only one
-        # whose callable names a generic UNIT is an instantiation, as the mint
-        # pass decides (resolveMainUnitInstantiations). Resolving another's
-        # arguments here demanded them eagerly -- `foo: bar foo`, `foo: 1 + foo`
-        # (the infix form is a call) -- whether anything used the definition
-        if rtdecl.isZero or r.tmplOpId.isZero then {
-            i = i + 1
-            continue
-        }
-        subs: IdMapV zast.nameid v: ztypes.tid
-        valSubs: IdMapV zast.nameid v: u64
-        resolveInstArgSubs :st :scope :program :r :subs :valSubs
-        # the mono is the one on the trie under the template, keyed on the
-        # resolved arguments -- the identity the mint pass laid; the label is
-        # not consulted
-        mgo: optionval.none ztypes.tid
-        {
-            if rtdecl.notZero when r.tmplOpId.notZero then {
-                argsC: ListVal ztypes.genericarg
-                if (instMonoKeys :st :scope ast: program :r tdecl: rtdecl args: argsC) then {
-                    mgo = (
-                        unitMonoOnTrie
-                        :st
-                        tplTid: (st.typing.declTypeOf declId: rtdecl)
-                        args: argsC
-                    )
-                }
-            }
-        }
-        if mgo.some then {
-            completeOneInstance :st :scope :program :r :mgo :subs :valSubs
-        }
-        i = i + 1
-    }
-}
-
-# demandInstArgs -- demand every definition an instantiation's arguments
-# name, from the scope the instantiation is written in (a bare type name, a
-# dotted one, a nested specialisation's parts), so the mint pass -- which runs
-# before the demand drain -- can key the mono on resolved arguments. The
-# caller drains.
-demandInstArgs: function {
-    st: zenv.ZSymbolTable
-    scope: ztypes.declid
-    ast: Ast.view
-    r: InstReq.view
-} is {
-    rf: scope
-    if r.scopeDeclId.notZero then rf = r.scopeDeclId
-    for each nid: r.argNodeIds loop {
-        if nid.notZero then {
-            scanCallsInNode :st scope: rf :ast node: (ast.nodes.get i: nid)
-        }
-    }
-}
-
-# instMonoKeys -- an instantiation's arguments in the template's PARAMETER
-# order. False when a parameter has no resolvable argument (it stays a type
-# argument of no type).
-instMonoKeys: function {
-    st: zenv.ZSymbolTable
-    scope: ztypes.declid
-    ast: Ast
-    r: InstReq.view
-    tdecl: ztypes.declid
-    args: ListVal ztypes.genericarg
-} out bool is {
-    ok: true
-    pn: st.reg.genericParamNamesOf :tdecl
-    if pn.length == 0 then return false
-    for each pnm: pn loop {
-        k: ztypes.genericarg.typeArg ztypes.tid.zero
-        found: false
-        ai: u64
-        for ai < r.argLabels.length loop {
-            lbl: r.argLabels.get i: ai
-            if lbl == pnm then {
-                if (instNumericParam :st :r label: lbl) then {
-                    rfK: scope
-                    if r.scopeDeclId.notZero then rfK = r.scopeDeclId
-                    naK: instNumericArg :st scope: rfK :ast :r i: ai
-                    if naK.state.value then {
-                        # a value key may be 0 (`sized cap: 0`)
-                        k = ztypes.genericarg.valueArg naK.bits
-                        found = true
-                    }
-                } else {
-                    at: instArgTypeOf :st :scope :ast :r i: ai
-                    k = ztypes.genericarg.typeArg at
-                    if at.notZero then found = true
-                }
-            }
-            ai = ai + 1
-        }
-        if found.not then ok = false
-        args.append k
-    }
-    return ok
-}
-
-# unitMonoOnTrie -- the unit mono already minted for `args` under the
-# template, walking one trie level per parameter; none when any level is
-# missing. A probe: it lays nothing.
-unitMonoOnTrie: function {
-    st: zenv.ZSymbolTable.view
-    tplTid: ztypes.tid
-    args: (ListVal ztypes.genericarg).view
-} out optionval ztypes.tid is {
-    if tplTid.isZero then return (optionval.none ztypes.tid)
-    cur: tplTid
-    for each a: args loop {
-        n: st.reg.getGenericChild parentId: cur key: a
-        match (
-            n
-        ) case some then {
-            cur = n
-        } case none then {
-            return (optionval.none ztypes.tid)
-        }
-    }
-    return (optionval.some cur)
-}
-
-# unitMonoJoinTrie -- lay the mono's path under the template: one level per
-# parameter, keyed on the argument (a type id or a numeric value; the kinds
-# never share a level), interior nodes labelled after the template and marked
-# by `isTrieNode` on their row, the leaf the mono. getOrMintSpec keys a record
-# specialisation the same way; a unit tid parents a trie node exactly as a
-# record tid does.
-unitMonoJoinTrie: function {
-    st: zenv.ZSymbolTable
-    tplTid: ztypes.tid
-    tplName: StringView
-    args: (ListVal ztypes.genericarg).view
-    monoId: ztypes.tid
-} is {
-    if tplTid.isZero then return
-    cur: tplTid
-    n: args.length
-    i: u64
-    for i < n loop {
-        k: args.get :i
-        last: false
-        if (i + 1) == n then last = true
-        step: ztypes.tid
-        got: st.reg.getGenericChild parentId: cur key: k
-        match (
-            got
-        ) case some then {
-            step = got
-        } case none then {
-            if last then {
-                step = monoId
-            } else {
-                step = st.reg.newType name: tplName typetype: ztypes.ztypetype.genericParam
-                st.reg.setTrieNode typeId: step value: true
-            }
-            st.reg.setGenericChild parentId: cur key: k child: step
-        }
-        cur = step
-        i = i + 1
-    }
-}
-
-# instArgTypeOf -- the type an instantiation argument names, resolved where
-# the instantiation is written: a bare atom by name, a call-shaped argument
-# (a specialisation of its own, `(Box t: i64)`) through the type-ref
-# resolver, which mints or finds it on the trie. 0 for a numeric value
-# argument or an unresolvable one.
-instArgTypeOf: function {
-    st: zenv.ZSymbolTable
-    scope: ztypes.declid
-    ast: Ast
-    r: InstReq.view
-    i: u64
-} out ztypes.tid is {
-    anm: r.argNames.get :i
-    if (isNumericLiteralName name: anm.stringView) then return ztypes.tid.zero
-    if (instNumericParam :st :r label: (r.argLabels.get :i)) then return ztypes.tid.zero
-    rf: scope
-    if r.scopeDeclId.notZero then rf = r.scopeDeclId
-    result: ztypes.tid
-    if anm.length > 0 then {
-        ao: walkLookupTyperef :st scope: rf :ast unitDecl: r.declUnit base: anm.stringView
-        if ao.some then {
-            result = ao
-        }
-    } else {
-        nid: r.argNodeIds.get :i
-        if nid.notZero then {
-            result = (
-                resolveTyperefShell
-                :st
-                scope: rf
-                :ast
-                unitDecl: r.declUnit
-                :nid
-                thisName: ""
-            )
-        }
-    }
-    return result
-}
-
-# instMonoLabel -- the mono's label: the template's name and one component per
-# argument: a numeric parameter's value, a bare atom's own text or, for a
-# call-shaped argument, the label of the specialisation it names.
-instMonoLabel: function {
-    st: zenv.ZSymbolTable
-    scope: ztypes.declid
-    ast: Ast
-    r: InstReq.view
-    # the mono's arguments in parameter order, where a numeric argument's value
-    # is read
-    args: (ListVal ztypes.genericarg).view
-} out String is {
-    mn: zast.poolTextCopy pool: ast.names ref: r.tmplId
-    na: r.argNames.length
-    pn: st.reg.genericParamNamesOf tdecl: r.tmplDeclId
-    i: u64
-    for i < na loop {
-        mn.append "_"
-        an: r.argNames.get :i
-        lbl: r.argLabels.get :i
-        if (instNumericParam :st :r label: lbl) then {
-            appendInstNumericLabel :st :r :args :pn :lbl :mn
-        } else if an.length > 0 then {
-            mn.append an
-        } else {
-            at: instArgTypeOf :st :scope :ast :r :i
-            if at.notZero then mn.append (monoValName :st :ast tid: at)
-        }
-        i = i + 1
-    }
-    return mn
 }
 
 # appendInstNumericLabel -- a numeric argument's label component: the value
@@ -22972,7 +22387,7 @@ resolveMainUnitInstantiations: function {
         # instantiation's own scope
         if r.tmplDeclId.notZero when r.tmplOpId.notZero then {
             {
-                mintUnitMonoOf :st :scope ast: program :r
+                bodies.mintUnitMonoOf :st :scope ast: program :r
                 (
                     scanTemplateBodyDemands
                     :st
@@ -22983,133 +22398,6 @@ resolveMainUnitInstantiations: function {
                 )
             }
         }
-    }
-}
-
-# mintUnitMonoOf -- one instantiation's mono: its arguments demanded and
-# drained (the mint pass precedes the drain), keyed in the template's
-# parameter order, found on the trie under the template or minted and
-# joined there. The label is display only. An argument nothing resolves is
-# reported here, where the request is.
-mintUnitMonoOf: function {
-    st: zenv.ZSymbolTable
-    scope: ztypes.declid
-    ast: Ast
-    r: InstReq.view
-} is {
-    demandInstArgs :st :scope :ast :r
-    resolveDemandedDefs :st :ast
-    templateTid: st.typing.declTypeOf declId: r.tmplDeclId
-    args: ListVal ztypes.genericarg
-    ok: instMonoKeys :st :scope :ast :r tdecl: r.tmplDeclId :args
-    if ok.not then {
-        reportUnresolvedInstArgs :st :scope :ast :r
-        return
-    }
-    got: unitMonoOnTrie :st tplTid: templateTid :args
-    if got.some then {
-        return
-    }
-    label: instMonoLabel :st :scope :ast :r :args
-    mono: (
-        createUnitMono
-        :st
-        :ast
-        monoName: label.stringView
-        tmplDeclId: r.tmplDeclId
-        tplTid: templateTid
-        templateOpId: r.tmplOpId
-    )
-    templateName: zast.poolTextAt pool: ast.names ref: r.tmplId
-    unitMonoJoinTrie :st tplTid: templateTid tplName: templateName.stringView :args monoId: mono
-    templateName.drop
-    # sited at the instantiation, which an error in its walk names
-    if r.callId.notZero then {
-        n: ast.nodes.get i: r.callId
-        ms: ztyping.monosite lineno: (nodeLine :n) colno: (nodeCol :n) unitDecl: r.declUnit
-        st.walk.monoSite.set key: mono value: ms
-    }
-    # the numeric arguments are recorded where they are keyed: a constant of the
-    # instance may be read before its completion pass records the rest
-    for each a: args loop st.reg.appendGenericArg specId: mono arg: a
-    recordNumericArgConsts :ast :st :scope monoId: mono tdecl: r.tmplDeclId
-    mintNumericSingletons :ast :st :scope monoId: mono tdecl: r.tmplDeclId
-}
-
-# instNumericParam -- whether an instantiation argument's label names a
-# numeric generic parameter of its template.
-instNumericParam: function {
-    st: zenv.ZSymbolTable.view
-    r: InstReq.view
-    label: zast.nameid
-} out bool is {
-    if label.isZero then return false
-    return (st.reg.genericParamConstraintOf tdecl: r.tmplDeclId paramName: label).numKind.has
-}
-
-# instNumericArg -- an instantiation's numeric argument read to its value where
-# the instantiation is written.
-instNumericArg: function {
-    st: zenv.ZSymbolTable
-    scope: ztypes.declid
-    ast: Ast
-    r: InstReq.view
-    i: u64
-} out numarg is {
-    return (
-        numericGenericArg
-        :ast
-        :st
-        unitDecl: r.declUnit
-        :scope
-        tdecl: r.tmplDeclId
-        param: (r.argLabels.get :i)
-        argOp: (r.argNodeIds.get :i)
-        inBody: false
-    )
-}
-
-# reportUnresolvedInstArgs -- E0023 at every instantiation argument that names
-# nothing (a numeric value always resolves).
-reportUnresolvedInstArgs: function {
-    st: zenv.ZSymbolTable
-    scope: ztypes.declid
-    ast: Ast.view
-    r: InstReq.view
-} is {
-    n: r.argLabels.length
-    i: u64
-    for i < n loop {
-        an: r.argNames.get :i
-        nid: r.argNodeIds.get :i
-        i = i + 1
-        # a numeric argument is read, and refused, by its own reader
-        if (instNumericParam :st :r label: (r.argLabels.get i: i - 1)) then continue
-        if (isNumericLiteralName name: an.stringView) then continue
-        if nid.isZero then continue
-        rt: ztypes.tid
-        {
-            rf: scope
-            if r.scopeDeclId.notZero then rf = r.scopeDeclId
-            if an.length > 0 then {
-                eh: envLookup :st scope: rf nameId: (nameIdOf :ast name: an.stringView)
-                rt = st.typing.declTypeOf declId: eh.declId
-            }
-        }
-        if rt.notZero then continue
-        an8: an.copy
-        if an8.length == 0 then an8 = "the argument".string
-        n8: ast.nodes.get i: nid
-        (
-            addResolveErrorAt
-            :st
-            nodeid: (zast.nodeIdOf n: n8)
-            lineno: (nodeLine n: n8)
-            colno: (nodeCol n: n8)
-            e: zast.err.badReference
-            msg: "Unknown reference '\{an8}'"
-            width: an8.length
-        )
     }
 }
 
@@ -34537,7 +33825,7 @@ checkInstanceConstant: function {
     prevMono: st.walk.constMono
     st.walk.constMono = bt
     v: (
-        constValueOfMemberAt
+        bodies.constValueOfMemberAt
         :st
         :ast
         unitDecl: (unitRootOfDecl typing: st.typing declId: cd)
@@ -42715,7 +42003,7 @@ checkForConditionIn: function {
         # the factory's lazy walks (its body + the iterator class's
         # methods via return-first transitivity) fire before the
         # synthetic invocation's call scope opens.
-        maybeWalkMethodsById :st scope: st.curScope :unitDecl :ast nameId: fbnId
+        bodies.maybeWalkMethodsById :st scope: st.curScope :unitDecl :ast nameId: fbnId
         fcm: st.pushCall node: condId
         vt = checkValueAt :st :unitDecl :ast nid: cond.operation
         st.popTo marker: fcm
@@ -49893,7 +49181,7 @@ fnDefinitionWritesParameters: function {
     fop: (st.typing.decls.get i: fd).node
     dn: ast.nodes.get i: fop
     if dn.namedoperation then fop = dn.operation
-    return (fnRefAt :ast nid: fop).nparams > 0
+    return (bodies.fnRefAt :ast nid: fop).nparams > 0
 }
 
 # reportSurplusPositional -- an unlabelled argument whose slot binds no parameter.
@@ -51154,30 +50442,6 @@ yieldIsInScope: function {st: zenv.ZSymbolTable.view} out bool is {
     } case none then {
         return false
     }
-}
-
-# yieldInputTidOf -- the type of a generator `call`'s per-call input: its SECOND
-# parameter, the receiver being first. 0 when it declares none, which is what
-# makes reading `yield`'s value there an error rather than a silent zero.
-yieldInputTidOf: function {
-    # the scope the parameter is looked up in
-    st: zenv.ZSymbolTable
-    # the tree the parameter list is read from
-    ast: Ast
-    # the `call` whose input is wanted
-    defn: fnref
-} out ztypes.tid is {
-    if defn.nparams < 2 then return ztypes.tid
-    pmId: zast.fnParamAt :ast nid: defn.nid i: 1
-    if pmId.isZero then return ztypes.tid
-    pn: ast.nodes.get i: pmId
-    if pn.namedoperation then {
-        po: st.lookup nameId: pn.name
-        if po.some then {
-            return po
-        }
-    }
-    return ztypes.tid
 }
 
 # checkYieldCall -- a suspension point, checked as the call it is. The call's
@@ -55439,23 +54703,6 @@ isGenericParamLabel: function {
     return found
 }
 
-# bindExplicitTypeArg -- an explicit type argument binds its parameter to the
-# type its value names.
-bindExplicitTypeArg: function {
-    st: zenv.ZSymbolTable
-    unitDecl: ztypes.declid
-    ast: Ast
-    arg: argref
-    subs: (IdMapV zast.nameid v: ztypes.tid)
-} is {
-    tn3: zast.nameTextCopy :ast ref: (atomNameId :ast n: (ast.nodes.get i: arg.operation))
-    to3: walkLookupTyperef :st scope: st.curScope :ast :unitDecl base: tn3.stringView
-    if to3.some then {
-        sv: monoSubstTid :st tid: to3
-        subs.set key: arg.name value: sv
-    }
-}
-
 # argHolderSlot -- the declared parameter an argument binds: a LABEL names one,
 # and an unlabelled argument takes the next positional slot. A label naming no
 # parameter is reported here, which is the one place holding the owner to name
@@ -55841,7 +55088,7 @@ inferGenericCallSubs: function {
             fnDecl: templateDeclOf reg: st.reg typing: st.typing tid: funcId
             argBound: st.reg.genericParamConstraintOf tdecl: fnDecl paramName: arg.name
             argNumeric: argBound.numKind.has
-            if argNumeric.not then bindExplicitTypeArg :st :unitDecl :ast :arg :subs
+            if argNumeric.not then bodies.bindExplicitTypeArg :st :unitDecl :ast :arg :subs
             continue
         }
         errG: st.typing.errors.length
@@ -56680,35 +55927,6 @@ genericParamSubjectTid: function {
     return subjT
 }
 
-# monoSubjectDecl -- the declaration a `match t` subject resolves to when the
-# enclosing owner did not claim it: a unit-level generic template whose
-# parameter list carries the name. 0 when none does.
-monoSubjectDecl: function {
-    st: zenv.ZSymbolTable.view
-    ast: Ast.view
-    unitDecl: ztypes.declid
-    gsn: StringView
-} out ztypes.declid is {
-    gdecl: ztypes.declid
-    # the template's own body walk runs with unitDecl = the
-    # TEMPLATE's name; the template def lives in the main unit,
-    # which the registry names -- the eager walk's current unit
-    # happened to be it for every program that reaches here, but
-    # only because such a template is declared where main is.
-    gunm: unitNameTextOf :st :ast :unitDecl
-    gmud: st.typing.mainUnitRoot
-    gcand: (
-        declOfUnitDef
-        :st
-        scope: st.curScope
-        unitDecl: gmud
-        nameId: (nameIdOf :ast name: gunm.stringView)
-    )
-    if gcand.notZero when (st.reg.isGenericParamOf tdecl: gcand name: (nameIdOf :ast name: gsn)
-    ) then gdecl = gcand
-    return gdecl
-}
-
 
 # caseGenericSubjectTid -- the type of a `match` subject that is not a value: a
 # bare generic parameter, resolved against the enclosing generic context so it
@@ -56764,7 +55982,7 @@ caseGenericSubjectTid: function {
             }
         }
         if gdecl.isZero when gdecl.isZero then gdecl = (
-            monoSubjectDecl
+            bodies.monoSubjectDecl
             :st
             :ast
             :unitDecl
@@ -58597,25 +57815,6 @@ fnRefOf: function {fnode: zast.functionrow.view} out fnref is {
     )
 }
 
-# fnRefAt -- the function row `nid` as plain values (all zero for any other
-# arm).
-fnRefAt: function {ast: Ast.view nid: zast.nodeid} out fnref is {
-    n: ast.nodes.get i: nid
-    if n.functiondef then return (fnRefOf fnode: n)
-    zn: zast.nodeid
-    return (
-        fnref
-        nid: zn
-        returntype: zn
-        nparams: 0
-        body: zn
-        isNative: false
-        pins: false
-        lineno: 0
-        colno: 0
-    )
-}
-
 # objref -- what a definition walk reads of an object-definition row: the
 # kind, the is/as item counts, the native flag and the position, as plain
 # values. Items are read by index through zast.objIsItemAt / objAsItemAt.
@@ -59724,155 +58923,6 @@ walkBodyAt: function {
     if bodyId.notZero then checkStatement :st :unitDecl :ast blockId: bodyId
 }
 
-# nodeIsFunctiondef -- kind test that keeps the caller's un-narrowed handle.
-nodeIsFunctiondef: function {o: astnode.view} out bool is {
-    match (
-        o
-    ) case functiondef then {
-        return true
-    } else {
-        return false
-    }
-}
-
-# objectdefIsGeneric -- a type definition with a generic as-block parameter;
-# generic templates are never body-walked (instances clone at call sites).
-objectdefIsGeneric: function {ast: Ast.view o: astnode.view} out bool is {
-    match (
-        o
-    ) case objectdef then {
-        return (zast.itemsHaveGenericParam :ast items: o.asItems)
-    } else {
-        return false
-    }
-}
-
-# scanTypeNameOpt -- recurse the method-walk trigger into an optional typeref
-# (a function's return type).
-scanTypeNameOpt: function {
-    st: zenv.ZSymbolTable
-    unitDecl: ztypes.declid
-    scope: ztypes.declid
-    ast: Ast
-    oId: zast.nodeid
-} is {
-    if oId.isZero then return
-    # the row's root name
-    bnId: zast.nameid
-    o: ast.nodes.get i: oId
-    bnId = rootNameIdOf :ast n: o
-    if bnId.notZero then maybeWalkMethodsById :st :unitDecl :scope :ast nameId: bnId
-}
-
-# scanFnSig -- recurse the method-walk trigger through a function signature in
-# resolution order: the return type first, then parameters in declaration order.
-scanFnSig: function {
-    st: zenv.ZSymbolTable
-    unitDecl: ztypes.declid
-    scope: ztypes.declid
-    ast: Ast
-    opId: zast.nodeid
-} is {
-    fr: fnRefAt :ast nid: opId
-    if fr.nid.isZero then return
-    scanTypeNameOpt :st :scope :unitDecl :ast oId: fr.returntype
-    kP: u64
-    for kP < fr.nparams loop {
-        pmId: zast.fnParamAt :ast nid: fr.nid i: kP
-        kP = kP + 1
-        pm: argRefAt :ast nid: pmId
-        if pm.nid.notZero then {
-            bnId: rootNameIdOf :ast n: (ast.nodes.get i: pm.operation)
-            if bnId.notZero then maybeWalkMethodsById :st :unitDecl :scope :ast nameId: bnId
-        }
-    }
-}
-
-# scanMemberSignatures -- replay one definition's signature-resolution order:
-# an objectdef resolves its field typerefs, then its is- and as-block method
-# signatures; a function resolves its own signature. Each name recurses the
-# trigger, so transitively referenced types walk their methods first.
-scanMemberSignatures: function {
-    st: zenv.ZSymbolTable
-    unitDecl: ztypes.declid
-    scope: ztypes.declid
-    ast: Ast
-    opId: zast.nodeid
-} is {
-    arm: rowArmAt :ast nid: opId
-    match (
-        arm
-    ) case functiondef then {
-        scanFnSig :st :scope :unitDecl :ast :opId
-    } case objectdef then {
-        orf: objRefAt :ast nid: opId
-        kF: u64
-        for kF < orf.nis loop {
-            fmId: zast.objIsItemAt :ast nid: opId i: kF
-            kF = kF + 1
-            fm: argRefAt :ast nid: fmId
-            if fm.nid.notZero when (nodeIsFunctiondef o: (ast.nodes.get i: fm.operation)).not then {
-                bnId: rootNameIdOf :ast n: (ast.nodes.get i: fm.operation)
-                if bnId.notZero then {
-                    maybeWalkMethodsById :st :unitDecl :scope :ast nameId: bnId
-                }
-            }
-        }
-        kI: u64
-        for kI < orf.nis loop {
-            imId: zast.objIsItemAt :ast nid: opId i: kI
-            kI = kI + 1
-            im: argRefAt :ast nid: imId
-            if im.nid.notZero then {
-                scanFnSig :st :scope :unitDecl :ast opId: im.operation
-            }
-        }
-        kA: u64
-        for kA < orf.nas loop {
-            amId: zast.objAsItemAt :ast nid: opId i: kA
-            kA = kA + 1
-            am: argRefAt :ast nid: amId
-            if am.nid.notZero then {
-                scanFnSig :st :scope :unitDecl :ast opId: am.operation
-            }
-        }
-    } else null
-}
-
-# maybeWalkMethods -- the resolution-time method-walk trigger: the first time
-# a body walk resolves a main-unit definition's name, scan the signature
-# typerefs (recursing per name) at the current scope position, then body-check
-# the type's methods. The early mark stops re-entry (a method constructing its
-# own type).
-maybeWalkMethods: function {
-    st: zenv.ZSymbolTable
-    unitDecl: ztypes.declid
-    scope: ztypes.declid
-    ast: Ast
-    name: StringView
-} is {
-    nmId: zast.poolFind pool: ast.names text: name
-    maybeWalkMethodsById :st :unitDecl :scope :ast nameId: nmId
-}
-
-# maybeWalkMethodsById -- maybeWalkMethods for a name already interned. The
-# declaring node comes from the DECL, which is keyed by (unit, name) and
-# records the node that declared it, so any unit's definition can be walked
-# at the point something demands it.
-maybeWalkMethodsById: function {
-    st: zenv.ZSymbolTable
-    unitDecl: ztypes.declid
-    scope: ztypes.declid
-    ast: Ast
-    nameId: zast.nameid
-} is {
-    if nameId.isZero then return
-    dd: declOfUnitDefIds typing: st.typing :unitDecl :nameId
-    if dd.isZero then return
-    if (st.typing.declIsWalked declId: dd) then return
-    walkDeclaredDef :st :scope :ast :unitDecl declId: dd
-}
-
 # walkDefinitionById -- walk the definition a RESOLVED ID names, wherever it
 # lives. A unit is code layout: a path the parser follows to reach a definition,
 # not a property of the walk. So the walk takes the definition -- the id IS the
@@ -59895,134 +58945,7 @@ walkDefinitionById: function {
     if dnm.isZero then return
     unTd: unitDeclOfTid reg: st.reg typing: st.typing :tid
     if unTd.isZero then return
-    walkDeclaredDef :st scope: st.curScope :ast unitDecl: unTd declId: dcl
-}
-
-# walkDeclaredDef -- the shared core: mark the definition walked and walk it.
-walkDeclaredDef: function {
-    st: zenv.ZSymbolTable
-    ast: Ast
-    unitDecl: ztypes.declid
-    scope: ztypes.declid
-    declId: ztypes.declid
-} is {
-    # the definition is walked in the scope of its own declaration
-    rf: scope
-    if declId.notZero then rf = declId
-    dd: declId
-    if (st.typing.declIsWalked declId: dd) then return
-    memId: (st.typing.decls.get i: dd).node
-    if memId.isZero then return
-    # a template's member is checked per instance, from the instance's copy
-    if (declIsUnitTemplate :st :ast declId: (st.typing.declParentOf declId: dd)) then return
-    # The mark means BODY WALKED, so it is never set for a definition this is
-    # not about to walk. Claiming one and declining is what made a free function
-    # -- and then a namespace -- vanish: the unit's own walk skipped it as done.
-    mopId: zast.nodeid
-    mm2: ast.nodes.get i: memId
-    if mm2.namedoperation then mopId = mm2.operation
-    if mopId.isZero then return
-    isFn: false
-    if (isFunctionDefWithBody o: (ast.nodes.get i: mopId)) then isFn = true
-    canW: isFn
-    if canW.not when (objectdefHasMethodBodies :ast op: (ast.nodes.get i: mopId)) then canW = true
-    if canW.not then return
-    st.typing.declSetWalked declId: dd
-    # A DEMAND MET INSIDE A DEMANDED BODY WAITS ITS TURN. The mark is laid now,
-    # as it is for a body that calls itself, so nothing asks twice; the
-    # outermost demand walks what its body and theirs asked for, one after
-    # another. A chain of calls then costs no stack, however long it is.
-    if st.walk.demandDraining then {
-        st.walk.demands.append (zenv.walkjob decl: dd scope: rf :unitDecl mono: ztypes.tid)
-        return
-    }
-    st.walk.demandDraining = true
-    walkDemandedDef :st :ast :unitDecl scope: rf declId: dd
-    i: u64
-    for i < st.walk.demands.length loop {
-        dj: st.walk.demands.get :i
-        walkDemandedDef :st :ast unitDecl: dj.unitDecl scope: dj.scope declId: dj.decl
-        i = i + 1
-    }
-    for st.walk.demands.length > 0 loop st.walk.demands.pop
-    st.walk.demandDraining = false
-}
-
-# walkDemandedDef -- walk the definition `declId`, which walkDeclaredDef marked:
-# a function's body, or a type's method bodies.
-walkDemandedDef: function {
-    st: zenv.ZSymbolTable
-    ast: Ast
-    unitDecl: ztypes.declid
-    scope: ztypes.declid
-    declId: ztypes.declid
-} is {
-    rf: scope
-    dd: declId
-    nameId: st.typing.declNameOf :declId
-    memId: (st.typing.decls.get i: dd).node
-    mopId: zast.nodeid
-    mm2: ast.nodes.get i: memId
-    if mm2.namedoperation then mopId = mm2.operation
-    isFn: isFunctionDefWithBody o: (ast.nodes.get i: mopId)
-    # a walk reached from a use runs in a neutral context, as a drain does: the
-    # use may sit in an instance's or a template's walk, whose state belongs to
-    # that body and not to this definition
-    prevMono: st.typing.curMonoStamp
-    prevMonoFn: st.walk.curMonoFnTid
-    savedMode: st.mode
-    st.typing.curMonoStamp = ztypes.tid.zero
-    st.walk.curMonoFnTid = ztypes.tid
-    st.mode.genericWalk = false
-    st.mode.inContainmentEdge = false
-    # walkOwnerMethods only ever walked a TYPE's methods; a free function
-    # reaching it was marked and declined, and its unit's own free-function walk
-    # then skipped it as done -- a body emitted with nothing stamped.
-    if isFn then {
-        # a demand-time walk is its own scope, and checkFunctionBody SETS the
-        # ambient receiver without restoring it: a free function walked from
-        # inside a method's body would leave the ambient receiver cleared, and the
-        # rest of that method then reads `b.private` as external code. The type
-        # branch has bracketed these two since it was the only branch.
-        prevL: st.walk.synthLabel.copy
-        prevOwnerUnit: st.walk.synthOwnerUnit
-        prevOwnerName: st.walk.synthOwnerName
-        prevT: st.walk.currentThisTid
-        cfbFr: fnRefAt :ast nid: mopId
-        (
-            checkFunctionBody
-            :st
-            scope: rf
-            :unitDecl
-            defName: ""
-            defNameId: nameId
-            fn: cfbFr
-            thisName: ""
-            thisTid: ztypes.tid
-            :ast
-            declId: dd
-        )
-        st.walk.synthLabel = prevL.take
-        st.walk.synthOwnerUnit = prevOwnerUnit
-        st.walk.synthOwnerName = prevOwnerName
-        st.walk.currentThisTid = prevT
-    } else {
-        # the owner's own type, which a namespace's type has and the file
-        # unit's definitions do not reach
-        (
-            walkOwnerMethods
-            :st
-            scope: rf
-            :unitDecl
-            :ast
-            :memId
-            :nameId
-            knownTid: (st.typing.declTypeOf declId: dd)
-        )
-    }
-    st.typing.curMonoStamp = prevMono
-    st.walk.curMonoFnTid = prevMonoFn
-    st.mode = savedMode
+    bodies.walkDeclaredDef :st scope: st.curScope :ast unitDecl: unTd declId: dcl
 }
 
 
@@ -60055,8 +58978,8 @@ walkOwnerMethods: function {
         # silently stops asking.
         owTid: knownTid
         if owTid.isZero then owTid = forceUnitDef :st :scope :ast :unitDecl :memId
-        scanMemberSignatures :st :scope :unitDecl :ast opId: mem.operation
-        canWalk: objectdefHasMethodBodies :ast op: (ast.nodes.get i: mem.operation)
+        bodies.scanMemberSignatures :st :scope :unitDecl :ast opId: mem.operation
+        canWalk: bodies.objectdefHasMethodBodies :ast op: (ast.nodes.get i: mem.operation)
         # an owner that will not resolve is not walked at all: its own
         # resolution reports its own error, while a body walk on notype only
         # cascades that failure into every line of every method.
@@ -60067,7 +58990,7 @@ walkOwnerMethods: function {
             prevN: st.walk.synthOwnerName
             prevThis: st.walk.currentThisTid
             (
-                checkMethodBodies
+                bodies.checkMethodBodies
                 :st
                 :scope
                 :unitDecl
@@ -60085,216 +59008,6 @@ walkOwnerMethods: function {
     }
 }
 
-# objectdefHasMethodBodies -- a unit member whose operation is an objectdef
-# with at least one is- or as-item method that has a body.
-objectdefHasMethodBodies: function {ast: Ast.view op: astnode.view} out bool is {
-    match (
-        op
-    ) case objectdef then {
-        for each imId: (zast.kidsOf :ast span: op.isItems) loop {
-            im: ast.nodes.get i: imId
-            if im.namedoperation when (isFunctionDefWithBody o: (ast.nodes.get i: im.operation)
-            ) then return true
-        }
-        for each amId: (zast.kidsOf :ast span: op.asItems) loop {
-            am: ast.nodes.get i: amId
-            if am.namedoperation when (isFunctionDefWithBody o: (ast.nodes.get i: am.operation)
-            ) then return true
-        }
-        return false
-    } else {
-        return false
-    }
-}
-
-# bodiedMemberDeferred -- may this bodied member's body be left unwalked?
-#
-# A method is walked only where the program uses it, like any other
-# definition: code that is never reached must parse, and is not typechecked.
-# Walking every member of a type the program touches checks, mints and emits
-# whatever each body constructs, for a program that calls one of them. A
-# member a spec names is used by the implementation (markSpecMembersUsed).
-#
-# `usedMemberDecl` is stamped by the reference that resolves the member. The
-# owner walks ONCE, and a use can come after it: reading another unit's typed
-# constant walks the scalars' owners early, and a dependency's namespace is
-# walked late. So a deferred member is recorded (deferBody), and one a use
-# reached after its owner's walk is walked then (walkLateUsedBodies) -- missing
-# it showed the symptom fnUndemanded names: a body emitted with nothing
-# stamped, here `u64.times` as its template.
-#
-# `--eager` walks everything, which is the point of it.
-bodiedMemberDeferred: function {
-    st: zenv.ZSymbolTable
-    ownerTid: ztypes.tid
-    memberDecl: ztypes.declid
-} out bool is {
-    if (eagerAt :st declId: memberDecl) then return false
-    if memberDecl.isZero then return false
-    if ownerTid.isZero then return false
-    # a written `create` runs wherever the type is constructed, and a function
-    # field's body is the value construction stores in it; no member reference
-    # spells either
-    mn: (st.typing.decls.get i: memberDecl).name
-    if mn == zast.wellKnown.slot.wkCreate then return false
-    if (st.typing.declIsFnptrFieldId parentTypeId: ownerTid nameId: mn) then return false
-    return (st.walk.usedMemberDecl.has item: memberDecl).not
-}
-
-# checkMethodBodies -- body-check every method of one type definition (is- and
-# as-block functiondefs, declaration order). The scopes land under the walk's
-# current scope, where the first demand placed them.
-checkMethodBodies: function {
-    st: zenv.ZSymbolTable
-    unitDecl: ztypes.declid
-    scope: ztypes.declid
-    ast: Ast
-    # the owner type's name, interned; its text is copied once below, for
-    # the labels and the receiver name the bodies are walked under
-    typeNameId: zast.nameid
-    typeTid: ztypes.tid
-    opId: zast.nodeid
-} is {
-    typeName: zast.nameTextCopy :ast ref: typeNameId
-    # the owner's declaration by its id: a type a nested unit declares shares
-    # its name with any top-level one, and the file unit's name answers that one
-    ownerDecl: st.typing.declIdOfType typeId: typeTid
-    if ownerDecl.isZero then ownerDecl = (
-        declOfUnitDefIds
-        typing: st.typing
-        :unitDecl
-        nameId: typeNameId
-    )
-    orf: objRefAt :ast nid: opId
-    if orf.nid.notZero then {
-        kI: u64
-        for kI < orf.nis loop {
-            imId: zast.objIsItemAt :ast nid: opId i: kI
-            kI = kI + 1
-            # the member is read through a view scoped to this block: the
-            # body check below lends ast
-            imIsFn: false
-            imOp: zast.nodeid
-            imName: zast.nameid
-            {
-                im: argRefAt :ast nid: imId
-                if im.nid.notZero when (
-                    isFunctionDefWithBody
-                    o: (ast.nodes.get i: im.operation)
-                ) then {
-                    imIsFn = true
-                    imOp = im.operation
-                    imName = im.name
-                }
-            }
-            if imIsFn then {
-                {
-                    qn: methodLabel :ast typeName: typeName.stringView memberId: imName
-                    isMethodDecl: st.typing.declFindChild parentDeclId: ownerDecl nameId: imName
-                    imSkip: bodiedMemberDeferred :st ownerTid: typeTid memberDecl: isMethodDecl
-                    if imSkip then deferBody :st :scope :unitDecl declId: isMethodDecl
-                    # about to check this body, so its signature is needed:
-                    # `this` binds from the resolved receiver. AFTER the gate:
-                    # forcing it mints the member's return type, which is how a
-                    # deferred body still dragged its types into every program
-                    if imSkip.not then forceOwnerMember :st :ast :ownerDecl memberId: imName
-                    imFr: fnRefAt :ast nid: imOp
-                    if imSkip.not then {
-                        (
-                            checkFunctionBody
-                            :st
-                            :scope
-                            :unitDecl
-                            defName: qn.stringView
-                            defNameId: zast.nameid
-                            fn: imFr
-                            thisName: typeName.stringView
-                            thisTid: typeTid
-                            :ast
-                            declId: isMethodDecl
-                        )
-                        markMemberWalked :st declId: isMethodDecl
-                    }
-                }
-            }
-        }
-        kA: u64
-        for kA < orf.nas loop {
-            amId: zast.objAsItemAt :ast nid: opId i: kA
-            kA = kA + 1
-            # the member is read through a view scoped to this block: the
-            # body check below lends ast
-            amIsFn: false
-            amOp: zast.nodeid
-            amName: zast.nameid
-            {
-                am: argRefAt :ast nid: amId
-                if am.nid.notZero when (
-                    isFunctionDefWithBody
-                    o: (ast.nodes.get i: am.operation)
-                ) then {
-                    amIsFn = true
-                    amOp = am.operation
-                    amName = am.name
-                }
-            }
-            if amIsFn then {
-                {
-                    qn2: methodLabel :ast typeName: typeName.stringView memberId: amName
-                    asMethodDecl: st.typing.declFindChild parentDeclId: ownerDecl nameId: amName
-                    amSkip: bodiedMemberDeferred :st ownerTid: typeTid memberDecl: asMethodDecl
-                    if amSkip then deferBody :st :scope :unitDecl declId: asMethodDecl
-                    if amSkip.not then forceOwnerMember :st :ast :ownerDecl memberId: amName
-                    amFr: fnRefAt :ast nid: amOp
-                    if amSkip.not then {
-                        (
-                            checkFunctionBody
-                            :st
-                            :scope
-                            :unitDecl
-                            defName: qn2.stringView
-                            defNameId: zast.nameid
-                            fn: amFr
-                            thisName: typeName.stringView
-                            thisTid: typeTid
-                            :ast
-                            declId: asMethodDecl
-                        )
-                        markMemberWalked :st declId: asMethodDecl
-                    }
-                }
-            }
-        }
-    }
-}
-
-# markMemberWalked -- a method's body has been walked, which is what lets the
-# emitter write it. Laid AFTER the walk: checkFunctionBody reads the mark to
-# tell a first walk from a recursive reference.
-markMemberWalked: function {st: zenv.ZSymbolTable declId: ztypes.declid} is {
-    if declId.isZero then return
-    st.typing.declSetWalked :declId
-}
-
-# deferBody -- record a member checkMethodBodies left unwalked, with the scope,
-# unit and instance its owner's walk ran in, so a use that arrives after that
-# walk can still have it walked (walkLateUsedBodies).
-deferBody: function {
-    st: zenv.ZSymbolTable
-    scope: ztypes.declid
-    unitDecl: ztypes.declid
-    declId: ztypes.declid
-} is {
-    if declId.isZero then return
-    st.walk.deferred.append (
-        zenv.walkjob
-        decl: declId
-        :scope
-        :unitDecl
-        mono: st.typing.curMonoStamp
-    )
-}
-
 # walkStaticFnRefs -- walk the body of each function a static value refers to
 # (constOfFnRef) that nothing has walked yet; true when any was walked. A walk
 # can evaluate a static value that names another, so the list is read to its
@@ -60307,7 +59020,7 @@ walkStaticFnRefs: function {st: zenv.ZSymbolTable scope: ztypes.declid ast: Ast}
         i = i + 1
         if (st.typing.declIsWalked declId: fd) then continue
         (
-            walkDeclaredDef
+            bodies.walkDeclaredDef
             :st
             :scope
             :ast
@@ -60332,7 +59045,7 @@ walkLateUsedBodies: function {st: zenv.ZSymbolTable ast: Ast} out bool is {
         dj: st.walk.deferred.get :i
         if (lateBodyOwed :st d: dj.decl) then {
             (
-                walkDeferredBody
+                bodies.walkDeferredBody
                 :st
                 :ast
                 declId: dj.decl
@@ -60345,77 +59058,6 @@ walkLateUsedBodies: function {st: zenv.ZSymbolTable ast: Ast} out bool is {
         i = i + 1
     }
     return walked
-}
-
-# walkDeferredBody -- walk one deferred member as its owner's walk would have:
-# in that walk's scope, unit and instance, its signature forced first, and the
-# ambient walk state restored after. Its name, owner and definition are the
-# declaration's.
-walkDeferredBody: function {
-    st: zenv.ZSymbolTable
-    ast: Ast
-    declId: ztypes.declid
-    scope: ztypes.declid
-    unitDecl: ztypes.declid
-    mono: ztypes.tid
-} is {
-    memberId: zast.nameid
-    ownerDecl: ztypes.declid
-    defNode: zast.nodeid
-    {
-        dm: st.typing.decls.get i: declId
-        memberId = dm.name
-        ownerDecl = dm.parent
-        defNode = dm.node
-    }
-    opId: (argRefAt :ast nid: defNode).operation
-    # the walk marks the member it takes; one it could not walk would be owed
-    # again by every round (lateBodyOwed)
-    if opId.isZero or ownerDecl.isZero then {
-        mn: zast.nameTextAt :ast ref: memberId
-        panic msg: "ztypecheck: deferred member '\{mn}' has no body or no owner to walk"
-    }
-    ownerTid: st.typing.declTypeOf declId: ownerDecl
-    typeName: zast.nameTextCopy :ast ref: (st.typing.decls.get i: ownerDecl).name
-    prevMono: st.typing.curMonoStamp
-    savedMode: st.mode
-    prevL: st.walk.synthLabel.copy
-    prevU: st.walk.synthOwnerUnit
-    prevN: st.walk.synthOwnerName
-    prevThis: st.walk.currentThisTid
-    st.typing.curMonoStamp = mono
-    st.mode.suppressBareCtor = false
-    st.mode.suppressFnAutoCall = false
-    forceOwnerMember :st :ast :ownerDecl :memberId
-    qn: methodLabel :ast typeName: typeName.stringView :memberId
-    if mono.notZero then st.typing.beginInstanceWalk next: (nextRowOf :ast)
-    (
-        checkFunctionBody
-        :st
-        :scope
-        :unitDecl
-        defName: qn.stringView
-        defNameId: zast.nameid
-        fn: (fnRefAt :ast nid: opId)
-        thisName: typeName.stringView
-        thisTid: ownerTid
-        :ast
-        :declId
-    )
-    if mono.notZero then st.typing.endInstanceWalk next: (nextRowOf :ast)
-    markMemberWalked :st :declId
-    st.typing.curMonoStamp = prevMono
-    st.mode = savedMode
-    st.walk.synthLabel = prevL.take
-    st.walk.synthOwnerUnit = prevU
-    st.walk.synthOwnerName = prevN
-    st.walk.currentThisTid = prevThis
-}
-
-# methodLabel -- the `Type.member` label a method body is walked under.
-methodLabel: function {ast: Ast.view typeName: StringView memberId: zast.nameid} out String is {
-    mn: zast.nameTextAt :ast ref: memberId
-    return "\{typeName}.\{mn}"
 }
 
 # lastStmtLineId / lastStmtLineIdAt -- the node id of a function body's last
@@ -60648,7 +59290,7 @@ bindFunctionParam: function {
         :ast
         op: (ast.nodes.get i: pm.operation)
     ) then {
-        thOpt: walkLookupTyperef :st scope: rf :ast :unitDecl base: thisName
+        thOpt: bodies.walkLookupTyperef :st scope: rf :ast :unitDecl base: thisName
         if thOpt.some then {
             ptid = thOpt
         }
@@ -60698,7 +59340,7 @@ checkImplicitReturn: function {
     expR: st.walk.currentReturnTypeId
     if expR.isZero or defn.body.isZero or st.walk.currentReturnsNothing then return
     # a generator's body yields its values; its synthesised `.call` returns none
-    if (generatorCallOf typing: st.typing nid: defn.nid).notZero then return
+    if (bodies.generatorCallOf typing: st.typing nid: defn.nid).notZero then return
     lsid: lastStmtLineIdAt :ast oId: defn.body
     valId: zast.nodeid
     if lsid.notZero then valId = (
@@ -60874,334 +59516,6 @@ reportNoTailValue: function {
     )
 }
 
-# setSynthOwnerLabel -- synth rows carry the unit member's dump label: a method's
-# nodes live inside its TYPE's subtree, so the label is the type name. The same
-# pair travels as ids too -- a method's owner is its TYPE, everything else owns
-# itself -- which is what checkCase reads instead of splitting the label apart.
-setSynthOwnerLabel: function {
-    st: zenv.ZSymbolTable
-    unitDecl: ztypes.declid
-    ast: Ast.view
-    defName: StringView
-    # the definition's interned name; it spells the synth label when `defName` is empty
-    defNameId: zast.nameid
-    thisName: StringView
-} is {
-    # Synth rows carry the unit member's dump label: a method's nodes
-    # live inside its TYPE's subtree, so the label is the type name.
-    # Nested method walks save and restore it around their bodies.
-    lblUnit: zast.poolTextAt pool: ast.names ref: (unitNameIdOf :st :unitDecl)
-    # the label's pair as ids: a method's owner is its TYPE, everything
-    # else owns itself. checkCase reads this instead of splitting the
-    # label back apart.
-    st.walk.synthOwnerUnit = unitDecl
-    {
-        soid: defNameId
-        if soid.isZero then soid = zast.poolFind pool: ast.names text: defName
-        if thisName.length > 0 then soid = zast.poolFind pool: ast.names text: thisName
-        st.walk.synthOwnerName = soid
-    }
-    # the definition's spelling: the label's, else the interned name's
-    dnT: zast.nameTextAt :ast ref: defNameId
-    # the spelling is chosen first and composed once: a method's own name wins,
-    # then the label's, then the interned one
-    lblName: if thisName.length > 0 then thisName else if (
-        defName.length == 0
-    ) then dnT.stringView else defName
-    lbl: "\{lblUnit}.\{lblName}"
-    st.walk.synthLabel = lbl.take
-}
-
-
-# checkFunctionBody -- type-check one function body. Pushes a scope, binds each
-# parameter as a runtime variable, walks the body, then pops (the pop snapshots
-# the scope's entries + unreachable flag for the SQL dump).
-checkFunctionBody: function {
-    st: zenv.ZSymbolTable
-    unitDecl: ztypes.declid
-    scope: ztypes.declid
-    defName: StringView
-    # the definition's name id when the caller holds one -- zero when `defName`
-    # is a composed label (`Type.method`), which no id spells
-    defNameId: zast.nameid
-    fn: fnref
-    thisName: StringView
-    thisTid: ztypes.tid
-    ast: Ast
-    declId: ztypes.declid
-} is {
-    # A BODY IS ITS OWN EXPRESSION SCOPE. A body walked on demand is reached from
-    # inside some other expression, and that expression's position flags --
-    # a dotted base's suppressions, a write target, a call's callable or
-    # argument -- are about the TRIGGERING reference, not this body. Leaked
-    # in, they would walk `mk` in `(mk).val` with bare construction suppressed,
-    # leaving `i: Inner` unchecked to reach the C as the type's name.
-    savedMode: st.mode
-    prevCallee: st.walk.calleeDottedNid
-    prevArg: st.walk.callArgNode
-    st.mode.suppressBareCtor = false
-    st.mode.suppressFnAutoCall = false
-    st.mode.inAssignTarget = false
-    st.mode.allowBareFnRef = false
-    st.walk.calleeDottedNid = zast.nodeid
-    st.walk.callArgNode = zast.nodeid
-    # A body walked on demand inside a caller's argument leaves what the caller
-    # has pending as it found it: every value in it keeps its pins to its record
-    callerPinCount: st.walk.draft.pins.length
-    callerMarker: st.walk.draft.marker
-    callerOwned: st.walk.draft.owned
-    errsBefore: st.typing.errors.length
-    chargedBefore: st.walk.bodyErrorsCharged
-    (
-        checkFunctionBodyIn
-        :st
-        :unitDecl
-        :scope
-        :defName
-        :defNameId
-        :fn
-        :thisName
-        :thisTid
-        :ast
-        :declId
-    )
-    st.mode = savedMode
-    st.walk.calleeDottedNid = prevCallee
-    st.walk.callArgNode = prevArg
-    if (
-        (st.walk.draft.pins.length != callerPinCount) or
-        (
-            st.walk.draft.marker != callerMarker
-        ) or
-        (st.walk.draft.owned != callerOwned)
-    ) then (
-        panic
-        msg: "ztypecheck: a function body changed the pins its caller has pending"
-    )
-    # a body walked on demand inside this one was charged its own errors
-    added: st.typing.errors.length - errsBefore
-    own: added - (st.walk.bodyErrorsCharged - chargedBefore)
-    if own > 0 when st.typing.curMonoStamp.isZero then st.walk.refusedBodies.add item: fn.nid
-    st.walk.bodyErrorsCharged = chargedBefore + added
-}
-
-# walkedReturnMarker / walkedFnPins -- what the walked function's signature
-# recorded about its return (the marker on it, `outx`): its own, or for an
-# instance walk that reached the body without it, the instance's.
-walkedReturnMarker: function {
-    typing: ztyping.ZTyping.view fitid: ztypes.tid mono: ztypes.tid
-} out ztypes.zparamownership is {
-    own: typing.funcReturnMarker.get key: fitid
-    if own.some then return own
-    return (typing.returnMarkerOf tid: mono)
-}
-
-# the walked function, or the instance it is walked for, is declared `outx`
-walkedFnPins: function {
-    typing: ztyping.ZTyping.view fitid: ztypes.tid mono: ztypes.tid
-} out bool is {
-    if (typing.funcPins.has item: fitid) then return true
-    if mono.isZero then return false
-    return (typing.funcPins.has item: mono)
-}
-
-# checkFunctionBodyIn -- checkFunctionBody's walk, once the expression position
-# it was reached from has been set aside.
-checkFunctionBodyIn: function {
-    st: zenv.ZSymbolTable
-    unitDecl: ztypes.declid
-    scope: ztypes.declid
-    defName: StringView
-    # the definition's name id when the caller holds one -- zero when `defName`
-    # is a composed label (`Type.method`), which no id spells
-    defNameId: zast.nameid
-    fn: fnref
-    thisName: StringView
-    thisTid: ztypes.tid
-    ast: Ast
-    declId: ztypes.declid
-} is {
-    # the body resolves in the scope of its own declaration, whatever walk
-    # reached it. A caller that has no declaration for the body (a mono
-    # instance walk) keeps the scope it was given.
-    rf: scope
-    if declId.notZero then rf = declId
-    # a definition with no node has no body to check, and everything below is
-    # about the body
-    if fn.nid.isZero then return
-    # the function's own declaration, when the caller passed one whose
-    # type IS this function (a free function, a namespace member, a
-    # method), is its identity: a namespace member is not found by the
-    # unit's name, and without it the walk skipped its return-type
-    # checks. A mono instance walk passes the TEMPLATE's Decl -- its
-    # function is the mono's substituted child, found by label -- and
-    # keeps the name path.
-    fnDecl: ztypes.declid
-    fnTid: ztypes.tid
-    if st.typing.curMonoStamp.isZero then {
-        dt: st.typing.declTypeOf :declId
-        if dt.notZero when (st.reg.typetypeOf typeId: dt) == ztypes.ztypetype.functionType then {
-            fnDecl = declId
-            fnTid = dt
-        }
-    }
-    # a method's body demands what it names when it is walked, as its owner's
-    # resolution scans no member body; a type constructed only inside it must
-    # resolve before the walk, or the construction stamps type 0
-    if thisName.length > 0 then scanDefCalls :st scope: rf :ast op: (ast.nodes.get i: fn.nid)
-    # a body is walked only once everything demanded so far has resolved:
-    # an owner or function resolved late (from a walk) queued what its
-    # bodies reference, and those must be resolved before those bodies are
-    # walked, exactly as the early ones were.
-    resolveDemandedDefs :st :ast
-    # Claim this definition BEFORE the trigger runs. The trigger now walks
-    # a free function's body, and the body it would walk here is the one
-    # already being walked -- checkFunctionBody calls it with its OWN name.
-    # Claiming first turns the self-call into the signature scan it was
-    # always there for, and leaves the body walk to this rf.
-    {
-        sfId: defNameId
-        if sfId.isZero then sfId = zast.poolFind pool: ast.names text: defName
-        if sfId.notZero then {
-            sfd: fnDecl
-            if sfd.isZero then sfd = declOfUnitDefIds typing: st.typing :unitDecl nameId: sfId
-            sfHad: st.typing.declIsWalked declId: sfd
-            st.typing.declSetWalked declId: sfd
-            if sfHad.not then {
-                scanFnSig :st scope: rf :unitDecl :ast opId: fn.nid
-            }
-        }
-    }
-    if defNameId.notZero then {
-        maybeWalkMethodsById :st :unitDecl scope: rf :ast nameId: defNameId
-    } else {
-        maybeWalkMethods :st scope: rf :unitDecl :ast name: defName
-    }
-    hasBody: fn.body.notZero
-    isGenDef: false
-    # the function's own tid, off the Decl the caller passed; a defName is
-    # display only (a mono walk's owner is a registry label such as
-    # `mathops_i64`, never an interned name).
-    if fnTid.notZero when (st.reg.isGenericOf tid: fnTid) then isGenDef = true
-    if hasBody then {
-        # A generic template's body is checked ONCE, for its diagnostics;
-        # each instance walks its own copy of the function
-        # (instanceBodyAt). The walk is marked a generic's, which keeps
-        # its scopes and entries out of the dump log.
-        savedMode: st.mode
-        if isGenDef then st.mode.genericWalk = true
-        st.pushScope parent: rf node: fn.nid
-        st.fnScopes.append (zenv.openpos.create from: st.open.length - 1)
-        exitMark: st.exitLog.length
-        kP: u64
-        for kP < fn.nparams loop {
-            pmId: zast.fnParamAt :ast nid: fn.nid i: kP
-            kP = kP + 1
-            pm: argRefAt :ast nid: pmId
-            if pm.nid.notZero then {
-                bindFunctionParam :st :unitDecl :ast :rf :pm :thisName :isGenDef :fnTid
-            }
-        }
-        setSynthOwnerLabel :st :unitDecl :ast :defName :defNameId :thisName
-        st.walk.currentThisTid = thisTid
-        prevFn: st.walk.currentFnTid
-        st.walk.currentFnTid = fnTid
-        prevRet: st.walk.currentReturnTypeId
-        fitid: fnTid
-        crt: ztypes.tid
-        if fitid.notZero then crt = (
-            (methodReturnOf reg: st.reg typing: st.typing mid: fitid).or
-            d: ztypes.tid
-        )
-        st.walk.currentReturnTypeId = crt
-        # a generator's `call`, or an instance's copy of one: its body yields
-        # its values, and its return is the wrapper the lowering wrote
-        isGenCall: (generatorCallOf typing: st.typing nid: fn.nid).notZero
-        # the body walk is where a user function's return type is first
-        # known: an owned result holding a reference into an input is
-        # declared `outx` or refused here
-        if crt.notZero when isGenCall.not then {
-            pinHonestyAt :st :ast fnode: fn retTid: crt :defName :defNameId
-        }
-        # an instance walk returns what the instance it checks returns
-        if crt.isZero when st.walk.curMonoFnTid.notZero then {
-            st.walk.currentReturnTypeId = (
-                (methodReturnOf reg: st.reg typing: st.typing mid: st.walk.curMonoFnTid).or
-                d: ztypes.tid
-            )
-        }
-        # so do the markers on what it returns
-        mono: st.walk.curMonoFnTid
-        prevRm: st.walk.currentReturnMarker
-        st.walk.currentReturnMarker = walkedReturnMarker typing: st.typing :fitid :mono
-        prevFp: st.walk.currentFnPins
-        st.walk.currentFnPins = walkedFnPins typing: st.typing :fitid :mono
-        prevRn: st.walk.currentReturnsNothing
-        # `out null` names the absence of a return, as no `out` does -- for an
-        # instance whose `out R` is null too
-        st.walk.currentReturnsNothing = (
-            fn.returntype.isZero or
-            (st.walk.currentReturnTypeId == st.typing.nullTypeId) and
-            isGenCall.not
-        )
-        # `yield` enters scope for a generator's synth `.call` body and
-        # nowhere else, the way `break`/`continue` enter a `for`. Legality
-        # stops being a syntactic depth count and becomes a resolution
-        # fact: a `yield` in an ordinary function does not resolve, and one
-        # inside a nested function literal never sees this scope because
-        # the literal pushes its own.
-        prevYi: st.walk.currentYieldInputTid
-        st.walk.currentYieldInputTid = ztypes.tid
-        # the class a suspending loop or `with` in this body mints its state
-        # fields on: the walked generator's -- an instance's own in an instance
-        # walk -- and never a generic template's, whose fields would be typed by
-        # its parameters, nor, for a nested function literal, the enclosing
-        # generator's
-        prevGen: st.walk.currentGenTid
-        prevSpill: st.walk.genSpillNext
-        st.walk.currentGenTid = ztypes.tid
-        st.walk.genSpillNext = 0
-        if isGenCall then {
-            if (st.reg.isGenericOf tid: thisTid).not then st.walk.currentGenTid = thisTid
-            ykp: st.reg.ctlPlaceholder
-            st.define nameId: zast.wellKnown.slot.wkYield ztypeId: ykp
-            # what `yield` evaluates to: the per-call input, which is the
-            # SECOND parameter -- the receiver is first. Stashed rather than
-            # read off a name at the yield, because the input is not a body
-            # binding and the label it carries is the CALL SITE's.
-            st.walk.currentYieldInputTid = yieldInputTidOf :st :ast defn: fn
-        }
-        bodyErrs: st.typing.errors.length
-        prevTailBody: st.tailBody
-        prevTailBlock: st.tailBlock
-        st.tailBody = zast.nodeid
-        st.tailBlock = zast.nodeid
-        if st.walk.currentReturnTypeId.notZero when isGenCall.not then {
-            st.tailBody = fn.body
-            st.tailBlock = fn.body
-        }
-        # a body's last line returns its value when it declares one (a tail,
-        # never a discard), and is a statement otherwise
-        st.walk.stmtBlocks.add item: fn.body
-        walkBodyAt :st :unitDecl :ast bodyId: fn.body
-        checkImplicitReturn :st :ast defn: fn :bodyErrs
-        st.tailBody = prevTailBody
-        st.tailBlock = prevTailBlock
-        st.walk.currentYieldInputTid = prevYi
-        st.walk.currentGenTid = prevGen
-        st.walk.genSpillNext = prevSpill
-        st.walk.currentReturnTypeId = prevRet
-        st.walk.currentReturnMarker = prevRm
-        st.walk.currentFnPins = prevFp
-        st.walk.currentReturnsNothing = prevRn
-        st.walk.currentFnTid = prevFn
-        st.fnScopes.pop
-        for st.exitLog.length > exitMark loop st.exitLog.pop
-        st.pop
-        st.mode = savedMode
-    }
-}
-
 
 # walkUnitTemplateBodies -- body-walk a generic unit template's functions with
 # the generic param UNBOUND (no st.define of the arg), so a `match t` subject
@@ -61250,9 +59564,9 @@ walkUnitTemplateBodies: function {
                 parentDeclId: tdecl
                 nameId: bm.name
             )
-            cfbFr: fnRefAt :ast nid: bm.operation
+            cfbFr: bodies.fnRefAt :ast nid: bm.operation
             (
-                checkFunctionBody
+                bodies.checkFunctionBody
                 :st
                 :scope
                 :unitDecl
@@ -61348,83 +59662,6 @@ walkGenericUnitTemplates: function {st: zenv.ZSymbolTable scope: ztypes.declid p
     }
 }
 
-# typecheck every definition body in a unit.
-# checkNamespaceBodies -- walk the function bodies of a namespace unit. Its
-# members resolve against ITS body list, not the file unit's, so a name written
-# inside a namespace finds the namespace's definition first. Without this a
-# namespace's signatures reach the emitter with unstamped nodes, which surfaces
-# as a loud E0500 rather than a diagnostic.
-checkNamespaceBodies: function {
-    ast: Ast
-    st: zenv.ZSymbolTable
-    unitDecl: ztypes.declid
-    scope: ztypes.declid
-    unitdefId: zast.nodeid
-} is {
-    # Once per unit op: the main tree walk and the demand drain can both reach
-    # the same namespace, and a second walk would re-report every diagnostic.
-    if (st.walk.nsBodiesWalked.has item: unitdefId) then return
-    st.walk.nsBodiesWalked.add item: unitdefId
-    rf: scope
-    nsDecl: ztypes.declid
-    {
-        un: unitdefNodeId :ast nId: unitdefId
-        if un.notZero then {
-            nt: ztyping.nodeTypeAt tbl: st.typing.nodeType nid: un
-            if nt.notZero then {
-                nsDecl = st.typing.declIdOfType typeId: nt
-                rf = nsDecl
-            }
-        }
-    }
-    bodyIds: zast.unitBodyIdsAt :ast unitId: unitdefId
-    bn: bodyIds.count.u64
-    bi: u64
-    for bi < bn loop {
-        bmId: zast.kidAt kids: ast.kids span: bodyIds i: bi
-        bi = bi + 1
-        bm: argRefAt :ast nid: bmId
-        if bm.nid.notZero then {
-            if (zast.unitOpDeclaresUnit :ast opId: bm.operation) then {
-                checkNamespaceBodies :ast :st scope: rf :unitDecl unitdefId: bm.operation
-            } else if (objectdefHasMethodBodies :ast op: (ast.nodes.get i: bm.operation)) then {
-                # a type's methods, which walkDeclaredDef leaves to this walk
-                # for a namespace member as it does a function
-                walkNamespaceOwner :st :ast :unitDecl :nsDecl memId: bm.nid nameId: bm.name
-            } else {
-                memberDecl: st.typing.declFindChild parentDeclId: nsDecl nameId: bm.name
-                if (bodyWalkOwed :st declId: memberDecl).not then continue
-                defNameText: zast.nameTextCopy :ast ref: bm.name
-                cfbFr: fnRefAt :ast nid: bm.operation
-                (
-                    checkFunctionBody
-                    :st
-                    scope: rf
-                    :unitDecl
-                    defName: defNameText.stringView
-                    defNameId: zast.nameid
-                    fn: cfbFr
-                    thisName: ""
-                    thisTid: ztypes.tid
-                    :ast
-                    declId: memberDecl
-                )
-            }
-        }
-    }
-}
-
-# bodyWalkOwed -- a definition a unit's or a namespace's body walk still owes:
-# one a use resolved (or every one, under --eager) that no demand point has
-# walked yet. A unit of any kind is a scope, and its walk asks this one
-# question of every definition in it.
-bodyWalkOwed: function {st: zenv.ZSymbolTable.view declId: ztypes.declid} out bool is {
-    if declId.isZero then return false
-    if (st.typing.declIsWalked :declId) then return false
-    if st.typing.eagerAll then return true
-    return (st.typing.declIsResolved :declId)
-}
-
 # walkNamespaceOwner -- the method bodies of a type a namespace declares, once,
 # in the scope of the type's own declaration.
 walkNamespaceOwner: function {
@@ -61446,99 +59683,6 @@ walkNamespaceOwner: function {
     st.typing.curMonoStamp = ztypes.tid.zero
     walkOwnerMethods :st scope: od :unitDecl :ast :memId :nameId knownTid: otid
     st.typing.curMonoStamp = prevMono
-}
-
-# checkUnitBodies -- walk every function definition with a body in one unit.
-checkUnitBodies: function {
-    ast: Ast
-    st: zenv.ZSymbolTable
-    unitDecl: ztypes.declid
-    scope: ztypes.declid
-    unitdefId: zast.nodeid
-} is {
-    bodyIds: zast.unitBodyIdsAt :ast unitId: unitdefId
-    {
-        mn: bodyIds.count.u64
-        mi: u64
-        foundMain: false
-        for mi < mn loop {
-            mmId: zast.kidAt kids: ast.kids span: bodyIds i: mi
-            mi = mi + 1
-            mm: argRefAt :ast nid: mmId
-            if mm.nid.notZero when mm.name == zast.wellKnown.slot.wkMain when (
-                isFunctionDefOp
-                op: (ast.nodes.get i: mm.operation)
-            ) then {
-                foundMain = true
-                memberDecl: declOfUnitDefIds typing: st.typing :unitDecl nameId: mm.name
-                cfbFr: fnRefAt :ast nid: mm.operation
-                checkMainSignature :st at: mm fn: cfbFr
-                (
-                    checkFunctionBody
-                    :st
-                    :scope
-                    :unitDecl
-                    defName: "main"
-                    defNameId: zast.nameid
-                    fn: cfbFr
-                    thisName: ""
-                    thisTid: ztypes.tid
-                    :ast
-                    declId: memberDecl
-                )
-            }
-        }
-        # E0039 -- there is no root to demand from. Compilation is demand-driven
-        # and `main` is the root, so a target unit without one has no entry point
-        # and nothing to reach from: it is a LIBRARY, and the program that opens
-        # it is what should be compiled. `--eager` is exempt on the same
-        # reasoning rather than as a convenience -- it resolves every definition
-        # instead of what a root reaches, so it needs no root. That exemption is
-        # what keeps `zl lint --full`, zls and eager-guard (all eager: true)
-        # working on a library unit.
-        if foundMain.not when st.typing.eagerAll.not when st.typing.requireMain then {
-            noMainError :st :ast :unitDecl :unitdefId
-        }
-        bn: bodyIds.count.u64
-        bi: u64
-        for bi < bn loop {
-            bmId: zast.kidAt kids: ast.kids span: bodyIds i: bi
-            bi = bi + 1
-            bm: argRefAt :ast nid: bmId
-            if bm.nid.notZero then {
-                defName: zast.nameTextCopy :ast ref: bm.name
-                # the target unit's own definitions are walked because something
-                # DEMANDED them, exactly as a dependency's are. Walking every one
-                # regardless is what made the root the one unit in the program
-                # that was not demand-driven.
-                # and not again if a demand point already walked it
-                if (
-                    bodyWalkOwed
-                    :st
-                    declId: (declOfUnitDefIds typing: st.typing :unitDecl nameId: bm.name)
-                ).not then continue
-                if (zast.unitOpDeclaresUnit :ast opId: bm.operation) then {
-                    checkNamespaceBodies :ast :st :scope :unitDecl unitdefId: bm.operation
-                } else if bm.name != zast.wellKnown.slot.wkMain then {
-                    hDeclId: declOfUnitDefIds typing: st.typing :unitDecl nameId: bm.name
-                    cfbFr: fnRefAt :ast nid: bm.operation
-                    (
-                        checkFunctionBody
-                        :st
-                        :scope
-                        :unitDecl
-                        defName: defName.stringView
-                        defNameId: zast.nameid
-                        fn: cfbFr
-                        thisName: ""
-                        thisTid: ztypes.tid
-                        :ast
-                        declId: hDeclId
-                    )
-                }
-            }
-        }
-    }
 }
 
 # checkBodies -- the body-walk pass, mirroring check()'s top-level
@@ -61568,7 +59712,7 @@ checkBodies: function {st: zenv.ZSymbolTable scope: ztypes.declid program: Ast} 
             mu: program.nodes.get i: muId
             if mu.namedoperation then mOpId = mu.operation
             if mOpId.notZero then {
-                checkUnitBodies :st :scope :unitDecl unitdefId: mOpId ast: program
+                bodies.checkUnitBodies :st :scope :unitDecl unitdefId: mOpId ast: program
             }
         }
         # a body walk can demand definitions the signatures never reached
@@ -61592,7 +59736,7 @@ checkBodies: function {st: zenv.ZSymbolTable scope: ztypes.declid program: Ast} 
             }
             # the instance sweep walks each instance member used so far, and a
             # use it or a late walk finds after that is the next round's
-            stampUnitMonoTemplates :st :scope :program
+            bodies.stampUnitMonoTemplates :st :scope :program
             markGeneratedEqParts :st ast: program
             more = (
                 (lateBodyPending :st) or
@@ -61652,7 +59796,7 @@ walkOwedNamespaceBodies: function {st: zenv.ZSymbolTable scope: ztypes.declid as
         for st.walk.nsBodiesOwed.length > 0 loop round.append st.walk.nsBodiesOwed.pop
         for each rec: round loop {
             unitDecl: unitDeclOfNameOrOwn :st :scope nameId: rec.unitName
-            checkNamespaceBodies :ast :st :scope :unitDecl unitdefId: rec.unitOp
+            bodies.checkNamespaceBodies :ast :st :scope :unitDecl unitdefId: rec.unitOp
         }
         # a walked body demands definitions of its own; resolving them here is
         # what puts the next depth on the list
@@ -61682,7 +59826,7 @@ walkLateOwnerMember: function {
     swop: ast.nodes.get i: swm.operation
     if swop.objectdef when (zast.itemsHaveGenericParam :ast items: swop.asItems
     ).not then isOwner = true
-    hasBodies = objectdefHasMethodBodies :ast op: swop
+    hasBodies = bodies.objectdefHasMethodBodies :ast op: swop
     if isOwner.not then return
     if hasBodies.not then return
     # Whose dead code it is decides whether this compile
@@ -61757,809 +59901,6 @@ walkLateResolvedOwners: function {st: zenv.ZSymbolTable scope: ztypes.declid ast
     }
 }
 
-# bindMonoParams -- fill monoParamSubst (param tid -> arg tid) with one mono's
-# type args, for flat substitution at stamp time; the template's Decl is the one
-# key. A numeric parameter's own type is the mono's singleton type; a read of
-# the parameter is valued by the evaluator from the mono itself.
-bindMonoParams: function {
-    st: zenv.ZSymbolTable
-    monoId: ztypes.tid
-} is {
-    morig: ztypes.tid
-    mgo: st.reg.genericOriginOf tid: monoId
-    if mgo.notZero then morig = mgo
-    tdecl: templateDeclOf reg: st.reg typing: st.typing tid: morig
-    pn: st.reg.genericParamNamesOf :tdecl
-    pc: pn.length
-    pj: u64
-    for pj < pc loop {
-        pnm: pn.get i: pj
-        # a numeric parameter's type is the instance's singleton type
-        av: st.typing.singletonOf instance: monoId param: pnm
-        if av.isZero then av = st.reg.genericTypeArgAt specId: monoId ordinal: pj
-        if av.notZero then {
-            pto: st.reg.genericParamTidOf :tdecl paramName: pnm
-            if pto.some then {
-                st.walk.monoParamSubst.set key: pto value: av
-            }
-        }
-        pj = pj + 1
-    }
-}
-
-# stampMonoTemplateFn -- stamp-walk every registry mono of one generic free
-# function template against the TEMPLATE body (mirrors planFnMonoInstances'
-# enumeration: FUNCTION types whose generic origin is the template).
-stampMonoTemplateFn: function {
-    st: zenv.ZSymbolTable
-    ast: Ast
-    unitDecl: ztypes.declid
-    scope: ztypes.declid
-    fnOpId: zast.nodeid
-    templateFnId: ztypes.tid
-} is {
-    last: st.reg.nextTid
-    t: ztypes.tid 1
-    for t < last loop {
-        isMono: false
-        if (st.reg.typetypeOf typeId: t) == ztypes.ztypetype.functionType then {
-            go: st.reg.genericOriginOf tid: t
-            if go == templateFnId when go.notZero then isMono = true
-        }
-        if isMono then {
-            (
-                stampOneFnMono
-                :st
-                :scope
-                :ast
-                :unitDecl
-                :fnOpId
-                monoId: t
-                ownerName: ""
-                ownerTid: ztypes.tid.zero
-            )
-        }
-        t = t.next
-    }
-}
-
-# stampOneFnMono -- the instance walk for one generic function or method mono:
-# args bound, params bound through the mono FUNCTION's substituted children,
-# `this` the owner type for a method, stamps into the side table under the mono
-# FUNCTION tid (the emitter's curThisTid for fn-mono re-walks).
-stampOneFnMono: function {
-    st: zenv.ZSymbolTable
-    ast: Ast
-    unitDecl: ztypes.declid
-    scope: ztypes.declid
-    fnOpId: zast.nodeid
-    monoId: ztypes.tid
-    # the type a generic method belongs to, its receiver's type; "" and 0 for a
-    # free function
-    ownerName: StringView
-    ownerTid: ztypes.tid
-} is {
-    if (firstInstanceWalk :st :ast :monoId opId: fnOpId).not then return
-    minted: st.reg.nextTid
-    monoNm: st.reg.nameOf tid: monoId
-    savedMode: st.mode
-    st.mode.genericWalk = true
-    st.pushScope parent: scope node: zast.nodeid
-    st.walk.monoParamSubst = IdMapV ztypes.tid v: ztypes.tid
-    {
-        bindMonoParams :st :monoId
-    }
-    st.typing.curMonoStamp = monoId
-    st.walk.curMonoFnTid = monoId
-    prevL: st.walk.synthLabel.copy
-    prevOwnerUnit: st.walk.synthOwnerUnit
-    prevOwnerName: st.walk.synthOwnerName
-    prevT: st.walk.currentThisTid
-    origin: st.reg.genericOriginOf tid: monoId
-    fnTemplateDecl: st.typing.declIdOfType typeId: origin
-    st.typing.beginInstanceWalk next: (nextRowOf :ast)
-    cfbFr: fnRefAt :ast nid: (instanceBodyAt :st :ast mono: monoId opId: fnOpId)
-    errsBefore: st.typing.errors.length
-    (
-        checkFunctionBody
-        :st
-        :scope
-        :unitDecl
-        defName: monoNm.stringView
-        defNameId: zast.nameid
-        fn: cfbFr
-        thisName: ownerName
-        thisTid: ownerTid
-        :ast
-        declId: fnTemplateDecl
-    )
-    st.typing.endInstanceWalk next: (nextRowOf :ast)
-    noteInstanceErrors :st :ast mono: monoId from: errsBefore
-    st.walk.synthLabel = prevL.take
-    st.walk.synthOwnerUnit = prevOwnerUnit
-    st.walk.synthOwnerName = prevOwnerName
-    st.walk.currentThisTid = prevT
-    st.walk.curMonoFnTid = ztypes.tid.zero
-    st.typing.curMonoStamp = ztypes.tid.zero
-    st.mode = savedMode
-    st.walk.monoParamSubst = IdMapV ztypes.tid v: ztypes.tid
-    st.pop
-    recordMintedBy :st :monoId :minted
-}
-
-# stampMonoTemplateClass -- resolve one generic class/record template and
-# stamp-walk every registry mono minted from it (mirrors the emitter's
-# planTypeMethods, which plans each mono's methods).
-stampMonoTemplateClass: function {
-    st: zenv.ZSymbolTable
-    ast: Ast
-    unitDecl: ztypes.declid
-    scope: ztypes.declid
-    clsNameId: zast.nameid
-    clsOpId: zast.nodeid
-    ownerTid: ztypes.tid
-} is {
-    isCand: false
-    cop: ast.nodes.get i: clsOpId
-    if cop.objectdef then isCand = true
-    if isCand.not then return
-    if (objectdefIsGeneric :ast o: (ast.nodes.get i: clsOpId)).not then return
-    if (objectdefHasMethodBodies :ast op: (ast.nodes.get i: clsOpId)).not then return
-    templateTid: unitBodyMemberTid :st :ast :unitDecl :ownerTid nameId: clsNameId
-    if templateTid.isZero then return
-    last: st.reg.nextTid
-    t: ztypes.tid 1
-    for t < last loop {
-        isMono: false
-        go: st.reg.genericOriginOf tid: t
-        if go == templateTid when go.notZero then isMono = true
-        # a PARTIAL names this template too -- it records the template as its
-        # origin -- but it is trie bookkeeping with no members, and walking the
-        # body against it would bind the template's parameter names to generic
-        # parameters rather than to types. The function and unit enumerators
-        # exclude it by asking for their own typetype; this one has to say so.
-        if isMono when (st.reg.isPartialOf tid: t) then {
-            isMono = false
-        }
-        if isMono then {
-            stampOneClassMono :st :scope :ast :unitDecl :clsOpId monoId: t
-        }
-        t = t.next
-    }
-}
-
-# collectOwedMembers -- append the bodied members of a class template that
-# instance `monoId` owes a walk (instanceMemberOwed) to `names` and `ops`.
-collectOwedMembers: function {
-    st: zenv.ZSymbolTable
-    ast: Ast
-    clsOpId: zast.nodeid
-    monoId: ztypes.tid
-    names: (ListVal zast.nameid).borrow
-    ops: (ListVal zast.nodeid).borrow
-} is {
-    cop: ast.nodes.get i: clsOpId
-    if cop.objectdef.not then return
-    isSpan: cop.isItems
-    asSpan: cop.asItems
-    cop.drop
-    collectOwedIn :st :ast span: isSpan :monoId :names :ops
-    collectOwedIn :st :ast span: asSpan :monoId :names :ops
-}
-
-# collectOwedIn -- collectOwedMembers over one of the class's member spans. A
-# member whose body its own check refused is marked walked and left out: its
-# instance walk would only report that error again.
-collectOwedIn: function {
-    st: zenv.ZSymbolTable
-    ast: Ast
-    span: zast.kidspan
-    monoId: ztypes.tid
-    names: (ListVal zast.nameid).borrow
-    ops: (ListVal zast.nodeid).borrow
-} is {
-    for each mId: (zast.kidsOf :ast :span) loop {
-        m: ast.nodes.get i: mId
-        if m.namedoperation when (
-            isFunctionDefWithBody
-            o: (ast.nodes.get i: m.operation)
-        ) when (instanceMemberOwed :st :monoId nameId: m.name) then {
-            markInstanceMemberWalked :st :monoId nameId: m.name
-            if (st.walk.refusedBodies.has item: m.operation).not then {
-                names.append m.name
-                ops.append m.operation
-            }
-        }
-    }
-}
-
-# instanceMemberOwed -- an instance's bodied member its walk still owes: one
-# not yet walked that the program uses (bodiedMemberDeferred).
-instanceMemberOwed: function {
-    st: zenv.ZSymbolTable
-    monoId: ztypes.tid
-    nameId: zast.nameid
-} out bool is {
-    md: st.typing.declMemberIdOf parentTypeId: monoId :nameId
-    if md.isZero then return true
-    if (st.typing.declIsWalked declId: md) then return false
-    return (bodiedMemberDeferred :st ownerTid: monoId memberDecl: md).not
-}
-
-# markInstanceMemberWalked -- the instance walk is about to take this member.
-markInstanceMemberWalked: function {
-    st: zenv.ZSymbolTable
-    monoId: ztypes.tid
-    nameId: zast.nameid
-} is {
-    md: st.typing.declMemberIdOf parentTypeId: monoId :nameId
-    if md.notZero then st.typing.declSetWalked declId: md
-}
-
-# instanceOwesWalk -- does instance `monoId` owe a walk to any bodied member of
-# its class template? Asked before anything is gathered: the sweep revisits
-# every instance each round, and most owe nothing.
-instanceOwesWalk: function {
-    st: zenv.ZSymbolTable
-    ast: Ast
-    clsOpId: zast.nodeid
-    monoId: ztypes.tid
-} out bool is {
-    cop: ast.nodes.get i: clsOpId
-    if cop.objectdef.not then return false
-    if (spanOwesWalk :st :ast span: cop.isItems :monoId) then return true
-    return (spanOwesWalk :st :ast span: cop.asItems :monoId)
-}
-
-# spanOwesWalk -- instanceOwesWalk over one block of the template's members.
-spanOwesWalk: function {
-    st: zenv.ZSymbolTable
-    ast: Ast
-    span: zast.kidspan
-    monoId: ztypes.tid
-} out bool is {
-    for each mId: (zast.kidsOf :ast :span) loop {
-        m: ast.nodes.get i: mId
-        if m.namedoperation when (
-            isFunctionDefWithBody
-            o: (ast.nodes.get i: m.operation)
-        ) when (instanceMemberOwed :st :monoId nameId: m.name) then return true
-    }
-    return false
-}
-
-
-# stampOneClassMono -- the instance walk for one class/record mono: type args
-# bound, each template method body re-checked with `this` typed as the mono
-# and params bound through the mono's substituted method children.
-stampOneClassMono: function {
-    st: zenv.ZSymbolTable
-    ast: Ast
-    unitDecl: ztypes.declid
-    scope: ztypes.declid
-    clsOpId: zast.nodeid
-    monoId: ztypes.tid
-} is {
-    # an instance is revisited for the members a use reached since its last
-    # walk; only its first visit asks whether instantiating it ends
-    if (st.walk.monosWalked.has item: monoId).not when (
-        firstInstanceWalk
-        :st
-        :ast
-        :monoId
-        opId: clsOpId
-    ).not then return
-    if (instanceOwesWalk :st :ast :clsOpId :monoId).not then return
-    mNames: ListVal zast.nameid
-    mOps: ListVal zast.nodeid
-    collectOwedMembers :st :ast :clsOpId :monoId names: mNames ops: mOps
-    minted: st.reg.nextTid
-    monoNm: st.reg.nameOf tid: monoId
-    savedMode: st.mode
-    st.mode.genericWalk = true
-    st.pushScope parent: scope node: zast.nodeid
-    st.walk.monoParamSubst = IdMapV ztypes.tid v: ztypes.tid
-    {
-        bindMonoParams :st :monoId
-    }
-    st.typing.curMonoStamp = monoId
-    prevL: st.walk.synthLabel.copy
-    prevOwnerUnit: st.walk.synthOwnerUnit
-    prevOwnerName: st.walk.synthOwnerName
-    prevT: st.walk.currentThisTid
-    errsBefore: st.typing.errors.length
-    # a walk can use another member of this instance, which is walked in the
-    # same visit
-    for mNames.length > 0 loop {
-        mi: u64
-        for mi < mNames.length loop {
-            mnmId: mNames.get i: mi
-            mop: mOps.get i: mi
-            mi = mi + 1
-            mnm: zast.nameTextCopy :ast ref: mnmId
-            mfo: st.typing.declChildOfId parentTypeId: monoId nameId: mnmId
-            match (
-                mfo
-            ) case some then {
-                st.walk.curMonoFnTid = mfo
-            } case none then {
-                st.walk.curMonoFnTid = ztypes.tid.zero
-            }
-            q: "\{monoNm}.\{mnm}"
-            origin: st.reg.genericOriginOf tid: monoId
-            classTemplateDecl: st.typing.declIdOfType typeId: origin
-            mgen: st.walk.curMonoFnTid
-            if mgen.notZero when (st.reg.isGenericOf tid: mgen) then {
-                # a method with type parameters of its own is walked per instance
-                # of it, the instance's own arguments bound beside the type's
-                (
-                    stampMemberFnMonos
-                    :st
-                    :scope
-                    :ast
-                    :unitDecl
-                    :monoId
-                    monoNm: monoNm.stringView
-                    :mop
-                    methodTid: mgen
-                )
-                st.typing.curMonoStamp = monoId
-                continue
-            }
-            st.typing.beginInstanceWalk next: (nextRowOf :ast)
-            cfbFr: fnRefAt :ast nid: (instanceBodyAt :st :ast mono: monoId opId: mop)
-            (
-                checkFunctionBody
-                :st
-                :scope
-                :unitDecl
-                defName: q.stringView
-                defNameId: zast.nameid
-                fn: cfbFr
-                thisName: monoNm.stringView
-                thisTid: monoId
-                :ast
-                declId: classTemplateDecl
-            )
-            st.typing.endInstanceWalk next: (nextRowOf :ast)
-        }
-        mNames = ListVal zast.nameid
-        mOps = ListVal zast.nodeid
-        collectOwedMembers :st :ast :clsOpId :monoId names: mNames ops: mOps
-    }
-    noteInstanceErrors :st :ast mono: monoId from: errsBefore
-    st.walk.synthLabel = prevL.take
-    st.walk.synthOwnerUnit = prevOwnerUnit
-    st.walk.synthOwnerName = prevOwnerName
-    st.walk.currentThisTid = prevT
-    st.walk.curMonoFnTid = ztypes.tid.zero
-    st.typing.curMonoStamp = ztypes.tid.zero
-    st.mode = savedMode
-    st.walk.monoParamSubst = IdMapV ztypes.tid v: ztypes.tid
-    st.pop
-    recordMintedBy :st :monoId :minted
-}
-
-# stampMemberFnMonos -- inside the walk of a class's or a unit's instance, walk
-# each instance of its member function `methodTid` that has type parameters of
-# its own: the owner's arguments are bound already, the member instance's own
-# are bound beside them, and `this` is the class instance (none for a unit's
-# function).
-stampMemberFnMonos: function {
-    st: zenv.ZSymbolTable
-    scope: ztypes.declid
-    ast: Ast
-    unitDecl: ztypes.declid
-    # the class instance a method's `this` is, 0 for a unit's function
-    monoId: ztypes.tid
-    monoNm: StringView
-    mop: zast.nodeid
-    methodTid: ztypes.tid
-} is {
-    methodDecl: templateDeclOf reg: st.reg typing: st.typing tid: methodTid
-    for each t: (st.reg.instancesOf origin: methodTid) loop {
-        if (firstInstanceWalk :st :ast monoId: t opId: mop).not then continue
-        minted: st.reg.nextTid
-        bindMonoParams :st monoId: t
-        st.typing.curMonoStamp = t
-        st.walk.curMonoFnTid = t
-        q: st.reg.nameOf tid: t
-        st.typing.beginInstanceWalk next: (nextRowOf :ast)
-        cfbFr: fnRefAt :ast nid: (instanceBodyAt :st :ast mono: t opId: mop)
-        errsBefore: st.typing.errors.length
-        (
-            checkFunctionBody
-            :st
-            :scope
-            :unitDecl
-            defName: q.stringView
-            defNameId: zast.nameid
-            fn: cfbFr
-            thisName: monoNm
-            thisTid: monoId
-            :ast
-            declId: methodDecl
-        )
-        st.typing.endInstanceWalk next: (nextRowOf :ast)
-        noteInstanceErrors :st :ast mono: t from: errsBefore
-        recordMintedBy :st monoId: t :minted
-    }
-}
-
-# stampMonoTemplateMethods -- walk every instance of each generic method a
-# non-generic record or class declares: a method with type parameters of its
-# own is a template exactly as a generic free function is, each instance
-# checked from its own copy of the body, `this` the type itself.
-stampMonoTemplateMethods: function {
-    st: zenv.ZSymbolTable
-    ast: Ast
-    unitDecl: ztypes.declid
-    scope: ztypes.declid
-    clsNameId: zast.nameid
-    clsOpId: zast.nodeid
-    ownerTid: ztypes.tid
-} is {
-    {
-        cop: ast.nodes.get i: clsOpId
-        if cop.objectdef.not then return
-    }
-    if (objectdefIsGeneric :ast o: (ast.nodes.get i: clsOpId)) then return
-    clsTid: unitBodyMemberTid :st :ast :unitDecl :ownerTid nameId: clsNameId
-    if clsTid.isZero then return
-    mTids: ListVal ztypes.tid
-    mOps: ListVal zast.nodeid
-    {
-        cop: ast.nodes.get i: clsOpId
-        if cop.objectdef then {
-            genericMethodsIn :st :ast :clsTid span: cop.isItems tids: mTids ops: mOps
-            genericMethodsIn :st :ast :clsTid span: cop.asItems tids: mTids ops: mOps
-        }
-    }
-    mi: u64
-    # the owner's name labels each instance, and only an instance needs it
-    clsName: String
-    if mTids.length > 0 then clsName = zast.nameTextCopy :ast ref: clsNameId
-    for mi < mTids.length loop {
-        mt: mTids.get i: mi
-        mop: mOps.get i: mi
-        mi = mi + 1
-        for each t: (st.reg.instancesOf origin: mt) loop {
-            (
-                stampOneFnMono
-                :st
-                :scope
-                :ast
-                :unitDecl
-                fnOpId: mop
-                monoId: t
-                ownerName: clsName.stringView
-                ownerTid: clsTid
-            )
-        }
-    }
-}
-
-# genericMethodsIn -- the bodied methods among one item span of the type
-# `clsTid` that have type parameters of their own, with the function node each
-# is written at
-genericMethodsIn: function {
-    st: zenv.ZSymbolTable
-    ast: Ast
-    clsTid: ztypes.tid
-    span: zast.kidspan
-    tids: ListVal ztypes.tid
-    ops: ListVal zast.nodeid
-} is {
-    for each itId: (zast.kidsOf :ast :span) loop {
-        it: ast.nodes.get i: itId
-        if it.namedoperation when (isFunctionDefWithBody o: (ast.nodes.get i: it.operation)) then {
-            mo: (st.typing.declChildOfId parentTypeId: clsTid nameId: it.name).or d: ztypes.tid.zero
-            if mo.notZero when (st.reg.isGenericOf tid: mo) then {
-                tids.append from: mo
-                ops.append from: it.operation
-            }
-        }
-    }
-}
-
-# unitBodyMemberTid -- the type id a unit body's definition `nameId` names: the
-# file unit's member when `ownerTid` is 0, else a child of the nested unit
-# `ownerTid`. 0 when it names none.
-unitBodyMemberTid: function {
-    st: zenv.ZSymbolTable
-    ast: Ast
-    unitDecl: ztypes.declid
-    ownerTid: ztypes.tid
-    nameId: zast.nameid
-} out ztypes.tid is {
-    if ownerTid.notZero then return (
-        (st.typing.declChildOfId parentTypeId: ownerTid :nameId).or
-        d: ztypes.tid.zero
-    )
-    uq: unitDeclOfName typing: st.typing nameId: (unitNameIdOf :st :unitDecl)
-    ro: resolvedByIds :st :ast unitDecl: uq name: nameId
-    return (ro.or d: ztypes.tid.zero)
-}
-
-# stampUnitMonoMembers -- the generic templates a unit's body declares, at any
-# depth. A unit is a scope, and a scope nests: a template declared inside a
-# plain unit inside another one is still a template, so a non-generic member
-# unit is descended into rather than skipped. Reached only through
-# stampUnitMonoTemplates, which supplies the file unit that both the templates
-# and their instance bodies resolve against.
-stampUnitMonoMembers: function {
-    st: zenv.ZSymbolTable
-    program: Ast
-    unitDecl: ztypes.declid
-    scope: ztypes.declid
-    unitOpId: zast.nodeid
-    # the nested unit whose body this is, 0 for the file unit: a nested unit's
-    # templates are its children, not the file unit's
-    ownerTid: ztypes.tid
-} is {
-    ibody: zast.unitBodyIdsAt ast: program unitId: unitOpId
-    ibn: ibody.count.u64
-    ibi: u64
-    for ibi < ibn loop {
-        imId: zast.kidAt kids: program.kids span: ibody i: ibi
-        ibi = ibi + 1
-        imOp: zast.nodeid
-        fnOp: zast.nodeid
-        clsOp: zast.nodeid
-        mNm: zast.nameid
-        {
-            im: program.nodes.get i: imId
-            if im.namedoperation then {
-                mNm = im.name
-                if (isUnitOp op: (program.nodes.get i: im.operation)) then {
-                    imOp = im.operation
-                } else {
-                    if (isFunctionDefWithBody o: (program.nodes.get i: im.operation)) then {
-                        fnOp = im.operation
-                    } else {
-                        opNode: program.nodes.get i: im.operation
-                        if opNode.objectdef then {
-                            clsOp = im.operation
-                        }
-                    }
-                }
-            }
-        }
-        if imOp.notZero then {
-            if (zast.unitIsGeneric ast: program unitId: imOp) then {
-                (
-                    stampMonoTemplateUnit
-                    :st
-                    :scope
-                    ast: program
-                    :unitDecl
-                    tplId: (templateUnitStampAt :st ast: program opId: imOp)
-                    unitOpId: imOp
-                )
-            } else {
-                (
-                    stampUnitMonoMembers
-                    :st
-                    :scope
-                    :program
-                    :unitDecl
-                    unitOpId: imOp
-                    ownerTid: (unitBodyMemberTid :st ast: program :unitDecl :ownerTid nameId: mNm)
-                )
-            }
-        }
-        if fnOp.notZero then {
-            fnTid: unitBodyMemberTid :st ast: program :unitDecl :ownerTid nameId: mNm
-            isGenFn: false
-            if fnTid.notZero when (
-                (st.reg.typetypeOf typeId: fnTid) == ztypes.ztypetype.functionType
-            ) then {
-                isGeneric: st.reg.isGenericOf tid: fnTid
-                if isGeneric then isGenFn = true
-            }
-            if isGenFn then {
-                (
-                    stampMonoTemplateFn
-                    :st
-                    :scope
-                    ast: program
-                    :unitDecl
-                    fnOpId: fnOp
-                    templateFnId: fnTid
-                )
-            }
-        }
-        if clsOp.notZero then {
-            (
-                stampMonoTemplateClass
-                :st
-                :scope
-                ast: program
-                :unitDecl
-                clsNameId: mNm
-                clsOpId: clsOp
-                :ownerTid
-            )
-            (
-                stampMonoTemplateMethods
-                :st
-                :scope
-                ast: program
-                :unitDecl
-                clsNameId: mNm
-                clsOpId: clsOp
-                :ownerTid
-            )
-        }
-    }
-}
-
-# stampUnitMonoTemplates -- post-sweep: re-walk each generic-unit template's
-# method bodies once per monomorphised instance, each from the instance's own
-# copy, instance type args bound in scope (stampGate's curMonoStamp mode, flat
-# param->arg substitution via monoParamSubst). Runs as a generic's walk
-# (genericWalk), so its scopes/entries stay out of the dump log. It runs when
-# the program has errors as well: an instance's walk reports what holds only for its
-# arguments, which no other walk sees. An instance walk can mint an instance of a
-# template this sweep has already enumerated -- a generic function called from
-# a generic body with the body's own parameter, and a walk can use another
-# member of an instance -- so the sweep repeats until a round mints nothing and
-# owes no instance member; each instance member is walked once
-# (instanceMemberOwed).
-stampUnitMonoTemplates: function {
-    st: zenv.ZSymbolTable
-    scope: ztypes.declid
-    program: Ast
-} is {
-    more: true
-    for more loop {
-        minted: st.reg.nextTid
-        st.walk.instanceUseOwed = false
-        stampUnitMonoRound :st :scope :program
-        more = (st.reg.nextTid > minted) or st.walk.instanceUseOwed
-    }
-}
-
-# firstInstanceWalk -- true the first time the sweep reaches an instance, which
-# it records: walking one twice would re-bind its names. An instance minted by
-# a chain of walks that already passed through its template
-# instanceRepeatLimit times is a template instantiating itself at ever larger
-# type arguments -- `f t: (wrap t: t)` inside `f` -- which no number of rounds
-# ends: it is refused once, at the template's definition, and not walked.
-firstInstanceWalk: function {
-    st: zenv.ZSymbolTable
-    ast: Ast.view
-    monoId: ztypes.tid
-    opId: zast.nodeid
-} out bool is {
-    if (st.walk.monosWalked.has item: monoId) then return false
-    # a walk of a body its own check refused, or of an instance a call made
-    # from arguments it refused, would only report that error again
-    if (st.walk.refusedBodies.has item: opId) then return false
-    if ((st.walk.refusedInstances.get key: monoId).or d: false) then return false
-    st.walk.monosWalked.add item: monoId
-    if (templateRepeatsInMints :st :monoId) < instanceRepeatLimit then return true
-    org: st.reg.genericOriginOf tid: monoId
-    if (st.walk.monoRecursionReported.has item: org) then return false
-    st.walk.monoRecursionReported.add item: org
-    tn: specWrittenName :st :ast tid: org
-    mn: specWrittenName :st :ast tid: monoId
-    m: "instantiating '\{tn}' does not end: each instance instantiates it again, at a larger type argument ('\{mn}')"
-    opn: ast.nodes.get i: opId
-    (
-        addError
-        :st
-        nodeid: opId
-        lineno: (nodeLine n: opn)
-        colno: (nodeCol n: opn)
-        e: zast.err.genericError
-        msg: m
-    )
-    return false
-}
-
-# instanceBodyAt -- the function node instance `mono` walks for template
-# function `opId`: the instance's own copy of the function -- its return type,
-# its parameters and its body -- made at the instance's first walk of it
-# (zast.cloneTreeAt). The instance is checked and emitted from the copy and
-# never from the template's nodes, so no node of a signature or a body carries
-# another instance's answer.
-instanceBodyAt: function {
-    st: zenv.ZSymbolTable ast: Ast mono: ztypes.tid opId: zast.nodeid
-} out zast.nodeid is {
-    k: ztyping.monostamp :mono node: opId
-    have: st.typing.instanceBody.get key: k
-    if have.some then {
-        return have
-    }
-    bodyId: zast.nodeid
-    {
-        fv: ast.nodes.get i: opId
-        if fv.functiondef then bodyId = fv.body
-    }
-    if bodyId.isZero then return opId
-    # the copy's own function row first, so the copy is the rows from it to the
-    # cloned body's root, the last row the clone takes
-    myId: zast.tableReserve :ast from: opId
-    returnSrc: zast.nodeid
-    paramSrc: ListVal zast.nodeid
-    {
-        fv: ast.nodes.get i: opId
-        if fv.functiondef then {
-            returnSrc = fv.returntype
-            zast.appendSpan kids: ast.kids acc: paramSrc span: fv.parameters
-        }
-    }
-    returnId: zast.nodeid
-    if returnSrc.notZero then {
-        rc: zast.cloneTreeAt :ast nid: returnSrc
-        returnId = zast.tableAdd :ast n: rc
-    }
-    paramIds: ListVal zast.nodeid
-    for each src: paramSrc loop {
-        pc: zast.cloneTreeAt :ast nid: src
-        paramIds.append from: (zast.tableAdd :ast n: pc)
-    }
-    paramSpan: zast.kidsAdd kids: ast.kids xs: paramIds
-    bc: zast.cloneTreeAt :ast nid: bodyId
-    bcId: zast.tableAdd :ast n: bc
-    row: astnode.placeholder
-    {
-        fv: ast.nodes.get i: opId
-        if fv.functiondef then {
-            row = astnode.functiondef (
-                zast.functionrow
-                nodeid: myId
-                lineno: fv.lineno
-                colno: fv.colno
-                returntype: returnId
-                parameters: paramSpan
-                body: bcId
-                isNative: fv.isNative
-                pins: fv.pins
-                asItems: fv.asItems
-            )
-        }
-    }
-    cid: zast.tableAdd :ast n: row
-    st.typing.instanceFunctions.append from: cid
-    st.typing.instanceBody.set key: k value: cid
-    st.typing.instanceOrigin.set key: cid value: opId
-    return cid
-}
-
-# nextRowOf -- the id the next row made in `ast` takes.
-nextRowOf: function {ast: Ast.view} out zast.nodeid is {
-    return (zast.nodeid from: ast.nodes.length.u32.orPanic)
-}
-
-# generatorCallOf -- the generator `call` whose recorded answers (`yield` in
-# scope, the state fields) the function node `nid` takes: the node itself, or
-# for an instance's copy of a generic generator's `call`, the template's. 0 for
-# any other function.
-generatorCallOf: function {typing: ztyping.ZTyping.view nid: zast.nodeid} out zast.nodeid is {
-    if (typing.generatorCallBodies.has item: nid) then return nid
-    org: (typing.instanceOrigin.get key: nid).or d: zast.nodeid
-    if org.notZero when (typing.generatorCallBodies.has item: org) then return org
-    return zast.nodeid
-}
-
-# instanceRepeatLimit -- how many times a template may recur in the chain of
-# walks that minted one of its instances.
-instanceRepeatLimit: 8
-
-# templateRepeatsInMints -- how many of the instances whose walks minted
-# `monoId`, one inside the other, share its template.
-templateRepeatsInMints: function {st: zenv.ZSymbolTable.view monoId: ztypes.tid} out u64 is {
-    org: st.reg.genericOriginOf tid: monoId
-    n: u64
-    p: (st.walk.monoMintedBy.get key: monoId).or d: ztypes.tid.zero
-    for p.notZero loop {
-        if (st.reg.genericOriginOf tid: p) == org then n = n + 1
-        p = (st.walk.monoMintedBy.get key: p).or d: ztypes.tid.zero
-    }
-    return n
-}
 
 # noteMonoSite -- the first call that instantiates `mono`, a generic function's
 # call or a generic type's construction: an error in the instance names it.
@@ -62591,486 +59932,6 @@ recordMonoRef: function {
     n: ast.nodes.get i: at
     ms: ztyping.monosite lineno: (nodeLine :n) colno: (nodeCol :n) :unitDecl
     st.walk.monoSite.set key: mono value: ms
-}
-
-# noteInstanceErrors -- the errors an instance walk raised from `from` on are
-# about the instance, not the template text they point at: each gains a note
-# naming the template, its type arguments and the call that instantiated it.
-# Duck typing puts a type's missing member inside library code, and without
-# this the reader would not know which instantiation to look at. Once per
-# instance: an error the instance's own constant fold raised inside its walk
-# (foldInstanceConstant) already names it.
-noteInstanceErrors: function {st: zenv.ZSymbolTable ast: Ast.view mono: ztypes.tid from: u64} is {
-    n: st.typing.errors.length
-    if n <= from then return
-    ctxt: instanceNote :st :ast :mono
-    i: from
-    for i < n loop {
-        e: st.typing.errors.getMut :i
-        if e.note.length == 0 then {
-            e.note = ctxt.copy
-        } else if (e.note.startsWith prefix: ctxt).not then {
-            e.note = "\{ctxt.stringView}; \{e.note.stringView}"
-        }
-        i = i + 1
-    }
-}
-
-# instanceNote -- "in the instance of `edgeOf` with T = Circ, instantiated at
-# app.z line 14": the template, each argument -- a type or a numeric value --
-# and the first instantiating call when a call made it.
-instanceNote: function {st: zenv.ZSymbolTable.view ast: Ast.view mono: ztypes.tid} out String is {
-    org: st.reg.genericOriginOf tid: mono
-    tn: specWrittenName :st :ast tid: org
-    r: "in the instance of `\{tn}`"
-    pnames: st.reg.genericParamNamesOf tdecl: (st.typing.declIdOfType typeId: org)
-    n: st.reg.genericArgCount specId: mono
-    i: u64
-    sep: " with ".string
-    tdecl: st.typing.declIdOfType typeId: org
-    for i < n while i < pnames.length loop {
-        pnm: pnames.get :i
-        an: (
-            instanceArgText
-            :st
-            :mono
-            ordinal: i
-            cd: (st.reg.genericParamConstraintOf :tdecl paramName: pnm)
-        )
-        if an.length > 0 then {
-            r.append sep
-            r.append (zast.nameTextAt :ast ref: pnm)
-            r.append " = "
-            r.append an
-            sep = ", ".string
-        }
-        i = i + 1
-    }
-    so: st.walk.monoSite.get key: mono
-    if so.some then {
-        uname: (st.typing.decls.get i: so.unitDecl).name
-        un: zast.nameTextAt :ast ref: uname
-        at: ", instantiated at \{un}.z line \{so.lineno}"
-        r.append at
-    }
-    return r
-}
-
-# instanceArgText -- the argument the instance `mono` took at `ordinal`, whose
-# parameter's constraint is `cd`, as instanceNote spells it: a type by its name,
-# a numeric value in decimal, with its sign when the parameter's kind has one.
-# "" for none.
-instanceArgText: function {
-    st: zenv.ZSymbolTable.view
-    mono: ztypes.tid
-    ordinal: u64
-    cd: ztypes.constraintdesc
-} out String is {
-    vg: st.reg.genericValueArgAt specId: mono :ordinal
-    if vg.some then {
-        if cd.numKind.has when (ztypes.isSignedIntKind k: cd.numKind.kind) when (
-            vg > 9223372036854775807
-        ) then return "-\{ztypes.absI64 v: (ztypes.bitsI64 b: vg)}"
-        return "\{vg}"
-    }
-    at: st.reg.genericTypeArgAt specId: mono :ordinal
-    if at.isZero then return "".string
-    return (st.reg.nameOf tid: at)
-}
-
-# recordMintedBy -- every type id minted since `minted` was minted by the walk
-# of `monoId`.
-recordMintedBy: function {st: zenv.ZSymbolTable monoId: ztypes.tid minted: ztypes.tid} is {
-    t: minted
-    last: st.reg.nextTid
-    for t < last loop {
-        st.walk.monoMintedBy.set key: t value: monoId
-        t = t.next
-    }
-}
-
-# stampUnitMonoRound -- one round of the post-sweep over every file unit.
-stampUnitMonoRound: function {
-    st: zenv.ZSymbolTable
-    scope: ztypes.declid
-    program: Ast
-} is {
-    {
-        uCnt: program.units.length
-        uIdx: u64
-        for uIdx < uCnt loop {
-            uId: program.units.get i: uIdx
-            uIdx = uIdx + 1
-            uOp: zast.nodeid
-            uNm: zast.nameid
-            u: program.nodes.get i: uId
-            if u.namedoperation then {
-                uNm = u.name
-                uOp = u.operation
-            }
-            if uOp.notZero then {
-                unitDecl: unitDeclOfNameOrOwn :st :scope nameId: uNm
-                if (zast.unitIsGeneric ast: program unitId: uOp) then {
-                    (
-                        stampMonoTemplateUnit
-                        :st
-                        :scope
-                        ast: program
-                        :unitDecl
-                        tplId: (st.typing.declTypeOf declId: unitDecl)
-                        unitOpId: uOp
-                    )
-                } else {
-                    (
-                        stampUnitMonoMembers
-                        :st
-                        :scope
-                        :program
-                        :unitDecl
-                        unitOpId: uOp
-                        ownerTid: ztypes.tid
-                    )
-                }
-            }
-        }
-    }
-}
-
-# templateUnitStampAt -- the type a nested unit template's definition node was
-# stamped with: the template itself, never a name looked up anywhere.
-templateUnitStampAt: function {
-    st: zenv.ZSymbolTable.view
-    ast: Ast.view
-    opId: zast.nodeid
-} out ztypes.tid is {
-    tuo: ast.nodes.get i: opId
-    if tuo.unitdef.not then return ztypes.tid
-    return (ztyping.nodeTypeAt tbl: st.typing.nodeType nid: opId)
-}
-
-# stampMonoTemplateUnit -- stamp-walk every registry mono minted from the
-# generic template unit `tplId`, whose definition node is `unitOpId`.
-stampMonoTemplateUnit: function {
-    st: zenv.ZSymbolTable
-    ast: Ast
-    unitDecl: ztypes.declid
-    scope: ztypes.declid
-    tplId: ztypes.tid
-    unitOpId: zast.nodeid
-} is {
-    if tplId.isZero then return
-    last: st.reg.nextTid
-    t: ztypes.tid 1
-    for t < last loop {
-        isMono: false
-        if (st.reg.typetypeOf typeId: t) == ztypes.ztypetype.unitType then {
-            go: st.reg.genericOriginOf tid: t
-            if go == tplId when go.notZero then isMono = true
-        }
-        if isMono then {
-            stampOneUnitMono :st :scope :ast :unitDecl :unitOpId monoId: t
-        }
-        t = t.next
-    }
-}
-
-# bindUnitNestedTypes -- a unit instance's walk reads each member the unit
-# declares -- a type, a list, a nested unit -- as the instance's own copy
-# of it, and so do the walks of the instances it owns.
-bindUnitNestedTypes: function {st: zenv.ZSymbolTable monoId: ztypes.tid} is {
-    # a nested unit's instance reads its enclosing instance's members too, its
-    # own nearer
-    own: st.reg.ownerTidOf tid: monoId
-    if own.notZero when (st.reg.typetypeOf typeId: own) == ztypes.ztypetype.unitType when (
-        st.reg.genericOriginOf
-        tid: own
-    ).notZero then bindUnitNestedTypes :st monoId: own
-    ri: u64
-    rn: st.typing.declRowSlots ownerTid: monoId
-    for ri < rn loop {
-        # every row: a type the unit declares is no field, method, arm or
-        # parameter, which is all a members-only read keeps
-        rw: st.typing.declRowAt ownerTid: monoId membersOnly: false slot: ri
-        ri = ri + 1
-        if rw.keep then {
-            org: st.reg.genericOriginOf tid: rw.tid
-            if org.notZero when (
-                (st.reg.typetypeOf typeId: org) != ztypes.ztypetype.functionType
-            ) then {
-                st.walk.monoParamSubst.set key: org value: rw.tid
-            }
-        }
-    }
-}
-
-# collectOwedUnitFns -- append the body index of each function unit instance
-# `monoId` owes a walk (instanceMemberOwed) to `idxs`, marking it walked.
-collectOwedUnitFns: function {
-    st: zenv.ZSymbolTable
-    ast: Ast
-    bodyIds: zast.kidspan
-    monoId: ztypes.tid
-    idxs: (ListVal u64).borrow
-} is {
-    di: u64
-    for di < bodyIds.count loop {
-        bm: argRefAt :ast nid: (zast.kidAt kids: ast.kids span: bodyIds i: di)
-        if bm.nid.notZero when (isFunctionDefWithBody o: (ast.nodes.get i: bm.operation)) when (
-            instanceMemberOwed
-            :st
-            :monoId
-            nameId: bm.name
-        ) then {
-            # an instance's walk marks the member it takes; one the instance
-            # does not declare would be owed again by every visit
-            if (st.typing.declMemberIdOf parentTypeId: monoId nameId: bm.name).isZero then {
-                # an instantiation that was refused -- an argument labelled
-                # with no parameter of the unit -- leaves an instance with no
-                # members: its error is reported, and there is nothing to walk
-                if st.typing.errors.length > 0 then {
-                    di = di + 1
-                    continue
-                }
-                mn: st.reg.nameOf tid: monoId
-                fnm: zast.nameTextAt :ast ref: bm.name
-                (
-                    panic
-                    msg: "ztypecheck: unit instance '\{mn}' does not declare its template's function '\{fnm}'"
-                )
-            }
-            markInstanceMemberWalked :st :monoId nameId: bm.name
-            if (st.walk.refusedBodies.has item: bm.operation).not then idxs.append from: di
-        }
-        di = di + 1
-    }
-}
-
-# stampOneUnitMono -- one visit of a unit instance: the functions it owes a walk
-# (walkUnitMonoFns), then the methods of its own copy of each type the unit
-# declares.
-stampOneUnitMono: function {
-    st: zenv.ZSymbolTable
-    ast: Ast
-    unitDecl: ztypes.declid
-    scope: ztypes.declid
-    unitOpId: zast.nodeid
-    monoId: ztypes.tid
-} is {
-    # an instance is revisited for the functions a use reached since its last
-    # walk; only its first visit asks whether instantiating it ends
-    if (st.walk.monosWalked.has item: monoId).not when (
-        firstInstanceWalk
-        :st
-        :ast
-        :monoId
-        opId: unitOpId
-    ).not then return
-    bodyIds: zast.unitBodyIdsAt :ast unitId: unitOpId
-    if (spanOwesWalk :st :ast span: bodyIds :monoId) then {
-        walkUnitMonoFns :st :ast :unitDecl :scope :bodyIds :monoId
-    }
-    # the methods of this instance's own copy of each type the unit declares
-    stampUnitNestedMethods :st :ast :unitDecl :scope :bodyIds :monoId
-    # and its own instance of each unit the unit declares
-    di: u64
-    for di < bodyIds.count loop {
-        bm: argRefAt :ast nid: (zast.kidAt kids: ast.kids span: bodyIds i: di)
-        di = di + 1
-        if bm.nid.isZero or (zast.unitOpHasBody :ast opId: bm.operation).not then continue
-        inner: (st.typing.declChildOfId parentTypeId: monoId nameId: bm.name).or d: ztypes.tid.zero
-        if inner.isZero then continue
-        if (st.reg.genericOriginOf tid: inner).notZero then {
-            stampOneUnitMono :st :ast :unitDecl :scope unitOpId: bm.operation monoId: inner
-            continue
-        }
-        # a template with parameters of its own: each instance of it this one owns
-        innerInsts: instancesWithin reg: st.reg typing: st.typing owner: monoId tplId: inner
-        for each oi: innerInsts loop {
-            stampOneUnitMono :st :ast :unitDecl :scope unitOpId: bm.operation monoId: oi
-        }
-    }
-}
-
-# instancesWithin -- the instances of `tplId`, a template with parameters of its
-# own written in a generic unit, that belong to that unit's instance `owner`:
-# those whose arguments for the unit's parameters are `owner`'s
-# (bindInheritedParams), in the order they were minted. Partials are none.
-instancesWithin: function {
-    reg: ztypes.ZTypeRegistry.view typing: ztyping.ZTyping.view owner: ztypes.tid tplId: ztypes.tid
-} out ListVal ztypes.tid is {
-    r: ListVal ztypes.tid
-    tdecl: typing.declIdOfType typeId: tplId
-    odecl: typing.declIdOfType typeId: (reg.genericOriginOf tid: owner)
-    if tdecl.isZero or odecl.isZero then return r
-    tnames: reg.genericParamNamesOf :tdecl
-    onames: reg.genericParamNamesOf tdecl: odecl
-    last: reg.nextTid
-    t: ztypes.tid
-    for t < last loop {
-        keep: (reg.genericOriginOf tid: t) == tplId
-        if keep then keep = (reg.isPartialOf tid: t).not and (reg.isTrieNodeOf tid: t).not
-        if keep when (sharesInheritedArgs :reg mono: t :tnames :owner :onames) then r.append t
-        t = t.next
-    }
-    return r
-}
-
-# sharesInheritedArgs -- each of the parameters `onames` of the instance `owner`
-# has the same argument in `mono`, whose parameters are `tnames`.
-sharesInheritedArgs: function {
-    reg: ztypes.ZTypeRegistry.view
-    mono: ztypes.tid
-    tnames: (ListVal zast.nameid).view
-    owner: ztypes.tid
-    onames: (ListVal zast.nameid).view
-} out bool is {
-    oi: u64
-    for oi < onames.length loop {
-        ti: u64
-        for ti < tnames.length while (tnames.get i: ti) != (onames.get i: oi) loop ti = ti + 1
-        if ti == tnames.length then return false
-        ma: reg.genericArgAt specId: mono ordinal: ti
-        if ma != (reg.genericArgAt specId: owner ordinal: oi) then return false
-        oi = oi + 1
-    }
-    return true
-}
-
-# walkUnitMonoFns -- the instance walk of the functions unit instance `monoId`
-# owes (instanceMemberOwed): bind the mono's type args (scope defines +
-# monoParamSubst), then re-check each template function body with curMonoStamp
-# routing stamps into the side table. A function another one calls is walked
-# in the same visit.
-walkUnitMonoFns: function {
-    st: zenv.ZSymbolTable
-    ast: Ast
-    unitDecl: ztypes.declid
-    scope: ztypes.declid
-    bodyIds: zast.kidspan
-    monoId: ztypes.tid
-} is {
-    minted: st.reg.nextTid
-    errsBefore: st.typing.errors.length
-    monoNm: st.reg.nameOf tid: monoId
-    savedMode: st.mode
-    st.mode.genericWalk = true
-    st.pushScope parent: scope node: zast.nodeid
-    st.walk.monoParamSubst = IdMapV ztypes.tid v: ztypes.tid
-    {
-        bindMonoParams :st :monoId
-        bindUnitNestedTypes :st :monoId
-    }
-    idxs: ListVal u64
-    collectOwedUnitFns :st :ast :bodyIds :monoId :idxs
-    st.typing.curMonoStamp = monoId
-    prevL: st.walk.synthLabel.copy
-    prevOwnerUnit: st.walk.synthOwnerUnit
-    prevOwnerName: st.walk.synthOwnerName
-    prevT: st.walk.currentThisTid
-    for idxs.length > 0 loop {
-        for each bidx: idxs loop {
-            memberId: zast.kidAt kids: ast.kids span: bodyIds i: bidx
-            bm2: argRefAt :ast nid: memberId
-            if bm2.nid.notZero then {
-                mnm: zast.nameTextCopy :ast ref: bm2.name
-                q: "\{monoNm}.\{mnm}"
-                mfo: st.typing.declChildOfId parentTypeId: monoId nameId: bm2.name
-                match (
-                    mfo
-                ) case some then {
-                    st.walk.curMonoFnTid = mfo
-                } case none then {
-                    st.walk.curMonoFnTid = ztypes.tid.zero
-                }
-                ugen: st.walk.curMonoFnTid
-                if ugen.notZero when (st.reg.isGenericOf tid: ugen) then {
-                    # a function with type parameters of its own is walked per
-                    # instance of it, the instance's own arguments bound beside
-                    # the unit's
-                    (
-                        stampMemberFnMonos
-                        :st
-                        :scope
-                        :ast
-                        :unitDecl
-                        monoId: ztypes.tid
-                        monoNm: ""
-                        mop: bm2.operation
-                        methodTid: ugen
-                    )
-                    st.typing.curMonoStamp = monoId
-                    continue
-                }
-                origin: st.reg.genericOriginOf tid: monoId
-                unitTemplateDecl: st.typing.declIdOfType typeId: origin
-                st.typing.beginInstanceWalk next: (nextRowOf :ast)
-                cfbFr: fnRefAt :ast nid: (instanceBodyAt :st :ast mono: monoId opId: bm2.operation)
-                (
-                    checkFunctionBody
-                    :st
-                    :scope
-                    :unitDecl
-                    defName: q.stringView
-                    defNameId: zast.nameid
-                    fn: cfbFr
-                    thisName: ""
-                    thisTid: ztypes.tid
-                    :ast
-                    declId: unitTemplateDecl
-                )
-                st.typing.endInstanceWalk next: (nextRowOf :ast)
-            }
-        }
-        idxs = ListVal u64
-        collectOwedUnitFns :st :ast :bodyIds :monoId :idxs
-    }
-    st.walk.synthLabel = prevL.take
-    st.walk.synthOwnerUnit = prevOwnerUnit
-    st.walk.synthOwnerName = prevOwnerName
-    st.walk.currentThisTid = prevT
-    st.walk.curMonoFnTid = ztypes.tid.zero
-    st.typing.curMonoStamp = ztypes.tid.zero
-    st.mode = savedMode
-    st.walk.monoParamSubst = IdMapV ztypes.tid v: ztypes.tid
-    st.pop
-    recordMintedBy :st :monoId :minted
-    noteInstanceErrors :st :ast mono: monoId from: errsBefore
-}
-
-# stampUnitNestedMethods -- the instance walk of the methods each type a generic
-# unit declares carries, over the unit instance `monoId`'s copy of it.
-stampUnitNestedMethods: function {
-    st: zenv.ZSymbolTable
-    ast: Ast
-    unitDecl: ztypes.declid
-    scope: ztypes.declid
-    bodyIds: zast.kidspan
-    monoId: ztypes.tid
-} is {
-    vi: u64
-    for vi < bodyIds.count loop {
-        bm: argRefAt :ast nid: (zast.kidAt kids: ast.kids span: bodyIds i: vi)
-        vi = vi + 1
-        if bm.nid.notZero when (
-            objectdefHasMethodBodies
-            :ast
-            op: (ast.nodes.get i: bm.operation)
-        ) then {
-            inst: (
-                (st.typing.declChildOfId parentTypeId: monoId nameId: bm.name).or
-                d: ztypes.tid.zero
-            )
-            if inst.notZero when (st.reg.genericOriginOf tid: inst).notZero then {
-                stampOneClassMono :st :ast :unitDecl :scope clsOpId: bm.operation monoId: inst
-            } else if inst.notZero when (ownsTypeParams :st tid: inst) then {
-                # a type with parameters of its own: each instance of it this one has
-                ownInsts: instancesWithin reg: st.reg typing: st.typing owner: monoId tplId: inst
-                for each ci: ownInsts loop {
-                    stampOneClassMono :st :ast :unitDecl :scope clsOpId: bm.operation monoId: ci
-                }
-            }
-        }
-    }
 }
 
 # recordLiteralDecl -- name the literal type a node WORE, for tooling, in the
@@ -63225,7 +60086,7 @@ constantAtomType: function {
             cdN: st.reg.genericParamConstraintOf tdecl: npOwn paramName: nameId
             result = numericBoundTid :ast :st :scope cd: cdN
         } else {
-            ro: walkLookupTyperef :st :scope :ast :unitDecl base: trN.stringView
+            ro: bodies.walkLookupTyperef :st :scope :ast :unitDecl base: trN.stringView
             if ro.some then {
                 result = ro
             }
@@ -65501,7 +62362,15 @@ constValueOfMemberId: function {
         holds: typeMemberHoldsConstant :st :ast typeDecl: od defNode: dnode
         if holds.not then return ztypes.noConst
     }
-    return (constValueOfMemberAt :st :ast :unitDecl ownerDecl: od nameId: nid defNodeId: dnode)
+    return (
+        bodies.constValueOfMemberAt
+        :st
+        :ast
+        :unitDecl
+        ownerDecl: od
+        nameId: nid
+        defNodeId: dnode
+    )
 }
 
 # declIsType -- the declaration is a type definition.
@@ -65576,101 +62445,6 @@ typeMemberHoldsConstant: function {
         }
     }
     return false
-}
-
-# constValueOfMemberAt -- the fold itself, addressed by the OWNER's declaration.
-# A member of a NESTED unit has no (unitDecl, defName) pair that names it, so
-# the name-keyed lookup above is the wrapper's and the evaluation is here. The
-# owner arrives as a Decl rather than a type id because that is what the
-# evaluation scope is: deriving it back from the id was a reverse lookup.
-constValueOfMemberAt: function {
-    ast: Ast
-    st: zenv.ZSymbolTable
-    unitDecl: ztypes.declid
-    ownerDecl: ztypes.declid
-    nameId: zast.nameid
-    defNodeId: zast.nodeid
-} out ztypes.cval is {
-    utid: st.typing.declTypeOf declId: ownerDecl
-    nid: nameId
-    if utid.isZero then return ztypes.noConst
-    # a template's constant is evaluated, and kept, for the instantiation it is
-    # read for: its numeric generic parameters have that instantiation's values
-    evalMono: activeConstMono :st :ownerDecl
-    if evalMono.notZero then utid = evalMono
-    k: st.typing.memberConstKey parentTypeId: utid nameId: nid
-    evalState: ztyping.constevalstate.unvisited
-    sg: st.walk.constEvalState.get key: k
-    if sg.some then {
-        evalState = sg
-    }
-    if evalState.done then return (st.typing.memberConstOf parentTypeId: utid nameId: nid)
-    dnid: defNodeId
-    if dnid.isZero then return ztypes.noConst
-    opid: zast.nodeid
-    dline: u32
-    dcol: u32
-    dnode: zast.nodeid
-    {
-        dn: ast.nodes.get i: dnid
-        if dn.namedoperation then {
-            opid = dn.operation
-            dline = dn.lineno
-            dcol = dn.colno
-            dnode = dn.nodeid
-        }
-    }
-    if opid.isZero then return ztypes.noConst
-    if evalState.evaluating then {
-        # settled before the question is asked: asking whether the value is
-        # computed looks its head up, and a head of the constant's own name
-        # (`foundation: (foundation n: 3)`) comes back here
-        st.walk.constEvalState.set key: k value: ztyping.constevalstate.done
-        if (constDefIsComputed :st scope: ownerDecl :ast :unitDecl nid: opid).not then {
-            return ztypes.noConst
-        }
-        # the only place the NAME's text is wanted: a cycle names itself in
-        # its own diagnostic. Everywhere else the id is the whole answer.
-        cycName: zast.nameTextAt :ast ref: nid
-        cycleText: constInternString :st text: cycName.stringView
-        (
-            constFailRecord
-            :st
-            kind: ztypes.constfailkind.cycle
-            nodeid: dnode
-            lineno: dline
-            colno: dcol
-            width: cycName.length
-            strId: cycleText
-        )
-        st.walk.constEvalState.set key: k value: ztyping.constevalstate.done
-        return ztypes.noConst
-    }
-    st.walk.constEvalState.set key: k value: ztyping.constevalstate.evaluating
-    # the value is evaluated in the scope of the unit that owns the member --
-    # the owner itself, which the caller already holds -- and its names are
-    # that unit's: core's `text: system.text` reads the system unit, whatever
-    # the program that asked calls `system`
-    evalUnit: unitRootOfDecl typing: st.typing declId: ownerDecl
-    if evalUnit.isZero then evalUnit = unitDecl
-    prevMono: st.walk.constMono
-    evalNid: opid
-    if evalMono.notZero then {
-        st.walk.constMono = evalMono
-        # an instantiation evaluates its own copy of the definition: what the
-        # evaluation records on a node is then that instantiation's alone
-        st.typing.beginInstanceWalk next: (nextRowOf :ast)
-        ownDef: zast.cloneTreeAt :ast nid: opid
-        evalNid = zast.tableAdd :ast n: ownDef
-    }
-    valFound: evalConstNode :st scope: ownerDecl :ast unitDecl: evalUnit nid: evalNid
-    if evalMono.notZero then st.typing.endInstanceWalk next: (nextRowOf :ast)
-    st.walk.constMono = prevMono
-    st.walk.constEvalState.set key: k value: ztyping.constevalstate.done
-    if valFound.isConst then {
-        st.typing.setMemberConst parentTypeId: utid nameId: nid value: valFound
-    }
-    return valFound
 }
 
 # activeConstMono -- the instantiation a constant of `ownerDecl` is evaluated
@@ -70169,7 +66943,7 @@ resolveDottedConstantDef: function {
                 }
             }
             if known.not then {
-                pTo: walkLookupTyperef :st :scope :ast :unitDecl base: sfLit
+                pTo: bodies.walkLookupTyperef :st :scope :ast :unitDecl base: sfLit
                 if pTo.some then {
                     ptt = st.reg.typetypeOf typeId: pTo
                     known = true
@@ -70909,7 +67683,7 @@ constFoldDecl: function {
     if unm.isZero then return
     constFailClear :st
     valFound: (
-        constValueOfMemberAt
+        bodies.constValueOfMemberAt
         :st
         :ast
         unitDecl: unm
@@ -72666,29 +69440,6 @@ unitOfAliasType: function {
     return (st.typing.declIdOfType typeId: bt)
 }
 
-# unitNameIdOf / unitNameTextOf -- the spelling a unit's DECLARATION carries.
-# The display projection of a unit id, for a diagnostic, a composed key or a
-# text compare: reading a name OFF the Decl is not a re-resolution, and is the
-# only sanctioned direction now that identity travels as an id.
-unitNameIdOf: function {
-    st: zenv.ZSymbolTable.view
-    unitDecl: ztypes.declid
-} out zast.nameid is {
-    if unitDecl.isZero then return zast.nameid.zero
-    return (st.typing.declNameOf declId: unitDecl)
-}
-
-# a unit's name as text, for the diagnostics that must spell it. Everything
-# else compares the id
-unitNameTextOf: function {
-    st: zenv.ZSymbolTable.view
-    ast: Ast.view
-    unitDecl: ztypes.declid
-} out String is {
-    if unitDecl.isZero then return "".string
-    return (zast.poolTextCopy pool: ast.names ref: (unitNameIdOf :st :unitDecl))
-}
-
 # fileUnitNamedAt -- the FILE unit a bare name written in `scope` reaches: the
 # program root's child of that name, unless the scope, an enclosing unit or
 # `core` binds the name first and so hides it. Names resolve from the scope
@@ -73103,26 +69854,6 @@ probeScopeTyperef: function {
         return co
     }
     return ztypes.tid.zero
-}
-
-# walkLookupTyperef -- resolve a bare type name to its id: the environment
-# walk from the scope a name written in `unitDecl` resolves from (scopeFor:
-# `scope`'s unit scope when it lies inside that unit, else the unit's
-# own root), each enclosing unit scope outward, then the prelude -- the
-# current unit shadows core, and every other unit is reached through core's
-# re-exports or a qualified path. It serves internal/mangled queries (dotted
-# member keys) beyond the source-level surface, so a scope answers from the
-# member index as well as the Decl tree (probeScopeTyperef).
-walkLookupTyperef: function {
-    ast: Ast
-    st: zenv.ZSymbolTable
-    unitDecl: ztypes.declid
-    scope: ztypes.declid
-    base: StringView
-} out optionval ztypes.tid is {
-    nid: zast.poolFind pool: ast.names text: base
-    if nid.isZero then return (optionval.none ztypes.tid)
-    return (walkLookupTyperefById :st :scope :ast :unitDecl baseId: nid)
 }
 
 
@@ -73651,7 +70382,7 @@ shellResolveByName: function {
     if r2.some then {
         return r2
     }
-    r3: walkLookupTyperef :st :scope :ast unitDecl: fromUnit base: name
+    r3: bodies.walkLookupTyperef :st :scope :ast unitDecl: fromUnit base: name
     if r3.some then {
         return r3
     }
@@ -74015,7 +70746,7 @@ typecheck: function {
     demandAllDefs :st :program
     resolveDemands :st scope: rf :program
     resolveConstantDefs :st scope: rf :program
-    completeUnitInstantiations :st scope: rf :program
+    bodies.completeUnitInstantiations :st scope: rf :program
     applyUnitVisibility :st :program
     stampTyperefs :st :program
     checkBodies :st scope: rf :program
