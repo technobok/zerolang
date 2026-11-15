@@ -1,0 +1,1392 @@
+# typeref -- recording a written type name on its node. An implementation
+# subunit of ztypecheck.
+
+# asOpIsTypeShaped -- an `as` item's value is shaped as a type may be: a name
+# that is no numeric literal, a path whose leaf is no marker, or an
+# application -- an operator expression (`x: a + b`) is none. Read off the text
+# alone, as indexing is.
+asOpIsTypeShaped: function {ast: Ast.view opNode: astnode.view} out bool is {
+    match (
+        opNode
+    ) case atomid then {
+        return (isNumericLiteralNameAt :ast ref: opNode.name).not
+    } case dottedpath then {
+        return (leafNamesNoMember leafId: (atomNameId :ast n: (ast.nodes.get i: opNode.child))).not
+    } case call then {
+        return opNode.infix.not
+    } else {
+        return false
+    }
+}
+
+# stamp the name a node resolved to, so nothing downstream has to resolve it
+# again
+recordNodeName: function {
+    ast: Ast.view
+    st: zenv.ZSymbolTable
+    name: StringView
+    nid: zast.nodeid
+    scope: ztypes.declid
+} is {
+    if name.length != 0 then recordNodeNameId :st nameId: (nameIdOf :ast :name) :nid :scope
+}
+
+# recordNodeNameId -- recordNodeName by the name's id: the pending typeref
+# stores the id, so a caller holding one hands it straight over.
+recordNodeNameId: function {
+    st: zenv.ZSymbolTable
+    nameId: zast.nameid
+    nid: zast.nodeid
+    scope: ztypes.declid
+} is {
+    if nameId.isZero then return
+    notePendingTyperef :st :nid :nameId
+    kc3: nid
+    st.walk.pendingTyperefScope.set key: kc3 value: scope
+}
+
+# recordResolvedName -- record (nid -> name) for post-demand resolution; the `this` and
+# `type` self-keywords record as the enclosing type (thisName).
+recordResolvedName: function {
+    st: zenv.ZSymbolTable
+    ast: Ast
+    unitDecl: ztypes.declid
+    scope: ztypes.declid
+    thisName: StringView
+    # the referenced name, interned
+    nameId: zast.nameid
+    nid: zast.nodeid
+    recScope: ztypes.declid
+} is {
+    if nameId == zast.wellKnown.slot.wkThis then {
+        recordNodeName :ast :st name: thisName :nid scope: recScope
+    } else {
+        if nameId == zast.wellKnown.slot.wkType then {
+            recordNodeName :ast :st name: thisName :nid scope: recScope
+        } else {
+            if (isNumericLiteralNameAt :ast ref: nameId) then {
+                # the literal's spelling decides its default
+                isFloat: false
+                nT: zast.nameTextAt :ast ref: nameId
+                if (ztypes.isFloatLexeme numstr: nT.stringView) then isFloat = true
+                if isFloat then {
+                    recordNodeName :ast :st name: "f64" :nid scope: recScope
+                } else {
+                    recordNodeName :ast :st name: "i64" :nid scope: recScope
+                }
+            } else {
+                if (bodies.refuseParamAsType :st :ast :nameId :nid) then return
+                # a numeric generic parameter as a type is refused where the
+                # declaration is written (refuseSingletonDeclType) and keeps
+                # its bound's type, known now and in no scope the deferred
+                # stamp searches
+                npO: numericParamTypeOwner :st :ast :unitDecl :scope :nameId :thisName
+                if npO.notZero then {
+                    npT: numericParamBoundOf :st :ast :scope owner: npO :nameId
+                    ztyping.nodeTypeSet tbl: st.typing.nodeType :nid tid: npT
+                    npD: st.typing.declFindChild parentDeclId: npO :nameId
+                    stampRefDecl :st :nid declId: npD
+                    npk: nid
+                    st.walk.noStampNode.set key: npk value: true
+                    return
+                }
+                # a template's own param name still RECORDS (the pending
+                # map feeds mono substitution) but never name-resolves: mark
+                # it no-stamp so resolution doesn't chase or report it
+                gskip: false
+                gpnr: nameId
+                if thisName.length > 0 then {
+                    enclK: declOfUnitDef :st :scope :unitDecl nameId: (nameIdOf :ast name: thisName)
+                    if (st.reg.isGenericParamOf tdecl: enclK name: gpnr) then {
+                        gskip = true
+                    } else if (ast.nodes.get i: nid).labelvalue.not when (
+                        st.typing.declFindChild
+                        parentDeclId: enclK
+                        nameId: gpnr
+                    ).notZero then {
+                        # a member of the enclosing type: the stamp asks the
+                        # type whether it is an alias
+                        akn: nid
+                        st.walk.aliasRefOwner.set key: akn value: enclK
+                    }
+                }
+                if gskip.not when st.walk.sigGenericDecl.notZero when (
+                    st.reg.isGenericParamOf
+                    tdecl: st.walk.sigGenericDecl
+                    name: gpnr
+                ) then gskip = true
+                recordNodeNameId :st :nameId :nid scope: recScope
+                if gskip then {
+                    nsg: nid
+                    nsv: true
+                    st.walk.noStampNode.set key: nsg value: nsv
+                }
+            }
+        }
+    }
+}
+
+# singletonPathArg -- a type parameter's argument that names a numeric generic
+# parameter's singleton type through a path (`(ListVal t: B5.cap)`), refused as
+# the bare name is (refuseSingletonTypeArg): the reference takes the bound. 0
+# for any other argument.
+singletonPathArg: function {
+    st: zenv.ZSymbolTable
+    ast: Ast
+    unitDecl: ztypes.declid
+    scope: ztypes.declid
+    thisName: StringView
+    nid: zast.nodeid
+} out ztypes.tid is {
+    parentId: zast.nodeid
+    leafId: zast.nameid
+    {
+        n: ast.nodes.get i: nid
+        if n.dottedpath then {
+            parentId = n.parent
+            leafId = atomNameId :ast n: (ast.nodes.get i: n.child)
+        }
+    }
+    if parentId.isZero or leafId.isZero then return ztypes.tid
+    sg: numericParamTyperef :st :scope :ast :unitDecl :nid :parentId :leafId :thisName
+    if sg.isZero then return ztypes.tid
+    st.walk.numericArgsRefused.add item: nid
+    return (refuseSingletonPathType :st :ast :nid tid: sg)
+}
+
+# recordDottedTyperef -- a type-ref written as a dotted path: a unit-qualified type
+# name, a nested namespace's type, or a member type of a type. Records the
+# dependency the reference creates, whichever shape it takes.
+recordDottedTyperef: function {
+    st: zenv.ZSymbolTable
+    ast: Ast
+    unitDecl: ztypes.declid
+    scope: ztypes.declid
+    thisName: StringView
+    nid: zast.nodeid
+} is {
+    # Ownership/access strip marker (this.borrow / StringView.borrow / Container.private):
+    # record the dotted node with its peeled base AND recurse on the parent so the
+    # stripped inner atom is stamped too.
+    # the row and its parent/child names are read through views scoped to
+    # blocks (owned copies): the recordings below lend ast exclusively
+    parentId: zast.nodeid
+    childId: zast.nodeid
+    {
+        node: ast.nodes.get i: nid
+        if node.dottedpath then {
+            parentId = node.parent
+            childId = node.child
+        }
+    }
+    if parentId.isZero then return
+    cnId: zast.nameid
+    pnId: zast.nameid
+    cNode: ast.nodes.get i: childId
+    cnId = atomNameId :ast n: cNode
+    pNode: ast.nodes.get i: parentId
+    pnId = atomNameId :ast n: pNode
+    if (recordUnitPathTyperef :st :ast :scope :thisName :nid :parentId :pnId :cnId) then return
+    if (qualifierNamesUnit :st :scope qualId: pnId memberId: cnId) then {
+        # a unit INSTANCE's member type names the instance's own copy, which
+        # the instance's scope does not hold by name: stamped here
+        if (stampInstanceTyperef :st :scope :ast :unitDecl :nid qualId: pnId memberId: cnId
+        ) then return
+        # cross-unit qualified type ref (zlexer.token): record the MEMBER under
+        # its DEFINING unit (the parent) so stampTyperefs bridges this node.
+        # The member resolves in the qualifier's scope, not the writer's.
+        qfr: ztypes.declid
+        qro: st.typing.declFindChild parentDeclId: st.typing.programRoot nameId: pnId
+        if qro.notZero then qfr = qualifiedMemberScope :st unitRoot: qro memberId: cnId
+        udQ: unitDeclOfNameOrOwn :st :scope nameId: pnId
+        # the member is the unit's: the type the ref is written in has no say
+        (
+            recordResolvedName
+            :st
+            :scope
+            :ast
+            unitDecl: udQ
+            thisName: ""
+            nameId: cnId
+            :nid
+            recScope: qfr
+        )
+    } else {
+        if (isStripMarkerId nameId: cnId) then {
+            bnId: rootNameIdOf :ast n: (ast.nodes.get i: parentId)
+            (
+                recordResolvedName
+                :st
+                :scope
+                :ast
+                :unitDecl
+                :thisName
+                nameId: bnId
+                :nid
+                recScope: scope
+            )
+            # a parameterized parent ((List of: String).take) has no base
+            # name; the marker dp wears the parent's mono stamp.
+            if bnId.isZero then {
+                (
+                    resolveMonoRefInline
+                    :st
+                    :scope
+                    :ast
+                    :unitDecl
+                    :thisName
+                    enclDecl: ztypes.declid
+                    opNid: parentId
+                    :nid
+                )
+            }
+            # Ownership markers peel and stamp the inner ref; `.private` /
+            # `.public` resolve the pair atomically (no base-atom stamp).
+            if cnId != zast.wellKnown.slot.wkPrivate when (
+                cnId != zast.wellKnown.slot.wkPublic
+            ) then {
+                recordTyperef :st :scope :ast :unitDecl :thisName nid: parentId
+            }
+        } else {
+            stampDottedMember :st :scope :ast :unitDecl :thisName :nid :parentId :pnId :cnId
+        }
+    }
+}
+
+# stampDottedMember -- the stamp of a dotted type-ref naming a member of what its
+# parent names: an instance's numeric generic parameter is its singleton type
+# (numericParamTyperef, which stamps it); anything else is a nested type
+# (stampNestedTyperef).
+stampDottedMember: function {
+    st: zenv.ZSymbolTable
+    scope: ztypes.declid
+    ast: Ast
+    unitDecl: ztypes.declid
+    thisName: StringView
+    nid: zast.nodeid
+    parentId: zast.nodeid
+    # the parent's name, zero for an application or a path
+    pnId: zast.nameid
+    cnId: zast.nameid
+} is {
+    npT: numericParamTyperef :st :scope :ast :unitDecl :nid :parentId leafId: cnId :thisName
+    if npT.notZero then return
+    stampNestedTyperef :st :scope :ast :unitDecl unitId: pnId memberId: cnId :nid
+}
+
+# recordUnitPathTyperef -- a dotted type-ref naming a member of a unit through an
+# alias or a path (`c.os` with `c: inner`, `rt.inner.T`): a file unit's member is
+# recorded under that unit, as recordDottedTyperef records a cross-unit ref; a
+# nested unit's is stamped here, as stampNestedTyperef stamps one. False when
+# the parent names no unit, or names a file unit by its own name.
+recordUnitPathTyperef: function {
+    st: zenv.ZSymbolTable
+    ast: Ast
+    scope: ztypes.declid
+    thisName: StringView
+    nid: zast.nodeid
+    parentId: zast.nodeid
+    # the parent's name, zero for a path
+    pnId: zast.nameid
+    cnId: zast.nameid
+} out bool is {
+    if (isStripMarkerId nameId: cnId) then return false
+    qud: qualifierUnitDecl :st :scope :ast nid: parentId
+    if qud.isZero or ((unitDeclOfName typing: st.typing nameId: pnId) == qud) then return false
+    if (st.typing.declParentOf declId: qud) == st.typing.programRoot then {
+        (
+            recordResolvedName
+            :st
+            :scope
+            :ast
+            unitDecl: qud
+            :thisName
+            nameId: cnId
+            :nid
+            recScope: (qualifiedMemberScope :st unitRoot: qud memberId: cnId)
+        )
+        return true
+    }
+    qmt: qualifiedMemberTid :st :scope :ast qualNid: parentId memberId: cnId
+    if qmt.isZero then return false
+    ztyping.nodeTypeSet tbl: st.typing.nodeType :nid tid: qmt
+    return true
+}
+
+# recordTyperefArgs -- a parameterized type `(T arg: U ...)`: the outer node
+# resolves to a NULL-defined mono (filtered out); record each argument's
+# inner TYPE-ref (e.g. the `u32` in `(optionval t: u32)`), but skip
+# numeric-literal size args (the `16` in `(str to: 16)`) -- they are const
+# values, not type references -- then the head atom, so go-to-definition /
+# hover resolve the template (the call itself carries the instance stamp,
+# recorded by recordTyperef before it gets here).
+recordTyperefArgs: function {
+    st: zenv.ZSymbolTable
+    ast: Ast
+    unitDecl: ztypes.declid
+    scope: ztypes.declid
+    thisName: StringView
+    callableId: zast.nodeid
+    argIds: (ListVal zast.nodeid).view
+} is {
+    for each argId: argIds loop {
+        # the argument is read through a view scoped to this block
+        isNamedArg: false
+        opId: zast.nodeid
+        an: String
+        {
+            arg: ast.nodes.get i: argId
+            match (
+                arg
+            ) case namedoperation then {
+                isNamedArg = true
+                opId = arg.operation
+                an = (
+                    zast.nameTextCopy
+                    :ast
+                    ref: (atomNameId :ast n: (ast.nodes.get i: arg.operation))
+                )
+            } else {
+                an = zast.nameTextCopy :ast ref: (atomNameId :ast n: arg)
+            }
+        }
+        if (isNumericLiteralName name: an.stringView).not then {
+            if isNamedArg then {
+                recordTyperef :st :scope :ast :unitDecl :thisName nid: opId
+            } else {
+                # a bare (label-less) type argument records directly, with
+                # the same numeric-size-arg skip as the labeled form
+                recordTyperef :st :scope :ast :unitDecl :thisName nid: argId
+            }
+        }
+    }
+    # the head atom is itself a type reference: record it so
+    # go-to-definition / hover resolve the template (the call still
+    # carries the instance stamp)
+    savedMode: st.mode
+    st.mode.typerefHead = true
+    recordTyperef :st :scope :ast :unitDecl :thisName nid: callableId
+    st.mode = savedMode
+}
+
+# recordTyperef -- record a signature type-ref node (param / field / arm / return) for
+# post-demand stamping. resolveTyperefShell yields only a NULL-unit shell and the real
+# type may be unresolved here (system / forward refs), so the base name is resolved to its
+# real type later by stampTyperefs. Recurses parameterized args and strip-marker dotted
+# paths; `this`/`type` record as the enclosing type (thisName).
+recordTyperef: function {
+    st: zenv.ZSymbolTable
+    ast: Ast
+    unitDecl: ztypes.declid
+    scope: ztypes.declid
+    thisName: StringView
+    nid: zast.nodeid
+} is {
+    # the row is read through a view scoped to this block: the recordings below
+    # lend ast exclusively
+    kind: zast.nodekind.placeholder
+    callableId: zast.nodeid
+    argIds: ListVal zast.nodeid
+    nameId: zast.nameid
+    {
+        node: ast.nodes.get i: nid
+        kind = zast.kindOf n: node
+        match (
+            node
+        ) case call then {
+            callableId = node.callable
+            for each a: (zast.kidsOf :ast span: node.arguments) loop {
+                argIds.append from: a
+            }
+        } case dottedpath then {} case atomid then {
+            nameId = node.name
+        } case labelvalue then {
+            nameId = node.name
+        } else null
+    }
+    if kind.call then {
+        if (refuseAppliedTwice :st :ast :nid :callableId) then return
+        # a parameterized type ref resolves to its mono now, and the call
+        # carries the instance stamp
+        (
+            resolveMonoRefInline
+            :st
+            :scope
+            :ast
+            :unitDecl
+            :thisName
+            enclDecl: ztypes.declid
+            opNid: nid
+            :nid
+        )
+        recordTyperefArgs :st :scope :ast :unitDecl :thisName :callableId :argIds
+        if (ast.nodes.get i: callableId).dottedpath then (
+            refuseUnknownPathHead
+            :st
+            :scope
+            :ast
+            :unitDecl
+            :callableId
+        )
+        return
+    }
+    if kind.dottedpath then {
+        recordDottedTyperef :st :ast :unitDecl :scope :thisName :nid
+        return
+    }
+    if kind.atomid or kind.labelvalue when st.mode.typerefHead.not then (
+        st.walk.bareTyperefNodes.add
+        item: nid
+    )
+    if kind.atomid then {
+        recordResolvedName :st :scope :ast :unitDecl :thisName :nameId :nid recScope: scope
+        return
+    }
+    if kind.labelvalue then {
+        recordResolvedName :st :scope :ast :unitDecl :thisName :nameId :nid recScope: scope
+    }
+}
+
+# refuseAppliedTwice -- the type reference `nid` gives arguments to a head
+# that is an application already (`(Box i64) 5`, or `(Box i64)` with a stray
+# word on the line below it). A type takes its arguments once, and unreported
+# the reference named a type nothing declares. True when it reported.
+refuseAppliedTwice: function {
+    st: zenv.ZSymbolTable
+    ast: Ast.view
+    nid: zast.nodeid
+    callableId: zast.nodeid
+} out bool is {
+    if (ast.nodes.get i: callableId).call.not then return false
+    if (operatorPartsAt :ast :nid).found then return false
+    pos: zast.posOf n: (ast.nodes.get i: callableId)
+    head: typeExprText :ast nid: callableId
+    (
+        addErrorWithHint
+        :st
+        nodeid: nid
+        lineno: pos.line
+        colno: pos.col
+        e: zast.err.genericError
+        msg: "'\{head}' is a type already: it takes no further arguments"
+        note: String
+        hint: "a word written after the type, on its line or the next, reads as one more argument".string
+        width: 1
+    )
+    st.typing.refusedValues.add item: nid
+    return true
+}
+
+# stampTypePathAlias -- a signature's type-ref that is an alias reached through
+# a type (`Tree.Node`, `B.Elem`) is stamped where the signature resolves it,
+# and kept from the deferred stamp, which resolves names, not paths. A body
+# binds a parameter from this stamp; without it, the path read as an arm
+# default and typed the parameter as the path's parent.
+stampTypePathAlias: function {
+    st: zenv.ZSymbolTable
+    ast: Ast
+    scope: ztypes.declid
+    nid: zast.nodeid
+} is {
+    par: zast.nodeid
+    chd: zast.nodeid
+    {
+        n: ast.nodes.get i: nid
+        if n.dottedpath then {
+            par = n.parent
+            chd = n.child
+        }
+    }
+    if par.isZero then return
+    t: (
+        typePathAliasTid
+        :st
+        :ast
+        :scope
+        parentNid: par
+        leafId: (atomNameId :ast n: (ast.nodes.get i: chd))
+        :nid
+    )
+    if t.isZero then return
+    ztyping.nodeTypeSet tbl: st.typing.nodeType :nid tid: t
+    st.walk.noStampNode.set key: nid value: true
+}
+
+# recordReturnType -- record a function's `out T` return type-ref (mirrors
+# demandReturnType's extraction). A parameterized return (out (Result ...)) yields no
+# bare base name and is skipped (its mono is NULL-defined, filtered out anyway).
+recordReturnType: function {
+    st: zenv.ZSymbolTable
+    ast: Ast
+    unitDecl: ztypes.declid
+    scope: ztypes.declid
+    thisName: StringView
+    oId: zast.nodeid
+} is {
+    if oId.isZero then return
+    refuseMarkedFunctionType :st :ast :unitDecl :scope typeNid: oId
+    # the return still types as the interface the misplaced marker names
+    refuseMisplacedImplement :st :ast nid: oId
+    # an alias of the enclosing type is stamped now (typeAsMemberTid): the
+    # deferred stamp may meet it while its target is still being minted. One
+    # reached through a type is stamped now too: the dotted return is checked
+    # before any stamp (checkReturnNamesType)
+    rnm: zast.nameid
+    {
+        rn: ast.nodes.get i: oId
+        if rn.atomid then rnm = rn.name
+    }
+    stampTypePathAlias :st :ast :scope nid: oId
+    # only a name some `as` item spells as a type may be an alias
+    if rnm.notZero when (st.walk.asTypeShapedNames.has item: rnm) when (
+        thisName.length > 0
+    ) when (
+        st.reg.isGenericParamOf
+        tdecl: (declOfUnitDef :st :scope :unitDecl nameId: (nameIdOf :ast name: thisName))
+        name: rnm
+    ).not then (
+        genericParamTypeId
+        :st
+        :ast
+        :unitDecl
+        :scope
+        nameId: rnm
+        :thisName
+        nid: oId
+    )
+    if (refuseLiteralReturn :st :ast :oId) then return
+    recordTyperef :st :scope :ast :unitDecl :thisName nid: oId
+    checkReturnNamesType :st :scope :ast :unitDecl :thisName :oId
+}
+
+# refuseLiteralReturn -- an `out` clause that writes a literal, or a member of
+# one, where a type belongs (`out 5`, `out "abc".string`). A literal is a
+# value, and unreported the function returned nothing. True when it reported.
+refuseLiteralReturn: function {st: zenv.ZSymbolTable ast: Ast.view oId: zast.nodeid} out bool is {
+    root: oId
+    isLiteral: false
+    for root.notZero loop {
+        rn: ast.nodes.get i: root
+        next: zast.nodeid
+        if rn.dottedpath then next = rn.parent
+        if rn.atomstring then isLiteral = true
+        if rn.atomid when (isNumericLiteralNameAt :ast ref: rn.name) then isLiteral = true
+        root = next
+    }
+    if isLiteral.not then return false
+    outNode: ast.nodes.get i: oId
+    (
+        addResolveErrorAt
+        :st
+        nodeid: oId
+        lineno: (nodeLine n: outNode)
+        colno: (nodeCol n: outNode)
+        e: zast.err.typeError
+        msg: "an `out` type names a type: this is a literal, which is a value".string
+        width: 1
+    )
+    return true
+}
+
+# checkReturnNamesType -- a dotted `out` type the typeref pass left untyped: its
+# leaf is no marker, bound or numeric suffix and its parent no unit, so it named
+# no type (`out Bag.bogus`, `out Bag.drop`, `out mode.slow`). Reported, and typed
+# as the parent so its uses check against something; unreported, the return
+# typed as null and the first use said so.
+checkReturnNamesType: function {
+    st: zenv.ZSymbolTable
+    scope: ztypes.declid
+    ast: Ast
+    unitDecl: ztypes.declid
+    thisName: StringView
+    oId: zast.nodeid
+} is {
+    if (ztyping.nodeTypeAt tbl: st.typing.nodeType nid: oId).notZero then return
+    # three words in a row read as an operator between two operands
+    # (`out String String String`), which is no type
+    oc: callRefAt :ast nid: oId
+    if oc.nid.notZero when oc.infix then {
+        outNode: ast.nodes.get i: oId
+        (
+            addResolveErrorAt
+            :st
+            nodeid: oId
+            lineno: (nodeLine n: outNode)
+            colno: (nodeCol n: outNode)
+            e: zast.err.typeError
+            msg: "an `out` type is one type: this reads as an operator between two values, which names none".string
+            width: 1
+        )
+        return
+    }
+    parentId: zast.nodeid
+    leafId: zast.nameid
+    {
+        rn: ast.nodes.get i: oId
+        match (
+            rn
+        ) case dottedpath then {
+            parentId = rn.parent
+            leafId = atomNameId :ast n: (ast.nodes.get i: rn.child)
+        } else null
+    }
+    if parentId.isZero or leafId.isZero then return
+    if (leafNamesNoMember :leafId) then return
+    pnId: atomNameId :ast n: (ast.nodes.get i: parentId)
+    if pnId.isZero then return
+    if (isNumericLiteralNameAt :ast ref: pnId) then return
+    if (nameDenotesUnit :st :scope nameId: pnId) then return
+    if (qualifierUnitDecl :st :scope :ast nid: parentId).notZero then return
+    reportReturnNamesNoType :st :scope :ast :unitDecl nid: oId unitId: pnId memberId: leafId
+    recordResolvedName :st :scope :ast :unitDecl :thisName nameId: pnId nid: oId recScope: scope
+    recordTyperef :st :scope :ast :unitDecl :thisName nid: parentId
+}
+
+# reportReturnNamesNoType -- the report for checkReturnNamesType: `.drop` is a
+# statement, a member of the parent (an arm) is a value, and any other leaf names
+# nothing.
+reportReturnNamesNoType: function {
+    st: zenv.ZSymbolTable
+    scope: ztypes.declid
+    ast: Ast
+    unitDecl: ztypes.declid
+    nid: zast.nodeid
+    unitId: zast.nameid
+    memberId: zast.nameid
+} is {
+    rdc: declOfUnitDef :st :unitDecl :scope nameId: unitId
+    child: ztypes.declid
+    if rdc.notZero then child = st.typing.declFindChild parentDeclId: rdc nameId: memberId
+    if (memberId == zast.wellKnown.slot.wkDrop) or child.isZero then {
+        reportPeeledLeaf :st :scope :ast :unitDecl :nid leafId: memberId
+        return
+    }
+    pT: zast.nameTextCopy :ast ref: unitId
+    mT: zast.nameTextCopy :ast ref: memberId
+    n: ast.nodes.get i: nid
+    (
+        addResolveErrorAt
+        :st
+        nodeid: nid
+        lineno: (nodeLine :n)
+        colno: (nodeCol :n)
+        e: zast.err.typeError
+        msg: "an `out` type names '\{mT}', a member of '\{pT}', not a type"
+        width: pT.length
+    )
+}
+
+# dottedTyperefShell -- the shell a dotted type-ref names: a unit-qualified type, a
+# nested namespace's type, a member type of a type, or the parent a marker peels
+# back to (`Container.private.borrow`, `direction.north`).
+dottedTyperefShell: function {
+    st: zenv.ZSymbolTable
+    ast: Ast
+    unitDecl: ztypes.declid
+    scope: ztypes.declid
+    nid: zast.nodeid
+    thisName: StringView
+} out ztypes.tid is {
+    # the dotted row's parent and child ids
+    parentId: zast.nodeid
+    childId: zast.nodeid
+    typeExpr: ast.nodes.get i: nid
+    if typeExpr.dottedpath then {
+        parentId = typeExpr.parent
+        childId = typeExpr.child
+    }
+    if parentId.isZero then return ztypes.tid.zero
+    # A cross-unit qualified type ref (zlexer.token) names the MEMBER in the
+    # referenced unit -- resolve the child like a bare atom. Otherwise a dotted
+    # type-expr peels to its parent: an ownership/access strip marker
+    # (Container.private.borrow) or a variant/union subtype default where the arm
+    # is the default value and the type is the parent (direction.north).
+    # owned copies: the resolutions below lend ast
+    pId: atomNameId :ast n: (ast.nodes.get i: parentId)
+    cId: atomNameId :ast n: (ast.nodes.get i: childId)
+    # refused where it is written, the slot is declared with no type
+    # (memberDefinitionFailed), as a type-ref naming a value is
+    if (refuseMisplacedImplement :st :ast :nid) then return ztypes.tid.zero
+    # a unit INSTANCE's member type (`ic.Cell` with `ic: (cells t: i64)`) names
+    # that instance's own copy
+    uim: instanceTyperefMember :st :scope :ast :unitDecl :nid :pId :cId
+    if uim.notZero then return uim
+    # a member of a unit the declarations name (a file unit, a nested unit, a
+    # path of them, an alias of any): the member, the way a cross-unit ref is
+    if (isStripMarkerId nameId: cId).not then {
+        qm: pathMemberTypeTid :st :ast :scope :parentId leafId: cId :nid
+        if qm.notZero then return qm
+    }
+    if (qualifierNamesUnit :st :scope qualId: pId memberId: cId) then {
+        demandUnitMember :st unitNameId: pId nameId: cId
+        ud8: unitDeclOfNameOrOwn :st :scope nameId: pId
+        parentDecl: descendNamedId :st :scope :ast unitDecl: ud8 nameId: cId
+        if parentDecl.notZero then return parentDecl
+        return (resolveAtomType :st :scope :ast :unitDecl nameId: cId :thisName)
+    } else {
+        # a dotted numeric literal (4.u64, 2.5.f32) declares the SUFFIX
+        # type: peeling to the numeric parent would collapse it to the
+        # literal default (i64/f64), silently mistyping the slot. A suffix is
+        # the system's scalar, as it is on a literal in an expression,
+        # whatever the program declares under its name
+        isSfx: isScalarNameId id: cId
+        if (isNumericLiteralNameAt :ast ref: pId) when isSfx then {
+            return (scalarTidOf :st :scope :ast nameId: cId)
+        }
+        return (peeledTyperef :st :scope :ast :unitDecl :nid :parentId leafId: cId :thisName)
+    }
+}
+
+# numericParamTyperef -- a dotted type-ref whose leaf is a numeric generic
+# parameter of the type its parent names: an instance's singleton type
+# (`(Box cap: 5).cap`, `B5.cap` with `B5: (Box cap: 5)`). Through the template
+# itself (`Box.cap`) it is the parameter's own type inside the template, as the
+# bare name is, and outside it is refused: only an instance has a value for
+# it, and the type-ref keeps the bound. 0 when the leaf is no such parameter.
+# The answer is kept by the type-ref (WalkState.singletonPaths) and stamped on
+# it: a later resolution of it -- the navigation stamp, which knows less of
+# where it is written -- reads it back.
+numericParamTyperef: function {
+    st: zenv.ZSymbolTable
+    scope: ztypes.declid
+    ast: Ast
+    unitDecl: ztypes.declid
+    nid: zast.nodeid
+    parentId: zast.nodeid
+    leafId: zast.nameid
+    thisName: StringView
+} out ztypes.tid is {
+    if (leafNamesNoMember :leafId) or (isScalarNameId id: leafId) then return ztypes.tid
+    if leafId == zast.wellKnown.slot.wkDrop then return ztypes.tid
+    kept: st.walk.singletonPaths.get key: nid
+    if kept.some then return kept
+    r: numericParamTyperefOf :st :scope :ast :unitDecl :nid :parentId :leafId :thisName
+    if r.notZero then {
+        ztyping.nodeTypeSet tbl: st.typing.nodeType :nid tid: r
+        st.walk.singletonPaths.set key: nid value: r
+    }
+    return r
+}
+
+# numericParamTyperefOf -- what numericParamTyperef answers for a type-ref it
+# has not answered before: the parent is resolved, and a template's parameter
+# named outside the template is reported.
+numericParamTyperefOf: function {
+    st: zenv.ZSymbolTable
+    scope: ztypes.declid
+    ast: Ast
+    unitDecl: ztypes.declid
+    nid: zast.nodeid
+    parentId: zast.nodeid
+    leafId: zast.nameid
+    thisName: StringView
+} out ztypes.tid is {
+    # the template named bare is no type without its arguments: it is resolved
+    # as a name, which says nothing of that
+    tdecl: ztypes.declid
+    pnId: zast.atomNameIdOf n: (ast.nodes.get i: parentId)
+    if pnId.notZero then {
+        tt: (
+            resolveTyperefAtomShell
+            :st
+            :scope
+            :ast
+            :unitDecl
+            nameId: pnId
+            :thisName
+            demand: true
+            nid: parentId
+        )
+        if (st.reg.isGenericOf tid: tt) when (st.reg.genericOriginOf tid: tt).isZero then {
+            tdecl = st.typing.declIdOfType typeId: tt
+        }
+    }
+    cd: st.reg.genericParamConstraintOf :tdecl paramName: leafId
+    if cd.numKind.has.not then {
+        pt: resolveTyperefShell :st :scope :ast :unitDecl nid: parentId :thisName
+        if pt.isZero then return ztypes.tid
+        return (st.typing.singletonOf instance: pt param: leafId)
+    }
+    bound: numericBoundTid :ast :st :scope :cd
+    if bound.isZero then return ztypes.tid
+    # a field's type-ref resolves in the scope its type is written in
+    encl: declOfUnitDef :st :unitDecl :scope nameId: (nameIdOf :ast name: thisName)
+    if (scopeIsWithin typing: st.typing :scope root: tdecl) or (encl == tdecl) then {
+        return (abstractSingletonOf :st :ast :tdecl param: leafId :bound)
+    }
+    cn: zast.nameTextAt :ast ref: leafId
+    tn: zast.nameTextAt :ast ref: (st.typing.decls.get i: tdecl).name
+    n: ast.nodes.get i: nid
+    (
+        addErrorWithHint
+        :st
+        nodeid: nid
+        lineno: (nodeLine :n)
+        colno: (nodeCol :n)
+        e: zast.err.constError
+        msg: "'\{cn}' is a numeric generic parameter of '\{tn}', which only an instance has a value for"
+        note: String
+        hint: "name it through an instance of '\{tn}'"
+        width: cn.length
+    )
+    return bound
+}
+
+# reportPeeledLeaf -- a dotted type-ref about to peel to its parent: `.drop` is
+# a statement and declares nothing (`h: Bag.drop`), and a leaf that is neither
+# a marker nor a member of the parent names nothing (`h: Bag.bogus`).
+reportPeeledLeaf: function {
+    st: zenv.ZSymbolTable
+    scope: ztypes.declid
+    ast: Ast
+    unitDecl: ztypes.declid
+    nid: zast.nodeid
+    leafId: zast.nameid
+} is {
+    if leafId != zast.wellKnown.slot.wkDrop then {
+        reportMissingTypeMember :st :scope :ast :unitDecl op: nid
+        return
+    }
+    n: ast.nodes.get i: nid
+    (
+        addErrorWithHint
+        :st
+        nodeid: nid
+        lineno: (nodeLine :n)
+        colno: (nodeCol :n)
+        e: zast.err.typeError
+        msg: "`.drop` is a statement, not a declaration marker".string
+        note: "".string
+        hint: "".string
+        width: 1
+    )
+}
+
+# peeledTyperef -- the type a dotted type-ref peels to, its parent's. The
+# parent is the type only when the leaf is a marker or a member of it (an arm
+# default); any other leaf names nothing, and is reported before the peel so
+# the slot still types. A parent that is itself a path (`shade.hue.green`) is
+# resolved first, and the leaf asked of what it resolved to.
+peeledTyperef: function {
+    st: zenv.ZSymbolTable
+    scope: ztypes.declid
+    ast: Ast
+    unitDecl: ztypes.declid
+    nid: zast.nodeid
+    parentId: zast.nodeid
+    leafId: zast.nameid
+    thisName: StringView
+} out ztypes.tid is {
+    # an instance's numeric generic parameter is no member to peel: it is the
+    # instance's singleton type
+    npT: numericParamTyperef :st :scope :ast :unitDecl :nid :parentId :leafId :thisName
+    if npT.notZero then return npT
+    # a root that names nothing is the one report: it is deferred as a bare
+    # type-ref's is (stampOnePendingTyperef), and the shell the peel mints for
+    # it has no member to ask a leaf of
+    rootU: unknownPathRoot :st :ast :nid rf: scope origin: unitDecl
+    if rootU.notZero then (
+        recordNodeNameId
+        :st
+        nameId: (atomNameId :ast n: (ast.nodes.get i: rootU))
+        nid: rootU
+        :scope
+    )
+    if (ast.nodes.get i: parentId).dottedpath then {
+        pathTid: resolveTyperefShell :st :scope :ast :unitDecl nid: parentId :thisName
+        if rootU.isZero then (
+            reportPathLeaf
+            :st
+            :scope
+            :ast
+            :unitDecl
+            :nid
+            :leafId
+            parentTid: pathTid
+        )
+        return pathTid
+    }
+    reportPeeledLeaf :st :scope :ast :unitDecl :nid :leafId
+    pt: resolveTyperefShell :st :scope :ast :unitDecl nid: parentId :thisName
+    reportAppliedLeaf :st :ast :nid :parentId :leafId tid: pt
+    return pt
+}
+
+# reportAppliedLeaf -- reportPeeledLeaf's missing-member half for a parent that
+# is an application (`(ListVal i64).zork`): reportMissingTypeMember reads a
+# parent by its name, and an application has none, so the leaf went unasked.
+# `tid` is what the parent resolved to.
+reportAppliedLeaf: function {
+    st: zenv.ZSymbolTable
+    ast: Ast
+    nid: zast.nodeid
+    parentId: zast.nodeid
+    leafId: zast.nameid
+    tid: ztypes.tid
+} is {
+    if tid.isZero or leafId.isZero then return
+    if (ast.nodes.get i: parentId).call.not then return
+    # a parent that resolved to no declared type -- an expression written
+    # where a type goes -- has its own report
+    if (st.reg.genericOriginOf :tid).isZero when (st.typing.declIdOfType typeId: tid
+    ).isZero then return
+    if (leafNamesNoMember :leafId) then return
+    if (st.typing.declChildOfId parentTypeId: tid nameId: leafId).some then return
+    n: ast.nodes.get i: nid
+    tn: specWrittenName :st :ast :tid
+    (
+        addError
+        :st
+        nodeid: nid
+        lineno: (nodeLine :n)
+        colno: (nodeCol :n)
+        e: zast.err.typeError
+        msg: "type '\{tn}' has no member '\{zast.nameTextAt :ast ref: leafId}'"
+    )
+}
+
+# reportPathLeaf -- reportPeeledLeaf for a dotted type-ref whose parent is
+# itself a path (`shade.hue.green`): the leaf is asked of the type the parent
+# resolved to, which no root name reaches.
+reportPathLeaf: function {
+    st: zenv.ZSymbolTable
+    scope: ztypes.declid
+    ast: Ast
+    unitDecl: ztypes.declid
+    nid: zast.nodeid
+    leafId: zast.nameid
+    # the type the parent path resolved to, 0 when it resolved to none
+    parentTid: ztypes.tid
+} is {
+    if leafId == zast.wellKnown.slot.wkDrop then {
+        reportPeeledLeaf :st :scope :ast :unitDecl :nid :leafId
+        return
+    }
+    if parentTid.isZero or (leafNamesNoMember :leafId) then return
+    if (st.reg.typetypeOf typeId: parentTid) == ztypes.ztypetype.unitType then return
+    if (st.typing.declChildOfId parentTypeId: parentTid nameId: leafId).some then return
+    n: ast.nodes.get i: nid
+    root: st.reg.nameOf tid: parentTid
+    member: zast.nameTextAt :ast ref: leafId
+    (
+        addErrorWithHint
+        :st
+        nodeid: nid
+        lineno: (nodeLine :n)
+        colno: (nodeCol :n)
+        e: zast.err.typeError
+        msg: "type '\{root}' has no member '\{member}'"
+        note: "".string
+        hint: "".string
+        width: root.length
+    )
+}
+
+# numericParamBoundOf -- the type numeric generic parameter `nameId` of `owner`
+# is: its bound's.
+numericParamBoundOf: function {
+    st: zenv.ZSymbolTable
+    ast: Ast
+    scope: ztypes.declid
+    owner: ztypes.declid
+    nameId: zast.nameid
+} out ztypes.tid is {
+    cd: st.reg.genericParamConstraintOf tdecl: owner paramName: nameId
+    return (numericBoundTid :ast :st :scope :cd)
+}
+
+# resolveTyperefShell -- register a SHALLOW named shell for a referenced type
+# (e.g. the `i64` in `n: i64`), routing atom names through resolveAtomType so
+# `this`/numeric-default atoms resolve correctly. A parenthesized parameterized
+# type `(T arg: N)` (a call) mangles to a `T_N` shell.
+# Source-type rows never include these shells (they fall outside `defined_in_unit`),
+# but a `type_children` row joins to the shell's name. Returns the shell's type id.
+resolveTyperefShell: function {
+    st: zenv.ZSymbolTable
+    ast: Ast
+    unitDecl: ztypes.declid
+    scope: ztypes.declid
+    nid: zast.nodeid
+    thisName: StringView
+} out ztypes.tid is {
+    # a declaration refused where it is written declares no type
+    if (nodeRefused :st :nid) then return ztypes.tid
+    # the row is read through a view scoped to this block: the resolutions
+    # below lend ast exclusively
+    kind: zast.nodekind.placeholder
+    nameId: zast.nameid
+    callableId: zast.nodeid
+    argIds: ListVal zast.nodeid
+    {
+        typeExpr: ast.nodes.get i: nid
+        kind = zast.kindOf n: typeExpr
+        match (
+            typeExpr
+        ) case atomid then {
+            nameId = typeExpr.name
+        } case labelvalue then {
+            nameId = typeExpr.name
+        } case call then {
+            callableId = typeExpr.callable
+            for each a: (zast.kidsOf :ast span: typeExpr.arguments) loop {
+                argIds.append from: a
+            }
+        } case dottedpath then {} else null
+    }
+    if kind.atomid or kind.labelvalue then {
+        r: (
+            resolveTyperefAtomShell
+            :st
+            :scope
+            :ast
+            :unitDecl
+            :nameId
+            :thisName
+            demand: kind.atomid
+            :nid
+        )
+        # a receiver's `this` is the type being declared
+        if nameId != zast.wellKnown.slot.wkThis then {
+            return (bareGenericType :st :ast :unitDecl tid: r :nid :scope :thisName)
+        }
+        return r
+    }
+    if kind.call then return (
+        resolveTyperefCallShell
+        :st
+        :scope
+        :ast
+        :unitDecl
+        :thisName
+        :callableId
+        :argIds
+        :nid
+    )
+    if kind.dottedpath then {
+        return (dottedTyperefShell :st :ast :unitDecl :scope :nid :thisName)
+    }
+    # anything else is a value, not a type: its fold has said why it is
+    # refused, and the member is declared with no type (memberDefinitionFailed)
+    st.typing.refusedValues.add item: nid
+    return ztypes.tid.zero
+}
+
+# refuseUnknownPathHead -- the head of a type application is a path that names
+# nothing: its root is no name at all (`s.substring i64`), or its base is a unit
+# that declares no such member (`io.nosuch i64`). A bare name may be defined
+# further down; a path names what its base holds now, so nothing later gives it
+# a meaning. Asked where a declaration writes a type (recordTyperef). True when
+# it reported.
+refuseUnknownPathHead: function {
+    st: zenv.ZSymbolTable
+    scope: ztypes.declid
+    ast: Ast
+    unitDecl: ztypes.declid
+    callableId: zast.nodeid
+} out bool is {
+    parentId: zast.nodeid
+    leafId: zast.nameid
+    {
+        cn: ast.nodes.get i: callableId
+        if cn.dottedpath then {
+            parentId = cn.parent
+            leafId = atomNameId :ast n: (ast.nodes.get i: cn.child)
+        }
+    }
+    if parentId.isZero or leafId.isZero then return false
+    if (leafNamesNoMember :leafId) then return false
+    # an operator's operand is a value, which the value walk answers for
+    if (isOperatorName name: (zast.nameTextAt :ast ref: leafId).stringView) then return false
+    unknown: (unknownPathRoot :st :ast nid: callableId rf: scope origin: unitDecl).notZero
+    if unknown.not then {
+        ud: qualifierUnitDecl :st :scope :ast nid: parentId
+        if ud.isZero then return false
+        head: typeApplicationTemplate :st :scope :ast :unitDecl callableNid: callableId
+        unknown = head.isZero
+    }
+    if unknown.not then return false
+    pos: zast.posOf n: (ast.nodes.get i: callableId)
+    spelled: typeExprText :ast nid: callableId
+    (
+        addErrorWithHint
+        :st
+        nodeid: callableId
+        lineno: pos.line
+        colno: pos.col
+        e: zast.err.badReference
+        msg: "Unknown type '\{spelled}'"
+        note: String
+        hint: "the head of a type application names a type".string
+        width: spelled.length
+    )
+    return true
+}
+
+# resolveFieldTyperef -- resolveTyperefShell for a member's declared type: an
+# edge of the containment graph, and never a literal's pseudo-type outside a
+# static position (refuseLiteralTyperef).
+resolveFieldTyperef: function {
+    st: zenv.ZSymbolTable
+    ast: Ast
+    unitDecl: ztypes.declid
+    scope: ztypes.declid
+    nid: zast.nodeid
+    thisName: StringView
+} out ztypes.tid is {
+    savedMode: st.mode
+    st.mode.inContainmentEdge = true
+    cid: resolveTyperefShell :st :scope :ast :unitDecl :nid :thisName
+    st.mode = savedMode
+    refuseLiteralTyperef :st :ast :nid tid: cid
+    return cid
+}
+
+# leafNamesNoMember -- a path leaf that marks its root rather than naming a
+# member of it: `.generic`, `.implement`, an ownership or access marker, and
+# the tag spec.
+leafNamesNoMember: function {leafId: zast.nameid} out bool is {
+    if leafId == zast.wellKnown.slot.wkTag then return true
+    if (isStripMarkerId nameId: leafId) then return true
+    k: zast.markerKindOfName id: leafId
+    return k.genericBound or k.implementMarker
+}
+
+# reportMissingTypeMember -- a dotted value `P.m` whose root names a TYPE (not a
+# unit, not a constant) that declares no member `m`: the report a read of the
+# same path gets in a body, placed at the declaration. A marker leaf --
+# `.generic`, an ownership or access marker -- and the tag spec name no member. True when it reported.
+reportMissingTypeMember: function {
+    st: zenv.ZSymbolTable
+    scope: ztypes.declid
+    ast: Ast
+    unitDecl: ztypes.declid
+    op: zast.nodeid
+} out bool is {
+    rootId: zast.nameid
+    leafId: zast.nameid
+    ln: u32
+    co: u32
+    n: ast.nodes.get i: op
+    if n.dottedpath.not then return false
+    rootId = atomNameId :ast n: (ast.nodes.get i: n.parent)
+    leafId = atomNameId :ast n: (ast.nodes.get i: n.child)
+    ln = nodeLine n: (ast.nodes.get i: op)
+    co = nodeCol n: (ast.nodes.get i: op)
+    if rootId.isZero or leafId.isZero then return false
+    if (leafNamesNoMember :leafId) then return false
+    if (isNumericLiteralNameAt :ast ref: rootId) then return false
+    # a root this unit declares as no type -- a constant (`N: LEN.u32`), an
+    # alias -- is read through the value channel, which reports its own miss
+    rdc: declOfUnitDef :st :unitDecl :scope nameId: rootId
+    if rdc.notZero when (declDefTypetype :st :ast declId: rdc).none then return false
+    rto: walkLookupTyperefById :ast :st :unitDecl :scope baseId: rootId
+    if rto.none then return false
+    rt: rto
+    if (st.reg.typetypeOf typeId: rt) == ztypes.ztypetype.unitType then return false
+    if (st.typing.declChildOfId parentTypeId: rt nameId: leafId).some then return false
+    root: zast.nameTextAt :ast ref: rootId
+    member: zast.nameTextAt :ast ref: leafId
+    (
+        addErrorWithHint
+        :st
+        nodeid: op
+        lineno: ln
+        colno: co
+        e: zast.err.typeError
+        msg: "type '\{root}' has no member '\{member}'"
+        note: "".string
+        hint: "".string
+        width: root.length
+    )
+    return true
+}
+
+# refuseMisplacedImplement -- `.implement` outside a type's `as` block. Only an
+# item there declares that its type implements an interface, and attachMarkers
+# reads such an item at its base, so a path ending in the marker that reaches a
+# type-ref, a value or another block's item is misplaced. True when `nid` ends
+# in it; the report is placed at the marker, and stands for every read of what
+# it declares (memberDefinitionFailed).
+refuseMisplacedImplement: function {st: zenv.ZSymbolTable ast: Ast nid: zast.nodeid} out bool is {
+    if (zast.implementBaseOf :ast opId: nid).isZero then return false
+    st.typing.refusedValues.add item: nid
+    n: ast.nodes.get i: nid
+    if n.dottedpath.not then return false
+    lf: ast.nodes.get i: n.child
+    (
+        addErrorWithHint
+        :st
+        nodeid: n.child
+        lineno: (nodeLine n: lf)
+        colno: (nodeCol n: lf)
+        e: zast.err.typeError
+        msg: "`.implement` is written only as an item of a type's `as` block".string
+        note: "".string
+        hint: "".string
+        width: 9
+    )
+    return true
+}
+
+# staticListOutParts -- a list's `out` type, when it is `staticlist` or an instance of it,
+# taken apart. The parameters are read by position in the template's own
+# declaration: the element first, then the index. What the `out` node WROTE
+# decides what is untyped -- the instance itself materialises a literal
+# argument.
+staticListOutParts: function {
+    ast: Ast
+    st: zenv.ZSymbolTable
+    scope: ztypes.declid
+    unitDecl: ztypes.declid
+    valueTid: ztypes.tid
+    outId: zast.nodeid
+} out staticlistoutparts is {
+    none: (
+        staticlistoutparts
+        isValue: false
+        elem: ztypes.tid
+        index: ztypes.tid
+        elemLiteral: false
+        indexLiteral: false
+    )
+    if valueTid.isZero then return none
+    tpl: st.reg.genericOriginOf tid: valueTid
+    if tpl.isZero then tpl = valueTid
+    if tpl != (stdTid :ast :st wk: zast.wellKnown.slot.tyStaticlist) then return none
+    elem: st.reg.genericTypeArgAt specId: valueTid ordinal: 0
+    idx: st.reg.genericTypeArgAt specId: valueTid ordinal: 1
+    pn: st.reg.genericParamNamesOf tdecl: (st.typing.declIdOfType typeId: tpl)
+    # what the `out` wrote for each part: nothing, or a literal type, leaves
+    # it untyped
+    wrote: (
+        staticListOutWrote
+        :ast
+        :st
+        :scope
+        :unitDecl
+        :outId
+        elemName: (pn.get i: 0)
+        idxName: (pn.get i: 1)
+    )
+    elemWrote: wrote.elem
+    idxWrote: wrote.index
+    eLit: elemWrote.isZero or (isAnyLiteralTid :st tid: elemWrote)
+    iLit: idxWrote.isZero or (isLiteralTypeId reg: st.reg tid: idxWrote)
+    if iLit then idx = ztypes.tid.zero
+    return (staticlistoutparts isValue: true :elem index: idx elemLiteral: eLit indexLiteral: iLit)
+}
+
+# staticlistoutwrote -- the element and index types a list's `out` names as its type's
+# arguments, 0 for a part it leaves to the template's default.
+staticlistoutwrote: record {
+    # the element type written, positionally or by its parameter's name
+    elem: ztypes.tid
+    # the index type written, by its parameter's name
+    index: ztypes.tid
+}
+
+# typeAppArgs -- the argument nodes of a type application (`(staticlist u8 i: nid)`),
+# in order; none for a bare name.
+typeAppArgs: function {ast: Ast.view nid: zast.nodeid} out ListVal zast.nodeid is {
+    args: ListVal zast.nodeid
+    n: ast.nodes.get i: nid
+    if n.call then {
+        ak: u64
+        for ak < n.arguments.count loop {
+            args.append (zast.kidAt kids: ast.kids span: n.arguments i: ak)
+            ak = ak + 1
+        }
+    }
+    return args
+}
+
+# staticListOutWrote -- what `(staticlist u8 i: nid)` writes for each parameter of its
+# template: an unlabelled argument is the element, and a labelled one is the
+# parameter it names.
+staticListOutWrote: function {
+    ast: Ast
+    st: zenv.ZSymbolTable
+    scope: ztypes.declid
+    unitDecl: ztypes.declid
+    outId: zast.nodeid
+    elemName: zast.nameid
+    idxName: zast.nameid
+} out staticlistoutwrote is {
+    elemWrote: ztypes.tid
+    idxWrote: ztypes.tid
+    args: typeAppArgs :ast nid: outId
+    positional: u64
+    for each argId: args loop {
+        lbl: zast.nameid
+        opId: zast.nodeid
+        {
+            an: ast.nodes.get i: argId
+            if an.namedoperation then {
+                lbl = an.name
+                opId = an.operation
+            }
+        }
+        if opId.isZero then continue
+        at: resolveTyperefShell :st :scope :ast :unitDecl nid: opId thisName: ""
+        # an untyped element or index is written as its literal type here
+        if (isAnyLiteralTid :st tid: at) then st.walk.staticLiteralTyperefs.add item: opId
+        first: lbl.isZero and (positional == 0)
+        if lbl.isZero then positional = positional + 1
+        if lbl.notZero and (lbl == elemName) or first then elemWrote = at
+        if lbl.notZero and (lbl == idxName) then idxWrote = at
+    }
+    return (staticlistoutwrote elem: elemWrote index: idxWrote)
+}
+
+# unknownPathRoot -- the root atom of a dotted type-ref (`nosuch.os`) whose root
+# names nothing: no unit, no declaration in scope, no generic parameter, nothing
+# a scope claims or a loaded unit resolves. 0 for any other ref -- a bare name
+# under strip markers (`Crate.private.view`) is reported as the bare name it is.
+unknownPathRoot: function {
+    st: zenv.ZSymbolTable
+    ast: Ast
+    # the dotted type-ref
+    nid: zast.nodeid
+    rf: ztypes.declid
+    origin: ztypes.declid
+} out zast.nodeid is {
+    none: zast.nodeid.zero
+    if (ast.nodes.get i: nid).dottedpath.not then return none
+    if (markedBareAtom :ast :nid).notZero then return none
+    cur: nid
+    rootN: zast.nodeid
+    for cur.notZero loop {
+        n: ast.nodes.get i: cur
+        if n.atomid then {
+            rootN = cur
+            cur = zast.nodeid.zero
+        } else if n.dottedpath then {
+            cur = n.parent
+        } else {
+            cur = zast.nodeid.zero
+        }
+    }
+    if rootN.isZero then return none
+    rid: atomNameId :ast n: (ast.nodes.get i: rootN)
+    if rid.isZero or (isNumericLiteralNameAt :ast ref: rid) then return none
+    if (st.walk.gpNames.has item: rid) then return none
+    if (rootNamesAnyUnit :st scope: rf nameId: rid) then return none
+    if (envLookup :st scope: rf nameId: rid).declId.notZero then return none
+    if (nameKnownAt :st :ast :rf :origin nameId: rid) then return none
+    return rootN
+}
+
+# qualifierNamesUnit -- the dotted type-ref `qual.member` is qualified by a
+# unit: `member` is no marker -- a marker is a reserved word and so no unit's
+# member, which makes `X.borrow` the marker form whatever X names -- and `qual`
+# names a unit here. A program in `t.z` is a unit `t`, and OptionViewVal's
+# `some: t.borrow` still names its own parameter, borrowed.
+qualifierNamesUnit: function {
+    st: zenv.ZSymbolTable.view
+    scope: ztypes.declid
+    qualId: zast.nameid
+    memberId: zast.nameid
+} out bool is {
+    if (isStripMarkerId nameId: memberId) then return false
+    return (nameDenotesUnit :st :scope nameId: qualId)
+}
