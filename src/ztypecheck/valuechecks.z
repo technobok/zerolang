@@ -492,13 +492,14 @@ nodeNamesType: function {
             isPath = true
         } else null
     }
-    if isPath then return (pathNamesType :st :ast :nid)
+    if isPath then return (memberaccess.pathNamesType :st :ast :nid)
     if nameId.isZero then return false
     # `type` in a type's members names that type
     if (bodySelfTypeNameId :st :nameId) != nameId then return true
     if (st.isLocalName :nameId) then return false
     # an alias of a type enclosing the body
-    if (enclosingAsAliasTid :st :ast scope: st.curScope :nameId).notZero then return true
+    if (memberaccess.enclosingAsAliasTid :st :ast scope: st.curScope :nameId
+    ).notZero then return true
     if (isNumericLiteralNameAt :ast ref: nameId) then return false
     return (nameNamesType :st :ast :unitDecl :nameId)
 }
@@ -563,7 +564,10 @@ refusedParamCopy: function {
     nameId: zast.nameid
 } out bool is {
     if st.walk.refusedParamCopies.length == 0 then return false
-    return (st.walk.refusedParamCopies.has item: (declMemberOf :st ownerTid: fnId :nameId))
+    return (
+        st.walk.refusedParamCopies.has
+        item: (memberaccess.declMemberOf :st ownerTid: fnId :nameId)
+    )
 }
 
 # bareFnRefError -- a bare reference to a function with required parameters
@@ -849,7 +853,7 @@ checkUnitMemberValue: function {
         udD = st.typing.declFindChild parentDeclId: udO nameId: cnRef
     }
     if udD.isZero then udD = templateDeclOf reg: st.reg typing: st.typing tid: memberDecl
-    stampRefDecl :st nid: dp.nid declId: udD
+    memberaccess.stampRefDecl :st nid: dp.nid declId: udD
     return result
 }
 
@@ -893,7 +897,15 @@ callFieldObject: function {
         return result
     }
     rewriteFieldReadAsObjectCall :st :ast :dp tid: result
-    return (checkDottedOn :st :unitDecl :ast dp: (dpRefAt :ast nid: dp.nid) bt: result coerce: true)
+    return (
+        memberaccess.checkDottedOn
+        :st
+        :unitDecl
+        :ast
+        dp: (dpRefAt :ast nid: dp.nid)
+        bt: result
+        coerce: true
+    )
 }
 
 # isNativeFnTid -- the tid is a FUNCTION type whose body the compiler supplies.
@@ -919,7 +931,7 @@ dottedAliasValueTid: function {st: zenv.ZSymbolTable ast: Ast dp: dpref} out zty
     }
     if bnm.notZero when (st.lookup nameId: bnm).some then return ztypes.tid.zero
     t: (
-        typePathAliasTid
+        memberaccess.typePathAliasTid
         :st
         :ast
         scope: st.curScope
@@ -957,7 +969,7 @@ checkDotted: function {
         )
         return tpv
     }
-    nsc: checkNumericSuffixCast :st :ast :dp
+    nsc: memberaccess.checkNumericSuffixCast :st :ast :dp
     if nsc.handled then return nsc.tid
     if (
         callchecks.refuseMetaMember
@@ -970,7 +982,7 @@ checkDotted: function {
     ) then return ztypes.tid.zero
     bt: moves.dottedBaseTid :st :unitDecl :ast :dp
     if bt.isZero then return ztypes.tid.zero
-    return (checkDottedOn :st :unitDecl :ast :dp :bt :coerce)
+    return (memberaccess.checkDottedOn :st :unitDecl :ast :dp :bt :coerce)
 }
 
 # checkBareTypeValue -- a bare TYPE name in value position is zero-argument
@@ -1339,7 +1351,7 @@ typeOfBareName: function {
         )
         # atom-use def reference: the DEF's declaration (nodeType
         # carries the auto-call RETURN type above, not the referent)
-        sfF: declSurfaceOfName :st :ast :unitDecl nameId: node.name tid: fo
+        sfF: memberaccess.declSurfaceOfName :st :ast :unitDecl nameId: node.name tid: fo
         # a list's name reads its value, never a construction of its type
         isList: sfF.notZero and (st.typing.decls.get i: sfF).kind.staticListDecl
         if st.mode.suppressBareCtor.not when isList.not then (
@@ -1353,7 +1365,7 @@ typeOfBareName: function {
         )
         setu: result
         stampGate :st nid: node.nid tid: setu
-        stampRefDecl :st nid: node.nid declId: sfF
+        memberaccess.stampRefDecl :st nid: node.nid declId: sfF
         # the definition the name resolved to, wherever it lives: a namespace
         # member is no definition of the unit the read is written in
         walkDefinitionById :st :ast tid: fo
@@ -1574,7 +1586,8 @@ checkUnboundAtom: function {
     if (callchecks.bodyMemberAsPath :st :ast nameId: node.name nid: node.nid) then {
         return (checkValueRowAt :st :unitDecl :ast nid: node.nid)
     }
-    if (refuseBodyFieldRead :st :ast nameId: node.name nid: node.nid) then return ztypes.tid
+    if (memberaccess.refuseBodyFieldRead :st :ast nameId: node.name nid: node.nid
+    ) then return ztypes.tid
     ncr: checkNarrowedConstRead :st :unitDecl :ast :node
     if ncr.notZero then return ncr
     if (refuseStrayControl :st :unitDecl :ast :node) then return ztypes.tid
@@ -1644,7 +1657,11 @@ checkNarrowedConstRead: function {
     arm: st.getSubtypeName nameId: node.name
     v: flow.constSumValueOf :st :ast :unitDecl nameId: node.name
     if v.kind.none or arm.isZero then return ztypes.tid.zero
-    if (armCarriesPayload :st armTid: (constValueTid :st scope: st.curScope :ast :v) armName: arm
+    if (
+        memberaccess.armCarriesPayload
+        :st
+        armTid: (constValueTid :st scope: st.curScope :ast :v)
+        armName: arm
     ).not then return ztypes.tid.zero
     tid: st.currentTypeOf declId: d
     pv: constArmPayload :st :v :arm
@@ -2294,7 +2311,7 @@ checkReassignment: function {
         return
     }
     if (
-        (refuseStaticWrite :st :ast target: rasgn.topath) or
+        (memberaccess.refuseStaticWrite :st :ast target: rasgn.topath) or
         (
             refuseSingletonWrite
             :st
@@ -2402,7 +2419,7 @@ checkReassignment: function {
     }
     numerics.checkReassignedType :st :ast :rasgn :lvt :rvt
     checkNarrowedTargetWrite :st :ast :rasgn
-    checkMethodRefTarget :st :ast :rasgn
+    memberaccess.checkMethodRefTarget :st :ast :rasgn
 }
 
 # mintRepointCompanion -- the companion of the borrowed reftype local or
@@ -2705,7 +2722,7 @@ refuseModeChange: function {
     vmode: moves.reassignValueMode :st :ast n: vn :vt
     if vmode.length == 0 then return false
     if targetHeld when (zast.markerKindOf :ast n: vn).holdMarker then return false
-    if (borrowedFieldMarkerOf :st :ast :rasgn).length > 0 then return false
+    if (memberaccess.borrowedFieldMarkerOf :st :ast :rasgn).length > 0 then return false
     moves.reportModeChange :st :ast :rasgn :targetHeld :vmode value: rasgn.value
     return true
 }
@@ -4791,7 +4808,7 @@ checkValueRowAt: function {
     nid: zast.nodeid
 } out ztypes.tid is {
     t: checkValueArmAt :st :unitDecl :ast :nid
-    refuseCompileTimeSumValue :st :ast :nid :t
+    memberaccess.refuseCompileTimeSumValue :st :ast :nid :t
     consteval.stampConstAt :st :unitDecl :ast :nid
     ult: untypedNameReadTid :st :ast :nid
     if ult.notZero then {
@@ -4911,7 +4928,7 @@ checkValueArmAt: function {
         arm
     ) case call then {
         cr: callRefAt :ast :nid
-        return (checkCall :st :unitDecl :ast call: cr)
+        return (memberaccess.checkCall :st :unitDecl :ast call: cr)
     } case dottedpath then {
         dr: dpRefAt :ast :nid
         return (checkDotted :st :unitDecl :ast dp: dr coerce: true)

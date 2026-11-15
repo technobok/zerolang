@@ -598,7 +598,11 @@ bodyMemberAsPath: function {
 } out bool is {
     md: bodyMemberDecl :st :nameId
     if md.isZero then return false
-    if (st.typing.decls.get i: md).kind.methodDecl.not when (bodyMemberIsConstant :st :ast :md
+    if (st.typing.decls.get i: md).kind.methodDecl.not when (
+        memberaccess.bodyMemberIsConstant
+        :st
+        :ast
+        :md
     ).not then {
         return false
     }
@@ -1187,15 +1191,20 @@ reportUnknownArgument: function {
     # a member refused where it is written is still the type's, as written:
     # naming it is no second error -- a construction names it through the
     # type's `create`, whose parameters are the type's fields
-    if (fieldRefusedWhereWritten :st :ast owner: ownerTid :label) then return
-    if (fieldRefusedWhereWritten :st :ast owner: (st.reg.ownerTidOf tid: ownerTid) :label
+    if (memberaccess.fieldRefusedWhereWritten :st :ast owner: ownerTid :label) then return
+    if (
+        memberaccess.fieldRefusedWhereWritten
+        :st
+        :ast
+        owner: (st.reg.ownerTidOf tid: ownerTid)
+        :label
     ) then return
     if (refuseSingletonFieldArg :st :ast owner: ownerTid :label :arg) then return
     if (refuseSingletonFieldArg :st :ast owner: (st.reg.ownerTidOf tid: ownerTid) :label :arg
     ) then return
     pn: zast.nameTextAt :ast ref: label
     m: "unknown argument '\{pn}'"
-    sug: suggestSimilar :ast :st parentTypeId: ownerTid name: pn.stringView
+    sug: memberaccess.suggestSimilar :ast :st parentTypeId: ownerTid name: pn.stringView
     h: String
     if sug.length > 0 then {
         hh: "did you mean '\{sug}'?"
@@ -1475,7 +1484,7 @@ reportDottedNoParameters: function {
     funcId: ztypes.tid
 } is {
     if call.nargs == 0 then return
-    nm: dottedChildNameId :ast n: (ast.nodes.get i: call.callable)
+    nm: memberaccess.dottedChildNameId :ast n: (ast.nodes.get i: call.callable)
     if (nm == zast.wellKnown.slot.wkReturn) or (nm == zast.wellKnown.slot.wkYield) then return
     arg: argRefAt :ast nid: (zast.callArgAt :ast nid: call.nid i: 0)
     if arg.nid.isZero then return
@@ -1538,7 +1547,11 @@ reportSurplusPositional: function {
     if effId.isZero then return
     if (st.reg.typetypeOf typeId: effId) != ztypes.ztypetype.functionType then return
     if (st.typing.declMemberCount ownerTid: effId) == 0 then return
-    fnm: zast.nameTextAt :ast ref: (dottedChildNameId :ast n: (ast.nodes.get i: call.callable))
+    fnm: (
+        zast.nameTextAt
+        :ast
+        ref: (memberaccess.dottedChildNameId :ast n: (ast.nodes.get i: call.callable))
+    )
     msp: "too many arguments: '\{fnm}' takes no parameter besides its receiver"
     (
         addError
@@ -2523,7 +2536,7 @@ checkDottedTypeApplication: function {
     errD: st.typing.errors.length
     vokD: typeargs.validateGenericTypeArgs :ast :st :unitDecl :call :tplId allowFrom: false
     gres: instantiate.genericTypeConstruction :ast :st :unitDecl :call :tplId
-    namesType: pathNamesType :st :ast nid: call.callable
+    namesType: memberaccess.pathNamesType :st :ast nid: call.callable
     if gres.notZero then {
         if namesType then {
             checkTypeApplicationValue :ast :st :call tid: gres
@@ -2607,7 +2620,7 @@ checkResolvedValueCall: function {
                     tid: (checkTypedefCreate :st :unitDecl :ast :call tdId: dro)
                 )
             }
-            if call.nargs > 0 when (pathNamesType :st :ast nid: call.callable) then {
+            if call.nargs > 0 when (memberaccess.pathNamesType :st :ast nid: call.callable) then {
                 dct: checkTypeConstruction :st :unitDecl :ast :call tid: dro
                 return (callleg handled: true tid: dct)
             }
@@ -2834,7 +2847,12 @@ checkBareGenericCall: function {
         # the callee is the TEMPLATE's declaration; the instance is
         # the call's stamped type
         fnDecl: templateDeclOf reg: st.reg typing: st.typing tid: funcId
-        stampRefDecl :st nid: (nodeId n: (ast.nodes.get i: call.callable)) declId: fnDecl
+        (
+            memberaccess.stampRefDecl
+            :st
+            nid: (nodeId n: (ast.nodes.get i: call.callable))
+            declId: fnDecl
+        )
     }
     if cnId == zast.wellKnown.slot.wkPanic then {
         calleeNodeId: nodeId n: (ast.nodes.get i: call.callable)
@@ -2883,7 +2901,7 @@ reportValueCalledWithArgs: function {
     vt: ztypes.tid
     {
         cn: ast.nodes.get i: call.callable
-        nameId = dottedChildNameId :ast n: cn
+        nameId = memberaccess.dottedChildNameId :ast n: cn
         vt = walkTypeOf :st nid: call.callable
         if nameId.isZero then {
             nameId = zast.atomNameIdOf n: cn
@@ -3092,8 +3110,8 @@ checkUserFnCall: function {
     result: ztypes.tid
     # tooling: a bare callable resolving to a unit FUNCTION is a def reference
     # like any bare read
-    sfG: declSurfaceOfName :st :ast :unitDecl nameId: cnId tid: funcId
-    stampRefDecl :st nid: calid declId: sfG
+    sfG: memberaccess.declSurfaceOfName :st :ast :unitDecl nameId: cnId tid: funcId
+    memberaccess.stampRefDecl :st nid: calid declId: sfG
     cm: st.pushCall node: call.nid
     pins: (
         walkCallArgsHoist
@@ -3736,7 +3754,7 @@ reportUnresolvedMemberCall: function {
     if st.typing.errors.length > 0 then return
     cn: ast.nodes.get i: call.callable
     if (callableReadsStaticList :st :ast :call) then return
-    mn: zast.nameTextAt :ast ref: (dottedChildNameId :ast n: cn)
+    mn: zast.nameTextAt :ast ref: (memberaccess.dottedChildNameId :ast n: cn)
     bn: specWrittenName :st :ast tid: baseT
     (
         addError
@@ -3823,7 +3841,7 @@ resultViaPartialBase: function {
     if dr.nid.isZero then return tid
     bt: walkTypeOf :st nid: dr.parent
     if bt.isZero or (st.reg.isPartialOf tid: bt).not then return tid
-    return (partialSubstituted :st :ast :unitDecl partial: bt :tid)
+    return (memberaccess.partialSubstituted :st :ast :unitDecl partial: bt :tid)
 }
 
 # ownMethodOfWalkedTemplate -- `fid` is a method of the generic type whose

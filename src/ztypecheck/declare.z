@@ -560,7 +560,7 @@ indexDeclPublicEntries: function {
                     )
                     # the entry's value node (`:m` labelvalue / `alias: m`
                     # atom) is a navigable reference to the sibling def
-                    stampRefDecl :st nid: m.operation declId: tgt
+                    memberaccess.stampRefDecl :st nid: m.operation declId: tgt
                 } else if isLabel.not then {
                     (
                         indexDeclDef
@@ -909,7 +909,7 @@ familyNameTaken: function {
     nameId: zast.nameid
 } out bool is {
     if nameId.isZero then return false
-    d: declInScope :st scopeDeclId: (st.typing.declParentOf declId: tdecl) :nameId
+    d: memberaccess.declInScope :st scopeDeclId: (st.typing.declParentOf declId: tdecl) :nameId
     if d.isZero then return false
     ur: unitRootOfDecl typing: st.typing declId: d
     if (ur == st.typing.systemUnitRoot) or (ur == st.typing.coreUnitRoot) then return false
@@ -1943,7 +1943,7 @@ attachAsConstant: function {
     # an alias names a type, not a value; asked before the fold, which would
     # declare an application's instance (`Elems: (ListVal t)`) as the member's
     # type and so make it a field
-    if (asMemberIsAlias :st :ast :tdecl :md) then return
+    if (memberaccess.asMemberIsAlias :st :ast :tdecl :md) then return
     # only an instance has a value for a constant over the template's numeric
     # parameter: each instance folds it, and says why it does not
     # (foldInstanceConstant)
@@ -2423,7 +2423,7 @@ attachMarkers: function {
         ) then isMarker = false
         # an alias names a type, which it is asked for where it is read
         if isMarker when implemented.not when (
-            asMemberIsAlias
+            memberaccess.asMemberIsAlias
             :st
             :ast
             tdecl: ptdecl
@@ -2788,7 +2788,7 @@ scanVisibility: function {
         fId: zast.objIsItemAt :ast nid: onode.nid i: kFiter
         kFiter = kFiter + 1
         (
-            scanTypeField
+            memberaccess.scanTypeField
             :st
             :ast
             n: (ast.nodes.get i: fId)
@@ -2931,7 +2931,7 @@ applyUnitVisibility: function {
                     # the entry `main` of the primary unit must stay public:
                     # a `public:` block that omits it hides the entry point
                     if nmV == st.reg.regMainUnitId when (
-                        declMemberIsPrivate
+                        memberaccess.declMemberIsPrivate
                         :st
                         tid: utidV
                         nameId: zast.wellKnown.slot.wkMain
@@ -3032,7 +3032,7 @@ refuseSelfNamedMember: function {
     od: st.typing.declIdOfType typeId: ownerTid
     md: st.typing.declFindChild parentDeclId: od nameId: fm.name
     what: "a field".string
-    if md.notZero then what = memberKindPhrase :st :ast tdecl: od :md
+    if md.notZero then what = memberaccess.memberKindPhrase :st :ast tdecl: od :md
     nn: zast.nameTextAt :ast ref: fm.name
     tn: st.reg.nameOf tid: ownerTid
     (
@@ -3066,7 +3066,7 @@ attachRecordField: function {
 } is {
     if (refuseStringDefault :st :ast what: "field" nameId: fm.name :fm) then return
     refuseSelfNamedMember :st :ast ownerTid: rid :fm
-    refuseMarkedFunctionType :st :ast :unitDecl :scope typeNid: fm.operation
+    memberaccess.refuseMarkedFunctionType :st :ast :unitDecl :scope typeNid: fm.operation
     ftnR: fieldHeadNameId :ast n: (ast.nodes.get i: fm.operation)
     # a field's type-ref can name a SIBLING function (an fn-ptr
     # slot defaulting to it), which is a member like any other
@@ -3085,7 +3085,17 @@ attachRecordField: function {
         st.walk.pendingDefaultId.set key: pdk2R value: pdiR
         handledR = true
     }
-    if handledR.not then attachDeclaredField :st :scope :ast :unitDecl :defName :rid :fm :fname
+    if handledR.not then (
+        memberaccess.attachDeclaredField
+        :st
+        :scope
+        :ast
+        :unitDecl
+        :defName
+        :rid
+        :fm
+        :fname
+    )
 }
 
 # synthValueMembers -- the comparison pair and the `hash` a record or variant
@@ -3485,7 +3495,16 @@ attachSumMethods: function {
                 }
             } else {
                 # a generic template's tag accessor is its instances'
-                detectTagAccessor :st :scope :ast :unitDecl :defName ownerId: sumTid :am
+                (
+                    memberaccess.detectTagAccessor
+                    :st
+                    :scope
+                    :ast
+                    :unitDecl
+                    :defName
+                    ownerId: sumTid
+                    :am
+                )
                 if isgen.not then attachAsConstant :st :ast parentId: sumTid item: am
             }
         }
@@ -3506,7 +3525,7 @@ recordTagBase: function {
 } is {
     # none when nothing is declared: distinct from tid.zero, a data-sourced tag,
     # whose constants set their own width and whose enum must stay the storage
-    tb: variantTagBaseTid :st :scope :ast :unitDecl :objId
+    tb: memberaccess.variantTagBaseTid :st :scope :ast :unitDecl :objId
     declared: ztypes.tid
     listSourced: false
     if tb.some then {
@@ -3556,7 +3575,7 @@ attachVariantTag: function {
     # so the value is an ordinal and nothing needs a tagged struct -- and a
     # discriminator whose values ARE those ordinals.
     if allNullV when armCountV > 0 when (
-        variantTagIsOrdinalPlain
+        memberaccess.variantTagIsOrdinalPlain
         :st
         :scope
         :ast
@@ -3729,7 +3748,7 @@ resolveVariant: function {
             # an arm over the variant's own parameter (`(Cell t: t)`) is a
             # partial, as a field's is
             cid: (
-                fieldSlotTid
+                memberaccess.fieldSlotTid
                 :st
                 :ast
                 :unitDecl
@@ -3738,7 +3757,7 @@ resolveVariant: function {
                 oId: fm.operation
                 thisName: defName
             )
-            if (refuseArmPayload :st :ast :fm :defName :cid :isChoice) then continue
+            if (memberaccess.refuseArmPayload :st :ast :fm :defName :cid :isChoice) then continue
             st.typing.setMemberType parentTypeId: variantTid nameId: fm.name childTypeId: cid
             (
                 typeref.recordTyperef
@@ -3948,7 +3967,16 @@ attachUnionArm: function {
         }
     }
     # an arm over the union's own parameter is a partial, as a field's is
-    cid: fieldSlotTid :st :ast :unitDecl :scope ownerTid: uid oId: armTe thisName: defName
+    cid: (
+        memberaccess.fieldSlotTid
+        :st
+        :ast
+        :unitDecl
+        :scope
+        ownerTid: uid
+        oId: armTe
+        thisName: defName
+    )
     # a payload refused where it is written has no type to judge
     if armTe != fm.operation when cid.notZero when (st.reg.isValtypeOf tid: cid).not then {
         bxw: typeargs.atomName :ast n: (ast.nodes.get i: armTe)
@@ -4411,7 +4439,7 @@ resolveClassFieldEntry: function {
         recordMemberRefField :st :ast :cid fname: fname.stringView :mref :fm
     } case none then {
         if (
-            resolveNamedFieldSlot
+            memberaccess.resolveNamedFieldSlot
             :st
             :ast
             :unitDecl
@@ -4635,7 +4663,7 @@ resolveClassTypedefBase: function {
     # the base the typedef resolved to answers for itself -- one reached through
     # its unit (`(pr.GBox t: i64)`) included
     if (refuseTypedefOfItself :st own: cid base: baseTid onode: cnode) then return false
-    if (fieldTypeNeedsCleanup :st tid: baseTid isBorrowed: false) then needsDtor = true
+    if (memberaccess.fieldTypeNeedsCleanup :st tid: baseTid isBorrowed: false) then needsDtor = true
     if tdbase.notZero or baseTid.notZero then {
         st.typing.typedefBase.set key: cid value: (ztyping.typedefbase name: tdbase tid: baseTid)
     }
@@ -5778,7 +5806,7 @@ constraintIntKindId: function {id: zast.nameid} out ztypes.suffixinfo is {
 # scalarKindOfNameId -- the scalar kind name id `id` spells, by its position in
 # zast.wellKnown's ty* run; `has` false for any other name.
 scalarKindOfNameId: function {id: zast.nameid} out ztypes.suffixinfo is {
-    if (isScalarNameId :id).not then return (
+    if (memberaccess.isScalarNameId :id).not then return (
         ztypes.suffixinfo
         has: false
         kind: ztypes.numkind.i64Type
@@ -5857,7 +5885,7 @@ genericParamInScope: function {
             return (genericParamTidMint :st :ast tdecl: cur :nameId)
         }
         # an enclosing type's alias, as near as its parameters
-        at: typeDeclAliasTid :st :ast decl: cur :nameId
+        at: memberaccess.typeDeclAliasTid :st :ast decl: cur :nameId
         if at.notZero then return at
         cur = st.typing.declParentOf declId: cur
     }
@@ -6113,7 +6141,7 @@ typedefOverNumericDecl: function {
     if b.isZero then return false
     # by the base's written name, the shape the parse answers;
     # numericTypedefNamed then asks the resolved base itself
-    return (isScalarNameId id: b)
+    return (memberaccess.isScalarNameId id: b)
 }
 
 # numericTypedefNamed -- the typedef over a numeric type the callee `callableId`

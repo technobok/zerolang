@@ -397,7 +397,7 @@ resolveNamedTypeId: function {
     if literalTid.notZero then return literalTid
     # a name its signature's parameter declares is refused, and the node with it
     bodies.refuseParamAsType :st :ast :nameId :nid
-    gp7: genericParamTypeId :st :ast :unitDecl :scope :nameId :thisName :nid
+    gp7: memberaccess.genericParamTypeId :st :ast :unitDecl :scope :nameId :thisName :nid
     # a name refused as the member it names has no type of that spelling either
     if gp7.notZero or (nodeRefused :st :nid) then return gp7
     site: definingSiteForId :st :scope :ast :unitDecl :nameId
@@ -500,7 +500,7 @@ resolveDottedArgTid: function {
     qm: qualifiedMemberTid :st :scope :ast qualNid: dr.parent memberId: cqId
     if qm.notZero then return qm
     # an alias of a type, reached through it
-    tpa: typePathAliasTid :st :ast :scope parentNid: dr.parent leafId: cqId :nid
+    tpa: memberaccess.typePathAliasTid :st :ast :scope parentNid: dr.parent leafId: cqId :nid
     if tpa.notZero then return tpa
     # owned copies: the walks below lend ast
     pq: zast.nameTextCopy :ast ref: (atomNameId :ast n: (ast.nodes.get i: dr.parent))
@@ -762,7 +762,7 @@ pathMemberTypeTid: function {
 } out ztypes.tid is {
     qm: qualifiedMemberTid :st :scope :ast qualNid: parentId memberId: leafId
     if qm.notZero then return qm
-    return (typePathAliasTid :st :ast :scope parentNid: parentId :leafId :nid)
+    return (memberaccess.typePathAliasTid :st :ast :scope parentNid: parentId :leafId :nid)
 }
 
 # unitInstanceMemberNamed -- the type `memberId` of the unit instance the name
@@ -914,7 +914,7 @@ stampForcedTyperef: function {
         peel = peel + 1
         stop: true
         pk: ast.nodes.get i: tnid
-        pkLeaf: dottedChildNameId :ast n: pk
+        pkLeaf: memberaccess.dottedChildNameId :ast n: pk
         if pk.dottedpath when (isStripMarkerId nameId: pkLeaf) then {
             tnid = pk.parent
             stop = false
@@ -940,7 +940,11 @@ stampForcedTyperef: function {
     # no single base name reaches
     {
         rootN: zast.nameTextCopy :ast ref: (rootNameIdOf :ast n: (ast.nodes.get i: tnid))
-        childN: zast.nameTextCopy :ast ref: (dottedChildNameId :ast n: (ast.nodes.get i: tnid))
+        childN: (
+            zast.nameTextCopy
+            :ast
+            ref: (memberaccess.dottedChildNameId :ast n: (ast.nodes.get i: tnid))
+        )
         if childN.length > 0 when rootN.length > 0 then {
             hUnitDecl: unitDeclOfNameOrOwn :st :scope nameId: (nameIdOf :ast name: rootN.stringView)
             dd: descendNamed :st :scope :ast unitDecl: hUnitDecl name: childN.stringView
@@ -1142,7 +1146,7 @@ dottedTyperefId: function {ast: Ast st: zenv.ZSymbolTable op: astnode.view} out 
         }
         # an alias reached through its type (`Tree.Node`)
         tpa: (
-            typePathAliasTid
+            memberaccess.typePathAliasTid
             :st
             :ast
             scope: st.curScope
@@ -1300,7 +1304,7 @@ unionCustomTagOfArm: function {
         }
     }
     if pnId.isZero then return none
-    ld: declInScope :st scopeDeclId: scope nameId: pnId
+    ld: memberaccess.declInScope :st scopeDeclId: scope nameId: pnId
     if ld.notZero when (st.typing.decls.get i: ld).kind.staticListDecl then {
         lv: evalConstNode :st :scope :ast :unitDecl nid: baseId
         if lv.kind.aggKind then return (tagsource row: lv.aggId decl: ld)
@@ -1894,7 +1898,7 @@ refuseArmAliasPayload: function {
     if isSum.not then return
     tgt: reexportTargetIdsOf typing: st.typing :ast :declId
     if tgt.defName.isZero then return
-    if (armCarriesPayload :st armTid: tid armName: tgt.defName).not then return
+    if (memberaccess.armCarriesPayload :st armTid: tid armName: tgt.defName).not then return
     dn: String
     dnode: zast.nodeid
     dr: st.typing.decls.get i: declId
@@ -2041,7 +2045,7 @@ stampAliasValue: function {
     if n.namedoperation then opNid = n.operation
     d.drop
     if opNid.isZero then return
-    stampRefDecl :st nid: opNid declId: td
+    memberaccess.stampRefDecl :st nid: opNid declId: td
 }
 
 # aliasTargetTid -- the type a re-export alias stands for, when neither the nested-
@@ -2684,7 +2688,7 @@ resolveDottedDef: function {
         # a cross-unit `unit.Type` alias records its target's declaration
         # for go-to-definition (dotted node; see the type-position stamp)
         targetDecl: templateDeclOf reg: st.reg typing: st.typing tid: sda
-        stampRefDecl :st nid: defn.nid declId: targetDecl
+        memberaccess.stampRefDecl :st nid: defn.nid declId: targetDecl
     }
 }
 
@@ -3231,7 +3235,7 @@ demandUnitMember: function {
 # needs of its toolchain: a requirement in its implementation file applies
 # only to a program that reaches the unit.
 markUnitReached: function {st: zenv.ZSymbolTable declId: ztypes.declid} is {
-    own: owningUnitDecl :st :declId
+    own: memberaccess.owningUnitDecl :st :declId
     if own.isZero then return
     st.typing.unitsReached.add item: own
 }
@@ -4431,7 +4435,7 @@ stampOnePendingTyperef: function {
     if originId.notZero then origin = unitDeclOfNameOrOwn :st scope: rf nameId: originId
     # an alias of the type the ref is written in, which the scope it waits in
     # does not see
-    if (stampAliasRef :st :ast :uk :pval :origin) then return
+    if (memberaccess.stampAliasRef :st :ast :uk :pval :origin) then return
     r: walkLookupTyperefFrom :st :ast scope: rf baseId: pval
     if r.some then {
         rt: r
@@ -4440,7 +4444,7 @@ stampOnePendingTyperef: function {
             di: instantiate.defaultsInstance :st :ast :unitDecl tid: rt scope: rf
             if di.notZero then rt = di
         }
-        stampResolvedTyperef :st :ast nid: uk :pval :origin tid: rt
+        memberaccess.stampResolvedTyperef :st :ast nid: uk :pval :origin tid: rt
         return
     }
     if (typeargs.stampQualifiedTyperef :st :ast unitDecl: origin scope: rf :uk) then return
@@ -4449,7 +4453,7 @@ stampOnePendingTyperef: function {
     # said why where it is written is no unknown name: the ref is refused with
     # it, quietly, and a read of the field reports nothing further
     own: (st.walk.fieldRefOwner.get key: uk).or d: ztypes.declid
-    if own.notZero when (memberDefinitionFailed :st :ast root: own nameId: pval) then {
+    if own.notZero when (memberaccess.memberDefinitionFailed :st :ast root: own nameId: pval) then {
         st.typing.refusedValues.add item: uk
         return
     }
@@ -6746,7 +6750,7 @@ typecheck: function {
     # name of every unit, marked not yet typechecked -- BEFORE any resolution,
     # so a reference always finds its declaration and never mints a shell for
     # a name that has one. Generator lowering indexes what it synthesizes.
-    lowerDeclaredGenerators :st :program
+    memberaccess.lowerDeclaredGenerators :st :program
     registerUnitRoots :st :program
     declare.indexUnitDefs :st scope: ztypes.declid :program
     {
@@ -6818,7 +6822,7 @@ typecheck: function {
         recordDeclaredReturns :st
         reportTypedefClashes ast: program :st
         numerics.checkWideConstants ast: program :st
-        markAggsReached ast: program :st
+        memberaccess.markAggsReached ast: program :st
         consteval.checkClosedRangeSpans ast: program :st
         stampAliasValues :st ast: program
         conform.stampGenericBounds :st ast: program
