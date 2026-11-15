@@ -132,13 +132,21 @@ NAMES    := $(filter-out $(SKIP),$(basename $(notdir $(EXAMPLES))))
 TOOLSRC := $(wildcard tools/*/*.z)
 TOOLDIRS := $(sort $(patsubst %/,%,$(dir $(TOOLSRC))))
 
+# SRC_SUBUNITS -- the subunit files of the compiler's units: the `.z` files of a
+# folder under src/, which is the folder of the unit of its name. CHECKER_SRCS
+# and EMITTER_SRCS are the two units written that way: every guard that reads
+# one of them by its text reads the unit's file and its subunit files.
+SRC_SUBUNITS := $(wildcard src/*/*.z)
+CHECKER_SRCS := src/ztypecheck.z $(wildcard src/ztypecheck/*.z)
+EMITTER_SRCS := src/zemitterc.z $(wildcard src/zemitterc/*.z)
+
 # What the parse-tier linter reads.
-ZLSCOPE := src/*.z lib/system/*.z lib/system/system/*.z lib/system/math/*.z tests/unit/*.z tests/unit/matrixgen/*.z $(TOOLSRC)
+ZLSCOPE := src/*.z $(SRC_SUBUNITS) lib/system/*.z lib/system/system/*.z lib/system/math/*.z tests/unit/*.z tests/unit/matrixgen/*.z $(TOOLSRC)
 # What the --full tier reads. It checks a file as the unit it is, so style-lint
 # gives each tree its own roots.
-ZLFULLSCOPE := src/*.z lib/system/*.z lib/system/system/*.z lib/system/math/*.z
+ZLFULLSCOPE := src/*.z $(SRC_SUBUNITS) lib/system/*.z lib/system/system/*.z lib/system/math/*.z
 # What the formatter checks; tests/fixtures/ is input and stays as written.
-FMTSCOPE := src/*.z lib/system/*.z lib/system/system/*.z lib/system/math/*.z examples/*.z tests/unit/*.z tests/unit/matrixgen/*.z $(TOOLSRC) lib/system/*.zd project.zd
+FMTSCOPE := src/*.z $(SRC_SUBUNITS) lib/system/*.z lib/system/system/*.z lib/system/math/*.z examples/*.z tests/unit/*.z tests/unit/matrixgen/*.z $(TOOLSRC) lib/system/*.zd project.zd
 
 all: bin/zc bin/zl bin/zls
 
@@ -147,7 +155,7 @@ check: style-lint-fast complexity-report
 
 # complexity-report -- every function over A008's threshold, highest first, into
 # $(COMPLEXITY_TSV); the per-file ratchet is tests/fixtures/arch_baseline.txt.
-COMPLEXITY_SCOPE := src/*.z lib/system/*.z lib/system/system/*.z lib/system/math/*.z tests/unit/*.z tests/unit/matrixgen/*.z examples/*.z $(TOOLSRC)
+COMPLEXITY_SCOPE := src/*.z $(SRC_SUBUNITS) lib/system/*.z lib/system/system/*.z lib/system/math/*.z tests/unit/*.z tests/unit/matrixgen/*.z examples/*.z $(TOOLSRC)
 COMPLEXITY_TSV := $(BUILDDIR)/cognitive-complexity.tsv
 complexity-report: bin/zl
 	@mkdir -p $(BUILDDIR)
@@ -607,7 +615,7 @@ windows-guest: $(NATIVEC_INC)/zthread_shim.inc
 WINDOWS_VERIFIED := tests/windows-verified.txt
 WINDOWS_DUE_DAYS := 14
 WINDOWS_DUE_TOUCHED_DAYS := 2
-WINDOWS_PATHS := src/zemitterc.z src/zc.z src/zcobj.z src/zcheck.z src/ztestrunner.z \
+WINDOWS_PATHS := src/zemitterc.z src/zemitterc src/zc.z src/zcobj.z src/zcheck.z src/ztestrunner.z \
 	lib/system bootstrap/zc.c Makefile tests/c
 windows-due:
 	@if [ ! -f $(WINDOWS_VERIFIED) ]; then echo "windows-due: make ci-windows has never passed (tools/windows/README.md)"; exit 0; fi; \
@@ -970,7 +978,7 @@ $(NATIVEC_INC)/zthread_shim.inc: bin/zc
 	bin/zc natives show prelude.@zthread --c --system lib/system > $@
 
 # bin/zc -- the self-hosted compiler, built by the seed.
-bin/zc.c: $(wildcard src/*.z) $(wildcard lib/system/*.z) $(wildcard lib/system/system/*.z lib/system/math/*.z) $(NATIVEC_DEP) $(ZC)
+bin/zc.c: $(wildcard src/*.z) $(SRC_SUBUNITS) $(wildcard lib/system/*.z) $(wildcard lib/system/system/*.z lib/system/math/*.z) $(NATIVEC_DEP) $(ZC)
 	@mkdir -p bin
 	$(ZC) zc --src src --system lib/system $(ZCHASH) --emit-c bin/zc.c
 
@@ -985,7 +993,7 @@ bin/zc: $(BUILDDIR)/zc.o $(BUILDDIR)/buildstamp.o $(MIMALLOC_OBJ)
 zc: bin/zc
 
 # bin/zl -- the linter and formatter (src/zl.z); no emitter.
-out/zl.c: $(BUILDDIR)/zc.o $(wildcard src/zl.z) $(wildcard src/zsource.z) $(wildcard src/zcheck.z) $(wildcard src/ztarget.z) $(wildcard src/zproject.z) $(wildcard src/zdiag.z) $(wildcard src/zrule.z) $(wildcard src/zfix.z) $(wildcard src/ztypecheck.z) $(wildcard src/ztypes.z) $(wildcard src/zenv.z) $(wildcard src/ztyping.z) $(wildcard src/zgenerator.z) $(wildcard src/zfmt.z) $(wildcard src/zfmtcursor.z) $(wildcard src/zdoc.z) $(wildcard lib/system/*.z) $(wildcard lib/system/system/*.z lib/system/math/*.z) | bin/zc
+out/zl.c: $(BUILDDIR)/zc.o $(SRC_SUBUNITS) $(wildcard src/zl.z) $(wildcard src/zsource.z) $(wildcard src/zcheck.z) $(wildcard src/ztarget.z) $(wildcard src/zproject.z) $(wildcard src/zdiag.z) $(wildcard src/zrule.z) $(wildcard src/zfix.z) $(wildcard src/ztypecheck.z) $(wildcard src/ztypes.z) $(wildcard src/zenv.z) $(wildcard src/ztyping.z) $(wildcard src/zgenerator.z) $(wildcard src/zfmt.z) $(wildcard src/zfmtcursor.z) $(wildcard src/zdoc.z) $(wildcard lib/system/*.z) $(wildcard lib/system/system/*.z lib/system/math/*.z) | bin/zc
 	@mkdir -p out
 	bin/zc zl --src src --system lib/system $(ZCHASH) --emit-c out/zl.c
 
@@ -997,7 +1005,7 @@ bin/zl: $(BUILDDIR)/zl.o $(BUILDDIR)/buildstamp.o $(MIMALLOC_OBJ)
 	$(CC) $(DRIVERLINK) -o bin/zl $(BUILDDIR)/zl.o $(BUILDDIR)/buildstamp.o $(MIMALLOC_OBJ) $(call ZLINKOF,$(BUILDDIR)/zl.c) $(THREADLIB) -lm
 
 # bin/zls -- the language server (src/zls.z); no emitter.
-out/zls.c: $(BUILDDIR)/zc.o $(wildcard src/zls.z) $(wildcard src/zcheck.z) $(wildcard src/ztarget.z) $(wildcard src/zproject.z) $(wildcard src/zsource.z) $(wildcard src/zdiag.z) $(wildcard src/zrule.z) $(wildcard src/zfix.z) $(wildcard src/ztypecheck.z) $(wildcard src/ztypes.z) $(wildcard src/zenv.z) $(wildcard src/ztyping.z) $(wildcard src/zgenerator.z) $(wildcard src/zfmt.z) $(wildcard src/zfmtcursor.z) $(wildcard src/zdoc.z) $(wildcard lib/system/*.z) $(wildcard lib/system/system/*.z lib/system/math/*.z) | bin/zc
+out/zls.c: $(BUILDDIR)/zc.o $(SRC_SUBUNITS) $(wildcard src/zls.z) $(wildcard src/zcheck.z) $(wildcard src/ztarget.z) $(wildcard src/zproject.z) $(wildcard src/zsource.z) $(wildcard src/zdiag.z) $(wildcard src/zrule.z) $(wildcard src/zfix.z) $(wildcard src/ztypecheck.z) $(wildcard src/ztypes.z) $(wildcard src/zenv.z) $(wildcard src/ztyping.z) $(wildcard src/zgenerator.z) $(wildcard src/zfmt.z) $(wildcard src/zfmtcursor.z) $(wildcard src/zdoc.z) $(wildcard lib/system/*.z) $(wildcard lib/system/system/*.z lib/system/math/*.z) | bin/zc
 	@mkdir -p out
 	bin/zc zls --src src --system lib/system $(ZCHASH) --emit-c out/zls.c
 
@@ -1027,7 +1035,7 @@ out/zlexer: bin/zc tests/unit/zlexer_dump.z $(wildcard lib/system/*.z) $(wildcar
 SEED ?= 1
 N ?= 20000
 FUZZ_SAN := -fsanitize=address,undefined -fno-sanitize-recover=undefined
-out/zc-asan: bin/zc $(wildcard src/*.z lib/system/*.z lib/system/system/*)
+out/zc-asan: bin/zc $(wildcard src/*.z lib/system/*.z lib/system/system/*) $(SRC_SUBUNITS)
 	@mkdir -p $(BUILDDIR)
 	bin/zc build src/zc.z --system lib/system -o $@ --cflags "-O1 -g -fno-omit-frame-pointer $(FUZZ_SAN)" --ldflags "$(FUZZ_SAN)"
 
@@ -1102,7 +1110,7 @@ regen-fmt-goldens: out/zfmt
 	@echo "regenerated fmt goldens via $(BUILDDIR)/zfmt"
 
 # The ownership matrix generator: every type family by every position.
-out/matrixgen: bin/zc tests/unit/matrixgen.z $(wildcard tests/unit/matrixgen/*.z) $(wildcard src/*.z) $(wildcard lib/system/*.z) $(wildcard lib/system/system/*.z lib/system/math/*.z)
+out/matrixgen: bin/zc tests/unit/matrixgen.z $(wildcard tests/unit/matrixgen/*.z) $(wildcard src/*.z) $(SRC_SUBUNITS) $(wildcard lib/system/*.z) $(wildcard lib/system/system/*.z lib/system/math/*.z)
 	@mkdir -p $(BUILDDIR)
 	bin/zc matrixgen --src tests/unit --src src --system lib/system --emit-c $(BUILDDIR)/matrixgen.c
 	$(CC) $(CFLAGS) -o $(BUILDDIR)/matrixgen $(BUILDDIR)/matrixgen.c $(call ZLINKOF,$(BUILDDIR)/matrixgen.c) -lm
@@ -1412,8 +1420,8 @@ $(PERFBIN): bin/zc.c $(MIMALLOC_OBJ) $(BUILDDIR)/buildstamp.o
 
 perf: $(PERFBIN)
 	@echo "== zerolang line count (.z) =="
-	@lsrc=$$(cat src/*.z | wc -l); llib=$$(cat lib/system/*.z lib/system/system/*.z lib/system/math/*.z | wc -l); \
-	  printf "  src/*.z: %s    lib/system/**/*.z: %s    total: %s\n" "$$lsrc" "$$llib" "$$((lsrc + llib))"
+	@lsrc=$$(cat src/*.z $(SRC_SUBUNITS) | wc -l); llib=$$(cat lib/system/*.z lib/system/system/*.z lib/system/math/*.z | wc -l); \
+	  printf "  src/**/*.z: %s    lib/system/**/*.z: %s    total: %s\n" "$$lsrc" "$$llib" "$$((lsrc + llib))"
 	@echo "== self-compile wall best-of-5 (mimalloc; drop run 1) + peak RSS =="
 	@for i in 1 2 3 4 5; do /usr/bin/time -f "  %es  %MkB" $(PERFRUN) 2>&1 | tail -1; done
 	@echo "== phase split (parse / typecheck / emit) =="
@@ -1428,7 +1436,7 @@ perf: $(PERFBIN)
 # deletes write-only allocations; perf-elision measures that), a failed run and
 # allocs != frees. Above ALLOC_BASELINE fails; a commit raising it says why in
 # its message, and one lowering the count lowers it here.
-ALLOC_BASELINE := 2793122
+ALLOC_BASELINE := 2793876
 # ALLOC_LINE -- the one measurement every allocation number comes from.
 ALLOC_LINE = valgrind --tool=memcheck $(PERFRUN) 2>&1 | grep 'total heap usage' | sed 's/.*usage: //'
 
@@ -1493,28 +1501,29 @@ any-guard:
 	echo "any-guard OK: lib/system neither declares Any nor bounds by it"
 
 # typename-guard -- a type is identified by its declaration, never by its spelling:
-# a comparison against a zast.wellKnown ty* name is allowed only in TYPENAME_OK,
+# a comparison against a zast.wellKnown ty* name is allowed only in TYPENAME_OK
+# (`unit:function`, the unit's subunit files read as the unit),
 # each where the name is not a type identity (system-gated declarations, member and
 # suffix vocabulary, bound families, the `null` an as-block opt-out is spelled with,
 # the `null` an empty body is spelled with where A013 reads statements (hwQuietName),
 # a template's own name picking the one collection family it could be, whose id
 # then decides: templateIsCollection, templateNeedsMonoDtor).
-TYPENAME_OK := src/ztypecheck.z:resolveClass src/ztypecheck.z:resolveProtocol \
-	src/ztypecheck.z:defTypetypeOf src/ztypecheck.z:resolveObjectDef \
-	src/ztypecheck.z:paramIsBorrowReftype src/ztypecheck.z:isBoxTemplate \
-	src/ztypecheck.z:checkStaticListMember src/ztypecheck.z:checkMarkerMember \
-	src/zemitterc.z:emitStaticListMember src/zemitterc.z:emitStrConvCall \
-	src/zsource.z:bareZeroTypeName src/ztypecheck.z:constraintKindForId \
-	src/ztypecheck.z:isConformanceMarker src/ztypecheck.z:declareCanonicalTypeId \
-	src/ztypecheck.z:textLiteralCastTarget src/ztypecheck.z:isIterFamilyName \
-	src/ztypecheck.z:isCollectionFamilyName src/ztypecheck.z:isHeapCollectionName \
-	src/zsource.z:hwQuietName
+TYPENAME_OK := ztypecheck:resolveClass ztypecheck:resolveProtocol \
+	ztypecheck:defTypetypeOf ztypecheck:resolveObjectDef \
+	ztypecheck:paramIsBorrowReftype ztypecheck:isBoxTemplate \
+	ztypecheck:checkStaticListMember ztypecheck:checkMarkerMember \
+	zemitterc:emitStaticListMember zemitterc:emitStrConvCall \
+	zsource:bareZeroTypeName ztypecheck:constraintKindForId \
+	ztypecheck:isConformanceMarker ztypecheck:declareCanonicalTypeId \
+	ztypecheck:textLiteralCastTarget ztypecheck:isIterFamilyName \
+	ztypecheck:isCollectionFamilyName ztypecheck:isHeapCollectionName \
+	zsource:hwQuietName
 typename-guard:
 	@fail=0; n=0; \
 	for e in $$(awk '/^[A-Za-z_][A-Za-z0-9_]*: function/ {fn=$$1; sub(":", "", fn)} \
 	    /^[ \t]*#/ {next} \
-	    /(==|!=)[ \t]*zast\.wellKnown\.slot\.ty[A-Za-z0-9]+|zast\.wellKnown\.slot\.ty[A-Za-z0-9]+[ \t]*(==|!=)/ {print FILENAME ":" fn}' \
-	    src/*.z | sort -u); do \
+	    /(==|!=)[ \t]*zast\.wellKnown\.slot\.ty[A-Za-z0-9]+|zast\.wellKnown\.slot\.ty[A-Za-z0-9]+[ \t]*(==|!=)/ {u=FILENAME; sub(/^src\//, "", u); sub(/\/.*/, "", u); sub(/\.z$$/, "", u); print u ":" fn}' \
+	    src/*.z $(SRC_SUBUNITS) | sort -u); do \
 	  n=$$((n + 1)); \
 	  case " $(TYPENAME_OK) " in *" $$e "*) ;; \
 	    *) echo "typename-guard FAIL: $$e compares a name id with a wellKnown type name -- decide by the declaration (stdTidRo, declaredBySystem, numKindOfTid), or add the function to TYPENAME_OK with why"; fail=1;; \
@@ -1527,18 +1536,18 @@ typename-guard:
 # remaining name-based site (lower the baseline as one goes). z_t{ literals are
 # allowed only in the one C-name composer.
 emitter-guard:
-	@e2=$$(grep -c 'ztypecheck.walkLookupTyperef' src/zemitterc.z); \
-	e6=$$(grep -vE '^[[:space:]]*#' src/zemitterc.z | grep -c 'reg\.nameOf\b'); \
-	e7=$$(grep -c 'mangleVarName :name' src/zemitterc.z); \
-	e8=$$(grep -cF 'io.readText' src/zemitterc.z); \
-	e10=$$(grep -vE '^[[:space:]]*#' src/zemitterc.z | grep -cE '\.data\.[a-z]'); \
-	e11=$$(grep -c 'poolFind' src/zemitterc.z); \
-	e12=$$(grep -cE 'aliasChildName :ast|aliasOrChild :ast' src/zemitterc.z); \
-	g2=$$(grep -cF 'z_t\{' src/zemitterc.z); \
+	@e2=$$(cat $(EMITTER_SRCS) | grep -c 'ztypecheck.walkLookupTyperef'); \
+	e6=$$(cat $(EMITTER_SRCS) | grep -vE '^[[:space:]]*#' | grep -c 'reg\.nameOf\b'); \
+	e7=$$(cat $(EMITTER_SRCS) | grep -c 'mangleVarName :name'); \
+	e8=$$(cat $(EMITTER_SRCS) | grep -cF 'io.readText'); \
+	e10=$$(cat $(EMITTER_SRCS) | grep -vE '^[[:space:]]*#' | grep -cE '\.data\.[a-z]'); \
+	e11=$$(cat $(EMITTER_SRCS) | grep -c 'poolFind'); \
+	e12=$$(cat $(EMITTER_SRCS) | grep -cE 'aliasChildName :ast|aliasOrChild :ast'); \
+	g2=$$(cat $(EMITTER_SRCS) | grep -cF 'z_t\{'); \
 	fail=0; \
 	chk() { if [ "$$2" -gt "$$3" ]; then echo "emitter-guard FAIL: $$1 = $$2 (baseline $$3)"; fail=1; \
 	  elif [ "$$2" -lt "$$3" ]; then echo "emitter-guard: $$1 = $$2 < baseline $$3 -- lower the baseline here"; fi; }; \
-	chk "'z_t{' literals in src/zemitterc.z" "$$g2" 3; \
+	chk "'z_t{' literals in the emitter" "$$g2" 3; \
 	chk "ztypecheck.walkLookupTyperef" "$$e2" 1; \
 	chk "a type's name TEXT (reg.nameOf; compare by id)" "$$e6" 4; \
 	chk "mangleVarName (inside nameCName)" "$$e7" 1; \
@@ -1556,7 +1565,7 @@ emitter-guard:
 
 # frontend-guard -- the front end names no backend: no C spelling, no triple parse,
 # no target (that is the generated `z` unit's). Comments are not counted.
-FRONTEND_SRCS := src/ztypecheck.z src/ztyping.z src/ztypes.z src/zenv.z src/zgenerator.z \
+FRONTEND_SRCS := $(CHECKER_SRCS) src/ztyping.z src/ztypes.z src/zenv.z src/zgenerator.z \
 	lib/system/zparser.z lib/system/zlexer.z lib/system/zast.z
 frontend-guard:
 	@c=$$(cat $(FRONTEND_SRCS) | grep -vE '^[[:space:]]*#' \
@@ -1583,11 +1592,11 @@ frontend-guard:
 # (armLeafPlaces). factsOfText counts the places that read an expression's
 # facts off its C text rather than from its producer: none do.
 lifetime-guard:
-	@l1=$$(grep -c 'registerScopeDestroy' src/zemitterc.z); \
-	l2=$$(grep -c 'refsLocal' src/zemitterc.z); \
-	l3=$$(grep -c 'factsOfText' src/zemitterc.z); \
-	l4=$$(grep -c 'bindingRhsIsBorrow' src/zemitterc.z); \
-	l5=$$(grep -cF '_ah\{' src/zemitterc.z); \
+	@l1=$$(cat $(EMITTER_SRCS) | grep -c 'registerScopeDestroy'); \
+	l2=$$(cat $(EMITTER_SRCS) | grep -c 'refsLocal'); \
+	l3=$$(cat $(EMITTER_SRCS) | grep -c 'factsOfText'); \
+	l4=$$(cat $(EMITTER_SRCS) | grep -c 'bindingRhsIsBorrow'); \
+	l5=$$(cat $(EMITTER_SRCS) | grep -cF '_ah\{'); \
 	fail=0; \
 	chk() { if [ "$$2" -gt "$$3" ]; then echo "lifetime-guard FAIL: $$1 = $$2 (baseline $$3)"; fail=1; \
 	  elif [ "$$2" -lt "$$3" ]; then echo "lifetime-guard: $$1 = $$2 < baseline $$3 -- lower the baseline here"; fi; }; \
@@ -2120,7 +2129,7 @@ deadcode-guard: bin/zc
 	if [ "$$n" -gt "$(DEADCODE_BASELINE)" ]; then \
 	  echo "deadcode-guard FAIL: $$n unreachable statements (baseline $(DEADCODE_BASELINE))"; \
 	  printf "$$rep"; \
-	  echo "  A site appended after a diverged block. See blockDiverges in src/zemitterc.z."; \
+	  echo "  A site appended after a diverged block. See blockDiverges in the zemitterc unit."; \
 	  exit 1; \
 	elif [ "$$n" -lt "$(DEADCODE_BASELINE)" ]; then \
 	  echo "deadcode-guard: $$n < baseline $(DEADCODE_BASELINE) -- lower DEADCODE_BASELINE here"; \
@@ -2349,7 +2358,7 @@ cdead-guard: bin/zc
 	  rm -rf $$d; exit 1; \
 	elif [ "$$n" -gt "$$1" ] || [ "$$z" -gt "$$2" ]; then \
 	  echo "cdead-guard FAIL: $$n dead C items in the corpus, $$z in zc (baseline $(CDEAD_BASELINE));$$kinds"; \
-	  echo "  A C item written that main does not reach: see emitC in src/zemitterc.z."; \
+	  echo "  A C item written that main does not reach: see emitC in the zemitterc unit."; \
 	  rm -rf $$d; exit 1; \
 	elif [ "$$n" -lt "$$1" ] || [ "$$z" -lt "$$2" ]; then \
 	  echo "cdead-guard: $$n $$z < baseline $(CDEAD_BASELINE) -- lower CDEAD_BASELINE here"; \
@@ -2457,7 +2466,7 @@ cc-unused-guard: bin/zc
 	same=$$(echo "$$got / $(CC_UNUSED_BASELINE)" | awk '{n = (NF - 1) / 2; for (i = 1; i <= n; i++) if ($$i != "-" && $$i != $$(i + n + 1)) d = 1; print d + 0}'); \
 	if [ "$$over" = 1 ]; then \
 	  echo "cc-unused-guard FAIL: unused file-scope functions/variables:$$got (baseline $(CC_UNUSED_BASELINE))"; \
-	  echo "  A C item written that nothing calls in some configuration: see emitC in src/zemitterc.z."; exit 1; \
+	  echo "  A C item written that nothing calls in some configuration: see emitC in the zemitterc unit."; exit 1; \
 	elif [ "$$same" = 1 ]; then \
 	  echo "cc-unused-guard:$$got < baseline $(CC_UNUSED_BASELINE) -- lower CC_UNUSED_BASELINE here"; \
 	else \
@@ -2465,7 +2474,7 @@ cc-unused-guard: bin/zc
 	fi
 
 # piece-guard -- a piece of a fixed file or of a row's fragment is written only
-# where written C needs it (loadPieces in src/zemitterc.z), so every text that
+# where written C needs it (loadPieces in the zemitterc unit), so every text that
 # calls what a piece defines must say so: a row and another piece by its needs,
 # a template by its needs and its sections', and the emitter by `preludeNeed
 # :ctx memb: "@<piece>"` in the definition that spells the name. Text outside
@@ -2477,8 +2486,10 @@ cc-unused-guard: bin/zc
 # emitter with one record removed, and must report it.
 PIECE_GUARD_DIR := $(BUILDDIR)/piece-guard
 piece-guard: bin/zc
-	@mkdir -p $(PIECE_GUARD_DIR); \
-	grep -vF 'preludeNeed :ctx memb: "@quadmath_snprintf"' src/zemitterc.z > $(PIECE_GUARD_DIR)/zemitterc.z; \
+	@rm -rf $(PIECE_GUARD_DIR); mkdir -p $(PIECE_GUARD_DIR)/zemitterc; \
+	for f in $(EMITTER_SRCS); do \
+	  grep -vF 'preludeNeed :ctx memb: "@quadmath_snprintf"' $$f > $(PIECE_GUARD_DIR)/$${f#src/}; \
+	done; \
 	got=$$(bin/zc natives check needs --emitter $(PIECE_GUARD_DIR)/zemitterc.z --system lib/system | grep -c 'FAIL.*quadmath_snprintf'); \
 	if [ "$$got" = 0 ]; then \
 	  echo "piece-guard FAIL: an emitter record removed gives no report"; exit 1; \
@@ -2497,7 +2508,7 @@ static-value-guard: bin/zc
 	  | grep -A1 '^    uint64_t length;$$' | grep -c '^    const .*\* data;$$'); \
 	if [ "$$v" -ne 0 ]; then \
 	  echo "static-value-guard FAIL: a list read only at compile time wrote $$v view types"; \
-	  echo "  See staticListReached in src/zemitterc.z."; exit 1; \
+	  echo "  See staticListReached in the zemitterc unit."; exit 1; \
 	fi
 	@command -v clang >/dev/null 2>&1 || { echo "static-value-guard SKIP: clang not installed"; exit 0; }; \
 	d=$$(mktemp -d); n=0; rep=""; \
@@ -2512,7 +2523,7 @@ static-value-guard: bin/zc
 	if [ "$$n" -gt 0 ]; then \
 	  echo "static-value-guard FAIL: $$n static values or strings written that nothing reads"; \
 	  printf "$$rep"; \
-	  echo "  A value marked reached where no run-time read remains. See markAggReached in src/ztypecheck.z."; \
+	  echo "  A value marked reached where no run-time read remains. See markAggReached in the ztypecheck unit."; \
 	  exit 1; \
 	fi; \
 	echo "static-value-guard OK: every static value written is read"
@@ -2756,13 +2767,13 @@ view-guard: bin/zc
 
 # fallback-guard -- the emitter never degrades silently: a construct it cannot
 # emit records an emitFail, and zc then writes no C at all. The count of
-# emitFail lines in src/zemitterc.z is a ratchet: a new refusal leg may raise
+# emitFail lines in the emitter's files is a ratchet: a new refusal leg may raise
 # EMITFAIL_BASELINE (say so in the commit); a new fallback leg may not.
 EMITFAIL_BASELINE := 54
 fallback-guard:
-	@n=$$(grep -c 'emitFail' src/zemitterc.z); \
+	@n=$$(cat $(EMITTER_SRCS) | grep -c 'emitFail'); \
 	if [ "$$n" -gt $(EMITFAIL_BASELINE) ]; then \
-	  echo "fallback-guard FAIL: src/zemitterc.z emitFail lines = $$n (baseline $(EMITFAIL_BASELINE)) -- new fallback leg?"; \
+	  echo "fallback-guard FAIL: the emitter's emitFail lines = $$n (baseline $(EMITFAIL_BASELINE)) -- new fallback leg?"; \
 	  echo "  The emitter hit a construct it cannot emit. Fix the emission gap."; \
 	  exit 1; \
 	elif [ "$$n" -lt $(EMITFAIL_BASELINE) ]; then \

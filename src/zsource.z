@@ -175,50 +175,50 @@ unitNamesIn: function {dir: StringView} out List String is {
     return names
 }
 
+# sourceFilesUnder -- the `.z` files the source root `dir` holds, as paths:
+# each file directly under it, followed by the files of the folder of its name
+# (its subunits) and theirs. A rule that asks what the project reads asks
+# every one of them: a subunit file is code of its unit.
+sourceFilesUnder: function {dir: StringView} out List String is {
+    files: List String
+    names: unitNamesIn :dir
+    names.sort
+    for each nm: names loop {
+        f: "\{dir}/\{nm}.z"
+        appendFamilyFiles unitFile: f.stringView into: files
+    }
+    return files
+}
+
 # projectReadNames -- the member names dotted reads reach in every `.z` file
-# directly under `dir`, as text: a parse per file, the reassignment targets
-# excluded (a write is not a read).
+# of the source root `dir` (sourceFilesUnder), as text: a parse per file, the
+# reassignment targets excluded (a write is not a read).
 projectReadNames: function {dir: StringView into: Set String} is {
-    ents: io.listDir path: dir
-    match (
-        ents
-    ) case ok then {
-        for each e: ents loop {
-            ev: e.stringView
-            if (ev.endsWith suffix: ".z") then {
-                fp: "\{dir}/\{ev}"
-                rd: io.readText path: fp
-                match (
-                    rd
-                ) case ok then {
-                    fileReadNames root: (ast.parseSource source: rd.take) :into
-                } case err then null
-            }
-        }
-    } case err then null
+    for each fp: (sourceFilesUnder :dir) loop {
+        rd: io.readText path: fp
+        match (
+            rd
+        ) case ok then {
+            fileReadNames root: (ast.parseSource source: rd.take) :into
+        } case err then null
+    }
 }
 
 # projectUnitReads -- the member names read as `<unit>.<name>` in every `.z` file
-# directly under `dir` other than the unit's own, as text: a parse per file.
+# of the source root `dir` (sourceFilesUnder) other than the unit's own, as
+# text: a parse per file.
 projectUnitReads: function {dir: StringView uname: StringView into: Set String} is {
-    own: "\{uname}.z"
-    ents: io.listDir path: dir
-    match (
-        ents
-    ) case ok then {
-        for each e: ents loop {
-            ev: e.stringView
-            if (ev.endsWith suffix: ".z") when ev != own then {
-                fp: "\{dir}/\{ev}"
-                rd: io.readText path: fp
-                match (
-                    rd
-                ) case ok then {
-                    fileUnitReads root: (ast.parseSource source: rd.take) :uname :into
-                } case err then null
-            }
+    own: "\{dir}/\{uname}.z"
+    for each fp: (sourceFilesUnder :dir) loop {
+        if fp.stringView != own then {
+            rd: io.readText path: fp
+            match (
+                rd
+            ) case ok then {
+                fileUnitReads root: (ast.parseSource source: rd.take) :uname :into
+            } case err then null
         }
-    } case err then null
+    }
 }
 
 # fileUnitReads -- the child names of every `<unit>.<child>` dotted path in one
