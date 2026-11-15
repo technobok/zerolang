@@ -39,13 +39,22 @@ public: unit {
     # facet/protocol spec signature whose body is none)
     isFunctionDefWithBody: bodies.isFunctionDefWithBody
     :truthyCondArmOf
-    :blockEndsInReturn
-    :blockHasBreak
-    :withForwardsTail
-    :armLeaves
-    :dissectedArgOf
-    :dissectedArmOf
-    :dissectedArgText
+    # true when `block`'s last statement is a return
+    blockEndsInReturn: flow.blockEndsInReturn
+    blockHasBreak: flow.blockHasBreak
+    # return position passes INTO a `with`'s body, rather than the `with` being the tail value
+    # itself, when that body is a `do` block no `break` leaves
+    withForwardsTail: flow.withForwardsTail
+    armLeaves: flow.armLeaves
+    # what the instance `ownerTid` bound its template's generic parameter `paramName` to; a
+    # type argument of no type when the owner is no instance of a template declaring that
+    # parameter
+    dissectedArgOf: flow.dissectedArgOf
+    dissectedArmOf: flow.dissectedArmOf
+    # the argument `darg` the instance `ownerTid` bound its template's parameter `paramName`
+    # to, as a diagnostic names it: a value as the program writes it, a type's name, "" for
+    # none
+    dissectedArgText: flow.dissectedArgText
     # stdTid for a caller holding only a view of the tree: the memoised or already-resolved
     # id, 0 when the type has not been resolved
     stdTidRo: stdtypes.stdTidRo
@@ -7716,7 +7725,7 @@ resolveMethodFnLazy: function {
     isFnDef: false
     arm: rowArmAt :ast nid: opId
     if arm.functiondef then isFnDef = true
-    if lazyOk when isFnDef when (eagerAt :st declId: unitDecl).not then return (
+    if lazyOk when isFnDef when (flow.eagerAt :st declId: unitDecl).not then return (
         optionval.some
         ztypes.tid.zero
     )
@@ -18053,41 +18062,6 @@ stampCtorDefaults: function {
     }
 }
 
-# true when `block`'s last statement is a return.
-blockEndsInReturn: function {ast: Ast.view block: astnode.view} out bool is {
-    match (
-        block
-    ) case statement then {
-        ne: block.statements.count.u64
-        if ne > 0 then {
-            lastId: zast.kidAt kids: ast.kids span: block.statements i: ne - 1
-            last: ast.nodes.get i: lastId
-            match (
-                last
-            ) case statementline then {
-                return (exprCallIsReturn :ast op: (ast.nodes.get i: last.statementline))
-            } else {
-                return false
-            }
-        } else {
-            return false
-        }
-    } else {
-        return false
-    }
-}
-
-# true when operation `op` is a call to the `return` builtin.
-exprCallIsReturn: function {ast: Ast.view op: astnode.view} out bool is {
-    match (
-        op
-    ) case call then {
-        return (atomNameId :ast n: (ast.nodes.get i: op.callable)) == zast.wellKnown.slot.wkReturn
-    } else {
-        return false
-    }
-}
-
 # unitHasObjectMethodBody -- true when a unit body holds an objectdef with a method-body.
 unitHasObjectMethodBody: function {ast: Ast.view defId: zast.nodeid} out bool is {
     bodyIds: zast.unitBodyIdsAt :ast unitId: defId
@@ -18542,7 +18516,7 @@ scanCallsInNode: function {
         scanCallsInSpan :st :scope :ast span: node.postconditions
     } case doexpr then {
         doFr: demandNever :st :scope
-        if (blockHasBreak :ast n: (ast.nodes.get i: node.statement)) then {
+        if (flow.blockHasBreak :ast n: (ast.nodes.get i: node.statement)) then {
             demandDefinition :st scope: doFr nameId: zast.wellKnown.slot.tyOptionval
         }
         scanCallsAt :st :scope :ast nid: node.statement
@@ -19224,7 +19198,10 @@ resolveOrdinaryMember: function {
     # use reaches it, and not before: following every one when the block
     # resolved demanded each unit a re-export names and minted every type in
     # it, for a program that names one of them
-    if isRx when (declIsPublicBlock :st declId: ownerDeclId) when (eagerAt :st declId: ownerDeclId
+    if isRx when (declIsPublicBlock :st declId: ownerDeclId) when (
+        flow.eagerAt
+        :st
+        declId: ownerDeclId
     ).not then return
     # A re-export whose target is a DOTTED path is resolved by following it,
     # which is resolveAliasKey's job -- resolveDef has no leg for a dotted target
@@ -19482,7 +19459,7 @@ resolveNamespaceMembers: function {
         )
     } else {
         resolveUnitScopes :st :ast :unitDecl ownerDeclId: declId ownerTid: uid :unitOpId
-        if declId.notZero when (eagerAt :st declId: parentDeclId) then (
+        if declId.notZero when (flow.eagerAt :st declId: parentDeclId) then (
             demandChildDecls
             :st
             :declId
@@ -21237,30 +21214,6 @@ paramTypeId: function {
         )
     }
     return ztypes.tid.zero
-}
-
-# isReturnCallKind -- true iff the stamped call-kind is a diverging control
-# statement (return / panic / error); the statement walk marks the scope
-# unreachable after one.
-isReturnCallKind: function {o: optionval zast.callkind} out bool is {
-    match (
-        o
-    ) case some then {
-        ck: o
-        match (
-            ck
-        ) case returnCall then {
-            return true
-        } case panicCall then {
-            return true
-        } case errorCall then {
-            return true
-        } else {
-            return false
-        }
-    } case none then {
-        return false
-    }
 }
 
 # printableInterpTid -- an interpolated part must be a value the string
@@ -33167,18 +33120,6 @@ refuseTypedefArmConstructor: function {
     return true
 }
 
-# typedefSumBase -- the union or variant at the end of `tid`'s typedef chain,
-# whose arms a match, an arm predicate and narrowing read through the
-# typedef; `tid` itself when it is no typedef over a sum.
-typedefSumBase: function {st: zenv.ZSymbolTable.view tid: ztypes.tid} out ztypes.tid is {
-    if (st.typing.typedefBaseTidOf :tid).isZero then return tid
-    t: tid
-    for (st.typing.typedefBaseTidOf tid: t).notZero loop t = st.typing.typedefBaseTidOf tid: t
-    tt: st.reg.typetypeOf typeId: (partialTemplateOf :st tid: t)
-    if tt.isSum then return t
-    return tid
-}
-
 # typedefMemberOwner -- the type a member read resolves on: the first link of
 # the receiver's typedef chain that declares it -- the receiver itself, or the
 # base a typedef delegates a member it does not carry to (Bytes.append is
@@ -33624,7 +33565,7 @@ typeOfBareName: function {
         # leaves a void function and supplies no result on purpose, so the
         # control names are not held to this.
         if isGenFn when (
-            (ctlDivKind bn: node.name) == zenv.divkind.none
+            (flow.ctlDivKind bn: node.name) == zenv.divkind.none
         ) when st.mode.suppressFnAutoCall.not when st.mode.allowBareFnRef.not then {
             if (fnAutoCallable :st mid: fo) then {
                 rewriteReadAsCall :ast :node
@@ -34842,7 +34783,7 @@ checkNarrowedConstRead: function {
     if d.isZero or (st.typing.decls.get i: d).kind.constDecl.not then return ztypes.tid.zero
     if (st.isShadowNarrowed nameId: node.name).not then return ztypes.tid.zero
     arm: st.getSubtypeName nameId: node.name
-    v: constSumValueOf :st :ast :unitDecl nameId: node.name
+    v: flow.constSumValueOf :st :ast :unitDecl nameId: node.name
     if v.kind.none or arm.isZero then return ztypes.tid.zero
     if (armCarriesPayload :st armTid: (constValueTid :st scope: st.curScope :ast :v) armName: arm
     ).not then return ztypes.tid.zero
@@ -34858,29 +34799,6 @@ checkNarrowedConstRead: function {
     return tid
 }
 
-# constSumValueOf -- the value of the unit constant a body's bare name reads,
-# when it is a sum's (an arm, a choice value or an option); noConst otherwise.
-constSumValueOf: function {
-    st: zenv.ZSymbolTable
-    ast: Ast
-    unitDecl: ztypes.declid
-    nameId: zast.nameid
-} out ztypes.cval is {
-    if (st.isLocalName :nameId) then return ztypes.noConst
-    held: st.walk.constFail
-    v: constValueOfMemberId :st scope: st.curScope :ast :unitDecl :nameId
-    st.walk.constFail = held
-    if v.kind.armKind then return v
-    if v.kind.aggKind when (st.typing.constAggs.get i: v.aggId.u64).kind.staticChoice then return v
-    return ztypes.noConst
-}
-
-# constHeldArm -- the arm a sum constant `v` holds
-constHeldArm: function {st: zenv.ZSymbolTable.view v: ztypes.cval} out zast.nameid is {
-    if v.kind.aggKind then return (st.typing.constAggs.get i: v.aggId.u64).arm
-    return v.armName
-}
-
 # constArmPayload -- the payload sum constant `v` holds in arm `arm`: its value
 # when it holds that arm and the arm carries one, noConst otherwise
 constArmPayload: function {
@@ -34890,44 +34808,6 @@ constArmPayload: function {
     g: st.typing.constAggs.get i: v.aggId.u64
     if (g.arm != arm) or (g.itemCount == 0) then return ztypes.noConst
     return (st.typing.constAggItems.get i: g.itemStart.u64)
-}
-
-# recordConstMatchFold -- a match whose subject is a unit constant's name selects
-# the arm the constant holds, as an `if` on a constant condition selects its
-# branch (foldIfBranch): only that arm's body is emitted.
-recordConstMatchFold: function {
-    st: zenv.ZSymbolTable
-    ast: Ast
-    unitDecl: ztypes.declid
-    casenode: caseref
-} is {
-    sn: atomNameId :ast n: (ast.nodes.get i: casenode.subject)
-    if sn.isZero then return
-    v: constSumValueOf :st :ast :unitDecl nameId: sn
-    if v.kind.none then return
-    held: constHeldArm :st :v
-    stmt: casenode.elseclause
-    k: u64
-    for k < casenode.nclauses loop {
-        cl: caseClauseRefAt :ast nid: (zast.caseClauseAt :ast nid: casenode.nid i: k)
-        k = k + 1
-        if cl.name == held then stmt = cl.statement
-    }
-    if stmt.isZero then return
-    foreign: st.typing.rowIsForeign nid: casenode.nid
-    (
-        ztyping.setAgreed
-        shared: st.typing.foldedBranch
-        :foreign
-        nid: casenode.nid
-        value: (ztyping.foldedbranch known: true :stmt)
-    )
-    # the subject decided the fold, and run time never reads it
-    (
-        st.walk.wideConstTaken.set
-        key: (ztyping.monostamp mono: st.typing.curMonoStamp node: casenode.subject)
-        value: 1
-    )
 }
 
 # checkNumericParamAtom -- a bare name that names a numeric generic parameter of
@@ -35256,90 +35136,6 @@ predFactOf: function {
     }
 }
 
-# shadowCollapseIfSingle -- when exclusions have collapsed `name` to a
-# single PAYLOAD arm, upgrade to the shadow narrowing:
-# the bare name becomes the payload, exactly as in a match arm. A null
-# payload keeps the outer type (nothing to read). Condition-derived
-# call sites only -- construction narrowing never routes through here.
-shadowCollapseIfSingle: function {
-    ast: Ast.view
-    st: zenv.ZSymbolTable
-    name: zast.nameid
-    fullTid: ztypes.tid
-} is {
-    arm: st.narrowedArmOf nameId: name fullTypeId: fullTid
-    if arm.isZero then return
-    po: sumArmTid :st sumTid: fullTid armId: arm
-    if po.some then {
-        if (st.reg.typetypeOf typeId: po) == ztypes.ztypetype.nullType then return
-        st.narrow nameId: name toTypeId: po subtypeName: arm shadow: true
-        armPayloadReadonly :st :ast subject: name parentTid: fullTid armName: arm payloadTid: po
-    }
-}
-
-# applyPredFact -- record one predicate fact on its subject in the current
-# branch scope. `holds` is the branch's knowledge of the condition: true
-# on the then path, false on else/later-clause paths. A holding positive
-# (or failing negated) fact SHADOW-narrows to the arm (the bare name is
-# the payload); the opposite excludes it, and an exclusion that leaves a
-# single payload arm collapses to the same shadow form.
-applyPredFact: function {ast: Ast.view st: zenv.ZSymbolTable f: ArmPredFact.view holds: bool} is {
-    doNarrow: holds != f.negated
-    if doNarrow then {
-        po: sumArmTid :st sumTid: f.fullTid armId: f.armName
-        if po.some then {
-            st.narrow nameId: f.subject toTypeId: po subtypeName: f.armName shadow: true
-            (
-                armPayloadReadonly
-                :st
-                :ast
-                subject: f.subject
-                parentTid: f.fullTid
-                armName: f.armName
-                payloadTid: po
-            )
-        }
-    } else {
-        st.exclude nameId: f.subject subtypeName: f.armName fullTypeId: f.fullTid
-        shadowCollapseIfSingle :ast :st name: f.subject fullTid: f.fullTid
-    }
-}
-
-# postGuardRecord -- record the post-guard narrowing of `subject` under the
-# guarding statement's node id when the applied facts left it SHADOW-
-# narrowed to a payload arm: the emitter aliases the bare name for the
-# rest of the enclosing block.
-postGuardRecord: function {
-    st: zenv.ZSymbolTable
-    stmtNid: zast.nodeid
-    subject: zast.nameid
-    fullTid: ztypes.tid
-} is {
-    if (st.isShadowNarrowed nameId: subject).not then return
-    # the emitter reads these per statement, so each instance walk records its
-    # own; a template walk's partial names no type the emitter writes. A
-    # template walk after them (a generic unit's) re-binds the name, so the
-    # variable it names is the one the emitter will find.
-    if (st.reg.isPartialOf tid: fullTid) then {
-        if (st.typing.postGuardTid.has key: stmtNid) then {
-            pgt: (st.lookupVarId nameId: subject).or d: ztypes.vid.zero
-            st.typing.setPostGuardVar nid: stmtNid vid: pgt
-        }
-        return
-    }
-    arm: st.getSubtypeName nameId: subject
-    if arm.isZero then return
-    po: st.typing.declChildOfId parentTypeId: fullTid nameId: arm
-    if po.some then {
-        if (st.reg.typetypeOf typeId: po) == ztypes.ztypetype.nullType then return
-        st.typing.postGuardName.set key: stmtNid value: subject
-        pgv: (st.lookupVarId nameId: subject).or d: ztypes.vid.zero
-        st.typing.setPostGuardVar nid: stmtNid vid: pgv
-        st.typing.postGuardTid.set key: stmtNid value: fullTid
-        st.typing.postGuardArm.set key: stmtNid value: arm
-    }
-}
-
 # checkClauseCondition -- walk one if-clause condition: an unresolved value
 # is an unknown reference, and the value must be a bool or a 2-arm sum type.
 checkClauseCondition: function {
@@ -35387,87 +35183,6 @@ checkClauseCondition: function {
             )
         }
     }
-}
-
-# checkClauseConditions -- walk one if-clause's conditions (each must be bool
-# or a 2-arm sum type) and the predicate facts they establish. Answers the
-# releaseMark after the first conjunct: the conjuncts after it run only where
-# those before them held, so what they release is released on those paths alone.
-checkClauseConditions: function {
-    st: zenv.ZSymbolTable
-    unitDecl: ztypes.declid
-    ast: Ast
-    clause: ifclauseref
-    factsOut: List ArmPredFact
-    boolId: ztypes.tid
-} out u64 is {
-    firstRel: st.releaseMark
-    if clause.nid.isZero then return firstRel
-    k: u64
-    for k < clause.nconds loop {
-        condId: zast.ifCondAt :ast nid: clause.nid i: k
-        k = k + 1
-        cond: argRefAt :ast nid: condId
-        if cond.nid.notZero then {
-            condMark: st.entryMark
-            checkClauseCondition :st :unitDecl :ast :cond :boolId
-            # a conjunct after the first runs only when those before it hold
-            if k > 1 then st.markTakesMaybeFrom from: condMark
-            if k == 1 then firstRel = st.releaseMark
-            # the fact a conjunct establishes holds for the conjuncts after it,
-            # not only for the body: `when` short-circuits, so a later conjunct
-            # runs only where this one held. Applying it here is what makes
-            # `if x.some when x > 3` mean what the nested form means.
-            fo: predFactOf :ast :st n: (ast.nodes.get i: cond.operation) :boolId
-            if fo.some then {
-                pf: fo.take
-                applyPredFact :ast :st f: pf holds: true
-                factsOut.append pf
-            }
-        }
-    }
-    return firstRel
-}
-
-# checkClauseBody -- walk one if-clause's statement block, its conditions
-# walked. Answers the block's last statement type, 0 for a row that is no
-# if-clause.
-checkClauseBody: function {
-    st: zenv.ZSymbolTable unitDecl: ztypes.declid ast: Ast clause: ifclauseref
-} out ztypes.tid is {
-    if clause.nid.isZero then return ztypes.tid.zero
-    checkStatement :st :unitDecl :ast blockId: clause.statement
-    return (lastStmtType :st :ast block: (ast.nodes.get i: clause.statement))
-}
-
-# lastStmtType -- the resolved type id of a statement block's last statement
-# (the value of a do-block), or 0 when empty/untyped.
-lastStmtType: function {
-    st: zenv.ZSymbolTable.view ast: Ast.view block: astnode.view
-} out ztypes.tid is {
-    result: ztypes.tid
-    match (
-        block
-    ) case statement then {
-        ne: block.statements.count.u64
-        if ne > 0 then {
-            lastId: zast.kidAt kids: ast.kids span: block.statements i: ne - 1
-            last: ast.nodes.get i: lastId
-            if last.statementline then {
-                lst: walkTypeOf :st nid: last.nodeid
-                if lst.notZero then result = lst
-            }
-        }
-    } else {
-        # An expression-shaped body (a bare `then 10` branch) carries its
-        # value on its own node.
-        bid: nodeId n: block
-        if bid.notZero then {
-            bst: walkTypeOf :st nid: bid
-            if bst.notZero then result = bst
-        }
-    }
-    return result
 }
 
 # materialiseLiteral -- fold a literal pseudo-type id to its concrete default
@@ -36442,39 +36157,6 @@ refuseNullValue: function {
     return true
 }
 
-# refuseUnitValue -- a unit -- a file unit, a nested one, a generic unit's
-# instance, or an instantiation written in place -- used whole where a value is
-# wanted. A unit is a namespace of definitions with no runtime object of its
-# own, so it has no value to bind; its members are reached through it.
-refuseUnitValue: function {
-    st: zenv.ZSymbolTable
-    ast: Ast.view
-    vt: ztypes.tid
-    nid: zast.nodeid
-} out bool is {
-    if vt.isZero then return false
-    if (st.reg.typetypeOf typeId: vt) != ztypes.ztypetype.unitType then return false
-    ut: typeExprText :ast :nid
-    ln: u32
-    co: u32
-    vn: ast.nodes.get i: nid
-    ln = nodeLine n: vn
-    co = nodeCol n: vn
-    (
-        addErrorWithHint
-        :st
-        nodeid: nid
-        lineno: ln
-        colno: co
-        e: zast.err.typeError
-        msg: "'\{ut}' is a unit, not a value"
-        note: "a unit is a namespace of definitions; it has no runtime object".string
-        hint: "name one of its members through it".string
-        width: ut.length
-    )
-    return true
-}
-
 # refuseStaticListStatement -- a list's name written alone as a statement.
 # Its value is a view of constants, so evaluating it does nothing. True when
 # `vt`, the statement's type, is a block and was refused.
@@ -36508,28 +36190,6 @@ refuseStaticListStatement: function {
     return true
 }
 
-# checkAssignment -- a local binding `name: value`: walk the value, materialise a
-# literal-typed value to its concrete default (the binding takes i64, unlike a
-# for-loop binding which keeps the pseudo id), define the local (owned for a plain
-# value), and stamp the assignment node + def-variable.
-checkAssignment: function {
-    st: zenv.ZSymbolTable
-    unitDecl: ztypes.declid
-    ast: Ast
-    asgn: asgnref
-} is {
-    # the local is in scope from its statement on, grey while its value is
-    # checked (zenv.beginLocal)
-    grey: st.beginLocal nameId: asgn.name
-    checkAssignmentIn :st :unitDecl :ast :asgn :grey
-    # one whose value failed binds a typeless variable (endLocal), which the
-    # binding names too: a generic unit's template walk runs after its
-    # instances' and re-binds every read, so a binding left naming an instance
-    # walk's variable would disagree with its own reads
-    vh: st.endLocal declId: grey
-    if vh.notZero then st.typing.setDefVariable nid: asgn.nid vid: vh
-}
-
 # checkAssignmentIn -- checkAssignment's check of the definition, whose local
 # `grey` is bound and grey (0 when the block already binds the name).
 checkAssignmentIn: function {
@@ -36554,7 +36214,7 @@ checkAssignmentIn: function {
     }
     if (refuseNullValue :st :ast :vt nid: asgn.value) then return
     vt = staticListAsValue :st :ast :vt nid: asgn.value
-    if (refuseUnitValue :st :ast :vt nid: asgn.value) then return
+    if (flow.refuseUnitValue :st :ast :vt nid: asgn.value) then return
     refuseValueBorrow :st :ast :vt value: asgn.value
     if vt.notZero then {
         bpins: List ztyping.PinPath
@@ -38033,7 +37693,7 @@ checkWith: function {
     # a literal type has no run-time variable
     vt = materialiseLiteral :ast :st t: vt
     vt = staticListAsValue :st :ast :vt nid: withnode.value
-    if (refuseUnitValue :st :ast :vt nid: withnode.value) then vt = ztypes.tid
+    if (flow.refuseUnitValue :st :ast :vt nid: withnode.value) then vt = ztypes.tid
     refuseValueBorrow :st :ast :vt value: withnode.value
     if vt.u64 == 0 when st.typing.errors.length == errW then {
         reportUnresolvedValue :st :unitDecl :ast nid: withnode.value
@@ -38133,7 +37793,7 @@ checkWith: function {
     # a body that leaves on every path leaves the `with`, and takes the code
     # after it out of reach
     wk: st.unreachableKind
-    if wk == zenv.divkind.none then wk = exprDivKind :st :ast valueId: withnode.body
+    if wk == zenv.divkind.none then wk = flow.exprDivKind :st :ast valueId: withnode.body
     moveWithValue :st :ast body: withnode.body used: outerStmt != withnode.nid kind: wk
     st.popTo marker: withMarker
     # a `with` used as a value answers whether it hands back a place
@@ -38155,134 +37815,6 @@ withValueCrossesSuspension: function {
     if st.walk.currentGenTid.isZero then return false
     if own != ztypes.zownership.owned then return false
     return (zast.yieldCountIn :ast nid: withnode.body) > 0
-}
-
-# blockHasBreak -- a bare `break` somewhere in this block's own control flow:
-# in any node, a binding's value and a condition included, but not inside a
-# nested `do` or `for`, whose breaks bind to them. Drives the do-block's
-# optionval wrapping and its own break target.
-blockHasBreak: function {ast: Ast.view n: astnode.view} out bool is {
-    match (
-        n
-    ) case atomid then {
-        return n.name == zast.wellKnown.slot.wkBreak
-    } case doexpr then {
-        return false
-    } case forexpr then {
-        return false
-    } else null
-    nk: zast.childCount :ast :n
-    i: u64
-    for i < nk loop {
-        k: zast.childAt :ast :n :i
-        i = i + 1
-        if (blockHasBreak :ast n: (ast.nodes.get i: k)) then return true
-    }
-    return false
-}
-
-# armLeaves -- an arm of this `if` or `match` holds a `return`, a `break` or a
-# `continue` that leaves the construct. The walk descends blocks, nested
-# if/match/with bodies and binding values; a `break` or `continue` inside a
-# nested loop or `do` binds to it and stays inside, while a `return` leaves from
-# any depth.
-armLeaves: function {ast: Ast.view n: astnode.view inLoop: bool} out bool is {
-    match (
-        n
-    ) case statement then {
-        return (statementsLeave :ast span: n.statements :inLoop)
-    } case statementline then {
-        return (armLeaves :ast n: (ast.nodes.get i: n.statementline) :inLoop)
-    } case atomid then {
-        if n.name == zast.wellKnown.slot.wkReturn then return true
-        if inLoop then return false
-        return (n.name == zast.wellKnown.slot.wkBreak) or (n.name == zast.wellKnown.slot.wkContinue)
-    } case ifexpr then {
-        return (clauseArmsLeave :ast clauses: n.clauses elseId: n.elseclause :inLoop)
-    } case caseexpr then {
-        return (clauseArmsLeave :ast clauses: n.clauses elseId: n.elseclause :inLoop)
-    } case withexpr then {
-        return (armLeaves :ast n: (ast.nodes.get i: n.body) :inLoop)
-    } case forexpr then {
-        if n.body.isZero then return false
-        return (armLeaves :ast n: (ast.nodes.get i: n.body) inLoop: true)
-    } case doexpr then {
-        return (armLeaves :ast n: (ast.nodes.get i: n.statement) inLoop: true)
-    } case assignment then {
-        return (armLeaves :ast n: (ast.nodes.get i: n.value) :inLoop)
-    } case reassignment then {
-        return (armLeaves :ast n: (ast.nodes.get i: n.value) :inLoop)
-    } else {
-        return (exprCallIsReturn :ast op: n)
-    }
-}
-
-# statementsLeave -- armLeaves over a block's statements.
-statementsLeave: function {ast: Ast.view span: zast.kidspan inLoop: bool} out bool is {
-    for each sId: (zast.kidsOf :ast :span) loop {
-        if (armLeaves :ast n: (ast.nodes.get i: sId) :inLoop) then return true
-    }
-    return false
-}
-
-# clauseArmsLeave -- armLeaves over an if's or a match's arms and its else.
-clauseArmsLeave: function {
-    ast: Ast.view
-    clauses: zast.kidspan
-    elseId: zast.nodeid
-    inLoop: bool
-} out bool is {
-    for each cId: (zast.kidsOf :ast span: clauses) loop {
-        if (clauseArmLeaves :ast cl: (ast.nodes.get i: cId) :inLoop) then return true
-    }
-    if elseId.isZero then return false
-    return (armLeaves :ast n: (ast.nodes.get i: elseId) :inLoop)
-}
-
-# clauseArmLeaves -- armLeaves over one `if` or `case` clause's body.
-clauseArmLeaves: function {ast: Ast.view cl: astnode.view inLoop: bool} out bool is {
-    match (
-        cl
-    ) case ifclause then {
-        return (armLeaves :ast n: (ast.nodes.get i: cl.statement) :inLoop)
-    } case caseclause then {
-        return (armLeaves :ast n: (ast.nodes.get i: cl.statement) :inLoop)
-    } else {
-        return false
-    }
-}
-
-# refuseLeavingArm -- an `if` or a `match` inside an expression (an argument,
-# an operand, an interpolation part, a condition, a returned value) whose arm
-# leaves with `return`, `break` or `continue`. The arms run where the
-# expression is evaluated, among values the enclosing statement is still
-# building, and leaving from there would skip releasing them. A statement, and
-# the whole value of a binding, may leave from an arm.
-refuseLeavingArm: function {
-    st: zenv.ZSymbolTable
-    ast: Ast.view
-    nid: zast.nodeid
-    lineno: u32
-    colno: u32
-    # how the construct is named in the message, and its keyword's width
-    form: StringView
-    width: u32
-} is {
-    if st.walk.stmtExprNid == nid then return
-    if st.walk.formValueNid == nid then return
-    if (armLeaves :ast n: (ast.nodes.get i: nid) inLoop: false).not then return
-    (
-        addErrorWithHint
-        :st
-        nodeid: nid
-        :lineno
-        :colno
-        e: zast.err.typeError
-        msg: "an arm of \{form} used inside an expression leaves it with `return`, `break` or `continue`"
-        note: "".string
-        hint: "bind the value to a local first, then use the local".string
-        :width
-    )
 }
 
 # wrapDoBreakValue -- the value type of a do-block that can BREAK: an early
@@ -38310,7 +37842,7 @@ wrapDoBreakValue: function {
     result: ztypes.tid
 } out ztypes.tid is {
     if result.isZero then return result
-    if (blockHasBreak :ast n: (ast.nodes.get i: donode.statement)).not then return result
+    if (flow.blockHasBreak :ast n: (ast.nodes.get i: donode.statement)).not then return result
     rtt: st.reg.typetypeOf typeId: result
     if (rtt == ztypes.ztypetype.nullType) or (rtt == ztypes.ztypetype.neverType) then {
         return st.typing.nullTypeId
@@ -38345,50 +37877,6 @@ wrapDoBreakValue: function {
     )
     if omid0.isZero then return payloadTid
     return omid0
-}
-
-# checkDo -- walk a do-block: push the `block` scope, define break (an entry
-# position placeholder with an unregistered type id, so it never joins the dump),
-# walk the statements, then pop. The do resolves to its last statement's value type.
-checkDo: function {
-    st: zenv.ZSymbolTable
-    unitDecl: ztypes.declid
-    ast: Ast
-    donode: doref
-} out ztypes.tid is {
-    doMarker: st.pushBlock node: donode.nid
-    # a `break` leaves part of the block unrun on some paths: a lock it
-    # releases is released on the paths that ran it only
-    doPath: blockHasBreak :ast n: (ast.nodes.get i: donode.statement)
-    if doPath then st.markPath marker: doMarker since: st.releaseMark
-    restMark: st.restoreMark
-    st.openBreakScope
-    dbk: st.reg.ctlPlaceholder
-    st.define nameId: zast.wellKnown.slot.wkBreak ztypeId: dbk
-    brkMark: st.loopBreakTakes.length
-    checkStatement :st :unitDecl :ast blockId: donode.statement
-    result: lastStmtType :st :ast block: (ast.nodes.get i: donode.statement)
-    broke: st.breakLeavesInnermost
-    endTook: ListVal ztypes.declid
-    if broke then st.takenDeclsInScope into: endTook
-    if broke.not then st.markUnconditional marker: doMarker
-    # a `break` lands just after the block, so only a block none leaves takes
-    # the code after it out of reach
-    doKind: zenv.divkind.none
-    if broke.not then doKind = st.unreachableKind
-    st.popTo marker: doMarker
-    st.closeBreakScope
-    if doKind > 0 then st.markUnreachable kind: doKind
-    # a block used as a value answers whether it hands back a place
-    if st.walk.stmtExprNid != donode.nid then recordControlPlaceLeaves :st :ast nid: donode.nid
-    if broke then settleDoBreakTakes :st :brkMark :endTook
-    if doPath then settleRestoredLocks :st since: restMark
-    result = wrapDoBreakValue :ast :st :unitDecl :donode :result
-    if result.notZero then {
-        setk: result
-        stampGate :st nid: donode.nid tid: setk
-    }
-    return result
 }
 
 # headerIsPlace -- the value a `for each` header walks is storage that already
@@ -38828,7 +38316,7 @@ checkForConditionIn: function {
     st.mode = savedMode
     st.walk.eachSubjectNid = esPrev
     vt = staticListAsValue :st :ast :vt nid: cond.operation
-    if (refuseUnitValue :st :ast :vt nid: cond.operation) then vt = ztypes.tid
+    if (flow.refuseUnitValue :st :ast :vt nid: cond.operation) then vt = ztypes.tid
     # a condition that typed to nothing and raised nothing is an
     # unresolvable name -- the same rule the binding and operand sites
     # follow. Without it the emitter writes the bare name into the C.
@@ -39066,139 +38554,6 @@ checkForPostcondition: function {
 }
 
 
-# checkFor -- walk a for-loop: push the `for` scope, define break/continue (entry
-# position placeholders with unregistered type ids, so they never join the dump),
-# then walk the conditions, the body and the postconditions, and pop. A named condition
-# is a binding: define the loop var with the condition value's type (the value of
-# a bare literal init stays the literal pseudo-type, keeping the entry out of the
-# dump joins). Iterator-wrapper element extraction needs monomorphization and is
-# not implemented. The for itself resolves to null (filtered) in statement position.
-checkFor: function {
-    st: zenv.ZSymbolTable
-    unitDecl: ztypes.declid
-    ast: Ast
-    fornode: forref
-} out ztypes.tid is {
-    # what the constant fold reads of the conditions, for the emitter and for
-    # whether the code after the loop is reached
-    entry: foldLoopEntry :st scope: st.curScope :ast :unitDecl :fornode
-    end: ztyping.loopend.unwritten
-    if entry != ztyping.loopentry.never then end = (
-        foldLoopEnd
-        :st
-        scope: st.curScope
-        :ast
-        :unitDecl
-        :fornode
-    )
-    constFailClear :st
-    # A loop the fold proved never runs is reached by no use site, as a dead
-    # clause of an `if` is: its body and conditions are not walked. A loop in
-    # value position is walked all the same, for its list's element type, and
-    # `--eager` walks everything.
-    deadStatement: (
-        (entry == ztyping.loopentry.never) and
-        (
-            st.walk.stmtBlocks.has
-            item: fornode.body
-        )
-    )
-    if deadStatement when (eagerAt :st declId: unitDecl).not then {
-        (
-            stampFoldedLoop
-            :st
-            nid: fornode.nid
-            fold: (ztyping.foldedloop :entry :end neverExits: false)
-        )
-        return ztypes.tid
-    }
-    entryStart: st.entryMark
-    # THE `for` SCOPE IS ONE ITERATION'S. What a named condition binds is bound
-    # afresh at the top of every iteration, and is read by the `while` arms,
-    # the body and the postconditions of that iteration. So the scope's end is
-    # the iteration's end, and a `break` or a `continue` leaves it.
-    forMarker: st.pushBlock node: fornode.nid
-    st.openLoopRun :entryStart postTest: fornode.nposts > 0
-    st.openBreakScope
-    endLoopWriteNarrowing :st :ast :fornode
-    bk: st.reg.ctlPlaceholder
-    st.define nameId: zast.wellKnown.slot.wkBreak ztypeId: bk
-    ct: st.reg.ctlPlaceholder
-    st.define nameId: zast.wellKnown.slot.wkContinue ztypeId: ct
-    # inside a generator body, a loop whose body suspends keeps what its
-    # header binds in the instance: the loop's C locals die at the return.
-    # Asked in two steps: `and` does not short-circuit, and the count walks
-    # the body
-    spillFor: false
-    if st.walk.currentGenTid.notZero then {
-        spillFor = (zast.yieldCountIn :ast nid: fornode.body) > 0
-    }
-    checkForConditions :st :unitDecl :ast :fornode :spillFor :forMarker
-    st.walk.draft.clear
-    bodyMark: st.entryMark
-    # THE BODY IS ITS OWN SCOPE, inside the iteration's: the postconditions run
-    # after it and do not see its locals. `popTo marker: forMarker` below pops
-    # this with it.
-    bodyMarker: st.pushBlock node: fornode.body
-    # the body runs zero or more times: a lock it releases is released on its
-    # path alone
-    st.markPath marker: bodyMarker since: st.releaseMark
-    restMark: st.restoreMark
-    abPrev: st.walk.appendedBody
-    st.walk.appendedBody = zast.nodeid
-    if (st.walk.stmtBlocks.has item: fornode.body).not then st.walk.appendedBody = fornode.body
-    walkBodyAt :st :unitDecl :ast bodyId: fornode.body
-    st.walk.appendedBody = abPrev
-    elemT: ztypes.tid
-    # a body whose last statement DIVERGES -- a bare `return`, a return call,
-    # a panic -- yields nothing, and the loop is a statement, not a
-    # comprehension. Asked of the last statement's type instead, a bare
-    # `return` handed back the builtin's own function type and a `List` of
-    # it was minted, which the constraint check then refused by name.
-    if fornode.body.notZero when st.isUnreachable.not then {
-        fb: ast.nodes.get i: fornode.body
-        elemT = lastStmtType :st :ast block: fb
-    }
-    # THE VALUE IS APPENDED, and only in value position: a statement loop
-    # whose last line happens to have a value discards it, and stmtBlocks is
-    # what says which this is (noteStatementBlocks runs before the walk reaches
-    # here). The scope is still open, so the element is still a name.
-    if elemT.notZero when (st.walk.stmtBlocks.has item: fornode.body).not then {
-        checkComprehensionValue :st :ast :fornode :elemT
-    }
-    # a body that leaves the FUNCTION runs at most once: its own takes are
-    # dropped (the code after the loop never sees them) while a condition's
-    # survive, since the condition ran before it. One that leaves with
-    # `break` keeps everything. One that falls through reaches the next
-    # iteration, and a take of an outer local on that path is the loop-move
-    # error -- as is one at any `continue`, which the walk recorded there.
-    k: st.unreachableKind
-    if k == zenv.divkind.exit then st.discardTakenFrom start: bodyMark
-    # walked only for its type, a loop that never runs moves nothing
-    if entry == ztyping.loopentry.never then st.discardTakenFrom start: entryStart
-    st.popTo marker: bodyMarker
-    broke: st.breakLeavesInnermost
-    checkForPostconditions :st :unitDecl :ast :fornode :end :bodyMark
-    st.walk.draft.clear
-    st.popTo marker: forMarker
-    st.closeBreakScope
-    run: st.closeLoopRun
-    if k == zenv.divkind.none then reportLoopMoves :st :ast :fornode :run
-    reportContinueMoves :st :ast :fornode :run
-    relayBreakTakes :st :run
-    settleRestoredLocks :st since: restMark
-    st.forgetOnceTakes :run
-    # no condition can stop the loop and no `break` left it: its only ways out
-    # leave the function
-    endless: (end == ztyping.loopend.unwritten) or (end == ztyping.loopend.always)
-    neverExits: (entry == ztyping.loopentry.always) and endless and broke.not
-    stampFoldedLoop :st nid: fornode.nid fold: (ztyping.foldedloop :entry :end :neverExits)
-    if neverExits then st.markUnreachable kind: zenv.divkind.exit
-    # a statement loop discards its body's value, so it has no List to mint
-    if (st.walk.stmtBlocks.has item: fornode.body) then return ztypes.tid
-    return (forComprehensionTid :st :unitDecl :ast :fornode :elemT)
-}
-
 # relayContinueTakes -- in a loop that tests postconditions, a `continue` lands
 # on their test, inside the iteration's scope, where the path that fell out of
 # the body arrives too. So a local of that scope -- the element the binding
@@ -39220,40 +38575,6 @@ relayContinueTakes: function {st: zenv.ZSymbolTable bodyMark: u64} is {
         )
     }
     st.markTakesMaybeFrom from: bodyMark
-}
-
-# checkForConditions -- walk a loop's conditions, in order. A condition after the
-# first runs only when those before it hold, so what it takes is taken on some
-# paths only, and the `for` scope at `forMarker` is a path from it on: what it
-# releases, as what the body and the postconditions release, is released on
-# those paths alone.
-checkForConditions: function {
-    st: zenv.ZSymbolTable
-    unitDecl: ztypes.declid
-    ast: Ast
-    fornode: forref
-    spillFor: bool
-    forMarker: zenv.openpos
-} is {
-    if fornode.nconds == 0 then st.markPath marker: forMarker since: st.releaseMark
-    kC: u64
-    for kC < fornode.nconds loop {
-        condId: zast.forCondAt :ast nid: fornode.nid i: kC
-        kC = kC + 1
-        onceMark: st.entryMark
-        checkForCondition :st :unitDecl :ast :condId :spillFor isEach: fornode.isEach
-        # an `each` binding runs once, before the loop: what it moved is not
-        # moved again by the next iteration. A plain one runs at every
-        # iteration, so what it moves is a move in the loop.
-        if fornode.isEach when (forCondBindsName :ast :condId) then (
-            st.recordOnceTakes
-            from: onceMark
-        )
-        if kC > 1 then st.markTakesMaybeFrom from: onceMark
-        if kC == 1 then st.markPath marker: forMarker since: st.releaseMark
-    }
-    # a `while` arm that fails leaves the loop with the binding answered
-    if fornode.nconds > 1 then st.recordLoopArmDestroy nid: fornode.nid
 }
 
 # checkForPostconditions -- walk a loop's postconditions. A POSTCONDITION RUNS
@@ -39290,744 +38611,6 @@ checkForPostconditions: function {
     }
 }
 
-# endLoopWriteNarrowing -- a name the loop writes, anywhere in its conditions or
-# its body, holds on each iteration what the previous one may have written, so
-# its narrowing ends at the loop's entry: every read in the loop -- before the
-# write as much as after it -- and the code after the loop see the declared
-# type. The walk is skipped when nothing is narrowed, which is almost always.
-endLoopWriteNarrowing: function {st: zenv.ZSymbolTable ast: Ast.view fornode: forref} is {
-    if st.anyNarrowed.not then return
-    if (loopWritesNarrowedName :st :ast :fornode).not then return
-    written: ListVal zast.nameid
-    bound: IdSet zast.nameid
-    collectOuterWrites :ast nid: fornode.nid :bound names: written
-    for each nm: written loop {
-        st.endNarrowingIfNarrowed nameId: nm
-    }
-}
-
-# loopWritesNarrowedName -- whether any write in the loop targets a bare name
-# that resolves to a narrowed local. A quick question before the exact walk,
-# asked of every loop inside a narrowing: one worklist and no shadowing, since
-# a name the answer wrongly includes only sends the loop to the walk that
-# decides it.
-loopWritesNarrowedName: function {
-    st: zenv.ZSymbolTable.view
-    ast: Ast.view
-    fornode: forref
-} out bool is {
-    # sized for a typical loop body: growing the list is the walk's only cost
-    work: ListVal zast.nodeid capacity: 128
-    work.append fornode.nid
-    wi: u64
-    for wi < work.length loop {
-        wid: work.get i: wi
-        wi = wi + 1
-        if (nodeWritesNarrowedName :st :ast nid: wid :work) then return true
-    }
-    return false
-}
-
-# nodeWritesNarrowedName -- one node of that walk: whether it writes a narrowed
-# local's bare name, its children queued unless it is a nested function.
-nodeWritesNarrowedName: function {
-    st: zenv.ZSymbolTable.view
-    ast: Ast.view
-    nid: zast.nodeid
-    work: ListVal zast.nodeid
-} out bool is {
-    if nid.isZero then return false
-    t1: zast.nameid
-    t2: zast.nameid
-    {
-        wn: ast.nodes.get i: nid
-        if wn.functiondef then return false
-        if wn.reassignment then t1 = atomNameId :ast n: (ast.nodes.get i: wn.topath)
-        if wn.swapstmt then {
-            t1 = atomNameId :ast n: (ast.nodes.get i: wn.lhs)
-            t2 = atomNameId :ast n: (ast.nodes.get i: wn.rhs)
-        }
-        zast.childIdsInto :ast n: wn acc: work
-    }
-    if (nameIsNarrowedLocal :st nameId: t1) then return true
-    return (nameIsNarrowedLocal :st nameId: t2)
-}
-
-# nameReadsPayload -- whether `nameId` resolves to a local narrowed to one arm,
-# so that the name reads that arm's payload rather than the local.
-nameReadsPayload: function {st: zenv.ZSymbolTable.view nameId: zast.nameid} out bool is {
-    d: st.findLocal :nameId
-    if d.isZero then return false
-    return (st.narrowsToArm declId: d)
-}
-
-# nameIsNarrowedLocal -- whether `nameId` resolves to a local its newest row
-# narrows.
-nameIsNarrowedLocal: function {st: zenv.ZSymbolTable.view nameId: zast.nameid} out bool is {
-    if nameId.isZero then return false
-    d: st.findLocal :nameId
-    if d.isZero then return false
-    narrowed: st.isNarrowedDecl declId: d
-    return narrowed
-}
-
-# collectOuterWrites -- the names the writes under `nid` target that still mean
-# the local OUTSIDE it: a reassignment's bare target and each bare side of a
-# swap, unless a binding the walk has passed shadows the name there -- a
-# binding earlier in an enclosing block, a loop's binding over its body, a
-# `with` name over its body. A binder this walk does not know leaves the name
-# unshadowed, which only ends a narrowing that could have stood. A nested
-# function is its own scope and is not walked.
-collectOuterWrites: function {
-    ast: Ast.view
-    nid: zast.nodeid
-    # the names shadowed where `nid` sits
-    bound: IdSet zast.nameid
-    # the written names, appended
-    names: ListVal zast.nameid
-} is {
-    if nid.isZero then return
-    kids: ListVal zast.nodeid
-    inner: bound.copy
-    scope: readWriteScope :ast :nid :bound :names :inner :kids
-    if scope.walk.not then return
-    if scope.block then {
-        collectBlockWrites :ast :kids bound: inner :names
-        return
-    }
-    # a loop's and a `with`'s bindings shadow their names in the body only
-    for each k: kids loop {
-        if k == scope.body when scope.body.notZero then {
-            collectOuterWrites :ast nid: k bound: inner :names
-        } else {
-            collectOuterWrites :ast nid: k :bound :names
-        }
-    }
-}
-
-# writescope -- what collectOuterWrites needs of one node: whether to walk into
-# it at all, whether it is a block, and the body its own bindings cover.
-writescope: record {
-    # false for a nested function, which is its own scope
-    walk: bool
-    # a block, whose bindings shadow the lines after them
-    block: bool
-    # the body a loop's or a `with`'s bindings shadow, 0 for none
-    body: zast.nodeid
-}
-
-# readWriteScope -- read one node: record the writes it makes, add the names it
-# binds over its body to `inner`, and hand its children to `kids`.
-readWriteScope: function {
-    ast: Ast.view
-    nid: zast.nodeid
-    bound: (IdSet zast.nameid).view
-    names: ListVal zast.nameid
-    inner: IdSet zast.nameid
-    kids: ListVal zast.nodeid
-} out writescope is {
-    n: ast.nodes.get i: nid
-    if n.functiondef then return (writescope walk: false block: false body: zast.nodeid)
-    if n.reassignment then addOuterWrite :ast target: n.topath :bound :names
-    if n.swapstmt then {
-        addOuterWrite :ast target: n.lhs :bound :names
-        addOuterWrite :ast target: n.rhs :bound :names
-    }
-    zast.childIdsInto :ast :n acc: kids
-    if n.statement then return (writescope walk: true block: true body: zast.nodeid)
-    if n.withexpr then {
-        inner.add item: n.name
-        return (writescope walk: true block: false body: n.body)
-    }
-    if n.forexpr.not then return (writescope walk: true block: false body: zast.nodeid)
-    for each cnId: (zast.kidsOf :ast span: n.conditions) loop {
-        cn: ast.nodes.get i: cnId
-        if cn.namedoperation when cn.name.notZero then inner.add item: cn.name
-    }
-    return (writescope walk: true block: false body: n.body)
-}
-
-# collectBlockWrites -- a block's lines in order: a binding shadows its name for
-# the lines after it.
-collectBlockWrites: function {
-    ast: Ast.view
-    kids: (ListVal zast.nodeid).view
-    bound: IdSet zast.nameid
-    names: ListVal zast.nameid
-} is {
-    for each k: kids loop {
-        collectOuterWrites :ast nid: k :bound :names
-        bn: bindingNameOfLine :ast nid: k
-        if bn.notZero then bound.add item: bn
-    }
-}
-
-# addOuterWrite -- a write's target, when it is a bare name nothing shadows.
-addOuterWrite: function {
-    ast: Ast.view
-    target: zast.nodeid
-    bound: (IdSet zast.nameid).view
-    names: ListVal zast.nameid
-} is {
-    nm: atomNameId :ast n: (ast.nodes.get i: target)
-    if nm.isZero then return
-    if (bound.has item: nm).not then names.append nm
-}
-
-# bindingNameOfLine -- the name a block line binds (`name: value`), 0 when it
-# binds none.
-bindingNameOfLine: function {ast: Ast.view nid: zast.nodeid} out zast.nameid is {
-    line: ast.nodes.get i: nid
-    if line.statementline.not then return zast.nameid.zero
-    inner: ast.nodes.get i: line.statementline
-    if inner.assignment then return inner.name
-    return zast.nameid.zero
-}
-
-# forCondBindsName -- the condition is the loop's binding (`x: E`), not one of
-# its `while` tests
-forCondBindsName: function {ast: Ast.view condId: zast.nodeid} out bool is {
-    k: ast.nodes.get i: condId
-    if k.namedoperation.not then return false
-    return (zast.nameTextAt :ast ref: k.name).length > 0
-}
-
-# reportLoopMoves -- the outer locals a loop's conditions or body consumed on
-# the path that falls through to the next iteration, which would find them
-# already consumed. Asked after the loop's scope closed: the close re-lays a
-# take of an outer local above the stack height the loop opened at, and
-# drops everything else the loop laid, so those rows are the answer. Each
-# local is reported once, at its innermost loop; the take stays laid, so a
-# use after the loop is still refused.
-reportLoopMoves: function {
-    st: zenv.ZSymbolTable
-    ast: Ast.view
-    fornode: forref
-    run: zenv.looprun
-} is {
-    i: run.entryStart
-    for i < st.entryMark loop {
-        d: st.takenDeclAt :i
-        i = i + 1
-        if d.isZero then continue
-        if (st.isOnceTake :run :d) then continue
-        reportLoopMove :st :ast :fornode :d
-    }
-}
-
-# reportContinueMoves -- the locals the loop's `continue`s found consumed,
-# drained from the loop's run. A body-local recorded there is gone with the
-# loop's scope, and a name it shadowed is not the one consumed, so only a
-# decl the name still resolves to is reported.
-reportContinueMoves: function {
-    st: zenv.ZSymbolTable
-    ast: Ast.view
-    fornode: forref
-    run: zenv.looprun
-} is {
-    for st.loopContinueTakes.length > run.contStart loop {
-        d: st.loopContinueTakes.pop
-        if (st.isOnceTake :run :d) then continue
-        nid: st.typing.declNameOf declId: d
-        if (st.findLocal nameId: nid) == d then reportLoopMove :st :ast :fornode :d
-    }
-}
-
-# reportLoopMove -- one local moved where the loop's next iteration would
-# find it consumed, reported once at its innermost loop
-reportLoopMove: function {
-    st: zenv.ZSymbolTable
-    ast: Ast.view
-    fornode: forref
-    d: ztypes.declid
-} is {
-    if (st.loopMoveReported.has item: d) then return
-    st.loopMoveReported.add item: d
-    {
-        nid: st.typing.declNameOf declId: d
-        nm: zast.nameTextAt :ast ref: nid
-        lm: "cannot transfer ownership of '\{nm}' inside a loop (executes 0+ times; on later iterations '\{nm}' would already be consumed)"
-        ln: "'\{nm}' is declared outside the loop; move it after the loop, end the iteration that moves it with 'break' or 'return', or declare the value inside the body so each iteration owns a fresh one"
-        lh: String
-        (
-            addErrorWithHint
-            :st
-            nodeid: fornode.nid
-            lineno: fornode.lineno
-            colno: fornode.colno
-            e: zast.err.ownerError
-            msg: lm
-            note: ln
-            hint: lh
-            width: 3
-        )
-    }
-}
-
-# relayBreakTakes -- the takes recorded on paths that left the loop with
-# `break` are laid again after it: the code after the loop sees them
-# consumed. A body-local recorded there is gone with the loop's scope, and
-# a name it shadowed must not be consumed in its place, so only a decl the
-# name still resolves to is re-laid. The loop may end without that break,
-# so each is moved only maybe.
-relayBreakTakes: function {st: zenv.ZSymbolTable run: zenv.looprun} is {
-    for st.loopBreakTakes.length > run.breakStart loop {
-        d: st.loopBreakTakes.pop
-        nm: st.typing.declNameOf declId: d
-        nid: nm
-        if (st.findLocal nameId: nid) == d then (
-            st.invalidateDeclAs
-            declId: d
-            loc: takenHere
-            maybe: true
-        )
-    }
-}
-
-# settleDoBreakTakes -- a `do` block a `break` left: the takes on the paths
-# that left it with `break` (recorded from `brkMark`) are laid again after it,
-# and those its end laid (`endTook`) stay, each moved only maybe -- some
-# path reached past the block without it. A block-local is gone with the
-# block, and a name it shadowed must not be consumed in its place, so only a
-# declaration the name still resolves to is laid.
-settleDoBreakTakes: function {
-    st: zenv.ZSymbolTable
-    brkMark: u64
-    endTook: (ListVal ztypes.declid).view
-} is {
-    for st.loopBreakTakes.length > brkMark loop {
-        d: st.loopBreakTakes.pop
-        if (declStillResolves :st :d) then st.invalidateDeclAs declId: d loc: takenHere maybe: true
-    }
-    for each d2: endTook loop {
-        if (declStillResolves :st d: d2) then st.markTakeMaybe declId: d2
-    }
-}
-
-# declStillResolves -- whether the local `d`'s name still names it here.
-declStillResolves: function {st: zenv.ZSymbolTable.view d: ztypes.declid} out bool is {
-    nid: st.typing.declNameOf declId: d
-    return (st.findLocal nameId: nid) == d
-}
-
-# ArmTakes -- what the arms of an `if` or a `match` moved of the locals live
-# before it: every such local, consumed after the statement on at least one
-# path, and how many of the arms that reach the statement's end moved each. A
-# local every reaching arm of an exhaustive statement moved is moved; any other
-# only maybe.
-ArmTakes: class {
-    # every local some arm moved
-    taken: IdSet ztypes.declid
-    # how many reaching arms moved each
-    counts: (IdMapV ztypes.declid v: u64)
-    # how many arms reach the statement's end
-    reached: u64
-    # every local moved out before the statement that some reaching arm refilled
-    refilled: IdSet ztypes.declid
-    # how many reaching arms refilled each
-    refillCounts: (IdMapV ztypes.declid v: u64)
-    # the lock rows of the scopes outside that reaching arms released, by id,
-    # and how many reaching arms released each: one every reaching arm of an
-    # exhaustive statement released stays released after it
-    relRows: ListVal ztypes.entryid
-    relCounts: ListVal u64
-}
-
-# settleArmTakes -- an arm's takes once its walk ends. A path that leaves the
-# function or the loop never reaches the fall-through (zenv settles those);
-# any other path does, so its takes of outer locals are restored for the
-# sibling arms and collected for the single post-if invalidation, and an arm
-# that reaches the end is counted with what it moved. Answers the arm's
-# divergence kind, `none` for a reachable end.
-settleArmTakes: function {
-    st: zenv.ZSymbolTable
-    liveBefore: (IdSet ztypes.declid).view
-    taken: ArmTakes
-} out u8 is {
-    k: st.settleDivergingTakes
-    if k == zenv.divkind.exit then return k
-    if k == zenv.divkind.brk then return k
-    # a take of a local live before the arm, laid in the arm, is undone so
-    # the sibling arms see the local live, and collected for the single
-    # invalidation after the statement. Without the undo a take in one arm
-    # would reach the sibling arm, which then sees the local gone and never
-    # stamps its type. A take is an overlay over a persisting entry, so the
-    # clear alone restores it. A take laid over it since, outside the arm (a
-    # sibling clause's condition), is not the arm's.
-    for each vd: liveBefore loop {
-        if (st.takenInInnermost declId: vd) then {
-            taken.taken.add item: vd
-            # an arm that moved it on only some of its paths does not count: a
-            # path through it reaches the end still holding the local
-            if k == zenv.divkind.none when (st.stateOfDecl declId: vd).maybe.not then (
-                taken.counts.set
-                key: vd
-                value: ((taken.counts.get key: vd).or d: 0) + 1
-            )
-            st.clearTakenDecl declId: vd
-        }
-    }
-    if k == zenv.divkind.none then {
-        taken.reached = taken.reached + 1
-        noteArmReleases :st :taken
-        # a local moved out before the statement that this arm refilled
-        refilled: ListVal ztypes.declid
-        st.refilledInInnermost into: refilled
-        for each rd: refilled loop {
-            taken.refilled.add item: rd
-            taken.refillCounts.set key: rd value: ((taken.refillCounts.get key: rd).or d: 0) + 1
-        }
-    }
-    return k
-}
-
-# noteArmReleases -- the lock rows of the scopes outside that this reaching
-# arm released, each counted once for the arm (ArmTakes.relRows). Its close
-# lays them again for the other paths; after the statement, one every reaching
-# arm released goes (invalidateTakenAcross).
-noteArmReleases: function {st: zenv.ZSymbolTable.view taken: ArmTakes} is {
-    rows: ListVal u64
-    st.innermostReleases into: rows
-    seen: ListVal ztypes.entryid
-    for each ri: rows loop {
-        id: st.rowEntryId i: ri
-        if (entryIdIn ids: seen :id).not then {
-            seen.append id
-            j: u64
-            found: false
-            for j < taken.relRows.length loop {
-                if (taken.relRows.get i: j) == id then {
-                    taken.relCounts.set i: j val: (taken.relCounts.get i: j) + 1
-                    found = true
-                }
-                j = j + 1
-            }
-            if found.not then {
-                taken.relRows.append id
-                taken.relCounts.append 1
-            }
-        }
-    }
-}
-
-# entryIdIn -- whether the arm counted the row `id` already: a row an inner
-# path laid again and the arm released once more is still one release.
-entryIdIn: function {ids: (ListVal ztypes.entryid).view id: ztypes.entryid} out bool is {
-    for each x: ids loop {
-        if x == id then return true
-    }
-    return false
-}
-
-# settleRestoredLocks -- once an `if`, a `match`, a loop or a `do` a `break`
-# left is done: a lock row one of its paths released, which that path's close
-# laid again for the others (restored from `since`), goes after all when its
-# holder is spent here -- moved out on some path, so nothing reads it again.
-settleRestoredLocks: function {st: zenv.ZSymbolTable since: u64} is {
-    any: false
-    k: since
-    for k < st.restoredRows.length loop {
-        id: st.restoredRows.get i: k
-        k = k + 1
-        if (st.releaseIfSpent :id) then any = true
-    }
-    # a temporary a line kept to the block's end that only those rows' holders
-    # held lets go in turn
-    if any then st.releaseUnheldTemps
-}
-
-# invalidateTakenAcross -- after the whole if, mark every local taken in some arm
-# as taken in the enclosing scope (it is consumed on at least one path, so a later
-# use is use-after-take), by declaration: moved when every arm reaching the end of
-# an `exhaustive` statement moved it, else maybe.
-invalidateTakenAcross: function {st: zenv.ZSymbolTable decls: ArmTakes.view exhaustive: bool} is {
-    for each vd: decls.taken loop {
-        c: (decls.counts.get key: vd).or d: 0
-        every: exhaustive and (decls.reached > 0) and (c == decls.reached)
-        st.invalidateDeclAs declId: vd loc: takenHere maybe: every.not
-    }
-    # a lock every arm reaching the end of an exhaustive statement released is
-    # released after it: each arm's close laid it again for the paths that did
-    # not run that arm, and there are none
-    if exhaustive when decls.reached > 0 then {
-        ri: u64
-        for ri < decls.relRows.length loop {
-            if (decls.relCounts.get i: ri) == decls.reached then (
-                st.hideLockRowById
-                id: (decls.relRows.get i: ri)
-            )
-            ri = ri + 1
-        }
-    }
-    # a local moved out before it and refilled by every arm that reaches the end
-    # of an exhaustive statement holds a value after it
-    for each rd: decls.refilled loop {
-        rc: (decls.refillCounts.get key: rd).or d: 0
-        if exhaustive when decls.reached > 0 when rc == decls.reached then {
-            st.layRefill declId: rd
-        }
-    }
-}
-
-# ifExpressionType -- the type an `if` used as an EXPRESSION produces: never when
-# every branch diverges, otherwise the type its branches agree on -- and null when
-# a branch produces no value or the else is missing, since one path then yields
-# nothing.
-ifExpressionType: function {
-    st: zenv.ZSymbolTable
-    ifnode: ifref
-    branchTypes: (ListVal ztypes.tid).view
-    allDiverge: bool
-    hasElse: bool
-    anyEmpty: bool
-    nvId: ztypes.tid
-    nullId: ztypes.tid
-} out ztypes.tid is {
-    result: ztypes.tid
-    if allDiverge then {
-        if nvId.notZero then {
-            result = nvId
-            setk: result
-            stampGate :st nid: ifnode.nid tid: setk
-        }
-    } else {
-        # An exhaustive (else-carrying) if is a value: the first completing
-        # branch's type, diverging branches skipped (mirrors the match rule).
-        # an empty (`{}` / null) branch body makes the if valueless:
-        # stamp null so consuming it as a value is rejected.
-        if hasElse when anyEmpty when nullId.notZero then {
-            result = nullId
-            stampedTid: result
-            stampGate :st nid: ifnode.nid tid: stampedTid
-        }
-        if hasElse when anyEmpty.not then {
-            ti: u64
-            tn: branchTypes.length
-            for ti < tn loop {
-                bt2: branchTypes.get i: ti
-                if bt2 != nvId then {
-                    if bt2.notZero then {
-                        result = bt2
-                        setv: result
-                        stampGate :st nid: ifnode.nid tid: setv
-                        ti = tn
-                    } else {
-                        ti = tn
-                    }
-                }
-                ti = ti + 1
-            }
-        }
-    }
-    return result
-}
-
-# checkIfClauses -- walk each clause: its conditions, the facts they establish for
-# the arm's body, and the body itself. A clause the fold proved dead is not walked
-# at all -- the language does not promise to resolve names inside it, and that is
-# what keeps a statically-eliminated branch from demanding its unit's link
-# library. flagsOut reports allDiverge and anyEmpty.
-checkIfClauses: function {
-    st: zenv.ZSymbolTable
-    unitDecl: ztypes.declid
-    ast: Ast
-    ifnode: ifref
-    accFacts: List ArmPredFact
-    guardFacts: List ArmPredFact
-    branchTypes: ListVal ztypes.tid
-    liveBefore: (IdSet ztypes.declid).view
-    takenAcross: ArmTakes
-    skipDead: bool
-    pBool: ztypes.tid
-    flagsOut: ListVal bool
-    fbr: ztyping.foldedbranch
-} out u8 is {
-    allDiverge: true
-    # the weakest of the arms' divergence kinds, since one arm reaching
-    # the loop's next iteration is enough for the whole statement to
-    kindAcc: zenv.divkind.none
-    anyEmpty: false
-    # before the selected clause, every condition folded false
-    beforeSelected: true
-    kC: u64
-    for kC < ifnode.nclauses loop {
-        clauseId: zast.ifClauseAt :ast nid: ifnode.nid i: kC
-        kC = kC + 1
-        clause: ifClauseRefAt :ast nid: clauseId
-        dead: false
-        if clause.nid.notZero then {
-            if (isEmptyBody :st :ast :unitDecl n: (ast.nodes.get i: clause.statement)
-            ) then anyEmpty = true
-            if skipDead when clause.statement != fbr.stmt then dead = true
-            if clause.statement == fbr.stmt then beforeSelected = false
-        }
-        if dead then {
-            if beforeSelected then (
-                foldedFalseFacts
-                :st
-                :unitDecl
-                :ast
-                :clause
-                :accFacts
-                :guardFacts
-                :pBool
-            )
-            continue
-        }
-        bm: st.pushBlock node: clause.nid
-        bmRel: st.releaseMark
-        brokeBefore: st.breakLeavesInnermost
-        for each pf: accFacts loop applyPredFact :ast :st f: pf holds: false
-        cfacts: List ArmPredFact
-        cStart: st.entryMark
-        firstRel: checkClauseConditions :st :unitDecl :ast :clause factsOut: cfacts boolId: pBool
-        cEnd: st.entryMark
-        # the arm runs on some paths only, so a lock its body releases is
-        # released on its path alone (markPath) -- unless the fold made it
-        # the only path. The first clause's first conjunct runs on every path
-        # that reaches the statement, and its later conjuncts only where those
-        # before them held; a later clause's conditions run only where those
-        # before it failed, which makes them the clause's own
-        if kC == 1 then bmRel = firstRel
-        if skipDead.not then st.markPath marker: bm since: bmRel
-        bt: checkClauseBody :st :unitDecl :ast :clause
-        # a clause the fold rules out, walked for the editor, decides nothing
-        foldedOut: fbr.known and (clause.statement != fbr.stmt)
-        if foldedOut then st.restoreBreakSeen seen: brokeBefore
-        # what the conditions moved is not the arm's: they ran before it on
-        # every path that reached this clause, the next clause's among them
-        cDecls: ListVal ztypes.declid
-        cMaybes: ListVal bool
-        cLocs: ListVal ztypes.zsrcpos
-        if (st.takenBetween from: cStart to: cEnd) then (
-            st.liftTakenBetween
-            from: cStart
-            to: cEnd
-            decls: cDecls
-            maybes: cMaybes
-            locs: cLocs
-        )
-        dvgC: st.isUnreachable
-        btc: bt
-        branchTypes.append btc
-        ak: settleArmTakes :st :liveBefore taken: takenAcross
-        if foldedOut.not then {
-            if ak > kindAcc then kindAcc = ak
-            if ak == zenv.divkind.none then allDiverge = false
-        }
-        if ak == zenv.divkind.none then st.collectArmNarrowingEnds
-        st.popTo marker: bm
-        layConditionTakes :st decls: cDecls maybes: cMaybes locs: cLocs later: kC > 1
-        cn1c: clause.nconds
-        if cn1c == 1 when cfacts.length == 1 then {
-            mvf: cfacts.pop
-            if dvgC then {
-                gf: (
-                    ArmPredFact
-                    subject: mvf.subject
-                    armName: mvf.armName
-                    fullTid: mvf.fullTid
-                    negated: mvf.negated
-                )
-                guardFacts.append gf
-            }
-            accFacts.append mvf
-        }
-    }
-    flagsOut.append allDiverge
-    flagsOut.append anyEmpty
-    return kindAcc
-}
-
-
-# foldedFalseFacts -- a dead clause before the selected one: its one condition
-# folded false, so it is checked as the fold read it, and the arm it rules out
-# is ruled out for the clauses after it and the else, as a failed condition's
-# is. Its body is not walked, so the code after the `if` learns the arm is ruled
-# out only where the body is seen to diverge without walking it (deadBody-
-# Diverges), as a diverging clause's condition is ruled out there.
-foldedFalseFacts: function {
-    st: zenv.ZSymbolTable
-    unitDecl: ztypes.declid
-    ast: Ast
-    clause: ifclauseref
-    accFacts: List ArmPredFact
-    guardFacts: List ArmPredFact
-    pBool: ztypes.tid
-} is {
-    if clause.nconds != 1 then return
-    bm: st.pushBlock node: clause.nid
-    cfacts: List ArmPredFact
-    checkClauseConditions :st :unitDecl :ast :clause factsOut: cfacts boolId: pBool
-    st.popTo marker: bm
-    if cfacts.length != 1 then return
-    f: cfacts.pop
-    if (deadBodyDiverges :st :unitDecl :ast body: clause.statement) then guardFacts.append (
-        ArmPredFact
-        subject: f.subject
-        armName: f.armName
-        fullTid: f.fullTid
-        negated: f.negated
-    )
-    accFacts.append f
-}
-
-# deadBodyDiverges -- a body that is not walked ends in `return`, `break`,
-# `continue` or `panic`, the builtin and not a name the program binds: read
-# off the tree, as nothing in a dead body is resolved. false for any other
-# ending, which may still diverge -- an answer only where it is sure.
-deadBodyDiverges: function {
-    st: zenv.ZSymbolTable
-    unitDecl: ztypes.declid
-    ast: Ast
-    body: zast.nodeid
-} out bool is {
-    lastId: body
-    bn: ast.nodes.get i: body
-    if bn.statement then {
-        if bn.statements.count.u64 == 0 then return false
-        sId: zast.kidAt kids: ast.kids span: bn.statements i: bn.statements.count.u64 - 1
-        sl: ast.nodes.get i: sId
-        lastId = sId
-        if sl.statementline then lastId = sl.statementline
-    }
-    head: lastId
-    ln: ast.nodes.get i: lastId
-    if ln.call then head = ln.callable
-    hn: atomNameId :ast n: (ast.nodes.get i: head)
-    builtin: (hn == zast.wellKnown.slot.wkReturn) or (hn == zast.wellKnown.slot.wkBreak)
-    builtin = (
-        builtin or (hn == zast.wellKnown.slot.wkContinue) or (hn == zast.wellKnown.slot.wkPanic)
-    )
-    if builtin.not or (st.isLocalName nameId: hn) then return false
-    return (declOfUnitDef :st :unitDecl scope: st.curScope nameId: hn).isZero
-}
-
-# layConditionTakes -- the takes an `if` clause's conditions made, laid again
-# where the `if` stands once the clause is walked: the clauses after it and
-# the code after the `if` see them consumed. A clause after the first runs its
-# conditions only when those before failed (`later`), so what they moved is
-# moved only maybe, as is what a conjunct after the first moved.
-layConditionTakes: function {
-    st: zenv.ZSymbolTable
-    decls: (ListVal ztypes.declid).view
-    maybes: (ListVal bool).view
-    locs: (ListVal ztypes.zsrcpos).view
-    later: bool
-} is {
-    i: decls.length
-    for i > 0 loop {
-        i = i - 1
-        d: decls.get :i
-        if (declStillResolves :st :d) then (
-            st.invalidateDeclAs
-            declId: d
-            loc: optionval.some (locs.get :i)
-            maybe: later or (maybes.get :i)
-        )
-    }
-}
-
 
 # armvalue -- one arm of a value-producing `if` or `match`: the node its value
 # is, the type it yields, and whether that value is an untyped literal, which
@@ -40059,32 +38642,7 @@ controlArmBlocks: function {ast: Ast.view nid: zast.nodeid into: ListVal zast.no
         if body.notZero then into.append from: body
         return
     }
-    branchArmBlocks :ast :nid :into
-}
-
-# branchArmBlocks -- controlArmBlocks for an `if` or a `match`.
-branchArmBlocks: function {ast: Ast.view nid: zast.nodeid into: ListVal zast.nodeid} is {
-    n: ast.nodes.get i: nid
-    elseId: zast.nodeid
-    if n.ifexpr then {
-        k: u64
-        for k < n.clauses.count loop {
-            cl: ifClauseRefAt :ast nid: (zast.ifClauseAt :ast :nid i: k)
-            k = k + 1
-            if cl.statement.notZero then into.append from: cl.statement
-        }
-        elseId = n.elseclause
-    }
-    if n.caseexpr then {
-        k: u64
-        for k < n.clauses.count loop {
-            cc: caseClauseRefAt :ast nid: (zast.caseClauseAt :ast :nid i: k)
-            k = k + 1
-            if cc.statement.notZero then into.append from: cc.statement
-        }
-        elseId = n.elseclause
-    }
-    if elseId.notZero then into.append from: elseId
+    flow.branchArmBlocks :ast :nid :into
 }
 
 # armValueOf -- the value an arm's body yields: its last line's, or the body
@@ -40234,197 +38792,6 @@ looseArm: function {st: zenv.ZSymbolTable.view arms: (ListVal armvalue).view} ou
         }
     }
     return loose
-}
-
-# consumedIfTid -- an `if` whose value is consumed yields one type from every
-# arm, and yields nothing at all when no condition holds and there is no else.
-# An `if` standing as a statement discards its value and is asked neither.
-consumedIfTid: function {
-    st: zenv.ZSymbolTable
-    ast: Ast
-    ifnode: ifref
-    hasElse: bool
-    result: ztypes.tid
-    # every branch diverges, so the `if` yields `never` and no value is asked of it
-    allDiverge: bool
-    # a branch is empty, so the `if` yields null and consuming it is refused
-    anyEmpty: bool
-} out ztypes.tid is {
-    (
-        refuseLeavingArm
-        :st
-        :ast
-        nid: ifnode.nid
-        lineno: ifnode.lineno
-        colno: ifnode.colno
-        form: "an `if`"
-        width: 2
-    )
-    if allDiverge or anyEmpty then return result
-    if st.walk.stmtExprNid == ifnode.nid then return result
-    if hasElse then return (valueArmsTid :st :ast nid: ifnode.nid first: result)
-    reportValueIfWithoutElse :st :ifnode
-    return result
-}
-
-# reportValueIfWithoutElse -- an `if` whose value is consumed has no else, so
-# it yields nothing when no condition holds.
-reportValueIfWithoutElse: function {st: zenv.ZSymbolTable ifnode: ifref} is {
-    (
-        addErrorWithHint
-        :st
-        nodeid: ifnode.nid
-        lineno: ifnode.lineno
-        colno: ifnode.colno
-        e: zast.err.typeError
-        msg: "an `if` used as a value needs an else: it yields nothing when no condition holds".string
-        note: "".string
-        hint: "add an `else` branch with the value to yield".string
-        width: 2
-    )
-}
-
-# textListHas -- `names` holds `text`.
-textListHas: function {names: (List String).view text: StringView} out bool is {
-    for each e: names loop {
-        if e.stringView == text then return true
-    }
-    return false
-}
-
-# checkIf -- walk an if: push the `if` scope, then a `if_branch` scope per clause
-# and an `if_else` scope for the else; when every branch diverges (returns) the
-# if resolves to never and marks the enclosing scope unreachable.
-checkIf: function {
-    st: zenv.ZSymbolTable
-    unitDecl: ztypes.declid
-    ast: Ast
-    ifnode: ifref
-} out ztypes.tid is {
-    # Which clause a constant condition selects, recorded for the emitter. Most
-    # body conditions name a local and do not fold at all, and the stamp says
-    # so -- `known: false` means "emit a runtime if", which is the answer for
-    # every ordinary branch. Only a condition made of constants decides
-    # anything here.
-    fbr: foldIfBranch :st scope: st.curScope :ast :unitDecl nid: ifnode.nid
-    constFailClear :st
-    # A clause the fold proved dead is reached by no use site, and the language
-    # does not promise to resolve names or check types inside it. NOT walking it
-    # is what keeps a statically-eliminated branch from demanding its unit's
-    # link library, and from being refused by a toolchain that never sees the
-    # type it names. `--eager` -- and so zls and `zl lint --full` -- still walks
-    # everything, which is what keeps the editor alive inside a branch that is
-    # dead only on this host; neither of those emits C, so no artifact differs.
-    skipDead: false
-    if fbr.known when (eagerAt :st declId: unitDecl).not then skipDead = true
-    ifMarker: st.pushBlock node: ifnode.nid
-    restMark: st.restoreMark
-    armEnds: st.openArmNarrowingEnds
-    liveBefore: st.getLiveOwnedVars
-    takenAcross: (
-        ArmTakes
-        taken: IdSet ztypes.declid
-        counts: (IdMapV ztypes.declid v: u64)
-        reached: 0
-        refilled: IdSet ztypes.declid
-        refillCounts: (IdMapV ztypes.declid v: u64)
-        relRows: ListVal ztypes.entryid
-        relCounts: ListVal u64
-    )
-    nvId: stdTid :ast :st wk: zast.wellKnown.slot.tyNever
-    nullId: stdTid :ast :st wk: zast.wellKnown.slot.tyNull
-    pBool: stdTid :ast :st wk: zast.wellKnown.slot.wkBool
-    accFacts: List ArmPredFact
-    guardFacts: List ArmPredFact
-    elseDvg: false
-    branchTypes: ListVal ztypes.tid
-    flagsOut: ListVal bool
-    kindAcc: (
-        checkIfClauses
-        :st
-        :unitDecl
-        :ast
-        :ifnode
-        :accFacts
-        :guardFacts
-        :branchTypes
-        :liveBefore
-        :takenAcross
-        :skipDead
-        :pBool
-        :flagsOut
-        :fbr
-    )
-    allDiverge: flagsOut.get i: 0
-    anyEmpty: flagsOut.get i: 1
-    hasElse: false
-    if ifnode.elseclause.notZero then {
-        hasElse = true
-        if (isEmptyBody :st :ast :unitDecl n: (ast.nodes.get i: ifnode.elseclause)
-        ) then anyEmpty = true
-        elseDead: false
-        if skipDead when ifnode.elseclause != fbr.stmt then elseDead = true
-        if elseDead.not then {
-            ebm: st.pushBlock node: ifnode.elseclause
-            if skipDead.not then st.markPath marker: ebm since: st.releaseMark
-            for each ef: accFacts loop applyPredFact :ast :st f: ef holds: false
-            brokeBefore: st.breakLeavesInnermost
-            walkBodyAt :st :unitDecl :ast bodyId: ifnode.elseclause
-            if fbr.known when ifnode.elseclause != fbr.stmt then (
-                st.restoreBreakSeen
-                seen: brokeBefore
-            )
-            et: lastStmtType :st :ast block: (ast.nodes.get i: ifnode.elseclause)
-            if st.isUnreachable then elseDvg = true
-            etc: et
-            branchTypes.append etc
-            ak2: settleArmTakes :st :liveBefore taken: takenAcross
-            # an else the fold rules out, walked for the editor, decides nothing
-            if fbr.known.not or (ifnode.elseclause == fbr.stmt) then {
-                if ak2 > kindAcc then kindAcc = ak2
-                if ak2 == zenv.divkind.none then allDiverge = false
-            }
-            if ak2 == zenv.divkind.none then st.collectArmNarrowingEnds
-            st.popTo marker: ebm
-        }
-    } else {
-        # with no else, the end is reached unless the fold selected a clause
-        if fbr.known.not or fbr.stmt.isZero then allDiverge = false
-    }
-    result: ifExpressionType :st :ifnode :branchTypes :allDiverge :hasElse :anyEmpty :nvId :nullId
-    result = consumedIfTid :st :ast :ifnode :hasElse :result :allDiverge :anyEmpty
-    st.popTo marker: ifMarker
-    # post-guard flow typing: a diverging clause's condition was FALSE for
-    # the remainder of the enclosing scope; a diverging else of a single-
-    # clause if means its condition was TRUE. Apply that knowledge (the
-    # exclusion collapse shadows to the payload where one arm remains) and
-    # record it for the emitter's block aliasing.
-    pgSubj: zast.nameid
-    pgTid: ztypes.tid
-    pgApplied: u64
-    for each gf2: guardFacts loop {
-        applyPredFact :ast :st f: gf2 holds: false
-        pgSubj = gf2.subject
-        pgTid = gf2.fullTid
-        pgApplied = pgApplied + 1
-    }
-    if elseDvg when ifnode.nclauses == 1 when accFacts.length == 1 then {
-        af0: accFacts.get i: 0
-        applyPredFact :ast :st f: af0 holds: true
-        pgSubj = af0.subject
-        pgTid = af0.fullTid
-        pgApplied = pgApplied + 1
-    }
-    if pgApplied == 1 when pgSubj.notZero then {
-        postGuardRecord :st stmtNid: ifnode.nid subject: pgSubj fullTid: pgTid
-    }
-    invalidateTakenAcross :st decls: takenAcross exhaustive: hasElse
-    settleRestoredLocks :st since: restMark
-    # after the guard facts: a write in an arm that completes wins over what a
-    # diverging arm let the rest of the scope assume
-    st.closeArmNarrowingEnds marker: armEnds
-    if allDiverge then st.markUnreachable kind: kindAcc
-    return result
 }
 
 
@@ -42738,48 +41105,6 @@ nameIsReadonly: function {st: zenv.ZSymbolTable.view ast: Ast.view name: StringV
     rop: ListVal zast.nameid
     rop.append (nameIdOf :ast :name)
     return (pathIsReadonly :st path: rop)
-}
-
-# armPayloadReadonly -- a narrowed match-arm payload takes the readonly
-# self-lock when its ARM is declared `view` or `hold`. The payload binds under
-# the subject's own name, so the lock lands on that name for the arm's scope
-# and every readonly rule -- writes, mutating receivers, moves -- follows from
-# it. A readonly SUBJECT needs nothing here: the shadow reuses the name, so its
-# lock is still the innermost one found.
-armPayloadReadonly: function {
-    st: zenv.ZSymbolTable
-    ast: Ast.view
-    subject: zast.nameid
-    parentTid: ztypes.tid
-    armName: zast.nameid
-    payloadTid: ztypes.tid
-} is {
-    if subject.isZero then return
-    if parentTid.isZero then return
-    if payloadTid.isZero then return
-    if (st.reg.isReftypeOf tid: payloadTid).not then return
-    ao: st.typing.declOwnershipOfId parentTypeId: parentTid nameId: armName
-    apr: false
-    if ao.some then {
-        if ao == ztypes.zparamownership.viewMode then apr = true
-        if ao == ztypes.zparamownership.holdMode then apr = true
-    }
-    if apr.not then return
-    svo: st.lookupVarId nameId: subject
-    if svo.none then return
-    spa: ListVal zast.nameid
-    spa.append subject
-    sho: ztypes.zlockholder.var svo
-    slr: (
-        st.tryLock
-        pool: ast.names
-        path: spa.listView
-        lockType: ztypes.zlockstate.shared
-        lockScope: ztypes.zlockscope.target
-        holder: sho
-        mutable: false
-    )
-    if slr.length > 0 then return
 }
 
 # pinnedMoveError -- a move out of a binding ANOTHER holder has locked is
@@ -46409,7 +44734,7 @@ returnedBareFieldName: function {
         ) case some then {
             if (st.reg.typetypeOf typeId: bfo) == ztypes.ztypetype.genericParam then {
                 if (
-                    genericFieldMayBeReftype
+                    flow.genericFieldMayBeReftype
                     :ast
                     :st
                     ownerTid: bft
@@ -46425,40 +44750,6 @@ returnedBareFieldName: function {
     } else {
         return "".string
     }
-}
-
-# genericFieldMayBeReftype -- whether a field whose type is generic -- a type
-# parameter, or a specialization over one -- may hold a reftype in some
-# instance. Never inside a valtype, whose every instance holds value data only.
-# A specialization answers as its template does; a parameter as its bound,
-# read off the declaration around the walk that owns it. A parameter no
-# enclosing declaration owns may be anything.
-genericFieldMayBeReftype: function {
-    ast: Ast
-    st: zenv.ZSymbolTable
-    ownerTid: ztypes.tid
-    fieldTid: ztypes.tid
-} out bool is {
-    if (st.reg.isValtypeOf tid: (partialTemplateOf :st tid: ownerTid)) then return false
-    if (st.reg.isPartialOf tid: fieldTid) then {
-        return (st.reg.isReftypeOf tid: (partialTemplateOf :st tid: fieldTid))
-    }
-    cur: st.curScope
-    for cur.notZero loop {
-        pn: st.reg.genericParamNameOfTid tdecl: cur ptid: fieldTid
-        if pn.notZero then return (boundMayBeReftype :ast :st tdecl: cur paramName: pn)
-        cur = st.typing.declParentOf declId: cur
-    }
-    return true
-}
-
-# partialTemplateOf -- the template a partial specialization was taken from;
-# any other type is itself.
-partialTemplateOf: function {st: zenv.ZSymbolTable.view tid: ztypes.tid} out ztypes.tid is {
-    if (st.reg.isPartialOf :tid).not then return tid
-    og: st.reg.genericOriginOf :tid
-    if og.isZero then return tid
-    return og
 }
 
 # boundMayBeReftype -- whether `tdecl`'s type parameter `paramName` may be
@@ -51859,24 +50150,6 @@ checkGenericCall: function {
     return st.typing.nullTypeId
 }
 
-# subjectAtomName -- a match subject's bare-atom name (narrowing requires a
-# simple addressable name): "" for dotted/complex
-# subjects and numeric atoms.
-subjectAtomName: function {ast: Ast.view n: astnode.view} out String is {
-    match (
-        n
-    ) case atomid then {
-        saB: ast.names.texts.get i: n.name
-        if (isNumericLiteralName name: saB.stringView) then {
-            return "".string
-        } else {
-            return saB.copy
-        }
-    } else {
-        return "".string
-    }
-}
-
 # sumSubtypeNames -- a union/variant's arm names: its members minus the
 # synthesized ones (functions, the tag data record, enums).
 sumSubtypeNames: function {
@@ -51885,46 +50158,6 @@ sumSubtypeNames: function {
     arms: List String
     zenv.sumArmNames ty: st.typing reg: st.reg pool: ast.names tid: sid names: arms
     return arms
-}
-
-# isEmptyBody -- a clause body that does nothing: a statement block with no
-# statement lines (`{}`), or one whose only line is the null value (`then null`).
-# Decided before the body is walked, so the null value is told by declarations:
-# a bare name no local binds whose nearest declaration is the system's `null`.
-isEmptyBody: function {
-    # the symbol table whose locals and scope the body is written in
-    st: zenv.ZSymbolTable.view
-    # the tree holding the body
-    ast: Ast.view
-    # the unit the body is written in
-    unitDecl: ztypes.declid
-    # the clause body
-    n: astnode.view
-} out bool is {
-    match (
-        n
-    ) case statement then {
-        if n.statements.count.u64 == 0 then return true
-        if n.statements.count.u64 != 1 then return false
-        sl: ast.nodes.get i: (zast.kidAt kids: ast.kids span: n.statements i: 0)
-        match (
-            sl
-        ) case statementline then {
-            v: ast.nodes.get i: sl.statementline
-            match (
-                v
-            ) case atomid then {
-                if (st.lookup nameId: v.name).some then return false
-                return (namesNullTypeAt :st :ast :unitDecl scope: st.curScope nameId: v.name)
-            } else {
-                return false
-            }
-        } else {
-            return false
-        }
-    } else {
-        return false
-    }
 }
 
 # genericParamSubjectTid -- the GENERIC_PARAM type a `match t` subject names,
@@ -51966,7 +50199,7 @@ caseGenericSubjectTid: function {
     casenode: caseref
 } out ztypes.tid is {
     subjT: ztypes.tid
-    gsn: subjectAtomName :ast n: (ast.nodes.get i: casenode.subject)
+    gsn: flow.subjectAtomName :ast n: (ast.nodes.get i: casenode.subject)
     if gsn.length > 0 then {
         gdecl: ztypes.declid
         {
@@ -52023,98 +50256,6 @@ caseGenericSubjectTid: function {
 }
 
 
-# what an arm turned out to be: whether it binds nothing, and whether every
-# path out of it diverges
-casearmfacts: record {
-    # the arm binds nothing
-    empty: bool
-    # every path out of the arm diverges, which is what lets the REST of the
-    # scope narrow
-    diverges: bool
-    # how it does, a `divkind`
-    kind: u8
-}
-
-# narrowCaseArmSubject -- inside an arm, the subject IS the arm's payload: narrow
-# the binding to it, and carry the payload's readonly-ness from the parent.
-narrowCaseArmSubject: function {
-    st: zenv.ZSymbolTable
-    ast: Ast.view
-    targetName: StringView
-    armName: StringView
-    armTid: ztypes.tid
-    subjT: ztypes.tid
-} is {
-    if armTid.isZero then return
-    (
-        st.narrow
-        nameId: (nameIdOf :ast name: targetName)
-        toTypeId: armTid
-        subtypeName: (nameIdOf :ast name: armName)
-        shadow: true
-    )
-    (
-        armPayloadReadonly
-        :st
-        :ast
-        subject: (nameIdOf :ast name: targetName)
-        parentTid: subjT
-        armName: (nameIdOf :ast name: armName)
-        payloadTid: armTid
-    )
-}
-
-# checkSumArmName -- an arm of a sum-typed match must name one of the subject's
-# arms; report the ones it could have meant when it does not.
-checkSumArmName: function {
-    st: zenv.ZSymbolTable
-    ast: Ast.view
-    clause: caseclauseref
-    subjT: ztypes.tid
-    armName: StringView
-    armTid: ztypes.tid
-} is {
-    if armTid.isZero then {
-        subjTn: specWrittenName :st :ast tid: subjT
-        amsg: "type '\{subjTn}' has no arm '\{armName}'"
-        marm: ast.nodes.get i: clause.matcharm
-        (
-            addError
-            :st
-            nodeid: (zast.nodeIdOf n: marm)
-            lineno: (nodeLine n: marm)
-            colno: (nodeCol n: marm)
-            e: zast.err.typeError
-            msg: amsg
-        )
-    }
-}
-
-
-# sumArmTid -- the payload type of arm `armId` of the sum `sumTid`. A partial
-# (`optionval_t` in a generic body) has its template's arms, and an arm the
-# template types by one of its own parameters takes the partial's argument for
-# it; an arm typed some other way keeps the template's type.
-sumArmTid: function {
-    st: zenv.ZSymbolTable.view
-    sumTid: ztypes.tid
-    armId: zast.nameid
-} out optionval ztypes.tid is {
-    if (st.reg.isPartialOf tid: sumTid).not then {
-        return (st.typing.declChildOfId parentTypeId: sumTid nameId: armId)
-    }
-    tpl: partialTemplateOf :st tid: sumTid
-    ao: st.typing.declChildOfId parentTypeId: tpl nameId: armId
-    if ao.none then return ao
-    arm: ao
-    tdecl: st.typing.declIdOfType typeId: tpl
-    pn: st.reg.genericParamNameOfTid :tdecl ptid: arm
-    if pn.isZero then return (optionval.some arm)
-    ord: st.reg.paramOrdinalOf :tdecl paramName: pn
-    if ord.some then return (optionval.some (st.reg.genericTypeArgAt specId: sumTid ordinal: ord))
-    return (optionval.some arm)
-}
-
 # publicCaseArm -- the arm a case clause names through its subject type's
 # public interface: a renamed arm is the arm it renames (stamped on the clause
 # for the emitter), and a private arm is refused, as a member read is.
@@ -52150,144 +50291,6 @@ publicCaseArm: function {
     return written
 }
 
-# checkCaseClause -- type one `case` arm: bind what the arm narrows to, walk
-# its body, and report what the arm contributes to the match -- whether it is
-# empty and whether it diverges. Its arm name and value type are appended to
-# the match's running lists.
-checkCaseClause: function {
-    st: zenv.ZSymbolTable
-    unitDecl: ztypes.declid
-    ast: Ast
-    clause: caseclauseref
-    subjT: ztypes.tid
-    isSum: bool
-    armsPublic: bool
-    targetName: StringView
-    neverId: ztypes.tid
-    covered: List String
-    diverging: List String
-    armTypes: ListVal ztypes.tid
-    # the owned locals live before the match, and those an arm took
-    liveBefore: (IdSet ztypes.declid).view
-    takenAcross: ArmTakes
-    # the match folds to another arm: this one's body is not walked
-    dead: bool
-    # the match folds to one arm: the one walked is the only path
-    folded: bool
-    # the fold selected another arm, whether or not this one is walked
-    ruledOut: bool
-} out casearmfacts is {
-    anyEmpty: false
-    allDiverge: true
-    # the arm as written, for the messages
-    writtenId: atomNameId :ast n: (ast.nodes.get i: clause.matcharm)
-    # through the public interface a renamed arm is the arm it renames, as a
-    # member read is (checkDottedOn): stamped on the clause for the emitter
-    armId: publicCaseArm :st :ast :clause :subjT written: writtenId :armsPublic
-    armName: zast.nameTextCopy :ast ref: armId
-    if (isEmptyBody :st :ast :unitDecl n: (ast.nodes.get i: clause.statement)) then anyEmpty = true
-    # A value-match literal arm wears the subject's concrete type.
-    if isSum.not when (isNumericLiteralName name: armName.stringView) when subjT.notZero when (
-        isLiteralTypeId
-        reg: st.reg
-        tid: subjT
-    ).not then {
-        amid: clause.matcharm
-        if amid.notZero then {
-            seta: subjT
-            stampGate :st nid: amid tid: seta
-        }
-    }
-    armMarker: st.pushBlock node: clause.nid
-    # a lock the arm releases is released on its path alone
-    if folded.not then st.markPath marker: armMarker since: st.releaseMark
-    # Every arm of a sum subject must name one of its declared arms.
-    armo: optionval.none ztypes.tid
-    forceMemberOf :st :ast parentTypeId: (partialTemplateOf :st tid: subjT) nameId: armId
-    if subjT.notZero then armo = sumArmTid :st sumTid: subjT :armId
-    if isSum when subjT.notZero when isSum when subjT.notZero then {
-        (
-            checkSumArmName
-            :st
-            :ast
-            :clause
-            :subjT
-            armName: (zast.nameTextAt :ast ref: writtenId).stringView
-            armTid: (armo.or d: ztypes.tid.zero)
-        )
-    }
-    if targetName.length > 0 when subjT.notZero then {
-        (
-            narrowCaseArmSubject
-            :st
-            :ast
-            :targetName
-            armName: armName.stringView
-            armTid: (armo.or d: ztypes.tid.zero)
-            :subjT
-        )
-    }
-    # an arm the fold rules out is not walked: it neither completes nor is
-    # seen to diverge, so it gives the match no type and the code after it no
-    # narrowing
-    brokeBefore: st.breakLeavesInnermost
-    if dead.not then {
-        allDiverge = (
-            walkCaseArmBody
-            :st
-            :unitDecl
-            :ast
-            :clause
-            armName: armName.stringView
-            :neverId
-            :diverging
-            :armTypes
-        )
-    }
-    if (textListHas names: covered text: armName.stringView) then {
-        (
-            addError
-            :st
-            nodeid: clause.nid
-            lineno: clause.lineno
-            colno: clause.colno
-            e: zast.err.typeError
-            msg: "arm '\{zast.nameTextAt :ast ref: writtenId}' is matched twice"
-        )
-    }
-    cn2: armName.copy
-    covered.append cn2
-    ak: settleArmTakes :st :liveBefore taken: takenAcross
-    if ak == zenv.divkind.none then st.collectArmNarrowingEnds
-    st.popTo marker: armMarker
-    # an arm the fold rules out decides nothing, walked or not
-    if ruledOut then {
-        st.restoreBreakSeen seen: brokeBefore
-        return (casearmfacts empty: anyEmpty diverges: true kind: zenv.divkind.none)
-    }
-    return (casearmfacts empty: anyEmpty diverges: allDiverge kind: ak)
-}
-
-# walkCaseArmBody -- walk a `case` arm's body: its value type joins the
-# match's, and an arm that diverges is recorded by name. True when it diverges.
-walkCaseArmBody: function {
-    st: zenv.ZSymbolTable
-    unitDecl: ztypes.declid
-    ast: Ast
-    clause: caseclauseref
-    armName: StringView
-    neverId: ztypes.tid
-    diverging: List String
-    armTypes: ListVal ztypes.tid
-} out bool is {
-    checkStatement :st :unitDecl :ast blockId: clause.statement
-    at: lastStmtType :st :ast block: (ast.nodes.get i: clause.statement)
-    armTypes.append at
-    if at.isZero or (at != neverId) then return false
-    diverging.append armName.string
-    return true
-}
-
 # requiredArms -- the arms a match over a sum subject must cover. Ambient
 # narrowing relaxes the requirement: a subject already narrowed to a single
 # arm needs only that arm's case; arms the enclosing flow has excluded are
@@ -52317,871 +50320,6 @@ requiredArms: function {
     }
 }
 
-# missingArms -- the required arms no case covers, in the required order.
-missingArms: function {
-    required: (List String).view covered: (List String).view into: List String
-} is {
-    a2iter: required.iterate
-    for an3: a2iter loop {
-        found: false
-        c2iter: covered.iterate
-        for cn3: c2iter loop {
-            if an3.stringView == cn3 then found = true
-        }
-        if found.not then into.append an3.copy
-    }
-}
-
-# caseIsExhaustive -- whether an else-less match covers every arm its subject
-# can still hold, reporting the missing ones when it does not. Narrowing and
-# construction both shrink that set, so the answer is about what the subject
-# can reach here, not about the type's full arm list.
-caseIsExhaustive: function {
-    st: zenv.ZSymbolTable
-    ast: Ast.view
-    casenode: caseref
-    subjT: ztypes.tid
-    isSum: bool
-    targetName: StringView
-    covered: (List String).view
-} out bool is {
-    if isSum.not then return false
-    required: List String
-    requiredArms :st :ast :subjT :targetName into: required
-    missing: List String
-    missingArms :required :covered into: missing
-    if missing.length == 0 then return true
-    # through the public interface an arm is named by its public name
-    armsPublic: caseArmsArePublic :st :ast subject: casenode.subject :subjT
-    mj: String
-    mfirst: true
-    for each mn: missing loop {
-        if mfirst.not then mj.append ", "
-        pubA: zast.nameid
-        if armsPublic then pubA = (
-            declPublicAliasOf
-            :st
-            tid: subjT
-            internalId: (nameIdOf :ast name: mn.stringView)
-        )
-        if pubA.isZero then mj.append mn else mj.append (zast.nameTextAt :ast ref: pubA)
-        mfirst = false
-    }
-    (
-        addErrorWithHint
-        :st
-        nodeid: casenode.nid
-        lineno: casenode.lineno
-        colno: casenode.colno
-        e: zast.err.nonExhaustive
-        msg: "non-exhaustive match: missing case(s) \{mj} -- add them or an `else` clause"
-        note: "".string
-        hint: "".string
-        width: 5
-    )
-    return false
-}
-
-# caseResultTid -- the value a match produces: `never` when every arm diverges,
-# nothing when an arm is empty, else the first completing arm's type. A match
-# that is not exhaustive produces no value at all.
-caseResultTid: function {
-    st: zenv.ZSymbolTable
-    casenode: caseref
-    exhaustive: bool
-    allDiverge: bool
-    anyEmpty: bool
-    neverId: ztypes.tid
-    nullId: ztypes.tid
-    armTypes: (ListVal ztypes.tid).view
-} out ztypes.tid is {
-    if exhaustive when allDiverge when neverId.notZero then {
-        if casenode.nclauses > 0 then {
-            neverTid: neverId
-            stampGate :st nid: casenode.nid tid: neverTid
-            return neverId
-        } else {
-            return ztypes.tid.zero
-        }
-    }
-    if exhaustive when anyEmpty then {
-        # an empty (`{}` / null) arm body makes the match valueless: stamp
-        # null so consuming the match as a value is rejected.
-        if nullId.notZero then {
-            nullStampId: nullId
-            stampGate :st nid: casenode.nid tid: nullStampId
-            return nullId
-        }
-        return ztypes.tid.zero
-    }
-    if exhaustive then {
-        # the first completing (non-diverging) arm's type is the match value;
-        # an untyped completing arm leaves the match unstamped.
-        for each at2: armTypes loop {
-            if at2 != neverId then {
-                if at2.notZero then {
-                    armTid: at2
-                    stampGate :st nid: casenode.nid tid: armTid
-                    return at2
-                } else {
-                    return ztypes.tid.zero
-                }
-            }
-        }
-        return ztypes.tid.zero
-    } else {
-        return ztypes.tid.zero
-    }
-    return ztypes.tid.zero
-}
-
-# applyCaseExclusions -- after an else-less match, the subject can no longer
-# hold any arm the match covered: record those exclusions so the rest of the
-# scope narrows on them.
-applyCaseExclusions: function {
-    st: zenv.ZSymbolTable
-    ast: Ast.view
-    targetName: StringView
-    subjT: ztypes.tid
-    diverging: (List String).view
-    casenode: caseref
-} is {
-    for each dn2: diverging loop {
-        (
-            st.exclude
-            nameId: (nameIdOf :ast name: targetName)
-            subtypeName: (nameIdOf :ast name: dn2.stringView)
-            fullTypeId: subjT
-        )
-    }
-    if diverging.length > 0 then {
-        shadowCollapseIfSingle :ast :st name: (nameIdOf :ast name: targetName) fullTid: subjT
-        (
-            postGuardRecord
-            :st
-            stmtNid: casenode.nid
-            subject: (nameIdOf :ast name: targetName)
-            fullTid: subjT
-        )
-    }
-}
-
-# checkCaseElse -- walk a match's `else` arm. It narrows the subject to what no
-# earlier arm covered, and contributes the same two facts every arm does:
-# whether it is empty and whether it diverges.
-checkCaseElse: function {
-    st: zenv.ZSymbolTable
-    unitDecl: ztypes.declid
-    ast: Ast
-    casenode: caseref
-    subjT: ztypes.tid
-    targetName: StringView
-    neverId: ztypes.tid
-    covered: List String
-    armTypes: ListVal ztypes.tid
-    # the owned locals live before the match, and those an arm took
-    liveBefore: (IdSet ztypes.declid).view
-    takenAcross: ArmTakes
-} out casearmfacts is {
-    anyEmpty: false
-    allDiverge: true
-    if (isEmptyBody :st :ast :unitDecl n: (ast.nodes.get i: casenode.elseclause)
-    ) then anyEmpty = true
-    elseMarker: st.pushBlock node: casenode.elseclause
-    # a lock the else releases is released on its path alone, unless the
-    # match folds to it
-    efb: st.typing.foldedBranchAt nid: casenode.nid
-    if efb.known.not or (eagerAt :st declId: unitDecl) then (
-        st.markPath
-        marker: elseMarker
-        since: st.releaseMark
-    )
-    if targetName.length > 0 when subjT.notZero then {
-        for each en2: covered loop {
-            (
-                st.exclude
-                nameId: (nameIdOf :ast name: targetName)
-                subtypeName: (nameIdOf :ast name: en2.stringView)
-                fullTypeId: subjT
-            )
-        }
-        shadowCollapseIfSingle :ast :st name: (nameIdOf :ast name: targetName) fullTid: subjT
-    }
-    et: walkCaseElseBody :st :unitDecl :ast :casenode :neverId :armTypes
-    # the else is an arm: it decides `allDiverge` like any other. Leaving it
-    # out stamped `never` on a match whose else completes -- and `never` is
-    # read downstream as "control does not continue", so the emitter dropped
-    # the enclosing arm's `break` and the switch fell through.
-    if et.notZero when et == neverId then null else allDiverge = false
-    ek: settleArmTakes :st :liveBefore taken: takenAcross
-    if ek == zenv.divkind.none then st.collectArmNarrowingEnds
-    st.popTo marker: elseMarker
-    # an else the fold rules out decides nothing, walked or not
-    if (caseElseRuledOut :st :casenode) then {
-        return (casearmfacts empty: anyEmpty diverges: true kind: zenv.divkind.none)
-    }
-    return (casearmfacts empty: anyEmpty diverges: allDiverge kind: ek)
-}
-
-# caseElseRuledOut -- the fold selected one of this match's arms, so its else
-# never runs.
-caseElseRuledOut: function {st: zenv.ZSymbolTable.view casenode: caseref} out bool is {
-    fb: st.typing.foldedBranchAt nid: casenode.nid
-    return fb.known and (fb.stmt != casenode.elseclause)
-}
-
-# walkCaseElseBody -- walk a match's `else` body and answer its type, `neverId`
-# when the fold ruled it out (walkCaseClauses) and it is not walked. Walked for
-# the editor all the same, a `break` in it leaves nothing.
-walkCaseElseBody: function {
-    st: zenv.ZSymbolTable
-    unitDecl: ztypes.declid
-    ast: Ast
-    casenode: caseref
-    neverId: ztypes.tid
-    armTypes: ListVal ztypes.tid
-} out ztypes.tid is {
-    ruledOut: caseElseRuledOut :st :casenode
-    if ruledOut when (eagerAt :st declId: unitDecl).not then return neverId
-    brokeBefore: st.breakLeavesInnermost
-    walkBodyAt :st :unitDecl :ast bodyId: casenode.elseclause
-    if ruledOut then st.restoreBreakSeen seen: brokeBefore
-    et: lastStmtType :st :ast block: (ast.nodes.get i: casenode.elseclause)
-    armTypes.append et
-    return et
-}
-
-# walkCaseClauses -- walk every `case` arm of a match, accumulating the arm
-# names, their value types, and the two facts the match needs back: whether any
-# arm was empty and whether they all diverge.
-walkCaseClauses: function {
-    st: zenv.ZSymbolTable
-    unitDecl: ztypes.declid
-    ast: Ast
-    casenode: caseref
-    subjT: ztypes.tid
-    isSum: bool
-    targetName: StringView
-    neverId: ztypes.tid
-    covered: List String
-    diverging: List String
-    armTypes: ListVal ztypes.tid
-    liveBefore: (IdSet ztypes.declid).view
-    takenAcross: ArmTakes
-} out casearmfacts is {
-    anyEmpty: false
-    allDiverge: true
-    kindAcc: zenv.divkind.none
-    armsPublic: caseArmsArePublic :st :ast subject: casenode.subject :subjT
-    # a match folded to one arm walks that arm alone, as a folded `if` does
-    # (checkIfClauses); `--eager` walks every arm
-    fb: st.typing.foldedBranchAt nid: casenode.nid
-    skipDead: fb.known and (eagerAt :st declId: unitDecl).not
-    kC: u64
-    for kC < casenode.nclauses loop {
-        clauseId: zast.caseClauseAt :ast nid: casenode.nid i: kC
-        kC = kC + 1
-        clause: caseClauseRefAt :ast nid: clauseId
-        if clause.nid.notZero then {
-            cf: (
-                checkCaseClause
-                :st
-                :unitDecl
-                :ast
-                :clause
-                :subjT
-                :isSum
-                :armsPublic
-                :targetName
-                :neverId
-                :covered
-                :diverging
-                :armTypes
-                :liveBefore
-                :takenAcross
-                dead: skipDead and (clause.statement != fb.stmt)
-                folded: skipDead
-                ruledOut: fb.known and (clause.statement != fb.stmt)
-            )
-            if cf.empty then anyEmpty = true
-            if cf.diverges.not then allDiverge = false
-            if cf.kind > kindAcc then kindAcc = cf.kind
-        }
-    }
-    return (casearmfacts empty: anyEmpty diverges: allDiverge kind: kindAcc)
-}
-
-# finishCaseMatch -- close a match once its arms are walked: pop the match
-# scope, decide exhaustiveness, record what the subject can no longer hold,
-# and answer the match's own value type.
-finishCaseMatch: function {
-    st: zenv.ZSymbolTable
-    ast: Ast.view
-    casenode: caseref
-    subjT: ztypes.tid
-    isSum: bool
-    targetName: StringView
-    hasElse: bool
-    allDiverge: bool
-    anyEmpty: bool
-    neverId: ztypes.tid
-    nullId: ztypes.tid
-    matchMarker: zenv.openpos
-    covered: (List String).view
-    diverging: (List String).view
-    armTypes: (ListVal ztypes.tid).view
-} out ztypes.tid is {
-    st.popTo marker: matchMarker
-    exhaustive: hasElse
-    if exhaustive.not then {
-        exhaustive = caseIsExhaustive :st :ast :casenode :subjT :isSum :targetName :covered
-    }
-    if targetName.length > 0 when subjT.notZero then {
-        applyCaseExclusions :st :ast :targetName :subjT :diverging :casenode
-    }
-    return (
-        caseResultTid
-        :st
-        :casenode
-        :exhaustive
-        :allDiverge
-        :anyEmpty
-        :neverId
-        :nullId
-        :armTypes
-    )
-}
-
-# checkCaseArms -- walk a match's arms once its subject is typed: each clause,
-# the else, then exhaustiveness and the narrowing the match leaves behind.
-# Answers the match's own value type -- the first completing arm's.
-checkCaseArms: function {
-    st: zenv.ZSymbolTable
-    unitDecl: ztypes.declid
-    ast: Ast
-    casenode: caseref
-    subjT: ztypes.tid
-    isSum: bool
-    matchMarker: zenv.openpos
-} out ztypes.tid is {
-    restMark: st.restoreMark
-    targetName: String
-    if isSum then {
-        tn: subjectAtomName :ast n: (ast.nodes.get i: casenode.subject)
-        targetName = tn.take
-    }
-    neverId: ztypes.tid
-    nvOpt: stdtypes.stdTidOpt :ast :st wk: zast.wellKnown.slot.tyNever
-    if nvOpt.some then {
-        neverId = nvOpt
-    }
-    nullId: stdTid :ast :st wk: zast.wellKnown.slot.tyNull
-    anyEmpty: false
-    armEnds: st.openArmNarrowingEnds
-    # a take in one arm is restored for its siblings and consumes the local once
-    # the match is done, as an `if` arm's does
-    liveBefore: st.getLiveOwnedVars
-    takenAcross: (
-        ArmTakes
-        taken: IdSet ztypes.declid
-        counts: (IdMapV ztypes.declid v: u64)
-        reached: 0
-        refilled: IdSet ztypes.declid
-        refillCounts: (IdMapV ztypes.declid v: u64)
-        relRows: ListVal ztypes.entryid
-        relCounts: ListVal u64
-    )
-    st.pushBlock node: zast.nodeid
-    if targetName.length > 0 then st.resetNarrowing nameId: (
-        nameIdOf
-        :ast
-        name: targetName.stringView
-    )
-    covered: List String
-    diverging: List String
-    armTypes: ListVal ztypes.tid
-    allDiverge: true
-    recordConstMatchFold :st :ast :unitDecl :casenode
-    cf0: (
-        walkCaseClauses
-        :st
-        :unitDecl
-        :ast
-        :casenode
-        :subjT
-        :isSum
-        targetName: targetName.stringView
-        :neverId
-        :covered
-        :diverging
-        :armTypes
-        :liveBefore
-        :takenAcross
-    )
-    if cf0.empty then anyEmpty = true
-    if cf0.diverges.not then allDiverge = false
-    kindAcc: cf0.kind
-    hasElse: casenode.elseclause.notZero
-    if hasElse then {
-        ef: (
-            checkCaseElse
-            :st
-            :unitDecl
-            :ast
-            :casenode
-            :subjT
-            targetName: targetName.stringView
-            :neverId
-            :covered
-            :armTypes
-            :liveBefore
-            :takenAcross
-        )
-        if ef.empty then anyEmpty = true
-        if ef.diverges.not then allDiverge = false
-        if ef.kind > kindAcc then kindAcc = ef.kind
-    }
-    result: (
-        finishCaseMatch
-        :st
-        :ast
-        :casenode
-        :subjT
-        :isSum
-        targetName: targetName.stringView
-        :hasElse
-        :allDiverge
-        :anyEmpty
-        :neverId
-        :nullId
-        :matchMarker
-        :covered
-        :diverging
-        :armTypes
-    )
-    # after the exclusions the diverging arms left: a write in an arm that
-    # completes wins over them
-    st.closeArmNarrowingEnds marker: armEnds
-    # a match is exhaustive, or refused (caseIsExhaustive)
-    invalidateTakenAcross :st decls: takenAcross exhaustive: true
-    settleRestoredLocks :st since: restMark
-    if result.notZero when result == neverId when kindAcc > 0 then (
-        st.markUnreachable
-        kind: kindAcc
-    )
-    return result
-}
-
-# rejectGenericValueMatch -- report a match over a VALUE whose type is a generic
-# parameter, and say whether it was rejected. `match t` dissects the type
-# parameter at monomorphisation; a value of that type has no per-instance arm
-# dispatch (the template body is shared), so it is rejected rather than
-# silently taking the else path.
-rejectGenericValueMatch: function {
-    st: zenv.ZSymbolTable
-    ast: Ast.view
-    casenode: caseref
-    subjT: ztypes.tid
-} out bool is {
-    # `match t` dissects the TYPE parameter at monomorphisation. A match
-    # over a VALUE whose type is the generic parameter has no per-
-    # instance arm dispatch (the template body is shared), so it is
-    # rejected rather than silently taking the else path.
-    gvid: nodeId n: (ast.nodes.get i: casenode.subject)
-    gvav: st.typing.atomVariableId.get key: gvid
-    if gvav.some then {
-        gvav.drop
-        subject: ast.nodes.get i: casenode.subject
-        subjectName: specWrittenName :st :ast tid: subjT
-        gm: "cannot match over a value of generic parameter type '\{subjectName}'"
-        gh: "dissect the type parameter itself (`match \{subjectName}`), or move the value dispatch outside the generic"
-        gn: String
-        (
-            addErrorWithHint
-            :st
-            nodeid: (zast.nodeIdOf n: subject)
-            lineno: (nodeLine n: subject)
-            colno: (nodeCol n: subject)
-            e: zast.err.typeError
-            msg: gm
-            note: gn
-            hint: gh
-            width: 0
-        )
-        return true
-    }
-    return false
-}
-
-# dissectArmByValue -- the statement of the first case clause whose name is the
-# numeral `value`, for a generic match over a VALUE parameter; 0 when none is.
-# `value` is the argument's two's-complement bits, so a negative or hex numeral
-# compares as the same bits.
-dissectArmByValue: function {ast: Ast.view m: zast.caserow.view value: u64} out zast.nodeid is {
-    for each cId: (zast.kidsOf :ast span: m.clauses) loop {
-        cnode: ast.nodes.get i: cId
-        if cnode.caseclause when cnode.name.notZero then {
-            cnt: zast.poolTextAt pool: ast.names ref: cnode.name
-            if (
-                (numeralBits text: cnt.stringView) == (optionval.some value)
-            ) then return cnode.statement
-        }
-    }
-    return zast.nodeid
-}
-
-# numeralBits -- an integer numeral's two's-complement bits (`-5`, `0x10`), none
-# for any other text.
-numeralBits: function {text: StringView} out optionval u64 is {
-    neg: text.startsWith "-"
-    skip: u64
-    if neg then skip = 1
-    pv: ztypes.parseLiteralValue numstr: (text.substring from: skip to: text.length)
-    if pv.ok.not or pv.isFloat then return (optionval.none u64)
-    bits: pv.ival
-    if neg when bits > 0 then bits = 18446744073709551615.u64 - bits + 1
-    return (optionval.some bits)
-}
-
-# dissectArmByType -- the statement of the first case clause whose written type
-# IS `darg`, for a generic match over a TYPE parameter: each arm's name is
-# resolved where the template writes it (`scope`, the nearest declaration), so
-# a `Point` another unit declares, or the builtin `i64` beside a program's own
-# `i64`, is not the arm's type. 0 when none is.
-dissectArmByType: function {
-    typing: ztyping.ZTyping.view
-    ast: Ast.view
-    m: zast.caserow.view
-    scope: ztypes.declid
-    darg: ztypes.tid
-} out zast.nodeid is {
-    if darg.isZero or scope.isZero then return zast.nodeid
-    ud: unitRootOfDecl :typing declId: scope
-    for each cId: (zast.kidsOf :ast span: m.clauses) loop {
-        cnode: ast.nodes.get i: cId
-        if cnode.caseclause then {
-            at: (
-                (walkLookupTyperefByIdRo :ast :typing unitDecl: ud :scope baseId: cnode.name).or
-                d: ztypes.tid.zero
-            )
-            if at == darg then return cnode.statement
-        }
-    }
-    return zast.nodeid
-}
-
-# dissectedArgOf -- what the instance `ownerTid` bound its template's generic
-# parameter `paramName` to; a type argument of no type when the owner is no
-# instance of a template declaring that parameter.
-dissectedArgOf: function {
-    reg: ztypes.ZTypeRegistry.view
-    typing: ztyping.ZTyping.view
-    ownerTid: ztypes.tid
-    paramName: zast.nameid
-} out ztypes.genericarg is {
-    none: ztypes.genericarg.typeArg ztypes.tid.zero
-    if ownerTid.isZero then return none
-    orig: reg.genericOriginOf tid: ownerTid
-    if orig.isZero then return none
-    tk: typing.declIdOfType typeId: orig
-    if tk.isZero then return none
-    ord: reg.paramOrdinalOf tdecl: tk :paramName
-    if ord.none then return none
-    return (reg.genericArgAt specId: ownerTid ordinal: ord)
-}
-
-# dissectedArgText -- the argument `darg` the instance `ownerTid` bound its
-# template's parameter `paramName` to, as a diagnostic names it: a value as the
-# program writes it, a type's name, "" for none.
-dissectedArgText: function {
-    reg: ztypes.ZTypeRegistry.view
-    typing: ztyping.ZTyping.view
-    ownerTid: ztypes.tid
-    paramName: zast.nameid
-    darg: ztypes.genericarg
-} out String is {
-    match (
-        darg
-    ) case valueArg then {
-        tdecl: typing.declIdOfType typeId: (reg.genericOriginOf tid: ownerTid)
-        return (reg.valueArgText :tdecl :paramName bits: darg)
-    } case typeArg then {
-        if darg.isZero then return "".string
-        return (reg.nameOf tid: darg)
-    }
-}
-
-# dissectedArmOf -- the statement a compile-time `match` over a generic
-# parameter runs in the instance `ownerTid` for `darg`: the first case naming
-# the bound type, resolved where the template writes it (for a value
-# parameter, the bound numeral), else the else arm, else 0. The checker's
-# instance walk and the emitter both ask here, so the arm that is checked is the
-# arm that is written.
-dissectedArmOf: function {
-    reg: ztypes.ZTypeRegistry.view
-    typing: ztyping.ZTyping.view
-    ast: Ast.view
-    m: zast.caserow.view
-    ownerTid: ztypes.tid
-    darg: ztypes.genericarg
-} out zast.nodeid is {
-    win: zast.nodeid
-    match (
-        darg
-    ) case valueArg then {
-        win = dissectArmByValue :ast :m value: darg
-    } case typeArg then {
-        # the template's own declaration is the scope its arms are written in
-        tsc: typing.declIdOfType typeId: (reg.genericOriginOf tid: ownerTid)
-        win = dissectArmByType :typing :ast :m scope: tsc :darg
-    }
-    if win.isZero then win = m.elseclause
-    return win
-}
-
-# rebindOuterUses -- the arms an instance walk skips keep the variable ids of
-# the walk that last checked them, while a name declared outside them is bound
-# afresh on every walk. Their uses of such a name are pointed at this walk's
-# variable, so the arm another instance selects names what this walk declared.
-rebindOuterUses: function {st: zenv.ZSymbolTable ast: Ast.view root: zast.nodeid} is {
-    work: ListVal zast.nodeid
-    work.append from: root
-    wi: u64
-    for wi < work.length loop {
-        wid: work.get i: wi
-        wi = wi + 1
-        wn: ast.nodes.get i: wid
-        zast.childIdsInto :ast n: wn acc: work
-        if wn.atomid when (st.typing.atomVariableId.get key: wid).some then {
-            outer: st.lookupVarId nameId: wn.name
-            if outer.some then st.typing.setAtomVariable nid: wid vid: outer
-        }
-    }
-}
-
-# rebindSkippedArms -- rebindOuterUses over every arm of the match but `win`.
-rebindSkippedArms: function {
-    st: zenv.ZSymbolTable ast: Ast.view casenode: caseref win: zast.nodeid
-} is {
-    skipped: ListVal zast.nodeid
-    ci: u64
-    for ci < casenode.nclauses loop {
-        clause: caseClauseRefAt :ast nid: (zast.caseClauseAt :ast nid: casenode.nid i: ci)
-        ci = ci + 1
-        if (clause.statement == win).not then skipped.append from: clause.statement
-    }
-    els: casenode.elseclause
-    if (els == win).not when els.notZero then skipped.append from: els
-    for each sk: skipped loop rebindOuterUses :st :ast root: sk
-}
-
-# refuseMissingDissectArm -- an instance that bound the parameter to something
-# no case names, in a match with no else.
-refuseMissingDissectArm: function {
-    st: zenv.ZSymbolTable
-    casenode: caseref
-    darg: ztypes.genericarg
-    pname: StringView
-    paramName: zast.nameid
-} is {
-    desc: (
-        dissectedArgText
-        reg: st.reg
-        typing: st.typing
-        ownerTid: st.typing.curMonoStamp
-        :paramName
-        :darg
-    )
-    (
-        addError
-        :st
-        nodeid: casenode.nid
-        lineno: casenode.lineno
-        colno: casenode.colno
-        e: zast.err.genericError
-        msg: "generic match on '\{pname}' has no case for '\{desc}' and no else"
-    )
-}
-
-# checkDissectedArm -- an instance walk's compile-time `match` over a type
-# parameter: only the arm this instance selects is walked -- the others need
-# not type for it -- and that arm's value is the match's value here.
-checkDissectedArm: function {
-    st: zenv.ZSymbolTable
-    unitDecl: ztypes.declid
-    ast: Ast
-    casenode: caseref
-} out ztypes.tid is {
-    none: ztypes.tid.zero
-    win: zast.nodeid
-    darg: ztypes.genericarg.typeArg ztypes.tid.zero
-    pname: String
-    pnId: zast.nameid
-    {
-        mn: ast.nodes.get i: casenode.nid
-        if mn.caseexpr then {
-            pname = subjectAtomName :ast n: (ast.nodes.get i: mn.subject)
-            pnId = nameIdOf :ast name: pname.stringView
-            darg = (
-                dissectedArgOf
-                reg: st.reg
-                typing: st.typing
-                ownerTid: st.typing.curMonoStamp
-                paramName: pnId
-            )
-            win = (
-                dissectedArmOf
-                reg: st.reg
-                typing: st.typing
-                :ast
-                m: mn
-                ownerTid: st.typing.curMonoStamp
-                :darg
-            )
-        }
-    }
-    rebindSkippedArms :st :ast :casenode :win
-    if win.isZero then {
-        refuseMissingDissectArm :st :casenode :darg pname: pname.stringView paramName: pnId
-        return none
-    }
-    armBlock: win
-    armMarker: st.pushBlock node: armBlock
-    checkStatement :st :unitDecl :ast blockId: armBlock
-    at: lastStmtType :st :ast block: (ast.nodes.get i: win)
-    # the one arm that runs: where it leaves, the match does
-    armKind: st.unreachableKind
-    st.popTo marker: armMarker
-    if armKind > 0 then st.markUnreachable kind: armKind
-    if st.walk.stmtExprNid == casenode.nid then return at
-    if at.isZero or (at == st.typing.nullTypeId) then return at
-    if (st.reg.typetypeOf typeId: at) == ztypes.ztypetype.neverType then return at
-    av: armValueOf :st :ast blockId: armBlock
-    if av.nid.isZero or av.untyped then return at
-    stampGate :st nid: casenode.nid tid: av.tid
-    return av.tid
-}
-
-# markInstanceDissection -- the subject of a compile-time `match` in an
-# instance's own copy of a body carries the generic parameter it names, as the
-# template's subject does: the emitter dissects on it (matchGenericRoute), and
-# the copy has no template walk to mark it.
-markInstanceDissection: function {st: zenv.ZSymbolTable ast: Ast.view casenode: caseref} is {
-    sn: nodeId n: (ast.nodes.get i: casenode.subject)
-    if sn.isZero then return
-    if (st.typing.rowIsForeign nid: sn) then return
-    dsn: subjectAtomName :ast n: (ast.nodes.get i: casenode.subject)
-    if dsn.length == 0 then return
-    orig: st.reg.genericOriginOf tid: st.typing.curMonoStamp
-    if orig.isZero then return
-    tk: st.typing.declIdOfType typeId: orig
-    if tk.isZero then return
-    ptid: (
-        (st.reg.genericParamTidOf tdecl: tk paramName: (nameIdOf :ast name: dsn.stringView)).or
-        d: ztypes.tid.zero
-    )
-    if ptid.isZero then return
-    ztyping.nodeTypeSet tbl: st.typing.nodeType nid: sn tid: ptid
-}
-
-# monoDissectionHandled -- on a per-mono instance walk, a subject that is a bare
-# TYPE name is a compile-time dissection: the match scope is closed and only the
-# selected arm is walked (checkDissectedArm). True when the subject is one.
-monoDissectionHandled: function {
-    st: zenv.ZSymbolTable
-    ast: Ast.view
-    casenode: caseref
-    matchMarker: zenv.openpos
-} out bool is {
-    dsn: subjectAtomName :ast n: (ast.nodes.get i: casenode.subject)
-    if dsn.length > 0 then {
-        dsv: st.lookupVarId nameId: (nameIdOf :ast name: dsn.stringView)
-        match (
-            dsv
-        ) case some then null case none then {
-            st.popTo marker: matchMarker
-            return true
-        }
-    }
-    return false
-}
-
-
-# checkCase -- walk a match: push the `match` scope, type the subject, push
-# `match_body` (resetting the bare-name subject's narrowing), then per arm an
-# `arm:{name}` scope with a shadow-narrowing overlay (the subject resolves to
-# the arm payload in the body), tracking diverging arms; an else arm excludes
-# the covered subtypes. After popping, an exhaustive all-diverging match
-# resolves to `never` (a completing-arm result type lands with a value-match
-# example) and each diverging arm's subtype is excluded from the subject in
-# the enclosing scope (all-excluded marks it unreachable).
-checkCase: function {
-    st: zenv.ZSymbolTable
-    unitDecl: ztypes.declid
-    ast: Ast
-    casenode: caseref
-} out ztypes.tid is {
-    foldCaseArm :st :ast :unitDecl n: casenode
-    constFailClear :st
-    matchMarker: st.pushBlock node: casenode.nid
-    # a typedef over a union or variant is matched on its base's arms
-    subjT: typedefSumBase :st tid: (caseSubjectTid :st :unitDecl :ast :casenode)
-    # per-mono instance walk: a subject that is a bare TYPE name (resolved
-    # by the instance's scope define, not a value) is a compile-time
-    # dissection -- only the arm this instance selects is walked
-    if st.typing.curMonoStamp.notZero when subjT.notZero when st.typing.curMonoStamp.notZero when subjT.notZero when (
-        monoDissectionHandled
-        :st
-        :ast
-        :casenode
-        :matchMarker
-    ) then {
-        markInstanceDissection :st :ast :casenode
-        return (checkDissectedArm :st :unitDecl :ast :casenode)
-    }
-    if subjT.notZero when (st.reg.isTypeParamOf tid: subjT) then {
-        # a genericParam subject IS a compile-time dissection: write the
-        # marker stamp directly (an instance's row must carry the
-        # param, not its substitution, for the emitter's dispatch gate)
-        gmn: nodeId n: (ast.nodes.get i: casenode.subject)
-        if gmn.notZero then {
-            gmv: subjT
-            ztyping.nodeTypeSet tbl: st.typing.nodeType nid: gmn tid: gmv
-        }
-    }
-    isSum: false
-    if subjT.notZero then {
-        # a partial of a sum (`optionval_t` in a generic body) is a sum
-        stt: st.reg.typetypeOf typeId: (partialTemplateOf :st tid: subjT)
-        if stt == ztypes.ztypetype.unionType then isSum = true
-        if stt == ztypes.ztypetype.variantType then isSum = true
-    }
-    isGenericSubj: false
-    if subjT.notZero when (st.reg.isTypeParamOf tid: subjT) then isGenericSubj = true
-    if isGenericSubj when (rejectGenericValueMatch :st :ast :casenode :subjT) then {
-        return ztypes.tid.zero
-    }
-    # A match dissects a union/variant into its arms (a runtime discriminator
-    # test) or a generic parameter into its resolutions (at monomorphisation).
-    # Any other subject -- a numeric, string, class, record, or a constant --
-    # has no child arms to dissect into.
-    if subjT.notZero when isSum.not when isGenericSubj.not then {
-        subjNode: ast.nodes.get i: casenode.subject
-        subjectName: specWrittenName :st :ast tid: subjT
-        smsg: "match subject must be a union, variant, or generic parameter, got '\{subjectName}'"
-        (
-            addError
-            :st
-            nodeid: (zast.nodeIdOf n: subjNode)
-            lineno: (nodeLine n: subjNode)
-            colno: (nodeCol n: subjNode)
-            e: zast.err.typeError
-            msg: smsg
-        )
-    }
-    arms: checkCaseArms :st :unitDecl :ast :casenode :subjT :isSum :matchMarker
-    return (consumedCaseTid :st :ast :casenode :arms)
-}
 
 # caseSubjectTid -- type a match's subject. A subject that types to nothing and
 # raised nothing is an unresolvable name, reported where the match reads it.
@@ -53242,31 +50380,6 @@ unitParamSubjectTid: function {
         if (st.reg.isTypeParamOf tid: rt) then return rt
     }
     return ztypes.tid
-}
-
-# consumedCaseTid -- a `match` whose value is consumed yields one type from every
-# arm; one standing as a statement, one yielding no value and one that diverges
-# are asked nothing.
-consumedCaseTid: function {
-    st: zenv.ZSymbolTable
-    ast: Ast
-    casenode: caseref
-    arms: ztypes.tid
-} out ztypes.tid is {
-    (
-        refuseLeavingArm
-        :st
-        :ast
-        nid: casenode.nid
-        lineno: casenode.lineno
-        colno: casenode.colno
-        form: "a `match`"
-        width: 5
-    )
-    if st.walk.stmtExprNid == casenode.nid then return arms
-    if arms.isZero or (arms == st.typing.nullTypeId) then return arms
-    if (st.reg.typetypeOf typeId: arms) == ztypes.ztypetype.neverType then return arms
-    return (valueArmsTid :st :ast nid: casenode.nid first: arms)
 }
 
 # rowarm -- which arm a value or statement row holds: the dispatch tag that
@@ -53533,52 +50646,6 @@ asgnref: record {
     colno: u32
 }
 
-# asgnRefAt -- the assignment row `nid` as plain values (all zero for any
-# other arm).
-asgnRefAt: function {ast: Ast.view nid: zast.nodeid} out asgnref is {
-    n: ast.nodes.get i: nid
-    if n.assignment then {
-        return (asgnref :nid name: n.name value: n.value lineno: n.lineno colno: n.colno)
-    }
-    zn: zast.nodeid
-    zm: zast.nameid
-    return (asgnref nid: zn name: zm value: zn lineno: 0 colno: 0)
-}
-
-# ifclauseref -- what the if-clause walk reads of its row: the condition
-# count, the statement id and the position, as plain values.
-ifclauseref: record {
-    # the if clause node this was read from
-    nid: zast.nodeid
-    # how many conditions the clause chains, counted so the view can be dropped
-    # before they are walked
-    nconds: u64
-    # the body the conditions guard
-    statement: zast.nodeid
-    # the line to report this if clause against
-    lineno: u32
-    # the column to report this if clause against
-    colno: u32
-}
-
-# ifClauseRefAt -- the if-clause row `nid` as plain values (all zero for any
-# other arm).
-ifClauseRefAt: function {ast: Ast.view nid: zast.nodeid} out ifclauseref is {
-    n: ast.nodes.get i: nid
-    if n.ifclause then {
-        return (
-            ifclauseref
-            :nid
-            nconds: n.conditions.count
-            statement: n.statement
-            lineno: n.lineno
-            colno: n.colno
-        )
-    }
-    zn: zast.nodeid
-    return (ifclauseref nid: zn nconds: 0 statement: zn lineno: 0 colno: 0)
-}
-
 # caseclauseref -- what the match-arm walk reads of its row: the binding
 # name, the matched arm id, the statement id and the position.
 caseclauseref: record {
@@ -53594,26 +50661,6 @@ caseclauseref: record {
     lineno: u32
     # the column to report this match arm against
     colno: u32
-}
-
-# caseClauseRefAt -- the match-arm row `nid` as plain values (all zero for
-# any other arm).
-caseClauseRefAt: function {ast: Ast.view nid: zast.nodeid} out caseclauseref is {
-    n: ast.nodes.get i: nid
-    if n.caseclause then {
-        return (
-            caseclauseref
-            :nid
-            name: n.name
-            matcharm: n.matcharm
-            statement: n.statement
-            lineno: n.lineno
-            colno: n.colno
-        )
-    }
-    zn: zast.nodeid
-    zm: zast.nameid
-    return (caseclauseref nid: zn name: zm matcharm: zn statement: zn lineno: 0 colno: 0)
 }
 
 # binref -- what the binary-operator walk reads of its row: the operand and
@@ -54365,20 +51412,20 @@ checkValueArmAt: function {
         return (checkWith :st :unitDecl :ast withnode: wr)
     } case doexpr then {
         dr: doRefAt :ast :nid
-        return (checkDo :st :unitDecl :ast donode: dr)
+        return (flow.checkDo :st :unitDecl :ast donode: dr)
     } case reassignment then {
         rr: reasgRefAt :ast :nid
         checkReassignment :st :unitDecl :ast rasgn: rr
         return ztypes.tid.zero
     } case caseexpr then {
         csr: caseRefAt :ast :nid
-        return (checkCase :st :unitDecl :ast casenode: csr)
+        return (flow.checkCase :st :unitDecl :ast casenode: csr)
     } case ifexpr then {
         ifr: ifRefAt :ast :nid
-        return (checkIf :st :unitDecl :ast ifnode: ifr)
+        return (flow.checkIf :st :unitDecl :ast ifnode: ifr)
     } case forexpr then {
         frr: forRefAt :ast :nid
-        return (checkFor :st :unitDecl :ast fornode: frr)
+        return (flow.checkFor :st :unitDecl :ast fornode: frr)
     } case labelvalue then {
         lvr: labelRefAt :ast :nid
         return (checkLabelValueAt :st :unitDecl :ast lv: lvr)
@@ -54407,220 +51454,6 @@ refuseBodyList: function {st: zenv.ZSymbolTable ast: Ast.view nid: zast.nodeid} 
         hint: "declare it at unit level, `codes: list { 9 10 }`, and read it by name".string
         width: 4
     )
-}
-
-# ctlDivKind -- how a bare control name leaves the statement's scope: `return`
-# leaves the function, `break` the loop, `continue` the iteration;
-# `divkind.none` for any other name.
-ctlDivKind: function {bn: zast.nameid} out u8 is {
-    if bn == zast.wellKnown.slot.wkReturn then return zenv.divkind.exit
-    if bn == zast.wellKnown.slot.wkBreak then return zenv.divkind.brk
-    if bn == zast.wellKnown.slot.wkContinue then return zenv.divkind.cont
-    return zenv.divkind.none
-}
-
-# checkStmtExpression -- an expression statement line: walk the value, stamp
-# the LINE with what the walk answered, and answer how the line diverges (a
-# `divkind`: a return call or a control builtin), `none` when it does not. The
-# value keeps its own stamp: a `with` is stamped with its bound value's type
-# and answers its body's.
-checkStmtExpression: function {
-    st: zenv.ZSymbolTable
-    unitDecl: ztypes.declid
-    ast: Ast
-    valueId: zast.nodeid
-    lineId: zast.nodeid
-} out u8 is {
-    errsBefore: st.typing.errors.length
-    # a `.drop` is legal on this node and nowhere else; saved and restored
-    # because a statement's expression can contain nested statement blocks
-    outerStmt: st.walk.stmtExprNid
-    st.walk.stmtExprNid = valueId
-    et0: checkValueAt :st :unitDecl :ast nid: valueId
-    st.walk.stmtExprNid = outerStmt
-    if (refuseStaticListStatement :st :ast vt: et0 nid: valueId).not then {
-        refuseUnitValue :st :ast vt: et0 nid: valueId
-    }
-    if et0.notZero then stampGate :st nid: lineId tid: et0
-    k0: exprDivKind :st :ast :valueId
-    isControl: (ctlDivKind bn: (zast.atomNameIdOf n: (ast.nodes.get i: valueId))) > 0
-    recordControlDestroy :st :ast :valueId kind: k0
-    # a statement whose value resolved to nothing and raised nothing:
-    # an unresolvable root name is an unknown reference (the emitter
-    # would otherwise hit its unhandled-callee backstop)
-    if st.typing.errors.length == errsBefore when isControl.not then {
-        lineTid: walkTypeOf :st nid: lineId
-        unknown: true
-        if lineTid.notZero then unknown = false
-        if unknown then {
-            unresolved: unresolvedBareCallable :ast :st :unitDecl nid: valueId
-            if unresolved.length > 0 then reportUnknownNameAt :st :ast nid: valueId name: unresolved
-        }
-    }
-    return k0
-}
-
-# exprDivKind -- how the expression `valueId`, once walked, leaves: a control
-# word's own kind, `exit` for a return or panic call, `none` when it does not.
-exprDivKind: function {st: zenv.ZSymbolTable.view ast: Ast.view valueId: zast.nodeid} out u8 is {
-    k: ctlDivKind bn: (zast.atomNameIdOf n: (ast.nodes.get i: valueId))
-    if k > 0 then return k
-    if (isReturnCallKind o: (st.typing.callKind.get key: valueId)) then return zenv.divkind.exit
-    return zenv.divkind.none
-}
-
-# recordControlDestroy -- what the control statement `valueId` destroys as it
-# leaves (exitDestroy): a `return` every scope of its function, but the local it
-# hands back when it returns a bare name; a `break` every scope inside what it
-# leaves, its loop or a `do` block; a `continue` every scope inside its loop. A
-# bare name narrowed to an arm reads the arm's PAYLOAD, a copy the return hands
-# back while the local itself -- an owned union -- is still owed.
-recordControlDestroy: function {
-    st: zenv.ZSymbolTable ast: Ast.view valueId: zast.nodeid kind: u8
-} is {
-    if kind == zenv.divkind.exit then {
-        ret: ztypes.vid
-        {
-            vn: ast.nodes.get i: valueId
-            if vn.call when vn.arguments.count == 1 then {
-                a0: argRefAt :ast nid: (zast.kidAt kids: ast.kids span: vn.arguments i: 0)
-                rn: zast.atomNameIdOf n: (ast.nodes.get i: a0.operation)
-                if rn.notZero when (nameReadsPayload :st nameId: rn).not then {
-                    ret = (st.lookupVarId nameId: rn).or d: ztypes.vid
-                }
-            }
-        }
-        st.recordReturnDestroy nid: valueId except: ret
-    }
-    if kind == zenv.divkind.brk then {
-        st.noteBreak
-        st.recordBreakDestroy nid: valueId
-    }
-    if kind == zenv.divkind.cont then st.recordLoopExitDestroy nid: valueId
-}
-
-# checkStmtInner -- dispatch a statement line's inner row by arm, and stamp the
-# line: a binding and a reassignment each have their own walk and lend the line
-# their own type, and every other row is the value the line computes. Answers
-# how the line diverges (a `divkind`), `none` when it does not.
-checkStmtInner: function {
-    st: zenv.ZSymbolTable
-    unitDecl: ztypes.declid
-    ast: Ast
-    innerId: zast.nodeid
-    lineId: zast.nodeid
-} out u8 is {
-    arm: rowArmAt :ast nid: innerId
-    match (
-        arm
-    ) case assignment then {
-        ar: asgnRefAt :ast nid: innerId
-        checkAssignment :st :unitDecl :ast asgn: ar
-        stampLineFrom :st :lineId :innerId
-        return zenv.divkind.none
-    } case reassignment then {
-        checkValueAt :st :unitDecl :ast nid: innerId
-        stampLineFrom :st :lineId :innerId
-        return zenv.divkind.none
-    } else {
-        return (checkStmtExpression :st :unitDecl :ast valueId: innerId :lineId)
-    }
-}
-
-# stampLineFrom -- a statement line carries its inner row's type.
-stampLineFrom: function {st: zenv.ZSymbolTable lineId: zast.nodeid innerId: zast.nodeid} is {
-    itOpt: walkTypeOf :st nid: innerId
-    if itOpt.notZero then {
-        stampGate :st nid: lineId tid: itOpt
-    }
-}
-
-# checkStatement -- walk a function-body statement block, marking the scope
-# unreachable after a control-flow terminator (return).
-checkStatement: function {
-    st: zenv.ZSymbolTable
-    unitDecl: ztypes.declid
-    ast: Ast
-    blockId: zast.nodeid
-} is {
-    nLines: zast.stmtLineCount :ast nid: blockId
-    k: u64
-    for k < nLines loop {
-        slnId: zast.stmtLineAt :ast nid: blockId i: k
-        k = k + 1
-        checkStmtLine :st :unitDecl :ast :blockId :slnId last: k == nLines
-    }
-}
-
-# checkStmtLine -- one line `slnId` of the block `blockId`, its `last` line
-# when so: its row walked, a tail in return position handed on or recorded,
-# and how the line diverges laid for the lines after it.
-checkStmtLine: function {
-    st: zenv.ZSymbolTable
-    unitDecl: ztypes.declid
-    ast: Ast
-    blockId: zast.nodeid
-    slnId: zast.nodeid
-    last: bool
-} is {
-    # the line row's inner statement
-    innerId: zast.nodeid
-    sline: ast.nodes.get i: slnId
-    if sline.statementline then innerId = sline.statementline
-    dk: zenv.divkind.none
-    ul0: st.walk.lineUnnamedLocals.length
-    tailLine: last and (st.tailBlock == blockId) and blockId.notZero
-    if tailLine then forwardTail :st :ast :innerId
-    # only a block's last line can be its value: a statement block's is not
-    discarded: tailLine.not and (last.not or (st.walk.stmtBlocks.has item: blockId))
-    if discarded then noteStatementBlocks :st :ast :innerId
-    if innerId.notZero then {
-        savedMode: st.mode
-        st.mode.stmtDiscarded = discarded
-        bsPrev: st.walk.boundSiteNid
-        blPrev: st.walk.boundSiteLine
-        bcPrev: st.walk.boundSiteCol
-        bfPrev: st.walk.boundSiteFailArg
-        st.walk.boundSiteFailArg = ztypes.tid.zero
-        inode: ast.nodes.get i: innerId
-        st.walk.boundSiteNid = innerId
-        st.walk.boundSiteLine = nodeLine n: inode
-        st.walk.boundSiteCol = nodeCol n: inode
-        dk = checkStmtInner :st :unitDecl :ast :innerId lineId: slnId
-        refuseUnitNameValue :st :ast nid: innerId
-        st.mode = savedMode
-        st.walk.boundSiteNid = bsPrev
-        st.walk.boundSiteLine = blPrev
-        st.walk.boundSiteCol = bcPrev
-        st.walk.boundSiteFailArg = bfPrev
-    }
-    # the body's own tail is recorded once its value is judged
-    # (checkImplicitReturn); a `with` or `do` block's, here
-    if tailLine when blockId != st.tailBody then (
-        recordTailExit
-        :st
-        :ast
-        lineId: slnId
-        valId: (
-            implicitReturnValue
-            reg: st.reg
-            typing: st.typing
-            :ast
-            lineId: slnId
-            lineType: (walkTypeOf :st nid: slnId)
-        )
-    )
-    # a block's value takes over what its line's references hold before the
-    # line's unheld temporaries release theirs
-    if last then recordArmValueLocks :st :ast lineId: slnId
-    yields: last and discarded.not and tailLine.not and (blockId != st.walk.appendedBody)
-    if yields when dk == zenv.divkind.none then moveYieldedLocals :st :ast lineId: slnId
-    recordTempHoldingLine :st lineId: slnId from: ul0
-    if discarded when dk == zenv.divkind.none then recordDiscard :st :ast :innerId
-    # a line is no scope of pins: each value on it kept its own to its record
-    if st.walk.draft.holds then panic msg: "ztypecheck: a statement line left pins pending"
-    if dk > 0 then st.markUnreachable kind: dk
-    if dk == zenv.divkind.cont then st.recordContinueTakes
 }
 
 # moveYieldedLocals -- a block's value that is a local of the block's own is
@@ -54674,153 +51507,11 @@ moveYieldedValue: function {st: zenv.ZSymbolTable ast: Ast valueNid: zast.nodeid
     }
 }
 
-# noteStatementBlocks -- the row `innerId` of a line whose value nothing
-# receives: an `if`, `match`, loop, `do` or `with` there is a statement, and so
-# is the last line of each of its arms and bodies (stmtBlocks).
-noteStatementBlocks: function {st: zenv.ZSymbolTable ast: Ast.view innerId: zast.nodeid} is {
-    if innerId.isZero then return
-    n: ast.nodes.get i: innerId
-    match (
-        n
-    ) case forexpr then {
-        st.walk.stmtBlocks.add item: n.body
-    } case doexpr then {
-        st.walk.stmtBlocks.add item: n.statement
-    } case withexpr then {
-        st.walk.stmtBlocks.add item: n.body
-        st.walk.stmtBlocks.add item: (doStatementOf n: (ast.nodes.get i: n.body))
-    } case ifexpr then {
-        k: u64
-        for k < n.clauses.count loop {
-            cl: ifClauseRefAt :ast nid: (zast.ifClauseAt :ast nid: innerId i: k)
-            k = k + 1
-            st.walk.stmtBlocks.add item: cl.statement
-        }
-        st.walk.stmtBlocks.add item: n.elseclause
-    } case caseexpr then {
-        k: u64
-        for k < n.clauses.count loop {
-            cc: caseClauseRefAt :ast nid: (zast.caseClauseAt :ast nid: innerId i: k)
-            k = k + 1
-            st.walk.stmtBlocks.add item: cc.statement
-        }
-        st.walk.stmtBlocks.add item: n.elseclause
-    } else null
-}
-
 # noteStatementAutoCall -- the function or method named at `nid` without an
 # argument list is called there, and `nid` is a statement's own value: a
 # result the statement may discard (recordDiscard).
 noteStatementAutoCall: function {st: zenv.ZSymbolTable nid: zast.nodeid} is {
     if nid == st.walk.stmtExprNid then st.typing.autoCallNodes.add item: nid
-}
-
-# doStatementOf -- the statement block a `do` node holds, 0 for any other node.
-doStatementOf: function {n: astnode.view} out zast.nodeid is {
-    match (
-        n
-    ) case doexpr then {
-        return n.statement
-    } else {
-        return zast.nodeid
-    }
-}
-
-# recordDiscard -- the statement whose row is `innerId` computes a value nothing
-# receives: when that value is a fresh owned result -- a call's, or a
-# construction's, that owns what it holds and borrows from nothing -- the
-# checker holds it in a temporary of its own that dies as the statement ends
-# (discardTemp). A read of a local or a field holds nothing of its own.
-recordDiscard: function {st: zenv.ZSymbolTable ast: Ast innerId: zast.nodeid} is {
-    if innerId.isZero then return
-    if (freshResultNode :st nid: innerId).not then return
-    vt: walkTypeOf :st nid: innerId
-    if vt.isZero then return
-    tid: vt
-    if (st.reg.needsDestructor typeId: tid).not then return
-    tt: st.reg.typetypeOf typeId: tid
-    if tt.isReferenceData.not then return
-    # a result that keeps a borrow of its inputs is a reference to them, an
-    # `outx` one a value of its own (checkAssignment's rule)
-    dp: valuePinsOf :st nid: innerId
-    if dp.len > 0 when dp.owned.not then return
-    if (isViewFamilyTid :ast :st :tid) then return
-    vid: st.reg.newVariable ztypeId: tid ownership: ztypes.zownership.owned
-    st.reg.setVariableSynthOrigin id: vid origin: ztypes.zsynthorigin.discard
-    if st.recording then st.typing.discardTemp.set key: innerId value: vid
-}
-
-# freshResultNode -- the node computes a value of its own: a call of a function
-# or a construction -- not `return` and its kin, a borrowing wrapper or a
-# function reference -- or a function or method named without an argument list.
-freshResultNode: function {st: zenv.ZSymbolTable.view nid: zast.nodeid} out bool is {
-    if (st.typing.autoCallNodes.has item: nid) then return true
-    ck: st.typing.callKind.get key: nid
-    match (
-        ck
-    ) case some then {
-        k: ck
-        match (
-            k
-        ) case regular then {
-            return true
-        } case recordCreate then {
-            return true
-        } case classCreate then {
-            return true
-        } case unionCreate then {
-            return true
-        } case protocolCreate then {
-            return true
-        } case facetCreate then {
-            return true
-        } case typedefCreate then {
-            return true
-        } case boxCreate then {
-            return true
-        } else {
-            return false
-        }
-    } case none then {
-        return false
-    }
-}
-
-# withForwardsTail -- return position passes INTO a `with`'s body, rather than
-# the `with` being the tail value itself, when that body is a `do` block no
-# `break` leaves. An unbraced body is a value, and the `with` line returns it.
-# The tail-exit record and the emitter both ask THIS, so the two cannot
-# disagree about which line returns -- when they did, a bare-bodied tail `with`
-# was recorded by nobody and emitted a function with no `return` at all.
-withForwardsTail: function {ast: Ast.view n: astnode.view} out bool is {
-    match (
-        n
-    ) case withexpr then {
-        ds: doStatementOf n: (ast.nodes.get i: n.body)
-        if ds.isZero then return false
-        return (blockHasBreak :ast n: (ast.nodes.get i: ds)).not
-    } else {
-        return false
-    }
-}
-
-# forwardTail -- the last line `innerId` of a block in return position: a `with`
-# block, or a `do` block no `break` leaves, hands return position to its own
-# last line, as the emitter hands it on.
-forwardTail: function {st: zenv.ZSymbolTable ast: Ast.view innerId: zast.nodeid} is {
-    if innerId.isZero then return
-    n: ast.nodes.get i: innerId
-    match (
-        n
-    ) case withexpr then {
-        # its body is a `do` block, whose own block holds the lines
-        if (withForwardsTail :ast n: (ast.nodes.get i: innerId)) then {
-            st.tailBlock = doStatementOf n: (ast.nodes.get i: n.body)
-        }
-    } case doexpr then {
-        if (blockHasBreak :ast n: (ast.nodes.get i: n.statement)
-        ).not then st.tailBlock = n.statement
-    } else null
 }
 
 # noteDropReleasedTemps -- a `.drop` released its binding's holds: an unnamed
@@ -54869,16 +51560,6 @@ recordTempHoldingLine: function {st: zenv.ZSymbolTable lineId: zast.nodeid from:
     }
     if held then st.typing.tempHoldingLines.add item: lineId
     for st.walk.lineUnnamedLocals.length > from loop st.walk.lineUnnamedLocals.pop
-}
-
-# walkBodyAt -- walk a function body by its table id (0 = a spec method, no body).
-walkBodyAt: function {
-    st: zenv.ZSymbolTable
-    unitDecl: ztypes.declid
-    ast: Ast
-    bodyId: zast.nodeid
-} is {
-    if bodyId.notZero then checkStatement :st :unitDecl :ast blockId: bodyId
 }
 
 # walkDefinitionById -- walk the definition a RESOLVED ID names, wherever it
@@ -55354,7 +52035,7 @@ recordTailExit: function {
     # a `do` line, and a `with` that hands return position to its own body,
     # record at that body's last line instead
     if vn.doexpr then return
-    if (withForwardsTail :ast n: vn) then return
+    if (flow.withForwardsTail :ast n: vn) then return
     ret: ztypes.vid
     rn: zast.atomNameIdOf n: vn
     if rn.notZero then ret = (st.lookupVarId nameId: rn).or d: ztypes.vid
@@ -55384,7 +52065,7 @@ implicitReturnValue: function {
     arm: rowArmAt :ast nid: innerId
     if arm.assignment or arm.reassignment or arm.swapstmt then return zast.nodeid
     # a bare `return`, `break` or `continue` leaves rather than yields
-    ctl: ctlDivKind bn: (zast.atomNameIdOf n: (ast.nodes.get i: innerId))
+    ctl: flow.ctlDivKind bn: (zast.atomNameIdOf n: (ast.nodes.get i: innerId))
     if ctl > 0 then return zast.nodeid
     if lineType.isZero then return zast.nodeid
     if (reg.typetypeOf typeId: lineType) == ztypes.ztypetype.neverType then return zast.nodeid
@@ -55393,29 +52074,13 @@ implicitReturnValue: function {
     return innerId
 }
 
-# tailIsControl -- the last line is a control construct (an `if`, a `match`, a
-# loop, a `with` or `do` block) or a bare control word, whose paths may each
-# return on their own.
-tailIsControl: function {st: zenv.ZSymbolTable.view ast: Ast.view lineId: zast.nodeid} out bool is {
-    innerId: zast.nodeid
-    ln: ast.nodes.get i: lineId
-    if ln.statementline then innerId = ln.statementline
-    if innerId.isZero then return false
-    arm: rowArmAt :ast nid: innerId
-    if arm.ifexpr or arm.caseexpr or arm.forexpr or arm.withexpr or arm.doexpr then return true
-    lt: walkTypeOf :st nid: lineId
-    ltt: st.reg.typetypeOf typeId: lt
-    if lt.notZero when ltt == ztypes.ztypetype.neverType then return true
-    return (ctlDivKind bn: (zast.atomNameIdOf n: (ast.nodes.get i: innerId))) > 0
-}
-
 # reportValuelessTail -- an `out`-typed function body whose last line has no
 # value: a control construct is refused only when some path falls out of it,
 # anything else always is.
 reportValuelessTail: function {
     st: zenv.ZSymbolTable ast: Ast defn: fnref lsid: zast.nodeid expR: ztypes.tid
 } is {
-    if lsid.notZero when (tailIsControl :st :ast lineId: lsid) then {
+    if lsid.notZero when (flow.tailIsControl :st :ast lineId: lsid) then {
         # a template's walk has not read what each instance folds: they answer
         if st.isUnreachable.not when st.recording then reportTailFallsOut :st :ast :lsid :expR
         return
@@ -57582,7 +54247,7 @@ constMatchArm: function {
     stmt: zast.nodeid
     k: u64
     for k < cr.nclauses loop {
-        cl: caseClauseRefAt :ast nid: (zast.caseClauseAt :ast nid: cr.nid i: k)
+        cl: flow.caseClauseRefAt :ast nid: (zast.caseClauseAt :ast nid: cr.nid i: k)
         k = k + 1
         armId: cl.name
         refusal: constArmRefusal :st :ast subjTid: subject.armTid :armId :covered
@@ -58507,30 +55172,6 @@ foldReadsLocal: function {
     return false
 }
 
-# foldLoopEntry -- a loop's preconditions read in the order they run: a true one
-# is passed over, a false one means the body never runs and nothing after it is
-# read, and one that does not fold, a binding among them, stops the fold. A later
-# one that folds true needs no test wherever it stands, so each is read for that.
-foldLoopEntry: function {
-    ast: Ast
-    st: zenv.ZSymbolTable
-    unitDecl: ztypes.declid
-    scope: ztypes.declid
-    fornode: forref
-} out ztyping.loopentry is {
-    answer: ztyping.loopentry.always
-    kC: u64
-    for kC < fornode.nconds loop {
-        condId: zast.forCondAt :ast nid: fornode.nid i: kC
-        kC = kC + 1
-        v: foldIfCond :st :scope :ast :unitDecl :condId
-        stampCondFoldsTrue :st nid: condId :v
-        if v == 0 then answer = ztyping.loopentry.runtime
-        if v == 2 when answer == ztyping.loopentry.always then return ztyping.loopentry.never
-    }
-    return answer
-}
-
 # foldLoopPost -- the truth of one postcondition, as foldTruth answers it.
 foldLoopPost: function {
     ast: Ast
@@ -58543,54 +55184,6 @@ foldLoopPost: function {
     pc: argRefAt :ast nid: pcId
     if pc.nid.notZero then opId = pc.operation
     return (foldTruth :st :scope :ast :unitDecl :opId)
-}
-
-# foldLoopEnd -- a loop's postconditions read in the order they run, as its
-# preconditions are.
-foldLoopEnd: function {
-    ast: Ast
-    st: zenv.ZSymbolTable
-    unitDecl: ztypes.declid
-    scope: ztypes.declid
-    fornode: forref
-} out ztyping.loopend is {
-    if fornode.nposts == 0 then return ztyping.loopend.unwritten
-    answer: ztyping.loopend.always
-    kP: u64
-    for kP < fornode.nposts loop {
-        pcId: zast.forPostAt :ast nid: fornode.nid i: kP
-        kP = kP + 1
-        v: foldLoopPost :st :scope :ast :unitDecl :pcId
-        stampCondFoldsTrue :st nid: pcId :v
-        if v == 0 then answer = ztyping.loopend.runtime
-        if v == 2 when answer == ztyping.loopend.always then return ztyping.loopend.once
-    }
-    return answer
-}
-
-# stampCondFoldsTrue -- keep whether a loop's condition, read as `v` (a foldTruth
-# answer), folds true, the way setNodeConst keeps a value.
-stampCondFoldsTrue: function {st: zenv.ZSymbolTable nid: zast.nodeid v: u32} is {
-    foreign: st.typing.rowIsForeign :nid
-    (
-        ztyping.setAgreed
-        shared: st.typing.condFoldsTrue
-        :foreign
-        :nid
-        value: v == 1
-    )
-}
-
-# stampFoldedLoop -- keep a loop's fold the way setNodeConst keeps a value.
-stampFoldedLoop: function {st: zenv.ZSymbolTable nid: zast.nodeid fold: ztyping.foldedloop} is {
-    foreign: st.typing.rowIsForeign :nid
-    (
-        ztyping.setAgreed
-        shared: st.typing.foldedLoop
-        :foreign
-        :nid
-        value: fold
-    )
 }
 
 # foldIfBranch -- which clause of an `if` the constant fold selects, stamped on
@@ -58829,62 +55422,6 @@ constValEq: function {st: zenv.ZSymbolTable.view a: ztypes.cval b: ztypes.cval} 
         return (ffoldval has: true val: r)
     }
     return (ffoldval has: false val: 0.0)
-}
-
-# foldCaseArm -- which arm of a `match` a constant subject selects, stamped on
-# the match the way foldIfBranch stamps an `if`. A BINDING arm (`case x then`)
-# names its payload rather than testing a value, so a match holding one is not
-# decidable here at all.
-foldCaseArm: function {
-    ast: Ast
-    st: zenv.ZSymbolTable
-    unitDecl: ztypes.declid
-    n: caseref
-} is {
-    # a numeric generic parameter's dissection is decided per mono where it is
-    # emitted, which also refuses a value no arm covers
-    if (st.typing.numericParamRead.has key: n.subject) then return
-    sv: evalConstNode :st scope: st.curScope :ast :unitDecl nid: n.subject
-    if sv.kind.none then return
-    known: true
-    stmt: zast.nodeid
-    decided: false
-    kC: u64
-    for kC < n.nclauses loop {
-        clId: zast.caseClauseAt :ast nid: n.nid i: kC
-        kC = kC + 1
-        if known then {
-            cl: caseClauseRefAt :ast nid: clId
-            if cl.nid.notZero then {
-                if cl.name.notZero then {
-                    known = false
-                } else {
-                    av: evalConstNode :st scope: st.curScope :ast :unitDecl nid: cl.matcharm
-                    eq: constValEq :st a: av b: sv
-                    if eq.has then {
-                        if eq.val > 0.0 when decided.not then {
-                            stmt = cl.statement
-                            decided = true
-                        }
-                    } else {
-                        known = false
-                    }
-                }
-            } else {
-                known = false
-            }
-        }
-    }
-    if known.not then return
-    if decided.not then stmt = n.elseclause
-    foreign: st.typing.rowIsForeign nid: n.nid
-    (
-        ztyping.setAgreed
-        shared: st.typing.foldedBranch
-        :foreign
-        nid: n.nid
-        value: (ztyping.foldedbranch known: true :stmt)
-    )
 }
 
 # constStrArgAt -- one argument of a static string method, found by LABEL or by
@@ -66241,40 +62778,6 @@ declPublicAliasInternal: function {
     return intName
 }
 
-# declPublicAliasOf -- the public name `tid`'s interface exposes its member
-# `internalId` under when that differs (the reverse of declPublicAliasInternal),
-# zero otherwise.
-declPublicAliasOf: function {
-    st: zenv.ZSymbolTable.view
-    tid: ztypes.tid
-    internalId: zast.nameid
-} out zast.nameid is {
-    if internalId.isZero then return zast.nameid
-    pn: publicNsOf reg: st.reg typing: st.typing :tid
-    if pn.isZero then return zast.nameid
-    po: st.typing.decls.get i: pn
-    for each c: po.children.iterateItems loop {
-        if c.key != internalId when (st.typing.decls.get i: c.value).name == internalId then {
-            return c.key
-        }
-    }
-    return zast.nameid
-}
-
-# caseArmsArePublic -- a match's arms are named through its subject type's
-# public interface: renames resolve, as a member read off the same subject
-# would (checkDottedOn), unless the subject is private-capable.
-caseArmsArePublic: function {
-    st: zenv.ZSymbolTable.view
-    ast: Ast.view
-    subject: zast.nodeid
-    subjT: ztypes.tid
-} out bool is {
-    if st.typing.renameSeen.not then return false
-    if subject.isZero or subjT.isZero then return false
-    return (baseIsPrivateCapable :st :ast bt: subjT baseNode: (ast.nodes.get i: subject)).not
-}
-
 # publicAliasInternalNames -- the internal member names `tid`'s public interface
 # exposes under a DIFFERENT public name (its alias targets); empty when `tid` has
 # no publicNs. The linter marks these as used so a renamed def is not flagged.
@@ -66350,20 +62853,6 @@ checkreach: variant {
     # every declaration of every unit: `--eager`
     everything: null
 } as { tag: u8.tag }
-
-# eagerAt -- whether the declaration `declId` is checked whether or not a use
-# reaches it: every one under checkreach.everything, the main unit's own
-# (nested units and members included) under checkreach.mainUnit
-eagerAt: function {st: zenv.ZSymbolTable.view declId: ztypes.declid} out bool is {
-    if st.typing.eagerAll then return true
-    if st.typing.mainUnitAll.not then return false
-    cur: declId
-    for cur.notZero loop {
-        if cur == st.typing.mainUnitRoot then return true
-        cur = st.typing.declParentOf declId: cur
-    }
-    return false
-}
 
 # typecheck -- entry point. Registers a UNIT type per unit and resolves the main
 # unit's definition signatures, then demand-resolves the cross-unit types those
