@@ -80,7 +80,7 @@ emitNumericCast: function {
     rowKey: zemitrows.rowname
     facts: exprfacts.borrow
 } out String is {
-    row: ctx.rows.ofName n: rowKey
+    row: ctx.pieces.rows.ofName n: rowKey
     key: rowLabel :ctx :prog n: rowKey
     body: rtid
     if row > 0 then body = rowBody :ctx :row
@@ -180,7 +180,7 @@ emitNumericCast: function {
         rawIds: rn
         rawVals: rv
     )
-    if pre.length == 0 when (ctx.rows.rows.get i: row).value then {
+    if pre.length == 0 when (ctx.pieces.rows.rows.get i: row).value then {
         return (stating :facts from: (values.operandFacts e: valF place: false) text: filled)
     }
     return (stating :facts from: callFacts text: (memberreads.orderWrap prefix: pre call: filled))
@@ -212,13 +212,13 @@ rtHoleId: function {slot: u64} out zast.nameid is {
 # its first value: the first substitution of a key leaves nothing for a second
 # to find.
 rtKey: function {ctx: Ctx keys: RtKeys name: StringView val: StringView} is {
-    keys.ids.append (ctx.rt.keys.set s: name)
+    keys.ids.append (ctx.pieces.rt.keys.set s: name)
     keys.vals.append from: val.string
 }
 
 # rtKeyBound -- `keys` binds the key `name`
 rtKeyBound: function {ctx: Ctx.view keys: RtKeys.view name: StringView} out bool is {
-    kid: ctx.rt.keys.find s: name
+    kid: ctx.pieces.rt.keys.find s: name
     if kid.isZero then return false
     for each d: keys.ids loop {
         if d == kid then return true
@@ -228,17 +228,17 @@ rtKeyBound: function {ctx: Ctx.view keys: RtKeys.view name: StringView} out bool
 
 # rtEmpty -- text `id` is empty: a template that could not be read
 rtEmpty: function {ctx: Ctx.view id: rtid} out bool is {
-    return (ctx.rt.texts.get i: id).length == 0
+    return (ctx.pieces.rt.texts.get i: id).length == 0
 }
 
 # rtSpellsKey -- text `id` spells the key `name`
 rtSpellsKey: function {ctx: Ctx.view id: rtid name: StringView} out bool is {
-    kid: ctx.rt.keys.find s: name
+    kid: ctx.pieces.rt.keys.find s: name
     if kid.isZero then return false
-    inf: ctx.rt.infos.get i: id
+    inf: ctx.pieces.rt.infos.get i: id
     k: inf.segFrom
     for k < inf.segTo loop {
-        sg: ctx.rt.segs.get i: k
+        sg: ctx.pieces.rt.segs.get i: k
         if sg.kind.key when sg.name == kid then return true
         k = k + 1
     }
@@ -251,10 +251,10 @@ rtFillKeys: function {ctx: Ctx.view id: rtid keys: RtKeys.view} out String is {
     buf: String
     fails: List String
     (
-        ctx.rt.fillSpan
+        ctx.pieces.rt.fillSpan
         :id
         from: 0
-        to: (ctx.rt.texts.get i: id).length
+        to: (ctx.pieces.rt.texts.get i: id).length
         :keys
         bindIds: ListVal zast.nameid
         bindVals: List String
@@ -270,13 +270,13 @@ rtFillKeys: function {ctx: Ctx.view id: rtid keys: RtKeys.view} out String is {
 
 # rtHas -- text `id` spells the hole rtHole `slot`
 rtHas: function {ctx: Ctx.view id: rtid slot: u64} out bool is {
-    return (ctx.rt.holeCount :id hole: (rtHoleId :slot)) > 0
+    return (ctx.pieces.rt.holeCount :id hole: (rtHoleId :slot)) > 0
 }
 
 # rtTwice -- text `id` spells the hole `hole` more than once: the part filling it
 # is read into a temp (orderNamesTwice)
 rtTwice: function {ctx: Ctx.view id: rtid hole: zast.nameid} out bool is {
-    return (ctx.rt.holeCount :id :hole) > 1
+    return (ctx.pieces.rt.holeCount :id :hole) > 1
 }
 
 # rtFillForCtx -- a row's body `id` filled: its tag-constant and
@@ -292,17 +292,17 @@ rtFillForCtx: function {
     rawIds: ListVal zast.nameid
     rawVals: List String
 } out String is {
-    inf: ctx.rt.infos.get i: id
+    inf: ctx.pieces.rt.infos.get i: id
     if inf.arms then rtBindHoles :prog :ctx :id arms: true :rawIds :rawVals
     if inf.members then rtBindHoles :prog :ctx :id arms: false :rawIds :rawVals
     ferr: List String
     cur: String
     (
-        ctx.rt.fillSpan
+        ctx.pieces.rt.fillSpan
         :id
         from: 0
-        to: (ctx.rt.texts.get i: id).length
-        keys: ctx.rt.noKeys
+        to: (ctx.pieces.rt.texts.get i: id).length
+        keys: ctx.pieces.rt.noKeys
         :bindIds
         :bindVals
         :rawIds
@@ -331,7 +331,7 @@ rtBindHoles: function {
     hnames: List String
     prefix: "MEMBER_"
     if arms then prefix = "ARM_"
-    ctx.rt.holesNamed :id :prefix ids: hids names: hnames
+    ctx.pieces.rt.holesNamed :id :prefix ids: hids names: hnames
     (
         nativepieces.rtBindPrefixed
         :prog
@@ -361,7 +361,7 @@ tmplTextOf: function {ctx: Ctx key: textkey} out rtid is {
     id: nativepieces.tmplParsed :ctx :key
     nds: String
     {
-        got: ctx.tmplNeeds.get :key
+        got: ctx.pieces.tmplNeeds.get :key
         if got.some then {
             nds = got.copy
         }
@@ -374,8 +374,8 @@ tmplTextOf: function {ctx: Ctx key: textkey} out rtid is {
 
 # rowBody -- row `row`'s C body, cut on first use; zero for none
 rowBody: function {ctx: Ctx row: u64} out rtid is {
-    id: (ctx.rows.rows.get i: row).body
-    ctx.rt.ready :id
+    id: (ctx.pieces.rows.rows.get i: row).body
+    ctx.pieces.rt.ready :id
     return id
 }
 
@@ -468,7 +468,7 @@ wordOperatorRowBinds: function {
     mnId: zast.nameid
 } out bool is {
     if (prog.reg.isNativeOf tid: method).not then return false
-    row: ctx.rows.ofName n: (rowNameOfMember :prog :ctx :owner name: mnId)
+    row: ctx.pieces.rows.ofName n: (rowNameOfMember :prog :ctx :owner name: mnId)
     if row == 0 then return false
     return (rtHas :ctx id: (rowBody :ctx :row) slot: rtHole.slot.holeL)
 }
@@ -548,13 +548,13 @@ convRowNameOf: function {
     mn2Id: zast.nameid
 } out zemitrows.rowname is {
     none: zemitrows.rowname impl: 0 typeName: zast.nameid.zero name: zast.nameid.zero
-    if (ctx.rows.memberBodies.has item: mn2Id).not then return none
+    if (ctx.pieces.rows.memberBodies.has item: mn2Id).not then return none
     ownerTid: stampIdOf :prog nid: (interpPartNodeId n: (prog.ast.nodes.get i: n.parent))
     mo9: prog.typing.declChildOfId parentTypeId: ownerTid nameId: mn2Id
     if mo9.some when (prog.reg.isNativeOf tid: mo9).not then return none
     srcTid: ztypecheck.typedefChaseTid typing: prog.typing tid: ownerTid
     rk: rowNameOfMember :prog :ctx owner: srcTid name: mn2Id
-    row: ctx.rows.ofName n: rk
+    row: ctx.pieces.rows.ofName n: rk
     if row == 0 then return none
     body: rowBody :ctx :row
     if body.isZero then return none
@@ -585,11 +585,11 @@ emitOperatorByRow: function {
     label: String
     if isNat then {
         rowKey = rowNameOfMember :prog :ctx :owner name: opId
-        row = ctx.rows.ofName n: rowKey
+        row = ctx.pieces.rows.ofName n: rowKey
         label = rowLabel :ctx :prog n: rowKey
     } else {
         sk: zemitrows.shapekey shape: (consts.rowShapeOf :prog :ctx :owner) op: opId
-        row = ctx.rows.ofShape k: sk
+        row = ctx.pieces.rows.ofShape k: sk
         label = shapeLabel :prog k: sk
     }
     body: rtid
@@ -615,10 +615,10 @@ emitOperatorByRow: function {
     if rhsConst.isConst then {
         ieee: zeroDivisionC :prog :owner :opId :lhsNid rhs: rhsConst
         if ieee.length > 0 then return (stating :facts from: constFacts text: ieee)
-        crow: ctx.rows.constOfName n: rowKey
+        crow: ctx.pieces.rows.constOfName n: rowKey
         # a binop HAS only argument 1, so a variant asking for any other
         # position cannot be satisfied by one and is not selected
-        if crow > 0 when (ctx.rows.rows.get i: crow).constMask == 1 then {
+        if crow > 0 when (ctx.pieces.rows.rows.get i: crow).constMask == 1 then {
             body = rowBody :ctx row: crow
             constRow = true
         }
@@ -709,7 +709,7 @@ emitOperatorRow: function {
     rhsNid: zast.nodeid
     facts: exprfacts.borrow
 } out String is {
-    r: ctx.rows.rows.get i: row
+    r: ctx.pieces.rows.rows.get i: row
     if constRow.not then nativepieces.rowNeedsAdd :ctx :row cond: nativepieces.condAlways
     ord: callorder.orderBegin :ctx slots: 2
     lh: rtHoleId slot: rtHole.slot.holeL
@@ -989,7 +989,7 @@ tmplSectionDestroys: function {
     mono: ztypes.tid
 } is {
     row: tmplClassRowOf :prog :ctx tid: mono
-    tf: (ctx.classRows.get i: row - 1).tmpl.copy
+    tf: (ctx.pieces.classRows.get i: row - 1).tmpl.copy
     p: tmplKey :ctx name: tf.stringView
     ti: tmplTextOf :ctx key: p
     if (rtEmpty :ctx id: ti) then return
@@ -1180,12 +1180,12 @@ memberUsed: function {ctx: Ctx.view mono: ztypes.tid member: u64} out bool is {
 # text order. Names and needs are read from the template: a fill changes no head.
 rtSectionPlan: function {ctx: Ctx mono: ztypes.tid id: rtid} out RtPlan is {
     plan: RtPlan :id kept: ListVal bool conds: List Cond
-    inf: ctx.rt.infos.get i: id
+    inf: ctx.pieces.rt.infos.get i: id
     if inf.pieceFrom == inf.pieceTo then return plan
     marks: ListVal u64
     rtKept :ctx :mono :id :marks kept: plan.kept
     # the sections' names and needs, not the C
-    tt: (ctx.rt.heads.get i: id).copy
+    tt: (ctx.pieces.rt.heads.get i: id).copy
     text: tt.stringView
     # a section kept only for a call some configurations make is written
     # inside `#if`, and so is each section only it needs
@@ -1214,12 +1214,12 @@ rtKept: function {
     marks: ListVal u64
     kept: ListVal bool
 } is {
-    t: ctx.rt.heads.get i: id
+    t: ctx.pieces.rt.heads.get i: id
     text: t.stringView
-    inf: ctx.rt.infos.get i: id
+    inf: ctx.pieces.rt.infos.get i: id
     j: inf.pieceFrom
     for j < inf.pieceTo loop {
-        pc: ctx.rt.pieces.get i: j
+        pc: ctx.pieces.rt.pieces.get i: j
         j = j + 1
         marks.append pc.headFrom
         marks.append pc.nameTo
@@ -1228,7 +1228,10 @@ rtKept: function {
         if pc.nameTo == pc.headFrom then {
             kept.append true
         } else {
-            slot: ctx.memberWords.slotOf text: (text.substring from: pc.headFrom to: pc.nameTo)
+            slot: (
+                ctx.pieces.memberWords.slotOf
+                text: (text.substring from: pc.headFrom to: pc.nameTo)
+            )
             kept.append (ctx.memberUses.has item: (nativepieces.memberKey :mono member: slot))
         }
     }
@@ -1241,12 +1244,12 @@ rtKept: function {
 # left out (planNeeds).
 rtKeepReached: function {ctx: Ctx.view plan: RtPlan key: StringView reached: bool} is {
     if reached then return
-    t: ctx.rt.heads.get i: plan.id
+    t: ctx.pieces.rt.heads.get i: plan.id
     hd: t.stringView
-    inf: ctx.rt.infos.get i: plan.id
+    inf: ctx.pieces.rt.infos.get i: plan.id
     j: inf.pieceFrom
     for j < inf.pieceTo loop {
-        pc: ctx.rt.pieces.get i: j
+        pc: ctx.pieces.rt.pieces.get i: j
         i: j - inf.pieceFrom
         j = j + 1
         if (hd.substring from: pc.reachedFrom to: pc.reachedTo) == key then (
@@ -1280,9 +1283,9 @@ rtRender: function {ctx: Ctx.view plan: RtPlan.view keys: RtKeys.view} out Strin
 # rtPlanSpells -- the text plan `plan` writes spells the key `name`: outside
 # every section, or in a written one
 rtPlanSpells: function {ctx: Ctx.view plan: RtPlan.view name: StringView} out bool is {
-    kid: ctx.rt.keys.find s: name
+    kid: ctx.pieces.rt.keys.find s: name
     if kid.isZero then return false
-    rt: ctx.rt
+    rt: ctx.pieces.rt
     inf: rt.infos.get i: plan.id
     k: inf.segFrom
     for k < inf.segTo loop {
@@ -1325,8 +1328,9 @@ rtOptionKeys: function {
 # monoCondMembers -- some member of instance `mono` is used only under a
 # condition
 monoCondMembers: function {ctx: Ctx.view mono: ztypes.tid} out bool is {
-    for each mc: ctx.memberConds loop {
-        if (mc.key / 128) == mono.u64 when (ctx.memberAlways.has item: mc.key).not then return true
+    for each mc: ctx.pieces.memberConds loop {
+        if (mc.key / 128) == mono.u64 when (ctx.pieces.memberAlways.has item: mc.key
+        ).not then return true
     }
     return false
 }
@@ -3599,7 +3603,7 @@ answerKeys: function {
     buf: String.borrow
 } is {
     names: List String
-    ctx.rt.keyNames :id :names
+    ctx.pieces.rt.keyNames :id :names
     for each hole: names loop {
         if (rtKeyBound :ctx :keys name: hole.stringView) then continue
         ht: holeText :prog :ctx :inst :nm hole: hole.stringView :buf
@@ -3767,7 +3771,7 @@ memberKeys: function {
 } is {
     open: "\{param}."
     names: List String
-    ctx.rt.keyNames :id :names
+    ctx.pieces.rt.keyNames :id :names
     for each key: names loop {
         kv: key.stringView
         if (kv.startsWith prefix: open).not then continue
@@ -3825,7 +3829,7 @@ emitTmplClassMono: function {
     row: u64
     buf: String.borrow
 } is {
-    tf: (ctx.classRows.get i: row).tmpl.copy
+    tf: (ctx.pieces.classRows.get i: row).tmpl.copy
     p: tmplKey :ctx name: tf.stringView
     ti: tmplTextOf :ctx key: p
     if (rtEmpty :ctx id: ti) then return
@@ -3884,7 +3888,7 @@ emitTmplClassMono: function {
     # instance's own text, parsed once; what is left in it is a runtime
     # fragment's own holes, every one bound: a type by canon, a tag constant, a
     # member
-    plan: rtSectionPlan :ctx mono: monoId id: (ctx.rt.parsePieced x: made.take)
+    plan: rtSectionPlan :ctx mono: monoId id: (ctx.pieces.rt.parsePieced x: made.take)
     kept: nativepieces.rtFragmentText :prog :ctx :plan all: true key: p
     di: u64
     for di < dfns.length loop {
@@ -4118,7 +4122,7 @@ rowNameOfMember: function {
     did: prog.typing.declIdOfType typeId: owner
     if did.isZero then return none
     impl: (
-        ctx.rows.fileOfUnit
+        ctx.pieces.rows.fileOfUnit
         ud: (ztypecheck.unitDeclOfTid reg: prog.reg typing: prog.typing tid: owner)
     )
     if impl == 0 then return none
@@ -4128,7 +4132,7 @@ rowNameOfMember: function {
 # rowLabel -- row key `n` as `zc natives show` addresses it, `<unit>.<key>`,
 # written in one allocation
 rowLabel: function {ctx: Ctx.view prog: Program.view n: zemitrows.rowname} out String is {
-    owner: ctx.demands.nameText id: (ctx.rows.unitOfFile impl: n.impl)
+    owner: ctx.pieces.demands.nameText id: (ctx.pieces.rows.unitOfFile impl: n.impl)
     nm: zast.nameTextAt ast: prog.ast ref: n.name
     tl: u64
     if n.typeName.notZero then tl = (zast.nameTextAt ast: prog.ast ref: n.typeName).length + 1

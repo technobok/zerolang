@@ -197,10 +197,10 @@ cReserved: list {
 shapeRow: function {ctx: Ctx prog: Program.view key: StringView row: u64} is {
     d: key.indexOf needle: "."
     if d.some then {
-        sh: ctx.nativeWords.slotOf text: (key.substring from: 0 to: d)
+        sh: ctx.pieces.nativeWords.slotOf text: (key.substring from: 0 to: d)
         op: poolIdOf :prog text: (key.substring from: d + 1 to: key.length)
-        if (sh == ctx.nativeWords.none) or op.isZero then return
-        ctx.rows.shapes.set key: (zemitrows.shapekey shape: sh :op) value: row
+        if (sh == ctx.pieces.nativeWords.none) or op.isZero then return
+        ctx.pieces.rows.shapes.set key: (zemitrows.shapekey shape: sh :op) value: row
     }
 }
 
@@ -226,12 +226,12 @@ nameRow: function {
     if nm.isZero then return
     n: zemitrows.rowname :impl typeName: tn name: nm
     if constant then {
-        ctx.rows.constByName.set key: n value: row
+        ctx.pieces.rows.constByName.set key: n value: row
         return
     }
-    ctx.rows.byName.set key: n value: row
-    if tn.notZero when (ctx.rows.rows.get i: row).body.notZero then (
-        ctx.rows.memberBodies.add
+    ctx.pieces.rows.byName.set key: n value: row
+    if tn.notZero when (ctx.pieces.rows.rows.get i: row).body.notZero then (
+        ctx.pieces.rows.memberBodies.add
         item: nm
     )
 }
@@ -2243,16 +2243,16 @@ collectFnLiterals: function {
 # walk writes it. Every other piece row was placed as its reader read it.
 placePanicRow: function {ctx: Ctx} is {
     pr: panicRow :ctx
-    if pr > 0 then ctx.rowsInPlace.add item: pr
+    if pr > 0 then ctx.pieces.rowsInPlace.add item: pr
 }
 
 # panicRow -- the prelude's `@panic` row, whose fragment is z_panic's; 0 when
 # the prelude has none
 panicRow: function {ctx: Ctx.view} out u64 is {
-    p: ctx.demands.names.find s: "prelude"
-    n: ctx.demands.names.find s: "@panic"
+    p: ctx.pieces.demands.names.find s: "prelude"
+    n: ctx.pieces.demands.names.find s: "@panic"
     if p.isZero or n.isZero then return 0
-    return (ctx.rows.helperOf k: (zemitrows.demandkey owner: p name: n))
+    return (ctx.pieces.rows.helperOf k: (zemitrows.demandkey owner: p name: n))
 }
 
 # addMemberUse -- record member key `k` of instance `mono` as used. A member its
@@ -2381,7 +2381,7 @@ emitCodeBody: function {
     )
     rtBuf: String
     nativepieces.emitRuntimeUnits :prog :ctx buf: rtBuf
-    needsAt: ctx.demands.keys.length
+    needsAt: ctx.pieces.demands.keys.length
     closeReachedTypes :prog :ctx
     closeTmplDestroys :prog :ctx
     types.emitMonos :prog :ctx buf: codeBuf
@@ -2496,18 +2496,48 @@ emitC: function {
             hoistsToBlock: false
         )
         defUnitId: (IdMapV ztypes.tid v: ztypes.declid)
-        classRows: List ClassRow
-        classRowTids: ListVal ztypes.tid
+        pieces: (
+            PieceState
+            demands: zemitrows.DemandSet.create
+            condEpoch: 0
+            rowCondEpochAt: 0
+            rowCondKey: (IdMapR u64 V: String)
+            conds: List CondDecl
+            classRows: List ClassRow
+            classRowTids: ListVal ztypes.tid
+            textIds: (MapRV String v: u32)
+            textNames: List String
+            unitReqs: List UnitReq
+            rt: RtTexts.create
+            tmplNeeds: (MapVR textkey V: String)
+            piecedTexts: (MapVR textkey V: PiecedText)
+            pullsByDemand: (MapVR zemitrows.demandkey V: String)
+            nativeWords: (zast.Vocab.create block: nativeWord)
+            nativeMarks: (MapVV textkey v: u64)
+            marks: List NativeMark
+            rows: zemitrows.RowTable.create
+            rowsWritten: IdSet u64
+            rowsClosed: IdSet u64
+            rowsAlwaysClosed: IdSet u64
+            rowNeedsAt: 0
+            rowsInPlace: IdSet u64
+            piecedFrags: Set String
+            memberConds: ListVal membercond
+            memberAlways: IdSet u64
+            memberWords: (zast.Vocab.create block: memberWord)
+            fragUnitDecls: ListVal ztypes.declid
+            condScan: ListVal zast.nodeid
+            texts: (MapVR textkey V: String)
+            stemCnames: (Map String V: String)
+            tmplTexts: (MapVV textkey v: rtid)
+            :markNatives
+            unitOrder: List String
+        )
         liveClasses: IdSet ztypes.tid
         fieldListAt: (IdMapV ztypes.tid v: u64)
         fieldNameIds: ListVal zast.nameid
         mainUnitId: ztypes.declid
         emitErrors: List zast.ErrorData
-        demands: zemitrows.DemandSet.create
-        condEpoch: 0
-        rowCondEpochAt: 0
-        rowCondKey: (IdMapR u64 V: String)
-        conds: List CondDecl
         keyEqKept: IdSet ztypes.tid
         keyHashKept: IdSet ztypes.tid
         keyEqNoAt: (IdMapV ztypes.tid v: u64)
@@ -2591,37 +2621,12 @@ emitC: function {
         fnClosed: false
         fnSpelled: IdSet ztypes.tid
         nativeBoxes: ListVal nativebox
-        texts: (MapVR textkey V: String)
-        textIds: (MapRV String v: u32)
-        textNames: List String
-        stemCnames: (Map String V: String)
         canonSpecs: (Map String V: String)
-        unitReqs: List UnitReq
-        rt: RtTexts.create
-        tmplTexts: (MapVV textkey v: rtid)
-        tmplNeeds: (MapVR textkey V: String)
-        piecedTexts: (MapVR textkey V: PiecedText)
-        pullsByDemand: (MapVR zemitrows.demandkey V: String)
         cWords: (zast.Vocab.create block: cReserved)
         opWords: (zast.Vocab.create block: opSpelling)
-        nativeWords: (zast.Vocab.create block: nativeWord)
         implementedUnits: Set String
-        :markNatives
-        nativeMarks: (MapVV textkey v: u64)
-        marks: List NativeMark
-        rows: zemitrows.RowTable.create
-        rowsWritten: IdSet u64
-        rowsClosed: IdSet u64
-        rowsAlwaysClosed: IdSet u64
-        rowNeedsAt: 0
-        rowsInPlace: IdSet u64
-        piecedFrags: Set String
         memberUses: IdSet u64
-        memberConds: ListVal membercond
-        memberAlways: IdSet u64
-        memberWords: (zast.Vocab.create block: memberWord)
         membersLeftOut: IdSet u64
-        fragUnitDecls: ListVal ztypes.declid
         demandGatedTids: IdSet ztypes.tid
         usedTypeIds: IdSet ztypes.tid
         emittedImplementation: IdSet ztypes.confid
@@ -2635,8 +2640,6 @@ emitC: function {
         aggReaderUses: IdSet u64
         markerValues: (IdMapV ztypes.tid v: bool)
         emittedListIters: IdSet ztypes.tid
-        unitOrder: List String
-        condScan: ListVal zast.nodeid
         contLabelUsed: (IdMapV u64 v: bool)
         strTid: strId
         svTid: svId
@@ -2811,12 +2814,12 @@ applyUnitReqs: function {
     # the operating system the build is for, as an oskind arm name
     os: StringView
 } is {
-    if ctx.unitReqs.length == 0 then return
+    if ctx.pieces.unitReqs.length == 0 then return
     fam: zcc.ccFamilyName f: ccFamily
     # collected, and reported once the walk over the rows is done: a report
     # writes the context the rows live in
     refusals: List String
-    for each r: ctx.unitReqs loop {
+    for each r: ctx.pieces.unitReqs loop {
         if (unitPathReached :prog path: r.path.stringView).not then continue
         if (rowSpeaksForOs :r :os).not then continue
         why: unitReqRefusal :r :fam :arch
@@ -3177,16 +3180,16 @@ declaresNative: function {prog: Program.view did: ztypes.declid} out bool is {
 # 0, and the row keeps its member demands. The registry scan is the house
 # pattern and runs once over the handful of rows the table demand-types.
 bindFragTypeTids: function {prog: Program.view ctx: Ctx} is {
-    for each row: ctx.rows.fragRows loop {
-        r: ctx.rows.rows.get i: row
+    for each row: ctx.pieces.rows.fragRows loop {
+        r: ctx.pieces.rows.rows.get i: row
         if r.typeName.notZero then {
             r.typeTid = (
                 rowTypeTid
                 :prog
-                uname: (ctx.demands.nameText id: r.owner)
-                tname: (ctx.demands.nameText id: r.typeName)
+                uname: (ctx.pieces.demands.nameText id: r.owner)
+                tname: (ctx.pieces.demands.nameText id: r.typeName)
             )
-            ctx.rows.rows.set i: row val: r
+            ctx.pieces.rows.rows.set i: row val: r
             # a destructor's row gates no type: the type is written when reached
             if r.typeTid.notZero when r.destroys.not then ctx.demandGatedTids.add item: r.typeTid
         }
@@ -3199,17 +3202,17 @@ bindFragTypeTids: function {prog: Program.view ctx: Ctx} is {
 # reach) lists nothing.
 bindFragUnitDecls: function {prog: Program.view ctx: Ctx} is {
     sysU: prog.typing.systemUnitRoot
-    for each row: ctx.rows.fragRows loop {
+    for each row: ctx.pieces.rows.fragRows loop {
         uid: (
             unitDeclByName
             :prog
-            name: (ctx.demands.nameText id: (ctx.rows.rows.get i: row).owner)
+            name: (ctx.pieces.demands.nameText id: (ctx.pieces.rows.rows.get i: row).owner)
         )
         seen: uid.isZero or (uid == sysU)
-        for each d: ctx.fragUnitDecls loop {
+        for each d: ctx.pieces.fragUnitDecls loop {
             if d == uid then seen = true
         }
-        if seen.not then ctx.fragUnitDecls.append uid
+        if seen.not then ctx.pieces.fragUnitDecls.append uid
     }
 }
 
@@ -3218,9 +3221,9 @@ bindFragUnitDecls: function {prog: Program.view ctx: Ctx} is {
 # need of its own asks no late runtime walk
 needsOutsidePrelude: function {ctx: Ctx.view from: u64} out bool is {
     i: from
-    for i < ctx.demands.keys.length loop {
-        u: ctx.demands.nameText id: (ctx.demands.keys.get :i).owner
-        if (ctx.nativeWords.slotOf text: u) != nativeWord.slot.unitPrelude then return true
+    for i < ctx.pieces.demands.keys.length loop {
+        u: ctx.pieces.demands.nameText id: (ctx.pieces.demands.keys.get :i).owner
+        if (ctx.pieces.nativeWords.slotOf text: u) != nativeWord.slot.unitPrelude then return true
         i = i + 1
     }
     return false
@@ -3240,7 +3243,7 @@ demandBoxedNatives: function {prog: Program.view ctx: Ctx} is {
             cid = row.implTypeId
             spec = row.specTypeId
         }
-        if (ctx.classRowTids.contains item: cid) then (
+        if (ctx.pieces.classRowTids.contains item: cid) then (
             demandSpecNatives
             :prog
             :ctx
@@ -3253,9 +3256,9 @@ demandBoxedNatives: function {prog: Program.view ctx: Ctx} is {
 # bindClassRows -- each ClassRow's class, by id (ctx.classRowTids, parallel
 # to ctx.classRows); 0 when the program has no such class (rowTypeTid)
 bindClassRows: function {prog: Program.view ctx: Ctx} is {
-    for each r: ctx.classRows loop {
+    for each r: ctx.pieces.classRows loop {
         cid: rowTypeTid :prog uname: r.uname.stringView tname: r.cls.stringView
-        ctx.classRowTids.append cid
+        ctx.pieces.classRowTids.append cid
     }
 }
 

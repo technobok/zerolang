@@ -1366,6 +1366,86 @@ NarrowState: class {
     armParks: List ArgHoist
 }
 
+# PieceState -- the native pieces: rows, conditions, marks and texts. A part
+# of Ctx (`pieces`).
+PieceState: class {
+    # every runtime demand written C made, and the configurations each holds in
+    demands: zemitrows.DemandSet
+    # bumped whenever a demand's condition grows: closeRowNeeds re-runs a fired
+    # row's needs when its condition changed
+    condEpoch: u64
+    rowCondEpochAt: u64
+    rowCondKey: (IdMapR u64 V: String)
+    # the foundation's conditions, by bit (Cond)
+    conds: List CondDecl
+    # the classes the runtime writes, in table order, each class's id once bound
+    # (bindClassRows), and the ones the program made live (markLiveClasses)
+    classRows: List ClassRow
+    classRowTids: ListVal ztypes.tid
+    textIds: (MapRV String v: u32)
+    textNames: List String
+    # the links, sources and refusals: what a reached unit needs from the C
+    # toolchain
+    unitReqs: List UnitReq
+    # the runtime text the emitter fills, each parsed once (RtTexts)
+    rt: RtTexts
+    tmplNeeds: (MapVR textkey V: String)
+    # the pieced texts read and not yet parsed (tmplParsed)
+    piecedTexts: (MapVR textkey V: PiecedText)
+    # the pulls of the rows answering each demand, comma-separated (needsAddPullsOf)
+    pullsByDemand: (MapVR zemitrows.demandkey V: String)
+    # the words the rows and the fragments spell that the loader acts on
+    nativeWords: zast.Vocab
+    # each native text's place: its row in `marks`, 0 for a text with none
+    nativeMarks: (MapVV textkey v: u64)
+    # row 0 is the sentinel, no place
+    marks: List NativeMark
+    # the rows, one table, each found by the declaration it implements
+    # (rowNameOfFn, rowNameOfMember)
+    rows: zemitrows.RowTable
+    # the fragment rows already written: a unit whose types a function type's
+    # typedef spells is written ahead of the typedefs, and not again after
+    rowsWritten: IdSet u64
+    # the fired rows whose needs are registered (closeRowNeeds), and the
+    # count of demands when that was last made whole
+    rowsClosed: IdSet u64
+    # the closed rows that hold in every configuration: their needs are final
+    rowsAlwaysClosed: IdSet u64
+    rowNeedsAt: u64
+    # the rows a file writes in place, which no unit walk writes: every piece,
+    # and the row whose fragment the header writes (z_panic's)
+    rowsInPlace: IdSet u64
+    # the prelude fragments holding pieces, by name: written a piece at a time
+    piecedFrags: Set String
+    # a member used only under conditions has terms here (memberCond); one
+    # used in every configuration after that is in memberAlways
+    memberConds: ListVal membercond
+    memberAlways: IdSet u64
+    # the template members' vocabulary
+    memberWords: zast.Vocab
+    # the units the rows belong to, each once, in the order the table first
+    # names them: where a fragment's plain type-name hole is looked up after
+    # the system unit (stemTid). The system unit itself is not listed
+    fragUnitDecls: ListVal ztypes.declid
+    # the worklist condHoldsControlValue walks a condition with, kept so that
+    # asking about every condition allocates nothing
+    condScan: ListVal zast.nodeid
+    # the native texts zc carries -- each fixed file, row fragment and
+    # template -- by kind and name (textkey), and the names by id (row 0 the
+    # sentinel "")
+    texts: (MapVR textkey V: String)
+    # each canonical stem's C name (stemCname)
+    stemCnames: (Map String V: String)
+    # each native text's parse (tmplTextOf), and the runtime a template needs
+    tmplTexts: (MapVV textkey v: rtid)
+    # zc emit --mark-natives: each native text written is marked with where
+    # it is written (NativeMark)
+    markNatives: bool
+    # the units the table orders, in that order. A unit with rows that is not
+    # named here runs after those that are.
+    unitOrder: List String
+}
+
 # Ctx -- the per-program emission context (anchor cnames, main unit name,
 # the literal pool, and the resolved-name map access).
 Ctx: class {
@@ -1404,15 +1484,8 @@ Ctx: class {
     # entry exists only because something asked to emit it, so unlike usedLits
     # there is no separate mark.
     constLits: List String
-    # every runtime demand written C made, and the configurations each holds in
-    demands: zemitrows.DemandSet
-    # bumped whenever a demand's condition grows: closeRowNeeds re-runs a fired
-    # row's needs when its condition changed
-    condEpoch: u64
-    rowCondEpochAt: u64
-    rowCondKey: (IdMapR u64 V: String)
-    # the foundation's conditions, by bit (Cond)
-    conds: List CondDecl
+    # the native pieces: rows, conditions, marks and texts
+    pieces: PieceState
     # the Set and Map instances whose kept text spells their key's `==` /
     # `hash` (tmplKeptSpells): member uses only grow, so a yes is final
     keyEqKept: IdSet ztypes.tid
@@ -1448,10 +1521,6 @@ Ctx: class {
     readableNames: bool
     # which unit each definition came from
     defUnitId: (IdMapV ztypes.tid v: ztypes.declid)
-    # the classes the runtime writes, in table order, each class's id once bound
-    # (bindClassRows), and the ones the program made live (markLiveClasses)
-    classRows: List ClassRow
-    classRowTids: ListVal ztypes.tid
     liveClasses: IdSet ztypes.tid
     # where each record's or class's data-field list starts in fieldNameIds, read
     # once per type (fieldOrdinalOf)
@@ -1535,78 +1604,22 @@ Ctx: class {
     # no unit pass writes its helpers: every box site asks for them here, and
     # emitC writes them once the last body is out
     nativeBoxes: ListVal nativebox
-    # the native texts zc carries -- each fixed file, row fragment and
-    # template -- by kind and name (textkey), and the names by id (row 0 the
-    # sentinel "")
-    texts: (MapVR textkey V: String)
-    textIds: (MapRV String v: u32)
-    textNames: List String
-    # each canonical stem's C name (stemCname)
-    stemCnames: (Map String V: String)
     # the units' canons: stem -> the instance's template and
     # type arguments, comma-separated
     canonSpecs: (Map String V: String)
-    # the links, sources and refusals: what a reached unit needs from the C
-    # toolchain
-    unitReqs: List UnitReq
-    # the runtime text the emitter fills, each parsed once (RtTexts)
-    rt: RtTexts
-    # each native text's parse (tmplTextOf), and the runtime a template needs
-    tmplTexts: (MapVV textkey v: rtid)
-    tmplNeeds: (MapVR textkey V: String)
-    # the pieced texts read and not yet parsed (tmplParsed)
-    piecedTexts: (MapVR textkey V: PiecedText)
-    # the pulls of the rows answering each demand, comma-separated (needsAddPullsOf)
-    pullsByDemand: (MapVR zemitrows.demandkey V: String)
     # the C words an emitted identifier dodges (cReserved)
     cWords: zast.Vocab
     # the operator spellings a C identifier cannot carry (opSpelling)
     opWords: zast.Vocab
-    # the words the rows and the fragments spell that the loader acts on
-    nativeWords: zast.Vocab
     # the user units whose C implementation file (`<unit>/nativec.zd`) was
     # read (UserImplementation), by name
     implementedUnits: Set String
-    # zc emit --mark-natives: each native text written is marked with where
-    # it is written (NativeMark)
-    markNatives: bool
-    # each native text's place: its row in `marks`, 0 for a text with none
-    nativeMarks: (MapVV textkey v: u64)
-    # row 0 is the sentinel, no place
-    marks: List NativeMark
-    # the rows, one table, each found by the declaration it implements
-    # (rowNameOfFn, rowNameOfMember)
-    rows: zemitrows.RowTable
-    # the fragment rows already written: a unit whose types a function type's
-    # typedef spells is written ahead of the typedefs, and not again after
-    rowsWritten: IdSet u64
-    # the fired rows whose needs are registered (closeRowNeeds), and the
-    # count of demands when that was last made whole
-    rowsClosed: IdSet u64
-    # the closed rows that hold in every configuration: their needs are final
-    rowsAlwaysClosed: IdSet u64
-    rowNeedsAt: u64
-    # the rows a file writes in place, which no unit walk writes: every piece,
-    # and the row whose fragment the header writes (z_panic's)
-    rowsInPlace: IdSet u64
-    # the prelude fragments holding pieces, by name: written a piece at a time
-    piecedFrags: Set String
     # the template members written C calls, each keyed by its instance and its
     # memberWord slot (memberKey): a template's member section is written for an
     # instance only where its member is here (rtSectionPlan)
     memberUses: IdSet u64
-    # a member used only under conditions has terms here (memberCond); one
-    # used in every configuration after that is in memberAlways
-    memberConds: ListVal membercond
-    memberAlways: IdSet u64
-    # the template members' vocabulary
-    memberWords: zast.Vocab
     # the members an instance was written without: spelling one after is late
     membersLeftOut: IdSet u64
-    # the units the rows belong to, each once, in the order the table first
-    # names them: where a fragment's plain type-name hole is looked up after
-    # the system unit (stemTid). The system unit itself is not listed
-    fragUnitDecls: ListVal ztypes.declid
     # the type ids those rows gate, and the ones the program actually built
     demandGatedTids: IdSet ztypes.tid
     # the types something actually referenced, which is what decides emission
@@ -1638,12 +1651,6 @@ Ctx: class {
     # ListIter monos whose cursor is already in the buffer. A List and a view
     # of it resolve `iterate` to ONE mono, so both reach the same typedef
     emittedListIters: IdSet ztypes.tid
-    # the units the table orders, in that order. A unit with rows that is not
-    # named here runs after those that are.
-    unitOrder: List String
-    # the worklist condHoldsControlValue walks a condition with, kept so that
-    # asking about every condition allocates nothing
-    condScan: ListVal zast.nodeid
     # which continue labels were actually jumped to, so an unused one is not
     # emitted
     contLabelUsed: (IdMapV u64 v: bool)
@@ -1863,20 +1870,20 @@ ExclSave: class {
 # that fires it: a method's row answers its demand word
 # (`file_pollReadable`), a helper its `@name`, not its key
 recordRowPulls: function {ctx: Ctx row: u64 pulls: StringView} is {
-    r: ctx.rows.rows.get i: row
+    r: ctx.pieces.rows.rows.get i: row
     k: r.demandFrom
     for k < r.demandTo loop {
-        key: ctx.rows.demandKeys.get i: k
+        key: ctx.pieces.rows.demandKeys.get i: k
         cur: String
         {
-            got: ctx.pullsByDemand.get :key
+            got: ctx.pieces.pullsByDemand.get :key
             if got.some then {
                 cur = got.copy
             }
         }
         if cur.length > 0 then cur.append ","
         cur.append pulls
-        ctx.pullsByDemand.set :key value: cur.take
+        ctx.pieces.pullsByDemand.set :key value: cur.take
         k = k + 1
     }
 }
@@ -2522,7 +2529,7 @@ fnjob: record {
 noteMemberUse: function {ctx: Ctx mono: ztypes.tid member: u64} is {
     k: nativepieces.memberKey :mono :member
     if (ctx.memberUses.has item: k) then {
-        if (memberHasCond :ctx key: k) then ctx.memberAlways.add item: k
+        if (memberHasCond :ctx key: k) then ctx.pieces.memberAlways.add item: k
         return
     }
     emitplan.addMemberUse :ctx :mono :k
@@ -2531,7 +2538,7 @@ noteMemberUse: function {ctx: Ctx mono: ztypes.tid member: u64} is {
 # memberHasCond -- member key `key` has a term: some use of it holds under a
 # condition.
 memberHasCond: function {ctx: Ctx.view key: u64} out bool is {
-    for each mc: ctx.memberConds loop {
+    for each mc: ctx.pieces.memberConds loop {
         if mc.key == key then return true
     }
     return false

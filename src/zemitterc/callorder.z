@@ -90,14 +90,14 @@ emitNativeArgMethod: function {
     # BORROWED view: an owned copy here is one allocation per call in the
     # program, paid to discover that almost none of them are this
     mnId: aliasChildNameId :prog n: (prog.ast.nodes.get i: call.callable)
-    if (ctx.rows.memberBodies.has item: mnId).not then return "".string
+    if (ctx.pieces.rows.memberBodies.has item: mnId).not then return "".string
     # a str instance's members are declared on its template
     srcT: ownerTid
     if (originIsTid :prog tid: ownerTid originTid: (ctx.origins.get i: family.slot.str)) then {
         srcT = originTidOf :prog tid: ownerTid
     }
     rowKey: nativerows.rowNameOfMember :prog :ctx owner: srcT name: mnId
-    row: ctx.rows.ofName n: rowKey
+    row: ctx.pieces.rows.ofName n: rowKey
     if row == 0 then return "".string
     body: nativerows.rowBody :ctx :row
     if body.isZero then return "".string
@@ -273,7 +273,7 @@ orderBegin: function {ctx: Ctx slots: u64} out orderstate is {
 rtArgHole: function {ctx: Ctx.view hi: u64} out zast.nameid is {
     if hi == 0 then return (nativerows.rtHoleId slot: rtHole.slot.holeV)
     an: "A\{hi}"
-    return (ctx.rt.holeNamed name: an.stringView)
+    return (ctx.pieces.rt.holeNamed name: an.stringView)
 }
 
 # orderNamesTwiceArgs -- orderNamesTwice for each of an argument row's `count`
@@ -641,7 +641,8 @@ orderConstantWith: function {
 # with its struct.
 noteCreateUse: function {ctx: Ctx tid: ztypes.tid} is {
     if (ctx.createUsed.has item: tid) then return
-    if (ctx.emittedUserTypes.has item: tid) when (ctx.classRowTids.contains item: tid).not then {
+    if (ctx.emittedUserTypes.has item: tid) when (ctx.pieces.classRowTids.contains item: tid
+    ).not then {
         cn: emitplan.ctxCname :ctx :tid
         emitFail :ctx what: "\{cn} built after its type was written" line: 0
         return
@@ -3797,7 +3798,7 @@ applyTmpl: function {text: String key: StringView val: StringView} out String is
 # rowOfFn -- the row implementing native function `fid` (rowNameOfFn); 0 when
 # no row does
 rowOfFn: function {prog: Program.view ctx: Ctx.view fid: ztypes.tid} out u64 is {
-    return (ctx.rows.ofName n: (rowNameOfFn :prog :ctx :fid))
+    return (ctx.pieces.rows.ofName n: (rowNameOfFn :prog :ctx :fid))
 }
 
 # rowNameOfFn -- the key of the row implementing native function `fid`, an
@@ -3813,7 +3814,7 @@ rowNameOfFn: function {prog: Program.view ctx: Ctx.view fid: ztypes.tid} out zem
     did: prog.typing.declIdOfType typeId: d
     if did.isZero then return none
     impl: (
-        ctx.rows.fileOfUnit
+        ctx.pieces.rows.fileOfUnit
         ud: (ztypecheck.unitDeclOfTid reg: prog.reg typing: prog.typing tid: d)
     )
     if impl == 0 then return none
@@ -3831,7 +3832,7 @@ rowNameOfFn: function {prog: Program.view ctx: Ctx.view fid: ztypes.tid} out zem
 methodFragRow: function {prog: Program.view ctx: Ctx.view mfid: ztypes.tid} out u64 is {
     row: rowOfFn :prog :ctx fid: mfid
     if row == 0 then return 0
-    if (ctx.rows.rows.get i: row).fragment.not then return 0
+    if (ctx.pieces.rows.rows.get i: row).fragment.not then return 0
     return row
 }
 
@@ -3839,7 +3840,7 @@ methodFragRow: function {prog: Program.view ctx: Ctx.view mfid: ztypes.tid} out 
 # `cid`: that section of its template is written (rtSectionPlan)
 noteTmplMemberUse: function {prog: Program.view ctx: Ctx cid: ztypes.tid mnId: zast.nameid} is {
     mn: zast.nameTextAt ast: prog.ast ref: mnId
-    noteMemberUse :ctx mono: cid member: (ctx.memberWords.slotOf text: mn.stringView)
+    noteMemberUse :ctx mono: cid member: (ctx.pieces.memberWords.slotOf text: mn.stringView)
 }
 
 # nativeMethodCallOpen -- `<class>_<method>(<receiver>`, the open call of a
@@ -4247,9 +4248,9 @@ emitNativeFreeFnCall: function {
     duo: types.definedInUnitName :prog tid: fid
     if duo.length == 0 then return "".string
     rowKey: rowNameOfFn :prog :ctx :fid
-    row: ctx.rows.ofName n: rowKey
+    row: ctx.pieces.rows.ofName n: rowKey
     if row == 0 then return "".string
-    r: ctx.rows.rows.get i: row
+    r: ctx.pieces.rows.rows.get i: row
     un: duo.string
     # a function a templated class implements is the template function of the
     # instance it answers
@@ -4259,12 +4260,17 @@ emitNativeFreeFnCall: function {
     body: rtid
     if viaMember.length > 0 then {
         viaInst: stampIdOf :prog nid: call.nodeid
-        noteMemberUse :ctx mono: viaInst member: (ctx.memberWords.slotOf text: viaMember.stringView)
+        (
+            noteMemberUse
+            :ctx
+            mono: viaInst
+            member: (ctx.pieces.memberWords.slotOf text: viaMember.stringView)
+        )
         callee = "\{spelledCname :ctx tid: viaInst}_\{viaMember}"
     } else if r.fragment.not then {
         body = r.body
         if body.isZero then return "".string
-        ctx.rt.ready id: body
+        ctx.pieces.rt.ready id: body
     }
     nativepieces.needsAddM :ctx uname: un.stringView memb: "@unit"
     if body.isZero then nativepieces.needsAddM :ctx uname: un.stringView memb: mn
@@ -4400,7 +4406,7 @@ orderNativeFreeArgs: function {
 # when it names none
 rowVia: function {ctx: Ctx.view r: zemitrows.nativerow} out String is {
     if r.via.isZero then return String
-    return (ctx.demands.nameText id: r.via).string
+    return (ctx.pieces.demands.nameText id: r.via).string
 }
 
 # viaArgText -- argument `j`, of a call whose template function takes the types
