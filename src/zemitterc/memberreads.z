@@ -147,7 +147,7 @@ emitDottedCall: function {
             :ctx
             tid: (dottedReceiverStampId :ast :typing callable: (ast.nodes.get i: call.callable))
         )
-        if (isStringOrViewLaid :ctx tid: rsid) then {
+        if (argforms.isStringOrViewLaid :ctx tid: rsid) then {
             callableNode: ast.nodes.get i: call.callable
             bn = emitDottedReceiver :ast :reg :typing :ctx callable: callableNode facts: bnF
             btid = rsid
@@ -199,7 +199,7 @@ emitDottedCall: function {
         )
     }
     sv: (
-        emitSvCallLegs
+        argforms.emitSvCallLegs
         :ast
         :reg
         :typing
@@ -298,7 +298,7 @@ emitStringArgMethod: function {
             # hoist it to an _ah temp (freed at the statement flush, the
             # receiver only borrows), exactly like collection/user-fn args
             iv: (
-                emitColInterpArg
+                argforms.emitColInterpArg
                 :ast
                 :reg
                 :typing
@@ -334,7 +334,7 @@ emitStringArgMethod: function {
         # borrowed param); a StringView reads .data/.length.
         if argTid == ctx.strTid then {
             aph: (
-                hoistBorrowValArgWith
+                argforms.hoistBorrowValArgWith
                 :ast
                 :reg
                 :typing
@@ -351,7 +351,7 @@ emitStringArgMethod: function {
                 # a load of a call's result is read for its data and its size:
                 # bound once, into a temp that owns nothing
                 argval = (
-                    readOnce
+                    argforms.readOnce
                     :ast
                     :reg
                     :typing
@@ -425,7 +425,16 @@ stringAppendViewText: function {
 } out String is {
     if argTid == ctx.svTid when argvalF.once then {
         # a view read twice is bound once, and frees nothing
-        ah: hoistForAddress :ast :reg :typing :ctx av: argval tid: argTid argNid: zast.nodeid
+        ah: (
+            argforms.hoistForAddress
+            :ast
+            :reg
+            :typing
+            :ctx
+            av: argval
+            tid: argTid
+            argNid: zast.nodeid
+        )
         preludeNeed :ctx memb: "@String_append"
         rh: "\{ctx.strC}_append(\{recvAddr}, (\{ah}).data, (\{ah}).size)"
         return (stating :facts from: callFacts text: rh)
@@ -460,7 +469,7 @@ orderOnePart: function {
     twice: true
 } out String is {
     ord: orderBegin :ctx slots: 1
-    if twice then orderNamesTwice st: ord slot: 0
+    if twice then argforms.orderNamesTwice st: ord slot: 0
     (
         orderPartWith
         :ast
@@ -587,7 +596,7 @@ emitStrConvCall: function {
     # bound to a temp the statement flush frees, a view call to a plain one
     if ptid == ctx.strTid when pvF.place.not then {
         sh: (
-            hoistBorrowValArgWith
+            argforms.hoistBorrowValArgWith
             :ast
             :reg
             :typing
@@ -605,7 +614,16 @@ emitStrConvCall: function {
     }
     if ptid == ctx.svTid when pvF.once then {
         # a view, bound so the call runs once; there is nothing to free
-        pv = hoistForAddress :ast :reg :typing :ctx av: pv.stringView tid: ptid argNid: zast.nodeid
+        pv = (
+            argforms.hoistForAddress
+            :ast
+            :reg
+            :typing
+            :ctx
+            av: pv.stringView
+            tid: ptid
+            argNid: zast.nodeid
+        )
     }
     lenAcc: "len".string
     if ptid == ctx.strTid then lenAcc = "size".string
@@ -662,7 +680,7 @@ emitCollectionMethodCall: function {
     )
     if bn.length == 0 then return "".string
     bvid: (
-        atomVidIfPlain
+        argforms.atomVidIfPlain
         :ast
         :reg
         :typing
@@ -698,7 +716,7 @@ emitCollectionMethodCall: function {
     recvNode: ast.nodes.get i: (dottedParentNodeId n: (ast.nodes.get i: call.callable))
     if (localnames.nodeIsRefBorrowResult :ast :reg :typing :ctx n: recvNode) then {
         bp9: (
-            hoistForAddress
+            argforms.hoistForAddress
             :ast
             :reg
             :typing
@@ -719,9 +737,9 @@ emitCollectionMethodCall: function {
     # the temp owns the receiver only when the call handed over a new value; an
     # element or other borrow still belongs to its container. A Set or a Map is
     # held as its pointer.
-    if rcvIsCreate.not when (canTakeAddress f: bnF).not then {
+    if rcvIsCreate.not when (argforms.canTakeAddress f: bnF).not then {
         bh9: (
-            hoistForAddress
+            argforms.hoistForAddress
             :ast
             :reg
             :typing
@@ -1125,7 +1143,7 @@ colArgHeldByPtr: function {
         if a.namedoperation when (a.name == label) or a.name.isZero then {
             op: ast.nodes.get i: a.operation
             if (pathIsPointer :ast :reg :typing :ctx n: op).not then return false
-            return (ptrHeldValtype :ast :reg :typing :ctx n: op).not
+            return (argforms.ptrHeldValtype :ast :reg :typing :ctx n: op).not
         }
     }
     return false
@@ -1439,7 +1457,7 @@ emitSpanCopyFrom: function {
     facts: exprfacts.borrow
 } out String is {
     vc: listArg :ast :reg :typing :ctx :call label: zast.wellKnown.slot.wkFrom
-    vn: labelArgNode :ast :call label: zast.wellKnown.slot.wkFrom form: argform.value
+    vn: argforms.labelArgNode :ast :call label: zast.wellKnown.slot.wkFrom form: argform.value
     lc: (
         spelledCname
         :ctx
@@ -1668,7 +1686,7 @@ colArg: function {
     consumes: bool
 } out String is {
     facts: exprfacts
-    return (colArgWith :ast :reg :typing :ctx :call :label :consumes :facts)
+    return (argforms.colArgWith :ast :reg :typing :ctx :call :label :consumes :facts)
 }
 
 # listArg -- the C expression for a labeled list-method argument ("0" if
@@ -1682,7 +1700,7 @@ listArg: function {
     label: zast.nameid
 } out String is {
     facts: exprfacts
-    return (listArgWith :ast :reg :typing :ctx :call :label :facts)
+    return (argforms.listArgWith :ast :reg :typing :ctx :call :label :facts)
 }
 
 # emitOrderedPair -- `<cb>_<m>(lead, a, b)`: a native leg whose two labelled
@@ -1704,7 +1722,7 @@ emitOrderedPair: function {
     b: zast.nameid
     bForm: argform
 } out String is {
-    ord: orderPairArgs :ast :reg :typing :ctx :call :a :aForm :b :bForm
+    ord: argforms.orderPairArgs :ast :reg :typing :ctx :call :a :aForm :b :bForm
     if mono.notZero then noteMemberUse :ctx :mono member: (ctx.memberWords.slotOf text: m)
     r: orderFinish :ctx st: ord
     opened: r.length > 0
@@ -1842,7 +1860,17 @@ emitStringMethod: function {
             return (stating :facts from: callFacts text: "\{ctx.strC}_copy(\{recv})")
         }
         rhF: exprfacts
-        rh: addressableText :ast :reg :typing :ctx e: recv eF: recvF tid: ctx.strTid facts: rhF
+        rh: (
+            argforms.addressableText
+            :ast
+            :reg
+            :typing
+            :ctx
+            e: recv
+            eF: recvF
+            tid: ctx.strTid
+            facts: rhF
+        )
         preludeNeed :ctx memb: "@String_copy"
         return (stating :facts from: callFacts text: "\{ctx.strC}_copy(&\{rh})")
     }
@@ -1864,10 +1892,20 @@ emitStringMethod: function {
             stating
             :facts
             from: literalFacts
-            text: (svValueFormPtr :ctx expr: recv)
+            text: (argforms.svValueFormPtr :ctx expr: recv)
         )
-        stateFacts :facts from: recvF
-        return (svValueForm :ast :reg :typing :ctx expr: recv isStr: true vid: recvVid :facts)
+        argforms.stateFacts :facts from: recvF
+        return (
+            argforms.svValueForm
+            :ast
+            :reg
+            :typing
+            :ctx
+            expr: recv
+            isStr: true
+            vid: recvVid
+            :facts
+        )
     }
     if mnId == zast.wellKnown.slot.wkShrink then {
         preludeNeed :ctx memb: "@String_shrink"
@@ -1959,7 +1997,7 @@ nestedStrMember: function {
     if (ztypecheck.isStringViewMember nameId: mnId) then {
         bound: String
         if baseAtomF.once then bound = (
-            readOnce
+            argforms.readOnce
             :ast
             :reg
             :typing
@@ -2184,7 +2222,7 @@ emitNestedMonoMethodBase: function {
                 :facts
                 from: callFacts
                 text: (
-                    nestedFnptrFieldRead
+                    argforms.nestedFnptrFieldRead
                     :ast
                     :reg
                     :typing
@@ -2199,7 +2237,7 @@ emitNestedMonoMethodBase: function {
         }
         if nDisp then {
             return (
-                nestedOwnMethodCall
+                argforms.nestedOwnMethodCall
                 :ast
                 :reg
                 :typing
@@ -2400,7 +2438,7 @@ emitResolvedMemberRead: function {
     if (mtt == ztypes.ztypetype.functionType).not then return "".string
     if (typing.declIsFnptrFieldId parentTypeId: bstamp nameId: mnId) then {
         return (
-            fnptrFieldRead
+            argforms.fnptrFieldRead
             :ast
             :reg
             :typing
@@ -2418,7 +2456,7 @@ emitResolvedMemberRead: function {
     sh: synthHashRead :ast :reg :typing :ctx :bn2 :bn2v :bstamp :mco :baseIsType :readIsRef :facts
     if sh.length > 0 then return sh
     return (
-        methodAutoCallRead
+        argforms.methodAutoCallRead
         :ast
         :reg
         :typing
@@ -2604,7 +2642,7 @@ emitUserTypeMemberRead: function {
     mnUtC: memberC :ast :reg :typing :ctx owner: bstamp kind: memberkind.field nameId: mnId
     # a data value is a handle whatever spells it: a variable, or a narrowed
     # sum's payload read in place
-    if (isPtrVid :ctx vid: bn2v) or (isStaticHandle :reg :typing tid: bstamp) then {
+    if (isPtrVid :ctx vid: bn2v) or (argforms.isStaticHandle :reg :typing tid: bstamp) then {
         return (stating :facts from: (memberFacts b: bn2F) text: "\{bn2}->\{mnUtC}")
     }
     return (stating :facts from: (memberFacts b: bn2F) text: "\{bn2}.\{mnUtC}")
@@ -2755,7 +2793,7 @@ windowMemberRead: function {
     # work
     bound: String
     if isArr.not when baseF.once then bound = (
-        readOnce
+        argforms.readOnce
         :ast
         :reg
         :typing
@@ -3047,7 +3085,7 @@ emitDottedAtomBase: function {
     if bareSv when childNameId == zast.wellKnown.slot.wkStringView then {
         return (stating :facts from: bn2F text: bn2.string)
     }
-    eSv: emitSvAtomBase :reg :typing :ctx :bn2 :bn2F :mn2 :mnId :bn2v :bareSv :facts
+    eSv: argforms.emitSvAtomBase :reg :typing :ctx :bn2 :bn2F :mn2 :mnId :bn2v :bareSv :facts
     if eSv.length > 0 then return eSv
     if bareTid == ctx.strTid when mnId == zast.wellKnown.slot.wkLength then {
         acc: ".".string
@@ -3506,7 +3544,7 @@ emitResultCombinator: function {
     payArmId: zast.wellKnown.slot.wkOk
     if isOpt then payArmId = zast.wellKnown.slot.wkSome
     recvExprF: exprfacts
-    recvExpr: valueExprC :ast :reg :typing :ctx n: (ast.nodes.get i: bnid) facts: recvExprF
+    recvExpr: argforms.valueExprC :ast :reg :typing :ctx n: (ast.nodes.get i: bnid) facts: recvExprF
     if recvExpr.length == 0 then return "".string
     okTag: spelledTagConst :ast :ctx :reg :typing tid: rtid armId: payArmId
     rcT: spelledCname :ctx tid: rtid
@@ -3530,7 +3568,7 @@ emitResultCombinator: function {
     if a.namedoperation then opId = a.operation
     if opId.isZero then return "".string
     dExprF: exprfacts
-    dExpr: valueExprC :ast :reg :typing :ctx n: (ast.nodes.get i: opId) facts: dExprF
+    dExpr: argforms.valueExprC :ast :reg :typing :ctx n: (ast.nodes.get i: opId) facts: dExprF
     if dExpr.length == 0 then return "".string
     payC: memberC :ast :reg :typing :ctx owner: rtid kind: memberkind.arm nameId: payArmId
     # the receiver is read for its tag and then its payload
