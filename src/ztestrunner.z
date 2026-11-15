@@ -25,7 +25,12 @@
 #   smoke    per-unit no-arg binaries against <unit>_z/smoke.expected
 #   usage    a driver (zl, the runner itself) refuses a command line: what it
 #            says on stderr and its exit code match the case's expected files
+#   vocab    the spec and the three highlighters carry the lexer's keywords
+#            and reserved words, and core.z's names (src/ztestrunner/vocab.z)
 #   --heavy adds the self-host ASan run and the byte-identity fixpoint.
+# `--only emitted` runs the EMITTED kind, which no other run includes: what the
+# emitted C of every program holds, read from one shared emit
+# (src/ztestrunner/emitted.z; its baselines are src/ztestrunner/expected.z's).
 #
 # Usage: ztestrunner --zc <zc> --cc gcc --root <repo> [--jobs N] [--heavy] [--report]
 #   `ztestrunner --help` lists every flag. The command line is read by `cli`:
@@ -625,14 +630,12 @@ mkJob: function {name: StringView steps: (List PoolStep).take} out PoolJob is {
     return (PoolJob name: name.string :steps)
 }
 
-# JobPool -- the pool's state: per job, whether a child of it is running, the
-# step it is on, its deadline (0 when the step has none) and whether its child
-# was killed; the children in flight with the job each runs for; and how many
-# jobs have ended. The scans that read and write it take the pool; the caller's
+# JobPool -- the pool's state: per job, the step it is on, its deadline (0 when
+# the step has none) and whether its child was killed; the children in flight
+# with the job each runs for; how many jobs have ended; and which job's step
+# starts next. The scans that read and write it take the pool; the caller's
 # statuses and failSteps stay the caller's.
 JobPool: class {
-    # whether each job has a child in flight
-    busy: ListVal bool
     # the step each job is on
     stepIdxs: ListVal u64
     # each job's deadline in monotonic millis, 0 when its step has none
@@ -645,10 +648,19 @@ JobPool: class {
     childJobs: ListVal u64
     # jobs that have ended, by success or by a failing step
     doneN: u64
+    # the first job no step of which has started: jobs start in order
+    fresh: u64
+    # the jobs whose step ended with steps left, in the order they ended; a
+    # job's next step starts before any job that has not started
+    resumed: ListVal u64
+    # how many of `resumed` have started their next step
+    resumedTaken: u64
 }
 
-# launchReady -- start every job that is idle and has a step left, up to the
-# cap. A spawn that cannot start ends the job as 127 at that step.
+# launchReady -- start the next step of jobs that have one, up to the cap: the
+# resumed jobs first, then those not started, in order. Each job is looked at
+# once per step, however many jobs the pool holds. A spawn that cannot start
+# ends the job as 127 at that step.
 launchReady: function {
     jobs: (List PoolJob).view
     pool: JobPool
@@ -657,13 +669,12 @@ launchReady: function {
     failSteps: ListVal i64
 } is {
     total: jobs.length
-    ji: u64
-    for ji < total while pool.children.length < cap loop {
-        jbusy: pool.busy.get i: ji
-        jfail: failSteps.get i: ji
+    for pool.children.length < cap loop {
+        ji: nextJob :pool :total
+        if ji == total then return
         jstep: pool.stepIdxs.get i: ji
         j: jobs.get i: ji
-        if jbusy.not when jfail == -1 when jstep < j.steps.length then {
+        if jstep < j.steps.length then {
             st: j.steps.get i: jstep
             sargv: stepArgv step: st
             started: (
@@ -678,7 +689,6 @@ launchReady: function {
             ) case ok then {
                 pool.children.append from: started.take
                 pool.childJobs.append ji
-                pool.busy.set i: ji val: true
                 pool.killeds.set i: ji val: false
                 if st.timeoutSecs > 0 then {
                     dl: os.monotonicMillis + (st.timeoutSecs.i64 * 1000)
@@ -691,9 +701,23 @@ launchReady: function {
                 failSteps.set i: ji val: jstep.i64.orPanic
                 pool.doneN = pool.doneN + 1
             }
+        } else {
+            pool.doneN = pool.doneN + 1
         }
-        ji = ji + 1
     }
+}
+
+# nextJob -- the job whose step starts next, taken from the pool: a resumed one
+# first, then the first not started; `total` when no job has a step waiting
+nextJob: function {pool: JobPool total: u64} out u64 is {
+    if pool.resumedTaken < pool.resumed.length then {
+        ji: pool.resumed.get i: pool.resumedTaken
+        pool.resumedTaken = pool.resumedTaken + 1
+        return ji
+    }
+    if pool.fresh == total then return total
+    pool.fresh = pool.fresh + 1
+    return pool.fresh - 1
 }
 
 # dropChild -- take the reaped child at `k` out of the pool, the last one
@@ -730,7 +754,6 @@ reapOne: function {
             continue
         }
         jk: dropChild :pool :k
-        pool.busy.set i: jk val: false
         kstep: pool.stepIdxs.get i: jk
         j2: jobs.get i: jk
         stw: j2.steps.get i: kstep
@@ -746,7 +769,9 @@ reapOne: function {
             pool.stepIdxs.set i: jk val: kn
             if kn >= j2.steps.length then ended = true
         }
-        if ended then pool.doneN = pool.doneN + 1
+        if ended then {
+            pool.doneN = pool.doneN + 1
+        } else pool.resumed.append jk
         return
     }
 }
@@ -782,7 +807,6 @@ runJobs: function {
     cap: maxJobs
     if cap == 0 then cap = 1
     total: jobs.length
-    busyL: ListVal bool
     stepIdxsL: ListVal u64
     deadlinesL: ListVal i64
     killedsL: ListVal bool
@@ -790,17 +814,18 @@ runJobs: function {
     childJobsL: ListVal u64
     pool: (
         JobPool
-        busy: busyL
         stepIdxs: stepIdxsL
         deadlines: deadlinesL
         killeds: killedsL
         children: childrenL
         childJobs: childJobsL
         doneN: 0
+        fresh: 0
+        resumed: ListVal u64
+        resumedTaken: 0
     )
     pi: u64
     for pi < total loop {
-        pool.busy.append false
         pool.stepIdxs.append 0.u64
         pool.deadlines.append 0.i64
         pool.killeds.append false
@@ -922,10 +947,7 @@ opt: list {
     heavy: "--heavy"
     saveTemps: "--save-temps"
     regenLsp: "--regen-lsp"
-    doccodeOnly: "--doccode-only"
-    agreeOnly: "--agree-only"
-    archOnly: "--arch-only"
-    runOnly: "--run-only"
+    only: "--only"
     help: "--help"
     zc: "--zc"
     cc: "--cc"
@@ -936,6 +958,23 @@ opt: list {
     target: "--target"
     exec: "--exec"
     tmp: "--tmp"
+} out staticlist StringView
+
+# kindWord -- the kinds `--only` runs alone, by the word it is given
+kindWord: list {
+    # the RUN cases, the only kind whose programs can be built for another
+    # target (`make test-mingw`)
+    run: "run"
+    # the examples and the pages of the documentation (`make doc-check`)
+    doccode: "doccode"
+    # the nativec agreement check (`make nativec-agree-guard`)
+    agree: "agree"
+    # the architecture ratchet (`make arch-check`)
+    arch: "arch"
+    # what the emitted C holds, read from one shared emit (`make emitted-check`)
+    emitted: "emitted"
+    # the spec and the highlighters carry the lexer's words (also in `make test`)
+    vocab: "vocab"
 } out staticlist StringView
 
 # test-runner entry point: build the compiler, run the
@@ -976,17 +1015,11 @@ Runner: class {
     saveTemps: bool
     # rewrite the LSP goldens from this run's answers instead of comparing
     regenLsp: bool
-    # run the doccode kind alone (`make doc-check`)
-    doccodeOnly: bool
-    # run the agree kind alone (`make nativec-agree-guard`)
-    agreeOnly: bool
-    # run the arch kind alone (`make arch-check`)
-    archOnly: bool
-    # run the RUN kind alone (`make test-mingw`): the only kind whose programs
-    # can be built for another target
-    runOnly: bool
+    # the kind `--only` runs alone, by its slot in kindWord; kindWord's length
+    # when every kind runs
+    only: u64
     # the triple the RUN cases are built for (zc --target); empty builds for
-    # the host. Only with --run-only: every other kind runs what it builds
+    # the host. Only with `--only run`: every other kind runs what it builds
     target: String
     # the program each RUN case's binary is run under (wine for a Windows
     # build); empty runs it directly
@@ -4425,12 +4458,14 @@ printUsage: function is {
     io.eprintln "  --heavy         add the self-host ASan run, the fixpoint and the doc ratchet"
     io.eprintln "  --report        exit 0 whatever failed"
     io.eprintln "  --regen-lsp     rewrite the LSP goldens from this run's answers"
-    io.eprintln "one kind alone:"
-    io.eprintln "  --run-only      the run cases; --target TRIPLE builds them for another system"
-    io.eprintln "                  and --exec PROGRAM runs each one under that program"
-    io.eprintln "  --doccode-only  the examples and the pages of the documentation"
-    io.eprintln "  --agree-only    the nativec agreement check"
-    io.eprintln "  --arch-only     the architecture ratchet"
+    io.eprintln "  --only KIND     run one kind alone:"
+    io.eprintln "                  run      the run cases; --target TRIPLE builds them for another"
+    io.eprintln "                           system and --exec PROGRAM runs each one under that program"
+    io.eprintln "                  doccode  the examples and the pages of the documentation"
+    io.eprintln "                  agree    the nativec agreement check"
+    io.eprintln "                  arch     the architecture ratchet"
+    io.eprintln "                  emitted  what the emitted C holds, from one shared emit"
+    io.eprintln "                  vocab    the spec and the highlighters carry the lexer's words"
     io.eprintln "A value is written `--name VALUE` or `--name=VALUE`."
 }
 
@@ -4460,10 +4495,6 @@ runnerSpec: function out cli.Spec is {
     addSwitch :sp name: opt.heavy
     addSwitch :sp name: opt.saveTemps
     addSwitch :sp name: opt.regenLsp
-    addSwitch :sp name: opt.doccodeOnly
-    addSwitch :sp name: opt.agreeOnly
-    addSwitch :sp name: opt.archOnly
-    addSwitch :sp name: opt.runOnly
     cli.addFlag spec: sp name: opt.help.string shortName: "-h".string help: "".string
     addValue :sp name: opt.zc
     addValue :sp name: opt.cc
@@ -4474,6 +4505,7 @@ runnerSpec: function out cli.Spec is {
     addValue :sp name: opt.target
     addValue :sp name: opt.exec
     addValue :sp name: opt.tmp
+    addValue :sp name: opt.only
     return sp
 }
 
@@ -4537,34 +4569,39 @@ timeoutOf: function {p: cli.Parsed.view} out i32 is {
     return n
 }
 
-# onlyFlags -- the switches of `p` that each ask for one kind alone
-onlyFlags: function {p: cli.Parsed.view} out List String is {
-    names: List String
-    if (p.hasFlag name: opt.doccodeOnly) then names.append from: opt.doccodeOnly.string
-    if (p.hasFlag name: opt.agreeOnly) then names.append from: opt.agreeOnly.string
-    if (p.hasFlag name: opt.archOnly) then names.append from: opt.archOnly.string
-    if (p.hasFlag name: opt.runOnly) then names.append from: opt.runOnly.string
-    return names
+# onlyKind -- the slot in kindWord of the kind `p`'s `--only` names; kindWord's
+# length when it names none, and when `--only` is not written
+onlyKind: function {p: cli.Parsed.view} out u64 is {
+    words: zast.Vocab.create block: kindWord
+    v: p.option name: opt.only
+    match (
+        v
+    ) case some then {
+        return (words.slotOf text: v.stringView)
+    } case none then {
+        return kindWord.length
+    }
 }
 
 # refuseMisuse -- stops the runner on a command line cli reads and the runner
-# cannot honour: an operand, two kinds each asked for alone, or a foreign
-# target or compiler outside the one kind that builds for one
+# cannot honour: an operand, a kind `--only` does not know, or a foreign target
+# or compiler outside the one kind that builds for one
 refuseMisuse: function {r: Runner.view p: cli.Parsed.view} is {
     if p.extraArgs.length > 0 then {
         surplus: "ztestrunner: unexpected argument '\{p.extraArgs.get i: 0}'"
         refuse surplus.stringView
     }
-    only: onlyFlags :p
-    if only.length > 1 then {
-        both: "ztestrunner: \{only.get i: 0} and \{only.get i: 1} name two different runs"
-        refuse both.stringView
+    written: textOr :p name: opt.only d: ""
+    if written.length > 0 when r.only == kindWord.length then {
+        unknown: "ztestrunner: --only takes run, doccode, agree, arch, emitted or vocab, not '\{written}'"
+        refuse unknown.stringView
     }
-    if (r.target.length > 0) or (r.exec.length > 0) when r.runOnly.not then {
-        refuse "ztestrunner: --target and --exec need --run-only; no other kind runs a foreign binary"
+    runOnly: r.only == kindWord.slot.run
+    if (r.target.length > 0) or (r.exec.length > 0) when runOnly.false then {
+        refuse "ztestrunner: --target and --exec need --only run; no other kind runs a foreign binary"
     }
-    if (zcc.ccFamilyOf ccPath: r.cc.stringView).msvc when r.runOnly.not then {
-        refuse "ztestrunner: --cc cl needs --run-only; the other kinds build with gcc's command line"
+    if (zcc.ccFamilyOf ccPath: r.cc.stringView).msvc when runOnly.false then {
+        refuse "ztestrunner: --cc cl needs --only run; the other kinds build with gcc's command line"
     }
 }
 
@@ -4594,10 +4631,7 @@ runnerFrom: function {p: cli.Parsed.view} out Runner is {
         report: (p.hasFlag name: opt.report)
         saveTemps: (p.hasFlag name: opt.saveTemps)
         regenLsp: (p.hasFlag name: opt.regenLsp)
-        doccodeOnly: (p.hasFlag name: opt.doccodeOnly)
-        agreeOnly: (p.hasFlag name: opt.agreeOnly)
-        archOnly: (p.hasFlag name: opt.archOnly)
-        runOnly: (p.hasFlag name: opt.runOnly)
+        only: (onlyKind :p)
         target: (textOr :p name: opt.target d: "")
         exec: (textOr :p name: opt.exec d: "")
         errors: String
@@ -4673,15 +4707,19 @@ runKinds: function {r: Runner} is {
     # symbols come from the binaries' own DWARF.
     os.setEnv key: "DEBUGINFOD_URLS" value: ""
 
-    if r.doccodeOnly then {
+    if r.only == kindWord.slot.doccode then {
         runDoccodeCases :r
         runDocPageCases :r
-    } else if r.agreeOnly then {
+    } else if r.only == kindWord.slot.agree then {
         runAgreeCases :r
-    } else if r.archOnly then {
+    } else if r.only == kindWord.slot.arch then {
         runArchCases :r
-    } else if r.runOnly then {
+    } else if r.only == kindWord.slot.run then {
         runRunCases :r
+    } else if r.only == kindWord.slot.emitted then {
+        emitted.runEmittedCases :r
+    } else if r.only == kindWord.slot.vocab then {
+        vocab.runVocabCases :r
     } else {
         runRunCases :r
         runLspCases :r
@@ -4697,6 +4735,7 @@ runKinds: function {r: Runner} is {
         runErrCodeCases :r
         runSmokeCases :r
         runFmtCases :r
+        vocab.runVocabCases :r
         runDoccodeCases :r
         runDocPageCases :r
         runSelfhostAsan :r

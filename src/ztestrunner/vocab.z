@@ -1,0 +1,254 @@
+# vocab -- the VOCAB kind (`--only vocab`): the spec and the three highlighters
+# (prism, nvim, rouge) carry the language's vocabulary. The keywords and the
+# reserved words are what the lexer answers for each well-known name
+# (zlexer.kwOfId, zlexer.isReservedId), so a new word needs no edit here; the
+# predeclared names are the top-level definitions of lib/system/core.z, and a
+# highlighter carries the context words (contextWords) beside them. A subunit
+# of ztestrunner.
+
+# contextWords -- the words a highlighter may carry that core.z does not define
+contextWords: list {
+    "_" "copy" "iterator" "meta" "public" "tag" "this" "yield"
+} out staticlist StringView
+
+# runVocabCases -- the vocab kind: each word set of the spec and of each
+# highlighter against the lexer's, and the highlighters' predeclared names
+# against core.z's
+runVocabCases: function {r: Runner} is {
+    root: r.root.stringView
+    lexKw: List String
+    lexRes: List String
+    k: 1.u64
+    for k < zast.wellKnown.length loop {
+        id: zast.nameid from: k.u32.orPanic
+        word: zast.wellKnown.get i: id
+        if (zlexer.kwOfId :id).found then lexKw.append word.string
+        if (zlexer.isReservedId :id) then lexRes.append word.string
+        k = k + 1
+    }
+    kwSet: sortedSet names: lexKw
+    resSet: sortedSet names: lexRes
+    core: coreNames path: "\{root}/lib/system/core.z".stringView
+    spec: slurp path: "\{root}/docs/spec.pdoc".stringView
+    prism: slurp path: "\{root}/docs/style/prism-zerolang.js".stringView
+    rouge: slurp path: "\{root}/editor/rouge/zerolang.rb".stringView
+    vim: slurp path: "\{root}/editor/nvim/syntax/zerolang.vim".stringView
+    specKw: specWords text: spec.stringView heading: "Keywords"
+    specRes: specWords text: spec.stringView heading: "Reserved Words"
+    pKw: prismWords text: prism.stringView name: "keywords"
+    pRes: prismWords text: prism.stringView name: "reserved"
+    pBi: prismWords text: prism.stringView name: "builtins"
+    rKw: rougeWords text: rouge.stringView name: "keywords"
+    rRes: rougeWords text: rouge.stringView name: "reserved"
+    rBi: rougeWords text: rouge.stringView name: "builtins"
+    vKw: vimWords text: vim.stringView group: "zerolangKeyword"
+    vRes: vimWords text: vim.stringView group: "zerolangReserved"
+    vAll: List String
+    for each g: (
+        listOfGroups3
+        a: "zerolangBuiltinType"
+        b: "zerolangBuiltinConst"
+        c: "zerolangBuiltin"
+    ) loop {
+        for each w: (vimWords text: vim.stringView group: g.stringView) loop vAll.append w.copy
+    }
+    vBi: sortedSet names: vAll
+    wantAll: List String
+    for each w: core loop wantAll.append w.copy
+    for each w: contextWords loop wantAll.append w.string
+    wantBi: sortedSet names: wantAll
+    bad: u64
+    bad = bad + (sameSet what: "prism keywords vs zlexer kwOfId" want: kwSet got: pKw)
+    bad = bad + (sameSet what: "nvim keywords vs zlexer kwOfId" want: kwSet got: vKw)
+    bad = bad + (sameSet what: "prism reserved vs zlexer isReservedId" want: resSet got: pRes)
+    bad = bad + (sameSet what: "nvim reserved vs zlexer isReservedId" want: resSet got: vRes)
+    bad = bad + (sameSet what: "spec Keywords vs zlexer kwOfId" want: kwSet got: specKw)
+    bad = (
+        bad + (sameSet what: "spec Reserved Words vs zlexer isReservedId" want: resSet got: specRes)
+    )
+    bad = bad + (sameSet what: "rouge keywords vs zlexer kwOfId" want: kwSet got: rKw)
+    bad = bad + (sameSet what: "rouge reserved vs zlexer isReservedId" want: resSet got: rRes)
+    bad = bad + (sameSet what: "prism builtins vs nvim builtins" want: pBi got: vBi)
+    bad = bad + (sameSet what: "rouge builtins vs prism builtins" want: pBi got: rBi)
+    bad = (
+        bad + (sameSet what: "builtins vs lib/system/core.z + context words" want: wantBi got: pBi)
+    )
+    if bad > 0 then {
+        print "  The language moved and a highlighter did not. Fix the word list."
+        r.fails = r.fails + bad
+        return
+    }
+    r.passN = r.passN + 11
+    print "vocab: \{core.length} core.z names, \{kwSet.length} keywords, \{resSet.length} reserved -- spec and all three highlighters agree"
+}
+
+# listOfGroups3 -- the vim syntax groups `a`, `b` and `c`
+listOfGroups3: function {a: StringView b: StringView c: StringView} out List String is {
+    l: List String
+    l.append a.string
+    l.append b.string
+    l.append c.string
+    return l
+}
+
+# sameSet -- 0 when the sorted sets `want` and `got` are equal; otherwise 1,
+# after printing what `got` misses and what it holds that `want` does not
+sameSet: function {what: StringView want: (List String).view got: (List String).view} out u64 is {
+    missing: List String
+    for each w: want loop {
+        if (got.contains item: w).false then missing.append w.copy
+    }
+    stale: List String
+    for each g: got loop {
+        if (want.contains item: g).false then stale.append g.copy
+    }
+    if missing.length == 0 when stale.length == 0 then return 0
+    print "FAIL(vocab) \{what}"
+    for each m: missing loop print "    missing: \{m}"
+    for each s: stale loop print "    stale:   \{s}"
+    return 1
+}
+
+# sortedSet -- `names` sorted, each once
+sortedSet: function {names: (List String).view} out List String is {
+    all: List String
+    for each n: names loop all.append n.copy
+    all.sort
+    r: List String
+    for each n: all loop {
+        if r.length == 0 then {
+            r.append n.copy
+        } else if (r.get i: r.length - 1) != n then r.append n.copy
+    }
+    return r
+}
+
+# coreNames -- the names lib/system/core.z defines at its top level, sorted
+coreNames: function {path: StringView} out List String is {
+    names: List String
+    text: slurp :path
+    for each l: text.stringView.lines loop {
+        e: creach.wordEnd text: l from: 0
+        first: (l.byteAt i: 0).or d: 0
+        if e > 0 when (ascii.isLetter b: first) or (first == 0c_) when (
+            ((l.byteAt i: e).or d: 0) == ascii.colon
+        ) then {
+            names.append (l.substring from: 0 to: e).string
+        }
+    }
+    return (sortedSet :names)
+}
+
+# specWords -- the words of the code block under the spec's `#---: <heading>`
+# section, sorted: from its `#code` line to the first empty line
+specWords: function {text: StringView heading: StringView} out List String is {
+    words: List String
+    inCode: false
+    for each l: (sectionLines :text :heading) loop {
+        if inCode.false then {
+            inCode = l.stringView.startsWith "#code"
+        } else if l.length == 0 then {
+            inCode = false
+        } else appendWords :words line: l.stringView
+    }
+    return (sortedSet names: words)
+}
+
+# sectionLines -- the lines of the spec's `#---: <heading>` section, up to the
+# next section
+sectionLines: function {text: StringView heading: StringView} out List String is {
+    lines: List String
+    want: "#---: \{heading}"
+    inHeading: false
+    for each l: text.lines loop {
+        if inHeading when l.startsWith "#---: " then return lines
+        if inHeading then lines.append l.string
+        if l == want then inHeading = true
+    }
+    return lines
+}
+
+# appendWords -- each word of `line` onto `words`
+appendWords: function {words: List String line: StringView} is {
+    for each w: (line.split sep: " ") loop {
+        if w.length > 0 then words.append w.string
+    }
+}
+
+# prismWords -- the quoted words of `var <name> = [ ... ];` in the prism
+# grammar, sorted
+prismWords: function {text: StringView name: StringView} out List String is {
+    words: List String
+    open: "var \{name} = ["
+    at: (text.indexOf open).or d: text.length
+    if at == text.length then return words
+    rest: text.substring from: at + open.length to: text.length
+    close: (rest.indexOf "];").or d: rest.length
+    body: rest.substring from: 0 to: close
+    i: u64
+    for i < body.length loop {
+        if ((body.byteAt :i).or d: 0) == 0c' then {
+            e: i + 1
+            for e < body.length while ((body.byteAt i: e).or d: 0) != 0c' loop e = e + 1
+            words.append (body.substring from: i + 1 to: e).string
+            i = e + 1
+        } else i = i + 1
+    }
+    return (sortedSet names: words)
+}
+
+# rougeWords -- the words of the `%w( ... )` list after `def self.<name>` in
+# the rouge lexer, sorted
+rougeWords: function {text: StringView name: StringView} out List String is {
+    words: List String
+    listed: rougeList :text :name
+    for each l: listed.stringView.lines loop appendWords :words line: l
+    return (sortedSet names: words)
+}
+
+# rougeList -- the text of the first `%w( ... )` after `def self.<name>`, the
+# name a whole word; "" when there is none
+rougeList: function {text: StringView name: StringView} out String is {
+    def: "def self.\{name}"
+    pos: u64
+    for pos < text.length loop {
+        at: ((text.substring from: pos to: text.length).indexOf def).or d: text.length
+        if at == text.length then return "".string
+        after: pos + at + def.length
+        if (ascii.isWord b: ((text.byteAt i: after).or d: 0)).false then {
+            tail: text.substring from: after to: text.length
+            o: (tail.indexOf "%w(").or d: tail.length
+            if o == tail.length then return "".string
+            listed: tail.substring from: o + 3 to: tail.length
+            return (listed.substring from: 0 to: ((listed.indexOf ")").or d: listed.length)).string
+        }
+        pos = after
+    }
+    return "".string
+}
+
+# vimWords -- the words of every `syn match <group> /\<\%(a\|b\)\>/` line of
+# the nvim syntax file, sorted: the pattern without its `\<`, `\>` and `\%(`
+# and its closing `)`, split at `\|`, each word without its backslashes
+vimWords: function {text: StringView group: StringView} out List String is {
+    words: List String
+    head: "syn match \{group} /"
+    for each l: text.lines loop {
+        if (l.startsWith head).false then continue
+        if (l.endsWith "/").false then continue
+        if l.length <= (head.length + 1) then continue
+        p: l.substring from: head.length to: l.length - 1
+        s1: p.replace needle: "\\<" replacement: ""
+        s2: s1.stringView.replace needle: "\\>" replacement: ""
+        s3: s2.stringView.replace needle: "\\%(" replacement: ""
+        cut: s3.length
+        if s3.stringView.endsWith ")" then cut = cut - 1
+        v: s3.stringView.substring from: 0 to: cut
+        for each w: (v.split sep: "\\|") loop {
+            u: w.replace needle: "\\" replacement: ""
+            t: u.stringView.trim
+            if t.length > 0 then words.append t.string
+        }
+    }
+    return (sortedSet names: words)
+}

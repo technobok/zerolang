@@ -1,9 +1,9 @@
 /* cdead_probe.c -- C with dead items of every kind, on purpose. `make
-   cdead-guard` requires its reader to report exactly the items named
-   cdead_dead_*, and `make cc-unused-guard` requires gcc and clang to report
-   cdead_dead_fn, cdead_dead_str and cdead_dead_word_fn (and not the unused
-   local), before either trusts a count over the emitted C: a reader or a
-   compiler that stops seeing dead C cannot pass.
+   emitted-check` requires its reader (creach) to report exactly the items
+   named cdead_dead_*, gcc and clang to report the unused file-scope items
+   the expected subunit names (and not the unused local), and clang to report
+   the one unreachable statement, before it trusts a count over the emitted
+   C: a reader or a compiler that stops seeing dead C cannot pass.
    Everything named cdead_live_* is reached from main, some of it only through
    a path a rough reader misses. */
 /* configures a system header: live although the C never names it */
@@ -92,6 +92,13 @@ static int cdead_live_win(void) {
 }
 #endif
 
+/* a statement after a return: clang reports it unreachable, and the
+   emitted C may hold none */
+static int cdead_live_unreachable(int n) {
+    return n;
+    cdead_live_count = n;
+}
+
 static int cdead_live_add(cdead_live_t v) {
 #if defined(_WIN32)
     return v.n + cdead_live_win();
@@ -109,6 +116,6 @@ int main(void) {
     cdead_live_t v = {1};
     cdead_live_count = cdead_live_add(v);
 #endif
-    printf("%d\n", cdead_live_count + CDEAD_LIVE_ANON_0);
+    printf("%d\n", cdead_live_count + CDEAD_LIVE_ANON_0 + cdead_live_unreachable(0));
     return 0;
 }

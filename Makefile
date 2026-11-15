@@ -34,7 +34,7 @@ HOST_OSNAME  := linux
 endif
 # the gcc spelling of the discarded-qualifiers error; clang names it differently.
 QUALWERR := $(if $(findstring clang,$(shell $(CC) --version 2>/dev/null | head -1)),-Werror=incompatible-pointer-types-discards-qualifiers,-Werror=discarded-qualifiers)
-# The emitted C writes only what `main` reaches (make cdead-guard, cc-unused-guard):
+# The emitted C writes only what `main` reaches (make emitted-check):
 # an unused static function is an error. An unused local stays a warning: a
 # binding whose reads all fold is the source's matter (-Wall).
 CFLAGS_BASE := -std=c17 -Wall -Wextra -Werror=unused-function -Wno-unused-parameter \
@@ -113,16 +113,16 @@ SKIP     := mathutil genmath dissectlib
 EXAMPLES := $(wildcard examples/*.z)
 NAMES    := $(filter-out $(SKIP),$(basename $(notdir $(EXAMPLES))))
 
-.PHONY: all check complexity-report style-lint-fast style-lint test doc-check arch-check ci ci-gates gate-guards gate-same-c ci-corpus fuzz fuzz-ci fuzz-known \
+.PHONY: all check complexity-report style-lint-fast style-lint test doc-check arch-check emitted-check ci ci-gates gate-guards gate-same-c ci-corpus fuzz fuzz-ci fuzz-known \
 	test-math-arm64 test-sqlite-arm64 test-mingw test-tcc-mingw test-msvc-wine test-msvc-corpus ci-windows windows-guest windows-due test-math-noasm test-portable-scalars docs-link-guard math-asm-guard \
 	bench-math bench-math-kernels test-clang test-tcc test-tcc-heavy readable-check build \
 	tcc zc zl zls regen-goldens regen-fmt-goldens regen-matrix matrix-guard regen-constparity constparity-guard regen-math-asm \
 	fmt-raw-guard regen-lsp-goldens bump-seed test-bootstrap install docs warn-check pedantic-check perf \
 	perf-strict pre-push perf-elision any-guard typename-guard emitter-guard frontend-guard \
-	lifetime-guard user-native-guard shim-guard thread-tsan-guard cobj-guard sqlite-decls-guard case-guard require-guard mode-parity zlink-rules-guard \
-	refusal-guard static-tcc-guard zlink-guard emit-set ident-set const-row-guard \
-	deadcode-guard cdead-guard cc-unused-guard piece-guard static-value-guard alias-label-guard fwd-shape-guard eager-guard eager-lib-guard \
-	highlight-guard view-guard fallback-guard clean native-guard generic-param-guard \
+	lifetime-guard user-native-guard shim-guard thread-tsan-guard cobj-guard sqlite-decls-guard case-guard mode-parity zlink-rules-guard \
+	refusal-guard static-tcc-guard emit-set ident-set \
+	piece-guard \
+	view-guard fallback-guard clean native-guard generic-param-guard \
 	zl-full-guard
 
 # Keep the per-example .c intermediates.
@@ -179,9 +179,9 @@ style-lint: bin/zl
 	  bin/zl lint --full --src $$d --system lib/system $$d/*.z || exit 1; done
 	bin/zl format --check $(FMTSCOPE)
 
-# out/ztestrunner -- the corpus runner (src/ztestrunner.z, and src/zdocblocks.z
-# for the doccode kind).
-$(BUILDDIR)/ztestrunner: bin/zc src/ztestrunner.z src/zdocblocks.z src/zcc.z src/ztarget.z $(wildcard lib/system/*.z) $(wildcard lib/system/system/*.z lib/system/math/*.z)
+# out/ztestrunner -- the corpus runner (src/ztestrunner.z and its subunits under
+# src/ztestrunner/, and src/zdocblocks.z for the doccode kind).
+$(BUILDDIR)/ztestrunner: bin/zc src/ztestrunner.z $(wildcard src/ztestrunner/*.z) src/zdocblocks.z src/zcc.z src/ztarget.z $(wildcard lib/system/*.z) $(wildcard lib/system/system/*.z lib/system/math/*.z)
 	@mkdir -p $(BUILDDIR)
 	bin/zc ztestrunner --src src --system lib/system --emit-c $(BUILDDIR)/ztestrunner.c
 	$(CC) $(CFLAGS) $(MAINSTACK) -o $(BUILDDIR)/ztestrunner $(BUILDDIR)/ztestrunner.c $(call ZLINKOF,$(BUILDDIR)/ztestrunner.c) -lm
@@ -197,13 +197,26 @@ test: bin/zc bin/zl bin/zls $(BUILDDIR)/ztestrunner
 # laid out as zl fmt lays it, with check=none and unformatted blocks ratcheted in
 # tests/fixtures/doccode_baseline.txt. `make test` runs it too.
 doc-check: bin/zc bin/zl $(BUILDDIR)/ztestrunner
-	$(BUILDDIR)/ztestrunner --zc bin/zc --cc $(CC) --root . --jobs $(NPROC) --doccode-only
+	$(BUILDDIR)/ztestrunner --zc bin/zc --cc $(CC) --root . --jobs $(NPROC) --only doccode
 
 # arch-check -- the arch kind alone: `zl lint --full --arch --counts` over the
 # compiler and front-end units against tests/fixtures/arch_baseline.txt, in
 # seconds. `make test` runs it too.
 arch-check: bin/zc bin/zl $(BUILDDIR)/ztestrunner
-	$(BUILDDIR)/ztestrunner --zc bin/zc --cc $(CC) --root . --jobs $(NPROC) --arch-only
+	$(BUILDDIR)/ztestrunner --zc bin/zc --cc $(CC) --root . --jobs $(NPROC) --only arch
+
+# emitted-check -- the emitted kind alone (src/ztestrunner/emitted.z): every
+# example and corpus program is emitted once for each variant a check reads,
+# in parallel, and the checks read that C: no unused file-scope item and no
+# undeclared call under gcc, clang and mingw-w64 in each configuration the C
+# branches on, no unreachable statement under clang, no top-level C item
+# unreached from main (creach), no type both untagged and forward-declared, no
+# mono labelled by an alias, C that compiles under --eager (programs, user
+# units, lib/system, src), and the programs that declare a link library or
+# that --cc tcc refuses, per system, at their baselines. The baselines and the
+# known-bad lists are src/ztestrunner/expected.z's.
+emitted-check: bin/zc bin/zl $(BUILDDIR)/ztestrunner
+	$(BUILDDIR)/ztestrunner --zc bin/zc --cc $(CC) --root . --jobs $(NPROC) --only emitted
 
 # natives-show-guard -- `zc natives show` names where each thing it shows is
 # written: each row `zc emit --mark-natives` marks in a program's C, shown, is
@@ -260,7 +273,7 @@ prelude-share-guard: bin/zc
 # them, the same C. (bin/zc is rebuilt when a nativec.zd changes, so the rows
 # it carries are the files' as they stand.)
 nativec-agree-guard: bin/zc $(BUILDDIR)/ztestrunner
-	$(BUILDDIR)/ztestrunner --zc bin/zc --cc $(CC) --root . --jobs $(NPROC) --agree-only
+	$(BUILDDIR)/ztestrunner --zc bin/zc --cc $(CC) --root . --jobs $(NPROC) --only agree
 
 # ci -- every gate: the allocation ratchet first and alone, then the guards and
 # the heavy corpus (self-host ASan and the fixpoint) in parallel, then the seed
@@ -278,12 +291,10 @@ ci:
 # GATE_GUARDS -- the legs of ci-gates the per-batch gate runs, in parallel and to
 # the end (`make -k -j gate-guards`). The gate runs check, test, perf-strict and
 # the clang and tcc corpora itself.
-GATE_GUARDS := style-lint zl-full-guard warn-check pedantic-check emitter-guard typename-guard \
-	frontend-guard lifetime-guard native-guard alias-label-guard fwd-shape-guard \
-	generic-param-guard const-row-guard view-guard fallback-guard highlight-guard any-guard \
-	deadcode-guard cdead-guard cc-unused-guard piece-guard static-value-guard eager-guard \
-	eager-lib-guard case-guard user-native-guard shim-guard thread-tsan-guard cobj-guard \
-	sqlite-decls-guard zlink-guard zlink-rules-guard require-guard static-tcc-guard \
+GATE_GUARDS := style-lint zl-full-guard warn-check pedantic-check emitter-guard \
+	typename-guard frontend-guard lifetime-guard native-guard generic-param-guard view-guard \
+	fallback-guard any-guard emitted-check piece-guard case-guard user-native-guard shim-guard \
+	thread-tsan-guard cobj-guard sqlite-decls-guard zlink-rules-guard static-tcc-guard \
 	refusal-guard fmt-raw-guard nativec-agree-guard natives-show-guard prelude-share-guard \
 	math-asm-guard matrix-guard constparity-guard test-math-noasm test-portable-scalars \
 	test-msvc-wine docs-link-guard
@@ -402,7 +413,7 @@ test-mingw: bin/zc $(BUILDDIR)/ztestrunner $(BUILDDIR)/wineprefix/.ready
 	  echo "test-mingw: skipped ($(MINGW_CC) cannot target the UCRT: $(MINGW_UCRT_FIX); see tools/windows/README.md)"; exit 0; fi; \
 	$(WINE_SERVER_UP); \
 	$(WINE_ENV) $(BUILDDIR)/ztestrunner --zc bin/zc --cc $(MINGW_CC) --ccflags "$(MINGW_CFLAGS)" --target x86_64-w64-mingw32 \
-	   --exec wine --run-only --root . --jobs $(NPROC) > $(BUILDDIR)/mingw-run.log 2>&1; \
+	   --exec wine --only run --root . --jobs $(NPROC) > $(BUILDDIR)/mingw-run.log 2>&1; \
 	awk '/^FAIL/ || /^SKIP\(run\) .* \(posix\)$$/ { k = $$1; sub(/^FAIL\(/, "", k); sub(/\)$$/, "", k); \
 	       print $$2, (NF >= 3 ? $$3 : "(" k ")") }' $(BUILDDIR)/mingw-run.log \
 	  | sort > $(BUILDDIR)/mingw-fails.txt; \
@@ -432,7 +443,7 @@ test-tcc-mingw: bin/zc $(BUILDDIR)/ztestrunner $(BUILDDIR)/wineprefix/.ready
 	$(WINE_SERVER_UP); \
 	$(WINE_ENV) $(BUILDDIR)/ztestrunner --zc bin/zc --cc $(BUILDDIR)/x86_64-win32-tcc --cc-forward \
 	   --ccflags "-B $(TCCW_LIB)" --target x86_64-w64-mingw32 \
-	   --exec wine --run-only --root . --jobs $(NPROC) > $(BUILDDIR)/tcc-mingw-run.log 2>&1; \
+	   --exec wine --only run --root . --jobs $(NPROC) > $(BUILDDIR)/tcc-mingw-run.log 2>&1; \
 	awk '/^FAIL/ || /^SKIP\(run\) .* \(posix\)$$/ { k = $$1; sub(/^FAIL\(/, "", k); sub(/\)$$/, "", k); \
 	       print $$2, (NF >= 3 ? $$3 : "(" k ")") }' $(BUILDDIR)/tcc-mingw-run.log \
 	  | sort > $(BUILDDIR)/tcc-mingw-fails.txt; \
@@ -500,7 +511,7 @@ test-msvc-corpus: bin/zc $(BUILDDIR)/ztestrunner $(BUILDDIR)/wineprefix/.ready
 	elif [ -z "$(MSVC_WINE)" ] || [ ! -x "$(MSVC_WINE)/cl" ] || ! command -v wine > /dev/null 2>&1; then \
 	  echo "test-msvc-corpus: skipped (needs wine and MSVC_WINE=<dir>/msvc/bin/x64 from tools/windows/msvc-wine.sh; see tools/windows/README.md)"; exit 0; fi; \
 	[ -n "$(WINDOWS_HOST)" ] || $(WINE_SERVER_UP); \
-	$(MSVC_CORPUS_RUN) --run-only --root . --jobs $(NPROC) > $(BUILDDIR)/msvc-run.log 2>&1; \
+	$(MSVC_CORPUS_RUN) --only run --root . --jobs $(NPROC) > $(BUILDDIR)/msvc-run.log 2>&1; \
 	awk '/^FAIL/ || /^SKIP\(run\) .* \(posix\)$$/ { k = $$1; sub(/^FAIL\(/, "", k); sub(/\)$$/, "", k); \
 	       print $$2, (NF >= 3 ? $$3 : "(" k ")") }' $(BUILDDIR)/msvc-run.log \
 	  | sort > $(BUILDDIR)/msvc-fails.txt; \
@@ -540,7 +551,7 @@ ci-windows: bin/zc $(BUILDDIR)/ztestrunner $(BUILDDIR)/wineprefix/.ready
 	rm -rf $(WINDOWS_DIR); mkdir -p $(WINDOWS_DIR); \
 	$(WINE_SERVER_UP); \
 	$(WINE_ENV) $(BUILDDIR)/ztestrunner --zc bin/zc --cc $(MINGW_CC) --ccflags "$(MINGW_CFLAGS)" --target x86_64-w64-mingw32 \
-	   --exec wine --run-only --root . --jobs $(NPROC) --save-temps --tmp $(abspath $(WINDOWS_DIR))/build \
+	   --exec wine --only run --root . --jobs $(NPROC) --save-temps --tmp $(abspath $(WINDOWS_DIR))/build \
 	   > $(WINDOWS_DIR)/build.log 2>&1; \
 	dest=/c/zl/run/$$(date +%Y%m%d-%H%M%S)-$(BUILDID); \
 	$(WINDOWS_SSH_CMD) "mkdir -p $$dest" || { echo "ci-windows FAIL: cannot create $$dest on $(WINDOWS_SSH)"; exit 1; }; \
@@ -762,7 +773,7 @@ test-ub:
 	@echo "test-ub: skipped (Linux only: UCRT64 gcc has no UBSan runtime; the Linux run covers the same C)"
 else
 test-ub: bin/zc bin/zl $(BUILDDIR)/ztestrunner
-	@$(BUILDDIR)/ztestrunner --zc bin/zc --cc gcc --ccflags "$(UB_FLAGS)" --run-only --root . \
+	@$(BUILDDIR)/ztestrunner --zc bin/zc --cc gcc --ccflags "$(UB_FLAGS)" --only run --root . \
 	   --jobs $(NPROC) > $(BUILDDIR)/ub.log 2>&1 \
 	  || { grep -E '^FAIL|runtime error' $(BUILDDIR)/ub.log | head -20; \
 	       echo "test-ub FAIL: a run case reached C's undefined behaviour (UBSan; full log $(BUILDDIR)/ub.log)"; exit 1; }; \
@@ -778,7 +789,7 @@ endif
 # of the largest emitted program.
 test-o2: bin/zc bin/zl $(BUILDDIR)/ztestrunner
 	@command -v clang >/dev/null 2>&1 || { echo "test-o2: clang not installed, skipped"; exit 0; }; \
-	$(BUILDDIR)/ztestrunner --zc bin/zc --cc clang --ccflags "-O2" --run-only --root . \
+	$(BUILDDIR)/ztestrunner --zc bin/zc --cc clang --ccflags "-O2" --only run --root . \
 	   --jobs $(NPROC) > $(BUILDDIR)/o2-clang.log 2>&1 \
 	  || { grep -E '^FAIL' $(BUILDDIR)/o2-clang.log | head -20; \
 	       echo "test-o2 FAIL: a run case differs at -O2 under clang (full log $(BUILDDIR)/o2-clang.log)"; exit 1; }; \
@@ -1861,33 +1872,6 @@ case-guard:
 	if [ $$dup -ne 0 ]; then exit 1; fi; \
 	echo "case-guard OK: every program declaring main is in a case list, and no list names one twice"
 
-# require-guard -- how many programs are refused under --cc tcc, for a Linux and
-# a Windows target whatever the host: a unit's toolchain needs speak only for
-# programs that reach it. zlink-guard is the other half. Windows refuses one
-# more, fold_guarded_f128, whose f128 arm only a Windows build reaches.
-REQUIRE_TCC_BASELINE := 8
-REQUIRE_TCC_BASELINE_WINDOWS := 9
-
-require-guard: bin/zc
-	@fail=0; \
-	for tb in x86_64-linux-gnu:$(REQUIRE_TCC_BASELINE) x86_64-w64-mingw32:$(REQUIRE_TCC_BASELINE_WINDOWS); do \
-	  t=$${tb%%:*}; base=$${tb#*:}; n=0; rep=""; \
-	  for f in examples/*.z tests/fixtures/emitc_corpus/*.z; do \
-	    b=$$(basename $$f .z); \
-	    if bin/zc emit $$f --system lib/system --cc tcc --target $$t -o /dev/null 2>&1 | grep -qE 'error\[E0601\]|from the C compiler, and tcc has none'; then \
-	      n=$$(($$n + 1)); rep="$$rep  $$b\n"; \
-	    fi; \
-	  done; \
-	  if [ "$$n" -ne "$$base" ]; then \
-	    echo "require-guard FAIL: $$n program(s) rejected under --cc tcc for $$t (baseline $$base)"; \
-	    printf "$$rep"; \
-	    echo "  a unit's needs speak only for a program that REACHES it."; \
-	    fail=1; \
-	  fi; \
-	done; \
-	if [ $$fail -ne 0 ]; then exit 1; fi; \
-	echo "require-guard OK: programs rejected under --cc tcc: $(REQUIRE_TCC_BASELINE) for Linux, $(REQUIRE_TCC_BASELINE_WINDOWS) for Windows (the baselines)"
-
 # mode-parity -- --cc-mode inproc builds the same PROGRAM as spawn: every run case
 # is built both ways and its output and exit code compared (never the bytes).
 # Refusals must match too. Only zc's temp-path pid is normalised. Each program
@@ -2052,32 +2036,6 @@ static-tcc-guard: bin/zc bin/zl bin/zls
 	fi; \
 	echo "static-tcc-guard OK: no libtcc symbols in the driver binaries"
 
-# zlink-guard -- how many programs declare a link library, for a Linux and a
-# Windows target whatever the host: a unit's library goes to the programs that
-# reach it and no others. The sets differ by system -- pthread for sync and
-# thread on Linux; advapi32 and shell32 for os, ws2_32 for net on Windows.
-ZLINK_BASELINE := 33
-ZLINK_BASELINE_WINDOWS := 40
-
-zlink-guard: bin/zc
-	@fail=0; \
-	for tb in x86_64-linux-gnu:$(ZLINK_BASELINE) x86_64-w64-mingw32:$(ZLINK_BASELINE_WINDOWS); do \
-	  t=$${tb%%:*}; base=$${tb#*:}; n=0; rep=""; \
-	  for f in examples/*.z tests/fixtures/emitc_corpus/*.z; do \
-	    b=$$(basename $$f .z); \
-	    l=$$(bin/zc emit $$f --system lib/system --target $$t 2>/dev/null \
-	          | $(ZLINKSED)); \
-	    if [ -n "$$l" ]; then n=$$(($$n + 1)); rep="$$rep  $$b: $$l\n"; fi; \
-	  done; \
-	  if [ "$$n" -ne "$$base" ]; then \
-	    echo "zlink-guard FAIL: $$n program(s) declare a link library for $$t (baseline $$base)"; \
-	    printf "$$rep"; \
-	    fail=1; \
-	  fi; \
-	done; \
-	if [ $$fail -ne 0 ]; then exit 1; fi; \
-	echo "zlink-guard OK: programs declaring a link library: $(ZLINK_BASELINE) for Linux, $(ZLINK_BASELINE_WINDOWS) for Windows (the baselines)"
-
 # emit-set / ident-set -- the byte-identity oracle for refactors. `make emit-set
 # OUT=dir [ZC=...]` emits every example, corpus program and driver; `make
 # ident-set A=dir B=dir` diffs two sets with every minted id normalised away.
@@ -2113,389 +2071,6 @@ ident-set:
 	  sed 's/^/  /' "$$rep" | head -60; rm -rf "$$na" "$$nb" "$$rep"; exit 1; \
 	fi
 
-# const-row-guard -- a nativec row with a `constant` position is chosen exactly when its operand
-# is a compile-time constant: const_divide_form divides by a variable four times,
-# and each of those must call the helper that checks the divisor; its constant
-# divisors divide inline.
-CONST_ROW_VARIABLE := 4
-
-const-row-guard: bin/zc
-	@d=$$(mktemp -d); em=$$d/emitted.c; \
-	bin/zc emit tests/fixtures/emitc_corpus/const_divide_form.z -o $$em || { \
-	  echo "const-row-guard FAIL: const_divide_form did not emit"; rm -rf $$d; exit 1; }; \
-	n=$$(grep -v '^static' $$em | grep -oE 'z_(div|rem)_[a-z0-9]+\(' | wc -l); rm -rf $$d; \
-	if [ "$$n" -ne $(CONST_ROW_VARIABLE) ]; then \
-	  echo "const-row-guard FAIL: $$n divisor-checking calls, expected $(CONST_ROW_VARIABLE)"; \
-	  echo "  More means a constant divisor stopped selecting the const= row."; \
-	  echo "  Fewer means a variable divisor selected it, and that division is"; \
-	  echo "  no longer checked for zero."; \
-	  exit 1; \
-	fi; \
-	echo "const-row-guard OK: $$n variable divisors checked, the constant ones divide inline"
-
-# deadcode-guard -- no emitted statement is unreachable (clang's
-# -Wunreachable-code; gcc never warns). Skipped without clang.
-DEADCODE_BASELINE := 0
-
-deadcode-guard: bin/zc
-	@command -v clang >/dev/null 2>&1 || { echo "deadcode-guard SKIP: clang not installed"; exit 0; }; \
-	d=$$(mktemp -d); n=0; rep=""; \
-	for f in examples/*.z tests/fixtures/emitc_corpus/*.z; do \
-	  b=$$(basename $$f .z); \
-	  bin/zc emit $$f -o $$d/$$b.c 2>/dev/null || continue; \
-	  c=$$(clang -fsyntax-only -std=c17 -Wunreachable-code -Wunreachable-code-break \
-	       -Wunreachable-code-return $$d/$$b.c 2>&1 | grep -c 'unreachable-code'); \
-	  n=$$(($$n + $$c)); \
-	  if [ "$$c" -gt 0 ]; then rep="$$rep  $$b: $$c\n"; fi; \
-	done; \
-	rm -rf $$d; \
-	if [ "$$n" -gt "$(DEADCODE_BASELINE)" ]; then \
-	  echo "deadcode-guard FAIL: $$n unreachable statements (baseline $(DEADCODE_BASELINE))"; \
-	  printf "$$rep"; \
-	  echo "  A site appended after a diverged block. See blockDiverges in the zemitterc unit."; \
-	  exit 1; \
-	elif [ "$$n" -lt "$(DEADCODE_BASELINE)" ]; then \
-	  echo "deadcode-guard: $$n < baseline $(DEADCODE_BASELINE) -- lower DEADCODE_BASELINE here"; \
-	else \
-	  echo "deadcode-guard OK: $$n unreachable statements (baseline $(DEADCODE_BASELINE))"; \
-	fi
-
-# cdead-guard -- every top-level C item the emitter writes is reached from
-# `main`. No C compiler reports an unused type, macro or static inline function,
-# or a function only an unused one calls, so the C is read here: the C of each
-# corpus program and of zc itself, once for each preprocessor configuration the
-# C branches on (C17 and C23, the portable integer and float code with and
-# without __float128, clang, tcc, MSVC, MinGW). Each top-level item -- function,
-# prototype, type, enumerator, static, macro -- is owned by the names it defines
-# and reaches every name it mentions. `main`, a name an #if tests and a #define
-# that configures a system header are the roots. An item no configuration reaches is dead, and an item
-# the reader cannot name fails the guard. tests/c/cdead_probe.c holds dead items
-# of every kind, and live ones only a careless reader misses: the reader must
-# report exactly CDEAD_PROBE there before its count is trusted. The baseline is
-# the dead items the emitter writes today (corpus, then zc); lower it as it falls.
-CDEAD_BASELINE := 0 0
-CDEAD_PROBE := cdead_dead_ext_t cdead_dead_fn cdead_dead_fn_ft cdead_dead_inline cdead_dead_leaf \
-	cdead_dead_macro cdead_dead_proto_t cdead_dead_str cdead_dead_t cdead_dead_vtable_t \
-	cdead_dead_word_fn
-
-define CDEAD_GUARD_PY
-import re, subprocess, sys
-from collections import defaultdict
-# the preprocessor configurations the emitted C branches on; reach is their union
-CONFIGS = [
-    ['-std=c17'],
-    ['-std=c23'],
-    ['-std=c17', '-DZ_WORD_PORTABLE', '-DZ_INT128_PORTABLE', '-DZ_F16_PORTABLE',
-     '-U__SIZEOF_FLOAT128__', '-U__SIZEOF_INT128__', '-U__FLT16_MANT_DIG__'],
-    # make test-portable-scalars: the struct forms beside the compiler's __float128
-    ['-std=c17', '-DZ_INT128_PORTABLE', '-DZ_F16_PORTABLE'],
-    ['-std=c17', '-D__clang__'],
-    ['-undef', '-D__TINYC__', '-D__linux__', '-D__x86_64__', '-D__STDC_VERSION__=201112L'],
-    ['-undef', '-D_WIN32', '-D_WIN64', '-D_MSC_VER=1940', '-D_M_X64', '-D__STDC_VERSION__=201710L'],
-    ['-std=c17', '-U__linux__', '-U__linux', '-Ulinux', '-U__unix__', '-U__unix', '-Uunix',
-     '-D_WIN32', '-D_WIN64'],
-]
-SENT = 'int cdead_sentinel_;'
-# a name, but not a member after `.` or `->`
-ID = re.compile(r'(?<![.\w>])(?<!->)[A-Za-z_]\w*')
-ATTR = re.compile(r'\b(__attribute__|__declspec)\s*\(')
-
-def pre(text, flags):
-    """the file's own text for one configuration: conditionals resolved, macros
-    kept, system headers not read"""
-    src = SENT + '\n' + re.sub(r'(?m)^\s*#\s*include\b.*$$', '', text)
-    out = subprocess.run(['gcc', '-E', '-P', '-fdirectives-only', '-nostdinc', *flags, '-x', 'c', '-'],
-                         input=src, capture_output=True, text=True).stdout
-    return out.split(SENT, 1)[1]
-
-def strip(t):
-    # one pass, left to right: a `//` or `/*` inside a literal is the
-    # literal's, and a quote inside a comment is the comment's
-    t = re.sub(r'\\\n', ' ', t)
-    def one(m):
-        s = m.group(0)
-        if s.startswith('"'): return '""'
-        if s.startswith("'"): return '0'
-        return ' '
-    return re.sub(r'"(?:\\.|[^"\\\n])*"|\'(?:\\.|[^\'\\\n])*\'|/\*.*?\*/|//[^\n]*', one, t, flags=re.S)
-
-def unattr(t):
-    while True:
-        m = ATTR.search(t)
-        if not m: return t
-        i, d = m.end(), 1
-        while d and i < len(t):
-            d += {'(': 1, ')': -1}.get(t[i], 0); i += 1
-        t = t[:m.start()] + ' ' + t[i:]
-
-def chunks(text):
-    """the top-level items, one string each: a directive, or the lines up to a
-    `;` or `}` at brace depth 0"""
-    out, cur, depth = [], [], 0
-    for line in text.split('\n'):
-        s = line.strip()
-        if not s: continue
-        if depth == 0 and not cur and s.startswith('#'):
-            out.append(s); continue
-        cur.append(s); depth += s.count('{') - s.count('}')
-        if depth == 0 and s.endswith((';', '}')):
-            out.append(' '.join(cur)); cur = []
-    if cur: out.append(' '.join(cur))
-    return out
-
-def top_paren(head):
-    d = 0
-    for i, c in enumerate(head):
-        if c == '(' and d == 0: return i
-        d += {'(': 1, ')': -1, '[': 1, ']': -1}.get(c, 0)
-    return -1
-
-def enumerators(body):
-    inner = body[1:body.find('}')]
-    return [m.group(1) for m in re.finditer(r'(?:^|,)\s*(\w+)\s*(?:=[^,]*)?(?=,|$$)', inner)]
-
-def classify(ch):
-    """(kind, names) for one top-level item; no names when it defines none"""
-    if ch.startswith('#'):
-        m = re.match(r'#\s*define\s+(\w+)', ch)
-        return ('macro', [m.group(1)]) if m else (None, [])
-    # `__extension__` only quiets -pedantic: the item is what follows it
-    t = re.sub(r'^(__extension__\s+)+', '', unattr(ch))
-    if re.match(r'(_Static_assert|static_assert)\b', t): return (None, [])
-    b = t.find('{')
-    head = t if b < 0 else t[:b]
-    if re.match(r'typedef\b', t):
-        m = re.search(r'\(\s*(?:\w+\s+)?\*\s*(\w+)\s*\)\s*\(', t) if b < 0 else None
-        names = [m.group(1)] if m else []
-        if not m:
-            tail = re.sub(r'\[[^\]]*\]', '', t[t.rfind('}') + 1:] if b >= 0 else t)
-            ids = ID.findall(tail.rstrip(' ;'))
-            if ids: names.append(ids[-1])
-        tm = re.match(r'typedef\s+(?:const\s+)?(?:struct|union|enum)\s+(\w+)', t)
-        if tm and b >= 0 and tm.group(1) not in names: names.append(tm.group(1))
-        if re.match(r'typedef\s+enum\b', t) and b >= 0: names += enumerators(t[b:])
-        return ('type', names)
-    # an anonymous enum is one item, owned by every constant it declares
-    if re.match(r'enum\s*\{', t) and b >= 0:
-        return ('type', enumerators(t[b:]))
-    m = re.match(r'(?:(?:static|const|volatile|extern|inline)\s+)*(struct|union|enum)\s+(\w+)\s*([{;])', t)
-    if m and (m.group(3) == ';' or t.endswith('};') and not re.search(r'\}\s*\w+\s*(\[[^\]]*\])?\s*(=|;)', t)):
-        names = [m.group(2)]
-        if m.group(1) == 'enum' and b >= 0: names += enumerators(t[b:])
-        return ('type', names)
-    p = top_paren(head)
-    eq = head.find('=')
-    if p > 0 and (eq < 0 or eq > p):
-        ids = ID.findall(head[:p])
-        if ids and not re.match(r'(if|while|for|switch|return|sizeof)$$', ids[-1]):
-            return ('fn', [ids[-1]])
-    cut = len(t)
-    for c in ('=', ';'):
-        i = t.find(c)
-        if 0 <= i < cut: cut = i
-    ids = ID.findall(re.sub(r'\[[^\]]*\]', '', t[:cut]))
-    return ('var', [ids[-1]]) if ids else (None, [])
-
-def raw_roots(raw):
-    """the names the preprocessor itself consumes: those an #if tests, and each
-    #define directly ahead of an #include (it configures a system header)"""
-    roots, pending = set(), set()
-    for line in strip(raw).split('\n'):
-        s = line.strip()
-        if not s: continue
-        m = re.match(r'#\s*(if|ifdef|ifndef|elif)\b(.*)', s)
-        if m: roots |= set(ID.findall(m.group(2))); continue
-        m = re.match(r'#\s*define\s+(\w+)', s)
-        if m: pending.add(m.group(1)); continue
-        if re.match(r'#\s*include\b', s): roots |= pending
-        if not re.match(r'#\s*(else|endif)\b', s): pending = set()
-    return roots
-
-def analyse(path):
-    """the dead items of one file, {first name: kind}, and the items it could
-    not name"""
-    raw = open(path, errors='replace').read()
-    reached, groups, unowned = set(), {}, []
-    roots = raw_roots(raw) | {'main'}
-    for flags in CONFIGS:
-        own = defaultdict(set)
-        for ch in chunks(strip(pre(raw, flags))):
-            kind, names = classify(ch)
-            if not names:
-                if not re.match(r'#\s*(undef|pragma)|(_Static_assert|static_assert)\b', ch):
-                    unowned.append(ch[:80])
-                continue
-            refs = set(ID.findall(ch if ch.startswith('#') else unattr(ch))) - set(names)
-            for n in names: own[n] |= refs
-            groups.setdefault(names[0], [kind, set()])[1].update(names)
-        seen, todo = set(), set(roots)
-        while todo:
-            n = todo.pop()
-            if n in seen: continue
-            seen.add(n)
-            todo |= own.get(n, set()) - seen
-        reached |= seen
-    # an item (a prototype and its definition are one) is dead when no
-    # configuration reaches any name it defines
-    return {p: k for p, (k, ns) in groups.items() if not (ns & reached)}, sorted(set(unowned))
-
-listing = sys.argv[1] == '--list'
-tot = defaultdict(int); uo = 0
-for p in sys.argv[2 if listing else 1:]:
-    items, unowned = analyse(p)
-    uo += len(unowned)
-    for n, k in sorted(items.items()):
-        tot[k] += 1
-        if listing: print('DEAD %s %s' % (k, n))
-    for u in unowned: print('UNOWNED %s: %s' % (p.rsplit('/', 1)[-1], u))
-print('KINDS', ' '.join('%s=%d' % kv for kv in sorted(tot.items())))
-print('TOTAL', sum(tot.values()), uo)
-endef
-export CDEAD_GUARD_PY
-
-# GUARD_EMIT_C -- write the C of every corpus program into $$d, and zc's own C
-# into $$d/zc/zc.c, for the guards that read emitted C. A program that does not
-# emit is left out: the corpus runner reports it.
-GUARD_EMIT_C = mkdir -p $$d/zc; \
-	for f in examples/*.z tests/fixtures/emitc_corpus/*.z; do \
-	  b=$$(basename $$f .z); bin/zc emit $$f -o $$d/$$b.c 2>/dev/null || rm -f $$d/$$b.c; \
-	done; \
-	bin/zc zc --src src --system lib/system $(ZCHASH) --emit-c $$d/zc/zc.c >/dev/null
-
-cdead-guard: bin/zc
-	@d=$$(mktemp -d); \
-	got=$$(python3 -c "$$CDEAD_GUARD_PY" --list tests/c/cdead_probe.c | sed -n 's/^DEAD [a-z]* //p' | tr '\n' ' '); \
-	if [ "$$got" != "$$(echo $(CDEAD_PROBE)) " ]; then \
-	  echo "cdead-guard FAIL: the reader does not see tests/c/cdead_probe.c's dead items"; \
-	  echo "  want: $(CDEAD_PROBE)"; echo "  got:  $$got"; rm -rf $$d; exit 1; \
-	fi; \
-	$(GUARD_EMIT_C); \
-	ls $$d/*.c | xargs -P $(NPROC) -n 40 python3 -c "$$CDEAD_GUARD_PY" > $$d/report; \
-	python3 -c "$$CDEAD_GUARD_PY" $$d/zc/zc.c > $$d/zcreport; \
-	n=$$(awk '/^TOTAL/ {s += $$2} END {print s}' $$d/report); z=$$(awk '/^TOTAL/ {print $$2}' $$d/zcreport); \
-	u=$$(cat $$d/report $$d/zcreport | awk '/^TOTAL/ {s += $$3} END {print s}'); \
-	kinds=$$(cat $$d/report $$d/zcreport | tr ' ' '\n' | grep = | awk -F= '{a[$$1] += $$2} END {for (k in a) printf " %s=%d", k, a[k]}'); \
-	set -- $(CDEAD_BASELINE); \
-	if [ "$$u" -gt 0 ]; then \
-	  echo "cdead-guard FAIL: $$u top-level C items the reader cannot name"; grep '^UNOWNED' $$d/report $$d/zcreport | head -20; \
-	  rm -rf $$d; exit 1; \
-	elif [ "$$n" -gt "$$1" ] || [ "$$z" -gt "$$2" ]; then \
-	  echo "cdead-guard FAIL: $$n dead C items in the corpus, $$z in zc (baseline $(CDEAD_BASELINE));$$kinds"; \
-	  echo "  A C item written that main does not reach: see emitC in the zemitterc unit."; \
-	  rm -rf $$d; exit 1; \
-	elif [ "$$n" -lt "$$1" ] || [ "$$z" -lt "$$2" ]; then \
-	  echo "cdead-guard: $$n $$z < baseline $(CDEAD_BASELINE) -- lower CDEAD_BASELINE here"; \
-	else \
-	  echo "cdead-guard OK: $$n dead C items in the corpus, $$z in zc (baseline $(CDEAD_BASELINE));$$kinds"; \
-	fi; \
-	rm -rf $$d
-
-# cc-unused-guard -- gcc and clang find no unused file-scope item in the
-# emitted C: the C of each corpus program and of zc itself is compiled in each
-# configuration the C branches on that this host can run (default, the portable
-# integers and float, the portable word) with -Wunused-function
-# -Wunused-variable -Wunused-const-variable, and the warnings on FILE-SCOPE
-# items counted -- static functions and variables; a local, an indented line,
-# is not (CC_UNUSED_PY). An undeclared function is an error
-# (-Werror=implicit-function-declaration), so C conditioned on a narrower test
-# than its callers fails as surely as C conditioned on a wider one stays
-# unused. Both compilers must first report exactly CC_UNUSED_PROBE_<cc> in
-# tests/c/cdead_probe.c across the configurations (its unused local not among
-# them) and an error for a call to an undeclared function, so a compiler, a
-# configuration or a filter that stops seeing them cannot pass. The baseline is
-# today's count summed over the configurations (gcc corpus, gcc zc, clang
-# corpus, clang zc, mingw-w64 corpus, mingw-w64 zc -- the Windows branches);
-# lower it as it falls. Skipped without clang; mingw-w64's pair is not measured
-# without it ("-").
-CC_UNUSED_BASELINE := 0 0 0 0 0 0
-CC_UNUSED_FLAGS := -std=c17 -c -o /dev/null -Wunused-function -Wunused-variable -Wunused-const-variable \
-	-Werror=implicit-function-declaration
-CC_UNUSED_PROBE_gcc := cdead_dead_fn cdead_dead_str cdead_dead_word_fn
-# clang also reports an unused static inline function (gcc never does)
-CC_UNUSED_PROBE_clang := cdead_dead_fn cdead_dead_inline cdead_dead_str cdead_dead_word_fn
-CC_UNUSED_PROBE_mingw := $(CC_UNUSED_PROBE_gcc)
-# the compilers: mingw-w64 compiles the same C for Windows
-CC_UNUSED_CCS = gcc clang $(if $(shell command -v $(MINGW_CC) 2>/dev/null),mingw)
-CC_UNUSED_CMD = $(if $(filter mingw,$(1)),$(MINGW_CC) $(MINGW_CFLAGS),$(1))
-
-define CC_UNUSED_PY
-import re, sys
-# the file-scope unused warnings, and the errors, a compiler wrote on stdin for
-# the file argv[1]; --list names each
-path = sys.argv[1]; listing = '--list' in sys.argv
-src = open(path, errors='replace').read().split('\n')
-n = 0; errs = 0
-for ln in sys.stdin:
-    if ': error:' in ln:
-        errs += 1
-        if listing: print('ERROR ' + ln.strip())
-        continue
-    m = re.match(r'(.*?):(\d+):\d+: warning: (.*)\[-Wunused-(function|variable|const-variable)=?\]', ln)
-    if not m or m.group(1) != path: continue
-    no = int(m.group(2))
-    text = src[no - 1] if no <= len(src) else ''
-    if m.group(4) == 'variable' and text[:1] in (' ', '\t'): continue
-    n += 1
-    if listing:
-        nm = re.search(r"['‘]([A-Za-z_]\w*)['’]", m.group(3))
-        print('UNUSED ' + (nm.group(1) if nm else '?'))
-print('COUNT %d %d' % (n, errs))
-endef
-export CC_UNUSED_PY
-
-# CC_UNUSED_CFGS -- the configurations, one per line of flags (the first empty)
-CC_UNUSED_CFGS = "" "-DZ_INT128_PORTABLE -DZ_F16_PORTABLE" "-DZ_WORD_PORTABLE"
-
-cc-unused-guard: bin/zc
-	@command -v clang >/dev/null 2>&1 || { echo "cc-unused-guard SKIP: clang not installed"; exit 0; }; \
-	d=$$(mktemp -d); \
-	printf 'int main(void) { return cdead_undeclared_fn(); }\n' > $$d/undeclared.c; \
-	for cc in $(CC_UNUSED_CCS); do \
-	  ccx="$$cc"; [ $$cc = mingw ] && ccx="$(MINGW_CC) $(MINGW_CFLAGS)"; \
-	  got=$$(for cfg in $(CC_UNUSED_CFGS); do \
-	    $$ccx $(CC_UNUSED_FLAGS) $$cfg tests/c/cdead_probe.c 2>&1 \
-	      | python3 -c "$$CC_UNUSED_PY" tests/c/cdead_probe.c --list; done \
-	    | sed -n 's/^UNUSED //p' | sort -u | tr '\n' ' '); \
-	  want="$(CC_UNUSED_PROBE_gcc) "; [ $$cc = clang ] && want="$(CC_UNUSED_PROBE_clang) "; \
-	  [ $$cc = mingw ] && want="$(CC_UNUSED_PROBE_mingw) "; \
-	  if [ "$$got" != "$$want" ]; then \
-	    echo "cc-unused-guard FAIL: $$cc does not report exactly tests/c/cdead_probe.c's file-scope dead items"; \
-	    echo "  want: $$want"; echo "  got:  $$got"; rm -rf $$d; exit 1; \
-	  fi; \
-	  e=$$($$ccx $(CC_UNUSED_FLAGS) $$d/undeclared.c 2>&1 | python3 -c "$$CC_UNUSED_PY" $$d/undeclared.c | awk '{print $$3}'); \
-	  if [ "$$e" = "0" ]; then \
-	    echo "cc-unused-guard FAIL: $$cc does not reject a call to an undeclared function"; rm -rf $$d; exit 1; \
-	  fi; \
-	done; \
-	$(GUARD_EMIT_C); \
-	got=""; errs=0; \
-	for cc in gcc clang mingw; do \
-	  case " $(CC_UNUSED_CCS) " in *" $$cc "*) ;; *) got="$$got - -"; continue;; esac; \
-	  ccx="$$cc"; [ $$cc = mingw ] && ccx="$(MINGW_CC) $(MINGW_CFLAGS)"; \
-	  c=0; z=0; \
-	  for cfg in $(CC_UNUSED_CFGS); do \
-	    ls $$d/*.c | grep -v '/undeclared.c$$' | xargs -P $(NPROC) -I{} sh -c "$$ccx $(CC_UNUSED_FLAGS) $$cfg {} 2>&1 | python3 -c \"\$$CC_UNUSED_PY\" {}" > $$d/count; \
-	    c=$$((c + $$(awk '{s += $$2} END {print s + 0}' $$d/count))); errs=$$((errs + $$(awk '{s += $$3} END {print s + 0}' $$d/count))); \
-	    $$ccx $(CC_UNUSED_FLAGS) $$cfg $$d/zc/zc.c 2>&1 | python3 -c "$$CC_UNUSED_PY" $$d/zc/zc.c > $$d/count; \
-	    z=$$((z + $$(awk '{print $$2}' $$d/count))); errs=$$((errs + $$(awk '{print $$3}' $$d/count))); \
-	  done; \
-	  got="$$got $$c $$z"; \
-	done; \
-	rm -rf $$d; \
-	if [ $$errs -ne 0 ]; then \
-	  echo "cc-unused-guard FAIL: $$errs compile error(s) in a configuration: C calls a function its test leaves out"; exit 1; \
-	fi; \
-	over=$$(echo "$$got / $(CC_UNUSED_BASELINE)" | awk '{n = (NF - 1) / 2; for (i = 1; i <= n; i++) if ($$i != "-" && $$i > $$(i + n + 1)) o = 1; print o + 0}'); \
-	same=$$(echo "$$got / $(CC_UNUSED_BASELINE)" | awk '{n = (NF - 1) / 2; for (i = 1; i <= n; i++) if ($$i != "-" && $$i != $$(i + n + 1)) d = 1; print d + 0}'); \
-	if [ "$$over" = 1 ]; then \
-	  echo "cc-unused-guard FAIL: unused file-scope functions/variables:$$got (baseline $(CC_UNUSED_BASELINE))"; \
-	  echo "  A C item written that nothing calls in some configuration: see emitC in the zemitterc unit."; exit 1; \
-	elif [ "$$same" = 1 ]; then \
-	  echo "cc-unused-guard:$$got < baseline $(CC_UNUSED_BASELINE) -- lower CC_UNUSED_BASELINE here"; \
-	else \
-	  echo "cc-unused-guard OK: unused file-scope functions/variables:$$got (baseline $(CC_UNUSED_BASELINE))"; \
-	fi
-
 # piece-guard -- a piece of a fixed file or of a row's fragment is written only
 # where written C needs it (loadPieces in the zemitterc unit), so every text that
 # calls what a piece defines must say so: a row and another piece by its needs,
@@ -2518,267 +2093,6 @@ piece-guard: bin/zc
 	  echo "piece-guard FAIL: an emitter record removed gives no report"; exit 1; \
 	fi; \
 	bin/zc natives check needs --emitter src/zemitterc.z --system lib/system
-
-# static-value-guard -- every static value the emitter writes (`_zag<row>`) is
-# read by the C: a value no run-time code reaches is not written (clang's
-# -Wunused-const-variable; gcc warns only past -fsyntax-only), and so is every
-# string array (`_zs<n>`, `_zcs<n>`): a string folded and read only at compile
-# time writes none (text_fold_run). And a list read
-# only at compile time writes no view type: static_list_folded_only's C holds no
-# `{ length; const T* data; }` struct. Skipped without clang.
-static-value-guard: bin/zc
-	@v=$$(bin/zc emit tests/fixtures/emitc_corpus/static_list_folded_only.z 2>/dev/null \
-	  | grep -A1 '^    uint64_t length;$$' | grep -c '^    const .*\* data;$$'); \
-	if [ "$$v" -ne 0 ]; then \
-	  echo "static-value-guard FAIL: a list read only at compile time wrote $$v view types"; \
-	  echo "  See staticListReached in the zemitterc unit."; exit 1; \
-	fi
-	@command -v clang >/dev/null 2>&1 || { echo "static-value-guard SKIP: clang not installed"; exit 0; }; \
-	d=$$(mktemp -d); n=0; rep=""; \
-	for f in examples/*.z tests/fixtures/emitc_corpus/*.z; do \
-	  b=$$(basename $$f .z); \
-	  bin/zc emit $$f -o $$d/$$b.c 2>/dev/null || continue; \
-	  c=$$(clang -fsyntax-only -std=c17 -Wunused-const-variable $$d/$$b.c 2>&1 | grep -cE "unused variable '_z(ag|c?s)[0-9]"); \
-	  n=$$(($$n + $$c)); \
-	  if [ "$$c" -gt 0 ]; then rep="$$rep  $$b: $$c\n"; fi; \
-	done; \
-	rm -rf $$d; \
-	if [ "$$n" -gt 0 ]; then \
-	  echo "static-value-guard FAIL: $$n static values or strings written that nothing reads"; \
-	  printf "$$rep"; \
-	  echo "  A value marked reached where no run-time read remains. See markAggReached in the ztypecheck unit."; \
-	  exit 1; \
-	fi; \
-	echo "static-value-guard OK: every static value written is read"
-
-# alias-label-guard -- a mono is labelled by its template's declared name, never by
-# the alias a use reached it through. A program declaring its own List/Map/Set
-# keeps that head.
-alias-label-guard: bin/zc
-	@d=$$(mktemp -d); bad=""; \
-	for f in examples/*.z tests/fixtures/emitc_corpus/*.z; do \
-	  if grep -qE '^(List|Map|Set): *(class|record|union|variant|protocol|facet)' $$f; then continue; fi; \
-	  b=$$(basename $$f .z); \
-	  for m in "" "--eager"; do \
-	    bin/zc emit $$f $$m --readable-names -o $$d/x.c >/dev/null 2>&1 || continue; \
-	    if grep -qE 'z_t[0-9]+_(List|Map|Set)_' $$d/x.c; then bad="$$bad $$b$$m"; fi; \
-	  done; \
-	done; \
-	rm -rf $$d; \
-	if [ -n "$$bad" ]; then \
-	  echo "alias-label-guard FAIL: a mono is labelled with an ALIAS head:$$bad"; \
-	  echo "  The label head must be the template's DECLARED name. A caller that"; \
-	  echo "  composes its own head reintroduces the path-dependence -- pass only"; \
-	  echo "  the argument suffix to getOrMintSpec."; \
-	  exit 1; \
-	fi; \
-	echo "alias-label-guard OK: no mono carries an alias head (both modes, examples + corpus)"
-
-# fwd-shape-guard -- no struct is both emitted untagged and forward-declared (a
-# forward of an anonymous struct names nothing). The scan closes each
-# `typedef struct {` at the first following line starting with `}`.
-fwd-shape-guard: bin/zc
-	@d=$$(mktemp -d); bad=""; \
-	for f in examples/*.z tests/fixtures/emitc_corpus/*.z; do \
-	  b=$$(basename $$f .z); \
-	  for m in "" "--eager"; do \
-	    bin/zc emit $$f $$m -o $$d/x.c >/dev/null 2>&1 || continue; \
-	    awk '/^typedef struct \{$$/ { inb=1; next } \
-	         inb == 1 && substr($$0,1,1) == "}" { \
-	           inb=0; \
-	           if ($$0 ~ /^\} z_t[0-9]+_t;$$/) { s=$$0; sub(/^\} /,"",s); sub(/;$$/,"",s); print s } \
-	           next }' $$d/x.c | LC_ALL=C sort -u > $$d/untagged; \
-	    grep -oE '^typedef struct z_t[0-9]+_t z_t[0-9]+_t;' $$d/x.c 2>/dev/null \
-	      | sed -e 's/^typedef struct //' -e 's/ .*//' | LC_ALL=C sort -u > $$d/fwd; \
-	    both=$$(LC_ALL=C comm -12 $$d/untagged $$d/fwd); \
-	    if [ -n "$$both" ]; then bad="$$bad $$b$$m"; fi; \
-	  done; \
-	done; \
-	rm -rf $$d; \
-	if [ -n "$$bad" ]; then \
-	  echo "fwd-shape-guard FAIL: a type is emitted UNTAGGED and forward-declared:$$bad"; \
-	  echo "  An anonymous 'typedef struct { ... } X_t;' has no tag, so a later"; \
-	  echo "  'typedef struct X_t X_t;' names nothing. Whoever writes the forward"; \
-	  echo "  must first ask whether the body is already out (typeStructEmitted)."; \
-	  exit 1; \
-	fi; \
-	echo "fwd-shape-guard OK: no type is both emitted untagged and forward-declared (both modes, examples + corpus)"
-
-# eager-guard -- every example, corpus program and user-units case emits C that
-# compiles under --eager. EAGER_KNOWN is bad by design: each pins that an unused
-# definition is never checked, which --eager then checks and refuses. A move
-# either way fails.
-EAGER_KNOWN := unused_definition_not_demanded unused_method_not_demanded generic_member_not_demanded generic_unit_member_not_demanded user_never_not_demanded user_unit_public_instance_lazy user_unit_public_reexport_lazy user_unit_namespace_lazy user_unit_entry_demand
-
-eager-guard: bin/zc
-	@d=$$(mktemp -d); bad=""; \
-	uu=$$(awk '$$2 == "tests/fixtures/user_units" { print $$2 "/" $$1 ".z" }' tests/fixtures/run_cases.txt); \
-	for f in examples/*.z tests/fixtures/emitc_corpus/*.z $$uu; do \
-	  b=$$(basename $$f .z); em=$$d/$$b.c; \
-	  if ! bin/zc emit $$f --eager -o $$em >/dev/null 2>&1; then \
-	    bad="$$bad $$b"; continue; \
-	  fi; \
-	  if ! $(CC) -std=c17 -w -Werror=implicit-function-declaration \
-	       -fsyntax-only $$em >/dev/null 2>&1; then \
-	    bad="$$bad $$b"; \
-	  fi; \
-	done; \
-	rm -rf $$d; \
-	new=""; for b in $$bad; do \
-	  case " $(EAGER_KNOWN) " in *" $$b "*) ;; *) new="$$new $$b";; esac; \
-	done; \
-	gone=""; for k in $(EAGER_KNOWN); do \
-	  case " $$bad " in *" $$k "*) ;; *) gone="$$gone $$k";; esac; \
-	done; \
-	if [ -n "$$new" ]; then \
-	  echo "eager-guard FAIL: bad under --eager and not known:$$new"; \
-	  echo "  A definition nothing references reached the emitter and it wrote"; \
-	  echo "  C that does not compile. Fix it, do not add it to EAGER_KNOWN."; \
-	  exit 1; \
-	fi; \
-	if [ -n "$$gone" ]; then \
-	  echo "eager-guard FAIL: known-bad now clean:$$gone"; \
-	  echo "  Delete the row from EAGER_KNOWN in the same commit that fixed it."; \
-	  exit 1; \
-	fi; \
-	echo "eager-guard OK: examples + corpus + user units emit AND compile under --eager ($(words $(EAGER_KNOWN)) known)"
-
-# eager-lib-guard -- the same for lib/system and src, whose unused definitions
-# nothing else checks. Subunits (lib/system/system/) are reached only through
-# their parent, so they are no compilation root.
-EAGER_LIB_KNOWN :=
-
-eager-lib-guard: bin/zc
-	@d=$$(mktemp -d); bad=""; \
-	for f in lib/system/*.z src/*.z; do \
-	  b=$$(basename $$f .z); em=$$d/$$b.c; \
-	  if ! bin/zc emit $$f --eager -o $$em >/dev/null 2>&1; then \
-	    bad="$$bad $$b"; continue; \
-	  fi; \
-	  if ! $(CC) -std=c17 -w -Werror=implicit-function-declaration \
-	       -fsyntax-only $$em >/dev/null 2>&1; then \
-	    bad="$$bad $$b"; \
-	  fi; \
-	done; \
-	rm -rf $$d; \
-	new=""; for b in $$bad; do \
-	  case " $(EAGER_LIB_KNOWN) " in *" $$b "*) ;; *) new="$$new $$b";; esac; \
-	done; \
-	gone=""; for k in $(EAGER_LIB_KNOWN); do \
-	  case " $$bad " in *" $$k "*) ;; *) gone="$$gone $$k";; esac; \
-	done; \
-	if [ -n "$$new" ]; then \
-	  echo "eager-lib-guard FAIL: bad under --eager and not known:$$new"; \
-	  echo "  A definition nothing demands is checked HERE and nowhere else."; \
-	  echo "  Fix it, do not add it to EAGER_LIB_KNOWN."; \
-	  exit 1; \
-	fi; \
-	if [ -n "$$gone" ]; then \
-	  echo "eager-lib-guard FAIL: known-bad now clean:$$gone"; \
-	  echo "  Delete the row from EAGER_LIB_KNOWN in the same commit that fixed it."; \
-	  exit 1; \
-	fi; \
-	echo "eager-lib-guard OK: lib/system + src emit AND compile under --eager ($(words $(EAGER_LIB_KNOWN)) known)"
-
-# highlight-guard -- the spec and the three highlighters (prism, nvim, rouge) carry
-# the language's vocabulary: keywords and reserved words from zlexer, predeclared
-# names from core.z.
-define HIGHLIGHT_GUARD_SH
-set -e
-LC_ALL=C; export LC_ALL
-D=$$(mktemp -d); trap 'rm -rf "$$D"' EXIT
-
-# what a highlighter may carry that core.z does not define: the context words.
-CONTEXT="_ copy iterator meta public tag this yield"
-
-sed -n 's|^syn match \([A-Za-z]*\) /\(.*\)/$$|\1 \2|p' editor/nvim/syntax/zerolang.vim > "$$D/vim.raw"
-vimset() {
-  awk -v g="$$1" '$$1 == g { $$1=""; print }' "$$D/vim.raw" \
-    | sed 's/\\<//g; s/\\>//g; s/\\%(//g; s/)$$//' | tr '|' '\n' | sed 's/\\//g' \
-    | grep -v '^ *$$' | tr -d ' ' | sort -u
-}
-# Python on Windows ends each printed line with \r\n; tr keeps the sets comparable.
-jsset() {
-  python3 -c "
-import re,sys
-s=open('docs/style/prism-zerolang.js', encoding='utf-8').read()
-m=re.search(r'var '+sys.argv[1]+r' = \[(.*?)\];',s,re.S)
-print('\n'.join(sorted(set(re.findall(r\"'([^']*)'\",m.group(1))))))" "$$1" | tr -d '\r'
-}
-rbset() {
-  python3 -c "
-import re,sys
-s=open('editor/rouge/zerolang.rb', encoding='utf-8').read()
-m=re.search(r'def self\.'+sys.argv[1]+r'\b.*?%w\((.*?)\)',s,re.S)
-print('\n'.join(sorted(set(m.group(1).split()))))" "$$1" | tr -d '\r'
-}
-
-grep -oE '^[A-Za-z_][A-Za-z0-9_]*:' lib/system/core.z | sed 's/:$$//' | sort -u > "$$D/core"
-# the keywords are what each kw*Id function returns, spelled beside its label in
-# zast's wellKnown block (read from the construction, so a new family needs no edit).
-wkspell() {
-  sed -n '/^wellKnown: list {/,/^}/p' lib/system/zast.z | awk -v want="$$1" '
-    BEGIN { n = split(want, a, " "); for (i = 1; i <= n; i++) w[a[i]] = 1 }
-    match($$0, /^ +[A-Za-z0-9_]+: "/) {
-      l = $$1; sub(/:$$/, "", l)
-      if (l in w) { s = $$0; sub(/^[^"]*"/, "", s); sub(/"$$/, "", s); print s }
-    }' | sort -u
-}
-kwlabels=$$(sed -n '/^kw[A-Za-z]*Id: function/,/^}/p' lib/system/zlexer.z \
-  | grep -oE 'slot\.[A-Za-z0-9_]+' | sed 's/slot\.//' | tr '\n' ' ')
-wkspell "$$kwlabels" > "$$D/lexkw.all"
-cp "$$D/lexkw.all" "$$D/lexkw"
-rslabels=$$(sed -n '/^isReservedId: function/,/^}/p' lib/system/zlexer.z \
-  | grep -oE 'slot\.[A-Za-z0-9_]+' | sed 's/slot\.//' | tr '\n' ' ')
-wkspell "$$rslabels" > "$$D/lexres"
-
-# the spec's Keywords and Reserved Words tables.
-specset() {
-  awk -v h="$$1" '
-    $$0 == "#---: " h { inh=1; next }
-    inh && /^#---: / { exit }
-    inh && /^#code/ { incode=1; next }
-    inh && incode && /^$$/ { incode=0 }
-    inh && incode { print }
-  ' docs/spec.pdoc | tr -s ' ' '\n' | grep -v '^$$' | sort -u
-}
-specset Keywords > "$$D/speckw"; specset "Reserved Words" > "$$D/specres"
-
-jsset keywords > "$$D/pkw"; jsset reserved > "$$D/pres"; jsset builtins > "$$D/pbi"
-rbset keywords > "$$D/rkw"; rbset reserved > "$$D/rres"; rbset builtins > "$$D/rbi"
-vimset zerolangKeyword > "$$D/vkw"; vimset zerolangReserved > "$$D/vres"
-{ vimset zerolangBuiltinType; vimset zerolangBuiltinConst; vimset zerolangBuiltin; } | sort -u > "$$D/vbi"
-echo "$$CONTEXT" | tr ' ' '\n' | grep -v '^$$' | sort -u > "$$D/ctx"
-
-fail=0
-cmp_set() {
-  if ! cmp -s "$$2" "$$3"; then
-    echo "highlight-guard FAIL: $$1"
-    comm -23 "$$2" "$$3" | sed 's/^/    missing: /'
-    comm -13 "$$2" "$$3" | sed 's/^/    stale:   /'
-    fail=1
-  fi
-}
-cmp_set "prism keywords vs zlexer kwOfId"            "$$D/lexkw"  "$$D/pkw"
-cmp_set "nvim keywords vs zlexer kwOfId"             "$$D/lexkw"  "$$D/vkw"
-cmp_set "prism reserved vs zlexer isReservedId" "$$D/lexres" "$$D/pres"
-cmp_set "nvim reserved vs zlexer isReservedId"  "$$D/lexres" "$$D/vres"
-cmp_set "spec Keywords vs zlexer kwOfId"             "$$D/lexkw"  "$$D/speckw"
-cmp_set "spec Reserved Words vs zlexer isReservedId" "$$D/lexres" "$$D/specres"
-cmp_set "rouge keywords vs zlexer kwOfId"             "$$D/lexkw"  "$$D/rkw"
-cmp_set "rouge reserved vs zlexer isReservedId" "$$D/lexres" "$$D/rres"
-cmp_set "prism builtins vs nvim builtins"           "$$D/pbi"    "$$D/vbi"
-cmp_set "rouge builtins vs prism builtins"          "$$D/pbi"    "$$D/rbi"
-sort -u "$$D/core" "$$D/ctx" > "$$D/want_bi"
-cmp_set "builtins vs lib/system/core.z + context words" "$$D/want_bi" "$$D/pbi"
-
-[ "$$fail" = 0 ] || { echo "  The language moved and a highlighter did not. Fix the word list."; exit 1; }
-echo "highlight-guard OK: $$(wc -l < "$$D/core") core.z names, $$(wc -l < "$$D/lexkw") keywords, $$(wc -l < "$$D/lexres") reserved -- spec and all three highlighters agree"
-endef
-export HIGHLIGHT_GUARD_SH
-
-highlight-guard:
-	@sh -c "$$HIGHLIGHT_GUARD_SH"
 
 # view-guard -- a native receiver marked `.view` is const in the C function that
 # takes it, and a const one is marked `.view`, so the C compiler proves a viewed

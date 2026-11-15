@@ -1,0 +1,926 @@
+# creach -- the top-level items of an emitted C file that nothing reaches. Each
+# top-level item -- a function, a prototype, a type, an enumerator, a static, a
+# macro -- is owned by the names it defines and reaches every name it mentions;
+# a prototype and its definition are one item. `main`, a name an `#if` tests and
+# a `#define` written directly ahead of an `#include` (it configures a system
+# header) are the roots. The file is read once for each preprocessor
+# configuration the C branches on, its conditionals resolved by `gcc -E` (the
+# emitted kind runs it, on the text `preprocessInput` writes), and reach is the
+# union over the configurations: an item no configuration reaches is dead. A
+# top-level item the reader cannot name is reported apart, so a shape it does
+# not know never passes as reached. A subunit of ztestrunner.
+
+# cword -- the C words the reader classifies a name by, each by its slot
+cword: list {
+    cTypedef: "typedef"
+    cStruct: "struct"
+    cUnion: "union"
+    cEnum: "enum"
+    cStatic: "static"
+    cConst: "const"
+    cVolatile: "volatile"
+    cExtern: "extern"
+    cInline: "inline"
+    cExtension: "__extension__"
+    cAttribute: "__attribute__"
+    cDeclspec: "__declspec"
+    cStaticAssert: "_Static_assert"
+    cStaticAssertMacro: "static_assert"
+    cIf: "if"
+    cWhile: "while"
+    cFor: "for"
+    cSwitch: "switch"
+    cReturn: "return"
+    cSizeof: "sizeof"
+    ppDefine: "define"
+    ppUndef: "undef"
+    ppPragma: "pragma"
+    ppInclude: "include"
+    ppIfdef: "ifdef"
+    ppIfndef: "ifndef"
+    ppElif: "elif"
+    ppElse: "else"
+    ppEndif: "endif"
+} out staticlist StringView
+
+# sentinel -- the line `preprocessInput` puts first, after which the
+# preprocessor's output is the file's own: what gcc writes ahead of it is its own
+sentinel: "int cdead_sentinel_;"
+
+# itemkind -- what a top-level item is
+itemkind: variant {
+    macroDef: null
+    typeDef: null
+    funcDef: null
+    varDef: null
+} as { tag: u8.tag }
+
+# itemWord -- how a report names an item of kind `k`
+itemWord: function {k: itemkind} out StringView is {
+    match (
+        k
+    ) case macroDef then {
+        return "macro"
+    } case typeDef then {
+        return "type"
+    } case funcDef then {
+        return "fn"
+    } case varDef then {
+        return "var"
+    }
+}
+
+# ctokkind -- what a token of a C chunk is
+ctokkind: variant {
+    name: null
+    number: null
+    punct: null
+    arrow: null
+} as { tag: u8.tag }
+
+# ctok -- one token of a C chunk
+ctok: record {
+    kind: ctokkind
+    # a name's id in the reader's pool; 0 for every other token
+    id: u32
+    # a name's slot in cword, cword's length when it is none of them
+    word: u64
+    # a punctuator's byte; 0 for every other token
+    byte: u8
+}
+
+# Reader -- the names one file's items define and mention, each interned once,
+# and the C words they are classified by
+Reader: class {
+    words: zast.Vocab
+    pool: zast.StringPool
+}
+
+# newReader -- a reader that has interned no name yet
+newReader: function out Reader is {
+    return (Reader words: (zast.Vocab.create block: cword) pool: zast.StringPool.createEmpty)
+}
+
+# DeadItem -- one item no configuration reaches: its kind and its first name
+DeadItem: class {
+    kind: itemkind
+    name: String
+}
+
+# Verdict -- what the reader found in one file: its dead items in the order the
+# file defines them, the start of each top-level item it could not name (each
+# once, sorted), and how many configurations' output lacks the sentinel (the
+# preprocessor failed, so nothing it would have shown was read)
+Verdict: class {
+    dead: List DeadItem
+    unowned: List String
+    failed: u64
+}
+
+# Group -- the names one item defines, the first of them naming the item
+Group: class {
+    kind: itemkind
+    names: ListVal u32
+}
+
+# NamedItem -- what classify found: the item's kind and the names it defines,
+# none when it defines none
+NamedItem: class {
+    kind: itemkind
+    names: ListVal u32
+}
+
+# ReachState -- what the reading of one file gathers over its configurations:
+# each item by its first name, and the names some configuration reaches
+ReachState: class {
+    groups: List Group
+    # each first name's group, one past its index; 0 for a name that names none
+    groupOf: ListVal u32
+    reached: ListVal bool
+}
+
+# preprocessInput -- what the preprocessor reads for C `raw`: the sentinel, then
+# `raw` without its #include lines, so the conditionals resolve and no system
+# header is read
+preprocessInput: function {raw: StringView} out String is {
+    r: String
+    r.append sentinel
+    r.append "\n"
+    for each line: raw.lines loop {
+        if (isIncludeLine :line).false then r.append line
+        r.append "\n"
+    }
+    return r
+}
+
+# isIncludeLine -- `line` is an #include directive
+isIncludeLine: function {line: StringView} out bool is {
+    s: line.trimStart
+    if (s.startsWith "#").false then return false
+    d: (s.substring from: 1 to: s.length).trimStart
+    return (d.startsWith "include") and (ascii.isWord b: ((d.byteAt i: 7).or d: 0)).false
+}
+
+# analyse -- the verdict on C `raw`, given the preprocessor's output for each
+# configuration in `outputs`
+analyse: function {raw: StringView outputs: (List String).view} out Verdict is {
+    rd: newReader
+    st: ReachState groups: List Group groupOf: ListVal u32 reached: ListVal bool
+    unowned: List String
+    roots: rawRoots :rd :raw
+    roots.append (rd.pool.set s: "main").u32
+    failed: u64
+    for each pp: outputs loop {
+        at: (pp.stringView.indexOf sentinel).or d: pp.length
+        if at == pp.length then {
+            failed = failed + 1
+        } else {
+            body: blanked text: (pp.stringView.substring from: at + sentinel.length to: pp.length)
+            own: readConfiguration :rd :st :unowned text: body.stringView
+            reachFrom :roots :own reached: st.reached
+        }
+    }
+    unowned.sort
+    return (Verdict dead: (deadOf :rd :st) unowned: unowned.take :failed)
+}
+
+# readConfiguration -- the names each name's items mention in one
+# configuration's preprocessed, blanked `text`; each item it names joins its
+# group in `st`, and the start of each it cannot name is noted in `unowned`
+readConfiguration: function {
+    rd: Reader st: ReachState unowned: List String text: StringView
+} out List (ListVal u32) is {
+    own: List (ListVal u32)
+    for each ch: (chunksOf :text) loop {
+        toks: tokensOf :rd text: ch.stringView
+        item: classify :toks
+        if item.names.length == 0 then {
+            if (isQuietUnnamed :toks).false then noteUnowned :unowned chunk: ch.stringView
+        } else {
+            addOwners :own :item refs: (mentions :toks skipAttributes: (isDirective :toks).false)
+            addGroup :st :item
+        }
+    }
+    return own
+}
+
+# noteUnowned -- the start of item `chunk`, which the reader cannot name, in
+# `unowned` once
+noteUnowned: function {unowned: List String chunk: StringView} is {
+    cut: chunk.length
+    if cut > 80 then cut = 80
+    head: (chunk.substring from: 0 to: cut).string
+    if (unowned.contains item: head).false then unowned.append head.take
+}
+
+# addOwners -- each name `item` defines owns the names of `refs` it does not
+# define itself
+addOwners: function {own: List (ListVal u32) item: NamedItem.view refs: (ListVal u32).view} is {
+    for each nm: item.names loop {
+        growTo :own n: nm.u64 + 1
+        for each m: refs loop {
+            if (item.names.contains item: m).false then (own.getMut i: nm.u64).append m
+        }
+    }
+}
+
+# addGroup -- `item`'s names join the group of its first name, which they open
+# when it has none
+addGroup: function {st: ReachState item: NamedItem.view} is {
+    first: item.names.get i: 0
+    growIds ids: st.groupOf n: first.u64 + 1
+    gi: st.groupOf.get i: first.u64
+    if gi == 0 then {
+        st.groups.append (Group kind: item.kind names: ListVal u32)
+        gi = st.groups.length.u32.orPanic
+        st.groupOf.set i: first.u64 val: gi
+    }
+    g: st.groups.getMut i: gi.u64 - 1
+    for each nm: item.names loop {
+        if (g.names.contains item: nm).false then g.names.append nm
+    }
+}
+
+# deadOf -- each group none of whose names any configuration reached
+deadOf: function {rd: Reader.view st: ReachState.view} out List DeadItem is {
+    dead: List DeadItem
+    for each g: st.groups loop {
+        live: false
+        for each nm: g.names loop {
+            if nm.u64 < st.reached.length when (st.reached.get i: nm.u64) then live = true
+        }
+        if live.false then {
+            first: zast.nameid from: (g.names.get i: 0)
+            dead.append (DeadItem kind: g.kind name: (zast.poolTextCopy pool: rd.pool ref: first))
+        }
+    }
+    return dead
+}
+
+# reachFrom -- mark in `reached` every name `roots` reach through `own`, the
+# names each name's items mention
+reachFrom: function {
+    roots: (ListVal u32).view own: (List (ListVal u32)).view reached: ListVal bool
+} is {
+    seen: ListVal bool
+    todo: ListVal u32
+    for each r: roots loop todo.append r
+    for todo.length > 0 loop {
+        n: todo.pop
+        growFlags flags: seen n: n.u64 + 1
+        if (seen.get i: n.u64).false then {
+            seen.set i: n.u64 val: true
+            growFlags flags: reached n: n.u64 + 1
+            reached.set i: n.u64 val: true
+            if n.u64 < own.length then {
+                for each m: (own.get i: n.u64) loop todo.append m
+            }
+        }
+    }
+}
+
+# RootScan -- what rawRoots has found so far: the roots, and the defines read
+# since the last line that was not one
+RootScan: class {
+    roots: ListVal u32
+    pending: ListVal u32
+}
+
+# rawRoots -- the names the preprocessor itself reads in C `raw`: each name an
+# #if, #ifdef, #ifndef or #elif tests, and each name a #define directly ahead of
+# an #include defines (it configures a system header). A line between them
+# other than #else or #endif ends that run of defines.
+rawRoots: function {rd: Reader raw: StringView} out ListVal u32 is {
+    scan: RootScan roots: ListVal u32 pending: ListVal u32
+    body: blanked text: raw
+    for each line: body.stringView.lines loop {
+        s: line.trim
+        if s.length > 0 then scanLine :scan toks: (tokensOf :rd text: s)
+    }
+    return scan.roots.copy
+}
+
+# scanLine -- what one non-empty line, its tokens `toks`, adds to `scan`
+scanLine: function {scan: RootScan toks: (ListVal ctok).view} is {
+    d: directiveWord :toks
+    if (isConditional :d) then {
+        for each id: (namesFrom :toks from: 2) loop scan.roots.append id
+        return
+    }
+    if d == cword.slot.ppDefine then {
+        if toks.length > 2 then scan.pending.append (toks.get i: 2).id
+        return
+    }
+    if d == cword.slot.ppInclude then {
+        for each p: scan.pending loop scan.roots.append p
+    }
+    if (d != cword.slot.ppElse) and (d != cword.slot.ppEndif) then scan.pending = ListVal u32
+}
+
+# isConditional -- directive word `d` is one that tests names: #if, #ifdef,
+# #ifndef or #elif
+isConditional: function {d: u64} out bool is {
+    a: (d == cword.slot.cIf) or (d == cword.slot.ppIfdef)
+    return a or (d == cword.slot.ppIfndef) or (d == cword.slot.ppElif)
+}
+
+# namesFrom -- the ids of the names among `toks` from position `from` on
+namesFrom: function {toks: (ListVal ctok).view from: u64} out ListVal u32 is {
+    ids: ListVal u32
+    k: from
+    for k < toks.length loop {
+        t: toks.get i: k
+        if t.kind.name then ids.append t.id
+        k = k + 1
+    }
+    return ids
+}
+
+# directiveWord -- the slot of the directive tokens `toks` spell (`#` and its
+# word), cword's length when they are no directive
+directiveWord: function {toks: (ListVal ctok).view} out u64 is {
+    if (isDirective :toks).false or (toks.length < 2) then return cword.length
+    return (toks.get i: 1).word
+}
+
+# isDirective -- the tokens start with `#`
+isDirective: function {toks: (ListVal ctok).view} out bool is {
+    if toks.length == 0 then return false
+    return (isPunct t: (toks.get i: 0) byte: ascii.hash)
+}
+
+# isQuietUnnamed -- a nameless item that is not a finding: an #undef, a
+# #pragma, or a static assertion
+isQuietUnnamed: function {toks: (ListVal ctok).view} out bool is {
+    d: directiveWord :toks
+    if (d == cword.slot.ppUndef) or (d == cword.slot.ppPragma) then return true
+    if toks.length == 0 then return false
+    return (isStaticAssert w: (toks.get i: 0).word)
+}
+
+# isStaticAssert -- word `w` is `_Static_assert` or `static_assert`
+isStaticAssert: function {w: u64} out bool is {
+    return (w == cword.slot.cStaticAssert) or (w == cword.slot.cStaticAssertMacro)
+}
+
+# one -- a list of the one name `id`
+one: function {id: u32} out ListVal u32 is {
+    l: ListVal u32
+    l.append id
+    return l
+}
+
+# classify -- the kind and the names of the item whose tokens are `toks`
+classify: function {toks: (ListVal ctok).view} out NamedItem is {
+    nameless: NamedItem kind: itemkind.varDef names: ListVal u32
+    if (isDirective :toks) then {
+        if (directiveWord :toks) == cword.slot.ppDefine when toks.length > 2 when (toks.get i: 2
+        ).kind.name then {
+            return (NamedItem kind: itemkind.macroDef names: (one id: (toks.get i: 2).id))
+        }
+        return nameless
+    }
+    t: withoutAttributes :toks
+    if t.length == 0 then return nameless
+    w0: (t.get i: 0).word
+    if (isStaticAssert w: w0) then return nameless
+    b: firstPunct toks: t byte: ascii.braceOpen from: 0
+    if w0 == cword.slot.cTypedef then return (
+        NamedItem
+        kind: itemkind.typeDef
+        names: (typedefNames toks: t brace: b)
+    )
+    if w0 == cword.slot.cEnum when t.length > 1 when (isPunct t: (t.get i: 1) byte: ascii.braceOpen
+    ) then {
+        return (NamedItem kind: itemkind.typeDef names: (enumerators toks: t brace: b))
+    }
+    tagged: taggedTypeNames toks: t brace: b
+    if tagged.length > 0 then return (NamedItem kind: itemkind.typeDef names: tagged.take)
+    fn: functionName toks: t head: b
+    if fn > 0 then return (NamedItem kind: itemkind.funcDef names: (one id: fn))
+    v: objectName toks: t
+    if v > 0 then return (NamedItem kind: itemkind.varDef names: (one id: v))
+    return nameless
+}
+
+# functionName -- the name a function or prototype declares: the last name
+# before the first `(` of its head (the tokens before `head`) that stands
+# outside every other bracket, with no `=` before it, when that name is no
+# statement word; 0 when the item declares none
+functionName: function {toks: (ListVal ctok).view head: u64} out u32 is {
+    p: topParen :toks to: head
+    eq: firstPunct :toks byte: 0c= from: 0
+    if (p == 0) or (p >= head) or (eq < p) then return 0
+    ids: memberFreeNames :toks from: 0 to: p
+    if ids.length == 0 then return 0
+    last: toks.get i: (ids.get i: ids.length - 1)
+    if (isStatementWord w: last.word) then return 0
+    return last.id
+}
+
+# isStatementWord -- `w` is a statement word a name may stand before a `(` as
+# (if, while, for, switch, return, sizeof)
+isStatementWord: function {w: u64} out bool is {
+    a: (w == cword.slot.cIf) or (w == cword.slot.cWhile) or (w == cword.slot.cFor)
+    return a or (w == cword.slot.cSwitch) or (w == cword.slot.cReturn) or (w == cword.slot.cSizeof)
+}
+
+# objectName -- the name an object declares: the last name before the first
+# `=` or `;`, outside `[...]`; 0 when there is none
+objectName: function {toks: (ListVal ctok).view} out u32 is {
+    cut: firstPunct :toks byte: 0c= from: 0
+    semi: firstPunct :toks byte: ascii.semicolon from: 0
+    if semi < cut then cut = semi
+    ids: unbracketedNamesIn :toks from: 0 to: cut
+    if ids.length == 0 then return 0
+    return (ids.get i: ids.length - 1)
+}
+
+# typedefNames -- the names a typedef defines: a function pointer's name, else
+# the last name after the body (or of the whole declaration); the tag a body is
+# declared with; and an enum's constants. `brace` is the body's first token,
+# past the end when it has none.
+typedefNames: function {toks: (ListVal ctok).view brace: u64} out ListVal u32 is {
+    names: ListVal u32
+    fpName: u32
+    if brace >= toks.length then fpName = funcPointerName :toks
+    if fpName > 0 then {
+        names.append fpName
+    } else {
+        from: u64
+        if brace < toks.length then from = (lastPunct :toks byte: ascii.braceClose) + 1
+        tail: unbracketedNamesIn :toks :from to: toks.length
+        if tail.length > 0 then names.append (tail.get i: tail.length - 1)
+    }
+    tag: typedefTag :toks :brace
+    if tag > 0 when (names.contains item: tag).false then names.append tag
+    if toks.length > 1 when brace < toks.length when (toks.get i: 1).word == cword.slot.cEnum then {
+        for each e: (enumerators :toks :brace) loop names.append e
+    }
+    return names
+}
+
+# typedefTag -- the tag of `typedef [const] struct|union|enum TAG { ... }`, 0
+# when the typedef declares no body or its body no tag
+typedefTag: function {toks: (ListVal ctok).view brace: u64} out u32 is {
+    k: 1.u64
+    if k < toks.length when (toks.get i: k).word == cword.slot.cConst then k = k + 1
+    if ((k + 1) >= toks.length) or (brace >= toks.length) then return 0
+    tag: toks.get i: k + 1
+    if (isTagWord w: (toks.get i: k).word) when tag.kind.name then return tag.id
+    return 0
+}
+
+# isTagWord -- `struct`, `union` or `enum`
+isTagWord: function {w: u64} out bool is {
+    return (w == cword.slot.cStruct) or (w == cword.slot.cUnion) or (w == cword.slot.cEnum)
+}
+
+# funcPointerName -- the name of the first `( [word] * NAME ) (` in `toks`, 0
+# when they hold none
+funcPointerName: function {toks: (ListVal ctok).view} out u32 is {
+    i: u64
+    for i < toks.length loop {
+        nm: funcPointerAt :toks :i
+        if nm > 0 then return nm
+        i = i + 1
+    }
+    return 0
+}
+
+# funcPointerAt -- the name of `( [word] * NAME ) (` starting at position `i`,
+# 0 when none starts there
+funcPointerAt: function {toks: (ListVal ctok).view i: u64} out u32 is {
+    if (isPunct t: (toks.get :i) byte: ascii.parenOpen).false then return 0
+    k: i + 1
+    if k < toks.length when (toks.get i: k).kind.name then k = k + 1
+    if (k + 3) >= toks.length then return 0
+    star: isPunct t: (toks.get i: k) byte: 0c*
+    nm: toks.get i: k + 1
+    close: isPunct t: (toks.get i: k + 2) byte: ascii.parenClose
+    open: isPunct t: (toks.get i: k + 3) byte: ascii.parenOpen
+    if star when nm.kind.name when close when open then return nm.id
+    return 0
+}
+
+# taggedTypeNames -- the names of a tagged struct, union or enum declared on
+# its own (`struct T;`, or `struct T { ... };` with no object after the body),
+# after any storage words; with an enum's constants. None for anything else.
+taggedTypeNames: function {toks: (ListVal ctok).view brace: u64} out ListVal u32 is {
+    names: ListVal u32
+    k: u64
+    for k < toks.length while (isStorageWord w: (toks.get i: k).word) loop k = k + 1
+    if (k + 2) >= toks.length then return names
+    w: (toks.get i: k).word
+    tag: toks.get i: k + 1
+    if (isTagWord :w).false or tag.kind.name.false then return names
+    after: toks.get i: k + 2
+    forward: isPunct t: after byte: ascii.semicolon
+    bodied: (
+        (isPunct t: after byte: ascii.braceOpen) and
+        (endsInBraceSemicolon :toks) and
+        (hasObjectAfterBody :toks).false
+    )
+    if forward or bodied then names.append tag.id
+    if w == cword.slot.cEnum when bodied then {
+        for each e: (enumerators :toks :brace) loop names.append e
+    }
+    return names
+}
+
+# isStorageWord -- `static`, `const`, `volatile`, `extern` or `inline`
+isStorageWord: function {w: u64} out bool is {
+    a: (w == cword.slot.cStatic) or (w == cword.slot.cConst) or (w == cword.slot.cVolatile)
+    return a or (w == cword.slot.cExtern) or (w == cword.slot.cInline)
+}
+
+# endsInBraceSemicolon -- the tokens end in `} ;`
+endsInBraceSemicolon: function {toks: (ListVal ctok).view} out bool is {
+    if toks.length < 2 then return false
+    a: isPunct t: (toks.get i: toks.length - 2) byte: ascii.braceClose
+    return a and (isPunct t: (toks.get i: toks.length - 1) byte: ascii.semicolon)
+}
+
+# hasObjectAfterBody -- some `}` is followed by a name, an optional `[...]`,
+# and `=` or `;`: an object of the type is declared with it
+hasObjectAfterBody: function {toks: (ListVal ctok).view} out bool is {
+    i: u64
+    for (i + 2) < toks.length loop {
+        if (isPunct t: (toks.get :i) byte: ascii.braceClose) when (toks.get i: i + 1
+        ).kind.name then {
+            k: i + 2
+            if (isPunct t: (toks.get i: k) byte: ascii.bracketOpen) then k = (
+                (firstPunct :toks byte: ascii.bracketClose from: k) + 1
+            )
+            if k < toks.length when (endsDeclarator t: (toks.get i: k)) then return true
+        }
+        i = i + 1
+    }
+    return false
+}
+
+# endsDeclarator -- token `t` is `=` or `;`
+endsDeclarator: function {t: ctok} out bool is {
+    return (isPunct :t byte: 0c=) or (isPunct :t byte: ascii.semicolon)
+}
+
+# enumerators -- the constants of the enum body opening at `brace`: each item
+# up to its first `}` that is a name alone or a name `=` a value
+enumerators: function {toks: (ListVal ctok).view brace: u64} out ListVal u32 is {
+    names: ListVal u32
+    if brace >= toks.length then return names
+    close: firstPunct :toks byte: ascii.braceClose from: brace
+    start: brace + 1
+    i: start
+    for i <= close loop {
+        if (i == close) or (isPunctAt :toks :i byte: ascii.comma) then {
+            nm: enumeratorIn :toks from: start to: i
+            if nm > 0 then names.append nm
+            start = i + 1
+        }
+        i = i + 1
+    }
+    return names
+}
+
+# enumeratorIn -- the constant item `toks[from, to)` declares: a name alone,
+# or a name `=` a value; 0 for anything else
+enumeratorIn: function {toks: (ListVal ctok).view from: u64 to: u64} out u32 is {
+    if from >= to then return 0
+    first: toks.get i: from
+    if first.kind.name.false then return 0
+    if (from + 1) == to then return first.id
+    if (isPunct t: (toks.get i: from + 1) byte: 0c=) then return first.id
+    return 0
+}
+
+# mentions -- the names the tokens mention, each once: every name but a member
+# after `.` or `->`, and with `skipAttributes` none inside `__attribute__((...))`
+# or `__declspec(...)`
+mentions: function {toks: (ListVal ctok).view skipAttributes: bool} out ListVal u32 is {
+    names: ListVal u32
+    src: ListVal ctok
+    if skipAttributes then {
+        src = withoutAttributes :toks
+    } else {
+        for each t: toks loop src.append t
+    }
+    for each k: (memberFreeNames toks: src from: 0 to: src.length) loop {
+        id: (src.get i: k).id
+        if (names.contains item: id).false then names.append id
+    }
+    return names
+}
+
+# memberFreeNames -- the positions of the names in `toks[from, to)` that are
+# not a member after `.` or `->`
+memberFreeNames: function {toks: (ListVal ctok).view from: u64 to: u64} out ListVal u64 is {
+    r: ListVal u64
+    i: from
+    for i < to loop {
+        if (toks.get :i).kind.name when (isMemberAt :toks :i).false then r.append i
+        i = i + 1
+    }
+    return r
+}
+
+# isMemberAt -- the token at `i` follows `.` or `->`: it names a member
+isMemberAt: function {toks: (ListVal ctok).view i: u64} out bool is {
+    if i == 0 then return false
+    p: toks.get i: i - 1
+    return p.kind.arrow or (isPunct t: p byte: ascii.dot)
+}
+
+# unbracketedNamesIn -- the ids of the names in `toks[from, to)` outside
+# `[...]`, members left out
+unbracketedNamesIn: function {toks: (ListVal ctok).view from: u64 to: u64} out ListVal u32 is {
+    r: ListVal u32
+    depth: u64
+    i: from
+    for i < to loop {
+        t: toks.get :i
+        if (isPunct :t byte: ascii.bracketOpen) then {
+            depth = depth + 1
+        } else if (isPunct :t byte: ascii.bracketClose) then {
+            if depth > 0 then depth = depth - 1
+        } else if depth == 0 when t.kind.name when (isMemberAt :toks :i).false then r.append t.id
+        i = i + 1
+    }
+    return r
+}
+
+# withoutAttributes -- `toks` without a leading run of `__extension__` and
+# without each `__attribute__ (...)` or `__declspec (...)`, parentheses balanced
+withoutAttributes: function {toks: (ListVal ctok).view} out ListVal ctok is {
+    r: ListVal ctok
+    i: u64
+    for i < toks.length while (toks.get :i).word == cword.slot.cExtension loop i = i + 1
+    for i < toks.length loop {
+        e: attributeEnd :toks :i
+        if e > i then {
+            i = e
+        } else {
+            r.append (toks.get :i)
+            i = i + 1
+        }
+    }
+    return r
+}
+
+# attributeEnd -- one past the `__attribute__ (...)` or `__declspec (...)`
+# starting at `i`, its parentheses balanced; `i` itself when none starts there
+attributeEnd: function {toks: (ListVal ctok).view i: u64} out u64 is {
+    w: (toks.get :i).word
+    if (w != cword.slot.cAttribute) and (w != cword.slot.cDeclspec) then return i
+    k: i + 1
+    if (isPunctAt :toks i: k byte: ascii.parenOpen).false then return i
+    depth: 1.u64
+    k = k + 1
+    for k < toks.length while depth > 0 loop {
+        p: toks.get i: k
+        if (isPunct t: p byte: ascii.parenOpen) then depth = depth + 1
+        if (isPunct t: p byte: ascii.parenClose) then depth = depth - 1
+        k = k + 1
+    }
+    return k
+}
+
+# topParen -- the position of the first `(` in `toks[0, to)` outside every
+# other bracket, past the end when there is none
+topParen: function {toks: (ListVal ctok).view to: u64} out u64 is {
+    depth: i64
+    i: u64
+    for i < to loop {
+        t: toks.get :i
+        if (isPunct :t byte: ascii.parenOpen) when depth == 0 then return i
+        if (isPunct :t byte: ascii.parenOpen) or (isPunct :t byte: ascii.bracketOpen) then depth = (
+            depth + 1
+        )
+        if (
+            (isPunct :t byte: ascii.parenClose) or (isPunct :t byte: ascii.bracketClose)
+        ) then depth = depth - 1
+        i = i + 1
+    }
+    return toks.length
+}
+
+# firstPunct -- the position of the first punctuator `byte` at or after `from`,
+# past the end when there is none
+firstPunct: function {toks: (ListVal ctok).view byte: u8 from: u64} out u64 is {
+    i: from
+    for i < toks.length loop {
+        if (isPunct t: (toks.get :i) :byte) then return i
+        i = i + 1
+    }
+    return toks.length
+}
+
+# lastPunct -- the position of the last punctuator `byte`, 0 when there is none
+lastPunct: function {toks: (ListVal ctok).view byte: u8} out u64 is {
+    i: toks.length
+    for i > 0 loop {
+        i = i - 1
+        if (isPunct t: (toks.get :i) :byte) then return i
+    }
+    return 0
+}
+
+# isPunctAt -- the token at `i` is the punctuator `byte`; false past the end
+isPunctAt: function {toks: (ListVal ctok).view i: u64 byte: u8} out bool is {
+    if i >= toks.length then return false
+    return (isPunct t: (toks.get :i) :byte)
+}
+
+# isPunct -- token `t` is the punctuator `byte`
+isPunct: function {t: ctok byte: u8} out bool is {
+    return t.kind.punct and (t.byte == byte)
+}
+
+# tokensOf -- the tokens of blanked C `text`: each name, interned in `rd`'s
+# pool with its slot in cword; each number; `->`; and each other byte that is
+# not white space, as a punctuator of its own
+tokensOf: function {rd: Reader text: StringView} out ListVal ctok is {
+    r: ListVal ctok
+    n: text.length
+    i: u64
+    for i < n loop {
+        b: (text.byteAt :i).or d: 0
+        nb: (text.byteAt i: i + 1).or d: 0
+        if (ascii.isSpace :b) then {
+            i = i + 1
+        } else if (ascii.isLetter :b) or (b == 0c_) then {
+            e: wordEnd :text from: i
+            w: text.substring from: i to: e
+            r.append (
+                ctok
+                kind: ctokkind.name
+                id: (rd.pool.set s: w).u32
+                word: (rd.words.slotOf text: w)
+                byte: 0
+            )
+            i = e
+        } else if (ascii.isDigit :b) or ((b == ascii.dot) and (ascii.isDigit b: nb)) then {
+            i = numberEnd :text from: i
+            r.append (ctok kind: ctokkind.number id: 0 word: cword.length byte: 0)
+        } else if b == 0c- when nb == 0c> then {
+            r.append (ctok kind: ctokkind.arrow id: 0 word: cword.length byte: 0)
+            i = i + 2
+        } else {
+            r.append (ctok kind: ctokkind.punct id: 0 word: cword.length byte: b)
+            i = i + 1
+        }
+    }
+    return r
+}
+
+# wordEnd -- where the name starting at `from` ends
+wordEnd: function {text: StringView from: u64} out u64 is {
+    i: from
+    for i < text.length while (ascii.isWord b: ((text.byteAt :i).or d: 0)) loop i = i + 1
+    return i
+}
+
+# numberEnd -- where the preprocessing number starting at `from` ends: name
+# bytes and dots, and a sign right after an exponent letter
+numberEnd: function {text: StringView from: u64} out u64 is {
+    i: from + 1
+    for i < text.length loop {
+        b: (text.byteAt :i).or d: 0
+        if (ascii.isWord :b) or (b == ascii.dot) then {
+            i = i + 1
+        } else if (b == 0c+) or (b == 0c-) then {
+            p: ascii.lower b: ((text.byteAt i: i - 1).or d: 0)
+            if (p != 0ce) and (p != 0cp) then return i
+            i = i + 1
+        } else return i
+    }
+    return i
+}
+
+# chunksOf -- the top-level items of preprocessed, blanked C `text`, one text
+# each: a directive line, or the lines up to one that ends in `;` or `}` with
+# every brace closed, joined by a space
+chunksOf: function {text: StringView} out List String is {
+    r: List String
+    cur: String
+    open: false
+    depth: i64
+    for each line: text.lines loop {
+        s: line.trim
+        if s.length == 0 then continue
+        if depth == 0 when open.false when s.startsWith "#" then {
+            r.append s.string
+            continue
+        }
+        if open then cur.append " "
+        cur.append s
+        open = true
+        depth = depth + (braceBalance :s)
+        if depth == 0 when (s.endsWith ";") or (s.endsWith "}") then {
+            r.append cur.copy
+            cur = "".string
+            open = false
+        }
+    }
+    if open then r.append cur.copy
+    return r
+}
+
+# braceBalance -- how many more `{` than `}` `s` holds
+braceBalance: function {s: StringView} out i64 is {
+    d: i64
+    for each b: s.byteView loop {
+        if b == ascii.braceOpen then d = d + 1
+        if b == ascii.braceClose then d = d - 1
+    }
+    return d
+}
+
+# blanked -- C `text` with each line splice joined, each comment a space, each
+# string literal `""` and each character literal `0`, read left to right: a
+# `//` or `/*` inside a literal is the literal's, and a quote inside a comment
+# is the comment's. A quote with no close on its line, or a `/*` with no `*/`,
+# stays as it is.
+blanked: function {text: StringView} out String is {
+    joined: text.replace needle: "\\\n" replacement: " "
+    v: joined.stringView
+    r: String
+    i: u64
+    for i < v.length loop {
+        b: (v.byteAt :i).or d: 0
+        e: blankEnd text: v from: i
+        if e > i then {
+            r.append (blankFor :b)
+            i = e
+        } else {
+            r.appendByte :b
+            i = i + 1
+        }
+    }
+    return r
+}
+
+# blankEnd -- one past the literal or comment opening at `from`, `from` itself
+# when none opens there
+blankEnd: function {text: StringView from: u64} out u64 is {
+    b: (text.byteAt i: from).or d: 0
+    if (b == ascii.doubleQuote) or (b == 0c') then return (literalEnd :text :from quote: b)
+    if b == 0c/ then return (commentEnd :text :from)
+    return from
+}
+
+# blankFor -- what stands for a literal or comment opening with `b`: `""` for
+# a string, `0` for a character, a space for a comment
+blankFor: function {b: u8} out StringView is {
+    if b == ascii.doubleQuote then return "\"\""
+    if b == 0c' then return "0"
+    return " "
+}
+
+# literalEnd -- one past the quote closing the literal that opens at `from`,
+# `from` itself when no quote closes it before the line ends. A backslash
+# escapes the byte after it.
+literalEnd: function {text: StringView from: u64 quote: u8} out u64 is {
+    i: from + 1
+    for i < text.length loop {
+        b: (text.byteAt :i).or d: 0
+        if b == 0c\\ then {
+            i = i + 2
+        } else if b == quote then {
+            return i + 1
+        } else if b == ascii.lf then {
+            return from
+        } else i = i + 1
+    }
+    return from
+}
+
+# commentEnd -- one past the comment that opens at `from`: a block comment
+# through its `*/`, a line comment up to its line end; `from` itself when no
+# comment opens there or a block comment never closes
+commentEnd: function {text: StringView from: u64} out u64 is {
+    nb: (text.byteAt i: from + 1).or d: 0
+    rest: text.substring from: from + 2 to: text.length
+    if nb == 0c* then {
+        at: (rest.indexOf "*/").or d: rest.length
+        if at == rest.length then return from
+        return from + 2 + at + 2
+    }
+    if nb == 0c/ then return from + 2 + ((rest.indexOf "\n").or d: rest.length)
+    return from
+}
+
+# growTo -- `own` holds at least `n` lists
+growTo: function {own: List (ListVal u32) n: u64} is {
+    for own.length < n loop own.append (ListVal u32)
+}
+
+# growIds -- `ids` holds at least `n` entries, the new ones 0
+growIds: function {ids: ListVal u32 n: u64} is {
+    for ids.length < n loop ids.append 0
+}
+
+# growFlags -- `flags` holds at least `n` entries, the new ones false
+growFlags: function {flags: ListVal bool n: u64} is {
+    for flags.length < n loop flags.append false
+}

@@ -1,0 +1,1576 @@
+# emitted -- the EMITTED kind (`--only emitted`): what the C the emitter writes
+# holds. Every example and corpus program is emitted once for each variant a
+# check reads, all in the job pool, and zc's own C once; the checks then read
+# those files. Each count is held at its baseline in the expected subunit,
+# exactly: a count above it is new and fails, one below it fails until the
+# baseline is lowered.
+#   unused      gcc, clang and mingw-w64 report no unused file-scope function or
+#               variable in the C of the corpus and of zc, in each preprocessor
+#               configuration the C branches on that this host can run, and no
+#               call to an undeclared function: C conditioned on a narrower
+#               test than its callers fails as surely as C left unused. clang
+#               also reports no unreachable statement. A local is not counted.
+#   reach       every top-level C item is reached from `main` in some
+#               configuration (creach): no compiler reports an unused type,
+#               macro or static inline function, or a function only an unused
+#               one calls
+#   forward     no struct is both emitted untagged and forward-declared: a
+#               forward of an anonymous struct names nothing
+#   alias       a mono is labelled by its template's declared name, never by the
+#               alias a use reached it through
+#   eager       every program, every user-units case, and lib/system's and
+#               src's units, emit C that compiles under --eager, but for the
+#               ones expected to fail by design
+#   zlink       how many programs declare a link library, for Linux and for
+#               Windows, whatever the host
+#   tcc         how many programs `--cc tcc` refuses, for Linux and Windows
+#   constRow    const_divide_form's variable divisors each call the helper that
+#               checks the divisor; its constant ones divide inline
+#   staticView  a list read only at compile time writes no view type
+# A compiler and the reader each first show, on tests/c/cdead_probe.c, that
+# they see what they count: one that stops seeing dead C cannot pass. Without
+# clang the unused and reach checks say so and are skipped. Each file the kind
+# writes is numbered by the job or compile that writes it. A subunit of
+# ztestrunner.
+
+# emitVariant -- the flags each variant emits every program with
+emitVariant: list {
+    host: ""
+    eager: "--eager"
+    readable: "--readable-names"
+    readableEager: "--readable-names --eager"
+    linux: "--target x86_64-linux-gnu"
+    windows: "--target x86_64-w64-mingw32"
+    tccLinux: "--cc tcc --target x86_64-linux-gnu"
+    tccWindows: "--cc tcc --target x86_64-w64-mingw32"
+} out staticlist StringView
+
+# unusedConfig -- the configurations the unused check compiles the C in, as
+# flags: the default, the portable 128-bit integers and half floats, the
+# portable word
+unusedConfig: list {
+    plain: ""
+    portableScalars: "-DZ_INT128_PORTABLE -DZ_F16_PORTABLE"
+    portableWord: "-DZ_WORD_PORTABLE"
+} out staticlist StringView
+
+# reachConfig -- the configurations creach reads the C in, as `gcc -E` flags:
+# C17, C23, the portable word, integers and floats without the compiler's own
+# 128-bit and half types, the portable scalars beside them, clang, tcc, MSVC
+# and MinGW
+reachConfig: list {
+    c17: "-std=c17"
+    c23: "-std=c23"
+    portableAll: "-std=c17 -DZ_WORD_PORTABLE -DZ_INT128_PORTABLE -DZ_F16_PORTABLE -U__SIZEOF_FLOAT128__ -U__SIZEOF_INT128__ -U__FLT16_MANT_DIG__"
+    portableScalars: "-std=c17 -DZ_INT128_PORTABLE -DZ_F16_PORTABLE"
+    clang: "-std=c17 -D__clang__"
+    tcc: "-undef -D__TINYC__ -D__linux__ -D__x86_64__ -D__STDC_VERSION__=201112L"
+    msvc: "-undef -D_WIN32 -D_WIN64 -D_MSC_VER=1940 -D_M_X64 -D__STDC_VERSION__=201710L"
+    mingw: "-std=c17 -U__linux__ -U__linux -Ulinux -U__unix__ -U__unix -Uunix -D_WIN32 -D_WIN64"
+} out staticlist StringView
+
+# unusedFlags -- what every compile of the unused check adds: the warnings it
+# counts, and an undeclared call made an error
+unusedFlags: list {
+    "-std=c17"
+    "-Wunused-function"
+    "-Wunused-variable"
+    "-Wunused-const-variable"
+    "-Werror=implicit-function-declaration"
+} out staticlist StringView
+
+# unreachableFlags -- what a compile by clang adds: the unreachable statements.
+# clang reports every warning the check counts while it reads the C
+# (-fsyntax-only); gcc reports an unused item only when it compiles, so gcc and
+# mingw-w64 write assembly (-S), which nothing reads, and run no assembler.
+unreachableFlags: list {
+    "-fsyntax-only"
+    "-Wunreachable-code"
+    "-Wunreachable-code-break"
+    "-Wunreachable-code-return"
+} out staticlist StringView
+
+# mingwCc / mingwFlags -- the Windows cross compiler, and what makes it build
+# against the Universal C Runtime every real Windows build links
+mingwCc: "x86_64-w64-mingw32-gcc"
+mingwFlags: "-mcrtdll=ucrt"
+
+# probePath -- the C with dead items of every kind on purpose
+probePath: "tests/c/cdead_probe.c"
+
+# emittedWord -- the outside text the kind compares a whole line with, by its
+# slot
+emittedWord: list {
+    # a case list's directory column, for the user-units cases
+    userUnits: "tests/fixtures/user_units"
+    # the head of a struct emitted with no tag
+    untaggedOpen: "typedef struct {"
+    # the first field of a list's view struct
+    viewLength: "    uint64_t length;"
+} out staticlist StringView
+
+# Program -- one program the kind emits: its path, and its name in a report
+Program: class {
+    path: String
+    name: String
+}
+
+# Emitted -- the shared emit: where its files go, the programs, and whether
+# each job's emit succeeded (an eager job's: and its C compiled). Job 0 is zc's
+# own C; then each variant of `progs` in order, then the eager emit of `users`
+# and of `libs`.
+Emitted: class {
+    dir: String
+    progs: List Program
+    users: List Program
+    libs: List Program
+    ok: ListVal bool
+}
+
+# UnusedCc -- a compiler the unused check runs
+UnusedCc: class {
+    # how a report names it
+    label: String
+    # the program, and the flags it starts every compile with
+    argv: List String
+    # whether it reports unreachable statements too (clang)
+    unreachable: bool
+    # what it must report unused in the probe
+    probe: List String
+}
+
+# runEmittedCases -- the emitted kind: emit, compile and preprocess, then judge
+runEmittedCases: function {r: Runner} is {
+    em: emitShared :r
+    if (hasCc name: "clang") then {
+        checkUnused :r :em
+        checkReach :r :em
+    } else {
+        print "SKIP(emitted) unused, reach: clang not installed"
+        r.skip = r.skip + 2
+    }
+    checkForward :r :em
+    checkAlias :r :em
+    checkEager :r :em
+    checkCounts :r :em
+}
+
+# emitShared -- run every emit of the kind, under the runner's scratch directory
+emitShared: function {r: Runner.view} out Emitted is {
+    dir: "\{r.tmp}/emitted"
+    io.mkdirp path: dir
+    progs: programsUnder dirs: (listOf2 a: r.examplesDir.stringView b: r.corpusDir.stringView)
+    em: (
+        Emitted
+        :dir
+        progs: progs.take
+        users: (userUnitPrograms :r)
+        libs: (programsUnder dirs: (listOf2 a: r.sys.stringView b: r.srcDir.stringView))
+        ok: ListVal bool
+    )
+    pool: emitPool :r :em
+    statuses: ListVal i32
+    failSteps: ListVal i64
+    t0: os.monotonicMillis
+    runJobs jobs: pool maxJobs: r.jobsMax :statuses :failSteps
+    print "emitted: \{pool.length} emits in \{secondsSince :t0} s"
+    k: u64
+    for k < pool.length loop {
+        em.ok.append ((failSteps.get i: k) == -1) and ((statuses.get i: k) == 0)
+        k = k + 1
+    }
+    return em
+}
+
+# emitPool -- the emit jobs, in job order
+emitPool: function {r: Runner.view em: Emitted.view} out List PoolJob is {
+    pool: List PoolJob
+    za: List String
+    za.append from: r.zc.copy
+    for each w: (listOfNames3 a: "zc" b: "--src" c: r.srcDir.stringView) loop za.append w.copy
+    for each w: (listOfNames3 a: "--system" b: r.sys.stringView c: "--fast-hash"
+    ) loop za.append w.copy
+    za.append "--emit-c".string
+    za.append (zcCOf :em)
+    zcSteps: List PoolStep
+    (
+        zcSteps.append
+        (
+            mkStep
+            argv: za.take
+            cwd: r.root.stringView
+            outPath: os.nullDevice.stringView
+            errPath: os.nullDevice.stringView
+            timeoutSecs: 0
+            allowFail: false
+            zlinkFrom: ""
+        )
+    )
+    pool.append (mkJob name: "zc" steps: zcSteps.take)
+    v: u64
+    for v < emitVariant.length loop {
+        for each p: em.progs loop pool.append (variantJobOf :r :em :p :v job: pool.length)
+        v = v + 1
+    }
+    for each p: em.users loop pool.append (eagerJob :r :em :p job: pool.length)
+    for each p: em.libs loop pool.append (eagerJob :r :em :p job: pool.length)
+    return pool
+}
+
+# variantJobOf -- job `job`: emit program `p` in variant `v`; an eager C is then
+# compiled, and a `--cc tcc` emit writes no C (its diagnostics are what counts)
+variantJobOf: function {
+    r: Runner.view em: Emitted.view p: Program.view v: u64 job: u64
+} out PoolJob is {
+    steps: List PoolStep
+    tcc: (v == emitVariant.slot.tccLinux) or (v == emitVariant.slot.tccWindows)
+    cfile: cOf :em :job
+    if tcc then cfile = os.nullDevice
+    flags: emitVariant.get i: v
+    steps.append (
+        emitStep
+        :r
+        prog: p.path.stringView
+        :flags
+        cfile: cfile.stringView
+        errfile: (errOf :em :job).stringView
+    )
+    if v == emitVariant.slot.eager then steps.append (syntaxStep :r cfile: cfile.stringView)
+    return (mkJob name: p.name.stringView :steps)
+}
+
+# eagerJob -- job `job`: emit program `p` under --eager, then compile its C
+eagerJob: function {r: Runner.view em: Emitted.view p: Program.view job: u64} out PoolJob is {
+    steps: List PoolStep
+    cfile: cOf :em :job
+    steps.append (
+        emitStep
+        :r
+        prog: p.path.stringView
+        flags: "--eager"
+        cfile: cfile.stringView
+        errfile: (errOf :em :job).stringView
+    )
+    steps.append (syntaxStep :r cfile: cfile.stringView)
+    return (mkJob name: p.name.stringView steps: steps.take)
+}
+
+# listOf2 -- the two texts `a` and `b`
+listOf2: function {a: StringView b: StringView} out List String is {
+    l: List String
+    l.append a.string
+    l.append b.string
+    return l
+}
+
+# listOfNames3 -- the three texts `a`, `b` and `c`
+listOfNames3: function {a: StringView b: StringView c: StringView} out List String is {
+    l: List String
+    l.append a.string
+    l.append b.string
+    l.append c.string
+    return l
+}
+
+# programsUnder -- every `.z` file directly under `dirs`, by name
+programsUnder: function {dirs: (List String).view} out List Program is {
+    ps: List Program
+    for each d: dirs loop {
+        for each nm: (fixtureNames dir: d.stringView suffix: ".z") loop ps.append (
+            Program
+            path: "\{d}/\{nm}.z"
+            name: nm.copy
+        )
+    }
+    return ps
+}
+
+# userUnitPrograms -- the run cases under tests/fixtures/user_units, which the
+# eager check emits too
+userUnitPrograms: function {r: Runner.view} out List Program is {
+    ps: List Program
+    words: zast.Vocab.create block: emittedWord
+    listText: slurp path: r.runcases.stringView
+    for each ln: listText.stringView.lines loop {
+        cols: List String
+        for each c: (ln.split sep: " ") loop {
+            if c.length > 0 then cols.append c.string
+        }
+        if cols.length >= 2 when (
+            (words.slotOf text: (cols.get i: 1).stringView) == emittedWord.slot.userUnits
+        ) then {
+            nm: cols.get i: 0
+            dir: cols.get i: 1
+            ps.append (Program path: "\{r.root}/\{dir}/\{nm}.z" name: nm.copy)
+        }
+    }
+    return ps
+}
+
+# jobOf -- the job emitting variant `v` of program `i`
+jobOf: function {em: Emitted.view v: u64 i: u64} out u64 is {
+    return 1 + (v * em.progs.length) + i
+}
+
+# emittedOk -- program `i`'s emit in variant `v` succeeded
+emittedOk: function {em: Emitted.view v: u64 i: u64} out bool is {
+    return (em.ok.get i: (jobOf :em :v :i))
+}
+
+# cOf -- where job `job` writes its C
+cOf: function {em: Emitted.view job: u64} out String is {
+    return "\{em.dir}/e\{job}.c"
+}
+
+# errOf -- where job `job` writes zc's diagnostics
+errOf: function {em: Emitted.view job: u64} out String is {
+    return "\{em.dir}/e\{job}.err"
+}
+
+# zcCOf -- where zc's own C goes
+zcCOf: function {em: Emitted.view} out String is {
+    return (cOf :em job: 0)
+}
+
+# variantC -- the C of program `i` in variant `v`; "" when its emit failed
+variantC: function {em: Emitted.view v: u64 i: u64} out String is {
+    if (emittedOk :em :v :i).false then return "".string
+    return (slurp path: (cOf :em job: (jobOf :em :v :i)).stringView)
+}
+
+# emitStep -- `zc emit` of `prog` with `flags`, its C to `cfile` and its
+# diagnostics to `errfile`. A failed emit stops the job.
+emitStep: function {
+    r: Runner.view
+    prog: StringView
+    flags: StringView
+    cfile: StringView
+    errfile: StringView
+} out PoolStep is {
+    argv: List String
+    argv.append from: r.zc.copy
+    argv.append "emit".string
+    argv.append prog.string
+    appendFlags :argv :flags
+    argv.append "-o".string
+    argv.append cfile.string
+    return (
+        mkStep
+        argv: argv.take
+        cwd: r.root.stringView
+        outPath: os.nullDevice.stringView
+        errPath: errfile
+        timeoutSecs: r.timeoutSecs
+        allowFail: false
+        zlinkFrom: ""
+    )
+}
+
+# appendFlags -- each word of `flags` onto `argv`
+appendFlags: function {argv: List String flags: StringView} is {
+    for each f: (flags.split sep: " ") loop {
+        if f.length > 0 then argv.append f.string
+    }
+}
+
+# syntaxStep -- the runner's C compiler reads `cfile` and refuses an undeclared
+# call
+syntaxStep: function {r: Runner.view cfile: StringView} out PoolStep is {
+    argv: List String
+    argv.append from: r.cc.copy
+    appendFlags :argv flags: "-std=c17 -w -Werror=implicit-function-declaration -fsyntax-only"
+    argv.append cfile.string
+    return (
+        mkStep
+        argv: argv.take
+        cwd: r.root.stringView
+        outPath: os.nullDevice.stringView
+        errPath: os.nullDevice.stringView
+        timeoutSecs: r.timeoutSecs
+        allowFail: false
+        zlinkFrom: ""
+    )
+}
+
+# hasCc -- the program `name` runs on this host
+hasCc: function {name: StringView} out bool is {
+    argv: List String
+    argv.append name.string
+    argv.append "--version".string
+    rc: (
+        os.spawn
+        :argv
+        cwd: ""
+        outPath: os.nullDevice.stringView
+        errPath: os.nullDevice.stringView
+        timeoutSecs: 60
+    )
+    return rc == 0
+}
+
+# secondsSince -- whole seconds from monotonic millis `t0` to now
+secondsSince: function {t0: i64} out i64 is {
+    return os.monotonicMillis - t0 / 1000
+}
+
+# holdsCount -- count `n` equals its baseline `base` (named `name` in the
+# expected subunit); fails the check `check` when it does not
+holdsCount: function {
+    r: Runner
+    check: StringView
+    what: StringView
+    n: u64
+    base: u64
+    name: StringView
+} out bool is {
+    if n > base then {
+        print "FAIL(emitted) \{check}: \{n} \{what} (baseline \{base})"
+        r.fails = r.fails + 1
+        return false
+    }
+    if n < base then {
+        print "FAIL(emitted) \{check}: \{n} \{what} < baseline \{base} -- lower \{name} in src/ztestrunner/expected.z"
+        r.fails = r.fails + 1
+        return false
+    }
+    r.passN = r.passN + 1
+    return true
+}
+
+# sameNames -- `a` and `b` hold the same names in the same order
+sameNames: function {a: (List String).view b: (List String).view} out bool is {
+    if a.length != b.length then return false
+    i: u64
+    for i < a.length loop {
+        if (a.get :i) != (b.get :i) then return false
+        i = i + 1
+    }
+    return true
+}
+
+# joined -- `names`, a space between each two
+joined: function {names: (List String).view} out String is {
+    s: String
+    for each nm: names loop {
+        if s.length > 0 then s.append " "
+        s.append nm
+    }
+    return s
+}
+
+# namesOf -- the texts of `block`
+namesOf: function {block: staticlist StringView} out List String is {
+    l: List String
+    for each nm: block loop l.append nm.string
+    return l
+}
+
+# unusedCompilers -- the compilers the unused check runs on this host: gcc,
+# clang, and mingw-w64 where it is installed
+unusedCompilers: function out List UnusedCc is {
+    ccs: List UnusedCc
+    ccs.append (
+        newUnusedCc
+        label: "gcc"
+        cc: "gcc"
+        flags: ""
+        unreachable: false
+        probe: expected.unusedProbeGcc
+    )
+    ccs.append (
+        newUnusedCc
+        label: "clang"
+        cc: "clang"
+        flags: ""
+        unreachable: true
+        probe: expected.unusedProbeClang
+    )
+    if (hasCc name: mingwCc) then {
+        ccs.append (
+            newUnusedCc
+            label: "mingw"
+            cc: mingwCc
+            flags: mingwFlags
+            unreachable: false
+            probe: expected.unusedProbeGcc
+        )
+    }
+    return ccs
+}
+
+# newUnusedCc -- the unused check's view of compiler `cc`
+newUnusedCc: function {
+    label: StringView
+    cc: StringView
+    flags: StringView
+    unreachable: bool
+    probe: staticlist StringView
+} out UnusedCc is {
+    argv: List String
+    argv.append cc.string
+    appendFlags :argv :flags
+    return (UnusedCc label: label.string argv: argv.take :unreachable probe: (namesOf block: probe))
+}
+
+# UnusedFound -- what a compiler said of one file: the file-scope items it
+# reports unused (by name), its errors, and its unreachable statements
+UnusedFound: class {
+    names: List String
+    errors: u64
+    unreachable: u64
+}
+
+# UnusedTally -- what the compilers said of every file, by part
+UnusedTally: class {
+    corpus: u64
+    compiler: u64
+    errors: u64
+    unreachableCorpus: u64
+    unreachableCompiler: u64
+    # each compiler's count, `<n> from <compiler>`, a comma between each two
+    byCompiler: String
+}
+
+# checkUnused -- the unused check: each compiler first reports exactly its
+# probe names in the probe and an error for an undeclared call, then compiles
+# zc's C and every program's host C in each configuration
+checkUnused: function {r: Runner em: Emitted.view} is {
+    ccs: unusedCompilers
+    targets: unusedTargets :em
+    probe: "\{r.root}/\{probePath}"
+    undeclared: "\{em.dir}/undeclared.c"
+    wr: io.writeText path: undeclared content: "int main(void) { return cdead_undeclared_fn(); }\n"
+    wr.drop
+    pool: List PoolJob
+    for each cc: ccs loop {
+        for each cfg: unusedConfig loop pool.append (
+            unusedJob
+            :cc
+            :cfg
+            cfile: probe
+            errfile: (probeErrOf :em n: pool.length)
+        )
+        pool.append (
+            unusedJob
+            :cc
+            cfg: ""
+            cfile: undeclared
+            errfile: (probeErrOf :em n: pool.length)
+        )
+    }
+    probeJobs: pool.length
+    for each cc: ccs loop {
+        for each t: targets loop {
+            for each cfg: unusedConfig loop {
+                pool.append (
+                    unusedJob
+                    :cc
+                    :cfg
+                    cfile: t
+                    errfile: (unusedErrOf :em n: pool.length - probeJobs)
+                )
+            }
+        }
+    }
+    statuses: ListVal i32
+    failSteps: ListVal i64
+    t0: os.monotonicMillis
+    runJobs jobs: pool maxJobs: r.jobsMax :statuses :failSteps
+    secs: secondsSince :t0
+    if (unusedProbesHold :r :em :ccs probe: probe.stringView undeclared: undeclared.stringView
+    ).false then return
+    tally: tallyUnused :em :ccs :targets
+    reportUnused :r :tally
+    print "emitted unused: corpus \{tally.corpus}, zc \{tally.compiler} (\{tally.byCompiler}); unreachable: corpus \{tally.unreachableCorpus}, zc \{tally.unreachableCompiler}; \{targets.length} files x \{unusedConfig.length} configurations, compiled in \{secs} s"
+}
+
+# unusedTargets -- the files the unused and reach checks read: zc's C first
+# (its compiles take longest, and started last they would run alone at the
+# end), then each program's host C that emitted
+unusedTargets: function {em: Emitted.view} out List String is {
+    files: List String
+    if (em.ok.get i: 0) then files.append (zcCOf :em)
+    i: u64
+    for i < em.progs.length loop {
+        if (emittedOk :em v: emitVariant.slot.host :i) then files.append (
+            cOf
+            :em
+            job: (jobOf :em v: emitVariant.slot.host :i)
+        )
+        i = i + 1
+    }
+    return files
+}
+
+# probeErrOf -- where probe compile `n` writes its diagnostics. Each compiler's
+# probe compiles stand together: one per configuration, then the undeclared
+# call.
+probeErrOf: function {em: Emitted.view n: u64} out String is {
+    return "\{em.dir}/q\{n}.err"
+}
+
+# unusedErrOf -- where target compile `n` writes its diagnostics: by compiler,
+# then target, then configuration
+unusedErrOf: function {em: Emitted.view n: u64} out String is {
+    return "\{em.dir}/u\{n}.err"
+}
+
+# unusedJob -- compiler `cc` compiles `cfile` in configuration `cfg`, its
+# diagnostics to `errfile`
+unusedJob: function {
+    cc: UnusedCc.view cfg: StringView cfile: String.view errfile: String.view
+} out PoolJob is {
+    argv: List String
+    for each a: cc.argv loop argv.append a.copy
+    for each f: unusedFlags loop argv.append f.string
+    if cc.unreachable then {
+        for each f: unreachableFlags loop argv.append f.string
+    } else {
+        appendFlags :argv flags: "-S -o"
+        argv.append os.nullDevice
+    }
+    appendFlags :argv flags: cfg
+    argv.append cfile.copy
+    steps: List PoolStep
+    (
+        steps.append
+        (
+            mkStep
+            argv: argv.take
+            cwd: ""
+            outPath: os.nullDevice.stringView
+            errPath: errfile.stringView
+            timeoutSecs: 0
+            allowFail: true
+            zlinkFrom: ""
+        )
+    )
+    return (mkJob name: cfile.stringView :steps)
+}
+
+# unusedProbesHold -- each compiler's probe compiles hold (probeHolds)
+unusedProbesHold: function {
+    r: Runner
+    em: Emitted.view
+    ccs: (List UnusedCc).view
+    probe: StringView
+    undeclared: StringView
+} out bool is {
+    bad: u64
+    first: u64
+    for each cc: ccs loop {
+        bad = bad + (probeHolds :em :cc :first :probe :undeclared)
+        first = first + unusedConfig.length + 1
+    }
+    r.fails = r.fails + bad
+    return bad == 0
+}
+
+# probeHolds -- how many of compiler `cc`'s probe claims fail, its probe
+# compiles starting at `first`: it reports exactly its probe names over the
+# configurations, the probe's unreachable statement in each configuration where
+# it counts them, and an error for the undeclared call
+probeHolds: function {
+    em: Emitted.view
+    cc: UnusedCc.view
+    first: u64
+    probe: StringView
+    undeclared: StringView
+} out u64 is {
+    bad: u64
+    seen: List String
+    c: u64
+    for c < unusedConfig.length loop {
+        pu: readUnused cfile: probe errfile: (probeErrOf :em n: first + c).stringView
+        for each nm: pu.names loop {
+            if (seen.contains item: nm).false then seen.append nm.copy
+        }
+        if cc.unreachable when pu.unreachable != expected.unreachableProbe then {
+            print "FAIL(emitted) unused: \{cc.label} reports \{pu.unreachable} unreachable statement(s) in \{probePath} in configuration \{c}, not \{expected.unreachableProbe}"
+            bad = bad + 1
+        }
+        c = c + 1
+    }
+    seen.sort
+    if (sameNames a: seen b: cc.probe).false then {
+        print "FAIL(emitted) unused: \{cc.label} does not report exactly \{probePath}'s file-scope dead items"
+        print "  want: \{joined names: cc.probe}"
+        print "  got:  \{joined names: seen}"
+        bad = bad + 1
+    }
+    if (
+        (
+            readUnused
+            cfile: undeclared
+            errfile: (probeErrOf :em n: first + unusedConfig.length).stringView
+        ).errors ==
+        0
+    ) then {
+        print "FAIL(emitted) unused: \{cc.label} does not reject a call to an undeclared function"
+        bad = bad + 1
+    }
+    return bad
+}
+
+# tallyUnused -- what the compilers said of `targets`, listing the first twenty
+# findings as it reads them
+tallyUnused: function {
+    em: Emitted.view ccs: (List UnusedCc).view targets: (List String).view
+} out UnusedTally is {
+    t: (
+        UnusedTally
+        corpus: 0
+        compiler: 0
+        errors: 0
+        unreachableCorpus: 0
+        unreachableCompiler: 0
+        byCompiler: String
+    )
+    zcC: zcCOf :em
+    n: u64
+    for each cc: ccs loop {
+        ccN: u64
+        for each f: targets loop {
+            c: u64
+            for c < unusedConfig.length loop {
+                ccN = (
+                    ccN +
+                    (
+                        tallyCompile
+                        :t
+                        :cc
+                        file: f.stringView
+                        errfile: (unusedErrOf :em :n).stringView
+                        isZc: f == zcC
+                    )
+                )
+                n = n + 1
+                c = c + 1
+            }
+        }
+        if t.byCompiler.length > 0 then t.byCompiler.append ", "
+        t.byCompiler.append "\{ccN} from \{cc.label}"
+    }
+    if (hasCc name: mingwCc).false then t.byCompiler.append ", mingw-w64 not installed"
+    return t
+}
+
+# tallyCompile -- add what compiler `cc` said of `file` (in `errfile`) to the
+# tally `t`, by part, listing an unused item while the tally holds twenty or
+# fewer; answers how many it reported
+tallyCompile: function {
+    t: UnusedTally
+    cc: UnusedCc.view
+    file: StringView
+    errfile: StringView
+    isZc: bool
+} out u64 is {
+    u: readUnused cfile: file :errfile
+    t.errors = t.errors + u.errors
+    if isZc then {
+        t.compiler = t.compiler + u.names.length
+        t.unreachableCompiler = t.unreachableCompiler + u.unreachable
+    } else {
+        t.corpus = t.corpus + u.names.length
+        t.unreachableCorpus = t.unreachableCorpus + u.unreachable
+    }
+    for each nm: u.names loop {
+        if (t.corpus + t.compiler) <= 20 then print "  unused (\{cc.label}): \{nm} in \{file}"
+    }
+    return u.names.length
+}
+
+# reportUnused -- each count of the tally against its baseline
+reportUnused: function {r: Runner tally: UnusedTally.view} is {
+    if tally.errors > 0 then {
+        print "FAIL(emitted) unused: \{tally.errors} compile error(s) in a configuration: C calls a function its test leaves out"
+        r.fails = r.fails + 1
+    }
+    a: (
+        holdsCount
+        :r
+        check: "unused"
+        what: "unused file-scope functions and variables in the corpus"
+        n: tally.corpus
+        base: expected.unusedCorpus
+        name: "unusedCorpus"
+    )
+    b: (
+        holdsCount
+        :r
+        check: "unused"
+        what: "unused file-scope functions and variables in zc"
+        n: tally.compiler
+        base: expected.unusedCompiler
+        name: "unusedCompiler"
+    )
+    if (
+        a and b
+    ).false then print "  A C item written that nothing calls in some configuration: see emitC in the zemitterc unit."
+    c: (
+        holdsCount
+        :r
+        check: "unused"
+        what: "unreachable statements in the corpus"
+        n: tally.unreachableCorpus
+        base: expected.unreachableCorpus
+        name: "unreachableCorpus"
+    )
+    d: (
+        holdsCount
+        :r
+        check: "unused"
+        what: "unreachable statements in zc"
+        n: tally.unreachableCompiler
+        base: expected.unreachableCompiler
+        name: "unreachableCompiler"
+    )
+    if (
+        c and d
+    ).false then print "  A site appended after a diverged block: see blockDiverges in the zemitterc unit."
+}
+
+# readUnused -- what the diagnostics in `errfile` say of C file `cfile`: each
+# unused-function, -variable or -const-variable warning placed in `cfile` and
+# not on an indented line (a local), each error, each unreachable statement
+readUnused: function {cfile: StringView errfile: StringView} out UnusedFound is {
+    found: UnusedFound names: List String errors: 0 unreachable: 0
+    diag: slurp path: errfile
+    src: slurp path: cfile
+    srcLines: List String
+    for each l: src.stringView.lines loop srcLines.append l.string
+    for each ln: diag.stringView.lines loop {
+        w: warningOf :ln
+        if w.error then {
+            found.errors = found.errors + 1
+        } else if w.unreachable then {
+            found.unreachable = found.unreachable + 1
+        } else if w.unusedVar or w.unusedItem when (
+            placedLocally
+            :ln
+            :cfile
+            :srcLines
+            var: w.unusedVar
+        ).false then {
+            at: (ln.indexOf ": warning: ").or d: ln.length
+            found.names.append (quotedName text: (ln.substring from: at to: ln.length))
+        }
+    }
+    return found
+}
+
+# warnkind -- what one line of a compiler's diagnostics says
+warnkind: variant {
+    other: null
+    error: null
+    unreachable: null
+    # an unused function or constant: file-scope wherever it is placed
+    unusedItem: null
+    # an unused variable: file-scope only when its line is not indented
+    unusedVar: null
+} as { tag: u8.tag }
+
+# warningOf -- what diagnostic line `ln` says
+warningOf: function {ln: StringView} out warnkind is {
+    if ln.contains ": error:" then return warnkind.error
+    if (ln.contains ": warning: ").false then return warnkind.other
+    if ln.contains "[-Wunreachable-code" then return warnkind.unreachable
+    if (
+        (ln.contains "[-Wunused-function]") or (ln.contains "[-Wunused-const-variable")
+    ) then return warnkind.unusedItem
+    if ln.contains "[-Wunused-variable]" then return warnkind.unusedVar
+    return warnkind.other
+}
+
+# placedLocally -- warning line `ln` is about a line of another file than
+# `cfile`, places nothing, or (for a variable, `var`) is about an indented line
+# of `srcLines`: a local
+placedLocally: function {
+    ln: StringView cfile: StringView srcLines: (List String).view var: bool
+} out bool is {
+    at: (ln.indexOf ": warning: ").or d: ln.length
+    lineNo: placeLine where: (ln.substring from: 0 to: at) file: cfile
+    if lineNo == 0 then return true
+    if var.false or (lineNo > srcLines.length) then return false
+    text: srcLines.get i: lineNo - 1
+    return (text.stringView.startsWith " ") or (text.stringView.startsWith "\t")
+}
+
+# placeLine -- the line of `where` (`<file>:<line>:<col>`) when its file is
+# `file`; 0 for another file, or when `where` places nothing
+placeLine: function {where: StringView file: StringView} out u64 is {
+    c2: (where.lastIndexOf ":").or d: where.length
+    if c2 == where.length then return 0
+    head: where.substring from: 0 to: c2
+    c1: (head.lastIndexOf ":").or d: head.length
+    if c1 == head.length then return 0
+    if (head.substring from: 0 to: c1) != file then return 0
+    return ((head.substring from: c1 + 1 to: head.length).parseU64.or d: 0)
+}
+
+# quotedName -- the first name a diagnostic quotes, in ASCII or typographic
+# quotes; "?" when it quotes none
+quotedName: function {text: StringView} out String is {
+    i: 1.u64
+    for i < text.length loop {
+        b: (text.byteAt :i).or d: 0
+        p: (text.byteAt i: i - 1).or d: 0
+        # `'`, or the last byte of `‘` (E2 80 98)
+        if (ascii.isLetter :b) or (b == 0c_) when (p == 0c') or (p == 152) then {
+            return (text.substring from: i to: (creach.wordEnd :text from: i)).string
+        }
+        i = i + 1
+    }
+    return "?".string
+}
+
+# ReachTally -- what creach found in every file, by part
+ReachTally: class {
+    corpus: u64
+    compiler: u64
+    # configurations whose preprocessing wrote nothing
+    failed: u64
+    # each item it could not name, `<file>: <start>`, the first twenty
+    unowned: List String
+    # the dead items by kind, by the kind's tag
+    kinds: ListVal u64
+}
+
+# checkReach -- the reach check: creach first reports exactly the probe's dead
+# items, then reads zc's C and every program's host C
+checkReach: function {r: Runner em: Emitted.view} is {
+    targets: List String
+    probeCopy: "\{em.dir}/cdead_probe.c"
+    probeSrc: "\{r.root}/\{probePath}"
+    probeText: slurp path: probeSrc.stringView
+    pw: io.writeText path: probeCopy content: probeText
+    pw.drop
+    targets.append probeCopy.take
+    for each f: (unusedTargets :em) loop targets.append f.copy
+    pool: List PoolJob
+    t: u64
+    for t < targets.length loop {
+        raw: slurp path: (targets.get i: t).stringView
+        ppin: creach.preprocessInput raw: raw.stringView
+        input: reachInputOf :em :t
+        iw: io.writeText path: input content: ppin
+        iw.drop
+        c: u64
+        for c < reachConfig.length loop {
+            output: reachOutputOf :em :t :c
+            pool.append (
+                preprocessJob
+                cfg: (reachConfig.get i: c)
+                input: input.stringView
+                output: output.stringView
+            )
+            c = c + 1
+        }
+        t = t + 1
+    }
+    statuses: ListVal i32
+    failSteps: ListVal i64
+    t0: os.monotonicMillis
+    runJobs jobs: pool maxJobs: r.jobsMax :statuses :failSteps
+    ppSecs: secondsSince :t0
+    if (reachProbeHolds :r :em).false then return
+    t1: os.monotonicMillis
+    tally: tallyReach :em :targets
+    if (reachReadable :r :tally).false then return
+    a: (
+        holdsCount
+        :r
+        check: "reach"
+        what: "dead C items in the corpus"
+        n: tally.corpus
+        base: expected.deadCorpus
+        name: "deadCorpus"
+    )
+    b: (
+        holdsCount
+        :r
+        check: "reach"
+        what: "dead C items in zc"
+        n: tally.compiler
+        base: expected.deadCompiler
+        name: "deadCompiler"
+    )
+    if (
+        a and b
+    ).false then print "  A C item written that main does not reach: see emitC in the zemitterc unit."
+    k: tally.kinds
+    print "emitted reach: corpus \{tally.corpus}, zc \{tally.compiler} (macro=\{k.get i: 0} type=\{(
+        k.get
+        i: 1
+    )} fn=\{k.get i: 2} var=\{(
+        k.get
+        i: 3
+    )}); \{targets.length - 1} files x \{reachConfig.length} configurations, preprocessed in \{ppSecs} s, read in \{(
+        secondsSince
+        t0: t1
+    )} s"
+}
+
+# reachInputOf -- what target `t`'s preprocessing reads
+reachInputOf: function {em: Emitted.view t: u64} out String is {
+    return "\{em.dir}/r\{t}.in"
+}
+
+# reachOutputOf -- what target `t`'s preprocessing writes in configuration `c`
+reachOutputOf: function {em: Emitted.view t: u64 c: u64} out String is {
+    n: t * reachConfig.length + c
+    return "\{em.dir}/r\{n}.pp"
+}
+
+# reachProbeHolds -- creach reported exactly the probe's dead items (target 0)
+reachProbeHolds: function {r: Runner em: Emitted.view} out bool is {
+    probeCopy: "\{em.dir}/cdead_probe.c"
+    probeV: verdictOf :em t: 0 raw: probeCopy.stringView
+    got: List String
+    for each d: probeV.dead loop got.append d.name.copy
+    got.sort
+    want: namesOf block: expected.deadProbe
+    if (sameNames a: got b: want) then return true
+    print "FAIL(emitted) reach: the reader does not see \{probePath}'s dead items"
+    print "  want: \{joined names: want}"
+    print "  got:  \{joined names: got}"
+    r.fails = r.fails + 1
+    return false
+}
+
+# tallyReach -- creach's verdicts on every target after the probe, listing the
+# first twenty dead items as it reads them
+tallyReach: function {em: Emitted.view targets: (List String).view} out ReachTally is {
+    t: ReachTally corpus: 0 compiler: 0 failed: 0 unowned: List String kinds: ListVal u64
+    for t.kinds.length < 4 loop t.kinds.append 0
+    zcC: zcCOf :em
+    i: 1.u64
+    for i < targets.length loop {
+        f: targets.get :i
+        v: verdictOf :em t: i raw: f.stringView
+        t.failed = t.failed + v.failed
+        for each d: v.dead loop tallyDead :t :d file: f.stringView isZc: f == zcC
+        for each u: v.unowned loop {
+            if t.unowned.length < 20 then t.unowned.append "\{f}: \{u}"
+        }
+        i = i + 1
+    }
+    return t
+}
+
+# tallyDead -- add dead item `d` of `file` to the tally `t`, listing it while
+# the tally holds twenty or fewer
+tallyDead: function {t: ReachTally d: creach.DeadItem.view file: StringView isZc: bool} is {
+    if isZc then {
+        t.compiler = t.compiler + 1
+    } else t.corpus = t.corpus + 1
+    t.kinds.set i: d.kind.tag.u64 val: (t.kinds.get i: d.kind.tag.u64) + 1
+    word: creach.itemWord k: d.kind
+    if (t.corpus + t.compiler) <= 20 then print "  dead \{word}: \{d.name} in \{file}"
+}
+
+# reachReadable -- every configuration was preprocessed and every item named
+reachReadable: function {r: Runner tally: ReachTally.view} out bool is {
+    if tally.failed > 0 then {
+        print "FAIL(emitted) reach: the preprocessor wrote nothing for \{tally.failed} configuration(s) of a file"
+        r.fails = r.fails + 1
+        return false
+    }
+    if tally.unowned.length == 0 then return true
+    print "FAIL(emitted) reach: top-level C items the reader cannot name:"
+    for each u: tally.unowned loop print "  \{u}"
+    r.fails = r.fails + 1
+    return false
+}
+
+# verdictOf -- creach's verdict on target `t`, whose C is at `raw`, from its
+# preprocessed copies
+verdictOf: function {em: Emitted.view t: u64 raw: StringView} out creach.Verdict is {
+    text: slurp path: raw
+    outs: List String
+    c: u64
+    for c < reachConfig.length loop {
+        outs.append (slurp path: (reachOutputOf :em :t :c).stringView)
+        c = c + 1
+    }
+    return (creach.analyse raw: text.stringView outputs: outs)
+}
+
+# preprocessJob -- gcc resolves the conditionals of `input` in configuration
+# `cfg`, keeping every macro and reading no system header, into `output`
+preprocessJob: function {cfg: StringView input: StringView output: StringView} out PoolJob is {
+    argv: List String
+    argv.append "gcc".string
+    appendFlags :argv flags: "-E -P -fdirectives-only -nostdinc"
+    appendFlags :argv flags: cfg
+    appendFlags :argv flags: "-x c"
+    argv.append input.string
+    argv.append "-o".string
+    argv.append output.string
+    steps: List PoolStep
+    (
+        steps.append
+        (
+            mkStep
+            argv: argv.take
+            cwd: ""
+            outPath: os.nullDevice.stringView
+            errPath: os.nullDevice.stringView
+            timeoutSecs: 0
+            allowFail: true
+            zlinkFrom: ""
+        )
+    )
+    return (mkJob name: input :steps)
+}
+
+# checkForward -- the forward check, over the host and the eager C
+checkForward: function {r: Runner em: Emitted.view} is {
+    words: zast.Vocab.create block: emittedWord
+    bad: String
+    for each v: (listOfVariants a: emitVariant.slot.host b: emitVariant.slot.eager) loop {
+        i: u64
+        for i < em.progs.length loop {
+            c: variantC :em :v :i
+            if (untaggedAndForward :words c: c.stringView) then {
+                bad.append " \{(em.progs.get :i).name}"
+                if v == emitVariant.slot.eager then bad.append "--eager"
+            }
+            i = i + 1
+        }
+    }
+    if bad.length > 0 then {
+        print "FAIL(emitted) forward: a type is emitted UNTAGGED and forward-declared:\{bad}"
+        print "  An anonymous 'typedef struct { ... } X_t;' has no tag, so a later"
+        print "  'typedef struct X_t X_t;' names nothing. Whoever writes the forward"
+        print "  must first ask whether the body is already out (typeStructEmitted)."
+        r.fails = r.fails + 1
+        return
+    }
+    r.passN = r.passN + 1
+    print "emitted forward: no type is both emitted untagged and forward-declared (host and --eager)"
+}
+
+# listOfVariants -- the slots `a` and `b` as one list, for a check that reads
+# two variants
+listOfVariants: function {a: u64 b: u64} out ListVal u64 is {
+    l: ListVal u64
+    l.append a
+    l.append b
+    return l
+}
+
+# untaggedAndForward -- C `c` declares a struct with no tag (`typedef struct {`
+# closed by `} z_tN_t;`) and also forward-declares that name
+# (`typedef struct z_tN_t z_tN_t;`)
+untaggedAndForward: function {words: zast.Vocab.view c: StringView} out bool is {
+    forward: forwardNames :c
+    for each u: (untaggedNames :words :c) loop {
+        if (forward.contains item: u) then return true
+    }
+    return false
+}
+
+# untaggedNames -- the names of the structs C `c` declares with no tag: what
+# the first `}` line after a `typedef struct {` line names, `} z_tN_t;`
+untaggedNames: function {words: zast.Vocab.view c: StringView} out List String is {
+    names: List String
+    inBody: false
+    for each l: c.lines loop {
+        if (words.slotOf text: l) == emittedWord.slot.untaggedOpen then {
+            inBody = true
+        } else if inBody when l.startsWith "}" then {
+            inBody = false
+            if l.startsWith "} " when l.endsWith ";" then {
+                nm: l.substring from: 2 to: l.length - 1
+                if (isTypeName :nm) then names.append nm.string
+            }
+        }
+    }
+    return names
+}
+
+# forwardNames -- the names C `c` forward-declares,
+# `typedef struct z_tN_t z_tN_t;`
+forwardNames: function {c: StringView} out List String is {
+    names: List String
+    for each l: c.lines loop {
+        if l.startsWith "typedef struct z_t" then {
+            rest: l.substring from: 15 to: l.length
+            sp: (rest.indexOf " ").or d: rest.length
+            nm: rest.substring from: 0 to: sp
+            second: rest.substring from: sp to: rest.length
+            if (isTypeName :nm) when second.startsWith " z_t" then names.append nm.string
+        }
+    }
+    return names
+}
+
+# isTypeName -- `nm` is an emitted type's C name, `z_t<digits>_t`
+isTypeName: function {nm: StringView} out bool is {
+    if (nm.startsWith "z_t").false or (nm.endsWith "_t").false or (nm.length < 6) then return false
+    for each b: (nm.substring from: 3 to: nm.length - 2).byteView loop {
+        if (ascii.isDigit :b).false then return false
+    }
+    return true
+}
+
+# checkAlias -- the alias check, over the readable-names C with and without
+# --eager, of every program that declares no List, Map or Set of its own
+checkAlias: function {r: Runner em: Emitted.view} is {
+    bad: String
+    i: u64
+    for i < em.progs.length loop {
+        p: em.progs.get :i
+        if (declaresCollection path: p.path.stringView).false then bad.append (aliasBad :em :i)
+        i = i + 1
+    }
+    if bad.length > 0 then {
+        print "FAIL(emitted) alias: a mono is labelled with an ALIAS head:\{bad}"
+        print "  The label head must be the template's DECLARED name. A caller that"
+        print "  composes its own head reintroduces the path-dependence -- pass only"
+        print "  the argument suffix to getOrMintSpec."
+        r.fails = r.fails + 1
+        return
+    }
+    r.passN = r.passN + 1
+    print "emitted alias: no mono carries an alias head (--readable-names, with and without --eager)"
+}
+
+# aliasBad -- ` <name>` for program `i` when its readable-names C carries an
+# alias head, ` <name>--eager` when its --eager one does; "" when neither does
+aliasBad: function {em: Emitted.view i: u64} out String is {
+    bad: String
+    for each v: (listOfVariants a: emitVariant.slot.readable b: emitVariant.slot.readableEager
+    ) loop {
+        c: variantC :em :v :i
+        if (aliasLabelled c: c.stringView) then {
+            bad.append " \{(em.progs.get :i).name}"
+            if v == emitVariant.slot.readableEager then bad.append "--eager"
+        }
+    }
+    return bad
+}
+
+# declaresCollection -- the program at `path` declares its own List, Map or
+# Set type at unit level
+declaresCollection: function {path: StringView} out bool is {
+    src: slurp :path
+    for each l: src.stringView.lines loop {
+        for each nm: (listOfNames3 a: "List" b: "Map" c: "Set") loop {
+            if l.startsWith nm when (
+                isTypeDeclarator
+                text: (l.substring from: nm.length to: l.length)
+            ) then return true
+        }
+    }
+    return false
+}
+
+# isTypeDeclarator -- `text` is `:` and a type declarator: what follows a type's
+# name where a unit declares it
+isTypeDeclarator: function {text: StringView} out bool is {
+    if (text.startsWith ":").false then return false
+    w: (text.substring from: 1 to: text.length).trimStart
+    for each d: (listOfNames3 a: "class" b: "record" c: "union") loop {
+        if w.startsWith d then return true
+    }
+    for each d: (listOfNames3 a: "variant" b: "protocol" c: "facet") loop {
+        if w.startsWith d then return true
+    }
+    return false
+}
+
+# aliasLabelled -- C `c` names a mono `z_t<digits>_List_`, `_Map_` or `_Set_`:
+# one labelled by an alias head
+aliasLabelled: function {c: StringView} out bool is {
+    pos: u64
+    for pos < c.length loop {
+        at: ((c.substring from: pos to: c.length).indexOf "z_t").or d: c.length
+        if at == c.length then return false
+        i: pos + at + 3
+        k: i
+        for k < c.length while (ascii.isDigit b: ((c.byteAt i: k).or d: 0)) loop k = k + 1
+        tail: c.substring from: k to: c.length
+        if k > i when (
+            (tail.startsWith "_List_") or (tail.startsWith "_Map_") or (tail.startsWith "_Set_")
+        ) then return true
+        pos = i
+    }
+    return false
+}
+
+# checkEager -- the eager check: the programs and the user units against
+# eagerKnown, the lib/system and src units against eagerLibKnown
+checkEager: function {r: Runner em: Emitted.view} is {
+    bad: List String
+    i: u64
+    for i < em.progs.length loop {
+        if (emittedOk :em v: emitVariant.slot.eager :i).false then bad.append (em.progs.get :i
+        ).name.copy
+        i = i + 1
+    }
+    first: jobOf :em v: emitVariant.length i: 0
+    for each nm: (failedOf :em from: first progs: em.users) loop bad.append nm.copy
+    libBad: failedOf :em from: first + em.users.length progs: em.libs
+    known: namesOf block: expected.eagerKnown
+    libKnown: namesOf block: expected.eagerLibKnown
+    a: holdsKnown :r what: "examples, corpus and user units" :bad :known name: "eagerKnown"
+    b: holdsKnown :r what: "lib/system and src" bad: libBad known: libKnown name: "eagerLibKnown"
+    if a when b then print "emitted eager: every program, user unit and library unit emits and compiles under --eager (\{known.length} + \{libKnown.length} known)"
+}
+
+# failedOf -- the names of `progs` whose jobs, from job `from` on, failed
+failedOf: function {em: Emitted.view from: u64 progs: (List Program).view} out List String is {
+    names: List String
+    i: u64
+    for i < progs.length loop {
+        if (em.ok.get i: from + i).false then names.append (progs.get :i).name.copy
+        i = i + 1
+    }
+    return names
+}
+
+# holdsKnown -- the cases in `bad` are exactly those in `known` (named `name`
+# in the expected subunit)
+holdsKnown: function {
+    r: Runner
+    what: StringView
+    bad: (List String).view
+    known: (List String).view
+    name: StringView
+} out bool is {
+    fresh: String
+    for each b: bad loop {
+        if (known.contains item: b).false then fresh.append " \{b}"
+    }
+    gone: String
+    for each k: known loop {
+        if (bad.contains item: k).false then gone.append " \{k}"
+    }
+    if fresh.length > 0 then {
+        print "FAIL(emitted) eager: \{what}: bad under --eager and not known:\{fresh}"
+        print "  A definition nothing references reached the emitter and it wrote"
+        print "  C that does not compile. Fix it; do not add it to \{name}."
+        r.fails = r.fails + 1
+        return false
+    }
+    if gone.length > 0 then {
+        print "FAIL(emitted) eager: \{what}: known-bad now clean:\{gone}"
+        print "  Delete its line from \{name} in src/ztestrunner/expected.z in the change that fixed it."
+        r.fails = r.fails + 1
+        return false
+    }
+    r.passN = r.passN + 1
+    return true
+}
+
+# checkCounts -- the zlink, tcc, constRow and staticView checks
+checkCounts: function {r: Runner em: Emitted.view} is {
+    zl: countZlink :em v: emitVariant.slot.linux
+    zw: countZlink :em v: emitVariant.slot.windows
+    a: (
+        holdsCount
+        :r
+        check: "zlink"
+        what: "programs declaring a link library for Linux"
+        n: zl.length
+        base: expected.zlinkLinux
+        name: "zlinkLinux"
+    )
+    b: (
+        holdsCount
+        :r
+        check: "zlink"
+        what: "programs declaring a link library for Windows"
+        n: zw.length
+        base: expected.zlinkWindows
+        name: "zlinkWindows"
+    )
+    if (a and b).false then listBoth linux: zl windows: zw advice: ""
+    tl: countTccRefused :em v: emitVariant.slot.tccLinux
+    tw: countTccRefused :em v: emitVariant.slot.tccWindows
+    c: (
+        holdsCount
+        :r
+        check: "tcc"
+        what: "programs refused under --cc tcc for Linux"
+        n: tl.length
+        base: expected.tccRefusedLinux
+        name: "tccRefusedLinux"
+    )
+    d: (
+        holdsCount
+        :r
+        check: "tcc"
+        what: "programs refused under --cc tcc for Windows"
+        n: tw.length
+        base: expected.tccRefusedWindows
+        name: "tccRefusedWindows"
+    )
+    if (c and d).false then (
+        listBoth
+        linux: tl
+        windows: tw
+        advice: "A unit's needs speak only for a program that REACHES it."
+    )
+    print "emitted zlink: \{zl.length} programs declare a link library for Linux, \{zw.length} for Windows; tcc refuses \{tl.length} for Linux, \{tw.length} for Windows"
+    checkConstRow :r :em
+    checkStaticView :r :em
+}
+
+# listBoth -- the programs of a count for each system, and what to do
+listBoth: function {linux: (List String).view windows: (List String).view advice: StringView} is {
+    for each l: linux loop print "  linux: \{l}"
+    for each l: windows loop print "  windows: \{l}"
+    if advice.length > 0 then print "  \{advice}"
+}
+
+# checkConstRow -- const_divide_form's divisor-checking calls at their baseline
+checkConstRow: function {r: Runner em: Emitted.view} is {
+    c: hostC :em name: "const_divide_form"
+    if c.length == 0 then {
+        print "FAIL(emitted) constRow: const_divide_form did not emit"
+        r.fails = r.fails + 1
+        return
+    }
+    n: checkedDivisions c: c.stringView
+    if (
+        holdsCount
+        :r
+        check: "constRow"
+        what: "divisor-checking calls in const_divide_form"
+        :n
+        base: expected.constRowChecked
+        name: "constRowChecked"
+    ).false then {
+        print "  More means a constant divisor stopped selecting the const= row. Fewer"
+        print "  means a variable divisor selected it, and that division is no longer"
+        print "  checked for zero."
+    }
+}
+
+# checkStaticView -- static_list_folded_only's C writes no view type
+checkStaticView: function {r: Runner em: Emitted.view} is {
+    c: hostC :em name: "static_list_folded_only"
+    if c.length == 0 then {
+        print "FAIL(emitted) staticView: static_list_folded_only did not emit"
+        r.fails = r.fails + 1
+        return
+    }
+    views: viewTypes c: c.stringView
+    if views > 0 then {
+        print "FAIL(emitted) staticView: a list read only at compile time wrote \{views} view types"
+        print "  See staticListReached in the zemitterc unit."
+        r.fails = r.fails + 1
+        return
+    }
+    r.passN = r.passN + 1
+}
+
+# countZlink -- each program whose variant-`v` C declares a link library, with
+# the libraries
+countZlink: function {em: Emitted.view v: u64} out List String is {
+    found: List String
+    i: u64
+    for i < em.progs.length loop {
+        libs: zlinkLine c: (variantC :em :v :i).stringView
+        if libs.length > 0 then found.append "\{(em.progs.get :i).name}: \{libs}"
+        i = i + 1
+    }
+    return found
+}
+
+# zlinkLine -- the libraries the `/* zlink: ... */` line among C `c`'s first
+# eight lines names; "" when there is none
+zlinkLine: function {c: StringView} out String is {
+    n: u64
+    for each l: c.lines loop {
+        if n == 8 then break
+        n = n + 1
+        if l.startsWith "/* zlink: " when l.endsWith " */" when l.length >= 13 then {
+            return (l.substring from: 10 to: l.length - 3).string
+        }
+    }
+    return "".string
+}
+
+# countTccRefused -- each program `--cc tcc` (variant `v`) refuses: zc says the
+# program needs what tcc has none of
+countTccRefused: function {em: Emitted.view v: u64} out List String is {
+    found: List String
+    i: u64
+    for i < em.progs.length loop {
+        e: slurp path: (errOf :em job: (jobOf :em :v :i)).stringView
+        if (
+            (e.stringView.contains "error[E0601]") or
+            (e.stringView.contains "from the C compiler, and tcc has none")
+        ) then {
+            found.append (em.progs.get :i).name.copy
+        }
+        i = i + 1
+    }
+    return found
+}
+
+# hostC -- the host C of the program named `name`; "" when it did not emit
+hostC: function {em: Emitted.view name: StringView} out String is {
+    i: u64
+    for i < em.progs.length loop {
+        if (em.progs.get :i).name.stringView == name then return (
+            variantC
+            :em
+            v: emitVariant.slot.host
+            :i
+        )
+        i = i + 1
+    }
+    return "".string
+}
+
+# checkedDivisions -- how many calls of a divisor-checking helper
+# (`z_div_<kind>(` or `z_rem_<kind>(`) C `c` writes outside its `static` lines
+checkedDivisions: function {c: StringView} out u64 is {
+    n: u64
+    for each l: c.lines loop {
+        if (l.startsWith "static").false then {
+            n = n + (helperCalls :l helper: "z_div_") + (helperCalls :l helper: "z_rem_")
+        }
+    }
+    return n
+}
+
+# helperCalls -- how many times line `l` calls `<helper><kind>(`, a kind being
+# small letters and digits
+helperCalls: function {l: StringView helper: StringView} out u64 is {
+    n: u64
+    pos: u64
+    for pos < l.length loop {
+        at: ((l.substring from: pos to: l.length).indexOf helper).or d: l.length
+        if at == l.length then return n
+        i: pos + at + helper.length
+        k: i
+        for k < l.length while (isKindByte b: ((l.byteAt i: k).or d: 0)) loop k = k + 1
+        if k > i when ((l.byteAt i: k).or d: 0) == ascii.parenOpen then n = n + 1
+        pos = i
+    }
+    return n
+}
+
+# isKindByte -- a byte of a numeric kind's C suffix: a small letter or a digit
+isKindByte: function {b: u8} out bool is {
+    return (ascii.isLower :b) or (ascii.isDigit :b)
+}
+
+# viewTypes -- how many `{ length; const T* data; }` view structs C `c` writes:
+# a line `    uint64_t length;` followed by one `    const ...* data;`
+viewTypes: function {c: StringView} out u64 is {
+    words: zast.Vocab.create block: emittedWord
+    n: u64
+    prevLength: false
+    for each l: c.lines loop {
+        if prevLength when l.startsWith "    const " when l.endsWith "* data;" then n = n + 1
+        prevLength = (words.slotOf text: l) == emittedWord.slot.viewLength
+    }
+    return n
+}
