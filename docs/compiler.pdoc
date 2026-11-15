@@ -149,7 +149,7 @@ keep nothing.
 
 A #~"generator" declaration is a class whose #~"call" suspends. Generator
 lowering (helpers in #~"src/zgenerator.z", driven by
-#~"lowerDeclaredGenerators" in #~"src/ztypecheck.z") prepares each one: it
+#~"lowerDeclaredGenerators" in #~"src/ztypecheck/memberaccess.z") prepares each one: it
 adds what the suspension transform needs to the declaration the author
 wrote, so the rest of the typechecker sees an ordinary class. The lowering
 runs early in the typecheck pass, before the definitions are indexed and
@@ -207,9 +207,9 @@ where it is stored differs. Binding a local in a generator's #~"call" body, the
 checker mints a field of the instance for it -- one per variable, named
 #~"<name>_N" so it collides with nothing else the instance holds, typed by the
 variable's own type (#~"bindGenLocal" and #~"mintGenField" in
-#~"src/ztypecheck.z") -- and records it in #~"genLocalFieldOf". The emitter
+#~"src/ztypecheck/valuechecks.z") -- and records it in #~"genLocalFieldOf". The emitter
 stores into the field where the local is bound and spells every later use of
-the local as the field (#~"emitGenLocalBind" in #~"src/zemitterc.z"). A binding
+the local as the field (#~"emitGenLocalBind" in #~"src/zemitterc/stmtblocks.z"). A binding
 frees what the field held before -- a loop body binds its locals afresh on
 every pass -- and the instance's destructor frees what the field holds last.
 
@@ -223,7 +223,7 @@ of a suspending #~"with" are the checker's fields as well
 
 #---: State-machine codegen
 
-The emitter (#~"src/zemitterc.z") routes any function whose
+The emitter (#~"src/zemitterc/forloops.z") routes any function whose
 #~"synthOrigin == \"generator-call\"" through a dedicated state-machine
 path. Helpers #~"emitGenPrologue", #~"emitYieldStmt", and
 #~"emitGenEpilogue" assign one state number per yield
@@ -460,7 +460,7 @@ either order.
 Key code: #~"tryLock" / #~"findExclusiveLock" /
 #~"lockAcquireConflict" in #~"src/zenv.z"; #~"lockCallArg" /
 #~"installBorrowLocks" and the path-tuple builders and access-check
-helpers in #~"src/ztypecheck.z".
+helpers in #~"src/ztypecheck/moves.z" and #~"src/ztypecheck/valuechecks.z".
 
 All parameters default to #~".borrow" regardless of type family.
 For valtypes, #~".borrow" means a copy (no lock, source not invalidated).
@@ -493,7 +493,7 @@ when one of the following fires:
 
 #ul:
   [#*: #_*"Typed-location coercion" via the literal-coercion helpers
-    in #~"src/ztypecheck.z". The helper reads #~"nodeConst", applies
+    in #~"src/ztypecheck/numerics.z". The helper reads #~"nodeConst", applies
     the rule appropriate to the source/target combination (int→int
     range check; int→float exact mantissa; float→float round-trip;
     float→int rejected outright), and on success rewrites #~"nodeType"
@@ -594,7 +594,7 @@ marked unreachable and subsequent statements are reported as dead code.
 The type checker may need to introduce nodes that did not appear in
 the parsed source -- temporaries introduced by per-call argument
 hoisting and the generator-lowering rewrites. These nodes are
-synthesised inline in #~"src/ztypecheck.z" (there is no separate
+synthesised by the checker where it needs them (there is no separate
 synthesis module):
 
 #ul:
@@ -620,7 +620,7 @@ inspection.
 Current consumers:
 
 #ul:
-  [#*: #~"hoistArg" in #~"src/ztypecheck.z" -- per-call atomic
+  [#*: #~"hoistArg" in #~"src/ztypecheck/moves.z" -- per-call atomic
   processing rewrites every non-trivial call argument to a synth
   temp inside a per-call sub-scope. See
   #~"docs/ownership.pdoc:Per-Call Atomic Processing" for the model.]
@@ -640,6 +640,46 @@ features (#~"typeof", #~"constexpr", #~"#embed") are used.
 The emitter produces several output sections in order: struct/type definitions,
 forward declarations, function typedefs, function bodies, and a #~"main()"
 entry point. Each section is collected separately and assembled at the end.
+
+#---: The files of the emitter
+
+The emitter is one unit, #~"zemitterc", written in fifteen files: the
+unit's own file and the fourteen implementation subunits of the folder
+#~"src/zemitterc/". A subunit reads the unit's definitions by their bare
+names; the unit's other files name it as #~"file.name". #~"emitC", the one
+entry point, is in #~"emitplan.z" and listed in the #~"public:" block of
+#~"src/zemitterc.z" as #~"emitC: emitplan.emitC".
+
+#table:
+  [#tr: [#th: File] [#th: What it holds]]
+  [#tr: [#td: #~"src/zemitterc.z"] [#td: the #~"public:" block, #~"Program", #~"Ctx" and its parts, the shared types and the helpers every part calls]]
+  [#tr: [#td: #~"emitplan.z"] [#td: what is written and in what order: units, functions, reach, C names]]
+  [#tr: [#td: #~"nativepieces.z"] [#td: loading the native C pieces: files, conditions, checked and served text]]
+  [#tr: [#td: #~"nativerows.z"] [#td: the native rows and templates a program uses: keys, holes, fills]]
+  [#tr: [#td: #~"types.z"] [#td: type definitions, destroy functions, and what family a type is]]
+  [#tr: [#td: #~"consts.z"] [#td: constants, literals and static data as C text]]
+  [#tr: [#td: #~"stmtblocks.z"] [#td: statements, blocks, scope ends and returns]]
+  [#tr: [#td: #~"values.z"] [#td: value expressions: control values, moves and zeroing, operands, reads]]
+  [#tr: [#td: #~"callorder.z"] [#td: evaluation order of a call's parts, and the call forms that use it]]
+  [#tr: [#td: #~"argforms.z"] [#td: how one argument is passed: by value, pointer, box, label or position]]
+  [#tr: [#td: #~"memberreads.z"] [#td: member reads and the methods of strings and collections]]
+  [#tr: [#td: #~"parttexts.z"] [#td: interpolation parts, and the equality and hash functions of a type]]
+  [#tr: [#td: #~"forloops.z"] [#td: #~"for" forms, ranges, and a generator's state machine]]
+  [#tr: [#td: #~"narrowfacts.z"] [#td: narrowing facts: arm seeds, variable entries, aliases]]
+  [#tr: [#td: #~"localnames.z"] [#td: a local's C name and what a binding refers to]]
+
+Two values travel through it. #~"prog: Program" is the program as the
+checker left it -- the tree, the type registry and the checker's tables,
+read-only -- and every function that reads the program takes it.
+#~"ctx: Ctx" is what the emission has written and decided so far; its parts
+are records of their own (#~"ctx.pieces", #~"ctx.reach", #~"ctx.stmt",
+#~"ctx.gen", #~"ctx.order", #~"ctx.known", #~"ctx.narrow",
+#~"ctx.literals", #~"ctx.typeDefs", #~"ctx.plan"), and a function that
+touches only one part takes that part in place of #~"ctx".
+
+Reading order: #~"emitC" (#~"emitplan.z") for the order things are
+written in; #~"stmtblocks.z" and #~"values.z" for a function body;
+#~"callorder.z" and #~"argforms.z" for a call; the rest by concern.
 
 #---: The backend contract
 
@@ -774,11 +814,11 @@ table is built once from a frozen model, so a name cannot go stale, and one
 function composes every name, so a definition and its references cannot
 disagree.
 
-The composer is #~"zemitterc.cnameOf". Outside the table builder only two
+The composer is #~"cnameOf" (#~"src/zemitterc/emitplan.z"). Outside the table builder only two
 sites call it, both naming a symbol that no registered type owns: the
 flattened #~"{base}.{member}" of a dotted member access, and an #~"as"-block
 constant's #~"{type}.{label}". Variable names go through
-#~"zemitterc.mangleVarName" (C-keyword mangling of the emitted identifier
+#~"mangleVarName" (#~"src/zemitterc/localnames.z"; C-keyword mangling of the emitted identifier
 only). The #~"emitter-guard" Makefile ratchet (run by #~"make ci") pins the
 emitter's by-name resolution sites at their current floors, holds
 #~"composeCname" in the type checker at zero, and caps the #~"z_t{id}"
@@ -876,7 +916,7 @@ from the free list.
 
 A value that has no address -- a call's result handed to a parameter that takes
 a pointer, a receiver read through, a value read twice -- is bound to a
-statement temporary first (#~"hoistForAddress" in #~"src/zemitterc.z"). Every
+statement temporary first (#~"hoistForAddress" in #~"src/zemitterc/argforms.z"). Every
 such temporary owes a destroy by one rule: exactly when the checker's
 temporary for that value node still owns what it holds where it dies
 (#~"scopeOwnsTemp", read from the checker's per-scope temporary record). A

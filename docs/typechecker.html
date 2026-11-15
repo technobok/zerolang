@@ -99,7 +99,9 @@ Table of Contents</div>
 </li>
 </ul>
 </li>
-<li><a href="#entry-points-of">Entry points of </a>
+<li><a href="#the-files-of-the-checker">The files of the checker</a>
+</li>
+<li><a href="#entry-points-of-the-checker">Entry points of the checker</a>
 </li>
 <li><a href="#dispatch-mechanism">Dispatch Mechanism</a>
 </li>
@@ -146,7 +148,8 @@ Table of Contents</div>
 <h2 id="introduction"><a href="#introduction">1. Introduction</a></h2>
 <p>This document is the architectural map of the zerolang typechecker.
 It is intended to be read <em><strong>before</strong></em> opening
-<code>src/ztypecheck.z</code> -- after reading it,
+the checker's files -- <code>src/ztypecheck.z</code> and the files of
+<code>src/ztypecheck/</code> -- after reading it,
 a contributor should know which structures the typechecker
 maintains, how its code is partitioned, and where a particular
 feature lives.</p>
@@ -191,8 +194,8 @@ rationale.</p>
 <h2 id="core-data-structures"><a href="#core-data-structures">3. Core Data Structures</a></h2>
 <p>The typechecker is built around four core record types, the
 declaration tree, and one mutable output container. Reading this
-section first makes <code>ztypecheck.z</code> considerably easier to follow,
-because nearly every function in it produces, mutates, or consults one
+section first makes the checker's files considerably easier to follow,
+because nearly every function in them produces, mutates, or consults one
 of these.</p>
 <h3 id="ztype-the-unified-type-descriptor"><a href="#ztype-the-unified-type-descriptor">3.1. ZType -- the unified type descriptor</a></h3>
 <p><code>ZType</code> (in <code>src/ztypes.z</code>) is the <em><strong>only</strong></em> type
@@ -356,50 +359,88 @@ site enforcement (used by lock-escape checks)</li>
 exclusion overlay row in the current scope</li>
 </ul>
 <p>The lock conflict logic lives in <code>zenv.z</code>, not in
-<code>ztypecheck.z</code>. The typechecker only chooses <em><strong>when</strong></em> to
+the checker's files. The typechecker only chooses <em><strong>when</strong></em> to
 install a lock; the rule for whether it conflicts is owned by
 the scope module.</p>
-<h2 id="entry-points-of"><a href="#entry-points-of">4. Entry points of <code>ztypecheck.z</code></a></h2>
-<p>The functions below are where each part of the check starts. They are
-not in any order in the file; <code>grep -n '^name:'</code> finds each one. Read the
-prose below for the semantics.</p>
+<h2 id="the-files-of-the-checker"><a href="#the-files-of-the-checker">4. The files of the checker</a></h2>
+<p>The checker is one unit, <code>ztypecheck</code>, written in seventeen files: the
+unit's own file and the sixteen files of the folder <code>src/ztypecheck/</code>.
+Each file in the folder is an implementation subunit: private to the unit,
+reading the unit's own definitions by their bare names, and named by the
+unit's other files as <code>file.name</code> (<code>declare.resolveFunction</code>). Outside
+the unit only the names of the <code>public:</code> block in <code>src/ztypecheck.z</code>
+are seen; a name that lives in a subunit is listed there as an alias
+(<code>name: file.name</code>).</p>
 <table>
 <thead>
-<tr><th style="text-align: left">Part</th><th style="text-align: left">Entry points</th></tr>
+<tr><th style="text-align: left">File</th><th style="text-align: left">What it holds</th></tr>
+</thead>
+<tbody>
+<tr><td><code>src/ztypecheck.z</code></td><td>the <code>public:</code> block, the shared types and the helpers every part calls (<code>checkValueAt</code>, <code>envLookup</code>, the error builders)</td></tr>
+<tr><td><code>resolve.z</code></td><td>finding a definition on demand: units, scopes, aliases, shells</td></tr>
+<tr><td><code>declare.z</code></td><td>indexing a unit and declaring its definitions, members and visibility</td></tr>
+<tr><td><code>bodies.z</code></td><td>walking a function body, and the instances of a generic one</td></tr>
+<tr><td><code>flow.z</code></td><td>statements and control flow: arms, narrowing facts, what a block leaves</td></tr>
+<tr><td><code>valuechecks.z</code></td><td>checking a value: names, literals, bare functions and types read as values</td></tr>
+<tr><td><code>callchecks.z</code></td><td>calls and constructions: arguments, labels, inference, projections</td></tr>
+<tr><td><code>memberaccess.z</code></td><td>member access: private reach, defaults, tags, <code>as</code> aliases</td></tr>
+<tr><td><code>moves.z</code></td><td>ownership of values: moves, pins, receivers and locks</td></tr>
+<tr><td><code>typeref.z</code></td><td>recording a written type name on its node</td></tr>
+<tr><td><code>typeargs.z</code></td><td>the arguments of a type application: defaults, partial types, validation</td></tr>
+<tr><td><code>instantiate.z</code></td><td>instantiating a template: minting, clones, unit instances</td></tr>
+<tr><td><code>conform.z</code></td><td>specs, implementations, markers, bounds and value operations</td></tr>
+<tr><td><code>numerics.z</code></td><td>numeric types, literal coercion and layout</td></tr>
+<tr><td><code>stdtypes.z</code></td><td>the standard types the checker mints: collections, iterators, their methods</td></tr>
+<tr><td><code>consteval.z</code></td><td>constant evaluation of an expression: folds, compares, arithmetic</td></tr>
+<tr><td><code>statics.z</code></td><td>constants of declarations: members, fields, static lists; why one did not fold</td></tr>
+</tbody>
+</table>
+<p>The state the walk keeps is <code>WalkState</code> (<code>src/zenv.z</code>), held as
+<code>st.walk</code>; its parts are records of their own, one a concern:
+<code>st.walk.fn</code> (the function being walked), <code>value</code> (the value or call
+being checked, its temporaries and pins), <code>consts</code>, <code>bounds</code>,
+<code>pendingDefault</code>, <code>resolve</code> and <code>bodies</code>. The fields no one part owns
+stay on <code>WalkState</code> itself.</p>
+<h2 id="entry-points-of-the-checker"><a href="#entry-points-of-the-checker">5. Entry points of the checker</a></h2>
+<p>The functions below are where each part of the check starts; the third
+column names the file each is in. Read the prose below for the semantics.</p>
+<table>
+<thead>
+<tr><th style="text-align: left">Part</th><th style="text-align: left">Entry points</th><th style="text-align: left">Files</th></tr>
 </thead>
 <tbody>
 <tr><td>The pass</td><td><code>typecheck</code> -- starts at <code>main</code>, drives demand-driven
-resolution and body checking, and returns the error list</td></tr>
+resolution and body checking, and returns the error list</td><td><code>resolve.z</code></td></tr>
 <tr><td>Unit-level names</td><td><code>resolveDef</code> (dispatches over <code>nodetype</code>),
-<code>resolveUnitBody</code></td></tr>
+<code>resolveUnitBody</code></td><td><code>resolve.z</code></td></tr>
 <tr><td>Type definitions</td><td><code>resolveFunction</code>, <code>resolveRecord</code>, <code>resolveClass</code>,
 <code>resolveUnion</code>, <code>resolveVariant</code>, <code>resolveProtocol</code>,
 <code>resolveFacet</code>, <code>resolveInlineGenericUnit</code>,
 <code>resolveStaticListInto</code>, <code>refuseReftypeMember</code>,
-<code>refuseReftypeBounds</code></td></tr>
+<code>refuseReftypeBounds</code></td><td><code>declare.z</code>, <code>statics.z</code>, <code>memberaccess.z</code></td></tr>
 <tr><td>Names and type references</td><td><code>envLookup</code>, <code>walkLookupTyperef</code>,
-<code>resolveTyperefShell</code>, <code>dottedParentName</code></td></tr>
+<code>resolveTyperefShell</code>, <code>dottedParentName</code></td><td><code>ztypecheck.z</code>, <code>bodies.z</code>, <code>typeref.z</code>, <code>memberaccess.z</code></td></tr>
 <tr><td>Monomorphisation</td><td><code>getOrMintSpec</code>, <code>mintMono</code>,
-<code>validateGenericTypeArgs</code></td></tr>
+<code>validateGenericTypeArgs</code></td><td><code>instantiate.z</code>, <code>typeargs.z</code></td></tr>
 <tr><td>Bodies</td><td><code>checkBodies</code>, <code>checkMethodBodies</code>,
-<code>checkFunctionBody</code></td></tr>
+<code>checkFunctionBody</code></td><td><code>resolve.z</code>, <code>bodies.z</code></td></tr>
 <tr><td>Statements</td><td><code>checkStatement</code>, <code>checkStmtInner</code>,
 <code>checkStmtExpression</code>, <code>checkAssignment</code>,
-<code>checkReassignment</code>, <code>checkSwap</code></td></tr>
+<code>checkReassignment</code>, <code>checkSwap</code></td><td><code>flow.z</code>, <code>valuechecks.z</code></td></tr>
 <tr><td>Expressions</td><td><code>checkValueAt</code>, <code>checkValueArmAt</code>, <code>checkAtomid</code>,
 <code>checkString</code>, <code>checkDotted</code> (auto-call, and the
 <code>.take</code> / <code>.drop</code> / <code>.borrow</code> / <code>.view</code> /
-<code>.private</code> markers)</td></tr>
+<code>.private</code> markers)</td><td><code>ztypecheck.z</code>, <code>valuechecks.z</code>, <code>declare.z</code></td></tr>
 <tr><td>Calls</td><td><code>checkCall</code>, <code>checkMissingCallArgs</code>, <code>lockCallArg</code>,
 <code>installBorrowLocks</code>, <code>checkProjectionCreate</code>,
 <code>checkTypedefCreate</code>. An infix <code>a op b</code> is a call and
-takes the same path</td></tr>
+takes the same path</td><td><code>memberaccess.z</code>, <code>callchecks.z</code>, <code>moves.z</code>, <code>valuechecks.z</code></td></tr>
 <tr><td>Control flow</td><td><code>checkIf</code>, <code>checkFor</code>, <code>checkWith</code>, <code>checkDo</code>,
 <code>checkCase</code> (match arms, their narrowing and the
-exclusion after the match), <code>checkBoxConstruction</code></td></tr>
+exclusion after the match), <code>checkBoxConstruction</code></td><td><code>flow.z</code>, <code>valuechecks.z</code>, <code>instantiate.z</code></td></tr>
 </tbody>
 </table>
-<h2 id="dispatch-mechanism"><a href="#dispatch-mechanism">5. Dispatch Mechanism</a></h2>
+<h2 id="dispatch-mechanism"><a href="#dispatch-mechanism">6. Dispatch Mechanism</a></h2>
 <p>Per the project convention (<code>CLAUDE.md</code>), the typechecker
 dispatches on the <code>nodetype</code> discriminator rather than runtime
 type tests. The pattern appears in two forms:</p>
@@ -415,7 +456,7 @@ than a table.</li>
 </ul>
 <p>After the discriminator check, <code>cast()</code> narrows the node to the
 concrete <code>Node</code> arm; see <code>lib/system/zast.z</code>.</p>
-<h2 id="resolution-stack-and-cycle-detection"><a href="#resolution-stack-and-cycle-detection">6. Resolution Stack and Cycle Detection</a></h2>
+<h2 id="resolution-stack-and-cycle-detection"><a href="#resolution-stack-and-cycle-detection">7. Resolution Stack and Cycle Detection</a></h2>
 <p>Resolution is keyed by <em><strong>declaration</strong></em>, not by synthesized dotted-string
 names. Every definition is one Decl in the tree, found from a reference by
 walking the scopes outward from the scope the reference was written in,
@@ -442,7 +483,7 @@ E0100. The flow is:</p>
 at the bottom of the resolving stack, so a method body can refer
 to its own enclosing type without naming it. <code>this</code> works
 similarly.</p>
-<h2 id="type-name-resolution-and-the-canonical-id-rule"><a href="#type-name-resolution-and-the-canonical-id-rule">7. Type-name resolution and the canonical-id rule</a></h2>
+<h2 id="type-name-resolution-and-the-canonical-id-rule"><a href="#type-name-resolution-and-the-canonical-id-rule">8. Type-name resolution and the canonical-id rule</a></h2>
 <p>A bare type name (the <code>i64</code> in <code>x: i64</code>, the <code>X</code> of an <code>X.implement</code>, a
 field or parameter type) resolves <em><strong>outward</strong></em> from the scope it is
 written in: the enclosing namespace or template, the current unit, then
@@ -519,7 +560,7 @@ member function or constant is rewritten to <code>type.name</code>
 <p>A <code>:x</code> shorthand is a <code>labelvalue</code> node: its lookup starts outside the
 declaration it makes, so every leg that would find the declaration itself
 skips it there.</p>
-<h2 id="unit-members-three-passes-each-keyed-on-the-value-s-arm"><a href="#unit-members-three-passes-each-keyed-on-the-value-s-arm">8. Unit members: three passes, each keyed on the value's ARM</a></h2>
+<h2 id="unit-members-three-passes-each-keyed-on-the-value-s-arm"><a href="#unit-members-three-passes-each-keyed-on-the-value-s-arm">9. Unit members: three passes, each keyed on the value's ARM</a></h2>
 <p>A unit-level definition is dispatched three times, and every one of them
 matches on the shape of the member's VALUE node. Reading only one of
 them is how a shape ends up silently registering nothing:</p>
@@ -547,7 +588,7 @@ registry says "no". And <code>origin: Point.create x: 0</code> parses as TWO
 members, the dotted value <code>Point.create</code> and a separate constant
 <code>x: 0</code>, so a construction never arrives as a call unless it is
 parenthesised.</p>
-<h2 id="the-numeric-id-spaces"><a href="#the-numeric-id-spaces">9. The numeric id spaces</a></h2>
+<h2 id="the-numeric-id-spaces"><a href="#the-numeric-id-spaces">10. The numeric id spaces</a></h2>
 <p>Every id the compiler carries is a zero-overhead typedef over its base
 integer, so one space cannot silently stand in for another: equality is
 same-space only and a sentinel reads <code>isZero</code> rather than <code>== 0</code>
@@ -575,11 +616,11 @@ more than one space: <code>genericChildren</code>'s key, <code>genericArgs</code
 <code>zlockholder.id</code> (a vid OR a node id), and the emitter's
 <code>interpPartNodeId</code>, whose consumers ARE the u64-keyed stamp tables. <code>zvfs</code>
 carries its own <code>dentryid</code> / <code>providerid</code> pair, out of this scope.</p>
-<h2 id="cross-cutting-concerns"><a href="#cross-cutting-concerns">10. Cross-Cutting Concerns</a></h2>
+<h2 id="cross-cutting-concerns"><a href="#cross-cutting-concerns">11. Cross-Cutting Concerns</a></h2>
 <p>Each subsection below points at <em><strong>where</strong></em> a concern lives in the
 typechecker. For <em><strong>why</strong></em> it works that way, follow the links to
 the semantic documents.</p>
-<h3 id="ownership-enforcement"><a href="#ownership-enforcement">10.1. Ownership enforcement</a></h3>
+<h3 id="ownership-enforcement"><a href="#ownership-enforcement">11.1. Ownership enforcement</a></h3>
 <p>The 2-state ownership model (see <code>compiler.pdoc:Ownership and
 Lifetime</code>) is enforced at the assignment and call sites:</p>
 <ul>
@@ -609,7 +650,7 @@ laid when the call starts, after its arguments, so a
 readonly binding passed via <code>:name</code> to a mutable-borrow parameter
 is refused with E0200 exactly as <code>b: b</code> is
 (<code>tests/fixtures/errors/shorthand_arg_locks.z</code>).</p>
-<h3 id="lock-checking"><a href="#lock-checking">10.2. Lock checking</a></h3>
+<h3 id="lock-checking"><a href="#lock-checking">11.2. Lock checking</a></h3>
 <p>The typechecker chooses <em><strong>when</strong></em> to install a lock; <code>zenv.z</code>
 owns the conflict rule (<code>lockAcquireConflict</code>) and the
 prefix-overlap path test (<code>pathsOverlap</code>). Two scopes of
@@ -637,7 +678,7 @@ value escape its scope.</p>
 stack and <code>zlockholder</code> tagging: <code>tryLock</code>
 skips the conflict check when the existing holder matches the
 current call's identity.</p>
-<h3 id="borrow-correctness-for-parameters"><a href="#borrow-correctness-for-parameters">10.3. Borrow correctness for parameters</a></h3>
+<h3 id="borrow-correctness-for-parameters"><a href="#borrow-correctness-for-parameters">11.3. Borrow correctness for parameters</a></h3>
 <p>Deep methods that take a borrow into a return value record the
 source path on the pending-borrow slot (<code>ZTyping.pendingBorrowPath</code>
 and its flags); the binding site (<code>checkAssignment</code> or the
@@ -658,7 +699,7 @@ exactly when the type's <code>publicNs</code> subtree reaches it. Two gates in
 private member from a non-capable base raises E0101, and taking <code>.private</code> of
 a non-capable base raises E0102. Construction argument labels never reach
 <code>checkDotted</code>, so naming private fields at construction is unaffected.</p>
-<h3 id="monomorphisation"><a href="#monomorphisation">10.4. Monomorphisation</a></h3>
+<h3 id="monomorphisation"><a href="#monomorphisation">11.4. Monomorphisation</a></h3>
 <p>Generic types and functions are monomorphised by deep-cloning
 the original AST subtree, binding the generic parameters to
 concrete types, and re-running the standard resolvers on the
@@ -695,7 +736,7 @@ only requirement is that their declaration in
 <code>lib/system/system.z</code> or <code>lib/system/collections.z</code> carries
 the <code>is native</code> form. Resolution flows through the standard
 child-lookup path.</p>
-<h3 id="type-narrowing"><a href="#type-narrowing">10.5. Type narrowing</a></h3>
+<h3 id="type-narrowing"><a href="#type-narrowing">11.5. Type narrowing</a></h3>
 <p>Narrowing for <code>union</code> and <code>variant</code> subjects in match arms
 is implemented via overlay entries. When a match arm narrows
 subject <code>s</code> to subtype <code>ok</code>, an overlay <code>ZEntry</code> with
@@ -713,7 +754,7 @@ narrowing entry in the current scope at definition time;
 reassignment resets it.</p>
 <p>Narrowing and exclusion are carried as arm name ids on the overlay
 row (<code>narrowedSubtype</code>, <code>excludedSubtypes</code>).</p>
-<h3 id="auto-call-coercion"><a href="#auto-call-coercion">10.6. Auto-call coercion</a></h3>
+<h3 id="auto-call-coercion"><a href="#auto-call-coercion">11.6. Auto-call coercion</a></h3>
 <p>A no-user-arg method dotted path read in value position
 (<code>v: s.stringView</code>, <code>p1.distance</code> inside a string
 interpolation) is auto-called to its return type. The coercion
@@ -725,7 +766,7 @@ normally instead of constructing the return type. Path
 resolution itself is context-free: it
 always returns the FUNCTION type for a method path. Behaviour is
 identical for <code>is native</code> and user-defined methods.</p>
-<h3 id="unified-call-dispatch"><a href="#unified-call-dispatch">10.7. Unified call dispatch</a></h3>
+<h3 id="unified-call-dispatch"><a href="#unified-call-dispatch">11.7. Unified call dispatch</a></h3>
 <p>A type used in callable position is rewritten through the
 unified-dispatch route. The bare-name construction call
 <code>Point x: 1 y: 2</code> resolves the callee to the <code>Point</code>
@@ -756,7 +797,7 @@ only when the program's demand loop referenced them; a bodied type
 METHOD is demanded at the granularity of its owner, so it is gated
 separately (<code>bodiedMemberDeferred</code>) and walked only where the program
 calls it. See the compiler doc's "Runtime-backed stdlib units".</p>
-<h2 id="error-reporting"><a href="#error-reporting">11. Error Reporting</a></h2>
+<h2 id="error-reporting"><a href="#error-reporting">12. Error Reporting</a></h2>
 <p>Type errors are <code>zast.ErrorData</code> value objects, appended to
 <code>ZTyping.errors</code> via the <code>addError</code> helper. Errors are never
 raised as exceptions; the typechecker tries to continue
@@ -774,7 +815,7 @@ Error codes (the <code>err</code> variant in <code>lib/system/zast.z</code>) are
 <code>loc</code> / <code>Token</code>. After <code>typecheck()</code> returns, the caller
 inspects <code>ZTyping.errors</code> to decide whether to proceed to
 emission.</p>
-<h2 id="what-lives-elsewhere"><a href="#what-lives-elsewhere">12. What Lives Elsewhere</a></h2>
+<h2 id="what-lives-elsewhere"><a href="#what-lives-elsewhere">13. What Lives Elsewhere</a></h2>
 <p>Module boundaries the typechecker relies on:</p>
 <ul>
 <li><code>src/ztypes.z</code> -- <code>ZType</code>, <code>ZVariable</code>,
@@ -789,10 +830,9 @@ the numeric-literal parser and the shared mangler <code>mangleVarName</code></li
 (<code>lockAcquireConflict</code>, <code>pathsOverlap</code>), narrowing
 / exclusion installers</li>
 </ul>
-<p>Collection-type predicates (<code>typeIsReftype</code>, <code>typeIsValtype</code>,
-...), node synthesis, and the monomorphisation dedup hashing have
-no separate module -- they live within <code>src/ztypecheck.z</code> itself.</p>
-<h2 id="reading-order"><a href="#reading-order">13. Reading Order</a></h2>
+<p>The checker itself is <code>src/ztypecheck.z</code> and the files of
+<code>src/ztypecheck/</code> (The files of the checker, above).</p>
+<h2 id="reading-order"><a href="#reading-order">14. Reading Order</a></h2>
 <p>When opening the typechecker for the first time, read in this
 order:</p>
 <ol>
@@ -803,14 +843,16 @@ component-table architecture concrete.</li>
 <li><code>src/zenv.z</code> -- the scope stack and the lock-conflict
 rule. The semantics of "what makes two locks conflict" lives
 here, not in the typechecker.</li>
-<li><code>src/ztypecheck.z</code> -- enter via the entry points above.
-A good first dive is <code>typecheck</code> &#x2192; <code>resolveDef</code> &#x2192;
-<code>resolveFunction</code> &#x2192; <code>checkFunctionBody</code> &#x2192;
-<code>checkStatement</code> &#x2192; <code>checkStmtInner</code> &#x2192; <code>checkValueAt</code> &#x2192;
-<code>checkCall</code>. That path touches almost every cross-
-cutting concern in turn.</li>
+<li><code>src/ztypecheck.z</code> -- the public names, the shared types and
+helpers; then the subunit files, entered by the entry points
+above. A good first dive is <code>typecheck</code> and <code>resolveDef</code>
+(<code>resolve.z</code>) &#x2192; <code>resolveFunction</code> (<code>declare.z</code>) &#x2192;
+<code>checkFunctionBody</code> (<code>bodies.z</code>) &#x2192; <code>checkStatement</code> and
+<code>checkStmtInner</code> (<code>flow.z</code>) &#x2192; <code>checkValueAt</code>
+(<code>ztypecheck.z</code>) &#x2192; <code>checkCall</code> (<code>memberaccess.z</code>). That
+path touches almost every cross-cutting concern in turn.</li>
 </ol>
-<h2 id="related-documents"><a href="#related-documents">14. Related Documents</a></h2>
+<h2 id="related-documents"><a href="#related-documents">15. Related Documents</a></h2>
 <ul>
 <li><code>compiler.pdoc</code> -- the pipeline overview and the
 semantic descriptions of demand-driven resolution,

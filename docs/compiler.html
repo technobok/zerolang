@@ -125,6 +125,8 @@ Table of Contents</div>
 </li>
 <li><a href="#code-generator">Code Generator</a>
 <ul>
+<li><a href="#the-files-of-the-emitter">The files of the emitter</a>
+</li>
 <li><a href="#the-backend-contract">The backend contract</a>
 </li>
 <li><a href="#runtime-backed-stdlib-units">Runtime-backed stdlib units</a>
@@ -258,7 +260,7 @@ keep nothing.</p>
 <h2 id="generator-desugaring"><a href="#generator-desugaring">6. Generator Desugaring</a></h2>
 <p>A <code>generator</code> declaration is a class whose <code>call</code> suspends. Generator
 lowering (helpers in <code>src/zgenerator.z</code>, driven by
-<code>lowerDeclaredGenerators</code> in <code>src/ztypecheck.z</code>) prepares each one: it
+<code>lowerDeclaredGenerators</code> in <code>src/ztypecheck/memberaccess.z</code>) prepares each one: it
 adds what the suspension transform needs to the declaration the author
 wrote, so the rest of the typechecker sees an ordinary class. The lowering
 runs early in the typecheck pass, before the definitions are indexed and
@@ -302,9 +304,9 @@ where it is stored differs. Binding a local in a generator's <code>call</code> b
 checker mints a field of the instance for it -- one per variable, named
 <code>&lt;name&gt;_N</code> so it collides with nothing else the instance holds, typed by the
 variable's own type (<code>bindGenLocal</code> and <code>mintGenField</code> in
-<code>src/ztypecheck.z</code>) -- and records it in <code>genLocalFieldOf</code>. The emitter
+<code>src/ztypecheck/valuechecks.z</code>) -- and records it in <code>genLocalFieldOf</code>. The emitter
 stores into the field where the local is bound and spells every later use of
-the local as the field (<code>emitGenLocalBind</code> in <code>src/zemitterc.z</code>). A binding
+the local as the field (<code>emitGenLocalBind</code> in <code>src/zemitterc/stmtblocks.z</code>). A binding
 frees what the field held before -- a loop body binds its locals afresh on
 every pass -- and the instance's destructor frees what the field holds last.</p>
 <p>Two kinds of local are not kept. A <code>yield</code> value (<code>a: yield e</code>) lives in
@@ -315,7 +317,7 @@ payload a suspending loop binds, the iterable it constructs and the owned value
 of a suspending <code>with</code> are the checker's fields as well
 (<code>mintForSpillFields</code>, <code>withValueField</code>).</p>
 <h3 id="state-machine-codegen"><a href="#state-machine-codegen">6.3. State-machine codegen</a></h3>
-<p>The emitter (<code>src/zemitterc.z</code>) routes any function whose
+<p>The emitter (<code>src/zemitterc/forloops.z</code>) routes any function whose
 <code>synthOrigin == "generator-call"</code> through a dedicated state-machine
 path. Helpers <code>emitGenPrologue</code>, <code>emitYieldStmt</code>, and
 <code>emitGenEpilogue</code> assign one state number per yield
@@ -516,7 +518,7 @@ either order.</p>
 <p>Key code: <code>tryLock</code> / <code>findExclusiveLock</code> /
 <code>lockAcquireConflict</code> in <code>src/zenv.z</code>; <code>lockCallArg</code> /
 <code>installBorrowLocks</code> and the path-tuple builders and access-check
-helpers in <code>src/ztypecheck.z</code>.</p>
+helpers in <code>src/ztypecheck/moves.z</code> and <code>src/ztypecheck/valuechecks.z</code>.</p>
 <p>All parameters default to <code>.borrow</code> regardless of type family.
 For valtypes, <code>.borrow</code> means a copy (no lock, source not invalidated).
 For reftypes, <code>.borrow</code> means a reference (source not invalidated).
@@ -544,7 +546,7 @@ intermediate range check. An <code>intliteral</code> only becomes a concrete num
 when one of the following fires:</p>
 <ul>
 <li><em><strong>Typed-location coercion</strong></em> via the literal-coercion helpers
-in <code>src/ztypecheck.z</code>. The helper reads <code>nodeConst</code>, applies
+in <code>src/ztypecheck/numerics.z</code>. The helper reads <code>nodeConst</code>, applies
 the rule appropriate to the source/target combination (int&#x2192;int
 range check; int&#x2192;float exact mantissa; float&#x2192;float round-trip;
 float&#x2192;int rejected outright), and on success rewrites <code>nodeType</code>
@@ -631,7 +633,7 @@ marked unreachable and subsequent statements are reported as dead code.</p>
 <p>The type checker may need to introduce nodes that did not appear in
 the parsed source -- temporaries introduced by per-call argument
 hoisting and the generator-lowering rewrites. These nodes are
-synthesised inline in <code>src/ztypecheck.z</code> (there is no separate
+synthesised by the checker where it needs them (there is no separate
 synthesis module):</p>
 <ul>
 <li>Fresh temp names -- a monotonic counter,
@@ -654,7 +656,7 @@ per-call argument hoisting). It is persisted in the SQL dump
 inspection.</p>
 <p>Current consumers:</p>
 <ul>
-<li><code>hoistArg</code> in <code>src/ztypecheck.z</code> -- per-call atomic
+<li><code>hoistArg</code> in <code>src/ztypecheck/moves.z</code> -- per-call atomic
 processing rewrites every non-trivial call argument to a synth
 temp inside a per-call sub-scope. See
 <code>docs/ownership.pdoc:Per-Call Atomic Processing</code> for the model.</li>
@@ -670,7 +672,47 @@ features (<code>typeof</code>, <code>constexpr</code>, <code>#embed</code>) are 
 <p>The emitter produces several output sections in order: struct/type definitions,
 forward declarations, function typedefs, function bodies, and a <code>main()</code>
 entry point. Each section is collected separately and assembled at the end.</p>
-<h3 id="the-backend-contract"><a href="#the-backend-contract">8.1. The backend contract</a></h3>
+<h3 id="the-files-of-the-emitter"><a href="#the-files-of-the-emitter">8.1. The files of the emitter</a></h3>
+<p>The emitter is one unit, <code>zemitterc</code>, written in fifteen files: the
+unit's own file and the fourteen implementation subunits of the folder
+<code>src/zemitterc/</code>. A subunit reads the unit's definitions by their bare
+names; the unit's other files name it as <code>file.name</code>. <code>emitC</code>, the one
+entry point, is in <code>emitplan.z</code> and listed in the <code>public:</code> block of
+<code>src/zemitterc.z</code> as <code>emitC: emitplan.emitC</code>.</p>
+<table>
+<thead>
+<tr><th style="text-align: left">File</th><th style="text-align: left">What it holds</th></tr>
+</thead>
+<tbody>
+<tr><td><code>src/zemitterc.z</code></td><td>the <code>public:</code> block, <code>Program</code>, <code>Ctx</code> and its parts, the shared types and the helpers every part calls</td></tr>
+<tr><td><code>emitplan.z</code></td><td>what is written and in what order: units, functions, reach, C names</td></tr>
+<tr><td><code>nativepieces.z</code></td><td>loading the native C pieces: files, conditions, checked and served text</td></tr>
+<tr><td><code>nativerows.z</code></td><td>the native rows and templates a program uses: keys, holes, fills</td></tr>
+<tr><td><code>types.z</code></td><td>type definitions, destroy functions, and what family a type is</td></tr>
+<tr><td><code>consts.z</code></td><td>constants, literals and static data as C text</td></tr>
+<tr><td><code>stmtblocks.z</code></td><td>statements, blocks, scope ends and returns</td></tr>
+<tr><td><code>values.z</code></td><td>value expressions: control values, moves and zeroing, operands, reads</td></tr>
+<tr><td><code>callorder.z</code></td><td>evaluation order of a call's parts, and the call forms that use it</td></tr>
+<tr><td><code>argforms.z</code></td><td>how one argument is passed: by value, pointer, box, label or position</td></tr>
+<tr><td><code>memberreads.z</code></td><td>member reads and the methods of strings and collections</td></tr>
+<tr><td><code>parttexts.z</code></td><td>interpolation parts, and the equality and hash functions of a type</td></tr>
+<tr><td><code>forloops.z</code></td><td><code>for</code> forms, ranges, and a generator's state machine</td></tr>
+<tr><td><code>narrowfacts.z</code></td><td>narrowing facts: arm seeds, variable entries, aliases</td></tr>
+<tr><td><code>localnames.z</code></td><td>a local's C name and what a binding refers to</td></tr>
+</tbody>
+</table>
+<p>Two values travel through it. <code>prog: Program</code> is the program as the
+checker left it -- the tree, the type registry and the checker's tables,
+read-only -- and every function that reads the program takes it.
+<code>ctx: Ctx</code> is what the emission has written and decided so far; its parts
+are records of their own (<code>ctx.pieces</code>, <code>ctx.reach</code>, <code>ctx.stmt</code>,
+<code>ctx.gen</code>, <code>ctx.order</code>, <code>ctx.known</code>, <code>ctx.narrow</code>,
+<code>ctx.literals</code>, <code>ctx.typeDefs</code>, <code>ctx.plan</code>), and a function that
+touches only one part takes that part in place of <code>ctx</code>.</p>
+<p>Reading order: <code>emitC</code> (<code>emitplan.z</code>) for the order things are
+written in; <code>stmtblocks.z</code> and <code>values.z</code> for a function body;
+<code>callorder.z</code> and <code>argforms.z</code> for a call; the rest by concern.</p>
+<h3 id="the-backend-contract"><a href="#the-backend-contract">8.2. The backend contract</a></h3>
 <p>The front end -- lexer, parser, type checker, generator lowering -- knows no
 backend. It hands one over a checked program: the AST, the type registry and
 the <code>ZTyping</code> model, every value it can answer already a constant of the
@@ -702,7 +744,7 @@ triple parse and no read of the target.</p>
     <code>defines</code>), which the driver builds into its object cache with the
     compiler that links.</li>
 </ul>
-<h3 id="runtime-backed-stdlib-units"><a href="#runtime-backed-stdlib-units">8.2. Runtime-backed stdlib units</a></h3>
+<h3 id="runtime-backed-stdlib-units"><a href="#runtime-backed-stdlib-units">8.3. Runtime-backed stdlib units</a></h3>
 <p>Five stdlib units -- <code>system</code>, <code>core</code>, <code>collections</code>, <code>io</code>,
 <code>os</code> -- are <em><strong>runtime-backed</strong></em>: their types (String, File,
 the collections, the numerics) and their <code>is native</code> functions are
@@ -783,7 +825,7 @@ method body only when the checker walked it. <code>--eager</code> walks everythi
 which is the point of it.</p>
 <p>With the gate, a bodied <code>times</code> on all eight scalars costs ONE line of
 C in a program that never iterates.</p>
-<h3 id="c-name-generation"><a href="#c-name-generation">8.3. C Name Generation</a></h3>
+<h3 id="c-name-generation"><a href="#c-name-generation">8.4. C Name Generation</a></h3>
 <p>C names are the emitter's business -- the type checker composes none. At
 the start of <code>emitC</code> a single pass over the type registry fills a
 <code>tid</code>-indexed table on <code>Ctx.cnames</code>, and every emission site reads it
@@ -791,11 +833,11 @@ back through <code>ctxCname</code> (a hole minted by <code>allocType</code> gets
 table is built once from a frozen model, so a name cannot go stale, and one
 function composes every name, so a definition and its references cannot
 disagree.</p>
-<p>The composer is <code>zemitterc.cnameOf</code>. Outside the table builder only two
+<p>The composer is <code>cnameOf</code> (<code>src/zemitterc/emitplan.z</code>). Outside the table builder only two
 sites call it, both naming a symbol that no registered type owns: the
 flattened <code>{base}.{member}</code> of a dotted member access, and an <code>as</code>-block
 constant's <code>{type}.{label}</code>. Variable names go through
-<code>zemitterc.mangleVarName</code> (C-keyword mangling of the emitted identifier
+<code>mangleVarName</code> (<code>src/zemitterc/localnames.z</code>; C-keyword mangling of the emitted identifier
 only). The <code>emitter-guard</code> Makefile ratchet (run by <code>make ci</code>) pins the
 emitter's by-name resolution sites at their current floors, holds
 <code>composeCname</code> in the type checker at zero, and caps the <code>z_t{id}</code>
@@ -879,7 +921,7 @@ assigned to a named variable, ownership transfers and the temporary is removed
 from the free list.</p>
 <p>A value that has no address -- a call's result handed to a parameter that takes
 a pointer, a receiver read through, a value read twice -- is bound to a
-statement temporary first (<code>hoistForAddress</code> in <code>src/zemitterc.z</code>). Every
+statement temporary first (<code>hoistForAddress</code> in <code>src/zemitterc/argforms.z</code>). Every
 such temporary owes a destroy by one rule: exactly when the checker's
 temporary for that value node still owns what it holds where it dies
 (<code>scopeOwnsTemp</code>, read from the checker's per-scope temporary record). A

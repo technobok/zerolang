@@ -35,7 +35,8 @@
 
 This document is the architectural map of the zerolang typechecker.
 It is intended to be read #_*"before" opening
-#~"src/ztypecheck.z" -- after reading it,
+the checker's files -- #~"src/ztypecheck.z" and the files of
+#~"src/ztypecheck/" -- after reading it,
 a contributor should know which structures the typechecker
 maintains, how its code is partitioned, and where a particular
 feature lives.
@@ -94,8 +95,8 @@ rationale.
 
 The typechecker is built around four core record types, the
 declaration tree, and one mutable output container. Reading this
-section first makes #~"ztypecheck.z" considerably easier to follow,
-because nearly every function in it produces, mutates, or consults one
+section first makes the checker's files considerably easier to follow,
+because nearly every function in them produces, mutates, or consults one
 of these.
 
 
@@ -285,58 +286,106 @@ and only #~"pushScope" / #~"materialiseTop" / #~"pop" move it. Key APIs:
     exclusion overlay row in the current scope]
 
 The lock conflict logic lives in #~"zenv.z", not in
-#~"ztypecheck.z". The typechecker only chooses #_*"when" to
+the checker's files. The typechecker only chooses #_*"when" to
 install a lock; the rule for whether it conflicts is owned by
 the scope module.
 
 
-#--: Entry points of #~"ztypecheck.z"
+#--: The files of the checker
 
-The functions below are where each part of the check starts. They are
-not in any order in the file; #~"grep -n '^name:'" finds each one. Read the
-prose below for the semantics.
+The checker is one unit, #~"ztypecheck", written in seventeen files: the
+unit's own file and the sixteen files of the folder #~"src/ztypecheck/".
+Each file in the folder is an implementation subunit: private to the unit,
+reading the unit's own definitions by their bare names, and named by the
+unit's other files as #~"file.name" (#~"declare.resolveFunction"). Outside
+the unit only the names of the #~"public:" block in #~"src/ztypecheck.z"
+are seen; a name that lives in a subunit is listed there as an alias
+(#~"name: file.name").
 
 #table:
-  [#tr: [#th: Part] [#th: Entry points]]
+  [#tr: [#th: File] [#th: What it holds]]
+  [#tr: [#td: #~"src/ztypecheck.z"] [#td: the #~"public:" block, the shared types and the helpers every part calls (#~"checkValueAt", #~"envLookup", the error builders)]]
+  [#tr: [#td: #~"resolve.z"] [#td: finding a definition on demand: units, scopes, aliases, shells]]
+  [#tr: [#td: #~"declare.z"] [#td: indexing a unit and declaring its definitions, members and visibility]]
+  [#tr: [#td: #~"bodies.z"] [#td: walking a function body, and the instances of a generic one]]
+  [#tr: [#td: #~"flow.z"] [#td: statements and control flow: arms, narrowing facts, what a block leaves]]
+  [#tr: [#td: #~"valuechecks.z"] [#td: checking a value: names, literals, bare functions and types read as values]]
+  [#tr: [#td: #~"callchecks.z"] [#td: calls and constructions: arguments, labels, inference, projections]]
+  [#tr: [#td: #~"memberaccess.z"] [#td: member access: private reach, defaults, tags, #~"as" aliases]]
+  [#tr: [#td: #~"moves.z"] [#td: ownership of values: moves, pins, receivers and locks]]
+  [#tr: [#td: #~"typeref.z"] [#td: recording a written type name on its node]]
+  [#tr: [#td: #~"typeargs.z"] [#td: the arguments of a type application: defaults, partial types, validation]]
+  [#tr: [#td: #~"instantiate.z"] [#td: instantiating a template: minting, clones, unit instances]]
+  [#tr: [#td: #~"conform.z"] [#td: specs, implementations, markers, bounds and value operations]]
+  [#tr: [#td: #~"numerics.z"] [#td: numeric types, literal coercion and layout]]
+  [#tr: [#td: #~"stdtypes.z"] [#td: the standard types the checker mints: collections, iterators, their methods]]
+  [#tr: [#td: #~"consteval.z"] [#td: constant evaluation of an expression: folds, compares, arithmetic]]
+  [#tr: [#td: #~"statics.z"] [#td: constants of declarations: members, fields, static lists; why one did not fold]]
+
+The state the walk keeps is #~"WalkState" (#~"src/zenv.z"), held as
+#~"st.walk"; its parts are records of their own, one a concern:
+#~"st.walk.fn" (the function being walked), #~"value" (the value or call
+being checked, its temporaries and pins), #~"consts", #~"bounds",
+#~"pendingDefault", #~"resolve" and #~"bodies". The fields no one part owns
+stay on #~"WalkState" itself.
+
+
+#--: Entry points of the checker
+
+The functions below are where each part of the check starts; the third
+column names the file each is in. Read the prose below for the semantics.
+
+#table:
+  [#tr: [#th: Part] [#th: Entry points] [#th: Files]]
   [#tr: [#td: The pass]
         [#td: #~"typecheck" -- starts at #~"main", drives demand-driven
-              resolution and body checking, and returns the error list]]
+              resolution and body checking, and returns the error list]
+        [#td: #~"resolve.z"]]
   [#tr: [#td: Unit-level names]
         [#td: #~"resolveDef" (dispatches over #~"nodetype"),
-              #~"resolveUnitBody"]]
+              #~"resolveUnitBody"]
+        [#td: #~"resolve.z"]]
   [#tr: [#td: Type definitions]
         [#td: #~"resolveFunction", #~"resolveRecord", #~"resolveClass",
               #~"resolveUnion", #~"resolveVariant", #~"resolveProtocol",
               #~"resolveFacet", #~"resolveInlineGenericUnit",
               #~"resolveStaticListInto", #~"refuseReftypeMember",
-              #~"refuseReftypeBounds"]]
+              #~"refuseReftypeBounds"]
+        [#td: #~"declare.z", #~"statics.z", #~"memberaccess.z"]]
   [#tr: [#td: Names and type references]
         [#td: #~"envLookup", #~"walkLookupTyperef",
-              #~"resolveTyperefShell", #~"dottedParentName"]]
+              #~"resolveTyperefShell", #~"dottedParentName"]
+        [#td: #~"ztypecheck.z", #~"bodies.z", #~"typeref.z", #~"memberaccess.z"]]
   [#tr: [#td: Monomorphisation]
         [#td: #~"getOrMintSpec", #~"mintMono",
-              #~"validateGenericTypeArgs"]]
+              #~"validateGenericTypeArgs"]
+        [#td: #~"instantiate.z", #~"typeargs.z"]]
   [#tr: [#td: Bodies]
         [#td: #~"checkBodies", #~"checkMethodBodies",
-              #~"checkFunctionBody"]]
+              #~"checkFunctionBody"]
+        [#td: #~"resolve.z", #~"bodies.z"]]
   [#tr: [#td: Statements]
         [#td: #~"checkStatement", #~"checkStmtInner",
               #~"checkStmtExpression", #~"checkAssignment",
-              #~"checkReassignment", #~"checkSwap"]]
+              #~"checkReassignment", #~"checkSwap"]
+        [#td: #~"flow.z", #~"valuechecks.z"]]
   [#tr: [#td: Expressions]
         [#td: #~"checkValueAt", #~"checkValueArmAt", #~"checkAtomid",
               #~"checkString", #~"checkDotted" (auto-call, and the
               #~".take" / #~".drop" / #~".borrow" / #~".view" /
-              #~".private" markers)]]
+              #~".private" markers)]
+        [#td: #~"ztypecheck.z", #~"valuechecks.z", #~"declare.z"]]
   [#tr: [#td: Calls]
         [#td: #~"checkCall", #~"checkMissingCallArgs", #~"lockCallArg",
               #~"installBorrowLocks", #~"checkProjectionCreate",
               #~"checkTypedefCreate". An infix #~"a op b" is a call and
-              takes the same path]]
+              takes the same path]
+        [#td: #~"memberaccess.z", #~"callchecks.z", #~"moves.z", #~"valuechecks.z"]]
   [#tr: [#td: Control flow]
         [#td: #~"checkIf", #~"checkFor", #~"checkWith", #~"checkDo",
               #~"checkCase" (match arms, their narrowing and the
-              exclusion after the match), #~"checkBoxConstruction"]]
+              exclusion after the match), #~"checkBoxConstruction"]
+        [#td: #~"flow.z", #~"valuechecks.z", #~"instantiate.z"]]
 
 #--: Dispatch Mechanism
 
@@ -794,9 +843,8 @@ Module boundaries the typechecker relies on:
     (#~"lockAcquireConflict", #~"pathsOverlap"), narrowing
     / exclusion installers]
 
-Collection-type predicates (#~"typeIsReftype", #~"typeIsValtype",
-...), node synthesis, and the monomorphisation dedup hashing have
-no separate module -- they live within #~"src/ztypecheck.z" itself.
+The checker itself is #~"src/ztypecheck.z" and the files of
+#~"src/ztypecheck/" (The files of the checker, above).
 
 
 #--: Reading Order
@@ -812,12 +860,14 @@ order:
   [#*: #~"src/zenv.z" -- the scope stack and the lock-conflict
     rule. The semantics of "what makes two locks conflict" lives
     here, not in the typechecker.]
-  [#*: #~"src/ztypecheck.z" -- enter via the entry points above.
-    A good first dive is #~"typecheck" → #~"resolveDef" →
-    #~"resolveFunction" → #~"checkFunctionBody" →
-    #~"checkStatement" → #~"checkStmtInner" → #~"checkValueAt" →
-    #~"checkCall". That path touches almost every cross-
-    cutting concern in turn.]
+  [#*: #~"src/ztypecheck.z" -- the public names, the shared types and
+    helpers; then the subunit files, entered by the entry points
+    above. A good first dive is #~"typecheck" and #~"resolveDef"
+    (#~"resolve.z") → #~"resolveFunction" (#~"declare.z") →
+    #~"checkFunctionBody" (#~"bodies.z") → #~"checkStatement" and
+    #~"checkStmtInner" (#~"flow.z") → #~"checkValueAt"
+    (#~"ztypecheck.z") → #~"checkCall" (#~"memberaccess.z"). That
+    path touches almost every cross-cutting concern in turn.]
 
 
 #--: Related Documents
