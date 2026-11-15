@@ -19,6 +19,7 @@ public: unit {
     :ZTypeRegistry
     :ZVariable
     :zvarorigin
+    :zsynthorigin
     :constfail
     :constfailkind
     :noConstFail
@@ -1040,6 +1041,16 @@ zvarorigin: variant {
     param: null
 } as { tag: u8.tag }
 
+# what the checker synthesised a variable for.
+zsynthorigin: variant {
+    # nothing: a written binding, or a synthesised one that says no more
+    unsaid: null
+    # an argument hoisted ahead of its call
+    anf: null
+    # a value computed and then discarded
+    discard: null
+} as { tag: u8.tag }
+
 # ZVariable -- one runtime variable: the row variableById holds for its vid.
 # The C identifier is the emitter's business, made from the id and, where the
 # output is to be read, the name.
@@ -1056,9 +1067,8 @@ ZVariable: class {
     isPrivateAccess: bool
     # the root of the path a borrowed variable borrows from (0 when none)
     borrowOrigin: zast.nameid
-    # what the checker synthesised it FOR, when it synthesised it; none for a
-    # written binding
-    synthOrigin: Option String
+    # what the checker synthesised it for
+    synthOrigin: zsynthorigin
     # how it came to be: a parameter, a local, or synthesised
     origin: zvarorigin
 }
@@ -1316,19 +1326,6 @@ ParamList: class {
     params: List ParamDesc
 }
 
-# the registry of every type: each ZType keyed by id, plus the name and
-# child indexes the resolver and emitter query.
-# optStringCopy -- an owned copy of an optional string.
-optStringCopy: function {o: (Option String).view} out Option String is {
-    match (
-        o
-    ) case some then {
-        return (Option.some o.copy)
-    } case none then {
-        return (Option.none String)
-    }
-}
-
 # holeType -- the row standing in for an id minted by allocType, which names an
 # expression with no type.
 holeType: function {} out ZType is {
@@ -1463,7 +1460,7 @@ ZTypeRegistry: class {
             :ownership
             isPrivateAccess: false
             borrowOrigin: zast.nameid
-            synthOrigin: Option.none String
+            synthOrigin: zsynthorigin.unsaid
             origin: zvarorigin.synth
         )
         )
@@ -1505,10 +1502,10 @@ ZTypeRegistry: class {
         return got.borrowOrigin
     }
 
-    # what the checker synthesised it for; none for a written binding
-    variableSynthOriginOf: function {t: this.view id: vid} out Option String is {
+    # what the checker synthesised it for
+    variableSynthOriginOf: function {t: this.view id: vid} out zsynthorigin is {
         got: t.variableById.get i: id
-        return (optStringCopy o: got.synthOrigin)
+        return got.synthOrigin
     }
 
     # how it came to be: a parameter, a local, or synthesised
@@ -1532,9 +1529,9 @@ ZTypeRegistry: class {
 
     # record what the variable was synthesised for, which is all a diagnostic
     # can say about a name no one wrote
-    setVariableSynthOrigin: function {t: this id: vid origin: String.take} is {
+    setVariableSynthOrigin: function {t: this id: vid origin: zsynthorigin} is {
         got: t.variableById.getMut i: id
-        got.synthOrigin = Option.some origin
+        got.synthOrigin = origin
     }
 
     # mark it able to reach private members, which a `this` receiver is and an
