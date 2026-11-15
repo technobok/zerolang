@@ -96,3 +96,414 @@ unusedProbeClang: list {
     "cdead_dead_str"
     "cdead_dead_word_fn"
 } out staticlist StringView
+
+# pinfiles -- the files a pin counts in
+pinfiles: variant {
+    # the emitter: src/zemitterc.z and its subunit files
+    emitter: null
+    # the front end, which names no backend: the checker and its subunit
+    # files, ztyping, ztypes, zenv, zgenerator, and lib/system's zparser,
+    # zlexer and zast
+    frontend: null
+    # the standard library: lib/system's units and their subunit files
+    stdlib: null
+} as { tag: u8.tag }
+
+# pinafter -- what may follow a pin's text where it counts
+pinafter: variant {
+    anything: null
+    # no name byte: the text ends a name
+    nameEnd: null
+    # a small letter
+    small: null
+} as { tag: u8.tag }
+
+# pinfacts -- one pin: the lines of its files' code that hold its needle, held
+# at its baseline. A comment does not count; the text of a string does.
+pinfacts: data {
+    files: pinfiles
+    # the text the pin counts
+    needle: text
+    after: pinafter
+    # only blanks may stand before the text on its line
+    lineStart: bool
+    baseline: u64
+    # what a line it counts is, and what to do instead
+    why: text
+}
+
+# pins -- the counts the compiler's own source is held at. The emitter reads
+# the checker's stamps and ids, so each name-based site left is counted, and
+# each one gone stays gone; the front end names no backend; the standard
+# library declares no `Any`.
+pins: list {
+    ztLiteral: (
+        pinfacts
+        files: pinfiles.emitter
+        needle: "z_t\\{"
+        after: pinafter.anything
+        lineStart: false
+        baseline: 3
+        why: "a C type name composed outside nameCName, the one C-name composer"
+    )
+    walkLookupTyperef: (
+        pinfacts
+        files: pinfiles.emitter
+        needle: "ztypecheck.walkLookupTyperef"
+        after: pinafter.anything
+        lineStart: false
+        baseline: 1
+        why: "a type reference resolved by name: read the checker's stamp (atomVariableId, refDecl, callKind)"
+    )
+    regNameOf: (
+        pinfacts
+        files: pinfiles.emitter
+        needle: "reg.nameOf"
+        after: pinafter.nameEnd
+        lineStart: false
+        baseline: 4
+        why: "a type's name TEXT: compare types by id"
+    )
+    mangleVarName: (
+        pinfacts
+        files: pinfiles.emitter
+        needle: "mangleVarName :name"
+        after: pinafter.anything
+        lineStart: false
+        baseline: 1
+        why: "a variable's C name made outside nameCName"
+    )
+    readText: (
+        pinfacts
+        files: pinfiles.emitter
+        needle: "io.readText"
+        after: pinafter.anything
+        lineStart: false
+        baseline: 0
+        why: "the emitter reads no file: zc carries its texts"
+    )
+    armLiteral: (
+        pinfacts
+        files: pinfiles.emitter
+        needle: ".data."
+        after: pinafter.small
+        lineStart: false
+        baseline: 0
+        why: "a literal arm member (.data.<arm>): memberC spells them"
+    )
+    poolFind: (
+        pinfacts
+        files: pinfiles.emitter
+        needle: "poolFind"
+        after: pinafter.anything
+        lineStart: false
+        baseline: 11
+        why: "a re-intern of a name the emitter held as an id, or table text"
+    )
+    aliasChildName: (
+        pinfacts
+        files: pinfiles.emitter
+        needle: "aliasChildName :prog"
+        after: pinafter.anything
+        lineStart: false
+        baseline: 11
+        why: "a member-name TEXT for a C spelling or a row key; look a member up by aliasChildNameId"
+    )
+    aliasOrChild: (
+        pinfacts
+        files: pinfiles.emitter
+        needle: "aliasOrChild :prog"
+        after: pinafter.anything
+        lineStart: false
+        baseline: 2
+        why: "a member-name TEXT for a C spelling or a row key; look a member up by aliasChildNameId"
+    )
+    emitFail: (
+        pinfacts
+        files: pinfiles.emitter
+        needle: "emitFail"
+        after: pinafter.anything
+        lineStart: false
+        baseline: 52
+        why: "an emitter refusal leg: a construct it cannot emit records an emitFail and zc writes no C. A new refusal may raise this (say so in the commit); a new fallback may not"
+    )
+    registerScopeDestroy: (
+        pinfacts
+        files: pinfiles.emitter
+        needle: "registerScopeDestroy"
+        after: pinafter.anything
+        lineStart: false
+        baseline: 0
+        why: "the emitter recording a local's destroy itself: read the checker's destroy lists (scopeDestroy, exitDestroy)"
+    )
+    refsLocal: (
+        pinfacts
+        files: pinfiles.emitter
+        needle: "refsLocal"
+        after: pinafter.anything
+        lineStart: false
+        baseline: 0
+        why: "a local searched for in a returned value's C text: read the checker's destroy lists"
+    )
+    factsOfText: (
+        pinfacts
+        files: pinfiles.emitter
+        needle: "factsOfText"
+        after: pinafter.anything
+        lineStart: false
+        baseline: 0
+        why: "an expression's facts read off its C text, not from its producer"
+    )
+    bindingRhsIsBorrow: (
+        pinfacts
+        files: pinfiles.emitter
+        needle: "bindingRhsIsBorrow"
+        after: pinafter.anything
+        lineStart: false
+        baseline: 0
+        why: "a borrow judged by the value's shape: the checker records it (armLeafPlaces)"
+    )
+    argHoist: (
+        pinfacts
+        files: pinfiles.emitter
+        needle: "_ah\\{"
+        after: pinafter.anything
+        lineStart: false
+        baseline: 0
+        why: "an argument hoist the emitter decided itself: read the checker's recorded state"
+    )
+    int128: (
+        pinfacts
+        files: pinfiles.frontend
+        needle: "__int128"
+        after: pinafter.anything
+        lineStart: false
+        baseline: 0
+        why: "a C spelling in the front end: a backend fact belongs to the C emitter and its rows (lib/system/<unit>/nativec.zd)"
+    )
+    float16: (
+        pinfacts
+        files: pinfiles.frontend
+        needle: "_Float16"
+        after: pinafter.anything
+        lineStart: false
+        baseline: 0
+        why: "a C spelling in the front end: a backend fact belongs to the C emitter and its rows"
+    )
+    float128: (
+        pinfacts
+        files: pinfiles.frontend
+        needle: "__float128"
+        after: pinafter.anything
+        lineStart: false
+        baseline: 0
+        why: "a C spelling in the front end: a backend fact belongs to the C emitter and its rows"
+    )
+    sizeofCall: (
+        pinfacts
+        files: pinfiles.frontend
+        needle: "sizeof("
+        after: pinafter.anything
+        lineStart: false
+        baseline: 0
+        why: "a C spelling in the front end: a backend fact belongs to the C emitter and its rows"
+    )
+    alignof: (
+        pinfacts
+        files: pinfiles.frontend
+        needle: "_Alignof"
+        after: pinafter.anything
+        lineStart: false
+        baseline: 0
+        why: "a C spelling in the front end: a backend fact belongs to the C emitter and its rows"
+    )
+    voidPointer: (
+        pinfacts
+        files: pinfiles.frontend
+        needle: "void*"
+        after: pinafter.anything
+        lineStart: false
+        baseline: 0
+        why: "a C spelling in the front end: a backend fact belongs to the C emitter and its rows"
+    )
+    int8: (
+        pinfacts
+        files: pinfiles.frontend
+        needle: "int8_t"
+        after: pinafter.anything
+        lineStart: false
+        baseline: 0
+        why: "a C spelling in the front end: a backend fact belongs to the C emitter and its rows"
+    )
+    int16: (
+        pinfacts
+        files: pinfiles.frontend
+        needle: "int16_t"
+        after: pinafter.anything
+        lineStart: false
+        baseline: 0
+        why: "a C spelling in the front end: a backend fact belongs to the C emitter and its rows"
+    )
+    int32: (
+        pinfacts
+        files: pinfiles.frontend
+        needle: "int32_t"
+        after: pinafter.anything
+        lineStart: false
+        baseline: 0
+        why: "a C spelling in the front end: a backend fact belongs to the C emitter and its rows"
+    )
+    int64: (
+        pinfacts
+        files: pinfiles.frontend
+        needle: "int64_t"
+        after: pinafter.anything
+        lineStart: false
+        baseline: 0
+        why: "a C spelling in the front end: a backend fact belongs to the C emitter and its rows"
+    )
+    nativesTbl: (
+        pinfacts
+        files: pinfiles.frontend
+        needle: "natives.tbl"
+        after: pinafter.anything
+        lineStart: false
+        baseline: 0
+        why: "a backend file named in the front end"
+    )
+    zlink: (
+        pinfacts
+        files: pinfiles.frontend
+        needle: "zlink"
+        after: pinafter.anything
+        lineStart: false
+        baseline: 0
+        why: "the C link step named in the front end"
+    )
+    ccPath: (
+        pinfacts
+        files: pinfiles.frontend
+        needle: "ccPath"
+        after: pinafter.anything
+        lineStart: false
+        baseline: 0
+        why: "the C compiler named in the front end"
+    )
+    ccMode: (
+        pinfacts
+        files: pinfiles.frontend
+        needle: "ccMode"
+        after: pinafter.anything
+        lineStart: false
+        baseline: 0
+        why: "the C compiler named in the front end"
+    )
+    cckind: (
+        pinfacts
+        files: pinfiles.frontend
+        needle: "cckind"
+        after: pinafter.anything
+        lineStart: false
+        baseline: 0
+        why: "the C compiler named in the front end"
+    )
+    isCReserved: (
+        pinfacts
+        files: pinfiles.frontend
+        needle: "isCReserved"
+        after: pinafter.anything
+        lineStart: false
+        baseline: 0
+        why: "C's reserved words named in the front end"
+    )
+    frontendMangle: (
+        pinfacts
+        files: pinfiles.frontend
+        needle: "mangleVarName"
+        after: pinafter.anything
+        lineStart: false
+        baseline: 0
+        why: "a C name made in the front end"
+    )
+    ztargetPath: (
+        pinfacts
+        files: pinfiles.frontend
+        needle: "ztarget."
+        after: pinafter.anything
+        lineStart: false
+        baseline: 0
+        why: "the target read in the front end: it is the generated `z` unit's to say"
+    )
+    targetTriple: (
+        pinfacts
+        files: pinfiles.frontend
+        needle: "targetTriple"
+        after: pinafter.anything
+        lineStart: false
+        baseline: 0
+        why: "the resolved target named in the front end: it is the generated `z` unit's to say"
+    )
+    targetOs: (
+        pinfacts
+        files: pinfiles.frontend
+        needle: "targetOs"
+        after: pinafter.anything
+        lineStart: false
+        baseline: 0
+        why: "the resolved target named in the front end: it is the generated `z` unit's to say"
+    )
+    targetArch: (
+        pinfacts
+        files: pinfiles.frontend
+        needle: "targetArch"
+        after: pinafter.anything
+        lineStart: false
+        baseline: 0
+        why: "the resolved target named in the front end: it is the generated `z` unit's to say"
+    )
+    anyDeclared: (
+        pinfacts
+        files: pinfiles.stdlib
+        needle: "Any:"
+        after: pinafter.anything
+        lineStart: true
+        baseline: 0
+        why: "there is no `Any`: a generic names the family it takes, anyval.generic or AnyRef.generic"
+    )
+    anyBound: (
+        pinfacts
+        files: pinfiles.stdlib
+        needle: "Any.generic"
+        after: pinafter.anything
+        lineStart: false
+        baseline: 0
+        why: "there is no `Any`: a generic names the family it takes, anyval.generic or AnyRef.generic"
+    )
+} out staticlist pinfacts
+
+# typenameAllowed -- the functions (`unit:function`, a subunit's file read as
+# its unit) that may compare a name id with a zast.wellKnown type name, each
+# where the name is no type's identity: system-gated declarations, member and
+# suffix vocabulary, bound families, the `null` an as-block opt-out and an
+# empty body are spelled with, and a template's own name picking the one
+# collection family it could be (whose id then decides). A type is identified
+# by its declaration (stdTidRo, declaredBySystem, numKindOfTid), never by its
+# spelling, everywhere else.
+typenameAllowed: list {
+    "ztypecheck:resolveClass"
+    "ztypecheck:resolveProtocol"
+    "ztypecheck:defTypetypeOf"
+    "ztypecheck:resolveObjectDef"
+    "ztypecheck:isBoxTemplate"
+    "ztypecheck:checkStaticListMember"
+    "ztypecheck:checkMarkerMember"
+    "zemitterc:emitStaticListMember"
+    "zemitterc:emitStrConvCall"
+    "zsource:bareZeroTypeName"
+    "ztypecheck:constraintKindForId"
+    "ztypecheck:textLiteralCastTarget"
+    "ztypecheck:isIterFamilyName"
+    "ztypecheck:isCollectionFamilyName"
+    "ztypecheck:isHeapCollectionName"
+    "zsource:hwQuietName"
+} out staticlist StringView

@@ -118,11 +118,11 @@ NAMES    := $(filter-out $(SKIP),$(basename $(notdir $(EXAMPLES))))
 	bench-math bench-math-kernels test-clang test-tcc test-tcc-heavy readable-check build \
 	tcc zc zl zls regen-goldens regen-fmt-goldens regen-matrix matrix-guard regen-constparity constparity-guard regen-math-asm \
 	fmt-raw-guard regen-lsp-goldens bump-seed test-bootstrap install docs warn-check pedantic-check perf \
-	perf-strict pre-push perf-elision any-guard typename-guard emitter-guard frontend-guard \
-	lifetime-guard user-native-guard shim-guard thread-tsan-guard cobj-guard sqlite-decls-guard case-guard mode-parity zlink-rules-guard \
+	perf-strict pre-push perf-elision \
+	user-native-guard shim-guard thread-tsan-guard cobj-guard sqlite-decls-guard case-guard mode-parity \
 	refusal-guard static-tcc-guard emit-set ident-set \
 	piece-guard \
-	view-guard fallback-guard clean native-guard generic-param-guard \
+	view-guard clean native-guard generic-param-guard \
 	zl-full-guard
 
 # Keep the per-example .c intermediates.
@@ -291,13 +291,12 @@ ci:
 # GATE_GUARDS -- the legs of ci-gates the per-batch gate runs, in parallel and to
 # the end (`make -k -j gate-guards`). The gate runs check, test, perf-strict and
 # the clang and tcc corpora itself.
-GATE_GUARDS := style-lint zl-full-guard warn-check pedantic-check emitter-guard \
-	typename-guard frontend-guard lifetime-guard native-guard generic-param-guard view-guard \
-	fallback-guard any-guard emitted-check piece-guard case-guard user-native-guard shim-guard \
-	thread-tsan-guard cobj-guard sqlite-decls-guard zlink-rules-guard static-tcc-guard \
-	refusal-guard fmt-raw-guard nativec-agree-guard natives-show-guard prelude-share-guard \
-	math-asm-guard matrix-guard constparity-guard test-math-noasm test-portable-scalars \
-	test-msvc-wine docs-link-guard
+GATE_GUARDS := style-lint zl-full-guard warn-check pedantic-check native-guard \
+	generic-param-guard view-guard emitted-check piece-guard case-guard user-native-guard \
+	shim-guard thread-tsan-guard cobj-guard sqlite-decls-guard static-tcc-guard refusal-guard \
+	fmt-raw-guard nativec-agree-guard natives-show-guard prelude-share-guard math-asm-guard \
+	matrix-guard constparity-guard test-math-noasm test-portable-scalars test-msvc-wine \
+	docs-link-guard
 # GATE_SAME_C -- the legs that only rebuild and run the emitted C of the run
 # corpus: the per-batch gate leaves them out when the C every program emits is the
 # C its snapshot's compiler emits, and runs them otherwise.
@@ -1523,129 +1522,6 @@ perf-elision: bin/zc.c
 	  printf "  after LLVM deletion:   %s allocs\n" "$$left"; \
 	  printf "  write-only pool:       %s\n" "$$((kept - left))"
 
-# any-guard -- there is no `Any`: lib/system must not declare it or bound by it.
-any-guard:
-	@n=$$(grep -nE '^[[:space:]]*Any:|Any\.generic' lib/system/*.z lib/system/system/*.z lib/system/math/*.z | grep -vE ':[0-9]+: *#' | wc -l); \
-	if [ "$$n" -gt 0 ]; then \
-	  echo "any-guard FAIL: lib/system declares Any or bounds a parameter by it"; \
-	  grep -nE '^[[:space:]]*Any:|Any\.generic' lib/system/*.z lib/system/system/*.z lib/system/math/*.z | grep -vE ':[0-9]+: *#'; \
-	  echo "  A generic names the family it takes: anyval.generic or AnyRef.generic."; \
-	  exit 1; \
-	fi; \
-	echo "any-guard OK: lib/system neither declares Any nor bounds by it"
-
-# typename-guard -- a type is identified by its declaration, never by its spelling:
-# a comparison against a zast.wellKnown ty* name is allowed only in TYPENAME_OK
-# (`unit:function`, the unit's subunit files read as the unit),
-# each where the name is not a type identity (system-gated declarations, member and
-# suffix vocabulary, bound families, the `null` an as-block opt-out is spelled with,
-# the `null` an empty body is spelled with where A013 reads statements (hwQuietName),
-# a template's own name picking the one collection family it could be, whose id
-# then decides: templateIsCollection, templateNeedsMonoDtor).
-TYPENAME_OK := ztypecheck:resolveClass ztypecheck:resolveProtocol \
-	ztypecheck:defTypetypeOf ztypecheck:resolveObjectDef \
-	ztypecheck:paramIsBorrowReftype ztypecheck:isBoxTemplate \
-	ztypecheck:checkStaticListMember ztypecheck:checkMarkerMember \
-	zemitterc:emitStaticListMember zemitterc:emitStrConvCall \
-	zsource:bareZeroTypeName ztypecheck:constraintKindForId \
-	ztypecheck:isConformanceMarker ztypecheck:declareCanonicalTypeId \
-	ztypecheck:textLiteralCastTarget ztypecheck:isIterFamilyName \
-	ztypecheck:isCollectionFamilyName ztypecheck:isHeapCollectionName \
-	zsource:hwQuietName
-typename-guard:
-	@fail=0; n=0; \
-	for e in $$(awk '/^[A-Za-z_][A-Za-z0-9_]*: function/ {fn=$$1; sub(":", "", fn)} \
-	    /^[ \t]*#/ {next} \
-	    /(==|!=)[ \t]*zast\.wellKnown\.slot\.ty[A-Za-z0-9]+|zast\.wellKnown\.slot\.ty[A-Za-z0-9]+[ \t]*(==|!=)/ {u=FILENAME; sub(/^src\//, "", u); sub(/\/.*/, "", u); sub(/\.z$$/, "", u); print u ":" fn}' \
-	    src/*.z $(SRC_SUBUNITS) | sort -u); do \
-	  n=$$((n + 1)); \
-	  case " $(TYPENAME_OK) " in *" $$e "*) ;; \
-	    *) echo "typename-guard FAIL: $$e compares a name id with a wellKnown type name -- decide by the declaration (stdTidRo, declaredBySystem, numKindOfTid), or add the function to TYPENAME_OK with why"; fail=1;; \
-	  esac; \
-	done; \
-	if [ $$fail -ne 0 ]; then exit 1; fi; \
-	echo "typename-guard OK: $$n functions compare a wellKnown type name, each sanctioned"
-
-# emitter-guard -- the emitter reads the checker's stamps and ids; each count is a
-# remaining name-based site (lower the baseline as one goes). z_t{ literals are
-# allowed only in the one C-name composer.
-emitter-guard:
-	@e2=$$(cat $(EMITTER_SRCS) | grep -c 'ztypecheck.walkLookupTyperef'); \
-	e6=$$(cat $(EMITTER_SRCS) | grep -vE '^[[:space:]]*#' | grep -c 'reg\.nameOf\b'); \
-	e7=$$(cat $(EMITTER_SRCS) | grep -c 'mangleVarName :name'); \
-	e8=$$(cat $(EMITTER_SRCS) | grep -cF 'io.readText'); \
-	e10=$$(cat $(EMITTER_SRCS) | grep -vE '^[[:space:]]*#' | grep -cE '\.data\.[a-z]'); \
-	e11=$$(cat $(EMITTER_SRCS) | grep -c 'poolFind'); \
-	e12=$$(cat $(EMITTER_SRCS) | grep -cE 'aliasChildName :prog|aliasOrChild :prog'); \
-	g2=$$(cat $(EMITTER_SRCS) | grep -cF 'z_t\{'); \
-	fail=0; \
-	chk() { if [ "$$2" -gt "$$3" ]; then echo "emitter-guard FAIL: $$1 = $$2 (baseline $$3)"; fail=1; \
-	  elif [ "$$2" -lt "$$3" ]; then echo "emitter-guard: $$1 = $$2 < baseline $$3 -- lower the baseline here"; fi; }; \
-	chk "'z_t{' literals in the emitter" "$$g2" 3; \
-	chk "ztypecheck.walkLookupTyperef" "$$e2" 1; \
-	chk "a type's name TEXT (reg.nameOf; compare by id)" "$$e6" 4; \
-	chk "mangleVarName (inside nameCName)" "$$e7" 1; \
-	chk "io.readText (the emitter reads no file: zc carries its texts)" "$$e8" 0; \
-	chk "literal arm members (.data.<arm>; memberC spells them)" "$$e10" 0; \
-	chk "poolFind (a re-intern of a name the emitter held as an id, or table text)" "$$e11" 11; \
-	chk "member-name TEXT (C spelling and row keys only; look members up by aliasChildNameId)" "$$e12" 13; \
-	if [ "$$fail" = "1" ]; then \
-	  echo "  A new name-resolution site was added to the emitter. Read the typechecker"; \
-	  echo "  stamp (atomVariableId/refDecl/callKind), the canonical child id, or"; \
-	  echo "  ctxCname instead of resolving by name."; \
-	  exit 1; \
-	fi; \
-	echo "emitter-guard OK: zt=$$g2 walkLookup=$$e2 nameOf=$$e6 mangleVar=$$e7 readText=$$e8 armLiteral=$$e10 poolFind=$$e11 memberText=$$e12"
-
-# frontend-guard -- the front end names no backend: no C spelling, no triple parse,
-# no target (that is the generated `z` unit's). Comments are not counted.
-FRONTEND_SRCS := $(CHECKER_SRCS) src/ztyping.z src/ztypes.z src/zenv.z src/zgenerator.z \
-	lib/system/zparser.z lib/system/zlexer.z lib/system/zast.z
-frontend-guard:
-	@c=$$(cat $(FRONTEND_SRCS) | grep -vE '^[[:space:]]*#' \
-	  | grep -cE '__int128|_Float16|__float128|sizeof\(|_Alignof|void\*|u?int(8|16|32|64)_t|natives\.tbl|zlink|ccPath|ccMode|cckind|isCReserved|mangleVarName|ztarget\.'); \
-	t=$$(cat $(FRONTEND_SRCS) | grep -vE '^[[:space:]]*#' | grep -cE 'target(Triple|Os|Arch)'); \
-	fail=0; \
-	if [ "$$c" -gt 0 ]; then \
-	  echo "frontend-guard FAIL: $$c C spelling(s) in the front end's code:"; \
-	  grep -nE '__int128|_Float16|__float128|sizeof\(|_Alignof|void\*|u?int(8|16|32|64)_t|natives\.tbl|zlink|ccPath|ccMode|cckind|isCReserved|mangleVarName|ztarget\.' $(FRONTEND_SRCS) \
-	    | grep -vE ':[0-9]+:[[:space:]]*#' | sed 's/^/    /' | head -10; fail=1; fi; \
-	if [ "$$t" -gt 0 ]; then \
-	  echo "frontend-guard FAIL: the front end names the resolved target $$t times; it is the generated z unit's to say"; fail=1; fi; \
-	if [ "$$fail" = "1" ]; then \
-	  echo "  A backend fact belongs to the backend: the C emitter and its rows (lib/system/<unit>/nativec.zd)."; \
-	  exit 1; \
-	fi; \
-	echo "frontend-guard OK: no C spelling, no triple parse and no target in the front end's code"
-
-# lifetime-guard -- places the emitter decided a lifetime itself rather than
-# reading the checker's destroy lists; each is gone, and its row keeps it so.
-# registerScopeDestroy recorded a local's destroy where it was bound, refsLocal
-# searched a returned value's C text for a local's name, and bindingRhsIsBorrow
-# judged a borrow by the value's shape where the checker records it
-# (armLeafPlaces). factsOfText counts the places that read an expression's
-# facts off its C text rather than from its producer: none do.
-lifetime-guard:
-	@l1=$$(cat $(EMITTER_SRCS) | grep -c 'registerScopeDestroy'); \
-	l2=$$(cat $(EMITTER_SRCS) | grep -c 'refsLocal'); \
-	l3=$$(cat $(EMITTER_SRCS) | grep -c 'factsOfText'); \
-	l4=$$(cat $(EMITTER_SRCS) | grep -c 'bindingRhsIsBorrow'); \
-	l5=$$(cat $(EMITTER_SRCS) | grep -cF '_ah\{'); \
-	fail=0; \
-	chk() { if [ "$$2" -gt "$$3" ]; then echo "lifetime-guard FAIL: $$1 = $$2 (baseline $$3)"; fail=1; \
-	  elif [ "$$2" -lt "$$3" ]; then echo "lifetime-guard: $$1 = $$2 < baseline $$3 -- lower the baseline here"; fi; }; \
-	chk "registerScopeDestroy" "$$l1" 0; \
-	chk "refsLocal" "$$l2" 0; \
-	chk "factsOfText" "$$l3" 0; \
-	chk "bindingRhsIsBorrow" "$$l4" 0; \
-	chk "'_ah{' argument hoists" "$$l5" 0; \
-	if [ "$$fail" = "1" ]; then \
-	  echo "  The emitter decided a lifetime on its own again. Read the checker's destroy"; \
-	  echo "  lists (scopeDestroy, exitDestroy) and the variable's recorded state instead."; \
-	  exit 1; \
-	fi; \
-	echo "lifetime-guard OK: registerScopeDestroy=$$l1 refsLocal=$$l2 factsOfText=$$l3 bindingRhsIsBorrow=$$l4 argHoists=$$l5"
-
 # sqlite-decls-guard -- the part of SQLite's C interface the sqlite unit's
 # fragments declare instead of including (its @decls row) compiles after the
 # vendored sqlite3.h without a diagnostic: a prototype, typedef or constant that
@@ -1912,18 +1788,6 @@ mode-parity: bin/zc $(BUILDDIR)/tcc
 	fi; \
 	echo "mode-parity OK: $$n run cases identical under --cc-mode spawn and inproc (output and exit code, not bytes)"
 
-# zlink-rules-guard -- every rule that links emitted C takes its -l set via ZLINKOF.
-zlink-rules-guard:
-	@off=$$(grep -n -- '-l' Makefile | grep -v '^[0-9]*:#' | grep -vE ' -c ' \
-	         | grep -E '\.c\b' | grep -v ZLINKOF); \
-	if [ -n "$$off" ]; then \
-	  echo "zlink-rules-guard FAIL: these rules link emitted C with a hardcoded -l set:"; \
-	  echo "$$off"; \
-	  echo "  take the libraries from the artifact: \$$(call ZLINKOF,<the .c>)"; \
-	  exit 1; \
-	fi; \
-	echo "zlink-rules-guard OK: every rule linking emitted C reads its -l set from the artifact"
-
 # refusal-guard -- zc refuses what it cannot honour, exit 2 and naming it, and the
 # honoured counterpart still works: --ldflags under inproc, bad or ambiguous
 # --target, tcc cross, f128 off x86-64, a missing root, a missing unit. Not error
@@ -2101,22 +1965,6 @@ piece-guard: bin/zc
 # reads takes, and each of its entries must still place one.
 view-guard: bin/zc
 	@bin/zc natives check views --system lib/system --emitter src/zemitterc.z --register tests/view_guard.zd
-
-# fallback-guard -- the emitter never degrades silently: a construct it cannot
-# emit records an emitFail, and zc then writes no C at all. The count of
-# emitFail lines in the emitter's files is a ratchet: a new refusal leg may raise
-# EMITFAIL_BASELINE (say so in the commit); a new fallback leg may not.
-EMITFAIL_BASELINE := 54
-fallback-guard:
-	@n=$$(cat $(EMITTER_SRCS) | grep -c 'emitFail'); \
-	if [ "$$n" -gt $(EMITFAIL_BASELINE) ]; then \
-	  echo "fallback-guard FAIL: the emitter's emitFail lines = $$n (baseline $(EMITFAIL_BASELINE)) -- new fallback leg?"; \
-	  echo "  The emitter hit a construct it cannot emit. Fix the emission gap."; \
-	  exit 1; \
-	elif [ "$$n" -lt $(EMITFAIL_BASELINE) ]; then \
-	  echo "fallback-guard: emitFail lines = $$n < baseline $(EMITFAIL_BASELINE) -- lower EMITFAIL_BASELINE"; \
-	fi; \
-	echo "fallback-guard OK: emitFail legs $$n"
 
 clean:
 	rm -rf $(BUILDDIR) bin

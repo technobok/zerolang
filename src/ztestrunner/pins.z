@@ -1,0 +1,350 @@
+# pins -- the PINS kind (`--only pins`, and in every full run): counts the
+# compiler's own source is held at. Each pin of the expected subunit is a text
+# and the files it is counted in: a line of those files' code that holds the
+# text counts once. A comment does not count -- the lexer says where each one
+# is -- and the text of a string does. Each count must equal its baseline: one
+# above is new, one below fails until the baseline is lowered. Two checks a
+# text cannot state stand beside them:
+#   typename   a comparison against a zast.wellKnown type name stands only in a
+#              function expected.typenameAllowed names: a type is identified by
+#              its declaration, never by its spelling
+#   linkRules  every Makefile rule that links emitted C takes its -l set from
+#              the artifact, through ZLINKOF
+# A subunit of ztestrunner.
+
+# runPinsCases -- the pins kind
+runPinsCases: function {r: Runner} is {
+    codes: PinCode texts: List String paths: List String
+    bad: u64
+    for each p: expected.pins loop {
+        files: pinFiles :r files: p.files
+        n: u64
+        for each f: files loop {
+            k: codeIndex :codes path: f.stringView
+            n = n + (pinLines code: (codes.texts.get i: k).stringView :p)
+        }
+        if n != p.baseline then {
+            print "FAIL(pins) `\{p.needle}` in \{(
+                pinFilesWord
+                files: p.files
+            )}: \{n} lines, baseline \{p.baseline} -- \{p.why}"
+            if n < p.baseline then print "  lower its baseline in src/ztestrunner/expected.z"
+            bad = bad + 1
+        }
+    }
+    sites: typenameSites :r :codes
+    bad = bad + (checkTypenames :sites)
+    bad = bad + (checkLinkRules :r)
+    if bad > 0 then {
+        r.fails = r.fails + bad
+        return
+    }
+    r.passN = r.passN + expected.pins.length + 2
+    print "pins: \{expected.pins.length} pins at their baselines; \{sites.length} functions compare a wellKnown type name, each sanctioned; every rule linking emitted C uses ZLINKOF"
+}
+
+# PinCode -- each file's code, read once: its text with every comment blanked
+PinCode: class {
+    texts: List String
+    paths: List String
+}
+
+# codeIndex -- where in `codes` the code of the file at `path` is: its text
+# with each comment the lexer finds turned to spaces, so every line stays where
+# it was. A file is read and lexed once.
+codeIndex: function {codes: PinCode path: StringView} out u64 is {
+    i: u64
+    for i < codes.paths.length loop {
+        if (codes.paths.get :i).stringView == path then return i
+        i = i + 1
+    }
+    src: slurp :path
+    code: String
+    tok: zlexer.Tokenizer.create source: src.copy fsno: zvfs.fsno
+    pool: zast.StringPool.createEmpty
+    pos: u64
+    for true loop {
+        t: tok.nextToken :pool
+        if t.toktype.eofTok then break
+        if t.toktype.commentTok then {
+            code.append (src.stringView.substring from: pos to: t.offset)
+            code.append (" ".repeated n: t.width)
+            pos = t.offset + t.width
+        }
+    }
+    code.append (src.stringView.substring from: pos to: src.length)
+    codes.paths.append path.string
+    codes.texts.append code.take
+    return codes.paths.length - 1
+}
+
+# pinLines -- how many lines of `code` hold pin `p`'s text where it counts
+pinLines: function {code: StringView p: expected.pinfacts} out u64 is {
+    n: u64
+    for each l: code.lines loop {
+        if (lineHolds line: l :p) then n = n + 1
+    }
+    return n
+}
+
+# lineHolds -- line `line` holds pin `p`'s text with what the pin allows
+# around it
+lineHolds: function {line: StringView p: expected.pinfacts} out bool is {
+    pos: u64
+    for pos < line.length loop {
+        at: (
+            ((line.substring from: pos to: line.length).indexOf p.needle.stringView).or
+            d: line.length
+        )
+        if at == line.length then return false
+        start: pos + at
+        end: start + p.needle.length
+        if (afterAllowed :line :end after: p.after) when (
+            beforeAllowed
+            :line
+            :start
+            lineStart: p.lineStart
+        ) then return true
+        pos = start + 1
+    }
+    return false
+}
+
+# afterAllowed -- the byte at `end` of `line` is one the pin lets follow its text
+afterAllowed: function {line: StringView end: u64 after: expected.pinafter} out bool is {
+    b: (line.byteAt i: end).or d: 0
+    match (
+        after
+    ) case anything then {
+        return true
+    } case nameEnd then {
+        return (ascii.isWord :b).false
+    } case small then {
+        return (ascii.isLower :b)
+    }
+}
+
+# beforeAllowed -- what stands before `start` on `line` is what the pin lets
+# stand there: anything, or with `lineStart` blanks only
+beforeAllowed: function {line: StringView start: u64 lineStart: bool} out bool is {
+    if lineStart.false then return true
+    return (line.substring from: 0 to: start).trim.length == 0
+}
+
+# pinFilesWord -- how a report names a pin's files
+pinFilesWord: function {files: expected.pinfiles} out StringView is {
+    match (
+        files
+    ) case emitter then {
+        return "the emitter"
+    } case frontend then {
+        return "the front end"
+    } case stdlib then {
+        return "the standard library"
+    }
+}
+
+# pinFiles -- the paths of the files `files` names, under the runner's root
+pinFiles: function {r: Runner.view files: expected.pinfiles} out List String is {
+    paths: List String
+    root: r.root.stringView
+    match (
+        files
+    ) case emitter then {
+        addUnitFamily :paths dir: "\{root}/src".stringView name: "zemitterc"
+    } case frontend then {
+        addUnitFamily :paths dir: "\{root}/src".stringView name: "ztypecheck"
+        for each u: frontendUnits loop paths.append "\{root}/src/\{u}.z"
+        for each u: frontendStdlibUnits loop paths.append "\{root}/lib/system/\{u}.z"
+    } case stdlib then {
+        for each d: stdlibDirs loop {
+            for each nm: (fixtureNames dir: "\{root}/\{d}".stringView suffix: ".z"
+            ) loop paths.append "\{root}/\{d}/\{nm}.z"
+        }
+    }
+    return paths
+}
+
+# frontendUnits -- the front end's units under src beside the checker
+frontendUnits: list { "ztyping" "ztypes" "zenv" "zgenerator" } out staticlist StringView
+
+# frontendStdlibUnits -- the front end's units under lib/system
+frontendStdlibUnits: list { "zparser" "zlexer" "zast" } out staticlist StringView
+
+# stdlibDirs -- the directories the standard library's units and subunit files
+# are in
+stdlibDirs: list { "lib/system" "lib/system/system" "lib/system/math" } out staticlist StringView
+
+# addUnitFamily -- the file of the unit called `name` under `dir`, and each
+# file of its subunit folder
+addUnitFamily: function {paths: List String dir: StringView name: StringView} is {
+    paths.append "\{dir}/\{name}.z"
+    sub: "\{dir}/\{name}"
+    for each nm: (fixtureNames dir: sub.stringView suffix: ".z") loop paths.append "\{sub}/\{nm}.z"
+}
+
+# TypenameSite -- a function that compares a name id with a zast.wellKnown
+# type name: the unit it belongs to, and its name
+TypenameSite: class {
+    owner: String
+    fn: String
+}
+
+# typenameSites -- each function of the unit files and subunit files under src
+# that compares a name id with a zast.wellKnown type name
+typenameSites: function {r: Runner.view codes: PinCode} out List TypenameSite is {
+    src: "\{r.root}/src"
+    files: List String
+    for each nm: (fixtureNames dir: src.stringView suffix: ".z") loop {
+        addUnitFamily paths: files dir: src.stringView name: nm.stringView
+    }
+    sites: List TypenameSite
+    for each f: files loop {
+        owner: unitOfPath path: f.stringView src: src.stringView
+        k: codeIndex :codes path: f.stringView
+        for each fn: (typenameFunctions code: (codes.texts.get i: k).stringView) loop {
+            sites.append (TypenameSite owner: owner.copy fn: fn.copy)
+        }
+    }
+    return sites
+}
+
+# checkTypenames -- each of `sites` is one expected.typenameAllowed names
+# (`unit:function`), and each name there is a site still; answers how many are
+# not
+checkTypenames: function {sites: (List TypenameSite).view} out u64 is {
+    bad: u64
+    for each site: sites loop {
+        if (isTypenameAllowed :site).false then {
+            print "FAIL(pins) typename: \{site.fn} of unit \{site.owner} compares a name id with a wellKnown type name -- decide by the declaration (stdTidRo, declaredBySystem, numKindOfTid), or add it to typenameAllowed in src/ztestrunner/expected.z with why"
+            bad = bad + 1
+        }
+    }
+    for each a: expected.typenameAllowed loop {
+        met: false
+        for each site: sites loop {
+            if (namesSite allowed: a :site) then met = true
+        }
+        if met.false then {
+            print "FAIL(pins) typename: \{a} compares no wellKnown type name any more -- delete it from typenameAllowed in src/ztestrunner/expected.z"
+            bad = bad + 1
+        }
+    }
+    return bad
+}
+
+# isTypenameAllowed -- `site` is one expected.typenameAllowed names
+isTypenameAllowed: function {site: TypenameSite.view} out bool is {
+    for each a: expected.typenameAllowed loop {
+        if (namesSite allowed: a :site) then return true
+    }
+    return false
+}
+
+# namesSite -- `allowed` (`unit:function`) names `site`
+namesSite: function {allowed: StringView site: TypenameSite.view} out bool is {
+    colon: (allowed.indexOf ":").or d: allowed.length
+    if colon == allowed.length then return false
+    owner: allowed.substring from: 0 to: colon
+    fn: allowed.substring from: colon + 1 to: allowed.length
+    return (owner == site.owner) and (fn == site.fn)
+}
+
+# unitOfPath -- the unit file `path` (under `src`) belongs to: `src/X.z` and
+# `src/X/Y.z` are both unit X's
+unitOfPath: function {path: StringView src: StringView} out String is {
+    rest: path.substring from: src.length + 1 to: path.length
+    slash: (rest.indexOf "/").or d: rest.length
+    if slash < rest.length then return (rest.substring from: 0 to: slash).string
+    return (rest.substring from: 0 to: rest.length - 2).string
+}
+
+# typenameFunctions -- the top-level functions of `code` with a line comparing
+# a name id with a zast.wellKnown type name (`== zast.wellKnown.slot.tyX` or
+# `zast.wellKnown.slot.tyX ==`, `!=` alike), each once
+typenameFunctions: function {code: StringView} out List String is {
+    fns: List String
+    current: String
+    for each l: code.lines loop {
+        e: creach.wordEnd text: l from: 0
+        if e > 0 when (l.substring from: e to: l.length).startsWith ": function" then current = (
+            l.substring
+            from: 0
+            to: e
+        ).string
+        if (comparesTypeName line: l) when (fns.contains item: current
+        ).false then fns.append current.copy
+    }
+    return fns
+}
+
+# typeNamePath -- the path a well-known type name is read through
+typeNamePath: "zast.wellKnown.slot.ty"
+
+# comparesTypeName -- `line` compares something with a zast.wellKnown type
+# name: `==` or `!=` stands, after blanks, right before or right after one
+comparesTypeName: function {line: StringView} out bool is {
+    pos: u64
+    for pos < line.length loop {
+        at: ((line.substring from: pos to: line.length).indexOf typeNamePath).or d: line.length
+        if at == line.length then return false
+        start: pos + at
+        end: creach.wordEnd text: line from: start + typeNamePath.length
+        before: (line.substring from: 0 to: start).trimEnd
+        after: (line.substring from: end to: line.length).trimStart
+        named: end > (start + typeNamePath.length)
+        if named when (endsInEquality :before) or (startsWithEquality :after) then return true
+        pos = end
+    }
+    return false
+}
+
+# endsInEquality -- the text `before` a type name ends in `==` or `!=`: a
+# comparison stands on its left
+endsInEquality: function {before: StringView} out bool is {
+    return (before.endsWith "==") or (before.endsWith "!=")
+}
+
+# startsWithEquality -- the text `after` a type name starts with `==` or `!=`:
+# a comparison stands on its right
+startsWithEquality: function {after: StringView} out bool is {
+    return (after.startsWith "==") or (after.startsWith "!=")
+}
+
+# checkLinkRules -- the link-rules check over the Makefile; answers how many
+# rules break it
+checkLinkRules: function {r: Runner.view} out u64 is {
+    makefile: slurp path: "\{r.root}/Makefile".stringView
+    bad: u64
+    no: u64
+    for each l: makefile.stringView.lines loop {
+        no = no + 1
+        if (linksEmittedC line: l) when (l.contains "ZLINKOF").false then {
+            print "FAIL(pins) linkRules: Makefile:\{no} links emitted C with a hard-coded -l set -- take the libraries from the artifact: $(call ZLINKOF,<the .c>)"
+            bad = bad + 1
+        }
+    }
+    return bad
+}
+
+# linksEmittedC -- Makefile line `line` links a C file: it names a `-l`
+# library and a `.c` file and compiles nothing alone (` -c `); a comment line
+# is none
+linksEmittedC: function {line: StringView} out bool is {
+    if line.startsWith "#" then return false
+    if (line.contains "-l").false or (line.contains " -c ") then return false
+    return (namesCFile :line)
+}
+
+# namesCFile -- `line` holds `.c` not followed by a name byte
+namesCFile: function {line: StringView} out bool is {
+    pos: u64
+    for pos < line.length loop {
+        at: ((line.substring from: pos to: line.length).indexOf ".c").or d: line.length
+        if at == line.length then return false
+        end: pos + at + 2
+        if (ascii.isWord b: ((line.byteAt i: end).or d: 0)).false then return true
+        pos = end
+    }
+    return false
+}
