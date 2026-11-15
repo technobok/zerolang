@@ -119,12 +119,12 @@ emitNumericCast: function {
     if (rtHas :ctx id: body slot: rtHole.slot.holeStringView) then {
         bn.append (rtHoleId slot: rtHole.slot.holeStringView)
         preludeNeed :ctx memb: "@StringView_t"
-        bv.append from: ctx.svC.copy
+        bv.append from: ctx.known.svC.copy
     }
     if (rtHas :ctx id: body slot: rtHole.slot.holeString) then {
         bn.append (rtHoleId slot: rtHole.slot.holeString)
         preludeNeed :ctx memb: "@String_t"
-        bv.append from: ctx.strC.copy
+        bv.append from: ctx.known.strC.copy
     }
     # a checked conversion reads a constant into its temp too: spelled in
     # place, it would fold the tests, and the C compiler would report the
@@ -441,7 +441,7 @@ nativeBodyFill: function {
     if (rtHas :ctx id: body slot: rtHole.slot.holeStringView) then {
         bn.append (rtHoleId slot: rtHole.slot.holeStringView)
         preludeNeed :ctx memb: "@StringView_t"
-        bv.append from: ctx.svC.copy
+        bv.append from: ctx.known.svC.copy
     }
     return (
         rtFillForCtx
@@ -784,7 +784,7 @@ fillOperatorRow: function {
     if bn.length == 0 then {
         bn.append (rtHoleId slot: rtHole.slot.holeStringView)
         bn.append (rtHoleId slot: rtHole.slot.holeT)
-        bv.append from: ctx.svC.copy
+        bv.append from: ctx.known.svC.copy
         bv.append from: String
         rn.append (rtHoleId slot: rtHole.slot.holeL)
         rn.append (rtHoleId slot: rtHole.slot.holeR)
@@ -893,9 +893,9 @@ elemBorrowsByPtr: function {
     tid: ztypes.tid
 } out bool is {
     if tid.isZero then return false
-    if tid == ctx.strTid then return true
+    if tid == ctx.known.strTid then return true
     chasedStrTid: memberreads.chaseStrTypedef :prog :ctx :tid
-    if chasedStrTid == ctx.strTid then return true
+    if chasedStrTid == ctx.known.strTid then return true
     return (argforms.isReftypeParam :prog :ctx :tid)
 }
 
@@ -1008,7 +1008,7 @@ tmplSectionDestroys: function {
     nativepieces.destroyKeyTypes :prog :ctx inst: mono :plan :pNames :pTids acc: hits
     for each t: hits loop {
         dt: types.destroyTargetTid :prog :ctx tid: t
-        if dt.notZero when dt != ctx.strTid then types.noteDestroyUse :prog :ctx tid: dt
+        if dt.notZero when dt != ctx.known.strTid then types.noteDestroyUse :prog :ctx tid: dt
     }
 }
 
@@ -1545,9 +1545,9 @@ emitStrMono: function {
     bn: ListVal zast.nameid
     bv: List String
     bn.append (rtHoleId slot: rtHole.slot.holeStringView)
-    bv.append from: ctx.svC.copy
+    bv.append from: ctx.known.svC.copy
     bn.append (rtHoleId slot: rtHole.slot.holeString)
-    bv.append from: ctx.strC.copy
+    bv.append from: ctx.known.strC.copy
     plan: rtSectionPlan :ctx mono: monoId id: ti
     ferr: List String
     buf.append (
@@ -1618,7 +1618,7 @@ emitListMono: function {
     nm: cbaseNoPrefix :ctx tid: monoId
     eid: listElemType :prog :monoId
     isStrEl: false
-    if eid == ctx.strTid then isStrEl = true
+    if eid == ctx.known.strTid then isStrEl = true
     isSvEl: parttexts.isViewLaid :ctx tid: eid
     elemC: slotCType :prog :ctx tid: eid
     ect: ctypeOrI64 s: elemC.stringView
@@ -2222,10 +2222,10 @@ emitListSort: function {
     if isStr.not when isSv.not then lt = sortLessC :prog :ctx :elem
     if isStr then {
         preludeNeed :ctx memb: "@String_cmp"
-        buf.append "\{s0} { return \{ctx.strC}_cmp(&_a, &_b) < 0; }\n"
+        buf.append "\{s0} { return \{ctx.known.strC}_cmp(&_a, &_b) < 0; }\n"
     } else if isSv then {
         preludeNeed :ctx memb: "@StringView_cmp"
-        buf.append "\{s0} { return \{ctx.svC}_cmp(_a, _b) < 0; }\n"
+        buf.append "\{s0} { return \{ctx.known.svC}_cmp(_a, _b) < 0; }\n"
     } else if (sortCallsWritten :prog :elem) then {
         buf.append "\{s0};\n"
         ctx.lateDefs.append "\{s0} { return \{lt}; }\n\n"
@@ -2536,7 +2536,7 @@ monoMethodReturn: function {
 # total: the typechecker refuses a reftype member at the declaration.
 keyHashKind: function {prog: Program.view ctx: Ctx.view tid: ztypes.tid} out keykind is {
     ktid: ztypecheck.typedefChaseTid typing: prog.typing :tid
-    if ktid == ctx.strTid then return keykind.nativeString
+    if ktid == ctx.known.strTid then return keykind.nativeString
     if (parttexts.isViewLaid :ctx tid: ktid) then return keykind.stringView
     tt: prog.reg.typetypeOf typeId: ktid
     isRv: tt == ztypes.ztypetype.recordType
@@ -3839,8 +3839,8 @@ emitTmplClassMono: function {
     rtKey :ctx keys: kt name: "NAME" val: nm.stringView
     if (rtSpellsKey :ctx id: ti name: "String") then preludeNeed :ctx memb: "@String_t"
     if (rtSpellsKey :ctx id: ti name: "StringView") then preludeNeed :ctx memb: "@StringView_t"
-    strC: ctx.strC.copy
-    svC: ctx.svC.copy
+    strC: ctx.known.strC.copy
+    svC: ctx.known.svC.copy
     rtKey :ctx keys: kt name: "String" val: strC.stringView
     rtKey :ctx keys: kt name: "StringView" val: svC.stringView
     tpl: originTidOf :prog tid: monoId

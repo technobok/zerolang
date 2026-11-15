@@ -105,7 +105,7 @@ noteDestroyUse: function {prog: Program.view ctx: Ctx tid: ztypes.tid} is {
     destroyParts :prog :ctx :tid acc: parts
     for each p: parts loop {
         dt: destroyTargetTid :prog :ctx tid: p
-        if dt.notZero when dt != ctx.strTid then noteDestroyUse :prog :ctx tid: dt
+        if dt.notZero when dt != ctx.known.strTid then noteDestroyUse :prog :ctx tid: dt
     }
 }
 
@@ -178,7 +178,7 @@ destroyTargetTid: function {
     tid: ztypes.tid
 } out ztypes.tid is {
     dt: memberreads.chaseStrTypedef :prog :ctx tid: (chaseAggregateTypedef :prog :ctx :tid)
-    if (dt == ctx.strTid) or (ownsResources :prog :ctx tid: dt) then return dt
+    if (dt == ctx.known.strTid) or (ownsResources :prog :ctx tid: dt) then return dt
     if (isHeapPtrCollection :prog :ctx tid: dt) then return dt
     return ztypes.tid
 }
@@ -209,9 +209,9 @@ destroyFnC: function {
     dt: destroyTargetTid :prog :ctx :tid
     if dt.isZero then return String
     noteDestroyUse :prog :ctx tid: dt
-    if dt == ctx.strTid then {
+    if dt == ctx.known.strTid then {
         preludeNeed :ctx memb: "@String_free"
-        return "\{ctx.strC}_free"
+        return "\{ctx.known.strC}_free"
     }
     return "\{ctxCnameView :ctx tid: dt}_destroy"
 }
@@ -1398,7 +1398,7 @@ demandWrittenDestroys: function {prog: Program.view ctx: Ctx} is {
     }
     for each impl: impls loop {
         dt: destroyTargetTid :prog :ctx tid: impl
-        if dt.notZero when dt != ctx.strTid then noteDestroyUse :prog :ctx tid: dt
+        if dt.notZero when dt != ctx.known.strTid then noteDestroyUse :prog :ctx tid: dt
     }
 }
 
@@ -1604,7 +1604,7 @@ tagConstC: function {
     armOrd: u64
 } out String is {
     t: "Z_T\{tid}_TAG_\{armOrd}"
-    if ctx.readableNames then {
+    if ctx.known.readableNames then {
         cn: ctxCnameView :ctx :tid
         pre: emitplan.cnameById :tid
         if cn.length > pre.length then t.append (cn.substring from: pre.length to: cn.length)
@@ -1828,11 +1828,11 @@ definedInNonMain: function {
     ctx: Ctx.view
     tid: ztypes.tid
 } out bool is {
-    dgo: ctx.defUnitId.get key: tid
+    dgo: ctx.known.defUnitId.get key: tid
     match (
         dgo
     ) case some then {
-        return dgo != ctx.mainUnitId
+        return dgo != ctx.known.mainUnitId
     } case none then {
         return false
     }
@@ -2213,15 +2213,15 @@ maybePreEmitElem: function {
     if origin.notZero when (userSpecInstance :prog tid: cid).not then return
     if (prog.reg.isGenericOf tid: cid) then return
     duoPe: definedInUnitName :prog tid: cid
-    peUnit: ctx.mainName.copy
+    peUnit: ctx.known.mainName.copy
     if duoPe.length > 0 then {
         if (prog.reg.isNativeOf tid: cid) then return
         peUnit = duoPe.string
     }
     if (prog.reg.typeValid tid: cid).not then return
     tt: prog.reg.typetypeOf typeId: cid
-    smPe: ctx.mainName.copy
-    smPeD: ctx.mainUnitId
+    smPe: ctx.known.mainName.copy
+    smPeD: ctx.known.mainUnitId
     (
         emitplan.ctxBindMain
         :ctx
@@ -2764,8 +2764,8 @@ emitUserTypeById: function {
 } is {
     if (prog.reg.typeValid :tid).not then return
     duo: definedInUnitName :prog :tid
-    sm: ctx.mainName.copy
-    smD: ctx.mainUnitId
+    sm: ctx.known.mainName.copy
+    smD: ctx.known.mainUnitId
     if duo.length > 0 then (
         emitplan.ctxBindMain
         :ctx
@@ -4538,7 +4538,7 @@ nativeBoxCall: function {
     mnameId: zast.nameid
 } out String is {
     if mnameId == zast.wellKnown.slot.wkStringView then {
-        if implTid == ctx.strTid then return (argforms.svValueFormPtr :ctx expr: "_self")
+        if implTid == ctx.known.strTid then return (argforms.svValueFormPtr :ctx expr: "_self")
         if (originIsTid :prog tid: implTid originTid: (ctx.origins.get i: family.slot.str)) then {
             svT: values.svTypeC :ctx
             return "((\{svT}){ .data = _self->data, .size = _self->len })"
@@ -4605,7 +4605,7 @@ implementationLabelFor: function {
 # function's and a protocol slot's are -- `.view` is an ownership marker, not a
 # C convention; an owned collection by address; anything else by value
 nativeMethodArgForm: function {prog: Program.view ctx: Ctx pid: ztypes.tid} out argform is {
-    if pid == ctx.svTid then return argform.viewed
+    if pid == ctx.known.svTid then return argform.viewed
     if (prog.reg.typetypeOf typeId: pid) == ztypes.ztypetype.genericParam then return argform.viewed
     if (isValueViewTid :prog :ctx tid: pid) then return argform.viewed
     if (
@@ -4972,7 +4972,7 @@ structDestroyNontrivial: function {
         fid: fids.get i: fi
         fnameId: fidsNm.get i: fi
         if (prog.typing.declIsBorrowedFieldId parentTypeId: tid nameId: fnameId).not then {
-            if fid == ctx.strTid then return true
+            if fid == ctx.known.strTid then return true
             if (fieldIsBox :prog :fid).notZero then return true
             fmid: chaseAggregateTypedef :prog :ctx tid: fid
             if (ownsResources :prog :ctx tid: fmid) then return true
@@ -5030,9 +5030,9 @@ emitStructDestructor: function {
                 kind: memberkind.field
                 nameId: (fnameIds.get i: fi)
             )
-            if fid == ctx.strTid then {
+            if fid == ctx.known.strTid then {
                 preludeNeed :ctx memb: "@String_free"
-                ds: "    \{ctx.strC}_free(&p->\{fC});\n"
+                ds: "    \{ctx.known.strC}_free(&p->\{fC});\n"
                 buf.append ds
             } else if bxF.notZero then {
                 # a Box field IS the cell's pointer: its destroy takes the value

@@ -73,7 +73,7 @@ atomVidIfPlain: function {
 svCallOf: function {prog: Program.view ctx: Ctx.view nameId: zast.nameid} out svcall is {
     row: (
         ctx.pieces.rows.ofName
-        n: (nativerows.rowNameOfMember :prog :ctx owner: ctx.svTid name: nameId)
+        n: (nativerows.rowNameOfMember :prog :ctx owner: ctx.known.svTid name: nameId)
     )
     if row == 0 then return svcall.none
     return (ctx.pieces.rows.rows.get i: row).call
@@ -105,7 +105,7 @@ ternaryElse: function {
 # this, and each had to name the intermediate; the QUESTION is the thing worth
 # naming, not the tid it goes through.
 stampIsStr: function {prog: Program.view ctx: Ctx.view nid: zast.nodeid} out bool is {
-    return (stampIdOf :prog :nid) == ctx.strTid
+    return (stampIdOf :prog :nid) == ctx.known.strTid
 }
 
 # valueExprC -- an expression standing where a VALUE is wanted: a binop
@@ -206,8 +206,8 @@ refValtypeResult: function {
 
 # isStringyTid -- tid is canonical String or StringView.
 isStringyTid: function {ctx: Ctx.view tid: ztypes.tid} out bool is {
-    if tid == ctx.strTid then return true
-    return tid == ctx.svTid
+    if tid == ctx.known.strTid then return true
+    return tid == ctx.known.svTid
 }
 
 # isStringOrViewLaid -- tid is String, or laid out as a StringView (isViewLaid):
@@ -282,7 +282,7 @@ svValueForm: function {
                 :ctx
                 text: rex.stringView
                 textF: rf
-                tid: ctx.strTid
+                tid: ctx.known.strTid
                 nid: zast.nodeid
             )
             valueVid = ztypes.vid.zero
@@ -349,7 +349,7 @@ svValueFormAt: function {
             argNid: (zast.nodeIdOf :n)
             av: expr
             avF: ef
-            pid: ctx.strTid
+            pid: ctx.known.strTid
             paramTake: false
         )
         if hv.length > 0 then {
@@ -399,7 +399,7 @@ svNativeCall: function {
             prefix: pre
         )
     }
-    c: "\{ctx.svC}_\{m}(\{addr}\{args})"
+    c: "\{ctx.known.svC}_\{m}(\{addr}\{args})"
     return (memberreads.orderWrap prefix: pre call: c)
 }
 
@@ -596,7 +596,7 @@ emitSvCompareCall: function {
             }
         }
         preludeNeed :ctx memb: "@StringView_cmp"
-        ce: "\{ctx.svC}_cmp(\{bf}, \{cargs})"
+        ce: "\{ctx.known.svC}_cmp(\{bf}, \{cargs})"
         return (stating :facts from: callFacts text: ce)
     }
     return "".string
@@ -619,7 +619,7 @@ svNativeArgFrag: function {
     sxF: exprfacts
     sx: emitExprWith :prog :ctx :n facts: sxF
     stampTid: stampIdOf :prog nid: (interpPartNodeId :n)
-    if stampTid == ctx.strTid then {
+    if stampTid == ctx.known.strTid then {
         sxh: (
             hoistBorrowValArgWith
             :prog
@@ -627,7 +627,7 @@ svNativeArgFrag: function {
             argNid: (zast.nodeIdOf :n)
             av: sx.stringView
             avF: sxF
-            pid: ctx.strTid
+            pid: ctx.known.strTid
             paramTake: false
         )
         if sxh.length > 0 then {
@@ -645,7 +645,7 @@ svNativeArgFrag: function {
     # a projection -- and these natives take their argument by pointer, so it
     # binds to a temp whose address the call can take. Passing it by value was
     # an argument of the wrong C type.
-    if stampTid == ctx.svTid then {
+    if stampTid == ctx.known.svTid then {
         if sxF.place.not then {
             # the view owns nothing: the temp only gives it an address
             svb: (
@@ -653,7 +653,7 @@ svNativeArgFrag: function {
                 :prog
                 :ctx
                 av: sx.stringView
-                tid: ctx.svTid
+                tid: ctx.known.svTid
                 argNid: zast.nodeid
             )
             return (stating :facts from: (addrFacts e: pathFacts) text: "&\{svb}")
@@ -707,7 +707,7 @@ emitSvSplitCall: function {
                 }
             }
         }
-        es: "\{ctx.svC}_split(\{(viewRecvAddr
+        es: "\{ctx.known.svC}_split(\{(viewRecvAddr
             :prog
             :ctx
             recv: bnv
@@ -729,7 +729,7 @@ emitSvLinesCall: function {
 } out String is {
     if (isStringyTid :ctx tid: btid) when mnId == zast.wellKnown.slot.wkLines then {
         nativepieces.needsAddM :ctx uname: "sviter" memb: "sv_lines"
-        el: "\{ctx.svC}_lines(&\{bnv})"
+        el: "\{ctx.known.svC}_lines(&\{bnv})"
         return (stating :facts from: callFacts text: el)
     }
     return "".string
@@ -813,7 +813,7 @@ emitSvSimpleCall: function {
     dcbV: ztypes.vid
     facts: exprfacts.borrow
 } out String is {
-    svRecvOk: (btid == ctx.svTid) or btIsStr
+    svRecvOk: (btid == ctx.known.svTid) or btIsStr
     if svRecvOk when (svCallOf :prog :ctx nameId: mnId).simple then {
         demandSvMember :prog :ctx nameId: mnId
         # a String receiver projects to a view value, like the
@@ -881,7 +881,7 @@ emitSvCallLegs: function {
     facts: exprfacts.borrow
 } out String is {
     # text is laid out as a StringView, and its view members are StringView's
-    if btid == ctx.textTid then btid = ctx.svTid
+    if btid == ctx.known.textTid then btid = ctx.known.svTid
     eCmp: (
         emitSvCompareCall
         :prog
@@ -1169,7 +1169,7 @@ stringViewBinopOperand: function {
     isStrT: operandIsStr :prog :ctx :n
     if isStrT.not when srcF.once then {
         # the operand is a view: bound so it is read once; it frees nothing
-        src = hoistForAddress :prog :ctx av: expr tid: ctx.svTid argNid: zast.nodeid
+        src = hoistForAddress :prog :ctx av: expr tid: ctx.known.svTid argNid: zast.nodeid
         srcF = pathFacts
     }
     valueVid: atomVidIfPlain :prog :ctx :n text: src.stringView
@@ -1606,7 +1606,7 @@ stringKeyArgPointer: function {
             :prog
             :ctx
             av: expr
-            tid: ctx.strTid
+            tid: ctx.known.strTid
             argNid: (ctorArgNodeByLabel :prog :call :label)
         )
         return "&\{nmK}"
@@ -1733,7 +1733,7 @@ emitColInterpArg: function {
     sx: emitInterpArgExpr :prog :ctx :n
     if sx.length == 0 then {
         if consumes then return "".string
-        if ((stmtblocks.stampIdDeep :prog :n) == ctx.strTid).not then return "".string
+        if ((stmtblocks.stampIdDeep :prog :n) == ctx.known.strTid).not then return "".string
         # the argument is spelled again by the caller when this declines, so
         # what this spelling hoisted is dropped with it
         hmk: pendingHoistMark :ctx
@@ -1750,7 +1750,7 @@ emitColInterpArg: function {
         :prog
         :ctx
         av: sx.stringView
-        tid: ctx.strTid
+        tid: ctx.known.strTid
         argNid: (interpStorageNid :prog :n)
     )
 }
@@ -1776,18 +1776,18 @@ emitInterpArgForParam: function {
     sx: emitInterpArgExpr :prog :ctx :n
     if sx.length == 0 then return "".string
     isTake: false
-    if pid == ctx.strTid when (paramTakesArg :prog :fid :pnameId) then isTake = true
+    if pid == ctx.known.strTid when (paramTakesArg :prog :fid :pnameId) then isTake = true
     nmH: (
         hoistForAddress
         :prog
         :ctx
         av: sx.stringView
-        tid: ctx.strTid
+        tid: ctx.known.strTid
         argNid: (interpStorageNid :prog :n)
     )
     retx: String
     retF: pathFacts
-    if pid == ctx.strTid then {
+    if pid == ctx.known.strTid then {
         if isTake then {
             retx = nmH.copy
         } else {
@@ -2888,7 +2888,7 @@ emitNestedStringViewBase: function {
     if (ztypecheck.isStringViewMember nameId: mnId) then {
         ppid: interpPartNodeId n: (prog.ast.nodes.get i: n.parent)
         parentStampTid: stampIdOf :prog nid: ppid
-        if parentStampTid == ctx.strTid then {
+        if parentStampTid == ctx.known.strTid then {
             pbvF: exprfacts
             pbv: emitExprWith :prog :ctx n: (prog.ast.nodes.get i: n.parent) facts: pbvF
             pbq: (
@@ -2910,7 +2910,7 @@ emitNestedStringViewBase: function {
             )
             return (stating :facts from: pbvF text: sv)
         }
-        if parentStampTid == ctx.svTid then {
+        if parentStampTid == ctx.known.svTid then {
             return (emitExprWith :prog :ctx n: (prog.ast.nodes.get i: n.parent) :facts)
         }
     }
@@ -2950,11 +2950,11 @@ nestedOwnMethodCall: function {
                 :prog
                 :ctx
                 expr: baseAtom
-                isStr: nlid == ctx.strTid
+                isStr: nlid == ctx.known.strTid
                 vid: baseVid
                 facts: svfnF
             )
-            return (stating :facts from: callFacts text: "\{ctx.svC}_\{mn2}(&\{svfn})")
+            return (stating :facts from: callFacts text: "\{ctx.known.svC}_\{mn2}(&\{svfn})")
         }
         nmc: emitplan.autoCallCname :prog :ctx owner: nlid method: nmco
         # a member without a receiver is reached only through its
@@ -3177,12 +3177,12 @@ methodAutoCallRead: function {
             :prog
             :ctx
             expr: bn2
-            isStr: bstamp == ctx.strTid
+            isStr: bstamp == ctx.known.strTid
             vid: bn2v
             facts: svfaF
         )
         mn: zast.nameTextAt ast: prog.ast ref: mnId
-        return (stating :facts from: callFacts text: "\{ctx.svC}_\{mn}(&\{svfa})")
+        return (stating :facts from: callFacts text: "\{ctx.known.svC}_\{mn}(&\{svfa})")
     }
     mt: mco
     mc2: emitplan.autoCallCname :prog :ctx owner: bstamp method: mt
@@ -3307,40 +3307,40 @@ emitSvAtomBase: function {
         }
         if mnId == zast.wellKnown.slot.wkCount then {
             demandSvMember :prog :ctx nameId: zast.wellKnown.slot.wkCount
-            return (stating :facts from: callFacts text: "\{ctx.svC}_count(&\{bn2})")
+            return (stating :facts from: callFacts text: "\{ctx.known.svC}_count(&\{bn2})")
         }
         if mnId == zast.wellKnown.slot.wkCodepoints then {
             demandSvMember :prog :ctx nameId: zast.wellKnown.slot.wkCodepoints
-            return (stating :facts from: callFacts text: "\{ctx.svC}_codepoints(&\{bn2})")
+            return (stating :facts from: callFacts text: "\{ctx.known.svC}_codepoints(&\{bn2})")
         }
         if mnId == zast.wellKnown.slot.wkParseI64 then {
             demandSvMember :prog :ctx nameId: zast.wellKnown.slot.wkParseI64
-            return (stating :facts from: callFacts text: "\{ctx.svC}_parseI64(&\{bn2})")
+            return (stating :facts from: callFacts text: "\{ctx.known.svC}_parseI64(&\{bn2})")
         }
         if mnId == zast.wellKnown.slot.wkParseU64 then {
             demandSvMember :prog :ctx nameId: zast.wellKnown.slot.wkParseU64
-            return (stating :facts from: callFacts text: "\{ctx.svC}_parseU64(&\{bn2})")
+            return (stating :facts from: callFacts text: "\{ctx.known.svC}_parseU64(&\{bn2})")
         }
         if mnId == zast.wellKnown.slot.wkParseF64 then {
             demandSvMember :prog :ctx nameId: zast.wellKnown.slot.wkParseF64
-            return (stating :facts from: callFacts text: "\{ctx.svC}_parseF64(&\{bn2})")
+            return (stating :facts from: callFacts text: "\{ctx.known.svC}_parseF64(&\{bn2})")
         }
         if mnId == zast.wellKnown.slot.wkParseF16 then {
             demandSvMember :prog :ctx nameId: zast.wellKnown.slot.wkParseF16
-            return (stating :facts from: callFacts text: "\{ctx.svC}_parseF16(&\{bn2})")
+            return (stating :facts from: callFacts text: "\{ctx.known.svC}_parseF16(&\{bn2})")
         }
         if mnId == zast.wellKnown.slot.wkParseF128 then {
             demandSvMember :prog :ctx nameId: zast.wellKnown.slot.wkParseF128
-            return (stating :facts from: callFacts text: "\{ctx.svC}_parseF128(&\{bn2})")
+            return (stating :facts from: callFacts text: "\{ctx.known.svC}_parseF128(&\{bn2})")
         }
         if (svCallOf :prog :ctx nameId: mnId).simple then {
             # a no-paren method reference auto-calls
             demandSvMember :prog :ctx nameId: mnId
-            return (stating :facts from: callFacts text: "\{ctx.svC}_\{mn2}(&\{bn2})")
+            return (stating :facts from: callFacts text: "\{ctx.known.svC}_\{mn2}(&\{bn2})")
         }
         if mnId == zast.wellKnown.slot.wkLines then {
             nativepieces.needsAddM :ctx uname: "sviter" memb: "sv_lines"
-            return (stating :facts from: callFacts text: "\{ctx.svC}_lines(&\{bn2})")
+            return (stating :facts from: callFacts text: "\{ctx.known.svC}_lines(&\{bn2})")
         }
     }
     return "".string
@@ -3529,7 +3529,7 @@ operandIsStr: function {
 } out bool is {
     return (
         (memberreads.chaseStrTypedef :prog :ctx tid: (stmtblocks.stampIdDeep :prog :n)) ==
-        ctx.strTid
+        ctx.known.strTid
     )
 }
 
@@ -3602,7 +3602,7 @@ emitReassignDestroy: function {
 } is {
     if (stampIsStr :prog :ctx nid: rtnid) then {
         preludeNeed :ctx memb: "@String_free"
-        buf.append "\{ind}\{ctx.strC}_free(&\{nm2});\n"
+        buf.append "\{ind}\{ctx.known.strC}_free(&\{nm2});\n"
         return
     }
     buf.append (stmtblocks.destroyLineC :prog :ctx tid: rtsid nm: nm2 :ind)
@@ -3654,7 +3654,9 @@ isReftypeParam: function {
     # -- the two well-known ids, a runtime-owned layout -- and the collection
     # monos left above already. Asking which unit declared it answered for a
     # user class of the same name too, which no id does.
-    return ((cid == ctx.strTid) or (cid == ctx.svTid) or (prog.reg.isNativeOf tid: cid)).not
+    return (
+        (cid == ctx.known.strTid) or (cid == ctx.known.svTid) or (prog.reg.isNativeOf tid: cid)
+    ).not
 }
 
 # unionBorrowsByPtr -- a union borrowed is a POINTER to the caller's slot, as a
@@ -3685,7 +3687,7 @@ isBorrowStringParam: function {
     pnameId: zast.nameid
     pid: ztypes.tid
 } out bool is {
-    if pid != ctx.strTid then return false
+    if pid != ctx.known.strTid then return false
     if (
         prog.typing.declOwnershipIs
         parentTypeId: fid
@@ -3926,7 +3928,7 @@ noteOwnedBoxUse: function {ctx: Ctx implTid: ztypes.tid protoTid: ztypes.tid} is
 demandSvMember: function {prog: Program.view ctx: Ctx nameId: zast.nameid} is {
     row: (
         ctx.pieces.rows.ofName
-        n: (nativerows.rowNameOfMember :prog :ctx owner: ctx.svTid name: nameId)
+        n: (nativerows.rowNameOfMember :prog :ctx owner: ctx.known.svTid name: nameId)
     )
     if row > 0 then nativepieces.demandRowKeys :ctx :row
 }
@@ -3954,7 +3956,7 @@ viewArgCoerce: function {
                     :prog
                     nid: (interpPartNodeId n: (prog.ast.nodes.get i: fa.operation))
                 )
-                if stampTid == ctx.strTid then {
+                if stampTid == ctx.known.strTid then {
                     fh: (
                         hoistBorrowValArgWith
                         :prog
@@ -3962,7 +3964,7 @@ viewArgCoerce: function {
                         argNid: (zast.nodeIdOf n: faOpNode)
                         :av
                         :avF
-                        pid: ctx.strTid
+                        pid: ctx.known.strTid
                         paramTake: false
                     )
                     fb: av.string
@@ -4086,7 +4088,8 @@ lowerNativeArg: function {
     facts: exprfacts.borrow
 } out String is {
     isViewP: (
-        (pid == ctx.svTid) or ((prog.reg.typetypeOf typeId: pid) == ztypes.ztypetype.genericParam)
+        (pid == ctx.known.svTid) or
+        ((prog.reg.typetypeOf typeId: pid) == ztypes.ztypetype.genericParam)
     )
     if isViewP then {
         avh: emitColInterpArg :prog :ctx n: op consumes: false
@@ -4113,7 +4116,7 @@ lowerNativeArg: function {
                 argNid: (zast.nodeIdOf n: op)
                 av: av0.stringView
                 avF: av0F
-                pid: ctx.strTid
+                pid: ctx.known.strTid
                 paramTake: false
             )
             if hb.length > 0 then {

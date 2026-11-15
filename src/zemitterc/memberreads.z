@@ -76,7 +76,7 @@ textOwnMember: function {
     owner: ztypes.tid
     nameId: zast.nameid
 } out bool is {
-    if owner != ctx.textTid then return false
+    if owner != ctx.known.textTid then return false
     md: prog.typing.declMemberIdOf parentTypeId: owner :nameId
     if md.isZero then return false
     return (prog.reg.isNativeOf tid: (prog.typing.decls.get i: md).typeId).not
@@ -88,7 +88,7 @@ textOwnMember: function {
 # handed the pointee (a StringView is a class, passed as itself).
 textHeldByPtr: function {prog: Program.view ctx: Ctx.view vid: ztypes.vid} out bool is {
     if (isPtrVid :ctx :vid).not then return false
-    return (prog.reg.variableTypeOf id: vid) == ctx.textTid
+    return (prog.reg.variableTypeOf id: vid) == ctx.known.textTid
 }
 
 # dottedParentNodeId -- the node a dotted path `n` reads its member of -- its
@@ -172,7 +172,7 @@ emitDottedCall: function {
             bnF = derefFacts
         }
     }
-    btIsStr: btid == ctx.strTid
+    btIsStr: btid == ctx.known.strTid
     # the view legs read a String receiver more than once, for its data and its
     # size: one that is a call's result is bound once, and dropped again when no
     # leg takes the call
@@ -264,7 +264,7 @@ emitStringArgMethod: function {
     recvTid: dottedReceiverStampId :prog callable: (prog.ast.nodes.get i: call.callable)
     rtid: chaseAggregateTypedef :prog :ctx tid: recvTid
     rtid = chaseStrTypedef :prog :ctx tid: rtid
-    if rtid != ctx.strTid then return "".string
+    if rtid != ctx.known.strTid then return "".string
     rptr: (
         callorder.dottedReceiverIsPtr
         :prog
@@ -295,7 +295,7 @@ emitStringArgMethod: function {
             if iv.length > 0 then {
                 argval = iv.take
                 argvalF = pathFacts
-                argTid = ctx.strTid
+                argTid = ctx.known.strTid
             } else {
                 av: (
                     emitExprWith
@@ -316,14 +316,14 @@ emitStringArgMethod: function {
         # The StringLike arg lowers to (data, length) by its concrete type:
         # an owned String reads .data/.size (through the pointer for a
         # borrowed param); a StringView reads .data/.length.
-        if argTid == ctx.strTid then {
+        if argTid == ctx.known.strTid then {
             aph: (
                 argforms.hoistBorrowValArgWith
                 :prog
                 :ctx
                 av: argval.stringView
                 avF: argvalF
-                pid: ctx.strTid
+                pid: ctx.known.strTid
                 paramTake: false
                 argNid: argNode
             )
@@ -338,14 +338,14 @@ emitStringArgMethod: function {
                     :ctx
                     text: argval.stringView
                     textF: argvalF
-                    tid: ctx.strTid
+                    tid: ctx.known.strTid
                     nid: zast.nodeid
                 )
             }
             aacc: "."
             if argPtr then aacc = "->"
             preludeNeed :ctx memb: "@String_append"
-            rapps: "\{ctx.strC}_append(\{recvAddr}, (\{argval})\{aacc}data, (\{argval})\{aacc}size)"
+            rapps: "\{ctx.known.strC}_append(\{recvAddr}, (\{argval})\{aacc}data, (\{argval})\{aacc}size)"
             return (stating :facts from: callFacts text: rapps)
         }
         return (
@@ -362,7 +362,7 @@ emitStringArgMethod: function {
     # append_byte and reserve are pieces of the String fragment
     pm: "@String_\{nativeM}"
     preludeNeed :ctx memb: pm.stringView
-    r: "\{ctx.strC}_\{nativeM}(\{recvAddr}, \{argval})"
+    r: "\{ctx.known.strC}_\{nativeM}(\{recvAddr}, \{argval})"
     return (stating :facts from: callFacts text: r)
 }
 
@@ -399,7 +399,7 @@ stringAppendViewText: function {
     argTid: ztypes.tid
     facts: exprfacts.borrow
 } out String is {
-    if argTid == ctx.svTid when argvalF.once then {
+    if argTid == ctx.known.svTid when argvalF.once then {
         # a view read twice is bound once, and frees nothing
         ah: (
             argforms.hoistForAddress
@@ -410,11 +410,11 @@ stringAppendViewText: function {
             argNid: zast.nodeid
         )
         preludeNeed :ctx memb: "@String_append"
-        rh: "\{ctx.strC}_append(\{recvAddr}, (\{ah}).data, (\{ah}).size)"
+        rh: "\{ctx.known.strC}_append(\{recvAddr}, (\{ah}).data, (\{ah}).size)"
         return (stating :facts from: callFacts text: rh)
     }
     preludeNeed :ctx memb: "@String_append"
-    r: "\{ctx.strC}_append(\{recvAddr}, (\{argval}).data, (\{argval}).size)"
+    r: "\{ctx.known.strC}_append(\{recvAddr}, (\{argval}).data, (\{argval}).size)"
     return (stating :facts from: callFacts text: r)
 }
 
@@ -468,7 +468,7 @@ orderOnePart: function {
 # over a buffer.
 isValueStructTid: function {prog: Program.view ctx: Ctx.view tid: ztypes.tid} out bool is {
     if tid.isZero then return false
-    if (chaseStrTypedef :prog :ctx :tid) == ctx.strTid then return true
+    if (chaseStrTypedef :prog :ctx :tid) == ctx.known.strTid then return true
     cm: chaseAggregateTypedef :prog :ctx :tid
     if (types.isListOriginOf :prog :ctx tid: cm) then return true
     return (isIdCollectionOriginOf :prog :ctx tid: cm)
@@ -518,7 +518,7 @@ isSvAsStringNode: function {
         if cnId != zast.wellKnown.slot.wkAsString then return false
         bnidA: interpPartNodeId n: (prog.ast.nodes.get i: n.parent)
         btA: chaseStrTypedef :prog :ctx tid: (stampIdOf :prog nid: bnidA)
-        return btA == ctx.svTid
+        return btA == ctx.known.svTid
     } else {
         return false
     }
@@ -555,7 +555,7 @@ emitStrConvCall: function {
     ptid: dottedReceiverStampId :prog callable: (prog.ast.nodes.get i: call.callable)
     # the receiver is read twice, for data and length. An owned String call is
     # bound to a temp the statement flush frees, a view call to a plain one
-    if ptid == ctx.strTid when pvF.place.not then {
+    if ptid == ctx.known.strTid when pvF.place.not then {
         sh: (
             argforms.hoistBorrowValArgWith
             :prog
@@ -571,7 +571,7 @@ emitStrConvCall: function {
             pvF = pathFacts
         }
     }
-    if ptid == ctx.svTid when pvF.once then {
+    if ptid == ctx.known.svTid when pvF.once then {
         # a view, bound so the call runs once; there is nothing to free
         pv = (
             argforms.hoistForAddress
@@ -583,14 +583,14 @@ emitStrConvCall: function {
         )
     }
     lenAcc: "len".string
-    if ptid == ctx.strTid then lenAcc = "size".string
-    if ptid == ctx.svTid then lenAcc = "size".string
+    if ptid == ctx.known.strTid then lenAcc = "size".string
+    if ptid == ctx.known.svTid then lenAcc = "size".string
     noteMemberUse :ctx mono: rid member: memberWord.slot.toStr
     return (
         stating
         :facts
         from: callFacts
-        text: "\{ctx.strC}_to_\{rnm}(\{pv}.data, \{pv}.\{lenAcc})"
+        text: "\{ctx.known.strC}_to_\{rnm}(\{pv}.data, \{pv}.\{lenAcc})"
     )
 }
 
@@ -1682,7 +1682,7 @@ emitStringFamilyCall: function {
     ownerTid: ztypes.tid
     facts: exprfacts.borrow
 } out String is {
-    if ownerTid == ctx.strTid then {
+    if ownerTid == ctx.known.strTid then {
         rsa: emitStringArgMethod :prog :ctx :call :facts
         if rsa.length > 0 then return rsa
         return (emitDottedCall :prog :ctx :call :facts)
@@ -1718,7 +1718,7 @@ emitStringMethod: function {
     if mnId == zast.wellKnown.slot.wkCopy then {
         if recvIsPtr then {
             preludeNeed :ctx memb: "@String_copy"
-            return (stating :facts from: callFacts text: "\{ctx.strC}_copy(\{recv})")
+            return (stating :facts from: callFacts text: "\{ctx.known.strC}_copy(\{recv})")
         }
         rhF: exprfacts
         rh: (
@@ -1727,11 +1727,11 @@ emitStringMethod: function {
             :ctx
             e: recv
             eF: recvF
-            tid: ctx.strTid
+            tid: ctx.known.strTid
             facts: rhF
         )
         preludeNeed :ctx memb: "@String_copy"
-        return (stating :facts from: callFacts text: "\{ctx.strC}_copy(&\{rh})")
+        return (stating :facts from: callFacts text: "\{ctx.known.strC}_copy(&\{rh})")
     }
     if mnId == zast.wellKnown.slot.wkLength then {
         if recvIsPtr then return (stating :facts from: (memberFacts b: recvF) text: "\{recv}->size")
@@ -1766,9 +1766,13 @@ emitStringMethod: function {
     }
     if mnId == zast.wellKnown.slot.wkShrink then {
         preludeNeed :ctx memb: "@String_shrink"
-        if recvIsPtr then return (stating :facts from: callFacts text: "\{ctx.strC}_shrink(\{recv})"
+        if recvIsPtr then return (
+            stating
+            :facts
+            from: callFacts
+            text: "\{ctx.known.strC}_shrink(\{recv})"
         )
-        return (stating :facts from: callFacts text: "\{ctx.strC}_shrink(&\{recv})")
+        return (stating :facts from: callFacts text: "\{ctx.known.strC}_shrink(&\{recv})")
     }
     return "".string
 }
@@ -2109,7 +2113,7 @@ nestedStringMember: function {
     facts: exprfacts.borrow
 } out String is {
     nptT: chaseStrTypedef :prog :ctx tid: (stmtblocks.stampIdDeep :prog n: parent)
-    if nptT == ctx.strTid then {
+    if nptT == ctx.known.strTid then {
         nsm: (
             emitStringMethod
             :prog
@@ -2389,7 +2393,7 @@ emitUserTypeMemberRead: function {
 } out String is {
     baseIsType: false
     if bn2v.isZero when (prog.typing.dpTypeBase.has item: baseNid) then baseIsType = true
-    if bstamp == ctx.strTid then {
+    if bstamp == ctx.known.strTid then {
         sptr: isPtrVid :ctx vid: bn2v
         sm: (
             emitStringMethod
@@ -2874,7 +2878,7 @@ emitDottedAtomBase: function {
     }
     eSv: argforms.emitSvAtomBase :prog :ctx :bn2 :bn2F :mn2 :mnId :bn2v :bareSv :facts
     if eSv.length > 0 then return eSv
-    if bareTid == ctx.strTid when mnId == zast.wellKnown.slot.wkLength then {
+    if bareTid == ctx.known.strTid when mnId == zast.wellKnown.slot.wkLength then {
         acc: ".".string
         if (isPtrVid :ctx vid: bn2v) then acc = "->".string
         return (stating :facts from: (memberFacts b: bn2F) text: "\{bn2}\{acc}size")
@@ -3239,7 +3243,7 @@ chaseStrTypedef: function {
 } out ztypes.tid is {
     if (prog.typing.typedefBase.has key: tid).not then return tid
     e: ztypecheck.typedefChaseTid typing: prog.typing :tid
-    if (e == ctx.strTid) or (e == ctx.svTid) then return e
+    if (e == ctx.known.strTid) or (e == ctx.known.svTid) then return e
     return tid
 }
 

@@ -5,7 +5,7 @@
 # one C type with it.
 isViewLaid: function {ctx: Ctx.view tid: ztypes.tid} out bool is {
     if tid.isZero then return false
-    return (tid == ctx.svTid) or (tid == ctx.textTid)
+    return (tid == ctx.known.svTid) or (tid == ctx.known.textTid)
 }
 
 # appendDecimal -- `n` in decimal digits, written onto `buf` without a string of
@@ -285,7 +285,7 @@ appendFormattedNum: function {
         nn: "_b\{bN}_n"
         interpLocal :ctx :expr ctype: "int" name: nn.stringView init: call.stringView :ind :buf :ops
         preludeNeed :ctx memb: "@String_append"
-        st: "\{ctx.strC}_append(&\{sNm}, _b\{bN}, (uint64_t)_b\{bN}_n)"
+        st: "\{ctx.known.strC}_append(&\{sNm}, _b\{bN}, (uint64_t)_b\{bN}_n)"
         interpStep :expr text: st.stringView :ind :buf :ops
         return
     }
@@ -302,7 +302,7 @@ appendFormattedNum: function {
     buf.append call
     buf.append ";\n"
     buf.append ind
-    buf.append ctx.strC
+    buf.append ctx.known.strC
     buf.append "_append(&"
     buf.append sNm
     buf.append ", _b"
@@ -335,7 +335,7 @@ appendViewPart: function {
         interpLocal :ctx :expr ctype: svT.stringView name: rd.stringView init: val :ind :buf :ops
     }
     preludeNeed :ctx memb: "@String_append"
-    st: "\{ctx.strC}_append(&\{sNm}, \{rd}.data, \{rd}.size)"
+    st: "\{ctx.known.strC}_append(&\{sNm}, \{rd}.data, \{rd}.size)"
     interpStep :expr text: st.stringView :ind :buf :ops
 }
 
@@ -367,7 +367,7 @@ appendStrPart: function {
         interpLocal :ctx :expr ctype: stC.stringView name: rd.stringView init: val :ind :buf :ops
     }
     preludeNeed :ctx memb: "@String_append"
-    st: "\{ctx.strC}_append(&\{sNm}, \{rd}.data, \{rd}.len)"
+    st: "\{ctx.known.strC}_append(&\{sNm}, \{rd}.data, \{rd}.len)"
     interpStep :expr text: st.stringView :ind :buf :ops
 }
 
@@ -410,7 +410,7 @@ appendStringPart: function {
         # behind it
         if an0.length == 0 when (pathIsPointer :prog :ctx :n) then sAcc = "->".string
         preludeNeed :ctx memb: "@String_append"
-        sa: "\{ctx.strC}_append(&\{sNm}, \{val}\{sAcc}data, \{val}\{sAcc}size)"
+        sa: "\{ctx.known.strC}_append(&\{sNm}, \{val}\{sAcc}data, \{val}\{sAcc}size)"
         interpStep :expr text: sa.stringView :ind :buf :ops
         return
     }
@@ -420,11 +420,11 @@ appendStringPart: function {
     strT: values.strTypeC :ctx
     interpLocal :ctx :expr ctype: strT.stringView name: hNm.stringView init: val :ind :buf :ops
     preludeNeed :ctx memb: "@String_append"
-    sh: "\{ctx.strC}_append(&\{sNm}, \{hNm}.data, \{hNm}.size)"
+    sh: "\{ctx.known.strC}_append(&\{sNm}, \{hNm}.data, \{hNm}.size)"
     interpStep :expr text: sh.stringView :ind :buf :ops
     if (values.scopeOwnsTemp :prog argNid: (interpPartNodeId :n)) then {
         preludeNeed :ctx memb: "@String_free"
-        sf: "\{ctx.strC}_free(&\{hNm})"
+        sf: "\{ctx.known.strC}_free(&\{hNm})"
         interpStep :expr text: sf.stringView :ind :buf :ops
     }
 }
@@ -464,8 +464,8 @@ interpBoolPart: function {
     buf: String.borrow
     ops: String.borrow
 } is {
-    f: zast.nameTextAt ast: prog.ast ref: (armIdAt :prog tid: ctx.boolTid armOrd: 0)
-    t: zast.nameTextAt ast: prog.ast ref: (armIdAt :prog tid: ctx.boolTid armOrd: 1)
+    f: zast.nameTextAt ast: prog.ast ref: (armIdAt :prog tid: ctx.known.boolTid armOrd: 0)
+    t: zast.nameTextAt ast: prog.ast ref: (armIdAt :prog tid: ctx.known.boolTid armOrd: 1)
     fl: f.length
     tl: t.length
     fq: "\"\{f}\""
@@ -489,7 +489,7 @@ interpBoolPart: function {
     ni: "\{vn} ? \{tl} : \{fl}"
     interpLocal :ctx :expr ctype: "int" name: nn.stringView init: ni.stringView :ind :buf :ops
     preludeNeed :ctx memb: "@String_append"
-    st: "\{ctx.strC}_append(&\{sNm}, \{bn}, (uint64_t)\{nn})"
+    st: "\{ctx.known.strC}_append(&\{sNm}, \{bn}, (uint64_t)\{nn})"
     interpStep :expr text: st.stringView :ind :buf :ops
 }
 
@@ -540,8 +540,8 @@ interpScalarPart: function {
             :buf
             :ops
         )
-    } else if pt.notZero when ctx.boolTid.notZero when (
-        (ztypecheck.typedefChaseTid typing: prog.typing tid: pt) == ctx.boolTid
+    } else if pt.notZero when ctx.known.boolTid.notZero when (
+        (ztypecheck.typedefChaseTid typing: prog.typing tid: pt) == ctx.known.boolTid
     ) then {
         interpBoolPart :prog :ctx :val :sNm :bN :expr :ind :buf :ops
     } else if (interpPartIsInt :prog tid: pt :nk) then {
@@ -635,7 +635,7 @@ emitInterpPart: function {
         tv: zast.literalTextAt ast: prog.ast ref: n.text
         esc: consts.cEscape text: tv
         preludeNeed :ctx memb: "@String_append"
-        sc: "\{ctx.strC}_append(&\{sNm}, \"\{esc}\", sizeof(\"\{esc}\")-1)"
+        sc: "\{ctx.known.strC}_append(&\{sNm}, \"\{esc}\", sizeof(\"\{esc}\")-1)"
         interpStep :expr text: sc.stringView :ind :buf :ops
         return
     }
@@ -668,9 +668,9 @@ emitInterpPart: function {
         :ops
     ) then {
         null
-    } else if pt.notZero when (pt == ctx.svTid) or (pt == ctx.textTid) then {
+    } else if pt.notZero when (pt == ctx.known.svTid) or (pt == ctx.known.textTid) then {
         appendViewPart :ctx val: val.stringView :valF :sNm :expr :ind :tmp :buf :ops
-    } else if pt.notZero when pt == ctx.strTid then {
+    } else if pt.notZero when pt == ctx.known.strTid then {
         (
             appendStringPart
             :prog
@@ -808,7 +808,7 @@ setHashBody: function {ctx: Ctx kind: keykind} out String is {
 # hashBytesFn -- the C function hashing a run of bytes: SipHash, or the fast
 # hash under --fast-hash. Written C calls it through here, so it is written.
 hashBytesFn: function {ctx: Ctx} out String is {
-    if ctx.fastHash then {
+    if ctx.known.fastHash then {
         preludeNeed :ctx memb: "@fasthash_bytes"
         return "z_fasthash_bytes".string
     }
@@ -818,7 +818,7 @@ hashBytesFn: function {ctx: Ctx} out String is {
 
 # hashViewFn -- hashBytesFn for the bytes a StringView views
 hashViewFn: function {ctx: Ctx} out String is {
-    if ctx.fastHash then {
+    if ctx.known.fastHash then {
         preludeNeed :ctx memb: "@fasthash_stringview"
         return "z_fasthash_stringview".string
     }

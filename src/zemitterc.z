@@ -1525,9 +1525,9 @@ ReachState: class {
     contLabelUsed: (IdMapV u64 v: bool)
 }
 
-# Ctx -- the per-program emission context (anchor cnames, main unit name,
-# the literal pool, and the resolved-name map access).
-Ctx: class {
+# KnownNames -- the well-known types, their C spellings, and the program's own
+# names. A part of Ctx (`known`).
+KnownNames: class {
     # the main unit's name as the C sees it
     mainName: String
     # the namespace unit whose functions are being emitted, 0 while emitting
@@ -1543,6 +1543,34 @@ Ctx: class {
     strC: String
     # the C name of the StringView runtime type
     svC: String
+    # the receiver type being emitted into, which decides what a bare member
+    # resolves against
+    curThisTid: ztypes.tid
+    # use the fast hash rather than the seeded one, which makes a build
+    # reproducible
+    fastHash: bool
+    # emit source-derived C names instead of id-based ones, for reading the
+    # output rather than shipping it
+    readableNames: bool
+    # which unit each definition came from
+    defUnitId: (IdMapV ztypes.tid v: ztypes.declid)
+    # the main unit's declaration, which every demand walk starts from
+    mainUnitId: ztypes.declid
+    # String's type id
+    strTid: ztypes.tid
+    # StringView's type id
+    svTid: ztypes.tid
+    # text's type id: laid out as a StringView, and spelled with its C name
+    textTid: ztypes.tid
+    # bool's type id: an interpolated bool prints its arm's name
+    boolTid: ztypes.tid
+}
+
+# Ctx -- the per-program emission context (anchor cnames, main unit name,
+# the literal pool, and the resolved-name map access).
+Ctx: class {
+    # the well-known types, their C spellings, and the program's own names
+    known: KnownNames
     # type id -> C name base, composed once at emit start; "" for a hole
     cnames: List String
     # the literal pool's ids in emission order
@@ -1589,17 +1617,6 @@ Ctx: class {
     narrow: NarrowState
     # the generator function being written
     gen: GeneratorState
-    # the receiver type being emitted into, which decides what a bare member
-    # resolves against
-    curThisTid: ztypes.tid
-    # use the fast hash rather than the seeded one, which makes a build
-    # reproducible
-    fastHash: bool
-    # emit source-derived C names instead of id-based ones, for reading the
-    # output rather than shipping it
-    readableNames: bool
-    # which unit each definition came from
-    defUnitId: (IdMapV ztypes.tid v: ztypes.declid)
     # what the program uses: types, members and functions
     reach: ReachState
     # where each record's or class's data-field list starts in fieldNameIds, read
@@ -1607,8 +1624,6 @@ Ctx: class {
     fieldListAt: (IdMapV ztypes.tid v: u64)
     # those lists end to end, each ended by a zero id
     fieldNameIds: ListVal zast.nameid
-    # the main unit's declaration, which every demand walk starts from
-    mainUnitId: ztypes.declid
     # the constructs the emitter could not handle and the `error` calls it
     # proved reachable, collected rather than thrown so one run reports all of
     # them
@@ -1661,18 +1676,10 @@ Ctx: class {
     # ListIter monos whose cursor is already in the buffer. A List and a view
     # of it resolve `iterate` to ONE mono, so both reach the same typedef
     emittedListIters: IdSet ztypes.tid
-    # String's type id
-    strTid: ztypes.tid
-    # StringView's type id
-    svTid: ztypes.tid
-    # text's type id: laid out as a StringView, and spelled with its C name
-    textTid: ztypes.tid
     # converror's canonical id. The numeric-conversion rule is ABOUT converror --
     # the conversion rows name its arms -- so the emitter has to know
     # which type that is to spell the error assignment for its representation.
     converrorTid: ztypes.tid
-    # bool's type id: an interpolated bool prints its arm's name
-    boolTid: ztypes.tid
     # the well-known generic origins -- Option, Result, List and the rest --
     # looked up once and compared by id after
     origins: ListVal ztypes.tid
@@ -2244,7 +2251,7 @@ memberC: function {
         panic msg: "zemitterc: a C name for member '\{nm}', which '\{tn}' does not declare"
     }
     r: "\{memberLetter :kind}\{o}"
-    if ctx.readableNames then {
+    if ctx.known.readableNames then {
         r.append "_"
         if kind.slot then {
             r.append (emitplan.slotReadableName name: nm.stringView ow: ctx.opWords)
@@ -2371,7 +2378,7 @@ chaseAggregateTypedef: function {
 } out ztypes.tid is {
     if (prog.typing.typedefBase.has key: tid).not then return tid
     e: ztypecheck.typedefChaseTid typing: prog.typing :tid
-    if (e == ctx.strTid) or (e == ctx.svTid) then return tid
+    if (e == ctx.known.strTid) or (e == ctx.known.svTid) then return tid
     # a scalar is a native record, and an ordinal variant emits as one; a
     # sized str or array is a native record too, and an aggregate
     isRec: (prog.reg.typetypeOf typeId: e) == ztypes.ztypetype.recordType
@@ -2417,7 +2424,7 @@ typeRefC: function {
     cid = memberreads.chaseStrTypedef :prog :ctx tid: cid
     tdc: consts.typedefChaseC :prog :ctx tid: cid
     if tdc.length > 0 then return tdc
-    if cid == ctx.strTid then return (values.strTypeC :ctx)
+    if cid == ctx.known.strTid then return (values.strTypeC :ctx)
     # text is one C type with StringView (isViewLaid), and its typedef is
     # the same piece
     if (parttexts.isViewLaid :ctx tid: cid) then return (values.svTypeC :ctx)

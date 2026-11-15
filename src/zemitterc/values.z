@@ -222,7 +222,7 @@ ternaryAsStatements: function {
 # whether a node's stamped type is StringView, which decides the whole
 # string emit path
 stampIsSv: function {prog: Program.view ctx: Ctx.view nid: zast.nodeid} out bool is {
-    return (stampIdOf :prog :nid) == ctx.svTid
+    return (stampIdOf :prog :nid) == ctx.known.svTid
 }
 
 # dottedTaggedTid -- the tagged-construction stamp for a dotted node: the
@@ -728,7 +728,7 @@ textViewNativeByPtr: function {
     mnId: zast.nameid
 } out bool is {
     if (memberreads.textHeldByPtr :prog :ctx :vid).not then return false
-    return (memberreads.viewLaidNative :prog :ctx tid: ctx.textTid :mnId)
+    return (memberreads.viewLaidNative :prog :ctx tid: ctx.known.textTid :mnId)
 }
 
 # aliasOrChild / aliasChildName -- the internal member name a dotted-path node
@@ -760,7 +760,7 @@ emitSvSubstringCall: function {
     if mnId == zast.wellKnown.slot.wkSubstring then {
         recvp: String
         recvpF: bnvF
-        if btid == ctx.svTid then {
+        if btid == ctx.known.svTid then {
             recvp = bnv.string
         } else {
             if btIsStr then {
@@ -797,7 +797,7 @@ emitSvSubstringCall: function {
                 ctype: svT.stringView
                 prefix: pre
             )
-            svc: ctx.svC.copy
+            svc: ctx.known.svC.copy
             esb: (
                 memberreads.emitOrderedPair
                 :prog
@@ -1731,7 +1731,7 @@ emitCopyConversion: function {
         return (emitValtypeCopy :prog :ctx :n tid: cvp :facts)
     }
     if cvgen.not then return "".string
-    if ctx.curThisTid.notZero then {
+    if ctx.known.curThisTid.notZero then {
         (
             emitFail
             :ctx
@@ -1756,12 +1756,12 @@ emitDottedStringConversion: function {
     if scl > 0 then {
         sclv: litView :ctx li: scl
         preludeNeed :ctx memb: "@String_from_view"
-        return (stating :facts from: callFacts text: "\{ctx.strC}_from_view(\{sclv})")
+        return (stating :facts from: callFacts text: "\{ctx.known.strC}_from_view(\{sclv})")
     }
     if (stampIsSv :prog :ctx nid: n.parent).not then return "".string
     baseValue: emitExpr :prog :ctx n: (prog.ast.nodes.get i: n.parent)
     preludeNeed :ctx memb: "@String_from_view"
-    return (stating :facts from: callFacts text: "\{ctx.strC}_from_view(\{baseValue})")
+    return (stating :facts from: callFacts text: "\{ctx.known.strC}_from_view(\{baseValue})")
 }
 
 # emitDottedConversionRead -- a cross-unit bare construction, and the two deep
@@ -1987,7 +1987,7 @@ moveMarkerMovesBase: function {
     tknid: atomNodeId n: (prog.ast.nodes.get i: pnid)
     if tknid.isZero then tknid = pnid
     tkt: stampIdOf :prog nid: tknid
-    if tkt == ctx.strTid then return true
+    if tkt == ctx.known.strTid then return true
     tt: prog.reg.typetypeOf typeId: tkt
     if (tt == ztypes.ztypetype.unionType) or (tt == ztypes.ztypetype.protocolType) then return true
     if tt == ztypes.ztypetype.functionType then return true
@@ -2204,7 +2204,7 @@ emitDottedMemberRead: function {
         # StringView only: svValueForm reads a String receiver's expression
         # twice, once for .data and once for .size, and twice is a second
         # evaluation when the expression is a call.
-        if nbT == ctx.svTid then {
+        if nbT == ctx.known.svTid then {
             nbXF: exprfacts
             nbX: emitExprWith :prog :ctx n: (prog.ast.nodes.get i: n.parent) facts: nbXF
             if nbX.length > 0 then {
@@ -2440,7 +2440,7 @@ controlValueIsReference: function {
     nid: zast.nodeIdOf :n
     vt: bindingStampOf :prog nid: (controlValueStampNid :prog :n)
     if vt.isZero then return false
-    owns: vt == ctx.strTid
+    owns: vt == ctx.known.strTid
     if owns.not then owns = isHeapPtrCollection :prog :ctx tid: vt
     if owns.not then owns = types.ownsResources :prog :ctx tid: vt
     if owns.not then return false
@@ -2733,11 +2733,11 @@ emitInterpPrint: function {
     unusedOps: String
     sNm: emitInterpBuild :prog :ctx :parts :ind :tmp :buf :strNid ops: unusedOps
     preludeNeed :ctx memb: "@String_print"
-    l1: "\{ind}\{ctx.strC}_print(&\{sNm});\n"
+    l1: "\{ind}\{ctx.known.strC}_print(&\{sNm});\n"
     buf.append l1
     if (scopeOwnsTemp :prog argNid: strNid) then {
         preludeNeed :ctx memb: "@String_free"
-        l2: "\{ind}\{ctx.strC}_free(&\{sNm});\n"
+        l2: "\{ind}\{ctx.known.strC}_free(&\{sNm});\n"
         buf.append l2
     }
 }
@@ -2785,7 +2785,7 @@ emitInterpBuild: function {
     )
     strT: strTypeC :ctx
     preludeNeed :ctx memb: "@String_create"
-    cr: "\{ctx.strC}_create((uint64_t)\{est})"
+    cr: "\{ctx.known.strC}_create((uint64_t)\{est})"
     (
         parttexts.interpLocal
         :ctx
@@ -2858,7 +2858,7 @@ emitPrintStringLiteral: function {
     }
     lv: litView :ctx :li
     preludeNeed :ctx memb: "@StringView_print"
-    l: "\{ind}\{ctx.svC}_print(\{lv});\n"
+    l: "\{ind}\{ctx.known.svC}_print(\{lv});\n"
     buf.append l
 }
 
@@ -2878,11 +2878,11 @@ emitPrintValueExpr: function {
         ev: emitExpr :prog :ctx :n
         flushArgHoists :ctx :ind :tmp :buf
         preludeNeed :ctx memb: "@StringView_print"
-        lpe: "\{ind}\{ctx.svC}_print(\{ev});\n"
+        lpe: "\{ind}\{ctx.known.svC}_print(\{ev});\n"
         buf.append lpe
         return
     }
-    if ctx.strTid != (stampIdOf :prog nid: eid) then {
+    if ctx.known.strTid != (stampIdOf :prog nid: eid) then {
         emitFail :ctx what: "unhandled print argument".string line: (ztypecheck.nodeLine :n)
         return
     }
@@ -2895,22 +2895,22 @@ emitPrintValueExpr: function {
         lsa: "\{ind}\{strT} _h\{hps} = \{es};\n"
         buf.append lsa
         preludeNeed :ctx memb: "@String_print"
-        lsb: "\{ind}\{ctx.strC}_print(&_h\{hps});\n"
+        lsb: "\{ind}\{ctx.known.strC}_print(&_h\{hps});\n"
         buf.append lsb
         preludeNeed :ctx memb: "@String_free"
-        lsf: "\{ind}\{ctx.strC}_free(&_h\{hps});\n"
+        lsf: "\{ind}\{ctx.known.strC}_free(&_h\{hps});\n"
         buf.append lsf
         return
     }
     # a String read through a borrowed field is already a pointer
     if (pathIsPointer :prog :ctx :n) then {
         preludeNeed :ctx memb: "@String_print"
-        lsp: "\{ind}\{ctx.strC}_print(\{es});\n"
+        lsp: "\{ind}\{ctx.known.strC}_print(\{es});\n"
         buf.append lsp
         return
     }
     preludeNeed :ctx memb: "@String_print"
-    lsl: "\{ind}\{ctx.strC}_print(&\{es});\n"
+    lsl: "\{ind}\{ctx.known.strC}_print(&\{es});\n"
     buf.append lsl
 }
 
@@ -2946,7 +2946,7 @@ emitPrintCallValue: function {
     flushArgHoists :ctx :ind :tmp :buf
     if (stampIsSv :prog :ctx nid: call.nodeid) then {
         preludeNeed :ctx memb: "@StringView_print"
-        lpcv: "\{ind}\{ctx.svC}_print(\{ce});\n"
+        lpcv: "\{ind}\{ctx.known.svC}_print(\{ce});\n"
         buf.append lpcv
         return
     }
@@ -2955,13 +2955,13 @@ emitPrintCallValue: function {
     lpa: "\{ind}\{strT} _h\{hpc} = \{ce};\n"
     buf.append lpa
     preludeNeed :ctx memb: "@String_print"
-    lpb: "\{ind}\{ctx.strC}_print(&_h\{hpc});\n"
+    lpb: "\{ind}\{ctx.known.strC}_print(&_h\{hpc});\n"
     buf.append lpb
     # a borrow-returning call (an element view) hands back storage its container
     # still owns
     if (memberreads.callRhsIsBorrow :prog :ctx :call) then return
     preludeNeed :ctx memb: "@String_free"
-    lpf: "\{ind}\{ctx.strC}_free(&_h\{hpc});\n"
+    lpf: "\{ind}\{ctx.known.strC}_free(&_h\{hpc});\n"
     buf.append lpf
 }
 
@@ -3074,7 +3074,7 @@ copyReceiverTemp: function {
     argNid: zast.nodeid
     pv: StringView
 } out String is {
-    return (argforms.hoistForAddress :prog :ctx av: pv tid: ctx.strTid :argNid)
+    return (argforms.hoistForAddress :prog :ctx av: pv tid: ctx.known.strTid :argNid)
 }
 
 # copyRvalueHoist -- `<rvalue>.copy` over a String (e.g. `(list.get i: n).copy`):
@@ -3092,7 +3092,7 @@ copyRvalueHoist: function {
         cnId: aliasOrChildId :prog aliasId: n.nodeid childId: n.child
         if cnId != zast.wellKnown.slot.wkCopy then return "".string
         if (
-            (stmtblocks.stampIdDeep :prog n: (prog.ast.nodes.get i: n.parent)) != ctx.strTid
+            (stmtblocks.stampIdDeep :prog n: (prog.ast.nodes.get i: n.parent)) != ctx.known.strTid
         ) then return "".string
         # the receiver is spelled again by the caller when this declines, so
         # what this spelling hoisted is dropped with it
@@ -3111,7 +3111,7 @@ copyRvalueHoist: function {
             pv: pv.stringView
         )
         preludeNeed :ctx memb: "@String_copy"
-        return (stating :facts from: callFacts text: "\{ctx.strC}_copy(&\{tnm})")
+        return (stating :facts from: callFacts text: "\{ctx.known.strC}_copy(&\{tnm})")
     } else {
         return "".string
     }
@@ -3164,7 +3164,8 @@ emitStringBindValue: function {
             # receiver is a non-lvalue, so hoist it to a borrowed temp (List.get
             # returns a shallow view -- never freed) before String_copy(&temp).
             if (
-                (stmtblocks.stampIdDeep :prog n: (prog.ast.nodes.get i: n.parent)) == ctx.strTid
+                (stmtblocks.stampIdDeep :prog n: (prog.ast.nodes.get i: n.parent)) ==
+                ctx.known.strTid
             ) then {
                 # the value is spelled again by the caller when this declines,
                 # so what this spelling hoisted is dropped with it
@@ -3183,7 +3184,7 @@ emitStringBindValue: function {
                     flushArgHoists :ctx :ind :tmp :buf
                     preludeNeed :ctx memb: "@String_copy"
                     strT: strTypeC :ctx
-                    lc: "\{ind}\{strT} \{nm} = \{ctx.strC}_copy(&\{tnm});\n"
+                    lc: "\{ind}\{strT} \{nm} = \{ctx.known.strC}_copy(&\{tnm});\n"
                     buf.append lc
                     return true
                 }
@@ -3363,7 +3364,7 @@ emitListBind: function {
     nbrw: bool
 } is {
     lcb: spelledCname :ctx tid: ltid
-    if (types.noArgNativeRhs :ctx :prog unitName: ctx.mainName.stringView n: avn) then {
+    if (types.noArgNativeRhs :ctx :prog unitName: ctx.known.mainName.stringView n: avn) then {
         # owned List returned by os.args / os.envNames: emit the call.
         losr: emitExpr :prog :ctx n: avn
         flushArgHoists :ctx :ind :tmp :buf
@@ -3503,8 +3504,8 @@ emitStringMatchBind: function {
     nm: StringView
     btid: ztypes.tid
 } out bool is {
-    isStr: btid == ctx.strTid
-    if isStr.not when btid != ctx.svTid then return false
+    isStr: btid == ctx.known.strTid
+    if isStr.not when btid != ctx.known.svTid then return false
     isMatch: false
     isIf: false
     vn: prog.ast.nodes.get i: n.value
@@ -3565,9 +3566,9 @@ emitStringBind: function {
     avn: prog.ast.nodes.get i: n.value
     # a block value is bound as a collection's is: the local declared, the block
     # assigning its last value
-    if avn.doexpr when (btid == ctx.svTid) or (btid == ctx.strTid) then {
+    if avn.doexpr when (btid == ctx.known.svTid) or (btid == ctx.known.strTid) then {
         dct: svTypeC :ctx
-        if btid == ctx.strTid then {
+        if btid == ctx.known.strTid then {
             dct = strTypeC :ctx
         }
         return (
@@ -3583,7 +3584,7 @@ emitStringBind: function {
             :buf
         )
     }
-    if btid == ctx.svTid then {
+    if btid == ctx.known.svTid then {
         lvN: bindLitIndex :prog :ctx n: avn
         if lvN > 0 then {
             lvv: litView :ctx li: lvN
@@ -3616,13 +3617,13 @@ emitStringBind: function {
         }
         return true
     }
-    if btid == ctx.strTid then {
+    if btid == ctx.known.strTid then {
         fvN: stringCopyLitIndex :prog :ctx n: avn
         if fvN > 0 then {
             fvv: litView :ctx li: fvN
             preludeNeed :ctx memb: "@String_from_view"
             strT: strTypeC :ctx
-            lsc: "\{ind}\{strT} \{nm} = \{ctx.strC}_from_view(\{fvv});\n"
+            lsc: "\{ind}\{strT} \{nm} = \{ctx.known.strC}_from_view(\{fvv});\n"
             buf.append lsc
             return true
         }
@@ -3829,7 +3830,7 @@ movedZeroC: function {
     dt: types.destroyTargetTid :prog :ctx :tid
     if dt.isZero then return String
     if (stmtblocks.valueIsItsPointer :prog :ctx tid: dt) then return "NULL".string
-    if dt == ctx.strTid then {
+    if dt == ctx.known.strTid then {
         strT: strTypeC :ctx
         return "(\{strT}){0}"
     }
@@ -3912,7 +3913,7 @@ companionCType: function {
     ctx: Ctx
     tid: ztypes.tid
 } out String is {
-    if tid == ctx.strTid then {
+    if tid == ctx.known.strTid then {
         return (strTypeC :ctx)
     }
     ct: typeRefC :prog :ctx :tid
@@ -4255,13 +4256,13 @@ literalTypeC: function {prog: Program.view ctx: Ctx tid: ztypes.tid} out String 
 # records the typedef piece it names, so no spelling goes without it.
 svTypeC: function {ctx: Ctx} out String is {
     preludeNeed :ctx memb: "@StringView_t"
-    return "\{ctx.svC}_t"
+    return "\{ctx.known.svC}_t"
 }
 
 # strTypeC -- String's C type, spelled as svTypeC spells StringView's.
 strTypeC: function {ctx: Ctx} out String is {
     preludeNeed :ctx memb: "@String_t"
-    return "\{ctx.strC}_t"
+    return "\{ctx.known.strC}_t"
 }
 
 # armValueC -- a no-payload arm's VALUE when the tagged type's C form is a
@@ -4421,10 +4422,10 @@ fnptrRetTypeC: function {
     rtid: prog.reg.returnTypeOf :tid
     if rtid.isZero then return "void".string
     baseC: String
-    if rtid == ctx.strTid then {
+    if rtid == ctx.known.strTid then {
         baseC = strTypeC :ctx
     }
-    if baseC.length == 0 when rtid == ctx.svTid then {
+    if baseC.length == 0 when rtid == ctx.known.svTid then {
         baseC = svTypeC :ctx
     }
     if baseC.length == 0 then {

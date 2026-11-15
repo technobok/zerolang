@@ -1102,8 +1102,8 @@ planRecordMethods: function {prog: Program.view ctx: Ctx} is {
         opId: u.operation
         if opId.isZero or (isGenericTemplateUnitOp :prog :opId) then continue
         un: zast.nameTextCopy ast: prog.ast ref: u.name
-        sm: ctx.mainName.copy
-        smD: ctx.mainUnitId
+        sm: ctx.known.mainName.copy
+        smD: ctx.known.mainUnitId
         (
             ctxBindMain
             :ctx
@@ -1166,8 +1166,8 @@ planNestedUnitMethods: function {
         if (zast.unitOpDeclaresUnit ast: prog.ast opId: nOp).not then continue
         nsTid: unitMemberTid :prog :ctx :ownerTid nameId: nm.name
         if nsTid.isZero then continue
-        sns: ctx.nsTid
-        ctx.nsTid = nsTid
+        sns: ctx.known.nsTid
+        ctx.known.nsTid = nsTid
         (
             planBodyMethods
             :prog
@@ -1175,7 +1175,7 @@ planNestedUnitMethods: function {
             bodyIds: (zast.unitBodyIdsAt ast: prog.ast unitId: nOp)
             ownerTid: nsTid
         )
-        ctx.nsTid = sns
+        ctx.known.nsTid = sns
     }
 }
 
@@ -1410,8 +1410,8 @@ planFnsPass: function {
             }
         }
         if opId.notZero then {
-            sm: ctx.mainName.copy
-            smD: ctx.mainUnitId
+            sm: ctx.known.mainName.copy
+            smD: ctx.known.mainUnitId
             (
                 ctxBindMain
                 :ctx
@@ -1423,7 +1423,7 @@ planFnsPass: function {
                     planUnitMonoInstances
                     :prog
                     :ctx
-                    tplId: (prog.typing.declTypeOf declId: ctx.mainUnitId)
+                    tplId: (prog.typing.declTypeOf declId: ctx.known.mainUnitId)
                     templateUnitOpId: opId
                 )
             } else {
@@ -1485,8 +1485,8 @@ addFnJob: function {
         fnjob
         :fid
         :nid
-        unitDecl: ctx.mainUnitId
-        nsTid: ctx.nsTid
+        unitDecl: ctx.known.mainUnitId
+        nsTid: ctx.known.nsTid
         :mono
         :method
         :owner
@@ -1534,9 +1534,9 @@ drainFnJobs: function {
     protos: String.borrow
     bodies: String.borrow
 } is {
-    sm: ctx.mainName.copy
-    smD: ctx.mainUnitId
-    sns: ctx.nsTid
+    sm: ctx.known.mainName.copy
+    smD: ctx.known.mainUnitId
+    sns: ctx.known.nsTid
     more: true
     for more loop {
         more = false
@@ -1551,7 +1551,7 @@ drainFnJobs: function {
         }
     }
     ctxBindMain :ctx name: sm.stringView unitDecl: smD
-    ctx.nsTid = sns
+    ctx.known.nsTid = sns
 }
 
 # writeFnJob -- write job `k`, its forward declaration onto `protos` and its
@@ -1568,11 +1568,11 @@ writeFnJob: function {
     j: ctx.fnJobs.get i: k
     j.written = true
     ctx.fnJobs.set i: k val: j
-    if j.unitDecl != ctx.mainUnitId then {
+    if j.unitDecl != ctx.known.mainUnitId then {
         un: zast.poolTextAt pool: prog.ast.names ref: (prog.typing.declNameOf declId: j.unitDecl)
         ctxBindMain :ctx name: un.stringView unitDecl: j.unitDecl
     }
-    ctx.nsTid = j.nsTid
+    ctx.known.nsTid = j.nsTid
     pa: protos.length
     ba: bodies.length
     if j.method then {
@@ -1605,9 +1605,9 @@ writeFnJob: function {
         appendFnSignature :prog :ctx fid: j.fid :op buf: bodies tail: " {\n"
         resetFnEmitState :ctx
         registerReftypeParams :prog :ctx fid: j.fid :op
-        ctx.curThisTid = j.mono
+        ctx.known.curThisTid = j.mono
         emitFnBody :prog :ctx :op fid: j.fid buf: bodies
-        ctx.curThisTid = ztypes.tid.zero
+        ctx.known.curThisTid = ztypes.tid.zero
         bodies.append "}\n\n"
     }
     j.protoAt = pa
@@ -1845,8 +1845,12 @@ demandImplCalls: function {
 # entryMainTid -- the function the unit ctx is bound to declares as `main`; 0
 # when it declares none.
 entryMainTid: function {prog: Program.view ctx: Ctx.view} out ztypes.tid is {
-    if ctx.mainUnitId.isZero then return ztypes.tid.zero
-    md: prog.typing.declFindChild parentDeclId: ctx.mainUnitId nameId: zast.wellKnown.slot.wkMain
+    if ctx.known.mainUnitId.isZero then return ztypes.tid.zero
+    md: (
+        prog.typing.declFindChild
+        parentDeclId: ctx.known.mainUnitId
+        nameId: zast.wellKnown.slot.wkMain
+    )
     if md.isZero then return ztypes.tid.zero
     return (prog.typing.declTypeOf declId: md)
 }
@@ -1930,10 +1934,10 @@ planNestedUnitFns: function {
                     }
                 }
                 if nsTid.notZero then {
-                    sns: ctx.nsTid
-                    ctx.nsTid = nsTid
+                    sns: ctx.known.nsTid
+                    ctx.known.nsTid = nsTid
                     planFnsIn :prog :ctx mainOpId: iuOpId ownerTid: nsTid
-                    ctx.nsTid = sns
+                    ctx.known.nsTid = sns
                 }
             }
         }
@@ -1962,14 +1966,14 @@ collectFnDecls: function {
                 (
                     fnUndemanded
                     :prog
-                    unitDecl: ctx.mainUnitId
+                    unitDecl: ctx.known.mainUnitId
                     nameId: bm.name
                     :ownerTid
                     wantWalked: true
                 ) or
                 (
                     (bm.name == zast.wellKnown.slot.wkMain) and
-                    (ctx.mainName.stringView != ctx.realMain)
+                    (ctx.known.mainName.stringView != ctx.known.realMain)
                 )
             )
             if skipDepMain.not then {
@@ -2455,13 +2459,23 @@ emitC: function {
     rm: mn.copy
     ctx: (
         Ctx
-        mainName: mn
-        nsTid: ztypes.tid
-        realMain: rm
-        :fastHash
-        :readableNames
-        :strC
-        :svC
+        known: (
+            KnownNames
+            mainName: mn
+            nsTid: ztypes.tid
+            realMain: rm
+            :strC
+            :svC
+            curThisTid: ztypes.tid
+            :fastHash
+            :readableNames
+            defUnitId: (IdMapV ztypes.tid v: ztypes.declid)
+            mainUnitId: ztypes.declid
+            strTid: strId
+            svTid: svId
+            textTid: rtids.text
+            boolTid: boolId
+        )
         cnames: typeCnames
         :litIds
         :litIndex
@@ -2495,7 +2509,6 @@ emitC: function {
             borrowedVars: (IdMapV ztypes.vid v: bool)
             hoistsToBlock: false
         )
-        defUnitId: (IdMapV ztypes.tid v: ztypes.declid)
         pieces: (
             PieceState
             demands: zemitrows.DemandSet.create
@@ -2565,7 +2578,6 @@ emitC: function {
         )
         fieldListAt: (IdMapV ztypes.tid v: u64)
         fieldNameIds: ListVal zast.nameid
-        mainUnitId: ztypes.declid
         emitErrors: List zast.ErrorData
         keyEqKept: IdSet ztypes.tid
         keyHashKept: IdSet ztypes.tid
@@ -2624,7 +2636,6 @@ emitC: function {
             payC: "".string
             hasValue: false
         )
-        curThisTid: ztypes.tid
         emittedUserTypes: IdSet ztypes.tid
         lateDefs: String
         fwdDeclaredTypes: IdSet ztypes.tid
@@ -2644,11 +2655,7 @@ emitC: function {
         aggsFixed: false
         markerValues: (IdMapV ztypes.tid v: bool)
         emittedListIters: IdSet ztypes.tid
-        strTid: strId
-        svTid: svId
-        textTid: rtids.text
         converrorTid: cerrId
-        boolTid: boolId
         :origins
     )
     recordImplementedUnits :ctx :users
@@ -2675,7 +2682,7 @@ emitC: function {
         bindFragTypeTids :prog :ctx
         bindFragUnitDecls :prog :ctx
         bindClassRows :prog :ctx
-        rmn: ctx.realMain.copy
+        rmn: ctx.known.realMain.copy
         ctxBindMain :ctx name: rmn.stringView unitDecl: typing.mainUnitRoot
     }
     nativepieces.checkLoadedNatives :prog :ctx
@@ -2967,7 +2974,7 @@ buildDefUnitIndex: function {prog: Program.view ctx: Ctx} is {
     for t < n loop {
         udd: ztypecheck.unitDeclOfTid reg: prog.reg typing: prog.typing tid: t
         if udd.notZero then {
-            ctx.defUnitId.set key: t value: udd
+            ctx.known.defUnitId.set key: t value: udd
         }
         t = t.next
     }
@@ -2981,8 +2988,8 @@ buildDefUnitIndex: function {prog: Program.view ctx: Ctx} is {
 # mainUnitId never goes stale (definedInNonMain compares against it).
 ctxBindMain: function {ctx: Ctx name: StringView unitDecl: ztypes.declid} is {
     nm: name.string
-    ctx.mainName = nm.take
-    ctx.mainUnitId = unitDecl
+    ctx.known.mainName = nm.take
+    ctx.known.mainUnitId = unitDecl
 }
 
 # setHashBody / setEqBody / setDestroyItems -- the element-kind-specific
@@ -3501,8 +3508,8 @@ emitRecordDefs: function {
             }
         }
         if opId.notZero then {
-            sm: ctx.mainName.copy
-            smD: ctx.mainUnitId
+            sm: ctx.known.mainName.copy
+            smD: ctx.known.mainUnitId
             (
                 ctxBindMain
                 :ctx
@@ -3690,11 +3697,11 @@ emitNestedRecordDefs: function {
         nsTid: unitMemberTid :prog :ctx :ownerTid nameId: nm.name
         if nsTid.isZero then continue
         nb: zast.unitBodyIdsAt ast: prog.ast unitId: nOp
-        sns: ctx.nsTid
-        ctx.nsTid = nsTid
+        sns: ctx.known.nsTid
+        ctx.known.nsTid = nsTid
         emitUnitImplementationImpls :prog :ctx bodyIds: nb ownerTid: nsTid :buf
         emitNestedRecordDefs :prog :ctx bodyIds: nb ownerTid: nsTid :buf
-        ctx.nsTid = sns
+        ctx.known.nsTid = sns
     }
 }
 
@@ -3707,7 +3714,7 @@ unitMemberTid: function {
     nameId: zast.nameid
 } out ztypes.tid is {
     owner: ownerTid
-    if owner.isZero then owner = prog.typing.declTypeOf declId: ctx.mainUnitId
+    if owner.isZero then owner = prog.typing.declTypeOf declId: ctx.known.mainUnitId
     return ((prog.typing.declChildOfId parentTypeId: owner :nameId).or d: ztypes.tid.zero)
 }
 
@@ -3761,7 +3768,7 @@ noteEqUse: function {
 } is {
     t: ztypecheck.typedefChaseTid typing: prog.typing :tid
     # String's and StringView's `==` are pieces of their runtime fragments
-    if t == ctx.strTid then preludeNeed :ctx memb: "@String_eq"
+    if t == ctx.known.strTid then preludeNeed :ctx memb: "@String_eq"
     if (parttexts.isViewLaid :ctx tid: t) then preludeNeed :ctx memb: "@StringView_eq"
     if (ctx.reach.eqUsed.has item: t) then return
     if (ctx.emittedUserTypes.has item: t) then {
@@ -3960,9 +3967,9 @@ emitOneMethod: function {
         registerReftypeParams :prog :ctx fid: mid :op
         isGen: setupGenCtx :prog :ctx :mid :op owner: thisTid
         if isGen then forloops.emitGenPrologue :prog :ctx :buf
-        ctx.curThisTid = thisTid
+        ctx.known.curThisTid = thisTid
         emitFnBody :prog :ctx :op fid: mid :buf
-        ctx.curThisTid = ztypes.tid.zero
+        ctx.known.curThisTid = ztypes.tid.zero
         if isGen then {
             forloops.emitGenEpilogue :prog :ctx :buf
             ctx.gen.active = false
