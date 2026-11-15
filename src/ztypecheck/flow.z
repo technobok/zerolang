@@ -514,7 +514,12 @@ checkDo: function {
     st.closeBreakScope
     if doKind > 0 then st.markUnreachable kind: doKind
     # a block used as a value answers whether it hands back a place
-    if st.walk.stmtExprNid != donode.nid then recordControlPlaceLeaves :st :ast nid: donode.nid
+    if st.walk.stmtExprNid != donode.nid then (
+        moves.recordControlPlaceLeaves
+        :st
+        :ast
+        nid: donode.nid
+    )
     if broke then settleDoBreakTakes :st :brkMark :endTook
     if doPath then settleRestoredLocks :st since: restMark
     result = wrapDoBreakValue :ast :st :unitDecl :donode :result
@@ -623,7 +628,7 @@ checkFor: function {
     # what says which this is (noteStatementBlocks runs before the walk reaches
     # here). The scope is still open, so the element is still a name.
     if elemT.notZero when (st.walk.stmtBlocks.has item: fornode.body).not then {
-        checkComprehensionValue :st :ast :fornode :elemT
+        moves.checkComprehensionValue :st :ast :fornode :elemT
     }
     # a body that leaves the FUNCTION runs at most once: its own takes are
     # dropped (the code after the loop never sees them) while a condition's
@@ -980,7 +985,7 @@ relayBreakTakes: function {st: zenv.ZSymbolTable run: zenv.looprun} is {
         if (st.findLocal nameId: nid) == d then (
             st.invalidateDeclAs
             declId: d
-            loc: takenHere
+            loc: moves.takenHere
             maybe: true
         )
     }
@@ -999,7 +1004,12 @@ settleDoBreakTakes: function {
 } is {
     for st.loopBreakTakes.length > brkMark loop {
         d: st.loopBreakTakes.pop
-        if (declStillResolves :st :d) then st.invalidateDeclAs declId: d loc: takenHere maybe: true
+        if (declStillResolves :st :d) then (
+            st.invalidateDeclAs
+            declId: d
+            loc: moves.takenHere
+            maybe: true
+        )
     }
     for each d2: endTook loop {
         if (declStillResolves :st d: d2) then st.markTakeMaybe declId: d2
@@ -1146,7 +1156,7 @@ invalidateTakenAcross: function {st: zenv.ZSymbolTable decls: ArmTakes.view exha
     for each vd: decls.taken loop {
         c: (decls.counts.get key: vd).or d: 0
         every: exhaustive and (decls.reached > 0) and (c == decls.reached)
-        st.invalidateDeclAs declId: vd loc: takenHere maybe: every.not
+        st.invalidateDeclAs declId: vd loc: moves.takenHere maybe: every.not
     }
     # a lock every arm reaching the end of an exhaustive statement released is
     # released after it: each arm's close laid it again for the paths that did
@@ -1480,7 +1490,7 @@ consumedIfTid: function {
     )
     if allDiverge or anyEmpty then return result
     if st.walk.stmtExprNid == ifnode.nid then return result
-    if hasElse then return (valueArmsTid :st :ast nid: ifnode.nid first: result)
+    if hasElse then return (moves.valueArmsTid :st :ast nid: ifnode.nid first: result)
     reportValueIfWithoutElse :st :ifnode
     return result
 }
@@ -2749,7 +2759,7 @@ checkDissectedArm: function {
     if st.walk.stmtExprNid == casenode.nid then return at
     if at.isZero or (at == st.typing.nullTypeId) then return at
     if (st.reg.typetypeOf typeId: at) == ztypes.ztypetype.neverType then return at
-    av: armValueOf :st :ast blockId: armBlock
+    av: moves.armValueOf :st :ast blockId: armBlock
     if av.nid.isZero or av.untyped then return at
     stampGate :st nid: casenode.nid tid: av.tid
     return av.tid
@@ -2897,7 +2907,7 @@ consumedCaseTid: function {
     if st.walk.stmtExprNid == casenode.nid then return arms
     if arms.isZero or (arms == st.typing.nullTypeId) then return arms
     if (st.reg.typetypeOf typeId: arms) == ztypes.ztypetype.neverType then return arms
-    return (valueArmsTid :st :ast nid: casenode.nid first: arms)
+    return (moves.valueArmsTid :st :ast nid: casenode.nid first: arms)
 }
 
 # asgnRefAt -- the assignment row `nid` as plain values (all zero for any
@@ -2995,7 +3005,7 @@ checkStmtExpression: function {
     st.walk.stmtExprNid = valueId
     et0: checkValueAt :st :unitDecl :ast nid: valueId
     st.walk.stmtExprNid = outerStmt
-    if (refuseStaticListStatement :st :ast vt: et0 nid: valueId).not then {
+    if (moves.refuseStaticListStatement :st :ast vt: et0 nid: valueId).not then {
         refuseUnitValue :st :ast vt: et0 nid: valueId
     }
     if et0.notZero then stampGate :st nid: lineId tid: et0
@@ -3154,12 +3164,12 @@ checkStmtLine: function {
     # the body's own tail is recorded once its value is judged
     # (checkImplicitReturn); a `with` or `do` block's, here
     if tailLine when blockId != st.tailBody then (
-        recordTailExit
+        moves.recordTailExit
         :st
         :ast
         lineId: slnId
         valId: (
-            implicitReturnValue
+            moves.implicitReturnValue
             reg: st.reg
             typing: st.typing
             :ast
@@ -3169,9 +3179,9 @@ checkStmtLine: function {
     )
     # a block's value takes over what its line's references hold before the
     # line's unheld temporaries release theirs
-    if last then recordArmValueLocks :st :ast lineId: slnId
+    if last then moves.recordArmValueLocks :st :ast lineId: slnId
     yields: last and discarded.not and tailLine.not and (blockId != st.walk.appendedBody)
-    if yields when dk == zenv.divkind.none then moveYieldedLocals :st :ast lineId: slnId
+    if yields when dk == zenv.divkind.none then moves.moveYieldedLocals :st :ast lineId: slnId
     recordTempHoldingLine :st lineId: slnId from: ul0
     if discarded when dk == zenv.divkind.none then recordDiscard :st :ast :innerId
     # a line is no scope of pins: each value on it kept its own to its record
@@ -3241,7 +3251,7 @@ recordDiscard: function {st: zenv.ZSymbolTable ast: Ast innerId: zast.nodeid} is
     if tt.isReferenceData.not then return
     # a result that keeps a borrow of its inputs is a reference to them, an
     # `outx` one a value of its own (checkAssignment's rule)
-    dp: valuePinsOf :st nid: innerId
+    dp: moves.valuePinsOf :st nid: innerId
     if dp.len > 0 when dp.owned.not then return
     if (isViewFamilyTid :ast :st :tid) then return
     vid: st.reg.newVariable ztypeId: tid ownership: ztypes.zownership.owned
