@@ -59,12 +59,12 @@ emitDroppedZero: function {
 # the view native of the name: text's own members are methods instead
 viewLaidNative: function {
     prog: Program.view
-    ctx: Ctx.view
+    known: KnownNames.view
     tid: ztypes.tid
     mnId: zast.nameid
 } out bool is {
-    if (parttexts.isViewLaid :ctx :tid).not then return false
-    return (textOwnMember :prog :ctx owner: tid nameId: mnId).not
+    if (parttexts.isViewLaid :known :tid).not then return false
+    return (textOwnMember :prog :known owner: tid nameId: mnId).not
 }
 
 # textOwnMember -- member `nameId` of `owner` is one of text's own: written in
@@ -72,11 +72,11 @@ viewLaidNative: function {
 # reads as StringView's of the name
 textOwnMember: function {
     prog: Program.view
-    ctx: Ctx.view
+    known: KnownNames.view
     owner: ztypes.tid
     nameId: zast.nameid
 } out bool is {
-    if owner != ctx.known.textTid then return false
+    if owner != known.textTid then return false
     md: prog.typing.declMemberIdOf parentTypeId: owner :nameId
     if md.isZero then return false
     return (prog.reg.isNativeOf tid: (prog.typing.decls.get i: md).typeId).not
@@ -138,10 +138,10 @@ emitDottedCall: function {
         rsid: (
             chaseStrTypedef
             :prog
-            :ctx
+            known: ctx.known
             tid: (dottedReceiverStampId :prog callable: (prog.ast.nodes.get i: call.callable))
         )
-        if (argforms.isStringOrViewLaid :ctx tid: rsid) then {
+        if (argforms.isStringOrViewLaid known: ctx.known tid: rsid) then {
             callableNode: prog.ast.nodes.get i: call.callable
             bn = emitDottedReceiver :prog :ctx callable: callableNode facts: bnF
             btid = rsid
@@ -150,7 +150,7 @@ emitDottedCall: function {
         }
     } else {
         bnid: stmtblocks.dottedBaseNodeId :prog n: (prog.ast.nodes.get i: call.callable)
-        btid = chaseStrTypedef :prog :ctx tid: (stampIdOf :prog nid: bnid)
+        btid = chaseStrTypedef :prog known: ctx.known tid: (stampIdOf :prog nid: bnid)
         # the simple-atom receiver becomes its own identifier (the bn.length==0
         # leg already routes through emitDottedReceiver). An alias or narrowing
         # in scope substitutes for it, and then no variable is being read -- so
@@ -176,7 +176,7 @@ emitDottedCall: function {
     # the view legs read a String receiver more than once, for its data and its
     # size: one that is a call's result is bound once, and dropped again when no
     # leg takes the call
-    rmark: pendingHoistMark :ctx
+    rmark: pendingHoistMark stmt: ctx.stmt
     if btIsStr when dcbV.isZero when bnF.place.not then {
         bn = (
             callorder.receiverOnce
@@ -263,7 +263,7 @@ emitStringArgMethod: function {
     if recvExpr.length == 0 then return "".string
     recvTid: dottedReceiverStampId :prog callable: (prog.ast.nodes.get i: call.callable)
     rtid: chaseAggregateTypedef :prog :ctx tid: recvTid
-    rtid = chaseStrTypedef :prog :ctx tid: rtid
+    rtid = chaseStrTypedef :prog known: ctx.known tid: rtid
     if rtid != ctx.known.strTid then return "".string
     rptr: (
         callorder.dottedReceiverIsPtr
@@ -440,7 +440,7 @@ orderOnePart: function {
     constant: false
     twice: true
 } out String is {
-    ord: callorder.orderBegin :ctx slots: 1
+    ord: callorder.orderBegin order: ctx.order slots: 1
     if twice then argforms.orderNamesTwice st: ord slot: 0
     (
         callorder.orderPartWith
@@ -458,9 +458,9 @@ orderOnePart: function {
         slot: 0
         valueNid: nid
     )
-    prefix.append (callorder.orderFinish :ctx st: ord)
+    prefix.append (callorder.orderFinish order: ctx.order st: ord)
     spelled: (callorder.orderSlotText t: ctx st: ord slot: 0).string
-    callorder.orderEnd :ctx st: ord
+    callorder.orderEnd order: ctx.order st: ord
     return spelled
 }
 
@@ -468,7 +468,7 @@ orderOnePart: function {
 # over a buffer.
 isValueStructTid: function {prog: Program.view ctx: Ctx.view tid: ztypes.tid} out bool is {
     if tid.isZero then return false
-    if (chaseStrTypedef :prog :ctx :tid) == ctx.known.strTid then return true
+    if (chaseStrTypedef :prog known: ctx.known :tid) == ctx.known.strTid then return true
     cm: chaseAggregateTypedef :prog :ctx :tid
     if (types.isListOriginOf :prog :ctx tid: cm) then return true
     return (isIdCollectionOriginOf :prog :ctx tid: cm)
@@ -508,7 +508,7 @@ callRhsIsBorrow: function {
 # isSvAsStringNode -- the node is `sv.asString` on a StringView-typed base.
 isSvAsStringNode: function {
     prog: Program.view
-    ctx: Ctx.view
+    known: KnownNames.view
     n: astnode.view
 } out bool is {
     match (
@@ -517,8 +517,8 @@ isSvAsStringNode: function {
         cnId: aliasOrChildId :prog aliasId: n.nodeid childId: n.child
         if cnId != zast.wellKnown.slot.wkAsString then return false
         bnidA: interpPartNodeId n: (prog.ast.nodes.get i: n.parent)
-        btA: chaseStrTypedef :prog :ctx tid: (stampIdOf :prog nid: bnidA)
-        return btA == ctx.known.svTid
+        btA: chaseStrTypedef :prog :known tid: (stampIdOf :prog nid: bnidA)
+        return btA == known.svTid
     } else {
         return false
     }
@@ -873,7 +873,7 @@ narrowListIndex: function {
         orderOnePart
         :prog
         :ctx
-        mark: (pendingHoistMark :ctx)
+        mark: (pendingHoistMark stmt: ctx.stmt)
         text: pos
         tf: exprfacts
         nid: zast.nodeid
@@ -1307,7 +1307,7 @@ emitSpanSplit: function {
         text: recvR.string
         ctype: spT.stringView
         prefix: rpre
-        mark: (pendingHoistMark :ctx)
+        mark: (pendingHoistMark stmt: ctx.stmt)
         tf: exprfacts
     )
     apre: String
@@ -1318,7 +1318,7 @@ emitSpanSplit: function {
         text: va
         ctype: "uint64_t"
         prefix: apre
-        mark: (pendingHoistMark :ctx)
+        mark: (pendingHoistMark stmt: ctx.stmt)
         tf: exprfacts
     )
     es: String
@@ -1361,7 +1361,7 @@ emitSpanCopyFrom: function {
         text: recvR.string
         ctype: spT.stringView
         prefix: rpre
-        mark: (pendingHoistMark :ctx)
+        mark: (pendingHoistMark stmt: ctx.stmt)
         tf: exprfacts
     )
     srcT: "\{lc}_t"
@@ -1373,7 +1373,7 @@ emitSpanCopyFrom: function {
         text: vc
         ctype: srcT.stringView
         prefix: fpre
-        mark: (pendingHoistMark :ctx)
+        mark: (pendingHoistMark stmt: ctx.stmt)
         tf: exprfacts
     )
     ec: String
@@ -1415,7 +1415,7 @@ emitWindowSlice: function {
         orderOnePart
         :prog
         :ctx
-        mark: (pendingHoistMark :ctx)
+        mark: (pendingHoistMark stmt: ctx.stmt)
         text: recvR.string
         tf: exprfacts
         nid: zast.nodeid
@@ -1590,7 +1590,7 @@ emitOrderedPair: function {
 } out String is {
     ord: argforms.orderPairArgs :prog :ctx :call :a :aForm :b :bForm
     if mono.notZero then noteMemberUse :ctx :mono member: (ctx.pieces.memberWords.slotOf text: m)
-    r: callorder.orderFinish :ctx st: ord
+    r: callorder.orderFinish order: ctx.order st: ord
     opened: r.length > 0
     r.append cb
     r.append "_"
@@ -1603,7 +1603,7 @@ emitOrderedPair: function {
     r.append (callorder.orderSlotText t: ctx st: ord slot: 1)
     r.append ")"
     if opened then r.append ")"
-    callorder.orderEnd :ctx st: ord
+    callorder.orderEnd order: ctx.order st: ord
     return r
 }
 
@@ -1689,11 +1689,11 @@ emitStringFamilyCall: function {
     }
     # text is laid out as a StringView, and its view members are StringView's;
     # its own, written in zerolang, are called as any method is
-    if (parttexts.isViewLaid :ctx tid: ownerTid).not then return "".string
+    if (parttexts.isViewLaid known: ctx.known tid: ownerTid).not then return "".string
     if (
         textOwnMember
         :prog
-        :ctx
+        known: ctx.known
         owner: ownerTid
         nameId: (aliasChildNameId :prog n: (prog.ast.nodes.get i: call.callable))
     ) then return "".string
@@ -2112,7 +2112,7 @@ nestedStringMember: function {
     baseVid: ztypes.vid
     facts: exprfacts.borrow
 } out String is {
-    nptT: chaseStrTypedef :prog :ctx tid: (stmtblocks.stampIdDeep :prog n: parent)
+    nptT: chaseStrTypedef :prog known: ctx.known tid: (stmtblocks.stampIdDeep :prog n: parent)
     if nptT == ctx.known.strTid then {
         nsm: (
             emitStringMethod
@@ -2868,8 +2868,8 @@ emitDottedAtomBase: function {
     eNum: consts.dottedAtomNumericBase :bn2 :mn2 :ctx
     if eNum.length > 0 then return eNum
     baseNid: interpPartNodeId n: (prog.ast.nodes.get i: n.parent)
-    bareTid: chaseStrTypedef :prog :ctx tid: (stampIdOf :prog nid: baseNid)
-    bareSv: viewLaidNative :prog :ctx tid: bareTid :mnId
+    bareTid: chaseStrTypedef :prog known: ctx.known tid: (stampIdOf :prog nid: baseNid)
+    bareSv: viewLaidNative :prog known: ctx.known tid: bareTid :mnId
     # `.stringView` of a view is the view: a generic body wrote it for a type
     # parameter a StringView fills
     childNameId: aliasOrChildId :prog aliasId: n.nodeid childId: n.child
@@ -3056,7 +3056,7 @@ orPanicExprC: function {
         orderOnePart
         :prog
         :ctx
-        mark: (pendingHoistMark :ctx)
+        mark: (pendingHoistMark stmt: ctx.stmt)
         text: recv
         tf: recvF
         nid: recvNid
@@ -3238,12 +3238,12 @@ isIdCollectionOriginOf: function {
 # shares the base's struct, methods, and cleanup.
 chaseStrTypedef: function {
     prog: Program.view
-    ctx: Ctx.view
+    known: KnownNames.view
     tid: ztypes.tid
 } out ztypes.tid is {
     if (prog.typing.typedefBase.has key: tid).not then return tid
     e: ztypecheck.typedefChaseTid typing: prog.typing :tid
-    if (e == ctx.known.strTid) or (e == ctx.known.svTid) then return e
+    if (e == known.strTid) or (e == known.svTid) then return e
     return tid
 }
 
@@ -3258,7 +3258,10 @@ demandMemberNeeds: function {
 } is {
     o: originTidOf :prog tid: mono
     if o.isZero then o = mono
-    row: ctx.pieces.rows.ofName n: (nativerows.rowNameOfMember :prog :ctx owner: o name: mnId)
+    row: (
+        ctx.pieces.rows.ofName
+        n: (nativerows.rowNameOfMember :prog pieces: ctx.pieces owner: o name: mnId)
+    )
     if row > 0 then nativepieces.rowNeedsAdd :ctx :row cond: nativepieces.condAlways
 }
 
@@ -3338,7 +3341,7 @@ emitResultCombinator: function {
         orderOnePart
         :prog
         :ctx
-        mark: (pendingHoistMark :ctx)
+        mark: (pendingHoistMark stmt: ctx.stmt)
         text: recvExpr
         tf: recvExprF
         nid: bnid

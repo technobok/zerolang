@@ -147,7 +147,7 @@ emitCountedRangeFor: function {
     rtR: rangeTid :prog :n
     ctR: intScalarCTypeOf :prog tid: rtR
     if ctR.length == 0 then return false
-    mN: values.tmpNext :ctx :tmp
+    mN: values.tmpNext stmt: ctx.stmt :tmp
     fn: "_fn\{mN}"
     rk: ztypecheck.numKindOfTid typing: prog.typing tid: rtR
     cnt: (
@@ -159,7 +159,13 @@ emitCountedRangeFor: function {
     flushArgHoists :ctx :ind :tmp :buf
     d0: "\{ind}uint64_t \{fn} = \{cnt};\n"
     buf.append d0
-    lidR: stmtblocks.pushLoopLabel :ctx :tmp isDo: false postTest: m.postconditions.count.u64 > 0
+    lidR: (
+        stmtblocks.pushLoopLabel
+        stmt: ctx.stmt
+        :tmp
+        isDo: false
+        postTest: m.postconditions.count.u64 > 0
+    )
     # A suspension inside the body RETURNS from `.call`, and the resume `goto`
     # lands inside the loop, PAST the C for-init -- so the counter and the
     # count, which live only in the header, are indeterminate on the next call
@@ -171,7 +177,7 @@ emitCountedRangeFor: function {
     pushed: false
     if ctx.gen.active when (zast.yieldCountIn ast: prog.ast nid: m.body) > 0 then {
         ctx.gen.forNext = ctx.gen.forNext + 1
-        fcF: genSynthField :prog :ctx which: gensynth.forCounter k: ctx.gen.forNext
+        fcF: genSynthField :prog gen: ctx.gen which: gensynth.forCounter k: ctx.gen.forNext
         fcC: genFieldC :prog :ctx nameId: fcF
         ctx.gen.forSpills.append (
             ForSpill
@@ -182,7 +188,7 @@ emitCountedRangeFor: function {
             payC: String
             payZero: String
         )
-        fnF: genSynthField :prog :ctx which: gensynth.forCount k: ctx.gen.forNext
+        fnF: genSynthField :prog gen: ctx.gen which: gensynth.forCount k: ctx.gen.forNext
         fnC: genFieldC :prog :ctx nameId: fnF
         ctx.gen.forSpills.append (
             ForSpill
@@ -236,7 +242,7 @@ emitCountedRangeFor: function {
     )
     lc: "\{ind}}\n"
     buf.append lc
-    stmtblocks.popLoopLabel :ctx id: lidR :ind :buf
+    stmtblocks.popLoopLabel stmt: ctx.stmt id: lidR :ind :buf
     # both leave C scope with the loop, so a suspension after it must not
     # spill either
     if pushed then {
@@ -306,14 +312,14 @@ emitClosedRangeFor: function {
     ) case call then {
         startNid: memberreads.dottedParentNodeId n: (prog.ast.nodes.get i: n.callable)
         if startNid.isZero then return false
-        mN: values.tmpNext :ctx :tmp
+        mN: values.tmpNext stmt: ctx.stmt :tmp
         rs: "_rs\{mN}"
         re: "_re\{mN}"
         fn: "_fn\{mN}"
         cnt: closedRangeCountExpr from: rs.stringView to: re.stringView :down
         lidR: (
             stmtblocks.pushLoopLabel
-            :ctx
+            stmt: ctx.stmt
             :tmp
             isDo: false
             postTest: m.postconditions.count.u64 > 0
@@ -338,7 +344,7 @@ emitClosedRangeFor: function {
         pushed: false
         if ctx.gen.active when (zast.yieldCountIn ast: prog.ast nid: m.body) > 0 then {
             ctx.gen.forNext = ctx.gen.forNext + 1
-            fcF: genSynthField :prog :ctx which: gensynth.forCounter k: ctx.gen.forNext
+            fcF: genSynthField :prog gen: ctx.gen which: gensynth.forCounter k: ctx.gen.forNext
             fcC: genFieldC :prog :ctx nameId: fcF
             ctx.gen.forSpills.append (
                 ForSpill
@@ -349,7 +355,7 @@ emitClosedRangeFor: function {
                 payC: String
                 payZero: String
             )
-            fnF: genSynthField :prog :ctx which: gensynth.forCount k: ctx.gen.forNext
+            fnF: genSynthField :prog gen: ctx.gen which: gensynth.forCount k: ctx.gen.forNext
             fnC: genFieldC :prog :ctx nameId: fnF
             ctx.gen.forSpills.append (
                 ForSpill
@@ -417,7 +423,7 @@ emitClosedRangeFor: function {
         )
         lc: "\{ind}}\n"
         buf.append lc
-        stmtblocks.popLoopLabel :ctx id: lidR :ind :buf
+        stmtblocks.popLoopLabel stmt: ctx.stmt id: lidR :ind :buf
         if pushed then {
             ctx.gen.forSpills.pop
             ctx.gen.forSpills.pop
@@ -638,12 +644,12 @@ emitGenPrologue: function {
     buf: String.borrow
 } is {
     if ctx.gen.hasValue then {
-        riI: genSynthField :prog :ctx which: gensynth.resumeInput k: 0
+        riI: genSynthField :prog gen: ctx.gen which: gensynth.resumeInput k: 0
         riC: genFieldC :prog :ctx nameId: riI
         lgv: "    \{riC} = \{ctx.gen.valC};\n"
         buf.append lgv
     }
-    stI: genSynthField :prog :ctx which: gensynth.state k: 0
+    stI: genSynthField :prog gen: ctx.gen which: gensynth.state k: 0
     stC: genFieldC :prog :ctx nameId: stI
     lgs: "    switch (\{stC}) {\n"
     buf.append lgs
@@ -679,7 +685,7 @@ emitGenEpilogue: function {
         kd = kd + 1
     }
     buf.append "L_done:;\n"
-    stI: genSynthField :prog :ctx which: gensynth.state k: 0
+    stI: genSynthField :prog gen: ctx.gen which: gensynth.state k: 0
     stC: genFieldC :prog :ctx nameId: stI
     lge: "    \{stC} = -1;\n"
     buf.append lge
@@ -722,7 +728,7 @@ emitExprFormYield: function {
     # the hoist has already suspended this yield and left the resume value in
     # a temp; only a yield it declined (no resume type it could name) still
     # needs suspending here
-    riS: genSynthField :prog :ctx which: gensynth.resumeInput k: 0
+    riS: genSynthField :prog gen: ctx.gen which: gensynth.resumeInput k: 0
     srcC: genFieldC :prog :ctx nameId: riS
     {
         ycid: zast.yieldCallIdAt ast: prog.ast nid: (zast.nodeIdOf n: value)
@@ -730,7 +736,7 @@ emitExprFormYield: function {
         match (
             ykq
         ) case some then {
-            yvQ: genSynthField :prog :ctx which: gensynth.yieldSlot k: ykq
+            yvQ: genSynthField :prog gen: ctx.gen which: gensynth.yieldSlot k: ykq
             srcC = genFieldC :prog :ctx nameId: yvQ
         } case none then {
             emitYieldFromNode :prog :ctx n: value :ind :buf
@@ -746,7 +752,7 @@ emitExprFormYield: function {
         buf.append lp0
         lp1: "\{ind}/* alias: \{nm} => (*__borrow_\{nm}) */\n"
         buf.append lp1
-        localnames.bindBorrowAlias :ctx vid: nmVid :nm
+        localnames.bindBorrowAlias narrow: ctx.narrow vid: nmVid :nm
     } else {
         # bind the name TO ITS SLOT rather than copying it into a C local.
         # `a: yield 1` used after a later suspension read a dead local before
@@ -888,9 +894,9 @@ hoistExprYields: function {
     # into the state object's slot, NOT a C local: the suspension above
     # returned, so a local declared here would be gone by the next one. The
     # lowering allocated one slot per suspension point for exactly this.
-    yvK: genSynthField :prog :ctx which: gensynth.yieldSlot k: kNum
+    yvK: genSynthField :prog gen: ctx.gen which: gensynth.yieldSlot k: kNum
     yvC: genFieldC :prog :ctx nameId: yvK
-    riK: genSynthField :prog :ctx which: gensynth.resumeInput k: 0
+    riK: genSynthField :prog gen: ctx.gen which: gensynth.resumeInput k: 0
     riC: genFieldC :prog :ctx nameId: riK
     lrv: "\{ind}\{yvC} = \{riC};\n"
     buf.append lrv
@@ -923,7 +929,7 @@ emitYieldStmt: function {
     # is in the box, before the suspension
     ytmp: FnTemps n: 0 listFrees: List OwedFree
     flushArgHoists :ctx :ind tmp: ytmp :buf
-    stI: genSynthField :prog :ctx which: gensynth.state k: 0
+    stI: genSynthField :prog gen: ctx.gen which: gensynth.state k: 0
     stC: genFieldC :prog :ctx nameId: stI
     ls: "\{ind}\{stC} = \{k};\n"
     buf.append ls
@@ -956,12 +962,12 @@ emitYieldStmt: function {
     # inside the loop, and a `with` its value in the header's local; this
     # `return` destroys them all and the resume `goto` re-enters past them.
     # Spill each open one to its state field here and reload it at the label
-    emitSpillSaves :ctx :ind :buf
+    emitSpillSaves gen: ctx.gen :ind :buf
     lr: "\{ind}return _ry_\{k};\n"
     buf.append lr
     ll: "L_resume_\{k}:;\n"
     buf.append ll
-    emitSpillReloads :ctx :ind :buf
+    emitSpillReloads gen: ctx.gen :ind :buf
 }
 
 # genFieldC -- a state field of the generator instance being emitted, as the
@@ -985,13 +991,13 @@ genFieldC: function {
 genSynthField: function {
     prog: Program.view
     # the generator context: its row
-    ctx: Ctx.view
+    gen: GeneratorState.view
     # the field's family
     which: gensynth
     # the suspension or loop number; unread for the cursor and the input
     k: u64
 } out zast.nameid is {
-    row: prog.typing.genFields.get i: ctx.gen.fieldsRow
+    row: prog.typing.genFields.get i: gen.fieldsRow
     match (
         which
     ) case state then {
@@ -1009,8 +1015,8 @@ genSynthField: function {
 
 # emitSpillSaves -- before a suspension's `return`: every open loop counter,
 # loop payload and `with` value goes to its state field.
-emitSpillSaves: function {ctx: Ctx.view ind: StringView buf: String.borrow} is {
-    for each sp: ctx.gen.forSpills loop {
+emitSpillSaves: function {gen: GeneratorState.view ind: StringView buf: String.borrow} is {
+    for each sp: gen.forSpills loop {
         lsv: "\{ind}\{sp.field} = \{sp.saved};\n"
         buf.append lsv
     }
@@ -1021,8 +1027,8 @@ emitSpillSaves: function {ctx: Ctx.view ind: StringView buf: String.borrow} is {
 # lets go of, or a borrowed view re-derived from the saved wrapper. The
 # wrapper local is restored too: a later yield in the same iteration saves
 # it again, and the resume jumped past its declaration.
-emitSpillReloads: function {ctx: Ctx.view ind: StringView buf: String.borrow} is {
-    for each sp: ctx.gen.forSpills loop {
+emitSpillReloads: function {gen: GeneratorState.view ind: StringView buf: String.borrow} is {
+    for each sp: gen.forSpills loop {
         f: sp.field.stringView
         match (
             sp.kind

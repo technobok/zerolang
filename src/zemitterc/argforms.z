@@ -73,7 +73,7 @@ atomVidIfPlain: function {
 svCallOf: function {prog: Program.view ctx: Ctx.view nameId: zast.nameid} out svcall is {
     row: (
         ctx.pieces.rows.ofName
-        n: (nativerows.rowNameOfMember :prog :ctx owner: ctx.known.svTid name: nameId)
+        n: (nativerows.rowNameOfMember :prog pieces: ctx.pieces owner: ctx.known.svTid name: nameId)
     )
     if row == 0 then return svcall.none
     return (ctx.pieces.rows.rows.get i: row).call
@@ -104,8 +104,8 @@ ternaryElse: function {
 # / StringView. Thirteen sites read a stamp for no other reason than to ask
 # this, and each had to name the intermediate; the QUESTION is the thing worth
 # naming, not the tid it goes through.
-stampIsStr: function {prog: Program.view ctx: Ctx.view nid: zast.nodeid} out bool is {
-    return (stampIdOf :prog :nid) == ctx.known.strTid
+stampIsStr: function {prog: Program.view known: KnownNames.view nid: zast.nodeid} out bool is {
+    return (stampIdOf :prog :nid) == known.strTid
 }
 
 # valueExprC -- an expression standing where a VALUE is wanted: a binop
@@ -205,15 +205,15 @@ refValtypeResult: function {
 }
 
 # isStringyTid -- tid is canonical String or StringView.
-isStringyTid: function {ctx: Ctx.view tid: ztypes.tid} out bool is {
-    if tid == ctx.known.strTid then return true
-    return tid == ctx.known.svTid
+isStringyTid: function {known: KnownNames.view tid: ztypes.tid} out bool is {
+    if tid == known.strTid then return true
+    return tid == known.svTid
 }
 
 # isStringOrViewLaid -- tid is String, or laid out as a StringView (isViewLaid):
 # a receiver the view natives take.
-isStringOrViewLaid: function {ctx: Ctx.view tid: ztypes.tid} out bool is {
-    return (isStringyTid :ctx :tid) or (parttexts.isViewLaid :ctx :tid)
+isStringOrViewLaid: function {known: KnownNames.view tid: ztypes.tid} out bool is {
+    return (isStringyTid :known :tid) or (parttexts.isViewLaid :known :tid)
 }
 
 # readOnce -- `text`, which its caller spells more than once, as it may be
@@ -414,7 +414,7 @@ svArgAddr: function {
     match (
         n
     ) case atomstring then {
-        li: values.litIndexOf :ctx nid: n.nodeid
+        li: values.litIndexOf literals: ctx.literals nid: n.nodeid
         if li > 0 then {
             lv: values.litView :ctx :li
             a1: "&\{lv}"
@@ -457,7 +457,7 @@ svArgAddr: function {
             vid: anV
             facts: anEF
         )
-        if (stampIsStr :prog :ctx nid: n.nodeid) then {
+        if (stampIsStr :prog known: ctx.known nid: n.nodeid) then {
             svs: (
                 svValueForm
                 :prog
@@ -495,7 +495,7 @@ svArgAddr: function {
             vid: anlV
             facts: anlEF
         )
-        if (stampIsStr :prog :ctx nid: n.nodeid) then {
+        if (stampIsStr :prog known: ctx.known nid: n.nodeid) then {
             svl: (
                 svValueForm
                 :prog
@@ -516,7 +516,7 @@ svArgAddr: function {
             pIsStr: (
                 stampIsStr
                 :prog
-                :ctx
+                known: ctx.known
                 nid: (interpPartNodeId n: (prog.ast.nodes.get i: n.parent))
             )
             pev: (
@@ -558,7 +558,7 @@ emitSvCompareCall: function {
     dcbV: ztypes.vid
     facts: exprfacts.borrow
 } out String is {
-    if (isStringyTid :ctx tid: btid) when mnId == zast.wellKnown.slot.wkCompare then {
+    if (isStringyTid known: ctx.known tid: btid) when mnId == zast.wellKnown.slot.wkCompare then {
         # compare maps to the by-value cmp in the base fragment
         argFacts: bnvF
         bf: svValueForm :prog :ctx expr: bnv isStr: btIsStr vid: dcbV facts: argFacts
@@ -574,7 +574,7 @@ emitSvCompareCall: function {
                     n: (prog.ast.nodes.get i: ca.operation)
                     facts: argF
                 )
-                caIsStr: operandIsStr :prog :ctx n: (prog.ast.nodes.get i: ca.operation)
+                caIsStr: operandIsStr :prog known: ctx.known n: (prog.ast.nodes.get i: ca.operation)
                 cav: (
                     atomVidIfPlain
                     :prog
@@ -686,7 +686,7 @@ emitSvSplitCall: function {
     btid: ztypes.tid
     facts: exprfacts.borrow
 } out String is {
-    if (isStringyTid :ctx tid: btid) when mnId == zast.wellKnown.slot.wkSplit then {
+    if (isStringyTid known: ctx.known tid: btid) when mnId == zast.wellKnown.slot.wkSplit then {
         nativepieces.needsAddM :ctx uname: "sviter" memb: "sv_split"
         sepx: String
         for each argId: (zast.kidsOf ast: prog.ast span: call.arguments) loop {
@@ -727,7 +727,7 @@ emitSvLinesCall: function {
     btid: ztypes.tid
     facts: exprfacts.borrow
 } out String is {
-    if (isStringyTid :ctx tid: btid) when mnId == zast.wellKnown.slot.wkLines then {
+    if (isStringyTid known: ctx.known tid: btid) when mnId == zast.wellKnown.slot.wkLines then {
         nativepieces.needsAddM :ctx uname: "sviter" memb: "sv_lines"
         el: "\{ctx.known.svC}_lines(&\{bnv})"
         return (stating :facts from: callFacts text: el)
@@ -748,7 +748,7 @@ emitSvArgNativeCall: function {
     btid: ztypes.tid
     facts: exprfacts.borrow
 } out String is {
-    if (isStringyTid :ctx tid: btid) when (svCallOf :prog :ctx nameId: mnId).arg then {
+    if (isStringyTid known: ctx.known tid: btid) when (svCallOf :prog :ctx nameId: mnId).arg then {
         demandSvMember :prog :ctx nameId: mnId
         # the argument is built once, as the native takes it
         if mnId == zast.wellKnown.slot.wkByteAt then {
@@ -1028,7 +1028,7 @@ orderAddressOf: function {
         memberreads.orderOnePart
         :prog
         :ctx
-        mark: (pendingHoistMark :ctx)
+        mark: (pendingHoistMark stmt: ctx.stmt)
         :text
         tf: partF
         nid: zast.nodeid
@@ -1166,7 +1166,7 @@ stringViewBinopOperand: function {
             srcF = pathFacts
         }
     }
-    isStrT: operandIsStr :prog :ctx :n
+    isStrT: operandIsStr :prog known: ctx.known :n
     if isStrT.not when srcF.once then {
         # the operand is a view: bound so it is read once; it frees nothing
         src = hoistForAddress :prog :ctx av: expr tid: ctx.known.svTid argNid: zast.nodeid
@@ -1697,7 +1697,7 @@ argHoistName: function {
 } out String is {
     if argNid.notZero then {
         tv: prog.typing.tempOf.get key: argNid
-        if tv.some then return (localnames.varCName :ctx :prog vid: tv)
+        if tv.some then return (localnames.varCName known: ctx.known :prog vid: tv)
     }
     hn: ctx.stmt.argHoistCtr
     ctx.stmt.argHoistCtr = ctx.stmt.argHoistCtr + 1
@@ -1736,7 +1736,7 @@ emitColInterpArg: function {
         if ((stmtblocks.stampIdDeep :prog :n) == ctx.known.strTid).not then return "".string
         # the argument is spelled again by the caller when this declines, so
         # what this spelling hoisted is dropped with it
-        hmk: pendingHoistMark :ctx
+        hmk: pendingHoistMark stmt: ctx.stmt
         exF: exprfacts
         ex: emitExprWith :prog :ctx :n facts: exF
         if exF.place then {
@@ -1948,7 +1948,7 @@ orderPairArgs: function {
     na: labelArgNode :prog :call label: a form: aForm
     nb: labelArgNode :prog :call label: b form: bForm
     bFirst: (writtenArgPosition :prog :call nid: nb) < (writtenArgPosition :prog :call nid: na)
-    ord: callorder.orderBegin :ctx slots: 2
+    ord: callorder.orderBegin order: ctx.order slots: 2
     if twice then {
         orderNamesTwice st: ord slot: 0
         orderNamesTwice st: ord slot: 1
@@ -1992,7 +1992,7 @@ orderLabelArg: function {
     slot: u64
     ord: orderstate.borrow
 } is {
-    mk: pendingHoistMark :ctx
+    mk: pendingHoistMark stmt: ctx.stmt
     tF: exprfacts
     text: labelArgText :prog :ctx :call :label :form facts: tF
     (
@@ -2650,9 +2650,9 @@ implementationArgText: function {
     suffix: "create".string
     if su.owning when (prog.reg.typetypeOf typeId: su.spec) == ztypes.ztypetype.protocolType then {
         suffix = "create_owned".string
-        noteOwnedBoxUse :ctx implTid: su.value protoTid: su.spec
+        noteOwnedBoxUse reach: ctx.reach implTid: su.value protoTid: su.spec
     } else {
-        types.noteBorrowBoxUse :ctx implTid: su.value protoTid: su.spec
+        types.noteBorrowBoxUse reach: ctx.reach implTid: su.value protoTid: su.spec
     }
     aIb: spelledCname :ctx tid: su.value
     aRcv: "&\{av}"
@@ -2713,7 +2713,7 @@ paramTakesPointer: function {
     if (paramIsReceiverName :prog :fid :pnameId) then return true
     if (markedValtypeRefParam :prog :fid :pnameId :pid) then return true
     if takesArg.not when (isReftypeParam :prog :ctx tid: pid) then return true
-    if (isBorrowStringParam :prog :ctx :fid :pnameId :pid) then return true
+    if (isBorrowStringParam :prog known: ctx.known :fid :pnameId :pid) then return true
     return (isListPtrParam :prog :ctx :fid :pnameId tid: pid)
 }
 
@@ -2866,7 +2866,7 @@ localAtomNameIsAt: function {
     vid: ztypes.vid
     text: StringView
 } out bool is {
-    if (narrowfacts.narrowingEndedAt :prog :ctx :nid :vid).not then {
+    if (narrowfacts.narrowingEndedAt :prog narrow: ctx.narrow :nid :vid).not then {
         nb: narrowfacts.vidFind xs: ctx.narrow.box :vid
         if nb > 0 then return (ctx.narrow.box.get i: nb - 1).val.stringView == text
     }
@@ -2940,7 +2940,7 @@ nestedOwnMethodCall: function {
         # canonical native symbol, not the method-id cname
         if (svCallOf :prog :ctx nameId: mnId).noarg when (
             isStringyTid
-            :ctx
+            known: ctx.known
             tid: nlid
         ) then {
             demandSvMember :prog :ctx nameId: mnId
@@ -3116,7 +3116,7 @@ typePathMemberCall: function {
     if (types.isCollectionOriginTid :ctx originTid: (originTidOf :prog tid: nlid)
     ) then return "".string
     if (callorder.isDispatchableTid :prog tid: nlid) then return "".string
-    if (isStringyTid :ctx tid: nlid) then return "".string
+    if (isStringyTid known: ctx.known tid: nlid) then return "".string
     if (prog.typing.declIsFnptrFieldId parentTypeId: nlid nameId: mnId) then return "".string
     mo: prog.typing.declChildOfId parentTypeId: nlid nameId: mnId
     match (
@@ -3167,7 +3167,8 @@ methodAutoCallRead: function {
     facts: exprfacts.borrow
 } out String is {
     viewNative: (
-        (isStringyTid :ctx tid: bstamp) or (memberreads.viewLaidNative :prog :ctx tid: bstamp :mnId)
+        (isStringyTid known: ctx.known tid: bstamp) or
+        (memberreads.viewLaidNative :prog known: ctx.known tid: bstamp :mnId)
     )
     if (svCallOf :prog :ctx nameId: mnId).noarg when viewNative then {
         demandSvMember :prog :ctx nameId: mnId
@@ -3447,13 +3448,13 @@ orderRowOperand: function {
     # is taken for a call's result
     opF: exprfacts.borrow
 } is {
-    mk: pendingHoistMark :ctx
+    mk: pendingHoistMark stmt: ctx.stmt
     vF: exprfacts
     v: values.operandValueC :prog :ctx :nid facts: vF
     n: prog.ast.nodes.get i: nid
-    if (isStringOrViewLaid :ctx tid: owner).not then {
+    if (isStringOrViewLaid known: ctx.known tid: owner).not then {
         stateFacts facts: opF from: vF
-        constant: callorder.orderConstantWith :prog :ctx :n tf: vF byPtr: false
+        constant: callorder.orderConstantWith :prog literals: ctx.literals :n tf: vF byPtr: false
         (
             callorder.orderPartWith
             :prog
@@ -3497,7 +3498,7 @@ orderRowOperand: function {
             :ctx
             :n
             expr: v.stringView
-            isStr: (operandIsStr :prog :ctx :n)
+            isStr: (operandIsStr :prog known: ctx.known :n)
             vid: q
             facts: vF
         )
@@ -3524,12 +3525,12 @@ orderRowOperand: function {
 # answers where the id route has none (a shell method's result).
 operandIsStr: function {
     prog: Program.view
-    ctx: Ctx
+    known: KnownNames
     n: astnode.view
 } out bool is {
     return (
-        (memberreads.chaseStrTypedef :prog :ctx tid: (stmtblocks.stampIdDeep :prog :n)) ==
-        ctx.known.strTid
+        (memberreads.chaseStrTypedef :prog :known tid: (stmtblocks.stampIdDeep :prog :n)) ==
+        known.strTid
     )
 }
 
@@ -3600,7 +3601,7 @@ emitReassignDestroy: function {
     ind: StringView
     buf: String.borrow
 } is {
-    if (stampIsStr :prog :ctx nid: rtnid) then {
+    if (stampIsStr :prog known: ctx.known nid: rtnid) then {
         preludeNeed :ctx memb: "@String_free"
         buf.append "\{ind}\{ctx.known.strC}_free(&\{nm2});\n"
         return
@@ -3632,7 +3633,7 @@ isReftypeParam: function {
     cid: (
         memberreads.chaseStrTypedef
         :prog
-        :ctx
+        known: ctx.known
         tid: (chaseAggregateTypedef :prog :ctx :tid)
     )
     duT: types.definedInUnitTid :prog :tid
@@ -3644,7 +3645,7 @@ isReftypeParam: function {
     tt: prog.reg.typetypeOf typeId: cid
     if tt == ztypes.ztypetype.unionType then return (unionBorrowsByPtr :prog :ctx tid: cid)
     if tt != ztypes.ztypetype.classType then return false
-    if (nativerows.tmplClassRowOf :prog :ctx tid: cid) > 0 then return true
+    if (nativerows.tmplClassRowOf :prog pieces: ctx.pieces tid: cid) > 0 then return true
     origin: originTidOf :prog tid: cid
     if origin.notZero when (types.isUserClassMonoTid :prog :ctx tid: cid).not then return false
     # the types with their own family rule answer through it, not the
@@ -3682,12 +3683,12 @@ unionBorrowsByPtr: function {
 # registers on SysV, and copying it carries nothing that can dangle.
 isBorrowStringParam: function {
     prog: Program.view
-    ctx: Ctx.view
+    known: KnownNames.view
     fid: ztypes.tid
     pnameId: zast.nameid
     pid: ztypes.tid
 } out bool is {
-    if pid != ctx.known.strTid then return false
+    if pid != known.strTid then return false
     if (
         prog.typing.declOwnershipIs
         parentTypeId: fid
@@ -3837,7 +3838,7 @@ paramTypeIsPointer: function {
     }
     if owns.not when (markedValtypeRefParam :prog :fid :pnameId :pid) then return true
     if owns.not when (isReftypeParam :prog :ctx tid: pid) then return true
-    if (isBorrowStringParam :prog :ctx :fid :pnameId :pid) then return true
+    if (isBorrowStringParam :prog known: ctx.known :fid :pnameId :pid) then return true
     if (isListPtrParam :prog :ctx :fid :pnameId tid: pid) then return true
     if (types.isSetMapPtrParam :prog :ctx :fid :pnameId tid: pid) then return true
     return false
@@ -3918,8 +3919,8 @@ fnptrParamTypeC: function {
 # noteOwnedBoxUse -- written C boxes an `implTid` as an OWNED `protoTid` value
 # (`_create_owned`): the pair's owned create and destroy are written, and the
 # impl's destructor with them (demandWrittenDestroys)
-noteOwnedBoxUse: function {ctx: Ctx implTid: ztypes.tid protoTid: ztypes.tid} is {
-    ctx.reach.ownedBoxUses.add item: (types.ownedBoxKey :implTid :protoTid)
+noteOwnedBoxUse: function {reach: ReachState implTid: ztypes.tid protoTid: ztypes.tid} is {
+    reach.ownedBoxUses.add item: (types.ownedBoxKey :implTid :protoTid)
 }
 
 # demandSvMember -- written C calls the C of StringView member `nameId` (a
@@ -3928,7 +3929,7 @@ noteOwnedBoxUse: function {ctx: Ctx implTid: ztypes.tid protoTid: ztypes.tid} is
 demandSvMember: function {prog: Program.view ctx: Ctx nameId: zast.nameid} is {
     row: (
         ctx.pieces.rows.ofName
-        n: (nativerows.rowNameOfMember :prog :ctx owner: ctx.known.svTid name: nameId)
+        n: (nativerows.rowNameOfMember :prog pieces: ctx.pieces owner: ctx.known.svTid name: nameId)
     )
     if row > 0 then nativepieces.demandRowKeys :ctx :row
 }
@@ -4108,7 +4109,7 @@ lowerNativeArg: function {
         }
         av0F: exprfacts
         av0: emitExprWith :prog :ctx n: op facts: av0F
-        if (stampIsStr :prog :ctx nid: (interpPartNodeId n: op)) then {
+        if (stampIsStr :prog known: ctx.known nid: (interpPartNodeId n: op)) then {
             hb: (
                 hoistBorrowValArgWith
                 :prog
@@ -4268,7 +4269,7 @@ viaBoxArg: function {
         tmpNm: hoistForAddress :prog :ctx :av tid: paramTid :argNid
         addr = "&\{tmpNm}"
     }
-    noteOwnedBoxUse :ctx implTid: paramTid protoTid: targetTid
+    noteOwnedBoxUse reach: ctx.reach implTid: paramTid protoTid: targetTid
     return "\{spelledCname :ctx tid: paramTid}_\{lbl}_create_owned(\{addr})"
 }
 

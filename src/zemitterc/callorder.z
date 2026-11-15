@@ -9,8 +9,8 @@ isUserStructType: function {tt: ztypes.ztypetype} out bool is {
 }
 
 # typeUseAdd -- record that the program constructed this type.
-typeUseAdd: function {ctx: Ctx tid: ztypes.tid} is {
-    ctx.reach.usedTypeIds.add item: tid
+typeUseAdd: function {reach: ReachState tid: ztypes.tid} is {
+    reach.usedTypeIds.add item: tid
 }
 
 # the base atom of a dotted path, which is the sanctioned discriminator the
@@ -96,15 +96,16 @@ emitNativeArgMethod: function {
     if (originIsTid :prog tid: ownerTid originTid: (ctx.origins.get i: family.slot.str)) then {
         srcT = originTidOf :prog tid: ownerTid
     }
-    rowKey: nativerows.rowNameOfMember :prog :ctx owner: srcT name: mnId
+    rowKey: nativerows.rowNameOfMember :prog pieces: ctx.pieces owner: srcT name: mnId
     row: ctx.pieces.rows.ofName n: rowKey
     if row == 0 then return "".string
-    body: nativerows.rowBody :ctx :row
+    body: nativerows.rowBody pieces: ctx.pieces :row
     if body.isZero then return "".string
-    if (nativerows.rtHas :ctx id: body slot: rtHole.slot.holeA1).not then return "".string
+    if (nativerows.rtHas pieces: ctx.pieces id: body slot: rtHole.slot.holeA1
+    ).not then return "".string
     nativepieces.rowNeedsAdd :ctx :row cond: nativepieces.condAlways
-    key: nativerows.rowLabel :ctx :prog n: rowKey
-    mk: pendingHoistMark :ctx
+    key: nativerows.rowLabel pieces: ctx.pieces :prog n: rowKey
+    mk: pendingHoistMark stmt: ctx.stmt
     recvF: exprfacts
     recv: (
         memberreads.emitDottedReceiver
@@ -130,8 +131,8 @@ emitNativeArgMethod: function {
     recFieldLists :prog tid: mtid names: pNames ids: pIds nameIds: pNameIds
     if pNames.length < 2 then return "".string
     # the receiver is evaluated first, then the arguments as written
-    ord: orderBegin :ctx slots: pNames.length
-    orderNamesTwiceArgs :ctx st: ord :body count: pNames.length firstHole: 0
+    ord: orderBegin order: ctx.order slots: pNames.length
+    orderNamesTwiceArgs pieces: ctx.pieces st: ord :body count: pNames.length firstHole: 0
     recvNid: memberreads.dottedParentNodeId n: (prog.ast.nodes.get i: call.callable)
     (
         orderArgAtWith
@@ -147,11 +148,11 @@ emitNativeArgMethod: function {
         valueNid: recvNid
     )
     orderNativeArgs :prog :ctx :call fpNameIds: pNameIds :ord
-    oprefix: orderFinish :ctx st: ord
+    oprefix: orderFinish order: ctx.order st: ord
     rn: ListVal zast.nameid
     rv: List String
     filledAll: nativeHoleValues t: ctx st: ord count: pNames.length firstHole: 0 names: rn vals: rv
-    orderEnd :ctx st: ord
+    orderEnd order: ctx.order st: ord
     # a slot no argument fills leaves the caller on its ordinary path rather than
     # emitting a body with a hole still in it
     if filledAll.not then return "".string
@@ -191,7 +192,7 @@ nativeHoleValues: function {
     for hi < count loop {
         hv: orderSlotText :t :st slot: hi
         if hv.length == 0 then filledAll = false
-        names.append (rtArgHole ctx: t hi: firstHole + hi)
+        names.append (rtArgHole pieces: t.pieces hi: firstHole + hi)
         vals.append hv.string
         hi = hi + 1
     }
@@ -224,7 +225,7 @@ orderNativeArgs: function {
         if a.namedoperation then {
             slot: (slots.get i: ai) + 1
             if slot < fpNameIds.length then {
-                mk: pendingHoistMark :ctx
+                mk: pendingHoistMark stmt: ctx.stmt
                 avF: exprfacts
                 av: (
                     argforms.valueExprC
@@ -254,26 +255,26 @@ orderNativeArgs: function {
 
 # orderBegin -- a call's parts are about to be built, in written order, into
 # `slots` empty argument slots.
-orderBegin: function {ctx: Ctx slots: u64} out orderstate is {
-    base: ctx.order.vals.length
-    for ctx.order.vals.length < (base + slots) loop ctx.order.vals.append String
-    for ctx.order.valFacts.length < (base + slots) loop ctx.order.valFacts.append exprfacts
+orderBegin: function {order: OrderState slots: u64} out orderstate is {
+    base: order.vals.length
+    for order.vals.length < (base + slots) loop order.vals.append String
+    for order.valFacts.length < (base + slots) loop order.valFacts.append exprfacts
     return (
         orderstate
-        pieceMark: ctx.order.pieces.length
+        pieceMark: order.pieces.length
         valBase: base
         live: false
-        pendMark: ctx.order.pends.length
+        pendMark: order.pends.length
         twice: 0
     )
 }
 
 # rtArgHole -- the hole an argument row's slot `hi` fills: @V@ for slot 0, @A1@
 # for slot 1, and so on; zero when no row spells it
-rtArgHole: function {ctx: Ctx.view hi: u64} out zast.nameid is {
+rtArgHole: function {pieces: PieceState.view hi: u64} out zast.nameid is {
     if hi == 0 then return (nativerows.rtHoleId slot: rtHole.slot.holeV)
     an: "A\{hi}"
-    return (ctx.pieces.rt.holeNamed name: an.stringView)
+    return (pieces.rt.holeNamed name: an.stringView)
 }
 
 # orderNamesTwiceArgs -- orderNamesTwice for each of an argument row's `count`
@@ -281,11 +282,11 @@ rtArgHole: function {ctx: Ctx.view hi: u64} out zast.nameid is {
 # (nativeHoleValues), so a method's @V@ fills slot 0, @A1@ slot 1, and a free
 # function's @A1@ slot 0.
 orderNamesTwiceArgs: function {
-    ctx: Ctx.view st: orderstate.borrow body: rtid count: u64 firstHole: u64
+    pieces: PieceState.view st: orderstate.borrow body: rtid count: u64 firstHole: u64
 } is {
     i: u64
     for i < count loop {
-        if (nativerows.rtTwice :ctx id: body hole: (rtArgHole :ctx hi: firstHole + i)) then (
+        if (nativerows.rtTwice :pieces id: body hole: (rtArgHole :pieces hi: firstHole + i)) then (
             argforms.orderNamesTwice
             :st
             slot: i
@@ -302,9 +303,9 @@ orderSlotTwice: function {st: orderstate.view slot: u64} out bool is {
 }
 
 # orderEnd -- a call's argument slots are read: release them.
-orderEnd: function {ctx: Ctx st: orderstate} is {
-    for ctx.order.vals.length > st.valBase loop ctx.order.vals.pop
-    for ctx.order.valFacts.length > st.valBase loop ctx.order.valFacts.pop
+orderEnd: function {order: OrderState st: orderstate} is {
+    for order.vals.length > st.valBase loop order.vals.pop
+    for order.valFacts.length > st.valBase loop order.valFacts.pop
 }
 
 # orderSlotText -- the argument text in slot `slot` of the call `st` opened, ""
@@ -324,16 +325,20 @@ orderSlotFacts: function {t: Ctx.view st: orderstate slot: u64} out exprfacts is
 
 # orderSetSlot -- fill slot `slot` of the call `st` opened with `text`, whose
 # facts are `tf`.
-orderSetSlot: function {ctx: Ctx st: orderstate slot: u64 text: String.take tf: exprfacts} is {
-    orderSetSlotAt :ctx base: st.valBase :slot :text :tf
+orderSetSlot: function {
+    order: OrderState st: orderstate slot: u64 text: String.take tf: exprfacts
+} is {
+    orderSetSlotAt :order base: st.valBase :slot :text :tf
 }
 
 # orderSetSlotAt -- orderSetSlot for the call whose slots begin at `base`.
-orderSetSlotAt: function {ctx: Ctx base: u64 slot: u64 text: String.take tf: exprfacts} is {
-    for ctx.order.vals.length <= (base + slot) loop ctx.order.vals.append String
-    for ctx.order.valFacts.length <= (base + slot) loop ctx.order.valFacts.append exprfacts
-    ctx.order.vals.set i: base + slot val: text
-    ctx.order.valFacts.set i: base + slot val: tf
+orderSetSlotAt: function {
+    order: OrderState base: u64 slot: u64 text: String.take tf: exprfacts
+} is {
+    for order.vals.length <= (base + slot) loop order.vals.append String
+    for order.valFacts.length <= (base + slot) loop order.valFacts.append exprfacts
+    order.vals.set i: base + slot val: text
+    order.valFacts.set i: base + slot val: tf
 }
 
 # orderPartWith -- one part of a call, whose facts are `tf`, just built from `mark`, placed in evaluation
@@ -374,7 +379,7 @@ orderPartWith: function {
 } is {
     pure: constant.not and tf.pure
     if st.live then {
-        if (hoistsWithValues :ctx :mark) or (constant.not and pure.not) then {
+        if (hoistsWithValues stmt: ctx.stmt :mark) or (constant.not and pure.not) then {
             orderSettleWaiting :prog :ctx :st all: true
         } else if constant.not then {
             orderSettleWaiting :prog :ctx :st all: false
@@ -391,13 +396,20 @@ orderPartWith: function {
                 }
             }
             if pv.length > 0 then {
-                orderAddPiece :ctx name: pn temp: 0 val: pv seq: (orderNextSeq :ctx)
+                (
+                    orderAddPiece
+                    order: ctx.order
+                    name: pn
+                    temp: 0
+                    val: pv
+                    seq: (orderNextSeq order: ctx.order)
+                )
             }
             i = i + 1
         }
     }
     if constant then {
-        orderSetSlot :ctx :st :slot :text :tf
+        orderSetSlot order: ctx.order :st :slot :text :tf
         return
     }
     st.live = true
@@ -413,7 +425,7 @@ orderPartWith: function {
         :pure
         facts: tf
         valBase: st.valBase
-        seq: (orderNextSeq :ctx)
+        seq: (orderNextSeq order: ctx.order)
         done: false
     )
     if (orderSlotTwice :st :slot) when tf.once or tf.stated.not then {
@@ -447,20 +459,20 @@ orderSettleWaiting: function {
         if (ctx.order.pends.get :i).done.not then orderSettle :prog :ctx :i
         i = i + 1
     }
-    orderDropWaiting :ctx :st
+    orderDropWaiting order: ctx.order :st
 }
 
 # orderDropWaiting -- the call's waiting parts, decided: off orderPends.
-orderDropWaiting: function {ctx: Ctx st: orderstate.view} is {
-    for ctx.order.pends.length > st.pendMark loop ctx.order.pends.pop
+orderDropWaiting: function {order: OrderState st: orderstate.view} is {
+    for order.pends.length > st.pendMark loop order.pends.pop
 }
 
 # hoistsWithValues -- whether a part built from `mark` recorded a hoist that is
 # still initialised where the statement declares it.
-hoistsWithValues: function {ctx: Ctx.view mark: hoistmark} out bool is {
+hoistsWithValues: function {stmt: StatementState.view mark: hoistmark} out bool is {
     i: mark.names
-    for i < ctx.stmt.argHoists.length loop {
-        if (ctx.stmt.argHoists.get :i).val.length > 0 then return true
+    for i < stmt.argHoists.length loop {
+        if (stmt.argHoists.get :i).val.length > 0 then return true
         i = i + 1
     }
     return false
@@ -517,7 +529,7 @@ orderSettle: function {
         }
     }
     if ct.length == 0 then {
-        orderSetSlotAt :ctx base: vb :slot :text tf: pf
+        orderSetSlotAt order: ctx.order base: vb :slot :text tf: pf
         return
     }
     tnum: ctx.order.ctr
@@ -525,23 +537,25 @@ orderSettle: function {
     tn: "_o\{tnum}"
     # an evaluation-order temp holds the part's value for the call, which owns
     # it: it is no address hoist and owes no destroy
-    orderAddPiece :ctx name: String temp: tnum + 1 val: text seq: sq
+    orderAddPiece order: ctx.order name: String temp: tnum + 1 val: text seq: sq
     ctx.stmt.argHoists.append (ArgHoist name: tn.copy val: String ctype: ct dtor: String)
     # the ordered temp's name
-    orderSetSlotAt :ctx base: vb :slot text: tn tf: pathFacts
+    orderSetSlotAt order: ctx.order base: vb :slot text: tn tf: pathFacts
 }
 
 # orderAddPiece -- an assignment that runs ahead of its call: to ordered temp
 # `temp` - 1, or to the hoist `name` when `temp` is 0. `seq` is when its part
 # was built.
-orderAddPiece: function {ctx: Ctx name: String.take temp: u64 val: String.take seq: u64} is {
-    ctx.order.pieces.append (OrderPiece :name :temp :val :seq done: false)
+orderAddPiece: function {
+    order: OrderState name: String.take temp: u64 val: String.take seq: u64
+} is {
+    order.pieces.append (OrderPiece :name :temp :val :seq done: false)
 }
 
 # orderNextSeq -- the next number on the order counter.
-orderNextSeq: function {ctx: Ctx} out u64 is {
-    s: ctx.order.seq
-    ctx.order.seq = s + 1
+orderNextSeq: function {order: OrderState} out u64 is {
+    s: order.seq
+    order.seq = s + 1
     return s
 }
 
@@ -550,29 +564,29 @@ orderNextSeq: function {ctx: Ctx} out u64 is {
 # none (orderClose completes it). The parts still waiting need no temp: the last
 # one evaluated, and the reading parts after the last one that may write, stay
 # in the call.
-orderFinish: function {ctx: Ctx st: orderstate} out String is {
+orderFinish: function {order: OrderState st: orderstate} out String is {
     wi: st.pendMark
-    for wi < ctx.order.pends.length loop {
+    for wi < order.pends.length loop {
         # a part settleAhead settled has its slot filled already
-        if (ctx.order.pends.get i: wi).done.not then {
+        if (order.pends.get i: wi).done.not then {
             wtext: String
             wslot: u64
             wf: exprfacts
             {
-                wp: ctx.order.pends.getMut i: wi
+                wp: order.pends.getMut i: wi
                 wtext swap wp.text
                 wslot = wp.slot
                 wf = wp.facts
             }
-            orderSetSlot :ctx :st slot: wslot text: wtext tf: wf
+            orderSetSlot :order :st slot: wslot text: wtext tf: wf
         }
         wi = wi + 1
     }
-    orderDropWaiting :ctx :st
+    orderDropWaiting :order :st
     prefix: String
     i: st.pieceMark
-    for i < ctx.order.pieces.length loop {
-        p: ctx.order.pieces.get :i
+    for i < order.pieces.length loop {
+        p: order.pieces.get :i
         # a piece settleAhead made a statement has run already
         if p.done.not then {
             if prefix.length == 0 then prefix.append "("
@@ -588,7 +602,7 @@ orderFinish: function {ctx: Ctx st: orderstate} out String is {
         }
         i = i + 1
     }
-    for ctx.order.pieces.length > st.pieceMark loop ctx.order.pieces.pop
+    for order.pieces.length > st.pieceMark loop order.pieces.pop
     return prefix
 }
 
@@ -610,7 +624,7 @@ orderClose: function {prefix: String.take callee: StringView args: StringView} o
 # pointer parameter is handed on.
 orderConstantWith: function {
     prog: Program.view
-    ctx: Ctx
+    literals: LiteralState
     n: astnode.view
     tf: exprfacts
     # the parameter takes the part by pointer
@@ -620,13 +634,13 @@ orderConstantWith: function {
     if cv.isConst then return true
     # a constant a unit or a list names reaches the C as its literal
     if tf.constant then return true
-    if n.atomstring when (values.litIndexOf :ctx nid: n.nodeid) > 0 then return true
+    if n.atomstring when (values.litIndexOf :literals nid: n.nodeid) > 0 then return true
     if n.dottedpath then {
         # an arm without a payload named on its type, and a literal's own String
         if (values.dottedTaggedTid :prog nid: n.nodeid).notZero then return true
         mid: aliasOrChildId :prog aliasId: n.nodeid childId: n.child
         if mid == zast.wellKnown.slot.wkString then {
-            return (values.bindLitIndex :prog :ctx n: (prog.ast.nodes.get i: n.parent)) > 0
+            return (values.bindLitIndex :prog :literals n: (prog.ast.nodes.get i: n.parent)) > 0
         }
     }
     if tf.fixedAddr then return true
@@ -744,11 +758,11 @@ emitInstanceMethodBody: function {
         posAt: ctx.order.posAt
     )
     for ctx.order.done.length < (wbase + pn) loop ctx.order.done.append false
-    ord: orderBegin :ctx slots: pn
+    ord: orderBegin order: ctx.order slots: pn
     k: u64
     pi: u64
     for k < pn loop {
-        pi = orderNextParam :ctx base: wbase
+        pi = orderNextParam order: ctx.order base: wbase
         k = k + 1
         isR: (pidsNm.get i: pi) == recvNm
         (
@@ -769,10 +783,10 @@ emitInstanceMethodBody: function {
             :ord
         )
     }
-    orderDropPositions :ctx base: wbase
-    oprefix: orderFinish :ctx st: ord
+    orderDropPositions order: ctx.order base: wbase
+    oprefix: orderFinish order: ctx.order st: ord
     args: orderJoinSlots :ctx st: ord count: pn
-    orderEnd :ctx st: ord
+    orderEnd order: ctx.order st: ord
     emitplan.noteFnUse :ctx tid: mco
     return (stating :facts from: callFacts text: (
         orderClose
@@ -804,7 +818,7 @@ orderMethodParam: function {
     slot: u64
     ord: orderstate.borrow
 } is {
-    mk: pendingHoistMark :ctx
+    mk: pendingHoistMark stmt: ctx.stmt
     one: String
     oneF: exprfacts
     constant: true
@@ -848,7 +862,7 @@ orderMethodParam: function {
             constant = (
                 orderConstantWith
                 :prog
-                :ctx
+                literals: ctx.literals
                 n: (prog.ast.nodes.get i: (writtenArgNode :prog :call pos: written - 1))
                 tf: oneF
                 byPtr: ctx.order.lastArgByPtr
@@ -1057,7 +1071,7 @@ emitOperatorCallForm: function {
     if (ztypecheck.isOperatorName name: mnO).not when (
         nativerows.wordOperatorRowBinds
         :prog
-        :ctx
+        pieces: ctx.pieces
         :method
         :owner
         mnId: opNameId
@@ -1272,14 +1286,14 @@ emitOrderedPairInto: function {
     tmpl: StringView
 } out String is {
     ord: argforms.orderPairArgs :prog :ctx :call :a :aForm :b :bForm twice: true
-    r: orderFinish :ctx st: ord
+    r: orderFinish order: ctx.order st: ord
     opened: r.length > 0
     t1: applyTmpl text: tmpl.string key: "R" val: lead
     t2: applyTmpl text: t1 key: "A" val: (orderSlotText t: ctx st: ord slot: 0)
     t3: applyTmpl text: t2 key: "B" val: (orderSlotText t: ctx st: ord slot: 1)
     r.append t3
     if opened then r.append ")"
-    orderEnd :ctx st: ord
+    orderEnd order: ctx.order st: ord
     return r
 }
 
@@ -1299,11 +1313,11 @@ userCreateCallC: function {
     pidsNm: ListVal zast.nameid
     recFieldLists :prog tid: fid names: pnames ids: pids nameIds: pidsNm
     pn: pnames.length
-    wbase: orderPositions :prog :ctx :call nameIds: pidsNm labelsOnly: true
-    ord: orderBegin :ctx slots: pn
+    wbase: orderPositions :prog order: ctx.order :call nameIds: pidsNm labelsOnly: true
+    ord: orderBegin order: ctx.order slots: pn
     k: u64
     for k < pn loop {
-        pi: orderNextParam :ctx base: wbase
+        pi: orderNextParam order: ctx.order base: wbase
         k = k + 1
         aNid: argforms.ctorArgNodeByLabel :prog :call label: (pidsNm.get i: pi)
         if aNid.notZero then {
@@ -1330,13 +1344,13 @@ userCreateCallC: function {
                 pid: (pids.get i: pi)
                 facts: dvF
             )
-            orderSetSlot :ctx st: ord slot: pi text: dv tf: dvF
+            orderSetSlot order: ctx.order st: ord slot: pi text: dv tf: dvF
         }
     }
-    orderDropPositions :ctx base: wbase
-    oprefix: orderFinish :ctx st: ord
+    orderDropPositions order: ctx.order base: wbase
+    oprefix: orderFinish order: ctx.order st: ord
     args: orderJoinSlots :ctx st: ord count: pn
-    orderEnd :ctx st: ord
+    orderEnd order: ctx.order st: ord
     mc3: spelledCname :ctx tid: fid
     return (
         stating
@@ -1486,7 +1500,7 @@ emitCtorDefaultsFill: function {
         }
         ccb: spelledCname :ctx tid: cco
         # a templated class creates through its template's function
-        if (nativerows.tmplClassRowOf :prog :ctx :tid) > 0 then {
+        if (nativerows.tmplClassRowOf :prog pieces: ctx.pieces :tid) > 0 then {
             noteMemberUse :ctx mono: tid member: memberWord.slot.create
             ccb = "\{spelledCname :ctx :tid}_create"
         }
@@ -1570,13 +1584,13 @@ userCreateCtor: function {
     cpiNm: ListVal zast.nameid
     recFieldLists :prog tid: cco names: cpn ids: cpi nameIds: cpiNm
     ccn: cpn.length
-    wbase: orderPositions :prog :ctx :call nameIds: cpiNm labelsOnly: false
-    ord: orderBegin :ctx slots: ccn
+    wbase: orderPositions :prog order: ctx.order :call nameIds: cpiNm labelsOnly: false
+    ord: orderBegin order: ctx.order slots: ccn
     k: u64
     for k < ccn loop {
-        ci: orderNextParam :ctx base: wbase
+        ci: orderNextParam order: ctx.order base: wbase
         k = k + 1
-        mk: pendingHoistMark :ctx
+        mk: pendingHoistMark stmt: ctx.stmt
         ca: (
             argforms.ctorArgFor
             :prog
@@ -1604,7 +1618,7 @@ userCreateCtor: function {
             constant = (
                 orderConstantWith
                 :prog
-                :ctx
+                literals: ctx.literals
                 n: (prog.ast.nodes.get i: (writtenArgNode :prog :call pos: wr - 1))
                 tf: cavF
                 byPtr: cavPtr
@@ -1626,10 +1640,10 @@ userCreateCtor: function {
             slot: ci
         )
     }
-    orderDropPositions :ctx base: wbase
-    oprefix: orderFinish :ctx st: ord
+    orderDropPositions order: ctx.order base: wbase
+    oprefix: orderFinish order: ctx.order st: ord
     cargs: orderJoinSlots :ctx st: ord count: ccn
-    orderEnd :ctx st: ord
+    orderEnd order: ctx.order st: ord
     ccb: named.string
     if ccb.length == 0 then ccb = spelledCname :ctx tid: cco
     return (
@@ -1681,15 +1695,15 @@ emitRecordCtor: function {
     wbase: u64
     na: fn0
     if fixed then {
-        wbase = orderPositions :prog :ctx :call nameIds: argNm labelsOnly: false
+        wbase = orderPositions :prog order: ctx.order :call nameIds: argNm labelsOnly: false
         na = argNm.length
     } else {
-        wbase = orderPositions :prog :ctx :call nameIds: fidsNm labelsOnly: false
+        wbase = orderPositions :prog order: ctx.order :call nameIds: fidsNm labelsOnly: false
     }
-    ord: orderBegin :ctx slots: fn0
+    ord: orderBegin order: ctx.order slots: fn0
     k: u64
     for k < na loop {
-        ai: orderNextParam :ctx base: wbase
+        ai: orderNextParam order: ctx.order base: wbase
         k = k + 1
         fi: ai
         if fixed then fi = argAt.get i: ai
@@ -1721,10 +1735,10 @@ emitRecordCtor: function {
         )
         fj = fj + 1
     }
-    orderDropPositions :ctx base: wbase
-    oprefix: orderFinish :ctx st: ord
+    orderDropPositions order: ctx.order base: wbase
+    oprefix: orderFinish order: ctx.order st: ord
     args: orderJoinSlots :ctx st: ord count: fn0
-    orderEnd :ctx st: ord
+    orderEnd order: ctx.order st: ord
     noteCreateAliasUse :ctx :tid
     rc: spelledCname :ctx :tid
     rc.append "_create"
@@ -1768,7 +1782,7 @@ orderSingletonField: function {
     slot: u64
     ord: orderstate.borrow
 } is {
-    mk: pendingHoistMark :ctx
+    mk: pendingHoistMark stmt: ctx.stmt
     avF: exprfacts
     av: argforms.fieldDefaultText :prog :ctx :tid nameId: fnameId fid: ffid facts: avF
     (
@@ -1806,7 +1820,7 @@ orderRecordField: function {
     slot: u64
     ord: orderstate.borrow
 } is {
-    mk: pendingHoistMark :ctx
+    mk: pendingHoistMark stmt: ctx.stmt
     ca: argforms.ctorArgFor :prog :call label: fnameId :posIdx
     avF: exprfacts
     av: argforms.fieldArgText :prog :ctx :tid :ca nameId: fnameId fid: ffid facts: avF
@@ -1839,7 +1853,7 @@ orderRecordField: function {
         constant = (
             orderConstantWith
             :prog
-            :ctx
+            literals: ctx.literals
             n: (prog.ast.nodes.get i: (writtenArgNode :prog :call pos: written - 1))
             tf: avF
             byPtr: byref
@@ -1891,29 +1905,29 @@ fieldIsReftypePtr: function {
 # base.
 orderPositions: function {
     prog: Program.view
-    ctx: Ctx
+    order: OrderState
     call: zast.callrow.view
     nameIds: (ListVal zast.nameid).view
     labelsOnly: bool
 } out u64 is {
-    wbase: ctx.order.writ.length
+    wbase: order.writ.length
     (
         argforms.ctorArgPositions
         :prog
         :call
         :nameIds
         :labelsOnly
-        writ: ctx.order.writ
-        posAt: ctx.order.posAt
+        writ: order.writ
+        posAt: order.posAt
     )
-    for ctx.order.done.length < (wbase + nameIds.length) loop ctx.order.done.append false
+    for order.done.length < (wbase + nameIds.length) loop order.done.append false
     return wbase
 }
 
 # orderNextParam -- the parameter to build next, marked built.
-orderNextParam: function {ctx: Ctx base: u64} out u64 is {
-    i: nextWrittenParam writ: ctx.order.writ done: ctx.order.done :base
-    ctx.order.done.set i: base + i val: true
+orderNextParam: function {order: OrderState base: u64} out u64 is {
+    i: nextWrittenParam writ: order.writ done: order.done :base
+    order.done.set i: base + i val: true
     return i
 }
 
@@ -1953,7 +1967,7 @@ orderArgAtWith: function {
     if nid.notZero then constant = (
         orderConstantWith
         :prog
-        :ctx
+        literals: ctx.literals
         n: (prog.ast.nodes.get i: nid)
         :tf
         :byPtr
@@ -1977,11 +1991,11 @@ orderArgAtWith: function {
 }
 
 # orderDropPositions -- a call's parameter positions are read: release them.
-orderDropPositions: function {ctx: Ctx base: u64} is {
-    for ctx.order.writ.length > base loop {
-        ctx.order.writ.pop
-        ctx.order.posAt.pop
-        ctx.order.done.pop
+orderDropPositions: function {order: OrderState base: u64} is {
+    for order.writ.length > base loop {
+        order.writ.pop
+        order.posAt.pop
+        order.done.pop
     }
 }
 
@@ -2071,14 +2085,14 @@ emitMetaCreateCall: function {
         recFieldLists :prog tid: et names: fnames ids: fids nameIds: fidsNm
         fn0: fnames.length
         # the fields' arguments are built in the order they are written
-        wbase: orderPositions :prog :ctx :call nameIds: fidsNm labelsOnly: true
-        ord: orderBegin :ctx slots: fn0
+        wbase: orderPositions :prog order: ctx.order :call nameIds: fidsNm labelsOnly: true
+        ord: orderBegin order: ctx.order slots: fn0
         k: u64
         for k < fn0 loop {
-            fi: orderNextParam :ctx base: wbase
+            fi: orderNextParam order: ctx.order base: wbase
             k = k + 1
             wr: ctx.order.writ.get i: wbase + fi
-            mk: pendingHoistMark :ctx
+            mk: pendingHoistMark stmt: ctx.stmt
             avF: exprfacts
             av: (
                 argforms.metaCreateFieldText
@@ -2105,7 +2119,7 @@ emitMetaCreateCall: function {
                 constant = (
                     orderConstantWith
                     :prog
-                    :ctx
+                    literals: ctx.literals
                     n: (prog.ast.nodes.get i: (writtenArgNode :prog :call pos: wr - 1))
                     tf: avF
                     byPtr: ptrField
@@ -2132,10 +2146,10 @@ emitMetaCreateCall: function {
                 slot: fi
             )
         }
-        orderDropPositions :ctx base: wbase
-        oprefix: orderFinish :ctx st: ord
+        orderDropPositions order: ctx.order base: wbase
+        oprefix: orderFinish order: ctx.order st: ord
         args: orderJoinSlots :ctx st: ord count: fn0
-        orderEnd :ctx st: ord
+        orderEnd order: ctx.order st: ord
         noteCreateUse :ctx tid: et
         ecb: spelledCname :ctx tid: et
         ecb.append "_meta_create"
@@ -2196,7 +2210,7 @@ emitFnCallWithFid: function {
     paramNameIds: ListVal zast.nameid
     types.recFieldIds :prog tid: fid ids: fpIds nameIds: paramNameIds
     argSlots: argSlotList :prog :call fpNameIds: paramNameIds
-    ord: orderBegin :ctx slots: paramNameIds.length
+    ord: orderBegin order: ctx.order slots: paramNameIds.length
     ai: u64
     for each argId: (zast.kidsOf ast: prog.ast span: call.arguments) loop {
         a: prog.ast.nodes.get i: argId
@@ -2219,7 +2233,7 @@ emitFnCallWithFid: function {
             ai = ai + 1
         }
     }
-    orderPrefix: orderFinish :ctx st: ord
+    orderPrefix: orderFinish order: ctx.order st: ord
     argTids: String
     pi: u64
     paramCount: paramNameIds.length
@@ -2237,7 +2251,7 @@ emitFnCallWithFid: function {
         )
         pi = pi + 1
     }
-    orderEnd :ctx st: ord
+    orderEnd order: ctx.order st: ord
     return (
         stating
         :facts
@@ -2471,7 +2485,7 @@ emitFnptrFieldCall: function {
     # each written argument fills the parameter its label names, and is built in
     # the order it is written
     slots: argSlotList :prog :call fpNameIds: argNmIds
-    ord: orderBegin :ctx slots: argIds.length
+    ord: orderBegin order: ctx.order slots: argIds.length
     ai: u64
     for each aId: (zast.kidsOf ast: prog.ast span: call.arguments) loop {
         a: prog.ast.nodes.get i: aId
@@ -2492,7 +2506,7 @@ emitFnptrFieldCall: function {
             )
         }
     }
-    oprefix: orderFinish :ctx st: ord
+    oprefix: orderFinish order: ctx.order st: ord
     args: String
     va: u64
     nslots: argIds.length
@@ -2505,7 +2519,7 @@ emitFnptrFieldCall: function {
         }
         va = va + 1
     }
-    orderEnd :ctx st: ord
+    orderEnd order: ctx.order st: ord
     callArgs: args.copy
     if direct.length > 0 then {
         dcall: direct.take
@@ -2579,10 +2593,10 @@ orderFnptrArg: function {
         )
         return
     }
-    mk: pendingHoistMark :ctx
+    mk: pendingHoistMark stmt: ctx.stmt
     avF: exprfacts
     av: emitExprWith :prog :ctx n: op facts: avF
-    constant: orderConstantWith :prog :ctx n: op tf: avF byPtr: false
+    constant: orderConstantWith :prog literals: ctx.literals n: op tf: avF byPtr: false
     (
         orderPartWith
         :prog
@@ -2641,7 +2655,7 @@ emitFnptrLocalCall: function {
     # each written argument fills the parameter its label names, and is built in
     # the order it is written
     slots: argSlotList :prog :call fpNameIds: pNmIds
-    ord: orderBegin :ctx slots: pIds.length
+    ord: orderBegin order: ctx.order slots: pIds.length
     ai: u64
     for each aId: (zast.kidsOf ast: prog.ast span: call.arguments) loop {
         a: prog.ast.nodes.get i: aId
@@ -2662,7 +2676,7 @@ emitFnptrLocalCall: function {
             )
         }
     }
-    oprefix: orderFinish :ctx st: ord
+    oprefix: orderFinish order: ctx.order st: ord
     args: String
     va: u64
     nslots: pIds.length
@@ -2675,7 +2689,7 @@ emitFnptrLocalCall: function {
         }
         va = va + 1
     }
-    orderEnd :ctx st: ord
+    orderEnd order: ctx.order st: ord
     return (
         stating
         :facts
@@ -2698,7 +2712,7 @@ emitUserFnCall: function {
     fpIdsNm: ListVal zast.nameid
     types.recFieldIds :prog tid: fid ids: fpIds nameIds: fpIdsNm
     slots: argSlotList :prog :call fpNameIds: fpIdsNm
-    ord: orderBegin :ctx slots: fpIdsNm.length
+    ord: orderBegin order: ctx.order slots: fpIdsNm.length
     ai8: u64
     for each aId: (zast.kidsOf ast: prog.ast span: call.arguments) loop {
         a: prog.ast.nodes.get i: aId
@@ -2722,7 +2736,7 @@ emitUserFnCall: function {
             ai8 = ai8 + 1
         }
     }
-    oprefix: orderFinish :ctx st: ord
+    oprefix: orderFinish order: ctx.order st: ord
     args: String
     emitted: u64
     pp: u64
@@ -2759,7 +2773,7 @@ emitUserFnCall: function {
         }
         pp = pp + 1
     }
-    orderEnd :ctx st: ord
+    orderEnd order: ctx.order st: ord
     emitplan.noteFnUse :ctx tid: fid
     return (
         stating
@@ -2788,7 +2802,7 @@ orderUserFnArg: function {
     slot: u64
     ord: orderstate.borrow
 } is {
-    mk: pendingHoistMark :ctx
+    mk: pendingHoistMark stmt: ctx.stmt
     txtF: exprfacts
     txt: (
         argforms.userFnArgTextWith
@@ -2800,7 +2814,14 @@ orderUserFnArg: function {
         :argOpNode
         facts: txtF
     )
-    constant: orderConstantWith :prog :ctx n: argOpNode tf: txtF byPtr: ctx.order.lastArgByPtr
+    constant: (
+        orderConstantWith
+        :prog
+        literals: ctx.literals
+        n: argOpNode
+        tf: txtF
+        byPtr: ctx.order.lastArgByPtr
+    )
     (
         orderPartWith
         :prog
@@ -2972,7 +2993,7 @@ emitUndeclaredCall: function {
     # left here is a plain read
     yk: ctx.gen.yieldTempK.get key: call.nodeid
     if yk.some then {
-        yvN: forloops.genSynthField :prog :ctx which: gensynth.yieldSlot k: yk
+        yvN: forloops.genSynthField :prog gen: ctx.gen which: gensynth.yieldSlot k: yk
         # the resume value's field of the instance, read through its pointer
         return (
             stating
@@ -3057,7 +3078,7 @@ tmplInstCreate: function {
 } out String is {
     if isCreate.not then return "".string
     ct: stampIdOf :prog nid: call.nodeid
-    if (nativerows.tmplClassRowOf :prog :ctx tid: ct) == 0 then return "".string
+    if (nativerows.tmplClassRowOf :prog pieces: ctx.pieces tid: ct) == 0 then return "".string
     cco: userCreateFn :prog tid: ct
     if cco.isZero then return "".string
     noteMemberUse :ctx mono: ct member: memberWord.slot.create
@@ -3520,8 +3541,8 @@ emitDeclaredOperator: function {
     neg: bool
     facts: exprfacts.borrow
 } out String is {
-    ord: orderBegin :ctx slots: 2
-    mk: pendingHoistMark :ctx
+    ord: orderBegin order: ctx.order slots: 2
+    mk: pendingHoistMark stmt: ctx.stmt
     recv: String
     recvF: exprfacts
     # the place `recv` addresses, "" when the receiver is a pointer already
@@ -3566,7 +3587,7 @@ emitDeclaredOperator: function {
         byPtr: true
         slot: 0
     )
-    mkR: pendingHoistMark :ctx
+    mkR: pendingHoistMark stmt: ctx.stmt
     rvF: exprfacts
     rv: argforms.operatorOperandText :prog :ctx :call :rhsNid facts: rvF
     (
@@ -3581,7 +3602,7 @@ emitDeclaredOperator: function {
         byPtr: ctx.order.lastArgByPtr
         slot: 1
     )
-    r: orderFinish :ctx st: ord
+    r: orderFinish order: ctx.order st: ord
     opened: r.length > 0
     if neg then r.append "!"
     if (isDispatchableTid :prog tid: owner) then {
@@ -3610,7 +3631,7 @@ emitDeclaredOperator: function {
         r.append ")"
     }
     if opened then r.append ")"
-    orderEnd :ctx st: ord
+    orderEnd order: ctx.order st: ord
     return (stating :facts from: callFacts text: r)
 }
 
@@ -3638,8 +3659,8 @@ emitListEqOperator: function {
     neg: bool
     facts: exprfacts.borrow
 } out String is {
-    ord: orderBegin :ctx slots: 2
-    mk: pendingHoistMark :ctx
+    ord: orderBegin order: ctx.order slots: 2
+    mk: pendingHoistMark stmt: ctx.stmt
     laF: exprfacts
     la: listOperandAddr :prog :ctx nid: lhsNid tid: owner facts: laF
     (
@@ -3654,7 +3675,7 @@ emitListEqOperator: function {
         byPtr: true
         slot: 0
     )
-    mkR: pendingHoistMark :ctx
+    mkR: pendingHoistMark stmt: ctx.stmt
     raF: exprfacts
     ra: listOperandAddr :prog :ctx nid: rhsNid tid: owner facts: raF
     (
@@ -3669,7 +3690,7 @@ emitListEqOperator: function {
         byPtr: true
         slot: 1
     )
-    r: orderFinish :ctx st: ord
+    r: orderFinish order: ctx.order st: ord
     opened: r.length > 0
     if neg then r.append "!"
     noteMemberUse :ctx mono: owner member: memberWord.slot.eq
@@ -3680,7 +3701,7 @@ emitListEqOperator: function {
     r.append (orderSlotText t: ctx st: ord slot: 1)
     r.append ")"
     if opened then r.append ")"
-    orderEnd :ctx st: ord
+    orderEnd order: ctx.order st: ord
     return (stating :facts from: callFacts text: r)
 }
 
@@ -3763,7 +3784,7 @@ typedefMethodOwner: function {
     return (
         memberreads.chaseStrTypedef
         :prog
-        :ctx
+        known: ctx.known
         tid: (chaseAggregateTypedef :prog :ctx :tid)
     )
 }
@@ -3799,8 +3820,8 @@ applyTmpl: function {text: String key: StringView val: StringView} out String is
 
 # rowOfFn -- the row implementing native function `fid` (rowNameOfFn); 0 when
 # no row does
-rowOfFn: function {prog: Program.view ctx: Ctx.view fid: ztypes.tid} out u64 is {
-    return (ctx.pieces.rows.ofName n: (rowNameOfFn :prog :ctx :fid))
+rowOfFn: function {prog: Program.view pieces: PieceState.view fid: ztypes.tid} out u64 is {
+    return (pieces.rows.ofName n: (rowNameOfFn :prog :pieces :fid))
 }
 
 # rowNameOfFn -- the key of the row implementing native function `fid`, an
@@ -3808,7 +3829,9 @@ rowOfFn: function {prog: Program.view ctx: Ctx.view fid: ztypes.tid} out u64 is 
 # unit that declares it (a hidden subunit's or an inline unit's members are
 # their file unit's, ztypecheck.unitDeclOfTid), its name and, for a member of a
 # type, the type's. No file (impl 0) when the program reaches none for it.
-rowNameOfFn: function {prog: Program.view ctx: Ctx.view fid: ztypes.tid} out zemitrows.rowname is {
+rowNameOfFn: function {
+    prog: Program.view pieces: PieceState.view fid: ztypes.tid
+} out zemitrows.rowname is {
     none: zemitrows.rowname impl: 0 typeName: zast.nameid.zero name: zast.nameid.zero
     d: originTidOf :prog tid: fid
     if d.isZero then d = fid
@@ -3816,7 +3839,7 @@ rowNameOfFn: function {prog: Program.view ctx: Ctx.view fid: ztypes.tid} out zem
     did: prog.typing.declIdOfType typeId: d
     if did.isZero then return none
     impl: (
-        ctx.pieces.rows.fileOfUnit
+        pieces.rows.fileOfUnit
         ud: (ztypecheck.unitDeclOfTid reg: prog.reg typing: prog.typing tid: d)
     )
     if impl == 0 then return none
@@ -3831,10 +3854,10 @@ rowNameOfFn: function {prog: Program.view ctx: Ctx.view fid: ztypes.tid} out zem
 
 # methodFragRow -- the row implementing native method `mfid` when a fragment
 # implements it, its C the fragment's function; 0 otherwise
-methodFragRow: function {prog: Program.view ctx: Ctx.view mfid: ztypes.tid} out u64 is {
-    row: rowOfFn :prog :ctx fid: mfid
+methodFragRow: function {prog: Program.view pieces: PieceState.view mfid: ztypes.tid} out u64 is {
+    row: rowOfFn :prog :pieces fid: mfid
     if row == 0 then return 0
-    if (ctx.pieces.rows.rows.get i: row).fragment.not then return 0
+    if (pieces.rows.rows.get i: row).fragment.not then return 0
     return row
 }
 
@@ -3855,7 +3878,7 @@ nativeMethodCallOpen: function {fc: StringView mn: StringView recv: StringView} 
 # demandMethodRow -- what calling native method `mfid` demands, through the
 # fragment row that implements it (demandNativeRow); nothing when none does
 demandMethodRow: function {prog: Program.view ctx: Ctx mfid: ztypes.tid} is {
-    row: methodFragRow :prog :ctx :mfid
+    row: methodFragRow :prog pieces: ctx.pieces :mfid
     if row > 0 then nativepieces.demandNativeRow :ctx :row
 }
 
@@ -3928,15 +3951,15 @@ emitClassNativeCall: function {
     if bnid.isZero then bnid = valRecv
     if bnid.isZero then return "".string
     mnId: aliasChildNameId :prog n: calr
-    cid: nativerows.nativeCallOwner :prog :ctx :bnid :valRecv :mnId :ownerTid
+    cid: nativerows.nativeCallOwner :prog pieces: ctx.pieces :bnid :valRecv :mnId :ownerTid
     if cid.isZero then return "".string
     # a templated class's methods are its template's (emitTmplClassMono), under
     # the instance's own name, with no row of their own
-    tmplInst: (nativerows.tmplClassRowOf :prog :ctx tid: cid) > 0
+    tmplInst: (nativerows.tmplClassRowOf :prog pieces: ctx.pieces tid: cid) > 0
     mtid: (prog.typing.declChildOfId parentTypeId: cid nameId: mnId).or d: ztypes.tid.zero
     if mtid.isZero then return "".string
     if tmplInst.not then {
-        row: methodFragRow :prog :ctx mfid: mtid
+        row: methodFragRow :prog pieces: ctx.pieces mfid: mtid
         if row == 0 then return "".string
         nativepieces.demandNativeRow :ctx :row
     }
@@ -3964,11 +3987,11 @@ emitClassNativeCall: function {
         argNameIds.append (pNameIds.get i: k + 1)
         k = k + 1
     }
-    wbase: orderPositions :prog :ctx :call nameIds: argNameIds labelsOnly: true
-    ord: orderBegin :ctx slots: na
+    wbase: orderPositions :prog order: ctx.order :call nameIds: argNameIds labelsOnly: true
+    ord: orderBegin order: ctx.order slots: na
     done: u64
     for done < na loop {
-        best: orderNextParam :ctx base: wbase
+        best: orderNextParam order: ctx.order base: wbase
         pnb: argNameIds.get i: best
         lnid: argforms.ctorArgNodeByLabel :prog :call label: pnb
         if lnid.isZero when (
@@ -3977,7 +4000,7 @@ emitClassNativeCall: function {
             nameId: pnb
         ) then {
             # an argument the call leaves out is its declared default
-            dmk: pendingHoistMark :ctx
+            dmk: pendingHoistMark stmt: ctx.stmt
             dF: exprfacts
             dt: (
                 paramDefaultText
@@ -4024,15 +4047,15 @@ emitClassNativeCall: function {
         }
         done = done + 1
     }
-    orderDropPositions :ctx base: wbase
-    r: orderFinish :ctx st: ord
+    orderDropPositions order: ctx.order base: wbase
+    r: orderFinish order: ctx.order st: ord
     opened: r.length > 0
     r.append (nativeMethodCallOpen fc: fc.stringView mn: mn.stringView recv: recvExpr.stringView)
     r.append ", "
     r.append (orderJoinSlots :ctx st: ord count: na)
     r.append ")"
     if opened then r.append ")"
-    orderEnd :ctx st: ord
+    orderEnd order: ctx.order st: ord
     return (stating :facts from: callFacts text: r)
 }
 
@@ -4053,11 +4076,11 @@ emitClassNativeRead: function {
     if (prog.reg.typetypeOf typeId: cid) != ztypes.ztypetype.classType then return "".string
     # an instance of a templated class reads through its template's function,
     # which no row of its own implements
-    tmplInst: (nativerows.tmplClassRowOf :prog :ctx tid: cid) > 0
+    tmplInst: (nativerows.tmplClassRowOf :prog pieces: ctx.pieces tid: cid) > 0
     if tmplInst.not when (originTidOf :prog tid: cid).notZero then return "".string
     row: u64
     if tmplInst.not then {
-        row = methodFragRow :prog :ctx :mfid
+        row = methodFragRow :prog pieces: ctx.pieces :mfid
         if row == 0 then return "".string
     }
     pNames: List String
@@ -4167,14 +4190,14 @@ emitNativeCreate: function {
     pidsNm: ListVal zast.nameid
     recFieldLists :prog tid: crid names: pnames ids: pids nameIds: pidsNm
     pn: pnames.length
-    wbase: orderPositions :prog :ctx :call nameIds: pidsNm labelsOnly: true
+    wbase: orderPositions :prog order: ctx.order :call nameIds: pidsNm labelsOnly: true
     slots: argSlotList :prog :call fpNameIds: pidsNm
-    ord: orderBegin :ctx slots: pn
+    ord: orderBegin order: ctx.order slots: pn
     k: u64
     for k < pn loop {
-        pi: orderNextParam :ctx base: wbase
+        pi: orderNextParam order: ctx.order base: wbase
         k = k + 1
-        mk: pendingHoistMark :ctx
+        mk: pendingHoistMark stmt: ctx.stmt
         astrF: exprfacts
         argAt: argBoundTo :slots slot: pi
         astr: (
@@ -4202,12 +4225,12 @@ emitNativeCreate: function {
             slot: pi
         )
     }
-    orderDropPositions :ctx base: wbase
-    oprefix: orderFinish :ctx st: ord
+    orderDropPositions order: ctx.order base: wbase
+    oprefix: orderFinish order: ctx.order st: ord
     args: orderJoinSlots :ctx st: ord count: pn
-    orderEnd :ctx st: ord
+    orderEnd order: ctx.order st: ord
     wcn: spelledCname :ctx tid: cid
-    typeUseAdd :ctx tid: cid
+    typeUseAdd reach: ctx.reach tid: cid
     wcn.append "_create"
     return (
         stating
@@ -4249,7 +4272,7 @@ emitNativeFreeFnCall: function {
     if (prog.reg.isNativeOf tid: fid).not then return "".string
     duo: types.definedInUnitName :prog tid: fid
     if duo.length == 0 then return "".string
-    rowKey: rowNameOfFn :prog :ctx :fid
+    rowKey: rowNameOfFn :prog pieces: ctx.pieces :fid
     row: ctx.pieces.rows.ofName n: rowKey
     if row == 0 then return "".string
     r: ctx.pieces.rows.rows.get i: row
@@ -4257,7 +4280,7 @@ emitNativeFreeFnCall: function {
     # a function a templated class implements is the template function of the
     # instance it answers
     callee: "z_\{un}_\{mn}"
-    viaMember: rowVia :ctx :r
+    viaMember: rowVia pieces: ctx.pieces :r
     # the row's body, when the row is one rather than a fragment's function
     body: rtid
     if viaMember.length > 0 then {
@@ -4294,11 +4317,11 @@ emitNativeFreeFnCall: function {
         )
     }
     m: pn.length
-    wbase: orderPositions :prog :ctx :call nameIds: pidlNm labelsOnly: false
-    ord: orderBegin :ctx slots: m
+    wbase: orderPositions :prog order: ctx.order :call nameIds: pidlNm labelsOnly: false
+    ord: orderBegin order: ctx.order slots: m
     # an argument a body names twice is read into a temporary first; a free
     # function has no receiver, so its slot 0 is @A1@
-    if body.notZero then orderNamesTwiceArgs :ctx st: ord :body count: m firstHole: 1
+    if body.notZero then orderNamesTwiceArgs pieces: ctx.pieces st: ord :body count: m firstHole: 1
     (
         orderNativeFreeArgs
         :prog
@@ -4312,14 +4335,14 @@ emitNativeFreeFnCall: function {
         :pidlNm
         :viaTids
     )
-    orderDropPositions :ctx base: wbase
-    oprefix: orderFinish :ctx st: ord
+    orderDropPositions order: ctx.order base: wbase
+    oprefix: orderFinish order: ctx.order st: ord
     if body.notZero then {
         rn: ListVal zast.nameid
         rv: List String
         nativeHoleValues t: ctx st: ord count: m firstHole: 1 names: rn vals: rv
-        orderEnd :ctx st: ord
-        adr: nativerows.rowLabel :ctx :prog n: rowKey
+        orderEnd order: ctx.order st: ord
+        adr: nativerows.rowLabel pieces: ctx.pieces :prog n: rowKey
         filled: (
             nativerows.nativeBodyFill
             :prog
@@ -4338,7 +4361,7 @@ emitNativeFreeFnCall: function {
         )
     }
     args: orderJoinSlots :ctx st: ord count: m
-    orderEnd :ctx st: ord
+    orderEnd order: ctx.order st: ord
     return (
         stating
         :facts
@@ -4365,9 +4388,9 @@ orderNativeFreeArgs: function {
 } is {
     k: u64
     for k < count loop {
-        j: orderNextParam :ctx base: wbase
+        j: orderNextParam order: ctx.order base: wbase
         k = k + 1
-        mk: pendingHoistMark :ctx
+        mk: pendingHoistMark stmt: ctx.stmt
         avF: exprfacts
         av: (
             argforms.emitNativeArg
@@ -4406,9 +4429,9 @@ orderNativeFreeArgs: function {
 
 # rowVia -- the member row `r` (a native free function's) names `via`; ""
 # when it names none
-rowVia: function {ctx: Ctx.view r: zemitrows.nativerow} out String is {
+rowVia: function {pieces: PieceState.view r: zemitrows.nativerow} out String is {
     if r.via.isZero then return String
-    return (ctx.pieces.demands.nameText id: r.via).string
+    return (pieces.demands.nameText id: r.via).string
 }
 
 # viaArgText -- argument `j`, of a call whose template function takes the types
@@ -4625,7 +4648,7 @@ appendSlottedDispatchArgs: function {
     dargs: String
 } out String is {
     argSlots: argSlotList :prog :call fpNameIds: vpn
-    ord: orderBegin :ctx slots: vpn.length
+    ord: orderBegin order: ctx.order slots: vpn.length
     slotIdx: u64
     for each aId: (zast.kidsOf ast: prog.ast span: call.arguments) loop {
         a: prog.ast.nodes.get i: aId
@@ -4644,7 +4667,7 @@ appendSlottedDispatchArgs: function {
             slotIdx = slotIdx + 1
         }
     }
-    orderPrefix: orderFinish :ctx st: ord
+    orderPrefix: orderFinish order: ctx.order st: ord
     pi: u64
     paramCount: vpn.length
     for pi < paramCount loop {
@@ -4655,7 +4678,7 @@ appendSlottedDispatchArgs: function {
         }
         pi = pi + 1
     }
-    orderEnd :ctx st: ord
+    orderEnd order: ctx.order st: ord
     return orderPrefix
 }
 
@@ -4667,7 +4690,7 @@ appendPlainDispatchArgs: function {
     call: zast.callrow.view
     dargs: String
 } out String is {
-    ord: orderBegin :ctx slots: call.arguments.count
+    ord: orderBegin order: ctx.order slots: call.arguments.count
     i: u64
     w: u64
     for i < call.arguments.count loop {
@@ -4679,7 +4702,7 @@ appendPlainDispatchArgs: function {
             w = w + 1
         }
     }
-    prefix: orderFinish :ctx st: ord
+    prefix: orderFinish order: ctx.order st: ord
     wi: u64
     for wi < w loop {
         vo: orderSlotText t: ctx st: ord slot: wi
@@ -4689,7 +4712,7 @@ appendPlainDispatchArgs: function {
         }
         wi = wi + 1
     }
-    orderEnd :ctx st: ord
+    orderEnd order: ctx.order st: ord
     return prefix
 }
 
@@ -4702,10 +4725,17 @@ orderDispatchArg: function {
     slot: u64
     ord: orderstate.borrow
 } is {
-    mk: pendingHoistMark :ctx
+    mk: pendingHoistMark stmt: ctx.stmt
     txtF: exprfacts
     txt: argforms.dispatchArgText :prog :ctx n: op facts: txtF
-    constant: orderConstantWith :prog :ctx n: op tf: txtF byPtr: ctx.order.lastArgByPtr
+    constant: (
+        orderConstantWith
+        :prog
+        literals: ctx.literals
+        n: op
+        tf: txtF
+        byPtr: ctx.order.lastArgByPtr
+    )
     (
         orderPartWith
         :prog

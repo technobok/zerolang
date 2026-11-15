@@ -46,7 +46,7 @@ ternaryCondPart: function {
     guarded: bool
     facts: exprfacts.borrow
 } out String is {
-    mk: openInPlace :ctx :guarded
+    mk: openInPlace stmt: ctx.stmt :guarded
     cvF: exprfacts
     cv: argforms.valueExprC :prog :ctx n: (prog.ast.nodes.get i: op) facts: cvF
     tw: truthyCondText :prog :ctx n: (prog.ast.nodes.get i: op) raw: cv.stringView
@@ -55,13 +55,13 @@ ternaryCondPart: function {
         cv = tw.take
         cvF = values.operandFacts e: cvF place: false
     }
-    if guarded when (hoistsGrew :ctx mark: mk) then return (
+    if guarded when (hoistsGrew stmt: ctx.stmt mark: mk) then return (
         stating
         :facts
         from: callFacts
-        text: (assignInPlace :ctx mark: mk text: cv.stringView)
+        text: (assignInPlace stmt: ctx.stmt mark: mk text: cv.stringView)
     )
-    closeInPlace :ctx mark: mk
+    closeInPlace stmt: ctx.stmt mark: mk
     return (stating :facts from: cvF text: cv)
 }
 
@@ -75,10 +75,10 @@ armInPlace: function {
     ref: false
     facts: exprfacts.borrow
 } out String is {
-    mk: openInPlace :ctx guarded: true
+    mk: openInPlace stmt: ctx.stmt guarded: true
     vxF: exprfacts
     vx: values.armValueExpr :prog :ctx :n facts: vxF
-    if (hoistsGrew :ctx mark: mk) then {
+    if (hoistsGrew stmt: ctx.stmt mark: mk) then {
         # the address is taken of the value itself, which may be a place; the
         # hoists the value reads are assigned ahead of it
         part: vx.copy
@@ -98,10 +98,10 @@ armInPlace: function {
             stating
             :facts
             from: callFacts
-            text: (assignInPlace :ctx mark: mk text: part.stringView)
+            text: (assignInPlace stmt: ctx.stmt mark: mk text: part.stringView)
         )
     }
-    closeInPlace :ctx mark: mk
+    closeInPlace stmt: ctx.stmt mark: mk
     if ref then return (
         argforms.armRefLeaf
         :prog
@@ -254,12 +254,12 @@ ifDiverges: function {
 # dropPtrVid -- forget that `vid` arrives by pointer, for the scope in which a
 # narrowing has shadowed it with its payload VALUE; the caller re-appends it
 # when that scope closes.
-dropPtrVid: function {ctx: Ctx vid: ztypes.vid} is {
+dropPtrVid: function {stmt: StatementState vid: ztypes.vid} is {
     kept: ListVal ztypes.vid
-    for each v: ctx.stmt.ptrVids loop {
+    for each v: stmt.ptrVids loop {
         if v != vid then kept.append from: v
     }
-    ctx.stmt.ptrVids = kept.take
+    stmt.ptrVids = kept.take
 }
 
 # needsValueDeref -- a pointer-valued expression standing where a VALUE is
@@ -304,28 +304,28 @@ vidRemove: function as { T: AnyRef.generic } in {xs: List T vid: ztypes.vid} is 
 # scope that narrows a name saves this pair on the way in and hands it back on
 # the way out, so no arm's narrowing outlives the arm.
 restoreNarrow: function {
-    ctx: Ctx
+    narrow: NarrowState
     vid: ztypes.vid
     prevVal: StringView
     prevFacts: exprfacts
     prevTid: ztypes.tid
 } is {
     if prevVal.length > 0 then {
-        varEntrySet xs: ctx.narrow.box :vid val: prevVal facts: prevFacts
+        varEntrySet xs: narrow.box :vid val: prevVal facts: prevFacts
     } else {
-        vidRemove xs: ctx.narrow.box :vid
+        vidRemove xs: narrow.box :vid
     }
     if prevTid.notZero then {
-        varTidSet xs: ctx.narrow.tid :vid tid: prevTid
+        varTidSet xs: narrow.tid :vid tid: prevTid
     } else {
-        vidRemove xs: ctx.narrow.tid :vid
+        vidRemove xs: narrow.tid :vid
     }
 }
 
 # restoreNarrowSeeds -- put back every narrowing a scope's seeds displaced, one
 # restoreNarrow per saved pair.
 restoreNarrowSeeds: function {
-    ctx: Ctx
+    narrow: NarrowState
     svids: (ListVal ztypes.vid).view
     prevV: (List String).view
     prevF: (ListVal exprfacts).view
@@ -337,7 +337,7 @@ restoreNarrowSeeds: function {
         rt: prevT.get i: ri
         (
             restoreNarrow
-            :ctx
+            :narrow
             vid: (svids.get i: ri)
             prevFacts: (prevF.get i: ri)
             prevVal: rv.stringView
@@ -490,27 +490,27 @@ dottedBaseNodeId: function {prog: Program.view n: astnode.view} out zast.nodeid 
 # and closeInPlace or wrapInPlace ends it. `guarded` says it runs only on some
 # paths, or at every loop test, so nothing evaluated before it may be moved
 # into it (settleAhead).
-openInPlace: function {ctx: Ctx guarded: bool} out hoistmark is {
-    mk: pendingHoistMark :ctx
+openInPlace: function {stmt: StatementState guarded: bool} out hoistmark is {
+    mk: pendingHoistMark :stmt
     mk.guarded = guarded
-    ctx.stmt.argHoistFloor = mk.names
-    ctx.stmt.argHoistRawFloor = mk.raw
-    if guarded then ctx.stmt.guardDepth = ctx.stmt.guardDepth + 1
+    stmt.argHoistFloor = mk.names
+    stmt.argHoistRawFloor = mk.raw
+    if guarded then stmt.guardDepth = stmt.guardDepth + 1
     return mk
 }
 
 # hoistsGrew -- whether the condition begun at `mark` recorded a hoist of its own.
-hoistsGrew: function {ctx: Ctx.view mark: hoistmark} out bool is {
-    if ctx.stmt.argHoists.length > mark.names then return true
-    return ctx.stmt.argHoistRaw.length > mark.raw
+hoistsGrew: function {stmt: StatementState.view mark: hoistmark} out bool is {
+    if stmt.argHoists.length > mark.names then return true
+    return stmt.argHoistRaw.length > mark.raw
 }
 
 # closeInPlace -- end what openInPlace began, for a condition that recorded no
 # hoist of its own: the pending hoists around it are the enclosing statement's.
-closeInPlace: function {ctx: Ctx mark: hoistmark} is {
-    ctx.stmt.argHoistFloor = mark.floor
-    ctx.stmt.argHoistRawFloor = mark.rawFloor
-    if mark.guarded then ctx.stmt.guardDepth = ctx.stmt.guardDepth - 1
+closeInPlace: function {stmt: StatementState mark: hoistmark} is {
+    stmt.argHoistFloor = mark.floor
+    stmt.argHoistRawFloor = mark.rawFloor
+    if mark.guarded then stmt.guardDepth = stmt.guardDepth - 1
 }
 
 # appendInPlaceCond -- end the condition begun at `mark` and append it: its
@@ -523,11 +523,11 @@ appendInPlaceCond: function {
     text: StringView
     dst: String.borrow
 } is {
-    if (hoistsGrew :ctx :mark) then {
+    if (hoistsGrew stmt: ctx.stmt :mark) then {
         dst.append (assignInPlaceTest :ctx :mark cond: text)
         return
     }
-    closeInPlace :ctx :mark
+    closeInPlace stmt: ctx.stmt :mark
     dst.append text
 }
 
@@ -538,17 +538,17 @@ appendInPlaceCond: function {
 # skips the part leaves it zero, which its release ignores. A raw hoist is a
 # statement no expression can hold; the answer is then "" and the caller builds
 # the whole construct as statements instead.
-assignInPlace: function {ctx: Ctx mark: hoistmark text: StringView} out String is {
-    if ctx.stmt.argHoistRaw.length > mark.raw then {
-        closeInPlace :ctx :mark
+assignInPlace: function {stmt: StatementState mark: hoistmark text: StringView} out String is {
+    if stmt.argHoistRaw.length > mark.raw then {
+        closeInPlace :stmt :mark
         return "".string
     }
     r: "(".string
     i: mark.names
-    for i < ctx.stmt.argHoists.length loop {
+    for i < stmt.argHoists.length loop {
         # an inner part already assigns its own hoists where it runs, and left
         # no initialiser
-        ph: ctx.stmt.argHoists.getMut :i
+        ph: stmt.argHoists.getMut :i
         if ph.val.length > 0 then {
             vl: String
             vl swap ph.val
@@ -556,7 +556,7 @@ assignInPlace: function {ctx: Ctx mark: hoistmark text: StringView} out String i
         }
         i = i + 1
     }
-    closeInPlace :ctx :mark
+    closeInPlace :stmt :mark
     if r.length == 1 then return text.string
     r.append text
     r.append ")"
@@ -600,15 +600,15 @@ assignInPlaceTest: function {ctx: Ctx mark: hoistmark cond: StringView} out Stri
         i = i + 1
     }
     if rel.length == 0 then {
-        closeInPlace :ctx :mark
+        closeInPlace stmt: ctx.stmt :mark
         r.append cond
         r.append ")"
         return r
     }
     ltmp: FnTemps n: 0 listFrees: List OwedFree
-    cc: "_cc\{values.tmpNext :ctx tmp: ltmp}"
+    cc: "_cc\{values.tmpNext stmt: ctx.stmt tmp: ltmp}"
     ctx.stmt.argHoists.append (ArgHoist name: cc.copy val: String ctype: "bool".string dtor: String)
-    closeInPlace :ctx :mark
+    closeInPlace stmt: ctx.stmt :mark
     r.append "\{cc} = \{condInParens :cond}\{rel}, \{cc})"
     return r
 }
@@ -620,13 +620,13 @@ assignInPlaceTest: function {ctx: Ctx mark: hoistmark cond: StringView} out Stri
 # they owed and yields the test.
 wrapInPlace: function {ctx: Ctx mark: hoistmark cond: StringView} out String is {
     ltmp: FnTemps n: 0 listFrees: List OwedFree
-    ccN: values.tmpNext :ctx tmp: ltmp
+    ccN: values.tmpNext stmt: ctx.stmt tmp: ltmp
     lbuf: String
     flushArgHoists :ctx ind: " " tmp: ltmp buf: lbuf
     cw: condInParens :cond
     lbuf.append " bool _cc\{ccN} = \{cw};"
     flushBlockFrees tmp: ltmp lL: 0 diverged: false buf: lbuf
-    closeInPlace :ctx :mark
+    closeInPlace stmt: ctx.stmt :mark
     return "({\{lbuf} _cc\{ccN}; })"
 }
 
@@ -634,10 +634,12 @@ wrapInPlace: function {ctx: Ctx mark: hoistmark cond: StringView} out String is 
 # A zerolang `break` inside the loop emits `goto __zbrk_<id>`: a bare C `break`
 # would only leave an enclosing match->switch, not the loop. The label is
 # emitted after the loop by popLoopLabel, but only if a break referenced it.
-pushLoopLabel: function {ctx: Ctx tmp: FnTemps.view isDo: bool postTest: bool} out u64 is {
-    id: ctx.stmt.breakLabelCtr
-    ctx.stmt.breakLabelCtr = id + 1
-    ctx.stmt.loops.append (
+pushLoopLabel: function {
+    stmt: StatementState tmp: FnTemps.view isDo: bool postTest: bool
+} out u64 is {
+    id: stmt.breakLabelCtr
+    stmt.breakLabelCtr = id + 1
+    stmt.loops.append (
         LoopFrame
         :id
         :isDo
@@ -649,15 +651,15 @@ pushLoopLabel: function {ctx: Ctx tmp: FnTemps.view isDo: bool postTest: bool} o
 }
 
 # noteFrameLeft -- a `break` or `continue` of the frame at `idx` is being emitted.
-noteFrameLeft: function {ctx: Ctx idx: u64} is {
-    lf: ctx.stmt.loops.getMut i: idx
+noteFrameLeft: function {stmt: StatementState idx: u64} is {
+    lf: stmt.loops.getMut i: idx
     lf.leftEarly = true
 }
 
 # anyFrameLeft -- an open loop or block has already been left by a `break` or
 # `continue`, so what comes later in it does not run on every path.
-anyFrameLeft: function {ctx: Ctx.view} out bool is {
-    for each lf: ctx.stmt.loops loop {
+anyFrameLeft: function {stmt: StatementState.view} out bool is {
+    for each lf: stmt.loops loop {
         if lf.leftEarly then return true
     }
     return false
@@ -667,8 +669,8 @@ anyFrameLeft: function {ctx: Ctx.view} out bool is {
 # do{}while(0) wrapper jumps here (past the wrapper, before the loop's
 # closing brace so the increment/condition re-evaluates). Emitted only
 # when a continue referenced it.
-emitContLabel: function {ctx: Ctx.view id: u64 ind: StringView buf: String.borrow} is {
-    uo: ctx.reach.contLabelUsed.get key: id
+emitContLabel: function {reach: ReachState.view id: u64 ind: StringView buf: String.borrow} is {
+    uo: reach.contLabelUsed.get key: id
     if uo.some then {
         lbl: "\{ind}__zcont_\{id}: ;\n"
         buf.append lbl
@@ -676,9 +678,9 @@ emitContLabel: function {ctx: Ctx.view id: u64 ind: StringView buf: String.borro
 }
 
 # emit the C label that closes loop `id`.
-popLoopLabel: function {ctx: Ctx id: u64 ind: StringView buf: String.borrow} is {
-    if ctx.stmt.loops.length > 0 then ctx.stmt.loops.pop
-    uo: ctx.stmt.breakLabelUsed.get key: id
+popLoopLabel: function {stmt: StatementState id: u64 ind: StringView buf: String.borrow} is {
+    if stmt.loops.length > 0 then stmt.loops.pop
+    uo: stmt.breakLabelUsed.get key: id
     if uo.some then {
         lbl: "\{ind}__zbrk_\{id}: ;\n"
         buf.append lbl
@@ -836,7 +838,7 @@ emitErrorStmt: function {
     # ends. An early exit before it can skip it, so it stays a run-time trap
     if ctx.stmt.condDepth == 0 when ctx.gen.active.not when ctx.stmt.returnEmitted.not when (
         anyFrameLeft
-        :ctx
+        stmt: ctx.stmt
     ).not then {
         em: lit.copy
         if em.length == 0 then em = "compile-time error".string
@@ -907,7 +909,7 @@ emitDiscardedResult: function {
         buf.append "\{ind}(void)(\{ce});\n"
         return
     }
-    dnm: localnames.varCName :ctx :prog vid: dv
+    dnm: localnames.varCName known: ctx.known :prog vid: dv
     strT: values.strTypeC :ctx
     dct: if rtid == ctx.known.strTid then strT.copy else typeRefC :prog :ctx tid: rtid
     buf.append "\{ind}\{dct} \{dnm} = \{ce};\n"
@@ -1099,8 +1101,8 @@ emitAssignment: function {
     btid: values.bindingStampOf :prog nid: n.nodeid
     ct: consts.bindDeclaredCType :prog :ctx :n :btid
     nameVid: localnames.defVid :prog nid: n.nodeid
-    nm: localnames.varCName :ctx :prog vid: nameVid
-    narrowfacts.dropStaleBorrowAlias :ctx vid: nameVid
+    nm: localnames.varCName known: ctx.known :prog vid: nameVid
+    narrowfacts.dropStaleBorrowAlias narrow: ctx.narrow vid: nameVid
     nbrw: localnames.bindingVarIsBorrowed :prog :n
     ctx.stmt.borrowedVars.set key: (localnames.defVid :prog nid: n.nodeid) value: nbrw
     if ctx.gen.active when (isYieldNode :prog n: avn) then {
@@ -1249,7 +1251,7 @@ emitBreakStmt: function {
 } is {
     emitBreakFrees :prog :ctx :tmp :ind :buf
     if ctx.stmt.loops.length > 0 then {
-        noteFrameLeft :ctx idx: ctx.stmt.loops.length - 1
+        noteFrameLeft stmt: ctx.stmt idx: ctx.stmt.loops.length - 1
         bid: (ctx.stmt.loops.get i: ctx.stmt.loops.length - 1).id
         lbkg: "\{ind}goto __zbrk_\{bid};\n"
         buf.append lbkg
@@ -1292,7 +1294,7 @@ emitContinueStmt: function {
                 }
             }
         }
-        if hasLoop then noteFrameLeft :ctx idx: loopIdx
+        if hasLoop then noteFrameLeft stmt: ctx.stmt idx: loopIdx
         if inDo when hasLoop then {
             emitContinueFrees :prog :ctx :tmp idx: loopIdx :ind :buf
             cid: (ctx.stmt.loops.get i: loopIdx).id
@@ -1509,13 +1511,13 @@ emitForStmt: function {
     # loop with the condition moved to where both hold -- which is exactly how
     # the condition would be hand-written to make this work, and it is why a
     # `goto` back into the loop body still lands correctly on resume.
-    suspends: forCondSuspends :prog :ctx :n
+    suspends: forCondSuspends :prog gen: ctx.gen :n
     stepped: condsNeedSteps :prog :ctx :suspends conds: n.conditions
     # the HEADER's scope owns what its conditions register: the marks are
     # taken before them and closed after the loop, so those rows are the
     # header scope's to emit and to pop, not the enclosing block's
     lLh: tmp.listFrees.length
-    lidW: pushLoopLabel :ctx :tmp isDo: false postTest: n.postconditions.count.u64 > 0
+    lidW: pushLoopLabel stmt: ctx.stmt :tmp isDo: false postTest: n.postconditions.count.u64 > 0
     bodyInd: "\{ind}    "
     if stepped then {
         emitSteppedWhileHead :prog :ctx :n :ind bodyInd: bodyInd.stringView :tmp :buf
@@ -1543,7 +1545,7 @@ emitForStmt: function {
     )
     lwc: "\{ind}}\n"
     buf.append lwc
-    popLoopLabel :ctx id: lidW :ind :buf
+    popLoopLabel stmt: ctx.stmt id: lidW :ind :buf
     # the temporaries the conditions registered are released where the loop
     # ends, AFTER the break label: both the path that falls out and the path
     # that jumps reach it there
@@ -1566,7 +1568,7 @@ emitDoWhileFor: function {
     # the do-while opening, its body and its trailing test all append here
     buf: String.borrow
 } is {
-    lidDW: pushLoopLabel :ctx :tmp isDo: false postTest: false
+    lidDW: pushLoopLabel stmt: ctx.stmt :tmp isDo: false postTest: false
     # a postcondition that moves, or holds a control value, computes into a
     # guard the trailing test reads, declared where that test can see it. One
     # the fold settled writes a constant test instead, and runs none of them
@@ -1575,7 +1577,7 @@ emitDoWhileFor: function {
         (condsNeedSteps :prog :ctx suspends: false conds: n.postconditions)
     )
     gvD: String
-    if stepped then gvD = newCondGuard :ctx :ind :buf
+    if stepped then gvD = newCondGuard stmt: ctx.stmt :ind :buf
     # the body is written into its own buffer: the trailing test is built after
     # it, and the temporaries the test records are declared ahead of `do {`, as
     # a while loop's are ahead of `while`
@@ -1589,7 +1591,7 @@ emitDoWhileFor: function {
         dvG = blockDiverges :prog :ctx n: fbd
     }
     closeScopeBlock :prog :ctx :tmp lL: lLd diverged: dvG node: n.body buf: body
-    emitContLabel :ctx id: lidDW ind: ind2d.stringView buf: body
+    emitContLabel reach: ctx.reach id: lidDW ind: ind2d.stringView buf: body
     tail: String
     if stepped then {
         (
@@ -1614,7 +1616,7 @@ emitDoWhileFor: function {
     buf.append "\{ind}do {\n"
     buf.append body
     buf.append tail
-    popLoopLabel :ctx id: lidDW :ind :buf
+    popLoopLabel stmt: ctx.stmt id: lidDW :ind :buf
 }
 
 # doWhileCondText -- a do-while's trailing test as one `&&` chain, a condition
@@ -1635,7 +1637,7 @@ doWhileCondText: function {
             pkop: pk
             if pkn.namedoperation then pkop = pkn.operation
             # the trailing test runs at every iteration, so it is evaluated in place
-            mk8: openInPlace :ctx guarded: true
+            mk8: openInPlace stmt: ctx.stmt guarded: true
             pcvF: exprfacts
             pcv: argforms.valueExprC :prog :ctx n: pkn facts: pcvF
             tw8: (
@@ -1674,10 +1676,10 @@ emitIterationEnd: function {
 } is {
     if m.postconditions.count.u64 == 0 then {
         if diverged.not then emitScopeDestroy :prog :ctx node: m.nodeid :ind :buf
-        emitContLabel :ctx :id :ind :buf
+        emitContLabel reach: ctx.reach :id :ind :buf
         return
     }
-    emitContLabel :ctx :id :ind :buf
+    emitContLabel reach: ctx.reach :id :ind :buf
     owed: String
     emitScopeDestroy :prog :ctx node: m.nodeid :ind buf: owed
     end: (foldedLoopOf :prog nid: m.nodeid).end
@@ -1692,7 +1694,7 @@ emitIterationEnd: function {
     }
     test: String
     if (condsNeedSteps :prog :ctx suspends: false conds: m.postconditions) then {
-        gv: newCondGuard :ctx :ind :buf
+        gv: newCondGuard stmt: ctx.stmt :ind :buf
         (
             emitSteppedCond
             :prog
@@ -1755,8 +1757,10 @@ emitPlainWhileHead: function {
 
 # forCondSuspends -- one of a loop's conditions holds a suspension point, so
 # the header has to be written as a body test instead.
-forCondSuspends: function {prog: Program.view ctx: Ctx.view n: zast.forrow.view} out bool is {
-    if ctx.gen.active.not then return false
+forCondSuspends: function {
+    prog: Program.view gen: GeneratorState.view n: zast.forrow.view
+} out bool is {
+    if gen.active.not then return false
     for each kyId: (zast.kidsOf ast: prog.ast span: n.conditions) loop {
         if (zast.yieldCountIn ast: prog.ast nid: kyId) > 0 then return true
     }
@@ -1789,7 +1793,7 @@ emitSteppedWhileHead: function {
     buf: String.borrow
 } is {
     buf.append "\{ind}while (1) {\n"
-    gv: newCondGuard :ctx ind: bodyInd :buf
+    gv: newCondGuard stmt: ctx.stmt ind: bodyInd :buf
     (
         emitSteppedCond
         :prog
@@ -2114,7 +2118,7 @@ emitWithBody: function {
     tmp: FnTemps
     buf: String.borrow
 } is {
-    wnm: localnames.varCName :ctx :prog vid: (localnames.defVid :prog nid: n.nodeid)
+    wnm: localnames.varCName known: ctx.known :prog vid: (localnames.defVid :prog nid: n.nodeid)
     wsid: stampIdDeep :prog n: (prog.ast.nodes.get i: n.value)
     wct: withValueCType :prog :ctx n: (prog.ast.nodes.get i: n.value) :wsid
     wv: emitExpr :prog :ctx n: (prog.ast.nodes.get i: n.value)
@@ -2257,7 +2261,7 @@ emitDoStmt: function {
         # the block is its own break target: a break inside frees the
         # block's owned temps (since these marks) and lands after the
         # block, not on an enclosing loop's label
-        sdoId: pushLoopLabel :ctx :tmp isDo: true postTest: false
+        sdoId: pushLoopLabel stmt: ctx.stmt :tmp isDo: true postTest: false
         slL: tmp.listFrees.length
         dst: prog.ast.nodes.get i: n.statement
         emitBodyNode :prog :ctx n: dst ind: indd.stringView :tmp :buf
@@ -2265,7 +2269,7 @@ emitDoStmt: function {
         closeScopeBlock :prog :ctx :tmp lL: slL diverged: dvF node: n.nodeid :buf
         lwh: "\{ind}} while (0);\n"
         buf.append lwh
-        popLoopLabel :ctx id: sdoId :ind :buf
+        popLoopLabel stmt: ctx.stmt id: sdoId :ind :buf
     } else {
         # the block's lines join the enclosing C block, but its locals end with
         # it: what the checker recorded its end destroys is spent here -- not
@@ -2535,7 +2539,7 @@ matchOrdinalPairRoute: function {
         core: prog.ast.nodes.get i: m.subject
         if core.call then {
             ct: consts.pairSubjectCType :ctx :prog tid: sTid
-            mp: values.tmpNext :ctx :tmp
+            mp: values.tmpNext stmt: ctx.stmt :tmp
             buf.append "\{ind}\{ct} _mp\{mp} = \{subj};\n"
             emitCallTakeInvalidations :prog :ctx call: core :ind :buf
             subjOnce = "_mp\{mp}"
@@ -2830,7 +2834,7 @@ emitMatchStmt: function {
         return
     }
     vc: spelledCname :ctx tid: vtid
-    mN: values.tmpNext :ctx :tmp
+    mN: values.tmpNext stmt: ctx.stmt :tmp
     sname: narrowfacts.atomTextOf :prog n: (prog.ast.nodes.get i: m.subject)
     # the subject's variable: inside an arm the bound name IS the subject,
     # narrowed, so its declaration must carry the same identifier the body's
@@ -2950,7 +2954,7 @@ emitMatchStmt: function {
     if meSeed then {
         (
             restoreNarrow
-            :ctx
+            narrow: ctx.narrow
             vid: snameV
             prevVal: mePrevV.stringView
             prevFacts: mePrevF
@@ -3185,7 +3189,7 @@ emitLocalDestroy: function {
     }
     # storage another owner frees: what a borrow aliases
     if (narrowfacts.varEntryHas xs: ctx.narrow.aliases :vid) then return
-    nm: localnames.varCName :ctx :prog :vid
+    nm: localnames.varCName known: ctx.known :prog :vid
     buf.append (destroyLineC :prog :ctx :tid nm: nm.stringView :ind)
 }
 
@@ -3275,7 +3279,7 @@ seedUnionArmAlias: function {
     inl: types.armIsInlineC :prog tid: vtid :arm
     msl: armSlotC :prog :ctx tid: vtid recv: slotRecv acc: slotAcc :arm inline: inl
     nbv: armCellRef :pc slot: msl.stringView inline: inl
-    holdForAlias :ctx val: nbv.stringView held: pcHeld
+    holdForAlias narrow: ctx.narrow val: nbv.stringView held: pcHeld
     cmt: "\{ind}    /* alias: \{sname} => \{nbv} */\n"
     buf.append cmt
     (
@@ -3366,7 +3370,7 @@ emitMatchClause: function {
                 }
                 didSeed = true
             } else {
-                snE: localnames.varCName :ctx :prog vid: snameVid
+                snE: localnames.varCName known: ctx.known :prog vid: snameVid
                 armMP: memberC :prog :ctx owner: vtid kind: memberkind.arm nameId: arm
                 l3: "\{ind}    \{pc} \{snE} = _m\{mN}.data.\{armMP};\n"
                 buf.append l3
@@ -3382,7 +3386,7 @@ emitMatchClause: function {
                 # a subject that arrives by pointer (a method's `this`) is
                 # shadowed by a VALUE here, so the arm must read it as one
                 if (isPtrVid :ctx vid: snameVid) then {
-                    dropPtrVid :ctx vid: snameVid
+                    dropPtrVid stmt: ctx.stmt vid: snameVid
                     unptr = true
                 }
                 # a data payload is a handle: the shadow reads through it
@@ -3419,7 +3423,7 @@ emitMatchClause: function {
         if didSeed then {
             (
                 restoreNarrow
-                :ctx
+                narrow: ctx.narrow
                 vid: snameVid
                 prevVal: prevV.stringView
                 prevFacts: prevF
@@ -3427,7 +3431,7 @@ emitMatchClause: function {
             )
         }
         if unptr then ctx.stmt.ptrVids.append from: snameVid
-        if staticArm then dropPtrVid :ctx vid: snameVid
+        if staticArm then dropPtrVid stmt: ctx.stmt vid: snameVid
         if dv.not then {
             l5: "\{ind}    break;\n"
             buf.append l5
@@ -3621,7 +3625,7 @@ emitDoBindValue: function {
             # the block is its own break target: a break inside frees the
             # block's owned temps (since these marks) and lands after the
             # block, not on an enclosing loop's label
-            doId: pushLoopLabel :ctx :tmp isDo: true postTest: false
+            doId: pushLoopLabel stmt: ctx.stmt :tmp isDo: true postTest: false
             lLd: tmp.listFrees.length
             (
                 emitBranchAssignOptional
@@ -3640,7 +3644,7 @@ emitDoBindValue: function {
             closeScopeBlock :prog :ctx :tmp lL: lLd diverged: dvO node: n.nodeid :buf
             l2: "\{ind}} while (0);\n"
             buf.append l2
-            popLoopLabel :ctx id: doId :ind :buf
+            popLoopLabel stmt: ctx.stmt id: doId :ind :buf
         } else {
             l3: "\{ind}{\n"
             buf.append l3
@@ -3865,7 +3869,7 @@ emitObjIterLoop: function {
     if ovid.isZero then return false
     callC: emitplan.objIterCallC :prog :ctx :cco :itid
     ovc: spelledCname :ctx tid: ovid
-    mN: values.tmpNext :ctx :tmp
+    mN: values.tmpNext stmt: ctx.stmt :tmp
     itCb: spelledCname :ctx tid: itid
     iterRecv: (
         types.emitObjIterRecv
@@ -3881,7 +3885,7 @@ emitObjIterLoop: function {
         :tmp
         :buf
     )
-    lidO: pushLoopLabel :ctx :tmp isDo: false postTest: m.postconditions.count.u64 > 0
+    lidO: pushLoopLabel stmt: ctx.stmt :tmp isDo: false postTest: m.postconditions.count.u64 > 0
     l0: "\{ind}while (1) {\n"
     buf.append l0
     l1: "\{ind}    \{ovc}_t _iter\{mN} = \{callC}(&\{iterRecv});\n"
@@ -4000,7 +4004,7 @@ emitOptionLoopTail: function {
     )
     l: "\{ind}}\n"
     buf.append l
-    popLoopLabel :ctx id: lidO :ind :buf
+    popLoopLabel stmt: ctx.stmt id: lidO :ind :buf
     # the payload leaves C scope with the loop, so a suspension after it must
     # not spill it
     if pushedO then ctx.gen.forSpills.pop
@@ -4028,12 +4032,12 @@ emitPlainBindingFor: function {
     if lblR.length == 0 then return false
     opN: prog.ast.nodes.get i: c0.operation
     lblV: localnames.defVid :prog nid: (interpPartNodeId n: opN)
-    lbl: localnames.varCName :ctx :prog vid: lblV
+    lbl: localnames.varCName known: ctx.known :prog vid: lblV
     ovid: forloops.stampTidDeep :prog n: opN
     if ovid.isZero then return false
     ovc: spelledCname :ctx tid: ovid
-    mN: values.tmpNext :ctx :tmp
-    lidO: pushLoopLabel :ctx :tmp isDo: false postTest: m.postconditions.count.u64 > 0
+    mN: values.tmpNext stmt: ctx.stmt :tmp
+    lidO: pushLoopLabel stmt: ctx.stmt :tmp isDo: false postTest: m.postconditions.count.u64 > 0
     buf.append "\{ind}while (1) {\n"
     bodyInd: "\{ind}    "
     lL: tmp.listFrees.length
@@ -4074,7 +4078,7 @@ emitForCond: function {
         if (zast.nameTextAt ast: prog.ast ref: n.name).length > 0 then return
         if (condFoldsTrue :prog nid: n.nodeid) then return
         # a loop's test runs at every iteration, so it is evaluated in place
-        mk7: openInPlace :ctx guarded: true
+        mk7: openInPlace stmt: ctx.stmt guarded: true
         cvF: exprfacts
         cv: argforms.valueExprC :prog :ctx n: (prog.ast.nodes.get i: n.operation) facts: cvF
         tw7: (
@@ -4117,12 +4121,12 @@ armAliasText: function {
             from: (memberreads.armCellFacts :recvF inline: inl)
             text: (armCellRef pc: pc.stringView slot: rsl.stringView inline: inl)
         )
-        holdForAlias :ctx val: ut.stringView :held
+        holdForAlias narrow: ctx.narrow val: ut.stringView :held
         return ut
     }
     armC: memberC :prog :ctx owner: tid kind: memberkind.arm nameId: arm
     vt: stating :facts from: (memberreads.memberFacts b: recvF) text: "\{recv}\{acc}data.\{armC}"
-    holdForAlias :ctx val: vt.stringView :held
+    holdForAlias narrow: ctx.narrow val: vt.stringView :held
     return vt
 }
 
@@ -4189,18 +4193,18 @@ truthyCondText: function {
 # restoreCondExclusions -- put back what each vid this clause layered held
 # before it, newest first, and drop those entries so the enclosing clause's mark
 # still points where it did.
-restoreCondExclusions: function {ctx: Ctx mark: u64} is {
-    for ctx.narrow.exSaves.length > mark loop {
-        sv: ctx.narrow.exSaves.pop
+restoreCondExclusions: function {narrow: NarrowState mark: u64} is {
+    for narrow.exSaves.length > mark loop {
+        sv: narrow.exSaves.pop
         if sv.arms.length > 0 then {
-            narrowfacts.varArmsSet xs: ctx.narrow.exclArms vid: sv.vid arms: sv.arms
+            narrowfacts.varArmsSet xs: narrow.exclArms vid: sv.vid arms: sv.arms
         } else {
-            vidRemove xs: ctx.narrow.exclArms vid: sv.vid
+            vidRemove xs: narrow.exclArms vid: sv.vid
         }
         if sv.owner.notZero then {
-            varTidSet xs: ctx.narrow.exclTids vid: sv.vid tid: sv.owner
+            varTidSet xs: narrow.exclTids vid: sv.vid tid: sv.owner
         } else {
-            vidRemove xs: ctx.narrow.exclTids vid: sv.vid
+            vidRemove xs: narrow.exclTids vid: sv.vid
         }
     }
 }
@@ -4297,7 +4301,7 @@ appendCondText: function {
     if k.namedoperation then opId = k.operation
     # a conjunct past the first runs only when the ones before it held
     guarded: cond.length > 0
-    mk: openInPlace :ctx :guarded
+    mk: openInPlace stmt: ctx.stmt :guarded
     {
         cvF: exprfacts
         cv: argforms.valueExprC :prog :ctx n: (prog.ast.nodes.get i: opId) facts: cvF
@@ -4307,7 +4311,7 @@ appendCondText: function {
             cond.append " && "
             appendInPlaceCond :ctx mark: mk text: cv.stringView dst: cond
         } else {
-            closeInPlace :ctx mark: mk
+            closeInPlace stmt: ctx.stmt mark: mk
             cond.append cv
         }
     }
@@ -4319,8 +4323,10 @@ appendCondText: function {
 # ordinary statement-level hoist already reaches it. Every condition after it
 # is guarded by the ones before -- `when` short-circuits -- so its suspension
 # cannot be lifted above the `if` without running on a path never taken.
-whenCondSuspends: function {prog: Program.view ctx: Ctx.view n: zast.ifclauserow} out bool is {
-    if ctx.gen.active.not then return false
+whenCondSuspends: function {
+    prog: Program.view gen: GeneratorState.view n: zast.ifclauserow
+} out bool is {
+    if gen.active.not then return false
     wi: 1.u64
     for wi < n.conditions.count loop {
         cwi: zast.kidAt kids: prog.ast.kids span: n.conditions i: wi
@@ -4363,7 +4369,7 @@ condsNeedSteps: function {
     conds: zast.kidspan
 } out bool is {
     if suspends then return true
-    if (values.condHoldsControlValue :prog :ctx :conds) then return true
+    if (values.condHoldsControlValue :prog pieces: ctx.pieces :conds) then return true
     return (condMovesLocal :prog :ctx :conds)
 }
 
@@ -4426,14 +4432,14 @@ closeSteppedNesting: function {
 # initialiser has no test left to compute, and loops unconditionally.
 newCondGuard: function {
     # carries the guard counter
-    ctx: Ctx
+    stmt: StatementState
     # the indent the declaration is written at
     ind: StringView
     # the declaration appends here
     buf: String.borrow
 } out String is {
-    gnum: ctx.stmt.whenGuardCtr
-    ctx.stmt.whenGuardCtr = gnum + 1
+    gnum: stmt.whenGuardCtr
+    stmt.whenGuardCtr = gnum + 1
     gvar: "_wc\{gnum}"
     buf.append "\{ind}uint8_t \{gvar} = 1;\n"
     return gvar
@@ -4540,7 +4546,7 @@ openSteppedHead: function {
         opened = 1
     }
     indH: if opened > 0 then indN.stringView else ind
-    gv: newCondGuard :ctx ind: indH :buf
+    gv: newCondGuard stmt: ctx.stmt ind: indH :buf
     (
         emitSteppedCond
         :prog
@@ -4595,13 +4601,13 @@ emitPlainIfHead: function {
         buf.append "\{ind}if \{cw} {\n"
         return 0
     }
-    if (hoistsPending :ctx).not then {
+    if (hoistsPending stmt: ctx.stmt).not then {
         buf.append "\{ind}} else if \{cw} {\n"
         return 0
     }
     buf.append "\{ind}} else {\n"
     indN: "\{ind}    "
-    gv: newCondGuard :ctx ind: indN.stringView :buf
+    gv: newCondGuard stmt: ctx.stmt ind: indN.stringView :buf
     lL: tmp.listFrees.length
     flushArgHoists :ctx ind: indN.stringView :tmp :buf
     buf.append "\{indN}\{gv} = \{cw} ? 1 : 0;\n"
@@ -4612,9 +4618,9 @@ emitPlainIfHead: function {
 
 # hoistsPending -- whether argument hoists above the current floors wait to be
 # declared by the statement being built.
-hoistsPending: function {ctx: Ctx.view} out bool is {
-    if ctx.stmt.argHoists.length > ctx.stmt.argHoistFloor then return true
-    return ctx.stmt.argHoistRaw.length > ctx.stmt.argHoistRawFloor
+hoistsPending: function {stmt: StatementState.view} out bool is {
+    if stmt.argHoists.length > stmt.argHoistFloor then return true
+    return stmt.argHoistRaw.length > stmt.argHoistRawFloor
 }
 
 # emit one if or else-if clause: its conditions, then the body they guard. The
@@ -4644,7 +4650,7 @@ emitIfClause: function {
         sPrevF: ListVal exprfacts
         sPrevT: ListVal ztypes.tid
         xMark: ctx.narrow.exSaves.length
-        suspends: whenCondSuspends :prog :ctx :n
+        suspends: whenCondSuspends :prog gen: ctx.gen :n
         guarded: condsNeedSteps :prog :ctx :suspends conds: n.conditions
         opened: u64
         cond: String
@@ -4663,7 +4669,7 @@ emitIfClause: function {
             )
             (
                 narrowfacts.installNarrowSeeds
-                :ctx
+                narrow: ctx.narrow
                 svids: sVid
                 vals: sV
                 valFs: sVF
@@ -4724,8 +4730,8 @@ emitIfClause: function {
             dvF: blockDiverges :prog :ctx n: cst
             closeScopeBlock :prog :ctx :tmp lL: lLi diverged: dvF node: n.nodeid :buf
         }
-        restoreNarrowSeeds :ctx svids: sVid prevV: sPrevV prevF: sPrevF prevT: sPrevT
-        restoreCondExclusions :ctx mark: xMark
+        restoreNarrowSeeds narrow: ctx.narrow svids: sVid prevV: sPrevV prevF: sPrevF prevT: sPrevT
+        restoreCondExclusions narrow: ctx.narrow mark: xMark
         return opened
     }
     return 0
@@ -4827,7 +4833,7 @@ emitElse: function {
     xMark: ctx.narrow.exSaves.length
     (
         narrowfacts.layerChainExclusions
-        :ctx
+        narrow: ctx.narrow
         svids: chSubjectVids
         arms: chArms
         tids: chTids
@@ -4873,8 +4879,8 @@ emitElse: function {
         dvF: blockDiverges :prog :ctx n: o
         closeScopeBlock :prog :ctx :tmp lL: lLe diverged: dvF node: oId :buf
     }
-    restoreNarrowSeeds :ctx svids: sVid prevV: sPrevV prevF: sPrevF prevT: sPrevT
-    restoreCondExclusions :ctx mark: xMark
+    restoreNarrowSeeds narrow: ctx.narrow svids: sVid prevV: sPrevV prevF: sPrevF prevT: sPrevT
+    restoreCondExclusions narrow: ctx.narrow mark: xMark
 }
 
 # refReturnText -- the address a reference-returning function hands back for
@@ -4975,7 +4981,7 @@ emitPlainReturn: function {
         hpc: "\{retCt}*"
         (
             values.emitHoistedReturn
-            :ctx
+            stmt: ctx.stmt
             rv: rv.stringView
             retCt: hpc.stringView
             moved: moved.stringView
@@ -4993,7 +4999,7 @@ emitPlainReturn: function {
         rrCt: "Z_TYPEOF(\{rr})"
         (
             values.emitHoistedReturn
-            :ctx
+            stmt: ctx.stmt
             rv: rr.stringView
             retCt: rrCt.stringView
             moved: moved.stringView
@@ -5005,7 +5011,7 @@ emitPlainReturn: function {
     } else if hoist then {
         (
             values.emitHoistedReturn
-            :ctx
+            stmt: ctx.stmt
             rv: rv.stringView
             retCt: retCt.stringView
             moved: moved.stringView
@@ -5115,7 +5121,7 @@ emitTailValue: function {
     )
     ct: typeRefC :prog :ctx tid: rtid
     if (isHeapPtrCollection :prog :ctx tid: rtid) then ct = "\{ct}*"
-    trn: values.tmpNext :ctx :tmp
+    trn: values.tmpNext stmt: ctx.stmt :tmp
     nm: "_tr\{trn}"
     bound: (
         emitControlBindValue
@@ -5237,7 +5243,12 @@ emitTailStmt: function {
         if (ztypecheck.withForwardsTail ast: prog.ast n: (prog.ast.nodes.get i: n.nodeid)
         ).not then return false
         # an owned copy: the with-binding's emission below lends ast
-        wnmT: localnames.varCName :ctx :prog vid: (localnames.defVid :prog nid: n.nodeid)
+        wnmT: (
+            localnames.varCName
+            known: ctx.known
+            :prog
+            vid: (localnames.defVid :prog nid: n.nodeid)
+        )
         wsidT: stampIdDeep :prog n: (prog.ast.nodes.get i: n.value)
         wctT: withValueCType :prog :ctx n: (prog.ast.nodes.get i: n.value) wsid: wsidT
         wvT: emitExpr :prog :ctx n: (prog.ast.nodes.get i: n.value)
@@ -5413,7 +5424,7 @@ emitNestedControlAssign: function {
 # displaced, newest first. A write inside the block does not end a seed early:
 # each read after it is told apart by its own stamp.
 restoreBlockAliases: function {
-    ctx: Ctx
+    narrow: NarrowState
     svids: (ListVal ztypes.vid).view
     prevV: (List String).view
     prevF: (ListVal exprfacts).view
@@ -5426,7 +5437,7 @@ restoreBlockAliases: function {
         zt: prevT.get i: zi
         (
             restoreNarrow
-            :ctx
+            :narrow
             vid: (svids.get i: zi)
             prevFacts: (prevF.get i: zi)
             prevVal: zv.stringView
@@ -5484,7 +5495,7 @@ emitStatementBlock: function {
         i = i + 1
         if trunc then i = nst
     }
-    restoreBlockAliases :ctx svids: pgVid prevV: pgPrevV prevF: pgPrevF prevT: pgPrevT
+    restoreBlockAliases narrow: ctx.narrow svids: pgVid prevV: pgPrevV prevF: pgPrevF prevT: pgPrevT
 }
 
 # emit one statement or expression node of a body.
@@ -5694,8 +5705,8 @@ releaseHeld: function {ctx: Ctx held: ListVal ztypes.tid} is {
 
 # holdForAlias -- the types `held` holds are spelled by alias `val`: recorded
 # when narrowBox's text is read (noteAliasRead), not before.
-holdForAlias: function {ctx: Ctx val: StringView held: ListVal ztypes.tid} is {
-    for held.length > 0 loop ctx.narrow.aliasHeld.append (AliasHeld val: val.string tid: held.pop)
+holdForAlias: function {narrow: NarrowState val: StringView held: ListVal ztypes.tid} is {
+    for held.length > 0 loop narrow.aliasHeld.append (AliasHeld val: val.string tid: held.pop)
 }
 
 # ctEndsWithStar -- true if the C type string ends in '*' (a pointer return:

@@ -65,12 +65,12 @@ varEntryPut: function {
 # bindBorrowAlias -- read `nm`, a borrow the C holds as the pointer
 # `__borrow_<nm>`, as the place it points at: its alias is the pointer's deref, a
 # place read twice at no cost, and records the pointer a re-point assigns.
-bindBorrowAlias: function {ctx: Ctx vid: ztypes.vid nm: StringView} is {
+bindBorrowAlias: function {narrow: NarrowState vid: ztypes.vid nm: StringView} is {
     p: "__borrow_\{nm}"
     bal: "(*\{p})"
     (
         varEntryPut
-        xs: ctx.narrow.aliases
+        xs: narrow.aliases
         :vid
         val: bal.stringView
         facts: memberreads.derefFacts
@@ -133,7 +133,7 @@ fnReturnsRefBorrow: function {
     if (nativerows.isColGetMutRef :prog :ctx :fid) then return true
     # a templated class's method answering a reference returns a pointer into
     # what the class holds: its template writes it so (a guard's `value`)
-    if (tmplRowOfClass :ctx cls: (fnDeclScopeTid :prog :fid)) > 0 then return true
+    if (tmplRowOfClass pieces: ctx.pieces cls: (fnDeclScopeTid :prog :fid)) > 0 then return true
     # a NATIVE callee's ABI is fixed by its hand-written `.inc` fragment, which
     # returns its struct by value (`List.iterate` -> ListIter). This emitter only
     # rewrites the bodies it generates itself.
@@ -142,7 +142,7 @@ fnReturnsRefBorrow: function {
     # String/StringView and the collections are reftypes with hand-written C and
     # their own borrow legs; `isStringyTid` is asked rather than isNativeOf
     # because a String return arrives as a TYPEDEF id whose isNative is unset.
-    if (argforms.isStringyTid :ctx tid: retTid) then return false
+    if (argforms.isStringyTid known: ctx.known tid: retTid) then return false
     if (isHeapPtrCollection :prog :ctx tid: retTid) then return false
     if (types.isCollectionOriginTid :ctx originTid: (originTidOf :prog tid: retTid)
     ) then return false
@@ -294,7 +294,7 @@ tmplRefResult: function {
 } out bool is {
     fid: refBorrowCalleeFid :prog :ctx :n
     if fid.isZero then return false
-    if (tmplRowOfClass :ctx cls: (fnDeclScopeTid :prog :fid)) == 0 then return false
+    if (tmplRowOfClass pieces: ctx.pieces cls: (fnDeclScopeTid :prog :fid)) == 0 then return false
     return (nodeIsRefBorrowResult :prog :ctx :n)
 }
 
@@ -365,7 +365,7 @@ emitBorrowAliasBind: function {
     # aliasing it would make a write through it reach the source
     if placeLeg when (prog.reg.isReftypeOf tid: btid).not then return false
     base: prog.ast.nodes.get i: ab.node
-    hmk: pendingHoistMark :ctx
+    hmk: pendingHoistMark stmt: ctx.stmt
     rvmF: exprfacts
     rvm: emitExprWith :prog :ctx n: base facts: rvmF
     # a member read that lowers to a CALL names no storage: a protocol or facet
@@ -401,7 +401,7 @@ emitBorrowAliasBind: function {
     }
     lb1: "\{ind}/* alias: \{nm} => (*__borrow_\{nm}) */\n"
     buf.append lb1
-    bindBorrowAlias :ctx vid: nameVid :nm
+    bindBorrowAlias narrow: ctx.narrow vid: nameVid :nm
     return true
 }
 
@@ -549,11 +549,11 @@ rhsIsBorrowedFieldRead: function {
 # C block, and keeps a local clear of every macro a system header defines
 # (`near`, `FAR`, `stdin`, `errno`), which no list could enumerate.
 varCName: function {
-    ctx: Ctx.view
+    known: KnownNames.view
     prog: Program.view
     vid: ztypes.vid
 } out String is {
-    if ctx.known.readableNames.not then return "z_v\{vid}"
+    if known.readableNames.not then return "z_v\{vid}"
     rn: String
     nm: prog.reg.variableNameOf id: vid
     if nm.notZero then rn = zast.nameTextCopy ast: prog.ast ref: nm
@@ -579,7 +579,7 @@ varCNameIs: function {
     text: StringView
 } out bool is {
     if vid.isZero then return (nameCName :ctx :name).stringView == text
-    if ctx.known.readableNames then return (varCName :ctx :prog :vid).stringView == text
+    if ctx.known.readableNames then return (varCName known: ctx.known :prog :vid).stringView == text
     if (text.length < 4) or (text.startsWith prefix: "z_v").not then return false
     digits: text.substring from: 3 to: text.length
     if ((digits.byteAt 0).or d: 0) == 0c0 then return false
@@ -607,7 +607,7 @@ localNameText: function {
         stating
         :facts
         from: pathFacts
-        text: (varCName :ctx :prog :vid)
+        text: (varCName known: ctx.known :prog :vid)
     )
     t: nameCName :ctx :name
     if vid.isZero then {
@@ -705,7 +705,7 @@ emitWithLocal: function {
         buf.append lw0
         lw1: "\{ind}/* alias: \{wnm} => (*__borrow_\{wnm}) */\n"
         buf.append lw1
-        bindBorrowAlias :ctx vid: (defVid :prog nid: n.nodeid) nm: wnm
+        bindBorrowAlias narrow: ctx.narrow vid: (defVid :prog nid: n.nodeid) nm: wnm
         return
     }
     # `with v: src` over a name the checker made a borrow: a second name for the
@@ -720,7 +720,7 @@ emitWithLocal: function {
         buf.append lp0
         lp1: "\{ind}/* alias: \{wnm} => (*__borrow_\{wnm}) */\n"
         buf.append lp1
-        bindBorrowAlias :ctx vid: wvid nm: wnm
+        bindBorrowAlias narrow: ctx.narrow vid: wvid nm: wnm
         return
     }
     wvC: wv.string
@@ -766,7 +766,7 @@ objIterForNamed: function {
     # emitted from the `E.iterate` node it minted, as the written call would be
     cOp = (prog.typing.forImplicitIterate.get key: cNid).or d: cOp
     lblV: defVid :prog nid: (interpPartNodeId n: (prog.ast.nodes.get i: cOp))
-    lbl: varCName :ctx :prog vid: lblV
+    lbl: varCName known: ctx.known :prog vid: lblV
     tids: emitplan.objIterIterableTid :prog :cOp
     if tids.itid.isZero then return false
     itid: tids.itid
@@ -859,7 +859,7 @@ emitIntRangeFor: function {
         labelVid: defVid :prog nid: (interpPartNodeId n: (prog.ast.nodes.get i: c0.operation))
         lbl: if labelVid.isZero then nameCName :ctx name: labelText.stringView else (
             varCName
-            :ctx
+            known: ctx.known
             :prog
             vid: labelVid
         )
@@ -899,12 +899,12 @@ emitIntRangeFor: function {
 # tmplRowOfClass -- the ClassRow with a template that the class `cls` (a
 # generic template, or a class of its own) declares, as its index plus one; 0
 # when it has none
-tmplRowOfClass: function {ctx: Ctx.view cls: ztypes.tid} out u64 is {
+tmplRowOfClass: function {pieces: PieceState.view cls: ztypes.tid} out u64 is {
     if cls.isZero then return 0
     ri: u64
-    for ri < ctx.pieces.classRows.length loop {
-        if (ctx.pieces.classRowTids.get i: ri) == cls when (
-            (ctx.pieces.classRows.get i: ri).tmpl.length > 0
+    for ri < pieces.classRows.length loop {
+        if (pieces.classRowTids.get i: ri) == cls when (
+            (pieces.classRows.get i: ri).tmpl.length > 0
         ) then return ri + 1
         ri = ri + 1
     }

@@ -3,9 +3,9 @@
 
 # isViewLaid -- a type laid out as a StringView: StringView, or text, which is
 # one C type with it.
-isViewLaid: function {ctx: Ctx.view tid: ztypes.tid} out bool is {
+isViewLaid: function {known: KnownNames.view tid: ztypes.tid} out bool is {
     if tid.isZero then return false
-    return (tid == ctx.known.svTid) or (tid == ctx.known.textTid)
+    return (tid == known.svTid) or (tid == known.textTid)
 }
 
 # appendDecimal -- `n` in decimal digits, written onto `buf` without a string of
@@ -172,7 +172,7 @@ interpStep: function {
 # value, declared by the enclosing statement and assigned where the build
 # runs. It owns nothing the build does not release.
 interpLocal: function {
-    ctx: Ctx
+    stmt: StatementState
     expr: bool
     ctype: StringView
     name: StringView
@@ -182,7 +182,7 @@ interpLocal: function {
     ops: String.borrow
 } is {
     if expr then {
-        ctx.stmt.argHoists.append (
+        stmt.argHoists.append (
             ArgHoist
             name: name.string
             val: String
@@ -207,7 +207,7 @@ interpLocal: function {
 # interpBuffer -- the `size`-byte char buffer `_b<bN>` a number is formatted
 # into, declared as interpLocal declares a local.
 interpBuffer: function {
-    ctx: Ctx
+    stmt: StatementState
     expr: bool
     bN: u64
     size: u64
@@ -219,7 +219,7 @@ interpBuffer: function {
     appendDecimal buf: arr n: size
     arr.append "]"
     if expr then {
-        ctx.stmt.argHoists.append (ArgHoist name: arr val: String ctype: "char".string dtor: String)
+        stmt.argHoists.append (ArgHoist name: arr val: String ctype: "char".string dtor: String)
         return
     }
     buf.append "\{ind}char \{arr};\n"
@@ -230,10 +230,12 @@ interpBuffer: function {
 # a value it owns is released after the append (`rel`), so the statement
 # declaring it owes it nothing. A raw hoist copies a constant list, which
 # no order can change, and stays the statement's.
-interpHoistsInPlace: function {ctx: Ctx mark: hoistmark ops: String.borrow rel: String.borrow} is {
+interpHoistsInPlace: function {
+    stmt: StatementState mark: hoistmark ops: String.borrow rel: String.borrow
+} is {
     i: mark.names
-    for i < ctx.stmt.argHoists.length loop {
-        ph: ctx.stmt.argHoists.getMut :i
+    for i < stmt.argHoists.length loop {
+        ph: stmt.argHoists.getMut :i
         if ph.val.length > 0 then {
             vl: String
             vl swap ph.val
@@ -281,9 +283,19 @@ appendFormattedNum: function {
     ops: String.borrow
 } is {
     if expr then {
-        interpBuffer :ctx :expr :bN :size :ind :buf
+        interpBuffer stmt: ctx.stmt :expr :bN :size :ind :buf
         nn: "_b\{bN}_n"
-        interpLocal :ctx :expr ctype: "int" name: nn.stringView init: call.stringView :ind :buf :ops
+        (
+            interpLocal
+            stmt: ctx.stmt
+            :expr
+            ctype: "int"
+            name: nn.stringView
+            init: call.stringView
+            :ind
+            :buf
+            :ops
+        )
         preludeNeed :ctx memb: "@String_append"
         st: "\{ctx.known.strC}_append(&\{sNm}, _b\{bN}, (uint64_t)_b\{bN}_n)"
         interpStep :expr text: st.stringView :ind :buf :ops
@@ -330,9 +342,19 @@ appendViewPart: function {
 } is {
     rd: val.string
     if valF.once then {
-        rd = "_h\{values.tmpNext :ctx :tmp}"
+        rd = "_h\{values.tmpNext stmt: ctx.stmt :tmp}"
         svT: values.svTypeC :ctx
-        interpLocal :ctx :expr ctype: svT.stringView name: rd.stringView init: val :ind :buf :ops
+        (
+            interpLocal
+            stmt: ctx.stmt
+            :expr
+            ctype: svT.stringView
+            name: rd.stringView
+            init: val
+            :ind
+            :buf
+            :ops
+        )
     }
     preludeNeed :ctx memb: "@String_append"
     st: "\{ctx.known.strC}_append(&\{sNm}, \{rd}.data, \{rd}.size)"
@@ -356,7 +378,7 @@ appendStrPart: function {
 } is {
     rd: val.string
     if valF.once then {
-        rd = "_h\{values.tmpNext :ctx :tmp}"
+        rd = "_h\{values.tmpNext stmt: ctx.stmt :tmp}"
         stT: (
             chaseAggregateTypedef
             :prog
@@ -364,7 +386,17 @@ appendStrPart: function {
             tid: (stampIdOf :prog nid: (interpPartNodeId :n))
         )
         stC: typeRefC :prog :ctx tid: stT
-        interpLocal :ctx :expr ctype: stC.stringView name: rd.stringView init: val :ind :buf :ops
+        (
+            interpLocal
+            stmt: ctx.stmt
+            :expr
+            ctype: stC.stringView
+            name: rd.stringView
+            init: val
+            :ind
+            :buf
+            :ops
+        )
     }
     preludeNeed :ctx memb: "@String_append"
     st: "\{ctx.known.strC}_append(&\{sNm}, \{rd}.data, \{rd}.len)"
@@ -418,7 +450,17 @@ appendStringPart: function {
     # and this name comes from `ctx.argHoistCtr`, so two counters would collide
     hNm: argforms.argHoistName :prog :ctx argNid: (interpPartNodeId :n) fallback: "_hp"
     strT: values.strTypeC :ctx
-    interpLocal :ctx :expr ctype: strT.stringView name: hNm.stringView init: val :ind :buf :ops
+    (
+        interpLocal
+        stmt: ctx.stmt
+        :expr
+        ctype: strT.stringView
+        name: hNm.stringView
+        init: val
+        :ind
+        :buf
+        :ops
+    )
     preludeNeed :ctx memb: "@String_append"
     sh: "\{ctx.known.strC}_append(&\{sNm}, \{hNm}.data, \{hNm}.size)"
     interpStep :expr text: sh.stringView :ind :buf :ops
@@ -471,12 +513,12 @@ interpBoolPart: function {
     fq: "\"\{f}\""
     tq: "\"\{t}\""
     vn: "_v\{bN}"
-    interpLocal :ctx :expr ctype: "bool" name: vn.stringView init: val :ind :buf :ops
+    interpLocal stmt: ctx.stmt :expr ctype: "bool" name: vn.stringView init: val :ind :buf :ops
     bn: "_b\{bN}"
     bi: "\{vn} ? \{tq} : \{fq}"
     (
         interpLocal
-        :ctx
+        stmt: ctx.stmt
         :expr
         ctype: "const char*"
         name: bn.stringView
@@ -487,7 +529,17 @@ interpBoolPart: function {
     )
     nn: "_b\{bN}_n"
     ni: "\{vn} ? \{tl} : \{fl}"
-    interpLocal :ctx :expr ctype: "int" name: nn.stringView init: ni.stringView :ind :buf :ops
+    (
+        interpLocal
+        stmt: ctx.stmt
+        :expr
+        ctype: "int"
+        name: nn.stringView
+        init: ni.stringView
+        :ind
+        :buf
+        :ops
+    )
     preludeNeed :ctx memb: "@String_append"
     st: "\{ctx.known.strC}_append(&\{sNm}, \{bn}, (uint64_t)\{nn})"
     interpStep :expr text: st.stringView :ind :buf :ops
@@ -509,7 +561,7 @@ interpScalarPart: function {
     buf: String.borrow
     ops: String.borrow
 } out bool is {
-    bN: values.tmpNext :ctx :tmp
+    bN: values.tmpNext stmt: ctx.stmt :tmp
     if nk.has when nk.kind == ztypes.numkind.i128Type then {
         nativepieces.needsAddM :ctx uname: "prelude" memb: "int128"
         preludeNeed :ctx memb: "@fmt_i128"
@@ -641,7 +693,7 @@ emitInterpPart: function {
     }
     pt: interpPartTid :prog :n
     nk: ztypecheck.numKindOfTid typing: prog.typing tid: pt
-    pmk: pendingHoistMark :ctx
+    pmk: pendingHoistMark stmt: ctx.stmt
     valF: exprfacts
     val: argforms.valueExprC :prog :ctx :n facts: valF
     # a call fragment may have hoisted non-lvalue args to _ah temps: declare
@@ -649,7 +701,7 @@ emitInterpPart: function {
     # after emitCallValue); a build used as a value assigns them where it runs
     rel: String
     if expr then {
-        interpHoistsInPlace :ctx mark: pmk :ops :rel
+        interpHoistsInPlace stmt: ctx.stmt mark: pmk :ops :rel
     } else {
         flushArgHoists :ctx :ind :tmp :buf
     }
@@ -1068,7 +1120,7 @@ partHashWords: function {
         return
     }
     # a text part hashes its bytes, as a str does
-    if (isViewLaid :ctx tid: base) then {
+    if (isViewLaid known: ctx.known tid: base) then {
         wt: "\{hashBytesFn :ctx}((const uint8_t*)(\{v}).data, (\{v}).size)"
         words.append wt
         return
@@ -1129,7 +1181,7 @@ hashFnDemand: function {
     if isAgg.not then return
     if (partIsCScalar :prog :tid) then return
     # text hashes as the view it is laid out as: the runtime's, not a generated one
-    if (isViewLaid :ctx :tid) then return
+    if (isViewLaid known: ctx.known :tid) then return
     ctx.reach.hashAsked.add item: tid
     ctx.reach.hashOrder.append tid
     if (

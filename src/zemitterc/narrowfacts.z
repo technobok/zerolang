@@ -126,7 +126,7 @@ varTidGet: function {xs: (List VarTid).view vid: ztypes.vid} out optionval ztype
 # what the narrow tables held so restoreNarrowSeeds can put it back. The saved
 # pair is appended newest last, one per seeded vid.
 pushNarrow: function {
-    ctx: Ctx
+    narrow: NarrowState
     vid: ztypes.vid
     val: StringView
     valF: exprfacts
@@ -135,26 +135,28 @@ pushNarrow: function {
     prevF: ListVal exprfacts
     prevT: ListVal ztypes.tid
 } is {
-    pv: varEntryGet xs: ctx.narrow.box :vid
+    pv: varEntryGet xs: narrow.box :vid
     prevV.append pv
-    prevF.append (varEntryFactsOf xs: ctx.narrow.box :vid)
-    prevT.append ((varTidGet xs: ctx.narrow.tid :vid).or d: ztypes.tid.zero)
-    stmtblocks.varEntrySet xs: ctx.narrow.box :vid :val facts: valF
-    stmtblocks.varTidSet xs: ctx.narrow.tid :vid :tid
+    prevF.append (varEntryFactsOf xs: narrow.box :vid)
+    prevT.append ((varTidGet xs: narrow.tid :vid).or d: ztypes.tid.zero)
+    stmtblocks.varEntrySet xs: narrow.box :vid :val facts: valF
+    stmtblocks.varTidSet xs: narrow.tid :vid :tid
 }
 
 # aliasResolvesToSelf -- does `vid` stand for its own name, rather than for a
 # narrowing box or a take alias? The question aliasResolve is asked when the
 # caller wants no text, only the answer; asking it this way copies nothing.
-aliasResolvesToSelf: function {ctx: Ctx.view name: StringView vid: ztypes.vid} out bool is {
-    nb: vidFind xs: ctx.narrow.box :vid
+aliasResolvesToSelf: function {
+    narrow: NarrowState.view name: StringView vid: ztypes.vid
+} out bool is {
+    nb: vidFind xs: narrow.box :vid
     if nb > 0 then {
-        eNb: ctx.narrow.box.get i: nb - 1
+        eNb: narrow.box.get i: nb - 1
         return eNb.val.stringView == name
     }
-    al: vidFind xs: ctx.narrow.aliases :vid
+    al: vidFind xs: narrow.aliases :vid
     if al > 0 then {
-        eAl: ctx.narrow.aliases.get i: al - 1
+        eAl: narrow.aliases.get i: al - 1
         return eAl.val.stringView == name
     }
     return true
@@ -283,11 +285,11 @@ entryText: function {xs: (List VarEntry).view at: u64 facts: exprfacts.borrow} o
 # narrowing ends.
 narrowingEndedAt: function {
     prog: Program.view
-    ctx: Ctx.view
+    narrow: NarrowState.view
     nid: zast.nodeid
     vid: ztypes.vid
 } out bool is {
-    if (varEntryHas xs: ctx.narrow.box :vid).not then return false
+    if (varEntryHas xs: narrow.box :vid).not then return false
     stamped: stampIdOf :prog :nid
     if stamped.isZero then return false
     return stamped == (prog.reg.variableTypeOf id: vid)
@@ -317,7 +319,7 @@ emitLocalAtomNameAt: function {
     vid: ztypes.vid
     facts: exprfacts.borrow
 } out String is {
-    if (narrowingEndedAt :prog :ctx :nid :vid) then {
+    if (narrowingEndedAt :prog narrow: ctx.narrow :nid :vid) then {
         return (wholeLocalName :prog :ctx :name :vid :facts)
     }
     return (emitLocalAtomNameWith :prog :ctx :name :vid :facts)
@@ -332,7 +334,12 @@ aliasResolveAt: function {
     name: StringView
     vid: ztypes.vid
 } out String is {
-    if (narrowingEndedAt :prog :ctx :nid :vid).not then return (aliasResolve :ctx :name :vid)
+    if (narrowingEndedAt :prog narrow: ctx.narrow :nid :vid).not then return (
+        aliasResolve
+        :ctx
+        :name
+        :vid
+    )
     al: vidFind xs: ctx.narrow.aliases :vid
     if al > 0 then return (ctx.narrow.aliases.get i: al - 1).val.copy
     return name.string
@@ -341,17 +348,17 @@ aliasResolveAt: function {
 # aliasResolvesToSelfAt -- aliasResolvesToSelf for the read at `nid`.
 aliasResolvesToSelfAt: function {
     prog: Program.view
-    ctx: Ctx.view
+    narrow: NarrowState.view
     nid: zast.nodeid
     name: StringView
     vid: ztypes.vid
 } out bool is {
-    if (narrowingEndedAt :prog :ctx :nid :vid).not then {
-        return (aliasResolvesToSelf :ctx :name :vid)
+    if (narrowingEndedAt :prog :narrow :nid :vid).not then {
+        return (aliasResolvesToSelf :narrow :name :vid)
     }
-    al: vidFind xs: ctx.narrow.aliases :vid
+    al: vidFind xs: narrow.aliases :vid
     if al == 0 then return true
-    return (ctx.narrow.aliases.get i: al - 1).val.stringView == name
+    return (narrow.aliases.get i: al - 1).val.stringView == name
 }
 
 # emitPrintViaStringView -- an atom printed through its type's own `stringView`
@@ -434,13 +441,13 @@ emitPrintAtom: function {
     {
         alo: prog.typing.atomVariableId.get key: n.nodeid
         if alo.none then {
-            mainUnit: consts.mainUnitTid :prog :ctx
+            mainUnit: consts.mainUnitTid :prog known: ctx.known
             facts: exprfacts
             cst: consts.memberConstStringText :prog :ctx unitTid: mainUnit nameId: n.name :facts
             if cst.length > 0 then anmE = cst.copy
         }
     }
-    if (argforms.stampIsStr :prog :ctx nid: n.nodeid) then {
+    if (argforms.stampIsStr :prog known: ctx.known nid: n.nodeid) then {
         if (isPtrVid :ctx vid: anv) then {
             preludeNeed :ctx memb: "@String_print"
             lps: "\{ind}\{ctx.known.strC}_print(\{anmE});\n"
@@ -483,10 +490,10 @@ emitPrintAtom: function {
 # borrow alias left by an earlier binding of the same name points at a C
 # variable that is out of scope here. Drop it before the binding legs
 # re-establish one; anything that is not a borrow alias is left alone.
-dropStaleBorrowAlias: function {ctx: Ctx vid: ztypes.vid} is {
-    if (varEntryHasPtr xs: ctx.narrow.aliases :vid) then (
+dropStaleBorrowAlias: function {narrow: NarrowState vid: ztypes.vid} is {
+    if (varEntryHasPtr xs: narrow.aliases :vid) then (
         stmtblocks.vidRemove
-        xs: ctx.narrow.aliases
+        xs: narrow.aliases
         :vid
     )
 }
@@ -738,12 +745,12 @@ armMemberTid: function {
 # `extra` space-joined arms; "" when zero or more than one remain.
 remainingArm: function {
     prog: Program.view
-    ctx: Ctx.view
+    narrow: NarrowState.view
     subjVid: ztypes.vid
     tid: ztypes.tid
     extra: zast.nameid
 } out zast.nameid is {
-    exv: varArmsGet xs: ctx.narrow.exclArms vid: subjVid
+    exv: varArmsGet xs: narrow.exclArms vid: subjVid
     all: ListVal zast.nameid
     zenv.sumArmNameIds ty: prog.typing reg: prog.reg :tid ids: all
     remN: u64
@@ -892,7 +899,7 @@ seedNegatedFromPredicate: function {
         if subj.length == 0 then return
         snv: atomVid :prog nid: (atomNodeId n: (prog.ast.nodes.get i: n.parent))
         ctorArmName: aliasOrChildId :prog aliasId: n.nodeid childId: n.child
-        rem: remainingArm :prog :ctx subjVid: snv tid: dap extra: ctorArmName
+        rem: remainingArm :prog narrow: ctx.narrow subjVid: snv tid: dap extra: ctorArmName
         if rem.isZero then return
         recvF: exprfacts
         recvText: emitExprWith :prog :ctx n: (prog.ast.nodes.get i: n.parent) facts: recvF
@@ -1125,8 +1132,8 @@ seedAndLayerCond: function {
 } is {
     had: svids.length
     seedCondOne :prog :ctx :condId :names :svids :vals :valFs :tids
-    installNarrowSeeds :ctx :svids :vals :valFs :tids :prevV :prevF :prevT from: had
-    layerCondExclusion :prog :ctx :condId
+    installNarrowSeeds narrow: ctx.narrow :svids :vals :valFs :tids :prevV :prevF :prevT from: had
+    layerCondExclusion :prog narrow: ctx.narrow :condId
 }
 
 # layerCondExclusion -- record that a conjunct's NEGATED arm predicate excludes
@@ -1139,7 +1146,7 @@ seedAndLayerCond: function {
 # it allocates nothing at all unless the conjunct really does exclude an arm.
 layerCondExclusion: function {
     prog: Program.view
-    ctx: Ctx
+    narrow: NarrowState
     condId: zast.nodeid
 } is {
     k: prog.ast.nodes.get i: condId
@@ -1147,29 +1154,29 @@ layerCondExclusion: function {
     f: classifyCondFact :prog n: (prog.ast.nodes.get i: k.operation)
     if f.ok.not then return
     if f.neg.not then return
-    pushExclusion :ctx vid: f.svid arm: f.armRef owner: f.owner
+    pushExclusion :narrow vid: f.svid arm: f.armRef owner: f.owner
 }
 
 # pushExclusion -- add `arm` to the arms already excluded for `vid`, saving what
 # the exclusion tables held on ctx's stack so restoreCondExclusions can put it
 # back. The arms accumulate space-joined, which is how remainingArm reads them.
 pushExclusion: function {
-    ctx: Ctx
+    narrow: NarrowState
     vid: ztypes.vid
     arm: zast.nameid
     owner: ztypes.tid
 } is {
-    pv0: varArmsGet xs: ctx.narrow.exclArms :vid
+    pv0: varArmsGet xs: narrow.exclArms :vid
     nx: pv0.copy
     nx.append arm
-    ctx.narrow.exSaves.append (
+    narrow.exSaves.append (
         ExclSave
         :vid
         arms: pv0
-        owner: ((varTidGet xs: ctx.narrow.exclTids :vid).or d: ztypes.tid.zero)
+        owner: ((varTidGet xs: narrow.exclTids :vid).or d: ztypes.tid.zero)
     )
-    varArmsSet xs: ctx.narrow.exclArms :vid arms: nx
-    stmtblocks.varTidSet xs: ctx.narrow.exclTids :vid tid: owner
+    varArmsSet xs: narrow.exclArms :vid arms: nx
+    stmtblocks.varTidSet xs: narrow.exclTids :vid tid: owner
 }
 
 # installNarrowSeeds -- install the aliases at index `from` and after, recording
@@ -1177,7 +1184,7 @@ pushExclusion: function {
 # in place BEFORE this clause touched it, so installing in stages still
 # restores in one pass.
 installNarrowSeeds: function {
-    ctx: Ctx
+    narrow: NarrowState
     svids: (ListVal ztypes.vid).view
     vals: (List String).view
     valFs: (ListVal exprfacts).view
@@ -1193,7 +1200,7 @@ installNarrowSeeds: function {
         stt: tids.get i: si
         (
             pushNarrow
-            :ctx
+            :narrow
             vid: (svids.get i: si)
             val: svv.stringView
             valF: (valFs.get i: si)
@@ -1457,7 +1464,7 @@ chainCondFact: function {
 # each one's arm is excluded for the else body. A negated fact names the arm the
 # subject has instead, and is seeded rather than excluded.
 layerChainExclusions: function {
-    ctx: Ctx
+    narrow: NarrowState
     svids: (ListVal ztypes.vid).view
     arms: (ListVal zast.nameid).view
     tids: (ListVal ztypes.tid).view
@@ -1468,7 +1475,7 @@ layerChainExclusions: function {
         if (negs.get i: fi).not then {
             (
                 pushExclusion
-                :ctx
+                :narrow
                 vid: (svids.get i: fi)
                 arm: (arms.get i: fi)
                 owner: (tids.get i: fi)
@@ -1498,7 +1505,14 @@ seedElseSubject: function {
     buf: String.borrow
 } is {
     fArm: negArm
-    if fArm.isZero then fArm = remainingArm :prog :ctx :subjVid tid: owner extra: zast.nameid
+    if fArm.isZero then fArm = (
+        remainingArm
+        :prog
+        narrow: ctx.narrow
+        :subjVid
+        tid: owner
+        extra: zast.nameid
+    )
     if fArm.isZero then return
     acc: ".".string
     if (isPtrVid :ctx vid: subjVid) then acc = "->".string
@@ -1517,7 +1531,7 @@ seedElseSubject: function {
     if aliasText.length == 0 then return
     (
         pushNarrow
-        :ctx
+        narrow: ctx.narrow
         vid: subjVid
         val: aliasText.stringView
         valF: aliasF
@@ -1627,7 +1641,7 @@ seedPostGuardAlias: function {
     if aliasText.length == 0 then return
     (
         pushNarrow
-        :ctx
+        narrow: ctx.narrow
         vid: pgrv
         val: aliasText.stringView
         valF: aliasF

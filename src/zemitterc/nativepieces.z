@@ -11,55 +11,59 @@ newPiecedText: function out PiecedText is {
 # empty) and needing `needs`: written in place, by the text holding it, when a
 # demand it answers fires
 pieceRow: function {
-    ctx: Ctx owner: StringView name: StringView demands: (List String).view needs: StringView
+    pieces: PieceState
+    owner: StringView
+    name: StringView
+    demands: (List String).view
+    needs: StringView
 } out u64 is {
-    r: beginDemands :ctx r: (zemitrows.blankRow owner: (ctx.pieces.demands.names.intern s: owner))
-    for each d: demands loop r = addRowDemands :ctx :r dm: d.stringView
-    if r.demandTo == r.demandFrom then r = addRowDemands :ctx :r dm: name
-    if needs.length > 0 then r.needText = rowNeedText :ctx :needs
-    row: appendFragmentRow :ctx :r
-    ctx.pieces.rowsInPlace.add item: row
+    r: beginDemands :pieces r: (zemitrows.blankRow owner: (pieces.demands.names.intern s: owner))
+    for each d: demands loop r = addRowDemands :pieces :r dm: d.stringView
+    if r.demandTo == r.demandFrom then r = addRowDemands :pieces :r dm: name
+    if needs.length > 0 then r.needText = rowNeedText :pieces :needs
+    row: appendFragmentRow :pieces :r
+    pieces.rowsInPlace.add item: row
     return row
 }
 
 # rtFragHoles -- each distinct hole of text `id` that plan `plan` writes (every
 # one when `all`), in the order first spelled
 rtFragHoles: function {
-    ctx: Ctx.view
+    pieces: PieceState.view
     plan: RtPlan.view
     all: bool
     ids: ListVal zast.nameid
     names: List String
 } is {
-    inf: ctx.pieces.rt.infos.get i: plan.id
+    inf: pieces.rt.infos.get i: plan.id
     k: inf.segFrom
     for k < inf.segTo loop {
-        sg: ctx.pieces.rt.segs.get i: k
+        sg: pieces.rt.segs.get i: k
         k = k + 1
         if sg.kind.hole.not then continue
-        if all.not when (rtPlanWrites :ctx :plan at: sg.from).not then continue
+        if all.not when (rtPlanWrites :pieces :plan at: sg.from).not then continue
         seen: false
         for each d: ids loop {
             if d == sg.name then seen = true
         }
         if seen then continue
         ids.append sg.name
-        names.append from: (ctx.pieces.rt.holes.pool.texts.get i: sg.name).copy
+        names.append from: (pieces.rt.holes.pool.texts.get i: sg.name).copy
     }
 }
 
 # rtTagTypeHole -- text `id` spells `z_@<hole>@_tag_t`, the tag enum of the type
 # the hole names: the hole, then a literal starting `_tag_t`
-rtTagTypeHole: function {ctx: Ctx.view id: rtid hole: zast.nameid} out bool is {
-    inf: ctx.pieces.rt.infos.get i: id
-    t: ctx.pieces.rt.texts.get i: id
+rtTagTypeHole: function {pieces: PieceState.view id: rtid hole: zast.nameid} out bool is {
+    inf: pieces.rt.infos.get i: id
+    t: pieces.rt.texts.get i: id
     tv: t.stringView
     k: inf.segFrom
     for (k + 1) < inf.segTo loop {
-        sg: ctx.pieces.rt.segs.get i: k
+        sg: pieces.rt.segs.get i: k
         k = k + 1
         if sg.kind.hole.not or (sg.name != hole) then continue
-        nx: ctx.pieces.rt.segs.get i: k
+        nx: pieces.rt.segs.get i: k
         if nx.kind.literal.not then continue
         if ((tv.substring from: nx.from to: nx.to).startsWith prefix: "_tag_t") then return true
     }
@@ -81,14 +85,14 @@ rtFragmentText: function {
     # the text, for its mark and the messages
     key: textkey
 } out String is {
-    path: textLabel :ctx :key
+    path: textLabel pieces: ctx.pieces :key
     bn: ListVal zast.nameid
     bv: List String
     rn: ListVal zast.nameid
     rv: List String
     hids: ListVal zast.nameid
     hnames: List String
-    rtFragHoles :ctx :plan :all ids: hids names: hnames
+    rtFragHoles pieces: ctx.pieces :plan :all ids: hids names: hnames
     k: u64
     for k < hids.length loop {
         (
@@ -111,7 +115,7 @@ rtFragmentText: function {
     ferr: List String
     res: (
         rtRenderWith
-        :ctx
+        pieces: ctx.pieces
         :plan
         keys: ctx.pieces.rt.noKeys
         bindIds: bn
@@ -175,7 +179,7 @@ rtFragHole: function {
     }
     cc: stemCname :prog :ctx canon: name
     # `z_@X@_tag_t` spells X's tag enum
-    if (rtTagTypeHole :ctx :id :hole) then (
+    if (rtTagTypeHole pieces: ctx.pieces :id :hole) then (
         noteTagEnumUse
         :ctx
         :prog
@@ -305,35 +309,35 @@ memberHoleC: function {
 }
 
 # textKey -- the key of the text of kind `kind` named `name`
-textKey: function {ctx: Ctx kind: textkind name: StringView} out textkey is {
-    if ctx.pieces.textNames.length == 0 then ctx.pieces.textNames.append "".string
-    id: (ctx.pieces.textIds.get key: name.string).or d: 0
+textKey: function {pieces: PieceState kind: textkind name: StringView} out textkey is {
+    if pieces.textNames.length == 0 then pieces.textNames.append "".string
+    id: (pieces.textIds.get key: name.string).or d: 0
     if id == 0 then {
-        id = ctx.pieces.textNames.length.u32.orPanic
-        ctx.pieces.textIds.set key: name.string value: id
-        ctx.pieces.textNames.append from: name.string
+        id = pieces.textNames.length.u32.orPanic
+        pieces.textIds.set key: name.string value: id
+        pieces.textNames.append from: name.string
     }
     return (textkey kind: kind.tag name: id)
 }
 
 # fileKey -- the key of fixed file `name`
-fileKey: function {ctx: Ctx name: StringView} out textkey is {
-    return (textKey :ctx kind: textkind.fixedFile :name)
+fileKey: function {pieces: PieceState name: StringView} out textkey is {
+    return (textKey :pieces kind: textkind.fixedFile :name)
 }
 
 # fragKey -- the key of fragment `name`
-fragKey: function {ctx: Ctx name: StringView} out textkey is {
-    return (textKey :ctx kind: textkind.fragment :name)
+fragKey: function {pieces: PieceState name: StringView} out textkey is {
+    return (textKey :pieces kind: textkind.fragment :name)
 }
 
 # textLabel -- text `key` as a message names it: `fixed file head`, `fragment
 # _Z_F16`, `template List`; "" for no text
-textLabel: function {ctx: Ctx.view key: textkey} out String is {
+textLabel: function {pieces: PieceState.view key: textkey} out String is {
     if key.kind == textkind.none.tag then return String
     r: "template ".string
     if key.kind == textkind.fixedFile.tag then r = "fixed file ".string
     if key.kind == textkind.fragment.tag then r = "fragment ".string
-    r.append (ctx.pieces.textNames.get i: key.name.u64)
+    r.append (pieces.textNames.get i: key.name.u64)
     return r
 }
 
@@ -347,14 +351,14 @@ textOf: function {ctx: Ctx key: textkey} out String is {
             return got.copy
         }
     }
-    emitFail :ctx what: "zc carries no \{textLabel :ctx :key}" line: 0
+    emitFail :ctx what: "zc carries no \{textLabel pieces: ctx.pieces :key}" line: 0
     ctx.pieces.texts.set :key value: String
     return String
 }
 
 # setText -- `text` as the native text `key` names
-setText: function {ctx: Ctx key: textkey text: String.take} is {
-    ctx.pieces.texts.set :key value: text.take
+setText: function {pieces: PieceState key: textkey text: String.take} is {
+    pieces.texts.set :key value: text.take
 }
 
 # tmplParsed -- native text `key` parsed (RtTexts) on its first read and kept
@@ -400,18 +404,18 @@ recordCanon: function {ctx: Ctx stem: StringView spec: StringView} is {
 
 # recordUnitOrder -- the `@units` pseudo-row: not a row but the order the
 # units' runtimes run in, comma-separated
-recordUnitOrder: function {ctx: Ctx order: StringView} is {
+recordUnitOrder: function {pieces: PieceState order: StringView} is {
     for each ou: (order.split sep: ",") loop {
-        if ou.length > 0 then ctx.pieces.unitOrder.append from: ou.string
+        if ou.length > 0 then pieces.unitOrder.append from: ou.string
     }
 }
 
 # beginDemands -- row `r` as a fragment row whose demands follow
 # (addRowDemands), its span opening where the table's demands end
-beginDemands: function {ctx: Ctx.view r: zemitrows.nativerow} out zemitrows.nativerow is {
+beginDemands: function {pieces: PieceState.view r: zemitrows.nativerow} out zemitrows.nativerow is {
     fr: r
     fr.fragment = true
-    fr.demandFrom = ctx.pieces.rows.demandKeys.length
+    fr.demandFrom = pieces.rows.demandKeys.length
     fr.demandTo = fr.demandFrom
     return fr
 }
@@ -419,7 +423,9 @@ beginDemands: function {ctx: Ctx.view r: zemitrows.nativerow} out zemitrows.nati
 # endDemands -- fragment row `r`, keyed `key`, with its demands closed: a row
 # whose file names none answers the key's last segment, a helper's (`@name`)
 # without its `@`
-endDemands: function {ctx: Ctx r: zemitrows.nativerow key: StringView} out zemitrows.nativerow is {
+endDemands: function {
+    pieces: PieceState r: zemitrows.nativerow key: StringView
+} out zemitrows.nativerow is {
     if r.demandTo > r.demandFrom then return r
     from: u64
     ld: key.lastIndexOf needle: "."
@@ -430,7 +436,7 @@ endDemands: function {ctx: Ctx r: zemitrows.nativerow key: StringView} out zemit
     } case none then {
         if key.startsWith "@" then from = 1
     }
-    return (addRowDemands :ctx :r dm: (key.substring :from to: key.length))
+    return (addRowDemands :pieces :r dm: (key.substring :from to: key.length))
 }
 
 # addRowDemands -- demands `dm` (one, or comma-separated) onto fragment row
@@ -439,7 +445,7 @@ endDemands: function {ctx: Ctx r: zemitrows.nativerow key: StringView} out zemit
 # fires where written C spells the type, or calls its destructor, and on any
 # member the rest names.
 addRowDemands: function {
-    ctx: Ctx r: zemitrows.nativerow dm: StringView
+    pieces: PieceState r: zemitrows.nativerow dm: StringView
 } out zemitrows.nativerow is {
     fr: r
     if fr.demandTo == fr.demandFrom then {
@@ -447,7 +453,7 @@ addRowDemands: function {
             uo
         ) case some then {
             fr.typeName = (
-                ctx.pieces.demands.names.intern
+                pieces.demands.names.intern
                 s: (uo.substring from: 0 to: ((uo.indexOf needle: ",").or d: uo.length))
             )
         } case none then null
@@ -455,37 +461,37 @@ addRowDemands: function {
             dso
         ) case some then {
             fr.typeName = (
-                ctx.pieces.demands.names.intern
+                pieces.demands.names.intern
                 s: (dso.substring from: 0 to: ((dso.indexOf needle: ",").or d: dso.length))
             )
             fr.destroys = true
         } case none then null
     }
     for each w: (dm.split sep: ",") loop {
-        if w.length > 0 then ctx.pieces.rows.demandKeys.append (
+        if w.length > 0 then pieces.rows.demandKeys.append (
             zemitrows.demandkey
             owner: fr.owner
-            name: (ctx.pieces.demands.names.intern s: w)
+            name: (pieces.demands.names.intern s: w)
         )
     }
-    fr.demandTo = ctx.pieces.rows.demandKeys.length
+    fr.demandTo = pieces.rows.demandKeys.length
     return fr
 }
 
 # appendFragmentRow -- fragment row `r` into the row table and its fragment
 # rows; its place
-appendFragmentRow: function {ctx: Ctx r: zemitrows.nativerow} out u64 is {
-    ctx.pieces.rows.rows.append r
-    row: ctx.pieces.rows.rows.length - 1
-    ctx.pieces.rows.fragRows.append row
+appendFragmentRow: function {pieces: PieceState r: zemitrows.nativerow} out u64 is {
+    pieces.rows.rows.append r
+    row: pieces.rows.rows.length - 1
+    pieces.rows.fragRows.append row
     return row
 }
 
 # rowNeedText -- a row's needs as its file writes them, kept to be read on
 # first use (readRowNeeds): RowTable.needTexts' place plus one
-rowNeedText: function {ctx: Ctx needs: StringView} out u64 is {
-    ctx.pieces.rows.needTexts.append from: needs.string
-    return ctx.pieces.rows.needTexts.length
+rowNeedText: function {pieces: PieceState needs: StringView} out u64 is {
+    pieces.rows.needTexts.append from: needs.string
+    return pieces.rows.needTexts.length
 }
 
 # constBit -- a constant-operand variant's position (1-based, the receiver
@@ -588,7 +594,7 @@ registerImplementations: function {
     for each u: users loop checkedFacts :w :prog :u
     for each u: users loop checkedCanons :ctx :u
     for each r: fd.structural loop servedRow :w :ctx :prog :r owner: ""
-    recordUnitOrder :ctx order: (servedList xs: fd.order).stringView
+    recordUnitOrder pieces: ctx.pieces order: (servedList xs: fd.order).stringView
     for each g: fd.groups loop {
         for each r: g.rows loop servedRow :w :ctx :prog :r owner: g.name.stringView
     }
@@ -597,8 +603,8 @@ registerImplementations: function {
     for each fl: fd.files loop {
         (
             ctx.pieces.piecedTexts.set
-            key: (fileKey :ctx name: fl.name.stringView)
-            value: (servedPieces :ctx ps: fl.pieces owner: "prelude")
+            key: (fileKey pieces: ctx.pieces name: fl.name.stringView)
+            value: (servedPieces pieces: ctx.pieces ps: fl.pieces owner: "prelude")
         )
     }
 }
@@ -624,7 +630,7 @@ servedUnit: function {
         need: (servedList xs: c.needs)
     )
     servedRequirements :w :ctx im: u.implementation owner: u.name.stringView
-    for each t: u.implementation.templates loop servedTemplate :ctx :t
+    for each t: u.implementation.templates loop servedTemplate pieces: ctx.pieces :t
 }
 
 # newRowWalk -- a walk that has registered nothing yet
@@ -688,7 +694,7 @@ servedRow: function {
         :ctx
         :owner
         :key
-        text: (servedPieces :ctx ps: r.pieces :owner)
+        text: (servedPieces pieces: ctx.pieces ps: r.pieces :owner)
     )
     x: zemitrows.blankRow owner: w.owner
     bd: r.body.stringView.trim
@@ -700,12 +706,12 @@ servedRow: function {
     x.call = servedCall c: r.call
     if r.via.length > 0 then x.via = ctx.pieces.demands.names.intern s: r.via.stringView
     if x.constMask == 0 when w.owner.notZero when r.needs.length > 0 then {
-        x.needText = rowNeedText :ctx needs: (servedList xs: r.needs).stringView
+        x.needText = rowNeedText pieces: ctx.pieces needs: (servedList xs: r.needs).stringView
     }
     if w.frags.length > 0 then {
-        x = beginDemands :ctx r: x
-        for each d: r.demand loop x = addRowDemands :ctx r: x dm: d.stringView
-        x = endDemands :ctx r: x :key
+        x = beginDemands pieces: ctx.pieces r: x
+        for each d: r.demand loop x = addRowDemands pieces: ctx.pieces r: x dm: d.stringView
+        x = endDemands pieces: ctx.pieces r: x :key
     }
     (
         w.place
@@ -812,7 +818,7 @@ RowWalk: class {
     fragment: function {t: this ctx: Ctx owner: StringView key: StringView text: String.take} is {
         spelledBoxes text: text.stringView into: t.boxes
         nm: t.fragmentName :owner :key
-        servedFragment :ctx name: nm.stringView text: text.take
+        servedFragment pieces: ctx.pieces name: nm.stringView text: text.take
         t.markFragment :ctx name: nm.stringView
         if t.frags.length > 0 then t.frags.append ","
         t.frags.append nm
@@ -822,7 +828,11 @@ RowWalk: class {
     # fragments: written a piece at a time
     pieces: function {t: this ctx: Ctx owner: StringView key: StringView text: PiecedText.take} is {
         nm: t.fragmentName :owner :key
-        ctx.pieces.piecedTexts.set key: (fragKey :ctx name: nm.stringView) value: text.take
+        (
+            ctx.pieces.piecedTexts.set
+            key: (fragKey pieces: ctx.pieces name: nm.stringView)
+            value: text.take
+        )
         ctx.pieces.piecedFrags.add item: nm.copy
         t.frags = nm.copy
     }
@@ -844,7 +854,7 @@ RowWalk: class {
         if destroy.length > 0 then {
             dkey: "\{key}.@destroy"
             dn = t.fragmentName :owner key: dkey.stringView
-            servedFragment :ctx name: dn.stringView text: "\{destroy}\n"
+            servedFragment pieces: ctx.pieces name: dn.stringView text: "\{destroy}\n"
             t.markFragment :ctx name: dn.stringView
         }
         (
@@ -867,8 +877,8 @@ RowWalk: class {
         if t.at.length == 0 then return
         (
             recordMark
-            :ctx
-            key: (fragKey :ctx :name)
+            pieces: ctx.pieces
+            key: (fragKey pieces: ctx.pieces :name)
             m: (NativeMark mark: t.at.copy parts: (Map String V: String))
         )
     }
@@ -931,14 +941,14 @@ RowWalk: class {
                 x.boxes = ctx.pieces.rows.boxTexts.length
                 t.boxes = String
             }
-            rid = appendFragmentRow :ctx r: x
-            if pulls.length > 0 then recordRowPulls :ctx row: rid :pulls
+            rid = appendFragmentRow pieces: ctx.pieces r: x
+            if pulls.length > 0 then recordRowPulls pieces: ctx.pieces row: rid :pulls
         } else {
             ctx.pieces.rows.rows.append x
             rid = ctx.pieces.rows.rows.length - 1
         }
         if x.owner.isZero then {
-            emitplan.shapeRow :ctx :prog :key row: rid
+            emitplan.shapeRow pieces: ctx.pieces :prog :key row: rid
             return
         }
         if key.startsWith "@" then {
@@ -954,7 +964,7 @@ RowWalk: class {
         }
         if t.reached then (
             emitplan.nameRow
-            :ctx
+            pieces: ctx.pieces
             :prog
             impl: t.impl
             :key
@@ -1098,10 +1108,10 @@ checkedUnit: function {
             }
         }
         tn: checkedText :u v: t name: "name"
-        k: nativerows.tmplKey :ctx name: tn.stringView
+        k: nativerows.tmplKey pieces: ctx.pieces name: tn.stringView
         ctx.pieces.tmplNeeds.set key: k value: (checkedTexts :u v: t name: "needs")
         ctx.pieces.piecedTexts.set key: k value: x.take
-        if ctx.pieces.markNatives then markTemplate :ctx :u :t name: tn.stringView
+        if ctx.pieces.markNatives then markTemplate pieces: ctx.pieces :u :t name: tn.stringView
     }
 }
 
@@ -1136,12 +1146,18 @@ checkedRow: function {
     )
     ps: zdata.itemsOf :f v: (zdata.fieldOf :f v: r name: "pieces")
     if ps.length > 0 then {
-        w.pieces :ctx :owner key: key.stringView text: (checkedPieces :ctx :u :ps :owner)
+        (
+            w.pieces
+            :ctx
+            :owner
+            key: key.stringView
+            text: (checkedPieces pieces: ctx.pieces :u :ps :owner)
+        )
         if ctx.pieces.markNatives then {
             (
                 recordMark
-                :ctx
-                key: (fragKey :ctx name: w.frags.stringView)
+                pieces: ctx.pieces
+                key: (fragKey pieces: ctx.pieces name: w.frags.stringView)
                 m: (piecesMark :u :ps mark: w.at.copy)
             )
         }
@@ -1158,19 +1174,19 @@ checkedRow: function {
     )
     x.byPointer = zdata.boolOf v: (zdata.fieldOf :f v: r name: "byPointer")
     x.callsEquals = zdata.boolOf v: (zdata.fieldOf :f v: r name: "callsEquals")
-    x.call = callOfArm :ctx arm: (checkedArm :u v: r name: "call").stringView
+    x.call = callOfArm pieces: ctx.pieces arm: (checkedArm :u v: r name: "call").stringView
     via: checkedText :u v: r name: "via"
     if via.length > 0 then x.via = ctx.pieces.demands.names.intern s: via.stringView
     nd: checkedTexts :u v: r name: "needs"
     if x.constMask == 0 when w.owner.notZero when nd.length > 0 then {
-        x.needText = rowNeedText :ctx needs: nd.stringView
+        x.needText = rowNeedText pieces: ctx.pieces needs: nd.stringView
     }
     if w.frags.length > 0 then {
-        x = beginDemands :ctx r: x
+        x = beginDemands pieces: ctx.pieces r: x
         for each d: (zdata.textsOf :f v: (zdata.fieldOf :f v: r name: "demand")) loop {
-            x = addRowDemands :ctx r: x dm: d.stringView
+            x = addRowDemands pieces: ctx.pieces r: x dm: d.stringView
         }
-        x = endDemands :ctx r: x key: key.stringView
+        x = endDemands pieces: ctx.pieces r: x key: key.stringView
     }
     (
         w.place
@@ -1185,8 +1201,8 @@ checkedRow: function {
 
 # callOfArm -- a checked file's `call` arm, by its name, as the kind the emitter
 # acts on
-callOfArm: function {ctx: Ctx.view arm: StringView} out svcall is {
-    k: ctx.pieces.nativeWords.slotOf text: arm
+callOfArm: function {pieces: PieceState.view arm: StringView} out svcall is {
+    k: pieces.nativeWords.slotOf text: arm
     if k == nativeWord.slot.armSimple then return svcall.simple
     if k == nativeWord.slot.armArgument then return svcall.arg
     if k == nativeWord.slot.armParse then return svcall.parse
@@ -1226,7 +1242,7 @@ checkedClass: function {
 # checkedPieces -- a list of pieces read off a checked file as the text the
 # emitter writes, as servedPieces reads the pieces zc carries
 checkedPieces: function {
-    ctx: Ctx
+    pieces: PieceState
     u: UserImplementation.view
     ps: (ListVal ztypes.cval).view
     owner: StringView
@@ -1243,7 +1259,7 @@ checkedPieces: function {
         for each d: (zdata.textsOf f: u.file v: (zdata.fieldOf f: u.file v: p name: "demand")
         ) loop dl.append from: d.copy
         nd: checkedTexts :u v: p name: "needs"
-        row: pieceRow :ctx :owner name: nm.stringView demands: dl needs: nd.stringView
+        row: pieceRow :pieces :owner name: nm.stringView demands: dl needs: nd.stringView
         x.named name: nm.stringView needs: nd.stringView :row reached: "" text: tx.stringView
     }
     return x
@@ -1276,7 +1292,7 @@ registerFromFiles: function {
     if found.not then return
     sys: users.get i: sk
     fd: zdata.definition f: sys.file name: "foundation"
-    order: checkedUnitOrder :ctx :users :sys :fd
+    order: checkedUnitOrder pieces: ctx.pieces :users :sys :fd
     for each c: (checkedItems u: sys v: fd name: "conditions") loop (
         recordCondition
         :ctx
@@ -1295,7 +1311,7 @@ registerFromFiles: function {
         :r
         owner: ""
     )
-    recordUnitOrder :ctx order: (checkedTexts u: sys v: fd name: "order").stringView
+    recordUnitOrder pieces: ctx.pieces order: (checkedTexts u: sys v: fd name: "order").stringView
     for each g: (checkedItems u: sys v: fd name: "groups") loop {
         gn: checkedText u: sys v: g name: "name"
         for each r: (checkedItems u: sys v: g name: "rows") loop (
@@ -1311,25 +1327,29 @@ registerFromFiles: function {
     for each i: order loop checkedUnit :w :ctx :prog u: (users.get :i)
     for each fl: (checkedItems u: sys v: fd name: "files") loop {
         fn: checkedText u: sys v: fl name: "name"
-        k: fileKey :ctx name: fn.stringView
+        k: fileKey pieces: ctx.pieces name: fn.stringView
         ps: checkedItems u: sys v: fl name: "pieces"
         if ctx.pieces.markNatives then {
             fm: "file \{fn}, \{zdata.placeOf f: sys.file v: fl}"
-            recordMark :ctx key: k m: (piecesMark u: sys :ps mark: fm.take)
+            recordMark pieces: ctx.pieces key: k m: (piecesMark u: sys :ps mark: fm.take)
         }
-        ctx.pieces.piecedTexts.set key: k value: (checkedPieces :ctx u: sys :ps owner: "prelude")
+        (
+            ctx.pieces.piecedTexts.set
+            key: k
+            value: (checkedPieces pieces: ctx.pieces u: sys :ps owner: "prelude")
+        )
     }
 }
 
 # recordMark -- `m` as the mark of native text `key`
-recordMark: function {ctx: Ctx key: textkey m: NativeMark.take} is {
-    if ctx.pieces.marks.length == 0 then ctx.pieces.marks.append (
+recordMark: function {pieces: PieceState key: textkey m: NativeMark.take} is {
+    if pieces.marks.length == 0 then pieces.marks.append (
         NativeMark
         mark: String
         parts: (Map String V: String)
     )
-    ctx.pieces.nativeMarks.set :key value: ctx.pieces.marks.length
-    ctx.pieces.marks.append m.take
+    pieces.nativeMarks.set :key value: pieces.marks.length
+    pieces.marks.append m.take
 }
 
 # rowAddress -- a row's address as `zc natives show` takes it: `<unit>.<key>`,
@@ -1358,7 +1378,9 @@ piecesMark: function {
 
 # markTemplate -- template `t` of a checked file marked with where it and each
 # of its member sections is written
-markTemplate: function {ctx: Ctx u: UserImplementation.view t: ztypes.cval name: StringView} is {
+markTemplate: function {
+    pieces: PieceState u: UserImplementation.view t: ztypes.cval name: StringView
+} is {
     m: (
         NativeMark
         mark: "template \{name}, \{zdata.placeOf f: u.file v: t}"
@@ -1369,14 +1391,14 @@ markTemplate: function {ctx: Ctx u: UserImplementation.view t: ztypes.cval name:
         if mb.length == 0 then continue
         m.parts.set key: mb.copy value: "section \{mb}, \{zdata.placeOf f: u.file v: s}"
     }
-    recordMark :ctx key: (nativerows.tmplKey :ctx :name) :m
+    recordMark :pieces key: (nativerows.tmplKey :pieces :name) :m
 }
 
 # checkedUnitOrder -- each file's place in `users`, in the order the foundation
 # `fd` names the units, then the files it does not name, system's first and the
 # rest by name, as servedUnitOrder orders the rows zc carries
 checkedUnitOrder: function {
-    ctx: Ctx
+    pieces: PieceState
     users: (List UserImplementation).view
     sys: UserImplementation.view
     fd: ztypes.cval
@@ -1386,7 +1408,7 @@ checkedUnitOrder: function {
     if (named.contains item: sys.name).not then rest.append from: sys.name.copy
     sorted: List String
     for each u: users loop {
-        isSys: (ctx.pieces.nativeWords.slotOf text: u.name.stringView) == nativeWord.slot.unitSystem
+        isSys: (pieces.nativeWords.slotOf text: u.name.stringView) == nativeWord.slot.unitSystem
         if (named.contains item: u.name).not when isSys.not then sorted.append from: u.name.copy
     }
     sorted.sort
@@ -1488,13 +1510,13 @@ servedUnitOrder: function {fd: schema.foundation} out ListVal u64 is {
 }
 
 # servedFragment -- a fragment's text, as fragment `name`
-servedFragment: function {ctx: Ctx name: StringView text: String.take} is {
-    setText :ctx key: (fragKey :ctx :name) text: text.take
+servedFragment: function {pieces: PieceState name: StringView text: String.take} is {
+    setText :pieces key: (fragKey :pieces :name) text: text.take
 }
 
 # servedTemplate -- one template zc carries, its sections as pieces
 # (PiecedText) and its needs kept by its key (tmplTextOf)
-servedTemplate: function {ctx: Ctx t: schema.template} is {
+servedTemplate: function {pieces: PieceState t: schema.template} is {
     x: newPiecedText
     for each s: t.sections loop {
         if s.member.length == 0 when s.reached.length == 0 then {
@@ -1510,14 +1532,16 @@ servedTemplate: function {ctx: Ctx t: schema.template} is {
             )
         }
     }
-    k: nativerows.tmplKey :ctx name: t.name.stringView
-    ctx.pieces.tmplNeeds.set key: k value: (servedList xs: t.needs)
-    ctx.pieces.piecedTexts.set key: k value: x.take
+    k: nativerows.tmplKey :pieces name: t.name.stringView
+    pieces.tmplNeeds.set key: k value: (servedList xs: t.needs)
+    pieces.piecedTexts.set key: k value: x.take
 }
 
 # servedPieces -- pieces `ps` of `owner` zc carries as the text the emitter
 # writes (PiecedText), each named piece a row of its own (pieceRow)
-servedPieces: function {ctx: Ctx ps: staticlist schema.piece owner: StringView} out PiecedText is {
+servedPieces: function {
+    pieces: PieceState ps: staticlist schema.piece owner: StringView
+} out PiecedText is {
     x: newPiecedText
     for each p: ps loop {
         if p.name.length == 0 then {
@@ -1527,7 +1551,7 @@ servedPieces: function {ctx: Ctx ps: staticlist schema.piece owner: StringView} 
         dl: List String
         for each d: p.demand loop dl.append from: d.string
         nd: servedList xs: p.needs
-        row: pieceRow :ctx :owner name: p.name.stringView demands: dl needs: nd.stringView
+        row: pieceRow :pieces :owner name: p.name.stringView demands: dl needs: nd.stringView
         (
             x.named
             name: p.name.stringView
@@ -1864,9 +1888,9 @@ needsAddKeyCond: function {ctx: Ctx key: zemitrows.demandkey cond: Cond.view} is
         }
     } else {
         if (ctx.pieces.demands.always.get i: i - 1) then return
-        cur: demandCond :ctx at: i - 1
+        cur: demandCond pieces: ctx.pieces at: i - 1
         if (condMerge dst: cur src: cond).not then return
-        setDemandCond :ctx at: i - 1 c: cur
+        setDemandCond pieces: ctx.pieces at: i - 1 c: cur
         ctx.pieces.condEpoch = ctx.pieces.condEpoch + 1
     }
     needsAddPullsOf :ctx :key :cond
@@ -1914,8 +1938,8 @@ needsAddPullsIn: function {ctx: Ctx pulls: StringView cond: Cond.view} is {
 
 # typeIsUsed -- the program constructed this type, so the rows its
 # construction reaches have fired.
-typeIsUsed: function {ctx: Ctx.view tid: ztypes.tid} out bool is {
-    return (ctx.reach.usedTypeIds.has item: tid)
+typeIsUsed: function {reach: ReachState.view tid: ztypes.tid} out bool is {
+    return (reach.usedTypeIds.has item: tid)
 }
 
 # typeDemandMet -- may this type's body be emitted? A type no fragment row
@@ -1923,16 +1947,16 @@ typeIsUsed: function {ctx: Ctx.view tid: ztypes.tid} out bool is {
 # constructs it, because its struct exists to be dereferenced by a fragment
 # that is itself demand-loaded (typeRowDemanded). The gating set comes from
 # the rows, not from a list here.
-typeDemandMet: function {ctx: Ctx.view tid: ztypes.tid} out bool is {
-    if (ctx.reach.demandGatedTids.has item: tid).not then return true
-    return (typeRowDemanded :ctx :tid)
+typeDemandMet: function {reach: ReachState.view tid: ztypes.tid} out bool is {
+    if (reach.demandGatedTids.has item: tid).not then return true
+    return (typeRowDemanded :reach :tid)
 }
 
 # typeRowDemanded -- a `uses_<Type>` row's demand: written C spells or reaches
 # the type (ctx.typeUses, ctx.reachedTypes), or constructs it.
-typeRowDemanded: function {ctx: Ctx.view tid: ztypes.tid} out bool is {
-    if (ctx.reach.typeUses.has item: tid) or (ctx.reach.reachedTypes.has item: tid) then return true
-    return (typeIsUsed :ctx :tid)
+typeRowDemanded: function {reach: ReachState.view tid: ztypes.tid} out bool is {
+    if (reach.typeUses.has item: tid) or (reach.reachedTypes.has item: tid) then return true
+    return (typeIsUsed :reach :tid)
 }
 
 # destroyKeyTypes -- the types whose destructor the text plan `plan` writes
@@ -1940,14 +1964,14 @@ typeRowDemanded: function {ctx: Ctx.view tid: ztypes.tid} out bool is {
 # the key X names (tmplHoleType)
 destroyKeyTypes: function {
     prog: Program.view
-    ctx: Ctx.view
+    pieces: PieceState.view
     inst: ztypes.tid
     plan: RtPlan.view
     pNames: (List String).view
     pTids: (ListVal ztypes.tid).view
     acc: ListVal ztypes.tid
 } is {
-    rt: ctx.pieces.rt
+    rt: pieces.rt
     t: rt.texts.get i: plan.id
     tv: t.stringView
     inf: rt.infos.get i: plan.id
@@ -1955,13 +1979,13 @@ destroyKeyTypes: function {
     for k < inf.segTo loop {
         sg: rt.segs.get i: k
         k = k + 1
-        if sg.kind.key.not or (rtPlanWrites :ctx :plan at: sg.from).not then continue
+        if sg.kind.key.not or (rtPlanWrites :pieces :plan at: sg.from).not then continue
         hole: tv.substring from: sg.from + 2 to: sg.to - 2
         if (hole.endsWith suffix: "_DESTROY") then {
             pa: holeParamArg :pNames :pTids name: (hole.substring from: 0 to: hole.length - 8)
             if pa.notZero then acc.append pa
-        } else if k < inf.segTo when (rtStartsLiteral :ctx :plan at: k prefix: "_destroy") then {
-            ht: nativerows.tmplHoleType :prog :ctx :inst :hole
+        } else if k < inf.segTo when (rtStartsLiteral :pieces :plan at: k prefix: "_destroy") then {
+            ht: nativerows.tmplHoleType :prog :pieces :inst :hole
             if ht.notZero then acc.append ht
         }
     }
@@ -1969,10 +1993,12 @@ destroyKeyTypes: function {
 
 # rtStartsLiteral -- stretch `at` of plan `plan`'s text is a written literal
 # starting with `prefix`
-rtStartsLiteral: function {ctx: Ctx.view plan: RtPlan.view at: u64 prefix: StringView} out bool is {
-    sg: ctx.pieces.rt.segs.get i: at
-    if sg.kind.literal.not or (rtPlanWrites :ctx :plan at: sg.from).not then return false
-    t: ctx.pieces.rt.texts.get i: plan.id
+rtStartsLiteral: function {
+    pieces: PieceState.view plan: RtPlan.view at: u64 prefix: StringView
+} out bool is {
+    sg: pieces.rt.segs.get i: at
+    if sg.kind.literal.not or (rtPlanWrites :pieces :plan at: sg.from).not then return false
+    t: pieces.rt.texts.get i: plan.id
     return ((t.stringView.substring from: sg.from to: sg.to).startsWith :prefix)
 }
 
@@ -2280,13 +2306,13 @@ assembleEmitOutput: function {
     buf.append fnsBuf
     buf.append ctx.lateDefs
     buf.append hashDefs
-    ps: fileKey :ctx name: "start"
+    ps: fileKey pieces: ctx.pieces name: "start"
     buf.append (loadFixedFile :ctx key: ps)
     buf.append "int main(int argc, char* argv[]) {\n"
     if (
         stdDeclDemanded
         :prog
-        :ctx
+        pieces: ctx.pieces
         stdUnit: zast.wellKnown.slot.unOs
         member: zast.wellKnown.slot.wkArgs
     ) then {
@@ -2335,11 +2361,11 @@ emitCHeader: function {
         buf.append " */\n"
     }
     buf.append "\n"
-    p0: fileKey :ctx name: "head"
+    p0: fileKey pieces: ctx.pieces name: "head"
     buf.append (loadFixedFile :ctx key: p0)
-    p1: fragKey :ctx name: panicFrag
+    p1: fragKey pieces: ctx.pieces name: panicFrag
     buf.append (loadFixedFile :ctx key: p1)
-    p2: fileKey :ctx name: "alloc"
+    p2: fileKey pieces: ctx.pieces name: "alloc"
     buf.append (loadFixedFile :ctx key: p2)
 }
 
@@ -2357,8 +2383,9 @@ noteMemberUseCond: function {ctx: Ctx mono: ztypes.tid member: u64 cond: Cond.vi
         return
     }
     k: memberKey :mono :member
-    if (ctx.reach.memberUses.has item: k) when (memberCondOf :ctx key: k).always then return
-    cur: memberCondOf :ctx key: k
+    if (ctx.reach.memberUses.has item: k) when (memberCondOf pieces: ctx.pieces key: k
+    ).always then return
+    cur: memberCondOf pieces: ctx.pieces key: k
     if (ctx.reach.memberUses.has item: k).not then cur = Cond always: false terms: ListVal u64
     if (condMerge dst: cur src: cond).not when (ctx.reach.memberUses.has item: k) then return
     w: u64
@@ -2376,10 +2403,10 @@ noteMemberUseCond: function {ctx: Ctx mono: ztypes.tid member: u64 cond: Cond.vi
 }
 
 # memberCondOf -- the condition member key `key` is used under
-memberCondOf: function {ctx: Ctx.view key: u64} out Cond is {
-    if (ctx.pieces.memberAlways.has item: key) then return condAlways
+memberCondOf: function {pieces: PieceState.view key: u64} out Cond is {
+    if (pieces.memberAlways.has item: key) then return condAlways
     c: Cond always: false terms: ListVal u64
-    for each mc: ctx.pieces.memberConds loop {
+    for each mc: pieces.memberConds loop {
         if mc.key == key then c.terms.append mc.mask
     }
     if c.terms.length == 0 then return condAlways
@@ -2399,8 +2426,8 @@ rtRowPlan: function {ctx: Ctx.view id: rtid} out RtPlan is {
         fired: false
         if row > 0 when (rowDemandFired :ctx :row) then fired = true
         plan.kept.append fired
-        if fired when (rowAlways :ctx :row).not then {
-            plan.conds.append (rowCond :ctx :row)
+        if fired when (rowAlways pieces: ctx.pieces :row).not then {
+            plan.conds.append (rowCond pieces: ctx.pieces :row)
         } else {
             plan.conds.append condAlways
         }
@@ -2451,7 +2478,7 @@ planNeeds: function {
 # rtRenderWith -- rtRender, filling the holes from the bindings too when `holes`
 # (fillSpan)
 rtRenderWith: function {
-    ctx: Ctx.view
+    pieces: PieceState.view
     plan: RtPlan.view
     keys: RtKeys.view
     bindIds: (ListVal zast.nameid).view
@@ -2464,12 +2491,12 @@ rtRenderWith: function {
     fails: List String
 } out String is {
     res: String
-    path: textLabel :ctx :key
-    rt: ctx.pieces.rt
+    path: textLabel :pieces :key
+    rt: pieces.rt
     id: plan.id
     inf: rt.infos.get i: id
     total: (rt.texts.get i: id).length
-    mk: openMark :ctx :key buf: res
+    mk: openMark :pieces :key buf: res
     # a piece's mark was written last: the text's own is written again before
     # more of it
     pieceMarked: false
@@ -2479,7 +2506,7 @@ rtRenderWith: function {
     for j < inf.pieceTo loop {
         pc: rt.pieces.get i: j
         j = j + 1
-        pieceMarked = remarkText :ctx :mk :id from: pos to: pc.at after: pieceMarked buf: res
+        pieceMarked = remarkText :pieces :mk :id from: pos to: pc.at after: pieceMarked buf: res
         (
             rt.fillSpan
             :id
@@ -2496,7 +2523,7 @@ rtRenderWith: function {
             buf: res
         )
         if (plan.kept.get :i) then {
-            pieceMarked = markPiece :ctx :mk :id :pc buf: res
+            pieceMarked = markPiece :pieces :mk :id :pc buf: res
             # a section written under a condition is filled apart, to wrap it
             wrapped: false
             if i < plan.conds.length then wrapped = (condAlwaysHolds c: (plan.conds.get :i)).not
@@ -2518,7 +2545,7 @@ rtRenderWith: function {
                 buf: body
             )
             if wrapped then {
-                wrapCond :ctx c: (plan.conds.get :i) body: body.stringView buf: res
+                wrapCond :pieces c: (plan.conds.get :i) body: body.stringView buf: res
             } else {
                 body swap res
             }
@@ -2526,7 +2553,7 @@ rtRenderWith: function {
         i = i + 1
         pos = pc.next
     }
-    remarkText :ctx :mk :id from: pos to: total after: pieceMarked buf: res
+    remarkText :pieces :mk :id from: pos to: total after: pieceMarked buf: res
     (
         rt.fillSpan
         :id
@@ -2547,8 +2574,10 @@ rtRenderWith: function {
 
 # appendNativeMark -- the mark of native text `mk` (NativeMark) as a C comment
 # line: the piece's or section's named `name`, the text's own for ""
-appendNativeMark: function {ctx: Ctx.view mk: u64 name: StringView buf: String.borrow} is {
-    m: ctx.pieces.marks.get i: mk
+appendNativeMark: function {
+    pieces: PieceState.view mk: u64 name: StringView buf: String.borrow
+} is {
+    m: pieces.marks.get i: mk
     if name.length > 0 then {
         pm: m.parts.get key: name.asString
         if pm.some then {
@@ -2561,19 +2590,21 @@ appendNativeMark: function {ctx: Ctx.view mk: u64 name: StringView buf: String.b
 
 # openMark -- the mark of native text `key`, written first (zc emit
 # --mark-natives): its row in Ctx.marks, 0 for none
-openMark: function {ctx: Ctx.view key: textkey buf: String.borrow} out u64 is {
-    if ctx.pieces.markNatives.not then return 0
-    mk: (ctx.pieces.nativeMarks.get :key).or d: 0
-    if mk > 0 then appendNativeMark :ctx :mk name: "" :buf
+openMark: function {pieces: PieceState.view key: textkey buf: String.borrow} out u64 is {
+    if pieces.markNatives.not then return 0
+    mk: (pieces.nativeMarks.get :key).or d: 0
+    if mk > 0 then appendNativeMark :pieces :mk name: "" :buf
     return mk
 }
 
 # markPiece -- the mark of piece `pc` of text `id`, when the text has a mark
 # `mk`; whether it had
-markPiece: function {ctx: Ctx.view mk: u64 id: rtid pc: rtpiece buf: String.borrow} out bool is {
+markPiece: function {
+    pieces: PieceState.view mk: u64 id: rtid pc: rtpiece buf: String.borrow
+} out bool is {
     if mk == 0 then return false
-    tv: (ctx.pieces.rt.heads.get i: id).stringView
-    appendNativeMark :ctx :mk name: (tv.substring from: pc.headFrom to: pc.nameTo) :buf
+    tv: (pieces.rt.heads.get i: id).stringView
+    appendNativeMark :pieces :mk name: (tv.substring from: pc.headFrom to: pc.nameTo) :buf
     return true
 }
 
@@ -2581,13 +2612,13 @@ markPiece: function {ctx: Ctx.view mk: u64 id: rtid pc: rtpiece buf: String.borr
 # more of the text (bytes `from` to `to`) that is not blank; whether a piece's
 # mark is still the last written
 remarkText: function {
-    ctx: Ctx.view mk: u64 id: rtid from: u64 to: u64 after: bool buf: String.borrow
+    pieces: PieceState.view mk: u64 id: rtid from: u64 to: u64 after: bool buf: String.borrow
 } out bool is {
     if after.not then return false
     if (
-        ((ctx.pieces.rt.texts.get i: id).stringView.substring :from :to).trim.length == 0
+        ((pieces.rt.texts.get i: id).stringView.substring :from :to).trim.length == 0
     ) then return true
-    appendNativeMark :ctx :mk name: "" :buf
+    appendNativeMark :pieces :mk name: "" :buf
     return false
 }
 
@@ -2599,12 +2630,12 @@ condAlwaysHolds: function {c: Cond.view} out bool is {
 
 # rtPlanWrites -- plan `plan` writes the template byte at `at`: it lies outside
 # every section, or in the body of a written one
-rtPlanWrites: function {ctx: Ctx.view plan: RtPlan.view at: u64} out bool is {
-    inf: ctx.pieces.rt.infos.get i: plan.id
+rtPlanWrites: function {pieces: PieceState.view plan: RtPlan.view at: u64} out bool is {
+    inf: pieces.rt.infos.get i: plan.id
     i: u64
     j: inf.pieceFrom
     for j < inf.pieceTo loop {
-        pc: ctx.pieces.rt.pieces.get i: j
+        pc: pieces.rt.pieces.get i: j
         j = j + 1
         if at < pc.at then return true
         if at < pc.next then {
@@ -2637,7 +2668,7 @@ sectionConds: function {
         mk: memberKey :mono member: slot
         if (kept.get i: k) when (ctx.reach.memberUses.has item: mk) then c = (
             memberCondOf
-            :ctx
+            pieces: ctx.pieces
             key: mk
         )
         conds.append c
@@ -2709,7 +2740,7 @@ loadFixedFile: function {ctx: Ctx key: textkey} out String is {
     ferr: List String
     res: (
         rtRenderWith
-        :ctx
+        pieces: ctx.pieces
         :plan
         keys: ctx.pieces.rt.noKeys
         bindIds: bn
@@ -2721,7 +2752,7 @@ loadFixedFile: function {ctx: Ctx key: textkey} out String is {
         fails: ferr
     )
     if (ctx.pieces.rt.infos.get i: plan.id).open then {
-        ferr.append from: "\{textLabel :ctx :key}: unterminated hole"
+        ferr.append from: "\{textLabel pieces: ctx.pieces :key}: unterminated hole"
     }
     for each m: ferr loop ctx.emitErrors.append (emitterFailure what: m.copy line: 0)
     return res
@@ -2730,11 +2761,11 @@ loadFixedFile: function {ctx: Ctx key: textkey} out String is {
 # emitStringFragments -- the String, StringView and hash runtime fragments. A
 # String typedef (Path) shares the String struct and its free (destroyFnC).
 emitStringFragments: function {ctx: Ctx buf: String.borrow} is {
-    p1: fileKey :ctx name: "String"
+    p1: fileKey pieces: ctx.pieces name: "String"
     buf.append (loadFixedFile :ctx key: p1)
-    p2: fileKey :ctx name: "StringView"
+    p2: fileKey pieces: ctx.pieces name: "StringView"
     buf.append (loadFixedFile :ctx key: p2)
-    ph: fileKey :ctx name: "hash"
+    ph: fileKey pieces: ctx.pieces name: "hash"
     buf.append (loadFixedFile :ctx key: ph)
 }
 
@@ -2903,19 +2934,19 @@ condKey: function {c: Cond.view} out String is {
 
 # condExprC -- the C preprocessor test a condition is: its terms ORed, each the
 # AND of its conditions' expressions
-condExprC: function {ctx: Ctx.view c: Cond.view} out String is {
+condExprC: function {pieces: PieceState.view c: Cond.view} out String is {
     e: String
     for each t: c.terms loop {
         if e.length > 0 then e.append " || "
         e.append "("
         first: true
         k: u64
-        for k < ctx.pieces.conds.length loop {
+        for k < pieces.conds.length loop {
             if (t & (1.u64 << k)) != 0 then {
                 if first.not then e.append " && "
                 first = false
                 e.append "("
-                e.append (ctx.pieces.conds.get i: k).expr
+                e.append (pieces.conds.get i: k).expr
                 e.append ")"
             }
             k = k + 1
@@ -2927,13 +2958,13 @@ condExprC: function {ctx: Ctx.view c: Cond.view} out String is {
 
 # wrapCond -- `body` into `buf`, inside `#if` where `c` holds in fewer than
 # every configuration
-wrapCond: function {ctx: Ctx.view c: Cond.view body: StringView buf: String.borrow} is {
+wrapCond: function {pieces: PieceState.view c: Cond.view body: StringView buf: String.borrow} is {
     if c.always or (c.terms.length == 0) then {
         buf.append body
         return
     }
     buf.append "#if "
-    buf.append (condExprC :ctx :c)
+    buf.append (condExprC :pieces :c)
     buf.append "\n"
     buf.append body
     if (body.endsWith suffix: "\n").not then buf.append "\n"
@@ -2941,13 +2972,13 @@ wrapCond: function {ctx: Ctx.view c: Cond.view body: StringView buf: String.borr
 }
 
 # demandCond -- the condition demand `at` holds under
-demandCond: function {ctx: Ctx.view at: u64} out Cond is {
-    if (ctx.pieces.demands.always.get i: at) then return condAlways
+demandCond: function {pieces: PieceState.view at: u64} out Cond is {
+    if (pieces.demands.always.get i: at) then return condAlways
     c: Cond always: false terms: ListVal u64
     k: u64
-    for k < ctx.pieces.demands.termDemand.length loop {
-        if (ctx.pieces.demands.termDemand.get i: k) == at then c.terms.append (
-            ctx.pieces.demands.termMask.get
+    for k < pieces.demands.termDemand.length loop {
+        if (pieces.demands.termDemand.get i: k) == at then c.terms.append (
+            pieces.demands.termMask.get
             i: k
         )
         k = k + 1
@@ -2956,39 +2987,39 @@ demandCond: function {ctx: Ctx.view at: u64} out Cond is {
 }
 
 # setDemandCond -- demand `at` holds under `c` now
-setDemandCond: function {ctx: Ctx at: u64 c: Cond.view} is {
+setDemandCond: function {pieces: PieceState at: u64 c: Cond.view} is {
     w: u64
     k: u64
-    for k < ctx.pieces.demands.termDemand.length loop {
-        d: ctx.pieces.demands.termDemand.get i: k
-        m: ctx.pieces.demands.termMask.get i: k
+    for k < pieces.demands.termDemand.length loop {
+        d: pieces.demands.termDemand.get i: k
+        m: pieces.demands.termMask.get i: k
         k = k + 1
         if d == at then continue
-        ctx.pieces.demands.termDemand.set i: w val: d
-        ctx.pieces.demands.termMask.set i: w val: m
+        pieces.demands.termDemand.set i: w val: d
+        pieces.demands.termMask.set i: w val: m
         w = w + 1
     }
-    for ctx.pieces.demands.termDemand.length > w loop {
-        ctx.pieces.demands.termDemand.pop
-        ctx.pieces.demands.termMask.pop
+    for pieces.demands.termDemand.length > w loop {
+        pieces.demands.termDemand.pop
+        pieces.demands.termMask.pop
     }
-    ctx.pieces.demands.always.set i: at val: c.always
+    pieces.demands.always.set i: at val: c.always
     if c.always then return
     for each t: c.terms loop {
-        ctx.pieces.demands.termDemand.append at
-        ctx.pieces.demands.termMask.append t
+        pieces.demands.termDemand.append at
+        pieces.demands.termMask.append t
     }
 }
 
 # rowAlways -- fired fragment row `row` holds in every configuration: a demand
 # it answers does, or written C spelled its type
-rowAlways: function {ctx: Ctx.view row: u64} out bool is {
-    r: ctx.pieces.rows.rows.get i: row
+rowAlways: function {pieces: PieceState.view row: u64} out bool is {
+    r: pieces.rows.rows.get i: row
     if r.typeTid.notZero then return true
     k: r.demandFrom
     for k < r.demandTo loop {
-        x: ctx.pieces.demands.at key: (ctx.pieces.rows.demandKeys.get i: k)
-        if x > 0 when (ctx.pieces.demands.always.get i: x - 1) then return true
+        x: pieces.demands.at key: (pieces.rows.demandKeys.get i: k)
+        if x > 0 when (pieces.demands.always.get i: x - 1) then return true
         k = k + 1
     }
     return false
@@ -2996,14 +3027,14 @@ rowAlways: function {ctx: Ctx.view row: u64} out bool is {
 
 # rowCond -- the condition fired fragment row `row` holds under: the OR of the
 # demands it answers
-rowCond: function {ctx: Ctx.view row: u64} out Cond is {
-    if (rowAlways :ctx :row) then return condAlways
+rowCond: function {pieces: PieceState.view row: u64} out Cond is {
+    if (rowAlways :pieces :row) then return condAlways
     c: Cond always: false terms: ListVal u64
-    r: ctx.pieces.rows.rows.get i: row
+    r: pieces.rows.rows.get i: row
     k: r.demandFrom
     for k < r.demandTo loop {
-        x: ctx.pieces.demands.at key: (ctx.pieces.rows.demandKeys.get i: k)
-        if x > 0 then condMerge dst: c src: (demandCond :ctx at: x - 1)
+        x: pieces.demands.at key: (pieces.rows.demandKeys.get i: k)
+        if x > 0 then condMerge dst: c src: (demandCond :pieces at: x - 1)
         k = k + 1
     }
     return c
@@ -3020,7 +3051,7 @@ rowDemandFired: function {ctx: Ctx.view row: u64} out bool is {
     if r.typeTid.notZero then {
         if r.destroys then {
             if (ctx.reach.destroyUsed.has item: r.typeTid) then return true
-        } else if (typeRowDemanded :ctx tid: r.typeTid) then return true
+        } else if (typeRowDemanded reach: ctx.reach tid: r.typeTid) then return true
     }
     k: r.demandFrom
     for k < r.demandTo loop {
@@ -3069,8 +3100,8 @@ writeRuntimeRow: function {
     ctx.pieces.rowsWritten.add item: row
     closeRowNeeds :ctx
     rowMemberUses :prog :ctx :row
-    fl: rowFragText :ctx :row
-    if (rowAlways :ctx :row) then {
+    fl: rowFragText pieces: ctx.pieces :row
+    if (rowAlways pieces: ctx.pieces :row) then {
         for each fr: (fl.stringView.split sep: ",") loop {
             if fr.length > 0 then writeFragment :prog :ctx frag: fr :buf
         }
@@ -3080,15 +3111,15 @@ writeRuntimeRow: function {
     for each fr: (fl.stringView.split sep: ",") loop {
         if fr.length > 0 then writeFragment :prog :ctx frag: fr buf: rb
     }
-    wrapCond :ctx c: (rowCond :ctx :row) body: rb.stringView :buf
+    wrapCond pieces: ctx.pieces c: (rowCond pieces: ctx.pieces :row) body: rb.stringView :buf
 }
 
 # rowFragText -- fragment row `row`'s fragment names, comma-separated, as an
 # owned copy (the fragment emitter lends ctx); "" for a piece
-rowFragText: function {ctx: Ctx.view row: u64} out String is {
-    ft: (ctx.pieces.rows.rows.get i: row).fragText
+rowFragText: function {pieces: PieceState.view row: u64} out String is {
+    ft: (pieces.rows.rows.get i: row).fragText
     if ft == 0 then return String
-    return (ctx.pieces.rows.fragTexts.get i: ft - 1).copy
+    return (pieces.rows.fragTexts.get i: ft - 1).copy
 }
 
 # rowMemberUses -- the template members row `row`'s fragments call (its
@@ -3123,11 +3154,11 @@ rowMemberUse: function {
     }
     cb: u64
     if qm < one.length then cb = condBitOf :ctx name: (one.substring from: qm + 1 to: one.length)
-    if cb == 0 when (rowAlways :ctx :row) then {
+    if cb == 0 when (rowAlways pieces: ctx.pieces :row) then {
         noteMemberUse :ctx mono: mt member: sl
         return
     }
-    rc: rowCond :ctx :row
+    rc: rowCond pieces: ctx.pieces :row
     if cb != 0 then rc = condWith c: rc bit: cb
     noteMemberUseCond :ctx mono: mt member: sl cond: rc
 }
@@ -3165,7 +3196,7 @@ closeRow: function {ctx: Ctx row: u64 recond: bool} is {
         return
     }
     ctx.pieces.rowsClosed.add item: row
-    if (rowAlways :ctx :row).not then {
+    if (rowAlways pieces: ctx.pieces :row).not then {
         rowNeedsUnder :ctx :row
         return
     }
@@ -3176,7 +3207,7 @@ closeRow: function {ctx: Ctx row: u64 recond: bool} is {
 # rowNeedsUnder -- rowNeedsAdd for fired row `row` under the condition it holds
 # in, once per condition: a row the walk revisits under the same one adds nothing
 rowNeedsUnder: function {ctx: Ctx row: u64} is {
-    c: rowCond :ctx :row
+    c: rowCond pieces: ctx.pieces :row
     k: condKey :c
     seen: false
     {
@@ -3233,7 +3264,7 @@ writeFragment: function {
     frag: StringView
     buf: String.borrow
 } is {
-    p: fragKey :ctx name: frag
+    p: fragKey pieces: ctx.pieces name: frag
     if (ctx.pieces.piecedFrags.has item: frag.string) then {
         plan: rtRowPlan :ctx id: (tmplParsed :ctx key: p)
         buf.append (rtFragmentText :prog :ctx :plan all: false key: p)
@@ -3260,7 +3291,7 @@ demandRowBoxes: function {prog: Program.view ctx: Ctx} is {
             pt: boxTidOf :prog :ctx :one wantProtocol: true
             if it.notZero when pt.notZero then {
                 noteBoxUse :prog :ctx implTid: it protoTid: pt
-                types.noteBorrowBoxUse :ctx implTid: it protoTid: pt
+                types.noteBorrowBoxUse reach: ctx.reach implTid: it protoTid: pt
             }
         }
     }
@@ -3312,21 +3343,21 @@ markLiveClasses: function {prog: Program.view ctx: Ctx} is {
 # rtFillPieced -- a class template's text `id` with the keys `keys` binds
 # filled and its unmade functions dropped (dropUnmadeFns), its member sections
 # kept as sections: each stretch between and in them is filled apart
-rtFillPieced: function {ctx: Ctx.view id: rtid keys: RtKeys.view} out PiecedText is {
+rtFillPieced: function {pieces: PieceState.view id: rtid keys: RtKeys.view} out PiecedText is {
     x: newPiecedText
-    hd: (ctx.pieces.rt.heads.get i: id).copy
-    total: (ctx.pieces.rt.texts.get i: id).length
-    inf: ctx.pieces.rt.infos.get i: id
+    hd: (pieces.rt.heads.get i: id).copy
+    total: (pieces.rt.texts.get i: id).length
+    inf: pieces.rt.infos.get i: id
     pos: u64
     j: inf.pieceFrom
     for j < inf.pieceTo loop {
-        pc: ctx.pieces.rt.pieces.get i: j
+        pc: pieces.rt.pieces.get i: j
         j = j + 1
         (
             x.plainLines
             text: (
                 dropUnmadeFns
-                text: (rtFillKeysSpan :ctx :id :keys from: pos to: pc.at).stringView
+                text: (rtFillKeysSpan :pieces :id :keys from: pos to: pc.at).stringView
             ).stringView
         )
         (
@@ -3337,14 +3368,14 @@ rtFillPieced: function {ctx: Ctx.view id: rtid keys: RtKeys.view} out PiecedText
             reached: (hd.stringView.substring from: pc.reachedFrom to: pc.reachedTo)
             text: (
                 dropUnmadeFns
-                text: (rtFillKeysSpan :ctx :id :keys from: pc.bodyFrom to: pc.bodyTo).stringView
+                text: (rtFillKeysSpan :pieces :id :keys from: pc.bodyFrom to: pc.bodyTo).stringView
             ).stringView
         )
         pos = pc.next
     }
     (
         x.plainLines
-        text: (dropUnmadeFns text: (rtFillKeysSpan :ctx :id :keys from: pos to: total).stringView
+        text: (dropUnmadeFns text: (rtFillKeysSpan :pieces :id :keys from: pos to: total).stringView
         ).stringView
     )
     return x
@@ -3352,12 +3383,12 @@ rtFillPieced: function {ctx: Ctx.view id: rtid keys: RtKeys.view} out PiecedText
 
 # rtFillKeysSpan -- rtFillKeys for bytes `from` to `to` of text `id`
 rtFillKeysSpan: function {
-    ctx: Ctx.view id: rtid keys: RtKeys.view from: u64 to: u64
+    pieces: PieceState.view id: rtid keys: RtKeys.view from: u64 to: u64
 } out String is {
     buf: String
     fails: List String
     (
-        ctx.pieces.rt.fillSpan
+        pieces.rt.fillSpan
         :id
         :from
         :to
@@ -3453,7 +3484,7 @@ demandRowKeys: function {ctx: Ctx row: u64} is {
 # lowers by hand: its demand, by its declaring unit and its name, was met
 stdDeclDemanded: function {
     prog: Program.view
-    ctx: Ctx.view
+    pieces: PieceState.view
     stdUnit: zast.nameid
     member: zast.nameid
 } out bool is {
@@ -3464,7 +3495,7 @@ stdDeclDemanded: function {
     nm: zast.poolTextAt pool: prog.ast.names ref: (prog.typing.decls.get i: did).name
     return (
         (
-            ctx.pieces.demands.atNamed
+            pieces.demands.atNamed
             owner: (types.definedInUnitName :prog tid: fid)
             name: nm.stringView
         ) >

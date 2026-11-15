@@ -194,13 +194,13 @@ cReserved: list {
 # shapeRow -- structural row `row`, keyed `<shape>.<op>`, found by the shape
 # and the operator's name id (rowShapeOf); a shape the vocabulary does not
 # hold, or an operator the program never spells, is not found
-shapeRow: function {ctx: Ctx prog: Program.view key: StringView row: u64} is {
+shapeRow: function {pieces: PieceState prog: Program.view key: StringView row: u64} is {
     d: key.indexOf needle: "."
     if d.some then {
-        sh: ctx.pieces.nativeWords.slotOf text: (key.substring from: 0 to: d)
+        sh: pieces.nativeWords.slotOf text: (key.substring from: 0 to: d)
         op: poolIdOf :prog text: (key.substring from: d + 1 to: key.length)
-        if (sh == ctx.pieces.nativeWords.none) or op.isZero then return
-        ctx.pieces.rows.shapes.set key: (zemitrows.shapekey shape: sh :op) value: row
+        if (sh == pieces.nativeWords.none) or op.isZero then return
+        pieces.rows.shapes.set key: (zemitrows.shapekey shape: sh :op) value: row
     }
 }
 
@@ -211,7 +211,7 @@ shapeRow: function {ctx: Ctx prog: Program.view key: StringView row: u64} is {
 # found this way. A type member's row with a body puts the member's name
 # among RowTable.memberBodies.
 nameRow: function {
-    ctx: Ctx prog: Program.view impl: u64 key: StringView row: u64 constant: bool
+    pieces: PieceState prog: Program.view impl: u64 key: StringView row: u64 constant: bool
 } is {
     if key.startsWith "@" then return
     tn: zast.nameid
@@ -226,12 +226,12 @@ nameRow: function {
     if nm.isZero then return
     n: zemitrows.rowname :impl typeName: tn name: nm
     if constant then {
-        ctx.pieces.rows.constByName.set key: n value: row
+        pieces.rows.constByName.set key: n value: row
         return
     }
-    ctx.pieces.rows.byName.set key: n value: row
-    if tn.notZero when (ctx.pieces.rows.rows.get i: row).body.notZero then (
-        ctx.pieces.rows.memberBodies.add
+    pieces.rows.byName.set key: n value: row
+    if tn.notZero when (pieces.rows.rows.get i: row).body.notZero then (
+        pieces.rows.memberBodies.add
         item: nm
     )
 }
@@ -432,14 +432,14 @@ buildOriginTids: function {
 # implementationRowMark / implementationRowEmitted -- an implementation row is one
 # (impl, spec, label) triple and produces one set of wrappers, a vtable and the
 # two create helpers. Emitted once, keyed by the row's confid.
-implementationRowMark: function {ctx: Ctx row: ztypes.confid} is {
-    ctx.plan.emittedImplementation.add item: row
+implementationRowMark: function {plan: PlanState row: ztypes.confid} is {
+    plan.emittedImplementation.add item: row
 }
 
 # whether an implementation's row is already out, so a second demand does not
 # repeat it
-implementationRowEmitted: function {ctx: Ctx.view row: ztypes.confid} out bool is {
-    return (ctx.plan.emittedImplementation.has item: row)
+implementationRowEmitted: function {plan: PlanState.view row: ztypes.confid} out bool is {
+    return (plan.emittedImplementation.has item: row)
 }
 
 # emitCrossUnitBareCreate -- a bare (no-arg) cross-unit construction
@@ -594,7 +594,7 @@ objIterCallC: function {
     } else {
         itc: ctxCname :ctx tid: itid
         # a templated class's `call` is a section of its template
-        if (nativerows.tmplClassRowOf :prog :ctx tid: itid) > 0 then (
+        if (nativerows.tmplClassRowOf :prog pieces: ctx.pieces tid: itid) > 0 then (
             noteMemberUse
             :ctx
             mono: itid
@@ -712,7 +712,7 @@ fnParamsC: function {
         }
         params.append " "
         pmnV: paramVidByNameId :prog :op nameId: pnmId
-        pmnDecl: localnames.varCName :ctx :prog vid: pmnV
+        pmnDecl: localnames.varCName known: ctx.known :prog vid: pmnV
         params.append pmnDecl
         pi = pi + 1
     }
@@ -728,7 +728,7 @@ fnSignature: function {
     fid: ztypes.tid
     op: astnode.view
 } out String is {
-    if (isEntryMain :prog :ctx :fid) then return "void z_main(void)".string
+    if (isEntryMain :prog known: ctx.known :fid) then return "void z_main(void)".string
     ret: fnReturnC :prog :ctx :fid
     params: fnParamsC :prog :ctx :fid :op
     fc: types.ctxCnameView :ctx tid: fid
@@ -739,8 +739,8 @@ fnSignature: function {
 # isEntryMain -- `fid` is the program's entry point: the `main` the main unit
 # itself declares. A function of that name anywhere else -- a namespace's, a
 # type's -- is an ordinary function and keeps its own signature.
-isEntryMain: function {prog: Program.view ctx: Ctx.view fid: ztypes.tid} out bool is {
-    em: entryMainTid :prog :ctx
+isEntryMain: function {prog: Program.view known: KnownNames.view fid: ztypes.tid} out bool is {
+    em: entryMainTid :prog :known
     if em.isZero then return false
     return em == fid
 }
@@ -831,7 +831,7 @@ closeTmplDestroys: function {
         seen = ctx.reach.memberUses.length
         monos: ListVal ztypes.tid
         for each r: ctx.reach.reachedTypes loop {
-            if (nativerows.tmplClassRowOf :prog :ctx tid: r) != 0 then monos.append r
+            if (nativerows.tmplClassRowOf :prog pieces: ctx.pieces tid: r) != 0 then monos.append r
         }
         for each m: monos loop nativerows.tmplSectionDestroys :prog :ctx mono: m
     }
@@ -1106,7 +1106,7 @@ planRecordMethods: function {prog: Program.view ctx: Ctx} is {
         smD: ctx.known.mainUnitId
         (
             ctxBindMain
-            :ctx
+            known: ctx.known
             name: un.stringView
             unitDecl: (ztypecheck.unitDeclOfName typing: prog.typing nameId: u.name)
         )
@@ -1117,7 +1117,7 @@ planRecordMethods: function {prog: Program.view ctx: Ctx} is {
             bodyIds: (zast.unitBodyIdsAt ast: prog.ast unitId: opId)
             ownerTid: ztypes.tid
         )
-        ctxBindMain :ctx name: sm.stringView unitDecl: smD
+        ctxBindMain known: ctx.known name: sm.stringView unitDecl: smD
     }
 }
 
@@ -1143,7 +1143,7 @@ planBodyMethods: function {
             (isTypedefDef n: opn)
         )
         if hasMethods.not then continue
-        rid: unitMemberTid :prog :ctx :ownerTid nameId: bm.name
+        rid: unitMemberTid :prog known: ctx.known :ownerTid nameId: bm.name
         if rid.notZero then planTypeMethods :prog :ctx tid: rid op: opn
     }
     planNestedUnitMethods :prog :ctx :bodyIds :ownerTid
@@ -1164,7 +1164,7 @@ planNestedUnitMethods: function {
         nOp: nm.operation
         if (isGenericTemplateUnitOp :prog opId: nOp) then continue
         if (zast.unitOpDeclaresUnit ast: prog.ast opId: nOp).not then continue
-        nsTid: unitMemberTid :prog :ctx :ownerTid nameId: nm.name
+        nsTid: unitMemberTid :prog known: ctx.known :ownerTid nameId: nm.name
         if nsTid.isZero then continue
         sns: ctx.known.nsTid
         ctx.known.nsTid = nsTid
@@ -1414,7 +1414,7 @@ planFnsPass: function {
             smD: ctx.known.mainUnitId
             (
                 ctxBindMain
-                :ctx
+                known: ctx.known
                 name: unitNameText.stringView
                 unitDecl: (ztypecheck.unitDeclOfName typing: prog.typing nameId: unitNameId)
             )
@@ -1429,7 +1429,7 @@ planFnsPass: function {
             } else {
                 planFnsIn :prog :ctx mainOpId: opId ownerTid: ztypes.tid
             }
-            ctxBindMain :ctx name: sm.stringView unitDecl: smD
+            ctxBindMain known: ctx.known name: sm.stringView unitDecl: smD
         }
     }
 }
@@ -1446,7 +1446,7 @@ planFns: function {
     ctx: Ctx
 } is {
     planFnsPass :prog :ctx
-    em: entryMainTid :prog :ctx
+    em: entryMainTid :prog known: ctx.known
     if em.notZero then noteFnUse :ctx tid: em
 }
 
@@ -1550,7 +1550,7 @@ drainFnJobs: function {
             k = k + 1
         }
     }
-    ctxBindMain :ctx name: sm.stringView unitDecl: smD
+    ctxBindMain known: ctx.known name: sm.stringView unitDecl: smD
     ctx.known.nsTid = sns
 }
 
@@ -1570,7 +1570,7 @@ writeFnJob: function {
     ctx.plan.fnJobs.set i: k val: j
     if j.unitDecl != ctx.known.mainUnitId then {
         un: zast.poolTextAt pool: prog.ast.names ref: (prog.typing.declNameOf declId: j.unitDecl)
-        ctxBindMain :ctx name: un.stringView unitDecl: j.unitDecl
+        ctxBindMain known: ctx.known name: un.stringView unitDecl: j.unitDecl
     }
     ctx.known.nsTid = j.nsTid
     pa: protos.length
@@ -1646,13 +1646,13 @@ writeDemanded: function {
 # written jobs from `text` (drainFnJobs' `protos` or `bodies`), in the order
 # planFns met them: the units' type methods, or the rest.
 appendWrittenFns: function {
-    ctx: Ctx.view
+    plan: PlanState.view
     protos: bool
     withMethods: bool
     text: StringView
     buf: String.borrow
 } is {
-    for each j: ctx.plan.fnJobs loop {
+    for each j: plan.fnJobs loop {
         if j.withMethods != withMethods then continue
         if protos then {
             buf.append (text.substring from: j.protoAt to: j.protoEnd)
@@ -1674,7 +1674,7 @@ demandHelperCalls: function {
     ctx: Ctx
     preview: IdSet ztypes.tid
 } out bool is {
-    before: queuedFnCount :ctx
+    before: queuedFnCount plan: ctx.plan
     seen: IdSet ztypes.tid
     seenHash: IdSet ztypes.tid
     for each r: (reachPreview :prog :ctx seen: preview) loop {
@@ -1693,7 +1693,7 @@ demandHelperCalls: function {
         row: prog.typing.implementation.get i: ri
         demandImplCalls :prog :ctx implTid: row.implTypeId specTid: row.specTypeId
     }
-    return (queuedFnCount :ctx) != before
+    return (queuedFnCount plan: ctx.plan) != before
 }
 
 # demandKeyCalls -- the `==` and `hash` of the key `key` a Set or Map instance
@@ -1707,7 +1707,7 @@ demandKeyCalls: function {
     seenHash: IdSet ztypes.tid
 } is {
     k: key
-    kind: nativerows.keyHashKind :prog :ctx tid: k
+    kind: nativerows.keyHashKind :prog known: ctx.known tid: k
     eqK: types.keyEqSpelled :prog :ctx :tid
     hashK: types.keyHashSpelled :prog :ctx :tid
     if (nativerows.isValKey :prog key: k :kind) then {
@@ -1725,9 +1725,9 @@ demandKeyCalls: function {
 }
 
 # queuedFnCount -- the function jobs written C has spelled so far.
-queuedFnCount: function {ctx: Ctx.view} out u64 is {
+queuedFnCount: function {plan: PlanState.view} out u64 is {
     n: u64
-    for each j: ctx.plan.fnJobs loop {
+    for each j: plan.fnJobs loop {
         if j.queued then n = n + 1
     }
     return n
@@ -1844,11 +1844,11 @@ demandImplCalls: function {
 
 # entryMainTid -- the function the unit ctx is bound to declares as `main`; 0
 # when it declares none.
-entryMainTid: function {prog: Program.view ctx: Ctx.view} out ztypes.tid is {
-    if ctx.known.mainUnitId.isZero then return ztypes.tid.zero
+entryMainTid: function {prog: Program.view known: KnownNames.view} out ztypes.tid is {
+    if known.mainUnitId.isZero then return ztypes.tid.zero
     md: (
         prog.typing.declFindChild
-        parentDeclId: ctx.known.mainUnitId
+        parentDeclId: known.mainUnitId
         nameId: zast.wellKnown.slot.wkMain
     )
     if md.isZero then return ztypes.tid.zero
@@ -1926,7 +1926,7 @@ planNestedUnitFns: function {
                 {
                     ownr: ownerTid
                     if ownr.isZero then {
-                        ownr = consts.mainUnitTid :prog :ctx
+                        ownr = consts.mainUnitTid :prog known: ctx.known
                     }
                     no: prog.typing.declChildOfId parentTypeId: ownr nameId: ium.name
                     if no.some then {
@@ -1948,7 +1948,7 @@ planNestedUnitFns: function {
 # source order, as their body-list indices.
 collectFnDecls: function {
     prog: Program.view
-    ctx: Ctx.view
+    known: KnownNames.view
     bodyIds: zast.kidspan
     ownerTid: ztypes.tid
     idxs: ListVal u64
@@ -1966,14 +1966,14 @@ collectFnDecls: function {
                 (
                     fnUndemanded
                     :prog
-                    unitDecl: ctx.known.mainUnitId
+                    unitDecl: known.mainUnitId
                     nameId: bm.name
                     :ownerTid
                     wantWalked: true
                 ) or
                 (
                     (bm.name == zast.wellKnown.slot.wkMain) and
-                    (ctx.known.mainName.stringView != ctx.known.realMain)
+                    (known.mainName.stringView != known.realMain)
                 )
             )
             if skipDepMain.not then {
@@ -1998,7 +1998,7 @@ planFnDecls: function {
         dm2Id: zast.kidAt kids: prog.ast.kids span: bodyIds i: didx
         dm2: prog.ast.nodes.get i: dm2Id
         if dm2.namedoperation.not then continue
-        fid: unitMemberTid :prog :ctx :ownerTid nameId: dm2.name
+        fid: unitMemberTid :prog known: ctx.known :ownerTid nameId: dm2.name
         if (isGenericFnTid :prog tid: fid) then {
             planFnMonoInstances :prog :ctx templateFnId: fid templateFnOpId: dm2.operation
         } else {
@@ -2023,7 +2023,7 @@ planFnsIn: function {
     bodyIds: zast.unitBodyIdsAt ast: prog.ast unitId: mainOpId
     planNestedUnitFns :prog :ctx :bodyIds :ownerTid
     idxs: ListVal u64
-    collectFnDecls :prog :ctx :bodyIds :ownerTid :idxs
+    collectFnDecls :prog known: ctx.known :bodyIds :ownerTid :idxs
     planFnDecls :prog :ctx :bodyIds :ownerTid :idxs
 }
 
@@ -2245,18 +2245,18 @@ collectFnLiterals: function {
 # placePanicRow -- the row of z_panic's fragment, the one the table chose (a
 # threaded program's differs), is written by the header, in its slot: no unit
 # walk writes it. Every other piece row was placed as its reader read it.
-placePanicRow: function {ctx: Ctx} is {
-    pr: panicRow :ctx
-    if pr > 0 then ctx.pieces.rowsInPlace.add item: pr
+placePanicRow: function {pieces: PieceState} is {
+    pr: panicRow :pieces
+    if pr > 0 then pieces.rowsInPlace.add item: pr
 }
 
 # panicRow -- the prelude's `@panic` row, whose fragment is z_panic's; 0 when
 # the prelude has none
-panicRow: function {ctx: Ctx.view} out u64 is {
-    p: ctx.pieces.demands.names.find s: "prelude"
-    n: ctx.pieces.demands.names.find s: "@panic"
+panicRow: function {pieces: PieceState.view} out u64 is {
+    p: pieces.demands.names.find s: "prelude"
+    n: pieces.demands.names.find s: "@panic"
     if p.isZero or n.isZero then return 0
-    return (ctx.pieces.rows.helperOf k: (zemitrows.demandkey owner: p name: n))
+    return (pieces.rows.helperOf k: (zemitrows.demandkey owner: p name: n))
 }
 
 # addMemberUse -- record member key `k` of instance `mono` as used. A member its
@@ -2673,7 +2673,7 @@ emitC: function {
     } else {
         nativepieces.registerFromFiles :ctx :prog :users
     }
-    placePanicRow :ctx
+    placePanicRow pieces: ctx.pieces
     linkLibs: List String
     csrcs: List String
     (
@@ -2687,12 +2687,12 @@ emitC: function {
         os: targetOs
     )
     {
-        buildDefUnitIndex :prog :ctx
+        buildDefUnitIndex :prog known: ctx.known
         bindFragTypeTids :prog :ctx
-        bindFragUnitDecls :prog :ctx
-        bindClassRows :prog :ctx
+        bindFragUnitDecls :prog pieces: ctx.pieces
+        bindClassRows :prog pieces: ctx.pieces
         rmn: ctx.known.realMain.copy
-        ctxBindMain :ctx name: rmn.stringView unitDecl: typing.mainUnitRoot
+        ctxBindMain known: ctx.known name: rmn.stringView unitDecl: typing.mainUnitRoot
     }
     nativepieces.checkLoadedNatives :prog :ctx
     noteStaticVids :prog :ctx
@@ -2718,14 +2718,35 @@ emitC: function {
     fnBodyText: String
     fnBodyText.reserve n: nodeEstE * 24
     writeDemanded :prog :ctx protos: fnProtoText bodies: fnBodyText
-    appendWrittenAggs :prog :ctx buf: protosBuf
+    appendWrittenAggs :prog literals: ctx.literals buf: protosBuf
     emitStaticListReaders :prog :ctx buf: protosBuf
-    appendWrittenFns :ctx protos: true withMethods: true text: fnProtoText.stringView buf: protosBuf
+    (
+        appendWrittenFns
+        plan: ctx.plan
+        protos: true
+        withMethods: true
+        text: fnProtoText.stringView
+        buf: protosBuf
+    )
     bodiesBuf: String
-    appendWrittenFns :ctx protos: false withMethods: true text: fnBodyText.stringView buf: bodiesBuf
+    (
+        appendWrittenFns
+        plan: ctx.plan
+        protos: false
+        withMethods: true
+        text: fnBodyText.stringView
+        buf: bodiesBuf
+    )
     fnsBuf: String
     fnsBuf.reserve n: fnBodyText.length + 64
-    appendWrittenFns :ctx protos: false withMethods: false text: fnBodyText.stringView buf: fnsBuf
+    (
+        appendWrittenFns
+        plan: ctx.plan
+        protos: false
+        withMethods: false
+        text: fnBodyText.stringView
+        buf: fnsBuf
+    )
     if (programHasMain :prog).not then {
         fnsBuf.append "void z_main(void) {\n"
         fnsBuf.append "}\n\n"
@@ -2737,7 +2758,7 @@ emitC: function {
     fnProtosBuf.reserve n: fnProtoText.length + 1
     (
         appendWrittenFns
-        :ctx
+        plan: ctx.plan
         protos: true
         withMethods: false
         text: fnProtoText.stringView
@@ -2757,7 +2778,7 @@ emitC: function {
     emitRecordDefs :prog :ctx buf: codeBuf
     codeBuf.append bodiesBuf
     lateBuf: String
-    if (needsOutsidePrelude :ctx from: needsAt) then {
+    if (needsOutsidePrelude pieces: ctx.pieces from: needsAt) then {
         nativepieces.emitRuntimeUnits :prog :ctx buf: lateBuf
     }
     if ctx.typeDefs.nativeBoxes.length > 0 then {
@@ -2771,7 +2792,7 @@ emitC: function {
         codeBuf = spliced.take
     }
     poolBuf: String
-    consts.emitLiteralPools :ctx :litTexts :poolBuf
+    consts.emitLiteralPools literals: ctx.literals :litTexts :poolBuf
     (
         nativepieces.assembleEmitOutput
         :prog
@@ -2782,9 +2803,9 @@ emitC: function {
         fnsBuf: fnsBuf.stringView
     )
     # z_panic's fragment, chosen by the table (a threaded program's differs)
-    pr: panicRow :ctx
+    pr: panicRow pieces: ctx.pieces
     pf: String
-    if pr > 0 then pf = nativepieces.rowFragText :ctx row: pr
+    if pr > 0 then pf = nativepieces.rowFragText pieces: ctx.pieces row: pr
     if pf.length == 0 then {
         (
             emitFail
@@ -2977,13 +2998,13 @@ unitHasMain: function {prog: Program.view mainOpId: zast.nodeid} out bool is {
 # emission (the Decl chain is immutable during emission); zero-alloc id
 # lookups then serve the hot definedInNonMain path. Interning a fresh integer
 # per unit NAME collapsed two units that share a spelling into one id.
-buildDefUnitIndex: function {prog: Program.view ctx: Ctx} is {
+buildDefUnitIndex: function {prog: Program.view known: KnownNames} is {
     t: ztypes.tid
     n: prog.reg.nextTid
     for t < n loop {
         udd: ztypecheck.unitDeclOfTid reg: prog.reg typing: prog.typing tid: t
         if udd.notZero then {
-            ctx.known.defUnitId.set key: t value: udd
+            known.defUnitId.set key: t value: udd
         }
         t = t.next
     }
@@ -2995,10 +3016,10 @@ buildDefUnitIndex: function {prog: Program.view ctx: Ctx} is {
 # saved from the bind it is restoring -- so nothing here asks which unit is
 # spelled a given way. Every mainName assignment must route through here so
 # mainUnitId never goes stale (definedInNonMain compares against it).
-ctxBindMain: function {ctx: Ctx name: StringView unitDecl: ztypes.declid} is {
+ctxBindMain: function {known: KnownNames name: StringView unitDecl: ztypes.declid} is {
     nm: name.string
-    ctx.known.mainName = nm.take
-    ctx.known.mainUnitId = unitDecl
+    known.mainName = nm.take
+    known.mainUnitId = unitDecl
 }
 
 # setHashBody / setEqBody / setDestroyItems -- the element-kind-specific
@@ -3222,30 +3243,30 @@ bindFragTypeTids: function {prog: Program.view ctx: Ctx} is {
 # once, in the order the table first names them (ctx.fragUnitDecls). A row's
 # unit that names no unit in scope (`sviter`, a unit the program does not
 # reach) lists nothing.
-bindFragUnitDecls: function {prog: Program.view ctx: Ctx} is {
+bindFragUnitDecls: function {prog: Program.view pieces: PieceState} is {
     sysU: prog.typing.systemUnitRoot
-    for each row: ctx.pieces.rows.fragRows loop {
+    for each row: pieces.rows.fragRows loop {
         uid: (
             unitDeclByName
             :prog
-            name: (ctx.pieces.demands.nameText id: (ctx.pieces.rows.rows.get i: row).owner)
+            name: (pieces.demands.nameText id: (pieces.rows.rows.get i: row).owner)
         )
         seen: uid.isZero or (uid == sysU)
-        for each d: ctx.pieces.fragUnitDecls loop {
+        for each d: pieces.fragUnitDecls loop {
             if d == uid then seen = true
         }
-        if seen.not then ctx.pieces.fragUnitDecls.append uid
+        if seen.not then pieces.fragUnitDecls.append uid
     }
 }
 
 # needsOutsidePrelude -- whether a need registered from position `from` on is
 # another unit's than the prelude's: the prelude is decided at assembly, so a
 # need of its own asks no late runtime walk
-needsOutsidePrelude: function {ctx: Ctx.view from: u64} out bool is {
+needsOutsidePrelude: function {pieces: PieceState.view from: u64} out bool is {
     i: from
-    for i < ctx.pieces.demands.keys.length loop {
-        u: ctx.pieces.demands.nameText id: (ctx.pieces.demands.keys.get :i).owner
-        if (ctx.pieces.nativeWords.slotOf text: u) != nativeWord.slot.unitPrelude then return true
+    for i < pieces.demands.keys.length loop {
+        u: pieces.demands.nameText id: (pieces.demands.keys.get :i).owner
+        if (pieces.nativeWords.slotOf text: u) != nativeWord.slot.unitPrelude then return true
         i = i + 1
     }
     return false
@@ -3277,10 +3298,10 @@ demandBoxedNatives: function {prog: Program.view ctx: Ctx} is {
 
 # bindClassRows -- each ClassRow's class, by id (ctx.classRowTids, parallel
 # to ctx.classRows); 0 when the program has no such class (rowTypeTid)
-bindClassRows: function {prog: Program.view ctx: Ctx} is {
-    for each r: ctx.pieces.classRows loop {
+bindClassRows: function {prog: Program.view pieces: PieceState} is {
+    for each r: pieces.classRows loop {
         cid: rowTypeTid :prog uname: r.uname.stringView tname: r.cls.stringView
-        ctx.pieces.classRowTids.append cid
+        pieces.classRowTids.append cid
     }
 }
 
@@ -3434,11 +3455,11 @@ emitFnptrTypedefs: function {
 }
 
 # appendWrittenAggs -- the written static aggregates' text, in row order.
-appendWrittenAggs: function {prog: Program.view ctx: Ctx.view buf: String.borrow} is {
+appendWrittenAggs: function {prog: Program.view literals: LiteralState.view buf: String.borrow} is {
     i: 1.u64
     for i < prog.typing.constAggs.length loop {
-        if (ctx.literals.aggWritten.has item: i) then {
-            for each wa: ctx.literals.aggsOut loop {
+        if (literals.aggWritten.has item: i) then {
+            for each wa: literals.aggsOut loop {
                 if wa.row == i then buf.append wa.text
             }
         }
@@ -3521,12 +3542,12 @@ emitRecordDefs: function {
             smD: ctx.known.mainUnitId
             (
                 ctxBindMain
-                :ctx
+                known: ctx.known
                 name: unitNameText.stringView
                 unitDecl: (ztypecheck.unitDeclOfName typing: prog.typing nameId: unitNameId)
             )
             emitRecordDefsIn :prog :ctx mainOpId: opId :buf
-            ctxBindMain :ctx name: sm.stringView unitDecl: smD
+            ctxBindMain known: ctx.known name: sm.stringView unitDecl: smD
         }
     }
     emitInstanceImplementationImpls :prog :ctx :buf
@@ -3603,10 +3624,10 @@ emitImplementationImplsForType: function {
         if (ctx.boxedImplementation.has item: ri).not then continue
         if (prog.reg.typetypeOf typeId: tid) == want when (
             implementationRowEmitted
-            :ctx
+            plan: ctx.plan
             row: ri
         ).not then {
-            implementationRowMark :ctx row: ri
+            implementationRowMark plan: ctx.plan row: ri
             (
                 types.emitImplementationImpl
                 :prog
@@ -3659,7 +3680,7 @@ emitUnitImplementationImpls: function {
             (isVariantDef n: biOp) or
             (isTypedefDef n: biOp)
         ).not then continue
-        implT: unitMemberTid :prog :ctx :ownerTid nameId: bi.name
+        implT: unitMemberTid :prog known: ctx.known :ownerTid nameId: bi.name
         if implT.isZero then continue
         emitImplementationImplsForType :prog :ctx implTid: implT isFacet: false :buf
         emitImplementationImplsForType :prog :ctx implTid: implT isFacet: true :buf
@@ -3703,7 +3724,7 @@ emitNestedRecordDefs: function {
         nOp: nm.operation
         if (isGenericTemplateUnitOp :prog opId: nOp) then continue
         if (zast.unitOpDeclaresUnit ast: prog.ast opId: nOp).not then continue
-        nsTid: unitMemberTid :prog :ctx :ownerTid nameId: nm.name
+        nsTid: unitMemberTid :prog known: ctx.known :ownerTid nameId: nm.name
         if nsTid.isZero then continue
         nb: zast.unitBodyIdsAt ast: prog.ast unitId: nOp
         sns: ctx.known.nsTid
@@ -3718,12 +3739,12 @@ emitNestedRecordDefs: function {
 # the nested unit `ownerTid`, or of the file unit ctx is bound to when it is 0.
 unitMemberTid: function {
     prog: Program.view
-    ctx: Ctx.view
+    known: KnownNames.view
     ownerTid: ztypes.tid
     nameId: zast.nameid
 } out ztypes.tid is {
     owner: ownerTid
-    if owner.isZero then owner = prog.typing.declTypeOf declId: ctx.known.mainUnitId
+    if owner.isZero then owner = prog.typing.declTypeOf declId: known.mainUnitId
     return ((prog.typing.declChildOfId parentTypeId: owner :nameId).or d: ztypes.tid.zero)
 }
 
@@ -3778,7 +3799,7 @@ noteEqUse: function {
     t: ztypecheck.typedefChaseTid typing: prog.typing :tid
     # String's and StringView's `==` are pieces of their runtime fragments
     if t == ctx.known.strTid then preludeNeed :ctx memb: "@String_eq"
-    if (parttexts.isViewLaid :ctx tid: t) then preludeNeed :ctx memb: "@StringView_eq"
+    if (parttexts.isViewLaid known: ctx.known tid: t) then preludeNeed :ctx memb: "@StringView_eq"
     if (ctx.reach.eqUsed.has item: t) then return
     if (ctx.typeDefs.emittedUserTypes.has item: t) then {
         cn: ctxCname :ctx tid: t
@@ -3924,7 +3945,7 @@ setupGenCtx: function {
     gpi: u64
     for gpi < gnm.length loop {
         gv: paramVidByNameId :prog :op nameId: (gnm.get i: gpi)
-        gc: localnames.varCName :ctx :prog vid: gv
+        gc: localnames.varCName known: ctx.known :prog vid: gv
         if gpi == 0 then ctx.gen.recvC = gc.copy
         if gpi == 1 then ctx.gen.valC = gc.copy
         gpi = gpi + 1

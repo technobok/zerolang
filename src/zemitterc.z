@@ -1743,7 +1743,7 @@ pathIsPointer: function {
         selfA: (
             narrowfacts.aliasResolvesToSelfAt
             :prog
-            :ctx
+            narrow: ctx.narrow
             nid: n.nodeid
             name: anP.stringView
             vid: nameVid
@@ -1757,7 +1757,7 @@ pathIsPointer: function {
         selfL: (
             narrowfacts.aliasResolvesToSelfAt
             :prog
-            :ctx
+            narrow: ctx.narrow
             nid: n.nodeid
             name: lnP.stringView
             vid: leafVid
@@ -1904,21 +1904,21 @@ ExclSave: class {
 # recordRowPulls -- the pulls of fragment row `row`, filed under each demand
 # that fires it: a method's row answers its demand word
 # (`file_pollReadable`), a helper its `@name`, not its key
-recordRowPulls: function {ctx: Ctx row: u64 pulls: StringView} is {
-    r: ctx.pieces.rows.rows.get i: row
+recordRowPulls: function {pieces: PieceState row: u64 pulls: StringView} is {
+    r: pieces.rows.rows.get i: row
     k: r.demandFrom
     for k < r.demandTo loop {
-        key: ctx.pieces.rows.demandKeys.get i: k
+        key: pieces.rows.demandKeys.get i: k
         cur: String
         {
-            got: ctx.pieces.pullsByDemand.get :key
+            got: pieces.pullsByDemand.get :key
             if got.some then {
                 cur = got.copy
             }
         }
         if cur.length > 0 then cur.append ","
         cur.append pulls
-        ctx.pieces.pullsByDemand.set :key value: cur.take
+        pieces.pullsByDemand.set :key value: cur.take
         k = k + 1
     }
 }
@@ -2087,7 +2087,7 @@ flushArgHoists: function {
     rn: ctx.stmt.argHoistRaw.length
     for i < n loop {
         # the statements recorded before this hoist run before it
-        ri = appendRawHoistsTo :ctx from: ri to: rn upto: i :ind :buf
+        ri = appendRawHoistsTo stmt: ctx.stmt from: ri to: rn upto: i :ind :buf
         ah: ctx.stmt.argHoists.get :i
         appendArgHoistDecl :ah :ind :buf
         dto: ah.dtor.stringView
@@ -2098,9 +2098,9 @@ flushArgHoists: function {
         }
         i = i + 1
     }
-    tagOwedTemps :ctx :tmp from: lf0
+    tagOwedTemps stmt: ctx.stmt :tmp from: lf0
     for ri < rn loop {
-        appendRawHoist :ctx i: ri :ind :buf
+        appendRawHoist stmt: ctx.stmt i: ri :ind :buf
         ri = ri + 1
     }
     # drop what was just emitted, back to the floor -- not to empty
@@ -2127,7 +2127,7 @@ appendArgHoistDecl: function {ah: ArgHoist.view ind: StringView buf: String.borr
 # appendRawHoistsTo -- the raw hoists from `from` (below `to`) recorded before
 # argument hoist `upto`, in order; the answer is the first one not written.
 appendRawHoistsTo: function {
-    ctx: Ctx.view
+    stmt: StatementState.view
     from: u64
     to: u64
     upto: u64
@@ -2136,16 +2136,16 @@ appendRawHoistsTo: function {
 } out u64 is {
     ri: from
     for ri < to loop {
-        if (ctx.stmt.argHoistRaw.get i: ri).at > upto then return ri
-        appendRawHoist :ctx i: ri :ind :buf
+        if (stmt.argHoistRaw.get i: ri).at > upto then return ri
+        appendRawHoist :stmt i: ri :ind :buf
         ri = ri + 1
     }
     return ri
 }
 
 # appendRawHoist -- raw hoist `i`'s statements, each line at `ind`.
-appendRawHoist: function {ctx: Ctx.view i: u64 ind: StringView buf: String.borrow} is {
-    rh: ctx.stmt.argHoistRaw.get :i
+appendRawHoist: function {stmt: StatementState.view i: u64 ind: StringView buf: String.borrow} is {
+    rh: stmt.argHoistRaw.get :i
     for each ln: rh.text.stringView.lines loop {
         buf.append ind
         buf.append ln
@@ -2165,13 +2165,13 @@ hoistmark: record {
 }
 
 # pendingHoistMark -- where the pending hoists and their floors stand now.
-pendingHoistMark: function {ctx: Ctx.view} out hoistmark is {
+pendingHoistMark: function {stmt: StatementState.view} out hoistmark is {
     return (
         hoistmark
-        names: ctx.stmt.argHoists.length
-        raw: ctx.stmt.argHoistRaw.length
-        floor: ctx.stmt.argHoistFloor
-        rawFloor: ctx.stmt.argHoistRawFloor
+        names: stmt.argHoists.length
+        raw: stmt.argHoistRaw.length
+        floor: stmt.argHoistFloor
+        rawFloor: stmt.argHoistRawFloor
         guarded: false
     )
 }
@@ -2180,13 +2180,13 @@ pendingHoistMark: function {ctx: Ctx.view} out hoistmark is {
 # tagOwedTemps -- the statement temporaries just owed from `from` on that
 # realise one of the checker's unnamed locals carry its name id, and the
 # statement that zeroes them once destroyed early.
-tagOwedTemps: function {ctx: Ctx tmp: FnTemps from: u64} is {
+tagOwedTemps: function {stmt: StatementState tmp: FnTemps from: u64} is {
     k: from
     for k < tmp.listFrees.length loop {
         o: tmp.listFrees.getMut i: k
         k = k + 1
         if o.temp then {
-            tg: (ctx.stmt.hoistTags.remove key: o.name).or d: zast.nameid.zero
+            tg: (stmt.hoistTags.remove key: o.name).or d: zast.nameid.zero
             if tg.notZero then {
                 o.tag = tg
                 o.zero = "memset(&\{o.name}, 0, sizeof(\{o.name}));"
@@ -2442,13 +2442,13 @@ typeRefC: function {
         cmc: spelledCname :ctx tid: cmid
         return "\{cmc}_t"
     }
-    cid = memberreads.chaseStrTypedef :prog :ctx tid: cid
+    cid = memberreads.chaseStrTypedef :prog known: ctx.known tid: cid
     tdc: consts.typedefChaseC :prog :ctx tid: cid
     if tdc.length > 0 then return tdc
     if cid == ctx.known.strTid then return (values.strTypeC :ctx)
     # text is one C type with StringView (isViewLaid), and its typedef is
     # the same piece
-    if (parttexts.isViewLaid :ctx tid: cid) then return (values.svTypeC :ctx)
+    if (parttexts.isViewLaid known: ctx.known tid: cid) then return (values.svTypeC :ctx)
     if (prog.reg.isBoxOf tid: cid) then {
         # spelled as its element's pointer, and destroyed through its own
         emitplan.noteTypeUse :ctx tid: cid
@@ -2564,7 +2564,7 @@ fnjob: record {
 noteMemberUse: function {ctx: Ctx mono: ztypes.tid member: u64} is {
     k: nativepieces.memberKey :mono :member
     if (ctx.reach.memberUses.has item: k) then {
-        if (memberHasCond :ctx key: k) then ctx.pieces.memberAlways.add item: k
+        if (memberHasCond pieces: ctx.pieces key: k) then ctx.pieces.memberAlways.add item: k
         return
     }
     emitplan.addMemberUse :ctx :mono :k
@@ -2572,8 +2572,8 @@ noteMemberUse: function {ctx: Ctx mono: ztypes.tid member: u64} is {
 
 # memberHasCond -- member key `key` has a term: some use of it holds under a
 # condition.
-memberHasCond: function {ctx: Ctx.view key: u64} out bool is {
-    for each mc: ctx.pieces.memberConds loop {
+memberHasCond: function {pieces: PieceState.view key: u64} out bool is {
+    for each mc: pieces.memberConds loop {
         if mc.key == key then return true
     }
     return false

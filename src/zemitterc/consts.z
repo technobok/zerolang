@@ -165,7 +165,7 @@ cEscape: function {text: StringView} out String is {
 # vocabulary's `none` for any other type
 rowShapeOf: function {
     prog: Program.view
-    ctx: Ctx.view
+    pieces: PieceState.view
     owner: ztypes.tid
 } out u64 is {
     tt: prog.reg.typetypeOf typeId: owner
@@ -185,7 +185,7 @@ rowShapeOf: function {
         }
         return nativeWord.slot.shapeRecord
     }
-    return ctx.pieces.nativeWords.none
+    return pieces.nativeWords.none
 }
 
 # stmtFormNameId -- the statement form a DOTTED callee resolves to ("print",
@@ -637,7 +637,7 @@ nodeConstText: function {
         tv = wt
     }
     if g.kind.svalKind when (
-        (memberreads.chaseStrTypedef :prog :ctx tid: tv) == ctx.known.strTid
+        (memberreads.chaseStrTypedef :prog known: ctx.known tid: tv) == ctx.known.strTid
     ) then {
         return "".string
     }
@@ -699,8 +699,8 @@ memberConstStringText: function {
 
 # mainUnitTid -- the type id of the unit being emitted: its declaration's type,
 # never a name looked up at the program root.
-mainUnitTid: function {prog: Program.view ctx: Ctx.view} out ztypes.tid is {
-    return (prog.typing.declTypeOf declId: ctx.known.mainUnitId)
+mainUnitTid: function {prog: Program.view known: KnownNames.view} out ztypes.tid is {
+    return (prog.typing.declTypeOf declId: known.mainUnitId)
 }
 
 # emitStaticListMember -- a list's member read through `n`, whose base is the
@@ -726,7 +726,7 @@ emitStaticListMember: function {
         daNm: "_da\{daN}"
         noteAggUse :ctx :row
         daRaw: "\{daCt} \{daNm};\nfor (int64_t _i = 0; _i < \{daLen.stringView}; _i++) { \{daNm}.data[_i] = _zag\{row}[_i]; }\n"
-        values.recordRawHoist :ctx text: daRaw
+        values.recordRawHoist stmt: ctx.stmt text: daRaw
         return (stating :facts from: pathFacts text: daNm)
     }
     g: prog.typing.constAggs.get i: row
@@ -1097,14 +1097,14 @@ emitAtom: function {
     # key alloc + hash) never runs for it
     avo: prog.typing.atomVariableId.get key: n.nodeid
     if avo.some then {
-        if (narrowfacts.narrowingEndedAt :prog :ctx nid: n.nodeid vid: avo) then {
+        if (narrowfacts.narrowingEndedAt :prog narrow: ctx.narrow nid: n.nodeid vid: avo) then {
             return (narrowfacts.wholeLocalName :prog :ctx name: av vid: avo :facts)
         }
         return (narrowfacts.emitLocalAtomNameWith :prog :ctx name: av vid: avo :facts)
     }
     nsc: namespaceConstText :prog :ctx nameId: n.name :facts
     if nsc.length > 0 then return nsc
-    mutd: mainUnitTid :prog :ctx
+    mutd: mainUnitTid :prog known: ctx.known
     mca: memberConstText :prog :ctx unitTid: mutd nameId: n.name :facts
     if mca.length > 0 then return mca
     mcsa: memberConstStringText :prog :ctx unitTid: mutd nameId: n.name :facts
@@ -1411,9 +1411,9 @@ emitDottedNativeMarker: function {
         return (emitExprWith :prog :ctx n: (prog.ast.nodes.get i: n.parent) :facts)
     }
     # a runtime numeric conversion `<expr>.<numtype>`
-    ncKey: nativerows.convRowNameOf :prog :ctx :n :mn2Id
+    ncKey: nativerows.convRowNameOf :prog pieces: ctx.pieces :n :mn2Id
     if ncKey.impl > 0 then {
-        ncMk: pendingHoistMark :ctx
+        ncMk: pendingHoistMark stmt: ctx.stmt
         ncValF: exprfacts
         ncVal: emitExprWith :prog :ctx n: (prog.ast.nodes.get i: n.parent) facts: ncValF
         if (pathIsPointer :prog :ctx n: (prog.ast.nodes.get i: n.parent)) then {
@@ -1635,15 +1635,15 @@ constLitView: function {ctx: Ctx ci: u64} out String is {
 # the folded-constant pool, whose every entry was minted BY an emission and so
 # has nothing unused to skip.
 emitLiteralPools: function {
-    ctx: Ctx.view
+    literals: LiteralState.view
     litTexts: (List String).view
     poolBuf: String.borrow
 } is {
     pi: u64
-    pn: ctx.literals.ids.length
+    pn: literals.ids.length
     for pi < pn loop {
-        plid: ctx.literals.ids.get i: pi
-        if (ctx.literals.used.has item: plid) then {
+        plid: literals.ids.get i: pi
+        if (literals.used.has item: plid) then {
             pt: litTexts.get i: pi
             ptv: pt.stringView
             pesc: cEscape text: ptv
@@ -1657,9 +1657,9 @@ emitLiteralPools: function {
     # buffer, so both precede the code. Every entry here was minted BY an
     # emission that asked for it, so there is nothing unused to skip.
     ci: u64
-    constCount: ctx.literals.constLits.length
+    constCount: literals.constLits.length
     for ci < constCount loop {
-        cTypeText: ctx.literals.constLits.get i: ci
+        cTypeText: literals.constLits.get i: ci
         ctv: cTypeText.stringView
         cesc: cEscape text: ctv
         cidx: ci + 1

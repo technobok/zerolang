@@ -82,8 +82,8 @@ canonTypeId: function {
 # reachability signal the implementation helpers need: they forward to the impl's
 # methods, so emitting them for a type the program never reached names natives
 # that were never loaded.
-typeStructEmitted: function {ctx: Ctx.view tid: ztypes.tid} out bool is {
-    return (ctx.typeDefs.emittedUserTypes.has item: tid)
+typeStructEmitted: function {typeDefs: TypeDefState.view tid: ztypes.tid} out bool is {
+    return (typeDefs.emittedUserTypes.has item: tid)
 }
 
 # noteDestroyUse -- written C calls the destructor of `tid`, a destroy target
@@ -123,7 +123,7 @@ destroyParts: function {
     tt: prog.reg.typetypeOf typeId: tid
     # a templated class's destructor frees what its destroy section's holes
     # spell, recorded with the sections the instance keeps (closeTmplDestroys)
-    if (nativerows.tmplClassRowOf :prog :ctx :tid) != 0 then return
+    if (nativerows.tmplClassRowOf :prog pieces: ctx.pieces :tid) != 0 then return
     if (originTidOf :prog :tid).notZero then {
         monoElemIdsOf :prog :ctx monoId: tid :acc
     } else if tt.isFieldwise then {
@@ -177,7 +177,12 @@ destroyTargetTid: function {
     ctx: Ctx.view
     tid: ztypes.tid
 } out ztypes.tid is {
-    dt: memberreads.chaseStrTypedef :prog :ctx tid: (chaseAggregateTypedef :prog :ctx :tid)
+    dt: (
+        memberreads.chaseStrTypedef
+        :prog
+        known: ctx.known
+        tid: (chaseAggregateTypedef :prog :ctx :tid)
+    )
     if (dt == ctx.known.strTid) or (ownsResources :prog :ctx tid: dt) then return dt
     if (isHeapPtrCollection :prog :ctx tid: dt) then return dt
     return ztypes.tid
@@ -193,9 +198,9 @@ destroyTargetTid: function {
 ownsResources: function {prog: Program.view ctx: Ctx.view tid: ztypes.tid} out bool is {
     if (prog.reg.needsDestructor typeId: tid) then return true
     # an instance of a templated class: its template supplies the destructor
-    if (nativerows.tmplClassRowOf :prog :ctx :tid) > 0 then return true
+    if (nativerows.tmplClassRowOf :prog pieces: ctx.pieces :tid) > 0 then return true
     if (ctx.pieces.classRowTids.contains item: tid).not then return false
-    return (ctx.reach.liveClasses.has item: tid) or (nativepieces.typeIsUsed :ctx :tid)
+    return (ctx.reach.liveClasses.has item: tid) or (nativepieces.typeIsUsed reach: ctx.reach :tid)
 }
 
 # destroyFnC -- the C function that frees a value of tid, handed destroyOperand's
@@ -244,7 +249,7 @@ colArgAsStringViewExpr: function {
         a: prog.ast.nodes.get i: aId
         if a.namedoperation when a.name == label then {
             opn: prog.ast.nodes.get i: a.operation
-            if (memberreads.isSvAsStringNode :prog :ctx n: opn) then {
+            if (memberreads.isSvAsStringNode :prog known: ctx.known n: opn) then {
                 return (svBaseExprOfAsString :prog :ctx n: opn)
             }
             return "".string
@@ -309,8 +314,8 @@ emitEmptyColCreate: function {
 # keyIsString -- a map's key or a set's element, of type `tid`, is a String: its
 # view-mode probe params are `const String*` in the template C, and it decides
 # the hash and the compare the mono gets.
-keyIsString: function {prog: Program.view ctx: Ctx.view tid: ztypes.tid} out bool is {
-    return (nativerows.keyHashKind :prog :ctx :tid).nativeString
+keyIsString: function {prog: Program.view known: KnownNames.view tid: ztypes.tid} out bool is {
+    return (nativerows.keyHashKind :prog :known :tid).nativeString
 }
 
 # emitKeyedProbe -- a Set's or Map's keyed probe, `fnC(recv, key)`: the
@@ -414,7 +419,7 @@ emitSetMethodCall: function {
         bn: bn.stringView
         label: zast.wellKnown.slot.wkItem
         viewForm: true
-        stringKey: (keyIsString :prog :ctx tid: (setElemType :prog monoId: bt))
+        stringKey: (keyIsString :prog known: ctx.known tid: (setElemType :prog monoId: bt))
         :facts
     )
     if mnId == zast.wellKnown.slot.wkDelete then return (
@@ -429,7 +434,7 @@ emitSetMethodCall: function {
         bn: bn.stringView
         label: zast.wellKnown.slot.wkItem
         viewForm: true
-        stringKey: (keyIsString :prog :ctx tid: (setElemType :prog monoId: bt))
+        stringKey: (keyIsString :prog known: ctx.known tid: (setElemType :prog monoId: bt))
         :facts
     )
     return "".string
@@ -477,7 +482,7 @@ emitMapMethodCall: function {
         bn: bn.stringView
         label: zast.wellKnown.slot.wkKey
         viewForm: true
-        stringKey: (keyIsString :prog :ctx tid: (mapKeyType :prog monoId: bt))
+        stringKey: (keyIsString :prog known: ctx.known tid: (mapKeyType :prog monoId: bt))
         :facts
     )
     if mnId == zast.wellKnown.slot.wkGetMut then return (
@@ -492,7 +497,7 @@ emitMapMethodCall: function {
         bn: bn.stringView
         label: zast.wellKnown.slot.wkKey
         viewForm: false
-        stringKey: (keyIsString :prog :ctx tid: (mapKeyType :prog monoId: bt))
+        stringKey: (keyIsString :prog known: ctx.known tid: (mapKeyType :prog monoId: bt))
         :facts
     )
     if mnId == zast.wellKnown.slot.wkHas then return (
@@ -507,7 +512,7 @@ emitMapMethodCall: function {
         bn: bn.stringView
         label: zast.wellKnown.slot.wkKey
         viewForm: true
-        stringKey: (keyIsString :prog :ctx tid: (mapKeyType :prog monoId: bt))
+        stringKey: (keyIsString :prog known: ctx.known tid: (mapKeyType :prog monoId: bt))
         :facts
     )
     if mnId == zast.wellKnown.slot.wkRemove then return (
@@ -522,7 +527,7 @@ emitMapMethodCall: function {
         bn: bn.stringView
         label: zast.wellKnown.slot.wkKey
         viewForm: false
-        stringKey: (keyIsString :prog :ctx tid: (mapKeyType :prog monoId: bt))
+        stringKey: (keyIsString :prog known: ctx.known tid: (mapKeyType :prog monoId: bt))
         :facts
     )
     return "".string
@@ -591,7 +596,7 @@ memberOrdinal: function {
     } case slot then {
         return (slotOrdinalOf :prog tid: t :nameId)
     } else {
-        return (fieldOrdinalOf :prog :ctx tid: t :nameId)
+        return (fieldOrdinalOf :prog typeDefs: ctx.typeDefs tid: t :nameId)
     }
 }
 
@@ -601,31 +606,31 @@ memberOrdinal: function {
 fieldOrdinalOf: function {
     prog: Program.view
     # the emission context, whose cache keeps each list once read
-    ctx: Ctx
+    typeDefs: TypeDefState
     # the record or class
     tid: ztypes.tid
     # the field's name, interned
     nameId: zast.nameid
 } out optionval u64 is {
     start: u64
-    so: ctx.typeDefs.fieldListAt.get key: tid
+    so: typeDefs.fieldListAt.get key: tid
     match (
         so
     ) case some then {
         start = so
     } case none then {
-        start = ctx.typeDefs.fieldNameIds.length
+        start = typeDefs.fieldNameIds.length
         ids: ListVal ztypes.tid
         nms: ListVal zast.nameid
         ztypecheck.dataFieldIds reg: prog.reg typing: prog.typing :tid :ids nameIds: nms
-        for each fnm: nms loop ctx.typeDefs.fieldNameIds.append fnm
-        ctx.typeDefs.fieldNameIds.append zast.nameid.zero
-        ctx.typeDefs.fieldListAt.set key: tid value: start
+        for each fnm: nms loop typeDefs.fieldNameIds.append fnm
+        typeDefs.fieldNameIds.append zast.nameid.zero
+        typeDefs.fieldListAt.set key: tid value: start
     }
     k: u64
     i: start
     for true loop {
-        f: ctx.typeDefs.fieldNameIds.get :i
+        f: typeDefs.fieldNameIds.get :i
         if f.isZero then break
         if f == nameId then return (optionval.some k)
         k = k + 1
@@ -701,7 +706,7 @@ protocolProjectionRead: function {
 } out String is {
     clab: boxLabelFor :prog :ctx implTid: bstamp protoTid: mco
     if (clab.stringView == mn2).not then return String
-    noteBorrowBoxUse :ctx implTid: bstamp protoTid: mco
+    noteBorrowBoxUse reach: ctx.reach implTid: bstamp protoTid: mco
     ib: ctxCnameView :ctx tid: bstamp
     # a data value is already the pointer the create takes (isStaticHandle)
     if (
@@ -1087,7 +1092,7 @@ emitObjIterPayload: function {
             buf.append l3p
             l3pa: "\{ind}    /* alias: \{lbl} => (*__borrow_\{lbl}) */\n"
             buf.append l3pa
-            localnames.bindBorrowAlias :ctx vid: lblV nm: lbl
+            localnames.bindBorrowAlias narrow: ctx.narrow vid: lblV nm: lbl
             return spillkind.viewPtr
         }
     } else if (
@@ -1409,8 +1414,8 @@ demandWrittenDestroys: function {prog: Program.view ctx: Ctx} is {
 templateEqElem: function {prog: Program.view ctx: Ctx tid: ztypes.tid} out ztypes.tid is {
     if (isListOriginOf :prog :ctx :tid) then {
         compares: (
-            (nativerows.memberUsed :ctx mono: tid member: memberWord.slot.contains) or
-            (nativerows.memberUsed :ctx mono: tid member: memberWord.slot.eq)
+            (nativerows.memberUsed reach: ctx.reach mono: tid member: memberWord.slot.contains) or
+            (nativerows.memberUsed reach: ctx.reach mono: tid member: memberWord.slot.eq)
         )
         if compares then return (nativerows.listElemType :prog monoId: tid)
         return ztypes.tid.zero
@@ -1419,7 +1424,11 @@ templateEqElem: function {prog: Program.view ctx: Ctx tid: ztypes.tid} out ztype
     if (isSetOriginOf :prog :ctx :tid) then el = setElemType :prog monoId: tid
     if (isMapOriginOf :prog :ctx :tid) then el = mapKeyType :prog monoId: tid
     if el.isZero then return el
-    if (nativerows.isValKey :prog key: el kind: (nativerows.keyHashKind :prog :ctx tid: el)
+    if (
+        nativerows.isValKey
+        :prog
+        key: el
+        kind: (nativerows.keyHashKind :prog known: ctx.known tid: el)
     ).not then return ztypes.tid.zero
     if (keyEqSpelled :prog :ctx :tid).not then return ztypes.tid.zero
     return el
@@ -1481,9 +1490,9 @@ keyHashSpelled: function {prog: Program.view ctx: Ctx tid: ztypes.tid} out bool 
 # for the member uses so far, spells the key `key`: in the text outside every
 # section, or in a kept one
 tmplKeptSpells: function {ctx: Ctx mono: ztypes.tid file: StringView key: StringView} out bool is {
-    p: nativerows.tmplKey :ctx name: file
+    p: nativerows.tmplKey pieces: ctx.pieces name: file
     plan: rtKeptPlan :ctx :mono id: (nativepieces.tmplParsed :ctx key: p)
-    return (nativerows.rtPlanSpells :ctx :plan name: key)
+    return (nativerows.rtPlanSpells pieces: ctx.pieces :plan name: key)
 }
 
 # typeReachEdges -- the types one written type's C spells: a mono's elements,
@@ -1827,14 +1836,14 @@ typeHasNativeCreate: function {prog: Program.view tid: ztypes.tid} out bool is {
 # definedInNonMain -- the type is defined in a non-main (system/io/...)
 # unit (a reachable library type to emit alongside the main closure).
 definedInNonMain: function {
-    ctx: Ctx.view
+    known: KnownNames.view
     tid: ztypes.tid
 } out bool is {
-    dgo: ctx.known.defUnitId.get key: tid
+    dgo: known.defUnitId.get key: tid
     match (
         dgo
     ) case some then {
-        return dgo != ctx.known.mainUnitId
+        return dgo != known.mainUnitId
     } case none then {
         return false
     }
@@ -1877,7 +1886,7 @@ emitUnionMono: function {
     }
     le: "} \{vc}_tag_t;\n"
     buf.append le
-    if (isFwdDeclared :ctx :tid) then {
+    if (isFwdDeclared typeDefs: ctx.typeDefs :tid) then {
         lopenU: "struct \{vc}_t {\n"
         buf.append lopenU
     } else {
@@ -1892,7 +1901,7 @@ emitUnionMono: function {
         buf.append lfD
     }
     inlineAsserts: emitUnionSlot :prog :ctx :tid arms: aidsNm :buf
-    if (isFwdDeclared :ctx :tid) then {
+    if (isFwdDeclared typeDefs: ctx.typeDefs :tid) then {
         buf.append "};\n"
     } else {
         lg: "} \{vc}_t;\n"
@@ -2078,7 +2087,7 @@ emitClassRowStructs: function {
         # a class with a template is written from it (emitTmplClassMono)
         emit: cid.notZero and ((ctx.pieces.classRows.get :i).tmpl.length == 0)
         if emit when (ctx.typeDefs.emittedUserTypes.has item: cid) then emit = false
-        if emit when (nativerows.typeReached :ctx tid: cid).not then emit = false
+        if emit when (nativerows.typeReached reach: ctx.reach tid: cid).not then emit = false
         if emit then {
             ctx.typeDefs.emittedUserTypes.add item: cid
             emitClassRowStruct :prog :ctx :cid :buf
@@ -2096,7 +2105,7 @@ emitClassRowStructs: function {
 # the main unit's and constructed by its fields, not by a native create.
 recordCreateAlias: function {prog: Program.view ctx: Ctx.view tid: ztypes.tid} out bool is {
     if (ctx.reach.createAliasUsed.has item: tid).not then return false
-    if (definedInNonMain :ctx :tid) then return false
+    if (definedInNonMain known: ctx.known :tid) then return false
     return (typeHasNativeCreate :prog :tid).not
 }
 
@@ -2136,7 +2145,7 @@ emitClassRowStruct: function {
     fids: ListVal ztypes.tid
     fidsNm: ListVal zast.nameid
     callorder.recFieldLists :prog tid: cid names: fnames ids: fids nameIds: fidsNm
-    fwd: isFwdDeclared :ctx tid: cid
+    fwd: isFwdDeclared typeDefs: ctx.typeDefs tid: cid
     if fwd then {
         lo: "struct \{fc}_t {\n"
         buf.append lo
@@ -2208,7 +2217,7 @@ maybePreEmitElem: function {
     cid: chaseAggregateTypedef :prog :ctx tid: elemTid
     # a type written C never reaches is not written: an ordinal field is its
     # scalar, so its enum is reached only where a tag constant is spelled
-    if (nativerows.typeReached :ctx tid: cid).not then return
+    if (nativerows.typeReached reach: ctx.reach tid: cid).not then return
     # an instance is emitted by its own sweep, but a user's spec instance is
     # emitted as a user spec is
     origin: originTidOf :prog tid: cid
@@ -2226,7 +2235,7 @@ maybePreEmitElem: function {
     smPeD: ctx.known.mainUnitId
     (
         emitplan.ctxBindMain
-        :ctx
+        known: ctx.known
         name: peUnit.stringView
         unitDecl: (ztypecheck.unitDeclOfTid reg: prog.reg typing: prog.typing tid: cid)
     )
@@ -2248,7 +2257,7 @@ maybePreEmitElem: function {
     if tt == ztypes.ztypetype.unionType then {
         emitUnionMono :prog :ctx tid: cid :buf
     }
-    emitplan.ctxBindMain :ctx name: smPe.stringView unitDecl: smPeD
+    emitplan.ctxBindMain known: ctx.known name: smPe.stringView unitDecl: smPeD
 }
 
 # preEmitEmbeddedTypes -- emit the main-unit user types a variant/record/class
@@ -2268,8 +2277,8 @@ preEmitEmbeddedTypes: function {
 # isFwdDeclared -- the type was forward-declared by emitMainFwdDecls, so its
 # body must be emitted as a named `struct X_t { ... };` (the typedef is already
 # in the forward-decl block).
-isFwdDeclared: function {ctx: Ctx.view tid: ztypes.tid} out bool is {
-    return (ctx.typeDefs.fwdDeclaredTypes.has item: tid)
+isFwdDeclared: function {typeDefs: TypeDefState.view tid: ztypes.tid} out bool is {
+    return (typeDefs.fwdDeclaredTypes.has item: tid)
 }
 
 # isStructTypetype -- the three typetypes whose C is a struct the emitter writes,
@@ -2395,7 +2404,7 @@ emitMainFwdDecls: function {prog: Program.view ctx: Ctx buf: String.borrow} is {
     for t < last loop {
         if (isStructTypetype tt: (prog.reg.typetypeOf typeId: t)) when (
             nativerows.typeReached
-            :ctx
+            reach: ctx.reach
             tid: t
         ) then {
             emitTypeFwdDecl :prog :ctx tid: t :buf
@@ -2494,8 +2503,8 @@ monoElemIdsOf: function {
         monoMapKV :prog :monoId :acc
         return
     }
-    if (nativerows.tmplClassRowOf :prog :ctx tid: monoId) > 0 then {
-        nativerows.tmplInstArgIds :prog :ctx :monoId :acc
+    if (nativerows.tmplClassRowOf :prog pieces: ctx.pieces tid: monoId) > 0 then {
+        nativerows.tmplInstArgIds :prog pieces: ctx.pieces :monoId :acc
         return
     }
     # both append to `acc`
@@ -2516,7 +2525,7 @@ monoElemIdsOf: function {
 # into every program that merely imports io.
 buildUserTypeList: function {
     prog: Program.view
-    ctx: Ctx.view
+    reach: ReachState.view
     acc: ListVal ztypes.tid
 } is {
     last: prog.reg.nextTid
@@ -2534,9 +2543,9 @@ buildUserTypeList: function {
                 emOk: (prog.reg.isNativeOf tid: t).not
                 if emOk when (
                     nativepieces.typeDemandMet
-                    :ctx
+                    :reach
                     tid: t
-                ) when (nativerows.typeReached :ctx tid: t) then acc.append t
+                ) when (nativerows.typeReached :reach tid: t) then acc.append t
             }
         }
         t = t.next
@@ -2612,7 +2621,7 @@ monoHoldsTmplClass: function {prog: Program.view ctx: Ctx.view monoId: ztypes.ti
     monoElemIdsOf :prog :ctx :monoId acc: elems
     for each e: elems loop {
         ce: chaseAggregateTypedef :prog :ctx tid: e
-        if (nativerows.tmplClassRowOf :prog :ctx tid: ce) > 0 then return true
+        if (nativerows.tmplClassRowOf :prog pieces: ctx.pieces tid: ce) > 0 then return true
         if (isValueSumMono :prog :ctx tid: ce) when (monoHoldsTmplClass :prog :ctx monoId: ce
         ) then return true
     }
@@ -2770,7 +2779,7 @@ emitUserTypeById: function {
     smD: ctx.known.mainUnitId
     if duo.length > 0 then (
         emitplan.ctxBindMain
-        :ctx
+        known: ctx.known
         name: duo
         unitDecl: (ztypecheck.unitDeclOfTid reg: prog.reg typing: prog.typing :tid)
     )
@@ -2785,7 +2794,7 @@ emitUserTypeById: function {
     if tt == ztypes.ztypetype.facetType then {
         emitOneFacet :prog :ctx :tid :buf
     }
-    emitplan.ctxBindMain :ctx name: sm.stringView unitDecl: smD
+    emitplan.ctxBindMain known: ctx.known name: sm.stringView unitDecl: smD
 }
 
 # collectLateMonosKind -- append late monos of one origin to acc. Called in
@@ -2801,7 +2810,11 @@ collectLateMonosKind: function {
 } is {
     tm: ztypes.tid
     for tm < last loop {
-        if (originIsTid :prog tid: tm :originTid) when (nativerows.typeReached :ctx tid: tm) when (
+        if (originIsTid :prog tid: tm :originTid) when (
+            nativerows.typeReached
+            reach: ctx.reach
+            tid: tm
+        ) when (
             monoIsLate
             :prog
             :ctx
@@ -2826,7 +2839,7 @@ ensureFwdStruct: function {
     # fwdDeclaredTypes, and one that was not in that set was written as an
     # anonymous `typedef struct { ... } X_t;` with no tag for
     # `typedef struct X_t X_t;` to name. The monos emit before this pass runs.
-    if (typeStructEmitted :ctx :tid) then return
+    if (typeStructEmitted typeDefs: ctx.typeDefs :tid) then return
     scalarCType: consts.scalarCTypeFor :prog :tid
     if scalarCType.length > 0 then return
     if (definedInUnitTid :prog :tid).notZero when (prog.reg.isNativeOf :tid) then return
@@ -2880,7 +2893,7 @@ fwdDeclareSpec: function {
     buf: String.borrow
 } is {
     if (fwdTaggedSpec :prog :tid).not then return
-    if (typeStructEmitted :ctx :tid) then return
+    if (typeStructEmitted typeDefs: ctx.typeDefs :tid) then return
     if (ctx.typeDefs.fwdDeclaredTypes.has item: tid) then return
     if (prog.reg.isNativeOf :tid) then return
     cn: spelledCname :ctx :tid
@@ -2901,7 +2914,7 @@ fwdDeclareSpec: function {
 # the name, and the C had no such type.
 isComplexFnptrParam: function {
     prog: Program.view
-    ctx: Ctx.view
+    typeDefs: TypeDefState.view
     tid: ztypes.tid
 } out bool is {
     ct: tid
@@ -2911,8 +2924,8 @@ isComplexFnptrParam: function {
     tt: prog.reg.typetypeOf typeId: ct
     isAgg: tt.isInterface or tt.isSum
     if isAgg.not then return false
-    if (typeStructEmitted :ctx tid: ct) then return false
-    return (isFwdDeclared :ctx tid: ct).not
+    if (typeStructEmitted :typeDefs tid: ct) then return false
+    return (isFwdDeclared :typeDefs tid: ct).not
 }
 
 # emitOneFnptrTypedef -- emit one `typedef RET (*<cname>_ft)(PARAMS);`,
@@ -2965,10 +2978,11 @@ emitOneFnptrTypedef: function {
     sn: pIds.length
     for sj < sn loop {
         spid: rIds.get i: sj
-        if (isComplexFnptrParam :prog :ctx tid: spid) then skipIt = true
+        if (isComplexFnptrParam :prog typeDefs: ctx.typeDefs tid: spid) then skipIt = true
         sj = sj + 1
     }
-    if srt.notZero when (isComplexFnptrParam :prog :ctx tid: srt) then skipIt = true
+    if srt.notZero when (isComplexFnptrParam :prog typeDefs: ctx.typeDefs tid: srt
+    ) then skipIt = true
     if skipIt then return
     di: u64
     dn: pIds.length
@@ -3045,7 +3059,7 @@ emitUserProtocols: function {
             )
             if pown or (userSpecInstance :prog tid: tp) when (
                 nativerows.typeReached
-                :ctx
+                reach: ctx.reach
                 tid: tp
             ) then {
                 emitUserTypeById :prog :ctx tid: tp :buf
@@ -3168,7 +3182,7 @@ emitEarlyUserStructs: function {
 lateMemberIsMono: function {prog: Program.view ctx: Ctx.view tid: ztypes.tid} out bool is {
     # a templated class -- an instance of a generic one or a class of its own
     # -- is written from its template as the runtime's monos are
-    if (nativerows.tmplClassRowOf :prog :ctx :tid) > 0 then return true
+    if (nativerows.tmplClassRowOf :prog pieces: ctx.pieces :tid) > 0 then return true
     if (originTidOf :prog :tid).isZero then return false
     # a static list is the runtime's mono, whatever its element
     if (memberreads.staticListValueFamilyOf :prog :ctx :tid).notZero then return true
@@ -3331,7 +3345,7 @@ emitUserStructsOrdered: function {
 } is {
     last: prog.reg.nextTid
     userList: ListVal ztypes.tid
-    buildUserTypeList :prog :ctx acc: userList
+    buildUserTypeList :prog reach: ctx.reach acc: userList
     emitUserProtocols :prog :ctx :last :buf
     lateGroup: ListVal ztypes.tid
     collectLateGroup :prog :ctx :userList acc: lateGroup :last
@@ -3376,7 +3390,9 @@ classifyCollectionMono: function {
     }
     if (isViewUnionOriginOf :prog :ctx tid: tcl) then {
         isSv: originIsTid :prog tid: tcl originTid: (ctx.origins.get i: family.slot.staticView)
-        if isSv.not or (staticViewReached :prog :ctx tid: tv) then work.wOptView.append tv
+        if (
+            isSv.not or (staticViewReached :prog reach: ctx.reach tid: tv)
+        ) then work.wOptView.append tv
     }
     colDst: u64
     if (originIsTid :prog tid: tcl originTid: (ctx.origins.get i: family.slot.fixedArray)) then {
@@ -3466,12 +3482,14 @@ declOwnerTid: function {prog: Program.view declId: ztypes.declid} out ztypes.tid
 
 # staticViewReached -- the StaticView instance `tid` answers a walk run time
 # makes: a reached list of its element type has its `iterate` used.
-staticViewReached: function {prog: Program.view ctx: Ctx.view tid: ztypes.tid} out bool is {
+staticViewReached: function {
+    prog: Program.view reach: ReachState.view tid: ztypes.tid
+} out bool is {
     elem: prog.reg.genericTypeArgAt specId: tid ordinal: 0
     for each g: prog.typing.constAggs loop {
         if g.reached when g.kind.staticList when (
             (prog.reg.genericTypeArgAt specId: g.tid ordinal: 0) == elem
-        ) when (nativerows.memberUsed :ctx mono: g.tid member: memberWord.slot.iterateAll
+        ) when (nativerows.memberUsed :reach mono: g.tid member: memberWord.slot.iterateAll
         ) then return true
     }
     return false
@@ -3480,7 +3498,7 @@ staticViewReached: function {prog: Program.view ctx: Ctx.view tid: ztypes.tid} o
 # isSystemVariantTid -- a variant a system unit DECLARED: not an instantiation
 # and not a template, so its C is written once with the system types.
 isSystemVariantTid: function {
-    ctx: Ctx.view
+    known: KnownNames.view
     tcl: ztypes.tid
     tt: ztypes.ztypetype
     isMono: bool
@@ -3489,7 +3507,7 @@ isSystemVariantTid: function {
     if tt != ztypes.ztypetype.variantType then return false
     if isMono then return false
     if gen then return false
-    return (definedInNonMain :ctx tid: tcl)
+    return (definedInNonMain :known tid: tcl)
 }
 
 # isUserGenericRecordMono -- a user generic record/class instantiation. The
@@ -3557,7 +3575,7 @@ classifyMonoAt: function {
     tcl: ztypes.tid
     work: MonoWork
 } is {
-    if (nativerows.typeReached :ctx tid: tcl).not then return
+    if (nativerows.typeReached reach: ctx.reach tid: tcl).not then return
     tv: tcl
     tt: prog.reg.typetypeOf typeId: tcl
     gen: prog.reg.isGenericOf tid: tcl
@@ -3569,7 +3587,7 @@ classifyMonoAt: function {
         originTid: (ctx.origins.get i: family.slot.str)
     ) then work.wStr.append tv
     if (prog.reg.isBoxOf tid: tcl) then work.wBox.append tv
-    if (isSystemVariantTid :ctx :tcl :tt :isMono :gen) then work.wSysVar.append tv
+    if (isSystemVariantTid known: ctx.known :tcl :tt :isMono :gen) then work.wSysVar.append tv
     isValMono: (
         (originIsTid :prog tid: tcl originTid: (ctx.origins.get i: family.slot.optionval)) or
         (originIsTid :prog tid: tcl originTid: (ctx.origins.get i: family.slot.resultval))
@@ -3578,7 +3596,7 @@ classifyMonoAt: function {
     classifyCollectionMono :prog :ctx :userListM :tcl :tv :tt :isMono :isValMono :work
     if tt == ztypes.ztypetype.protocolType when gen.not when (
         definedInNonMain
-        :ctx
+        known: ctx.known
         tid: tcl
     ) then work.wProto.append tv
     if isMono.not then return
@@ -3611,7 +3629,7 @@ isLateUserInstance: function {
     userList: (ListVal ztypes.tid).view
 } out bool is {
     if (isUserInstance :prog :ctx :tcl).not then return false
-    if (nativerows.typeReached :ctx tid: tcl).not then return false
+    if (nativerows.typeReached reach: ctx.reach tid: tcl).not then return false
     return (monoIsLate :prog :ctx monoId: tcl :userList)
 }
 
@@ -3783,7 +3801,7 @@ emitMonos: function {
     buf: String.borrow
 } is {
     userListM: ListVal ztypes.tid
-    buildUserTypeList :prog :ctx acc: userListM
+    buildUserTypeList :prog reach: ctx.reach acc: userListM
     emitMainFwdDecls :prog :ctx :buf
     # one classification sweep over the registry fills the per-category
     # worklists; the category loops below emit in the original sequence.
@@ -4107,13 +4125,13 @@ emitOneFacet: function {
     if du.length == 0 then du.append "    char _none;\n"
     l1: "typedef union {\n\{du}} \{pbase}_data_u;\n\n"
     buf.append l1
-    openStructBody :ctx :tid cn: pbase.stringView :buf
+    openStructBody typeDefs: ctx.typeDefs :tid cn: pbase.stringView :buf
     buf.append "    "
     buf.append pbase
     buf.append "_vtable_t* vtable;\n    "
     buf.append pbase
     buf.append "_data_u data;\n"
-    closeStructBody :ctx :tid cn: pbase.stringView :buf
+    closeStructBody typeDefs: ctx.typeDefs :tid cn: pbase.stringView :buf
     buf.append "\n"
 }
 
@@ -4129,11 +4147,11 @@ vtableTypedefC: function {slots: StringView base: StringView} out String is {
 # the buffer already, or it is a marker no value is made of (markerValueMade)
 protocolEmitted: function {
     prog: Program.view
-    ctx: Ctx
+    typeDefs: TypeDefState
     tid: ztypes.tid
 } out bool is {
-    if (ctx.typeDefs.emittedUserTypes.has item: tid) then return true
-    return (markerValueMade :prog :ctx spec: tid).not
+    if (typeDefs.emittedUserTypes.has item: tid) then return true
+    return (markerValueMade :prog :typeDefs spec: tid).not
 }
 
 # emitOneProtocol -- the protocol value representation: vtable typedef (one
@@ -4146,7 +4164,7 @@ emitOneProtocol: function {
     buf: String.borrow
 } is {
     # a marker no value is made of has nothing in the program's C to name it
-    if (protocolEmitted :prog :ctx :tid) then return
+    if (protocolEmitted :prog typeDefs: ctx.typeDefs :tid) then return
     ctx.typeDefs.emittedUserTypes.add item: tid
     pbase: spelledCname :ctx :tid
     mnames: List String
@@ -4204,11 +4222,11 @@ emitOneProtocol: function {
         mi = mi + 1
     }
     buf.append (vtableTypedefC slots: vfuncs.stringView base: pbase.stringView)
-    openStructBody :ctx :tid cn: pbase.stringView :buf
+    openStructBody typeDefs: ctx.typeDefs :tid cn: pbase.stringView :buf
     buf.append "    void* data;\n    "
     buf.append pbase
     buf.append "_vtable_t* vtable;\n    void (*destroy)(void*);\n"
-    closeStructBody :ctx :tid cn: pbase.stringView :buf
+    closeStructBody typeDefs: ctx.typeDefs :tid cn: pbase.stringView :buf
     buf.append "\n"
     emitProtocolDestroy :prog :ctx :tid pbase: pbase.stringView :buf
 }
@@ -4231,7 +4249,12 @@ emitProtocolDestroy: function {
 # implStructC -- the C struct an implementer's value is: a typedef over an
 # aggregate or a String is its chain end's struct, anything else its own.
 implStructC: function {prog: Program.view ctx: Ctx.view tid: ztypes.tid} out String is {
-    e: memberreads.chaseStrTypedef :prog :ctx tid: (chaseAggregateTypedef :prog :ctx :tid)
+    e: (
+        memberreads.chaseStrTypedef
+        :prog
+        known: ctx.known
+        tid: (chaseAggregateTypedef :prog :ctx :tid)
+    )
     ecn: ctxCnameView :ctx tid: e
     return "\{ecn}_t"
 }
@@ -4257,7 +4280,7 @@ implMethodCname: function {
     emitplan.noteFnUse :ctx tid: implMid
     implBase: ctxCnameView :ctx tid: owner
     if (prog.reg.isNativeOf tid: implMid) then return "\{implBase}_\{mname}"
-    if (definedInNonMain :ctx tid: owner) then return "\{implBase}_\{mname}"
+    if (definedInNonMain known: ctx.known tid: owner) then return "\{implBase}_\{mname}"
     return (emitplan.ctxCname :ctx tid: implMid)
 }
 
@@ -4267,11 +4290,11 @@ implMethodCname: function {
 # needs no helpers. Answered once per protocol.
 markerValueMade: function {
     prog: Program.view
-    ctx: Ctx
+    typeDefs: TypeDefState
     spec: ztypes.tid
 } out bool is {
     if (prog.reg.typetypeOf typeId: spec) != ztypes.ztypetype.protocolType then return true
-    known: ctx.typeDefs.markerValues.get key: spec
+    known: typeDefs.markerValues.get key: spec
     match (
         known
     ) case some then return known case none then null
@@ -4293,7 +4316,7 @@ markerValueMade: function {
             if su.value.spec == spec then made = true
         }
     }
-    ctx.typeDefs.markerValues.set key: spec value: made
+    typeDefs.markerValues.set key: spec value: made
     return made
 }
 
@@ -4489,8 +4512,8 @@ nativeImplementerRow: function {prog: Program.view tid: ztypes.tid} out ztypes.t
 # noteBorrowBoxUse -- written C boxes an `implTid` as a borrowed `protoTid`
 # value, or copies it into a `protoTid` facet (`_create`): the pair's create is
 # written (emitImplementationImpl)
-noteBorrowBoxUse: function {ctx: Ctx implTid: ztypes.tid protoTid: ztypes.tid} is {
-    ctx.reach.borrowBoxUses.add item: (ownedBoxKey :implTid :protoTid)
+noteBorrowBoxUse: function {reach: ReachState implTid: ztypes.tid protoTid: ztypes.tid} is {
+    reach.borrowBoxUses.add item: (ownedBoxKey :implTid :protoTid)
 }
 
 # ownedBoxKey -- the (impl, protocol) pair as one ownedBoxUses key
@@ -4758,9 +4781,9 @@ emitProtocolCreateCall: function {
             label: boxLabelFor :prog :ctx implTid: fromTid :protoTid
             if label.length == 0 then return "".string
             if borrowsP or isFct then {
-                noteBorrowBoxUse :ctx implTid: fromTid :protoTid
+                noteBorrowBoxUse reach: ctx.reach implTid: fromTid :protoTid
             } else {
-                argforms.noteOwnedBoxUse :ctx implTid: fromTid :protoTid
+                argforms.noteOwnedBoxUse reach: ctx.reach implTid: fromTid :protoTid
             }
             valueVid: atomVid :prog nid: (stmtblocks.dottedBaseNodeId :prog n: fop)
             if valueVid.isZero then valueVid = atomVid :prog nid: (atomNodeId n: fop)
@@ -4825,8 +4848,10 @@ armTagValueText: function {
 
 # openStructBody -- open a struct the emitter writes as an anonymous typedef,
 # or as the tagged `struct X_t { ... };` a forward declaration named.
-openStructBody: function {ctx: Ctx.view tid: ztypes.tid cn: StringView buf: String.borrow} is {
-    if (isFwdDeclared :ctx :tid) then {
+openStructBody: function {
+    typeDefs: TypeDefState.view tid: ztypes.tid cn: StringView buf: String.borrow
+} is {
+    if (isFwdDeclared :typeDefs :tid) then {
         lo: "struct \{cn}_t {\n"
         buf.append lo
     } else {
@@ -4836,8 +4861,10 @@ openStructBody: function {ctx: Ctx.view tid: ztypes.tid cn: StringView buf: Stri
 
 # closeStructBody -- close what openStructBody opened: the typedef's name, or
 # just the brace when the tag already named it.
-closeStructBody: function {ctx: Ctx.view tid: ztypes.tid cn: StringView buf: String.borrow} is {
-    if (isFwdDeclared :ctx :tid) then {
+closeStructBody: function {
+    typeDefs: TypeDefState.view tid: ztypes.tid cn: StringView buf: String.borrow
+} is {
+    if (isFwdDeclared :typeDefs :tid) then {
         buf.append "};\n"
     } else {
         lc: "} \{cn}_t;\n"
@@ -4913,7 +4940,7 @@ emitOneVariant: function {
     emitVariantEnum :prog :ctx :tid :aidsNm ctype: ovc.stringView cn: vc.stringView :buf
     if ovc.length > 0 then return
     an: aidsNm.length
-    openStructBody :ctx :tid cn: vc.stringView :buf
+    openStructBody typeDefs: ctx.typeDefs :tid cn: vc.stringView :buf
     tsc: tagStorageCType :prog :tid
     if tsc.length == 0 then {
         lfE: "    \{vc}_tag_t tag;\n"
@@ -4939,7 +4966,7 @@ emitOneVariant: function {
         pj = pj + 1
     }
     if haveP then buf.append "    } data;\n"
-    closeStructBody :ctx :tid cn: vc.stringView :buf
+    closeStructBody typeDefs: ctx.typeDefs :tid cn: vc.stringView :buf
     if (ctx.reach.eqUsed.has item: tid) when (eqGenerated :prog :ctx :tid) then {
         (
             parttexts.emitVariantEq
@@ -5257,14 +5284,14 @@ emitOneRecord: function {
     if fnames.length == 0 then return
     preEmitEmbeddedTypes :prog :ctx ids: fids :buf
     rc: spelledCname :ctx :tid
-    if (isFwdDeclared :ctx :tid) then {
+    if (isFwdDeclared typeDefs: ctx.typeDefs :tid) then {
         lopenR: "struct \{rc}_t {\n"
         buf.append lopenR
     } else {
         buf.append "typedef struct {\n"
     }
     emitRecordStructBody :prog :ctx :tid names: fnames ids: fids nameIds: fidsNm :buf
-    if (isFwdDeclared :ctx :tid) then {
+    if (isFwdDeclared typeDefs: ctx.typeDefs :tid) then {
         buf.append "};\n"
     } else {
         l2: "} \{rc}_t;\n"

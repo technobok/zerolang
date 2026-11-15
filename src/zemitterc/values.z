@@ -13,9 +13,9 @@ isInterp: function {prog: Program.view parts: zast.kidspan} out bool is {
 }
 
 # litIndexOf -- the 1-based pool index for a literal's nodeid (0 = absent).
-litIndexOf: function {ctx: Ctx nid: zast.nodeid} out u64 is {
-    li: (ctx.literals.index.get key: nid).or d: 0
-    if li > 0 then ctx.literals.used.add item: nid
+litIndexOf: function {literals: LiteralState nid: zast.nodeid} out u64 is {
+    li: (literals.index.get key: nid).or d: 0
+    if li > 0 then literals.used.add item: nid
     return li
 }
 
@@ -106,7 +106,7 @@ emitTernaryChain: function {
     tx: String
     txF: constFacts
     depth: u64
-    tm: pendingHoistMark :ctx
+    tm: pendingHoistMark stmt: ctx.stmt
     # nothing evaluated before the chain is moved into it: a control value in
     # it makes the whole if one (below)
     ctx.stmt.guardDepth = ctx.stmt.guardDepth + 1
@@ -221,8 +221,8 @@ ternaryAsStatements: function {
 
 # whether a node's stamped type is StringView, which decides the whole
 # string emit path
-stampIsSv: function {prog: Program.view ctx: Ctx.view nid: zast.nodeid} out bool is {
-    return (stampIdOf :prog :nid) == ctx.known.svTid
+stampIsSv: function {prog: Program.view known: KnownNames.view nid: zast.nodeid} out bool is {
+    return (stampIdOf :prog :nid) == known.svTid
 }
 
 # dottedTaggedTid -- the tagged-construction stamp for a dotted node: the
@@ -484,7 +484,7 @@ armValueExpr: function {
         memberreads.orderOnePart
         :prog
         :ctx
-        mark: (pendingHoistMark :ctx)
+        mark: (pendingHoistMark stmt: ctx.stmt)
         text: vx.copy
         tf: partF
         nid: zast.nodeid
@@ -710,12 +710,12 @@ emitMovedSourceZero: function {
 # then not what is being read and the substituted text is.
 unaliasedVid: function {
     prog: Program.view
-    ctx: Ctx.view
+    narrow: NarrowState.view
     nid: zast.nodeid
     name: StringView
     vid: ztypes.vid
 } out ztypes.vid is {
-    if (narrowfacts.aliasResolvesToSelfAt :prog :ctx :nid :name :vid).not then return ztypes.vid
+    if (narrowfacts.aliasResolvesToSelfAt :prog :narrow :nid :name :vid).not then return ztypes.vid
     return vid
 }
 
@@ -728,7 +728,7 @@ textViewNativeByPtr: function {
     mnId: zast.nameid
 } out bool is {
     if (memberreads.textHeldByPtr :prog :ctx :vid).not then return false
-    return (memberreads.viewLaidNative :prog :ctx tid: ctx.known.textTid :mnId)
+    return (memberreads.viewLaidNative :prog known: ctx.known tid: ctx.known.textTid :mnId)
 }
 
 # aliasOrChild / aliasChildName -- the internal member name a dotted-path node
@@ -939,7 +939,7 @@ settleAhead: function {prog: Program.view ctx: Ctx} is {
     if ctx.stmt.guardDepth > 0 then return
     for true loop {
         # the earliest part not yet made a statement, then the earliest piece
-        pe: earliestUnsettled :ctx
+        pe: earliestUnsettled order: ctx.order
         if pe.found.not then return
         if pe.isPend then {
             # settled into its temp, the part is a piece at the end of the list
@@ -965,20 +965,20 @@ unsettled: record {
 
 # earliestUnsettled -- the part or piece at or above the order floor, not yet
 # made a statement, that was built first.
-earliestUnsettled: function {ctx: Ctx.view} out unsettled is {
+earliestUnsettled: function {order: OrderState.view} out unsettled is {
     r: unsettled found: false isPend: false at: 0 seq: 0
-    fl: ctx.order.seqFloor
+    fl: order.seqFloor
     pi: u64
-    for pi < ctx.order.pends.length loop {
-        pd: ctx.order.pends.get i: pi
+    for pi < order.pends.length loop {
+        pd: order.pends.get i: pi
         if pd.done.not when pd.seq >= fl when (seqBeats :r seq: pd.seq) then {
             r = unsettled found: true isPend: true at: pi seq: pd.seq
         }
         pi = pi + 1
     }
     ci: u64
-    for ci < ctx.order.pieces.length loop {
-        cp: ctx.order.pieces.get i: ci
+    for ci < order.pieces.length loop {
+        cp: order.pieces.get i: ci
         if cp.done.not when cp.seq >= fl when (seqBeats :r seq: cp.seq) then {
             r = unsettled found: true isPend: false at: ci seq: cp.seq
         }
@@ -1018,16 +1018,16 @@ settlePieceAhead: function {ctx: Ctx i: u64} is {
 
 # recordRawHoist -- statements the statement being built runs ahead of itself,
 # after the argument hoists recorded so far.
-recordRawHoist: function {ctx: Ctx text: String.take} is {
-    ctx.stmt.argHoistRaw.append (RawHoist :text at: ctx.stmt.argHoists.length settles: false)
+recordRawHoist: function {stmt: StatementState text: String.take} is {
+    stmt.argHoistRaw.append (RawHoist :text at: stmt.argHoists.length settles: false)
 }
 
 # tmpNext -- the next temp number of the function being emitted, from `tmp` or
 # from a statement expression's own counter, whichever has counted further.
-tmpNext: function {ctx: Ctx tmp: FnTemps} out u64 is {
-    if ctx.stmt.tmpHigh > tmp.n then tmp.n = ctx.stmt.tmpHigh
+tmpNext: function {stmt: StatementState tmp: FnTemps} out u64 is {
+    if stmt.tmpHigh > tmp.n then tmp.n = stmt.tmpHigh
     v: tmp.next
-    ctx.stmt.tmpHigh = tmp.n
+    stmt.tmpHigh = tmp.n
     return v
 }
 
@@ -1459,7 +1459,7 @@ callBaseTemp: function {
     # address too
     isView: types.isListViewOriginOf :prog :ctx tid: nlid
     if (memberreads.staticListValueFamilyOf :prog :ctx tid: nlid).notZero then isView = true
-    if (nativerows.tmplClassRowOf :prog :ctx tid: nlid) > 0 then isView = true
+    if (nativerows.tmplClassRowOf :prog pieces: ctx.pieces tid: nlid) > 0 then isView = true
     if (stackCollectionTid :prog :ctx tid: nlid).not when isView.not then return "".string
     if (argforms.canTakeAddress f: baseF) then return "".string
     return (
@@ -1752,13 +1752,13 @@ emitDottedStringConversion: function {
     n: zast.dottedpathrow.view
     facts: exprfacts.borrow
 } out String is {
-    scl: bindLitIndex :prog :ctx n: (prog.ast.nodes.get i: n.parent)
+    scl: bindLitIndex :prog literals: ctx.literals n: (prog.ast.nodes.get i: n.parent)
     if scl > 0 then {
         sclv: litView :ctx li: scl
         preludeNeed :ctx memb: "@String_from_view"
         return (stating :facts from: callFacts text: "\{ctx.known.strC}_from_view(\{sclv})")
     }
-    if (stampIsSv :prog :ctx nid: n.parent).not then return "".string
+    if (stampIsSv :prog known: ctx.known nid: n.parent).not then return "".string
     baseValue: emitExpr :prog :ctx n: (prog.ast.nodes.get i: n.parent)
     preludeNeed :ctx memb: "@String_from_view"
     return (stating :facts from: callFacts text: "\{ctx.known.strC}_from_view(\{baseValue})")
@@ -2169,7 +2169,14 @@ emitDottedMemberRead: function {
     baseAtomNid: atomNodeId n: (prog.ast.nodes.get i: n.parent)
     baseAtomVid: atomVid :prog nid: baseAtomNid
     # the receiver's variable, for the pointer-access checks below
-    bn2v: unaliasedVid :prog :ctx nid: baseAtomNid name: bn2r.stringView vid: baseAtomVid
+    bn2v: (
+        unaliasedVid
+        :prog
+        narrow: ctx.narrow
+        nid: baseAtomNid
+        name: bn2r.stringView
+        vid: baseAtomVid
+    )
     bn2F: exprfacts
     bn2: (
         narrowfacts.emitLocalAtomNameAt
@@ -2200,7 +2207,7 @@ emitDottedMemberRead: function {
     # carries this leg for the CALL form; the READ form never got it.
     if bn2.length == 0 then {
         nbId: interpPartNodeId n: (prog.ast.nodes.get i: n.parent)
-        nbT: memberreads.chaseStrTypedef :prog :ctx tid: (stampIdOf :prog nid: nbId)
+        nbT: memberreads.chaseStrTypedef :prog known: ctx.known tid: (stampIdOf :prog nid: nbId)
         # StringView only: svValueForm reads a String receiver's expression
         # twice, once for .data and once for .size, and twice is a second
         # evaluation when the expression is a call.
@@ -2323,7 +2330,7 @@ emitExprArms: function {
             :facts
         )
     } case atomstring then {
-        li: litIndexOf :ctx nid: n.nodeid
+        li: litIndexOf literals: ctx.literals nid: n.nodeid
         if li > 0 then return (stating :facts from: pathFacts text: (litView :ctx :li))
         # an interpolation is an owned String rvalue, built where it is
         # evaluated -- the same shape as a call returning one
@@ -2575,7 +2582,7 @@ emitControlPtrExpr: function {
     ) then return "".string
     settleAhead :prog :ctx
     ltmp: FnTemps n: 0 listFrees: List OwedFree
-    cvN: tmpNext :ctx tmp: ltmp
+    cvN: tmpNext stmt: ctx.stmt tmp: ltmp
     cv: "_cv\{cvN}"
     pct: "\{ct}*"
     lbuf: String
@@ -2602,7 +2609,7 @@ emitControlPtrExpr: function {
     if ctx.narrow.armRefDepth == 0 then {
         for ctx.narrow.armParks.length > 0 loop ctx.stmt.argHoists.append ctx.narrow.armParks.pop
     }
-    recordRawHoist :ctx text: lbuf
+    recordRawHoist stmt: ctx.stmt text: lbuf
     return cv
 }
 
@@ -2671,7 +2678,7 @@ emitControlExpr: function {
     ) then return "".string
     settleAhead :prog :ctx
     ltmp: FnTemps n: 0 listFrees: List OwedFree
-    cvN: tmpNext :ctx tmp: ltmp
+    cvN: tmpNext stmt: ctx.stmt tmp: ltmp
     cv: "_cv\{cvN}"
     lbuf: String
     outer: openControlArms :ctx
@@ -2689,7 +2696,7 @@ emitControlExpr: function {
     )
     stmtblocks.flushBlockFrees tmp: ltmp lL: 0 diverged: false buf: lbuf
     closeControlArms :ctx :outer
-    recordRawHoist :ctx text: lbuf
+    recordRawHoist stmt: ctx.stmt text: lbuf
     return cv
 }
 
@@ -2788,7 +2795,7 @@ emitInterpBuild: function {
     cr: "\{ctx.known.strC}_create((uint64_t)\{est})"
     (
         parttexts.interpLocal
-        :ctx
+        stmt: ctx.stmt
         :expr
         ctype: strT.stringView
         name: sNm.stringView
@@ -2851,7 +2858,7 @@ emitPrintStringLiteral: function {
         emitInterpPrint :prog :ctx parts: n.stringparts :ind :tmp :buf strNid: n.nodeid
         return
     }
-    li: litIndexOf :ctx nid: n.nodeid
+    li: litIndexOf literals: ctx.literals nid: n.nodeid
     if li == 0 then {
         emitFail :ctx what: "unpooled literal".string line: n.lineno
         return
@@ -2874,7 +2881,7 @@ emitPrintValueExpr: function {
     buf: String.borrow
 } is {
     eid: interpPartNodeId :n
-    if (stampIsSv :prog :ctx nid: eid) then {
+    if (stampIsSv :prog known: ctx.known nid: eid) then {
         ev: emitExpr :prog :ctx :n
         flushArgHoists :ctx :ind :tmp :buf
         preludeNeed :ctx memb: "@StringView_print"
@@ -2890,7 +2897,7 @@ emitPrintValueExpr: function {
     es: emitExprWith :prog :ctx :n facts: esF
     flushArgHoists :ctx :ind :tmp :buf
     if esF.place.not then {
-        hps: tmpNext :ctx :tmp
+        hps: tmpNext stmt: ctx.stmt :tmp
         strT: strTypeC :ctx
         lsa: "\{ind}\{strT} _h\{hps} = \{es};\n"
         buf.append lsa
@@ -2944,13 +2951,13 @@ emitPrintCallValue: function {
         facts: ceF
     )
     flushArgHoists :ctx :ind :tmp :buf
-    if (stampIsSv :prog :ctx nid: call.nodeid) then {
+    if (stampIsSv :prog known: ctx.known nid: call.nodeid) then {
         preludeNeed :ctx memb: "@StringView_print"
         lpcv: "\{ind}\{ctx.known.svC}_print(\{ce});\n"
         buf.append lpcv
         return
     }
-    hpc: tmpNext :ctx :tmp
+    hpc: tmpNext stmt: ctx.stmt :tmp
     strT: strTypeC :ctx
     lpa: "\{ind}\{strT} _h\{hpc} = \{ce};\n"
     buf.append lpa
@@ -2995,7 +3002,7 @@ emitPrintArg: function {
 # bindLitIndex -- the pool index of a plain-literal value node (0 = none).
 bindLitIndex: function {
     prog: Program.view
-    ctx: Ctx
+    literals: LiteralState
     n: astnode.view
 } out u64 is {
     match (
@@ -3004,7 +3011,7 @@ bindLitIndex: function {
         if (isInterp :prog parts: n.stringparts) then {
             return 0
         } else {
-            return (litIndexOf :ctx nid: n.nodeid)
+            return (litIndexOf :literals nid: n.nodeid)
         }
     } else {
         return 0
@@ -3046,7 +3053,7 @@ stringviewOfBaseNid: function {
 # stringCopyLitIndex -- the pool index of `\"lit\".string` (0 otherwise).
 stringCopyLitIndex: function {
     prog: Program.view
-    ctx: Ctx
+    literals: LiteralState
     n: astnode.view
 } out u64 is {
     match (
@@ -3054,7 +3061,7 @@ stringCopyLitIndex: function {
     ) case dottedpath then {
         mnId: aliasOrChildId :prog aliasId: n.nodeid childId: n.child
         if mnId == zast.wellKnown.slot.wkString then {
-            return (bindLitIndex :prog :ctx n: (prog.ast.nodes.get i: n.parent))
+            return (bindLitIndex :prog :literals n: (prog.ast.nodes.get i: n.parent))
         } else {
             return 0
         }
@@ -3096,7 +3103,7 @@ copyRvalueHoist: function {
         ) then return "".string
         # the receiver is spelled again by the caller when this declines, so
         # what this spelling hoisted is dropped with it
-        hmk: pendingHoistMark :ctx
+        hmk: pendingHoistMark stmt: ctx.stmt
         pvF: exprfacts
         pv: emitExprWith :prog :ctx n: (prog.ast.nodes.get i: n.parent) facts: pvF
         if pvF.place then {
@@ -3169,7 +3176,7 @@ emitStringBindValue: function {
             ) then {
                 # the value is spelled again by the caller when this declines,
                 # so what this spelling hoisted is dropped with it
-                hmk: pendingHoistMark :ctx
+                hmk: pendingHoistMark stmt: ctx.stmt
                 pvF: exprfacts
                 pv: emitExprWith :prog :ctx n: (prog.ast.nodes.get i: n.parent) facts: pvF
                 if pvF.place then dropHoistsTo :ctx mark: hmk
@@ -3238,7 +3245,7 @@ emitOptionBoxHoist: function {
         tg: spelledTagConst :prog :ctx tid: mid armId: zast.wellKnown.slot.wkSome
         # what the payload hoisted is declared ahead of the box
         flushArgHoists :ctx :ind :tmp :buf
-        bN: tmpNext :ctx :tmp
+        bN: tmpNext stmt: ctx.stmt :tmp
         b0: "\{ind}\{vc}_t _c\{bN} = {0};\n"
         buf.append b0
         b1: "\{ind}_c\{bN}.tag = \{tg};\n"
@@ -3585,7 +3592,7 @@ emitStringBind: function {
         )
     }
     if btid == ctx.known.svTid then {
-        lvN: bindLitIndex :prog :ctx n: avn
+        lvN: bindLitIndex :prog literals: ctx.literals n: avn
         if lvN > 0 then {
             lvv: litView :ctx li: lvN
             svT: svTypeC :ctx
@@ -3618,7 +3625,7 @@ emitStringBind: function {
         return true
     }
     if btid == ctx.known.strTid then {
-        fvN: stringCopyLitIndex :prog :ctx n: avn
+        fvN: stringCopyLitIndex :prog literals: ctx.literals n: avn
         if fvN > 0 then {
             fvv: litView :ctx li: fvN
             preludeNeed :ctx memb: "@String_from_view"
@@ -3778,7 +3785,7 @@ emitReferenceBind: function {
     }
     buf.append "\{ind}\{ct}* __borrow_\{nm} = &\{rv};\n"
     buf.append "\{ind}/* alias: \{nm} => (*__borrow_\{nm}) */\n"
-    localnames.bindBorrowAlias :ctx vid: nameVid :nm
+    localnames.bindBorrowAlias narrow: ctx.narrow vid: nameVid :nm
     return true
 }
 
@@ -3810,7 +3817,7 @@ reassignTargetC: function {
     rtnid: zast.nodeid
     rtsid: ztypes.tid
 } out String is {
-    if (argforms.stampIsStr :prog :ctx nid: rtnid) then {
+    if (argforms.stampIsStr :prog known: ctx.known nid: rtnid) then {
         return (strTypeC :ctx)
     }
     rrt: typeRefC :prog :ctx tid: rtsid
@@ -3901,7 +3908,7 @@ emitRepointCompanion: function {
     if co.none then return
     cv: co
     tid: chaseAggregateTypedef :prog :ctx tid: (prog.reg.variableTypeOf id: cv)
-    nm: companionCName :ctx :prog :cv
+    nm: companionCName known: ctx.known :prog :cv
     ct: companionCType :prog :ctx :tid
     buf.append "\{ind}\{ct} \{nm} = \{zeroValueC :prog :ctx :tid};\n"
 }
@@ -3925,11 +3932,11 @@ companionCType: function {
 # borrow, so a function with two holds two, and the readable scheme spells
 # each with its own id
 companionCName: function {
-    ctx: Ctx.view
+    known: KnownNames.view
     prog: Program.view
     cv: ztypes.vid
 } out String is {
-    return (localnames.varCName :ctx :prog vid: cv)
+    return (localnames.varCName :known :prog vid: cv)
 }
 
 # emitOwnedRepoint -- `x = v` re-pointing the borrowed `x` at an owned value
@@ -3955,12 +3962,12 @@ emitOwnedRepoint: function {
     if co.none then return
     cv: co
     tid: chaseAggregateTypedef :prog :ctx tid: (prog.reg.variableTypeOf id: cv)
-    cn: companionCName :ctx :prog :cv
+    cn: companionCName known: ctx.known :prog :cv
     valueNode: prog.ast.nodes.get i: n.value
     facts: exprfacts
     rv: reassignRhsText :prog :ctx :valueNode :ind :tmp :buf :facts
     flushArgHoists :ctx :ind :tmp :buf
-    rrn: tmpNext :ctx :tmp
+    rrn: tmpNext stmt: ctx.stmt :tmp
     ct: companionCType :prog :ctx :tid
     buf.append "\{ind}\{ct} _rr\{rrn} = \{rv};\n"
     buf.append (stmtblocks.destroyLineC :prog :ctx :tid nm: cn.stringView :ind)
@@ -4007,12 +4014,13 @@ emitStoreTo: function {
     # flush at a later statement, after -- and outside -- this scope)
     flushArgHoists :ctx :ind :tmp :buf
     rdrop: (
-        (argforms.stampIsStr :prog :ctx nid: rtnid) or (types.ownsResources :prog :ctx tid: rtsid)
+        (argforms.stampIsStr :prog known: ctx.known nid: rtnid) or
+        (types.ownsResources :prog :ctx tid: rtsid)
     )
     ran: false
     if rdrop when rv2F.place.not then {
         rrt: reassignTargetC :prog :ctx :rtnid :rtsid
-        rrn: tmpNext :ctx :tmp
+        rrn: tmpNext stmt: ctx.stmt :tmp
         buf.append "\{ind}\{rrt} _rr\{rrn} = \{rv2};\n"
         rv2 = "_rr\{rrn}"
         # the value has run: the sources it moved out of are zeroed now, before
@@ -4157,16 +4165,18 @@ armCellStore: function {
 # `with` used as a value that runs as statements ahead of its statement
 # (emitControlExpr). A ternary-shaped `if` stays an expression and is looked
 # through.
-condHoldsControlValue: function {prog: Program.view ctx: Ctx conds: zast.kidspan} out bool is {
-    for ctx.pieces.condScan.length > 0 loop ctx.pieces.condScan.pop
+condHoldsControlValue: function {
+    prog: Program.view pieces: PieceState conds: zast.kidspan
+} out bool is {
+    for pieces.condScan.length > 0 loop pieces.condScan.pop
     ci: u64
     for ci < conds.count loop {
-        ctx.pieces.condScan.append (zast.kidAt kids: prog.ast.kids span: conds i: ci)
+        pieces.condScan.append (zast.kidAt kids: prog.ast.kids span: conds i: ci)
         ci = ci + 1
     }
     wi: u64
-    for wi < ctx.pieces.condScan.length loop {
-        wid: ctx.pieces.condScan.get i: wi
+    for wi < pieces.condScan.length loop {
+        wid: pieces.condScan.get i: wi
         wi = wi + 1
         if wid.notZero then {
             wn: prog.ast.nodes.get i: wid
@@ -4175,7 +4185,7 @@ condHoldsControlValue: function {prog: Program.view ctx: Ctx conds: zast.kidspan
                 zast.childIdsInto
                 ast: prog.ast
                 n: wn
-                acc: ctx.pieces.condScan
+                acc: pieces.condScan
             )
         }
     }
@@ -4196,7 +4206,7 @@ isControlValueNode: function {prog: Program.view nid: zast.nodeid} out bool is {
 # freed (`cleanup`), then the temp is returned: a local the value read is
 # reclaimed, and a moved-in local's free is a no-op.
 emitHoistedReturn: function {
-    ctx: Ctx
+    stmt: StatementState
     # the value's C text and C type
     rv: StringView
     retCt: StringView
@@ -4207,7 +4217,7 @@ emitHoistedReturn: function {
     tmp: FnTemps
     buf: String.borrow
 } is {
-    rtmpN: tmpNext :ctx :tmp
+    rtmpN: tmpNext :stmt :tmp
     retNm: "_ret\{rtmpN}"
     buf.append "\{ind}\{retCt} \{retNm} = \{rv};\n"
     buf.append moved
@@ -4331,7 +4341,7 @@ litView: function {ctx: Ctx li: u64} out String is {
 # never store or free it (delete frees the STORED item only). Each records the
 # member it forwards to, so the instance written after keeps it.
 setViewProbes: function {ctx: Ctx monoId: ztypes.tid nm: StringView buf: String.borrow} is {
-    if (nativerows.memberUsed :ctx mono: monoId member: memberWord.slot.hasv) then {
+    if (nativerows.memberUsed reach: ctx.reach mono: monoId member: memberWord.slot.hasv) then {
         noteMemberUse :ctx mono: monoId member: memberWord.slot.has
         svT: svTypeC :ctx
         sv0: "static int z_\{nm}_hasv(const z_\{nm}_t* _this, \{svT} _item) {\n"
@@ -4342,7 +4352,7 @@ setViewProbes: function {ctx: Ctx monoId: ztypes.tid nm: StringView buf: String.
         sv2: "    return z_\{nm}_has(_this, &_k);\n}\n\n"
         buf.append sv2
     }
-    if (nativerows.memberUsed :ctx mono: monoId member: memberWord.slot.deletev) then {
+    if (nativerows.memberUsed reach: ctx.reach mono: monoId member: memberWord.slot.deletev) then {
         noteMemberUse :ctx mono: monoId member: memberWord.slot.delete
         svT: svTypeC :ctx
         sd0: "static int z_\{nm}_deletev(z_\{nm}_t* _this, \{svT} _item) {\n"
@@ -4360,7 +4370,7 @@ setViewProbes: function {ctx: Ctx monoId: ztypes.tid nm: StringView buf: String.
 mapViewProbes: function {
     ctx: Ctx monoId: ztypes.tid nm: StringView ov: StringView buf: String.borrow
 } is {
-    if (nativerows.memberUsed :ctx mono: monoId member: memberWord.slot.getv) then {
+    if (nativerows.memberUsed reach: ctx.reach mono: monoId member: memberWord.slot.getv) then {
         noteMemberUse :ctx mono: monoId member: memberWord.slot.getOne
         svT: svTypeC :ctx
         gv0: "static z_\{ov}_t z_\{nm}_getv(const z_\{nm}_t* _this, \{svT} _key) {\n"
@@ -4371,7 +4381,7 @@ mapViewProbes: function {
         gv2: "    return z_\{nm}_get(_this, &_k);\n}\n\n"
         buf.append gv2
     }
-    if (nativerows.memberUsed :ctx mono: monoId member: memberWord.slot.hasv) then {
+    if (nativerows.memberUsed reach: ctx.reach mono: monoId member: memberWord.slot.hasv) then {
         noteMemberUse :ctx mono: monoId member: memberWord.slot.has
         svT: svTypeC :ctx
         hv0: "static int z_\{nm}_hasv(const z_\{nm}_t* _this, \{svT} _key) {\n"
