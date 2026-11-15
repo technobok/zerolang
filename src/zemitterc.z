@@ -1592,6 +1592,39 @@ LiteralState: class {
     aggsFixed: bool
 }
 
+# TypeDefState -- the type definitions written so far. A part of Ctx
+# (`typeDefs`).
+TypeDefState: class {
+    # the Set and Map instances whose kept text spells their key's `==` /
+    # `hash` (tmplKeptSpells): member uses only grow, so a yes is final
+    keyEqKept: IdSet ztypes.tid
+    keyHashKept: IdSet ztypes.tid
+    # a no, with the member use count it was given at: still no while no
+    # member use was added
+    keyEqNoAt: (IdMapV ztypes.tid v: u64)
+    keyHashNoAt: (IdMapV ztypes.tid v: u64)
+    # where each record's or class's data-field list starts in fieldNameIds, read
+    # once per type (fieldOrdinalOf)
+    fieldListAt: (IdMapV ztypes.tid v: u64)
+    # those lists end to end, each ended by a zero id
+    fieldNameIds: ListVal zast.nameid
+    # the user types whose struct is already out, so a second demand does not
+    # emit it twice
+    emittedUserTypes: IdSet ztypes.tid
+    # the types already forward-declared. Asking whether a FORWARD exists is not
+    # the same as asking whether the body is out, and conflating them emits
+    # invalid C
+    fwdDeclaredTypes: IdSet ztypes.tid
+    # the (impl, protocol) pairs a NATIVE implementer is boxed as -- a String or a
+    # str mono handed to a StringViewable. The runtime supplies such an impl's struct, so
+    # no unit pass writes its helpers: every box site asks for them here, and
+    # emitC writes them once the last body is out
+    nativeBoxes: ListVal nativebox
+    # each marker protocol (one with no members) asked about, to whether the
+    # program makes a value of it (markerValueMade)
+    markerValues: (IdMapV ztypes.tid v: bool)
+}
+
 # Ctx -- the per-program emission context (anchor cnames, main unit name,
 # the literal pool, and the resolved-name map access).
 Ctx: class {
@@ -1603,14 +1636,8 @@ Ctx: class {
     literals: LiteralState
     # the native pieces: rows, conditions, marks and texts
     pieces: PieceState
-    # the Set and Map instances whose kept text spells their key's `==` /
-    # `hash` (tmplKeptSpells): member uses only grow, so a yes is final
-    keyEqKept: IdSet ztypes.tid
-    keyHashKept: IdSet ztypes.tid
-    # a no, with the member use count it was given at: still no while no
-    # member use was added
-    keyEqNoAt: (IdMapV ztypes.tid v: u64)
-    keyHashNoAt: (IdMapV ztypes.tid v: u64)
+    # the type definitions written so far
+    typeDefs: TypeDefState
     # each function's "RET cname(PARAMS)", by its type: the forward
     # declaration and the definition write the same text, built once
     fnSigs: (IdMapR ztypes.tid V: String)
@@ -1629,25 +1656,13 @@ Ctx: class {
     gen: GeneratorState
     # what the program uses: types, members and functions
     reach: ReachState
-    # where each record's or class's data-field list starts in fieldNameIds, read
-    # once per type (fieldOrdinalOf)
-    fieldListAt: (IdMapV ztypes.tid v: u64)
-    # those lists end to end, each ended by a zero id
-    fieldNameIds: ListVal zast.nameid
     # the constructs the emitter could not handle and the `error` calls it
     # proved reachable, collected rather than thrown so one run reports all of
     # them
     emitErrors: List zast.ErrorData
-    # the user types whose struct is already out, so a second demand does not
-    # emit it twice
-    emittedUserTypes: IdSet ztypes.tid
     # the generated helpers that call a method the author wrote: their bodies,
     # written after every function prototype
     lateDefs: String
-    # the types already forward-declared. Asking whether a FORWARD exists is not
-    # the same as asking whether the body is out, and conflating them emits
-    # invalid C
-    fwdDeclaredTypes: IdSet ztypes.tid
     # every function the units could write, in the order the C writes them
     # (planFns), and each one's job by its type id
     fnJobs: ListVal fnjob
@@ -1657,11 +1672,6 @@ Ctx: class {
     # every function written C spells, whether or not it is a job: a generated
     # member written only where named (hashMemberRead) asks it
     fnSpelled: IdSet ztypes.tid
-    # the (impl, protocol) pairs a NATIVE implementer is boxed as -- a String or a
-    # str mono handed to a StringViewable. The runtime supplies such an impl's struct, so
-    # no unit pass writes its helpers: every box site asks for them here, and
-    # emitC writes them once the last body is out
-    nativeBoxes: ListVal nativebox
     # the units' canons: stem -> the instance's template and
     # type arguments, comma-separated
     canonSpecs: (Map String V: String)
@@ -1677,9 +1687,6 @@ Ctx: class {
     # implementation rows written C makes a value of -- an impl boxed as its
     # protocol or facet (noteBoxUse): only these rows' helpers are written
     boxedImplementation: IdSet ztypes.confid
-    # each marker protocol (one with no members) asked about, to whether the
-    # program makes a value of it (markerValueMade)
-    markerValues: (IdMapV ztypes.tid v: bool)
     # ListIter monos whose cursor is already in the buffer. A List and a view
     # of it resolve `iterate` to ONE mono, so both reach the same typedef
     emittedListIters: IdSet ztypes.tid

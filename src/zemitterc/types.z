@@ -83,7 +83,7 @@ canonTypeId: function {
 # methods, so emitting them for a type the program never reached names natives
 # that were never loaded.
 typeStructEmitted: function {ctx: Ctx.view tid: ztypes.tid} out bool is {
-    return (ctx.emittedUserTypes.has item: tid)
+    return (ctx.typeDefs.emittedUserTypes.has item: tid)
 }
 
 # noteDestroyUse -- written C calls the destructor of `tid`, a destroy target
@@ -93,7 +93,7 @@ typeStructEmitted: function {ctx: Ctx.view tid: ztypes.tid} out bool is {
 # type was written names a function that is never written.
 noteDestroyUse: function {prog: Program.view ctx: Ctx tid: ztypes.tid} is {
     if (ctx.reach.destroyUsed.has item: tid) then return
-    if (destroyGated :prog :ctx :tid) when (ctx.emittedUserTypes.has item: tid) then {
+    if (destroyGated :prog :ctx :tid) when (ctx.typeDefs.emittedUserTypes.has item: tid) then {
         cn: emitplan.ctxCname :ctx :tid
         emitFail :ctx what: "the destructor of \{cn} called after its type was written" line: 0
         return
@@ -608,24 +608,24 @@ fieldOrdinalOf: function {
     nameId: zast.nameid
 } out optionval u64 is {
     start: u64
-    so: ctx.fieldListAt.get key: tid
+    so: ctx.typeDefs.fieldListAt.get key: tid
     match (
         so
     ) case some then {
         start = so
     } case none then {
-        start = ctx.fieldNameIds.length
+        start = ctx.typeDefs.fieldNameIds.length
         ids: ListVal ztypes.tid
         nms: ListVal zast.nameid
         ztypecheck.dataFieldIds reg: prog.reg typing: prog.typing :tid :ids nameIds: nms
-        for each fnm: nms loop ctx.fieldNameIds.append fnm
-        ctx.fieldNameIds.append zast.nameid.zero
-        ctx.fieldListAt.set key: tid value: start
+        for each fnm: nms loop ctx.typeDefs.fieldNameIds.append fnm
+        ctx.typeDefs.fieldNameIds.append zast.nameid.zero
+        ctx.typeDefs.fieldListAt.set key: tid value: start
     }
     k: u64
     i: start
     for true loop {
-        f: ctx.fieldNameIds.get :i
+        f: ctx.typeDefs.fieldNameIds.get :i
         if f.isZero then break
         if f == nameId then return (optionval.some k)
         k = k + 1
@@ -1392,7 +1392,7 @@ demandWrittenDestroys: function {prog: Program.view ctx: Ctx} is {
         k: ownedBoxKey implTid: row.implTypeId protoTid: row.specTypeId
         if (ctx.reach.ownedBoxUses.has item: k) then impls.append row.implTypeId
     }
-    for each nb: ctx.nativeBoxes loop {
+    for each nb: ctx.typeDefs.nativeBoxes loop {
         k: ownedBoxKey implTid: nb.impl protoTid: nb.proto
         if (ctx.reach.ownedBoxUses.has item: k) then impls.append nb.impl
     }
@@ -1429,8 +1429,10 @@ templateEqElem: function {prog: Program.view ctx: Ctx tid: ztypes.tid} out ztype
 # it is written with: a member whose section does (a lookup) is used, so the
 # key's `==` is called
 keyEqSpelled: function {prog: Program.view ctx: Ctx tid: ztypes.tid} out bool is {
-    if (ctx.keyEqKept.has item: tid) then return true
-    if ((ctx.keyEqNoAt.get key: tid).or d: 0) == (ctx.reach.memberUses.length + 1) then return false
+    if (ctx.typeDefs.keyEqKept.has item: tid) then return true
+    if (
+        ((ctx.typeDefs.keyEqNoAt.get key: tid).or d: 0) == (ctx.reach.memberUses.length + 1)
+    ) then return false
     sp: false
     if (isSetOriginOf :prog :ctx :tid) then sp = (
         tmplKeptSpells
@@ -1443,18 +1445,18 @@ keyEqSpelled: function {prog: Program.view ctx: Ctx tid: ztypes.tid} out bool is
         sp = tmplKeptSpells :ctx mono: tid file: "Map" key: "KEYS_EQUAL_BODY"
     }
     if sp then {
-        ctx.keyEqKept.add item: tid
+        ctx.typeDefs.keyEqKept.add item: tid
     } else {
-        ctx.keyEqNoAt.set key: tid value: ctx.reach.memberUses.length + 1
+        ctx.typeDefs.keyEqNoAt.set key: tid value: ctx.reach.memberUses.length + 1
     }
     return sp
 }
 
 # keyHashSpelled -- keyEqSpelled for the key's `hash`
 keyHashSpelled: function {prog: Program.view ctx: Ctx tid: ztypes.tid} out bool is {
-    if (ctx.keyHashKept.has item: tid) then return true
+    if (ctx.typeDefs.keyHashKept.has item: tid) then return true
     if (
-        ((ctx.keyHashNoAt.get key: tid).or d: 0) == (ctx.reach.memberUses.length + 1)
+        ((ctx.typeDefs.keyHashNoAt.get key: tid).or d: 0) == (ctx.reach.memberUses.length + 1)
     ) then return false
     sp: false
     if (isSetOriginOf :prog :ctx :tid) then sp = (
@@ -1468,9 +1470,9 @@ keyHashSpelled: function {prog: Program.view ctx: Ctx tid: ztypes.tid} out bool 
         sp = tmplKeptSpells :ctx mono: tid file: "Map" key: "HASH_KEY_BODY"
     }
     if sp then {
-        ctx.keyHashKept.add item: tid
+        ctx.typeDefs.keyHashKept.add item: tid
     } else {
-        ctx.keyHashNoAt.set key: tid value: ctx.reach.memberUses.length + 1
+        ctx.typeDefs.keyHashNoAt.set key: tid value: ctx.reach.memberUses.length + 1
     }
     return sp
 }
@@ -1848,8 +1850,8 @@ emitUnionMono: function {
     tid: ztypes.tid
     buf: String.borrow
 } is {
-    if (ctx.emittedUserTypes.has item: tid) then return
-    ctx.emittedUserTypes.add item: tid
+    if (ctx.typeDefs.emittedUserTypes.has item: tid) then return
+    ctx.typeDefs.emittedUserTypes.add item: tid
     aids: ListVal ztypes.tid
     aidsNm: ListVal zast.nameid
     variantArmIds :prog :tid ids: aids nameIds: aidsNm
@@ -2075,10 +2077,10 @@ emitClassRowStructs: function {
         cid: ctx.pieces.classRowTids.get :i
         # a class with a template is written from it (emitTmplClassMono)
         emit: cid.notZero and ((ctx.pieces.classRows.get :i).tmpl.length == 0)
-        if emit when (ctx.emittedUserTypes.has item: cid) then emit = false
+        if emit when (ctx.typeDefs.emittedUserTypes.has item: cid) then emit = false
         if emit when (nativerows.typeReached :ctx tid: cid).not then emit = false
         if emit then {
-            ctx.emittedUserTypes.add item: cid
+            ctx.typeDefs.emittedUserTypes.add item: cid
             emitClassRowStruct :prog :ctx :cid :buf
             dfr: (ctx.pieces.classRows.get :i).destroy.copy
             if dfr.length > 0 when (destroyWritten :prog :ctx tid: cid) then {
@@ -2267,7 +2269,7 @@ preEmitEmbeddedTypes: function {
 # body must be emitted as a named `struct X_t { ... };` (the typedef is already
 # in the forward-decl block).
 isFwdDeclared: function {ctx: Ctx.view tid: ztypes.tid} out bool is {
-    return (ctx.fwdDeclaredTypes.has item: tid)
+    return (ctx.typeDefs.fwdDeclaredTypes.has item: tid)
 }
 
 # isStructTypetype -- the three typetypes whose C is a struct the emitter writes,
@@ -2292,7 +2294,7 @@ emitDeclaredFwdDecl: function {
     if (isTypedefType :prog :tid) then return
     if (prog.reg.isBoxOf :tid) then return
     cn: spelledCname :ctx :tid
-    ctx.fwdDeclaredTypes.add item: tid
+    ctx.typeDefs.fwdDeclaredTypes.add item: tid
     l0: "typedef struct \{cn}_t \{cn}_t;\n"
     buf.append l0
     # a destructor is declared where one is written: a union's whenever written
@@ -2338,7 +2340,7 @@ emitMonoFwdDecl: function {
     if (prog.reg.isBoxOf :tid) then return
     if (monoNeedsFwdDecl :prog :ctx :tid).not then return
     cnX: spelledCname :ctx :tid
-    ctx.fwdDeclaredTypes.add item: tid
+    ctx.typeDefs.fwdDeclaredTypes.add item: tid
     lx0: "typedef struct \{cnX}_t \{cnX}_t;\n"
     buf.append lx0
     fwdDtor: (
@@ -2839,7 +2841,7 @@ ensureFwdStruct: function {
         if (originIsTid :prog :tid originTid: strO) then isStruct = false
         if (originIsTid :prog :tid originTid: arrO) then isStruct = false
     }
-    if isStruct when (ctx.fwdDeclaredTypes.has item: tid).not then {
+    if isStruct when (ctx.typeDefs.fwdDeclaredTypes.has item: tid).not then {
         # a mono is declared on the terms its own pass declares it: an iterator
         # cursor is an anonymous typedef no forward declaration can name, and a
         # Box is a pointer. An instance of a user's own generic type is declared
@@ -2850,7 +2852,7 @@ ensureFwdStruct: function {
             return
         }
         cn: spelledCname :ctx :tid
-        ctx.fwdDeclaredTypes.add item: tid
+        ctx.typeDefs.fwdDeclaredTypes.add item: tid
         l0: "typedef struct \{cn}_t \{cn}_t;\n"
         buf.append l0
     }
@@ -2879,10 +2881,10 @@ fwdDeclareSpec: function {
 } is {
     if (fwdTaggedSpec :prog :tid).not then return
     if (typeStructEmitted :ctx :tid) then return
-    if (ctx.fwdDeclaredTypes.has item: tid) then return
+    if (ctx.typeDefs.fwdDeclaredTypes.has item: tid) then return
     if (prog.reg.isNativeOf :tid) then return
     cn: spelledCname :ctx :tid
-    ctx.fwdDeclaredTypes.add item: tid
+    ctx.typeDefs.fwdDeclaredTypes.add item: tid
     l0: "typedef struct \{cn}_t \{cn}_t;\n"
     buf.append l0
 }
@@ -4030,8 +4032,8 @@ emitOneFacet: function {
     tid: ztypes.tid
     buf: String.borrow
 } is {
-    if (ctx.emittedUserTypes.has item: tid) then return
-    ctx.emittedUserTypes.add item: tid
+    if (ctx.typeDefs.emittedUserTypes.has item: tid) then return
+    ctx.typeDefs.emittedUserTypes.add item: tid
     pbase: spelledCname :ctx :tid
     impls: ListVal ztypes.tid
     facetImplTids :prog :tid acc: impls
@@ -4130,7 +4132,7 @@ protocolEmitted: function {
     ctx: Ctx
     tid: ztypes.tid
 } out bool is {
-    if (ctx.emittedUserTypes.has item: tid) then return true
+    if (ctx.typeDefs.emittedUserTypes.has item: tid) then return true
     return (markerValueMade :prog :ctx spec: tid).not
 }
 
@@ -4145,7 +4147,7 @@ emitOneProtocol: function {
 } is {
     # a marker no value is made of has nothing in the program's C to name it
     if (protocolEmitted :prog :ctx :tid) then return
-    ctx.emittedUserTypes.add item: tid
+    ctx.typeDefs.emittedUserTypes.add item: tid
     pbase: spelledCname :ctx :tid
     mnames: List String
     mids: ListVal ztypes.tid
@@ -4269,7 +4271,7 @@ markerValueMade: function {
     spec: ztypes.tid
 } out bool is {
     if (prog.reg.typetypeOf typeId: spec) != ztypes.ztypetype.protocolType then return true
-    known: ctx.markerValues.get key: spec
+    known: ctx.typeDefs.markerValues.get key: spec
     match (
         known
     ) case some then return known case none then null
@@ -4291,7 +4293,7 @@ markerValueMade: function {
             if su.value.spec == spec then made = true
         }
     }
-    ctx.markerValues.set key: spec value: made
+    ctx.typeDefs.markerValues.set key: spec value: made
     return made
 }
 
@@ -4517,10 +4519,10 @@ boxLabelFor: function {
         ctx.reach.typeUses.add item: protoTid
     }
     seen: false
-    for each nb: ctx.nativeBoxes loop {
+    for each nb: ctx.typeDefs.nativeBoxes loop {
         if nb.impl == implTid when nb.proto == protoTid then seen = true
     }
-    if seen.not then ctx.nativeBoxes.append (nativebox impl: implTid proto: protoTid)
+    if seen.not then ctx.typeDefs.nativeBoxes.append (nativebox impl: implTid proto: protoTid)
     return lbl
 }
 
@@ -4561,9 +4563,9 @@ emitNativeImplementationImpls: function {
     buf: String.borrow
 } is {
     ni: u64
-    for ni < ctx.nativeBoxes.length loop {
-        implT: (ctx.nativeBoxes.get i: ni).impl
-        protoT: (ctx.nativeBoxes.get i: ni).proto
+    for ni < ctx.typeDefs.nativeBoxes.length loop {
+        implT: (ctx.typeDefs.nativeBoxes.get i: ni).impl
+        protoT: (ctx.typeDefs.nativeBoxes.get i: ni).proto
         ni = ni + 1
         nrow: nativeImplementerRow :prog tid: implT
         lbl: implementationLabelFor :prog implTid: nrow protoTid: protoT
@@ -4887,8 +4889,8 @@ emitOneVariant: function {
     tid: ztypes.tid
     buf: String.borrow
 } is {
-    if (ctx.emittedUserTypes.has item: tid) then return
-    ctx.emittedUserTypes.add item: tid
+    if (ctx.typeDefs.emittedUserTypes.has item: tid) then return
+    ctx.typeDefs.emittedUserTypes.add item: tid
     aids: ListVal ztypes.tid
     aidsNm: ListVal zast.nameid
     variantArmIds :prog :tid ids: aids nameIds: aidsNm
@@ -5241,8 +5243,8 @@ emitOneRecord: function {
     tid: ztypes.tid
     buf: String.borrow
 } is {
-    if (ctx.emittedUserTypes.has item: tid) then return
-    ctx.emittedUserTypes.add item: tid
+    if (ctx.typeDefs.emittedUserTypes.has item: tid) then return
+    ctx.typeDefs.emittedUserTypes.add item: tid
     if (isTypedefType :prog :tid) then return
     fnames: List String
     fids: ListVal ztypes.tid
