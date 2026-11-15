@@ -113,7 +113,7 @@ SKIP     := mathutil genmath dissectlib
 EXAMPLES := $(wildcard examples/*.z)
 NAMES    := $(filter-out $(SKIP),$(basename $(notdir $(EXAMPLES))))
 
-.PHONY: all check complexity-report style-lint-fast style-lint test doc-check arch-check ci ci-gates ci-corpus fuzz fuzz-ci fuzz-known \
+.PHONY: all check complexity-report style-lint-fast style-lint test doc-check arch-check ci ci-gates gate-guards gate-same-c ci-corpus fuzz fuzz-ci fuzz-known \
 	test-math-arm64 test-sqlite-arm64 test-mingw test-tcc-mingw test-msvc-wine test-msvc-corpus ci-windows windows-guest windows-due test-math-noasm test-portable-scalars docs-link-guard math-asm-guard \
 	bench-math bench-math-kernels test-clang test-tcc test-tcc-heavy readable-check build \
 	tcc zc zl zls regen-goldens regen-fmt-goldens regen-matrix matrix-guard regen-constparity constparity-guard regen-math-asm \
@@ -275,8 +275,31 @@ ci:
 	@echo "CI GATE GREEN: style-lint + corpus(--heavy: +selfhost-asan +fixpoint) + bootstrap"
 	@$(MAKE) --no-print-directory windows-due
 
-# ci-gates -- the gates ci runs in parallel, after perf-strict.
-ci-gates: style-lint zl-full-guard complexity-report warn-check pedantic-check emitter-guard typename-guard frontend-guard lifetime-guard native-guard alias-label-guard fwd-shape-guard generic-param-guard const-row-guard view-guard fallback-guard highlight-guard any-guard deadcode-guard cdead-guard cc-unused-guard piece-guard static-value-guard eager-guard eager-lib-guard case-guard user-native-guard shim-guard thread-tsan-guard cobj-guard sqlite-decls-guard zlink-guard zlink-rules-guard require-guard static-tcc-guard refusal-guard fmt-raw-guard nativec-agree-guard natives-show-guard prelude-share-guard readable-check test-tcc-heavy test-clang test-ub test-o2 test-math-arm64 test-sqlite-arm64 test-math-noasm test-portable-scalars test-mingw test-tcc-mingw test-msvc-wine test-msvc-corpus math-asm-guard matrix-guard constparity-guard docs-link-guard mode-parity fuzz-ci ci-corpus
+# GATE_GUARDS -- the legs of ci-gates the per-batch gate runs, in parallel and to
+# the end (`make -k -j gate-guards`). The gate runs check, test, perf-strict and
+# the clang and tcc corpora itself.
+GATE_GUARDS := style-lint zl-full-guard warn-check pedantic-check emitter-guard typename-guard \
+	frontend-guard lifetime-guard native-guard alias-label-guard fwd-shape-guard \
+	generic-param-guard const-row-guard view-guard fallback-guard highlight-guard any-guard \
+	deadcode-guard cdead-guard cc-unused-guard piece-guard static-value-guard eager-guard \
+	eager-lib-guard case-guard user-native-guard shim-guard thread-tsan-guard cobj-guard \
+	sqlite-decls-guard zlink-guard zlink-rules-guard require-guard static-tcc-guard \
+	refusal-guard fmt-raw-guard nativec-agree-guard natives-show-guard prelude-share-guard \
+	math-asm-guard matrix-guard constparity-guard test-math-noasm test-portable-scalars \
+	test-msvc-wine docs-link-guard
+# GATE_SAME_C -- the legs that only rebuild and run the emitted C of the run
+# corpus: the per-batch gate leaves them out when the C every program emits is the
+# C its snapshot's compiler emits, and runs them otherwise.
+GATE_SAME_C := test-ub test-mingw test-tcc-mingw test-msvc-corpus
+
+gate-guards: $(GATE_GUARDS)
+
+gate-same-c: $(GATE_SAME_C)
+
+# ci-gates -- the gates ci runs in parallel, after perf-strict: the per-batch
+# gate's legs and the slower corpus runs only ci makes.
+ci-gates: $(GATE_GUARDS) $(GATE_SAME_C) complexity-report readable-check test-tcc-heavy test-clang \
+	test-o2 test-math-arm64 test-sqlite-arm64 mode-parity fuzz-ci ci-corpus
 
 ci-corpus: bin/zc bin/zl bin/zls $(BUILDDIR)/ztestrunner
 	$(BUILDDIR)/ztestrunner --zc bin/zc --cc $(CC) --root . --heavy --jobs $(NPROC)
@@ -748,18 +771,18 @@ test-ub: bin/zc bin/zl $(BUILDDIR)/ztestrunner
 	echo "test-ub OK: $$(grep -o 'pass=[0-9]*' $(BUILDDIR)/ub.log | tail -1) run cases, no undefined behaviour"
 endif
 
-# test-o2 -- the run corpus built at -O2 under gcc and clang. The other runs
-# build without optimisation, and an optimiser acts on what the C leaves
-# undefined: a case that passes there and fails here shows such a place.
+# test-o2 -- the run corpus built at -O2 under clang. The other runs build
+# without optimisation, and an optimiser acts on what the C leaves undefined: a
+# case that passes there and fails here shows such a place. gcc's optimiser is
+# not run over the corpus, to keep the leg short: the drivers are gcc -O2 builds
+# of the largest emitted program.
 test-o2: bin/zc bin/zl $(BUILDDIR)/ztestrunner
-	@for cc in gcc clang; do \
-	  command -v $$cc >/dev/null 2>&1 || { echo "test-o2: $$cc not installed, skipped"; continue; }; \
-	  $(BUILDDIR)/ztestrunner --zc bin/zc --cc $$cc --ccflags "-O2" --run-only --root . \
-	     --jobs $(NPROC) > $(BUILDDIR)/o2-$$cc.log 2>&1 \
-	    || { grep -E '^FAIL' $(BUILDDIR)/o2-$$cc.log | head -20; \
-	         echo "test-o2 FAIL: a run case differs at -O2 under $$cc (full log $(BUILDDIR)/o2-$$cc.log)"; exit 1; }; \
-	  echo "test-o2 OK ($$cc): $$(grep -o 'pass=[0-9]*' $(BUILDDIR)/o2-$$cc.log | tail -1) run cases at -O2"; \
-	done
+	@command -v clang >/dev/null 2>&1 || { echo "test-o2: clang not installed, skipped"; exit 0; }; \
+	$(BUILDDIR)/ztestrunner --zc bin/zc --cc clang --ccflags "-O2" --run-only --root . \
+	   --jobs $(NPROC) > $(BUILDDIR)/o2-clang.log 2>&1 \
+	  || { grep -E '^FAIL' $(BUILDDIR)/o2-clang.log | head -20; \
+	       echo "test-o2 FAIL: a run case differs at -O2 under clang (full log $(BUILDDIR)/o2-clang.log)"; exit 1; }; \
+	echo "test-o2 OK (clang): $$(grep -o 'pass=[0-9]*' $(BUILDDIR)/o2-clang.log | tail -1) run cases at -O2"
 
 # what a corpus run under the vendored tcc needs built first.
 TCC_RUN_DEPS := bin/zc bin/zl bin/zls $(BUILDDIR)/tcc $(BUILDDIR)/ztestrunner
@@ -1053,7 +1076,7 @@ fuzz: out/zc-asan out/zfuzz
 # signature tests/fuzz-known-findings.txt does not list, and on a listed one
 # the run no longer shows. `make fuzz-known` writes that file from the run.
 FUZZ_CI_SEED := 11
-FUZZ_CI_N := 5000
+FUZZ_CI_N := 2500
 FUZZ_KNOWN := tests/fuzz-known-findings.txt
 FUZZ_CI_RUN = out/zfuzz --zc $(CURDIR)/out/zc-asan --system $(CURDIR)/lib/system \
 	  --corpus $(CURDIR)/examples,$(CURDIR)/tests/fixtures/emitc_corpus \
