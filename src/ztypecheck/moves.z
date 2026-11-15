@@ -357,7 +357,7 @@ consumeProjectionSource: function {
 carryPinsIntoDraft: function {st: zenv.ZSymbolTable pins: (List ztyping.PinPath).view} is {
     if pins.length == 0 then return
     for each cp: pins loop {
-        st.walk.draft.pins.append (
+        st.walk.value.draft.pins.append (
             ztyping.PinPath
             path: cp.path.copy
             shared: cp.shared
@@ -365,7 +365,7 @@ carryPinsIntoDraft: function {st: zenv.ZSymbolTable pins: (List ztyping.PinPath)
             carried: true
         )
     }
-    st.walk.draft.owned = true
+    st.walk.value.draft.owned = true
 }
 
 # projectionSourceBorrows -- a projection (`Speaker d`, `Bytes.create from: d`)
@@ -384,7 +384,7 @@ projectionSourceBorrows: function {
     mk: zast.markerKindOf :ast n: sn
     if mk.borrowMarker then return true
     if mk.unmarked.not then return false
-    if call.nid == st.walk.owningValueNid then return false
+    if call.nid == st.walk.value.owningValueNid then return false
     if (st.reg.isReftypeOf tid: vt).not then return false
     bn: zast.atomNameIdOf n: sn
     if bn.notZero then return (st.lookupVarId nameId: bn).some
@@ -599,7 +599,7 @@ checkMemberAutoCall: function {
         # the read's value is the method's result, not the base's: what the
         # base's record gave the read goes, and the receiver's record is read
         # where the call needs it (valueReceiverPins)
-        st.walk.draft.clear
+        st.walk.value.draft.clear
         aShr: callReadsReceiver :st mid: mo nid: dp.nid
         # a receiver that is a `.view` result is read-only, written as a member
         # read (`(xs.get i: 0).pop`) exactly as written as a call
@@ -1289,7 +1289,7 @@ checkTransferMarker: function {
     # take from it. Legal only on the node that IS the statement.
     # a line whose value is used -- a block's value line, a function's implied
     # return -- is no statement for this purpose: `x.drop` there yields nothing
-    dropIsValue: (dp.nid != st.walk.stmtExprNid) or st.mode.stmtDiscarded.not
+    dropIsValue: (dp.nid != st.walk.value.stmtExprNid) or st.mode.stmtDiscarded.not
     if (isDropMarkerId nameId: cnId) when dropIsValue then {
         mvs: "'.drop' is a statement, not a value -- it ends a lifetime and produces nothing; use '.take' to move the value into a new name".string
         (
@@ -1433,7 +1433,7 @@ dottedBaseTid: function {
     bt: checkValueAt :st :unitDecl :ast nid: dp.parent
     # a member read off a value keeps what the value keeps; a method a call
     # calls makes a value of its own, and reads its receiver's record itself
-    if st.walk.calleeDottedNid != dp.nid then callchecks.composeChildRecord :st nid: dp.parent
+    if st.walk.value.calleeDottedNid != dp.nid then callchecks.composeChildRecord :st nid: dp.parent
     st.mode = savedMode
     if baseIsName then valuechecks.readSingletonBase :st :ast :unitDecl base: dp.parent :bt
     # a base refused as a call missing its arguments has no value to read a
@@ -2232,7 +2232,7 @@ appendRecordPins: function {
 } is {
     k: u64
     for k < vp.len loop {
-        p: st.walk.valuePins.get i: vp.start.u64 + k
+        p: st.walk.value.pins.get i: vp.start.u64 + k
         k = k + 1
         dst.append (
             ztyping.PinPath
@@ -2423,7 +2423,7 @@ armRecordPins: function {
         i: vp.start.u64 + k
         k = k + 1
         root: valuePinRoot :st :i
-        was: st.walk.valuePinRoots.get :i
+        was: st.walk.value.pinRoots.get :i
         now: (st.lookupVarId nameId: root).or d: ztypes.vid
         if was.notZero when now != was then {
             reportArmKeepsDyingStorage :st :ast :leaf :root rootVid: was :verb
@@ -2492,7 +2492,7 @@ readonlyMarker: function {
 
 # valuePinRoot -- the name recorded pin `i` is rooted at.
 valuePinRoot: function {st: zenv.ZSymbolTable.view i: u64} out zast.nameid is {
-    p: st.walk.valuePins.get :i
+    p: st.walk.value.pins.get :i
     return (p.path.get i: 0)
 }
 
@@ -2583,7 +2583,7 @@ followDyingReferences: function {st: zenv.ZSymbolTable nid: zast.nodeid} is {
         if (appendFollowedPin :st :p dst: followed depth: 0) then changed = true
     }
     if changed.not then return
-    start: st.walk.valuePins.length
+    start: st.walk.value.pins.length
     for each fp: followed loop appendValuePin :st p: fp
     (
         st.setValuePins
@@ -2677,8 +2677,8 @@ recordWithLocks: function {
     for k < own.len loop {
         i: own.start.u64 + k
         k = k + 1
-        roots.append (st.walk.valuePinRoots.get :i)
-        p: st.walk.valuePins.get :i
+        roots.append (st.walk.value.pinRoots.get :i)
+        p: st.walk.value.pins.get :i
         cps.append (
             ztyping.PinPath
             path: p.path.copy
@@ -2687,11 +2687,11 @@ recordWithLocks: function {
             carried: p.carried
         )
     }
-    start: st.walk.valuePins.length
+    start: st.walk.value.pins.length
     rev: List ztyping.PinPath
     for cps.length > 0 loop rev.append cps.pop
-    for rev.length > 0 loop st.walk.valuePins.append rev.pop
-    for each r: roots loop st.walk.valuePinRoots.append r
+    for rev.length > 0 loop st.walk.value.pins.append rev.pop
+    for each r: roots loop st.walk.value.pinRoots.append r
     for each hp: held loop appendValuePin :st p: hp
     (
         st.setValuePins
@@ -2699,7 +2699,7 @@ recordWithLocks: function {
         vp: (
             ztyping.valuepins
             start: start.u32.orPanic
-            len: (st.walk.valuePins.length - start).u32.orPanic
+            len: (st.walk.value.pins.length - start).u32.orPanic
             owned: own.owned or movedOut
             marker: own.marker
         )
@@ -3910,7 +3910,7 @@ reportHeldIntoSlot: function {
     }
     # a value handed to another thread by a call that keeps nothing: nothing
     # waits for that thread, so nothing keeps the lock while it runs
-    xc: (st.walk.crossingArgCallee.get key: nodeid).or d: ztypes.tid.zero
+    xc: (st.walk.value.crossingArgCallee.get key: nodeid).or d: ztypes.tid.zero
     if xc.notZero when calleePins.not then {
         xn: conform.crossingCallName :st funcId: xc
         msg = "Cannot hand \{what} to another thread with `\{xn}`: it holds a lock on \{root}, and the call keeps no handle that would hold that lock while the thread runs\{rem}"
@@ -4077,7 +4077,7 @@ takeHeldLocks: function {st: zenv.ZSymbolTable from: ztypes.vid} is {
     carried: List ztyping.PinPath
     if (carryHeldLocks :st :from pins: carried).not then return
     for each cp: carried loop {
-        st.walk.draft.pins.append (
+        st.walk.value.draft.pins.append (
             ztyping.PinPath
             path: cp.path.copy
             shared: cp.shared
@@ -4085,7 +4085,7 @@ takeHeldLocks: function {st: zenv.ZSymbolTable from: ztypes.vid} is {
             carried: true
         )
     }
-    st.walk.draft.owned = true
+    st.walk.value.draft.owned = true
 }
 
 # pinsPush / pinsPushOne -- record a pin the pending result keeps. Appended
@@ -4100,7 +4100,7 @@ pinsPush: function {
     if path.length == 0 then return
     p: ListVal zast.nameid
     for each seg: path loop p.append seg
-    st.walk.draft.pins.append (
+    st.walk.value.draft.pins.append (
         ztyping.PinPath
         path: p
         shared: shared and mutable.not
@@ -4271,7 +4271,7 @@ pinConstructionResult: function {
     for each p: pins loop {
         pinsPush :st path: p.path shared: p.shared mutable: p.mutable
     }
-    if pins.length > 0 then st.walk.draft.owned = true
+    if pins.length > 0 then st.walk.value.draft.owned = true
 }
 
 # resultPins -- whether a call's result keeps its inputs locked: an `outx`
@@ -4702,7 +4702,7 @@ unnamedReceiverLocal: function {
     if (valuechecks.isViewFamilyTid :ast :st tid: recvT) then return
     tnId: mintReceiverTemp :st :ast :recvT :recvNid
     if tnId.isZero then return
-    st.walk.lineUnnamedLocals.append tnId
+    st.walk.value.lineUnnamedLocals.append tnId
     st.typing.unnamedLocalOfNode.set key: recvNid value: tnId
     dst.append tnId
 }
@@ -4725,10 +4725,10 @@ mintReceiverTemp: function {
     # its dotted path, and by the call leg that pins its result -- and a second
     # mint would leave two variables claiming one value, which a destroy list
     # would then free twice.
-    exN: st.walk.tempNameOf.get key: recvNid
+    exN: st.walk.value.tempNameOf.get key: recvNid
     if exN.some then return exN
-    tn: st.walk.nextTempId
-    st.walk.nextTempId = tn + 1
+    tn: st.walk.value.nextTempId
+    st.walk.value.nextTempId = tn + 1
     tname: "_t\{tn}"
     # WHAT A VALUE IS HELD IN DOES NOT ALWAYS OWN IT (valueIsLent): a temporary
     # over storage something else owns would free that storage.
@@ -4739,8 +4739,8 @@ mintReceiverTemp: function {
     st.defineTemp nameId: tnId :vid
     # a view of it may leave the scope it is bound in -- an argument carrying
     # it out of a call -- and the result that keeps it adopts it there
-    st.walk.adoptableTemps.set key: tnId value: vid
-    st.walk.tempNameOf.set key: recvNid value: tnId
+    st.walk.value.adoptableTemps.set key: tnId value: vid
+    st.walk.value.tempNameOf.set key: recvNid value: tnId
     if st.recording then st.typing.tempOf.set key: recvNid value: vid
     return tnId
 }
@@ -4782,12 +4782,12 @@ adoptKeptTemps: function {
     }
     for each r: roots loop {
         # a temp's name is unique to the run, so an entry is never asked twice
-        ato: st.walk.adoptableTemps.get key: r
+        ato: st.walk.value.adoptableTemps.get key: r
         if ato.some then {
             if (st.lookupVarId nameId: r).none then {
                 # a temporary the popped scope listed (a receiver's) moves out of
                 # that list: it dies once, here
-                if ((st.walk.pinnedTempPending.get key: ato).or d: false).not then (
+                if ((st.walk.value.pinnedTempPending.get key: ato).or d: false).not then (
                     st.retireTempListing
                     vid: ato
                 )
@@ -4797,14 +4797,14 @@ adoptKeptTemps: function {
                 # in a list that no longer names it and answers "owns nothing",
                 # which drops the free
                 st.defineTemp nameId: r vid: ato
-                st.walk.lineUnnamedLocals.append r
+                st.walk.value.lineUnnamedLocals.append r
                 # the temporary is the user's named hoist made explicit: it
                 # keeps its own locks where it now lives
                 relayTempPins :st :pool vid: ato
             }
             # settled either way -- adopted here, or still bound by a scope that
             # has yet to pop -- so the scope that holds it now may list it
-            st.walk.pinnedTempPending.set key: ato value: false
+            st.walk.value.pinnedTempPending.set key: ato value: false
         }
     }
 }
@@ -4818,13 +4818,13 @@ recordTempPins: function {
     onlyRoot: zast.nameid
     forceShared: bool
 } is {
-    start: st.walk.valuePins.length
+    start: st.walk.value.pins.length
     for each p: pins loop {
         if onlyRoot.isZero or ((p.path.get i: 0) == onlyRoot) then {
             sh: p.shared or forceShared
             mu: p.mutable and forceShared.not
-            st.walk.valuePinRoots.append ztypes.vid
-            st.walk.valuePins.append (
+            st.walk.value.pinRoots.append ztypes.vid
+            st.walk.value.pins.append (
                 ztyping.PinPath
                 path: p.path.copy
                 shared: sh
@@ -4833,10 +4833,10 @@ recordTempPins: function {
             )
         }
     }
-    n: st.walk.valuePins.length - start
+    n: st.walk.value.pins.length - start
     if n == 0 then return
     (
-        st.walk.tempPins.set
+        st.walk.value.tempPins.set
         key: vid
         value: (
             ztyping.valuepins
@@ -4852,7 +4852,7 @@ recordTempPins: function {
 # locks it laid in the call's scope (recordTempPins), which closed with the
 # call: the result keeps the temporary, and the temporary keeps what it views.
 relayTempPins: function {st: zenv.ZSymbolTable pool: zast.StringPool.view vid: ztypes.vid} is {
-    tp: st.walk.tempPins.get key: vid
+    tp: st.walk.value.tempPins.get key: vid
     if tp.none then return
     run: List ztyping.PinPath
     appendRecordPins :st vp: tp dst: run
@@ -4903,8 +4903,8 @@ pinCallResult: function {
         for each p: pins loop {
             pinsPush :st path: p.path shared: p.shared mutable: p.mutable
         }
-        if isRef.not then st.walk.draft.owned = true
-        if marker == ztypes.zparamownership.viewMode then st.walk.draft.marker = marker
+        if isRef.not then st.walk.value.draft.owned = true
+        if marker == ztypes.zparamownership.viewMode then st.walk.value.draft.marker = marker
     } else {
         # the locks a moved-in argument carried travel to the result whatever
         # the callee declares, and the temporaries they are on with them
@@ -4912,7 +4912,7 @@ pinCallResult: function {
         pushCarriedPins :st :pins
     }
     # `hold`: owned and READONLY with no pin, whichever leg ran
-    if marker == ztypes.zparamownership.holdMode then st.walk.draft.marker = marker
+    if marker == ztypes.zparamownership.holdMode then st.walk.value.draft.marker = marker
 }
 
 # pushCarriedPins -- the locks moved-in values carried travel to the result
@@ -4925,7 +4925,7 @@ pushCarriedPins: function {st: zenv.ZSymbolTable pins: (List ztyping.PinPath).vi
             anyC = true
         }
     }
-    if anyC then st.walk.draft.owned = true
+    if anyC then st.walk.value.draft.owned = true
 }
 
 # frozenFieldInPath -- the first segment of a path, up to `upTo`, declared
@@ -5453,8 +5453,8 @@ hoistArg: function {
     # the call holds the argument's path itself (lockFieldArgForCall)
     callHolds: false
 } out String is {
-    tn: st.walk.nextTempId
-    st.walk.nextTempId = tn + 1
+    tn: st.walk.value.nextTempId
+    st.walk.value.nextTempId = tn + 1
     tname: "_t\{tn}"
     # the argument's position
     ln: u32
@@ -5473,7 +5473,7 @@ hoistArg: function {
         t: argType
     )
     assignId: hoistRows :ast :st argType: tempType :paramType :ln :co
-    st.walk.draft.dropPins
+    st.walk.value.draft.dropPins
     # A borrow path whose LEAF is a method describes a CALL, and a call's
     # result ownership is its signature's business: `.copy` hands back a fresh
     # value, so the temp OWNS it and locking `x.copy` as though it were a field
@@ -5873,10 +5873,10 @@ lockNonTrivialArg: function {
         pinsAppendOne :pins nameId: tnId shared: isViewArg mutable: isViewArg.not
         tvo: st.lookupVarId nameId: tnId
         if tvo.some then {
-            st.walk.adoptableTemps.set key: tnId value: tvo
+            st.walk.value.adoptableTemps.set key: tnId value: tvo
             # the call's own scope pops before the result is judged, and it must
             # not list a temporary that result keeps locked
-            st.walk.pinnedTempPending.set key: tvo value: true
+            st.walk.value.pinnedTempPending.set key: tvo value: true
         }
     }
     if hadPending.not when isLockish when byRef or valByPointer then {
@@ -7068,7 +7068,7 @@ pinPayloadOfArm: function {
     if armView then own = ztypes.zparamownership.viewMode
     stampArgDisposition :st :ast :op :own
     pinsPush :st path: pth shared: true mutable: armView.not
-    st.walk.draft.owned = true
+    st.walk.value.draft.owned = true
 }
 
 # checkGenericFnCall -- a GENERIC FUNCTION member reached through the dotted
@@ -7262,8 +7262,8 @@ moveGenericFieldArg: function {
 # its root names here (none when it names none).
 appendValuePin: function {st: zenv.ZSymbolTable p: ztyping.PinPath.view} is {
     rv: (st.lookupVarId nameId: (p.path.get i: 0)).or d: ztypes.vid
-    st.walk.valuePinRoots.append rv
-    st.walk.valuePins.append (
+    st.walk.value.pinRoots.append rv
+    st.walk.value.pins.append (
         ztyping.PinPath
         path: p.path.copy
         shared: p.shared
@@ -7276,7 +7276,7 @@ appendValuePin: function {st: zenv.ZSymbolTable p: ztyping.PinPath.view} is {
 # made no pins.
 valuePinsOf: function {st: zenv.ZSymbolTable.view nid: zast.nodeid} out ztyping.valuepins is {
     none: ztyping.valuepins start: 0 len: 0 owned: false marker: ztypes.zparamownership.noneMode
-    vp: (st.walk.pinsAt.get key: nid).or d: none
+    vp: (st.walk.value.pinsAt.get key: nid).or d: none
     return vp
 }
 
@@ -7331,8 +7331,8 @@ moveYieldedValue: function {st: zenv.ZSymbolTable ast: Ast valueNid: zast.nodeid
 noteDropReleasedTemps: function {st: zenv.ZSymbolTable dropNid: zast.nodeid} is {
     onPath: st.inPath
     kept: ListVal zast.nameid
-    for st.walk.heldTemps.length > 0 loop {
-        nm: st.walk.heldTemps.pop
+    for st.walk.value.heldTemps.length > 0 loop {
+        nm: st.walk.value.heldTemps.pop
         p: ListVal zast.nameid
         p.append nm
         if (st.isPathLocked path: p) then {
@@ -7342,7 +7342,7 @@ noteDropReleasedTemps: function {st: zenv.ZSymbolTable dropNid: zast.nodeid} is 
             if onPath then kept.append nm
         }
     }
-    for kept.length > 0 loop st.walk.heldTemps.append kept.pop
+    for kept.length > 0 loop st.walk.value.heldTemps.append kept.pop
 }
 
 # lastStmtLineId / lastStmtLineIdAt -- the node id of a function body's last

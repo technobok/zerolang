@@ -1858,7 +1858,7 @@ recordRootAt: function {
     st: zenv.ZSymbolTable.view vp: ztyping.valuepins i: u64
 } out zast.nameid is {
     if i >= vp.len then return zast.nameid
-    p: st.walk.valuePins.get i: vp.start.u64 + i
+    p: st.walk.value.pins.get i: vp.start.u64 + i
     return (p.path.get i: 0)
 }
 
@@ -2090,7 +2090,7 @@ checkAssignmentIn: function {
         # freeze is a property of the value rather than of a reference into
         # someone else's. Both end at the same self-lock below.
         if pending == ztypes.zparamownership.holdMode then roRef = true
-        st.walk.draft.marker = ztypes.zparamownership.noneMode
+        st.walk.value.draft.marker = ztypes.zparamownership.noneMode
         # the block bound the name before this statement began
         redefined: grey.isZero and asgn.name.notZero
         if redefined then {
@@ -2130,7 +2130,7 @@ checkAssignmentIn: function {
         }
         checkReadonlyBindSource :st :ast :asgn :vt :boundVid
         instX: (own == ztypes.zownership.borrowed) or (pboX and (bpins.length > 0))
-        st.walk.draft.owned = false
+        st.walk.value.draft.owned = false
         if instX then {
             (
                 installPins
@@ -2370,10 +2370,10 @@ checkReassignment: function {
     errsBeforeValue: st.typing.errors.length
     # a function-typed target is written a reference as any value is: a bare
     # callable path is called, and `.copy` is the reference
-    owPrev: st.walk.owningValueNid
-    st.walk.owningValueNid = moves.valueCoreNid :ast nid: rasgn.value
+    owPrev: st.walk.value.owningValueNid
+    st.walk.value.owningValueNid = moves.valueCoreNid :ast nid: rasgn.value
     rvt: checkMovedValueAt :st :unitDecl :ast nid: rasgn.value owning: false
-    st.walk.owningValueNid = owPrev
+    st.walk.value.owningValueNid = owPrev
     # a value that resolved to nothing and raised nothing: an unresolvable
     # root name is an unknown reference, as at a binding
     if rvt.isZero when st.typing.errors.length == errsBeforeValue then {
@@ -2438,8 +2438,8 @@ mintRepointCompanion: function {
     if st.walk.fn.currentGenTid.notZero then return none
     io: st.openIndexOf scope: (st.scopeOfVar vid: borrowVid)
     if io.none then return none
-    tn: st.walk.nextTempId
-    st.walk.nextTempId = tn + 1
+    tn: st.walk.value.nextTempId
+    st.walk.value.nextTempId = tn + 1
     tname: "_t\{tn}"
     cv: (
         st.reg.newVariable
@@ -2528,8 +2528,8 @@ checkRepoint: function {
         (isView and (isAddressableTarget :ast :st nid: rasgn.value).not)
     )
     roV: rread.marker == ztypes.zparamownership.viewMode
-    st.walk.draft.owned = false
-    st.walk.draft.marker = ztypes.zparamownership.noneMode
+    st.walk.value.draft.owned = false
+    st.walk.value.draft.marker = ztypes.zparamownership.noneMode
     if owned then {
         repointOwned :st :ast :rasgn :xVid pins: bpins
         return
@@ -2669,7 +2669,7 @@ refuseRepointOutlives: function {
             mo: "Cannot re-point '\{xn}' at '\{rn}': '\{xn}' outlives '\{rn}'"
             # a call's argument the result keeps locked has no name of the
             # program's
-            if (st.walk.adoptableTemps.get key: root).some then {
+            if (st.walk.value.adoptableTemps.get key: root).some then {
                 mo = "Cannot re-point '\{xn}' at a value that locks a temporary: '\{xn}' outlives the temporary"
             }
             (
@@ -3184,10 +3184,10 @@ checkWith: function {
     # a `with` standing as a statement discards its body's value, so the body
     # stands as the statement too: `with x: v do if c then ...` needs no else
     st.endLocal declId: grey
-    outerStmt: st.walk.stmtExprNid
-    if outerStmt == withnode.nid then st.walk.stmtExprNid = withnode.body
+    outerStmt: st.walk.value.stmtExprNid
+    if outerStmt == withnode.nid then st.walk.value.stmtExprNid = withnode.body
     dt: checkValueAt :st :unitDecl :ast nid: withnode.body
-    st.walk.stmtExprNid = outerStmt
+    st.walk.value.stmtExprNid = outerStmt
     # a body that is one expression is the with's one arm: what its value pins is
     # kept for the destination, as an arm line's is, before the binding dies
     if (ast.nodes.get i: withnode.body).doexpr.not then (
@@ -3277,7 +3277,7 @@ bindForBorrowedElement: function {
     # container's storage, and a write through the
     # container reallocates it. The `with` form leaves
     # nothing pending here -- its binding took the lock.
-    st.walk.draft.dropPins
+    st.walk.value.draft.dropPins
     if fpins.length > 0 then {
         fcn: ast.nodes.get i: cond.operation
         fnd: zast.nodeIdOf n: fcn
@@ -4158,10 +4158,10 @@ callableDottedResultAt: function {
         dr: statics.dpRefAt :ast :nid
         # `Type.arm` is one path whether an argument follows or not, so the
         # arm read is told it is a CALLABLE here -- the only place that knows
-        cdPrev: st.walk.calleeDottedNid
-        st.walk.calleeDottedNid = dr.nid
+        cdPrev: st.walk.value.calleeDottedNid
+        st.walk.value.calleeDottedNid = dr.nid
         r: checkDotted :st :unitDecl :ast dp: dr coerce: false
-        st.walk.calleeDottedNid = cdPrev
+        st.walk.value.calleeDottedNid = cdPrev
         return (optionval.some r)
     } else {
         return (optionval.none ztypes.tid)
@@ -5003,7 +5003,7 @@ moveWithValue: function {st: zenv.ZSymbolTable ast: Ast body: zast.nodeid used: 
 # argument list is called there, and `nid` is a statement's own value: a
 # result the statement may discard (recordDiscard).
 noteStatementAutoCall: function {st: zenv.ZSymbolTable nid: zast.nodeid} is {
-    if nid == st.walk.stmtExprNid then st.typing.autoCallNodes.add item: nid
+    if nid == st.walk.value.stmtExprNid then st.typing.autoCallNodes.add item: nid
 }
 
 # recordTempHoldingLine -- a statement line that made unnamed locals ends: one a
@@ -5013,13 +5013,13 @@ noteStatementAutoCall: function {st: zenv.ZSymbolTable nid: zast.nodeid} is {
 recordTempHoldingLine: function {st: zenv.ZSymbolTable lineId: zast.nodeid from: u64} is {
     held: false
     i: from
-    for i < st.walk.lineUnnamedLocals.length loop {
-        nm: st.walk.lineUnnamedLocals.get :i
+    for i < st.walk.value.lineUnnamedLocals.length loop {
+        nm: st.walk.value.lineUnnamedLocals.get :i
         p: ListVal zast.nameid
         p.append nm
         if (st.isPathLocked path: p) then {
             held = true
-            st.walk.heldTemps.append nm
+            st.walk.value.heldTemps.append nm
         } else {
             st.typing.unheldTemps.add item: nm
             # it ends with the statement, and the locks it holds with it
@@ -5029,7 +5029,7 @@ recordTempHoldingLine: function {st: zenv.ZSymbolTable lineId: zast.nodeid from:
         i = i + 1
     }
     if held then st.typing.tempHoldingLines.add item: lineId
-    for st.walk.lineUnnamedLocals.length > from loop st.walk.lineUnnamedLocals.pop
+    for st.walk.value.lineUnnamedLocals.length > from loop st.walk.value.lineUnnamedLocals.pop
 }
 
 # walkDefinitionById -- walk the definition a RESOLVED ID names, wherever it

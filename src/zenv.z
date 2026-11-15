@@ -493,12 +493,48 @@ FunctionState: class {
     currentYieldInputTid: ztypes.tid
 }
 
-# WalkState -- the body walk's working state: what the checker records while
-# it walks and reads back itself. Nothing downstream reads it; the output is
-# ZTyping's.
-WalkState: class {
+# ValueState -- the value or call being checked: its temporaries and pins. A
+# part of WalkState (`value`).
+ValueState: class {
     # the next synthesised name's number, so two temps never collide
     nextTempId: u64
+    # the unnamed locals the statement line being walked has made, by name:
+    # read, and dropped, when the line ends
+    lineUnnamedLocals: ListVal zast.nameid
+    # what the value whose walk is running keeps locked so far (ValueDraft)
+    draft: ValueDraft
+    # the node of the call argument being typed (0 outside one): a reftype
+    # argument is judged by the lock the call takes on it, not by the
+    # field-read rule
+    callArgNode: zast.nodeid
+    # unnamed locals a binding held when their line ended, until a `.drop`
+    # releases the last hold
+    heldTemps: ListVal zast.nameid
+    # the dotted node currently being walked as a CALL'S CALLABLE, 0 outside
+    # one. `Type.arm` is the same path whether an argument follows it or not,
+    # so the arm read cannot tell a construction from a bare read on its own
+    # -- this is what says an argument is coming.
+    calleeDottedNid: zast.nodeid
+    # what each checked value keeps locked, by the value's node: an
+    # append-only arena of pins, the variable each pin's root named where the
+    # value was made, and each node's run of the arena (pinsOfValue)
+    pins: List ztyping.PinPath
+    pinRoots: ListVal ztypes.vid
+    pinsAt: (IdMapV zast.nodeid v: ztyping.valuepins)
+    # the node id of the expression that IS the statement being checked, or 0.
+    # `.drop` ends a lifetime and produces nothing, so it is legal only there --
+    # this is what tells `y: x.drop` from `x.drop`. astnode ids are unique, so a
+    # stale value can never wrongly permit one.
+    stmtExprNid: zast.nodeid
+    # the node id of the value a destination that owns what it holds is walking
+    # (a taking or held parameter, an owned field, a sum arm, a return, a
+    # yield, a reassignment), or 0. An unmarked projection there takes its
+    # source; anywhere else it borrows it.
+    owningValueNid: zast.nodeid
+    # each argument a call hands to another thread (a parameter typed or
+    # bounded by a `thread.Crossing` protocol), to the callee: a lock the
+    # argument carries is refused in a thread's words
+    crossingArgCallee: (IdMapV zast.nodeid v: ztypes.tid)
     # the temporaries a result may keep past the call scope they were bound in,
     # by name, with their variable: an owned argument temp a pinning call's
     # result keeps locked, and a receiver's temp (a value's own storage, whose
@@ -514,17 +550,33 @@ WalkState: class {
     # call has popped: the popped scope listed it, and adoption retires that
     # listing (retireTempListing).
     pinnedTempPending: (IdMapV ztypes.vid v: bool)
-    # the unnamed locals the statement line being walked has made, by name:
-    # read, and dropped, when the line ends
-    lineUnnamedLocals: ListVal zast.nameid
+    # the locks each hoisted argument temporary laid, a run of valuePins by its
+    # variable: an `outx` result that keeps the temporary adopts it, and the
+    # temporary lays them again where it now lives
+    tempPins: (IdMapV ztypes.vid v: ztyping.valuepins)
+    # the NAME of the temporary a value node is held in, beside `tempOf`'s
+    # variable: a second mint for the same node must reuse the first, and a
+    # name is what its callers hand on
+    tempNameOf: (IdMapV zast.nodeid v: zast.nameid)
+    # a dry run's record writes, newest last, each with the record its node
+    # held before, and per open dry run the arena and journal lengths at its
+    # start: popDiscard puts every record back
+    pinsJournal: ListVal pinjournal
+    pinMarks: ListVal pinmark
+    # the checker's own temporaries: the emitter still decides WHEN each one
+    # dies, so `scopeDestroy` does not list them (ownsDestroy). What a scope
+    # would destroy if it did is recorded separately (appendOwnedTempsOf).
+    tempVars: IdSet ztypes.vid
+}
+
+# WalkState -- the body walk's working state: what the checker records while
+# it walks and reads back itself. Nothing downstream reads it; the output is
+# ZTyping's.
+WalkState: class {
+    # the value or call being checked: its temporaries and pins
+    value: ValueState
     # the function being walked
     fn: FunctionState
-    # what the value whose walk is running keeps locked so far (ValueDraft)
-    draft: ValueDraft
-    # the node of the call argument being typed (0 outside one): a reftype
-    # argument is judged by the lock the call takes on it, not by the
-    # field-read rule
-    callArgNode: zast.nodeid
     # namespace / subunit bodies the demand path owes a walk, and the unit
     # ops already walked -- a subunit of the MAIN unit is walked by the main
     # tree walk and must not be walked twice.
@@ -617,9 +669,6 @@ WalkState: class {
     # the errors the function-body checks under way have charged so far: a
     # body is charged only the errors its own lines raised (checkFunctionBody)
     bodyErrorsCharged: u64
-    # unnamed locals a binding held when their line ended, until a `.drop`
-    # releases the last hold
-    heldTemps: ListVal zast.nameid
     # the instantiation a constant is being evaluated for, when it is read
     # through one (`a.BIG` on a unit instance); 0 otherwise. A template's
     # constant over a numeric generic parameter has a value per instantiation
@@ -648,11 +697,6 @@ WalkState: class {
     sigFnNode: zast.nodeid
     # that function's name, for the refusal
     sigFnName: zast.nameid
-    # the dotted node currently being walked as a CALL'S CALLABLE, 0 outside
-    # one. `Type.arm` is the same path whether an argument follows it or not,
-    # so the arm read cannot tell a construction from a bare read on its own
-    # -- this is what says an argument is coming.
-    calleeDottedNid: zast.nodeid
     # the part that leaves a type with no generated `==`, or zero when it has
     # one: asked at every generated comparison, answered once per type
     valEqMissing: (IdMapV ztypes.tid v: ztypes.tid)
@@ -681,21 +725,6 @@ WalkState: class {
     # application's head -- which name a generic type's defaults' instance
     bareTyperefNodes: IdSet zast.nodeid
     collectionChildrenBuilt: IdSet ztypes.tid
-    # what each checked value keeps locked, by the value's node: an
-    # append-only arena of pins, the variable each pin's root named where the
-    # value was made, and each node's run of the arena (pinsOfValue)
-    valuePins: List ztyping.PinPath
-    valuePinRoots: ListVal ztypes.vid
-    pinsAt: (IdMapV zast.nodeid v: ztyping.valuepins)
-    # the locks each hoisted argument temporary laid, a run of valuePins by its
-    # variable: an `outx` result that keeps the temporary adopts it, and the
-    # temporary lays them again where it now lives
-    tempPins: (IdMapV ztypes.vid v: ztyping.valuepins)
-    # a dry run's record writes, newest last, each with the record its node
-    # held before, and per open dry run the arena and journal lengths at its
-    # start: popDiscard puts every record back
-    pinsJournal: ListVal pinjournal
-    pinMarks: ListVal pinmark
     # the blocks whose last line's value nothing receives: a function body, and
     # the arms and bodies of an `if`, `match`, loop, `do` or `with` written as a
     # statement
@@ -711,14 +740,6 @@ WalkState: class {
     # (`Strs: (List String)`): each names that instance, a type. A call-shaped
     # constant (`AT: G.indexOf "#"`) is a value, whatever type it has
     instantiatedAliases: IdSet ztypes.declid
-    # the checker's own temporaries: the emitter still decides WHEN each one
-    # dies, so `scopeDestroy` does not list them (ownsDestroy). What a scope
-    # would destroy if it did is recorded separately (appendOwnedTempsOf).
-    tempVars: IdSet ztypes.vid
-    # the NAME of the temporary a value node is held in, beside `tempOf`'s
-    # variable: a second mint for the same node must reuse the first, and a
-    # name is what its callers hand on
-    tempNameOf: (IdMapV zast.nodeid v: zast.nameid)
     # evaluation state per memberConst key, the evaluator's cycle guard; a key
     # with no entry is unvisited
     constEvalState: (MapVV ztyping.constslot v: ztyping.constevalstate)
@@ -756,11 +777,6 @@ WalkState: class {
     genericParamName: (IdMapV zast.nodeid v: zast.nameid)
     # the scope a generic parameter belongs to
     genericParamScope: (IdMapV zast.nodeid v: ztypes.declid)
-    # the node id of the expression that IS the statement being checked, or 0.
-    # `.drop` ends a lifetime and produces nothing, so it is legal only there --
-    # this is what tells `y: x.drop` from `x.drop`. astnode ids are unique, so a
-    # stale value can never wrongly permit one.
-    stmtExprNid: zast.nodeid
     # the statement being walked -- its node, line and column -- or 0 outside a
     # body: where a bound an instance's argument does not meet is reported when
     # the instance is minted with no position of its own
@@ -777,11 +793,6 @@ WalkState: class {
     # `match` there is emitted as statements assigning the local, so an arm of
     # it may leave; one anywhere else inside an expression may not.
     formValueNid: zast.nodeid
-    # the node id of the value a destination that owns what it holds is walking
-    # (a taking or held parameter, an owned field, a sum arm, a return, a
-    # yield, a reassignment), or 0. An unmarked projection there takes its
-    # source; anywhere else it borrows it.
-    owningValueNid: zast.nodeid
     # true once indexUnitDefs has populated the node finder; descent is gated
     # off before then (generator lowering runs pre-index).
     defNodeIndexBuilt: bool
@@ -796,10 +807,6 @@ WalkState: class {
     # the thread unit's declaration: its markers say what may not cross to
     # another thread and which protocols' values a call hands across
     threadUnitRoot: ztypes.declid
-    # each argument a call hands to another thread (a parameter typed or
-    # bounded by a `thread.Crossing` protocol), to the callee: a lock the
-    # argument carries is refused in a thread's words
-    crossingArgCallee: (IdMapV zast.nodeid v: ztypes.tid)
     # one-shot guard: the native link-target descend runs once per program
     # type-ref node id -> base type name; resolved to its real type post-demand
     pendingTyperef: (IdMapV zast.nodeid v: zast.nameid)
@@ -875,10 +882,33 @@ WalkState: class {
 newWalkState: function out WalkState is {
     return (
         WalkState
-        nextTempId: 0
-        adoptableTemps: (IdMapV zast.nameid v: ztypes.vid)
-        pinnedTempPending: (IdMapV ztypes.vid v: bool)
-        lineUnnamedLocals: ListVal zast.nameid
+        value: (
+            ValueState
+            nextTempId: 0
+            lineUnnamedLocals: ListVal zast.nameid
+            draft: (
+                ValueDraft
+                pins: List ztyping.PinPath
+                marker: ztypes.zparamownership.noneMode
+                owned: false
+            )
+            callArgNode: zast.nodeid
+            heldTemps: ListVal zast.nameid
+            calleeDottedNid: zast.nodeid
+            pins: List ztyping.PinPath
+            pinRoots: ListVal ztypes.vid
+            pinsAt: (IdMapV zast.nodeid v: ztyping.valuepins)
+            stmtExprNid: zast.nodeid
+            owningValueNid: zast.nodeid
+            crossingArgCallee: (IdMapV zast.nodeid v: ztypes.tid)
+            adoptableTemps: (IdMapV zast.nameid v: ztypes.vid)
+            pinnedTempPending: (IdMapV ztypes.vid v: bool)
+            tempPins: (IdMapV ztypes.vid v: ztyping.valuepins)
+            tempNameOf: (IdMapV zast.nodeid v: zast.nameid)
+            pinsJournal: ListVal pinjournal
+            pinMarks: ListVal pinmark
+            tempVars: IdSet ztypes.vid
+        )
         fn: (
             FunctionState
             synthLabel: "".string
@@ -898,13 +928,6 @@ newWalkState: function out WalkState is {
             currentReturnTypeId: ztypes.tid
             currentYieldInputTid: ztypes.tid
         )
-        draft: (
-            ValueDraft
-            pins: List ztyping.PinPath
-            marker: ztypes.zparamownership.noneMode
-            owned: false
-        )
-        callArgNode: zast.nodeid
         nsBodiesOwed: ListVal ztyping.nsbody
         nsBodiesWalked: IdSet zast.nodeid
         nsConstsWalked: IdSet zast.nodeid
@@ -930,7 +953,6 @@ newWalkState: function out WalkState is {
         refusedBodies: IdSet zast.nodeid
         refusedInstances: (IdMapV ztypes.tid v: bool)
         bodyErrorsCharged: 0
-        heldTemps: ListVal zast.nameid
         constMono: ztypes.tid.zero
         privacySeen: false
         choiceNames: IdSet zast.nameid
@@ -941,7 +963,6 @@ newWalkState: function out WalkState is {
         sigGenericDecl: ztypes.declid
         sigFnNode: zast.nodeid
         sigFnName: zast.nameid
-        calleeDottedNid: zast.nodeid
         valEqMissing: (IdMapV ztypes.tid v: ztypes.tid)
         hashKeys: IdSet ztypes.tid
         eachSubjectNid: zast.nodeid
@@ -952,18 +973,10 @@ newWalkState: function out WalkState is {
         constructedTypes: (IdMapV ztypes.tid v: bool)
         bareTyperefNodes: IdSet zast.nodeid
         collectionChildrenBuilt: IdSet ztypes.tid
-        valuePins: List ztyping.PinPath
-        valuePinRoots: ListVal ztypes.vid
-        pinsAt: (IdMapV zast.nodeid v: ztyping.valuepins)
-        tempPins: (IdMapV ztypes.vid v: ztyping.valuepins)
-        pinsJournal: ListVal pinjournal
-        pinMarks: ListVal pinmark
         stmtBlocks: IdSet zast.nodeid
         aliasFoldsOpen: ListVal ztypes.declid
         aliasCyclesReported: IdSet ztypes.declid
         instantiatedAliases: IdSet ztypes.declid
-        tempVars: IdSet ztypes.vid
-        tempNameOf: (IdMapV zast.nodeid v: zast.nameid)
         constEvalState: (MapVV ztyping.constslot v: ztyping.constevalstate)
         tagSourceDecls: (IdMapV ztypes.tid v: ztypes.declid)
         staticLiteralTyperefs: IdSet zast.nodeid
@@ -974,19 +987,16 @@ newWalkState: function out WalkState is {
         genericBoundScope: (IdMapV zast.nodeid v: ztypes.declid)
         genericParamName: (IdMapV zast.nodeid v: zast.nameid)
         genericParamScope: (IdMapV zast.nodeid v: ztypes.declid)
-        stmtExprNid: zast.nodeid
         boundSiteNid: zast.nodeid
         boundSiteLine: 0
         boundSiteCol: 0
         boundSiteFailArg: ztypes.tid.zero
         unmetBounds: ListVal ztyping.unmetbound
         formValueNid: zast.nodeid
-        owningValueNid: zast.nodeid
         defNodeIndexBuilt: false
         createOptOut: IdSet ztypes.tid
         fieldSpans: (IdMapV ztypes.tid v: ztyping.fieldspan)
         threadUnitRoot: ztypes.declid
-        crossingArgCallee: (IdMapV zast.nodeid v: ztypes.tid)
         pendingTyperef: (IdMapV zast.nodeid v: zast.nameid)
         pendingTyperefScope: (IdMapV zast.nodeid v: ztypes.declid)
         fieldRefOwner: (IdMapV zast.nodeid v: ztypes.declid)
@@ -1465,8 +1475,8 @@ ZSymbolTable: class {
     # (heldTemps).
     heldTempNamed: function {t: this.view nameId: zast.nameid} out bool is {
         k: u64
-        for k < t.walk.heldTemps.length loop {
-            if (t.walk.heldTemps.get i: k) == nameId then return true
+        for k < t.walk.value.heldTemps.length loop {
+            if (t.walk.value.heldTemps.get i: k) == nameId then return true
             k = k + 1
         }
         return false
@@ -1478,7 +1488,7 @@ ZSymbolTable: class {
     # a holder lets go -- a release (releaseCascade), the close of the scope it
     # was bound in.
     releaseUnheldTemps: function {t: this} is {
-        if t.walk.heldTemps.length == 0 then return
+        if t.walk.value.heldTemps.length == 0 then return
         # one path, re-aimed at each temporary in turn
         p: ListVal zast.nameid
         p.append zast.nameid
@@ -1486,8 +1496,8 @@ ZSymbolTable: class {
         for released loop {
             released = false
             k: u64
-            for k < t.walk.heldTemps.length loop {
-                nm: t.walk.heldTemps.get i: k
+            for k < t.walk.value.heldTemps.length loop {
+                nm: t.walk.value.heldTemps.get i: k
                 k = k + 1
                 tv: t.lookupVarId nameId: nm
                 if tv.some then {
@@ -1508,8 +1518,8 @@ ZSymbolTable: class {
         f: t.pushScope parent: t.curScope node: zast.nodeid
         t.scopeHidden.add item: f
         t.dryRunDepth = t.dryRunDepth + 1
-        mk: pinmark arena: t.walk.valuePins.length journal: t.walk.pinsJournal.length
-        t.walk.pinMarks.append mk
+        mk: pinmark arena: t.walk.value.pins.length journal: t.walk.value.pinsJournal.length
+        t.walk.value.pinMarks.append mk
     }
 
     # popDiscard -- close the innermost scope and drop every row it laid,
@@ -1531,14 +1541,14 @@ ZSymbolTable: class {
     # discardDryRunPins -- the value-pin records the closing dry run wrote are
     # put back as they were, and its arena run is dropped.
     discardDryRunPins: function {t: this} is {
-        if t.walk.pinMarks.length == 0 then return
-        mk: t.walk.pinMarks.pop
-        for t.walk.pinsJournal.length > mk.journal loop {
-            j: t.walk.pinsJournal.pop
-            t.walk.pinsAt.set key: j.nid value: j.was
+        if t.walk.value.pinMarks.length == 0 then return
+        mk: t.walk.value.pinMarks.pop
+        for t.walk.value.pinsJournal.length > mk.journal loop {
+            j: t.walk.value.pinsJournal.pop
+            t.walk.value.pinsAt.set key: j.nid value: j.was
         }
-        for t.walk.valuePins.length > mk.arena loop t.walk.valuePins.pop
-        for t.walk.valuePinRoots.length > mk.arena loop t.walk.valuePinRoots.pop
+        for t.walk.value.pins.length > mk.arena loop t.walk.value.pins.pop
+        for t.walk.value.pinRoots.length > mk.arena loop t.walk.value.pinRoots.pop
     }
 
     # setValuePins -- record `vp` as what the value at `nid` keeps locked. In a
@@ -1547,7 +1557,7 @@ ZSymbolTable: class {
         if t.dryRunDepth > 0 then {
             was: (
                 (
-                    t.walk.pinsAt.get
+                    t.walk.value.pinsAt.get
                     key: nid
                 ).or
                 d: (
@@ -1558,9 +1568,9 @@ ZSymbolTable: class {
                     marker: ztypes.zparamownership.noneMode
                 )
             )
-            t.walk.pinsJournal.append (pinjournal :nid :was)
+            t.walk.value.pinsJournal.append (pinjournal :nid :was)
         }
-        t.walk.pinsAt.set key: nid value: vp
+        t.walk.value.pinsAt.set key: nid value: vp
     }
 
     # close every scope back to `marker`, dumping the entries as they go
@@ -1586,7 +1596,7 @@ ZSymbolTable: class {
     # defineTemp -- a binding for one of the checker's own temporaries, which no
     # destroy point lists (tempVars).
     defineTemp: function {t: this nameId: zast.nameid vid: ztypes.vid} is {
-        t.walk.tempVars.add item: vid
+        t.walk.value.tempVars.add item: vid
         n: t.open.length
         if t.recording when n > 0 then {
             nd: (t.open.get i: n - 1).node
@@ -1927,7 +1937,7 @@ ZSymbolTable: class {
     # checker's own temporaries.
     ownsDestroy: function {t: this.view vid: ztypes.vid} out bool is {
         if vid.isZero then return false
-        if (t.walk.tempVars.has item: vid) then return false
+        if (t.walk.value.tempVars.has item: vid) then return false
         if (t.reg.variableOwnershipOf id: vid) != ztypes.zownership.owned then return false
         return (t.reg.isReftypeOf tid: (t.reg.variableTypeOf id: vid))
     }
@@ -1951,11 +1961,11 @@ ZSymbolTable: class {
             ki = ki - 1
             kd: t.typing.declChildAt declId: scope index: ki
             v: t.typing.declLocalVarOf declId: kd
-            if (t.walk.tempVars.has item: v).not then continue
+            if (t.walk.value.tempVars.has item: v).not then continue
             if v.isZero then continue
             # a temporary a pinning call's result keeps locked outlives the
             # call: the scope that adopts it lists it, and this one does not
-            if ((t.walk.pinnedTempPending.get key: v).or d: false) then continue
+            if ((t.walk.value.pinnedTempPending.get key: v).or d: false) then continue
             if (t.reg.variableOwnershipOf id: v) != ztypes.zownership.owned then continue
             if (t.reg.isReftypeOf tid: (t.reg.variableTypeOf id: v)).not then continue
             t.typing.destroyItems.append (
@@ -2408,7 +2418,7 @@ ZSymbolTable: class {
         start: u64
     } out bool is {
         v: t.typing.declLocalVarOf :declId
-        if (t.walk.tempVars.has item: v).not then return false
+        if (t.walk.value.tempVars.has item: v).not then return false
         p: t.typing.declParentOf :declId
         k: t.open.length
         for k > 0 loop {
@@ -2580,7 +2590,7 @@ ZSymbolTable: class {
     # an unnamed local no source line declares (defineTemp lists it; its origin
     # alone does not say so: an origin never set reads as `synth`)
     holderIsTemporary: function {t: this.view vid: ztypes.vid} out bool is {
-        return (t.walk.tempVars.has item: vid)
+        return (t.walk.value.tempVars.has item: vid)
     }
 
     # the variable holding a lock, by its local's name
