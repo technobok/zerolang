@@ -19,6 +19,9 @@ public: unit {
     :convRangeCond
 }
 
+# isServedUnit -- see nativepieces.isServedUnit
+isServedUnit: nativepieces.isServedUnit
+
 astnode: zast.astnode
 Ast: zast.Ast
 
@@ -807,7 +810,7 @@ emitNumericCast: function {
             text: "0".string
         )
     }
-    rowNeedsAdd :ctx :row cond: condAlways
+    nativepieces.rowNeedsAdd :ctx :row cond: nativepieces.condAlways
     # a lossy conversion builds a `resultval`; the row spells the tags and the
     # mono's name, and the DECLARATION is what decided which shape it is
     isResultval: (
@@ -1043,27 +1046,6 @@ PiecedText: class {
             )
         )
     }
-}
-
-# newPiecedText -- a text with nothing in it yet
-newPiecedText: function out PiecedText is {
-    return (PiecedText text: String heads: String pieces: ListVal rtpiece)
-}
-
-# pieceRow -- the row of a piece named `name` of `owner`'s file or of the
-# foundation (`prelude`), answering `demands` (or its name when the list is
-# empty) and needing `needs`: written in place, by the text holding it, when a
-# demand it answers fires
-pieceRow: function {
-    ctx: Ctx owner: StringView name: StringView demands: (List String).view needs: StringView
-} out u64 is {
-    r: beginDemands :ctx r: (zemitrows.blankRow owner: (ctx.demands.names.intern s: owner))
-    for each d: demands loop r = addRowDemands :ctx :r dm: d.stringView
-    if r.demandTo == r.demandFrom then r = addRowDemands :ctx :r dm: name
-    if needs.length > 0 then r.needText = rowNeedText :ctx :needs
-    row: appendFragmentRow :ctx :r
-    ctx.rowsInPlace.add item: row
-    return row
 }
 
 # rtid -- a parsed runtime text's id in RtTexts (zemitrows.rtid: a row holds
@@ -1714,220 +1696,6 @@ rtFillForCtx: function {
     return cur
 }
 
-# rtFragHoles -- each distinct hole of text `id` that plan `plan` writes (every
-# one when `all`), in the order first spelled
-rtFragHoles: function {
-    ctx: Ctx.view
-    plan: RtPlan.view
-    all: bool
-    ids: ListVal zast.nameid
-    names: List String
-} is {
-    inf: ctx.rt.infos.get i: plan.id
-    k: inf.segFrom
-    for k < inf.segTo loop {
-        sg: ctx.rt.segs.get i: k
-        k = k + 1
-        if sg.kind.hole.not then continue
-        if all.not when (rtPlanWrites :ctx :plan at: sg.from).not then continue
-        seen: false
-        for each d: ids loop {
-            if d == sg.name then seen = true
-        }
-        if seen then continue
-        ids.append sg.name
-        names.append from: (ctx.rt.holes.pool.texts.get i: sg.name).copy
-    }
-}
-
-# rtTagTypeHole -- text `id` spells `z_@<hole>@_tag_t`, the tag enum of the type
-# the hole names: the hole, then a literal starting `_tag_t`
-rtTagTypeHole: function {ctx: Ctx.view id: rtid hole: zast.nameid} out bool is {
-    inf: ctx.rt.infos.get i: id
-    t: ctx.rt.texts.get i: id
-    tv: t.stringView
-    k: inf.segFrom
-    for (k + 1) < inf.segTo loop {
-        sg: ctx.rt.segs.get i: k
-        k = k + 1
-        if sg.kind.hole.not or (sg.name != hole) then continue
-        nx: ctx.rt.segs.get i: k
-        if nx.kind.literal.not then continue
-        if ((tv.substring from: nx.from to: nx.to).startsWith prefix: "_tag_t") then return true
-    }
-    return false
-}
-
-# rtFragmentText -- a runtime fragment or an instantiated class template, parsed
-# (`id`), as plan `plan` writes it with its `z_@Name@` holes filled. The holes it
-# writes (every one when `all`) ARE the demand: each name resolves through
-# StringView/String or the canon path, and a name that resolves to nothing is
-# fatal. A `@TAG_<canon>@` hole is how to reach that type's discriminator, an
-# `@ARM_<canon>.<arm>@` hole a tag constant (armHoleC), an
-# `@MEMBER_<canon>.<name>@` hole a member (memberHoleC).
-rtFragmentText: function {
-    ast: Ast.view
-    reg: ztypes.ZTypeRegistry.view
-    typing: ztyping.ZTyping.view
-    ctx: Ctx
-    plan: RtPlan.view
-    all: bool
-    # the text, for its mark and the messages
-    key: textkey
-} out String is {
-    path: textLabel :ctx :key
-    bn: ListVal zast.nameid
-    bv: List String
-    rn: ListVal zast.nameid
-    rv: List String
-    hids: ListVal zast.nameid
-    hnames: List String
-    rtFragHoles :ctx :plan :all ids: hids names: hnames
-    k: u64
-    for k < hids.length loop {
-        (
-            rtFragHole
-            :ast
-            :reg
-            :typing
-            :ctx
-            id: plan.id
-            hole: (hids.get i: k)
-            name: (hnames.get i: k).stringView
-            path: path.stringView
-            :bn
-            :bv
-            :rn
-            :rv
-        )
-        k = k + 1
-    }
-    rtBindPrefixed :ast :reg :typing :ctx ids: hids names: hnames arms: true rawIds: rn rawVals: rv
-    rtBindPrefixed :ast :reg :typing :ctx ids: hids names: hnames arms: false rawIds: rn rawVals: rv
-    ferr: List String
-    res: (
-        rtRenderWith
-        :ctx
-        :plan
-        keys: ctx.rt.noKeys
-        bindIds: bn
-        bindVals: bv
-        rawIds: rn
-        rawVals: rv
-        holes: true
-        :key
-        fails: ferr
-    )
-    if (ctx.rt.infos.get i: plan.id).open then {
-        ferr.append from: "fragment \{path}: unterminated hole"
-    }
-    emitFillFails :ctx fails: ferr
-    return res
-}
-
-# rtFragHole -- bind the fragment hole `name` (`hole`): a `@TAG_<canon>@` to
-# `.tag`, or to nothing for a type the backend has unwrapped, which IS its
-# discriminator; a `@BOX_<type>.<protocol>@` to the function lending the type
-# as the protocol (boxHoleC); StringView and String to their C names; any other
-# name to the C name of the type its canon names. An ARM or MEMBER hole is bound
-# apart (rtBindPrefixed).
-rtFragHole: function {
-    ast: Ast.view
-    reg: ztypes.ZTypeRegistry.view
-    typing: ztyping.ZTyping.view
-    ctx: Ctx
-    id: rtid
-    hole: zast.nameid
-    name: StringView
-    path: StringView
-    bn: ListVal zast.nameid
-    bv: List String
-    rn: ListVal zast.nameid
-    rv: List String
-} is {
-    if (name.startsWith prefix: "ARM_") or (name.startsWith prefix: "MEMBER_") then return
-    if (name.startsWith prefix: "TAG_") then {
-        tt: stemTid :ast :reg :typing :ctx canon: (name.substring from: 4 to: name.length)
-        rn.append hole
-        tagv: ".tag"
-        if (isOrdinalVariant :typing tid: tt) then tagv = ""
-        rv.append from: tagv.string
-        return
-    }
-    bn.append hole
-    if (name.startsWith prefix: "BOX_") then {
-        bc: boxHoleC :ast :reg :typing :ctx box: (name.substring from: 4 to: name.length) :path
-        bv.append from: bc
-        return
-    }
-    hw: ctx.nativeWords.slotOf text: name
-    if hw == nativeWord.slot.holeStringView then {
-        preludeNeed :ctx memb: "@StringView_t"
-        bv.append from: ctx.svC.copy
-        return
-    }
-    if hw == nativeWord.slot.holeString then {
-        preludeNeed :ctx memb: "@String_t"
-        bv.append from: ctx.strC.copy
-        return
-    }
-    cc: stemCname :ast :reg :typing :ctx canon: name
-    # `z_@X@_tag_t` spells X's tag enum
-    if (rtTagTypeHole :ctx :id :hole) then (
-        noteTagEnumUse
-        :ctx
-        :reg
-        tid: (stemTid :ast :reg :typing :ctx canon: name)
-    )
-    # a type-name hole that resolves to nothing is reported here, not left
-    # for the C compiler to find as `z__t`; the TAG channel above is where an
-    # empty fill is legitimate
-    if cc.length == 0 then {
-        emitFail :ctx what: "fragment \{path}: hole @\{name}@ names no type in this program" line: 0
-    }
-    bv.append from: cc
-}
-
-# boxHoleC -- the C function a `@BOX_<type>.<protocol>@` hole names, which lends
-# a `<type>` as the `<protocol>` (`<type>_<label>_create`, the label the type
-# implements the protocol under); the fill writes it minus its z_, as every
-# hole's C name. demandRowBoxes has noted the box; one that names no type, or
-# that the type does not implement, is reported.
-boxHoleC: function {
-    ast: Ast.view
-    reg: ztypes.ZTypeRegistry.view
-    typing: ztyping.ZTyping.view
-    ctx: Ctx
-    box: StringView
-    path: StringView
-} out String is {
-    it: boxTidOf :ast :reg :typing :ctx one: box wantProtocol: false
-    pt: boxTidOf :ast :reg :typing :ctx one: box wantProtocol: true
-    lbl: String
-    if it.notZero when pt.notZero then lbl = (
-        boxLabelFor
-        :reg
-        :typing
-        :ctx
-        implTid: it
-        protoTid: pt
-    )
-    if lbl.length == 0 then {
-        (
-            emitFail
-            :ctx
-            what: "fragment \{path}: hole @BOX_\{box}@ names no box in this program"
-            line: 0
-        )
-        return "".string
-    }
-    fn: spelledCname :ctx tid: it
-    fn.append "_"
-    fn.append lbl
-    fn.append "_create"
-    return fn
-}
-
 # rtBindHoles -- bind each ARM hole (when `arms`) or MEMBER hole of the row body
 # `id` (rtBindPrefixed)
 rtBindHoles: function {
@@ -1945,92 +1713,18 @@ rtBindHoles: function {
     prefix: "MEMBER_"
     if arms then prefix = "ARM_"
     ctx.rt.holesNamed :id :prefix ids: hids names: hnames
-    rtBindPrefixed :ast :reg :typing :ctx ids: hids names: hnames :arms :rawIds :rawVals
-}
-
-# rtBindPrefixed -- bind each hole of `ids` / `names` that is an `ARM_` hole
-# (armHoleC) when `arms`, a `MEMBER_` hole (memberHoleC) otherwise, to the C it
-# names; one that names nothing is left unbound, which the fill reports
-rtBindPrefixed: function {
-    ast: Ast.view
-    reg: ztypes.ZTypeRegistry.view
-    typing: ztyping.ZTyping.view
-    ctx: Ctx
-    ids: (ListVal zast.nameid).view
-    names: (List String).view
-    arms: bool
-    rawIds: ListVal zast.nameid
-    rawVals: List String
-} is {
-    prefix: "MEMBER_"
-    if arms then prefix = "ARM_"
-    k: u64
-    for k < ids.length loop {
-        nv: names.get i: k
-        k = k + 1
-        if (nv.stringView.startsWith :prefix).not then continue
-        body: nv.stringView.substring from: prefix.length to: nv.length
-        c: String
-        if arms then {
-            c = armHoleC :ast :reg :typing :ctx :body
-        } else {
-            c = memberHoleC :ast :reg :typing :ctx :body
-        }
-        if c.length > 0 then {
-            rawIds.append (ids.get i: k - 1)
-            rawVals.append from: c
-        }
-    }
-}
-
-# armHoleC -- the tag constant an ARM hole's `<canon>.<arm>` names, its use
-# noted; "" when the canon names no type in this program or the type declares no
-# such arm
-armHoleC: function {
-    ast: Ast.view
-    reg: ztypes.ZTypeRegistry.view
-    typing: ztyping.ZTyping.view
-    ctx: Ctx
-    # the hole past its `ARM_`
-    body: StringView
-} out String is {
-    dot: body.indexOf needle: "."
-    if dot.none then return "".string
-    tt: stemTid :ast :reg :typing :ctx canon: (body.substring from: 0 to: dot)
-    aid: zast.poolFind pool: ast.names text: (body.substring from: dot + 1 to: body.length)
-    ord: armOrdinalOf :reg :typing tid: tt armId: aid
-    if ord.none then return "".string
-    noteTagConstUse :ctx :reg :typing tid: tt
-    return (tagConstC :ast :ctx :reg :typing tid: tt armOrd: ord)
-}
-
-# memberHoleC -- the C name of the member a MEMBER hole's `<canon>.<name>`
-# names, "" when the canon names no type or the type declares no such member.
-memberHoleC: function {
-    # the member's name is interned here
-    ast: Ast.view
-    # the program the canon is resolved in
-    reg: ztypes.ZTypeRegistry.view
-    typing: ztyping.ZTyping.view
-    # the emission context memberC is spelled through
-    ctx: Ctx
-    # the hole past its `MEMBER_`
-    body: StringView
-} out String is {
-    dot: body.indexOf needle: "."
-    if dot.none then return "".string
-    tt: stemTid :ast :reg :typing :ctx canon: (body.substring from: 0 to: dot)
-    mid: zast.poolFind pool: ast.names text: (body.substring from: dot + 1 to: body.length)
-    if tt.isZero or mid.isZero then return "".string
-    k: memberkind.field
-    ttt: reg.typetypeOf typeId: (chaseAggregateTypedef :reg :typing :ctx tid: tt)
-    if ttt == ztypes.ztypetype.variantType then k = memberkind.arm
-    if ttt == ztypes.ztypetype.unionType then k = memberkind.inlineArm
-    if (ttt == ztypes.ztypetype.protocolType) or (ttt == ztypes.ztypetype.facetType) then {
-        k = memberkind.slot
-    }
-    if (memberOrdinal :reg :typing :ctx owner: tt kind: k nameId: mid).none then return "".string
-    return (memberC :ast :reg :typing :ctx owner: tt kind: k nameId: mid)
+    (
+        nativepieces.rtBindPrefixed
+        :ast
+        :reg
+        :typing
+        :ctx
+        ids: hids
+        names: hnames
+        :arms
+        :rawIds
+        :rawVals
+    )
 }
 
 # textkind -- what a native text zc carries is
@@ -2057,69 +1751,16 @@ noText: function out textkey is {
     return (textkey kind: textkind.none.tag name: 0)
 }
 
-# textKey -- the key of the text of kind `kind` named `name`
-textKey: function {ctx: Ctx kind: textkind name: StringView} out textkey is {
-    if ctx.textNames.length == 0 then ctx.textNames.append "".string
-    id: (ctx.textIds.get key: name.string).or d: 0
-    if id == 0 then {
-        id = ctx.textNames.length.u32.orPanic
-        ctx.textIds.set key: name.string value: id
-        ctx.textNames.append from: name.string
-    }
-    return (textkey kind: kind.tag name: id)
-}
-
-# fileKey -- the key of fixed file `name`
-fileKey: function {ctx: Ctx name: StringView} out textkey is {
-    return (textKey :ctx kind: textkind.fixedFile :name)
-}
-
-# fragKey -- the key of fragment `name`
-fragKey: function {ctx: Ctx name: StringView} out textkey is {
-    return (textKey :ctx kind: textkind.fragment :name)
-}
-
 # tmplKey -- the key of template `name`
 tmplKey: function {ctx: Ctx name: StringView} out textkey is {
-    return (textKey :ctx kind: textkind.template :name)
-}
-
-# textLabel -- text `key` as a message names it: `fixed file head`, `fragment
-# _Z_F16`, `template List`; "" for no text
-textLabel: function {ctx: Ctx.view key: textkey} out String is {
-    if key.kind == textkind.none.tag then return String
-    r: "template ".string
-    if key.kind == textkind.fixedFile.tag then r = "fixed file ".string
-    if key.kind == textkind.fragment.tag then r = "fragment ".string
-    r.append (ctx.textNames.get i: key.name.u64)
-    return r
-}
-
-# textOf -- the native text `key` names. A text zc does not carry is fatal and
-# reported once (the "" is kept so it is not asked again); no text zc carries
-# is empty, so a kept "" is unambiguously the missing one.
-textOf: function {ctx: Ctx key: textkey} out String is {
-    {
-        got: ctx.texts.get :key
-        if got.some then {
-            return got.copy
-        }
-    }
-    emitFail :ctx what: "zc carries no \{textLabel :ctx :key}" line: 0
-    ctx.texts.set :key value: String
-    return String
-}
-
-# setText -- `text` as the native text `key` names
-setText: function {ctx: Ctx key: textkey text: String.take} is {
-    ctx.texts.set :key value: text.take
+    return (nativepieces.textKey :ctx kind: textkind.template :name)
 }
 
 # tmplTextOf -- a template's text, parsed once (RtTexts), for writing an
 # instance of it, and its needs (the runtime the template calls, kept when it
 # was read) registered at every instance as a row's are
 tmplTextOf: function {ctx: Ctx key: textkey} out rtid is {
-    id: tmplParsed :ctx :key
+    id: nativepieces.tmplParsed :ctx :key
     nds: String
     {
         got: ctx.tmplNeeds.get :key
@@ -2128,27 +1769,8 @@ tmplTextOf: function {ctx: Ctx key: textkey} out rtid is {
         }
     }
     for each nd: (nds.stringView.split sep: ",") loop {
-        if nd.length > 0 then rowNeedAddOne :ctx uname: "" need: nd
+        if nd.length > 0 then nativepieces.rowNeedAddOne :ctx uname: "" need: nd
     }
-    return id
-}
-
-# tmplParsed -- native text `key` parsed (RtTexts) on its first read and kept
-# by key: a pieced text (a template, a fixed file, a fragment of pieces) with
-# the pieces its reader cut
-tmplParsed: function {ctx: Ctx key: textkey} out rtid is {
-    id: (ctx.tmplTexts.get :key).or d: rtid.zero
-    if id.notZero then return id
-    po: ctx.piecedTexts.remove :key
-    match (
-        po
-    ) case some then {
-        id = ctx.rt.parsePieced x: po.take
-    } case none then {
-        raw: textOf :ctx :key
-        id = ctx.rt.parse text: raw.stringView
-    }
-    ctx.tmplTexts.set :key value: id
     return id
 }
 
@@ -2258,21 +1880,6 @@ UnitReq: class {
     cdefs: String
 }
 
-# newUnitReq -- a requirement of unit `path` setting nothing yet
-newUnitReq: function {path: String.take} out UnitReq is {
-    return (
-        UnitReq
-        path: path.take
-        feature: String
-        nocc: String
-        arch: String
-        os: String
-        link: String
-        csrc: String
-        cdefs: String
-    )
-}
-
 # memberWord -- the template members an instance's text is cut into (its
 # sections, PiecedText): a member written C calls is recorded by its instance
 # and its slot here (noteMemberUse), never by its spelling.
@@ -2377,103 +1984,6 @@ nativeWord: list {
     shapeRecord: "record"
 } out staticlist StringView
 
-# recordCanon -- a unit's canonical stem: the generic instance a runtime
-# fragment spells as the hole <stem>, its template then each type argument
-# (`spec`, comma-separated), kept by stem for stemInstanceTid
-recordCanon: function {ctx: Ctx stem: StringView spec: StringView} is {
-    ctx.canonSpecs.set key: stem.string value: spec.string
-}
-
-# recordUnitOrder -- the `@units` pseudo-row: not a row but the order the
-# units' runtimes run in, comma-separated
-recordUnitOrder: function {ctx: Ctx order: StringView} is {
-    for each ou: (order.split sep: ",") loop {
-        if ou.length > 0 then ctx.unitOrder.append from: ou.string
-    }
-}
-
-# beginDemands -- row `r` as a fragment row whose demands follow
-# (addRowDemands), its span opening where the table's demands end
-beginDemands: function {ctx: Ctx.view r: zemitrows.nativerow} out zemitrows.nativerow is {
-    fr: r
-    fr.fragment = true
-    fr.demandFrom = ctx.rows.demandKeys.length
-    fr.demandTo = fr.demandFrom
-    return fr
-}
-
-# endDemands -- fragment row `r`, keyed `key`, with its demands closed: a row
-# whose file names none answers the key's last segment, a helper's (`@name`)
-# without its `@`
-endDemands: function {ctx: Ctx r: zemitrows.nativerow key: StringView} out zemitrows.nativerow is {
-    if r.demandTo > r.demandFrom then return r
-    from: u64
-    ld: key.lastIndexOf needle: "."
-    match (
-        ld
-    ) case some then {
-        from = ld + 1
-    } case none then {
-        if key.startsWith "@" then from = 1
-    }
-    return (addRowDemands :ctx :r dm: (key.substring :from to: key.length))
-}
-
-# addRowDemands -- demands `dm` (one, or comma-separated) onto fragment row
-# `r`, whose span ends where the table's demands do. The row's first demand,
-# when it is `uses_<Type>` or `destroys_<Type>`, is its type demand: the row
-# fires where written C spells the type, or calls its destructor, and on any
-# member the rest names.
-addRowDemands: function {
-    ctx: Ctx r: zemitrows.nativerow dm: StringView
-} out zemitrows.nativerow is {
-    fr: r
-    if fr.demandTo == fr.demandFrom then {
-        with uo: (dm.stripPrefix p: "uses_") do match (
-            uo
-        ) case some then {
-            fr.typeName = (
-                ctx.demands.names.intern
-                s: (uo.substring from: 0 to: ((uo.indexOf needle: ",").or d: uo.length))
-            )
-        } case none then null
-        with dso: (dm.stripPrefix p: "destroys_") do match (
-            dso
-        ) case some then {
-            fr.typeName = (
-                ctx.demands.names.intern
-                s: (dso.substring from: 0 to: ((dso.indexOf needle: ",").or d: dso.length))
-            )
-            fr.destroys = true
-        } case none then null
-    }
-    for each w: (dm.split sep: ",") loop {
-        if w.length > 0 then ctx.rows.demandKeys.append (
-            zemitrows.demandkey
-            owner: fr.owner
-            name: (ctx.demands.names.intern s: w)
-        )
-    }
-    fr.demandTo = ctx.rows.demandKeys.length
-    return fr
-}
-
-# appendFragmentRow -- fragment row `r` into the row table and its fragment
-# rows; its place
-appendFragmentRow: function {ctx: Ctx r: zemitrows.nativerow} out u64 is {
-    ctx.rows.rows.append r
-    row: ctx.rows.rows.length - 1
-    ctx.rows.fragRows.append row
-    return row
-}
-
-# rowNeedText -- a row's needs as its file writes them, kept to be read on
-# first use (readRowNeeds): RowTable.needTexts' place plus one
-rowNeedText: function {ctx: Ctx needs: StringView} out u64 is {
-    ctx.rows.needTexts.append from: needs.string
-    return ctx.rows.needTexts.length
-}
-
 # svcall -- how a call of a StringView native member is emitted
 # (zemitrows.svcall: the `call` of the member's row)
 svcall: zemitrows.svcall
@@ -2486,13 +1996,6 @@ svCallOf: function {
     row: ctx.rows.ofName n: (rowNameOfMember :reg :typing :ctx owner: ctx.svTid name: nameId)
     if row == 0 then return svcall.none
     return (ctx.rows.rows.get i: row).call
-}
-
-# constBit -- a constant-operand variant's position (1-based, the receiver
-# excluded) as its bit of nativerow.constMask; zero for a position past 64
-constBit: function {position: u64} out u64 is {
-    if (position == 0) or (position > 64) then return 0
-    return 1.u64 << (position - 1)
 }
 
 # shapeRow -- structural row `row`, keyed `<shape>.<op>`, found by the shape
@@ -2545,512 +2048,13 @@ rowBody: function {ctx: Ctx row: u64} out rtid is {
     return id
 }
 
-# readRowNeeds -- row `row`'s needs (`u.m`, or `m` of the row's own unit, each
-# `?NAME` holding under the foundation's condition NAME too) parsed onto the
-# row table's needs, the first time the row is emitted from; a need under a
-# condition no file declares is reported (condBitOf) and dropped
-readRowNeeds: function {ctx: Ctx row: u64} is {
-    r: ctx.rows.rows.get i: row
-    if r.needText == 0 then return
-    needs: (ctx.rows.needTexts.get i: r.needText - 1).copy
-    r.needFrom = ctx.rows.needs.length
-    parseRowNeeds :ctx owner: r.owner needs: needs.stringView
-    r.needTo = ctx.rows.needs.length
-    r.needText = 0
-    ctx.rows.rows.set i: row val: r
-}
-
-# parseRowNeeds -- readRowNeeds' parse of the needs of a row of `owner`
-parseRowNeeds: function {ctx: Ctx owner: zast.nameid needs: StringView} is {
-    for each nd: (needs.split sep: ",") loop {
-        if nd.length > 0 then {
-            bit: u64
-            keep: true
-            cut: nd.length
-            q: nd.indexOf needle: "?"
-            if q.some then {
-                bit = condBitOf :ctx name: (nd.substring from: q + 1 to: nd.length)
-                keep = bit != 0
-                cut = q
-            }
-            if keep then {
-                bare: nd.substring from: 0 to: cut
-                key: zemitrows.demandkey :owner name: zast.nameid.zero
-                d: bare.indexOf needle: "."
-                match (
-                    d
-                ) case some then {
-                    key = (
-                        ctx.demands.keyOf
-                        owner: (bare.substring from: 0 to: d)
-                        name: (bare.substring from: d + 1 to: bare.length)
-                    )
-                } case none then {
-                    key.name = ctx.demands.names.intern s: bare
-                }
-                ctx.rows.needs.append (zemitrows.rowneed :key cond: bit)
-            }
-        }
-    }
-}
-
-# rowNeedsAdd -- what row `row`'s body calls (its needs), demanded wherever
-# the row is emitted from, in the configurations `cond` holds in
-rowNeedsAdd: function {ctx: Ctx row: u64 cond: Cond.view} is {
-    readRowNeeds :ctx :row
-    r: ctx.rows.rows.get i: row
-    k: r.needFrom
-    for k < r.needTo loop {
-        nd: ctx.rows.needs.get i: k
-        if nd.cond == 0 then {
-            needsAddKeyCond :ctx key: nd.key :cond
-        } else {
-            needsAddKeyCond :ctx key: nd.key cond: (condWith c: cond bit: nd.cond)
-        }
-        k = k + 1
-    }
-}
-
 # schema -- the implementation files' schema, as the served unit holds it
 schema: nativec.runtime.nativec
-
-# registerImplementations -- the rows zc carries (`nativec.units`, foundation
-# `nativec.systemc.foundation`) and each user unit's checked rows (`users`)
-# into the row tables, in this order: the conditions, every unit's facts and canons, the
-# structural rows, the unit order, the foundation's groups, then each unit's
-# rows and requirements, the units in the foundation's order and the user
-# units after them. A row's fragments, pieces, templates and the fixed files
-# are put in the template cache under the paths the emitter reads them by, so
-# no file is opened. The rows are read by a reader of each kind (servedRow and
-# the like, checkedRow and the like) and registered by one RowWalk.
-registerImplementations: function {
-    ctx: Ctx
-    ast: Ast.view
-    typing: ztyping.ZTyping.view
-    users: (List UserImplementation).view
-} is {
-    w: newRowWalk
-    fd: nativec.systemc.foundation
-    order: servedUnitOrder :fd
-    for each c: fd.conditions loop (
-        recordCondition
-        :ctx
-        name: c.name.stringView
-        expression: c.expression.stringView
-    )
-    servedFactsAndCanons :w :ctx :ast :typing :order
-    for each u: users loop checkedFacts :w :ast :typing :u
-    for each u: users loop checkedCanons :ctx :u
-    for each r: fd.structural loop servedRow :w :ctx :ast :r owner: ""
-    recordUnitOrder :ctx order: (servedList xs: fd.order).stringView
-    for each g: fd.groups loop {
-        for each r: g.rows loop servedRow :w :ctx :ast :r owner: g.name.stringView
-    }
-    for each k: order loop servedUnit :w :ctx :ast :typing u: (nativec.units.get i: k)
-    for each u: users loop checkedUnit :w :ctx :ast :typing :u
-    for each fl: fd.files loop {
-        (
-            ctx.piecedTexts.set
-            key: (fileKey :ctx name: fl.name.stringView)
-            value: (servedPieces :ctx ps: fl.pieces owner: "prelude")
-        )
-    }
-}
-
-# servedUnit -- one unit zc carries: its rows, its classes, its requirements and
-# its templates
-servedUnit: function {
-    w: RowWalk
-    ctx: Ctx
-    ast: Ast.view
-    typing: ztyping.ZTyping.view
-    u: nativec.servedUnit
-} is {
-    w.file :ctx :ast :typing owner: u.name.stringView
-    for each r: u.implementation.rows loop servedRow :w :ctx :ast :r owner: u.name.stringView
-    for each c: u.implementation.classes loop (
-        w.classRow
-        :ctx
-        owner: u.name.stringView
-        key: c.key.stringView
-        template: c.template.stringView
-        live: (servedList xs: c.live)
-        destroy: c.destroy.stringView
-        need: (servedList xs: c.needs)
-    )
-    servedRequirements :w :ctx im: u.implementation owner: u.name.stringView
-    for each t: u.implementation.templates loop servedTemplate :ctx :t
-}
 
 # recordImplementedUnits -- the user units whose implementation file was read,
 # for a refusal to say which unit has none (noNativeImplFailure)
 recordImplementedUnits: function {ctx: Ctx users: (List UserImplementation).view} is {
     for each u: users loop ctx.implementedUnits.add item: u.name.copy
-}
-
-# newRowWalk -- a walk that has registered nothing yet
-newRowWalk: function out RowWalk is {
-    return (
-        RowWalk
-        used: Set String
-        rf: (
-            RowFacts
-            declared: Set String
-            held: Set String
-            placed: Set String
-            replaced: Set String
-            linkReplaced: Set String
-            sourceReplaced: Set String
-        )
-        frags: String
-        boxes: String
-        at: String
-        impl: 0
-        ownerText: String
-        owner: zast.nameid.zero
-        reached: false
-    )
-}
-
-# servedFactsAndCanons -- every served unit's facts, then every one's canons,
-# the units in `order`, above every unit's own rows
-servedFactsAndCanons: function {
-    w: RowWalk
-    ctx: Ctx
-    ast: Ast.view
-    typing: ztyping.ZTyping.view
-    order: (ListVal u64).view
-} is {
-    for each k: order loop {
-        for each f: (nativec.units.get i: k).implementation.facts loop {
-            w.fact :ast :typing name: f.name.stringView reach: (servedList xs: f.reach).stringView
-        }
-    }
-    for each k: order loop {
-        for each c: (nativec.units.get i: k).implementation.canons loop {
-            recordCanon :ctx stem: c.stem.stringView spec: (servedList xs: c.spec).stringView
-        }
-    }
-}
-
-# servedRow -- one row zc carries, written into the row table from its typed
-# fields (placeRow): its texts handed to the walk first
-servedRow: function {
-    w: RowWalk
-    ctx: Ctx
-    ast: Ast.view
-    r: schema.row
-    owner: StringView
-} is {
-    key: r.key.stringView
-    if (w.admits :ctx :owner :key fact: r.fact.stringView).not then return
-    for each t: r.fragments loop w.fragment :ctx :owner :key text: "\{t}\n"
-    if r.pieces.length > 0 then (
-        w.pieces
-        :ctx
-        :owner
-        :key
-        text: (servedPieces :ctx ps: r.pieces :owner)
-    )
-    x: zemitrows.blankRow owner: w.owner
-    bd: r.body.stringView.trim
-    if bd.length > 0 then x.body = ctx.rt.defer text: bd
-    for each c: r.constant loop x.constMask = x.constMask | (constBit position: c)
-    x.value = r.form.value
-    x.byPointer = r.byPointer
-    x.callsEquals = r.callsEquals
-    x.call = servedCall c: r.call
-    if r.via.length > 0 then x.via = ctx.demands.names.intern s: r.via.stringView
-    if x.constMask == 0 when w.owner.notZero when r.needs.length > 0 then {
-        x.needText = rowNeedText :ctx needs: (servedList xs: r.needs).stringView
-    }
-    if w.frags.length > 0 then {
-        x = beginDemands :ctx r: x
-        for each d: r.demand loop x = addRowDemands :ctx r: x dm: d.stringView
-        x = endDemands :ctx r: x :key
-    }
-    (
-        w.place
-        :ctx
-        :ast
-        r: x
-        :key
-        members: (servedList xs: r.members).stringView
-        pulls: (servedList xs: r.pulls).stringView
-    )
-}
-
-# servedCall -- a row's `call` choice as the kind the emitter acts on
-servedCall: function {c: schema.call} out svcall is {
-    match (
-        c
-    ) case simple then {
-        return svcall.simple
-    } case argument then {
-        return svcall.arg
-    } case parse then {
-        return svcall.parse
-    } case noArguments then {
-        return svcall.noarg
-    } else return svcall.none
-}
-
-# servedRequirements -- a unit's links, sources and refusals, each recorded as
-# a UnitReq when it holds
-servedRequirements: function {
-    w: RowWalk
-    ctx: Ctx
-    im: schema.implementation
-    owner: StringView
-} is {
-    for each l: im.links loop {
-        r: newUnitReq path: (servedSubunit sub: l.subunit.stringView :owner)
-        r.os = servedOs xs: l.os
-        r.link = l.library.string
-        w.requirement :ctx req: r.take fact: l.fact.stringView
-    }
-    for each s: im.sources loop {
-        r: newUnitReq path: (servedSubunit sub: s.subunit.stringView :owner)
-        r.os = servedOs xs: s.os
-        r.csrc = s.path.string
-        r.cdefs = servedList xs: s.defines
-        w.requirement :ctx req: r.take fact: s.fact.stringView
-    }
-    for each f: im.refusals loop {
-        r: newUnitReq path: (servedSubunit sub: f.subunit.stringView :owner)
-        r.feature = f.feature.string
-        r.nocc = servedCompilers xs: f.compilers
-        r.arch = servedArchitectures xs: f.onlyArchitectures
-        w.requirement :ctx req: r.take fact: ""
-    }
-}
-
-# RowWalk -- registering the rows a reader reads: the fragment names given so
-# far, the facts the rows declared and settled (RowFacts), and what the reader
-# handed over for the row it is reading -- its fragments' names
-RowWalk: class {
-    used: Set String
-    rf: RowFacts
-    frags: String
-    # the boxes the row's fragments spell, `<type>.<protocol>` comma-separated
-    # (spelledBoxes)
-    boxes: String
-    # where the row being read is written, as its texts' mark (NativeMark);
-    # "" when none is asked for
-    at: String
-    # the place of the file being read (from 1), 0 while the
-    # foundation's groups and structural rows are
-    impl: u64
-    # the unit or group the last row placed was read for, and its id in
-    # DemandSet.names (zero for a structural row): read once per run of rows
-    ownerText: String
-    owner: zast.nameid
-    # the program reaches the unit of the file being read
-    reached: bool
-} as {
-    # file -- the file implementing unit `owner` is read next: found by the
-    # unit's declaration (RowTable.fileOf) when the program reaches the unit,
-    # and its rows found by name then only (nameRow)
-    file: function {
-        t: this ctx: Ctx ast: Ast.view typing: ztyping.ZTyping.view owner: StringView
-    } is {
-        ctx.rows.fileUnits.append (ctx.demands.names.intern s: owner)
-        t.impl = ctx.rows.fileUnits.length - 1
-        ud: unitDeclByName :typing :ast name: owner
-        t.reached = ud.notZero
-        if t.reached then ctx.rows.fileOf.set key: ud value: t.impl
-    }
-
-    # fact -- a unit's fact: declared, and held when any of `reach`'s paths
-    # (comma-separated) is reached
-    fact: function {
-        t: this
-        ast: Ast.view
-        typing: ztyping.ZTyping.view
-        name: StringView
-        reach: StringView
-    } is {
-        t.rf.settle :ast :typing :name :reach
-    }
-
-    # fragment -- one of the row's fragments, cached under a name of its own
-    fragment: function {t: this ctx: Ctx owner: StringView key: StringView text: String.take} is {
-        spelledBoxes text: text.stringView into: t.boxes
-        nm: t.fragmentName :owner :key
-        servedFragment :ctx name: nm.stringView text: text.take
-        t.markFragment :ctx name: nm.stringView
-        if t.frags.length > 0 then t.frags.append ","
-        t.frags.append nm
-    }
-
-    # pieces -- the row's fragment as pieces (servedPieces), in place of its
-    # fragments: written a piece at a time
-    pieces: function {t: this ctx: Ctx owner: StringView key: StringView text: PiecedText.take} is {
-        nm: t.fragmentName :owner :key
-        ctx.piecedTexts.set key: (fragKey :ctx name: nm.stringView) value: text.take
-        ctx.piecedFrags.add item: nm.copy
-        t.frags = nm.copy
-    }
-
-    # classRow -- a class whose C struct the runtime writes, recorded in the
-    # order read (the order the structs are written in): its destroy fragment,
-    # when it has one, cached under a name of its own
-    classRow: function {
-        t: this
-        ctx: Ctx
-        owner: StringView
-        key: StringView
-        template: StringView
-        live: String.take
-        destroy: StringView
-        need: String.take
-    } is {
-        dn: String
-        if destroy.length > 0 then {
-            dkey: "\{key}.@destroy"
-            dn = t.fragmentName :owner key: dkey.stringView
-            servedFragment :ctx name: dn.stringView text: "\{destroy}\n"
-            t.markFragment :ctx name: dn.stringView
-        }
-        (
-            ctx.classRows.append
-            (
-                ClassRow
-                uname: owner.string
-                cls: key.string
-                live: live.take
-                destroy: dn.take
-                tmpl: template.string
-                need: need.take
-            )
-        )
-    }
-
-    # markFragment -- the fragment `name` marked with where its row is written,
-    # when a mark is asked for
-    markFragment: function {t: this.view ctx: Ctx name: StringView} is {
-        if t.at.length == 0 then return
-        (
-            recordMark
-            :ctx
-            key: (fragKey :ctx :name)
-            m: (NativeMark mark: t.at.copy parts: (Map String V: String))
-        )
-    }
-
-    # admits -- whether the row of `owner`'s file keyed `key`, a variant under
-    # `fact` ("" for none), is recorded (RowFacts.applies); the owner is read
-    # where its run of rows begins
-    admits: function {
-        t: this ctx: Ctx owner: StringView key: StringView fact: StringView
-    } out bool is {
-        if owner != t.ownerText then {
-            t.ownerText = owner.string
-            t.owner = zast.nameid.zero
-            if owner.length > 0 then t.owner = ctx.demands.names.intern s: owner
-            t.rf.beginFile
-        }
-        return (t.rf.applies :ctx :fact :owner :key)
-    }
-
-    # requirement -- a link, source or refusal a reader read: a link or a
-    # source recorded when it holds (RowFacts.requirementHolds), a refusal always
-    requirement: function {t: this ctx: Ctx req: UnitReq.take fact: StringView} is {
-        holds: true
-        if req.link.length > 0 then {
-            holds = t.rf.requirementHolds :ctx link: true path: req.path.stringView :fact
-        } else if req.csrc.length > 0 then {
-            holds = t.rf.requirementHolds :ctx link: false path: req.path.stringView :fact
-        }
-        if holds then ctx.unitReqs.append req.take
-    }
-
-    # place -- row `r` of the file being read, keyed `key` there, into the row
-    # table and the indexes it is found by: a fragment row with the fragments
-    # and boxes handed over since the last, its `members` and its `pulls`
-    # (comma-separated); a helper (`@name`) by its owner and name; a structural
-    # row by its shape; a row of a file the program reaches by its key's names
-    place: function {
-        t: this
-        ctx: Ctx
-        ast: Ast.view
-        r: zemitrows.nativerow
-        key: StringView
-        members: StringView
-        pulls: StringView
-    } is {
-        x: r
-        rid: u64
-        if x.fragment then {
-            if t.frags.length > 0 then {
-                ctx.rows.fragTexts.append from: t.frags.copy
-                x.fragText = ctx.rows.fragTexts.length
-                t.frags = String
-            }
-            if members.length > 0 then {
-                ctx.rows.memberTexts.append from: members.string
-                x.members = ctx.rows.memberTexts.length
-            }
-            if t.boxes.length > 0 then {
-                ctx.rows.boxTexts.append from: t.boxes.copy
-                x.boxes = ctx.rows.boxTexts.length
-                t.boxes = String
-            }
-            rid = appendFragmentRow :ctx r: x
-            if pulls.length > 0 then recordRowPulls :ctx row: rid :pulls
-        } else {
-            ctx.rows.rows.append x
-            rid = ctx.rows.rows.length - 1
-        }
-        if x.owner.isZero then {
-            shapeRow :ctx :ast :key row: rid
-            return
-        }
-        if key.startsWith "@" then {
-            (
-                ctx.rows.helpers.set
-                key: (zemitrows.demandkey owner: x.owner name: (ctx.demands.names.intern s: key))
-                value: rid
-            )
-        }
-        if t.reached then (
-            nameRow
-            :ctx
-            :ast
-            impl: t.impl
-            :key
-            row: rid
-            constant: x.constMask != 0
-        )
-    }
-
-    # fragmentName -- the name of a row's fragment, `_Z_<UNIT>_<KEY>`, each byte
-    # that is no letter or digit `_`, suffixed until it is unused
-    fragmentName: function {t: this owner: StringView key: StringView} out String is {
-        base: "_Z_\{owner.toUpperAscii}_"
-        k: key
-        if k.startsWith "@" then k = k.substring from: 1 to: k.length
-        up: k.toUpperAscii
-        i: u64
-        for i < up.length loop {
-            b: (up.stringView.byteAt :i).or d: 0
-            alnum: (ascii.isUpper :b) or (ascii.isDigit :b)
-            if alnum then {
-                base.appendByte :b
-            } else {
-                base.appendByte 0c_.u8
-            }
-            i = i + 1
-        }
-        nm: base.copy
-        n: 2.u64
-        for (t.used.has item: nm) loop {
-            nm = "\{base}_\{n}"
-            n = n + 1
-        }
-        t.used.add item: nm.copy
-        return nm
-    }
 }
 
 # UserImplementation -- a user unit's C implementation file: its nativec.zd,
@@ -3063,337 +2067,6 @@ UserImplementation: class {
     file: zdata.DataFile
 }
 
-# checkedFacts -- a user unit's facts, read off its checked file
-checkedFacts: function {
-    w: RowWalk
-    ast: Ast.view
-    typing: ztyping.ZTyping.view
-    u: UserImplementation.view
-} is {
-    f: u.file
-    for each v: (zdata.itemsOf :f v: (checkedField :u name: "facts")) loop (
-        w.fact
-        :ast
-        :typing
-        name: (zdata.textOf :f v: (zdata.fieldOf :f :v name: "name")).stringView
-        reach: (checkedTexts :u :v name: "reach").stringView
-    )
-}
-
-# checkedCanons -- a user unit's canonical stems, read off its checked file
-checkedCanons: function {
-    ctx: Ctx
-    u: UserImplementation.view
-} is {
-    f: u.file
-    for each v: (zdata.itemsOf :f v: (checkedField :u name: "canons")) loop (
-        recordCanon
-        :ctx
-        stem: (zdata.textOf :f v: (zdata.fieldOf :f :v name: "stem")).stringView
-        spec: (checkedTexts :u :v name: "spec").stringView
-    )
-}
-
-# checkedUnit -- a user unit's rows, requirements and templates, read off its
-# checked file
-checkedUnit: function {
-    w: RowWalk
-    ctx: Ctx
-    ast: Ast.view
-    typing: ztyping.ZTyping.view
-    u: UserImplementation.view
-} is {
-    f: u.file
-    owner: u.name.stringView
-    w.file :ctx :ast :typing :owner
-    for each r: (zdata.itemsOf :f v: (checkedField :u name: "rows")) loop (
-        checkedRow
-        :w
-        :ctx
-        :ast
-        :u
-        :r
-        :owner
-    )
-    for each c: (zdata.itemsOf :f v: (checkedField :u name: "classes")) loop (
-        checkedClass
-        :w
-        :ctx
-        :u
-        :c
-        :owner
-    )
-    for each l: (zdata.itemsOf :f v: (checkedField :u name: "links")) loop {
-        r: (
-            newUnitReq
-            path: (servedSubunit sub: (checkedText :u v: l name: "subunit").stringView :owner)
-        )
-        r.os = checkedArms :u v: l name: "os"
-        r.link = checkedText :u v: l name: "library"
-        w.requirement :ctx req: r.take fact: (checkedText :u v: l name: "fact").stringView
-    }
-    for each s: (zdata.itemsOf :f v: (checkedField :u name: "sources")) loop {
-        r: (
-            newUnitReq
-            path: (servedSubunit sub: (checkedText :u v: s name: "subunit").stringView :owner)
-        )
-        r.os = checkedArms :u v: s name: "os"
-        r.csrc = checkedText :u v: s name: "path"
-        r.cdefs = checkedTexts :u v: s name: "defines"
-        w.requirement :ctx req: r.take fact: (checkedText :u v: s name: "fact").stringView
-    }
-    for each x: (zdata.itemsOf :f v: (checkedField :u name: "refusals")) loop {
-        r: (
-            newUnitReq
-            path: (servedSubunit sub: (checkedText :u v: x name: "subunit").stringView :owner)
-        )
-        r.feature = checkedText :u v: x name: "feature"
-        r.nocc = checkedArms :u v: x name: "compilers"
-        r.arch = checkedArms :u v: x name: "onlyArchitectures"
-        w.requirement :ctx req: r.take fact: ""
-    }
-    for each t: (zdata.itemsOf :f v: (checkedField :u name: "templates")) loop {
-        x: newPiecedText
-        for each s: (zdata.itemsOf :f v: (zdata.fieldOf :f v: t name: "sections")) loop {
-            mb: checkedText :u v: s name: "member"
-            rd: checkedText :u v: s name: "reached"
-            tx: checkedText :u v: s name: "text"
-            if mb.length == 0 when rd.length == 0 then {
-                x.plain text: tx.stringView
-            } else {
-                (
-                    x.named
-                    name: mb.stringView
-                    needs: (checkedTexts :u v: s name: "needs").stringView
-                    row: 0
-                    reached: rd.stringView
-                    text: tx.stringView
-                )
-            }
-        }
-        tn: checkedText :u v: t name: "name"
-        k: tmplKey :ctx name: tn.stringView
-        ctx.tmplNeeds.set key: k value: (checkedTexts :u v: t name: "needs")
-        ctx.piecedTexts.set key: k value: x.take
-        if ctx.markNatives then markTemplate :ctx :u :t name: tn.stringView
-    }
-}
-
-# checkedRow -- one row of a user unit's checked file, written into the row
-# table from its fields (placeRow), as servedRow writes a row zc carries
-checkedRow: function {
-    w: RowWalk
-    ctx: Ctx
-    ast: Ast.view
-    u: UserImplementation.view
-    r: ztypes.cval
-    # the unit the row is keyed under: the file's unit, a foundation group,
-    # "" for a structural row
-    owner: StringView
-} is {
-    f: u.file
-    key: checkedText :u v: r name: "key"
-    if (w.admits :ctx :owner key: key.stringView fact: (checkedText :u v: r name: "fact").stringView
-    ).not then return
-    w.at = String
-    if ctx.markNatives then w.at = "row \{rowAddress :owner key: key.stringView}, \{(
-        zdata.placeOf
-        :f
-        v: r
-    )}"
-    for each t: (zdata.textsOf :f v: (zdata.fieldOf :f v: r name: "fragments")) loop (
-        w.fragment
-        :ctx
-        :owner
-        key: key.stringView
-        text: "\{t}\n"
-    )
-    ps: zdata.itemsOf :f v: (zdata.fieldOf :f v: r name: "pieces")
-    if ps.length > 0 then {
-        w.pieces :ctx :owner key: key.stringView text: (checkedPieces :ctx :u :ps :owner)
-        if ctx.markNatives then {
-            (
-                recordMark
-                :ctx
-                key: (fragKey :ctx name: w.frags.stringView)
-                m: (piecesMark :u :ps mark: w.at.copy)
-            )
-        }
-    }
-    x: zemitrows.blankRow owner: w.owner
-    bd: checkedText :u v: r name: "body"
-    if bd.stringView.trim.length > 0 then x.body = ctx.rt.defer text: bd.stringView.trim
-    for each c: (zdata.itemsOf :f v: (zdata.fieldOf :f v: r name: "constant")) loop {
-        x.constMask = x.constMask | (constBit position: (c.ival.u64.or d: 0))
-    }
-    x.value = (
-        (ctx.nativeWords.slotOf text: (checkedArm :u v: r name: "form").stringView) ==
-        nativeWord.slot.armValue
-    )
-    x.byPointer = zdata.boolOf v: (zdata.fieldOf :f v: r name: "byPointer")
-    x.callsEquals = zdata.boolOf v: (zdata.fieldOf :f v: r name: "callsEquals")
-    x.call = callOfArm :ctx arm: (checkedArm :u v: r name: "call").stringView
-    via: checkedText :u v: r name: "via"
-    if via.length > 0 then x.via = ctx.demands.names.intern s: via.stringView
-    nd: checkedTexts :u v: r name: "needs"
-    if x.constMask == 0 when w.owner.notZero when nd.length > 0 then {
-        x.needText = rowNeedText :ctx needs: nd.stringView
-    }
-    if w.frags.length > 0 then {
-        x = beginDemands :ctx r: x
-        for each d: (zdata.textsOf :f v: (zdata.fieldOf :f v: r name: "demand")) loop {
-            x = addRowDemands :ctx r: x dm: d.stringView
-        }
-        x = endDemands :ctx r: x key: key.stringView
-    }
-    (
-        w.place
-        :ctx
-        :ast
-        r: x
-        key: key.stringView
-        members: (checkedTexts :u v: r name: "members").stringView
-        pulls: (checkedTexts :u v: r name: "pulls").stringView
-    )
-}
-
-# callOfArm -- a checked file's `call` arm, by its name, as the kind the emitter
-# acts on
-callOfArm: function {ctx: Ctx.view arm: StringView} out svcall is {
-    k: ctx.nativeWords.slotOf text: arm
-    if k == nativeWord.slot.armSimple then return svcall.simple
-    if k == nativeWord.slot.armArgument then return svcall.arg
-    if k == nativeWord.slot.armParse then return svcall.parse
-    if k == nativeWord.slot.armNoArguments then return svcall.noarg
-    return svcall.none
-}
-
-# checkedClass -- one class of a user unit's checked file, as the served
-# reader reads a class zc carries
-checkedClass: function {
-    w: RowWalk
-    ctx: Ctx
-    u: UserImplementation.view
-    c: ztypes.cval
-    owner: StringView
-} is {
-    key: checkedText :u v: c name: "key"
-    w.at = String
-    if ctx.markNatives then w.at = "class \{rowAddress :owner key: key.stringView}, \{(
-        zdata.placeOf
-        f: u.file
-        v: c
-    )}"
-    ds: checkedText :u v: c name: "destroy"
-    (
-        w.classRow
-        :ctx
-        :owner
-        key: key.stringView
-        template: (checkedText :u v: c name: "template").stringView
-        live: (checkedTexts :u v: c name: "live")
-        destroy: ds.stringView
-        need: (checkedTexts :u v: c name: "needs")
-    )
-}
-
-# checkedPieces -- a list of pieces read off a checked file as the text the
-# emitter writes, as servedPieces reads the pieces zc carries
-checkedPieces: function {
-    ctx: Ctx
-    u: UserImplementation.view
-    ps: (ListVal ztypes.cval).view
-    owner: StringView
-} out PiecedText is {
-    x: newPiecedText
-    for each p: ps loop {
-        nm: checkedText :u v: p name: "name"
-        tx: checkedText :u v: p name: "text"
-        if nm.length == 0 then {
-            x.plain text: tx.stringView
-            continue
-        }
-        dl: List String
-        for each d: (zdata.textsOf f: u.file v: (zdata.fieldOf f: u.file v: p name: "demand")
-        ) loop dl.append from: d.copy
-        nd: checkedTexts :u v: p name: "needs"
-        row: pieceRow :ctx :owner name: nm.stringView demands: dl needs: nd.stringView
-        x.named name: nm.stringView needs: nd.stringView :row reached: "" text: tx.stringView
-    }
-    return x
-}
-
-# registerFromFiles -- registerImplementations with every unit's rows read off
-# its checked nativec.zd, the standard library's among them (`users`, zc
-# --nativec-files), rather than from the rows zc carries: the same order, the
-# foundation read off system's file. The agreement check: what this registers
-# must emit the same C (nativec-agree-guard).
-registerFromFiles: function {
-    ctx: Ctx
-    ast: Ast.view
-    typing: ztyping.ZTyping.view
-    users: (List UserImplementation).view
-} is {
-    sk: u64
-    found: false
-    k: u64
-    for each u: users loop {
-        if (ctx.nativeWords.slotOf text: u.name.stringView) == nativeWord.slot.unitSystem then {
-            sk = k
-            found = true
-        }
-        k = k + 1
-    }
-    # zc refuses --nativec-files for a program whose files hold no system's
-    # (userImplementations), so the foundation is there
-    if found.not then return
-    sys: users.get i: sk
-    fd: zdata.definition f: sys.file name: "foundation"
-    order: checkedUnitOrder :ctx :users :sys :fd
-    for each c: (checkedItems u: sys v: fd name: "conditions") loop (
-        recordCondition
-        :ctx
-        name: (checkedText u: sys v: c name: "name").stringView
-        expression: (checkedText u: sys v: c name: "expression").stringView
-    )
-    w: newRowWalk
-    for each i: order loop checkedFacts :w :ast :typing u: (users.get :i)
-    for each i: order loop checkedCanons :ctx u: (users.get :i)
-    for each r: (checkedItems u: sys v: fd name: "structural") loop (
-        checkedRow
-        :w
-        :ctx
-        :ast
-        u: sys
-        :r
-        owner: ""
-    )
-    recordUnitOrder :ctx order: (checkedTexts u: sys v: fd name: "order").stringView
-    for each g: (checkedItems u: sys v: fd name: "groups") loop {
-        gn: checkedText u: sys v: g name: "name"
-        for each r: (checkedItems u: sys v: g name: "rows") loop (
-            checkedRow
-            :w
-            :ctx
-            :ast
-            u: sys
-            :r
-            owner: gn.stringView
-        )
-    }
-    for each i: order loop checkedUnit :w :ctx :ast :typing u: (users.get :i)
-    for each fl: (checkedItems u: sys v: fd name: "files") loop {
-        fn: checkedText u: sys v: fl name: "name"
-        k: fileKey :ctx name: fn.stringView
-        ps: checkedItems u: sys v: fl name: "pieces"
-        if ctx.markNatives then {
-            fm: "file \{fn}, \{zdata.placeOf f: sys.file v: fl}"
-            recordMark :ctx key: k m: (piecesMark u: sys :ps mark: fm.take)
-        }
-        ctx.piecedTexts.set key: k value: (checkedPieces :ctx u: sys :ps owner: "prelude")
-    }
-}
-
 # NativeMark -- where a native text the emitter writes is written (zc emit
 # --mark-natives), each part of it written before that part as a C comment:
 # the text's own place, then each of its named pieces' or sections'
@@ -3404,493 +2077,12 @@ NativeMark: class {
     parts: (Map String V: String)
 }
 
-# recordMark -- `m` as the mark of native text `key`
-recordMark: function {ctx: Ctx key: textkey m: NativeMark.take} is {
-    if ctx.marks.length == 0 then ctx.marks.append (
-        NativeMark
-        mark: String
-        parts: (Map String V: String)
-    )
-    ctx.nativeMarks.set :key value: ctx.marks.length
-    ctx.marks.append m.take
-}
-
-# rowAddress -- a row's address as `zc natives show` takes it: `<unit>.<key>`,
-# the key alone for a structural row
-rowAddress: function {owner: StringView key: StringView} out String is {
-    r: owner.string
-    if r.length > 0 then r.append "."
-    r.append key
-    return r
-}
-
-# piecesMark -- `mark` with the place of each named piece of `ps`, by its name
-piecesMark: function {
-    u: UserImplementation.view
-    ps: (ListVal ztypes.cval).view
-    mark: String.take
-} out NativeMark is {
-    m: NativeMark mark: mark.take parts: (Map String V: String)
-    for each p: ps loop {
-        nm: checkedText :u v: p name: "name"
-        if nm.length == 0 then continue
-        m.parts.set key: nm.copy value: "piece \{nm}, \{zdata.placeOf f: u.file v: p}"
-    }
-    return m
-}
-
-# markTemplate -- template `t` of a checked file marked with where it and each
-# of its member sections is written
-markTemplate: function {ctx: Ctx u: UserImplementation.view t: ztypes.cval name: StringView} is {
-    m: (
-        NativeMark
-        mark: "template \{name}, \{zdata.placeOf f: u.file v: t}"
-        parts: (Map String V: String)
-    )
-    for each s: (checkedItems :u v: t name: "sections") loop {
-        mb: checkedText :u v: s name: "member"
-        if mb.length == 0 then continue
-        m.parts.set key: mb.copy value: "section \{mb}, \{zdata.placeOf f: u.file v: s}"
-    }
-    recordMark :ctx key: (tmplKey :ctx :name) :m
-}
-
-# checkedUnitOrder -- each file's place in `users`, in the order the foundation
-# `fd` names the units, then the files it does not name, system's first and the
-# rest by name, as servedUnitOrder orders the rows zc carries
-checkedUnitOrder: function {
-    ctx: Ctx
-    users: (List UserImplementation).view
-    sys: UserImplementation.view
-    fd: ztypes.cval
-} out ListVal u64 is {
-    named: zdata.textsOf f: sys.file v: (zdata.fieldOf f: sys.file v: fd name: "order")
-    rest: List String
-    if (named.contains item: sys.name).not then rest.append from: sys.name.copy
-    sorted: List String
-    for each u: users loop {
-        isSys: (ctx.nativeWords.slotOf text: u.name.stringView) == nativeWord.slot.unitSystem
-        if (named.contains item: u.name).not when isSys.not then sorted.append from: u.name.copy
-    }
-    sorted.sort
-    for each nm: sorted loop rest.append from: nm.copy
-    order: ListVal u64
-    for each o: named loop appendUserIndex :users name: o.stringView :order
-    for each o: rest loop appendUserIndex :users name: o.stringView :order
-    return order
-}
-
-# appendUserIndex -- the place in `users` of the file named `name`, when there
-# is one
-appendUserIndex: function {
-    users: (List UserImplementation).view
-    name: StringView
-    order: ListVal u64
-} is {
-    k: u64
-    for each u: users loop {
-        if u.name.stringView == name then order.append k
-        k = k + 1
-    }
-}
-
-# checkedItems -- the elements of list field `name` of data value `v`
-checkedItems: function {
-    u: UserImplementation.view v: ztypes.cval name: StringView
-} out ListVal ztypes.cval is {
-    return (zdata.itemsOf f: u.file v: (zdata.fieldOf f: u.file :v :name))
-}
-
-# checkedField -- field `name` of a user file's implementation
-checkedField: function {u: UserImplementation.view name: StringView} out ztypes.cval is {
-    im: zdata.definition f: u.file name: "implementation"
-    return (zdata.fieldOf f: u.file v: im :name)
-}
-
-# checkedText -- text field `name` of data value `v` of a user file
-checkedText: function {u: UserImplementation.view v: ztypes.cval name: StringView} out String is {
-    return (zdata.textOf f: u.file v: (zdata.fieldOf f: u.file :v :name))
-}
-
-# checkedTexts -- list-of-text field `name` of data value `v`, comma-separated
-# as servedList writes one
-checkedTexts: function {u: UserImplementation.view v: ztypes.cval name: StringView} out String is {
-    r: String
-    for each t: (zdata.textsOf f: u.file v: (zdata.fieldOf f: u.file :v :name)) loop {
-        if r.length > 0 then r.append ","
-        r.append t
-    }
-    return r
-}
-
-# checkedArm -- the arm a choice field `name` of `v` holds, by its name
-checkedArm: function {u: UserImplementation.view v: ztypes.cval name: StringView} out String is {
-    return (zdata.armOf f: u.file v: (zdata.fieldOf f: u.file :v :name))
-}
-
-# checkedArms -- the arms a list-of-choice field `name` of `v` holds, by their
-# names, comma-separated as servedOs writes them
-checkedArms: function {u: UserImplementation.view v: ztypes.cval name: StringView} out String is {
-    r: String
-    for each a: (zdata.itemsOf f: u.file v: (zdata.fieldOf f: u.file :v :name)) loop {
-        if r.length > 0 then r.append ","
-        r.append (zdata.armOf f: u.file v: a)
-    }
-    return r
-}
-
-# isServedUnit -- whether zc carries the rows of unit `name` (`nativec.units`)
-isServedUnit: function {name: StringView} out bool is {
-    for each u: nativec.units loop {
-        if u.name.stringView == name then return true
-    }
-    return false
-}
-
-# servedUnitOrder -- each served unit's place in `nativec.units`, in the order
-# the foundation names them, then the units it does not name, as served
-servedUnitOrder: function {fd: schema.foundation} out ListVal u64 is {
-    order: ListVal u64
-    for each o: fd.order loop {
-        k: u64
-        for each u: nativec.units loop {
-            if u.name.stringView == o.stringView then order.append k
-            k = k + 1
-        }
-    }
-    k: u64
-    for each u: nativec.units loop {
-        named: false
-        for each o: fd.order loop {
-            if u.name.stringView == o.stringView then named = true
-        }
-        if named.not then order.append k
-        k = k + 1
-    }
-    return order
-}
-
-# servedFragment -- a fragment's text, as fragment `name`
-servedFragment: function {ctx: Ctx name: StringView text: String.take} is {
-    setText :ctx key: (fragKey :ctx :name) text: text.take
-}
-
-# servedTemplate -- one template zc carries, its sections as pieces
-# (PiecedText) and its needs kept by its key (tmplTextOf)
-servedTemplate: function {ctx: Ctx t: schema.template} is {
-    x: newPiecedText
-    for each s: t.sections loop {
-        if s.member.length == 0 when s.reached.length == 0 then {
-            x.plain text: s.text.stringView
-        } else {
-            (
-                x.named
-                name: s.member.stringView
-                needs: (servedList xs: s.needs).stringView
-                row: 0
-                reached: s.reached.stringView
-                text: s.text.stringView
-            )
-        }
-    }
-    k: tmplKey :ctx name: t.name.stringView
-    ctx.tmplNeeds.set key: k value: (servedList xs: t.needs)
-    ctx.piecedTexts.set key: k value: x.take
-}
-
-# servedPieces -- pieces `ps` of `owner` zc carries as the text the emitter
-# writes (PiecedText), each named piece a row of its own (pieceRow)
-servedPieces: function {ctx: Ctx ps: staticlist schema.piece owner: StringView} out PiecedText is {
-    x: newPiecedText
-    for each p: ps loop {
-        if p.name.length == 0 then {
-            x.plain text: p.text.stringView
-            continue
-        }
-        dl: List String
-        for each d: p.demand loop dl.append from: d.string
-        nd: servedList xs: p.needs
-        row: pieceRow :ctx :owner name: p.name.stringView demands: dl needs: nd.stringView
-        (
-            x.named
-            name: p.name.stringView
-            needs: nd.stringView
-            :row
-            reached: ""
-            text: p.text.stringView
-        )
-    }
-    return x
-}
-
 # servedKey -- a row's key: `<unit>.<key>`, a helper `@<unit>.<name>`, a
 # structural case (no unit) `@<key>`
 servedKey: function {owner: StringView key: StringView} out String is {
     if owner.length == 0 then return "@\{key}"
     if key.startsWith "@" then return "@\{owner}.\{key.substring from: 1 to: key.length}"
     return "\{owner}.\{key}"
-}
-
-# servedList -- a list of texts, comma-separated
-servedList: function {xs: staticlist text} out String is {
-    r: String
-    for each t: xs loop {
-        if r.length > 0 then r.append ","
-        r.append t.stringView
-    }
-    return r
-}
-
-# servedSubunit -- `<unit>` or `<unit>.<subunit>` for a requirement
-servedSubunit: function {sub: StringView owner: StringView} out String is {
-    if sub.length == 0 then return owner.string
-    return "\{owner}.\{sub}"
-}
-
-# servedOs -- operating systems by their arm names, comma-separated
-servedOs: function {xs: staticlist schema.os} out String is {
-    r: String
-    for each o: xs loop {
-        if r.length > 0 then r.append ","
-        match (
-            o
-        ) case linux then {
-            r.append "linux"
-        } case darwin then {
-            r.append "darwin"
-        } case windows then {
-            r.append "windows"
-        } case other then {
-            r.append "other"
-        }
-    }
-    return r
-}
-
-# servedCompilers -- C compilers by their arm names, comma-separated
-servedCompilers: function {xs: staticlist schema.compiler} out String is {
-    r: String
-    for each c: xs loop {
-        if r.length > 0 then r.append ","
-        match (
-            c
-        ) case gcc then {
-            r.append "gcc"
-        } case clang then {
-            r.append "clang"
-        } case tcc then {
-            r.append "tcc"
-        } case msvc then {
-            r.append "msvc"
-        }
-    }
-    return r
-}
-
-# servedArchitectures -- architectures by their arm names, comma-separated
-servedArchitectures: function {xs: staticlist schema.architecture} out String is {
-    r: String
-    for each a: xs loop {
-        if r.length > 0 then r.append ","
-        match (
-            a
-        ) case x86_64 then {
-            r.append "x86_64"
-        } case aarch64 then {
-            r.append "aarch64"
-        } case other then {
-            r.append "other"
-        }
-    }
-    return r
-}
-
-# RowFacts -- the facts the files declared so far, which of them hold, and,
-# in the file being read, the keys recorded and those a held fact's variant
-# replaced
-RowFacts: class {
-    # every fact read so far, by name
-    declared: Set String
-    # the declared facts the program makes hold
-    held: Set String
-    # the keys recorded so far in the file being read, as it writes them
-    placed: Set String
-    # the keys a variant under a held fact took, in the file being read
-    replaced: Set String
-    # the unit paths whose links, and whose sources, a variant under a held
-    # fact took
-    linkReplaced: Set String
-    sourceReplaced: Set String
-} as {
-    # applies -- whether a row is recorded: a variant under a fact when the fact
-    # holds; a plain row unless a variant of its key replaced it. A variant under
-    # a fact no file declares, or below a plain row of its key that was already
-    # recorded, is refused.
-    applies: function {
-        :this
-        ctx: Ctx
-        # the fact the row is a variant under, "" for a plain row
-        fact: StringView
-        # the file's unit or group, "" for the structural rows
-        owner: StringView
-        # the row's key, as its file writes it
-        key: StringView
-    } out bool is {
-        if key.length == 0 then return false
-        if fact.length == 0 then {
-            if (this.replaced.has item: key.asString) then return false
-            this.placed.add item: key.string
-            return true
-        }
-        bad: String
-        adr: rowAddress :owner :key
-        if (this.declared.has item: fact.asString).not then {
-            bad = "'\{adr}' is a variant under '\{fact}', which no file declares"
-        } else if (this.placed.has item: key.asString) then {
-            bad = "the variant of '\{adr}' under '\{fact}' stands below its plain row; place it above"
-        }
-        if bad.length > 0 then {
-            emitFail :ctx what: "nativec: \{bad}" line: 0
-            return false
-        }
-        if (this.held.has item: fact.asString).not then return false
-        this.replaced.add item: key.string
-        this.placed.add item: key.string
-        return true
-    }
-
-    # beginFile -- the rows of another file are read next: its keys are its own
-    beginFile: function {:this} is {
-        this.placed = Set String
-        this.replaced = Set String
-    }
-
-    # settle -- fact `name` is declared, and holds when any of its `reach`
-    # paths (comma-separated) is reached
-    settle: function {
-        :this
-        ast: Ast.view
-        typing: ztyping.ZTyping.view
-        name: StringView
-        reach: StringView
-    } is {
-        this.declared.add item: name.string
-        for each rp: (reach.split sep: ",") loop {
-            if rp.length > 0 when (factPathReached :ast :typing path: rp) then (
-                this.held.add
-                item: name.string
-            )
-        }
-    }
-
-    # requirementHolds -- whether a link (`link`) or a source of unit `path` is
-    # recorded: one under no fact unless a variant of its kind and path
-    # took it; one under a fact when the fact holds, which takes the plain ones
-    # of its kind and path that follow. A fact no file declares is refused.
-    requirementHolds: function {
-        :this ctx: Ctx link: bool path: StringView fact: StringView
-    } out bool is {
-        if fact.length == 0 then {
-            if link then return (this.linkReplaced.has item: path.asString).not
-            return (this.sourceReplaced.has item: path.asString).not
-        }
-        if (this.declared.has item: fact.asString).not then {
-            (
-                emitFail
-                :ctx
-                what: "nativec: a requirement of '\{path}' holds under '\{fact}', which no file declares"
-                line: 0
-            )
-            return false
-        }
-        if (this.held.has item: fact.asString).not then return false
-        if link then {
-            this.linkReplaced.add item: path.string
-        } else {
-            this.sourceReplaced.add item: path.string
-        }
-        return true
-    }
-}
-
-# rowNeedAddOne -- one need of a row's `needs=` list (rowNeedAdd): a member of
-# the row's own unit `uname`, or `<unit>.<member>`.
-rowNeedAddOne: function {ctx: Ctx uname: StringView need: StringView} is {
-    rowNeedAddCond :ctx :uname :need cond: condAlways
-}
-
-# rowNeedAddCond -- rowNeedAddOne for a row holding under `cond`: a need
-# `X?NAME` holds where the row does AND the foundation's condition NAME does
-rowNeedAddCond: function {ctx: Ctx uname: StringView need: StringView cond: Cond.view} is {
-    q: need.indexOf needle: "?"
-    match (
-        q
-    ) case some then {
-        cb: condBitOf :ctx name: (need.substring from: q + 1 to: need.length)
-        if cb == 0 then return
-        (
-            rowNeedAddBare
-            :ctx
-            :uname
-            need: (need.substring from: 0 to: q)
-            cond: (condWith c: cond bit: cb)
-        )
-    } case none then rowNeedAddBare :ctx :uname :need :cond
-}
-
-# rowNeedAddBare -- one need with no condition of its own, under `cond`
-rowNeedAddBare: function {ctx: Ctx uname: StringView need: StringView cond: Cond.view} is {
-    qd: need.indexOf needle: "."
-    match (
-        qd
-    ) case some then {
-        (
-            needsAddMCond
-            :ctx
-            uname: (need.substring from: 0 to: qd)
-            memb: (need.substring from: qd + 1 to: need.length)
-            :cond
-        )
-    } case none then {
-        if uname.length > 0 then needsAddMCond :ctx :uname memb: need :cond
-    }
-}
-
-# condBitOf -- the bit of the foundation's condition `name`; 0, and a failure,
-# for a name it does not declare
-condBitOf: function {ctx: Ctx name: StringView} out u64 is {
-    k: u64
-    for k < ctx.conds.length loop {
-        if (ctx.conds.get i: k).name.stringView == name then return 1.u64 << k
-        k = k + 1
-    }
-    (
-        emitFail
-        :ctx
-        what: "nativec: a need names the condition '\{name}', which the foundation does not declare"
-        line: 0
-    )
-    return 0
-}
-
-# recordCondition -- a foundation condition: the condition `name` a need
-# `X?NAME` holds under, tested in the written C by `expression`
-recordCondition: function {ctx: Ctx name: StringView expression: StringView} is {
-    nm: name.trim
-    ex: expression.trim
-    bad: String
-    if (
-        (nm.length == 0) or (ex.length == 0)
-    ) then bad = "a condition needs a name and a C expression".string
-    for each c: ctx.conds loop {
-        if c.name.stringView == nm then bad = "the condition '\{nm}' is declared twice"
-    }
-    if ctx.conds.length == 64 then bad = "more than 64 conditions".string
-    if bad.length > 0 then {
-        emitFail :ctx what: "nativec: \{bad}" line: 0
-        return
-    }
-    ctx.conds.append (CondDecl name: nm.string expr: ex.string)
 }
 
 # CondDecl -- one condition the foundation declares: its name, which a need
@@ -3905,31 +2097,7 @@ CondDecl: class {
 # reports every recorded failure and exits nonzero without writing any
 # output, so the text a leg answers after recording one is never read.
 emitFail: function {ctx: Ctx what: String line: u32} is {
-    ctx.emitErrors.append (emitterFailure :what :line)
-}
-
-# emitterFailure -- E0500, a construct the emitter cannot emit. It carries only
-# a line, written into the message, and no node: the driver prints no snippet
-# for it, since a bare line could name the wrong file.
-emitterFailure: function {what: String line: u32} out zast.ErrorData is {
-    msg: String
-    if line > 0 then {
-        msg = "zemitterc: \{what} [line \{line}]"
-    } else {
-        msg = "zemitterc: \{what}"
-    }
-    return (
-        zast.ErrorData
-        nodeid: zast.nodeid
-        lineno: 0
-        colno: 0
-        width: 0
-        err: zast.err.emitterError
-        :msg
-        fsno: zvfs.fsno
-        note: "".string
-        hint: "".string
-    )
+    ctx.emitErrors.append (nativepieces.emitterFailure :what :line)
 }
 
 # stringChunkText -- a stringchunk's text ("" for any other shape).
@@ -6501,66 +4669,7 @@ emitValueTakeInvalidations: function {
 # needsAddM -- record that written C demands `memb` of unit `uname` in every
 # configuration
 needsAddM: function {ctx: Ctx uname: StringView memb: StringView} is {
-    needsAddKey :ctx key: (ctx.demands.keyOf owner: uname name: memb)
-}
-
-# needsAddKey -- needsAddM by the demand's key
-needsAddKey: function {ctx: Ctx key: zemitrows.demandkey} is {
-    i: ctx.demands.at :key
-    if i > 0 when (ctx.demands.always.get i: i - 1) then return
-    if i > 0 then {
-        needsAddKeyCond :ctx :key cond: condAlways
-        return
-    }
-    ctx.demands.add :key always: true
-    needsAddPullsOf :ctx :key cond: condAlways
-}
-
-# needsAddMCond -- needsAddM in the configurations `cond` holds in: a demand
-# met in fewer than every one is written inside `#if` (Cond), and one met again
-# under another condition holds under either
-needsAddMCond: function {ctx: Ctx uname: StringView memb: StringView cond: Cond.view} is {
-    needsAddKeyCond :ctx key: (ctx.demands.keyOf owner: uname name: memb) :cond
-}
-
-# needsAddKeyCond -- needsAddMCond by the demand's key
-needsAddKeyCond: function {ctx: Ctx key: zemitrows.demandkey cond: Cond.view} is {
-    i: ctx.demands.at :key
-    if i == 0 then {
-        ctx.demands.add :key always: cond.always
-        if cond.always.not then {
-            for each t: cond.terms loop {
-                ctx.demands.termDemand.append ctx.demands.keys.length - 1
-                ctx.demands.termMask.append t
-            }
-            ctx.condEpoch = ctx.condEpoch + 1
-        }
-    } else {
-        if (ctx.demands.always.get i: i - 1) then return
-        cur: demandCond :ctx at: i - 1
-        if (condMerge dst: cur src: cond).not then return
-        setDemandCond :ctx at: i - 1 c: cur
-        ctx.condEpoch = ctx.condEpoch + 1
-    }
-    needsAddPullsOf :ctx :key :cond
-}
-
-# needsAddPullsOf -- the demands the rows answering demand `key` pull along with
-# it (their `pulls`), under `cond`: the helpers another unit's C supplies to
-# theirs. os.env builds a C string out of a StringView and os.cwd maps errno to
-# an IoError: that C is io's, so the demand is io's. Recorded where the demand
-# is met, rather than recomputed at emission by reading its unit's demands back
-# -- which is what let io's runtime gate on a predicate no row could state.
-needsAddPullsOf: function {ctx: Ctx key: zemitrows.demandkey cond: Cond.view} is {
-    # copied out: each pulled demand writes the tables the rows are read from
-    pl: String
-    {
-        pg: ctx.pullsByDemand.get :key
-        if pg.some then {
-            pl = pg.copy
-        }
-    }
-    if pl.length > 0 then needsAddPullsIn :ctx pulls: pl.stringView :cond
+    nativepieces.needsAddKey :ctx key: (ctx.demands.keyOf owner: uname name: memb)
 }
 
 # recordRowPulls -- the pulls of fragment row `row`, filed under each demand
@@ -6582,28 +4691,6 @@ recordRowPulls: function {ctx: Ctx row: u64 pulls: StringView} is {
         cur.append pulls
         ctx.pullsByDemand.set :key value: cur.take
         k = k + 1
-    }
-}
-
-# needsAddPullsIn -- each `<unit>.<member>` of a row's `pulls=` list, demanded
-# under the condition of the member that pulls it
-needsAddPullsIn: function {ctx: Ctx pulls: StringView cond: Cond.view} is {
-    for each one: (pulls.split sep: ",") loop {
-        # `<unit>.<member>?NAME`: pulled where the member is AND NAME holds
-        if (one.contains needle: "?") then {
-            rowNeedAddCond :ctx uname: "" need: one :cond
-            continue
-        }
-        qd: one.indexOf needle: "."
-        if qd.some then {
-            (
-                needsAddMCond
-                :ctx
-                uname: (one.substring from: 0 to: qd)
-                memb: (one.substring from: qd + 1 to: one.length)
-                :cond
-            )
-        }
     }
 }
 
@@ -6651,29 +4738,6 @@ listIterMark: function {ctx: Ctx tid: ztypes.tid} is {
 # writes only its own constructors
 listIterEmitted: function {ctx: Ctx.view tid: ztypes.tid} out bool is {
     return (ctx.emittedListIters.has item: tid)
-}
-
-# typeIsUsed -- the program constructed this type, so the rows its
-# construction reaches have fired.
-typeIsUsed: function {ctx: Ctx.view tid: ztypes.tid} out bool is {
-    return (ctx.usedTypeIds.has item: tid)
-}
-
-# typeDemandMet -- may this type's body be emitted? A type no fragment row
-# gates is unconditional; one that IS gated waits until written C spells it or
-# constructs it, because its struct exists to be dereferenced by a fragment
-# that is itself demand-loaded (typeRowDemanded). The gating set comes from
-# the rows, not from a list here.
-typeDemandMet: function {ctx: Ctx.view tid: ztypes.tid} out bool is {
-    if (ctx.demandGatedTids.has item: tid).not then return true
-    return (typeRowDemanded :ctx :tid)
-}
-
-# typeRowDemanded -- a `uses_<Type>` row's demand: written C spells or reaches
-# the type (ctx.typeUses, ctx.reachedTypes), or constructs it.
-typeRowDemanded: function {ctx: Ctx.view tid: ztypes.tid} out bool is {
-    if (ctx.typeUses.has item: tid) or (ctx.reachedTypes.has item: tid) then return true
-    return (typeIsUsed :ctx :tid)
 }
 
 # isStringyTid -- tid is canonical String or StringView.
@@ -8059,7 +6123,7 @@ emitNativeArgMethod: function {
     body: rowBody :ctx :row
     if body.isZero then return "".string
     if (rtHas :ctx id: body slot: rtHole.slot.holeA1).not then return "".string
-    rowNeedsAdd :ctx :row cond: condAlways
+    nativepieces.rowNeedsAdd :ctx :row cond: nativepieces.condAlways
     key: rowLabel :ctx :ast n: rowKey
     mk: pendingHoistMark :ctx
     recvF: exprfacts
@@ -9700,7 +7764,7 @@ ownsResources: function {reg: ztypes.ZTypeRegistry.view ctx: Ctx.view tid: ztype
     # an instance of a templated class: its template supplies the destructor
     if (tmplClassRowOf :reg :ctx :tid) > 0 then return true
     if (ctx.classRowTids.contains item: tid).not then return false
-    return (ctx.liveClasses.has item: tid) or (typeIsUsed :ctx :tid)
+    return (ctx.liveClasses.has item: tid) or (nativepieces.typeIsUsed :ctx :tid)
 }
 
 # destroyFnC -- the C function that frees a value of tid, handed destroyOperand's
@@ -22966,7 +21030,7 @@ emitOperatorRow: function {
     facts: exprfacts.borrow
 } out String is {
     r: ctx.rows.rows.get i: row
-    if constRow.not then rowNeedsAdd :ctx :row cond: condAlways
+    if constRow.not then nativepieces.rowNeedsAdd :ctx :row cond: nativepieces.condAlways
     ord: orderBegin :ctx slots: 2
     lh: rtHoleId slot: rtHole.slot.holeL
     rh: rtHoleId slot: rtHole.slot.holeR
@@ -28535,7 +26599,7 @@ emitGenericDissect: function {
         subjDesc: ztypecheck.dissectedArgText :reg :typing :ownerTid :paramName :darg
         pnmT: zast.poolTextAt pool: ast.names ref: paramName
         cnm: "generic match on '\{pnmT}' has no case for '\{subjDesc}' and no else"
-        ctx.emitErrors.append (emitterFailure what: cnm.copy line: 0)
+        ctx.emitErrors.append (nativepieces.emitterFailure what: cnm.copy line: 0)
         preludeNeed :ctx memb: "@panic"
         ef: "\{ind}z_panic(\"(compile-time error)\");\n"
         buf.append ef
@@ -35320,73 +33384,11 @@ tmplSectionDestroys: function {
     )
     plan: rtKeptPlan :ctx :mono id: ti
     hits: ListVal ztypes.tid
-    destroyKeyTypes :ast :reg :typing :ctx inst: mono :plan :pNames :pTids acc: hits
+    nativepieces.destroyKeyTypes :ast :reg :typing :ctx inst: mono :plan :pNames :pTids acc: hits
     for each t: hits loop {
         dt: destroyTargetTid :reg :typing :ctx tid: t
         if dt.notZero when dt != ctx.strTid then noteDestroyUse :reg :typing :ctx tid: dt
     }
-}
-
-# destroyKeyTypes -- the types whose destructor the text plan `plan` writes
-# names through a key: `@@P_DESTROY@@` a parameter's, `@@X@@_destroy` the type
-# the key X names (tmplHoleType)
-destroyKeyTypes: function {
-    ast: Ast.view
-    reg: ztypes.ZTypeRegistry.view
-    typing: ztyping.ZTyping.view
-    ctx: Ctx.view
-    inst: ztypes.tid
-    plan: RtPlan.view
-    pNames: (List String).view
-    pTids: (ListVal ztypes.tid).view
-    acc: ListVal ztypes.tid
-} is {
-    rt: ctx.rt
-    t: rt.texts.get i: plan.id
-    tv: t.stringView
-    inf: rt.infos.get i: plan.id
-    k: inf.segFrom
-    for k < inf.segTo loop {
-        sg: rt.segs.get i: k
-        k = k + 1
-        if sg.kind.key.not or (rtPlanWrites :ctx :plan at: sg.from).not then continue
-        hole: tv.substring from: sg.from + 2 to: sg.to - 2
-        if (hole.endsWith suffix: "_DESTROY") then {
-            pa: holeParamArg :pNames :pTids name: (hole.substring from: 0 to: hole.length - 8)
-            if pa.notZero then acc.append pa
-        } else if k < inf.segTo when (rtStartsLiteral :ctx :plan at: k prefix: "_destroy") then {
-            ht: tmplHoleType :ast :reg :typing :ctx :inst :hole
-            if ht.notZero then acc.append ht
-        }
-    }
-}
-
-# rtStartsLiteral -- stretch `at` of plan `plan`'s text is a written literal
-# starting with `prefix`
-rtStartsLiteral: function {ctx: Ctx.view plan: RtPlan.view at: u64 prefix: StringView} out bool is {
-    sg: ctx.rt.segs.get i: at
-    if sg.kind.literal.not or (rtPlanWrites :ctx :plan at: sg.from).not then return false
-    t: ctx.rt.texts.get i: plan.id
-    return ((t.stringView.substring from: sg.from to: sg.to).startsWith :prefix)
-}
-
-# holeParamArg -- the argument bound to the type parameter a hole names, by its
-# name or by position (`P<k>`); 0 for a name no parameter has
-holeParamArg: function {
-    pNames: (List String).view
-    pTids: (ListVal ztypes.tid).view
-    name: StringView
-} out ztypes.tid is {
-    k: u64
-    for k < pNames.length loop {
-        byPos: "P\{k}"
-        if ((pNames.get i: k).stringView == name) or (byPos.stringView == name) then return (
-            pTids.get
-            i: k
-        )
-        k = k + 1
-    }
-    return ztypes.tid.zero
 }
 
 # demandWrittenDestroys -- the destructors written whatever calls them call
@@ -35520,7 +33522,7 @@ keyHashSpelled: function {reg: ztypes.ZTypeRegistry.view ctx: Ctx tid: ztypes.ti
 # section, or in a kept one
 tmplKeptSpells: function {ctx: Ctx mono: ztypes.tid file: StringView key: StringView} out bool is {
     p: tmplKey :ctx name: file
-    plan: rtKeptPlan :ctx :mono id: (tmplParsed :ctx key: p)
+    plan: rtKeptPlan :ctx :mono id: (nativepieces.tmplParsed :ctx key: p)
     return (rtPlanSpells :ctx :plan name: key)
 }
 
@@ -35836,45 +33838,6 @@ tagConstOf: function {
     }
 }
 
-# noteTagConstUse -- a tag constant of `tid` spelled in C being written: it is
-# declared by its type's enum, so until the reached types are fixed it is a use
-# of that type (closeReachedTypes) -- of an ordinal variant's enum alone, whose
-# type name is a use of its own -- and of the enum (noteTagEnumUse).
-noteTagConstUse: function {
-    ctx: Ctx reg: ztypes.ZTypeRegistry.view typing: ztyping.ZTyping.view tid: ztypes.tid
-} is {
-    if (isOrdinalVariant :typing :tid) then {
-        if ctx.reachFixed.not then ctx.ordinalTagUses.add item: tid
-        return
-    }
-    if ctx.reachFixed.not then ctx.typeUses.add item: tid
-    noteTagEnumUse :ctx :reg :tid
-}
-
-# noteTagEnumUse -- C being written spells the tag enum of the non-ordinal sum
-# `tid`, a constant of it or its `_tag_t`: before the reached types are fixed
-# the enum is a use; after, it must be one already used, or the C names an enum
-# that is never written. A union's enum is written with its struct: the
-# collection templates spell their options' tags after the types are fixed.
-noteTagEnumUse: function {ctx: Ctx reg: ztypes.ZTypeRegistry.view tid: ztypes.tid} is {
-    if (reg.typetypeOf typeId: tid) != ztypes.ztypetype.variantType then return
-    if ctx.reachFixed.not then {
-        ctx.tagEnumUses.add item: tid
-        return
-    }
-    if (ctx.tagEnumUses.has item: tid) then return
-    # a type that is not written is spelled only by template text its writer
-    # drops (a stand-in's options)
-    if (ctx.reachedTypes.has item: tid).not then return
-    cn: ctxCname :ctx :tid
-    (
-        emitFail
-        :ctx
-        what: "the tag enum of \{cn} spelled after the reached types were fixed, and not among them"
-        line: 0
-    )
-}
-
 # tagEnumWritten -- whether the non-ordinal variant `tid`'s tag enum is written:
 # where C spells it, where its struct stores the tag as the enum (`tsc`, its
 # tagStorageCType, empty), or where its generated `==` is written beside it and
@@ -35903,7 +33866,7 @@ spelledTagConst: function {
     tid: ztypes.tid
     armId: zast.nameid
 } out String is {
-    noteTagConstUse :ctx :reg :typing :tid
+    nativepieces.noteTagConstUse :ctx :reg :typing :tid
     return (tagConstOf :ast :ctx :reg :typing :tid :armId)
 }
 
@@ -36228,180 +34191,6 @@ unitConstTextOf: function {
     return "".string
 }
 
-# checkLoadedNatives -- drive checkNativesResolve over EVERY loaded unit. This
-# rode inside fillMethodReturns until that table turned out to be unreadable;
-# the CHECK was never part of the table's job and stays.
-#
-# The unit's own file is found PER UNIT and not hoisted, because the rows are
-# looked up in it. Hoisting it -- which is what the main-unit filter left behind
-# -- resolves every unit's natives in the main unit's file, so every row misses
-# and every declaration in the program reads as unimplemented at once.
-checkLoadedNatives: function {program: Ast.view typing: ztyping.ZTyping.view ctx: Ctx} is {
-    {
-        for each uId: program.units loop {
-            opId: zast.nodeid
-            unitName: String
-            impl: u64
-            u: program.nodes.get i: uId
-            if u.namedoperation then {
-                un: zast.poolTextAt pool: program.names ref: u.name
-                opId = u.operation
-                unitName = un.copy
-                impl = (
-                    ctx.rows.fileOfUnit
-                    ud: (ztypecheck.unitDeclOfName :typing nameId: u.name)
-                )
-            }
-            if opId.notZero then {
-                (
-                    checkNativesResolve
-                    ast: program
-                    :ctx
-                    unitOpId: opId
-                    unitName: unitName.stringView
-                    :impl
-                )
-            }
-        }
-    }
-}
-
-# checkNativeMembers -- the `is native` members of one of a type's two blocks
-# must each name a row. Split out because both blocks are read and the walk is
-# the same for either.
-checkNativeMembers: function {
-    ast: Ast.view
-    ctx: Ctx
-    items: zast.kidspan
-    unitName: StringView
-    # the file implementing the unit (RowTable.fileUnits), 0 for none
-    impl: u64
-    typeName: zast.nameid
-} is {
-    for each am: (zast.kidsOf :ast span: items) loop {
-        amn: ast.nodes.get i: am
-        if amn.namedoperation then {
-            mo: ast.nodes.get i: amn.operation
-            rk: zemitrows.rowname :impl :typeName name: amn.name
-            if mo.functiondef when mo.isNative when (ctx.rows.hasRowNamed n: rk).not then {
-                tn: zast.nameTextAt :ast ref: typeName
-                mn: zast.nameTextAt :ast ref: amn.name
-                tk: rowAddress owner: tn.stringView key: mn.stringView
-                ctx.emitErrors.append (
-                    noNativeImplFailure
-                    :ast
-                    :ctx
-                    nid: am
-                    key: (rowAddress owner: unitName key: tk.stringView).stringView
-                    :unitName
-                )
-            }
-        }
-    }
-}
-
-# noNativeImplFailure -- E0501 at the declaration `nid` names: it says
-# `is native` and its unit's C implementation has no row `key`. The program's
-# error, not an emitter gap, so it is shown where it was written. A unit outside
-# the standard library with no implementation file at all is told which file
-# it lacks.
-noNativeImplFailure: function {
-    ast: Ast.view
-    ctx: Ctx.view
-    # the declaration's labelled row
-    nid: zast.nodeid
-    # the row's key
-    key: StringView
-    # the unit the declaration is keyed under
-    unitName: StringView
-} out zast.ErrorData is {
-    dn: ast.nodes.get i: nid
-    pos: zast.posOf n: dn
-    # the declared name is what the caret marks
-    width: u32
-    if dn.namedoperation then width = (zast.nameTextAt :ast ref: dn.name).length.u32.orPanic
-    note: String
-    hint: "`is native` promises a body from the unit's C implementation: write the body, or add the row".string
-    if (isServedUnit name: unitName).not when (ctx.implementedUnits.has item: unitName.string
-    ).not then {
-        note = "unit '\{unitName}' has no C implementation file: \{unitName}/nativec.zd beside \{unitName}.z"
-        hint = "write its rows in \{unitName}/nativec.zd (a runtime.nativec value), or write the body"
-    }
-    return (
-        zast.ErrorData
-        nodeid: nid
-        lineno: pos.line
-        colno: pos.col
-        :width
-        err: zast.err.noNativeImpl
-        msg: "no native implementation for '\{key}'"
-        fsno: zvfs.fsno
-        :note
-        :hint
-    )
-}
-
-# checkNativesResolve -- every `is native` declaration in a loaded unit that the
-# checker does not answer must name a row of its unit. `is native` says a
-# backend supplies the body, and this is where that claim is checked: at the
-# declaration, whether or not anyone calls it. Without it an uncalled one is
-# accepted in silence and a called one is only found at the call, as an emitter
-# gap rather than as the missing implementation it is.
-#
-# EVERY loaded unit, not only the program's own. A program that loads
-# collections.z sees its native declarations exactly as it sees the ones it
-# wrote, so a standard library with a hole in it breaks the build that USES it
-# and not only the build that ships it.
-checkNativesResolve: function {
-    ast: Ast.view
-    ctx: Ctx
-    unitOpId: zast.nodeid
-    unitName: StringView
-    # the file implementing the unit (RowTable.fileUnits), 0 for none
-    impl: u64
-} is {
-    bodyIds: zast.unitBodyIdsAt :ast unitId: unitOpId
-    for each bm: (zast.kidsOf :ast span: bodyIds) loop {
-        bn: ast.nodes.get i: bm
-        if bn.namedoperation then {
-            nm: zast.nameTextAt :ast ref: bn.name
-            op: ast.nodes.get i: bn.operation
-            match (
-                op
-            ) case functiondef then {
-                rk: zemitrows.rowname :impl typeName: zast.nameid.zero name: bn.name
-                if op.isNative when (ctx.rows.hasRowNamed n: rk).not then {
-                    ctx.emitErrors.append (
-                        noNativeImplFailure
-                        :ast
-                        :ctx
-                        nid: bm
-                        key: (rowAddress owner: unitName key: nm.stringView).stringView
-                        :unitName
-                    )
-                }
-            } case objectdef then {
-                # BOTH blocks. A native method may be written in either, and
-                # which one carries it is a fact about the type rather than
-                # about the method: the containers declare theirs in `as`,
-                # io.File declares its five in the class body and keeps `as`
-                # for the protocols it implements. Reading only `as` left
-                # File.read and its four siblings checked by nothing.
-                checkNativeMembers :ast :ctx items: op.isItems :unitName :impl typeName: bn.name
-                checkNativeMembers :ast :ctx items: op.asItems :unitName :impl typeName: bn.name
-            } case unitdef then {
-                # a SUBUNIT -- lib/system/system/wideint.z and its siblings are
-                # this shape. Its declarations are not in the program's unit
-                # table, so nothing above reaches them, and they are keyed under
-                # the PARENT unit's name: i128's operators are `system.i128.+`,
-                # declared in wideint.z. So the name does NOT change on the way
-                # down, and the path a call site builds is the path checked here.
-                checkNativesResolve :ast :ctx unitOpId: bn.operation :unitName :impl
-            } else null
-        }
-    }
-}
-
 # noteStaticVids -- every data type into ctx.staticTids, and every variable
 # whose type is one into ctx.staticVids: such a variable holds a handle, so
 # isPtrVid answers for it in every function, as for a pointer receiver.
@@ -36419,31 +34208,6 @@ noteStaticVids: function {reg: ztypes.ZTypeRegistry.view typing: ztyping.ZTyping
             item: v
         )
         v = v.next
-    }
-}
-
-# demandTmplClassNeeds -- a templated class's row's `needs=`, demanded once the
-# program has an instance of it: the template calls what the row names, and no
-# method row is demanded on its behalf (their calls go to the template)
-demandTmplClassNeeds: function {
-    reg: ztypes.ZTypeRegistry.view typing: ztyping.ZTyping.view ctx: Ctx
-} is {
-    ri: u64
-    for ri < ctx.classRows.length loop {
-        un: String
-        nd: String
-        {
-            r: ctx.classRows.get i: ri
-            tpl: ctx.classRowTids.get i: ri
-            if r.tmpl.length > 0 when tpl.notZero when (tmplClassInProgram :reg :typing :tpl) then {
-                un = r.uname.copy
-                nd = r.need.copy
-            }
-        }
-        for each n1: (nd.stringView.split sep: ",") loop {
-            if n1.length > 0 then rowNeedAddOne :ctx uname: un.stringView need: n1
-        }
-        ri = ri + 1
     }
 }
 
@@ -38062,121 +35826,6 @@ emitLiteralPools: function {
     }
 }
 
-# assembleEmitOutput -- the file's final order: the prelude fragment (a unit of its
-# own precisely because a need registered inside a type method is still in time
-# for it, and no codeBuf walk may claim it), then the literal pools, the code, the
-# function bodies, the process start (z_start.inc) and C's `main`.
-assembleEmitOutput: function {
-    program: Ast.view
-    reg: ztypes.ZTypeRegistry.view
-    typing: ztyping.ZTyping.view
-    ctx: Ctx
-    buf: String.borrow
-    poolBuf: StringView
-    codeBuf: StringView
-    fnsBuf: StringView
-} is {
-    # the hash functions are the last C generated, so the runtime they call is
-    # demanded ahead of the prelude below
-    hashDefs: String
-    emitHashDefs ast: program :reg :typing :ctx buf: hashDefs
-    # every body has emitted by now, so a need registered inside a type
-    # method -- which emits after the runtime pass -- is still in time. This is
-    # why `prelude` is a unit of its own: it goes into the header, ahead of the
-    # literal pool, and no codeBuf walk may claim it.
-    {
-        (
-            emitRuntimeUnit
-            ast: program
-            :reg
-            :typing
-            :ctx
-            uname: "prelude"
-            :buf
-        )
-    }
-    (
-        buf.reserve
-        n: (
-            poolBuf.length +
-            codeBuf.length +
-            fnsBuf.length +
-            ctx.lateDefs.length +
-            hashDefs.length +
-            4096
-        )
-    )
-    buf.append poolBuf
-    buf.append "\n"
-    buf.append codeBuf
-    buf.append fnsBuf
-    buf.append ctx.lateDefs
-    buf.append hashDefs
-    ps: fileKey :ctx name: "start"
-    buf.append (loadFixedFile :ctx key: ps)
-    buf.append "int main(int argc, char* argv[]) {\n"
-    if (
-        stdDeclDemanded
-        ast: program
-        :reg
-        :typing
-        :ctx
-        stdUnit: zast.wellKnown.slot.unOs
-        member: zast.wellKnown.slot.wkArgs
-    ) then {
-        buf.append "    z_os_args_init(argc, argv);\n"
-    }
-    buf.append "    z_start();\n"
-    buf.append "    z_main();\n"
-    preludeNeed :ctx memb: "@end"
-    buf.append "    z_end();\n"
-    buf.append "    return 0;\n"
-    buf.append "}\n"
-}
-
-# emitCHeader -- the file's fixed header: the link libraries the reached units
-# declared (so whatever drives the compiler reads them off the artifact instead
-# of being told separately), then the prelude -- the feature macros and the
-# includes (z_head.inc), z_panic, and the allocator wrappers everything else is
-# built on (z_alloc.inc). The prelude is the same bytes in every program but
-# for z_panic, which is the `@prelude.panic` row's fragment: a threaded
-# program's differs, and for the pieces each program's C calls (loadPieces).
-emitCHeader: function {
-    libs: (List String).view
-    # the C sources to build and link, one `zcsrc:` line each (applyUnitReqs)
-    csrcs: (List String).view
-    # the fragment z_panic is written from
-    panicFrag: StringView
-    ctx: Ctx
-    buf: String.borrow
-} is {
-    # the link libraries the reached units declared, so whatever drives the C
-    # compiler -- zc itself, the corpus runner, a hand-run cc -- reads them off
-    # the artifact instead of being told separately. Fixed line, always present.
-    buf.append "/* zlink:"
-    for each lib: libs loop {
-        buf.append " "
-        buf.append lib
-    }
-    buf.append " */\n"
-    # the C sources the reached units need built and linked, one line each,
-    # only when there are any. The line names the SOURCE and its defines, not an
-    # object: the object depends on the compiler that links, which emitting C
-    # does not know (zc cobj resolves it)
-    for each cs: csrcs loop {
-        buf.append "/* zcsrc: "
-        buf.append cs
-        buf.append " */\n"
-    }
-    buf.append "\n"
-    p0: fileKey :ctx name: "head"
-    buf.append (loadFixedFile :ctx key: p0)
-    p1: fragKey :ctx name: panicFrag
-    buf.append (loadFixedFile :ctx key: p1)
-    p2: fileKey :ctx name: "alloc"
-    buf.append (loadFixedFile :ctx key: p2)
-}
-
 # placePanicRow -- the row of z_panic's fragment, the one the table chose (a
 # threaded program's differs), is written by the header, in its slot: no unit
 # walk writes it. Every other piece row was placed as its reader read it.
@@ -38194,22 +35843,16 @@ panicRow: function {ctx: Ctx.view} out u64 is {
     return (ctx.rows.helperOf k: (zemitrows.demandkey owner: p name: n))
 }
 
-# memberKey -- the key a template member is recorded by: its instance, and its
-# slot in memberWord (fewer than 128 words)
-memberKey: function {mono: ztypes.tid member: u64} out u64 is {
-    return mono.u64 * 128 + member
-}
-
 # memberUsed -- written C calls template member `member` of instance `mono`
 memberUsed: function {ctx: Ctx.view mono: ztypes.tid member: u64} out bool is {
-    return (ctx.memberUses.has item: (memberKey :mono :member))
+    return (ctx.memberUses.has item: (nativepieces.memberKey :mono :member))
 }
 
 # noteMemberUse -- written C calls template member `member` (a memberWord
 # slot) of instance `mono`: the instance writes its section. A member its
 # instance was already written without names a function the C never defines.
 noteMemberUse: function {ctx: Ctx mono: ztypes.tid member: u64} is {
-    k: memberKey :mono :member
+    k: nativepieces.memberKey :mono :member
     if (ctx.memberUses.has item: k) then {
         if (memberHasCond :ctx key: k) then ctx.memberAlways.add item: k
         return
@@ -38231,43 +35874,6 @@ addMemberUse: function {ctx: Ctx mono: ztypes.tid k: u64} is {
         return
     }
     ctx.memberUses.add item: k
-}
-
-# noteMemberUseCond -- noteMemberUse under `cond`: the section is written inside
-# `#if` while every use of the member holds in fewer than every configuration
-noteMemberUseCond: function {ctx: Ctx mono: ztypes.tid member: u64 cond: Cond.view} is {
-    if cond.always then {
-        noteMemberUse :ctx :mono :member
-        return
-    }
-    k: memberKey :mono :member
-    if (ctx.memberUses.has item: k) when (memberCondOf :ctx key: k).always then return
-    cur: memberCondOf :ctx key: k
-    if (ctx.memberUses.has item: k).not then cur = Cond always: false terms: ListVal u64
-    if (condMerge dst: cur src: cond).not when (ctx.memberUses.has item: k) then return
-    w: u64
-    j: u64
-    for j < ctx.memberConds.length loop {
-        mc: ctx.memberConds.get i: j
-        j = j + 1
-        if mc.key == k then continue
-        ctx.memberConds.set i: w val: mc
-        w = w + 1
-    }
-    for ctx.memberConds.length > w loop ctx.memberConds.pop
-    for each t: cur.terms loop ctx.memberConds.append (membercond key: k mask: t)
-    if (ctx.memberUses.has item: k).not then addMemberUse :ctx :mono :k
-}
-
-# memberCondOf -- the condition member key `key` is used under
-memberCondOf: function {ctx: Ctx.view key: u64} out Cond is {
-    if (ctx.memberAlways.has item: key) then return condAlways
-    c: Cond always: false terms: ListVal u64
-    for each mc: ctx.memberConds loop {
-        if mc.key == key then c.terms.append mc.mask
-    }
-    if c.terms.length == 0 then return condAlways
-    return c
 }
 
 # memberHasCond -- member key `key` has a term: some use of it holds under a
@@ -38307,7 +35913,7 @@ rtSectionPlan: function {ctx: Ctx mono: ztypes.tid id: rtid} out RtPlan is {
     # a section kept only for a call some configurations make is written
     # inside `#if`, and so is each section only it needs
     if (monoCondMembers :ctx :mono) then (
-        sectionConds
+        nativepieces.sectionConds
         :ctx
         :mono
         :text
@@ -38315,7 +35921,7 @@ rtSectionPlan: function {ctx: Ctx mono: ztypes.tid id: rtid} out RtPlan is {
         kept: plan.kept
         conds: plan.conds
     )
-    planNeeds :ctx :mono :text :marks :plan
+    nativepieces.planNeeds :ctx :mono :text :marks :plan
     return plan
 }
 
@@ -38346,7 +35952,7 @@ rtKept: function {
             kept.append true
         } else {
             slot: ctx.memberWords.slotOf text: (text.substring from: pc.headFrom to: pc.nameTo)
-            kept.append (ctx.memberUses.has item: (memberKey :mono member: slot))
+            kept.append (ctx.memberUses.has item: (nativepieces.memberKey :mono member: slot))
         }
     }
     closeSectionNeeds :text :marks :kept
@@ -38383,75 +35989,13 @@ rtKeptPlan: function {ctx: Ctx.view mono: ztypes.tid id: rtid} out RtPlan is {
     return plan
 }
 
-# rtRowPlan -- the pieces of fixed file `id` this program writes: a piece where
-# its row fired, inside `#if` where the row holds under a condition
-rtRowPlan: function {ctx: Ctx.view id: rtid} out RtPlan is {
-    plan: RtPlan :id kept: ListVal bool conds: List Cond
-    inf: ctx.rt.infos.get i: id
-    j: inf.pieceFrom
-    for j < inf.pieceTo loop {
-        pc: ctx.rt.pieces.get i: j
-        j = j + 1
-        row: pc.row
-        fired: false
-        if row > 0 when (rowDemandFired :ctx :row) then fired = true
-        plan.kept.append fired
-        if fired when (rowAlways :ctx :row).not then {
-            plan.conds.append (rowCond :ctx :row)
-        } else {
-            plan.conds.append condAlways
-        }
-    }
-    return plan
-}
-
-# planNeeds -- for each section of `plan`, in text order, the runtime a written
-# one needs (sectionRowNeeds), under its condition, or the member a section left
-# out names (membersLeftOut)
-planNeeds: function {
-    ctx: Ctx
-    mono: ztypes.tid
-    # the template
-    text: StringView
-    # each section's offsets (rtKept)
-    marks: (ListVal u64).view
-    plan: RtPlan.view
-} is {
-    i: u64
-    for i < plan.kept.length loop {
-        if (plan.kept.get :i) then {
-            sc: Cond always: true terms: ListVal u64
-            if i < plan.conds.length then {
-                so: plan.conds.get :i
-                sc.always = so.always
-                for each t: so.terms loop sc.terms.append t
-            }
-            (
-                sectionRowNeeds
-                :ctx
-                :text
-                from: (marks.get i: i * 4 + 2)
-                to: (marks.get i: i * 4 + 3)
-                cond: sc
-            )
-        } else {
-            slot: (
-                ctx.memberWords.slotOf
-                text: (text.substring from: (marks.get i: i * 4) to: (marks.get i: i * 4 + 1))
-            )
-            ctx.membersLeftOut.add item: (memberKey :mono member: slot)
-        }
-        i = i + 1
-    }
-}
-
 # rtRender -- plan `plan`'s template as the instance writes it: the text outside
 # its sections and each written section, inside `#if` where it is written under
 # a condition, with the keys `keys` binds filled (rtRenderWith)
 rtRender: function {ctx: Ctx.view plan: RtPlan.view keys: RtKeys.view} out String is {
     fails: List String
     return (
-        rtRenderWith
+        nativepieces.rtRenderWith
         :ctx
         :plan
         :keys
@@ -38465,153 +36009,6 @@ rtRender: function {ctx: Ctx.view plan: RtPlan.view keys: RtKeys.view} out Strin
     )
 }
 
-# rtRenderWith -- rtRender, filling the holes from the bindings too when `holes`
-# (fillSpan)
-rtRenderWith: function {
-    ctx: Ctx.view
-    plan: RtPlan.view
-    keys: RtKeys.view
-    bindIds: (ListVal zast.nameid).view
-    bindVals: (List String).view
-    rawIds: (ListVal zast.nameid).view
-    rawVals: (List String).view
-    holes: bool
-    # the text written, for its mark and the messages; noText for a row's body
-    key: textkey
-    fails: List String
-} out String is {
-    res: String
-    path: textLabel :ctx :key
-    rt: ctx.rt
-    id: plan.id
-    inf: rt.infos.get i: id
-    total: (rt.texts.get i: id).length
-    mk: openMark :ctx :key buf: res
-    # a piece's mark was written last: the text's own is written again before
-    # more of it
-    pieceMarked: false
-    pos: u64
-    i: u64
-    j: inf.pieceFrom
-    for j < inf.pieceTo loop {
-        pc: rt.pieces.get i: j
-        j = j + 1
-        pieceMarked = remarkText :ctx :mk :id from: pos to: pc.at after: pieceMarked buf: res
-        (
-            rt.fillSpan
-            :id
-            from: pos
-            to: pc.at
-            :keys
-            :bindIds
-            :bindVals
-            :rawIds
-            :rawVals
-            :holes
-            path: path.stringView
-            :fails
-            buf: res
-        )
-        if (plan.kept.get :i) then {
-            pieceMarked = markPiece :ctx :mk :id :pc buf: res
-            # a section written under a condition is filled apart, to wrap it
-            wrapped: false
-            if i < plan.conds.length then wrapped = (condAlwaysHolds c: (plan.conds.get :i)).not
-            body: String
-            if wrapped.not then body swap res
-            (
-                rt.fillSpan
-                :id
-                from: pc.bodyFrom
-                to: pc.bodyTo
-                :keys
-                :bindIds
-                :bindVals
-                :rawIds
-                :rawVals
-                :holes
-                path: path.stringView
-                :fails
-                buf: body
-            )
-            if wrapped then {
-                wrapCond :ctx c: (plan.conds.get :i) body: body.stringView buf: res
-            } else {
-                body swap res
-            }
-        }
-        i = i + 1
-        pos = pc.next
-    }
-    remarkText :ctx :mk :id from: pos to: total after: pieceMarked buf: res
-    (
-        rt.fillSpan
-        :id
-        from: pos
-        to: total
-        :keys
-        :bindIds
-        :bindVals
-        :rawIds
-        :rawVals
-        :holes
-        path: path.stringView
-        :fails
-        buf: res
-    )
-    return res
-}
-
-# appendNativeMark -- the mark of native text `mk` (NativeMark) as a C comment
-# line: the piece's or section's named `name`, the text's own for ""
-appendNativeMark: function {ctx: Ctx.view mk: u64 name: StringView buf: String.borrow} is {
-    m: ctx.marks.get i: mk
-    if name.length > 0 then {
-        pm: m.parts.get key: name.asString
-        if pm.some then {
-            buf.append "/* nativec: \{pm} */\n"
-            return
-        }
-    }
-    buf.append "/* nativec: \{m.mark} */\n"
-}
-
-# openMark -- the mark of native text `key`, written first (zc emit
-# --mark-natives): its row in Ctx.marks, 0 for none
-openMark: function {ctx: Ctx.view key: textkey buf: String.borrow} out u64 is {
-    if ctx.markNatives.not then return 0
-    mk: (ctx.nativeMarks.get :key).or d: 0
-    if mk > 0 then appendNativeMark :ctx :mk name: "" :buf
-    return mk
-}
-
-# markPiece -- the mark of piece `pc` of text `id`, when the text has a mark
-# `mk`; whether it had
-markPiece: function {ctx: Ctx.view mk: u64 id: rtid pc: rtpiece buf: String.borrow} out bool is {
-    if mk == 0 then return false
-    tv: (ctx.rt.heads.get i: id).stringView
-    appendNativeMark :ctx :mk name: (tv.substring from: pc.headFrom to: pc.nameTo) :buf
-    return true
-}
-
-# remarkText -- the mark of text `id` again, after a piece's (`after`), before
-# more of the text (bytes `from` to `to`) that is not blank; whether a piece's
-# mark is still the last written
-remarkText: function {
-    ctx: Ctx.view mk: u64 id: rtid from: u64 to: u64 after: bool buf: String.borrow
-} out bool is {
-    if after.not then return false
-    if ((ctx.rt.texts.get i: id).stringView.substring :from :to).trim.length == 0 then return true
-    appendNativeMark :ctx :mk name: "" :buf
-    return false
-}
-
-# condAlwaysHolds -- `c` holds in every configuration: wrapCond writes a body
-# under it as it stands
-condAlwaysHolds: function {c: Cond.view} out bool is {
-    return c.always or (c.terms.length == 0)
-}
-
 # rtPlanSpells -- the text plan `plan` writes spells the key `name`: outside
 # every section, or in a written one
 rtPlanSpells: function {ctx: Ctx.view plan: RtPlan.view name: StringView} out bool is {
@@ -38623,29 +36020,10 @@ rtPlanSpells: function {ctx: Ctx.view plan: RtPlan.view name: StringView} out bo
     for k < inf.segTo loop {
         sg: rt.segs.get i: k
         k = k + 1
-        if sg.kind.key when sg.name == kid when (rtPlanWrites :ctx :plan at: sg.from
+        if sg.kind.key when sg.name == kid when (nativepieces.rtPlanWrites :ctx :plan at: sg.from
         ) then return true
     }
     return false
-}
-
-# rtPlanWrites -- plan `plan` writes the template byte at `at`: it lies outside
-# every section, or in the body of a written one
-rtPlanWrites: function {ctx: Ctx.view plan: RtPlan.view at: u64} out bool is {
-    inf: ctx.rt.infos.get i: plan.id
-    i: u64
-    j: inf.pieceFrom
-    for j < inf.pieceTo loop {
-        pc: ctx.rt.pieces.get i: j
-        j = j + 1
-        if at < pc.at then return true
-        if at < pc.next then {
-            if (plan.kept.get :i).not then return false
-            return (at >= pc.bodyFrom) and (at < pc.bodyTo)
-        }
-        i = i + 1
-    }
-    return true
 }
 
 # rtOptionKeys -- bind option type `tid`'s two tag constants to the keys
@@ -38686,70 +36064,6 @@ monoCondMembers: function {ctx: Ctx.view mono: ztypes.tid} out bool is {
         if (mc.key / 128) == mono.u64 when (ctx.memberAlways.has item: mc.key).not then return true
     }
     return false
-}
-
-# sectionConds -- the condition each section of `mono`'s text is written under:
-# a kept one's member's, ORed into each section it needs, until none grows; a
-# section kept for no member of its own holds only where those that need it do
-sectionConds: function {
-    ctx: Ctx.view
-    mono: ztypes.tid
-    text: StringView
-    marks: (ListVal u64).view
-    kept: (ListVal bool).view
-    conds: List Cond
-} is {
-    k: u64
-    for k < kept.length loop {
-        c: Cond always: false terms: ListVal u64
-        slot: (
-            ctx.memberWords.slotOf
-            text: (text.substring from: (marks.get i: k * 4) to: (marks.get i: k * 4 + 1))
-        )
-        mk: memberKey :mono member: slot
-        if (kept.get i: k) when (ctx.memberUses.has item: mk) then c = memberCondOf :ctx key: mk
-        conds.append c
-        k = k + 1
-    }
-    grew: true
-    for grew loop {
-        grew = false
-        j: u64
-        for j < kept.length loop {
-            if (kept.get i: j) when (sectionNeedsUnder :text :marks :conds from: j) then grew = true
-            j = j + 1
-        }
-    }
-}
-
-# sectionNeedsUnder -- OR section `from`'s condition into each section it needs:
-# true when one grew
-sectionNeedsUnder: function {
-    text: StringView marks: (ListVal u64).view conds: List Cond from: u64
-} out bool is {
-    grew: false
-    src: Cond always: false terms: ListVal u64
-    {
-        sc: conds.get i: from
-        src.always = sc.always
-        for each t: sc.terms loop src.terms.append t
-    }
-    at: marks.get i: from * 4 + 2
-    to: marks.get i: from * 4 + 3
-    for at < to loop {
-        cm: ((text.substring from: at :to).indexOf needle: ",").or d: to - at
-        nm: text.substring from: at to: at + cm
-        j: u64
-        for j < conds.length loop {
-            if (text.substring from: (marks.get i: j * 4) to: (marks.get i: j * 4 + 1)) == nm then {
-                dst: conds.getMut i: j
-                if (condMerge :dst :src) then grew = true
-            }
-            j = j + 1
-        }
-        at = at + cm + 1
-    }
-    return grew
 }
 
 # closeSectionNeeds -- keep every section a kept one needs, until none is added
@@ -38798,49 +36112,6 @@ keepSection: function {
         j = j + 1
     }
     return false
-}
-
-# sectionRowNeeds -- the runtime rows a kept section needs: each need that names
-# a row (`prelude.@panic`, never a sibling section, whose name has no dot)
-sectionRowNeeds: function {ctx: Ctx text: StringView from: u64 to: u64 cond: Cond.view} is {
-    at: from
-    for at < to loop {
-        cm: ((text.substring from: at :to).indexOf needle: ",").or d: to - at
-        nd: text.substring from: at to: at + cm
-        if (nd.contains needle: ".") then rowNeedAddCond :ctx uname: "" need: nd :cond
-        at = at + cm + 1
-    }
-}
-
-# loadFixedFile -- one of the runtime's fixed files as this program writes it:
-# its pieces decided (rtRowPlan), its String and StringView holes filled
-loadFixedFile: function {ctx: Ctx key: textkey} out String is {
-    plan: rtRowPlan :ctx id: (tmplParsed :ctx :key)
-    bn: ListVal zast.nameid
-    bv: List String
-    bn.append (rtHoleId slot: rtHole.slot.holeStringView)
-    bv.append from: ctx.svC.copy
-    bn.append (rtHoleId slot: rtHole.slot.holeString)
-    bv.append from: ctx.strC.copy
-    ferr: List String
-    res: (
-        rtRenderWith
-        :ctx
-        :plan
-        keys: ctx.rt.noKeys
-        bindIds: bn
-        bindVals: bv
-        rawIds: ListVal zast.nameid
-        rawVals: List String
-        holes: true
-        :key
-        fails: ferr
-    )
-    if (ctx.rt.infos.get i: plan.id).open then {
-        ferr.append from: "\{textLabel :ctx :key}: unterminated hole"
-    }
-    for each m: ferr loop ctx.emitErrors.append (emitterFailure what: m.copy line: 0)
-    return res
 }
 
 # the runtime types the emitter must name before anything else: String,
@@ -38923,17 +36194,6 @@ buildTypeCnames: function {
     }
 }
 
-# emitStringFragments -- the String, StringView and hash runtime fragments. A
-# String typedef (Path) shares the String struct and its free (destroyFnC).
-emitStringFragments: function {ctx: Ctx buf: String.borrow} is {
-    p1: fileKey :ctx name: "String"
-    buf.append (loadFixedFile :ctx key: p1)
-    p2: fileKey :ctx name: "StringView"
-    buf.append (loadFixedFile :ctx key: p2)
-    ph: fileKey :ctx name: "hash"
-    buf.append (loadFixedFile :ctx key: ph)
-}
-
 # emitCodeBody -- everything that references a `_zsN` literal goes into codeBuf
 # FIRST (each reference marks ctx.usedLits through litIndexOf), so the pool that
 # precedes it in the file can be written with only the entries an emission asked
@@ -38950,7 +36210,7 @@ emitCodeBody: function {
     codeBuf.reserve n: nodeEstE * 8
     # every body is written: the boxes the fired rows make, and the natives
     # each boxed runtime class's vtable takes, are known before the rows are
-    demandRowBoxes ast: program :reg :typing :ctx
+    nativepieces.demandRowBoxes ast: program :reg :typing :ctx
     demandBoxedNatives ast: program :reg :typing :ctx
     # what the written code reaches so far, so a `uses_<Type>` row fires for a
     # type reached only through another's field or arm (a Result's payload);
@@ -38963,7 +36223,7 @@ emitCodeBody: function {
     # the passes below write
     svBuf: String
     (
-        emitRuntimeUnit
+        nativepieces.emitRuntimeUnit
         ast: program
         :reg
         :typing
@@ -38972,7 +36232,7 @@ emitCodeBody: function {
         buf: svBuf
     )
     rtBuf: String
-    emitRuntimeUnits ast: program :reg :typing :ctx buf: rtBuf
+    nativepieces.emitRuntimeUnits ast: program :reg :typing :ctx buf: rtBuf
     needsAt: ctx.demands.keys.length
     closeReachedTypes ast: program :reg :typing :ctx
     closeTmplDestroys ast: program :reg :typing :ctx
@@ -38987,24 +36247,6 @@ emitCodeBody: function {
     codeBuf.append rtBuf
     # the count of needs the runtime pass answered: one asked after it is late
     return needsAt
-}
-
-# emitRuntimeUnits -- every unit's runtime, in the order the table gives, then
-# the units it does not name. Run again LATE, it loads the rows whose demand
-# fired while a type method's body was written, after the first walk: a row
-# already written is skipped.
-emitRuntimeUnits: function {
-    ast: Ast.view
-    reg: ztypes.ZTypeRegistry.view
-    typing: ztyping.ZTyping.view
-    ctx: Ctx
-    buf: String.borrow
-} is {
-    # the unit order is copied first: the runtime emitters below lend ctx
-    uos: List String
-    for each uo0: ctx.unitOrder loop uos.append uo0.copy
-    for each uo: uos loop emitRuntimeUnit :ast :reg :typing :ctx uname: uo.stringView :buf
-    emitUnorderedUnits :ast :reg :typing :ctx :buf
 }
 
 
@@ -39245,9 +36487,9 @@ emitC: function {
     )
     recordImplementedUnits :ctx :users
     if servedRows then {
-        registerImplementations :ctx ast: program :typing :users
+        nativepieces.registerImplementations :ctx ast: program :typing :users
     } else {
-        registerFromFiles :ctx ast: program :typing :users
+        nativepieces.registerFromFiles :ctx ast: program :typing :users
     }
     placePanicRow :ctx
     linkLibs: List String
@@ -39271,9 +36513,9 @@ emitC: function {
         rmn: ctx.realMain.copy
         ctxBindMain :ctx name: rmn.stringView unitDecl: typing.mainUnitRoot
     }
-    checkLoadedNatives :program :typing :ctx
+    nativepieces.checkLoadedNatives :program :typing :ctx
     noteStaticVids :reg :typing :ctx
-    demandTmplClassNeeds :reg :typing :ctx
+    nativepieces.demandTmplClassNeeds :reg :typing :ctx
     # A runtime-owned class's methods are demanded by the class being LIVE
     # rather than by a call: a DECLARED Reader/Writer implementation needs the
     # native's address whether or not anything calls it, and net's `Conn`
@@ -39282,7 +36524,7 @@ emitC: function {
     # destroys or moves out -- a Listener a function returns by `r.take` must
     # leave its Result releasing nothing -- and emitMonos asks it for the
     # structs the fragments dereference.
-    markLiveClasses ast: program :reg :typing :ctx
+    nativepieces.markLiveClasses ast: program :reg :typing :ctx
     nodeEstE: u64
     nodeEstE = program.nodes.length
     planFns :program :reg :typing :ctx
@@ -39335,7 +36577,7 @@ emitC: function {
     codeBuf.append bodiesBuf
     lateBuf: String
     if (needsOutsidePrelude :ctx from: needsAt) then {
-        emitRuntimeUnits ast: program :reg :typing :ctx buf: lateBuf
+        nativepieces.emitRuntimeUnits ast: program :reg :typing :ctx buf: lateBuf
     }
     if ctx.nativeBoxes.length > 0 then {
         emitNativeImplementationImpls ast: program :reg :typing :ctx buf: lateBuf
@@ -39350,7 +36592,7 @@ emitC: function {
     poolBuf: String
     emitLiteralPools :ctx :litTexts :poolBuf
     (
-        assembleEmitOutput
+        nativepieces.assembleEmitOutput
         :program
         :reg
         :typing
@@ -39363,7 +36605,7 @@ emitC: function {
     # z_panic's fragment, chosen by the table (a threaded program's differs)
     pr: panicRow :ctx
     pf: String
-    if pr > 0 then pf = rowFragText :ctx row: pr
+    if pr > 0 then pf = nativepieces.rowFragText :ctx row: pr
     if pf.length == 0 then {
         (
             emitFail
@@ -39375,10 +36617,10 @@ emitC: function {
     }
     # the fixed files are decided last, when every demand is in: the header,
     # then the String, StringView and hash fragments the code follows
-    closeRowNeeds :ctx
+    nativepieces.closeRowNeeds :ctx
     head: String
-    emitCHeader libs: linkLibs :csrcs panicFrag: pf.stringView :ctx buf: head
-    emitStringFragments :ctx buf: head
+    nativepieces.emitCHeader libs: linkLibs :csrcs panicFrag: pf.stringView :ctx buf: head
+    nativepieces.emitStringFragments :ctx buf: head
     # the Ctx's failures follow assembly's own, in the order recorded: popped
     # twice, so each is moved rather than copied
     rev: List zast.ErrorData
@@ -39752,7 +36994,7 @@ emitStrMono: function {
     plan: rtSectionPlan :ctx mono: monoId id: ti
     ferr: List String
     buf.append (
-        rtRenderWith
+        nativepieces.rtRenderWith
         :ctx
         :plan
         keys: kt
@@ -39764,7 +37006,7 @@ emitStrMono: function {
         key: p
         fails: ferr
     )
-    for each m: ferr loop ctx.emitErrors.append (emitterFailure what: m.copy line: 0)
+    for each m: ferr loop ctx.emitErrors.append (nativepieces.emitterFailure what: m.copy line: 0)
     buf.append "\n"
 }
 
@@ -42364,100 +39606,6 @@ canonPartTid: function {
     return (builtinTid :ast :typing nameId: (zast.poolFind pool: ast.names text: part))
 }
 
-# stemCname -- the id-based cname for a canonical stem (the part after `z_` in a
-# fragment): a mono (Result_*/List_u8/...) via its spec trie, else a named type
-# (IoError/File/filestat/Reader/...) by registry name, and "" when the type is
-# not in the (demand-driven) registry for this program. The stem->cname map is
-# emit-stable and fragments name the same stems again and again, so each
-# result (the "" miss included) is cached per program: the O(type count)
-# registry scan runs once per stem.
-stemCname: function {
-    ast: Ast.view
-    reg: ztypes.ZTypeRegistry.view
-    typing: ztyping.ZTyping.view
-    ctx: Ctx
-    canon: StringView
-} out String is {
-    found: false
-    cached: String
-    {
-        h: ctx.stemCnames.get key: canon.asString
-        if h.some then {
-            found = true
-            cached = h.copy
-        }
-    }
-    if found then return cached
-    # a hole names the type it is filled with, as a spelling does
-    t: stemTid :ast :reg :typing :ctx :canon
-    if t.notZero when ctx.reachFixed.not then ctx.typeUses.add item: t
-    r: String
-    if t.notZero then r = ctxCname :ctx tid: t
-    ctx.stemCnames.set key: canon.string value: r.copy
-    return r
-}
-
-# stemTid -- the type behind a canonical stem, whatever kind it turns out to be
-stemTid: function {
-    ast: Ast.view
-    reg: ztypes.ZTypeRegistry.view
-    typing: ztyping.ZTyping.view
-    ctx: Ctx.view
-    canon: StringView
-} out ztypes.tid is {
-    st: stemInstanceTid :ast :reg :typing :ctx :canon
-    if st.notZero then return st
-    # a plain source-name stem (File, IoError, Reader): the system unit first,
-    # then each unit the table's rows belong to, in table order, by id. A
-    # generic instance's stem is a canon, resolved above, and
-    # native-guard holds every other stem to one declaring unit, so the order
-    # never decides between two.
-    canonId: zast.poolFind pool: ast.names text: canon
-    mo: (
-        ztypecheck.resolveUnitChildRo
-        :ast
-        :typing
-        unitDecl: typing.systemUnitRoot
-        nameId: canonId
-    )
-    if mo.some then {
-        return mo
-    }
-    for each ud: ctx.fragUnitDecls loop {
-        found: fragUnitChild :ast :typing unitDecl: ud nameId: canonId
-        if found.notZero then return found
-    }
-    return ztypes.tid.zero
-}
-
-# fragUnitChild -- the type `nameId` a runtime-fragment unit declares, 0 when the
-# unit is absent or declares none.
-fragUnitChild: function {
-    ast: Ast.view
-    typing: ztyping.ZTyping.view
-    unitDecl: ztypes.declid
-    nameId: zast.nameid
-} out ztypes.tid is {
-    if unitDecl.isZero then return ztypes.tid.zero
-    uo: ztypecheck.resolveUnitChildRo :ast :typing :unitDecl :nameId
-    return (uo.or d: ztypes.tid.zero)
-}
-
-# loadFragment -- the fragment `key` with its holes filled (rtFragmentText).
-loadFragment: function {
-    ast: Ast.view
-    reg: ztypes.ZTypeRegistry.view
-    typing: ztyping.ZTyping.view
-    ctx: Ctx
-    key: textkey
-} out String is {
-    txt: textOf :ctx :key
-    if txt.length == 0 then return "".string
-    id: ctx.rt.parse text: txt.stringView
-    plan: RtPlan :id kept: ListVal bool conds: List Cond
-    return (rtFragmentText :ast :reg :typing :ctx :plan all: true :key)
-}
-
 # isHeapPtrCollection -- a Map/Set mono is stored as a heap pointer (List is
 # embedded by value); a struct field of one is a pointer, freed without `&`.
 isHeapPtrCollection: function {
@@ -42567,260 +39715,6 @@ Cond: class {
     terms: ListVal u64
 }
 
-# condAlways -- the condition that holds in every configuration
-condAlways: function out Cond is {
-    return (Cond always: true terms: ListVal u64)
-}
-
-# condWith -- `c` AND the condition whose bit is `bit`
-condWith: function {c: Cond.view bit: u64} out Cond is {
-    r: Cond always: false terms: ListVal u64
-    if c.always then {
-        r.terms.append bit
-        return r
-    }
-    for each t: c.terms loop condAddTerm terms: r.terms term: t | bit
-    return r
-}
-
-# condAddTerm -- OR the term `term` into `terms`: nothing when a term there
-# already holds wherever it does, and the terms it holds wherever they do
-# dropped. True when `terms` changed.
-condAddTerm: function {terms: ListVal u64 term: u64} out bool is {
-    for each t: terms loop {
-        if (t & term) == t then return false
-    }
-    w: u64
-    k: u64
-    for k < terms.length loop {
-        t: terms.get i: k
-        k = k + 1
-        if (t & term) == term then continue
-        terms.set i: w val: t
-        w = w + 1
-    }
-    for terms.length > w loop terms.pop
-    terms.append term
-    return true
-}
-
-# condMerge -- OR `src` into `dst`: true when `dst` changed
-condMerge: function {dst: Cond src: Cond.view} out bool is {
-    if dst.always then return false
-    if src.always then {
-        dst.always = true
-        for dst.terms.length > 0 loop dst.terms.pop
-        return true
-    }
-    grew: false
-    for each t: src.terms loop {
-        if (condAddTerm terms: dst.terms term: t) then grew = true
-    }
-    return grew
-}
-
-# condKey -- a condition as text, equal for equal conditions
-condKey: function {c: Cond.view} out String is {
-    if c.always then return "*".string
-    k: String
-    for each t: c.terms loop k.append "\{t},"
-    return k
-}
-
-# condExprC -- the C preprocessor test a condition is: its terms ORed, each the
-# AND of its conditions' expressions
-condExprC: function {ctx: Ctx.view c: Cond.view} out String is {
-    e: String
-    for each t: c.terms loop {
-        if e.length > 0 then e.append " || "
-        e.append "("
-        first: true
-        k: u64
-        for k < ctx.conds.length loop {
-            if (t & (1.u64 << k)) != 0 then {
-                if first.not then e.append " && "
-                first = false
-                e.append "("
-                e.append (ctx.conds.get i: k).expr
-                e.append ")"
-            }
-            k = k + 1
-        }
-        e.append ")"
-    }
-    return e
-}
-
-# wrapCond -- `body` into `buf`, inside `#if` where `c` holds in fewer than
-# every configuration
-wrapCond: function {ctx: Ctx.view c: Cond.view body: StringView buf: String.borrow} is {
-    if c.always or (c.terms.length == 0) then {
-        buf.append body
-        return
-    }
-    buf.append "#if "
-    buf.append (condExprC :ctx :c)
-    buf.append "\n"
-    buf.append body
-    if (body.endsWith suffix: "\n").not then buf.append "\n"
-    buf.append "#endif\n"
-}
-
-# demandCond -- the condition demand `at` holds under
-demandCond: function {ctx: Ctx.view at: u64} out Cond is {
-    if (ctx.demands.always.get i: at) then return condAlways
-    c: Cond always: false terms: ListVal u64
-    k: u64
-    for k < ctx.demands.termDemand.length loop {
-        if (ctx.demands.termDemand.get i: k) == at then c.terms.append (
-            ctx.demands.termMask.get
-            i: k
-        )
-        k = k + 1
-    }
-    return c
-}
-
-# setDemandCond -- demand `at` holds under `c` now
-setDemandCond: function {ctx: Ctx at: u64 c: Cond.view} is {
-    w: u64
-    k: u64
-    for k < ctx.demands.termDemand.length loop {
-        d: ctx.demands.termDemand.get i: k
-        m: ctx.demands.termMask.get i: k
-        k = k + 1
-        if d == at then continue
-        ctx.demands.termDemand.set i: w val: d
-        ctx.demands.termMask.set i: w val: m
-        w = w + 1
-    }
-    for ctx.demands.termDemand.length > w loop {
-        ctx.demands.termDemand.pop
-        ctx.demands.termMask.pop
-    }
-    ctx.demands.always.set i: at val: c.always
-    if c.always then return
-    for each t: c.terms loop {
-        ctx.demands.termDemand.append at
-        ctx.demands.termMask.append t
-    }
-}
-
-# rowAlways -- fired fragment row `row` holds in every configuration: a demand
-# it answers does, or written C spelled its type
-rowAlways: function {ctx: Ctx.view row: u64} out bool is {
-    r: ctx.rows.rows.get i: row
-    if r.typeTid.notZero then return true
-    k: r.demandFrom
-    for k < r.demandTo loop {
-        x: ctx.demands.at key: (ctx.rows.demandKeys.get i: k)
-        if x > 0 when (ctx.demands.always.get i: x - 1) then return true
-        k = k + 1
-    }
-    return false
-}
-
-# rowCond -- the condition fired fragment row `row` holds under: the OR of the
-# demands it answers
-rowCond: function {ctx: Ctx.view row: u64} out Cond is {
-    if (rowAlways :ctx :row) then return condAlways
-    c: Cond always: false terms: ListVal u64
-    r: ctx.rows.rows.get i: row
-    k: r.demandFrom
-    for k < r.demandTo loop {
-        x: ctx.demands.at key: (ctx.rows.demandKeys.get i: k)
-        if x > 0 then condMerge dst: c src: (demandCond :ctx at: x - 1)
-        k = k + 1
-    }
-    return c
-}
-
-# rowDemandFired -- true when ANY demand fragment row `row` names was demanded
-# of that row's unit. A demand list `a,b,c` means ANY OF: a helper several
-# members share is one row naming the members that reach it, so it loads once
-# however many fired. A `uses_<Type>` row fires too when written C spells the
-# type (typeRowDemanded), and a `destroys_<Type>` row when written C calls the
-# type's destructor.
-rowDemandFired: function {ctx: Ctx.view row: u64} out bool is {
-    r: ctx.rows.rows.get i: row
-    if r.typeTid.notZero then {
-        if r.destroys then {
-            if (ctx.destroyUsed.has item: r.typeTid) then return true
-        } else if (typeRowDemanded :ctx tid: r.typeTid) then return true
-    }
-    k: r.demandFrom
-    for k < r.demandTo loop {
-        if (ctx.demands.at key: (ctx.rows.demandKeys.get i: k)) > 0 then return true
-        k = k + 1
-    }
-    return false
-}
-
-# emitRuntimeUnit -- one unit's runtime: every fragment row it owns, in TABLE
-# ORDER, loaded when its demands fired. The order the rows are written in is
-# the order they are emitted in -- the alphabetical convention runs included,
-# because a subset of an alphabetically ordered list, taken in order, is
-# already sorted. A member the runtime does not supply has no row to walk.
-emitRuntimeUnit: function {
-    ast: Ast.view
-    reg: ztypes.ZTypeRegistry.view
-    typing: ztyping.ZTyping.view
-    ctx: Ctx
-    uname: StringView
-    buf: String.borrow
-} is {
-    closeRowNeeds :ctx
-    uid: ctx.demands.names.find s: uname
-    if uid.isZero then return
-    i: u64
-    n: ctx.rows.fragRows.length
-    for i < n loop {
-        row: ctx.rows.fragRows.get :i
-        i = i + 1
-        if (ctx.rows.rows.get i: row).owner != uid then continue
-        # a piece is written in place by its file (loadPieces)
-        if (ctx.rowsInPlace.has item: row) then continue
-        if (ctx.rowsWritten.has item: row).not when (rowDemandFired :ctx :row) then {
-            writeRuntimeRow :ast :reg :typing :ctx :row :buf
-        }
-    }
-}
-
-# writeRuntimeRow -- a fired row's fragments, inside `#if` where the row holds
-# in fewer than every configuration (rowCond)
-writeRuntimeRow: function {
-    ast: Ast.view
-    reg: ztypes.ZTypeRegistry.view
-    typing: ztyping.ZTyping.view
-    ctx: Ctx
-    row: u64
-    buf: String.borrow
-} is {
-    ctx.rowsWritten.add item: row
-    closeRowNeeds :ctx
-    rowMemberUses :ast :reg :typing :ctx :row
-    fl: rowFragText :ctx :row
-    if (rowAlways :ctx :row) then {
-        for each fr: (fl.stringView.split sep: ",") loop {
-            if fr.length > 0 then writeFragment :ast :reg :typing :ctx frag: fr :buf
-        }
-        return
-    }
-    rb: String
-    for each fr: (fl.stringView.split sep: ",") loop {
-        if fr.length > 0 then writeFragment :ast :reg :typing :ctx frag: fr buf: rb
-    }
-    wrapCond :ctx c: (rowCond :ctx :row) body: rb.stringView :buf
-}
-
-# rowFragText -- fragment row `row`'s fragment names, comma-separated, as an
-# owned copy (the fragment emitter lends ctx); "" for a piece
-rowFragText: function {ctx: Ctx.view row: u64} out String is {
-    ft: (ctx.rows.rows.get i: row).fragText
-    if ft == 0 then return String
-    return (ctx.rows.fragTexts.get i: ft - 1).copy
-}
-
 # needsOutsidePrelude -- whether a need registered from position `from` on is
 # another unit's than the prelude's: the prelude is decided at assembly, so a
 # need of its own asks no late runtime walk
@@ -42832,185 +39726,6 @@ needsOutsidePrelude: function {ctx: Ctx.view from: u64} out bool is {
         i = i + 1
     }
     return false
-}
-
-# rowMemberUses -- the template members row `row`'s fragments call (its
-# `members`): each `<canon>.<member>` is recorded by the C name the canon's
-# instance has
-rowMemberUses: function {
-    ast: Ast.view reg: ztypes.ZTypeRegistry.view typing: ztyping.ZTyping.view ctx: Ctx row: u64
-} is {
-    mt: (ctx.rows.rows.get i: row).members
-    if mt == 0 then return
-    ml: (ctx.rows.memberTexts.get i: mt - 1).copy
-    for each one: (ml.stringView.split sep: ",") loop rowMemberUse :ast :reg :typing :ctx :row :one
-}
-
-# rowMemberUse -- one `<canon>.<member>` entry of row `row`'s `members=`, its
-# `?NAME` the condition the fragment calls it under
-rowMemberUse: function {
-    ast: Ast.view
-    reg: ztypes.ZTypeRegistry.view
-    typing: ztyping.ZTyping.view
-    ctx: Ctx
-    row: u64
-    one: StringView
-} is {
-    qm: (one.indexOf needle: "?").or d: one.length
-    ent: one.substring from: 0 to: qm
-    dot: (ent.lastIndexOf needle: ".").or d: ent.length
-    if dot == ent.length then return
-    mt: stemTid :ast :reg :typing :ctx canon: (ent.substring from: 0 to: dot)
-    if mt.isZero then return
-    sl: ctx.memberWords.slotOf text: (ent.substring from: dot + 1 to: ent.length)
-    # a destructor called is a destroy use, whatever the type (noteDestroyUse)
-    if sl == memberWord.slot.destroy then {
-        noteDestroyUse :reg :typing :ctx tid: mt
-        return
-    }
-    cb: u64
-    if qm < one.length then cb = condBitOf :ctx name: (one.substring from: qm + 1 to: one.length)
-    if cb == 0 when (rowAlways :ctx :row) then {
-        noteMemberUse :ctx mono: mt member: sl
-        return
-    }
-    rc: rowCond :ctx :row
-    if cb != 0 then rc = condWith c: rc bit: cb
-    noteMemberUseCond :ctx mono: mt member: sl cond: rc
-}
-
-# closeRowNeeds -- register the needs of every fired row, until a round fires
-# no row it has not seen: made whole before a row is written, so a row a later
-# one needs -- in a unit the walk has already passed -- is written in the same
-# walk, ahead of the C that calls it. Nothing to do while no demand has been
-# added since the last time.
-closeRowNeeds: function {ctx: Ctx} is {
-    for (ctx.demands.keys.length != ctx.rowNeedsAt) or (ctx.condEpoch != ctx.rowCondEpochAt) loop {
-        ctx.rowNeedsAt = ctx.demands.keys.length
-        # a demand's condition grew: a fired row it fires holds in more
-        # configurations, and so do its needs
-        recond: ctx.condEpoch != ctx.rowCondEpochAt
-        ctx.rowCondEpochAt = ctx.condEpoch
-        i: u64
-        for i < ctx.rows.fragRows.length loop {
-            row: ctx.rows.fragRows.get :i
-            if (rowDemandFired :ctx :row) then closeRow :ctx :row :recond
-            i = i + 1
-        }
-    }
-}
-
-# closeRow -- register fired row `row`'s needs the first time the walk meets it,
-# and again when a demand's condition grew (`recond`) and the row's may have
-# with it; a row holding everywhere can hold in no more places
-closeRow: function {ctx: Ctx row: u64 recond: bool} is {
-    if (ctx.rowsClosed.has item: row) then {
-        if recond when (ctx.rowsAlwaysClosed.has item: row).not then rowNeedsUnder :ctx :row
-        return
-    }
-    ctx.rowsClosed.add item: row
-    if (rowAlways :ctx :row).not then {
-        rowNeedsUnder :ctx :row
-        return
-    }
-    ctx.rowsAlwaysClosed.add item: row
-    rowNeedsAdd :ctx :row cond: condAlways
-}
-
-# rowNeedsUnder -- rowNeedsAdd for fired row `row` under the condition it holds
-# in, once per condition: a row the walk revisits under the same one adds nothing
-rowNeedsUnder: function {ctx: Ctx row: u64} is {
-    c: rowCond :ctx :row
-    k: condKey :c
-    seen: false
-    {
-        ko: ctx.rowCondKey.get key: row
-        if ko.some then {
-            seen = ko.stringView == k
-        }
-    }
-    if seen then return
-    ctx.rowCondKey.set key: row value: k.copy
-    rowNeedsAdd :ctx :row cond: c
-}
-
-# emitUnorderedUnits -- the units with rows the order directive does not name,
-# each once, in the order the table first mentions them. A unit shipping its own
-# rows is not in the compiler's list, and this is the slot it gets.
-# `prelude` is not one of them: emitC emits it into the header itself.
-emitUnorderedUnits: function {
-    ast: Ast.view
-    reg: ztypes.ZTypeRegistry.view
-    typing: ztyping.ZTyping.view
-    ctx: Ctx
-    buf: String.borrow
-} is {
-    done: List String
-    i: u64
-    n: ctx.rows.fragRows.length
-    for i < n loop {
-        # an owned copy: the runtime emitter below lends ctx
-        u: (ctx.demands.nameText id: (ctx.rows.rows.get i: (ctx.rows.fragRows.get :i)).owner).string
-        i = i + 1
-        skip: false
-        if (
-            (ctx.nativeWords.slotOf text: u.stringView) == nativeWord.slot.unitPrelude
-        ) then skip = true
-        for each o: ctx.unitOrder loop {
-            if o.stringView == u then skip = true
-        }
-        for each d: done loop {
-            if d.stringView == u then skip = true
-        }
-        if skip.not then {
-            done.append from: u.copy
-            emitRuntimeUnit :ast :reg :typing :ctx uname: u.stringView :buf
-        }
-    }
-}
-
-# writeFragment -- a fired row's fragment `frag`, its holes filled, onto `buf`.
-writeFragment: function {
-    ast: Ast.view
-    reg: ztypes.ZTypeRegistry.view
-    typing: ztyping.ZTyping.view
-    ctx: Ctx
-    frag: StringView
-    buf: String.borrow
-} is {
-    p: fragKey :ctx name: frag
-    if (ctx.piecedFrags.has item: frag.string) then {
-        plan: rtRowPlan :ctx id: (tmplParsed :ctx key: p)
-        buf.append (rtFragmentText :ast :reg :typing :ctx :plan all: false key: p)
-        return
-    }
-    f: loadFragment :ast :reg :typing :ctx key: p
-    buf.append f
-}
-
-# demandRowBoxes -- the boxes each fired row's fragments spell (the
-# @BOX_<type>.<protocol>@ holes, spelledBoxes): noted once every body is
-# written, so their helpers are written and the natives their vtables take are
-# demanded (demandBoxedNatives) before the rows are.
-demandRowBoxes: function {
-    ast: Ast.view reg: ztypes.ZTypeRegistry.view typing: ztyping.ZTyping.view ctx: Ctx
-} is {
-    rows: ListVal u64
-    for each r0: ctx.rows.fragRows loop rows.append r0
-    for each row: rows loop {
-        bt: (ctx.rows.rows.get i: row).boxes
-        if bt == 0 then continue
-        if (rowDemandFired :ctx :row).not then continue
-        bl: (ctx.rows.boxTexts.get i: bt - 1).copy
-        for each one: (bl.stringView.split sep: ",") loop {
-            it: boxTidOf :ast :reg :typing :ctx :one wantProtocol: false
-            pt: boxTidOf :ast :reg :typing :ctx :one wantProtocol: true
-            if it.notZero when pt.notZero then {
-                noteBoxUse :typing :ctx implTid: it protoTid: pt
-                noteBorrowBoxUse :ctx implTid: it protoTid: pt
-            }
-        }
-    }
 }
 
 # spelledBoxes -- each `@BOX_<type>.<protocol>@` hole `text` spells onto
@@ -43026,29 +39741,6 @@ spelledBoxes: function {text: StringView into: String.borrow} is {
         into.append (text.substring from: s to: s + e)
         at = s + e + 1
     }
-}
-
-# boxTidOf -- one half of a box `<type>.<protocol>` (a @BOX_...@ hole): the protocol when `wantProtocol`, else the type; 0 when it names
-# no type
-boxTidOf: function {
-    ast: Ast.view
-    reg: ztypes.ZTypeRegistry.view
-    typing: ztyping.ZTyping.view
-    ctx: Ctx.view
-    one: StringView
-    wantProtocol: bool
-} out ztypes.tid is {
-    dot: (one.lastIndexOf needle: ".").or d: one.length
-    if dot == one.length then return ztypes.tid.zero
-    if wantProtocol then return (
-        stemTid
-        :ast
-        :reg
-        :typing
-        :ctx
-        canon: (one.substring from: dot + 1 to: one.length)
-    )
-    return (stemTid :ast :reg :typing :ctx canon: (one.substring from: 0 to: dot))
 }
 
 # demandBoxedNatives -- for each boxed row of a runtime-owned class, the
@@ -43085,33 +39777,6 @@ bindClassRows: function {typing: ztyping.ZTyping.view ctx: Ctx ast: Ast.view} is
     for each r: ctx.classRows loop {
         cid: rowTypeTid :ast :typing uname: r.uname.stringView tname: r.cls.stringView
         ctx.classRowTids.append cid
-    }
-}
-
-# markLiveClasses -- each row's class is LIVE once every canon its `live=`
-# names exists: the instances its constructor hands back or its methods take,
-# which only a program that makes one mints. A live class is used, and the
-# native methods its declared implementations name are demanded, since their
-# vtables take those addresses whether or not anything calls them. The gate is
-# order-independent: it is true exactly when what the fragments reference has
-# been demanded, so the C always compiles.
-markLiveClasses: function {
-    ast: Ast.view reg: ztypes.ZTypeRegistry.view typing: ztyping.ZTyping.view ctx: Ctx
-} is {
-    i: u64
-    n: ctx.classRows.length
-    for i < n loop {
-        cid: ctx.classRowTids.get :i
-        if cid.notZero then {
-            lv: (ctx.classRows.get :i).live.copy
-            live: true
-            for each c: (lv.stringView.split sep: ",") loop {
-                if c.length > 0 when (stemTid :ast :reg :typing :ctx canon: c
-                ).isZero then live = false
-            }
-            if live then ctx.liveClasses.add item: cid
-        }
-        i = i + 1
     }
 }
 
@@ -43165,7 +39830,7 @@ emitClassRowStructs: function {
             emitClassRowStruct :ast :reg :typing :ctx :cid :buf
             dfr: (ctx.classRows.get :i).destroy.copy
             if dfr.length > 0 when (destroyWritten :reg :ctx tid: cid) then {
-                writeFragment :ast :reg :typing :ctx frag: dfr.stringView :buf
+                nativepieces.writeFragment :ast :reg :typing :ctx frag: dfr.stringView :buf
             }
         }
         i = i + 1
@@ -43678,7 +40343,7 @@ buildUserTypeList: function {
             if own or (userSpecInstance :reg :typing tid: t) then {
                 emOk: (reg.isNativeOf tid: t).not
                 if emOk when (
-                    typeDemandMet
+                    nativepieces.typeDemandMet
                     :ctx
                     tid: t
                 ) when (typeReached :ctx tid: t) then acc.append t
@@ -44256,100 +40921,6 @@ tmplTypeMade: function {
     return (tmplClassInProgram :reg :typing tpl: tid)
 }
 
-# rtFillPieced -- a class template's text `id` with the keys `keys` binds
-# filled and its unmade functions dropped (dropUnmadeFns), its member sections
-# kept as sections: each stretch between and in them is filled apart
-rtFillPieced: function {ctx: Ctx.view id: rtid keys: RtKeys.view} out PiecedText is {
-    x: newPiecedText
-    hd: (ctx.rt.heads.get i: id).copy
-    total: (ctx.rt.texts.get i: id).length
-    inf: ctx.rt.infos.get i: id
-    pos: u64
-    j: inf.pieceFrom
-    for j < inf.pieceTo loop {
-        pc: ctx.rt.pieces.get i: j
-        j = j + 1
-        (
-            x.plainLines
-            text: (
-                dropUnmadeFns
-                text: (rtFillKeysSpan :ctx :id :keys from: pos to: pc.at).stringView
-            ).stringView
-        )
-        (
-            x.namedLines
-            name: (hd.stringView.substring from: pc.headFrom to: pc.nameTo)
-            needs: (hd.stringView.substring from: pc.needsFrom to: pc.needsTo)
-            row: pc.row
-            reached: (hd.stringView.substring from: pc.reachedFrom to: pc.reachedTo)
-            text: (
-                dropUnmadeFns
-                text: (rtFillKeysSpan :ctx :id :keys from: pc.bodyFrom to: pc.bodyTo).stringView
-            ).stringView
-        )
-        pos = pc.next
-    }
-    (
-        x.plainLines
-        text: (dropUnmadeFns text: (rtFillKeysSpan :ctx :id :keys from: pos to: total).stringView
-        ).stringView
-    )
-    return x
-}
-
-# rtFillKeysSpan -- rtFillKeys for bytes `from` to `to` of text `id`
-rtFillKeysSpan: function {
-    ctx: Ctx.view id: rtid keys: RtKeys.view from: u64 to: u64
-} out String is {
-    buf: String
-    fails: List String
-    (
-        ctx.rt.fillSpan
-        :id
-        :from
-        :to
-        :keys
-        bindIds: ListVal zast.nameid
-        bindVals: List String
-        rawIds: ListVal zast.nameid
-        rawVals: List String
-        holes: false
-        path: ""
-        :fails
-        :buf
-    )
-    return buf
-}
-
-# dropUnmadeFns -- a class template without the functions that still spell a
-# hole (answerKeys leaves those whose type the program does not have):
-# each runs from its `static ...) {` line to the `}` closing it at the start of
-# a line
-dropUnmadeFns: function {text: StringView} out String is {
-    res: String
-    fn: String
-    inFn: false
-    for each ln: text.lines loop {
-        if (
-            (ln.startsWith prefix: "static ") and (ln.trimEnd.endsWith suffix: ") {")
-        ) then inFn = true
-        if inFn then {
-            fn.append ln
-            fn.append "\n"
-            if (ln.startsWith prefix: "}") then {
-                if (fn.contains needle: "@@").not then res.append fn
-                fn = "".string
-                inFn = false
-            }
-        } else {
-            res.append ln
-            res.append "\n"
-        }
-    }
-    res.append fn
-    return res
-}
-
 # memberKeys -- bind each `@@<param>.<member>@@` in a class template to the C
 # name of the function the argument type `arg` declares as `member`, which the
 # template calls with the receiver by pointer (`@@T.call@@(&b->task)`). A
@@ -44485,13 +41056,13 @@ emitTmplClassMono: function {
     # the program writes are known
     ab: String
     answerKeys :ast :reg :typing :ctx id: ti keys: kt inst: monoId nm: nm.stringView buf: ab
-    made: rtFillPieced :ctx id: ti keys: kt
+    made: nativepieces.rtFillPieced :ctx id: ti keys: kt
     # the members written C calls, and those they need (rtSectionPlan), in this
     # instance's own text, parsed once; what is left in it is a runtime
     # fragment's own holes, every one bound: a type by canon, a tag constant, a
     # member
     plan: rtSectionPlan :ctx mono: monoId id: (ctx.rt.parsePieced x: made.take)
-    kept: rtFragmentText :ast :reg :typing :ctx :plan all: true key: p
+    kept: nativepieces.rtFragmentText :ast :reg :typing :ctx :plan all: true key: p
     di: u64
     for di < dfns.length loop {
         dn: (dfns.get i: di).copy
@@ -47272,31 +43843,6 @@ nativeImplementerRow: function {reg: ztypes.ZTypeRegistry.view tid: ztypes.tid} 
     return ztypes.tid.zero
 }
 
-# noteBoxUse -- written C makes a `protoTid` value of an `implTid`: its
-# implementation row's helpers are written (emitImplementationImplsForType), and both
-# types are spelled.
-noteBoxUse: function {
-    typing: ztyping.ZTyping.view ctx: Ctx implTid: ztypes.tid protoTid: ztypes.tid
-} is {
-    ri: ztypes.confid
-    for ri.next < typing.nextConf loop {
-        ri = ri.next
-        hit: false
-        {
-            row: typing.implementation.get i: ri
-            hit = (row.implTypeId == implTid) and (row.specTypeId == protoTid)
-        }
-        if hit.not then continue
-        if (ctx.boxedImplementation.has item: ri) then return
-        ctx.boxedImplementation.add item: ri
-        if ctx.reachFixed.not then {
-            ctx.typeUses.add item: implTid
-            ctx.typeUses.add item: protoTid
-        }
-        return
-    }
-}
-
 # noteOwnedBoxUse -- written C boxes an `implTid` as an OWNED `protoTid` value
 # (`_create_owned`): the pair's owned create and destroy are written, and the
 # impl's destructor with them (demandWrittenDestroys)
@@ -47328,7 +43874,7 @@ boxLabelFor: function {
 } out String is {
     nrow: nativeImplementerRow :reg tid: implTid
     if nrow.isZero then {
-        noteBoxUse :typing :ctx :implTid :protoTid
+        nativepieces.noteBoxUse :typing :ctx :implTid :protoTid
         return (implementationLabelFor :typing :implTid :protoTid)
     }
     lbl: implementationLabelFor :typing implTid: nrow :protoTid
@@ -47564,28 +44110,6 @@ nativeMethodCallOpen: function {fc: StringView mn: StringView recv: StringView} 
     return "\{fc}_\{mn}(\{recv}"
 }
 
-# demandNativeRow -- what calling the method fragment row `row` implements
-# demands: its unit's runtime, and the row's own demands -- none for a
-# `uses_<Type>` or `destroys_<Type>` row, which loads with its type's use or
-# destructor -- plus the runtime its body needs
-demandNativeRow: function {ctx: Ctx row: u64} is {
-    r: ctx.rows.rows.get i: row
-    needsAddKey :ctx key: (ctx.demands.unitOf owner: r.owner)
-    if r.typeTid.isZero then demandRowKeys :ctx :row
-    rowNeedsAdd :ctx :row cond: condAlways
-}
-
-# demandRowKeys -- fragment row `row`'s own demands, each met in every
-# configuration
-demandRowKeys: function {ctx: Ctx row: u64} is {
-    r: ctx.rows.rows.get i: row
-    k: r.demandFrom
-    for k < r.demandTo loop {
-        needsAddKey :ctx key: (ctx.rows.demandKeys.get i: k)
-        k = k + 1
-    }
-}
-
 # demandMemberNeeds -- written C, a lowering by hand of member `mnId` of
 # instance `mono`, calls what the member's row needs: the row of the member's
 # declaration on the instance's template
@@ -47599,29 +44123,7 @@ demandMemberNeeds: function {
     o: originTidOf :reg tid: mono
     if o.isZero then o = mono
     row: ctx.rows.ofName n: (rowNameOfMember :reg :typing :ctx owner: o name: mnId)
-    if row > 0 then rowNeedsAdd :ctx :row cond: condAlways
-}
-
-# stdDeclDemanded -- written C calls the standard declaration `member` of
-# unit `stdUnit` (well-known name ids; ztypecheck.stdDeclRo), which the emitter
-# lowers by hand: its demand, by its declaring unit and its name, was met
-stdDeclDemanded: function {
-    ast: Ast.view
-    reg: ztypes.ZTypeRegistry.view
-    typing: ztyping.ZTyping.view
-    ctx: Ctx.view
-    stdUnit: zast.nameid
-    member: zast.nameid
-} out bool is {
-    fid: ztypecheck.stdDeclRo :ast :typing :stdUnit :member
-    if fid.isZero then return false
-    did: typing.declIdOfType typeId: fid
-    if did.isZero then return false
-    nm: zast.poolTextAt pool: ast.names ref: (typing.decls.get i: did).name
-    return (
-        (ctx.demands.atNamed owner: (definedInUnitName :reg :typing tid: fid) name: nm.stringView) >
-        0
-    )
+    if row > 0 then nativepieces.rowNeedsAdd :ctx :row cond: nativepieces.condAlways
 }
 
 # demandSvMember -- written C calls the C of StringView member `nameId` (a
@@ -47631,7 +44133,7 @@ demandSvMember: function {
     reg: ztypes.ZTypeRegistry.view typing: ztyping.ZTyping.view ctx: Ctx nameId: zast.nameid
 } is {
     row: ctx.rows.ofName n: (rowNameOfMember :reg :typing :ctx owner: ctx.svTid name: nameId)
-    if row > 0 then demandRowKeys :ctx :row
+    if row > 0 then nativepieces.demandRowKeys :ctx :row
 }
 
 # demandMethodRow -- what calling native method `mfid` demands, through the
@@ -47640,7 +44142,7 @@ demandMethodRow: function {
     reg: ztypes.ZTypeRegistry.view typing: ztyping.ZTyping.view ctx: Ctx mfid: ztypes.tid
 } is {
     row: methodFragRow :reg :typing :ctx :mfid
-    if row > 0 then demandNativeRow :ctx :row
+    if row > 0 then nativepieces.demandNativeRow :ctx :row
 }
 
 # nativeMethodArgForm -- how a native method's fragment takes a parameter of type
@@ -47824,7 +44326,7 @@ emitClassNativeCall: function {
     if tmplInst.not then {
         row: methodFragRow :reg :typing :ctx mfid: mtid
         if row == 0 then return "".string
-        demandNativeRow :ctx :row
+        nativepieces.demandNativeRow :ctx :row
     }
     if tmplInst then noteTmplMemberUse :ast :ctx :cid :mnId
     fc: spelledCname :ctx tid: cid
@@ -48000,7 +44502,7 @@ emitClassNativeRead: function {
         ).not then return "".string
         k = k + 1
     }
-    if tmplInst.not then demandNativeRow :ctx :row
+    if tmplInst.not then nativepieces.demandNativeRow :ctx :row
     # a templated class's member is a section of its template (noteMemberUse)
     if tmplInst then noteTmplMemberUse :ast :ctx :cid :mnId
     fc: spelledCname :ctx tid: cid
@@ -48625,7 +45127,7 @@ emitNativeFreeFnCall: function {
     }
     needsAddM :ctx uname: un.stringView memb: "@unit"
     if body.isZero then needsAddM :ctx uname: un.stringView memb: mn
-    rowNeedsAdd :ctx :row cond: condAlways
+    nativepieces.rowNeedsAdd :ctx :row cond: nativepieces.condAlways
     pn: List String
     pidl: ListVal ztypes.tid
     pidlNm: ListVal zast.nameid
