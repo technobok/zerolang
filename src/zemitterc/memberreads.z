@@ -52,8 +52,9 @@ emitDroppedZero: function {
     buf: String.borrow
 } is {
     base: ast.nodes.get i: (dottedParentNodeId :n)
-    if (moveNeedsZero :typing vid: (atomVid :typing nid: (atomNodeId n: base))).not then return
-    zero: movedZeroC :reg :typing :ctx :tid
+    if (values.moveNeedsZero :typing vid: (atomVid :typing nid: (atomNodeId n: base))
+    ).not then return
+    zero: values.movedZeroC :reg :typing :ctx :tid
     if zero.length > 0 then buf.append "\{ind}\{rcv} = \{zero};\n"
 }
 
@@ -126,7 +127,7 @@ emitDottedCall: function {
     baseIsCall: false
     dcn: ast.nodes.get i: call.callable
     if dcn.dottedpath then {
-        baseIsCall = baseAtomReadsAsValue :reg :typing n: (ast.nodes.get i: dcn.parent)
+        baseIsCall = values.baseAtomReadsAsValue :reg :typing n: (ast.nodes.get i: dcn.parent)
     }
     mn: aliasChildName :ast :typing n: (ast.nodes.get i: call.callable)
     mnId: aliasChildNameId :ast :typing n: (ast.nodes.get i: call.callable)
@@ -214,7 +215,7 @@ emitDottedCall: function {
         :dcbV
         :facts
     )
-    if sv.length == 0 then dropHoistsTo :ctx mark: rmark
+    if sv.length == 0 then values.dropHoistsTo :ctx mark: rmark
     return sv
 }
 
@@ -728,7 +729,8 @@ emitCollectionMethodCall: function {
         )
         bn = "(*\{bp9})"
         bnF = derefFacts
-    } else if recvNode.dottedpath when (borrowedFieldPath :ast :reg :typing :ctx n: recvNode) then {
+    } else if recvNode.dottedpath when (values.borrowedFieldPath :ast :reg :typing :ctx n: recvNode
+    ) then {
         # a borrowed field (`c.l` on `l: (ListVal t: i64).borrow`) holds its
         # container by pointer and has no variable for colRecvRef to ask
         bn = "(*\{bn})"
@@ -1006,7 +1008,11 @@ emitListMethodCall: function {
             :typing
             :ctx
             monoId: bt
-        ) then return (stating :facts from: (operandFacts e: callFacts place: true) text: "(*\{e1})"
+        ) then return (
+            stating
+            :facts
+            from: (values.operandFacts e: callFacts place: true)
+            text: "(*\{e1})"
         )
         return (stating :facts from: callFacts text: e1)
     }
@@ -1017,7 +1023,7 @@ emitListMethodCall: function {
         if (listGetIsPtr :reg :typing :ctx monoId: bt) then return (
             stating
             :facts
-            from: (operandFacts e: callFacts place: true)
+            from: (values.operandFacts e: callFacts place: true)
             text: "(*\{e1m})"
         )
         return (stating :facts from: callFacts text: e1m)
@@ -1093,7 +1099,7 @@ emitListMethodCall: function {
     if mnId == zast.wellKnown.slot.wkExtend then {
         eaa: listTakeArgBase :ast :call label: zast.wellKnown.slot.wkFrom
         eaV: atomVid :typing nid: (listTakeArgBaseNid :ast :call label: zast.wellKnown.slot.wkFrom)
-        ea: emitLocalAtomName :ast :reg :ctx name: eaa vid: eaV
+        ea: values.emitLocalAtomName :ast :reg :ctx name: eaa vid: eaV
         noteMemberUse :ctx mono: bt member: memberWord.slot.extend
         e5: "\{cb}_extend(\{recvR}, &\{ea})"
         return (stating :facts from: callFacts text: e5)
@@ -1288,7 +1294,11 @@ emitSpanMethodCall: function {
             :typing
             :ctx
             monoId: bt
-        ) then return (stating :facts from: (operandFacts e: callFacts place: true) text: "(*\{e1})"
+        ) then return (
+            stating
+            :facts
+            from: (values.operandFacts e: callFacts place: true)
+            text: "(*\{e1})"
         )
         return (stating :facts from: callFacts text: e1)
     }
@@ -1891,7 +1901,7 @@ emitStringMethod: function {
         if recvIsPtr then return (
             stating
             :facts
-            from: literalFacts
+            from: values.literalFacts
             text: (argforms.svValueFormPtr :ctx expr: recv)
         )
         argforms.stateFacts :facts from: recvF
@@ -2009,11 +2019,11 @@ nestedStrMember: function {
         )
         sb: baseAtom
         if bound.length > 0 then sb = bound.stringView
-        svT: svTypeC :ctx
+        svT: values.svTypeC :ctx
         return (
             stating
             :facts
-            from: literalFacts
+            from: values.literalFacts
             text: "(\{svT}){ .data = \{sb}.data, .size = \{sb}.len }"
         )
     }
@@ -2388,7 +2398,7 @@ staticListValueMemberRead: function {
     isLen: mnId == zast.wellKnown.slot.wkLength
     if isLen.not when mnId != zast.wellKnown.slot.wkIterate then return "".string
     base: consts.staticListValueText :typing :ctx nid: baseNid
-    baseF: literalFacts
+    baseF: values.literalFacts
     if base.length == 0 then {
         base = bn2.string
         baseF = bn2F
@@ -2815,13 +2825,13 @@ windowMemberRead: function {
     if isArr then return (
         stating
         :facts
-        from: literalFacts
+        from: values.literalFacts
         text: "((\{wc}_t){ .length = \{len}, .data = (void*)\{wb}\{acc}data })"
     )
     return (
         stating
         :facts
-        from: literalFacts
+        from: values.literalFacts
         text: "((\{wc}_t){ .length = \{len}, .data = \{wb}\{acc}data })"
     )
 }
@@ -2894,7 +2904,7 @@ emitCollectionMemberRead: function {
             return (
                 stating
                 :facts
-                from: (operandFacts e: bn2F place: true)
+                from: (values.operandFacts e: bn2F place: true)
                 text: "\{bn2}\{acc}data[\{mn2}]"
             )
         }
@@ -2913,11 +2923,11 @@ emitCollectionMemberRead: function {
             return (stating :facts from: callFacts text: "\{scba}_string(\{bn2})")
         }
         if (ztypecheck.isStringViewMember nameId: mnId) then {
-            svT: svTypeC :ctx
+            svT: values.svTypeC :ctx
             return (
                 stating
                 :facts
-                from: literalFacts
+                from: values.literalFacts
                 text: "(\{svT}){ .data = \{bn2}\{acc}data, .size = \{bn2}\{acc}len }"
             )
         }
@@ -3437,7 +3447,7 @@ isListReadWalkMember: function {name: StringView} out bool is {
 # through the pointer a member of it holds.
 armCellFacts: function {recvF: exprfacts inline: bool} out exprfacts is {
     if inline then return (memberFacts b: recvF)
-    return (operandFacts e: (memberFacts b: recvF) place: true)
+    return (values.operandFacts e: (memberFacts b: recvF) place: true)
 }
 
 # listGetIsPtr -- the `get` of this List/ListView mono returns a pointer: its

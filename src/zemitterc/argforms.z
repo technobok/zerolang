@@ -140,10 +140,10 @@ valueExprC: function {
     eF: exprfacts
     e: emitExprWith :ast :reg :typing :ctx :n facts: eF
     if (ptrHeldValtype :ast :reg :typing :ctx :n) then {
-        return (stating :facts from: (operandFacts e: eF place: true) text: "(*\{e})")
+        return (stating :facts from: (values.operandFacts e: eF place: true) text: "(*\{e})")
     }
     if (refValtypeResult :ast :reg :typing :ctx :n) then {
-        return (stating :facts from: (operandFacts e: eF place: true) text: "(*\{e})")
+        return (stating :facts from: (values.operandFacts e: eF place: true) text: "(*\{e})")
     }
     return (stating :facts from: eF text: e)
 }
@@ -316,12 +316,12 @@ svValueForm: function {
         if (isPtrVid :ctx vid: valueVid) then return (
             stating
             :facts
-            from: literalFacts
+            from: values.literalFacts
             text: (svValueFormPtr :ctx expr: rex.stringView)
         )
-        svT: svTypeC :ctx
+        svT: values.svTypeC :ctx
         v1: "((\{svT}){ .data = \{rex}.data, .size = \{rex}.size })"
-        return (stating :facts from: literalFacts text: v1)
+        return (stating :facts from: values.literalFacts text: v1)
     } else {
         return (stating :facts from: facts text: expr.string)
     }
@@ -331,7 +331,7 @@ svValueForm: function {
 # POINTER: a borrowed String parameter, or a String read through a borrowed
 # field.
 svValueFormPtr: function {ctx: Ctx expr: StringView} out String is {
-    svT: svTypeC :ctx
+    svT: values.svTypeC :ctx
     v: "((\{svT}){ .data = \{expr}->data, .size = \{expr}->size })"
     return v
 }
@@ -356,7 +356,7 @@ svValueFormAt: function {
     if (pathIsPointer :ast :reg :typing :ctx :n) then return (
         stating
         :facts
-        from: literalFacts
+        from: values.literalFacts
         text: (svValueFormPtr :ctx :expr)
     )
     ef: facts
@@ -422,7 +422,7 @@ svNativeCall: function {
     pre: String
     addr: "&\{recv}"
     if (canTakeAddress f: recvF).not then {
-        svT: svTypeC :ctx
+        svT: values.svTypeC :ctx
         addr = (
             orderAddressOf
             :ast
@@ -452,9 +452,9 @@ svArgAddr: function {
     match (
         n
     ) case atomstring then {
-        li: litIndexOf :ctx nid: n.nodeid
+        li: values.litIndexOf :ctx nid: n.nodeid
         if li > 0 then {
-            lv: litView :ctx :li
+            lv: values.litView :ctx :li
             a1: "&\{lv}"
             return a1
         } else {
@@ -981,7 +981,7 @@ emitSvCallLegs: function {
     )
     if eCmp.length > 0 then return eCmp
     eSub: (
-        emitSvSubstringCall
+        values.emitSvSubstringCall
         :ast
         :reg
         :typing
@@ -1182,7 +1182,7 @@ hoistBorrowValArgWith: function {
 # storage someone else owns, and owes none.
 hoistOwes: function {typing: ztyping.ZTyping.view argNid: zast.nodeid ptr: bool} out bool is {
     if ptr then return false
-    return (scopeOwnsTemp :typing :argNid)
+    return (values.scopeOwnsTemp :typing :argNid)
 }
 
 # hoistCtype -- a hoisted temporary's C type: the value's, held through its heap
@@ -1777,7 +1777,7 @@ emitInterpArgExpr: function {
     match (
         n
     ) case atomstring then {
-        if (isInterp :ast parts: n.stringparts) then {
+        if (values.isInterp :ast parts: n.stringparts) then {
             # the build runs where the value is read: its locals are declared by
             # the enclosing statement, and what its parts hoisted is assigned and
             # released inside it, so the statement owes none of them
@@ -1785,7 +1785,7 @@ emitInterpArgExpr: function {
             unused: String
             ops: String
             sM: (
-                emitInterpBuild
+                values.emitInterpBuild
                 :ast
                 :reg
                 :typing
@@ -1874,7 +1874,7 @@ ownedTypedefArg: function {typing: ztyping.ZTyping.view argNid: zast.nodeid} out
     ) case some then {
         if ck != zast.callkind.typedefCreate then return false
     } case none then return false
-    return (scopeOwnsTemp :typing :argNid)
+    return (values.scopeOwnsTemp :typing :argNid)
 }
 
 # emitColInterpArg -- an interpolated-string collection-method argument hoisted to
@@ -1901,7 +1901,7 @@ emitColInterpArg: function {
         exF: exprfacts
         ex: emitExprWith :ast :reg :typing :ctx :n facts: exF
         if exF.place then {
-            dropHoistsTo :ctx mark: hmk
+            values.dropHoistsTo :ctx mark: hmk
             return "".string
         }
         sx = ex.take
@@ -2812,7 +2812,7 @@ metaCreateFieldText: function {
             ffct = ffctP.take
         }
         av = "(\{ffct}){0}"
-        avF = literalFacts
+        avF = values.literalFacts
     }
     return (stating :facts from: avF text: av)
 }
@@ -3082,10 +3082,20 @@ userFnArgTextWith: function {
     # is a reference-returning call's valtype result; every parameter that
     # wants the pointer has answered above
     if (ptrHeldValtype :ast :reg :typing :ctx n: argOpNode) then {
-        return (stating :facts from: (operandFacts e: avF place: true) text: "(*\{atomVarId})")
+        return (
+            stating
+            :facts
+            from: (values.operandFacts e: avF place: true)
+            text: "(*\{atomVarId})"
+        )
     }
     if (refValtypeResult :ast :reg :typing :ctx n: argOpNode) then {
-        return (stating :facts from: (operandFacts e: avF place: true) text: "(*\{atomVarId})")
+        return (
+            stating
+            :facts
+            from: (values.operandFacts e: avF place: true)
+            text: "(*\{atomVarId})"
+        )
     }
     borrowHoist: (
         hoistBorrowValArgWith
@@ -3594,9 +3604,9 @@ emitSvAtomBase: function {
             # buffer and is only read, so nothing frees or grows it
             base: bn2.string
             if (isPtrVid :ctx vid: bn2v) then base = "(*\{bn2})"
-            strT: strTypeC :ctx
+            strT: values.strTypeC :ctx
             hdr: "((\{strT}){ .size = \{base}.size, .data = (char*)\{base}.data, .capacity = 0 })"
-            return (stating :facts from: literalFacts text: hdr)
+            return (stating :facts from: values.literalFacts text: hdr)
         }
         if mnId == zast.wellKnown.slot.wkCount then {
             demandSvMember :reg :typing :ctx nameId: zast.wellKnown.slot.wkCount
@@ -3671,18 +3681,18 @@ armRefLeaf: function {
     facts: exprfacts.borrow
 } out String is {
     lf: armValueNode :ast :n
-    lt: bindingStampOf :typing nid: (interpPartNodeId n: (ast.nodes.get i: lf))
+    lt: values.bindingStampOf :typing nid: (interpPartNodeId n: (ast.nodes.get i: lf))
     ct: typeRefC :ast :reg :typing :ctx tid: lt
     # a Set or Map value is its own reference: a place arm yields the pointer, an
     # owned one parks it
     heap: isHeapPtrCollection :reg :typing :ctx tid: lt
-    if heap when (armLeafIsPlace :ast :reg :typing :ctx :n) then return (
+    if heap when (values.armLeafIsPlace :ast :reg :typing :ctx :n) then return (
         stating
         :facts
         from: textF
         text: text.string
     )
-    if (armLeafIsPlace :ast :reg :typing :ctx :n) then {
+    if (values.armLeafIsPlace :ast :reg :typing :ctx :n) then {
         # a `.borrow` of a name reads that name's storage, as the bare name does
         under: localnames.rhsBorrowMarkerBase :ast :reg :typing n: (ast.nodes.get i: lf)
         baseN: if under.isZero then lf else under
@@ -3691,7 +3701,7 @@ armRefLeaf: function {
             return (
                 stating
                 :facts
-                from: (operandFacts e: textF place: false)
+                from: (values.operandFacts e: textF place: false)
                 text: "((\{ct}*)(\{text}))"
             )
         }
@@ -3747,7 +3757,7 @@ orderRowOperand: function {
 } is {
     mk: pendingHoistMark :ctx
     vF: exprfacts
-    v: operandValueC :ast :reg :typing :ctx :nid facts: vF
+    v: values.operandValueC :ast :reg :typing :ctx :nid facts: vF
     n: ast.nodes.get i: nid
     if (isStringOrViewLaid :ctx tid: owner).not then {
         stateFacts facts: opF from: vF
@@ -3852,7 +3862,7 @@ operatorOperandText: function {
     facts: exprfacts.borrow
 } out String is {
     avF: exprfacts
-    av: operandValueC :ast :reg :typing :ctx nid: rhsNid facts: avF
+    av: values.operandValueC :ast :reg :typing :ctx nid: rhsNid facts: avF
     ctx.lastArgByPtr = false
     # the receiver by its name id, `this` for the `:this` shorthand; every other
     # row of a function type is a parameter
