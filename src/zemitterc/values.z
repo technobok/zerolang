@@ -41,7 +41,16 @@ ternaryClause: function {
         cond: ternaryConds :ast :reg :typing :ctx :c :isFirst facts: condF
         if cond.length == 0 then return cond
         vxF: exprfacts
-        vx: armInPlace :ast :reg :typing :ctx n: (ast.nodes.get i: c.statement) :ref facts: vxF
+        vx: (
+            stmtblocks.armInPlace
+            :ast
+            :reg
+            :typing
+            :ctx
+            n: (ast.nodes.get i: c.statement)
+            :ref
+            facts: vxF
+        )
         if vx.length == 0 then return vx
         argforms.stateFacts :facts from: (valueFacts a: condF b: vxF)
         return "((\{cond}) ? (\{vx}) : "
@@ -72,7 +81,16 @@ ternaryConds: function {
         k: ast.nodes.get i: kId
         if k.namedoperation then {
             cvF: exprfacts
-            cv: ternaryCondPart :ast :reg :typing :ctx op: k.operation :guarded facts: cvF
+            cv: (
+                stmtblocks.ternaryCondPart
+                :ast
+                :reg
+                :typing
+                :ctx
+                op: k.operation
+                :guarded
+                facts: cvF
+            )
             if cv.length == 0 then return cv
             # one condition is the text itself; each further one joins it with `&&`
             if cond.length == 0 then condF = cvF else condF = valueFacts a: condF b: cvF
@@ -1371,7 +1389,7 @@ emitArmCtorCall: function {
     }
     inl: types.armIsInlineC :typing tid: stid :arm
     # the slot's designator: `.data`, or the inline arm's member
-    slot: armSlotC :ast :reg :typing :ctx tid: stid recv: "" acc: "." :arm inline: inl
+    slot: stmtblocks.armSlotC :ast :reg :typing :ctx tid: stid recv: "" acc: "." :arm inline: inl
     held: av.copy
     if inl.not then held = (
         argforms.armHeldC
@@ -1785,7 +1803,8 @@ emitValtypeCopy: function {
     # the expression is built so the common path keeps handing emitExpr's
     # result straight back: binding it to a local first costs a String on every
     # `.copy` in the program.
-    if (needsValueDeref :ast :reg :typing :ctx n: (ast.nodes.get i: n.parent) :tid) then {
+    if (stmtblocks.needsValueDeref :ast :reg :typing :ctx n: (ast.nodes.get i: n.parent) :tid
+    ) then {
         cvlF: exprfacts
         cvl: emitExprWith :ast :reg :typing :ctx n: (ast.nodes.get i: n.parent) facts: cvlF
         return (stating :facts from: (operandFacts e: cvlF place: true) text: "(*\{cvl})")
@@ -1965,8 +1984,8 @@ armPredicateC: function {
     # a Box receiver is the pointer to the variant it holds
     bxP: (boxMemberElem :ast :reg :typing :n).notZero
     if bxP or (pathIsPointer :ast :reg :typing :ctx n: pn) then valP = "(*\{recvP})"
-    if (isOrdinalPair :typing tid: dap) then {
-        fa: ordinalPairFirstArmId :typing tid: dap
+    if (stmtblocks.isOrdinalPair :typing tid: dap) then {
+        fa: stmtblocks.ordinalPairFirstArmId :typing tid: dap
         # the arm NAME resolved through any alias, as an id
         if fa.notZero when mnc0Id == fa then return (
             stating
@@ -2485,7 +2504,7 @@ emitExprArms: function {
         # value alone. spec.pdoc, Conditional Compilation, promises the false
         # branch is not emitted, and that promise is not limited to statement
         # position.
-        vfb: foldedBranchOf :typing nid: n.nodeid
+        vfb: stmtblocks.foldedBranchOf :typing nid: n.nodeid
         if vfb.known when vfb.stmt.notZero then {
             return (armValueExpr :ast :reg :typing :ctx n: (ast.nodes.get i: vfb.stmt) :facts)
         }
@@ -2741,7 +2760,7 @@ emitControlPtrExpr: function {
     ctx.armRefCv = cvN + 1
     ctx.armRefDepth = ctx.armRefDepth + 1
     (
-        emitControlBindValue
+        stmtblocks.emitControlBindValue
         :ast
         :reg
         :typing
@@ -2754,7 +2773,7 @@ emitControlPtrExpr: function {
         tmp: ltmp
         buf: lbuf
     )
-    flushBlockFrees tmp: ltmp lL: 0 diverged: false buf: lbuf
+    stmtblocks.flushBlockFrees tmp: ltmp lL: 0 diverged: false buf: lbuf
     ctx.armRefDepth = ctx.armRefDepth - 1
     ctx.armRefCv = outerCv
     closeControlArms :ctx :outer
@@ -2835,7 +2854,7 @@ emitControlExpr: function {
     lbuf: String
     outer: openControlArms :ctx
     (
-        emitControlBindValue
+        stmtblocks.emitControlBindValue
         :ast
         :reg
         :typing
@@ -2848,7 +2867,7 @@ emitControlExpr: function {
         tmp: ltmp
         buf: lbuf
     )
-    flushBlockFrees tmp: ltmp lL: 0 diverged: false buf: lbuf
+    stmtblocks.flushBlockFrees tmp: ltmp lL: 0 diverged: false buf: lbuf
     closeControlArms :ctx :outer
     recordRawHoist :ctx text: lbuf
     return cv
@@ -3278,7 +3297,7 @@ copyRvalueHoist: function {
         cnId: aliasOrChildId :ast :typing aliasId: n.nodeid childId: n.child
         if cnId != zast.wellKnown.slot.wkCopy then return "".string
         if (
-            (stampIdDeep :reg :typing n: (ast.nodes.get i: n.parent)) != ctx.strTid
+            (stmtblocks.stampIdDeep :reg :typing n: (ast.nodes.get i: n.parent)) != ctx.strTid
         ) then return "".string
         # the receiver is spelled again by the caller when this declines, so
         # what this spelling hoisted is dropped with it
@@ -3355,7 +3374,9 @@ emitStringBindValue: function {
             # `<rvalue>.copy` over a String (e.g. `(list.get i: n).copy`): the
             # receiver is a non-lvalue, so hoist it to a borrowed temp (List.get
             # returns a shallow view -- never freed) before String_copy(&temp).
-            if (stampIdDeep :reg :typing n: (ast.nodes.get i: n.parent)) == ctx.strTid then {
+            if (
+                (stmtblocks.stampIdDeep :reg :typing n: (ast.nodes.get i: n.parent)) == ctx.strTid
+            ) then {
                 # the value is spelled again by the caller when this declines,
                 # so what this spelling hoisted is dropped with it
                 hmk: pendingHoistMark :ctx
@@ -3493,7 +3514,7 @@ emitStringReturnValue: function {
                 strNid: n.nodeid
                 ops: unusedOps
             )
-            emitReturnCleanup :ast :reg :typing :ctx :tmp :ind :buf
+            stmtblocks.emitReturnCleanup :ast :reg :typing :ctx :tmp :ind :buf
             lst: "\{ind}return \{sB};\n"
             buf.append lst
             return true
@@ -3571,13 +3592,13 @@ emitListBind: function {
         losb: "\{ind}\{lcb}_t \{nm} = \{losr};\n"
         buf.append losb
     } else {
-        if (forexprValue n: avn) then {
+        if (stmtblocks.forexprValue n: avn) then {
             # list comprehension: `xs: for ... loop { expr }` create + populate
             noteMemberUse :ctx mono: ltid member: memberWord.slot.create
             lc0: "\{ind}\{lcb}_t \{nm} = \{lcb}_create((uint64_t)0);\n"
             buf.append lc0
             (
-                emitListComprehension
+                stmtblocks.emitListComprehension
                 :ast
                 :reg
                 :typing
@@ -3596,7 +3617,7 @@ emitListBind: function {
                 flushArgHoists :ctx :ind :tmp :buf
                 lb0: "\{ind}\{lcb}_t \{nm} = \{valueC};\n"
                 buf.append lb0
-                emitValueTakeInvalidations :ast :reg :typing :ctx n: avn :ind :buf
+                stmtblocks.emitValueTakeInvalidations :ast :reg :typing :ctx n: avn :ind :buf
                 # a binding from a bare owned local, or from a take out of
                 # one, is a MOVE: the source is zeroed where a destroy of it
                 # still runs. A BORROW takes the alias leg before reaching
@@ -3656,7 +3677,7 @@ emitHeapColBind: function {
         flushArgHoists :ctx :ind :tmp :buf
         hbc: "\{ind}\{cb}_t* \{nm} = \{hvr};\n"
         buf.append hbc
-        emitValueTakeInvalidations :ast :reg :typing :ctx n: avn :ind :buf
+        stmtblocks.emitValueTakeInvalidations :ast :reg :typing :ctx n: avn :ind :buf
         # a heap collection binding from a bare owned local, or from a take
         # out of one, is a MOVE: the source is cleared where a destroy of it
         # still runs. A BORROW of one is a second pointer to the same
@@ -3733,10 +3754,22 @@ emitStringMatchBind: function {
     }
     bound: false
     if isIf then {
-        bound = emitIfBindValue :ast :reg :typing :ctx n: avn :nm ct: smT.stringView :ind :tmp :buf
+        bound = (
+            stmtblocks.emitIfBindValue
+            :ast
+            :reg
+            :typing
+            :ctx
+            n: avn
+            :nm
+            ct: smT.stringView
+            :ind
+            :tmp
+            :buf
+        )
     } else {
         bound = (
-            emitMatchBindValue
+            stmtblocks.emitMatchBindValue
             :ast
             :reg
             :typing
@@ -3778,7 +3811,7 @@ emitStringBind: function {
             dct = strTypeC :ctx
         }
         return (
-            emitDoBindValue
+            stmtblocks.emitDoBindValue
             :ast
             :reg
             :typing
@@ -3849,7 +3882,7 @@ emitStringBind: function {
             # the value may be a call that took ownership of an argument;
             # the caller zeroes that source here, as every other binding
             # branch does
-            emitValueTakeInvalidations :ast :reg :typing :ctx n: avn :ind :buf
+            stmtblocks.emitValueTakeInvalidations :ast :reg :typing :ctx n: avn :ind :buf
             if (varOwnsHere :reg vid: nameVid) then {
                 # a binding from a bare owned local, or from an explicit
                 # `<local>.take`, is a MOVE, exactly as a reassignment from
@@ -4048,7 +4081,7 @@ movedZeroC: function {
 } out String is {
     dt: types.destroyTargetTid :reg :typing :ctx :tid
     if dt.isZero then return String
-    if (valueIsItsPointer :reg :typing :ctx tid: dt) then return "NULL".string
+    if (stmtblocks.valueIsItsPointer :reg :typing :ctx tid: dt) then return "NULL".string
     if dt == ctx.strTid then {
         strT: strTypeC :ctx
         return "(\{strT}){0}"
@@ -4106,7 +4139,7 @@ emitMovedArgZeroing: function {
     ind: StringView
     buf: String.borrow
 } is {
-    emitValueTakeInvalidations :ast :reg :typing :ctx :n :ind :buf
+    stmtblocks.emitValueTakeInvalidations :ast :reg :typing :ctx :n :ind :buf
     emitNarrowedTakeZero :ast :reg :typing :ctx :n :ind :buf
 }
 
@@ -4195,7 +4228,7 @@ emitOwnedRepoint: function {
     rrn: tmpNext :ctx :tmp
     ct: companionCType :ast :reg :typing :ctx :tid
     buf.append "\{ind}\{ct} _rr\{rrn} = \{rv};\n"
-    buf.append (destroyLineC :reg :typing :ctx :tid nm: cn.stringView :ind)
+    buf.append (stmtblocks.destroyLineC :reg :typing :ctx :tid nm: cn.stringView :ind)
     buf.append "\{ind}\{cn} = _rr\{rrn};\n"
     emitMovedArgZeroing :ast :reg :typing :ctx n: valueNode :ind :buf
     if ptr.length > 0 then {

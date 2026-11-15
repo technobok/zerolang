@@ -49,7 +49,7 @@ forArmCond: function {
     cond: String
     for each kId: (zast.kidsOf :ast span: n.conditions) loop {
         if (forCondIsNamed :ast :kId).not then {
-            emitForCond :ast :reg :typing :ctx n: (ast.nodes.get i: kId) :cond
+            stmtblocks.emitForCond :ast :reg :typing :ctx n: (ast.nodes.get i: kId) :cond
         }
     }
     return cond
@@ -74,7 +74,7 @@ emitForArmBreak: function {
     owed: String
     outerExit: ctx.exitNode
     ctx.exitNode = node
-    emitExitDestroy :ast :reg :typing :ctx ind: inner.stringView buf: owed
+    stmtblocks.emitExitDestroy :ast :reg :typing :ctx ind: inner.stringView buf: owed
     ctx.exitNode = outerExit
     if owed.length == 0 then {
         buf.append "\{ind}if (!(\{armc})) break;\n"
@@ -168,7 +168,7 @@ emitCountedRangeFor: function {
     flushArgHoists :ctx :ind :tmp :buf
     d0: "\{ind}uint64_t \{fn} = \{cnt};\n"
     buf.append d0
-    lidR: pushLoopLabel :ctx :tmp isDo: false postTest: m.postconditions.count.u64 > 0
+    lidR: stmtblocks.pushLoopLabel :ctx :tmp isDo: false postTest: m.postconditions.count.u64 > 0
     # A suspension inside the body RETURNS from `.call`, and the resume `goto`
     # lands inside the loop, PAST the C for-init -- so the counter and the
     # count, which live only in the header, are indeterminate on the next call
@@ -230,12 +230,12 @@ emitCountedRangeFor: function {
     dvR: false
     if m.body.notZero then {
         bodyNode: ast.nodes.get i: m.body
-        emitBodyNode :ast :reg :typing :ctx n: bodyNode ind: bodyInd.stringView :tmp :buf
-        dvR = blockDiverges :ast :reg :typing :ctx n: bodyNode
+        stmtblocks.emitBodyNode :ast :reg :typing :ctx n: bodyNode ind: bodyInd.stringView :tmp :buf
+        dvR = stmtblocks.blockDiverges :ast :reg :typing :ctx n: bodyNode
     }
-    closeScopeBlock :ast :reg :typing :ctx :tmp lL: lLR diverged: dvR node: m.body :buf
+    stmtblocks.closeScopeBlock :ast :reg :typing :ctx :tmp lL: lLR diverged: dvR node: m.body :buf
     (
-        emitIterationEnd
+        stmtblocks.emitIterationEnd
         :ast
         :reg
         :typing
@@ -249,7 +249,7 @@ emitCountedRangeFor: function {
     )
     lc: "\{ind}}\n"
     buf.append lc
-    popLoopLabel :ctx id: lidR :ind :buf
+    stmtblocks.popLoopLabel :ctx id: lidR :ind :buf
     # both leave C scope with the loop, so a suspension after it must not
     # spill either
     if pushed then {
@@ -326,7 +326,13 @@ emitClosedRangeFor: function {
         re: "_re\{mN}"
         fn: "_fn\{mN}"
         cnt: closedRangeCountExpr from: rs.stringView to: re.stringView :down
-        lidR: pushLoopLabel :ctx :tmp isDo: false postTest: m.postconditions.count.u64 > 0
+        lidR: (
+            stmtblocks.pushLoopLabel
+            :ctx
+            :tmp
+            isDo: false
+            postTest: m.postconditions.count.u64 > 0
+        )
         startx: emitExpr :ast :reg :typing :ctx n: (ast.nodes.get i: startNid)
         flushArgHoists :ctx :ind :tmp :buf
         d0: "\{ind}\{ctR} \{rs} = \{startx};\n"
@@ -394,12 +400,33 @@ emitClosedRangeFor: function {
         dvR: false
         if m.body.notZero then {
             bodyNode: ast.nodes.get i: m.body
-            emitBodyNode :ast :reg :typing :ctx n: bodyNode ind: bodyInd.stringView :tmp :buf
-            dvR = blockDiverges :ast :reg :typing :ctx n: bodyNode
+            (
+                stmtblocks.emitBodyNode
+                :ast
+                :reg
+                :typing
+                :ctx
+                n: bodyNode
+                ind: bodyInd.stringView
+                :tmp
+                :buf
+            )
+            dvR = stmtblocks.blockDiverges :ast :reg :typing :ctx n: bodyNode
         }
-        closeScopeBlock :ast :reg :typing :ctx :tmp lL: lLR diverged: dvR node: m.body :buf
         (
-            emitIterationEnd
+            stmtblocks.closeScopeBlock
+            :ast
+            :reg
+            :typing
+            :ctx
+            :tmp
+            lL: lLR
+            diverged: dvR
+            node: m.body
+            :buf
+        )
+        (
+            stmtblocks.emitIterationEnd
             :ast
             :reg
             :typing
@@ -413,7 +440,7 @@ emitClosedRangeFor: function {
         )
         lc: "\{ind}}\n"
         buf.append lc
-        popLoopLabel :ctx id: lidR :ind :buf
+        stmtblocks.popLoopLabel :ctx id: lidR :ind :buf
         if pushed then {
             ctx.genForSpills.pop
             ctx.genForSpills.pop
@@ -779,7 +806,7 @@ emitExprFormYield: function {
             lp3: "\{ind}/* alias: \{nm} => \{srcC} */\n"
             buf.append lp3
             (
-                varEntrySet
+                stmtblocks.varEntrySet
                 xs: ctx.aliases
                 vid: nmVid
                 val: srcC.stringView
@@ -959,7 +986,7 @@ emitYieldStmt: function {
     gsc: ctx.genSomeC.copy
     gpc: ctx.genPayC.copy
     (
-        emitOptionalAssign
+        stmtblocks.emitOptionalAssign
         :ctx
         target: tgt.stringView
         someTag: gst.stringView
@@ -969,9 +996,9 @@ emitYieldStmt: function {
         :ind
         :buf
     )
-    flushBlockFrees tmp: ytmp lL: 0 diverged: false :buf
+    stmtblocks.flushBlockFrees tmp: ytmp lL: 0 diverged: false :buf
     # what the value moved out of is zeroed before the suspension returns
-    emitValueTakeInvalidations :ast :reg :typing :ctx n: yx :ind :buf
+    stmtblocks.emitValueTakeInvalidations :ast :reg :typing :ctx n: yx :ind :buf
     # a yield of a bare local moves it into the box: the local is zeroed where
     # a destroy still reaches it -- the instance's destructor, for a local the
     # instance keeps
