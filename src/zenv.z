@@ -434,30 +434,8 @@ pinmark: record {
     journal: u64
 }
 
-# WalkState -- the body walk's working state: what the checker records while
-# it walks and reads back itself. Nothing downstream reads it; the output is
-# ZTyping's.
-WalkState: class {
-    # the next synthesised name's number, so two temps never collide
-    nextTempId: u64
-    # the temporaries a result may keep past the call scope they were bound in,
-    # by name, with their variable: an owned argument temp a pinning call's
-    # result keeps locked, and a receiver's temp (a value's own storage, whose
-    # view the call's arguments may carry out). Once the call's own scope has
-    # popped, one a result keeps is defined again -- the same variable -- as an
-    # unnamed local of the enclosing scope, so the lock has something to name
-    adoptableTemps: (IdMapV zast.nameid v: ztypes.vid)
-    # the argument temps by VARIABLE, while they still await that second
-    # definition. A TEMPORARY HAS ONE DEATH: the call's own scope must not list
-    # one its result keeps locked, because the pin makes it outlive the call and
-    # the adopting scope lists it instead. Cleared as each is adopted, so exactly
-    # one scope ever names it. A receiver's temp is known to escape only once the
-    # call has popped: the popped scope listed it, and adoption retires that
-    # listing (retireTempListing).
-    pinnedTempPending: (IdMapV ztypes.vid v: bool)
-    # the unnamed locals the statement line being walked has made, by name:
-    # read, and dropped, when the line ends
-    lineUnnamedLocals: ListVal zast.nameid
+# FunctionState -- the function being walked. A part of WalkState (`fn`).
+FunctionState: class {
     # the label the current synthesis is running under, for diagnostics about a
     # node no one wrote
     synthLabel: String
@@ -488,6 +466,59 @@ WalkState: class {
     # the fn whose body is being walked declares no `out` type, so a `return`
     # in it carries no value
     currentReturnsNothing: bool
+    # the generic parameter to type-argument substitution in force for the
+    # instantiation being walked
+    monoParamSubst: (IdMapV ztypes.tid v: ztypes.tid)
+    # the function type being walked inside that instantiation
+    curMonoFnTid: ztypes.tid
+    # FUNCTION tid -> the definition carries a body (a bodyless spec is false)
+    hasBody: (IdMapV ztypes.tid v: bool)
+    # the generator class whose `call` body is being walked, 0 outside one. A
+    # suspending loop or `with` inside it saves what it holds in a C local to
+    # a field of this class across each suspension, and the walk is what
+    # knows the field's type
+    currentGenTid: ztypes.tid
+    # the next ordinal for a field minted on currentGenTid, so two loops in
+    # one body never share a slot
+    genSpillNext: u64
+    # each instance's first instantiating call, which its errors name
+    monoSite: (IdMapV ztypes.tid v: ztyping.monosite)
+    # the return type in scope, which is what a bare `return` is checked against
+    currentReturnTypeId: ztypes.tid
+    # the per-call INPUT type in scope inside a generator's `call`, which is
+    # what `yield` evaluates to. 0 outside one, and 0 for a generator that
+    # declares no input -- reading `yield`'s value there is an error. It is
+    # stashed rather than bound: the input is not a body binding, because a
+    # generator yields before it can receive.
+    currentYieldInputTid: ztypes.tid
+}
+
+# WalkState -- the body walk's working state: what the checker records while
+# it walks and reads back itself. Nothing downstream reads it; the output is
+# ZTyping's.
+WalkState: class {
+    # the next synthesised name's number, so two temps never collide
+    nextTempId: u64
+    # the temporaries a result may keep past the call scope they were bound in,
+    # by name, with their variable: an owned argument temp a pinning call's
+    # result keeps locked, and a receiver's temp (a value's own storage, whose
+    # view the call's arguments may carry out). Once the call's own scope has
+    # popped, one a result keeps is defined again -- the same variable -- as an
+    # unnamed local of the enclosing scope, so the lock has something to name
+    adoptableTemps: (IdMapV zast.nameid v: ztypes.vid)
+    # the argument temps by VARIABLE, while they still await that second
+    # definition. A TEMPORARY HAS ONE DEATH: the call's own scope must not list
+    # one its result keeps locked, because the pin makes it outlive the call and
+    # the adopting scope lists it instead. Cleared as each is adopted, so exactly
+    # one scope ever names it. A receiver's temp is known to escape only once the
+    # call has popped: the popped scope listed it, and adoption retires that
+    # listing (retireTempListing).
+    pinnedTempPending: (IdMapV ztypes.vid v: bool)
+    # the unnamed locals the statement line being walked has made, by name:
+    # read, and dropped, when the line ends
+    lineUnnamedLocals: ListVal zast.nameid
+    # the function being walked
+    fn: FunctionState
     # what the value whose walk is running keeps locked so far (ValueDraft)
     draft: ValueDraft
     # the node of the call argument being typed (0 outside one): a reftype
@@ -589,15 +620,10 @@ WalkState: class {
     # unnamed locals a binding held when their line ended, until a `.drop`
     # releases the last hold
     heldTemps: ListVal zast.nameid
-    # the generic parameter to type-argument substitution in force for the
-    # instantiation being walked
-    monoParamSubst: (IdMapV ztypes.tid v: ztypes.tid)
     # the instantiation a constant is being evaluated for, when it is read
     # through one (`a.BIG` on a unit instance); 0 otherwise. A template's
     # constant over a numeric generic parameter has a value per instantiation
     constMono: ztypes.tid
-    # the function type being walked inside that instantiation
-    curMonoFnTid: ztypes.tid
     # true once any member has been marked private (gates cross-unit checks)
     privacySeen: bool
     # the names choices are declared under: a call builds a choice value only
@@ -614,8 +640,6 @@ WalkState: class {
     # nodes deliberately left unstamped, so a later pass does not read absence
     # as an error
     noStampNode: (IdMapV zast.nodeid v: bool)
-    # FUNCTION tid -> the definition carries a body (a bodyless spec is false)
-    fnHasBody: (IdMapV ztypes.tid v: bool)
     # the generic template (its DeclId) whose signature is being
     # registered: its param names are not unit typerefs
     sigGenericDecl: ztypes.declid
@@ -695,14 +719,6 @@ WalkState: class {
     # variable: a second mint for the same node must reuse the first, and a
     # name is what its callers hand on
     tempNameOf: (IdMapV zast.nodeid v: zast.nameid)
-    # the generator class whose `call` body is being walked, 0 outside one. A
-    # suspending loop or `with` inside it saves what it holds in a C local to
-    # a field of this class across each suspension, and the walk is what
-    # knows the field's type
-    currentGenTid: ztypes.tid
-    # the next ordinal for a field minted on currentGenTid, so two loops in
-    # one body never share a slot
-    genSpillNext: u64
     # evaluation state per memberConst key, the evaluator's cycle guard; a key
     # with no entry is unvisited
     constEvalState: (MapVV ztyping.constslot v: ztyping.constevalstate)
@@ -719,8 +735,6 @@ WalkState: class {
     constFail: ztypes.constfail
     # every value placed where a spec value is expected, checked at the end
     specStandIns: ListVal ztyping.specstandin
-    # each instance's first instantiating call, which its errors name
-    monoSite: (IdMapV ztypes.tid v: ztyping.monosite)
     # each generic typedef instance whose base refuses its argument
     typedefClash: (IdMapV ztypes.tid v: ztyping.typedefclash)
     # a generic parameter's BOUND, as (atom node -> the name it spells) and the
@@ -855,14 +869,6 @@ WalkState: class {
     # type-ref nodes a stamp pass could not stamp because their declaration
     # had not resolved yet; the next pass takes them first
     typerefRetry: ListVal zast.nodeid
-    # the return type in scope, which is what a bare `return` is checked against
-    currentReturnTypeId: ztypes.tid
-    # the per-call INPUT type in scope inside a generator's `call`, which is
-    # what `yield` evaluates to. 0 outside one, and 0 for a generator that
-    # declares no input -- reading `yield`'s value there is an error. It is
-    # stashed rather than bound: the input is not a body binding, because a
-    # generator yields before it can receive.
-    currentYieldInputTid: ztypes.tid
 }
 
 # newWalkState -- a walk state with nothing recorded yet
@@ -873,14 +879,25 @@ newWalkState: function out WalkState is {
         adoptableTemps: (IdMapV zast.nameid v: ztypes.vid)
         pinnedTempPending: (IdMapV ztypes.vid v: bool)
         lineUnnamedLocals: ListVal zast.nameid
-        synthLabel: "".string
-        synthOwnerUnit: ztypes.declid
-        synthOwnerName: zast.nameid
-        currentThisTid: ztypes.tid
-        currentFnTid: ztypes.tid
-        currentReturnMarker: ztypes.zparamownership.noneMode
-        currentFnPins: false
-        currentReturnsNothing: false
+        fn: (
+            FunctionState
+            synthLabel: "".string
+            synthOwnerUnit: ztypes.declid
+            synthOwnerName: zast.nameid
+            currentThisTid: ztypes.tid
+            currentFnTid: ztypes.tid
+            currentReturnMarker: ztypes.zparamownership.noneMode
+            currentFnPins: false
+            currentReturnsNothing: false
+            monoParamSubst: (IdMapV ztypes.tid v: ztypes.tid)
+            curMonoFnTid: ztypes.tid
+            hasBody: (IdMapV ztypes.tid v: bool)
+            currentGenTid: ztypes.tid
+            genSpillNext: 0
+            monoSite: (IdMapV ztypes.tid v: ztyping.monosite)
+            currentReturnTypeId: ztypes.tid
+            currentYieldInputTid: ztypes.tid
+        )
         draft: (
             ValueDraft
             pins: List ztyping.PinPath
@@ -914,16 +931,13 @@ newWalkState: function out WalkState is {
         refusedInstances: (IdMapV ztypes.tid v: bool)
         bodyErrorsCharged: 0
         heldTemps: ListVal zast.nameid
-        monoParamSubst: (IdMapV ztypes.tid v: ztypes.tid)
         constMono: ztypes.tid.zero
-        curMonoFnTid: ztypes.tid
         privacySeen: false
         choiceNames: IdSet zast.nameid
         constNarrows: ListVal ztyping.constnarrow
         boxedArms: SetVal ztyping.armkey
         generatorWrapper: (IdMapV zast.nodeid v: bool)
         noStampNode: (IdMapV zast.nodeid v: bool)
-        fnHasBody: (IdMapV ztypes.tid v: bool)
         sigGenericDecl: ztypes.declid
         sigFnNode: zast.nodeid
         sigFnName: zast.nameid
@@ -950,14 +964,11 @@ newWalkState: function out WalkState is {
         instantiatedAliases: IdSet ztypes.declid
         tempVars: IdSet ztypes.vid
         tempNameOf: (IdMapV zast.nodeid v: zast.nameid)
-        currentGenTid: ztypes.tid
-        genSpillNext: 0
         constEvalState: (MapVV ztyping.constslot v: ztyping.constevalstate)
         tagSourceDecls: (IdMapV ztypes.tid v: ztypes.declid)
         staticLiteralTyperefs: IdSet zast.nodeid
         constFail: ztypes.noConstFail
         specStandIns: ListVal ztyping.specstandin
-        monoSite: (IdMapV ztypes.tid v: ztyping.monosite)
         typedefClash: (IdMapV ztypes.tid v: ztyping.typedefclash)
         genericBoundName: (IdMapV zast.nodeid v: zast.nameid)
         genericBoundScope: (IdMapV zast.nodeid v: ztypes.declid)
@@ -996,8 +1007,6 @@ newWalkState: function out WalkState is {
         typerefNew: ListVal zast.nodeid
         typerefPassRan: false
         typerefRetry: ListVal zast.nodeid
-        currentReturnTypeId: ztypes.tid
-        currentYieldInputTid: ztypes.tid
     )
 }
 

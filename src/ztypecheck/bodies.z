@@ -635,7 +635,7 @@ mintUnitMonoOf: function {
     if r.callId.notZero then {
         n: ast.nodes.get i: r.callId
         ms: ztyping.monosite lineno: (nodeLine :n) colno: (nodeCol :n) unitDecl: r.declUnit
-        st.walk.monoSite.set key: mono value: ms
+        st.walk.fn.monoSite.set key: mono value: ms
     }
     # the numeric arguments are recorded where they are keyed: a constant of the
     # instance may be read before its completion pass records the rest
@@ -1031,10 +1031,10 @@ walkDemandedDef: function {
     # use may sit in an instance's or a template's walk, whose state belongs to
     # that body and not to this definition
     prevMono: st.typing.curMonoStamp
-    prevMonoFn: st.walk.curMonoFnTid
+    prevMonoFn: st.walk.fn.curMonoFnTid
     savedMode: st.mode
     st.typing.curMonoStamp = ztypes.tid.zero
-    st.walk.curMonoFnTid = ztypes.tid
+    st.walk.fn.curMonoFnTid = ztypes.tid
     st.mode.genericWalk = false
     st.mode.inContainmentEdge = false
     # walkOwnerMethods only ever walked a TYPE's methods; a free function
@@ -1046,10 +1046,10 @@ walkDemandedDef: function {
         # inside a method's body would leave the ambient receiver cleared, and the
         # rest of that method then reads `b.private` as external code. The type
         # branch has bracketed these two since it was the only branch.
-        prevL: st.walk.synthLabel.copy
-        prevOwnerUnit: st.walk.synthOwnerUnit
-        prevOwnerName: st.walk.synthOwnerName
-        prevT: st.walk.currentThisTid
+        prevL: st.walk.fn.synthLabel.copy
+        prevOwnerUnit: st.walk.fn.synthOwnerUnit
+        prevOwnerName: st.walk.fn.synthOwnerName
+        prevT: st.walk.fn.currentThisTid
         cfbFr: fnRefAt :ast nid: mopId
         (
             checkFunctionBody
@@ -1064,10 +1064,10 @@ walkDemandedDef: function {
             :ast
             declId: dd
         )
-        st.walk.synthLabel = prevL.take
-        st.walk.synthOwnerUnit = prevOwnerUnit
-        st.walk.synthOwnerName = prevOwnerName
-        st.walk.currentThisTid = prevT
+        st.walk.fn.synthLabel = prevL.take
+        st.walk.fn.synthOwnerUnit = prevOwnerUnit
+        st.walk.fn.synthOwnerName = prevOwnerName
+        st.walk.fn.currentThisTid = prevT
     } else {
         # the owner's own type, which a namespace's type has and the file
         # unit's definitions do not reach
@@ -1083,7 +1083,7 @@ walkDemandedDef: function {
         )
     }
     st.typing.curMonoStamp = prevMono
-    st.walk.curMonoFnTid = prevMonoFn
+    st.walk.fn.curMonoFnTid = prevMonoFn
     st.mode = savedMode
 }
 
@@ -1329,10 +1329,10 @@ walkDeferredBody: function {
     typeName: zast.nameTextCopy :ast ref: (st.typing.decls.get i: ownerDecl).name
     prevMono: st.typing.curMonoStamp
     savedMode: st.mode
-    prevL: st.walk.synthLabel.copy
-    prevU: st.walk.synthOwnerUnit
-    prevN: st.walk.synthOwnerName
-    prevThis: st.walk.currentThisTid
+    prevL: st.walk.fn.synthLabel.copy
+    prevU: st.walk.fn.synthOwnerUnit
+    prevN: st.walk.fn.synthOwnerName
+    prevThis: st.walk.fn.currentThisTid
     st.typing.curMonoStamp = mono
     st.mode.suppressBareCtor = false
     st.mode.suppressFnAutoCall = false
@@ -1356,10 +1356,10 @@ walkDeferredBody: function {
     markMemberWalked :st :declId
     st.typing.curMonoStamp = prevMono
     st.mode = savedMode
-    st.walk.synthLabel = prevL.take
-    st.walk.synthOwnerUnit = prevU
-    st.walk.synthOwnerName = prevN
-    st.walk.currentThisTid = prevThis
+    st.walk.fn.synthLabel = prevL.take
+    st.walk.fn.synthOwnerUnit = prevU
+    st.walk.fn.synthOwnerName = prevN
+    st.walk.fn.currentThisTid = prevThis
 }
 
 # methodLabel -- the `Type.member` label a method body is walked under.
@@ -1388,12 +1388,12 @@ setSynthOwnerLabel: function {
     # the label's pair as ids: a method's owner is its TYPE, everything
     # else owns itself. checkCase reads this instead of splitting the
     # label back apart.
-    st.walk.synthOwnerUnit = unitDecl
+    st.walk.fn.synthOwnerUnit = unitDecl
     {
         soid: defNameId
         if soid.isZero then soid = zast.poolFind pool: ast.names text: defName
         if thisName.length > 0 then soid = zast.poolFind pool: ast.names text: thisName
-        st.walk.synthOwnerName = soid
+        st.walk.fn.synthOwnerName = soid
     }
     # the definition's spelling: the label's, else the interned name's
     dnT: zast.nameTextAt :ast ref: defNameId
@@ -1403,7 +1403,7 @@ setSynthOwnerLabel: function {
         defName.length == 0
     ) then dnT.stringView else defName
     lbl: "\{lblUnit}.\{lblName}"
-    st.walk.synthLabel = lbl.take
+    st.walk.fn.synthLabel = lbl.take
 }
 
 # checkFunctionBody -- type-check one function body. Pushes a scope, binds each
@@ -1607,17 +1607,17 @@ checkFunctionBodyIn: function {
             }
         }
         setSynthOwnerLabel :st :unitDecl :ast :defName :defNameId :thisName
-        st.walk.currentThisTid = thisTid
-        prevFn: st.walk.currentFnTid
-        st.walk.currentFnTid = fnTid
-        prevRet: st.walk.currentReturnTypeId
+        st.walk.fn.currentThisTid = thisTid
+        prevFn: st.walk.fn.currentFnTid
+        st.walk.fn.currentFnTid = fnTid
+        prevRet: st.walk.fn.currentReturnTypeId
         fitid: fnTid
         crt: ztypes.tid
         if fitid.notZero then crt = (
             (conform.methodReturnOf reg: st.reg typing: st.typing mid: fitid).or
             d: ztypes.tid
         )
-        st.walk.currentReturnTypeId = crt
+        st.walk.fn.currentReturnTypeId = crt
         # a generator's `call`, or an instance's copy of one: its body yields
         # its values, and its return is the wrapper the lowering wrote
         isGenCall: (generatorCallOf typing: st.typing nid: fn.nid).notZero
@@ -1628,24 +1628,25 @@ checkFunctionBodyIn: function {
             declare.pinHonestyAt :st :ast fnode: fn retTid: crt :defName :defNameId
         }
         # an instance walk returns what the instance it checks returns
-        if crt.isZero when st.walk.curMonoFnTid.notZero then {
-            st.walk.currentReturnTypeId = (
-                (conform.methodReturnOf reg: st.reg typing: st.typing mid: st.walk.curMonoFnTid).or
+        if crt.isZero when st.walk.fn.curMonoFnTid.notZero then {
+            st.walk.fn.currentReturnTypeId = (
+                (conform.methodReturnOf reg: st.reg typing: st.typing mid: st.walk.fn.curMonoFnTid
+                ).or
                 d: ztypes.tid
             )
         }
         # so do the markers on what it returns
-        mono: st.walk.curMonoFnTid
-        prevRm: st.walk.currentReturnMarker
-        st.walk.currentReturnMarker = walkedReturnMarker typing: st.typing :fitid :mono
-        prevFp: st.walk.currentFnPins
-        st.walk.currentFnPins = walkedFnPins typing: st.typing :fitid :mono
-        prevRn: st.walk.currentReturnsNothing
+        mono: st.walk.fn.curMonoFnTid
+        prevRm: st.walk.fn.currentReturnMarker
+        st.walk.fn.currentReturnMarker = walkedReturnMarker typing: st.typing :fitid :mono
+        prevFp: st.walk.fn.currentFnPins
+        st.walk.fn.currentFnPins = walkedFnPins typing: st.typing :fitid :mono
+        prevRn: st.walk.fn.currentReturnsNothing
         # `out null` names the absence of a return, as no `out` does -- for an
         # instance whose `out R` is null too
-        st.walk.currentReturnsNothing = (
+        st.walk.fn.currentReturnsNothing = (
             fn.returntype.isZero or
-            (st.walk.currentReturnTypeId == st.typing.nullTypeId) and
+            (st.walk.fn.currentReturnTypeId == st.typing.nullTypeId) and
             isGenCall.not
         )
         # `yield` enters scope for a generator's synth `.call` body and
@@ -1654,33 +1655,33 @@ checkFunctionBodyIn: function {
         # fact: a `yield` in an ordinary function does not resolve, and one
         # inside a nested function literal never sees this scope because
         # the literal pushes its own.
-        prevYi: st.walk.currentYieldInputTid
-        st.walk.currentYieldInputTid = ztypes.tid
+        prevYi: st.walk.fn.currentYieldInputTid
+        st.walk.fn.currentYieldInputTid = ztypes.tid
         # the class a suspending loop or `with` in this body mints its state
         # fields on: the walked generator's -- an instance's own in an instance
         # walk -- and never a generic template's, whose fields would be typed by
         # its parameters, nor, for a nested function literal, the enclosing
         # generator's
-        prevGen: st.walk.currentGenTid
-        prevSpill: st.walk.genSpillNext
-        st.walk.currentGenTid = ztypes.tid
-        st.walk.genSpillNext = 0
+        prevGen: st.walk.fn.currentGenTid
+        prevSpill: st.walk.fn.genSpillNext
+        st.walk.fn.currentGenTid = ztypes.tid
+        st.walk.fn.genSpillNext = 0
         if isGenCall then {
-            if (st.reg.isGenericOf tid: thisTid).not then st.walk.currentGenTid = thisTid
+            if (st.reg.isGenericOf tid: thisTid).not then st.walk.fn.currentGenTid = thisTid
             ykp: st.reg.ctlPlaceholder
             st.define nameId: zast.wellKnown.slot.wkYield ztypeId: ykp
             # what `yield` evaluates to: the per-call input, which is the
             # SECOND parameter -- the receiver is first. Stashed rather than
             # read off a name at the yield, because the input is not a body
             # binding and the label it carries is the CALL SITE's.
-            st.walk.currentYieldInputTid = yieldInputTidOf :st :ast defn: fn
+            st.walk.fn.currentYieldInputTid = yieldInputTidOf :st :ast defn: fn
         }
         bodyErrs: st.typing.errors.length
         prevTailBody: st.tailBody
         prevTailBlock: st.tailBlock
         st.tailBody = zast.nodeid
         st.tailBlock = zast.nodeid
-        if st.walk.currentReturnTypeId.notZero when isGenCall.not then {
+        if st.walk.fn.currentReturnTypeId.notZero when isGenCall.not then {
             st.tailBody = fn.body
             st.tailBlock = fn.body
         }
@@ -1691,14 +1692,14 @@ checkFunctionBodyIn: function {
         moves.checkImplicitReturn :st :ast defn: fn :bodyErrs
         st.tailBody = prevTailBody
         st.tailBlock = prevTailBlock
-        st.walk.currentYieldInputTid = prevYi
-        st.walk.currentGenTid = prevGen
-        st.walk.genSpillNext = prevSpill
-        st.walk.currentReturnTypeId = prevRet
-        st.walk.currentReturnMarker = prevRm
-        st.walk.currentFnPins = prevFp
-        st.walk.currentReturnsNothing = prevRn
-        st.walk.currentFnTid = prevFn
+        st.walk.fn.currentYieldInputTid = prevYi
+        st.walk.fn.currentGenTid = prevGen
+        st.walk.fn.genSpillNext = prevSpill
+        st.walk.fn.currentReturnTypeId = prevRet
+        st.walk.fn.currentReturnMarker = prevRm
+        st.walk.fn.currentFnPins = prevFp
+        st.walk.fn.currentReturnsNothing = prevRn
+        st.walk.fn.currentFnTid = prevFn
         st.fnScopes.pop
         for st.exitLog.length > exitMark loop st.exitLog.pop
         st.pop
@@ -1899,7 +1900,7 @@ bindMonoParams: function {
         if av.notZero then {
             pto: st.reg.genericParamTidOf :tdecl paramName: pnm
             if pto.some then {
-                st.walk.monoParamSubst.set key: pto value: av
+                st.walk.fn.monoParamSubst.set key: pto value: av
             }
         }
         pj = pj + 1
@@ -1964,16 +1965,16 @@ stampOneFnMono: function {
     savedMode: st.mode
     st.mode.genericWalk = true
     st.pushScope parent: scope node: zast.nodeid
-    st.walk.monoParamSubst = IdMapV ztypes.tid v: ztypes.tid
+    st.walk.fn.monoParamSubst = IdMapV ztypes.tid v: ztypes.tid
     {
         bindMonoParams :st :monoId
     }
     st.typing.curMonoStamp = monoId
-    st.walk.curMonoFnTid = monoId
-    prevL: st.walk.synthLabel.copy
-    prevOwnerUnit: st.walk.synthOwnerUnit
-    prevOwnerName: st.walk.synthOwnerName
-    prevT: st.walk.currentThisTid
+    st.walk.fn.curMonoFnTid = monoId
+    prevL: st.walk.fn.synthLabel.copy
+    prevOwnerUnit: st.walk.fn.synthOwnerUnit
+    prevOwnerName: st.walk.fn.synthOwnerName
+    prevT: st.walk.fn.currentThisTid
     origin: st.reg.genericOriginOf tid: monoId
     fnTemplateDecl: st.typing.declIdOfType typeId: origin
     st.typing.beginInstanceWalk next: (nextRowOf :ast)
@@ -1994,14 +1995,14 @@ stampOneFnMono: function {
     )
     st.typing.endInstanceWalk next: (nextRowOf :ast)
     noteInstanceErrors :st :ast mono: monoId from: errsBefore
-    st.walk.synthLabel = prevL.take
-    st.walk.synthOwnerUnit = prevOwnerUnit
-    st.walk.synthOwnerName = prevOwnerName
-    st.walk.currentThisTid = prevT
-    st.walk.curMonoFnTid = ztypes.tid.zero
+    st.walk.fn.synthLabel = prevL.take
+    st.walk.fn.synthOwnerUnit = prevOwnerUnit
+    st.walk.fn.synthOwnerName = prevOwnerName
+    st.walk.fn.currentThisTid = prevT
+    st.walk.fn.curMonoFnTid = ztypes.tid.zero
     st.typing.curMonoStamp = ztypes.tid.zero
     st.mode = savedMode
-    st.walk.monoParamSubst = IdMapV ztypes.tid v: ztypes.tid
+    st.walk.fn.monoParamSubst = IdMapV ztypes.tid v: ztypes.tid
     st.pop
     recordMintedBy :st :monoId :minted
 }
@@ -2176,15 +2177,15 @@ stampOneClassMono: function {
     savedMode: st.mode
     st.mode.genericWalk = true
     st.pushScope parent: scope node: zast.nodeid
-    st.walk.monoParamSubst = IdMapV ztypes.tid v: ztypes.tid
+    st.walk.fn.monoParamSubst = IdMapV ztypes.tid v: ztypes.tid
     {
         bindMonoParams :st :monoId
     }
     st.typing.curMonoStamp = monoId
-    prevL: st.walk.synthLabel.copy
-    prevOwnerUnit: st.walk.synthOwnerUnit
-    prevOwnerName: st.walk.synthOwnerName
-    prevT: st.walk.currentThisTid
+    prevL: st.walk.fn.synthLabel.copy
+    prevOwnerUnit: st.walk.fn.synthOwnerUnit
+    prevOwnerName: st.walk.fn.synthOwnerName
+    prevT: st.walk.fn.currentThisTid
     errsBefore: st.typing.errors.length
     # a walk can use another member of this instance, which is walked in the
     # same visit
@@ -2199,14 +2200,14 @@ stampOneClassMono: function {
             match (
                 mfo
             ) case some then {
-                st.walk.curMonoFnTid = mfo
+                st.walk.fn.curMonoFnTid = mfo
             } case none then {
-                st.walk.curMonoFnTid = ztypes.tid.zero
+                st.walk.fn.curMonoFnTid = ztypes.tid.zero
             }
             q: "\{monoNm}.\{mnm}"
             origin: st.reg.genericOriginOf tid: monoId
             classTemplateDecl: st.typing.declIdOfType typeId: origin
-            mgen: st.walk.curMonoFnTid
+            mgen: st.walk.fn.curMonoFnTid
             if mgen.notZero when (st.reg.isGenericOf tid: mgen) then {
                 # a method with type parameters of its own is walked per instance
                 # of it, the instance's own arguments bound beside the type's
@@ -2246,14 +2247,14 @@ stampOneClassMono: function {
         collectOwedMembers :st :ast :clsOpId :monoId names: mNames ops: mOps
     }
     noteInstanceErrors :st :ast mono: monoId from: errsBefore
-    st.walk.synthLabel = prevL.take
-    st.walk.synthOwnerUnit = prevOwnerUnit
-    st.walk.synthOwnerName = prevOwnerName
-    st.walk.currentThisTid = prevT
-    st.walk.curMonoFnTid = ztypes.tid.zero
+    st.walk.fn.synthLabel = prevL.take
+    st.walk.fn.synthOwnerUnit = prevOwnerUnit
+    st.walk.fn.synthOwnerName = prevOwnerName
+    st.walk.fn.currentThisTid = prevT
+    st.walk.fn.curMonoFnTid = ztypes.tid.zero
     st.typing.curMonoStamp = ztypes.tid.zero
     st.mode = savedMode
-    st.walk.monoParamSubst = IdMapV ztypes.tid v: ztypes.tid
+    st.walk.fn.monoParamSubst = IdMapV ztypes.tid v: ztypes.tid
     st.pop
     recordMintedBy :st :monoId :minted
 }
@@ -2280,7 +2281,7 @@ stampMemberFnMonos: function {
         minted: st.reg.nextTid
         bindMonoParams :st monoId: t
         st.typing.curMonoStamp = t
-        st.walk.curMonoFnTid = t
+        st.walk.fn.curMonoFnTid = t
         q: st.reg.nameOf tid: t
         st.typing.beginInstanceWalk next: (nextRowOf :ast)
         cfbFr: fnRefAt :ast nid: (instanceBodyAt :st :ast mono: t opId: mop)
@@ -2732,7 +2733,7 @@ instanceNote: function {st: zenv.ZSymbolTable.view ast: Ast.view mono: ztypes.ti
         }
         i = i + 1
     }
-    so: st.walk.monoSite.get key: mono
+    so: st.walk.fn.monoSite.get key: mono
     if so.some then {
         uname: (st.typing.decls.get i: so.unitDecl).name
         un: zast.nameTextAt :ast ref: uname
@@ -2883,7 +2884,7 @@ bindUnitNestedTypes: function {st: zenv.ZSymbolTable monoId: ztypes.tid} is {
             if org.notZero when (
                 (st.reg.typetypeOf typeId: org) != ztypes.ztypetype.functionType
             ) then {
-                st.walk.monoParamSubst.set key: org value: rw.tid
+                st.walk.fn.monoParamSubst.set key: org value: rw.tid
             }
         }
     }
@@ -3041,7 +3042,7 @@ walkUnitMonoFns: function {
     savedMode: st.mode
     st.mode.genericWalk = true
     st.pushScope parent: scope node: zast.nodeid
-    st.walk.monoParamSubst = IdMapV ztypes.tid v: ztypes.tid
+    st.walk.fn.monoParamSubst = IdMapV ztypes.tid v: ztypes.tid
     {
         bindMonoParams :st :monoId
         bindUnitNestedTypes :st :monoId
@@ -3049,10 +3050,10 @@ walkUnitMonoFns: function {
     idxs: ListVal u64
     collectOwedUnitFns :st :ast :bodyIds :monoId :idxs
     st.typing.curMonoStamp = monoId
-    prevL: st.walk.synthLabel.copy
-    prevOwnerUnit: st.walk.synthOwnerUnit
-    prevOwnerName: st.walk.synthOwnerName
-    prevT: st.walk.currentThisTid
+    prevL: st.walk.fn.synthLabel.copy
+    prevOwnerUnit: st.walk.fn.synthOwnerUnit
+    prevOwnerName: st.walk.fn.synthOwnerName
+    prevT: st.walk.fn.currentThisTid
     for idxs.length > 0 loop {
         for each bidx: idxs loop {
             memberId: zast.kidAt kids: ast.kids span: bodyIds i: bidx
@@ -3064,11 +3065,11 @@ walkUnitMonoFns: function {
                 match (
                     mfo
                 ) case some then {
-                    st.walk.curMonoFnTid = mfo
+                    st.walk.fn.curMonoFnTid = mfo
                 } case none then {
-                    st.walk.curMonoFnTid = ztypes.tid.zero
+                    st.walk.fn.curMonoFnTid = ztypes.tid.zero
                 }
-                ugen: st.walk.curMonoFnTid
+                ugen: st.walk.fn.curMonoFnTid
                 if ugen.notZero when (st.reg.isGenericOf tid: ugen) then {
                     # a function with type parameters of its own is walked per
                     # instance of it, the instance's own arguments bound beside
@@ -3110,14 +3111,14 @@ walkUnitMonoFns: function {
         idxs = ListVal u64
         collectOwedUnitFns :st :ast :bodyIds :monoId :idxs
     }
-    st.walk.synthLabel = prevL.take
-    st.walk.synthOwnerUnit = prevOwnerUnit
-    st.walk.synthOwnerName = prevOwnerName
-    st.walk.currentThisTid = prevT
-    st.walk.curMonoFnTid = ztypes.tid.zero
+    st.walk.fn.synthLabel = prevL.take
+    st.walk.fn.synthOwnerUnit = prevOwnerUnit
+    st.walk.fn.synthOwnerName = prevOwnerName
+    st.walk.fn.currentThisTid = prevT
+    st.walk.fn.curMonoFnTid = ztypes.tid.zero
     st.typing.curMonoStamp = ztypes.tid.zero
     st.mode = savedMode
-    st.walk.monoParamSubst = IdMapV ztypes.tid v: ztypes.tid
+    st.walk.fn.monoParamSubst = IdMapV ztypes.tid v: ztypes.tid
     st.pop
     recordMintedBy :st :monoId :minted
     noteInstanceErrors :st :ast mono: monoId from: errsBefore

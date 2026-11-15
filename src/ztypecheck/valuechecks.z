@@ -2234,7 +2234,7 @@ valtypeParamIsCopy: function {
 } out bool is {
     if (st.reg.variableOriginOf id: vid) != ztypes.zvarorigin.param then return false
     if (st.reg.isValtypeOf tid: (st.reg.variableTypeOf id: vid)).not then return false
-    fn: st.walk.currentFnTid
+    fn: st.walk.fn.currentFnTid
     if fn.isZero then return false
     return (st.typing.declOwnershipOfId parentTypeId: fn :nameId).none
 }
@@ -2435,7 +2435,7 @@ mintRepointCompanion: function {
     borrowVid: ztypes.vid
 } out ztypes.vid is {
     none: ztypes.vid
-    if st.walk.currentGenTid.notZero then return none
+    if st.walk.fn.currentGenTid.notZero then return none
     io: st.openIndexOf scope: (st.scopeOfVar vid: borrowVid)
     if io.none then return none
     tn: st.walk.nextTempId
@@ -3218,7 +3218,7 @@ withValueCrossesSuspension: function {
     withnode: withref
     own: ztypes.zownership
 } out bool is {
-    if st.walk.currentGenTid.isZero then return false
+    if st.walk.fn.currentGenTid.isZero then return false
     if own != ztypes.zownership.owned then return false
     return (zast.yieldCountIn :ast nid: withnode.body) > 0
 }
@@ -3355,15 +3355,15 @@ mintGenField: function {
     name: StringView
     tid: ztypes.tid
 } out zast.nameid is {
-    st.walk.genSpillNext = st.walk.genSpillNext + 1
+    st.walk.fn.genSpillNext = st.walk.fn.genSpillNext + 1
     fnm: "#".string
     fnm.append name
-    sfx: "_\{st.walk.genSpillNext}"
+    sfx: "_\{st.walk.fn.genSpillNext}"
     fnm.append sfx
     fnId: zast.poolSet pool: ast.names text: fnm.stringView
     (
         st.typing.declSynthMemberTyped
-        parentTypeId: st.walk.currentGenTid
+        parentTypeId: st.walk.fn.currentGenTid
         nameId: fnId
         kind: ztyping.declkind.fieldDecl
         childTypeId: tid
@@ -3375,12 +3375,12 @@ mintGenField: function {
         (
             st.typing.setChildFnptrField
             pool: ast.names
-            parentTypeId: st.walk.currentGenTid
+            parentTypeId: st.walk.fn.currentGenTid
             name: fnm.stringView
         )
     }
     if (st.reg.isReftypeOf :tid) when (st.reg.needsDestructor typeId: tid) then {
-        st.reg.setNeedsDestructor typeId: st.walk.currentGenTid
+        st.reg.setNeedsDestructor typeId: st.walk.fn.currentGenTid
     }
     return fnId
 }
@@ -3422,7 +3422,7 @@ mintForSpillFields: function {
             return
         }
     }
-    if itT == st.walk.currentGenTid then return
+    if itT == st.walk.fn.currentGenTid then return
     gf: mintGenField :st :ast name: "gi" tid: itT
     st.typing.forIterableField.set key: cond.nid value: gf
 }
@@ -4373,7 +4373,7 @@ bindGenLocal: function {
     nameId: zast.nameid
     value: zast.nodeid
 } is {
-    if st.walk.currentGenTid.isZero then return
+    if st.walk.fn.currentGenTid.isZero then return
     vt: st.reg.variableTypeOf id: vid
     if own == ztypes.zownership.borrowed when (isViewFamilyTid :ast :st tid: vt).not then {
         noteGenBorrowBinding :st :ast :own :nameId :value
@@ -4396,7 +4396,7 @@ noteGenBorrowBinding: function {
     value: zast.nodeid
 } is {
     if own != ztypes.zownership.borrowed then return
-    if st.walk.currentGenTid.isZero then return
+    if st.walk.fn.currentGenTid.isZero then return
     if (valueIsYieldCall :ast nid: value) then return
     st.noteGenBorrow :nameId
 }
@@ -4469,8 +4469,8 @@ caseGenericSubjectTid: function {
                 declOfUnitDef
                 :st
                 scope: st.curScope
-                unitDecl: st.walk.synthOwnerUnit
-                nameId: st.walk.synthOwnerName
+                unitDecl: st.walk.fn.synthOwnerUnit
+                nameId: st.walk.fn.synthOwnerName
             )
         }
         if gdecl.notZero when (
@@ -4552,7 +4552,7 @@ caseSubjectTid: function {
 # is (bindGenLocal): a field of the subject's type, freed by the instance's
 # destructor if the body never reaches the temporary's own destroy.
 genSubjectField: function {st: zenv.ZSymbolTable ast: Ast nid: zast.nodeid tid: ztypes.tid} is {
-    if st.walk.currentGenTid.isZero then return
+    if st.walk.fn.currentGenTid.isZero then return
     tv: st.typing.tempOf.get key: nid
     if tv.none then return
     fid: mintGenField :st :ast name: "m" :tid

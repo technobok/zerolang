@@ -1665,7 +1665,7 @@ checkReturnRooting: function {
 } out bool is {
     if argT.isZero then return false
     cid: callNodeIdOf n: (ast.nodes.get i: arg.operation)
-    if st.walk.currentReturnMarker.isReference then {
+    if st.walk.fn.currentReturnMarker.isReference then {
         okRef: false
         # a call, and a control value (what its arms keep, pendReturnedPins), is
         # rooted where its pins are
@@ -1690,12 +1690,12 @@ checkReturnRooting: function {
                 msg: m1
             )
         }
-        if okRef when (st.walk.currentReturnMarker == ztypes.zparamownership.viewMode).not then {
+        if okRef when (st.walk.fn.currentReturnMarker == ztypes.zparamownership.viewMode).not then {
             checkBorrowResultSource :st :ast :arg :cid :marker
         }
         return okRef.not
     }
-    if st.walk.currentFnPins.not then return false
+    if st.walk.fn.currentFnPins.not then return false
     if cid.isZero then return false
     cr: statics.callRefAt :ast nid: cid
     isCtor: false
@@ -1929,9 +1929,9 @@ checkReturnCarries: function {
                 :ast
                 :st
                 tid: argT
-            ) when st.walk.currentFnPins.not when st.walk.currentReturnMarker.isReference.not then {
+            ) when st.walk.fn.currentFnPins.not when st.walk.fn.currentReturnMarker.isReference.not then {
                 pwn: zast.nameTextAt :ast ref: rbn
-                pfn: declWrittenName :st :ast tid: st.walk.currentFnTid
+                pfn: declWrittenName :st :ast tid: st.walk.fn.currentFnTid
                 pm: "Cannot return '\{pwn}': it views what the caller passed, which the caller cannot see because '\{pfn}' is `out`, not `outx`"
                 (
                     addError
@@ -1958,8 +1958,8 @@ checkReturnCarries: function {
             if held.length > 0 then {
                 wn: zast.nameTextAt :ast ref: rbn
                 rootPhrase: lockRootPhrase :st :ast nameId: (valuechecks.pinRootAt pins: held i: 0)
-                if st.walk.currentFnPins.not then {
-                    fnNm: declWrittenName :st :ast tid: st.walk.currentFnTid
+                if st.walk.fn.currentFnPins.not then {
+                    fnNm: declWrittenName :st :ast tid: st.walk.fn.currentFnTid
                     m1: "Cannot return '\{wn}': it holds locks on \{rootPhrase}, which the caller cannot see because '\{fnNm}' is `out`, not `outx`"
                     (
                         addError
@@ -2002,8 +2002,8 @@ checkReturnCarries: function {
     if (reportReturnKeepsDyingStorage :st :ast :arg :rpins) then return
     # a returned call: its pending pins are what the result keeps locked
     if (callNodeIdOf n: an).isZero when ctlRet.not then return
-    if st.walk.currentFnPins then return
-    if st.walk.currentReturnMarker.isReference then return
+    if st.walk.fn.currentFnPins then return
+    if st.walk.fn.currentReturnMarker.isReference then return
     if rpins.length == 0 then return
     # found first, reported after: the report takes `st` while the pins are
     # being read through it
@@ -2015,7 +2015,7 @@ checkReturnCarries: function {
     }
     if badPn.notZero then {
         pn: zast.nameTextAt :ast ref: badPn
-        fnNm: declWrittenName :st :ast tid: st.walk.currentFnTid
+        fnNm: declWrittenName :st :ast tid: st.walk.fn.currentFnTid
         what: "this call's result"
         if ctlRet then what = "this value"
         m3: "Cannot return \{what}: it keeps '\{pn}' locked, which the caller cannot see because '\{fnNm}' is `out`, not `outx`"
@@ -2207,7 +2207,7 @@ returnedPins: function {
     if (isControlValue :ast :nid) then {
         retBorrows: (
             (valuechecks.isViewFamilyTid :ast :st tid: argT) or
-            st.walk.currentReturnMarker.isReference
+            st.walk.fn.currentReturnMarker.isReference
         )
         return (
             readValuePins
@@ -5580,8 +5580,8 @@ hoistRows: function {
         ztyping.SynthNode
         nodeid: assignId
         kind: "Assignment"
-        ownerUnit: st.walk.synthOwnerUnit
-        ownerName: st.walk.synthOwnerName
+        ownerUnit: st.walk.fn.synthOwnerUnit
+        ownerName: st.walk.fn.synthOwnerName
         lineno: ln
         colno: co
     )
@@ -5589,8 +5589,8 @@ hoistRows: function {
         ztyping.SynthNode
         nodeid: atomId
         kind: "AtomId"
-        ownerUnit: st.walk.synthOwnerUnit
-        ownerName: st.walk.synthOwnerName
+        ownerUnit: st.walk.fn.synthOwnerUnit
+        ownerName: st.walk.fn.synthOwnerName
         lineno: ln
         colno: co
     )
@@ -6212,7 +6212,7 @@ spelledAsSignature: function {st: zenv.ZSymbolTable.view tid: ztypes.tid} out bo
     fd: st.typing.declIdOfType typeId: tid
     if fd.notZero when (st.typing.decls.get i: fd).fnptrField then return true
     if (st.reg.typetypeOf typeId: tid) != ztypes.ztypetype.functionType then return false
-    return ((st.walk.fnHasBody.get key: tid).or d: false)
+    return ((st.walk.fn.hasBody.get key: tid).or d: false)
 }
 
 # typeArgWrittenName -- a type argument as an application spells it. A function
@@ -6538,7 +6538,7 @@ reportReturnedBareField: function {
     ast: Ast
     arg: argref
 } is {
-    if st.walk.currentReturnMarker.isReference then return
+    if st.walk.fn.currentReturnMarker.isReference then return
     bfn: returnedBareFieldName :ast :st nid: arg.operation
     if bfn.length == 0 then return
     fieldN: ast.nodes.get i: arg.operation
@@ -6609,7 +6609,7 @@ recordReturnedOwnedLocal: function {
 # bare field read is, and one that yields storage a call pinned to its source as a
 # returned borrowed name is: the owner still frees what the return hands back.
 refuseReturnedArms: function {st: zenv.ZSymbolTable ast: Ast nid: zast.nodeid} is {
-    if st.walk.currentReturnMarker.isReference then return
+    if st.walk.fn.currentReturnMarker.isReference then return
     refuseReturnedArmReferences :st :ast :nid
     leaves: ListVal zast.nodeid
     armBorrowedLeaves :st :ast :nid into: leaves
@@ -6667,7 +6667,7 @@ returnOwnedLocal: function {
 } is {
     # a borrowed name returned bare hands the caller storage its source still
     # owns (returnHandsOnStorage)
-    lends: st.walk.currentReturnMarker.isReference
+    lends: st.walk.fn.currentReturnMarker.isReference
     if (returnHandsOnStorage :st :tid) when lends.not when (isBorrowedVar :st :vid) then (
         reportReturnedBorrowedName
         :st
@@ -6716,9 +6716,9 @@ checkReturnedValue: function {
 } is {
     # a function answering nothing may hand on what a call answering nothing
     # gives (`return j.call` where `call` is `out null`), as `null` itself
-    if st.walk.currentReturnsNothing when (resolve.returnsNullValue :st :unitDecl :ast :arg
+    if st.walk.fn.currentReturnsNothing when (resolve.returnsNullValue :st :unitDecl :ast :arg
     ) then return
-    if st.walk.currentReturnsNothing then {
+    if st.walk.fn.currentReturnsNothing then {
         opn: ast.nodes.get i: arg.operation
         (
             addErrorWithHint
@@ -6736,7 +6736,7 @@ checkReturnedValue: function {
     }
     errR: st.typing.errors.length
     argT: ztypes.tid
-    if st.walk.currentReturnMarker.isReference then {
+    if st.walk.fn.currentReturnMarker.isReference then {
         argT = checkValueAt :st :unitDecl :ast nid: arg.operation
     } else {
         argT = valuechecks.checkMovedValueAt :st :unitDecl :ast nid: arg.operation owning: true
@@ -6750,7 +6750,7 @@ checkReturnedValue: function {
     # which the return-type check below already runs.
     if argT.u64 == 0 when (
         st.typing.errors.length == errR
-    ) when st.walk.currentReturnTypeId.notZero then {
+    ) when st.walk.fn.currentReturnTypeId.notZero then {
         valuechecks.reportUnresolvedValue :st :unitDecl :ast nid: arg.operation
     }
     reportReturnedBareField :st :ast :arg
@@ -7380,8 +7380,8 @@ checkImplicitReturn: function {
     # value because of that failure, which is not a second one to report
     bodyErrs: u64
 } is {
-    expR: st.walk.currentReturnTypeId
-    if expR.isZero or defn.body.isZero or st.walk.currentReturnsNothing then return
+    expR: st.walk.fn.currentReturnTypeId
+    if expR.isZero or defn.body.isZero or st.walk.fn.currentReturnsNothing then return
     # a generator's body yields its values; its synthesised `.call` returns none
     if (bodies.generatorCallOf typing: st.typing nid: defn.nid).notZero then return
     lsid: lastStmtLineIdAt :ast oId: defn.body
