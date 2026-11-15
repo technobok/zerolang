@@ -905,8 +905,7 @@ quotedAfter: function {code: StringView needle: StringView into: Set String} is 
         o: (code.substring from: at to: code.length).indexOf :needle
         if o.none then return
         s: at + o + needle.length
-        e: s
-        for e < code.length while (isNameByte b: ((code.byteAt i: e).or d: 0)) loop e = e + 1
+        e: znativedecls.nameEnd text: code from: s
         if e > s when ((code.byteAt i: e).or d: 0) == ascii.doubleQuote then (
             into.add
             item: (code.substring from: s to: e).string
@@ -926,14 +925,13 @@ emitterIdents: function {code: StringView} out List String is {
         startOk: (ascii.isWord :b) and (ascii.isDigit :b).not
         if startOk when i > 0 then {
             pb: (code.byteAt i: i - 1).or d: 0
-            if (isNameByte b: pb) or (pb == 0c\\) then startOk = false
+            if (znativedecls.isNameByte b: pb) or (pb == 0c\\) then startOk = false
         }
         if startOk.not then {
             i = i + 1
             continue
         }
-        e: i
-        for e < code.length while (isNameByte b: ((code.byteAt i: e).or d: 0)) loop e = e + 1
+        e: znativedecls.nameEnd text: code from: i
         r.append from: (code.substring from: i to: e).string
         i = e
     }
@@ -1012,12 +1010,11 @@ identsOf: function {text: StringView} out List String is {
     i: u64
     for i < text.length loop {
         b: (text.byteAt :i).or d: 0
-        if (isNameByte :b).not or (ascii.isDigit :b) then {
+        if (znativedecls.isNameByte :b).not or (ascii.isDigit :b) then {
             i = i + 1
             continue
         }
-        e: i
-        for e < text.length while (isNameByte b: ((text.byteAt i: e).or d: 0)) loop e = e + 1
+        e: znativedecls.nameEnd :text from: i
         r.append from: (text.substring from: i to: e).string
         i = e
     }
@@ -1108,10 +1105,6 @@ wordEnd: function {text: StringView from: u64} out u64 is {
     return i
 }
 
-# isNameByte -- a letter, a digit, `_` or `@`
-isNameByte: function {b: u8} out bool is {
-    return (ascii.isWord :b) or (b == 0c@)
-}
 
 # definedNames -- the names a piece's C defines: its functions and prototypes,
 # its statics, typedefs and macros
@@ -1273,16 +1266,14 @@ defineName: function {line: StringView} out String is {
     if (startsWord line: d word: "define").not then return "".string
     p: skipSpaces text: d from: 6
     if p == 6 then return "".string
-    e: p
-    for e < d.length while (isNameByte b: ((d.byteAt i: e).or d: 0)) loop e = e + 1
+    e: znativedecls.nameEnd text: d from: p
     return (d.substring from: p to: e).string
 }
 
 # closeName -- NAME in `} NAME;` at the start of `line`
 closeName: function {line: StringView} out String is {
     p: skipSpaces text: line from: 1
-    e: p
-    for e < line.length while (isNameByte b: ((line.byteAt i: e).or d: 0)) loop e = e + 1
+    e: znativedecls.nameEnd text: line from: p
     if e == p then return "".string
     q: skipSpaces text: line from: e
     if ((line.byteAt i: q).or d: 0) != ascii.semicolon then return "".string
@@ -1297,7 +1288,7 @@ structTypedefName: function {line: StringView} out String is {
     j: line.length - 1
     for j > 0 while ((line.byteAt i: j - 1).or d: 0) == ascii.space loop j = j - 1
     e: j
-    for j > 0 while (isNameByte b: ((line.byteAt i: j - 1).or d: 0)) loop j = j - 1
+    j = znativedecls.nameStart text: line to: e
     if j == e then return "".string
     s: j
     for j > 0 while ((line.byteAt i: j - 1).or d: 0) == ascii.space loop j = j - 1
@@ -1321,8 +1312,7 @@ macroStaticName: function {line: StringView} out String is {
     ) loop c = c + 1
     if ((line.byteAt i: c).or d: 0) != ascii.parenClose then return "".string
     p: skipSpaces text: line from: c + 1
-    e: p
-    for e < line.length while (isNameByte b: ((line.byteAt i: e).or d: 0)) loop e = e + 1
+    e: znativedecls.nameEnd text: line from: p
     if e == p then return "".string
     q: skipSpaces text: line from: e
     b: (line.byteAt i: q).or d: 0
@@ -1375,8 +1365,7 @@ pointerAt: function {line: StringView open: u64} out String is {
 # text there has no such shape
 starName: function {line: StringView from: u64} out String is {
     p: skipSpaces text: line from: from + 1
-    e: p
-    for e < line.length while (isNameByte b: ((line.byteAt i: e).or d: 0)) loop e = e + 1
+    e: znativedecls.nameEnd text: line from: p
     if e == p then return "".string
     q: skipSpaces text: line from: e
     if ((line.byteAt i: q).or d: 0) != ascii.parenClose then return "".string
@@ -1415,7 +1404,7 @@ calledName: function {text: StringView} out String is {
                 (((text.byteAt i: j - 1).or d: 0) == 0c\t)
             ) loop j = j - 1
             e: j
-            for j > 0 while (isNameByte b: ((text.byteAt i: j - 1).or d: 0)) loop j = j - 1
+            j = znativedecls.nameStart :text to: e
             if e > j then return (text.substring from: j to: e).string
         }
         i = i + 1
