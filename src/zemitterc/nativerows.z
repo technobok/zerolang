@@ -502,7 +502,9 @@ isColGetMutRef: function {
 } out bool is {
     ownG: reg.ownerTidOf tid: fid
     if ownG.isZero then return false
-    isLG: (isListOriginOf :reg :ctx tid: ownG) or (isListViewOriginOf :reg :ctx tid: ownG)
+    isLG: (
+        (types.isListOriginOf :reg :ctx tid: ownG) or (types.isListViewOriginOf :reg :ctx tid: ownG)
+    )
     if isLG.not then return false
     if (
         (typing.declNameOf declId: (ztypecheck.templateDeclOf :reg :typing tid: fid)) !=
@@ -953,7 +955,7 @@ elemRefByPtr: function {
     # a Set or a Map element is already a pointer, so a copy of it IS the reference
     if (isHeapPtrCollection :reg :typing :ctx :tid) then return false
     ce: chaseAggregateTypedef :reg :typing :ctx :tid
-    if (isCollectionOriginTid :ctx originTid: (originTidOf :reg tid: ce)) then return true
+    if (types.isCollectionOriginTid :ctx originTid: (originTidOf :reg tid: ce)) then return true
     tt: reg.typetypeOf typeId: tid
     if tt == ztypes.ztypetype.recordType then return true
     return tt == ztypes.ztypetype.variantType
@@ -1047,12 +1049,12 @@ tmplSectionDestroys: function {
         names: pNames
         tids: pTids
     )
-    plan: rtKeptPlan :ctx :mono id: ti
+    plan: types.rtKeptPlan :ctx :mono id: ti
     hits: ListVal ztypes.tid
     nativepieces.destroyKeyTypes :ast :reg :typing :ctx inst: mono :plan :pNames :pTids acc: hits
     for each t: hits loop {
-        dt: destroyTargetTid :reg :typing :ctx tid: t
-        if dt.notZero when dt != ctx.strTid then noteDestroyUse :reg :typing :ctx tid: dt
+        dt: types.destroyTargetTid :reg :typing :ctx tid: t
+        if dt.notZero when dt != ctx.strTid then types.noteDestroyUse :reg :typing :ctx tid: dt
     }
 }
 
@@ -1092,7 +1094,7 @@ memberSigReachEdges: function {
             (ztypecheck.methodReturnOf :reg :typing mid: rw.tid).or
             d: ztypes.tid.zero
         )
-        recFieldIds :reg :typing tid: rw.tid ids: acc nameIds: names
+        types.recFieldIds :reg :typing tid: rw.tid ids: acc nameIds: names
         for at < acc.length loop {
             acc.set i: at val: (ownSignatureTid :reg tid: (acc.get i: at))
             at = at + 1
@@ -1112,8 +1114,8 @@ containerReachEdges: function {
     # what a container's member sections spell, for the members written C
     # calls (memberUses): a set's iterator, a map's `get` answer (`getv`
     # forwards to `get`) and a hashed map's `remove`
-    isSet: (isSetOriginOf :reg :ctx :tid) or (isIdSetOriginOf :reg :ctx :tid)
-    isMap: (isMapOriginOf :reg :ctx :tid) or (isIdMapOriginOf :reg :ctx :tid)
+    isSet: (types.isSetOriginOf :reg :ctx :tid) or (types.isIdSetOriginOf :reg :ctx :tid)
+    isMap: (types.isMapOriginOf :reg :ctx :tid) or (types.isIdMapOriginOf :reg :ctx :tid)
     walksSet: memberUsed :ctx mono: tid member: memberWord.slot.iterateAll
     usesGet: (
         (memberUsed :ctx mono: tid member: memberWord.slot.getOne) or
@@ -1126,7 +1128,7 @@ containerReachEdges: function {
     if isMap when usesGet then {
         acc.append (monoMethodReturn :reg :typing monoId: tid nameId: zast.wellKnown.slot.wkGet)
     }
-    if (isMapOriginOf :reg :ctx :tid) when usesRemove then {
+    if (types.isMapOriginOf :reg :ctx :tid) when usesRemove then {
         acc.append (monoMethodReturn :reg :typing monoId: tid nameId: zast.wellKnown.slot.wkRemove)
     }
     # a map's walks: each one's cursor, where written C calls it
@@ -1373,8 +1375,8 @@ rtOptionKeys: function {
     ).not then return
     # an option view's enum is written with its struct (emitOptionViewMono), so
     # spelling its constants is no use of it to record
-    sv: tagConstOf :ast :ctx :reg :typing :tid armId: zast.wellKnown.slot.wkSome
-    nv: tagConstOf :ast :ctx :reg :typing :tid armId: zast.wellKnown.slot.wkNone
+    sv: types.tagConstOf :ast :ctx :reg :typing :tid armId: zast.wellKnown.slot.wkSome
+    nv: types.tagConstOf :ast :ctx :reg :typing :tid armId: zast.wellKnown.slot.wkNone
     rtKey :ctx :keys name: sk.stringView val: sv.stringView
     rtKey :ctx :keys name: nk.stringView val: nv.stringView
 }
@@ -1485,7 +1487,8 @@ emitArrayMono: function {
     lenStr: monoLengthText :reg :monoId
     createBody: "    z_\{nm}_t _this = {0};"
     eqBody: String
-    if (ctx.eqUsed.has item: monoId) when (eqGenerated :ast :reg :typing :ctx tid: monoId) then (
+    if (ctx.eqUsed.has item: monoId) when (types.eqGenerated :ast :reg :typing :ctx tid: monoId
+    ) then (
         arrayEqBody
         :ast
         :reg
@@ -1695,7 +1698,7 @@ emitListMono: function {
         kt: RtKeys.create
         rtKey :ctx keys: kt name: "NAME" val: nm.stringView
         rtKey :ctx keys: kt name: "ELEM_T" val: ect.stringView
-        delems: listElemsDestroyC :reg :typing :ctx :eid
+        delems: types.listElemsDestroyC :reg :typing :ctx :eid
         rtKey :ctx keys: kt name: "DESTROY_ELEMS" val: delems.stringView
         lvm: listviewMethods :ctx :reg :typing :monoId nm: nm.stringView ect: ect.stringView
         rtKey :ctx keys: kt name: "LISTVIEW_METHODS" val: lvm.stringView
@@ -2098,7 +2101,7 @@ emitListSliceOnDemand: function {
         # a view's slice is a view of the same instance: the member returns
         # `type`, and an instance minted while the library is still being read
         # carries the template's member, which records no return id for it
-        if rt.isZero when (isListViewOriginOf :reg :ctx tid: monoId) then rt = monoId
+        if rt.isZero when (types.isListViewOriginOf :reg :ctx tid: monoId) then rt = monoId
         if rt.notZero then {
             lvc: emitplan.ctxCname :ctx tid: rt
             emitColSlice :ctx :nm lvc: lvc.stringView :kind :buf
@@ -2695,7 +2698,7 @@ emitSetMono: function {
 } is {
     nm: cbaseNoPrefix :ctx tid: monoId
     mcr: cUpperOf text: nm.stringView
-    elemTid: setElemType :typing :monoId
+    elemTid: types.setElemType :typing :monoId
     itemT: cTypeForNameTid :ast :reg :typing :ctx tid: elemTid
     ekind: keyHashKind :reg :typing :ctx tid: elemTid
     isStr: ekind.nativeString
@@ -2923,7 +2926,7 @@ mapValFreeStmt: function {
     slot: StringView
 } out String is {
     if valTid.isZero then return "".string
-    vfs: destroyFnC :reg :typing :ctx tid: valTid
+    vfs: types.destroyFnC :reg :typing :ctx tid: valTid
     if vfs.length == 0 then return vfs
     vfs.append "("
     vfs.append (
@@ -2931,7 +2934,7 @@ mapValFreeStmt: function {
         :reg
         :typing
         :ctx
-        tid: (destroyTargetTid :reg :typing :ctx tid: valTid)
+        tid: (types.destroyTargetTid :reg :typing :ctx tid: valTid)
         nm: slot
     )
     vfs.append ");"
@@ -3069,7 +3072,7 @@ emitMapMono: function {
     ov: cbaseNoPrefix :ctx tid: ovId
     ovSome: spelledTagConst :ast :ctx :reg :typing tid: ovId armId: zast.wellKnown.slot.wkSome
     ovNone: spelledTagConst :ast :ctx :reg :typing tid: ovId armId: zast.wellKnown.slot.wkNone
-    keyTid: mapKeyType :typing :monoId
+    keyTid: types.mapKeyType :typing :monoId
     keyT: cTypeForNameTid :ast :reg :typing :ctx tid: keyTid
     kkind: keyHashKind :reg :typing :ctx tid: keyTid
     keyIsStr: kkind.nativeString
@@ -3349,7 +3352,7 @@ emitIdMapMono: function {
     ovNone: spelledTagConst :ast :ctx :reg :typing tid: ovId armId: zast.wellKnown.slot.wkNone
     valTid: mapValType :typing :monoId
     valT: cTypeForNameTid :ast :reg :typing :ctx tid: valTid
-    keyTid: mapKeyType :typing :monoId
+    keyTid: types.mapKeyType :typing :monoId
     keyT: cTypeForNameTid :ast :reg :typing :ctx tid: keyTid
     vfDestroy: mapValFreeStmt :reg :typing :ctx :valTid slot: "p->entries[i].value"
     vfDup: (
@@ -3550,7 +3553,7 @@ emitIdSetMono: function {
 } is {
     nm: cbaseNoPrefix :ctx tid: monoId
     mcr: cUpperOf text: nm.stringView
-    elemTid: setElemType :typing :monoId
+    elemTid: types.setElemType :typing :monoId
     itemT: cTypeForNameTid :ast :reg :typing :ctx tid: elemTid
     siId: monoMethodReturn :reg :typing :monoId nameId: zast.wellKnown.slot.wkIterate
     if siId.isZero then return
@@ -3620,7 +3623,7 @@ tmplInstArgIds: function {
             sig: ListVal ztypes.tid
             sig.append (reg.returnTypeOf tid: rw.tid)
             names: ListVal zast.nameid
-            recFieldIds :reg :typing tid: rw.tid ids: sig nameIds: names
+            types.recFieldIds :reg :typing tid: rw.tid ids: sig nameIds: names
             for each st: sig loop {
                 it: ownSignatureTid :reg tid: st
                 if it != monoId when (tmplSigEdge :reg :typing :ctx tid: it) then acc.append it
@@ -3649,14 +3652,14 @@ emitMonoById: function {
     buf: String.borrow
 } is {
     if (originIsTid :reg tid: monoId originTid: (ctx.origins.get i: family.slot.optionval)) then {
-        emitOneVariant :ast :reg :typing :ctx tid: monoId :buf
+        types.emitOneVariant :ast :reg :typing :ctx tid: monoId :buf
         return
     }
     if (originIsTid :reg tid: monoId originTid: (ctx.origins.get i: family.slot.resultval)) then {
-        emitOneVariant :ast :reg :typing :ctx tid: monoId :buf
+        types.emitOneVariant :ast :reg :typing :ctx tid: monoId :buf
         return
     }
-    if (isListViewOriginOf :reg :ctx tid: monoId) then {
+    if (types.isListViewOriginOf :reg :ctx tid: monoId) then {
         emitListViewMono :ast :reg :typing :ctx :monoId :buf
         return
     }
@@ -3668,7 +3671,7 @@ emitMonoById: function {
         emitArrayMono :ast :reg :typing :ctx :monoId :buf
         return
     }
-    if (isListOriginOf :reg :ctx tid: monoId) then {
+    if (types.isListOriginOf :reg :ctx tid: monoId) then {
         emitListMono :ast :reg :typing :ctx :monoId :buf
         return
     }
@@ -3676,19 +3679,19 @@ emitMonoById: function {
         emitStaticListMono :ast :reg :typing :ctx :monoId :buf
         return
     }
-    if (isSetOriginOf :reg :ctx tid: monoId) then {
+    if (types.isSetOriginOf :reg :ctx tid: monoId) then {
         emitSetMono :ast :reg :typing :ctx :monoId :buf
         return
     }
-    if (isMapOriginOf :reg :ctx tid: monoId) then {
+    if (types.isMapOriginOf :reg :ctx tid: monoId) then {
         emitMapMono :ast :reg :typing :ctx :monoId :buf
         return
     }
-    if (isIdSetOriginOf :reg :ctx tid: monoId) then {
+    if (types.isIdSetOriginOf :reg :ctx tid: monoId) then {
         emitIdSetMono :ast :reg :typing :ctx :monoId :buf
         return
     }
-    if (isIdMapOriginOf :reg :ctx tid: monoId) then {
+    if (types.isIdMapOriginOf :reg :ctx tid: monoId) then {
         emitIdMapMono :ast :reg :typing :ctx :monoId :buf
         return
     }
@@ -4235,9 +4238,9 @@ emitCollectionMonos: function {
     # reachable system PROTOCOLs (Reader/Writer/Closer/Seeker) -- emitted after
     # the collection monos their vtable function-pointer signatures reference.
     for each spId: work.wProto loop {
-        emitOneProtocol :ast :reg :typing :ctx tid: spId :buf
+        types.emitOneProtocol :ast :reg :typing :ctx tid: spId :buf
     }
-    emitUserGenericInstances :ast :reg :typing :ctx :work :buf
+    types.emitUserGenericInstances :ast :reg :typing :ctx :work :buf
 }
 
 # staticListElemCType -- the C type of the elements of list row `row`: the C
