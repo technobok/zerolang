@@ -135,26 +135,26 @@ pushNarrow: function {
     prevF: ListVal exprfacts
     prevT: ListVal ztypes.tid
 } is {
-    pv: varEntryGet xs: ctx.narrowBox :vid
+    pv: varEntryGet xs: ctx.narrow.box :vid
     prevV.append pv
-    prevF.append (varEntryFactsOf xs: ctx.narrowBox :vid)
-    prevT.append ((varTidGet xs: ctx.narrowTid :vid).or d: ztypes.tid.zero)
-    stmtblocks.varEntrySet xs: ctx.narrowBox :vid :val facts: valF
-    stmtblocks.varTidSet xs: ctx.narrowTid :vid :tid
+    prevF.append (varEntryFactsOf xs: ctx.narrow.box :vid)
+    prevT.append ((varTidGet xs: ctx.narrow.tid :vid).or d: ztypes.tid.zero)
+    stmtblocks.varEntrySet xs: ctx.narrow.box :vid :val facts: valF
+    stmtblocks.varTidSet xs: ctx.narrow.tid :vid :tid
 }
 
 # aliasResolvesToSelf -- does `vid` stand for its own name, rather than for a
 # narrowing box or a take alias? The question aliasResolve is asked when the
 # caller wants no text, only the answer; asking it this way copies nothing.
 aliasResolvesToSelf: function {ctx: Ctx.view name: StringView vid: ztypes.vid} out bool is {
-    nb: vidFind xs: ctx.narrowBox :vid
+    nb: vidFind xs: ctx.narrow.box :vid
     if nb > 0 then {
-        eNb: ctx.narrowBox.get i: nb - 1
+        eNb: ctx.narrow.box.get i: nb - 1
         return eNb.val.stringView == name
     }
-    al: vidFind xs: ctx.aliases :vid
+    al: vidFind xs: ctx.narrow.aliases :vid
     if al > 0 then {
-        eAl: ctx.aliases.get i: al - 1
+        eAl: ctx.narrow.aliases.get i: al - 1
         return eAl.val.stringView == name
     }
     return true
@@ -165,13 +165,13 @@ aliasResolvesToSelf: function {ctx: Ctx.view name: StringView vid: ztypes.vid} o
 aliasResolveWith: function {
     ctx: Ctx name: StringView vid: ztypes.vid facts: exprfacts.borrow
 } out String is {
-    nb: vidFind xs: ctx.narrowBox :vid
+    nb: vidFind xs: ctx.narrow.box :vid
     if nb > 0 then {
         noteAliasRead :ctx :vid
-        return (entryText xs: ctx.narrowBox at: nb - 1 :facts)
+        return (entryText xs: ctx.narrow.box at: nb - 1 :facts)
     }
-    al: vidFind xs: ctx.aliases :vid
-    if al > 0 then return (entryText xs: ctx.aliases at: al - 1 :facts)
+    al: vidFind xs: ctx.narrow.aliases :vid
+    if al > 0 then return (entryText xs: ctx.narrow.aliases at: al - 1 :facts)
     return name.string
 }
 
@@ -181,13 +181,13 @@ aliasResolve: function {ctx: Ctx name: StringView vid: ztypes.vid} out String is
     # variable resolves to the narrowed union payload cast, not the un-narrowed
     # binding or a stale for-loop/borrow/take alias -- mirrors emitLocalAtomName.
     # `name` is only what comes back when neither table has an entry.
-    nb: vidFind xs: ctx.narrowBox :vid
+    nb: vidFind xs: ctx.narrow.box :vid
     if nb > 0 then {
         noteAliasRead :ctx :vid
-        return (ctx.narrowBox.get i: nb - 1).val.copy
+        return (ctx.narrow.box.get i: nb - 1).val.copy
     }
-    al: vidFind xs: ctx.aliases :vid
-    if al > 0 then return (ctx.aliases.get i: al - 1).val.copy
+    al: vidFind xs: ctx.narrow.aliases :vid
+    if al > 0 then return (ctx.narrow.aliases.get i: al - 1).val.copy
     return name.string
 }
 
@@ -257,13 +257,13 @@ emitLocalAtomNameWith: function {
     # Probed directly rather than through aliasResolve: that would synthesize a
     # copy of `name` for the no-alias case, which is the common one, only for the
     # comparison below to discard it.
-    nb: vidFind xs: ctx.narrowBox :vid
+    nb: vidFind xs: ctx.narrow.box :vid
     if nb > 0 then {
         noteAliasRead :ctx :vid
-        return (entryText xs: ctx.narrowBox at: nb - 1 :facts)
+        return (entryText xs: ctx.narrow.box at: nb - 1 :facts)
     }
-    al: vidFind xs: ctx.aliases :vid
-    if al > 0 then return (entryText xs: ctx.aliases at: al - 1 :facts)
+    al: vidFind xs: ctx.narrow.aliases :vid
+    if al > 0 then return (entryText xs: ctx.narrow.aliases at: al - 1 :facts)
     return (localnames.localNameText :prog :ctx :vid :name :facts)
 }
 
@@ -287,7 +287,7 @@ narrowingEndedAt: function {
     nid: zast.nodeid
     vid: ztypes.vid
 } out bool is {
-    if (varEntryHas xs: ctx.narrowBox :vid).not then return false
+    if (varEntryHas xs: ctx.narrow.box :vid).not then return false
     stamped: stampIdOf :prog :nid
     if stamped.isZero then return false
     return stamped == (prog.reg.variableTypeOf id: vid)
@@ -302,8 +302,8 @@ wholeLocalName: function {
     vid: ztypes.vid
     facts: exprfacts.borrow
 } out String is {
-    al: vidFind xs: ctx.aliases :vid
-    if al > 0 then return (entryText xs: ctx.aliases at: al - 1 :facts)
+    al: vidFind xs: ctx.narrow.aliases :vid
+    if al > 0 then return (entryText xs: ctx.narrow.aliases at: al - 1 :facts)
     return (localnames.localNameText :prog :ctx :vid :name :facts)
 }
 
@@ -333,8 +333,8 @@ aliasResolveAt: function {
     vid: ztypes.vid
 } out String is {
     if (narrowingEndedAt :prog :ctx :nid :vid).not then return (aliasResolve :ctx :name :vid)
-    al: vidFind xs: ctx.aliases :vid
-    if al > 0 then return (ctx.aliases.get i: al - 1).val.copy
+    al: vidFind xs: ctx.narrow.aliases :vid
+    if al > 0 then return (ctx.narrow.aliases.get i: al - 1).val.copy
     return name.string
 }
 
@@ -349,9 +349,9 @@ aliasResolvesToSelfAt: function {
     if (narrowingEndedAt :prog :ctx :nid :vid).not then {
         return (aliasResolvesToSelf :ctx :name :vid)
     }
-    al: vidFind xs: ctx.aliases :vid
+    al: vidFind xs: ctx.narrow.aliases :vid
     if al == 0 then return true
-    return (ctx.aliases.get i: al - 1).val.stringView == name
+    return (ctx.narrow.aliases.get i: al - 1).val.stringView == name
 }
 
 # emitPrintViaStringView -- an atom printed through its type's own `stringView`
@@ -484,7 +484,11 @@ emitPrintAtom: function {
 # variable that is out of scope here. Drop it before the binding legs
 # re-establish one; anything that is not a borrow alias is left alone.
 dropStaleBorrowAlias: function {ctx: Ctx vid: ztypes.vid} is {
-    if (varEntryHasPtr xs: ctx.aliases :vid) then stmtblocks.vidRemove xs: ctx.aliases :vid
+    if (varEntryHasPtr xs: ctx.narrow.aliases :vid) then (
+        stmtblocks.vidRemove
+        xs: ctx.narrow.aliases
+        :vid
+    )
 }
 
 # emitReassignStmt -- `x = <value>`: the old value is freed where the binding owns
@@ -556,7 +560,7 @@ emitRepointStmt: function {
     ptr: String
     tv: tgt.stringView
     # a borrow alias re-points the pointer it reads through
-    ap: varEntryPtrOf xs: ctx.aliases vid: xv
+    ap: varEntryPtrOf xs: ctx.narrow.aliases vid: xv
     if ap.length > 0 then {
         ptr.append ap
     } else if (isPtrVid :ctx vid: xv) then {
@@ -637,7 +641,7 @@ emitReassignLvalue: function {
         rbNm: atomTextOf :prog :n
         if rbNm.length > 0 then {
             rbVid: atomVid :prog nid: (atomNodeId :n)
-            if rbVid.notZero when (varEntryGet xs: ctx.narrowBox vid: rbVid).length > 0 then {
+            if rbVid.notZero when (varEntryGet xs: ctx.narrow.box vid: rbVid).length > 0 then {
                 rbF: exprfacts
                 return (wholeLocalName :prog :ctx vid: rbVid name: rbNm facts: rbF)
             }
@@ -651,13 +655,13 @@ emitReassignLvalue: function {
         )
         if ba.length > 0 then {
             baseVid: atomVid :prog nid: (atomNodeId n: (prog.ast.nodes.get i: n.parent))
-            nbo: varEntryGet xs: ctx.narrowBox vid: baseVid
+            nbo: varEntryGet xs: ctx.narrow.box vid: baseVid
             if nbo.length > 0 then {
                 memC: (
                     memberC
                     :prog
                     :ctx
-                    owner: ((varTidGet xs: ctx.narrowTid vid: baseVid).or d: ztypes.tid.zero)
+                    owner: ((varTidGet xs: ctx.narrow.tid vid: baseVid).or d: ztypes.tid.zero)
                     kind: memberkind.field
                     nameId: (aliasOrChildId :prog aliasId: n.nodeid childId: n.child)
                 )
@@ -739,7 +743,7 @@ remainingArm: function {
     tid: ztypes.tid
     extra: zast.nameid
 } out zast.nameid is {
-    exv: varArmsGet xs: ctx.exclArms vid: subjVid
+    exv: varArmsGet xs: ctx.narrow.exclArms vid: subjVid
     all: ListVal zast.nameid
     zenv.sumArmNameIds ty: prog.typing reg: prog.reg :tid ids: all
     remN: u64
@@ -1155,17 +1159,17 @@ pushExclusion: function {
     arm: zast.nameid
     owner: ztypes.tid
 } is {
-    pv0: varArmsGet xs: ctx.exclArms :vid
+    pv0: varArmsGet xs: ctx.narrow.exclArms :vid
     nx: pv0.copy
     nx.append arm
-    ctx.exSaves.append (
+    ctx.narrow.exSaves.append (
         ExclSave
         :vid
         arms: pv0
-        owner: ((varTidGet xs: ctx.exclTids :vid).or d: ztypes.tid.zero)
+        owner: ((varTidGet xs: ctx.narrow.exclTids :vid).or d: ztypes.tid.zero)
     )
-    varArmsSet xs: ctx.exclArms :vid arms: nx
-    stmtblocks.varTidSet xs: ctx.exclTids :vid tid: owner
+    varArmsSet xs: ctx.narrow.exclArms :vid arms: nx
+    stmtblocks.varTidSet xs: ctx.narrow.exclTids :vid tid: owner
 }
 
 # installNarrowSeeds -- install the aliases at index `from` and after, recording
@@ -1599,11 +1603,11 @@ seedPostGuardAlias: function {
     # option narrowed to `some`, then guarded on its payload's arm -- is read
     # through that narrowing: the arm is the payload's, not the local's. The
     # narrowed value is the payload itself, read with `.`
-    if ((varTidGet xs: ctx.narrowTid vid: pgrv).or d: ztypes.tid.zero) == owner then {
-        nb: varEntryGet xs: ctx.narrowBox vid: pgrv
+    if ((varTidGet xs: ctx.narrow.tid vid: pgrv).or d: ztypes.tid.zero) == owner then {
+        nb: varEntryGet xs: ctx.narrow.box vid: pgrv
         if nb.length > 0 then {
             pgRecv = nb.take
-            pgRecvF = varEntryFactsOf xs: ctx.narrowBox vid: pgrv
+            pgRecvF = varEntryFactsOf xs: ctx.narrow.box vid: pgrv
             acc = ".".string
         }
     }
@@ -1642,22 +1646,22 @@ seedPostGuardAlias: function {
 # noteAliasRead -- C being written reads `vid`'s narrowBox text: the types the
 # text spells are recorded, once.
 noteAliasRead: function {ctx: Ctx vid: ztypes.vid} is {
-    if ctx.aliasHeld.length == 0 then return
-    nb: vidFind xs: ctx.narrowBox :vid
+    if ctx.narrow.aliasHeld.length == 0 then return
+    nb: vidFind xs: ctx.narrow.box :vid
     if nb == 0 then return
     hits: ListVal u64
     {
-        v: (ctx.narrowBox.get i: nb - 1).val.stringView
+        v: (ctx.narrow.box.get i: nb - 1).val.stringView
         i: u64
-        for i < ctx.aliasHeld.length loop {
-            e: ctx.aliasHeld.get :i
+        for i < ctx.narrow.aliasHeld.length loop {
+            e: ctx.narrow.aliasHeld.get :i
             if e.tid.notZero when e.val.stringView == v then hits.append i
             i = i + 1
         }
     }
     for each h: hits loop {
-        t: (ctx.aliasHeld.get i: h).tid
+        t: (ctx.narrow.aliasHeld.get i: h).tid
         emitplan.noteTypeUse :ctx tid: t
-        ctx.aliasHeld.set i: h val: (AliasHeld val: "".string tid: ztypes.tid.zero)
+        ctx.narrow.aliasHeld.set i: h val: (AliasHeld val: "".string tid: ztypes.tid.zero)
     }
 }

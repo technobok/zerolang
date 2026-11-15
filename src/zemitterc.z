@@ -1334,6 +1334,38 @@ StatementState: class {
     hoistsToBlock: bool
 }
 
+# NarrowState -- what is known of a value in the branch being written. A part
+# of Ctx (`narrow`).
+NarrowState: class {
+    # variables that are aliases of another's storage, so a write through one is
+    # a write through both
+    aliases: List VarEntry
+    # the box a narrowed variable projects out of
+    box: List VarEntry
+    # the types each narrowBox text spells, recorded when the text is read
+    aliasHeld: List AliasHeld
+    # the type a variable is currently narrowed to
+    tid: List VarTid
+    # the arms ruled out for a variable, which lets a switch omit them
+    exclArms: List VarArms
+    # the types behind those exclusions
+    exclTids: List VarTid
+    # the save stack for exclusions layered by an `if` clause's conjuncts. One
+    # stack for the whole emission, indexed per clause, because a clause layers
+    # nothing at all in the ordinary case and a list per clause is an
+    # allocation per clause for an empty answer. Entries are popped in reverse,
+    # so a nested clause restores before the one enclosing it.
+    exSaves: List ExclSave
+    # inside a control value emitted as a reference (emitControlPtrExpr): one
+    # more than the number of the `_cv` pointer its arms assign, 0 outside one
+    armRefCv: u64
+    # the reference control values being built as statements, innermost last:
+    # a temporary an arm parks its value in waits here until the outermost one
+    # is done, since the statement around it declares and releases it
+    armRefDepth: u64
+    armParks: List ArgHoist
+}
+
 # Ctx -- the per-program emission context (anchor cnames, main unit name,
 # the literal pool, and the resolved-name map access).
 Ctx: class {
@@ -1401,25 +1433,8 @@ Ctx: class {
     staticVids: IdSet ztypes.vid
     # every data type, so a variable narrowed to one reads through its handle
     staticTids: IdSet ztypes.tid
-    # variables that are aliases of another's storage, so a write through one is
-    # a write through both
-    aliases: List VarEntry
-    # the box a narrowed variable projects out of
-    narrowBox: List VarEntry
-    # the types each narrowBox text spells, recorded when the text is read
-    aliasHeld: List AliasHeld
-    # the type a variable is currently narrowed to
-    narrowTid: List VarTid
-    # the arms ruled out for a variable, which lets a switch omit them
-    exclArms: List VarArms
-    # the types behind those exclusions
-    exclTids: List VarTid
-    # the save stack for exclusions layered by an `if` clause's conjuncts. One
-    # stack for the whole emission, indexed per clause, because a clause layers
-    # nothing at all in the ordinary case and a list per clause is an
-    # allocation per clause for an empty answer. Entries are popped in reverse,
-    # so a nested clause restores before the one enclosing it.
-    exSaves: List ExclSave
+    # what is known of a value in the branch being written
+    narrow: NarrowState
     # the generator function being written
     gen: GeneratorState
     # the receiver type being emitted into, which decides what a bare member
@@ -1629,14 +1644,6 @@ Ctx: class {
     # the worklist condHoldsControlValue walks a condition with, kept so that
     # asking about every condition allocates nothing
     condScan: ListVal zast.nodeid
-    # inside a control value emitted as a reference (emitControlPtrExpr): one
-    # more than the number of the `_cv` pointer its arms assign, 0 outside one
-    armRefCv: u64
-    # the reference control values being built as statements, innermost last:
-    # a temporary an arm parks its value in waits here until the outermost one
-    # is done, since the statement around it declares and releases it
-    armRefDepth: u64
-    armParks: List ArgHoist
     # which continue labels were actually jumped to, so an unused one is not
     # emitted
     contLabelUsed: (IdMapV u64 v: bool)
@@ -1668,10 +1675,10 @@ isPtrVid: function {ctx: Ctx.view vid: ztypes.vid} out bool is {
     if vid.isZero then return false
     if (ctx.staticVids.has item: vid) then return true
     # narrowed to a data value: the payload is a handle
-    nt: (narrowfacts.varTidGet xs: ctx.narrowTid :vid).or d: ztypes.tid.zero
+    nt: (narrowfacts.varTidGet xs: ctx.narrow.tid :vid).or d: ztypes.tid.zero
     if nt.notZero when (ctx.staticTids.has item: nt) then return true
     if (ctx.stmt.ptrVids.contains item: vid).not then return false
-    return (narrowfacts.varEntryHas xs: ctx.narrowBox :vid).not
+    return (narrowfacts.varEntryHas xs: ctx.narrow.box :vid).not
 }
 
 # pathIsPointer -- does the expression evaluate to a C pointer? A pointer variable
