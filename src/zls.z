@@ -49,8 +49,8 @@ newArr: function out Arr is {
 # the value of hex-digit byte `b`, or -1 when not a hex digit.
 hexNibble: function {b: u8} out i64 is {
     if (ascii.isDigit :b) then return b - 0c0
-    if b >= 0ca when b <= 0cf then return b - 87
-    if b >= 0cA when b <= 0cF then return b - 55
+    if b >= 0ca when b <= 0cf then return b - 0ca + 10
+    if b >= 0cA when b <= 0cF then return b - 0cA + 10
     return -1
 }
 
@@ -3544,7 +3544,7 @@ docPrefixed: function {block: StringView} out String is {
     for wbj < block.length loop {
         wcb: block.byteAt i: wbj
         if wcb.some then {
-            if wcb == 10 then {
+            if wcb == 0c\n then {
                 r.append "\n"
                 r.append "    # "
             } else {
@@ -3911,7 +3911,7 @@ docBlockAboveOf: function {vfs: zvfs.ZVfs fsno: zvfs.fsno line1: u32} out String
             if tl.startsWith "#" then {
                 st: 1.u64
                 sb: tl.byteAt i: 1
-                if sb.some when sb == 32 then st = 2
+                if sb.some when sb == ascii.space then st = 2
                 ds: tl.substring from: st to: tl.length
                 acc.append ds.string
             } else {
@@ -4026,7 +4026,7 @@ unitDocComment: function {snap: zcheck.CheckResult fsno: zvfs.fsno} out String i
             if tl.startsWith "#" then {
                 st: 1.u64
                 sb: tl.byteAt i: 1
-                if sb.some when sb == 32 then st = 2
+                if sb.some when sb == ascii.space then st = 2
                 ds: tl.substring from: st to: tl.length
                 if result.length > 0 then result.append "\n"
                 result.append ds
@@ -7246,7 +7246,7 @@ memberBaseOf: function {ltv: StringView dot: u64} out baserange is {
         match (
             bb
         ) case some then {
-            if (ascii.isWord b: bb).not when bb != 46 then break
+            if (ascii.isWord b: bb).not when bb != ascii.dot then break
         } case none then {
             break
         }
@@ -8250,7 +8250,7 @@ addMemberCompletions: function {
 leafMarkerOf: function {prog: Ast.view base: StringView} out zast.markerkind is {
     lastDot: base.length
     for lastDot > 0 loop {
-        if (byteIs s: base i: lastDot - 1 b: 46) then break
+        if (byteIs s: base i: lastDot - 1 b: ascii.dot) then break
         lastDot = lastDot - 1
     }
     leaf: base.substring from: lastDot to: base.length
@@ -8629,7 +8629,7 @@ argLabelComplete: function {
         match (
             wb
         ) case some then {
-            if wb != 32 when wb != 9 then stopw = true
+            if (ascii.isBlank b: wb).not then stopw = true
         } case none then {
             stopw = true
         }
@@ -8640,8 +8640,8 @@ argLabelComplete: function {
     pvb: ltv.byteAt i: ws - 1
     badPos: false
     if pvb.some then {
-        if pvb == 58 then badPos = true
-        if pvb == 46 then badPos = true
+        if pvb == ascii.colon then badPos = true
+        if pvb == ascii.dot then badPos = true
     }
     if badPos then return false
     sp: fileSpans :prog fsno: docFs
@@ -8756,15 +8756,15 @@ scanLineForHead: function {hs: HeadScan s: StringView line: u32 end: u64} is {
     i: end
     for i > 0 loop {
         bb: byteOr :s i: i - 1 d: 0
-        if bb == 41 then hs.pd = hs.pd + 1
-        if bb == 40 then {
+        if bb == ascii.parenClose then hs.pd = hs.pd + 1
+        if bb == ascii.parenOpen then {
             if hs.pd > 0 then {
                 hs.pd = hs.pd - 1
             } else {
                 hs.takeHead :line byte: i
             }
         }
-        isBrace: (bb == 123) or (bb == 125)
+        isBrace: (bb == ascii.braceOpen) or (bb == ascii.braceClose)
         if isBrace when hs.pd == 0 then hs.takeBoundary :line byte: i
         if hs.stop then return
         i = i - 1
@@ -8834,14 +8834,14 @@ calleeNameOn: function {s: StringView from: u64} out namespan is {
     ids: j
     j = identEndFrom :s from: j
     # `x: f a: 1` heads a BINDING, so the callee is what follows the colon
-    if (byteIs :s i: j b: 58) then {
+    if (byteIs :s i: j b: ascii.colon) then {
         j = skipSpacesFrom :s from: j + 1
         ids = j
         j = identEndFrom :s from: j
     }
     if j == ids then return (namespan segStart: 0 calleeEnd: 0 found: false)
     segStart: ids
-    for (byteIs :s i: j b: 46) loop {
+    for (byteIs :s i: j b: ascii.dot) loop {
         j = j + 1
         segStart = j
         j = identEndFrom :s from: j
@@ -8865,9 +8865,9 @@ activeLabelAt: function {s: StringView cursor: u64 floor: u64} out String is {
     apd: i64
     for k > floor loop {
         ab: byteOr :s i: k - 1 d: 0
-        if ab == 41 then apd = apd + 1
-        if ab == 40 when apd > 0 then apd = apd - 1
-        if ab == 58 when apd == 0 then {
+        if ab == ascii.parenClose then apd = apd + 1
+        if ab == ascii.parenOpen when apd > 0 then apd = apd - 1
+        if ab == ascii.colon when apd == 0 then {
             lab: labelBefore :s colon: k - 1 :floor
             if lab.length > 0 then return lab
         }
@@ -8881,7 +8881,7 @@ activeLabelAt: function {s: StringView cursor: u64 floor: u64} out String is {
 paramLabelOf: function {disp: StringView.view} outx StringView is {
     ci: u64
     for ci < disp.length loop {
-        if (byteIs s: disp i: ci b: 58) then return (disp.substring from: 0 to: ci)
+        if (byteIs s: disp i: ci b: ascii.colon) then return (disp.substring from: 0 to: ci)
         ci = ci + 1
     }
     return disp

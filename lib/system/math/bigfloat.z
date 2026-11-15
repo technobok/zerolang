@@ -1306,8 +1306,8 @@ parseFloat: function {
     pos: u64
     neg: false
     c0: natconv.byteAt :text i: 0
-    if (c0 == 43) or (c0 == 45) then {
-        neg = c0 == 45
+    if (c0 == 0c+) or (c0 == 0c-) then {
+        neg = c0 == 0c-
         pos = 1
     }
     rest: text.length - pos
@@ -1419,7 +1419,7 @@ maxShift: 60.u64
 
 # digitAt -- d's i-th digit, most significant first, '0' past either end
 digitAt: function {d: FloatDecimal.view i: i64} out u8 is {
-    if (i < 0) or (i >= d.mant.length.i64.orPanic) then return 48
+    if (i < 0) or (i >= d.mant.length.i64.orPanic) then return 0c0
     return (d.mant.get i: i.u64.orPanic)
 }
 
@@ -1452,7 +1452,7 @@ decimalInit: function {x: FloatDecimal.borrow m: (ListViewVal u64).view shift: i
     x.exp = n.i64.orPanic
     # trailing zeros go: the exponent places the point
     for n > 0 loop {
-        if (natconv.byteAt text: s.stringView i: n - 1) != 48 then break
+        if (natconv.byteAt text: s.stringView i: n - 1) != 0c0 then break
         n = n - 1
     }
     for each i: n.times loop x.mant.append from: (natconv.byteAt text: s.stringView :i)
@@ -1473,7 +1473,7 @@ decimalRsh: function {x: FloatDecimal.borrow s: u64} is {
     # enough leading digits to cover the first shift
     for (n >> s) == 0 loop {
         if r >= x.mant.length then break
-        n = n * 10 + ((x.mant.get i: r) - 48)
+        n = n * 10 + ((x.mant.get i: r) - 0c0)
         r = r + 1
     }
     if n == 0 then {
@@ -1492,15 +1492,15 @@ decimalRsh: function {x: FloatDecimal.borrow s: u64} is {
         r = r + 1
         d: n >> s
         n = n & mask
-        x.mant.set i: w val: (d + 48).u8.orPanic
+        x.mant.set i: w val: (d + 0c0).u8.orPanic
         w = w + 1
-        n = n * 10 + ch - 48
+        n = n * 10 + ch - 0c0
     }
     # the digits that still fit, then the ones that do not
     for (n > 0) and (w < x.mant.length) loop {
         d: n >> s
         n = n & mask
-        x.mant.set i: w val: (d + 48).u8.orPanic
+        x.mant.set i: w val: (d + 0c0).u8.orPanic
         w = w + 1
         n = n * 10
     }
@@ -1508,7 +1508,7 @@ decimalRsh: function {x: FloatDecimal.borrow s: u64} is {
     for n > 0 loop {
         d: n >> s
         n = n & mask
-        x.mant.append from: (d + 48).u8.orPanic
+        x.mant.append from: (d + 0c0).u8.orPanic
         n = n * 10
     }
     decimalTrim :x
@@ -1517,11 +1517,11 @@ decimalRsh: function {x: FloatDecimal.borrow s: u64} is {
 # shouldRoundUp -- whether x shortened to n digits rounds up: a tie, a lone
 # trailing 5, to the even digit
 shouldRoundUp: function {x: FloatDecimal.view n: u64} out bool is {
-    if ((x.mant.get i: n) == 53) and ((n + 1) == x.mant.length) then {
+    if ((x.mant.get i: n) == 0c5) and ((n + 1) == x.mant.length) then {
         if n == 0 then return false
-        return (((x.mant.get i: n - 1) - 48) & 1) != 0
+        return (((x.mant.get i: n - 1) - 0c0) & 1) != 0
     }
-    return (x.mant.get i: n) >= 53
+    return (x.mant.get i: n) >= 0c5
 }
 
 # decimalRound -- x rounded to at most n digits, a tie to the even one;
@@ -1537,12 +1537,12 @@ decimalRoundUp: function {x: FloatDecimal.borrow n: i64} is {
     k: n.u64.orPanic
     # the first digit below 9, from the cut back
     for k > 0 loop {
-        if (x.mant.get i: k - 1) < 57 then break
+        if (x.mant.get i: k - 1) < 0c9 then break
         k = k - 1
     }
     if k == 0 then {
         # all 9s: up to 1 and one more power of ten
-        x.mant.set i: 0 val: 49
+        x.mant.set i: 0 val: 0c1
         x.mant.resize to: 1
         x.exp = x.exp + 1
         return
@@ -1562,7 +1562,7 @@ decimalRoundDown: function {x: FloatDecimal.borrow n: i64} is {
 decimalTrim: function {x: FloatDecimal.borrow} is {
     i: x.mant.length
     for i > 0 loop {
-        if (x.mant.get i: i - 1) != 48 then break
+        if (x.mant.get i: i - 1) != 0c0 then break
         i = i - 1
     }
     x.mant.resize to: i
@@ -1700,7 +1700,7 @@ roundShortest: function {d: FloatDecimal.borrow x: BigFloat.view} is {
         # digit, or has digits left -- or ended earlier, which made it larger
         okdown: (l != m) or (inclusive and ((i + 1) == ll))
         okup: (
-            (m != u) and (inclusive or ((m + 1) < u) or ((i + 1) < ul) or ((i >= ul) and (m < 57)))
+            (m != u) and (inclusive or ((m + 1) < u) or ((i + 1) < ul) or ((i >= ul) and (m < 0c9)))
         )
         if okdown and okup then {
             decimalRound x: d n: i + 1
@@ -1722,7 +1722,7 @@ roundShortest: function {d: FloatDecimal.borrow x: BigFloat.view} is {
 appendZeros: function {buf: String.borrow n: i64} is {
     k: n
     for k > 0 loop {
-        buf.appendByte b: 48
+        buf.append "0"
         k = k - 1
     }
 }
@@ -1731,22 +1731,22 @@ appendZeros: function {buf: String.borrow n: i64} is {
 appendExponent: function {buf: String.borrow e: i64} is {
     v: e
     if v < 0 then {
-        buf.appendByte b: 45
+        buf.append "-"
         v = 0 - v
     } else {
-        buf.appendByte b: 43
+        buf.append "+"
     }
-    if v < 10 then buf.appendByte b: 48
+    if v < 10 then buf.append "0"
     buf.append "\{v}"
 }
 
 # fmtE -- d.dddde+dd with prec digits after the point
 fmtE: function {buf: String.borrow upper: bool prec: i64 d: FloatDecimal.view} is {
-    ch: 48.u8
+    ch: 0c0.u8
     if d.mant.length > 0 then ch = d.mant.get i: 0
     buf.appendByte b: ch
     if prec > 0 then {
-        buf.appendByte b: 46
+        buf.append "."
         i: 1
         m: d.mant.length.i64.orPanic
         if (prec + 1) < m then m = prec + 1
@@ -1755,11 +1755,11 @@ fmtE: function {buf: String.borrow upper: bool prec: i64 d: FloatDecimal.view} i
             i = i + 1
         }
         for i <= prec loop {
-            buf.appendByte b: 48
+            buf.append "0"
             i = i + 1
         }
     }
-    if upper then buf.appendByte b: 69 else buf.appendByte b: 101
+    if upper then buf.append "E" else buf.append "e"
     e: 0
     if d.mant.length > 0 then e = d.exp - 1
     appendExponent :buf :e
@@ -1777,10 +1777,10 @@ fmtF: function {buf: String.borrow prec: i64 d: FloatDecimal.view} is {
         }
         appendZeros :buf n: d.exp - m
     } else {
-        buf.appendByte b: 48
+        buf.append "0"
     }
     if prec > 0 then {
-        buf.appendByte b: 46
+        buf.append "."
         i: 0
         for i < prec loop {
             buf.appendByte b: (digitAt :d i: d.exp + i)
@@ -1851,7 +1851,7 @@ fmtP: function {buf: String.borrow x: BigFloat.view} is {
     hm: natconv.natText x: (x.mant.slice from: i to: x.mant.length) base: 16
     k: hm.length
     for k > 0 loop {
-        if (natconv.byteAt text: hm.stringView i: k - 1) != 48 then break
+        if (natconv.byteAt text: hm.stringView i: k - 1) != 0c0 then break
         k = k - 1
     }
     buf.append "0x."
