@@ -3440,8 +3440,33 @@ runDumpCases: function {r: Runner} is {
     }
 }
 
+# compareGolden -- one differential case: the file a dump tool wrote at
+# `outPath` against the committed `gold`. A case with no golden fails: nothing
+# would compare its output.
+compareGolden: function {
+    r: Runner
+    # the leg's name in the FAIL line: lexer, parser, program, vfs
+    kind: StringView
+    name: StringView
+    outPath: StringView
+    gold: StringView
+} is {
+    if (io.exists path: gold).not then {
+        print "FAIL(\{kind}) \{name}: no golden"
+        r.fails = r.fails + 1
+        return
+    }
+    want: slurp path: gold
+    got: slurp path: outPath
+    if got.stringView == want then {
+        r.passN = r.passN + 1
+    } else {
+        print "FAIL(\{kind}) \{name}"
+        r.fails = r.fails + 1
+    }
+}
+
 # lexGoldenCase -- run the token dump over `src` and compare with `gold`
-# (skipped when no golden exists).
 lexGoldenCase: function {
     r: Runner
     dumpBin: StringView
@@ -3449,7 +3474,6 @@ lexGoldenCase: function {
     gold: StringView
     name: StringView
 } is {
-    if (io.exists path: gold).not then return
     ltoks: "\{r.tmp.stringView}/D_\{name}.tokens"
     la: List String
     la.append from: dumpBin.string
@@ -3462,14 +3486,7 @@ lexGoldenCase: function {
         errPath: os.nullDevice.stringView
         timeoutSecs: r.timeoutSecs
     )
-    gL: slurp path: gold
-    oL: slurp path: ltoks.stringView
-    if oL.stringView == gL then {
-        r.passN = r.passN + 1
-    } else {
-        print "FAIL(lexer) \{name}"
-        r.fails = r.fails + 1
-    }
+    compareGolden :r kind: "lexer" :name outPath: ltoks.stringView :gold
 }
 
 # runDifferentialCases -- the DIFFERENTIAL (lexer / parser / program goldens) kind.
@@ -3543,16 +3560,14 @@ runDifferentialCases: function {r: Runner} is {
                 timeoutSecs: r.timeoutSecs
             )
             pgold: "\{parsegold}/\{dnm}.ast"
-            if (io.exists path: pgold) then {
-                gP: slurp path: pgold.stringView
-                oP: slurp path: past.stringView
-                if oP.stringView == gP then {
-                    r.passN = r.passN + 1
-                } else {
-                    print "FAIL(parser) \{dnm}"
-                    r.fails = r.fails + 1
-                }
-            }
+            (
+                compareGolden
+                :r
+                kind: "parser"
+                name: dnm
+                outPath: past.stringView
+                gold: pgold.stringView
+            )
         }
     }
     # the lexer's edge-case fixtures, whose goldens sit beside them
@@ -3593,16 +3608,14 @@ runDifferentialCases: function {r: Runner} is {
                 timeoutSecs: r.timeoutSecs
             )
             goldPath: "\{proggold}/\{ptnm}.expected"
-            if (io.exists path: goldPath) then {
-                gPr: slurp path: goldPath.stringView
-                oPr: slurp path: pout.stringView
-                if oPr.stringView == gPr then {
-                    r.passN = r.passN + 1
-                } else {
-                    print "FAIL(program) \{ptnm}"
-                    r.fails = r.fails + 1
-                }
-            }
+            (
+                compareGolden
+                :r
+                kind: "program"
+                name: ptnm
+                outPath: pout.stringView
+                gold: goldPath.stringView
+            )
         }
     }
 }
@@ -3657,16 +3670,14 @@ runVfsCases: function {r: Runner} is {
                 timeoutSecs: r.timeoutSecs
             )
             vgold: "\{vfsdir}/\{vnm}.expected"
-            if (io.exists path: vgold) then {
-                gV: slurp path: vgold.stringView
-                oV: slurp path: vout.stringView
-                if oV.stringView == gV then {
-                    r.passN = r.passN + 1
-                } else {
-                    print "FAIL(vfs) \{vnm}"
-                    r.fails = r.fails + 1
-                }
-            }
+            (
+                compareGolden
+                :r
+                kind: "vfs"
+                name: vnm
+                outPath: vout.stringView
+                gold: vgold.stringView
+            )
         }
     }
 }
