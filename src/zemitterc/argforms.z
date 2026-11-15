@@ -7,9 +7,7 @@
 # something other than the binding, and then there is no variable to ask a
 # pointer question about -- which is what a name compare answers by missing.
 atomVidIfPlain: function {
-    ast: Ast.view
-    reg: ztypes.ZTypeRegistry.view
-    typing: ztyping.ZTyping.view
+    prog: Program.view
     ctx: Ctx.view
     n: astnode.view
     text: StringView
@@ -17,13 +15,11 @@ atomVidIfPlain: function {
     match (
         n
     ) case atomid then {
-        at: zast.nameTextAt :ast ref: n.name
-        atomVarId: atomVid :typing nid: n.nodeid
+        at: zast.nameTextAt ast: prog.ast ref: n.name
+        atomVarId: atomVid :prog nid: n.nodeid
         if (
             localAtomNameIsAt
-            :ast
-            :reg
-            :typing
+            :prog
             :ctx
             nid: n.nodeid
             name: at.stringView
@@ -35,13 +31,11 @@ atomVidIfPlain: function {
         return ztypes.vid.zero
     } case labelvalue then {
         # the `:name` shorthand names a binding just as a bare atom does
-        lv: zast.nameTextAt :ast ref: n.name
-        lvv: atomVid :typing nid: n.nodeid
+        lv: zast.nameTextAt ast: prog.ast ref: n.name
+        lvv: atomVid :prog nid: n.nodeid
         if (
             localAtomNameIsAt
-            :ast
-            :reg
-            :typing
+            :prog
             :ctx
             nid: n.nodeid
             name: lv.stringView
@@ -54,16 +48,14 @@ atomVidIfPlain: function {
     } case dottedpath then {
         # a dotted path can still emit as its bare base -- a `.private` access
         # marker contributes no C text -- and then the base IS the value passed.
-        dbn: ast.nodes.get i: n.parent
-        db: zast.nameTextAt :ast ref: (zast.atomNameIdOf n: dbn)
+        dbn: prog.ast.nodes.get i: n.parent
+        db: zast.nameTextAt ast: prog.ast ref: (zast.atomNameIdOf n: dbn)
         if db.length == 0 then return ztypes.vid.zero
-        dbv: atomVid :typing nid: (atomNodeId n: dbn)
+        dbv: atomVid :prog nid: (atomNodeId n: dbn)
         atomNode: atomNodeId n: dbn
         if (
             localAtomNameIsAt
-            :ast
-            :reg
-            :typing
+            :prog
             :ctx
             nid: atomNode
             name: db.stringView
@@ -78,12 +70,10 @@ atomVidIfPlain: function {
 
 # svCallOf -- how a call of the StringView native named `nameId` is emitted:
 # its row's `call` (svcall.none when it has no row, or the row says none)
-svCallOf: function {
-    reg: ztypes.ZTypeRegistry.view typing: ztyping.ZTyping.view ctx: Ctx.view nameId: zast.nameid
-} out svcall is {
+svCallOf: function {prog: Program.view ctx: Ctx.view nameId: zast.nameid} out svcall is {
     row: (
         ctx.rows.ofName
-        n: (nativerows.rowNameOfMember :reg :typing :ctx owner: ctx.svTid name: nameId)
+        n: (nativerows.rowNameOfMember :prog :ctx owner: ctx.svTid name: nameId)
     )
     if row == 0 then return svcall.none
     return (ctx.rows.rows.get i: row).call
@@ -91,9 +81,7 @@ svCallOf: function {
 
 # emit the else-arm of a C ternary expression.
 ternaryElse: function {
-    ast: Ast.view
-    reg: ztypes.ZTypeRegistry.view
-    typing: ztyping.ZTyping.view
+    prog: Program.view
     ctx: Ctx
     oId: zast.nodeid
     # the arm of a reference chain (armRefLeaf)
@@ -102,7 +90,7 @@ ternaryElse: function {
 } out String is {
     if oId.notZero then {
         evF: exprfacts
-        ev: stmtblocks.armInPlace :ast :reg :typing :ctx n: (ast.nodes.get i: oId) :ref facts: evF
+        ev: stmtblocks.armInPlace :prog :ctx n: (prog.ast.nodes.get i: oId) :ref facts: evF
         if ev.length == 0 then return ev
         stateFacts :facts from: evF
         return "(\{ev})"
@@ -116,8 +104,8 @@ ternaryElse: function {
 # / StringView. Thirteen sites read a stamp for no other reason than to ask
 # this, and each had to name the intermediate; the QUESTION is the thing worth
 # naming, not the tid it goes through.
-stampIsStr: function {typing: ztyping.ZTyping.view ctx: Ctx.view nid: zast.nodeid} out bool is {
-    return (stampIdOf :typing :nid) == ctx.strTid
+stampIsStr: function {prog: Program.view ctx: Ctx.view nid: zast.nodeid} out bool is {
+    return (stampIdOf :prog :nid) == ctx.strTid
 }
 
 # valueExprC -- an expression standing where a VALUE is wanted: a binop
@@ -130,19 +118,17 @@ stampIsStr: function {typing: ztyping.ZTyping.view ctx: Ctx.view nid: zast.nodei
 # asking emitExpr and pathIsPointer. The cheap tests come first so the common
 # case pays no stamp read.
 valueExprC: function {
-    ast: Ast.view
-    reg: ztypes.ZTypeRegistry.view
-    typing: ztyping.ZTyping.view
+    prog: Program.view
     ctx: Ctx
     n: astnode.view
     facts: exprfacts.borrow
 } out String is {
     eF: exprfacts
-    e: emitExprWith :ast :reg :typing :ctx :n facts: eF
-    if (ptrHeldValtype :ast :reg :typing :ctx :n) then {
+    e: emitExprWith :prog :ctx :n facts: eF
+    if (ptrHeldValtype :prog :ctx :n) then {
         return (stating :facts from: (values.operandFacts e: eF place: true) text: "(*\{e})")
     }
-    if (refValtypeResult :ast :reg :typing :ctx :n) then {
+    if (refValtypeResult :prog :ctx :n) then {
         return (stating :facts from: (values.operandFacts e: eF place: true) text: "(*\{e})")
     }
     return (stating :facts from: eF text: e)
@@ -157,9 +143,7 @@ valueExprC: function {
 # C still holds the union pointer. The cheap tests come first so the common
 # case pays no registry read.
 ptrHeldValtype: function {
-    ast: Ast.view
-    reg: ztypes.ZTypeRegistry.view
-    typing: ztyping.ZTyping.view
+    prog: Program.view
     ctx: Ctx
     n: astnode.view
 } out bool is {
@@ -167,15 +151,15 @@ ptrHeldValtype: function {
     if nid.isZero then return false
     # the variable first: most atoms are not pointers, and the pointer table is
     # the one short scan; the alias walk pathIsPointer adds runs only for one
-    vid: atomVid :typing :nid
+    vid: atomVid :prog :nid
     if (isPtrVid :ctx :vid).not then return false
-    if (pathIsPointer :ast :reg :typing :ctx :n).not then return false
-    vt: chaseAggregateTypedef :reg :typing :ctx tid: (reg.variableTypeOf id: vid)
+    if (pathIsPointer :prog :ctx :n).not then return false
+    vt: chaseAggregateTypedef :prog :ctx tid: (prog.reg.variableTypeOf id: vid)
     # a data value's pointer is the value itself, never loaded: a variable of a
     # data type, or a sum's data payload the node is narrowed to
-    if (isStaticHandle :reg :typing tid: vt) then return false
-    if (isStaticHandle :reg :typing tid: (stampIdOf :typing :nid)) then return false
-    return (passesByValue :reg :ctx tid: vt)
+    if (isStaticHandle :prog tid: vt) then return false
+    if (isStaticHandle :prog tid: (stampIdOf :prog :nid)) then return false
+    return (passesByValue :prog :ctx tid: vt)
 }
 
 # passesByValue -- an unmarked parameter of tid takes its argument BY VALUE: a
@@ -184,13 +168,13 @@ ptrHeldValtype: function {
 # A class, a String, an owning union (Option, Result) and the collections pass
 # by pointer (unionBorrowsByPtr).
 passesByValue: function {
-    reg: ztypes.ZTypeRegistry.view
+    prog: Program.view
     ctx: Ctx.view
     tid: ztypes.tid
 } out bool is {
-    if (reg.isValtypeOf :tid) then return true
-    tt: reg.typetypeOf typeId: tid
-    if tt == ztypes.ztypetype.unionType then return (types.isViewUnionOriginOf :reg :ctx :tid)
+    if (prog.reg.isValtypeOf :tid) then return true
+    tt: prog.reg.typetypeOf typeId: tid
+    if tt == ztypes.ztypetype.unionType then return (types.isViewUnionOriginOf :prog :ctx :tid)
     return tt == ztypes.ztypetype.protocolType
 }
 
@@ -212,14 +196,12 @@ valueAtomNid: function {n: astnode.view} out zast.nodeid is {
 # refValtypeResult -- the node is a reference-returning call whose result is a
 # VALTYPE: a `T*` in the C, where a by-value position wants the `T`.
 refValtypeResult: function {
-    ast: Ast.view
-    reg: ztypes.ZTypeRegistry.view
-    typing: ztyping.ZTyping.view
+    prog: Program.view
     ctx: Ctx
     n: astnode.view
 } out bool is {
-    if (localnames.nodeIsRefBorrowResult :ast :reg :typing :ctx :n).not then return false
-    return (reg.isValtypeOf tid: (stampIdOf :typing nid: (interpPartNodeId :n)))
+    if (localnames.nodeIsRefBorrowResult :prog :ctx :n).not then return false
+    return (prog.reg.isValtypeOf tid: (stampIdOf :prog nid: (interpPartNodeId :n)))
 }
 
 # isStringyTid -- tid is canonical String or StringView.
@@ -240,9 +222,7 @@ isStringOrViewLaid: function {ctx: Ctx.view tid: ztypes.tid} out bool is {
 # member read off one -- is storage something else owns, so its temp owns
 # nothing; a value's temp owns what the checker's temporary for `nid` owns.
 readOnce: function {
-    ast: Ast.view
-    reg: ztypes.ZTypeRegistry.view
-    typing: ztyping.ZTyping.view
+    prog: Program.view
     ctx: Ctx
     text: StringView
     textF: exprfacts
@@ -253,15 +233,13 @@ readOnce: function {
     if textF.once.not then return text.string
     if textF.place then return (
         hoistForAddress
-        :ast
-        :reg
-        :typing
+        :prog
         :ctx
         av: text
         :tid
         argNid: zast.nodeid
     )
-    return (hoistForAddress :ast :reg :typing :ctx av: text :tid argNid: nid)
+    return (hoistForAddress :prog :ctx av: text :tid argNid: nid)
 }
 
 # svValueForm -- a String/StringView operand as a by-value StringView C
@@ -271,9 +249,7 @@ readOnce: function {
 # field read off one -- is bound to a temp first, which owns nothing, so the
 # call runs once.
 svValueForm: function {
-    ast: Ast.view
-    reg: ztypes.ZTypeRegistry.view
-    typing: ztyping.ZTyping.view
+    prog: Program.view
     ctx: Ctx
     expr: StringView
     isStr: bool
@@ -302,9 +278,7 @@ svValueForm: function {
         if rf.once when rf.place then {
             rex = (
                 readOnce
-                :ast
-                :reg
-                :typing
+                :prog
                 :ctx
                 text: rex.stringView
                 textF: rf
@@ -340,9 +314,7 @@ svValueFormPtr: function {ctx: Ctx expr: StringView} out String is {
 # variable: a String read through a borrowed field (`c.s`) is a pointer with
 # no variable behind it, which the vid question answers with `.`.
 svValueFormAt: function {
-    ast: Ast.view
-    reg: ztypes.ZTypeRegistry.view
-    typing: ztyping.ZTyping.view
+    prog: Program.view
     ctx: Ctx
     n: astnode.view
     expr: StringView
@@ -352,8 +324,8 @@ svValueFormAt: function {
     facts: exprfacts.borrow
 } out String is {
     # a view is its own value form, as it stands
-    if isStr.not then return (svValueForm :ast :reg :typing :ctx :expr :isStr :vid :facts)
-    if (pathIsPointer :ast :reg :typing :ctx :n) then return (
+    if isStr.not then return (svValueForm :prog :ctx :expr :isStr :vid :facts)
+    if (pathIsPointer :prog :ctx :n) then return (
         stating
         :facts
         from: values.literalFacts
@@ -372,9 +344,7 @@ svValueFormAt: function {
     if ef.place.not then {
         hv: (
             hoistBorrowValArgWith
-            :ast
-            :reg
-            :typing
+            :prog
             :ctx
             argNid: (zast.nodeIdOf :n)
             av: expr
@@ -386,9 +356,7 @@ svValueFormAt: function {
             stateFacts :facts from: pathFacts
             return (
                 svValueForm
-                :ast
-                :reg
-                :typing
+                :prog
                 :ctx
                 expr: hv.stringView
                 :isStr
@@ -400,7 +368,7 @@ svValueFormAt: function {
     # a place read once -- a load of a call's result, a reference control
     # value's `(*p)` -- svValueForm binds itself
     stateFacts :facts from: ef
-    return (svValueForm :ast :reg :typing :ctx :expr :isStr :vid :facts)
+    return (svValueForm :prog :ctx :expr :isStr :vid :facts)
 }
 
 # svNativeCall -- `<svC>_<m>(&recv, args)` for an sv-native method. `&` needs an
@@ -410,9 +378,7 @@ svValueFormAt: function {
 # temp frees nothing; a compound literal is already an lvalue and is spelled
 # directly.
 svNativeCall: function {
-    ast: Ast.view
-    reg: ztypes.ZTypeRegistry.view
-    typing: ztyping.ZTyping.view
+    prog: Program.view
     ctx: Ctx
     m: StringView
     recv: StringView
@@ -425,9 +391,7 @@ svNativeCall: function {
         svT: values.svTypeC :ctx
         addr = (
             orderAddressOf
-            :ast
-            :reg
-            :typing
+            :prog
             :ctx
             text: recv.string
             tf: recvF
@@ -442,9 +406,7 @@ svNativeCall: function {
 # svArgAddr -- the &-form of a StringView native argument (pooled
 # literal or local view); "" when unsupported.
 svArgAddr: function {
-    ast: Ast.view
-    reg: ztypes.ZTypeRegistry.view
-    typing: ztyping.ZTyping.view
+    prog: Program.view
     ctx: Ctx
     n: astnode.view
     facts: exprfacts.borrow
@@ -461,7 +423,7 @@ svArgAddr: function {
             return "".string
         }
     } case atomid then {
-        anSA: ast.names.texts.get i: n.name
+        anSA: prog.ast.names.texts.get i: n.name
         an: anSA.stringView
         # scalar args pass BY VALUE (only string-like args are pointer-
         # passed): a numeric literal has no address at all, and a stamped
@@ -470,39 +432,35 @@ svArgAddr: function {
         if b0d.some when (ascii.isDigit b: b0d) then return "".string
         if (
             ztypecheck.numKindOfTid
-            :typing
-            tid: (stampIdOf :typing nid: n.nodeid)
+            typing: prog.typing
+            tid: (stampIdOf :prog nid: n.nodeid)
         ).has then return "".string
         # a bare name that names no VARIABLE is not a place. A zero-argument
         # function read in value position is one of these: it is a CALL, and
         # addressing it handed the native `&fn`, which the C has no object for.
-        if (atomVid :typing nid: n.nodeid).isZero then return "".string
+        if (atomVid :prog nid: n.nodeid).isZero then return "".string
         # an ordinal pair is a C scalar, and passes like one
         if (
             narrowfacts.isOrdinalVariant
-            :typing
-            tid: (stampIdOf :typing nid: n.nodeid)
+            :prog
+            tid: (stampIdOf :prog nid: n.nodeid)
         ) then return "".string
         # A String arg to a StringLike param projects to a by-value view.
-        anV: atomVid :typing nid: n.nodeid
+        anV: atomVid :prog nid: n.nodeid
         anEF: exprfacts
         anE: (
             narrowfacts.emitLocalAtomNameAt
-            :ast
-            :reg
-            :typing
+            :prog
             :ctx
             nid: n.nodeid
             name: an
             vid: anV
             facts: anEF
         )
-        if (stampIsStr :typing :ctx nid: n.nodeid) then {
+        if (stampIsStr :prog :ctx nid: n.nodeid) then {
             svs: (
                 svValueForm
-                :ast
-                :reg
-                :typing
+                :prog
                 :ctx
                 expr: anE.stringView
                 isStr: true
@@ -513,38 +471,34 @@ svArgAddr: function {
         }
         return (stating :facts from: (addrFacts e: anEF) text: "&\{anE}")
     } case labelvalue then {
-        anlC: ast.names.texts.get i: n.name
+        anlC: prog.ast.names.texts.get i: n.name
         anl: anlC.stringView
         if (
             ztypecheck.numKindOfTid
-            :typing
-            tid: (stampIdOf :typing nid: n.nodeid)
+            typing: prog.typing
+            tid: (stampIdOf :prog nid: n.nodeid)
         ).has then return "".string
         # an ordinal pair is a C scalar, and passes like one
         if (
             narrowfacts.isOrdinalVariant
-            :typing
-            tid: (stampIdOf :typing nid: n.nodeid)
+            :prog
+            tid: (stampIdOf :prog nid: n.nodeid)
         ) then return "".string
-        anlV: atomVid :typing nid: n.nodeid
+        anlV: atomVid :prog nid: n.nodeid
         anlEF: exprfacts
         anlE: (
             narrowfacts.emitLocalAtomNameAt
-            :ast
-            :reg
-            :typing
+            :prog
             :ctx
             nid: n.nodeid
             name: anl
             vid: anlV
             facts: anlEF
         )
-        if (stampIsStr :typing :ctx nid: n.nodeid) then {
+        if (stampIsStr :prog :ctx nid: n.nodeid) then {
             svl: (
                 svValueForm
-                :ast
-                :reg
-                :typing
+                :prog
                 :ctx
                 expr: anlE.stringView
                 isStr: true
@@ -555,27 +509,28 @@ svArgAddr: function {
         }
         return (stating :facts from: (addrFacts e: anlEF) text: "&\{anlE}")
     } case dottedpath then {
-        dpm: aliasOrChildId :ast :typing aliasId: n.nodeid childId: n.child
+        dpm: aliasOrChildId :prog aliasId: n.nodeid childId: n.child
         if (ztypecheck.isStringViewMember nameId: dpm) then {
             peF: exprfacts
-            pe: emitExprWith :ast :reg :typing :ctx n: (ast.nodes.get i: n.parent) facts: peF
-            pIsStr: stampIsStr :typing :ctx nid: (interpPartNodeId n: (ast.nodes.get i: n.parent))
+            pe: emitExprWith :prog :ctx n: (prog.ast.nodes.get i: n.parent) facts: peF
+            pIsStr: (
+                stampIsStr
+                :prog
+                :ctx
+                nid: (interpPartNodeId n: (prog.ast.nodes.get i: n.parent))
+            )
             pev: (
                 atomVidIfPlain
-                :ast
-                :reg
-                :typing
+                :prog
                 :ctx
-                n: (ast.nodes.get i: n.parent)
+                n: (prog.ast.nodes.get i: n.parent)
                 text: pe.stringView
             )
             sv: (
                 svValueFormAt
-                :ast
-                :reg
-                :typing
+                :prog
                 :ctx
-                n: (ast.nodes.get i: n.parent)
+                n: (prog.ast.nodes.get i: n.parent)
                 expr: pe.stringView
                 isStr: pIsStr
                 vid: pev
@@ -592,9 +547,7 @@ svArgAddr: function {
 # emitSvCompareCall -- `a.compare b` on a stamped String/StringView base:
 # the by-value cmp in the base fragment, both sides projected to a view.
 emitSvCompareCall: function {
-    ast: Ast.view
-    reg: ztypes.ZTypeRegistry.view
-    typing: ztyping.ZTyping.view
+    prog: Program.view
     ctx: Ctx
     call: zast.callrow.view
     bnv: StringView
@@ -608,38 +561,32 @@ emitSvCompareCall: function {
     if (isStringyTid :ctx tid: btid) when mnId == zast.wellKnown.slot.wkCompare then {
         # compare maps to the by-value cmp in the base fragment
         argFacts: bnvF
-        bf: svValueForm :ast :reg :typing :ctx expr: bnv isStr: btIsStr vid: dcbV facts: argFacts
+        bf: svValueForm :prog :ctx expr: bnv isStr: btIsStr vid: dcbV facts: argFacts
         cargs: String
-        for each caId: (zast.kidsOf :ast span: call.arguments) loop {
-            ca: ast.nodes.get i: caId
+        for each caId: (zast.kidsOf ast: prog.ast span: call.arguments) loop {
+            ca: prog.ast.nodes.get i: caId
             if ca.namedoperation then {
                 argF: exprfacts
                 cae: (
                     emitExprWith
-                    :ast
-                    :reg
-                    :typing
+                    :prog
                     :ctx
-                    n: (ast.nodes.get i: ca.operation)
+                    n: (prog.ast.nodes.get i: ca.operation)
                     facts: argF
                 )
-                caIsStr: operandIsStr :reg :typing :ctx n: (ast.nodes.get i: ca.operation)
+                caIsStr: operandIsStr :prog :ctx n: (prog.ast.nodes.get i: ca.operation)
                 cav: (
                     atomVidIfPlain
-                    :ast
-                    :reg
-                    :typing
+                    :prog
                     :ctx
-                    n: (ast.nodes.get i: ca.operation)
+                    n: (prog.ast.nodes.get i: ca.operation)
                     text: cae.stringView
                 )
                 caf: (
                     svValueFormAt
-                    :ast
-                    :reg
-                    :typing
+                    :prog
                     :ctx
-                    n: (ast.nodes.get i: ca.operation)
+                    n: (prog.ast.nodes.get i: ca.operation)
                     expr: cae.stringView
                     isStr: caIsStr
                     vid: cav
@@ -661,25 +608,21 @@ emitSvCompareCall: function {
 # passes as the expression. `split` addresses its separator even in that last
 # case, and that is the only thing `addrAlways` selects.
 svNativeArgFrag: function {
-    ast: Ast.view
-    reg: ztypes.ZTypeRegistry.view
-    typing: ztyping.ZTyping.view
+    prog: Program.view
     ctx: Ctx
     n: astnode.view
     addrAlways: bool
     facts: exprfacts.borrow
 } out String is {
-    sav: svArgAddr :ast :reg :typing :ctx :n :facts
+    sav: svArgAddr :prog :ctx :n :facts
     if sav.length > 0 then return sav
     sxF: exprfacts
-    sx: emitExprWith :ast :reg :typing :ctx :n facts: sxF
-    stampTid: stampIdOf :typing nid: (interpPartNodeId :n)
+    sx: emitExprWith :prog :ctx :n facts: sxF
+    stampTid: stampIdOf :prog nid: (interpPartNodeId :n)
     if stampTid == ctx.strTid then {
         sxh: (
             hoistBorrowValArgWith
-            :ast
-            :reg
-            :typing
+            :prog
             :ctx
             argNid: (zast.nodeIdOf :n)
             av: sx.stringView
@@ -691,8 +634,8 @@ svNativeArgFrag: function {
             sx = sxh.take
             sxF = pathFacts
         }
-        sxq: atomVidIfPlain :ast :reg :typing :ctx :n text: sx.stringView
-        svx: svValueForm :ast :reg :typing :ctx expr: sx.stringView isStr: true vid: sxq facts: sxF
+        sxq: atomVidIfPlain :prog :ctx :n text: sx.stringView
+        svx: svValueForm :prog :ctx expr: sx.stringView isStr: true vid: sxq facts: sxF
         return (stating :facts from: (addrFacts e: sxF) text: "&\{svx}")
     }
     if addrAlways then {
@@ -707,9 +650,7 @@ svNativeArgFrag: function {
             # the view owns nothing: the temp only gives it an address
             svb: (
                 hoistForAddress
-                :ast
-                :reg
-                :typing
+                :prog
                 :ctx
                 av: sx.stringView
                 tid: ctx.svTid
@@ -724,23 +665,19 @@ svNativeArgFrag: function {
 
 # viewRecvAddr -- the address a native view method takes its receiver by.
 viewRecvAddr: function {
-    ast: Ast.view
-    reg: ztypes.ZTypeRegistry.view
-    typing: ztyping.ZTyping.view
+    prog: Program.view
     ctx: Ctx
     recv: StringView
     recvF: exprfacts
     tid: ztypes.tid
 } out String is {
     raF: exprfacts
-    return "&\{addressableText :ast :reg :typing :ctx e: recv eF: recvF :tid facts: raF}"
+    return "&\{addressableText :prog :ctx e: recv eF: recvF :tid facts: raF}"
 }
 
 # emitSvSplitCall -- `s.split sep`, the separator passed by address.
 emitSvSplitCall: function {
-    ast: Ast.view
-    reg: ztypes.ZTypeRegistry.view
-    typing: ztyping.ZTyping.view
+    prog: Program.view
     ctx: Ctx
     call: zast.callrow.view
     bnv: StringView
@@ -752,17 +689,15 @@ emitSvSplitCall: function {
     if (isStringyTid :ctx tid: btid) when mnId == zast.wellKnown.slot.wkSplit then {
         nativepieces.needsAddM :ctx uname: "sviter" memb: "sv_split"
         sepx: String
-        for each argId: (zast.kidsOf :ast span: call.arguments) loop {
-            sa: ast.nodes.get i: argId
+        for each argId: (zast.kidsOf ast: prog.ast span: call.arguments) loop {
+            sa: prog.ast.nodes.get i: argId
             if sa.namedoperation then {
-                saOpNode: ast.nodes.get i: sa.operation
+                saOpNode: prog.ast.nodes.get i: sa.operation
                 if sepx.length == 0 then {
                     argFacts: exprfacts
                     sfrag: (
                         svNativeArgFrag
-                        :ast
-                        :reg
-                        :typing
+                        :prog
                         :ctx
                         n: saOpNode
                         addrAlways: true
@@ -773,8 +708,7 @@ emitSvSplitCall: function {
             }
         }
         es: "\{ctx.svC}_split(\{(viewRecvAddr
-            :ast
-            :reg :typing
+            :prog
             :ctx
             recv: bnv
             recvF: bnvF
@@ -804,9 +738,7 @@ emitSvLinesCall: function {
 # emitSvArgNativeCall -- the one-argument view natives (`startsWith`, `indexOf`,
 # ...), plus `byteAt`, whose argument is an index and not a view.
 emitSvArgNativeCall: function {
-    ast: Ast.view
-    reg: ztypes.ZTypeRegistry.view
-    typing: ztyping.ZTyping.view
+    prog: Program.view
     ctx: Ctx
     call: zast.callrow.view
     bnv: StringView
@@ -816,24 +748,22 @@ emitSvArgNativeCall: function {
     btid: ztypes.tid
     facts: exprfacts.borrow
 } out String is {
-    if (isStringyTid :ctx tid: btid) when (svCallOf :reg :typing :ctx nameId: mnId).arg then {
-        demandSvMember :reg :typing :ctx nameId: mnId
+    if (isStringyTid :ctx tid: btid) when (svCallOf :prog :ctx nameId: mnId).arg then {
+        demandSvMember :prog :ctx nameId: mnId
         # the argument is built once, as the native takes it
         if mnId == zast.wellKnown.slot.wkByteAt then {
             barg: String
-            for each baId: (zast.kidsOf :ast span: call.arguments) loop {
-                ba: ast.nodes.get i: baId
+            for each baId: (zast.kidsOf ast: prog.ast span: call.arguments) loop {
+                ba: prog.ast.nodes.get i: baId
                 if ba.namedoperation when barg.length == 0 then {
-                    bx: emitExpr :ast :reg :typing :ctx n: (ast.nodes.get i: ba.operation)
+                    bx: emitExpr :prog :ctx n: (prog.ast.nodes.get i: ba.operation)
                     barg.append bx
                 }
             }
             bargs: ", \{barg}"
             eb: (
                 svNativeCall
-                :ast
-                :reg
-                :typing
+                :prog
                 :ctx
                 m: "byteAt"
                 recv: bnv
@@ -843,17 +773,15 @@ emitSvArgNativeCall: function {
             return (stating :facts from: callFacts text: eb)
         }
         argx: String
-        for each argId: (zast.kidsOf :ast span: call.arguments) loop {
-            a: ast.nodes.get i: argId
+        for each argId: (zast.kidsOf ast: prog.ast span: call.arguments) loop {
+            a: prog.ast.nodes.get i: argId
             if a.namedoperation then {
-                aOpNode: ast.nodes.get i: a.operation
+                aOpNode: prog.ast.nodes.get i: a.operation
                 if argx.length == 0 then {
                     argFacts: exprfacts
                     afrag: (
                         svNativeArgFrag
-                        :ast
-                        :reg
-                        :typing
+                        :prog
                         :ctx
                         n: aOpNode
                         addrAlways: false
@@ -864,7 +792,7 @@ emitSvArgNativeCall: function {
             }
         }
         aargs: ", \{argx}"
-        ea: svNativeCall :ast :reg :typing :ctx m: mnv recv: bnv recvF: bnvF args: aargs.stringView
+        ea: svNativeCall :prog :ctx m: mnv recv: bnv recvF: bnvF args: aargs.stringView
         return (stating :facts from: callFacts text: ea)
     }
     return "".string
@@ -873,9 +801,7 @@ emitSvArgNativeCall: function {
 # emitSvSimpleCall -- the remaining view natives on a String or StringView
 # receiver: every argument that is a String projects to a view address.
 emitSvSimpleCall: function {
-    ast: Ast.view
-    reg: ztypes.ZTypeRegistry.view
-    typing: ztyping.ZTyping.view
+    prog: Program.view
     ctx: Ctx
     call: zast.callrow.view
     bnv: StringView
@@ -888,8 +814,8 @@ emitSvSimpleCall: function {
     facts: exprfacts.borrow
 } out String is {
     svRecvOk: (btid == ctx.svTid) or btIsStr
-    if svRecvOk when (svCallOf :reg :typing :ctx nameId: mnId).simple then {
-        demandSvMember :reg :typing :ctx nameId: mnId
+    if svRecvOk when (svCallOf :prog :ctx nameId: mnId).simple then {
+        demandSvMember :prog :ctx nameId: mnId
         # a String receiver projects to a view value, like the
         # substring/parse legs (a StringView receiver is one already)
         recvS: bnv.string
@@ -897,9 +823,7 @@ emitSvSimpleCall: function {
         if btIsStr then {
             baseForm: (
                 svValueForm
-                :ast
-                :reg
-                :typing
+                :prog
                 :ctx
                 expr: bnv
                 isStr: true
@@ -909,17 +833,15 @@ emitSvSimpleCall: function {
             recvS = baseForm.copy
         }
         args: String
-        for each aId: (zast.kidsOf :ast span: call.arguments) loop {
-            a: ast.nodes.get i: aId
+        for each aId: (zast.kidsOf ast: prog.ast span: call.arguments) loop {
+            a: prog.ast.nodes.get i: aId
             if a.namedoperation then {
-                aOpNode: ast.nodes.get i: a.operation
+                aOpNode: prog.ast.nodes.get i: a.operation
                 args.append ", "
                 argFacts: exprfacts
                 cfrag: (
                     svNativeArgFrag
-                    :ast
-                    :reg
-                    :typing
+                    :prog
                     :ctx
                     n: aOpNode
                     addrAlways: false
@@ -930,9 +852,7 @@ emitSvSimpleCall: function {
         }
         e1: (
             svNativeCall
-            :ast
-            :reg
-            :typing
+            :prog
             :ctx
             m: mnv
             recv: recvS.stringView
@@ -947,9 +867,7 @@ emitSvSimpleCall: function {
 # emitSvCallLegs -- the view-native legs of a method call on a String,
 # StringView or text receiver, tried in turn; "" when none takes it.
 emitSvCallLegs: function {
-    ast: Ast.view
-    reg: ztypes.ZTypeRegistry.view
-    typing: ztyping.ZTyping.view
+    prog: Program.view
     ctx: Ctx
     call: zast.callrow.view
     # the receiver's C text
@@ -966,9 +884,7 @@ emitSvCallLegs: function {
     if btid == ctx.textTid then btid = ctx.svTid
     eCmp: (
         emitSvCompareCall
-        :ast
-        :reg
-        :typing
+        :prog
         :ctx
         :call
         :bnv
@@ -982,9 +898,7 @@ emitSvCallLegs: function {
     if eCmp.length > 0 then return eCmp
     eSub: (
         values.emitSvSubstringCall
-        :ast
-        :reg
-        :typing
+        :prog
         :ctx
         :call
         :bnv
@@ -996,17 +910,15 @@ emitSvCallLegs: function {
         :facts
     )
     if eSub.length > 0 then return eSub
-    eSpl: emitSvSplitCall :ast :reg :typing :ctx :call :bnv :bnvF :mnId :btid :facts
+    eSpl: emitSvSplitCall :prog :ctx :call :bnv :bnvF :mnId :btid :facts
     if eSpl.length > 0 then return eSpl
     eLin: emitSvLinesCall :ctx :bnv :mnId :btid :facts
     if eLin.length > 0 then return eLin
-    eArg: emitSvArgNativeCall :ast :reg :typing :ctx :call :bnv :bnvF :mnv :mnId :btid :facts
+    eArg: emitSvArgNativeCall :prog :ctx :call :bnv :bnvF :mnv :mnId :btid :facts
     if eArg.length > 0 then return eArg
     return (
         emitSvSimpleCall
-        :ast
-        :reg
-        :typing
+        :prog
         :ctx
         :call
         :bnv
@@ -1022,20 +934,16 @@ emitSvCallLegs: function {
 
 # receiverNodeIsPtr -- argAlreadyPointer for a receiver known by its node
 receiverNodeIsPtr: function {
-    ast: Ast.view
-    reg: ztypes.ZTypeRegistry.view
-    typing: ztyping.ZTyping.view
+    prog: Program.view
     ctx: Ctx
     n: astnode.view
 } out bool is {
     return (
         argAlreadyPointer
-        :ast
-        :reg
-        :typing
+        :prog
         :ctx
         :n
-        vid: (atomVid :typing nid: (valueAtomNid :n))
+        vid: (atomVid :prog nid: (valueAtomNid :n))
     )
 }
 
@@ -1081,9 +989,7 @@ canTakeAddress: function {f: exprfacts} out bool is {
 # that owns its storage is bound where it is made (ownedReceiverHoist), so what
 # arrives here is a view or a borrow.
 addressableText: function {
-    ast: Ast.view
-    reg: ztypes.ZTypeRegistry.view
-    typing: ztyping.ZTyping.view
+    prog: Program.view
     ctx: Ctx
     e: StringView
     eF: exprfacts
@@ -1091,7 +997,7 @@ addressableText: function {
     facts: exprfacts.borrow
 } out String is {
     if (canTakeAddress f: eF) then return (stating :facts from: eF text: e.string)
-    t: hoistForAddress :ast :reg :typing :ctx av: e :tid argNid: zast.nodeid
+    t: hoistForAddress :prog :ctx av: e :tid argNid: zast.nodeid
     return (stating :facts from: pathFacts text: t)
 }
 
@@ -1107,9 +1013,7 @@ orderNamesTwice: function {st: orderstate.borrow slot: u64} is {
 # `ctype`, it is read into in evaluation order. `prefix` is left holding that
 # read's opening (orderOnePart), "" when there is none.
 orderAddressOf: function {
-    ast: Ast.view
-    reg: ztypes.ZTypeRegistry.view
-    typing: ztyping.ZTyping.view
+    prog: Program.view
     ctx: Ctx
     text: String.take
     tf: exprfacts
@@ -1122,9 +1026,7 @@ orderAddressOf: function {
     partF.once = true
     t: (
         memberreads.orderOnePart
-        :ast
-        :reg
-        :typing
+        :prog
         :ctx
         mark: (pendingHoistMark :ctx)
         :text
@@ -1141,13 +1043,12 @@ orderAddressOf: function {
 # hoistDestroyLine -- the scope-exit line that destroys a hoisted `_ah` temp
 # of type `tid`, "" when the type owns nothing.
 hoistDestroyLine: function {
-    reg: ztypes.ZTypeRegistry.view
-    typing: ztyping.ZTyping.view
+    prog: Program.view
     ctx: Ctx
     tid: ztypes.tid
     nm: StringView
 } out String is {
-    return (stmtblocks.destroyLineC :reg :typing :ctx :tid :nm ind: "    ")
+    return (stmtblocks.destroyLineC :prog :ctx :tid :nm ind: "    ")
 }
 
 # hoistBorrowValArgWith -- a by-value call argument whose facts are `avF` that is
@@ -1156,9 +1057,7 @@ hoistDestroyLine: function {
 # hoisted (hoistForAddress) and the temp's name returned; "" when no hoist is
 # needed. `av` is borrowed -- the caller keeps ownership.
 hoistBorrowValArgWith: function {
-    ast: Ast.view
-    reg: ztypes.ZTypeRegistry.view
-    typing: ztyping.ZTyping.view
+    prog: Program.view
     ctx: Ctx
     av: StringView
     avF: exprfacts
@@ -1169,34 +1068,32 @@ hoistBorrowValArgWith: function {
     # an lvalue needs no temp -- unless it is a typedef built from a consumed
     # local (`(Path s)`), spelled as that local, whose own free the consumption
     # dropped: the checker's temporary owns it
-    if avF.place when (ownedTypedefArg :typing :argNid).not then return "".string
+    if avF.place when (ownedTypedefArg :prog :argNid).not then return "".string
     if paramTake then return "".string
     # a value whose type frees nothing needs no temp to free it
-    if (types.destroyTargetTid :reg :typing :ctx tid: pid).isZero then return "".string
-    return (hoistForAddress :ast :reg :typing :ctx :av tid: pid :argNid)
+    if (types.destroyTargetTid :prog :ctx tid: pid).isZero then return "".string
+    return (hoistForAddress :prog :ctx :av tid: pid :argNid)
 }
 
 # hoistOwes -- whether a hoisted temporary owes a destroy: exactly when the
 # checker's temporary for the value node `argNid` still owns what it holds where
 # it dies (scopeOwnsTemp), whatever was hoisted. A `ptr` temporary is a `T*` into
 # storage someone else owns, and owes none.
-hoistOwes: function {typing: ztyping.ZTyping.view argNid: zast.nodeid ptr: bool} out bool is {
+hoistOwes: function {prog: Program.view argNid: zast.nodeid ptr: bool} out bool is {
     if ptr then return false
-    return (values.scopeOwnsTemp :typing :argNid)
+    return (values.scopeOwnsTemp :prog :argNid)
 }
 
 # hoistCtype -- a hoisted temporary's C type: the value's, held through its heap
 # pointer for a Map or Set, and a pointer to it for a `ptr` value.
 hoistCtype: function {
-    ast: Ast.view
-    reg: ztypes.ZTypeRegistry.view
-    typing: ztyping.ZTyping.view
+    prog: Program.view
     ctx: Ctx
     tid: ztypes.tid
     ptr: bool
 } out String is {
-    ct: typeRefC :ast :reg :typing :ctx :tid
-    if ptr or (isHeapPtrCollection :reg :typing :ctx :tid) then ct.append "*"
+    ct: typeRefC :prog :ctx :tid
+    if ptr or (isHeapPtrCollection :prog :ctx :tid) then ct.append "*"
     return ct
 }
 
@@ -1210,9 +1107,7 @@ hoistCtype: function {
 # decides addressability; a compound literal already is one and must not come
 # here (it would cost a temp for nothing). Answers the temporary's name.
 hoistForAddress: function {
-    ast: Ast.view
-    reg: ztypes.ZTypeRegistry.view
-    typing: ztyping.ZTyping.view
+    prog: Program.view
     ctx: Ctx
     av: StringView
     tid: ztypes.tid
@@ -1223,16 +1118,16 @@ hoistForAddress: function {
     # the checker's unnamed local this temp realises, 0 for none
     tag: zast.nameid.zero
 } out String is {
-    nm: argHoistName :ast :reg :typing :ctx :argNid fallback: "_ah"
-    owes: hoistOwes :typing :argNid :ptr
+    nm: argHoistName :prog :ctx :argNid fallback: "_ah"
+    owes: hoistOwes :prog :argNid :ptr
     if tag.notZero when owes then ctx.hoistTags.set key: nm.copy value: tag
     dt: String
-    if owes then dt = hoistDestroyLine :reg :typing :ctx :tid nm: nm.stringView
+    if owes then dt = hoistDestroyLine :prog :ctx :tid nm: nm.stringView
     ctx.argHoists.append (
         ArgHoist
         name: nm.copy
         val: av.string
-        ctype: (hoistCtype :ast :reg :typing :ctx :tid :ptr)
+        ctype: (hoistCtype :prog :ctx :tid :ptr)
         dtor: dt
     )
     return nm
@@ -1245,9 +1140,7 @@ hoistForAddress: function {
 # twice allocates twice and leaks both. A StringView call (`sv + "!"`) binds to
 # a temp the statement flush declares.
 stringViewBinopOperand: function {
-    ast: Ast.view
-    reg: ztypes.ZTypeRegistry.view
-    typing: ztyping.ZTyping.view
+    prog: Program.view
     ctx: Ctx
     n: astnode.view
     expr: StringView
@@ -1257,12 +1150,10 @@ stringViewBinopOperand: function {
     src: expr.string
     srcF: exprF
     if exprF.place.not then {
-        operandTid: stmtblocks.stampIdDeep :reg :typing :n
+        operandTid: stmtblocks.stampIdDeep :prog :n
         hv: (
             hoistBorrowValArgWith
-            :ast
-            :reg
-            :typing
+            :prog
             :ctx
             argNid: (zast.nodeIdOf :n)
             av: expr
@@ -1275,20 +1166,18 @@ stringViewBinopOperand: function {
             srcF = pathFacts
         }
     }
-    isStrT: operandIsStr :reg :typing :ctx :n
+    isStrT: operandIsStr :prog :ctx :n
     if isStrT.not when srcF.once then {
         # the operand is a view: bound so it is read once; it frees nothing
-        src = hoistForAddress :ast :reg :typing :ctx av: expr tid: ctx.svTid argNid: zast.nodeid
+        src = hoistForAddress :prog :ctx av: expr tid: ctx.svTid argNid: zast.nodeid
         srcF = pathFacts
     }
-    valueVid: atomVidIfPlain :ast :reg :typing :ctx :n text: src.stringView
+    valueVid: atomVidIfPlain :prog :ctx :n text: src.stringView
     vf: String
     if src.stringView == expr then {
         vfa: (
             svValueFormAt
-            :ast
-            :reg
-            :typing
+            :prog
             :ctx
             :n
             expr: src.stringView
@@ -1301,9 +1190,7 @@ stringViewBinopOperand: function {
         # a hoisted operand is the temp, not the node
         vfh: (
             svValueForm
-            :ast
-            :reg
-            :typing
+            :prog
             :ctx
             expr: src.stringView
             isStr: isStrT
@@ -1346,9 +1233,7 @@ instargptr: record {
 # next positional one. Advances the positional cursor exactly when it consumes
 # a positional slot.
 instanceMethodArgValue: function {
-    ast: Ast.view
-    reg: ztypes.ZTypeRegistry.view
-    typing: ztyping.ZTyping.view
+    prog: Program.view
     ctx: Ctx
     call: zast.callrow.view
     mco: ztypes.tid
@@ -1360,14 +1245,12 @@ instanceMethodArgValue: function {
     avF: exprfacts.borrow
 } out instargval is {
     positionalIdx: posIdx
-    ca: ctorArgFor :ast :call label: posParamNameId posIdx: positionalIdx
+    ca: ctorArgFor :prog :call label: posParamNameId posIdx: positionalIdx
     isLabelled: ca.labelled
     iiF: exprfacts
     iiVal: (
         ctorInterpArgAt
-        :ast
-        :reg
-        :typing
+        :prog
         :ctx
         aid: ca.nid
         fid: mco
@@ -1388,19 +1271,19 @@ instanceMethodArgValue: function {
         usedInterp = true
         if isLabelled.not then positionalIdx = positionalIdx + 1
     } else {
-        avNd = ctorArgNodeByLabel :ast :call label: posParamNameId
+        avNd = ctorArgNodeByLabel :prog :call label: posParamNameId
         if avNd.isZero then {
             atomVarId = stating facts: avF from: constFacts text: "0".string
         } else {
-            atomVarId = ctorArgTextAt :ast :reg :typing :ctx aid: avNd facts: avF
+            atomVarId = ctorArgTextAt :prog :ctx aid: avNd facts: avF
         }
         if isLabelled.not then {
             pF: exprfacts
-            pv: ctorArgByPosition :ast :reg :typing :ctx :call idx: positionalIdx facts: pF
+            pv: ctorArgByPosition :prog :ctx :call idx: positionalIdx facts: pF
             if pv.length > 0 then {
                 atomVarId = pv.take
                 stateFacts facts: avF from: pF
-                avNd = ctorArgNodeByPosition :ast :call idx: positionalIdx
+                avNd = ctorArgNodeByPosition :prog :call idx: positionalIdx
             }
             positionalIdx = positionalIdx + 1
         }
@@ -1415,9 +1298,7 @@ instanceMethodArgValue: function {
 # value text `av` names. An interpolated argument is a statement expression,
 # never an lvalue, so it never is.
 instanceMethodArgPtr: function {
-    ast: Ast.view
-    reg: ztypes.ZTypeRegistry.view
-    typing: ztyping.ZTyping.view
+    prog: Program.view
     ctx: Ctx
     mco: ztypes.tid
     posParamNameId: zast.nameid
@@ -1427,11 +1308,10 @@ instanceMethodArgPtr: function {
     # the argument's node, 0 for an interpolated one
     avNd: zast.nodeid
 } out instargptr is {
-    pTake: paramTakesArg :typing fid: mco pnameId: posParamNameId
+    pTake: paramTakesArg :prog fid: mco pnameId: posParamNameId
     ptra: (
         paramTakesPointer
-        :reg
-        :typing
+        :prog
         :ctx
         fid: mco
         pnameId: posParamNameId
@@ -1443,9 +1323,9 @@ instanceMethodArgPtr: function {
     if ptra then {
         byref = true
         if avNd.notZero then {
-            avn: ast.nodes.get i: avNd
-            avq: atomVidIfPlain :ast :reg :typing :ctx n: avn text: av
-            if (argAlreadyPointer :ast :reg :typing :ctx n: avn vid: avq) then byref = false
+            avn: prog.ast.nodes.get i: avNd
+            avq: atomVidIfPlain :prog :ctx n: avn text: av
+            if (argAlreadyPointer :prog :ctx n: avn vid: avq) then byref = false
         }
     }
     return (instargptr :ptra :pTake :byref)
@@ -1454,9 +1334,7 @@ instanceMethodArgPtr: function {
 # instanceMethodArg -- one declared parameter of a user-object method, from its
 # name to the C text that passes it. Answers the positional cursor for the next.
 instanceMethodArg: function {
-    ast: Ast.view
-    reg: ztypes.ZTypeRegistry.view
-    typing: ztyping.ZTyping.view
+    prog: Program.view
     ctx: Ctx
     call: zast.callrow.view
     mco: ztypes.tid
@@ -1470,9 +1348,7 @@ instanceMethodArg: function {
     avF: exprfacts
     avr: (
         instanceMethodArgValue
-        :ast
-        :reg
-        :typing
+        :prog
         :ctx
         :call
         :mco
@@ -1484,9 +1360,7 @@ instanceMethodArg: function {
     )
     ptr: (
         instanceMethodArgPtr
-        :ast
-        :reg
-        :typing
+        :prog
         :ctx
         :mco
         :posParamNameId
@@ -1497,9 +1371,7 @@ instanceMethodArg: function {
     )
     (
         passMethodArg
-        :ast
-        :reg
-        :typing
+        :prog
         :ctx
         :ptr
         avNd: avr.avNd
@@ -1517,9 +1389,7 @@ instanceMethodArg: function {
 # value text `av` is built and how it is passed decided (instanceMethodArgPtr):
 # the method call's and a declared operator's right operand's one rule.
 passMethodArg: function {
-    ast: Ast.view
-    reg: ztypes.ZTypeRegistry.view
-    typing: ztyping.ZTyping.view
+    prog: Program.view
     ctx: Ctx
     ptr: instargptr
     # the argument's node, 0 for an interpolated one
@@ -1536,38 +1406,31 @@ passMethodArg: function {
     # call's valtype result (valueExprC); a parameter that takes the pointer
     # reads the argument as written instead
     if ptr.ptra when ptr.byref.not when avNd.notZero then {
-        avn: ast.nodes.get i: avNd
-        if (
-            (ptrHeldValtype :ast :reg :typing :ctx n: avn) or
-            (refValtypeResult :ast :reg :typing :ctx n: avn)
-        ) then {
-            av = emitExprWith :ast :reg :typing :ctx n: avn facts: avF
+        avn: prog.ast.nodes.get i: avNd
+        if (ptrHeldValtype :prog :ctx n: avn) or (refValtypeResult :prog :ctx n: avn) then {
+            av = emitExprWith :prog :ctx n: avn facts: avF
         }
     }
     # an implementer standing in for a spec parameter is passed as its box: its
     # source's own temporary is spelled inside it, so it takes no other hoist,
     # and the box owns nothing here -- it holds its source by pointer, or the
     # parameter that owns it takes it
-    if avNd.notZero when (typing.standInOf.has key: avNd) then {
-        avn: ast.nodes.get i: avNd
+    if avNd.notZero when (prog.typing.standInOf.has key: avNd) then {
+        avn: prog.ast.nodes.get i: avNd
         bx: (
             implementationArgText
-            :ast
-            :reg
-            :typing
+            :prog
             :ctx
             argOpNode: avn
             av: av.stringView
             :avF
-            avVid: (atomVidIfPlain :ast :reg :typing :ctx n: avn text: av.stringView)
+            avVid: (atomVidIfPlain :prog :ctx n: avn text: av.stringView)
         )
         if bx.length > 0 then {
             if ptr.byref then {
                 args.append (
                     emitByrefArgWith
-                    :ast
-                    :reg
-                    :typing
+                    :prog
                     :ctx
                     av: bx.stringView
                     avF: callFacts
@@ -1582,9 +1445,7 @@ passMethodArg: function {
     if ptr.byref then {
         args.append (
             emitByrefArgWith
-            :ast
-            :reg
-            :typing
+            :prog
             :ctx
             av: av.stringView
             :avF
@@ -1595,9 +1456,7 @@ passMethodArg: function {
     } else {
         (
             appendArgValue
-            :ast
-            :reg
-            :typing
+            :prog
             :ctx
             :ptr
             :usedInterp
@@ -1614,9 +1473,7 @@ passMethodArg: function {
 # appendArgValue -- a method argument passed as its value (not addressed),
 # hoisted when a borrow of the value has to be.
 appendArgValue: function {
-    ast: Ast.view
-    reg: ztypes.ZTypeRegistry.view
-    typing: ztyping.ZTyping.view
+    prog: Program.view
     ctx: Ctx
     ptr: instargptr
     usedInterp: bool
@@ -1630,9 +1487,7 @@ appendArgValue: function {
     if ptr.ptra.not when usedInterp.not then {
         vbhm: (
             hoistBorrowValArgWith
-            :ast
-            :reg
-            :typing
+            :prog
             :ctx
             :av
             :avF
@@ -1654,7 +1509,7 @@ appendArgValue: function {
 # argument is written (from 1, 0 for none -- the receiver's) and the positional
 # cursor its value is read with, walking the parameters as the value lookup does.
 methodArgPositions: function {
-    ast: Ast.view
+    prog: Program.view
     call: zast.callrow.view
     pidsNm: (ListVal zast.nameid).view
     # the receiver parameter's name
@@ -1670,8 +1525,8 @@ methodArgPositions: function {
         if pnB == recvNm then {
             writ.append 0
         } else {
-            ca: ctorArgFor :ast :call label: pnB posIdx: positionalIdx
-            writ.append (writtenArgPosition :ast :call nid: ca.nid)
+            ca: ctorArgFor :prog :call label: pnB posIdx: positionalIdx
+            writ.append (writtenArgPosition :prog :call nid: ca.nid)
             if ca.labelled.not then positionalIdx = positionalIdx + 1
         }
     }
@@ -1679,11 +1534,13 @@ methodArgPositions: function {
 
 # writtenArgPosition -- where the argument whose value is node `nid` is written
 # in the call, counted from 1; 0 when no argument is.
-writtenArgPosition: function {ast: Ast.view call: zast.callrow.view nid: zast.nodeid} out u64 is {
+writtenArgPosition: function {
+    prog: Program.view call: zast.callrow.view nid: zast.nodeid
+} out u64 is {
     if nid.isZero then return 0
     w: u64
-    for each aId: (zast.kidsOf :ast span: call.arguments) loop {
-        a: ast.nodes.get i: aId
+    for each aId: (zast.kidsOf ast: prog.ast span: call.arguments) loop {
+        a: prog.ast.nodes.get i: aId
         if a.namedoperation then {
             w = w + 1
             if a.operation == nid then return w
@@ -1699,21 +1556,19 @@ writtenArgPosition: function {ast: Ast.view call: zast.callrow.view nid: zast.no
 # binds it to a temporary that releases the box, and a binding or a taking
 # parameter owns it as any owned value.
 emitBoxCreate: function {
-    ast: Ast.view
-    reg: ztypes.ZTypeRegistry.view
-    typing: ztyping.ZTyping.view
+    prog: Program.view
     ctx: Ctx
     call: zast.callrow.view
     facts: exprfacts.borrow
 } out String is {
-    cko: typing.callKind.get key: call.nodeid
+    cko: prog.typing.callKind.get key: call.nodeid
     isBoxC: false
     if cko.some when cko == zast.callkind.boxCreate then isBoxC = true
     if isBoxC.not then return "".string
-    bmid: stampIdOf :typing nid: call.nodeid
-    beid: reg.genericTypeArgAt specId: bmid ordinal: 0
-    binner: typeRefC :ast :reg :typing :ctx tid: beid
-    bval: ctorArgByLabel :ast :reg :typing :ctx :call label: zast.wellKnown.slot.wkFrom
+    bmid: stampIdOf :prog nid: call.nodeid
+    beid: prog.reg.genericTypeArgAt specId: bmid ordinal: 0
+    binner: typeRefC :prog :ctx tid: beid
+    bval: ctorArgByLabel :prog :ctx :call label: zast.wellKnown.slot.wkFrom
     bN: ctx.argHoistCtr
     ctx.argHoistCtr = ctx.argHoistCtr + 1
     bnm: "_Box\{bN}"
@@ -1734,9 +1589,7 @@ emitBoxCreate: function {
 # hoisted temp (owned by the statement, freed at its flush -- a probe never
 # retains its key).
 stringKeyArgPointer: function {
-    ast: Ast.view
-    reg: ztypes.ZTypeRegistry.view
-    typing: ztyping.ZTyping.view
+    prog: Program.view
     ctx: Ctx
     call: zast.callrow.view
     label: zast.nameid
@@ -1746,17 +1599,15 @@ stringKeyArgPointer: function {
     # a String `.view`/`.borrow` PARAMETER, or a borrowed field, arrives as a
     # pointer already; addressing it again hands the runtime a `String_t**`,
     # which the C compiler rejects
-    if (argIsPointerByLabel :ast :reg :typing :ctx :call :label) then return expr.string
+    if (argIsPointerByLabel :prog :ctx :call :label) then return expr.string
     if exprF.place.not then {
         nmK: (
             hoistForAddress
-            :ast
-            :reg
-            :typing
+            :prog
             :ctx
             av: expr
             tid: ctx.strTid
-            argNid: (ctorArgNodeByLabel :ast :call :label)
+            argNid: (ctorArgNodeByLabel :prog :call :label)
         )
         return "&\{nmK}"
     }
@@ -1768,16 +1619,14 @@ stringKeyArgPointer: function {
 # builds and yields the owned String; "" otherwise. Used for inline argument
 # positions, where the pure emitExpr cannot emit the multi-statement interp build.
 emitInterpArgExpr: function {
-    ast: Ast.view
-    reg: ztypes.ZTypeRegistry.view
-    typing: ztyping.ZTyping.view
+    prog: Program.view
     ctx: Ctx
     n: astnode.view
 } out String is {
     match (
         n
     ) case atomstring then {
-        if (values.isInterp :ast parts: n.stringparts) then {
+        if (values.isInterp :prog parts: n.stringparts) then {
             # the build runs where the value is read: its locals are declared by
             # the enclosing statement, and what its parts hoisted is assigned and
             # released inside it, so the statement owes none of them
@@ -1786,9 +1635,7 @@ emitInterpArgExpr: function {
             ops: String
             sM: (
                 values.emitInterpBuild
-                :ast
-                :reg
-                :typing
+                :prog
                 :ctx
                 parts: n.stringparts
                 ind: ""
@@ -1802,18 +1649,16 @@ emitInterpArgExpr: function {
         }
         return "".string
     } case dottedpath then {
-        cm: aliasOrChildId :ast :typing aliasId: n.nodeid childId: n.child
+        cm: aliasOrChildId :prog aliasId: n.nodeid childId: n.child
         if cm == zast.wellKnown.slot.wkString then {
-            dpp: ast.nodes.get i: n.parent
-            return (emitInterpArgExpr :ast :reg :typing :ctx n: dpp)
+            dpp: prog.ast.nodes.get i: n.parent
+            return (emitInterpArgExpr :prog :ctx n: dpp)
         }
         if (ztypecheck.isStringViewMember nameId: cm) then return (
             emitInterpArgExpr
-            :ast
-            :reg
-            :typing
+            :prog
             :ctx
-            n: (ast.nodes.get i: n.parent)
+            n: (prog.ast.nodes.get i: n.parent)
         )
         return "".string
     } else {
@@ -1827,14 +1672,12 @@ emitInterpArgExpr: function {
 # checker holds in a temporary of the receiver's own (tempOf), and that
 # temporary says whether, and how long, the String is owned. Any other argument
 # is the String itself.
-interpStorageNid: function {
-    ast: Ast.view typing: ztyping.ZTyping.view n: astnode.view
-} out zast.nodeid is {
+interpStorageNid: function {prog: Program.view n: astnode.view} out zast.nodeid is {
     match (
         n
     ) case dottedpath then {
-        cm: aliasOrChildId :ast :typing aliasId: n.nodeid childId: n.child
-        held: (typing.tempOf.get key: n.parent).some
+        cm: aliasOrChildId :prog aliasId: n.nodeid childId: n.child
+        held: (prog.typing.tempOf.get key: n.parent).some
         if (ztypecheck.isStringViewMember nameId: cm) when held then return n.parent
     } else null
     return (zast.nodeIdOf :n)
@@ -1846,17 +1689,15 @@ interpStorageNid: function {
 # anything else gets the emitter's own `_ahN`. WHEN it dies is the hoist list's
 # business.
 argHoistName: function {
-    ast: Ast.view
-    reg: ztypes.ZTypeRegistry.view
-    typing: ztyping.ZTyping.view
+    prog: Program.view
     ctx: Ctx
     argNid: zast.nodeid
     # what the emitter's own name is called when it has to invent one
     fallback: StringView
 } out String is {
     if argNid.notZero then {
-        tv: typing.tempOf.get key: argNid
-        if tv.some then return (localnames.varCName :ctx :ast :reg vid: tv)
+        tv: prog.typing.tempOf.get key: argNid
+        if tv.some then return (localnames.varCName :ctx :prog vid: tv)
     }
     hn: ctx.argHoistCtr
     ctx.argHoistCtr = ctx.argHoistCtr + 1
@@ -1866,15 +1707,15 @@ argHoistName: function {
 # ownedTypedefArg -- the argument `argNid` is a typedef built from a value
 # (`(Path s)`) whose temporary the checker says owns it. A typedef emits as its
 # source, so the text is an lvalue that still needs the temporary's free.
-ownedTypedefArg: function {typing: ztyping.ZTyping.view argNid: zast.nodeid} out bool is {
+ownedTypedefArg: function {prog: Program.view argNid: zast.nodeid} out bool is {
     if argNid.isZero then return false
-    ck: typing.callKind.get key: argNid
+    ck: prog.typing.callKind.get key: argNid
     match (
         ck
     ) case some then {
         if ck != zast.callkind.typedefCreate then return false
     } case none then return false
-    return (values.scopeOwnsTemp :typing :argNid)
+    return (values.scopeOwnsTemp :prog :argNid)
 }
 
 # emitColInterpArg -- an interpolated-string collection-method argument hoisted to
@@ -1884,22 +1725,20 @@ ownedTypedefArg: function {typing: ztyping.ZTyping.view argNid: zast.nodeid} out
 # borrows owns nothing, so neither leaves one to register. The hoist list still
 # says WHEN the free runs. "" when n is not an interpolated string.
 emitColInterpArg: function {
-    ast: Ast.view
-    reg: ztypes.ZTypeRegistry.view
-    typing: ztyping.ZTyping.view
+    prog: Program.view
     ctx: Ctx
     n: astnode.view
     consumes: bool
 } out String is {
-    sx: emitInterpArgExpr :ast :reg :typing :ctx :n
+    sx: emitInterpArgExpr :prog :ctx :n
     if sx.length == 0 then {
         if consumes then return "".string
-        if ((stmtblocks.stampIdDeep :reg :typing :n) == ctx.strTid).not then return "".string
+        if ((stmtblocks.stampIdDeep :prog :n) == ctx.strTid).not then return "".string
         # the argument is spelled again by the caller when this declines, so
         # what this spelling hoisted is dropped with it
         hmk: pendingHoistMark :ctx
         exF: exprfacts
-        ex: emitExprWith :ast :reg :typing :ctx :n facts: exF
+        ex: emitExprWith :prog :ctx :n facts: exF
         if exF.place then {
             values.dropHoistsTo :ctx mark: hmk
             return "".string
@@ -1908,13 +1747,11 @@ emitColInterpArg: function {
     }
     return (
         hoistForAddress
-        :ast
-        :reg
-        :typing
+        :prog
         :ctx
         av: sx.stringView
         tid: ctx.strTid
-        argNid: (interpStorageNid :ast :typing :n)
+        argNid: (interpStorageNid :prog :n)
     )
 }
 
@@ -1928,9 +1765,7 @@ emitColInterpArg: function {
 # it normally). Mirrors emitColInterpArg's hoist but generalises the returned
 # form across param kinds.
 emitInterpArgForParam: function {
-    ast: Ast.view
-    reg: ztypes.ZTypeRegistry.view
-    typing: ztyping.ZTyping.view
+    prog: Program.view
     ctx: Ctx
     n: astnode.view
     fid: ztypes.tid
@@ -1938,19 +1773,17 @@ emitInterpArgForParam: function {
     pid: ztypes.tid
     facts: exprfacts.borrow
 } out String is {
-    sx: emitInterpArgExpr :ast :reg :typing :ctx :n
+    sx: emitInterpArgExpr :prog :ctx :n
     if sx.length == 0 then return "".string
     isTake: false
-    if pid == ctx.strTid when (paramTakesArg :typing :fid :pnameId) then isTake = true
+    if pid == ctx.strTid when (paramTakesArg :prog :fid :pnameId) then isTake = true
     nmH: (
         hoistForAddress
-        :ast
-        :reg
-        :typing
+        :prog
         :ctx
         av: sx.stringView
         tid: ctx.strTid
-        argNid: (interpStorageNid :ast :typing :n)
+        argNid: (interpStorageNid :prog :n)
     )
     retx: String
     retF: pathFacts
@@ -1961,16 +1794,14 @@ emitInterpArgForParam: function {
             retx = "&\{nmH}"
             retF = addrFacts e: pathFacts
         }
-    } else if (typing.standInOf.has key: (zast.nodeIdOf :n)) then {
+    } else if (prog.typing.standInOf.has key: (zast.nodeIdOf :n)) then {
         # the String stands in for a spec the parameter is typed as (`StringViewable`):
         # the temporary itself, which implementationArgText boxes
         retx = nmH.copy
     } else {
         retx = (
             svValueForm
-            :ast
-            :reg
-            :typing
+            :prog
             :ctx
             expr: nmH.stringView
             isStr: true
@@ -1983,9 +1814,7 @@ emitInterpArgForParam: function {
 
 # colArgWith -- colArg, its facts stated into `facts`.
 colArgWith: function {
-    ast: Ast.view
-    reg: ztypes.ZTypeRegistry.view
-    typing: ztyping.ZTyping.view
+    prog: Program.view
     ctx: Ctx
     call: zast.callrow.view
     label: zast.nameid
@@ -1995,35 +1824,29 @@ colArgWith: function {
     posFirst: String
     posF: exprfacts
     havePos: false
-    for each aId: (zast.kidsOf :ast span: call.arguments) loop {
-        a: ast.nodes.get i: aId
+    for each aId: (zast.kidsOf ast: prog.ast span: call.arguments) loop {
+        a: prog.ast.nodes.get i: aId
         if a.namedoperation then {
             if a.name == label then {
                 ic: (
                     emitColInterpArg
-                    :ast
-                    :reg
-                    :typing
+                    :prog
                     :ctx
-                    n: (ast.nodes.get i: a.operation)
+                    n: (prog.ast.nodes.get i: a.operation)
                     :consumes
                 )
                 # an interpolation, hoisted to its temp
                 if ic.length > 0 then return (stating :facts from: pathFacts text: ic)
                 return (
                     standInText
-                    :ast
-                    :reg
-                    :typing
+                    :prog
                     :ctx
-                    n: (ast.nodes.get i: a.operation)
+                    n: (prog.ast.nodes.get i: a.operation)
                     text: (
                         valueExprC
-                        :ast
-                        :reg
-                        :typing
+                        :prog
                         :ctx
-                        n: (ast.nodes.get i: a.operation)
+                        n: (prog.ast.nodes.get i: a.operation)
                         :facts
                     )
                     :facts
@@ -2033,26 +1856,22 @@ colArgWith: function {
                 havePos = true
                 icp: (
                     emitColInterpArg
-                    :ast
-                    :reg
-                    :typing
+                    :prog
                     :ctx
-                    n: (ast.nodes.get i: a.operation)
+                    n: (prog.ast.nodes.get i: a.operation)
                     :consumes
                 )
                 if icp.length > 0 then {
                     posFirst = icp.take
                     posF = pathFacts
                 } else {
-                    aOpNode: ast.nodes.get i: a.operation
+                    aOpNode: prog.ast.nodes.get i: a.operation
                     posFirst = (
                         standInText
-                        :ast
-                        :reg
-                        :typing
+                        :prog
                         :ctx
                         n: aOpNode
-                        text: (valueExprC :ast :reg :typing :ctx n: aOpNode facts: posF)
+                        text: (valueExprC :prog :ctx n: aOpNode facts: posF)
                         facts: posF
                     )
                 }
@@ -2065,9 +1884,7 @@ colArgWith: function {
 
 # listArgWith -- listArg, its facts stated into `facts`.
 listArgWith: function {
-    ast: Ast.view
-    reg: ztypes.ZTypeRegistry.view
-    typing: ztyping.ZTyping.view
+    prog: Program.view
     ctx: Ctx
     call: zast.callrow.view
     label: zast.nameid
@@ -2076,24 +1893,20 @@ listArgWith: function {
     posFirst: String
     posF: exprfacts
     havePos: false
-    for each aId: (zast.kidsOf :ast span: call.arguments) loop {
-        a: ast.nodes.get i: aId
+    for each aId: (zast.kidsOf ast: prog.ast span: call.arguments) loop {
+        a: prog.ast.nodes.get i: aId
         if a.namedoperation then {
             if a.name == label then {
                 return (
                     standInText
-                    :ast
-                    :reg
-                    :typing
+                    :prog
                     :ctx
-                    n: (ast.nodes.get i: a.operation)
+                    n: (prog.ast.nodes.get i: a.operation)
                     text: (
                         valueExprC
-                        :ast
-                        :reg
-                        :typing
+                        :prog
                         :ctx
-                        n: (ast.nodes.get i: a.operation)
+                        n: (prog.ast.nodes.get i: a.operation)
                         :facts
                     )
                     :facts
@@ -2101,15 +1914,13 @@ listArgWith: function {
             }
             if a.name.isZero when havePos.not then {
                 havePos = true
-                aOpNode: ast.nodes.get i: a.operation
+                aOpNode: prog.ast.nodes.get i: a.operation
                 posFirst = (
                     standInText
-                    :ast
-                    :reg
-                    :typing
+                    :prog
                     :ctx
                     n: aOpNode
-                    text: (valueExprC :ast :reg :typing :ctx n: aOpNode facts: posF)
+                    text: (valueExprC :prog :ctx n: aOpNode facts: posF)
                     facts: posF
                 )
             }
@@ -2124,9 +1935,7 @@ listArgWith: function {
 # orderPairArgs -- the two labelled arguments of a native leg, placed into slots
 # 0 and 1 in the order they are written.
 orderPairArgs: function {
-    ast: Ast.view
-    reg: ztypes.ZTypeRegistry.view
-    typing: ztyping.ZTyping.view
+    prog: Program.view
     ctx: Ctx
     call: zast.callrow.view
     a: zast.nameid
@@ -2136,9 +1945,9 @@ orderPairArgs: function {
     # the C reading the two names each more than once
     twice: false
 } out orderstate is {
-    na: labelArgNode :ast :call label: a form: aForm
-    nb: labelArgNode :ast :call label: b form: bForm
-    bFirst: (writtenArgPosition :ast :call nid: nb) < (writtenArgPosition :ast :call nid: na)
+    na: labelArgNode :prog :call label: a form: aForm
+    nb: labelArgNode :prog :call label: b form: bForm
+    bFirst: (writtenArgPosition :prog :call nid: nb) < (writtenArgPosition :prog :call nid: na)
     ord: callorder.orderBegin :ctx slots: 2
     if twice then {
         orderNamesTwice st: ord slot: 0
@@ -2146,9 +1955,7 @@ orderPairArgs: function {
     }
     if bFirst then (
         orderLabelArg
-        :ast
-        :reg
-        :typing
+        :prog
         :ctx
         :call
         label: b
@@ -2157,12 +1964,10 @@ orderPairArgs: function {
         slot: 1
         :ord
     )
-    orderLabelArg :ast :reg :typing :ctx :call label: a form: aForm nid: na slot: 0 :ord
+    orderLabelArg :prog :ctx :call label: a form: aForm nid: na slot: 0 :ord
     if bFirst.not then (
         orderLabelArg
-        :ast
-        :reg
-        :typing
+        :prog
         :ctx
         :call
         label: b
@@ -2177,9 +1982,7 @@ orderPairArgs: function {
 # orderLabelArg -- one labelled argument of a native leg, spelled as `form` says
 # and placed in evaluation order into `slot`.
 orderLabelArg: function {
-    ast: Ast.view
-    reg: ztypes.ZTypeRegistry.view
-    typing: ztyping.ZTyping.view
+    prog: Program.view
     ctx: Ctx
     call: zast.callrow.view
     label: zast.nameid
@@ -2191,12 +1994,10 @@ orderLabelArg: function {
 } is {
     mk: pendingHoistMark :ctx
     tF: exprfacts
-    text: labelArgText :ast :reg :typing :ctx :call :label :form facts: tF
+    text: labelArgText :prog :ctx :call :label :form facts: tF
     (
         callorder.orderArgAtWith
-        :ast
-        :reg
-        :typing
+        :prog
         :ctx
         st: ord
         mark: mk
@@ -2210,9 +2011,7 @@ orderLabelArg: function {
 
 # labelArgText -- a native leg's labelled argument, spelled as `form` says.
 labelArgText: function {
-    ast: Ast.view
-    reg: ztypes.ZTypeRegistry.view
-    typing: ztyping.ZTyping.view
+    prog: Program.view
     ctx: Ctx
     call: zast.callrow.view
     label: zast.nameid
@@ -2222,17 +2021,17 @@ labelArgText: function {
     match (
         form
     ) case value then {
-        return (listArgWith :ast :reg :typing :ctx :call :label :facts)
+        return (listArgWith :prog :ctx :call :label :facts)
     } case moved then {
-        return (colArgWith :ast :reg :typing :ctx :call :label consumes: true :facts)
+        return (colArgWith :prog :ctx :call :label consumes: true :facts)
     } case read then {
-        return (colArgWith :ast :reg :typing :ctx :call :label consumes: false :facts)
+        return (colArgWith :prog :ctx :call :label consumes: false :facts)
     } case labelled then {
-        return (ctorArgByLabelWith :ast :reg :typing :ctx :call :label :facts)
+        return (ctorArgByLabelWith :prog :ctx :call :label :facts)
     } case addressed then {
         avF: exprfacts
-        av: ctorArgByLabelWith :ast :reg :typing :ctx :call :label facts: avF
-        if (argIsPointerByLabel :ast :reg :typing :ctx :call :label) then return (
+        av: ctorArgByLabelWith :prog :ctx :call :label facts: avF
+        if (argIsPointerByLabel :prog :ctx :call :label) then return (
             stating
             :facts
             from: avF
@@ -2241,22 +2040,22 @@ labelArgText: function {
         return (stating :facts from: (addrFacts e: avF) text: "&\{av}")
     } case viewed then {
         vF: exprfacts
-        v: ctorArgByLabelWith :ast :reg :typing :ctx :call :label facts: vF
-        return (viewArgCoerce :ast :reg :typing :ctx :call :label av: v.stringView avF: vF :facts)
+        v: ctorArgByLabelWith :prog :ctx :call :label facts: vF
+        return (viewArgCoerce :prog :ctx :call :label av: v.stringView avF: vF :facts)
     }
 }
 
 # labelArgNode -- the value node of the argument `form` binds to `label`, 0 when
 # the call writes none.
 labelArgNode: function {
-    ast: Ast.view call: zast.callrow.view label: zast.nameid form: argform
+    prog: Program.view call: zast.callrow.view label: zast.nameid form: argform
 } out zast.nodeid is {
-    byLabel: ctorArgNodeByLabel :ast :call :label
+    byLabel: ctorArgNodeByLabel :prog :call :label
     if byLabel.notZero then return byLabel
     match (
         form
     ) case labelled then return zast.nodeid case addressed then return zast.nodeid case viewed then return zast.nodeid case value then null case moved then null case read then null
-    return (ctorArgNodeByPosition :ast :call idx: 0)
+    return (ctorArgNodeByPosition :prog :call idx: 0)
 }
 
 # armHeldC -- what a union's boxed arm `arm` holds for the payload `av`, the
@@ -2265,9 +2064,7 @@ labelArgNode: function {
 # nothing; any other arm points at a new cell holding the payload. An inline
 # arm holds the payload itself.
 armHeldC: function {
-    ast: Ast.view
-    reg: ztypes.ZTypeRegistry.view
-    typing: ztyping.ZTyping.view
+    prog: Program.view
     ctx: Ctx
     stid: ztypes.tid
     arm: zast.nameid
@@ -2275,12 +2072,12 @@ armHeldC: function {
     payC: StringView
     av: StringView
 } out String is {
-    if (armPayloadNamesStorage :ast :typing tid: stid :arm :payNid).not then {
+    if (armPayloadNamesStorage :prog tid: stid :arm :payNid).not then {
         return (armCellNew :ctx pc: payC value: av)
     }
-    pn: ast.nodes.get i: payNid
-    avq: atomVidIfPlain :ast :reg :typing :ctx n: pn text: av
-    if (argAlreadyPointer :ast :reg :typing :ctx n: pn vid: avq) then return av.string
+    pn: prog.ast.nodes.get i: payNid
+    avq: atomVidIfPlain :prog :ctx n: pn text: av
+    if (argAlreadyPointer :prog :ctx n: pn vid: avq) then return av.string
     return "&(\{av})"
 }
 
@@ -2288,16 +2085,15 @@ armHeldC: function {
 # name or a path, storage the checker pinned for the value built: the payload
 # is that storage's address, not a copy.
 armPayloadNamesStorage: function {
-    ast: Ast.view
-    typing: ztyping.ZTyping.view
+    prog: Program.view
     tid: ztypes.tid
     arm: zast.nameid
     # the payload's value node, 0 when there is none
     payNid: zast.nodeid
 } out bool is {
     if payNid.isZero then return false
-    if (typing.declIsBorrowedFieldId parentTypeId: tid nameId: arm).not then return false
-    op: ast.nodes.get i: payNid
+    if (prog.typing.declIsBorrowedFieldId parentTypeId: tid nameId: arm).not then return false
+    op: prog.ast.nodes.get i: payNid
     return op.atomid or op.dottedpath
 }
 
@@ -2316,45 +2112,40 @@ armPayloadNamesStorage: function {
 # variable id, or off the name -- is what let the two sides disagree and emit a
 # call with the receiver slot never filled.
 emitQualRecvMethodCall: function {
-    ast: Ast.view
-    reg: ztypes.ZTypeRegistry.view
-    typing: ztyping.ZTyping.view
+    prog: Program.view
     ctx: Ctx
     call: zast.callrow.view
     mtid: ztypes.tid
     facts: exprfacts.borrow
 } out String is {
-    if (typing.callBaseNamesType.has item: call.nodeid).not then return "".string
-    recvNmQ: reg.thisParamNameIdOf tid: mtid
+    if (prog.typing.callBaseNamesType.has item: call.nodeid).not then return "".string
+    recvNmQ: prog.reg.thisParamNameIdOf tid: mtid
     if recvNmQ.isZero then recvNmQ = zast.wellKnown.slot.wkThis
     recvExQ: String
     recvQF: exprfacts
     recvPtrQ: false
     posStartQ: u64
-    if (fnTypeTakesThis :reg :typing tid: mtid) then {
+    if (fnTypeTakesThis :prog tid: mtid) then {
         recvNdQ: zast.nodeid
-        if (ctorHasLabel :ast :call label: recvNmQ) then {
-            recvExQ = ctorArgByLabelWith :ast :reg :typing :ctx :call label: recvNmQ facts: recvQF
-            recvNdQ = ctorArgNodeByLabel :ast :call label: recvNmQ
+        if (ctorHasLabel :prog :call label: recvNmQ) then {
+            recvExQ = ctorArgByLabelWith :prog :ctx :call label: recvNmQ facts: recvQF
+            recvNdQ = ctorArgNodeByLabel :prog :call label: recvNmQ
         } else {
-            recvExQ = ctorArgByPosition :ast :reg :typing :ctx :call idx: 0 facts: recvQF
-            recvNdQ = ctorArgNodeByPosition :ast :call idx: 0
+            recvExQ = ctorArgByPosition :prog :ctx :call idx: 0 facts: recvQF
+            recvNdQ = ctorArgNodeByPosition :prog :call idx: 0
             posStartQ = 1
         }
         # a receiver already held as a pointer passes as it stands -- as
         # WRITTEN, since the construction-argument text loads a pointer-held
         # valtype and the receiver slot wants the pointer
         if recvNdQ.notZero then {
-            recvPtrQ = receiverNodeIsPtr :ast :reg :typing :ctx n: (ast.nodes.get i: recvNdQ)
-            if recvPtrQ when (ptrHeldValtype :ast :reg :typing :ctx n: (ast.nodes.get i: recvNdQ)
-            ) then {
+            recvPtrQ = receiverNodeIsPtr :prog :ctx n: (prog.ast.nodes.get i: recvNdQ)
+            if recvPtrQ when (ptrHeldValtype :prog :ctx n: (prog.ast.nodes.get i: recvNdQ)) then {
                 recvExQ = (
                     emitExprWith
-                    :ast
-                    :reg
-                    :typing
+                    :prog
                     :ctx
-                    n: (ast.nodes.get i: recvNdQ)
+                    n: (prog.ast.nodes.get i: recvNdQ)
                     facts: recvQF
                 )
             }
@@ -2367,9 +2158,7 @@ emitQualRecvMethodCall: function {
     }
     return (
         callorder.emitInstanceMethodBody
-        :ast
-        :reg
-        :typing
+        :prog
         :ctx
         :call
         mco: mtid
@@ -2392,29 +2181,25 @@ emitQualRecvMethodCall: function {
 # methods and a reference for `self: this` ones -- the same declaration
 # spelled two ways, emitting two different things. This mirrors the checker's
 # methodHasThisReceiver, which has always asked both.
-fnTypeTakesThis: function {
-    reg: ztypes.ZTypeRegistry.view typing: ztyping.ZTyping.view tid: ztypes.tid
-} out bool is {
-    if (typing.declHasMemberId parentTypeId: tid nameId: zast.wellKnown.slot.wkThis
+fnTypeTakesThis: function {prog: Program.view tid: ztypes.tid} out bool is {
+    if (prog.typing.declHasMemberId parentTypeId: tid nameId: zast.wellKnown.slot.wkThis
     ) then return true
-    return (reg.hasThisParamName :tid)
+    return (prog.reg.hasThisParamName :tid)
 }
 
 # renderedMethodDefaultArgs -- the comma-joined rendered defaults for every
 # non-receiver parameter of a method, when ALL of them carry defaults; ""
 # when any is required or there are none (the caller keeps its emission).
 renderedMethodDefaultArgs: function {
-    ast: Ast.view
-    reg: ztypes.ZTypeRegistry.view
-    typing: ztyping.ZTyping.view
+    prog: Program.view
     ctx: Ctx
     fnTid: ztypes.tid
 } out String is {
     pn: List String
     pidl: ListVal ztypes.tid
     pidlNm: ListVal zast.nameid
-    callorder.recFieldLists :ast :reg :typing tid: fnTid names: pn ids: pidl nameIds: pidlNm
-    thisPn: zast.poolTextAt pool: ast.names ref: (reg.thisParamNameIdOf tid: fnTid)
+    callorder.recFieldLists :prog tid: fnTid names: pn ids: pidl nameIds: pidlNm
+    thisPn: zast.poolTextAt pool: prog.ast.names ref: (prog.reg.thisParamNameIdOf tid: fnTid)
     args: String
     userSeen: false
     j: u64
@@ -2430,11 +2215,11 @@ renderedMethodDefaultArgs: function {
         )
         if isRecv.not then {
             userSeen = true
-            hd: typing.declHasDefaultId parentTypeId: fnTid nameId: pnjId
+            hd: prog.typing.declHasDefaultId parentTypeId: fnTid nameId: pnjId
             if hd.not then return "".string
-            dt: typing.declDefaultOfId parentTypeId: fnTid nameId: pnjId
+            dt: prog.typing.declDefaultOfId parentTypeId: fnTid nameId: pnjId
             facts: exprfacts
-            rv: consts.renderDefault :ast :reg :typing :ctx dv: dt targetTid: pij :facts
+            rv: consts.renderDefault :prog :ctx dv: dt targetTid: pij :facts
             if args.length > 0 then args.append ", "
             args.append rv
         }
@@ -2446,9 +2231,7 @@ renderedMethodDefaultArgs: function {
 # fieldDefaultText -- a field the construction left unsupplied: its registered
 # default, else an fnptr slot's method address, else the "0" fallback.
 fieldDefaultText: function {
-    ast: Ast.view
-    reg: ztypes.ZTypeRegistry.view
-    typing: ztyping.ZTyping.view
+    prog: Program.view
     ctx: Ctx
     tid: ztypes.tid
     # the field's name id (a raw pool index)
@@ -2458,11 +2241,11 @@ fieldDefaultText: function {
     facts: exprfacts.borrow
 } out String is {
     nm: nameId
-    if (typing.declHasDefaultId parentTypeId: tid nameId: nm) then {
-        cdt: typing.declDefaultOfId parentTypeId: tid nameId: nm
-        return (consts.renderDefault :ast :reg :typing :ctx dv: cdt targetTid: fid :facts)
+    if (prog.typing.declHasDefaultId parentTypeId: tid nameId: nm) then {
+        cdt: prog.typing.declDefaultOfId parentTypeId: tid nameId: nm
+        return (consts.renderDefault :prog :ctx dv: cdt targetTid: fid :facts)
     }
-    if (typing.declIsFnptrFieldId parentTypeId: tid nameId: nm) then {
+    if (prog.typing.declIsFnptrFieldId parentTypeId: tid nameId: nm) then {
         # the method's name, a designator
         return (stating :facts from: pathFacts text: (spelledCname :ctx tid: fid))
     }
@@ -2474,9 +2257,7 @@ fieldDefaultText: function {
 # (unlabeled) argument, then the field's default, then an fnptr slot's method
 # address, else the "0" fallback.
 fieldArgText: function {
-    ast: Ast.view
-    reg: ztypes.ZTypeRegistry.view
-    typing: ztyping.ZTyping.view
+    prog: Program.view
     ctx: Ctx
     tid: ztypes.tid
     # the argument the field binds
@@ -2488,29 +2269,27 @@ fieldArgText: function {
     facts: exprfacts.borrow
 } out String is {
     if ca.nid.notZero then {
-        t: ctorArgTextAt :ast :reg :typing :ctx aid: ca.nid :facts
+        t: ctorArgTextAt :prog :ctx aid: ca.nid :facts
         if ca.labelled or (t.length > 0) then {
             return (
                 standInText
-                :ast
-                :reg
-                :typing
+                :prog
                 :ctx
-                n: (ast.nodes.get i: ca.nid)
+                n: (prog.ast.nodes.get i: ca.nid)
                 text: t.take
                 :facts
             )
         }
     }
     if ca.labelled then return (stating :facts from: constFacts text: "0".string)
-    return (fieldDefaultText :ast :reg :typing :ctx :tid :nameId :fid :facts)
+    return (fieldDefaultText :prog :ctx :tid :nameId :fid :facts)
 }
 
 # ctorArgPositions -- for each parameter of a construction, in declaration
 # order: where its argument is written (from 1, 0 for none) and the positional
 # cursor it is read with. With `labelsOnly` only a label binds an argument.
 ctorArgPositions: function {
-    ast: Ast.view
+    prog: Program.view
     call: zast.callrow.view
     nameIds: (ListVal zast.nameid).view
     labelsOnly: bool
@@ -2523,13 +2302,13 @@ ctorArgPositions: function {
         if labelsOnly then {
             writ.append (
                 writtenArgPosition
-                :ast
+                :prog
                 :call
-                nid: (ctorArgNodeByLabel :ast :call label: nm)
+                nid: (ctorArgNodeByLabel :prog :call label: nm)
             )
         } else {
-            ca: ctorArgFor :ast :call label: nm posIdx: positionalIdx
-            writ.append (writtenArgPosition :ast :call nid: ca.nid)
+            ca: ctorArgFor :prog :call label: nm posIdx: positionalIdx
+            writ.append (writtenArgPosition :prog :call nid: ca.nid)
             if ca.labelled.not then positionalIdx = positionalIdx + 1
         }
     }
@@ -2539,23 +2318,23 @@ ctorArgPositions: function {
 # argument when the call spells the label, else the positional argument at
 # `posIdx`.
 ctorArgFor: function {
-    ast: Ast.view
+    prog: Program.view
     call: zast.callrow.view
     label: zast.nameid
     posIdx: u64
 } out ctorarg is {
-    if (ctorHasLabel :ast :call :label) then {
-        return (ctorarg nid: (ctorArgNodeByLabel :ast :call :label) labelled: true)
+    if (ctorHasLabel :prog :call :label) then {
+        return (ctorarg nid: (ctorArgNodeByLabel :prog :call :label) labelled: true)
     }
-    return (ctorarg nid: (ctorArgNodeByPosition :ast :call idx: posIdx) labelled: false)
+    return (ctorarg nid: (ctorArgNodeByPosition :prog :call idx: posIdx) labelled: false)
 }
 
 # the constructor-argument node matching a field label.
 ctorArgNodeByLabel: function {
-    ast: Ast.view call: zast.callrow.view label: zast.nameid
+    prog: Program.view call: zast.callrow.view label: zast.nameid
 } out zast.nodeid is {
-    for each aId: (zast.kidsOf :ast span: call.arguments) loop {
-        a: ast.nodes.get i: aId
+    for each aId: (zast.kidsOf ast: prog.ast span: call.arguments) loop {
+        a: prog.ast.nodes.get i: aId
         if a.namedoperation when a.name == label then return a.operation
     }
     return zast.nodeid
@@ -2564,51 +2343,45 @@ ctorArgNodeByLabel: function {
 # ctorArgByLabel -- that argument's emitted text. Selected through the node
 # above so a caller can ask about the same argument by node.
 ctorArgByLabel: function {
-    ast: Ast.view
-    reg: ztypes.ZTypeRegistry.view
-    typing: ztyping.ZTyping.view
+    prog: Program.view
     ctx: Ctx
     call: zast.callrow.view
     label: zast.nameid
 } out String is {
     facts: exprfacts
-    return (ctorArgByLabelWith :ast :reg :typing :ctx :call :label :facts)
+    return (ctorArgByLabelWith :prog :ctx :call :label :facts)
 }
 
 # ctorArgByLabelWith -- ctorArgByLabel, its facts stated into `facts`.
 ctorArgByLabelWith: function {
-    ast: Ast.view
-    reg: ztypes.ZTypeRegistry.view
-    typing: ztyping.ZTyping.view
+    prog: Program.view
     ctx: Ctx
     call: zast.callrow.view
     label: zast.nameid
     facts: exprfacts.borrow
 } out String is {
-    aid: ctorArgNodeByLabel :ast :call :label
+    aid: ctorArgNodeByLabel :prog :call :label
     if aid.isZero then return (stating :facts from: constFacts text: "0".string)
-    return (ctorArgTextAt :ast :reg :typing :ctx :aid :facts)
+    return (ctorArgTextAt :prog :ctx :aid :facts)
 }
 
 # ctorArgTextAt -- one argument node's emitted text. An interpolated argument
 # builds through a self-contained statement expression, which emitExpr cannot
 # emit as a chain, so it is asked for first.
 ctorArgTextAt: function {
-    ast: Ast.view
-    reg: ztypes.ZTypeRegistry.view
-    typing: ztyping.ZTyping.view
+    prog: Program.view
     ctx: Ctx
     aid: zast.nodeid
     facts: exprfacts.borrow
 } out String is {
-    n: ast.nodes.get i: aid
+    n: prog.ast.nodes.get i: aid
     # a VIEW of an interpolation is no String: it is read off the string's
     # temporary as any view of a value is (valueExprC)
-    if (interpStorageNid :ast :typing :n) == aid then {
-        iv: emitInterpArgExpr :ast :reg :typing :ctx :n
+    if (interpStorageNid :prog :n) == aid then {
+        iv: emitInterpArgExpr :prog :ctx :n
         if iv.length > 0 then return (stating :facts from: callFacts text: iv)
     }
-    return (valueExprC :ast :reg :typing :ctx :n :facts)
+    return (valueExprC :prog :ctx :n :facts)
 }
 
 # argAlreadyPointer -- does this argument expression already evaluate to the C
@@ -2621,9 +2394,7 @@ ctorArgTextAt: function {
 # `pathIsPointer` sees it. Every byref decision, a receiver's included, asks
 # this, not one part of it.
 argAlreadyPointer: function {
-    ast: Ast.view
-    reg: ztypes.ZTypeRegistry.view
-    typing: ztyping.ZTyping.view
+    prog: Program.view
     ctx: Ctx
     n: astnode.view
     vid: ztypes.vid
@@ -2631,34 +2402,29 @@ argAlreadyPointer: function {
     if (isPtrVid :ctx :vid) then return true
     if (
         isHeapPtrCollection
-        :reg
-        :typing
+        :prog
         :ctx
-        tid: (stampIdOf :typing nid: (interpPartNodeId :n))
+        tid: (stampIdOf :prog nid: (interpPartNodeId :n))
     ) then return true
-    return (pathIsPointer :ast :reg :typing :ctx :n)
+    return (pathIsPointer :prog :ctx :n)
 }
 
 # argIsPointerByLabel -- true when the arg at `label` already evaluates to a C
 # pointer (a reftype/List param or a borrowed field), so a native by-pointer
 # parameter must pass it directly rather than re-addressing it with `&`.
 argIsPointerByLabel: function {
-    ast: Ast.view
-    reg: ztypes.ZTypeRegistry.view
-    typing: ztyping.ZTyping.view
+    prog: Program.view
     ctx: Ctx
     call: zast.callrow.view
     label: zast.nameid
 } out bool is {
-    for each aId: (zast.kidsOf :ast span: call.arguments) loop {
-        a: ast.nodes.get i: aId
+    for each aId: (zast.kidsOf ast: prog.ast span: call.arguments) loop {
+        a: prog.ast.nodes.get i: aId
         if a.namedoperation when a.name == label then return (
             pathIsPointer
-            :ast
-            :reg
-            :typing
+            :prog
             :ctx
-            n: (ast.nodes.get i: a.operation)
+            n: (prog.ast.nodes.get i: a.operation)
         )
     }
     return false
@@ -2668,13 +2434,13 @@ argIsPointerByLabel: function {
 # for a caller that must look the argument up again instead of printing it.
 # 0 when there is no positional argument at that index.
 ctorArgNodeByPosition: function {
-    ast: Ast.view call: zast.callrow.view idx: u64
+    prog: Program.view call: zast.callrow.view idx: u64
 } out zast.nodeid is {
     seen: u64
-    for each aId: (zast.kidsOf :ast span: call.arguments) loop {
-        a: ast.nodes.get i: aId
+    for each aId: (zast.kidsOf ast: prog.ast span: call.arguments) loop {
+        a: prog.ast.nodes.get i: aId
         if a.namedoperation then {
-            an: zast.nameTextAt :ast ref: a.name
+            an: zast.nameTextAt ast: prog.ast ref: a.name
             if an.length == 0 then {
                 if seen == idx then return a.operation
                 seen = seen + 1
@@ -2690,17 +2456,15 @@ ctorArgNodeByPosition: function {
 # ctorArgByPosition -- that argument's emitted text, selected through the node
 # above so a caller can ask about the same argument by node.
 ctorArgByPosition: function {
-    ast: Ast.view
-    reg: ztypes.ZTypeRegistry.view
-    typing: ztyping.ZTyping.view
+    prog: Program.view
     ctx: Ctx
     call: zast.callrow.view
     idx: u64
     facts: exprfacts.borrow
 } out String is {
-    posParamId: ctorArgNodeByPosition :ast :call :idx
+    posParamId: ctorArgNodeByPosition :prog :call :idx
     if posParamId.isZero then return "".string
-    return (ctorArgTextAt :ast :reg :typing :ctx aid: posParamId :facts)
+    return (ctorArgTextAt :prog :ctx aid: posParamId :facts)
 }
 
 # ctorInterpArgAt -- the interp-arg form (emitInterpArgForParam) for one
@@ -2709,9 +2473,7 @@ ctorArgByPosition: function {
 # directly: build, coerce, free. The caller finds the node, by label or by
 # position, through the finders above.
 ctorInterpArgAt: function {
-    ast: Ast.view
-    reg: ztypes.ZTypeRegistry.view
-    typing: ztyping.ZTyping.view
+    prog: Program.view
     ctx: Ctx
     aid: zast.nodeid
     fid: ztypes.tid
@@ -2722,11 +2484,9 @@ ctorInterpArgAt: function {
     if aid.isZero then return "".string
     return (
         emitInterpArgForParam
-        :ast
-        :reg
-        :typing
+        :prog
         :ctx
-        n: (ast.nodes.get i: aid)
+        n: (prog.ast.nodes.get i: aid)
         :fid
         :pnameId
         :pid
@@ -2735,9 +2495,9 @@ ctorInterpArgAt: function {
 }
 
 # ctorHasLabel -- whether a call carries a named argument with this label.
-ctorHasLabel: function {ast: Ast.view call: zast.callrow.view label: zast.nameid} out bool is {
-    for each aId: (zast.kidsOf :ast span: call.arguments) loop {
-        a: ast.nodes.get i: aId
+ctorHasLabel: function {prog: Program.view call: zast.callrow.view label: zast.nameid} out bool is {
+    for each aId: (zast.kidsOf ast: prog.ast span: call.arguments) loop {
+        a: prog.ast.nodes.get i: aId
         if a.namedoperation when a.name == label then return true
     }
     return false
@@ -2747,9 +2507,7 @@ ctorHasLabel: function {ast: Ast.view call: zast.callrow.view label: zast.nameid
 # borrowed reftype field taking the source's address, or the typed zero of a
 # field the call leaves out.
 metaCreateFieldText: function {
-    ast: Ast.view
-    reg: ztypes.ZTypeRegistry.view
-    typing: ztyping.ZTyping.view
+    prog: Program.view
     ctx: Ctx
     call: zast.callrow.view
     et: ztypes.tid
@@ -2761,43 +2519,38 @@ metaCreateFieldText: function {
 } out String is {
     av: String
     avF: exprfacts
-    if (ctorHasLabel :ast :call label: fnameId) then {
-        av = ctorArgByLabelWith :ast :reg :typing :ctx :call label: fnameId facts: avF
+    if (ctorHasLabel :prog :call label: fnameId) then {
+        av = ctorArgByLabelWith :prog :ctx :call label: fnameId facts: avF
         # a borrowed reftype field is a pointer; a source stored INLINE
         # (the receiver's own field, a field of a parameter) is passed
         # by address
         ffidL: fids.get i: fi
-        if (typing.declIsBorrowedFieldId parentTypeId: et nameId: fnameId) when (
+        if (prog.typing.declIsBorrowedFieldId parentTypeId: et nameId: fnameId) when (
             borrowedFieldHeldByPointer
-            :reg
-            :typing
+            :prog
             :ctx
             fid: ffidL
-        ) when (argIsPointerByLabel :ast :reg :typing :ctx :call label: fnameId).not then {
+        ) when (argIsPointerByLabel :prog :ctx :call label: fnameId).not then {
             avMF: exprfacts
             avM: (
                 emitByrefArgWith
-                :ast
-                :reg
-                :typing
+                :prog
                 :ctx
                 av: av.stringView
                 :avF
                 pid: ffidL
-                argNid: (ctorArgNodeByLabel :ast :call label: fnameId)
+                argNid: (ctorArgNodeByLabel :prog :call label: fnameId)
                 facts: avMF
             )
             av = avM.take
             avF = avMF
         }
-    } else if (typing.isSingletonType tid: (fids.get i: fi)) then {
+    } else if (prog.typing.isSingletonType tid: (fids.get i: fi)) then {
         # a field of a numeric parameter's singleton type takes no argument:
         # it holds its default, the type's one value
         av = (
             fieldDefaultText
-            :ast
-            :reg
-            :typing
+            :prog
             :ctx
             tid: et
             nameId: fnameId
@@ -2809,19 +2562,18 @@ metaCreateFieldText: function {
         # local the body keeps, an inner iterator struct or a loop counter) is
         # value-initialized; a typed zero compiles for both scalars and structs.
         ffid: fids.get i: fi
-        ffct: typeRefC :ast :reg :typing :ctx tid: ffid
+        ffct: typeRefC :prog :ctx tid: ffid
         if ffct.length == 0 then {
             failMsg: "zemitterc: unspellable field type id \{ffid}"
             panic failMsg
         }
-        if (typing.declIsBorrowedFieldId parentTypeId: et nameId: fnameId) when (
+        if (prog.typing.declIsBorrowedFieldId parentTypeId: et nameId: fnameId) when (
             borrowedFieldHeldByPointer
-            :reg
-            :typing
+            :prog
             :ctx
             fid: ffid
         ) then {
-            ffctP: types.storedFieldPtrC :typing ownerTid: et :fnameId fct: ffct.stringView
+            ffctP: types.storedFieldPtrC :prog ownerTid: et :fnameId fct: ffct.stringView
             ffct = ffctP.take
         }
         av = "(\{ffct}){0}"
@@ -2835,9 +2587,7 @@ metaCreateFieldText: function {
 # temp of the parameter's own C type and the temp's address goes to the call
 # instead.
 emitByrefArgWith: function {
-    ast: Ast.view
-    reg: ztypes.ZTypeRegistry.view
-    typing: ztyping.ZTyping.view
+    prog: Program.view
     ctx: Ctx
     av: StringView
     avF: exprfacts
@@ -2848,10 +2598,10 @@ emitByrefArgWith: function {
 } out String is {
     # as for a by-value argument: a typedef built inline from a consumed local
     # is hoisted, so the temporary's free runs
-    if avF.place when (ownedTypedefArg :typing :argNid).not then {
+    if avF.place when (ownedTypedefArg :prog :argNid).not then {
         return (stating :facts from: (addrFacts e: avF) text: "&\{av}")
     }
-    nmH: hoistForAddress :ast :reg :typing :ctx :av tid: pid :argNid
+    nmH: hoistForAddress :prog :ctx :av tid: pid :argNid
     return (stating :facts from: (addrFacts e: pathFacts) text: "&\{nmH}")
 }
 
@@ -2859,9 +2609,7 @@ emitByrefArgWith: function {
 # alone, its other parameters filled with their declared defaults. An empty
 # `recv` is a member that takes no receiver: its defaults alone.
 receiverCallText: function {
-    ast: Ast.view
-    reg: ztypes.ZTypeRegistry.view
-    typing: ztyping.ZTyping.view
+    prog: Program.view
     ctx: Ctx
     callee: StringView
     recv: StringView
@@ -2870,7 +2618,7 @@ receiverCallText: function {
     r: callee.string
     r.append "("
     r.append recv
-    da: renderedMethodDefaultArgs :ast :reg :typing :ctx :fnTid
+    da: renderedMethodDefaultArgs :prog :ctx :fnTid
     if da.length > 0 then {
         if recv.length > 0 then r.append ", "
         r.append da
@@ -2886,9 +2634,7 @@ receiverCallText: function {
 # Every slot that spells a value asks it; "" when the value stands in for
 # nothing.
 implementationArgText: function {
-    ast: Ast.view
-    reg: ztypes.ZTypeRegistry.view
-    typing: ztyping.ZTyping.view
+    prog: Program.view
     ctx: Ctx
     argOpNode: astnode.view
     av: StringView
@@ -2896,13 +2642,13 @@ implementationArgText: function {
     avVid: ztypes.vid
 } out String is {
     nid: zast.nodeIdOf n: argOpNode
-    so: typing.standInOf.get key: nid
+    so: prog.typing.standInOf.get key: nid
     if so.none then return "".string
     su: so
-    pLbl: types.boxLabelFor :reg :typing :ctx implTid: su.value protoTid: su.spec
+    pLbl: types.boxLabelFor :prog :ctx implTid: su.value protoTid: su.spec
     if pLbl.length == 0 then return "".string
     suffix: "create".string
-    if su.owning when (reg.typetypeOf typeId: su.spec) == ztypes.ztypetype.protocolType then {
+    if su.owning when (prog.reg.typetypeOf typeId: su.spec) == ztypes.ztypetype.protocolType then {
         suffix = "create_owned".string
         noteOwnedBoxUse :ctx implTid: su.value protoTid: su.spec
     } else {
@@ -2911,12 +2657,12 @@ implementationArgText: function {
     aIb: spelledCname :ctx tid: su.value
     aRcv: "&\{av}"
     # a data value is already the pointer the create takes (isStaticHandle)
-    if (isPtrVid :ctx vid: avVid) or (isStaticHandle :reg :typing tid: su.value) then {
+    if (isPtrVid :ctx vid: avVid) or (isStaticHandle :prog tid: su.value) then {
         aRcv = "\{av}"
     } else if avF.place.not then {
         # AN INLINE CONSTRUCTION IS NOT AN LVALUE: C rejects `&z_t109_create(40)`,
         # so it is bound to a temp first, as a `P.create from: (Cat k: 40)` source is
-        ahv: hoistForAddress :ast :reg :typing :ctx :av tid: su.value argNid: nid
+        ahv: hoistForAddress :prog :ctx :av tid: su.value argNid: nid
         aRcv = "&\{ahv}"
     }
     return "\{aIb}_\{pLbl}_\{suffix}(\{aRcv})"
@@ -2925,26 +2671,22 @@ implementationArgText: function {
 # standInText -- a slot's text for the value at `n`: boxed as the spec it stands
 # in for (implementationArgText), or `text` as written.
 standInText: function {
-    ast: Ast.view
-    reg: ztypes.ZTypeRegistry.view
-    typing: ztyping.ZTyping.view
+    prog: Program.view
     ctx: Ctx
     n: astnode.view
     text: String.take
     # holds `text`'s facts, and is left holding the result's
     facts: exprfacts.borrow
 } out String is {
-    if (typing.standInOf.has key: (zast.nodeIdOf :n)).not then return text
+    if (prog.typing.standInOf.has key: (zast.nodeIdOf :n)).not then return text
     bx: (
         implementationArgText
-        :ast
-        :reg
-        :typing
+        :prog
         :ctx
         argOpNode: n
         av: text.stringView
         avF: facts
-        avVid: (atomVidIfPlain :ast :reg :typing :ctx :n text: text.stringView)
+        avVid: (atomVidIfPlain :prog :ctx :n text: text.stringView)
     )
     if bx.length > 0 then return (stating :facts from: callFacts text: bx)
     return text
@@ -2957,8 +2699,7 @@ standInText: function {
 # protocol or a view union as the handle it is (passesByValue), a Set or a Map
 # as the heap pointer it already is.
 paramTakesPointer: function {
-    reg: ztypes.ZTypeRegistry.view
-    typing: ztyping.ZTyping.view
+    prog: Program.view
     ctx: Ctx
     fid: ztypes.tid
     pnameId: zast.nameid
@@ -2969,11 +2710,11 @@ paramTakesPointer: function {
     # needs `&`. Only this leg is added, not the whole definition-side
     # predicate: a Map/Set argument is already a pointer here and must not
     # be addressed again.
-    if (paramIsReceiverName :reg :fid :pnameId) then return true
-    if (markedValtypeRefParam :reg :typing :fid :pnameId :pid) then return true
-    if takesArg.not when (isReftypeParam :reg :typing :ctx tid: pid) then return true
-    if (isBorrowStringParam :typing :ctx :fid :pnameId :pid) then return true
-    return (isListPtrParam :reg :typing :ctx :fid :pnameId tid: pid)
+    if (paramIsReceiverName :prog :fid :pnameId) then return true
+    if (markedValtypeRefParam :prog :fid :pnameId :pid) then return true
+    if takesArg.not when (isReftypeParam :prog :ctx tid: pid) then return true
+    if (isBorrowStringParam :prog :ctx :fid :pnameId :pid) then return true
+    return (isListPtrParam :prog :ctx :fid :pnameId tid: pid)
 }
 
 # boxAddressArg -- an implementation box handed to a facet parameter marked
@@ -2982,15 +2723,13 @@ paramTakesPointer: function {
 # temp: an inline construction's box is made FROM that one. A facet box holds
 # a copy of a valtype and owns nothing to destroy.
 boxAddressArg: function {
-    ast: Ast.view
-    reg: ztypes.ZTypeRegistry.view
-    typing: ztyping.ZTyping.view
+    prog: Program.view
     ctx: Ctx
     box: StringView
     tid: ztypes.tid
 } out String is {
     # a facet box holds a copy of a valtype and owns nothing to destroy
-    bx: hoistForAddress :ast :reg :typing :ctx av: box :tid argNid: zast.nodeid
+    bx: hoistForAddress :prog :ctx av: box :tid argNid: zast.nodeid
     return "&\{bx}"
 }
 
@@ -2999,9 +2738,7 @@ boxAddressArg: function {
 # implementation projections, then the by-reference or borrow hoist the
 # parameter's mode asks for.
 userFnArgTextWith: function {
-    ast: Ast.view
-    reg: ztypes.ZTypeRegistry.view
-    typing: ztyping.ZTyping.view
+    prog: Program.view
     ctx: Ctx
     fid: ztypes.tid
     pinId: ztypes.tid
@@ -3013,9 +2750,7 @@ userFnArgTextWith: function {
     projF: exprfacts
     iavb: (
         emitInterpArgForParam
-        :ast
-        :reg
-        :typing
+        :prog
         :ctx
         n: argOpNode
         :fid
@@ -3031,16 +2766,14 @@ userFnArgTextWith: function {
         atomVarId = iavb.take
         projd = true
     } else {
-        atomVarId = emitExprWith :ast :reg :typing :ctx n: argOpNode facts: avF
+        atomVarId = emitExprWith :prog :ctx n: argOpNode facts: avF
     }
-    avq: atomVidIfPlain :ast :reg :typing :ctx n: argOpNode text: atomVarId.stringView
+    avq: atomVidIfPlain :prog :ctx n: argOpNode text: atomVarId.stringView
     ppid: pinId
     {
         spec: (
             implementationArgText
-            :ast
-            :reg
-            :typing
+            :prog
             :ctx
             :argOpNode
             av: atomVarId.stringView
@@ -3052,8 +2785,8 @@ userFnArgTextWith: function {
             projd = true
             # an implementation box is built by a call
             projF = callFacts
-            if (markedValtypeRefParam :reg :typing :fid pnameId: pinNmId pid: ppid) then {
-                atomVarId = boxAddressArg :ast :reg :typing :ctx box: atomVarId.stringView tid: ppid
+            if (markedValtypeRefParam :prog :fid pnameId: pinNmId pid: ppid) then {
+                atomVarId = boxAddressArg :prog :ctx box: atomVarId.stringView tid: ppid
                 # the address of the box's own temp
                 projF = addrFacts e: pathFacts
                 ctx.lastArgByPtr = true
@@ -3063,11 +2796,10 @@ userFnArgTextWith: function {
     if projd then return (stating :facts from: projF text: atomVarId)
     # the parameter's mode: by pointer (addressed unless already one), or a
     # borrow hoist of the value
-    paramTakes: paramTakesArg :typing :fid pnameId: pinNmId
+    paramTakes: paramTakesArg :prog :fid pnameId: pinNmId
     ctx.lastArgByPtr = (
         paramTakesPointer
-        :reg
-        :typing
+        :prog
         :ctx
         :fid
         pnameId: pinNmId
@@ -3075,14 +2807,12 @@ userFnArgTextWith: function {
         takesArg: paramTakes
     )
     if ctx.lastArgByPtr then {
-        if (argAlreadyPointer :ast :reg :typing :ctx n: argOpNode vid: avq) then {
+        if (argAlreadyPointer :prog :ctx n: argOpNode vid: avq) then {
             return (stating :facts from: avF text: atomVarId)
         }
         return (
             emitByrefArgWith
-            :ast
-            :reg
-            :typing
+            :prog
             :ctx
             av: atomVarId.stringView
             :avF
@@ -3094,7 +2824,7 @@ userFnArgTextWith: function {
     # a pointer-held valtype handed to a BY-VALUE parameter is loaded, and so
     # is a reference-returning call's valtype result; every parameter that
     # wants the pointer has answered above
-    if (ptrHeldValtype :ast :reg :typing :ctx n: argOpNode) then {
+    if (ptrHeldValtype :prog :ctx n: argOpNode) then {
         return (
             stating
             :facts
@@ -3102,7 +2832,7 @@ userFnArgTextWith: function {
             text: "(*\{atomVarId})"
         )
     }
-    if (refValtypeResult :ast :reg :typing :ctx n: argOpNode) then {
+    if (refValtypeResult :prog :ctx n: argOpNode) then {
         return (
             stating
             :facts
@@ -3112,9 +2842,7 @@ userFnArgTextWith: function {
     }
     borrowHoist: (
         hoistBorrowValArgWith
-        :ast
-        :reg
-        :typing
+        :prog
         :ctx
         argNid: (zast.nodeIdOf n: argOpNode)
         av: atomVarId.stringView
@@ -3131,58 +2859,50 @@ userFnArgTextWith: function {
 # the same order -- the narrowing's alias unless a write ended it, the take
 # alias, the variable's own name -- each compared where it stands.
 localAtomNameIsAt: function {
-    ast: Ast.view
-    reg: ztypes.ZTypeRegistry.view
-    typing: ztyping.ZTyping.view
+    prog: Program.view
     ctx: Ctx.view
     nid: zast.nodeid
     name: StringView
     vid: ztypes.vid
     text: StringView
 } out bool is {
-    if (narrowfacts.narrowingEndedAt :reg :typing :ctx :nid :vid).not then {
+    if (narrowfacts.narrowingEndedAt :prog :ctx :nid :vid).not then {
         nb: narrowfacts.vidFind xs: ctx.narrowBox :vid
         if nb > 0 then return (ctx.narrowBox.get i: nb - 1).val.stringView == text
     }
     al: narrowfacts.vidFind xs: ctx.aliases :vid
     if al > 0 then return (ctx.aliases.get i: al - 1).val.stringView == text
-    return (localnames.varCNameIs :ast :reg :ctx :vid :name :text)
+    return (localnames.varCNameIs :prog :ctx :vid :name :text)
 }
 
 # emitNestedStringViewBase -- `.stringView` on a nested String/StringView base
 # projects an inline VIEW rather than reading a field, matching what the simple
 # base does through svValueForm.
 emitNestedStringViewBase: function {
-    ast: Ast.view
-    reg: ztypes.ZTypeRegistry.view
-    typing: ztyping.ZTyping.view
+    prog: Program.view
     ctx: Ctx
     n: zast.dottedpathrow.view
     mnId: zast.nameid
     facts: exprfacts.borrow
 } out String is {
     if (ztypecheck.isStringViewMember nameId: mnId) then {
-        ppid: interpPartNodeId n: (ast.nodes.get i: n.parent)
-        parentStampTid: stampIdOf :typing nid: ppid
+        ppid: interpPartNodeId n: (prog.ast.nodes.get i: n.parent)
+        parentStampTid: stampIdOf :prog nid: ppid
         if parentStampTid == ctx.strTid then {
             pbvF: exprfacts
-            pbv: emitExprWith :ast :reg :typing :ctx n: (ast.nodes.get i: n.parent) facts: pbvF
+            pbv: emitExprWith :prog :ctx n: (prog.ast.nodes.get i: n.parent) facts: pbvF
             pbq: (
                 atomVidIfPlain
-                :ast
-                :reg
-                :typing
+                :prog
                 :ctx
-                n: (ast.nodes.get i: n.parent)
+                n: (prog.ast.nodes.get i: n.parent)
                 text: pbv.stringView
             )
             sv: (
                 svValueFormAt
-                :ast
-                :reg
-                :typing
+                :prog
                 :ctx
-                n: (ast.nodes.get i: n.parent)
+                n: (prog.ast.nodes.get i: n.parent)
                 expr: pbv.stringView
                 isStr: true
                 vid: pbq
@@ -3191,7 +2911,7 @@ emitNestedStringViewBase: function {
             return (stating :facts from: pbvF text: sv)
         }
         if parentStampTid == ctx.svTid then {
-            return (emitExprWith :ast :reg :typing :ctx n: (ast.nodes.get i: n.parent) :facts)
+            return (emitExprWith :prog :ctx n: (prog.ast.nodes.get i: n.parent) :facts)
         }
     }
     return "".string
@@ -3203,9 +2923,7 @@ emitNestedStringViewBase: function {
 # with the receiver by address where its signature says. "" when the owner has
 # no such method.
 nestedOwnMethodCall: function {
-    ast: Ast.view
-    reg: ztypes.ZTypeRegistry.view
-    typing: ztyping.ZTyping.view
+    prog: Program.view
     ctx: Ctx
     n: zast.dottedpathrow.view
     mn2: StringView
@@ -3216,22 +2934,20 @@ nestedOwnMethodCall: function {
     baseVid: ztypes.vid
     facts: exprfacts.borrow
 } out String is {
-    nmco: typing.declChildOfId parentTypeId: nlid nameId: mnId
-    if nmco.some when (reg.typetypeOf typeId: nmco) == ztypes.ztypetype.functionType then {
+    nmco: prog.typing.declChildOfId parentTypeId: nlid nameId: mnId
+    if nmco.some when (prog.reg.typetypeOf typeId: nmco) == ztypes.ztypetype.functionType then {
         # no-arg SV natives on a nested stringy base: the
         # canonical native symbol, not the method-id cname
-        if (svCallOf :reg :typing :ctx nameId: mnId).noarg when (
+        if (svCallOf :prog :ctx nameId: mnId).noarg when (
             isStringyTid
             :ctx
             tid: nlid
         ) then {
-            demandSvMember :reg :typing :ctx nameId: mnId
+            demandSvMember :prog :ctx nameId: mnId
             svfnF: baseAtomF
             svfn: (
                 svValueForm
-                :ast
-                :reg
-                :typing
+                :prog
                 :ctx
                 expr: baseAtom
                 isStr: nlid == ctx.strTid
@@ -3240,15 +2956,13 @@ nestedOwnMethodCall: function {
             )
             return (stating :facts from: callFacts text: "\{ctx.svC}_\{mn2}(&\{svfn})")
         }
-        nmc: emitplan.autoCallCname :reg :typing :ctx owner: nlid method: nmco
+        nmc: emitplan.autoCallCname :prog :ctx owner: nlid method: nmco
         # a member without a receiver is reached only through its
         # type's path (`unit.Type.make`), which is no argument
-        if (fnTypeTakesThis :reg :typing tid: nmco).not then {
+        if (fnTypeTakesThis :prog tid: nmco).not then {
             return (stating :facts from: callFacts text: (
                 receiverCallText
-                :ast
-                :reg
-                :typing
+                :prog
                 :ctx
                 callee: nmc.stringView
                 recv: ""
@@ -3259,9 +2973,9 @@ nestedOwnMethodCall: function {
         # a receiver-taking method takes it by pointer in both
         # families, so address it unless it already is one
         nmrecv: "\{baseAtom}"
-        if (calleeTakesReceiverByPtr :ast :reg :typing fid: nmco) then {
-            dpu: ast.nodes.get i: n.parent
-            if (pathIsPointer :ast :reg :typing :ctx n: dpu).not then {
+        if (calleeTakesReceiverByPtr :prog fid: nmco) then {
+            dpu: prog.ast.nodes.get i: n.parent
+            if (pathIsPointer :prog :ctx n: dpu).not then {
                 # the receiver is passed by address, and a base
                 # that IS a call is not an lvalue -- `&f(x)` is C
                 # the compiler rejects. emitByrefArgWith hoists such a
@@ -3270,9 +2984,7 @@ nestedOwnMethodCall: function {
                 nmrF: exprfacts
                 nmrecv = (
                     emitByrefArgWith
-                    :ast
-                    :reg
-                    :typing
+                    :prog
                     :ctx
                     av: baseAtom
                     avF: baseAtomF
@@ -3284,9 +2996,7 @@ nestedOwnMethodCall: function {
         }
         return (stating :facts from: callFacts text: (
             receiverCallText
-            :ast
-            :reg
-            :typing
+            :prog
             :ctx
             callee: nmc.stringView
             recv: nmrecv.stringView
@@ -3302,9 +3012,7 @@ nestedOwnMethodCall: function {
 # declaration wrote as its default. A read stamped as the field's function is
 # the field itself, and never reaches here.
 nestedFnptrFieldRead: function {
-    ast: Ast.view
-    reg: ztypes.ZTypeRegistry.view
-    typing: ztyping.ZTyping.view
+    prog: Program.view
     ctx: Ctx
     # the read
     n: zast.dottedpathrow.view
@@ -3319,7 +3027,7 @@ nestedFnptrFieldRead: function {
     nfbase: baseAtom.string
     nfacc: ".".string
     nfrcv: "&\{baseAtom}"
-    if (pathIsPointer :ast :reg :typing :ctx n: (ast.nodes.get i: n.parent)) then {
+    if (pathIsPointer :prog :ctx n: (prog.ast.nodes.get i: n.parent)) then {
         nfacc = "->".string
         nfrcv = baseAtom.string
     } else if baseAtomF.place.not then {
@@ -3328,9 +3036,7 @@ nestedFnptrFieldRead: function {
         nfF: exprfacts
         nfrcv = (
             emitByrefArgWith
-            :ast
-            :reg
-            :typing
+            :prog
             :ctx
             av: baseAtom
             avF: baseAtomF
@@ -3342,15 +3048,13 @@ nestedFnptrFieldRead: function {
         nfacc = "->".string
     }
     nfco: (
-        (typing.declChildOfId parentTypeId: nlid nameId: mnId).or
+        (prog.typing.declChildOfId parentTypeId: nlid nameId: mnId).or
         d: ztypes.tid.zero
     )
-    if (fnTypeTakesThis :reg :typing tid: nfco).not then nfrcv = "".string
+    if (fnTypeTakesThis :prog tid: nfco).not then nfrcv = "".string
     return (
         callorder.fnptrSlotCallC
-        :ast
-        :reg
-        :typing
+        :prog
         :ctx
         owner: nlid
         base: nfbase.stringView
@@ -3365,30 +3069,29 @@ nestedFnptrFieldRead: function {
 # runtime value, so its base is not emitted; a read naming the function (a
 # `.take` of it) is its C name. "" when the base is no unit instance.
 unitInstanceMemberRead: function {
-    ast: Ast.view
-    reg: ztypes.ZTypeRegistry.view
-    typing: ztyping.ZTyping.view
+    prog: Program.view
     ctx: Ctx
     n: zast.dottedpathrow.view
     facts: exprfacts.borrow
 } out String is {
-    bst: stampIdOf :typing nid: (interpPartNodeId n: (ast.nodes.get i: n.parent))
-    if (reg.typetypeOf typeId: bst) != ztypes.ztypetype.unitType then return "".string
-    if (originTidOf :reg tid: bst).isZero then return "".string
-    cid: aliasOrChildId :ast :typing aliasId: n.nodeid childId: n.child
+    bst: stampIdOf :prog nid: (interpPartNodeId n: (prog.ast.nodes.get i: n.parent))
+    if (prog.reg.typetypeOf typeId: bst) != ztypes.ztypetype.unitType then return "".string
+    if (originTidOf :prog tid: bst).isZero then return "".string
+    cid: aliasOrChildId :prog aliasId: n.nodeid childId: n.child
     fid: (
         ztypes.tid.create
-        from: ((typing.declChildOfId parentTypeId: bst nameId: cid).or d: ztypes.tid.zero)
+        from: ((prog.typing.declChildOfId parentTypeId: bst nameId: cid).or d: ztypes.tid.zero)
     )
-    if (reg.typetypeOf typeId: fid) != ztypes.ztypetype.functionType then return "".string
+    if (prog.reg.typetypeOf typeId: fid) != ztypes.ztypetype.functionType then return "".string
     cn: spelledCname :ctx tid: fid
     if (
-        (reg.typetypeOf typeId: (stampIdOf :typing nid: n.nodeid)) == ztypes.ztypetype.functionType
+        (prog.reg.typetypeOf typeId: (stampIdOf :prog nid: n.nodeid)) ==
+        ztypes.ztypetype.functionType
     ) then {
         return (stating :facts from: pathFacts text: cn)
     }
     cn.append "("
-    cn.append (renderedMethodDefaultArgs :ast :reg :typing :ctx fnTid: fid)
+    cn.append (renderedMethodDefaultArgs :prog :ctx fnTid: fid)
     cn.append ")"
     return (stating :facts from: callFacts text: cn)
 }
@@ -3399,36 +3102,32 @@ unitInstanceMemberRead: function {
 # for a member that takes one, or that another leg serves (a collection's, a
 # protocol's, a native, a function field).
 typePathMemberCall: function {
-    ast: Ast.view
-    reg: ztypes.ZTypeRegistry.view
-    typing: ztyping.ZTyping.view
+    prog: Program.view
     ctx: Ctx
     n: zast.dottedpathrow.view
     mnId: zast.nameid
     facts: exprfacts.borrow
 } out String is {
-    pnid: interpPartNodeId n: (ast.nodes.get i: n.parent)
-    nlid: stampIdOf :typing nid: pnid
-    nlid = callorder.typedefMethodOwner :reg :typing :ctx tid: nlid :mnId
+    pnid: interpPartNodeId n: (prog.ast.nodes.get i: n.parent)
+    nlid: stampIdOf :prog nid: pnid
+    nlid = callorder.typedefMethodOwner :prog :ctx tid: nlid :mnId
     if nlid.isZero then return "".string
-    if (reg.typetypeOf typeId: nlid).isFieldwise.not then return "".string
-    if (types.isCollectionOriginTid :ctx originTid: (originTidOf :reg tid: nlid)
+    if (prog.reg.typetypeOf typeId: nlid).isFieldwise.not then return "".string
+    if (types.isCollectionOriginTid :ctx originTid: (originTidOf :prog tid: nlid)
     ) then return "".string
-    if (callorder.isDispatchableTid :reg tid: nlid) then return "".string
+    if (callorder.isDispatchableTid :prog tid: nlid) then return "".string
     if (isStringyTid :ctx tid: nlid) then return "".string
-    if (typing.declIsFnptrFieldId parentTypeId: nlid nameId: mnId) then return "".string
-    mo: typing.declChildOfId parentTypeId: nlid nameId: mnId
+    if (prog.typing.declIsFnptrFieldId parentTypeId: nlid nameId: mnId) then return "".string
+    mo: prog.typing.declChildOfId parentTypeId: nlid nameId: mnId
     match (
         mo
     ) case some then {
-        if (reg.typetypeOf typeId: mo) != ztypes.ztypetype.functionType then return "".string
-        if (reg.isNativeOf tid: mo) or (fnTypeTakesThis :reg :typing tid: mo) then return "".string
-        nmc: emitplan.autoCallCname :reg :typing :ctx owner: nlid method: mo
+        if (prog.reg.typetypeOf typeId: mo) != ztypes.ztypetype.functionType then return "".string
+        if (prog.reg.isNativeOf tid: mo) or (fnTypeTakesThis :prog tid: mo) then return "".string
+        nmc: emitplan.autoCallCname :prog :ctx owner: nlid method: mo
         return (stating :facts from: callFacts text: (
             receiverCallText
-            :ast
-            :reg
-            :typing
+            :prog
             :ctx
             callee: nmc.stringView
             recv: ""
@@ -3451,9 +3150,7 @@ typePathMemberCall: function {
 # never by the text alone (--readable-names keeps source names). Otherwise a
 # receiver-taking method takes its receiver by pointer in both families.
 methodAutoCallRead: function {
-    ast: Ast.view
-    reg: ztypes.ZTypeRegistry.view
-    typing: ztyping.ZTyping.view
+    prog: Program.view
     ctx: Ctx
     baseNid: zast.nodeid
     mnId: zast.nameid
@@ -3470,51 +3167,46 @@ methodAutoCallRead: function {
     facts: exprfacts.borrow
 } out String is {
     viewNative: (
-        (isStringyTid :ctx tid: bstamp) or
-        (memberreads.viewLaidNative :reg :typing :ctx tid: bstamp :mnId)
+        (isStringyTid :ctx tid: bstamp) or (memberreads.viewLaidNative :prog :ctx tid: bstamp :mnId)
     )
-    if (svCallOf :reg :typing :ctx nameId: mnId).noarg when viewNative then {
-        demandSvMember :reg :typing :ctx nameId: mnId
+    if (svCallOf :prog :ctx nameId: mnId).noarg when viewNative then {
+        demandSvMember :prog :ctx nameId: mnId
         svfaF: bn2F
         svfa: (
             svValueForm
-            :ast
-            :reg
-            :typing
+            :prog
             :ctx
             expr: bn2
             isStr: bstamp == ctx.strTid
             vid: bn2v
             facts: svfaF
         )
-        mn: zast.nameTextAt :ast ref: mnId
+        mn: zast.nameTextAt ast: prog.ast ref: mnId
         return (stating :facts from: callFacts text: "\{ctx.svC}_\{mn}(&\{svfa})")
     }
     mt: mco
-    mc2: emitplan.autoCallCname :reg :typing :ctx owner: bstamp method: mt
+    mc2: emitplan.autoCallCname :prog :ctx owner: bstamp method: mt
     if baseIsType when mnId == zast.wellKnown.slot.wkCreate then {
-        z: consts.typeNameCreateZero :typing :ctx :bstamp :facts
+        z: consts.typeNameCreateZero :prog :ctx :bstamp :facts
         if z.length > 0 then return z
     }
     if baseIsType then {
-        if readIsRef or (fnTypeTakesThis :reg :typing tid: mt) then return (
+        if readIsRef or (fnTypeTakesThis :prog tid: mt) then return (
             stating
             :facts
             from: pathFacts
             text: mc2
         )
-        sda: renderedMethodDefaultArgs :ast :reg :typing :ctx fnTid: mt
+        sda: renderedMethodDefaultArgs :prog :ctx fnTid: mt
         if sda.length > 0 then return (stating :facts from: callFacts text: "\{mc2}(\{sda})")
         return (stating :facts from: callFacts text: "\{mc2}()")
     }
     methodRecv: "\{bn2}"
-    if (calleeTakesReceiverByPtr :ast :reg :typing fid: mt) when (
+    if (calleeTakesReceiverByPtr :prog fid: mt) when (
         argAlreadyPointer
-        :ast
-        :reg
-        :typing
+        :prog
         :ctx
-        n: (ast.nodes.get i: baseNid)
+        n: (prog.ast.nodes.get i: baseNid)
         vid: bn2v
     ).not then {
         # a base that is not an lvalue -- an arm constant (`Dir.up`), a call's
@@ -3523,9 +3215,7 @@ methodAutoCallRead: function {
         mrF: exprfacts
         methodRecv = (
             emitByrefArgWith
-            :ast
-            :reg
-            :typing
+            :prog
             :ctx
             av: bn2
             avF: bn2F
@@ -3534,7 +3224,7 @@ methodAutoCallRead: function {
             facts: mrF
         )
     }
-    ida: renderedMethodDefaultArgs :ast :reg :typing :ctx fnTid: mt
+    ida: renderedMethodDefaultArgs :prog :ctx fnTid: mt
     if ida.length > 0 then return (
         stating
         :facts
@@ -3550,10 +3240,7 @@ methodAutoCallRead: function {
 # the checker stamped the read as the field's function (`.take` of it), which
 # is the field itself.
 fnptrFieldRead: function {
-    # the field names
-    ast: Ast.view
-    reg: ztypes.ZTypeRegistry.view
-    typing: ztyping.ZTyping.view
+    prog: Program.view
     ctx: Ctx
     mnId: zast.nameid
     bn2: StringView
@@ -3568,21 +3255,19 @@ fnptrFieldRead: function {
 } out String is {
     mcFp: spelledCname :ctx tid: mco
     if baseIsType then return (stating :facts from: pathFacts text: mcFp)
-    takesThis: fnTypeTakesThis :reg :typing tid: mco
+    takesThis: fnTypeTakesThis :prog tid: mco
     if readIsRef when takesThis.not then return String
     accFp: ".".string
     rcvFp: "&\{bn2}"
     # a data value is a handle, whether a variable holds it or it folded
-    if (isPtrVid :ctx vid: bn2v) or (isStaticHandle :reg :typing tid: bstamp) then {
+    if (isPtrVid :ctx vid: bn2v) or (isStaticHandle :prog tid: bstamp) then {
         accFp = "->".string
         rcvFp = "\{bn2}"
     }
     if takesThis.not then rcvFp = "".string
     return (stating :facts from: callFacts text: (
         callorder.fnptrSlotCallC
-        :ast
-        :reg
-        :typing
+        :prog
         :ctx
         owner: bstamp
         base: bn2
@@ -3597,8 +3282,7 @@ fnptrFieldRead: function {
 # parse members, and the simple view natives, each a direct field or call on the
 # view value rather than a dispatch.
 emitSvAtomBase: function {
-    reg: ztypes.ZTypeRegistry.view
-    typing: ztyping.ZTyping.view
+    prog: Program.view
     ctx: Ctx
     bn2: StringView
     bn2F: exprfacts
@@ -3622,36 +3306,36 @@ emitSvAtomBase: function {
             return (stating :facts from: values.literalFacts text: hdr)
         }
         if mnId == zast.wellKnown.slot.wkCount then {
-            demandSvMember :reg :typing :ctx nameId: zast.wellKnown.slot.wkCount
+            demandSvMember :prog :ctx nameId: zast.wellKnown.slot.wkCount
             return (stating :facts from: callFacts text: "\{ctx.svC}_count(&\{bn2})")
         }
         if mnId == zast.wellKnown.slot.wkCodepoints then {
-            demandSvMember :reg :typing :ctx nameId: zast.wellKnown.slot.wkCodepoints
+            demandSvMember :prog :ctx nameId: zast.wellKnown.slot.wkCodepoints
             return (stating :facts from: callFacts text: "\{ctx.svC}_codepoints(&\{bn2})")
         }
         if mnId == zast.wellKnown.slot.wkParseI64 then {
-            demandSvMember :reg :typing :ctx nameId: zast.wellKnown.slot.wkParseI64
+            demandSvMember :prog :ctx nameId: zast.wellKnown.slot.wkParseI64
             return (stating :facts from: callFacts text: "\{ctx.svC}_parseI64(&\{bn2})")
         }
         if mnId == zast.wellKnown.slot.wkParseU64 then {
-            demandSvMember :reg :typing :ctx nameId: zast.wellKnown.slot.wkParseU64
+            demandSvMember :prog :ctx nameId: zast.wellKnown.slot.wkParseU64
             return (stating :facts from: callFacts text: "\{ctx.svC}_parseU64(&\{bn2})")
         }
         if mnId == zast.wellKnown.slot.wkParseF64 then {
-            demandSvMember :reg :typing :ctx nameId: zast.wellKnown.slot.wkParseF64
+            demandSvMember :prog :ctx nameId: zast.wellKnown.slot.wkParseF64
             return (stating :facts from: callFacts text: "\{ctx.svC}_parseF64(&\{bn2})")
         }
         if mnId == zast.wellKnown.slot.wkParseF16 then {
-            demandSvMember :reg :typing :ctx nameId: zast.wellKnown.slot.wkParseF16
+            demandSvMember :prog :ctx nameId: zast.wellKnown.slot.wkParseF16
             return (stating :facts from: callFacts text: "\{ctx.svC}_parseF16(&\{bn2})")
         }
         if mnId == zast.wellKnown.slot.wkParseF128 then {
-            demandSvMember :reg :typing :ctx nameId: zast.wellKnown.slot.wkParseF128
+            demandSvMember :prog :ctx nameId: zast.wellKnown.slot.wkParseF128
             return (stating :facts from: callFacts text: "\{ctx.svC}_parseF128(&\{bn2})")
         }
-        if (svCallOf :reg :typing :ctx nameId: mnId).simple then {
+        if (svCallOf :prog :ctx nameId: mnId).simple then {
             # a no-paren method reference auto-calls
-            demandSvMember :reg :typing :ctx nameId: mnId
+            demandSvMember :prog :ctx nameId: mnId
             return (stating :facts from: callFacts text: "\{ctx.svC}_\{mn2}(&\{bn2})")
         }
         if mnId == zast.wellKnown.slot.wkLines then {
@@ -3664,15 +3348,15 @@ emitSvAtomBase: function {
 
 # armValueNode -- the value node an arm written as a one-line block or a statement
 # line holds; the node itself otherwise.
-armValueNode: function {ast: Ast.view n: astnode.view} out zast.nodeid is {
+armValueNode: function {prog: Program.view n: astnode.view} out zast.nodeid is {
     match (
         n
     ) case statementline then {
-        return (armValueNode :ast n: (ast.nodes.get i: n.statementline))
+        return (armValueNode :prog n: (prog.ast.nodes.get i: n.statementline))
     } case statement then {
         if n.statements.count.u64 != 1 then return n.nodeid
-        s0Id: zast.kidAt kids: ast.kids span: n.statements i: 0
-        return (armValueNode :ast n: (ast.nodes.get i: s0Id))
+        s0Id: zast.kidAt kids: prog.ast.kids span: n.statements i: 0
+        return (armValueNode :prog n: (prog.ast.nodes.get i: s0Id))
     } else {
         return (zast.nodeIdOf :n)
     }
@@ -3684,32 +3368,30 @@ armValueNode: function {ast: Ast.view n: astnode.view} out zast.nodeid is {
 # The address is cast to the value's plain pointer type, so a place read through a
 # readonly pointer and a temporary meet in one type.
 armRefLeaf: function {
-    ast: Ast.view
-    reg: ztypes.ZTypeRegistry.view
-    typing: ztyping.ZTyping.view
+    prog: Program.view
     ctx: Ctx
     n: astnode.view
     text: StringView
     textF: exprfacts
     facts: exprfacts.borrow
 } out String is {
-    lf: armValueNode :ast :n
-    lt: values.bindingStampOf :typing nid: (interpPartNodeId n: (ast.nodes.get i: lf))
-    ct: typeRefC :ast :reg :typing :ctx tid: lt
+    lf: armValueNode :prog :n
+    lt: values.bindingStampOf :prog nid: (interpPartNodeId n: (prog.ast.nodes.get i: lf))
+    ct: typeRefC :prog :ctx tid: lt
     # a Set or Map value is its own reference: a place arm yields the pointer, an
     # owned one parks it
-    heap: isHeapPtrCollection :reg :typing :ctx tid: lt
-    if heap when (values.armLeafIsPlace :ast :reg :typing :ctx :n) then return (
+    heap: isHeapPtrCollection :prog :ctx tid: lt
+    if heap when (values.armLeafIsPlace :prog :ctx :n) then return (
         stating
         :facts
         from: textF
         text: text.string
     )
-    if (values.armLeafIsPlace :ast :reg :typing :ctx :n) then {
+    if (values.armLeafIsPlace :prog :ctx :n) then {
         # a `.borrow` of a name reads that name's storage, as the bare name does
-        under: localnames.rhsBorrowMarkerBase :ast :reg :typing n: (ast.nodes.get i: lf)
+        under: localnames.rhsBorrowMarkerBase :prog n: (prog.ast.nodes.get i: lf)
         baseN: if under.isZero then lf else under
-        pv: atomVid :typing nid: (atomNodeId n: (ast.nodes.get i: baseN))
+        pv: atomVid :prog nid: (atomNodeId n: (prog.ast.nodes.get i: baseN))
         if pv.notZero when (isPtrVid :ctx vid: pv) then {
             return (
                 stating
@@ -3721,12 +3403,11 @@ armRefLeaf: function {
         return (stating :facts from: (addrFacts e: textF) text: "((\{ct}*)&(\{text}))")
     }
     # declared zero by the statement and assigned where the arm runs
-    nm: argHoistName :ast :reg :typing :ctx argNid: lf fallback: "_ah"
+    nm: argHoistName :prog :ctx argNid: lf fallback: "_ah"
     dt: String
-    if (hoistOwes :typing argNid: lf ptr: false) then dt = (
+    if (hoistOwes :prog argNid: lf ptr: false) then dt = (
         hoistDestroyLine
-        :reg
-        :typing
+        :prog
         :ctx
         tid: lt
         nm: nm.stringView
@@ -3735,7 +3416,7 @@ armRefLeaf: function {
         ArgHoist
         name: nm.copy
         val: String
-        ctype: (hoistCtype :ast :reg :typing :ctx tid: lt ptr: false)
+        ctype: (hoistCtype :prog :ctx tid: lt ptr: false)
         dtor: dt
     )
     if ctx.armRefDepth > 0 then {
@@ -3754,9 +3435,7 @@ armRefLeaf: function {
 # StringView reach one native: both project to a view, by value for the
 # compares and as an lvalue for the row that takes pointers.
 orderRowOperand: function {
-    ast: Ast.view
-    reg: ztypes.ZTypeRegistry.view
-    typing: ztyping.ZTyping.view
+    prog: Program.view
     ctx: Ctx
     owner: ztypes.tid
     # the row takes its operands by pointer
@@ -3770,16 +3449,14 @@ orderRowOperand: function {
 } is {
     mk: pendingHoistMark :ctx
     vF: exprfacts
-    v: values.operandValueC :ast :reg :typing :ctx :nid facts: vF
-    n: ast.nodes.get i: nid
+    v: values.operandValueC :prog :ctx :nid facts: vF
+    n: prog.ast.nodes.get i: nid
     if (isStringOrViewLaid :ctx tid: owner).not then {
         stateFacts facts: opF from: vF
-        constant: callorder.orderConstantWith :ast :typing :ctx :n tf: vF byPtr: false
+        constant: callorder.orderConstantWith :prog :ctx :n tf: vF byPtr: false
         (
             callorder.orderPartWith
-            :ast
-            :reg
-            :typing
+            :prog
             :ctx
             st: ord
             mark: mk
@@ -3797,13 +3474,11 @@ orderRowOperand: function {
     }
     if byPtr then {
         pfF: exprfacts
-        pf: stringViewBinopOperand :ast :reg :typing :ctx :n expr: v.stringView exprF: vF facts: pfF
+        pf: stringViewBinopOperand :prog :ctx :n expr: v.stringView exprF: vF facts: pfF
         stateFacts facts: opF from: callFacts
         (
             callorder.orderArgAtWith
-            :ast
-            :reg
-            :typing
+            :prog
             :ctx
             st: ord
             mark: mk
@@ -3815,25 +3490,21 @@ orderRowOperand: function {
         )
         return
     } else {
-        q: atomVidIfPlain :ast :reg :typing :ctx :n text: v.stringView
+        q: atomVidIfPlain :prog :ctx :n text: v.stringView
         vf: (
             svValueFormAt
-            :ast
-            :reg
-            :typing
+            :prog
             :ctx
             :n
             expr: v.stringView
-            isStr: (operandIsStr :reg :typing :ctx :n)
+            isStr: (operandIsStr :prog :ctx :n)
             vid: q
             facts: vF
         )
         stateFacts facts: opF from: callFacts
         (
             callorder.orderArgAtWith
-            :ast
-            :reg
-            :typing
+            :prog
             :ctx
             st: ord
             mark: mk
@@ -3852,13 +3523,12 @@ orderRowOperand: function {
 # view (chaseStrTypedef). `tname` is the operand's deep stamp name, which
 # answers where the id route has none (a shell method's result).
 operandIsStr: function {
-    reg: ztypes.ZTypeRegistry.view
-    typing: ztyping.ZTyping.view
+    prog: Program.view
     ctx: Ctx
     n: astnode.view
 } out bool is {
     return (
-        (memberreads.chaseStrTypedef :typing :ctx tid: (stmtblocks.stampIdDeep :reg :typing :n)) ==
+        (memberreads.chaseStrTypedef :prog :ctx tid: (stmtblocks.stampIdDeep :prog :n)) ==
         ctx.strTid
     )
 }
@@ -3867,32 +3537,28 @@ operandIsStr: function {
 # parameter -- the operator's one besides the receiver -- takes it, by the rule
 # a method argument is passed by (passMethodArg). Sets ctx.lastArgByPtr.
 operatorOperandText: function {
-    ast: Ast.view
-    reg: ztypes.ZTypeRegistry.view
-    typing: ztyping.ZTyping.view
+    prog: Program.view
     ctx: Ctx
     call: ztypes.tid
     rhsNid: zast.nodeid
     facts: exprfacts.borrow
 } out String is {
     avF: exprfacts
-    av: values.operandValueC :ast :reg :typing :ctx nid: rhsNid facts: avF
+    av: values.operandValueC :prog :ctx nid: rhsNid facts: avF
     ctx.lastArgByPtr = false
     # the receiver by its name id, `this` for the `:this` shorthand; every other
     # row of a function type is a parameter
-    recvId: reg.thisParamNameIdOf tid: call
+    recvId: prog.reg.thisParamNameIdOf tid: call
     if recvId.isZero then recvId = zast.wellKnown.slot.wkThis
     ri: u64
-    nRows: typing.declRowSlots ownerTid: call
+    nRows: prog.typing.declRowSlots ownerTid: call
     for ri < nRows loop {
-        rw: typing.declRowAt ownerTid: call membersOnly: true slot: ri
+        rw: prog.typing.declRowAt ownerTid: call membersOnly: true slot: ri
         ri = ri + 1
         if rw.keep.not or (rw.name == recvId) then continue
         ptr: (
             instanceMethodArgPtr
-            :ast
-            :reg
-            :typing
+            :prog
             :ctx
             mco: call
             posParamNameId: rw.name
@@ -3905,9 +3571,7 @@ operatorOperandText: function {
         txtF: exprfacts
         (
             passMethodArg
-            :ast
-            :reg
-            :typing
+            :prog
             :ctx
             :ptr
             avNd: rhsNid
@@ -3927,8 +3591,7 @@ operatorOperandText: function {
 # a String's buffer, a heap collection or a box through its pointer, any other
 # destructor-bearing value by address. Nothing for a value that owns no heap.
 emitReassignDestroy: function {
-    reg: ztypes.ZTypeRegistry.view
-    typing: ztyping.ZTyping.view
+    prog: Program.view
     ctx: Ctx
     # the target's C lvalue
     nm2: StringView
@@ -3937,12 +3600,12 @@ emitReassignDestroy: function {
     ind: StringView
     buf: String.borrow
 } is {
-    if (stampIsStr :typing :ctx nid: rtnid) then {
+    if (stampIsStr :prog :ctx nid: rtnid) then {
         preludeNeed :ctx memb: "@String_free"
         buf.append "\{ind}\{ctx.strC}_free(&\{nm2});\n"
         return
     }
-    buf.append (stmtblocks.destroyLineC :reg :typing :ctx tid: rtsid nm: nm2 :ind)
+    buf.append (stmtblocks.destroyLineC :prog :ctx tid: rtsid nm: nm2 :ind)
 }
 
 # armCellNew -- a new cell holding `value`, as an expression: the value is
@@ -3962,29 +3625,28 @@ armCellNew: function {ctx: Ctx pc: StringView value: StringView} out String is {
 # the other natives stay by value. A typedef passes as the end of its chain
 # does: a typedef over a class is that class.
 isReftypeParam: function {
-    reg: ztypes.ZTypeRegistry.view
-    typing: ztyping.ZTyping.view
+    prog: Program.view
     ctx: Ctx
     tid: ztypes.tid
 } out bool is {
     cid: (
         memberreads.chaseStrTypedef
-        :typing
+        :prog
         :ctx
-        tid: (chaseAggregateTypedef :reg :typing :ctx :tid)
+        tid: (chaseAggregateTypedef :prog :ctx :tid)
     )
-    duT: types.definedInUnitTid :reg :typing :tid
+    duT: types.definedInUnitTid :prog :tid
     isShell: duT.isZero
     if isShell then {
-        canonTid: types.canonTypeId :reg :typing :tid
+        canonTid: types.canonTypeId :prog :tid
         if canonTid.notZero then cid = canonTid
     }
-    tt: reg.typetypeOf typeId: cid
-    if tt == ztypes.ztypetype.unionType then return (unionBorrowsByPtr :reg :ctx tid: cid)
+    tt: prog.reg.typetypeOf typeId: cid
+    if tt == ztypes.ztypetype.unionType then return (unionBorrowsByPtr :prog :ctx tid: cid)
     if tt != ztypes.ztypetype.classType then return false
-    if (nativerows.tmplClassRowOf :reg :ctx tid: cid) > 0 then return true
-    origin: originTidOf :reg tid: cid
-    if origin.notZero when (types.isUserClassMonoTid :reg :ctx tid: cid).not then return false
+    if (nativerows.tmplClassRowOf :prog :ctx tid: cid) > 0 then return true
+    origin: originTidOf :prog tid: cid
+    if origin.notZero when (types.isUserClassMonoTid :prog :ctx tid: cid).not then return false
     # the types with their own family rule answer through it, not the
     # user-class one: containers via isListPtrParam/isSetMapPtrParam, String
     # via isBorrowStringParam (pointer when non-owned), StringView by value (a
@@ -3992,7 +3654,7 @@ isReftypeParam: function {
     # -- the two well-known ids, a runtime-owned layout -- and the collection
     # monos left above already. Asking which unit declared it answered for a
     # user class of the same name too, which no id does.
-    return ((cid == ctx.strTid) or (cid == ctx.svTid) or (reg.isNativeOf tid: cid)).not
+    return ((cid == ctx.strTid) or (cid == ctx.svTid) or (prog.reg.isNativeOf tid: cid)).not
 }
 
 # unionBorrowsByPtr -- a union borrowed is a POINTER to the caller's slot, as a
@@ -4001,12 +3663,12 @@ isReftypeParam: function {
 # A view union (OptionView, OptionMut, and their valtype twins) holds only a
 # pointer to what it refers to, and passes by value as the other native views do.
 unionBorrowsByPtr: function {
-    reg: ztypes.ZTypeRegistry.view
+    prog: Program.view
     ctx: Ctx.view
     tid: ztypes.tid
 } out bool is {
-    if (reg.typetypeOf typeId: tid) != ztypes.ztypetype.unionType then return false
-    return (types.isViewUnionOriginOf :reg :ctx :tid).not
+    if (prog.reg.typetypeOf typeId: tid) != ztypes.ztypetype.unionType then return false
+    return (types.isViewUnionOriginOf :prog :ctx :tid).not
 }
 
 # isBorrowStringParam -- a non-owned String param (BORROW/LOCK or VIEW), passed
@@ -4017,7 +3679,7 @@ unionBorrowsByPtr: function {
 # for a stated reason: a 16-byte fat pointer with no owned interior -- two
 # registers on SysV, and copying it carries nothing that can dangle.
 isBorrowStringParam: function {
-    typing: ztyping.ZTyping.view
+    prog: Program.view
     ctx: Ctx.view
     fid: ztypes.tid
     pnameId: zast.nameid
@@ -4025,13 +3687,13 @@ isBorrowStringParam: function {
 } out bool is {
     if pid != ctx.strTid then return false
     if (
-        typing.declOwnershipIs
+        prog.typing.declOwnershipIs
         parentTypeId: fid
         nameId: pnameId
         own: ztypes.zparamownership.borrowMode
     ) then return true
     if (
-        typing.declOwnershipIs
+        prog.typing.declOwnershipIs
         parentTypeId: fid
         nameId: pnameId
         own: ztypes.zparamownership.viewMode
@@ -4043,17 +3705,16 @@ isBorrowStringParam: function {
 # POINTER so the callee's append/pop/set persist to the caller. A `.take` List is
 # moved by value; Set/Map monos are already heap pointers (no extra `*`).
 isListPtrParam: function {
-    reg: ztypes.ZTypeRegistry.view
-    typing: ztyping.ZTyping.view
+    prog: Program.view
     ctx: Ctx.view
     fid: ztypes.tid
     pnameId: zast.nameid
     tid: ztypes.tid
 } out bool is {
-    if (paramTakesArg :typing :fid :pnameId) then return false
-    bt: chaseAggregateTypedef :reg :typing :ctx :tid
-    if (memberreads.isIdCollectionOriginOf :reg :ctx tid: bt) then return true
-    return (types.isListOriginOf :reg :ctx tid: bt)
+    if (paramTakesArg :prog :fid :pnameId) then return false
+    bt: chaseAggregateTypedef :prog :ctx :tid
+    if (memberreads.isIdCollectionOriginOf :prog :ctx tid: bt) then return true
+    return (types.isListOriginOf :prog :ctx tid: bt)
 }
 
 # paramIsReceiverName -- is `pname` the method's receiver slot? `this` for the
@@ -4062,15 +3723,15 @@ isListPtrParam: function {
 # Call sites add this leg ALONE, never the whole definition-side predicate: a
 # Map or Set argument is already a pointer and must not be addressed again.
 paramIsReceiverName: function {
-    reg: ztypes.ZTypeRegistry.view
+    prog: Program.view
     fid: ztypes.tid
     pnameId: zast.nameid
 } out bool is {
     # by id, and only fall back to the spelling when the type records no
     # receiver name of its own -- `this` is the implicit one
     pid: pnameId
-    if (reg.thisParamNameIs tid: fid nameId: pid) then return true
-    if (reg.thisParamNameIdOf tid: fid).isZero then return pid == zast.wellKnown.slot.wkThis
+    if (prog.reg.thisParamNameIs tid: fid nameId: pid) then return true
+    if (prog.reg.thisParamNameIdOf tid: fid).isZero then return pid == zast.wellKnown.slot.wkThis
     return false
 }
 
@@ -4079,17 +3740,15 @@ paramIsReceiverName: function {
 # first parameter is an ordinary one of the same type (`double: function
 # {self: meters}`) still takes it by value.
 calleeTakesReceiverByPtr: function {
-    ast: Ast.view
-    reg: ztypes.ZTypeRegistry.view
-    typing: ztyping.ZTyping.view
+    prog: Program.view
     fid: ztypes.tid
 } out bool is {
     fpN: List String
     fpI: ListVal ztypes.tid
     fpNm: ListVal zast.nameid
-    callorder.recFieldLists :ast :reg :typing tid: fid names: fpN ids: fpI nameIds: fpNm
+    callorder.recFieldLists :prog tid: fid names: fpN ids: fpI nameIds: fpNm
     if fpN.length == 0 then return false
-    return (paramIsReceiverName :reg :fid pnameId: (fpNm.get i: 0))
+    return (paramIsReceiverName :prog :fid pnameId: (fpNm.get i: 0))
 }
 
 # markedValtypeRefParam -- an explicitly marked VALTYPE parameter, which is a
@@ -4103,22 +3762,21 @@ calleeTakesReceiverByPtr: function {
 # item: of.view` monomorphise that marker onto a valtype key, and the runtime
 # templates would stop matching their own prototypes.
 markedValtypeRefParam: function {
-    reg: ztypes.ZTypeRegistry.view
-    typing: ztyping.ZTyping.view
+    prog: Program.view
     fid: ztypes.tid
     pnameId: zast.nameid
     pid: ztypes.tid
 } out bool is {
-    if (reg.isNativeOf tid: fid) then return false
-    if (reg.isValtypeOf tid: pid).not then return false
+    if (prog.reg.isNativeOf tid: fid) then return false
+    if (prog.reg.isValtypeOf tid: pid).not then return false
     if (
-        typing.declOwnershipIs
+        prog.typing.declOwnershipIs
         parentTypeId: fid
         nameId: pnameId
         own: ztypes.zparamownership.viewMode
     ) then return true
     if (
-        typing.declOwnershipIs
+        prog.typing.declOwnershipIs
         parentTypeId: fid
         nameId: pnameId
         own: ztypes.zparamownership.borrowMode
@@ -4131,18 +3789,18 @@ markedValtypeRefParam: function {
 # then frozen. Readonly is the checker's to enforce, so the two pass, and are
 # destroyed, alike.
 paramTakesArg: function {
-    typing: ztyping.ZTyping.view
+    prog: Program.view
     fid: ztypes.tid
     pnameId: zast.nameid
 } out bool is {
     if (
-        typing.declOwnershipIs
+        prog.typing.declOwnershipIs
         parentTypeId: fid
         nameId: pnameId
         own: ztypes.zparamownership.takeMode
     ) then return true
     return (
-        typing.declOwnershipIs
+        prog.typing.declOwnershipIs
         parentTypeId: fid
         nameId: pnameId
         own: ztypes.zparamownership.holdMode
@@ -4158,45 +3816,42 @@ paramTakesArg: function {
 # already holds a pointer (their create returns one), so taking its address
 # would build a `T**`, while a List local is a value and does need the `&`.
 paramTypeIsPointer: function {
-    ast: Ast.view
-    reg: ztypes.ZTypeRegistry.view
-    typing: ztyping.ZTyping.view
+    prog: Program.view
     ctx: Ctx
     fid: ztypes.tid
     pnameId: zast.nameid
     pid: ztypes.tid
 } out bool is {
     # a data value is a pointer already, and is passed as one
-    if (isStaticHandle :reg :typing tid: pid) then return false
-    owns: paramTakesArg :typing :fid :pnameId
+    if (isStaticHandle :prog tid: pid) then return false
+    owns: paramTakesArg :prog :fid :pnameId
     # The receiver is a reference in BOTH families -- its default is `borrow`,
     # not `take`, so a record method acts on the caller's instance rather than
     # on a copy of it.
     if owns.not then {
         rnid: pnameId
         if rnid == zast.wellKnown.slot.wkThis then return true
-        if rnid.notZero when (reg.thisParamNameIs tid: fid nameId: rnid) then return true
+        if rnid.notZero when (prog.reg.thisParamNameIs tid: fid nameId: rnid) then return true
     }
-    if owns.not when (markedValtypeRefParam :reg :typing :fid :pnameId :pid) then return true
-    if owns.not when (isReftypeParam :reg :typing :ctx tid: pid) then return true
-    if (isBorrowStringParam :typing :ctx :fid :pnameId :pid) then return true
-    if (isListPtrParam :reg :typing :ctx :fid :pnameId tid: pid) then return true
-    if (types.isSetMapPtrParam :ast :reg :typing :ctx :fid :pnameId tid: pid) then return true
+    if owns.not when (markedValtypeRefParam :prog :fid :pnameId :pid) then return true
+    if owns.not when (isReftypeParam :prog :ctx tid: pid) then return true
+    if (isBorrowStringParam :prog :ctx :fid :pnameId :pid) then return true
+    if (isListPtrParam :prog :ctx :fid :pnameId tid: pid) then return true
+    if (types.isSetMapPtrParam :prog :ctx :fid :pnameId tid: pid) then return true
     return false
 }
 
 # paramReadsOnly -- a parameter passed by reference that the function only
 # reads: a view, or a choice value, which nothing changes.
 paramReadsOnly: function {
-    reg: ztypes.ZTypeRegistry.view
-    typing: ztyping.ZTyping.view
+    prog: Program.view
     fid: ztypes.tid
     pnameId: zast.nameid
     pid: ztypes.tid
 } out bool is {
-    if (reg.isStaticOf tid: (types.canonTypeId :reg :typing tid: pid)) then return true
+    if (prog.reg.isStaticOf tid: (types.canonTypeId :prog tid: pid)) then return true
     return (
-        typing.declOwnershipIs
+        prog.typing.declOwnershipIs
         parentTypeId: fid
         nameId: pnameId
         own: ztypes.zparamownership.viewMode
@@ -4209,18 +3864,16 @@ paramReadsOnly: function {
 # readers it reaches take const too, so a writer reached through a view is
 # refused by the C compiler.
 paramCType: function {
-    ast: Ast.view
-    reg: ztypes.ZTypeRegistry.view
-    typing: ztyping.ZTyping.view
+    prog: Program.view
     ctx: Ctx
     fid: ztypes.tid
     pnameId: zast.nameid
     pid: ztypes.tid
 } out String is {
-    ct: typeRefC :ast :reg :typing :ctx tid: pid
-    if (paramTypeIsPointer :ast :reg :typing :ctx :fid :pnameId :pid).not then return ct
+    ct: typeRefC :prog :ctx tid: pid
+    if (paramTypeIsPointer :prog :ctx :fid :pnameId :pid).not then return ct
     if ct.length == 0 then return ct
-    if (paramReadsOnly :reg :typing :fid :pnameId :pid) then return "const \{ct}*"
+    if (paramReadsOnly :prog :fid :pnameId :pid) then return "const \{ct}*"
     return "\{ct}*"
 }
 
@@ -4228,35 +3881,32 @@ paramCType: function {
 # static object the compiler built, copied as the pointer and read through it.
 # A choice is static too, but held by value, as a variant is.
 isStaticHandle: function {
-    reg: ztypes.ZTypeRegistry.view
-    typing: ztyping.ZTyping.view
+    prog: Program.view
     tid: ztypes.tid
 } out bool is {
     if tid.isZero then return false
-    ct: types.canonTypeId :reg :typing :tid
-    if (reg.isStaticOf :tid).not when (reg.isStaticOf tid: ct).not then return false
-    return (reg.typetypeOf typeId: ct) == ztypes.ztypetype.recordType
+    ct: types.canonTypeId :prog :tid
+    if (prog.reg.isStaticOf :tid).not when (prog.reg.isStaticOf tid: ct).not then return false
+    return (prog.reg.typetypeOf typeId: ct) == ztypes.ztypetype.recordType
 }
 
 # fnptrParamTypeC -- C type for one param of a FUNCTION's `_ft` typedef, applying
 # the same pointer promotions as fnSignature so the typedef matches the emitted
 # signature.
 fnptrParamTypeC: function {
-    ast: Ast.view
-    reg: ztypes.ZTypeRegistry.view
-    typing: ztyping.ZTyping.view
+    prog: Program.view
     ctx: Ctx
     fid: ztypes.tid
     pnameId: zast.nameid
     pid: ztypes.tid
 } out String is {
-    ct: typeRefC :ast :reg :typing :ctx tid: pid
-    ptrp: paramTypeIsPointer :ast :reg :typing :ctx :fid :pnameId :pid
+    ct: typeRefC :prog :ctx tid: pid
+    ptrp: paramTypeIsPointer :prog :ctx :fid :pnameId :pid
     if ptrp when ct.length > 0 then {
         ctp: "\{ct}*"
         # the same rule as fnSignature: a view is read through, and a
         # function value must match the signatures it is assigned
-        if (paramReadsOnly :reg :typing :fid :pnameId :pid) then ctp = "const \{ct}*"
+        if (paramReadsOnly :prog :fid :pnameId :pid) then ctp = "const \{ct}*"
         ct = ctp.take
     }
     if ct.length == 0 then return "int64_t".string
@@ -4273,12 +3923,10 @@ noteOwnedBoxUse: function {ctx: Ctx implTid: ztypes.tid protoTid: ztypes.tid} is
 # demandSvMember -- written C calls the C of StringView member `nameId` (a
 # view native reached on a String, StringView or text receiver): the demands
 # of the member's row, found by its declaration on the StringView type
-demandSvMember: function {
-    reg: ztypes.ZTypeRegistry.view typing: ztyping.ZTyping.view ctx: Ctx nameId: zast.nameid
-} is {
+demandSvMember: function {prog: Program.view ctx: Ctx nameId: zast.nameid} is {
     row: (
         ctx.rows.ofName
-        n: (nativerows.rowNameOfMember :reg :typing :ctx owner: ctx.svTid name: nameId)
+        n: (nativerows.rowNameOfMember :prog :ctx owner: ctx.svTid name: nameId)
     )
     if row > 0 then nativepieces.demandRowKeys :ctx :row
 }
@@ -4288,9 +3936,7 @@ demandSvMember: function {
 # param; ByteView args pass through unchanged). A non-lvalue
 # String temp hoists for scope-exit free.
 viewArgCoerce: function {
-    ast: Ast.view
-    reg: ztypes.ZTypeRegistry.view
-    typing: ztyping.ZTyping.view
+    prog: Program.view
     ctx: Ctx
     call: zast.callrow.view
     label: zast.nameid
@@ -4298,22 +3944,20 @@ viewArgCoerce: function {
     avF: exprfacts
     facts: exprfacts.borrow
 } out String is {
-    for each argId: (zast.kidsOf :ast span: call.arguments) loop {
-        fa: ast.nodes.get i: argId
+    for each argId: (zast.kidsOf ast: prog.ast span: call.arguments) loop {
+        fa: prog.ast.nodes.get i: argId
         if fa.namedoperation then {
-            faOpNode: ast.nodes.get i: fa.operation
+            faOpNode: prog.ast.nodes.get i: fa.operation
             if fa.name == label then {
                 stampTid: (
                     stampIdOf
-                    :typing
-                    nid: (interpPartNodeId n: (ast.nodes.get i: fa.operation))
+                    :prog
+                    nid: (interpPartNodeId n: (prog.ast.nodes.get i: fa.operation))
                 )
                 if stampTid == ctx.strTid then {
                     fh: (
                         hoistBorrowValArgWith
-                        :ast
-                        :reg
-                        :typing
+                        :prog
                         :ctx
                         argNid: (zast.nodeIdOf n: faOpNode)
                         :av
@@ -4327,12 +3971,10 @@ viewArgCoerce: function {
                         fb = fh.take
                         stateFacts :facts from: pathFacts
                     }
-                    fbq: atomVidIfPlain :ast :reg :typing :ctx n: faOpNode text: fb.stringView
+                    fbq: atomVidIfPlain :prog :ctx n: faOpNode text: fb.stringView
                     return (
                         svValueForm
-                        :ast
-                        :reg
-                        :typing
+                        :prog
                         :ctx
                         expr: fb.stringView
                         isStr: true
@@ -4351,9 +3993,7 @@ viewArgCoerce: function {
 # class parameter takes the argument's address; any other takes it as written
 # (a `.take` String by value).
 nativeCreateArg: function {
-    ast: Ast.view
-    reg: ztypes.ZTypeRegistry.view
-    typing: ztyping.ZTyping.view
+    prog: Program.view
     ctx: Ctx
     call: zast.callrow.view
     # the create function, whose parameter `label` is
@@ -4365,51 +4005,46 @@ nativeCreateArg: function {
     ptid: ztypes.tid
     facts: exprfacts.borrow
 } out String is {
-    prtid: types.canonTypeId :reg :typing tid: ptid
+    prtid: types.canonTypeId :prog tid: ptid
     i: u64
     for i < call.arguments.count loop {
-        aId: zast.kidAt kids: ast.kids span: call.arguments :i
+        aId: zast.kidAt kids: prog.ast.kids span: call.arguments :i
         i = i + 1
-        a: ast.nodes.get i: aId
+        a: prog.ast.nodes.get i: aId
         if a.namedoperation when (i - 1) == argAt then {
-            if (reg.typetypeOf typeId: prtid) == ztypes.ztypetype.protocolType then {
+            if (prog.reg.typetypeOf typeId: prtid) == ztypes.ztypetype.protocolType then {
                 # an implementer is boxed as the protocol it stands in for, as at
                 # any other slot (standInText); a value that already is the
                 # protocol passes as it stands, a header by value
                 aF: exprfacts
                 sit: (
                     standInText
-                    :ast
-                    :reg
-                    :typing
+                    :prog
                     :ctx
-                    n: (ast.nodes.get i: a.operation)
+                    n: (prog.ast.nodes.get i: a.operation)
                     text: (
                         emitExprWith
-                        :ast
-                        :reg
-                        :typing
+                        :prog
                         :ctx
-                        n: (ast.nodes.get i: a.operation)
+                        n: (prog.ast.nodes.get i: a.operation)
                         facts: aF
                     )
                     facts: aF
                 )
                 return (stating :facts from: aF text: sit)
             }
-            if (reg.typetypeOf typeId: prtid) == ztypes.ztypetype.classType when (
-                typing.declIsBorrowedFieldId
+            if (prog.reg.typetypeOf typeId: prtid) == ztypes.ztypetype.classType when (
+                prog.typing.declIsBorrowedFieldId
                 parentTypeId: create
                 nameId: label
             ) then {
-                a2op: ast.nodes.get i: a.operation
-                ab2: callorder.argBaseAtom :ast n: a2op
-                argBaseNode: stmtblocks.argBaseNodeId :ast n: a2op
-                argBaseVid: atomVid :typing nid: argBaseNode
+                a2op: prog.ast.nodes.get i: a.operation
+                ab2: callorder.argBaseAtom :prog n: a2op
+                argBaseNode: stmtblocks.argBaseNodeId :prog n: a2op
+                argBaseVid: atomVid :prog nid: argBaseNode
                 argBaseC: (
                     narrowfacts.aliasResolveAt
-                    :reg
-                    :typing
+                    :prog
                     :ctx
                     nid: argBaseNode
                     name: ab2
@@ -4420,9 +4055,7 @@ nativeCreateArg: function {
                 abr2F: exprfacts
                 abr2C: (
                     narrowfacts.emitLocalAtomNameAt
-                    :ast
-                    :reg
-                    :typing
+                    :prog
                     :ctx
                     nid: argBaseNode
                     name: ab2
@@ -4432,7 +4065,7 @@ nativeCreateArg: function {
                 if (isPtrVid :ctx vid: ab2v) then return (stating :facts from: abr2F text: abr2C)
                 return (stating :facts from: (addrFacts e: abr2F) text: "&\{abr2C}")
             }
-            return (ctorArgTextAt :ast :reg :typing :ctx aid: a.operation :facts)
+            return (ctorArgTextAt :prog :ctx aid: a.operation :facts)
         }
     }
     return (stating :facts from: constFacts text: "0".string)
@@ -4444,9 +4077,7 @@ nativeCreateArg: function {
 # borrowed-List params pass by pointer; take params pass the owned value;
 # scalars pass verbatim.
 lowerNativeArg: function {
-    ast: Ast.view
-    reg: ztypes.ZTypeRegistry.view
-    typing: ztyping.ZTyping.view
+    prog: Program.view
     ctx: Ctx
     fid: ztypes.tid
     pnameId: zast.nameid
@@ -4454,17 +4085,17 @@ lowerNativeArg: function {
     op: astnode.view
     facts: exprfacts.borrow
 } out String is {
-    isViewP: (pid == ctx.svTid) or ((reg.typetypeOf typeId: pid) == ztypes.ztypetype.genericParam)
+    isViewP: (
+        (pid == ctx.svTid) or ((prog.reg.typetypeOf typeId: pid) == ztypes.ztypetype.genericParam)
+    )
     if isViewP then {
-        avh: emitColInterpArg :ast :reg :typing :ctx n: op consumes: false
+        avh: emitColInterpArg :prog :ctx n: op consumes: false
         if avh.length > 0 then {
             # the interpolation's hoisted temp, viewed
             stateFacts :facts from: pathFacts
             return (
                 svValueForm
-                :ast
-                :reg
-                :typing
+                :prog
                 :ctx
                 expr: avh.stringView
                 isStr: true
@@ -4473,13 +4104,11 @@ lowerNativeArg: function {
             )
         }
         av0F: exprfacts
-        av0: emitExprWith :ast :reg :typing :ctx n: op facts: av0F
-        if (stampIsStr :typing :ctx nid: (interpPartNodeId n: op)) then {
+        av0: emitExprWith :prog :ctx n: op facts: av0F
+        if (stampIsStr :prog :ctx nid: (interpPartNodeId n: op)) then {
             hb: (
                 hoistBorrowValArgWith
-                :ast
-                :reg
-                :typing
+                :prog
                 :ctx
                 argNid: (zast.nodeIdOf n: op)
                 av: av0.stringView
@@ -4491,13 +4120,11 @@ lowerNativeArg: function {
                 av0 = hb.take
                 av0F = pathFacts
             }
-            av0q: atomVidIfPlain :ast :reg :typing :ctx n: op text: av0.stringView
+            av0q: atomVidIfPlain :prog :ctx n: op text: av0.stringView
             stateFacts :facts from: av0F
             return (
                 svValueForm
-                :ast
-                :reg
-                :typing
+                :prog
                 :ctx
                 expr: av0.stringView
                 isStr: true
@@ -4507,7 +4134,7 @@ lowerNativeArg: function {
         }
         # a view held through a pointer -- a method's receiver handed on -- is
         # passed as the view it points at
-        if (pathIsPointer :ast :reg :typing :ctx n: op) then return (
+        if (pathIsPointer :prog :ctx n: op) then return (
             stating
             :facts
             from: av0F
@@ -4515,31 +4142,29 @@ lowerNativeArg: function {
         )
         return (stating :facts from: av0F text: av0)
     }
-    iv: emitInterpArgExpr :ast :reg :typing :ctx n: op
+    iv: emitInterpArgExpr :prog :ctx n: op
     # an interpolation built where it is evaluated, as a call's result is
     if iv.length > 0 then return (stating :facts from: callFacts text: iv)
-    isTake: paramTakesArg :typing :fid :pnameId
+    isTake: paramTakesArg :prog :fid :pnameId
     needAmp: false
     if isTake.not then {
-        if (isReftypeParam :reg :typing :ctx tid: pid) then needAmp = true
-        if (isListPtrParam :reg :typing :ctx :fid :pnameId tid: pid) then needAmp = true
-        if (markedValtypeRefParam :reg :typing :fid :pnameId :pid) then needAmp = true
+        if (isReftypeParam :prog :ctx tid: pid) then needAmp = true
+        if (isListPtrParam :prog :ctx :fid :pnameId tid: pid) then needAmp = true
+        if (markedValtypeRefParam :prog :fid :pnameId :pid) then needAmp = true
     }
     av1F: exprfacts
-    av1: emitExprWith :ast :reg :typing :ctx n: op facts: av1F
+    av1: emitExprWith :prog :ctx n: op facts: av1F
     # by value: a path that is a pointer -- a method's receiver handed on
     # (`viewBytes s: t`) -- passes the value it points at
-    if needAmp.not when (pathIsPointer :ast :reg :typing :ctx n: op) then {
+    if needAmp.not when (pathIsPointer :prog :ctx n: op) then {
         return (stating :facts from: av1F text: "(*\{av1})")
     }
     # by reference: a value with no address (`outbuf.byteView`) is hoisted first,
     # as every by-reference argument is (emitByrefArgWith)
-    if needAmp when (pathIsPointer :ast :reg :typing :ctx n: op).not then {
+    if needAmp when (pathIsPointer :prog :ctx n: op).not then {
         return (
             emitByrefArgWith
-            :ast
-            :reg
-            :typing
+            :prog
             :ctx
             av: av1.stringView
             avF: av1F
@@ -4554,9 +4179,7 @@ lowerNativeArg: function {
 # emitNativeArg -- find one native-call argument by label, else by the
 # positional cursor, and lower it (lowerNativeArg).
 emitNativeArg: function {
-    ast: Ast.view
-    reg: ztypes.ZTypeRegistry.view
-    typing: ztyping.ZTyping.view
+    prog: Program.view
     ctx: Ctx
     call: zast.callrow.view
     fid: ztypes.tid
@@ -4567,23 +4190,21 @@ emitNativeArg: function {
     facts: exprfacts.borrow
 } out String is {
     seen: u64
-    for each aId: (zast.kidsOf :ast span: call.arguments) loop {
-        a: ast.nodes.get i: aId
+    for each aId: (zast.kidsOf ast: prog.ast span: call.arguments) loop {
+        a: prog.ast.nodes.get i: aId
         if a.namedoperation then {
-            al: zast.nameTextAt :ast ref: a.name
+            al: zast.nameTextAt ast: prog.ast ref: a.name
             if usePos then {
                 if al.length == 0 then {
                     if seen == posIdx then {
                         return (
                             lowerNativeArg
-                            :ast
-                            :reg
-                            :typing
+                            :prog
                             :ctx
                             :fid
                             :pnameId
                             :pid
-                            op: (ast.nodes.get i: a.operation)
+                            op: (prog.ast.nodes.get i: a.operation)
                             :facts
                         )
                     }
@@ -4593,14 +4214,12 @@ emitNativeArg: function {
                 if a.name == pnameId then {
                     return (
                         lowerNativeArg
-                        :ast
-                        :reg
-                        :typing
+                        :prog
                         :ctx
                         :fid
                         :pnameId
                         :pid
-                        op: (ast.nodes.get i: a.operation)
+                        op: (prog.ast.nodes.get i: a.operation)
                         :facts
                     )
                 }
@@ -4608,12 +4227,10 @@ emitNativeArg: function {
         }
     }
     # an argument the call leaves out is its declared default
-    if (typing.declHasDefaultId parentTypeId: fid nameId: pnameId) then {
+    if (prog.typing.declHasDefaultId parentTypeId: fid nameId: pnameId) then {
         return (
             callorder.paramDefaultText
-            :ast
-            :reg
-            :typing
+            :prog
             :ctx
             cco: fid
             nameId: pnameId
@@ -4629,9 +4246,7 @@ emitNativeArg: function {
 # argument's implementation (`spawn`'s task, which the handle's `create` takes as a
 # Task value). "" when the two types are one, or the target is no protocol.
 viaBoxArg: function {
-    ast: Ast.view
-    reg: ztypes.ZTypeRegistry.view
-    typing: ztyping.ZTyping.view
+    prog: Program.view
     ctx: Ctx
     paramTid: ztypes.tid
     targetTid: ztypes.tid
@@ -4640,12 +4255,14 @@ viaBoxArg: function {
     argNid: zast.nodeid
 } out String is {
     if paramTid == targetTid then return "".string
-    if (reg.typetypeOf typeId: targetTid) != ztypes.ztypetype.protocolType then return "".string
-    lbl: types.boxLabelFor :reg :typing :ctx implTid: paramTid protoTid: targetTid
+    if (
+        (prog.reg.typetypeOf typeId: targetTid) != ztypes.ztypetype.protocolType
+    ) then return "".string
+    lbl: types.boxLabelFor :prog :ctx implTid: paramTid protoTid: targetTid
     if lbl.length == 0 then return "".string
     addr: "&\{av}"
     if avF.place.not then {
-        tmpNm: hoistForAddress :ast :reg :typing :ctx :av tid: paramTid :argNid
+        tmpNm: hoistForAddress :prog :ctx :av tid: paramTid :argNid
         addr = "&\{tmpNm}"
     }
     noteOwnedBoxUse :ctx implTid: paramTid protoTid: targetTid
@@ -4658,41 +4275,37 @@ viaBoxArg: function {
 # bound to a temp so it has one. Sets ctx.lastArgByPtr: whether the slot takes
 # the argument by pointer.
 dispatchArgText: function {
-    ast: Ast.view
-    reg: ztypes.ZTypeRegistry.view
-    typing: ztyping.ZTyping.view
+    prog: Program.view
     ctx: Ctx
     n: astnode.view
     facts: exprfacts.borrow
 } out String is {
     ctx.lastArgByPtr = false
     avF: exprfacts
-    av: emitExprWith :ast :reg :typing :ctx :n facts: avF
-    if (typing.standInOf.has key: (zast.nodeIdOf :n)) then {
-        sit: standInText :ast :reg :typing :ctx :n text: av.take facts: avF
+    av: emitExprWith :prog :ctx :n facts: avF
+    if (prog.typing.standInOf.has key: (zast.nodeIdOf :n)) then {
+        sit: standInText :prog :ctx :n text: av.take facts: avF
         return (stating :facts from: avF text: sit)
     }
-    atid: stampIdOf :typing nid: (interpPartNodeId :n)
+    atid: stampIdOf :prog nid: (interpPartNodeId :n)
     apfx: String
-    chasedColTid: chaseAggregateTypedef :reg :typing :ctx tid: atid
+    chasedColTid: chaseAggregateTypedef :prog :ctx tid: atid
     if (chasedColTid == atid).not then apfx = "&".string
     if (
         types.isCollectionOriginTid
         :ctx
-        originTid: (originTidOf :reg tid: atid)
+        originTid: (originTidOf :prog tid: atid)
     ) then apfx = "&".string
     # a value view goes by value, as the slot takes it (protoParamCtype)
-    if (types.isValueViewTid :reg :typing :ctx tid: atid) then apfx = "".string
+    if (types.isValueViewTid :prog :ctx tid: atid) then apfx = "".string
     ctx.lastArgByPtr = apfx.length > 0
-    if (pathIsPointer :ast :reg :typing :ctx :n) then apfx = "".string
+    if (pathIsPointer :prog :ctx :n) then apfx = "".string
     # a value a call returns has no address: it is bound to a temp first, freed
     # when the checker's temporary owns it (a view it does not)
     if apfx.length > 0 when avF.place.not then {
         hv: (
             hoistForAddress
-            :ast
-            :reg
-            :typing
+            :prog
             :ctx
             av: av.stringView
             tid: atid
@@ -4711,14 +4324,13 @@ dispatchArgText: function {
 # one holds that value, as the parameter does (passesByValue); a value type's
 # borrowed field is refused before emission.
 borrowedFieldHeldByPointer: function {
-    reg: ztypes.ZTypeRegistry.view
-    typing: ztyping.ZTyping.view
+    prog: Program.view
     ctx: Ctx
     fid: ztypes.tid
 } out bool is {
-    ftid: types.canonTypeId :reg :typing tid: fid
+    ftid: types.canonTypeId :prog tid: fid
     if ftid.isZero then ftid = fid
     # a Map or a Set IS its heap pointer, and a borrowed field holds that
-    if (isHeapPtrCollection :reg :typing :ctx tid: ftid) then return false
-    return (passesByValue :reg :ctx tid: ftid).not
+    if (isHeapPtrCollection :prog :ctx tid: ftid) then return false
+    return (passesByValue :prog :ctx tid: ftid).not
 }

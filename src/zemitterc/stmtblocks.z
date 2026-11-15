@@ -5,8 +5,8 @@
 # answers to truthiness: the second arm is the value, the first its negation.
 # Distinct from isOrdinalVariant, which is about there being no tag field --
 # every ordinal loses the field, only a pair gains `x` / `!x`.
-isOrdinalPair: function {typing: ztyping.ZTyping.view tid: ztypes.tid} out bool is {
-    ao: typing.ordinalVariant.get key: tid
+isOrdinalPair: function {prog: Program.view tid: ztypes.tid} out bool is {
+    ao: prog.typing.ordinalVariant.get key: tid
     match (
         ao
     ) case some then {
@@ -27,21 +27,19 @@ isOrdinalPair: function {typing: ztyping.ZTyping.view tid: ztypes.tid} out bool 
 # arm walk is a member walk, and forcing one during emission demands members
 # the program never asked for.
 ordinalPairFirstArmId: function {
-    typing: ztyping.ZTyping.view
+    prog: Program.view
     tid: ztypes.tid
 } out zast.nameid is {
     none: zast.nameid
-    if (isOrdinalPair :typing :tid).not then return none
-    return ((typing.sumPairFirstArm.get key: tid).or d: none)
+    if (isOrdinalPair :prog :tid).not then return none
+    return ((prog.typing.sumPairFirstArm.get key: tid).or d: none)
 }
 
 # ternaryCondPart -- one condition of a ternary clause. A guarded one -- a later
 # clause's, or one past the first -- assigns its hoists where it runs; "" when
 # one of them cannot be.
 ternaryCondPart: function {
-    ast: Ast.view
-    reg: ztypes.ZTypeRegistry.view
-    typing: ztyping.ZTyping.view
+    prog: Program.view
     ctx: Ctx
     # the condition's operation node
     op: zast.nodeid
@@ -50,8 +48,8 @@ ternaryCondPart: function {
 } out String is {
     mk: openInPlace :ctx :guarded
     cvF: exprfacts
-    cv: argforms.valueExprC :ast :reg :typing :ctx n: (ast.nodes.get i: op) facts: cvF
-    tw: truthyCondText :ast :reg :typing :ctx n: (ast.nodes.get i: op) raw: cv.stringView
+    cv: argforms.valueExprC :prog :ctx n: (prog.ast.nodes.get i: op) facts: cvF
+    tw: truthyCondText :prog :ctx n: (prog.ast.nodes.get i: op) raw: cv.stringView
     # a truthiness test written around the condition is a value computed from it
     if tw.length > 0 when tw.stringView != cv then {
         cv = tw.take
@@ -70,9 +68,7 @@ ternaryCondPart: function {
 # armInPlace -- a ternary arm's value, its hoists assigned where the arm runs;
 # "" when one of them cannot be.
 armInPlace: function {
-    ast: Ast.view
-    reg: ztypes.ZTypeRegistry.view
-    typing: ztyping.ZTyping.view
+    prog: Program.view
     ctx: Ctx
     n: astnode.view
     # the arm of a reference chain: its address is the answer (armRefLeaf)
@@ -81,7 +77,7 @@ armInPlace: function {
 } out String is {
     mk: openInPlace :ctx guarded: true
     vxF: exprfacts
-    vx: values.armValueExpr :ast :reg :typing :ctx :n facts: vxF
+    vx: values.armValueExpr :prog :ctx :n facts: vxF
     if (hoistsGrew :ctx mark: mk) then {
         # the address is taken of the value itself, which may be a place; the
         # hoists the value reads are assigned ahead of it
@@ -90,9 +86,7 @@ armInPlace: function {
             rfF: exprfacts
             part = (
                 argforms.armRefLeaf
-                :ast
-                :reg
-                :typing
+                :prog
                 :ctx
                 :n
                 text: vx.stringView
@@ -110,9 +104,7 @@ armInPlace: function {
     closeInPlace :ctx mark: mk
     if ref then return (
         argforms.armRefLeaf
-        :ast
-        :reg
-        :typing
+        :prog
         :ctx
         :n
         text: vx.stringView
@@ -124,12 +116,10 @@ armInPlace: function {
 
 # matchDiverges -- true when a match node is stamped `never` (the typechecker's
 # exhaustive + all-arms-diverge result), so its `default:` is provably unreachable.
-matchDiverges: function {
-    reg: ztypes.ZTypeRegistry.view typing: ztyping.ZTyping.view nid: zast.nodeid
-} out bool is {
-    tid: stampIdOf :typing :nid
+matchDiverges: function {prog: Program.view nid: zast.nodeid} out bool is {
+    tid: stampIdOf :prog :nid
     if tid.isZero then return false
-    tt: reg.typetypeOf typeId: tid
+    tt: prog.reg.typetypeOf typeId: tid
     if tt == ztypes.ztypetype.neverType then return true
     return false
 }
@@ -140,25 +130,23 @@ matchDiverges: function {
 # append after such a block is unreachable. Ask it about the block YOU emitted --
 # an `if c then { break }` diverges as a block, its enclosing block does not.
 blockDiverges: function {
-    ast: Ast.view
-    reg: ztypes.ZTypeRegistry.view
-    typing: ztyping.ZTyping.view
+    prog: Program.view
     ctx: Ctx.view
     n: astnode.view
 } out bool is {
-    if (ztypecheck.blockEndsInReturn :ast block: n) then return true
+    if (ztypecheck.blockEndsInReturn ast: prog.ast block: n) then return true
     match (
         n
     ) case statement then {
         # ANY diverging statement makes the rest of the block unreachable, so
         # the block diverges -- not just a diverging last statement
-        for each dsId: (zast.kidsOf :ast span: n.statements) loop {
-            if (stmtDiverges :ast :reg :typing :ctx sid: dsId) then return true
+        for each dsId: (zast.kidsOf ast: prog.ast span: n.statements) loop {
+            if (stmtDiverges :prog :ctx sid: dsId) then return true
         }
         return false
     } case doexpr then {
         # a `do` body (a `with`'s) is the block it wraps
-        return (blockDiverges :ast :reg :typing :ctx n: (ast.nodes.get i: n.statement))
+        return (blockDiverges :prog :ctx n: (prog.ast.nodes.get i: n.statement))
     } else {
         return false
     }
@@ -169,27 +157,25 @@ blockDiverges: function {
 # valued or bare, an if/else chain whose every arm diverges, or a loop that never
 # exits.
 stmtDiverges: function {
-    ast: Ast.view
-    reg: ztypes.ZTypeRegistry.view
-    typing: ztyping.ZTyping.view
+    prog: Program.view
     ctx: Ctx.view
     sid: zast.nodeid
 } out bool is {
     if sid.isZero then return false
-    sn: ast.nodes.get i: sid
+    sn: prog.ast.nodes.get i: sid
     match (
         sn
     ) case statementline then {
-        inn: ast.nodes.get i: sn.statementline
+        inn: prog.ast.nodes.get i: sn.statementline
         # the typechecker's `never` stamp IS the control-flow fact: checkCase
         # only stamps it on an exhaustive match whose every arm -- else included
         # -- diverges, and a panic or diverging call carries it because it does
         # not return. No shape-matching needed here.
-        if (matchDiverges :reg :typing nid: sid) then return true
-        if (matchDiverges :reg :typing nid: sn.statementline) then return true
+        if (matchDiverges :prog nid: sid) then return true
+        if (matchDiverges :prog nid: sn.statementline) then return true
         if (isBareReturn n: inn) then return true
-        if (loopNeverExits :typing n: inn) then return true
-        return (ifDiverges :ast :reg :typing :ctx n: inn)
+        if (loopNeverExits :prog n: inn) then return true
+        return (ifDiverges :prog :ctx n: inn)
     } else {
         return false
     }
@@ -211,13 +197,13 @@ isBareReturn: function {n: astnode.view} out bool is {
 # no `break` that leaves it: its only ways out leave the function, so anything
 # after the loop is unreachable.
 loopNeverExits: function {
-    typing: ztyping.ZTyping.view
+    prog: Program.view
     n: astnode.view
 } out bool is {
     match (
         n
     ) case forexpr then {
-        return (foldedLoopOf :typing nid: n.nodeid).neverExits
+        return (foldedLoopOf :prog nid: n.nodeid).neverExits
     } else {
         return false
     }
@@ -226,9 +212,7 @@ loopNeverExits: function {
 # ifDiverges -- an if/else chain every arm of which diverges, else included. No
 # else clause means the fall-through path is live, so the chain does not.
 ifDiverges: function {
-    ast: Ast.view
-    reg: ztypes.ZTypeRegistry.view
-    typing: ztyping.ZTyping.view
+    prog: Program.view
     ctx: Ctx.view
     n: astnode.view
 } out bool is {
@@ -238,32 +222,30 @@ ifDiverges: function {
         # a chain whose every condition folds emits ONE branch, so only that
         # branch decides -- the arms the emitter dropped cannot run. Mirrors the
         # fold in emitStmt's ifexpr case.
-        ffb: foldedBranchOf :typing nid: n.nodeid
+        ffb: foldedBranchOf :prog nid: n.nodeid
         if ffb.known then {
             # every branch folded away: nothing is emitted, so nothing diverges
             if ffb.stmt.isZero then return false
-            return (blockDiverges :ast :reg :typing :ctx n: (ast.nodes.get i: ffb.stmt))
+            return (blockDiverges :prog :ctx n: (prog.ast.nodes.get i: ffb.stmt))
         }
         if n.elseclause.isZero then return false
-        for each cId: (zast.kidsOf :ast span: n.clauses) loop {
-            cl: ast.nodes.get i: cId
+        for each cId: (zast.kidsOf ast: prog.ast span: n.clauses) loop {
+            cl: prog.ast.nodes.get i: cId
             match (
                 cl
             ) case ifclause then {
                 if cl.statement.isZero then return false
                 if (
                     blockDiverges
-                    :ast
-                    :reg
-                    :typing
+                    :prog
                     :ctx
-                    n: (ast.nodes.get i: cl.statement)
+                    n: (prog.ast.nodes.get i: cl.statement)
                 ).not then return false
             } else {
                 return false
             }
         }
-        return (blockDiverges :ast :reg :typing :ctx n: (ast.nodes.get i: n.elseclause))
+        return (blockDiverges :prog :ctx n: (prog.ast.nodes.get i: n.elseclause))
     } else {
         return false
     }
@@ -292,17 +274,15 @@ dropPtrVid: function {ctx: Ctx vid: ztypes.vid} is {
 # Set, a Map or a box is not loaded either: its value is its pointer
 # (valueIsItsPointer).
 needsValueDeref: function {
-    ast: Ast.view
-    reg: ztypes.ZTypeRegistry.view
-    typing: ztyping.ZTyping.view
+    prog: Program.view
     ctx: Ctx
     n: astnode.view
     tid: ztypes.tid
 } out bool is {
     if (localnames.nodeIsBareAtom :n).not then return false
-    if (pathIsPointer :ast :reg :typing :ctx :n).not then return false
-    if (valueIsItsPointer :reg :typing :ctx :tid) then return false
-    return (argforms.isReftypeParam :reg :typing :ctx :tid).not
+    if (pathIsPointer :prog :ctx :n).not then return false
+    if (valueIsItsPointer :prog :ctx :tid) then return false
+    return (argforms.isReftypeParam :prog :ctx :tid).not
 }
 
 # varEntrySet -- replace-or-append: one entry per variable (map.set semantics).
@@ -382,9 +362,7 @@ varTidSet: function {xs: List VarTid vid: ztypes.vid tid: ztypes.tid} is {
 # zeroed (movedZeroC) so its scope-exit destructor no-ops, the move having
 # transferred ownership -- when a destroy of it still runs (movedSourceNeedsZero).
 emitExplicitTakeZero: function {
-    ast: Ast.view
-    reg: ztypes.ZTypeRegistry.view
-    typing: ztyping.ZTyping.view
+    prog: Program.view
     ctx: Ctx
     a: zast.namedoperationrow.view
     ts: StringView
@@ -393,11 +371,9 @@ emitExplicitTakeZero: function {
 } is {
     (
         values.emitTakenSourceZero
-        :ast
-        :reg
-        :typing
+        :prog
         :ctx
-        n: (ast.nodes.get i: a.operation)
+        n: (prog.ast.nodes.get i: a.operation)
         :ts
         :ind
         :buf
@@ -406,15 +382,13 @@ emitExplicitTakeZero: function {
 
 # emitImplicitMoveZero -- emitMovedSourceZero for a call argument's value.
 emitImplicitMoveZero: function {
-    ast: Ast.view
-    reg: ztypes.ZTypeRegistry.view
-    typing: ztyping.ZTyping.view
+    prog: Program.view
     ctx: Ctx
     a: zast.namedoperationrow.view
     ind: StringView
     buf: String.borrow
 } is {
-    values.emitMovedSourceZero :ast :reg :typing :ctx n: (ast.nodes.get i: a.operation) :ind :buf
+    values.emitMovedSourceZero :prog :ctx n: (prog.ast.nodes.get i: a.operation) :ind :buf
 }
 
 # emitCallTakeInvalidations -- zero the source local of each ownership-moved arg
@@ -425,39 +399,37 @@ emitImplicitMoveZero: function {
 # bare owning local is zeroed when the stamp says the call takes it -- a take
 # parameter, an owned constructor field, a collection element.
 emitCallTakeInvalidations: function {
-    ast: Ast.view
-    reg: ztypes.ZTypeRegistry.view
-    typing: ztyping.ZTyping.view
+    prog: Program.view
     ctx: Ctx
     call: zast.callrow.view
     ind: StringView
     buf: String.borrow
 } is {
-    for each argId: (zast.kidsOf :ast span: call.arguments) loop {
-        a: ast.nodes.get i: argId
+    for each argId: (zast.kidsOf ast: prog.ast span: call.arguments) loop {
+        a: prog.ast.nodes.get i: argId
         if a.namedoperation.not then continue
-        opNode: ast.nodes.get i: a.operation
+        opNode: prog.ast.nodes.get i: a.operation
         isHold: false
         isTake: false
         {
-            disp: typing.argDisposition.get key: (ztypecheck.nodeId n: opNode)
+            disp: prog.typing.argDisposition.get key: (ztypecheck.nodeId n: opNode)
             if disp.some then {
                 if disp == ztypes.zparamownership.holdMode then isHold = true
                 if disp == ztypes.zparamownership.takeMode then isTake = true
             }
         }
-        ts: values.takeStringSource :ast :reg :typing :ctx n: opNode
+        ts: values.takeStringSource :prog :ctx n: opNode
         if ts.length > 0 then {
-            emitExplicitTakeZero :ast :reg :typing :ctx :a ts: ts.stringView :ind :buf
+            emitExplicitTakeZero :prog :ctx :a ts: ts.stringView :ind :buf
         } else if isTake or isHold then {
-            emitImplicitMoveZero :ast :reg :typing :ctx :a :ind :buf
+            emitImplicitMoveZero :prog :ctx :a :ind :buf
         }
-        emitValueTakeInvalidations :ast :reg :typing :ctx n: opNode :ind :buf
+        emitValueTakeInvalidations :prog :ctx n: opNode :ind :buf
     }
     # a moving call can sit under the callable: `(f xs: a).not` calls `not`
     # on the value `f` moved `a` into
-    callableNode: ast.nodes.get i: call.callable
-    emitValueTakeInvalidations :ast :reg :typing :ctx n: callableNode :ind :buf
+    callableNode: prog.ast.nodes.get i: call.callable
+    emitValueTakeInvalidations :prog :ctx n: callableNode :ind :buf
 }
 
 # emitValueTakeInvalidations -- statement-level source zeroing for a value node
@@ -465,9 +437,7 @@ emitCallTakeInvalidations: function {
 # wrappers, and through a dotted path's receiver, since `(f xs: a).not` moved
 # `a` in the call under the dot, not in an argument of the outer one.
 emitValueTakeInvalidations: function {
-    ast: Ast.view
-    reg: ztypes.ZTypeRegistry.view
-    typing: ztyping.ZTyping.view
+    prog: Program.view
     ctx: Ctx
     n: astnode.view
     ind: StringView
@@ -476,17 +446,17 @@ emitValueTakeInvalidations: function {
     match (
         n
     ) case statementline then {
-        statementlineNode: ast.nodes.get i: n.statementline
-        emitValueTakeInvalidations :ast :reg :typing :ctx n: statementlineNode :ind :buf
+        statementlineNode: prog.ast.nodes.get i: n.statementline
+        emitValueTakeInvalidations :prog :ctx n: statementlineNode :ind :buf
     } case call then {
-        emitCallTakeInvalidations :ast :reg :typing :ctx call: n :ind :buf
+        emitCallTakeInvalidations :prog :ctx call: n :ind :buf
     } case namedoperation then {
-        operationNode: ast.nodes.get i: n.operation
-        emitValueTakeInvalidations :ast :reg :typing :ctx n: operationNode :ind :buf
+        operationNode: prog.ast.nodes.get i: n.operation
+        emitValueTakeInvalidations :prog :ctx n: operationNode :ind :buf
     } case dottedpath then {
         if n.parent.notZero then {
-            parentNode: ast.nodes.get i: n.parent
-            emitValueTakeInvalidations :ast :reg :typing :ctx n: parentNode :ind :buf
+            parentNode: prog.ast.nodes.get i: n.parent
+            emitValueTakeInvalidations :prog :ctx n: parentNode :ind :buf
         }
     } else null
 }
@@ -494,21 +464,21 @@ emitValueTakeInvalidations: function {
 # clauseArmId -- the arm a match clause names: the internal arm a public
 # alias resolved to (the checker stamps the clause), else the written one.
 clauseArmId: function {
-    typing: ztyping.ZTyping.view
+    prog: Program.view
     nid: zast.nodeid
     written: zast.nameid
 } out zast.nameid is {
-    ai: typing.aliasInternalIdOf nodeid: nid
+    ai: prog.typing.aliasInternalIdOf nodeid: nid
     if ai.notZero then return ai
     return written
 }
 
 # the base node id of dotted-path node `n`.
-dottedBaseNodeId: function {ast: Ast.view n: astnode.view} out zast.nodeid is {
+dottedBaseNodeId: function {prog: Program.view n: astnode.view} out zast.nodeid is {
     match (
         n
     ) case dottedpath then {
-        return (atomNodeId n: (ast.nodes.get i: n.parent))
+        return (atomNodeId n: (prog.ast.nodes.get i: n.parent))
     } else {
         return zast.nodeid
     }
@@ -719,22 +689,21 @@ popLoopLabel: function {ctx: Ctx id: u64 ind: StringView buf: String.borrow} is 
 # type tid: destroyFnC handed destroyOperand's form of nm; "" when it owns
 # nothing.
 destroyLineC: function {
-    reg: ztypes.ZTypeRegistry.view
-    typing: ztyping.ZTyping.view
+    prog: Program.view
     ctx: Ctx
     tid: ztypes.tid
     nm: StringView
     ind: StringView
 } out String is {
-    dt: types.destroyTargetTid :reg :typing :ctx :tid
+    dt: types.destroyTargetTid :prog :ctx :tid
     if dt.isZero then return String
-    types.noteDestroyUse :reg :typing :ctx tid: dt
+    types.noteDestroyUse :prog :ctx tid: dt
     if dt == ctx.strTid then {
         preludeNeed :ctx memb: "@String_free"
         return "\{ind}\{ctx.strC}_free(&\{nm});\n"
     }
     addr: "&"
-    if (valueIsItsPointer :reg :typing :ctx tid: dt) then addr = ""
+    if (valueIsItsPointer :prog :ctx tid: dt) then addr = ""
     return "\{ind}\{types.ctxCnameView :ctx tid: dt}_destroy(\{addr}\{nm});\n"
 }
 
@@ -743,34 +712,32 @@ destroyLineC: function {
 # runtime branch must be emitted; `known` true with a zero stmt means nothing
 # was selected and nothing is emitted at all.
 foldedBranchOf: function {
-    typing: ztyping.ZTyping.view
+    prog: Program.view
     nid: zast.nodeid
 } out ztyping.foldedbranch is {
-    return (typing.foldedBranchAt :nid)
+    return (prog.typing.foldedBranchAt :nid)
 }
 
 # condFoldsTrue -- the checker's fold read this loop condition as true, so it
 # writes no test.
-condFoldsTrue: function {typing: ztyping.ZTyping.view nid: zast.nodeid} out bool is {
-    return (typing.condFoldsTrueAt :nid)
+condFoldsTrue: function {prog: Program.view nid: zast.nodeid} out bool is {
+    return (prog.typing.condFoldsTrueAt :nid)
 }
 
 # foldedLoopOf -- what the typechecker's constant fold read of a loop's
 # conditions, and whether that leaves the loop any normal way out.
 foldedLoopOf: function {
-    typing: ztyping.ZTyping.view
+    prog: Program.view
     nid: zast.nodeid
 } out ztyping.foldedloop is {
-    return (typing.foldedLoopAt :nid)
+    return (prog.typing.foldedLoopAt :nid)
 }
 
 # appendArmAssign -- an arm's value assigned to the local its control value binds,
 # `target = v;` -- or, when the target is the pointer a reference control value
 # builds (emitControlPtrExpr), the arm's address (armRefLeaf).
 appendArmAssign: function {
-    ast: Ast.view
-    reg: ztypes.ZTypeRegistry.view
-    typing: ztyping.ZTyping.view
+    prog: Program.view
     ctx: Ctx
     n: astnode.view
     target: StringView
@@ -783,7 +750,7 @@ appendArmAssign: function {
         rn: "_cv\{ctx.armRefCv - 1}"
         if target == rn then {
             raF: exprfacts
-            ra: argforms.armRefLeaf :ast :reg :typing :ctx :n text: vx textF: vxF facts: raF
+            ra: argforms.armRefLeaf :prog :ctx :n text: vx textF: vxF facts: raF
             buf.append "\{ind}\{target} = \{ra};\n"
             return
         }
@@ -794,15 +761,14 @@ appendArmAssign: function {
 # stampIdDeep -- node `n`'s stamped type id, unwrapping a value-position FUNCTION
 # stamp to its return tid; 0 when it carries none.
 stampIdDeep: function {
-    reg: ztypes.ZTypeRegistry.view
-    typing: ztyping.ZTyping.view
+    prog: Program.view
     n: astnode.view
 } out ztypes.tid is {
     nid: interpPartNodeId :n
-    sid: stampIdOf :typing :nid
+    sid: stampIdOf :prog :nid
     if sid.notZero then {
-        if (reg.typetypeOf typeId: sid) == ztypes.ztypetype.functionType then {
-            return (emitplan.fnReturnTidOf :reg tid: sid)
+        if (prog.reg.typetypeOf typeId: sid) == ztypes.ztypetype.functionType then {
+            return (emitplan.fnReturnTidOf :prog tid: sid)
         }
         return sid
     }
@@ -811,14 +777,14 @@ stampIdDeep: function {
 
 # plainLiteralText -- the text of a single-chunk string literal; "" for
 # interpolated or non-literal expressions.
-plainLiteralText: function {ast: Ast.view n: astnode.view} out String is {
+plainLiteralText: function {prog: Program.view n: astnode.view} out String is {
     match (
         n
     ) case atomstring then {
         if n.stringparts.count.u64 == 1 then {
-            p: ast.nodes.get i: (zast.kidAt kids: ast.kids span: n.stringparts i: 0)
+            p: prog.ast.nodes.get i: (zast.kidAt kids: prog.ast.kids span: n.stringparts i: 0)
             if p.stringchunk then {
-                pt: zast.literalTextAt :ast ref: p.text
+                pt: zast.literalTextAt ast: prog.ast ref: p.text
                 pc: pt.string
                 return pc
             }
@@ -834,9 +800,7 @@ plainLiteralText: function {ast: Ast.view n: astnode.view} out String is {
 # unconditional position the spec says compilation fails: the message is
 # recorded for the driver and the trap emitted as a placeholder.
 emitErrorStmt: function {
-    ast: Ast.view
-    reg: ztypes.ZTypeRegistry.view
-    typing: ztyping.ZTyping.view
+    prog: Program.view
     ctx: Ctx
     call: zast.callrow.view
     ind: StringView
@@ -847,13 +811,13 @@ emitErrorStmt: function {
     avF: exprfacts
     lit: String
     got: false
-    for each aId: (zast.kidsOf :ast span: call.arguments) loop {
-        a: ast.nodes.get i: aId
+    for each aId: (zast.kidsOf ast: prog.ast span: call.arguments) loop {
+        a: prog.ast.nodes.get i: aId
         if a.namedoperation when got.not then {
             got = true
-            opn: ast.nodes.get i: a.operation
-            av = emitExprWith :ast :reg :typing :ctx n: opn facts: avF
-            lit = plainLiteralText :ast n: opn
+            opn: prog.ast.nodes.get i: a.operation
+            av = emitExprWith :prog :ctx n: opn facts: avF
+            lit = plainLiteralText :prog n: opn
         }
     }
     okArg: false
@@ -876,7 +840,7 @@ emitErrorStmt: function {
     ).not then {
         em: lit.copy
         if em.length == 0 then em = "compile-time error".string
-        cn: ast.nodes.get i: call.callable
+        cn: prog.ast.nodes.get i: call.callable
         ctx.emitErrors.append (
             ztypecheck.reachedErrorData
             nodeid: call.callable
@@ -892,9 +856,7 @@ emitErrorStmt: function {
 # helper. msg is a StringLike (String/StringView); both expose `.data` as a
 # char pointer. A non-string or unhandled arg falls back to a bare marker.
 emitPanicStmt: function {
-    ast: Ast.view
-    reg: ztypes.ZTypeRegistry.view
-    typing: ztyping.ZTyping.view
+    prog: Program.view
     ctx: Ctx
     call: zast.callrow.view
     ind: StringView
@@ -904,12 +866,12 @@ emitPanicStmt: function {
     av: String
     avF: exprfacts
     got: false
-    for each aId: (zast.kidsOf :ast span: call.arguments) loop {
-        a: ast.nodes.get i: aId
+    for each aId: (zast.kidsOf ast: prog.ast span: call.arguments) loop {
+        a: prog.ast.nodes.get i: aId
         if a.namedoperation when got.not then {
             got = true
-            aOpNode: ast.nodes.get i: a.operation
-            av = emitExprWith :ast :reg :typing :ctx n: aOpNode facts: avF
+            aOpNode: prog.ast.nodes.get i: a.operation
+            av = emitExprWith :prog :ctx n: aOpNode facts: avF
         }
     }
     okArg: false
@@ -932,9 +894,7 @@ emitPanicStmt: function {
 # node `nid`) is bound to it and destroyed as the statement ends; any other
 # result is evaluated for its effect alone.
 emitDiscardedResult: function {
-    ast: Ast.view
-    reg: ztypes.ZTypeRegistry.view
-    typing: ztyping.ZTyping.view
+    prog: Program.view
     ctx: Ctx
     nid: zast.nodeid
     ce: StringView
@@ -942,23 +902,21 @@ emitDiscardedResult: function {
     ind: StringView
     buf: String.borrow
 } is {
-    dv: typing.discardTemp.get key: nid
+    dv: prog.typing.discardTemp.get key: nid
     if dv.none then {
         buf.append "\{ind}(void)(\{ce});\n"
         return
     }
-    dnm: localnames.varCName :ctx :ast :reg vid: dv
+    dnm: localnames.varCName :ctx :prog vid: dv
     strT: values.strTypeC :ctx
-    dct: if rtid == ctx.strTid then strT.copy else typeRefC :ast :reg :typing :ctx tid: rtid
+    dct: if rtid == ctx.strTid then strT.copy else typeRefC :prog :ctx tid: rtid
     buf.append "\{ind}\{dct} \{dnm} = \{ce};\n"
-    buf.append (destroyLineC :reg :typing :ctx tid: rtid nm: dnm.stringView :ind)
+    buf.append (destroyLineC :prog :ctx tid: rtid nm: dnm.stringView :ind)
 }
 
 # emitCallStmt -- one call-shaped statement: return / print / a plain call.
 emitCallStmt: function {
-    ast: Ast.view
-    reg: ztypes.ZTypeRegistry.view
-    typing: ztyping.ZTyping.view
+    prog: Program.view
     ctx: Ctx
     call: zast.callrow.view
     ind: StringView
@@ -966,31 +924,31 @@ emitCallStmt: function {
     buf: String.borrow
 } is {
     # an operation the compiler computed (`100 - 250`) has nothing left to run
-    folded: (typing.nodeConstAt nid: call.nodeid).kind
+    folded: (prog.typing.nodeConstAt nid: call.nodeid).kind
     if folded.ivalKind or folded.fvalKind or folded.svalKind then return
-    relmnId: aliasChildNameId :ast :typing n: (ast.nodes.get i: call.callable)
+    relmnId: aliasChildNameId :prog n: (prog.ast.nodes.get i: call.callable)
     if (zast.markerKindOfName id: relmnId).dropMarker then {
-        relbnid: dottedBaseNodeId :ast n: (ast.nodes.get i: call.callable)
-        reltid: stampIdOf :typing nid: relbnid
-        if (reg.typetypeOf typeId: reltid) == ztypes.ztypetype.protocolType then return
+        relbnid: dottedBaseNodeId :prog n: (prog.ast.nodes.get i: call.callable)
+        reltid: stampIdOf :prog nid: relbnid
+        if (prog.reg.typetypeOf typeId: reltid) == ztypes.ztypetype.protocolType then return
     }
-    cn0Id: zast.atomNameIdOf n: (ast.nodes.get i: call.callable)
+    cn0Id: zast.atomNameIdOf n: (prog.ast.nodes.get i: call.callable)
     # a statement form arrives either as its core alias (an atom) or spelled
     # qualified (a dotted path, whose atom carries no name)
     sfnId: cn0Id
     if cn0Id.isZero then {
-        sfnId = consts.stmtFormNameId :ast :reg :typing n: (ast.nodes.get i: call.callable)
+        sfnId = consts.stmtFormNameId :prog n: (prog.ast.nodes.get i: call.callable)
     }
     if sfnId == zast.wellKnown.slot.wkPrint then {
-        values.emitPrintStmt :ast :reg :typing :ctx :call :ind :tmp :buf
+        values.emitPrintStmt :prog :ctx :call :ind :tmp :buf
         return
     }
     if sfnId == zast.wellKnown.slot.wkPanic then {
-        emitPanicStmt :ast :reg :typing :ctx :call :ind :tmp :buf
+        emitPanicStmt :prog :ctx :call :ind :tmp :buf
         return
     }
     if sfnId == zast.wellKnown.slot.wkError then {
-        emitErrorStmt :ast :reg :typing :ctx :call :ind :tmp :buf
+        emitErrorStmt :prog :ctx :call :ind :tmp :buf
         return
     }
     if sfnId == zast.wellKnown.slot.wkReturn then {
@@ -998,20 +956,20 @@ emitCallStmt: function {
         outerExit: ctx.exitNode
         ctx.exitNode = call.nodeid
         hasArg: false
-        for each aId: (zast.kidsOf :ast span: call.arguments) loop {
-            a: ast.nodes.get i: aId
+        for each aId: (zast.kidsOf ast: prog.ast span: call.arguments) loop {
+            a: prog.ast.nodes.get i: aId
             if a.namedoperation when hasArg.not then {
                 hasArg = true
-                emitReturnOfNode :ast :reg :typing :ctx vid: a.operation :ind :tmp :buf
+                emitReturnOfNode :prog :ctx vid: a.operation :ind :tmp :buf
             }
         }
         if hasArg.not then {
             if ctx.genActive then {
-                emitExitDestroy :ast :reg :typing :ctx :ind :buf
+                emitExitDestroy :prog :ctx :ind :buf
                 lgd: "\{ind}goto L_done;\n"
                 buf.append lgd
             } else {
-                emitReturnCleanup :ast :reg :typing :ctx :tmp :ind :buf
+                emitReturnCleanup :prog :ctx :tmp :ind :buf
                 lr2: "\{ind}return;\n"
                 buf.append lr2
             }
@@ -1020,14 +978,12 @@ emitCallStmt: function {
         return
     }
     facts: exprfacts
-    ce: callorder.emitCallValue :ast :reg :typing :ctx :call :facts
+    ce: callorder.emitCallValue :prog :ctx :call :facts
     flushArgHoists :ctx :ind :tmp :buf
-    dcrtid: stampIdOf :typing nid: call.nodeid
+    dcrtid: stampIdOf :prog nid: call.nodeid
     (
         emitDiscardedResult
-        :ast
-        :reg
-        :typing
+        :prog
         :ctx
         nid: call.nodeid
         ce: ce.stringView
@@ -1035,7 +991,7 @@ emitCallStmt: function {
         :ind
         :buf
     )
-    emitCallTakeInvalidations :ast :reg :typing :ctx :call :ind :buf
+    emitCallTakeInvalidations :prog :ctx :call :ind :buf
 }
 
 # emitControlCollectionBind -- a List, Set or Map bound from an `if`, a `match` or
@@ -1043,9 +999,7 @@ emitCallStmt: function {
 # control binding does, and the local earns the cleanup entry a construction
 # would.
 emitControlCollectionBind: function {
-    ast: Ast.view
-    reg: ztypes.ZTypeRegistry.view
-    typing: ztyping.ZTyping.view
+    prog: Program.view
     ctx: Ctx
     avn: astnode.view
     ind: StringView
@@ -1066,11 +1020,9 @@ emitControlCollectionBind: function {
         isDo = true
         (
             emitDoBindValue
-            :ast
-            :reg
-            :typing
+            :prog
             :ctx
-            n: (ast.nodes.get i: avn.nodeid)
+            n: (prog.ast.nodes.get i: avn.nodeid)
             :nm
             ct: ct.stringView
             tid: ltid
@@ -1082,9 +1034,7 @@ emitControlCollectionBind: function {
     if isDo then return
     (
         emitControlBindValue
-        :ast
-        :reg
-        :typing
+        :prog
         :ctx
         vid: (zast.nodeIdOf n: avn)
         rtid: ltid
@@ -1100,9 +1050,7 @@ emitControlCollectionBind: function {
 # cleanup entry the local earns. A union or a heap-owning class registers its
 # destructor; a borrow registers nothing, since the source still owns the heap.
 emitTypedBind: function {
-    ast: Ast.view
-    reg: ztypes.ZTypeRegistry.view
-    typing: ztyping.ZTyping.view
+    prog: Program.view
     ctx: Ctx
     n: zast.assignmentrow.view
     ind: StringView
@@ -1113,58 +1061,52 @@ emitTypedBind: function {
     ct: StringView
     ltid: ztypes.tid
 } is {
-    avn: ast.nodes.get i: n.value
-    rv: emitExpr :ast :reg :typing :ctx n: avn
+    avn: prog.ast.nodes.get i: n.value
+    rv: emitExpr :prog :ctx n: avn
     flushArgHoists :ctx :ind :tmp :buf
     if ct.length == 0 then {
-        tn: reg.nameViewOf tid: ltid
+        tn: prog.reg.nameViewOf tid: ltid
         emitFail :ctx what: "unhandled binding type \{tn} for \{nm}" line: n.lineno
         return
     }
-    ctText: localnames.bindAliasCType :ast :reg :typing :ctx :avn :ct :ltid :nameVid
+    ctText: localnames.bindAliasCType :prog :ctx :avn :ct :ltid :nameVid
     rvText: "\{rv}"
     if ctText.stringView == ct when (
         needsValueDeref
-        :ast
-        :reg
-        :typing
+        :prog
         :ctx
         n: avn
         tid: ltid
     ) then rvText = "(*\{rv})"
     la: "\{ind}\{ctText} \{nm} = \{rvText};\n"
     buf.append la
-    emitValueTakeInvalidations :ast :reg :typing :ctx n: avn :ind :buf
-    values.emitBindSourceZero :ast :reg :typing :ctx abind: n :avn rv: rv.stringView :ind :buf
+    emitValueTakeInvalidations :prog :ctx n: avn :ind :buf
+    values.emitBindSourceZero :prog :ctx abind: n :avn rv: rv.stringView :ind :buf
 }
 
 # emitAssignment -- a binding statement (`x: <value>`): the declaration, the value,
 # and the ownership bookkeeping the binding takes on -- a move zeroes its source,
 # a borrow records its origin, and an owned local joins the scope's cleanup list.
 emitAssignment: function {
-    ast: Ast.view
-    reg: ztypes.ZTypeRegistry.view
-    typing: ztyping.ZTyping.view
+    prog: Program.view
     ctx: Ctx
     n: zast.assignmentrow.view
     ind: StringView
     tmp: FnTemps
     buf: String.borrow
 } is {
-    avn: ast.nodes.get i: n.value
-    btid: values.bindingStampOf :typing nid: n.nodeid
-    ct: consts.bindDeclaredCType :ast :reg :typing :ctx :n :btid
-    nameVid: localnames.defVid :typing nid: n.nodeid
-    nm: localnames.varCName :ctx :ast :reg vid: nameVid
+    avn: prog.ast.nodes.get i: n.value
+    btid: values.bindingStampOf :prog nid: n.nodeid
+    ct: consts.bindDeclaredCType :prog :ctx :n :btid
+    nameVid: localnames.defVid :prog nid: n.nodeid
+    nm: localnames.varCName :ctx :prog vid: nameVid
     narrowfacts.dropStaleBorrowAlias :ctx vid: nameVid
-    nbrw: localnames.bindingVarIsBorrowed :reg :typing :n
-    ctx.borrowedVars.set key: (localnames.defVid :typing nid: n.nodeid) value: nbrw
-    if ctx.genActive when (isYieldNode :ast n: avn) then {
+    nbrw: localnames.bindingVarIsBorrowed :prog :n
+    ctx.borrowedVars.set key: (localnames.defVid :prog nid: n.nodeid) value: nbrw
+    if ctx.genActive when (isYieldNode :prog n: avn) then {
         (
             forloops.emitExprFormYield
-            :ast
-            :reg
-            :typing
+            :prog
             :ctx
             value: avn
             aid: n.nodeid
@@ -1175,16 +1117,14 @@ emitAssignment: function {
         )
         return
     }
-    gfO: typing.genLocalFieldOf.get key: nameVid
+    gfO: prog.typing.genLocalFieldOf.get key: nameVid
     if gfO.some then {
-        emitGenLocalBind :ast :reg :typing :ctx :n :nameVid field: gfO :ind :tmp :buf
+        emitGenLocalBind :prog :ctx :n :nameVid field: gfO :ind :tmp :buf
         return
     }
     if (
         values.emitReferenceBind
-        :ast
-        :reg
-        :typing
+        :prog
         :ctx
         :avn
         :ind
@@ -1196,9 +1136,7 @@ emitAssignment: function {
     ) then return
     if (
         values.emitNarrowedTakeBind
-        :ast
-        :reg
-        :typing
+        :prog
         :ctx
         :n
         :ind
@@ -1207,9 +1145,7 @@ emitAssignment: function {
     ) then return
     if (
         localnames.emitBorrowAliasBind
-        :ast
-        :reg
-        :typing
+        :prog
         :ctx
         :n
         nm: nm.stringView
@@ -1221,9 +1157,7 @@ emitAssignment: function {
     ) then return
     if (
         types.emitCollectionBind
-        :ast
-        :reg
-        :typing
+        :prog
         :ctx
         :n
         :ind
@@ -1231,12 +1165,10 @@ emitAssignment: function {
         :buf
         nm: nm.stringView
     ) then return
-    ltid: localnames.bindChasedTid :reg :typing :ctx :n :avn
+    ltid: localnames.bindChasedTid :prog :ctx :n :avn
     if (
         values.emitStringLikeBind
-        :ast
-        :reg
-        :typing
+        :prog
         :ctx
         :n
         :ind
@@ -1248,9 +1180,7 @@ emitAssignment: function {
     ) then return
     if (
         emitControlBind
-        :ast
-        :reg
-        :typing
+        :prog
         :ctx
         :avn
         nm: nm.stringView
@@ -1262,9 +1192,7 @@ emitAssignment: function {
     ) then return
     (
         emitTypedBind
-        :ast
-        :reg
-        :typing
+        :prog
         :ctx
         :n
         :ind
@@ -1282,9 +1210,7 @@ emitAssignment: function {
 # (oweControlBinding); the do block's own leg registers its. True when it handled
 # the binding.
 emitControlBind: function {
-    ast: Ast.view
-    reg: ztypes.ZTypeRegistry.view
-    typing: ztyping.ZTyping.view
+    prog: Program.view
     ctx: Ctx
     avn: astnode.view
     nm: StringView
@@ -1295,14 +1221,12 @@ emitControlBind: function {
     buf: String.borrow
 } out bool is {
     if ct.length == 0 then return false
-    dm: emitMatchBindValue :ast :reg :typing :ctx n: avn :nm :ct :ind :tmp :buf
-    if dm.not then dm = emitIfBindValue :ast :reg :typing :ctx n: avn :nm :ct :ind :tmp :buf
+    dm: emitMatchBindValue :prog :ctx n: avn :nm :ct :ind :tmp :buf
+    if dm.not then dm = emitIfBindValue :prog :ctx n: avn :nm :ct :ind :tmp :buf
     if dm then return true
     return (
         emitDoBindValue
-        :ast
-        :reg
-        :typing
+        :prog
         :ctx
         n: avn
         :nm
@@ -1317,15 +1241,13 @@ emitControlBind: function {
 # emitBreakStmt -- `break`: the destroys it owes (emitBreakFrees), then the
 # goto.
 emitBreakStmt: function {
-    ast: Ast.view
-    reg: ztypes.ZTypeRegistry.view
-    typing: ztyping.ZTyping.view
+    prog: Program.view
     ctx: Ctx
     ind: StringView
     tmp: FnTemps.view
     buf: String.borrow
 } is {
-    emitBreakFrees :ast :reg :typing :ctx :tmp :ind :buf
+    emitBreakFrees :prog :ctx :tmp :ind :buf
     if ctx.loops.length > 0 then {
         noteFrameLeft :ctx idx: ctx.loops.length - 1
         bid: (ctx.loops.get i: ctx.loops.length - 1).id
@@ -1342,9 +1264,7 @@ emitBreakStmt: function {
 # emitContinueStmt -- `continue`, and the bare atom that is neither `break` nor
 # `continue` and so is a statement whose value is discarded.
 emitContinueStmt: function {
-    ast: Ast.view
-    reg: ztypes.ZTypeRegistry.view
-    typing: ztyping.ZTyping.view
+    prog: Program.view
     ctx: Ctx
     n: astnode.view
     # the keyword's name id
@@ -1374,14 +1294,14 @@ emitContinueStmt: function {
         }
         if hasLoop then noteFrameLeft :ctx idx: loopIdx
         if inDo when hasLoop then {
-            emitContinueFrees :ast :reg :typing :ctx :tmp idx: loopIdx :ind :buf
+            emitContinueFrees :prog :ctx :tmp idx: loopIdx :ind :buf
             cid: (ctx.loops.get i: loopIdx).id
             lcg: "\{ind}goto __zcont_\{cid};\n"
             buf.append lcg
             ucn: true
             ctx.contLabelUsed.set key: cid value: ucn
         } else {
-            emitBreakFrees :ast :reg :typing :ctx :tmp :ind :buf
+            emitBreakFrees :prog :ctx :tmp :ind :buf
             postId: u64
             post: false
             if ctx.loops.length > 0 then {
@@ -1400,7 +1320,7 @@ emitContinueStmt: function {
         }
     } else {
         ueF: exprfacts
-        ue: emitExprWith :ast :reg :typing :ctx :n facts: ueF
+        ue: emitExprWith :prog :ctx :n facts: ueF
         flushArgHoists :ctx :ind :tmp :buf
         if ueF.failed then {
             (
@@ -1410,12 +1330,10 @@ emitContinueStmt: function {
                 line: (ztypecheck.nodeLine :n)
             )
         } else {
-            urtid: stampIdOf :typing nid: (interpPartNodeId :n)
+            urtid: stampIdOf :prog nid: (interpPartNodeId :n)
             (
                 emitDiscardedResult
-                :ast
-                :reg
-                :typing
+                :prog
                 :ctx
                 nid: (zast.nodeIdOf :n)
                 ce: ue.stringView
@@ -1430,13 +1348,11 @@ emitContinueStmt: function {
 # isNullValueAtom -- a bare name the checker stamped with the null type: the null
 # value written as a statement, which does nothing. A record that a program names
 # `null` is no null type, and its bare name is emitted like any other.
-isNullValueAtom: function {
-    reg: ztypes.ZTypeRegistry.view typing: ztyping.ZTyping.view n: astnode.view
-} out bool is {
+isNullValueAtom: function {prog: Program.view n: astnode.view} out bool is {
     match (
         n
     ) case atomid then {
-        return (stampIsNullType :reg :typing nid: n.nodeid)
+        return (stampIsNullType :prog nid: n.nodeid)
     } else {
         return false
     }
@@ -1445,22 +1361,18 @@ isNullValueAtom: function {
 # stampIsNullType -- the checker stamped the bare name `nid` with the null type
 # as its value: the null value itself, not a call of an out-less function, whose
 # result wears the same stamp (autoCallNodes)
-stampIsNullType: function {
-    reg: ztypes.ZTypeRegistry.view typing: ztyping.ZTyping.view nid: zast.nodeid
-} out bool is {
-    if (typing.autoCallNodes.has item: nid) then return false
-    t: stampIdOf :typing :nid
+stampIsNullType: function {prog: Program.view nid: zast.nodeid} out bool is {
+    if (prog.typing.autoCallNodes.has item: nid) then return false
+    t: stampIdOf :prog :nid
     if t.isZero then return false
-    return (reg.typetypeOf typeId: t) == ztypes.ztypetype.nullType
+    return (prog.reg.typetypeOf typeId: t) == ztypes.ztypetype.nullType
 }
 
 # emitReturnStmt -- the statement shapes that are not one of the named node arms:
 # a `return` with its scope cleanup, `break` / `continue` with theirs, and a bare
 # expression statement.
 emitReturnStmt: function {
-    ast: Ast.view
-    reg: ztypes.ZTypeRegistry.view
-    typing: ztyping.ZTyping.view
+    prog: Program.view
     ctx: Ctx
     n: astnode.view
     ind: StringView
@@ -1468,13 +1380,13 @@ emitReturnStmt: function {
     buf: String.borrow
 } is {
     # the null value as a statement (`then null`, a bare `null` line) does nothing
-    if (isNullValueAtom :reg :typing :n) then return
+    if (isNullValueAtom :prog :n) then return
     # a no-arg method auto-call in statement position (this.accept,
     # this.statepop) is a dotted path: emit the call expression as a statement.
     # Tested through a binding, so `n` stays the whole node the call takes.
     isPath: n.dottedpath
     if isPath then {
-        memberreads.emitDottedAutoCallStmt :ast :reg :typing :ctx :n :ind :tmp :buf
+        memberreads.emitDottedAutoCallStmt :prog :ctx :n :ind :tmp :buf
         return
     }
     # a bare no-arg function call as a statement (`check_mode`): the checker
@@ -1484,25 +1396,23 @@ emitReturnStmt: function {
     ffid: ztypes.tid
     {
         anid: interpPartNodeId :n
-        if (typing.autoCallNodes.has item: anid) then {
-            ard: (typing.refDecl.get key: anid).or d: ztypes.declid
-            if ard.notZero then ffid = typing.declTypeOf declId: ard
+        if (prog.typing.autoCallNodes.has item: anid) then {
+            ard: (prog.typing.refDecl.get key: anid).or d: ztypes.declid
+            if ard.notZero then ffid = prog.typing.declTypeOf declId: ard
         }
     }
-    if ffid.notZero when (reg.typetypeOf typeId: ffid) == ztypes.ztypetype.functionType when (
-        reg.isNativeOf
+    if ffid.notZero when (prog.reg.typetypeOf typeId: ffid) == ztypes.ztypetype.functionType when (
+        prog.reg.isNativeOf
         tid: ffid
     ).not then {
         fceF: exprfacts
-        fce: emitExprWith :ast :reg :typing :ctx :n facts: fceF
+        fce: emitExprWith :prog :ctx :n facts: fceF
         flushArgHoists :ctx :ind :tmp :buf
         if fceF.failed.not then {
-            artid: stampIdOf :typing nid: (interpPartNodeId :n)
+            artid: stampIdOf :prog nid: (interpPartNodeId :n)
             (
                 emitDiscardedResult
-                :ast
-                :reg
-                :typing
+                :prog
                 :ctx
                 nid: (zast.nodeIdOf :n)
                 ce: fce.stringView
@@ -1521,19 +1431,19 @@ emitReturnStmt: function {
     if bkwId == zast.wellKnown.slot.wkReturn then {
         ctx.returnEmitted = true
         if ctx.genActive then {
-            emitExitDestroy :ast :reg :typing :ctx :ind :buf
+            emitExitDestroy :prog :ctx :ind :buf
             lgd: "\{ind}goto L_done;\n"
             buf.append lgd
         } else {
-            emitReturnCleanup :ast :reg :typing :ctx :tmp :ind :buf
+            emitReturnCleanup :prog :ctx :tmp :ind :buf
             lrt: "\{ind}return;\n"
             buf.append lrt
         }
     } else {
         if bkwId == zast.wellKnown.slot.wkBreak then {
-            emitBreakStmt :ast :reg :typing :ctx :ind :tmp :buf
+            emitBreakStmt :prog :ctx :ind :tmp :buf
         } else {
-            emitContinueStmt :ast :reg :typing :ctx :n :bkwId :ind :tmp :buf
+            emitContinueStmt :prog :ctx :n :bkwId :ind :tmp :buf
         }
     }
     ctx.exitNode = outerExit
@@ -1543,9 +1453,7 @@ emitReturnStmt: function {
 # the checker resolved its condition to -- an iterator object, a bare boolean
 # while, or a counted range.
 emitForStmt: function {
-    ast: Ast.view
-    reg: ztypes.ZTypeRegistry.view
-    typing: ztyping.ZTyping.view
+    prog: Program.view
     ctx: Ctx
     n: zast.forrow.view
     ind: StringView
@@ -1554,7 +1462,7 @@ emitForStmt: function {
 } is {
     # a precondition the fold proved false: the loop never runs, and its body
     # was not walked
-    entry: (foldedLoopOf :typing nid: n.nodeid).entry
+    entry: (foldedLoopOf :prog nid: n.nodeid).entry
     if entry == ztyping.loopentry.never then return
     # a loop no precondition can stop runs its body as surely as a winning
     # branch does, so an `error` in its first iteration is reached
@@ -1563,7 +1471,7 @@ emitForStmt: function {
     ctx.condDepth = ctx.condDepth + condBump
     # a plain binding is evaluated at every iteration; everything below is an
     # `each` binding's walk or a loop with no binding
-    if (emitPlainBindingFor :ast :reg :typing :ctx m: n :ind :tmp :buf) then {
+    if (emitPlainBindingFor :prog :ctx m: n :ind :tmp :buf) then {
         ctx.condDepth = ctx.condDepth - condBump
         return
     }
@@ -1579,19 +1487,18 @@ emitForStmt: function {
     #
     # A loop the fold stops after one iteration skips it: a C `for` whose body
     # always breaks has a step no path reaches.
-    runsOnce: (foldedLoopOf :typing nid: n.nodeid).end == ztyping.loopend.once
-    if runsOnce.not when (localnames.emitIntRangeFor :ast :reg :typing :ctx m: n :ind :tmp :buf
-    ) then {
+    runsOnce: (foldedLoopOf :prog nid: n.nodeid).end == ztyping.loopend.once
+    if runsOnce.not when (localnames.emitIntRangeFor :prog :ctx m: n :ind :tmp :buf) then {
         ctx.condDepth = ctx.condDepth - condBump
         return
     }
-    if (localnames.emitObjIterFor :ast :reg :typing :ctx m: n :ind :tmp :buf) then {
+    if (localnames.emitObjIterFor :prog :ctx m: n :ind :tmp :buf) then {
         ctx.condDepth = ctx.condDepth - condBump
         return
     }
     # do-while: no pre-conditions, a post-condition (`for loop {...} while C`).
     if n.conditions.count.u64 == 0 when n.postconditions.count.u64 > 0 then {
-        emitDoWhileFor :ast :reg :typing :ctx :n :ind :tmp :buf
+        emitDoWhileFor :prog :ctx :n :ind :tmp :buf
         ctx.condDepth = ctx.condDepth - condBump
         return
     }
@@ -1602,8 +1509,8 @@ emitForStmt: function {
     # loop with the condition moved to where both hold -- which is exactly how
     # the condition would be hand-written to make this work, and it is why a
     # `goto` back into the loop body still lands correctly on resume.
-    suspends: forCondSuspends :ast :ctx :n
-    stepped: condsNeedSteps :ast :reg :typing :ctx :suspends conds: n.conditions
+    suspends: forCondSuspends :prog :ctx :n
+    stepped: condsNeedSteps :prog :ctx :suspends conds: n.conditions
     # the HEADER's scope owns what its conditions register: the marks are
     # taken before them and closed after the loop, so those rows are the
     # header scope's to emit and to pop, not the enclosing block's
@@ -1611,23 +1518,21 @@ emitForStmt: function {
     lidW: pushLoopLabel :ctx :tmp isDo: false postTest: n.postconditions.count.u64 > 0
     bodyInd: "\{ind}    "
     if stepped then {
-        emitSteppedWhileHead :ast :reg :typing :ctx :n :ind bodyInd: bodyInd.stringView :tmp :buf
+        emitSteppedWhileHead :prog :ctx :n :ind bodyInd: bodyInd.stringView :tmp :buf
     } else {
-        emitPlainWhileHead :ast :reg :typing :ctx :n :ind :tmp :buf
+        emitPlainWhileHead :prog :ctx :n :ind :tmp :buf
     }
     lLw: tmp.listFrees.length
     dvG: false
     if n.body.notZero then {
-        fbw: ast.nodes.get i: n.body
-        emitBodyNode :ast :reg :typing :ctx n: fbw ind: bodyInd.stringView :tmp :buf
-        dvG = blockDiverges :ast :reg :typing :ctx n: fbw
+        fbw: prog.ast.nodes.get i: n.body
+        emitBodyNode :prog :ctx n: fbw ind: bodyInd.stringView :tmp :buf
+        dvG = blockDiverges :prog :ctx n: fbw
     }
-    closeScopeBlock :ast :reg :typing :ctx :tmp lL: lLw diverged: dvG node: n.body :buf
+    closeScopeBlock :prog :ctx :tmp lL: lLw diverged: dvG node: n.body :buf
     (
         emitIterationEnd
-        :ast
-        :reg
-        :typing
+        :prog
         :ctx
         m: n
         id: lidW
@@ -1649,11 +1554,7 @@ emitForStmt: function {
 # emitDoWhileFor -- `for loop { .. } while C`: no pre-conditions and at
 # least one post-condition, which is a do-while.
 emitDoWhileFor: function {
-    # the tree the body and conditions are read from
-    ast: Ast.view
-    # the stamps the condition text is built against
-    reg: ztypes.ZTypeRegistry.view
-    typing: ztyping.ZTyping.view
+    prog: Program.view
     # the emit context, which carries the loop labels
     ctx: Ctx
     # the for node being emitted
@@ -1670,8 +1571,8 @@ emitDoWhileFor: function {
     # guard the trailing test reads, declared where that test can see it. One
     # the fold settled writes a constant test instead, and runs none of them
     stepped: (
-        ((foldedLoopOf :typing nid: n.nodeid).end == ztyping.loopend.runtime) and
-        (condsNeedSteps :ast :reg :typing :ctx suspends: false conds: n.postconditions)
+        ((foldedLoopOf :prog nid: n.nodeid).end == ztyping.loopend.runtime) and
+        (condsNeedSteps :prog :ctx suspends: false conds: n.postconditions)
     )
     gvD: String
     if stepped then gvD = newCondGuard :ctx :ind :buf
@@ -1683,19 +1584,17 @@ emitDoWhileFor: function {
     lLd: tmp.listFrees.length
     dvG: false
     if n.body.notZero then {
-        fbd: ast.nodes.get i: n.body
-        emitBodyNode :ast :reg :typing :ctx n: fbd ind: ind2d.stringView :tmp buf: body
-        dvG = blockDiverges :ast :reg :typing :ctx n: fbd
+        fbd: prog.ast.nodes.get i: n.body
+        emitBodyNode :prog :ctx n: fbd ind: ind2d.stringView :tmp buf: body
+        dvG = blockDiverges :prog :ctx n: fbd
     }
-    closeScopeBlock :ast :reg :typing :ctx :tmp lL: lLd diverged: dvG node: n.body buf: body
+    closeScopeBlock :prog :ctx :tmp lL: lLd diverged: dvG node: n.body buf: body
     emitContLabel :ctx id: lidDW ind: ind2d.stringView buf: body
     tail: String
     if stepped then {
         (
             emitSteppedCond
-            :ast
-            :reg
-            :typing
+            :prog
             :ctx
             conds: n.postconditions
             gvar: gvD.stringView
@@ -1706,7 +1605,7 @@ emitDoWhileFor: function {
         )
         tail.append "\{ind}} while (\{gvD});\n"
     } else {
-        pcond: doWhileCondText :ast :reg :typing :ctx :n
+        pcond: doWhileCondText :prog :ctx :n
         cwP: condInParens cond: pcond.stringView
         tail.append "\{ind}} while \{cwP};\n"
         # the test assigns and releases them itself, so the loop owes nothing
@@ -1721,33 +1620,29 @@ emitDoWhileFor: function {
 # doWhileCondText -- a do-while's trailing test as one `&&` chain, a condition
 # that folds true writing nothing. A constant when the fold settled the test.
 doWhileCondText: function {
-    ast: Ast.view
-    reg: ztypes.ZTypeRegistry.view
-    typing: ztyping.ZTyping.view
+    prog: Program.view
     ctx: Ctx
     n: zast.forrow.view
 } out String is {
     pcond: String
-    end: (foldedLoopOf :typing nid: n.nodeid).end
+    end: (foldedLoopOf :prog nid: n.nodeid).end
     if end == ztyping.loopend.always then return "1".string
     if end == ztyping.loopend.once then return "0".string
-    for each pk: (zast.kidsOf :ast span: n.postconditions) loop {
-        if (condFoldsTrue :typing nid: pk).not then {
-            pkn: ast.nodes.get i: pk
+    for each pk: (zast.kidsOf ast: prog.ast span: n.postconditions) loop {
+        if (condFoldsTrue :prog nid: pk).not then {
+            pkn: prog.ast.nodes.get i: pk
             # the checker stamps the OPERATION node, so unwrap the same way
             pkop: pk
             if pkn.namedoperation then pkop = pkn.operation
             # the trailing test runs at every iteration, so it is evaluated in place
             mk8: openInPlace :ctx guarded: true
             pcvF: exprfacts
-            pcv: argforms.valueExprC :ast :reg :typing :ctx n: pkn facts: pcvF
+            pcv: argforms.valueExprC :prog :ctx n: pkn facts: pcvF
             tw8: (
                 truthyCondText
-                :ast
-                :reg
-                :typing
+                :prog
                 :ctx
-                n: (ast.nodes.get i: pkop)
+                n: (prog.ast.nodes.get i: pkop)
                 raw: pcv.stringView
             )
             if tw8.length > 0 then pcv = tw8.take
@@ -1768,9 +1663,7 @@ doWhileCondText: function {
 # `continue` of it jumps to, and destroys after the test on both of its ways
 # out, since the test may read the element.
 emitIterationEnd: function {
-    ast: Ast.view
-    reg: ztypes.ZTypeRegistry.view
-    typing: ztyping.ZTyping.view
+    prog: Program.view
     ctx: Ctx
     m: zast.forrow.view
     id: u64
@@ -1780,14 +1673,14 @@ emitIterationEnd: function {
     buf: String.borrow
 } is {
     if m.postconditions.count.u64 == 0 then {
-        if diverged.not then emitScopeDestroy :ast :reg :typing :ctx node: m.nodeid :ind :buf
+        if diverged.not then emitScopeDestroy :prog :ctx node: m.nodeid :ind :buf
         emitContLabel :ctx :id :ind :buf
         return
     }
     emitContLabel :ctx :id :ind :buf
     owed: String
-    emitScopeDestroy :ast :reg :typing :ctx node: m.nodeid :ind buf: owed
-    end: (foldedLoopOf :typing nid: m.nodeid).end
+    emitScopeDestroy :prog :ctx node: m.nodeid :ind buf: owed
+    end: (foldedLoopOf :prog nid: m.nodeid).end
     if end == ztyping.loopend.always then {
         buf.append owed
         return
@@ -1798,13 +1691,11 @@ emitIterationEnd: function {
         return
     }
     test: String
-    if (condsNeedSteps :ast :reg :typing :ctx suspends: false conds: m.postconditions) then {
+    if (condsNeedSteps :prog :ctx suspends: false conds: m.postconditions) then {
         gv: newCondGuard :ctx :ind :buf
         (
             emitSteppedCond
-            :ast
-            :reg
-            :typing
+            :prog
             :ctx
             conds: m.postconditions
             gvar: gv.stringView
@@ -1815,7 +1706,7 @@ emitIterationEnd: function {
         )
         test = gv.take
     } else {
-        pcond: doWhileCondText :ast :reg :typing :ctx n: m
+        pcond: doWhileCondText :prog :ctx n: m
         # the test assigns and releases its hoists itself
         flushArgHoists :ctx :ind :tmp :buf
         test = condInParens cond: pcond.stringView
@@ -1826,7 +1717,7 @@ emitIterationEnd: function {
     }
     inner: "\{ind}    "
     buf.append "\{ind}if (!\{test}) {\n"
-    emitScopeDestroy :ast :reg :typing :ctx node: m.nodeid ind: inner.stringView :buf
+    emitScopeDestroy :prog :ctx node: m.nodeid ind: inner.stringView :buf
     buf.append "\{inner}break;\n\{ind}}\n"
     buf.append owed
 }
@@ -1834,11 +1725,7 @@ emitIterationEnd: function {
 # emitPlainWhileHead -- the ordinary `while (c) {` opening, where no condition
 # suspends and the test can stay in the header.
 emitPlainWhileHead: function {
-    # the tree this loop's conditions are read from
-    ast: Ast.view
-    # the stamps the header text is built against
-    reg: ztypes.ZTypeRegistry.view
-    typing: ztyping.ZTyping.view
+    prog: Program.view
     # the emit context the condition text is built in
     ctx: Ctx
     # the for node whose conditions these are
@@ -1851,9 +1738,9 @@ emitPlainWhileHead: function {
     buf: String.borrow
 } is {
     cond: String
-    for each kId: (zast.kidsOf :ast span: n.conditions) loop {
-        if (forloops.forCondIsNamed :ast :kId).not then {
-            emitForCond :ast :reg :typing :ctx n: (ast.nodes.get i: kId) :cond
+    for each kId: (zast.kidsOf ast: prog.ast span: n.conditions) loop {
+        if (forloops.forCondIsNamed :prog :kId).not then {
+            emitForCond :prog :ctx n: (prog.ast.nodes.get i: kId) :cond
         }
     }
     # `for loop { ... }` -- no conditions, no postconditions: an unconditional
@@ -1868,10 +1755,10 @@ emitPlainWhileHead: function {
 
 # forCondSuspends -- one of a loop's conditions holds a suspension point, so
 # the header has to be written as a body test instead.
-forCondSuspends: function {ast: Ast.view ctx: Ctx.view n: zast.forrow.view} out bool is {
+forCondSuspends: function {prog: Program.view ctx: Ctx.view n: zast.forrow.view} out bool is {
     if ctx.genActive.not then return false
-    for each kyId: (zast.kidsOf :ast span: n.conditions) loop {
-        if (zast.yieldCountIn :ast nid: kyId) > 0 then return true
+    for each kyId: (zast.kidsOf ast: prog.ast span: n.conditions) loop {
+        if (zast.yieldCountIn ast: prog.ast nid: kyId) > 0 then return true
     }
     return false
 }
@@ -1887,11 +1774,7 @@ forCondSuspends: function {ast: Ast.view ctx: Ctx.view n: zast.forrow.view} out 
 # work. A named condition is an initialiser: declared once, before the loop,
 # as the plain header declares it.
 emitSteppedWhileHead: function {
-    # the tree this loop's conditions are read from
-    ast: Ast.view
-    # read for the resume type of each suspension in the condition
-    reg: ztypes.ZTypeRegistry.view
-    typing: ztyping.ZTyping.view
+    prog: Program.view
     # carries the state-machine cursor and the resume slots
     ctx: Ctx
     # the for node whose conditions these are
@@ -1909,9 +1792,7 @@ emitSteppedWhileHead: function {
     gv: newCondGuard :ctx ind: bodyInd :buf
     (
         emitSteppedCond
-        :ast
-        :reg
-        :typing
+        :prog
         :ctx
         conds: n.conditions
         gvar: gv.stringView
@@ -1927,9 +1808,7 @@ emitSteppedWhileHead: function {
 # emits only the live branch: spec.pdoc promises the false branch is not emitted,
 # and that promise is not limited to expression position.
 emitIfStmt: function {
-    ast: Ast.view
-    reg: ztypes.ZTypeRegistry.view
-    typing: ztyping.ZTyping.view
+    prog: Program.view
     ctx: Ctx
     n: zast.ifrow.view
     ind: StringView
@@ -1939,7 +1818,7 @@ emitIfStmt: function {
     # constant guards: when every clause folds at emit time, only the
     # winning body is emitted -- provably-dead branches (including dead
     # `error` arms) are eliminated from the C.
-    efb: foldedBranchOf :typing nid: n.nodeid
+    efb: foldedBranchOf :prog nid: n.nodeid
     if efb.known then {
         ewb: efb.stmt
         if ewb.notZero then {
@@ -1947,19 +1826,17 @@ emitIfStmt: function {
             buf.append lfo
             indE: "\{ind}    "
             lLE: tmp.listFrees.length
-            ewn: ast.nodes.get i: ewb
-            emitBodyNode :ast :reg :typing :ctx n: ewn ind: indE.stringView :tmp :buf
-            dvF: blockDiverges :ast :reg :typing :ctx n: ewn
+            ewn: prog.ast.nodes.get i: ewb
+            emitBodyNode :prog :ctx n: ewn ind: indE.stringView :tmp :buf
+            dvF: blockDiverges :prog :ctx n: ewn
             (
                 closeScopeBlock
-                :ast
-                :reg
-                :typing
+                :prog
                 :ctx
                 :tmp
                 lL: lLE
                 diverged: dvF
-                node: (branchScopeOf :ast clauses: n.clauses elseclause: n.elseclause stmt: ewb)
+                node: (branchScopeOf :prog clauses: n.clauses elseclause: n.elseclause stmt: ewb)
                 :buf
             )
             lfc: "\{ind}}\n"
@@ -1971,17 +1848,15 @@ emitIfStmt: function {
     ifAssign: String
     first: true
     opened: u64
-    for each cId: (zast.kidsOf :ast span: n.clauses) loop {
+    for each cId: (zast.kidsOf ast: prog.ast span: n.clauses) loop {
         isFirst: first
         first = false
-        c: ast.nodes.get i: cId
+        c: prog.ast.nodes.get i: cId
         opened = (
             opened +
             (
                 emitIfClause
-                :ast
-                :reg
-                :typing
+                :prog
                 :ctx
                 n: c
                 :isFirst
@@ -2001,9 +1876,7 @@ emitIfStmt: function {
     chRF: ListVal exprfacts
     (
         chainFactsOfClauses
-        :ast
-        :reg
-        :typing
+        :prog
         :ctx
         clauses: n.clauses
         subjects: chS
@@ -2016,9 +1889,7 @@ emitIfStmt: function {
     )
     (
         emitElse
-        :ast
-        :reg
-        :typing
+        :prog
         :ctx
         oId: n.elseclause
         assignTo: ifAssign.stringView
@@ -2047,9 +1918,7 @@ emitIfStmt: function {
 # a builtin scalar by its C name, anything else by its stamped id `wsid`. A
 # value with no stamp has no type the emitter can name, and is reported.
 withValueCType: function {
-    ast: Ast.view
-    reg: ztypes.ZTypeRegistry.view
-    typing: ztyping.ZTyping.view
+    prog: Program.view
     ctx: Ctx
     n: astnode.view
     wsid: ztypes.tid
@@ -2066,9 +1935,9 @@ withValueCType: function {
     }
     # a builtin scalar keeps its C name, as a binding's does (bindDeclaredCType);
     # a Set or a Map is held as its pointer (slotCType)
-    sc: consts.scalarCTypeFor :typing :tid
+    sc: consts.scalarCTypeFor :prog :tid
     if sc.length > 0 then return sc
-    return (nativerows.slotCType :ast :reg :typing :ctx :tid)
+    return (nativerows.slotCType :prog :ctx :tid)
 }
 
 # emitWithField -- a `with` value that lives in the state class (the checker
@@ -2077,9 +1946,7 @@ withValueCType: function {
 # the body. It is destroyed where the checker lists it, as any generator local
 # is, and its field left empty.
 emitWithField: function {
-    ast: Ast.view
-    reg: ztypes.ZTypeRegistry.view
-    typing: ztyping.ZTyping.view
+    prog: Program.view
     ctx: Ctx
     n: zast.withrow.view
     wf: zast.nameid
@@ -2087,13 +1954,13 @@ emitWithField: function {
     ind: StringView
     buf: String.borrow
 } is {
-    fld: forloops.genFieldC :ast :reg :typing :ctx nameId: wf
+    fld: forloops.genFieldC :prog :ctx nameId: wf
     la: "\{ind}\{fld} = \{wv};\n"
     buf.append la
     (
         varEntrySet
         xs: ctx.aliases
-        vid: (localnames.defVid :typing nid: n.nodeid)
+        vid: (localnames.defVid :prog nid: n.nodeid)
         val: fld.stringView
         facts: (memberreads.memberFacts b: pathFacts)
     )
@@ -2103,17 +1970,15 @@ emitWithField: function {
 # held in when no variable holds it (genSubjectField), with the alias that makes
 # the temporary's destroy free the field; "" for any other subject.
 genSubjectFieldC: function {
-    ast: Ast.view
-    reg: ztypes.ZTypeRegistry.view
-    typing: ztyping.ZTyping.view
+    prog: Program.view
     ctx: Ctx
     nid: zast.nodeid
 } out String is {
-    tv: typing.tempOf.get key: nid
+    tv: prog.typing.tempOf.get key: nid
     if tv.none then return "".string
-    gf: typing.genLocalFieldOf.get key: tv
+    gf: prog.typing.genLocalFieldOf.get key: tv
     if gf.none then return "".string
-    fld: forloops.genFieldC :ast :reg :typing :ctx nameId: gf
+    fld: forloops.genFieldC :prog :ctx nameId: gf
     (
         varEntrySet
         xs: ctx.aliases
@@ -2130,9 +1995,7 @@ genSubjectFieldC: function {
 # on its previous pass -- and every later spelling of the local is the field.
 # The instance's destructor frees what the field holds last.
 emitGenLocalBind: function {
-    ast: Ast.view
-    reg: ztypes.ZTypeRegistry.view
-    typing: ztyping.ZTyping.view
+    prog: Program.view
     ctx: Ctx
     n: zast.assignmentrow.view
     nameVid: ztypes.vid
@@ -2141,21 +2004,19 @@ emitGenLocalBind: function {
     tmp: FnTemps
     buf: String.borrow
 } is {
-    fld: forloops.genFieldC :ast :reg :typing :ctx nameId: field
-    rtsid: chaseAggregateTypedef :reg :typing :ctx tid: (reg.variableTypeOf id: nameVid)
+    fld: forloops.genFieldC :prog :ctx nameId: field
+    rtsid: chaseAggregateTypedef :prog :ctx tid: (prog.reg.variableTypeOf id: nameVid)
     # a comprehension is built where the local lives, in the field: a loop, not
     # an expression, so there is no value to store
-    vn: ast.nodes.get i: n.value
+    vn: prog.ast.nodes.get i: n.value
     if (forexprValue n: vn) then {
-        buf.append (destroyLineC :reg :typing :ctx tid: rtsid nm: fld.stringView :ind)
+        buf.append (destroyLineC :prog :ctx tid: rtsid nm: fld.stringView :ind)
         lcb: spelledCname :ctx tid: rtsid
         noteMemberUse :ctx mono: rtsid member: memberWord.slot.create
         buf.append "\{ind}\{fld} = \{lcb}_create((uint64_t)0);\n"
         (
             emitListComprehension
-            :ast
-            :reg
-            :typing
+            :prog
             :ctx
             listTid: rtsid
             forNode: vn
@@ -2176,14 +2037,12 @@ emitGenLocalBind: function {
     }
     (
         values.emitStoreTo
-        :ast
-        :reg
-        :typing
+        :prog
         :ctx
         nm2: fld.stringView
         rtnid: n.nodeid
         :rtsid
-        valueNode: (ast.nodes.get i: n.value)
+        valueNode: (prog.ast.nodes.get i: n.value)
         # what an earlier walk of this binding left in the field
         destroyOld: true
         :ind
@@ -2201,9 +2060,7 @@ emitGenLocalBind: function {
 
 # emitWithStmt -- `with x: <value> do <body>` as a statement.
 emitWithStmt: function {
-    ast: Ast.view
-    reg: ztypes.ZTypeRegistry.view
-    typing: ztyping.ZTyping.view
+    prog: Program.view
     ctx: Ctx
     n: zast.withrow.view
     ind: StringView
@@ -2211,7 +2068,7 @@ emitWithStmt: function {
     buf: String.borrow
 } is {
     wnoTid: ztypes.tid
-    emitWithBody :ast :reg :typing :ctx :n bindTo: "" bindCt: "" bindTid: wnoTid :ind :tmp :buf
+    emitWithBody :prog :ctx :n bindTo: "" bindCt: "" bindTid: wnoTid :ind :tmp :buf
 }
 
 # emitWithBindValue -- `s: with x: <value> do <expr>`: run the `with` with its
@@ -2219,9 +2076,7 @@ emitWithStmt: function {
 # value, which is what makes the statement and the expression one emission with
 # one difference.
 emitWithBindValue: function {
-    ast: Ast.view
-    reg: ztypes.ZTypeRegistry.view
-    typing: ztyping.ZTyping.view
+    prog: Program.view
     ctx: Ctx
     n: astnode.view
     rtid: ztypes.tid
@@ -2234,7 +2089,7 @@ emitWithBindValue: function {
     match (
         n
     ) case withexpr then {
-        emitWithBody :ast :reg :typing :ctx :n bindTo: nm bindCt: ct bindTid: rtid :ind :tmp :buf
+        emitWithBody :prog :ctx :n bindTo: nm bindCt: ct bindTid: rtid :ind :tmp :buf
         return true
     } else {
         return false
@@ -2248,9 +2103,7 @@ emitWithBindValue: function {
 # loop body that flush runs per iteration. `bindTo` names the local the body's
 # value assigns to, "" when the `with` is a statement and the value is dropped.
 emitWithBody: function {
-    ast: Ast.view
-    reg: ztypes.ZTypeRegistry.view
-    typing: ztyping.ZTyping.view
+    prog: Program.view
     ctx: Ctx
     n: zast.withrow.view
     bindTo: StringView
@@ -2261,25 +2114,23 @@ emitWithBody: function {
     tmp: FnTemps
     buf: String.borrow
 } is {
-    wnm: localnames.varCName :ctx :ast :reg vid: (localnames.defVid :typing nid: n.nodeid)
-    wsid: stampIdDeep :reg :typing n: (ast.nodes.get i: n.value)
-    wct: withValueCType :ast :reg :typing :ctx n: (ast.nodes.get i: n.value) :wsid
-    wv: emitExpr :ast :reg :typing :ctx n: (ast.nodes.get i: n.value)
+    wnm: localnames.varCName :ctx :prog vid: (localnames.defVid :prog nid: n.nodeid)
+    wsid: stampIdDeep :prog n: (prog.ast.nodes.get i: n.value)
+    wct: withValueCType :prog :ctx n: (prog.ast.nodes.get i: n.value) :wsid
+    wv: emitExpr :prog :ctx n: (prog.ast.nodes.get i: n.value)
     # a non-lvalue receiver (`with x: (mk).iterate do`) hoisted an _ahN temp
     # while that expression was built; declare it before the line that reads
     # it, as the plain-binding path does
     flushArgHoists :ctx :ind :tmp :buf
-    wfO: typing.genLocalFieldOf.get key: (localnames.defVid :typing nid: n.nodeid)
+    wfO: prog.typing.genLocalFieldOf.get key: (localnames.defVid :prog nid: n.nodeid)
     match (
         wfO
     ) case some then {
-        emitWithField :ast :reg :typing :ctx :n wf: wfO wv: wv.stringView :ind :buf
+        emitWithField :prog :ctx :n wf: wfO wv: wv.stringView :ind :buf
     } case none then {
         (
             localnames.emitWithLocal
-            :ast
-            :reg
-            :typing
+            :prog
             :ctx
             :n
             :wsid
@@ -2294,8 +2145,8 @@ emitWithBody: function {
     # call that took ownership of an argument, so that source is zeroed here.
     # What the `with` owns is destroyed where the checker lists it, at the
     # `with`'s end (emitScopeDestroy).
-    emitValueTakeInvalidations :ast :reg :typing :ctx n: (ast.nodes.get i: n.value) :ind :buf
-    wbody: ast.nodes.get i: n.body
+    emitValueTakeInvalidations :prog :ctx n: (prog.ast.nodes.get i: n.value) :ind :buf
+    wbody: prog.ast.nodes.get i: n.body
     if bindTo.length > 0 then {
         wvb: values.withValueBlock n: wbody
         # THE BODY MAY BE A CONTROL VALUE of its own -- an `if`, a `match` or a
@@ -2304,9 +2155,7 @@ emitWithBody: function {
         # plain value falls through to a declaration and an assignment.
         if (
             emitControlBindValue
-            :ast
-            :reg
-            :typing
+            :prog
             :ctx
             vid: wvb
             rtid: bindTid
@@ -2323,11 +2172,9 @@ emitWithBody: function {
             # branch closes only the temporaries it registered itself
             (
                 emitBranchAssign
-                :ast
-                :reg
-                :typing
+                :prog
                 :ctx
-                n: (ast.nodes.get i: wvb)
+                n: (prog.ast.nodes.get i: wvb)
                 target: bindTo
                 scope: zast.nodeid
                 :ind
@@ -2336,15 +2183,13 @@ emitWithBody: function {
             )
         }
     } else {
-        emitBodyNode :ast :reg :typing :ctx n: wbody :ind :tmp :buf
+        emitBodyNode :prog :ctx n: wbody :ind :tmp :buf
     }
     # the value ends with the `with`, though its line joined the enclosing C
     # block: what the checker recorded the `with`'s end destroys is spent here
-    if (blockDiverges :ast :reg :typing :ctx n: wbody).not then (
+    if (blockDiverges :prog :ctx n: wbody).not then (
         emitScopeDestroy
-        :ast
-        :reg
-        :typing
+        :prog
         :ctx
         node: n.nodeid
         :ind
@@ -2355,9 +2200,7 @@ emitWithBody: function {
 # emitCaseStmt -- a `match` in statement position, delegated to the shared arm
 # emitter.
 emitCaseStmt: function {
-    ast: Ast.view
-    reg: ztypes.ZTypeRegistry.view
-    typing: ztyping.ZTyping.view
+    prog: Program.view
     ctx: Ctx
     n: zast.caserow.view
     ind: StringView
@@ -2366,7 +2209,7 @@ emitCaseStmt: function {
 } is {
     # constant subject over literal arms: emit only the matching arm, as
     # the typechecker resolved it.
-    mfb: foldedBranchOf :typing nid: n.nodeid
+    mfb: foldedBranchOf :prog nid: n.nodeid
     if mfb.known then {
         mwb: mfb.stmt
         if mwb.notZero then {
@@ -2374,19 +2217,17 @@ emitCaseStmt: function {
             buf.append lmo
             indM: "\{ind}    "
             lLM: tmp.listFrees.length
-            mwn: ast.nodes.get i: mwb
-            emitBodyNode :ast :reg :typing :ctx n: mwn ind: indM.stringView :tmp :buf
-            dvF: blockDiverges :ast :reg :typing :ctx n: mwn
+            mwn: prog.ast.nodes.get i: mwb
+            emitBodyNode :prog :ctx n: mwn ind: indM.stringView :tmp :buf
+            dvF: blockDiverges :prog :ctx n: mwn
             (
                 closeScopeBlock
-                :ast
-                :reg
-                :typing
+                :prog
                 :ctx
                 :tmp
                 lL: lLM
                 diverged: dvF
-                node: (branchScopeOf :ast clauses: n.clauses elseclause: n.elseclause stmt: mwb)
+                node: (branchScopeOf :prog clauses: n.clauses elseclause: n.elseclause stmt: mwb)
                 :buf
             )
             lmc: "\{ind}}\n"
@@ -2395,23 +2236,21 @@ emitCaseStmt: function {
         return
     }
     ctx.condDepth = ctx.condDepth + 1
-    emitMatchStmt :ast :reg :typing :ctx m: n assignTo: "" :ind :tmp :buf
+    emitMatchStmt :prog :ctx m: n assignTo: "" :ind :tmp :buf
     ctx.condDepth = ctx.condDepth - 1
 }
 
 # emitDoStmt -- a `do` block in statement position: its own C scope, so the locals
 # it binds are freed at its end.
 emitDoStmt: function {
-    ast: Ast.view
-    reg: ztypes.ZTypeRegistry.view
-    typing: ztyping.ZTyping.view
+    prog: Program.view
     ctx: Ctx
     n: zast.dorow.view
     ind: StringView
     tmp: FnTemps
     buf: String.borrow
 } is {
-    if (ztypecheck.blockHasBreak :ast n: (ast.nodes.get i: n.statement)) then {
+    if (ztypecheck.blockHasBreak ast: prog.ast n: (prog.ast.nodes.get i: n.statement)) then {
         ldo: "\{ind}do {\n"
         buf.append ldo
         indd: "\{ind}    "
@@ -2420,10 +2259,10 @@ emitDoStmt: function {
         # block, not on an enclosing loop's label
         sdoId: pushLoopLabel :ctx :tmp isDo: true postTest: false
         slL: tmp.listFrees.length
-        dst: ast.nodes.get i: n.statement
-        emitBodyNode :ast :reg :typing :ctx n: dst ind: indd.stringView :tmp :buf
-        dvF: blockDiverges :ast :reg :typing :ctx n: dst
-        closeScopeBlock :ast :reg :typing :ctx :tmp lL: slL diverged: dvF node: n.nodeid :buf
+        dst: prog.ast.nodes.get i: n.statement
+        emitBodyNode :prog :ctx n: dst ind: indd.stringView :tmp :buf
+        dvF: blockDiverges :prog :ctx n: dst
+        closeScopeBlock :prog :ctx :tmp lL: slL diverged: dvF node: n.nodeid :buf
         lwh: "\{ind}} while (0);\n"
         buf.append lwh
         popLoopLabel :ctx id: sdoId :ind :buf
@@ -2432,13 +2271,11 @@ emitDoStmt: function {
         # it: what the checker recorded its end destroys is spent here -- not
         # when its last line returned the body's value (a `with` block in
         # return position), whose return freed them
-        body: ast.nodes.get i: n.statement
-        emitBodyNode :ast :reg :typing :ctx n: body :ind :tmp :buf
-        if (blockDiverges :ast :reg :typing :ctx n: body).not when ctx.tailReturned.not then (
+        body: prog.ast.nodes.get i: n.statement
+        emitBodyNode :prog :ctx n: body :ind :tmp :buf
+        if (blockDiverges :prog :ctx n: body).not when ctx.tailReturned.not then (
             emitScopeDestroy
-            :ast
-            :reg
-            :typing
+            :prog
             :ctx
             node: n.nodeid
             :ind
@@ -2449,9 +2286,7 @@ emitDoStmt: function {
 
 # emitStmt -- one statement of a function body.
 emitStmt: function {
-    ast: Ast.view
-    reg: ztypes.ZTypeRegistry.view
-    typing: ztyping.ZTyping.view
+    prog: Program.view
     ctx: Ctx
     n: astnode.view
     ind: StringView
@@ -2459,8 +2294,8 @@ emitStmt: function {
     buf: String.borrow
 } is {
     tL: tmp.listFrees.length
-    emitStmtParts :ast :reg :typing :ctx :n :ind :tmp :buf
-    releaseStatementTemps :ast :reg :typing :ctx :n :tmp from: tL :buf
+    emitStmtParts :prog :ctx :n :ind :tmp :buf
+    releaseStatementTemps :prog :ctx :n :tmp from: tL :buf
 }
 
 # releaseStatementTemps -- the temporaries a statement line's arguments needed
@@ -2469,9 +2304,7 @@ emitStmt: function {
 # locks it -- keeps them to the end of the block, and a line that diverges has
 # released them already, on its way out.
 releaseStatementTemps: function {
-    ast: Ast.view
-    reg: ztypes.ZTypeRegistry.view
-    typing: ztyping.ZTyping.view
+    prog: Program.view
     ctx: Ctx.view
     n: astnode.view
     tmp: FnTemps
@@ -2495,11 +2328,11 @@ releaseStatementTemps: function {
     } else {
         return
     }
-    if (typing.tempHoldingLines.has item: lineId) then {
-        emitUnheldTempFrees :typing :tmp :from :buf
+    if (prog.typing.tempHoldingLines.has item: lineId) then {
+        emitUnheldTempFrees :prog :tmp :from :buf
         return
     }
-    live: (stmtDiverges :ast :reg :typing :ctx sid: lineId).not
+    live: (stmtDiverges :prog :ctx sid: lineId).not
     kept: List OwedFree
     for tmp.listFrees.length > from loop {
         o: tmp.listFrees.pop
@@ -2517,7 +2350,7 @@ releaseStatementTemps: function {
 # recorded as unheld still ends with its statement. An untagged one is
 # kept.
 emitUnheldTempFrees: function {
-    typing: ztyping.ZTyping.view
+    prog: Program.view
     tmp: FnTemps
     from: u64
     buf: String.borrow
@@ -2525,7 +2358,7 @@ emitUnheldTempFrees: function {
     kept: List OwedFree
     for tmp.listFrees.length > from loop {
         o: tmp.listFrees.pop
-        if o.temp when o.tag.notZero when (typing.unheldTemps.has item: o.tag) then {
+        if o.temp when o.tag.notZero when (prog.typing.unheldTemps.has item: o.tag) then {
             buf.append o.stmt
         } else {
             kept.append o
@@ -2536,9 +2369,7 @@ emitUnheldTempFrees: function {
 
 # emitStmtParts -- one statement, whatever its shape.
 emitStmtParts: function {
-    ast: Ast.view
-    reg: ztypes.ZTypeRegistry.view
-    typing: ztyping.ZTyping.view
+    prog: Program.view
     ctx: Ctx
     n: astnode.view
     ind: StringView
@@ -2548,21 +2379,19 @@ emitStmtParts: function {
     # a suspension point is a CALL now, so it is intercepted before the match
     # rather than owning an arm -- adding a `call` arm here would re-route
     # every ordinary call away from the tail leg that handles them.
-    if ctx.genActive when (isYieldNode :ast :n) then {
-        ycs: zast.yieldCallIdAt :ast nid: (zast.nodeIdOf :n)
+    if ctx.genActive when (isYieldNode :prog :n) then {
+        ycs: zast.yieldCallIdAt ast: prog.ast nid: (zast.nodeIdOf :n)
         # this yield's OPERAND may itself contain yields, and they evaluate
         # before it does -- so they suspend first
         (
             forloops.hoistExprYields
-            :ast
-            :reg
-            :typing
+            :prog
             :ctx
-            nid: (zast.yieldCallOperandAt :ast nid: ycs)
+            nid: (zast.yieldCallOperandAt ast: prog.ast nid: ycs)
             :ind
             :buf
         )
-        forloops.emitYieldStmt :ast :reg :typing :ctx callId: ycs :ind :buf
+        forloops.emitYieldStmt :prog :ctx callId: ycs :ind :buf
         return
     }
     # a yield written in EXPRESSION position suspends the function, so it
@@ -2570,47 +2399,45 @@ emitStmtParts: function {
     # first and leave a temp behind for the expression emitter to read.
     if ctx.genActive then {
         hnid: zast.nodeIdOf :n
-        forloops.hoistExprYields :ast :reg :typing :ctx nid: hnid :ind :buf
+        forloops.hoistExprYields :prog :ctx nid: hnid :ind :buf
     }
     match (
         n
     ) case statementline then {
-        sln: ast.nodes.get i: n.statementline
-        emitStmt :ast :reg :typing :ctx n: sln :ind :tmp :buf
+        sln: prog.ast.nodes.get i: n.statementline
+        emitStmt :prog :ctx n: sln :ind :tmp :buf
     } case statement then {
-        for each stmtId: (zast.kidsOf :ast span: n.statements) loop {
-            emitStmt :ast :reg :typing :ctx n: (ast.nodes.get i: stmtId) :ind :tmp :buf
+        for each stmtId: (zast.kidsOf ast: prog.ast span: n.statements) loop {
+            emitStmt :prog :ctx n: (prog.ast.nodes.get i: stmtId) :ind :tmp :buf
         }
     } case doexpr then {
-        emitDoStmt :ast :reg :typing :ctx :n :ind :tmp :buf
+        emitDoStmt :prog :ctx :n :ind :tmp :buf
     } case call then {
-        emitCallStmt :ast :reg :typing :ctx call: n :ind :tmp :buf
+        emitCallStmt :prog :ctx call: n :ind :tmp :buf
     } case assignment then {
-        emitAssignment :ast :reg :typing :ctx :n :ind :tmp :buf
+        emitAssignment :prog :ctx :n :ind :tmp :buf
         (
             values.emitRepointCompanion
-            :ast
-            :reg
-            :typing
+            :prog
             :ctx
-            vid: (localnames.defVid :typing nid: n.nodeid)
+            vid: (localnames.defVid :prog nid: n.nodeid)
             :ind
             :buf
         )
     } case reassignment then {
-        narrowfacts.emitReassignStmt :ast :reg :typing :ctx :n :ind :tmp :buf
+        narrowfacts.emitReassignStmt :prog :ctx :n :ind :tmp :buf
     } case swapstmt then {
-        nativerows.emitSwapStmt :ast :reg :typing :ctx :n :ind :tmp :buf
+        nativerows.emitSwapStmt :prog :ctx :n :ind :tmp :buf
     } case ifexpr then {
-        emitIfStmt :ast :reg :typing :ctx :n :ind :tmp :buf
+        emitIfStmt :prog :ctx :n :ind :tmp :buf
     } case caseexpr then {
-        emitCaseStmt :ast :reg :typing :ctx :n :ind :tmp :buf
+        emitCaseStmt :prog :ctx :n :ind :tmp :buf
     } case withexpr then {
-        emitWithStmt :ast :reg :typing :ctx :n :ind :tmp :buf
+        emitWithStmt :prog :ctx :n :ind :tmp :buf
     } case forexpr then {
-        emitForStmt :ast :reg :typing :ctx :n :ind :tmp :buf
+        emitForStmt :prog :ctx :n :ind :tmp :buf
     } else {
-        emitReturnStmt :ast :reg :typing :ctx :n :ind :tmp :buf
+        emitReturnStmt :prog :ctx :n :ind :tmp :buf
     }
 }
 
@@ -2619,9 +2446,7 @@ emitStmtParts: function {
 # other arm is dropped (no runtime switch); a value match assigns the arm's
 # value to `assignTo`. No matching arm and no `else` is a compile error.
 emitGenericDissect: function {
-    ast: Ast.view
-    reg: ztypes.ZTypeRegistry.view
-    typing: ztyping.ZTyping.view
+    prog: Program.view
     ctx: Ctx
     m: zast.caserow.view
     ownerTid: ztypes.tid
@@ -2631,19 +2456,25 @@ emitGenericDissect: function {
     tmp: FnTemps
     buf: String.borrow
 } is {
-    darg: ztypecheck.dissectedArgOf :reg :typing :ownerTid :paramName
-    win: ztypecheck.dissectedArmOf :reg :typing :ast :m :ownerTid :darg
+    darg: ztypecheck.dissectedArgOf reg: prog.reg typing: prog.typing :ownerTid :paramName
+    win: (
+        ztypecheck.dissectedArmOf
+        reg: prog.reg
+        typing: prog.typing
+        ast: prog.ast
+        :m
+        :ownerTid
+        :darg
+    )
     if win.notZero then {
         buf.append ind
         buf.append "{\n"
         if assignTo.length > 0 then {
             (
                 emitBranchAssign
-                :ast
-                :reg
-                :typing
+                :prog
                 :ctx
-                n: (ast.nodes.get i: win)
+                n: (prog.ast.nodes.get i: win)
                 target: assignTo
                 scope: win
                 :ind
@@ -2654,16 +2485,23 @@ emitGenericDissect: function {
             # a local the arm declares is freed at the arm's end, where it is
             # still in C scope
             lL: tmp.listFrees.length
-            wst: ast.nodes.get i: win
-            emitBodyNode :ast :reg :typing :ctx n: wst :ind :tmp :buf
-            dv: blockDiverges :ast :reg :typing :ctx n: wst
-            closeScopeBlock :ast :reg :typing :ctx :tmp :lL diverged: dv node: win :buf
+            wst: prog.ast.nodes.get i: win
+            emitBodyNode :prog :ctx n: wst :ind :tmp :buf
+            dv: blockDiverges :prog :ctx n: wst
+            closeScopeBlock :prog :ctx :tmp :lL diverged: dv node: win :buf
         }
         buf.append ind
         buf.append "}\n"
     } else {
-        subjDesc: ztypecheck.dissectedArgText :reg :typing :ownerTid :paramName :darg
-        pnmT: zast.poolTextAt pool: ast.names ref: paramName
+        subjDesc: (
+            ztypecheck.dissectedArgText
+            reg: prog.reg
+            typing: prog.typing
+            :ownerTid
+            :paramName
+            :darg
+        )
+        pnmT: zast.poolTextAt pool: prog.ast.names ref: paramName
         cnm: "generic match on '\{pnmT}' has no case for '\{subjDesc}' and no else"
         ctx.emitErrors.append (nativepieces.emitterFailure what: cnm.copy line: 0)
         preludeNeed :ctx memb: "@panic"
@@ -2680,9 +2518,7 @@ emitGenericDissect: function {
 # or `.view` parameter -- is loaded, as the tag switch loads it: the test is of
 # the value, and a pointer tested is never null.
 matchOrdinalPairRoute: function {
-    ast: Ast.view
-    reg: ztypes.ZTypeRegistry.view
-    typing: ztyping.ZTyping.view
+    prog: Program.view
     ctx: Ctx
     m: zast.caserow.view
     subj: StringView
@@ -2692,27 +2528,25 @@ matchOrdinalPairRoute: function {
     tmp: FnTemps
     buf: String.borrow
 } out bool is {
-    sTid: stampIdDeep :reg :typing n: (ast.nodes.get i: m.subject)
-    if (isOrdinalPair :typing tid: sTid) then {
+    sTid: stampIdDeep :prog n: (prog.ast.nodes.get i: m.subject)
+    if (isOrdinalPair :prog tid: sTid) then {
         # the temp's name, built only for a call subject
         subjOnce: String
-        core: ast.nodes.get i: m.subject
+        core: prog.ast.nodes.get i: m.subject
         if core.call then {
-            ct: consts.pairSubjectCType :ctx :typing tid: sTid
+            ct: consts.pairSubjectCType :ctx :prog tid: sTid
             mp: values.tmpNext :ctx :tmp
             buf.append "\{ind}\{ct} _mp\{mp} = \{subj};\n"
-            emitCallTakeInvalidations :ast :reg :typing :ctx call: core :ind :buf
+            emitCallTakeInvalidations :prog :ctx call: core :ind :buf
             subjOnce = "_mp\{mp}"
-        } else if (needsValueDeref :ast :reg :typing :ctx n: core tid: sTid) then {
+        } else if (needsValueDeref :prog :ctx n: core tid: sTid) then {
             subjOnce = "(*\{subj})"
         }
         # the temp stands in for the subject exactly when one was built
         subjV: if subjOnce.length > 0 then subjOnce.stringView else subj
         (
             emitOrdinalPairMatch
-            :ast
-            :reg
-            :typing
+            :prog
             :ctx
             :m
             subj: subjV
@@ -2731,9 +2565,7 @@ matchOrdinalPairRoute: function {
 # bare or through a dotted path, dissects instead of switching: there is no
 # tag to switch on until the parameter is bound. True when it took the match.
 matchGenericRoute: function {
-    ast: Ast.view
-    reg: ztypes.ZTypeRegistry.view
-    typing: ztyping.ZTyping.view
+    prog: Program.view
     ctx: Ctx
     m: zast.caserow.view
     assignTo: StringView
@@ -2745,21 +2577,22 @@ matchGenericRoute: function {
     # own stamp is the type it was bound to, which is what dissection selects on
     subjSid: (
         ztyping.nodeTypeAt
-        tbl: typing.nodeType
-        nid: (interpPartNodeId n: (ast.nodes.get i: m.subject))
+        tbl: prog.typing.nodeType
+        nid: (interpPartNodeId n: (prog.ast.nodes.get i: m.subject))
     )
-    if subjSid.notZero when (reg.isTypeParamOf tid: subjSid) then {
+    if subjSid.notZero when (prog.reg.isTypeParamOf tid: subjSid) then {
         # the parameter's name, from its declaration in the owner's template
         paramName: (
-            reg.genericParamNameOfTid
-            tdecl: (typing.declIdOfType typeId: (types.genericOriginTid :reg tid: ctx.curThisTid))
+            prog.reg.genericParamNameOfTid
+            tdecl: (
+                prog.typing.declIdOfType
+                typeId: (types.genericOriginTid :prog tid: ctx.curThisTid)
+            )
             ptid: subjSid
         )
         (
             emitGenericDissect
-            :ast
-            :reg
-            :typing
+            :prog
             :ctx
             :m
             ownerTid: ctx.curThisTid
@@ -2772,21 +2605,19 @@ matchGenericRoute: function {
         return true
     }
     dcore: m.subject
-    dcn: ast.nodes.get i: dcore
+    dcn: prog.ast.nodes.get i: dcore
     if dcn.dottedpath then {
-        dleafId: aliasChildNameId :ast :typing n: (ast.nodes.get i: dcore)
-        dbnid: dottedBaseNodeId :ast n: (ast.nodes.get i: dcore)
-        dbst: stampIdOf :typing nid: dbnid
+        dleafId: aliasChildNameId :prog n: (prog.ast.nodes.get i: dcore)
+        dbnid: dottedBaseNodeId :prog n: (prog.ast.nodes.get i: dcore)
+        dbst: stampIdOf :prog nid: dbnid
         downer: ctx.curThisTid
-        if (reg.genericArgCount specId: dbst) > 0 then downer = dbst
+        if (prog.reg.genericArgCount specId: dbst) > 0 then downer = dbst
         if downer.notZero when dleafId.notZero then {
-            dkey: types.genericOwnerKey :reg :typing ownerTid: downer
-            if dkey.notZero when (reg.isGenericParamOf tdecl: dkey name: dleafId) then {
+            dkey: types.genericOwnerKey :prog ownerTid: downer
+            if dkey.notZero when (prog.reg.isGenericParamOf tdecl: dkey name: dleafId) then {
                 (
                     emitGenericDissect
-                    :ast
-                    :reg
-                    :typing
+                    :prog
                     :ctx
                     :m
                     ownerTid: downer
@@ -2816,9 +2647,7 @@ matchelse: record {
 # Answers seeded=false when the else covers more than one arm, when the subject
 # has no name to narrow, or when the else body reassigns it.
 matchElseNarrowing: function {
-    ast: Ast.view
-    reg: ztypes.ZTypeRegistry.view
-    typing: ztyping.ZTyping.view
+    prog: Program.view
     ctx: Ctx
     m: zast.caserow.view
     vtid: ztypes.tid
@@ -2837,7 +2666,7 @@ matchElseNarrowing: function {
     if m.elseclause.isZero then return (matchelse :meT :meSeed)
     if sname.length == 0 then return (matchelse :meT :meSeed)
     allME: ListVal zast.nameid
-    zenv.sumArmNameIds ty: typing :reg tid: vtid ids: allME
+    zenv.sumArmNameIds ty: prog.typing reg: prog.reg tid: vtid ids: allME
     remME: u64
     armME: zast.nameid
     for each ma: allME loop {
@@ -2855,9 +2684,7 @@ matchElseNarrowing: function {
         {
             aliasText: (
                 armAliasText
-                :ast
-                :reg
-                :typing
+                :prog
                 :ctx
                 tid: vtid
                 arm: armME
@@ -2869,7 +2696,7 @@ matchElseNarrowing: function {
             if aliasText.length > 0 then {
                 meV.append aliasText
                 meT = (
-                    (typing.declChildOfId parentTypeId: vtid nameId: armME).or
+                    (prog.typing.declChildOfId parentTypeId: vtid nameId: armME).or
                     d: ztypes.tid.zero
                 )
                 meSeed = true
@@ -2885,9 +2712,7 @@ matchElseNarrowing: function {
 # instance -- and a borrowed field or a reference-returning call is loaded
 # through its pointer.
 emitMatchSubjectTemp: function {
-    ast: Ast.view
-    reg: ztypes.ZTypeRegistry.view
-    typing: ztyping.ZTyping.view
+    prog: Program.view
     ctx: Ctx
     m: zast.caserow.view
     sx: StringView
@@ -2900,21 +2725,21 @@ emitMatchSubjectTemp: function {
     tmp: FnTemps
     buf: String.borrow
 } is {
-    subjT: ast.nodes.get i: m.subject
+    subjT: prog.ast.nodes.get i: m.subject
     sxM: "\{sx}"
-    if (needsValueDeref :ast :reg :typing :ctx n: subjT tid: vtid) then {
+    if (needsValueDeref :prog :ctx n: subjT tid: vtid) then {
         sxM = "(*\{sx})"
     }
-    if isUni when (pathIsPointer :ast :reg :typing :ctx n: subjT) then sxM = "(*\{sx})"
-    gfM: genSubjectFieldC :ast :reg :typing :ctx nid: m.subject
+    if isUni when (pathIsPointer :prog :ctx n: subjT) then sxM = "(*\{sx})"
+    gfM: genSubjectFieldC :prog :ctx nid: m.subject
     if gfM.length > 0 then {
-        mtv: (typing.tempOf.get key: m.subject).or d: ztypes.vid.zero
-        mtid: reg.variableTypeOf id: mtv
-        buf.append (destroyLineC :reg :typing :ctx tid: mtid nm: gfM.stringView :ind)
+        mtv: (prog.typing.tempOf.get key: m.subject).or d: ztypes.vid.zero
+        mtid: prog.reg.variableTypeOf id: mtv
+        buf.append (destroyLineC :prog :ctx tid: mtid nm: gfM.stringView :ind)
         buf.append "\{ind}\{gfM} = \{sxM};\n"
         sxM = gfM.take
     } else {
-        hoM: values.ownedReceiverHoist :ast :reg :typing :ctx expr: sx exprF: sxF n: subjT
+        hoM: values.ownedReceiverHoist :prog :ctx expr: sx exprF: sxF n: subjT
         if hoM.length > 0 then sxM = hoM.take
     }
     flushArgHoists :ctx :ind :tmp :buf
@@ -2924,9 +2749,7 @@ emitMatchSubjectTemp: function {
 # emitMatchStmt -- a variant-subject match as a tag switch over a temp;
 # payload arms shadow the subject name with the payload value.
 emitMatchStmt: function {
-    ast: Ast.view
-    reg: ztypes.ZTypeRegistry.view
-    typing: ztyping.ZTyping.view
+    prog: Program.view
     ctx: Ctx
     m: zast.caserow.view
     assignTo: StringView
@@ -2935,19 +2758,17 @@ emitMatchStmt: function {
     buf: String.borrow
 } is {
     # a match on a unit constant runs the one arm the constant holds
-    mfb: foldedBranchOf :typing nid: m.nodeid
+    mfb: foldedBranchOf :prog nid: m.nodeid
     if mfb.known then {
-        mwn: ast.nodes.get i: mfb.stmt
-        mscope: branchScopeOf :ast clauses: m.clauses elseclause: m.elseclause stmt: mfb.stmt
+        mwn: prog.ast.nodes.get i: mfb.stmt
+        mscope: branchScopeOf :prog clauses: m.clauses elseclause: m.elseclause stmt: mfb.stmt
         buf.append "\{ind}{\n"
         indM: "\{ind}    "
         lLM: tmp.listFrees.length
         if assignTo.length > 0 then {
             (
                 emitBranchAssign
-                :ast
-                :reg
-                :typing
+                :prog
                 :ctx
                 n: mwn
                 target: assignTo
@@ -2958,16 +2779,14 @@ emitMatchStmt: function {
             )
             flushBlockFrees :tmp lL: lLM diverged: false :buf
         } else {
-            emitBodyNode :ast :reg :typing :ctx n: mwn ind: indM.stringView :tmp :buf
+            emitBodyNode :prog :ctx n: mwn ind: indM.stringView :tmp :buf
             (
                 closeScopeBlock
-                :ast
-                :reg
-                :typing
+                :prog
                 :ctx
                 :tmp
                 lL: lLM
-                diverged: (blockDiverges :ast :reg :typing :ctx n: mwn)
+                diverged: (blockDiverges :prog :ctx n: mwn)
                 node: mscope
                 :buf
             )
@@ -2976,12 +2795,10 @@ emitMatchStmt: function {
         return
     }
     sxF: exprfacts
-    sx: emitExprWith :ast :reg :typing :ctx n: (ast.nodes.get i: m.subject) facts: sxF
+    sx: emitExprWith :prog :ctx n: (prog.ast.nodes.get i: m.subject) facts: sxF
     if (
         matchOrdinalPairRoute
-        :ast
-        :reg
-        :typing
+        :prog
         :ctx
         :m
         subj: sx.stringView
@@ -2990,35 +2807,35 @@ emitMatchStmt: function {
         :tmp
         :buf
     ) then return
-    subjStamp: stampIdDeep :reg :typing n: (ast.nodes.get i: m.subject)
-    vtid: types.canonTypeId :reg :typing tid: subjStamp
-    if (matchGenericRoute :ast :reg :typing :ctx :m :assignTo :ind :tmp :buf) then return
+    subjStamp: stampIdDeep :prog n: (prog.ast.nodes.get i: m.subject)
+    vtid: types.canonTypeId :prog tid: subjStamp
+    if (matchGenericRoute :prog :ctx :m :assignTo :ind :tmp :buf) then return
     # a typedef over a union or variant is matched on its base's tag
-    vend: ztypecheck.typedefChaseTid :typing tid: vtid
-    vett: reg.typetypeOf typeId: vend
+    vend: ztypecheck.typedefChaseTid typing: prog.typing tid: vtid
+    vett: prog.reg.typetypeOf typeId: vend
     if vett.isSum then {
         vtid = vend
     }
     isVar: false
     isUni: false
     if vtid.notZero then {
-        subjectKind: reg.typetypeOf typeId: vtid
+        subjectKind: prog.reg.typetypeOf typeId: vtid
         if subjectKind == ztypes.ztypetype.variantType then isVar = true
         if subjectKind == ztypes.ztypetype.unionType then isUni = true
     }
     # the checker refuses a match on any other subject (a scalar's included)
     if isVar.not when isUni.not then {
-        stn: reg.nameViewOf tid: vtid
+        stn: prog.reg.nameViewOf tid: vtid
         emitFail :ctx what: "unhandled match subject type \{stn}" line: m.lineno
         return
     }
     vc: spelledCname :ctx tid: vtid
     mN: values.tmpNext :ctx :tmp
-    sname: narrowfacts.atomTextOf :ast n: (ast.nodes.get i: m.subject)
+    sname: narrowfacts.atomTextOf :prog n: (prog.ast.nodes.get i: m.subject)
     # the subject's variable: inside an arm the bound name IS the subject,
     # narrowed, so its declaration must carry the same identifier the body's
     # references resolve to
-    snameV: atomVid :typing nid: (atomNodeId n: (ast.nodes.get i: m.subject))
+    snameV: atomVid :prog nid: (atomNodeId n: (prog.ast.nodes.get i: m.subject))
     # the subject's storage, as the receiver its tag and payload are read off:
     # the `_mN` temporary, or -- for a union subject that is a variable -- the
     # variable itself, as an `if` narrowing reads it. A payload write in an arm
@@ -3027,17 +2844,15 @@ emitMatchStmt: function {
     mRecv: String
     mRecvF: exprfacts
     mAcc: "."
-    subjM: ast.nodes.get i: m.subject
+    subjM: prog.ast.nodes.get i: m.subject
     if isUni when (localnames.nodeIsBareAtom n: subjM) when snameV.notZero then {
         mRecv = sx.take
         mRecvF = sxF
-        if (pathIsPointer :ast :reg :typing :ctx n: subjM) then mAcc = "->"
+        if (pathIsPointer :prog :ctx n: subjM) then mAcc = "->"
     } else {
         (
             emitMatchSubjectTemp
-            :ast
-            :reg
-            :typing
+            :prog
             :ctx
             :m
             sx: sx.stringView
@@ -3053,19 +2868,17 @@ emitMatchStmt: function {
         mRecv = "_m\{mN}"
         mRecvF = pathFacts
     }
-    if (narrowfacts.isOrdinalVariant :typing tid: vtid) then {
+    if (narrowfacts.isOrdinalVariant :prog tid: vtid) then {
         buf.append "\{ind}switch (\{mRecv}) {\n"
     } else {
         buf.append "\{ind}switch (\{mRecv}\{mAcc}tag) {\n"
     }
     bodyInd: "\{ind}    "
-    for each cId: (zast.kidsOf :ast span: m.clauses) loop {
-        c: ast.nodes.get i: cId
+    for each cId: (zast.kidsOf ast: prog.ast span: m.clauses) loop {
+        c: prog.ast.nodes.get i: cId
         (
             emitMatchClause
-            :ast
-            :reg
-            :typing
+            :prog
             :ctx
             :c
             :vtid
@@ -3083,10 +2896,10 @@ emitMatchStmt: function {
         )
     }
     covA: ListVal zast.nameid
-    for each c3Id: (zast.kidsOf :ast span: m.clauses) loop {
-        c3: ast.nodes.get i: c3Id
+    for each c3Id: (zast.kidsOf ast: prog.ast span: m.clauses) loop {
+        c3: prog.ast.nodes.get i: c3Id
         if c3.caseclause then {
-            cnm: clauseArmId :typing nid: c3.nodeid written: c3.name
+            cnm: clauseArmId :prog nid: c3.nodeid written: c3.name
             covA.append cnm
         }
     }
@@ -3094,9 +2907,7 @@ emitMatchStmt: function {
     meVF: exprfacts
     men: (
         matchElseNarrowing
-        :ast
-        :reg
-        :typing
+        :prog
         :ctx
         :m
         :vtid
@@ -3124,12 +2935,10 @@ emitMatchStmt: function {
         varEntrySet xs: ctx.narrowBox vid: snameV val: meV.stringView facts: meVF
         varTidSet xs: ctx.narrowTid vid: snameV tid: meT
     }
-    mdvg: matchDiverges :reg :typing nid: m.nodeid
+    mdvg: matchDiverges :prog nid: m.nodeid
     (
         emitMatchElse
-        :ast
-        :reg
-        :typing
+        :prog
         :ctx
         oId: m.elseclause
         :assignTo
@@ -3159,9 +2968,7 @@ emitMatchStmt: function {
 # subject an instance of this rather than a form of its own. assignTo writes the
 # arm value in each branch.
 emitOrdinalPairMatch: function {
-    ast: Ast.view
-    reg: ztypes.ZTypeRegistry.view
-    typing: ztyping.ZTyping.view
+    prog: Program.view
     ctx: Ctx
     m: zast.caserow.view
     subj: StringView
@@ -3171,14 +2978,14 @@ emitOrdinalPairMatch: function {
     tmp: FnTemps
     buf: String.borrow
 } is {
-    falseArm: ordinalPairFirstArmId :typing :tid
+    falseArm: ordinalPairFirstArmId :prog :tid
     firstB: true
-    for each cId: (zast.kidsOf :ast span: m.clauses) loop {
-        c: ast.nodes.get i: cId
+    for each cId: (zast.kidsOf ast: prog.ast span: m.clauses) loop {
+        c: prog.ast.nodes.get i: cId
         if c.caseclause then {
             condB: subj.string
             if falseArm.notZero when (
-                (clauseArmId :typing nid: c.nodeid written: c.name) == falseArm
+                (clauseArmId :prog nid: c.nodeid written: c.name) == falseArm
             ) then condB = "!\{subj}"
             kwB: "if"
             if firstB.not then kwB = "else if"
@@ -3190,11 +2997,9 @@ emitOrdinalPairMatch: function {
                 armInd: "\{ind}    "
                 (
                     emitBranchAssign
-                    :ast
-                    :reg
-                    :typing
+                    :prog
                     :ctx
-                    n: (ast.nodes.get i: c.statement)
+                    n: (prog.ast.nodes.get i: c.statement)
                     target: assignTo
                     scope: c.nodeid
                     ind: armInd.stringView
@@ -3203,14 +3008,12 @@ emitOrdinalPairMatch: function {
                 )
             } else {
                 lLB: tmp.listFrees.length
-                cstB: ast.nodes.get i: c.statement
-                emitBodyNode :ast :reg :typing :ctx n: cstB ind: indB.stringView :tmp :buf
-                dvF: blockDiverges :ast :reg :typing :ctx n: cstB
+                cstB: prog.ast.nodes.get i: c.statement
+                emitBodyNode :prog :ctx n: cstB ind: indB.stringView :tmp :buf
+                dvF: blockDiverges :prog :ctx n: cstB
                 (
                     closeScopeBlock
-                    :ast
-                    :reg
-                    :typing
+                    :prog
                     :ctx
                     :tmp
                     lL: lLB
@@ -3223,15 +3026,13 @@ emitOrdinalPairMatch: function {
             buf.append lcB
         }
     }
-    bdvg: matchDiverges :reg :typing nid: m.nodeid
-    emitBoolElse :ast :reg :typing :ctx oId: m.elseclause :assignTo :ind :tmp diverges: bdvg :buf
+    bdvg: matchDiverges :prog nid: m.nodeid
+    emitBoolElse :prog :ctx oId: m.elseclause :assignTo :ind :tmp diverges: bdvg :buf
 }
 
 # emitBoolElse -- the trailing `else { ... }` of a bool match (none = nothing).
 emitBoolElse: function {
-    ast: Ast.view
-    reg: ztypes.ZTypeRegistry.view
-    typing: ztyping.ZTyping.view
+    prog: Program.view
     ctx: Ctx
     oId: zast.nodeid
     assignTo: StringView
@@ -3241,7 +3042,7 @@ emitBoolElse: function {
     buf: String.borrow
 } is {
     if oId.notZero then {
-        o: ast.nodes.get i: oId
+        o: prog.ast.nodes.get i: oId
         leB: "\{ind}else {\n"
         buf.append leB
         indE: "\{ind}    "
@@ -3249,9 +3050,7 @@ emitBoolElse: function {
             armInd: "\{ind}    "
             (
                 emitBranchAssign
-                :ast
-                :reg
-                :typing
+                :prog
                 :ctx
                 n: o
                 target: assignTo
@@ -3262,9 +3061,9 @@ emitBoolElse: function {
             )
         } else {
             lLE: tmp.listFrees.length
-            emitBodyNode :ast :reg :typing :ctx n: o ind: indE.stringView :tmp :buf
-            dvF: blockDiverges :ast :reg :typing :ctx n: o
-            closeScopeBlock :ast :reg :typing :ctx :tmp lL: lLE diverged: dvF node: oId :buf
+            emitBodyNode :prog :ctx n: o ind: indE.stringView :tmp :buf
+            dvF: blockDiverges :prog :ctx n: o
+            closeScopeBlock :prog :ctx :tmp lL: lLE diverged: dvF node: oId :buf
         }
         lceB: "\{ind}}\n"
         buf.append lceB
@@ -3305,9 +3104,7 @@ flushBlockFrees: function {
 # the scope's end destroys (emitScopeDestroy). A block that diverges on every
 # path writes nothing, its exits having freed what it held.
 closeScopeBlock: function {
-    ast: Ast.view
-    reg: ztypes.ZTypeRegistry.view
-    typing: ztyping.ZTyping.view
+    prog: Program.view
     ctx: Ctx
     tmp: FnTemps
     lL: u64
@@ -3316,17 +3113,17 @@ closeScopeBlock: function {
     buf: String.borrow
 } is {
     flushBlockFrees :tmp :lL :diverged :buf
-    if diverged.not then emitScopeDestroy :ast :reg :typing :ctx :node ind: "    " :buf
+    if diverged.not then emitScopeDestroy :prog :ctx :node ind: "    " :buf
 }
 
 # branchScopeOf -- the checker scope of the `if` or `match` branch whose body
 # is `stmt`: the clause among `clauses` it belongs to, or the else body itself.
 branchScopeOf: function {
-    ast: Ast.view clauses: zast.kidspan elseclause: zast.nodeid stmt: zast.nodeid
+    prog: Program.view clauses: zast.kidspan elseclause: zast.nodeid stmt: zast.nodeid
 } out zast.nodeid is {
     if elseclause == stmt then return stmt
-    for each cId: (zast.kidsOf :ast span: clauses) loop {
-        c: ast.nodes.get i: cId
+    for each cId: (zast.kidsOf ast: prog.ast span: clauses) loop {
+        c: prog.ast.nodes.get i: cId
         body: zast.nodeid
         match (
             c
@@ -3345,22 +3142,20 @@ branchScopeOf: function {
 # local moved on every path here holds nothing and is skipped; one moved on
 # some was zeroed where it moved, and its destroy frees nothing there.
 emitScopeDestroy: function {
-    ast: Ast.view
-    reg: ztypes.ZTypeRegistry.view
-    typing: ztyping.ZTyping.view
+    prog: Program.view
     ctx: Ctx
     node: zast.nodeid
     ind: StringView
     buf: String.borrow
 } is {
-    rg: typing.scopeDestroy.get key: node
+    rg: prog.typing.scopeDestroy.get key: node
     if rg.none then return
     k: u64
     for k < rg.len loop {
-        it: typing.destroyItems.get i: rg.start.u64 + k
+        it: prog.typing.destroyItems.get i: rg.start.u64 + k
         k = k + 1
         if it.state.moved then continue
-        emitLocalDestroy :ast :reg :typing :ctx vid: it.vid :ind :buf
+        emitLocalDestroy :prog :ctx vid: it.vid :ind :buf
     }
 }
 
@@ -3370,46 +3165,42 @@ emitScopeDestroy: function {
 # field zeroed, so the instance's own destructor finds it empty. Nothing for a
 # type that frees nothing.
 emitLocalDestroy: function {
-    ast: Ast.view
-    reg: ztypes.ZTypeRegistry.view
-    typing: ztyping.ZTyping.view
+    prog: Program.view
     ctx: Ctx
     vid: ztypes.vid
     ind: StringView
     buf: String.borrow
 } is {
-    tid: reg.variableTypeOf id: vid
-    gf: typing.genLocalFieldOf.get key: vid
+    tid: prog.reg.variableTypeOf id: vid
+    gf: prog.typing.genLocalFieldOf.get key: vid
     if gf.some then {
         al: narrowfacts.vidFind xs: ctx.aliases :vid
         if al == 0 then return
         fld: (ctx.aliases.get i: al - 1).val.copy
-        dc: destroyLineC :reg :typing :ctx :tid nm: fld.stringView :ind
+        dc: destroyLineC :prog :ctx :tid nm: fld.stringView :ind
         if dc.length == 0 then return
         buf.append dc
-        buf.append "\{ind}\{fld} = \{values.movedZeroC :reg :typing :ctx :tid};\n"
+        buf.append "\{ind}\{fld} = \{values.movedZeroC :prog :ctx :tid};\n"
         return
     }
     # storage another owner frees: what a borrow aliases
     if (narrowfacts.varEntryHas xs: ctx.aliases :vid) then return
-    nm: localnames.varCName :ctx :ast :reg :vid
-    buf.append (destroyLineC :reg :typing :ctx :tid nm: nm.stringView :ind)
+    nm: localnames.varCName :ctx :prog :vid
+    buf.append (destroyLineC :prog :ctx :tid nm: nm.stringView :ind)
 }
 
 # emitBreakFrees -- the destroys a `break`, or a `continue` that jumps no
 # `do` block, owes: those of the innermost loop or `do` entry's scopes
 # (emitContinueFrees).
 emitBreakFrees: function {
-    ast: Ast.view
-    reg: ztypes.ZTypeRegistry.view
-    typing: ztyping.ZTyping.view
+    prog: Program.view
     ctx: Ctx
     tmp: FnTemps.view
     ind: StringView
     buf: String.borrow
 } is {
     if ctx.loops.length == 0 then return
-    emitContinueFrees :ast :reg :typing :ctx :tmp idx: ctx.loops.length - 1 :ind :buf
+    emitContinueFrees :prog :ctx :tmp idx: ctx.loops.length - 1 :ind :buf
 }
 
 # emitContinueFrees -- the destroys owed where an exit leaves the scopes since
@@ -3419,9 +3210,7 @@ emitBreakFrees: function {
 # does not take the exit still owes them. An exit the checker recorded nothing
 # for (ctx.exitNode 0) is refused.
 emitContinueFrees: function {
-    ast: Ast.view
-    reg: ztypes.ZTypeRegistry.view
-    typing: ztyping.ZTyping.view
+    prog: Program.view
     ctx: Ctx
     tmp: FnTemps.view
     idx: u64
@@ -3441,7 +3230,7 @@ emitContinueFrees: function {
         i = i - 1
         buf.append (tmp.listFrees.get :i).stmt
     }
-    if allRows.not then emitExitDestroy :ast :reg :typing :ctx :ind :buf
+    if allRows.not then emitExitDestroy :prog :ctx :ind :buf
 }
 
 # emitExitDestroy -- what the checker recorded the exit being emitted
@@ -3449,21 +3238,19 @@ emitContinueFrees: function {
 # variable (emitLocalDestroy); the path that does not take the exit destroys
 # it too. A local moved on every path here is skipped.
 emitExitDestroy: function {
-    ast: Ast.view
-    reg: ztypes.ZTypeRegistry.view
-    typing: ztyping.ZTyping.view
+    prog: Program.view
     ctx: Ctx
     ind: StringView
     buf: String.borrow
 } is {
-    rg: typing.exitDestroy.get key: ctx.exitNode
+    rg: prog.typing.exitDestroy.get key: ctx.exitNode
     if rg.none then return
     k: u64
     for k < rg.len loop {
-        it: typing.destroyItems.get i: rg.start.u64 + k
+        it: prog.typing.destroyItems.get i: rg.start.u64 + k
         k = k + 1
         if it.state.moved then continue
-        emitLocalDestroy :ast :reg :typing :ctx vid: it.vid :ind :buf
+        emitLocalDestroy :prog :ctx vid: it.vid :ind :buf
     }
 }
 
@@ -3471,9 +3258,7 @@ emitExitDestroy: function {
 # reads of it inside the arm read the payload's cell, cast to `pc`, whose types
 # (`pcHeld`) are recorded where that alias is read.
 seedUnionArmAlias: function {
-    ast: Ast.view
-    reg: ztypes.ZTypeRegistry.view
-    typing: ztyping.ZTyping.view
+    prog: Program.view
     ctx: Ctx
     vtid: ztypes.tid
     arm: zast.nameid
@@ -3487,8 +3272,8 @@ seedUnionArmAlias: function {
     ind: StringView
     buf: String.borrow
 } is {
-    inl: types.armIsInlineC :typing tid: vtid :arm
-    msl: armSlotC :ast :reg :typing :ctx tid: vtid recv: slotRecv acc: slotAcc :arm inline: inl
+    inl: types.armIsInlineC :prog tid: vtid :arm
+    msl: armSlotC :prog :ctx tid: vtid recv: slotRecv acc: slotAcc :arm inline: inl
     nbv: armCellRef :pc slot: msl.stringView inline: inl
     holdForAlias :ctx val: nbv.stringView held: pcHeld
     cmt: "\{ind}    /* alias: \{sname} => \{nbv} */\n"
@@ -3500,7 +3285,7 @@ seedUnionArmAlias: function {
         val: nbv.stringView
         facts: (memberreads.armCellFacts recvF: slotRecvF inline: inl)
     )
-    co: typing.declChildOfId parentTypeId: vtid nameId: arm
+    co: prog.typing.declChildOfId parentTypeId: vtid nameId: arm
     if co.some then {
         varTidSet xs: ctx.narrowTid vid: snameVid tid: co
     }
@@ -3508,9 +3293,7 @@ seedUnionArmAlias: function {
 
 # emit one arm of a match over a tagged sum.
 emitMatchClause: function {
-    ast: Ast.view
-    reg: ztypes.ZTypeRegistry.view
-    typing: ztyping.ZTyping.view
+    prog: Program.view
     ctx: Ctx
     c: astnode.view
     vtid: ztypes.tid
@@ -3528,13 +3311,13 @@ emitMatchClause: function {
     buf: String.borrow
 } is {
     if c.caseclause then {
-        arm: clauseArmId :typing nid: c.nodeid written: c.name
-        tg: spelledTagConst :ast :ctx :reg :typing tid: vtid armId: arm
+        arm: clauseArmId :prog nid: c.nodeid written: c.name
+        tg: spelledTagConst :prog :ctx tid: vtid armId: arm
         l2: "\{ind}case \{tg}: {\n"
         buf.append l2
         # held: a union arm's cast is recorded where its alias is read
         pcHeld: ListVal ztypes.tid
-        pc: heldArmPayloadC :ast :reg :typing :ctx tid: vtid :arm held: pcHeld
+        pc: heldArmPayloadC :prog :ctx tid: vtid :arm held: pcHeld
         bodyInd: "\{ind}    "
         didSeed: false
         unptr: false
@@ -3549,9 +3332,7 @@ emitMatchClause: function {
             if isUni then {
                 (
                     seedUnionArmAlias
-                    :ast
-                    :reg
-                    :typing
+                    :prog
                     :ctx
                     :vtid
                     :arm
@@ -3566,23 +3347,27 @@ emitMatchClause: function {
                     :buf
                 )
                 didSeed = true
-            } else if (narrowfacts.bodyReassigns :ast n: (ast.nodes.get i: c.statement) name: sname
+            } else if (
+                narrowfacts.bodyReassigns
+                :prog
+                n: (prog.ast.nodes.get i: c.statement)
+                name: sname
             ) then {
                 # a body that WRITES the subject must reach the variable, which a
                 # shadowing local of the same C name would hide: the payload is
                 # aliased instead, and each read picks the alias or the variable
                 # by its stamp
-                armMV: memberC :ast :reg :typing :ctx owner: vtid kind: memberkind.arm nameId: arm
+                armMV: memberC :prog :ctx owner: vtid kind: memberkind.arm nameId: arm
                 nbvV: "_m\{mN}.data.\{armMV}"
                 varEntrySet xs: ctx.narrowBox vid: snameVid val: nbvV.stringView facts: pathFacts
-                cov: typing.declChildOfId parentTypeId: vtid nameId: arm
+                cov: prog.typing.declChildOfId parentTypeId: vtid nameId: arm
                 if cov.some then {
                     varTidSet xs: ctx.narrowTid vid: snameVid tid: cov
                 }
                 didSeed = true
             } else {
-                snE: localnames.varCName :ctx :ast :reg vid: snameVid
-                armMP: memberC :ast :reg :typing :ctx owner: vtid kind: memberkind.arm nameId: arm
+                snE: localnames.varCName :ctx :prog vid: snameVid
+                armMP: memberC :prog :ctx owner: vtid kind: memberkind.arm nameId: arm
                 l3: "\{ind}    \{pc} \{snE} = _m\{mN}.data.\{armMP};\n"
                 buf.append l3
                 l4: "\{ind}    (void)\{snE};\n"
@@ -3601,8 +3386,8 @@ emitMatchClause: function {
                     unptr = true
                 }
                 # a data payload is a handle: the shadow reads through it
-                pyo: typing.declChildOfId parentTypeId: vtid nameId: arm
-                if pyo.some when (argforms.isStaticHandle :reg :typing tid: pyo) then {
+                pyo: prog.typing.declChildOfId parentTypeId: vtid nameId: arm
+                if pyo.some when (argforms.isStaticHandle :prog tid: pyo) then {
                     ctx.ptrVids.append from: snameVid
                     staticArm = true
                 }
@@ -3615,11 +3400,9 @@ emitMatchClause: function {
             armInd: "\{ind}    "
             (
                 emitBranchAssign
-                :ast
-                :reg
-                :typing
+                :prog
                 :ctx
-                n: (ast.nodes.get i: c.statement)
+                n: (prog.ast.nodes.get i: c.statement)
                 target: assignTo
                 scope: c.nodeid
                 ind: armInd.stringView
@@ -3628,10 +3411,10 @@ emitMatchClause: function {
             )
         } else {
             lL: tmp.listFrees.length
-            cst: ast.nodes.get i: c.statement
-            emitBodyNode :ast :reg :typing :ctx n: cst ind: bodyInd.stringView :tmp :buf
-            dv = blockDiverges :ast :reg :typing :ctx n: cst
-            closeScopeBlock :ast :reg :typing :ctx :tmp :lL diverged: dv node: c.nodeid :buf
+            cst: prog.ast.nodes.get i: c.statement
+            emitBodyNode :prog :ctx n: cst ind: bodyInd.stringView :tmp :buf
+            dv = blockDiverges :prog :ctx n: cst
+            closeScopeBlock :prog :ctx :tmp :lL diverged: dv node: c.nodeid :buf
         }
         if didSeed then {
             (
@@ -3656,9 +3439,7 @@ emitMatchClause: function {
 
 # emit a match's else arm.
 emitMatchElse: function {
-    ast: Ast.view
-    reg: ztypes.ZTypeRegistry.view
-    typing: ztyping.ZTyping.view
+    prog: Program.view
     ctx: Ctx
     oId: zast.nodeid
     assignTo: StringView
@@ -3668,7 +3449,7 @@ emitMatchElse: function {
     buf: String.borrow
 } is {
     if oId.notZero then {
-        o: ast.nodes.get i: oId
+        o: prog.ast.nodes.get i: oId
         l7: "\{ind}default: {\n"
         buf.append l7
         bodyInd: "\{ind}    "
@@ -3677,9 +3458,7 @@ emitMatchElse: function {
             armInd: "\{ind}    "
             (
                 emitBranchAssign
-                :ast
-                :reg
-                :typing
+                :prog
                 :ctx
                 n: o
                 target: assignTo
@@ -3690,9 +3469,9 @@ emitMatchElse: function {
             )
         } else {
             lLe: tmp.listFrees.length
-            emitBodyNode :ast :reg :typing :ctx n: o ind: bodyInd.stringView :tmp :buf
-            dv8 = blockDiverges :ast :reg :typing :ctx n: o
-            closeScopeBlock :ast :reg :typing :ctx :tmp lL: lLe diverged: dv8 node: oId :buf
+            emitBodyNode :prog :ctx n: o ind: bodyInd.stringView :tmp :buf
+            dv8 = blockDiverges :prog :ctx n: o
+            closeScopeBlock :prog :ctx :tmp lL: lLe diverged: dv8 node: oId :buf
         }
         if dv8.not then {
             l8: "\{ind}    break;\n"
@@ -3741,9 +3520,7 @@ emitOptionalAssign: function {
 # value in the optional's `some` arm (tag + data.some); a `break` reached first
 # leaves the result at its pre-set `none` tag.
 emitBranchAssignOptional: function {
-    ast: Ast.view
-    reg: ztypes.ZTypeRegistry.view
-    typing: ztyping.ZTyping.view
+    prog: Program.view
     ctx: Ctx
     n: astnode.view
     target: StringView
@@ -3761,28 +3538,28 @@ emitBranchAssignOptional: function {
         cnt: n.statements.count.u64
         si: u64
         for si < cnt loop {
-            sxId: zast.kidAt kids: ast.kids span: n.statements i: si
-            sx: ast.nodes.get i: sxId
+            sxId: zast.kidAt kids: prog.ast.kids span: n.statements i: si
+            sx: prog.ast.nodes.get i: sxId
             if (si + 1) == cnt then {
-                vx: emitExpr :ast :reg :typing :ctx n: sx
+                vx: emitExpr :prog :ctx n: sx
                 flushArgHoists :ctx :ind :tmp :buf
                 emitOptionalAssign :ctx :target :someTag :someC :payC vx: vx.stringView :ind :buf
-                emitValueTakeInvalidations :ast :reg :typing :ctx n: sx :ind :buf
+                emitValueTakeInvalidations :prog :ctx n: sx :ind :buf
             } else {
-                emitStmt :ast :reg :typing :ctx n: sx :ind :tmp :buf
+                emitStmt :prog :ctx n: sx :ind :tmp :buf
                 # a diverging statement -- typically an `if` the emitter folded
                 # to an unconditional break -- ends the block, so the value
                 # assignment below it can never run. The optional stays none,
                 # which is what the break path yields anyway.
-                if (stmtDiverges :ast :reg :typing :ctx sid: sxId) then si = cnt
+                if (stmtDiverges :prog :ctx sid: sxId) then si = cnt
             }
             si = si + 1
         }
     } else {
-        vx2: emitExpr :ast :reg :typing :ctx :n
+        vx2: emitExpr :prog :ctx :n
         flushArgHoists :ctx :ind :tmp :buf
         emitOptionalAssign :ctx :target :someTag :someC :payC vx: vx2.stringView :ind :buf
-        emitValueTakeInvalidations :ast :reg :typing :ctx :n :ind :buf
+        emitValueTakeInvalidations :prog :ctx :n :ind :buf
     }
 }
 
@@ -3793,9 +3570,7 @@ emitBranchAssignOptional: function {
 # binding's local `owes` its destroy at scope exit; a block inside an expression
 # owes nothing here, as an `if`'s or a `match`'s value does not.
 emitDoBindValue: function {
-    ast: Ast.view
-    reg: ztypes.ZTypeRegistry.view
-    typing: ztyping.ZTyping.view
+    prog: Program.view
     ctx: Ctx
     n: astnode.view
     nm: StringView
@@ -3810,14 +3585,12 @@ emitDoBindValue: function {
     ) case doexpr then {
         ld: "\{ind}\{ct} \{nm};\n"
         buf.append ld
-        if (ztypecheck.blockHasBreak :ast n: (ast.nodes.get i: n.statement)) then {
-            noneTag: spelledTagConst :ast :ctx :reg :typing :tid armId: zast.wellKnown.slot.wkNone
-            someTag: spelledTagConst :ast :ctx :reg :typing :tid armId: zast.wellKnown.slot.wkSome
+        if (ztypecheck.blockHasBreak ast: prog.ast n: (prog.ast.nodes.get i: n.statement)) then {
+            noneTag: spelledTagConst :prog :ctx :tid armId: zast.wellKnown.slot.wkNone
+            someTag: spelledTagConst :prog :ctx :tid armId: zast.wellKnown.slot.wkSome
             someC: (
                 memberC
-                :ast
-                :reg
-                :typing
+                :prog
                 :ctx
                 owner: tid
                 kind: memberkind.arm
@@ -3827,12 +3600,10 @@ emitDoBindValue: function {
             # malloc'd box, none carries NULL data, and the local owns the
             # box (scope-exit destroy).
             boxedC: String
-            if (originIsTid :reg :tid originTid: (ctx.origins.get i: family.slot.option)) then {
+            if (originIsTid :prog :tid originTid: (ctx.origins.get i: family.slot.option)) then {
                 boxedC = (
                     values.armPayloadC
-                    :ast
-                    :reg
-                    :typing
+                    :prog
                     :ctx
                     :tid
                     arm: zast.wellKnown.slot.wkSome
@@ -3854,11 +3625,9 @@ emitDoBindValue: function {
             lLd: tmp.listFrees.length
             (
                 emitBranchAssignOptional
-                :ast
-                :reg
-                :typing
+                :prog
                 :ctx
-                n: (ast.nodes.get i: n.statement)
+                n: (prog.ast.nodes.get i: n.statement)
                 target: nm
                 someTag: someTag.stringView
                 someC: someC.stringView
@@ -3867,8 +3636,8 @@ emitDoBindValue: function {
                 :tmp
                 :buf
             )
-            dvO: blockDiverges :ast :reg :typing :ctx n: (ast.nodes.get i: n.statement)
-            closeScopeBlock :ast :reg :typing :ctx :tmp lL: lLd diverged: dvO node: n.nodeid :buf
+            dvO: blockDiverges :prog :ctx n: (prog.ast.nodes.get i: n.statement)
+            closeScopeBlock :prog :ctx :tmp lL: lLd diverged: dvO node: n.nodeid :buf
             l2: "\{ind}} while (0);\n"
             buf.append l2
             popLoopLabel :ctx id: doId :ind :buf
@@ -3879,11 +3648,9 @@ emitDoBindValue: function {
             lLe: tmp.listFrees.length
             (
                 emitBranchAssign
-                :ast
-                :reg
-                :typing
+                :prog
                 :ctx
-                n: (ast.nodes.get i: n.statement)
+                n: (prog.ast.nodes.get i: n.statement)
                 target: nm
                 scope: n.nodeid
                 ind: innerInd.stringView
@@ -3903,9 +3670,7 @@ emitDoBindValue: function {
 # emitMatchBindValue -- `x: (match c case ok then 1 ...)`: declare the
 # local and assign per arm; false when the value is not a match.
 emitMatchBindValue: function {
-    ast: Ast.view
-    reg: ztypes.ZTypeRegistry.view
-    typing: ztyping.ZTyping.view
+    prog: Program.view
     ctx: Ctx
     n: astnode.view
     nm: StringView
@@ -3921,7 +3686,7 @@ emitMatchBindValue: function {
         buf.append ld
         # each arm runs only when selected, as a statement match's arms do
         ctx.condDepth = ctx.condDepth + 1
-        emitMatchStmt :ast :reg :typing :ctx m: n assignTo: nm :ind :tmp :buf
+        emitMatchStmt :prog :ctx m: n assignTo: nm :ind :tmp :buf
         ctx.condDepth = ctx.condDepth - 1
         return true
     } else {
@@ -3932,9 +3697,7 @@ emitMatchBindValue: function {
 # emitIfBindValue -- `s: if c then a else b`: declare the local and emit
 # an if-statement assigning the branch value to it; false otherwise.
 emitIfBindValue: function {
-    ast: Ast.view
-    reg: ztypes.ZTypeRegistry.view
-    typing: ztyping.ZTyping.view
+    prog: Program.view
     ctx: Ctx
     n: astnode.view
     nm: StringView
@@ -3949,21 +3712,21 @@ emitIfBindValue: function {
         # every condition folds to one live branch that is one value: declare
         # the local with that value, rather than emitting a runtime if whose
         # other arms are dead
-        bfb: foldedBranchOf :typing nid: n.nodeid
+        bfb: foldedBranchOf :prog nid: n.nodeid
         if bfb.known when bfb.stmt.notZero then {
-            bwn: ast.nodes.get i: bfb.stmt
-            if (values.isSimpleValueNode :ast n: bwn) then {
-                bvx: emitExpr :ast :reg :typing :ctx n: bwn
+            bwn: prog.ast.nodes.get i: bfb.stmt
+            if (values.isSimpleValueNode n: bwn) then {
+                bvx: emitExpr :prog :ctx n: bwn
                 flushArgHoists :ctx :ind :tmp :buf
                 lbf: "\{ind}\{ct} \{nm} = \{bvx};\n"
                 buf.append lbf
-                values.emitArmTakeZero :ast :reg :typing :ctx n: bwn rv: bvx.stringView :ind :buf
+                values.emitArmTakeZero :prog :ctx n: bwn rv: bvx.stringView :ind :buf
                 return true
             }
         }
         ld: "\{ind}\{ct} \{nm};\n"
         buf.append ld
-        emitIfAssign :ast :reg :typing :ctx :n target: nm :ind :tmp :buf
+        emitIfAssign :prog :ctx :n target: nm :ind :tmp :buf
         return true
     } else {
         return false
@@ -3976,9 +3739,7 @@ emitIfBindValue: function {
 # that leaves (`return`, `break`, `continue`) runs as the statement it is and
 # assigns nothing.
 emitIfAssign: function {
-    ast: Ast.view
-    reg: ztypes.ZTypeRegistry.view
-    typing: ztyping.ZTyping.view
+    prog: Program.view
     ctx: Ctx
     n: zast.ifrow.view
     target: StringView
@@ -3986,22 +3747,20 @@ emitIfAssign: function {
     tmp: FnTemps
     buf: String.borrow
 } is {
-    bfb: foldedBranchOf :typing nid: n.nodeid
+    bfb: foldedBranchOf :prog nid: n.nodeid
     if bfb.known when bfb.stmt.notZero then {
         lbo: "\{ind}{\n"
         buf.append lbo
         indB: "\{ind}    "
         (
             emitBranchAssign
-            :ast
-            :reg
-            :typing
+            :prog
             :ctx
-            n: (ast.nodes.get i: bfb.stmt)
+            n: (prog.ast.nodes.get i: bfb.stmt)
             :target
             scope: (
                 branchScopeOf
-                :ast
+                :prog
                 clauses: n.clauses
                 elseclause: n.elseclause
                 stmt: bfb.stmt
@@ -4018,18 +3777,16 @@ emitIfAssign: function {
     ctx.condDepth = ctx.condDepth + 1
     first: true
     opened: u64
-    for each cId: (zast.kidsOf :ast span: n.clauses) loop {
+    for each cId: (zast.kidsOf ast: prog.ast span: n.clauses) loop {
         isFirst: first
         first = false
         opened = (
             opened +
             (
                 emitIfClause
-                :ast
-                :reg
-                :typing
+                :prog
                 :ctx
-                n: (ast.nodes.get i: cId)
+                n: (prog.ast.nodes.get i: cId)
                 :isFirst
                 assignTo: target
                 :ind
@@ -4047,9 +3804,7 @@ emitIfAssign: function {
     chRF: ListVal exprfacts
     (
         chainFactsOfClauses
-        :ast
-        :reg
-        :typing
+        :prog
         :ctx
         clauses: n.clauses
         subjects: chS
@@ -4062,9 +3817,7 @@ emitIfAssign: function {
     )
     (
         emitElse
-        :ast
-        :reg
-        :typing
+        :prog
         :ctx
         oId: n.elseclause
         assignTo: target
@@ -4092,9 +3845,7 @@ emitIfAssign: function {
 # iterator becomes: the yield type, the receiver, its destroy registration, the
 # per-iteration payload bind, the body, and the loop labels.
 emitObjIterLoop: function {
-    ast: Ast.view
-    reg: ztypes.ZTypeRegistry.view
-    typing: ztyping.ZTyping.view
+    prog: Program.view
     ctx: Ctx
     m: zast.forrow.view
     cNid: zast.nodeid
@@ -4108,19 +3859,17 @@ emitObjIterLoop: function {
     tmp: FnTemps
     buf: String.borrow
 } out bool is {
-    ovid: nativerows.objIterYieldTid :reg :typing :cco
+    ovid: nativerows.objIterYieldTid :prog :cco
     # neither the registered return nor the .call stamp names a yield
     # type: there is no iterator to emit against.
     if ovid.isZero then return false
-    callC: emitplan.objIterCallC :reg :ctx :cco :itid
+    callC: emitplan.objIterCallC :prog :ctx :cco :itid
     ovc: spelledCname :ctx tid: ovid
     mN: values.tmpNext :ctx :tmp
     itCb: spelledCname :ctx tid: itid
     iterRecv: (
         types.emitObjIterRecv
-        :ast
-        :reg
-        :typing
+        :prog
         :ctx
         :cNid
         :cOp
@@ -4139,9 +3888,7 @@ emitObjIterLoop: function {
     buf.append l1
     (
         emitOptionLoopTail
-        :ast
-        :reg
-        :typing
+        :prog
         :ctx
         :m
         :cNid
@@ -4164,9 +3911,7 @@ emitObjIterLoop: function {
 # loop's close. The caller has opened `while (1) {`, written the `_iterN` line
 # and pushed the loop label.
 emitOptionLoopTail: function {
-    ast: Ast.view
-    reg: ztypes.ZTypeRegistry.view
-    typing: ztyping.ZTyping.view
+    prog: Program.view
     ctx: Ctx
     m: zast.forrow.view
     cNid: zast.nodeid
@@ -4181,11 +3926,11 @@ emitOptionLoopTail: function {
     tmp: FnTemps
     buf: String.borrow
 } is {
-    ovNone: spelledTagConst :ast :ctx :reg :typing tid: ovid armId: zast.wellKnown.slot.wkNone
-    payC: values.armPayloadC :ast :reg :typing :ctx tid: ovid arm: zast.wellKnown.slot.wkSome
-    if (originIsTid :reg tid: ovid originTid: (ctx.origins.get i: family.slot.option)) then {
+    ovNone: spelledTagConst :prog :ctx tid: ovid armId: zast.wellKnown.slot.wkNone
+    payC: values.armPayloadC :prog :ctx tid: ovid arm: zast.wellKnown.slot.wkSome
+    if (originIsTid :prog tid: ovid originTid: (ctx.origins.get i: family.slot.option)) then {
         # owned heap-payload union: destroy the box on the NONE arm too.
-        types.noteDestroyUse :reg :typing :ctx tid: ovid
+        types.noteDestroyUse :prog :ctx tid: ovid
         l2o: "\{ind}    if (_iter\{mN}.tag == \{ovNone}) { \{ovc}_destroy(&_iter\{mN}); break; }\n"
         buf.append l2o
     } else {
@@ -4194,9 +3939,7 @@ emitOptionLoopTail: function {
     }
     pk: (
         types.emitObjIterPayload
-        :ast
-        :reg
-        :typing
+        :prog
         :ctx
         :ovid
         payC: payC.stringView
@@ -4207,14 +3950,12 @@ emitOptionLoopTail: function {
         :buf
     )
     payTid: (
-        (typing.declChildOfId parentTypeId: ovid nameId: zast.wellKnown.slot.wkSome).or
+        (prog.typing.declChildOfId parentTypeId: ovid nameId: zast.wellKnown.slot.wkSome).or
         d: ztypes.tid.zero
     )
     pushedO: (
         forloops.pushPayloadSpill
-        :ast
-        :reg
-        :typing
+        :prog
         :ctx
         :cNid
         :pk
@@ -4228,13 +3969,11 @@ emitOptionLoopTail: function {
     # the arms are tested AFTER the payload binds, so one may read the loop
     # variable; the iterator has already advanced, which is the order the
     # conditions are written in
-    armO: forloops.forArmCond :ast :reg :typing :ctx n: m
+    armO: forloops.forArmCond :prog :ctx n: m
     flushArgHoists :ctx ind: bodyInd.stringView :tmp :buf
     (
         forloops.emitForArmBreak
-        :ast
-        :reg
-        :typing
+        :prog
         :ctx
         node: m.nodeid
         armc: armO.stringView
@@ -4243,16 +3982,14 @@ emitOptionLoopTail: function {
     )
     dvG: false
     if m.body.notZero then {
-        mb: ast.nodes.get i: m.body
-        emitBodyNode :ast :reg :typing :ctx n: mb ind: bodyInd.stringView :tmp :buf
-        dvG = blockDiverges :ast :reg :typing :ctx n: mb
+        mb: prog.ast.nodes.get i: m.body
+        emitBodyNode :prog :ctx n: mb ind: bodyInd.stringView :tmp :buf
+        dvG = blockDiverges :prog :ctx n: mb
     }
-    closeScopeBlock :ast :reg :typing :ctx :tmp lL: lLO diverged: dvG node: m.body :buf
+    closeScopeBlock :prog :ctx :tmp lL: lLO diverged: dvG node: m.body :buf
     (
         emitIterationEnd
-        :ast
-        :reg
-        :typing
+        :prog
         :ctx
         :m
         id: lidO
@@ -4275,9 +4012,7 @@ emitOptionLoopTail: function {
 # value is in hand; the rest is the loop an iterator's `call` drives. False
 # when the header has no plain binding.
 emitPlainBindingFor: function {
-    ast: Ast.view
-    reg: ztypes.ZTypeRegistry.view
-    typing: ztyping.ZTyping.view
+    prog: Program.view
     ctx: Ctx
     m: zast.forrow.view
     ind: StringView
@@ -4286,15 +4021,15 @@ emitPlainBindingFor: function {
 } out bool is {
     if m.isEach then return false
     if m.conditions.count.u64 == 0 then return false
-    c0Id: zast.kidAt kids: ast.kids span: m.conditions i: 0
-    c0: ast.nodes.get i: c0Id
+    c0Id: zast.kidAt kids: prog.ast.kids span: m.conditions i: 0
+    c0: prog.ast.nodes.get i: c0Id
     if c0.namedoperation.not then return false
-    lblR: zast.nameTextAt :ast ref: c0.name
+    lblR: zast.nameTextAt ast: prog.ast ref: c0.name
     if lblR.length == 0 then return false
-    opN: ast.nodes.get i: c0.operation
-    lblV: localnames.defVid :typing nid: (interpPartNodeId n: opN)
-    lbl: localnames.varCName :ctx :ast :reg vid: lblV
-    ovid: forloops.stampTidDeep :reg :typing n: opN
+    opN: prog.ast.nodes.get i: c0.operation
+    lblV: localnames.defVid :prog nid: (interpPartNodeId n: opN)
+    lbl: localnames.varCName :ctx :prog vid: lblV
+    ovid: forloops.stampTidDeep :prog n: opN
     if ovid.isZero then return false
     ovc: spelledCname :ctx tid: ovid
     mN: values.tmpNext :ctx :tmp
@@ -4302,16 +4037,14 @@ emitPlainBindingFor: function {
     buf.append "\{ind}while (1) {\n"
     bodyInd: "\{ind}    "
     lL: tmp.listFrees.length
-    ev: emitExpr :ast :reg :typing :ctx n: opN
+    ev: emitExpr :prog :ctx n: opN
     flushArgHoists :ctx ind: bodyInd.stringView :tmp :buf
     buf.append "\{bodyInd}\{ovc}_t _iter\{mN} = \{ev};\n"
     flushBlockFrees :tmp :lL diverged: false :buf
-    emitValueTakeInvalidations :ast :reg :typing :ctx n: opN ind: bodyInd.stringView :buf
+    emitValueTakeInvalidations :prog :ctx n: opN ind: bodyInd.stringView :buf
     (
         emitOptionLoopTail
-        :ast
-        :reg
-        :typing
+        :prog
         :ctx
         :m
         cNid: c0Id
@@ -4332,27 +4065,23 @@ emitPlainBindingFor: function {
 # condition. A NAMED arm is not one: it binds what the loop walks, and the
 # range and iterator emitters drive it. Every caller skips it.
 emitForCond: function {
-    ast: Ast.view
-    reg: ztypes.ZTypeRegistry.view
-    typing: ztyping.ZTyping.view
+    prog: Program.view
     ctx: Ctx
     n: astnode.view
     cond: String.borrow
 } is {
     if n.namedoperation then {
-        if (zast.nameTextAt :ast ref: n.name).length > 0 then return
-        if (condFoldsTrue :typing nid: n.nodeid) then return
+        if (zast.nameTextAt ast: prog.ast ref: n.name).length > 0 then return
+        if (condFoldsTrue :prog nid: n.nodeid) then return
         # a loop's test runs at every iteration, so it is evaluated in place
         mk7: openInPlace :ctx guarded: true
         cvF: exprfacts
-        cv: argforms.valueExprC :ast :reg :typing :ctx n: (ast.nodes.get i: n.operation) facts: cvF
+        cv: argforms.valueExprC :prog :ctx n: (prog.ast.nodes.get i: n.operation) facts: cvF
         tw7: (
             truthyCondText
-            :ast
-            :reg
-            :typing
+            :prog
             :ctx
-            n: (ast.nodes.get i: n.operation)
+            n: (prog.ast.nodes.get i: n.operation)
             raw: cv.stringView
         )
         if tw7.length > 0 then cv = tw7.take
@@ -4365,9 +4094,7 @@ emitForCond: function {
 # `tid`: the inline union member for variants, the heap cast for unions.
 # "" when the arm carries no payload.
 armAliasText: function {
-    ast: Ast.view
-    reg: ztypes.ZTypeRegistry.view
-    typing: ztyping.ZTyping.view
+    prog: Program.view
     ctx: Ctx
     tid: ztypes.tid
     arm: zast.nameid
@@ -4379,11 +4106,11 @@ armAliasText: function {
     # the payload type is recorded where the alias is read: an arm that never
     # reads it spells no cast
     held: ListVal ztypes.tid
-    pc: heldArmPayloadC :ast :reg :typing :ctx :tid :arm :held
+    pc: heldArmPayloadC :prog :ctx :tid :arm :held
     if pc.length == 0 then return "".string
-    if (reg.typetypeOf typeId: tid) == ztypes.ztypetype.unionType then {
-        inl: types.armIsInlineC :typing :tid :arm
-        rsl: armSlotC :ast :reg :typing :ctx :tid :recv :acc :arm inline: inl
+    if (prog.reg.typetypeOf typeId: tid) == ztypes.ztypetype.unionType then {
+        inl: types.armIsInlineC :prog :tid :arm
+        rsl: armSlotC :prog :ctx :tid :recv :acc :arm inline: inl
         ut: (
             stating
             :facts
@@ -4393,7 +4120,7 @@ armAliasText: function {
         holdForAlias :ctx val: ut.stringView :held
         return ut
     }
-    armC: memberC :ast :reg :typing :ctx owner: tid kind: memberkind.arm nameId: arm
+    armC: memberC :prog :ctx owner: tid kind: memberkind.arm nameId: arm
     vt: stating :facts from: (memberreads.memberFacts b: recvF) text: "\{recv}\{acc}data.\{armC}"
     holdForAlias :ctx val: vt.stringView :held
     return vt
@@ -4402,11 +4129,7 @@ armAliasText: function {
 # armSlotC -- the slot arm `arm` of union `tid` keeps its payload in, reached
 # from `recv` with `acc`: the union's `data`, or the inline arm's member.
 armSlotC: function {
-    # the arm names
-    ast: Ast.view
-    # the checked program
-    reg: ztypes.ZTypeRegistry.view
-    typing: ztyping.ZTyping.view
+    prog: Program.view
     # the emission context the inline member is spelled through
     ctx: Ctx
     # the union
@@ -4421,7 +4144,7 @@ armSlotC: function {
     inline: bool
 } out String is {
     if inline then {
-        im: memberC :ast :reg :typing :ctx owner: tid kind: memberkind.inlineArm nameId: arm
+        im: memberC :prog :ctx owner: tid kind: memberkind.inlineArm nameId: arm
         return "\{recv}\{acc}\{im}"
     }
     return "\{recv}\{acc}data"
@@ -4445,23 +4168,21 @@ armCellRef: function {pc: StringView slot: StringView inline: false} out String 
 # The arm comes off the stamp rather than a lookup here: a generic mono keeps
 # its arm record on the template it was minted from.
 truthyCondText: function {
-    ast: Ast.view
-    reg: ztypes.ZTypeRegistry.view
-    typing: ztyping.ZTyping.view
+    prog: Program.view
     ctx: Ctx
     n: astnode.view
     raw: StringView
 } out String is {
-    fa: (typing.truthyCondArm.get key: (interpPartNodeId :n)).or d: zast.nameid
+    fa: (prog.typing.truthyCondArm.get key: (interpPartNodeId :n)).or d: zast.nameid
     if fa.isZero then return "".string
-    tid: stampIdOf :typing nid: (interpPartNodeId :n)
+    tid: stampIdOf :prog nid: (interpPartNodeId :n)
     if tid.isZero then return "".string
-    if (isOrdinalPair :typing :tid) then return "".string
-    tg: spelledTagConst :ast :ctx :reg :typing :tid armId: fa
+    if (isOrdinalPair :prog :tid) then return "".string
+    tg: spelledTagConst :prog :ctx :tid armId: fa
     if tg.length == 0 then return "".string
     accessOp: ".".string
     rn: atomNodeId :n
-    if rn.notZero when (isPtrVid :ctx vid: (atomVid :typing nid: rn)) then accessOp = "->".string
+    if rn.notZero when (isPtrVid :ctx vid: (atomVid :prog nid: rn)) then accessOp = "->".string
     return "((\{raw})\{accessOp}tag == \{tg})"
 }
 
@@ -4488,9 +4209,7 @@ restoreCondExclusions: function {ctx: Ctx mark: u64} is {
 # if chain (subject/arm/tid/negated parallel lists), by the checker's
 # accumulation rule exactly.
 chainFactsOfClauses: function {
-    ast: Ast.view
-    reg: ztypes.ZTypeRegistry.view
-    typing: ztyping.ZTyping.view
+    prog: Program.view
     ctx: Ctx
     clauses: zast.kidspan
     subjects: List String
@@ -4501,19 +4220,17 @@ chainFactsOfClauses: function {
     recvs: List String
     recvFs: ListVal exprfacts
 } is {
-    for each clauseId: (zast.kidsOf :ast span: clauses) loop {
-        c: ast.nodes.get i: clauseId
+    for each clauseId: (zast.kidsOf ast: prog.ast span: clauses) loop {
+        c: prog.ast.nodes.get i: clauseId
         # a clause of ONE condition: the fact it records, if any, is the
         # clause's
         if c.ifclause when c.conditions.count.u64 == 1 then {
-            k: ast.nodes.get i: (zast.kidAt kids: ast.kids span: c.conditions i: 0)
+            k: prog.ast.nodes.get i: (zast.kidAt kids: prog.ast.kids span: c.conditions i: 0)
             if k.namedoperation then (
                 narrowfacts.chainCondFact
-                :ast
-                :reg
-                :typing
+                :prog
                 :ctx
-                n: (ast.nodes.get i: k.operation)
+                n: (prog.ast.nodes.get i: k.operation)
                 :subjects
                 :svids
                 :arms
@@ -4567,11 +4284,7 @@ condInParens: function {cond: StringView} out String is {
 # `if` or `while` condition arrives as a labelled operation; a do-while
 # postcondition is the bare expression.
 appendCondText: function {
-    # the tree this one condition is read from
-    ast: Ast.view
-    # the stamps this condition's truthiness is judged against
-    reg: ztypes.ZTypeRegistry.view
-    typing: ztyping.ZTyping.view
+    prog: Program.view
     # the emit context the condition text is built in
     ctx: Ctx
     # the condition's node id
@@ -4579,7 +4292,7 @@ appendCondText: function {
     # the chain so far; a `&&` is inserted when it is not empty
     cond: String.borrow
 } is {
-    k: ast.nodes.get i: kId
+    k: prog.ast.nodes.get i: kId
     opId: kId
     if k.namedoperation then opId = k.operation
     # a conjunct past the first runs only when the ones before it held
@@ -4587,8 +4300,8 @@ appendCondText: function {
     mk: openInPlace :ctx :guarded
     {
         cvF: exprfacts
-        cv: argforms.valueExprC :ast :reg :typing :ctx n: (ast.nodes.get i: opId) facts: cvF
-        tw: truthyCondText :ast :reg :typing :ctx n: (ast.nodes.get i: opId) raw: cv.stringView
+        cv: argforms.valueExprC :prog :ctx n: (prog.ast.nodes.get i: opId) facts: cvF
+        tw: truthyCondText :prog :ctx n: (prog.ast.nodes.get i: opId) raw: cv.stringView
         if tw.length > 0 then cv = tw.take
         if guarded then {
             cond.append " && "
@@ -4606,13 +4319,13 @@ appendCondText: function {
 # ordinary statement-level hoist already reaches it. Every condition after it
 # is guarded by the ones before -- `when` short-circuits -- so its suspension
 # cannot be lifted above the `if` without running on a path never taken.
-whenCondSuspends: function {ast: Ast.view ctx: Ctx.view n: zast.ifclauserow} out bool is {
+whenCondSuspends: function {prog: Program.view ctx: Ctx.view n: zast.ifclauserow} out bool is {
     if ctx.genActive.not then return false
     wi: 1.u64
     for wi < n.conditions.count loop {
-        cwi: zast.kidAt kids: ast.kids span: n.conditions i: wi
+        cwi: zast.kidAt kids: prog.ast.kids span: n.conditions i: wi
         wi = wi + 1
-        if (zast.yieldCountIn :ast nid: cwi) > 0 then return true
+        if (zast.yieldCountIn ast: prog.ast nid: cwi) > 0 then return true
     }
     return false
 }
@@ -4623,20 +4336,16 @@ whenCondSuspends: function {ast: Ast.view ctx: Ctx.view n: zast.ifclauserow} out
 # answer is the invalidation walker's own: whatever it would write for these
 # nodes, written into a probe instead of the body.
 condMovesLocal: function {
-    # the tree the conditions are read from
-    ast: Ast.view
-    # the stamps the walker decides "moved" from
-    reg: ztypes.ZTypeRegistry.view
-    typing: ztyping.ZTyping.view
+    prog: Program.view
     # the emit context the walker names sources through
     ctx: Ctx
     # the clause's condition nodes
     conds: zast.kidspan
 } out bool is {
     probe: String
-    for each cId: (zast.kidsOf :ast span: conds) loop {
-        condNode: ast.nodes.get i: cId
-        emitValueTakeInvalidations :ast :reg :typing :ctx n: condNode ind: "" buf: probe
+    for each cId: (zast.kidsOf ast: prog.ast span: conds) loop {
+        condNode: prog.ast.nodes.get i: cId
+        emitValueTakeInvalidations :prog :ctx n: condNode ind: "" buf: probe
     }
     return probe.length > 0
 }
@@ -4646,9 +4355,7 @@ condMovesLocal: function {
 # as statements. Each of those has to land on a statement, so they are written
 # as statements first and the header tests the guard they leave.
 condsNeedSteps: function {
-    ast: Ast.view
-    reg: ztypes.ZTypeRegistry.view
-    typing: ztyping.ZTyping.view
+    prog: Program.view
     ctx: Ctx
     # a condition holds a suspension, as the clause's or loop's own query says
     suspends: bool
@@ -4656,8 +4363,8 @@ condsNeedSteps: function {
     conds: zast.kidspan
 } out bool is {
     if suspends then return true
-    if (values.condHoldsControlValue :ast :ctx :conds) then return true
-    return (condMovesLocal :ast :reg :typing :ctx :conds)
+    if (values.condHoldsControlValue :prog :ctx :conds) then return true
+    return (condMovesLocal :prog :ctx :conds)
 }
 
 # emitSteppedConjunct -- one condition of a stepped clause: its text computed
@@ -4666,9 +4373,7 @@ condsNeedSteps: function {
 # declared just before the line and freed just after it -- the callee borrowed
 # it for the call alone.
 emitSteppedConjunct: function {
-    ast: Ast.view
-    reg: ztypes.ZTypeRegistry.view
-    typing: ztyping.ZTyping.view
+    prog: Program.view
     ctx: Ctx
     # the condition node, a labelled operation
     kId: zast.nodeid
@@ -4682,15 +4387,15 @@ emitSteppedConjunct: function {
     buf: String.borrow
 } is {
     ct: String
-    appendCondText :ast :reg :typing :ctx :kId cond: ct
+    appendCondText :prog :ctx :kId cond: ct
     if ct.length == 0 then ct.append "1"
     lL: tmp.listFrees.length
     flushArgHoists :ctx :ind :tmp :buf
     cw: condInParens cond: ct.stringView
     buf.append "\{ind}\{gvar} = \{cw} ? 1 : 0;\n"
     flushBlockFrees :tmp :lL diverged: false :buf
-    condNode: ast.nodes.get i: kId
-    emitValueTakeInvalidations :ast :reg :typing :ctx n: condNode :ind :buf
+    condNode: prog.ast.nodes.get i: kId
+    emitValueTakeInvalidations :prog :ctx n: condNode :ind :buf
 }
 
 # closeSteppedNesting -- the closing braces of a stepped clause's conditions,
@@ -4737,9 +4442,7 @@ newCondGuard: function {
 # hoistCondYields -- a condition's suspensions, lifted to statements at the
 # level the condition is computed at. Nothing outside a generator.
 hoistCondYields: function {
-    ast: Ast.view
-    reg: ztypes.ZTypeRegistry.view
-    typing: ztyping.ZTyping.view
+    prog: Program.view
     ctx: Ctx
     # the condition node
     kId: zast.nodeid
@@ -4749,7 +4452,7 @@ hoistCondYields: function {
     buf: String.borrow
 } is {
     if ctx.genActive.not then return
-    forloops.hoistExprYields :ast :reg :typing :ctx nid: kId :ind :buf
+    forloops.hoistExprYields :prog :ctx nid: kId :ind :buf
 }
 
 # emitSteppedCond -- conditions as statements computing into a declared guard.
@@ -4772,11 +4475,7 @@ hoistCondYields: function {
 # conditions are initialisers the loop head declared before it, and are
 # skipped.
 emitSteppedCond: function {
-    # the tree the conditions are read from
-    ast: Ast.view
-    # read for the resume type of each suspension
-    reg: ztypes.ZTypeRegistry.view
-    typing: ztyping.ZTyping.view
+    prog: Program.view
     # carries the resume slots
     ctx: Ctx
     # the condition nodes
@@ -4795,20 +4494,20 @@ emitSteppedCond: function {
     indK: ind.string
     opened: u64
     seen: u64
-    for each cId: (zast.kidsOf :ast span: conds) loop {
-        if inLoop when (forloops.forCondIsNamed :ast kId: cId) then continue
-        if inLoop when (condFoldsTrue :typing nid: cId) then continue
+    for each cId: (zast.kidsOf ast: prog.ast span: conds) loop {
+        if inLoop when (forloops.forCondIsNamed :prog kId: cId) then continue
+        if inLoop when (condFoldsTrue :prog nid: cId) then continue
         if seen > 0 then {
             buf.append "\{indK}if (\{gvar}) {\n"
             indK.append "    "
             opened = opened + 1
         }
         if inLoop then {
-            hoistCondYields :ast :reg :typing :ctx kId: cId ind: indK.stringView :buf
+            hoistCondYields :prog :ctx kId: cId ind: indK.stringView :buf
         } else if seen > 0 then {
-            hoistCondYields :ast :reg :typing :ctx kId: cId ind: indK.stringView :buf
+            hoistCondYields :prog :ctx kId: cId ind: indK.stringView :buf
         }
-        emitSteppedConjunct :ast :reg :typing :ctx kId: cId :gvar ind: indK.stringView :tmp :buf
+        emitSteppedConjunct :prog :ctx kId: cId :gvar ind: indK.stringView :tmp :buf
         seen = seen + 1
     }
     closeSteppedNesting depth: opened :ind :buf
@@ -4820,9 +4519,7 @@ emitSteppedCond: function {
 # writes them one level in, and answers 1: the block its caller closes after
 # the chain, whose body it indents one level further.
 openSteppedHead: function {
-    ast: Ast.view
-    reg: ztypes.ZTypeRegistry.view
-    typing: ztyping.ZTyping.view
+    prog: Program.view
     ctx: Ctx
     n: zast.ifclauserow
     # a later clause nests inside `} else {`
@@ -4846,9 +4543,7 @@ openSteppedHead: function {
     gv: newCondGuard :ctx ind: indH :buf
     (
         emitSteppedCond
-        :ast
-        :reg
-        :typing
+        :prog
         :ctx
         conds: n.conditions
         gvar: gv.stringView
@@ -4926,9 +4621,7 @@ hoistsPending: function {ctx: Ctx.view} out bool is {
 # answer is the number of blocks the clause opened around itself (0 or 1),
 # which the caller closes after the whole chain.
 emitIfClause: function {
-    ast: Ast.view
-    reg: ztypes.ZTypeRegistry.view
-    typing: ztyping.ZTyping.view
+    prog: Program.view
     ctx: Ctx
     n: astnode.view
     isFirst: bool
@@ -4951,17 +4644,15 @@ emitIfClause: function {
         sPrevF: ListVal exprfacts
         sPrevT: ListVal ztypes.tid
         xMark: ctx.exSaves.length
-        suspends: whenCondSuspends :ast :ctx :n
-        guarded: condsNeedSteps :ast :reg :typing :ctx :suspends conds: n.conditions
+        suspends: whenCondSuspends :prog :ctx :n
+        guarded: condsNeedSteps :prog :ctx :suspends conds: n.conditions
         opened: u64
         cond: String
         if guarded then {
-            opened = openSteppedHead :ast :reg :typing :ctx :n :isFirst :ind :tmp :buf
+            opened = openSteppedHead :prog :ctx :n :isFirst :ind :tmp :buf
             (
                 narrowfacts.ifPredicateSeeds
-                :ast
-                :reg
-                :typing
+                :prog
                 :ctx
                 conds: n.conditions
                 names: sN
@@ -4983,14 +4674,12 @@ emitIfClause: function {
                 from: 0
             )
         } else {
-            for each kId: (zast.kidsOf :ast span: n.conditions) loop {
-                appendCondText :ast :reg :typing :ctx :kId :cond
+            for each kId: (zast.kidsOf ast: prog.ast span: n.conditions) loop {
+                appendCondText :prog :ctx :kId :cond
                 # the checker's twin of this ordering is checkClauseConditions
                 (
                     narrowfacts.seedAndLayerCond
-                    :ast
-                    :reg
-                    :typing
+                    :prog
                     :ctx
                     condId: kId
                     names: sN
@@ -5016,13 +4705,11 @@ emitIfClause: function {
             buf.append cmtS
             si = si + 1
         }
-        cst: ast.nodes.get i: n.statement
+        cst: prog.ast.nodes.get i: n.statement
         if assignTo.length > 0 then {
             (
                 emitBranchAssign
-                :ast
-                :reg
-                :typing
+                :prog
                 :ctx
                 n: cst
                 target: assignTo
@@ -5033,9 +4720,9 @@ emitIfClause: function {
             )
         } else {
             lLi: tmp.listFrees.length
-            emitBodyNode :ast :reg :typing :ctx n: cst ind: bodyInd.stringView :tmp :buf
-            dvF: blockDiverges :ast :reg :typing :ctx n: cst
-            closeScopeBlock :ast :reg :typing :ctx :tmp lL: lLi diverged: dvF node: n.nodeid :buf
+            emitBodyNode :prog :ctx n: cst ind: bodyInd.stringView :tmp :buf
+            dvF: blockDiverges :prog :ctx n: cst
+            closeScopeBlock :prog :ctx :tmp lL: lLi diverged: dvF node: n.nodeid :buf
         }
         restoreNarrowSeeds :ctx svids: sVid prevV: sPrevV prevF: sPrevF prevT: sPrevT
         restoreCondExclusions :ctx mark: xMark
@@ -5068,9 +4755,7 @@ negatedChainArm: function {
 # seedElseNarrows -- narrow every distinct chain subject for the else body. A
 # subject that several clauses tested is seeded once, from its first fact.
 seedElseNarrows: function {
-    ast: Ast.view
-    reg: ztypes.ZTypeRegistry.view
-    typing: ztyping.ZTyping.view
+    prog: Program.view
     ctx: Ctx
     subjects: (List String).view
     chVids: (ListVal ztypes.vid).view
@@ -5097,9 +4782,7 @@ seedElseNarrows: function {
             na: negatedChainArm svids: chVids :arms :negs subj: gv
             (
                 narrowfacts.seedElseSubject
-                :ast
-                :reg
-                :typing
+                :prog
                 :ctx
                 subj: gs.stringView
                 subjVid: gv
@@ -5121,9 +4804,7 @@ seedElseNarrows: function {
 
 # emit an if/match else branch.
 emitElse: function {
-    ast: Ast.view
-    reg: ztypes.ZTypeRegistry.view
-    typing: ztyping.ZTyping.view
+    prog: Program.view
     ctx: Ctx
     oId: zast.nodeid
     assignTo: StringView
@@ -5139,7 +4820,7 @@ emitElse: function {
     buf: String.borrow
 } is {
     if oId.isZero then return
-    o: ast.nodes.get i: oId
+    o: prog.ast.nodes.get i: oId
     lh: "\{ind}} else {\n"
     buf.append lh
     bodyInd: "\{ind}    "
@@ -5158,9 +4839,7 @@ emitElse: function {
     sPrevT: ListVal ztypes.tid
     (
         seedElseNarrows
-        :ast
-        :reg
-        :typing
+        :prog
         :ctx
         subjects: chSubjects
         chVids: chSubjectVids
@@ -5179,9 +4858,7 @@ emitElse: function {
     if assignTo.length > 0 then {
         (
             emitBranchAssign
-            :ast
-            :reg
-            :typing
+            :prog
             :ctx
             n: o
             target: assignTo
@@ -5192,9 +4869,9 @@ emitElse: function {
         )
     } else {
         lLe: tmp.listFrees.length
-        emitBodyNode :ast :reg :typing :ctx n: o ind: bodyInd.stringView :tmp :buf
-        dvF: blockDiverges :ast :reg :typing :ctx n: o
-        closeScopeBlock :ast :reg :typing :ctx :tmp lL: lLe diverged: dvF node: oId :buf
+        emitBodyNode :prog :ctx n: o ind: bodyInd.stringView :tmp :buf
+        dvF: blockDiverges :prog :ctx n: o
+        closeScopeBlock :prog :ctx :tmp lL: lLe diverged: dvF node: oId :buf
     }
     restoreNarrowSeeds :ctx svids: sVid prevV: sPrevV prevF: sPrevF prevT: sPrevT
     restoreCondExclusions :ctx mark: xMark
@@ -5205,14 +4882,12 @@ emitElse: function {
 # pointer (a borrowed parameter, a borrowed field, another reference call), its
 # address otherwise.
 refReturnText: function {
-    ast: Ast.view
-    reg: ztypes.ZTypeRegistry.view
-    typing: ztyping.ZTyping.view
+    prog: Program.view
     ctx: Ctx
     vid: zast.nodeid
     rv: StringView
 } out String is {
-    if (pathIsPointer :ast :reg :typing :ctx n: (ast.nodes.get i: vid)) then return rv.string
+    if (pathIsPointer :prog :ctx n: (prog.ast.nodes.get i: vid)) then return rv.string
     return "&\{rv}"
 }
 
@@ -5221,9 +4896,7 @@ refReturnText: function {
 # not a copy of the struct (without the `&` the caller writes through a
 # temporary); a pointer-held valtype is loaded.
 emitDirectReturn: function {
-    ast: Ast.view
-    reg: ztypes.ZTypeRegistry.view
-    typing: ztyping.ZTyping.view
+    prog: Program.view
     ctx: Ctx
     vid: zast.nodeid
     rv: StringView
@@ -5233,15 +4906,13 @@ emitDirectReturn: function {
 } is {
     buf.append cleanup
     rvOut: "\{rv}"
-    if ctx.refBorrowRet then rvOut = refReturnText :ast :reg :typing :ctx :vid :rv
+    if ctx.refBorrowRet then rvOut = refReturnText :prog :ctx :vid :rv
     if ctx.refBorrowRet.not when (
         needsValueDeref
-        :ast
-        :reg
-        :typing
+        :prog
         :ctx
-        n: (ast.nodes.get i: vid)
-        tid: (stampIdOf :typing nid: vid)
+        n: (prog.ast.nodes.get i: vid)
+        tid: (stampIdOf :prog nid: vid)
     ) then rvOut = "(*\{rv})"
     buf.append "\{ind}return \{rvOut};\n"
 }
@@ -5254,9 +4925,7 @@ emitDirectReturn: function {
 # temps and are returned as they stand: the checker's exit list does not hold
 # what the return hands over.
 emitPlainReturn: function {
-    ast: Ast.view
-    reg: ztypes.ZTypeRegistry.view
-    typing: ztyping.ZTyping.view
+    prog: Program.view
     ctx: Ctx
     vid: zast.nodeid
     ind: StringView
@@ -5266,33 +4935,29 @@ emitPlainReturn: function {
     rvF: exprfacts
     rv: (
         argforms.standInText
-        :ast
-        :reg
-        :typing
+        :prog
         :ctx
-        n: (ast.nodes.get i: vid)
-        text: (emitExprWith :ast :reg :typing :ctx n: (ast.nodes.get i: vid) facts: rvF)
+        n: (prog.ast.nodes.get i: vid)
+        text: (emitExprWith :prog :ctx n: (prog.ast.nodes.get i: vid) facts: rvF)
         facts: rvF
     )
     flushArgHoists :ctx :ind :tmp :buf
     cleanup: String
-    emitReturnCleanup :ast :reg :typing :ctx :tmp :ind buf: cleanup
-    rtid: stampIdOf :typing nid: (interpPartNodeId n: (ast.nodes.get i: vid))
+    emitReturnCleanup :prog :ctx :tmp :ind buf: cleanup
+    rtid: stampIdOf :prog nid: (interpPartNodeId n: (prog.ast.nodes.get i: vid))
     # an implementer returned as the spec is its box, of the spec's type
-    so: typing.standInOf.get key: vid
+    so: prog.typing.standInOf.get key: vid
     if so.some then {
         rtid = so.spec
     }
-    retCt: typeRefC :ast :reg :typing :ctx tid: rtid
-    isPtr: (
-        (ctEndsWithStar ct: retCt.stringView) or (isHeapPtrCollection :reg :typing :ctx tid: rtid)
-    )
+    retCt: typeRefC :prog :ctx tid: rtid
+    isPtr: (ctEndsWithStar ct: retCt.stringView) or (isHeapPtrCollection :prog :ctx tid: rtid)
     trivial: emitplan.isBareCName s: rv.stringView
     # the sources the value moves out of -- a taken argument, a narrowed
     # payload's box -- zeroed once the value is in its temp
     moved: String
-    emitValueTakeInvalidations :ast :reg :typing :ctx n: (ast.nodes.get i: vid) :ind buf: moved
-    values.emitNarrowedTakeZero :ast :reg :typing :ctx n: (ast.nodes.get i: vid) :ind buf: moved
+    emitValueTakeInvalidations :prog :ctx n: (prog.ast.nodes.get i: vid) :ind buf: moved
+    values.emitNarrowedTakeZero :prog :ctx n: (prog.ast.nodes.get i: vid) :ind buf: moved
     hoist: (
         trivial.not and
         isPtr.not and
@@ -5304,9 +4969,8 @@ emitPlainReturn: function {
     # their values: the pointer is bound first, the source zeroed, and every
     # owned local is freed after -- the source's owner, and the local on a path
     # whose arm did not take it, included
-    if retCt.length > 0 when (isHeapPtrCollection :reg :typing :ctx tid: rtid) when (
-        (moved.length > 0) or
-        (types.controlValueOwnsArms :ast :reg :typing :ctx n: (ast.nodes.get i: vid))
+    if retCt.length > 0 when (isHeapPtrCollection :prog :ctx tid: rtid) when (
+        (moved.length > 0) or (types.controlValueOwnsArms :prog :ctx n: (prog.ast.nodes.get i: vid))
     ) then {
         hpc: "\{retCt}*"
         (
@@ -5324,7 +4988,7 @@ emitPlainReturn: function {
     }
     if hoist when ctx.refBorrowRet then {
         # a reference return holds the ADDRESS across the frees, not a copy
-        rr: refReturnText :ast :reg :typing :ctx :vid rv: rv.stringView
+        rr: refReturnText :prog :ctx :vid rv: rv.stringView
         preludeNeed :ctx memb: "@typeof"
         rrCt: "Z_TYPEOF(\{rr})"
         (
@@ -5353,9 +5017,7 @@ emitPlainReturn: function {
     } else {
         (
             emitDirectReturn
-            :ast
-            :reg
-            :typing
+            :prog
             :ctx
             :vid
             rv: rv.stringView
@@ -5371,9 +5033,7 @@ emitPlainReturn: function {
 # temp-materialization + cleanup ordering. Shared by the `return` call arm
 # and tail-position value yields.
 emitReturnOfNode: function {
-    ast: Ast.view
-    reg: ztypes.ZTypeRegistry.view
-    typing: ztyping.ZTyping.view
+    prog: Program.view
     ctx: Ctx
     vid: zast.nodeid
     ind: StringView
@@ -5382,26 +5042,26 @@ emitReturnOfNode: function {
 } is {
     # a value typed `null` -- `null` itself, a call answering nothing -- is
     # handed back by a function answering nothing: run, then a bare return
-    if (stampIsNullType :reg :typing nid: (interpPartNodeId n: (ast.nodes.get i: vid))) then {
-        if (isNullValueAtom :reg :typing n: (ast.nodes.get i: vid)).not then {
-            nre: emitExpr :ast :reg :typing :ctx n: (ast.nodes.get i: vid)
+    if (stampIsNullType :prog nid: (interpPartNodeId n: (prog.ast.nodes.get i: vid))) then {
+        if (isNullValueAtom :prog n: (prog.ast.nodes.get i: vid)).not then {
+            nre: emitExpr :prog :ctx n: (prog.ast.nodes.get i: vid)
             flushArgHoists :ctx :ind :tmp :buf
             buf.append "\{ind}(void)(\{nre});\n"
         }
-        emitReturnCleanup :ast :reg :typing :ctx :tmp :ind :buf
+        emitReturnCleanup :prog :ctx :tmp :ind :buf
         buf.append "\{ind}return;\n"
         return
     }
-    bx: values.emitOptionBoxHoist :ast :reg :typing :ctx n: (ast.nodes.get i: vid) :ind :tmp :buf
+    bx: values.emitOptionBoxHoist :prog :ctx n: (prog.ast.nodes.get i: vid) :ind :tmp :buf
     if bx.length > 0 then {
-        emitValueTakeInvalidations :ast :reg :typing :ctx n: (ast.nodes.get i: vid) :ind :buf
-        emitReturnCleanup :ast :reg :typing :ctx :tmp :ind :buf
+        emitValueTakeInvalidations :prog :ctx n: (prog.ast.nodes.get i: vid) :ind :buf
+        emitReturnCleanup :prog :ctx :tmp :ind :buf
         buf.append "\{ind}return \{bx};\n"
         return
     }
-    if (values.emitStringReturnValue :ast :reg :typing :ctx n: (ast.nodes.get i: vid) :ind :tmp :buf
+    if (values.emitStringReturnValue :prog :ctx n: (prog.ast.nodes.get i: vid) :ind :tmp :buf
     ) then return
-    emitPlainReturn :ast :reg :typing :ctx :vid :ind :tmp :buf
+    emitPlainReturn :prog :ctx :vid :ind :tmp :buf
 }
 
 # emitTailValue -- a tail value the atom, string and block arms leave, in return
@@ -5412,9 +5072,7 @@ emitReturnOfNode: function {
 # binding of it does, and that local is returned. False when the line yields no
 # value.
 emitTailValue: function {
-    ast: Ast.view
-    reg: ztypes.ZTypeRegistry.view
-    typing: ztyping.ZTyping.view
+    prog: Program.view
     ctx: Ctx
     lineId: zast.nodeid
     ind: StringView
@@ -5423,17 +5081,17 @@ emitTailValue: function {
 } out bool is {
     vid: (
         ztypecheck.implicitReturnValue
-        :reg
-        :typing
-        :ast
+        reg: prog.reg
+        typing: prog.typing
+        ast: prog.ast
         :lineId
-        lineType: (stampIdOf :typing nid: lineId)
+        lineType: (stampIdOf :prog nid: lineId)
     )
     if vid.isZero then return false
     isBlock: false
     isCtl: false
     {
-        vn: ast.nodes.get i: vid
+        vn: prog.ast.nodes.get i: vid
         isBlock = vn.doexpr
         # A `with` THAT YIELDS A VALUE binds a return local like any other
         # control value. emitTailStmt would emit the binding and then the body
@@ -5447,23 +5105,21 @@ emitTailValue: function {
     if isBlock then return false
     ctx.tailReturned = true
     if isCtl.not then {
-        emitReturnOfNode :ast :reg :typing :ctx :vid :ind :tmp :buf
+        emitReturnOfNode :prog :ctx :vid :ind :tmp :buf
         return true
     }
     rtid: (
         stampIdOf
-        :typing
-        nid: (values.controlValueStampNid :ast :reg :typing n: (ast.nodes.get i: vid))
+        :prog
+        nid: (values.controlValueStampNid :prog n: (prog.ast.nodes.get i: vid))
     )
-    ct: typeRefC :ast :reg :typing :ctx tid: rtid
-    if (isHeapPtrCollection :reg :typing :ctx tid: rtid) then ct = "\{ct}*"
+    ct: typeRefC :prog :ctx tid: rtid
+    if (isHeapPtrCollection :prog :ctx tid: rtid) then ct = "\{ct}*"
     trn: values.tmpNext :ctx :tmp
     nm: "_tr\{trn}"
     bound: (
         emitControlBindValue
-        :ast
-        :reg
-        :typing
+        :prog
         :ctx
         :vid
         :rtid
@@ -5475,7 +5131,7 @@ emitTailValue: function {
     )
     if bound.not then return false
     cl: String
-    emitReturnCleanup :ast :reg :typing :ctx :tmp :ind buf: cl
+    emitReturnCleanup :prog :ctx :tmp :ind buf: cl
     buf.append cl
     buf.append "\{ind}return \{nm};\n"
     return true
@@ -5484,9 +5140,7 @@ emitTailValue: function {
 # emitControlBindValue -- bind the value of an `if`, a `match`, a `with` or a
 # list comprehension to the local `nm`, as a binding of it is emitted.
 emitControlBindValue: function {
-    ast: Ast.view
-    reg: ztypes.ZTypeRegistry.view
-    typing: ztyping.ZTyping.view
+    prog: Program.view
     ctx: Ctx
     vid: zast.nodeid
     rtid: ztypes.tid
@@ -5496,16 +5150,13 @@ emitControlBindValue: function {
     tmp: FnTemps
     buf: String.borrow
 } out bool is {
-    vn: ast.nodes.get i: vid
-    if (emitIfBindValue :ast :reg :typing :ctx n: vn :nm :ct :ind :tmp :buf) then return true
-    if (emitMatchBindValue :ast :reg :typing :ctx n: vn :nm :ct :ind :tmp :buf) then return true
-    if (emitWithBindValue :ast :reg :typing :ctx n: vn :rtid :nm :ct :ind :tmp :buf
-    ) then return true
+    vn: prog.ast.nodes.get i: vid
+    if (emitIfBindValue :prog :ctx n: vn :nm :ct :ind :tmp :buf) then return true
+    if (emitMatchBindValue :prog :ctx n: vn :nm :ct :ind :tmp :buf) then return true
+    if (emitWithBindValue :prog :ctx n: vn :rtid :nm :ct :ind :tmp :buf) then return true
     if (
         emitDoBindValue
-        :ast
-        :reg
-        :typing
+        :prog
         :ctx
         n: vn
         :nm
@@ -5522,9 +5173,7 @@ emitControlBindValue: function {
     buf.append lc0
     (
         emitListComprehension
-        :ast
-        :reg
-        :typing
+        :prog
         :ctx
         listTid: rtid
         forNode: vn
@@ -5542,9 +5191,7 @@ emitControlBindValue: function {
 # with/do block forwards return position into its own final statement. False
 # when the statement is not a tail-value shape (the caller emits it normally).
 emitTailStmt: function {
-    ast: Ast.view
-    reg: ztypes.ZTypeRegistry.view
-    typing: ztyping.ZTyping.view
+    prog: Program.view
     ctx: Ctx
     n: astnode.view
     ind: StringView
@@ -5558,65 +5205,61 @@ emitTailStmt: function {
         # checker listed for the line (exitDestroy)
         outerExit: ctx.exitNode
         ctx.exitNode = zast.nodeid
-        if (typing.tailExits.has item: n.nodeid) then ctx.exitNode = n.nodeid
+        if (prog.typing.tailExits.has item: n.nodeid) then ctx.exitNode = n.nodeid
         done: (
             emitTailStmt
-            :ast
-            :reg
-            :typing
+            :prog
             :ctx
-            n: (ast.nodes.get i: n.statementline)
+            n: (prog.ast.nodes.get i: n.statementline)
             :ind
             :tmp
             :buf
         )
-        if done.not then done = emitTailValue :ast :reg :typing :ctx lineId: n.nodeid :ind :tmp :buf
+        if done.not then done = emitTailValue :prog :ctx lineId: n.nodeid :ind :tmp :buf
         ctx.exitNode = outerExit
         return done
     } case atomid then {
         if n.name == zast.wellKnown.slot.wkReturn then return false
         if n.name == zast.wellKnown.slot.wkBreak then return false
         if n.name == zast.wellKnown.slot.wkContinue then return false
-        if (stampIsNullType :reg :typing nid: n.nodeid) then return false
-        emitReturnOfNode :ast :reg :typing :ctx vid: n.nodeid :ind :tmp :buf
+        if (stampIsNullType :prog nid: n.nodeid) then return false
+        emitReturnOfNode :prog :ctx vid: n.nodeid :ind :tmp :buf
         ctx.tailReturned = true
         return true
     } case atomstring then {
-        emitReturnOfNode :ast :reg :typing :ctx vid: n.nodeid :ind :tmp :buf
+        emitReturnOfNode :prog :ctx vid: n.nodeid :ind :tmp :buf
         ctx.tailReturned = true
         return true
     } case withexpr then {
         # return position passes inward only when the checker said it does
         # (withForwardsTail); otherwise the `with` IS the tail value, and
         # emitTailValue binds and returns it
-        if (ztypecheck.withForwardsTail :ast n: (ast.nodes.get i: n.nodeid)).not then return false
+        if (ztypecheck.withForwardsTail ast: prog.ast n: (prog.ast.nodes.get i: n.nodeid)
+        ).not then return false
         # an owned copy: the with-binding's emission below lends ast
-        wnmT: localnames.varCName :ctx :ast :reg vid: (localnames.defVid :typing nid: n.nodeid)
-        wsidT: stampIdDeep :reg :typing n: (ast.nodes.get i: n.value)
-        wctT: withValueCType :ast :reg :typing :ctx n: (ast.nodes.get i: n.value) wsid: wsidT
-        wvT: emitExpr :ast :reg :typing :ctx n: (ast.nodes.get i: n.value)
+        wnmT: localnames.varCName :ctx :prog vid: (localnames.defVid :prog nid: n.nodeid)
+        wsidT: stampIdDeep :prog n: (prog.ast.nodes.get i: n.value)
+        wctT: withValueCType :prog :ctx n: (prog.ast.nodes.get i: n.value) wsid: wsidT
+        wvT: emitExpr :prog :ctx n: (prog.ast.nodes.get i: n.value)
         # a reference-returning callee hands back `T*`, so a `with` binding
         # ALIASES its source exactly as a plain binding does
         {
-            wrbT: localnames.refBorrowCalleeFid :ast :reg :typing :ctx n: (ast.nodes.get i: n.value)
+            wrbT: localnames.refBorrowCalleeFid :prog :ctx n: (prog.ast.nodes.get i: n.value)
             if wrbT.notZero when (
                 localnames.fnReturnsRefBorrow
-                :reg
-                :typing
+                :prog
                 :ctx
                 fid: wrbT
                 retTid: wsidT
             ) then {
-                wctTP: localnames.refPtrC :typing tid: wrbT base: wctT.stringView
+                wctTP: localnames.refPtrC :prog tid: wrbT base: wctT.stringView
                 wctT = wctTP.take
-                ctx.ptrVids.append (localnames.defVid :typing nid: n.nodeid)
+                ctx.ptrVids.append (localnames.defVid :prog nid: n.nodeid)
                 wvT = (
                     localnames.unloadValueStructRef
-                    :ast
-                    :reg
-                    :typing
+                    :prog
                     :ctx
-                    n: (ast.nodes.get i: n.value)
+                    n: (prog.ast.nodes.get i: n.value)
                     e: wvT.stringView
                 )
             }
@@ -5629,13 +5272,13 @@ emitTailStmt: function {
             buf.append withLine
         }
         ctx.tailRetActive = true
-        emitBodyNode :ast :reg :typing :ctx n: (ast.nodes.get i: n.body) :ind :tmp :buf
+        emitBodyNode :prog :ctx n: (prog.ast.nodes.get i: n.body) :ind :tmp :buf
         return true
     } case doexpr then {
-        dstT: ast.nodes.get i: n.statement
-        if (ztypecheck.blockHasBreak :ast n: dstT) then return false
+        dstT: prog.ast.nodes.get i: n.statement
+        if (ztypecheck.blockHasBreak ast: prog.ast n: dstT) then return false
         ctx.tailRetActive = true
-        emitBodyNode :ast :reg :typing :ctx n: dstT :ind :tmp :buf
+        emitBodyNode :prog :ctx n: dstT :ind :tmp :buf
         return true
     } else {
         return false
@@ -5647,9 +5290,7 @@ emitTailStmt: function {
 # last as `target = <value>`; a single node assigns directly. A branch that
 # ends by leaving assigns nothing.
 emitBranchAssign: function {
-    ast: Ast.view
-    reg: ztypes.ZTypeRegistry.view
-    typing: ztyping.ZTyping.view
+    prog: Program.view
     ctx: Ctx
     n: astnode.view
     target: StringView
@@ -5668,18 +5309,16 @@ emitBranchAssign: function {
         cnt: n.statements.count.u64
         si: u64
         for (si + 1) < cnt loop {
-            sxId: zast.kidAt kids: ast.kids span: n.statements i: si
-            emitStmt :ast :reg :typing :ctx n: (ast.nodes.get i: sxId) :ind :tmp :buf
+            sxId: zast.kidAt kids: prog.ast.kids span: n.statements i: si
+            emitStmt :prog :ctx n: (prog.ast.nodes.get i: sxId) :ind :tmp :buf
             si = si + 1
         }
         dv: false
         if cnt > 0 then {
-            lastId: zast.kidAt kids: ast.kids span: n.statements i: cnt - 1
+            lastId: zast.kidAt kids: prog.ast.kids span: n.statements i: cnt - 1
             dv = (
                 emitBranchLastAssign
-                :ast
-                :reg
-                :typing
+                :prog
                 :ctx
                 lineId: lastId
                 :target
@@ -5688,21 +5327,21 @@ emitBranchAssign: function {
                 :buf
             )
         }
-        closeScopeBlock :ast :reg :typing :ctx :tmp :lL diverged: dv node: scope :buf
+        closeScopeBlock :prog :ctx :tmp :lL diverged: dv node: scope :buf
     } else {
-        if (matchDiverges :reg :typing nid: (zast.nodeIdOf :n)) then {
-            emitStmt :ast :reg :typing :ctx :n :ind :tmp :buf
+        if (matchDiverges :prog nid: (zast.nodeIdOf :n)) then {
+            emitStmt :prog :ctx :n :ind :tmp :buf
             return
         }
         vx2F: exprfacts
-        vx2: emitExprWith :ast :reg :typing :ctx :n facts: vx2F
+        vx2: emitExprWith :prog :ctx :n facts: vx2F
         # an argument the value hoisted is declared in the arm, which runs it
         # only when selected, and freed at the arm's end
         listFreesMark: tmp.listFrees.length
         flushArgHoists :ctx :ind :tmp :buf
-        appendArmAssign :ast :reg :typing :ctx :n :target vx: vx2.stringView vxF: vx2F :ind :buf
-        values.emitArmTakeZero :ast :reg :typing :ctx :n rv: vx2.stringView :ind :buf
-        emitValueTakeInvalidations :ast :reg :typing :ctx :n :ind :buf
+        appendArmAssign :prog :ctx :n :target vx: vx2.stringView vxF: vx2F :ind :buf
+        values.emitArmTakeZero :prog :ctx :n rv: vx2.stringView :ind :buf
+        emitValueTakeInvalidations :prog :ctx :n :ind :buf
         flushBlockFrees :tmp lL: listFreesMark diverged: false :buf
     }
 }
@@ -5711,9 +5350,7 @@ emitBranchAssign: function {
 # it yields, run as the statement it is when it leaves -- a return, a panic, a
 # reached `error`, a break or a continue. True when it leaves.
 emitBranchLastAssign: function {
-    ast: Ast.view
-    reg: ztypes.ZTypeRegistry.view
-    typing: ztyping.ZTyping.view
+    prog: Program.view
     ctx: Ctx
     lineId: zast.nodeid
     target: StringView
@@ -5721,21 +5358,20 @@ emitBranchLastAssign: function {
     tmp: FnTemps
     buf: String.borrow
 } out bool is {
-    sx: ast.nodes.get i: lineId
-    if (stmtDiverges :ast :reg :typing :ctx sid: lineId) then {
-        emitStmt :ast :reg :typing :ctx n: sx :ind :tmp :buf
+    sx: prog.ast.nodes.get i: lineId
+    if (stmtDiverges :prog :ctx sid: lineId) then {
+        emitStmt :prog :ctx n: sx :ind :tmp :buf
         return true
     }
-    if (emitNestedControlAssign :ast :reg :typing :ctx line: sx :target :ind :tmp :buf
-    ) then return false
+    if (emitNestedControlAssign :prog :ctx line: sx :target :ind :tmp :buf) then return false
     vxF: exprfacts
-    vx: emitExprWith :ast :reg :typing :ctx n: sx facts: vxF
+    vx: emitExprWith :prog :ctx n: sx facts: vxF
     # an argument the value hoisted is declared here, inside the branch; the
     # block's flush frees it
     flushArgHoists :ctx :ind :tmp :buf
-    appendArmAssign :ast :reg :typing :ctx n: sx :target vx: vx.stringView :vxF :ind :buf
-    values.emitArmTakeZero :ast :reg :typing :ctx n: sx rv: vx.stringView :ind :buf
-    emitValueTakeInvalidations :ast :reg :typing :ctx n: sx :ind :buf
+    appendArmAssign :prog :ctx n: sx :target vx: vx.stringView :vxF :ind :buf
+    values.emitArmTakeZero :prog :ctx n: sx rv: vx.stringView :ind :buf
+    emitValueTakeInvalidations :prog :ctx n: sx :ind :buf
     return false
 }
 
@@ -5744,9 +5380,7 @@ emitBranchLastAssign: function {
 # in statements, since no single C expression can spell it; false for any other
 # value.
 emitNestedControlAssign: function {
-    ast: Ast.view
-    reg: ztypes.ZTypeRegistry.view
-    typing: ztyping.ZTyping.view
+    prog: Program.view
     ctx: Ctx
     line: astnode.view
     target: StringView
@@ -5755,19 +5389,20 @@ emitNestedControlAssign: function {
     buf: String.borrow
 } out bool is {
     if line.statementline.not then return false
-    mn: ast.nodes.get i: line.statementline
+    mn: prog.ast.nodes.get i: line.statementline
     match (
         mn
     ) case caseexpr then {
         ctx.condDepth = ctx.condDepth + 1
-        emitMatchStmt :ast :reg :typing :ctx m: mn assignTo: target :ind :tmp :buf
+        emitMatchStmt :prog :ctx m: mn assignTo: target :ind :tmp :buf
         ctx.condDepth = ctx.condDepth - 1
         return true
     } case ifexpr then {
-        if (ztypecheck.armLeaves :ast n: (ast.nodes.get i: mn.nodeid) inLoop: false).not then {
+        if (ztypecheck.armLeaves ast: prog.ast n: (prog.ast.nodes.get i: mn.nodeid) inLoop: false
+        ).not then {
             return false
         }
-        emitIfAssign :ast :reg :typing :ctx n: mn :target :ind :tmp :buf
+        emitIfAssign :prog :ctx n: mn :target :ind :tmp :buf
         return true
     } else {
         return false
@@ -5805,9 +5440,7 @@ restoreBlockAliases: function {
 # what follows it is unreachable, and the post-guard aliases each statement
 # seeds hold for the rest of the block and no longer.
 emitStatementBlock: function {
-    ast: Ast.view
-    reg: ztypes.ZTypeRegistry.view
-    typing: ztyping.ZTyping.view
+    prog: Program.view
     ctx: Ctx
     stmts: zast.kidspan
     ind: StringView
@@ -5824,22 +5457,20 @@ emitStatementBlock: function {
     i: u64
     nst: stmts.count.u64
     for i < nst loop {
-        stmtId: zast.kidAt kids: ast.kids span: stmts :i
-        s: ast.nodes.get i: stmtId
+        stmtId: zast.kidAt kids: prog.ast.kids span: stmts :i
+        s: prog.ast.nodes.get i: stmtId
         tailNow: false
         if trTail when (i + 1) == nst then tailNow = true
         handled: false
         if tailNow then {
-            handled = emitTailStmt :ast :reg :typing :ctx n: s :ind :tmp :buf
+            handled = emitTailStmt :prog :ctx n: s :ind :tmp :buf
         }
-        if handled.not then emitStmt :ast :reg :typing :ctx n: s :ind :tmp :buf
+        if handled.not then emitStmt :prog :ctx n: s :ind :tmp :buf
         trunc: false
-        if (stmtDiverges :ast :reg :typing :ctx sid: stmtId) then trunc = true
+        if (stmtDiverges :prog :ctx sid: stmtId) then trunc = true
         (
             narrowfacts.seedPostGuardAlias
-            :ast
-            :reg
-            :typing
+            :prog
             :ctx
             n: s
             :ind
@@ -5858,9 +5489,7 @@ emitStatementBlock: function {
 
 # emit one statement or expression node of a body.
 emitBodyNode: function {
-    ast: Ast.view
-    reg: ztypes.ZTypeRegistry.view
-    typing: ztyping.ZTyping.view
+    prog: Program.view
     ctx: Ctx
     n: astnode.view
     ind: StringView
@@ -5881,9 +5510,7 @@ emitBodyNode: function {
             target: ctx.comprehendTo.pop
             (
                 emitComprehensionNode
-                :ast
-                :reg
-                :typing
+                :prog
                 :ctx
                 :n
                 listCb: target.cb.stringView
@@ -5898,9 +5525,9 @@ emitBodyNode: function {
     match (
         n
     ) case statement then {
-        emitStatementBlock :ast :reg :typing :ctx stmts: n.statements :ind :tmp :buf
+        emitStatementBlock :prog :ctx stmts: n.statements :ind :tmp :buf
     } else {
-        emitStmt :ast :reg :typing :ctx :n :ind :tmp :buf
+        emitStmt :prog :ctx :n :ind :tmp :buf
     }
 }
 
@@ -5920,9 +5547,7 @@ forexprValue: function {n: astnode.view} out bool is {
 # a destroy still reaches it (emitMovedSourceZero), and the sources any taking
 # call inside it moved from.
 emitAppendedValueMoves: function {
-    ast: Ast.view
-    reg: ztypes.ZTypeRegistry.view
-    typing: ztyping.ZTyping.view
+    prog: Program.view
     ctx: Ctx
     n: astnode.view
     ind: StringView
@@ -5933,26 +5558,22 @@ emitAppendedValueMoves: function {
     ) case statementline then {
         (
             emitAppendedValueMoves
-            :ast
-            :reg
-            :typing
+            :prog
             :ctx
-            n: (ast.nodes.get i: n.statementline)
+            n: (prog.ast.nodes.get i: n.statementline)
             :ind
             :buf
         )
     } else {
-        values.emitMovedSourceZero :ast :reg :typing :ctx :n :ind :buf
-        emitValueTakeInvalidations :ast :reg :typing :ctx :n :ind :buf
+        values.emitMovedSourceZero :prog :ctx :n :ind :buf
+        emitValueTakeInvalidations :prog :ctx :n :ind :buf
     }
 }
 
 # emitComprehensionNode -- the body's statements: each but the last emits
 # normally; the last is the value expression, appended to the list.
 emitComprehensionNode: function {
-    ast: Ast.view
-    reg: ztypes.ZTypeRegistry.view
-    typing: ztyping.ZTyping.view
+    prog: Program.view
     ctx: Ctx
     n: astnode.view
     listCb: StringView
@@ -5967,25 +5588,25 @@ emitComprehensionNode: function {
         cnt: n.statements.count.u64
         si: u64
         for si < cnt loop {
-            stId: zast.kidAt kids: ast.kids span: n.statements i: si
-            st: ast.nodes.get i: stId
+            stId: zast.kidAt kids: prog.ast.kids span: n.statements i: si
+            st: prog.ast.nodes.get i: stId
             if si == (cnt - 1) then {
-                av: emitExpr :ast :reg :typing :ctx n: st
+                av: emitExpr :prog :ctx n: st
                 flushArgHoists :ctx :ind :tmp :buf
                 la: "\{ind}\{listCb}_append(&\{listVar}, (\{av}));\n"
                 buf.append la
-                emitAppendedValueMoves :ast :reg :typing :ctx n: st :ind :buf
+                emitAppendedValueMoves :prog :ctx n: st :ind :buf
             } else {
-                emitStmt :ast :reg :typing :ctx n: st :ind :tmp :buf
+                emitStmt :prog :ctx n: st :ind :tmp :buf
             }
             si = si + 1
         }
     } else {
-        av2: emitExpr :ast :reg :typing :ctx :n
+        av2: emitExpr :prog :ctx :n
         flushArgHoists :ctx :ind :tmp :buf
         la2: "\{ind}\{listCb}_append(&\{listVar}, (\{av2}));\n"
         buf.append la2
-        emitAppendedValueMoves :ast :reg :typing :ctx :n :ind :buf
+        emitAppendedValueMoves :prog :ctx :n :ind :buf
     }
 }
 
@@ -6000,9 +5621,7 @@ emitComprehensionNode: function {
 # have to be kept beside each of those, and a source it did not know would
 # answer an empty list with no diagnostic.
 emitListComprehension: function {
-    ast: Ast.view
-    reg: ztypes.ZTypeRegistry.view
-    typing: ztyping.ZTyping.view
+    prog: Program.view
     ctx: Ctx
     forNode: astnode.view
     # the list instance the comprehension appends to
@@ -6017,7 +5636,7 @@ emitListComprehension: function {
         forNode
     ) case forexpr then {
         # a precondition the fold proved false: the list stays empty
-        if (foldedLoopOf :typing nid: forNode.nodeid).entry == ztyping.loopentry.never then return
+        if (foldedLoopOf :prog nid: forNode.nodeid).entry == ztyping.loopentry.never then return
         noteMemberUse :ctx mono: listTid member: memberWord.slot.append
         ctx.comprehendTo.append (
             ComprehendTo
@@ -6026,7 +5645,7 @@ emitListComprehension: function {
             lvar: listVar.string
         )
         depth: ctx.comprehendTo.length
-        emitForStmt :ast :reg :typing :ctx n: forNode :ind :tmp :buf
+        emitForStmt :prog :ctx n: forNode :ind :tmp :buf
         # the body always emits, so the target always goes; one left standing
         # means the list would be silently empty, which is the defect this
         # replaced and is not a thing to fall back to
@@ -6042,29 +5661,26 @@ emitListComprehension: function {
 # Map, which live on the heap and are freed through it, and a data value, a
 # handle to static storage that nothing frees.
 valueIsItsPointer: function {
-    reg: ztypes.ZTypeRegistry.view
-    typing: ztyping.ZTyping.view
+    prog: Program.view
     ctx: Ctx.view
     tid: ztypes.tid
 } out bool is {
-    if (argforms.isStaticHandle :reg :typing :tid) then return true
-    return (reg.isBoxOf :tid) or (isHeapPtrCollection :reg :typing :ctx :tid)
+    if (argforms.isStaticHandle :prog :tid) then return true
+    return (prog.reg.isBoxOf :tid) or (isHeapPtrCollection :prog :ctx :tid)
 }
 
 # heldArmPayloadC -- armPayloadC with the types it spells held in `held`, not
 # recorded: the caller records them where the text is written (releaseHeld), or
 # where an alias spelling it is read (holdForAlias).
 heldArmPayloadC: function {
-    ast: Ast.view
-    reg: ztypes.ZTypeRegistry.view
-    typing: ztyping.ZTyping.view
+    prog: Program.view
     ctx: Ctx
     tid: ztypes.tid
     arm: zast.nameid
     held: ListVal ztypes.tid
 } out String is {
     ctx.typeUseHold = true
-    pc: values.armPayloadC :ast :reg :typing :ctx :tid :arm
+    pc: values.armPayloadC :prog :ctx :tid :arm
     ctx.typeUseHold = false
     for each t: ctx.heldTypeUses loop held.append t
     ctx.heldTypeUses = ListVal ztypes.tid
@@ -6101,9 +5717,7 @@ ctEndsWithStar: function {ct: StringView} out bool is {
 # nothing for (ctx.exitNode 0) is refused: a local it moved is zeroed only
 # where the checker says a path still destroys it.
 emitReturnCleanup: function {
-    ast: Ast.view
-    reg: ztypes.ZTypeRegistry.view
-    typing: ztyping.ZTyping.view
+    prog: Program.view
     ctx: Ctx
     tmp: FnTemps.view
     ind: StringView
@@ -6117,13 +5731,13 @@ emitReturnCleanup: function {
         line: 0
     )
     for each owed: tmp.listFrees loop buf.append owed.stmt
-    if allRows.not then emitExitDestroy :ast :reg :typing :ctx :ind :buf
+    if allRows.not then emitExitDestroy :prog :ctx :ind :buf
 }
 
 # the node an argument's value ultimately comes from, unwrapping the
 # wrappers between
-argBaseNodeId: function {ast: Ast.view n: astnode.view} out zast.nodeid is {
-    i: dottedBaseNodeId :ast :n
+argBaseNodeId: function {prog: Program.view n: astnode.view} out zast.nodeid is {
+    i: dottedBaseNodeId :prog :n
     if i.notZero then return i
     a: atomNodeId :n
     if a.notZero then return a
@@ -6133,13 +5747,13 @@ argBaseNodeId: function {ast: Ast.view n: astnode.view} out zast.nodeid is {
 }
 
 # isYieldNode -- the node is a yield expression.
-isYieldNode: function {ast: Ast.view n: astnode.view} out bool is {
+isYieldNode: function {prog: Program.view n: astnode.view} out bool is {
     match (
         n
     ) case statementline then {
-        return (isYieldNode :ast n: (ast.nodes.get i: n.statementline))
+        return (isYieldNode :prog n: (prog.ast.nodes.get i: n.statementline))
     } case call then {
-        return (zast.isYieldCalleeAt :ast callableId: n.callable)
+        return (zast.isYieldCalleeAt ast: prog.ast callableId: n.callable)
     } else {
         return false
     }

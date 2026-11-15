@@ -143,9 +143,9 @@ spelledCname: function {ctx: Ctx tid: ztypes.tid} out String is {
 }
 
 # atomVid -- the variable a reference node resolves to, or 0.
-atomVid: function {typing: ztyping.ZTyping.view nid: zast.nodeid} out ztypes.vid is {
+atomVid: function {prog: Program.view nid: zast.nodeid} out ztypes.vid is {
     return (
-        (typing.atomVariableId.get key: nid).or
+        (prog.typing.atomVariableId.get key: nid).or
         d: ztypes.vid.zero
     )
 }
@@ -1071,30 +1071,30 @@ atomNodeId: function {n: astnode.view} out zast.nodeid is {
 
 # stampIdOf -- the type the checker stamped on node `nid`. An instance is
 # emitted from its own copy of a function, so the stamp is that instance's.
-stampIdOf: function {typing: ztyping.ZTyping.view nid: zast.nodeid} out ztypes.tid is {
-    return (ztyping.nodeTypeAt tbl: typing.nodeType :nid)
+stampIdOf: function {prog: Program.view nid: zast.nodeid} out ztypes.tid is {
+    return (ztyping.nodeTypeAt tbl: prog.typing.nodeType :nid)
 }
 
 # originTidOf -- a type's genericOriginId (the template it monomorphized from), or
 # 0 when it has none.
-originTidOf: function {reg: ztypes.ZTypeRegistry.view tid: ztypes.tid} out ztypes.tid is {
+originTidOf: function {prog: Program.view tid: ztypes.tid} out ztypes.tid is {
     # a partial spec is trie bookkeeping, never an emittable mono; origin-keyed
     # sweeps must not select it. Asked of the flag, not the typetype: a bare
     # type parameter and a trie interior node wear GENERIC_PARAM too, and both
     # already answer 0 through the origin below.
-    if (reg.isPartialOf :tid) then return ztypes.tid.zero
-    return (reg.genericOriginOf :tid)
+    if (prog.reg.isPartialOf :tid) then return ztypes.tid.zero
+    return (prog.reg.genericOriginOf :tid)
 }
 
 # originIsTid -- true when tid's generic origin equals the (nonzero) originTid.
 # The 0-guard means an origin-less type never matches an unresolved (0) builtin.
 originIsTid: function {
-    reg: ztypes.ZTypeRegistry.view
+    prog: Program.view
     tid: ztypes.tid
     originTid: ztypes.tid
 } out bool is {
     if originTid.isZero then return false
-    ot: originTidOf :reg :tid
+    ot: originTidOf :prog :tid
     return ot == originTid
 }
 
@@ -1161,6 +1161,17 @@ family: list {
     staticList: "staticlist"
 } out staticlist StringView
 
+
+# Program -- the program being emitted, as the checker left it. Every function
+# that reads it takes this one value. It is built once (emitC) and read only.
+Program: class {
+    # the tree
+    ast: Ast.view
+    # the types
+    reg: ztypes.ZTypeRegistry.view
+    # the checker's tables
+    typing: ztyping.ZTyping.view
+}
 
 # Ctx -- the per-program emission context (anchor cnames, main unit name,
 # the literal pool, and the resolved-name map access).
@@ -1646,25 +1657,22 @@ isPtrVid: function {ctx: Ctx.view vid: ztypes.vid} out bool is {
 # (pointer receiver / borrow param) or a dotted read of a borrowed field both do,
 # so field access on them chains with `->`.
 pathIsPointer: function {
-    ast: Ast.view
-    reg: ztypes.ZTypeRegistry.view
-    typing: ztyping.ZTyping.view
+    prog: Program.view
     ctx: Ctx
     n: astnode.view
 } out bool is {
     # a data value is a handle, however it is reached
-    nStamp: stampIdOf :typing nid: (zast.nodeIdOf :n)
-    if (argforms.isStaticHandle :reg :typing tid: nStamp) then return true
+    nStamp: stampIdOf :prog nid: (zast.nodeIdOf :n)
+    if (argforms.isStaticHandle :prog tid: nStamp) then return true
     match (
         n
     ) case atomid then {
-        anP: ast.names.texts.get i: n.name
-        nameVid: atomVid :typing nid: n.nodeid
+        anP: prog.ast.names.texts.get i: n.name
+        nameVid: atomVid :prog nid: n.nodeid
         rnv: ztypes.vid
         selfA: (
             narrowfacts.aliasResolvesToSelfAt
-            :reg
-            :typing
+            :prog
             :ctx
             nid: n.nodeid
             name: anP.stringView
@@ -1673,13 +1681,12 @@ pathIsPointer: function {
         if selfA then rnv = nameVid
         return (isPtrVid :ctx vid: rnv)
     } case labelvalue then {
-        lnP: ast.names.texts.get i: n.name
-        leafVid: atomVid :typing nid: n.nodeid
+        lnP: prog.ast.names.texts.get i: n.name
+        leafVid: atomVid :prog nid: n.nodeid
         rlv: ztypes.vid
         selfL: (
             narrowfacts.aliasResolvesToSelfAt
-            :reg
-            :typing
+            :prog
             :ctx
             nid: n.nodeid
             name: lnP.stringView
@@ -1690,23 +1697,23 @@ pathIsPointer: function {
     } case call then {
         # a reference-returning call yields `T*`. The arm narrows `n` to
         # callrow, so the astnode is re-fetched by its own id.
-        cnd: ast.nodes.get i: n.nodeid
-        return (localnames.nodeIsRefBorrowResult :ast :reg :typing :ctx n: cnd)
+        cnd: prog.ast.nodes.get i: n.nodeid
+        return (localnames.nodeIsRefBorrowResult :prog :ctx n: cnd)
     } case dottedpath then {
         # a ZERO-ARG auto-call reads as a dotted path, so a reference-returning
         # one is itself a `T*` and a read off it is `->`. The arm narrows `n`, so
         # the astnode is re-fetched by its own id.
-        dnd: ast.nodes.get i: n.nodeid
-        if (localnames.nodeIsRefBorrowResult :ast :reg :typing :ctx n: dnd) then return true
+        dnd: prog.ast.nodes.get i: n.nodeid
+        if (localnames.nodeIsRefBorrowResult :prog :ctx n: dnd) then return true
         # an access or borrow marker contributes no C text: `b.private` and
         # `b.borrow` ARE `b`, a pointer exactly when `b` is one
         if (
             values.markerEmitsBase
-            id: (aliasOrChildId :ast :typing aliasId: n.nodeid childId: n.child)
+            id: (aliasOrChildId :prog aliasId: n.nodeid childId: n.child)
         ) then {
-            return (pathIsPointer :ast :reg :typing :ctx n: (ast.nodes.get i: n.parent))
+            return (pathIsPointer :prog :ctx n: (prog.ast.nodes.get i: n.parent))
         }
-        return (values.borrowedFieldPath :ast :reg :typing :ctx :n)
+        return (values.borrowedFieldPath :prog :ctx :n)
     } else {
         return false
     }
@@ -1855,14 +1862,13 @@ preludeNeed: function {ctx: Ctx memb: StringView} is {
 # aliasChildName's pool id: the internal (renamed) member id when a rename
 # stamp exists, else the child atom's own name id.
 aliasChildNameId: function {
-    ast: Ast.view
-    typing: ztyping.ZTyping.view
+    prog: Program.view
     n: astnode.view
 } out zast.nameid is {
     match (
         n
     ) case dottedpath then {
-        return (aliasOrChildId :ast :typing aliasId: n.nodeid childId: n.child)
+        return (aliasOrChildId :prog aliasId: n.nodeid childId: n.child)
     } else {
         return zast.nameid.zero
     }
@@ -1871,16 +1877,15 @@ aliasChildNameId: function {
 # aliasOrChildId -- aliasOrChild's id twin: the same answer as a pool id, for
 # the sites that only need to know WHICH member this is.
 aliasOrChildId: function {
-    ast: Ast.view
-    typing: ztyping.ZTyping.view
+    prog: Program.view
     aliasId: zast.nodeid
     childId: zast.nodeid
 } out zast.nameid is {
-    if typing.renameSeen then {
-        ai: typing.aliasInternalIdOf nodeid: aliasId
+    if prog.typing.renameSeen then {
+        ai: prog.typing.aliasInternalIdOf nodeid: aliasId
         if ai.notZero then return ai
     }
-    return (zast.atomNameIdOf n: (ast.nodes.get i: childId))
+    return (zast.atomNameIdOf n: (prog.ast.nodes.get i: childId))
 }
 
 
@@ -2180,11 +2185,7 @@ memberkind: variant {
 # and the dispatch through them, and the runtime fragments' `@MEMBER_` holes --
 # is this. Asking for a member the owner does not declare is an emitter defect.
 memberC: function {
-    # the member names
-    ast: Ast.view
-    # the checked program
-    reg: ztypes.ZTypeRegistry.view
-    typing: ztyping.ZTyping.view
+    prog: Program.view
     # the emission context; its field lists are read through it
     ctx: Ctx
     # the type that declares the member
@@ -2194,10 +2195,10 @@ memberC: function {
     # the member's name, interned
     nameId: zast.nameid
 } out String is {
-    o: types.memberOrdinal :reg :typing :ctx :owner :kind :nameId
-    nm: zast.nameTextAt :ast ref: nameId
+    o: types.memberOrdinal :prog :ctx :owner :kind :nameId
+    nm: zast.nameTextAt ast: prog.ast ref: nameId
     if o.none then {
-        tn: reg.nameViewOf tid: owner
+        tn: prog.reg.nameViewOf tid: owner
         panic msg: "zemitterc: a C name for member '\{nm}', which '\{tn}' does not declare"
     }
     r: "\{memberLetter :kind}\{o}"
@@ -2243,27 +2244,23 @@ memberLetter: function {kind: memberkind} out StringView is {
 # emitExpr -- the C expression text for a node (calls inline; the scalar
 # examples carry no order-sensitive multi-call arguments).
 emitExpr: function {
-    ast: Ast.view
-    reg: ztypes.ZTypeRegistry.view
-    typing: ztyping.ZTyping.view
+    prog: Program.view
     ctx: Ctx
     n: astnode.view
 } out String is {
     facts: exprfacts
-    return (values.emitExprArms :ast :reg :typing :ctx :n :facts)
+    return (values.emitExprArms :prog :ctx :n :facts)
 }
 
 # emitExprWith -- emitExpr, the facts its arm states written into `facts`.
 emitExprWith: function {
-    ast: Ast.view
-    reg: ztypes.ZTypeRegistry.view
-    typing: ztyping.ZTyping.view
+    prog: Program.view
     ctx: Ctx
     n: astnode.view
     facts: exprfacts.borrow
 } out String is {
     argforms.stateFacts :facts from: exprfacts
-    t: values.emitExprArms :ast :reg :typing :ctx :n :facts
+    t: values.emitExprArms :prog :ctx :n :facts
     if t.length > 0 when facts.stated.not then (
         emitFail
         :ctx
@@ -2326,34 +2323,31 @@ controlValueNodeId: function {n: astnode.view} out zast.nodeid is {
 # struct, methods and cleanup. tid itself for no typedef, or a chain ending
 # in a scalar (emitted as that scalar) or a String (chaseStrTypedef's).
 chaseAggregateTypedef: function {
-    reg: ztypes.ZTypeRegistry.view
-    typing: ztyping.ZTyping.view
+    prog: Program.view
     ctx: Ctx.view
     tid: ztypes.tid
 } out ztypes.tid is {
-    if (typing.typedefBase.has key: tid).not then return tid
-    e: ztypecheck.typedefChaseTid :typing :tid
+    if (prog.typing.typedefBase.has key: tid).not then return tid
+    e: ztypecheck.typedefChaseTid typing: prog.typing :tid
     if (e == ctx.strTid) or (e == ctx.svTid) then return tid
     # a scalar is a native record, and an ordinal variant emits as one; a
     # sized str or array is a native record too, and an aggregate
-    isRec: (reg.typetypeOf typeId: e) == ztypes.ztypetype.recordType
-    if isRec when (reg.isNativeOf tid: e) then {
-        eo: originTidOf :reg tid: e
+    isRec: (prog.reg.typetypeOf typeId: e) == ztypes.ztypetype.recordType
+    if isRec when (prog.reg.isNativeOf tid: e) then {
+        eo: originTidOf :prog tid: e
         strO: ctx.origins.get i: family.slot.str
         arrO: ctx.origins.get i: family.slot.fixedArray
         isSized: (eo == strO) or (eo == arrO)
         if isSized.not or eo.isZero then return tid
     }
-    if (narrowfacts.isOrdinalVariant :typing tid: e) then return tid
+    if (narrowfacts.isOrdinalVariant :prog tid: e) then return tid
     return e
 }
 
 # typeRefC -- the C spelling for a type id: scalars by name, records by
 # their id-based cname ("" when unsupported).
 typeRefC: function {
-    ast: Ast.view
-    reg: ztypes.ZTypeRegistry.view
-    typing: ztyping.ZTyping.view
+    prog: Program.view
     ctx: Ctx
     tid: ztypes.tid
 } out String is {
@@ -2367,44 +2361,44 @@ typeRefC: function {
         # the `is native` declaration -- emit its struct, not the C scalar.
         # scalarCTypeFor is that gate, and the sixteen scalars, `bool` and the
         # shells all come back through it with their C type intact.
-        ct: consts.scalarTypeRefC :typing :ctx :tid
+        ct: consts.scalarTypeRefC :prog :ctx :tid
         if ct.length > 0 then return ct
     }
-    lc: values.literalTypeC :reg :ctx :tid
+    lc: values.literalTypeC :prog :ctx :tid
     if lc.length > 0 then return lc
-    cmid: chaseAggregateTypedef :reg :typing :ctx tid: cid
+    cmid: chaseAggregateTypedef :prog :ctx tid: cid
     if cmid != cid then {
         emitplan.noteTypeUse :ctx tid: cmid
         cmc: spelledCname :ctx tid: cmid
         return "\{cmc}_t"
     }
-    cid = memberreads.chaseStrTypedef :typing :ctx tid: cid
-    tdc: consts.typedefChaseC :ast :reg :typing :ctx tid: cid
+    cid = memberreads.chaseStrTypedef :prog :ctx tid: cid
+    tdc: consts.typedefChaseC :prog :ctx tid: cid
     if tdc.length > 0 then return tdc
     if cid == ctx.strTid then return (values.strTypeC :ctx)
     # text is one C type with StringView (isViewLaid), and its typedef is
     # the same piece
     if (parttexts.isViewLaid :ctx tid: cid) then return (values.svTypeC :ctx)
-    if (reg.isBoxOf tid: cid) then {
+    if (prog.reg.isBoxOf tid: cid) then {
         # spelled as its element's pointer, and destroyed through its own
         emitplan.noteTypeUse :ctx tid: cid
-        bxeid: reg.genericTypeArgAt specId: cid ordinal: 0
-        bxinner: typeRefC :ast :reg :typing :ctx tid: bxeid
+        bxeid: prog.reg.genericTypeArgAt specId: cid ordinal: 0
+        bxinner: typeRefC :prog :ctx tid: bxeid
         return "\{bxinner}*"
     }
-    if (types.isCollectionOriginTid :ctx originTid: (originTidOf :reg tid: cid)) then {
+    if (types.isCollectionOriginTid :ctx originTid: (originTidOf :prog tid: cid)) then {
         emitplan.noteTypeUse :ctx tid: cid
         cc: types.ctxCnameView :ctx tid: cid
         cTypeText: "\{cc}_t"
         return cTypeText
     }
-    if (originIsTid :reg tid: cid originTid: (ctx.origins.get i: family.slot.fixedArray)) then {
+    if (originIsTid :prog tid: cid originTid: (ctx.origins.get i: family.slot.fixedArray)) then {
         emitplan.noteTypeUse :ctx tid: cid
         aca: types.ctxCnameView :ctx tid: cid
         act: "\{aca}_t"
         return act
     }
-    ctt: reg.typetypeOf typeId: cid
+    ctt: prog.reg.typetypeOf typeId: cid
     # every user type family spells its C type the same way -- the struct tag
     # the emitter minted for it -- so the kind decides only whether there is a
     # struct at all. A function type is the one that spells a different suffix,
@@ -2414,7 +2408,7 @@ typeRefC: function {
         emitplan.noteTypeUse :ctx tid: cid
         rc: types.ctxCnameView :ctx tid: cid
         # a data value is a handle to its static object
-        if (argforms.isStaticHandle :reg :typing tid: cid) then return "const \{rc}_t*"
+        if (argforms.isStaticHandle :prog tid: cid) then return "const \{rc}_t*"
         rt: "\{rc}_t"
         return rt
     }
@@ -2446,15 +2440,13 @@ noteFnptrUse: function {ctx: Ctx tid: ztypes.tid} is {
 
 # spelledTagConst -- tagConstOf for C being written (noteTagConstUse).
 spelledTagConst: function {
-    ast: Ast.view
+    prog: Program.view
     ctx: Ctx
-    reg: ztypes.ZTypeRegistry.view
-    typing: ztyping.ZTyping.view
     tid: ztypes.tid
     armId: zast.nameid
 } out String is {
-    nativepieces.noteTagConstUse :ctx :reg :typing :tid
-    return (types.tagConstOf :ast :ctx :reg :typing :tid :armId)
+    nativepieces.noteTagConstUse :ctx :prog :tid
+    return (types.tagConstOf :prog :ctx :tid :armId)
 }
 
 
@@ -2545,13 +2537,12 @@ keykind: variant {
 # isHeapPtrCollection -- a Map/Set mono is stored as a heap pointer (List is
 # embedded by value); a struct field of one is a pointer, freed without `&`.
 isHeapPtrCollection: function {
-    reg: ztypes.ZTypeRegistry.view
-    typing: ztyping.ZTyping.view
+    prog: Program.view
     ctx: Ctx.view
     tid: ztypes.tid
 } out bool is {
-    cm: chaseAggregateTypedef :reg :typing :ctx :tid
-    return (types.isMapOriginOf :reg :ctx tid: cm) or (types.isSetOriginOf :reg :ctx tid: cm)
+    cm: chaseAggregateTypedef :prog :ctx :tid
+    return (types.isMapOriginOf :prog :ctx tid: cm) or (types.isSetOriginOf :prog :ctx tid: cm)
 }
 
 # Cond -- the configurations C holds in: every one (`always`), or the OR of

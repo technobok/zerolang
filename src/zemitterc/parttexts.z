@@ -33,31 +33,59 @@ nativeUnitCallC: function {ctx: Ctx uname: StringView member: StringView} out St
 # be appended inline (freeing the hoisted copy would double-free the bucket
 # key). All four entry forms project the same way.
 interpBaseIsMapEntry: function {
-    ast: Ast.view
-    reg: ztypes.ZTypeRegistry.view
-    typing: ztyping.ZTyping.view
+    prog: Program.view
     ctx: Ctx.view
     n: astnode.view
 } out bool is {
     match (
         n
     ) case statementline then {
-        return (interpBaseIsMapEntry :ctx :ast :reg :typing n: (ast.nodes.get i: n.statementline))
+        return (interpBaseIsMapEntry :ctx :prog n: (prog.ast.nodes.get i: n.statementline))
     } case dottedpath then {
-        bnid: atomNodeId n: (ast.nodes.get i: n.parent)
-        bt: stampIdOf :typing nid: bnid
-        meT: ztypecheck.stdTidPeek :ast :typing wk: zast.wellKnown.slot.tyMapEntry
-        if (originIsTid :reg tid: bt originTid: meT) then return true
-        meRV: ztypecheck.stdTidPeek :ast :typing wk: zast.wellKnown.slot.tyMapEntryRV
-        if (originIsTid :reg tid: bt originTid: meRV) then return true
-        ideR: ztypecheck.stdTidPeek :ast :typing wk: zast.wellKnown.slot.tyIdMapEntryR
-        if (originIsTid :reg tid: bt originTid: ideR) then return true
-        ideV: ztypecheck.stdTidPeek :ast :typing wk: zast.wellKnown.slot.tyIdMapEntryV
-        if (originIsTid :reg tid: bt originTid: ideV) then return true
-        meVR: ztypecheck.stdTidPeek :ast :typing wk: zast.wellKnown.slot.tyMapEntryVR
-        if (originIsTid :reg tid: bt originTid: meVR) then return true
-        meVV: ztypecheck.stdTidPeek :ast :typing wk: zast.wellKnown.slot.tyMapEntryVV
-        if (originIsTid :reg tid: bt originTid: meVV) then return true
+        bnid: atomNodeId n: (prog.ast.nodes.get i: n.parent)
+        bt: stampIdOf :prog nid: bnid
+        meT: (
+            ztypecheck.stdTidPeek
+            ast: prog.ast
+            typing: prog.typing
+            wk: zast.wellKnown.slot.tyMapEntry
+        )
+        if (originIsTid :prog tid: bt originTid: meT) then return true
+        meRV: (
+            ztypecheck.stdTidPeek
+            ast: prog.ast
+            typing: prog.typing
+            wk: zast.wellKnown.slot.tyMapEntryRV
+        )
+        if (originIsTid :prog tid: bt originTid: meRV) then return true
+        ideR: (
+            ztypecheck.stdTidPeek
+            ast: prog.ast
+            typing: prog.typing
+            wk: zast.wellKnown.slot.tyIdMapEntryR
+        )
+        if (originIsTid :prog tid: bt originTid: ideR) then return true
+        ideV: (
+            ztypecheck.stdTidPeek
+            ast: prog.ast
+            typing: prog.typing
+            wk: zast.wellKnown.slot.tyIdMapEntryV
+        )
+        if (originIsTid :prog tid: bt originTid: ideV) then return true
+        meVR: (
+            ztypecheck.stdTidPeek
+            ast: prog.ast
+            typing: prog.typing
+            wk: zast.wellKnown.slot.tyMapEntryVR
+        )
+        if (originIsTid :prog tid: bt originTid: meVR) then return true
+        meVV: (
+            ztypecheck.stdTidPeek
+            ast: prog.ast
+            typing: prog.typing
+            wk: zast.wellKnown.slot.tyMapEntryVV
+        )
+        if (originIsTid :prog tid: bt originTid: meVV) then return true
         return false
     } else {
         return false
@@ -68,19 +96,17 @@ interpBaseIsMapEntry: function {
 # the projected String VIEWS the owner's field (freed by the owner's destructor),
 # so it appends inline -- freeing a hoisted copy would double-free the field.
 interpBaseIsOwnedStructField: function {
-    ast: Ast.view
-    reg: ztypes.ZTypeRegistry.view
-    typing: ztyping.ZTyping.view
+    prog: Program.view
     ctx: Ctx.view
     n: astnode.view
 } out bool is {
     match (
         n
     ) case statementline then {
-        sln: ast.nodes.get i: n.statementline
-        return (interpBaseIsOwnedStructField :ast :reg :typing :ctx n: sln)
+        sln: prog.ast.nodes.get i: n.statementline
+        return (interpBaseIsOwnedStructField :prog :ctx n: sln)
     } case dottedpath then {
-        pnd: ast.nodes.get i: n.parent
+        pnd: prog.ast.nodes.get i: n.parent
         bnid: atomNodeId n: pnd
         # A NESTED base (`b.it.name`) is itself a dotted path, not an atom, so
         # the atom lookup answers 0; its own stamp names the owner just as
@@ -88,20 +114,20 @@ interpBaseIsOwnedStructField: function {
         # through to the owned-call-result leg, which FREES the field's String
         # out from under its owner.
         if bnid.isZero then bnid = interpPartNodeId n: pnd
-        bt: stampIdOf :typing nid: bnid
-        bo: originTidOf :reg tid: bt
+        bt: stampIdOf :prog nid: bnid
+        bo: originTidOf :prog tid: bt
         # a user-generic mono owns its fields once it carries a destructor;
         # other monos (views, collections) keep the owned-call-result legs
-        if bo.notZero when (types.ownsResources :reg :ctx tid: bt).not then return false
-        btt: reg.typetypeOf typeId: bt
+        if bo.notZero when (types.ownsResources :prog :ctx tid: bt).not then return false
+        btt: prog.reg.typetypeOf typeId: bt
         isUC: btt.isFieldwise
         if isUC.not then return false
-        cn: aliasOrChildId :ast :typing aliasId: n.nodeid childId: n.child
-        co: typing.declChildOfId parentTypeId: bt nameId: cn
+        cn: aliasOrChildId :prog aliasId: n.nodeid childId: n.child
+        co: prog.typing.declChildOfId parentTypeId: bt nameId: cn
         match (
             co
         ) case some then {
-            if (reg.typetypeOf typeId: co) == ztypes.ztypetype.functionType then {
+            if (prog.reg.typetypeOf typeId: co) == ztypes.ztypetype.functionType then {
                 return false
             } else {
                 return true
@@ -116,11 +142,9 @@ interpBaseIsOwnedStructField: function {
 
 # interpPartTid -- the type an interpolated part formats as: the deep stamp,
 # with a typedef read as the type its chain ends at.
-interpPartTid: function {
-    reg: ztypes.ZTypeRegistry.view typing: ztyping.ZTyping.view n: astnode.view
-} out ztypes.tid is {
-    t: stmtblocks.stampIdDeep :reg :typing :n
-    return (ztypecheck.typedefChaseTid :typing tid: t)
+interpPartTid: function {prog: Program.view n: astnode.view} out ztypes.tid is {
+    t: stmtblocks.stampIdDeep :prog :n
+    return (ztypecheck.typedefChaseTid typing: prog.typing tid: t)
 }
 
 # interpStep -- one step of an interpolation build: a statement on `buf` at
@@ -318,9 +342,7 @@ appendViewPart: function {
 # appendStrPart -- append a sized str part, read for its data and its length:
 # bound to a temp first when a second read repeats work (a call's result).
 appendStrPart: function {
-    ast: Ast.view
-    reg: ztypes.ZTypeRegistry.view
-    typing: ztyping.ZTyping.view
+    prog: Program.view
     ctx: Ctx
     n: astnode.view
     val: StringView
@@ -337,12 +359,11 @@ appendStrPart: function {
         rd = "_h\{values.tmpNext :ctx :tmp}"
         stT: (
             chaseAggregateTypedef
-            :reg
-            :typing
+            :prog
             :ctx
-            tid: (stampIdOf :typing nid: (interpPartNodeId :n))
+            tid: (stampIdOf :prog nid: (interpPartNodeId :n))
         )
-        stC: typeRefC :ast :reg :typing :ctx tid: stT
+        stC: typeRefC :prog :ctx tid: stT
         interpLocal :ctx :expr ctype: stC.stringView name: rd.stringView init: val :ind :buf :ops
     }
     preludeNeed :ctx memb: "@String_append"
@@ -359,9 +380,7 @@ appendStrPart: function {
 # exemption, generalized by the declared signature); an owned call result is
 # hoisted, appended and freed.
 appendStringPart: function {
-    ast: Ast.view
-    reg: ztypes.ZTypeRegistry.view
-    typing: ztyping.ZTyping.view
+    prog: Program.view
     ctx: Ctx
     n: astnode.view
     # the part's C text
@@ -373,23 +392,23 @@ appendStringPart: function {
     buf: String.borrow
     ops: String.borrow
 } is {
-    an0: narrowfacts.atomTextOf :ast :n
+    an0: narrowfacts.atomTextOf :prog :n
     # an atom naming a FUNCTION is a call, whose String is a temporary
     localAtom: an0.length > 0
-    if localAtom when (values.baseAtomNamesFunction :reg :typing :n) then localAtom = false
+    if localAtom when (values.baseAtomNamesFunction :prog :n) then localAtom = false
     isAtomP: (
         localAtom or
-        (interpBaseIsMapEntry :ctx :ast :reg :typing :n) or
-        (interpBaseIsOwnedStructField :ast :reg :typing :ctx :n)
+        (interpBaseIsMapEntry :ctx :prog :n) or
+        (interpBaseIsOwnedStructField :prog :ctx :n)
     )
     if isAtomP when valF.once.not then {
         sAcc: ".".string
-        if an0.length > 0 when (isPtrVid :ctx vid: (atomVid :typing nid: (atomNodeId :n))) then {
+        if an0.length > 0 when (isPtrVid :ctx vid: (atomVid :prog nid: (atomNodeId :n))) then {
             sAcc = "->".string
         }
         # a String read through a borrowed field is a pointer with no variable
         # behind it
-        if an0.length == 0 when (pathIsPointer :ast :reg :typing :ctx :n) then sAcc = "->".string
+        if an0.length == 0 when (pathIsPointer :prog :ctx :n) then sAcc = "->".string
         preludeNeed :ctx memb: "@String_append"
         sa: "\{ctx.strC}_append(&\{sNm}, \{val}\{sAcc}data, \{val}\{sAcc}size)"
         interpStep :expr text: sa.stringView :ind :buf :ops
@@ -397,13 +416,13 @@ appendStringPart: function {
     }
     # a fallback here may NOT be spelled `_h<n>`: that prefix is the FnTemps's,
     # and this name comes from `ctx.argHoistCtr`, so two counters would collide
-    hNm: argforms.argHoistName :ast :reg :typing :ctx argNid: (interpPartNodeId :n) fallback: "_hp"
+    hNm: argforms.argHoistName :prog :ctx argNid: (interpPartNodeId :n) fallback: "_hp"
     strT: values.strTypeC :ctx
     interpLocal :ctx :expr ctype: strT.stringView name: hNm.stringView init: val :ind :buf :ops
     preludeNeed :ctx memb: "@String_append"
     sh: "\{ctx.strC}_append(&\{sNm}, \{hNm}.data, \{hNm}.size)"
     interpStep :expr text: sh.stringView :ind :buf :ops
-    if (values.scopeOwnsTemp :typing argNid: (interpPartNodeId :n)) then {
+    if (values.scopeOwnsTemp :prog argNid: (interpPartNodeId :n)) then {
         preludeNeed :ctx memb: "@String_free"
         sf: "\{ctx.strC}_free(&\{hNm})"
         interpStep :expr text: sf.stringView :ind :buf :ops
@@ -414,26 +433,21 @@ appendStringPart: function {
 # kind, or a tag, which prints as its number. A bool is not one: it prints its
 # arm's name (interpBoolPart).
 interpPartIsInt: function {
-    reg: ztypes.ZTypeRegistry.view
-    typing: ztyping.ZTyping.view
+    prog: Program.view
     tid: ztypes.tid
     nk: ztypes.suffixinfo
 } out bool is {
     if nk.has then return (ztypes.isFloatKind k: nk.kind).not
     if tid.isZero then return false
-    if (narrowfacts.isOrdinalVariant :typing :tid) then return true
-    return (reg.typetypeOf typeId: tid) == ztypes.ztypetype.tagType
+    if (narrowfacts.isOrdinalVariant :prog :tid) then return true
+    return (prog.reg.typetypeOf typeId: tid) == ztypes.ztypetype.tagType
 }
 
 # interpBoolPart -- an interpolated bool, appended as the name of the arm it holds
 # (`true` or `false`, read off bool's declaration). The value is bound once:
 # each interpolation part is evaluated exactly once.
 interpBoolPart: function {
-    # the arm names
-    ast: Ast.view
-    # the checked program declaring bool
-    reg: ztypes.ZTypeRegistry.view
-    typing: ztyping.ZTyping.view
+    prog: Program.view
     # the emission context holding bool's tid
     ctx: Ctx
     # the bool's C expression
@@ -450,8 +464,8 @@ interpBoolPart: function {
     buf: String.borrow
     ops: String.borrow
 } is {
-    f: zast.nameTextAt :ast ref: (armIdAt :reg :typing tid: ctx.boolTid armOrd: 0)
-    t: zast.nameTextAt :ast ref: (armIdAt :reg :typing tid: ctx.boolTid armOrd: 1)
+    f: zast.nameTextAt ast: prog.ast ref: (armIdAt :prog tid: ctx.boolTid armOrd: 0)
+    t: zast.nameTextAt ast: prog.ast ref: (armIdAt :prog tid: ctx.boolTid armOrd: 1)
     fl: f.length
     tl: t.length
     fq: "\"\{f}\""
@@ -483,9 +497,7 @@ interpBoolPart: function {
 # to `sNm`: false when the part's type `pt` (with its numeric kind `nk`) is
 # neither, and nothing is written.
 interpScalarPart: function {
-    ast: Ast.view
-    reg: ztypes.ZTypeRegistry.view
-    typing: ztyping.ZTyping.view
+    prog: Program.view
     ctx: Ctx
     pt: ztypes.tid
     nk: ztypes.suffixinfo
@@ -529,10 +541,10 @@ interpScalarPart: function {
             :ops
         )
     } else if pt.notZero when ctx.boolTid.notZero when (
-        (ztypecheck.typedefChaseTid :typing tid: pt) == ctx.boolTid
+        (ztypecheck.typedefChaseTid typing: prog.typing tid: pt) == ctx.boolTid
     ) then {
-        interpBoolPart :ast :reg :typing :ctx :val :sNm :bN :expr :ind :buf :ops
-    } else if (interpPartIsInt :reg :typing tid: pt :nk) then {
+        interpBoolPart :prog :ctx :val :sNm :bN :expr :ind :buf :ops
+    } else if (interpPartIsInt :prog tid: pt :nk) then {
         # u64 is the one integer width whose range does not fit in
         # int64_t, so it is formatted unsigned -- signed, u64 max would print
         # as -1. The kind answers this: unsigned and 64 bits wide is the case,
@@ -609,9 +621,7 @@ interpScalarPart: function {
 # `sNm` being built: as statements on `buf`, or, for a build used as a value
 # (`expr`), as operands of its comma expression on `ops`.
 emitInterpPart: function {
-    ast: Ast.view
-    reg: ztypes.ZTypeRegistry.view
-    typing: ztyping.ZTyping.view
+    prog: Program.view
     ctx: Ctx
     n: astnode.view
     sNm: StringView
@@ -622,18 +632,18 @@ emitInterpPart: function {
     ops: String.borrow
 } is {
     if n.stringchunk then {
-        tv: zast.literalTextAt :ast ref: n.text
+        tv: zast.literalTextAt ast: prog.ast ref: n.text
         esc: consts.cEscape text: tv
         preludeNeed :ctx memb: "@String_append"
         sc: "\{ctx.strC}_append(&\{sNm}, \"\{esc}\", sizeof(\"\{esc}\")-1)"
         interpStep :expr text: sc.stringView :ind :buf :ops
         return
     }
-    pt: interpPartTid :reg :typing :n
-    nk: ztypecheck.numKindOfTid :typing tid: pt
+    pt: interpPartTid :prog :n
+    nk: ztypecheck.numKindOfTid typing: prog.typing tid: pt
     pmk: pendingHoistMark :ctx
     valF: exprfacts
-    val: argforms.valueExprC :ast :reg :typing :ctx :n facts: valF
+    val: argforms.valueExprC :prog :ctx :n facts: valF
     # a call fragment may have hoisted non-lvalue args to _ah temps: declare
     # them before the fragment uses them (mirrors the direct print path's flush
     # after emitCallValue); a build used as a value assigns them where it runs
@@ -645,9 +655,7 @@ emitInterpPart: function {
     }
     if (
         interpScalarPart
-        :ast
-        :reg
-        :typing
+        :prog
         :ctx
         :pt
         :nk
@@ -665,9 +673,7 @@ emitInterpPart: function {
     } else if pt.notZero when pt == ctx.strTid then {
         (
             appendStringPart
-            :ast
-            :reg
-            :typing
+            :prog
             :ctx
             :n
             val: val.stringView
@@ -680,15 +686,13 @@ emitInterpPart: function {
         )
     } else if (
         originIsTid
-        :reg
-        tid: (stampIdOf :typing nid: (interpPartNodeId :n))
+        :prog
+        tid: (stampIdOf :prog nid: (interpPartNodeId :n))
         originTid: (ctx.origins.get i: family.slot.str)
     ) then {
         (
             appendStrPart
-            :ast
-            :reg
-            :typing
+            :prog
             :ctx
             :n
             val: val.stringView
@@ -701,7 +705,7 @@ emitInterpPart: function {
             :ops
         )
     } else {
-        tn: reg.nameViewOf tid: pt
+        tn: prog.reg.nameViewOf tid: pt
         emitFail :ctx what: "unhandled interp part type \{tn}" line: (ztypecheck.nodeLine :n)
     }
     # the part's value has been appended, so a `.take` argument inside it
@@ -709,20 +713,18 @@ emitInterpPart: function {
     # Without this the callee frees the moved value and the caller frees it
     # again at scope end.
     if expr.not then {
-        stmtblocks.emitValueTakeInvalidations :ast :reg :typing :ctx :n :ind :buf
+        stmtblocks.emitValueTakeInvalidations :prog :ctx :n :ind :buf
         return
     }
     inv: String
-    stmtblocks.emitValueTakeInvalidations :ast :reg :typing :ctx :n ind: "" buf: inv
+    stmtblocks.emitValueTakeInvalidations :prog :ctx :n ind: "" buf: inv
     appendLinesAsOps :ops lines: inv.stringView
     ops.append rel
 }
 
 # armIdAt -- the name of sum `tid`'s arm at ordinal `armOrd`; 0 past the last.
 armIdAt: function {
-    # the checked program
-    reg: ztypes.ZTypeRegistry.view
-    typing: ztyping.ZTyping.view
+    prog: Program.view
     # the sum type
     tid: ztypes.tid
     # the arm's position among the sum's arms
@@ -730,11 +732,11 @@ armIdAt: function {
 } out zast.nameid is {
     k: u64
     i: u64
-    n: typing.declRowSlots ownerTid: tid
+    n: prog.typing.declRowSlots ownerTid: tid
     for i < n loop {
-        rw: typing.declRowAt ownerTid: tid membersOnly: true slot: i
+        rw: prog.typing.declRowAt ownerTid: tid membersOnly: true slot: i
         i = i + 1
-        if rw.keep when (types.isArmRow :reg :typing :tid nameId: rw.name rowTid: rw.tid) then {
+        if rw.keep when (types.isArmRow :prog :tid nameId: rw.name rowTid: rw.tid) then {
             if k == armOrd then return rw.name
             k = k + 1
         }
@@ -744,20 +746,18 @@ armIdAt: function {
 
 # elemEqIsBytes -- the runtime's `==` for this element is a compare of its
 # bytes: an integer, a char, a bool, a function pointer. Not a float.
-elemEqIsBytes: function {
-    ast: Ast.view reg: ztypes.ZTypeRegistry.view typing: ztyping.ZTyping.view tid: ztypes.tid
-} out bool is {
+elemEqIsBytes: function {prog: Program.view tid: ztypes.tid} out bool is {
     src: (
         ztypecheck.valOpSource
-        :ast
-        :reg
-        :typing
+        ast: prog.ast
+        reg: prog.reg
+        typing: prog.typing
         :tid
         nameId: zast.wellKnown.slot.wkOpEq
     )
     if src.builtin.not then return false
-    if (partIsCScalar :reg :typing :tid).not then return false
-    nk: consts.constScalarKindForTid :typing :tid
+    if (partIsCScalar :prog :tid).not then return false
+    nk: consts.constScalarKindForTid :prog :tid
     return (nk.has and (ztypes.isFloatKind k: nk.kind)).not
 }
 
@@ -765,9 +765,7 @@ elemEqIsBytes: function {
 # its counterpart by the element's own `==` -- one memcmp when that `==` is
 # the element's bytes.
 emitListEq: function {
-    ast: Ast.view
-    reg: ztypes.ZTypeRegistry.view
-    typing: ztyping.ZTyping.view
+    prog: Program.view
     ctx: Ctx
     nm: StringView
     ect: StringView
@@ -777,21 +775,21 @@ emitListEq: function {
     proto: "static bool z_\{nm}_eq(const z_\{nm}_t* a, const z_\{nm}_t* b)"
     body: "\{proto} {\n"
     body.append "    if (a->length != b->length) return false;\n"
-    if (elemEqIsBytes :ast :reg :typing tid: elem) then {
+    if (elemEqIsBytes :prog tid: elem) then {
         body.append "    return a->length == 0 || memcmp(a->data, b->data, a->length * sizeof(*a->data)) == 0;\n"
     } else {
         body.append "    for (uint64_t _i = 0; _i < a->length; _i++) {\n"
         body.append "        \{ect} _x = a->data[_i];\n"
         body.append "        \{ect} _y = b->data[_i];\n"
         body.append "        if (!("
-        partEqC :ast :reg :typing :ctx tid: elem lhs: "_x" rhs: "_y" sel: "" dest: body
+        partEqC :prog :ctx tid: elem lhs: "_x" rhs: "_y" sel: "" dest: body
         body.append ")) return false;\n"
         body.append "    }\n"
         body.append "    return true;\n"
     }
     body.append "}\n\n"
     buf.append "\{proto};\n"
-    if (nativerows.partCallsWritten :ast :reg :typing tid: elem) then {
+    if (nativerows.partCallsWritten :prog tid: elem) then {
         ctx.lateDefs.append body
     } else {
         buf.append body
@@ -838,19 +836,17 @@ hashU64C: function {ctx: Ctx v: StringView} out String is {
 # written C names as a value (hashMemberRead): it has no declaration for the
 # pass above to read, and emitHashDefs writes it taking its type by pointer.
 emitHashMemberFnptrs: function {
-    ast: Ast.view
-    reg: ztypes.ZTypeRegistry.view
-    typing: ztyping.ZTyping.view
+    prog: Program.view
     ctx: Ctx
     buf: String.borrow
 } is {
-    for each ru: typing.hashUsed loop {
+    for each ru: prog.typing.hashUsed loop {
         r: ru
-        fid: hashMemberRead :ast :reg :typing :ctx tid: r
+        fid: hashMemberRead :prog :ctx tid: r
         if fid.isZero or (ctx.fnptrDemand.has item: fid).not then continue
         if (ctx.fnptrWritten.has item: fid) then continue
         ctx.fnptrWritten.add item: fid
-        rt: nativerows.cTypeForNameTid :ast :reg :typing :ctx tid: r
+        rt: nativerows.cTypeForNameTid :prog :ctx tid: r
         cb: types.ctxCnameView :ctx tid: fid
         buf.append "typedef uint64_t (*\{cb}_ft)(const \{rt}*);\n"
     }
@@ -860,9 +856,7 @@ emitHashMemberFnptrs: function {
 # payload of the arm both carry, with that payload's own `==`; a payload-less
 # variant is its tag.
 emitVariantEq: function {
-    ast: Ast.view
-    reg: ztypes.ZTypeRegistry.view
-    typing: ztyping.ZTyping.view
+    prog: Program.view
     ctx: Ctx
     tid: ztypes.tid
     # the variant's C name
@@ -875,20 +869,18 @@ emitVariantEq: function {
     haveP: bool
     buf: String.borrow
 } is {
-    if (partsCallWritten :ast :reg :typing ids: aids).not then {
-        writeVariantEq :ast :reg :typing :ctx :tid :vc :arms :haveP dest: buf
+    if (partsCallWritten :prog ids: aids).not then {
+        writeVariantEq :prog :ctx :tid :vc :arms :haveP dest: buf
         return
     }
     body: String
-    writeVariantEq :ast :reg :typing :ctx :tid :vc :arms :haveP dest: body
+    writeVariantEq :prog :ctx :tid :vc :arms :haveP dest: body
     emitEqLate :ctx cname: vc :body :buf
 }
 
 # writeVariantEq -- emitVariantEq's definition, written to `dest`.
 writeVariantEq: function {
-    ast: Ast.view
-    reg: ztypes.ZTypeRegistry.view
-    typing: ztyping.ZTyping.view
+    prog: Program.view
     ctx: Ctx
     tid: ztypes.tid
     vc: StringView
@@ -906,18 +898,16 @@ writeVariantEq: function {
     dest.append "    if (a.tag != b.tag) return false;\n"
     dest.append "    switch (a.tag) {\n"
     for each qname: arms loop {
-        qco: typing.declChildOfId parentTypeId: tid nameId: qname
-        qc: values.armPayloadC :ast :reg :typing :ctx :tid arm: qname
+        qco: prog.typing.declChildOfId parentTypeId: tid nameId: qname
+        qc: values.armPayloadC :prog :ctx :tid arm: qname
         if qc.length > 0 when qco.some then {
-            qtg: spelledTagConst :ast :ctx :reg :typing :tid armId: qname
-            qnameC: memberC :ast :reg :typing :ctx owner: tid kind: memberkind.arm nameId: qname
+            qtg: spelledTagConst :prog :ctx :tid armId: qname
+            qnameC: memberC :prog :ctx owner: tid kind: memberkind.arm nameId: qname
             qsel: ".data.\{qnameC}"
             dest.append "        case \{qtg}: return "
             (
                 partEqC
-                :ast
-                :reg
-                :typing
+                :prog
                 :ctx
                 tid: qco
                 lhs: "a"
@@ -940,9 +930,7 @@ writeVariantEq: function {
 # generated `==` otherwise. A method takes its receiver's address, so `lhs` +
 # `sel` is an lvalue.
 partEqC: function {
-    ast: Ast.view
-    reg: ztypes.ZTypeRegistry.view
-    typing: ztyping.ZTyping.view
+    prog: Program.view
     ctx: Ctx
     tid: ztypes.tid
     lhs: StringView
@@ -952,9 +940,9 @@ partEqC: function {
 } is {
     src: (
         ztypecheck.valOpSource
-        :ast
-        :reg
-        :typing
+        ast: prog.ast
+        reg: prog.reg
+        typing: prog.typing
         :tid
         nameId: zast.wellKnown.slot.wkOpEq
     )
@@ -964,8 +952,8 @@ partEqC: function {
             opId = zast.wellKnown.slot.wkOpNe
             dest.append "!"
         }
-        owner: ztypecheck.valOpOwner :typing :tid nameId: zast.wellKnown.slot.wkOpEq
-        fo: typing.declChildOfId parentTypeId: owner nameId: opId
+        owner: ztypecheck.valOpOwner typing: prog.typing :tid nameId: zast.wellKnown.slot.wkOpEq
+        fo: prog.typing.declChildOfId parentTypeId: owner nameId: opId
         dest.append (spelledCname :ctx tid: (fo.or d: ztypes.tid.zero))
         dest.append "(&"
         dest.append lhs
@@ -976,8 +964,8 @@ partEqC: function {
         dest.append ")"
         return
     }
-    if (consts.partIsHelperScalar :typing :tid) then {
-        hk: (consts.constScalarKindForTid :typing :tid).kind
+    if (consts.partIsHelperScalar :prog :tid) then {
+        hk: (consts.constScalarKindForTid :prog :tid).kind
         if hk == ztypes.numkind.f16Type then {
             nativepieces.needsAddM :ctx uname: "prelude" memb: "f16"
             preludeNeed :ctx memb: "@f16_eq"
@@ -999,7 +987,7 @@ partEqC: function {
         dest.append ")"
         return
     }
-    if (partIsCScalar :reg :typing :tid) then {
+    if (partIsCScalar :prog :tid) then {
         dest.append lhs
         dest.append sel
         dest.append " == "
@@ -1007,8 +995,8 @@ partEqC: function {
         dest.append sel
         return
     }
-    emitplan.noteEqUse :ast :reg :typing :ctx :tid
-    dest.append (spelledCname :ctx tid: (ztypecheck.typedefChaseTid :typing :tid))
+    emitplan.noteEqUse :prog :ctx :tid
+    dest.append (spelledCname :ctx tid: (ztypecheck.typedefChaseTid typing: prog.typing :tid))
     dest.append "_eq("
     dest.append lhs
     dest.append sel
@@ -1024,9 +1012,7 @@ partEqC: function {
 # afterwards, so equal values give equal words; for a function pointer, its
 # address; and the generated `_hash` of a str or an aggregate otherwise.
 partHashWords: function {
-    ast: Ast.view
-    reg: ztypes.ZTypeRegistry.view
-    typing: ztyping.ZTyping.view
+    prog: Program.view
     ctx: Ctx
     tid: ztypes.tid
     v: StringView
@@ -1034,15 +1020,15 @@ partHashWords: function {
 } is {
     src: (
         ztypecheck.valOpSource
-        :ast
-        :reg
-        :typing
+        ast: prog.ast
+        reg: prog.reg
+        typing: prog.typing
         :tid
         nameId: zast.wellKnown.slot.wkHash
     )
     if src.written then {
-        owner: ztypecheck.valOpOwner :typing :tid nameId: zast.wellKnown.slot.wkHash
-        fo: typing.declChildOfId parentTypeId: owner nameId: zast.wellKnown.slot.wkHash
+        owner: ztypecheck.valOpOwner typing: prog.typing :tid nameId: zast.wellKnown.slot.wkHash
+        fo: prog.typing.declChildOfId parentTypeId: owner nameId: zast.wellKnown.slot.wkHash
         fc: spelledCname :ctx tid: (fo.or d: ztypes.tid.zero)
         wr: String
         wr.append fc
@@ -1052,14 +1038,14 @@ partHashWords: function {
         words.append wr
         return
     }
-    base: ztypecheck.typedefChaseTid :typing :tid
-    if (reg.typetypeOf typeId: base) == ztypes.ztypetype.functionType then {
+    base: ztypecheck.typedefChaseTid typing: prog.typing :tid
+    if (prog.reg.typetypeOf typeId: base) == ztypes.ztypetype.functionType then {
         wf: "(uint64_t)(uintptr_t)\{v}"
         words.append wf
         return
     }
-    if (partIsCScalar :reg :typing tid: base) then {
-        hbk: ztypecheck.numKindOfTid :typing tid: base
+    if (partIsCScalar :prog tid: base) then {
+        hbk: ztypecheck.numKindOfTid typing: prog.typing tid: base
         if hbk.has when (ztypes.intKindBits k: hbk.kind) == 128 then {
             # its two words, through the int128 helpers: the value is no C
             # arithmetic type where the C compiler has no 128-bit integer
@@ -1087,7 +1073,7 @@ partHashWords: function {
         words.append wt
         return
     }
-    hashFnDemand :ast :reg :typing :ctx tid: base
+    hashFnDemand :prog :ctx tid: base
     wg: "\{spelledCname :ctx tid: base}_hash(\{v})"
     words.append wg
 }
@@ -1095,15 +1081,13 @@ partHashWords: function {
 # hashExprC -- the `u64` hash of a value `v` of type `tid`: the author's `hash`,
 # the integer mixer over a scalar's words, or the generated `_hash`.
 hashExprC: function {
-    ast: Ast.view
-    reg: ztypes.ZTypeRegistry.view
-    typing: ztyping.ZTyping.view
+    prog: Program.view
     ctx: Ctx
     tid: ztypes.tid
     v: StringView
 } out String is {
     words: List String
-    partHashWords :ast :reg :typing :ctx :tid :v :words
+    partHashWords :prog :ctx :tid :v :words
     if words.length == 0 then return "0".string
     w0: words.get i: 0
     if words.length == 2 then {
@@ -1114,19 +1098,19 @@ hashExprC: function {
     }
     src: (
         ztypecheck.valOpSource
-        :ast
-        :reg
-        :typing
+        ast: prog.ast
+        reg: prog.reg
+        typing: prog.typing
         :tid
         nameId: zast.wellKnown.slot.wkHash
     )
-    base: ztypecheck.typedefChaseTid :typing :tid
-    if src.written.not when (partIsCScalar :reg :typing tid: base) then return (
+    base: ztypecheck.typedefChaseTid typing: prog.typing :tid
+    if src.written.not when (partIsCScalar :prog tid: base) then return (
         hashU64C
         :ctx
         v: w0.stringView
     )
-    if (reg.typetypeOf typeId: base) == ztypes.ztypetype.functionType then {
+    if (prog.reg.typetypeOf typeId: base) == ztypes.ztypetype.functionType then {
         return (hashU64C :ctx v: w0.stringView)
     }
     return w0.copy
@@ -1135,47 +1119,43 @@ hashExprC: function {
 # hashFnDemand -- `tid` needs its generated `_hash` written: a str, or an
 # aggregate whose `hash` is generated. Its parts' are demanded with it.
 hashFnDemand: function {
-    ast: Ast.view
-    reg: ztypes.ZTypeRegistry.view
-    typing: ztyping.ZTyping.view
+    prog: Program.view
     ctx: Ctx
     tid: ztypes.tid
 } is {
     if (ctx.hashAsked.has item: tid) then return
-    tt: reg.typetypeOf typeId: tid
+    tt: prog.reg.typetypeOf typeId: tid
     isAgg: tt.isValueData
     if isAgg.not then return
-    if (partIsCScalar :reg :typing :tid) then return
+    if (partIsCScalar :prog :tid) then return
     # text hashes as the view it is laid out as: the runtime's, not a generated one
     if (isViewLaid :ctx :tid) then return
     ctx.hashAsked.add item: tid
     ctx.hashOrder.append tid
     if (
         ztypecheck.valOpSource
-        :ast
-        :reg
-        :typing
+        ast: prog.ast
+        reg: prog.reg
+        typing: prog.typing
         :tid
         nameId: zast.wellKnown.slot.wkHash
     ).generated.not then return
     parts: ListVal ztypes.tid
-    ztypecheck.valPartTids :reg :typing :tid :parts
+    ztypecheck.valPartTids reg: prog.reg typing: prog.typing :tid :parts
     for each p: parts loop {
         if (
             ztypecheck.valOpSource
-            :ast
-            :reg
-            :typing
+            ast: prog.ast
+            reg: prog.reg
+            typing: prog.typing
             tid: p
             nameId: zast.wellKnown.slot.wkHash
         ).written.not then {
             (
                 hashFnDemand
-                :ast
-                :reg
-                :typing
+                :prog
                 :ctx
-                tid: (ztypecheck.typedefChaseTid :typing tid: p)
+                tid: (ztypecheck.typedefChaseTid typing: prog.typing tid: p)
             )
         }
     }
@@ -1184,14 +1164,13 @@ hashFnDemand: function {
 # appendHashSig -- the signature of `tid`'s generated `_hash`, onto `dest`: it
 # takes the value, or for a data type the handle the value is held as.
 appendHashSig: function {
-    reg: ztypes.ZTypeRegistry.view
-    typing: ztyping.ZTyping.view
+    prog: Program.view
     ctx: Ctx
     tid: ztypes.tid
     dest: String.borrow
 } is {
     cn: spelledCname :ctx :tid
-    if (argforms.isStaticHandle :reg :typing :tid) then {
+    if (argforms.isStaticHandle :prog :tid) then {
         dest.append "static uint64_t \{cn}_hash(const \{cn}_t* a)"
     } else {
         dest.append "static uint64_t \{cn}_hash(\{cn}_t a)"
@@ -1203,19 +1182,17 @@ appendHashSig: function {
 # its tag; a str hashes its bytes up to its length; an array of integers hashes
 # its bytes, any other array folds its elements' hashes in order.
 hashDefC: function {
-    ast: Ast.view
-    reg: ztypes.ZTypeRegistry.view
-    typing: ztyping.ZTyping.view
+    prog: Program.view
     ctx: Ctx
     tid: ztypes.tid
     dest: String.borrow
 } is {
-    appendHashSig :reg :typing :ctx :tid :dest
+    appendHashSig :prog :ctx :tid :dest
     dest.append " {\n"
     if (
         ztypecheck.valIsMonoOf
-        :reg
-        :typing
+        reg: prog.reg
+        typing: prog.typing
         :tid
         wk: zast.wellKnown.slot.tyStr
     ) then {
@@ -1224,30 +1201,28 @@ hashDefC: function {
     }
     if (
         ztypecheck.valIsMonoOf
-        :reg
-        :typing
+        reg: prog.reg
+        typing: prog.typing
         :tid
         wk: zast.wellKnown.slot.tyArray
     ) then {
-        arrayHashBody :ast :reg :typing :ctx :tid :dest
+        arrayHashBody :prog :ctx :tid :dest
         return
     }
-    if (reg.typetypeOf typeId: tid) == ztypes.ztypetype.variantType then {
-        variantHashBody :ast :reg :typing :ctx :tid :dest
+    if (prog.reg.typetypeOf typeId: tid) == ztypes.ztypetype.variantType then {
+        variantHashBody :prog :ctx :tid :dest
         return
     }
     words: List String
     names: List String
     ids: ListVal ztypes.tid
     nameIds: ListVal zast.nameid
-    callorder.recFieldLists :ast :reg :typing :tid :names :ids :nameIds
+    callorder.recFieldLists :prog :tid :names :ids :nameIds
     fk: u64
     for fk < names.length loop {
         fknC: (
             memberC
-            :ast
-            :reg
-            :typing
+            :prog
             :ctx
             owner: tid
             kind: memberkind.field
@@ -1255,8 +1230,8 @@ hashDefC: function {
         )
         fv: "a.\{fknC}"
         # a data value is hashed through its handle
-        if (argforms.isStaticHandle :reg :typing :tid) then fv = "a->\{fknC}"
-        partHashWords :ast :reg :typing :ctx tid: (ids.get i: fk) v: fv.stringView :words
+        if (argforms.isStaticHandle :prog :tid) then fv = "a->\{fknC}"
+        partHashWords :prog :ctx tid: (ids.get i: fk) v: fv.stringView :words
         fk = fk + 1
     }
     dest.append "    uint64_t _h[] = { "
@@ -1274,28 +1249,26 @@ hashDefC: function {
 # variantHashBody -- a variant's generated `_hash`: its tag, then the words of
 # the payload of the arm it holds, and zero for the words it does not use.
 variantHashBody: function {
-    ast: Ast.view
-    reg: ztypes.ZTypeRegistry.view
-    typing: ztyping.ZTyping.view
+    prog: Program.view
     ctx: Ctx
     tid: ztypes.tid
     dest: String.borrow
 } is {
     aids: ListVal ztypes.tid
     aidsNm: ListVal zast.nameid
-    types.variantArmIds :reg :typing :tid ids: aids nameIds: aidsNm
+    types.variantArmIds :prog :tid ids: aids nameIds: aidsNm
     cases: String
     width: u64
     for each qname: aidsNm loop {
-        qco: typing.declChildOfId parentTypeId: tid nameId: qname
-        qc: values.armPayloadC :ast :reg :typing :ctx :tid arm: qname
+        qco: prog.typing.declChildOfId parentTypeId: tid nameId: qname
+        qc: values.armPayloadC :prog :ctx :tid arm: qname
         if qc.length > 0 when qco.some then {
-            qnameC: memberC :ast :reg :typing :ctx owner: tid kind: memberkind.arm nameId: qname
+            qnameC: memberC :prog :ctx owner: tid kind: memberkind.arm nameId: qname
             qv: "a.data.\{qnameC}"
             words: List String
-            partHashWords :ast :reg :typing :ctx tid: qco v: qv.stringView :words
+            partHashWords :prog :ctx tid: qco v: qv.stringView :words
             if words.length > width then width = words.length
-            cases.append "        case \{spelledTagConst :ast :ctx :reg :typing :tid armId: qname}:"
+            cases.append "        case \{spelledTagConst :prog :ctx :tid armId: qname}:"
             wi: u64
             for wi < words.length loop {
                 cases.append " _h[\{wi + 1}] = \{words.get i: wi};"
@@ -1317,20 +1290,18 @@ variantHashBody: function {
 # arrayHashBody -- an array's generated `_hash`: its bytes when the element's
 # `==` is its bytes, otherwise its elements' hashes folded in order.
 arrayHashBody: function {
-    ast: Ast.view
-    reg: ztypes.ZTypeRegistry.view
-    typing: ztyping.ZTyping.view
+    prog: Program.view
     ctx: Ctx
     tid: ztypes.tid
     dest: String.borrow
 } is {
-    elem: ztypecheck.arrayElemTid :reg :tid
-    if (elemEqIsBytes :ast :reg :typing tid: elem) then {
+    elem: ztypecheck.arrayElemTid reg: prog.reg :tid
+    if (elemEqIsBytes :prog tid: elem) then {
         dest.append "    return \{hashBytesFn :ctx}(a.data, sizeof(a.data));\n}\n\n"
         return
     }
-    len: nativerows.monoLengthText :reg monoId: tid
-    eh: hashExprC :ast :reg :typing :ctx tid: elem v: "a.data[_i]"
+    len: nativerows.monoLengthText :prog monoId: tid
+    eh: hashExprC :prog :ctx tid: elem v: "a.data[_i]"
     dest.append "    uint64_t _h = \{len};\n"
     preludeNeed :ctx memb: "@hash_combine"
     dest.append "    for (int _i = 0; _i < \{len}; _i++) _h = z_hash_combine(_h, \{eh});\n"
@@ -1341,23 +1312,21 @@ arrayHashBody: function {
 # which the emitter then writes as a call of the type's `_hash`; zero when
 # there is none to write.
 hashMemberRead: function {
-    ast: Ast.view
-    reg: ztypes.ZTypeRegistry.view
-    typing: ztyping.ZTyping.view
+    prog: Program.view
     ctx: Ctx.view
     tid: ztypes.tid
 } out ztypes.tid is {
     if (
         ztypecheck.valOpSource
-        :ast
-        :reg
-        :typing
+        ast: prog.ast
+        reg: prog.reg
+        typing: prog.typing
         :tid
         nameId: zast.wellKnown.slot.wkHash
     ).generated.not then {
         return ztypes.tid
     }
-    fo: typing.declChildOfId parentTypeId: tid nameId: zast.wellKnown.slot.wkHash
+    fo: prog.typing.declChildOfId parentTypeId: tid nameId: zast.wellKnown.slot.wkHash
     fid: fo.or d: ztypes.tid.zero
     if fid.isZero then return fid
     # a read of it is its type's hash of the value (synthHashRead); only C
@@ -1370,9 +1339,7 @@ hashMemberRead: function {
 # being the key: the key's own `hash`, whatever wrote it. The functions it
 # calls are declared here, ahead of the mono that calls them.
 valKeyHashBody: function {
-    ast: Ast.view
-    reg: ztypes.ZTypeRegistry.view
-    typing: ztyping.ZTyping.view
+    prog: Program.view
     ctx: Ctx
     key: ztypes.tid
     keyT: StringView
@@ -1380,57 +1347,55 @@ valKeyHashBody: function {
 } out String is {
     src: (
         ztypecheck.valOpSource
-        :ast
-        :reg
-        :typing
+        ast: prog.ast
+        reg: prog.reg
+        typing: prog.typing
         tid: key
         nameId: zast.wellKnown.slot.wkHash
     )
     if src.written then {
         owner: (
             ztypecheck.valOpOwner
-            :typing
+            typing: prog.typing
             tid: key
             nameId: zast.wellKnown.slot.wkHash
         )
-        fo: typing.declChildOfId parentTypeId: owner nameId: zast.wellKnown.slot.wkHash
+        fo: prog.typing.declChildOfId parentTypeId: owner nameId: zast.wellKnown.slot.wkHash
         fid: fo.or d: ztypes.tid.zero
         buf.append "static uint64_t "
         buf.append (spelledCname :ctx tid: fid)
         buf.append "("
-        buf.append (emitplan.keyFnParamConstC :reg :typing :fid index: 0)
+        buf.append (emitplan.keyFnParamConstC :prog :fid index: 0)
         buf.append keyT
         buf.append "*);\n"
     }
-    base: ztypecheck.typedefChaseTid :typing tid: key
-    if src.written.not when (partIsCScalar :reg :typing tid: base).not then {
-        appendHashSig :reg :typing :ctx tid: base dest: buf
+    base: ztypecheck.typedefChaseTid typing: prog.typing tid: key
+    if src.written.not when (partIsCScalar :prog tid: base).not then {
+        appendHashSig :prog :ctx tid: base dest: buf
         buf.append ";\n"
     }
-    return (hashExprC :ast :reg :typing :ctx tid: key v: "_key")
+    return (hashExprC :prog :ctx tid: key v: "_key")
 }
 
 # emitHashPrototypes -- the prototypes of every generated `_hash` the program
 # needs, and of the member each `hash` read calls: written ahead of the method
 # bodies that call them, their definitions after everything (emitHashDefs).
 emitHashPrototypes: function {
-    ast: Ast.view
-    reg: ztypes.ZTypeRegistry.view
-    typing: ztyping.ZTyping.view
+    prog: Program.view
     ctx: Ctx
     buf: String.borrow
 } is {
     oi: u64
     for oi < ctx.hashOrder.length loop {
-        appendHashSig :reg :typing :ctx tid: (ctx.hashOrder.get i: oi) dest: buf
+        appendHashSig :prog :ctx tid: (ctx.hashOrder.get i: oi) dest: buf
         buf.append ";\n"
         oi = oi + 1
     }
-    for each ru: typing.hashUsed loop {
+    for each ru: prog.typing.hashUsed loop {
         r: ru
-        fid: hashMemberRead :ast :reg :typing :ctx tid: r
+        fid: hashMemberRead :prog :ctx tid: r
         if fid.notZero then {
-            rt: nativerows.cTypeForNameTid :ast :reg :typing :ctx tid: r
+            rt: nativerows.cTypeForNameTid :prog :ctx tid: r
             buf.append "static uint64_t \{spelledCname :ctx tid: fid}(const \{rt}* _t);\n"
         }
     }
@@ -1439,52 +1404,46 @@ emitHashPrototypes: function {
 # emitHashDefs -- the definitions emitHashPrototypes declared: each generated
 # `_hash`, and each read `hash` member as a call of its type's.
 emitHashDefs: function {
-    ast: Ast.view
-    reg: ztypes.ZTypeRegistry.view
-    typing: ztyping.ZTyping.view
+    prog: Program.view
     ctx: Ctx
     buf: String.borrow
 } is {
-    for each ru: typing.hashUsed loop {
+    for each ru: prog.typing.hashUsed loop {
         r: ru
-        fid: hashMemberRead :ast :reg :typing :ctx tid: r
+        fid: hashMemberRead :prog :ctx tid: r
         if fid.notZero then {
-            rt: nativerows.cTypeForNameTid :ast :reg :typing :ctx tid: r
-            he: hashExprC :ast :reg :typing :ctx tid: r v: "(*_t)"
+            rt: nativerows.cTypeForNameTid :prog :ctx tid: r
+            he: hashExprC :prog :ctx tid: r v: "(*_t)"
             buf.append "static uint64_t \{spelledCname :ctx tid: fid}(const \{rt}* _t) {\n"
             buf.append "    return \{he};\n}\n\n"
         }
     }
     oi: u64
     for oi < ctx.hashOrder.length loop {
-        hashDefC :ast :reg :typing :ctx tid: (ctx.hashOrder.get i: oi) dest: buf
+        hashDefC :prog :ctx tid: (ctx.hashOrder.get i: oi) dest: buf
         oi = oi + 1
     }
 }
 
 # partsCallWritten -- partCallsWritten for any of `ids`.
 partsCallWritten: function {
-    ast: Ast.view
-    reg: ztypes.ZTypeRegistry.view
-    typing: ztyping.ZTyping.view
+    prog: Program.view
     ids: (ListVal ztypes.tid).view
 } out bool is {
     for each p: ids loop {
-        if (nativerows.partCallsWritten :ast :reg :typing tid: p) then return true
+        if (nativerows.partCallsWritten :prog tid: p) then return true
     }
     return false
 }
 
 # partIsCScalar -- a part C compares with `==`: a scalar, or a function
 # pointer. Asked after the author's own `==`, which always comes first.
-partIsCScalar: function {
-    reg: ztypes.ZTypeRegistry.view typing: ztyping.ZTyping.view tid: ztypes.tid
-} out bool is {
-    base: ztypecheck.typedefChaseTid :typing :tid
-    if (reg.typetypeOf typeId: base) == ztypes.ztypetype.functionType then return true
+partIsCScalar: function {prog: Program.view tid: ztypes.tid} out bool is {
+    base: ztypecheck.typedefChaseTid typing: prog.typing :tid
+    if (prog.reg.typetypeOf typeId: base) == ztypes.ztypetype.functionType then return true
     # an untyped number held at run time is the i64 or f64 typeRefC lays it out as
-    if (ztypecheck.isLiteralTypeId :reg tid: base) then return true
-    return (consts.scalarCTypeFor :typing tid: base).length > 0
+    if (ztypecheck.isLiteralTypeId reg: prog.reg tid: base) then return true
+    return (consts.scalarCTypeFor :prog tid: base).length > 0
 }
 
 # emitEqLate -- a generated `_eq` that calls a method the author wrote: its
@@ -1509,9 +1468,7 @@ emitEqLate: function {
 # emitRecordEq -- a record's generated `==`: its fields one at a time, each with
 # that field's own `==`.
 emitRecordEq: function {
-    ast: Ast.view
-    reg: ztypes.ZTypeRegistry.view
-    typing: ztyping.ZTyping.view
+    prog: Program.view
     ctx: Ctx
     # the record
     tid: ztypes.tid
@@ -1521,27 +1478,25 @@ emitRecordEq: function {
     ids: (ListVal ztypes.tid).view
     buf: String.borrow
 } is {
-    if (partsCallWritten :ast :reg :typing :ids).not then {
-        writeRecordEq :ast :reg :typing :ctx :tid :rc :nameIds :ids dest: buf
+    if (partsCallWritten :prog :ids).not then {
+        writeRecordEq :prog :ctx :tid :rc :nameIds :ids dest: buf
         return
     }
     body: String
-    writeRecordEq :ast :reg :typing :ctx :tid :rc :nameIds :ids dest: body
+    writeRecordEq :prog :ctx :tid :rc :nameIds :ids dest: body
     (
         emitEqLate
         :ctx
         cname: rc.stringView
         :body
         :buf
-        handles: (argforms.isStaticHandle :reg :typing :tid)
+        handles: (argforms.isStaticHandle :prog :tid)
     )
 }
 
 # writeRecordEq -- emitRecordEq's definition, written to `dest`.
 writeRecordEq: function {
-    ast: Ast.view
-    reg: ztypes.ZTypeRegistry.view
-    typing: ztyping.ZTyping.view
+    prog: Program.view
     ctx: Ctx
     # the record whose `_eq` is written
     tid: ztypes.tid
@@ -1552,7 +1507,7 @@ writeRecordEq: function {
     dest: String.borrow
 } is {
     # a data value is compared through the handles it is held as
-    handles: argforms.isStaticHandle :reg :typing :tid
+    handles: argforms.isStaticHandle :prog :tid
     lq: "static bool \{rc}_eq(\{rc}_t a, \{rc}_t b) {\n"
     if handles then lq = "static bool \{rc}_eq(const \{rc}_t* a, const \{rc}_t* b) {\n"
     dest.append lq
@@ -1568,9 +1523,7 @@ writeRecordEq: function {
         if fk > 0 then dest.append " && "
         fknC: (
             memberC
-            :ast
-            :reg
-            :typing
+            :prog
             :ctx
             owner: tid
             kind: memberkind.field
@@ -1580,9 +1533,7 @@ writeRecordEq: function {
         if handles then fsel = "->\{fknC}"
         (
             partEqC
-            :ast
-            :reg
-            :typing
+            :prog
             :ctx
             tid: (ids.get i: fk)
             lhs: "a"

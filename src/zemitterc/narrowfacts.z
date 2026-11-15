@@ -7,8 +7,8 @@
 # Reads the record rather than asking ordinalVariantCType and measuring what it
 # says: this is a QUESTION, asked 11503 times in a self-compile, and building a
 # string to answer it allocated once per ask.
-isOrdinalVariant: function {typing: ztyping.ZTyping.view tid: ztypes.tid} out bool is {
-    ao: typing.ordinalVariant.get key: tid
+isOrdinalVariant: function {prog: Program.view tid: ztypes.tid} out bool is {
+    ao: prog.typing.ordinalVariant.get key: tid
     match (
         ao
     ) case some then {
@@ -22,11 +22,11 @@ isOrdinalVariant: function {typing: ztyping.ZTyping.view tid: ztypes.tid} out bo
 # into the pool: the tree is read-only throughout emission, so the text is
 # never copied out of it. The node is taken by copy: the text points into
 # `ast`'s pool, never into it, so only `ast` stays locked.
-atomTextOf: function {ast: Ast.view n: astnode} outx StringView is {
+atomTextOf: function {prog: Program.view n: astnode} outx StringView is {
     match (
         n
     ) case atomid then {
-        return (zast.nameTextAt :ast ref: n.name).stringView
+        return (zast.nameTextAt ast: prog.ast ref: n.name).stringView
     } else {
         return ""
     }
@@ -34,8 +34,8 @@ atomTextOf: function {ast: Ast.view n: astnode} outx StringView is {
 
 # dottedArmPredicateTid -- the arm-predicate stamp for a dotted node: the
 # variant/union type id when `value.arm` is a tag test; 0 otherwise.
-dottedArmPredicateTid: function {typing: ztyping.ZTyping.view nid: zast.nodeid} out ztypes.tid is {
-    return ((typing.dpArmPredicate.get key: nid).or d: ztypes.tid.zero)
+dottedArmPredicateTid: function {prog: Program.view nid: zast.nodeid} out ztypes.tid is {
+    return ((prog.typing.dpArmPredicate.get key: nid).or d: ztypes.tid.zero)
 }
 
 # varArmsGet -- the arms recorded for `vid`, none when absent.
@@ -193,10 +193,10 @@ aliasResolve: function {ctx: Ctx name: StringView vid: ztypes.vid} out String is
 
 # atomOrBaseText -- the atom's own text, or a dotted path's base atom's text:
 # the two shapes a receiver or a `.take` source is spelt in ("" otherwise).
-atomOrBaseText: function {ast: Ast.view n: astnode.view} outx StringView is {
-    t: atomTextOf :ast :n
+atomOrBaseText: function {prog: Program.view n: astnode.view} outx StringView is {
+    t: atomTextOf :prog :n
     if t.length > 0 then return t
-    return (callorder.dottedBaseAtom :ast :n)
+    return (callorder.dottedBaseAtom :prog :n)
 }
 
 # typedefBorrowSource -- the source node of a borrowed typedef (`Bytes xs.borrow`,
@@ -204,19 +204,18 @@ atomOrBaseText: function {ast: Ast.view n: astnode.view} outx StringView is {
 # value.
 # The binding is a second name for that source.
 typedefBorrowSource: function {
-    ast: Ast.view
-    typing: ztyping.ZTyping.view
+    prog: Program.view
     n: astnode.view
 } out zast.nodeid is {
     match (
         n
     ) case statementline then {
-        return (typedefBorrowSource :ast :typing n: (ast.nodes.get i: n.statementline))
+        return (typedefBorrowSource :prog n: (prog.ast.nodes.get i: n.statementline))
     } case call then {
-        ck: typing.callKind.get key: n.nodeid
+        ck: prog.typing.callKind.get key: n.nodeid
         if ck.none then return zast.nodeid
         if ck != zast.callkind.typedefBorrow then return zast.nodeid
-        return (underBorrowMarker :ast :typing nid: (castSourceArg :ast call: n))
+        return (underBorrowMarker :prog nid: (castSourceArg :prog call: n))
     } else {
         return zast.nodeid
     }
@@ -224,9 +223,9 @@ typedefBorrowSource: function {
 
 # castSourceArg -- the value a cast is built from: its `from:` argument, or its
 # one unlabelled argument; 0 when it has neither.
-castSourceArg: function {ast: Ast.view call: zast.callrow.view} out zast.nodeid is {
-    for each aId: (zast.kidsOf :ast span: call.arguments) loop {
-        a: ast.nodes.get i: aId
+castSourceArg: function {prog: Program.view call: zast.callrow.view} out zast.nodeid is {
+    for each aId: (zast.kidsOf ast: prog.ast span: call.arguments) loop {
+        a: prog.ast.nodes.get i: aId
         if a.namedoperation when (
             a.name.isZero or (a.name == zast.wellKnown.slot.wkFrom)
         ) then return a.operation
@@ -236,14 +235,12 @@ castSourceArg: function {ast: Ast.view call: zast.callrow.view} out zast.nodeid 
 
 # underBorrowMarker -- the path a `.borrow` marker is written on (`xs` of
 # `xs.borrow`), else the node itself.
-underBorrowMarker: function {
-    ast: Ast.view typing: ztyping.ZTyping.view nid: zast.nodeid
-} out zast.nodeid is {
+underBorrowMarker: function {prog: Program.view nid: zast.nodeid} out zast.nodeid is {
     if nid.isZero then return zast.nodeid
-    src: ast.nodes.get i: nid
+    src: prog.ast.nodes.get i: nid
     if src.dottedpath.not then return nid
     if (
-        (aliasOrChildId :ast :typing aliasId: src.nodeid childId: src.child) !=
+        (aliasOrChildId :prog aliasId: src.nodeid childId: src.child) !=
         zast.wellKnown.slot.wkBorrow
     ) then return nid
     return src.parent
@@ -251,8 +248,7 @@ underBorrowMarker: function {
 
 # emitLocalAtomNameWith -- emitLocalAtomName, its facts stated into `facts`.
 emitLocalAtomNameWith: function {
-    ast: Ast.view
-    reg: ztypes.ZTypeRegistry.view
+    prog: Program.view
     ctx: Ctx
     name: StringView
     vid: ztypes.vid
@@ -268,7 +264,7 @@ emitLocalAtomNameWith: function {
     }
     al: vidFind xs: ctx.aliases :vid
     if al > 0 then return (entryText xs: ctx.aliases at: al - 1 :facts)
-    return (localnames.localNameText :ast :reg :ctx :vid :name :facts)
+    return (localnames.localNameText :prog :ctx :vid :name :facts)
 }
 
 # entryText -- the text an alias or narrowing entry records for a variable, and
@@ -286,23 +282,21 @@ entryText: function {xs: (List VarEntry).view at: u64 facts: exprfacts.borrow} o
 # apart by its own stamp, so the emitter never has to re-derive where a
 # narrowing ends.
 narrowingEndedAt: function {
-    reg: ztypes.ZTypeRegistry.view
-    typing: ztyping.ZTyping.view
+    prog: Program.view
     ctx: Ctx.view
     nid: zast.nodeid
     vid: ztypes.vid
 } out bool is {
     if (varEntryHas xs: ctx.narrowBox :vid).not then return false
-    stamped: stampIdOf :typing :nid
+    stamped: stampIdOf :prog :nid
     if stamped.isZero then return false
-    return stamped == (reg.variableTypeOf id: vid)
+    return stamped == (prog.reg.variableTypeOf id: vid)
 }
 
 # wholeLocalName -- the local's own storage: a take alias where one stands,
 # never the payload a narrowing aliased it to; its facts are stated into `facts`.
 wholeLocalName: function {
-    ast: Ast.view
-    reg: ztypes.ZTypeRegistry.view
+    prog: Program.view
     ctx: Ctx.view
     name: StringView
     vid: ztypes.vid
@@ -310,38 +304,35 @@ wholeLocalName: function {
 } out String is {
     al: vidFind xs: ctx.aliases :vid
     if al > 0 then return (entryText xs: ctx.aliases at: al - 1 :facts)
-    return (localnames.localNameText :ast :reg :ctx :vid :name :facts)
+    return (localnames.localNameText :prog :ctx :vid :name :facts)
 }
 
 # emitLocalAtomNameAt -- emitLocalAtomNameWith for the read at `nid`, which sees
 # the whole local once a write ended its narrowing.
 emitLocalAtomNameAt: function {
-    ast: Ast.view
-    reg: ztypes.ZTypeRegistry.view
-    typing: ztyping.ZTyping.view
+    prog: Program.view
     ctx: Ctx
     nid: zast.nodeid
     name: StringView
     vid: ztypes.vid
     facts: exprfacts.borrow
 } out String is {
-    if (narrowingEndedAt :reg :typing :ctx :nid :vid) then {
-        return (wholeLocalName :ast :reg :ctx :name :vid :facts)
+    if (narrowingEndedAt :prog :ctx :nid :vid) then {
+        return (wholeLocalName :prog :ctx :name :vid :facts)
     }
-    return (emitLocalAtomNameWith :ast :reg :ctx :name :vid :facts)
+    return (emitLocalAtomNameWith :prog :ctx :name :vid :facts)
 }
 
 # aliasResolveAt -- aliasResolve for the read at `nid`: past a narrowing a
 # write ended, only a take alias substitutes for the name.
 aliasResolveAt: function {
-    reg: ztypes.ZTypeRegistry.view
-    typing: ztyping.ZTyping.view
+    prog: Program.view
     ctx: Ctx
     nid: zast.nodeid
     name: StringView
     vid: ztypes.vid
 } out String is {
-    if (narrowingEndedAt :reg :typing :ctx :nid :vid).not then return (aliasResolve :ctx :name :vid)
+    if (narrowingEndedAt :prog :ctx :nid :vid).not then return (aliasResolve :ctx :name :vid)
     al: vidFind xs: ctx.aliases :vid
     if al > 0 then return (ctx.aliases.get i: al - 1).val.copy
     return name.string
@@ -349,14 +340,13 @@ aliasResolveAt: function {
 
 # aliasResolvesToSelfAt -- aliasResolvesToSelf for the read at `nid`.
 aliasResolvesToSelfAt: function {
-    reg: ztypes.ZTypeRegistry.view
-    typing: ztyping.ZTyping.view
+    prog: Program.view
     ctx: Ctx.view
     nid: zast.nodeid
     name: StringView
     vid: ztypes.vid
 } out bool is {
-    if (narrowingEndedAt :reg :typing :ctx :nid :vid).not then {
+    if (narrowingEndedAt :prog :ctx :nid :vid).not then {
         return (aliasResolvesToSelf :ctx :name :vid)
     }
     al: vidFind xs: ctx.aliases :vid
@@ -370,8 +360,7 @@ aliasResolvesToSelfAt: function {
 # valtype passes as it stands. A type declaring no such projection cannot be
 # printed, and says so where the program can see it.
 emitPrintViaStringView: function {
-    reg: ztypes.ZTypeRegistry.view
-    typing: ztyping.ZTyping.view
+    prog: Program.view
     ctx: Ctx
     argTid: ztypes.tid
     name: StringView
@@ -380,14 +369,16 @@ emitPrintViaStringView: function {
     ind: StringView
     buf: String.borrow
 } is {
-    svco: typing.declChildOfId parentTypeId: argTid nameId: zast.wellKnown.slot.wkStringView
+    svco: prog.typing.declChildOfId parentTypeId: argTid nameId: zast.wellKnown.slot.wkStringView
     match (
         svco
     ) case some then {
         mcb: spelledCname :ctx tid: svco
-        argOrig: originTidOf :reg tid: argTid
+        argOrig: originTidOf :prog tid: argTid
         usesAmp: false
-        if (reg.typetypeOf typeId: argTid) == ztypes.ztypetype.classType when argOrig.isZero when (
+        if (
+            (prog.reg.typetypeOf typeId: argTid) == ztypes.ztypetype.classType
+        ) when argOrig.isZero when (
             isPtrVid
             :ctx
             :vid
@@ -402,7 +393,7 @@ emitPrintViaStringView: function {
             buf.append printLine
         }
     } case none then {
-        tn: reg.nameViewOf tid: argTid
+        tn: prog.reg.nameViewOf tid: argTid
         emitFail :ctx what: "unhandled print of \{name} type \{tn}" :line
     }
 }
@@ -411,18 +402,16 @@ emitPrintViaStringView: function {
 # says it holds: an owned String, a StringView, a str mono, or any other type
 # through its own stringView projection.
 emitPrintAtom: function {
-    ast: Ast.view
-    reg: ztypes.ZTypeRegistry.view
-    typing: ztyping.ZTyping.view
+    prog: Program.view
     ctx: Ctx
     n: zast.atomidrow.view
     ind: StringView
     buf: String.borrow
 } is {
-    anC: zast.nameTextAt :ast ref: n.name
+    anC: zast.nameTextAt ast: prog.ast ref: n.name
     an: anC.stringView
-    nameVid: atomVid :typing nid: n.nodeid
-    anm: aliasResolveAt :reg :typing :ctx nid: n.nodeid name: an vid: nameVid
+    nameVid: atomVid :prog nid: n.nodeid
+    anm: aliasResolveAt :prog :ctx nid: n.nodeid name: an vid: nameVid
     anv: ztypes.vid
     if anm.stringView == an then anv = nameVid
     # anm stays the SOURCE name (the alias/narrow lookups key on it); anmE
@@ -430,9 +419,7 @@ emitPrintAtom: function {
     anmF: exprfacts
     anmE: (
         emitLocalAtomNameAt
-        :ast
-        :reg
-        :typing
+        :prog
         :ctx
         nid: n.nodeid
         name: an
@@ -445,15 +432,15 @@ emitPrintAtom: function {
     # A stamped local is not a constant, so the probe is skipped for one --
     # the same order emitExpr's atomid arm uses.
     {
-        alo: typing.atomVariableId.get key: n.nodeid
+        alo: prog.typing.atomVariableId.get key: n.nodeid
         if alo.none then {
-            mainUnit: consts.mainUnitTid :typing :ctx
+            mainUnit: consts.mainUnitTid :prog :ctx
             facts: exprfacts
-            cst: consts.memberConstStringText :typing :ctx unitTid: mainUnit nameId: n.name :facts
+            cst: consts.memberConstStringText :prog :ctx unitTid: mainUnit nameId: n.name :facts
             if cst.length > 0 then anmE = cst.copy
         }
     }
-    if (argforms.stampIsStr :typing :ctx nid: n.nodeid) then {
+    if (argforms.stampIsStr :prog :ctx nid: n.nodeid) then {
         if (isPtrVid :ctx vid: anv) then {
             preludeNeed :ctx memb: "@String_print"
             lps: "\{ind}\{ctx.strC}_print(\{anmE});\n"
@@ -465,14 +452,14 @@ emitPrintAtom: function {
         }
         return
     }
-    argTid: stampIdOf :typing nid: n.nodeid
+    argTid: stampIdOf :prog nid: n.nodeid
     if ctx.svTid == argTid then {
         preludeNeed :ctx memb: "@StringView_print"
         lpv: "\{ind}\{ctx.svC}_print(\{anmE});\n"
         buf.append lpv
         return
     }
-    if (originIsTid :reg tid: argTid originTid: (ctx.origins.get i: family.slot.str)) then {
+    if (originIsTid :prog tid: argTid originTid: (ctx.origins.get i: family.slot.str)) then {
         preludeNeed :ctx memb: "@StringView_print"
         svT: values.svTypeC :ctx
         lpstr: "\{ind}\{ctx.svC}_print((\{svT}){ .data = \{anmE}.data, .size = \{anmE}.len });\n"
@@ -481,8 +468,7 @@ emitPrintAtom: function {
     }
     (
         emitPrintViaStringView
-        :reg
-        :typing
+        :prog
         :ctx
         :argTid
         name: anmE.stringView
@@ -505,49 +491,44 @@ dropStaleBorrowAlias: function {ctx: Ctx vid: ztypes.vid} is {
 # heap, the new one is stored, and a move source is zeroed so its scope-exit free
 # becomes a no-op.
 emitReassignStmt: function {
-    ast: Ast.view
-    reg: ztypes.ZTypeRegistry.view
-    typing: ztyping.ZTyping.view
+    prog: Program.view
     ctx: Ctx
     n: zast.reassignmentrow.view
     ind: StringView
     tmp: FnTemps
     buf: String.borrow
 } is {
-    if (typing.repoints.has item: n.nodeid) then {
-        emitRepointStmt :ast :reg :typing :ctx :n :ind :tmp :buf
+    if (prog.typing.repoints.has item: n.nodeid) then {
+        emitRepointStmt :prog :ctx :n :ind :tmp :buf
         return
     }
-    topathNode: ast.nodes.get i: n.topath
-    nm2: emitReassignLvalue :ast :reg :typing :ctx n: topathNode
+    topathNode: prog.ast.nodes.get i: n.topath
+    nm2: emitReassignLvalue :prog :ctx n: topathNode
     rtnid: interpPartNodeId n: topathNode
     # a collection-typedef lvalue (Bytes) stores and destroys as its
     # chased underlying mono, exactly like the binding path
     rtsid: (
         chaseAggregateTypedef
-        :reg
-        :typing
+        :prog
         :ctx
-        tid: (reassignDestroyTid :ast :reg :typing n: topathNode nid: rtnid)
+        tid: (reassignDestroyTid :prog n: topathNode nid: rtnid)
     )
     # a local's old value dies as the checker recorded it: not when it was
     # moved away, nor when the local owns nothing; a field's always does, and
     # so does that of a name a loop's header binds, which is no variable of
     # the checker's
     destroyOld: true
-    if topathNode.atomid when (atomVid :typing nid: rtnid).notZero then {
-        destroyOld = namedDestroyOwes :typing nid: n.nodeid
+    if topathNode.atomid when (atomVid :prog nid: rtnid).notZero then {
+        destroyOld = namedDestroyOwes :prog nid: n.nodeid
     }
     (
         values.emitStoreTo
-        :ast
-        :reg
-        :typing
+        :prog
         :ctx
         nm2: nm2.stringView
         :rtnid
         :rtsid
-        valueNode: (ast.nodes.get i: n.value)
+        valueNode: (prog.ast.nodes.get i: n.value)
         :destroyOld
         :ind
         :tmp
@@ -562,18 +543,16 @@ emitReassignStmt: function {
 # borrowed box, a collection's own pointer -- is its value, stored whole.
 # Nothing is freed and no source is zeroed: `x` owns nothing.
 emitRepointStmt: function {
-    ast: Ast.view
-    reg: ztypes.ZTypeRegistry.view
-    typing: ztyping.ZTyping.view
+    prog: Program.view
     ctx: Ctx
     n: zast.reassignmentrow.view
     ind: StringView
     tmp: FnTemps
     buf: String.borrow
 } is {
-    topathNode: ast.nodes.get i: n.topath
-    tgt: emitReassignLvalue :ast :reg :typing :ctx n: topathNode
-    xv: atomVid :typing nid: (atomNodeId n: topathNode)
+    topathNode: prog.ast.nodes.get i: n.topath
+    tgt: emitReassignLvalue :prog :ctx n: topathNode
+    xv: atomVid :prog nid: (atomNodeId n: topathNode)
     ptr: String
     tv: tgt.stringView
     # a borrow alias re-points the pointer it reads through
@@ -583,12 +562,10 @@ emitRepointStmt: function {
     } else if (isPtrVid :ctx vid: xv) then {
         ptr.append tv
     }
-    if (typing.ownedRepoints.has item: n.nodeid) then {
+    if (prog.typing.ownedRepoints.has item: n.nodeid) then {
         (
             values.emitOwnedRepoint
-            :ast
-            :reg
-            :typing
+            :prog
             :ctx
             :n
             :xv
@@ -600,12 +577,12 @@ emitRepointStmt: function {
         )
         return
     }
-    base: ast.nodes.get i: (underBorrowMarker :ast :typing nid: n.value)
-    rvm: emitExpr :ast :reg :typing :ctx n: base
+    base: prog.ast.nodes.get i: (underBorrowMarker :prog nid: n.value)
+    rvm: emitExpr :prog :ctx n: base
     flushArgHoists :ctx :ind :tmp :buf
     if ptr.length > 0 then {
         addr: "&"
-        if (pathIsPointer :ast :reg :typing :ctx n: base) then addr = ""
+        if (pathIsPointer :prog :ctx n: base) then addr = ""
         buf.append "\{ind}\{ptr} = \{addr}\{rvm};\n"
         return
     }
@@ -615,10 +592,10 @@ emitRepointStmt: function {
 # namedDestroyOwes -- whether the `.drop` or the reassignment at `nid` destroys
 # the value its local holds: the checker recorded one there (exitDestroy) for
 # a local that owns what it holds, and the local was not moved away first.
-namedDestroyOwes: function {typing: ztyping.ZTyping.view nid: zast.nodeid} out bool is {
-    rg: typing.exitDestroy.get key: nid
+namedDestroyOwes: function {prog: Program.view nid: zast.nodeid} out bool is {
+    rg: prog.typing.exitDestroy.get key: nid
     if rg.none then return false
-    return (typing.destroyItems.get i: rg.start).state.moved.not
+    return (prog.typing.destroyItems.get i: rg.start).state.moved.not
 }
 
 # reassignDestroyTid -- the type an assignment's old value is destroyed as. A
@@ -628,18 +605,16 @@ namedDestroyOwes: function {typing: ztyping.ZTyping.view nid: zast.nodeid} out b
 # the union holding it, and the arm the variable still held would leak. Every
 # other target answers with its own stamp.
 reassignDestroyTid: function {
-    ast: Ast.view
-    reg: ztypes.ZTypeRegistry.view
-    typing: ztyping.ZTyping.view
+    prog: Program.view
     n: astnode.view
     nid: zast.nodeid
 } out ztypes.tid is {
-    stamped: stampIdOf :typing :nid
-    rbn: atomTextOf :ast :n
+    stamped: stampIdOf :prog :nid
+    rbn: atomTextOf :prog :n
     if rbn.length == 0 then return stamped
-    rbv: atomVid :typing nid: (atomNodeId :n)
+    rbv: atomVid :prog nid: (atomNodeId :n)
     if rbv.isZero then return stamped
-    declared: reg.variableTypeOf id: rbv
+    declared: prog.reg.variableTypeOf id: rbv
     if declared.isZero then return stamped
     return declared
 }
@@ -649,9 +624,7 @@ reassignDestroyTid: function {
 # (seeded in narrowBox) writes THROUGH the box into the live entry; the local
 # read-copy is not the backing storage. Other targets emit normally.
 emitReassignLvalue: function {
-    ast: Ast.view
-    reg: ztypes.ZTypeRegistry.view
-    typing: ztyping.ZTyping.view
+    prog: Program.view
     ctx: Ctx
     n: astnode.view
 } out String is {
@@ -661,56 +634,60 @@ emitReassignLvalue: function {
     # payload. A write THROUGH the subject (the dotted leg below) does take the
     # alias, which is what the narrowing is for.
     {
-        rbNm: atomTextOf :ast :n
+        rbNm: atomTextOf :prog :n
         if rbNm.length > 0 then {
-            rbVid: atomVid :typing nid: (atomNodeId :n)
+            rbVid: atomVid :prog nid: (atomNodeId :n)
             if rbVid.notZero when (varEntryGet xs: ctx.narrowBox vid: rbVid).length > 0 then {
                 rbF: exprfacts
-                return (wholeLocalName :ast :reg :ctx vid: rbVid name: rbNm facts: rbF)
+                return (wholeLocalName :prog :ctx vid: rbVid name: rbNm facts: rbF)
             }
         }
     }
     if n.dottedpath then {
-        ba: zast.nameTextAt :ast ref: (zast.atomNameIdOf n: (ast.nodes.get i: n.parent))
+        ba: (
+            zast.nameTextAt
+            ast: prog.ast
+            ref: (zast.atomNameIdOf n: (prog.ast.nodes.get i: n.parent))
+        )
         if ba.length > 0 then {
-            baseVid: atomVid :typing nid: (atomNodeId n: (ast.nodes.get i: n.parent))
+            baseVid: atomVid :prog nid: (atomNodeId n: (prog.ast.nodes.get i: n.parent))
             nbo: varEntryGet xs: ctx.narrowBox vid: baseVid
             if nbo.length > 0 then {
                 memC: (
                     memberC
-                    :ast
-                    :reg
-                    :typing
+                    :prog
                     :ctx
                     owner: ((varTidGet xs: ctx.narrowTid vid: baseVid).or d: ztypes.tid.zero)
                     kind: memberkind.field
-                    nameId: (aliasOrChildId :ast :typing aliasId: n.nodeid childId: n.child)
+                    nameId: (aliasOrChildId :prog aliasId: n.nodeid childId: n.child)
                 )
                 lvx: "\{nbo}.\{memC}"
                 return lvx
             }
         }
-        memFpId: aliasOrChildId :ast :typing aliasId: n.nodeid childId: n.child
-        rpnid: interpPartNodeId n: (ast.nodes.get i: n.parent)
-        stampTid: stampIdOf :typing nid: rpnid
+        memFpId: aliasOrChildId :prog aliasId: n.nodeid childId: n.child
+        rpnid: interpPartNodeId n: (prog.ast.nodes.get i: n.parent)
+        stampTid: stampIdOf :prog nid: rpnid
         rsc: stampTid
         rsFp: stampTid
         if rsc.notZero then rsFp = rsc
-        rsFpc: chaseAggregateTypedef :reg :typing :ctx tid: rsFp
-        if (typing.declIsFnptrFieldId parentTypeId: rsFpc nameId: memFpId) then {
-            recvFp: zast.nameTextAt :ast ref: (zast.atomNameIdOf n: (ast.nodes.get i: n.parent))
+        rsFpc: chaseAggregateTypedef :prog :ctx tid: rsFp
+        if (prog.typing.declIsFnptrFieldId parentTypeId: rsFpc nameId: memFpId) then {
+            recvFp: (
+                zast.nameTextAt
+                ast: prog.ast
+                ref: (zast.atomNameIdOf n: (prog.ast.nodes.get i: n.parent))
+            )
             accFpL: ".".string
             recvFpC: String
             if recvFp.length > 0 then {
-                rfn: atomNodeId n: (ast.nodes.get i: n.parent)
-                rfv: atomVid :typing nid: rfn
+                rfn: atomNodeId n: (prog.ast.nodes.get i: n.parent)
+                rfv: atomVid :prog nid: rfn
                 if (isPtrVid :ctx vid: rfv) then accFpL = "->".string
                 rfF: exprfacts
                 recvFpC = (
                     emitLocalAtomNameAt
-                    :ast
-                    :reg
-                    :typing
+                    :prog
                     :ctx
                     nid: rfn
                     name: recvFp.stringView
@@ -720,35 +697,33 @@ emitReassignLvalue: function {
             } else {
                 # a field reached through a path (`this.inner.zero`): the path
                 # itself, through `->` when it resolves to a pointer
-                recvFpC = emitExpr :ast :reg :typing :ctx n: (ast.nodes.get i: n.parent)
-                if (pathIsPointer :ast :reg :typing :ctx n: (ast.nodes.get i: n.parent)
+                recvFpC = emitExpr :prog :ctx n: (prog.ast.nodes.get i: n.parent)
+                if (pathIsPointer :prog :ctx n: (prog.ast.nodes.get i: n.parent)
                 ) then accFpL = "->".string
             }
             memFpC: (
                 memberC
-                :ast
-                :reg
-                :typing
+                :prog
                 :ctx
                 owner: rsFpc
                 kind: memberkind.field
-                nameId: (aliasOrChildId :ast :typing aliasId: n.nodeid childId: n.child)
+                nameId: (aliasOrChildId :prog aliasId: n.nodeid childId: n.child)
             )
             return "\{recvFpC}\{accFpL}\{memFpC}"
         }
     }
-    return (emitExpr :ast :reg :typing :ctx :n)
+    return (emitExpr :prog :ctx :n)
 }
 
 # armMemberTid -- the payload type `arm` names on sum type `owner`, 0 when the
 # arm is not a member of it.
 armMemberTid: function {
-    typing: ztyping.ZTyping.view
+    prog: Program.view
     owner: ztypes.tid
     arm: zast.nameid
 } out ztypes.tid is {
     pt: (
-        (typing.declChildOfId parentTypeId: owner nameId: arm).or
+        (prog.typing.declChildOfId parentTypeId: owner nameId: arm).or
         d: ztypes.tid.zero
     )
     return pt
@@ -758,8 +733,7 @@ armMemberTid: function {
 # ambient exclusions recorded for variable `subjVid` (ctx.exclArms) plus the
 # `extra` space-joined arms; "" when zero or more than one remain.
 remainingArm: function {
-    reg: ztypes.ZTypeRegistry.view
-    typing: ztyping.ZTyping.view
+    prog: Program.view
     ctx: Ctx.view
     subjVid: ztypes.vid
     tid: ztypes.tid
@@ -767,7 +741,7 @@ remainingArm: function {
 } out zast.nameid is {
     exv: varArmsGet xs: ctx.exclArms vid: subjVid
     all: ListVal zast.nameid
-    zenv.sumArmNameIds ty: typing :reg :tid ids: all
+    zenv.sumArmNameIds ty: prog.typing reg: prog.reg :tid ids: all
     remN: u64
     rem: zast.nameid
     for each a: all loop {
@@ -785,22 +759,22 @@ remainingArm: function {
 # whole subtree counts: a rebind in a binding's value, a condition or a call's
 # argument writes the variable as surely as one in a statement. A write
 # THROUGH the name (`s.field = x`) goes through the alias and leaves it standing.
-bodyReassigns: function {ast: Ast.view n: astnode.view name: StringView} out bool is {
+bodyReassigns: function {prog: Program.view n: astnode.view name: StringView} out bool is {
     match (
         n
     ) case reassignment then {
-        if (atomTextOf :ast n: (ast.nodes.get i: n.topath)) == name then return true
+        if (atomTextOf :prog n: (prog.ast.nodes.get i: n.topath)) == name then return true
     } case swapstmt then {
-        sl: atomTextOf :ast n: (ast.nodes.get i: n.lhs)
-        sr: atomTextOf :ast n: (ast.nodes.get i: n.rhs)
+        sl: atomTextOf :prog n: (prog.ast.nodes.get i: n.lhs)
+        sr: atomTextOf :prog n: (prog.ast.nodes.get i: n.rhs)
         if (sl == name) or (sr == name) then return true
     } else null
-    nk: zast.childCount :ast :n
+    nk: zast.childCount ast: prog.ast :n
     i: u64
     for i < nk loop {
-        k: zast.childAt :ast :n :i
+        k: zast.childAt ast: prog.ast :n :i
         i = i + 1
-        if (bodyReassigns :ast n: (ast.nodes.get i: k) :name) then return true
+        if (bodyReassigns :prog n: (prog.ast.nodes.get i: k) :name) then return true
     }
     return false
 }
@@ -811,9 +785,7 @@ bodyReassigns: function {ast: Ast.view n: astnode.view name: StringView} out boo
 # (subject, alias text, payload tid). The condition-form dispatch
 # (trailing .true/.false, == true/false) lives in seedCondOp.
 seedFromPredicate: function {
-    ast: Ast.view
-    reg: ztypes.ZTypeRegistry.view
-    typing: ztyping.ZTyping.view
+    prog: Program.view
     ctx: Ctx
     n: astnode.view
     names: List String
@@ -825,16 +797,14 @@ seedFromPredicate: function {
     match (
         n
     ) case dottedpath then {
-        armId: aliasOrChildId :ast :typing aliasId: n.nodeid childId: n.child
-        armTid: dottedArmPredicateTid :typing nid: n.nodeid
+        armId: aliasOrChildId :prog aliasId: n.nodeid childId: n.child
+        armTid: dottedArmPredicateTid :prog nid: n.nodeid
         (
             seedPositiveCore
-            :ast
-            :reg
-            :typing
+            :prog
             :ctx
             tid: armTid
-            parent: (ast.nodes.get i: n.parent)
+            parent: (prog.ast.nodes.get i: n.parent)
             childName: armId
             :names
             :svids
@@ -848,9 +818,7 @@ seedFromPredicate: function {
 # seedPositiveCore -- the positive-seed core: the subject named by `parent` is
 # known to hold `childName` of `tid`.
 seedPositiveCore: function {
-    ast: Ast.view
-    reg: ztypes.ZTypeRegistry.view
-    typing: ztyping.ZTyping.view
+    prog: Program.view
     ctx: Ctx
     tid: ztypes.tid
     parent: astnode.view
@@ -862,23 +830,21 @@ seedPositiveCore: function {
     tids: ListVal ztypes.tid
 } is {
     if tid.isZero then return
-    if (isOrdinalVariant :typing :tid) then return
-    subj: atomTextOf :ast n: parent
+    if (isOrdinalVariant :prog :tid) then return
+    subj: atomTextOf :prog n: parent
     if subj.length == 0 then return
     recvF: exprfacts
-    recvText: emitExprWith :ast :reg :typing :ctx n: parent facts: recvF
+    recvText: emitExprWith :prog :ctx n: parent facts: recvF
     accessOp: ".".string
     if (
         isPtrVid
         :ctx
-        vid: (atomVid :typing nid: (atomNodeId n: parent))
+        vid: (atomVid :prog nid: (atomNodeId n: parent))
     ) then accessOp = "->".string
     aliasF: exprfacts
     aliasText: (
         stmtblocks.armAliasText
-        :ast
-        :reg
-        :typing
+        :prog
         :ctx
         :tid
         arm: childName
@@ -889,11 +855,11 @@ seedPositiveCore: function {
     )
     if aliasText.length == 0 then return
     names.append subj.string
-    svids.append (atomVid :typing nid: (atomNodeId n: parent))
+    svids.append (atomVid :prog nid: (atomNodeId n: parent))
     vals.append aliasText
     valFs.append aliasF
     pt: (
-        (typing.declChildOfId parentTypeId: tid nameId: childName).or
+        (prog.typing.declChildOfId parentTypeId: tid nameId: childName).or
         d: ztypes.tid.zero
     )
     tids.append pt
@@ -903,9 +869,7 @@ seedPositiveCore: function {
 # subject does NOT hold `arm`. When exactly one payload arm remains, seed
 # its alias (exclusion collapse, mirroring the checker).
 seedNegatedFromPredicate: function {
-    ast: Ast.view
-    reg: ztypes.ZTypeRegistry.view
-    typing: ztyping.ZTyping.view
+    prog: Program.view
     ctx: Ctx
     n: astnode.view
     names: List String
@@ -917,25 +881,23 @@ seedNegatedFromPredicate: function {
     match (
         n
     ) case dottedpath then {
-        dap: dottedArmPredicateTid :typing nid: n.nodeid
+        dap: dottedArmPredicateTid :prog nid: n.nodeid
         if dap.isZero then return
-        if (isOrdinalVariant :typing tid: dap) then return
-        subj: atomTextOf :ast n: (ast.nodes.get i: n.parent)
+        if (isOrdinalVariant :prog tid: dap) then return
+        subj: atomTextOf :prog n: (prog.ast.nodes.get i: n.parent)
         if subj.length == 0 then return
-        snv: atomVid :typing nid: (atomNodeId n: (ast.nodes.get i: n.parent))
-        ctorArmName: aliasOrChildId :ast :typing aliasId: n.nodeid childId: n.child
-        rem: remainingArm :reg :typing :ctx subjVid: snv tid: dap extra: ctorArmName
+        snv: atomVid :prog nid: (atomNodeId n: (prog.ast.nodes.get i: n.parent))
+        ctorArmName: aliasOrChildId :prog aliasId: n.nodeid childId: n.child
+        rem: remainingArm :prog :ctx subjVid: snv tid: dap extra: ctorArmName
         if rem.isZero then return
         recvF: exprfacts
-        recvText: emitExprWith :ast :reg :typing :ctx n: (ast.nodes.get i: n.parent) facts: recvF
+        recvText: emitExprWith :prog :ctx n: (prog.ast.nodes.get i: n.parent) facts: recvF
         accessOp: ".".string
         if (isPtrVid :ctx vid: snv) then accessOp = "->".string
         aliasF: exprfacts
         aliasText: (
             stmtblocks.armAliasText
-            :ast
-            :reg
-            :typing
+            :prog
             :ctx
             tid: dap
             arm: rem
@@ -950,7 +912,7 @@ seedNegatedFromPredicate: function {
         vals.append aliasText
         valFs.append aliasF
         pt: (
-            (typing.declChildOfId parentTypeId: dap nameId: rem).or
+            (prog.typing.declChildOfId parentTypeId: dap nameId: rem).or
             d: ztypes.tid.zero
         )
         tids.append pt
@@ -964,24 +926,24 @@ seedNegatedFromPredicate: function {
 # stamp rather than looking `bool` up by name costs nothing and is exact under
 # a user type that shadows bool.
 armSideAtNode: function {
-    typing: ztyping.ZTyping.view
+    prog: Program.view
     nid: zast.nodeid
     nameId: zast.nameid
 } out ztyping.armside is {
     if nameId.isZero then return ztyping.armside.none
-    st: stampIdOf :typing :nid
-    return (ztyping.armSideOfName ty: typing typeId: st :nameId)
+    st: stampIdOf :prog :nid
+    return (ztyping.armSideOfName ty: prog.typing typeId: st :nameId)
 }
 
 # boolArmSideOf -- armSideAtNode for a bare atom operand.
 boolArmSideOf: function {
-    typing: ztyping.ZTyping.view
+    prog: Program.view
     n: astnode.view
 } out ztyping.armside is {
     match (
         n
     ) case atomid then {
-        return (armSideAtNode :typing nid: n.nodeid nameId: n.name)
+        return (armSideAtNode :prog nid: n.nodeid nameId: n.name)
     } else {
         return ztyping.armside.none
     }
@@ -994,9 +956,7 @@ boolArmSideOf: function {
 # its operands are read through the one seam that knows that layout; which side
 # is which comes from bool's arm ORDER, never from the spelling of the operand.
 seedEqualityCond: function {
-    ast: Ast.view
-    reg: ztypes.ZTypeRegistry.view
-    typing: ztyping.ZTyping.view
+    prog: Program.view
     ctx: Ctx
     n: astnode.view
     names: List String
@@ -1005,33 +965,33 @@ seedEqualityCond: function {
     valFs: ListVal exprfacts
     tids: ListVal ztypes.tid
 } out bool is {
-    ipS: zast.infixPartsOf :ast :n
+    ipS: zast.infixPartsOf ast: prog.ast :n
     if ipS.found.not then return false
     # the operator node is read ONCE: as a repeated subexpression it is emitted
     # per use, and the hoisted temporaries the uses it loses leave behind are a
     # warn-check failure
-    opNS: ast.nodes.get i: ipS.operator
+    opNS: prog.ast.nodes.get i: ipS.operator
     if (zast.atomNameIdOf n: opNS) != zast.wellKnown.slot.wkOpEq then return false
-    lsdS: boolArmSideOf :typing n: (ast.nodes.get i: ipS.lhs)
-    rsdS: boolArmSideOf :typing n: (ast.nodes.get i: ipS.rhs)
+    lsdS: boolArmSideOf :prog n: (prog.ast.nodes.get i: ipS.lhs)
+    rsdS: boolArmSideOf :prog n: (prog.ast.nodes.get i: ipS.rhs)
     if rsdS.truthy then {
-        blS: ast.nodes.get i: ipS.lhs
-        seedFromPredicate :ast :reg :typing :ctx n: blS :names :svids :vals :valFs :tids
+        blS: prog.ast.nodes.get i: ipS.lhs
+        seedFromPredicate :prog :ctx n: blS :names :svids :vals :valFs :tids
         return true
     }
     if rsdS.falsy then {
-        lnS: ast.nodes.get i: ipS.lhs
-        seedNegatedFromPredicate :ast :reg :typing :ctx n: lnS :names :svids :vals :valFs :tids
+        lnS: prog.ast.nodes.get i: ipS.lhs
+        seedNegatedFromPredicate :prog :ctx n: lnS :names :svids :vals :valFs :tids
         return true
     }
     if lsdS.truthy then {
-        brS: ast.nodes.get i: ipS.rhs
-        seedFromPredicate :ast :reg :typing :ctx n: brS :names :svids :vals :valFs :tids
+        brS: prog.ast.nodes.get i: ipS.rhs
+        seedFromPredicate :prog :ctx n: brS :names :svids :vals :valFs :tids
         return true
     }
     if lsdS.falsy then {
-        rnS: ast.nodes.get i: ipS.rhs
-        seedNegatedFromPredicate :ast :reg :typing :ctx n: rnS :names :svids :vals :valFs :tids
+        rnS: prog.ast.nodes.get i: ipS.rhs
+        seedNegatedFromPredicate :prog :ctx n: rnS :names :svids :vals :valFs :tids
         return true
     }
     return false
@@ -1040,9 +1000,7 @@ seedEqualityCond: function {
 # seed a condition's operator so the branch emit can read it without re-
 # resolving
 seedCondOp: function {
-    ast: Ast.view
-    reg: ztypes.ZTypeRegistry.view
-    typing: ztyping.ZTyping.view
+    prog: Program.view
     ctx: Ctx
     n: astnode.view
     names: List String
@@ -1054,14 +1012,12 @@ seedCondOp: function {
     # a bare 2-arm sum condition IS `x.<arm>` with the arm left implicit, so
     # it seeds the alias that form seeds.
     {
-        ta0: ztypecheck.truthyCondArmOf :typing nid: (interpPartNodeId :n)
+        ta0: ztypecheck.truthyCondArmOf typing: prog.typing nid: (interpPartNodeId :n)
         if ta0.notZero then {
-            condTid: stampIdOf :typing nid: (interpPartNodeId :n)
+            condTid: stampIdOf :prog nid: (interpPartNodeId :n)
             (
                 seedPositiveCore
-                :ast
-                :reg
-                :typing
+                :prog
                 :ctx
                 tid: condTid
                 parent: n
@@ -1075,40 +1031,38 @@ seedCondOp: function {
             return
         }
     }
-    if (seedEqualityCond :ast :reg :typing :ctx :n :names :svids :vals :valFs :tids) then return
+    if (seedEqualityCond :prog :ctx :n :names :svids :vals :valFs :tids) then return
     match (
         n
     ) case dottedpath then {
-        cn: aliasOrChildId :ast :typing aliasId: n.nodeid childId: n.child
+        cn: aliasOrChildId :prog aliasId: n.nodeid childId: n.child
         # `.true` / `.false` on a predicate: which side it is comes from the
         # stamped type's arm ORDER, never from the spelling of the segment.
         sd: (
             ztypecheck.armSuffixSide
-            :ast
-            :typing
+            ast: prog.ast
+            typing: prog.typing
             nid: n.nodeid
-            parent: (ast.nodes.get i: n.parent)
-            child: (ast.nodes.get i: n.child)
+            parent: (prog.ast.nodes.get i: n.parent)
+            child: (prog.ast.nodes.get i: n.child)
         )
         if sd.truthy then {
-            dpp: ast.nodes.get i: n.parent
-            seedFromPredicate :ast :reg :typing :ctx n: dpp :names :svids :vals :valFs :tids
+            dpp: prog.ast.nodes.get i: n.parent
+            seedFromPredicate :prog :ctx n: dpp :names :svids :vals :valFs :tids
             return
         }
         if sd.falsy then {
-            dpq: ast.nodes.get i: n.parent
-            seedNegatedFromPredicate :ast :reg :typing :ctx n: dpq :names :svids :vals :valFs :tids
+            dpq: prog.ast.nodes.get i: n.parent
+            seedNegatedFromPredicate :prog :ctx n: dpq :names :svids :vals :valFs :tids
             return
         }
-        armTid: dottedArmPredicateTid :typing nid: n.nodeid
+        armTid: dottedArmPredicateTid :prog nid: n.nodeid
         (
             seedPositiveCore
-            :ast
-            :reg
-            :typing
+            :prog
             :ctx
             tid: armTid
-            parent: (ast.nodes.get i: n.parent)
+            parent: (prog.ast.nodes.get i: n.parent)
             childName: cn
             :names
             :svids
@@ -1123,9 +1077,7 @@ seedCondOp: function {
 # parallel lists. Seeding a conjunct as it is emitted is what lets the conjunct
 # after it read the payload this one narrowed.
 seedCondOne: function {
-    ast: Ast.view
-    reg: ztypes.ZTypeRegistry.view
-    typing: ztyping.ZTyping.view
+    prog: Program.view
     ctx: Ctx
     condId: zast.nodeid
     names: List String
@@ -1134,15 +1086,13 @@ seedCondOne: function {
     valFs: ListVal exprfacts
     tids: ListVal ztypes.tid
 } is {
-    k: ast.nodes.get i: condId
+    k: prog.ast.nodes.get i: condId
     if k.namedoperation then {
         (
             seedCondOp
-            :ast
-            :reg
-            :typing
+            :prog
             :ctx
-            n: (ast.nodes.get i: k.operation)
+            n: (prog.ast.nodes.get i: k.operation)
             :names
             :svids
             :vals
@@ -1157,9 +1107,7 @@ seedCondOne: function {
 # ruled out. Both are installed before the next conjunct renders, because `when`
 # short-circuits and a later conjunct is reached only where this one held.
 seedAndLayerCond: function {
-    ast: Ast.view
-    reg: ztypes.ZTypeRegistry.view
-    typing: ztyping.ZTyping.view
+    prog: Program.view
     ctx: Ctx
     condId: zast.nodeid
     names: List String
@@ -1172,9 +1120,9 @@ seedAndLayerCond: function {
     prevT: ListVal ztypes.tid
 } is {
     had: svids.length
-    seedCondOne :ast :reg :typing :ctx :condId :names :svids :vals :valFs :tids
+    seedCondOne :prog :ctx :condId :names :svids :vals :valFs :tids
     installNarrowSeeds :ctx :svids :vals :valFs :tids :prevV :prevF :prevT from: had
-    layerCondExclusion :ast :typing :ctx :condId
+    layerCondExclusion :prog :ctx :condId
 }
 
 # layerCondExclusion -- record that a conjunct's NEGATED arm predicate excludes
@@ -1186,14 +1134,13 @@ seedAndLayerCond: function {
 # Classification is the chain facts' own, so this cannot disagree with them, and
 # it allocates nothing at all unless the conjunct really does exclude an arm.
 layerCondExclusion: function {
-    ast: Ast.view
-    typing: ztyping.ZTyping.view
+    prog: Program.view
     ctx: Ctx
     condId: zast.nodeid
 } is {
-    k: ast.nodes.get i: condId
+    k: prog.ast.nodes.get i: condId
     if k.namedoperation.not then return
-    f: classifyCondFact :ast :typing n: (ast.nodes.get i: k.operation)
+    f: classifyCondFact :prog n: (prog.ast.nodes.get i: k.operation)
     if f.ok.not then return
     if f.neg.not then return
     pushExclusion :ctx vid: f.svid arm: f.armRef owner: f.owner
@@ -1258,9 +1205,7 @@ installNarrowSeeds: function {
 # ifPredicateSeeds -- collect the narrowBox seeds for a clause's bare
 # arm-predicate conjuncts, all condition forms (parallel lists).
 ifPredicateSeeds: function {
-    ast: Ast.view
-    reg: ztypes.ZTypeRegistry.view
-    typing: ztyping.ZTyping.view
+    prog: Program.view
     ctx: Ctx
     conds: zast.kidspan
     names: List String
@@ -1269,16 +1214,14 @@ ifPredicateSeeds: function {
     valFs: ListVal exprfacts
     tids: ListVal ztypes.tid
 } is {
-    for each condId: (zast.kidsOf :ast span: conds) loop {
-        k: ast.nodes.get i: condId
+    for each condId: (zast.kidsOf ast: prog.ast span: conds) loop {
+        k: prog.ast.nodes.get i: condId
         if k.namedoperation then {
             (
                 seedCondOp
-                :ast
-                :reg
-                :typing
+                :prog
                 :ctx
-                n: (ast.nodes.get i: k.operation)
+                n: (prog.ast.nodes.get i: k.operation)
                 :names
                 :svids
                 :vals
@@ -1324,8 +1267,7 @@ noArmFact: function out condarmfact is {
 # without allocating: a real sum owner, not an ordinal variant, and a subject
 # that is a bare atom.
 classifyFactCore: function {
-    ast: Ast.view
-    typing: ztyping.ZTyping.view
+    prog: Program.view
     owner: ztypes.tid
     parentNid: zast.nodeid
     armRef: zast.nameid
@@ -1333,16 +1275,16 @@ classifyFactCore: function {
 } out condarmfact is {
     noFact: noArmFact
     if owner.isZero then return noFact
-    if (isOrdinalVariant :typing tid: owner) then return noFact
-    parent: ast.nodes.get i: parentNid
-    subj: atomTextOf :ast n: parent
+    if (isOrdinalVariant :prog tid: owner) then return noFact
+    parent: prog.ast.nodes.get i: parentNid
+    subj: atomTextOf :prog n: parent
     if subj.length == 0 then return noFact
     return (
         condarmfact
         ok: true
         :owner
         :parentNid
-        svid: (atomVid :typing nid: (atomNodeId n: parent))
+        svid: (atomVid :prog nid: (atomNodeId n: parent))
         :armRef
         :neg
     )
@@ -1350,8 +1292,7 @@ classifyFactCore: function {
 
 # classifyInnerFact -- the stamped bare-predicate core, as a classification.
 classifyInnerFact: function {
-    ast: Ast.view
-    typing: ztyping.ZTyping.view
+    prog: Program.view
     n: astnode.view
     neg: bool
 } out condarmfact is {
@@ -1360,11 +1301,10 @@ classifyInnerFact: function {
     ) case dottedpath then {
         return (
             classifyFactCore
-            :ast
-            :typing
-            owner: (dottedArmPredicateTid :typing nid: n.nodeid)
+            :prog
+            owner: (dottedArmPredicateTid :prog nid: n.nodeid)
             parentNid: n.parent
-            armRef: (aliasOrChildId :ast :typing aliasId: n.nodeid childId: n.child)
+            armRef: (aliasOrChildId :prog aliasId: n.nodeid childId: n.child)
             :neg
         )
     } else {
@@ -1386,37 +1326,36 @@ eqcondfact: record {
 # The comparison is an infix call, so its operands are read through the one seam
 # that knows that layout; which side is which comes from bool's arm ORDER.
 classifyEqualityCond: function {
-    ast: Ast.view
-    typing: ztyping.ZTyping.view
+    prog: Program.view
     n: astnode.view
 } out eqcondfact is {
     miss: eqcondfact handled: false fact: noArmFact
-    ipC: zast.infixPartsOf :ast :n
+    ipC: zast.infixPartsOf ast: prog.ast :n
     if ipC.found.not then return miss
     # read ONCE, as in seedEqualityCond
-    opNC: ast.nodes.get i: ipC.operator
+    opNC: prog.ast.nodes.get i: ipC.operator
     if (zast.atomNameIdOf n: opNC) != zast.wellKnown.slot.wkOpEq then return miss
-    lsdC: boolArmSideOf :typing n: (ast.nodes.get i: ipC.lhs)
-    rsdC: boolArmSideOf :typing n: (ast.nodes.get i: ipC.rhs)
+    lsdC: boolArmSideOf :prog n: (prog.ast.nodes.get i: ipC.lhs)
+    rsdC: boolArmSideOf :prog n: (prog.ast.nodes.get i: ipC.rhs)
     if rsdC.truthy then return (
         eqcondfact
         handled: true
-        fact: (classifyInnerFact :ast :typing n: (ast.nodes.get i: ipC.lhs) neg: false)
+        fact: (classifyInnerFact :prog n: (prog.ast.nodes.get i: ipC.lhs) neg: false)
     )
     if rsdC.falsy then return (
         eqcondfact
         handled: true
-        fact: (classifyInnerFact :ast :typing n: (ast.nodes.get i: ipC.lhs) neg: true)
+        fact: (classifyInnerFact :prog n: (prog.ast.nodes.get i: ipC.lhs) neg: true)
     )
     if lsdC.truthy then return (
         eqcondfact
         handled: true
-        fact: (classifyInnerFact :ast :typing n: (ast.nodes.get i: ipC.rhs) neg: false)
+        fact: (classifyInnerFact :prog n: (prog.ast.nodes.get i: ipC.rhs) neg: false)
     )
     if lsdC.falsy then return (
         eqcondfact
         handled: true
-        fact: (classifyInnerFact :ast :typing n: (ast.nodes.get i: ipC.rhs) neg: true)
+        fact: (classifyInnerFact :prog n: (prog.ast.nodes.get i: ipC.rhs) neg: true)
     )
     return (eqcondfact handled: true fact: noArmFact)
 }
@@ -1426,19 +1365,17 @@ classifyEqualityCond: function {
 # `.false` suffix whose side comes from the arm ORDER, and `== true` / `== false`
 # against bool. Answers without building any text.
 classifyCondFact: function {
-    ast: Ast.view
-    typing: ztyping.ZTyping.view
+    prog: Program.view
     n: astnode.view
 } out condarmfact is {
     noFact: noArmFact
     {
-        ta1: ztypecheck.truthyCondArmOf :typing nid: (interpPartNodeId :n)
+        ta1: ztypecheck.truthyCondArmOf typing: prog.typing nid: (interpPartNodeId :n)
         if ta1.notZero then {
             return (
                 classifyFactCore
-                :ast
-                :typing
-                owner: (stampIdOf :typing nid: (interpPartNodeId :n))
+                :prog
+                owner: (stampIdOf :prog nid: (interpPartNodeId :n))
                 # the subject here is `n` itself. classifyFactCore answers ok
                 # only when that node is an atomid (atomTextOf names nothing
                 # else), and interpPartNodeId of an atomid IS its own id, so
@@ -1449,32 +1386,31 @@ classifyCondFact: function {
             )
         }
     }
-    eqC: classifyEqualityCond :ast :typing :n
+    eqC: classifyEqualityCond :prog :n
     if eqC.handled then return eqC.fact
     match (
         n
     ) case dottedpath then {
         sd: (
             ztypecheck.armSuffixSide
-            :ast
-            :typing
+            ast: prog.ast
+            typing: prog.typing
             nid: n.nodeid
-            parent: (ast.nodes.get i: n.parent)
-            child: (ast.nodes.get i: n.child)
+            parent: (prog.ast.nodes.get i: n.parent)
+            child: (prog.ast.nodes.get i: n.child)
         )
         if sd.truthy then {
-            return (classifyInnerFact :ast :typing n: (ast.nodes.get i: n.parent) neg: false)
+            return (classifyInnerFact :prog n: (prog.ast.nodes.get i: n.parent) neg: false)
         }
         if sd.falsy then {
-            return (classifyInnerFact :ast :typing n: (ast.nodes.get i: n.parent) neg: true)
+            return (classifyInnerFact :prog n: (prog.ast.nodes.get i: n.parent) neg: true)
         }
         return (
             classifyFactCore
-            :ast
-            :typing
-            owner: (dottedArmPredicateTid :typing nid: n.nodeid)
+            :prog
+            owner: (dottedArmPredicateTid :prog nid: n.nodeid)
             parentNid: n.parent
-            armRef: (aliasOrChildId :ast :typing aliasId: n.nodeid childId: n.child)
+            armRef: (aliasOrChildId :prog aliasId: n.nodeid childId: n.child)
             neg: false
         )
     } else {
@@ -1487,9 +1423,7 @@ classifyCondFact: function {
 # adds only the text the else emission reuses rather than re-deriving -- the
 # subject spelling and the emitted receiver.
 chainCondFact: function {
-    ast: Ast.view
-    reg: ztypes.ZTypeRegistry.view
-    typing: ztyping.ZTyping.view
+    prog: Program.view
     ctx: Ctx
     n: astnode.view
     subjects: List String
@@ -1500,12 +1434,12 @@ chainCondFact: function {
     recvs: List String
     recvFs: ListVal exprfacts
 } is {
-    f: classifyCondFact :ast :typing :n
+    f: classifyCondFact :prog :n
     if f.ok.not then return
-    parent: ast.nodes.get i: f.parentNid
-    subj: atomTextOf :ast n: parent
+    parent: prog.ast.nodes.get i: f.parentNid
+    subj: atomTextOf :prog n: parent
     rvF: exprfacts
-    rv: emitExprWith :ast :reg :typing :ctx n: parent facts: rvF
+    rv: emitExprWith :prog :ctx n: parent facts: rvF
     subjects.append subj.string
     svids.append f.svid
     arms.append f.armRef
@@ -1544,9 +1478,7 @@ layerChainExclusions: function {
 # with: the arm a negated fact named, or the single arm the exclusions leave.
 # Seeds nothing when the arm carries no payload to alias.
 seedElseSubject: function {
-    ast: Ast.view
-    reg: ztypes.ZTypeRegistry.view
-    typing: ztyping.ZTyping.view
+    prog: Program.view
     ctx: Ctx
     subj: StringView
     subjVid: ztypes.vid
@@ -1562,16 +1494,14 @@ seedElseSubject: function {
     buf: String.borrow
 } is {
     fArm: negArm
-    if fArm.isZero then fArm = remainingArm :reg :typing :ctx :subjVid tid: owner extra: zast.nameid
+    if fArm.isZero then fArm = remainingArm :prog :ctx :subjVid tid: owner extra: zast.nameid
     if fArm.isZero then return
     acc: ".".string
     if (isPtrVid :ctx vid: subjVid) then acc = "->".string
     aliasF: exprfacts
     aliasText: (
         stmtblocks.armAliasText
-        :ast
-        :reg
-        :typing
+        :prog
         :ctx
         tid: owner
         arm: fArm
@@ -1587,7 +1517,7 @@ seedElseSubject: function {
         vid: subjVid
         val: aliasText.stringView
         valF: aliasF
-        tid: (armMemberTid :typing :owner arm: fArm)
+        tid: (armMemberTid :prog :owner arm: fArm)
         :prevV
         :prevF
         :prevT
@@ -1600,16 +1530,15 @@ seedElseSubject: function {
 # postGuardStmtId -- the node id of a guarding if/match statement that
 # recorded a post-guard narrowing; 0 otherwise.
 postGuardStmtId: function {
-    ast: Ast.view
-    typing: ztyping.ZTyping.view
+    prog: Program.view
     n: astnode.view
 } out zast.nodeid is {
     match (
         n
     ) case statementline then {
-        return (postGuardStmtId :ast :typing n: (ast.nodes.get i: n.statementline))
+        return (postGuardStmtId :prog n: (prog.ast.nodes.get i: n.statementline))
     } case ifexpr then {
-        po: typing.postGuardName.get key: n.nodeid
+        po: prog.typing.postGuardName.get key: n.nodeid
         match (
             po
         ) case some then {
@@ -1618,7 +1547,7 @@ postGuardStmtId: function {
             return zast.nodeid
         }
     } case caseexpr then {
-        po: typing.postGuardName.get key: n.nodeid
+        po: prog.typing.postGuardName.get key: n.nodeid
         match (
             po
         ) case some then {
@@ -1637,9 +1566,7 @@ postGuardStmtId: function {
 # receiver is the subject's identifier and the narrowing tables key on its
 # variable. Seeds nothing when the checker recorded no complete guard.
 seedPostGuardAlias: function {
-    ast: Ast.view
-    reg: ztypes.ZTypeRegistry.view
-    typing: ztyping.ZTyping.view
+    prog: Program.view
     ctx: Ctx
     n: astnode.view
     ind: StringView
@@ -1650,22 +1577,22 @@ seedPostGuardAlias: function {
     prevT: ListVal ztypes.tid
     buf: String.borrow
 } is {
-    pgid: postGuardStmtId :ast :typing :n
+    pgid: postGuardStmtId :prog :n
     if pgid.isZero then return
-    pgRawId: (typing.postGuardName.get key: pgid).or d: zast.nameid
-    pgRawN: zast.poolTextAt pool: ast.names ref: pgRawId
+    pgRawId: (prog.typing.postGuardName.get key: pgid).or d: zast.nameid
+    pgRawN: zast.poolTextAt pool: prog.ast.names ref: pgRawId
     if pgRawN.length == 0 then return
     pgrv: (
-        (typing.postGuardVarId.get key: pgid).or
+        (prog.typing.postGuardVarId.get key: pgid).or
         d: ztypes.vid.zero
     )
     if pgrv.isZero then return
-    owner: (typing.postGuardTid.get key: pgid).or d: ztypes.tid.zero
+    owner: (prog.typing.postGuardTid.get key: pgid).or d: ztypes.tid.zero
     if owner.isZero then return
-    armId: (typing.postGuardArm.get key: pgid).or d: zast.nameid
+    armId: (prog.typing.postGuardArm.get key: pgid).or d: zast.nameid
     if armId.isZero then return
     pgRecvF: exprfacts
-    pgRecv: wholeLocalName :ast :reg :ctx vid: pgrv name: pgRawN.stringView facts: pgRecvF
+    pgRecv: wholeLocalName :prog :ctx vid: pgrv name: pgRawN.stringView facts: pgRecvF
     acc: ".".string
     if (isPtrVid :ctx vid: pgrv) then acc = "->".string
     # a subject an enclosing narrowing still holds at the guard's type -- an
@@ -1684,9 +1611,7 @@ seedPostGuardAlias: function {
     aliasF: exprfacts
     aliasText: (
         stmtblocks.armAliasText
-        :ast
-        :reg
-        :typing
+        :prog
         :ctx
         tid: owner
         arm: armId
@@ -1702,7 +1627,7 @@ seedPostGuardAlias: function {
         vid: pgrv
         val: aliasText.stringView
         valF: aliasF
-        tid: (armMemberTid :typing :owner arm: armId)
+        tid: (armMemberTid :prog :owner arm: armId)
         :prevV
         :prevF
         :prevT

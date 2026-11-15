@@ -5,9 +5,7 @@
 # `resultval` it answers: its C type, its two tags and its two arms' members,
 # and how the error arm reaches converror's tag.
 convResultBindings: function {
-    ast: Ast.view
-    reg: ztypes.ZTypeRegistry.view
-    typing: ztyping.ZTyping.view
+    prog: Program.view
     ctx: Ctx
     retTid: ztypes.tid
     bn: ListVal zast.nameid
@@ -20,21 +18,19 @@ convResultBindings: function {
     rn.append (rtHoleId slot: rtHole.slot.holeOkTag)
     (
         rv.append
-        from: (spelledTagConst :ast :ctx :reg :typing tid: retTid armId: zast.wellKnown.slot.wkOk)
+        from: (spelledTagConst :prog :ctx tid: retTid armId: zast.wellKnown.slot.wkOk)
     )
     rn.append (rtHoleId slot: rtHole.slot.holeErrTag)
     (
         rv.append
-        from: (spelledTagConst :ast :ctx :reg :typing tid: retTid armId: zast.wellKnown.slot.wkErr)
+        from: (spelledTagConst :prog :ctx tid: retTid armId: zast.wellKnown.slot.wkErr)
     )
     rn.append (rtHoleId slot: rtHole.slot.holeOkMember)
     (
         rv.append
         from: (
             memberC
-            :ast
-            :reg
-            :typing
+            :prog
             :ctx
             owner: retTid
             kind: memberkind.arm
@@ -46,9 +42,7 @@ convResultBindings: function {
         rv.append
         from: (
             memberC
-            :ast
-            :reg
-            :typing
+            :prog
             :ctx
             owner: retTid
             kind: memberkind.arm
@@ -58,7 +52,7 @@ convResultBindings: function {
     # the error slot's assignment, spelled for whatever `converror` IS
     if ctx.converrorTid.notZero then {
         rn.append (rtHoleId slot: rtHole.slot.holeTagConverror)
-        if (narrowfacts.isOrdinalVariant :typing tid: ctx.converrorTid) then {
+        if (narrowfacts.isOrdinalVariant :prog tid: ctx.converrorTid) then {
             rv.append from: "".string
         } else {
             rv.append from: ".tag".string
@@ -74,8 +68,7 @@ convResultBindings: function {
 # row's one part, placed in evaluation order: a row that names @V@ more than
 # once reads it into its temp first.
 emitNumericCast: function {
-    # the arm names
-    ast: Ast.view
+    prog: Program.view
     ctx: Ctx
     val: String.take
     valF: exprfacts
@@ -83,14 +76,12 @@ emitNumericCast: function {
     valNid: zast.nodeid
     # where the pending hoists stood before `val` was built
     mark: hoistmark
-    reg: ztypes.ZTypeRegistry.view
-    typing: ztyping.ZTyping.view
     retTid: ztypes.tid
     rowKey: zemitrows.rowname
     facts: exprfacts.borrow
 } out String is {
     row: ctx.rows.ofName n: rowKey
-    key: rowLabel :ctx :ast n: rowKey
+    key: rowLabel :ctx :prog n: rowKey
     body: rtid
     if row > 0 then body = rowBody :ctx :row
     if body.isZero then {
@@ -107,7 +98,7 @@ emitNumericCast: function {
     # mono's name, and the DECLARATION is what decided which shape it is
     isResultval: (
         originIsTid
-        :reg
+        :prog
         tid: retTid
         originTid: (ctx.origins.get i: family.slot.resultval)
     )
@@ -116,7 +107,7 @@ emitNumericCast: function {
     rn: ListVal zast.nameid
     rv: List String
     if isResultval then {
-        convResultBindings :ast :reg :typing :ctx :retTid :bn :bv :rn :rv
+        convResultBindings :prog :ctx :retTid :bn :bv :rn :rv
     } else {
         # a row that builds a record spells the record's C type as @RT@
         if (rtHas :ctx id: body slot: rtHole.slot.holeRT) then {
@@ -141,10 +132,9 @@ emitNumericCast: function {
     partF: valF
     constant: (
         callorder.orderConstantWith
-        :ast
-        :typing
+        :prog
         :ctx
-        n: (ast.nodes.get i: valNid)
+        n: (prog.ast.nodes.get i: valNid)
         tf: valF
         byPtr: false
     )
@@ -155,9 +145,7 @@ emitNumericCast: function {
     pre: String
     spelled: (
         memberreads.orderOnePart
-        :ast
-        :reg
-        :typing
+        :prog
         :ctx
         :mark
         text: val
@@ -177,15 +165,13 @@ emitNumericCast: function {
             from: (
                 consts.castLitVal
                 val: spelled.stringView
-                dst: (consts.constScalarKindForTid :typing tid: retTid)
+                dst: (consts.constScalarKindForTid :prog tid: retTid)
             )
         )
     }
     filled: (
         rtFillForCtx
-        :ast
-        :reg
-        :typing
+        :prog
         :ctx
         id: body
         path: key.stringView
@@ -297,9 +283,7 @@ rtTwice: function {ctx: Ctx.view id: rtid hole: zast.nameid} out bool is {
 # member holes bound first (rtBindPrefixed), and each failure reported through
 # the emit-failure channel
 rtFillForCtx: function {
-    ast: Ast.view
-    reg: ztypes.ZTypeRegistry.view
-    typing: ztyping.ZTyping.view
+    prog: Program.view
     ctx: Ctx
     id: rtid
     path: StringView
@@ -309,8 +293,8 @@ rtFillForCtx: function {
     rawVals: List String
 } out String is {
     inf: ctx.rt.infos.get i: id
-    if inf.arms then rtBindHoles :ast :reg :typing :ctx :id arms: true :rawIds :rawVals
-    if inf.members then rtBindHoles :ast :reg :typing :ctx :id arms: false :rawIds :rawVals
+    if inf.arms then rtBindHoles :prog :ctx :id arms: true :rawIds :rawVals
+    if inf.members then rtBindHoles :prog :ctx :id arms: false :rawIds :rawVals
     ferr: List String
     cur: String
     (
@@ -336,9 +320,7 @@ rtFillForCtx: function {
 # rtBindHoles -- bind each ARM hole (when `arms`) or MEMBER hole of the row body
 # `id` (rtBindPrefixed)
 rtBindHoles: function {
-    ast: Ast.view
-    reg: ztypes.ZTypeRegistry.view
-    typing: ztyping.ZTyping.view
+    prog: Program.view
     ctx: Ctx
     id: rtid
     arms: bool
@@ -352,9 +334,7 @@ rtBindHoles: function {
     ctx.rt.holesNamed :id :prefix ids: hids names: hnames
     (
         nativepieces.rtBindPrefixed
-        :ast
-        :reg
-        :typing
+        :prog
         :ctx
         ids: hids
         names: hnames
@@ -401,12 +381,12 @@ rowBody: function {ctx: Ctx row: u64} out rtid is {
 
 # shapeLabel -- the structural row keyed `k` as the rows' check names it,
 # `@<shape>.<op>`, written in one allocation
-shapeLabel: function {ast: Ast.view k: zemitrows.shapekey} out String is {
+shapeLabel: function {prog: Program.view k: zemitrows.shapekey} out String is {
     sw: ""
     if k.shape == nativeWord.slot.shapeScalar then sw = "scalar"
     if k.shape == nativeWord.slot.shapeVariant then sw = "variant"
     if k.shape == nativeWord.slot.shapeRecord then sw = "record"
-    op: zast.nameTextAt :ast ref: k.op
+    op: zast.nameTextAt ast: prog.ast ref: k.op
     r: String
     r.reserve n: sw.length + op.length + 2
     r.append "@"
@@ -435,9 +415,7 @@ listIterEmitted: function {ctx: Ctx.view tid: ztypes.tid} out bool is {
 # (the call's own type) and text's view type as @StringView@. One fill for a
 # method's row and a free function's.
 nativeBodyFill: function {
-    ast: Ast.view
-    reg: ztypes.ZTypeRegistry.view
-    typing: ztyping.ZTyping.view
+    prog: Program.view
     ctx: Ctx
     call: zast.callrow.view
     body: rtid
@@ -454,10 +432,9 @@ nativeBodyFill: function {
             :ctx
             tid: (
                 chaseAggregateTypedef
-                :reg
-                :typing
+                :prog
                 :ctx
-                tid: (stampIdOf :typing nid: call.nodeid)
+                tid: (stampIdOf :prog nid: call.nodeid)
             )
         )
     }
@@ -468,9 +445,7 @@ nativeBodyFill: function {
     }
     return (
         rtFillForCtx
-        :ast
-        :reg
-        :typing
+        :prog
         :ctx
         id: body
         path: key
@@ -486,15 +461,14 @@ nativeBodyFill: function {
 # binds the operator holes. THE ROW IS THE AUTHORITY -- a bodyless row
 # (`optionval.or`) or a user method with a word name is not an operator.
 wordOperatorRowBinds: function {
-    reg: ztypes.ZTypeRegistry.view
-    typing: ztyping.ZTyping.view
+    prog: Program.view
     ctx: Ctx
     method: ztypes.tid
     owner: ztypes.tid
     mnId: zast.nameid
 } out bool is {
-    if (reg.isNativeOf tid: method).not then return false
-    row: ctx.rows.ofName n: (rowNameOfMember :reg :typing :ctx :owner name: mnId)
+    if (prog.reg.isNativeOf tid: method).not then return false
+    row: ctx.rows.ofName n: (rowNameOfMember :prog :ctx :owner name: mnId)
     if row == 0 then return false
     return (rtHas :ctx id: (rowBody :ctx :row) slot: rtHole.slot.holeL)
 }
@@ -503,33 +477,34 @@ wordOperatorRowBinds: function {
 # COMPOUND VALTYPE, i.e. the one case where emitColGet's generated `getMut`
 # returns a pointer that `get` does not.
 isColGetMutRef: function {
-    reg: ztypes.ZTypeRegistry.view
-    typing: ztyping.ZTyping.view
+    prog: Program.view
     ctx: Ctx
     fid: ztypes.tid
 } out bool is {
-    ownG: reg.ownerTidOf tid: fid
+    ownG: prog.reg.ownerTidOf tid: fid
     if ownG.isZero then return false
     isLG: (
-        (types.isListOriginOf :reg :ctx tid: ownG) or (types.isListViewOriginOf :reg :ctx tid: ownG)
+        (types.isListOriginOf :prog :ctx tid: ownG) or
+        (types.isListViewOriginOf :prog :ctx tid: ownG)
     )
     if isLG.not then return false
     if (
-        (typing.declNameOf declId: (ztypecheck.templateDeclOf :reg :typing tid: fid)) !=
+        (
+            prog.typing.declNameOf
+            declId: (ztypecheck.templateDeclOf reg: prog.reg typing: prog.typing tid: fid)
+        ) !=
         zast.wellKnown.slot.wkGetMut
     ) then return false
-    eG: listElemType :reg :typing monoId: ownG
-    if (elemBorrowsByPtr :reg :typing :ctx tid: eG) then return false
-    return (elemRefByPtr :reg :typing :ctx tid: eG)
+    eG: listElemType :prog monoId: ownG
+    if (elemBorrowsByPtr :prog :ctx tid: eG) then return false
+    return (elemRefByPtr :prog :ctx tid: eG)
 }
 
 # tmplNestedRead -- a templated class's native method read off a nested base
 # (`this.m.lock`): its template's function, taking the place the base names;
 # "" for any other member
 tmplNestedRead: function {
-    ast: Ast.view
-    reg: ztypes.ZTypeRegistry.view
-    typing: ztyping.ZTyping.view
+    prog: Program.view
     ctx: Ctx
     nlid: ztypes.tid
     mnId: zast.nameid
@@ -538,14 +513,12 @@ tmplNestedRead: function {
     nstPtr: bool
     facts: exprfacts.borrow
 } out String is {
-    if (tmplClassRowOf :reg :ctx tid: nlid) == 0 then return "".string
+    if (tmplClassRowOf :prog :ctx tid: nlid) == 0 then return "".string
     tb: base.string
     if nstPtr then tb = "(*\{base})"
     return (
         tmplInstMemberRead
-        :ast
-        :reg
-        :typing
+        :prog
         :ctx
         inst: nlid
         :mnId
@@ -568,9 +541,7 @@ tmplNestedRead: function {
 # taking an argument is a call's. Folded literal conversions return earlier
 # via nodeConstText.
 convRowNameOf: function {
-    ast: Ast.view
-    reg: ztypes.ZTypeRegistry.view
-    typing: ztyping.ZTyping.view
+    prog: Program.view
     ctx: Ctx
     n: zast.dottedpathrow.view
     # the conversion member's name id (`.u8`, `.i64` ...)
@@ -578,11 +549,11 @@ convRowNameOf: function {
 } out zemitrows.rowname is {
     none: zemitrows.rowname impl: 0 typeName: zast.nameid.zero name: zast.nameid.zero
     if (ctx.rows.memberBodies.has item: mn2Id).not then return none
-    ownerTid: stampIdOf :typing nid: (interpPartNodeId n: (ast.nodes.get i: n.parent))
-    mo9: typing.declChildOfId parentTypeId: ownerTid nameId: mn2Id
-    if mo9.some when (reg.isNativeOf tid: mo9).not then return none
-    srcTid: ztypecheck.typedefChaseTid :typing tid: ownerTid
-    rk: rowNameOfMember :reg :typing :ctx owner: srcTid name: mn2Id
+    ownerTid: stampIdOf :prog nid: (interpPartNodeId n: (prog.ast.nodes.get i: n.parent))
+    mo9: prog.typing.declChildOfId parentTypeId: ownerTid nameId: mn2Id
+    if mo9.some when (prog.reg.isNativeOf tid: mo9).not then return none
+    srcTid: ztypecheck.typedefChaseTid typing: prog.typing tid: ownerTid
+    rk: rowNameOfMember :prog :ctx owner: srcTid name: mn2Id
     row: ctx.rows.ofName n: rk
     if row == 0 then return none
     body: rowBody :ctx :row
@@ -598,9 +569,7 @@ convRowNameOf: function {
 # shape; its constant-operand variant when the right operand is a constant the
 # variant takes
 emitOperatorByRow: function {
-    ast: Ast.view
-    reg: ztypes.ZTypeRegistry.view
-    typing: ztyping.ZTyping.view
+    prog: Program.view
     ctx: Ctx
     lineno: u32
     opId: zast.nameid
@@ -615,13 +584,13 @@ emitOperatorByRow: function {
     rowKey: zemitrows.rowname impl: 0 typeName: zast.nameid.zero name: zast.nameid.zero
     label: String
     if isNat then {
-        rowKey = rowNameOfMember :reg :typing :ctx :owner name: opId
+        rowKey = rowNameOfMember :prog :ctx :owner name: opId
         row = ctx.rows.ofName n: rowKey
-        label = rowLabel :ctx :ast n: rowKey
+        label = rowLabel :ctx :prog n: rowKey
     } else {
-        sk: zemitrows.shapekey shape: (consts.rowShapeOf :ast :reg :typing :ctx :owner) op: opId
+        sk: zemitrows.shapekey shape: (consts.rowShapeOf :prog :ctx :owner) op: opId
         row = ctx.rows.ofShape k: sk
-        label = shapeLabel :ast k: sk
+        label = shapeLabel :prog k: sk
     }
     body: rtid
     if row > 0 then body = rowBody :ctx :row
@@ -642,9 +611,9 @@ emitOperatorByRow: function {
     # table means building a key from a view. Most operands are not constants,
     # and those never touch the table at all.
     constRow: false
-    rhsConst: typing.nodeConstAt nid: rhsNid
+    rhsConst: prog.typing.nodeConstAt nid: rhsNid
     if rhsConst.isConst then {
-        ieee: zeroDivisionC :typing :owner :opId :lhsNid rhs: rhsConst
+        ieee: zeroDivisionC :prog :owner :opId :lhsNid rhs: rhsConst
         if ieee.length > 0 then return (stating :facts from: constFacts text: ieee)
         crow: ctx.rows.constOfName n: rowKey
         # a binop HAS only argument 1, so a variant asking for any other
@@ -656,9 +625,7 @@ emitOperatorByRow: function {
     }
     return (
         emitOperatorRow
-        :ast
-        :reg
-        :typing
+        :prog
         :ctx
         :owner
         :row
@@ -680,7 +647,7 @@ emitOperatorByRow: function {
 # sign clear under glibc and set under MSVC -- else math.h's INFINITY, negative
 # when exactly one operand is. "" for any other operation.
 zeroDivisionC: function {
-    typing: ztyping.ZTyping.view
+    prog: Program.view
     # the operator's declaring type
     owner: ztypes.tid
     # the operator's name
@@ -692,8 +659,8 @@ zeroDivisionC: function {
     if opId != zast.wellKnown.slot.wkOpDiv then return "".string
     nk: (
         ztypecheck.numKindOfTid
-        :typing
-        tid: (ztypecheck.typedefChaseTid :typing tid: owner)
+        typing: prog.typing
+        tid: (ztypecheck.typedefChaseTid typing: prog.typing tid: owner)
     )
     if nk.has.not then return "".string
     ct: ""
@@ -707,10 +674,10 @@ zeroDivisionC: function {
     } else {
         return "".string
     }
-    if (typing.constIsZero v: rhs).not then return "".string
-    lhs: typing.nodeConstAt nid: lhsNid
+    if (prog.typing.constIsZero v: rhs).not then return "".string
+    lhs: prog.typing.nodeConstAt nid: lhsNid
     if lhs.kind.none then return "".string
-    if (typing.constIsZero v: lhs) then return nan.string
+    if (prog.typing.constIsZero v: lhs) then return nan.string
     if (constIsNegative v: lhs) != (constIsNegative v: rhs) then return "(-(\{ct})INFINITY)"
     return "((\{ct})INFINITY)"
 }
@@ -729,9 +696,7 @@ constIsNegative: function {v: ztypes.cval} out bool is {
 # other row's a call's. The plain row's needs are fired unless `body` is its
 # constant-operand variant's, which calls nothing they supply.
 emitOperatorRow: function {
-    ast: Ast.view
-    reg: ztypes.ZTypeRegistry.view
-    typing: ztyping.ZTyping.view
+    prog: Program.view
     ctx: Ctx
     owner: ztypes.tid
     # the plain row, whose flags hold for its constant-operand variant too
@@ -754,9 +719,7 @@ emitOperatorRow: function {
     lhsF: exprfacts
     (
         argforms.orderRowOperand
-        :ast
-        :reg
-        :typing
+        :prog
         :ctx
         :owner
         byPtr: r.byPointer
@@ -768,9 +731,7 @@ emitOperatorRow: function {
     rhsF: exprfacts
     (
         argforms.orderRowOperand
-        :ast
-        :reg
-        :typing
+        :prog
         :ctx
         :owner
         byPtr: r.byPointer
@@ -782,11 +743,11 @@ emitOperatorRow: function {
     oprefix: callorder.orderFinish :ctx st: ord
     # a typedef emits no helper of its own: the chain end owns it
     tcnTid: owner
-    if (typedefChaseHasBaseName :typing tid: owner) then {
-        tcnTid = ztypecheck.typedefChaseTid :typing tid: owner
+    if (typedefChaseHasBaseName :prog tid: owner) then {
+        tcnTid = ztypecheck.typedefChaseTid typing: prog.typing tid: owner
     }
-    if r.callsEquals then emitplan.noteEqUse :ast :reg :typing :ctx tid: tcnTid
-    filled: fillOperatorRow :ast :reg :typing :ctx :ord :body :label :tcnTid
+    if r.callsEquals then emitplan.noteEqUse :prog :ctx tid: tcnTid
+    filled: fillOperatorRow :prog :ctx :ord :body :label :tcnTid
     # a value row with no temps ahead of it reads as its operands do
     if oprefix.length == 0 when r.value then {
         return (stating :facts from: (values.valueFacts a: lhsF b: rhsF) text: filled)
@@ -804,11 +765,7 @@ emitOperatorRow: function {
 # lists borrowed from the context. The names are fixed, the owner's cname and
 # the operands move in, and nothing is copied.
 fillOperatorRow: function {
-    # the arm names
-    ast: Ast.view
-    # the checked program the row's canons resolve in
-    reg: ztypes.ZTypeRegistry.view
-    typing: ztyping.ZTyping.view
+    prog: Program.view
     ctx: Ctx
     ord: orderstate
     body: rtid
@@ -849,9 +806,7 @@ fillOperatorRow: function {
     callorder.orderEnd :ctx st: ord
     filled: (
         rtFillForCtx
-        :ast
-        :reg
-        :typing
+        :prog
         :ctx
         id: body
         path: label.stringView
@@ -870,23 +825,21 @@ fillOperatorRow: function {
 # emitSwapStmt -- `a >< b`: a three-step exchange through one temporary, so both
 # sides keep whatever ownership they held.
 emitSwapStmt: function {
-    ast: Ast.view
-    reg: ztypes.ZTypeRegistry.view
-    typing: ztyping.ZTyping.view
+    prog: Program.view
     ctx: Ctx
     n: zast.swapstmtrow.view
     ind: StringView
     tmp: FnTemps
     buf: String.borrow
 } is {
-    lhn: ast.nodes.get i: n.lhs
-    rhn: ast.nodes.get i: n.rhs
-    lx: emitExpr :ast :reg :typing :ctx n: lhn
-    rx: emitExpr :ast :reg :typing :ctx n: rhn
+    lhn: prog.ast.nodes.get i: n.lhs
+    rhn: prog.ast.nodes.get i: n.rhs
+    lx: emitExpr :prog :ctx n: lhn
+    rx: emitExpr :prog :ctx n: rhn
     lnid: interpPartNodeId n: lhn
-    lsid: stampIdOf :typing nid: lnid
+    lsid: stampIdOf :prog nid: lnid
     # the temporary holds what either slot holds: a heap collection is its pointer
-    lct: slotCType :ast :reg :typing :ctx tid: lsid
+    lct: slotCType :prog :ctx tid: lsid
     if lct.length == 0 then {
         failMsg: "zemitterc: unspellable swap operand type id \{lsid}"
         panic failMsg
@@ -910,21 +863,20 @@ emitSwapStmt: function {
 # template's, so its answer is read through the instance `itid`. Zero when
 # neither names one.
 objIterYieldTid: function {
-    reg: ztypes.ZTypeRegistry.view
-    typing: ztyping.ZTyping.view
+    prog: Program.view
     cco: ztypes.tid
 } out ztypes.tid is {
     ovid: ztypes.tid
-    rto: reg.returnTypeOf tid: cco
+    rto: prog.reg.returnTypeOf tid: cco
     if rto.notZero then ovid = rto
     if ovid.isZero then {
         # a user-class iterator whose `call` type records no return
-        mro: ztypecheck.methodReturnOf :reg :typing mid: cco
+        mro: ztypecheck.methodReturnOf reg: prog.reg typing: prog.typing mid: cco
         if mro.some then {
             ovid = mro
         }
     }
-    return (ownSignatureTid :reg tid: ovid)
+    return (ownSignatureTid :prog tid: ovid)
 }
 
 # elemBorrowsByPtr -- a List/ListView element type whose `get` lowers to a
@@ -936,16 +888,15 @@ objIterYieldTid: function {
 # stored element on a freed pointer). A valtype has no interior -- the copy IS
 # the borrow.
 elemBorrowsByPtr: function {
-    reg: ztypes.ZTypeRegistry.view
-    typing: ztyping.ZTyping.view
+    prog: Program.view
     ctx: Ctx
     tid: ztypes.tid
 } out bool is {
     if tid.isZero then return false
     if tid == ctx.strTid then return true
-    chasedStrTid: memberreads.chaseStrTypedef :typing :ctx :tid
+    chasedStrTid: memberreads.chaseStrTypedef :prog :ctx :tid
     if chasedStrTid == ctx.strTid then return true
-    return (argforms.isReftypeParam :reg :typing :ctx :tid)
+    return (argforms.isReftypeParam :prog :ctx :tid)
 }
 
 # elemRefByPtr -- a List/ListView element type whose MUTABLE reference is a
@@ -959,27 +910,26 @@ elemBorrowsByPtr: function {
 # use" for the declared hash/`==` dispatch, where a record is still passed BY
 # VALUE.
 elemRefByPtr: function {
-    reg: ztypes.ZTypeRegistry.view
-    typing: ztyping.ZTyping.view
+    prog: Program.view
     ctx: Ctx
     tid: ztypes.tid
 } out bool is {
-    if (elemBorrowsByPtr :reg :typing :ctx :tid) then return true
+    if (elemBorrowsByPtr :prog :ctx :tid) then return true
     # a Set or a Map element is already a pointer, so a copy of it IS the reference
-    if (isHeapPtrCollection :reg :typing :ctx :tid) then return false
-    ce: chaseAggregateTypedef :reg :typing :ctx :tid
-    if (types.isCollectionOriginTid :ctx originTid: (originTidOf :reg tid: ce)) then return true
-    tt: reg.typetypeOf typeId: tid
+    if (isHeapPtrCollection :prog :ctx :tid) then return false
+    ce: chaseAggregateTypedef :prog :ctx :tid
+    if (types.isCollectionOriginTid :ctx originTid: (originTidOf :prog tid: ce)) then return true
+    tt: prog.reg.typetypeOf typeId: tid
     if tt == ztypes.ztypetype.recordType then return true
     return tt == ztypes.ztypetype.variantType
 }
 
 # typedefChaseHasBaseName -- whether typedefChaseBaseName would name anything,
 # asked without copying the name.
-typedefChaseHasBaseName: function {typing: ztyping.ZTyping.view tid: ztypes.tid} out bool is {
+typedefChaseHasBaseName: function {prog: Program.view tid: ztypes.tid} out bool is {
     cur: tid
     for true loop {
-        b: typing.typedefBase.get key: cur
+        b: prog.typing.typedefBase.get key: cur
         if b.none then return false
         if b.name.notZero then return true
         if b.tid.isZero then return false
@@ -991,13 +941,12 @@ typedefChaseHasBaseName: function {typing: ztyping.ZTyping.view tid: ztypes.tid}
 # destroyOperand -- what a value's destroy is handed: its address, or the value
 # itself where it already IS the pointer the destroy frees (valueIsItsPointer).
 destroyOperand: function {
-    reg: ztypes.ZTypeRegistry.view
-    typing: ztyping.ZTyping.view
+    prog: Program.view
     ctx: Ctx.view
     tid: ztypes.tid
     nm: StringView
 } out String is {
-    if (stmtblocks.valueIsItsPointer :reg :typing :ctx :tid) then return nm.string
+    if (stmtblocks.valueIsItsPointer :prog :ctx :tid) then return nm.string
     return "&\{nm}"
 }
 
@@ -1009,29 +958,25 @@ destroyOperand: function {
 # to nothing. For collection-mono VAL_T/KEY_T/ELEM_T where the
 # element/key/value tid is known.
 cTypeForNameTid: function {
-    ast: Ast.view
-    reg: ztypes.ZTypeRegistry.view
-    typing: ztyping.ZTyping.view
+    prog: Program.view
     ctx: Ctx
     tid: ztypes.tid
 } out String is {
-    sc: consts.scalarCTypeFor :typing :tid
+    sc: consts.scalarCTypeFor :prog :tid
     if sc.length > 0 then return sc
-    return (slotCType :ast :reg :typing :ctx :tid)
+    return (slotCType :prog :ctx :tid)
 }
 
 # slotCType -- the C type a container stores a `tid` value as: its C type, and a
 # pointer for a heap collection (a Set or a Map), whose value IS that pointer
 # wherever it is held -- a local, a field, a parameter, an element.
 slotCType: function {
-    ast: Ast.view
-    reg: ztypes.ZTypeRegistry.view
-    typing: ztyping.ZTyping.view
+    prog: Program.view
     ctx: Ctx
     tid: ztypes.tid
 } out String is {
-    ct: typeRefC :ast :reg :typing :ctx :tid
-    if (isHeapPtrCollection :reg :typing :ctx :tid) then ct.append "*"
+    ct: typeRefC :prog :ctx :tid
+    if (isHeapPtrCollection :prog :ctx :tid) then ct.append "*"
     return ct
 }
 
@@ -1039,13 +984,11 @@ slotCType: function {
 # template's text as rtSectionPlan keeps it -- what is outside every section,
 # and each kept section -- its destroy holes noted.
 tmplSectionDestroys: function {
-    ast: Ast.view
-    reg: ztypes.ZTypeRegistry.view
-    typing: ztyping.ZTyping.view
+    prog: Program.view
     ctx: Ctx
     mono: ztypes.tid
 } is {
-    row: tmplClassRowOf :reg :ctx tid: mono
+    row: tmplClassRowOf :prog :ctx tid: mono
     tf: (ctx.classRows.get i: row - 1).tmpl.copy
     p: tmplKey :ctx name: tf.stringView
     ti: tmplTextOf :ctx key: p
@@ -1054,20 +997,18 @@ tmplSectionDestroys: function {
     pTids: ListVal ztypes.tid
     (
         templateParamArgs
-        :ast
-        :reg
-        :typing
-        template: (originTidOf :reg tid: mono)
+        :prog
+        template: (originTidOf :prog tid: mono)
         :mono
         names: pNames
         tids: pTids
     )
     plan: types.rtKeptPlan :ctx :mono id: ti
     hits: ListVal ztypes.tid
-    nativepieces.destroyKeyTypes :ast :reg :typing :ctx inst: mono :plan :pNames :pTids acc: hits
+    nativepieces.destroyKeyTypes :prog :ctx inst: mono :plan :pNames :pTids acc: hits
     for each t: hits loop {
-        dt: types.destroyTargetTid :reg :typing :ctx tid: t
-        if dt.notZero when dt != ctx.strTid then types.noteDestroyUse :reg :typing :ctx tid: dt
+        dt: types.destroyTargetTid :prog :ctx tid: t
+        if dt.notZero when dt != ctx.strTid then types.noteDestroyUse :prog :ctx tid: dt
     }
 }
 
@@ -1083,33 +1024,32 @@ typeReached: function {ctx: Ctx.view tid: ztypes.tid} out bool is {
 # with a body by its own job, an iterator's `call` with a body included, and a
 # native by its call.
 memberSigReachEdges: function {
-    reg: ztypes.ZTypeRegistry.view
-    typing: ztyping.ZTyping.view
+    prog: Program.view
     ctx: Ctx.view
     tid: ztypes.tid
     acc: ListVal ztypes.tid
 } is {
     names: ListVal zast.nameid
-    allMembers: (reg.typetypeOf typeId: tid).isInterface
+    allMembers: (prog.reg.typetypeOf typeId: tid).isInterface
     slot: u64
-    for slot < (typing.declRowSlots ownerTid: tid) loop {
-        rw: typing.declRowAt ownerTid: tid membersOnly: true :slot
+    for slot < (prog.typing.declRowSlots ownerTid: tid) loop {
+        rw: prog.typing.declRowAt ownerTid: tid membersOnly: true :slot
         slot = slot + 1
         if rw.keep.not then continue
-        if (reg.typetypeOf typeId: rw.tid) != ztypes.ztypetype.functionType then continue
+        if (prog.reg.typetypeOf typeId: rw.tid) != ztypes.ztypetype.functionType then continue
         if (ctx.fnJobAt.get key: rw.tid).some then continue
         if allMembers.not when rw.name != zast.wellKnown.slot.wkCall then continue
-        if allMembers.not when (reg.isNativeOf tid: rw.tid).not then continue
+        if allMembers.not when (prog.reg.isNativeOf tid: rw.tid).not then continue
         at: acc.length
-        acc.append (reg.returnTypeOf tid: rw.tid)
+        acc.append (prog.reg.returnTypeOf tid: rw.tid)
         # the return a vtable slot or a wrapper is written with (methodRetCtype)
         acc.append (
-            (ztypecheck.methodReturnOf :reg :typing mid: rw.tid).or
+            (ztypecheck.methodReturnOf reg: prog.reg typing: prog.typing mid: rw.tid).or
             d: ztypes.tid.zero
         )
-        types.recFieldIds :reg :typing tid: rw.tid ids: acc nameIds: names
+        types.recFieldIds :prog tid: rw.tid ids: acc nameIds: names
         for at < acc.length loop {
-            acc.set i: at val: (ownSignatureTid :reg tid: (acc.get i: at))
+            acc.set i: at val: (ownSignatureTid :prog tid: (acc.get i: at))
             at = at + 1
         }
     }
@@ -1118,8 +1058,7 @@ memberSigReachEdges: function {
 # containerReachEdges -- what a container's templates spell beyond its used
 # members.
 containerReachEdges: function {
-    reg: ztypes.ZTypeRegistry.view
-    typing: ztyping.ZTyping.view
+    prog: Program.view
     ctx: Ctx.view
     tid: ztypes.tid
     acc: ListVal ztypes.tid
@@ -1127,8 +1066,8 @@ containerReachEdges: function {
     # what a container's member sections spell, for the members written C
     # calls (memberUses): a set's iterator, a map's `get` answer (`getv`
     # forwards to `get`) and a hashed map's `remove`
-    isSet: (types.isSetOriginOf :reg :ctx :tid) or (types.isIdSetOriginOf :reg :ctx :tid)
-    isMap: (types.isMapOriginOf :reg :ctx :tid) or (types.isIdMapOriginOf :reg :ctx :tid)
+    isSet: (types.isSetOriginOf :prog :ctx :tid) or (types.isIdSetOriginOf :prog :ctx :tid)
+    isMap: (types.isMapOriginOf :prog :ctx :tid) or (types.isIdMapOriginOf :prog :ctx :tid)
     walksSet: memberUsed :ctx mono: tid member: memberWord.slot.iterateAll
     usesGet: (
         (memberUsed :ctx mono: tid member: memberWord.slot.getOne) or
@@ -1136,23 +1075,22 @@ containerReachEdges: function {
     )
     usesRemove: memberUsed :ctx mono: tid member: memberWord.slot.remove
     if isSet when walksSet then {
-        acc.append (monoMethodReturn :reg :typing monoId: tid nameId: zast.wellKnown.slot.wkIterate)
+        acc.append (monoMethodReturn :prog monoId: tid nameId: zast.wellKnown.slot.wkIterate)
     }
     if isMap when usesGet then {
-        acc.append (monoMethodReturn :reg :typing monoId: tid nameId: zast.wellKnown.slot.wkGet)
+        acc.append (monoMethodReturn :prog monoId: tid nameId: zast.wellKnown.slot.wkGet)
     }
-    if (types.isMapOriginOf :reg :ctx :tid) when usesRemove then {
-        acc.append (monoMethodReturn :reg :typing monoId: tid nameId: zast.wellKnown.slot.wkRemove)
+    if (types.isMapOriginOf :prog :ctx :tid) when usesRemove then {
+        acc.append (monoMethodReturn :prog monoId: tid nameId: zast.wellKnown.slot.wkRemove)
     }
     # a map's walks: each one's cursor, where written C calls it
     if isMap when (memberUsed :ctx mono: tid member: memberWord.slot.iterateAll) then {
-        acc.append (monoMethodReturn :reg :typing monoId: tid nameId: zast.wellKnown.slot.wkIterate)
+        acc.append (monoMethodReturn :prog monoId: tid nameId: zast.wellKnown.slot.wkIterate)
     }
     if isMap when (memberUsed :ctx mono: tid member: memberWord.slot.iterateItems) then {
         acc.append (
             monoMethodReturn
-            :reg
-            :typing
+            :prog
             monoId: tid
             nameId: zast.wellKnown.slot.wkIterateItems
         )
@@ -1165,11 +1103,10 @@ containerReachEdges: function {
         (memberUsed :ctx mono: tid member: memberWord.slot.extendView)
     )
     if spellsView then {
-        acc.append (monoMethodReturn :reg :typing monoId: tid nameId: zast.wellKnown.slot.wkListView
-        )
+        acc.append (monoMethodReturn :prog monoId: tid nameId: zast.wellKnown.slot.wkListView)
     }
     if (memberUsed :ctx mono: tid member: memberWord.slot.slice) then {
-        acc.append (monoMethodReturn :reg :typing monoId: tid nameId: zast.wellKnown.slot.wkSlice)
+        acc.append (monoMethodReturn :prog monoId: tid nameId: zast.wellKnown.slot.wkSlice)
     }
 }
 
@@ -1177,27 +1114,25 @@ containerReachEdges: function {
 # program: a generic one has an instance, a non-generic one is made -- its
 # `create` is demanded. Naming the class (a parameter type of another's
 # method) makes none, so it is not enough.
-tmplClassInProgram: function {
-    reg: ztypes.ZTypeRegistry.view typing: ztyping.ZTyping.view tpl: ztypes.tid
-} out bool is {
-    if (reg.isGenericOf tid: tpl) then return (classHasInstance :reg :tpl)
+tmplClassInProgram: function {prog: Program.view tpl: ztypes.tid} out bool is {
+    if (prog.reg.isGenericOf tid: tpl) then return (classHasInstance :prog :tpl)
     # `--eager` reaches every definition but resolves no native create: the
     # class is written when it is
-    if typing.eagerAll then return (
-        typing.declIsResolved
-        declId: (typing.declIdOfType typeId: tpl)
+    if prog.typing.eagerAll then return (
+        prog.typing.declIsResolved
+        declId: (prog.typing.declIdOfType typeId: tpl)
     )
-    cd: typing.declMemberIdOf parentTypeId: tpl nameId: zast.wellKnown.slot.wkCreate
+    cd: prog.typing.declMemberIdOf parentTypeId: tpl nameId: zast.wellKnown.slot.wkCreate
     if cd.isZero then return false
-    return (typing.declIsResolved declId: cd)
+    return (prog.typing.declIsResolved declId: cd)
 }
 
 # classHasInstance -- some type is an instance of the template `tpl`
-classHasInstance: function {reg: ztypes.ZTypeRegistry.view tpl: ztypes.tid} out bool is {
+classHasInstance: function {prog: Program.view tpl: ztypes.tid} out bool is {
     tm: ztypes.tid
-    last: reg.nextTid
+    last: prog.reg.nextTid
     for tm < last loop {
-        if (originTidOf :reg tid: tm) == tpl then return true
+        if (originTidOf :prog tid: tm) == tpl then return true
         tm = tm.next
     }
     return false
@@ -1207,27 +1142,23 @@ classHasInstance: function {reg: ztypes.ZTypeRegistry.view tpl: ztypes.tid} out 
 # mono's written members call: a reference element's `==` in `contains`
 # (emitListContains), and the `compare` its `sort` orders by (sortLessC).
 demandListElemCalls: function {
-    ast: Ast.view
-    reg: ztypes.ZTypeRegistry.view
-    typing: ztyping.ZTyping.view
+    prog: Program.view
     ctx: Ctx
     monoId: ztypes.tid
 } is {
-    elem: listElemType :reg :typing :monoId
+    elem: listElemType :prog :monoId
     if elem.isZero then return
-    if (reg.isValtypeOf tid: elem).not when (
+    if (prog.reg.isValtypeOf tid: elem).not when (
         memberUsed
         :ctx
         mono: monoId
         member: memberWord.slot.contains
-    ) then emitplan.noteFnUse :ctx tid: (refElemEqFid :typing :elem)
+    ) then emitplan.noteFnUse :ctx tid: (refElemEqFid :prog :elem)
     if (memberUsed :ctx mono: monoId member: memberWord.slot.sort) when (
         sortCallsWritten
-        :ast
-        :reg
-        :typing
+        :prog
         :elem
-    ) then emitplan.noteFnUse :ctx tid: (sortCompareFid :reg :typing :elem)
+    ) then emitplan.noteFnUse :ctx tid: (sortCompareFid :prog :elem)
 }
 
 # fnJobUnwritten -- `tid` is a function the program's units could write and
@@ -1366,11 +1297,8 @@ rtPlanSpells: function {ctx: Ctx.view plan: RtPlan.view name: StringView} out bo
 # rtOptionKeys -- bind option type `tid`'s two tag constants to the keys
 # `<key>_SOME` and `<key>_NONE`, where the text `plan` writes spells either
 rtOptionKeys: function {
-    # the arm names
-    ast: Ast.view
+    prog: Program.view
     ctx: Ctx
-    reg: ztypes.ZTypeRegistry.view
-    typing: ztyping.ZTyping.view
     plan: RtPlan.view
     keys: RtKeys
     # the key both names extend
@@ -1388,8 +1316,8 @@ rtOptionKeys: function {
     ).not then return
     # an option view's enum is written with its struct (emitOptionViewMono), so
     # spelling its constants is no use of it to record
-    sv: types.tagConstOf :ast :ctx :reg :typing :tid armId: zast.wellKnown.slot.wkSome
-    nv: types.tagConstOf :ast :ctx :reg :typing :tid armId: zast.wellKnown.slot.wkNone
+    sv: types.tagConstOf :prog :ctx :tid armId: zast.wellKnown.slot.wkSome
+    nv: types.tagConstOf :prog :ctx :tid armId: zast.wellKnown.slot.wkNone
     rtKey :ctx :keys name: sk.stringView val: sv.stringView
     rtKey :ctx :keys name: nk.stringView val: nv.stringView
 }
@@ -1462,12 +1390,10 @@ cbaseNoPrefix: function {ctx: Ctx.view tid: ztypes.tid} out String is {
 
 # listElemType -- a List/ListView mono's element type id (the get-child
 # return), 0 when absent.
-listElemType: function {
-    reg: ztypes.ZTypeRegistry.view typing: ztyping.ZTyping.view monoId: ztypes.tid
-} out ztypes.tid is {
-    go: typing.declChildOfId parentTypeId: monoId nameId: zast.wellKnown.slot.wkGet
+listElemType: function {prog: Program.view monoId: ztypes.tid} out ztypes.tid is {
+    go: prog.typing.declChildOfId parentTypeId: monoId nameId: zast.wellKnown.slot.wkGet
     if go.some then {
-        return (reg.returnTypeOf tid: go)
+        return (prog.reg.returnTypeOf tid: go)
     }
     return ztypes.tid.zero
 }
@@ -1486,26 +1412,21 @@ ctypeOrI64: function {s: StringView} out String is {
 # twin: the element mono supplies both the C element type and the `==` companion
 # (arrayEqBody).
 emitArrayMono: function {
-    ast: Ast.view
-    reg: ztypes.ZTypeRegistry.view
-    typing: ztyping.ZTyping.view
+    prog: Program.view
     ctx: Ctx
     monoId: ztypes.tid
     buf: String.borrow
 } is {
     nm: cbaseNoPrefix :ctx tid: monoId
-    eid: listElemType :reg :typing :monoId
-    elemC: typeRefC :ast :reg :typing :ctx tid: eid
+    eid: listElemType :prog :monoId
+    elemC: typeRefC :prog :ctx tid: eid
     ect: ctypeOrI64 s: elemC.stringView
-    lenStr: monoLengthText :reg :monoId
+    lenStr: monoLengthText :prog :monoId
     createBody: "    z_\{nm}_t _this = {0};"
     eqBody: String
-    if (ctx.eqUsed.has item: monoId) when (types.eqGenerated :ast :reg :typing :ctx tid: monoId
-    ) then (
+    if (ctx.eqUsed.has item: monoId) when (types.eqGenerated :prog :ctx tid: monoId) then (
         arrayEqBody
-        :ast
-        :reg
-        :typing
+        :prog
         :ctx
         :monoId
         elemId: eid
@@ -1534,9 +1455,7 @@ emitArrayMono: function {
 # body that calls a written method goes after the method prototypes, leaving
 # its prototype in the template's place.
 arrayEqBody: function {
-    ast: Ast.view
-    reg: ztypes.ZTypeRegistry.view
-    typing: ztyping.ZTyping.view
+    prog: Program.view
     ctx: Ctx
     monoId: ztypes.tid
     elemId: ztypes.tid
@@ -1545,15 +1464,13 @@ arrayEqBody: function {
 } is {
     nm: cbaseNoPrefix :ctx tid: monoId
     body: "static bool z_\{nm}_eq(z_\{nm}_t a, z_\{nm}_t b) {\n"
-    if (parttexts.elemEqIsBytes :ast :reg :typing tid: elemId) then {
+    if (parttexts.elemEqIsBytes :prog tid: elemId) then {
         body.append "    return memcmp(a.data, b.data, sizeof(a.data)) == 0;\n}\n"
     } else {
         body.append "    for (int _i = 0; _i < \{lenStr}; _i++) { if (!("
         (
             parttexts.partEqC
-            :ast
-            :reg
-            :typing
+            :prog
             :ctx
             tid: elemId
             lhs: "a"
@@ -1564,7 +1481,7 @@ arrayEqBody: function {
         body.append ")) return false; }\n"
         body.append "    return true;\n}\n"
     }
-    if (partCallsWritten :ast :reg :typing tid: elemId).not then {
+    if (partCallsWritten :prog tid: elemId).not then {
         dest.append body
         return
     }
@@ -1583,13 +1500,13 @@ capLenT: function {cap: u64} out String is {
 # monoLengthValue / monoLengthText -- a sized mono's element count or byte
 # capacity (array/str `to`): the value its numeric generic argument recorded,
 # never a spelling read back out of its name.
-monoLengthValue: function {reg: ztypes.ZTypeRegistry.view monoId: ztypes.tid} out u64 is {
-    return (reg.sizedLength specId: monoId)
+monoLengthValue: function {prog: Program.view monoId: ztypes.tid} out u64 is {
+    return (prog.reg.sizedLength specId: monoId)
 }
 
 # the same count as C text.
-monoLengthText: function {reg: ztypes.ZTypeRegistry.view monoId: ztypes.tid} out String is {
-    return "\{monoLengthValue :reg :monoId}"
+monoLengthText: function {prog: Program.view monoId: ztypes.tid} out String is {
+    return "\{monoLengthValue :prog :monoId}"
 }
 
 # emitStrMono -- a str valtype mono (fixed-capacity inline string). Substitutes
@@ -1597,18 +1514,17 @@ monoLengthText: function {reg: ztypes.ZTypeRegistry.view monoId: ztypes.tid} out
 # StringView holes are filled (fillStringHoles) with ctx.strC / ctx.svC.
 # Capacity is the mono's recorded `to` argument.
 emitStrMono: function {
-    reg: ztypes.ZTypeRegistry.view
-    typing: ztyping.ZTyping.view
+    prog: Program.view
     ctx: Ctx
     monoId: ztypes.tid
     buf: String.borrow
 } is {
     nm: cbaseNoPrefix :ctx tid: monoId
-    capV: monoLengthValue :reg :monoId
+    capV: monoLengthValue :prog :monoId
     capStr: "\{capV}"
     lenT: capLenT cap: capV
     eqBody: String
-    eqo: typing.declChildOfId parentTypeId: monoId nameId: zast.wellKnown.slot.wkOpEq
+    eqo: prog.typing.declChildOfId parentTypeId: monoId nameId: zast.wellKnown.slot.wkOpEq
     # written where written C compares two of them (noteEqUse)
     if eqo.some when (ctx.eqUsed.has item: monoId) then {
         eqBody = "static bool z_\{nm}_eq(z_\{nm}_t a, z_\{nm}_t b) {\n    return a.len == b.len && memcmp(a.data, b.data, a.len) == 0;\n}\n"
@@ -1690,19 +1606,17 @@ listAddOnsGrow: function {ctx: Ctx monoId: ztypes.tid} is {
 # emitListMono -- substitute template List for a List instance + the
 # linear-scan contains companion (scalar element equality).
 emitListMono: function {
-    ast: Ast.view
-    reg: ztypes.ZTypeRegistry.view
-    typing: ztyping.ZTyping.view
+    prog: Program.view
     ctx: Ctx
     monoId: ztypes.tid
     buf: String.borrow
 } is {
     nm: cbaseNoPrefix :ctx tid: monoId
-    eid: listElemType :reg :typing :monoId
+    eid: listElemType :prog :monoId
     isStrEl: false
     if eid == ctx.strTid then isStrEl = true
     isSvEl: parttexts.isViewLaid :ctx tid: eid
-    elemC: slotCType :ast :reg :typing :ctx tid: eid
+    elemC: slotCType :prog :ctx tid: eid
     ect: ctypeOrI64 s: elemC.stringView
     p: tmplKey :ctx name: "List"
     ti: tmplTextOf :ctx key: p
@@ -1711,9 +1625,9 @@ emitListMono: function {
         kt: RtKeys.create
         rtKey :ctx keys: kt name: "NAME" val: nm.stringView
         rtKey :ctx keys: kt name: "ELEM_T" val: ect.stringView
-        delems: types.listElemsDestroyC :reg :typing :ctx :eid
+        delems: types.listElemsDestroyC :prog :ctx :eid
         rtKey :ctx keys: kt name: "DESTROY_ELEMS" val: delems.stringView
-        lvm: listviewMethods :ctx :reg :typing :monoId nm: nm.stringView ect: ect.stringView
+        lvm: listviewMethods :ctx :prog :monoId nm: nm.stringView ect: ect.stringView
         rtKey :ctx keys: kt name: "LISTVIEW_METHODS" val: lvm.stringView
         # insert, extend and resize, written after the instance, call its grow
         listAddOnsGrow :ctx :monoId
@@ -1730,8 +1644,8 @@ emitListMono: function {
             nm: nm.stringView
             ect: ect.stringView
             kind: "List"
-            ptr: (elemBorrowsByPtr :reg :typing :ctx tid: eid)
-            mutPtr: (elemRefByPtr :reg :typing :ctx tid: eid)
+            ptr: (elemBorrowsByPtr :prog :ctx tid: eid)
+            mutPtr: (elemRefByPtr :prog :ctx tid: eid)
             hasGet: useGet
             hasMut: useMut
             :buf
@@ -1741,9 +1655,7 @@ emitListMono: function {
     if (memberUsed :ctx mono: monoId member: memberWord.slot.contains) then {
         (
             emitListContains
-            :ast
-            :reg
-            :typing
+            :prog
             :ctx
             nm: nm.stringView
             ect: ect.stringView
@@ -1758,9 +1670,7 @@ emitListMono: function {
     )
     if eqUsed then (
         parttexts.emitListEq
-        :ast
-        :reg
-        :typing
+        :prog
         :ctx
         nm: nm.stringView
         ect: ect.stringView
@@ -1770,9 +1680,7 @@ emitListMono: function {
     if (memberUsed :ctx mono: monoId member: memberWord.slot.sort) then {
         (
             emitListSort
-            :ast
-            :reg
-            :typing
+            :prog
             :ctx
             nm: nm.stringView
             ect: ect.stringView
@@ -1784,15 +1692,14 @@ emitListMono: function {
     }
     (
         emitListSliceOnDemand
-        :reg
-        :typing
+        :prog
         :ctx
         :monoId
         nm: nm.stringView
         kind: "List"
         :buf
     )
-    emitListIter :ast :ctx :reg :typing :monoId nm: nm.stringView ect: ect.stringView :buf
+    emitListIter :prog :ctx :monoId nm: nm.stringView ect: ect.stringView :buf
 }
 
 # emitListMembersOnDemand -- the List members written as fragments of their
@@ -1857,9 +1764,7 @@ emitListMembersOnDemand: function {
 # scalar's C `==`, the author's method, a generated `_eq`. A definition that
 # calls a written method comes after every method prototype.
 emitListContains: function {
-    ast: Ast.view
-    reg: ztypes.ZTypeRegistry.view
-    typing: ztyping.ZTyping.view
+    prog: Program.view
     ctx: Ctx
     nm: StringView
     ect: StringView
@@ -1873,31 +1778,27 @@ emitListContains: function {
     late: false
     if strLike then {
         body.append "        if (_this->data[i].size == _needle.size && memcmp(_this->data[i].data, _needle.data, _needle.size) == 0) return true;\n"
-    } else if (reg.isValtypeOf tid: elem).not then {
+    } else if (prog.reg.isValtypeOf tid: elem).not then {
         # a reference element compares with the `==` its type declares, by
         # address, as a Set's element does
         late = true
         body.append "        { \{ect} _e = _this->data[i]; if ("
-        body.append (spelledCname :ctx tid: (refElemEqFid :typing :elem))
+        body.append (spelledCname :ctx tid: (refElemEqFid :prog :elem))
         body.append "(&_e, "
-        if (elemBorrowsByPtr :reg :typing :ctx tid: elem) then body.append "&"
+        if (elemBorrowsByPtr :prog :ctx tid: elem) then body.append "&"
         body.append "_needle)) return true; }\n"
-    } else if (parttexts.partIsCScalar :reg :typing tid: elem) when (
+    } else if (parttexts.partIsCScalar :prog tid: elem) when (
         partCallsWritten
-        :ast
-        :reg
-        :typing
+        :prog
         tid: elem
     ).not then {
         body.append "        if (_this->data[i] == _needle) return true;\n"
     } else {
-        late = partCallsWritten :ast :reg :typing tid: elem
+        late = partCallsWritten :prog tid: elem
         body.append "        { \{ect} _e = _this->data[i]; if ("
         (
             parttexts.partEqC
-            :ast
-            :reg
-            :typing
+            :prog
             :ctx
             tid: elem
             lhs: "_e"
@@ -1920,25 +1821,23 @@ emitListContains: function {
 
 # refElemEqFid -- the `==` a reference element's type declares, which a list's
 # `contains` compares it with.
-refElemEqFid: function {typing: ztyping.ZTyping.view elem: ztypes.tid} out ztypes.tid is {
+refElemEqFid: function {prog: Program.view elem: ztypes.tid} out ztypes.tid is {
     fo: (
-        typing.declChildOfId
-        parentTypeId: (ztypecheck.typedefChaseTid :typing tid: elem)
+        prog.typing.declChildOfId
+        parentTypeId: (ztypecheck.typedefChaseTid typing: prog.typing tid: elem)
         nameId: zast.wellKnown.slot.wkOpEq
     )
     return (fo.or d: ztypes.tid.zero)
 }
 
 # sortCallsWritten -- ordering `elem` calls a `compare` the author wrote.
-sortCallsWritten: function {
-    ast: Ast.view reg: ztypes.ZTypeRegistry.view typing: ztyping.ZTyping.view elem: ztypes.tid
-} out bool is {
-    if (reg.isValtypeOf tid: elem).not then return true
+sortCallsWritten: function {prog: Program.view elem: ztypes.tid} out bool is {
+    if (prog.reg.isValtypeOf tid: elem).not then return true
     return (
         ztypecheck.valOpSource
-        :ast
-        :reg
-        :typing
+        ast: prog.ast
+        reg: prog.reg
+        typing: prog.typing
         tid: elem
         nameId: zast.wellKnown.slot.wkCompare
     ).written
@@ -1949,17 +1848,15 @@ sortCallsWritten: function {
 # lengths, and otherwise the author's `compare` below zero. The checker has
 # refused a `sort` whose element has none.
 sortLessC: function {
-    ast: Ast.view
-    reg: ztypes.ZTypeRegistry.view
-    typing: ztyping.ZTyping.view
+    prog: Program.view
     ctx: Ctx
     elem: ztypes.tid
 } out String is {
-    if (sortCallsWritten :ast :reg :typing :elem).not then {
+    if (sortCallsWritten :prog :elem).not then {
         if (
             ztypecheck.valIsMonoOf
-            :reg
-            :typing
+            reg: prog.reg
+            typing: prog.typing
             tid: elem
             wk: zast.wellKnown.slot.tyStr
         ) then {
@@ -1968,29 +1865,27 @@ sortLessC: function {
         return "_a < _b".string
     }
     rhs: "_b"
-    if (reg.isValtypeOf tid: elem).not when (elemBorrowsByPtr :reg :typing :ctx tid: elem) then {
+    if (prog.reg.isValtypeOf tid: elem).not when (elemBorrowsByPtr :prog :ctx tid: elem) then {
         rhs = "&_b"
     }
-    fc: spelledCname :ctx tid: (sortCompareFid :reg :typing :elem)
+    fc: spelledCname :ctx tid: (sortCompareFid :prog :elem)
     return "\{fc}(&_a, \{rhs}) < 0"
 }
 
 # sortCompareFid -- the `compare` the author wrote that orders `elem`
 # (sortCallsWritten): a value type's own or its typedef chain's, a reference's
 # declared one.
-sortCompareFid: function {
-    reg: ztypes.ZTypeRegistry.view typing: ztyping.ZTyping.view elem: ztypes.tid
-} out ztypes.tid is {
-    owner: ztypecheck.typedefChaseTid :typing tid: elem
-    if (reg.isValtypeOf tid: elem) then {
+sortCompareFid: function {prog: Program.view elem: ztypes.tid} out ztypes.tid is {
+    owner: ztypecheck.typedefChaseTid typing: prog.typing tid: elem
+    if (prog.reg.isValtypeOf tid: elem) then {
         owner = (
             ztypecheck.valOpOwner
-            :typing
+            typing: prog.typing
             tid: elem
             nameId: zast.wellKnown.slot.wkCompare
         )
     }
-    fo: typing.declChildOfId parentTypeId: owner nameId: zast.wellKnown.slot.wkCompare
+    fo: prog.typing.declChildOfId parentTypeId: owner nameId: zast.wellKnown.slot.wkCompare
     return (fo.or d: ztypes.tid.zero)
 }
 
@@ -2099,8 +1994,7 @@ emitColSlice: function {
 # the member's declared return, which is another mono for a List and the mono
 # itself for a ListView, so one path serves both templates.
 emitListSliceOnDemand: function {
-    reg: ztypes.ZTypeRegistry.view
-    typing: ztyping.ZTyping.view
+    prog: Program.view
     ctx: Ctx
     monoId: ztypes.tid
     nm: StringView
@@ -2108,13 +2002,13 @@ emitListSliceOnDemand: function {
     buf: String.borrow
 } is {
     if (memberUsed :ctx mono: monoId member: memberWord.slot.slice).not then return
-    co: typing.declChildOfId parentTypeId: monoId nameId: zast.wellKnown.slot.wkSlice
+    co: prog.typing.declChildOfId parentTypeId: monoId nameId: zast.wellKnown.slot.wkSlice
     if co.some then {
-        rt: emitplan.fnReturnTidOf :reg tid: co
+        rt: emitplan.fnReturnTidOf :prog tid: co
         # a view's slice is a view of the same instance: the member returns
         # `type`, and an instance minted while the library is still being read
         # carries the template's member, which records no return id for it
-        if rt.isZero when (types.isListViewOriginOf :reg :ctx tid: monoId) then rt = monoId
+        if rt.isZero when (types.isListViewOriginOf :prog :ctx tid: monoId) then rt = monoId
         if rt.notZero then {
             lvc: emitplan.ctxCname :ctx tid: rt
             emitColSlice :ctx :nm lvc: lvc.stringView :kind :buf
@@ -2178,22 +2072,19 @@ emitListIterCursor: function {
 # spelled by nothing the program writes, which leaves the walk with nothing to
 # emit.
 emitIterCursorOf: function {
-    # the arm names
-    ast: Ast.view
+    prog: Program.view
     ctx: Ctx
-    reg: ztypes.ZTypeRegistry.view
-    typing: ztyping.ZTyping.view
     liId: ztypes.tid
     ect: StringView
     buf: String.borrow
 } out bool is {
     if liId.isZero then return false
     if (typeReached :ctx tid: liId).not then return false
-    ovId: monoMethodReturn :reg :typing monoId: liId nameId: zast.wellKnown.slot.wkCall
+    ovId: monoMethodReturn :prog monoId: liId nameId: zast.wellKnown.slot.wkCall
     if ovId.isZero then return false
     if (listIterEmitted :ctx tid: liId) then return true
-    ovNone: spelledTagConst :ast :ctx :reg :typing tid: ovId armId: zast.wellKnown.slot.wkNone
-    ovSome: spelledTagConst :ast :ctx :reg :typing tid: ovId armId: zast.wellKnown.slot.wkSome
+    ovNone: spelledTagConst :prog :ctx tid: ovId armId: zast.wellKnown.slot.wkNone
+    ovSome: spelledTagConst :prog :ctx tid: ovId armId: zast.wellKnown.slot.wkSome
     (
         emitListIterCursor
         :ctx
@@ -2214,24 +2105,21 @@ emitIterCursorOf: function {
 # through ListIterMut; the two cursors are the same shape under two names. The
 # view union monos are emitted by the earlier pass, so this can reference them.
 emitListIter: function {
-    # the arm names
-    ast: Ast.view
+    prog: Program.view
     ctx: Ctx
-    reg: ztypes.ZTypeRegistry.view
-    typing: ztyping.ZTyping.view
     monoId: ztypes.tid
     nm: StringView
     ect: StringView
     buf: String.borrow
 } is {
-    liId: monoMethodReturn :reg :typing :monoId nameId: zast.wellKnown.slot.wkIterate
+    liId: monoMethodReturn :prog :monoId nameId: zast.wellKnown.slot.wkIterate
     # a mono that walks only BACKWARDS mints its cursor through the reverse
     # member, so the forward one answers nothing and the cursor would go
     # unemitted under a name the reverse constructor then names
     if liId.isZero then {
-        liId = monoMethodReturn :reg :typing :monoId nameId: zast.wellKnown.slot.wkIterateReverse
+        liId = monoMethodReturn :prog :monoId nameId: zast.wellKnown.slot.wkIterateReverse
     }
-    if (emitIterCursorOf :ast :ctx :reg :typing :liId :ect :buf) then {
+    if (emitIterCursorOf :prog :ctx :liId :ect :buf) then {
         emitListIterReadonly :ctx :monoId :liId :nm :buf
     }
     # iterateMut -- the mutable walk, for a mono that declares one: its own
@@ -2241,8 +2129,8 @@ emitListIter: function {
     # readonly, and an ungated one would be a writable walk over storage the
     # view may not write.
     if (memberUsed :ctx mono: monoId member: memberWord.slot.iterateMut).not then return
-    lmId: monoMethodReturn :reg :typing :monoId nameId: zast.wellKnown.slot.wkIterateMut
-    if (emitIterCursorOf :ast :ctx :reg :typing liId: lmId :ect :buf).not then return
+    lmId: monoMethodReturn :prog :monoId nameId: zast.wellKnown.slot.wkIterateMut
+    if (emitIterCursorOf :prog :ctx liId: lmId :ect :buf).not then return
     lm: cbaseNoPrefix :ctx tid: lmId
     (
         appendCursorCtor
@@ -2314,9 +2202,7 @@ emitListIterReadonly: function {
 
 # emitListSort -- stable in-place mergesort companion (scalar `<`).
 emitListSort: function {
-    ast: Ast.view
-    reg: ztypes.ZTypeRegistry.view
-    typing: ztyping.ZTyping.view
+    prog: Program.view
     ctx: Ctx
     nm: StringView
     ect: StringView
@@ -2328,14 +2214,14 @@ emitListSort: function {
 } is {
     s0: "static int z_\{nm}_sort_lt(\{ect} _a, \{ect} _b)"
     lt: String
-    if isStr.not when isSv.not then lt = sortLessC :ast :reg :typing :ctx :elem
+    if isStr.not when isSv.not then lt = sortLessC :prog :ctx :elem
     if isStr then {
         preludeNeed :ctx memb: "@String_cmp"
         buf.append "\{s0} { return \{ctx.strC}_cmp(&_a, &_b) < 0; }\n"
     } else if isSv then {
         preludeNeed :ctx memb: "@StringView_cmp"
         buf.append "\{s0} { return \{ctx.svC}_cmp(_a, _b) < 0; }\n"
-    } else if (sortCallsWritten :ast :reg :typing :elem) then {
+    } else if (sortCallsWritten :prog :elem) then {
         buf.append "\{s0};\n"
         ctx.lateDefs.append "\{s0} { return \{lt}; }\n\n"
     } else {
@@ -2378,16 +2264,14 @@ emitListSort: function {
 
 # emitListViewMono -- substitute template ListView for a ListView mono.
 emitListViewMono: function {
-    ast: Ast.view
-    reg: ztypes.ZTypeRegistry.view
-    typing: ztyping.ZTyping.view
+    prog: Program.view
     ctx: Ctx
     monoId: ztypes.tid
     buf: String.borrow
 } is {
     nm: cbaseNoPrefix :ctx tid: monoId
-    eid: listElemType :reg :typing :monoId
-    elemC: slotCType :ast :reg :typing :ctx tid: eid
+    eid: listElemType :prog :monoId
+    elemC: slotCType :prog :ctx tid: eid
     ect: ctypeOrI64 s: elemC.stringView
     p: tmplKey :ctx name: "ListView"
     ti: tmplTextOf :ctx key: p
@@ -2405,8 +2289,8 @@ emitListViewMono: function {
             nm: nm.stringView
             ect: ect.stringView
             kind: "ListView"
-            ptr: (elemBorrowsByPtr :reg :typing :ctx tid: eid)
-            mutPtr: (elemRefByPtr :reg :typing :ctx tid: eid)
+            ptr: (elemBorrowsByPtr :prog :ctx tid: eid)
+            mutPtr: (elemRefByPtr :prog :ctx tid: eid)
             hasGet: true
             hasMut: false
             :buf
@@ -2414,15 +2298,14 @@ emitListViewMono: function {
     }
     (
         emitListSliceOnDemand
-        :reg
-        :typing
+        :prog
         :ctx
         :monoId
         nm: nm.stringView
         kind: "ListView"
         :buf
     )
-    emitListIter :ast :ctx :reg :typing :monoId nm: nm.stringView ect: ect.stringView :buf
+    emitListIter :prog :ctx :monoId nm: nm.stringView ect: ect.stringView :buf
 }
 
 # emitStaticListMono -- a static list's value mono (`staticlist u8`): template data's view
@@ -2432,16 +2315,14 @@ emitListViewMono: function {
 # shared with walks that write, so the const is dropped there; the typechecker
 # is what keeps a list walk readonly.
 emitStaticListMono: function {
-    ast: Ast.view
-    reg: ztypes.ZTypeRegistry.view
-    typing: ztyping.ZTyping.view
+    prog: Program.view
     ctx: Ctx
     monoId: ztypes.tid
     buf: String.borrow
 } is {
     nm: cbaseNoPrefix :ctx tid: monoId
-    eid: reg.genericTypeArgAt specId: monoId ordinal: 0
-    elemC: slotCType :ast :reg :typing :ctx tid: eid
+    eid: prog.reg.genericTypeArgAt specId: monoId ordinal: 0
+    elemC: slotCType :prog :ctx tid: eid
     ect: ctypeOrI64 s: elemC.stringView
     est: staticListStoredC ect: ect.stringView
     p: tmplKey :ctx name: "data"
@@ -2467,8 +2348,8 @@ emitStaticListMono: function {
         buf.append "}\n\n"
     }
     if (memberUsed :ctx mono: monoId member: memberWord.slot.iterateAll).not then return
-    liId: monoMethodReturn :reg :typing :monoId nameId: zast.wellKnown.slot.wkIterate
-    if (emitIterCursorOf :ast :ctx :reg :typing :liId ect: ect.stringView :buf).not then return
+    liId: monoMethodReturn :prog :monoId nameId: zast.wellKnown.slot.wkIterate
+    if (emitIterCursorOf :prog :ctx :liId ect: ect.stringView :buf).not then return
     li: cbaseNoPrefix :ctx tid: liId
     buf.append "static z_\{li}_t z_\{nm}_iterate(const z_\{nm}_t* _this);\n"
     buf.append "static z_\{li}_t z_\{nm}_iterate(const z_\{nm}_t* _this) {\n"
@@ -2485,16 +2366,14 @@ emitStaticListMono: function {
 # take another type's value, so they are written at the call instead, where
 # every struct is complete.
 emitSpanMono: function {
-    ast: Ast.view
-    reg: ztypes.ZTypeRegistry.view
-    typing: ztyping.ZTyping.view
+    prog: Program.view
     ctx: Ctx
     monoId: ztypes.tid
     buf: String.borrow
 } is {
     nm: cbaseNoPrefix :ctx tid: monoId
-    eid: listElemType :reg :typing :monoId
-    elemC: slotCType :ast :reg :typing :ctx tid: eid
+    eid: listElemType :prog :monoId
+    elemC: slotCType :prog :ctx tid: eid
     ect: ctypeOrI64 s: elemC.stringView
     p: tmplKey :ctx name: "ListView"
     ti: tmplTextOf :ctx key: p
@@ -2511,7 +2390,7 @@ emitSpanMono: function {
         nm: nm.stringView
         ect: ect.stringView
         kind: "SpanVal"
-        ptr: (elemBorrowsByPtr :reg :typing :ctx tid: eid)
+        ptr: (elemBorrowsByPtr :prog :ctx tid: eid)
         mutPtr: false
         hasGet: true
         hasMut: false
@@ -2588,15 +2467,14 @@ emitSpanMemberOnDemand: function {
 # mono, each where written C calls it (memberUsed); "" otherwise.
 listviewMethods: function {
     ctx: Ctx
-    reg: ztypes.ZTypeRegistry.view
-    typing: ztyping.ZTyping.view
+    prog: Program.view
     monoId: ztypes.tid
     nm: StringView
     ect: StringView
 } out String is {
-    lo: typing.declChildOfId parentTypeId: monoId nameId: zast.wellKnown.slot.wkListView
+    lo: prog.typing.declChildOfId parentTypeId: monoId nameId: zast.wellKnown.slot.wkListView
     if lo.some then {
-        rt: emitplan.fnReturnTidOf :reg tid: lo
+        rt: emitplan.fnReturnTidOf :prog tid: lo
         if rt.notZero then {
             {
                 lvc: emitplan.ctxCname :ctx tid: rt
@@ -2631,14 +2509,13 @@ listviewMethods: function {
 # method or its return is absent). The id-first way to reach a collection's
 # iterator/view/wrapper companions.
 monoMethodReturn: function {
-    reg: ztypes.ZTypeRegistry.view
-    typing: ztyping.ZTyping.view
+    prog: Program.view
     monoId: ztypes.tid
     nameId: zast.nameid
 } out ztypes.tid is {
-    co: typing.declChildOfId parentTypeId: monoId :nameId
+    co: prog.typing.declChildOfId parentTypeId: monoId :nameId
     if co.some then {
-        mro: ztypecheck.methodReturnOf :reg :typing mid: co
+        mro: ztypecheck.methodReturnOf reg: prog.reg typing: prog.typing mid: co
         if mro.some then {
             return mro
         }
@@ -2652,17 +2529,15 @@ monoMethodReturn: function {
 # scalarCTypeFor is the shadow-safe gate (a user type shadowing a scalar name
 # stays a struct). A record holds value data only, so a struct's `_eq` is
 # total: the typechecker refuses a reftype member at the declaration.
-keyHashKind: function {
-    reg: ztypes.ZTypeRegistry.view typing: ztyping.ZTyping.view ctx: Ctx.view tid: ztypes.tid
-} out keykind is {
-    ktid: ztypecheck.typedefChaseTid :typing :tid
+keyHashKind: function {prog: Program.view ctx: Ctx.view tid: ztypes.tid} out keykind is {
+    ktid: ztypecheck.typedefChaseTid typing: prog.typing :tid
     if ktid == ctx.strTid then return keykind.nativeString
     if (parttexts.isViewLaid :ctx tid: ktid) then return keykind.stringView
-    tt: reg.typetypeOf typeId: ktid
+    tt: prog.reg.typetypeOf typeId: ktid
     isRv: tt == ztypes.ztypetype.recordType
     if isRv.not then isRv = tt == ztypes.ztypetype.variantType
     if isRv then {
-        sc: consts.scalarCTypeFor :typing tid: ktid
+        sc: consts.scalarCTypeFor :prog tid: ktid
         if sc.length > 0 then return keykind.scalarOrPointer
         return keykind.byValueStruct
     }
@@ -2702,22 +2577,20 @@ setFreeItemDel: function {itemFree: StringView} out String is {
 # struct + add/has/delete/iterate + the SetIter companion). Depends on the
 # element's OptionView mono being emitted first (the iterator yields it).
 emitSetMono: function {
-    ast: Ast.view
-    reg: ztypes.ZTypeRegistry.view
-    typing: ztyping.ZTyping.view
+    prog: Program.view
     ctx: Ctx
     monoId: ztypes.tid
     buf: String.borrow
 } is {
     nm: cbaseNoPrefix :ctx tid: monoId
     mcr: cUpperOf text: nm.stringView
-    elemTid: types.setElemType :typing :monoId
-    itemT: cTypeForNameTid :ast :reg :typing :ctx tid: elemTid
-    ekind: keyHashKind :reg :typing :ctx tid: elemTid
+    elemTid: types.setElemType :prog :monoId
+    itemT: cTypeForNameTid :prog :ctx tid: elemTid
+    ekind: keyHashKind :prog :ctx tid: elemTid
     isStr: ekind.nativeString
-    siId: monoMethodReturn :reg :typing :monoId nameId: zast.wellKnown.slot.wkIterate
+    siId: monoMethodReturn :prog :monoId nameId: zast.wellKnown.slot.wkIterate
     if siId.isZero then return
-    ovId: monoMethodReturn :reg :typing monoId: siId nameId: zast.wellKnown.slot.wkCall
+    ovId: monoMethodReturn :prog monoId: siId nameId: zast.wellKnown.slot.wkCall
     if ovId.isZero then return
     ov: cbaseNoPrefix :ctx tid: ovId
     si: cbaseNoPrefix :ctx tid: siId
@@ -2738,9 +2611,7 @@ emitSetMono: function {
     eqBody: String
     (
         setKeyBodies
-        :ast
-        :reg
-        :typing
+        :prog
         :ctx
         :elemTid
         :ekind
@@ -2752,11 +2623,11 @@ emitSetMono: function {
         :buf
     )
     et: elemTid
-    ifDestroy: mapValFreeStmt :reg :typing :ctx valTid: et slot: "p->entries[i].item"
+    ifDestroy: mapValFreeStmt :prog :ctx valTid: et slot: "p->entries[i].item"
     destroyItems: setDestroyItems itemFree: ifDestroy.stringView
-    ifDup: mapValFreeStmt :reg :typing :ctx valTid: et slot: "_item"
+    ifDup: mapValFreeStmt :prog :ctx valTid: et slot: "_item"
     freeItemDup: setFreeItemDup itemFree: ifDup.stringView
-    ifDel: mapValFreeStmt :reg :typing :ctx valTid: et slot: "_this->entries[idx].item"
+    ifDel: mapValFreeStmt :prog :ctx valTid: et slot: "_this->entries[idx].item"
     freeItemDel: setFreeItemDel itemFree: ifDel.stringView
     {
         kt: RtKeys.create
@@ -2770,7 +2641,7 @@ emitSetMono: function {
         rtKey :ctx keys: kt name: "FREE_ITEM_DUP" val: freeItemDup.stringView
         rtKey :ctx keys: kt name: "FREE_ITEM_DEL" val: freeItemDel.stringView
         rtKey :ctx keys: kt name: "OPTIONVIEW" val: ov.stringView
-        rtOptionKeys :ast :ctx :reg :typing :plan keys: kt key: "OPTIONVIEW" tid: ovId
+        rtOptionKeys :prog :ctx :plan keys: kt key: "OPTIONVIEW" tid: ovId
         rtKey :ctx keys: kt name: "SETITER" val: si.stringView
         buf.append (rtRender :ctx :plan keys: kt)
         buf.append vp
@@ -2795,9 +2666,7 @@ emitSetMono: function {
 # valKeyEqBody), a reference's declared pair (declaring both ahead of the mono),
 # or the kind's.
 setKeyBodies: function {
-    ast: Ast.view
-    reg: ztypes.ZTypeRegistry.view
-    typing: ztyping.ZTyping.view
+    prog: Program.view
     ctx: Ctx
     elemTid: ztypes.tid
     ekind: keykind
@@ -2808,13 +2677,11 @@ setKeyBodies: function {
     eqBody: String.borrow
     buf: String.borrow
 } is {
-    valElem: isValKey :reg key: elemTid kind: ekind
+    valElem: isValKey :prog key: elemTid kind: ekind
     if valElem then {
         if needHash then hashBody.append (
             parttexts.valKeyHashBody
-            :ast
-            :reg
-            :typing
+            :prog
             :ctx
             key: elemTid
             keyT: itemT
@@ -2822,9 +2689,7 @@ setKeyBodies: function {
         )
         if needEq then eqBody.append (
             valKeyEqBody
-            :ast
-            :reg
-            :typing
+            :prog
             :ctx
             key: elemTid
             keyT: itemT
@@ -2837,16 +2702,14 @@ setKeyBodies: function {
         if ekind.scalarOrPointer when valElem.not when needHash or needEq then {
             dh = (
                 emitplan.declaredKeyFnC
-                :reg
-                :typing
+                :prog
                 :ctx
                 tid: elemTid
                 memberId: zast.wellKnown.slot.wkHash
             )
             de = (
                 emitplan.declaredKeyFnC
-                :reg
-                :typing
+                :prog
                 :ctx
                 tid: elemTid
                 memberId: zast.wellKnown.slot.wkOpEq
@@ -2855,7 +2718,7 @@ setKeyBodies: function {
         if dh.length > 0 when de.length > 0 then {
             hb: "\{dh}(&_key)"
             hashBody.append hb
-            rhsPs: elemBorrowsByPtr :reg :typing :ctx tid: elemTid
+            rhsPs: elemBorrowsByPtr :prog :ctx tid: elemTid
             rhsAs: "_b".string
             rhsTs: itemT.string
             if rhsPs then {
@@ -2867,8 +2730,7 @@ setKeyBodies: function {
             eqBody.append eb
             fd: (
                 emitplan.keyFnProtosC
-                :reg
-                :typing
+                :prog
                 :ctx
                 tid: elemTid
                 dh: dh.stringView
@@ -2932,22 +2794,20 @@ mapFreeKeyDel: function {keyFree: StringView valFree: StringView} out String is 
 # via the String free, reftype / heap-collection value via its destructor, empty
 # for scalars. Mirrors emitStructDestructor's per-field cleanup.
 mapValFreeStmt: function {
-    reg: ztypes.ZTypeRegistry.view
-    typing: ztyping.ZTyping.view
+    prog: Program.view
     ctx: Ctx
     valTid: ztypes.tid
     slot: StringView
 } out String is {
     if valTid.isZero then return "".string
-    vfs: types.destroyFnC :reg :typing :ctx tid: valTid
+    vfs: types.destroyFnC :prog :ctx tid: valTid
     if vfs.length == 0 then return vfs
     vfs.append "("
     vfs.append (
         destroyOperand
-        :reg
-        :typing
+        :prog
         :ctx
-        tid: (types.destroyTargetTid :reg :typing :ctx tid: valTid)
+        tid: (types.destroyTargetTid :prog :ctx tid: valTid)
         nm: slot
     )
     vfs.append ");"
@@ -2959,10 +2819,7 @@ mapValFreeStmt: function {
 # (OptionView_<K>, OptionView_MapEntry_<K>_<V>) are defined by the earlier
 # OptionView leg.
 emitMapIters: function {
-    # the arm names
-    ast: Ast.view
-    reg: ztypes.ZTypeRegistry.view
-    typing: ztyping.ZTyping.view
+    prog: Program.view
     ctx: Ctx
     monoId: ztypes.tid
     nm: StringView
@@ -2975,16 +2832,16 @@ emitMapIters: function {
     walksKeys: memberUsed :ctx mono: monoId member: memberWord.slot.iterateAll
     walksItems: memberUsed :ctx mono: monoId member: memberWord.slot.iterateItems
     if walksKeys.not when walksItems.not then return
-    miiId: monoMethodReturn :reg :typing :monoId nameId: zast.wellKnown.slot.wkIterateItems
+    miiId: monoMethodReturn :prog :monoId nameId: zast.wellKnown.slot.wkIterateItems
     if miiId.isZero then return
-    mkiId: monoMethodReturn :reg :typing :monoId nameId: zast.wellKnown.slot.wkIterate
+    mkiId: monoMethodReturn :prog :monoId nameId: zast.wellKnown.slot.wkIterate
     if mkiId.isZero then return
-    ovkId: monoMethodReturn :reg :typing monoId: mkiId nameId: zast.wellKnown.slot.wkCall
+    ovkId: monoMethodReturn :prog monoId: mkiId nameId: zast.wellKnown.slot.wkCall
     if ovkId.isZero then return
-    oveId: monoMethodReturn :reg :typing monoId: miiId nameId: zast.wellKnown.slot.wkCall
+    oveId: monoMethodReturn :prog monoId: miiId nameId: zast.wellKnown.slot.wkCall
     if oveId.isZero then return
     meId: ztypes.tid
-    meo: typing.declChildOfId parentTypeId: oveId nameId: zast.wellKnown.slot.wkSome
+    meo: prog.typing.declChildOfId parentTypeId: oveId nameId: zast.wellKnown.slot.wkSome
     if meo.some then {
         meId = meo
     }
@@ -3005,11 +2862,11 @@ emitMapIters: function {
         rtKey :ctx keys: kt name: "VAL_T" val: valT
         rtKey :ctx keys: kt name: "MAPKEYITER" val: mki.stringView
         rtKey :ctx keys: kt name: "OPTIONVIEW_K" val: ovk.stringView
-        rtOptionKeys :ast :ctx :reg :typing :plan keys: kt key: "OPTIONVIEW_K" tid: ovkId
+        rtOptionKeys :prog :ctx :plan keys: kt key: "OPTIONVIEW_K" tid: ovkId
         rtKey :ctx keys: kt name: "MAPENTRY" val: me.stringView
         rtKey :ctx keys: kt name: "MAPITEMITER" val: mii.stringView
         rtKey :ctx keys: kt name: "OPTIONVIEW_ENTRY" val: ove.stringView
-        rtOptionKeys :ast :ctx :reg :typing :plan keys: kt key: "OPTIONVIEW_ENTRY" tid: oveId
+        rtOptionKeys :prog :ctx :plan keys: kt key: "OPTIONVIEW_ENTRY" tid: oveId
         filled: rtRender :ctx :plan keys: kt
         buf.append filled
         buf.append "\n"
@@ -3017,10 +2874,10 @@ emitMapIters: function {
 }
 
 # the value type id of Map instantiation `monoId`.
-mapValType: function {typing: ztyping.ZTyping.view monoId: ztypes.tid} out ztypes.tid is {
-    so: typing.declChildOfId parentTypeId: monoId nameId: zast.wellKnown.slot.wkSet
+mapValType: function {prog: Program.view monoId: ztypes.tid} out ztypes.tid is {
+    so: prog.typing.declChildOfId parentTypeId: monoId nameId: zast.wellKnown.slot.wkSet
     if so.some then {
-        vo: typing.declChildOfId parentTypeId: so nameId: zast.wellKnown.slot.wkValue
+        vo: prog.typing.declChildOfId parentTypeId: so nameId: zast.wellKnown.slot.wkValue
         if vo.some then {
             return vo
         }
@@ -3033,30 +2890,26 @@ mapValType: function {typing: ztyping.ZTyping.view monoId: ztypes.tid} out ztype
 # one: the declaration, the statements that make it none, and those that make
 # it some over `value` (C type `valT`) -- an optionval holds the payload in its
 # arm, an Option in a heap cell.
-optionDeclC: function {reg: ztypes.ZTypeRegistry.view ctx: Ctx.view opt: ztypes.tid} out String is {
-    if (optionIsValFamily :reg :ctx :opt) then return "z_\{cbaseNoPrefix :ctx tid: opt}_t _r;"
+optionDeclC: function {prog: Program.view ctx: Ctx.view opt: ztypes.tid} out String is {
+    if (optionIsValFamily :prog :ctx :opt) then return "z_\{cbaseNoPrefix :ctx tid: opt}_t _r;"
     return "z_\{cbaseNoPrefix :ctx tid: opt}_t _r = {0};"
 }
 
 # optionNoneC -- the statements making `_r` none, each indented by `ind`
 optionNoneC: function {
-    ast: Ast.view
-    reg: ztypes.ZTypeRegistry.view
-    typing: ztyping.ZTyping.view
+    prog: Program.view
     ctx: Ctx
     opt: ztypes.tid
     ind: StringView
 } out String is {
-    nt: spelledTagConst :ast :ctx :reg :typing tid: opt armId: zast.wellKnown.slot.wkNone
-    if (optionIsValFamily :reg :ctx :opt) then return "\{ind}_r.tag = \{nt};\n"
+    nt: spelledTagConst :prog :ctx tid: opt armId: zast.wellKnown.slot.wkNone
+    if (optionIsValFamily :prog :ctx :opt) then return "\{ind}_r.tag = \{nt};\n"
     return "\{ind}_r.tag = \{nt};\n\{ind}_r.data = NULL;\n"
 }
 
 # optionIsValFamily -- `opt` is an optionval, its payload held in its arm
-optionIsValFamily: function {
-    reg: ztypes.ZTypeRegistry.view ctx: Ctx.view opt: ztypes.tid
-} out bool is {
-    return (originIsTid :reg tid: opt originTid: (ctx.origins.get i: family.slot.optionval))
+optionIsValFamily: function {prog: Program.view ctx: Ctx.view opt: ztypes.tid} out bool is {
+    return (originIsTid :prog tid: opt originTid: (ctx.origins.get i: family.slot.optionval))
 }
 
 # emitMapMono -- substitute template Map for a Map instance (compact-dict +
@@ -3065,9 +2918,7 @@ optionIsValFamily: function {
 # mapValType -- the canonical Map value type id, off the "set" method's "value"
 # param (mirrors listElemType). 0 when absent.
 emitMapMono: function {
-    ast: Ast.view
-    reg: ztypes.ZTypeRegistry.view
-    typing: ztyping.ZTyping.view
+    prog: Program.view
     ctx: Ctx
     monoId: ztypes.tid
     buf: String.borrow
@@ -3075,19 +2926,19 @@ emitMapMono: function {
     nm: cbaseNoPrefix :ctx tid: monoId
     mcr: cUpperOf text: nm.stringView
     ovId: ztypes.tid
-    go: typing.declChildOfId parentTypeId: monoId nameId: zast.wellKnown.slot.wkGet
+    go: prog.typing.declChildOfId parentTypeId: monoId nameId: zast.wellKnown.slot.wkGet
     if go.some then {
-        ovId = reg.returnTypeOf tid: go
+        ovId = prog.reg.returnTypeOf tid: go
     }
     if ovId.isZero then return
-    valTid: mapValType :typing :monoId
-    valT: cTypeForNameTid :ast :reg :typing :ctx tid: valTid
+    valTid: mapValType :prog :monoId
+    valT: cTypeForNameTid :prog :ctx tid: valTid
     ov: cbaseNoPrefix :ctx tid: ovId
-    ovSome: spelledTagConst :ast :ctx :reg :typing tid: ovId armId: zast.wellKnown.slot.wkSome
-    ovNone: spelledTagConst :ast :ctx :reg :typing tid: ovId armId: zast.wellKnown.slot.wkNone
-    keyTid: types.mapKeyType :typing :monoId
-    keyT: cTypeForNameTid :ast :reg :typing :ctx tid: keyTid
-    kkind: keyHashKind :reg :typing :ctx tid: keyTid
+    ovSome: spelledTagConst :prog :ctx tid: ovId armId: zast.wellKnown.slot.wkSome
+    ovNone: spelledTagConst :prog :ctx tid: ovId armId: zast.wellKnown.slot.wkNone
+    keyTid: types.mapKeyType :prog :monoId
+    keyT: cTypeForNameTid :prog :ctx tid: keyTid
+    kkind: keyHashKind :prog :ctx tid: keyTid
     keyIsStr: kkind.nativeString
     keyArgT: keyT.copy
     keyRef: String
@@ -3100,9 +2951,7 @@ emitMapMono: function {
     gm: String
     (
         emitMapGetMut
-        :ast
-        :reg
-        :typing
+        :prog
         :ctx
         :monoId
         file: "MapMut"
@@ -3132,13 +2981,11 @@ emitMapMono: function {
     hashKeyBody: String
     keysEqBody: String
     kk: keyTid
-    valKey: isValKey :reg key: kk kind: kkind
+    valKey: isValKey :prog key: kk kind: kkind
     if valKey then {
         if needHash then hashKeyBody = (
             parttexts.valKeyHashBody
-            :ast
-            :reg
-            :typing
+            :prog
             :ctx
             key: kk
             keyT: keyT.stringView
@@ -3146,9 +2993,7 @@ emitMapMono: function {
         )
         if needEq then keysEqBody = (
             valKeyEqBody
-            :ast
-            :reg
-            :typing
+            :prog
             :ctx
             key: kk
             keyT: keyT.stringView
@@ -3165,16 +3010,14 @@ emitMapMono: function {
         if kkind.scalarOrPointer when valKey.not when needHash or needEq then {
             dhm = (
                 emitplan.declaredKeyFnC
-                :reg
-                :typing
+                :prog
                 :ctx
                 tid: keyTid
                 memberId: zast.wellKnown.slot.wkHash
             )
             dem = (
                 emitplan.declaredKeyFnC
-                :reg
-                :typing
+                :prog
                 :ctx
                 tid: keyTid
                 memberId: zast.wellKnown.slot.wkOpEq
@@ -3186,7 +3029,7 @@ emitMapMono: function {
             # the receiver is a pointer either way; the `rhs` PARAMETER follows
             # the key's own calling convention, which is a pointer for a class
             # and a value for a record
-            rhsP: elemBorrowsByPtr :reg :typing :ctx tid: keyTid
+            rhsP: elemBorrowsByPtr :prog :ctx tid: keyTid
             rhsA: "_b".string
             rhsT: keyT.copy
             if rhsP then {
@@ -3198,8 +3041,7 @@ emitMapMono: function {
             keysEqBody = ebm.take
             fdm: (
                 emitplan.keyFnProtosC
-                :reg
-                :typing
+                :prog
                 :ctx
                 tid: keyTid
                 dh: dhm.stringView
@@ -3219,33 +3061,29 @@ emitMapMono: function {
     if needEq when keysEqBody.length == 0 then keysEqBody = setEqBody kind: kkind
     vfDestroy: (
         mapValFreeStmt
-        :reg
-        :typing
+        :prog
         :ctx
         :valTid
         slot: "p->entries[i].value"
     )
     vfDup: (
         mapValFreeStmt
-        :reg
-        :typing
+        :prog
         :ctx
         :valTid
         slot: "_this->entries[existing].value"
     )
     freeValDup: String
     if vfDup.length > 0 then freeValDup = "        \{vfDup}\n"
-    kfDestroy: mapValFreeStmt :reg :typing :ctx valTid: kk slot: "p->entries[i].key"
+    kfDestroy: mapValFreeStmt :prog :ctx valTid: kk slot: "p->entries[i].key"
     destroyEntries: mapDestroyEntries keyFree: kfDestroy.stringView valFree: vfDestroy.stringView
-    kfDup: mapValFreeStmt :reg :typing :ctx valTid: kk slot: "_key"
+    kfDup: mapValFreeStmt :prog :ctx valTid: kk slot: "_key"
     freeKeyDup: mapFreeKeyDup keyFree: kfDup.stringView
     getBody: String
-    if (originIsTid :reg tid: ovId originTid: (ctx.origins.get i: family.slot.optionval)) then {
+    if (originIsTid :prog tid: ovId originTid: (ctx.origins.get i: family.slot.optionval)) then {
         gsC: (
             memberC
-            :ast
-            :reg
-            :typing
+            :prog
             :ctx
             owner: ovId
             kind: memberkind.arm
@@ -3263,21 +3101,19 @@ emitMapMono: function {
         getBody = gbR.take
     }
     rmWrapId: ztypes.tid
-    roMm: typing.declChildOfId parentTypeId: monoId nameId: zast.wellKnown.slot.wkRemove
+    roMm: prog.typing.declChildOfId parentTypeId: monoId nameId: zast.wellKnown.slot.wkRemove
     if roMm.some then {
-        rmWrapId = reg.returnTypeOf tid: roMm
+        rmWrapId = prog.reg.returnTypeOf tid: roMm
     }
     rmWrap: cbaseNoPrefix :ctx tid: rmWrapId
-    kfDel: mapValFreeStmt :reg :typing :ctx valTid: kk slot: "_this->entries[idx].key"
+    kfDel: mapValFreeStmt :prog :ctx valTid: kk slot: "_this->entries[idx].key"
     keyOnlyFree: mapFreeKeyDel keyFree: kfDel.stringView valFree: ""
     delTail: "\{keyOnlyFree}    _this->entries[idx].alive = 0;\n    _this->indices[slot] = Z_\{mcr}_INDEX_DELETED;\n    _this->length--;\n"
-    rmDecl: optionDeclC :reg :ctx opt: rmWrapId
-    rmNoneC: optionNoneC :ast :reg :typing :ctx opt: rmWrapId ind: "        "
+    rmDecl: optionDeclC :prog :ctx opt: rmWrapId
+    rmNoneC: optionNoneC :prog :ctx opt: rmWrapId ind: "        "
     rmSomeC: (
         values.optionSomeC
-        :ast
-        :reg
-        :typing
+        :prog
         :ctx
         opt: rmWrapId
         valT: valT.stringView
@@ -3308,9 +3144,7 @@ emitMapMono: function {
     }
     (
         emitMapIters
-        :ast
-        :reg
-        :typing
+        :prog
         :ctx
         :monoId
         nm: nm.stringView
@@ -3345,9 +3179,7 @@ idMapDestroyEntries: function {valFree: StringView} out String is {
 # holes than emitMapMono: the bound guarantees a scalar key, so there is no
 # hash body to choose, no key-equality body (C `==` is it), and no key to free.
 emitIdMapMono: function {
-    ast: Ast.view
-    reg: ztypes.ZTypeRegistry.view
-    typing: ztyping.ZTyping.view
+    prog: Program.view
     ctx: Ctx
     monoId: ztypes.tid
     buf: String.borrow
@@ -3355,23 +3187,22 @@ emitIdMapMono: function {
     nm: cbaseNoPrefix :ctx tid: monoId
     mcr: cUpperOf text: nm.stringView
     ovId: ztypes.tid
-    go: typing.declChildOfId parentTypeId: monoId nameId: zast.wellKnown.slot.wkGet
+    go: prog.typing.declChildOfId parentTypeId: monoId nameId: zast.wellKnown.slot.wkGet
     if go.some then {
-        ovId = reg.returnTypeOf tid: go
+        ovId = prog.reg.returnTypeOf tid: go
     }
     if ovId.isZero then return
     ov: cbaseNoPrefix :ctx tid: ovId
-    ovSome: spelledTagConst :ast :ctx :reg :typing tid: ovId armId: zast.wellKnown.slot.wkSome
-    ovNone: spelledTagConst :ast :ctx :reg :typing tid: ovId armId: zast.wellKnown.slot.wkNone
-    valTid: mapValType :typing :monoId
-    valT: cTypeForNameTid :ast :reg :typing :ctx tid: valTid
-    keyTid: types.mapKeyType :typing :monoId
-    keyT: cTypeForNameTid :ast :reg :typing :ctx tid: keyTid
-    vfDestroy: mapValFreeStmt :reg :typing :ctx :valTid slot: "p->entries[i].value"
+    ovSome: spelledTagConst :prog :ctx tid: ovId armId: zast.wellKnown.slot.wkSome
+    ovNone: spelledTagConst :prog :ctx tid: ovId armId: zast.wellKnown.slot.wkNone
+    valTid: mapValType :prog :monoId
+    valT: cTypeForNameTid :prog :ctx tid: valTid
+    keyTid: types.mapKeyType :prog :monoId
+    keyT: cTypeForNameTid :prog :ctx tid: keyTid
+    vfDestroy: mapValFreeStmt :prog :ctx :valTid slot: "p->entries[i].value"
     vfDup: (
         mapValFreeStmt
-        :reg
-        :typing
+        :prog
         :ctx
         :valTid
         slot: "_this->entries[existing].value"
@@ -3380,12 +3211,10 @@ emitIdMapMono: function {
     if vfDup.length > 0 then freeValDup = "        \{vfDup}\n"
     destroyEntries: idMapDestroyEntries valFree: vfDestroy.stringView
     getBody: String
-    if (originIsTid :reg tid: ovId originTid: (ctx.origins.get i: family.slot.optionval)) then {
+    if (originIsTid :prog tid: ovId originTid: (ctx.origins.get i: family.slot.optionval)) then {
         gsC: (
             memberC
-            :ast
-            :reg
-            :typing
+            :prog
             :ctx
             owner: ovId
             kind: memberkind.arm
@@ -3416,9 +3245,7 @@ emitIdMapMono: function {
     gm: String
     (
         emitMapGetMut
-        :ast
-        :reg
-        :typing
+        :prog
         :ctx
         :monoId
         file: "IdMapMut"
@@ -3438,9 +3265,7 @@ emitIdMapMono: function {
     buf.append gm
     (
         emitIdMapIters
-        :ast
-        :reg
-        :typing
+        :prog
         :ctx
         :monoId
         nm: nm.stringView
@@ -3469,10 +3294,7 @@ emitIdMapMono: function {
 # `get`'s differs between them -- names the C type; `keyHole` is the template's
 # key placeholder, filled with `keyT`.
 emitMapGetMut: function {
-    # the arm names
-    ast: Ast.view
-    reg: ztypes.ZTypeRegistry.view
-    typing: ztyping.ZTyping.view
+    prog: Program.view
     ctx: Ctx
     monoId: ztypes.tid
     file: StringView
@@ -3484,7 +3306,7 @@ emitMapGetMut: function {
     # written where written C calls this instance's getMut: its answer type is
     # shared by every map of the same value type
     if (memberUsed :ctx mono: monoId member: memberWord.slot.getMut).not then return
-    gmId: monoMethodReturn :reg :typing :monoId nameId: zast.wellKnown.slot.wkGetMut
+    gmId: monoMethodReturn :prog :monoId nameId: zast.wellKnown.slot.wkGetMut
     if (typeReached :ctx tid: gmId).not then return
     gmv: cbaseNoPrefix :ctx tid: gmId
     pm: tmplKey :ctx name: file
@@ -3498,7 +3320,7 @@ emitMapGetMut: function {
     rtKey :ctx keys: kt name: "NAME" val: nm
     rtKey :ctx keys: kt name: keyHole val: keyT
     rtKey :ctx keys: kt name: "OPTIONMUT_V" val: gmv.stringView
-    rtOptionKeys :ast :ctx :reg :typing :plan keys: kt key: "OPTIONMUT_V" tid: gmId
+    rtOptionKeys :prog :ctx :plan keys: kt key: "OPTIONMUT_V" tid: gmId
     buf.append (rtRender :ctx :plan keys: kt)
     buf.append "\n"
 }
@@ -3509,10 +3331,7 @@ emitMapGetMut: function {
 # its container, so the part that needs the iterator types is the part that can
 # be skipped.
 emitIdMapIters: function {
-    # the arm names
-    ast: Ast.view
-    reg: ztypes.ZTypeRegistry.view
-    typing: ztyping.ZTyping.view
+    prog: Program.view
     ctx: Ctx
     monoId: ztypes.tid
     nm: StringView
@@ -3520,13 +3339,13 @@ emitIdMapIters: function {
     valT: StringView
     buf: String.borrow
 } is {
-    miiId: monoMethodReturn :reg :typing :monoId nameId: zast.wellKnown.slot.wkIterateItems
+    miiId: monoMethodReturn :prog :monoId nameId: zast.wellKnown.slot.wkIterateItems
     if (typeReached :ctx tid: miiId).not then return
-    oveId: monoMethodReturn :reg :typing monoId: miiId nameId: zast.wellKnown.slot.wkCall
+    oveId: monoMethodReturn :prog monoId: miiId nameId: zast.wellKnown.slot.wkCall
     if oveId.isZero then return
     meId: ztypes.tid
     {
-        meo: typing.declChildOfId parentTypeId: oveId nameId: zast.wellKnown.slot.wkSome
+        meo: prog.typing.declChildOfId parentTypeId: oveId nameId: zast.wellKnown.slot.wkSome
         if meo.some then {
             meId = meo
         }
@@ -3547,7 +3366,7 @@ emitIdMapIters: function {
     rtKey :ctx keys: kt name: "IDMAPITEMITER" val: mii.stringView
     rtKey :ctx keys: kt name: "IDMAPENTRY" val: me.stringView
     rtKey :ctx keys: kt name: "OPTIONVIEW_ENTRY" val: ove.stringView
-    rtOptionKeys :ast :ctx :reg :typing :plan keys: kt key: "OPTIONVIEW_ENTRY" tid: oveId
+    rtOptionKeys :prog :ctx :plan keys: kt key: "OPTIONVIEW_ENTRY" tid: oveId
     filled: rtRender :ctx :plan keys: kt
     buf.append filled
     buf.append "\n"
@@ -3557,20 +3376,18 @@ emitIdMapIters: function {
 # holes: an id item is a scalar, so it has no hash body, no equality body and
 # no destructor.
 emitIdSetMono: function {
-    ast: Ast.view
-    reg: ztypes.ZTypeRegistry.view
-    typing: ztyping.ZTyping.view
+    prog: Program.view
     ctx: Ctx
     monoId: ztypes.tid
     buf: String.borrow
 } is {
     nm: cbaseNoPrefix :ctx tid: monoId
     mcr: cUpperOf text: nm.stringView
-    elemTid: types.setElemType :typing :monoId
-    itemT: cTypeForNameTid :ast :reg :typing :ctx tid: elemTid
-    siId: monoMethodReturn :reg :typing :monoId nameId: zast.wellKnown.slot.wkIterate
+    elemTid: types.setElemType :prog :monoId
+    itemT: cTypeForNameTid :prog :ctx tid: elemTid
+    siId: monoMethodReturn :prog :monoId nameId: zast.wellKnown.slot.wkIterate
     if siId.isZero then return
-    ovId: monoMethodReturn :reg :typing monoId: siId nameId: zast.wellKnown.slot.wkCall
+    ovId: monoMethodReturn :prog monoId: siId nameId: zast.wellKnown.slot.wkCall
     if ovId.isZero then return
     ov: cbaseNoPrefix :ctx tid: ovId
     si: cbaseNoPrefix :ctx tid: siId
@@ -3592,7 +3409,7 @@ emitIdSetMono: function {
         member: memberWord.slot.itemsCap
     )
     plan: rtSectionPlan :ctx mono: monoId id: ti
-    rtOptionKeys :ast :ctx :reg :typing :plan keys: kt key: "OPTIONVIEW" tid: ovId
+    rtOptionKeys :prog :ctx :plan keys: kt key: "OPTIONVIEW" tid: ovId
     buf.append (rtRender :ctx :plan keys: kt)
     # IdSet is one form only, so this writes for every instance that calls it
     (
@@ -3612,34 +3429,33 @@ emitIdSetMono: function {
 # arguments by value (a JoinHandle's task), and answers other instances by
 # value (a Mutex's guard): each is an ordering edge
 tmplInstArgIds: function {
-    reg: ztypes.ZTypeRegistry.view
-    typing: ztyping.ZTyping.view
+    prog: Program.view
     ctx: Ctx.view
     monoId: ztypes.tid
     acc: ListVal ztypes.tid
 } is {
-    td: typing.declIdOfType typeId: (originTidOf :reg tid: monoId)
+    td: prog.typing.declIdOfType typeId: (originTidOf :prog tid: monoId)
     if td.notZero then {
         k: u64
-        for k < (reg.genericParamNamesOf tdecl: td).length loop {
-            acc.append (reg.genericTypeArgAt specId: monoId ordinal: k)
+        for k < (prog.reg.genericParamNamesOf tdecl: td).length loop {
+            acc.append (prog.reg.genericTypeArgAt specId: monoId ordinal: k)
             k = k + 1
         }
     }
     # and each templated class or mono its methods answer or take (@@OUT.<m>@@,
     # @@ARG.<m>.<p>@@): a prototype names it
     slot: u64
-    for slot < (typing.declRowSlots ownerTid: monoId) loop {
-        rw: typing.declRowAt ownerTid: monoId membersOnly: true :slot
+    for slot < (prog.typing.declRowSlots ownerTid: monoId) loop {
+        rw: prog.typing.declRowAt ownerTid: monoId membersOnly: true :slot
         slot = slot + 1
-        if rw.keep when (reg.typetypeOf typeId: rw.tid) == ztypes.ztypetype.functionType then {
+        if rw.keep when (prog.reg.typetypeOf typeId: rw.tid) == ztypes.ztypetype.functionType then {
             sig: ListVal ztypes.tid
-            sig.append (reg.returnTypeOf tid: rw.tid)
+            sig.append (prog.reg.returnTypeOf tid: rw.tid)
             names: ListVal zast.nameid
-            types.recFieldIds :reg :typing tid: rw.tid ids: sig nameIds: names
+            types.recFieldIds :prog tid: rw.tid ids: sig nameIds: names
             for each st: sig loop {
-                it: ownSignatureTid :reg tid: st
-                if it != monoId when (tmplSigEdge :reg :typing :ctx tid: it) then acc.append it
+                it: ownSignatureTid :prog tid: st
+                if it != monoId when (tmplSigEdge :prog :ctx tid: it) then acc.append it
             }
         }
     }
@@ -3647,79 +3463,75 @@ tmplInstArgIds: function {
 
 # tmplSigEdge -- a type a templated class's signature names that orders the
 # class after it: a mono, or a templated class the program has
-tmplSigEdge: function {
-    reg: ztypes.ZTypeRegistry.view typing: ztyping.ZTyping.view ctx: Ctx.view tid: ztypes.tid
-} out bool is {
-    if (tmplTypeMade :reg :typing :ctx :tid).not then return false
-    if (originTidOf :reg :tid).notZero then return true
-    return (tmplClassRowOf :reg :ctx :tid) > 0
+tmplSigEdge: function {prog: Program.view ctx: Ctx.view tid: ztypes.tid} out bool is {
+    if (tmplTypeMade :prog :ctx :tid).not then return false
+    if (originTidOf :prog :tid).notZero then return true
+    return (tmplClassRowOf :prog :ctx :tid) > 0
 }
 
 # emitMonoById -- emit one late collection/variant mono by id (dispatch on origin).
 emitMonoById: function {
-    ast: Ast.view
-    reg: ztypes.ZTypeRegistry.view
-    typing: ztyping.ZTyping.view
+    prog: Program.view
     ctx: Ctx
     monoId: ztypes.tid
     buf: String.borrow
 } is {
-    if (originIsTid :reg tid: monoId originTid: (ctx.origins.get i: family.slot.optionval)) then {
-        types.emitOneVariant :ast :reg :typing :ctx tid: monoId :buf
+    if (originIsTid :prog tid: monoId originTid: (ctx.origins.get i: family.slot.optionval)) then {
+        types.emitOneVariant :prog :ctx tid: monoId :buf
         return
     }
-    if (originIsTid :reg tid: monoId originTid: (ctx.origins.get i: family.slot.resultval)) then {
-        types.emitOneVariant :ast :reg :typing :ctx tid: monoId :buf
+    if (originIsTid :prog tid: monoId originTid: (ctx.origins.get i: family.slot.resultval)) then {
+        types.emitOneVariant :prog :ctx tid: monoId :buf
         return
     }
-    if (types.isListViewOriginOf :reg :ctx tid: monoId) then {
-        emitListViewMono :ast :reg :typing :ctx :monoId :buf
+    if (types.isListViewOriginOf :prog :ctx tid: monoId) then {
+        emitListViewMono :prog :ctx :monoId :buf
         return
     }
-    if (originIsTid :reg tid: monoId originTid: (ctx.origins.get i: family.slot.spanVal)) then {
-        emitSpanMono :ast :reg :typing :ctx :monoId :buf
+    if (originIsTid :prog tid: monoId originTid: (ctx.origins.get i: family.slot.spanVal)) then {
+        emitSpanMono :prog :ctx :monoId :buf
         return
     }
-    if (originIsTid :reg tid: monoId originTid: (ctx.origins.get i: family.slot.fixedArray)) then {
-        emitArrayMono :ast :reg :typing :ctx :monoId :buf
+    if (originIsTid :prog tid: monoId originTid: (ctx.origins.get i: family.slot.fixedArray)) then {
+        emitArrayMono :prog :ctx :monoId :buf
         return
     }
-    if (types.isListOriginOf :reg :ctx tid: monoId) then {
-        emitListMono :ast :reg :typing :ctx :monoId :buf
+    if (types.isListOriginOf :prog :ctx tid: monoId) then {
+        emitListMono :prog :ctx :monoId :buf
         return
     }
-    if (memberreads.staticListValueFamilyOf :reg :ctx tid: monoId).notZero then {
-        emitStaticListMono :ast :reg :typing :ctx :monoId :buf
+    if (memberreads.staticListValueFamilyOf :prog :ctx tid: monoId).notZero then {
+        emitStaticListMono :prog :ctx :monoId :buf
         return
     }
-    if (types.isSetOriginOf :reg :ctx tid: monoId) then {
-        emitSetMono :ast :reg :typing :ctx :monoId :buf
+    if (types.isSetOriginOf :prog :ctx tid: monoId) then {
+        emitSetMono :prog :ctx :monoId :buf
         return
     }
-    if (types.isMapOriginOf :reg :ctx tid: monoId) then {
-        emitMapMono :ast :reg :typing :ctx :monoId :buf
+    if (types.isMapOriginOf :prog :ctx tid: monoId) then {
+        emitMapMono :prog :ctx :monoId :buf
         return
     }
-    if (types.isIdSetOriginOf :reg :ctx tid: monoId) then {
-        emitIdSetMono :ast :reg :typing :ctx :monoId :buf
+    if (types.isIdSetOriginOf :prog :ctx tid: monoId) then {
+        emitIdSetMono :prog :ctx :monoId :buf
         return
     }
-    if (types.isIdMapOriginOf :reg :ctx tid: monoId) then {
-        emitIdMapMono :ast :reg :typing :ctx :monoId :buf
+    if (types.isIdMapOriginOf :prog :ctx tid: monoId) then {
+        emitIdMapMono :prog :ctx :monoId :buf
         return
     }
-    tr: tmplClassRowOf :reg :ctx tid: monoId
-    if tr > 0 then emitTmplClassMono :ast :reg :typing :ctx :monoId row: tr - 1 :buf
+    tr: tmplClassRowOf :prog :ctx tid: monoId
+    if tr > 0 then emitTmplClassMono :prog :ctx :monoId row: tr - 1 :buf
 }
 
 # tmplClassRowOf -- the ClassRow whose template writes `tid`: an instance
 # of a generic templated class, or a non-generic class with a template of its
 # own; as its index plus one, 0 when `tid` is neither
-tmplClassRowOf: function {reg: ztypes.ZTypeRegistry.view ctx: Ctx.view tid: ztypes.tid} out u64 is {
+tmplClassRowOf: function {prog: Program.view ctx: Ctx.view tid: ztypes.tid} out u64 is {
     if tid.isZero then return 0
-    o: originTidOf :reg :tid
+    o: originTidOf :prog :tid
     if o.isZero then {
-        if (reg.isGenericOf :tid) then return 0
+        if (prog.reg.isGenericOf :tid) then return 0
         o = tid
     }
     return (localnames.tmplRowOfClass :ctx cls: o)
@@ -3729,29 +3541,27 @@ tmplClassRowOf: function {reg: ztypes.ZTypeRegistry.view ctx: Ctx.view tid: ztyp
 # answers, as the instance sees it (ownSignatureTid): 0 when nothing uses the
 # method on the instance
 tmplAnswerOf: function {
-    reg: ztypes.ZTypeRegistry.view
-    typing: ztyping.ZTyping.view
+    prog: Program.view
     inst: ztypes.tid
     mnId: zast.nameid
 } out ztypes.tid is {
-    mt: (typing.declChildOfId parentTypeId: inst nameId: mnId).or d: ztypes.tid.zero
+    mt: (prog.typing.declChildOfId parentTypeId: inst nameId: mnId).or d: ztypes.tid.zero
     if mt.isZero then return mt
-    return (ownSignatureTid :reg tid: (reg.returnTypeOf tid: mt))
+    return (ownSignatureTid :prog tid: (prog.reg.returnTypeOf tid: mt))
 }
 
 # tmplArgOf -- the type parameter `pid` of the templated instance `inst`'s
 # method `mnId` takes, as the instance sees it (ownSignatureTid)
 tmplArgOf: function {
-    reg: ztypes.ZTypeRegistry.view
-    typing: ztyping.ZTyping.view
+    prog: Program.view
     inst: ztypes.tid
     mnId: zast.nameid
     pid: zast.nameid
 } out ztypes.tid is {
-    mt: (typing.declChildOfId parentTypeId: inst nameId: mnId).or d: ztypes.tid.zero
+    mt: (prog.typing.declChildOfId parentTypeId: inst nameId: mnId).or d: ztypes.tid.zero
     if mt.isZero then return mt
-    pt: (typing.declChildOfId parentTypeId: mt nameId: pid).or d: ztypes.tid.zero
-    return (ownSignatureTid :reg tid: pt)
+    pt: (prog.typing.declChildOfId parentTypeId: mt nameId: pid).or d: ztypes.tid.zero
+    return (ownSignatureTid :prog tid: pt)
 }
 
 # ownSignatureTid -- a type a method's signature names, as the instance that
@@ -3759,9 +3569,11 @@ tmplArgOf: function {
 # template's parameters: the method is the template's own, and nothing has
 # used it on the instance (the checker gives an instance its own function for a
 # native method at the method's first use, and for `create` from the start).
-ownSignatureTid: function {reg: ztypes.ZTypeRegistry.view tid: ztypes.tid} out ztypes.tid is {
+ownSignatureTid: function {prog: Program.view tid: ztypes.tid} out ztypes.tid is {
     if tid.isZero then return tid
-    if (reg.typetypeOf typeId: tid) == ztypes.ztypetype.genericParam then return ztypes.tid.zero
+    if (
+        (prog.reg.typetypeOf typeId: tid) == ztypes.ztypetype.genericParam
+    ) then return ztypes.tid.zero
     return tid
 }
 
@@ -3774,9 +3586,7 @@ ownSignatureTid: function {reg: ztypes.ZTypeRegistry.view tid: ztypes.tid} out z
 # place, and the function spelling it is dropped (dropUnmadeFns): nothing
 # calls it.
 answerKeys: function {
-    ast: Ast.view
-    reg: ztypes.ZTypeRegistry.view
-    typing: ztyping.ZTyping.view
+    prog: Program.view
     ctx: Ctx
     # the template
     id: rtid
@@ -3792,7 +3602,7 @@ answerKeys: function {
     ctx.rt.keyNames :id :names
     for each hole: names loop {
         if (rtKeyBound :ctx :keys name: hole.stringView) then continue
-        ht: holeText :ast :reg :typing :ctx :inst :nm hole: hole.stringView :buf
+        ht: holeText :prog :ctx :inst :nm hole: hole.stringView :buf
         if ht.length > 0 then rtKey :ctx :keys name: hole.stringView val: ht.stringView
     }
 }
@@ -3801,20 +3611,18 @@ answerKeys: function {
 # helper's name, or the C name of the type it names; "" when the program does
 # not have the type
 holeText: function {
-    ast: Ast.view
-    reg: ztypes.ZTypeRegistry.view
-    typing: ztyping.ZTyping.view
+    prog: Program.view
     ctx: Ctx
     inst: ztypes.tid
     nm: StringView
     hole: StringView
     buf: String.borrow
 } out String is {
-    oh: optionHelper :ast :reg :typing :ctx :inst :nm :hole :buf
+    oh: optionHelper :prog :ctx :inst :nm :hole :buf
     if oh.length > 0 then return oh
-    sl: slotHole :ast :reg :typing :ctx :inst :hole
+    sl: slotHole :prog :ctx :inst :hole
     if sl.length > 0 then return sl
-    ht: tmplHoleType :ast :reg :typing :ctx :inst :hole
+    ht: tmplHoleType :prog :ctx :inst :hole
     if ht.isZero then return "".string
     return (cbaseNoPrefix :ctx tid: ht)
 }
@@ -3824,9 +3632,7 @@ holeText: function {
 # `<param>` calls its member `<member>` (`b->task.vtable->@@SLOT.create.task.call@@`);
 # "" for any other hole
 slotHole: function {
-    ast: Ast.view
-    reg: ztypes.ZTypeRegistry.view
-    typing: ztyping.ZTyping.view
+    prog: Program.view
     ctx: Ctx
     inst: ztypes.tid
     hole: StringView
@@ -3838,13 +3644,13 @@ slotHole: function {
         parts: List String
         for each w: (so.split sep: ".") loop parts.append w.string
         if parts.length != 3 then return "".string
-        mid: tmplHoleNameId :ast text: (parts.get i: 0).stringView
-        pid: tmplHoleNameId :ast text: (parts.get i: 1).stringView
-        memb: tmplHoleNameId :ast text: (parts.get i: 2).stringView
+        mid: tmplHoleNameId :prog text: (parts.get i: 0).stringView
+        pid: tmplHoleNameId :prog text: (parts.get i: 1).stringView
+        memb: tmplHoleNameId :prog text: (parts.get i: 2).stringView
         if mid.isZero or pid.isZero or memb.isZero then return "".string
-        pt: tmplArgOf :reg :typing :inst mnId: mid :pid
-        if (tmplTypeMade :reg :typing :ctx tid: pt).not then return "".string
-        return (memberC :ast :reg :typing :ctx owner: pt kind: memberkind.slot nameId: memb)
+        pt: tmplArgOf :prog :inst mnId: mid :pid
+        if (tmplTypeMade :prog :ctx tid: pt).not then return "".string
+        return (memberC :prog :ctx owner: pt kind: memberkind.slot nameId: memb)
     } case none then {
         return "".string
     }
@@ -3856,9 +3662,7 @@ slotHole: function {
 # and when the program never made the option (the function naming it is
 # dropped).
 optionHelper: function {
-    ast: Ast.view
-    reg: ztypes.ZTypeRegistry.view
-    typing: ztyping.ZTyping.view
+    prog: Program.view
     ctx: Ctx
     inst: ztypes.tid
     nm: StringView
@@ -3868,16 +3672,16 @@ optionHelper: function {
     isSome: hole.startsWith prefix: "SOME."
     if isSome.not when (hole.startsWith prefix: "NONE.").not then return "".string
     mn: hole.substring from: 5 to: hole.length
-    mid: tmplHoleNameId :ast text: mn
+    mid: tmplHoleNameId :prog text: mn
     if mid.isZero then return "".string
-    opt: tmplAnswerOf :reg :typing :inst mnId: mid
-    if (tmplTypeMade :reg :typing :ctx tid: opt).not then return "".string
+    opt: tmplAnswerOf :prog :inst mnId: mid
+    if (tmplTypeMade :prog :ctx tid: opt).not then return "".string
     oc: cbaseNoPrefix :ctx tid: opt
-    decl: optionDeclC :reg :ctx :opt
+    decl: optionDeclC :prog :ctx :opt
     if isSome.not then {
         fnn: "z_\{nm}_none_\{mn}"
         if (buf.contains needle: "\{fnn}(void)").not then {
-            body: optionNoneC :ast :reg :typing :ctx :opt ind: "    "
+            body: optionNoneC :prog :ctx :opt ind: "    "
             buf.append "static z_\{oc}_t \{fnn}(void) {\n    \{decl}\n\{body}    return _r;\n}\n"
         }
         return fnn
@@ -3886,17 +3690,13 @@ optionHelper: function {
     if (buf.contains needle: "\{fns}(").not then {
         pt0: (
             cTypeForNameTid
-            :ast
-            :reg
-            :typing
+            :prog
             :ctx
-            tid: (reg.genericTypeArgAt specId: opt ordinal: 0)
+            tid: (prog.reg.genericTypeArgAt specId: opt ordinal: 0)
         )
         body: (
             values.optionSomeC
-            :ast
-            :reg
-            :typing
+            :prog
             :ctx
             :opt
             valT: pt0.stringView
@@ -3912,9 +3712,7 @@ optionHelper: function {
 # names for the instance `inst`; 0 for another hole, and for a type the
 # program does not have (tmplTypeMade)
 tmplHoleType: function {
-    ast: Ast.view
-    reg: ztypes.ZTypeRegistry.view
-    typing: ztyping.ZTyping.view
+    prog: Program.view
     ctx: Ctx.view
     inst: ztypes.tid
     hole: StringView
@@ -3923,34 +3721,32 @@ tmplHoleType: function {
     if isOut.not when (hole.startsWith prefix: "ARG.").not then return ztypes.tid.zero
     rest: hole.substring from: 4 to: hole.length
     d2: (rest.indexOf needle: ".").or d: rest.length
-    mid: tmplHoleNameId :ast text: (rest.substring from: 0 to: d2)
+    mid: tmplHoleNameId :prog text: (rest.substring from: 0 to: d2)
     if mid.isZero then return ztypes.tid.zero
     t: ztypes.tid
-    if isOut when d2 == rest.length then t = tmplAnswerOf :reg :typing :inst mnId: mid
+    if isOut when d2 == rest.length then t = tmplAnswerOf :prog :inst mnId: mid
     if isOut.not when d2 < rest.length then {
-        pid: tmplHoleNameId :ast text: (rest.substring from: d2 + 1 to: rest.length)
-        if pid.notZero then t = tmplArgOf :reg :typing :inst mnId: mid :pid
+        pid: tmplHoleNameId :prog text: (rest.substring from: d2 + 1 to: rest.length)
+        if pid.notZero then t = tmplArgOf :prog :inst mnId: mid :pid
     }
-    if (tmplTypeMade :reg :typing :ctx tid: t).not then return ztypes.tid.zero
+    if (tmplTypeMade :prog :ctx tid: t).not then return ztypes.tid.zero
     return t
 }
 
 # tmplHoleNameId -- a name a template hole spells, as the program interned
 # it; 0 when no declaration uses it
-tmplHoleNameId: function {ast: Ast.view text: StringView} out zast.nameid is {
-    return (zast.poolFind pool: ast.names :text)
+tmplHoleNameId: function {prog: Program.view text: StringView} out zast.nameid is {
+    return (zast.poolFind pool: prog.ast.names :text)
 }
 
 # tmplTypeMade -- the program has the type `tid`: a non-generic templated
 # class only when the program makes one (tmplClassInProgram); any other type
 # once it exists
-tmplTypeMade: function {
-    reg: ztypes.ZTypeRegistry.view typing: ztyping.ZTyping.view ctx: Ctx.view tid: ztypes.tid
-} out bool is {
+tmplTypeMade: function {prog: Program.view ctx: Ctx.view tid: ztypes.tid} out bool is {
     if tid.isZero then return false
-    if (originTidOf :reg :tid).notZero then return true
-    if (tmplClassRowOf :reg :ctx :tid) == 0 then return true
-    return (tmplClassInProgram :reg :typing tpl: tid)
+    if (originTidOf :prog :tid).notZero then return true
+    if (tmplClassRowOf :prog :ctx :tid) == 0 then return true
+    return (tmplClassInProgram :prog tpl: tid)
 }
 
 # memberKeys -- bind each `@@<param>.<member>@@` in a class template to the C
@@ -3960,8 +3756,7 @@ tmplTypeMade: function {
 # to a bound is declared, so the function is emitted. A member `arg` lacks is
 # reported, not left as a hole.
 memberKeys: function {
-    ast: Ast.view
-    typing: ztyping.ZTyping.view
+    prog: Program.view
     ctx: Ctx
     # the template
     id: rtid
@@ -3978,10 +3773,10 @@ memberKeys: function {
         if (kv.startsWith prefix: open).not then continue
         if (rtKeyBound :ctx :keys name: kv) then continue
         mname: (kv.substring from: open.length to: kv.length).string
-        mid: zast.poolFind pool: ast.names text: mname.stringView
+        mid: zast.poolFind pool: prog.ast.names text: mname.stringView
         fid: ztypes.tid
         if mid.notZero then fid = (
-            (typing.declChildOfId parentTypeId: arg nameId: mid).or
+            (prog.typing.declChildOfId parentTypeId: arg nameId: mid).or
             d: ztypes.tid.zero
         )
         fc: spelledCname :ctx tid: fid
@@ -3998,21 +3793,19 @@ memberKeys: function {
 # type argument `mono` bound it to, in declaration order (the order arguments
 # bind in)
 templateParamArgs: function {
-    ast: Ast.view
-    reg: ztypes.ZTypeRegistry.view
-    typing: ztyping.ZTyping.view
+    prog: Program.view
     template: ztypes.tid
     mono: ztypes.tid
     names: List String
     tids: ListVal ztypes.tid
 } is {
-    td: typing.declIdOfType typeId: template
+    td: prog.typing.declIdOfType typeId: template
     if td.isZero then return
-    pns: reg.genericParamNamesOf tdecl: td
+    pns: prog.reg.genericParamNamesOf tdecl: td
     k: u64
     for k < pns.length loop {
-        names.append (zast.nameTextCopy :ast ref: (pns.get i: k))
-        tids.append (reg.genericTypeArgAt specId: mono ordinal: k)
+        names.append (zast.nameTextCopy ast: prog.ast ref: (pns.get i: k))
+        tids.append (prog.reg.genericTypeArgAt specId: mono ordinal: k)
         k = k + 1
     }
 }
@@ -4025,9 +3818,7 @@ templateParamArgs: function {
 # by position. A runtime fragment's own `@Name@` holes
 # fill as a fragment's do.
 emitTmplClassMono: function {
-    ast: Ast.view
-    reg: ztypes.ZTypeRegistry.view
-    typing: ztyping.ZTyping.view
+    prog: Program.view
     ctx: Ctx
     monoId: ztypes.tid
     # the class row, by index
@@ -4047,10 +3838,10 @@ emitTmplClassMono: function {
     svC: ctx.svC.copy
     rtKey :ctx keys: kt name: "String" val: strC.stringView
     rtKey :ctx keys: kt name: "StringView" val: svC.stringView
-    tpl: originTidOf :reg tid: monoId
+    tpl: originTidOf :prog tid: monoId
     pNames: List String
     pTids: ListVal ztypes.tid
-    templateParamArgs :ast :reg :typing template: tpl mono: monoId names: pNames tids: pTids
+    templateParamArgs :prog template: tpl mono: monoId names: pNames tids: pTids
     # each parameter's in-place destructor, written only where a kept section
     # names it (below)
     dfns: List String
@@ -4059,7 +3850,7 @@ emitTmplClassMono: function {
     for k < pNames.length loop {
         pn: (pNames.get i: k).copy
         at: pTids.get i: k
-        sc0: slotCType :ast :reg :typing :ctx tid: at
+        sc0: slotCType :prog :ctx tid: at
         sc: ctypeOrI64 s: sc0.stringView
         rtKey :ctx keys: kt name: pn.stringView val: sc.stringView
         dfn: "z_\{nm}_destroy_\{pn}"
@@ -4076,34 +3867,34 @@ emitTmplClassMono: function {
         # 1 when the argument is `null`, which a slot holds as a placeholder:
         # a template must not store what a call answering nothing gives
         isNull: "0"
-        if (reg.typetypeOf typeId: at) == ztypes.ztypetype.nullType then isNull = "1"
+        if (prog.reg.typetypeOf typeId: at) == ztypes.ztypetype.nullType then isNull = "1"
         nk: "\{pn}_NULL"
         rtKey :ctx keys: kt name: nk.stringView val: isNull
         pnk: "P\{k}_NULL"
         rtKey :ctx keys: kt name: pnk.stringView val: isNull
-        memberKeys :ast :typing :ctx id: ti keys: kt param: pn.stringView arg: at
+        memberKeys :prog :ctx id: ti keys: kt param: pn.stringView arg: at
         k = k + 1
     }
     # the option builders its answer holes name, kept apart until the sections
     # the program writes are known
     ab: String
-    answerKeys :ast :reg :typing :ctx id: ti keys: kt inst: monoId nm: nm.stringView buf: ab
+    answerKeys :prog :ctx id: ti keys: kt inst: monoId nm: nm.stringView buf: ab
     made: nativepieces.rtFillPieced :ctx id: ti keys: kt
     # the members written C calls, and those they need (rtSectionPlan), in this
     # instance's own text, parsed once; what is left in it is a runtime
     # fragment's own holes, every one bound: a type by canon, a tag constant, a
     # member
     plan: rtSectionPlan :ctx mono: monoId id: (ctx.rt.parsePieced x: made.take)
-    kept: nativepieces.rtFragmentText :ast :reg :typing :ctx :plan all: true key: p
+    kept: nativepieces.rtFragmentText :prog :ctx :plan all: true key: p
     di: u64
     for di < dfns.length loop {
         dn: (dfns.get i: di).copy
         dat: dts.get i: di
         di = di + 1
         if (kept.stringView.contains needle: dn).not then continue
-        dataC: slotCType :ast :reg :typing :ctx tid: dat
+        dataC: slotCType :prog :ctx tid: dat
         dsc: ctypeOrI64 s: dataC.stringView
-        dl: stmtblocks.destroyLineC :reg :typing :ctx tid: dat nm: "(*x)" ind: "    "
+        dl: stmtblocks.destroyLineC :prog :ctx tid: dat nm: "(*x)" ind: "    "
         buf.append "static void \{dn}("
         buf.append "\{dsc}* x) {\n"
         buf.append dl
@@ -4166,19 +3957,17 @@ splitTmplText: function {ctx: Ctx text: StringView buf: String.borrow} is {
 # (emitOneFnptrTypedef). The type is spelled through typeRefC, which records the
 # demand under the id it names.
 seedDeclaredFnptr: function {
-    ast: Ast.view
-    reg: ztypes.ZTypeRegistry.view
-    typing: ztyping.ZTyping.view
+    prog: Program.view
     ctx: Ctx
     owner: ztypes.tid
     name: zast.nameid
     tid: ztypes.tid
 } is {
     if (fnJobUnwritten :ctx :tid) then return
-    if (reg.typetypeOf typeId: owner) == ztypes.ztypetype.functionType then return
+    if (prog.reg.typetypeOf typeId: owner) == ztypes.ztypetype.functionType then return
     if (typeReached :ctx tid: owner).not then return
-    if (typing.declIsFnptrFieldId parentTypeId: owner nameId: name).not then return
-    typeRefC :ast :reg :typing :ctx :tid
+    if (prog.typing.declIsFnptrFieldId parentTypeId: owner nameId: name).not then return
+    typeRefC :prog :ctx :tid
 }
 
 # collectTmplClassInstances -- every instance of a templated class, and every
@@ -4186,18 +3975,16 @@ seedDeclaredFnptr: function {
 # order: emitted with the late group, after the user structs an instance may
 # hold, whether or not it holds one
 collectTmplClassInstances: function {
-    reg: ztypes.ZTypeRegistry.view
-    typing: ztyping.ZTyping.view
+    prog: Program.view
     ctx: Ctx.view
     acc: ListVal ztypes.tid
     last: ztypes.tid
 } is {
     tm: ztypes.tid
     for tm < last loop {
-        if (tmplClassRowOf :reg :ctx tid: tm) > 0 then {
-            own: (originTidOf :reg tid: tm).isZero
-            if own.not or (tmplClassInProgram :reg :typing tpl: tm) when (typeReached :ctx tid: tm
-            ) then {
+        if (tmplClassRowOf :prog :ctx tid: tm) > 0 then {
+            own: (originTidOf :prog tid: tm).isZero
+            if own.not or (tmplClassInProgram :prog tpl: tm) when (typeReached :ctx tid: tm) then {
                 acc.append tm
             }
         }
@@ -4211,9 +3998,7 @@ collectTmplClassInstances: function {
 # the id-keyed pair after the hashed ones for the same reason; protocols after
 # the monos their vtable signatures reference; user generic monos last.
 emitCollectionMonos: function {
-    ast: Ast.view
-    reg: ztypes.ZTypeRegistry.view
-    typing: ztyping.ZTyping.view
+    prog: Program.view
     ctx: Ctx
     buf: String.borrow
     work: MonoWork.view
@@ -4223,58 +4008,56 @@ emitCollectionMonos: function {
     # list values first: each is a scalar view, and nothing it names comes later
     tdat: u64
     for tdat < work.wStaticList.length loop {
-        emitStaticListMono :ast :reg :typing :ctx monoId: (work.wStaticList.get i: tdat) :buf
+        emitStaticListMono :prog :ctx monoId: (work.wStaticList.get i: tdat) :buf
         tdat = tdat + 1
     }
     for each arrId: work.wArr loop {
-        emitArrayMono :ast :reg :typing :ctx monoId: arrId :buf
+        emitArrayMono :prog :ctx monoId: arrId :buf
     }
     for each lvId: work.wListView loop {
-        emitListViewMono :ast :reg :typing :ctx monoId: lvId :buf
+        emitListViewMono :prog :ctx monoId: lvId :buf
     }
     # windows next: a window is a list view's layout, and a list's span
     # companion builds one by value
     for each spId: work.wSpan loop {
-        emitSpanMono :ast :reg :typing :ctx monoId: spId :buf
+        emitSpanMono :prog :ctx monoId: spId :buf
     }
     for each liId: work.wList loop {
-        emitListMono :ast :reg :typing :ctx monoId: liId :buf
+        emitListMono :prog :ctx monoId: liId :buf
     }
     # Set monos last -- the compact-dict + SetIter; needs its element's
     # OptionView (above) already defined.
     for each seId: work.wSet loop {
-        emitSetMono :ast :reg :typing :ctx monoId: seId :buf
+        emitSetMono :prog :ctx monoId: seId :buf
     }
     # Map monos -- the compact-dict over key+value; get's return optionval
     # (emitted above) supplies the value type.
     for each maId: work.wMap loop {
-        emitMapMono :ast :reg :typing :ctx monoId: maId :buf
+        emitMapMono :prog :ctx monoId: maId :buf
     }
     # the id-keyed pair, after the hashed ones for the same reason: an IdMap's
     # `get` returns an optionval / OptionView emitted above.
     for each isId: work.wIdSet loop {
-        emitIdSetMono :ast :reg :typing :ctx monoId: isId :buf
+        emitIdSetMono :prog :ctx monoId: isId :buf
     }
     for each imId: work.wIdMap loop {
-        emitIdMapMono :ast :reg :typing :ctx monoId: imId :buf
+        emitIdMapMono :prog :ctx monoId: imId :buf
     }
     # reachable system PROTOCOLs (Reader/Writer/Closer/Seeker) -- emitted after
     # the collection monos their vtable function-pointer signatures reference.
     for each spId: work.wProto loop {
-        types.emitOneProtocol :ast :reg :typing :ctx tid: spId :buf
+        types.emitOneProtocol :prog :ctx tid: spId :buf
     }
-    types.emitUserGenericInstances :ast :reg :typing :ctx :work :buf
+    types.emitUserGenericInstances :prog :ctx :work :buf
 }
 
 # staticListElemCType -- the C type of the elements of list row `row`: the C
 # type its value type's element has (slotCType), so the array is exactly what
 # the list's view points at -- an untyped list's i64 or f64, a typedef's own
 # base.
-staticListElemCType: function {
-    ast: Ast.view reg: ztypes.ZTypeRegistry.view typing: ztyping.ZTyping.view ctx: Ctx row: u64
-} out String is {
-    vt: (typing.constAggs.get i: row).tid
-    elemC: slotCType :ast :reg :typing :ctx tid: (reg.genericTypeArgAt specId: vt ordinal: 0)
+staticListElemCType: function {prog: Program.view ctx: Ctx row: u64} out String is {
+    vt: (prog.typing.constAggs.get i: row).tid
+    elemC: slotCType :prog :ctx tid: (prog.reg.genericTypeArgAt specId: vt ordinal: 0)
     return (ctypeOrI64 s: elemC.stringView)
 }
 
@@ -4298,28 +4081,26 @@ staticListStoredC: function {ect: StringView} out String is {
 # type the unit declares, and call a user unit spelled `cli` or `os`'s bodied
 # methods as fragments.
 nativeMethodOwnerOf: function {
-    reg: ztypes.ZTypeRegistry.view
-    typing: ztyping.ZTyping.view
+    prog: Program.view
     nid: zast.nodeid
     mnId: zast.nameid
 } out ztypes.tid is {
-    return (nativeMethodOwnerOfTid :reg :typing tid: (stampIdOf :typing :nid) :mnId)
+    return (nativeMethodOwnerOfTid :prog tid: (stampIdOf :prog :nid) :mnId)
 }
 
 # nativeMethodOwnerOfTid -- `tid` when it is a non-generic class whose member
 # `mnId` is native; 0 otherwise
 nativeMethodOwnerOfTid: function {
-    reg: ztypes.ZTypeRegistry.view
-    typing: ztyping.ZTyping.view
+    prog: Program.view
     tid: ztypes.tid
     mnId: zast.nameid
 } out ztypes.tid is {
     if tid.isZero then return ztypes.tid.zero
-    if (reg.typetypeOf typeId: tid) != ztypes.ztypetype.classType then return ztypes.tid.zero
-    fileOrig: originTidOf :reg :tid
+    if (prog.reg.typetypeOf typeId: tid) != ztypes.ztypetype.classType then return ztypes.tid.zero
+    fileOrig: originTidOf :prog :tid
     if fileOrig.notZero then return ztypes.tid.zero
-    mo: typing.declChildOfId parentTypeId: tid nameId: mnId
-    if mo.some when (reg.isNativeOf tid: mo) then return tid
+    mo: prog.typing.declChildOfId parentTypeId: tid nameId: mnId
+    if mo.some when (prog.reg.isNativeOf tid: mo) then return tid
     return ztypes.tid.zero
 }
 
@@ -4328,36 +4109,35 @@ nativeMethodOwnerOfTid: function {
 # implementing the unit that declares the type, the type's name and the
 # member's. No file (impl 0) when the program reaches none for it.
 rowNameOfMember: function {
-    reg: ztypes.ZTypeRegistry.view
-    typing: ztyping.ZTyping.view
+    prog: Program.view
     ctx: Ctx.view
     owner: ztypes.tid
     name: zast.nameid
 } out zemitrows.rowname is {
     none: zemitrows.rowname impl: 0 typeName: zast.nameid.zero name: zast.nameid.zero
-    did: typing.declIdOfType typeId: owner
+    did: prog.typing.declIdOfType typeId: owner
     if did.isZero then return none
     impl: (
         ctx.rows.fileOfUnit
-        ud: (ztypecheck.unitDeclOfTid :reg :typing tid: owner)
+        ud: (ztypecheck.unitDeclOfTid reg: prog.reg typing: prog.typing tid: owner)
     )
     if impl == 0 then return none
-    return (zemitrows.rowname :impl typeName: (typing.decls.get i: did).name :name)
+    return (zemitrows.rowname :impl typeName: (prog.typing.decls.get i: did).name :name)
 }
 
 # rowLabel -- row key `n` as `zc natives show` addresses it, `<unit>.<key>`,
 # written in one allocation
-rowLabel: function {ctx: Ctx.view ast: Ast.view n: zemitrows.rowname} out String is {
+rowLabel: function {ctx: Ctx.view prog: Program.view n: zemitrows.rowname} out String is {
     owner: ctx.demands.nameText id: (ctx.rows.unitOfFile impl: n.impl)
-    nm: zast.nameTextAt :ast ref: n.name
+    nm: zast.nameTextAt ast: prog.ast ref: n.name
     tl: u64
-    if n.typeName.notZero then tl = (zast.nameTextAt :ast ref: n.typeName).length + 1
+    if n.typeName.notZero then tl = (zast.nameTextAt ast: prog.ast ref: n.typeName).length + 1
     r: String
     r.reserve n: owner.length + tl + nm.length + 1
     r.append owner
     r.append "."
     if n.typeName.notZero then {
-        r.append (zast.nameTextAt :ast ref: n.typeName)
+        r.append (zast.nameTextAt ast: prog.ast ref: n.typeName)
         r.append "."
     }
     r.append nm
@@ -4369,8 +4149,7 @@ rowLabel: function {ctx: Ctx.view ast: Ast.view n: zemitrows.rowname} out String
 # defines every method; or, for a receiver a call computes (`valRecv`), the
 # class that declares the method. 0 when the method is not a class's native.
 nativeCallOwner: function {
-    reg: ztypes.ZTypeRegistry.view
-    typing: ztyping.ZTyping.view
+    prog: Program.view
     ctx: Ctx
     bnid: zast.nodeid
     valRecv: zast.nodeid
@@ -4378,21 +4157,19 @@ nativeCallOwner: function {
     # the class that declares the method
     ownerTid: ztypes.tid
 } out ztypes.tid is {
-    cid: nativeMethodOwnerOf :reg :typing nid: bnid :mnId
+    cid: nativeMethodOwnerOf :prog nid: bnid :mnId
     if cid.notZero then return cid
-    it: stampIdOf :typing nid: bnid
-    if (tmplClassRowOf :reg :ctx tid: it) > 0 then return it
+    it: stampIdOf :prog nid: bnid
+    if (tmplClassRowOf :prog :ctx tid: it) > 0 then return it
     if valRecv.isZero then return ztypes.tid.zero
-    return (nativeMethodOwnerOfTid :reg :typing tid: ownerTid :mnId)
+    return (nativeMethodOwnerOfTid :prog tid: ownerTid :mnId)
 }
 
 # tmplInstMemberRead -- a templated class's native method read as a member of
 # an instance: its template's function (emitClassNativeRead), ahead of the
 # class leg, which would name the template's member; "" for anything else
 tmplInstMemberRead: function {
-    ast: Ast.view
-    reg: ztypes.ZTypeRegistry.view
-    typing: ztyping.ZTyping.view
+    prog: Program.view
     ctx: Ctx
     inst: ztypes.tid
     mnId: zast.nameid
@@ -4400,15 +4177,13 @@ tmplInstMemberRead: function {
     bn2v: ztypes.vid
     facts: exprfacts.borrow
 } out String is {
-    if (tmplClassRowOf :reg :ctx tid: inst) == 0 then return "".string
-    tmo: typing.declChildOfId parentTypeId: inst nameId: mnId
+    if (tmplClassRowOf :prog :ctx tid: inst) == 0 then return "".string
+    tmo: prog.typing.declChildOfId parentTypeId: inst nameId: mnId
     if tmo.none then return "".string
-    if (reg.isNativeOf tid: tmo).not then return "".string
+    if (prog.reg.isNativeOf tid: tmo).not then return "".string
     return (
         callorder.emitClassNativeRead
-        :ast
-        :reg
-        :typing
+        :prog
         :ctx
         cid: inst
         :mnId
@@ -4423,26 +4198,22 @@ tmplInstMemberRead: function {
 # for the call's parameters `names`, as an `ARG.` hole names them: the member
 # `member` of the instance the call answers
 viaParams: function {
-    ast: Ast.view
-    reg: ztypes.ZTypeRegistry.view
-    typing: ztyping.ZTyping.view
+    prog: Program.view
     call: zast.callrow.view
     member: StringView
     names: (ListVal zast.nameid).view
     tids: ListVal ztypes.tid
 } is {
-    mid: tmplHoleNameId :ast text: member
+    mid: tmplHoleNameId :prog text: member
     if mid.isZero then return
-    inst: stampIdOf :typing nid: call.nodeid
-    for each pn: names loop tids.append (tmplArgOf :reg :typing :inst mnId: mid pid: pn)
+    inst: stampIdOf :prog nid: call.nodeid
+    for each pn: names loop tids.append (tmplArgOf :prog :inst mnId: mid pid: pn)
 }
 
 # valKeyEqBody -- a value-type key's equality for a Set or Map mono, `_a` and
 # `_b` being the keys: the key's own `==`, whatever wrote it.
 valKeyEqBody: function {
-    ast: Ast.view
-    reg: ztypes.ZTypeRegistry.view
-    typing: ztyping.ZTyping.view
+    prog: Program.view
     ctx: Ctx
     key: ztypes.tid
     keyT: StringView
@@ -4450,9 +4221,9 @@ valKeyEqBody: function {
 } out String is {
     src: (
         ztypecheck.valOpSource
-        :ast
-        :reg
-        :typing
+        ast: prog.ast
+        reg: prog.reg
+        typing: prog.typing
         tid: key
         nameId: zast.wellKnown.slot.wkOpEq
     )
@@ -4461,47 +4232,45 @@ valKeyEqBody: function {
         if src.negated then opId = zast.wellKnown.slot.wkOpNe
         owner: (
             ztypecheck.valOpOwner
-            :typing
+            typing: prog.typing
             tid: key
             nameId: zast.wellKnown.slot.wkOpEq
         )
-        fo: typing.declChildOfId parentTypeId: owner nameId: opId
+        fo: prog.typing.declChildOfId parentTypeId: owner nameId: opId
         fid: fo.or d: ztypes.tid.zero
         buf.append "static bool "
         buf.append (spelledCname :ctx tid: fid)
         buf.append "("
-        buf.append (emitplan.keyFnParamConstC :reg :typing :fid index: 0)
+        buf.append (emitplan.keyFnParamConstC :prog :fid index: 0)
         buf.append keyT
         buf.append "*, "
         buf.append keyT
         buf.append ");\n"
     }
     body: String
-    parttexts.partEqC :ast :reg :typing :ctx tid: key lhs: "_a" rhs: "_b" sel: "" dest: body
+    parttexts.partEqC :prog :ctx tid: key lhs: "_a" rhs: "_b" sel: "" dest: body
     return body
 }
 
 # isValKey -- a Set element or Map key hashed and compared with its own
 # members (valKeyHashBody, valKeyEqBody): a value type. A String and a
 # StringView keep their native pair, a reference its declared one.
-isValKey: function {reg: ztypes.ZTypeRegistry.view key: ztypes.tid kind: keykind} out bool is {
+isValKey: function {prog: Program.view key: ztypes.tid kind: keykind} out bool is {
     if kind.nativeString or kind.stringView then return false
-    return (reg.isValtypeOf tid: key)
+    return (prog.reg.isValtypeOf tid: key)
 }
 
 # partCallsWritten -- comparing a `tid` part calls a method the author wrote,
 # whose definition comes after every generated helper.
 partCallsWritten: function {
-    ast: Ast.view
-    reg: ztypes.ZTypeRegistry.view
-    typing: ztyping.ZTyping.view
+    prog: Program.view
     tid: ztypes.tid
 } out bool is {
     src: (
         ztypecheck.valOpSource
-        :ast
-        :reg
-        :typing
+        ast: prog.ast
+        reg: prog.reg
+        typing: prog.typing
         :tid
         nameId: zast.wellKnown.slot.wkOpEq
     )

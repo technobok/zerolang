@@ -7,14 +7,14 @@
 # `xs.length` in a for-header auto-calls, so the node's own stamp is the METHOD
 # and its width is the method's return.
 tidDeep: function {
-    reg: ztypes.ZTypeRegistry.view
+    prog: Program.view
     sid: ztypes.tid
 } out ztypes.tid is {
     if sid.isZero then return ztypes.tid
     # a value-position FUNCTION stamp is an auto-call; its value type is the
     # method's return.
-    if (reg.typetypeOf typeId: sid) == ztypes.ztypetype.functionType then {
-        rto: emitplan.fnReturnTidOf :reg tid: sid
+    if (prog.reg.typetypeOf typeId: sid) == ztypes.ztypetype.functionType then {
+        rto: emitplan.fnReturnTidOf :prog tid: sid
         if rto.notZero then return rto
     }
     return sid
@@ -22,11 +22,10 @@ tidDeep: function {
 
 # stampTidDeep -- tidDeep of a NODE's own stamp.
 stampTidDeep: function {
-    reg: ztypes.ZTypeRegistry.view
-    typing: ztyping.ZTyping.view
+    prog: Program.view
     n: astnode.view
 } out ztypes.tid is {
-    return (tidDeep :reg sid: (stampIdOf :typing nid: (interpPartNodeId :n)))
+    return (tidDeep :prog sid: (stampIdOf :prog nid: (interpPartNodeId :n)))
 }
 
 # forArmCond -- the text of a loop's `while:` arms: every condition that is
@@ -40,16 +39,14 @@ stampTidDeep: function {
 # name only in the first, so the callers that read `i: 0` to find it are
 # reading what the grammar guarantees.
 forArmCond: function {
-    ast: Ast.view
-    reg: ztypes.ZTypeRegistry.view
-    typing: ztyping.ZTyping.view
+    prog: Program.view
     ctx: Ctx
     n: zast.forrow.view
 } out String is {
     cond: String
-    for each kId: (zast.kidsOf :ast span: n.conditions) loop {
-        if (forCondIsNamed :ast :kId).not then {
-            stmtblocks.emitForCond :ast :reg :typing :ctx n: (ast.nodes.get i: kId) :cond
+    for each kId: (zast.kidsOf ast: prog.ast span: n.conditions) loop {
+        if (forCondIsNamed :prog :kId).not then {
+            stmtblocks.emitForCond :prog :ctx n: (prog.ast.nodes.get i: kId) :cond
         }
     }
     return cond
@@ -60,9 +57,7 @@ forArmCond: function {
 # the checker recorded a failing arm destroys (exitDestroy of the loop): the
 # element the binding answered. Nothing when the loop has no arms.
 emitForArmBreak: function {
-    ast: Ast.view
-    reg: ztypes.ZTypeRegistry.view
-    typing: ztyping.ZTyping.view
+    prog: Program.view
     ctx: Ctx
     node: zast.nodeid
     armc: StringView
@@ -74,7 +69,7 @@ emitForArmBreak: function {
     owed: String
     outerExit: ctx.exitNode
     ctx.exitNode = node
-    stmtblocks.emitExitDestroy :ast :reg :typing :ctx ind: inner.stringView buf: owed
+    stmtblocks.emitExitDestroy :prog :ctx ind: inner.stringView buf: owed
     ctx.exitNode = outerExit
     if owed.length == 0 then {
         buf.append "\{ind}if (!(\{armc})) break;\n"
@@ -89,9 +84,7 @@ emitForArmBreak: function {
 # borrowed view, whose pointer or copy the reload re-derives. True when a
 # spill was pushed, so the loop's end can pop it.
 pushPayloadSpill: function {
-    ast: Ast.view
-    reg: ztypes.ZTypeRegistry.view
-    typing: ztyping.ZTyping.view
+    prog: Program.view
     ctx: Ctx
     cNid: zast.nodeid
     pk: spillkind
@@ -102,7 +95,7 @@ pushPayloadSpill: function {
     payTid: ztypes.tid
 } out bool is {
     if ctx.genActive.not then return false
-    pfO: typing.forPayloadField.get key: cNid
+    pfO: prog.typing.forPayloadField.get key: cNid
     match (
         pfO
     ) case some then {
@@ -113,7 +106,7 @@ pushPayloadSpill: function {
             restoredO = "__borrow_\{lbl}"
         }
         if pk.viewCopy then savedO = "_iter\{mN}"
-        fldS: genFieldC :ast :reg :typing :ctx nameId: pfO
+        fldS: genFieldC :prog :ctx nameId: pfO
         ctx.genForSpills.append (
             ForSpill
             field: fldS
@@ -121,7 +114,7 @@ pushPayloadSpill: function {
             restored: restoredO
             kind: pk
             payC: payC.string
-            payZero: (values.movedZeroC :reg :typing :ctx tid: payTid)
+            payZero: (values.movedZeroC :prog :ctx tid: payTid)
         )
         return true
     } case none then {
@@ -140,9 +133,7 @@ pushPayloadSpill: function {
 # same range held as a value ran n times, because `intrange` captures its count
 # at construction. One spelling of one loop cannot mean two things.
 emitCountedRangeFor: function {
-    ast: Ast.view
-    reg: ztypes.ZTypeRegistry.view
-    typing: ztyping.ZTyping.view
+    prog: Program.view
     ctx: Ctx
     m: zast.forrow.view
     n: astnode.view
@@ -151,14 +142,14 @@ emitCountedRangeFor: function {
     tmp: FnTemps
     buf: String.borrow
 } out bool is {
-    bound: rangeBoundExpr :ast :reg :typing :ctx :n
+    bound: rangeBoundExpr :prog :ctx :n
     if bound.length == 0 then return false
-    rtR: rangeTid :ast :reg :typing :n
-    ctR: intScalarCTypeOf :typing tid: rtR
+    rtR: rangeTid :prog :n
+    ctR: intScalarCTypeOf :prog tid: rtR
     if ctR.length == 0 then return false
     mN: values.tmpNext :ctx :tmp
     fn: "_fn\{mN}"
-    rk: ztypecheck.numKindOfTid :typing tid: rtR
+    rk: ztypecheck.numKindOfTid typing: prog.typing tid: rtR
     cnt: (
         countRangeCountExpr
         signed: rk.has and (ztypes.isSignedIntKind k: rk.kind)
@@ -178,10 +169,10 @@ emitCountedRangeFor: function {
     # Both keep their C locals -- so the header, `continue` and the step are
     # untouched -- and are SPILLED to state fields across each suspension.
     pushed: false
-    if ctx.genActive when (zast.yieldCountIn :ast nid: m.body) > 0 then {
+    if ctx.genActive when (zast.yieldCountIn ast: prog.ast nid: m.body) > 0 then {
         ctx.genForNext = ctx.genForNext + 1
-        fcF: genSynthField :typing :ctx which: gensynth.forCounter k: ctx.genForNext
-        fcC: genFieldC :ast :reg :typing :ctx nameId: fcF
+        fcF: genSynthField :prog :ctx which: gensynth.forCounter k: ctx.genForNext
+        fcC: genFieldC :prog :ctx nameId: fcF
         ctx.genForSpills.append (
             ForSpill
             field: fcC
@@ -191,8 +182,8 @@ emitCountedRangeFor: function {
             payC: String
             payZero: String
         )
-        fnF: genSynthField :typing :ctx which: gensynth.forCount k: ctx.genForNext
-        fnC: genFieldC :ast :reg :typing :ctx nameId: fnF
+        fnF: genSynthField :prog :ctx which: gensynth.forCount k: ctx.genForNext
+        fnC: genFieldC :prog :ctx nameId: fnF
         ctx.genForSpills.append (
             ForSpill
             field: fnC
@@ -209,13 +200,11 @@ emitCountedRangeFor: function {
     lh: "\{ind}for (\{ctR} \{lbl} = 0; \{fn} > 0; \{st1}, \{st2}) {\n"
     buf.append lh
     bodyInd: "\{ind}    "
-    armC: forArmCond :ast :reg :typing :ctx n: m
+    armC: forArmCond :prog :ctx n: m
     flushArgHoists :ctx ind: bodyInd.stringView :tmp :buf
     (
         emitForArmBreak
-        :ast
-        :reg
-        :typing
+        :prog
         :ctx
         node: m.nodeid
         armc: armC.stringView
@@ -229,16 +218,14 @@ emitCountedRangeFor: function {
     lLR: tmp.listFrees.length
     dvR: false
     if m.body.notZero then {
-        bodyNode: ast.nodes.get i: m.body
-        stmtblocks.emitBodyNode :ast :reg :typing :ctx n: bodyNode ind: bodyInd.stringView :tmp :buf
-        dvR = stmtblocks.blockDiverges :ast :reg :typing :ctx n: bodyNode
+        bodyNode: prog.ast.nodes.get i: m.body
+        stmtblocks.emitBodyNode :prog :ctx n: bodyNode ind: bodyInd.stringView :tmp :buf
+        dvR = stmtblocks.blockDiverges :prog :ctx n: bodyNode
     }
-    stmtblocks.closeScopeBlock :ast :reg :typing :ctx :tmp lL: lLR diverged: dvR node: m.body :buf
+    stmtblocks.closeScopeBlock :prog :ctx :tmp lL: lLR diverged: dvR node: m.body :buf
     (
         stmtblocks.emitIterationEnd
-        :ast
-        :reg
-        :typing
+        :prog
         :ctx
         :m
         id: lidR
@@ -295,9 +282,7 @@ closedRangeStepOp: function {down: bool} out StringView is {
 # expression recorded declared just ahead of it: those run when declared, so a
 # temporary of the end declared ahead of the start would run first.
 emitClosedRangeFor: function {
-    ast: Ast.view
-    reg: ztypes.ZTypeRegistry.view
-    typing: ztyping.ZTyping.view
+    prog: Program.view
     ctx: Ctx
     m: zast.forrow.view
     n: astnode.view
@@ -310,16 +295,16 @@ emitClosedRangeFor: function {
     # asked of the WHOLE node, before the match below narrows it to the call
     # row: both readers take the node the header binds, as rangeBoundExpr's
     # arms do
-    ctR: rangeCType :ast :reg :typing :n
+    ctR: rangeCType :prog :n
     if ctR.length == 0 then return false
     # both ends' shapes are checked before either is built: nothing may be
     # written once the first is
-    toNid: rangeToNode :ast :n
+    toNid: rangeToNode :prog :n
     if toNid.isZero then return false
     match (
         n
     ) case call then {
-        startNid: memberreads.dottedParentNodeId n: (ast.nodes.get i: n.callable)
+        startNid: memberreads.dottedParentNodeId n: (prog.ast.nodes.get i: n.callable)
         if startNid.isZero then return false
         mN: values.tmpNext :ctx :tmp
         rs: "_rs\{mN}"
@@ -333,11 +318,11 @@ emitClosedRangeFor: function {
             isDo: false
             postTest: m.postconditions.count.u64 > 0
         )
-        startx: emitExpr :ast :reg :typing :ctx n: (ast.nodes.get i: startNid)
+        startx: emitExpr :prog :ctx n: (prog.ast.nodes.get i: startNid)
         flushArgHoists :ctx :ind :tmp :buf
         d0: "\{ind}\{ctR} \{rs} = \{startx};\n"
         buf.append d0
-        tox: emitExpr :ast :reg :typing :ctx n: (ast.nodes.get i: toNid)
+        tox: emitExpr :prog :ctx n: (prog.ast.nodes.get i: toNid)
         flushArgHoists :ctx :ind :tmp :buf
         d1: "\{ind}\{ctR} \{re} = \{tox};\n"
         buf.append d1
@@ -351,10 +336,10 @@ emitClosedRangeFor: function {
         # more recomputable than the variable -- the ends it was taken from
         # left C scope with the declarations above.
         pushed: false
-        if ctx.genActive when (zast.yieldCountIn :ast nid: m.body) > 0 then {
+        if ctx.genActive when (zast.yieldCountIn ast: prog.ast nid: m.body) > 0 then {
             ctx.genForNext = ctx.genForNext + 1
-            fcF: genSynthField :typing :ctx which: gensynth.forCounter k: ctx.genForNext
-            fcC: genFieldC :ast :reg :typing :ctx nameId: fcF
+            fcF: genSynthField :prog :ctx which: gensynth.forCounter k: ctx.genForNext
+            fcC: genFieldC :prog :ctx nameId: fcF
             ctx.genForSpills.append (
                 ForSpill
                 field: fcC
@@ -364,8 +349,8 @@ emitClosedRangeFor: function {
                 payC: String
                 payZero: String
             )
-            fnF: genSynthField :typing :ctx which: gensynth.forCount k: ctx.genForNext
-            fnC: genFieldC :ast :reg :typing :ctx nameId: fnF
+            fnF: genSynthField :prog :ctx which: gensynth.forCount k: ctx.genForNext
+            fnC: genFieldC :prog :ctx nameId: fnF
             ctx.genForSpills.append (
                 ForSpill
                 field: fnC
@@ -383,13 +368,11 @@ emitClosedRangeFor: function {
         lh: "\{ind}for (\{ctR} \{lbl} = \{rs}; \{fn} > 0; \{st1}, \{st2}) {\n"
         buf.append lh
         bodyInd: "\{ind}    "
-        armX: forArmCond :ast :reg :typing :ctx n: m
+        armX: forArmCond :prog :ctx n: m
         flushArgHoists :ctx ind: bodyInd.stringView :tmp :buf
         (
             emitForArmBreak
-            :ast
-            :reg
-            :typing
+            :prog
             :ctx
             node: m.nodeid
             armc: armX.stringView
@@ -399,25 +382,21 @@ emitClosedRangeFor: function {
         lLR: tmp.listFrees.length
         dvR: false
         if m.body.notZero then {
-            bodyNode: ast.nodes.get i: m.body
+            bodyNode: prog.ast.nodes.get i: m.body
             (
                 stmtblocks.emitBodyNode
-                :ast
-                :reg
-                :typing
+                :prog
                 :ctx
                 n: bodyNode
                 ind: bodyInd.stringView
                 :tmp
                 :buf
             )
-            dvR = stmtblocks.blockDiverges :ast :reg :typing :ctx n: bodyNode
+            dvR = stmtblocks.blockDiverges :prog :ctx n: bodyNode
         }
         (
             stmtblocks.closeScopeBlock
-            :ast
-            :reg
-            :typing
+            :prog
             :ctx
             :tmp
             lL: lLR
@@ -427,9 +406,7 @@ emitClosedRangeFor: function {
         )
         (
             stmtblocks.emitIterationEnd
-            :ast
-            :reg
-            :typing
+            :prog
             :ctx
             :m
             id: lidR
@@ -475,13 +452,11 @@ isClosedRangeMemberId: function {id: zast.nameid} out bool is {
 # closedRangeMemberOf -- the closed-range member a `for` header's operation
 # calls, or 0 for anything else. Only the CALL shape can name one: the endpoint
 # arrives as a `to:` argument, so there is no bare dotted-path spelling to test.
-closedRangeMemberOf: function {
-    ast: Ast.view typing: ztyping.ZTyping.view n: astnode.view
-} out zast.nameid is {
+closedRangeMemberOf: function {prog: Program.view n: astnode.view} out zast.nameid is {
     match (
         n
     ) case call then {
-        mnId: aliasChildNameId :ast :typing n: (ast.nodes.get i: n.callable)
+        mnId: aliasChildNameId :prog n: (prog.ast.nodes.get i: n.callable)
         if (isClosedRangeMemberId id: mnId) then return mnId
         return zast.nameid
     } else {
@@ -494,13 +469,13 @@ closedRangeMemberOf: function {
 # label: `upto` and `downto` declare one parameter each, and the member has
 # already been identified by interned id before this is asked, so the single
 # argument present is that endpoint.
-rangeToNode: function {ast: Ast.view n: astnode.view} out zast.nodeid is {
+rangeToNode: function {prog: Program.view n: astnode.view} out zast.nodeid is {
     match (
         n
     ) case call then {
         if n.arguments.count.u64 != 1 then return zast.nodeid
-        aId: zast.kidAt kids: ast.kids span: n.arguments i: 0
-        a: ast.nodes.get i: aId
+        aId: zast.kidAt kids: prog.ast.kids span: n.arguments i: 0
+        a: prog.ast.nodes.get i: aId
         if a.namedoperation then return a.operation
         return zast.nodeid
     } else {
@@ -556,26 +531,24 @@ closedRangeCountExpr: function {from: StringView to: StringView down: bool} out 
 # so it is never a call. A CLOSED range is read by closedRangeMemberOf/rangeToNode
 # instead -- its receiver is the range's start, not its bound.
 rangeBoundExpr: function {
-    ast: Ast.view
-    reg: ztypes.ZTypeRegistry.view
-    typing: ztyping.ZTyping.view
+    prog: Program.view
     ctx: Ctx
     n: astnode.view
 } out String is {
     match (
         n
     ) case dottedpath then {
-        cmnId: aliasOrChildId :ast :typing aliasId: n.nodeid childId: n.child
+        cmnId: aliasOrChildId :prog aliasId: n.nodeid childId: n.child
         if (isCountRangeMemberId id: cmnId) then {
             # the receiver may be a dotted path itself (squares.length.times) --
             # stampTidDeep resolves its scalar type either way
             bct: (
                 intScalarCTypeOf
-                :typing
-                tid: (stampTidDeep :reg :typing n: (ast.nodes.get i: n.parent))
+                :prog
+                tid: (stampTidDeep :prog n: (prog.ast.nodes.get i: n.parent))
             )
             if bct.length > 0 then {
-                return (emitExpr :ast :reg :typing :ctx n: (ast.nodes.get i: n.parent))
+                return (emitExpr :prog :ctx n: (prog.ast.nodes.get i: n.parent))
             }
         }
         return "".string
@@ -589,40 +562,38 @@ rangeBoundExpr: function {
 # struct, and a float or bool receiver is no counter at all -- counted in an
 # integer a float bound would truncate silently.
 intScalarCTypeOf: function {
-    typing: ztyping.ZTyping.view
+    prog: Program.view
     tid: ztypes.tid
 } out String is {
     if tid.isZero then return "".string
-    nk: ztypecheck.numKindOfTid :typing :tid
+    nk: ztypecheck.numKindOfTid typing: prog.typing :tid
     if nk.has.not then return "".string
     if (ztypes.isFloatKind k: nk.kind) then return "".string
-    return (consts.scalarCTypeFor :typing :tid)
+    return (consts.scalarCTypeFor :prog :tid)
 }
 
 # rangeTid -- the type a counted range's induction variable takes: its
 # RECEIVER's, the numeric type the range yields. 0 for a node that is no
 # counted range.
 rangeTid: function {
-    ast: Ast.view
-    reg: ztypes.ZTypeRegistry.view
-    typing: ztyping.ZTyping.view
+    prog: Program.view
     n: astnode.view
 } out ztypes.tid is {
     match (
         n
     ) case call then {
         # the CLOSED family: only it takes an argument, so only it is a call
-        callableNode: ast.nodes.get i: n.callable
-        if (isClosedRangeMemberId id: (aliasChildNameId :ast :typing n: callableNode)) then {
-            rsid: memberreads.dottedReceiverStampId :ast :typing callable: callableNode
-            return (tidDeep :reg sid: rsid)
+        callableNode: prog.ast.nodes.get i: n.callable
+        if (isClosedRangeMemberId id: (aliasChildNameId :prog n: callableNode)) then {
+            rsid: memberreads.dottedReceiverStampId :prog callable: callableNode
+            return (tidDeep :prog sid: rsid)
         }
         return ztypes.tid.zero
     } case dottedpath then {
         # the COUNT family, whose receiver rangeBoundExpr reads as the bound
-        cmnId: aliasOrChildId :ast :typing aliasId: n.nodeid childId: n.child
+        cmnId: aliasOrChildId :prog aliasId: n.nodeid childId: n.child
         if (isCountRangeMemberId id: cmnId) then {
-            rt2: stampTidDeep :reg :typing n: (ast.nodes.get i: n.parent)
+            rt2: stampTidDeep :prog n: (prog.ast.nodes.get i: n.parent)
             return rt2
         }
         return ztypes.tid.zero
@@ -642,44 +613,38 @@ rangeTid: function {
 # not at all. A u8 range counted in 64 bits and the loop name, typed u8, was
 # assigned from a wider counter at every step.
 rangeCType: function {
-    ast: Ast.view
-    reg: ztypes.ZTypeRegistry.view
-    typing: ztyping.ZTyping.view
+    prog: Program.view
     n: astnode.view
 } out String is {
-    return (intScalarCTypeOf :typing tid: (rangeTid :ast :reg :typing :n))
+    return (intScalarCTypeOf :prog tid: (rangeTid :prog :n))
 }
 
 # forCondIsNamed -- a `for` condition that binds a name (`i: 0`) is an
 # initialiser, not a test.
-forCondIsNamed: function {ast: Ast.view kId: zast.nodeid} out bool is {
-    k: ast.nodes.get i: kId
+forCondIsNamed: function {prog: Program.view kId: zast.nodeid} out bool is {
+    k: prog.ast.nodes.get i: kId
     if k.namedoperation.not then return false
-    lbl: zast.nameTextAt :ast ref: k.name
+    lbl: zast.nameTextAt ast: prog.ast ref: k.name
     return lbl.length > 0
 }
 
 # emitGenPrologue -- the resume dispatch: switch on this->state to L_entry / the
 # per-yield resume labels / L_done.
 emitGenPrologue: function {
-    # the state field names
-    ast: Ast.view
-    # the checked program the generator class is in
-    reg: ztypes.ZTypeRegistry.view
-    typing: ztyping.ZTyping.view
+    prog: Program.view
     # the emission context the generator is armed on (setupGenCtx)
     ctx: Ctx
     # the function body being written
     buf: String.borrow
 } is {
     if ctx.genHasValue then {
-        riI: genSynthField :typing :ctx which: gensynth.resumeInput k: 0
-        riC: genFieldC :ast :reg :typing :ctx nameId: riI
+        riI: genSynthField :prog :ctx which: gensynth.resumeInput k: 0
+        riC: genFieldC :prog :ctx nameId: riI
         lgv: "    \{riC} = \{ctx.genValC};\n"
         buf.append lgv
     }
-    stI: genSynthField :typing :ctx which: gensynth.state k: 0
-    stC: genFieldC :ast :reg :typing :ctx nameId: stI
+    stI: genSynthField :prog :ctx which: gensynth.state k: 0
+    stC: genFieldC :prog :ctx nameId: stI
     lgs: "    switch (\{stC}) {\n"
     buf.append lgs
     buf.append "        case 0: goto L_entry;\n"
@@ -696,11 +661,7 @@ emitGenPrologue: function {
 
 # emitGenEpilogue -- the terminal landing: mark done and return the NONE wrapper.
 emitGenEpilogue: function {
-    # the names of the state fields
-    ast: Ast.view
-    # the checked program holding the generator class
-    reg: ztypes.ZTypeRegistry.view
-    typing: ztyping.ZTyping.view
+    prog: Program.view
     # the generator context setupGenCtx armed
     ctx: Ctx
     # the body the exhausted path is appended to
@@ -718,8 +679,8 @@ emitGenEpilogue: function {
         kd = kd + 1
     }
     buf.append "L_done:;\n"
-    stI: genSynthField :typing :ctx which: gensynth.state k: 0
-    stC: genFieldC :ast :reg :typing :ctx nameId: stI
+    stI: genSynthField :prog :ctx which: gensynth.state k: 0
+    stC: genFieldC :prog :ctx nameId: stI
     lge: "    \{stC} = -1;\n"
     buf.append lge
     le: "    \{ctx.genWrap} _r_done = {0};\n"
@@ -732,9 +693,7 @@ emitGenEpilogue: function {
 # emitYieldFromNode -- emit the suspension for a yield reached through expression
 # wrappers (the expression-form `name: yield E`).
 emitYieldFromNode: function {
-    ast: Ast.view
-    reg: ztypes.ZTypeRegistry.view
-    typing: ztyping.ZTyping.view
+    prog: Program.view
     ctx: Ctx
     n: astnode.view
     ind: StringView
@@ -743,7 +702,7 @@ emitYieldFromNode: function {
     match (
         n
     ) case call then {
-        emitYieldStmt :ast :reg :typing :ctx callId: n.nodeid :ind :buf
+        emitYieldStmt :prog :ctx callId: n.nodeid :ind :buf
     } else null
 }
 
@@ -751,9 +710,7 @@ emitYieldFromNode: function {
 # (yield E), then bind name to the resume input the next `.call value:` provides.
 # A valtype binds the value directly; a borrowed reftype binds a pointer alias.
 emitExprFormYield: function {
-    ast: Ast.view
-    reg: ztypes.ZTypeRegistry.view
-    typing: ztyping.ZTyping.view
+    prog: Program.view
     ctx: Ctx
     value: astnode.view
     aid: zast.nodeid
@@ -765,24 +722,24 @@ emitExprFormYield: function {
     # the hoist has already suspended this yield and left the resume value in
     # a temp; only a yield it declined (no resume type it could name) still
     # needs suspending here
-    riS: genSynthField :typing :ctx which: gensynth.resumeInput k: 0
-    srcC: genFieldC :ast :reg :typing :ctx nameId: riS
+    riS: genSynthField :prog :ctx which: gensynth.resumeInput k: 0
+    srcC: genFieldC :prog :ctx nameId: riS
     {
-        ycid: zast.yieldCallIdAt :ast nid: (zast.nodeIdOf n: value)
+        ycid: zast.yieldCallIdAt ast: prog.ast nid: (zast.nodeIdOf n: value)
         ykq: ctx.yieldTempK.get key: ycid
         match (
             ykq
         ) case some then {
-            yvQ: genSynthField :typing :ctx which: gensynth.yieldSlot k: ykq
-            srcC = genFieldC :ast :reg :typing :ctx nameId: yvQ
+            yvQ: genSynthField :prog :ctx which: gensynth.yieldSlot k: ykq
+            srcC = genFieldC :prog :ctx nameId: yvQ
         } case none then {
-            emitYieldFromNode :ast :reg :typing :ctx n: value :ind :buf
+            emitYieldFromNode :prog :ctx n: value :ind :buf
         }
     }
-    ltid: stampIdOf :typing nid: aid
-    cTypeText: typeRefC :ast :reg :typing :ctx tid: ltid
+    ltid: stampIdOf :prog nid: aid
+    cTypeText: typeRefC :prog :ctx tid: ltid
     if cTypeText.length == 0 then cTypeText = "int64_t".string
-    tt: reg.typetypeOf typeId: ltid
+    tt: prog.reg.typetypeOf typeId: ltid
     isRef: tt.isReferenceData
     if isRef then {
         lp0: "\{ind}\{cTypeText}* __borrow_\{nm} = \{srcC};\n"
@@ -800,7 +757,7 @@ emitExprFormYield: function {
         # in a local the next `return` threw away. The slot is a field, so it
         # survives, and the reftype path above is untouched.
         slotted: false
-        yieldCallId: zast.yieldCallIdAt :ast nid: (zast.nodeIdOf n: value)
+        yieldCallId: zast.yieldCallIdAt ast: prog.ast nid: (zast.nodeIdOf n: value)
         if (ctx.yieldTempK.has key: yieldCallId) then slotted = true
         if slotted then {
             lp3: "\{ind}/* alias: \{nm} => \{srcC} */\n"
@@ -866,11 +823,7 @@ hoistStopsHere: function {n: astnode.view} out bool is {
 # Operands are hoisted before the yield that contains them (post-order), which
 # is the order they evaluate in, so `yield (yield a)` suspends innermost-first.
 hoistExprYields: function {
-    # the tree the statement's shape is walked from
-    ast: Ast.view
-    # read for each yield's resume TYPE, which the temp is declared with
-    reg: ztypes.ZTypeRegistry.view
-    typing: ztyping.ZTyping.view
+    prog: Program.view
     # carries the state-machine cursor, and takes the temp each hoist records
     ctx: Ctx
     # the statement, or the sub-expression of one, to lift yields out of
@@ -883,7 +836,7 @@ hoistExprYields: function {
 } is {
     if nid.isZero then return
     {
-        n: ast.nodes.get i: nid
+        n: prog.ast.nodes.get i: nid
         # an `if`'s FIRST clause's FIRST condition is the one part of it that
         # runs unconditionally and exactly once, so it hoists like any other
         # expression. Every later condition is guarded by the ones before it
@@ -891,14 +844,12 @@ hoistExprYields: function {
         # the descent goes no further.
         if n.ifexpr then {
             if n.clauses.count.u64 > 0 then {
-                c0: ast.nodes.get i: (zast.kidAt kids: ast.kids span: n.clauses i: 0)
+                c0: prog.ast.nodes.get i: (zast.kidAt kids: prog.ast.kids span: n.clauses i: 0)
                 if c0.ifclause when c0.conditions.count.u64 > 0 then (
                     hoistExprYields
-                    :ast
-                    :reg
-                    :typing
+                    :prog
                     :ctx
-                    nid: (zast.kidAt kids: ast.kids span: c0.conditions i: 0)
+                    nid: (zast.kidAt kids: prog.ast.kids span: c0.conditions i: 0)
                     :ind
                     :buf
                 )
@@ -906,41 +857,41 @@ hoistExprYields: function {
             return
         }
         if (hoistStopsHere :n) then return
-        kids: zast.childIds :ast :n
+        kids: zast.childIds ast: prog.ast :n
         kiter: kids.iterate
         for k0: kiter loop {
-            hoistExprYields :ast :reg :typing :ctx nid: k0 :ind :buf
+            hoistExprYields :prog :ctx nid: k0 :ind :buf
         }
     }
     # canonicalise to the CALL's own id. The walk reaches a yield twice -- once
     # through the statement line holding it, once as the call -- and both must
     # answer the same key, or the suspension is emitted twice and every later
     # state number shifts.
-    cid: zast.yieldCallIdAt :ast :nid
+    cid: zast.yieldCallIdAt ast: prog.ast :nid
     if cid.isZero then return
     # already hoisted: emitStmt runs this over the statement and then over the
     # nodes inside it, so the walk has to be idempotent
     if (ctx.yieldTempK.has key: cid) then return
     # the resume type. An out-only generator binds no `value`, so its yields
     # carry nothing and stay on the statement leg
-    ltid: stampIdOf :typing nid: cid
+    ltid: stampIdOf :prog nid: cid
     if ltid.isZero then return
     # a REFTYPE resume value is held as a pointer into the caller's argument,
     # and a temp for it would have to carry the borrow alias the binding leg
     # sets up. That leg still owns those; reftype `accepts` is deferred polish
     # either way, so the hoist declines rather than guessing at the C.
-    ttk: reg.typetypeOf typeId: ltid
+    ttk: prog.reg.typetypeOf typeId: ltid
     if ttk == ztypes.ztypetype.classType then return
     if ttk == ztypes.ztypetype.unionType then return
     kNum: ctx.genYieldNext
-    emitYieldStmt :ast :reg :typing :ctx callId: cid :ind :buf
+    emitYieldStmt :prog :ctx callId: cid :ind :buf
     # into the state object's slot, NOT a C local: the suspension above
     # returned, so a local declared here would be gone by the next one. The
     # lowering allocated one slot per suspension point for exactly this.
-    yvK: genSynthField :typing :ctx which: gensynth.yieldSlot k: kNum
-    yvC: genFieldC :ast :reg :typing :ctx nameId: yvK
-    riK: genSynthField :typing :ctx which: gensynth.resumeInput k: 0
-    riC: genFieldC :ast :reg :typing :ctx nameId: riK
+    yvK: genSynthField :prog :ctx which: gensynth.yieldSlot k: kNum
+    yvC: genFieldC :prog :ctx nameId: yvK
+    riK: genSynthField :prog :ctx which: gensynth.resumeInput k: 0
+    riC: genFieldC :prog :ctx nameId: riK
     lrv: "\{ind}\{yvC} = \{riC};\n"
     buf.append lrv
     kv: kNum
@@ -951,9 +902,7 @@ hoistExprYields: function {
 # SOME-wrapped value, then drop a resume label at column 0 (goto-reachable into
 # the enclosing block).
 emitYieldStmt: function {
-    ast: Ast.view
-    reg: ztypes.ZTypeRegistry.view
-    typing: ztyping.ZTyping.view
+    prog: Program.view
     ctx: Ctx
     # the yield CALL's node id. The suspension reads its one unlabelled
     # argument; the checker has already refused a labelled one
@@ -965,17 +914,17 @@ emitYieldStmt: function {
     ctx.genYieldNext = k + 1
     # an interpolated yield value builds via a self-contained statement
     # expression (emitExpr :ast cannot emit the chain)
-    yopId: zast.yieldCallOperandAt :ast nid: callId
-    yx: ast.nodes.get i: yopId
+    yopId: zast.yieldCallOperandAt ast: prog.ast nid: callId
+    yx: prog.ast.nodes.get i: yopId
     veF: exprfacts
-    ve: argforms.emitInterpArgExpr :ast :reg :typing :ctx n: yx
-    if ve.length == 0 then ve = emitExprWith :ast :reg :typing :ctx n: yx facts: veF
+    ve: argforms.emitInterpArgExpr :prog :ctx n: yx
+    if ve.length == 0 then ve = emitExprWith :prog :ctx n: yx facts: veF
     # what the value hoisted is declared ahead of it and released once the value
     # is in the box, before the suspension
     ytmp: FnTemps n: 0 listFrees: List OwedFree
     flushArgHoists :ctx :ind tmp: ytmp :buf
-    stI: genSynthField :typing :ctx which: gensynth.state k: 0
-    stC: genFieldC :ast :reg :typing :ctx nameId: stI
+    stI: genSynthField :prog :ctx which: gensynth.state k: 0
+    stC: genFieldC :prog :ctx nameId: stI
     ls: "\{ind}\{stC} = \{k};\n"
     buf.append ls
     lw: "\{ind}\{ctx.genWrap} _ry_\{k} = {0};\n"
@@ -998,11 +947,11 @@ emitYieldStmt: function {
     )
     stmtblocks.flushBlockFrees tmp: ytmp lL: 0 diverged: false :buf
     # what the value moved out of is zeroed before the suspension returns
-    stmtblocks.emitValueTakeInvalidations :ast :reg :typing :ctx n: yx :ind :buf
+    stmtblocks.emitValueTakeInvalidations :prog :ctx n: yx :ind :buf
     # a yield of a bare local moves it into the box: the local is zeroed where
     # a destroy still reaches it -- the instance's destructor, for a local the
     # instance keeps
-    values.emitMovedSourceZero :ast :reg :typing :ctx n: yx :ind :buf
+    values.emitMovedSourceZero :prog :ctx n: yx :ind :buf
     # a loop keeps its counter in the C for-header and its payload in a local
     # inside the loop, and a `with` its value in the header's local; this
     # `return` destroys them all and the resume `goto` re-enters past them.
@@ -1018,11 +967,7 @@ emitYieldStmt: function {
 # genFieldC -- a state field of the generator instance being emitted, as the
 # C lvalue `<receiver>-><field>`.
 genFieldC: function {
-    # the field names
-    ast: Ast.view
-    # the checked program
-    reg: ztypes.ZTypeRegistry.view
-    typing: ztyping.ZTyping.view
+    prog: Program.view
     # the emission context: the receiver and the generator class
     ctx: Ctx
     # the field's name, interned
@@ -1030,7 +975,7 @@ genFieldC: function {
 } out String is {
     r: ctx.genRecvC.copy
     r.append "->"
-    r.append (memberC :ast :reg :typing :ctx owner: ctx.genTid kind: memberkind.field :nameId)
+    r.append (memberC :prog :ctx owner: ctx.genTid kind: memberkind.field :nameId)
     return r
 }
 
@@ -1038,8 +983,7 @@ genFieldC: function {
 # added to the class whose `call` is being emitted (typing.genFields): `which`
 # picks the family, `k` the 1-based suspension or loop number within it.
 genSynthField: function {
-    # the checked program holding typing.genFields
-    typing: ztyping.ZTyping.view
+    prog: Program.view
     # the generator context: its row
     ctx: Ctx.view
     # the field's family
@@ -1047,7 +991,7 @@ genSynthField: function {
     # the suspension or loop number; unread for the cursor and the input
     k: u64
 } out zast.nameid is {
-    row: typing.genFields.get i: ctx.genFieldsRow
+    row: prog.typing.genFields.get i: ctx.genFieldsRow
     match (
         which
     ) case state then {

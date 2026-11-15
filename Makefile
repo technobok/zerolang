@@ -1436,7 +1436,7 @@ perf: $(PERFBIN)
 # deletes write-only allocations; perf-elision measures that), a failed run and
 # allocs != frees. Above ALLOC_BASELINE fails; a commit raising it says why in
 # its message, and one lowering the count lowers it here.
-ALLOC_BASELINE := 2818121
+ALLOC_BASELINE := 2796336
 # ALLOC_LINE -- the one measurement every allocation number comes from.
 ALLOC_LINE = valgrind --tool=memcheck $(PERFRUN) 2>&1 | grep 'total heap usage' | sed 's/.*usage: //'
 
@@ -1542,7 +1542,7 @@ emitter-guard:
 	e8=$$(cat $(EMITTER_SRCS) | grep -cF 'io.readText'); \
 	e10=$$(cat $(EMITTER_SRCS) | grep -vE '^[[:space:]]*#' | grep -cE '\.data\.[a-z]'); \
 	e11=$$(cat $(EMITTER_SRCS) | grep -c 'poolFind'); \
-	e12=$$(cat $(EMITTER_SRCS) | grep -cE 'aliasChildName :ast|aliasOrChild :ast'); \
+	e12=$$(cat $(EMITTER_SRCS) | grep -cE 'aliasChildName :prog|aliasOrChild :prog'); \
 	g2=$$(cat $(EMITTER_SRCS) | grep -cF 'z_t\{'); \
 	fail=0; \
 	chk() { if [ "$$2" -gt "$$3" ]; then echo "emitter-guard FAIL: $$1 = $$2 (baseline $$3)"; fail=1; \

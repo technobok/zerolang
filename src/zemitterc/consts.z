@@ -19,10 +19,10 @@ kindLitSuffix: function {k: ztypes.numkind} out StringView is {
 # unwrapping those changes the C type every field, param and local of them is
 # spelled with, which is its own change.
 ordinalVariantCType: function {
-    typing: ztyping.ZTyping.view
+    prog: Program.view
     tid: ztypes.tid
 } out String is {
-    ao: typing.ordinalVariant.get key: tid
+    ao: prog.typing.ordinalVariant.get key: tid
     match (
         ao
     ) case some then {
@@ -41,11 +41,11 @@ ordinalVariantCType: function {
 # declaration settles); "" for any other type, a program's own type spelled like
 # a scalar included. The caller then emits the type's struct (typeRefC /
 # cnameOf). The one gate every C-type site asks, by id.
-scalarCTypeFor: function {typing: ztyping.ZTyping.view tid: ztypes.tid} out String is {
-    if (narrowfacts.isOrdinalVariant :typing :tid) then {
-        return (ordinalVariantCType :typing :tid)
+scalarCTypeFor: function {prog: Program.view tid: ztypes.tid} out String is {
+    if (narrowfacts.isOrdinalVariant :prog :tid) then {
+        return (ordinalVariantCType :prog :tid)
     }
-    nk: ztypecheck.numKindOfTid :typing :tid
+    nk: ztypecheck.numKindOfTid typing: prog.typing :tid
     if nk.has.not then return "".string
     return (kindCType k: nk.kind).string
 }
@@ -164,24 +164,22 @@ cEscape: function {text: StringView} out String is {
 # ends at a scalar), a variant's tag compare, a record's byte compare; the
 # vocabulary's `none` for any other type
 rowShapeOf: function {
-    ast: Ast.view
-    reg: ztypes.ZTypeRegistry.view
-    typing: ztyping.ZTyping.view
+    prog: Program.view
     ctx: Ctx.view
     owner: ztypes.tid
 } out u64 is {
-    tt: reg.typetypeOf typeId: owner
+    tt: prog.reg.typetypeOf typeId: owner
     # an ORDINAL PAIR is a C scalar, so it compares with `==` rather than
     # through the tagged-struct comparator it has no struct for
-    if (narrowfacts.isOrdinalVariant :typing tid: owner) then return nativeWord.slot.shapeScalar
+    if (narrowfacts.isOrdinalVariant :prog tid: owner) then return nativeWord.slot.shapeScalar
     if tt == ztypes.ztypetype.variantType then return nativeWord.slot.shapeVariant
     if tt == ztypes.ztypetype.recordType then {
-        bn: typedefChaseBaseName :ast :typing tid: owner
+        bn: typedefChaseBaseName :prog tid: owner
         if bn.length > 0 then {
             sc: (
                 scalarCTypeFor
-                :typing
-                tid: (ztypecheck.typedefChaseTid :typing tid: owner)
+                :prog
+                tid: (ztypecheck.typedefChaseTid typing: prog.typing tid: owner)
             )
             if sc.length > 0 then return nativeWord.slot.shapeScalar
         }
@@ -199,14 +197,12 @@ rowShapeOf: function {
 # routes both spellings to one emitter, and is what keeps a user unit's own
 # `print` out of it.
 stmtFormNameId: function {
-    ast: Ast.view
-    reg: ztypes.ZTypeRegistry.view
-    typing: ztyping.ZTyping.view
+    prog: Program.view
     n: astnode.view
 } out zast.nameid is {
     # the child's name as an ID: this runs for every dotted callee in statement
     # position, and four compares against the four forms need no text at all
-    cid: aliasChildNameId :ast :typing :n
+    cid: aliasChildNameId :prog :n
     zid: zast.nameid
     if cid.isZero then return zid
     isSf: (
@@ -218,20 +214,20 @@ stmtFormNameId: function {
     if isSf.not then return zid
     # the unit the checker resolved the base to: a declaration spelled like
     # the unit, or a nested unit, is not it
-    ud0x: baseFileUnitDecl :reg :typing baseId: (memberreads.dottedParentNodeId :n)
+    ud0x: baseFileUnitDecl :prog baseId: (memberreads.dottedParentNodeId :n)
     if ud0x.isZero then return zid
     fo: (
         ztypecheck.resolvedByIdsRo
-        :ast
-        :typing
+        ast: prog.ast
+        typing: prog.typing
         unitDecl: ud0x
-        name: (aliasChildNameId :ast :typing :n)
+        name: (aliasChildNameId :prog :n)
     )
     if fo.some then {
         calleeTid: fo
-        tt: reg.typetypeOf typeId: calleeTid
+        tt: prog.reg.typetypeOf typeId: calleeTid
         if tt != ztypes.ztypetype.functionType then return zid
-        if (reg.isNativeOf tid: calleeTid).not then return zid
+        if (prog.reg.isNativeOf tid: calleeTid).not then return zid
         return cid
     }
     return zid
@@ -256,9 +252,7 @@ literalC: function {lex: StringView} out String is {
 # FUNCTION type's symbol (the parameter IS that function); an arm default is a
 # tag-only struct literal of the target.
 renderDefault: function {
-    ast: Ast.view
-    reg: ztypes.ZTypeRegistry.view
-    typing: ztyping.ZTyping.view
+    prog: Program.view
     ctx: Ctx
     dv: ztyping.defaultval
     targetTid: ztypes.tid
@@ -267,11 +261,11 @@ renderDefault: function {
     dl: dv
     if dl.literal then {
         if dl.isZero then return "".string
-        lt: ztypecheck.rootNameOf :ast n: (ast.nodes.get i: dl)
+        lt: ztypecheck.rootNameOf ast: prog.ast n: (prog.ast.nodes.get i: dl)
         # a float literal is the target type's value nearest it, as a body
         # literal is
         if (ztypes.isFloatLexeme numstr: lt.stringView) then {
-            fk: constScalarKindForTid :typing tid: targetTid
+            fk: constScalarKindForTid :prog tid: targetTid
             k: ztypes.numkind.f64Type
             if fk.has when (ztypes.isFloatKind k: fk.kind) then k = fk.kind
             return (
@@ -285,7 +279,7 @@ renderDefault: function {
             wideLiteralOf
             :ctx
             lex: lt.stringView
-            k: (constScalarKindForTid :typing tid: targetTid)
+            k: (constScalarKindForTid :prog tid: targetTid)
         )
         if wlD.length > 0 then return (stating :facts from: constFacts text: wlD)
         return (stating :facts from: constFacts text: (literalDefaultC lex: lt.stringView :ctx))
@@ -296,14 +290,14 @@ renderDefault: function {
             # a named or computed scalar: the member's own folded value
             kName: zast.nameid
             kOwner: ztypes.declid
-            ko: typing.decls.get i: dk
+            ko: prog.typing.decls.get i: dk
             kName = ko.name
             kOwner = ko.parent
-            kUnit: typing.declTypeOf declId: kOwner
+            kUnit: prog.typing.declTypeOf declId: kOwner
             # a string default is the `_zcsN` view of its static bytes
-            ks: memberConstStringText :typing :ctx unitTid: kUnit nameId: kName :facts
+            ks: memberConstStringText :prog :ctx unitTid: kUnit nameId: kName :facts
             if ks.length > 0 then return ks
-            return (memberConstText :ast :reg :typing :ctx unitTid: kUnit nameId: kName :facts)
+            return (memberConstText :prog :ctx unitTid: kUnit nameId: kName :facts)
         }
     }
     {
@@ -323,15 +317,15 @@ renderDefault: function {
         da: dv
         if da.arm then {
             armId: zast.nameid
-            ao: typing.decls.get i: da
+            ao: prog.typing.decls.get i: da
             armId = ao.name
             cv: targetTid
             vtarget: targetTid
             if cv.notZero then vtarget = cv
-            avd: values.armValueC :ast :ctx :reg :typing tid: vtarget arm: armId
+            avd: values.armValueC :prog :ctx tid: vtarget arm: armId
             if avd.length > 0 then return (stating :facts from: constFacts text: avd)
-            tg: spelledTagConst :ast :ctx :reg :typing tid: vtarget :armId
-            tc: typeRefC :ast :reg :typing :ctx tid: vtarget
+            tg: spelledTagConst :prog :ctx tid: vtarget :armId
+            tc: typeRefC :prog :ctx tid: vtarget
             return (stating :facts from: values.literalFacts text: "(\{tc}){ .tag = \{tg} }")
         }
     }
@@ -342,23 +336,21 @@ renderDefault: function {
 # defaulted is a no-arg auto-call: `describe` -> `z_..._describe(<defaults>)`.
 # "" when the function has no params or any param lacks a default.
 emitAllDefaultedCall: function {
-    ast: Ast.view
-    reg: ztypes.ZTypeRegistry.view
-    typing: ztyping.ZTyping.view
+    prog: Program.view
     ctx: Ctx
     fnTid: ztypes.tid
     fcn: StringView
 } out String is {
     pidl: ListVal ztypes.tid
     pidlNm: ListVal zast.nameid
-    types.recFieldIds :reg :typing tid: fnTid ids: pidl nameIds: pidlNm
+    types.recFieldIds :prog tid: fnTid ids: pidl nameIds: pidlNm
     m: pidl.length
     if m == 0 then return "".string
     j: u64
     allDef: true
     for j < m loop {
         pnjId: pidlNm.get i: j
-        hd: typing.declHasDefaultId parentTypeId: fnTid nameId: pnjId
+        hd: prog.typing.declHasDefaultId parentTypeId: fnTid nameId: pnjId
         if hd.not then allDef = false
         j = j + 1
     }
@@ -368,9 +360,9 @@ emitAllDefaultedCall: function {
     for k < m loop {
         pik: pidl.get i: k
         pnkId: pidlNm.get i: k
-        dt: typing.declDefaultOfId parentTypeId: fnTid nameId: pnkId
+        dt: prog.typing.declDefaultOfId parentTypeId: fnTid nameId: pnkId
         facts: exprfacts
-        rv: renderDefault :ast :reg :typing :ctx dv: dt targetTid: pik :facts
+        rv: renderDefault :prog :ctx dv: dt targetTid: pik :facts
         if k > 0 then args.append ", "
         args.append rv
         k = k + 1
@@ -391,13 +383,11 @@ emitExprStrZero: function {ctx: Ctx facts: exprfacts.borrow} out String is {
 # (`nameid` -> u64), keyed by tid so the answer does not depend on which unit the
 # read happens in. `has` false when the type is no scalar at all -- a program's
 # own type spelled like one included.
-constScalarKindForTid: function {
-    typing: ztyping.ZTyping.view tid: ztypes.tid
-} out ztypes.suffixinfo is {
+constScalarKindForTid: function {prog: Program.view tid: ztypes.tid} out ztypes.suffixinfo is {
     return (
         ztypecheck.numKindOfTid
-        :typing
-        tid: (ztypecheck.typedefChaseTid :typing :tid)
+        typing: prog.typing
+        tid: (ztypecheck.typedefChaseTid typing: prog.typing :tid)
     )
 }
 
@@ -422,10 +412,8 @@ narrowConstToKind: function {v: i64 k: ztypes.numkind} out i64 is {
 # f16 (whose every value a double spells), nothing for an f64 -- so every C
 # compiler reads the same value. "" for an infinity,
 # which the checker refuses before it gets here.
-floatValueC: function {
-    typing: ztyping.ZTyping.view v: ztypes.cval k: ztypes.numkind
-} out String is {
-    return (floatBitsC bits: (ztypecheck.constFloatBits :typing :v :k) :k)
+floatValueC: function {prog: Program.view v: ztypes.cval k: ztypes.numkind} out String is {
+    return (floatBitsC bits: (ztypecheck.constFloatBits typing: prog.typing :v :k) :k)
 }
 
 # floatBitsC -- floatValueC for the bits themselves
@@ -473,9 +461,7 @@ floatBitsC: function {bits: math.BigInt.view k: ztypes.numkind} out String is {
 # "" for a kind this emitter cannot render yet, which leaves the caller on its
 # ordinary path rather than emitting something wrong.
 cvalText: function {
-    ast: Ast.view
-    reg: ztypes.ZTypeRegistry.view
-    typing: ztyping.ZTyping.view
+    prog: Program.view
     ctx: Ctx
     tid: ztypes.tid
     v: ztypes.cval
@@ -485,13 +471,13 @@ cvalText: function {
         stating
         :facts
         from: constFacts
-        text: (intCvalText :typing :ctx :tid :v)
+        text: (intCvalText :prog :ctx :tid :v)
     )
     if v.kind.fvalKind then {
-        return (stating :facts from: constFacts text: (floatCvalText :typing :tid :v))
+        return (stating :facts from: constFacts text: (floatCvalText :prog :tid :v))
     }
-    if v.kind.armKind then return (values.armCvalText :ast :reg :typing :ctx :v :facts)
-    if v.kind.aggKind then return (aggCvalText :typing :ctx :v :facts)
+    if v.kind.armKind then return (values.armCvalText :prog :ctx :v :facts)
+    if v.kind.aggKind then return (aggCvalText :prog :ctx :v :facts)
     return "".string
 }
 
@@ -499,17 +485,17 @@ cvalText: function {
 # static object (writeDemandedAggs), a choice value that object itself, a list
 # the view of its array.
 aggCvalText: function {
-    typing: ztyping.ZTyping.view ctx: Ctx v: ztypes.cval facts: exprfacts.borrow
+    prog: Program.view ctx: Ctx v: ztypes.cval facts: exprfacts.borrow
 } out String is {
-    if (typing.constAggs.get i: v.aggId.u64).kind.staticList then return (
+    if (prog.typing.constAggs.get i: v.aggId.u64).kind.staticList then return (
         stating
         :facts
         from: values.literalFacts
-        text: (listValueC :typing :ctx row: v.aggId)
+        text: (listValueC :prog :ctx row: v.aggId)
     )
     noteAggUse :ctx row: v.aggId
     # a choice value is held by value: its static object, read whole
-    if (typing.constAggs.get i: v.aggId.u64).kind.staticChoice then return (
+    if (prog.typing.constAggs.get i: v.aggId.u64).kind.staticChoice then return (
         stating
         :facts
         from: constFacts
@@ -521,23 +507,23 @@ aggCvalText: function {
 # intCvalText -- cvalText for a folded integer: inline in the type it is
 # narrowed to, or a value outside i64 spelled whole.
 intCvalText: function {
-    typing: ztyping.ZTyping.view
+    prog: Program.view
     ctx: Ctx
     tid: ztypes.tid
     v: ztypes.cval
 } out String is {
-    nk: constScalarKindForTid :typing :tid
+    nk: constScalarKindForTid :prog :tid
     if nk.has when (ztypes.intKindBits k: nk.kind) == 128 then {
         sg: ztypes.isSignedIntKind k: nk.kind
         if v.bigId != 0 then return (
             int128WordsC
             :ctx
-            b: (ztypecheck.constBigOf :typing :v)
+            b: (ztypecheck.constBigOf typing: prog.typing :v)
             signed: sg
         )
         return (int128WordsC :ctx b: (math.BigInt from: v.ival) signed: sg)
     }
-    if v.bigId != 0 then return (bigConstC :typing :ctx :v)
+    if v.bigId != 0 then return (bigConstC :prog :ctx :v)
     iv: v.ival
     if nk.has then iv = narrowConstToKind v: v.ival k: nk.kind
     # C HAS NO NEGATIVE LITERALS. A leading `-` is an operator applied to a
@@ -560,8 +546,8 @@ intCvalText: function {
 
 # bigConstC -- an integer constant outside i64 as C, spelled by its value: the
 # checker settled it in a type that holds it, and C converts it there.
-bigConstC: function {typing: ztyping.ZTyping.view ctx: Ctx v: ztypes.cval} out String is {
-    b: ztypecheck.constBigOf :typing :v
+bigConstC: function {prog: Program.view ctx: Ctx v: ztypes.cval} out String is {
+    b: ztypecheck.constBigOf typing: prog.typing :v
     return (bigValueC :ctx :b)
 }
 
@@ -579,14 +565,14 @@ bigValueC: function {ctx: Ctx b: math.BigInt.view} out String is {
 # floatCvalText -- cvalText for a folded float: the value the float type it is
 # written as holds nearest it, an f64 where the type is no float one.
 floatCvalText: function {
-    typing: ztyping.ZTyping.view
+    prog: Program.view
     tid: ztypes.tid
     v: ztypes.cval
 } out String is {
-    fk: constScalarKindForTid :typing :tid
+    fk: constScalarKindForTid :prog :tid
     k: ztypes.numkind.f64Type
     if fk.has when (ztypes.isFloatKind k: fk.kind) then k = fk.kind
-    return (floatValueC :typing :v :k)
+    return (floatValueC :prog :v :k)
 }
 
 # cvalStrText -- the C text for a folded STRING value: a `_zcsN` static minted
@@ -596,11 +582,11 @@ floatCvalText: function {
 # Deduplicated by TEXT, not by origin: two constants that fold to the same bytes
 # are one static, and a folded value has no node identity to key on anyway.
 cvalStrText: function {
-    typing: ztyping.ZTyping.view ctx: Ctx v: ztypes.cval facts: exprfacts.borrow
+    prog: Program.view ctx: Ctx v: ztypes.cval facts: exprfacts.borrow
 } out String is {
     if v.kind.svalKind.not then return "".string
     if v.strId == 0 then return "".string
-    t: typing.constStrings.get i: v.strId
+    t: prog.typing.constStrings.get i: v.strId
     i: u64
     n: ctx.constLits.length
     hit: u64
@@ -630,39 +616,37 @@ cvalStrText: function {
 # -- is an owned buffer its binding frees. The ordinary path builds that buffer,
 # and its operands still render as their statics.
 nodeConstText: function {
-    ast: Ast.view
-    reg: ztypes.ZTypeRegistry.view
-    typing: ztyping.ZTyping.view
+    prog: Program.view
     ctx: Ctx
     nid: zast.nodeid
     facts: exprfacts.borrow
 } out String is {
     if nid.isZero then return "".string
-    g: typing.nodeConstAt :nid
+    g: prog.typing.nodeConstAt :nid
     if g.kind.none then return "".string
-    tv: stampIdOf :typing :nid
+    tv: stampIdOf :prog :nid
     # an untyped constant landing in an i128, u128 or f16 is spelled as that
     # type
-    wt: typing.helperScalarTarget.get key: nid
+    wt: prog.typing.helperScalarTarget.get key: nid
     if wt.some then {
         tv = wt
     }
-    if g.kind.svalKind when (memberreads.chaseStrTypedef :typing :ctx tid: tv) == ctx.strTid then {
+    if g.kind.svalKind when (memberreads.chaseStrTypedef :prog :ctx tid: tv) == ctx.strTid then {
         return "".string
     }
-    sc: cvalText :ast :reg :typing :ctx tid: tv v: g :facts
+    sc: cvalText :prog :ctx tid: tv v: g :facts
     if sc.length > 0 then return sc
     # a folded string is its pooled static, `_zcsN`
-    return (cvalStrText :typing :ctx v: g :facts)
+    return (cvalStrText :prog :ctx v: g :facts)
 }
 
 # memberConstTid -- the declared type of a unit constant, 0 when it has none.
 memberConstTid: function {
-    typing: ztyping.ZTyping.view
+    prog: Program.view
     unitTid: ztypes.tid
     nameId: zast.nameid
 } out ztypes.tid is {
-    co: typing.declChildOfId parentTypeId: unitTid :nameId
+    co: prog.typing.declChildOfId parentTypeId: unitTid :nameId
     match (
         co
     ) case some then {
@@ -677,9 +661,7 @@ memberConstTid: function {
 # member has no compile-time value, which is what leaves the caller on its
 # ordinary path. SCALARS ONLY: a folded string is memberConstStringText's.
 memberConstText: function {
-    ast: Ast.view
-    reg: ztypes.ZTypeRegistry.view
-    typing: ztyping.ZTyping.view
+    prog: Program.view
     ctx: Ctx
     unitTid: ztypes.tid
     nameId: zast.nameid
@@ -687,16 +669,16 @@ memberConstText: function {
 } out String is {
     if unitTid.isZero then return "".string
     if nameId.isZero then return "".string
-    mv: typing.memberConstOf parentTypeId: unitTid :nameId
+    mv: prog.typing.memberConstOf parentTypeId: unitTid :nameId
     if mv.kind.none then return "".string
-    mt: memberConstTid :typing :unitTid :nameId
-    return (cvalText :ast :reg :typing :ctx tid: mt v: mv :facts)
+    mt: memberConstTid :prog :unitTid :nameId
+    return (cvalText :prog :ctx tid: mt v: mv :facts)
 }
 
 # memberConstStringText -- the `_zcsN` a STRING constant renders as: the string
 # half of memberConstText, split off because minting needs a mutable Ctx.
 memberConstStringText: function {
-    typing: ztyping.ZTyping.view
+    prog: Program.view
     ctx: Ctx
     unitTid: ztypes.tid
     nameId: zast.nameid
@@ -704,14 +686,14 @@ memberConstStringText: function {
 } out String is {
     if unitTid.isZero then return "".string
     if nameId.isZero then return "".string
-    mv: typing.memberConstOf parentTypeId: unitTid :nameId
-    return (cvalStrText :typing :ctx v: mv :facts)
+    mv: prog.typing.memberConstOf parentTypeId: unitTid :nameId
+    return (cvalStrText :prog :ctx v: mv :facts)
 }
 
 # mainUnitTid -- the type id of the unit being emitted: its declaration's type,
 # never a name looked up at the program root.
-mainUnitTid: function {typing: ztyping.ZTyping.view ctx: Ctx.view} out ztypes.tid is {
-    return (typing.declTypeOf declId: ctx.mainUnitId)
+mainUnitTid: function {prog: Program.view ctx: Ctx.view} out ztypes.tid is {
+    return (prog.typing.declTypeOf declId: ctx.mainUnitId)
 }
 
 # emitStaticListMember -- a list's member read through `n`, whose base is the
@@ -720,9 +702,7 @@ mainUnitTid: function {typing: ztyping.ZTyping.view ctx: Ctx.view} out ztypes.ti
 # folded is its node constant already; this spells the ones it does not fold,
 # an element of a typedef type. "" for any other member.
 emitStaticListMember: function {
-    ast: Ast.view
-    reg: ztypes.ZTypeRegistry.view
-    typing: ztyping.ZTyping.view
+    prog: Program.view
     ctx: Ctx
     n: zast.dottedpathrow.view
     row: u64
@@ -730,10 +710,10 @@ emitStaticListMember: function {
     facts: exprfacts.borrow
 } out String is {
     if mnId == zast.wellKnown.slot.tyArray then {
-        listTid: stampIdOf :typing nid: n.nodeid
-        daid: chaseAggregateTypedef :reg :typing :ctx tid: listTid
-        daCt: typeRefC :ast :reg :typing :ctx tid: daid
-        daLen: nativerows.monoLengthText :reg monoId: daid
+        listTid: stampIdOf :prog nid: n.nodeid
+        daid: chaseAggregateTypedef :prog :ctx tid: listTid
+        daCt: typeRefC :prog :ctx tid: daid
+        daLen: nativerows.monoLengthText :prog monoId: daid
         daN: ctx.argHoistCtr
         ctx.argHoistCtr = ctx.argHoistCtr + 1
         daNm: "_da\{daN}"
@@ -742,17 +722,17 @@ emitStaticListMember: function {
         values.recordRawHoist :ctx text: daRaw
         return (stating :facts from: pathFacts text: daNm)
     }
-    g: typing.constAggs.get i: row
+    g: prog.typing.constAggs.get i: row
     # `primes.first` and `codes.4` reach a LABELLED element by its name, an
     # integer label included; `primes.0` an unlabelled one by its ordinal
-    pos: typing.aggLabelPos id: row.u32.orPanic label: mnId
+    pos: prog.typing.aggLabelPos id: row.u32.orPanic label: mnId
     match (
         pos
     ) case some then return (
         stating
         :facts
         from: constFacts
-        text: (listItemText :ast :reg :typing :ctx :row slot: pos)
+        text: (listItemText :prog :ctx :row slot: pos)
     ) case none then null
     if mnId == zast.wellKnown.slot.wkLength then return (
         stating
@@ -760,7 +740,7 @@ emitStaticListMember: function {
         from: constFacts
         text: "\{g.itemCount}"
     )
-    dcIdx: (zast.nameTextAt :ast ref: mnId).stringView.parseU64
+    dcIdx: (zast.nameTextAt ast: prog.ast ref: mnId).stringView.parseU64
     match (
         dcIdx
     ) case ok then {
@@ -768,7 +748,7 @@ emitStaticListMember: function {
             stating
             :facts
             from: constFacts
-            text: (listItemText :ast :reg :typing :ctx :row slot: dcIdx)
+            text: (listItemText :prog :ctx :row slot: dcIdx)
         )
     } else null
     return "".string
@@ -778,35 +758,31 @@ emitStaticListMember: function {
 # the list row: the label's position as a constant of the list's `slot` type.
 # "" when the base is no list's `slot`.
 emitListSlotRead: function {
-    ast: Ast.view
-    reg: ztypes.ZTypeRegistry.view
-    typing: ztyping.ZTyping.view
+    prog: Program.view
     ctx: Ctx
     n: zast.dottedpathrow.view
     mnId: zast.nameid
     facts: exprfacts.borrow
 } out String is {
-    st0: typing.listSlotTid
+    st0: prog.typing.listSlotTid
     if st0.isZero then return "".string
-    pid: interpPartNodeId n: (ast.nodes.get i: n.parent)
-    if (stampIdOf :typing nid: pid) != st0 then return "".string
+    pid: interpPartNodeId n: (prog.ast.nodes.get i: n.parent)
+    if (stampIdOf :prog nid: pid) != st0 then return "".string
     lp: zast.nodeid
     {
-        pn: ast.nodes.get i: pid
+        pn: prog.ast.nodes.get i: pid
         if pn.dottedpath then lp = pn.parent
     }
-    row: memberreads.listRowOf :typing nid: (interpPartNodeId n: (ast.nodes.get i: lp))
+    row: memberreads.listRowOf :prog nid: (interpPartNodeId n: (prog.ast.nodes.get i: lp))
     if row == 0 then return "".string
-    pos: typing.aggLabelPos id: row.u32.orPanic label: mnId
+    pos: prog.typing.aggLabelPos id: row.u32.orPanic label: mnId
     if pos.some then {
         cf: exprfacts
         t: (
             cvalText
-            :ast
-            :reg
-            :typing
+            :prog
             :ctx
-            tid: (typing.constAggs.get i: row).slot
+            tid: (prog.typing.constAggs.get i: row).slot
             v: ztypes.makeIntConst pos.i64.orPanic
             facts: cf
         )
@@ -823,9 +799,7 @@ emitListSlotRead: function {
 # with required parameters reaching it means a local binding shadows the name,
 # and the empty answer is what sends the caller to emit that local instead.
 fnRefOrCallC: function {
-    ast: Ast.view
-    reg: ztypes.ZTypeRegistry.view
-    typing: ztyping.ZTyping.view
+    prog: Program.view
     ctx: Ctx
     nid: zast.nodeid
     fnTid: ztypes.tid
@@ -833,21 +807,23 @@ fnRefOrCallC: function {
     requireNoParams: bool
     facts: exprfacts.borrow
 } out String is {
-    fst: stampIdOf :typing :nid
-    if fst.notZero when (reg.typetypeOf typeId: fst) == ztypes.ztypetype.functionType then return (
+    fst: stampIdOf :prog :nid
+    if fst.notZero when (
+        (prog.reg.typetypeOf typeId: fst) == ztypes.ztypetype.functionType
+    ) then return (
         stating
         :facts
         from: pathFacts
         text: cname.string
     )
-    fad: emitAllDefaultedCall :ast :reg :typing :ctx :fnTid fcn: cname
+    fad: emitAllDefaultedCall :prog :ctx :fnTid fcn: cname
     if fad.length > 0 then return (stating :facts from: callFacts text: fad)
-    nat: types.nativeNoArgCallC :ast :reg :typing :ctx :fnTid
+    nat: types.nativeNoArgCallC :prog :ctx :fnTid
     if nat.length > 0 then return (stating :facts from: callFacts text: nat)
     if requireNoParams then {
         fpi: ListVal ztypes.tid
         fpiNm: ListVal zast.nameid
-        types.recFieldIds :reg :typing tid: fnTid ids: fpi nameIds: fpiNm
+        types.recFieldIds :prog tid: fnTid ids: fpi nameIds: fpiNm
         if fpi.length > 0 then return "".string
     }
     return (stating :facts from: callFacts text: "\{cname}()")
@@ -859,33 +835,31 @@ fnRefOrCallC: function {
 # create with its field defaults filled. The tid is the STAMP's value, which is
 # what the checker decided to construct.
 implicitZeroValue: function {
-    ast: Ast.view
-    reg: ztypes.ZTypeRegistry.view
-    typing: ztyping.ZTyping.view
+    prog: Program.view
     ctx: Ctx
     tid: ztypes.tid
     facts: exprfacts.borrow
 } out String is {
-    zc: scalarCTypeFor :typing :tid
-    if zc.length > 0 then return (scalarZeroC :typing cType: zc.stringView :tid :facts)
+    zc: scalarCTypeFor :prog :tid
+    if zc.length > 0 then return (scalarZeroC :prog cType: zc.stringView :tid :facts)
     if tid == ctx.strTid then return (emitExprStrZero :ctx :facts)
     # a typedef is its base's zero: a scalar base's cast zero (meters -> i64),
     # and otherwise whatever the base builds -- the String struct for Path, a
     # record's create with its defaults
-    zb: ztypecheck.typedefChaseTid :typing :tid
+    zb: ztypecheck.typedefChaseTid typing: prog.typing :tid
     if zb != tid then {
-        zt: scalarCTypeFor :typing tid: zb
-        if zt.length > 0 then return (scalarZeroC :typing cType: zt.stringView :tid :facts)
-        return (implicitZeroValue :ast :reg :typing :ctx tid: zb :facts)
+        zt: scalarCTypeFor :prog tid: zb
+        if zt.length > 0 then return (scalarZeroC :prog cType: zt.stringView :tid :facts)
+        return (implicitZeroValue :prog :ctx tid: zb :facts)
     }
     # The collection is asked BEFORE the scalar chase, and the order is not a
     # preference: a typedef over a collection names its base `ListVal`, which
     # is a template rather than a C scalar or a user function, and the chase
     # panics on it. Asked in this order the chase never sees one.
-    zm: chaseAggregateTypedef :reg :typing :ctx :tid
+    zm: chaseAggregateTypedef :prog :ctx :tid
     # a sized str or array is built by its parameterless runtime create
     {
-        zso: originTidOf :reg tid: zm
+        zso: originTidOf :prog tid: zm
         strO: ctx.origins.get i: family.slot.str
         arrO: ctx.origins.get i: family.slot.fixedArray
         isSized: (zso == strO) or (zso == arrO)
@@ -895,15 +869,15 @@ implicitZeroValue: function {
             return (stating :facts from: callFacts text: "\{zsc}_create()")
         }
     }
-    if (types.isCollectionOriginTid :ctx originTid: (originTidOf :reg tid: zm)) then {
+    if (types.isCollectionOriginTid :ctx originTid: (originTidOf :prog tid: zm)) then {
         zmc: spelledCname :ctx tid: zm
         zmt: zm
         # every family whose `create` takes a capacity is built with none
         takesCap: (
-            (types.isListOriginOf :reg :ctx tid: zmt) or
-            (types.isSetOriginOf :reg :ctx tid: zmt) or
-            (types.isMapOriginOf :reg :ctx tid: zmt) or
-            (memberreads.isIdCollectionOriginOf :reg :ctx tid: zmt)
+            (types.isListOriginOf :prog :ctx tid: zmt) or
+            (types.isSetOriginOf :prog :ctx tid: zmt) or
+            (types.isMapOriginOf :prog :ctx tid: zmt) or
+            (memberreads.isIdCollectionOriginOf :prog :ctx tid: zmt)
         )
         if takesCap then {
             noteMemberUse :ctx mono: zm member: memberWord.slot.create
@@ -912,7 +886,7 @@ implicitZeroValue: function {
         noteMemberUse :ctx mono: zm member: memberWord.slot.create
         return (stating :facts from: callFacts text: "\{zmc}_create()")
     }
-    return (callorder.emitCtorDefaultsFill :ast :reg :typing :ctx :tid :facts)
+    return (callorder.emitCtorDefaultsFill :prog :ctx :tid :facts)
 }
 
 # scalarZeroC -- the zero of a scalar whose C type is `cType`. A 128-bit
@@ -920,12 +894,12 @@ implicitZeroValue: function {
 # own type and for the struct that stands in for it alike; every other scalar's
 # is a cast 0.
 scalarZeroC: function {
-    typing: ztyping.ZTyping.view
+    prog: Program.view
     cType: StringView
     tid: ztypes.tid
     facts: exprfacts.borrow
 } out String is {
-    if (partIsHelperScalar :typing :tid) then {
+    if (partIsHelperScalar :prog :tid) then {
         return (stating :facts from: values.literalFacts text: "((\{cType}){0})")
     }
     return (stating :facts from: constFacts text: "((\{cType})0)")
@@ -934,8 +908,8 @@ scalarZeroC: function {
 # partIsHelperScalar -- the type is i128, u128 or f16, or a scalar typedef over
 # one: a value no C operator may touch, since where the C compiler lacks the
 # type it is a struct (z_head.inc).
-partIsHelperScalar: function {typing: ztyping.ZTyping.view tid: ztypes.tid} out bool is {
-    nk: constScalarKindForTid :typing :tid
+partIsHelperScalar: function {prog: Program.view tid: ztypes.tid} out bool is {
+    nk: constScalarKindForTid :prog :tid
     if nk.has.not then return false
     return ((ztypes.intKindBits k: nk.kind) == 128) or (nk.kind == ztypes.numkind.f16Type)
 }
@@ -945,28 +919,24 @@ partIsHelperScalar: function {typing: ztyping.ZTyping.view tid: ztypes.tid} out 
 # class construction, or a function reference. Empty when the atom names none of
 # them.
 emitDefRefAtom: function {
-    ast: Ast.view
-    reg: ztypes.ZTypeRegistry.view
-    typing: ztyping.ZTyping.view
+    prog: Program.view
     ctx: Ctx
     n: zast.atomidrow.view
     brid: ztypes.tid
     bdec: ztypes.declid
     facts: exprfacts.borrow
 } out String is {
-    taa: values.tagAliasArmC :ast :reg :typing :ctx :brid :bdec :facts
+    taa: values.tagAliasArmC :prog :ctx :brid :bdec :facts
     if taa.length > 0 then return taa
-    if brid.notZero when (reg.typetypeOf typeId: brid) == ztypes.ztypetype.recordType then {
-        izr: typing.implicitCreate.get key: n.nodeid
+    if brid.notZero when (prog.reg.typetypeOf typeId: brid) == ztypes.ztypetype.recordType then {
+        izr: prog.typing.implicitCreate.get key: n.nodeid
         if izr.some then {
-            return (implicitZeroValue :ast :reg :typing :ctx tid: izr :facts)
+            return (implicitZeroValue :prog :ctx tid: izr :facts)
         }
         # unstamped: a scalar is its zero, any other record its zero struct
-        if (scalarCTypeFor :typing tid: brid).length > 0 then return (
+        if (scalarCTypeFor :prog tid: brid).length > 0 then return (
             implicitZeroValue
-            :ast
-            :reg
-            :typing
+            :prog
             :ctx
             tid: brid
             :facts
@@ -974,21 +944,19 @@ emitDefRefAtom: function {
         brc: spelledCname :ctx tid: brid
         return (stating :facts from: values.literalFacts text: "((\{brc}_t){0})")
     }
-    if brid.notZero when (reg.typetypeOf typeId: brid) == ztypes.ztypetype.classType then {
+    if brid.notZero when (prog.reg.typetypeOf typeId: brid) == ztypes.ztypetype.classType then {
         # no name is written for a class atom that the scalar leg could use:
         # a class typedef over a scalar reaches its zero through the chase
-        izc: typing.implicitCreate.get key: n.nodeid
+        izc: prog.typing.implicitCreate.get key: n.nodeid
         if izc.some then {
-            return (implicitZeroValue :ast :reg :typing :ctx tid: izc :facts)
+            return (implicitZeroValue :prog :ctx tid: izc :facts)
         }
     }
-    if brid.notZero when (reg.typetypeOf typeId: brid) == ztypes.ztypetype.functionType then {
+    if brid.notZero when (prog.reg.typetypeOf typeId: brid) == ztypes.ztypetype.functionType then {
         fbcn: spelledCname :ctx tid: brid
         return (
             fnRefOrCallC
-            :ast
-            :reg
-            :typing
+            :prog
             :ctx
             nid: n.nodeid
             fnTid: brid
@@ -1004,20 +972,20 @@ emitDefRefAtom: function {
 # value: the view of its static array (listValueC). "" when the node folded to
 # no list.
 staticListValueText: function {
-    typing: ztyping.ZTyping.view
+    prog: Program.view
     ctx: Ctx
     nid: zast.nodeid
 } out String is {
-    row: memberreads.listRowOf :typing :nid
+    row: memberreads.listRowOf :prog :nid
     if row == 0 then return "".string
-    return (listValueC :typing :ctx :row)
+    return (listValueC :prog :ctx :row)
 }
 
 # listValueC -- list row `row` as a value: the view of its static array,
 # `((z_M_t){ .length = N, .data = _zagN })` -- NULL for an empty list, which
 # has none.
-listValueC: function {typing: ztyping.ZTyping.view ctx: Ctx row: u64} out String is {
-    g: typing.constAggs.get i: row
+listValueC: function {prog: Program.view ctx: Ctx row: u64} out String is {
+    g: prog.typing.constAggs.get i: row
     vc: emitplan.ctxCname :ctx tid: g.tid
     if g.itemCount == 0 then return "((\{vc}_t){ .length = 0, .data = NULL })"
     noteAggUse :ctx :row
@@ -1030,30 +998,32 @@ listValueC: function {typing: ztyping.ZTyping.view ctx: Ctx row: u64} out String
 # mono method is written in the TEMPLATE, whose Decl the mono's id points at, so
 # its chain starts there. "" when no enclosing namespace declares it.
 namespaceConstText: function {
-    ast: Ast.view
-    reg: ztypes.ZTypeRegistry.view
-    typing: ztyping.ZTyping.view
+    prog: Program.view
     ctx: Ctx
     nameId: zast.nameid
     facts: exprfacts.borrow
 } out String is {
     nsAt: ctx.nsTid
     if nsAt.isZero when ctx.curThisTid.notZero when (
-        (reg.typetypeOf typeId: ctx.curThisTid) == ztypes.ztypetype.unitType
+        (prog.reg.typetypeOf typeId: ctx.curThisTid) == ztypes.ztypetype.unitType
     ) then nsAt = ctx.curThisTid
     if nsAt.isZero then return "".string
-    nsCur: ztypecheck.templateDeclOf :reg :typing tid: nsAt
+    nsCur: ztypecheck.templateDeclOf reg: prog.reg typing: prog.typing tid: nsAt
     for nsCur.notZero loop {
-        nsFt: typing.declTypeOf declId: nsCur
+        nsFt: prog.typing.declTypeOf declId: nsCur
         if nsFt.notZero then {
-            nsca: memberConstText :ast :reg :typing :ctx unitTid: nsFt :nameId :facts
+            nsca: memberConstText :prog :ctx unitTid: nsFt :nameId :facts
             if nsca.length > 0 then return nsca
-            nscs: memberConstStringText :typing :ctx unitTid: nsFt :nameId :facts
+            nscs: memberConstStringText :prog :ctx unitTid: nsFt :nameId :facts
             if nscs.length > 0 then return nscs
         }
-        nsNx: typing.declParentOf declId: nsCur
+        nsNx: prog.typing.declParentOf declId: nsCur
         nsCur = ztypes.declid
-        if nsNx.notZero when (ztypecheck.declDeclaresUnit :typing :ast declId: nsNx
+        if nsNx.notZero when (
+            ztypecheck.declDeclaresUnit
+            typing: prog.typing
+            ast: prog.ast
+            declId: nsNx
         ) then nsCur = nsNx
     }
     return "".string
@@ -1064,34 +1034,32 @@ namespaceConstText: function {
 # then a name written inside a namespace, then a stamped unit-def reference, and
 # only then the name probe an unstamped template re-emission needs.
 emitAtom: function {
-    ast: Ast.view
-    reg: ztypes.ZTypeRegistry.view
-    typing: ztyping.ZTyping.view
+    prog: Program.view
     ctx: Ctx
     n: zast.atomidrow.view
     # its facts, where a leg knows them; a leg that does not leaves the slot
     # unfilled for its caller to read off the text
     facts: exprfacts.borrow
 } out String is {
-    avC: ast.names.texts.get i: n.name
+    avC: prog.ast.names.texts.get i: n.name
     av: avC.stringView
     # a unit constant a match arm narrowed reads the payload it holds there
-    if (typing.narrowedConstReads.has key: n.nodeid) then {
-        nw: nodeConstText :ast :reg :typing :ctx nid: n.nodeid :facts
+    if (prog.typing.narrowedConstReads.has key: n.nodeid) then {
+        nw: nodeConstText :prog :ctx nid: n.nodeid :facts
         if nw.length > 0 then return nw
     }
-    dv: staticListValueText :typing :ctx nid: n.nodeid
+    dv: staticListValueText :prog :ctx nid: n.nodeid
     if dv.length > 0 then return (stating :facts from: values.literalFacts text: dv)
     # a literal landing in an i128, u128 or f16 is that type's value
-    if (typing.helperScalarTarget.has key: n.nodeid) then {
-        wa: nodeConstText :ast :reg :typing :ctx nid: n.nodeid :facts
+    if (prog.typing.helperScalarTarget.has key: n.nodeid) then {
+        wa: nodeConstText :prog :ctx nid: n.nodeid :facts
         if wa.length > 0 then return wa
     }
     # an integer literal outside i64 is spelled by its value, which the checker
     # settled in the type it landed in: C has no token for one past u64, and
     # none in binary or octal at all
     if av.length >= 19 when ((av.byteAt i: 0).or d: 0) <= 0c9 then {
-        wc: nodeConstText :ast :reg :typing :ctx nid: n.nodeid :facts
+        wc: nodeConstText :prog :ctx nid: n.nodeid :facts
         if wc.length > 0 then return wc
     }
     # a `0b` / `0o` / `0c` literal has no C token behind it, so decode it here
@@ -1120,28 +1088,28 @@ emitAtom: function {
     # stamped variable use first: the local, alias-resolved and C-mangled
     # -- a stamped atom is a LOCAL, so the module-constant probe (an owned
     # key alloc + hash) never runs for it
-    avo: typing.atomVariableId.get key: n.nodeid
+    avo: prog.typing.atomVariableId.get key: n.nodeid
     if avo.some then {
-        if (narrowfacts.narrowingEndedAt :reg :typing :ctx nid: n.nodeid vid: avo) then {
-            return (narrowfacts.wholeLocalName :ast :reg :ctx name: av vid: avo :facts)
+        if (narrowfacts.narrowingEndedAt :prog :ctx nid: n.nodeid vid: avo) then {
+            return (narrowfacts.wholeLocalName :prog :ctx name: av vid: avo :facts)
         }
-        return (narrowfacts.emitLocalAtomNameWith :ast :reg :ctx name: av vid: avo :facts)
+        return (narrowfacts.emitLocalAtomNameWith :prog :ctx name: av vid: avo :facts)
     }
-    nsc: namespaceConstText :ast :reg :typing :ctx nameId: n.name :facts
+    nsc: namespaceConstText :prog :ctx nameId: n.name :facts
     if nsc.length > 0 then return nsc
-    mutd: mainUnitTid :typing :ctx
-    mca: memberConstText :ast :reg :typing :ctx unitTid: mutd nameId: n.name :facts
+    mutd: mainUnitTid :prog :ctx
+    mca: memberConstText :prog :ctx unitTid: mutd nameId: n.name :facts
     if mca.length > 0 then return mca
-    mcsa: memberConstStringText :typing :ctx unitTid: mutd nameId: n.name :facts
+    mcsa: memberConstStringText :prog :ctx unitTid: mutd nameId: n.name :facts
     if mcsa.length > 0 then return mcsa
     # stamped unit-def reference: the RECORD / FUNCTION legs run off the
     # stamped declaration; an atom with none names no definition
     brid: ztypes.tid
     bdec: ztypes.declid
     {
-        audo: typing.refDecl.get key: n.nodeid
+        audo: prog.typing.refDecl.get key: n.nodeid
         if audo.some then {
-            d0x: typing.decls.get i: audo
+            d0x: prog.typing.decls.get i: audo
             brid = d0x.typeId
             bdec = audo
         }
@@ -1149,23 +1117,21 @@ emitAtom: function {
     # a generic parameter read as a value -- itself, or through an alias of
     # it -- is the zero value of the instance's argument, which the instance
     # walk stamped
-    if brid.notZero when (reg.typetypeOf typeId: brid) == ztypes.ztypetype.genericParam then {
-        pzt: stampIdOf :typing nid: n.nodeid
+    if brid.notZero when (prog.reg.typetypeOf typeId: brid) == ztypes.ztypetype.genericParam then {
+        pzt: stampIdOf :prog nid: n.nodeid
         if pzt.notZero when pzt != brid then return (
             implicitZeroValue
-            :ast
-            :reg
-            :typing
+            :prog
             :ctx
             tid: pzt
             :facts
         )
     }
-    dra: emitDefRefAtom :ast :reg :typing :ctx :n :brid :bdec :facts
+    dra: emitDefRefAtom :prog :ctx :n :brid :bdec :facts
     if dra.length > 0 then return dra
     # a stamped implicit zero-create on a String atom is the empty
     # owned string: the zero struct needs no allocation and no free
-    iso: typing.implicitCreate.get key: n.nodeid
+    iso: prog.typing.implicitCreate.get key: n.nodeid
     if iso.some when iso == ctx.strTid then return (emitExprStrZero :ctx :facts)
     # a numeric lexeme no leg above respelled is C text as written: identifiers
     # never start with a digit
@@ -1177,13 +1143,11 @@ emitAtom: function {
     )
     return (
         narrowfacts.emitLocalAtomNameAt
-        :ast
-        :reg
-        :typing
+        :prog
         :ctx
         nid: n.nodeid
         name: av
-        vid: (atomVid :typing nid: n.nodeid)
+        vid: (atomVid :prog nid: n.nodeid)
         :facts
     )
 }
@@ -1192,13 +1156,13 @@ emitAtom: function {
 # the zero value is the construction (those creates have no C symbol). Empty
 # for every other type.
 typeNameCreateZero: function {
-    typing: ztyping.ZTyping.view
+    prog: Program.view
     ctx: Ctx
     bstamp: ztypes.tid
     facts: exprfacts.borrow
 } out String is {
-    zsc: scalarCTypeFor :typing tid: bstamp
-    if zsc.length > 0 then return (scalarZeroC :typing cType: zsc.stringView tid: bstamp :facts)
+    zsc: scalarCTypeFor :prog tid: bstamp
+    if zsc.length > 0 then return (scalarZeroC :prog cType: zsc.stringView tid: bstamp :facts)
     if bstamp == ctx.strTid then {
         strT: values.strTypeC :ctx
         return (stating :facts from: values.literalFacts text: "((\{strT}){0})")
@@ -1243,44 +1207,38 @@ dottedAtomNumericBase: function {
 # or an arm is already the node's own folded value; a float is rendered here,
 # from the member's declared type, which a folded value cannot say.
 dottedTypeConstRead: function {
-    ast: Ast.view
-    reg: ztypes.ZTypeRegistry.view
-    typing: ztyping.ZTyping.view
+    prog: Program.view
     ctx: Ctx
     n: zast.dottedpathrow.view
     facts: exprfacts.borrow
 } out String is {
-    bt: stampIdOf :typing nid: (interpPartNodeId n: (ast.nodes.get i: n.parent))
+    bt: stampIdOf :prog nid: (interpPartNodeId n: (prog.ast.nodes.get i: n.parent))
     if bt.isZero then return "".string
-    cid: aliasOrChildId :ast :typing aliasId: n.nodeid childId: n.child
+    cid: aliasOrChildId :prog aliasId: n.nodeid childId: n.child
     # a list's `slot.label` is the label's position, a constant of the
     # list's index type
-    if bt == typing.listSlotTid then return (
+    if bt == prog.typing.listSlotTid then return (
         emitListSlotRead
-        :ast
-        :reg
-        :typing
+        :prog
         :ctx
         :n
         mnId: cid
         :facts
     )
     if (
-        typing.isAsConstDecl
-        declId: (typing.declMemberIdOf parentTypeId: bt nameId: cid)
+        prog.typing.isAsConstDecl
+        declId: (prog.typing.declMemberIdOf parentTypeId: bt nameId: cid)
     ).not then return "".string
-    ct: memberConstText :ast :reg :typing :ctx unitTid: bt nameId: cid :facts
+    ct: memberConstText :prog :ctx unitTid: bt nameId: cid :facts
     if ct.length > 0 then return ct
-    return (memberConstStringText :typing :ctx unitTid: bt nameId: cid :facts)
+    return (memberConstStringText :prog :ctx unitTid: bt nameId: cid :facts)
 }
 
 # unitFnMemberC -- `unit.fn` where the base names a FILE unit: the C text for a
 # zero-argument function member of it, which reads as a dotted path rather than
 # a call. Empty when the name is no emittable function of that unit.
 unitFnMemberC: function {
-    ast: Ast.view
-    reg: ztypes.ZTypeRegistry.view
-    typing: ztyping.ZTyping.view
+    prog: Program.view
     ctx: Ctx
     n: zast.dottedpathrow.view
     # the file unit the base resolved to
@@ -1289,10 +1247,10 @@ unitFnMemberC: function {
 } out String is {
     dpUfo: (
         ztypecheck.resolvedByIdsRo
-        :ast
-        :typing
+        ast: prog.ast
+        typing: prog.typing
         unitDecl: ud6x
-        name: (aliasOrChildId :ast :typing aliasId: n.nodeid childId: n.child)
+        name: (aliasOrChildId :prog aliasId: n.nodeid childId: n.child)
     )
     fid: ztypes.tid
     if dpUfo.some then {
@@ -1301,16 +1259,14 @@ unitFnMemberC: function {
     if fid.isZero then return "".string
     # only a bodied + demanded non-native fn earns the id-cname reference /
     # auto-call route here, whichever unit declares it
-    if (emitplan.stdFnRefEmittable :ast :reg :typing :fid).not then return "".string
-    if ((reg.typetypeOf typeId: fid) == ztypes.ztypetype.functionType).not then {
+    if (emitplan.stdFnRefEmittable :prog :fid).not then return "".string
+    if ((prog.reg.typetypeOf typeId: fid) == ztypes.ztypetype.functionType).not then {
         return "".string
     }
     dpUfc: spelledCname :ctx tid: fid
     return (
         fnRefOrCallC
-        :ast
-        :reg
-        :typing
+        :prog
         :ctx
         nid: n.nodeid
         fnTid: fid
@@ -1324,33 +1280,29 @@ unitFnMemberC: function {
 # file unit: its own zero-argument function member, reached by id. Empty when
 # the name is no function of that namespace.
 nsFnMemberC: function {
-    ast: Ast.view
-    reg: ztypes.ZTypeRegistry.view
-    typing: ztyping.ZTyping.view
+    prog: Program.view
     ctx: Ctx
     n: zast.dottedpathrow.view
     nsTid: ztypes.tid
     facts: exprfacts.borrow
 } out String is {
     nfo: (
-        typing.declChildOfId
+        prog.typing.declChildOfId
         parentTypeId: nsTid
-        nameId: (aliasOrChildId :ast :typing aliasId: n.nodeid childId: n.child)
+        nameId: (aliasOrChildId :prog aliasId: n.nodeid childId: n.child)
     )
     nftid: ztypes.tid
     if nfo.some then {
         nftid = nfo
     }
     if nftid.isZero then return "".string
-    if ((reg.typetypeOf typeId: nftid) == ztypes.ztypetype.functionType).not then {
+    if ((prog.reg.typetypeOf typeId: nftid) == ztypes.ztypetype.functionType).not then {
         return "".string
     }
     nfcn: spelledCname :ctx tid: nftid
     return (
         fnRefOrCallC
-        :ast
-        :reg
-        :typing
+        :prog
         :ctx
         nid: n.nodeid
         fnTid: nftid
@@ -1365,32 +1317,30 @@ nsFnMemberC: function {
 # namespace auto-calls. The unit is
 # the one the checker resolved the base to (pathUnitTidOf).
 emitDottedUnitRead: function {
-    ast: Ast.view
-    reg: ztypes.ZTypeRegistry.view
-    typing: ztyping.ZTyping.view
+    prog: Program.view
     ctx: Ctx
     n: zast.dottedpathrow.view
     facts: exprfacts.borrow
 } out String is {
     # `unit.CONST` -- a constant of another unit inlines its rendered C
     # text, exactly as a bare reference to a constant of this unit does
-    ucv: unitConstTextOf :ast :reg :typing :ctx :n :facts
+    ucv: unitConstTextOf :prog :ctx :n :facts
     if ucv.length > 0 then return ucv
     # `unit.block` -- another unit's list reads as its value
-    udv: staticListValueText :typing :ctx nid: n.nodeid
+    udv: staticListValueText :prog :ctx nid: n.nodeid
     if udv.length > 0 then return (stating :facts from: values.literalFacts text: udv)
     # the unit the checker resolved the base to: a file unit's zero-argument
     # function member, or a namespace's own -- a zero-argument function member
     # reads as a dotted path, not a call
-    dpFile: baseFileUnitDecl :reg :typing baseId: n.parent
+    dpFile: baseFileUnitDecl :prog baseId: n.parent
     if dpFile.notZero then {
-        ufm: unitFnMemberC :ast :reg :typing :ctx :n ud6x: dpFile :facts
+        ufm: unitFnMemberC :prog :ctx :n ud6x: dpFile :facts
         if ufm.length > 0 then return ufm
         return "".string
     }
-    dpNsTid: pathUnitTidOf :reg :typing baseId: n.parent
+    dpNsTid: pathUnitTidOf :prog baseId: n.parent
     if dpNsTid.notZero then {
-        return (nsFnMemberC :ast :reg :typing :ctx :n nsTid: dpNsTid :facts)
+        return (nsFnMemberC :prog :ctx :n nsTid: dpNsTid :facts)
     }
     return "".string
 }
@@ -1401,37 +1351,33 @@ emitDottedUnitRead: function {
 # member resolves to a row on the SOURCE type, so a user field merely NAMED `u32`
 # finds nothing and takes the member legs instead.
 emitDottedNativeMarker: function {
-    ast: Ast.view
-    reg: ztypes.ZTypeRegistry.view
-    typing: ztyping.ZTyping.view
+    prog: Program.view
     ctx: Ctx
     n: zast.dottedpathrow.view
     facts: exprfacts.borrow
 } out String is {
-    mn2Id: aliasOrChildId :ast :typing aliasId: n.nodeid childId: n.child
+    mn2Id: aliasOrChildId :prog aliasId: n.nodeid childId: n.child
     # a list's member read (`codes.ht`, `consts.codes.ht`, `primes.0`,
     # `codes.slot.lf`): the list is the base's row, whatever shape the base
     # takes; no base is emitted
-    listRow: memberreads.listRowOf :typing nid: (interpPartNodeId n: (ast.nodes.get i: n.parent))
+    listRow: memberreads.listRowOf :prog nid: (interpPartNodeId n: (prog.ast.nodes.get i: n.parent))
     if listRow != 0 then {
-        memberText: emitStaticListMember :ast :reg :typing :ctx :n row: listRow mnId: mn2Id :facts
+        memberText: emitStaticListMember :prog :ctx :n row: listRow mnId: mn2Id :facts
         if memberText.length > 0 then return memberText
     }
-    lsr: emitListSlotRead :ast :reg :typing :ctx :n mnId: mn2Id :facts
+    lsr: emitListSlotRead :prog :ctx :n mnId: mn2Id :facts
     if lsr.length > 0 then return lsr
     # a zero-parameter native read without parens auto-calls: the member's
     # DECLARATION says so, so io.stdout and os.pid take one leg and no
     # name is listed
     nnu: (
         types.nativeNoArgOf
-        :ast
-        :reg
-        :typing
+        :prog
         baseId: n.parent
-        membId: (aliasOrChildId :ast :typing aliasId: n.nodeid childId: n.child)
+        membId: (aliasOrChildId :prog aliasId: n.nodeid childId: n.child)
     )
     if nnu.length > 0 then {
-        mn2n: zast.nameTextAt :ast ref: mn2Id
+        mn2n: zast.nameTextAt ast: prog.ast ref: mn2Id
         return (
             stating
             :facts
@@ -1441,47 +1387,43 @@ emitDottedNativeMarker: function {
     }
     # `.private` is a compile-time friend marker -- it emits the receiver itself.
     if (zast.markerKindOfName id: mn2Id).privateMarker then {
-        return (emitExprWith :ast :reg :typing :ctx n: (ast.nodes.get i: n.parent) :facts)
+        return (emitExprWith :prog :ctx n: (prog.ast.nodes.get i: n.parent) :facts)
     }
     # `.borrow` on a value is the ownership marker, and the checker accepts it
     # as one; it emits the receiver itself.
     if (zast.markerKindOfName id: mn2Id).borrowMarker then {
-        return (emitExprWith :ast :reg :typing :ctx n: (ast.nodes.get i: n.parent) :facts)
+        return (emitExprWith :prog :ctx n: (prog.ast.nodes.get i: n.parent) :facts)
     }
     # `.take` / `.hold` hands on the base itself (markerHandsOnBase)
     if (ztypecheck.isMoveMarkerId nameId: mn2Id) when (
         types.markerHandsOnBase
-        :ast
-        :reg
-        :typing
+        :prog
         :ctx
         pnid: n.parent
     ) then {
-        return (emitExprWith :ast :reg :typing :ctx n: (ast.nodes.get i: n.parent) :facts)
+        return (emitExprWith :prog :ctx n: (prog.ast.nodes.get i: n.parent) :facts)
     }
     # a runtime numeric conversion `<expr>.<numtype>`
-    ncKey: nativerows.convRowNameOf :ast :reg :typing :ctx :n :mn2Id
+    ncKey: nativerows.convRowNameOf :prog :ctx :n :mn2Id
     if ncKey.impl > 0 then {
         ncMk: pendingHoistMark :ctx
         ncValF: exprfacts
-        ncVal: emitExprWith :ast :reg :typing :ctx n: (ast.nodes.get i: n.parent) facts: ncValF
-        if (pathIsPointer :ast :reg :typing :ctx n: (ast.nodes.get i: n.parent)) then {
+        ncVal: emitExprWith :prog :ctx n: (prog.ast.nodes.get i: n.parent) facts: ncValF
+        if (pathIsPointer :prog :ctx n: (prog.ast.nodes.get i: n.parent)) then {
             ncDeref: "(*\{ncVal})"
             ncVal = ncDeref.copy
             ncValF = values.operandFacts e: ncValF place: true
         }
-        ncRet: stampIdOf :typing nid: n.nodeid
-        ncRetM: chaseAggregateTypedef :reg :typing :ctx tid: ncRet
+        ncRet: stampIdOf :prog nid: n.nodeid
+        ncRetM: chaseAggregateTypedef :prog :ctx tid: ncRet
         return (
             nativerows.emitNumericCast
-            :ast
+            :prog
             :ctx
             val: ncVal
             valF: ncValF
             valNid: n.parent
             mark: ncMk
-            :reg
-            :typing
             retTid: ncRetM
             rowKey: ncKey
             :facts
@@ -1493,41 +1435,37 @@ emitDottedNativeMarker: function {
 # operandScalarC -- the C type of an operand whose stamp is a builtin scalar or
 # an ordinal variant; "" for anything else, a Box or a generic parameter among
 # them.
-operandScalarC: function {
-    reg: ztypes.ZTypeRegistry.view typing: ztyping.ZTyping.view n: astnode.view
-} out String is {
-    st: stmtblocks.stampIdDeep :reg :typing :n
+operandScalarC: function {prog: Program.view n: astnode.view} out String is {
+    st: stmtblocks.stampIdDeep :prog :n
     if st.isZero then return "".string
-    return (scalarCTypeFor :typing tid: st)
+    return (scalarCTypeFor :prog tid: st)
 }
 
 # bindDeclaredCType -- the C type a binding declares: the C scalar of a scalar
 # the system declares, else its type's struct. An unnamed binding takes the
 # stamped type of the statement, or of the value when the statement carries none.
 bindDeclaredCType: function {
-    ast: Ast.view
-    reg: ztypes.ZTypeRegistry.view
-    typing: ztyping.ZTyping.view
+    prog: Program.view
     ctx: Ctx
     n: zast.assignmentrow.view
     btid: ztypes.tid
 } out String is {
     # a scalar the system declares keeps its C scalar; anything else, a type
     # spelled like a scalar included, is spelled from its id below
-    avn: ast.nodes.get i: n.value
+    avn: prog.ast.nodes.get i: n.value
     ct: String
-    if btid.notZero then ct = scalarCTypeFor :typing tid: btid
+    if btid.notZero then ct = scalarCTypeFor :prog tid: btid
     if ct.length == 0 then {
-        tgo: stampIdOf :typing nid: n.nodeid
+        tgo: stampIdOf :prog nid: n.nodeid
         # the binding's own stamp as the body being emitted sees it comes first:
         # an instance's differs from the shared one
         if btid.notZero then tgo = btid
         if tgo.notZero then {
-            ct = typeRefC :ast :reg :typing :ctx tid: tgo
+            ct = typeRefC :prog :ctx tid: tgo
         } else {
-            vgo: stampIdOf :typing nid: (interpPartNodeId n: avn)
+            vgo: stampIdOf :prog nid: (interpPartNodeId n: avn)
             if vgo.notZero then {
-                ct = typeRefC :ast :reg :typing :ctx tid: vgo
+                ct = typeRefC :prog :ctx tid: vgo
             }
         }
     }
@@ -1538,12 +1476,12 @@ bindDeclaredCType: function {
 # scalar's own where it has one (`bool`), else the pair's typedef.
 pairSubjectCType: function {
     ctx: Ctx
-    typing: ztyping.ZTyping.view
+    prog: Program.view
     # the subject's stamped type name
     # the subject's type
     tid: ztypes.tid
 } out String is {
-    sct: scalarCTypeFor :typing :tid
+    sct: scalarCTypeFor :prog :tid
     if sct.length > 0 then return sct
     return "\{spelledCname :ctx :tid}_t"
 }
@@ -1551,21 +1489,20 @@ pairSubjectCType: function {
 # typedefChaseBaseName -- the chain-end base NAME of a typedef, "" when tid
 # is not one.
 typedefChaseBaseName: function {
-    ast: Ast.view
-    typing: ztyping.ZTyping.view
+    prog: Program.view
     tid: ztypes.tid
 } out String is {
     cur: tid
     nmId: zast.nameid
     for true loop {
-        b: typing.typedefBase.get key: cur
+        b: prog.typing.typedefBase.get key: cur
         if b.none then break
         if b.name.notZero then nmId = b.name
         if b.tid.isZero then break
         cur = b.tid
     }
     nm: String
-    if nmId.notZero then nm = zast.poolTextCopy pool: ast.names ref: nmId
+    if nmId.notZero then nm = zast.poolTextCopy pool: prog.ast.names ref: nmId
     return nm
 }
 
@@ -1573,32 +1510,30 @@ typedefChaseBaseName: function {
 # the typedef-base chain (meters -> i64, height -> meters -> i64); ""
 # when the type is not a typedef.
 typedefChaseC: function {
-    ast: Ast.view
-    reg: ztypes.ZTypeRegistry.view
-    typing: ztyping.ZTyping.view
+    prog: Program.view
     ctx: Ctx
     tid: ztypes.tid
 } out String is {
-    bid: ztypecheck.typedefChaseTid :typing :tid
+    bid: ztypecheck.typedefChaseTid typing: prog.typing :tid
     if bid == tid then return "".string
-    bc: scalarCTypeFor :typing tid: bid
+    bc: scalarCTypeFor :prog tid: bid
     if bc.length > 0 then return bc
-    return (typeRefC :ast :reg :typing :ctx tid: bid)
+    return (typeRefC :prog :ctx tid: bid)
 }
 
 # scalarTypeRefC -- the C scalar a type is held as, "" for one held otherwise.
 # An ordinal variant is held as a scalar: spelling it names neither its enum
 # nor its type (a value of it spells a tag constant, spelledTagConst).
-scalarTypeRefC: function {typing: ztyping.ZTyping.view ctx: Ctx tid: ztypes.tid} out String is {
-    ct: scalarCTypeFor :typing :tid
-    if ct.length > 0 then noteScalarTypeUse :typing :ctx :tid
+scalarTypeRefC: function {prog: Program.view ctx: Ctx tid: ztypes.tid} out String is {
+    ct: scalarCTypeFor :prog :tid
+    if ct.length > 0 then noteScalarTypeUse :prog :ctx :tid
     return ct
 }
 
 # noteScalarTypeUse -- a C spelling of the scalar `tid`: the 128-bit integers'
 # and f16's C types are prelude pieces, written where something spells them
-noteScalarTypeUse: function {typing: ztyping.ZTyping.view ctx: Ctx tid: ztypes.tid} is {
-    nk: ztypecheck.numKindOfTid :typing :tid
+noteScalarTypeUse: function {prog: Program.view ctx: Ctx tid: ztypes.tid} is {
+    nk: ztypecheck.numKindOfTid typing: prog.typing :tid
     if nk.has.not then return
     if nk.kind == ztypes.numkind.i128Type then preludeNeed :ctx memb: "@i128_t"
     if nk.kind == ztypes.numkind.u128Type then preludeNeed :ctx memb: "@u128_t"
@@ -1610,13 +1545,11 @@ noteScalarTypeUse: function {typing: ztyping.ZTyping.view ctx: Ctx tid: ztypes.t
 # that unit's type, so this is the unit the checker chose -- the nearest scope,
 # a nested unit sharing a file unit's spelling -- and a value, a type or a
 # nested unit spelled like a unit is never taken for it.
-pathUnitTidOf: function {
-    reg: ztypes.ZTypeRegistry.view typing: ztyping.ZTyping.view baseId: zast.nodeid
-} out ztypes.tid is {
+pathUnitTidOf: function {prog: Program.view baseId: zast.nodeid} out ztypes.tid is {
     if baseId.isZero then return ztypes.tid
-    t: stampIdOf :typing nid: baseId
+    t: stampIdOf :prog nid: baseId
     if t.isZero then return t
-    if (reg.typetypeOf typeId: t) != ztypes.ztypetype.unitType then return ztypes.tid
+    if (prog.reg.typetypeOf typeId: t) != ztypes.ztypetype.unitType then return ztypes.tid
     return t
 }
 
@@ -1624,18 +1557,16 @@ pathUnitTidOf: function {
 # path base `baseId` resolved to, 0 for any other base: a nested unit, an
 # instance of a generic file unit, or a value, type or nested unit that shares
 # a file unit's spelling.
-baseFileUnitDecl: function {
-    reg: ztypes.ZTypeRegistry.view typing: ztyping.ZTyping.view baseId: zast.nodeid
-} out ztypes.declid is {
-    t: pathUnitTidOf :reg :typing :baseId
+baseFileUnitDecl: function {prog: Program.view baseId: zast.nodeid} out ztypes.declid is {
+    t: pathUnitTidOf :prog :baseId
     if t.isZero then return ztypes.declid.zero
-    d: ztypecheck.templateDeclOf :reg :typing tid: t
-    if (typing.declParentOf declId: d) != typing.programRoot then {
+    d: ztypecheck.templateDeclOf reg: prog.reg typing: prog.typing tid: t
+    if (prog.typing.declParentOf declId: d) != prog.typing.programRoot then {
         return ztypes.declid.zero
     }
     # an instance of a generic file unit is not the file unit: templateDeclOf
     # answers an instance with its template's declaration
-    if (typing.declTypeOf declId: d) != t then return ztypes.declid.zero
+    if (prog.typing.declTypeOf declId: d) != t then return ztypes.declid.zero
     return d
 }
 
@@ -1645,42 +1576,38 @@ baseFileUnitDecl: function {
 # under a bare name has to fold under this spelling too, and the difference was
 # the spelling alone -- the same unit's own constant did not fold either.
 unitConstTextOf: function {
-    ast: Ast.view
-    reg: ztypes.ZTypeRegistry.view
-    typing: ztyping.ZTyping.view
+    prog: Program.view
     ctx: Ctx
     n: zast.dottedpathrow.view
     facts: exprfacts.borrow
 } out String is {
     cn8: zast.nameid
-    ca8: ast.nodes.get i: n.child
+    ca8: prog.ast.nodes.get i: n.child
     if ca8.atomid then cn8 = ca8.name
     if cn8.notZero then {
-        unitTid: pathUnitTidOf :reg :typing baseId: n.parent
+        unitTid: pathUnitTidOf :prog baseId: n.parent
         if unitTid.notZero then {
             # the VALUE is the only source: a constant is never rendered to
             # text ahead of time and re-read.
-            memberConst: memberConstText :ast :reg :typing :ctx :unitTid nameId: cn8 :facts
+            memberConst: memberConstText :prog :ctx :unitTid nameId: cn8 :facts
             if memberConst.length > 0 then return memberConst
-            memberText: memberConstStringText :typing :ctx :unitTid nameId: cn8 :facts
+            memberText: memberConstStringText :prog :ctx :unitTid nameId: cn8 :facts
             if memberText.length > 0 then return memberText
             # a constant the unit's `public:` block DEFINES is on the unit's
             # surface, keyed on the block (a nested unit named `public`)
-            publicDecl: ztypecheck.publicNsOf :reg :typing tid: unitTid
-            publicTid: typing.declTypeOf declId: publicDecl
+            publicDecl: ztypecheck.publicNsOf reg: prog.reg typing: prog.typing tid: unitTid
+            publicTid: prog.typing.declTypeOf declId: publicDecl
             if publicTid.notZero then {
                 publicConst: (
                     memberConstText
-                    :ast
-                    :reg
-                    :typing
+                    :prog
                     :ctx
                     unitTid: publicTid
                     nameId: cn8
                     :facts
                 )
                 if publicConst.length > 0 then return publicConst
-                publicText: memberConstStringText :typing :ctx unitTid: publicTid nameId: cn8 :facts
+                publicText: memberConstStringText :prog :ctx unitTid: publicTid nameId: cn8 :facts
                 if publicText.length > 0 then return publicText
             }
         }
@@ -1743,12 +1670,10 @@ emitLiteralPools: function {
 # Each row's text is kept apart (appendWrittenAggs writes them in row order: a
 # value it holds is emitted before it, as an aggregate is interned after the
 # ones it holds). True when it wrote one, whose items may spell more.
-writeDemandedAggs: function {
-    ast: Ast.view reg: ztypes.ZTypeRegistry.view typing: ztyping.ZTyping.view ctx: Ctx
-} out bool is {
+writeDemandedAggs: function {prog: Program.view ctx: Ctx} out bool is {
     wrote: false
     i: 1.u64
-    for i < typing.constAggs.length loop {
+    for i < prog.typing.constAggs.length loop {
         id: i
         i = i + 1
         if (ctx.aggUses.has item: id).not or (ctx.aggWritten.has item: id) then continue
@@ -1758,7 +1683,7 @@ writeDemandedAggs: function {
         isList: false
         isChoice: false
         {
-            g: typing.constAggs.get i: id
+            g: prog.typing.constAggs.get i: id
             if g.reached.not then continue
             isList = g.kind.staticList
             isChoice = g.kind.staticChoice
@@ -1769,14 +1694,14 @@ writeDemandedAggs: function {
         ctx.aggWritten.add item: id
         wrote = true
         buf: String
-        emitStaticFnProtos :ast :reg :typing :ctx row: id :buf
+        emitStaticFnProtos :prog :ctx row: id :buf
         if isList then {
-            emitStaticListArray :ast :reg :typing :ctx :id :count :buf
+            emitStaticListArray :prog :ctx :id :count :buf
         } else if isChoice then {
-            ci: staticChoiceInit :ast :reg :typing :ctx row: id
+            ci: staticChoiceInit :prog :ctx row: id
             buf.append "static const \{spelledCname :ctx :tid}_t _zag\{id} = \{ci};\n"
         } else {
-            emitStaticRecord :ast :reg :typing :ctx :id :tid :start :count :buf
+            emitStaticRecord :prog :ctx :id :tid :start :count :buf
         }
         ctx.aggsOut.append (WrittenAgg row: id text: buf.take)
     }
@@ -1786,9 +1711,7 @@ writeDemandedAggs: function {
 # emitStaticRecord -- data row `id`, a `tid` record of the `count` folded
 # values from `start`: its static const object.
 emitStaticRecord: function {
-    ast: Ast.view
-    reg: ztypes.ZTypeRegistry.view
-    typing: ztyping.ZTyping.view
+    prog: Program.view
     ctx: Ctx
     id: u64
     tid: ztypes.tid
@@ -1799,7 +1722,7 @@ emitStaticRecord: function {
     fnames: List String
     fids: ListVal ztypes.tid
     fidsNm: ListVal zast.nameid
-    callorder.recFieldLists :ast :reg :typing :tid names: fnames ids: fids nameIds: fidsNm
+    callorder.recFieldLists :prog :tid names: fnames ids: fids nameIds: fidsNm
     rc: spelledCname :ctx :tid
     buf.append "static const \{rc}_t _zag\{id} = { "
     k: u64
@@ -1807,12 +1730,10 @@ emitStaticRecord: function {
         if k > 0 then buf.append ", "
         buf.append (
             staticAggItemText
-            :ast
-            :reg
-            :typing
+            :prog
             :ctx
             tid: (fids.get i: k)
-            v: (typing.constAggItems.get i: start + k)
+            v: (prog.typing.constAggItems.get i: start + k)
         )
         k = k + 1
     }
@@ -1824,9 +1745,7 @@ emitStaticRecord: function {
 # function's address is a constant only once it is declared. C takes the same
 # declaration again where the function is written.
 emitStaticFnProtos: function {
-    ast: Ast.view
-    reg: ztypes.ZTypeRegistry.view
-    typing: ztyping.ZTyping.view
+    prog: Program.view
     ctx: Ctx
     row: u64
     buf: String.borrow
@@ -1834,30 +1753,28 @@ emitStaticFnProtos: function {
     start: u64
     count: u64
     {
-        g: typing.constAggs.get i: row
+        g: prog.typing.constAggs.get i: row
         start = g.itemStart
         count = g.itemCount
     }
     k: u64
     for k < count loop {
-        v: typing.constAggItems.get i: start + k
+        v: prog.typing.constAggItems.get i: start + k
         k = k + 1
         if v.kind.fnKind.not then continue
-        fid: (typing.decls.get i: v.fnDecl).typeId
+        fid: (prog.typing.decls.get i: v.fnDecl).typeId
         fnode: zast.nodeid
         {
-            dn: ast.nodes.get i: (typing.decls.get i: v.fnDecl).node
+            dn: prog.ast.nodes.get i: (prog.typing.decls.get i: v.fnDecl).node
             if dn.namedoperation then fnode = dn.operation
         }
         if fnode.isZero then continue
         (
             emitplan.appendFnSignature
-            :ast
-            :reg
-            :typing
+            :prog
             :ctx
             :fid
-            op: (ast.nodes.get i: fnode)
+            op: (prog.ast.nodes.get i: fnode)
             :buf
             tail: ";\n"
         )
@@ -1869,21 +1786,19 @@ emitStaticFnProtos: function {
 # (staticListElemCType). An empty list has no array -- C has no empty
 # initializer. Its reader is written apart, where called (emitStaticListReaders).
 emitStaticListArray: function {
-    ast: Ast.view
-    reg: ztypes.ZTypeRegistry.view
-    typing: ztyping.ZTyping.view
+    prog: Program.view
     ctx: Ctx
     id: u64
     count: u64
     buf: String.borrow
 } is {
-    ect: nativerows.staticListElemCType :ast :reg :typing :ctx row: id
+    ect: nativerows.staticListElemCType :prog :ctx row: id
     est: nativerows.staticListStoredC ect: ect.stringView
     elems: String
     k: u64
     for k < count loop {
         if k > 0 then elems.append ", "
-        elems.append (listItemText :ast :reg :typing :ctx row: id slot: k)
+        elems.append (listItemText :prog :ctx row: id slot: k)
         k = k + 1
     }
     if count > 0 then buf.append "static const \{est} _zag\{id}[] = {\{elems}};\n\n"
@@ -1917,30 +1832,26 @@ noteAggReaderUse: function {ctx: Ctx row: u64} is {
 # from the value the checker recorded, at the list's element type, as a static
 # initializer (staticAggItemText).
 listItemText: function {
-    ast: Ast.view
-    reg: ztypes.ZTypeRegistry.view
-    typing: ztyping.ZTyping.view
+    prog: Program.view
     ctx: Ctx
     row: u64
     slot: u64
 } out String is {
-    g: typing.constAggs.get i: row
+    g: prog.typing.constAggs.get i: row
     if slot >= g.itemCount then return "".string
     return (
         staticAggItemText
-        :ast
-        :reg
-        :typing
+        :prog
         :ctx
         tid: g.elem
-        v: (typing.constAggItems.get i: g.itemStart.u64 + slot)
+        v: (prog.typing.constAggItems.get i: g.itemStart.u64 + slot)
     )
 }
 
 # staticStringInit -- a folded string as a static initializer of its view: the
 # bytes themselves, since the pool's `_zcsN` view is no constant expression.
-staticStringInit: function {typing: ztyping.ZTyping.view v: ztypes.cval} out String is {
-    sv: typing.constStrings.get i: v.strId
+staticStringInit: function {prog: Program.view v: ztypes.cval} out String is {
+    sv: prog.typing.constStrings.get i: v.strId
     r: "{ .data = \"".string
     r.append (cEscape text: sv.stringView)
     r.append "\", .size = "
@@ -1951,8 +1862,8 @@ staticStringInit: function {typing: ztyping.ZTyping.view v: ztypes.cval} out Str
 
 # staticListInit -- list row `row` as a static initializer of its view: the
 # braces alone, since a compound literal is no constant expression.
-staticListInit: function {typing: ztyping.ZTyping.view ctx: Ctx row: u64} out String is {
-    n: (typing.constAggs.get i: row).itemCount
+staticListInit: function {prog: Program.view ctx: Ctx row: u64} out String is {
+    n: (prog.typing.constAggs.get i: row).itemCount
     if n == 0 then return "{ .length = 0, .data = NULL }".string
     noteAggUse :ctx :row
     return "{ .length = \{n}, .data = _zag\{row} }"
@@ -1963,9 +1874,7 @@ staticListInit: function {typing: ztyping.ZTyping.view ctx: Ctx row: u64} out St
 # as a field of a static object is (staticAggItemText). A choice is held by
 # value, so this is the value itself wherever it lands.
 staticChoiceInit: function {
-    ast: Ast.view
-    reg: ztypes.ZTypeRegistry.view
-    typing: ztyping.ZTyping.view
+    prog: Program.view
     ctx: Ctx
     row: u64
 } out String is {
@@ -1973,17 +1882,17 @@ staticChoiceInit: function {
     arm: zast.nameid
     item: ztypes.noConst
     {
-        g: typing.constAggs.get i: row
+        g: prog.typing.constAggs.get i: row
         tid = g.tid
         arm = g.arm
-        item = typing.constAggItems.get i: g.itemStart.u64
+        item = prog.typing.constAggItems.get i: g.itemStart.u64
     }
-    tg: spelledTagConst :ast :ctx :reg :typing :tid armId: arm
-    mc: memberC :ast :reg :typing :ctx owner: tid kind: memberkind.arm nameId: arm
+    tg: spelledTagConst :prog :ctx :tid armId: arm
+    mc: memberC :prog :ctx owner: tid kind: memberkind.arm nameId: arm
     pt: ztypes.tid
-    ad: typing.declMemberIdOf parentTypeId: tid nameId: arm
-    if ad.notZero then pt = (typing.decls.get i: ad).typeId
-    it: staticAggItemText :ast :reg :typing :ctx tid: pt v: item
+    ad: prog.typing.declMemberIdOf parentTypeId: tid nameId: arm
+    if ad.notZero then pt = (prog.typing.decls.get i: ad).typeId
+    it: staticAggItemText :prog :ctx tid: pt v: item
     return "{ .tag = \{tg}, .data = { .\{mc} = \{it} } }"
 }
 
@@ -1994,54 +1903,50 @@ staticChoiceInit: function {
 # its bool or its tag alone, and a number as cvalText spells it at the field's
 # type.
 staticAggItemText: function {
-    ast: Ast.view
-    reg: ztypes.ZTypeRegistry.view
-    typing: ztyping.ZTyping.view
+    prog: Program.view
     ctx: Ctx
     tid: ztypes.tid
     v: ztypes.cval
 } out String is {
-    if v.kind.svalKind then return (staticStringInit :typing :v)
-    if v.kind.aggKind when (typing.constAggs.get i: v.aggId.u64).kind.staticList then {
-        return (staticListInit :typing :ctx row: v.aggId)
+    if v.kind.svalKind then return (staticStringInit :prog :v)
+    if v.kind.aggKind when (prog.typing.constAggs.get i: v.aggId.u64).kind.staticList then {
+        return (staticListInit :prog :ctx row: v.aggId)
     }
-    if v.kind.aggKind when (typing.constAggs.get i: v.aggId.u64).kind.staticChoice then {
-        return (staticChoiceInit :ast :reg :typing :ctx row: v.aggId)
+    if v.kind.aggKind when (prog.typing.constAggs.get i: v.aggId.u64).kind.staticChoice then {
+        return (staticChoiceInit :prog :ctx row: v.aggId)
     }
     # a function reference is the function itself, whose address is a constant
     if v.kind.fnKind then return (
         spelledCname
         :ctx
-        tid: (typing.decls.get i: v.fnDecl).typeId
+        tid: (prog.typing.decls.get i: v.fnDecl).typeId
     )
     if v.kind.armKind then {
-        av: values.armValueC :ast :ctx :reg :typing tid: v.armTid arm: v.armName
+        av: values.armValueC :prog :ctx tid: v.armTid arm: v.armName
         if av.length > 0 then return av
-        tg: spelledTagConst :ast :ctx :reg :typing tid: v.armTid armId: v.armName
+        tg: spelledTagConst :prog :ctx tid: v.armTid armId: v.armName
         return "{ .tag = \{tg} }"
     }
     facts: exprfacts
-    return (cvalText :ast :reg :typing :ctx :tid :v :facts)
+    return (cvalText :prog :ctx :tid :v :facts)
 }
 
 # partEqCallsGenerated -- comparing a `tid` part calls its generated `_eq`
 # (partEqC's last leg): neither the author's `==` nor a scalar's.
 partEqCallsGenerated: function {
-    ast: Ast.view
-    reg: ztypes.ZTypeRegistry.view
-    typing: ztyping.ZTyping.view
+    prog: Program.view
     tid: ztypes.tid
 } out bool is {
-    if (ztypecheck.isLiteralTypeId :reg :tid) then return false
+    if (ztypecheck.isLiteralTypeId reg: prog.reg :tid) then return false
     src: (
         ztypecheck.valOpSource
-        :ast
-        :reg
-        :typing
+        ast: prog.ast
+        reg: prog.reg
+        typing: prog.typing
         :tid
         nameId: zast.wellKnown.slot.wkOpEq
     )
     if src.written or src.negated then return false
-    if (partIsHelperScalar :typing :tid) then return false
-    return (parttexts.partIsCScalar :reg :typing :tid).not
+    if (partIsHelperScalar :prog :tid) then return false
+    return (parttexts.partIsCScalar :prog :tid).not
 }
