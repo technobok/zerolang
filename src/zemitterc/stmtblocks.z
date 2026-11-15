@@ -82,7 +82,7 @@ armInPlace: function {
         # the address is taken of the value itself, which may be a place; the
         # hoists the value reads are assigned ahead of it
         part: vx.copy
-        if ref when ctx.argHoistRaw.length == mk.raw then {
+        if ref when ctx.stmt.argHoistRaw.length == mk.raw then {
             rfF: exprfacts
             part = (
                 argforms.armRefLeaf
@@ -256,10 +256,10 @@ ifDiverges: function {
 # when that scope closes.
 dropPtrVid: function {ctx: Ctx vid: ztypes.vid} is {
     kept: ListVal ztypes.vid
-    for each v: ctx.ptrVids loop {
+    for each v: ctx.stmt.ptrVids loop {
         if v != vid then kept.append from: v
     }
-    ctx.ptrVids = kept.take
+    ctx.stmt.ptrVids = kept.take
 }
 
 # needsValueDeref -- a pointer-valued expression standing where a VALUE is
@@ -493,24 +493,24 @@ dottedBaseNodeId: function {prog: Program.view n: astnode.view} out zast.nodeid 
 openInPlace: function {ctx: Ctx guarded: bool} out hoistmark is {
     mk: pendingHoistMark :ctx
     mk.guarded = guarded
-    ctx.argHoistFloor = mk.names
-    ctx.argHoistRawFloor = mk.raw
-    if guarded then ctx.guardDepth = ctx.guardDepth + 1
+    ctx.stmt.argHoistFloor = mk.names
+    ctx.stmt.argHoistRawFloor = mk.raw
+    if guarded then ctx.stmt.guardDepth = ctx.stmt.guardDepth + 1
     return mk
 }
 
 # hoistsGrew -- whether the condition begun at `mark` recorded a hoist of its own.
 hoistsGrew: function {ctx: Ctx.view mark: hoistmark} out bool is {
-    if ctx.argHoists.length > mark.names then return true
-    return ctx.argHoistRaw.length > mark.raw
+    if ctx.stmt.argHoists.length > mark.names then return true
+    return ctx.stmt.argHoistRaw.length > mark.raw
 }
 
 # closeInPlace -- end what openInPlace began, for a condition that recorded no
 # hoist of its own: the pending hoists around it are the enclosing statement's.
 closeInPlace: function {ctx: Ctx mark: hoistmark} is {
-    ctx.argHoistFloor = mark.floor
-    ctx.argHoistRawFloor = mark.rawFloor
-    if mark.guarded then ctx.guardDepth = ctx.guardDepth - 1
+    ctx.stmt.argHoistFloor = mark.floor
+    ctx.stmt.argHoistRawFloor = mark.rawFloor
+    if mark.guarded then ctx.stmt.guardDepth = ctx.stmt.guardDepth - 1
 }
 
 # appendInPlaceCond -- end the condition begun at `mark` and append it: its
@@ -539,16 +539,16 @@ appendInPlaceCond: function {
 # statement no expression can hold; the answer is then "" and the caller builds
 # the whole construct as statements instead.
 assignInPlace: function {ctx: Ctx mark: hoistmark text: StringView} out String is {
-    if ctx.argHoistRaw.length > mark.raw then {
+    if ctx.stmt.argHoistRaw.length > mark.raw then {
         closeInPlace :ctx :mark
         return "".string
     }
     r: "(".string
     i: mark.names
-    for i < ctx.argHoists.length loop {
+    for i < ctx.stmt.argHoists.length loop {
         # an inner part already assigns its own hoists where it runs, and left
         # no initialiser
-        ph: ctx.argHoists.getMut :i
+        ph: ctx.stmt.argHoists.getMut :i
         if ph.val.length > 0 then {
             vl: String
             vl swap ph.val
@@ -571,12 +571,12 @@ assignInPlace: function {ctx: Ctx mark: hoistmark text: StringView} out String i
 # is zeroed first, so a path that skips it releases nothing. A raw hoist is a
 # statement no expression can hold, and takes wrapInPlace.
 assignInPlaceTest: function {ctx: Ctx mark: hoistmark cond: StringView} out String is {
-    if ctx.argHoistRaw.length > mark.raw then return (wrapInPlace :ctx :mark :cond)
+    if ctx.stmt.argHoistRaw.length > mark.raw then return (wrapInPlace :ctx :mark :cond)
     r: "(".string
     rel: String
     i: mark.names
-    for i < ctx.argHoists.length loop {
-        ph: ctx.argHoists.getMut :i
+    for i < ctx.stmt.argHoists.length loop {
+        ph: ctx.stmt.argHoists.getMut :i
         owes: ph.dtor.length > 0
         if ph.val.length > 0 then {
             vl: String
@@ -607,7 +607,7 @@ assignInPlaceTest: function {ctx: Ctx mark: hoistmark cond: StringView} out Stri
     }
     ltmp: FnTemps n: 0 listFrees: List OwedFree
     cc: "_cc\{values.tmpNext :ctx tmp: ltmp}"
-    ctx.argHoists.append (ArgHoist name: cc.copy val: String ctype: "bool".string dtor: String)
+    ctx.stmt.argHoists.append (ArgHoist name: cc.copy val: String ctype: "bool".string dtor: String)
     closeInPlace :ctx :mark
     r.append "\{cc} = \{condInParens :cond}\{rel}, \{cc})"
     return r
@@ -635,9 +635,9 @@ wrapInPlace: function {ctx: Ctx mark: hoistmark cond: StringView} out String is 
 # would only leave an enclosing match->switch, not the loop. The label is
 # emitted after the loop by popLoopLabel, but only if a break referenced it.
 pushLoopLabel: function {ctx: Ctx tmp: FnTemps.view isDo: bool postTest: bool} out u64 is {
-    id: ctx.breakLabelCtr
-    ctx.breakLabelCtr = id + 1
-    ctx.loops.append (
+    id: ctx.stmt.breakLabelCtr
+    ctx.stmt.breakLabelCtr = id + 1
+    ctx.stmt.loops.append (
         LoopFrame
         :id
         :isDo
@@ -650,14 +650,14 @@ pushLoopLabel: function {ctx: Ctx tmp: FnTemps.view isDo: bool postTest: bool} o
 
 # noteFrameLeft -- a `break` or `continue` of the frame at `idx` is being emitted.
 noteFrameLeft: function {ctx: Ctx idx: u64} is {
-    lf: ctx.loops.getMut i: idx
+    lf: ctx.stmt.loops.getMut i: idx
     lf.leftEarly = true
 }
 
 # anyFrameLeft -- an open loop or block has already been left by a `break` or
 # `continue`, so what comes later in it does not run on every path.
 anyFrameLeft: function {ctx: Ctx.view} out bool is {
-    for each lf: ctx.loops loop {
+    for each lf: ctx.stmt.loops loop {
         if lf.leftEarly then return true
     }
     return false
@@ -677,8 +677,8 @@ emitContLabel: function {ctx: Ctx.view id: u64 ind: StringView buf: String.borro
 
 # emit the C label that closes loop `id`.
 popLoopLabel: function {ctx: Ctx id: u64 ind: StringView buf: String.borrow} is {
-    if ctx.loops.length > 0 then ctx.loops.pop
-    uo: ctx.breakLabelUsed.get key: id
+    if ctx.stmt.loops.length > 0 then ctx.stmt.loops.pop
+    uo: ctx.stmt.breakLabelUsed.get key: id
     if uo.some then {
         lbl: "\{ind}__zbrk_\{id}: ;\n"
         buf.append lbl
@@ -834,7 +834,7 @@ emitErrorStmt: function {
     }
     # proved: every path through the function reaches it, assuming each loop
     # ends. An early exit before it can skip it, so it stays a run-time trap
-    if ctx.condDepth == 0 when ctx.gen.active.not when ctx.returnEmitted.not when (
+    if ctx.stmt.condDepth == 0 when ctx.gen.active.not when ctx.stmt.returnEmitted.not when (
         anyFrameLeft
         :ctx
     ).not then {
@@ -952,9 +952,9 @@ emitCallStmt: function {
         return
     }
     if sfnId == zast.wellKnown.slot.wkReturn then {
-        ctx.returnEmitted = true
-        outerExit: ctx.exitNode
-        ctx.exitNode = call.nodeid
+        ctx.stmt.returnEmitted = true
+        outerExit: ctx.stmt.exitNode
+        ctx.stmt.exitNode = call.nodeid
         hasArg: false
         for each aId: (zast.kidsOf ast: prog.ast span: call.arguments) loop {
             a: prog.ast.nodes.get i: aId
@@ -974,7 +974,7 @@ emitCallStmt: function {
                 buf.append lr2
             }
         }
-        ctx.exitNode = outerExit
+        ctx.stmt.exitNode = outerExit
         return
     }
     facts: exprfacts
@@ -1102,7 +1102,7 @@ emitAssignment: function {
     nm: localnames.varCName :ctx :prog vid: nameVid
     narrowfacts.dropStaleBorrowAlias :ctx vid: nameVid
     nbrw: localnames.bindingVarIsBorrowed :prog :n
-    ctx.borrowedVars.set key: (localnames.defVid :prog nid: n.nodeid) value: nbrw
+    ctx.stmt.borrowedVars.set key: (localnames.defVid :prog nid: n.nodeid) value: nbrw
     if ctx.gen.active when (isYieldNode :prog n: avn) then {
         (
             forloops.emitExprFormYield
@@ -1248,13 +1248,13 @@ emitBreakStmt: function {
     buf: String.borrow
 } is {
     emitBreakFrees :prog :ctx :tmp :ind :buf
-    if ctx.loops.length > 0 then {
-        noteFrameLeft :ctx idx: ctx.loops.length - 1
-        bid: (ctx.loops.get i: ctx.loops.length - 1).id
+    if ctx.stmt.loops.length > 0 then {
+        noteFrameLeft :ctx idx: ctx.stmt.loops.length - 1
+        bid: (ctx.stmt.loops.get i: ctx.stmt.loops.length - 1).id
         lbkg: "\{ind}goto __zbrk_\{bid};\n"
         buf.append lbkg
         ubk: true
-        ctx.breakLabelUsed.set key: bid value: ubk
+        ctx.stmt.breakLabelUsed.set key: bid value: ubk
     } else {
         lbk: "\{ind}break;\n"
         buf.append lbk
@@ -1280,13 +1280,13 @@ emitContinueStmt: function {
         inDo: false
         loopIdx: u64
         hasLoop: false
-        li: ctx.loops.length
+        li: ctx.stmt.loops.length
         if li > 0 then {
-            if (ctx.loops.get i: li - 1).isDo then inDo = true
+            if (ctx.stmt.loops.get i: li - 1).isDo then inDo = true
             sj: li
             for sj > 0 loop {
                 sj = sj - 1
-                if (ctx.loops.get i: sj).isDo.not when hasLoop.not then {
+                if (ctx.stmt.loops.get i: sj).isDo.not when hasLoop.not then {
                     loopIdx = sj
                     hasLoop = true
                 }
@@ -1295,7 +1295,7 @@ emitContinueStmt: function {
         if hasLoop then noteFrameLeft :ctx idx: loopIdx
         if inDo when hasLoop then {
             emitContinueFrees :prog :ctx :tmp idx: loopIdx :ind :buf
-            cid: (ctx.loops.get i: loopIdx).id
+            cid: (ctx.stmt.loops.get i: loopIdx).id
             lcg: "\{ind}goto __zcont_\{cid};\n"
             buf.append lcg
             ucn: true
@@ -1304,8 +1304,8 @@ emitContinueStmt: function {
             emitBreakFrees :prog :ctx :tmp :ind :buf
             postId: u64
             post: false
-            if ctx.loops.length > 0 then {
-                pf0: ctx.loops.get i: ctx.loops.length - 1
+            if ctx.stmt.loops.length > 0 then {
+                pf0: ctx.stmt.loops.get i: ctx.stmt.loops.length - 1
                 post = pf0.postTest
                 postId = pf0.id
             }
@@ -1426,10 +1426,10 @@ emitReturnStmt: function {
     # bare control keywords parse as an AtomId reference (no value): a
     # no-value `return` (goto L_done inside a generator), `break`, `continue`.
     bkwId: zast.atomNameIdOf :n
-    outerExit: ctx.exitNode
-    ctx.exitNode = interpPartNodeId :n
+    outerExit: ctx.stmt.exitNode
+    ctx.stmt.exitNode = interpPartNodeId :n
     if bkwId == zast.wellKnown.slot.wkReturn then {
-        ctx.returnEmitted = true
+        ctx.stmt.returnEmitted = true
         if ctx.gen.active then {
             emitExitDestroy :prog :ctx :ind :buf
             lgd: "\{ind}goto L_done;\n"
@@ -1446,7 +1446,7 @@ emitReturnStmt: function {
             emitContinueStmt :prog :ctx :n :bkwId :ind :tmp :buf
         }
     }
-    ctx.exitNode = outerExit
+    ctx.stmt.exitNode = outerExit
 }
 
 # emitForStmt -- a `for` in statement position: the iteration form comes from what
@@ -1468,11 +1468,11 @@ emitForStmt: function {
     # branch does, so an `error` in its first iteration is reached
     condBump: 1.u64
     if entry == ztyping.loopentry.always then condBump = 0
-    ctx.condDepth = ctx.condDepth + condBump
+    ctx.stmt.condDepth = ctx.stmt.condDepth + condBump
     # a plain binding is evaluated at every iteration; everything below is an
     # `each` binding's walk or a loop with no binding
     if (emitPlainBindingFor :prog :ctx m: n :ind :tmp :buf) then {
-        ctx.condDepth = ctx.condDepth - condBump
+        ctx.stmt.condDepth = ctx.stmt.condDepth - condBump
         return
     }
     # THE COUNTED RANGE IS ASKED FIRST. An integer range is an ordinary
@@ -1489,17 +1489,17 @@ emitForStmt: function {
     # always breaks has a step no path reaches.
     runsOnce: (foldedLoopOf :prog nid: n.nodeid).end == ztyping.loopend.once
     if runsOnce.not when (localnames.emitIntRangeFor :prog :ctx m: n :ind :tmp :buf) then {
-        ctx.condDepth = ctx.condDepth - condBump
+        ctx.stmt.condDepth = ctx.stmt.condDepth - condBump
         return
     }
     if (localnames.emitObjIterFor :prog :ctx m: n :ind :tmp :buf) then {
-        ctx.condDepth = ctx.condDepth - condBump
+        ctx.stmt.condDepth = ctx.stmt.condDepth - condBump
         return
     }
     # do-while: no pre-conditions, a post-condition (`for loop {...} while C`).
     if n.conditions.count.u64 == 0 when n.postconditions.count.u64 > 0 then {
         emitDoWhileFor :prog :ctx :n :ind :tmp :buf
-        ctx.condDepth = ctx.condDepth - condBump
+        ctx.stmt.condDepth = ctx.stmt.condDepth - condBump
         return
     }
     # a condition that SUSPENDS, or that MOVES an owned local, cannot be
@@ -1548,7 +1548,7 @@ emitForStmt: function {
     # ends, AFTER the break label: both the path that falls out and the path
     # that jumps reach it there
     flushBlockFrees :tmp lL: lLh diverged: false :buf
-    ctx.condDepth = ctx.condDepth - condBump
+    ctx.stmt.condDepth = ctx.stmt.condDepth - condBump
 }
 
 # emitDoWhileFor -- `for loop { .. } while C`: no pre-conditions and at
@@ -1844,7 +1844,7 @@ emitIfStmt: function {
         }
         return
     }
-    ctx.condDepth = ctx.condDepth + 1
+    ctx.stmt.condDepth = ctx.stmt.condDepth + 1
     ifAssign: String
     first: true
     opened: u64
@@ -1911,7 +1911,7 @@ emitIfStmt: function {
         opened = opened - 1
         buf.append le
     }
-    ctx.condDepth = ctx.condDepth - 1
+    ctx.stmt.condDepth = ctx.stmt.condDepth - 1
 }
 
 # withValueCType -- the C type of a `with` binding's value, as a binding's is:
@@ -2235,9 +2235,9 @@ emitCaseStmt: function {
         }
         return
     }
-    ctx.condDepth = ctx.condDepth + 1
+    ctx.stmt.condDepth = ctx.stmt.condDepth + 1
     emitMatchStmt :prog :ctx m: n assignTo: "" :ind :tmp :buf
-    ctx.condDepth = ctx.condDepth - 1
+    ctx.stmt.condDepth = ctx.stmt.condDepth - 1
 }
 
 # emitDoStmt -- a `do` block in statement position: its own C scope, so the locals
@@ -2273,7 +2273,7 @@ emitDoStmt: function {
         # return position), whose return freed them
         body: prog.ast.nodes.get i: n.statement
         emitBodyNode :prog :ctx n: body :ind :tmp :buf
-        if (blockDiverges :prog :ctx n: body).not when ctx.tailReturned.not then (
+        if (blockDiverges :prog :ctx n: body).not when ctx.stmt.tailReturned.not then (
             emitScopeDestroy
             :prog
             :ctx
@@ -3199,8 +3199,8 @@ emitBreakFrees: function {
     ind: StringView
     buf: String.borrow
 } is {
-    if ctx.loops.length == 0 then return
-    emitContinueFrees :prog :ctx :tmp idx: ctx.loops.length - 1 :ind :buf
+    if ctx.stmt.loops.length == 0 then return
+    emitContinueFrees :prog :ctx :tmp idx: ctx.stmt.loops.length - 1 :ind :buf
 }
 
 # emitContinueFrees -- the destroys owed where an exit leaves the scopes since
@@ -3217,14 +3217,14 @@ emitContinueFrees: function {
     ind: StringView
     buf: String.borrow
 } is {
-    allRows: ctx.exitNode.isZero
+    allRows: ctx.stmt.exitNode.isZero
     if allRows then (
         emitFail
         :ctx
         what: "an exit whose destroys the checker did not record".string
         line: 0
     )
-    lMark: (ctx.loops.get i: idx).listMark
+    lMark: (ctx.stmt.loops.get i: idx).listMark
     i: tmp.listFrees.length
     for i > lMark loop {
         i = i - 1
@@ -3243,7 +3243,7 @@ emitExitDestroy: function {
     ind: StringView
     buf: String.borrow
 } is {
-    rg: prog.typing.exitDestroy.get key: ctx.exitNode
+    rg: prog.typing.exitDestroy.get key: ctx.stmt.exitNode
     if rg.none then return
     k: u64
     for k < rg.len loop {
@@ -3388,7 +3388,7 @@ emitMatchClause: function {
                 # a data payload is a handle: the shadow reads through it
                 pyo: prog.typing.declChildOfId parentTypeId: vtid nameId: arm
                 if pyo.some when (argforms.isStaticHandle :prog tid: pyo) then {
-                    ctx.ptrVids.append from: snameVid
+                    ctx.stmt.ptrVids.append from: snameVid
                     staticArm = true
                 }
             }
@@ -3426,7 +3426,7 @@ emitMatchClause: function {
                 prevTid: prevT
             )
         }
-        if unptr then ctx.ptrVids.append from: snameVid
+        if unptr then ctx.stmt.ptrVids.append from: snameVid
         if staticArm then dropPtrVid :ctx vid: snameVid
         if dv.not then {
             l5: "\{ind}    break;\n"
@@ -3685,9 +3685,9 @@ emitMatchBindValue: function {
         ld: "\{ind}\{ct} \{nm};\n"
         buf.append ld
         # each arm runs only when selected, as a statement match's arms do
-        ctx.condDepth = ctx.condDepth + 1
+        ctx.stmt.condDepth = ctx.stmt.condDepth + 1
         emitMatchStmt :prog :ctx m: n assignTo: nm :ind :tmp :buf
-        ctx.condDepth = ctx.condDepth - 1
+        ctx.stmt.condDepth = ctx.stmt.condDepth - 1
         return true
     } else {
         return false
@@ -3774,7 +3774,7 @@ emitIfAssign: function {
         return
     }
     # each branch runs only when selected, as a statement if's branches do
-    ctx.condDepth = ctx.condDepth + 1
+    ctx.stmt.condDepth = ctx.stmt.condDepth + 1
     first: true
     opened: u64
     for each cId: (zast.kidsOf ast: prog.ast span: n.clauses) loop {
@@ -3838,7 +3838,7 @@ emitIfAssign: function {
         opened = opened - 1
         buf.append le
     }
-    ctx.condDepth = ctx.condDepth - 1
+    ctx.stmt.condDepth = ctx.stmt.condDepth - 1
 }
 
 # emitObjIterLoop -- the `while (1) { T _iter = C_call(&recv); ... }` an object
@@ -4432,8 +4432,8 @@ newCondGuard: function {
     # the declaration appends here
     buf: String.borrow
 } out String is {
-    gnum: ctx.whenGuardCtr
-    ctx.whenGuardCtr = gnum + 1
+    gnum: ctx.stmt.whenGuardCtr
+    ctx.stmt.whenGuardCtr = gnum + 1
     gvar: "_wc\{gnum}"
     buf.append "\{ind}uint8_t \{gvar} = 1;\n"
     return gvar
@@ -4613,8 +4613,8 @@ emitPlainIfHead: function {
 # hoistsPending -- whether argument hoists above the current floors wait to be
 # declared by the statement being built.
 hoistsPending: function {ctx: Ctx.view} out bool is {
-    if ctx.argHoists.length > ctx.argHoistFloor then return true
-    return ctx.argHoistRaw.length > ctx.argHoistRawFloor
+    if ctx.stmt.argHoists.length > ctx.stmt.argHoistFloor then return true
+    return ctx.stmt.argHoistRaw.length > ctx.stmt.argHoistRawFloor
 }
 
 # emit one if or else-if clause: its conditions, then the body they guard. The
@@ -4906,8 +4906,8 @@ emitDirectReturn: function {
 } is {
     buf.append cleanup
     rvOut: "\{rv}"
-    if ctx.refBorrowRet then rvOut = refReturnText :prog :ctx :vid :rv
-    if ctx.refBorrowRet.not when (
+    if ctx.stmt.refBorrowRet then rvOut = refReturnText :prog :ctx :vid :rv
+    if ctx.stmt.refBorrowRet.not when (
         needsValueDeref
         :prog
         :ctx
@@ -4986,7 +4986,7 @@ emitPlainReturn: function {
         )
         return
     }
-    if hoist when ctx.refBorrowRet then {
+    if hoist when ctx.stmt.refBorrowRet then {
         # a reference return holds the ADDRESS across the frees, not a copy
         rr: refReturnText :prog :ctx :vid rv: rv.stringView
         preludeNeed :ctx memb: "@typeof"
@@ -5103,7 +5103,7 @@ emitTailValue: function {
         isCtl = vn.ifexpr or vn.caseexpr or vn.forexpr or vn.withexpr
     }
     if isBlock then return false
-    ctx.tailReturned = true
+    ctx.stmt.tailReturned = true
     if isCtl.not then {
         emitReturnOfNode :prog :ctx :vid :ind :tmp :buf
         return true
@@ -5203,9 +5203,9 @@ emitTailStmt: function {
     ) case statementline then {
         # a tail the checker recorded is an exit: its return frees what the
         # checker listed for the line (exitDestroy)
-        outerExit: ctx.exitNode
-        ctx.exitNode = zast.nodeid
-        if (prog.typing.tailExits.has item: n.nodeid) then ctx.exitNode = n.nodeid
+        outerExit: ctx.stmt.exitNode
+        ctx.stmt.exitNode = zast.nodeid
+        if (prog.typing.tailExits.has item: n.nodeid) then ctx.stmt.exitNode = n.nodeid
         done: (
             emitTailStmt
             :prog
@@ -5216,7 +5216,7 @@ emitTailStmt: function {
             :buf
         )
         if done.not then done = emitTailValue :prog :ctx lineId: n.nodeid :ind :tmp :buf
-        ctx.exitNode = outerExit
+        ctx.stmt.exitNode = outerExit
         return done
     } case atomid then {
         if n.name == zast.wellKnown.slot.wkReturn then return false
@@ -5224,11 +5224,11 @@ emitTailStmt: function {
         if n.name == zast.wellKnown.slot.wkContinue then return false
         if (stampIsNullType :prog nid: n.nodeid) then return false
         emitReturnOfNode :prog :ctx vid: n.nodeid :ind :tmp :buf
-        ctx.tailReturned = true
+        ctx.stmt.tailReturned = true
         return true
     } case atomstring then {
         emitReturnOfNode :prog :ctx vid: n.nodeid :ind :tmp :buf
-        ctx.tailReturned = true
+        ctx.stmt.tailReturned = true
         return true
     } case withexpr then {
         # return position passes inward only when the checker said it does
@@ -5254,7 +5254,7 @@ emitTailStmt: function {
             ) then {
                 wctTP: localnames.refPtrC :prog tid: wrbT base: wctT.stringView
                 wctT = wctTP.take
-                ctx.ptrVids.append (localnames.defVid :prog nid: n.nodeid)
+                ctx.stmt.ptrVids.append (localnames.defVid :prog nid: n.nodeid)
                 wvT = (
                     localnames.unloadValueStructRef
                     :prog
@@ -5271,13 +5271,13 @@ emitTailStmt: function {
             withLine: "\{ind}int64_t \{wnmT} = \{wvT};\n"
             buf.append withLine
         }
-        ctx.tailRetActive = true
+        ctx.stmt.tailRetActive = true
         emitBodyNode :prog :ctx n: (prog.ast.nodes.get i: n.body) :ind :tmp :buf
         return true
     } case doexpr then {
         dstT: prog.ast.nodes.get i: n.statement
         if (ztypecheck.blockHasBreak ast: prog.ast n: dstT) then return false
-        ctx.tailRetActive = true
+        ctx.stmt.tailRetActive = true
         emitBodyNode :prog :ctx n: dstT :ind :tmp :buf
         return true
     } else {
@@ -5393,9 +5393,9 @@ emitNestedControlAssign: function {
     match (
         mn
     ) case caseexpr then {
-        ctx.condDepth = ctx.condDepth + 1
+        ctx.stmt.condDepth = ctx.stmt.condDepth + 1
         emitMatchStmt :prog :ctx m: mn assignTo: target :ind :tmp :buf
-        ctx.condDepth = ctx.condDepth - 1
+        ctx.stmt.condDepth = ctx.stmt.condDepth - 1
         return true
     } case ifexpr then {
         if (ztypecheck.armLeaves ast: prog.ast n: (prog.ast.nodes.get i: mn.nodeid) inLoop: false
@@ -5447,8 +5447,8 @@ emitStatementBlock: function {
     tmp: FnTemps
     buf: String.borrow
 } is {
-    trTail: ctx.tailRetActive
-    ctx.tailRetActive = false
+    trTail: ctx.stmt.tailRetActive
+    ctx.stmt.tailRetActive = false
     pgN: List String
     pgVid: ListVal ztypes.vid
     pgPrevV: List String
@@ -5500,14 +5500,14 @@ emitBodyNode: function {
     # five loop shapes emit their body through, so it is the one place that has
     # to know. The target is matched by NODE, so a body emitted from inside the
     # loop's header cannot take it.
-    depth: ctx.comprehendTo.length
+    depth: ctx.stmt.comprehendTo.length
     if depth > 0 then {
         hit: false
-        top: ctx.comprehendTo.get i: depth - 1
+        top: ctx.stmt.comprehendTo.get i: depth - 1
         hit = top.body == (zast.nodeIdOf :n)
         top.drop
         if hit then {
-            target: ctx.comprehendTo.pop
+            target: ctx.stmt.comprehendTo.pop
             (
                 emitComprehensionNode
                 :prog
@@ -5638,19 +5638,19 @@ emitListComprehension: function {
         # a precondition the fold proved false: the list stays empty
         if (foldedLoopOf :prog nid: forNode.nodeid).entry == ztyping.loopentry.never then return
         noteMemberUse :ctx mono: listTid member: memberWord.slot.append
-        ctx.comprehendTo.append (
+        ctx.stmt.comprehendTo.append (
             ComprehendTo
             body: forNode.body
             cb: listCb.string
             lvar: listVar.string
         )
-        depth: ctx.comprehendTo.length
+        depth: ctx.stmt.comprehendTo.length
         emitForStmt :prog :ctx n: forNode :ind :tmp :buf
         # the body always emits, so the target always goes; one left standing
         # means the list would be silently empty, which is the defect this
         # replaced and is not a thing to fall back to
-        if ctx.comprehendTo.length == depth then {
-            target: ctx.comprehendTo.pop
+        if ctx.stmt.comprehendTo.length == depth then {
+            target: ctx.stmt.comprehendTo.pop
             f6: "for-expression body emitted no append (list \{target.lvar})"
             emitFail :ctx what: f6 line: forNode.lineno
         }
@@ -5679,11 +5679,11 @@ heldArmPayloadC: function {
     arm: zast.nameid
     held: ListVal ztypes.tid
 } out String is {
-    ctx.typeUseHold = true
+    ctx.stmt.typeUseHold = true
     pc: values.armPayloadC :prog :ctx :tid :arm
-    ctx.typeUseHold = false
-    for each t: ctx.heldTypeUses loop held.append t
-    ctx.heldTypeUses = ListVal ztypes.tid
+    ctx.stmt.typeUseHold = false
+    for each t: ctx.stmt.heldTypeUses loop held.append t
+    ctx.stmt.heldTypeUses = ListVal ztypes.tid
     return pc
 }
 
@@ -5723,7 +5723,7 @@ emitReturnCleanup: function {
     ind: StringView
     buf: String.borrow
 } is {
-    allRows: ctx.exitNode.isZero
+    allRows: ctx.stmt.exitNode.isZero
     if allRows then (
         emitFail
         :ctx

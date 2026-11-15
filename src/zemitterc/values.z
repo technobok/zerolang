@@ -109,7 +109,7 @@ emitTernaryChain: function {
     tm: pendingHoistMark :ctx
     # nothing evaluated before the chain is moved into it: a control value in
     # it makes the whole if one (below)
-    ctx.guardDepth = ctx.guardDepth + 1
+    ctx.stmt.guardDepth = ctx.stmt.guardDepth + 1
     i: u64
     for i < n.clauses.count loop {
         cId: zast.kidAt kids: prog.ast.kids span: n.clauses :i
@@ -117,7 +117,7 @@ emitTernaryChain: function {
         cxF: exprfacts
         cx: ternaryClause :prog :ctx c: clause isFirst: i == 0 :ref facts: cxF
         i = i + 1
-        if cx.length == 0 then ctx.guardDepth = ctx.guardDepth - 1
+        if cx.length == 0 then ctx.stmt.guardDepth = ctx.stmt.guardDepth - 1
         if cx.length == 0 then return (
             ternaryAsStatements
             :prog
@@ -133,10 +133,10 @@ emitTernaryChain: function {
     }
     exF: exprfacts
     ex: argforms.ternaryElse :prog :ctx oId: n.elseclause :ref facts: exF
-    ctx.guardDepth = ctx.guardDepth - 1
+    ctx.stmt.guardDepth = ctx.stmt.guardDepth - 1
     # a control value anywhere in the chain runs as statements, which neither
     # a condition nor an arm of a ternary can hold
-    if (ex.length == 0) or (ctx.argHoistRaw.length > tm.raw) then return (
+    if (ex.length == 0) or (ctx.stmt.argHoistRaw.length > tm.raw) then return (
         ternaryAsStatements
         :prog
         :ctx
@@ -173,10 +173,10 @@ emitTernaryChain: function {
 # dropHoistsTo -- forget the hoists recorded since `mark`: the text that would
 # have read them is not being emitted.
 dropHoistsTo: function {ctx: Ctx mark: hoistmark} is {
-    for ctx.argHoists.length > mark.names loop ctx.argHoists.pop
-    for ctx.argHoistRaw.length > mark.raw loop {
+    for ctx.stmt.argHoists.length > mark.names loop ctx.stmt.argHoists.pop
+    for ctx.stmt.argHoistRaw.length > mark.raw loop {
         # a part settleAhead moved out of its call reads nowhere else
-        if (ctx.argHoistRaw.get i: ctx.argHoistRaw.length - 1).settles then {
+        if (ctx.stmt.argHoistRaw.get i: ctx.stmt.argHoistRaw.length - 1).settles then {
             (
                 emitFail
                 :ctx
@@ -184,7 +184,7 @@ dropHoistsTo: function {ctx: Ctx mark: hoistmark} is {
                 line: 0
             )
         }
-        ctx.argHoistRaw.pop
+        ctx.stmt.argHoistRaw.pop
     }
 }
 
@@ -936,7 +936,7 @@ failedFacts: function {} out exprfacts is {
 # (guardDepth) nothing is: that region is built as statements around it, or
 # keeps its control value in place.
 settleAhead: function {prog: Program.view ctx: Ctx} is {
-    if ctx.guardDepth > 0 then return
+    if ctx.stmt.guardDepth > 0 then return
     for true loop {
         # the earliest part not yet made a statement, then the earliest piece
         pe: earliestUnsettled :ctx
@@ -1008,10 +1008,10 @@ settlePieceAhead: function {ctx: Ctx i: u64} is {
     v.append p.val
     p.val = String
     p.done = true
-    ctx.argHoistRaw.append (
+    ctx.stmt.argHoistRaw.append (
         RawHoist
         text: "\{lhs} = \{v};\n"
-        at: ctx.argHoists.length
+        at: ctx.stmt.argHoists.length
         settles: true
     )
 }
@@ -1019,15 +1019,15 @@ settlePieceAhead: function {ctx: Ctx i: u64} is {
 # recordRawHoist -- statements the statement being built runs ahead of itself,
 # after the argument hoists recorded so far.
 recordRawHoist: function {ctx: Ctx text: String.take} is {
-    ctx.argHoistRaw.append (RawHoist :text at: ctx.argHoists.length settles: false)
+    ctx.stmt.argHoistRaw.append (RawHoist :text at: ctx.stmt.argHoists.length settles: false)
 }
 
 # tmpNext -- the next temp number of the function being emitted, from `tmp` or
 # from a statement expression's own counter, whichever has counted further.
 tmpNext: function {ctx: Ctx tmp: FnTemps} out u64 is {
-    if ctx.tmpHigh > tmp.n then tmp.n = ctx.tmpHigh
+    if ctx.stmt.tmpHigh > tmp.n then tmp.n = ctx.stmt.tmpHigh
     v: tmp.next
-    ctx.tmpHigh = tmp.n
+    ctx.stmt.tmpHigh = tmp.n
     return v
 }
 
@@ -2600,7 +2600,7 @@ emitControlPtrExpr: function {
     ctx.armRefCv = outerCv
     closeControlArms :ctx :outer
     if ctx.armRefDepth == 0 then {
-        for ctx.armParks.length > 0 loop ctx.argHoists.append ctx.armParks.pop
+        for ctx.armParks.length > 0 loop ctx.stmt.argHoists.append ctx.armParks.pop
     }
     recordRawHoist :ctx text: lbuf
     return cv
@@ -2622,23 +2622,23 @@ armsmark: record {
 openControlArms: function {ctx: Ctx} out armsmark is {
     m: (
         armsmark
-        floor: ctx.argHoistFloor
-        rawFloor: ctx.argHoistRawFloor
-        guards: ctx.guardDepth
+        floor: ctx.stmt.argHoistFloor
+        rawFloor: ctx.stmt.argHoistRawFloor
+        guards: ctx.stmt.guardDepth
         seqFloor: ctx.order.seqFloor
     )
-    ctx.argHoistFloor = ctx.argHoists.length
-    ctx.argHoistRawFloor = ctx.argHoistRaw.length
-    ctx.guardDepth = 0
+    ctx.stmt.argHoistFloor = ctx.stmt.argHoists.length
+    ctx.stmt.argHoistRawFloor = ctx.stmt.argHoistRaw.length
+    ctx.stmt.guardDepth = 0
     ctx.order.seqFloor = ctx.order.seq
     return m
 }
 
 # closeControlArms -- end what openControlArms began.
 closeControlArms: function {ctx: Ctx outer: armsmark} is {
-    ctx.argHoistFloor = outer.floor
-    ctx.argHoistRawFloor = outer.rawFloor
-    ctx.guardDepth = outer.guards
+    ctx.stmt.argHoistFloor = outer.floor
+    ctx.stmt.argHoistRawFloor = outer.rawFloor
+    ctx.stmt.guardDepth = outer.guards
     ctx.order.seqFloor = outer.seqFloor
 }
 
@@ -3765,11 +3765,11 @@ emitReferenceBind: function {
 } out bool is {
     if ct.length == 0 then return false
     if (controlValueIsReference :prog :ctx n: avn).not then return false
-    prevBlock: ctx.hoistsToBlock
-    ctx.hoistsToBlock = true
+    prevBlock: ctx.stmt.hoistsToBlock
+    ctx.stmt.hoistsToBlock = true
     rv: emitExpr :prog :ctx n: avn
     flushArgHoists :ctx :ind :tmp :buf
-    ctx.hoistsToBlock = prevBlock
+    ctx.stmt.hoistsToBlock = prevBlock
     vt: bindingStampOf :prog nid: (controlValueStampNid :prog n: avn)
     if (isHeapPtrCollection :prog :ctx tid: vt) then {
         buf.append "\{ind}\{ct}* \{nm} = \{rv};\n"

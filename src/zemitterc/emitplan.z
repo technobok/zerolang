@@ -610,7 +610,7 @@ objIterCallC: function {
 # restarts at the function boundary, so carrying one across would let a previous
 # body's alias, narrowing or exclusion answer for a name in this one.
 resetFnEmitState: function {ctx: Ctx} is {
-    ctx.ptrVids = ListVal ztypes.vid
+    ctx.stmt.ptrVids = ListVal ztypes.vid
     ctx.aliases = List VarEntry
     ctx.narrowBox = List VarEntry
     ctx.aliasHeld = List AliasHeld
@@ -645,7 +645,7 @@ registerReftypeParams: function {
         )
         if regp then {
             rvd: paramVidByNameId :prog :op nameId: (pNmIds.get i: ri)
-            ctx.ptrVids.append rvd
+            ctx.stmt.ptrVids.append rvd
         }
         ri = ri + 1
     }
@@ -777,8 +777,8 @@ appendFnSignature: function {
 # holds, or the C names a struct that is never written.
 noteTypeUse: function {ctx: Ctx tid: ztypes.tid} is {
     if ctx.reachFixed.not then {
-        if ctx.typeUseHold then {
-            ctx.heldTypeUses.append tid
+        if ctx.stmt.typeUseHold then {
+            ctx.stmt.heldTypeUses.append tid
             return
         }
         ctx.typeUses.add item: tid
@@ -2075,17 +2075,17 @@ emitFnBody: function {
     buf: String.borrow
 } is {
     rbt: fnReturnTidOf :prog tid: fid
-    ctx.refBorrowRet = localnames.fnReturnsRefBorrow :prog :ctx :fid retTid: rbt
+    ctx.stmt.refBorrowRet = localnames.fnReturnsRefBorrow :prog :ctx :fid retTid: rbt
     if op.functiondef.not then return
     tmp: FnTemps n: 0 listFrees: List OwedFree
     # temp numbers are the function's: a body emitted while another is under
     # way counts from zero and hands the outer one's count back
-    outerTmpHigh: ctx.tmpHigh
-    ctx.tmpHigh = 0
+    outerTmpHigh: ctx.stmt.tmpHigh
+    ctx.stmt.tmpHigh = 0
     outerOrderCtr: ctx.order.ctr
     ctx.order.ctr = 0
-    outerReturned: ctx.returnEmitted
-    ctx.returnEmitted = false
+    outerReturned: ctx.stmt.returnEmitted
+    ctx.stmt.returnEmitted = false
     for each pcmId: (zast.kidsOf ast: prog.ast span: op.parameters) loop {
         pcm: prog.ast.nodes.get i: pcmId
         if pcm.namedoperation then (
@@ -2102,15 +2102,15 @@ emitFnBody: function {
         opb: prog.ast.nodes.get i: op.body
         # a declared result puts the last statement in return position, whatever
         # form the type is written in -- `u8` and `(ListVal u64)` alike
-        if op.returntype.notZero when ctx.gen.active.not then ctx.tailRetActive = true
-        ctx.tailReturned = false
+        if op.returntype.notZero when ctx.gen.active.not then ctx.stmt.tailRetActive = true
+        ctx.stmt.tailReturned = false
         stmtblocks.emitBodyNode :prog :ctx n: opb ind: "    " :tmp :buf
-        ctx.tailRetActive = false
-        endsRet = ctx.tailReturned or (stmtblocks.blockDiverges :prog :ctx n: opb)
+        ctx.stmt.tailRetActive = false
+        endsRet = ctx.stmt.tailReturned or (stmtblocks.blockDiverges :prog :ctx n: opb)
     }
-    ctx.tmpHigh = outerTmpHigh
+    ctx.stmt.tmpHigh = outerTmpHigh
     ctx.order.ctr = outerOrderCtr
-    ctx.returnEmitted = outerReturned
+    ctx.stmt.returnEmitted = outerReturned
     # a body that diverges on every path never reaches this flush; the
     # return/break cleanups already freed the same locals on those paths
     if endsRet then return
@@ -2468,8 +2468,33 @@ emitC: function {
         :litSizes
         usedLits: IdSet zast.nodeid
         constLits: List String
-        tailRetActive: false
-        tailReturned: false
+        stmt: (
+            StatementState
+            ptrVids: ListVal ztypes.vid
+            refBorrowRet: false
+            typeUseHold: false
+            heldTypeUses: ListVal ztypes.tid
+            exitNode: zast.nodeid
+            comprehendTo: List ComprehendTo
+            tailRetActive: false
+            tailReturned: false
+            condDepth: 0
+            returnEmitted: false
+            hoistTags: (MapRV String v: zast.nameid)
+            argHoists: List ArgHoist
+            argHoistRaw: List RawHoist
+            argHoistCtr: 0
+            guardDepth: 0
+            tmpHigh: 0
+            argHoistFloor: 0
+            argHoistRawFloor: 0
+            loops: List LoopFrame
+            breakLabelUsed: (IdMapV u64 v: bool)
+            whenGuardCtr: 0
+            breakLabelCtr: 0
+            borrowedVars: (IdMapV ztypes.vid v: bool)
+            hoistsToBlock: false
+        )
         defUnitId: (IdMapV ztypes.tid v: ztypes.declid)
         classRows: List ClassRow
         classRowTids: ListVal ztypes.tid
@@ -2477,8 +2502,6 @@ emitC: function {
         fieldListAt: (IdMapV ztypes.tid v: u64)
         fieldNameIds: ListVal zast.nameid
         mainUnitId: ztypes.declid
-        condDepth: 0
-        returnEmitted: false
         emitErrors: List zast.ErrorData
         demands: zemitrows.DemandSet.create
         condEpoch: 0
@@ -2508,10 +2531,8 @@ emitC: function {
             ctr: 0
             lastArgByPtr: false
         )
-        ptrVids: ListVal ztypes.vid
         staticVids: IdSet ztypes.vid
         staticTids: IdSet ztypes.tid
-        refBorrowRet: false
         aliases: List VarEntry
         narrowBox: List VarEntry
         aliasHeld: List AliasHeld
@@ -2538,8 +2559,6 @@ emitC: function {
             payC: "".string
             hasValue: false
         )
-        exitNode: zast.nodeid
-        comprehendTo: List ComprehendTo
         curThisTid: ztypes.tid
         emittedUserTypes: IdSet ztypes.tid
         eqAsked: IdSet ztypes.tid
@@ -2556,8 +2575,6 @@ emitC: function {
         fnptrWritten: IdSet ztypes.tid
         fnptrPassDone: false
         typeUses: IdSet ztypes.tid
-        typeUseHold: false
-        heldTypeUses: ListVal ztypes.tid
         ordinalTagUses: IdSet ztypes.tid
         tagOnlyTypes: IdSet ztypes.tid
         tagEnumUses: IdSet ztypes.tid
@@ -2587,7 +2604,6 @@ emitC: function {
         nativeMarks: (MapVV textkey v: u64)
         marks: List NativeMark
         rows: zemitrows.RowTable.create
-        hoistTags: (MapRV String v: zast.nameid)
         rowsWritten: IdSet u64
         rowsClosed: IdSet u64
         rowsAlwaysClosed: IdSet u64
@@ -2614,24 +2630,11 @@ emitC: function {
         markerValues: (IdMapV ztypes.tid v: bool)
         emittedListIters: IdSet ztypes.tid
         unitOrder: List String
-        argHoists: List ArgHoist
-        argHoistRaw: List RawHoist
-        argHoistCtr: 0
-        guardDepth: 0
         condScan: ListVal zast.nodeid
-        tmpHigh: 0
-        argHoistFloor: 0
-        argHoistRawFloor: 0
         armRefCv: 0
         armRefDepth: 0
         armParks: List ArgHoist
-        hoistsToBlock: false
-        whenGuardCtr: 0
-        loops: List LoopFrame
         contLabelUsed: (IdMapV u64 v: bool)
-        breakLabelCtr: 0
-        breakLabelUsed: (IdMapV u64 v: bool)
-        borrowedVars: (IdMapV ztypes.vid v: bool)
         strTid: strId
         svTid: svId
         textTid: rtids.text

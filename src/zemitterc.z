@@ -1262,6 +1262,78 @@ OrderState: class {
     lastArgByPtr: bool
 }
 
+# StatementState -- the statement being written: its temporaries, labels and
+# returns. A part of Ctx (`stmt`).
+StatementState: class {
+    # the current class method body's pointer-receiver params, by variable id
+    ptrVids: ListVal ztypes.vid
+    # the enclosing function hands back a REFERENCE to a user reftype, so its
+    # `return` yields an address. Per-function, set by emitFnBody like ptrVids.
+    refBorrowRet: bool
+    # while an arm alias is built: noteTypeUse holds its types in heldTypeUses
+    # instead of recording them
+    typeUseHold: bool
+    heldTypeUses: ListVal ztypes.tid
+    # the `return`, `break` or `continue` statement being emitted, whose
+    # destroys the checker recorded (exitDestroy); 0 at a tail value, which
+    # records none
+    exitNode: zast.nodeid
+    # the for-EXPRESSION append targets open around the statement being
+    # emitted, innermost last: a comprehension records one, and the loop's own
+    # body takes it (emitBodyNode). Nested only through a comprehension inside
+    # another's body, which is why it is a stack rather than a slot
+    comprehendTo: List ComprehendTo
+    # whether the statement being emitted is in tail position, where a return
+    # needs no jump
+    tailRetActive: bool
+    # the body's last statement was emitted as a `return`, so nothing after it runs
+    tailReturned: bool
+    # how deep in nested conditions the emit is, which decides whether a temp
+    # can be hoisted out
+    condDepth: u64
+    # a `return` has been emitted in this function: what comes later does not
+    # run on every path
+    returnEmitted: bool
+    # the hoists that realise one of the checker's unnamed locals: the local's
+    # name id by hoist name; flushing a hoist moves it onto the temporary it owes
+    hoistTags: (MapRV String v: zast.nameid)
+    # the statement temporaries awaiting declaration
+    argHoists: List ArgHoist
+    # statements the statement being built runs ahead of itself, among the
+    # argument hoists in the order they were recorded
+    argHoistRaw: List RawHoist
+    # the next `_ah` number
+    argHoistCtr: u64
+    # how many in-place regions that run only on some paths, or at every loop
+    # test, enclose the text being built (openInPlace with `guarded`)
+    guardDepth: u64
+    # the lowest temp number the function being emitted has not handed out,
+    # across every counter a statement expression in it keeps. A temp declared
+    # inside a statement expression counts on from it, so it never shadows a
+    # temp the code around it still reads through an alias
+    tmpHigh: u64
+    # how many argument hoists were pending when the innermost statement
+    # expression began: they belong to the statement around it, which declares
+    # them, so a statement inside flushes only the hoists it added
+    argHoistFloor: u64
+    argHoistRawFloor: u64
+    # the enclosing loops and do-blocks, innermost last
+    loops: List LoopFrame
+    # which break labels were actually used
+    breakLabelUsed: (IdMapV u64 v: bool)
+    # the next `_wc` number: the guard a suspending `when` condition computes
+    # into, since its value has to outlive the `if` that computes it
+    whenGuardCtr: u64
+    # the next label number
+    breakLabelCtr: u64
+    # variables that borrow rather than own, so scope exit frees nothing for
+    # them
+    borrowedVars: (IdMapV ztypes.vid v: bool)
+    # the temporaries the statement being emitted declares live as long as the
+    # binding it builds, not as long as the statement
+    hoistsToBlock: bool
+}
+
 # Ctx -- the per-program emission context (anchor cnames, main unit name,
 # the literal pool, and the resolved-name map access).
 Ctx: class {
@@ -1322,16 +1394,13 @@ Ctx: class {
     fnSigs: (IdMapR ztypes.tid V: String)
     # the call whose parts are being ordered
     order: OrderState
-    # the current class method body's pointer-receiver params, by variable id
-    ptrVids: ListVal ztypes.vid
+    # the statement being written: its temporaries, labels and returns
+    stmt: StatementState
     # every variable holding a data value: a handle, read through with `->`
     # (noteStaticVids, once per program)
     staticVids: IdSet ztypes.vid
     # every data type, so a variable narrowed to one reads through its handle
     staticTids: IdSet ztypes.tid
-    # the enclosing function hands back a REFERENCE to a user reftype, so its
-    # `return` yields an address. Per-function, set by emitFnBody like ptrVids.
-    refBorrowRet: bool
     # variables that are aliases of another's storage, so a write through one is
     # a write through both
     aliases: List VarEntry
@@ -1339,10 +1408,6 @@ Ctx: class {
     narrowBox: List VarEntry
     # the types each narrowBox text spells, recorded when the text is read
     aliasHeld: List AliasHeld
-    # while an arm alias is built: noteTypeUse holds its types in heldTypeUses
-    # instead of recording them
-    typeUseHold: bool
-    heldTypeUses: ListVal ztypes.tid
     # the type a variable is currently narrowed to
     narrowTid: List VarTid
     # the arms ruled out for a variable, which lets a switch omit them
@@ -1357,15 +1422,6 @@ Ctx: class {
     exSaves: List ExclSave
     # the generator function being written
     gen: GeneratorState
-    # the `return`, `break` or `continue` statement being emitted, whose
-    # destroys the checker recorded (exitDestroy); 0 at a tail value, which
-    # records none
-    exitNode: zast.nodeid
-    # the for-EXPRESSION append targets open around the statement being
-    # emitted, innermost last: a comprehension records one, and the loop's own
-    # body takes it (emitBodyNode). Nested only through a comprehension inside
-    # another's body, which is why it is a stack rather than a slot
-    comprehendTo: List ComprehendTo
     # the receiver type being emitted into, which decides what a bare member
     # resolves against
     curThisTid: ztypes.tid
@@ -1375,11 +1431,6 @@ Ctx: class {
     # emit source-derived C names instead of id-based ones, for reading the
     # output rather than shipping it
     readableNames: bool
-    # whether the statement being emitted is in tail position, where a return
-    # needs no jump
-    tailRetActive: bool
-    # the body's last statement was emitted as a `return`, so nothing after it runs
-    tailReturned: bool
     # which unit each definition came from
     defUnitId: (IdMapV ztypes.tid v: ztypes.declid)
     # the classes the runtime writes, in table order, each class's id once bound
@@ -1394,12 +1445,6 @@ Ctx: class {
     fieldNameIds: ListVal zast.nameid
     # the main unit's declaration, which every demand walk starts from
     mainUnitId: ztypes.declid
-    # how deep in nested conditions the emit is, which decides whether a temp
-    # can be hoisted out
-    condDepth: u64
-    # a `return` has been emitted in this function: what comes later does not
-    # run on every path
-    returnEmitted: bool
     # the constructs the emitter could not handle and the `error` calls it
     # proved reachable, collected rather than thrown so one run reports all of
     # them
@@ -1517,9 +1562,6 @@ Ctx: class {
     # the rows, one table, each found by the declaration it implements
     # (rowNameOfFn, rowNameOfMember)
     rows: zemitrows.RowTable
-    # the hoists that realise one of the checker's unnamed locals: the local's
-    # name id by hoist name; flushing a hoist moves it onto the temporary it owes
-    hoistTags: (MapRV String v: zast.nameid)
     # the fragment rows already written: a unit whose types a function type's
     # typedef spells is written ahead of the typedefs, and not again after
     rowsWritten: IdSet u64
@@ -1584,29 +1626,9 @@ Ctx: class {
     # the units the table orders, in that order. A unit with rows that is not
     # named here runs after those that are.
     unitOrder: List String
-    # the statement temporaries awaiting declaration
-    argHoists: List ArgHoist
-    # statements the statement being built runs ahead of itself, among the
-    # argument hoists in the order they were recorded
-    argHoistRaw: List RawHoist
-    # the next `_ah` number
-    argHoistCtr: u64
-    # how many in-place regions that run only on some paths, or at every loop
-    # test, enclose the text being built (openInPlace with `guarded`)
-    guardDepth: u64
     # the worklist condHoldsControlValue walks a condition with, kept so that
     # asking about every condition allocates nothing
     condScan: ListVal zast.nodeid
-    # the lowest temp number the function being emitted has not handed out,
-    # across every counter a statement expression in it keeps. A temp declared
-    # inside a statement expression counts on from it, so it never shadows a
-    # temp the code around it still reads through an alias
-    tmpHigh: u64
-    # how many argument hoists were pending when the innermost statement
-    # expression began: they belong to the statement around it, which declares
-    # them, so a statement inside flushes only the hoists it added
-    argHoistFloor: u64
-    argHoistRawFloor: u64
     # inside a control value emitted as a reference (emitControlPtrExpr): one
     # more than the number of the `_cv` pointer its arms assign, 0 outside one
     armRefCv: u64
@@ -1615,24 +1637,9 @@ Ctx: class {
     # is done, since the statement around it declares and releases it
     armRefDepth: u64
     armParks: List ArgHoist
-    # the temporaries the statement being emitted declares live as long as the
-    # binding it builds, not as long as the statement
-    hoistsToBlock: bool
-    # the next `_wc` number: the guard a suspending `when` condition computes
-    # into, since its value has to outlive the `if` that computes it
-    whenGuardCtr: u64
-    # the enclosing loops and do-blocks, innermost last
-    loops: List LoopFrame
     # which continue labels were actually jumped to, so an unused one is not
     # emitted
     contLabelUsed: (IdMapV u64 v: bool)
-    # the next label number
-    breakLabelCtr: u64
-    # which break labels were actually used
-    breakLabelUsed: (IdMapV u64 v: bool)
-    # variables that borrow rather than own, so scope exit frees nothing for
-    # them
-    borrowedVars: (IdMapV ztypes.vid v: bool)
     # String's type id
     strTid: ztypes.tid
     # StringView's type id
@@ -1663,7 +1670,7 @@ isPtrVid: function {ctx: Ctx.view vid: ztypes.vid} out bool is {
     # narrowed to a data value: the payload is a handle
     nt: (narrowfacts.varTidGet xs: ctx.narrowTid :vid).or d: ztypes.tid.zero
     if nt.notZero when (ctx.staticTids.has item: nt) then return true
-    if (ctx.ptrVids.contains item: vid).not then return false
+    if (ctx.stmt.ptrVids.contains item: vid).not then return false
     return (narrowfacts.varEntryHas xs: ctx.narrowBox :vid).not
 }
 
@@ -2021,21 +2028,21 @@ flushArgHoists: function {
 } is {
     # a statement expression being built keeps the hoists pending around it
     fl: floor
-    if ctx.argHoistFloor > fl then fl = ctx.argHoistFloor
+    if ctx.stmt.argHoistFloor > fl then fl = ctx.stmt.argHoistFloor
     rfl: rawFloor
-    if ctx.argHoistRawFloor > rfl then rfl = ctx.argHoistRawFloor
+    if ctx.stmt.argHoistRawFloor > rfl then rfl = ctx.stmt.argHoistRawFloor
     lf0: tmp.listFrees.length
     i: fl
-    n: ctx.argHoists.length
+    n: ctx.stmt.argHoists.length
     ri: rfl
-    rn: ctx.argHoistRaw.length
+    rn: ctx.stmt.argHoistRaw.length
     for i < n loop {
         # the statements recorded before this hoist run before it
         ri = appendRawHoistsTo :ctx from: ri to: rn upto: i :ind :buf
-        ah: ctx.argHoists.get :i
+        ah: ctx.stmt.argHoists.get :i
         appendArgHoistDecl :ah :ind :buf
         dto: ah.dtor.stringView
-        if dto.length > 0 when ctx.hoistsToBlock then {
+        if dto.length > 0 when ctx.stmt.hoistsToBlock then {
             tmp.oweList stmt: ah.dtor.copy name: ah.name.copy
         } else if dto.length > 0 then {
             tmp.oweTemp stmt: ah.dtor.copy name: ah.name.copy
@@ -2048,8 +2055,8 @@ flushArgHoists: function {
         ri = ri + 1
     }
     # drop what was just emitted, back to the floor -- not to empty
-    for ctx.argHoists.length > fl loop ctx.argHoists.pop
-    for ctx.argHoistRaw.length > rfl loop ctx.argHoistRaw.pop
+    for ctx.stmt.argHoists.length > fl loop ctx.stmt.argHoists.pop
+    for ctx.stmt.argHoistRaw.length > rfl loop ctx.stmt.argHoistRaw.pop
 }
 
 # appendArgHoistDecl -- one argument hoist's declaration. A hoist assigned where
@@ -2080,7 +2087,7 @@ appendRawHoistsTo: function {
 } out u64 is {
     ri: from
     for ri < to loop {
-        if (ctx.argHoistRaw.get i: ri).at > upto then return ri
+        if (ctx.stmt.argHoistRaw.get i: ri).at > upto then return ri
         appendRawHoist :ctx i: ri :ind :buf
         ri = ri + 1
     }
@@ -2089,7 +2096,7 @@ appendRawHoistsTo: function {
 
 # appendRawHoist -- raw hoist `i`'s statements, each line at `ind`.
 appendRawHoist: function {ctx: Ctx.view i: u64 ind: StringView buf: String.borrow} is {
-    rh: ctx.argHoistRaw.get :i
+    rh: ctx.stmt.argHoistRaw.get :i
     for each ln: rh.text.stringView.lines loop {
         buf.append ind
         buf.append ln
@@ -2112,10 +2119,10 @@ hoistmark: record {
 pendingHoistMark: function {ctx: Ctx.view} out hoistmark is {
     return (
         hoistmark
-        names: ctx.argHoists.length
-        raw: ctx.argHoistRaw.length
-        floor: ctx.argHoistFloor
-        rawFloor: ctx.argHoistRawFloor
+        names: ctx.stmt.argHoists.length
+        raw: ctx.stmt.argHoistRaw.length
+        floor: ctx.stmt.argHoistFloor
+        rawFloor: ctx.stmt.argHoistRawFloor
         guarded: false
     )
 }
@@ -2130,7 +2137,7 @@ tagOwedTemps: function {ctx: Ctx tmp: FnTemps from: u64} is {
         o: tmp.listFrees.getMut i: k
         k = k + 1
         if o.temp then {
-            tg: (ctx.hoistTags.remove key: o.name).or d: zast.nameid.zero
+            tg: (ctx.stmt.hoistTags.remove key: o.name).or d: zast.nameid.zero
             if tg.notZero then {
                 o.tag = tg
                 o.zero = "memset(&\{o.name}, 0, sizeof(\{o.name}));"
