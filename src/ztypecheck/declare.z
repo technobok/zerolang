@@ -53,7 +53,7 @@ indexUnitDefs: function {st: zenv.ZSymbolTable scope: ztypes.declid program: Ast
         for unitIdx < unitCount loop {
             ruId: program.units.get i: unitIdx
             unitIdx = unitIdx + 1
-            indexOneUnitDef :st :program :ruId
+            resolve.indexOneUnitDef :st :program :ruId
         }
         st.walk.defNodeIndexBuilt = true
         cro: (
@@ -589,7 +589,7 @@ linkDeclType: function {
     tid: ztypes.tid
 } is {
     nid: nameIdOf :ast :name
-    linkDeclTypeId :st :scope :unitDecl nameId: nid :tid
+    resolve.linkDeclTypeId :st :scope :unitDecl nameId: nid :tid
 }
 
 # declareCanonicalType -- get-or-declare the ONE canonical id for `unit.name` as a
@@ -613,7 +613,16 @@ declareCanonicalType: function {
     # can mint it by the same spelling
     nid: zast.poolFind pool: ast.names text: name
     if nid.isZero then nid = ast.internString text: name
-    return (declareCanonicalTypeId :st :scope :ast :unitDecl :ownerNameId nameId: nid :typetype)
+    return (
+        resolve.declareCanonicalTypeId
+        :st
+        :scope
+        :ast
+        :unitDecl
+        :ownerNameId
+        nameId: nid
+        :typetype
+    )
 }
 
 # asItemCanAlias -- the `as` item `item` of the type declared by `tdecl` has a
@@ -986,7 +995,7 @@ familyBoundLeafId: function {
 } out zast.nameid is {
     q: genericBoundQualifierId :ast n: op
     if q.isZero then return zast.nameid.zero
-    qd: fileUnitNamedAt :st scope: (st.typing.declParentOf declId: tdecl) nameId: q
+    qd: resolve.fileUnitNamedAt :st scope: (st.typing.declParentOf declId: tdecl) nameId: q
     if qd.isZero then return zast.nameid.zero
     if qd != st.typing.systemUnitRoot when qd != st.typing.coreUnitRoot then {
         return zast.nameid.zero
@@ -2086,7 +2095,7 @@ namesNullType: function {
 } out bool is {
     if ownerDecl.isZero then return false
     return (
-        namesNullTypeAt
+        resolve.namesNullTypeAt
         :st
         :ast
         unitDecl: (unitRootOfDecl typing: st.typing declId: ownerDecl)
@@ -2523,7 +2532,7 @@ objectTypedefBaseTid: function {
     pt: typeargs.partialFieldTid :st :ast :unitDecl :scope :ownerTid oId: bn
     if pt.notZero then return pt
     memberIdAt: (
-        resolveMonoRefInline
+        resolve.resolveMonoRefInline
         :st
         :scope
         :ast
@@ -2537,12 +2546,12 @@ objectTypedefBaseTid: function {
     # a base named through its unit (`pr.Sh`) is the type the path reaches, not
     # the unit its root names
     if (ast.nodes.get i: bn).dottedpath then {
-        dtid: resolveDottedArgTid :st :scope :ast nid: bn
+        dtid: resolve.resolveDottedArgTid :st :scope :ast nid: bn
         if dtid.notZero then return dtid
     }
     anId: rootNameIdOf :ast n: (ast.nodes.get i: bn)
     if anId.isZero then return ztypes.tid.zero
-    return (resolveAtomType :st :scope :ast :unitDecl nameId: anId thisName: "")
+    return (resolve.resolveAtomType :st :scope :ast :unitDecl nameId: anId thisName: "")
 }
 
 # fnFieldFlaggableName -- an is-block FUNCTION member that should become a struct
@@ -3802,7 +3811,7 @@ unionCustomTagId: function {
         kIter = kIter + 1
         am: argRefAt :ast nid: amId
         if am.nid.notZero then {
-            r: unionCustomTagOfArm :st :scope :ast :unitDecl :am
+            r: resolve.unionCustomTagOfArm :st :scope :ast :unitDecl :am
             if r.row != 0 then return r
         }
     }
@@ -5052,7 +5061,7 @@ registerEmptyType: function {
     name: StringView
     tt: ztypes.ztypetype
 } out ztypes.tid is {
-    ex0: resolvedByIds :st :ast :unitDecl name: (zast.poolFind pool: ast.names text: name)
+    ex0: resolve.resolvedByIds :st :ast :unitDecl name: (zast.poolFind pool: ast.names text: name)
     if ex0.some then {
         st.reg.setValtype typeId: ex0 value: true
         emptyTid: (
@@ -5203,7 +5212,7 @@ resolveObjectDef: function {
     } case generatorDef then {
         resolveClass :st scope: rf :ast :unitDecl :defName :nameId cnode: defn
     } case typedefDef then {
-        if (typedefDefIsReftype :st :ast :unitDecl :defName) then {
+        if (resolve.typedefDefIsReftype :st :ast :unitDecl :defName) then {
             resolveClass :st scope: rf :ast :unitDecl :defName :nameId cnode: defn
         } else {
             resolveRecord :st scope: rf :ast :unitDecl :defName rnode: defn
@@ -5213,7 +5222,13 @@ resolveObjectDef: function {
     } case protocolDef then {
         resolveProtocol :st scope: rf :ast :unitDecl :defName :nameId fnode: defn
     } else null
-    objrid: resolvedByIds :st :ast :unitDecl name: (zast.poolFind pool: ast.names text: defName)
+    objrid: (
+        resolve.resolvedByIds
+        :st
+        :ast
+        :unitDecl
+        name: (zast.poolFind pool: ast.names text: defName)
+    )
     if objrid.some then {
         ztyping.nodeTypeSet tbl: st.typing.nodeType nid: defn.nid tid: objrid
     }
@@ -5352,7 +5367,7 @@ resolveInlineGenericUnit: function {
             # createUnitMono falls back to this def-node stamp to find a template
             # with no childOf edge, so laying it is a property of resolving the
             # template, not of which walk got here.
-            udnid: unitdefNodeId :ast nId: unitOpId
+            udnid: resolve.unitdefNodeId :ast nId: unitOpId
             ztyping.nodeTypeSet tbl: st.typing.nodeType nid: udnid tid: uid
             for each gmId: (zast.kidsOf :ast span: bodyIds) loop {
                 gm: argRefAt :ast nid: gmId
@@ -5445,7 +5460,7 @@ resolveUnitNestedType: function {
     if td.isZero then return
     if (st.typing.declIsResolved declId: td) then return
     tn: zast.nameTextCopy :ast ref: bmNode.name
-    resolveDef :st :scope :ast :unitDecl defName: tn.stringView defnId: bmNode.operation
+    resolve.resolveDef :st :scope :ast :unitDecl defName: tn.stringView defnId: bmNode.operation
     st.typing.declSetResolved declId: td
 }
 
@@ -6115,7 +6130,7 @@ numericTypedefNamed: function {
     cnId: atomNameId :ast n: (ast.nodes.get i: callableId)
     tdTid: (
         ztypes.tid.create
-        from: (resolveNamedTypeId :st :ast :unitDecl :scope nameId: cnId thisName: "")
+        from: (resolve.resolveNamedTypeId :st :ast :unitDecl :scope nameId: cnId thisName: "")
     )
     base: st.typing.typedefBaseTidOf tid: tdTid
     if base.isZero then return ztypes.tid
@@ -6216,7 +6231,7 @@ resolvedByIdsMember: function {
     defId: zast.nameid
     memberId: zast.nameid
 } out optionval ztypes.tid is {
-    decl: resolvedByIds :st :ast :unitDecl name: defId
+    decl: resolve.resolvedByIds :st :ast :unitDecl name: defId
     if decl.some then {
         return (st.typing.declChildOfId parentTypeId: decl nameId: memberId)
     }

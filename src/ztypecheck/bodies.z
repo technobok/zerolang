@@ -319,7 +319,7 @@ completeOneInstance: function {
     # the namespace's own type id. A top-level binding has no such
     # owner: the file unit's members are not indexed that way.
     rsp: st.typing.declParentOf declId: rscope
-    if (declAtProgramTop typing: st.typing parentDeclId: rsp).not then {
+    if (resolve.declAtProgramTop typing: st.typing parentDeclId: rsp).not then {
         sTid: st.typing.declTypeOf declId: rscope
         if sTid.notZero then {
             st.typing.setMemberType parentTypeId: sTid nameId: rbId childTypeId: memberIdAt
@@ -352,7 +352,7 @@ completeUnitInstantiations: function {
     program: Ast
 } is {
     reqs: List InstReq
-    scanMainForInstantiations :st :scope :program :reqs
+    resolve.scanMainForInstantiations :st :scope :program :reqs
     i: u64
     for i < reqs.length loop {
         r: reqs.get :i
@@ -408,7 +408,7 @@ demandInstArgs: function {
     if r.scopeDeclId.notZero then rf = r.scopeDeclId
     for each nid: r.argNodeIds loop {
         if nid.notZero then {
-            scanCallsInNode :st scope: rf :ast node: (ast.nodes.get i: nid)
+            resolve.scanCallsInNode :st scope: rf :ast node: (ast.nodes.get i: nid)
         }
     }
 }
@@ -606,7 +606,7 @@ mintUnitMonoOf: function {
     r: InstReq.view
 } is {
     demandInstArgs :st :scope :ast :r
-    resolveDemandedDefs :st :ast
+    resolve.resolveDemandedDefs :st :ast
     templateTid: st.typing.declTypeOf declId: r.tmplDeclId
     args: ListVal ztypes.genericarg
     ok: instMonoKeys :st :scope :ast :r tdecl: r.tmplDeclId :args
@@ -953,7 +953,7 @@ maybeWalkMethodsById: function {
     nameId: zast.nameid
 } is {
     if nameId.isZero then return
-    dd: declOfUnitDefIds typing: st.typing :unitDecl :nameId
+    dd: resolve.declOfUnitDefIds typing: st.typing :unitDecl :nameId
     if dd.isZero then return
     if (st.typing.declIsWalked declId: dd) then return
     walkDeclaredDef :st :scope :ast :unitDecl declId: dd
@@ -1071,7 +1071,7 @@ walkDemandedDef: function {
         # the owner's own type, which a namespace's type has and the file
         # unit's definitions do not reach
         (
-            walkOwnerMethods
+            resolve.walkOwnerMethods
             :st
             scope: rf
             :unitDecl
@@ -1161,7 +1161,7 @@ checkMethodBodies: function {
     # its name with any top-level one, and the file unit's name answers that one
     ownerDecl: st.typing.declIdOfType typeId: typeTid
     if ownerDecl.isZero then ownerDecl = (
-        declOfUnitDefIds
+        resolve.declOfUnitDefIds
         typing: st.typing
         :unitDecl
         nameId: typeNameId
@@ -1540,12 +1540,18 @@ checkFunctionBodyIn: function {
     # a method's body demands what it names when it is walked, as its owner's
     # resolution scans no member body; a type constructed only inside it must
     # resolve before the walk, or the construction stamps type 0
-    if thisName.length > 0 then scanDefCalls :st scope: rf :ast op: (ast.nodes.get i: fn.nid)
+    if thisName.length > 0 then (
+        resolve.scanDefCalls
+        :st
+        scope: rf
+        :ast
+        op: (ast.nodes.get i: fn.nid)
+    )
     # a body is walked only once everything demanded so far has resolved:
     # an owner or function resolved late (from a walk) queued what its
     # bodies reference, and those must be resolved before those bodies are
     # walked, exactly as the early ones were.
-    resolveDemandedDefs :st :ast
+    resolve.resolveDemandedDefs :st :ast
     # Claim this definition BEFORE the trigger runs. The trigger now walks
     # a free function's body, and the body it would walk here is the one
     # already being walked -- checkFunctionBody calls it with its OWN name.
@@ -1556,7 +1562,12 @@ checkFunctionBodyIn: function {
         if sfId.isZero then sfId = zast.poolFind pool: ast.names text: defName
         if sfId.notZero then {
             sfd: fnDecl
-            if sfd.isZero then sfd = declOfUnitDefIds typing: st.typing :unitDecl nameId: sfId
+            if sfd.isZero then sfd = (
+                resolve.declOfUnitDefIds
+                typing: st.typing
+                :unitDecl
+                nameId: sfId
+            )
             sfHad: st.typing.declIsWalked declId: sfd
             st.typing.declSetWalked declId: sfd
             if sfHad.not then {
@@ -1714,7 +1725,7 @@ checkNamespaceBodies: function {
     rf: scope
     nsDecl: ztypes.declid
     {
-        un: unitdefNodeId :ast nId: unitdefId
+        un: resolve.unitdefNodeId :ast nId: unitdefId
         if un.notZero then {
             nt: ztyping.nodeTypeAt tbl: st.typing.nodeType nid: un
             if nt.notZero then {
@@ -1736,7 +1747,7 @@ checkNamespaceBodies: function {
             } else if (objectdefHasMethodBodies :ast op: (ast.nodes.get i: bm.operation)) then {
                 # a type's methods, which walkDeclaredDef leaves to this walk
                 # for a namespace member as it does a function
-                walkNamespaceOwner :st :ast :unitDecl :nsDecl memId: bm.nid nameId: bm.name
+                resolve.walkNamespaceOwner :st :ast :unitDecl :nsDecl memId: bm.nid nameId: bm.name
             } else {
                 memberDecl: st.typing.declFindChild parentDeclId: nsDecl nameId: bm.name
                 if (bodyWalkOwed :st declId: memberDecl).not then continue
@@ -1793,7 +1804,7 @@ checkUnitBodies: function {
                 op: (ast.nodes.get i: mm.operation)
             ) then {
                 foundMain = true
-                memberDecl: declOfUnitDefIds typing: st.typing :unitDecl nameId: mm.name
+                memberDecl: resolve.declOfUnitDefIds typing: st.typing :unitDecl nameId: mm.name
                 cfbFr: fnRefAt :ast nid: mm.operation
                 checkMainSignature :st at: mm fn: cfbFr
                 (
@@ -1838,12 +1849,12 @@ checkUnitBodies: function {
                 if (
                     bodyWalkOwed
                     :st
-                    declId: (declOfUnitDefIds typing: st.typing :unitDecl nameId: bm.name)
+                    declId: (resolve.declOfUnitDefIds typing: st.typing :unitDecl nameId: bm.name)
                 ).not then continue
                 if (zast.unitOpDeclaresUnit :ast opId: bm.operation) then {
                     checkNamespaceBodies :ast :st :scope :unitDecl unitdefId: bm.operation
                 } else if bm.name != zast.wellKnown.slot.wkMain then {
-                    hDeclId: declOfUnitDefIds typing: st.typing :unitDecl nameId: bm.name
+                    hDeclId: resolve.declOfUnitDefIds typing: st.typing :unitDecl nameId: bm.name
                     cfbFr: fnRefAt :ast nid: bm.operation
                     (
                         checkFunctionBody
@@ -2382,8 +2393,8 @@ unitBodyMemberTid: function {
         (st.typing.declChildOfId parentTypeId: ownerTid :nameId).or
         d: ztypes.tid.zero
     )
-    uq: unitDeclOfName typing: st.typing nameId: (unitNameIdOf :st :unitDecl)
-    ro: resolvedByIds :st :ast unitDecl: uq name: nameId
+    uq: resolve.unitDeclOfName typing: st.typing nameId: (unitNameIdOf :st :unitDecl)
+    ro: resolve.resolvedByIds :st :ast unitDecl: uq name: nameId
     return (ro.or d: ztypes.tid.zero)
 }
 
@@ -2417,7 +2428,7 @@ stampUnitMonoMembers: function {
             im: program.nodes.get i: imId
             if im.namedoperation then {
                 mNm = im.name
-                if (isUnitOp op: (program.nodes.get i: im.operation)) then {
+                if (resolve.isUnitOp op: (program.nodes.get i: im.operation)) then {
                     imOp = im.operation
                 } else {
                     if (isFunctionDefWithBody o: (program.nodes.get i: im.operation)) then {
@@ -2783,7 +2794,7 @@ stampUnitMonoRound: function {
                 uOp = u.operation
             }
             if uOp.notZero then {
-                unitDecl: unitDeclOfNameOrOwn :st :scope nameId: uNm
+                unitDecl: resolve.unitDeclOfNameOrOwn :st :scope nameId: uNm
                 if (zast.unitIsGeneric ast: program unitId: uOp) then {
                     (
                         stampMonoTemplateUnit
