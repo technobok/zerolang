@@ -1222,6 +1222,46 @@ GeneratorState: class {
     hasValue: bool
 }
 
+# OrderState -- the call whose parts are being ordered. A part of Ctx
+# (`order`).
+OrderState: class {
+    # a native operator row's hole bindings: `StringView` and `T` its cnames,
+    # `L` and `R` its operands. The holes never change and the values are
+    # replaced per operator, so the four lists live here and an operator
+    # borrows them (emitOperatorAt) rather than building four of its own
+    opBindIds: ListVal zast.nameid
+    opBindVals: List String
+    opRawIds: ListVal zast.nameid
+    opRawVals: List String
+    # the parts of the calls being built, in the order they are evaluated: the
+    # assignments that run ahead of each call (orderPieces), and, per call, the
+    # part last read that is not constant and not yet given a temp -- its text,
+    # the slot it fills, and the function, parameter type and parameter name
+    # its temp's C type is spelled from. A call keeps the stretch above the
+    # marks it took.
+    pieces: List OrderPiece
+    # the counter every part and piece is numbered from, in the order built;
+    # settleAhead touches only those at or above the floor
+    seq: u64
+    seqFloor: u64
+    # each open call's argument texts by parameter slot, "" for a slot no
+    # argument fills, and a method call's parameter positions: where each
+    # argument is written, the positional cursor it is read with, and whether it
+    # has been built
+    vals: List String
+    # the facts of each slot's text
+    valFacts: ListVal exprfacts
+    writ: ListVal u64
+    posAt: ListVal u64
+    done: ListVal bool
+    # the open calls' parts still waiting on what follows them
+    pends: List OrderPend
+    # the next `_o` number, the function's own
+    ctr: u64
+    # whether the argument just built was passed by pointer
+    lastArgByPtr: bool
+}
+
 # Ctx -- the per-program emission context (anchor cnames, main unit name,
 # the literal pool, and the resolved-name map access).
 Ctx: class {
@@ -1280,14 +1320,8 @@ Ctx: class {
     # each function's "RET cname(PARAMS)", by its type: the forward
     # declaration and the definition write the same text, built once
     fnSigs: (IdMapR ztypes.tid V: String)
-    # a native operator row's hole bindings: `StringView` and `T` its cnames,
-    # `L` and `R` its operands. The holes never change and the values are
-    # replaced per operator, so the four lists live here and an operator
-    # borrows them (emitOperatorAt) rather than building four of its own
-    opBindIds: ListVal zast.nameid
-    opBindVals: List String
-    opRawIds: ListVal zast.nameid
-    opRawVals: List String
+    # the call whose parts are being ordered
+    order: OrderState
     # the current class method body's pointer-receiver params, by variable id
     ptrVids: ListVal ztypes.vid
     # every variable holding a data value: a handle, read through with `->`
@@ -1557,39 +1591,12 @@ Ctx: class {
     argHoistRaw: List RawHoist
     # the next `_ah` number
     argHoistCtr: u64
-    # the parts of the calls being built, in the order they are evaluated: the
-    # assignments that run ahead of each call (orderPieces), and, per call, the
-    # part last read that is not constant and not yet given a temp -- its text,
-    # the slot it fills, and the function, parameter type and parameter name
-    # its temp's C type is spelled from. A call keeps the stretch above the
-    # marks it took.
-    orderPieces: List OrderPiece
-    # the counter every part and piece is numbered from, in the order built;
-    # settleAhead touches only those at or above the floor
-    orderSeq: u64
-    orderSeqFloor: u64
     # how many in-place regions that run only on some paths, or at every loop
     # test, enclose the text being built (openInPlace with `guarded`)
     guardDepth: u64
     # the worklist condHoldsControlValue walks a condition with, kept so that
     # asking about every condition allocates nothing
     condScan: ListVal zast.nodeid
-    # each open call's argument texts by parameter slot, "" for a slot no
-    # argument fills, and a method call's parameter positions: where each
-    # argument is written, the positional cursor it is read with, and whether it
-    # has been built
-    orderVals: List String
-    # the facts of each slot's text
-    orderValFacts: ListVal exprfacts
-    orderWrit: ListVal u64
-    orderPosAt: ListVal u64
-    orderDone: ListVal bool
-    # the open calls' parts still waiting on what follows them
-    orderPends: List OrderPend
-    # the next `_o` number, the function's own
-    orderCtr: u64
-    # whether the argument just built was passed by pointer
-    lastArgByPtr: bool
     # the lowest temp number the function being emitted has not handed out,
     # across every counter a statement expression in it keeps. A temp declared
     # inside a statement expression counts on from it, so it never shadows a
