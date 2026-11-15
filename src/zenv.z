@@ -616,6 +616,50 @@ ConstState: class {
     fail: ztypes.constfail
 }
 
+# BoundState -- the generic parameter or bound being resolved. A part of
+# WalkState (`bounds`).
+BoundState: class {
+    # the unit a QUALIFIED generic bound names (`io` in `io.Reader.generic`),
+    # by the bound atom's node: the bound resolves in that unit and nowhere else
+    genericBoundQual: (IdMapV zast.nodeid v: zast.nameid)
+    # the generic template (its DeclId) whose signature is being
+    # registered: its param names are not unit typerefs
+    sigGenericDecl: ztypes.declid
+    # a generic parameter's BOUND, as (atom node -> the name it spells) and the
+    # scope to resolve it in. Recorded where the parameter is registered -- the
+    # bound is read as TEXT there and mapped to a constraint kind, never as a
+    # type-ref -- and resolved once at the end, for TOOLING only: an unresolved
+    # one is silent, and nothing here reaches the emitter.
+    genericBoundName: (IdMapV zast.nodeid v: zast.nameid)
+    # the scope a generic bound resolves in, which is where it was WRITTEN and
+    # not where it is used
+    genericBoundScope: (IdMapV zast.nodeid v: ztypes.declid)
+    # a generic parameter, as (node -> the name it spells) and the scope to
+    # resolve it in. Recorded at the parameter's declaration and at every type
+    # position that resolves to one: a generic parameter lives outside the
+    # name-resolution table, so nothing else records what its atom means, and
+    # `newType ... genericParam` mints the type with no declaration -- the tid
+    # cannot answer for its declaration either. Resolved once at the end, for
+    # TOOLING only.
+    genericParamName: (IdMapV zast.nodeid v: zast.nameid)
+    # the scope a generic parameter belongs to
+    genericParamScope: (IdMapV zast.nodeid v: ztypes.declid)
+    # the statement being walked -- its node, line and column -- or 0 outside a
+    # body: where a bound an instance's argument does not meet is reported when
+    # the instance is minted with no position of its own
+    siteNid: zast.nodeid
+    siteLine: u32
+    siteCol: u32
+    # the argument type whose unmet bound was reported at that statement: the
+    # instances minted as its members (a list's view and iterator) fail over
+    # the same argument, and are not reported again
+    siteFailArg: ztypes.tid
+    # every generic parameter's name, swept from the registry up to
+    # gpNamesSwept: the names a pending type-ref reads as a parameter
+    # (stampPendingTyperefs)
+    gpNames: IdSet zast.nameid
+}
+
 # WalkState -- the body walk's working state: what the checker records while
 # it walks and reads back itself. Nothing downstream reads it; the output is
 # ZTyping's.
@@ -644,9 +688,8 @@ WalkState: class {
     # argument node: the type-reference shell the refusal leaves behind is not a
     # second mistake to report
     numericArgsRefused: IdSet zast.nodeid
-    # the unit a QUALIFIED generic bound names (`io` in `io.Reader.generic`),
-    # by the bound atom's node: the bound resolves in that unit and nowhere else
-    genericBoundQual: (IdMapV zast.nodeid v: zast.nameid)
+    # the generic parameter or bound being resolved
+    bounds: BoundState
     # the type applications, by node, that name their type rather than build a
     # value of it: the callable of a call supplying the fields (`(Box cap: 8)
     # used: "x"`) and the base of a member path (`(slot t: i64).empty`)
@@ -706,9 +749,6 @@ WalkState: class {
     # nodes deliberately left unstamped, so a later pass does not read absence
     # as an error
     noStampNode: (IdMapV zast.nodeid v: bool)
-    # the generic template (its DeclId) whose signature is being
-    # registered: its param names are not unit typerefs
-    sigGenericDecl: ztypes.declid
     # the function whose signature is being resolved: its parameters are in
     # scope there, so a type-ref in it naming one finds the parameter
     sigFnNode: zast.nodeid
@@ -764,35 +804,6 @@ WalkState: class {
     specStandIns: ListVal ztyping.specstandin
     # each generic typedef instance whose base refuses its argument
     typedefClash: (IdMapV ztypes.tid v: ztyping.typedefclash)
-    # a generic parameter's BOUND, as (atom node -> the name it spells) and the
-    # scope to resolve it in. Recorded where the parameter is registered -- the
-    # bound is read as TEXT there and mapped to a constraint kind, never as a
-    # type-ref -- and resolved once at the end, for TOOLING only: an unresolved
-    # one is silent, and nothing here reaches the emitter.
-    genericBoundName: (IdMapV zast.nodeid v: zast.nameid)
-    # the scope a generic bound resolves in, which is where it was WRITTEN and
-    # not where it is used
-    genericBoundScope: (IdMapV zast.nodeid v: ztypes.declid)
-    # a generic parameter, as (node -> the name it spells) and the scope to
-    # resolve it in. Recorded at the parameter's declaration and at every type
-    # position that resolves to one: a generic parameter lives outside the
-    # name-resolution table, so nothing else records what its atom means, and
-    # `newType ... genericParam` mints the type with no declaration -- the tid
-    # cannot answer for its declaration either. Resolved once at the end, for
-    # TOOLING only.
-    genericParamName: (IdMapV zast.nodeid v: zast.nameid)
-    # the scope a generic parameter belongs to
-    genericParamScope: (IdMapV zast.nodeid v: ztypes.declid)
-    # the statement being walked -- its node, line and column -- or 0 outside a
-    # body: where a bound an instance's argument does not meet is reported when
-    # the instance is minted with no position of its own
-    boundSiteNid: zast.nodeid
-    boundSiteLine: u32
-    boundSiteCol: u32
-    # the argument type whose unmet bound was reported at that statement: the
-    # instances minted as its members (a list's view and iterator) fail over
-    # the same argument, and are not reported again
-    boundSiteFailArg: ztypes.tid
     # every unmet bound reported so far: one error per refused instance
     unmetBounds: ListVal ztyping.unmetbound
     # the node id of the value a binding takes whole, or 0. An `if` or a
@@ -860,10 +871,6 @@ WalkState: class {
     # the type ids below this one have had their generated `==` swept for the
     # written part comparisons it calls (markGeneratedEqParts)
     eqPartsSwept: ztypes.tid
-    # every generic parameter's name, swept from the registry up to
-    # gpNamesSwept: the names a pending type-ref reads as a parameter
-    # (stampPendingTyperefs)
-    gpNames: IdSet zast.nameid
     gpNamesSwept: ztypes.tid
     # declarations a reference found and demanded, in discovery order,
     # awaiting resolution (resolveDemandedDefs drains it)
@@ -953,7 +960,20 @@ newWalkState: function out WalkState is {
         )
         instanceConstsChecked: SetVal ztyping.constslot
         numericArgsRefused: IdSet zast.nodeid
-        genericBoundQual: (IdMapV zast.nodeid v: zast.nameid)
+        bounds: (
+            BoundState
+            genericBoundQual: (IdMapV zast.nodeid v: zast.nameid)
+            sigGenericDecl: ztypes.declid
+            genericBoundName: (IdMapV zast.nodeid v: zast.nameid)
+            genericBoundScope: (IdMapV zast.nodeid v: ztypes.declid)
+            genericParamName: (IdMapV zast.nodeid v: zast.nameid)
+            genericParamScope: (IdMapV zast.nodeid v: ztypes.declid)
+            siteNid: zast.nodeid
+            siteLine: 0
+            siteCol: 0
+            siteFailArg: ztypes.tid.zero
+            gpNames: IdSet zast.nameid
+        )
         typeAppsNamed: IdSet zast.nodeid
         refusedParamCopies: IdSet ztypes.declid
         singletonPaths: (IdMapV zast.nodeid v: ztypes.tid)
@@ -972,7 +992,6 @@ newWalkState: function out WalkState is {
         boxedArms: SetVal ztyping.armkey
         generatorWrapper: (IdMapV zast.nodeid v: bool)
         noStampNode: (IdMapV zast.nodeid v: bool)
-        sigGenericDecl: ztypes.declid
         sigFnNode: zast.nodeid
         sigFnName: zast.nameid
         valEqMissing: (IdMapV ztypes.tid v: ztypes.tid)
@@ -992,14 +1011,6 @@ newWalkState: function out WalkState is {
         staticLiteralTyperefs: IdSet zast.nodeid
         specStandIns: ListVal ztyping.specstandin
         typedefClash: (IdMapV ztypes.tid v: ztyping.typedefclash)
-        genericBoundName: (IdMapV zast.nodeid v: zast.nameid)
-        genericBoundScope: (IdMapV zast.nodeid v: ztypes.declid)
-        genericParamName: (IdMapV zast.nodeid v: zast.nameid)
-        genericParamScope: (IdMapV zast.nodeid v: ztypes.declid)
-        boundSiteNid: zast.nodeid
-        boundSiteLine: 0
-        boundSiteCol: 0
-        boundSiteFailArg: ztypes.tid.zero
         unmetBounds: ListVal ztyping.unmetbound
         formValueNid: zast.nodeid
         defNodeIndexBuilt: false
@@ -1018,7 +1029,6 @@ newWalkState: function out WalkState is {
         demandDraining: false
         deferred: ListVal walkjob
         eqPartsSwept: ztypes.tid
-        gpNames: IdSet zast.nameid
         gpNamesSwept: ztypes.tid
         pendingDefs: ListVal ztypes.declid
         enteredUnits: IdSet ztypes.declid
