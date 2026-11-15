@@ -433,13 +433,13 @@ buildOriginTids: function {
 # (impl, spec, label) triple and produces one set of wrappers, a vtable and the
 # two create helpers. Emitted once, keyed by the row's confid.
 implementationRowMark: function {ctx: Ctx row: ztypes.confid} is {
-    ctx.emittedImplementation.add item: row
+    ctx.plan.emittedImplementation.add item: row
 }
 
 # whether an implementation's row is already out, so a second demand does not
 # repeat it
 implementationRowEmitted: function {ctx: Ctx.view row: ztypes.confid} out bool is {
-    return (ctx.emittedImplementation.has item: row)
+    return (ctx.plan.emittedImplementation.has item: row)
 }
 
 # emitCrossUnitBareCreate -- a bare (no-arg) cross-unit construction
@@ -758,7 +758,7 @@ appendFnSignature: function {
 } is {
     hit: false
     {
-        got: ctx.fnSigs.get key: fid
+        got: ctx.plan.fnSigs.get key: fid
         if got.some then {
             buf.append got
             hit = true
@@ -767,7 +767,7 @@ appendFnSignature: function {
     if hit.not then {
         sig: fnSignature :prog :ctx :fid :op
         buf.append sig
-        ctx.fnSigs.set key: fid value: sig.take
+        ctx.plan.fnSigs.set key: fid value: sig.take
     }
     buf.append tail
 }
@@ -1480,8 +1480,8 @@ addFnJob: function {
     owner: ztypes.tid
     withMethods: bool
 } is {
-    k: ctx.fnJobs.length
-    ctx.fnJobs.append (
+    k: ctx.plan.fnJobs.length
+    ctx.plan.fnJobs.append (
         fnjob
         :fid
         :nid
@@ -1508,9 +1508,9 @@ noteFnUse: function {ctx: Ctx tid: ztypes.tid} is {
     ctx.fnSpelled.add item: tid
     at: ctx.fnJobAt.get key: tid
     if at.none then return
-    j: ctx.fnJobs.get i: at
+    j: ctx.plan.fnJobs.get i: at
     if j.queued then return
-    if ctx.fnClosed then {
+    if ctx.plan.fnClosed then {
         cn: ctxCname :ctx :tid
         (
             emitFail
@@ -1521,7 +1521,7 @@ noteFnUse: function {ctx: Ctx tid: ztypes.tid} is {
         return
     }
     j.queued = true
-    ctx.fnJobs.set i: at val: j
+    ctx.plan.fnJobs.set i: at val: j
 }
 
 # drainFnJobs -- write every queued job not yet written, lowest first, until a
@@ -1541,8 +1541,8 @@ drainFnJobs: function {
     for more loop {
         more = false
         k: u64
-        for k < ctx.fnJobs.length loop {
-            jk: ctx.fnJobs.get i: k
+        for k < ctx.plan.fnJobs.length loop {
+            jk: ctx.plan.fnJobs.get i: k
             if jk.queued when jk.written.not then {
                 writeFnJob :prog :ctx :k :protos :bodies
                 more = true
@@ -1565,9 +1565,9 @@ writeFnJob: function {
     protos: String.borrow
     bodies: String.borrow
 } is {
-    j: ctx.fnJobs.get i: k
+    j: ctx.plan.fnJobs.get i: k
     j.written = true
-    ctx.fnJobs.set i: k val: j
+    ctx.plan.fnJobs.set i: k val: j
     if j.unitDecl != ctx.known.mainUnitId then {
         un: zast.poolTextAt pool: prog.ast.names ref: (prog.typing.declNameOf declId: j.unitDecl)
         ctxBindMain :ctx name: un.stringView unitDecl: j.unitDecl
@@ -1614,7 +1614,7 @@ writeFnJob: function {
     j.protoEnd = protos.length
     j.bodyAt = ba
     j.bodyEnd = bodies.length
-    ctx.fnJobs.set i: k val: j
+    ctx.plan.fnJobs.set i: k val: j
 }
 
 # writeDemanded -- write every function, method and static value written C
@@ -1638,7 +1638,7 @@ writeDemanded: function {
         more = aggs or helpers
         if more then drainFnJobs :prog :ctx :protos :bodies
     }
-    ctx.fnClosed = true
+    ctx.plan.fnClosed = true
     ctx.literals.aggsFixed = true
 }
 
@@ -1652,7 +1652,7 @@ appendWrittenFns: function {
     text: StringView
     buf: String.borrow
 } is {
-    for each j: ctx.fnJobs loop {
+    for each j: ctx.plan.fnJobs loop {
         if j.withMethods != withMethods then continue
         if protos then {
             buf.append (text.substring from: j.protoAt to: j.protoEnd)
@@ -1727,7 +1727,7 @@ demandKeyCalls: function {
 # queuedFnCount -- the function jobs written C has spelled so far.
 queuedFnCount: function {ctx: Ctx.view} out u64 is {
     n: u64
-    for each j: ctx.fnJobs loop {
+    for each j: ctx.plan.fnJobs loop {
         if j.queued then n = n + 1
     }
     return n
@@ -2596,7 +2596,13 @@ emitC: function {
             markerValues: (IdMapV ztypes.tid v: bool)
         )
         emitErrors: List zast.ErrorData
-        fnSigs: (IdMapR ztypes.tid V: String)
+        plan: (
+            PlanState
+            fnSigs: (IdMapR ztypes.tid V: String)
+            fnJobs: ListVal fnjob
+            fnClosed: false
+            emittedImplementation: IdSet ztypes.confid
+        )
         order: (
             OrderState
             opBindIds: ListVal zast.nameid
@@ -2650,15 +2656,12 @@ emitC: function {
             hasValue: false
         )
         lateDefs: String
-        fnJobs: ListVal fnjob
         fnJobAt: (IdMapV ztypes.tid v: u64)
-        fnClosed: false
         fnSpelled: IdSet ztypes.tid
         canonSpecs: (Map String V: String)
         cWords: (zast.Vocab.create block: cReserved)
         opWords: (zast.Vocab.create block: opSpelling)
         implementedUnits: Set String
-        emittedImplementation: IdSet ztypes.confid
         boxedImplementation: IdSet ztypes.confid
         emittedListIters: IdSet ztypes.tid
         converrorTid: cerrId
