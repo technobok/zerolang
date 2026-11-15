@@ -2833,6 +2833,7 @@ ZLFULL_BZS := tests/fixtures/zl_full/bare_zero_shadow.z
 ZLFULL_WALK := tests/fixtures/zl_full/handwalk.z
 ZLFULL_TWIN := tests/fixtures/zl_full/negated_twin.z
 ZLFULL_FAM := tests/fixtures/zl_full/family/host
+ZLFULL_WIDE := tests/fixtures/zl_full/wide.z
 zl-full-guard: bin/zl
 	@d=$$(mktemp -d); fail=0; \
 	out=$$(cd $$d && $(CURDIR)/bin/zl lint --full $(CURDIR)/$(ZLFULL_FIX) 2>&1); \
@@ -2928,6 +2929,10 @@ zl-full-guard: bin/zl
 	out=$$(cd $$d && $(CURDIR)/bin/zl lint --docs-all $(CURDIR)/$(ZLFULL_FAM).z $(CURDIR)/$(ZLFULL_FAM)/alpha.z $(CURDIR)/$(ZLFULL_FAM)/beta.z 2>&1); \
 	if [ "$$(printf '%s\n' "$$out" | grep -c 'L025.*appears 3 times in the files of unit `host`')" != 3 ]; then \
 	  echo "zl-full-guard FAIL: L025 did not report a doc body that stands once in each of a unit's three files, once a file:"; \
+	  printf '%s\n' "$$out" | sed 's/^/    /'; fail=1; fi; \
+	out=$$(cd $$d && $(CURDIR)/bin/zl lint --arch $(CURDIR)/$(ZLFULL_WIDE) 2>&1); \
+	if [ "$$(printf '%s\n' "$$out" | grep -c 'A014')" != 2 ] || ! printf '%s\n' "$$out" | grep -qE 'wide\.z:5:' || ! printf '%s\n' "$$out" | grep -qE 'wide\.z:20:'; then \
+	  echo "zl-full-guard FAIL: A014 did not report the two heads of eight parameters (one a method with its receiver), and only them:"; \
 	  printf '%s\n' "$$out" | sed 's/^/    /'; fail=1; fi; \
 	rm -rf $$d; \
 	if [ $$fail -ne 0 ]; then exit 1; fi; \

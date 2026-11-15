@@ -82,6 +82,11 @@ defaultOpts: function {} out lintopts is {
 # is exempt: a dispatcher is as long as the arms it names.
 longFunctionLines: 150.u32
 
+# The parameter count from which A014 reports a function head. Eight is where a
+# reader stops holding the list in mind: the parameters that travel together are
+# one value, and a head that stays this wide says why in its doc.
+wideSignatureParams: 8.u32
+
 # The body length from which A006 compares shapes: below it a match is a
 # coincidence of small bodies, not a copy.
 duplicateBodyLines: 8.u32
@@ -2229,13 +2234,16 @@ Analysis: class {
             t.checkUnreachable :ast stmts: n.statements
             t.checkFlagAccumulator :ast stmts: n.statements
         } case functiondef then {
-            if t.opts.arch then (
-                t.checkLongFunction
-                :ast
-                bodyId: n.body
-                line: n.lineno
-                col: n.colno
-            )
+            if t.opts.arch then {
+                (
+                    t.checkLongFunction
+                    :ast
+                    bodyId: n.body
+                    line: n.lineno
+                    col: n.colno
+                )
+                t.checkWideSignature params: n.parameters line: n.lineno col: n.colno
+            }
             # the body is walked one function deeper; the signature is not
             t.walkOptAt :ast oId: n.returntype
             t.walkIds :ast ids: n.parameters
@@ -2869,6 +2877,21 @@ Analysis: class {
                 }
             }
         }
+    }
+
+    # checkWideSignature -- A014: a function head that declares
+    # wideSignatureParams parameters or more, the receiver among them.
+    checkWideSignature: function {t: this params: zast.kidspan line: u32 col: u32} is {
+        n: params.count
+        if n < wideSignatureParams then return
+        (
+            t.info
+            code: "A014"
+            msg: "function declares \{n} parameters; pass the ones that travel together as one value"
+            :line
+            :col
+            width: 1
+        )
     }
 
     # checkLongFunction -- A005: a function whose body spans more than
