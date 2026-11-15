@@ -3506,10 +3506,18 @@ recordNodeNameId: function {
     scope: ztypes.declid
 } is {
     if nameId.isZero then return
-    kc: nid
-    st.walk.pendingTyperef.set key: kc value: nameId
+    notePendingTyperef :st :nid :nameId
     kc3: nid
     st.walk.pendingTyperefScope.set key: kc3 value: scope
+}
+
+# notePendingTyperef -- node `nid` writes the type name `nameId`: a pending
+# type-ref, which the next stampPendingTyperefs pass stamps. A node recorded
+# before keeps its place and is not stamped a second time.
+notePendingTyperef: function {st: zenv.ZSymbolTable nid: zast.nodeid nameId: zast.nameid} is {
+    before: st.walk.pendingTyperef.length
+    st.walk.pendingTyperef.set key: nid value: nameId
+    if st.walk.pendingTyperef.length > before then st.walk.typerefNew.append from: nid
 }
 
 # stampNestedTyperef -- a qualified type reference into a NESTED unit
@@ -19002,11 +19010,13 @@ resolveAliasKeyIn: function {
         # the value alias's own dotted node resolves as a typeref to the
         # root type post-demand (nav from the alias line into the tag type)
         dnid: zast.nodeid
-        do8: st.typing.decls.get i: adecl
-        defNode: ast.nodes.get i: do8.node
-        if defNode.namedoperation then dnid = defNode.operation
+        {
+            do8: st.typing.decls.get i: adecl
+            defNode: ast.nodes.get i: do8.node
+            if defNode.namedoperation then dnid = defNode.operation
+        }
         if dnid.notZero then {
-            st.walk.pendingTyperef.set key: dnid value: altK.unitName
+            notePendingTyperef :st nid: dnid nameId: altK.unitName
             # the alias resolves in the scope it is written in
             st.walk.pendingTyperefScope.set key: dnid value: aParent
         }
@@ -23565,8 +23575,8 @@ typeNameResolvesNowhere: function {
 }
 
 # stampPendingTyperefs -- stamp the type-ref nodes recorded since the last
-# call (pendingTyperef is append-only and iterates in insertion order, so a
-# count is the cursor). The first call is the post-demand pass; a definition
+# call (walk.typerefNew, which notePendingTyperef fills in the order
+# recorded). The first call is the post-demand pass; a definition
 # resolved after it -- from a drain during the body walk -- records its
 # type-refs the same way, and the drain re-runs this over the new tail.
 stampPendingTyperefs: function {
@@ -23576,9 +23586,7 @@ stampPendingTyperefs: function {
 } is {
     # nothing recorded or deferred since the last pass: a definition resolved
     # on demand asks after each one, and most add nothing
-    if st.walk.typerefRetry.length == 0 when (
-        st.walk.pendingTyperef.length == st.walk.typerefsStamped
-    ) then return
+    if st.walk.typerefRetry.length == 0 when st.walk.typerefNew.length == 0 then return
     # a declaration's type-refs belong to no instance and no template walk,
     # whichever walk asked for them
     prevMono: st.typing.curMonoStamp
@@ -23632,16 +23640,14 @@ stampPendingTyperefsIn: function {
         }
     }
     st.walk.typerefRetry = ListVal zast.nodeid
-    seen: u64
-    for each e: st.walk.pendingTyperef.iterateItems loop {
-        seen = seen + 1
-        if seen > st.walk.typerefsStamped then {
-            pk: e.key
-            pkeys.append pk
-            pvals.append e.value
+    for each nk: st.walk.typerefNew loop {
+        nv: st.walk.pendingTyperef.get key: nk
+        if nv.some then {
+            pkeys.append nk
+            pvals.append nv
         }
     }
-    st.walk.typerefsStamped = seen
+    st.walk.typerefNew = ListVal zast.nodeid
     sweepGenericParamNames :st :ast
     pi: u64
     pcnt: pkeys.length
