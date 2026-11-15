@@ -70,7 +70,7 @@ varEntryPut: function {
 bindBorrowAlias: function {ctx: Ctx vid: ztypes.vid nm: StringView} is {
     p: "__borrow_\{nm}"
     bal: "(*\{p})"
-    varEntryPut xs: ctx.aliases :vid val: bal.stringView facts: derefFacts ptr: p.take
+    varEntryPut xs: ctx.aliases :vid val: bal.stringView facts: memberreads.derefFacts ptr: p.take
 }
 
 # refPtrC -- the C spelling of a reference a function hands back, or of the
@@ -95,7 +95,7 @@ returnsValueStructRef: function {
     retTid: ztypes.tid
 } out bool is {
     if (typing.returnMarkerOf tid: fid) == ztypes.zparamownership.viewMode then return false
-    return (isValueStructTid :reg :typing :ctx tid: retTid)
+    return (memberreads.isValueStructTid :reg :typing :ctx tid: retTid)
 }
 
 # fnReturnsRefBorrow -- the function hands back a REFERENCE to a user reftype:
@@ -168,7 +168,12 @@ refBorrowCalleeFid: function {
         if (typing.returnsReference tid: cid) then return cid
         ch8: aliasChildName :ast :typing n: (ast.nodes.get i: n.callable)
         if ch8.length == 0 then return ztypes.tid.zero
-        recvTid: dottedReceiverStampId :ast :typing callable: (ast.nodes.get i: n.callable)
+        recvTid: (
+            memberreads.dottedReceiverStampId
+            :ast
+            :typing
+            callable: (ast.nodes.get i: n.callable)
+        )
         recvTid = (
             typedefMethodOwner
             :reg
@@ -320,7 +325,7 @@ valueStructRefNode: function {
     }
     # the result's type first: it is one stamp read, and most calls fail it
     rt: stampIdOf :typing nid: (interpPartNodeId :n)
-    if (isValueStructTid :reg :typing :ctx tid: rt).not then return zast.nodeid
+    if (memberreads.isValueStructTid :reg :typing :ctx tid: rt).not then return zast.nodeid
     fid: refBorrowCalleeFid :ast :reg :typing :ctx :n
     if fid.isZero then return zast.nodeid
     # a native reference (`getMut`) keeps its own pointer spelling
@@ -429,7 +434,7 @@ rhsIsBorrowGet: function {
         chId: aliasChildNameId :ast :typing n: cbl
         isMut: chId == zast.wellKnown.slot.wkGetMut
         if isMut.not when (chId == zast.wellKnown.slot.wkGet).not then return false
-        rst: dottedReceiverStampId :ast :typing callable: cbl
+        rst: memberreads.dottedReceiverStampId :ast :typing callable: cbl
         bt: chaseAggregateTypedef :reg :typing :ctx tid: rst
         isC: (
             (types.isListOriginOf :reg :ctx tid: bt) or (types.isListViewOriginOf :reg :ctx tid: bt)
@@ -444,7 +449,7 @@ rhsIsBorrowGet: function {
                 tid: (nativerows.listElemType :reg :typing monoId: bt)
             )
         }
-        return (listGetIsPtr :reg :typing :ctx monoId: bt)
+        return (memberreads.listGetIsPtr :reg :typing :ctx monoId: bt)
     } else {
         return false
     }
