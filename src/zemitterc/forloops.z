@@ -1,0 +1,1079 @@
+# forloops -- `for` forms, ranges, and a generator's state machine. An
+# implementation subunit of zemitterc.
+
+# tidDeep -- a stamp id with a value-position FUNCTION unwrapped to its return
+# type. The id the readers that owe scalarCTypeFor a canonical id ask for, since
+# a spelling cannot tell a user type shadowing a scalar from the scalar:
+# `xs.length` in a for-header auto-calls, so the node's own stamp is the METHOD
+# and its width is the method's return.
+tidDeep: function {
+    reg: ztypes.ZTypeRegistry.view
+    sid: ztypes.tid
+} out ztypes.tid is {
+    if sid.isZero then return ztypes.tid
+    # a value-position FUNCTION stamp is an auto-call; its value type is the
+    # method's return.
+    if (reg.typetypeOf typeId: sid) == ztypes.ztypetype.functionType then {
+        rto: emitplan.fnReturnTidOf :reg tid: sid
+        if rto.notZero then return rto
+    }
+    return sid
+}
+
+# stampTidDeep -- tidDeep of a NODE's own stamp.
+stampTidDeep: function {
+    reg: ztypes.ZTypeRegistry.view
+    typing: ztyping.ZTyping.view
+    n: astnode.view
+} out ztypes.tid is {
+    return (tidDeep :reg sid: (stampIdOf :typing nid: (interpPartNodeId :n)))
+}
+
+# forArmCond -- the text of a loop's `while:` arms: every condition that is
+# NOT the named binding, joined. "" when there are none.
+#
+# A named binding drives the loop by itself -- an iterator answers `none`, a
+# counted range runs out -- so the arms are a second way to leave, tested per
+# iteration inside the loop rather than in a C header the binding already owns.
+#
+# The binding is condition ZERO whenever there is one: the parser accepts a
+# name only in the first, so the callers that read `i: 0` to find it are
+# reading what the grammar guarantees.
+forArmCond: function {
+    ast: Ast.view
+    reg: ztypes.ZTypeRegistry.view
+    typing: ztyping.ZTyping.view
+    ctx: Ctx
+    n: zast.forrow.view
+} out String is {
+    cond: String
+    for each kId: (zast.kidsOf :ast span: n.conditions) loop {
+        if (forCondIsNamed :ast :kId).not then {
+            emitForCond :ast :reg :typing :ctx n: (ast.nodes.get i: kId) :cond
+        }
+    }
+    return cond
+}
+
+# emitForArmBreak -- the arms' test `armc` of the loop `node`, as the loop's
+# first statement after its binding: `if (!(c)) break;`, the break after what
+# the checker recorded a failing arm destroys (exitDestroy of the loop): the
+# element the binding answered. Nothing when the loop has no arms.
+emitForArmBreak: function {
+    ast: Ast.view
+    reg: ztypes.ZTypeRegistry.view
+    typing: ztyping.ZTyping.view
+    ctx: Ctx
+    node: zast.nodeid
+    armc: StringView
+    ind: StringView
+    buf: String.borrow
+} is {
+    if armc.length == 0 then return
+    inner: "\{ind}    "
+    owed: String
+    outerExit: ctx.exitNode
+    ctx.exitNode = node
+    emitExitDestroy :ast :reg :typing :ctx ind: inner.stringView buf: owed
+    ctx.exitNode = outerExit
+    if owed.length == 0 then {
+        buf.append "\{ind}if (!(\{armc})) break;\n"
+        return
+    }
+    buf.append "\{ind}if (!(\{armc})) {\n\{owed}\{inner}break;\n\{ind}}\n"
+}
+
+# pushPayloadSpill -- a suspending loop's payload is saved to the field the
+# checker minted for it at every yield inside the loop and reloaded at the
+# label: the local for an owned or value payload, the `_iterN` wrapper for a
+# borrowed view, whose pointer or copy the reload re-derives. True when a
+# spill was pushed, so the loop's end can pop it.
+pushPayloadSpill: function {
+    ast: Ast.view
+    reg: ztypes.ZTypeRegistry.view
+    typing: ztyping.ZTyping.view
+    ctx: Ctx
+    cNid: zast.nodeid
+    pk: spillkind
+    lbl: StringView
+    mN: u64
+    payC: StringView
+    # the payload's type
+    payTid: ztypes.tid
+} out bool is {
+    if ctx.genActive.not then return false
+    pfO: typing.forPayloadField.get key: cNid
+    match (
+        pfO
+    ) case some then {
+        savedO: lbl.string
+        restoredO: lbl.string
+        if pk.viewPtr then {
+            savedO = "_iter\{mN}"
+            restoredO = "__borrow_\{lbl}"
+        }
+        if pk.viewCopy then savedO = "_iter\{mN}"
+        fldS: genFieldC :ast :reg :typing :ctx nameId: pfO
+        ctx.genForSpills.append (
+            ForSpill
+            field: fldS
+            saved: savedO
+            restored: restoredO
+            kind: pk
+            payC: payC.string
+            payZero: (movedZeroC :reg :typing :ctx tid: payTid)
+        )
+        return true
+    } case none then {
+        return false
+    }
+}
+
+# emitCountedRangeFor -- `for each x: N.times loop`: the HALF-OPEN range, walked by
+# the same trip count the closed forms use. A count starts at 0 -- `times` takes
+# no argument to start it anywhere else. False when the operand drives no
+# counted range.
+#
+# THE COUNT IS READ ONCE, which is the whole of the difference from
+# `x < (N)`: that re-read N at every test, so a body that assigned to N drove
+# the loop -- `for each i: n.times loop { n = n + 100 }` never terminated, while the
+# same range held as a value ran n times, because `intrange` captures its count
+# at construction. One spelling of one loop cannot mean two things.
+emitCountedRangeFor: function {
+    ast: Ast.view
+    reg: ztypes.ZTypeRegistry.view
+    typing: ztyping.ZTyping.view
+    ctx: Ctx
+    m: zast.forrow.view
+    n: astnode.view
+    lbl: StringView
+    ind: StringView
+    tmp: FnTemps
+    buf: String.borrow
+} out bool is {
+    bound: rangeBoundExpr :ast :reg :typing :ctx :n
+    if bound.length == 0 then return false
+    rtR: rangeTid :ast :reg :typing :n
+    ctR: intScalarCTypeOf :typing tid: rtR
+    if ctR.length == 0 then return false
+    mN: tmpNext :ctx :tmp
+    fn: "_fn\{mN}"
+    rk: ztypecheck.numKindOfTid :typing tid: rtR
+    cnt: (
+        countRangeCountExpr
+        signed: rk.has and (ztypes.isSignedIntKind k: rk.kind)
+        bound: bound.stringView
+    )
+    # the temporaries the count's expression recorded are declared ahead of it
+    flushArgHoists :ctx :ind :tmp :buf
+    d0: "\{ind}uint64_t \{fn} = \{cnt};\n"
+    buf.append d0
+    lidR: pushLoopLabel :ctx :tmp isDo: false postTest: m.postconditions.count.u64 > 0
+    # A suspension inside the body RETURNS from `.call`, and the resume `goto`
+    # lands inside the loop, PAST the C for-init -- so the counter and the
+    # count, which live only in the header, are indeterminate on the next call
+    # and the loop yields once and reports itself exhausted. Neither is a local
+    # the checker keeps in the instance: a `for` label is a nameid on the
+    # header's namedoperation and carries no variable id to alias a field to.
+    # Both keep their C locals -- so the header, `continue` and the step are
+    # untouched -- and are SPILLED to state fields across each suspension.
+    pushed: false
+    if ctx.genActive when (zast.yieldCountIn :ast nid: m.body) > 0 then {
+        ctx.genForNext = ctx.genForNext + 1
+        fcF: genSynthField :typing :ctx which: gensynth.forCounter k: ctx.genForNext
+        fcC: genFieldC :ast :reg :typing :ctx nameId: fcF
+        ctx.genForSpills.append (
+            ForSpill
+            field: fcC
+            saved: lbl.string
+            restored: lbl.string
+            kind: spillkind.copy
+            payC: String
+            payZero: String
+        )
+        fnF: genSynthField :typing :ctx which: gensynth.forCount k: ctx.genForNext
+        fnC: genFieldC :ast :reg :typing :ctx nameId: fnF
+        ctx.genForSpills.append (
+            ForSpill
+            field: fnC
+            saved: fn.copy
+            restored: fn.copy
+            kind: spillkind.copy
+            payC: String
+            payZero: String
+        )
+        pushed = true
+    }
+    st1: "\{fn} = \{fn} - 1"
+    st2: "\{lbl} = (\{ctR})((uint64_t)\{lbl} + 1ULL)"
+    lh: "\{ind}for (\{ctR} \{lbl} = 0; \{fn} > 0; \{st1}, \{st2}) {\n"
+    buf.append lh
+    bodyInd: "\{ind}    "
+    armC: forArmCond :ast :reg :typing :ctx n: m
+    flushArgHoists :ctx ind: bodyInd.stringView :tmp :buf
+    (
+        emitForArmBreak
+        :ast
+        :reg
+        :typing
+        :ctx
+        node: m.nodeid
+        armc: armC.stringView
+        ind: bodyInd.stringView
+        :buf
+    )
+    # the body is a BLOCK: whatever it registers -- an argument hoisted to an
+    # `_ah` temp, an owned local -- is declared per iteration and has to be
+    # freed per iteration. Without the mark those frees stayed pending and
+    # landed after the loop, naming a temp that had left C scope.
+    lLR: tmp.listFrees.length
+    dvR: false
+    if m.body.notZero then {
+        bodyNode: ast.nodes.get i: m.body
+        emitBodyNode :ast :reg :typing :ctx n: bodyNode ind: bodyInd.stringView :tmp :buf
+        dvR = blockDiverges :ast :reg :typing :ctx n: bodyNode
+    }
+    closeScopeBlock :ast :reg :typing :ctx :tmp lL: lLR diverged: dvR node: m.body :buf
+    (
+        emitIterationEnd
+        :ast
+        :reg
+        :typing
+        :ctx
+        :m
+        id: lidR
+        diverged: dvR
+        ind: bodyInd.stringView
+        :tmp
+        :buf
+    )
+    lc: "\{ind}}\n"
+    buf.append lc
+    popLoopLabel :ctx id: lidR :ind :buf
+    # both leave C scope with the loop, so a suspension after it must not
+    # spill either
+    if pushed then {
+        ctx.genForSpills.pop
+        ctx.genForSpills.pop
+    }
+    return true
+}
+
+# closedRangeCmp -- the guard a closed range is entered under: an ASCENDING
+# range whose start is already past its end walks nothing, and a descending one
+# whose start is already below it does the same. One compare, outside the loop.
+closedRangeCmp: function {down: bool} out StringView is {
+    if down then return ">="
+    return "<="
+}
+
+# closedRangeStepOp -- which way the loop variable moves.
+closedRangeStepOp: function {down: bool} out StringView is {
+    if down then return "-"
+    return "+"
+}
+
+# emitClosedRangeFor -- `for each x: (F.upto to: T) loop` and its `downto` twin: the
+# CLOSED range lowered to a counted C loop, with no range object constructed.
+#
+# A closed range cannot be driven by an endpoint comparison. `i >= 0` on an
+# unsigned type is true forever and the step wraps at zero, and a range whose
+# last value is its type's MAXIMUM has no value past it to stop at -- the two
+# shapes the closed forms exist to serve. So the loop counts down a trip count,
+# exactly as `intrange` does.
+#
+# The loop variable stays in the for-INIT, where the half-open form keeps it,
+# and steps in the THIRD clause so `continue` reaches the step. It steps through
+# u64, which is defined at every width and sign; its final step is dead and may
+# wrap (`3.u8.downto to: 0` leaves it at 255), because the count has already
+# reached zero and the loop has left.
+#
+# Both ends are bound to locals first: each is read twice, once by the guard and
+# once by the count or the init, and re-emitting the expression would evaluate
+# it twice. Each binding is its own statement, built and written in the order
+# the ends are written -- the start, then the end -- with the temporaries its
+# expression recorded declared just ahead of it: those run when declared, so a
+# temporary of the end declared ahead of the start would run first.
+emitClosedRangeFor: function {
+    ast: Ast.view
+    reg: ztypes.ZTypeRegistry.view
+    typing: ztyping.ZTyping.view
+    ctx: Ctx
+    m: zast.forrow.view
+    n: astnode.view
+    lbl: StringView
+    down: bool
+    ind: StringView
+    tmp: FnTemps
+    buf: String.borrow
+} out bool is {
+    # asked of the WHOLE node, before the match below narrows it to the call
+    # row: both readers take the node the header binds, as rangeBoundExpr's
+    # arms do
+    ctR: rangeCType :ast :reg :typing :n
+    if ctR.length == 0 then return false
+    # both ends' shapes are checked before either is built: nothing may be
+    # written once the first is
+    toNid: rangeToNode :ast :n
+    if toNid.isZero then return false
+    match (
+        n
+    ) case call then {
+        startNid: dottedParentNodeId n: (ast.nodes.get i: n.callable)
+        if startNid.isZero then return false
+        mN: tmpNext :ctx :tmp
+        rs: "_rs\{mN}"
+        re: "_re\{mN}"
+        fn: "_fn\{mN}"
+        cnt: closedRangeCountExpr from: rs.stringView to: re.stringView :down
+        lidR: pushLoopLabel :ctx :tmp isDo: false postTest: m.postconditions.count.u64 > 0
+        startx: emitExpr :ast :reg :typing :ctx n: (ast.nodes.get i: startNid)
+        flushArgHoists :ctx :ind :tmp :buf
+        d0: "\{ind}\{ctR} \{rs} = \{startx};\n"
+        buf.append d0
+        tox: emitExpr :ast :reg :typing :ctx n: (ast.nodes.get i: toNid)
+        flushArgHoists :ctx :ind :tmp :buf
+        d1: "\{ind}\{ctR} \{re} = \{tox};\n"
+        buf.append d1
+        d2: "\{ind}uint64_t \{fn} = 0;\n"
+        buf.append d2
+        gd: closedRangeCmp :down
+        d3: "\{ind}if (\{rs} \{gd} \{re}) \{fn} = \{cnt};\n"
+        buf.append d3
+        # TWO values cross a suspension here where the half-open form spills
+        # one: the resume `goto` lands past the C for-init, and the count is no
+        # more recomputable than the variable -- the ends it was taken from
+        # left C scope with the declarations above.
+        pushed: false
+        if ctx.genActive when (zast.yieldCountIn :ast nid: m.body) > 0 then {
+            ctx.genForNext = ctx.genForNext + 1
+            fcF: genSynthField :typing :ctx which: gensynth.forCounter k: ctx.genForNext
+            fcC: genFieldC :ast :reg :typing :ctx nameId: fcF
+            ctx.genForSpills.append (
+                ForSpill
+                field: fcC
+                saved: lbl.string
+                restored: lbl.string
+                kind: spillkind.copy
+                payC: String
+                payZero: String
+            )
+            fnF: genSynthField :typing :ctx which: gensynth.forCount k: ctx.genForNext
+            fnC: genFieldC :ast :reg :typing :ctx nameId: fnF
+            ctx.genForSpills.append (
+                ForSpill
+                field: fnC
+                saved: fn.copy
+                restored: fn.copy
+                kind: spillkind.copy
+                payC: String
+                payZero: String
+            )
+            pushed = true
+        }
+        sp: closedRangeStepOp :down
+        st1: "\{fn} = \{fn} - 1"
+        st2: "\{lbl} = (\{ctR})((uint64_t)\{lbl} \{sp} 1ULL)"
+        lh: "\{ind}for (\{ctR} \{lbl} = \{rs}; \{fn} > 0; \{st1}, \{st2}) {\n"
+        buf.append lh
+        bodyInd: "\{ind}    "
+        armX: forArmCond :ast :reg :typing :ctx n: m
+        flushArgHoists :ctx ind: bodyInd.stringView :tmp :buf
+        (
+            emitForArmBreak
+            :ast
+            :reg
+            :typing
+            :ctx
+            node: m.nodeid
+            armc: armX.stringView
+            ind: bodyInd.stringView
+            :buf
+        )
+        lLR: tmp.listFrees.length
+        dvR: false
+        if m.body.notZero then {
+            bodyNode: ast.nodes.get i: m.body
+            emitBodyNode :ast :reg :typing :ctx n: bodyNode ind: bodyInd.stringView :tmp :buf
+            dvR = blockDiverges :ast :reg :typing :ctx n: bodyNode
+        }
+        closeScopeBlock :ast :reg :typing :ctx :tmp lL: lLR diverged: dvR node: m.body :buf
+        (
+            emitIterationEnd
+            :ast
+            :reg
+            :typing
+            :ctx
+            :m
+            id: lidR
+            diverged: dvR
+            ind: bodyInd.stringView
+            :tmp
+            :buf
+        )
+        lc: "\{ind}}\n"
+        buf.append lc
+        popLoopLabel :ctx id: lidR :ind :buf
+        if pushed then {
+            ctx.genForSpills.pop
+            ctx.genForSpills.pop
+        }
+        return true
+    } else {
+        return false
+    }
+}
+
+# isCountRangeMemberId -- `times`, by INTERNED ID: the COUNT family, whose
+# receiver is the range's BOUND and whose walk is half-open. Both legs of the
+# count emit ask through here, and they must agree: a recogniser that accepts
+# the member while the bound reader does not sends `for each x: N.times loop` past
+# the counted-loop path into the iterator protocol, where it never advances --
+# a loop that prints the receiver forever.
+isCountRangeMemberId: function {id: zast.nameid} out bool is {
+    return id == zast.wellKnown.slot.wkTimes
+}
+
+# isClosedRangeMemberId -- `upto` or `downto`, by INTERNED ID. SEPARATE from
+# isCountRangeMemberId deliberately: that one's callers read the receiver as the
+# range's BOUND, and a closed range's receiver is its START. Teaching the two
+# names to it would emit `for (T i = 0; i < start; i++)` and walk the wrong
+# values with no diagnostic -- the mirror of the failure recorded above, where
+# one of two recognisers knows the member and the other does not. rangeCType asks
+# both, because the width is the receiver's whichever family it is.
+isClosedRangeMemberId: function {id: zast.nameid} out bool is {
+    return (id == zast.wellKnown.slot.wkUpto) or (id == zast.wellKnown.slot.wkDownto)
+}
+
+# closedRangeMemberOf -- the closed-range member a `for` header's operation
+# calls, or 0 for anything else. Only the CALL shape can name one: the endpoint
+# arrives as a `to:` argument, so there is no bare dotted-path spelling to test.
+closedRangeMemberOf: function {
+    ast: Ast.view typing: ztyping.ZTyping.view n: astnode.view
+} out zast.nameid is {
+    match (
+        n
+    ) case call then {
+        mnId: aliasChildNameId :ast :typing n: (ast.nodes.get i: n.callable)
+        if (isClosedRangeMemberId id: mnId) then return mnId
+        return zast.nameid
+    } else {
+        return zast.nameid
+    }
+}
+
+# rangeToNode -- the node of a closed range's `to:` endpoint, 0 when the call
+# has no such argument. The argument is taken by POSITION rather than by its
+# label: `upto` and `downto` declare one parameter each, and the member has
+# already been identified by interned id before this is asked, so the single
+# argument present is that endpoint.
+rangeToNode: function {ast: Ast.view n: astnode.view} out zast.nodeid is {
+    match (
+        n
+    ) case call then {
+        if n.arguments.count.u64 != 1 then return zast.nodeid
+        aId: zast.kidAt kids: ast.kids span: n.arguments i: 0
+        a: ast.nodes.get i: aId
+        if a.namedoperation then return a.operation
+        return zast.nodeid
+    } else {
+        return zast.nodeid
+    }
+}
+
+# countRangeCountExpr -- the trip count `times` walks: the receiver itself,
+# which IS the count, read once into u64.
+#
+# A SIGNED receiver clamps at zero, as the stdlib body does with
+# `(v.u64.or d: 0)`: a negative count walks nothing, and reinterpreting one as
+# u64 would walk 1.8e19. An unsigned receiver needs no test, and emitting one
+# would be a comparison the C compiler is right to warn about.
+countRangeCountExpr: function {signed: bool bound: StringView} out String is {
+    if signed.not then {
+        cu: "(uint64_t)(\{bound})"
+        return cu
+    }
+    cs: "(\{bound}) < 0 ? 0 : (uint64_t)(\{bound})"
+    return cs
+}
+
+# closedRangeCountExpr -- the trip count a closed range walks: the number of
+# values in `[lo, hi]`, which is `hi - lo + 1` taken in the UNSIGNED domain.
+#
+# One expression serves all eight integer types and both directions. Each end is
+# reinterpreted through u64 first -- the two's complement `.bits` names in the
+# stdlib -- so a signed range spanning zero does not overflow the way `to - from`
+# would, and an unsigned one is simply zero-extended. The stdlib writes the
+# unsigned case as `(to - v).u64 + 1`, subtracting at the receiver's own width;
+# that truncation is a no-op here because the caller has already guarded
+# `lo <= hi`, so the difference cannot exceed what the receiver's width holds.
+# The two spellings therefore agree on every value, which is what must not drift.
+#
+# The full span is the one count this cannot express: `hi - lo` is then u64's
+# maximum and the `+ 1` wraps to zero, so the loop walks nothing. `intrange`
+# has the same hole, and closing it is not a lowering question.
+closedRangeCountExpr: function {from: StringView to: StringView down: bool} out String is {
+    if down then {
+        cd: "((uint64_t)\{from} - (uint64_t)\{to}) + 1ULL"
+        return cd
+    }
+    cu: "((uint64_t)\{to} - (uint64_t)\{from}) + 1ULL"
+    return cu
+}
+
+# rangeBoundExpr -- the upper bound of an `N.times` range: the dotted receiver
+# N, which the half-open walk stops below. "" for anything else.
+#
+# There is no other shape to read. Integers are not iterable, so no bare
+# `for each x: N loop` makes an operand its own bound, and `times` takes no arguments,
+# so it is never a call. A CLOSED range is read by closedRangeMemberOf/rangeToNode
+# instead -- its receiver is the range's start, not its bound.
+rangeBoundExpr: function {
+    ast: Ast.view
+    reg: ztypes.ZTypeRegistry.view
+    typing: ztyping.ZTyping.view
+    ctx: Ctx
+    n: astnode.view
+} out String is {
+    match (
+        n
+    ) case dottedpath then {
+        cmnId: aliasOrChildId :ast :typing aliasId: n.nodeid childId: n.child
+        if (isCountRangeMemberId id: cmnId) then {
+            # the receiver may be a dotted path itself (squares.length.times) --
+            # stampTidDeep resolves its scalar type either way
+            bct: (
+                intScalarCTypeOf
+                :typing
+                tid: (stampTidDeep :reg :typing n: (ast.nodes.get i: n.parent))
+            )
+            if bct.length > 0 then {
+                return (emitExpr :ast :reg :typing :ctx n: (ast.nodes.get i: n.parent))
+            }
+        }
+        return "".string
+    } else {
+        return "".string
+    }
+}
+
+# intScalarCTypeOf -- the C scalar an INTEGER tid spells, "" for anything else.
+# Asked by canonical id: a user type shadowing a scalar name emits its own
+# struct, and a float or bool receiver is no counter at all -- counted in an
+# integer a float bound would truncate silently.
+intScalarCTypeOf: function {
+    typing: ztyping.ZTyping.view
+    tid: ztypes.tid
+} out String is {
+    if tid.isZero then return "".string
+    nk: ztypecheck.numKindOfTid :typing :tid
+    if nk.has.not then return "".string
+    if (ztypes.isFloatKind k: nk.kind) then return "".string
+    return (consts.scalarCTypeFor :typing :tid)
+}
+
+# rangeTid -- the type a counted range's induction variable takes: its
+# RECEIVER's, the numeric type the range yields. 0 for a node that is no
+# counted range.
+rangeTid: function {
+    ast: Ast.view
+    reg: ztypes.ZTypeRegistry.view
+    typing: ztyping.ZTyping.view
+    n: astnode.view
+} out ztypes.tid is {
+    match (
+        n
+    ) case call then {
+        # the CLOSED family: only it takes an argument, so only it is a call
+        callableNode: ast.nodes.get i: n.callable
+        if (isClosedRangeMemberId id: (aliasChildNameId :ast :typing n: callableNode)) then {
+            rsid: dottedReceiverStampId :ast :typing callable: callableNode
+            return (tidDeep :reg sid: rsid)
+        }
+        return ztypes.tid.zero
+    } case dottedpath then {
+        # the COUNT family, whose receiver rangeBoundExpr reads as the bound
+        cmnId: aliasOrChildId :ast :typing aliasId: n.nodeid childId: n.child
+        if (isCountRangeMemberId id: cmnId) then {
+            rt2: stampTidDeep :reg :typing n: (ast.nodes.get i: n.parent)
+            return rt2
+        }
+        return ztypes.tid.zero
+    } else {
+        return ztypes.tid.zero
+    }
+}
+
+# rangeCType -- the C type a counted range's induction variable takes: the
+# RECEIVER's, which is what the range yields and so what the loop name binds.
+# "" when the operand drives no counted range, and the arms are
+# rangeBoundExpr's own -- the bound and the width are the same receiver read
+# two ways, so they must agree about which node that is.
+#
+# Written `int64_t` the counter was signed whatever the width, so a u64 bound
+# above i64's maximum compared as a negative number and the loop ran once or
+# not at all. A u8 range counted in 64 bits and the loop name, typed u8, was
+# assigned from a wider counter at every step.
+rangeCType: function {
+    ast: Ast.view
+    reg: ztypes.ZTypeRegistry.view
+    typing: ztyping.ZTyping.view
+    n: astnode.view
+} out String is {
+    return (intScalarCTypeOf :typing tid: (rangeTid :ast :reg :typing :n))
+}
+
+# forCondIsNamed -- a `for` condition that binds a name (`i: 0`) is an
+# initialiser, not a test.
+forCondIsNamed: function {ast: Ast.view kId: zast.nodeid} out bool is {
+    k: ast.nodes.get i: kId
+    if k.namedoperation.not then return false
+    lbl: zast.nameTextAt :ast ref: k.name
+    return lbl.length > 0
+}
+
+# emitGenPrologue -- the resume dispatch: switch on this->state to L_entry / the
+# per-yield resume labels / L_done.
+emitGenPrologue: function {
+    # the state field names
+    ast: Ast.view
+    # the checked program the generator class is in
+    reg: ztypes.ZTypeRegistry.view
+    typing: ztyping.ZTyping.view
+    # the emission context the generator is armed on (setupGenCtx)
+    ctx: Ctx
+    # the function body being written
+    buf: String.borrow
+} is {
+    if ctx.genHasValue then {
+        riI: genSynthField :typing :ctx which: gensynth.resumeInput k: 0
+        riC: genFieldC :ast :reg :typing :ctx nameId: riI
+        lgv: "    \{riC} = \{ctx.genValC};\n"
+        buf.append lgv
+    }
+    stI: genSynthField :typing :ctx which: gensynth.state k: 0
+    stC: genFieldC :ast :reg :typing :ctx nameId: stI
+    lgs: "    switch (\{stC}) {\n"
+    buf.append lgs
+    buf.append "        case 0: goto L_entry;\n"
+    k: 1.u64
+    for k <= ctx.genYieldCount loop {
+        lk: "        case \{k}: goto L_resume_\{k};\n"
+        buf.append lk
+        k = k + 1
+    }
+    buf.append "        default: goto L_done;\n"
+    buf.append "    }\n"
+    buf.append "L_entry:;\n"
+}
+
+# emitGenEpilogue -- the terminal landing: mark done and return the NONE wrapper.
+emitGenEpilogue: function {
+    # the names of the state fields
+    ast: Ast.view
+    # the checked program holding the generator class
+    reg: ztypes.ZTypeRegistry.view
+    typing: ztyping.ZTyping.view
+    # the generator context setupGenCtx armed
+    ctx: Ctx
+    # the body the exhausted path is appended to
+    buf: String.borrow
+} is {
+    # a yield the body counted but never emitted -- one made unreachable by a
+    # bare `return` before it -- still has a `case` in the resume switch, and a
+    # switch arm jumping to a label that was never written is C that does not
+    # compile. Land those on the terminal state: an unreachable yield can never
+    # be the state the machine suspended at, so resuming into it is done.
+    kd: ctx.genYieldNext
+    for kd <= ctx.genYieldCount loop {
+        ld: "L_resume_\{kd}:;\n"
+        buf.append ld
+        kd = kd + 1
+    }
+    buf.append "L_done:;\n"
+    stI: genSynthField :typing :ctx which: gensynth.state k: 0
+    stC: genFieldC :ast :reg :typing :ctx nameId: stI
+    lge: "    \{stC} = -1;\n"
+    buf.append lge
+    le: "    \{ctx.genWrap} _r_done = {0};\n"
+    buf.append le
+    lt: "    _r_done.tag = \{ctx.genNoneTag};\n"
+    buf.append lt
+    buf.append "    return _r_done;\n"
+}
+
+# emitYieldFromNode -- emit the suspension for a yield reached through expression
+# wrappers (the expression-form `name: yield E`).
+emitYieldFromNode: function {
+    ast: Ast.view
+    reg: ztypes.ZTypeRegistry.view
+    typing: ztyping.ZTyping.view
+    ctx: Ctx
+    n: astnode.view
+    ind: StringView
+    buf: String.borrow
+} is {
+    match (
+        n
+    ) case call then {
+        emitYieldStmt :ast :reg :typing :ctx callId: n.nodeid :ind :buf
+    } else null
+}
+
+# emitExprFormYield -- `name: yield E` in a bidirectional generator: suspend
+# (yield E), then bind name to the resume input the next `.call value:` provides.
+# A valtype binds the value directly; a borrowed reftype binds a pointer alias.
+emitExprFormYield: function {
+    ast: Ast.view
+    reg: ztypes.ZTypeRegistry.view
+    typing: ztyping.ZTyping.view
+    ctx: Ctx
+    value: astnode.view
+    aid: zast.nodeid
+    nm: StringView
+    nmVid: ztypes.vid
+    ind: StringView
+    buf: String.borrow
+} is {
+    # the hoist has already suspended this yield and left the resume value in
+    # a temp; only a yield it declined (no resume type it could name) still
+    # needs suspending here
+    riS: genSynthField :typing :ctx which: gensynth.resumeInput k: 0
+    srcC: genFieldC :ast :reg :typing :ctx nameId: riS
+    {
+        ycid: zast.yieldCallIdAt :ast nid: (zast.nodeIdOf n: value)
+        ykq: ctx.yieldTempK.get key: ycid
+        match (
+            ykq
+        ) case some then {
+            yvQ: genSynthField :typing :ctx which: gensynth.yieldSlot k: ykq
+            srcC = genFieldC :ast :reg :typing :ctx nameId: yvQ
+        } case none then {
+            emitYieldFromNode :ast :reg :typing :ctx n: value :ind :buf
+        }
+    }
+    ltid: stampIdOf :typing nid: aid
+    cTypeText: typeRefC :ast :reg :typing :ctx tid: ltid
+    if cTypeText.length == 0 then cTypeText = "int64_t".string
+    tt: reg.typetypeOf typeId: ltid
+    isRef: tt.isReferenceData
+    if isRef then {
+        lp0: "\{ind}\{cTypeText}* __borrow_\{nm} = \{srcC};\n"
+        buf.append lp0
+        lp1: "\{ind}/* alias: \{nm} => (*__borrow_\{nm}) */\n"
+        buf.append lp1
+        localnames.bindBorrowAlias :ctx vid: nmVid :nm
+    } else {
+        # bind the name TO ITS SLOT rather than copying it into a C local.
+        # `a: yield 1` used after a later suspension read a dead local before
+        # this -- silently, and long before expression-position yield existed:
+        # the checker keeps no `name: yield E` binding in the instance
+        # (a REFTYPE resume value is an alias into the caller's storage and a
+        # stored pointer would dangle), and for a valtype that left the value
+        # in a local the next `return` threw away. The slot is a field, so it
+        # survives, and the reftype path above is untouched.
+        slotted: false
+        yieldCallId: zast.yieldCallIdAt :ast nid: (zast.nodeIdOf n: value)
+        if (ctx.yieldTempK.has key: yieldCallId) then slotted = true
+        if slotted then {
+            lp3: "\{ind}/* alias: \{nm} => \{srcC} */\n"
+            buf.append lp3
+            (
+                varEntrySet
+                xs: ctx.aliases
+                vid: nmVid
+                val: srcC.stringView
+                facts: (memberFacts b: pathFacts)
+            )
+        } else {
+            lp2: "\{ind}\{cTypeText} \{nm} = \{srcC};\n"
+            buf.append lp2
+        }
+    }
+}
+
+# hoistStopsHere -- descent for the expression-yield hoist stops at anything
+# whose evaluation is CONDITIONAL or REPEATED: a clause body, a loop, a `with`
+# body, a nested definition. A yield there is a statement in its own right and
+# emitStmt reaches it on that path; hoisting it would run the suspension
+# whether or not the branch is taken.
+hoistStopsHere: function {n: astnode.view} out bool is {
+    match (
+        n
+    ) case statement then {
+        return true
+    } case ifexpr then {
+        return true
+    } case ifclause then {
+        return true
+    } case forexpr then {
+        return true
+    } case caseexpr then {
+        return true
+    } case caseclause then {
+        return true
+    } case withexpr then {
+        return true
+    } case doexpr then {
+        return true
+    } case functiondef then {
+        return true
+    } case objectdef then {
+        return true
+    } case unitdef then {
+        return true
+    } else {
+        return false
+    }
+}
+
+# hoistExprYields -- emit, as their own statements, the suspensions for every
+# yield written in EXPRESSION position inside `nid`, binding each resume value
+# to a temp the expression emitter then reads.
+#
+# A yield SUSPENDS the function: everything before it must already have run,
+# and what follows resumes at a label. It cannot sit in the middle of a C
+# expression, so the statement is split around it -- `b: (yield a) + 1` becomes
+# the suspension, then `b = #yv_k + 1`.
+#
+# Operands are hoisted before the yield that contains them (post-order), which
+# is the order they evaluate in, so `yield (yield a)` suspends innermost-first.
+hoistExprYields: function {
+    # the tree the statement's shape is walked from
+    ast: Ast.view
+    # read for each yield's resume TYPE, which the temp is declared with
+    reg: ztypes.ZTypeRegistry.view
+    typing: ztyping.ZTyping.view
+    # carries the state-machine cursor, and takes the temp each hoist records
+    ctx: Ctx
+    # the statement, or the sub-expression of one, to lift yields out of
+    nid: zast.nodeid
+    # the indent the hoisted statements are written at
+    ind: StringView
+    # the function body being built; the suspensions append here, ahead of the
+    # statement whose expression they were lifted from
+    buf: String.borrow
+} is {
+    if nid.isZero then return
+    {
+        n: ast.nodes.get i: nid
+        # an `if`'s FIRST clause's FIRST condition is the one part of it that
+        # runs unconditionally and exactly once, so it hoists like any other
+        # expression. Every later condition is guarded by the ones before it
+        # (`when` short-circuits) and every body is guarded by all of them, so
+        # the descent goes no further.
+        if n.ifexpr then {
+            if n.clauses.count.u64 > 0 then {
+                c0: ast.nodes.get i: (zast.kidAt kids: ast.kids span: n.clauses i: 0)
+                if c0.ifclause when c0.conditions.count.u64 > 0 then (
+                    hoistExprYields
+                    :ast
+                    :reg
+                    :typing
+                    :ctx
+                    nid: (zast.kidAt kids: ast.kids span: c0.conditions i: 0)
+                    :ind
+                    :buf
+                )
+            }
+            return
+        }
+        if (hoistStopsHere :n) then return
+        kids: zast.childIds :ast :n
+        kiter: kids.iterate
+        for k0: kiter loop {
+            hoistExprYields :ast :reg :typing :ctx nid: k0 :ind :buf
+        }
+    }
+    # canonicalise to the CALL's own id. The walk reaches a yield twice -- once
+    # through the statement line holding it, once as the call -- and both must
+    # answer the same key, or the suspension is emitted twice and every later
+    # state number shifts.
+    cid: zast.yieldCallIdAt :ast :nid
+    if cid.isZero then return
+    # already hoisted: emitStmt runs this over the statement and then over the
+    # nodes inside it, so the walk has to be idempotent
+    if (ctx.yieldTempK.has key: cid) then return
+    # the resume type. An out-only generator binds no `value`, so its yields
+    # carry nothing and stay on the statement leg
+    ltid: stampIdOf :typing nid: cid
+    if ltid.isZero then return
+    # a REFTYPE resume value is held as a pointer into the caller's argument,
+    # and a temp for it would have to carry the borrow alias the binding leg
+    # sets up. That leg still owns those; reftype `accepts` is deferred polish
+    # either way, so the hoist declines rather than guessing at the C.
+    ttk: reg.typetypeOf typeId: ltid
+    if ttk == ztypes.ztypetype.classType then return
+    if ttk == ztypes.ztypetype.unionType then return
+    kNum: ctx.genYieldNext
+    emitYieldStmt :ast :reg :typing :ctx callId: cid :ind :buf
+    # into the state object's slot, NOT a C local: the suspension above
+    # returned, so a local declared here would be gone by the next one. The
+    # lowering allocated one slot per suspension point for exactly this.
+    yvK: genSynthField :typing :ctx which: gensynth.yieldSlot k: kNum
+    yvC: genFieldC :ast :reg :typing :ctx nameId: yvK
+    riK: genSynthField :typing :ctx which: gensynth.resumeInput k: 0
+    riC: genFieldC :ast :reg :typing :ctx nameId: riK
+    lrv: "\{ind}\{yvC} = \{riC};\n"
+    buf.append lrv
+    kv: kNum
+    ctx.yieldTempK.set key: cid value: kv
+}
+
+# emitYieldStmt -- one `yield E` suspension: set the resume state, return the
+# SOME-wrapped value, then drop a resume label at column 0 (goto-reachable into
+# the enclosing block).
+emitYieldStmt: function {
+    ast: Ast.view
+    reg: ztypes.ZTypeRegistry.view
+    typing: ztyping.ZTyping.view
+    ctx: Ctx
+    # the yield CALL's node id. The suspension reads its one unlabelled
+    # argument; the checker has already refused a labelled one
+    callId: zast.nodeid
+    ind: StringView
+    buf: String.borrow
+} is {
+    k: ctx.genYieldNext
+    ctx.genYieldNext = k + 1
+    # an interpolated yield value builds via a self-contained statement
+    # expression (emitExpr :ast cannot emit the chain)
+    yopId: zast.yieldCallOperandAt :ast nid: callId
+    yx: ast.nodes.get i: yopId
+    veF: exprfacts
+    ve: emitInterpArgExpr :ast :reg :typing :ctx n: yx
+    if ve.length == 0 then ve = emitExprWith :ast :reg :typing :ctx n: yx facts: veF
+    # what the value hoisted is declared ahead of it and released once the value
+    # is in the box, before the suspension
+    ytmp: FnTemps n: 0 listFrees: List OwedFree
+    flushArgHoists :ctx :ind tmp: ytmp :buf
+    stI: genSynthField :typing :ctx which: gensynth.state k: 0
+    stC: genFieldC :ast :reg :typing :ctx nameId: stI
+    ls: "\{ind}\{stC} = \{k};\n"
+    buf.append ls
+    lw: "\{ind}\{ctx.genWrap} _ry_\{k} = {0};\n"
+    buf.append lw
+    tgt: "_ry_\{k}"
+    # copied out: the assignment records what it calls in the Ctx
+    gst: ctx.genSomeTag.copy
+    gsc: ctx.genSomeC.copy
+    gpc: ctx.genPayC.copy
+    (
+        emitOptionalAssign
+        :ctx
+        target: tgt.stringView
+        someTag: gst.stringView
+        someC: gsc.stringView
+        payC: gpc.stringView
+        vx: ve.stringView
+        :ind
+        :buf
+    )
+    flushBlockFrees tmp: ytmp lL: 0 diverged: false :buf
+    # what the value moved out of is zeroed before the suspension returns
+    emitValueTakeInvalidations :ast :reg :typing :ctx n: yx :ind :buf
+    # a yield of a bare local moves it into the box: the local is zeroed where
+    # a destroy still reaches it -- the instance's destructor, for a local the
+    # instance keeps
+    emitMovedSourceZero :ast :reg :typing :ctx n: yx :ind :buf
+    # a loop keeps its counter in the C for-header and its payload in a local
+    # inside the loop, and a `with` its value in the header's local; this
+    # `return` destroys them all and the resume `goto` re-enters past them.
+    # Spill each open one to its state field here and reload it at the label
+    emitSpillSaves :ctx :ind :buf
+    lr: "\{ind}return _ry_\{k};\n"
+    buf.append lr
+    ll: "L_resume_\{k}:;\n"
+    buf.append ll
+    emitSpillReloads :ctx :ind :buf
+}
+
+# genFieldC -- a state field of the generator instance being emitted, as the
+# C lvalue `<receiver>-><field>`.
+genFieldC: function {
+    # the field names
+    ast: Ast.view
+    # the checked program
+    reg: ztypes.ZTypeRegistry.view
+    typing: ztyping.ZTyping.view
+    # the emission context: the receiver and the generator class
+    ctx: Ctx
+    # the field's name, interned
+    nameId: zast.nameid
+} out String is {
+    r: ctx.genRecvC.copy
+    r.append "->"
+    r.append (memberC :ast :reg :typing :ctx owner: ctx.genTid kind: memberkind.field :nameId)
+    return r
+}
+
+# genSynthField -- the name of one of the state fields the generator transform
+# added to the class whose `call` is being emitted (typing.genFields): `which`
+# picks the family, `k` the 1-based suspension or loop number within it.
+genSynthField: function {
+    # the checked program holding typing.genFields
+    typing: ztyping.ZTyping.view
+    # the generator context: its row
+    ctx: Ctx.view
+    # the field's family
+    which: gensynth
+    # the suspension or loop number; unread for the cursor and the input
+    k: u64
+} out zast.nameid is {
+    row: typing.genFields.get i: ctx.genFieldsRow
+    match (
+        which
+    ) case state then {
+        return row.state
+    } case resumeInput then {
+        return row.resumeInput
+    } case yieldSlot then {
+        return (row.yieldSlots.get i: k - 1)
+    } case forCounter then {
+        return (row.forCounters.get i: k - 1)
+    } case forCount then {
+        return (row.forCounts.get i: k - 1)
+    }
+}
+
+# emitSpillSaves -- before a suspension's `return`: every open loop counter,
+# loop payload and `with` value goes to its state field.
+emitSpillSaves: function {ctx: Ctx.view ind: StringView buf: String.borrow} is {
+    for each sp: ctx.genForSpills loop {
+        lsv: "\{ind}\{sp.field} = \{sp.saved};\n"
+        buf.append lsv
+    }
+}
+
+# emitSpillReloads -- after a resume label: each saved value back into the C
+# local the body reads, by kind -- a copy, an owned payload the field then
+# lets go of, or a borrowed view re-derived from the saved wrapper. The
+# wrapper local is restored too: a later yield in the same iteration saves
+# it again, and the resume jumped past its declaration.
+emitSpillReloads: function {ctx: Ctx.view ind: StringView buf: String.borrow} is {
+    for each sp: ctx.genForSpills loop {
+        f: sp.field.stringView
+        match (
+            sp.kind
+        ) case copy then {
+            lc: "\{ind}\{sp.restored} = \{f};\n"
+            buf.append lc
+        } case owned then {
+            lo: "\{ind}\{sp.restored} = \{f};\n"
+            buf.append lo
+            if sp.payZero.length > 0 then buf.append "\{ind}\{f} = \{sp.payZero};\n"
+        } case viewCopy then {
+            lw: "\{ind}\{sp.saved} = \{f};\n"
+            buf.append lw
+            cv: "*(\{sp.payC}*)"
+            lv: "\{ind}\{sp.restored} = \{cv}\{f}.data;\n"
+            buf.append lv
+        } case viewPtr then {
+            lw2: "\{ind}\{sp.saved} = \{f};\n"
+            buf.append lw2
+            cp: "(\{sp.payC}*)"
+            lp: "\{ind}\{sp.restored} = \{cp}\{f}.data;\n"
+            buf.append lp
+        }
+    }
+}
