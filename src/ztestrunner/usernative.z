@@ -38,15 +38,8 @@ runUserNativeCases: function {r: Runner} is {
         return
     }
     jobs: List PoolJob
-    jobs.append (userProgramJob :r :dir src: fix.stringView name: "mystery" extra: "")
-    jobs.append (
-        userProgramJob
-        :r
-        :dir
-        src: fix.stringView
-        name: "cellar"
-        extra: "-Wno-unused-function"
-    )
+    jobs.append (userProgramJob :r :dir src: fix.stringView name: "mystery")
+    jobs.append (userProgramJob :r :dir src: fix.stringView name: "cellar")
     jobs.append (
         userEmitJob
         :r
@@ -122,11 +115,14 @@ listOfTwo: function {a: u64 b: u64} out ListVal u64 is {
     return l
 }
 
-# userProgramJob -- emit program `name` from the fixture root `src`, build it
-# with --cc (and `extra`, a flag after the rest) and its declared libraries,
-# and run it
+# userProgramJob -- emit program `name` from the fixture root `src` (its C is
+# read for the link line), then build it as a user does -- `zc build`, with
+# the C compiler zc picks, its unit's libraries and objects linked by zc --
+# and run it. The runner's --cc plays no part: what is checked is zc's user
+# units, not a C compiler, and a toolchain may lack a library a unit names
+# (tcc on Windows has no pthread)
 userProgramJob: function {
-    r: Runner.view dir: StringView src: StringView name: StringView extra: StringView
+    r: Runner.view dir: StringView src: StringView name: StringView
 } out PoolJob is {
     cpath: "\{dir}/\{name}.c"
     bpath: "\{dir}/\{name}.bin"
@@ -150,26 +146,25 @@ userProgramJob: function {
         allowFail: false
         zlinkFrom: ""
     )
-    ga: (
-        ccArgv
-        cc: r.cc.stringView
-        ccflags: r.ccflags.stringView
-        target: ""
-        bin: bpath.stringView
-        csrc: cpath.stringView
-        asan: false
-    )
-    if extra.length > 0 then ga.append from: extra.string
+    build: List String
+    build.append from: r.zc.copy
+    build.append from: "build".string
+    build.append from: name.string
+    build.append from: "--src".string
+    build.append from: src.string
+    build.append from: "--system".string
+    build.append from: r.sys.copy
+    build.append from: "-o".string
+    build.append from: bpath.copy
     steps.append (
         zjobs.mkStep
-        argv: ga
+        argv: build
         cwd: ""
         outPath: os.nullDevice.stringView
         errPath: "\{dir}/\{name}.cc".stringView
         timeoutSecs: r.timeoutSecs
         allowFail: false
-        zlinkFrom: cpath.stringView
-        zc: r.zc.stringView
+        zlinkFrom: ""
     )
     run: List String
     run.append from: bpath.copy
@@ -254,7 +249,7 @@ userProgramHolds: function {
         return false
     }
     if failStep == 1 then {
-        print "FAIL(usernative) \{name}: its C did not build, its unit's fragments or templates among it (\{dir}/\{name}.cc)"
+        print "FAIL(usernative) \{name}: zc build did not build it, its unit's fragments or templates among it (\{dir}/\{name}.cc)"
         return false
     }
     got: slurp path: "\{dir}/\{name}.out".stringView

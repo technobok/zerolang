@@ -71,34 +71,58 @@ caseNames: function {path: StringView} out List String is {
     return names
 }
 
-# checkGenericParams -- the params check: one `zl lint --counts` over the
-# examples, the corpus and the error fixtures; answers how many files hold an
-# L023 finding
+# checkGenericParams -- the params check: `zl lint --counts` over the
+# examples, the corpus and the error fixtures, paramsBatch files a call (one
+# command line holding every path passes Windows' length limit), the calls in
+# the job pool; answers how many files hold an L023 finding
 checkGenericParams: function {r: Runner.view} out u64 is {
-    argv: List String
-    argv.append "\{r.root}/bin/zl"
-    argv.append "lint".string
-    argv.append "--counts".string
+    files: List String
     errorsDir: "\{r.root}/tests/fixtures/errors"
     for each d: (listOfDirs a: r.examplesDir.stringView b: r.corpusDir.stringView) loop {
-        for each n: (fixtureNames dir: d.stringView suffix: ".z") loop argv.append "\{d}/\{n}.z"
+        for each n: (fixtureNames dir: d.stringView suffix: ".z") loop files.append "\{d}/\{n}.z"
     }
     for each n: (fixtureNames dir: errorsDir.stringView suffix: ".z"
-    ) loop argv.append "\{errorsDir}/\{n}.z"
-    rowsFile: "\{r.tmp}/fixtures-lint.out"
-    rc: (
-        os.spawn
-        :argv
-        cwd: ""
-        outPath: rowsFile.stringView
-        errPath: os.nullDevice.stringView
-        timeoutSecs: r.timeoutSecs
-    )
-    if (rc != 0) and (rc != 1) then {
-        print "FAIL(fixtures) params: zl lint did not run (exit \{rc})"
-        return 1
+    ) loop files.append "\{errorsDir}/\{n}.z"
+    jobs: List PoolJob
+    at: u64
+    for at < files.length loop {
+        argv: List String
+        argv.append "\{r.root}/bin/zl"
+        argv.append "lint".string
+        argv.append "--counts".string
+        k: at
+        for k < files.length while k < (at + paramsBatch) loop {
+            argv.append (files.get i: k).copy
+            k = k + 1
+        }
+        steps: List PoolStep
+        steps.append (
+            zjobs.mkStep
+            :argv
+            cwd: ""
+            outPath: "\{r.tmp}/fixtures-lint-\{jobs.length}.out".stringView
+            errPath: os.nullDevice.stringView
+            timeoutSecs: r.timeoutSecs
+            allowFail: true
+            zlinkFrom: ""
+        )
+        jobs.append (zjobs.mkJob name: "fixtures-lint" :steps)
+        at = k
     }
-    rows: slurp path: rowsFile.stringView
+    statuses: ListVal i32
+    failSteps: ListVal i64
+    zjobs.runJobs :jobs maxJobs: r.jobsMax :statuses :failSteps
+    rows: String
+    i: u64
+    for i < jobs.length loop {
+        rc: statuses.get :i
+        if (rc != 0) and (rc != 1) then {
+            print "FAIL(fixtures) params: zl lint did not run (exit \{rc})"
+            return 1
+        }
+        rows.append (slurp path: "\{r.tmp}/fixtures-lint-\{i}.out".stringView)
+        i = i + 1
+    }
     bad: u64
     for each l: rows.stringView.lines loop {
         if l.startsWith "L023 " then {
@@ -115,6 +139,9 @@ checkGenericParams: function {r: Runner.view} out u64 is {
     }
     return bad
 }
+
+# paramsBatch -- how many files one `zl lint --counts` of the params check reads
+paramsBatch: 200
 
 # minOf -- the smaller of `a` and `b`
 minOf: function {a: u64 b: u64} out u64 is {
