@@ -412,18 +412,9 @@ test-mingw: bin/zc $(BUILDDIR)/ztestrunner $(BUILDDIR)/wineprefix/.ready
 	  echo "test-mingw: skipped ($(MINGW_CC) cannot target the UCRT: $(MINGW_UCRT_FIX); see tools/windows/README.md)"; exit 0; fi; \
 	$(WINE_SERVER_UP); \
 	$(WINE_ENV) $(BUILDDIR)/ztestrunner --zc bin/zc --cc $(MINGW_CC) --ccflags "$(MINGW_CFLAGS)" --target x86_64-w64-mingw32 \
-	   --exec wine --only run --root . --jobs $(NPROC) > $(BUILDDIR)/mingw-run.log 2>&1; \
-	awk '/^FAIL/ || /^SKIP\(run\) .* \(posix\)$$/ { k = $$1; sub(/^FAIL\(/, "", k); sub(/\)$$/, "", k); \
-	       print $$2, (NF >= 3 ? $$3 : "(" k ")") }' $(BUILDDIR)/mingw-run.log \
-	  | sort > $(BUILDDIR)/mingw-fails.txt; \
-	grep -v '^#' $(MINGW_KNOWN) | grep -v '^ *$$' | sort > $(BUILDDIR)/mingw-known.txt; \
-	if ! diff -u $(BUILDDIR)/mingw-known.txt $(BUILDDIR)/mingw-fails.txt; then \
-	  echo "test-mingw FAIL: the Windows failure set moved (-known +actual above)"; \
-	  echo "  a gained line is a regression; a lost one passes now -- delete it from"; \
-	  echo "  $(MINGW_KNOWN) in the same commit. Full log: $(BUILDDIR)/mingw-run.log"; \
-	  exit 1; \
-	fi; \
-	echo "test-mingw OK: $$(sed -n 's/^pass=\([0-9]*\).*/\1/p' $(BUILDDIR)/mingw-run.log) RUN cases pass on Windows (mingw-w64, wine), $$(grep -c . $(BUILDDIR)/mingw-fails.txt) known failures, none new"
+	   --exec wine --only run --known $(MINGW_KNOWN) --root . --jobs $(NPROC) > $(BUILDDIR)/mingw-run.log 2>&1 \
+	  || { cat $(BUILDDIR)/mingw-run.log; echo "test-mingw FAIL: the Windows failure set moved (above): a new failure is a regression; a listed one that passes now is deleted from $(MINGW_KNOWN) in the same commit"; exit 1; }; \
+	echo "test-mingw OK: the RUN cases pass on Windows (mingw-w64, wine) but for $(MINGW_KNOWN)'s, none new"
 
 # test-tcc-mingw -- the RUN corpus built for Windows by the vendored tcc (the
 # cross compiler above, which links the UCRT, as MSVC and MSYS2 UCRT64 gcc do) as a backend
@@ -442,18 +433,9 @@ test-tcc-mingw: bin/zc $(BUILDDIR)/ztestrunner $(BUILDDIR)/wineprefix/.ready
 	$(WINE_SERVER_UP); \
 	$(WINE_ENV) $(BUILDDIR)/ztestrunner --zc bin/zc --cc $(BUILDDIR)/x86_64-win32-tcc --cc-forward \
 	   --ccflags "-B $(TCCW_LIB)" --target x86_64-w64-mingw32 \
-	   --exec wine --only run --root . --jobs $(NPROC) > $(BUILDDIR)/tcc-mingw-run.log 2>&1; \
-	awk '/^FAIL/ || /^SKIP\(run\) .* \(posix\)$$/ { k = $$1; sub(/^FAIL\(/, "", k); sub(/\)$$/, "", k); \
-	       print $$2, (NF >= 3 ? $$3 : "(" k ")") }' $(BUILDDIR)/tcc-mingw-run.log \
-	  | sort > $(BUILDDIR)/tcc-mingw-fails.txt; \
-	grep -v '^#' $(TCC_MINGW_KNOWN) | grep -v '^ *$$' | sort > $(BUILDDIR)/tcc-mingw-known.txt; \
-	if ! diff -u $(BUILDDIR)/tcc-mingw-known.txt $(BUILDDIR)/tcc-mingw-fails.txt; then \
-	  echo "test-tcc-mingw FAIL: the Windows tcc failure set moved (-known +actual above)"; \
-	  echo "  a gained line is a regression; a lost one passes now -- delete it from"; \
-	  echo "  $(TCC_MINGW_KNOWN) in the same commit. Full log: $(BUILDDIR)/tcc-mingw-run.log"; \
-	  exit 1; \
-	fi; \
-	echo "test-tcc-mingw OK: $$(sed -n 's/^pass=\([0-9]*\).*/\1/p' $(BUILDDIR)/tcc-mingw-run.log) RUN cases pass on Windows (tcc, wine), $$(grep -c . $(BUILDDIR)/tcc-mingw-fails.txt) known failures, none new"
+	   --exec wine --only run --known $(TCC_MINGW_KNOWN) --root . --jobs $(NPROC) > $(BUILDDIR)/tcc-mingw-run.log 2>&1 \
+	  || { cat $(BUILDDIR)/tcc-mingw-run.log; echo "test-tcc-mingw FAIL: the Windows tcc failure set moved (above): a new failure is a regression; a listed one that passes now is deleted from $(TCC_MINGW_KNOWN) in the same commit"; exit 1; }; \
+	echo "test-tcc-mingw OK: the RUN cases pass on Windows (tcc, wine) but for $(TCC_MINGW_KNOWN)'s, none new"
 
 # test-msvc-wine -- MSVC itself, cl.exe run under wine (msvc-wine; MSVC_WINE
 # names its bin/x64 directory), builds the thread shim's test with the flags
@@ -510,19 +492,9 @@ test-msvc-corpus: bin/zc $(BUILDDIR)/ztestrunner $(BUILDDIR)/wineprefix/.ready
 	elif [ -z "$(MSVC_WINE)" ] || [ ! -x "$(MSVC_WINE)/cl" ] || ! command -v wine > /dev/null 2>&1; then \
 	  echo "test-msvc-corpus: skipped (needs wine and MSVC_WINE=<dir>/msvc/bin/x64 from tools/windows/msvc-wine.sh; see tools/windows/README.md)"; exit 0; fi; \
 	[ -n "$(WINDOWS_HOST)" ] || $(WINE_SERVER_UP); \
-	$(MSVC_CORPUS_RUN) --only run --root . --jobs $(NPROC) > $(BUILDDIR)/msvc-run.log 2>&1; \
-	awk '/^FAIL/ || /^SKIP\(run\) .* \(posix\)$$/ { k = $$1; sub(/^FAIL\(/, "", k); sub(/\)$$/, "", k); \
-	       print $$2, (NF >= 3 ? $$3 : "(" k ")") }' $(BUILDDIR)/msvc-run.log \
-	  | sort > $(BUILDDIR)/msvc-fails.txt; \
-	grep -v '^#' $(MSVC_KNOWN) | grep -v '^ *$$' | sort > $(BUILDDIR)/msvc-known.txt; \
-	if ! diff -u $(BUILDDIR)/msvc-known.txt $(BUILDDIR)/msvc-fails.txt > $(BUILDDIR)/msvc-diff.txt; then \
-	  head -40 $(BUILDDIR)/msvc-diff.txt; \
-	  echo "test-msvc-corpus FAIL: the MSVC failure set moved (-known +actual above, all of it in $(BUILDDIR)/msvc-diff.txt)"; \
-	  echo "  a gained line is a regression; a lost one passes now -- delete it from"; \
-	  echo "  $(MSVC_KNOWN) in the same commit. Full log: $(BUILDDIR)/msvc-run.log"; \
-	  exit 1; \
-	fi; \
-	echo "test-msvc-corpus OK: $$(sed -n 's/^pass=\([0-9]*\).*/\1/p' $(BUILDDIR)/msvc-run.log) RUN cases pass on Windows (MSVC, $(MSVC_CORPUS_WHERE)), $$(grep -c . $(BUILDDIR)/msvc-fails.txt) known failures, none new"
+	$(MSVC_CORPUS_RUN) --only run --known $(MSVC_KNOWN) --root . --jobs $(NPROC) > $(BUILDDIR)/msvc-run.log 2>&1 \
+	  || { cat $(BUILDDIR)/msvc-run.log; echo "test-msvc-corpus FAIL: the MSVC failure set moved (above): a new failure is a regression; a listed one that passes now is deleted from $(MSVC_KNOWN) in the same commit"; exit 1; }; \
+	echo "test-msvc-corpus OK: the RUN cases pass on Windows (MSVC, $(MSVC_CORPUS_WHERE)) but for $(MSVC_KNOWN)'s, none new"
 
 # ci-windows -- the Windows legs on a real Windows machine, reached over ssh as
 # WINDOWS_SSH (the zlwin VM by default; any Windows host whose ssh shell is
@@ -774,11 +746,9 @@ else
 test-ub: bin/zc bin/zl $(BUILDDIR)/ztestrunner
 	@$(BUILDDIR)/ztestrunner --zc bin/zc --cc gcc --ccflags "$(UB_FLAGS)" --only run --root . \
 	   --jobs $(NPROC) > $(BUILDDIR)/ub.log 2>&1 \
-	  || { grep -E '^FAIL|runtime error' $(BUILDDIR)/ub.log | head -20; \
-	       echo "test-ub FAIL: a run case reached C's undefined behaviour (UBSan; full log $(BUILDDIR)/ub.log)"; exit 1; }; \
-	tail -2 $(BUILDDIR)/ub.log | grep -q 'CORPUS GATE GREEN' \
-	  || { tail -5 $(BUILDDIR)/ub.log; echo "test-ub FAIL: the run did not finish green"; exit 1; }; \
-	echo "test-ub OK: $$(grep -o 'pass=[0-9]*' $(BUILDDIR)/ub.log | tail -1) run cases, no undefined behaviour"
+	  || { cat $(BUILDDIR)/ub.log; echo "test-ub FAIL: a run case reached C's undefined behaviour (UBSan; log $(BUILDDIR)/ub.log)"; exit 1; }; \
+	echo "test-ub OK: the run cases reach no undefined behaviour"
+
 endif
 
 # test-o2 -- the run corpus built at -O2 under clang. The other runs build
@@ -790,9 +760,8 @@ test-o2: bin/zc bin/zl $(BUILDDIR)/ztestrunner
 	@command -v clang >/dev/null 2>&1 || { echo "test-o2: clang not installed, skipped"; exit 0; }; \
 	$(BUILDDIR)/ztestrunner --zc bin/zc --cc clang --ccflags "-O2" --only run --root . \
 	   --jobs $(NPROC) > $(BUILDDIR)/o2-clang.log 2>&1 \
-	  || { grep -E '^FAIL' $(BUILDDIR)/o2-clang.log | head -20; \
-	       echo "test-o2 FAIL: a run case differs at -O2 under clang (full log $(BUILDDIR)/o2-clang.log)"; exit 1; }; \
-	echo "test-o2 OK (clang): $$(grep -o 'pass=[0-9]*' $(BUILDDIR)/o2-clang.log | tail -1) run cases at -O2"
+	  || { cat $(BUILDDIR)/o2-clang.log; echo "test-o2 FAIL: a run case differs at -O2 under clang (log $(BUILDDIR)/o2-clang.log)"; exit 1; }; \
+	echo "test-o2 OK: the run cases at -O2 under clang"
 
 # what a corpus run under the vendored tcc needs built first.
 TCC_RUN_DEPS := bin/zc bin/zl bin/zls $(BUILDDIR)/tcc $(BUILDDIR)/ztestrunner
@@ -808,20 +777,10 @@ TCC_TIER ?=
 
 test-tcc: $(TCC_RUN_DEPS)
 	@$(BUILDDIR)/ztestrunner --zc bin/zc --cc $(BUILDDIR)/tcc$(EXE) --cc-forward \
-	   --ccflags "-B $(TCCLIB)" --root . $(TCC_TIER) --jobs $(NPROC) \
-	   > $(BUILDDIR)/tcc-run.log 2>&1; \
-	awk '/^FAIL/ || /^SKIP\(run\) .* \(posix\)$$/ { k = $$1; sub(/^FAIL\(/, "", k); sub(/\)$$/, "", k); \
-	       print $$2, (NF >= 3 ? $$3 : "(" k ")") }' $(BUILDDIR)/tcc-run.log \
-	  | sort > $(BUILDDIR)/tcc-fails.txt; \
-	grep -v '^#' $(TCC_KNOWN) | grep -v '^ *$$' | sort > $(BUILDDIR)/tcc-known.txt; \
-	if ! diff -u $(BUILDDIR)/tcc-known.txt $(BUILDDIR)/tcc-fails.txt; then \
-	  echo "test-tcc FAIL: the tcc failure set moved (-known +actual above)"; \
-	  echo "  a gained line is a regression; a lost line, or one moving from (cc)"; \
-	  echo "  to (zc), means a unit now guards itself -- record it in $(TCC_KNOWN)"; \
-	  echo "  in the same commit. Full log: $(BUILDDIR)/tcc-run.log"; \
-	  exit 1; \
-	fi; \
-	echo "test-tcc$(TCC_TIER:--heavy=-heavy) OK: $$(grep -c . $(BUILDDIR)/tcc-fails.txt) known failures, none new"
+	   --ccflags "-B $(TCCLIB)" --root . $(TCC_TIER) --jobs $(NPROC) --known $(TCC_KNOWN) \
+	   > $(BUILDDIR)/tcc-run.log 2>&1 \
+	  || { cat $(BUILDDIR)/tcc-run.log; echo "test-tcc FAIL: the tcc failure set moved (above): a new failure is a regression; a listed one that passes now, or moves from (cc) to (zc) because a unit guards itself, is changed in $(TCC_KNOWN) in the same commit"; exit 1; }; \
+	echo "test-tcc$(TCC_TIER:--heavy=-heavy) OK: the corpus passes under tcc but for $(TCC_KNOWN)'s, none new"
 
 # test-tcc-heavy -- test-tcc with the self-host and fixpoint kinds (ci only).
 # It names test-tcc's prerequisites itself so the parent make builds them before

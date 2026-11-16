@@ -960,6 +960,7 @@ opt: list {
     target: "--target"
     exec: "--exec"
     tmp: "--tmp"
+    known: "--known"
 } out staticlist StringView
 
 # kindWord -- the kinds `--only` runs alone, by the word it is given
@@ -1004,6 +1005,9 @@ Runner: class {
     # the scratch directory (--tmp, else a pid-named one under os.tempDir); kept when
     # saveTemps is set, removed otherwise
     tmp: String
+    # the RUN cases' expected failures (--known): a file of `<case> (<why>)`
+    # lines; empty when none is given, and every failure fails
+    known: String
     # how many jobs run at once. It comes from the machine rather than a typed
     # number, a default of 1 being silently serial on a many-core box
     jobsMax: u64
@@ -2275,6 +2279,8 @@ runRunCases: function {r: Runner} is {
     # ---------------- RUN cases ----------------
     rcC: slurp path: r.runcases.stringView
     rcv: rcC.stringView
+    known: knownCases :r
+    met: falseFlags n: known.length
     runPool: List PoolJob
     words: zast.Vocab.create block: runnerWord
     windows: ztarget.targetIsWindows triple: r.target.stringView
@@ -2299,8 +2305,7 @@ runRunCases: function {r: Runner} is {
             }
             if posixOnly when windows then {
                 # what it checks has no Windows counterpart: listed, not run
-                print "SKIP(run) \{nameStr} (posix)"
-                r.skip = r.skip + 1
+                runOutcome :r :known :met name: nameStr.stringView why: runWhy.slot.posix
             } else if idx >= 2 then {
                 srcAbs: manifestDirs root: r.root.stringView column: dirStr.stringView
                 cpath: "\{r.tmp.stringView}/\{nameStr.stringView}.c"
@@ -2383,11 +2388,9 @@ runRunCases: function {r: Runner} is {
         rnm: rjob.name.stringView
         rfail: runFailSteps.get i: rji
         if rfail == 0 then {
-            print "FAIL(run) \{rnm} (zc)"
-            r.fails = r.fails + 1
+            runOutcome :r :known :met name: rnm why: runWhy.slot.zc
         } else if rfail == 1 then {
-            print "FAIL(run) \{rnm} (cc)"
-            r.fails = r.fails + 1
+            runOutcome :r :known :met name: rnm why: runWhy.slot.cc
         } else {
             opath: "\{r.tmp.stringView}/\{rnm}.out"
             gold: goldenFor :r name: rnm ext: ".out"
@@ -2409,13 +2412,114 @@ runRunCases: function {r: Runner} is {
                 sameExit: codeStr.stringView == expStr
                 if sameOut when sameExit then {
                     r.passN = r.passN + 1
-                } else {
-                    print "FAIL(run) \{rnm}"
-                    r.fails = r.fails + 1
-                }
+                } else runOutcome :r :known :met name: rnm why: runWhy.slot.run
             }
         }
         rji = rji + 1
+    }
+    knownLeft :r :known :met
+}
+
+# runWhy -- why a RUN case did not pass, as an expected-failure line spells it
+runWhy: list {
+    # zc refused it
+    zc: "zc"
+    # its C did not build
+    cc: "cc"
+    # it ran other than its golden
+    run: "run"
+    # it checks something only POSIX has, and a Windows build lists it rather
+    # than runs it
+    posix: "posix"
+} out staticlist StringView
+
+# KnownCase -- one line of the RUN cases' expected failures: the case, and why
+# it fails, by its slot in runWhy
+KnownCase: class {
+    name: String
+    why: u64
+}
+
+# knownCases -- the expected failures --known names, one `<case> (<why>)` a
+# line, `#` lines and empty ones left out; none without --known
+knownCases: function {r: Runner} out List KnownCase is {
+    cases: List KnownCase
+    if r.known.length == 0 then return cases
+    words: zast.Vocab.create block: runWhy
+    text: slurp path: r.known.stringView
+    for each ln: text.stringView.lines loop {
+        l: ln.trim
+        if (l.length == 0) or (l.startsWith "#") then continue
+        open: (l.indexOf " (").or d: l.length
+        why: words.none
+        if open < l.length when l.endsWith ")" then why = (
+            words.slotOf
+            text: (l.substring from: open + 2 to: l.length - 1)
+        )
+        if why < runWhy.length then {
+            cases.append (KnownCase name: (l.substring from: 0 to: open).string :why)
+        } else {
+            print "FAIL(run) \{r.known}: '\{l}' is no `<case> (<why>)` line with a why of zc, cc, run or posix"
+            r.fails = r.fails + 1
+        }
+    }
+    return cases
+}
+
+# falseFlags -- `n` flags, each false
+falseFlags: function {n: u64} out ListVal bool is {
+    flags: ListVal bool
+    for flags.length < n loop flags.append false
+    return flags
+}
+
+# runOutcome -- RUN case `name` failed (or, for `posix`, was listed and not
+# run) for reason `why`: an expected failure when `known` holds it (marked in
+# `met`), a failure otherwise. A `posix` case is a skip when no --known is
+# given, the leg having none to compare with.
+runOutcome: function {
+    r: Runner
+    known: (List KnownCase).view
+    met: ListVal bool
+    name: StringView
+    why: u64
+} is {
+    i: u64
+    for i < known.length loop {
+        k: known.get :i
+        if k.name == name when k.why == why then {
+            met.set :i val: true
+            r.xfail = r.xfail + 1
+            return
+        }
+        i = i + 1
+    }
+    if why == runWhy.slot.posix when r.known.length == 0 then {
+        print "SKIP(run) \{name} (posix)"
+        r.skip = r.skip + 1
+        return
+    }
+    print "FAIL(run) \{name} (\{runWhy.get i: why})"
+    if r.known.length > 0 then print "  not in \{r.known}: a new failure"
+    r.fails = r.fails + 1
+}
+
+# knownLeft -- each expected failure that did not happen fails: the case
+# passes now, or fails for another reason (a move from `cc` to `zc` means a
+# unit now refuses what it cannot build). Delete or change its line in the
+# same change.
+knownLeft: function {r: Runner known: (List KnownCase).view met: (ListVal bool).view} is {
+    i: u64
+    for i < known.length loop {
+        if (met.get :i).false then {
+            k: known.get :i
+            print "FAIL(run) \{k.name} (\{(
+                runWhy.get
+                i: k.why
+            )}): in \{r.known} but did not fail so -- delete or change its line"
+            r.fails = r.fails + 1
+        }
+        i = i + 1
     }
 }
 
@@ -4511,6 +4615,7 @@ runnerSpec: function out cli.Spec is {
     addValue :sp name: opt.exec
     addValue :sp name: opt.tmp
     addValue :sp name: opt.only
+    addValue :sp name: opt.known
     return sp
 }
 
@@ -4630,6 +4735,7 @@ runnerFrom: function {p: cli.Parsed.view} out Runner is {
         :ccFwdOn
         sys: String
         tmp: (textOr :p name: opt.tmp d: "")
+        known: (textOr :p name: opt.known d: "")
         jobsMax: (jobsOf :p)
         timeoutSecs: (timeoutOf :p)
         heavy: (p.hasFlag name: opt.heavy)
