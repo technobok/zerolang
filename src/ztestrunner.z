@@ -969,6 +969,9 @@ opt: list {
     known: "--known"
     cases: "--cases"
     casesNaming: "--cases-naming"
+    zcFlag: "--zc-flag"
+    repeats: "--repeat"
+    zcBuild: "--zc-build"
 } out staticlist StringView
 
 # kindWord -- the kinds `--only` runs alone, by the word it is given
@@ -992,6 +995,8 @@ kindWord: list {
     fixtures: "fixtures"
     # the drivers' command lines, judged by what they print and how they exit
     usage: "usage"
+    # a sanitizer reports the fault it exists to find (`make thread-tsan-guard`)
+    probes: "probes"
 } out staticlist StringView
 
 # test-runner entry point: build the compiler, run the
@@ -1025,6 +1030,14 @@ Runner: class {
     cases: List String
     # the words --cases-naming selects a RUN case by: one its source names
     cases2: List String
+    # what --zc-flag adds to each RUN case's zc command line, in order
+    zcFlags: List String
+    # how many more times each RUN case that passed runs (--repeat), every run
+    # judged against its goldens: a race shows only in some schedules
+    repeats: u64
+    # whether zc builds each RUN case itself (--zc-build: `zc build`, with the C
+    # compiler --cc names), in place of emitting C the runner compiles
+    zcBuild: bool
     # how many jobs run at once. It comes from the machine rather than a typed
     # number, a default of 1 being silently serial on a many-core box
     jobsMax: u64
@@ -2355,19 +2368,22 @@ runRunCases: function {r: Runner} is {
     runStatuses: ListVal i32
     runFailSteps: ListVal i64
     runJobs jobs: runPool maxJobs: r.jobsMax statuses: runStatuses failSteps: runFailSteps
+    passed: List String
     rji: u64
     for rji < runPool.length loop {
-        (
+        job: runPool.get i: rji
+        if (
             judgeRunCase
             :r
             :known
             :met
-            name: (runPool.get i: rji).name.stringView
+            name: job.name.stringView
             status: (runStatuses.get i: rji)
             failStep: (runFailSteps.get i: rji)
-        )
+        ) then passed.append job.name.copy
         rji = rji + 1
     }
+    if r.repeats > 0 then repeatRunCases :r names: passed
     knownLeft :r :known :met
 }
 
@@ -2404,8 +2420,8 @@ runCaseLines: function {r: Runner.view} out List RunCaseLine is {
     return lines
 }
 
-# runCaseJob -- RUN case `name`'s job: emit, compile, then run under --exec's
-# words when it gives some
+# runCaseJob -- RUN case `name`'s job: emit and compile (or, with --zc-build,
+# zc builds it), then run it under --exec's words when it gives some
 runCaseJob: function {r: Runner.view name: StringView dir: StringView} out PoolJob is {
     srcAbs: manifestDirs root: r.root.stringView column: dir
     cpath: "\{r.tmp.stringView}/\{name}.c"
@@ -2413,63 +2429,67 @@ runCaseJob: function {r: Runner.view name: StringView dir: StringView} out PoolJ
     opath: "\{r.tmp.stringView}/\{name}.out"
     rdir: "\{r.tmp.stringView}/run_\{name}"
     io.mkdirp path: rdir
-    argsFile: "\{r.rungold.stringView}/\{name}.args"
     steps: List PoolStep
-    za: (
-        zcArgv
-        zc: r.zc.stringView
-        ccFwd: r.ccFwd.stringView
-        :name
-        srcdirs: srcAbs
-        sys: r.sys.stringView
-        outc: cpath.stringView
-    )
-    if r.target.length > 0 then {
-        za.append from: "--target".string
-        za.append from: r.target.copy
-    }
-    steps.append (
-        mkStep
-        argv: za
-        cwd: ""
-        outPath: os.nullDevice.stringView
-        errPath: os.nullDevice.stringView
-        timeoutSecs: 0
-        allowFail: false
-        zlinkFrom: ""
-    )
-    ga: (
-        ccArgv
-        cc: r.cc.stringView
-        ccflags: r.ccflags.stringView
-        target: r.target.stringView
-        bin: bpath.stringView
-        csrc: cpath.stringView
-        asan: false
-    )
-    steps.append (
-        mkStep
-        argv: ga
-        cwd: ""
-        outPath: os.nullDevice.stringView
-        errPath: os.nullDevice.stringView
-        timeoutSecs: 0
-        allowFail: false
-        zlinkFrom: cpath.stringView
-        zc: r.zc.stringView
-    )
-    ba: binArgv bin: bpath.stringView argsFile: argsFile.stringView
-    if r.exec.length > 0 then {
-        under: List String
-        for each w: (r.exec.stringView.split sep: " ") loop {
-            if w.length > 0 then under.append from: w.string
+    if r.zcBuild then {
+        steps.append (
+            mkStep
+            argv: (zcBuildArgv :r :name srcdirs: srcAbs bin: bpath.stringView)
+            cwd: ""
+            outPath: os.nullDevice.stringView
+            errPath: os.nullDevice.stringView
+            timeoutSecs: 0
+            allowFail: false
+            zlinkFrom: ""
+        )
+    } else {
+        za: (
+            zcArgv
+            zc: r.zc.stringView
+            ccFwd: r.ccFwd.stringView
+            :name
+            srcdirs: srcAbs
+            sys: r.sys.stringView
+            outc: cpath.stringView
+        )
+        if r.target.length > 0 then {
+            za.append from: "--target".string
+            za.append from: r.target.copy
         }
-        for each arg: ba loop under.append from: arg.copy
-        ba = under.take
+        for each zf: r.zcFlags loop za.append from: zf.copy
+        steps.append (
+            mkStep
+            argv: za
+            cwd: ""
+            outPath: os.nullDevice.stringView
+            errPath: os.nullDevice.stringView
+            timeoutSecs: 0
+            allowFail: false
+            zlinkFrom: ""
+        )
+        ga: (
+            ccArgv
+            cc: r.cc.stringView
+            ccflags: r.ccflags.stringView
+            target: r.target.stringView
+            bin: bpath.stringView
+            csrc: cpath.stringView
+            asan: false
+        )
+        steps.append (
+            mkStep
+            argv: ga
+            cwd: ""
+            outPath: os.nullDevice.stringView
+            errPath: os.nullDevice.stringView
+            timeoutSecs: 0
+            allowFail: false
+            zlinkFrom: cpath.stringView
+            zc: r.zc.stringView
+        )
     }
     steps.append (
         mkStep
-        argv: ba
+        argv: (runArgv :r :name bin: bpath.stringView)
         cwd: rdir.stringView
         outPath: opath.stringView
         errPath: os.nullDevice.stringView
@@ -2480,9 +2500,50 @@ runCaseJob: function {r: Runner.view name: StringView dir: StringView} out PoolJ
     return (mkJob :name :steps)
 }
 
+# zcBuildArgv -- `zc build` of RUN case `name` into `bin` with the C compiler
+# --cc names, for --zc-build: zc compiles and links the program itself
+zcBuildArgv: function {
+    r: Runner.view name: StringView srcdirs: (List String).view bin: StringView
+} out List String is {
+    a: List String
+    a.append from: r.zc.copy
+    a.append from: "build".string
+    a.append from: name.string
+    for each d: srcdirs loop {
+        a.append from: "--src".string
+        a.append from: d.copy
+    }
+    a.append from: "--system".string
+    a.append from: r.sys.copy
+    a.append from: "--cc".string
+    a.append from: r.cc.copy
+    if r.target.length > 0 then {
+        a.append from: "--target".string
+        a.append from: r.target.copy
+    }
+    for each zf: r.zcFlags loop a.append from: zf.copy
+    a.append from: "-o".string
+    a.append from: bin.string
+    return a
+}
+
+# runArgv -- how RUN case `name`'s binary `bin` is run: under --exec's words
+# when it gives some, with the arguments its .args golden lists
+runArgv: function {r: Runner.view name: StringView bin: StringView} out List String is {
+    argsFile: "\{r.rungold.stringView}/\{name}.args"
+    ba: binArgv :bin argsFile: argsFile.stringView
+    if r.exec.length == 0 then return ba
+    under: List String
+    for each w: (r.exec.stringView.split sep: " ") loop {
+        if w.length > 0 then under.append from: w.string
+    }
+    for each arg: ba loop under.append from: arg.copy
+    return under
+}
+
 # judgeRunCase -- RUN case `name`'s verdict from its job's `status` and
 # `failStep`: refused by zc, its C not built, or its output and exit code
-# against its goldens
+# against its goldens. Answers whether it passed.
 judgeRunCase: function {
     r: Runner
     known: (List KnownCase).view
@@ -2490,33 +2551,108 @@ judgeRunCase: function {
     name: StringView
     status: i32
     failStep: i64
-} is {
+} out bool is {
     if failStep == 0 then {
         runOutcome :r :known :met :name why: runWhy.slot.zc
-    } else if failStep == 1 then {
+        return false
+    }
+    if failStep == 1 then {
         runOutcome :r :known :met :name why: runWhy.slot.cc
-    } else {
-        opath: "\{r.tmp.stringView}/\{name}.out"
-        gold: goldenFor :r :name ext: ".out"
-        exitFile: goldenFor :r :name ext: ".exit"
-        if (io.exists path: gold).not then {
-            r.skip = r.skip + 1
-        } else {
-            goldC: slurp path: gold.stringView
-            outC: slurp path: opath.stringView
-            expStr: "0".string
-            if (io.exists path: exitFile) then {
-                rawx: slurp path: exitFile.stringView
-                rxv: rawx.stringView
-                tvw: rxv.trim
-                expStr = tvw.string
+        return false
+    }
+    gold: goldenFor :r :name ext: ".out"
+    if (io.exists path: gold).not then {
+        r.skip = r.skip + 1
+        return false
+    }
+    opath: "\{r.tmp.stringView}/\{name}.out"
+    if (matchesGoldens :r :name outPath: opath.stringView :status) then {
+        r.passN = r.passN + 1
+        return true
+    }
+    runOutcome :r :known :met :name why: runWhy.slot.run
+    return false
+}
+
+# repeatDir -- where the repeated runs of RUN case `name` run: run k in the
+# directory `k`, its stdout in `k.out`
+repeatDir: function {r: Runner.view name: StringView} out String is {
+    return "\{r.tmp.stringView}/repeat_\{name}"
+}
+
+# matchesGoldens -- a run of RUN case `name` that wrote `outPath` and exited
+# with `status` printed its .out golden and exited as its .exit golden says
+# (0 when it has none)
+matchesGoldens: function {r: Runner name: StringView outPath: StringView status: i32} out bool is {
+    gold: goldenFor :r :name ext: ".out"
+    exitFile: goldenFor :r :name ext: ".exit"
+    goldC: slurp path: gold.stringView
+    outC: slurp path: outPath
+    expStr: "0".string
+    if (io.exists path: exitFile) then {
+        rawx: slurp path: exitFile.stringView
+        rxv: rawx.stringView
+        tvw: rxv.trim
+        expStr = tvw.string
+    }
+    codeStr: "\{status}"
+    return (outC.stringView == goldC) and (codeStr.stringView == expStr)
+}
+
+# repeatRunCases -- each RUN case of `names`, which passed, run --repeat more
+# times in the job pool, each in a directory of its own; a case fails when any
+# run differs from its goldens. A race shows only in some schedules, and
+# ThreadSanitizer's exit status for one (66) is in no golden.
+repeatRunCases: function {r: Runner names: (List String).view} is {
+    jobs: List PoolJob
+    for each n: names loop {
+        bpath: "\{r.tmp.stringView}/\{n}.bin"
+        repdir: repeatDir :r name: n.stringView
+        k: u64
+        for k < r.repeats loop {
+            rdir: "\{repdir}/\{k}"
+            io.mkdirp path: rdir
+            opath: "\{repdir}/\{k}.out"
+            steps: List PoolStep
+            steps.append (
+                mkStep
+                argv: (runArgv :r name: n.stringView bin: bpath.stringView)
+                cwd: rdir.stringView
+                outPath: opath.stringView
+                errPath: os.nullDevice.stringView
+                timeoutSecs: r.timeoutSecs
+                allowFail: true
+                zlinkFrom: ""
+            )
+            jobs.append (mkJob name: n.stringView :steps)
+            k = k + 1
+        }
+    }
+    statuses: ListVal i32
+    failSteps: ListVal i64
+    runJobs :jobs maxJobs: r.jobsMax :statuses :failSteps
+    ji: u64
+    for each n: names loop {
+        bad: u64
+        repdir: repeatDir :r name: n.stringView
+        k: u64
+        for k < r.repeats loop {
+            opath: "\{repdir}/\{k}.out"
+            if (
+                matchesGoldens
+                :r
+                name: n.stringView
+                outPath: opath.stringView
+                status: (statuses.get i: ji)
+            ).false then {
+                bad = bad + 1
             }
-            codeStr: "\{status}"
-            sameOut: outC.stringView == goldC
-            sameExit: codeStr.stringView == expStr
-            if sameOut when sameExit then {
-                r.passN = r.passN + 1
-            } else runOutcome :r :known :met :name why: runWhy.slot.run
+            ji = ji + 1
+            k = k + 1
+        }
+        if bad > 0 then {
+            print "FAIL(run) \{n} (repeat): \{bad} of \{r.repeats} more runs differ from its goldens (output or exit status)"
+            r.fails = r.fails + 1
         }
     }
 }
@@ -4822,6 +4958,9 @@ printUsage: function is {
     io.eprintln "  --cases TEXT    run only the run cases whose name starts with TEXT or whose"
     io.eprintln "                  directory is TEXT (repeats)"
     io.eprintln "  --cases-naming WORD  run only the run cases whose source names WORD (repeats)"
+    io.eprintln "  --zc-flag FLAG  add FLAG to each run case's zc command line (repeats)"
+    io.eprintln "  --zc-build      zc builds each run case itself (`zc build`, with --cc's compiler)"
+    io.eprintln "  --repeat N      run each run case that passed N more times, each run judged"
     io.eprintln "  --only KIND     run one kind alone:"
     io.eprintln "                  run      the run cases; --target TRIPLE builds them for another"
     io.eprintln "                           system and --exec PROGRAM runs each one under that program"
@@ -4833,6 +4972,7 @@ printUsage: function is {
     io.eprintln "                  pins     the counts the compiler's own source is held at"
     io.eprintln "                  fixtures the case lists name every program, and fixtures follow L023"
     io.eprintln "                  usage    the drivers' command lines, judged by output and exit"
+    io.eprintln "                  probes   ThreadSanitizer, with --cc, reports a race made on purpose"
     io.eprintln "A value is written `--name VALUE` or `--name=VALUE`."
 }
 
@@ -4863,6 +5003,7 @@ runnerSpec: function out cli.Spec is {
     addSwitch :sp name: opt.saveTemps
     addSwitch :sp name: opt.regenLsp
     addSwitch :sp name: opt.regenUsage
+    addSwitch :sp name: opt.zcBuild
     cli.addFlag spec: sp name: opt.help.string shortName: "-h".string help: "".string
     addValue :sp name: opt.zc
     addValue :sp name: opt.cc
@@ -4875,6 +5016,16 @@ runnerSpec: function out cli.Spec is {
     addValue :sp name: opt.tmp
     addValue :sp name: opt.only
     addValue :sp name: opt.known
+    addValue :sp name: opt.repeats
+    (
+        cli.addOption
+        spec: sp
+        name: opt.zcFlag.string
+        shortName: "".string
+        help: "".string
+        required: false
+        repeats: true
+    )
     (
         cli.addOption
         spec: sp
@@ -4947,6 +5098,15 @@ jobsOf: function {p: cli.Parsed.view} out u64 is {
     return n.u64.orPanic
 }
 
+# repeatsOf -- --repeat: how many more times a passing RUN case runs; none when
+# it was not written
+repeatsOf: function {p: cli.Parsed.view} out u64 is {
+    if (p.given name: opt.repeats).not then return 0
+    n: numberOf :p name: opt.repeats
+    if n < 0 then refuse "ztestrunner: --repeat needs a number, 0 or more"
+    return n.u64.orPanic
+}
+
 # timeoutOf -- --timeout: the seconds one step may take; a minute when it was
 # not written
 timeoutOf: function {p: cli.Parsed.view} out i32 is {
@@ -4980,12 +5140,15 @@ refuseMisuse: function {r: Runner.view p: cli.Parsed.view} is {
     }
     written: textOr :p name: opt.only d: ""
     if written.length > 0 when r.only == kindWord.length then {
-        unknown: "ztestrunner: --only takes run, doccode, agree, arch, emitted, vocab, pins, fixtures or usage, not '\{written}'"
+        unknown: "ztestrunner: --only takes run, doccode, agree, arch, emitted, vocab, pins, fixtures, usage or probes, not '\{written}'"
         refuse unknown.stringView
     }
     runOnly: r.only == kindWord.slot.run
     if (r.target.length > 0) or (r.exec.length > 0) when runOnly.false then {
         refuse "ztestrunner: --target and --exec need --only run; no other kind runs a foreign binary"
+    }
+    if (r.zcFlags.length > 0) or (r.repeats > 0) or r.zcBuild when runOnly.false then {
+        refuse "ztestrunner: --zc-flag, --zc-build and --repeat need --only run; they change how the run cases are built and run"
     }
     if (zcc.ccFamilyOf ccPath: r.cc.stringView).msvc when runOnly.false then {
         refuse "ztestrunner: --cc cl needs --only run; the other kinds build with gcc's command line"
@@ -5015,6 +5178,9 @@ runnerFrom: function {p: cli.Parsed.view} out Runner is {
         known: (textOr :p name: opt.known d: "")
         cases: (p.optionAll name: opt.cases)
         cases2: (p.optionAll name: opt.casesNaming)
+        zcFlags: (p.optionAll name: opt.zcFlag)
+        repeats: (repeatsOf :p)
+        zcBuild: (p.hasFlag name: opt.zcBuild)
         jobsMax: (jobsOf :p)
         timeoutSecs: (timeoutOf :p)
         heavy: (p.hasFlag name: opt.heavy)
@@ -5167,6 +5333,8 @@ runOneKind: function {r: Runner} is {
         fixtures.runFixtureCases :r
     } else if r.only == kindWord.slot.usage then {
         runUsageCases :r
+    } else if r.only == kindWord.slot.probes then {
+        probes.runProbeCases :r
     }
 }
 

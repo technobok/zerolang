@@ -1582,41 +1582,27 @@ shim-guard: $(BUILDDIR)/tcc $(BUILDDIR)/wineprefix/.ready $(NATIVEC_INC)/zthread
 	echo "shim-guard OK: the thread shim's test passes under $(CC), clang, tcc$$tsan$$win"
 
 # thread-tsan-guard -- every threaded run fixture (thread_*, sync_*) under
-# ThreadSanitizer, built by $(CC) and by clang: no report, and the stdout and exit
-# status its goldens hold. TSan is proved first on tests/c/tsan_probe.c, which
-# races on purpose, so a sanitizer that reports nothing cannot pass the rest.
-# A race shows only in some schedules, so each program then runs TSAN_REPEAT
-# more times, $(NPROC) at once, and every run must hold.
+# ThreadSanitizer, built by $(CC) and by clang: the stdout and exit status its
+# goldens hold, which a race fails (ThreadSanitizer exits 66). TSan is proved
+# first by the runner's probes kind on tests/c/tsan_probe.c, which races on
+# purpose, so a sanitizer that reports nothing cannot pass the rest. A race
+# shows only in some schedules, so each program then runs TSAN_REPEAT more
+# times (--repeat), $(NPROC) at once, and every run must hold.
 TSAN_REPEAT ?= 20
+TSAN_RUN = $(BUILDDIR)/ztestrunner --zc bin/zc --root . --jobs $(NPROC)
 ifdef WINDOWS_HOST
 thread-tsan-guard:
 	@echo "thread-tsan-guard: skipped (Linux only: ThreadSanitizer, which no Windows toolchain has)"
 else
-thread-tsan-guard: bin/zc
-	@d=$$(mktemp -d); fail=0; n=0; pr=tests/c/tsan_probe.c; \
-	$(CC) -g -fsanitize=thread -o $$d/probe $$pr -lpthread > $$d/cc.log 2>&1; \
-	$$d/probe > /dev/null 2> $$d/probe.err; \
-	grep -q "data race" $$d/probe.err || { echo "thread-tsan-guard FAIL: ThreadSanitizer did not report the probe's race"; fail=1; }; \
-	for f in tests/fixtures/emitc_corpus/thread_*.z tests/fixtures/emitc_corpus/sync_*.z; do \
-	  [ -f $$f ] || continue; b=$$(basename $$f .z); \
-	  bin/zc emit $$f --system lib/system -o $$d/$$b.c > $$d/emit.log 2>&1 \
-	    || { echo "thread-tsan-guard FAIL: $$b did not emit"; fail=1; continue; }; \
-	  want=0; [ -f tests/fixtures/run_golden/$$b.exit ] && want=$$(cat tests/fixtures/run_golden/$$b.exit); \
-	  for cc in $(CC) clang; do \
-	    $$cc -std=c17 -g -O1 -fsanitize=thread -w -o $$d/$$b-$$cc $$d/$$b.c $(call ZLINKOF,$$d/$$b.c,$$cc,-fsanitize=thread) -lm > $$d/cc.log 2>&1 \
-	      || { echo "thread-tsan-guard FAIL: $$b did not build under $$cc"; grep -m3 error $$d/cc.log; fail=1; continue; }; \
-	    $$d/$$b-$$cc > $$d/out.txt 2> $$d/err.txt; rc=$$?; n=$$((n+1)); \
-	    if grep -q "ThreadSanitizer" $$d/err.txt; then echo "thread-tsan-guard FAIL: $$b under $$cc:"; head -20 $$d/err.txt; fail=1; fi; \
-	    [ "$$rc" = "$$want" ] || { echo "thread-tsan-guard FAIL: $$b under $$cc exited $$rc, want $$want"; fail=1; }; \
-	    cmp -s $$d/out.txt tests/fixtures/run_golden/$$b.out || { echo "thread-tsan-guard FAIL: $$b under $$cc printed other than its golden"; fail=1; }; \
-	    bad=$$(seq $(TSAN_REPEAT) | xargs -P $(NPROC) -I{} sh -c '"$$0" > "$$1.{}.out" 2> "$$1.{}.err"; rc=$$?; if grep -q ThreadSanitizer "$$1.{}.err" || [ "$$rc" != "$$2" ] || ! cmp -s "$$1.{}.out" "$$3"; then echo bad; fi' $$d/$$b-$$cc $$d/rep $$want tests/fixtures/run_golden/$$b.out | grep -c bad); \
-	    n=$$((n+$(TSAN_REPEAT))); \
-	    [ "$$bad" = 0 ] || { echo "thread-tsan-guard FAIL: $$b under $$cc: $$bad of $(TSAN_REPEAT) repeated runs raced, exited other than $$want or printed other than the golden"; fail=1; }; \
-	  done; \
+thread-tsan-guard: bin/zc $(BUILDDIR)/ztestrunner
+	@: > $(BUILDDIR)/thread-tsan.log; \
+	for cc in $(CC) clang; do \
+	  { $(TSAN_RUN) --cc $$cc --only probes \
+	    && $(TSAN_RUN) --cc $$cc --only run --cases thread_ --cases sync_ \
+	         --ccflags "-g -O1 -fsanitize=thread" --repeat $(TSAN_REPEAT); } >> $(BUILDDIR)/thread-tsan.log 2>&1 \
+	    || { cat $(BUILDDIR)/thread-tsan.log; echo "thread-tsan-guard FAIL: under $$cc (above): a race, or a threaded program that differs from its goldens"; exit 1; }; \
 	done; \
-	rm -rf $$d; \
-	if [ $$fail -ne 0 ]; then exit 1; fi; \
-	echo "thread-tsan-guard OK: $$n threaded fixture runs race-free under ThreadSanitizer ($(CC), clang), proved on a racy probe"
+	echo "thread-tsan-guard OK: the threaded fixtures race-free under ThreadSanitizer ($(CC), clang), each run $$(($(TSAN_REPEAT) + 1)) times, proved on a racy probe"
 endif
 
 # mode-parity -- --cc-mode inproc builds the same PROGRAM as spawn: every run case

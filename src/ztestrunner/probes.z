@@ -1,0 +1,66 @@
+# probes -- the PROBES kind (`--only probes`): a sanitizer is shown to report
+# what it exists to find, so that a clean run under it means something.
+#   tsan   tests/c/tsan_probe.c, which races on purpose, built by --cc with
+#          -fsanitize=thread, exits with ThreadSanitizer's status for a report
+#          (66) and names a data race. Skipped on Windows, where no toolchain
+#          has ThreadSanitizer.
+# A subunit of ztestrunner.
+
+# tsanReportStatus -- the exit status ThreadSanitizer gives a program it found
+# a race in
+tsanReportStatus: 66
+
+# runProbeCases -- the probes kind
+runProbeCases: function {r: Runner} is {
+    if z.build.os == z.build.oskind.windows then {
+        print "SKIP(probes) tsan: no Windows toolchain has ThreadSanitizer"
+        r.skip = r.skip + 1
+        return
+    }
+    if (tsanReports :r cc: r.cc.stringView) then {
+        r.passN = r.passN + 1
+    } else r.fails = r.fails + 1
+}
+
+# tsanReports -- ThreadSanitizer, with the C compiler `cc`, reports the race of
+# tests/c/tsan_probe.c; a FAIL line says why when it does not
+tsanReports: function {r: Runner.view cc: StringView} out bool is {
+    bin: "\{r.tmp}/tsan_probe.bin"
+    cclog: "\{r.tmp}/tsan_probe.cc"
+    argv: List String
+    argv.append from: cc.string
+    argv.append from: "-g".string
+    argv.append from: "-fsanitize=thread".string
+    argv.append from: "-o".string
+    argv.append from: bin.copy
+    argv.append from: "\{r.root}/tests/c/tsan_probe.c"
+    argv.append from: "-lpthread".string
+    built: (
+        os.spawn
+        :argv
+        cwd: ""
+        outPath: os.nullDevice.stringView
+        errPath: cclog.stringView
+        timeoutSecs: r.timeoutSecs
+    )
+    if built != 0 then {
+        print "FAIL(probes) tsan: \{cc} did not build tests/c/tsan_probe.c with -fsanitize=thread (\{cclog})"
+        return false
+    }
+    errPath: "\{r.tmp}/tsan_probe.err"
+    run: List String
+    run.append from: bin.copy
+    status: (
+        os.spawn
+        argv: run
+        cwd: ""
+        outPath: os.nullDevice.stringView
+        errPath: errPath.stringView
+        timeoutSecs: r.timeoutSecs
+    )
+    report: slurp path: errPath.stringView
+    if status == tsanReportStatus when (report.stringView.contains needle: "data race"
+    ) then return true
+    print "FAIL(probes) tsan: under \{cc}, ThreadSanitizer did not report the race of tests/c/tsan_probe.c (exit \{status}, want \{tsanReportStatus}); a clean run under it proves nothing"
+    return false
+}
