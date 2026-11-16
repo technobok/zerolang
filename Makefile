@@ -717,31 +717,20 @@ test-tcc: $(TCC_RUN_DEPS)
 test-tcc-heavy: $(TCC_RUN_DEPS)
 	@$(MAKE) --no-print-directory test-tcc TCC_TIER=--heavy
 
-# readable-check -- --readable-names programs build and behave as the default
-# names do; the cases are the ones about naming (shadowing, case-only arm names,
-# C-keyword members, locals named as system-header macros). A readable-named
-# compiler must emit identical C, and with mingw-w64 present the readable C of
-# the macro case and of the compiler must compile for Windows, whose headers
-# define macros Linux's do not (`near`, `far`, `FAR`).
-readable-check: bin/zc $(BUILDDIR)/buildstamp.o
+# readable-check -- --readable-names programs build and behave as their goldens
+# say: the run kind builds the cases about naming (shadowing, case-only arm
+# names, C-keyword members, locals named as system-header macros) with
+# --readable-names. A readable-named compiler must emit identical C, and with
+# mingw-w64 present the readable C of the macro case and of the compiler must
+# compile for Windows, whose headers define macros Linux's do not (`near`,
+# `far`, `FAR`).
+READABLE_CASES := hello vector records fibonacci typedefs shadow_unit_const rn_sibling_shadow \
+  rn_macro_names rn_two_companions arm_case_tags tag_stem_clash member_names_c_words generator_field_names
+readable-check: bin/zc $(BUILDDIR)/buildstamp.o $(BUILDDIR)/ztestrunner
 	@mkdir -p $(BUILDDIR)/rn
-	@for c in hello:examples vector:examples records:examples fibonacci:examples \
-	          typedefs:examples shadow_unit_const:tests/fixtures/emitc_corpus \
-	          rn_sibling_shadow:tests/fixtures/emitc_corpus rn_macro_names:tests/fixtures/emitc_corpus \
-          rn_two_companions:tests/fixtures/emitc_corpus \
-	          arm_case_tags:tests/fixtures/emitc_corpus tag_stem_clash:tests/fixtures/emitc_corpus \
-	          member_names_c_words:tests/fixtures/emitc_corpus \
-	          generator_field_names:tests/fixtures/emitc_corpus; do \
-	  n=$${c%%:*}; d=$$(echo $$c | sed 's/^[^:]*://'); \
-	  bin/zc $$n --src $$d --system lib/system --emit-c $(BUILDDIR)/rn/$$n-id.c || exit 1; \
-	  bin/zc $$n --src $$d --system lib/system --readable-names --emit-c $(BUILDDIR)/rn/$$n-rn.c || exit 1; \
-	  $(CC) $(CFLAGS) -o $(BUILDDIR)/rn/$$n-id $(BUILDDIR)/rn/$$n-id.c $(call ZLINKOF,$(BUILDDIR)/rn/$$n-id.c) -lm || exit 1; \
-	  $(CC) $(CFLAGS) -o $(BUILDDIR)/rn/$$n-rn $(BUILDDIR)/rn/$$n-rn.c $(call ZLINKOF,$(BUILDDIR)/rn/$$n-rn.c) -lm || exit 1; \
-	  $(BUILDDIR)/rn/$$n-id > $(BUILDDIR)/rn/$$n-id.out 2>&1; \
-	  $(BUILDDIR)/rn/$$n-rn > $(BUILDDIR)/rn/$$n-rn.out 2>&1; \
-	  diff -q $(BUILDDIR)/rn/$$n-id.out $(BUILDDIR)/rn/$$n-rn.out > /dev/null \
-	    || { echo "readable-check FAIL: $$n differs between naming schemes"; exit 1; }; \
-	done
+	@$(BUILDDIR)/ztestrunner --zc bin/zc --cc $(CC) --root . --jobs $(NPROC) --only run --zc-flag --readable-names \
+	   $(addprefix --cases ,$(READABLE_CASES)) > $(BUILDDIR)/rn/cases.log 2>&1 \
+	  || { cat $(BUILDDIR)/rn/cases.log; echo "readable-check FAIL: a program built with --readable-names differs from its golden (above)"; exit 1; }
 	bin/zc zc --src src --system lib/system --readable-names --emit-c $(BUILDDIR)/rn/zc-rn.c
 	$(CC) $(CFLAGS) $(STAMPDEF) -c $(BUILDDIR)/rn/zc-rn.c -o $(BUILDDIR)/rn/zc-rn.o
 	$(CC) $(DRIVERLINK) -o $(BUILDDIR)/rn/zc-rn $(BUILDDIR)/rn/zc-rn.o $(BUILDDIR)/buildstamp.o \
@@ -756,10 +745,10 @@ readable-check: bin/zc $(BUILDDIR)/buildstamp.o
 	    bin/zc $$n --src $$d --system lib/system --readable-names --target x86_64-w64-mingw32 \
 	      --emit-c $(BUILDDIR)/rn/$$n-win.c || exit 1; \
 	    $(MINGW_CC) -std=c17 -fsyntax-only $(MINGW_CFLAGS) $(BUILDDIR)/rn/$$n-win.c 2> $(BUILDDIR)/rn/$$n-win.log \
-	      || { echo "readable-check FAIL: $$n's readable C does not compile for Windows"; grep -m3 error $(BUILDDIR)/rn/$$n-win.log; exit 1; }; \
+	      || { cat $(BUILDDIR)/rn/$$n-win.log; echo "readable-check FAIL: $$n's readable C does not compile for Windows (above)"; exit 1; }; \
 	  done; \
 	fi
-	@echo "readable-check OK: --readable-names builds and runs identically (the compiler included)"
+	@echo "readable-check OK: the naming cases built with --readable-names match their goldens, and the readable-named compiler emits the same C"
 
 # build -- compile every example, one pattern chain each.
 EXDIR  := $(BUILDDIR)/ex
@@ -1540,45 +1529,18 @@ thread-tsan-guard: bin/zc $(BUILDDIR)/ztestrunner
 	echo "thread-tsan-guard OK: the threaded fixtures race-free under ThreadSanitizer ($(CC), clang), each run $$(($(TSAN_REPEAT) + 1)) times, proved on a racy probe"
 endif
 
-# mode-parity -- --cc-mode inproc builds the same PROGRAM as spawn: every run case
-# is built both ways and its output and exit code compared (never the bytes).
-# Refusals must match too. Only zc's temp-path pid is normalised. Each program
-# reads an empty stdin, as the test runner gives it: the list of cases is this
-# loop's stdin, and a program reading its own would eat the cases after it.
-mode-parity: bin/zc $(BUILDDIR)/tcc
-	@mkdir -p $(BUILDDIR)/parity; n=0; bad=0; \
-	while read -r name dir rest; do \
-	  [ -n "$$name" ] || continue; \
-	  args=$(BUILDDIR)/parity/$$name.args; \
-	  : > $$args; \
-	  [ -f tests/fixtures/run_golden/$$name.args ] && cp tests/fixtures/run_golden/$$name.args $$args; \
-	  for mode in spawn inproc; do \
-	    bin/zc build $$name --src $$dir --system lib/system --cc tcc \
-	      --cc-mode $$mode -o $(BUILDDIR)/parity/$$name.$$mode \
-	      > $(BUILDDIR)/parity/$$name.$$mode.build 2>&1 || true; \
-	    if [ -x $(BUILDDIR)/parity/$$name.$$mode ]; then \
-	      ( cd $(BUILDDIR)/parity && xargs -a $$name.args ./$$name.$$mode ) \
-	        < /dev/null > $(BUILDDIR)/parity/$$name.$$mode.out 2>&1; \
-	      echo "exit=$$?" >> $(BUILDDIR)/parity/$$name.$$mode.out; \
-	    else \
-	      cp $(BUILDDIR)/parity/$$name.$$mode.build $(BUILDDIR)/parity/$$name.$$mode.out; \
-	    fi; \
-	  done; \
-	  n=$$(($$n + 1)); \
-	  for mode in spawn inproc; do \
-	    sed -i -e 's|/zc-[0-9][0-9]*-|/zc-PID-|g' $(BUILDDIR)/parity/$$name.$$mode.out; \
-	  done; \
-	  if ! cmp -s $(BUILDDIR)/parity/$$name.spawn.out $(BUILDDIR)/parity/$$name.inproc.out; then \
-	    echo "mode-parity FAIL: $$name differs between spawn and inproc"; \
-	    diff $(BUILDDIR)/parity/$$name.spawn.out $(BUILDDIR)/parity/$$name.inproc.out | head -6; \
-	    bad=1; \
-	  fi; \
-	done < tests/fixtures/run_cases.txt; \
-	if [ $$bad -ne 0 ]; then \
-	  echo "  in-process compilation must produce the same PROGRAM, not the same bytes."; \
-	  exit 1; \
-	fi; \
-	echo "mode-parity OK: $$n run cases identical under --cc-mode spawn and inproc (output and exit code, not bytes)"
+# mode-parity -- --cc-mode inproc builds the same PROGRAM as spawn: the run
+# kind has zc build every run case with tcc itself (--zc-build), once in each
+# mode, and judges each program against its goldens, never the bytes. The
+# programs zc refuses for tcc, $(TCC_KNOWN)'s, must be refused in both modes,
+# and every other one must print its golden and exit as it says.
+MODE_RUN = $(BUILDDIR)/ztestrunner --zc bin/zc --root . --jobs $(NPROC) --only run --zc-build --cc tcc --known $(TCC_KNOWN)
+mode-parity: bin/zc $(BUILDDIR)/tcc $(BUILDDIR)/ztestrunner
+	@for m in spawn inproc; do \
+	  $(MODE_RUN) --zc-flag --cc-mode --zc-flag $$m > $(BUILDDIR)/mode-parity.log 2>&1 \
+	    || { cat $(BUILDDIR)/mode-parity.log; echo "mode-parity FAIL: zc build --cc tcc --cc-mode $$m (above): a program that differs from its golden, or a refusal $(TCC_KNOWN) does not list"; exit 1; }; \
+	done; \
+	echo "mode-parity OK: zc build --cc tcc builds every run case to its goldens under --cc-mode spawn and inproc, refusing $(TCC_KNOWN)'s in both"
 
 # static-tcc-guard -- the vendored tinycc is LGPL-2.1, so the drivers may only
 # dlopen it: no libtcc symbol may appear in them (see vendor/tinycc/VERSION.md).
