@@ -114,15 +114,15 @@ EXAMPLES := $(wildcard examples/*.z)
 NAMES    := $(filter-out $(SKIP),$(basename $(notdir $(EXAMPLES))))
 
 .PHONY: all check complexity-report style-lint-fast style-lint test doc-check arch-check emitted-check ci ci-gates gate-guards gate-same-c ci-corpus fuzz fuzz-ci fuzz-known \
-	test-math-arm64 test-sqlite-arm64 test-mingw test-tcc-mingw test-msvc-wine test-msvc-corpus ci-windows windows-guest windows-due test-math-noasm test-portable-scalars docs-link-guard math-asm-guard \
+	test-math-arm64 test-sqlite-arm64 test-mingw test-tcc-mingw test-msvc-wine test-msvc-corpus ci-windows windows-guest windows-due test-math-noasm test-portable-scalars math-asm-guard \
 	bench-math bench-math-kernels test-clang test-tcc test-tcc-heavy readable-check build \
 	tcc zc zl zls regen-goldens regen-fmt-goldens regen-matrix matrix-guard regen-constparity constparity-guard regen-math-asm \
 	fmt-raw-guard regen-lsp-goldens bump-seed test-bootstrap install docs warn-check pedantic-check perf \
 	perf-strict pre-push perf-elision \
-	user-native-guard shim-guard thread-tsan-guard cobj-guard sqlite-decls-guard case-guard mode-parity \
+	user-native-guard shim-guard thread-tsan-guard cobj-guard sqlite-decls-guard mode-parity \
 	refusal-guard static-tcc-guard emit-set ident-set \
 	piece-guard \
-	view-guard clean native-guard generic-param-guard \
+	view-guard clean native-guard \
 	zl-full-guard
 
 # Keep the per-example .c intermediates.
@@ -159,12 +159,7 @@ COMPLEXITY_SCOPE := src/*.z $(SRC_SUBUNITS) lib/system/*.z lib/system/system/*.z
 COMPLEXITY_TSV := $(BUILDDIR)/cognitive-complexity.tsv
 complexity-report: bin/zl
 	@mkdir -p $(BUILDDIR)
-	@{ printf 'score\tfile:line\tfunction\n'; bin/zl lint --complexity 15 $(COMPLEXITY_SCOPE) 2>&1 \
-	  | grep -A1 'warning\[A008\]' | grep -v '^--$$' | paste - - \
-	  | sed -E 's/.*function `([^`]+)` has cognitive complexity ([0-9]+).*--> ([^:]+:[0-9]+):.*/\2\t\3\t\1/' \
-	  | sort -t "$$(printf '\t')" -k1,1nr; } > $(COMPLEXITY_TSV)
-	@n=$$(($$(wc -l < $(COMPLEXITY_TSV)) - 1)); top=$$(sed -n '2p' $(COMPLEXITY_TSV) | cut -f1,3 | tr '\t' ' '); \
-	  echo "complexity-report: $$n functions over 15, highest $$top -- $(COMPLEXITY_TSV)"
+	@bin/zl lint --complexity 15 --complexity-table $(COMPLEXITY_TSV) $(COMPLEXITY_SCOPE)
 
 # style-lint-fast -- the parse-tier lint and the formatter check (docs/zl.pdoc).
 # style-lint -- adds the typecheck tier, which needs each tree's roots.
@@ -291,12 +286,11 @@ ci:
 # GATE_GUARDS -- the legs of ci-gates the per-batch gate runs, in parallel and to
 # the end (`make -k -j gate-guards`). The gate runs check, test, perf-strict and
 # the clang and tcc corpora itself.
-GATE_GUARDS := style-lint zl-full-guard warn-check pedantic-check native-guard \
-	generic-param-guard view-guard emitted-check piece-guard case-guard user-native-guard \
-	shim-guard thread-tsan-guard cobj-guard sqlite-decls-guard static-tcc-guard refusal-guard \
-	fmt-raw-guard nativec-agree-guard natives-show-guard prelude-share-guard math-asm-guard \
-	matrix-guard constparity-guard test-math-noasm test-portable-scalars test-msvc-wine \
-	docs-link-guard
+GATE_GUARDS := style-lint zl-full-guard warn-check pedantic-check native-guard view-guard \
+	emitted-check piece-guard user-native-guard shim-guard thread-tsan-guard cobj-guard \
+	sqlite-decls-guard static-tcc-guard refusal-guard fmt-raw-guard nativec-agree-guard \
+	natives-show-guard prelude-share-guard math-asm-guard matrix-guard constparity-guard \
+	test-math-noasm test-portable-scalars test-msvc-wine
 # GATE_SAME_C -- the legs that only rebuild and run the emitted C of the run
 # corpus: the per-batch gate leaves them out when the C every program emits is the
 # C its snapshot's compiler emits, and runs them otherwise.
@@ -666,19 +660,6 @@ test-portable-scalars: bin/zc
 	done; \
 	if [ $$fail -ne 0 ]; then exit 1; fi; \
 	echo "test-portable-scalars OK: $$n programs on the struct forms of i128, u128 and f16"
-
-# docs-link-guard -- every .pdoc link is bracketed (a bare one runs to the end of
-# its line), and a target holding `#` is quoted.
-docs-link-guard:
-	@bad=$$(grep -nE '(^|[^[])#> to=' docs/*.pdoc); \
-	if [ -n "$$bad" ]; then \
-	  echo "docs-link-guard FAIL: a link written bare runs to the end of its line -- write [#> to=TARGET: text]:"; \
-	  printf '%s\n' "$$bad" | sed 's/^/    /'; exit 1; fi; \
-	bad=$$(grep -nE '\[#> to=[^" :]*#' docs/*.pdoc); \
-	if [ -n "$$bad" ]; then \
-	  echo "docs-link-guard FAIL: a target holding # must be quoted -- to=\"page.html#anchor\":"; \
-	  printf '%s\n' "$$bad" | sed 's/^/    /'; exit 1; fi; \
-	echo "docs-link-guard OK: every docs link is bracketed"
 
 # math-asm-guard -- the committed asm kernels (MATH_ASM) are what tools/asmgen
 # writes.
@@ -1428,7 +1409,7 @@ perf: $(PERFBIN)
 # deletes write-only allocations; perf-elision measures that), a failed run and
 # allocs != frees. Above ALLOC_BASELINE fails; a commit raising it says why in
 # its message, and one lowering the count lowers it here.
-ALLOC_BASELINE := 2814390
+ALLOC_BASELINE := 2814395
 # ALLOC_LINE -- the one measurement every allocation number comes from.
 ALLOC_LINE = valgrind --tool=memcheck $(PERFRUN) 2>&1 | grep 'total heap usage' | sed 's/.*usage: //'
 
@@ -1682,31 +1663,6 @@ thread-tsan-guard: bin/zc
 	echo "thread-tsan-guard OK: $$n threaded fixture runs race-free under ThreadSanitizer ($(CC), clang), proved on a racy probe"
 endif
 
-# case-guard -- every program declaring `main` is in a case list (run, smoke or
-# dump), so something compiles it, and no list names a case twice. A unit with no
-# main is reached through others.
-case-guard:
-	@fail=0; dup=0; \
-	for f in examples/*.z tests/fixtures/emitc_corpus/*.z; do \
-	  b=$$(basename $$f .z); \
-	  grep -qE '^main: *function' $$f || continue; \
-	  awk -v b="$$b" '$$1 == b {found = 1} END {exit !found}' \
-	    tests/fixtures/run_cases.txt tests/fixtures/smoke_cases.txt tests/fixtures/dump_cases.txt \
-	    || { echo "case-guard: $$b declares main but is in no case list -- nothing compiles it"; fail=1; }; \
-	done; \
-	for l in tests/fixtures/run_cases.txt tests/fixtures/smoke_cases.txt tests/fixtures/dump_cases.txt; do \
-	  for d in $$(grep -v '^#' $$l | awk 'NF {print $$1}' | sort | uniq -d); do \
-	    echo "case-guard: $$d is listed twice in $$l -- the runner would build and run it twice; delete one line"; dup=1; \
-	  done; \
-	done; \
-	if [ $$fail -ne 0 ]; then \
-	  echo "  add it to run_cases.txt with a tests/fixtures/run_golden/<name>.out, or to"; \
-	  echo "  smoke_cases.txt when the output is environment-dependent (build only)"; \
-	  exit 1; \
-	fi; \
-	if [ $$dup -ne 0 ]; then exit 1; fi; \
-	echo "case-guard OK: every program declaring main is in a case list, and no list names one twice"
-
 # mode-parity -- --cc-mode inproc builds the same PROGRAM as spawn: every run case
 # is built both ways and its output and exit code compared (never the bytes).
 # Refusals must match too. Only zc's temp-path pid is normalised. Each program
@@ -1943,20 +1899,6 @@ clean:
 # row the numeric rule gives (body, needs and form; `zc natives conversions` prints them).
 native-guard: bin/zc
 	@bin/zc natives check rows --system lib/system
-
-# generic-param-guard -- L023 (a parameter's case follows its bound's) over the
-# examples and fixtures, which no lint gate reads.
-generic-param-guard: bin/zl
-	@n=$$(bin/zl lint examples/*.z tests/fixtures/emitc_corpus/*.z \
-	        tests/fixtures/errors/*.z 2>&1 | grep -c 'L023' || true); \
-	if [ "$$n" -gt 0 ]; then \
-	  echo "generic-param-guard FAIL: $$n generic parameter(s) whose case does not match their bound:"; \
-	  bin/zl lint examples/*.z tests/fixtures/emitc_corpus/*.z \
-	    tests/fixtures/errors/*.z 2>&1 | grep -A1 'L023' | sed 's/^/    /'; \
-	  echo "  A parameter's case matches its bound's: see docs/styleguide.pdoc Generic Parameters."; \
-	  exit 1; \
-	fi; \
-	echo "generic-param-guard OK: examples + corpus + error fixtures clean (baseline 0)"
 
 # zl-full-guard -- `zl lint --full` never passes a file it did not check: it runs
 # with no flags from a foreign cwd, says why when it cannot, reports a dependency's error at that file, reports a generic body once,

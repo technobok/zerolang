@@ -46,6 +46,7 @@ printUsage: function is {
     io.eprintln "  --line-length N  report lines over N columns (advisory; default off)"
     io.eprintln "  --complexity N  report functions whose cognitive complexity exceeds N (advisory; --arch implies 15)"
     io.eprintln "  --counts  print one `<code> <file> <count>` row per code to stdout, the findings' weights added up, in place of the diagnostics"
+    io.eprintln "  --complexity-table FILE  write every A008 function to FILE as `score<TAB>file:line<TAB>function` rows, highest first, and print one summary line in place of the diagnostics"
 }
 
 # reportAnalysis -- render every collected diagnostic for one file to stderr,
@@ -205,15 +206,18 @@ reportCounts: function {a: zsource.Analysis.view} is {
 }
 
 # runLint -- lint each target file at the tier `opts` asks for, and report its
-# diagnostics, or its count rows when `counts` is set. Exit 1 if any
-# diagnostics fail the gate.
+# diagnostics, or its count rows when `counts` is set, or with a `table` path
+# its A008 functions there (writeComplexityTable). Exit 1 if any diagnostics
+# fail the gate; a table run answers 0 once the table is written.
 runLint: function {
     paths: (List String).borrow
     srcdirs: (List String).view
     systemdir: StringView
     opts: zsource.lintopts
     counts: bool
+    table: StringView
 } out i32 is {
+    rows: List ComplexityRow
     if paths.length == 0 then {
         io.eprintln "zl lint: no input files"
         return 2
@@ -246,14 +250,93 @@ runLint: function {
             :opts
             :prelude
         )
-        if counts then {
+        if table.length > 0 then {
+            addComplexityRows :rows :a
+        } else if counts then {
             reportCounts :a
         } else {
             reportAnalysis :a
         }
         total = total + a.failCount
     }
+    if table.length > 0 then return (
+        writeComplexityTable
+        :rows
+        path: table
+        threshold: opts.complexity
+    )
     if total > 0 then return 1
+    return 0
+}
+
+# tableCode -- the rule whose findings --complexity-table writes, by its slot
+tableCode: list { complexity: "A008" } out staticlist StringView
+
+# ComplexityRow -- one A008 function: its cognitive complexity, the file and
+# line it is at, and its name
+ComplexityRow: class {
+    score: u64
+    path: String
+    line: u32
+    fn: String
+}
+
+# addComplexityRows -- each A008 finding of `a` as a row of `rows`; its score is
+# its weight (how far over the threshold it is) and the threshold
+addComplexityRows: function {rows: List ComplexityRow a: zsource.Analysis.view} is {
+    words: zast.Vocab.create block: tableCode
+    for each d: a.diags loop {
+        if (words.slotOf text: d.code.stringView) == tableCode.slot.complexity then {
+            score: d.weight.u64 + a.opts.complexity
+            rows.append (ComplexityRow :score path: a.path.copy line: d.lineno fn: d.subject.copy)
+        }
+    }
+}
+
+# writeComplexityTable -- `rows`, highest score first, to the file at `path`
+# under a header row, and one line naming the count and the highest; answers 0,
+# or 2 when the file cannot be written
+writeComplexityTable: function {
+    rows: List ComplexityRow path: StringView threshold: u32
+} out i32 is {
+    order: ListVal u64
+    for order.length < rows.length loop order.append order.length
+    i: 1.u64
+    for i < order.length loop {
+        k: i
+        for k > 0 while (
+            (rows.get i: (order.get i: k - 1)).score < (rows.get i: (order.get i: k)).score
+        ) loop {
+            t: order.get i: k - 1
+            order.set i: k - 1 val: (order.get i: k)
+            order.set i: k val: t
+            k = k - 1
+        }
+        i = i + 1
+    }
+    text: "score\tfile:line\tfunction\n".string
+    for each j: order loop {
+        row: rows.get i: j
+        text.append "\{row.score}"
+        text.appendByte b: ascii.ht
+        text.append row.path
+        text.appendByte b: ascii.colon
+        text.append "\{row.line}"
+        text.appendByte b: ascii.ht
+        text.append row.fn
+        text.appendByte b: ascii.lf
+    }
+    w: io.writeText :path content: text
+    if w.err then {
+        io.eprintln "zl lint: cannot write \{path}"
+        return 2
+    }
+    if rows.length == 0 then {
+        print "complexity: no function over \{threshold} -- \{path}"
+        return 0
+    }
+    top: rows.get i: (order.get i: 0)
+    print "complexity: \{rows.length} functions over \{threshold}, highest \{top.score} \{top.fn} -- \{path}"
     return 0
 }
 
@@ -472,6 +555,7 @@ opt: list {
     docsAll: "--docs-all"
     arch: "--arch"
     counts: "--counts"
+    complexityTable: "--complexity-table"
     check: "--check"
     stdout: "--stdout"
     diff: "--diff"
@@ -524,6 +608,7 @@ lintSpec: function out cli.Spec is {
     addSwitch :sp name: opt.docsAll
     addSwitch :sp name: opt.arch
     addSwitch :sp name: opt.counts
+    addValue :sp name: opt.complexityTable repeats: false
     addValue :sp name: opt.complexity repeats: false
     return sp
 }
@@ -630,6 +715,9 @@ CliFlags: class {
     fcSet: bool
     # --counts: print each file's count rows in place of its diagnostics
     counts: bool
+    # --complexity-table: the file the A008 table is written to, in place of
+    # the diagnostics; empty when the flag is absent
+    table: String
 } as {
     # read -- what the command line `p` set. A name the command's spec does not
     # declare was not written, so one reading serves `lint` and `fmt`.
@@ -659,6 +747,7 @@ CliFlags: class {
             llSet: (p.given name: opt.lineLength)
             fcSet: (p.given name: opt.complexity)
             counts: (p.hasFlag name: opt.counts)
+            table: (textOf v: (p.option name: opt.complexityTable))
         )
     }
 
@@ -695,6 +784,7 @@ lintCommand: function out i32 is {
             systemdir: cf.systemdir.stringView
             opts: lintOpts
             counts: cf.counts
+            table: cf.table.stringView
         )
     } case err then {
         return (refused spec: sp e: pr)

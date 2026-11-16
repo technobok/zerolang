@@ -29,6 +29,8 @@
 #            and reserved words, and core.z's names (src/ztestrunner/vocab.z)
 #   pins     counts the compiler's own source is held at, each a text in the
 #            code of a set of files (src/ztestrunner/pins.z)
+#   fixtures every program declaring `main` is in a case list, no list names
+#            a case twice, and no fixture breaks L023 (src/ztestrunner/fixtures.z)
 #   --heavy adds the self-host ASan run and the byte-identity fixpoint.
 # `--only emitted` runs the EMITTED kind, which no other run includes: what the
 # emitted C of every program holds, read from one shared emit
@@ -65,8 +67,8 @@ slurp: function {path: StringView} out String is {
 # none is a LIBRARY: it exists to be opened by another program and is compiled
 # through its dependant, so compiling it AS a program is E0039. The two sweeps
 # below walk a whole directory rather than a case list, so they are the only
-# places that would hand one to the compiler on its own. Mirrors the same
-# `^main: *function` test the Makefile's case-guard uses on the other side.
+# places that would hand one to the compiler on its own. The fixtures kind
+# reads a program's `main` the same way.
 declaresMain: function {path: StringView} out bool is {
     c: slurp :path
     for each ln: c.stringView.lines loop {
@@ -980,6 +982,8 @@ kindWord: list {
     vocab: "vocab"
     # the counts the compiler's own source is held at (also in `make test`)
     pins: "pins"
+    # what the fixtures themselves must hold (also in `make test`)
+    fixtures: "fixtures"
 } out staticlist StringView
 
 # test-runner entry point: build the compiler, run the
@@ -1850,6 +1854,7 @@ runDocPageCases: function {r: Runner} is {
     pi: u64
     for pi < names.length loop {
         broken: docPageBrokenLinks :names :texts at: pi dir: docsDir.stringView
+        broken = broken + (docLinkForms page: (names.get i: pi).stringView dir: docsDir.stringView)
         if broken == 0 then r.passN = r.passN + 1
         r.fails = r.fails + broken
         pi = pi + 1
@@ -1880,6 +1885,49 @@ runDocPageCases: function {r: Runner} is {
         }
         pi = pi + 1
     }
+}
+
+# linkOpen -- how a link of a .pdoc page starts
+linkOpen: "#> to="
+
+# docLinkForms -- how many links of `page`'s .pdoc are written in a form the
+# renderer misreads: a link not in brackets runs to the end of its line, and a
+# target holding `#` and not quoted ends at the `#`
+docLinkForms: function {page: StringView dir: StringView} out u64 is {
+    text: slurp path: "\{dir}/\{page}.pdoc".stringView
+    bad: u64
+    no: u64
+    for each l: text.stringView.lines loop {
+        no = no + 1
+        pos: u64
+        for pos < l.length loop {
+            at: ((l.substring from: pos to: l.length).indexOf linkOpen).or d: l.length
+            if at == l.length then break
+            start: pos + at
+            bracketed: (start > 0) and (((l.byteAt i: start - 1).or d: 0) == ascii.bracketOpen)
+            if bracketed.false then {
+                print "FAIL(docpage) docs/\{page}.pdoc:\{no}: a link written bare runs to the end of its line -- write [#> to=TARGET: text]"
+                bad = bad + 1
+            } else if (unquotedAnchor text: (l.substring from: start + linkOpen.length to: l.length)
+            ) then {
+                print "FAIL(docpage) docs/\{page}.pdoc:\{no}: a target holding # must be quoted -- to=\"page.html#anchor\""
+                bad = bad + 1
+            }
+            pos = start + linkOpen.length
+        }
+    }
+    return bad
+}
+
+# unquotedAnchor -- a link target, `text` from just after `to=`, is not quoted
+# and holds a `#` before the space, colon or quote that ends it
+unquotedAnchor: function {text: StringView} out bool is {
+    if text.startsWith "\"" then return false
+    for each b: text.byteView loop {
+        if (b == ascii.space) or (b == ascii.colon) or (b == ascii.doubleQuote) then return false
+        if b == ascii.hash then return true
+    }
+    return false
 }
 
 # docPageBrokenLinks -- how many links of page `at` point at nothing, each
@@ -4575,6 +4623,7 @@ printUsage: function is {
     io.eprintln "                  emitted  what the emitted C holds, from one shared emit"
     io.eprintln "                  vocab    the spec and the highlighters carry the lexer's words"
     io.eprintln "                  pins     the counts the compiler's own source is held at"
+    io.eprintln "                  fixtures the case lists name every program, and fixtures follow L023"
     io.eprintln "A value is written `--name VALUE` or `--name=VALUE`."
 }
 
@@ -4703,7 +4752,7 @@ refuseMisuse: function {r: Runner.view p: cli.Parsed.view} is {
     }
     written: textOr :p name: opt.only d: ""
     if written.length > 0 when r.only == kindWord.length then {
-        unknown: "ztestrunner: --only takes run, doccode, agree, arch, emitted, vocab or pins, not '\{written}'"
+        unknown: "ztestrunner: --only takes run, doccode, agree, arch, emitted, vocab, pins or fixtures, not '\{written}'"
         refuse unknown.stringView
     }
     runOnly: r.only == kindWord.slot.run
@@ -4833,6 +4882,8 @@ runKinds: function {r: Runner} is {
         vocab.runVocabCases :r
     } else if r.only == kindWord.slot.pins then {
         pins.runPinsCases :r
+    } else if r.only == kindWord.slot.fixtures then {
+        fixtures.runFixtureCases :r
     } else {
         runRunCases :r
         runLspCases :r
@@ -4850,6 +4901,7 @@ runKinds: function {r: Runner} is {
         runFmtCases :r
         vocab.runVocabCases :r
         pins.runPinsCases :r
+        fixtures.runFixtureCases :r
         runDoccodeCases :r
         runDocPageCases :r
         runSelfhostAsan :r
