@@ -59,20 +59,19 @@ BUILDDIR := out
 NATIVEC_INC := $(BUILDDIR)/nativec
 # the machine make runs on, as `uname -m` spells it
 HOST_ARCH := $(shell uname -m)
-# What an emitted C file links, read off its header (searched in the first
-# lines, not pinned to one): the objects of the C sources its `zcsrc:` lines name
-# -- built by `bin/zc cobj` with the compiler that links, $(2) or $(CC), and the
-# sanitizer flags $(3) (a sanitizer sees only what it instrumented), asked only
-# when there are any, so the seed's own C never needs bin/zc -- then
-# the -l flags its `zlink:` line declares. Every rule linking emitted C uses
-# ZLINKOF.
-ZLINKSED = sed -n '1,8s|^/\* zlink: \(.*\) \*/$$|\1|p'
-ZCSRCSED = sed -n '1,8s|^/\* zcsrc: \(.*\) \*/$$|\1|p'
-ZLINKOF = $$($(ZCSRCSED) $(1) | grep -q . && bin/zc cobj $(1) --cc $(or $(2),$(CC)) $(if $(3),--cflags "$(3)")) \
-  $$($(ZLINKSED) $(1) | tr ' ' '\n' | sed -e '/^$$/d' -e 's|^|-l|')
-# MSVCLINKOF -- ZLINKOF's libraries as MSVC's cl names them, `<name>.lib` (the
-# C it is used on, zc's own, names no C source)
-MSVCLINKOF = $$($(ZLINKSED) $(1) | tr ' ' '\n' | sed -e '/^$$/d' -e 's|$$|.lib|')
+# ZLINKOF -- what the emitted C file $(1) links, as `zc cobj $(1) --link`
+# prints it: the objects of the C sources its `zcsrc:` lines name, built by the
+# compiler that links, $(2) or $(CC), with the sanitizer flags $(3) (a sanitizer
+# sees only what it instrumented), then the libraries its `zlink:` line
+# declares, as that compiler names them (`-lX`, cl's `X.lib`). $(4) is the zc
+# asked, bin/zc unless named: test-bootstrap asks each stage's seed. Every rule
+# linking emitted C uses ZLINKOF, but the seed's own two links (SEEDLINK).
+ZLINKOF = $$($(or $(4),bin/zc) cobj $(1) --link --cc $(or $(2),$(CC)) $(if $(3),--cflags "$(3)"))
+# SEEDLINK -- the libraries of the seed's `zlink:` line, written here: the seed
+# links before any zc exists to read it. The seed is emitted for Linux (dl, for
+# the in-process tcc); on Windows it links no library, there being no
+# in-process tcc there.
+SEEDLINK := $(if $(WINDOWS_HOST),,-ldl)
 # what every cl command line here carries, as zcc.msvcFlags gives zc's
 MSVC_CFLAGS := -nologo -std:c17 -experimental:c11atomics -utf-8
 # The drivers link the vendored mimalloc ahead of libc; MIMALLOC=0 builds them on
@@ -853,7 +852,7 @@ tcc: $(BUILDDIR)/tcc $(TCCLIB)/$(LIBTCC)
 # on Windows it links no library -- there is no in-process tcc there.
 $(BUILDDIR)/zc-seed: bootstrap/zc.c
 	@mkdir -p $(BUILDDIR)
-	$(CC) $(CFLAGS) -o $@ bootstrap/zc.c $(if $(WINDOWS_HOST),$(DRIVERLINK),$(call ZLINKOF,bootstrap/zc.c)) -lm
+	$(CC) $(CFLAGS) -o $@ bootstrap/zc.c $(if $(WINDOWS_HOST),$(DRIVERLINK)) $(SEEDLINK) -lm
 
 # NATIVEC_DEP -- the files the generated `nativec` unit is made from (znativec.servedText):
 # zc serves them to its own build, so a change to one rebuilds bin/zc
@@ -875,7 +874,7 @@ $(BUILDDIR)/zc.o: bin/zc.c
 
 bin/zc: $(BUILDDIR)/zc.o $(BUILDDIR)/buildstamp.o $(MIMALLOC_OBJ)
 	@mkdir -p bin
-	$(CC) $(DRIVERLINK) -o bin/zc $(BUILDDIR)/zc.o $(BUILDDIR)/buildstamp.o $(MIMALLOC_OBJ) $(call ZLINKOF,bin/zc.c) $(THREADLIB) -lm
+	$(CC) $(DRIVERLINK) -o bin/zc $(BUILDDIR)/zc.o $(BUILDDIR)/buildstamp.o $(MIMALLOC_OBJ) $(call ZLINKOF,bin/zc.c,,,$(ZC)) $(THREADLIB) -lm
 
 zc: bin/zc
 
@@ -1118,9 +1117,9 @@ test-bootstrap:
 	    exit 1; \
 	  fi; \
 	  echo "== bootstrap chain: $$cc =="; \
-	  $$cc $$f $${o}$(BUILDDIR)/zc-seed-$$tag bootstrap/zc.c $(if $(WINDOWS_HOST),$$l,$(call ZLINKOF,bootstrap/zc.c)) $(LIBM) $$s; \
+	  $$cc $$f $${o}$(BUILDDIR)/zc-seed-$$tag bootstrap/zc.c $(if $(WINDOWS_HOST),$$l) $(SEEDLINK) $(LIBM) $$s; \
 	  $(BUILDDIR)/zc-seed-$$tag zc --src src --system lib/system --emit-c $(BUILDDIR)/b1-$$tag.c; \
-	  if [ -n "$$m" ]; then k="$(call MSVCLINKOF,$(BUILDDIR)/b1-$$tag.c)"; else k="$(call ZLINKOF,$(BUILDDIR)/b1-$$tag.c) $(LIBM)"; fi; \
+	  k="$(call ZLINKOF,$(BUILDDIR)/b1-$$tag.c,$$cc,,$(BUILDDIR)/zc-seed-$$tag)"; [ -n "$$m" ] || k="$$k $(LIBM)"; \
 	  $$cc $$f $$l $${o}$(BUILDDIR)/zc-b1-$$tag $(BUILDDIR)/b1-$$tag.c $$k $$s; \
 	  $(BUILDDIR)/zc-b1-$$tag zc --src src --system lib/system --emit-c $(BUILDDIR)/b2-$$tag.c; \
 	  $$cc $$f $$l $${o}$(BUILDDIR)/zc-b2-$$tag $(BUILDDIR)/b2-$$tag.c $$k $$s; \
@@ -1132,7 +1131,7 @@ test-bootstrap:
 	    diff $(BUILDDIR)/b2-$$tag.c $(BUILDDIR)/b3-$$tag.c | head -6; exit 1; \
 	  fi; \
 	  $(BUILDDIR)/zc-b1-$$tag ztypes_smoke --src tests/unit --src src --system lib/system --emit-c $(BUILDDIR)/zt-$$tag.c; \
-	  if [ -n "$$m" ]; then k="$(call MSVCLINKOF,$(BUILDDIR)/zt-$$tag.c)"; else k="$(call ZLINKOF,$(BUILDDIR)/zt-$$tag.c) $(LIBM)"; fi; \
+	  k="$(call ZLINKOF,$(BUILDDIR)/zt-$$tag.c,$$cc,,$(BUILDDIR)/zc-seed-$$tag)"; [ -n "$$m" ] || k="$$k $(LIBM)"; \
 	  $$cc $$f $$l $${o}$(BUILDDIR)/zt-$$tag $(BUILDDIR)/zt-$$tag.c $$k; \
 	  $(BUILDDIR)/zt-$$tag | diff - tests/fixtures/ztypes_smoke_z/smoke.expected; \
 	  echo "  correctness OK (seed-built zc compiles the ztypes smoke to golden) under $$tag"; \
@@ -1257,7 +1256,7 @@ PERFRUN  := $(PERFBIN) $(PERFARGS)
 
 # The series binary: bin/zc.c compiled by PERFCC at PERFOPT.
 $(PERFBIN): bin/zc.c $(MIMALLOC_OBJ) $(BUILDDIR)/buildstamp.o
-	@$(PERFCC) -std=c17 -w $(PERFOPT) $(STAMPDEF) -o $@ $(MIMALLOC_OBJ) $(BUILDDIR)/buildstamp.o bin/zc.c $(call ZLINKOF,bin/zc.c) -lpthread -lm
+	@$(PERFCC) -std=c17 -w $(PERFOPT) $(STAMPDEF) -o $@ $(MIMALLOC_OBJ) $(BUILDDIR)/buildstamp.o bin/zc.c $(call ZLINKOF,bin/zc.c,,,$(ZC)) -lpthread -lm
 
 perf: $(PERFBIN)
 	@echo "== zerolang line count (.z) =="
@@ -1320,8 +1319,8 @@ perf-elision: bin/zc.c
 	@command -v valgrind >/dev/null 2>&1 || { echo "perf-elision: valgrind not installed -- skipping"; exit 0; }
 	@sha=$$(git rev-parse --short HEAD); dirty=$$(git diff --quiet && git diff --cached --quiet && echo clean || echo DIRTY); \
 	  echo "== perf-elision @ $$sha ($$dirty), $(ELIDECC) A/B over bin/zc.c =="
-	@$(ELIDECC) -std=c17 -w $(PERFOPT) -o $(BUILDDIR)/zc-elide bin/zc.c $(call ZLINKOF,bin/zc.c) -lpthread -lm
-	@$(ELIDECC) -std=c17 -w $(PERFOPT) $(NOBUILTIN) -o $(BUILDDIR)/zc-noelide bin/zc.c $(call ZLINKOF,bin/zc.c) -lpthread -lm
+	@$(ELIDECC) -std=c17 -w $(PERFOPT) -o $(BUILDDIR)/zc-elide bin/zc.c $(call ZLINKOF,bin/zc.c,,,$(ZC)) -lpthread -lm
+	@$(ELIDECC) -std=c17 -w $(PERFOPT) $(NOBUILTIN) -o $(BUILDDIR)/zc-noelide bin/zc.c $(call ZLINKOF,bin/zc.c,,,$(ZC)) -lpthread -lm
 	@blocks() { valgrind --tool=memcheck $$1 $(PERFARGS) 2>&1 \
 	    | grep 'total heap usage' | sed 's/.*usage: //;s/ allocs.*//;s/,//g'; }; \
 	  kept=$$(blocks $(BUILDDIR)/zc-noelide); left=$$(blocks $(BUILDDIR)/zc-elide); \
