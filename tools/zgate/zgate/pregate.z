@@ -135,17 +135,27 @@ lintCheck: function {g: Gate.view file: StringView} out u64 is {
 
 # familyOf -- the unit family `file` belongs to: the folder of a subunit
 # file, or the unit's name when a folder of its subunits stands beside it;
-# empty for a file of no family
+# empty for a file of no family. A family's doc findings count across its
+# files, so HEAD's copy of one file, linted alone, is no measure of it
 familyOf: function {g: Gate.view file: StringView} out String is {
-    rest: file.stripPrefix "src/"
-    if rest.none then return "".string
-    slash: rest.indexOf "/"
-    if slash.some then return (rest.substring from: 0 to: slash).string
-    stem: rest.substring from: 0 to: rest.length - 2
-    st: io.stat path: "\{g.repo}/src/\{stem}"
-    if st.ok when st.kind.dir then return stem.string
+    for each root: familyRoots loop {
+        rest: file.stripPrefix root
+        if rest.some then {
+            slash: rest.indexOf "/"
+            if slash.some then return (rest.substring from: 0 to: slash).string
+            stem: rest.substring from: 0 to: rest.length - 2
+            st: io.stat path: "\{g.repo}/\{root}\{stem}"
+            if st.ok when st.kind.dir then return stem.string
+            return "".string
+        }
+    }
     return "".string
 }
+
+# familyRoots -- the folders whose units may have subunits
+familyRoots: list {
+    "src/" "lib/system/"
+} out staticlist StringView
 
 # countsCheck -- the doc and arch counts of `file` against HEAD's copy of it:
 # a doc count that rises, or arch rows that change, answer 1 and are shown
