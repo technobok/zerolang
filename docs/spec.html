@@ -648,11 +648,14 @@ match (
 } case err then {
     # precisionLoss or outOfRange
 }</code></pre>
-<p>A compile-time-constant conversion (a literal or constant expression, see
-<a href="#numeric-literal-coercion-at-typed-locations">literal coercion</a>) is
+<p>A conversion of an untyped literal, or of a constant expression built only
+from untyped literals (see
+<a href="#numeric-literal-coercion-at-typed-locations">literal coercion</a>), is
 checked statically and yields the bare type <code>T</code>, never a <code>resultval</code>: so
-<code>100.u8</code> is a <code>u8</code> and <code>300.u8</code> is a compile error, while <code>x.u8</code> on a
-runtime <code>x</code> is a <code>resultval</code>.</p>
+<code>100.u8</code> is a <code>u8</code> and <code>300.u8</code> and <code>(0 - 8).u64</code> are compile errors.
+A conversion of a typed value is checked at run time and yields a
+<code>resultval</code>, whether the value is a runtime <code>x</code> (<code>x.u8</code>) or a suffixed
+literal (<code>1000.u64.u8</code>, <code>(0.i64 - 8.i64).u64</code>).</p>
 <h3 id="labels"><a href="#labels">2.8. Labels</a></h3>
 <p>Labels are used when assigning names to definitions. They are
 <a href="#identifiers">identifiers</a> followed by a colon (<code>:</code>). The name assigned is
@@ -2427,7 +2430,7 @@ is <code>true</code> here); the payload is reached through <a href="#match">matc
 <p>Also, a <code>match</code> clause that exits the current scope (using a <code>return</code>, <code>break</code>
 or <code>continue</code>) will also 'narrow' a named target for the remainder of that
 scope -- ie. the type of that named target will exclude the subtypes where a
-matching <code>of</code> clause has resulted in exiting the current scope. The same
+matching <code>case</code> clause has resulted in exiting the current scope. The same
 applies to a diverging <a href="#if">if</a> branch over an arm predicate: after
 <code>if o.none then return</code>, the remainder of the scope knows the condition
 was false. When such exit-exclusions leave a single payload arm, the name
@@ -3895,8 +3898,9 @@ or <code>.borrow</code> (mutable) -- or the receiver, which <code>outx</code> ke
 the result's lifetime. <code>out type.borrow</code> is refused.</p>
 <p>As a compiler method on instances (<code>x.borrow</code>): valid on all types. For
 reftypes, returns a borrowed reference and exclusively locks the receiver.
-For valtypes, returns a copy without locking. See
-<a href="#borrow-method">borrow (method)</a>.</p>
+For valtypes, it is accepted only where it is handed to a <code>.borrow</code>
+parameter, which takes the value by reference; a binding of it is refused
+(<code>E0200</code>). See <a href="#borrow-method">borrow (method)</a>.</p>
 <h4 id="typedef"><a href="#typedef">5.4.9. typedef</a></h4>
 <p>A typedef wraps one base type to provide a new type. The new type has no
 run-time overhead beyond its base: it is a compile-time construct.</p>
@@ -4375,12 +4379,12 @@ integer, enum) <code>.borrow</code> is accepted only where it is handed to a
 <code>.borrow</code> parameter, which takes the value by reference; a binding of it
 borrows nothing and is a compile error.</p>
 <p>The <code>borrow</code> method is zero overhead -- it is a manipulation of the compile
-time type system only. Use of the <code>.borrow</code> method is optional when passing
-to function parameters (parameters are borrowed by default).</p>
+time type system only. Writing <code>.borrow</code> on an argument is optional: the
+parameter's own marker decides how the argument is passed.</p>
 <p><code>.borrow</code> takes no arguments.</p>
-<p><code>.borrow</code> can be used for defining local variables -- the new variable borrows
-the value and the source name is exclusively locked while the new name is in
-scope.</p>
+<p>On a reftype, <code>.borrow</code> can define a local variable: the new variable
+borrows the value, and the source name is exclusively locked while the new
+name is in scope.</p>
 <p>See also <a href="./ownership.html">ownership</a>.</p>
 <h4 id="view-type-marker"><a href="#view-type-marker">5.5.3. view (type marker)</a></h4>
 <p><code>.view</code> is a type marker, not an instance method: it is written on a
@@ -4963,10 +4967,10 @@ program text. They can be freely copied and do not participate in ownership
 tracking beyond simple value semantics.</p>
 <p>It is not possible to specify a method spec without a function value.</p>
 <h4 id="native-declarations"><a href="#native-declarations">5.13.4. Native Declarations</a></h4>
-<p>The <code>native</code> keyword marks definitions whose implementations are provided by
-the compiler backend rather than by zerolang source code. Native declarations
-appear in the system library units (<code>system.z</code> and <code>collections.z</code>) and are
-not intended for use in programmer-written code.</p>
+<p>The <code>native</code> keyword marks a declaration whose body is not written in
+zerolang. The body is C, in the C implementation file of the declaration's
+unit (<code>&lt;unit&gt;/nativec.zd</code>). Any unit may declare natives: see
+<a href="./native_units.html">Native Units</a>.</p>
 <p>For functions, <code>native</code> replaces the body expression:</p>
 <pre><code class="language-zerolang">length: function {:this} out u64 is native</code></pre>
 <p>For object types (records, classes, etc.), <code>native</code> replaces the instance
@@ -5880,8 +5884,8 @@ supplies both the type <em><strong>and</strong></em> the default, so a call or c
 may omit the argument and the compiler fills the declared value at the
 site. (In a <em><strong>function body</strong></em> the bare-type-name spelling is a value:
 <code>width: u64</code> binds zero -- see Zero Values under Implicit
-Construction. A unit-level binding takes literal values only; a bare
-type name there is a compile error.)</p>
+Construction. At unit level it names a type: <code>tally: u64</code> is an alias
+of <code>u64</code> -- see <a href="#unit-level-definitions">Unit-level Definitions</a>.)</p>
 <p><strong>Eligible value forms.</strong></p>
 <ul>
 <li>Numeric literal -- bare (<code>42</code>) or typed

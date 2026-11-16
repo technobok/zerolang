@@ -516,11 +516,14 @@ exactly representable). Unwrap the result with the #~"resultval" combinators
   }
   """
 
-A compile-time-constant conversion (a literal or constant expression, see
-[#> to=numeric-literal-coercion-at-typed-locations: literal coercion]) is
+A conversion of an untyped literal, or of a constant expression built only
+from untyped literals (see
+[#> to=numeric-literal-coercion-at-typed-locations: literal coercion]), is
 checked statically and yields the bare type #~"T", never a #~"resultval": so
-#~"100.u8" is a #~"u8" and #~"300.u8" is a compile error, while #~"x.u8" on a
-runtime #~"x" is a #~"resultval".
+#~"100.u8" is a #~"u8" and #~"300.u8" and #~"(0 - 8).u64" are compile errors.
+A conversion of a typed value is checked at run time and yields a
+#~"resultval", whether the value is a runtime #~"x" (#~"x.u8") or a suffixed
+literal (#~"1000.u64.u8", #~"(0.i64 - 8.i64).u64").
 
 
 #---: Labels
@@ -2624,7 +2627,7 @@ is #~"true" here); the payload is reached through #>"match" or an
 Also, a #~"match" clause that exits the current scope (using a #~"return", #~"break"
 or #~"continue") will also 'narrow' a named target for the remainder of that
 scope -- ie. the type of that named target will exclude the subtypes where a
-matching #~"of" clause has resulted in exiting the current scope. The same
+matching #~"case" clause has resulted in exiting the current scope. The same
 applies to a diverging #>"if" branch over an arm predicate: after
 #~"if o.none then return", the remainder of the scope knows the condition
 was false. When such exit-exclusions leave a single payload arm, the name
@@ -4374,8 +4377,9 @@ the result's lifetime. #~"out type.borrow" is refused.
 
 As a compiler method on instances (#~"x.borrow"): valid on all types. For
 reftypes, returns a borrowed reference and exclusively locks the receiver.
-For valtypes, returns a copy without locking. See
-[#> to=borrow-method: borrow (method)].
+For valtypes, it is accepted only where it is handed to a #~".borrow"
+parameter, which takes the value by reference; a binding of it is refused
+(#~"E0200"). See [#> to=borrow-method: borrow (method)].
 
 #----: typedef
 
@@ -4977,14 +4981,14 @@ integer, enum) #~".borrow" is accepted only where it is handed to a
 borrows nothing and is a compile error.
 
 The #~"borrow" method is zero overhead -- it is a manipulation of the compile
-time type system only. Use of the #~".borrow" method is optional when passing
-to function parameters (parameters are borrowed by default).
+time type system only. Writing #~".borrow" on an argument is optional: the
+parameter's own marker decides how the argument is passed.
 
 #~".borrow" takes no arguments.
 
-#~".borrow" can be used for defining local variables -- the new variable borrows
-the value and the source name is exclusively locked while the new name is in
-scope.
+On a reftype, #~".borrow" can define a local variable: the new variable
+borrows the value, and the source name is exclusively locked while the new
+name is in scope.
 
 See also [#> to=./ownership.html: ownership].
 
@@ -5691,10 +5695,10 @@ It is not possible to specify a method spec without a function value.
 
 #----: Native Declarations
 
-The #~"native" keyword marks definitions whose implementations are provided by
-the compiler backend rather than by zerolang source code. Native declarations
-appear in the system library units (#~"system.z" and #~"collections.z") and are
-not intended for use in programmer-written code.
+The #~"native" keyword marks a declaration whose body is not written in
+zerolang. The body is C, in the C implementation file of the declaration's
+unit (#~"<unit>/nativec.zd"). Any unit may declare natives: see
+[#> to=./native_units.html: Native Units].
 
 For functions, #~"native" replaces the body expression:
 
@@ -6759,8 +6763,8 @@ supplies both the type #_*"and" the default, so a call or construction
 may omit the argument and the compiler fills the declared value at the
 site. (In a #_*"function body" the bare-type-name spelling is a value:
 #~"width: u64" binds zero -- see Zero Values under Implicit
-Construction. A unit-level binding takes literal values only; a bare
-type name there is a compile error.)
+Construction. At unit level it names a type: #~"tally: u64" is an alias
+of #~"u64" -- see [#> to=unit-level-definitions: Unit-level Definitions].)
 
 #b:"Eligible value forms."
 
