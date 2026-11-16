@@ -1079,9 +1079,19 @@ is expected at runtime (right hand side of assignments, #~"if" conditions etc.)
   #*: [#>"assignment"]
   #*: [#>"reassignment"]
   #*: [#> to=calls: call]   \# labelled
-  #*: [#> to=operations: operation]
+  #*: [#> to=binary-operations: operation]
 
 #---: assignment
+
+In a body, a label and a value (#~"name: value") define a new name in the
+current scope and bind it to the value. The name's type is the value's type:
+there is no separate type annotation, and a bare type name as the value binds
+that type's zero value (#~"n: u64" is 0; see Zero Values under Implicit
+Construction). A valtype value is copied. A reftype value that another name
+holds is borrowed: the source stays locked while the new name is in scope,
+and #~".take" moves the value instead (#~"c: m.take"). A new value -- a
+construction or a call's result -- belongs to the new name. A name is defined
+once in its scope; [#>"reassignment"] gives it a new value.
 
 #---: reassignment
 
@@ -1458,9 +1468,6 @@ so a function-typed parameter with no default names a spec.
       calc a: 1 b: 2 c: 3     # -> 6
   }
   """
-
-
-#---: Operations
 
 
 #---: Flow Control Expressions
@@ -2317,6 +2324,9 @@ have no limit.
 
 #--: Type System
 
+This part describes the two families of types, each kind of type the language
+and its standard library define, and the operations on their values.
+
 #---: Overview
 
 A type (or data type) is a group of values and the operations that can be
@@ -2340,9 +2350,8 @@ There are two broad categories of types: value types and reference types.
   [#*: 'facet' is the user defined value interface type]
   [#*: records and variants can only contain other value types]
   [#*: records have constructors]
-  [#*: no destructor (why?) (default destructor only)]
-  [#*: no other resources that need freeing (eg. can't have a file, db handle or any
-    reftype as a member)]
+  [#*: no destructor: a valtype holds nothing that needs freeing -- a file,
+    a database handle or any other reftype cannot be one of its members]
   [#*: single, contiguous block of memory of a fixed size (for all instances of this
     type)]
   [#*: variant is size of tag + size of largest possible member]
@@ -2352,17 +2361,18 @@ There are two broad categories of types: value types and reference types.
 
 #ul:
   [#*: pass-by-reference]
-  [#*: eg String, File, List, Dict, protocol, union, (others?)]
+  [#*: for example #~"String", #~"List", #~"Map", #~"File", and every class,
+    union and protocol]
   [#*: 'class' is the user defined reference product type]
   [#*: 'union' is the user defined reference sum type]
   [#*: 'protocol' is the user defined reference interface type]
   [#*: can contain value types -- the value types will be embedded]
-  [#*: can contain other reftypes (reftypes will not be embedded - store reference
-    to them only). But must have ownership.]
+  [#*: can contain other reftypes -- each is embedded too, and the class owns it]
   [#*: classes have constructors]
   [#*: can have destructor (but it doesn't destroy memory, compiler handles that)]
-  [#*: single, contiguous block of memory of a fixed size (for all instances ?? what
-    about List?) but may have references to other reftypes]
+  [#*: single, contiguous block of memory of a fixed size: a #~"String" or
+    #~"List" field holds its fixed-size header, and its contents live in a
+    separate heap block]
   [#*: mutable (but private members may be protected with accessor methods)]
   [#*: a reftype variable must always contain a valid reference. The swap operator
     can be used to take a new reference and return the old one. The destructor
@@ -2890,13 +2900,13 @@ stored and compared by #~"==" like any field.
       used: u32
   } as {
       cap: u32.generic
-      DOUBLE: cap * 2 # a u32 constant of each instance
+      doubled: cap * 2 # a u32 constant of each instance
       describe: function {b: this} out u32 is {
           if cap > 4 then { print "big" } else { print "small" }
           a: array t: i64 to: cap * 2 # 10 elements in (Box cap: 5)
           c: cap # a slot, read at run time
           print "\{a.length} \{c} \{cap.u64}"
-          return b.stored + b.used + DOUBLE
+          return b.stored + b.used + doubled
       }
   }
 
@@ -3004,9 +3014,9 @@ in a nested unit are both of type #~"(wrap n: 3).n".
 
 A constant of the template -- a generic unit's definition or an #~"as"
 constant -- may read the parameter (#~"big: if cap > 4 then { 1 } else { 0 }",
-#~"DOUBLE: cap * 2"). It is evaluated for each instance. So is a constant
-that reads such a constant (#~"E: DOUBLE * 2"), however long the chain is.
-#~"DOUBLE" is a #~"u32" constant. #~"C: cap.create" is a constant of the
+#~"doubled: cap * 2"). It is evaluated for each instance. So is a constant
+that reads such a constant (#~"quadrupled: doubled * 2"), however long the
+chain is. #~"doubled" is a #~"u32" constant. #~"capValue: cap.create" is a constant of the
 singleton type, whose value is the argument. A constant is read bare inside
 the template, through a unit instance (#~"eight.big"), or through the type
 inside the template's own methods. Read through the template from anywhere
@@ -4060,13 +4070,13 @@ A unit's numeric generic parameter is a singleton type in each instance, as
 a type's is (see [#> to=generic-types: generic types]). A type or a unit
 written inside the unit inherits the parameter, and in each unit instance it
 is the same type: below, #~"size" and the local #~"c" are both of type
-#~"(wrap n: 3).n". A definition that reads the parameter (#~"TRIPLE") is
+#~"(wrap n: 3).n". A definition that reads the parameter (#~"tripled") is
 evaluated for each instance, and a read through the instance (#~"w3.n") folds:
 
 #code language=zerolang: """
   wrap: unit {
       n: u32.generic
-      TRIPLE: n * 3
+      tripled: n * 3
       box: record {
           size: n
           v: i64
@@ -4083,7 +4093,7 @@ evaluated for each instance, and a read through the instance (#~"w3.n") folds:
 
   main: function is {
       b: w3.box v: 7
-      print "\{b.size} \{w3.TRIPLE} \{w3.inner.twice}"   # 3 9 6
+      print "\{b.size} \{w3.tripled} \{w3.inner.twice}"   # 3 9 6
       if w3.n > 8 then { error msg: "wrap takes at most 8" }
   }
   """
@@ -6277,7 +6287,7 @@ at the subtype construction form.
 
   # classes are not copy by value. Constructor is always run before object is
   # returned
-  # embedded records are inlined(??). There cannot be any name conflicts
+  # a record field is stored inside the class
   MyRefType: class {
       aa: 1
       bb: 2
@@ -8159,15 +8169,8 @@ The compiler derives no run-time twin of a static type.
 
 #---: Operations
 
-#----: Constants and Variables
-
-Literals
-Top level definitions
-
-Names - identifiers
-
-Declaration and Initialisation (happen at the same time, must be initialised)
-Includes functions definitions/literals.
+An operation is a method call written between its two operands. This section
+gives the rules of operations and the equality operators every type receives.
 
 #----: Binary operations
 
@@ -8354,6 +8357,9 @@ project explicitly with #~".stringView" to bring both operands into the
 same type.
 
 #--: Compile Time Operations
+
+The compiler evaluates some expressions while it compiles the program: this
+part says which, and what it does with the results.
 
 #---: Constant Folding
 
@@ -8632,13 +8638,13 @@ reached as a winning branch is: #~"for loop { error \"todo\" }" is a compile-tim
 error.
 
 #code language=zerolang: """
-  MODE: 1
+  mode: 1
 
   main: function is {
-      if MODE == 0 then {
-          error "MODE must not be zero"
+      if mode == 0 then {
+          error "mode must not be zero"
       }
-      # compiles successfully because MODE is 1
+      # compiles successfully because mode is 1
   }
   """
 
