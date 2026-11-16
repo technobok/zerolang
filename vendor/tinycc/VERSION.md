@@ -12,8 +12,9 @@ DLLs with tcc's `-impdef`. Built by upstream's own Makefile from a staged copy
 under `out/`; see the Makefile `out/tcc` rule.
 
 LGPL-2.1 in this dual MIT/Apache tree means **dlopen only, never static-link**:
-static linking is what triggers LGPL section 6's relink obligation. `make
-static-tcc-guard` enforces it -- no driver binary may define `tcc_new`.
+static linking is what triggers LGPL section 6's relink obligation. The test
+runner's statictcc kind (`make test`) enforces it -- no driver binary may name
+`tcc_new`.
 
 ## Local patches
 

@@ -1,0 +1,122 @@
+# piece -- the PIECE kind (in every full run, and `--only piece`): `zc natives
+# check needs` (src/znativepieces.z) holds what the emitter and the rows say
+# they need to what their C calls, piece by piece. It first runs on a copy of
+# the emitter with one record left out, the need of @quadmath_snprintf, and
+# must report it; then on the emitter itself, and must pass.
+# A subunit of ztestrunner.
+
+# pieceWord -- the record left out of the copy, and what the report of its
+# absence names
+pieceWord: list {
+    taken: "preludeNeed :ctx memb: \"@quadmath_snprintf\""
+    named: "quadmath_snprintf"
+    failed: "FAIL"
+} out staticlist StringView
+
+# runPieceCases -- the piece kind
+runPieceCases: function {r: Runner} is {
+    dirText: "\{r.tmp}/piece"
+    dir: dirText.stringView
+    left: copyEmitterWithout :r to: dir
+    if left == 0 then {
+        print "FAIL(piece) no file of the emitter holds `\{pieceWord.taken}`, so the copy proves nothing -- name a record it holds"
+        r.fails = r.fails + 1
+        return
+    }
+    jobs: List PoolJob
+    jobs.append (needsJob :r emitter: "\{dir}/zemitterc.z".stringView tag: "\{dir}/copy".stringView)
+    jobs.append (
+        needsJob
+        :r
+        emitter: "\{r.srcDir}/zemitterc.z".stringView
+        tag: "\{dir}/own".stringView
+    )
+    statuses: ListVal i32
+    failSteps: ListVal i64
+    runJobs :jobs maxJobs: r.jobsMax :statuses :failSteps
+    bad: u64
+    reported: false
+    copyOut: slurp path: "\{dir}/copy.out".stringView
+    for each ln: copyOut.stringView.lines loop {
+        if (ln.contains needle: pieceWord.failed) when (ln.contains needle: pieceWord.named
+        ) then reported = true
+    }
+    if reported.false then {
+        print "FAIL(piece) zc natives check needs gives no report on an emitter with `\{pieceWord.taken}` removed (\{dir}/copy.out)"
+        bad = bad + 1
+    }
+    if (statuses.get i: 1) != 0 then {
+        print "FAIL(piece) zc natives check needs fails on the emitter:"
+        own: slurp path: "\{dir}/own.out".stringView
+        for each ln: own.stringView.lines loop {
+            if (ln.contains needle: pieceWord.failed) then print "  \{ln}"
+        }
+        bad = bad + 1
+    }
+    if bad > 0 then {
+        r.fails = r.fails + bad
+        return
+    }
+    ownOut: slurp path: "\{dir}/own.out".stringView
+    print ownOut.stringView.trimEnd
+    r.passN = r.passN + 1
+}
+
+# copyEmitterWithout -- src/zemitterc.z and its subunits copied under `to`,
+# each line holding pieceWord.taken left out; answers how many lines were
+# left out
+copyEmitterWithout: function {r: Runner.view to: StringView} out u64 is {
+    io.mkdirp path: "\{to}/zemitterc"
+    left: copyWithout from: "\{r.srcDir}/zemitterc.z".stringView to: "\{to}/zemitterc.z".stringView
+    sub: "\{r.srcDir}/zemitterc"
+    for each n: (fixtureNames dir: sub.stringView suffix: ".z") loop {
+        k: copyWithout from: "\{sub}/\{n}.z".stringView to: "\{to}/zemitterc/\{n}.z".stringView
+        left = left + k
+    }
+    return left
+}
+
+# copyWithout -- the file `from` written to `to` with each line holding
+# pieceWord.taken left out; answers how many were
+copyWithout: function {from: StringView to: StringView} out u64 is {
+    text: slurp path: from
+    kept: String
+    left: u64
+    for each ln: text.stringView.lines loop {
+        if (ln.contains needle: pieceWord.taken) then {
+            left = left + 1
+        } else {
+            kept.append ln
+            kept.appendByte b: ascii.lf
+        }
+    }
+    w: io.writeText path: to content: kept
+    w.drop
+    return left
+}
+
+# needsJob -- `zc natives check needs` of the emitter at `emitter`, its report
+# in `<tag>.out`
+needsJob: function {r: Runner.view emitter: StringView tag: StringView} out PoolJob is {
+    a: List String
+    a.append from: r.zc.copy
+    a.append from: "natives".string
+    a.append from: "check".string
+    a.append from: "needs".string
+    a.append from: "--emitter".string
+    a.append from: emitter.string
+    a.append from: "--system".string
+    a.append from: r.sys.copy
+    steps: List PoolStep
+    steps.append (
+        mkStep
+        argv: a
+        cwd: ""
+        outPath: "\{tag}.out".stringView
+        errPath: "\{tag}.err".stringView
+        timeoutSecs: r.timeoutSecs
+        allowFail: true
+        zlinkFrom: ""
+    )
+    return (mkJob name: tag :steps)
+}

@@ -1001,6 +1001,16 @@ kindWord: list {
     pedantic: "pedantic"
     # the C test programs, tests/c/*_test.c (`make shim-guard`)
     ctest: "ctest"
+    # zc natives show places what zc emit --mark-natives marks (also in `make test`)
+    natives: "natives"
+    # a unit outside the standard library builds and runs its own natives
+    # (also in `make test`)
+    usernative: "usernative"
+    # the emitter's needs hold to what its C calls, piece by piece (also in
+    # `make test`)
+    piece: "piece"
+    # no libtcc symbol is linked into the drivers (also in `make test`)
+    statictcc: "statictcc"
 } out staticlist StringView
 
 # test-runner entry point: build the compiler, run the
@@ -4981,6 +4991,12 @@ printUsage: function is {
     io.eprintln "                           -Wpedantic diagnostic under --cc and --ccflags"
     io.eprintln "                  ctest    the C test programs, tests/c/*_test.c, built by --cc"
     io.eprintln "                           (--ccflags after the file) and run under --exec"
+    io.eprintln "                  natives  zc natives show places what zc emit --mark-natives marks"
+    io.eprintln "                  usernative  a unit outside the standard library builds and runs its"
+    io.eprintln "                           own natives, and check rows refuses a mistyped key"
+    io.eprintln "                  piece    zc natives check needs reports a record taken out of the"
+    io.eprintln "                           emitter, and passes the emitter itself"
+    io.eprintln "                  statictcc  no libtcc symbol in the zc, zl and zls beside --zc"
     io.eprintln "A value is written `--name VALUE` or `--name=VALUE`."
 }
 
@@ -5148,7 +5164,7 @@ refuseMisuse: function {r: Runner.view p: cli.Parsed.view} is {
     }
     written: textOr :p name: opt.only d: ""
     if written.length > 0 when r.only == kindWord.length then {
-        unknown: "ztestrunner: --only takes run, doccode, agree, arch, emitted, vocab, pins, fixtures, usage, probes, pedantic or ctest, not '\{written}'"
+        unknown: "ztestrunner: --only takes run, doccode, agree, arch, emitted, vocab, pins, fixtures, usage, probes, pedantic, ctest, natives, usernative, piece or statictcc, not '\{written}'"
         refuse unknown.stringView
     }
     runOnly: r.only == kindWord.slot.run
@@ -5297,6 +5313,10 @@ runKinds: function {r: Runner} is {
         vocab.runVocabCases :r
         pins.runPinsCases :r
         fixtures.runFixtureCases :r
+        natives.runNativesCases :r
+        usernative.runUserNativeCases :r
+        piece.runPieceCases :r
+        statictcc.runStaticTccCases :r
         runDoccodeCases :r
         runDocPageCases :r
         runSelfhostAsan :r
@@ -5325,7 +5345,8 @@ runKinds: function {r: Runner} is {
     }
 }
 
-# runOneKind -- the one kind `--only` names
+# runOneKind -- the one kind `--only` names, when it is one this file holds;
+# runSubunitKind runs the kinds the subunits hold
 runOneKind: function {r: Runner} is {
     if r.only == kindWord.slot.doccode then {
         runDoccodeCases :r
@@ -5336,7 +5357,14 @@ runOneKind: function {r: Runner} is {
         runArchCases :r
     } else if r.only == kindWord.slot.run then {
         runRunCases :r
-    } else if r.only == kindWord.slot.emitted then {
+    } else if r.only == kindWord.slot.usage then {
+        runUsageCases :r
+    } else runSubunitKind :r
+}
+
+# runSubunitKind -- the one kind `--only` names, of those a subunit holds
+runSubunitKind: function {r: Runner} is {
+    if r.only == kindWord.slot.emitted then {
         emitted.runEmittedCases :r
     } else if r.only == kindWord.slot.vocab then {
         vocab.runVocabCases :r
@@ -5344,14 +5372,20 @@ runOneKind: function {r: Runner} is {
         pins.runPinsCases :r
     } else if r.only == kindWord.slot.fixtures then {
         fixtures.runFixtureCases :r
-    } else if r.only == kindWord.slot.usage then {
-        runUsageCases :r
     } else if r.only == kindWord.slot.probes then {
         probes.runProbeCases :r
     } else if r.only == kindWord.slot.pedantic then {
         pedantic.runPedanticCases :r
     } else if r.only == kindWord.slot.ctest then {
         ctests.runCtestCases :r
+    } else if r.only == kindWord.slot.natives then {
+        natives.runNativesCases :r
+    } else if r.only == kindWord.slot.usernative then {
+        usernative.runUserNativeCases :r
+    } else if r.only == kindWord.slot.piece then {
+        piece.runPieceCases :r
+    } else if r.only == kindWord.slot.statictcc then {
+        statictcc.runStaticTccCases :r
     }
 }
 

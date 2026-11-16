@@ -119,9 +119,8 @@ NAMES    := $(filter-out $(SKIP),$(basename $(notdir $(EXAMPLES))))
 	tcc zc zl zls regen-goldens regen-fmt-goldens regen-matrix matrix-guard regen-constparity constparity-guard regen-math-asm \
 	fmt-raw-guard regen-lsp-goldens bump-seed test-bootstrap install docs warn-check pedantic-check perf \
 	perf-strict pre-push perf-elision \
-	user-native-guard shim-guard thread-tsan-guard cobj-guard sqlite-decls-guard mode-parity \
-	static-tcc-guard emit-set ident-set \
-	piece-guard \
+	shim-guard thread-tsan-guard cobj-guard sqlite-decls-guard mode-parity \
+	emit-set ident-set \
 	view-guard clean native-guard \
 	
 # Keep the per-example .c intermediates.
@@ -213,28 +212,6 @@ arch-check: bin/zc bin/zl $(BUILDDIR)/ztestrunner
 emitted-check: bin/zc bin/zl $(BUILDDIR)/ztestrunner
 	$(BUILDDIR)/ztestrunner --zc bin/zc --cc $(CC) --root . --jobs $(NPROC) --only emitted
 
-# natives-show-guard -- `zc natives show` names where each thing it shows is
-# written: each row `zc emit --mark-natives` marks in a program's C, shown, is
-# placed at the file and line its mark names; a row's fragment's C is shown; a
-# unit lists its rows; a name that is none of them is refused.
-natives-show-guard: bin/zc
-	@fail=0; d=$(BUILDDIR)/natives-show; mkdir -p $$d; \
-	bin/zc emit examples/io_textreader.z --system lib/system --mark-natives -o $$d/marked.c || fail=1; \
-	grep -E '^/\* nativec: (row|class) ' $$d/marked.c | sort -u | sed -E 's|^/\* nativec: (row\|class) (.*), (.*) \*/$$|\2  \3|' > $$d/rows.txt; \
-	[ -s $$d/rows.txt ] || { echo "natives-show-guard FAIL: zc emit --mark-natives marked no row"; fail=1; }; \
-	while IFS= read -r m; do \
-	  bin/zc natives show "$${m%%  *}" --system lib/system | grep -qxF "$$m" \
-	    || { echo "natives-show-guard FAIL: the mark says '$$m', zc natives show does not"; fail=1; }; \
-	done < $$d/rows.txt; \
-	bin/zc natives show io.eprintln --system lib/system | grep -q 'static void z_io_eprintln' \
-	  || { echo "natives-show-guard FAIL: io.eprintln's fragment is not shown"; fail=1; }; \
-	bin/zc natives show io --system lib/system | grep -q '^io.eprintln  ' \
-	  || { echo "natives-show-guard FAIL: the unit io does not list io.eprintln"; fail=1; }; \
-	bin/zc natives show io.nosuch --system lib/system > /dev/null 2>&1 \
-	  && { echo "natives-show-guard FAIL: a row that does not exist was shown"; fail=1; }; \
-	if [ $$fail -ne 0 ]; then exit 1; fi; \
-	echo "natives-show-guard OK: zc natives show places each row where zc emit --mark-natives marks it, and shows its C"
-
 # prelude-share-guard -- a parse that reads on from the prelude another parse
 # kept (zparser.Parser.parseShared) builds the tree that parse would have built
 # itself. `zc dump` of one program in two projects: in the first, the program's
@@ -287,8 +264,8 @@ ci:
 # the end (`make -k -j gate-guards`). The gate runs check, test, perf-strict and
 # the clang and tcc corpora itself.
 GATE_GUARDS := style-lint warn-check pedantic-check native-guard view-guard emitted-check \
-	piece-guard user-native-guard shim-guard thread-tsan-guard cobj-guard sqlite-decls-guard \
-	static-tcc-guard fmt-raw-guard nativec-agree-guard natives-show-guard prelude-share-guard \
+	shim-guard thread-tsan-guard cobj-guard sqlite-decls-guard \
+	fmt-raw-guard nativec-agree-guard prelude-share-guard \
 	math-asm-guard matrix-guard constparity-guard test-math-noasm test-portable-scalars \
 	test-msvc-wine
 # GATE_SAME_C -- the legs that only rebuild and run the emitted C of the run
@@ -1397,76 +1374,6 @@ cobj-guard: bin/zc $(BUILDDIR)/tcc
 	if [ $$fail -ne 0 ]; then exit 1; fi; \
 	echo "cobj-guard OK: a unit's C source builds once per compiler, target and defines, shared by parallel builds"
 
-# user-native-guard -- a unit outside the standard library with its own C
-# implementation file (`<unit>/nativec.zd`) compiles, links and runs, one native in a hidden subunit, and a
-# `when=` variant replaces its plain row exactly when its fact holds; and a
-# generic native class (cellar.Cell) is instantiated per element type from the
-# C template its class entry names, and a generic native function (cellar.holding)
-# is the template function of the instance it answers; and an `os=windows` @unit row links
-# for a windows target and nowhere else. Each unit's rows, fragments and
-# templates are its own nativec.zd's.
-# A user unit's class template is written whole where it has no member
-# sections, and the member words a section may name are the runtime's own
-# (memberWord): Cell's `puts` and `holding`, which one instance calls and
-# another does not, are the user's C, as a hand-written shim's functions are.
-USERTMPLCFLAGS := -Wno-unused-function
-
-user-native-guard: bin/zc
-	@d=$$(mktemp -d); fail=0; \
-	bin/zc mystery --src tests/fixtures/user_native --system lib/system \
-	  --emit-c $$d/mystery.c > $$d/emit.log 2>&1 \
-	  || { echo "user-native-guard FAIL: emit"; sed -n 1,5p $$d/emit.log; fail=1; }; \
-	if [ $$fail -eq 0 ]; then \
-	  $(CC) $(CFLAGS) -o $$d/mystery $$d/mystery.c $(call ZLINKOF,$$d/mystery.c) -lm > $$d/cc.log 2>&1 \
-	    || { echo "user-native-guard FAIL: the unit's fragment did not load (link)"; \
-	         grep -m1 error $$d/cc.log; fail=1; }; \
-	fi; \
-	if [ $$fail -eq 0 ]; then \
-	  grep -q '^/\* zlink:.*pthread' $$d/mystery.c \
-	    || { echo "user-native-guard FAIL: the held fact's @unit variant did not add its link= library"; fail=1; }; \
-	fi; \
-	if [ $$fail -eq 0 ]; then \
-	  got=$$($$d/mystery | tr '\n' ' '); \
-	  if [ "$$got" != "49 42 3 63 " ]; then \
-	    echo "user-native-guard FAIL: ran but printed '$$got', want '49 42 3 63 '"; fail=1; fi; \
-	fi; \
-	if [ $$fail -eq 0 ]; then \
-	  bin/zc cellar --src tests/fixtures/user_native --system lib/system \
-	    --emit-c $$d/cellar.c > $$d/cemit.log 2>&1 \
-	    || { echo "user-native-guard FAIL: emit cellar"; sed -n 1,5p $$d/cemit.log; fail=1; }; \
-	fi; \
-	if [ $$fail -eq 0 ]; then \
-	  $(CC) $(CFLAGS) $(USERTMPLCFLAGS) -o $$d/cellar $$d/cellar.c $(call ZLINKOF,$$d/cellar.c) -lm > $$d/ccc.log 2>&1 \
-	    || { echo "user-native-guard FAIL: the templated class did not compile"; grep -m3 error $$d/ccc.log; fail=1; }; \
-	fi; \
-	if [ $$fail -eq 0 ]; then \
-	  got=$$($$d/cellar | tr '\n' ' '); \
-	  if [ "$$got" != "42 false true 1 true true " ]; then \
-	    echo "user-native-guard FAIL: cellar printed '$$got', want '42 false true 1 true true '"; fail=1; fi; \
-	fi; \
-	if [ $$fail -eq 0 ]; then \
-	  for t in x86_64-w64-mingw32:win x86_64-linux-gnu:lin; do \
-	    bin/zc cellar --src tests/fixtures/user_native --system lib/system \
-	      --target $${t%%:*} --emit-c $$d/cellar_$${t#*:}.c > $$d/temit.log 2>&1 \
-	      || { echo "user-native-guard FAIL: emit cellar for $${t%%:*}"; sed -n 1,5p $$d/temit.log; fail=1; }; \
-	  done; \
-	fi; \
-	if [ $$fail -eq 0 ]; then \
-	  $(ZLINKSED) $$d/cellar_win.c | grep -qw winmm && ! $(ZLINKSED) $$d/cellar_lin.c | grep -qw winmm \
-	    || { echo "user-native-guard FAIL: an os=windows @unit row must link for a windows target and only there"; fail=1; }; \
-	fi; \
-	for u in mystery cellar; do \
-	  bin/zc natives check rows tests/fixtures/user_native/$$u --system lib/system > $$d/rows.log 2>&1 \
-	    || { echo "user-native-guard FAIL: zc natives check rows refuses $$u's rows"; sed -n 1,5p $$d/rows.log; fail=1; }; \
-	done; \
-	mkdir -p $$d/typo; cp -r tests/fixtures/user_native/mystery.z tests/fixtures/user_native/mystery $$d/typo/; \
-	sed -i 's/key: "triple"/key: "tripel"/' $$d/typo/mystery/nativec.zd; \
-	bin/zc natives check rows $$d/typo/mystery --system lib/system 2>&1 | grep -q 'row mystery.tripel names no declaration' \
-	  || { echo "user-native-guard FAIL: zc natives check rows let a mistyped key (mystery.tripel) through"; fail=1; }; \
-	rm -rf $$d; \
-	if [ $$fail -ne 0 ]; then exit 1; fi; \
-	echo "user-native-guard OK: a unit outside the standard library links and runs its own natives, a hidden subunit's among them, a fact's variant chosen, a generic and a non-generic class from their templates, a generic function from its result's, an os= row only for its OS; zc natives check rows passes both units and refuses a mistyped key"
-
 # shim-guard -- the C thread shim (system's prelude.@zthread row, written to
 # $(NATIVEC_INC)/zthread_shim.inc) passes its own test under every compiler zc
 # drives and under ThreadSanitizer: tests/c/zthread_shim_test.c exercises each
@@ -1542,29 +1449,6 @@ mode-parity: bin/zc $(BUILDDIR)/tcc $(BUILDDIR)/ztestrunner
 	done; \
 	echo "mode-parity OK: zc build --cc tcc builds every run case to its goldens under --cc-mode spawn and inproc, refusing $(TCC_KNOWN)'s in both"
 
-# static-tcc-guard -- the vendored tinycc is LGPL-2.1, so the drivers may only
-# dlopen it: no libtcc symbol may appear in them (see vendor/tinycc/VERSION.md).
-# STATIC_TCC_BINS overrides the binaries checked, to falsify the guard. A binary
-# whose symbols cannot be read fails it: "found no libtcc symbol" proves nothing
-# about a file nm never opened (on Windows the drivers are bin/zc.exe ...).
-STATIC_TCC_BINS ?= bin/zc$(EXE) bin/zl$(EXE) bin/zls$(EXE)
-static-tcc-guard: bin/zc bin/zl bin/zls
-	@fail=0; \
-	for b in $(STATIC_TCC_BINS); do \
-	  if ! nm -A $$b > /dev/null 2>&1; then \
-	    echo "static-tcc-guard FAIL: cannot read the symbols of $$b"; fail=1; continue; fi; \
-	  if nm -A $$b 2>/dev/null | grep -qE ' tcc_(new|delete|set_lib_path|output_file|add_file)$$'; then \
-	    echo "static-tcc-guard FAIL: $$b names a libtcc symbol -- it must be dlopen'd, never linked"; \
-	    fail=1; \
-	  fi; \
-	done; \
-	if [ $$fail -ne 0 ]; then \
-	  echo "  vendored tinycc is LGPL-2.1 in a dual MIT/Apache tree: dynamic LOADING only."; \
-	  echo "  See vendor/tinycc/VERSION.md and the Third-party table in README.md."; \
-	  exit 1; \
-	fi; \
-	echo "static-tcc-guard OK: no libtcc symbols in the driver binaries"
-
 # emit-set / ident-set -- the byte-identity oracle for refactors. `make emit-set
 # OUT=dir [ZC=...]` emits every example, corpus program and driver; `make
 # ident-set A=dir B=dir` diffs two sets with every minted id normalised away.
@@ -1599,29 +1483,6 @@ ident-set:
 	  echo "ident-set: $$(grep -c . "$$rep") file(s) differ after normalisation ($$raw raw):"; \
 	  sed 's/^/  /' "$$rep" | head -60; rm -rf "$$na" "$$nb" "$$rep"; exit 1; \
 	fi
-
-# piece-guard -- a piece of a fixed file or of a row's fragment is written only
-# where written C needs it (loadPieces in the zemitterc unit), so every text that
-# calls what a piece defines must say so: a row and another piece by its needs,
-# a template by its needs and its sections', and the emitter by `preludeNeed
-# :ctx memb: "@<piece>"` in the definition that spells the name. Text outside
-# every piece may call none. Each piece closes the #if it opens, each piece name
-# is defined once, a need's condition is declared, a row with pieces is the
-# prelude's or answers @unit, one demand word fires one class's members, and a
-# fragment calling an instance's member by its canon names it in members
-# (`zc natives check needs`, src/znativepieces.z). It first runs on a copy of the
-# emitter with one record removed, and must report it.
-PIECE_GUARD_DIR := $(BUILDDIR)/piece-guard
-piece-guard: bin/zc
-	@rm -rf $(PIECE_GUARD_DIR); mkdir -p $(PIECE_GUARD_DIR)/zemitterc; \
-	for f in $(EMITTER_SRCS); do \
-	  grep -vF 'preludeNeed :ctx memb: "@quadmath_snprintf"' $$f > $(PIECE_GUARD_DIR)/$${f#src/}; \
-	done; \
-	got=$$(bin/zc natives check needs --emitter $(PIECE_GUARD_DIR)/zemitterc.z --system lib/system | grep -c 'FAIL.*quadmath_snprintf'); \
-	if [ "$$got" = 0 ]; then \
-	  echo "piece-guard FAIL: an emitter record removed gives no report"; exit 1; \
-	fi; \
-	bin/zc natives check needs --emitter src/zemitterc.z --system lib/system
 
 # view-guard -- a native receiver marked `.view` is const in the C function that
 # takes it, and a const one is marked `.view`, so the C compiler proves a viewed

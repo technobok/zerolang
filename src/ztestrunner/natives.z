@@ -1,0 +1,162 @@
+# natives -- the NATIVES kind (in every full run, and `--only natives`):
+# `zc natives show` names where each thing it shows is written. Each row and
+# class `zc emit --mark-natives` marks in examples/io_textreader.z's C, shown,
+# is placed at the file and line its mark names; a row's fragment's C is shown;
+# a unit lists its rows; a name that is none of them is refused.
+# A subunit of ztestrunner.
+
+# markWord -- how a mark in the emitted C opens and closes, and what parts it
+markWord: list {
+    row: "/* nativec: row "
+    klass: "/* nativec: class "
+    close: " */"
+    # what stands between the name and the place
+    comma: ", "
+} out staticlist StringView
+
+# runNativesCases -- the natives kind
+runNativesCases: function {r: Runner} is {
+    dirText: "\{r.tmp}/natives"
+    dir: dirText.stringView
+    io.mkdirp path: dir
+    marked: "\{dir}/marked.c"
+    ea: List String
+    ea.append from: r.zc.copy
+    ea.append from: "emit".string
+    ea.append from: "\{r.root}/examples/io_textreader.z"
+    ea.append from: "--system".string
+    ea.append from: r.sys.copy
+    ea.append from: "--mark-natives".string
+    ea.append from: "-o".string
+    ea.append from: marked.copy
+    elog: "\{dir}/emit.log"
+    rc: (
+        os.spawn
+        argv: ea
+        cwd: ""
+        outPath: os.nullDevice.stringView
+        errPath: elog.stringView
+        timeoutSecs: r.timeoutSecs
+    )
+    if rc != 0 then {
+        print "FAIL(natives) zc emit --mark-natives of examples/io_textreader.z exited \{rc} (\{elog})"
+        r.fails = r.fails + 1
+        return
+    }
+    marks: marksOf path: marked.stringView
+    if marks.length == 0 then {
+        print "FAIL(natives) zc emit --mark-natives marked no row in examples/io_textreader.z's C"
+        r.fails = r.fails + 1
+        return
+    }
+    jobs: List PoolJob
+    for each m: marks loop {
+        name: m.stringView.substring from: 0 to: ((m.stringView.indexOf "  ").or d: m.length)
+        jobs.append (showJob :r :dir what: name n: jobs.length)
+    }
+    jobs.append (showJob :r :dir what: "io.eprintln" n: jobs.length)
+    jobs.append (showJob :r :dir what: "io" n: jobs.length)
+    jobs.append (showJob :r :dir what: "io.nosuch" n: jobs.length)
+    statuses: ListVal i32
+    failSteps: ListVal i64
+    runJobs :jobs maxJobs: r.jobsMax :statuses :failSteps
+    bad: u64
+    i: u64
+    for i < marks.length loop {
+        mark: marks.get :i
+        if ((showLines :dir n: i).contains item: mark).not then {
+            print "FAIL(natives) the mark says '\{mark}', zc natives show does not"
+            bad = bad + 1
+        }
+        i = i + 1
+    }
+    k: marks.length
+    shown: slurp path: (showOut :dir n: k).stringView
+    if (shown.stringView.contains needle: "static void z_io_eprintln").not then {
+        print "FAIL(natives) zc natives show io.eprintln does not show its fragment's C"
+        bad = bad + 1
+    }
+    listed: false
+    for each ln: (showLines :dir n: k + 1) loop {
+        if ln.startsWith "io.eprintln  " then listed = true
+    }
+    if listed.false then {
+        print "FAIL(natives) zc natives show io does not list io.eprintln"
+        bad = bad + 1
+    }
+    if (statuses.get i: k + 2) == 0 then {
+        print "FAIL(natives) zc natives show io.nosuch, a row that does not exist, was shown"
+        bad = bad + 1
+    }
+    if bad > 0 then {
+        r.fails = r.fails + bad
+        return
+    }
+    print "natives: zc natives show places each of \{marks.length} rows where zc emit --mark-natives marks it, and shows its C"
+    r.passN = r.passN + 1
+}
+
+# marksOf -- each distinct row or class mark of the C at `path`, as
+# `zc natives show` prints its first line
+marksOf: function {path: StringView} out List String is {
+    marks: List String
+    text: slurp :path
+    for each ln: text.stringView.lines loop {
+        mark: markOf line: ln
+        if mark.length > 0 when (marks.contains item: mark).false then marks.append mark.take
+    }
+    return marks
+}
+
+# markOf -- the row or class mark `line` as `<name>  <place>`; empty when the
+# line is no such mark
+markOf: function {line: StringView} out String is {
+    start: u64
+    if line.startsWith markWord.row then start = markWord.row.length
+    if line.startsWith markWord.klass then start = markWord.klass.length
+    if start == 0 then return "".string
+    if (line.endsWith markWord.close).not then return "".string
+    body: (line.substring from: start to: line.length - markWord.close.length).string
+    at: body.stringView.lastIndexOf markWord.comma
+    if at.none then return "".string
+    name: (body.stringView.substring from: 0 to: at).string
+    place: (body.stringView.substring from: at + markWord.comma.length to: body.length).string
+    return "\{name}  \{place}"
+}
+
+# showJob -- `zc natives show <what>`, its stdout to the n-th output file
+showJob: function {r: Runner.view dir: StringView what: StringView n: u64} out PoolJob is {
+    a: List String
+    a.append from: r.zc.copy
+    a.append from: "natives".string
+    a.append from: "show".string
+    a.append from: what.string
+    a.append from: "--system".string
+    a.append from: r.sys.copy
+    outp: showOut :dir :n
+    steps: List PoolStep
+    steps.append (
+        mkStep
+        argv: a
+        cwd: ""
+        outPath: outp.stringView
+        errPath: os.nullDevice.stringView
+        timeoutSecs: r.timeoutSecs
+        allowFail: true
+        zlinkFrom: ""
+    )
+    return (mkJob name: what :steps)
+}
+
+# showOut -- where the n-th `zc natives show` writes
+showOut: function {dir: StringView n: u64} out String is {
+    return "\{dir}/show\{n}.out"
+}
+
+# showLines -- the lines the n-th `zc natives show` printed
+showLines: function {dir: StringView n: u64} out List String is {
+    l: List String
+    text: slurp path: (showOut :dir :n).stringView
+    for each ln: text.stringView.lines loop l.append ln.string
+    return l
+}

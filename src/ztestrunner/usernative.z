@@ -1,0 +1,289 @@
+# usernative -- the USERNATIVE kind (in every full run, and `--only
+# usernative`): a unit outside the standard library with its own C
+# implementation file (`<unit>/nativec.zd`, tests/fixtures/user_native) builds
+# and runs. mystery has one native in a hidden subunit, and a `when=` variant
+# that replaces its plain row exactly when its fact holds, which adds a link
+# library (pthread). cellar has a generic native class instantiated per element
+# type from the C template its class entry names, a generic native function
+# that is the template function of the instance it answers, and an
+# `os=windows` @unit row that links winmm for a Windows target and nowhere
+# else. `zc natives check rows` passes both units and refuses a mistyped key.
+# A subunit of ztestrunner.
+
+# userNativeOut -- what each program prints
+userNativeOut: list {
+    mystery: "49\n42\n3\n63\n"
+    cellar: "42\nfalse\ntrue 1\ntrue\ntrue\n"
+} out staticlist StringView
+
+# typoKey -- the mistyped key the typo copy of mystery has, and the refusal
+# `zc natives check rows` must give it
+typoKey: list {
+    written: "key: \"triple\""
+    mistyped: "key: \"tripel\""
+    refusal: "row mystery.tripel names no declaration"
+} out staticlist StringView
+
+# runUserNativeCases -- the usernative kind
+runUserNativeCases: function {r: Runner} is {
+    dirText: "\{r.tmp}/usernative"
+    dir: dirText.stringView
+    io.mkdirp path: dir
+    fix: "\{r.root}/tests/fixtures/user_native"
+    typo: "\{dir}/typo"
+    if (copyMysteryWithTypo from: fix.stringView to: typo.stringView).false then {
+        print "FAIL(usernative) the typo copy of mystery under \{typo} could not be written"
+        r.fails = r.fails + 1
+        return
+    }
+    jobs: List PoolJob
+    jobs.append (userProgramJob :r :dir src: fix.stringView name: "mystery" extra: "")
+    jobs.append (
+        userProgramJob
+        :r
+        :dir
+        src: fix.stringView
+        name: "cellar"
+        extra: "-Wno-unused-function"
+    )
+    jobs.append (
+        userEmitJob
+        :r
+        :dir
+        src: fix.stringView
+        tag: "cellar_win"
+        target: "x86_64-w64-mingw32"
+    )
+    jobs.append (
+        userEmitJob
+        :r
+        :dir
+        src: fix.stringView
+        tag: "cellar_lin"
+        target: "x86_64-linux-gnu"
+    )
+    jobs.append (rowsJob :r :dir unitDir: "\{fix}/mystery".stringView tag: "rows_mystery")
+    jobs.append (rowsJob :r :dir unitDir: "\{fix}/cellar".stringView tag: "rows_cellar")
+    jobs.append (rowsJob :r :dir unitDir: "\{typo}/mystery".stringView tag: "rows_typo")
+    statuses: ListVal i32
+    failSteps: ListVal i64
+    runJobs :jobs maxJobs: r.jobsMax :statuses :failSteps
+    bad: u64
+    if (
+        userProgramHolds
+        :dir
+        name: "mystery"
+        failStep: (failSteps.get i: 0)
+        want: userNativeOut.mystery
+    ).false then bad = bad + 1
+    if (zlinkHas csrc: "\{dir}/mystery.c".stringView lib: "pthread").not then {
+        print "FAIL(usernative) mystery: the held fact's @unit variant did not add its link= library (pthread)"
+        bad = bad + 1
+    }
+    if (
+        userProgramHolds
+        :dir
+        name: "cellar"
+        failStep: (failSteps.get i: 1)
+        want: userNativeOut.cellar
+    ).false then bad = bad + 1
+    win: zlinkHas csrc: "\{dir}/cellar_win.c".stringView lib: "winmm"
+    lin: zlinkHas csrc: "\{dir}/cellar_lin.c".stringView lib: "winmm"
+    if ((failSteps.get i: 2) >= 0) or ((failSteps.get i: 3) >= 0) or win.not or lin then {
+        print "FAIL(usernative) cellar: an os=windows @unit row must link winmm for a windows target and only there"
+        bad = bad + 1
+    }
+    for each k: (listOfTwo a: 4 b: 5) loop {
+        if (statuses.get i: k) != 0 then {
+            print "FAIL(usernative) zc natives check rows refuses \{(jobs.get i: k
+            ).name} (\{dir}/\{(jobs.get i: k).name}.out)"
+            bad = bad + 1
+        }
+    }
+    said: slurp path: "\{dir}/rows_typo.out".stringView
+    if (said.stringView.contains needle: typoKey.refusal).not then {
+        print "FAIL(usernative) zc natives check rows let a mistyped key (mystery.tripel) through"
+        bad = bad + 1
+    }
+    if bad > 0 then {
+        r.fails = r.fails + bad
+        return
+    }
+    print "usernative: mystery and cellar link and run their own natives; check rows passes both and refuses a mistyped key"
+    r.passN = r.passN + 1
+}
+
+# listOfTwo -- the indexes `a` and `b`
+listOfTwo: function {a: u64 b: u64} out ListVal u64 is {
+    l: ListVal u64
+    l.append a
+    l.append b
+    return l
+}
+
+# userProgramJob -- emit program `name` from the fixture root `src`, build it
+# with --cc (and `extra`, a flag after the rest) and its declared libraries,
+# and run it
+userProgramJob: function {
+    r: Runner.view dir: StringView src: StringView name: StringView extra: StringView
+} out PoolJob is {
+    cpath: "\{dir}/\{name}.c"
+    bpath: "\{dir}/\{name}.bin"
+    opath: "\{dir}/\{name}.out"
+    steps: List PoolStep
+    steps.append (
+        mkStep
+        argv: (
+            zcArgv
+            zc: r.zc.stringView
+            ccFwd: ""
+            :name
+            srcdirs: (oneDir d: src)
+            sys: r.sys.stringView
+            outc: cpath.stringView
+        )
+        cwd: ""
+        outPath: os.nullDevice.stringView
+        errPath: "\{dir}/\{name}.zc".stringView
+        timeoutSecs: 0
+        allowFail: false
+        zlinkFrom: ""
+    )
+    ga: (
+        ccArgv
+        cc: r.cc.stringView
+        ccflags: r.ccflags.stringView
+        target: ""
+        bin: bpath.stringView
+        csrc: cpath.stringView
+        asan: false
+    )
+    if extra.length > 0 then ga.append from: extra.string
+    steps.append (
+        mkStep
+        argv: ga
+        cwd: ""
+        outPath: os.nullDevice.stringView
+        errPath: "\{dir}/\{name}.cc".stringView
+        timeoutSecs: r.timeoutSecs
+        allowFail: false
+        zlinkFrom: cpath.stringView
+        zc: r.zc.stringView
+    )
+    run: List String
+    run.append from: bpath.copy
+    steps.append (
+        mkStep
+        argv: run
+        cwd: dir
+        outPath: opath.stringView
+        errPath: os.nullDevice.stringView
+        timeoutSecs: r.timeoutSecs
+        allowFail: true
+        zlinkFrom: ""
+    )
+    return (mkJob :name :steps)
+}
+
+# userEmitJob -- emit cellar from the fixture root `src` for `target`, as
+# `<tag>.c`
+userEmitJob: function {
+    r: Runner.view dir: StringView src: StringView tag: StringView target: StringView
+} out PoolJob is {
+    cpath: "\{dir}/\{tag}.c"
+    za: (
+        zcArgv
+        zc: r.zc.stringView
+        ccFwd: ""
+        name: "cellar"
+        srcdirs: (oneDir d: src)
+        sys: r.sys.stringView
+        outc: cpath.stringView
+    )
+    za.append from: "--target".string
+    za.append from: target.string
+    steps: List PoolStep
+    steps.append (
+        mkStep
+        argv: za
+        cwd: ""
+        outPath: os.nullDevice.stringView
+        errPath: "\{dir}/\{tag}.zc".stringView
+        timeoutSecs: 0
+        allowFail: false
+        zlinkFrom: ""
+    )
+    return (mkJob name: tag :steps)
+}
+
+# rowsJob -- `zc natives check rows` of the unit directory `unitDir`, its
+# report in `<tag>.out` and its stderr in `<tag>.err`
+rowsJob: function {
+    r: Runner.view dir: StringView unitDir: StringView tag: StringView
+} out PoolJob is {
+    a: List String
+    a.append from: r.zc.copy
+    a.append from: "natives".string
+    a.append from: "check".string
+    a.append from: "rows".string
+    a.append from: unitDir.string
+    a.append from: "--system".string
+    a.append from: r.sys.copy
+    steps: List PoolStep
+    steps.append (
+        mkStep
+        argv: a
+        cwd: ""
+        outPath: "\{dir}/\{tag}.out".stringView
+        errPath: "\{dir}/\{tag}.err".stringView
+        timeoutSecs: r.timeoutSecs
+        allowFail: true
+        zlinkFrom: ""
+    )
+    return (mkJob name: tag :steps)
+}
+
+# userProgramHolds -- program `name` was emitted, built and printed `want`; a
+# FAIL line says which step broke when it did not
+userProgramHolds: function {
+    dir: StringView name: StringView failStep: i64 want: StringView
+} out bool is {
+    if failStep == 0 then {
+        print "FAIL(usernative) \{name}: zc did not emit it (\{dir}/\{name}.zc)"
+        return false
+    }
+    if failStep == 1 then {
+        print "FAIL(usernative) \{name}: its C did not build, its unit's fragments or templates among it (\{dir}/\{name}.cc)"
+        return false
+    }
+    got: slurp path: "\{dir}/\{name}.out".stringView
+    if got.stringView == want then return true
+    print "FAIL(usernative) \{name}: ran but printed other than it should (\{dir}/\{name}.out)"
+    return false
+}
+
+# zlinkHas -- the emitted C at `csrc` declares link library `lib`
+zlinkHas: function {csrc: StringView lib: StringView} out bool is {
+    want: "-l\{lib}"
+    return ((zlinkArgs :csrc fam: zcc.ccfamily.gcc).contains item: want)
+}
+
+# copyMysteryWithTypo -- the fixture unit mystery (its file and its directory)
+# copied under `to`, its key `triple` spelled `tripel` wherever it is written
+# (its nativec.zd); false when a file could not be read or written
+copyMysteryWithTypo: function {from: StringView to: StringView} out bool is {
+    unitDir: "\{to}/mystery"
+    io.mkdirp path: unitDir
+    main: slurp path: "\{from}/mystery.z".stringView
+    w1: io.writeText path: "\{to}/mystery.z" content: main
+    if w1.err then return false
+    ls: io.listDir path: "\{from}/mystery"
+    if ls.err then return false
+    for each ent: ls loop {
+        text: slurp path: "\{from}/mystery/\{ent}".stringView
+        typoed: text.stringView.replace needle: typoKey.written replacement: typoKey.mistyped
+        w: io.writeText path: "\{unitDir}/\{ent}" content: typoed
+        if w.err then return false
+    }
+    return true
+}

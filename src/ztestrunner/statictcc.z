@@ -1,0 +1,79 @@
+# statictcc -- the STATICTCC kind (in every full run, and `--only
+# statictcc`): the vendored tinycc is LGPL-2.1, so the drivers may only load it
+# at run time, never link it (see vendor/tinycc/VERSION.md): no libtcc symbol
+# may appear in zc, zl or zls, the drivers beside --zc. A driver whose symbols
+# nm cannot read fails: "found no libtcc symbol" proves nothing about a file nm
+# never opened.
+# A subunit of ztestrunner.
+
+# tccSymbol -- how nm's line for each libtcc entry point ends
+tccSymbol: list {
+    " tcc_new"
+    " tcc_delete"
+    " tcc_set_lib_path"
+    " tcc_output_file"
+    " tcc_add_file"
+} out staticlist StringView
+
+# driverName -- the drivers whose symbols are read
+driverName: list { "zc" "zl" "zls" } out staticlist StringView
+
+# runStaticTccCases -- the statictcc kind
+runStaticTccCases: function {r: Runner} is {
+    exe: ""
+    if z.build.os == z.build.oskind.windows then exe = ".exe"
+    bindir: path.dirname p: r.zc.stringView
+    jobs: List PoolJob
+    for each d: driverName loop {
+        a: List String
+        a.append from: "nm".string
+        a.append from: "-A".string
+        a.append from: "\{bindir}/\{d}\{exe}"
+        steps: List PoolStep
+        steps.append (
+            mkStep
+            argv: a
+            cwd: ""
+            outPath: "\{r.tmp}/nm_\{d}.out".stringView
+            errPath: os.nullDevice.stringView
+            timeoutSecs: r.timeoutSecs
+            allowFail: true
+            zlinkFrom: ""
+        )
+        jobs.append (mkJob name: "\{bindir}/\{d}\{exe}".stringView :steps)
+    }
+    statuses: ListVal i32
+    failSteps: ListVal i64
+    runJobs :jobs maxJobs: r.jobsMax :statuses :failSteps
+    bad: u64
+    i: u64
+    for i < jobs.length loop {
+        bin: (jobs.get :i).name.stringView
+        if (statuses.get :i) != 0 then {
+            print "FAIL(statictcc) cannot read the symbols of \{bin} (nm exited \{statuses.get :i})"
+            bad = bad + 1
+        } else if (namesTccSymbol path: "\{r.tmp}/nm_\{driverName.get :i}.out".stringView) then {
+            print "FAIL(statictcc) \{bin} names a libtcc symbol: it must be loaded at run time, never linked. The vendored tinycc is LGPL-2.1 in a dual MIT/Apache tree (vendor/tinycc/VERSION.md, the Third-party table in README.md)"
+            bad = bad + 1
+        }
+        i = i + 1
+    }
+    if bad > 0 then {
+        r.fails = r.fails + bad
+        return
+    }
+    print "statictcc: no libtcc symbol in \{bindir}'s zc, zl and zls"
+    r.passN = r.passN + 1
+}
+
+# namesTccSymbol -- a line of the nm listing at `path` ends with a libtcc
+# entry point
+namesTccSymbol: function {path: StringView} out bool is {
+    text: slurp :path
+    for each ln: text.stringView.lines loop {
+        for each s: tccSymbol loop {
+            if ln.endsWith s then return true
+        }
+    }
+    return false
+}
