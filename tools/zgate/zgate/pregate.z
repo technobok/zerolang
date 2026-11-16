@@ -1,0 +1,316 @@
+# pregate -- `zgate pregate`: the seconds-long checks to run before a gate,
+# over every .z file changed against HEAD (tracked or new), with the
+# repository's bin/zl as built now. The failures that cost a whole gate run
+# are visible on the touched files alone:
+#   format    `zl format --check` (the files the formatter's scope holds)
+#   lint      `zl lint --full` warnings and errors (style-lint fails on them)
+#   docs      the L016/L024/L025 findings of `zl lint --docs-all`, the file
+#             against HEAD's copy of it (the doc ratchet)
+#   arch      `zl lint --arch --counts` rows, the file against HEAD's copy
+#             (the arch ratchet; an A008 row is points, so a function that
+#             grows shows)
+#   A007      one run over src and tests/unit: an export no other unit reads,
+#             per changed file against its row of the arch baseline
+#   fixtures  the runner's fixtures kind (case lists, L023) when a fixture
+#             changed
+# A file of a unit family (src/<unit>.z beside a folder src/<unit>/, or a file
+# of that folder) is not counted against its own old copy: a move shifts a
+# finding between the family's files, so the arch kind judges the family's
+# rows. Prints one line per problem and `pregate OK` when there is none; ALL
+# of it, since a FORMAT line stands above the last. A subunit of zgate.
+
+# docCode -- the doc rules the doc ratchet counts
+docCode: list { "L016" "L024" "L025" } out staticlist StringView
+
+# runPregate -- the pregate subcommand
+runPregate: function {g: Gate.view} out i32 is {
+    files: changedZFiles :g
+    bad: u64
+    families: List String
+    srcs: List String
+    fixtures: false
+    for each f: files loop {
+        fv: f.stringView
+        if (inFormatScope file: fv) then bad = bad + (formatCheck :g file: fv)
+        if (fv.startsWith "src/") or (fv.startsWith "lib/system/") then {
+            bad = bad + (lintCheck :g file: fv)
+            fam: familyOf :g file: fv
+            if fam.length > 0 then {
+                if (families.contains item: fam).false then families.append fam.take
+            } else bad = bad + (countsCheck :g file: fv)
+        }
+        if fv.startsWith "src/" then srcs.append f.copy
+        if fv.startsWith "tests/fixtures/" then fixtures = true
+    }
+    if fixtures then bad = bad + (fixturesCheck :g)
+    if srcs.length > 0 then bad = bad + (a007Check :g :srcs)
+    for each fam: families loop print "FAMILY  \{fam}: counts are the arch kind's to judge (make test)"
+    if bad > 0 then return 1
+    print "pregate OK (\{files.length} .z files)"
+    return 0
+}
+
+# changedZFiles -- the .z files changed against HEAD, tracked or new, that
+# exist, sorted
+changedZFiles: function {g: Gate.view} out List String is {
+    l: List String
+    for each words: changeListers loop {
+        c: captured :g argv: (gitArgv repo: g.repo.stringView :words) cwd: "" tag: "changed"
+        for each ln: c.text.stringView.lines loop {
+            name: ln.string
+            if ln.endsWith ".z" when (io.exists path: "\{g.repo}/\{ln}") when (l.contains item: name
+            ).false then l.append name.take
+        }
+    }
+    l.sort
+    return l
+}
+
+# changeListers -- the git commands that list the changed files
+changeListers: list {
+    "diff --name-only HEAD" "ls-files --others --exclude-standard"
+} out staticlist StringView
+
+# inFormatScope -- the formatter's scope holds `file` (FMTSCOPE's .z files:
+# the fixtures keep their own style)
+inFormatScope: function {file: StringView} out bool is {
+    for each d: formatDirs loop {
+        if file.startsWith d then return true
+    }
+    return false
+}
+
+# formatDirs -- where the formatter's scope reaches
+formatDirs: list {
+    "src/" "lib/system/" "examples/" "tests/unit/" "tools/"
+} out staticlist StringView
+
+# zlArgv -- the repository's bin/zl followed by the words of `words`
+zlArgv: function {g: Gate.view words: StringView} out List String is {
+    a: List String
+    a.append from: "\{g.repo}/bin/zl"
+    for each w: (wordsOf text: words) loop a.append from: w.copy
+    return a
+}
+
+# formatCheck -- `file` is laid out as zl fmt lays it; answers 1 and says so
+# when it is not
+formatCheck: function {g: Gate.view file: StringView} out u64 is {
+    a: zlArgv :g words: "format --check"
+    a.append from: file.string
+    c: captured :g argv: a cwd: g.repo.stringView tag: "fmt"
+    if c.status == 0 then return 0
+    print "FORMAT  \{file} needs zl fmt"
+    return 1
+}
+
+# lintCheck -- `file` has no `zl lint --full` warning or error; answers 1 and
+# lists them, each with how many times it stands, when it has
+lintCheck: function {g: Gate.view file: StringView} out u64 is {
+    a: zlArgv :g words: "lint --full --src src --system lib/system"
+    a.append from: file.string
+    c: captured :g argv: a cwd: g.repo.stringView tag: "lint"
+    found: List String
+    counts: ListVal u64
+    for each ln: c.err.stringView.lines loop {
+        if (ln.startsWith "warning[") or (ln.startsWith "error[") then {
+            k: u64
+            for k < found.length while (found.get i: k).stringView != ln loop k = k + 1
+            if k == found.length then {
+                found.append ln.string
+                counts.append 0
+            }
+            counts.set i: k val: (counts.get i: k) + 1
+        }
+    }
+    if found.length == 0 then return 0
+    print "LINT    \{file}:"
+    k: u64
+    for k < found.length loop {
+        print "          \{counts.get i: k} \{found.get i: k}"
+        k = k + 1
+    }
+    return 1
+}
+
+# familyOf -- the unit family `file` belongs to: the folder of a subunit
+# file, or the unit's name when a folder of its subunits stands beside it;
+# empty for a file of no family
+familyOf: function {g: Gate.view file: StringView} out String is {
+    rest: file.stripPrefix "src/"
+    if rest.none then return "".string
+    slash: rest.indexOf "/"
+    if slash.some then return (rest.substring from: 0 to: slash).string
+    stem: rest.substring from: 0 to: rest.length - 2
+    st: io.stat path: "\{g.repo}/src/\{stem}"
+    if st.ok when st.kind.dir then return stem.string
+    return "".string
+}
+
+# countsCheck -- the doc and arch counts of `file` against HEAD's copy of it:
+# a doc count that rises, or arch rows that change, answer 1 and are shown
+countsCheck: function {g: Gate.view file: StringView} out u64 is {
+    dir: "\{g.home}/pregate"
+    io.mkdirp path: dir
+    old: "\{dir}/old.z"
+    show: gitArgv repo: g.repo.stringView words: "show"
+    show.append from: "HEAD:\{file}"
+    c: captured :g argv: show cwd: "" tag: "show"
+    w: io.writeText path: old content: c.text
+    w.drop
+    bad: u64
+    docsNow: docCount :g :file
+    docsWas: docCount :g file: old.stringView
+    if docsNow > docsWas then {
+        print "DOCS    \{file}: \{docsWas} -> \{docsNow} doc findings"
+        bad = bad + 1
+    }
+    an: archRows :g :file
+    ao: archRows :g file: old.stringView
+    if (sameRows a: an b: ao).false then {
+        print "ARCH    \{file}:"
+        for each r: ao loop {
+            if (an.contains item: r).false then print "          < \{r}"
+        }
+        for each r: an loop {
+            if (ao.contains item: r).false then print "          > \{r}"
+        }
+        bad = bad + 1
+    }
+    return bad
+}
+
+# docCount -- how many L016, L024 and L025 warnings or errors `zl lint
+# --docs-all` reports in `file`
+docCount: function {g: Gate.view file: StringView} out u64 is {
+    a: zlArgv :g words: "lint --docs-all"
+    a.append from: file.string
+    c: captured :g argv: a cwd: g.repo.stringView tag: "docs"
+    n: u64
+    for each ln: c.err.stringView.lines loop {
+        for each code: docCode loop {
+            if (ln.startsWith "warning[\{code}]") or (ln.startsWith "error[\{code}]") then n = n + 1
+        }
+    }
+    return n
+}
+
+# archRows -- the arch rows `zl lint --arch --counts` gives `file`, each as
+# `<code> <count>`, sorted
+archRows: function {g: Gate.view file: StringView} out List String is {
+    a: zlArgv :g words: "lint --arch --counts"
+    a.append from: file.string
+    c: captured :g argv: a cwd: g.repo.stringView tag: "arch"
+    rows: List String
+    for each ln: c.text.stringView.lines loop {
+        cols: wordsOf text: ln
+        if cols.length >= 3 when (cols.get i: 0).stringView.startsWith "A" then {
+            rows.append "\{cols.get i: 0} \{cols.get i: cols.length - 1}"
+        }
+    }
+    rows.sort
+    return rows
+}
+
+# sameRows -- `a` and `b` hold the same rows in the same order
+sameRows: function {a: (List String).view b: (List String).view} out bool is {
+    if a.length != b.length then return false
+    i: u64
+    for i < a.length loop {
+        if (a.get :i) != (b.get :i) then return false
+        i = i + 1
+    }
+    return true
+}
+
+# fixturesCheck -- the runner's fixtures kind; answers 1 and shows its FAIL
+# lines when it fails
+fixturesCheck: function {g: Gate.view} out u64 is {
+    runner: "\{g.repo}/out/ztestrunner"
+    if (io.exists path: runner).not then {
+        print "FIXTURES out/ztestrunner is not built (make out/ztestrunner), so the case lists and L023 went unchecked"
+        return 1
+    }
+    a: List String
+    a.append from: runner.copy
+    for each w: (wordsOf text: "--zc bin/zc --root . --only fixtures") loop a.append from: w.copy
+    c: captured :g argv: a cwd: g.repo.stringView tag: "fixtures"
+    if c.status == 0 then return 0
+    for each ln: c.text.stringView.lines loop {
+        if ln.startsWith "FAIL" then print "FIXTURES \{ln}"
+    }
+    return 1
+}
+
+# a007Check -- one A007 run over src and tests/unit (an export no other unit
+# reads needs every unit to see it); each changed file of `srcs` holding more
+# than its arch baseline row answers 1
+a007Check: function {g: Gate.view srcs: (List String).view} out u64 is {
+    a: zlArgv :g words: "lint --full --arch --src src --src tests/unit --system lib/system"
+    for each f: (srcFiles :g) loop a.append from: f.copy
+    c: captured :g argv: a cwd: g.repo.stringView tag: "a007"
+    hits: List String
+    seen: false
+    for each ln: c.err.stringView.lines loop {
+        if ln.contains "[A007]" then {
+            seen = true
+        } else if seen when ln.contains "--> " then {
+            seen = false
+            at: (ln.indexOf "--> ").or d: 0
+            rest: ln.substring from: at + 4 to: ln.length
+            colon: (rest.indexOf ":").or d: rest.length
+            hits.append (rest.substring from: 0 to: colon).string
+        }
+    }
+    baseline: zjobs.slurp path: "\{g.repo}/tests/fixtures/arch_baseline.txt".stringView
+    bad: u64
+    for each f: srcs loop {
+        nn: u64
+        for each h: hits loop {
+            if h == f then nn = nn + 1
+        }
+        nb: baselineRow text: baseline.stringView code: "A007" file: f.stringView
+        if nn > nb then {
+            print "A007    \{f}: \{nb} -> \{nn} (an export no other unit reads)"
+            bad = bad + 1
+        }
+    }
+    return bad
+}
+
+# srcFiles -- src's .z files and its subunits' files, as paths from the
+# repository
+srcFiles: function {g: Gate.view} out List String is {
+    l: List String
+    ls: io.listDir path: "\{g.repo}/src"
+    if ls.err then return l
+    for each e: ls loop {
+        if e.stringView.endsWith ".z" then {
+            l.append "src/\{e}"
+        } else {
+            sub: io.listDir path: "\{g.repo}/src/\{e}"
+            if sub.ok then {
+                for each s: sub loop {
+                    if s.stringView.endsWith ".z" then l.append "src/\{e}/\{s}"
+                }
+            }
+        }
+    }
+    l.sort
+    return l
+}
+
+# baselineRow -- the count the arch baseline `text` holds for `code` and
+# `file`; 0 when it has no such row
+baselineRow: function {text: StringView code: StringView file: StringView} out u64 is {
+    for each ln: text.lines loop {
+        cols: wordsOf text: ln
+        if cols.length == 3 when (cols.get i: 0).stringView == code when (
+            (cols.get i: 1).stringView == file
+        ) then {
+            n: (cols.get i: 2).stringView.parseU64
+            if n.ok then return n
+        }
+    }
+    return 0
+}

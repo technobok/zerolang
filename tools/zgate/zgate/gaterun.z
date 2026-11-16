@@ -1,0 +1,319 @@
+# gaterun -- `zgate run TAG OUT [SHA]`: the per-batch gate of commit SHA (HEAD
+# when it is not given) against snapshot TAG, in a worktree of its own beside
+# the repository, so the repository stays free to edit while it runs. One run
+# at a time owns the worktree: a second would remove it under the first, so a
+# lock in zgate's home names the run's pid. The phases, each a line of
+# OUT/gates.log with its seconds:
+#   build      make zc bin/zl
+#   cdiff      the corpus C and dumps, snapshot TAG's compiler (reading the
+#              snapshot's standard library) against this build. When nothing
+#              differs, the legs that only rebuild that same C -- test-clang,
+#              test-tcc and the Makefile's GATE_SAME_C -- are skipped
+#   check, test        always: the error fixtures, the smokes and the runner's
+#                      kinds are about the compiler, not only its C
+#   test-clang, test-tcc  unless skipped
+#   ab         the allocation split against the snapshot
+#   perf       make perf-strict, alone: a zc running beside it in the same
+#              tree moves its count
+#   guards     make -k gate-guards, with gate-same-c unless skipped
+#   windows-due  one line when make ci-windows is due
+# Each phase's output is OUT/<phase>.log and OUT/<phase>.err. Answers 0 when
+# every phase passed. A subunit of zgate.
+
+# guardJobs -- how many guards run at once: each is a parallel job of its own
+guardJobs: 8
+
+# runGateCommand -- the run subcommand from its command line `p`
+runGateCommand: function {g: Gate.view p: cli.Parsed.view} out i32 is {
+    rev: operand :p name: "SHA"
+    if rev.length == 0 then rev = "HEAD".string
+    return (
+        gateRun
+        :g
+        tag: (operand :p name: "TAG").stringView
+        outDir: (absolute p: (operand :p name: "OUT").stringView).stringView
+        rev: rev.stringView
+    )
+}
+
+# gateRun -- the gate of commit `rev` against snapshot `tag`, its record in
+# `outDir`
+gateRun: function {g: Gate.view tag: StringView outDir: StringView rev: StringView} out i32 is {
+    snap: snapshot.snapDir :g :tag
+    if (io.exists path: "\{snap}/zc").not then {
+        io.eprintln "zgate run: no snapshot \{tag} in \{g.home}/snap (zgate snap \{tag} at a clean HEAD)"
+        return wrongUsage
+    }
+    sha: fullSha :g :rev
+    if sha.length == 0 then {
+        io.eprintln "zgate run: git names no commit '\{rev}'"
+        return wrongUsage
+    }
+    io.mkdirp path: g.home
+    lock: "\{g.home}/run.lock"
+    owner: zjobs.slurp path: lock.stringView
+    if owner.length > 0 when (io.exists path: "/proc/\{owner.stringView.trim}") then {
+        io.eprintln "zgate run: run \{owner.stringView.trim} owns the gate worktree -- wait for it"
+        return wrongUsage
+    }
+    w: io.writeText path: lock content: "\{os.pid}\n"
+    w.drop
+    io.mkdirp path: outDir
+    logPath: "\{outDir}/gates.log"
+    wl: io.writeText path: logPath content: ""
+    wl.drop
+    lines: List String
+    snapHead: zjobs.slurp path: "\{snap}/HEAD.txt".stringView
+    (
+        logLine
+        :lines
+        logPath: logPath.stringView
+        text: "gating \{(
+            sha.stringView.substring
+            from: 0
+            to: 9
+        )} against snap \{tag} (\{snapHead.stringView.trim})".stringView
+    )
+    wt: sibling repo: g.repo.stringView role: "gat"
+    failed: false
+    if (addWorktree repo: g.repo.stringView dir: wt.stringView sha: sha.stringView) then {
+        failed = (
+            gatePhases
+            :g
+            snap: snap.stringView
+            wt: wt.stringView
+            :outDir
+            :lines
+            logPath: logPath.stringView
+        )
+        removeWorktree repo: g.repo.stringView dir: wt.stringView
+    } else {
+        logLine :lines logPath: logPath.stringView text: "worktree=FAIL"
+        failed = true
+    }
+    logLine :lines logPath: logPath.stringView text: "ALLDONE"
+    rm: io.remove path: lock
+    rm.drop
+    if failed then return 1
+    return 0
+}
+
+# gatePhases -- the phases, in the worktree `wt`; answers whether one failed
+gatePhases: function {
+    g: Gate.view
+    snap: StringView
+    wt: StringView
+    outDir: StringView
+    lines: List String
+    logPath: StringView
+} out bool is {
+    failed: false
+    t0: os.monotonicMillis
+    rc: makeIn dir: wt words: "zc bin/zl" log: "\{outDir}/build".stringView
+    logLine :lines :logPath text: "build=\{rc} secs=\{secsSince :t0}".stringView
+    if rc != 0 then failed = true
+    t0 = os.monotonicMillis
+    wg: Gate repo: wt.string home: g.home.copy jobs: g.jobs
+    report: List String
+    r: (
+        cdiff.compare
+        g: wg
+        refZc: "\{snap}/zc".stringView
+        newZc: "\{wt}/bin/zc".stringView
+        outDir: "\{outDir}/cdiff".stringView
+        wide: false
+        refSys: "\{snap}/tree/lib/system".stringView
+        normalise: false
+        lines: report
+    )
+    writeLines path: "\{outDir}/cdiff.log".stringView lines: report
+    same: r.same
+    yes: "no"
+    if same then yes = "yes"
+    (
+        logLine
+        :lines
+        :logPath
+        text: "identical-C=\{yes} (\{r.cFiles} C files differ, \{r.logs} logs differ, \{r.dumps} dumps differ)".stringView
+    )
+    logLine :lines :logPath text: "cdiff secs=\{secsSince :t0}".stringView
+    for each ph: (phasesFor :same) loop {
+        t1: os.monotonicMillis
+        prc: (
+            makeIn
+            dir: wt
+            words: ph.stringView
+            log: "\{outDir}/\{phaseName words: ph.stringView}".stringView
+        )
+        (
+            logLine
+            :lines
+            :logPath
+            text: "\{phaseName words: ph.stringView}=\{prc} secs=\{secsSince t0: t1}".stringView
+        )
+        for each tl: (
+            tailLines
+            path: "\{outDir}/\{phaseName words: ph.stringView}.log".stringView
+            n: 2
+        ) loop {
+            logLine :lines :logPath text: tl.stringView
+        }
+        if prc != 0 then failed = true
+    }
+    if same then (
+        logLine
+        :lines
+        :logPath
+        text: "clang=SKIPPED tcc=SKIPPED (gate-same-c SKIPPED): the emitted C is identical"
+    )
+    t0 = os.monotonicMillis
+    abLines: List String
+    (
+        absplit.abSplit
+        g: wg
+        oldZc: "\{snap}/zc".stringView
+        newZc: "\{wt}/bin/zc".stringView
+        oldTree: "\{snap}/tree".stringView
+        newTree: wt
+        lines: abLines
+    )
+    logLine :lines :logPath text: "ab secs=\{secsSince :t0}".stringView
+    for each al: abLines loop {
+        if (al.stringView.startsWith "behaviour") or (al.stringView.startsWith "source") then (
+            logLine
+            :lines
+            :logPath
+            text: al.stringView
+        )
+    }
+    t0 = os.monotonicMillis
+    prc: makeIn dir: wt words: "perf-strict" log: "\{outDir}/perf".stringView
+    logLine :lines :logPath text: "perf=\{prc} secs=\{secsSince :t0}".stringView
+    for each pl: (
+        linesHolding
+        path: "\{outDir}/perf.log".stringView
+        words: "allocs perf-strict"
+        n: 4
+    ) loop {
+        logLine :lines :logPath text: pl.stringView
+    }
+    if prc != 0 then failed = true
+    t0 = os.monotonicMillis
+    guards: "-k -j \{guardJobs} gate-guards"
+    if same.not then guards.append " gate-same-c"
+    grc: makeIn dir: wt words: guards.stringView log: "\{outDir}/guards".stringView
+    logLine :lines :logPath text: "guards=\{grc} secs=\{secsSince :t0}".stringView
+    for each fl: (failLines path: "\{outDir}/guards".stringView) loop (
+        logLine
+        :lines
+        :logPath
+        text: fl.stringView
+    )
+    if grc != 0 then failed = true
+    due: (
+        makeIn
+        dir: wt
+        words: "--no-print-directory windows-due"
+        log: "\{outDir}/windows-due".stringView
+    )
+    due.drop
+    for each dl: (tailLines path: "\{outDir}/windows-due.log".stringView n: 3) loop (
+        logLine
+        :lines
+        :logPath
+        text: dl.stringView
+    )
+    return failed
+}
+
+# phasesFor -- the make phases after cdiff: check and test, and test-clang and
+# test-tcc unless the C is the same as the snapshot's
+phasesFor: function {same: bool} out List String is {
+    l: List String
+    l.append from: "check".string
+    l.append from: "test".string
+    if same.not then {
+        l.append from: "test-clang".string
+        l.append from: "test-tcc".string
+    }
+    return l
+}
+
+# logLine -- `text` printed, kept in `lines` and added to the gate's log
+logLine: function {lines: List String logPath: StringView text: StringView} is {
+    say :lines :text
+    w: io.appendText path: logPath content: "\{text}\n"
+    w.drop
+}
+
+# writeLines -- `lines` written to the file at `path`, one a line
+writeLines: function {path: StringView lines: (List String).view} is {
+    text: String
+    for each ln: lines loop {
+        text.append ln
+        text.appendByte b: ascii.lf
+    }
+    w: io.writeText :path content: text
+    w.drop
+}
+
+# tailLines -- the last `n` lines of the file at `path`
+tailLines: function {path: StringView n: u64} out List String is {
+    all: List String
+    text: zjobs.slurp :path
+    for each ln: text.stringView.lines loop all.append ln.string
+    r: List String
+    i: u64
+    if all.length > n then i = all.length - n
+    for i < all.length loop {
+        r.append (all.get :i).copy
+        i = i + 1
+    }
+    return r
+}
+
+# linesHolding -- the first `n` lines of the file at `path` holding one of the
+# words of `words`
+linesHolding: function {path: StringView words: StringView n: u64} out List String is {
+    r: List String
+    text: zjobs.slurp :path
+    ws: wordsOf text: words
+    for each ln: text.stringView.lines loop {
+        hit: false
+        for each w: ws loop {
+            if (ln.contains needle: w) then hit = true
+        }
+        if hit when r.length < n then r.append ln.string
+    }
+    return r
+}
+
+# failLines -- the first ten lines of the guards' stdout and stderr (`<base>.log`
+# and `<base>.err`) that report a failure, a make error or a baseline to move,
+# and are no OK line
+failLines: function {path: StringView} out List String is {
+    r: List String
+    for each ext: logExts loop {
+        text: zjobs.slurp path: "\{path}\{ext}".stringView
+        for each ln: text.stringView.lines loop {
+            if (failWord line: ln) when (ln.contains needle: "OK").not when (
+                r.length < 10
+            ) then r.append ln.string
+        }
+    }
+    return r
+}
+
+# logExts -- a phase's two output files
+logExts: list { ".log" ".err" } out staticlist StringView
+
+# failWord -- `line` reports a failure, a make error or a baseline to move
+failWord: function {line: StringView} out bool is {
+    for each w: failWords loop {
+        if (line.contains needle: w) then return true
+    }
+    return false
+}
+
+# failWords -- what a guard's line says when it reports a failure
+failWords: list { "FAIL" "Error" "lower the" "baseline" } out staticlist StringView

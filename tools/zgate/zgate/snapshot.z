@@ -1,0 +1,70 @@
+# snapshot -- `zgate snap TAG`: the repository's bin/zc and bin/zl and the tree
+# of HEAD, kept in <home>/snap/TAG as zc, zl, tree/ and HEAD.txt. A snapshot is
+# the old side of every comparison, so it must BE HEAD: a bin/zc left from an
+# earlier commit, or built from an edited tree, moves every split by whatever
+# that build differs by. The build stamp each driver prints with --version
+# says what it was built from. A subunit of zgate.
+
+# runSnap -- snapshot `tag`; answers 0, or 1 when the drivers are not a clean
+# build of HEAD or a copy fails
+runSnap: function {g: Gate.view tag: StringView} out i32 is {
+    head: (
+        captured
+        :g
+        argv: (gitArgv repo: g.repo.stringView words: "rev-parse --short=8 HEAD")
+        cwd: ""
+        tag: "head"
+    )
+    if head.status != 0 then {
+        io.eprintln "zgate snap: git cannot name HEAD in \{g.repo}"
+        return 1
+    }
+    sha: head.text.stringView.trim.string
+    for each d: driverNames loop {
+        v: (
+            captured
+            :g
+            argv: (wordsOf text: "\{g.repo}/bin/\{d} --version".stringView)
+            cwd: ""
+            tag: "version"
+        )
+        if (v.text.stringView.contains needle: "+\{sha} (").not then {
+            io.eprintln "zgate snap: bin/\{d} is '\{v.text.stringView.trim}', not a clean build of HEAD \{sha} -- make zc bin/zl at a clean HEAD first"
+            return 1
+        }
+    }
+    dir: snapDir :g :tag
+    io.removeTree path: dir.stringView
+    io.mkdirp path: "\{dir}/tree"
+    for each d: driverNames loop {
+        cp: wordsOf text: "cp"
+        cp.append from: "\{g.repo}/bin/\{d}"
+        cp.append from: "\{dir}/\{d}"
+        if (runTo argv: cp cwd: "" outPath: "" errPath: "") != 0 then return 1
+    }
+    tar: "\{dir}/tree.tar"
+    ar: gitArgv repo: g.repo.stringView words: "archive -o"
+    ar.append from: tar.copy
+    ar.append from: "HEAD".string
+    if (runTo argv: ar cwd: "" outPath: "" errPath: "") != 0 then return 1
+    x: wordsOf text: "tar -xf"
+    x.append from: tar.copy
+    x.append from: "-C".string
+    x.append from: "\{dir}/tree"
+    if (runTo argv: x cwd: "" outPath: "" errPath: "") != 0 then return 1
+    rm: io.remove path: tar
+    rm.drop
+    said: "snap \{tag} = \{sha}"
+    w: io.writeText path: "\{dir}/HEAD.txt" content: "\{said}\n"
+    w.drop
+    print said
+    return 0
+}
+
+# driverNames -- the drivers a snapshot keeps
+driverNames: list { "zc" "zl" } out staticlist StringView
+
+# snapDir -- where snapshot `tag` is kept
+snapDir: function {g: Gate.view tag: StringView} out String is {
+    return "\{g.home}/snap/\{tag}"
+}

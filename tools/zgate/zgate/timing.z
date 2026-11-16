@@ -1,0 +1,129 @@
+# timing -- `zgate time ci|gates OUT [SHA]`, in a worktree of commit SHA
+# (HEAD when it is not given) beside the repository, removed after:
+#   ci     `make ci` as its recipe runs it, one leg at a time -- perf-strict,
+#          ci-gates, test-bootstrap under gcc, clang and tcc, windows-due --
+#          each leg's seconds in OUT/ci-times.txt
+#   gates  each leg of ci-gates (`make ci-legs` lists them) run ALONE, one
+#          after another, each one's seconds in OUT/gate-times.txt: a leg's
+#          time alone is its cost, not its share of a parallel make ci
+# Each leg's output is OUT/<leg>.log and OUT/<leg>.err. Answers 0 when every
+# leg passed. A subunit of zgate.
+
+# timeWord -- what `zgate time` times, by the word that names it
+timeWord: list { ci: "ci" gates: "gates" } out staticlist StringView
+
+# ciLegs -- make ci's legs, in its order, as make's arguments; a `+` stands for
+# a space inside one argument
+ciLegs: list {
+    "perf-strict"
+    "ci-gates"
+    "test-bootstrap BOOTSTRAP_CCS=gcc+clang+out/tcc"
+    "windows-due"
+} out staticlist StringView
+
+# runTimeCommand -- the time subcommand from its command line `p`
+runTimeCommand: function {g: Gate.view p: cli.Parsed.view} out i32 is {
+    words: zast.Vocab.create block: timeWord
+    what: operand :p name: "WHAT"
+    which: words.slotOf text: what.stringView
+    if which == words.none then {
+        io.eprintln "zgate time: times ci or gates, not '\{what}'"
+        return wrongUsage
+    }
+    rev: operand :p name: "SHA"
+    if rev.length == 0 then rev = "HEAD".string
+    sha: fullSha :g rev: rev.stringView
+    if sha.length == 0 then {
+        io.eprintln "zgate time: git names no commit '\{rev}'"
+        return wrongUsage
+    }
+    outDir: absolute p: (operand :p name: "OUT").stringView
+    io.mkdirp path: outDir
+    wt: sibling repo: g.repo.stringView role: "ci1"
+    if (addWorktree repo: g.repo.stringView dir: wt.stringView sha: sha.stringView).not then {
+        io.eprintln "zgate time: git could not make the worktree \{wt}"
+        return 1
+    }
+    failed: false
+    if which == timeWord.slot.ci then {
+        failed = timeCi wt: wt.stringView outDir: outDir.stringView sha: sha.stringView
+    } else failed = timeGates wt: wt.stringView outDir: outDir.stringView sha: sha.stringView
+    removeWorktree repo: g.repo.stringView dir: wt.stringView
+    if failed then return 1
+    return 0
+}
+
+# timeCi -- make ci's legs in turn; answers whether one failed
+timeCi: function {wt: StringView outDir: StringView sha: StringView} out bool is {
+    times: "\{outDir}/ci-times.txt"
+    w: io.writeText path: times content: ""
+    w.drop
+    failed: false
+    for each leg: ciLegs loop {
+        args: List String
+        for each w: (wordsOf text: leg) loop args.append (
+            w.stringView.replace
+            needle: "+"
+            replacement: " "
+        )
+        rc: timedLeg :wt :args name: (args.get i: 0).stringView :outDir times: times.stringView
+        if rc != 0 then failed = true
+    }
+    f: 0
+    if failed then f = 1
+    line: "ci sha=\{sha.substring from: 0 to: 8} fail=\{f}\n"
+    a: io.appendText path: times content: line
+    a.drop
+    print line.stringView.trim
+    return failed
+}
+
+# timeGates -- the build, then each leg of ci-gates alone; answers whether
+# one failed
+timeGates: function {wt: StringView outDir: StringView sha: StringView} out bool is {
+    times: "\{outDir}/gate-times.txt"
+    w: io.writeText path: times content: ""
+    w.drop
+    failed: false
+    if (
+        (
+            timedLeg
+            :wt
+            args: (wordsOf text: "zc bin/zl")
+            name: "build"
+            :outDir
+            times: times.stringView
+        ) !=
+        0
+    ) then failed = true
+    lc: makeIn dir: wt words: "--no-print-directory -s ci-legs" log: "\{outDir}/ci-legs".stringView
+    if lc != 0 then return true
+    legs: zjobs.slurp path: "\{outDir}/ci-legs.log".stringView
+    for each leg: (wordsOf text: legs.stringView) loop {
+        args: wordsOf text: "--no-print-directory"
+        args.append from: leg.copy
+        if (
+            (timedLeg :wt :args name: leg.stringView :outDir times: times.stringView) != 0
+        ) then failed = true
+    }
+    line: "done sha=\{sha.substring from: 0 to: 8}\n"
+    a: io.appendText path: times content: line
+    a.drop
+    print line.stringView.trim
+    return failed
+}
+
+# timedLeg -- `make` with `args` in `wt`, its output as `<name>.log` and
+# `<name>.err`, its exit status and seconds a line of `times`; answers the
+# exit status
+timedLeg: function {
+    wt: StringView args: (List String).view name: StringView outDir: StringView times: StringView
+} out i32 is {
+    t0: os.monotonicMillis
+    rc: makeWith dir: wt :args log: "\{outDir}/\{name}".stringView
+    line: "\{name} rc=\{rc} secs=\{secsSince :t0}"
+    print line
+    a: io.appendText path: times content: "\{line}\n"
+    a.drop
+    return rc
+}

@@ -1,0 +1,237 @@
+# absplit -- `zgate ab OLDZC NEWZC OLDTREE [NEWTREE]`: the allocation split of
+# a self-compile (`zc zc --src src --system lib/system --emit-c /dev/null`
+# under valgrind memcheck, the perf-strict measurement). OLDTREE and NEWTREE
+# hold src/ and lib/system/; NEWTREE is the repository when it is not given.
+# It prints each of the four counts and the split:
+#   behaviour = new compiler - old compiler, on the old source
+#   source    = new source - old source, compiled by the new compiler
+# A run that does not compile reads FAIL, with zc's first error: a compiler
+# that refuses its input still exits through the allocator, and its small
+# count would read as a real row. The four runs go in parallel. Both compilers
+# are copied to paths of one length first, and each run compiles its own copy
+# of its tree at a path of one length and depth: the compiler locates itself
+# from its own path, and finds its project by walking up from the working
+# directory, and each costs allocations by its length. A subunit of zgate.
+
+# runAbCommand -- the ab subcommand from its command line `p`
+runAbCommand: function {g: Gate.view p: cli.Parsed.view} out i32 is {
+    newTree: operand :p name: "NEWTREE"
+    if newTree.length == 0 then newTree = g.repo.copy
+    return (
+        abSplit
+        :g
+        oldZc: (absolute p: (operand :p name: "OLDZC").stringView).stringView
+        newZc: (absolute p: (operand :p name: "NEWZC").stringView).stringView
+        oldTree: (absolute p: (operand :p name: "OLDTREE").stringView).stringView
+        newTree: (absolute p: newTree.stringView).stringView
+        lines: List String
+    )
+}
+
+# abSplit -- the four self-compiles and the split; each printed line is also
+# added to `lines`, for a gate's log. Answers 0, or 1 when a run failed.
+abSplit: function {
+    g: Gate.view
+    oldZc: StringView
+    newZc: StringView
+    oldTree: StringView
+    newTree: StringView
+    lines: List String
+} out i32 is {
+    tmp: "\{g.home}/ab/\{os.pid}"
+    io.removeTree path: tmp.stringView
+    io.mkdirp path: "\{tmp}/o"
+    io.mkdirp path: "\{tmp}/n"
+    copyTo from: oldZc to: "\{tmp}/o/zc".stringView
+    copyTo from: newZc to: "\{tmp}/n/zc".stringView
+    say :lines text: "old zc: \{(versionOf :g zc: "\{tmp}/o/zc".stringView).stringView}".stringView
+    say :lines text: "new zc: \{(versionOf :g zc: "\{tmp}/n/zc".stringView).stringView}".stringView
+    jobs: List PoolJob
+    for each run: runNames loop {
+        tree: oldTree
+        if run.endsWith "n" then tree = newTree
+        stageTree from: tree to: "\{tmp}/w/\{run}".stringView
+        side: "o"
+        if run.startsWith "n" then side = "n"
+        a: List String
+        a.append from: "valgrind".string
+        a.append from: "--tool=memcheck".string
+        a.append from: "\{tmp}/\{side}/zc"
+        for each w: (wordsOf text: "zc --src src --system lib/system --emit-c /dev/null") loop (
+            a.append
+            from: w.copy
+        )
+        steps: List PoolStep
+        steps.append (
+            zjobs.mkStep
+            argv: a
+            cwd: "\{tmp}/w/\{run}".stringView
+            outPath: os.nullDevice.stringView
+            errPath: "\{tmp}/\{run}.log".stringView
+            timeoutSecs: 0
+            allowFail: true
+            zlinkFrom: ""
+        )
+        jobs.append (zjobs.mkJob name: run :steps)
+    }
+    statuses: ListVal i32
+    failSteps: ListVal i64
+    zjobs.runJobs :jobs maxJobs: 4 :statuses :failSteps
+    counts: ListVal i64
+    whys: List String
+    k: u64
+    for k < runNames.length loop {
+        log: zjobs.slurp path: "\{tmp}/\{runNames.get i: k}.log".stringView
+        n: heapCount text: log.stringView
+        if (statuses.get i: k) != 0 then n = -1
+        counts.append n
+        whys.append (firstError text: log.stringView status: (statuses.get i: k))
+        k = k + 1
+    }
+    k = 0
+    for k < runNames.length loop {
+        say :lines text: "\{runLabels.get i: k}: \{countText n: (counts.get i: k)}".stringView
+        k = k + 1
+    }
+    ok: true
+    oo: counts.get i: 0
+    no: counts.get i: 2
+    nn: counts.get i: 3
+    if (oo >= 0) and (no >= 0) then {
+        say :lines text: "behaviour (new-old zc, old src): \{no - oo}".stringView
+    } else {
+        (
+            say
+            :lines
+            text: "behaviour (new-old zc, old src): FAIL\{(
+                failWhy
+                :whys
+                :counts
+                a: 0
+                b: 2
+            )}".stringView
+        )
+        ok = false
+    }
+    if (no >= 0) and (nn >= 0) then {
+        say :lines text: "source (new-old src, new zc):    \{nn - no}".stringView
+    } else {
+        (
+            say
+            :lines
+            text: "source (new-old src, new zc):    FAIL\{(
+                failWhy
+                :whys
+                :counts
+                a: 2
+                b: 3
+            )}".stringView
+        )
+        ok = false
+    }
+    io.removeTree path: tmp.stringView
+    if ok then return 0
+    return 1
+}
+
+# runNames -- the four runs: old or new compiler, then old or new source
+runNames: list { "oo" "on" "no" "nn" } out staticlist StringView
+
+# runLabels -- each run as its line says it
+runLabels: list {
+    "old zc / old src" "old zc / new src" "new zc / old src" "new zc / new src"
+} out staticlist StringView
+
+# versionOf -- what the compiler at `zc` prints for --version, one line
+versionOf: function {g: Gate.view zc: StringView} out String is {
+    a: List String
+    a.append from: zc.string
+    a.append from: "--version".string
+    c: captured :g argv: a cwd: "" tag: "abversion"
+    return c.text.stringView.trim.string
+}
+
+# copyTo -- the file `from` copied to `to`, its mode kept
+copyTo: function {from: StringView to: StringView} is {
+    a: wordsOf text: "cp"
+    a.append from: from.string
+    a.append from: to.string
+    rc: runTo argv: a cwd: "" outPath: "" errPath: ""
+    rc.drop
+}
+
+# stageTree -- what a self-compile reads of the tree `from` -- src/,
+# lib/system/ and project.z -- copied to `to`
+stageTree: function {from: StringView to: StringView} is {
+    io.mkdirp path: "\{to}/lib"
+    copyDir from: "\{from}/src".stringView to: "\{to}/src".stringView
+    copyDir from: "\{from}/lib/system".stringView to: "\{to}/lib/system".stringView
+    pz: "\{from}/project.z"
+    if (io.exists path: pz) then copyTo from: pz.stringView to: "\{to}/project.z".stringView
+}
+
+# copyDir -- the directory `from` copied whole to `to`
+copyDir: function {from: StringView to: StringView} is {
+    a: wordsOf text: "cp -r"
+    a.append from: from.string
+    a.append from: to.string
+    rc: runTo argv: a cwd: "" outPath: "" errPath: ""
+    rc.drop
+}
+
+# heapCount -- the allocations valgrind's `total heap usage: N allocs` line
+# of `text` counts; -1 when it has none
+heapCount: function {text: StringView} out i64 is {
+    for each ln: text.lines loop {
+        at: ln.indexOf "total heap usage: "
+        if at.some then {
+            rest: ln.substring from: at + 18 to: ln.length
+            digits: String
+            i: u64
+            for i < rest.length loop {
+                b: (rest.byteAt :i).or d: 0
+                if b == ascii.space then break
+                if (ascii.isDigit :b) then digits.appendByte :b
+                i = i + 1
+            }
+            n: digits.stringView.parseI64
+            if n.ok then return n
+        }
+    }
+    return -1
+}
+
+# firstError -- why a run failed: its exit status and the first line of its
+# log that says error; empty when it did not fail
+firstError: function {text: StringView status: i32} out String is {
+    if status == 0 when (heapCount :text) >= 0 then return "".string
+    for each ln: text.lines loop {
+        if (ln.startsWith "==").not when ln.contains "error" then return "exit \{status}: \{ln}"
+    }
+    return "exit \{status}"
+}
+
+# countText -- a count as printed: the number, or FAIL
+countText: function {n: i64} out String is {
+    if n < 0 then return "FAIL".string
+    return "\{n}"
+}
+
+# failWhy -- `[<run>: <why>]` for each of runs `a` and `b` that failed
+failWhy: function {
+    whys: (List String).view counts: (ListVal i64).view a: u64 b: u64
+} out String is {
+    r: String
+    for each k: (twoOf :a :b) loop {
+        if (counts.get i: k) < 0 then r.append " [\{runNames.get i: k}: \{whys.get i: k}]"
+    }
+    return r
+}
+
+# twoOf -- the indexes `a` and `b`
+twoOf: function {a: u64 b: u64} out ListVal u64 is {
+    l: ListVal u64
+    l.append a
+    l.append b
+    return l
+}

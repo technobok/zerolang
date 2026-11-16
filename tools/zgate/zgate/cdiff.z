@@ -1,0 +1,578 @@
+# cdiff -- `zgate cdiff REF NEW OUT [--set corpus|wide] [--normalise]
+# [--ref-system DIR]`: the C two compilers emit for the same programs, and what
+# differs between them. The corpus set (the default) is every examples and
+# emitc_corpus program that declares `main`, each emitted and dumped
+# (`dump --canon`) in its own directory. The wide set is every program under
+# examples and tests/fixtures (the error fixtures left out), each emitted for
+# the host and for Windows, and the drivers, the tests/unit programs and the
+# user units that carry their own C. REF reads --ref-system's standard library
+# (the repository's when it is not given), so a change to the library shows
+# as a C difference; NEW reads the repository's. --normalise sorts each file
+# that differs: RENUM when it is equal once every minted number is blanked
+# (mintedPrefix), REORDER when it is equal as a set of blanked lines, REAL
+# otherwise, listing the lines only one side has. OUT/cdiff.txt,
+# OUT/logdiff.txt (an exit status or diagnostics that differ) and
+# OUT/dumpdiff.txt list the names. A subunit of zgate.
+
+# setWord -- the program sets, by the word --set takes
+setWord: list { corpus: "corpus" wide: "wide" } out staticlist StringView
+
+# mintedPrefix -- the spellings the emitter mints a number after, in a C
+# identifier: types, tags, temps, string and array constants. A number after
+# one of them is a counter's value, not a choice of the program's.
+mintedPrefix: list {
+    "z_t" "Z_T" "_t" "_i" "z_v" "_zs" "_zcs" "_zag" "_ah" "_tmp" "_b" "_s" "_o" "_m" "_p" "_iter"
+    "_ret" "_h" "_git" "_cc" "_cv" "_rr" "_Box" "_sw" "_wc" "_c" "_tr" "_cpv" "_mp" "_u" "_hp"
+    "_da" "_sb"
+} out staticlist StringView
+
+# refusedLimit -- more corpus emits than this refused on one side, and the
+# comparison proves nothing: a compiler that refuses every program emits
+# nothing on both sides. The wide set holds fixtures written to be refused,
+# so its refusals are counted and not limited.
+refusedLimit: 50
+
+# EmitItem -- one program of a set: the name its files take, where zc runs,
+# zc's arguments up to the library and output ones, how the C is named, and
+# whether a canonical dump is taken too
+EmitItem: class {
+    name: String
+    cwd: String
+    args: List String
+    # the C goes to --emit-c (a program named with its roots) rather than -o
+    # (a file emitted)
+    byName: bool
+    # the `dump --canon` arguments, empty when no dump is taken
+    dumpArgs: List String
+}
+
+# CdiffResult -- what a comparison found
+CdiffResult: class {
+    programs: u64
+    # the C files, the exit statuses or diagnostics, and the dumps that differ
+    cFiles: u64
+    logs: u64
+    dumps: u64
+    # one side refused more than refusedLimit emits
+    refusedMany: bool
+} as {
+    # same -- nothing differs and the comparison means something
+    same: function {t: this.view} out bool is {
+        return t.refusedMany.not and (t.cFiles == 0) and (t.logs == 0) and (t.dumps == 0)
+    }
+}
+
+# runCdiffCommand -- the cdiff subcommand from its command line `p`
+runCdiffCommand: function {g: Gate.view p: cli.Parsed.view} out i32 is {
+    words: zast.Vocab.create block: setWord
+    setText: optionText :p name: opt.set d: setWord.corpus
+    which: words.slotOf text: setText.stringView
+    if which == words.none then {
+        io.eprintln "zgate cdiff: --set takes corpus or wide, not '\{setText}'"
+        return wrongUsage
+    }
+    refSys: optionText :p name: opt.refSystem d: "\{g.repo}/lib/system".stringView
+    r: (
+        compare
+        :g
+        refZc: (absolute p: (operand :p name: "REF").stringView).stringView
+        newZc: (absolute p: (operand :p name: "NEW").stringView).stringView
+        outDir: (absolute p: (operand :p name: "OUT").stringView).stringView
+        wide: which == setWord.slot.wide
+        refSys: (absolute p: refSys.stringView).stringView
+        normalise: (p.hasFlag name: opt.normalise)
+        lines: List String
+    )
+    if r.refusedMany then return 1
+    if r.same.not then return 1
+    return 0
+}
+
+# compare -- emit the set with both compilers into `outDir`, and report what
+# differs
+compare: function {
+    g: Gate.view
+    refZc: StringView
+    newZc: StringView
+    outDir: StringView
+    wide: bool
+    refSys: StringView
+    normalise: bool
+    lines: List String
+} out CdiffResult is {
+    for each side: sideNames loop {
+        io.removeTree path: "\{outDir}/\{side}".stringView
+        io.mkdirp path: "\{outDir}/\{side}/c"
+        io.mkdirp path: "\{outDir}/\{side}/dump"
+    }
+    items: List EmitItem
+    if wide then {
+        items = wideItems :g
+    } else items = corpusItems :g
+    say :lines text: "programs: \{items.length}".stringView
+    bad: false
+    newSys: "\{g.repo}/lib/system"
+    k: u64
+    for k < sideNames.length loop {
+        side: sideNames.get i: k
+        zc: refZc
+        sys: refSys
+        if k == 1 then {
+            zc = newZc
+            sys = newSys.stringView
+        }
+        n: emitSide :g :items :zc :sys dir: "\{outDir}/\{side}".stringView
+        say :lines text: "\{side}: \{n} emits did not succeed".stringView
+        if n > refusedLimit when wide.not then {
+            io.eprintln "zgate cdiff: \{side} refused \{n} emits -- this comparison proves nothing"
+            bad = true
+        }
+        k = k + 1
+    }
+    r: CdiffResult programs: items.length cFiles: 0 logs: 0 dumps: 0 refusedMany: bad
+    cdiffs: List String
+    logdiffs: List String
+    dumpdiffs: List String
+    for each it: items loop {
+        if (differs :outDir file: "c/\{it.name}.c".stringView) then cdiffs.append it.name.copy
+        if (
+            (differs :outDir file: "c/\{it.name}.err".stringView) or
+            (differs :outDir file: "c/\{it.name}.rc".stringView)
+        ) then logdiffs.append it.name.copy
+        if it.dumpArgs.length > 0 when (differs :outDir file: "dump/\{it.name}.sql".stringView
+        ) then dumpdiffs.append it.name.copy
+    }
+    r.cFiles = cdiffs.length
+    r.logs = logdiffs.length
+    r.dumps = dumpdiffs.length
+    printList title: "--- C differs:" :outDir file: "cdiff.txt" names: cdiffs :lines
+    say :lines text: "(\{cdiffs.length} C files differ)".stringView
+    (
+        printList
+        title: "--- logs differ (exit status / diagnostics):"
+        :outDir
+        file: "logdiff.txt"
+        names: logdiffs
+        :lines
+    )
+    printList title: "--- dumps differ:" :outDir file: "dumpdiff.txt" names: dumpdiffs :lines
+    say :lines text: "(\{dumpdiffs.length} dumps differ)".stringView
+    if normalise then classifyAll :outDir names: cdiffs :lines
+    return r
+}
+
+# sideNames -- the two sides, the old compiler's and the new one's
+sideNames: list { "ref" "new" } out staticlist StringView
+
+# emitSide -- every item emitted (and dumped) by `zc` with the library `sys`
+# into `dir`, in the job pool; answers how many emits did not succeed
+emitSide: function {
+    g: Gate.view items: (List EmitItem).view zc: StringView sys: StringView dir: StringView
+} out u64 is {
+    jobs: List PoolJob
+    for each it: items loop {
+        jobs.append (emitJob :it :zc :sys :dir)
+        if it.dumpArgs.length > 0 then jobs.append (dumpJob :it :zc :sys :dir)
+    }
+    statuses: ListVal i32
+    failSteps: ListVal i64
+    zjobs.runJobs :jobs maxJobs: g.jobs :statuses :failSteps
+    refused: u64
+    i: u64
+    for i < jobs.length loop {
+        job: jobs.get :i
+        if (job.name.stringView.endsWith ".sql").not then {
+            st: statuses.get :i
+            w: io.writeText path: "\{dir}/c/\{job.name}.rc" content: "\{st}\n"
+            w.drop
+            if st != 0 then refused = refused + 1
+        }
+        i = i + 1
+    }
+    return refused
+}
+
+# emitJob -- the job emitting item `it` with `zc`
+emitJob: function {
+    it: EmitItem.view zc: StringView sys: StringView dir: StringView
+} out PoolJob is {
+    a: List String
+    a.append from: zc.string
+    for each w: it.args loop a.append from: w.copy
+    a.append from: "--system".string
+    a.append from: sys.string
+    if it.byName then {
+        a.append from: "--emit-c".string
+    } else a.append from: "-o".string
+    a.append from: "\{dir}/c/\{it.name}.c"
+    steps: List PoolStep
+    steps.append (
+        zjobs.mkStep
+        argv: a
+        cwd: it.cwd.stringView
+        outPath: os.nullDevice.stringView
+        errPath: "\{dir}/c/\{it.name}.err".stringView
+        timeoutSecs: 120
+        allowFail: true
+        zlinkFrom: ""
+    )
+    return (zjobs.mkJob name: it.name.stringView :steps)
+}
+
+# dumpJob -- the job taking item `it`'s canonical dump with `zc`; its name
+# ends `.sql`, which tells it from an emit
+dumpJob: function {
+    it: EmitItem.view zc: StringView sys: StringView dir: StringView
+} out PoolJob is {
+    a: List String
+    a.append from: zc.string
+    for each w: it.dumpArgs loop a.append from: w.copy
+    a.append from: "--system".string
+    a.append from: sys.string
+    steps: List PoolStep
+    steps.append (
+        zjobs.mkStep
+        argv: a
+        cwd: it.cwd.stringView
+        outPath: "\{dir}/dump/\{it.name}.sql".stringView
+        errPath: os.nullDevice.stringView
+        timeoutSecs: 120
+        allowFail: true
+        zlinkFrom: ""
+    )
+    return (zjobs.mkJob name: "\{it.name}.sql".stringView :steps)
+}
+
+# differs -- the file `file` under `outDir` is not the same on the two sides
+differs: function {outDir: StringView file: StringView} out bool is {
+    a: zjobs.slurp path: "\{outDir}/ref/\{file}".stringView
+    b: zjobs.slurp path: "\{outDir}/new/\{file}".stringView
+    return a != b
+}
+
+# printList -- `title`, then the first 60 of `names`; all of them are written
+# to `file` under `outDir`, one a line
+printList: function {
+    title: StringView
+    outDir: StringView
+    file: StringView
+    names: (List String).view
+    lines: List String
+} is {
+    say :lines text: title
+    text: String
+    n: u64
+    for each nm: names loop {
+        text.append nm
+        text.appendByte b: ascii.lf
+        if n < 60 then say :lines text: nm.stringView
+        n = n + 1
+    }
+    w: io.writeText path: "\{outDir}/\{file}" content: text
+    w.drop
+}
+
+# corpusItems -- every examples and emitc_corpus program that declares main,
+# emitted and dumped in its own directory
+corpusItems: function {g: Gate.view} out List EmitItem is {
+    items: List EmitItem
+    for each sub: corpusDirs loop {
+        dir: "\{g.repo}/\{sub}"
+        for each f: (zFiles dir: dir.stringView) loop {
+            if (declaresMain path: "\{dir}/\{f}".stringView) then {
+                stem: f.stringView.substring from: 0 to: f.length - 2
+                args: List String
+                args.append from: "emit".string
+                args.append from: f.copy
+                dumpArgs: List String
+                dumpArgs.append from: "dump".string
+                dumpArgs.append from: f.copy
+                dumpArgs.append from: "--canon".string
+                (
+                    items.append
+                    (
+                        EmitItem
+                        name: "\{path.baseName p: dir.stringView}_\{stem}"
+                        cwd: dir.copy
+                        :args
+                        byName: false
+                        :dumpArgs
+                    )
+                )
+            }
+        }
+    }
+    return items
+}
+
+# corpusDirs -- where the corpus set's programs are
+corpusDirs: list { "examples" "tests/fixtures/emitc_corpus" } out staticlist StringView
+
+# wideItems -- the wide set: every program with main under examples and
+# tests/fixtures (not tests/fixtures/errors), for the host and for Windows;
+# the drivers, zc for Windows too; the tests/unit programs; the user units
+# that carry their own C
+wideItems: function {g: Gate.view} out List EmitItem is {
+    items: List EmitItem
+    files: List String
+    for each f: (zFiles dir: "\{g.repo}/examples".stringView) loop files.append "examples/\{f}"
+    collectPrograms :g rel: "tests/fixtures" :files
+    files.sort
+    for each f: files loop {
+        if (declaresMain path: "\{g.repo}/\{f}".stringView) then {
+            nm: flatName rel: f.stringView
+            items.append (
+                wideItem
+                :g
+                name: nm.stringView
+                words: "emit \{f}".stringView
+                byName: false
+            )
+            items.append (
+                wideItem
+                :g
+                name: "\{nm}.w".stringView
+                words: "emit \{f} --target x86_64-w64-mingw32".stringView
+                byName: false
+            )
+        }
+    }
+    for each d: driverNames loop {
+        items.append (
+            wideItem
+            :g
+            name: "DRV_\{d}".stringView
+            words: "\{d} --src src --fast-hash".stringView
+            byName: true
+        )
+    }
+    items.append (
+        wideItem
+        :g
+        name: "DRV_zcw"
+        words: "zc --src src --fast-hash --target x86_64-w64-mingw32"
+        byName: true
+    )
+    for each f: (zFiles dir: "\{g.repo}/tests/unit".stringView) loop {
+        stem: f.stringView.substring from: 0 to: f.length - 2
+        items.append (
+            wideItem
+            :g
+            name: "U_\{stem}".stringView
+            words: "\{stem} --src tests/unit".stringView
+            byName: true
+        )
+    }
+    for each u: userNativeUnits loop {
+        items.append (
+            wideItem
+            :g
+            name: "UN_\{u}".stringView
+            words: "\{u} --src tests/fixtures/user_native".stringView
+            byName: true
+        )
+    }
+    items.append (
+        wideItem
+        :g
+        name: "UN_cobjmain"
+        words: "cobjmain --src tests/fixtures/cobj"
+        byName: true
+    )
+    return items
+}
+
+# driverNames -- the drivers the wide set emits
+driverNames: list { "zc" "zl" "zls" } out staticlist StringView
+
+# userNativeUnits -- the units of tests/fixtures/user_native the wide set emits
+userNativeUnits: list { "mystery" "cellar" } out staticlist StringView
+
+# wideItem -- an item of the wide set, run in the repository
+wideItem: function {g: Gate.view name: StringView words: StringView byName: bool} out EmitItem is {
+    return (
+        EmitItem
+        name: name.string
+        cwd: g.repo.copy
+        args: (wordsOf text: words)
+        :byName
+        dumpArgs: List String
+    )
+}
+
+# collectPrograms -- every .z file under the directory `rel` of the
+# repository, tests/fixtures/errors left out, appended to `files` as paths
+# from the repository
+collectPrograms: function {g: Gate.view rel: StringView files: List String} is {
+    if rel == "tests/fixtures/errors" then return
+    ls: io.listDir path: "\{g.repo}/\{rel}"
+    if ls.err then return
+    for each e: ls loop {
+        sub: "\{rel}/\{e}"
+        st: io.stat path: "\{g.repo}/\{sub}"
+        if st.ok then {
+            if st.kind.dir then {
+                collectPrograms :g rel: sub.stringView :files
+            } else if e.stringView.endsWith ".z" then files.append sub.take
+        }
+    }
+}
+
+# flatName -- a path from the repository as one file name: its `/` written
+# `_` and its `.z` left off
+flatName: function {rel: StringView} out String is {
+    stem: rel.substring from: 0 to: rel.length - 2
+    return (stem.replace needle: "/" replacement: "_")
+}
+
+# zFiles -- the .z files of the directory `dir`, by name, sorted
+zFiles: function {dir: StringView} out List String is {
+    l: List String
+    ls: io.listDir path: dir
+    if ls.err then return l
+    for each e: ls loop {
+        if e.stringView.endsWith ".z" then l.append e.copy
+    }
+    l.sort
+    return l
+}
+
+# declaresMain -- the file at `path` has a line that starts `main:`
+declaresMain: function {path: StringView} out bool is {
+    text: zjobs.slurp :path
+    for each ln: text.stringView.lines loop {
+        if ln.startsWith "main:" then return true
+    }
+    return false
+}
+
+# classifyAll -- each of `names`' C sorted RENUM, REORDER or REAL; the counts,
+# and each REAL one with the blanked lines only one side has (the first 20
+# files, 8 lines each)
+classifyAll: function {outDir: StringView names: (List String).view lines: List String} is {
+    renum: u64
+    reorder: u64
+    real: List String
+    for each nm: names loop {
+        a: blanked text: (zjobs.slurp path: "\{outDir}/ref/c/\{nm}.c".stringView).stringView
+        b: blanked text: (zjobs.slurp path: "\{outDir}/new/c/\{nm}.c".stringView).stringView
+        if a == b then {
+            renum = renum + 1
+        } else if (sameLines :a :b) then {
+            reorder = reorder + 1
+        } else real.append nm.copy
+    }
+    (
+        say
+        :lines
+        text: "renumbering only: \{renum}; reordered: \{reorder}; real differences: \{real.length}".stringView
+    )
+    shown: u64
+    for each nm: real loop {
+        if shown < 20 then {
+            say :lines text: "  REAL \{nm}".stringView
+            a: blanked text: (zjobs.slurp path: "\{outDir}/ref/c/\{nm}.c".stringView).stringView
+            b: blanked text: (zjobs.slurp path: "\{outDir}/new/c/\{nm}.c".stringView).stringView
+            printOneSided :a :b :lines
+        }
+        shown = shown + 1
+    }
+}
+
+# sortedLines -- the lines of `text`, sorted
+sortedLines: function {text: String.view} out List String is {
+    l: List String
+    for each ln: text.stringView.lines loop l.append ln.string
+    l.sort
+    return l
+}
+
+# sameLines -- `a` and `b` hold the same lines, in any order
+sameLines: function {a: String.view b: String.view} out bool is {
+    la: sortedLines text: a
+    lb: sortedLines text: b
+    if la.length != lb.length then return false
+    i: u64
+    for i < la.length loop {
+        if (la.get :i) != (lb.get :i) then return false
+        i = i + 1
+    }
+    return true
+}
+
+# printOneSided -- up to 8 of the lines only one of `a` (-) and `b` (+) holds
+printOneSided: function {a: String.view b: String.view lines: List String} is {
+    la: sortedLines text: a
+    lb: sortedLines text: b
+    i: u64
+    j: u64
+    shown: u64
+    for (i < la.length) or (j < lb.length) while shown < 8 loop {
+        if j >= lb.length then {
+            say :lines text: "    - \{la.get :i}".stringView
+            i = i + 1
+            shown = shown + 1
+        } else if i >= la.length then {
+            say :lines text: "    + \{lb.get i: j}".stringView
+            j = j + 1
+            shown = shown + 1
+        } else {
+            c: (la.get :i).stringView.compare rhs: (lb.get i: j).stringView
+            if c == 0 then {
+                i = i + 1
+                j = j + 1
+            } else if c < 0 then {
+                say :lines text: "    - \{la.get :i}".stringView
+                i = i + 1
+                shown = shown + 1
+            } else {
+                say :lines text: "    + \{lb.get i: j}".stringView
+                j = j + 1
+                shown = shown + 1
+            }
+        }
+    }
+}
+
+# blanked -- `text` with each minted number written N: a run of digits inside
+# a C identifier, after one of the mintedPrefix spellings
+blanked: function {text: StringView} out String is {
+    res: String
+    start: u64
+    inName: false
+    inNumber: false
+    i: u64
+    for i < text.length loop {
+        b: (text.byteAt :i).or d: 0
+        word: ascii.isWord :b
+        if word.not then {
+            inName = false
+            inNumber = false
+            res.appendByte :b
+            i = i + 1
+        } else if inName.not when inNumber.not then {
+            start = i
+            inName = (ascii.isDigit :b).not
+            inNumber = ascii.isDigit :b
+            res.appendByte :b
+            i = i + 1
+        } else if inName when (ascii.isDigit :b) when (endsMinted :text :start end: i) then {
+            res.appendByte b: 0cN
+            for i < text.length while (ascii.isDigit b: ((text.byteAt :i).or d: 0)) loop i = i + 1
+        } else {
+            res.appendByte :b
+            i = i + 1
+        }
+    }
+    return res
+}
+
+# endsMinted -- the identifier text from `start` to `end` ends with a
+# mintedPrefix spelling
+endsMinted: function {text: StringView start: u64 end: u64} out bool is {
+    name: text.substring from: start to: end
+    for each p: mintedPrefix loop {
+        if name.endsWith p then return true
+    }
+    return false
+}

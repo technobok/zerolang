@@ -1,0 +1,403 @@
+# zgate -- the gate tool of the zerolang repository: a development program
+# (bin/zgate, built by `make test`, never installed). One subcommand a job:
+#   snap TAG              keep bin/zc, bin/zl and the tree of a clean HEAD as
+#                         snapshot TAG, the old side the comparisons read
+#   cdiff REF NEW OUT     emit the C, and the canonical dumps, of every program
+#                         with both compilers, and list what differs
+#   ab OLDZC NEWZC OLDTREE [NEWTREE]
+#                         the allocation split of a self-compile
+#   asan ZC FILE [ARGS]   build FILE with AddressSanitizer and UBSan and run it
+#   pregate               the seconds-long checks of the .z files changed
+#                         since HEAD
+#   run TAG OUT [SHA]     the per-batch gate of SHA against snapshot TAG
+#   time ci|gates OUT [SHA]
+#                         make ci, or each ci-gates leg alone, timed
+# The repository is the current directory, or --repo DIR. Snapshots, the run
+# lock and scratch files live in $ZGATE_HOME (~/.cache/zerolang/gate when it is
+# not set). The worktree a run or a timing makes stands beside the repository,
+# named so that its path is as long as the repository's: the self-compile's
+# allocation count reads the compiler's own path and the working directory.
+
+# Public interface -- the definitions other units may reference; all other
+# top-level definitions are private to this unit.
+public: unit {
+    :main
+}
+
+# command -- the subcommands, by the word that names each
+command: list {
+    snap: "snap"
+    cdiff: "cdiff"
+    ab: "ab"
+    asan: "asan"
+    pregate: "pregate"
+    run: "run"
+    time: "time"
+    help: "help"
+} out staticlist StringView
+
+# opt -- the options the subcommands take, as they are written
+opt: list {
+    repo: "--repo"
+    jobs: "--jobs"
+    set: "--set"
+    normalise: "--normalise"
+    refSystem: "--ref-system"
+} out staticlist StringView
+
+# PoolStep, PoolJob -- a spawn of a job and a job, of the job pool (zjobs)
+PoolStep: zjobs.PoolStep
+PoolJob: zjobs.PoolJob
+
+# wrongUsage -- the exit status of a command line zgate does not accept
+wrongUsage: 2
+
+# Gate -- what every subcommand reads: the repository, zgate's home and how
+# many jobs run at once
+Gate: class {
+    # the repository's absolute path
+    repo: String
+    # where snapshots, the run lock and scratch files live
+    home: String
+    # how many jobs run at once
+    jobs: u64
+}
+
+# printUsage -- the usage text, on stderr
+printUsage: function is {
+    io.eprintln "usage: zgate COMMAND [--repo DIR] [--jobs N] ..."
+    io.eprintln "  snap TAG                 keep bin/zc, bin/zl and HEAD's tree as snapshot TAG"
+    io.eprintln "  cdiff REF NEW OUT [--set corpus|wide] [--normalise] [--ref-system DIR]"
+    io.eprintln "                           the C (and dumps) of every program, REF's against NEW's"
+    io.eprintln "  ab OLDZC NEWZC OLDTREE [NEWTREE]"
+    io.eprintln "                           the allocation split of a self-compile"
+    io.eprintln "  asan ZC FILE [ARGS]      build FILE with ASan and UBSan, and run it"
+    io.eprintln "  pregate                  the quick checks of the .z files changed since HEAD"
+    io.eprintln "  run TAG OUT [SHA]        the per-batch gate of SHA (HEAD) against snapshot TAG"
+    io.eprintln "  time ci|gates OUT [SHA]  make ci, or each ci-gates leg alone, timed"
+    io.eprintln "The repository is the current directory, or --repo DIR; snapshots and the run"
+    io.eprintln "lock live in $ZGATE_HOME (default ~/.cache/zerolang/gate)."
+}
+
+# main -- read the subcommand and run it; its answer is zgate's exit status
+main: function is {
+    args: os.args
+    if args.length < 2 then {
+        printUsage
+        os.exit code: wrongUsage
+    }
+    words: zast.Vocab.create block: command
+    which: words.slotOf text: (args.get i: 1).stringView
+    if which == command.slot.help then {
+        printUsage
+        os.exit code: 0
+    }
+    if which == words.none then {
+        bad: "zgate: unknown command '\{args.get i: 1}'"
+        io.eprintln bad
+        printUsage
+        os.exit code: wrongUsage
+    }
+    os.exit code: (runCommand :which args: args.take)
+}
+
+# runCommand -- the subcommand `which` with the command line `args`; answers
+# its exit status
+runCommand: function {which: u64 args: (List String).take} out i32 is {
+    sp: specOf :which
+    pr: cli.parse spec: sp :args first: 2
+    match (
+        pr
+    ) case err then {
+        io.eprintln (cli.errorText spec: sp e: pr)
+        return wrongUsage
+    } case ok then null
+    g: gateFrom p: pr
+    if (io.exists path: "\{g.repo}/Makefile").not then {
+        io.eprintln "zgate: \{g.repo} is no repository: it has no Makefile (--repo DIR)"
+        return wrongUsage
+    }
+    if which == command.slot.snap then return (
+        snapshot.runSnap
+        :g
+        tag: (operand p: pr name: "TAG").stringView
+    )
+    if which == command.slot.cdiff then return (cdiff.runCdiffCommand :g p: pr)
+    if which == command.slot.ab then return (absplit.runAbCommand :g p: pr)
+    if which == command.slot.asan then return (runAsan :g p: pr)
+    if which == command.slot.pregate then return (pregate.runPregate :g)
+    if which == command.slot.run then return (gaterun.runGateCommand :g p: pr)
+    return (timing.runTimeCommand :g p: pr)
+}
+
+# specOf -- the command line of subcommand `which`
+specOf: function {which: u64} out cli.Spec is {
+    sp: cli.Spec.create programName: "zgate \{command.get i: which}" summary: "".string
+    addValue :sp name: opt.repo
+    addValue :sp name: opt.jobs
+    if which == command.slot.snap then {
+        addOperand :sp name: "TAG" required: true
+    } else if which == command.slot.cdiff then {
+        addOperand :sp name: "REF" required: true
+        addOperand :sp name: "NEW" required: true
+        addOperand :sp name: "OUT" required: true
+        addValue :sp name: opt.set
+        addValue :sp name: opt.refSystem
+        cli.addFlag spec: sp name: opt.normalise.string shortName: "".string help: "".string
+    } else if which == command.slot.ab then {
+        addOperand :sp name: "OLDZC" required: true
+        addOperand :sp name: "NEWZC" required: true
+        addOperand :sp name: "OLDTREE" required: true
+        addOperand :sp name: "NEWTREE" required: false
+    } else if which == command.slot.asan then {
+        addOperand :sp name: "ZC" required: true
+        addOperand :sp name: "FILE" required: true
+        sp.stopAtOperand = true
+    } else if which == command.slot.run then {
+        addOperand :sp name: "TAG" required: true
+        addOperand :sp name: "OUT" required: true
+        addOperand :sp name: "SHA" required: false
+    } else if which == command.slot.time then {
+        addOperand :sp name: "WHAT" required: true
+        addOperand :sp name: "OUT" required: true
+        addOperand :sp name: "SHA" required: false
+    }
+    return sp
+}
+
+# addValue -- declares an option on `sp` that a command line may leave out
+addValue: function {sp: cli.Spec.borrow name: StringView} is {
+    (
+        cli.addOption
+        spec: sp
+        name: name.string
+        shortName: "".string
+        help: "".string
+        required: false
+    )
+}
+
+# addOperand -- declares an operand on `sp`
+addOperand: function {sp: cli.Spec.borrow name: StringView required: bool} is {
+    cli.addPositional spec: sp name: name.string help: "".string :required
+}
+
+# operand -- the operand `name` of `p`; empty when it was left out
+operand: function {p: cli.Parsed.view name: StringView} out String is {
+    v: p.positional :name
+    match (
+        v
+    ) case some then {
+        return v.copy
+    } case none then {
+        return "".string
+    }
+}
+
+# optionText -- the option `name` of `p`; `d` when it was left out
+optionText: function {p: cli.Parsed.view name: StringView d: StringView} out String is {
+    v: p.option :name
+    match (
+        v
+    ) case some then {
+        return v.copy
+    } case none then {
+        return d.string
+    }
+}
+
+# gateFrom -- the Gate the command line `p` asks for
+gateFrom: function {p: cli.Parsed.view} out Gate is {
+    jobs: os.cpuCount.u64.orPanic
+    jt: optionText :p name: opt.jobs d: ""
+    if jt.length > 0 then {
+        n: jt.stringView.parseU64
+        if n.ok when n > 0 then jobs = n
+    }
+    repo: optionText :p name: opt.repo d: "."
+    return (Gate repo: (absolute p: repo.stringView) home: homeDir :jobs)
+}
+
+# homeDir -- $ZGATE_HOME, else ~/.cache/zerolang/gate
+homeDir: function out String is {
+    h: os.env key: "ZGATE_HOME"
+    if h.some when h.length > 0 then return (absolute p: h.stringView)
+    home: os.env key: "HOME"
+    if home.some then return "\{home}/.cache/zerolang/gate"
+    return (absolute p: ".zgate")
+}
+
+# absolute -- `p` as an absolute path: itself when it is one, else under
+# the working directory (`.` is the working directory itself)
+absolute: function {p: StringView} out String is {
+    if p.startsWith "/" then return p.string
+    wd: os.cwd
+    if wd.err then return p.string
+    if p == "." then return wd.copy
+    return (path.join a: wd.stringView b: p)
+}
+
+# wordsOf -- the space-separated words of `text`, as a command line's start
+wordsOf: function {text: StringView} out List String is {
+    l: List String
+    for each w: (text.split sep: " ") loop {
+        if w.length > 0 then l.append from: w.string
+    }
+    return l
+}
+
+# runTo -- spawn `argv` in `cwd` (zgate's own when empty), its stdout to
+# `outPath` and its stderr to `errPath` (zgate's own when empty); answers its
+# exit status
+runTo: function {
+    argv: List String cwd: StringView outPath: StringView errPath: StringView
+} out i32 is {
+    return (os.spawn :argv :cwd :outPath :errPath timeoutSecs: 0)
+}
+
+# Captured -- a command's exit status and what it printed on stdout and on
+# stderr
+Captured: class {
+    status: i32
+    text: String
+    err: String
+}
+
+# captured -- `argv` run in `cwd`, its stdout and stderr read back (through
+# files named for `tag` under zgate's home)
+captured: function {
+    g: Gate.view argv: List String cwd: StringView tag: StringView
+} out Captured is {
+    io.mkdirp path: "\{g.home}/tmp"
+    outp: "\{g.home}/tmp/\{tag}.\{os.pid}.out"
+    errp: "\{g.home}/tmp/\{tag}.\{os.pid}.err"
+    status: runTo :argv :cwd outPath: outp.stringView errPath: errp.stringView
+    text: zjobs.slurp path: outp.stringView
+    err: zjobs.slurp path: errp.stringView
+    r1: io.remove path: outp
+    r1.drop
+    r2: io.remove path: errp
+    r2.drop
+    return (Captured :status :text :err)
+}
+
+# gitArgv -- `git -C <repo>` followed by the words of `words`
+gitArgv: function {repo: StringView words: StringView} out List String is {
+    a: List String
+    a.append from: "git".string
+    a.append from: "-C".string
+    a.append from: repo.string
+    for each w: (wordsOf text: words) loop a.append from: w.copy
+    return a
+}
+
+# phaseName -- a make phase's name in a log: the last word of its arguments
+phaseName: function {words: StringView} out String is {
+    ws: wordsOf text: words
+    if ws.length == 0 then return "".string
+    return (ws.get i: ws.length - 1).copy
+}
+
+# makeIn -- `make` with the words of `words`, in `dir`, its stdout to
+# `<log>.log` and its stderr to `<log>.err`; answers its exit status
+makeIn: function {dir: StringView words: StringView log: StringView} out i32 is {
+    return (makeWith :dir args: (wordsOf text: words) :log)
+}
+
+# makeWith -- `make` with the arguments `args`, each one argument whatever it
+# holds, as makeIn runs it
+makeWith: function {dir: StringView args: (List String).view log: StringView} out i32 is {
+    a: List String
+    a.append from: "make".string
+    for each w: args loop a.append from: w.copy
+    return (runTo argv: a cwd: dir outPath: "\{log}.log".stringView errPath: "\{log}.err".stringView
+    )
+}
+
+# say -- print `text`, and add it to `lines`, which a gate writes to its log
+say: function {lines: List String text: StringView} is {
+    print text
+    lines.append text.string
+}
+
+# secsSince -- whole seconds since `t0` on the monotonic clock
+secsSince: function {t0: i64} out i64 is {
+    return os.monotonicMillis - t0 / 1000
+}
+
+# sibling -- the worktree for `role` beside the repository: a name as long as
+# the repository's own (`zlwt-gat` beside `zerolang`), so its paths are as long
+sibling: function {repo: StringView role: StringView} out String is {
+    base: path.baseName p: repo
+    name: "zlwt-\{role}----------------------------------------"
+    n: base.length
+    if n > name.length then n = name.length
+    dir: path.dirname p: repo
+    return (path.join a: dir.stringView b: (name.stringView.substring from: 0 to: n))
+}
+
+# removeWorktree -- remove the repository's worktree `dir`, if it has one there
+removeWorktree: function {repo: StringView dir: StringView} is {
+    a: gitArgv :repo words: "worktree remove --force"
+    a.append from: dir.string
+    rc: runTo argv: a cwd: "" outPath: os.nullDevice.stringView errPath: os.nullDevice.stringView
+    rc.drop
+}
+
+# addWorktree -- a fresh worktree of the repository at `sha` in `dir`, any
+# old one there removed first; false when git refuses
+addWorktree: function {repo: StringView dir: StringView sha: StringView} out bool is {
+    removeWorktree :repo :dir
+    a: gitArgv :repo words: "worktree add -q --detach"
+    a.append from: dir.string
+    a.append from: sha.string
+    return (runTo argv: a cwd: "" outPath: os.nullDevice.stringView errPath: "") == 0
+}
+
+# fullSha -- the commit `rev` names, in full; empty when git cannot name it
+fullSha: function {g: Gate.view rev: StringView} out String is {
+    a: gitArgv repo: g.repo.stringView words: "rev-parse --verify --quiet"
+    a.append from: "\{rev}^{commit}"
+    c: captured :g argv: a cwd: "" tag: "sha"
+    if c.status != 0 then return "".string
+    return c.text.stringView.trim.string
+}
+
+# runAsan -- `zgate asan ZC FILE [ARGS]`: FILE built by ZC with
+# AddressSanitizer and UBSan, in FILE's directory, then run with ARGS; answers
+# the program's exit status, or 3 when it did not build
+runAsan: function {g: Gate.view p: cli.Parsed.view} out i32 is {
+    zc: absolute p: (operand :p name: "ZC").stringView
+    file: absolute p: (operand :p name: "FILE").stringView
+    dir: "\{g.home}/asan"
+    io.mkdirp path: dir
+    bin: "\{dir}/a.\{os.pid}"
+    b: List String
+    b.append from: zc.copy
+    b.append from: "build".string
+    b.append from: (path.baseName p: file.stringView)
+    b.append from: "-o".string
+    b.append from: bin.copy
+    b.append from: "--system".string
+    b.append from: "\{g.repo}/lib/system"
+    b.append from: "--cflags".string
+    (
+        b.append
+        from: "-O0 -g -fsanitize=address,undefined -fno-omit-frame-pointer -fwrapv -fno-strict-aliasing".string
+    )
+    b.append from: "--ldflags".string
+    b.append from: "-fsanitize=address,undefined".string
+    if (
+        (runTo argv: b cwd: (path.dirname p: file.stringView).stringView outPath: "" errPath: "") !=
+        0
+    ) then return 3
+    os.setEnv key: "ASAN_OPTIONS" value: "detect_leaks=1"
+    os.setEnv key: "UBSAN_OPTIONS" value: "print_stacktrace=1:halt_on_error=1"
+    r: List String
+    r.append from: bin.copy
+    for each a: p.extraArgs loop r.append from: a.copy
+    status: runTo argv: r cwd: "" outPath: "" errPath: ""
+    rm: io.remove path: bin
+    rm.drop
+    return status
+}

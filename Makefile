@@ -112,22 +112,23 @@ SKIP     := mathutil genmath dissectlib
 EXAMPLES := $(wildcard examples/*.z)
 NAMES    := $(filter-out $(SKIP),$(basename $(notdir $(EXAMPLES))))
 
-.PHONY: all check complexity-report style-lint-fast style-lint test doc-check arch-check emitted-check ci ci-gates gate-guards gate-same-c ci-corpus fuzz fuzz-ci fuzz-known \
+.PHONY: all check complexity-report style-lint-fast style-lint test doc-check arch-check emitted-check ci ci-gates ci-legs gate-guards gate-same-c ci-corpus fuzz fuzz-ci fuzz-known \
 	test-math-arm64 test-sqlite-arm64 test-mingw test-tcc-mingw test-msvc-wine test-msvc-corpus ci-windows windows-guest windows-due test-math-noasm test-portable-scalars math-asm-guard \
 	bench-math bench-math-kernels test-clang test-tcc test-tcc-heavy readable-check build \
 	tcc zc zl zls regen-goldens regen-fmt-goldens regen-matrix matrix-guard regen-constparity constparity-guard regen-math-asm \
 	fmt-raw-guard regen-lsp-goldens bump-seed test-bootstrap install docs warn-check pedantic-check perf \
 	perf-strict pre-push perf-elision \
 	shim-guard thread-tsan-guard sqlite-decls-guard mode-parity \
-	emit-set ident-set \
 	view-guard clean native-guard \
 	
 # Keep the per-example .c intermediates.
 .SECONDARY:
 
 # The zerolang sources of the tools under tools/ (one program per directory).
-TOOLSRC := $(wildcard tools/*/*.z)
-TOOLDIRS := $(sort $(patsubst %/,%,$(dir $(TOOLSRC))))
+# the tools' sources: each tool's files, and the subunits of a tool's unit
+# (tools/<tool>/<unit>/*.z)
+TOOLSRC := $(wildcard tools/*/*.z tools/*/*/*.z)
+TOOLDIRS := $(sort $(patsubst %/,%,$(dir $(wildcard tools/*/*.z))))
 
 # SRC_SUBUNITS -- the subunit files of the compiler's units: the `.z` files of a
 # folder under src/, which is the folder of the unit of its name. CHECKER_SRCS
@@ -167,8 +168,8 @@ style-lint-fast: bin/zl
 style-lint: bin/zl
 	bin/zl lint --full --src src --system lib/system $(ZLFULLSCOPE)
 	bin/zl lint --full --src tests/unit --src src --system lib/system tests/unit/*.z
-	@for d in $(TOOLDIRS); do echo "bin/zl lint --full --src $$d --system lib/system $$d/*.z"; \
-	  bin/zl lint --full --src $$d --system lib/system $$d/*.z || exit 1; done
+	@for d in $(TOOLDIRS); do echo "bin/zl lint --full --src $$d --src src --system lib/system $$d/*.z"; \
+	  bin/zl lint --full --src $$d --src src --system lib/system $$d/*.z $(filter $$d/%,$(wildcard tools/*/*/*.z)) || exit 1; done
 	bin/zl format --check $(FMTSCOPE)
 
 # out/ztestrunner -- the corpus runner (src/ztestrunner.z and its subunits under
@@ -178,11 +179,20 @@ $(BUILDDIR)/ztestrunner: bin/zc src/ztestrunner.z $(wildcard src/ztestrunner/*.z
 	bin/zc ztestrunner --src src --system lib/system --emit-c $(BUILDDIR)/ztestrunner.c
 	$(CC) $(CFLAGS) $(MAINSTACK) -o $(BUILDDIR)/ztestrunner $(BUILDDIR)/ztestrunner.c $(call ZLINKOF,$(BUILDDIR)/ztestrunner.c) -lm
 
+# bin/zgate -- the gate tool (tools/zgate): snapshots, C diffs, the allocation
+# split, pregate, the per-batch gate and the CI timings. A development program:
+# `make install` leaves it out. It reads the job pool and the compiler
+# families from src (zjobs, zcc).
+bin/zgate: bin/zc $(wildcard tools/zgate/*.z tools/zgate/*/*.z) src/zjobs.z src/zcc.z $(wildcard lib/system/*.z) $(wildcard lib/system/system/*.z lib/system/math/*.z)
+	@mkdir -p $(BUILDDIR) bin
+	bin/zc zgate --src tools/zgate --src src --system lib/system --emit-c $(BUILDDIR)/zgate.c
+	$(CC) $(CFLAGS) -o bin/zgate $(BUILDDIR)/zgate.c $(call ZLINKOF,$(BUILDDIR)/zgate.c) -lm
+
 # test -- the fast corpus gate. The arch and docs kinds run bin/zl, so it must be
 # built: without it those kinds count nothing and every ratchet reads zero. The
 # usage kind runs each driver from bin/, bin/zls among them, and one of its cases
 # links with the vendored tcc.
-test: bin/zc bin/zl bin/zls $(BUILDDIR)/ztestrunner $(BUILDDIR)/tcc
+test: bin/zc bin/zl bin/zls bin/zgate $(BUILDDIR)/ztestrunner $(BUILDDIR)/tcc
 	$(BUILDDIR)/ztestrunner --zc bin/zc --cc $(CC) --root . --jobs $(NPROC)
 
 # doc-check -- the doccode kind alone: every zerolang example in docs/*.pdoc and
@@ -278,8 +288,14 @@ gate-same-c: $(GATE_SAME_C)
 
 # ci-gates -- the gates ci runs in parallel, after perf-strict: the per-batch
 # gate's legs and the slower corpus runs only ci makes.
-ci-gates: $(GATE_GUARDS) $(GATE_SAME_C) complexity-report readable-check test-tcc-heavy test-clang \
+CI_ONLY := complexity-report readable-check test-tcc-heavy test-clang \
 	test-o2 test-math-arm64 test-sqlite-arm64 mode-parity fuzz-ci ci-corpus
+ci-gates: $(GATE_GUARDS) $(GATE_SAME_C) $(CI_ONLY)
+
+# ci-legs -- ci-gates' legs on one line, which `zgate time gates` runs one at a
+# time
+ci-legs:
+	@echo $(GATE_GUARDS) $(GATE_SAME_C) $(CI_ONLY)
 
 ci-corpus: bin/zc bin/zl bin/zls $(BUILDDIR)/ztestrunner
 	$(BUILDDIR)/ztestrunner --zc bin/zc --cc $(CC) --root . --heavy --jobs $(NPROC)
@@ -1413,41 +1429,6 @@ mode-parity: bin/zc $(BUILDDIR)/tcc $(BUILDDIR)/ztestrunner
 	    || { cat $(BUILDDIR)/mode-parity.log; echo "mode-parity FAIL: zc build --cc tcc --cc-mode $$m (above): a program that differs from its golden, or a refusal $(TCC_KNOWN) does not list"; exit 1; }; \
 	done; \
 	echo "mode-parity OK: zc build --cc tcc builds every run case to its goldens under --cc-mode spawn and inproc, refusing $(TCC_KNOWN)'s in both"
-
-# emit-set / ident-set -- the byte-identity oracle for refactors. `make emit-set
-# OUT=dir [ZC=...]` emits every example, corpus program and driver; `make
-# ident-set A=dir B=dir` diffs two sets with every minted id normalised away.
-EMITSET_ZC ?= bin/zc
-emit-set:
-	@test -n "$(OUT)" || { echo "usage: make emit-set OUT=dir [ZC=bin/zc]"; exit 1; }; \
-	zc="$${ZC:-$(EMITSET_ZC)}"; mkdir -p "$(OUT)"; n=0; bad=""; \
-	for f in examples/*.z tests/fixtures/emitc_corpus/*.z; do \
-	  b=$$(basename $$f .z); \
-	  grep -q '^main:' $$f || continue; \
-	  if $$zc emit $$f -o "$(OUT)/$$b.c" >"$(OUT)/$$b.log" 2>&1; then n=$$(($$n + 1)); rm -f "$(OUT)/$$b.log"; \
-	  else bad="$$bad $$b"; rm -f "$(OUT)/$$b.c"; fi; \
-	done; \
-	for d in zc zl zls; do \
-	  if $$zc $$d --src src --system lib/system $(ZCHASH) --emit-c "$(OUT)/$$d.c" >"$(OUT)/$$d.log" 2>&1; then n=$$(($$n + 1)); rm -f "$(OUT)/$$d.log"; \
-	  else bad="$$bad $$d"; fi; \
-	done; \
-	echo "emit-set: $$n programs emitted into $(OUT)"; \
-	if [ -n "$$bad" ]; then echo "emit-set: NOT emitted (see .log):$$bad"; fi
-
-ident-set:
-	@test -n "$(A)" && test -n "$(B)" || { echo "usage: make ident-set A=dir B=dir"; exit 1; }; \
-	na=$$(mktemp -d); nb=$$(mktemp -d); rep=$$(mktemp); \
-	norm() { sed -E -e 's/z_t[0-9]+/z_tN/g' -e 's/_t[0-9]+_/_tN_/g' -e 's/Z_T[0-9]+_/Z_TN_/g' \
-	  -e 's/_i[0-9]+\b/_iN/g' -e 's/_zs[0-9]+\b/_zsN/g' -e 's/z_v[0-9]+\b/z_vN/g' "$$1" > "$$2"; }; \
-	for f in "$(A)"/*.c; do b=$$(basename $$f); norm "$$f" "$$na/$$b"; done; \
-	for f in "$(B)"/*.c; do b=$$(basename $$f); norm "$$f" "$$nb/$$b"; done; \
-	raw=$$(diff -rq "$(A)" "$(B)" | grep -c '\.c' || true); \
-	if diff -rq "$$na" "$$nb" > "$$rep"; then \
-	  echo "ident-set OK: identical after normalisation ($$raw file(s) differ raw)"; rm -rf "$$na" "$$nb" "$$rep"; \
-	else \
-	  echo "ident-set: $$(grep -c . "$$rep") file(s) differ after normalisation ($$raw raw):"; \
-	  sed 's/^/  /' "$$rep" | head -60; rm -rf "$$na" "$$nb" "$$rep"; exit 1; \
-	fi
 
 # view-guard -- a native receiver marked `.view` is const in the C function that
 # takes it, and a const one is marked `.view`, so the C compiler proves a viewed
