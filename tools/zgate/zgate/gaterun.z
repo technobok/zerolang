@@ -10,7 +10,9 @@
 #              differs, the legs that only rebuild that same C -- test-clang,
 #              test-tcc and the Makefile's GATE_SAME_C -- are skipped
 #   check, test        always: the error fixtures, the smokes and the runner's
-#                      kinds are about the compiler, not only its C
+#                      kinds are about the compiler, not only its C. A test
+#                      phase's last two lines are logged, and any phase's
+#                      when it fails
 #   test-clang, test-tcc  unless skipped
 #   ab         the allocation split against the snapshot
 #   perf       make perf-strict, alone: a zc running beside it in the same
@@ -151,12 +153,14 @@ gatePhases: function {
             :logPath
             text: "\{phaseName words: ph.stringView}=\{prc} secs=\{secsSince t0: t1}".stringView
         )
-        for each tl: (
-            tailLines
-            path: "\{outDir}/\{phaseName words: ph.stringView}.log".stringView
-            n: 2
-        ) loop {
-            logLine :lines :logPath text: tl.stringView
+        if (prc != 0) or (ph.stringView.startsWith "test") then {
+            for each tl: (
+                tailLines
+                path: "\{outDir}/\{phaseName words: ph.stringView}.log".stringView
+                n: 2
+            ) loop {
+                logLine :lines :logPath text: tl.stringView
+            }
         }
         if prc != 0 then failed = true
     }
@@ -203,13 +207,15 @@ gatePhases: function {
     if same.not then guards.append " gate-same-c"
     grc: makeIn dir: wt words: guards.stringView log: "\{outDir}/guards".stringView
     logLine :lines :logPath text: "guards=\{grc} secs=\{secsSince :t0}".stringView
-    for each fl: (failLines path: "\{outDir}/guards".stringView) loop (
-        logLine
-        :lines
-        :logPath
-        text: fl.stringView
-    )
-    if grc != 0 then failed = true
+    if grc != 0 then {
+        for each fl: (failLines path: "\{outDir}/guards".stringView) loop (
+            logLine
+            :lines
+            :logPath
+            text: fl.stringView
+        )
+        failed = true
+    }
     due: (
         makeIn
         dir: wt
