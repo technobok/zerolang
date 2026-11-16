@@ -120,11 +120,10 @@ NAMES    := $(filter-out $(SKIP),$(basename $(notdir $(EXAMPLES))))
 	fmt-raw-guard regen-lsp-goldens bump-seed test-bootstrap install docs warn-check pedantic-check perf \
 	perf-strict pre-push perf-elision \
 	user-native-guard shim-guard thread-tsan-guard cobj-guard sqlite-decls-guard mode-parity \
-	refusal-guard static-tcc-guard emit-set ident-set \
+	static-tcc-guard emit-set ident-set \
 	piece-guard \
 	view-guard clean native-guard \
-	zl-full-guard
-
+	
 # Keep the per-example .c intermediates.
 .SECONDARY:
 
@@ -183,8 +182,9 @@ $(BUILDDIR)/ztestrunner: bin/zc src/ztestrunner.z $(wildcard src/ztestrunner/*.z
 
 # test -- the fast corpus gate. The arch and docs kinds run bin/zl, so it must be
 # built: without it those kinds count nothing and every ratchet reads zero. The
-# usage kind runs each driver from bin/, bin/zls among them.
-test: bin/zc bin/zl bin/zls $(BUILDDIR)/ztestrunner
+# usage kind runs each driver from bin/, bin/zls among them, and one of its cases
+# links with the vendored tcc.
+test: bin/zc bin/zl bin/zls $(BUILDDIR)/ztestrunner $(BUILDDIR)/tcc
 	$(BUILDDIR)/ztestrunner --zc bin/zc --cc $(CC) --root . --jobs $(NPROC)
 
 # doc-check -- the doccode kind alone: every zerolang example in docs/*.pdoc and
@@ -286,11 +286,11 @@ ci:
 # GATE_GUARDS -- the legs of ci-gates the per-batch gate runs, in parallel and to
 # the end (`make -k -j gate-guards`). The gate runs check, test, perf-strict and
 # the clang and tcc corpora itself.
-GATE_GUARDS := style-lint zl-full-guard warn-check pedantic-check native-guard view-guard \
-	emitted-check piece-guard user-native-guard shim-guard thread-tsan-guard cobj-guard \
-	sqlite-decls-guard static-tcc-guard refusal-guard fmt-raw-guard nativec-agree-guard \
-	natives-show-guard prelude-share-guard math-asm-guard matrix-guard constparity-guard \
-	test-math-noasm test-portable-scalars test-msvc-wine
+GATE_GUARDS := style-lint warn-check pedantic-check native-guard view-guard emitted-check \
+	piece-guard user-native-guard shim-guard thread-tsan-guard cobj-guard sqlite-decls-guard \
+	static-tcc-guard fmt-raw-guard nativec-agree-guard natives-show-guard prelude-share-guard \
+	math-asm-guard matrix-guard constparity-guard test-math-noasm test-portable-scalars \
+	test-msvc-wine
 # GATE_SAME_C -- the legs that only rebuild and run the emitted C of the run
 # corpus: the per-batch gate leaves them out when the C every program emits is the
 # C its snapshot's compiler emits, and runs them otherwise.
@@ -1703,95 +1703,6 @@ mode-parity: bin/zc $(BUILDDIR)/tcc
 	fi; \
 	echo "mode-parity OK: $$n run cases identical under --cc-mode spawn and inproc (output and exit code, not bytes)"
 
-# refusal-guard -- zc refuses what it cannot honour, exit 2 and naming it, and the
-# honoured counterpart still works: --ldflags under inproc, bad or ambiguous
-# --target, tcc cross, f128 off x86-64, a missing root, a missing unit. Not error
-# fixtures: those only ever run --emit-c, which never reaches these paths. A
-# command line zc refuses before it starts any work (an unknown option, an
-# option with no value, a surplus operand, `zc explain` of a foreign code) is a
-# case of the runner's usage kind, under tests/fixtures/usage.
-refusal-guard: bin/zc $(BUILDDIR)/tcc
-	@d=$(BUILDDIR)/refusal; rm -rf $$d; mkdir -p $$d; bad=0; \
-	bin/zc build hello --src examples --system lib/system --cc tcc --cc-mode spawn \
-	  --ldflags "-Wl,--nonsense-flag" -o $$d/a > $$d/a.log 2>&1; rc=$$?; \
-	if [ $$rc -eq 0 ] || [ -e $$d/a ]; then \
-	  echo "refusal-guard FAIL: --ldflags is not reaching the linker under spawn (exit $$rc)"; \
-	  cat $$d/a.log; bad=1; \
-	fi; \
-	bin/zc build hello --src examples --system lib/system --cc tcc --cc-mode inproc \
-	  --ldflags "-Wl,--nonsense-flag" -o $$d/b > $$d/b.log 2>&1; rc=$$?; \
-	if [ $$rc -ne 2 ] || [ -e $$d/b ]; then \
-	  echo "refusal-guard FAIL: --ldflags under --cc-mode inproc must exit 2, got $$rc"; \
-	  cat $$d/b.log; bad=1; \
-	elif ! grep -q -- '--ldflags' $$d/b.log || ! grep -q inproc $$d/b.log; then \
-	  echo "refusal-guard FAIL: the --ldflags refusal must name the flag and the resolved mode"; \
-	  cat $$d/b.log; bad=1; \
-	fi; \
-	bin/zc build os_platform --src examples --system lib/system --cc gcc \
-	  --target sparc-solaris-nonsense -o $$d/c > $$d/c.log 2>&1; rc=$$?; \
-	if [ $$rc -ne 2 ] || ! grep -q "names no operating system" $$d/c.log; then \
-	  echo "refusal-guard FAIL: an unrecognised --target must exit 2, got $$rc"; \
-	  cat $$d/c.log; bad=1; \
-	elif ! grep -q "operating systems: linux" $$d/c.log; then \
-	  echo "refusal-guard FAIL: the --target refusal must list the vocabulary it accepts"; \
-	  cat $$d/c.log; bad=1; \
-	fi; \
-	bin/zc build os_platform --src examples --system lib/system --cc tcc \
-	  --target x86_64-linux-windows -o $$d/e > $$d/e.log 2>&1; rc=$$?; \
-	if [ $$rc -ne 2 ] || ! grep -q "more than one operating system" $$d/e.log; then \
-	  echo "refusal-guard FAIL: an ambiguous --target must exit 2, not resolve to whichever test ran last (got $$rc)"; \
-	  cat $$d/e.log; bad=1; \
-	fi; \
-	bin/zc build os_platform --src examples --system lib/system --cc tcc \
-	  --target aarch64-linux -o $$d/f > $$d/f.log 2>&1; rc=$$?; \
-	if [ $$rc -ne 2 ] || [ -e $$d/f ]; then \
-	  echo "refusal-guard FAIL: --cc tcc with a non-host --target must exit 2, got $$rc"; \
-	  cat $$d/f.log; bad=1; \
-	elif ! grep -q "host-only linux-x86_64" $$d/f.log; then \
-	  echo "refusal-guard FAIL: the tcc cross refusal must say why tcc cannot"; \
-	  cat $$d/f.log; bad=1; \
-	fi; \
-	bin/zc emit tests/fixtures/emitc_corpus/math/math_constants_wide.z --target aarch64-linux-gnu \
-	  --system lib/system -o $$d/q.c > $$d/q.log 2>&1; rc=$$?; \
-	if [ $$rc -ne 1 ] || [ -e $$d/q.c ] || ! grep -q "which only x86_64 targets have" $$d/q.log; then \
-	  echo "refusal-guard FAIL: f128 for a non-x86-64 target must be refused by name, exit 1 (got $$rc)"; \
-	  cat $$d/q.log; bad=1; \
-	fi; \
-	if ! bin/zc env --target x86_64-w64-mingw32 | grep -q '^ZC_CC=x86_64-w64-mingw32-gcc$$'; then \
-	  echo "refusal-guard FAIL: the documented <triple>-gcc cross path stopped resolving"; \
-	  bin/zc env --target x86_64-w64-mingw32; bad=1; \
-	fi; \
-	bin/zc build os_platform --src examples --system lib/system --cc gcc \
-	  --target $(HOST_TARGET) -o $$d/g > $$d/g.log 2>&1; rc=$$?; \
-	if [ $$rc -ne 0 ] || [ "$$($$d/g | head -1)" != "os=$(HOST_OSNAME)" ]; then \
-	  echo "refusal-guard FAIL: a HOST --target must still build and fold to the host (exit $$rc)"; \
-	  cat $$d/g.log; bad=1; \
-	fi; \
-	for c in E0200 e0200 0200 200; do \
-	  if [ "$$(bin/zc explain $$c 2>&1 | head -1)" != "ownership error" ]; then \
-	    echo "refusal-guard FAIL: zc explain $$c must explain E0200"; bad=1; \
-	  fi; \
-	done; \
-	for root in "--system $$d/none" "--src $$d/none --system lib/system"; do \
-	  bin/zc emit hello --src examples $$root > $$d/r.log 2>&1; rc=$$?; \
-	  if [ $$rc -ne 2 ] || grep -q zpanic $$d/r.log || ! grep -q "$$d/none' does not exist" $$d/r.log; then \
-	    echo "refusal-guard FAIL: a missing root ($$root) must exit 2 naming it, got $$rc"; \
-	    cat $$d/r.log; bad=1; \
-	  fi; \
-	done; \
-	for cmd in emit build run dump; do \
-	  bin/zc $$cmd nosuchunit --src examples --system lib/system > $$d/u.log 2>&1; rc=$$?; \
-	  if [ $$rc -ne 1 ] || grep -q zpanic $$d/u.log || ! grep -q "Unknown reference 'nosuchunit'" $$d/u.log; then \
-	    echo "refusal-guard FAIL: zc $$cmd of a missing unit must report it and exit 1, got $$rc"; \
-	    cat $$d/u.log; bad=1; \
-	  fi; \
-	done; \
-	if [ $$bad -ne 0 ]; then \
-	  echo "  zc never accepts a flag it will ignore: it names what it resolved and exits 2."; \
-	  exit 1; \
-	fi; \
-	echo "refusal-guard OK: every unhonourable flag combination is refused, and its honoured counterpart still works"
-
 # static-tcc-guard -- the vendored tinycc is LGPL-2.1, so the drivers may only
 # dlopen it: no libtcc symbol may appear in them (see vendor/tinycc/VERSION.md).
 # STATIC_TCC_BINS overrides the binaries checked, to falsify the guard. A binary
@@ -1899,128 +1810,3 @@ clean:
 # row the numeric rule gives (body, needs and form; `zc natives conversions` prints them).
 native-guard: bin/zc
 	@bin/zc natives check rows --system lib/system
-
-# zl-full-guard -- `zl lint --full` never passes a file it did not check: it runs
-# with no flags from a foreign cwd, says why when it cannot, reports a dependency's error at that file, reports a generic body once,
-# lints a subunit as itself, places L003/L011 only in the --full tier, and
-# reports A012 for a file unit with no public block, never for a subunit. It
-# also checks A013 and --counts: of handwalk.z's four walks, only the one
-# written out by hand is reported, and its row is `A013 <file> 1`. L033
-# reports a negated test only where the type has the positive twin, and its
-# fix writes the twin.
-ZLFULL_FIX := tests/fixtures/zl_full/tiered.z
-ZLFULL_DEP := tests/fixtures/zl_full/depunit/depmain.z
-ZLFULL_ONCE := tests/fixtures/zl_full/generic_once.z
-ZLFULL_SUB := tests/fixtures/zl_full/subunit/host
-ZLFULL_PUB := tests/fixtures/zl_full/pubhost.z
-ZLFULL_ELIDE := tests/fixtures/zl_full/elide.z
-ZLFULL_BZ := tests/fixtures/zl_full/bare_zero.z
-ZLFULL_BZS := tests/fixtures/zl_full/bare_zero_shadow.z
-ZLFULL_WALK := tests/fixtures/zl_full/handwalk.z
-ZLFULL_TWIN := tests/fixtures/zl_full/negated_twin.z
-ZLFULL_FAM := tests/fixtures/zl_full/family/host
-ZLFULL_WIDE := tests/fixtures/zl_full/wide.z
-zl-full-guard: bin/zl
-	@d=$$(mktemp -d); fail=0; \
-	out=$$(cd $$d && $(CURDIR)/bin/zl lint --full $(CURDIR)/$(ZLFULL_FIX) 2>&1); \
-	if ! printf '%s\n' "$$out" | grep -q 'L030'; then \
-	  echo "zl-full-guard FAIL: no flags, foreign cwd: the typecheck tier did not report L030:"; \
-	  printf '%s\n' "$$out" | sed 's/^/    /'; fail=1; fi; \
-	out=$$(cd $$d && $(CURDIR)/bin/zl lint --full --system $$d/none $(CURDIR)/$(ZLFULL_FIX) 2>&1); rc=$$?; \
-	if [ $$rc -eq 0 ] || ! printf '%s\n' "$$out" | grep -q 'did not run: the system directory'; then \
-	  echo "zl-full-guard FAIL: a missing --system was not reported (rc=$$rc):"; \
-	  printf '%s\n' "$$out" | sed 's/^/    /'; fail=1; fi; \
-	out=$$(cd $$d && $(CURDIR)/bin/zl lint --full --src $$d $(CURDIR)/$(ZLFULL_FIX) 2>&1); rc=$$?; \
-	if [ $$rc -eq 0 ] || ! printf '%s\n' "$$out" | grep -q "did not run: unit 'tiered' is under none"; then \
-	  echo "zl-full-guard FAIL: a unit under no --src root was not reported (rc=$$rc):"; \
-	  printf '%s\n' "$$out" | sed 's/^/    /'; fail=1; fi; \
-	out=$$(cd $$d && $(CURDIR)/bin/zl lint --full $(CURDIR)/$(ZLFULL_DEP) 2>&1); \
-	if ! printf '%s\n' "$$out" | grep -qE 'depunit[/\\]dep\.z:3:10' || ! printf '%s\n' "$$out" | grep -q 'bad: "x" + n'; then \
-	  echo "zl-full-guard FAIL: an error in a dependency unit was not shown at its own path and line:"; \
-	  printf '%s\n' "$$out" | sed 's/^/    /'; fail=1; fi; \
-	out=$$(cd $$d && $(CURDIR)/bin/zl lint --full $(CURDIR)/$(ZLFULL_ONCE) 2>&1); \
-	if [ "$$(printf '%s\n' "$$out" | grep -c 'L013')" != 1 ] || [ "$$(printf '%s\n' "$$out" | grep -c 'L022')" != 1 ]; then \
-	  echo "zl-full-guard FAIL: a generic body's L013/L022 was not reported exactly once:"; \
-	  printf '%s\n' "$$out" | sed 's/^/    /'; fail=1; fi; \
-	out=$$(cd $$d && $(CURDIR)/bin/zl lint --full $(CURDIR)/$(ZLFULL_SUB)/inner.z 2>&1); \
-	if ! printf '%s\n' "$$out" | grep -q 'L013' || ! printf '%s\n' "$$out" | grep -q 'subunit/host/inner.z:4:5' || ! printf '%s\n' "$$out" | grep -q 'subunit/host/inner.z:11:14' || printf '%s\n' "$$out" | grep -q 'error\['; then \
-	  echo "zl-full-guard FAIL: a subunit file was not linted as its parent's subunit, at its own path:"; \
-	  printf '%s\n' "$$out" | sed 's/^/    /'; fail=1; fi; \
-	out=$$(cd $$d && $(CURDIR)/bin/zl lint --full $(CURDIR)/$(ZLFULL_SUB).z 2>&1); \
-	if printf '%s\n' "$$out" | grep -q 'L015\|L013'; then \
-	  echo "zl-full-guard FAIL: linting a unit reported its subunit's finding at the unit's own path:"; \
-	  printf '%s\n' "$$out" | sed 's/^/    /'; fail=1; fi; \
-	out=$$(cd $$d && $(CURDIR)/bin/zl lint --full $(CURDIR)/$(ZLFULL_SUB)/orphan.z 2>&1); rc=$$?; \
-	if [ $$rc -eq 0 ] || ! printf '%s\n' "$$out" | grep -q "did not run: no unit the roots load for 'host' comes from this file"; then \
-	  echo "zl-full-guard FAIL: a subunit file its parent never names was not reported (rc=$$rc):"; \
-	  printf '%s\n' "$$out" | sed 's/^/    /'; fail=1; fi; \
-	out=$$(cd $$d && $(CURDIR)/bin/zl lint --full $(CURDIR)/$(ZLFULL_PUB) 2>&1); \
-	if printf '%s\n' "$$out" | grep -q 'L012'; then \
-	  echo "zl-full-guard FAIL: a hidden subunit named only from the public block was reported unused:"; \
-	  printf '%s\n' "$$out" | sed 's/^/    /'; fail=1; fi; \
-	out=$$(cd $$d && $(CURDIR)/bin/zl lint --full $(CURDIR)/$(ZLFULL_ELIDE) 2>&1); \
-	if [ "$$(printf '%s\n' "$$out" | grep -c 'L003')" != 6 ] || ! printf '%s\n' "$$out" | grep -q 'elide.z:19:23'; then \
-	  echo "zl-full-guard FAIL: L003 did not report the fixture's six labelled first arguments:"; \
-	  printf '%s\n' "$$out" | sed 's/^/    /'; fail=1; fi; \
-	if $(CURDIR)/bin/zl lint $(CURDIR)/$(ZLFULL_ELIDE) 2>&1 | grep -q 'L003'; then \
-	  echo "zl-full-guard FAIL: the parse tier reported L003, which needs the checker"; fail=1; fi; \
-	out=$$(cd $$d && $(CURDIR)/bin/zl lint --full $(CURDIR)/$(ZLFULL_BZ) 2>&1); \
-	if [ "$$(printf '%s\n' "$$out" | grep -c 'L011')" != 2 ]; then \
-	  echo "zl-full-guard FAIL: L011 did not report the fixture's two bare-zero initializers:"; \
-	  printf '%s\n' "$$out" | sed 's/^/    /'; fail=1; fi; \
-	out=$$(cd $$d && $(CURDIR)/bin/zl lint --full $(CURDIR)/$(ZLFULL_BZS) 2>&1); \
-	if printf '%s\n' "$$out" | grep -q 'L011'; then \
-	  echo "zl-full-guard FAIL: L011 offered a bare name the unit's own type takes:"; \
-	  printf '%s\n' "$$out" | sed 's/^/    /'; fail=1; fi; \
-	if $(CURDIR)/bin/zl lint $(CURDIR)/$(ZLFULL_BZ) 2>&1 | grep -q 'L011'; then \
-	  echo "zl-full-guard FAIL: the parse tier reported L011, which needs the checker"; fail=1; fi; \
-	out=$$(cd $$d && $(CURDIR)/bin/zl lint --full $(CURDIR)/$(ZLFULL_TWIN) 2>&1); \
-	if [ "$$(printf '%s\n' "$$out" | grep -c 'L033')" != 4 ] || [ "$$(printf '%s\n' "$$out" | grep -c 'write `notZero`')" != 2 ] || [ "$$(printf '%s\n' "$$out" | grep -c 'write `some`')" != 2 ]; then \
-	  echo "zl-full-guard FAIL: L033 did not report the fixture's two isZero.not and two option none.not, and only those:"; \
-	  printf '%s\n' "$$out" | sed 's/^/    /'; fail=1; fi; \
-	out=$$(cd $$d && $(CURDIR)/bin/zl fmt --full --stdout $(CURDIR)/$(ZLFULL_TWIN) 2>&1); \
-	if [ "$$(printf '%s\n' "$$out" | grep -c 'if r.notZero then\|if row.id.notZero then\|if row.next.some then\|if (pick i: 0).some then')" != 4 ] || [ "$$(printf '%s\n' "$$out" | grep -c '\.not then')" != 2 ]; then \
-	  echo "zl-full-guard FAIL: L033's fix did not write the four twins and leave the two tests that have none:"; \
-	  printf '%s\n' "$$out" | sed 's/^/    /'; fail=1; fi; \
-	if $(CURDIR)/bin/zl lint $(CURDIR)/$(ZLFULL_TWIN) 2>&1 | grep -q 'L033'; then \
-	  echo "zl-full-guard FAIL: the parse tier reported L033, which needs the checker"; fail=1; fi; \
-	out=$$(cd $$d && $(CURDIR)/bin/zl lint --full --arch $(CURDIR)/$(ZLFULL_SUB).z 2>&1); \
-	if [ "$$(printf '%s\n' "$$out" | grep -c 'A012')" != 1 ]; then \
-	  echo "zl-full-guard FAIL: A012 did not report the unit with no public block once:"; \
-	  printf '%s\n' "$$out" | sed 's/^/    /'; fail=1; fi; \
-	out=$$(cd $$d && $(CURDIR)/bin/zl lint --full --arch $(CURDIR)/$(ZLFULL_SUB)/inner.z $(CURDIR)/$(ZLFULL_PUB) 2>&1); \
-	if printf '%s\n' "$$out" | grep -q 'A012'; then \
-	  echo "zl-full-guard FAIL: A012 reported a subunit, or a unit that has a public block:"; \
-	  printf '%s\n' "$$out" | sed 's/^/    /'; fail=1; fi; \
-	out=$$(cd $$d && $(CURDIR)/bin/zl lint --arch $(CURDIR)/$(ZLFULL_WALK) 2>&1); \
-	if [ "$$(printf '%s\n' "$$out" | grep -c 'A013')" != 1 ] || ! printf '%s\n' "$$out" | grep -q 'function `countDots` has 5 match arms'; then \
-	  echo "zl-full-guard FAIL: A013 did not report countDots, and only countDots, with its five arms:"; \
-	  printf '%s\n' "$$out" | sed 's/^/    /'; fail=1; fi; \
-	out=$$(cd $$d && $(CURDIR)/bin/zl lint --arch --counts $(CURDIR)/$(ZLFULL_WALK) 2>/dev/null); \
-	if [ "$$(printf '%s\n' "$$out" | grep -c .)" != 1 ] || ! printf '%s\n' "$$out" | grep -qE '^A013 .*[/\\]handwalk\.z 1$$'; then \
-	  echo "zl-full-guard FAIL: --counts did not print the one row 'A013 <file> 1':"; \
-	  printf '%s\n' "$$out" | sed 's/^/    /'; fail=1; fi; \
-	out=$$(cd $$d && $(CURDIR)/bin/zl lint --full $(CURDIR)/$(ZLFULL_FAM).z $(CURDIR)/$(ZLFULL_FAM)/alpha.z $(CURDIR)/$(ZLFULL_FAM)/beta.z 2>&1); \
-	if [ "$$(printf '%s\n' "$$out" | grep -c 'L012')" != 1 ] || ! printf '%s\n' "$$out" | grep -q "private definition 'neverRead' is never used"; then \
-	  echo "zl-full-guard FAIL: L012 did not report the one definition of a hidden subunit that no file of its unit names, and only it:"; \
-	  printf '%s\n' "$$out" | sed 's/^/    /'; fail=1; fi; \
-	out=$$(cd $$d && $(CURDIR)/bin/zl lint --arch $(CURDIR)/$(ZLFULL_FAM)/beta.z 2>&1); \
-	if [ "$$(printf '%s\n' "$$out" | grep -c 'A006')" != 1 ] || ! printf '%s\n' "$$out" | grep -qE 'the one at line 5 of .*host[/\\]alpha\.z'; then \
-	  echo "zl-full-guard FAIL: A006 did not report a subunit's body against its first copy, in a sibling file:"; \
-	  printf '%s\n' "$$out" | sed 's/^/    /'; fail=1; fi; \
-	out=$$(cd $$d && $(CURDIR)/bin/zl lint --arch $(CURDIR)/$(ZLFULL_FAM).z $(CURDIR)/$(ZLFULL_FAM)/alpha.z 2>&1); \
-	if printf '%s\n' "$$out" | grep -q 'A006'; then \
-	  echo "zl-full-guard FAIL: A006 reported the first copy of a body, or a file that holds none:"; \
-	  printf '%s\n' "$$out" | sed 's/^/    /'; fail=1; fi; \
-	out=$$(cd $$d && $(CURDIR)/bin/zl lint --docs-all $(CURDIR)/$(ZLFULL_FAM).z $(CURDIR)/$(ZLFULL_FAM)/alpha.z $(CURDIR)/$(ZLFULL_FAM)/beta.z 2>&1); \
-	if [ "$$(printf '%s\n' "$$out" | grep -c 'L025.*appears 3 times in the files of unit `host`')" != 3 ]; then \
-	  echo "zl-full-guard FAIL: L025 did not report a doc body that stands once in each of a unit's three files, once a file:"; \
-	  printf '%s\n' "$$out" | sed 's/^/    /'; fail=1; fi; \
-	out=$$(cd $$d && $(CURDIR)/bin/zl lint --arch $(CURDIR)/$(ZLFULL_WIDE) 2>&1); \
-	if [ "$$(printf '%s\n' "$$out" | grep -c 'A014')" != 2 ] || ! printf '%s\n' "$$out" | grep -qE 'wide\.z:5:' || ! printf '%s\n' "$$out" | grep -qE 'wide\.z:20:'; then \
-	  echo "zl-full-guard FAIL: A014 did not report the two heads of eight parameters (one a method with its receiver), and only them:"; \
-	  printf '%s\n' "$$out" | sed 's/^/    /'; fail=1; fi; \
-	rm -rf $$d; \
-	if [ $$fail -ne 0 ]; then exit 1; fi; \
-	echo "zl-full-guard OK: --full runs without flags from a foreign cwd, says why when it cannot, places a dependency's error in its own file, and lints a subunit as itself; A013 and --counts report the hand-written walk"
-

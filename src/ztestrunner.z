@@ -940,6 +940,9 @@ runnerWord: list {
     casePosix: "posix"
     # the driver a USAGE case names when it runs the runner itself
     ownName: "ztestrunner"
+    # what a USAGE case's `cwd` file says when its driver runs in the case's
+    # own empty directory
+    scratchCwd: "scratch"
 } out staticlist StringView
 
 # opt -- the name of each flag and option the runner takes, as it is written
@@ -951,6 +954,7 @@ opt: list {
     heavy: "--heavy"
     saveTemps: "--save-temps"
     regenLsp: "--regen-lsp"
+    regenUsage: "--regen-usage"
     only: "--only"
     help: "--help"
     zc: "--zc"
@@ -984,6 +988,8 @@ kindWord: list {
     pins: "pins"
     # what the fixtures themselves must hold (also in `make test`)
     fixtures: "fixtures"
+    # the drivers' command lines, judged by what they print and how they exit
+    usage: "usage"
 } out staticlist StringView
 
 # test-runner entry point: build the compiler, run the
@@ -1027,6 +1033,9 @@ Runner: class {
     saveTemps: bool
     # rewrite the LSP goldens from this run's answers instead of comparing
     regenLsp: bool
+    # rewrite the expected files each USAGE case has from this run's answers
+    # instead of comparing against them
+    regenUsage: bool
     # the kind `--only` runs alone, by its slot in kindWord; kindWord's length
     # when every kind runs
     only: u64
@@ -3890,11 +3899,19 @@ runVfsCases: function {r: Runner} is {
     }
 }
 
-# runUsageCases -- the USAGE cases kind: a driver refusing a command line. Each
-# directory under tests/fixtures/usage is one case. Its `args` file is one
-# line: the driver's name (`zl`, `ztestrunner`), then the arguments. The driver runs in the
-# repository root. What it printed on stderr is compared with expected.err, and
-# its exit code with the number in expected.exit.
+# runUsageCases -- the USAGE cases kind: a driver run with one command line,
+# judged by what it says and how it exits. Each directory under
+# tests/fixtures/usage is one case. Its `args` file is one line: the driver's
+# name (`zc`, `zl`, `ztestrunner`), then the arguments, where `$ROOT` stands
+# for the repository root, `$SCRATCH` for an empty directory of the case's own
+# and `$HOST` for this host's target triple. The driver runs in the repository
+# root, or in the scratch directory when the case's `cwd` file says `scratch`.
+# Its exit code is compared with the number in expected.exit; its stderr, when
+# the case has an expected.err, with that; its stdout, when it has an
+# expected.out (or an expected.<os>.out for the system it runs on), with that;
+# and each line of an expected.lines must be a line of its stdout. The root's
+# and the scratch directory's paths read as `$ROOT` and `$SCRATCH` in what it
+# printed.
 runUsageCases: function {r: Runner} is {
     udir: "\{r.root.stringView}/tests/fixtures/usage"
     ls: io.listDir path: udir
@@ -3915,39 +3932,137 @@ runUsageCase: function {r: Runner.view dir: StringView name: StringView} out boo
     src: "\{dir}/\{name}"
     outP: "\{r.tmp.stringView}/U_\{name}.out"
     errP: "\{r.tmp.stringView}/U_\{name}.err"
-    rootAbs: absoluteFrom base: workingDir.stringView p: r.root.stringView
+    scratch: "\{r.tmp.stringView}/U_\{name}.d"
+    io.mkdirp path: scratch
+    rootAbs: absoluteRoot :r
+    cwd: rootAbs.copy
+    words: zast.Vocab.create block: runnerWord
+    cwdText: slurp path: "\{src}/cwd".stringView
+    if (
+        (words.slotOf text: cwdText.stringView.trim) == runnerWord.slot.scratchCwd
+    ) then cwd = scratch.copy
     rc: (
         os.spawn
-        argv: (usageArgv root: rootAbs.stringView caseDir: src.stringView)
-        cwd: rootAbs.stringView
+        argv: (
+            usageArgv
+            root: rootAbs.stringView
+            caseDir: src.stringView
+            scratch: scratch.stringView
+        )
+        cwd: cwd.stringView
         outPath: outP.stringView
         errPath: errP.stringView
         timeoutSecs: r.timeoutSecs
     )
     exitP: "\{src}/expected.exit"
-    wantExit: slurp path: exitP.stringView
     gotExit: "\{rc}"
+    gotErr: usageText path: errP.stringView root: rootAbs.stringView scratch: scratch.stringView
+    gotOut: usageText path: outP.stringView root: rootAbs.stringView scratch: scratch.stringView
+    if r.regenUsage then {
+        rewriteIfThere path: exitP.stringView text: "\{rc}\n".stringView
+        rewriteIfThere path: "\{src}/expected.err".stringView text: gotErr.stringView
+        (
+            rewriteIfThere
+            path: (usageOutGolden caseDir: src.stringView).stringView
+            text: gotOut.stringView
+        )
+        return true
+    }
+    wantExit: slurp path: exitP.stringView
     if gotExit.stringView != wantExit.stringView.trim then return false
-    wantErr: "\{src}/expected.err"
-    return (projectOutDiffers want: wantErr.stringView got: errP.stringView).not
+    if (usageDiffers want: "\{src}/expected.err".stringView got: gotErr.stringView
+    ) then return false
+    if (
+        usageDiffers
+        want: (usageOutGolden caseDir: src.stringView).stringView
+        got: gotOut.stringView
+    ) then return false
+    return (usageLinesIn want: "\{src}/expected.lines".stringView got: gotOut.stringView)
+}
+
+# rewriteIfThere -- the file at `path`, when there is one, holds `text`
+rewriteIfThere: function {path: StringView text: StringView} is {
+    if (io.exists :path).false then return
+    w: io.writeText :path content: text
+    w.drop
+}
+
+# usageText -- what a usage case's driver wrote to `path`, the root's and the
+# scratch directory's paths read as `$ROOT` and `$SCRATCH`
+usageText: function {path: StringView root: StringView scratch: StringView} out String is {
+    raw: slurp :path
+    s1: raw.stringView.replace needle: scratch replacement: "$SCRATCH"
+    return (s1.stringView.replace needle: root replacement: "$ROOT")
+}
+
+# usageDiffers -- the golden at `want` exists and `got` is not it (path
+# separators forgiven)
+usageDiffers: function {want: StringView got: StringView} out bool is {
+    if (io.exists path: want).not then return false
+    w: slurp path: want
+    return (sameAcrossSeparators want: w.stringView :got).not
+}
+
+# usageOutGolden -- a usage case's stdout golden: expected.<os>.out for the
+# system the runner runs on where the case has one, else expected.out
+usageOutGolden: function {caseDir: StringView} out String is {
+    own: "\{caseDir}/expected."
+    own.append os.hostOsName
+    own.append ".out"
+    if (io.exists path: own) then return own
+    return "\{caseDir}/expected.out"
+}
+
+# usageLinesIn -- each non-empty line of the file at `want` is a line of `got`;
+# true when there is no such file
+usageLinesIn: function {want: StringView got: StringView} out bool is {
+    if (io.exists path: want).not then return true
+    lines: List String
+    for each l: got.lines loop lines.append l.trimEnd.string
+    w: slurp path: want
+    for each l: w.stringView.lines loop {
+        if l.trim.length > 0 when (lines.contains item: l.trimEnd.string).false then return false
+    }
+    return true
+}
+
+# absoluteRoot -- the runner's root as an absolute path, cleaned: what `$ROOT`
+# stands for in a usage case and reads as in its output
+absoluteRoot: function {r: Runner.view} out String is {
+    if (path.isAbsolute p: r.root.stringView) then return (path.clean p: r.root.stringView)
+    joined: path.join a: workingDir.stringView b: r.root.stringView
+    return (path.clean p: joined.stringView)
+}
+
+# hostTriple -- this host's target triple, as `$HOST` in a usage case
+hostTriple: function out String is {
+    if z.build.os == z.build.oskind.windows then return "x86_64-w64-mingw32".string
+    t: os.hostArchName
+    t.append "-"
+    t.append os.hostOsName
+    return t
 }
 
 # usageArgv -- the command a USAGE case's `args` line gives. Its first word
 # names a driver: that program in the `bin` directory under `root`, or, for
 # `ztestrunner`, the running runner itself.
-usageArgv: function {root: StringView caseDir: StringView} out List String is {
+usageArgv: function {root: StringView caseDir: StringView scratch: StringView} out List String is {
     argsP: "\{caseDir}/args"
     argsLine: slurp path: argsP.stringView
     words: zast.Vocab.create block: runnerWord
+    host: hostTriple
     argv: List String
     for each tok: (argsLine.stringView.trim.split sep: " ") loop {
         if tok.length == 0 then continue
+        t1: tok.replace needle: "$ROOT" replacement: root
+        t2: t1.stringView.replace needle: "$SCRATCH" replacement: scratch
+        arg: t2.stringView.replace needle: "$HOST" replacement: host
         if argv.length > 0 then {
-            argv.append from: tok.string
-        } else if (words.slotOf text: tok) == runnerWord.slot.ownName then {
+            argv.append from: arg.take
+        } else if (words.slotOf text: arg.stringView) == runnerWord.slot.ownName then {
             argv.append from: ownPath
         } else {
-            argv.append from: "\{root}/bin/\{tok}"
+            argv.append from: "\{root}/bin/\{arg}"
         }
     }
     return argv
@@ -4614,6 +4729,7 @@ printUsage: function is {
     io.eprintln "  --heavy         add the self-host ASan run, the fixpoint and the doc ratchet"
     io.eprintln "  --report        exit 0 whatever failed"
     io.eprintln "  --regen-lsp     rewrite the LSP goldens from this run's answers"
+    io.eprintln "  --regen-usage   rewrite each usage case's expected files from this run's answers"
     io.eprintln "  --only KIND     run one kind alone:"
     io.eprintln "                  run      the run cases; --target TRIPLE builds them for another"
     io.eprintln "                           system and --exec PROGRAM runs each one under that program"
@@ -4624,6 +4740,7 @@ printUsage: function is {
     io.eprintln "                  vocab    the spec and the highlighters carry the lexer's words"
     io.eprintln "                  pins     the counts the compiler's own source is held at"
     io.eprintln "                  fixtures the case lists name every program, and fixtures follow L023"
+    io.eprintln "                  usage    the drivers' command lines, judged by output and exit"
     io.eprintln "A value is written `--name VALUE` or `--name=VALUE`."
 }
 
@@ -4653,6 +4770,7 @@ runnerSpec: function out cli.Spec is {
     addSwitch :sp name: opt.heavy
     addSwitch :sp name: opt.saveTemps
     addSwitch :sp name: opt.regenLsp
+    addSwitch :sp name: opt.regenUsage
     cli.addFlag spec: sp name: opt.help.string shortName: "-h".string help: "".string
     addValue :sp name: opt.zc
     addValue :sp name: opt.cc
@@ -4752,7 +4870,7 @@ refuseMisuse: function {r: Runner.view p: cli.Parsed.view} is {
     }
     written: textOr :p name: opt.only d: ""
     if written.length > 0 when r.only == kindWord.length then {
-        unknown: "ztestrunner: --only takes run, doccode, agree, arch, emitted, vocab, pins or fixtures, not '\{written}'"
+        unknown: "ztestrunner: --only takes run, doccode, agree, arch, emitted, vocab, pins, fixtures or usage, not '\{written}'"
         refuse unknown.stringView
     }
     runOnly: r.only == kindWord.slot.run
@@ -4791,6 +4909,7 @@ runnerFrom: function {p: cli.Parsed.view} out Runner is {
         report: (p.hasFlag name: opt.report)
         saveTemps: (p.hasFlag name: opt.saveTemps)
         regenLsp: (p.hasFlag name: opt.regenLsp)
+        regenUsage: (p.hasFlag name: opt.regenUsage)
         only: (onlyKind :p)
         target: (textOr :p name: opt.target d: "")
         exec: (textOr :p name: opt.exec d: "")
@@ -4867,23 +4986,8 @@ runKinds: function {r: Runner} is {
     # symbols come from the binaries' own DWARF.
     os.setEnv key: "DEBUGINFOD_URLS" value: ""
 
-    if r.only == kindWord.slot.doccode then {
-        runDoccodeCases :r
-        runDocPageCases :r
-    } else if r.only == kindWord.slot.agree then {
-        runAgreeCases :r
-    } else if r.only == kindWord.slot.arch then {
-        runArchCases :r
-    } else if r.only == kindWord.slot.run then {
-        runRunCases :r
-    } else if r.only == kindWord.slot.emitted then {
-        emitted.runEmittedCases :r
-    } else if r.only == kindWord.slot.vocab then {
-        vocab.runVocabCases :r
-    } else if r.only == kindWord.slot.pins then {
-        pins.runPinsCases :r
-    } else if r.only == kindWord.slot.fixtures then {
-        fixtures.runFixtureCases :r
+    if r.only < kindWord.length then {
+        runOneKind :r
     } else {
         runRunCases :r
         runLspCases :r
@@ -4927,6 +5031,30 @@ runKinds: function {r: Runner} is {
     } else {
         print "CORPUS GATE FAILED (\{r.fails})"
         os.exit code: 1
+    }
+}
+
+# runOneKind -- the one kind `--only` names
+runOneKind: function {r: Runner} is {
+    if r.only == kindWord.slot.doccode then {
+        runDoccodeCases :r
+        runDocPageCases :r
+    } else if r.only == kindWord.slot.agree then {
+        runAgreeCases :r
+    } else if r.only == kindWord.slot.arch then {
+        runArchCases :r
+    } else if r.only == kindWord.slot.run then {
+        runRunCases :r
+    } else if r.only == kindWord.slot.emitted then {
+        emitted.runEmittedCases :r
+    } else if r.only == kindWord.slot.vocab then {
+        vocab.runVocabCases :r
+    } else if r.only == kindWord.slot.pins then {
+        pins.runPinsCases :r
+    } else if r.only == kindWord.slot.fixtures then {
+        fixtures.runFixtureCases :r
+    } else if r.only == kindWord.slot.usage then {
+        runUsageCases :r
     }
 }
 
