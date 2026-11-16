@@ -18,8 +18,9 @@
 #   lone     every run case, with one unrelated error written at the top of
 #            `main`, reports that error and no other
 #   dump     dump_cases.txt -> `zc dump --canon` matches dump_golden/<n>.canon
-#   docpage  docs/*.html is what the renderer writes from its .pdoc, and a
-#            link between pages names a page and an anchor that exist
+#   docpage  docs/*.html is what the renderer writes from its .pdoc, a link
+#            between pages names a page and an anchor that exist, and the
+#            code table of docs/errors.pdoc is zast.errFacts' (docErrorTable)
 #   lexer / parser / program goldens for every example
 #   vfs      zvfs script dispatch
 #   smoke    per-unit no-arg binaries against <unit>_z/smoke.expected
@@ -1494,6 +1495,9 @@ runDocPageCases: function {r: Runner} is {
         r.fails = r.fails + broken
         pi = pi + 1
     }
+    tableBad: docErrorTable docsDir: docsDir.stringView
+    if tableBad == 0 then r.passN = r.passN + 1
+    r.fails = r.fails + tableBad
     picodoc: "\{root}/../picodoc-c/picodoc"
     if (io.exists path: picodoc).not then {
         r.skip = r.skip + 1
@@ -1520,6 +1524,97 @@ runDocPageCases: function {r: Runner} is {
         }
         pi = pi + 1
     }
+}
+
+# docErrorTable -- the code table of docs/errors.pdoc agrees with
+# zast.errFacts: each code has one row, every row names a code the compiler
+# reports, and a row's meaning is the first line of the code's `explain` --
+# the title `zc explain` prints. Answers how many disagreements it printed.
+docErrorTable: function {docsDir: StringView} out u64 is {
+    page: "\{docsDir}/errors.pdoc"
+    if (io.exists path: page).not then {
+        print "FAIL(docpage) docs/errors.pdoc is missing: it holds the table of error codes"
+        return 1
+    }
+    text: slurp path: page.stringView
+    codes: List String
+    meanings: List String
+    bad: errorTableRows text: text.stringView :codes :meanings
+    for each f: zast.errFacts loop {
+        code: zdiag.ecodeString code: f.code
+        ex: f.explain.stringView
+        title: ex.substring from: 0 to: ((ex.indexOf "\n").or d: ex.length)
+        problem: errorRowProblem code: code.stringView :title :codes :meanings
+        if problem.length > 0 then {
+            print "FAIL(docpage) docs/errors.pdoc: \{problem}"
+            bad = bad + 1
+        }
+    }
+    for each c: codes loop {
+        known: false
+        for each f: zast.errFacts loop {
+            if (zdiag.ecodeString code: f.code).stringView == c then known = true
+        }
+        if known.not then {
+            print "FAIL(docpage) docs/errors.pdoc: \{c} is a row, and the compiler reports no such code"
+            bad = bad + 1
+        }
+    }
+    return bad
+}
+
+# errorTableRows -- each row of the code table in `text`, one a line, as
+# `[#tr: [#td: #~"E0003"] [#td: duplicate definition]]`: its code onto
+# `codes`, its meaning onto `meanings`. A line that starts as a row and is
+# not one is printed; answers how many.
+errorTableRows: function {text: StringView codes: List String meanings: List String} out u64 is {
+    bad: u64
+    for each ln: text.lines loop {
+        rest: ln.trim.stripPrefix "[#tr: [#td: #~\""
+        if rest.none then continue
+        q: rest.indexOf "\""
+        good: false
+        if q.some then {
+            meaning: (rest.substring from: q to: rest.length).stripPrefix "\"] [#td: "
+            if meaning.some when meaning.endsWith "]]" then {
+                codes.append (rest.substring from: 0 to: q).string
+                meanings.append (meaning.substring from: 0 to: meaning.length - 2).string
+                good = true
+            }
+        }
+        if good.not then {
+            print "FAIL(docpage) docs/errors.pdoc: a row is not `[#tr: [#td: #~\"E0000\"] [#td: meaning]]`: \{ln.trim}"
+            bad = bad + 1
+        }
+    }
+    return bad
+}
+
+# errorRowProblem -- what is wrong with the rows of `code`, whose meaning is
+# `title`: none, more than one, or a meaning that differs; "" when it has one
+# row with that meaning.
+errorRowProblem: function {
+    code: StringView
+    title: StringView
+    codes: (List String).view
+    meanings: (List String).view
+} out String is {
+    rows: u64
+    got: String
+    i: u64
+    for i < codes.length loop {
+        if (codes.get :i).stringView == code then {
+            rows = rows + 1
+            got = (meanings.get :i).copy
+        }
+        i = i + 1
+    }
+    if rows == 0 then return "\{code} has no row -- its meaning is '\{title}'"
+    if rows > 1 then return "\{code} has \{rows} rows"
+    if (
+        got.stringView != title
+    ) then return "\{code}'s meaning is '\{got}', and zc explain gives '\{title}'"
+    return "".string
 }
 
 # linkOpen -- how a link of a .pdoc page starts
