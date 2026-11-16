@@ -103,25 +103,7 @@ Table of Contents</div>
 </li>
 </ul>
 </li>
-<li><a href="#semantic-analyser-type-ownership-lock-checking">Semantic Analyser (Type/Ownership/Lock checking)</a>
-<ul>
-<li><a href="#demand-driven-resolution">Demand-Driven Resolution</a>
-</li>
-<li><a href="#monomorphization">Monomorphization</a>
-</li>
-<li><a href="#ownership-and-lifetime">Ownership and Lifetime</a>
-</li>
-<li><a href="#scope-environment">Scope Environment</a>
-</li>
-<li><a href="#lock-checking">Lock Checking</a>
-</li>
-<li><a href="#numeric-literal-coercion">Numeric Literal Coercion</a>
-</li>
-<li><a href="#type-narrowing">Type Narrowing</a>
-</li>
-<li><a href="#synthesis-toolkit">Synthesis Toolkit</a>
-</li>
-</ul>
+<li><a href="#semantic-analyser">Semantic Analyser</a>
 </li>
 <li><a href="#code-generator">Code Generator</a>
 <ul>
@@ -133,10 +115,8 @@ Table of Contents</div>
 </li>
 <li><a href="#c-name-generation">C Name Generation</a>
 </li>
-</ul>
-</li>
 <li><a href="#id-based-naming">Id-based naming</a>
-<ul>
+</li>
 <li><a href="#type-emission">Type Emission</a>
 </li>
 <li><a href="#memory-management">Memory Management</a>
@@ -166,17 +146,31 @@ Table of Contents</div>
 </nav>
 <main id="content">
 <h2 id="introduction"><a href="#introduction">1. Introduction</a></h2>
-<p>A document showing the compiler architecture overview.</p>
+<p>The compiler, <code>zc</code>, turns a program's units into C and hands the C to a C
+compiler. Its stages run in this order, each taking what the one before it
+gives:</p>
+<ol>
+<li>the <a href="#virtual-file-system">Virtual File System</a> presents the
+    source roots as one tree;</li>
+<li>the <a href="#tokenizer">Tokenizer</a> and the <a href="#lexer">Lexer</a> turn a
+    unit's text into tokens;</li>
+<li>the <a href="#parser">Parser</a> builds the syntax tree of every unit the
+    program names;</li>
+<li><a href="#generator-desugaring">Generator Desugaring</a> prepares each
+generator for the checker;</li>
+<li>the <a href="#semantic-analyser">Semantic Analyser</a> checks types,
+    ownership and locks, and records what it finds;</li>
+<li>the <a href="#code-generator">Code Generator</a> writes the C.</li>
+</ol>
+<p>Each section below says what its stage takes and gives, and links to the
+page that owns its detail. <a href="./zc.html">zc</a> gives the command line.</p>
 <h2 id="virtual-file-system"><a href="#virtual-file-system">2. Virtual File System</a></h2>
 <p>A simple readonly Virtual File System (VFS) is used to present a unified source
 tree to the compiler.</p>
 <p>The VFS allows union or bind mounts to mount one filesystem over another. The
 VFS tree presented to the compiler is usually the system directory with the
-user source directory union mounted over this. In this way, user units are
-found first, shadowing system units. This offers some backwards compatibility -
-future system modules that may be released that collide with user modules will
-be hidden by them. The user modules would need to be refactored/renamed to make
-use of the new system modules.</p>
+user source directory union mounted over it, so a user unit is found first
+and shadows a system unit of the same name.</p>
 <p>The VFS allows abstraction over a source tree that may be arbitrarily complex
 while providing a simple interface to the compiler. The VFS tree can be built
 from multiple physical filesystems or can be built from alternate data stores
@@ -202,9 +196,8 @@ concatenating all of the tokens returned by the tokenizer.</p>
 <p>The tokens have a type, the string contents and an identifier for the file that
 they are contained within and the location (line and column) within that source
 file.</p>
-<p>The Tokenizer follows the ITokenizer protocol which provides a single 'token'
-method.  This allows alternate tokenizers to be provided or allows filtering or
-logging to be inserted.</p>
+<p>The <a href="./stdlib_tokenize.html">tokenize</a> unit gives the tokenizer and
+the lexer to programs; its page owns their detail.</p>
 <h2 id="lexer"><a href="#lexer">4. Lexer</a></h2>
 <p>The Lexer provides another layer over the Tokenizer to ease the job of the
 parser which will follow.</p>
@@ -228,7 +221,8 @@ Consuming a token is free: <code>accept</code> / <code>acceptAny</code> move the
 token out rather than duplicating it.</p>
 <h2 id="parser"><a href="#parser">5. Parser</a></h2>
 <p>The parser creates an abstract syntax tree (AST) from the source units
-supplied. It begins with the 'core' system unit and the user 'main' unit and
+supplied. The <a href="./stdlib_ast.html">ast</a> unit gives the parser and the
+tree to programs; its page owns the tree's shape. It begins with the 'core' system unit and the user 'main' unit and
 parses each, loading further units as they are referred to.</p>
 <p>The parser resolves no names. After a unit is parsed, one walk over its body
 (<code>collectExterns</code>) collects the identifiers the unit refers to but does not
@@ -338,7 +332,8 @@ path. Helpers <code>emitGenPrologue</code>, <code>emitYieldStmt</code>, and
   L_done:
       this-&gt;state = -1;
       return OPTION_NONE;</code></pre>
-<p>C17 <code>goto</code> plus <code>switch</code> arbitrates cleanly; no GCC extensions.
+<p>C17 <code>goto</code> plus <code>switch</code> arbitrates cleanly, with no compiler
+extension.
 The yield-state numbers are pre-allocated from the function's yield
 count (<code>fnYieldCount</code>) so the prologue, body fragments, and
 epilogue agree.</p>
@@ -359,316 +354,35 @@ The first reachable yield must be statement form -- the
 desugarer rejects expression-form first-yields, reflecting that
 the resume-input slot is undefined before the first
 <code>.call value:</code> arrives.</p>
-<h2 id="semantic-analyser-type-ownership-lock-checking"><a href="#semantic-analyser-type-ownership-lock-checking">7. Semantic Analyser (Type/Ownership/Lock checking)</a></h2>
-<p>The Semantic Analyser assigns a type to each node in the AST. It compares
-types of definitions, assignments and arguments being passed to ensure the
-types are compatible.</p>
-<p>A stack of nodes being typechecked is maintained as checking proceeds. This
-allows the type checker to catch circular dependencies.</p>
-<h3 id="demand-driven-resolution"><a href="#demand-driven-resolution">7.1. Demand-Driven Resolution</a></h3>
-<p>The type checker is demand-driven: it starts from <code>main</code> and resolves
-definitions as they are referenced. Types, functions, and definitions that are
-never reachable from <code>main</code> are never type-checked. This ensures the compiler
-only processes what is needed, and circular dependencies are detected when a
-name is encountered that is already on the resolution stack.</p>
-<p>There is one environment. Every unit's top-level names are indexed before any
-resolution (the declaration tree: each unit is a scope whose children are its
-definitions, each carrying its resolution state -- not yet touched, demanded,
-being resolved, resolved). A reference resolves by walking the scopes from the
-inside out: the enclosing namespace, the current unit, then the prelude
-(<code>core</code>, whose members are re-exports); the first match wins, and a
-qualified <code>unit.member</code> names its unit directly and walks nothing. The
-declaration a reference finds is what it demands -- never a bare name -- so a
-name defined in two units can only ever reach the one the reference could see,
-and the standard library is resolved by exactly the same rule as any other unit.
-Demanded declarations are queued in discovery order and resolved from the top
-level, each one's body scanned for further references only once its own
-resolution completes.</p>
-<p>The rule holds for the unit being compiled exactly as it does for its
-dependencies, which is why that unit must declare a <code>main</code> at all
-(<strong>E0039</strong>): without a root there is nothing to demand from. What a type
-DECLARES is resolved either way -- its generic parameters, the interfaces it
-implements, and the namespaces and inline templates that scope it -- because
-those are properties of the declaration rather than of anything walking a body.</p>
-<p>A namespace -- an inline <code>m: unit { }</code>, a hidden subunit, a <code>public:</code>
-block -- is a scope like a file unit, not a definition resolved whole.
-Demanding one resolves the namespaces and templates it declares; each other
-member resolves when a use names it, and its body is walked when it is used.
-A member of <code>math</code>'s <code>bigint</code> subunit that the program never reaches is
-neither checked nor emitted.</p>
-<p>Resolution is outside-in: a type resolves before its fields, its fields before
-its method signatures, and no method body is walked until that completes. A body
-walked ahead of its owner would bind <code>this</code> to no type at all, and every check
-that hangs off the receiver would quietly stop asking.</p>
-<h3 id="monomorphization"><a href="#monomorphization">7.2. Monomorphization</a></h3>
-<p>Generic types are instantiated through monomorphization. When a generic type
-(e.g., <code>List(String)</code>) is used, the type checker creates a concrete copy
-(a monomorphized type) with the generic parameters replaced by concrete types.
-The monomorphized type name is mangled (e.g., <code>list__string</code>) to produce a
-unique C identifier.</p>
-<p>Generic method bodies are deep-copied during monomorphization and type-checked
-with the concrete type arguments in scope. This ensures that each instantiation
-is independently validated. A numeric generic argument is bound as the
-instance's singleton type for that parameter: a typedef over the bound whose
-one value is the argument. A bare read of the parameter in a body is that
-value, so it folds per instance; a field or a local of the type holds the
-value at run time.</p>
-<p>Compiler-injected methods on collections (<code>.append</code>, <code>.set</code>,
-<code>.get</code>, <code>.byteView</code>, <code>.listView</code>, <code>.stringView</code>, <code>.iterate</code>,
-<code>.length</code>, and friends) are <em><strong>not</strong></em> synthesised by the
-monomorphizer. They are declared with the <code>is native</code> form in
-<code>lib/system/system.z</code> and <code>lib/system/collections.z</code>; the
-monomorphizer clones those declarations alongside everything else.
-Resolution flows through the standard child-lookup path -- there is
-no syntactic special case in the type checker for these names, and a
-user-defined member of the same name on a non-collection type
-resolves normally. Methods that return a borrowed reference into a parameter or
-receiver declare that source as a non-owned parameter
-(e.g. <code>function {t: this.borrow} outx T.borrow</code>); the standard
-<code>.borrow</code>-param transfer at call resolution drives the call-site
-locking, with no name-based pattern matching.</p>
-<p>A no-user-arg method dotted path (<code>v: s.stringView</code>, <code>p1.distance</code>
-inside string interpolation) is auto-called when read in value
-position. The coercion lives in <code>checkDotted</code> and is gated
-by a coerce-to-return flag that <code>checkCall</code> clears
-when resolving its callable -- so explicit method calls
-(<code>obj.method named: arg</code>) see the function type and dispatch
-normally instead of falling into construction-of-return-type. Path
-resolution itself is context-free: it
-always returns the FUNCTION type for a method path. The behaviour is
-identical for <code>is native</code> and user-defined methods.</p>
-<h3 id="ownership-and-lifetime"><a href="#ownership-and-lifetime">7.3. Ownership and Lifetime</a></h3>
-<p>The ownership status of each expression is determined using a 2-state model:
-OWNED (the variable owns the instance and is responsible for its lifetime) or
-BORROWED (a temporary reference; the variable does not own the instance).</p>
-<p>Function parameters carry ownership annotations: <code>take</code> (caller transfers
-ownership to callee), <code>borrow</code> (callee gets a borrowed reference that locks
-the argument for the duration of the call), or <code>view</code> (the same, readonly).
-See <code>docs/ownership.pdoc</code> for the full specification.</p>
-<h3 id="scope-environment"><a href="#scope-environment">7.4. Scope Environment</a></h3>
-<p>All variable state -- type, ownership, lock state, type narrowing, and
-taken (consumed) status -- is tracked in a unified scope-based environment.
-Entries are held in a flat <code>List ZEntry</code> on the symbol table, with each
-scope recording its start index rather than owning a dictionary. Scopes are
-small (measured maximum of approximately 6 entries in practice) so linear
-scan outperforms hash lookup.</p>
-<p>A <code>ZEntry</code> carries: the variable name, its resolved type, whether it is a
-definition or a shadow overlay, optional ownership info, optional lock
-state, optional type narrowing (<code>narrowedSubtype</code> and
-<code>excludedSubtypes</code>), and optional taken state.</p>
-<p>Three scope kinds are used:</p>
+<h2 id="semantic-analyser"><a href="#semantic-analyser">7. Semantic Analyser</a></h2>
+<p>The semantic analyser, the typechecker, takes the syntax tree and gives the
+model the code generator reads: a type for each node, and the ownership,
+lock and narrowing facts of every body (<code>ZTyping</code>), beside the type
+registry. It is demand-driven: it starts from <code>main</code> and checks only what
+a reference reaches. <a href="./typechecker.html">The typechecker</a> owns its
+detail:</p>
 <ul>
-<li>BLOCK -- language constructs (function, do, for, if, with, match,
-match arm). Can contain variable definitions.</li>
-<li>CALL -- pushed before processing call arguments, popped after the
-call returns. Lock entries placed here are released automatically when the
-scope is popped.</li>
-<li>OVERLAY -- per-statement state changes. Contains shadow entries
-that record a new state (lock, narrowing, taken) for a variable defined in
-an outer scope.</li>
+<li><a href="./typechecker.html#demand-driven-resolution">demand-driven resolution</a>
+and <a href="./typechecker.html#resolution-stack-and-cycle-detection">cycle detection</a>;</li>
+<li><a href="./typechecker.html#monomorphisation">monomorphisation</a> -- each
+instance of a generic definition checked from its own copy;</li>
+<li><a href="./typechecker.html#ownership-enforcement">ownership</a> and
+<a href="./typechecker.html#lock-checking">lock checking</a>;</li>
+<li><a href="./typechecker.html#numeric-literal-coercion">numeric literal coercion</a>
+and <a href="./typechecker.html#type-narrowing">type narrowing</a>;</li>
+<li><a href="./typechecker.html#synthesis-toolkit">the nodes it synthesises</a>.</li>
 </ul>
-<p>State changes follow an immutability principle: new shadow entries are
-created in overlay scopes rather than modifying existing entries. The scope
-chain is the history. Scope exit (via <code>popTo</code>) naturally releases all
-state from that scope -- locks vanish, narrowing resets, taken markers are
-merged into the parent.</p>
-<p>Each scope carries a monotonically increasing <code>scopeId</code> for tracing and
-SQL output.</p>
-<h3 id="lock-checking"><a href="#lock-checking">7.5. Lock Checking</a></h3>
-<p>Lock keys are paths -- tuples of name ids <code>(root, f1, f2, ...,
-fn)</code>. Overlay rows (<code>ZEntry</code>) are keyed by the root local's
-declaration so the linear scan stays cheap; the full path lives on
-<code>ZEntry.lockPath</code> and is consulted to apply the prefix-overlap
-conflict rule. Two lock scopes exist:</p>
-<ul>
-<li>Call-scoped locks -- taken on function arguments during a call.
-A call scope is pushed before argument processing. Each by-reference
-argument queues its lock while the arguments are evaluated, and the
-queue is laid, in argument order, when the call starts: SHARED intent
-locks on every intermediate prefix of the source path and, on the leaf,
-EXCLUSIVE unless the parameter is <code>.view</code> (SHARED). A call nested in an
-argument has taken and released its own locks by then. The receiver path
-locks the same way at the receiver's strength: EXCLUSIVE for a
-<code>{:this}</code> method. After the call returns, the scope is popped and all
-call-scoped locks are released. For non-owned parameters, the leaf
-lock transfers to the return value (installed as a borrow-scoped lock
-in the parent scope).</li>
-<li>Borrow-scoped locks -- taken when <code>.borrow</code>, <code>.view</code>,
-<code>.stringView</code>, <code>.listView</code>, a <code>with</code>-binding, or a
-<code>.borrow</code>-param transfer creates a borrowed binding. SHARED entries
-are placed on each intermediate prefix and on the leaf (EXCLUSIVE only
-when the pin came from a <code>{:this}</code> receiver) in
-the scope where the borrow variable is defined. The locks persist
-for the lifetime of that scope (released on scope exit or explicit
-<code>.drop</code>).</li>
-</ul>
-<p>Conflict check (multi-granularity): same-path locks dedupe when both
-SHARED and conflict when either is EXCLUSIVE; a strict ancestor
-SHARED is intent-shared and permits any lock on descendants; a strict
-ancestor EXCLUSIVE conflicts with any descendant. Sibling paths (no
-prefix relation) never conflict. Enforcement for access / mutation
-sites uses the same prefix-overlap test: any EXCLUSIVE whose path
-prefix-overlaps the target path is a conflict. Two rules on top of
-the strengths: inside one call, a second row over the same value
-conflicts when either row is <code>mutable</code> (two arguments, or an
-argument and the receiver); and a row whose reference a call handed
-back (<code>alias</code> false -- it may point inside the value) conflicts
-with any other holder's <code>mutable</code> row over the same value, in
-either order.</p>
-<p>Key code: <code>tryLock</code> / <code>findExclusiveLock</code> /
-<code>lockAcquireConflict</code> in <code>src/zenv.z</code>; <code>lockCallArg</code> /
-<code>installBorrowLocks</code> and the path-tuple builders and access-check
-helpers in <code>src/ztypecheck/moves.z</code> and <code>src/ztypecheck/valuechecks.z</code>.</p>
-<p>All parameters default to <code>.borrow</code> regardless of type family.
-For valtypes, <code>.borrow</code> means a copy (no lock, source not invalidated).
-For reftypes, <code>.borrow</code> means a reference (source not invalidated).
-<code>.borrow</code> on a known valtype is a compile error -- valtypes are
-pass-by-value so identity-based locking is meaningless. Generic type
-parameters are exempt because they may monomorphize to a reftype.</p>
-<h3 id="numeric-literal-coercion"><a href="#numeric-literal-coercion">7.6. Numeric Literal Coercion</a></h3>
-<p>Bare numeric literals are typed as one of two DECLARED types during
-typecheck: <code>intliteral</code> or <code>floatliteral</code>, declared <code>is native</code>
-in <code>lib/system/system.z</code> beside the sixteen scalars and minted as the
-registry's first two rows, which the declaration then attaches to. Each
-declares exactly the conversions it can reach -- sixteen for the integer
-literal, the four float targets for the float one -- so which suffixes a
-literal accepts is a question for its declaration rather than for the
-checker. Each also declares its operators, as generic natives bounded by
-<code>anynumber</code>, <code>anyint</code> or <code>anyfloat</code>, and the integer literal its
-<code>times</code>, <code>upto</code> and <code>downto</code>. They are compile-time only: <code>create: null</code> says a program
-cannot construct one, so a binding naming either bare is refused by the
-same rule any non-constructible type gets, with no literal-specific
-message. <code>core</code> does re-export the names, so a unit-level alias can
-refer to one. Constant expressions
-built from them stay literal-typed too &#x2014; the binop folder operates at
-unbounded integer precision when both operands are literal, with no
-intermediate range check. An <code>intliteral</code> only becomes a concrete numeric
-when one of the following fires:</p>
-<ul>
-<li><em><strong>Typed-location coercion</strong></em> via the literal-coercion helpers
-in <code>src/ztypecheck/numerics.z</code>. The helper reads <code>nodeConst</code>, applies
-the rule appropriate to the source/target combination (int&#x2192;int
-range check; int&#x2192;float exact mantissa; float&#x2192;float round-trip;
-float&#x2192;int rejected outright), and on success rewrites <code>nodeType</code>
-to the target. Wired sites: call arguments (<code>checkCall</code>),
-function implicit return (<code>checkImplicitReturn</code>), reassignment RHS
-(<code>checkReassignment</code>), match-arm numeric patterns
-(<code>checkCase</code>), and if-/match-expression branch unification.</li>
-<li><em><strong>Bind-site materialisation</strong></em> via <code>materialiseLiteral</code>.
-Called from <code>checkAssignment</code> and unit-name resolution so a
-literal-typed RHS never escapes into long-lived storage
-(<code>ZVariable.ztypeId</code>, the resolution cache). Also wired into
-generic-arg inference (<code>inferGenericConstruction</code>,
-<code>checkBoxConstruction</code>) so the monomorphization key is keyed
-on the concrete default (e.g. <code>id_i64</code>, not
-<code>id_intliteral</code>).</li>
-<li><em><strong>Default-resolution late pass</strong></em> -- a final walk invoked from
-the module-level <code>typecheck</code> entry point after resolution
-returns. Walks <code>ZTyping.nodeType</code> and blindly replaces any
-remaining literal-typed entry with its concrete default
-(<code>i64</code> for <code>intliteral</code>, <code>f64</code> for <code>floatliteral</code>). No
-range check fires here &#x2014; that is the coercion sites' job.</li>
-</ul>
-<p>No VALUE of a literal type reaches the emitter. That was an aspiration for as
-long as one route went around the late pass: a break-carrying
-do-block wrapped its value in an <code>optionval</code> keyed on the payload
-type, and a literal payload minted <code>optionval_intliteral</code>, whose
-field the emitter then had to spell. <code>wrapDoBreakValue</code>
-materialises the payload before the wrap, which is the rule
-generic-argument inference already applied everywhere else, so the
-monomorphization is keyed on <code>i64</code> / <code>f64</code> like any other.</p>
-<p>The late pass therefore stays PARTIAL by design -- symbol-table
-entries keep their literal ids, and nothing reads them afterwards.
-Making it total was considered and rejected: it would not have moved
-the measurement, because the leak was never a surviving stamp. It was
-a type keyed on a literal at the one mint site that did not
-materialise first, and it is fixed there.</p>
-<p>A suffix the literal type DECLARES (<code>65.u8</code>) is dispatched through
-that declaration: the child resolves to the declared method and the
-target is that method's return type, which is the BARE type and never a
-<code>resultval</code> -- a literal's fit is settled at compile time, so it
-either fits or it is an error. The range and exactness checks stay in
-<code>checkLiteralFits</code>, shared by the in-body and unit-level paths,
-because a declaration can say which conversions exist but not that 300
-does not fit a <code>u8</code>.</p>
-<p>Any other member of a literal-typed receiver is looked up on the literal
-type itself, as any type's member is; one it does not declare is no member
-(<code>1.nid</code>: type 'intliteral' has no member 'nid'). A literal's operator
-is a generic native, and its argument binds the parameter by
-<code>argBindingTid</code>: a literal argument of a native whose bound lists the
-literal's own type binds the literal itself, so <code>4 + 5</code> is computed by
-the constant folder and an unfolded one is <code>E0600</code>
-(<code>refuseUnfoldedLiteral</code>); any other binds its default; a singleton binds
-its bound. Against a typed operand the receiver then LANDS
-(<code>landLiteralReceiver</code>): it is checked to fit the type the operator's
-parameter was bound to, as a literal argument is, its node is stamped
-with that type, and that type's member of the same name is demanded. The
-emitter writes a literal type's operator or method as that member -- the
-operator from the receiver's stamp, a method (<code>times</code> lands in
-<code>i64</code>, every member of a string literal in <code>StringView</code>) through
-<code>emitCallByDecl</code> -- so no row of the literal type
-carries C: its rows in <code>system/nativec.zd</code> are bodyless, there only so
-each <code>is native</code> declaration names one.</p>
-<p><code>typesCompatible</code> treats literal-vs-concrete-numeric as
-structurally compatible so multi-arm constructs unify cleanly; the
-range check happens at the typed-location coercion sites, not in the
-compat check.</p>
-<p>Three typechecker gaps cover the remaining sites: record/class
-field-init type validation, list element type unification, and
-separable parameter defaults.</p>
-<h3 id="type-narrowing"><a href="#type-narrowing">7.7. Type Narrowing</a></h3>
-<p>Type narrowing for union and variant types is tracked through scope-based
-overlay entries. When a match arm narrows a variable to a specific subtype,
-a narrowing entry is placed in the arm's scope. When the arm scope is
-popped, the narrowing resets automatically.</p>
-<p>Post-match exclusion works by recording which subtypes were handled by
-diverging arms (arms that return or break). After the match scope is popped,
-exclusion entries are placed in the parent scope. Subsequent access to an
-excluded subtype produces a compile error.</p>
-<p>Assignment-based narrowing (e.g., <code>x: Result.ok 42</code>) also places a
-narrowing entry in the current scope. Reassignment resets the narrowing.</p>
-<p>If all branches of an <code>if</code> or <code>match</code> diverge, the parent scope is
-marked unreachable and subsequent statements are reported as dead code.</p>
-<h3 id="synthesis-toolkit"><a href="#synthesis-toolkit">7.8. Synthesis Toolkit</a></h3>
-<p>The type checker may need to introduce nodes that did not appear in
-the parsed source -- temporaries introduced by per-call argument
-hoisting and the generator-lowering rewrites. These nodes are
-synthesised by the checker where it needs them (there is no separate
-synthesis module):</p>
-<ul>
-<li>Fresh temp names -- a monotonic counter,
-<code>WalkState.nextTempId</code>, yields names of the form <code>_t0</code>, <code>_t1</code>,
-... in the order they are requested. The monotonicity matters:
-tests rely on the numeric suffix to assert source-order evaluation
-of call arguments.</li>
-<li>Node construction -- synthesised AST nodes are built with a
-fresh node id, a defaulted source location, and a <code>synthOrigin</code>
-stamp.</li>
-<li>Symbol-table registration -- a synth temp's <code>ZVariable</code>
-is registered in the current scope so downstream resolution finds
-it.</li>
-</ul>
-<p>Every synthesised node carries a <code>synthOrigin</code> field (and
-<code>ZVariable</code> carries one in the symbol table). The field names the
-rewrite that introduced the node (for example, <code>"anf"</code> for
-per-call argument hoisting). It is persisted in the SQL dump
-(<code>src/zsqldump.z</code>) so rewrite provenance survives into post-mortem
-inspection.</p>
-<p>Current consumers:</p>
-<ul>
-<li><code>hoistArg</code> in <code>src/ztypecheck/moves.z</code> -- per-call atomic
-processing rewrites every non-trivial call argument to a synth
-temp inside a per-call sub-scope. See
-<code>docs/ownership.pdoc:Per-Call Atomic Processing</code> for the model.</li>
-</ul>
+<p>The ownership rules as a program meets them are in
+<a href="./ownership.html">Ownership</a>.</p>
 <h2 id="code-generator"><a href="#code-generator">8. Code Generator</a></h2>
 <p>The code generator (C emitter) walks the fully typed AST and emits C source
-code. The output is compiled by a C compiler (gcc/clang) to produce a native
-executable.</p>
+code. A C compiler -- gcc, clang, tcc, mingw-w64 or MSVC -- compiles the
+output into a native executable.</p>
 <p>The emitter targets the <strong>C17</strong> language standard
-(<code>-std=c17 -Wall -Wextra</code>). Emitted code relies only on designated
-initializers, fixed-width <code>&lt;stdint.h&gt;</code> types, and <code>&lt;stdbool.h&gt;</code>; no C23
-features (<code>typeof</code>, <code>constexpr</code>, <code>#embed</code>) are used.</p>
+(<code>-std=c17 -Wall -Wextra</code>). The one thing beyond C17 the output may need
+is the type of an expression, for a temporary whose type the emitter has no
+C text for: the <code>Z_TYPEOF</code> macro spells it <code>typeof</code> under C23 and
+<code>__typeof__</code> otherwise, which each of those compilers takes in C17 mode.</p>
 <p>The emitter produces several output sections in order: struct/type definitions,
 forward declarations, function typedefs, function bodies, and a <code>main()</code>
 entry point. Each section is collected separately and assembled at the end.</p>
@@ -795,8 +509,7 @@ bodied stdlib functions work like any function reference (natives
 themselves have no reference form; they are call-only).
 A <em><strong>type method</strong></em> in these units may be a <code>.z</code> body, and
 <code>u8.times</code> and its seven siblings are: they construct an <code>intrange</code>
-and hand it back, and they emit and run like any other method. What was
-once true of them -- that no emit route existed -- no longer is.</p>
+and hand it back, and they emit and run like any other method.</p>
 <p>A method body is demanded per MEMBER, as a free function is: resolving a
 type walks only the bodied members the program uses
 (<code>bodiedMemberDeferred</code>), asked from <code>usedMemberDecl</code>. A walk MINTS
@@ -842,7 +555,7 @@ only). The test runner's pins kind (run by <code>make test</code>) pins the
 emitter's by-name resolution sites at their current floors and caps the
 <code>z_t{id}</code> spelling at the composer itself (src/ztestrunner/expected.z
 holds each pin).</p>
-<h2 id="id-based-naming"><a href="#id-based-naming">9. Id-based naming</a></h2>
+<h3 id="id-based-naming"><a href="#id-based-naming">8.5. Id-based naming</a></h3>
 <p>A type's (and a non-native function's) C name <strong>is</strong> its monotonic id under
 the <code>z_</code> namespace prefix: the type <code>point</code> with id 525 becomes
 <code>z_t525_t</code>, its <strong>add</strong> method (a function type of its own, id 527)
@@ -893,7 +606,7 @@ writer bound, and writes only the sections and pieces the program keeps; a
 value put in a hole is never searched again. A hole naming nothing the loader
 can resolve is fatal. Pure-C helpers (<code>z_panic</code>, <code>z_xmalloc</code>,
 <code>z_siphash_*</code>) spell no hole and are untouched.</p>
-<h3 id="type-emission"><a href="#type-emission">9.1. Type Emission</a></h3>
+<h3 id="type-emission"><a href="#type-emission">8.6. Type Emission</a></h3>
 <p>Each zerolang type maps to a C representation:</p>
 <ul>
 <li>Records &#x2192; C structs (stack-allocated value types)</li>
@@ -904,7 +617,7 @@ can resolve is fatal. Pure-C helpers (<code>z_panic</code>, <code>z_xmalloc</cod
 <li>Facets &#x2192; vtable + inline data union (value-type dynamic dispatch)</li>
 <li>Enums &#x2192; integer constants with a tag enum type</li>
 </ul>
-<h3 id="memory-management"><a href="#memory-management">9.2. Memory Management</a></h3>
+<h3 id="memory-management"><a href="#memory-management">8.7. Memory Management</a></h3>
 <p>The emitter implements ownership-based memory management without a garbage
 collector.</p>
 <p>String data buffers are heap-allocated and freed via <code>z_String_free()</code>.
@@ -939,7 +652,7 @@ element, a reassigned value, a return (<code>implementationArgText</code>): the 
 protocol value, borrowed otherwise.</p>
 <p>The <code>.take</code> operation transfers ownership from one variable to another,
 nullifying the source to prevent double-free.</p>
-<h3 id="unrecoverable-errors"><a href="#unrecoverable-errors">9.3. Unrecoverable Errors</a></h3>
+<h3 id="unrecoverable-errors"><a href="#unrecoverable-errors">8.8. Unrecoverable Errors</a></h3>
 <p>All runtime-terminal exits route through a single helper emitted in
 the stdlib preamble of every program:</p>
 <pre><code class="language-c">  static _Noreturn void z_panic(const char* msg) {
@@ -963,7 +676,7 @@ function" diagnostics in callers that panic on every path.</p>
 <p>Source location (<code>.z</code> file + line) is intentionally not included
 in the <code>zpanic:</code> output; the panic message text itself is the
 post-mortem link back to the emitting site.</p>
-<h3 id="collection-choice"><a href="#collection-choice">9.4. Collection Choice</a></h3>
+<h3 id="collection-choice"><a href="#collection-choice">8.9. Collection Choice</a></h3>
 <p>Compiler data structures follow a measured policy. Id-keyed tables (node
 stamps, declarations, registries) are <code>IdMap</code> / <code>IdSet</code>: a stack struct
 that costs no allocation while empty, a dense insertion-ordered entry array
@@ -977,15 +690,15 @@ that uses it.</strong> An IdMap below its small-mode ceiling has no index array 
 all and <code>find</code> scans the dense entries; past it the index appears and the
 scan becomes a probe. So a declaration's namespace is one field that answers
 both questions asked of it -- <code>children.get</code> is the lookup and the same
-entries in order are the walk -- where it was once a list plus a lazily
-built by-name map, and every reader carried the crossing as a branch.</p>
+entries in order are the walk -- and no reader carries the crossing as a
+branch.</p>
 <p>Small, per-instance state that <em><strong>deletes</strong></em> (the emitter's narrowing and
 alias lists) stays an <strong>assoc-list</strong>: at a handful of entries a linear row
 scan beats a probe, and an append-only container cannot serve it at all.
 Hot String-keyed lookups are avoided outright: resolution goes through
 interned ids and two-argument (unit, name) probes rather than composed
 "unit.name" key strings.</p>
-<h3 id="stamp-driven-emission"><a href="#stamp-driven-emission">9.5. Stamp-Driven Emission</a></h3>
+<h3 id="stamp-driven-emission"><a href="#stamp-driven-emission">8.10. Stamp-Driven Emission</a></h3>
 <p>The emitter is a mechanical typed-AST-to-C pass: it reads what the type
 checker stamped and compares by id, never re-resolving names. An atom
 reference carries <code>atomVariableId</code> (a local) or <code>refDecl</code> (the
@@ -1001,7 +714,7 @@ probe-chain fallbacks -- are counted and pinned by the pins kind.
 Internal impossibilities (an unresolvable typedef base, an unspellable
 field type) <strong>panic</strong> with a <code>zemitterc:</code> message instead of
 emitting a silent fallback type.</p>
-<h3 id="evaluation-order"><a href="#evaluation-order">9.6. Evaluation Order</a></h3>
+<h3 id="evaluation-order"><a href="#evaluation-order">8.11. Evaluation Order</a></h3>
 <p>A call's arguments and an operator's operands are evaluated in the order they
 are written (spec: Call Arguments, Operations), and C leaves both unsequenced.
 The emitter keeps the order with <strong>ordered temps</strong>: a part is read into an
@@ -1014,11 +727,11 @@ that may write needs one only when a part that is not constant follows it.
 <code>h.bump + h.count</code> keeps a temp for <code>h.bump</code>, and <code>x.v + (addTo c: x d: 1)</code>
 one for <code>x.v</code>. A literal, a folded constant and a plain address never need
 one. <code>order_pure_parts</code> pins each case by running it.</p>
-<h2 id="bootstrapping-self-hosting"><a href="#bootstrapping-self-hosting">10. Bootstrapping &amp; self-hosting</a></h2>
+<h2 id="bootstrapping-self-hosting"><a href="#bootstrapping-self-hosting">9. Bootstrapping &amp; self-hosting</a></h2>
 <p>The compiler is self-hosted: it is written in zerolang (<code>src/*.z</code>) and
-compiles itself. Building and testing it require only a C toolchain -- no
-Python, and no shell scripts.</p>
-<h3 id="the-bootstrap-chain"><a href="#the-bootstrap-chain">10.1. The bootstrap chain</a></h3>
+compiles itself. A C toolchain is the only requirement to build and test
+it.</p>
+<h3 id="the-bootstrap-chain"><a href="#the-bootstrap-chain">9.1. The bootstrap chain</a></h3>
 <p>The sources are compiled by a <strong>seed</strong>: <code>bootstrap/zc.c</code>, a committed,
 self-emitted C dump of the compiler. <code>cc bootstrap/zc.c</code> alone yields a
 working <code>zc</code>.</p>
@@ -1027,7 +740,7 @@ working <code>zc</code>.</p>
 <li><code>make test-bootstrap</code> proves the loop converges: the seed builds a compiler, which rebuilds itself to a byte-identical fixpoint (<code>b2 == b3</code>). Under <code>make ci</code> it runs that chain for gcc, clang and the vendored tcc, and asserts the three emit byte-identical C &#x2014; so "any C toolchain" means they agree, not merely that each works.</li>
 <li><code>make bump-seed</code> regenerates <code>bootstrap/zc.c</code> from a fresh <code>bin/zc</code> when the sources have drifted far enough that the seed lags.</li>
 </ul>
-<h3 id="building-and-testing"><a href="#building-and-testing">10.2. Building and testing</a></h3>
+<h3 id="building-and-testing"><a href="#building-and-testing">9.2. Building and testing</a></h3>
 <p>The test runner and the style linter/formatter are themselves zerolang programs
 (<code>src/ztestrunner.z</code> and <code>src/zl.z</code>), so the whole build-and-test
 pipeline is portable to any platform with a C compiler.</p>

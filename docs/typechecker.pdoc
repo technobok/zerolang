@@ -41,18 +41,16 @@ a contributor should know which structures the typechecker
 maintains, how its code is partitioned, and where a particular
 feature lives.
 
-The companion document #~"compiler.pdoc" covers #_*"semantics" --
-what ownership means, how the multi-granularity lock-conflict rule
-works, what demand-driven resolution guarantees. This document
-covers #_*"structure": data layout, dispatch, code organisation.
-The two documents are deliberately split so that semantic rules
-have a single source of truth (compiler.pdoc / ownership.pdoc) and
-this one stays a navigation aid that does not rot when rule wording
-changes.
+[#> to=./compiler.html: The compiler overview] gives the whole
+pipeline and the stages around the typechecker. This document is the
+typechecker's own: the rules it applies while it checks -- demand-driven
+resolution, ownership and locks, literal coercion, narrowing -- and the
+structures and code that apply them. [#> to=./ownership.html: Ownership]
+states the ownership rules as a program meets them; this document says
+how the checker enforces them.
 
 #b:"Audience." A new contributor who has already read
-#~"spec.pdoc", #~"ownership.pdoc", and the Semantic-Analyser
-section of #~"compiler.pdoc".
+#~"spec.pdoc", #~"ownership.pdoc", and #~"compiler.pdoc".
 
 
 #--: Pipeline Position
@@ -87,8 +85,7 @@ descends only into names that are actually referenced. Names that
 are never reached are never typechecked. The same property gives
 cycle detection for free -- a name that is encountered while it is
 already on the resolution stack is reported as a circular
-dependency. See #~"compiler.pdoc:Demand-Driven Resolution" for the
-rationale.
+dependency. See [#> to=demand-driven-resolution: Demand-Driven Resolution].
 
 
 #--: Core Data Structures
@@ -159,15 +156,15 @@ setters on the registry (#~"variableTypeOf", #~"variableOwnershipOf",
 #ul:
   [#*: #~"ztypeId": the variable's resolved type]
   [#*: #~"ownership": #~"OWNED" or #~"BORROWED" (the
-    2-state model described in #~"compiler.pdoc:Ownership and
-    Lifetime")]
+    2-state model; see [#> to=ownership-enforcement: Ownership enforcement])]
   [#*: #~"isPrivateAccess": carried through #~".private"
     typedef projections]
   [#*: #~"borrowOrigin": the name id of the root of the path this
     variable borrows from; 0 for an owned variable and for parameters]
-  [#*: #~"synthOrigin": pass-name string for variables
-    synthesised by a compiler pass (e.g. #~"\"anf\"" for hoisted
-    call temps); none for user-source variables]
+  [#*: #~"synthOrigin": the rewrite that synthesised the variable
+    (#~"anf" for a hoisted call temp; see
+    [#> to=synthesis-toolkit: Synthesis toolkit]), #~"unsaid" for a
+    written one]
   [#*: #~"origin": how the variable came to be -- a parameter, a
     local binding, or synthesised]
 
@@ -407,6 +404,48 @@ After the discriminator check, #~"cast()" narrows the node to the
 concrete #~"Node" arm; see #~"lib/system/zast.z".
 
 
+#--: Demand-Driven Resolution
+
+The type checker is demand-driven: it starts from #~"main" and resolves
+definitions as they are referenced. Types, functions, and definitions that are
+never reachable from #~"main" are never type-checked. This ensures the compiler
+only processes what is needed, and circular dependencies are detected when a
+name is encountered that is already on the resolution stack.
+
+There is one environment. Every unit's top-level names are indexed before any
+resolution (the declaration tree: each unit is a scope whose children are its
+definitions, each carrying its resolution state -- not yet touched, demanded,
+being resolved, resolved). A reference resolves by walking the scopes from the
+inside out: the enclosing namespace, the current unit, then the prelude
+(#~"core", whose members are re-exports); the first match wins, and a
+qualified #~"unit.member" names its unit directly and walks nothing. The
+declaration a reference finds is what it demands -- never a bare name -- so a
+name defined in two units can only ever reach the one the reference could see,
+and the standard library is resolved by exactly the same rule as any other unit.
+Demanded declarations are queued in discovery order and resolved from the top
+level, each one's body scanned for further references only once its own
+resolution completes.
+
+The rule holds for the unit being compiled exactly as it does for its
+dependencies, which is why that unit must declare a #~"main" at all
+(#b:"E0039"): without a root there is nothing to demand from. What a type
+DECLARES is resolved either way -- its generic parameters, the interfaces it
+implements, and the namespaces and inline templates that scope it -- because
+those are properties of the declaration rather than of anything walking a body.
+
+A namespace -- an inline #~"m: unit { }", a hidden subunit, a #~"public:"
+block -- is a scope like a file unit, not a definition resolved whole.
+Demanding one resolves the namespaces and templates it declares; each other
+member resolves when a use names it, and its body is walked when it is used.
+A member of #~"math"'s #~"bigint" subunit that the program never reaches is
+neither checked nor emitted.
+
+Resolution is outside-in: a type resolves before its fields, its fields before
+its method signatures, and no method body is walked until that completes. A body
+walked ahead of its owner would bind #~"this" to no type at all, and every check
+that hangs off the receiver would quietly stop asking.
+
+
 #--: Resolution Stack and Cycle Detection
 
 Resolution is keyed by #_*"declaration", not by synthesized dotted-string
@@ -589,15 +628,16 @@ carries its own #~"dentryid" / #~"providerid" pair, out of this scope.
 
 #--: Cross-Cutting Concerns
 
-Each subsection below points at #_*"where" a concern lives in the
-typechecker. For #_*"why" it works that way, follow the links to
-the semantic documents.
+Each subsection below gives a rule the checker applies across the
+walk and #_*"where" it lives in the code.
 
 
 #---: Ownership enforcement
 
-The 2-state ownership model (see #~"compiler.pdoc:Ownership and
-Lifetime") is enforced at the assignment and call sites:
+The ownership status of each expression is one of two states: OWNED
+(the variable owns the instance and is responsible for its lifetime) or
+BORROWED (a temporary reference; the variable does not own the instance).
+The model is enforced at the assignment and call sites:
 
 #ul:
   [#*: #~"checkAssignment" -- definition site. Records the
@@ -634,22 +674,54 @@ is refused with E0200 exactly as #~"b: b" is
 
 The typechecker chooses #_*"when" to install a lock; #~"zenv.z"
 owns the conflict rule (#~"lockAcquireConflict") and the
-prefix-overlap path test (#~"pathsOverlap"). Two scopes of
-locks, both described in #~"compiler.pdoc:Lock Checking":
+prefix-overlap path test (#~"pathsOverlap").
+
+Lock keys are #_+"paths" -- tuples of name ids #~"(root, f1, f2, ...,
+fn)". Overlay rows (#~"ZEntry") are keyed by the root local's
+declaration so the linear scan stays cheap; the full path lives on
+#~"ZEntry.lockPath" and is consulted to apply the prefix-overlap
+conflict rule. Two lock scopes exist:
 
 #ul:
-  [#*: #b:"Call-scoped" -- installed by #~"lockCallArg" inside a
-    #~"CALL" scope that wraps argument processing. An argument's leaf
-    is #~"SHARED" whatever its marker, with the row's #~"mutable"
-    flag set unless the parameter is #~".view"; a #~"{:this}"
-    receiver's leaf is #~"EXCLUSIVE"; every intermediate prefix is
-    #~"SHARED".]
-  [#*: #b:"Borrow-scoped" -- installed by
-    #~"installBorrowLocks" when a binding takes a borrow into
-    a #~"BLOCK" scope (#~".borrow", #~".view", #~".stringView",
-    #~"with", or a #~".borrow"-param transfer). Persists for the
-    lifetime of the binding's scope; released by scope pop or
-    explicit #~".drop".]
+  [#*: #b:"Call-scoped" -- taken on a call's arguments and receiver
+    (#~"lockCallArg", #~"lockCallPath"). Each by-reference argument
+    queues its lock while the arguments are evaluated, and the queue
+    is laid, in argument order, when the call starts (#~"layArgLocks"):
+    SHARED intent locks on every intermediate prefix of the source
+    path and, on the leaf, EXCLUSIVE when the callee may write through
+    the reference and SHARED when it only reads (a #~".view"
+    parameter); the row records which (#~"mutable"). A call nested in
+    an argument has taken and released its own locks by then. The
+    receiver locks the same way at the receiver's strength. When the
+    call returns its scope is popped and its locks are released. For a
+    non-owned parameter the leaf lock transfers to the return value
+    (installed as a borrow-scoped lock in the parent scope).]
+  [#*: #b:"Borrow-scoped" -- installed by #~"installBorrowLocks" when
+    a binding takes a borrow (#~".borrow", #~".view", #~".stringView",
+    #~".listView", #~"with", or a #~".borrow"-param transfer): SHARED
+    on each intermediate prefix and on the leaf (EXCLUSIVE when the pin
+    came from a #~"{:this}" receiver), in the scope where the borrow
+    variable is defined. It lasts for that scope; released by scope pop
+    or explicit #~".drop".]
+
+Conflict check (multi-granularity): same-path locks dedupe when both
+SHARED and conflict when either is EXCLUSIVE; a strict ancestor
+SHARED is intent-shared and permits any lock on descendants; a strict
+ancestor EXCLUSIVE conflicts with any descendant. Sibling paths (no
+prefix relation) never conflict. Enforcement for access / mutation
+sites uses the same prefix-overlap test: any EXCLUSIVE whose path
+prefix-overlaps the target path is a conflict. Two rules on top of
+the strengths: inside one call, a second row over the same value
+conflicts when either row is #~"mutable" (two arguments, or an
+argument and the receiver); and a row whose reference a call handed
+back (#~"alias" false -- it may point inside the value) conflicts
+with any other holder's #~"mutable" row over the same value, in
+either order.
+
+Key code: #~"tryLock" / #~"findExclusiveLock" /
+#~"lockAcquireConflict" in #~"src/zenv.z"; #~"lockCallArg" /
+#~"installBorrowLocks" and the path-tuple builders and access-check
+helpers in #~"src/ztypecheck/moves.z" and #~"src/ztypecheck/valuechecks.z".
 
 The aggregate-lock-escape check runs at storage sites (field
 writes) and at return sites; it consults #~"isPathLocked" on
@@ -719,7 +791,7 @@ clone.
     constraints on a candidate argument type.]
 
 Node synthesis (the hoist temps, the generator lowering) is described
-in #~"compiler.pdoc:Synthesis Toolkit".
+in [#> to=synthesis-toolkit: Synthesis toolkit].
 
 #~"is native" methods (the compiler-provided collection methods
 on #~"array", #~"List", #~"Map", #~"str", etc.) are #_*"not"
@@ -752,6 +824,130 @@ reassignment resets it.
 
 Narrowing and exclusion are carried as arm name ids on the overlay
 row (#~"narrowedSubtype", #~"excludedSubtypes").
+
+
+#---: Numeric literal coercion
+
+Bare numeric literals are typed as one of two DECLARED types during
+typecheck: #~"intliteral" or #~"floatliteral", declared #~"is native"
+in #~"lib/system/system.z" beside the sixteen scalars and minted as the
+registry's first two rows, which the declaration then attaches to. Each
+declares exactly the conversions it can reach -- sixteen for the integer
+literal, the four float targets for the float one -- so which suffixes a
+literal accepts is a question for its declaration rather than for the
+checker. Each also declares its operators, as generic natives bounded by
+#~"anynumber", #~"anyint" or #~"anyfloat", and the integer literal its
+#~"times", #~"upto" and #~"downto". They are compile-time only: #~"create: null" says a program
+cannot construct one, so a binding naming either bare is refused by the
+same rule any non-constructible type gets, with no literal-specific
+message. #~"core" does re-export the names, so a unit-level alias can
+refer to one. Constant expressions
+built from them stay literal-typed too — the binop folder operates at
+unbounded integer precision when both operands are literal, with no
+intermediate range check. An #~"intliteral" only becomes a concrete numeric
+when one of the following fires:
+
+#ul:
+  [#*: #_*"Typed-location coercion" via the literal-coercion helpers
+    in #~"src/ztypecheck/numerics.z". The helper reads #~"nodeConst", applies
+    the rule appropriate to the source/target combination (int→int
+    range check; int→float exact mantissa; float→float round-trip;
+    float→int rejected outright), and on success rewrites #~"nodeType"
+    to the target. Wired sites: call arguments (#~"checkCall"),
+    function implicit return (#~"checkImplicitReturn"), reassignment RHS
+    (#~"checkReassignment"), match-arm numeric patterns
+    (#~"checkCase"), and if-/match-expression branch unification.]
+  [#*: #_*"Bind-site materialisation" via #~"materialiseLiteral".
+    Called from #~"checkAssignment" and unit-name resolution so a
+    literal-typed RHS never escapes into long-lived storage
+    (#~"ZVariable.ztypeId", the resolution cache). Also wired into
+    generic-arg inference (#~"inferGenericConstruction",
+    #~"checkBoxConstruction") so the monomorphization key is keyed
+    on the concrete default (e.g. #~"id_i64", not
+    #~"id_intliteral").]
+  [#*: #_*"Default-resolution late pass" -- a final walk invoked from
+    the module-level #~"typecheck" entry point after resolution
+    returns. Walks #~"ZTyping.nodeType" and blindly replaces any
+    remaining literal-typed entry with its concrete default
+    (#~"i64" for #~"intliteral", #~"f64" for #~"floatliteral"). No
+    range check fires here — that is the coercion sites' job.]
+
+No VALUE of a literal type reaches the emitter: every site that mints a
+type from a value materialises a literal first, as generic-argument
+inference does, so a monomorphisation is keyed on #~"i64" / #~"f64" -- a
+break-carrying do-block's #~"optionval" too (#~"wrapDoBreakValue"). The
+late pass is PARTIAL: symbol-table entries keep their literal ids, and
+nothing reads them afterwards.
+
+A suffix the literal type DECLARES (#~"65.u8") is dispatched through
+that declaration: the child resolves to the declared method and the
+target is that method's return type, which is the BARE type and never a
+#~"resultval" -- a literal's fit is settled at compile time, so it
+either fits or it is an error. The range and exactness checks stay in
+#~"checkLiteralFits", shared by the in-body and unit-level paths,
+because a declaration can say which conversions exist but not that 300
+does not fit a #~"u8".
+
+Any other member of a literal-typed receiver is looked up on the literal
+type itself, as any type's member is; one it does not declare is no member
+(#~"1.nid": type 'intliteral' has no member 'nid'). A literal's operator
+is a generic native, and its argument binds the parameter by
+#~"argBindingTid": a literal argument of a native whose bound lists the
+literal's own type binds the literal itself, so #~"4 + 5" is computed by
+the constant folder and an unfolded one is #~"E0600"
+(#~"refuseUnfoldedLiteral"); any other binds its default; a singleton binds
+its bound. Against a typed operand the receiver then LANDS
+(#~"landLiteralReceiver"): it is checked to fit the type the operator's
+parameter was bound to, as a literal argument is, its node is stamped
+with that type, and that type's member of the same name is demanded. The
+emitter writes a literal type's operator or method as that member -- the
+operator from the receiver's stamp, a method (#~"times" lands in
+#~"i64", every member of a string literal in #~"StringView") through
+#~"emitCallByDecl" -- so no row of the literal type
+carries C: its rows in #~"system/nativec.zd" are bodyless, there only so
+each #~"is native" declaration names one.
+
+#~"typesCompatible" treats literal-vs-concrete-numeric as
+structurally compatible so multi-arm constructs unify cleanly; the
+range check happens at the typed-location coercion sites, not in the
+compat check.
+
+
+#---: Synthesis toolkit
+
+The type checker may need to introduce nodes that did not appear in
+the parsed source -- temporaries introduced by per-call argument
+hoisting and the generator-lowering rewrites. These nodes are
+synthesised by the checker where it needs them (there is no separate
+synthesis module):
+
+#ul:
+  [#*: #+ Fresh temp names -- a monotonic counter,
+  #~"WalkState.nextTempId", yields names of the form #~"_t0", #~"_t1",
+  ... in the order they are requested. The monotonicity matters:
+  tests rely on the numeric suffix to assert source-order evaluation
+  of call arguments.]
+  [#*: #+ Node construction -- synthesised AST nodes are built with a
+  fresh node id, a defaulted source location, and a #~"synthOrigin"
+  stamp.]
+  [#*: #+ Symbol-table registration -- a synth temp's #~"ZVariable"
+  is registered in the current scope so downstream resolution finds
+  it.]
+
+A synthesised variable's #~"ZVariable" carries a #~"synthOrigin", a
+#~"zsynthorigin" naming the rewrite that introduced it (#~"anf" for
+per-call argument hoisting, #~"discard" for a value computed and then
+discarded; #~"unsaid" for a written binding). It is persisted in the SQL
+dump (#~"src/zsqldump.z") so rewrite provenance survives into post-mortem
+inspection.
+
+Current consumers:
+
+#ul:
+  [#*: #~"hoistArg" in #~"src/ztypecheck/moves.z" -- per-call atomic
+  processing rewrites every non-trivial call argument to a synth
+  temp inside a per-call sub-scope. See
+  [#> to=./ownership.html: ownership] (Per-Call Atomic Processing) for the model.]
 
 
 #---: Auto-call coercion
@@ -802,7 +998,7 @@ body on one is legal and #~"u8.times" is the living example. Bodied
 only when the program's demand loop referenced them; a bodied type
 METHOD is demanded at the granularity of its owner, so it is gated
 separately (#~"bodiedMemberDeferred") and walked only where the program
-calls it. See the compiler doc's "Runtime-backed stdlib units".
+calls it. See [#> to="./compiler.html#runtime-backed-stdlib-units": Runtime-backed stdlib units].
 
 
 #--: Error Reporting
@@ -874,11 +1070,9 @@ order:
 #--: Related Documents
 
 #ul:
-  [#*: #~"compiler.pdoc" -- the pipeline overview and the
-    semantic descriptions of demand-driven resolution,
-    monomorphisation, ownership, scope environment, lock
-    checking, type narrowing, and the synthesis toolkit. This
-    document is the structural companion to that one.]
+  [#*: [#> to=./compiler.html: compiler.pdoc] -- the pipeline overview:
+    each stage, what it takes and gives, and the code generator's own
+    detail.]
   [#*: #~"ownership.pdoc" -- the full specification of
     ownership states, parameter annotations
     (#~".take" / #~".borrow" / #~".view"), and per-call atomic
@@ -888,7 +1082,7 @@ order:
     #~"needs_field_cleanup", #~"is_box") and the stack-vs-heap
     strategy.]
 
-#b:"Anti-duplication note." Semantic rules live in
-#~"compiler.pdoc" and #~"ownership.pdoc"; type layout lives in
-#~"representation_of_types.pdoc". This document is the map. If a
-rule's wording needs to change, change it there, not here.
+#b:"Anti-duplication note." The ownership rules as a program meets them
+live in #~"ownership.pdoc"; type layout lives in
+#~"representation_of_types.pdoc"; the checker's own rules and structure
+live here. Each rule is stated in one place, and the others link to it.

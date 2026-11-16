@@ -33,7 +33,25 @@
 
 #--: Introduction
 
-A document showing the compiler architecture overview.
+The compiler, #~"zc", turns a program's units into C and hands the C to a C
+compiler. Its stages run in this order, each taking what the one before it
+gives:
+
+#ol:
+  [#*: the [#> to=virtual-file-system: Virtual File System] presents the
+    source roots as one tree;]
+  [#*: the [#> to=tokenizer: Tokenizer] and the [#> to=lexer: Lexer] turn a
+    unit's text into tokens;]
+  [#*: the [#> to=parser: Parser] builds the syntax tree of every unit the
+    program names;]
+  [#*: [#> to=generator-desugaring: Generator Desugaring] prepares each
+    generator for the checker;]
+  [#*: the [#> to=semantic-analyser: Semantic Analyser] checks types,
+    ownership and locks, and records what it finds;]
+  [#*: the [#> to=code-generator: Code Generator] writes the C.]
+
+Each section below says what its stage takes and gives, and links to the
+page that owns its detail. [#> to=./zc.html: zc] gives the command line.
 
 #--: Virtual File System
 
@@ -42,11 +60,8 @@ tree to the compiler.
 
 The VFS allows union or bind mounts to mount one filesystem over another. The
 VFS tree presented to the compiler is usually the system directory with the
-user source directory union mounted over this. In this way, user units are
-found first, shadowing system units. This offers some backwards compatibility -
-future system modules that may be released that collide with user modules will
-be hidden by them. The user modules would need to be refactored/renamed to make
-use of the new system modules.
+user source directory union mounted over it, so a user unit is found first
+and shadows a system unit of the same name.
 
 The VFS allows abstraction over a source tree that may be arbitrarily complex
 while providing a simple interface to the compiler. The VFS tree can be built
@@ -78,9 +93,8 @@ The tokens have a type, the string contents and an identifier for the file that
 they are contained within and the location (line and column) within that source
 file.
 
-The Tokenizer follows the ITokenizer protocol which provides a single 'token'
-method.  This allows alternate tokenizers to be provided or allows filtering or
-logging to be inserted.
+The [#> to=./stdlib_tokenize.html: tokenize] unit gives the tokenizer and
+the lexer to programs; its page owns their detail.
 
 #--: Lexer
 
@@ -112,7 +126,8 @@ token out rather than duplicating it.
 #--: Parser
 
 The parser creates an abstract syntax tree (AST) from the source units
-supplied. It begins with the 'core' system unit and the user 'main' unit and
+supplied. The [#> to=./stdlib_ast.html: ast] unit gives the parser and the
+tree to programs; its page owns the tree's shape. It begins with the 'core' system unit and the user 'main' unit and
 parses each, loading further units as they are referred to.
 
 The parser resolves no names. After a unit is parsed, one walk over its body
@@ -248,7 +263,8 @@ path. Helpers #~"emitGenPrologue", #~"emitYieldStmt", and
       return OPTION_NONE;
 """
 
-C17 #~"goto" plus #~"switch" arbitrates cleanly; no GCC extensions.
+C17 #~"goto" plus #~"switch" arbitrates cleanly, with no compiler
+extension.
 The yield-state numbers are pre-allocated from the function's yield
 count (#~"fnYieldCount") so the prologue, body fragments, and
 epilogue agree.
@@ -273,369 +289,40 @@ desugarer rejects expression-form first-yields, reflecting that
 the resume-input slot is undefined before the first
 #~".call value:" arrives.
 
-#--: Semantic Analyser (Type/Ownership/Lock checking)
+#--: Semantic Analyser
 
-The Semantic Analyser assigns a type to each node in the AST. It compares
-types of definitions, assignments and arguments being passed to ensure the
-types are compatible.
-
-A stack of nodes being typechecked is maintained as checking proceeds. This
-allows the type checker to catch circular dependencies.
-
-#---: Demand-Driven Resolution
-
-The type checker is demand-driven: it starts from #~"main" and resolves
-definitions as they are referenced. Types, functions, and definitions that are
-never reachable from #~"main" are never type-checked. This ensures the compiler
-only processes what is needed, and circular dependencies are detected when a
-name is encountered that is already on the resolution stack.
-
-There is one environment. Every unit's top-level names are indexed before any
-resolution (the declaration tree: each unit is a scope whose children are its
-definitions, each carrying its resolution state -- not yet touched, demanded,
-being resolved, resolved). A reference resolves by walking the scopes from the
-inside out: the enclosing namespace, the current unit, then the prelude
-(#~"core", whose members are re-exports); the first match wins, and a
-qualified #~"unit.member" names its unit directly and walks nothing. The
-declaration a reference finds is what it demands -- never a bare name -- so a
-name defined in two units can only ever reach the one the reference could see,
-and the standard library is resolved by exactly the same rule as any other unit.
-Demanded declarations are queued in discovery order and resolved from the top
-level, each one's body scanned for further references only once its own
-resolution completes.
-
-The rule holds for the unit being compiled exactly as it does for its
-dependencies, which is why that unit must declare a #~"main" at all
-(#b:"E0039"): without a root there is nothing to demand from. What a type
-DECLARES is resolved either way -- its generic parameters, the interfaces it
-implements, and the namespaces and inline templates that scope it -- because
-those are properties of the declaration rather than of anything walking a body.
-
-A namespace -- an inline #~"m: unit { }", a hidden subunit, a #~"public:"
-block -- is a scope like a file unit, not a definition resolved whole.
-Demanding one resolves the namespaces and templates it declares; each other
-member resolves when a use names it, and its body is walked when it is used.
-A member of #~"math"'s #~"bigint" subunit that the program never reaches is
-neither checked nor emitted.
-
-Resolution is outside-in: a type resolves before its fields, its fields before
-its method signatures, and no method body is walked until that completes. A body
-walked ahead of its owner would bind #~"this" to no type at all, and every check
-that hangs off the receiver would quietly stop asking.
-
-#---: Monomorphization
-
-Generic types are instantiated through monomorphization. When a generic type
-(e.g., #~"List(String)") is used, the type checker creates a concrete copy
-(a monomorphized type) with the generic parameters replaced by concrete types.
-The monomorphized type name is mangled (e.g., #~"list__string") to produce a
-unique C identifier.
-
-Generic method bodies are deep-copied during monomorphization and type-checked
-with the concrete type arguments in scope. This ensures that each instantiation
-is independently validated. A numeric generic argument is bound as the
-instance's singleton type for that parameter: a typedef over the bound whose
-one value is the argument. A bare read of the parameter in a body is that
-value, so it folds per instance; a field or a local of the type holds the
-value at run time.
-
-Compiler-injected methods on collections (#~".append", #~".set",
-#~".get", #~".byteView", #~".listView", #~".stringView", #~".iterate",
-#~".length", and friends) are #_*"not" synthesised by the
-monomorphizer. They are declared with the #~"is native" form in
-#~"lib/system/system.z" and #~"lib/system/collections.z"; the
-monomorphizer clones those declarations alongside everything else.
-Resolution flows through the standard child-lookup path -- there is
-no syntactic special case in the type checker for these names, and a
-user-defined member of the same name on a non-collection type
-resolves normally. Methods that return a borrowed reference into a parameter or
-receiver declare that source as a non-owned parameter
-(e.g. #~"function {t: this.borrow} outx T.borrow"); the standard
-#~".borrow"-param transfer at call resolution drives the call-site
-locking, with no name-based pattern matching.
-
-A no-user-arg method dotted path (#~"v: s.stringView", #~"p1.distance"
-inside string interpolation) is auto-called when read in value
-position. The coercion lives in #~"checkDotted" and is gated
-by a coerce-to-return flag that #~"checkCall" clears
-when resolving its callable -- so explicit method calls
-(#~"obj.method named: arg") see the function type and dispatch
-normally instead of falling into construction-of-return-type. Path
-resolution itself is context-free: it
-always returns the FUNCTION type for a method path. The behaviour is
-identical for #~"is native" and user-defined methods.
-
-#---: Ownership and Lifetime
-
-The ownership status of each expression is determined using a 2-state model:
-OWNED (the variable owns the instance and is responsible for its lifetime) or
-BORROWED (a temporary reference; the variable does not own the instance).
-
-Function parameters carry ownership annotations: #~"take" (caller transfers
-ownership to callee), #~"borrow" (callee gets a borrowed reference that locks
-the argument for the duration of the call), or #~"view" (the same, readonly).
-See #~"docs/ownership.pdoc" for the full specification.
-
-
-#---: Scope Environment
-
-All variable state -- type, ownership, lock state, type narrowing, and
-taken (consumed) status -- is tracked in a unified scope-based environment.
-Entries are held in a flat #~"List ZEntry" on the symbol table, with each
-scope recording its start index rather than owning a dictionary. Scopes are
-small (measured maximum of approximately 6 entries in practice) so linear
-scan outperforms hash lookup.
-
-A #~"ZEntry" carries: the variable name, its resolved type, whether it is a
-definition or a shadow overlay, optional ownership info, optional lock
-state, optional type narrowing (#~"narrowedSubtype" and
-#~"excludedSubtypes"), and optional taken state.
-
-Three scope kinds are used:
+The semantic analyser, the typechecker, takes the syntax tree and gives the
+model the code generator reads: a type for each node, and the ownership,
+lock and narrowing facts of every body (#~"ZTyping"), beside the type
+registry. It is demand-driven: it starts from #~"main" and checks only what
+a reference reaches. [#> to=./typechecker.html: The typechecker] owns its
+detail:
 
 #ul:
-  [#*: #+ BLOCK -- language constructs (function, do, for, if, with, match,
-  match arm). Can contain variable definitions.]
-  [#*: #+ CALL -- pushed before processing call arguments, popped after the
-  call returns. Lock entries placed here are released automatically when the
-  scope is popped.]
-  [#*: #+ OVERLAY -- per-statement state changes. Contains shadow entries
-  that record a new state (lock, narrowing, taken) for a variable defined in
-  an outer scope.]
+  [#*: [#> to="./typechecker.html#demand-driven-resolution": demand-driven resolution]
+    and [#> to="./typechecker.html#resolution-stack-and-cycle-detection": cycle detection];]
+  [#*: [#> to="./typechecker.html#monomorphisation": monomorphisation] -- each
+    instance of a generic definition checked from its own copy;]
+  [#*: [#> to="./typechecker.html#ownership-enforcement": ownership] and
+    [#> to="./typechecker.html#lock-checking": lock checking];]
+  [#*: [#> to="./typechecker.html#numeric-literal-coercion": numeric literal coercion]
+    and [#> to="./typechecker.html#type-narrowing": type narrowing];]
+  [#*: [#> to="./typechecker.html#synthesis-toolkit": the nodes it synthesises].]
 
-State changes follow an immutability principle: new shadow entries are
-created in overlay scopes rather than modifying existing entries. The scope
-chain is the history. Scope exit (via #~"popTo") naturally releases all
-state from that scope -- locks vanish, narrowing resets, taken markers are
-merged into the parent.
-
-Each scope carries a monotonically increasing #~"scopeId" for tracing and
-SQL output.
-
-
-#---: Lock Checking
-
-Lock keys are #_+"paths" -- tuples of name ids #~"(root, f1, f2, ...,
-fn)". Overlay rows (#~"ZEntry") are keyed by the root local's
-declaration so the linear scan stays cheap; the full path lives on
-#~"ZEntry.lockPath" and is consulted to apply the prefix-overlap
-conflict rule. Two lock scopes exist:
-
-#ul:
-  [#*: #+ Call-scoped locks -- taken on function arguments during a call.
-  A call scope is pushed before argument processing. Each by-reference
-  argument queues its lock while the arguments are evaluated, and the
-  queue is laid, in argument order, when the call starts: SHARED intent
-  locks on every intermediate prefix of the source path and, on the leaf,
-  EXCLUSIVE unless the parameter is #~".view" (SHARED). A call nested in an
-  argument has taken and released its own locks by then. The receiver path
-  locks the same way at the receiver's strength: EXCLUSIVE for a
-  #~"{:this}" method. After the call returns, the scope is popped and all
-  call-scoped locks are released. For non-owned parameters, the leaf
-  lock transfers to the return value (installed as a borrow-scoped lock
-  in the parent scope).]
-  [#*: #+ Borrow-scoped locks -- taken when #~".borrow", #~".view",
-  #~".stringView", #~".listView", a #~"with"-binding, or a
-  #~".borrow"-param transfer creates a borrowed binding. SHARED entries
-  are placed on each intermediate prefix and on the leaf (EXCLUSIVE only
-  when the pin came from a #~"{:this}" receiver) in
-  the scope where the borrow variable is defined. The locks persist
-  for the lifetime of that scope (released on scope exit or explicit
-  #~".drop").]
-
-Conflict check (multi-granularity): same-path locks dedupe when both
-SHARED and conflict when either is EXCLUSIVE; a strict ancestor
-SHARED is intent-shared and permits any lock on descendants; a strict
-ancestor EXCLUSIVE conflicts with any descendant. Sibling paths (no
-prefix relation) never conflict. Enforcement for access / mutation
-sites uses the same prefix-overlap test: any EXCLUSIVE whose path
-prefix-overlaps the target path is a conflict. Two rules on top of
-the strengths: inside one call, a second row over the same value
-conflicts when either row is #~"mutable" (two arguments, or an
-argument and the receiver); and a row whose reference a call handed
-back (#~"alias" false -- it may point inside the value) conflicts
-with any other holder's #~"mutable" row over the same value, in
-either order.
-
-Key code: #~"tryLock" / #~"findExclusiveLock" /
-#~"lockAcquireConflict" in #~"src/zenv.z"; #~"lockCallArg" /
-#~"installBorrowLocks" and the path-tuple builders and access-check
-helpers in #~"src/ztypecheck/moves.z" and #~"src/ztypecheck/valuechecks.z".
-
-All parameters default to #~".borrow" regardless of type family.
-For valtypes, #~".borrow" means a copy (no lock, source not invalidated).
-For reftypes, #~".borrow" means a reference (source not invalidated).
-#~".borrow" on a known valtype is a compile error -- valtypes are
-pass-by-value so identity-based locking is meaningless. Generic type
-parameters are exempt because they may monomorphize to a reftype.
-
-
-#---: Numeric Literal Coercion
-
-Bare numeric literals are typed as one of two DECLARED types during
-typecheck: #~"intliteral" or #~"floatliteral", declared #~"is native"
-in #~"lib/system/system.z" beside the sixteen scalars and minted as the
-registry's first two rows, which the declaration then attaches to. Each
-declares exactly the conversions it can reach -- sixteen for the integer
-literal, the four float targets for the float one -- so which suffixes a
-literal accepts is a question for its declaration rather than for the
-checker. Each also declares its operators, as generic natives bounded by
-#~"anynumber", #~"anyint" or #~"anyfloat", and the integer literal its
-#~"times", #~"upto" and #~"downto". They are compile-time only: #~"create: null" says a program
-cannot construct one, so a binding naming either bare is refused by the
-same rule any non-constructible type gets, with no literal-specific
-message. #~"core" does re-export the names, so a unit-level alias can
-refer to one. Constant expressions
-built from them stay literal-typed too — the binop folder operates at
-unbounded integer precision when both operands are literal, with no
-intermediate range check. An #~"intliteral" only becomes a concrete numeric
-when one of the following fires:
-
-#ul:
-  [#*: #_*"Typed-location coercion" via the literal-coercion helpers
-    in #~"src/ztypecheck/numerics.z". The helper reads #~"nodeConst", applies
-    the rule appropriate to the source/target combination (int→int
-    range check; int→float exact mantissa; float→float round-trip;
-    float→int rejected outright), and on success rewrites #~"nodeType"
-    to the target. Wired sites: call arguments (#~"checkCall"),
-    function implicit return (#~"checkImplicitReturn"), reassignment RHS
-    (#~"checkReassignment"), match-arm numeric patterns
-    (#~"checkCase"), and if-/match-expression branch unification.]
-  [#*: #_*"Bind-site materialisation" via #~"materialiseLiteral".
-    Called from #~"checkAssignment" and unit-name resolution so a
-    literal-typed RHS never escapes into long-lived storage
-    (#~"ZVariable.ztypeId", the resolution cache). Also wired into
-    generic-arg inference (#~"inferGenericConstruction",
-    #~"checkBoxConstruction") so the monomorphization key is keyed
-    on the concrete default (e.g. #~"id_i64", not
-    #~"id_intliteral").]
-  [#*: #_*"Default-resolution late pass" -- a final walk invoked from
-    the module-level #~"typecheck" entry point after resolution
-    returns. Walks #~"ZTyping.nodeType" and blindly replaces any
-    remaining literal-typed entry with its concrete default
-    (#~"i64" for #~"intliteral", #~"f64" for #~"floatliteral"). No
-    range check fires here — that is the coercion sites' job.]
-
-No VALUE of a literal type reaches the emitter. That was an aspiration for as
-long as one route went around the late pass: a break-carrying
-do-block wrapped its value in an #~"optionval" keyed on the payload
-type, and a literal payload minted #~"optionval_intliteral", whose
-field the emitter then had to spell. #~"wrapDoBreakValue"
-materialises the payload before the wrap, which is the rule
-generic-argument inference already applied everywhere else, so the
-monomorphization is keyed on #~"i64" / #~"f64" like any other.
-
-The late pass therefore stays PARTIAL by design -- symbol-table
-entries keep their literal ids, and nothing reads them afterwards.
-Making it total was considered and rejected: it would not have moved
-the measurement, because the leak was never a surviving stamp. It was
-a type keyed on a literal at the one mint site that did not
-materialise first, and it is fixed there.
-
-A suffix the literal type DECLARES (#~"65.u8") is dispatched through
-that declaration: the child resolves to the declared method and the
-target is that method's return type, which is the BARE type and never a
-#~"resultval" -- a literal's fit is settled at compile time, so it
-either fits or it is an error. The range and exactness checks stay in
-#~"checkLiteralFits", shared by the in-body and unit-level paths,
-because a declaration can say which conversions exist but not that 300
-does not fit a #~"u8".
-
-Any other member of a literal-typed receiver is looked up on the literal
-type itself, as any type's member is; one it does not declare is no member
-(#~"1.nid": type 'intliteral' has no member 'nid'). A literal's operator
-is a generic native, and its argument binds the parameter by
-#~"argBindingTid": a literal argument of a native whose bound lists the
-literal's own type binds the literal itself, so #~"4 + 5" is computed by
-the constant folder and an unfolded one is #~"E0600"
-(#~"refuseUnfoldedLiteral"); any other binds its default; a singleton binds
-its bound. Against a typed operand the receiver then LANDS
-(#~"landLiteralReceiver"): it is checked to fit the type the operator's
-parameter was bound to, as a literal argument is, its node is stamped
-with that type, and that type's member of the same name is demanded. The
-emitter writes a literal type's operator or method as that member -- the
-operator from the receiver's stamp, a method (#~"times" lands in
-#~"i64", every member of a string literal in #~"StringView") through
-#~"emitCallByDecl" -- so no row of the literal type
-carries C: its rows in #~"system/nativec.zd" are bodyless, there only so
-each #~"is native" declaration names one.
-
-#~"typesCompatible" treats literal-vs-concrete-numeric as
-structurally compatible so multi-arm constructs unify cleanly; the
-range check happens at the typed-location coercion sites, not in the
-compat check.
-
-Three typechecker gaps cover the remaining sites: record/class
-field-init type validation, list element type unification, and
-separable parameter defaults.
-
-
-#---: Type Narrowing
-
-Type narrowing for union and variant types is tracked through scope-based
-overlay entries. When a match arm narrows a variable to a specific subtype,
-a narrowing entry is placed in the arm's scope. When the arm scope is
-popped, the narrowing resets automatically.
-
-Post-match exclusion works by recording which subtypes were handled by
-diverging arms (arms that return or break). After the match scope is popped,
-exclusion entries are placed in the parent scope. Subsequent access to an
-excluded subtype produces a compile error.
-
-Assignment-based narrowing (e.g., #~"x: Result.ok 42") also places a
-narrowing entry in the current scope. Reassignment resets the narrowing.
-
-If all branches of an #~"if" or #~"match" diverge, the parent scope is
-marked unreachable and subsequent statements are reported as dead code.
-
-
-#---: Synthesis Toolkit
-
-The type checker may need to introduce nodes that did not appear in
-the parsed source -- temporaries introduced by per-call argument
-hoisting and the generator-lowering rewrites. These nodes are
-synthesised by the checker where it needs them (there is no separate
-synthesis module):
-
-#ul:
-  [#*: #+ Fresh temp names -- a monotonic counter,
-  #~"WalkState.nextTempId", yields names of the form #~"_t0", #~"_t1",
-  ... in the order they are requested. The monotonicity matters:
-  tests rely on the numeric suffix to assert source-order evaluation
-  of call arguments.]
-  [#*: #+ Node construction -- synthesised AST nodes are built with a
-  fresh node id, a defaulted source location, and a #~"synthOrigin"
-  stamp.]
-  [#*: #+ Symbol-table registration -- a synth temp's #~"ZVariable"
-  is registered in the current scope so downstream resolution finds
-  it.]
-
-Every synthesised node carries a #~"synthOrigin" field (and
-#~"ZVariable" carries one in the symbol table). The field names the
-rewrite that introduced the node (for example, #~"\"anf\"" for
-per-call argument hoisting). It is persisted in the SQL dump
-(#~"src/zsqldump.z") so rewrite provenance survives into post-mortem
-inspection.
-
-Current consumers:
-
-#ul:
-  [#*: #~"hoistArg" in #~"src/ztypecheck/moves.z" -- per-call atomic
-  processing rewrites every non-trivial call argument to a synth
-  temp inside a per-call sub-scope. See
-  #~"docs/ownership.pdoc:Per-Call Atomic Processing" for the model.]
-
+The ownership rules as a program meets them are in
+[#> to=./ownership.html: Ownership].
 
 #--: Code Generator
 
 The code generator (C emitter) walks the fully typed AST and emits C source
-code. The output is compiled by a C compiler (gcc/clang) to produce a native
-executable.
+code. A C compiler -- gcc, clang, tcc, mingw-w64 or MSVC -- compiles the
+output into a native executable.
 
 The emitter targets the #b:"C17" language standard
-(#~"-std=c17 -Wall -Wextra"). Emitted code relies only on designated
-initializers, fixed-width #~"<stdint.h>" types, and #~"<stdbool.h>"; no C23
-features (#~"typeof", #~"constexpr", #~"#embed") are used.
+(#~"-std=c17 -Wall -Wextra"). The one thing beyond C17 the output may need
+is the type of an expression, for a temporary whose type the emitter has no
+C text for: the #~"Z_TYPEOF" macro spells it #~"typeof" under C23 and
+#~"__typeof__" otherwise, which each of those compilers takes in C17 mode.
 
 The emitter produces several output sections in order: struct/type definitions,
 forward declarations, function typedefs, function bodies, and a #~"main()"
@@ -770,8 +457,7 @@ bodied stdlib functions work like any function reference (natives
 themselves have no reference form; they are call-only).
 A #_*"type method" in these units may be a #~".z" body, and
 #~"u8.times" and its seven siblings are: they construct an #~"intrange"
-and hand it back, and they emit and run like any other method. What was
-once true of them -- that no emit route existed -- no longer is.
+and hand it back, and they emit and run like any other method.
 
 A method body is demanded per MEMBER, as a free function is: resolving a
 type walks only the bodied members the program uses
@@ -824,7 +510,7 @@ emitter's by-name resolution sites at their current floors and caps the
 #~"z_t{id}" spelling at the composer itself (src/ztestrunner/expected.z
 holds each pin).
 
-#--: Id-based naming
+#---: Id-based naming
 
 A type's (and a non-native function's) C name #b:"is" its monotonic id under
 the #~"z_" namespace prefix: the type #~"point" with id 525 becomes
@@ -985,8 +671,8 @@ that uses it." An IdMap below its small-mode ceiling has no index array at
 all and #~"find" scans the dense entries; past it the index appears and the
 scan becomes a probe. So a declaration's namespace is one field that answers
 both questions asked of it -- #~"children.get" is the lookup and the same
-entries in order are the walk -- where it was once a list plus a lazily
-built by-name map, and every reader carried the crossing as a branch.
+entries in order are the walk -- and no reader carries the crossing as a
+branch.
 
 Small, per-instance state that #_*"deletes" (the emitter's narrowing and
 alias lists) stays an #b:"assoc-list": at a handful of entries a linear row
@@ -1031,8 +717,8 @@ one. #~"order_pure_parts" pins each case by running it.
 #--: Bootstrapping & self-hosting
 
 The compiler is self-hosted: it is written in zerolang (#~"src/*.z") and
-compiles itself. Building and testing it require only a C toolchain -- no
-Python, and no shell scripts.
+compiles itself. A C toolchain is the only requirement to build and test
+it.
 
 #---: The bootstrap chain
 
