@@ -61,8 +61,7 @@ all types in Zerolang.
   with only valtype fields is valid. Such a class still has identity and
   single-owner semantics but needs no destructor.]
   [#*: #+ Locks live on reftypes. The non-owned field mechanism is available to
-  reftypes (classes) only. Valtypes (records, variants) cannot hold locks.
-  Born-borrowed is removed as a concept.]
+  reftypes (classes) only. Valtypes (records, variants) cannot hold locks.]
 
 
 #--: Type Classification Summary
@@ -149,8 +148,7 @@ function references. Records #_*"cannot" contain #~"String", #~"List",
 This restriction is enforced by the type checker.
 
 Records cannot have non-owned fields. Locks require identity (single-owner
-semantics) which valtypes do not have. See the Born-Borrowed Analysis section
-for discussion.
+semantics) which valtypes do not have.
 
 #---: Construction
 
@@ -389,12 +387,10 @@ Classes may have non-owned fields. A class with non-owned fields:
   [#*: When the instance falls out of scope, locks are released (and the
   destructor runs if present).]
 
-Classes with non-owned fields are normal owned instances. The single-owner
-semantics of classes (no copying) already provide the safety guarantees that
-born-borrowed previously enforced for records. A class cannot be duplicated, so
-there is no risk of multiple copies holding the same lock.
+Classes with non-owned fields are normal owned instances. A class cannot be
+duplicated, so no two copies can hold the same lock.
 
-non-owned fields are immutable after construction.
+Non-owned fields are immutable after construction.
 
 
 #--: Unions (Reftypes)
@@ -406,8 +402,11 @@ inline arm -- in the slot itself.
 #---: Memory Layout
 
 A union is a tag and an 8-byte slot on every target -- 16 bytes on a 64-bit
-one. The C backend spells the slot a #~"void*", overlaid by each inline arm's
-own member, and asserts each one's fit in 8 bytes:
+one. The tag is stored in the type the declaration asks for
+(#~"as { tag: u16.tag }"), and in a #~"uint8_t" when it asks for none; a C
+enum beside the struct names its values. The C backend spells the slot a
+#~"void*". A union with an inline arm overlays it with each inline arm's own
+member, in an anonymous union, and asserts that each one fits:
 
 #code language=c: """
   typedef enum {
@@ -416,25 +415,17 @@ own member, and asserts each one's fit in 8 bytes:
   } z_result_tag_t;
 
   typedef struct {
-      z_result_tag_t tag;
-      void* data;           /* heap-allocated subtype data */
-  } z_result_t;
-  """
-
-The struct is 16 bytes on the stack regardless of subtype sizes. A union
-with an inline arm overlays #~"data" with each inline arm's own member, in an
-anonymous union, and asserts that each fits:
-
-#code language=c: """
-  typedef struct {
-      z_shape_tag_t tag;
+      uint8_t tag;
       union {
-          void* data;      /* a cell arm's heap cell */
-          int64_t in_num;  /* the inline arm `num: i64` */
+          void* data;      /* the heap cell of a cell arm (`err: String`) */
+          int64_t i0;      /* the inline arm `ok: i64` */
       };
-  } z_shape_t;
-  _Static_assert(sizeof(int64_t) <= sizeof(void*) && _Alignof(int64_t) <= _Alignof(void*), "...");
+  } z_result_t;
+  _Static_assert(sizeof(int64_t) <= 8 && _Alignof(int64_t) <= 8, "union arm payload wider than its 8-byte slot");
   """
+
+A union with no inline arm has the bare #~"void* data" member in place of the
+anonymous union. The struct is 16 bytes on the stack whatever its arms hold.
 
 #---: Subtype Data
 
@@ -446,10 +437,10 @@ reference-family whatever it points at, and the rest are:
   [#*: A bare valtype arm that fits the slot (size and alignment no wider
   than a pointer): the value itself, in its member of the slot. No allocation,
   nothing to free. A wider one is a compile error that hints #~"(Box T)".]
-  [#*: A #~"(Box T)" valtype arm, or a #~"Box" type argument: a heap cell,
-  #~"malloc(sizeof(subtype))" + copy value; the Box collapses to the element.]
-  [#*: A reftype arm (classes, strings, etc.): #~"malloc(sizeof(subtype))" +
-  move (take) the struct into the heap allocation, invalidating the source.]
+  [#*: A #~"(Box T)" valtype arm, or a #~"Box" type argument: a heap cell
+  holding a copy of the value; the Box collapses to the element.]
+  [#*: A reftype arm (classes, strings and the rest): a heap cell the value is
+  moved into, invalidating the source.]
   [#*: For #~"null" subtypes: #~"data" is #~"NULL".]
 
 Because union subtypes can be reftypes, a union may indirectly contain
@@ -458,60 +449,60 @@ subtypes.
 
 #---: Destructor
 
-The destructor switches on the tag, cleans up the active subtype, frees the
-subtype data, but does #_*"not" free the union struct:
+The destructor switches on the tag, cleans up the active arm and frees its
+heap cell, but does #_*"not" free the union struct. A union whose slot is
+null holds nothing to free:
 
 #code language=c: """
   static void z_result_destroy(z_result_t* u) {
       if (!u) return;
+      if (!u->data) return;
       switch (u->tag) {
-          case Z_RESULT_TAG_OK:
-              break;
           case Z_RESULT_TAG_ERR:
               z_string_free((z_string_t*)u->data);
               free(u->data);
               break;
+          default: break;
       }
   }
   """
 
-A union always needs a destructor if any subtype has non-null data (to free the
-heap allocation for the subtype data).
+An inline arm and a #~"null" arm have no case: there is nothing to free.
 
 #---: Construction
 
-Subtype construction allocates and stores the data:
+Construction is a compound literal. A cell arm's value is copied into a new
+heap cell (#~"z_xmemdup"); an inline arm's value is stored in its member of
+the slot, with no allocation:
 
 #code language=c: """
-  z_result_t r = {0};
-  r.tag = Z_RESULT_TAG_OK;
-  r.data = malloc(sizeof(int64_t));
-  *(int64_t*)r.data = 42;
+  z_result_t e = ((z_result_t){ .tag = Z_RESULT_TAG_ERR, .data = z_xmemdup((z_string_t[1]){ s }, sizeof(z_string_t)) });
+  z_result_t r = ((z_result_t){ .tag = Z_RESULT_TAG_OK, .i0 = 42 });
   """
 
-For null subtypes:
-
-#code language=c: """
-  z_result_t r = {0};
-  r.tag = Z_RESULT_TAG_ERR;
-  r.data = NULL;
-  """
+A #~"null" arm leaves #~"data" null.
 
 #---: Match / Case
 
-Match arms cast #~"data" to the subtype:
+A #~"match" switches on the tag. In each case the subject's name reads the
+arm's payload: a cell arm's through the cast slot, an inline arm's from its
+member:
 
 #code language=c: """
-  switch (zv_r.tag) {
-      case Z_RESULT_TAG_OK:
-          printf("%lld\n", *(int64_t*)zv_r.data);
+  switch (r.tag) {
+      case Z_RESULT_TAG_OK: {
+          /* r reads r.i0 */
+          ...
           break;
-      case Z_RESULT_TAG_ERR:
-          z_string_free((z_string_t*)zv_r.data);
+      }
+      case Z_RESULT_TAG_ERR: {
+          /* r reads (*(z_string_t*)r.data) */
+          ...
           break;
+      }
+      default: break;
   }
   """
-
 
 #--: Protocol Instances
 
@@ -609,9 +600,7 @@ the arm is a heap cell -- see the union section.
 For #~"Box(point)" where point is #~"{ i64 x, i64 y }":
 
 #code language=c: """
-  /* C type: z_point_t*  (pointer to heap-allocated point struct) */
-  z_point_t* b = (z_point_t*)malloc(sizeof(z_point_t));
-  *b = z_point_create(1, 2);
+  z_point_t* b;    /* points at a heap-allocated z_point_t */
   """
 
 #---: Transparency
@@ -636,41 +625,21 @@ valtype, and valtypes own no heap, so the destructor is #~"free(v)":
   }
   """
 
-#---: Born-Boxed Construction
+#---: Construction
 
-When a type is defined as a boxed type at the unit level, construction should
-allocate directly on the heap and construct in-place. This avoids the overhead
-of constructing on the stack then copying to the heap.
-
-The box's #~"meta.create" does the heap allocation and field initialisation
-in one step:
+A box is made from its value: #~"Box from: v", or through an instance of
+Box -- an alias of one (#~"BP from: v" with #~"BP: (Box point)") or its own
+spelling (#~"(Box point) from: v"). The value must be of the instance's
+element type. The compiler allocates the cell and copies the value into it
+where the box is built:
 
 #code language=c: """
-  static z_point_t* z_box_point_meta_create(int64_t x, int64_t y) {
-      z_point_t* _this = (z_point_t*)malloc(sizeof(z_point_t));
-      *_this = (z_point_t){0};
-      _this->x = x;
-      _this->y = y;
-      return _this;
-  }
+  z_point_t* b = (_Box0 = (z_point_t*)z_xmalloc(sizeof(z_point_t)), *_Box0 = p, _Box0);
   """
 
-This is the heap-allocating version of #~"meta.create" -- the same pattern
-currently used for classes, now repurposed for box types only.
-
-#---: Boxing a Pre-Existing Item
-
-When boxing a variable that already exists:
-
-#code language=zerolang: """
-  point: record { x: i64 y: i64 }
-
-  p: point x: 1 y: 2
-  b: Box from: p
-  """
-
-The compiler generates: allocate on heap, copy the value. The source is a
-valtype, so it is copied, not consumed -- the standard valtype rule.
+The source is a valtype, so it is copied, not consumed -- the standard
+valtype rule. A box has no empty value: an instance named with no value
+(#~"b: BP") is refused.
 
 #---: Swap
 
@@ -686,7 +655,7 @@ Swapping two boxed items of the same type is a pointer swap:
 
 Swapping a boxed item with an unboxed item of the same underlying type is
 #_*"not" supported. This would require a move-in/move-out dance that is
-error-prone. The programmer should unbox/rebox explicitly if needed.
+error-prone. A program that needs it unboxes and boxes again.
 
 
 #--: list(T)
@@ -764,20 +733,10 @@ Unchanged: #~"new_cap = cap + (cap >> 1) + 4" (approximately 1.5x + 4).
 All methods (append, insert, extend, get, set, pop, grow) take #~"this" as a
 pointer. Call sites pass #~"&var".
 
-#---: In-Place Element Creation
+#---: Element Creation
 
-For creating elements directly in the data buffer (avoiding a stack temporary
-+ copy), two approaches are possible:
-
-#ol:
-  [#*: #+ Append-then-init: append a zero-initialised element, then return a
-  pointer to the last slot for the caller to initialise.]
-  [#*: #+ Placement-style: provide a variant of append that takes construction
-  arguments and constructs the element in-place.]
-
-Recommendation: defer in-place creation to a future optimisation. The current
-pattern (construct element on stack, append copies it into data buffer) is
-correct and the copy cost is negligible for element-sized data.
+An element is constructed on the stack, and #~"append" copies it into the
+data buffer. The copy costs as much as the element's size.
 
 
 #--: listView(T)
@@ -981,9 +940,8 @@ advice about lists and maps suggests, because that advice is about a hashed
 map with an owned key and this scan is #~"==" over raw scalars with no hash
 and no allocation.
 
-Because this crossing is inside the container, a caller never writes one. A
-structure that was a list plus a lazily built by-name index -- with the
-threshold test repeated in every reader -- is one field here.
+Because this crossing is inside the container, a caller never writes one: a
+reader asks one field, and the threshold test is written once.
 
 #---: Construction
 
@@ -1087,10 +1045,7 @@ the data buffer is heap-allocated.
 Field order: #~"size" first, #~"data" second, #~"capacity" last. This matches
 the field order of #~"List" (#~"length", #~"data", #~"capacity") for
 consistency. The first two fields (#~"size", #~"data") match #~"StringView"
-layout, enabling zero-cost casting. Putting #~"size" first also enables a
-future small-string optimisation (SSO) where the high bit of #~"size" marks
-inline storage and the remaining bytes of the struct store the string data
-directly.
+layout, enabling zero-cost casting.
 
 The struct (24 bytes) is on the stack. The #~"data" pointer references a
 heap-allocated buffer. Strings are null-terminated (for C interop) but #~"size"
@@ -1174,173 +1129,8 @@ Stringview has no destructor (no heap allocations).
 #---: Methods
 
 #ul:
-  #*: #~"length() out u64" -- byte count
-  #*: #~"String() out String" -- materialise a new owned string from the view
-  #*: #~"==(rhs: StringView) out bool" -- content comparison
-  #*: #~"!=(rhs: StringView) out bool" -- negated comparison
+  #*: #~"length" -- the byte count, a #~"u64"
+  #*: #~"string" -- an owned #~"String" copy of the viewed bytes
+  #*: #~"==" and #~"!=" -- content comparison
 
-
-#--: option / optionval -- Impact
-
-#~"Option" is a union with subtypes #~"{ none: null, some: T }" (falsy arm
-first). Under the new
-model, the #~"Option" struct (#~"{ tag, void* }") moves to the stack but its
-subtype data is still heap-allocated (standard union behaviour).
-
-The nullable-pointer optimisation (#~"is_nullable_ptr") is preserved: for
-pointer-typed payloads (box, protocol, etc.), #~"Option" is represented as a
-bare pointer with #~"NULL" sentinel, avoiding the tag + void* overhead entirely.
-
-
-#-: Born-Borrowed Analysis
-
-#--: Removal from Valtypes
-
-Born-borrowed is removed as a language concept. The non-owned field mechanism
-is now available only to reftypes (classes). Valtypes (records, variants)
-cannot hold locks.
-
-#---: Rationale
-
-The original motivation for born-borrowed was to allow stack-allocated records
-to hold locked references to heap-allocated classes. Since records are
-valtypes (freely copyable), the born-borrowed flag was needed to prevent copies
--- each copy would appear to hold a separate lock on the same target. This made
-born-borrowed records neither truly values (they could not be copied) nor truly
-references (they had no identity or destructor).
-
-With classes now stack-allocated, the motivation disappears. A class with
-non-owned fields has single-owner semantics that naturally prevent copies,
-without any special born-borrowed mechanism. The class can be moved
-(#~".take"), which born-borrowed records could not do.
-
-#---: Migration
-
-Types that were born-borrowed records become classes:
-
-#ul:
-  [#*: #~"StringView": becomes a class with #~".borrow" on the source string.]
-  [#*: Iterators (eg. #~"BagIter"): become classes with #~".borrow" on the
-  container.]
-  [#*: Any record with non-owned fields: becomes a class.]
-
-#---: Critique
-
-Removing born-borrowed from valtypes is a simplification but has trade-offs:
-
-#ul:
-  [#*: #+ Pro: Cleaner type system. Valtypes are always values -- freely
-  copyable, no identity, no destructor, no locks. There is no hybrid category.]
-  [#*: #+ Pro: More flexible. Class-based views and iterators support
-  #~".take" (moving to a new name), which born-borrowed records could not do.]
-  [#*: #+ Pro: Consistent locking. Locks live only on types with identity
-  (reftypes). This is conceptually cleaner -- a lock pins a specific instance,
-  which requires identity.]
-  [#*: #+ Con: Performance. Born-borrowed records were passed by value (struct
-  copy) for #~".take" parameters, which is efficient for small structs (eg.
-  stringView = 16 bytes). Classes are passed by pointer for #~".borrow"
-  parameters, adding one level of indirection. However, the struct sizes are
-  identical and the indirection cost is negligible.]
-  [#*: #+ Con: Existing code. All existing born-borrowed records must be
-  migrated to classes. This is a one-time migration cost. The compiler should
-  emit clear errors guiding the migration.]
-  [#*: #+ Con: Semantic shift. A #~"StringView" that was previously a value
-  (cheaply passed around, no ownership tracking) becomes a reference (needs
-  ownership tracking, borrow annotations). This adds some friction for common
-  string-passing patterns. However, since born-borrowed stringviews were
-  already restricted (could not be copied or stored), the practical difference
-  is small.]
-  [#*: #+ Issue: String literals. String literals currently produce
-  stringviews pointing into #~".rodata". If stringView is a class, string
-  literals produce an owned class instance. Since #~".rodata" has static
-  lifetime, there is no safety concern, but the ownership tracking adds
-  overhead to a very common pattern. Consider: should string literals remain a
-  special case that produces a freely-borrowable stringView without locking?
-  This would require the compiler to recognise that #~".rodata"-backed
-  stringviews need no lock.]
-
-
-#-: Pros, Cons, and Risks
-
-
-#--: Pros
-
-#ul:
-  [#*: #+ Simpler mental model. "Everything is on the stack. Only box and data
-  buffers are on the heap." Easy to teach and reason about.]
-  [#*: #+ Fewer allocations. Most programs see fewer #~"malloc"/#~"free" calls,
-  improving performance and reducing fragmentation.]
-  [#*: #+ Unified field access. Local variables of all types use #~"." for
-  field access. Only #~"this" in methods and boxed items use #~"->".]
-  [#*: #+ Class non-owned fields. Enables natural class-based iterators and
-  views. More flexible than the old born-borrowed record approach: a class
-  instance supports #~".take" (moving to a new name).]
-  [#*: #+ Clean type system. Valtypes are always values. Reftypes are always
-  references with identity. No hybrid category.]
-  [#*: #+ Predictable memory usage. Stack allocation makes memory usage more
-  predictable and eliminates #~"malloc" failure risk for ordinary objects.]
-
-
-#--: Cons
-
-#ul:
-  [#*: #+ Stack size. Large class structs consume stack space. For deeply
-  recursive functions with large local classes, stack overflow is possible.
-  Mitigation: #~"Box(T)" provides explicit opt-in to heap allocation.]
-  [#*: #+ Struct copy cost. Moving a large class (via #~".take" or function
-  return) copies the entire struct. NRVO mitigates returns, but #~".take"
-  always copies. For large structs, #~"Box" should be preferred.]
-  [#*: #+ Variant size. Inline tagged variants use the size of the largest
-  subtype. For variants with subtypes of very different sizes, this wastes
-  stack space. Rarely an issue in practice since variant subtypes must be
-  valtypes (typically small).]
-  [#*: #+ Recursive types. Self-referential types (linked list nodes, tree
-  nodes) must use #~"Box(self)" for the recursive field. Error message should
-  be clear.]
-
-
-#--: Risks
-
-#ul:
-  [#*: #+ Protocol interaction. Protocol wrappers that own their data
-  heap-allocate a copy of the implementation.]
-  [#*: #+ C ABI for large structs. Some platforms pass large structs via hidden
-  pointer at the ABI level. Handled transparently by the C compiler.]
-  [#*: #+ String literal stringviews. Since stringView is a class, string
-  literals produce owned class instances. The .rodata-backed
-  stringviews are handled specially (no lock needed).]
-
-
-#-: Future Directions
-
-#ul:
-  [#*: #+ Small-string optimisation (SSO). The #~"size" field is first in the
-  string struct. The high bit can mark inline storage. When set, the remaining
-  bytes of the struct (data pointer + capacity = 16 bytes) store the string
-  data directly, avoiding a heap allocation for strings up to 15 bytes. The
-  same #~"size-first" layout applies to #~"StringView", #~"List", and
-  #~"ListView" for consistency.]
-  [#*: #+ In-place list element creation. Construct elements directly in the
-  data buffer without a stack intermediate.]
-  [#*: #+ Box swap across types. Allow swapping #~"Box(T)" with #~"T" for the
-  same underlying type.]
-  [#*: #+ Automatic boxing. Compiler-inferred boxing when a class is passed to
-  a function expecting #~"Box(T)".]
-  [#*: #+ Move semantics. Elide struct copies when the compiler can prove the
-  source is unused after the move.]
-  [#*: #+ Arena allocation. Allow #~"Box" and #~"List" to allocate from a
-  user-provided arena.]
-
-
-#-: Verification Plan
-
-After a change to the type representation, run:
-
-#ol:
-  [#*: #~"make check" -- formatting, linting, type checking.]
-  [#*: #~"make test" -- the full test suite.]
-  [#*: #~"make build" -- compile all examples to C and then to binaries.]
-  [#*: Run compiled examples under ASan (#~"CFLAGS=-fsanitize=address make build")
-  to detect memory errors, leaks, and undefined behaviour.]
-  [#*: Manual inspection of generated C for a representative example
-  to verify the emitted code matches the specification.]
+The full list is in [#> to=./stdlib_system.html: the system unit's reference].
