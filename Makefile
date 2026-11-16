@@ -1204,24 +1204,25 @@ warn-check: bin/zc.c $(BUILDDIR)/zl.c $(BUILDDIR)/zls.c $(BUILDDIR)/tcc
 	done; \
 	mkdir -p $(BUILDDIR)/warn-check; \
 	rm -f $(BUILDDIR)/warn-check/*.log $(BUILDDIR)/warn-check/*.fail; \
+	i=0; \
 	for cc in $(WARN_CCS); do \
-	  tag=$$(basename $$cc); \
+	  tag=$${cc##*/}; \
 	  case "$$tag" in \
 	    *tcc*)   w='$(WARNSET_tcc)';; \
 	    *clang*) w='$(WARNSET_clang)';; \
 	    *)       w='$(WARNSET_gcc)';; \
 	  esac; \
 	  for f in bootstrap/zc.c bin/zc.c $(BUILDDIR)/zl.c $(BUILDDIR)/zls.c; do \
-	    n=$(BUILDDIR)/warn-check/$$tag-$$(echo $$f | tr / _); \
+	    i=$$((i + 1)); n=$(BUILDDIR)/warn-check/$$tag-$$i; \
 	    ( $$cc $$w -Werror -c $$f -o /dev/null > $$n.log 2>&1 || echo "$$tag on $$f" > $$n.fail ) & \
 	  done; \
 	done; \
 	wait; \
 	if ls $(BUILDDIR)/warn-check/*.fail > /dev/null 2>&1; then \
-	  for x in $(BUILDDIR)/warn-check/*.fail; do echo "warn-check FAIL: $$(cat $$x)"; sed -n 1,20p $${x%.fail}.log; done; \
+	  for x in $(BUILDDIR)/warn-check/*.fail; do echo "warn-check FAIL: $$(cat $$x)"; cat $${x%.fail}.log; done; \
 	  exit 1; \
 	fi; \
-	for cc in $(WARN_CCS); do echo "  $$(basename $$cc): clean on seed + zc + zl + zls"; done
+	for cc in $(WARN_CCS); do echo "  $${cc##*/}: clean on seed + zc + zl + zls"; done
 	@echo "warn-check OK: zero warnings from $(words $(WARN_CCS)) compiler(s) on all four emitted files"
 
 # pedantic-check -- the emitted C stays inside ISO C17, which is all MSVC
