@@ -4763,6 +4763,25 @@ reportBoxUnknownArgument: function {
     )
 }
 
+# boxCallIsInstantiation -- the call of the Box template names an instance
+# (`(Box point)`, `(Box t: point)`) rather than building a box: it has no
+# `from:` argument, and each argument is unlabelled or labelled with Box's type
+# parameter. The instance it names is then built by its own construction
+# (checkBoxInstanceConstruction), as any instance is.
+boxCallIsInstantiation: function {
+    st: zenv.ZSymbolTable ast: Ast call: callref tplId: ztypes.tid
+} out bool is {
+    if call.nargs == 0 then return false
+    boxParam: firstGenericParamId :st templateId: tplId
+    k: u64
+    for k < call.nargs loop {
+        arg: argRefAt :ast nid: (zast.callArgAt :ast nid: call.nid i: k)
+        k = k + 1
+        if arg.name.notZero when arg.name != boxParam then return false
+    }
+    return true
+}
+
 # boxArgumentTid -- the type a `Box` construction is given: an explicit `t:` type
 # argument, or the type of the single value it boxes. 0 when neither is present.
 boxArgumentTid: function {
@@ -4830,6 +4849,70 @@ checkBoxConstruction: function {
         fallbackArg: ztypes.tid.zero
     )
     if mid.isZero then return ztypes.tid.zero
+    return (finishBoxConstruction :st :ast :call :tplId :mid :vt)
+}
+
+# checkBoxInstanceConstruction -- a construction whose callee is an INSTANCE of
+# Box, by an alias (`BP from: v`, `BP: (Box point)`) or by its spelling
+# (`(Box point) from: v`): made as `Box from: v` is, by its one value, which
+# must be of the instance's element type. Any other argument is refused by the
+# same rule as the template's (boxArgumentTid).
+checkBoxInstanceConstruction: function {
+    st: zenv.ZSymbolTable
+    unitDecl: ztypes.declid
+    ast: Ast
+    call: callref
+    boxTid: ztypes.tid
+} out ztypes.tid is {
+    tplId: st.reg.genericOriginOf tid: boxTid
+    elemT: st.reg.genericTypeArgAt specId: boxTid ordinal: 0
+    errsBefore: st.typing.errors.length
+    vt: boxArgumentTid :st :unitDecl :ast :call :tplId
+    # an argument boxArgumentTid refused is the one mistake to report; the
+    # value is still the instance, so nothing after it is refused for its type
+    if st.typing.errors.length > errsBefore then return boxTid
+    if vt.isZero then {
+        if call.nargs == 0 then {
+            (
+                addError
+                :st
+                nodeid: call.nid
+                lineno: call.lineno
+                colno: call.colno
+                e: zast.err.callError
+                msg: "a Box is made from a value: give it 'from:' and the value".string
+            )
+        }
+        return boxTid
+    }
+    if vt != elemT then {
+        en: st.reg.nameOf tid: elemT
+        vn: st.reg.nameOf tid: vt
+        (
+            addError
+            :st
+            nodeid: call.nid
+            lineno: call.lineno
+            colno: call.colno
+            e: zast.err.callError
+            msg: "this Box holds a '\{en}', and 'from:' is given a '\{vn}'"
+        )
+        return boxTid
+    }
+    return (finishBoxConstruction :st :ast :call :tplId mid: boxTid :vt)
+}
+
+# finishBoxConstruction -- the Box instance `mid` of element `vt`, built by
+# `call`: it carries `create` and the element's members, copied for transparent
+# member access, and the call is stamped as a box creation for the emitter.
+finishBoxConstruction: function {
+    st: zenv.ZSymbolTable
+    ast: Ast
+    call: callref
+    tplId: ztypes.tid
+    mid: ztypes.tid
+    vt: ztypes.tid
+} out ztypes.tid is {
     st.reg.setIsBox typeId: mid
     st.reg.setIsHeapAllocated typeId: mid
     st.reg.setNeedsDestructor typeId: mid

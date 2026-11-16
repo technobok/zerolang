@@ -3039,7 +3039,13 @@ checkNonUserCall: function {
     result: ztypes.tid
     # `Box from: val` -- the system box (empty generic class body)
     # constructs through its own leg: t inferred from the value.
-    if isGen when (instantiate.isBoxTemplate :st tid: funcId) then {
+    if isGen when (instantiate.isBoxTemplate :st tid: funcId) when (
+        instantiate.boxCallIsInstantiation
+        :st
+        :ast
+        :call
+        tplId: funcId
+    ).not then {
         bres: instantiate.checkBoxConstruction :st :unitDecl :ast :call tplId: funcId
         if bres.notZero then return (callleg handled: true tid: bres)
     }
@@ -3155,6 +3161,9 @@ checkTypeConstruction: function {
     tid: ztypes.tid
 } out ztypes.tid is {
     funcId: tid
+    if (st.reg.isBoxOf :tid) then {
+        return (instantiate.checkBoxInstanceConstruction :st :unitDecl :ast :call boxTid: tid)
+    }
     # A PROJECTION TYPE IS NO RECORD TO BUILD. `Speaker d` re-views its source:
     # `d` and `d.borrow` borrow it, `d.take` hands it over, and so does `d` in a
     # destination that owns what it holds.
@@ -3561,6 +3570,10 @@ checkWrappedCall: function {
     # an instance of a generic protocol or facet, `(Getter v: i64) c`, is
     # projected onto as the spec's own name is
     if call.nargs > 0 when (wrappedCalleeIsSpec :st :call :wcv) then {
+        return (checkTypeConstruction :st :unitDecl :ast :call tid: wcv)
+    }
+    # an instance of Box, `(Box point) from: p`, is made as `Box from: p` is
+    if call.nargs > 0 when (st.reg.isBoxOf tid: wcv) then {
         return (checkTypeConstruction :st :unitDecl :ast :call tid: wcv)
     }
     if call.nargs > 0 when (wrappedCalleeIsCallResult :st :call) then {
