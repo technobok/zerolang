@@ -1,0 +1,385 @@
+# cobj -- the COBJ kind (in every full run, and `--only cobj`): a unit whose
+# runtime is a C source of its own (a `source` in its nativec.zd,
+# tests/fixtures/cobj) builds through the object cache. The first build
+# compiles the source (a miss); the second links the same object (a hit: the
+# object keeps its file id -- its inode, or on Windows its NTFS file index --
+# since a build renames a new object into place); inproc and a spawned tcc get
+# objects of their own; a changed define gets a new key; eight `zc cobj` at
+# once build ONE object and leave no lock or partial file; a source missing
+# from the vendor directory is refused by name; and a user unit named as a
+# standard unit (sqlite) that declares nothing native asks for no source. The
+# kind sets ZEROLANG_VENDOR and ZC_OBJ_CACHE for the zc it runs, and puts back
+# what they were.
+# A subunit of ztestrunner.
+
+# cobjWord -- the define the fixture's row passes and the copy's, what the
+# programs and zc's emitted header say, and what the cache holds
+cobjWord: list {
+    define: "COBJ_ANSWER=42"
+    changed: "COBJ_ANSWER=43"
+    answer: "answer 42\n"
+    answerChanged: "answer 43\n"
+    header: "/* zcsrc: answer/answer.c COBJ_ANSWER=42 */"
+    anyHeader: "/* zcsrc:"
+    source: "answer/answer.c"
+    object: ".o"
+    lock: "lock"
+    partial: "tmp"
+} out staticlist StringView
+
+# cobjEnv -- the variables the kind sets for the zc it runs
+cobjEnv: list { vendor: "ZEROLANG_VENDOR" cache: "ZC_OBJ_CACHE" } out staticlist StringView
+
+# parallelBuilds -- how many `zc cobj` run at once on one emitted file
+parallelBuilds: 8
+
+# runCobjCases -- the cobj kind
+runCobjCases: function {r: Runner} is {
+    vendorWas: os.env key: cobjEnv.vendor
+    cacheWas: os.env key: cobjEnv.cache
+    bad: cobjChecks :r
+    restoreEnv key: cobjEnv.vendor was: vendorWas
+    restoreEnv key: cobjEnv.cache was: cacheWas
+    if bad > 0 then {
+        r.fails = r.fails + bad
+        return
+    }
+    print "cobj: a unit's C source builds once per compiler, mode and define, is reused by file id, and is shared by \{parallelBuilds} parallel builds"
+    r.passN = r.passN + 1
+}
+
+# cobjChecks -- every check of the kind but the parallel ones' and the user
+# unit's (cobjEmitChecks); answers how many failed
+cobjChecks: function {r: Runner} out u64 is {
+    dirText: "\{r.tmp}/cobj"
+    dir: dirText.stringView
+    fix: "\{r.root}/tests/fixtures/cobj"
+    f43: "\{dir}/f43"
+    if (
+        copyTreeReplacing
+        from: fix.stringView
+        to: f43.stringView
+        needle: cobjWord.define
+        replacement: cobjWord.changed
+    ).false then {
+        print "FAIL(cobj) the fixture could not be copied to \{f43}"
+        return 1
+    }
+    vendor: "\{fix}/vendor"
+    os.setEnv key: cobjEnv.vendor value: vendor.stringView
+    cache: "\{dir}/cache"
+    os.setEnv key: cobjEnv.cache value: cache.stringView
+    bad: answers :r :dir src: fix.stringView tag: "miss" cc: "" mode: "" want: cobjWord.answer
+    first: objectsIn dir: cache.stringView
+    if first.length != 1 then {
+        print "FAIL(cobj) the first build left \{first.length} objects in the cache, want 1"
+        return bad + 1
+    }
+    obj: "\{cache}/\{first.get i: 0}"
+    id: fileIdOf path: obj.stringView
+    bad = (
+        bad + (answers :r :dir src: fix.stringView tag: "hit" cc: "" mode: "" want: cobjWord.answer)
+    )
+    if id == 0 then {
+        print "FAIL(cobj) \{obj} has no file id (inode 0): reuse cannot be proved on this file system"
+        bad = bad + 1
+    } else if (fileIdOf path: obj.stringView) != id then {
+        print "FAIL(cobj) the second build did not reuse the object: \{obj} is a new file"
+        bad = bad + 1
+    }
+    bad = (
+        bad +
+        (
+            answers
+            :r
+            :dir
+            src: fix.stringView
+            tag: "inproc"
+            cc: "tcc"
+            mode: "inproc"
+            want: cobjWord.answer
+        )
+    )
+    bad = (
+        bad +
+        (
+            answers
+            :r
+            :dir
+            src: fix.stringView
+            tag: "spawn"
+            cc: "tcc"
+            mode: "spawn"
+            want: cobjWord.answer
+        )
+    )
+    bad = (
+        bad +
+        (
+            answers
+            :r
+            :dir
+            src: f43.stringView
+            tag: "define"
+            cc: ""
+            mode: ""
+            want: cobjWord.answerChanged
+        )
+    )
+    keys: objectsIn dir: cache.stringView
+    if keys.length != 4 then {
+        print "FAIL(cobj) \{keys.length} objects after four distinct keys (the host compiler, tcc inproc, tcc spawned, a changed define), want 4"
+        bad = bad + 1
+    }
+    return bad + (cobjEmitChecks :r :dir src: fix.stringView)
+}
+
+# cobjEmitChecks -- the emitted header names the source; eight `zc cobj` at
+# once on it print one path and build one object, leaving no lock or partial
+# file; with no vendor directory the source is refused by name; and the user
+# unit named sqlite, declaring nothing native, names no source. Answers how
+# many failed.
+cobjEmitChecks: function {r: Runner.view dir: StringView src: StringView} out u64 is {
+    mc: "\{dir}/m.c"
+    if (emits :r name: "cobjmain" :src outc: mc.stringView log: "\{dir}/m.zc".stringView
+    ).false then {
+        print "FAIL(cobj) zc emit cobjmain failed (\{dir}/m.zc)"
+        return 1
+    }
+    bad: u64
+    head: slurp path: mc.stringView
+    if (head.stringView.contains needle: cobjWord.header).not then {
+        print "FAIL(cobj) the emitted header of cobjmain names no `\{cobjWord.header}`"
+        bad = bad + 1
+    }
+    par: "\{dir}/par"
+    os.setEnv key: cobjEnv.cache value: par.stringView
+    jobs: List PoolJob
+    k: u64
+    for k < parallelBuilds loop {
+        jobs.append (cobjJob :r csrc: mc.stringView outPath: "\{dir}/p\{k}.txt".stringView)
+        k = k + 1
+    }
+    statuses: ListVal i32
+    failSteps: ListVal i64
+    runJobs :jobs maxJobs: parallelBuilds :statuses :failSteps
+    paths: List String
+    k = 0
+    for k < parallelBuilds loop {
+        said: slurp path: "\{dir}/p\{k}.txt".stringView
+        if (paths.contains item: said).false then paths.append said.take
+        k = k + 1
+    }
+    objs: objectsIn dir: par.stringView
+    left: leftoversIn dir: par.stringView
+    if (paths.length != 1) or (objs.length != 1) or (left > 0) then {
+        print "FAIL(cobj) \{parallelBuilds} parallel builds gave \{paths.length} paths, \{objs.length} objects, \{left} leftovers (want 1, 1, 0)"
+        bad = bad + 1
+    }
+    none: "\{dir}/none"
+    os.setEnv key: cobjEnv.vendor value: none.stringView
+    miss: "\{dir}/miss.txt"
+    missErr: "\{dir}/miss.err"
+    rc: (
+        os.spawn
+        argv: (cobjArgv :r csrc: mc.stringView)
+        cwd: ""
+        outPath: miss.stringView
+        errPath: missErr.stringView
+        timeoutSecs: r.timeoutSecs
+    )
+    told: slurp path: missErr.stringView
+    if (rc != 1) or (told.stringView.contains needle: cobjWord.source).not then {
+        print "FAIL(cobj) a source missing from the vendor directory was not refused by name (exit \{rc}, \{miss})"
+        bad = bad + 1
+    }
+    uc: "\{dir}/u.c"
+    uu: "\{r.root}/tests/fixtures/user_units"
+    if (
+        emits
+        :r
+        name: "user_unit_sqlite"
+        src: uu.stringView
+        outc: uc.stringView
+        log: "\{dir}/u.zc".stringView
+    ).false then {
+        print "FAIL(cobj) zc emit user_unit_sqlite failed (\{dir}/u.zc)"
+        bad = bad + 1
+    } else {
+        utext: slurp path: uc.stringView
+        if (utext.stringView.contains needle: cobjWord.anyHeader) then {
+            print "FAIL(cobj) a user unit named sqlite, declaring nothing native, asked for the SQLite source"
+            bad = bad + 1
+        }
+    }
+    return bad
+}
+
+# answers -- `zc run cobjmain` from `src`, with the C compiler `cc` and the
+# mode `mode` when given, prints `want` and nothing on stderr; answers 1 and
+# says so when it does not
+answers: function {
+    r: Runner.view
+    dir: StringView
+    src: StringView
+    tag: StringView
+    cc: StringView
+    mode: StringView
+    want: StringView
+} out u64 is {
+    a: List String
+    a.append from: r.zc.copy
+    a.append from: "run".string
+    a.append from: "cobjmain".string
+    a.append from: "--system".string
+    a.append from: r.sys.copy
+    a.append from: "--src".string
+    a.append from: src.string
+    if cc.length > 0 then {
+        a.append from: "--cc".string
+        a.append from: cc.string
+    }
+    if mode.length > 0 then {
+        a.append from: "--cc-mode".string
+        a.append from: mode.string
+    }
+    outp: "\{dir}/\{tag}.out"
+    errp: "\{dir}/\{tag}.err"
+    rc: (
+        os.spawn
+        argv: a
+        cwd: ""
+        outPath: outp.stringView
+        errPath: errp.stringView
+        timeoutSecs: r.timeoutSecs
+    )
+    got: slurp path: outp.stringView
+    said: slurp path: errp.stringView
+    if rc == 0 when got.stringView == want when said.length == 0 then return 0
+    print "FAIL(cobj) \{tag}: zc run cobjmain exited \{rc} or printed other than it should (\{outp}, \{errp})"
+    return 1
+}
+
+# emits -- `zc emit` of program `name` from `src` into `outc` succeeds, its
+# diagnostics in `log`
+emits: function {
+    r: Runner.view name: StringView src: StringView outc: StringView log: StringView
+} out bool is {
+    a: List String
+    a.append from: r.zc.copy
+    a.append from: "emit".string
+    a.append from: name.string
+    a.append from: "--src".string
+    a.append from: src.string
+    a.append from: "--system".string
+    a.append from: r.sys.copy
+    a.append from: "-o".string
+    a.append from: outc.string
+    rc: (
+        os.spawn
+        argv: a
+        cwd: ""
+        outPath: os.nullDevice.stringView
+        errPath: log
+        timeoutSecs: r.timeoutSecs
+    )
+    return rc == 0
+}
+
+# cobjArgv -- `zc cobj` of the emitted file `csrc`
+cobjArgv: function {r: Runner.view csrc: StringView} out List String is {
+    a: List String
+    a.append from: r.zc.copy
+    a.append from: "cobj".string
+    a.append from: csrc.string
+    return a
+}
+
+# cobjJob -- `zc cobj` of `csrc`, what it prints in `outPath` and its
+# diagnostics beside it
+cobjJob: function {r: Runner.view csrc: StringView outPath: StringView} out PoolJob is {
+    errPath: "\{outPath}.err"
+    steps: List PoolStep
+    steps.append (
+        mkStep
+        argv: (cobjArgv :r :csrc)
+        cwd: ""
+        :outPath
+        errPath: errPath.stringView
+        timeoutSecs: r.timeoutSecs
+        allowFail: true
+        zlinkFrom: ""
+    )
+    return (mkJob name: outPath :steps)
+}
+
+# fileIdOf -- the file id of `path` (its inode; on Windows its file index); 0
+# when it cannot be read
+fileIdOf: function {path: StringView} out u64 is {
+    st: io.stat :path
+    if st.err then return 0
+    return st.inode
+}
+
+# objectsIn -- the objects in the cache directory `dir`
+objectsIn: function {dir: StringView} out List String is {
+    objs: List String
+    ls: io.listDir path: dir
+    if ls.err then return objs
+    for each e: ls loop {
+        if e.stringView.endsWith cobjWord.object then objs.append e.copy
+    }
+    return objs
+}
+
+# leftoversIn -- how many entries of the cache directory `dir` are a lock or
+# a partial file a build left behind
+leftoversIn: function {dir: StringView} out u64 is {
+    n: u64
+    ls: io.listDir path: dir
+    if ls.err then return 0
+    for each e: ls loop {
+        if (
+            (e.stringView.contains needle: cobjWord.lock) or
+            (e.stringView.contains needle: cobjWord.partial)
+        ) then n = n + 1
+    }
+    return n
+}
+
+# restoreEnv -- `key` as it was before the kind set it: `was`, or unset
+restoreEnv: function {key: StringView was: (Option String).view} is {
+    match (
+        was
+    ) case some then {
+        os.setEnv :key value: was.stringView
+    } case none then {
+        os.unsetEnv :key
+    }
+}
+
+# copyTreeReplacing -- the directory `from`, every file and directory under it,
+# copied to `to`, with each `needle` in each file's text replaced by
+# `replacement`; false when anything could not be read or written
+copyTreeReplacing: function {
+    from: StringView to: StringView needle: StringView replacement: StringView
+} out bool is {
+    io.mkdirp path: to
+    ls: io.listDir path: from
+    if ls.err then return false
+    for each e: ls loop {
+        src: "\{from}/\{e}"
+        dst: "\{to}/\{e}"
+        st: io.stat path: src
+        if st.err then return false
+        if st.kind.dir then {
+            if (copyTreeReplacing from: src.stringView to: dst.stringView :needle :replacement
+            ).false then return false
+        } else {
+            text: slurp path: src.stringView
+            w: io.writeText path: dst content: (text.stringView.replace :needle :replacement)
+            if w.err then return false
+        }
+    }
+    return true
+}

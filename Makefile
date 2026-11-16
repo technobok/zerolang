@@ -119,7 +119,7 @@ NAMES    := $(filter-out $(SKIP),$(basename $(notdir $(EXAMPLES))))
 	tcc zc zl zls regen-goldens regen-fmt-goldens regen-matrix matrix-guard regen-constparity constparity-guard regen-math-asm \
 	fmt-raw-guard regen-lsp-goldens bump-seed test-bootstrap install docs warn-check pedantic-check perf \
 	perf-strict pre-push perf-elision \
-	shim-guard thread-tsan-guard cobj-guard sqlite-decls-guard mode-parity \
+	shim-guard thread-tsan-guard sqlite-decls-guard mode-parity \
 	emit-set ident-set \
 	view-guard clean native-guard \
 	
@@ -264,7 +264,7 @@ ci:
 # the end (`make -k -j gate-guards`). The gate runs check, test, perf-strict and
 # the clang and tcc corpora itself.
 GATE_GUARDS := style-lint warn-check pedantic-check native-guard view-guard emitted-check \
-	shim-guard thread-tsan-guard cobj-guard sqlite-decls-guard \
+	shim-guard thread-tsan-guard sqlite-decls-guard \
 	fmt-raw-guard nativec-agree-guard prelude-share-guard \
 	math-asm-guard matrix-guard constparity-guard test-math-noasm test-portable-scalars \
 	test-msvc-wine
@@ -1338,41 +1338,6 @@ sqlite-decls-guard: bin/zc
 	  | $(CC) -std=c17 -fsyntax-only -Wall -Werror -x c - \
 	  || { echo "sqlite-decls-guard FAIL: sqlite's @decls row (lib/system/sqlite/nativec.zd) disagrees with vendor/sqlite/sqlite3.h -- match the declaration to the vendored header"; exit 1; }; \
 	echo "sqlite-decls-guard OK: the sqlite fragments' declarations match the vendored sqlite3.h"
-
-# cobj-guard -- a unit whose runtime is a C source of its own (a `source` in
-# its nativec.zd) builds through the object cache: the first build compiles it
-# (a miss), the second links the same object (a hit, the same inode), inproc
-# and a spawned tcc get objects of their own, a changed define gets a new key,
-# eight `zc cobj` at once build ONE object and leave no lock or partial file,
-# a source missing from the vendor directory is refused by name, and a user
-# unit that shares the unit's name but declares nothing native builds nothing.
-cobj-guard: bin/zc $(BUILDDIR)/tcc
-	@d=$$(mktemp -d); fail=0; F=tests/fixtures/cobj; \
-	mkdir -p $$d/f43; cp -r $$F/. $$d/f43/; sed -i 's/COBJ_ANSWER=42/COBJ_ANSWER=43/' $$d/f43/cobjdemo/nativec.zd; \
-	export ZEROLANG_VENDOR=$$PWD/$$F/vendor ZC_OBJ_CACHE=$$d/cache; \
-	run() { bin/zc run cobjmain --system lib/system "$$@" 2>&1 | tr '\n' ' '; }; \
-	got=$$(run --src $$F); [ "$$got" = "answer 42 " ] || { echo "cobj-guard FAIL: first build printed '$$got'"; fail=1; }; \
-	n1=$$(ls $$d/cache/*.o 2>/dev/null | wc -l); i1=$$(ls -i $$d/cache/*.o 2>/dev/null); \
-	[ "$$n1" = 1 ] || { echo "cobj-guard FAIL: the miss left $$n1 objects, want 1"; fail=1; }; \
-	got=$$(run --src $$F); i2=$$(ls -i $$d/cache/*.o 2>/dev/null); \
-	[ "$$got" = "answer 42 " ] && [ "$$i1" = "$$i2" ] || { echo "cobj-guard FAIL: the second build did not reuse the object ('$$got')"; fail=1; }; \
-	got=$$(run --src $$F --cc $(BUILDDIR)/tcc --cc-mode inproc); [ "$$got" = "answer 42 " ] || { echo "cobj-guard FAIL: inproc printed '$$got'"; fail=1; }; \
-	got=$$(run --src $$F --cc $(BUILDDIR)/tcc); [ "$$got" = "answer 42 " ] || { echo "cobj-guard FAIL: a spawned tcc printed '$$got'"; fail=1; }; \
-	got=$$(run --src $$d/f43); [ "$$got" = "answer 43 " ] || { echo "cobj-guard FAIL: a changed define printed '$$got'"; fail=1; }; \
-	n2=$$(ls $$d/cache/*.o | wc -l); [ "$$n2" = 4 ] || { echo "cobj-guard FAIL: $$n2 objects after four distinct keys, want 4"; fail=1; }; \
-	bin/zc emit cobjmain --src $$F --system lib/system -o $$d/m.c; \
-	grep -q '^/\* zcsrc: answer/answer.c COBJ_ANSWER=42 \*/' $$d/m.c || { echo "cobj-guard FAIL: the emitted header names no zcsrc"; fail=1; }; \
-	export ZC_OBJ_CACHE=$$d/par; \
-	for i in 1 2 3 4 5 6 7 8; do bin/zc cobj $$d/m.c > $$d/p$$i.txt 2>&1 & done; wait; \
-	np=$$(cat $$d/p*.txt | sort -u | wc -l); no=$$(ls $$d/par/*.o | wc -l); left=$$(ls -a $$d/par | grep -cE 'lock|tmp'); \
-	[ "$$np" = 1 ] && [ "$$no" = 1 ] && [ "$$left" = 0 ] || { echo "cobj-guard FAIL: 8 parallel builds gave $$np paths, $$no objects, $$left leftovers"; fail=1; }; \
-	ZEROLANG_VENDOR=$$d/none bin/zc cobj $$d/m.c > $$d/miss.txt 2>&1; rc=$$?; \
-	[ $$rc = 1 ] && grep -q "answer/answer.c" $$d/miss.txt || { echo "cobj-guard FAIL: a missing source was not refused by name (exit $$rc)"; fail=1; }; \
-	bin/zc emit user_unit_sqlite --src tests/fixtures/user_units --system lib/system -o $$d/u.c > $$d/u.log 2>&1 \
-	  && ! grep -q '^/\* zcsrc:' $$d/u.c || { echo "cobj-guard FAIL: a user unit named sqlite, declaring nothing native, asked for the SQLite source"; fail=1; }; \
-	rm -rf $$d; \
-	if [ $$fail -ne 0 ]; then exit 1; fi; \
-	echo "cobj-guard OK: a unit's C source builds once per compiler, target and defines, shared by parallel builds"
 
 # shim-guard -- the C thread shim (system's prelude.@zthread row, written to
 # $(NATIVEC_INC)/zthread_shim.inc) passes its own test under every compiler zc
