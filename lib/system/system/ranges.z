@@ -9,20 +9,24 @@
 # integers. The compiler lowers the header form to a counted C loop without
 # constructing one, which is an optimisation and not the semantics.
 
-# a walk over consecutive integers of type `t`, ascending.
+# a walk over consecutive integers of type `t`.
 #
-# The cursor holds a COUNT of iterations remaining rather than an endpoint to
-# compare against, and steps only while more remain. An endpoint cannot say
-# what a count says: a range whose last value is its type's maximum has no
-# representable value past it to stop at, so the comparison is true forever and
-# the step wraps. Counting cannot reach past the end, so that case does not
-# exist -- and a count of zero is simply a walk that yields nothing, which is
-# what a non-positive `times` hands back.
+# The cursor holds a COUNT of the values still to come rather than an endpoint
+# to compare against. An endpoint cannot say what a count says: a range whose
+# last value is its type's maximum has no representable value past it to stop
+# at, so the comparison is true forever and the step wraps. The count is of the
+# values AFTER `cur`, which fits a u64 even for a walk over all 2^64 values of
+# a 64-bit type, and `more` says whether `cur` itself is still to come. `after`
+# is read only while `more` holds, so a range that walks nothing -- an inverted
+# one, or a `times` of zero or less -- sets `more` false and leaves `after` as
+# its arithmetic fell.
 intrange: record {
-    # the value this step yields; meaningless once `left` is 0
+    # the value the next step yields
     cur: t
-    # iterations remaining, this one included
-    left: u64
+    # how many values follow `cur`
+    after: u64
+    # true while `cur` is still to be yielded
+    more: bool
     # step direction: `downto` counts down, `times` and `upto` count up
     down: bool
 } as {
@@ -32,12 +36,14 @@ intrange: record {
     # the next value, or none once the walk is exhausted. A `for` header drives
     # it
     call: function {r: this} out optionval t is {
-        if r.left == 0 then return (optionval.none t)
+        if r.more.not then return (optionval.none t)
         v: r.cur
-        r.left = r.left - 1
         # the last value does not step: past the end there may be nothing to
         # step to
-        if r.left > 0 then {
+        if r.after == 0 then {
+            r.more = false
+        } else {
+            r.after = r.after - 1
             if r.down then r.cur = r.cur - 1 else r.cur = r.cur + 1
         }
         return (optionval.some v)

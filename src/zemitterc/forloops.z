@@ -123,7 +123,7 @@ pushPayloadSpill: function {
 }
 
 # emitCountedRangeFor -- `for each x: N.times loop`: the HALF-OPEN range, walked by
-# the same trip count the closed forms use. A count starts at 0 -- `times` takes
+# a trip count of its own, N values. A count starts at 0 -- `times` takes
 # no argument to start it anywhere else. False when the operand drives no
 # counted range.
 #
@@ -272,14 +272,14 @@ closedRangeStepOp: function {down: bool} out StringView is {
 # A closed range cannot be driven by an endpoint comparison. `i >= 0` on an
 # unsigned type is true forever and the step wraps at zero, and a range whose
 # last value is its type's MAXIMUM has no value past it to stop at -- the two
-# shapes the closed forms exist to serve. So the loop counts down a trip count,
-# exactly as `intrange` does.
-#
-# The loop variable stays in the for-INIT, where the half-open form keeps it,
-# and steps in the THIRD clause so `continue` reaches the step. It steps through
-# u64, which is defined at every width and sign; its final step is dead and may
-# wrap (`3.u8.downto to: 0` leaves it at 255), because the count has already
-# reached zero and the loop has left.
+# shapes the closed forms exist to serve. So the loop counts down the values
+# still to come, exactly as `intrange` does: a guard skips a range that walks
+# nothing, and inside it the count is of the values AFTER the loop variable, so
+# a walk over all 2^64 values of a 64-bit type counts from u64's maximum. The
+# loop is a `do`-`while` whose condition takes one off the count and steps the
+# variable, through u64, which is defined at every width and sign. A C
+# `continue` goes to that condition, so it reaches the step. The variable never
+# steps past the last value: the condition is false before the step.
 #
 # Both ends are bound to locals first: each is read twice, once by the guard and
 # once by the count or the init, and re-emitting the expression would evaluate
@@ -316,7 +316,7 @@ emitClosedRangeFor: function {
         rs: "_rs\{mN}"
         re: "_re\{mN}"
         fn: "_fn\{mN}"
-        cnt: closedRangeCountExpr from: rs.stringView to: re.stringView :down
+        cnt: closedRangeStepsExpr from: rs.stringView to: re.stringView :down
         lidR: (
             stmtblocks.pushLoopLabel
             stmt: ctx.stmt
@@ -332,15 +332,18 @@ emitClosedRangeFor: function {
         flushArgHoists :ctx :ind :tmp :buf
         d1: "\{ind}\{ctR} \{re} = \{tox};\n"
         buf.append d1
-        d2: "\{ind}uint64_t \{fn} = 0;\n"
-        buf.append d2
         gd: closedRangeCmp :down
-        d3: "\{ind}if (\{rs} \{gd} \{re}) \{fn} = \{cnt};\n"
+        d2: "\{ind}if (\{rs} \{gd} \{re}) {\n"
+        buf.append d2
+        inner: "\{ind}    "
+        d3: "\{inner}uint64_t \{fn} = \{cnt};\n"
         buf.append d3
+        d4: "\{inner}\{ctR} \{lbl} = \{rs};\n"
+        buf.append d4
         # TWO values cross a suspension here where the half-open form spills
-        # one: the resume `goto` lands past the C for-init, and the count is no
-        # more recomputable than the variable -- the ends it was taken from
-        # left C scope with the declarations above.
+        # one: the resume `goto` lands inside the `do`, past both declarations,
+        # and the count is no more recomputable than the variable -- the ends
+        # it was taken from are not kept across a suspension.
         pushed: false
         if ctx.gen.active when (zast.yieldCountIn ast: prog.ast nid: m.body) > 0 then {
             ctx.gen.forNext = ctx.gen.forNext + 1
@@ -368,12 +371,9 @@ emitClosedRangeFor: function {
             )
             pushed = true
         }
-        sp: closedRangeStepOp :down
-        st1: "\{fn} = \{fn} - 1"
-        st2: "\{lbl} = (\{ctR})((uint64_t)\{lbl} \{sp} 1ULL)"
-        lh: "\{ind}for (\{ctR} \{lbl} = \{rs}; \{fn} > 0; \{st1}, \{st2}) {\n"
+        lh: "\{inner}do {\n"
         buf.append lh
-        bodyInd: "\{ind}    "
+        bodyInd: "\{inner}    "
         armX: forArmCond :prog :ctx n: m
         flushArgHoists :ctx ind: bodyInd.stringView :tmp :buf
         (
@@ -421,9 +421,13 @@ emitClosedRangeFor: function {
             :tmp
             :buf
         )
-        lc: "\{ind}}\n"
+        sp: closedRangeStepOp :down
+        st: "\{lbl} = (\{ctR})((uint64_t)\{lbl} \{sp} 1ULL)"
+        lc: "\{inner}} while (\{fn} > 0 && (\{fn} = \{fn} - 1, \{st}, 1));\n"
         buf.append lc
-        stmtblocks.popLoopLabel stmt: ctx.stmt id: lidR :ind :buf
+        stmtblocks.popLoopLabel stmt: ctx.stmt id: lidR ind: inner.stringView :buf
+        lg: "\{ind}}\n"
+        buf.append lg
         if pushed then {
             ctx.gen.forSpills.pop
             ctx.gen.forSpills.pop
@@ -505,27 +509,25 @@ countRangeCountExpr: function {signed: bool bound: StringView} out String is {
     return cs
 }
 
-# closedRangeCountExpr -- the trip count a closed range walks: the number of
-# values in `[lo, hi]`, which is `hi - lo + 1` taken in the UNSIGNED domain.
+# closedRangeStepsExpr -- the steps a closed range takes after its first value:
+# one less than the number of values in `[lo, hi]`, so `hi - lo`, taken in the
+# UNSIGNED domain. It fits a u64 for every range, the full span of a 64-bit type
+# included, where the number of values does not.
 #
 # One expression serves all eight integer types and both directions. Each end is
 # reinterpreted through u64 first -- the two's complement `.bits` names in the
 # stdlib -- so a signed range spanning zero does not overflow the way `to - from`
 # would, and an unsigned one is simply zero-extended. The stdlib writes the
-# unsigned case as `(to - v).u64 + 1`, subtracting at the receiver's own width;
+# unsigned case as `(to - v).u64`, subtracting at the receiver's own width;
 # that truncation is a no-op here because the caller has already guarded
 # `lo <= hi`, so the difference cannot exceed what the receiver's width holds.
 # The two spellings therefore agree on every value, which is what must not drift.
-#
-# The full span is the one count this cannot express: `hi - lo` is then u64's
-# maximum and the `+ 1` wraps to zero, so the loop walks nothing. `intrange`
-# has the same hole, and closing it is not a lowering question.
-closedRangeCountExpr: function {from: StringView to: StringView down: bool} out String is {
+closedRangeStepsExpr: function {from: StringView to: StringView down: bool} out String is {
     if down then {
-        cd: "((uint64_t)\{from} - (uint64_t)\{to}) + 1ULL"
+        cd: "(uint64_t)\{from} - (uint64_t)\{to}"
         return cd
     }
-    cu: "((uint64_t)\{to} - (uint64_t)\{from}) + 1ULL"
+    cu: "(uint64_t)\{to} - (uint64_t)\{from}"
     return cu
 }
 
