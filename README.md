@@ -143,17 +143,17 @@ cl -std:c17 -experimental:c11atomics -utf-8 -O2 bootstrap/zc.c -Fe:zc.exe   # MS
 
 ### Run the tests
 
-The gates are self-contained — they need only the compiler and a C toolchain
-(no Python, no shell). The test runner and linter are themselves zerolang
-programs (`src/ztestrunner.z`, `src/zl.z`):
+A C toolchain is the only requirement: the test runner and the linter are
+themselves zerolang programs (`src/ztestrunner.z`, `src/zl.z`).
 
 ```bash
-make check             # fast style lint (zl) over src + front-end
-make test              # compile + run the example/corpus programs, check output
-make ci                # full gate: style-lint + corpus (--heavy) + seed bootstrap
-make test-bootstrap    # rebuild the compiler from the seed, check the fixpoint
-                       #   (BOOTSTRAP_CCS="gcc clang out/tcc" for all three)
+make check             # the lint and the formatter check
+make test              # the test runner's default kinds
+make ci                # every gate
 ```
+
+[docs/testing.pdoc](docs/testing.pdoc) says what each target runs and how to
+add a test.
 
 Windows is tested five ways. `make test-mingw` (the run corpus built by
 mingw-w64 against the Universal C Runtime, run under wine; `sudo apt install

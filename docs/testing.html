@@ -1,0 +1,298 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Zero Language Testing</title>
+<link rel="stylesheet" href="style/zerolang.css">
+<link rel="icon" href="style/favicon-192x192.png" type="image/png" sizes="192x192">
+<link rel="icon" href="style/favicon-48x48.ico" type="image/x-icon">
+<link rel="icon" href="style/favicon-32x32.png" type="image/png" sizes="32x32">
+<link rel="icon" href="style/favicon-16x16.png" type="image/png" sizes="16x16">
+<script src="style/tocbot.min.js"></script>
+<script src="style/init.js"></script>
+<script src="style/prism.min.js"></script>
+<script src="style/prism-zerolang.js"></script>
+<meta name="author" content="pw &lt;p@zerolang.org&gt;">
+<meta name="datecreated" content="2026-11-17">
+<meta name="version" content="v0.1">
+</head>
+<body class="toc-sidebar">
+<nav id="nav">
+  <div class="doc-wrapper">
+    <a title="Zerolang" href="./index.html">Zerolang</a>
+  </div>
+
+  <label>
+    <input id="mode-checkbox" class="mode-checkbox" type="checkbox" />
+    <div class="mode-slot">
+      <div class="sun-icon-wrapper">
+        <svg
+          class="sun-icon"
+          xmlns="http://www.w3.org/2000/svg"
+          width="24"
+          height="24"
+          viewBox="0 0 24 24"
+          fill="none"
+          stroke="currentColor"
+          stroke-width="2"
+          stroke-linecap="round"
+          stroke-linejoin="round"
+        >
+          <circle cx="12" cy="12" r="5"></circle>
+          <line x1="12" y1="1" x2="12" y2="3"></line>
+          <line x1="12" y1="21" x2="12" y2="23"></line>
+          <line x1="4.22" y1="4.22" x2="5.64" y2="5.64"></line>
+          <line x1="18.36" y1="18.36" x2="19.78" y2="19.78"></line>
+          <line x1="1" y1="12" x2="3" y2="12"></line>
+          <line x1="21" y1="12" x2="23" y2="12"></line>
+          <line x1="4.22" y1="19.78" x2="5.64" y2="18.36"></line>
+          <line x1="18.36" y1="5.64" x2="19.78" y2="4.22"></line>
+        </svg>
+      </div>
+      <div class="mode-button"></div>
+      <div class="moon-icon-wrapper">
+        <svg
+          class="moon-icon"
+          xmlns="http://www.w3.org/2000/svg"
+          width="24"
+          height="24"
+          viewBox="0 0 24 24"
+          fill="none"
+          stroke="currentColor"
+          stroke-width="2"
+          stroke-linecap="round"
+          stroke-linejoin="round"
+        >
+          <path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"></path>
+        </svg>
+      </div>
+    </div>
+  </label>
+
+
+</nav>
+<header>
+<h1 id="zero-language-testing"><a href="#zero-language-testing">Zero Language Testing</a></h1>
+</header>
+<nav class="toc-sidebar" id="toc">
+<div id="tocfile">
+Table of Contents</div>
+
+<ul>
+<li><a href="#zero-language-testing">Zero Language Testing</a>
+<ul>
+<li><a href="#testing">Testing</a>
+</li>
+<li><a href="#the-tiers">The tiers</a>
+<ul>
+<li><a href="#make-ci">make ci</a>
+</li>
+</ul>
+</li>
+<li><a href="#the-test-runner">The test runner</a>
+</li>
+<li><a href="#adding-a-test">Adding a test</a>
+</li>
+<li><a href="#ratchets">Ratchets</a>
+</li>
+<li><a href="#the-per-batch-gate">The per-batch gate</a>
+</li>
+<li><a href="#performance">Performance</a>
+</li>
+</ul>
+</li>
+</ul>
+
+</nav>
+<main id="content">
+<h2 id="testing"><a href="#testing">1. Testing</a></h2>
+<p>This page says what tests the repository has, what each make target runs,
+and how to add a test of each kind. Every gate needs only the compiler and a
+C toolchain: the test runner (<code>src/ztestrunner.z</code>), the linter
+(<code>src/zl.z</code>) and the gate tool (<code>tools/zgate/</code>) are zerolang programs.</p>
+<h2 id="the-tiers"><a href="#the-tiers">2. The tiers</a></h2>
+<table>
+<thead>
+<tr><th style="text-align: left">Target</th><th style="text-align: left">What it runs</th><th style="text-align: left">When</th></tr>
+</thead>
+<tbody>
+<tr><td><code>make check</code></td><td>the parse-tier lint and the formatter check over every source file (<code>zl lint</code>, <code>zl format --check</code>), and the complexity report</td><td>before every commit</td></tr>
+<tr><td><code>make test</code></td><td>builds the drivers and runs the test runner's default kinds</td><td>before every commit</td></tr>
+<tr><td><code>make pre-push</code></td><td><code>check</code>, <code>test</code> and <code>perf-strict</code></td><td>before a push</td></tr>
+<tr><td><code>make ci</code></td><td>every gate (below)</td><td>at the end of a batch of work</td></tr>
+<tr><td><code>make ci-windows</code></td><td>the Windows legs on a real Windows host over ssh</td><td>when <code>make windows-due</code> says so</td></tr>
+</tbody>
+</table>
+<p><code>make doc-check</code> runs the doccode and docpage kinds alone.
+<code>make style-lint</code> adds the typecheck-tier lint (<code>zl lint --full</code>) to
+<code>make check</code>'s.</p>
+<h3 id="make-ci"><a href="#make-ci">2.1. make ci</a></h3>
+<p><code>make ci</code> runs, in order:</p>
+<ol>
+<li><code>perf-strict</code>, alone: the allocation ratchet (see
+<a href="#performance">Performance</a>). It runs first and alone because a
+<code>zc</code> running beside it in the repository root moves its count.</li>
+<li><code>ci-gates</code>, in parallel: the legs <code>make ci-legs</code> lists. They are
+the per-batch gate's guards (<code>GATE_GUARDS</code>: the lint, the warnings and
+<code>-Wpedantic</code> checks, the guards over the emitted C, the thread
+sanitizer, the math and Windows legs), the legs that rebuild the run
+corpus's C under another toolchain (<code>GATE_SAME_C</code>: full UBSan,
+mingw-w64 and tcc for Windows under wine, MSVC under wine), and the legs
+only <code>make ci</code> runs (<code>CI_ONLY</code>: the heavy corpus <code>ci-corpus</code>, clang,
+<code>-O2</code>, arm64 under qemu, the fuzzer's fixed seed, both build modes).
+A leg whose tools are missing says so and passes.</li>
+<li><code>test-bootstrap</code>: the seed builds a compiler that rebuilds itself
+to a byte-identical fixpoint, under gcc, clang and the vendored tcc, and
+the three emit the same C.</li>
+<li><code>windows-due</code>: one line saying when <code>make ci-windows</code> is due.</li>
+</ol>
+<p><code>make ci-windows</code> runs the Windows legs on a real Windows machine and,
+when they pass, writes <code>tests/windows-verified.txt</code>, which the commit
+carries. <code>tools/windows/README.md</code> sets one up.</p>
+<h2 id="the-test-runner"><a href="#the-test-runner">3. The test runner</a></h2>
+<p><code>out/ztestrunner --zc bin/zc --cc gcc --root .</code> runs the default kinds;
+<code>--only KIND</code> runs one; <code>--heavy</code> adds the self-host ASan run, the
+byte-identity fixpoint and the doc ratchet; <code>--jobs N</code> sets the job pool's
+size; <code>ztestrunner --help</code> lists every flag. A command line it does not
+accept is refused with exit 2. The kinds, as the runner's header lists them:</p>
+<table>
+<thead>
+<tr><th style="text-align: left">Kind</th><th style="text-align: left">What it checks</th></tr>
+</thead>
+<tbody>
+<tr><td><code>run</code></td><td>each run case is emitted, compiled and run; its output and exit code match its goldens</td></tr>
+<tr><td><code>error</code></td><td>each error fixture fails with the <code>error[Exxxx]</code> lines of its golden</td></tr>
+<tr><td><code>errcode</code></td><td>every code <code>zast.errFacts</code> lists is reported by some golden</td></tr>
+<tr><td><code>lone</code></td><td>each run case, given one unrelated error, reports that error and no other</td></tr>
+<tr><td><code>leak</code></td><td>every buildable example and corpus program runs clean under its compiler's sanitizer</td></tr>
+<tr><td><code>dump</code></td><td><code>zc dump --canon</code> of each dump case matches its golden</td></tr>
+<tr><td><code>lsp</code></td><td>framed JSON-RPC transcripts replayed through <code>zls</code> match their goldens</td></tr>
+<tr><td><code>lexer</code>, <code>parser</code>, <code>program</code></td><td>the token, tree and program goldens of every example</td></tr>
+<tr><td><code>vfs</code>, <code>smoke</code></td><td>the file system's script cases, and each unit's no-argument harness</td></tr>
+<tr><td><code>doccode</code></td><td>every zerolang example in the documentation compiles, or fails as its <code>error=</code> says, and is laid out as <code>zl fmt</code> lays it</td></tr>
+<tr><td><code>docpage</code></td><td>each <code>docs/*.html</code> is what the renderer writes from its <code>.pdoc</code>, links name pages and anchors that exist, and the table of <a href="./errors.html">Error Codes</a> is <code>zast.errFacts</code>'</td></tr>
+<tr><td><code>usage</code></td><td>each driver, given a command line, says what its case states and exits as it states</td></tr>
+<tr><td><code>arch</code></td><td>the architecture ratchet, <code>zl lint --arch</code> per rule and file</td></tr>
+<tr><td><code>vocab</code></td><td>the spec and the three highlighters carry the lexer's keywords and reserved words</td></tr>
+<tr><td><code>pins</code></td><td>the counts the compiler's own source is held at</td></tr>
+<tr><td><code>fixtures</code></td><td>every program with a <code>main</code> is in a case list, once, and no fixture breaks L023</td></tr>
+<tr><td><code>natives</code>, <code>usernative</code>, <code>piece</code></td><td>the native rows and their marks, a user unit's own natives, a record taken out of the emitter</td></tr>
+<tr><td><code>statictcc</code>, <code>cobj</code></td><td>no libtcc symbol in the drivers, and a unit's C source built once through the object cache</td></tr>
+<tr><td><code>emitted</code></td><td>(only by <code>--only</code>) what the emitted C of every program holds</td></tr>
+<tr><td><code>probes</code></td><td>(only by <code>--only</code>) ThreadSanitizer reports a race made on purpose</td></tr>
+<tr><td><code>pedantic</code></td><td>(only by <code>--only</code>) the C of the drivers and the run cases has no <code>-Wpedantic</code> diagnostic</td></tr>
+<tr><td><code>ctest</code></td><td>(only by <code>--only</code>) the C test programs <code>tests/c/*_test.c</code> against their <code>.out</code></td></tr>
+</tbody>
+</table>
+<h2 id="adding-a-test"><a href="#adding-a-test">4. Adding a test</a></h2>
+<p>Each kind reads its cases from <code>tests/fixtures/</code>:</p>
+<ul>
+<li><strong>A program that runs.</strong> A line <code>&lt;name&gt; &lt;dir&gt;</code> in
+<code>run_cases.txt</code> (<code>&lt;dir&gt;</code> is a list joined by <code>:</code>; a line ending in
+<code>posix</code> is skipped for Windows), the program at <code>&lt;dir&gt;/&lt;name&gt;.z</code> --
+usually <code>tests/fixtures/emitc_corpus/</code> -- and its output in
+<code>run_golden/&lt;name&gt;.out</code>. A <code>&lt;name&gt;.exit</code> holds an exit code other than
+0, and <code>&lt;name&gt;.&lt;os&gt;.out</code> the output for a system that prints its own.</li>
+<li><strong>A program the compiler refuses.</strong> <code>errors/&lt;name&gt;.z</code> and
+<code>errors/&lt;name&gt;.err</code>, the <code>error[Exxxx]</code> lines and the count line. A
+<code>&lt;name&gt;.zcargs</code> gives the compiler flags (<code>--eager</code> for a unit whose
+error is in code nothing calls).</li>
+<li><strong>A dump.</strong> A line in <code>dump_cases.txt</code> and <code>dump_golden/&lt;name&gt;.canon</code>.</li>
+<li><strong>A language-server session.</strong> <code>lsp_cases/&lt;case&gt;.msgs</code>, one JSON
+message a line, and <code>lsp_golden/&lt;case&gt;.out</code>; <code>make regen-lsp-goldens</code>
+rewrites the goldens from a run.</li>
+<li><strong>A command line.</strong> A folder <code>usage/&lt;case&gt;/</code> with <code>args</code> (the
+driver's name and its arguments, where <code>$ROOT</code>, <code>$SCRATCH</code> and
+<code>$HOST</code> stand for the repository, an empty folder of the case's own and
+the host's target), <code>expected.exit</code>, and <code>expected.err</code> and
+<code>expected.out</code> for what the driver says. A <code>cwd</code> file holding
+<code>scratch</code> runs the driver in the scratch folder. <code>--regen-usage</code>
+rewrites the expected files.</li>
+<li><strong>An example in the documentation.</strong> A <code>#code language=zerolang</code>
+block in a <code>.pdoc</code> page; see the style guide's "Examples in
+Documentation".</li>
+<li><strong>A C test.</strong> <code>tests/c/&lt;name&gt;_test.c</code> and <code>tests/c/&lt;name&gt;_test.out</code>.</li>
+</ul>
+<p><code>make regen-goldens</code> rewrites the lexer, parser and program goldens of the
+examples. A golden that moves is a signal: read its diff before committing
+it.</p>
+<p>Lists of expected failures, each read by one leg: <code>tests/known-leaks.txt</code>,
+<code>tests/*-known-failures.txt</code> (a toolchain's cases it refuses or fails) and
+<code>tests/fuzz-known-findings.txt</code>.</p>
+<h2 id="ratchets"><a href="#ratchets">5. Ratchets</a></h2>
+<p>A ratchet holds a count at its committed value: a count above its row fails,
+and a count below fails until the row is lowered in the same commit. A row
+is raised only with the reason in the commit message.</p>
+<ul>
+<li><code>tests/fixtures/arch_baseline.txt</code> -- <code>zl lint --arch</code> findings
+per rule and file (the arch kind).</li>
+<li><code>tests/fixtures/doc_baseline.txt</code> -- undocumented definitions
+(L016), docs that only repeat their declaration (L024) and a body
+repeated across a file (L025), under <code>--heavy</code>.</li>
+<li><code>tests/fixtures/doccode_baseline.txt</code> -- per page, the examples
+marked <code>check=none</code> and the checked ones <code>zl fmt</code> would lay out
+differently.</li>
+<li><code>ALLOC_BASELINE</code> in the Makefile -- the self-compile's heap
+allocations (<code>perf-strict</code>).</li>
+<li><code>src/ztestrunner/expected.z</code> -- the pins and the emitted kind's
+baselines.</li>
+</ul>
+<h2 id="the-per-batch-gate"><a href="#the-per-batch-gate">6. The per-batch gate</a></h2>
+<p><code>bin/zgate</code> (<code>tools/zgate/</code>, built by <code>make test</code>) gates a batch of
+commits against a snapshot of an earlier, gated state. Its home,
+<code>$ZGATE_HOME</code>, holds the snapshots and its lock.</p>
+<table>
+<thead>
+<tr><th style="text-align: left">Command</th><th style="text-align: left">What it does</th></tr>
+</thead>
+<tbody>
+<tr><td><code>zgate snap TAG</code></td><td>keeps <code>bin/zc</code>, <code>bin/zl</code> and HEAD's tree as snapshot TAG; take it at a clean HEAD</td></tr>
+<tr><td><code>zgate pregate</code></td><td>the quick checks of the <code>.z</code> files changed since HEAD: format, lint, doc and arch counts</td></tr>
+<tr><td><code>zgate run TAG OUT</code></td><td>the gate of HEAD against TAG, in a worktree of its own: check, test, clang, tcc, the C diff, the allocation split, perf-strict and the guards</td></tr>
+<tr><td><code>zgate cdiff REF NEW OUT</code></td><td>the C (and dumps) of every program, the reference compiler's against the new one's</td></tr>
+<tr><td><code>zgate ab OLDZC NEWZC OLDTREE</code></td><td>the allocation split of a self-compile: what the compiler's behaviour changed, and what its source did</td></tr>
+<tr><td><code>zgate asan ZC FILE</code></td><td>builds FILE with ASan and UBSan and runs it</td></tr>
+<tr><td><code>zgate time ci|gates OUT</code></td><td><code>make ci</code>, or each leg of <code>ci-gates</code> alone, timed</td></tr>
+</tbody>
+</table>
+<h2 id="performance"><a href="#performance">7. Performance</a></h2>
+<p>Two binaries hold the same emitted C. <code>bin/zc</code> is the driver, built at
+<code>-O2</code>. <code>out/zc-perf</code> is the measured one, built by <code>PERFCC</code> at
+<code>PERFOPT</code> (gcc <code>-O1</code>) and rebuilt by every performance target: <code>-O2</code>
+moves the wall time by about 30% and the allocations by nothing, so every
+measurement is of <code>out/zc-perf</code>. Never time <code>bin/zc</code> for a measurement.</p>
+<ul>
+<li><code>make perf</code> -- the self-compile's line count, wall time (best of
+five) and peak memory, the parse / typecheck / emit split, and the
+allocation total when valgrind is installed.</li>
+<li><code>make perf-strict</code> -- the allocation ratchet: the heap blocks of
+one self-compile under valgrind, the same on every run, against
+<code>ALLOC_BASELINE</code>. A count above it fails: lower the count, or raise the
+baseline with the reason in the commit. A count below it asks for the
+baseline to be lowered in the same commit. It refuses a clang-built
+binary, and it reports the instruction count beside the allocations.</li>
+<li><code>make perf-elision</code> -- the allocations an optimising C compiler
+deletes as write-only: <code>bin/zc.c</code> built twice by clang, once with
+<code>-fno-builtin-malloc</code>. The difference belongs at zero.</li>
+<li><code>zgate ab</code> -- splits a change in allocations into the part the
+compiler's behaviour made (new compiler, old source) and the part its
+own source made (new source, new compiler).</li>
+</ul>
+<p><strong>Judge speed by instructions, not cycles.</strong></p>
+<p><code>perf stat -e instructions:u</code> counts work, and for one binary on one
+input it is the same on every run, to a few hundredths of a percent, so a
+difference of 0.2% can be read. Cycles count how long the core took to do
+that work, and they move with whatever else runs: a thread on the same
+physical core, other programs using the shared cache and memory, the
+scheduler moving the process to another core, whether the kernel could give
+the heap large pages, and where code and heap fall in memory. Three rounds
+of the same binary on the same input have differed by 13% in cycles while
+the instruction count held to 0.01%. A speed claim needs both binaries on
+the same input: the self-compile cannot separate a slower compiler from a
+larger source, so compare two compilers on one fixed program. Quote cycles
+only when both binaries' spreads are tight, the rounds were interleaved and
+the machine was quiet. Allocations count events, not time, and none of this
+moves them.</p>
+</main>
+</body>
+</html>

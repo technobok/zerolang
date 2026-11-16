@@ -267,7 +267,7 @@ ci:
 	$(MAKE) --no-print-directory perf-strict
 	$(MAKE) --no-print-directory ci-gates
 	$(MAKE) --no-print-directory test-bootstrap BOOTSTRAP_CCS="$(CI_BOOTSTRAP_CCS)"
-	@echo "CI GATE GREEN: style-lint + corpus(--heavy: +selfhost-asan +fixpoint) + bootstrap"
+	@echo "CI GATE GREEN: perf-strict + ci-gates (guards, toolchains, heavy corpus) + bootstrap"
 	@$(MAKE) --no-print-directory windows-due
 
 # GATE_GUARDS -- the legs of ci-gates the per-batch gate runs, in parallel and to
@@ -1266,8 +1266,8 @@ pedantic-check: bin/zc $(BUILDDIR)/ztestrunner
 	  || { cat $(BUILDDIR)/pedantic.log; echo "pedantic-check FAIL (above): emit the portable form of what -Wpedantic names"; exit 1; }; \
 	echo "pedantic-check OK: the C of the drivers and the run cases has no -Wpedantic diagnostic, $(PEDANTIC_WHERE)"
 
-# perf -- the self-compile snapshot for docs/perf-baseline.md: line count, wall,
-# peak RSS, phase split and the allocation total.
+# perf -- the self-compile's numbers (docs/testing.pdoc, Performance): line
+# count, wall, peak RSS, phase split and the allocation total.
 PERFARGS := zc --src src --system lib/system --emit-c /dev/null
 PERFRUN  := $(PERFBIN) $(PERFARGS)
 
