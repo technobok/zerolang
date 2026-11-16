@@ -566,13 +566,30 @@ exampleArgFor: function {ast: Ast.view cd: ztypes.constraintdesc} out String is 
     return "i64".string
 }
 
-# implementationOwn -- a receiver's or parameter's marker as an implementation compares
-# it: `.borrow` is the default a missing marker means, and a bare `:this` is
-# recorded as one, so the two read alike.
+# implementationOwn -- a receiver's or a reftype parameter's marker as an
+# implementation compares it: `.borrow` is the default a missing marker means,
+# and a bare `:this` is recorded as one, so the two read alike.
 implementationOwn: function {o: optionval ztypes.zparamownership} out ztypes.zparamownership is {
     r: o.or d: ztypes.zparamownership.noneMode
     if r == ztypes.zparamownership.borrowMode then return ztypes.zparamownership.noneMode
     return r
+}
+
+# implementationParamOwn -- the marker of the parameter `nameId` of method `mid`,
+# of type `tid`, as an implementation compares it. A reftype parameter passes a
+# reference marked `.borrow` or not, so the two read alike (implementationOwn).
+# Any other parameter is a copy unmarked and goes by pointer marked `.borrow`
+# (valtypeArgOwn), so the two differ, and the vtable's wrapper could not pass
+# the one where the other is declared.
+implementationParamOwn: function {
+    st: zenv.ZSymbolTable.view
+    mid: ztypes.tid
+    nameId: zast.nameid
+    tid: ztypes.tid
+} out ztypes.zparamownership is {
+    o: st.typing.declOwnershipOfId parentTypeId: mid :nameId
+    if (st.reg.isReftypeOf :tid) then return (implementationOwn :o)
+    return (o.or d: ztypes.zparamownership.noneMode)
 }
 
 # checkInstanceImplementations -- a generic template's implementation row, checked on
@@ -956,8 +973,8 @@ checkImplementationParam: function {
             msg: "'\{implName}' implements \{specName}'s '\{mname}' with parameter '\{pnm}' of type \{itn}, where the spec's is \{stn}"
         )
     }
-    spO: implementationOwn o: (st.typing.declOwnershipOfId parentTypeId: smid nameId: spN)
-    ipO: implementationOwn o: (st.typing.declOwnershipOfId parentTypeId: imid nameId: ipN)
+    spO: implementationParamOwn :st mid: smid nameId: spN tid: spT
+    ipO: implementationParamOwn :st mid: imid nameId: ipN tid: ipT
     if spO != ipO then {
         spm: markerText o: spO
         ipm: markerText o: ipO
@@ -2233,8 +2250,9 @@ implementationMethodMatches: function {
         if (sids.get i: pi) != (iids.get i: pi) then return false
         spN: snms.get i: pi
         ipN: inms.get i: pi
-        spO: implementationOwn o: (st.typing.declOwnershipOfId parentTypeId: smid nameId: spN)
-        ipO: implementationOwn o: (st.typing.declOwnershipOfId parentTypeId: imid nameId: ipN)
+        pT: sids.get i: pi
+        spO: implementationParamOwn :st mid: smid nameId: spN tid: pT
+        ipO: implementationParamOwn :st mid: imid nameId: ipN tid: pT
         if spO != ipO then return false
         pi = pi + 1
     }
@@ -2578,7 +2596,7 @@ keyEqParamMismatch: function {
         ptn: specWrittenName :st :ast tid: pT
         return "its '==' compares with a '\{ptn}', where a key's compares with its own type"
     }
-    pO: implementationOwn o: (st.typing.declOwnershipOfId parentTypeId: mid nameId: pnId)
+    pO: implementationParamOwn :st :mid nameId: pnId tid: pT
     if pO == ztypes.zparamownership.noneMode then return "".string
     pm: markerText o: pO
     pp: implementationMarkerPhrase m: pm.stringView
