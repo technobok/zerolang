@@ -190,8 +190,9 @@ bin/zgate: bin/zc $(wildcard tools/zgate/*.z tools/zgate/*/*.z) src/zjobs.z src/
 
 # test -- the fast corpus gate. The arch and docs kinds run bin/zl, so it must be
 # built: without it those kinds count nothing and every ratchet reads zero. The
-# usage kind runs each driver from bin/, bin/zls among them, and one of its cases
-# links with the vendored tcc.
+# usage kind runs each driver from bin/, bin/zls and bin/zgate among them, and
+# one of its cases links with the vendored tcc. ci-corpus, test-clang and
+# test-tcc run the usage kind too, so they build the same drivers.
 test: bin/zc bin/zl bin/zls bin/zgate $(BUILDDIR)/ztestrunner $(BUILDDIR)/tcc
 	$(BUILDDIR)/ztestrunner --zc bin/zc --cc $(CC) --root . --jobs $(NPROC)
 
@@ -297,7 +298,7 @@ ci-gates: $(GATE_GUARDS) $(GATE_SAME_C) $(CI_ONLY)
 ci-legs:
 	@echo $(GATE_GUARDS) $(GATE_SAME_C) $(CI_ONLY)
 
-ci-corpus: bin/zc bin/zl bin/zls $(BUILDDIR)/ztestrunner
+ci-corpus: bin/zc bin/zl bin/zls bin/zgate $(BUILDDIR)/ztestrunner
 	$(BUILDDIR)/ztestrunner --zc bin/zc --cc $(CC) --root . --heavy --jobs $(NPROC)
 
 # test-math-arm64 -- the math corpus cross-built for aarch64 and run under qemu
@@ -650,7 +651,7 @@ bench-math-kernels: bin/zc $(if $(BENCH_TCC),$(BUILDDIR)/tcc)
 
 # test-clang -- the corpus under clang. Only clang shows an f128 helper the
 # prelude forgot to declare (gcc reads quadmath.h).
-test-clang: bin/zc bin/zl bin/zls $(BUILDDIR)/ztestrunner
+test-clang: bin/zc bin/zl bin/zls bin/zgate $(BUILDDIR)/ztestrunner
 	$(BUILDDIR)/ztestrunner --zc bin/zc --cc clang --cc-forward --root . --jobs $(NPROC)
 
 # test-ub -- the run corpus with C's undefined behaviour trapping: every check
@@ -685,7 +686,7 @@ test-o2: bin/zc bin/zl $(BUILDDIR)/ztestrunner
 	echo "test-o2 OK: the run cases at -O2 under clang"
 
 # what a corpus run under the vendored tcc needs built first.
-TCC_RUN_DEPS := bin/zc bin/zl bin/zls $(BUILDDIR)/tcc $(BUILDDIR)/ztestrunner
+TCC_RUN_DEPS := bin/zc bin/zl bin/zls bin/zgate $(BUILDDIR)/tcc $(BUILDDIR)/ztestrunner
 
 # test-tcc -- the corpus under the vendored tcc, as a backend (--cc-forward), so
 # units tcc cannot build are refused by name. tests/tcc-known-failures.txt is
