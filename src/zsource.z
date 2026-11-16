@@ -1633,6 +1633,14 @@ lookupFn: list {
     declChildOf: "declChildOf"
 } out staticlist StringView
 
+# ComplexityFinding -- one function A008 reports: the line it is defined at,
+# its name and its cognitive complexity
+ComplexityFinding: class {
+    line: u32
+    fn: String
+    score: u32
+}
+
 # the working state of one file's lint/format analysis: the source and
 # its line table, the collected diagnostics and fix edits, and the raw
 # token stream shared across the checks.
@@ -1673,6 +1681,9 @@ Analysis: class {
     opts: lintopts
     # the name-lookup functions A011 watches (lookupFn)
     lookupWords: zast.Vocab
+    # each A008 function's line, name and score, in the order found: what
+    # `zl lint --complexity-table` writes
+    complexities: List ComplexityFinding
 } as {
     # parseErrorCount -- how many collected diagnostics are hard (ERROR) -- i.e.
     # parse errors. The fmt parse gate refuses any file with a non-zero count.
@@ -1753,7 +1764,6 @@ Analysis: class {
             note: "".string
             hint: "".string
             :weight
-            subject: String
         )
         t.diags.append d
     }
@@ -2944,9 +2954,7 @@ Analysis: class {
                     width: 1
                     weight: sc - th
                 )
-                # the table --complexity-table writes names the function
-                last: t.diags.getMut i: t.diags.length - 1
-                last.subject = nm.copy
+                t.complexities.append (ComplexityFinding line: op.lineno fn: nm.copy score: sc)
             }
         } else null
     }
@@ -6870,6 +6878,7 @@ analyzeSource: function {source: String.take path: String.take opts: lintopts} o
         elsewhere: (IdMapR u32 V: DiagSrc)
         :opts
         lookupWords: (zast.Vocab.create block: lookupFn)
+        complexities: List ComplexityFinding
     )
     a.runFastChecks n: root
     if opts.arch then a.reportDuplicateBodies prog: root
@@ -6919,6 +6928,7 @@ analyzeFile: function {path: String.take opts: lintopts} out Analysis is {
             elsewhere: (IdMapR u32 V: DiagSrc)
             :opts
             lookupWords: (zast.Vocab.create block: lookupFn)
+            complexities: List ComplexityFinding
         )
         d: (
             zdiag.errorDiag
@@ -6973,6 +6983,7 @@ analyzeFileFull: function {
             elsewhere: (IdMapR u32 V: DiagSrc)
             :opts
             lookupWords: (zast.Vocab.create block: lookupFn)
+            complexities: List ComplexityFinding
         )
         a.runFastChecks n: root
         if opts.arch then a.reportDuplicateBodies prog: root
@@ -7023,6 +7034,7 @@ analyzeFileFull: function {
             elsewhere: (IdMapR u32 V: DiagSrc)
             :opts
             lookupWords: (zast.Vocab.create block: lookupFn)
+            complexities: List ComplexityFinding
         )
         d: (
             zdiag.errorDiag
@@ -7096,6 +7108,7 @@ sourceParses: function {source: String.take} out bool is {
         elsewhere: (IdMapR u32 V: DiagSrc)
         opts: defaultOpts
         lookupWords: (zast.Vocab.create block: lookupFn)
+        complexities: List ComplexityFinding
     )
     root: ast.parseSource :source
     a.walkProgram prog: root
