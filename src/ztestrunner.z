@@ -997,6 +997,8 @@ kindWord: list {
     usage: "usage"
     # a sanitizer reports the fault it exists to find (`make thread-tsan-guard`)
     probes: "probes"
+    # the emitted C has no -Wpedantic diagnostic (`make pedantic-check`)
+    pedantic: "pedantic"
 } out staticlist StringView
 
 # test-runner entry point: build the compiler, run the
@@ -4973,6 +4975,8 @@ printUsage: function is {
     io.eprintln "                  fixtures the case lists name every program, and fixtures follow L023"
     io.eprintln "                  usage    the drivers' command lines, judged by output and exit"
     io.eprintln "                  probes   ThreadSanitizer, with --cc, reports a race made on purpose"
+    io.eprintln "                  pedantic the C of the drivers and the run cases, for --target, has no"
+    io.eprintln "                           -Wpedantic diagnostic under --cc and --ccflags"
     io.eprintln "A value is written `--name VALUE` or `--name=VALUE`."
 }
 
@@ -5140,12 +5144,16 @@ refuseMisuse: function {r: Runner.view p: cli.Parsed.view} is {
     }
     written: textOr :p name: opt.only d: ""
     if written.length > 0 when r.only == kindWord.length then {
-        unknown: "ztestrunner: --only takes run, doccode, agree, arch, emitted, vocab, pins, fixtures, usage or probes, not '\{written}'"
+        unknown: "ztestrunner: --only takes run, doccode, agree, arch, emitted, vocab, pins, fixtures, usage, probes or pedantic, not '\{written}'"
         refuse unknown.stringView
     }
     runOnly: r.only == kindWord.slot.run
-    if (r.target.length > 0) or (r.exec.length > 0) when runOnly.false then {
-        refuse "ztestrunner: --target and --exec need --only run; no other kind runs a foreign binary"
+    takesTarget: runOnly or (r.only == kindWord.slot.pedantic)
+    if r.target.length > 0 when takesTarget.false then {
+        refuse "ztestrunner: --target needs --only run or --only pedantic; no other kind emits for another system"
+    }
+    if r.exec.length > 0 when runOnly.false then {
+        refuse "ztestrunner: --exec needs --only run; no other kind runs a foreign binary"
     }
     if (r.zcFlags.length > 0) or (r.repeats > 0) or r.zcBuild when runOnly.false then {
         refuse "ztestrunner: --zc-flag, --zc-build and --repeat need --only run; they change how the run cases are built and run"
@@ -5335,6 +5343,8 @@ runOneKind: function {r: Runner} is {
         runUsageCases :r
     } else if r.only == kindWord.slot.probes then {
         probes.runProbeCases :r
+    } else if r.only == kindWord.slot.pedantic then {
+        pedantic.runPedanticCases :r
     }
 }
 

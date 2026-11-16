@@ -1266,77 +1266,30 @@ warn-check: bin/zc.c $(BUILDDIR)/zl.c $(BUILDDIR)/zls.c $(BUILDDIR)/tcc
 	for cc in $(WARN_CCS); do echo "  $$(basename $$cc): clean on seed + zc + zl + zls"; done
 	@echo "warn-check OK: zero warnings from $(words $(WARN_CCS)) compiler(s) on all four emitted files"
 
-# pedantic-check -- how far the emitted C is from ISO C17, which is all MSVC
-# compiles: gcc -Wpedantic's diagnostics over the C of zc, zl and zls and over
-# the C of every RUN case, emitted for Linux and for Windows, each total held in
-# tests/pedantic-baseline.txt. Each target's C is read by a gcc FOR that target,
-# since the runtime chooses its branches by the compiler's own _WIN32: on Linux
-# the host gcc and the mingw-w64 cross gcc, on a Windows host UCRT64 gcc, where
-# no compiler for Linux exists and that half says so and is skipped.
-# A total that moves either way fails: a rise is C that only some compilers
-# take, and a fall is recorded by lowering the baseline in the same commit.
+# pedantic-check -- the emitted C stays inside ISO C17, which is all MSVC
+# compiles: the runner's pedantic kind, once for each target, reads the C of
+# zc, zl and zls and of every RUN case with gcc -std=c17 -Wpedantic
+# -fsyntax-only, and one diagnostic fails. Each target's C is read by a gcc FOR
+# that target, since the runtime chooses its branches by the compiler's own
+# _WIN32: on Linux the host gcc and the mingw-w64 cross gcc, on a Windows host
+# UCRT64 gcc, where no compiler for Linux exists and that half is skipped.
 # -Wpedantic does not see __typeof__, __builtin_* or __attribute__;
 # test-msvc-corpus, cl itself, does.
-PEDANTIC_DIR := $(BUILDDIR)/pedantic
-PEDANTIC_BASELINE := tests/pedantic-baseline.txt
-PEDANTIC_FLAGS := -std=c17 -Wpedantic -fsyntax-only
+PEDANTIC_RUN = $(BUILDDIR)/ztestrunner --zc bin/zc --root . --jobs $(NPROC) --only pedantic
 ifeq ($(WINDOWS_HOST),)
-PEDANTIC_TARGETS := linux:x86_64-linux-gnu windows:x86_64-w64-mingw32
-PEDANTIC_CC_linux := gcc
-PEDANTIC_CC_windows := $(MINGW_CC) $(MINGW_CFLAGS)
+PEDANTIC_LEGS = $(PEDANTIC_RUN) --cc gcc --target x86_64-linux-gnu \
+  && $(PEDANTIC_RUN) --cc $(MINGW_CC) --ccflags "$(MINGW_CFLAGS)" --target x86_64-w64-mingw32
+PEDANTIC_WHERE := for Linux and for Windows
 else
-PEDANTIC_TARGETS := windows:x86_64-w64-mingw32
-PEDANTIC_CC_windows := gcc
+PEDANTIC_LEGS = $(PEDANTIC_RUN) --cc gcc --target x86_64-w64-mingw32
+PEDANTIC_WHERE := for Windows (the Linux half is Linux only: no compiler for Linux on Windows)
 endif
-pedantic-check: bin/zc
+pedantic-check: bin/zc $(BUILDDIR)/ztestrunner
 	@if [ -z "$(WINDOWS_HOST)" ] && ! $(MINGW_UCRT_CHECK); then \
 	  echo "pedantic-check FAIL: the Windows C is read by $(MINGW_CC), which cannot target the UCRT: $(MINGW_UCRT_FIX); see tools/windows/README.md"; exit 1; fi; \
-	if [ -n "$(WINDOWS_HOST)" ]; then echo "pedantic-check: drivers-linux and corpus-linux skipped (Linux only: no compiler for Linux on Windows)"; fi; \
-	rm -rf $(PEDANTIC_DIR); mkdir -p $(PEDANTIC_DIR); \
-	one() { cc=$$1; o=$$2; n=$$3; t=$$4; dirs=$$5; shift 5; \
-	  for d in $$(echo "$$dirs" | tr ":" " "); do set -- "$$@" --src "$$d"; done; \
-	  if bin/zc "$$n" "$$@" --system lib/system --target "$$t" --emit-c "$$o/$$n.c" > "$$o/$$n.zc" 2>&1; then \
-	    $$cc $(PEDANTIC_FLAGS) "$$o/$$n.c" > "$$o/$$n.log" 2>&1; \
-	  else echo "$$n" >> "$$o/emitfail.txt"; fi; }; \
-	grep -v '^#' tests/fixtures/run_cases.txt | awk 'NF >= 2 && !seen[$$1]++ {print $$1, $$2}' > $(PEDANTIC_DIR)/cases.txt; \
-	fail=0; \
-	for pair in $(PEDANTIC_TARGETS); do \
-	  os=$${pair%%:*}; t=$${pair#*:}; \
-	  case $$os in linux) cc="$(PEDANTIC_CC_linux)";; *) cc="$(PEDANTIC_CC_windows)";; esac; \
-	  for part in drivers corpus; do mkdir -p $(PEDANTIC_DIR)/$$os/$$part; done; \
-	  for d in zc zl zls; do one "$$cc" $(PEDANTIC_DIR)/$$os/drivers $$d $$t src & done; \
-	  i=0; while read -r n dirs; do \
-	    one "$$cc" $(PEDANTIC_DIR)/$$os/corpus "$$n" $$t "$$dirs" & \
-	    i=$$((i + 1)); [ $$((i % $(NPROC))) -eq 0 ] && wait; \
-	  done < $(PEDANTIC_DIR)/cases.txt; \
-	  wait; \
-	  for part in drivers corpus; do \
-	    key=$$part-$$os; dir=$(PEDANTIC_DIR)/$$os/$$part; \
-	    if [ -s $$dir/emitfail.txt ]; then \
-	      echo "pedantic-check FAIL: zc did not emit these for $$t (the .zc file beside each says why):"; \
-	      sed "s|^|  $$dir/|; s|$$|.zc|" $$dir/emitfail.txt; fail=1; continue; fi; \
-	    want=3; [ $$part = corpus ] && want=$$(grep -c . $(PEDANTIC_DIR)/cases.txt); \
-	    have=$$(ls $$dir | grep -c '\.log$$'); \
-	    if [ "$$have" != "$$want" ]; then \
-	      echo "pedantic-check FAIL: $$key: gcc ran on $$have of $$want files -- the check itself broke here"; fail=1; continue; fi; \
-	    cat $$dir/*.log > $$dir.all; \
-	    if grep -q ' error: ' $$dir.all; then \
-	      echo "pedantic-check FAIL: gcc rejects the $$key C:"; grep -m5 ' error: ' $$dir.all; fail=1; continue; fi; \
-	    got=$$(grep -c '\[-Wpedantic\]' $$dir.all); \
-	    base=$$(awk -v k=$$key '$$1 == k {print $$2}' $(PEDANTIC_BASELINE)); \
-	    if [ "$$got" != "$$base" ]; then \
-	      echo "pedantic-check FAIL: $$key has $$got -Wpedantic diagnostics, $(PEDANTIC_BASELINE) says $$base"; \
-	      echo "  a rise is C outside ISO C17 -- emit the portable form instead; a fall is progress --"; \
-	      echo "  set '$$key $$got' in $(PEDANTIC_BASELINE) in the same commit. By kind:"; \
-	      grep '\[-Wpedantic\]' $$dir.all | sed -E 's/^.*:[0-9]+:[0-9]+: warning: //' \
-	        | sort | uniq -c | sort -rn | sed 's/^/  /'; \
-	      fail=1; \
-	    fi; \
-	    printf '%s=%s ' $$key $$got >> $(PEDANTIC_DIR)/summary; \
-	  done; \
-	done; \
-	if [ $$fail -ne 0 ]; then exit 1; fi; \
-	echo "pedantic-check OK: $$(cat $(PEDANTIC_DIR)/summary)-Wpedantic diagnostics, as the baseline says"
+	{ $(PEDANTIC_LEGS); } > $(BUILDDIR)/pedantic.log 2>&1 \
+	  || { cat $(BUILDDIR)/pedantic.log; echo "pedantic-check FAIL (above): emit the portable form of what -Wpedantic names"; exit 1; }; \
+	echo "pedantic-check OK: the C of the drivers and the run cases has no -Wpedantic diagnostic, $(PEDANTIC_WHERE)"
 
 # perf -- the self-compile snapshot for docs/perf-baseline.md: line count, wall,
 # peak RSS, phase split and the allocation total.

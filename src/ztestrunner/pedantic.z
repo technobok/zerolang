@@ -1,0 +1,201 @@
+# pedantic -- the PEDANTIC kind (`--only pedantic`): the emitted C stays
+# inside ISO C17, which is all MSVC compiles. The C of zc, zl and zls and of
+# every RUN case, emitted for --target (the host when none), is read by --cc
+# and --ccflags with -std=c17 -Wpedantic -fsyntax-only. One diagnostic fails,
+# and the failure lists them by kind. The compiler must be one FOR that
+# target: the runtime chooses its branches by the compiler's own _WIN32.
+# -Wpedantic does not see __typeof__, __builtin_* or __attribute__; the MSVC
+# corpus leg, which is cl itself, does.
+# A subunit of ztestrunner.
+
+# pedanticFlags -- what the C compiler reads each file with
+pedanticFlags: list { "-std=c17" "-Wpedantic" "-fsyntax-only" } out staticlist StringView
+
+# pedanticDrivers -- the drivers whose C is read beside the run cases'
+pedanticDrivers: list { "zc" "zl" "zls" } out staticlist StringView
+
+# pedanticWord -- what a compiler line is read for
+pedanticWord: list {
+    # the tag that ends a -Wpedantic diagnostic
+    wpedantic: "[-Wpedantic]"
+    # what stands before a diagnostic's message
+    warning: "warning: "
+    # what marks a line that rejects the C outright
+    error: " error: "
+} out staticlist StringView
+
+# runPedanticCases -- the pedantic kind
+runPedanticCases: function {r: Runner} is {
+    drivers: "\{r.tmp}/pedantic/drivers"
+    corpus: "\{r.tmp}/pedantic/corpus"
+    io.mkdirp path: drivers
+    io.mkdirp path: corpus
+    jobs: List PoolJob
+    for each d: pedanticDrivers loop {
+        jobs.append (
+            pedanticJob
+            :r
+            dir: drivers.stringView
+            name: d
+            srcdirs: (oneDir d: r.srcDir.stringView)
+        )
+    }
+    for each c: (runCaseLines :r) loop {
+        srcdirs: manifestDirs root: r.root.stringView column: c.dir.stringView
+        jobs.append (pedanticJob :r dir: corpus.stringView name: c.name.stringView :srcdirs)
+    }
+    statuses: ListVal i32
+    failSteps: ListVal i64
+    runJobs :jobs maxJobs: r.jobsMax :statuses :failSteps
+    found: List String
+    bad: u64
+    i: u64
+    for i < jobs.length loop {
+        dir: drivers.stringView
+        if i >= pedanticDrivers.length then dir = corpus.stringView
+        job: jobs.get :i
+        if (pedanticFile :dir name: job.name.stringView failStep: (failSteps.get :i) :found
+        ).false then {
+            bad = bad + 1
+        }
+        i = i + 1
+    }
+    where: "the host"
+    if r.target.length > 0 then where = r.target.stringView
+    if found.length > 0 then {
+        print "FAIL(pedantic) \{found.length} -Wpedantic diagnostics in the C for \{where}: C outside ISO C17, which only some compilers take -- emit the portable form instead. By kind:"
+        printByKind lines: found
+        bad = bad + 1
+    }
+    if bad > 0 then {
+        r.fails = r.fails + bad
+        return
+    }
+    print "pedantic: the C of \{pedanticDrivers.length} drivers and \{jobs.length - pedanticDrivers.length} run cases for \{where} has no -Wpedantic diagnostic (\{r.cc})"
+    r.passN = r.passN + 1
+}
+
+# pedanticJob -- emit `name` from `srcdirs` for --target into `dir`, then read
+# its C with the pedantic flags; the compiler's diagnostics land in
+# `<dir>/<name>.log`, zc's in `<dir>/<name>.zc`
+pedanticJob: function {
+    r: Runner.view dir: StringView name: StringView srcdirs: (List String).view
+} out PoolJob is {
+    cpath: "\{dir}/\{name}.c"
+    za: (
+        zcArgv
+        zc: r.zc.stringView
+        ccFwd: ""
+        :name
+        :srcdirs
+        sys: r.sys.stringView
+        outc: cpath.stringView
+    )
+    if r.target.length > 0 then {
+        za.append from: "--target".string
+        za.append from: r.target.copy
+    }
+    ca: List String
+    ca.append from: r.cc.copy
+    for each f: (r.ccflags.stringView.split sep: " ") loop {
+        if f.length > 0 then ca.append from: f.string
+    }
+    for each f: pedanticFlags loop ca.append from: f.string
+    ca.append from: cpath.copy
+    zlog: "\{dir}/\{name}.zc"
+    clog: "\{dir}/\{name}.log"
+    steps: List PoolStep
+    steps.append (
+        mkStep
+        argv: za
+        cwd: ""
+        outPath: os.nullDevice.stringView
+        errPath: zlog.stringView
+        timeoutSecs: 0
+        allowFail: false
+        zlinkFrom: ""
+    )
+    steps.append (
+        mkStep
+        argv: ca
+        cwd: ""
+        outPath: os.nullDevice.stringView
+        errPath: clog.stringView
+        timeoutSecs: r.timeoutSecs
+        allowFail: false
+        zlinkFrom: ""
+    )
+    return (mkJob :name :steps)
+}
+
+# pedanticFile -- one file's verdict: zc emitted it and the compiler read it,
+# its -Wpedantic lines added to `found`. A FAIL line says what broke when
+# either step did; answers false then.
+pedanticFile: function {
+    dir: StringView name: StringView failStep: i64 found: List String
+} out bool is {
+    if failStep == 0 then {
+        print "FAIL(pedantic) \{name}: zc did not emit it (\{dir}/\{name}.zc says why)"
+        return false
+    }
+    clog: "\{dir}/\{name}.log"
+    log: slurp path: clog.stringView
+    if failStep == 1 then {
+        print "FAIL(pedantic) \{name}: the C compiler rejects its C (\{clog}):"
+        shown: u64
+        for each ln: log.stringView.lines loop {
+            if (ln.contains needle: pedanticWord.error) when shown < 3 then {
+                print "  \{ln}"
+                shown = shown + 1
+            }
+        }
+        return false
+    }
+    for each ln: log.stringView.lines loop {
+        if (ln.contains needle: pedanticWord.wpedantic) then found.append ln.string
+    }
+    return true
+}
+
+# printByKind -- the diagnostics `lines` counted by their message, the most
+# common first
+printByKind: function {lines: (List String).view} is {
+    kinds: List String
+    counts: ListVal u64
+    for each ln: lines loop {
+        msg: messageOf line: ln.stringView
+        k: u64
+        for k < kinds.length while (kinds.get i: k).stringView != msg loop k = k + 1
+        if k == kinds.length then {
+            kinds.append msg.copy
+            counts.append 0
+        }
+        counts.set i: k val: (counts.get i: k) + 1
+    }
+    n: u64
+    for n < kinds.length loop {
+        best: mostCommon :counts
+        print "  \{counts.get i: best} \{kinds.get i: best}"
+        counts.set i: best val: 0
+        n = n + 1
+    }
+}
+
+# messageOf -- a compiler diagnostic `line` from its message on: what stands
+# after `warning: `, or the whole line when it has none
+messageOf: function {line: StringView} out String is {
+    at: line.indexOf pedanticWord.warning
+    if at.none then return line.string
+    return (line.substring from: at + pedanticWord.warning.length to: line.length).string
+}
+
+# mostCommon -- the index of the highest of `counts`, the first of equals
+mostCommon: function {counts: (ListVal u64).view} out u64 is {
+    best: u64
+    j: u64
+    for j < counts.length loop {
+        if (counts.get i: j) > (counts.get i: best) then best = j
+        j = j + 1
+    }
+    return best
+}
