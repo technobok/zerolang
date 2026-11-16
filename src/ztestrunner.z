@@ -999,6 +999,8 @@ kindWord: list {
     probes: "probes"
     # the emitted C has no -Wpedantic diagnostic (`make pedantic-check`)
     pedantic: "pedantic"
+    # the C test programs, tests/c/*_test.c (`make shim-guard`)
+    ctest: "ctest"
 } out staticlist StringView
 
 # test-runner entry point: build the compiler, run the
@@ -4977,6 +4979,8 @@ printUsage: function is {
     io.eprintln "                  probes   ThreadSanitizer, with --cc, reports a race made on purpose"
     io.eprintln "                  pedantic the C of the drivers and the run cases, for --target, has no"
     io.eprintln "                           -Wpedantic diagnostic under --cc and --ccflags"
+    io.eprintln "                  ctest    the C test programs, tests/c/*_test.c, built by --cc"
+    io.eprintln "                           (--ccflags after the file) and run under --exec"
     io.eprintln "A value is written `--name VALUE` or `--name=VALUE`."
 }
 
@@ -5144,7 +5148,7 @@ refuseMisuse: function {r: Runner.view p: cli.Parsed.view} is {
     }
     written: textOr :p name: opt.only d: ""
     if written.length > 0 when r.only == kindWord.length then {
-        unknown: "ztestrunner: --only takes run, doccode, agree, arch, emitted, vocab, pins, fixtures, usage, probes or pedantic, not '\{written}'"
+        unknown: "ztestrunner: --only takes run, doccode, agree, arch, emitted, vocab, pins, fixtures, usage, probes, pedantic or ctest, not '\{written}'"
         refuse unknown.stringView
     }
     runOnly: r.only == kindWord.slot.run
@@ -5152,14 +5156,15 @@ refuseMisuse: function {r: Runner.view p: cli.Parsed.view} is {
     if r.target.length > 0 when takesTarget.false then {
         refuse "ztestrunner: --target needs --only run or --only pedantic; no other kind emits for another system"
     }
-    if r.exec.length > 0 when runOnly.false then {
-        refuse "ztestrunner: --exec needs --only run; no other kind runs a foreign binary"
+    runsForeign: runOnly or (r.only == kindWord.slot.ctest)
+    if r.exec.length > 0 when runsForeign.false then {
+        refuse "ztestrunner: --exec needs --only run or --only ctest; no other kind runs a foreign binary"
     }
     if (r.zcFlags.length > 0) or (r.repeats > 0) or r.zcBuild when runOnly.false then {
         refuse "ztestrunner: --zc-flag, --zc-build and --repeat need --only run; they change how the run cases are built and run"
     }
-    if (zcc.ccFamilyOf ccPath: r.cc.stringView).msvc when runOnly.false then {
-        refuse "ztestrunner: --cc cl needs --only run; the other kinds build with gcc's command line"
+    if (zcc.ccFamilyOf ccPath: r.cc.stringView).msvc when runsForeign.false then {
+        refuse "ztestrunner: --cc cl needs --only run or --only ctest; the other kinds build with gcc's command line"
     }
 }
 
@@ -5345,6 +5350,8 @@ runOneKind: function {r: Runner} is {
         probes.runProbeCases :r
     } else if r.only == kindWord.slot.pedantic then {
         pedantic.runPedanticCases :r
+    } else if r.only == kindWord.slot.ctest then {
+        ctests.runCtestCases :r
     }
 }
 

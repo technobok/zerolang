@@ -406,33 +406,25 @@ test-tcc-mingw: bin/zc $(BUILDDIR)/ztestrunner $(BUILDDIR)/wineprefix/.ready
 	echo "test-tcc-mingw OK: the RUN cases pass on Windows (tcc, wine) but for $(TCC_MINGW_KNOWN)'s, none new"
 
 # test-msvc-wine -- MSVC itself, cl.exe run under wine (msvc-wine; MSVC_WINE
-# names its bin/x64 directory), builds the thread shim's test with the flags
-# windows-guest gives cl on Windows, and the result runs under wine. Paths stay
-# relative: link.exe reads an argument starting with / as an option. Skipped
-# without MSVC_WINE or wine.
+# names its bin/x64 directory): the runner's ctest kind builds the thread
+# shim's test with cl and runs it under wine, and the run kind has zc build
+# sqlite_hello with cl (its C objects included) and judges it against its
+# golden. That zc refuses cl for a target that is not Windows is a usage case
+# (zc_cl_refuses_linux_target), in make test. Skipped without MSVC_WINE or
+# wine.
 MSVC_WINE ?=
-test-msvc-wine: bin/zc $(BUILDDIR)/wineprefix/.ready $(NATIVEC_INC)/zthread_shim.inc
+test-msvc-wine: bin/zc $(BUILDDIR)/ztestrunner $(BUILDDIR)/wineprefix/.ready $(NATIVEC_INC)/zthread_shim.inc
 	@if [ -n "$(WINDOWS_HOST)" ]; then \
 	  echo "test-msvc-wine: skipped (Linux only: it runs MSVC under wine; on Windows windows-guest builds with cl itself)"; exit 0; fi; \
 	if [ -z "$(MSVC_WINE)" ] || [ ! -x "$(MSVC_WINE)/cl" ] || ! command -v wine > /dev/null 2>&1; then \
 	  echo "test-msvc-wine: skipped (needs wine and MSVC_WINE=<dir>/msvc/bin/x64 from tools/windows/msvc-wine.sh; see tools/windows/README.md)"; exit 0; fi; \
-	d=$(BUILDDIR)/msvc; rm -rf $$d; mkdir -p $$d; \
+	l=$(BUILDDIR)/msvc-wine.log; \
 	$(WINE_SERVER_UP); \
-	$(WINE_ENV) $(MSVC_WINE)/cl -nologo -std:c17 -experimental:c11atomics -W3 -O2 -I$(NATIVEC_INC) \
-	  tests/c/zthread_shim_test.c -Fe:$$d/shim.exe -Fo:$$d/ > $$d/cl.log 2>&1 \
-	  || { echo "test-msvc-wine FAIL: cl did not build the shim test"; grep -m5 -E 'error|fatal' $$d/cl.log; exit 1; }; \
-	$(WINE_ENV) timeout 300 wine $$d/shim.exe > $$d/run.log 2>&1 && grep -q "zthread shim OK" $$d/run.log \
-	  || { echo "test-msvc-wine FAIL: the MSVC build of the shim test under wine"; tail -20 $$d/run.log; exit 1; }; \
-	$(WINE_ENV) bin/zc build tests/fixtures/emitc_corpus/sqlite_hello.z --cc $(MSVC_WINE)/cl --target x86_64-pc-windows-msvc \
-	  -o $$d/sqlite_hello.exe > $$d/zcbuild.log 2>&1 \
-	  || { echo "test-msvc-wine FAIL: zc build --cc cl did not build sqlite_hello"; tail -10 $$d/zcbuild.log; exit 1; }; \
-	$(WINE_ENV) timeout 300 wine $$d/sqlite_hello.exe > $$d/sqlite_hello.out 2>&1; \
-	cmp -s $$d/sqlite_hello.out tests/fixtures/run_golden/sqlite_hello.out \
-	  || { echo "test-msvc-wine FAIL: zc build --cc cl's sqlite_hello differs from its golden"; diff $$d/sqlite_hello.out tests/fixtures/run_golden/sqlite_hello.out | head; exit 1; }; \
-	rc=0; bin/zc build examples/hello.z --cc $(MSVC_WINE)/cl -o $$d/hello.exe > $$d/refuse.log 2>&1 || rc=$$?; \
-	{ [ $$rc -eq 2 ] && grep -q 'builds only for Windows' $$d/refuse.log; } \
-	  || { echo "test-msvc-wine FAIL: zc build --cc cl for a Linux target did not refuse (exit $$rc)"; cat $$d/refuse.log; exit 1; }; \
-	echo "test-msvc-wine OK: MSVC $$($(WINE_ENV) $(MSVC_WINE)/cl 2>&1 | grep -m1 -o 'Version [0-9.]*') built the thread shim's test, which passes under wine; zc build --cc cl builds sqlite_hello (C objects included) to its golden, and refuses a target that is not Windows"
+	{ $(WINE_ENV) $(SHIM_RUN) --cc $(MSVC_WINE)/cl --ccflags "$(SHIM_INC)" --exec wine --timeout 300 \
+	  && $(WINE_ENV) $(BUILDDIR)/ztestrunner --zc bin/zc --root . --only run --zc-build --cc $(MSVC_WINE)/cl \
+	       --target x86_64-pc-windows-msvc --exec wine --timeout 300 --cases sqlite_hello; } > $$l 2>&1 \
+	  || { cat $$l; echo "test-msvc-wine FAIL (above)"; exit 1; }; \
+	echo "test-msvc-wine OK: MSVC built the thread shim's test, which passes under wine, and zc build --cc cl builds sqlite_hello (C objects included) to its golden"
 
 # test-msvc-corpus -- the RUN corpus built for Windows by MSVC itself (cl under
 # wine, MSVC_WINE as test-msvc-wine names it; on a Windows host the cl on PATH,
@@ -1487,51 +1479,41 @@ user-native-guard: bin/zc
 	echo "user-native-guard OK: a unit outside the standard library links and runs its own natives, a hidden subunit's among them, a fact's variant chosen, a generic and a non-generic class from their templates, a generic function from its result's, an os= row only for its OS; zc natives check rows passes both units and refuses a mistyped key"
 
 # shim-guard -- the C thread shim (system's prelude.@zthread row, written to
-# $(NATIVEC_INC)/zthread_shim.inc) passes its own test under
-# every compiler zc drives and under ThreadSanitizer: tests/c/zthread_shim_test.c
-# exercises each primitive under contention. TSan is proved first on a probe
-# that races on purpose: a sanitizer that reports nothing there would make a
-# clean shim run mean nothing. Where mingw-w64 and wine are installed the Win32
-# backend is built and run too (in a wine prefix kept under out/, which takes
-# seconds to create once); the OK line says which backends ran. On a Windows
-# host gcc, clang and tcc build the Win32 backend natively, and TSan, which no
-# Windows toolchain has, is skipped. MSVC is ci-windows's.
-shim-guard: $(BUILDDIR)/tcc $(BUILDDIR)/wineprefix/.ready $(NATIVEC_INC)/zthread_shim.inc
-	@d=$$(mktemp -d); fail=0; t=tests/c/zthread_shim_test.c; pr=tests/c/tsan_probe.c; si=-I$(NATIVEC_INC); \
+# $(NATIVEC_INC)/zthread_shim.inc) passes its own test under every compiler zc
+# drives and under ThreadSanitizer: tests/c/zthread_shim_test.c exercises each
+# primitive under contention, and the runner's ctest kind builds it and judges
+# its exit status and output. TSan is proved first by the probes kind on a
+# probe that races on purpose: a sanitizer that reports nothing there would
+# make a clean shim run mean nothing. Where mingw-w64 and wine are installed the
+# Win32 backend is built and run too (in a wine prefix kept under out/, which
+# takes seconds to create once). On a Windows host gcc, clang and tcc build the
+# Win32 backend natively, and TSan, which no Windows toolchain has, is skipped.
+# MSVC is test-msvc-wine's, and ci-windows's.
+SHIM_RUN = $(BUILDDIR)/ztestrunner --zc bin/zc --root . --jobs $(NPROC) --only ctest
+SHIM_INC := -I$(NATIVEC_INC)
+shim-guard: $(BUILDDIR)/ztestrunner $(BUILDDIR)/tcc $(BUILDDIR)/wineprefix/.ready $(NATIVEC_INC)/zthread_shim.inc
+	@l=$(BUILDDIR)/shim-guard.log; : > $$l; \
 	for cc in $(CC) clang; do \
-	  $$cc -std=c17 -Wall -Wextra -Wno-unused-function -O2 $$si -o $$d/shim-$$cc $$t $(THREADLIB) > $$d/cc.log 2>&1 \
-	    || { echo "shim-guard FAIL: $$cc did not build the shim test"; grep -m3 error $$d/cc.log; fail=1; continue; }; \
-	  $$d/shim-$$cc > $$d/run.log 2>&1 || { echo "shim-guard FAIL: under $$cc"; cat $$d/run.log; fail=1; }; \
+	  $(SHIM_RUN) --cc $$cc --ccflags "$(SHIM_INC) $(THREADLIB)" >> $$l 2>&1 \
+	    || { cat $$l; echo "shim-guard FAIL: under $$cc (above)"; exit 1; }; \
 	done; \
-	$(BUILDDIR)/tcc -B $(TCCLIB) -I $(TCCLIB)/include $$si -o $$d/shim-tcc $$t $(THREADLIB) > $$d/cc.log 2>&1 \
-	  || { echo "shim-guard FAIL: tcc did not build the shim test"; grep -m3 error $$d/cc.log; fail=1; }; \
-	[ -x $$d/shim-tcc ] && { $$d/shim-tcc > $$d/run.log 2>&1 || { echo "shim-guard FAIL: under tcc"; cat $$d/run.log; fail=1; }; }; \
-	tsan=" and ThreadSanitizer (proved on a racy probe)"; \
-	if [ -n "$(WINDOWS_HOST)" ]; then \
-	  tsan=" -- the Win32 backend, natively; ThreadSanitizer skipped (Linux only: no Windows toolchain has it)"; \
-	else \
-	  $(CC) -g -fsanitize=thread -o $$d/probe $$pr -lpthread > $$d/cc.log 2>&1; \
-	  $$d/probe > /dev/null 2> $$d/probe.err; \
-	  grep -q "data race" $$d/probe.err || { echo "shim-guard FAIL: ThreadSanitizer did not report the probe's race; a clean TSan run proves nothing"; fail=1; }; \
-	  $(CC) -std=c17 -g -O1 -fsanitize=thread $$si -o $$d/shim-tsan $$t -lpthread > $$d/cc.log 2>&1 \
-	    || { echo "shim-guard FAIL: the TSan build"; fail=1; }; \
-	  [ -x $$d/shim-tsan ] && { $$d/shim-tsan > $$d/run.log 2>&1 || { echo "shim-guard FAIL: under ThreadSanitizer"; head -30 $$d/run.log; fail=1; }; }; \
+	$(SHIM_RUN) --cc $(BUILDDIR)/tcc --ccflags "-B $(TCCLIB) -I $(TCCLIB)/include $(SHIM_INC) $(THREADLIB)" >> $$l 2>&1 \
+	  || { cat $$l; echo "shim-guard FAIL: under tcc (above)"; exit 1; }; \
+	tsan=" -- the Win32 backend, natively; ThreadSanitizer skipped (Linux only: no Windows toolchain has it)"; \
+	if [ -z "$(WINDOWS_HOST)" ]; then \
+	  { $(TSAN_RUN) --cc $(CC) --only probes \
+	    && $(SHIM_RUN) --cc $(CC) --ccflags "-g -O1 -fsanitize=thread $(SHIM_INC) -lpthread"; } >> $$l 2>&1 \
+	    || { cat $$l; echo "shim-guard FAIL: under ThreadSanitizer (above)"; exit 1; }; \
+	  tsan=" and ThreadSanitizer (proved on a racy probe)"; \
 	fi; \
 	win="; Win32 not run (needs $(MINGW_CC) 14 or newer, for -mcrtdll=ucrt, and wine: sudo apt install gcc-mingw-w64-x86-64 wine)"; \
 	[ -n "$(WINDOWS_HOST)" ] && win=""; \
 	if [ -z "$(WINDOWS_HOST)" ] && $(MINGW_UCRT_CHECK) && command -v wine >/dev/null 2>&1; then \
-	  $(MINGW_CC) -std=c17 -Wall -Wextra -Wno-unused-function -O2 $(MINGW_CFLAGS) $$si -o $$d/shim.exe $$t > $$d/cc.log 2>&1 \
-	    || { echo "shim-guard FAIL: mingw-w64 did not build the shim test"; grep -m3 error $$d/cc.log; fail=1; }; \
-	  if [ -f $$d/shim.exe ]; then \
-	    $(WINE_SERVER_UP); \
-	    $(WINE_ENV) timeout 300 wine $$d/shim.exe > $$d/run.log 2>&1; wrc=$$?; \
-	    [ $$wrc = 0 ] || { echo "shim-guard FAIL: the Win32 backend under wine exited $$wrc"; tail -20 $$d/run.log; fail=1; }; \
-	    grep -q "zthread shim OK" $$d/run.log || { echo "shim-guard FAIL: the Win32 run did not report OK (wine exited $$wrc and wrote $$(wc -c < $$d/run.log) bytes)"; tail -20 $$d/run.log; fail=1; }; \
-	  fi; \
+	  $(WINE_SERVER_UP); \
+	  $(WINE_ENV) $(SHIM_RUN) --cc $(MINGW_CC) --ccflags "$(MINGW_CFLAGS) $(SHIM_INC)" --exec wine --timeout 300 >> $$l 2>&1 \
+	    || { cat $$l; echo "shim-guard FAIL: the Win32 backend (mingw-w64, under wine; above)"; exit 1; }; \
 	  win=", and the Win32 backend (mingw-w64 under wine)"; \
 	fi; \
-	rm -rf $$d; \
-	if [ $$fail -ne 0 ]; then exit 1; fi; \
 	echo "shim-guard OK: the thread shim's test passes under $(CC), clang, tcc$$tsan$$win"
 
 # thread-tsan-guard -- every threaded run fixture (thread_*, sync_*) under

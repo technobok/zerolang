@@ -1,0 +1,153 @@
+# ctests -- the CTEST kind (`--only ctest`): the C test programs, each
+# tests/c/<name>_test.c, built by --cc and run, under --exec's words when it
+# gives some. One passes when it exits 0 and prints its golden,
+# tests/c/<name>_test.out, where a CR before a line end is not counted: a
+# Windows C runtime writes its text so. A gcc or clang builds it with -std=c17
+# -Wall -Wextra -Wno-unused-function -O2, cl with its C17 flags and -W3 -O2,
+# and a tcc with nothing of its own. --ccflags follow the C file: the include
+# directories, a sanitizer, the libraries it links.
+# A subunit of ztestrunner.
+
+# ctestFlags -- what a gcc or a clang builds a C test with
+ctestFlags: list {
+    "-std=c17" "-Wall" "-Wextra" "-Wno-unused-function" "-O2"
+} out staticlist StringView
+
+# ctestMsvcFlags -- what cl builds a C test with, beside zcc.msvcFlags
+ctestMsvcFlags: list { "-W3" "-O2" } out staticlist StringView
+
+# runCtestCases -- the ctest kind
+runCtestCases: function {r: Runner} is {
+    dir: "\{r.root}/tests/c"
+    names: fixtureNames dir: dir.stringView suffix: "_test.c"
+    jobs: List PoolJob
+    for each n: names loop jobs.append (ctestJob :r dir: dir.stringView name: n.stringView)
+    statuses: ListVal i32
+    failSteps: ListVal i64
+    runJobs :jobs maxJobs: r.jobsMax :statuses :failSteps
+    i: u64
+    for i < names.length loop {
+        (
+            judgeCtest
+            :r
+            dir: dir.stringView
+            name: (names.get :i).stringView
+            status: (statuses.get :i)
+            failStep: (failSteps.get :i)
+        )
+        i = i + 1
+    }
+}
+
+# ctestJob -- C test `name`'s job: build it, then run it in a directory of its
+# own; the compiler's diagnostics land in `<name>.cc`, its stderr in
+# `<name>.err`
+ctestJob: function {r: Runner.view dir: StringView name: StringView} out PoolJob is {
+    src: "\{dir}/\{name}_test.c"
+    bin: "\{r.tmp}/\{name}.bin"
+    cclog: "\{r.tmp}/\{name}.cc"
+    outp: "\{r.tmp}/\{name}.out"
+    err: "\{r.tmp}/\{name}.err"
+    rdir: "\{r.tmp}/ctest_\{name}"
+    io.mkdirp path: rdir
+    steps: List PoolStep
+    steps.append (
+        mkStep
+        argv: (ctestArgv :r src: src.stringView bin: bin.stringView)
+        cwd: ""
+        outPath: os.nullDevice.stringView
+        errPath: cclog.stringView
+        timeoutSecs: r.timeoutSecs
+        allowFail: false
+        zlinkFrom: ""
+    )
+    run: List String
+    for each w: (r.exec.stringView.split sep: " ") loop {
+        if w.length > 0 then run.append from: w.string
+    }
+    run.append from: bin.copy
+    steps.append (
+        mkStep
+        argv: run
+        cwd: rdir.stringView
+        outPath: outp.stringView
+        errPath: err.stringView
+        timeoutSecs: r.timeoutSecs
+        allowFail: true
+        zlinkFrom: ""
+    )
+    return (mkJob :name :steps)
+}
+
+# ctestArgv -- the command line that builds the C test `src` into `bin` with
+# --cc: its family's flags, the executable, the file, then --ccflags
+ctestArgv: function {r: Runner.view src: StringView bin: StringView} out List String is {
+    fam: zcc.ccFamilyOf ccPath: r.cc.stringView
+    a: List String
+    a.append from: r.cc.copy
+    if fam.msvc then {
+        for each mf: zcc.msvcFlags loop a.append from: mf.copy
+        for each f: ctestMsvcFlags loop a.append from: f.string
+        a.append from: "-Fo:\{zcc.msvcPath p: r.tmp.stringView}/"
+    } else if fam.tcc.not then {
+        for each f: ctestFlags loop a.append from: f.string
+    }
+    for each o: (zcc.outputArgs f: fam exe: bin) loop a.append from: o.copy
+    if fam.msvc then {
+        a.append from: (zcc.msvcPath p: src)
+    } else a.append from: src.string
+    for each f: (r.ccflags.stringView.split sep: " ") loop {
+        if f.length > 0 then a.append from: f.string
+    }
+    return a
+}
+
+# judgeCtest -- C test `name`'s verdict from its job's `status` and
+# `failStep`: not built, or its exit status and output against its golden
+judgeCtest: function {r: Runner dir: StringView name: StringView status: i32 failStep: i64} is {
+    if failStep == 0 then {
+        print "FAIL(ctest) \{name}: \{r.cc} did not build \{dir}/\{name}_test.c:"
+        printHead path: "\{r.tmp}/\{name}.cc".stringView lines: 10
+        r.fails = r.fails + 1
+        return
+    }
+    gold: "\{dir}/\{name}_test.out"
+    if (io.exists path: gold).not then {
+        print "FAIL(ctest) \{name}: no golden \{gold} -- write what a passing run prints there"
+        r.fails = r.fails + 1
+        return
+    }
+    got: slurp path: "\{r.tmp}/\{name}.out".stringView
+    want: slurp path: gold.stringView
+    if status == 0 when (withoutCr text: got.stringView) == want then {
+        r.passN = r.passN + 1
+        return
+    }
+    print "FAIL(ctest) \{name}: exited \{status} (want 0), or printed other than \{gold}; its stderr:"
+    printHead path: "\{r.tmp}/\{name}.err".stringView lines: 20
+    r.fails = r.fails + 1
+}
+
+# withoutCr -- `text` with each CR that stands before a LF left out
+withoutCr: function {text: StringView} out String is {
+    s: String
+    i: u64
+    for i < text.length loop {
+        b: (text.byteAt :i).or d: 0
+        if b != ascii.cr then {
+            s.appendByte :b
+        } else if ((text.byteAt i: i + 1).or d: 0) != ascii.lf then s.appendByte :b
+        i = i + 1
+    }
+    return s
+}
+
+# printHead -- the first `lines` lines of the file at `path`, indented
+printHead: function {path: StringView lines: u64} is {
+    text: slurp :path
+    n: u64
+    for each ln: text.stringView.lines loop {
+        if n < lines then print "  \{ln}"
+        n = n + 1
+    }
+}
