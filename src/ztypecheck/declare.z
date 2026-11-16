@@ -4946,6 +4946,7 @@ resolveFacet: function {
         kSiter = kSiter + 1
         sm: argRefAt :ast nid: smId
         if sm.nid.notZero then {
+            refuseSpecWithoutReceiver :st :ast :sm :defName kind: "facet"
             mname: zast.nameTextCopy :ast ref: sm.name
             ownerNmId: nameIdOf :ast name: defName
             sido: (
@@ -4983,6 +4984,36 @@ resolveFacet: function {
     }
     if pvExcl_ffid.length > 0 then st.walk.privacySeen = true
     applyGrantsPrivate :st parentId: ffid grants: pvGrants_ffid
+}
+
+# refuseSpecWithoutReceiver -- a spec `sm` of an interface (`kind` says which:
+# a protocol or a facet) that declares no `this` parameter is refused: a value
+# of the interface calls each spec on the value it holds, through its vtable,
+# and a function with no receiver has nothing to be called on there. It
+# belongs in the implementing type's namespace, as a constructor does.
+refuseSpecWithoutReceiver: function {
+    st: zenv.ZSymbolTable
+    ast: Ast.view
+    sm: argref
+    defName: StringView
+    kind: StringView
+} is {
+    if (ast.nodes.get i: sm.operation).functiondef.not then return
+    if (memberaccess.functionNamesReceiver :ast fnId: sm.operation) then return
+    mname: zast.nameTextCopy :ast ref: sm.name
+    n: ast.nodes.get i: sm.nid
+    (
+        addErrorWithHint
+        :st
+        nodeid: sm.nid
+        lineno: (nodeLine :n)
+        colno: (nodeCol :n)
+        e: zast.err.typeError
+        msg: "'\{mname}' in \{kind} '\{defName}' takes no receiver: a \{kind} value calls each spec on the value it holds"
+        note: "".string
+        hint: "give it a receiver (`t: this.view`), or declare it on each implementing type".string
+        width: mname.length
+    )
 }
 
 # resolveProtocol -- resolve a protocol ObjectDef into a PROTOCOL reftype: a child
@@ -5038,6 +5069,7 @@ resolveProtocol: function {
         kSiter = kSiter + 1
         sm: argRefAt :ast nid: smId
         if sm.nid.notZero then {
+            refuseSpecWithoutReceiver :st :ast :sm :defName kind: "protocol"
             mname: zast.nameTextCopy :ast ref: sm.name
             ownerNmId: nameIdOf :ast name: defName
             sido: (

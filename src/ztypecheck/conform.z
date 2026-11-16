@@ -863,6 +863,22 @@ checkImplementationMethod: function {
         )
         return
     }
+    if (implementationTakesReceiver :st mid: imid).not when (
+        specLacksReceiver
+        :st
+        :ast
+        :specTid
+        :mnameId
+    ).not then {
+        (
+            implementationReport
+            :st
+            :ast
+            :markerOp
+            msg: "'\{implName}' implements \{specName}'s '\{mname}' with a function that takes no receiver, where the spec's takes one"
+        )
+        return
+    }
     sids: ListVal ztypes.tid
     snms: ListVal zast.nameid
     implementationParams :st mid: smid ids: sids nameIds: snms
@@ -2229,6 +2245,34 @@ typedefInheritsImplementation: function {
     return true
 }
 
+# implementationTakesReceiver -- the implementing method `mid` declares a
+# receiver: one thisParamNameIdOf names (`t: this.view`), or the bare `:this`,
+# which records no name and stands among the parameters as `this`. Every spec
+# takes a receiver, and the vtable's wrapper passes the held value as the first
+# argument, so a method without one cannot implement a spec.
+implementationTakesReceiver: function {st: zenv.ZSymbolTable.view mid: ztypes.tid} out bool is {
+    if (st.reg.thisParamNameIdOf tid: mid).notZero then return true
+    return (st.typing.declChildOfId parentTypeId: mid nameId: zast.wellKnown.slot.wkThis).some
+}
+
+# specLacksReceiver -- the spec member `mnameId` of `specTid` is declared with
+# no parameter that names a receiver (paramNamesReceiver). Its declaration is
+# refused already (refuseSpecWithoutReceiver), so an implementer is not
+# refused again for the same mistake. False when the declaration is not found.
+specLacksReceiver: function {
+    st: zenv.ZSymbolTable.view
+    ast: Ast.view
+    specTid: ztypes.tid
+    mnameId: zast.nameid
+} out bool is {
+    md: st.typing.declMemberIdOf parentTypeId: specTid nameId: mnameId
+    if md.isZero then return false
+    fnode: valMemberFnNode :ast typing: st.typing memberDecl: md
+    if fnode.isZero then return false
+    if (ast.nodes.get i: fnode).functiondef.not then return false
+    return (memberaccess.functionNamesReceiver :ast fnId: fnode).not
+}
+
 # implementationMethodMatches -- checkImplementationMethod's comparisons as a
 # predicate: `imid` implements the spec method `smid` with its exact
 # signature. Nothing is reported.
@@ -2236,6 +2280,7 @@ implementationMethodMatches: function {
     st: zenv.ZSymbolTable.view smid: ztypes.tid imid: ztypes.tid
 } out bool is {
     if imid.isZero or (st.reg.isGenericOf tid: imid) then return false
+    if (implementationTakesReceiver :st mid: imid).not then return false
     sids: ListVal ztypes.tid
     snms: ListVal zast.nameid
     implementationParams :st mid: smid ids: sids nameIds: snms
