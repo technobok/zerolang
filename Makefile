@@ -174,7 +174,7 @@ style-lint: bin/zl
 
 # out/ztestrunner -- the corpus runner (src/ztestrunner.z and its subunits under
 # src/ztestrunner/, and src/zdocblocks.z for the doccode kind).
-$(BUILDDIR)/ztestrunner: bin/zc src/ztestrunner.z $(wildcard src/ztestrunner/*.z) src/zdocblocks.z src/zcc.z src/ztarget.z $(wildcard lib/system/*.z) $(wildcard lib/system/system/*.z lib/system/math/*.z)
+$(BUILDDIR)/ztestrunner: bin/zc src/ztestrunner.z $(wildcard src/ztestrunner/*.z) src/zjobs.z src/zdocblocks.z src/zcc.z src/ztarget.z $(wildcard lib/system/*.z) $(wildcard lib/system/system/*.z lib/system/math/*.z)
 	@mkdir -p $(BUILDDIR)
 	bin/zc ztestrunner --src src --system lib/system --emit-c $(BUILDDIR)/ztestrunner.c
 	$(CC) $(CFLAGS) $(MAINSTACK) -o $(BUILDDIR)/ztestrunner $(BUILDDIR)/ztestrunner.c $(call ZLINKOF,$(BUILDDIR)/ztestrunner.c) -lm

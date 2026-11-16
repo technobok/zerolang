@@ -1,0 +1,455 @@
+# zjobs -- the job pool the test runner and the gate tool run their commands
+# in: each job a pipeline of steps (PoolStep) spawned one after another, the
+# jobs run at most a given number at once (runJobs), each step with a timeout;
+# and the link flags an emitted C file declares in its header (`zlink:`) and
+# the objects of the C sources it names (`zcsrc:`, built by `zc cobj`), which
+# a step that compiles the C adds when it spawns.
+
+# Public interface -- the definitions other units may reference; all other
+# top-level definitions are private to this unit.
+public: unit {
+    :PoolStep
+    :mkStep
+    :PoolJob
+    :mkJob
+    :runJobs
+    :withZlink
+    :zlinkArgs
+    :slurp
+}
+
+# jobWord -- every word the pool reads off outside text: the emitted C's
+# `zlink:` comment, and the flag naming tcc's runtime payload. A word is
+# classified by its slot (zast.Vocab), never by comparing its text.
+jobWord: list {
+    # a C compiler's flag naming tcc's runtime payload
+    ccPayload: "-B"
+    zlinkOpen: "zlink:"
+    zlinkClose: "*/"
+} out staticlist StringView
+
+# slurp -- file content as an owned String, or "" when unreadable.
+slurp: function {path: StringView} out String is {
+    r: io.readText :path
+    match (
+        r
+    ) case ok then {
+        return r.copy
+    } case err then {
+        return "".string
+    }
+}
+
+# zlinkArgs -- the libraries the emitted C declares in its `zlink:` header,
+# `/* zlink: name name */`, as the compiler family `fam` names them
+# (zcc.libraryArg). The generated file states its own link
+# requirements, so the harness reads them off the artifact rather than being
+# told separately. Only the header is parsed: these files reach 5.8 MB.
+#
+# The marker is SEARCHED for in that header, not read off a fixed line number.
+# Pinning it to line 2 meant any emitter change that inserted a line above it
+# would drop every library with no error -- and the reader would go on linking,
+# because a missing library the libc happens to supply looks like success.
+zlinkArgs: function {csrc: StringView fam: zcc.ccfamily} out List String is {
+    words: zast.Vocab.create block: jobWord
+    flags: List String
+    text: slurp path: csrc
+    if text.length == 0 then return flags
+    end: text.length
+    if end > 512 then end = 512
+    head: text.stringView.substring from: 0 to: end
+    for each line: (head.split sep: "\n") loop {
+        if (line.startsWith prefix: "/* zlink:") then {
+            seen: false
+            for each token: (line.split sep: " ") loop {
+                word: words.slotOf text: token
+                if word == jobWord.slot.zlinkClose then seen = false
+                if seen then flags.append from: (zcc.libraryArg f: fam name: token)
+                if word == jobWord.slot.zlinkOpen then seen = true
+            }
+        }
+    }
+    return flags
+}
+
+# withZlink -- `argv` with the objects of the C sources `csrc` declares
+# (cobjArgs) right after the C file, ahead of every library -- the libraries
+# they need (libm) resolve only for objects named before them -- and the
+# libraries it declares appended, spelled for the compiler argv[0] names (cl's
+# paths through zcc.msvcPath). The emitted C must already exist, so a pipeline
+# step whose C is written by an earlier step resolves this at spawn time
+# instead (PoolStep.zlinkFrom).
+withZlink: function {argv: (List String).take csrc: StringView zc: StringView} out List String is {
+    fam: zcc.ccfamily.other
+    if argv.length > 0 then fam = zcc.ccFamilyOf ccPath: (argv.get i: 0).stringView
+    objects: cobjArgs :argv :csrc :zc
+    if objects.length > 0 then argv = withObjects :argv :csrc objs: objects :fam
+    linkArgs: zlinkArgs :csrc :fam
+    for each linkFlag: linkArgs loop {
+        argv.append from: linkFlag.copy
+    }
+    return argv
+}
+
+# withObjects -- `argv` with the objects `objs` right after the C file `csrc`,
+# each spelled as compiler family `fam` is handed a path.
+withObjects: function {
+    argv: (List String).view
+    csrc: StringView
+    objs: (List String).view
+    fam: zcc.ccfamily
+} out List String is {
+    # the C file as the compiler was handed it
+    cArg: csrc.string
+    if fam.msvc then cArg = zcc.msvcPath p: csrc
+    r: List String
+    for each arg: argv loop {
+        r.append from: arg.copy
+        if arg == cArg then {
+            for each obj: objs loop r.append from: (familyPath :fam p: obj.stringView)
+        }
+    }
+    return r
+}
+
+# familyPath -- a path as compiler family `fam` is handed it: cl's through
+# zcc.msvcPath, any other's as it is.
+familyPath: function {fam: zcc.ccfamily p: StringView} out String is {
+    if fam.msvc then return (zcc.msvcPath :p)
+    return p.string
+}
+
+# cobjArgs -- the objects of the C sources the emitted C's `zcsrc:` header
+# names, built by `zc cobj` with the compiler `argv` runs (argv[0], and the
+# `-B` payload a tcc is handed) -- the objects a program built that way links.
+# Nothing is spawned for C that names none; a failed `zc cobj` answers no
+# objects, and the link then fails on the symbols, naming them.
+cobjArgs: function {argv: (List String).view csrc: StringView zc: StringView} out List String is {
+    objs: List String
+    if (zc.length == 0) or (argv.length == 0) then return objs
+    head: slurp path: csrc
+    end: head.length
+    if end > 1024 then end = 1024
+    if ((head.stringView.substring from: 0 to: end).contains needle: "/* zcsrc: "
+    ).not then return objs
+    ca: List String
+    ca.append from: zc.string
+    ca.append from: "cobj".string
+    ca.append from: csrc.string
+    ca.append from: "--cc".string
+    ca.append from: (argv.get i: 0).copy
+    words: zast.Vocab.create block: jobWord
+    i: u64
+    for (i + 1) < argv.length loop {
+        if (words.slotOf text: (argv.get :i).stringView) == jobWord.slot.ccPayload then {
+            ca.append from: "--tcc-lib".string
+            ca.append from: (argv.get i: i + 1).copy
+        }
+        i = i + 1
+    }
+    outp: "\{csrc}.cobj"
+    rc: os.spawn argv: ca cwd: "" outPath: outp.stringView errPath: "" timeoutSecs: 0
+    if rc == 0 then {
+        txt: slurp path: outp.stringView
+        for each ln: txt.stringView.lines loop {
+            if ln.length > 0 then objs.append from: ln.string
+        }
+    }
+    rm: io.remove path: outp
+    rm.drop
+    return objs
+}
+
+# PoolStep -- one spawn in a job's pipeline. allowFail steps record a
+# nonzero exit without ending the job (a run step's exit code is data,
+# compared against the golden -- only zc/cc steps are hard gates).
+PoolStep: class {
+    # the command and its arguments; argv[0] is the program
+    argv: List String
+    # the directory it runs in; empty keeps the runner's own
+    cwd: String
+    # where stdout goes; /dev/null discards it
+    outPath: String
+    # where stderr goes -- the diagnostics a case is judged on usually land here
+    errPath: String
+    # seconds before the step is killed; 0 waits forever
+    timeoutSecs: i32
+    # whether a non-zero exit is expected. A lint step that FINDS something
+    # exits non-zero, so failure is not always failure
+    allowFail: bool
+    # the emitted C whose declared link libraries this step must add, resolved
+    # when the step runs because an earlier step in the pipeline writes it
+    zlinkFrom: String
+    # the zc that resolves that C's `zcsrc:` sources to objects (zc cobj)
+    zc: String
+}
+
+# build one pipeline step (a named command) for a test job.
+mkStep: function {
+    argv: (List String).take
+    cwd: StringView
+    outPath: StringView
+    errPath: StringView
+    timeoutSecs: i32
+    allowFail: bool
+    zlinkFrom: StringView
+    # the zc a zlinkFrom step resolves objects with; "" for any other step
+    zc: ""
+} out PoolStep is {
+    return (
+        PoolStep
+        :argv
+        cwd: cwd.string
+        outPath: outPath.string
+        errPath: errPath.string
+        :timeoutSecs
+        :allowFail
+        zlinkFrom: zlinkFrom.string
+        zc: zc.string
+    )
+}
+
+# stepArgv -- a step's argv as spawned: the link flags its C declares are
+# resolved now, because the C is written by an earlier step of this pipeline.
+stepArgv: function {step: PoolStep.view} out List String is {
+    args: List String
+    for each arg: step.argv loop {
+        args.append from: arg.copy
+    }
+    if step.zlinkFrom.length == 0 then return args
+    return (withZlink argv: args csrc: step.zlinkFrom.stringView zc: step.zc.stringView)
+}
+
+# PoolJob -- a test case's sequential spawn pipeline (immutable; the
+# pool's mutable per-job state lives in runJobs-local parallel arrays,
+# since a list `get` hands back a non-owning shallow copy).
+PoolJob: class {
+    # the case's name, which is what a FAIL line reports
+    name: String
+    # the steps in order; the job stops at the first that fails without
+    # allowFail
+    steps: List PoolStep
+}
+
+# build a test job: a named sequence of steps run as a unit.
+mkJob: function {name: StringView steps: (List PoolStep).take} out PoolJob is {
+    return (PoolJob name: name.string :steps)
+}
+
+# JobPool -- the pool's state: per job, the step it is on, its deadline (0 when
+# the step has none) and whether its child was killed; the children in flight
+# with the job each runs for; how many jobs have ended; and which job's step
+# starts next. The scans that read and write it take the pool; the caller's
+# statuses and failSteps stay the caller's.
+JobPool: class {
+    # the step each job is on
+    stepIdxs: ListVal u64
+    # each job's deadline in monotonic millis, 0 when its step has none
+    deadlines: ListVal i64
+    # whether each job's running child was already killed
+    killeds: ListVal bool
+    # the children in flight, in no order
+    children: List os.Child
+    # the job each child in `children` runs for, parallel to it
+    childJobs: ListVal u64
+    # jobs that have ended, by success or by a failing step
+    doneN: u64
+    # the first job no step of which has started: jobs start in order
+    fresh: u64
+    # the jobs whose step ended with steps left, in the order they ended; a
+    # job's next step starts before any job that has not started
+    resumed: ListVal u64
+    # how many of `resumed` have started their next step
+    resumedTaken: u64
+}
+
+# launchReady -- start the next step of jobs that have one, up to the cap: the
+# resumed jobs first, then those not started, in order. Each job is looked at
+# once per step, however many jobs the pool holds. A spawn that cannot start
+# ends the job as 127 at that step.
+launchReady: function {
+    jobs: (List PoolJob).view
+    pool: JobPool
+    cap: u64
+    statuses: ListVal i32
+    failSteps: ListVal i64
+} is {
+    total: jobs.length
+    for pool.children.length < cap loop {
+        ji: nextJob :pool :total
+        if ji == total then return
+        jstep: pool.stepIdxs.get i: ji
+        j: jobs.get i: ji
+        if jstep < j.steps.length then {
+            st: j.steps.get i: jstep
+            sargv: stepArgv step: st
+            started: (
+                os.spawnAsync
+                argv: sargv
+                cwd: st.cwd.stringView
+                outPath: st.outPath.stringView
+                errPath: st.errPath.stringView
+            )
+            match (
+                started
+            ) case ok then {
+                pool.children.append from: started.take
+                pool.childJobs.append ji
+                pool.killeds.set i: ji val: false
+                if st.timeoutSecs > 0 then {
+                    dl: os.monotonicMillis + (st.timeoutSecs.i64 * 1000)
+                    pool.deadlines.set i: ji val: dl
+                } else {
+                    pool.deadlines.set i: ji val: 0
+                }
+            } case err then {
+                statuses.set i: ji val: 127
+                failSteps.set i: ji val: jstep.i64.orPanic
+                pool.doneN = pool.doneN + 1
+            }
+        } else {
+            pool.doneN = pool.doneN + 1
+        }
+    }
+}
+
+# nextJob -- the job whose step starts next, taken from the pool: a resumed one
+# first, then the first not started; `total` when no job has a step waiting
+nextJob: function {pool: JobPool total: u64} out u64 is {
+    if pool.resumedTaken < pool.resumed.length then {
+        ji: pool.resumed.get i: pool.resumedTaken
+        pool.resumedTaken = pool.resumedTaken + 1
+        return ji
+    }
+    if pool.fresh == total then return total
+    pool.fresh = pool.fresh + 1
+    return pool.fresh - 1
+}
+
+# dropChild -- take the reaped child at `k` out of the pool, the last one
+# moving into its place; dropping it closes its handle. Answers its job.
+dropChild: function {pool: JobPool k: u64} out u64 is {
+    job: pool.childJobs.get i: k
+    last: pool.children.length - 1
+    if k < last then {
+        moved: pool.children.pop
+        pool.children.set i: k val: moved
+        pool.childJobs.set i: k val: (pool.childJobs.get i: last)
+    } else {
+        pool.children.pop
+    }
+    pool.childJobs.pop
+    return job
+}
+
+# reapOne -- a child has exited: find its job, record the step's status (124
+# when the child was killed for its deadline), and advance the job to its next
+# step or end it.
+reapOne: function {
+    jobs: (List PoolJob).view
+    pool: JobPool
+    pid: i32
+    status: i32
+    statuses: ListVal i32
+    failSteps: ListVal i64
+} is {
+    k: u64
+    for k < pool.children.length loop {
+        if (pool.children.get i: k).pid != pid then {
+            k = k + 1
+            continue
+        }
+        jk: dropChild :pool :k
+        kstep: pool.stepIdxs.get i: jk
+        j2: jobs.get i: jk
+        stw: j2.steps.get i: kstep
+        stStatus: status
+        if (pool.killeds.get i: jk) then stStatus = 124
+        statuses.set i: jk val: stStatus
+        ended: false
+        if stStatus != 0 when stw.allowFail.false then {
+            failSteps.set i: jk val: kstep.i64.orPanic
+            ended = true
+        } else {
+            kn: kstep + 1
+            pool.stepIdxs.set i: jk val: kn
+            if kn >= j2.steps.length then ended = true
+        }
+        if ended then {
+            pool.doneN = pool.doneN + 1
+        } else pool.resumed.append jk
+        return
+    }
+}
+
+# killOverdue -- kill every running child past its job's deadline, once each;
+# reapOne records it as 124 when the child is collected.
+killOverdue: function {pool: JobPool} is {
+    now: os.monotonicMillis
+    k: u64
+    for k < pool.children.length loop {
+        jm: pool.childJobs.get i: k
+        mdl: pool.deadlines.get i: jm
+        if mdl > 0 when now > mdl when (pool.killeds.get i: jm).false then {
+            (pool.children.getMut i: k).kill
+            pool.killeds.set i: jm val: true
+        }
+        k = k + 1
+    }
+}
+
+# runJobs -- drive every job through its steps with at most maxJobs
+# children in flight. Steps within a job stay sequential; jobs overlap.
+# A step past its deadline is killed and recorded as 124 (spawn's
+# timeout convention). Results land in the caller's statuses/failSteps,
+# indexed by job: failStep -1 = every step ran (status = the LAST
+# step's exit); otherwise the index of the hard-failing step.
+runJobs: function {
+    jobs: (List PoolJob).view
+    maxJobs: u64
+    statuses: ListVal i32
+    failSteps: ListVal i64
+} is {
+    cap: maxJobs
+    if cap == 0 then cap = 1
+    total: jobs.length
+    stepIdxsL: ListVal u64
+    deadlinesL: ListVal i64
+    killedsL: ListVal bool
+    childrenL: List os.Child
+    childJobsL: ListVal u64
+    pool: (
+        JobPool
+        stepIdxs: stepIdxsL
+        deadlines: deadlinesL
+        killeds: killedsL
+        children: childrenL
+        childJobs: childJobsL
+        doneN: 0
+        fresh: 0
+        resumed: ListVal u64
+        resumedTaken: 0
+    )
+    pi: u64
+    for pi < total loop {
+        pool.stepIdxs.append 0.u64
+        pool.deadlines.append 0.i64
+        pool.killeds.append false
+        statuses.append 0
+        failSteps.append -1
+        pi = pi + 1
+    }
+    for pool.doneN < total loop {
+        launchReady :jobs :pool :cap :statuses :failSteps
+        if pool.children.length == 0 then return
+        r: os.waitAny children: pool.children
+        if r.pid > 0 then {
+            # the shorthand arguments come first: `r.status :statuses` would
+            # read as a call of the field
+            reapOne :jobs :pool :statuses :failSteps pid: r.pid status: r.status
+        } else {
+            killOverdue :pool
+            os.sleepMillis ms: 5
+        }
+    }
+}

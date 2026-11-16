@@ -50,18 +50,12 @@ public: unit {
     :main
 }
 
-# slurp -- file content as an owned String, or "" when unreadable.
-slurp: function {path: StringView} out String is {
-    r: io.readText :path
-    match (
-        r
-    ) case ok then {
-        return r.copy
-    } case err then {
-        return "".string
-    }
-    return "".string
-}
+# slurp -- file content as an owned String, or "" when unreadable (zjobs.slurp)
+slurp: zjobs.slurp
+
+# PoolStep, PoolJob -- a spawn of a job and a job, of the job pool (zjobs)
+PoolStep: zjobs.PoolStep
+PoolJob: zjobs.PoolJob
 
 # declaresMain -- the file declares a top-level `main: function`. A unit with
 # none is a LIBRARY: it exists to be opened by another program and is compiled
@@ -232,126 +226,6 @@ dumpArgv: function {
     return a
 }
 
-# zlinkArgs -- the libraries the emitted C declares in its `zlink:` header,
-# `/* zlink: name name */`, as the compiler family `fam` names them
-# (zcc.libraryArg). The generated file states its own link
-# requirements, so the harness reads them off the artifact rather than being
-# told separately. Only the header is parsed: these files reach 5.8 MB.
-#
-# The marker is SEARCHED for in that header, not read off a fixed line number.
-# Pinning it to line 2 meant any emitter change that inserted a line above it
-# would drop every library with no error -- and the reader would go on linking,
-# because a missing library the libc happens to supply looks like success.
-zlinkArgs: function {csrc: StringView fam: zcc.ccfamily} out List String is {
-    words: zast.Vocab.create block: runnerWord
-    flags: List String
-    text: slurp path: csrc
-    if text.length == 0 then return flags
-    end: text.length
-    if end > 512 then end = 512
-    head: text.stringView.substring from: 0 to: end
-    for each line: (head.split sep: "\n") loop {
-        if (line.startsWith prefix: "/* zlink:") then {
-            seen: false
-            for each token: (line.split sep: " ") loop {
-                word: words.slotOf text: token
-                if word == runnerWord.slot.zlinkClose then seen = false
-                if seen then flags.append from: (zcc.libraryArg f: fam name: token)
-                if word == runnerWord.slot.zlinkOpen then seen = true
-            }
-        }
-    }
-    return flags
-}
-
-# withZlink -- `argv` with the objects of the C sources `csrc` declares
-# (cobjArgs) right after the C file, ahead of every library -- the libraries
-# they need (libm) resolve only for objects named before them -- and the
-# libraries it declares appended, spelled for the compiler argv[0] names (cl's
-# paths through zcc.msvcPath). The emitted C must already exist, so a pipeline
-# step whose C is written by an earlier step resolves this at spawn time
-# instead (PoolStep.zlinkFrom).
-withZlink: function {argv: (List String).take csrc: StringView zc: StringView} out List String is {
-    fam: zcc.ccfamily.other
-    if argv.length > 0 then fam = zcc.ccFamilyOf ccPath: (argv.get i: 0).stringView
-    objects: cobjArgs :argv :csrc :zc
-    if objects.length > 0 then argv = withObjects :argv :csrc objs: objects :fam
-    linkArgs: zlinkArgs :csrc :fam
-    for each linkFlag: linkArgs loop {
-        argv.append from: linkFlag.copy
-    }
-    return argv
-}
-
-# withObjects -- `argv` with the objects `objs` right after the C file `csrc`,
-# each spelled as compiler family `fam` is handed a path.
-withObjects: function {
-    argv: (List String).view
-    csrc: StringView
-    objs: (List String).view
-    fam: zcc.ccfamily
-} out List String is {
-    # the C file as the compiler was handed it
-    cArg: csrc.string
-    if fam.msvc then cArg = zcc.msvcPath p: csrc
-    r: List String
-    for each arg: argv loop {
-        r.append from: arg.copy
-        if arg == cArg then {
-            for each obj: objs loop r.append from: (familyPath :fam p: obj.stringView)
-        }
-    }
-    return r
-}
-
-# familyPath -- a path as compiler family `fam` is handed it: cl's through
-# zcc.msvcPath, any other's as it is.
-familyPath: function {fam: zcc.ccfamily p: StringView} out String is {
-    if fam.msvc then return (zcc.msvcPath :p)
-    return p.string
-}
-
-# cobjArgs -- the objects of the C sources the emitted C's `zcsrc:` header
-# names, built by `zc cobj` with the compiler `argv` runs (argv[0], and the
-# `-B` payload a tcc is handed) -- the objects a program built that way links.
-# Nothing is spawned for C that names none; a failed `zc cobj` answers no
-# objects, and the link then fails on the symbols, naming them.
-cobjArgs: function {argv: (List String).view csrc: StringView zc: StringView} out List String is {
-    objs: List String
-    if (zc.length == 0) or (argv.length == 0) then return objs
-    head: slurp path: csrc
-    end: head.length
-    if end > 1024 then end = 1024
-    if ((head.stringView.substring from: 0 to: end).contains needle: "/* zcsrc: "
-    ).not then return objs
-    ca: List String
-    ca.append from: zc.string
-    ca.append from: "cobj".string
-    ca.append from: csrc.string
-    ca.append from: "--cc".string
-    ca.append from: (argv.get i: 0).copy
-    words: zast.Vocab.create block: runnerWord
-    i: u64
-    for (i + 1) < argv.length loop {
-        if (words.slotOf text: (argv.get :i).stringView) == runnerWord.slot.ccPayload then {
-            ca.append from: "--tcc-lib".string
-            ca.append from: (argv.get i: i + 1).copy
-        }
-        i = i + 1
-    }
-    outp: "\{csrc}.cobj"
-    rc: os.spawn argv: ca cwd: "" outPath: outp.stringView errPath: "" timeoutSecs: 0
-    if rc == 0 then {
-        txt: slurp path: outp.stringView
-        for each ln: txt.stringView.lines loop {
-            if ln.length > 0 then objs.append from: ln.string
-        }
-    }
-    rm: io.remove path: outp
-    rm.drop
-    return objs
-}
-
 # withExtraArgs -- `argv` plus one element per non-empty line of `file`. An
 # error fixture that needs a compiler flag -- `--cc tcc`, to prove a refusal
 # fires without tcc installed -- names it in <name>.zcargs beside its
@@ -417,7 +291,7 @@ buildTool: function {
         0
     ) then return buildstep.emit
     ga: (
-        withZlink
+        zjobs.withZlink
         argv: (
             ccArgv
             cc: r.cc.stringView
@@ -558,300 +432,6 @@ binArgv: function {bin: StringView argsFile: StringView} out List String is {
     return a
 }
 
-# PoolStep -- one spawn in a job's pipeline. allowFail steps record a
-# nonzero exit without ending the job (a run step's exit code is data,
-# compared against the golden -- only zc/cc steps are hard gates).
-PoolStep: class {
-    # the command and its arguments; argv[0] is the program
-    argv: List String
-    # the directory it runs in; empty keeps the runner's own
-    cwd: String
-    # where stdout goes; /dev/null discards it
-    outPath: String
-    # where stderr goes -- the diagnostics a case is judged on usually land here
-    errPath: String
-    # seconds before the step is killed; 0 waits forever
-    timeoutSecs: i32
-    # whether a non-zero exit is expected. A lint step that FINDS something
-    # exits non-zero, so failure is not always failure
-    allowFail: bool
-    # the emitted C whose declared link libraries this step must add, resolved
-    # when the step runs because an earlier step in the pipeline writes it
-    zlinkFrom: String
-    # the zc that resolves that C's `zcsrc:` sources to objects (zc cobj)
-    zc: String
-}
-
-# build one pipeline step (a named command) for a test job.
-mkStep: function {
-    argv: (List String).take
-    cwd: StringView
-    outPath: StringView
-    errPath: StringView
-    timeoutSecs: i32
-    allowFail: bool
-    zlinkFrom: StringView
-    # the zc a zlinkFrom step resolves objects with; "" for any other step
-    zc: ""
-} out PoolStep is {
-    return (
-        PoolStep
-        :argv
-        cwd: cwd.string
-        outPath: outPath.string
-        errPath: errPath.string
-        :timeoutSecs
-        :allowFail
-        zlinkFrom: zlinkFrom.string
-        zc: zc.string
-    )
-}
-
-# stepArgv -- a step's argv as spawned: the link flags its C declares are
-# resolved now, because the C is written by an earlier step of this pipeline.
-stepArgv: function {step: PoolStep.view} out List String is {
-    args: List String
-    for each arg: step.argv loop {
-        args.append from: arg.copy
-    }
-    if step.zlinkFrom.length == 0 then return args
-    return (withZlink argv: args csrc: step.zlinkFrom.stringView zc: step.zc.stringView)
-}
-
-# PoolJob -- a test case's sequential spawn pipeline (immutable; the
-# pool's mutable per-job state lives in runJobs-local parallel arrays,
-# since a list `get` hands back a non-owning shallow copy).
-PoolJob: class {
-    # the case's name, which is what a FAIL line reports
-    name: String
-    # the steps in order; the job stops at the first that fails without
-    # allowFail
-    steps: List PoolStep
-}
-
-# build a test job: a named sequence of steps run as a unit.
-mkJob: function {name: StringView steps: (List PoolStep).take} out PoolJob is {
-    return (PoolJob name: name.string :steps)
-}
-
-# JobPool -- the pool's state: per job, the step it is on, its deadline (0 when
-# the step has none) and whether its child was killed; the children in flight
-# with the job each runs for; how many jobs have ended; and which job's step
-# starts next. The scans that read and write it take the pool; the caller's
-# statuses and failSteps stay the caller's.
-JobPool: class {
-    # the step each job is on
-    stepIdxs: ListVal u64
-    # each job's deadline in monotonic millis, 0 when its step has none
-    deadlines: ListVal i64
-    # whether each job's running child was already killed
-    killeds: ListVal bool
-    # the children in flight, in no order
-    children: List os.Child
-    # the job each child in `children` runs for, parallel to it
-    childJobs: ListVal u64
-    # jobs that have ended, by success or by a failing step
-    doneN: u64
-    # the first job no step of which has started: jobs start in order
-    fresh: u64
-    # the jobs whose step ended with steps left, in the order they ended; a
-    # job's next step starts before any job that has not started
-    resumed: ListVal u64
-    # how many of `resumed` have started their next step
-    resumedTaken: u64
-}
-
-# launchReady -- start the next step of jobs that have one, up to the cap: the
-# resumed jobs first, then those not started, in order. Each job is looked at
-# once per step, however many jobs the pool holds. A spawn that cannot start
-# ends the job as 127 at that step.
-launchReady: function {
-    jobs: (List PoolJob).view
-    pool: JobPool
-    cap: u64
-    statuses: ListVal i32
-    failSteps: ListVal i64
-} is {
-    total: jobs.length
-    for pool.children.length < cap loop {
-        ji: nextJob :pool :total
-        if ji == total then return
-        jstep: pool.stepIdxs.get i: ji
-        j: jobs.get i: ji
-        if jstep < j.steps.length then {
-            st: j.steps.get i: jstep
-            sargv: stepArgv step: st
-            started: (
-                os.spawnAsync
-                argv: sargv
-                cwd: st.cwd.stringView
-                outPath: st.outPath.stringView
-                errPath: st.errPath.stringView
-            )
-            match (
-                started
-            ) case ok then {
-                pool.children.append from: started.take
-                pool.childJobs.append ji
-                pool.killeds.set i: ji val: false
-                if st.timeoutSecs > 0 then {
-                    dl: os.monotonicMillis + (st.timeoutSecs.i64 * 1000)
-                    pool.deadlines.set i: ji val: dl
-                } else {
-                    pool.deadlines.set i: ji val: 0
-                }
-            } case err then {
-                statuses.set i: ji val: 127
-                failSteps.set i: ji val: jstep.i64.orPanic
-                pool.doneN = pool.doneN + 1
-            }
-        } else {
-            pool.doneN = pool.doneN + 1
-        }
-    }
-}
-
-# nextJob -- the job whose step starts next, taken from the pool: a resumed one
-# first, then the first not started; `total` when no job has a step waiting
-nextJob: function {pool: JobPool total: u64} out u64 is {
-    if pool.resumedTaken < pool.resumed.length then {
-        ji: pool.resumed.get i: pool.resumedTaken
-        pool.resumedTaken = pool.resumedTaken + 1
-        return ji
-    }
-    if pool.fresh == total then return total
-    pool.fresh = pool.fresh + 1
-    return pool.fresh - 1
-}
-
-# dropChild -- take the reaped child at `k` out of the pool, the last one
-# moving into its place; dropping it closes its handle. Answers its job.
-dropChild: function {pool: JobPool k: u64} out u64 is {
-    job: pool.childJobs.get i: k
-    last: pool.children.length - 1
-    if k < last then {
-        moved: pool.children.pop
-        pool.children.set i: k val: moved
-        pool.childJobs.set i: k val: (pool.childJobs.get i: last)
-    } else {
-        pool.children.pop
-    }
-    pool.childJobs.pop
-    return job
-}
-
-# reapOne -- a child has exited: find its job, record the step's status (124
-# when the child was killed for its deadline), and advance the job to its next
-# step or end it.
-reapOne: function {
-    jobs: (List PoolJob).view
-    pool: JobPool
-    pid: i32
-    status: i32
-    statuses: ListVal i32
-    failSteps: ListVal i64
-} is {
-    k: u64
-    for k < pool.children.length loop {
-        if (pool.children.get i: k).pid != pid then {
-            k = k + 1
-            continue
-        }
-        jk: dropChild :pool :k
-        kstep: pool.stepIdxs.get i: jk
-        j2: jobs.get i: jk
-        stw: j2.steps.get i: kstep
-        stStatus: status
-        if (pool.killeds.get i: jk) then stStatus = 124
-        statuses.set i: jk val: stStatus
-        ended: false
-        if stStatus != 0 when stw.allowFail.false then {
-            failSteps.set i: jk val: kstep.i64.orPanic
-            ended = true
-        } else {
-            kn: kstep + 1
-            pool.stepIdxs.set i: jk val: kn
-            if kn >= j2.steps.length then ended = true
-        }
-        if ended then {
-            pool.doneN = pool.doneN + 1
-        } else pool.resumed.append jk
-        return
-    }
-}
-
-# killOverdue -- kill every running child past its job's deadline, once each;
-# reapOne records it as 124 when the child is collected.
-killOverdue: function {pool: JobPool} is {
-    now: os.monotonicMillis
-    k: u64
-    for k < pool.children.length loop {
-        jm: pool.childJobs.get i: k
-        mdl: pool.deadlines.get i: jm
-        if mdl > 0 when now > mdl when (pool.killeds.get i: jm).false then {
-            (pool.children.getMut i: k).kill
-            pool.killeds.set i: jm val: true
-        }
-        k = k + 1
-    }
-}
-
-# runJobs -- drive every job through its steps with at most maxJobs
-# children in flight. Steps within a job stay sequential; jobs overlap.
-# A step past its deadline is killed and recorded as 124 (spawn's
-# timeout convention). Results land in the caller's statuses/failSteps,
-# indexed by job: failStep -1 = every step ran (status = the LAST
-# step's exit); otherwise the index of the hard-failing step.
-runJobs: function {
-    jobs: (List PoolJob).view
-    maxJobs: u64
-    statuses: ListVal i32
-    failSteps: ListVal i64
-} is {
-    cap: maxJobs
-    if cap == 0 then cap = 1
-    total: jobs.length
-    stepIdxsL: ListVal u64
-    deadlinesL: ListVal i64
-    killedsL: ListVal bool
-    childrenL: List os.Child
-    childJobsL: ListVal u64
-    pool: (
-        JobPool
-        stepIdxs: stepIdxsL
-        deadlines: deadlinesL
-        killeds: killedsL
-        children: childrenL
-        childJobs: childJobsL
-        doneN: 0
-        fresh: 0
-        resumed: ListVal u64
-        resumedTaken: 0
-    )
-    pi: u64
-    for pi < total loop {
-        pool.stepIdxs.append 0.u64
-        pool.deadlines.append 0.i64
-        pool.killeds.append false
-        statuses.append 0
-        failSteps.append -1
-        pi = pi + 1
-    }
-    for pool.doneN < total loop {
-        launchReady :jobs :pool :cap :statuses :failSteps
-        if pool.children.length == 0 then return
-        r: os.waitAny children: pool.children
-        if r.pid > 0 then {
-            # the shorthand arguments come first: `r.status :statuses` would
-            # read as a call of the field
-            reapOne :jobs :pool :statuses :failSteps pid: r.pid status: r.status
-        } else {
-            killOverdue :pool
-            os.sleepMillis ms: 5
-        }
-    }
-}
-
 # frameLsp -- wrap each non-empty line of a .msgs transcript in LSP
 # Content-Length framing (the bytes zls reads on its --replay input).
 frameLsp: function {src: StringView} out String is {
@@ -927,15 +507,10 @@ deframeLsp: function {raw: StringView} out String is {
 }
 
 # runnerWord -- every word the runner reads off outside text: the LSP frame
-# header, the emitted C's `zlink:` comment, a case list's marker and its own
-# name. A word is classified by its slot here (zast.Vocab), never by comparing
-# its text.
+# header, a case list's marker and its own name. A word is classified by its
+# slot here (zast.Vocab), never by comparing its text.
 runnerWord: list {
-    # a C compiler's flag naming tcc's runtime payload
-    ccPayload: "-B"
     lspHeader: "Content-Length: "
-    zlinkOpen: "zlink:"
-    zlinkClose: "*/"
     # a run case's third word: it checks something only POSIX has
     casePosix: "posix"
     # the driver a USAGE case names when it runs the runner itself
@@ -1156,7 +731,7 @@ runArchCases: function {r: Runner} is {
         steps: List PoolStep
         # the count rows go to zl's stdout, anything else it says to its stderr
         steps.append (
-            mkStep
+            zjobs.mkStep
             :argv
             cwd: ""
             outPath: opath.stringView
@@ -1165,11 +740,11 @@ runArchCases: function {r: Runner} is {
             allowFail: true
             zlinkFrom: ""
         )
-        pool.append (mkJob name: f.stringView :steps)
+        pool.append (zjobs.mkJob name: f.stringView :steps)
     }
     statuses: ListVal i32
     failSteps: ListVal i64
-    runJobs jobs: pool maxJobs: r.jobsMax :statuses :failSteps
+    zjobs.runJobs jobs: pool maxJobs: r.jobsMax :statuses :failSteps
     baseKeys: List String
     baseCounts: ListVal u64
     readRatchetBaseline path: basePath.stringView keys: baseKeys counts: baseCounts
@@ -1316,14 +891,14 @@ runAgreeCases: function {r: Runner} is {
                 option: "--mark-natives"
                 cfile: "\{base}.marked.c".stringView
             )
-            pool.append (mkJob name: pg.stringView :steps)
+            pool.append (zjobs.mkJob name: pg.stringView :steps)
             bases.append base.take
             targets.append t.string
         }
     }
     statuses: ListVal i32
     failSteps: ListVal i64
-    runJobs jobs: pool maxJobs: r.jobsMax :statuses :failSteps
+    zjobs.runJobs jobs: pool maxJobs: r.jobsMax :statuses :failSteps
     bad: u64
     i: u64
     for i < bases.length loop {
@@ -1396,7 +971,7 @@ agreeStep: function {
     argv.append "-o".string
     argv.append cfile.string
     return (
-        mkStep
+        zjobs.mkStep
         argv: argv.take
         cwd: r.root.stringView
         outPath: os.nullDevice.stringView
@@ -1450,7 +1025,7 @@ runDoccodeCases: function {r: Runner} is {
     doccodeJobs :r :blocks :naming dir: dir.stringView :pool :emitAt :fmtAt
     statuses: ListVal i32
     failSteps: ListVal i64
-    runJobs jobs: pool maxJobs: r.jobsMax :statuses :failSteps
+    zjobs.runJobs jobs: pool maxJobs: r.jobsMax :statuses :failSteps
     # per page: blocks skipped, blocks not laid out as zl fmt lays them
     noneN: ListVal u64
     fmtN: ListVal u64
@@ -1609,7 +1184,7 @@ doccodeJob: function {
     compiles: (tool.endsWith "emit") and (zcc.ccFamilyOf ccPath: r.cc.stringView).msvc.not
     steps: List PoolStep
     steps.append (
-        mkStep
+        zjobs.mkStep
         :argv
         cwd: ""
         outPath: os.nullDevice.stringView
@@ -1621,7 +1196,7 @@ doccodeJob: function {
     if compiles then {
         ccErrPath: "\{path}.c.err"
         steps.append (
-            mkStep
+            zjobs.mkStep
             argv: (doccodeCcArgv :r :path)
             cwd: ""
             outPath: os.nullDevice.stringView
@@ -1632,7 +1207,7 @@ doccodeJob: function {
         )
         if runs then doccodeRunSteps :r :path :steps
     }
-    return (mkJob name: path :steps)
+    return (zjobs.mkJob name: path :steps)
 }
 
 # doccodeRunSteps -- the two steps that run the example at `path`, onto
@@ -1650,7 +1225,7 @@ doccodeRunSteps: function {r: Runner.view path: StringView steps: List PoolStep}
     build.append from: bin.copy
     buildErr: "\{path}.build.err"
     steps.append (
-        mkStep
+        zjobs.mkStep
         argv: build
         cwd: ""
         outPath: os.nullDevice.stringView
@@ -1663,7 +1238,7 @@ doccodeRunSteps: function {r: Runner.view path: StringView steps: List PoolStep}
     run.append from: bin.copy
     outPath: "\{path}.out"
     steps.append (
-        mkStep
+        zjobs.mkStep
         argv: run
         cwd: ""
         outPath: outPath.stringView
@@ -2205,7 +1780,7 @@ runDocCases: function {r: Runner} is {
         steps: List PoolStep
         # the count rows go to zl's stdout, anything else it says to its stderr
         steps.append (
-            mkStep
+            zjobs.mkStep
             :argv
             cwd: ""
             outPath: opath.stringView
@@ -2214,11 +1789,11 @@ runDocCases: function {r: Runner} is {
             allowFail: true
             zlinkFrom: ""
         )
-        pool.append (mkJob name: f.stringView :steps)
+        pool.append (zjobs.mkJob name: f.stringView :steps)
     }
     statuses: ListVal i32
     failSteps: ListVal i64
-    runJobs jobs: pool maxJobs: r.jobsMax :statuses :failSteps
+    zjobs.runJobs jobs: pool maxJobs: r.jobsMax :statuses :failSteps
     baseKeys: List String
     baseCounts: ListVal u64
     readRatchetBaseline path: basePath.stringView keys: baseKeys counts: baseCounts
@@ -2383,7 +1958,7 @@ runRunCases: function {r: Runner} is {
     }
     runStatuses: ListVal i32
     runFailSteps: ListVal i64
-    runJobs jobs: runPool maxJobs: r.jobsMax statuses: runStatuses failSteps: runFailSteps
+    zjobs.runJobs jobs: runPool maxJobs: r.jobsMax statuses: runStatuses failSteps: runFailSteps
     passed: List String
     rji: u64
     for rji < runPool.length loop {
@@ -2448,7 +2023,7 @@ runCaseJob: function {r: Runner.view name: StringView dir: StringView} out PoolJ
     steps: List PoolStep
     if r.zcBuild then {
         steps.append (
-            mkStep
+            zjobs.mkStep
             argv: (zcBuildArgv :r :name srcdirs: srcAbs bin: bpath.stringView)
             cwd: ""
             outPath: os.nullDevice.stringView
@@ -2473,7 +2048,7 @@ runCaseJob: function {r: Runner.view name: StringView dir: StringView} out PoolJ
         }
         for each zf: r.zcFlags loop za.append from: zf.copy
         steps.append (
-            mkStep
+            zjobs.mkStep
             argv: za
             cwd: ""
             outPath: os.nullDevice.stringView
@@ -2492,7 +2067,7 @@ runCaseJob: function {r: Runner.view name: StringView dir: StringView} out PoolJ
             asan: false
         )
         steps.append (
-            mkStep
+            zjobs.mkStep
             argv: ga
             cwd: ""
             outPath: os.nullDevice.stringView
@@ -2504,7 +2079,7 @@ runCaseJob: function {r: Runner.view name: StringView dir: StringView} out PoolJ
         )
     }
     steps.append (
-        mkStep
+        zjobs.mkStep
         argv: (runArgv :r :name bin: bpath.stringView)
         cwd: rdir.stringView
         outPath: opath.stringView
@@ -2513,7 +2088,7 @@ runCaseJob: function {r: Runner.view name: StringView dir: StringView} out PoolJ
         allowFail: true
         zlinkFrom: ""
     )
-    return (mkJob :name :steps)
+    return (zjobs.mkJob :name :steps)
 }
 
 # zcBuildArgv -- `zc build` of RUN case `name` into `bin` with the C compiler
@@ -2631,7 +2206,7 @@ repeatRunCases: function {r: Runner names: (List String).view} is {
             opath: "\{repdir}/\{k}.out"
             steps: List PoolStep
             steps.append (
-                mkStep
+                zjobs.mkStep
                 argv: (runArgv :r name: n.stringView bin: bpath.stringView)
                 cwd: rdir.stringView
                 outPath: opath.stringView
@@ -2640,13 +2215,13 @@ repeatRunCases: function {r: Runner names: (List String).view} is {
                 allowFail: true
                 zlinkFrom: ""
             )
-            jobs.append (mkJob name: n.stringView :steps)
+            jobs.append (zjobs.mkJob name: n.stringView :steps)
             k = k + 1
         }
     }
     statuses: ListVal i32
     failSteps: ListVal i64
-    runJobs :jobs maxJobs: r.jobsMax :statuses :failSteps
+    zjobs.runJobs :jobs maxJobs: r.jobsMax :statuses :failSteps
     ji: u64
     for each n: names loop {
         bad: u64
@@ -3359,7 +2934,7 @@ runLeakCases: function {r: Runner} is {
                 outc: lc.stringView
             )
             steps.append (
-                mkStep
+                zjobs.mkStep
                 argv: za2
                 cwd: ""
                 outPath: os.nullDevice.stringView
@@ -3378,7 +2953,7 @@ runLeakCases: function {r: Runner} is {
                 asan: true
             )
             steps.append (
-                mkStep
+                zjobs.mkStep
                 argv: ga2
                 cwd: ""
                 outPath: os.nullDevice.stringView
@@ -3390,7 +2965,7 @@ runLeakCases: function {r: Runner} is {
             )
             ba2: binArgv bin: lb.stringView argsFile: argsFile.stringView
             steps.append (
-                mkStep
+                zjobs.mkStep
                 argv: ba2
                 cwd: runDir.stringView
                 outPath: os.nullDevice.stringView
@@ -3399,7 +2974,7 @@ runLeakCases: function {r: Runner} is {
                 allowFail: true
                 zlinkFrom: ""
             )
-            leakPool.append (mkJob name: nm :steps)
+            leakPool.append (zjobs.mkJob name: nm :steps)
         }
         di = di + 1
     }
@@ -3408,7 +2983,7 @@ runLeakCases: function {r: Runner} is {
     ek: sanEnvKey :bounds
     ev: sanEnvValue :bounds
     os.setEnv key: ek.stringView value: ev.stringView
-    runJobs jobs: leakPool maxJobs: r.jobsMax statuses: leakStatuses failSteps: leakFailSteps
+    zjobs.runJobs jobs: leakPool maxJobs: r.jobsMax statuses: leakStatuses failSteps: leakFailSteps
     os.unsetEnv key: ek.stringView
     lji: u64
     for lji < leakPool.length loop {
@@ -3482,7 +3057,7 @@ runErrorCases: function {r: Runner} is {
         )
         exf: "\{r.errors.stringView}/\{enm}.zcargs"
         steps.append (
-            mkStep
+            zjobs.mkStep
             argv: (withExtraArgs argv: eza file: exf.stringView)
             cwd: ""
             outPath: os.nullDevice.stringView
@@ -3491,11 +3066,11 @@ runErrorCases: function {r: Runner} is {
             allowFail: true
             zlinkFrom: ""
         )
-        errPool.append (mkJob name: enm :steps)
+        errPool.append (zjobs.mkJob name: enm :steps)
     }
     errStatuses: ListVal i32
     errFailSteps: ListVal i64
-    runJobs jobs: errPool maxJobs: r.jobsMax statuses: errStatuses failSteps: errFailSteps
+    zjobs.runJobs jobs: errPool maxJobs: r.jobsMax statuses: errStatuses failSteps: errFailSteps
     eji: u64
     for eji < errPool.length loop {
         ejob: errPool.get i: eji
@@ -3598,7 +3173,7 @@ loneErrorJob: function {
     pe: "\{r.tmp.stringView}/lone_\{name}.pe"
     steps: List PoolStep
     steps.append (
-        mkStep
+        zjobs.mkStep
         :argv
         cwd: ""
         outPath: os.nullDevice.stringView
@@ -3607,7 +3182,7 @@ loneErrorJob: function {
         allowFail: true
         zlinkFrom: ""
     )
-    pool.append (mkJob :name :steps)
+    pool.append (zjobs.mkJob :name :steps)
     return true
 }
 
@@ -3625,7 +3200,7 @@ runLoneErrorCases: function {r: Runner} is {
     for each ln: rcC.stringView.lines loop queueLoneErrorCase :r :ln :words :windows :pool
     statuses: ListVal i32
     failSteps: ListVal i64
-    runJobs jobs: pool maxJobs: r.jobsMax :statuses :failSteps
+    zjobs.runJobs jobs: pool maxJobs: r.jobsMax :statuses :failSteps
     for each job: pool loop checkLoneErrorJob :r name: job.name.stringView
 }
 
@@ -3702,7 +3277,7 @@ runZdataCases: function {r: Runner} is {
         errP: "\{r.tmp.stringView}/\{nm}.zderr"
         steps: List PoolStep
         steps.append (
-            mkStep
+            zjobs.mkStep
             argv: (withExtraArgs :argv file: xf.stringView)
             cwd: ""
             outPath: outP.stringView
@@ -3711,7 +3286,7 @@ runZdataCases: function {r: Runner} is {
             allowFail: true
             zlinkFrom: ""
         )
-        pool.append (mkJob name: nm :steps)
+        pool.append (zjobs.mkJob name: nm :steps)
         largv: List String
         largv.append from: "\{r.root.stringView}/bin/zl"
         largv.append from: "lint".string
@@ -3724,7 +3299,7 @@ runZdataCases: function {r: Runner} is {
         lerrP: "\{r.tmp.stringView}/\{nm}.zlerr"
         lsteps: List PoolStep
         lsteps.append (
-            mkStep
+            zjobs.mkStep
             argv: (withExtraArgs argv: largv file: xf.stringView)
             cwd: ""
             outPath: os.nullDevice.stringView
@@ -3734,11 +3309,11 @@ runZdataCases: function {r: Runner} is {
             zlinkFrom: ""
         )
         ljn: "\{nm}#zl"
-        pool.append (mkJob name: ljn.stringView steps: lsteps)
+        pool.append (zjobs.mkJob name: ljn.stringView steps: lsteps)
     }
     statuses: ListVal i32
     failSteps: ListVal i64
-    runJobs jobs: pool maxJobs: r.jobsMax :statuses :failSteps
+    zjobs.runJobs jobs: pool maxJobs: r.jobsMax :statuses :failSteps
     ji: u64
     for ji < pool.length loop {
         job: pool.get i: ji
@@ -3857,7 +3432,7 @@ runDumpCases: function {r: Runner} is {
                 # source names the flag, the way an error fixture does.
                 dxf: "\{srcAbs.stringView}/\{nameStr.stringView}.zcargs"
                 steps.append (
-                    mkStep
+                    zjobs.mkStep
                     argv: (withExtraArgs argv: da file: dxf.stringView)
                     cwd: ""
                     outPath: dpath.stringView
@@ -3866,13 +3441,13 @@ runDumpCases: function {r: Runner} is {
                     allowFail: true
                     zlinkFrom: ""
                 )
-                dumpPool.append (mkJob name: nameStr.stringView :steps)
+                dumpPool.append (zjobs.mkJob name: nameStr.stringView :steps)
             }
         }
     }
     dumpStatuses: ListVal i32
     dumpFailSteps: ListVal i64
-    runJobs jobs: dumpPool maxJobs: r.jobsMax statuses: dumpStatuses failSteps: dumpFailSteps
+    zjobs.runJobs jobs: dumpPool maxJobs: r.jobsMax statuses: dumpStatuses failSteps: dumpFailSteps
     dji: u64
     for dji < dumpPool.length loop {
         djob: dumpPool.get i: dji
@@ -4506,7 +4081,7 @@ runSmokeCases: function {r: Runner} is {
                     outc: cpath.stringView
                 )
                 steps.append (
-                    mkStep
+                    zjobs.mkStep
                     argv: za
                     cwd: ""
                     outPath: os.nullDevice.stringView
@@ -4525,7 +4100,7 @@ runSmokeCases: function {r: Runner} is {
                     asan: false
                 )
                 steps.append (
-                    mkStep
+                    zjobs.mkStep
                     argv: ga
                     cwd: ""
                     outPath: os.nullDevice.stringView
@@ -4537,7 +4112,7 @@ runSmokeCases: function {r: Runner} is {
                 )
                 ba: binArgv bin: bpath.stringView argsFile: ""
                 steps.append (
-                    mkStep
+                    zjobs.mkStep
                     argv: ba
                     cwd: ""
                     outPath: opath.stringView
@@ -4546,13 +4121,19 @@ runSmokeCases: function {r: Runner} is {
                     allowFail: true
                     zlinkFrom: ""
                 )
-                smokePool.append (mkJob name: nameStr.stringView :steps)
+                smokePool.append (zjobs.mkJob name: nameStr.stringView :steps)
             }
         }
     }
     smokeStatuses: ListVal i32
     smokeFailSteps: ListVal i64
-    runJobs jobs: smokePool maxJobs: r.jobsMax statuses: smokeStatuses failSteps: smokeFailSteps
+    (
+        zjobs.runJobs
+        jobs: smokePool
+        maxJobs: r.jobsMax
+        statuses: smokeStatuses
+        failSteps: smokeFailSteps
+    )
     sji: u64
     for sji < smokePool.length loop {
         sjob: smokePool.get i: sji
@@ -4727,7 +4308,7 @@ addSelfhostJob: function {
     }
     steps: List PoolStep
     steps.append (
-        mkStep
+        zjobs.mkStep
         argv: args
         cwd: ""
         outPath: os.nullDevice.stringView
@@ -4736,7 +4317,7 @@ addSelfhostJob: function {
         allowFail: true
         zlinkFrom: ""
     )
-    pool.append (mkJob :name :steps)
+    pool.append (zjobs.mkJob :name :steps)
     names.append from: name.string
     modes.append from: mode
     errs.append from: errPath
@@ -4876,7 +4457,13 @@ runSelfhostAsan: function {r: Runner} is {
             saek: sanEnvKey bounds: sabounds
             saev: sanEnvValue bounds: sabounds
             os.setEnv key: saek.stringView value: saev.stringView
-            runJobs jobs: saPool maxJobs: r.jobsMax statuses: saStatuses failSteps: saFailSteps
+            (
+                zjobs.runJobs
+                jobs: saPool
+                maxJobs: r.jobsMax
+                statuses: saStatuses
+                failSteps: saFailSteps
+            )
             os.unsetEnv key: saek.stringView
             svi: u64
             for svi < saPool.length loop {
