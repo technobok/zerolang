@@ -309,56 +309,30 @@ ci-corpus: bin/zc bin/zl bin/zls $(BUILDDIR)/ztestrunner
 	$(BUILDDIR)/ztestrunner --zc bin/zc --cc $(CC) --root . --heavy --jobs $(NPROC)
 
 # test-math-arm64 -- the math corpus cross-built for aarch64 and run under qemu
-# against the same goldens, on the builtin word primitives and on the generated
-# asm kernels. MATH_ARM64_REFUSED uses f128, which the backend refuses off
-# x86-64: it must fail with that refusal. Skipped without the cross tools.
-MATH_ARM64_DIR := $(BUILDDIR)/math-arm64
-MATH_ARM64_REFUSED := math_constants_wide
-test-math-arm64: bin/zc
-	@if ! command -v aarch64-linux-gnu-gcc >/dev/null 2>&1 || ! command -v qemu-aarch64 >/dev/null 2>&1; then \
-	  echo "test-math-arm64: skipped (needs aarch64-linux-gnu-gcc and qemu-aarch64)"; exit 0; fi; \
-	fail=0; n=0; \
-	for v in builtins asm; do \
-	  d=$(MATH_ARM64_DIR)/$$v; mkdir -p $$d; fl=""; \
-	  if [ $$v = builtins ]; then fl="--cflags -DZ_MATH_NOASM"; fi; \
-	  for f in tests/fixtures/emitc_corpus/math/*.z; do \
-	    b=$$(basename $$f .z); n=$$((n + 1)); \
-	    bin/zc build $$f --target aarch64-linux-gnu $$fl -o $$d/$$b > $$d/$$b.build 2>&1; rc=$$?; \
-	    case " $(MATH_ARM64_REFUSED) " in *" $$b "*) \
-	      grep -q "which only x86_64 targets have" $$d/$$b.build && [ $$rc -eq 1 ] \
-	        || { echo "test-math-arm64 FAIL ($$v): $$b must be refused for f128 (exit $$rc)"; fail=1; }; \
-	      continue;; \
-	    esac; \
-	    if [ $$rc -ne 0 ]; then \
-	      echo "test-math-arm64 FAIL ($$v): $$b does not build"; sed -n 1,3p $$d/$$b.build; fail=1; continue; fi; \
-	    qemu-aarch64 -L /usr/aarch64-linux-gnu $$d/$$b > $$d/$$b.out 2>&1; \
-	    cmp -s $$d/$$b.out tests/fixtures/run_golden/$$b.out \
-	      || { echo "test-math-arm64 FAIL ($$v): $$b differs from its golden"; fail=1; }; \
-	  done; \
-	done; \
-	if [ $$fail -ne 0 ]; then exit 1; fi; \
-	echo "test-math-arm64 OK: $$n math builds on aarch64 (builtins, asm), golden or refused as f128"
+# against the same goldens, on the builtin word primitives (-DZ_MATH_NOASM) and
+# on the generated asm kernels. The cases tests/arm64-known-failures.txt lists
+# are refused for aarch64 (f128, which only x86-64 has): any other outcome of
+# theirs fails. Skipped without the cross tools.
+ARM64_RUN = $(BUILDDIR)/ztestrunner --zc bin/zc --cc aarch64-linux-gnu-gcc --target aarch64-linux-gnu \
+  --exec "qemu-aarch64 -L /usr/aarch64-linux-gnu" --only run --known tests/arm64-known-failures.txt \
+  --root . --jobs $(NPROC)
+ARM64_TOOLS = command -v aarch64-linux-gnu-gcc >/dev/null 2>&1 && command -v qemu-aarch64 >/dev/null 2>&1
+test-math-arm64: bin/zc bin/zl $(BUILDDIR)/ztestrunner
+	@$(ARM64_TOOLS) || { echo "test-math-arm64: skipped (needs aarch64-linux-gnu-gcc and qemu-aarch64)"; exit 0; }; \
+	$(ARM64_RUN) --cases tests/fixtures/emitc_corpus/math > $(BUILDDIR)/math-arm64.log 2>&1 \
+	  || { cat $(BUILDDIR)/math-arm64.log; echo "test-math-arm64 FAIL (asm): a math program on aarch64 differs from its golden or is not refused as listed"; exit 1; }; \
+	$(ARM64_RUN) --cases tests/fixtures/emitc_corpus/math --ccflags -DZ_MATH_NOASM > $(BUILDDIR)/math-arm64.log 2>&1 \
+	  || { cat $(BUILDDIR)/math-arm64.log; echo "test-math-arm64 FAIL (builtins): a math program on aarch64 differs from its golden or is not refused as listed"; exit 1; }; \
+	echo "test-math-arm64 OK: the math corpus on aarch64 (asm and builtins) matches its goldens, f128 refused as listed"
 
-# test-sqlite-arm64 -- the sqlite corpus cross-built for aarch64 and run under
-# qemu against the same goldens: the vendored library compiled by the cross
-# compiler into the object cache and linked. Each program runs in the build
-# directory, since one writes and removes a database file in its working
-# directory. Skipped without the cross tools.
-SQLITE_ARM64_DIR := $(BUILDDIR)/sqlite-arm64
-test-sqlite-arm64: bin/zc
-	@if ! command -v aarch64-linux-gnu-gcc >/dev/null 2>&1 || ! command -v qemu-aarch64 >/dev/null 2>&1; then \
-	  echo "test-sqlite-arm64: skipped (needs aarch64-linux-gnu-gcc and qemu-aarch64)"; exit 0; fi; \
-	fail=0; n=0; d=$(SQLITE_ARM64_DIR); mkdir -p $$d; \
-	for f in tests/fixtures/emitc_corpus/sqlite_*.z; do \
-	  b=$$(basename $$f .z); n=$$((n + 1)); \
-	  bin/zc build $$f --target aarch64-linux-gnu -o $$d/$$b > $$d/$$b.build 2>&1 \
-	    || { echo "test-sqlite-arm64 FAIL: $$b does not build"; sed -n 1,3p $$d/$$b.build; fail=1; continue; }; \
-	  (cd $$d && qemu-aarch64 -L /usr/aarch64-linux-gnu ./$$b) > $$d/$$b.out 2>&1; \
-	  cmp -s $$d/$$b.out tests/fixtures/run_golden/$$b.out \
-	    || { echo "test-sqlite-arm64 FAIL: $$b differs from its golden"; fail=1; }; \
-	done; \
-	if [ $$fail -ne 0 ]; then exit 1; fi; \
-	echo "test-sqlite-arm64 OK: $$n sqlite programs built for aarch64 match their goldens"
+# test-sqlite-arm64 -- the sqlite programs (sqlite_*) cross-built for aarch64,
+# the vendored SQLite among their C sources, and run under qemu against their
+# goldens. Skipped without the cross tools.
+test-sqlite-arm64: bin/zc bin/zl $(BUILDDIR)/ztestrunner
+	@$(ARM64_TOOLS) || { echo "test-sqlite-arm64: skipped (needs aarch64-linux-gnu-gcc and qemu-aarch64)"; exit 0; }; \
+	$(ARM64_RUN) --cases sqlite_ > $(BUILDDIR)/sqlite-arm64.log 2>&1 \
+	  || { cat $(BUILDDIR)/sqlite-arm64.log; echo "test-sqlite-arm64 FAIL: a sqlite program on aarch64 differs from its golden"; exit 1; }; \
+	echo "test-sqlite-arm64 OK: the sqlite programs built for aarch64 match their goldens"
 
 # the wine prefix the Windows legs share (shim-guard, test-mingw), created
 # once and alone: wines that start in parallel on a missing prefix race to
@@ -628,38 +602,20 @@ windows-due:
 	fi
 
 # test-math-noasm -- the math corpus on math's C kernels (-DZ_MATH_NOASM).
-MATH_NOASM_DIR := $(BUILDDIR)/math-noasm
-test-math-noasm: bin/zc
-	@mkdir -p $(MATH_NOASM_DIR); fail=0; n=0; \
-	for f in tests/fixtures/emitc_corpus/math/*.z; do \
-	  b=$$(basename $$f .z); n=$$((n + 1)); \
-	  if ! bin/zc build $$f --cflags -DZ_MATH_NOASM -o $(MATH_NOASM_DIR)/$$b > $(MATH_NOASM_DIR)/$$b.build 2>&1; then \
-	    echo "test-math-noasm FAIL: $$b does not build"; sed -n 1,3p $(MATH_NOASM_DIR)/$$b.build; fail=1; continue; fi; \
-	  $(MATH_NOASM_DIR)/$$b > $(MATH_NOASM_DIR)/$$b.out 2>&1; \
-	  cmp -s $(MATH_NOASM_DIR)/$$b.out tests/fixtures/run_golden/$$b.out \
-	    || { echo "test-math-noasm FAIL: $$b differs from its golden"; fail=1; }; \
-	done; \
-	if [ $$fail -ne 0 ]; then exit 1; fi; \
-	echo "test-math-noasm OK: $$n math programs on math's C kernels"
+test-math-noasm: bin/zc bin/zl $(BUILDDIR)/ztestrunner
+	@$(BUILDDIR)/ztestrunner --zc bin/zc --cc $(CC) --ccflags -DZ_MATH_NOASM --only run \
+	   --cases tests/fixtures/emitc_corpus/math --root . --jobs $(NPROC) > $(BUILDDIR)/math-noasm.log 2>&1 \
+	  || { cat $(BUILDDIR)/math-noasm.log; echo "test-math-noasm FAIL: a math program on the C kernels differs from its golden"; exit 1; }; \
+	echo "test-math-noasm OK: the math corpus on math's C kernels matches its goldens"
 
-# test-portable-scalars -- every program naming i128, u128 or f16, built on
-# their struct forms (what tcc always takes) and compared with the native goldens.
-PORTABLE_SCALARS_DIR := $(BUILDDIR)/portable-scalars
-test-portable-scalars: bin/zc
-	@mkdir -p $(PORTABLE_SCALARS_DIR); fail=0; n=0; \
-	for f in examples/*.z tests/fixtures/emitc_corpus/*.z tests/fixtures/emitc_corpus/math/*.z; do \
-	  b=$$(basename $$f .z); \
-	  grep -qE '(^|[^A-Za-z0-9_])([iu]128|f16)([^A-Za-z0-9_]|$$)' $$f || continue; \
-	  [ -f tests/fixtures/run_golden/$$b.out ] || continue; \
-	  n=$$((n + 1)); \
-	  if ! bin/zc build $$f --system lib/system --cflags "-DZ_INT128_PORTABLE -DZ_F16_PORTABLE" -o $(PORTABLE_SCALARS_DIR)/$$b > $(PORTABLE_SCALARS_DIR)/$$b.build 2>&1; then \
-	    echo "test-portable-scalars FAIL: $$b does not build"; sed -n 1,3p $(PORTABLE_SCALARS_DIR)/$$b.build; fail=1; continue; fi; \
-	  $(PORTABLE_SCALARS_DIR)/$$b > $(PORTABLE_SCALARS_DIR)/$$b.out 2>&1; \
-	  cmp -s $(PORTABLE_SCALARS_DIR)/$$b.out tests/fixtures/run_golden/$$b.out \
-	    || { echo "test-portable-scalars FAIL: $$b differs from its golden"; fail=1; }; \
-	done; \
-	if [ $$fail -ne 0 ]; then exit 1; fi; \
-	echo "test-portable-scalars OK: $$n programs on the struct forms of i128, u128 and f16"
+# test-portable-scalars -- every run case whose source names i128, u128 or f16,
+# built on their struct forms (what tcc always takes) and compared with the
+# native goldens.
+test-portable-scalars: bin/zc bin/zl $(BUILDDIR)/ztestrunner
+	@$(BUILDDIR)/ztestrunner --zc bin/zc --cc $(CC) --ccflags "-DZ_INT128_PORTABLE -DZ_F16_PORTABLE" --only run \
+	   --cases-naming i128 --cases-naming u128 --cases-naming f16 --root . --jobs $(NPROC) > $(BUILDDIR)/portable-scalars.log 2>&1 \
+	  || { cat $(BUILDDIR)/portable-scalars.log; echo "test-portable-scalars FAIL: a program on the struct forms of i128, u128 and f16 differs from its golden"; exit 1; }; \
+	echo "test-portable-scalars OK: the programs naming i128, u128 or f16 match their goldens on the struct forms"
 
 # math-asm-guard -- the committed asm kernels (MATH_ASM) are what tools/asmgen
 # writes.

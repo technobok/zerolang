@@ -967,6 +967,8 @@ opt: list {
     exec: "--exec"
     tmp: "--tmp"
     known: "--known"
+    cases: "--cases"
+    casesNaming: "--cases-naming"
 } out staticlist StringView
 
 # kindWord -- the kinds `--only` runs alone, by the word it is given
@@ -1018,6 +1020,11 @@ Runner: class {
     # the RUN cases' expected failures (--known): a file of `<case> (<why>)`
     # lines; empty when none is given, and every failure fails
     known: String
+    # the RUN cases --cases selects, each a name prefix or a directory column;
+    # empty selects every case
+    cases: List String
+    # the words --cases-naming selects a RUN case by: one its source names
+    cases2: List String
     # how many jobs run at once. It comes from the machine rather than a typed
     # number, a default of 1 being silently serial on a many-core box
     jobsMax: u64
@@ -2333,148 +2340,219 @@ countRows: function {text: StringView codes: List String counts: ListVal u64} ou
 
 # runRunCases -- the RUN cases kind.
 runRunCases: function {r: Runner} is {
-    # ---------------- RUN cases ----------------
-    rcC: slurp path: r.runcases.stringView
-    rcv: rcC.stringView
     known: knownCases :r
     met: falseFlags n: known.length
     runPool: List PoolJob
-    words: zast.Vocab.create block: runnerWord
     windows: ztarget.targetIsWindows triple: r.target.stringView
-    for each ln: rcv.lines loop {
-        if ln.length > 0 then {
-            nameStr: String
-            dirStr: String
-            posixOnly: false
-            idx: u64
-            for each pc: (ln.split sep: " ") loop {
-                if pc.length > 0 then {
-                    if idx == 0 then {
-                        nameStr = pc.string
-                    } else if idx == 1 then {
-                        dirStr = pc.string
-                    } else {
-                        marked: (words.slotOf text: pc) == runnerWord.slot.casePosix
-                        if marked then posixOnly = true
-                    }
-                    idx = idx + 1
-                }
-            }
-            if posixOnly when windows then {
-                # what it checks has no Windows counterpart: listed, not run
-                runOutcome :r :known :met name: nameStr.stringView why: runWhy.slot.posix
-            } else if idx >= 2 then {
-                srcAbs: manifestDirs root: r.root.stringView column: dirStr.stringView
-                cpath: "\{r.tmp.stringView}/\{nameStr.stringView}.c"
-                bpath: "\{r.tmp.stringView}/\{nameStr.stringView}.bin"
-                opath: "\{r.tmp.stringView}/\{nameStr.stringView}.out"
-                rdir: "\{r.tmp.stringView}/run_\{nameStr.stringView}"
-                io.mkdirp path: rdir
-                argsFile: "\{r.rungold.stringView}/\{nameStr.stringView}.args"
-                steps: List PoolStep
-                za: (
-                    zcArgv
-                    zc: r.zc.stringView
-                    ccFwd: r.ccFwd.stringView
-                    name: nameStr.stringView
-                    srcdirs: srcAbs
-                    sys: r.sys.stringView
-                    outc: cpath.stringView
-                )
-                if r.target.length > 0 then {
-                    za.append from: "--target".string
-                    za.append from: r.target.copy
-                }
-                steps.append (
-                    mkStep
-                    argv: za
-                    cwd: ""
-                    outPath: os.nullDevice.stringView
-                    errPath: os.nullDevice.stringView
-                    timeoutSecs: 0
-                    allowFail: false
-                    zlinkFrom: ""
-                )
-                ga: (
-                    ccArgv
-                    cc: r.cc.stringView
-                    ccflags: r.ccflags.stringView
-                    target: r.target.stringView
-                    bin: bpath.stringView
-                    csrc: cpath.stringView
-                    asan: false
-                )
-                steps.append (
-                    mkStep
-                    argv: ga
-                    cwd: ""
-                    outPath: os.nullDevice.stringView
-                    errPath: os.nullDevice.stringView
-                    timeoutSecs: 0
-                    allowFail: false
-                    zlinkFrom: cpath.stringView
-                    zc: r.zc.stringView
-                )
-                ba: binArgv bin: bpath.stringView argsFile: argsFile.stringView
-                if r.exec.length > 0 then {
-                    under: List String
-                    under.append from: r.exec.copy
-                    for each arg: ba loop under.append from: arg.copy
-                    ba = under.take
-                }
-                steps.append (
-                    mkStep
-                    argv: ba
-                    cwd: rdir.stringView
-                    outPath: opath.stringView
-                    errPath: os.nullDevice.stringView
-                    timeoutSecs: r.timeoutSecs
-                    allowFail: true
-                    zlinkFrom: ""
-                )
-                runPool.append (mkJob name: nameStr.stringView :steps)
-            }
-        }
+    for each c: (runCaseLines :r) loop {
+        if (isSelected :r name: c.name.stringView dir: c.dir.stringView).false then {
+            markUnselected :known :met name: c.name.stringView
+        } else if c.posix when windows then {
+            # what it checks has no Windows counterpart: listed, not run
+            runOutcome :r :known :met name: c.name.stringView why: runWhy.slot.posix
+        } else runPool.append (runCaseJob :r name: c.name.stringView dir: c.dir.stringView)
     }
     runStatuses: ListVal i32
     runFailSteps: ListVal i64
     runJobs jobs: runPool maxJobs: r.jobsMax statuses: runStatuses failSteps: runFailSteps
     rji: u64
     for rji < runPool.length loop {
-        rjob: runPool.get i: rji
-        rnm: rjob.name.stringView
-        rfail: runFailSteps.get i: rji
-        if rfail == 0 then {
-            runOutcome :r :known :met name: rnm why: runWhy.slot.zc
-        } else if rfail == 1 then {
-            runOutcome :r :known :met name: rnm why: runWhy.slot.cc
-        } else {
-            opath: "\{r.tmp.stringView}/\{rnm}.out"
-            gold: goldenFor :r name: rnm ext: ".out"
-            exitFile: goldenFor :r name: rnm ext: ".exit"
-            if (io.exists path: gold).not then {
-                r.skip = r.skip + 1
-            } else {
-                goldC: slurp path: gold.stringView
-                outC: slurp path: opath.stringView
-                expStr: "0".string
-                if (io.exists path: exitFile) then {
-                    rawx: slurp path: exitFile.stringView
-                    rxv: rawx.stringView
-                    tvw: rxv.trim
-                    expStr = tvw.string
-                }
-                codeStr: "\{runStatuses.get i: rji}"
-                sameOut: outC.stringView == goldC
-                sameExit: codeStr.stringView == expStr
-                if sameOut when sameExit then {
-                    r.passN = r.passN + 1
-                } else runOutcome :r :known :met name: rnm why: runWhy.slot.run
-            }
-        }
+        (
+            judgeRunCase
+            :r
+            :known
+            :met
+            name: (runPool.get i: rji).name.stringView
+            status: (runStatuses.get i: rji)
+            failStep: (runFailSteps.get i: rji)
+        )
         rji = rji + 1
     }
     knownLeft :r :known :met
+}
+
+# RunCaseLine -- one line of the RUN case list: the case, its directory
+# column, and whether it checks something only POSIX has
+RunCaseLine: class {
+    name: String
+    dir: String
+    posix: bool
+}
+
+# runCaseLines -- the RUN case list's lines with a name and a directory
+runCaseLines: function {r: Runner.view} out List RunCaseLine is {
+    lines: List RunCaseLine
+    words: zast.Vocab.create block: runnerWord
+    text: slurp path: r.runcases.stringView
+    for each ln: text.stringView.lines loop {
+        cols: List String
+        for each pc: (ln.split sep: " ") loop {
+            if pc.length > 0 then cols.append pc.string
+        }
+        if cols.length >= 2 then {
+            posix: false
+            k: 2.u64
+            for k < cols.length loop {
+                if (
+                    (words.slotOf text: (cols.get i: k).stringView) == runnerWord.slot.casePosix
+                ) then posix = true
+                k = k + 1
+            }
+            lines.append (RunCaseLine name: (cols.get i: 0).copy dir: (cols.get i: 1).copy :posix)
+        }
+    }
+    return lines
+}
+
+# runCaseJob -- RUN case `name`'s job: emit, compile, then run under --exec's
+# words when it gives some
+runCaseJob: function {r: Runner.view name: StringView dir: StringView} out PoolJob is {
+    srcAbs: manifestDirs root: r.root.stringView column: dir
+    cpath: "\{r.tmp.stringView}/\{name}.c"
+    bpath: "\{r.tmp.stringView}/\{name}.bin"
+    opath: "\{r.tmp.stringView}/\{name}.out"
+    rdir: "\{r.tmp.stringView}/run_\{name}"
+    io.mkdirp path: rdir
+    argsFile: "\{r.rungold.stringView}/\{name}.args"
+    steps: List PoolStep
+    za: (
+        zcArgv
+        zc: r.zc.stringView
+        ccFwd: r.ccFwd.stringView
+        :name
+        srcdirs: srcAbs
+        sys: r.sys.stringView
+        outc: cpath.stringView
+    )
+    if r.target.length > 0 then {
+        za.append from: "--target".string
+        za.append from: r.target.copy
+    }
+    steps.append (
+        mkStep
+        argv: za
+        cwd: ""
+        outPath: os.nullDevice.stringView
+        errPath: os.nullDevice.stringView
+        timeoutSecs: 0
+        allowFail: false
+        zlinkFrom: ""
+    )
+    ga: (
+        ccArgv
+        cc: r.cc.stringView
+        ccflags: r.ccflags.stringView
+        target: r.target.stringView
+        bin: bpath.stringView
+        csrc: cpath.stringView
+        asan: false
+    )
+    steps.append (
+        mkStep
+        argv: ga
+        cwd: ""
+        outPath: os.nullDevice.stringView
+        errPath: os.nullDevice.stringView
+        timeoutSecs: 0
+        allowFail: false
+        zlinkFrom: cpath.stringView
+        zc: r.zc.stringView
+    )
+    ba: binArgv bin: bpath.stringView argsFile: argsFile.stringView
+    if r.exec.length > 0 then {
+        under: List String
+        for each w: (r.exec.stringView.split sep: " ") loop {
+            if w.length > 0 then under.append from: w.string
+        }
+        for each arg: ba loop under.append from: arg.copy
+        ba = under.take
+    }
+    steps.append (
+        mkStep
+        argv: ba
+        cwd: rdir.stringView
+        outPath: opath.stringView
+        errPath: os.nullDevice.stringView
+        timeoutSecs: r.timeoutSecs
+        allowFail: true
+        zlinkFrom: ""
+    )
+    return (mkJob :name :steps)
+}
+
+# judgeRunCase -- RUN case `name`'s verdict from its job's `status` and
+# `failStep`: refused by zc, its C not built, or its output and exit code
+# against its goldens
+judgeRunCase: function {
+    r: Runner
+    known: (List KnownCase).view
+    met: ListVal bool
+    name: StringView
+    status: i32
+    failStep: i64
+} is {
+    if failStep == 0 then {
+        runOutcome :r :known :met :name why: runWhy.slot.zc
+    } else if failStep == 1 then {
+        runOutcome :r :known :met :name why: runWhy.slot.cc
+    } else {
+        opath: "\{r.tmp.stringView}/\{name}.out"
+        gold: goldenFor :r :name ext: ".out"
+        exitFile: goldenFor :r :name ext: ".exit"
+        if (io.exists path: gold).not then {
+            r.skip = r.skip + 1
+        } else {
+            goldC: slurp path: gold.stringView
+            outC: slurp path: opath.stringView
+            expStr: "0".string
+            if (io.exists path: exitFile) then {
+                rawx: slurp path: exitFile.stringView
+                rxv: rawx.stringView
+                tvw: rxv.trim
+                expStr = tvw.string
+            }
+            codeStr: "\{status}"
+            sameOut: outC.stringView == goldC
+            sameExit: codeStr.stringView == expStr
+            if sameOut when sameExit then {
+                r.passN = r.passN + 1
+            } else runOutcome :r :known :met :name why: runWhy.slot.run
+        }
+    }
+}
+
+# isSelected -- the RUN case `name`, listed under directory `dir`, is one a
+# selector names: its name starts with a --cases text, its directory is one,
+# or its source names a --cases-naming word as a whole word; every case when
+# there is no selector
+isSelected: function {r: Runner.view name: StringView dir: StringView} out bool is {
+    if (r.cases.length == 0) and (r.cases2.length == 0) then return true
+    for each c: r.cases loop {
+        if (name.startsWith c) or (dir == c) then return true
+    }
+    if r.cases2.length == 0 then return false
+    src: slurp path: "\{r.root}/\{dir}/\{name}.z".stringView
+    for each w: r.cases2 loop {
+        if (namesWord text: src.stringView word: w.stringView) then return true
+    }
+    return false
+}
+
+# namesWord -- `text` holds `word` with no name byte on either side of it
+namesWord: function {text: StringView word: StringView} out bool is {
+    pos: u64
+    for pos < text.length loop {
+        at: ((text.substring from: pos to: text.length).indexOf word).or d: text.length
+        if at == text.length then return false
+        start: pos + at
+        end: start + word.length
+        before: (text.byteAt i: start - 1).or d: 0
+        after: (text.byteAt i: end).or d: 0
+        if (start == 0) or (ascii.isWord b: before).false when (ascii.isWord b: after
+        ).false then return true
+        pos = start + 1
+    }
+    return false
 }
 
 # runWhy -- why a RUN case did not pass, as an expected-failure line spells it
@@ -2521,6 +2599,16 @@ knownCases: function {r: Runner} out List KnownCase is {
         }
     }
     return cases
+}
+
+# markUnselected -- a listed expected failure of RUN case `name`, which no
+# selector chose, counts as met: a case this run does not build says nothing
+markUnselected: function {known: (List KnownCase).view met: ListVal bool name: StringView} is {
+    i: u64
+    for i < known.length loop {
+        if (known.get :i).name == name then met.set :i val: true
+        i = i + 1
+    }
 }
 
 # falseFlags -- `n` flags, each false
@@ -4730,6 +4818,10 @@ printUsage: function is {
     io.eprintln "  --report        exit 0 whatever failed"
     io.eprintln "  --regen-lsp     rewrite the LSP goldens from this run's answers"
     io.eprintln "  --regen-usage   rewrite each usage case's expected files from this run's answers"
+    io.eprintln "  --known FILE    the run cases' expected failures, one `<case> (<why>)` a line"
+    io.eprintln "  --cases TEXT    run only the run cases whose name starts with TEXT or whose"
+    io.eprintln "                  directory is TEXT (repeats)"
+    io.eprintln "  --cases-naming WORD  run only the run cases whose source names WORD (repeats)"
     io.eprintln "  --only KIND     run one kind alone:"
     io.eprintln "                  run      the run cases; --target TRIPLE builds them for another"
     io.eprintln "                           system and --exec PROGRAM runs each one under that program"
@@ -4783,6 +4875,24 @@ runnerSpec: function out cli.Spec is {
     addValue :sp name: opt.tmp
     addValue :sp name: opt.only
     addValue :sp name: opt.known
+    (
+        cli.addOption
+        spec: sp
+        name: opt.cases.string
+        shortName: "".string
+        help: "".string
+        required: false
+        repeats: true
+    )
+    (
+        cli.addOption
+        spec: sp
+        name: opt.casesNaming.string
+        shortName: "".string
+        help: "".string
+        required: false
+        repeats: true
+    )
     return sp
 }
 
@@ -4903,6 +5013,8 @@ runnerFrom: function {p: cli.Parsed.view} out Runner is {
         sys: String
         tmp: (textOr :p name: opt.tmp d: "")
         known: (textOr :p name: opt.known d: "")
+        cases: (p.optionAll name: opt.cases)
+        cases2: (p.optionAll name: opt.casesNaming)
         jobsMax: (jobsOf :p)
         timeoutSecs: (timeoutOf :p)
         heavy: (p.hasFlag name: opt.heavy)
