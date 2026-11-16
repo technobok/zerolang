@@ -189,6 +189,7 @@ opt: list {
     onlyC: "--c"
     emitter: "--emitter"
     register: "--register"
+    link: "--link"
 } out staticlist StringView
 
 # operand -- the name of each operand a command takes, as its usage line and a
@@ -336,6 +337,7 @@ cobjSpec: function out cli.Spec is {
     sp: newSpec prog: "zc"
     addToolchain :sp
     addValue :sp name: opt.cflags repeats: false
+    addSwitch :sp name: opt.link
     addOperand :sp name: operand.cFile
     return sp
 }
@@ -427,7 +429,7 @@ printUsage: function is {
     io.eprintln "info:"
     io.eprintln "  env                  print resolved tool paths and settings"
     io.eprintln "  cobj <file.c>        build the C sources an emitted file's units need, print"
-    io.eprintln "                       their cached objects"
+    io.eprintln "                       their cached objects (and, with --link, its libraries)"
     io.eprintln "  version              print the version"
     io.eprintln "  help [command]       print usage, or help for one command"
     io.eprintln ""
@@ -523,11 +525,13 @@ printCommandHelp: function {zv: zast.Vocab.view cmd: StringView} is {
         io.eprintln "the C compiler, the target triple, and the version."
     } else if w == zcWord.slot.vCobj then {
         io.eprintln "usage: zc cobj <file.c> [--cc CC] [--target TRIPLE] [--cc-mode MODE] [--tcc-lib DIR]"
-        io.eprintln "               [--cflags STR] [--system DIR]"
+        io.eprintln "               [--cflags STR] [--system DIR] [--link]"
         io.eprintln "Compile each C source the emitted file's `/* zcsrc: */` header names (a unit's"
         io.eprintln "vendored library) with the compiler that will link it, into the object cache,"
         io.eprintln "and print each object's path: link them after the .c file. Cached by source,"
-        io.eprintln "compiler, target and defines; $ZC_OBJ_CACHE moves the cache."
+        io.eprintln "compiler, target and defines; $ZC_OBJ_CACHE moves the cache. --link prints,"
+        io.eprintln "after the objects, each library the header's `/* zlink: */` line declares, as"
+        io.eprintln "the compiler names one (-lX, or X.lib for cl): the whole link of the file."
     } else if w == zcWord.slot.vInit then {
         io.eprintln "usage: zc init [dir]"
         io.eprintln "Make dir (default .) a project: write its project.zd, and a main.z when"
@@ -1364,6 +1368,8 @@ ZcFlags: class {
     # written; the rows are then read from their nativec.zd files, which
     # carry the places
     markNatives: bool
+    # --link: `zc cobj` prints the libraries the file declares after its objects
+    link: bool
     # --eager: typecheck every definition, not only what main reaches
     eagerCheck: bool
     # under `run`, the arguments that belong to the program and not to zc:
@@ -1403,6 +1409,7 @@ ZcFlags: class {
             readableNames: (p.hasFlag name: opt.readableNames)
             nativecFiles: (p.hasFlag name: opt.nativecFiles)
             markNatives: (p.hasFlag name: opt.markNatives)
+            link: (p.hasFlag name: opt.link)
             eagerCheck: (p.hasFlag name: opt.eager)
             :progArgs
         )
@@ -1921,7 +1928,8 @@ objectsForBuild: function {
 
 # printObjectsAndExit -- `zc cobj <file.c>`: the cached object of each C source
 # the emitted file's header names, built first where needed, one path a line
-# (stdout), then stop
+# (stdout), and with --link then each library its header declares, as the
+# compiler names one (`-lX`, or cl's `X.lib`); then stop
 printObjectsAndExit: function {cf: ZcFlags.view zv: zast.Vocab.view} is {
     text: String
     rd: io.readText path: cf.unitname
@@ -1950,6 +1958,13 @@ printObjectsAndExit: function {cf: ZcFlags.view zv: zast.Vocab.view} is {
         if lines.length > 0 then lines.append "\n"
         lines.append o
     }
+    if cf.link then {
+        fam: zcc.ccFamilyOf ccPath: cc.stringView
+        for each lib: (zcobj.linksOf csrc: text.stringView) loop {
+            if lines.length > 0 then lines.append "\n"
+            lines.append (zcc.libraryArg f: fam name: lib.stringView)
+        }
+    }
     if lines.length > 0 then print lines
     os.exit code: 0
 }
@@ -1965,32 +1980,6 @@ refuseBadTarget: function {targetTriple: StringView} is {
     tm: "zc: \{te.stringView}"
     io.eprintln tm
     os.exit code: 2
-}
-
-# zlinkLibsOf -- the libraries an emitted C file's `/* zlink: ... */` header
-# names, which is where emitC records every library the program links.
-zlinkLibsOf: function {csrc: StringView} out List String is {
-    r: List String
-    n: u64
-    for each ln: csrc.lines loop {
-        n = n + 1
-        if n > 8 then break
-        lo: ln.stripPrefix p: "/* zlink:"
-        if lo.some then {
-            # the words up to the comment's close
-            wordsEnd: lo.length
-            ce: lo.indexOf needle: "*/"
-            if ce.some then {
-                wordsEnd = ce
-            }
-            words: lo.substring from: 0 to: wordsEnd
-            for each w: (words.split sep: " ") loop {
-                if w.length > 0 then r.append from: w.string
-            }
-            return r
-        }
-    }
-    return r
 }
 
 # emitCSource -- the C for the whole program, with any emitter refusal reported
@@ -2355,7 +2344,7 @@ compileUnit: function {
     }
     # the link line is the artifact's own: the reached units' libraries, the
     # ones the C backend added among them
-    linkLibs: zlinkLibsOf csrc: csrc.stringView
+    linkLibs: zcobj.linksOf csrc: csrc.stringView
     (
         buildAndRun
         :cf
