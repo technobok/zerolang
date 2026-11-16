@@ -252,8 +252,7 @@ shall be dual licensed as above, without any additional terms or conditions.
 
 `zc` compiles the parts of the standard library (`lib/system/`, its units'
 C in each `nativec.zd` among them) that a program reaches into the C it emits, so they
-end up in the binary you build -- as Rust's standard library and Go's runtime
-end up in theirs. Those portions stay under their own licenses: this
+end up in the binary you build. Those portions stay under their own licenses: this
 project's, and for a standard-library unit ported from third-party source,
 that source's license as well (see the table below). Whoever distributes a
 binary includes the notices for what it carries. None of these licenses
