@@ -1,0 +1,54 @@
+# result_or_panic -- Result, ResultVR and ResultView answer their ok payload
+# through `orPanic` where the error has text (StringViewable), and panic with
+# that text on an err; an io result, whose IoError has none, is matched as
+# before. The last call panics: the program exits 1 after its output.
+public: unit {
+    :main
+}
+
+# Fault -- an error with text
+Fault: class {
+    message: String
+} as {
+    stringViewable: StringViewable.implement
+    stringView: function {f: this.view} outx StringView is {
+        return f.message.stringView
+    }
+}
+
+# word -- the text at `i` of `ws`, viewed, or a Fault naming the index
+word: function {ws: (List String).view i: u64} outx (ResultView String E: Fault) is {
+    if i < ws.length then {
+        w: ws.get :i
+        return ((ResultView String E: Fault).ok from: w)
+    }
+    return ((ResultView String E: Fault).err (Fault message: "no word \{i}"))
+}
+
+# number -- `s` read as a number, or a Fault saying it is none
+number: function {s: StringView} out (ResultVR u64 E: Fault) is {
+    p: s.parseU64
+    if p.ok then return ((ResultVR u64 E: Fault).ok p)
+    return ((ResultVR u64 E: Fault).err (Fault message: "'\{s}' is no number"))
+}
+
+# greeting -- a greeting, or a Fault when there is no name
+greeting: function {name: StringView} out (Result String E: Fault) is {
+    if name.length == 0 then return ((Result String E: Fault).err (Fault message: "no name".string))
+    return ((Result String E: Fault).ok "hello, \{name}")
+}
+
+main: function is {
+    print (greeting name: "zd").orPanic
+    print "\{(number s: "42").orPanic + 1}"
+    ws: List String
+    ws.append "alpha".string
+    ws.append "beta".string
+    print (word :ws i: 1).orPanic
+    r: io.readText path: "no/such/file.txt"
+    match (
+        r
+    ) case ok then print "read" case err then print "unreadable"
+    print (word :ws i: 5).orPanic
+    print "not reached"
+}

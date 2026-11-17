@@ -58,6 +58,7 @@ public: unit {
     :Result
     :ResultVR
     :ResultRV
+    :ResultView
     :resultval
     :parseerror
     :utf8error
@@ -2969,6 +2970,18 @@ Result: union {
     # the error type; making it a parameter is what lets each subsystem name its
     # own failures
     E: AnyRef.generic
+    # the ok payload, viewed, or a panic with the error's text -- for an err
+    # that means a bug, not a case to handle. Only where the error has text:
+    # `E` must be StringViewable (a method bound)
+    orPanic: function as { E: StringViewable.generic } in {r: this.view} outx T.view is {
+        match (
+            r
+        ) case ok then {
+            return r
+        } case err then {
+            panic msg: r.stringView
+        }
+    }
 }
 
 # The mixed result: a VALUE on success, a reference error -- named as MapVR is,
@@ -2986,6 +2999,44 @@ ResultVR: union {
     t: anyval.generic
     # the reference error type, as Result's
     E: AnyRef.generic
+    # the ok value, or a panic with the error's text, as Result's: only where
+    # `E` is StringViewable
+    orPanic: function as { E: StringViewable.generic } in {r: this.view} out t is {
+        match (
+            r
+        ) case ok then {
+            return r
+        } case err then {
+            panic msg: r.stringView
+        }
+    }
+}
+
+# ResultView -- Result's view twin, as OptionView is Option's: a failure, or a
+# readonly VIEW of a value that lives elsewhere -- inside the receiver or a
+# view argument of the call that answered it (`outx`), so it cannot outlive
+# that. The ok arm is built with `from:`, (ResultView T E: E).ok from: v.
+ResultView: union {
+    # the failure payload, owned
+    err: E
+    # a readonly view of the value; it never owns it
+    ok: T.view
+} as {
+    # the REFERENCE type viewed
+    T: AnyRef.generic
+    # the reference error type, as Result's
+    E: AnyRef.generic
+    # the viewed value, or a panic with the error's text, as Result's: only
+    # where `E` is StringViewable
+    orPanic: function as { E: StringViewable.generic } in {r: this.view} outx T.view is {
+        match (
+            r
+        ) case ok then {
+            return r
+        } case err then {
+            panic msg: r.stringView
+        }
+    }
 }
 
 # The other mixed result: a REFERENCE on success, a value error -- named as

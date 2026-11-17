@@ -92,7 +92,7 @@ module Rouge
           MapEntryVV MapItemIter MapItemIterRV MapItemIterVR MapItemIterVV MapKeyIter
           MapKeyIterRV MapKeyIterVR MapKeyIterVV MapRR MapRV MapVR
           MapVV Option OptionView OptionViewVal OptionMut OptionMutVal Path PathView Reader
-          RefHashable Releasing Result ResultRV ResultVR Seeker Set SetIter SetIterVal
+          RefHashable Releasing Result ResultRV ResultVR ResultView Seeker Set SetIter SetIterVal
           SetRef SetVal SpanPair SpanVal Splitter StaticIter StaticView String StringLike StringView StringViewable
           TextReader Writer _ anyfloat anyint anynumber anyval array
           bool break c32 c8 continue

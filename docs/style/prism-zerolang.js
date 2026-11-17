@@ -67,7 +67,7 @@
         'i8', 'i16', 'i32', 'i64', 'i128',
         'f16', 'f32', 'f64', 'f128', 'c8', 'c32', 'bool',
         'String', 'StringView', 'StringViewable', 'StringLike', 'AnyRef', 'anyval', 'RefHashable', 'valhashable', 'Releasing',
-        'Option', 'optionval', 'OptionView', 'OptionViewVal', 'OptionMut', 'OptionMutVal', 'Result', 'ResultVR', 'ResultRV', 'resultval', 'converror', 'Box', 'intrange',
+        'Option', 'optionval', 'OptionView', 'OptionViewVal', 'OptionMut', 'OptionMutVal', 'Result', 'ResultVR', 'ResultRV', 'ResultView', 'resultval', 'converror', 'Box', 'intrange',
         'array', 'str', 'text', 'List', 'ListRef', 'ListVal', 'ListView', 'ListViewVal', 'ListIter', 'ListIterVal', 'ListIterMut', 'ListIterMutVal', 'StaticIter', 'StaticView', 'SpanVal', 'SpanPair', 'Set', 'SetRef', 'SetVal', 'SetIter', 'SetIterVal', 'Bytes', 'ByteView',
         'IdMapR', 'IdMapV', 'IdMapEntryR', 'IdMapEntryV', 'IdMapItemIterR', 'IdMapItemIterV', 'IdSet', 'IdSetIter',
         'CpIter', 'LinesIter', 'Splitter', 'TextReader', 'intliteral', 'floatliteral', 'textliteral', 'idkey', 'anyint', 'anyfloat', 'anynumber', 'staticindex', 'staticmember', 'staticlist', 'parseerror', 'utf8error',
