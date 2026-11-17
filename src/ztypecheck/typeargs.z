@@ -1370,7 +1370,16 @@ resolveTyperefCallShell: function {
         return ztypes.tid.zero
     }
     if headIsGeneric.not when hn9.length > 0 then {
-        return (plainHeadOrShell :st :scope :ast :unitDecl :callableId suffix: suffix.stringView)
+        return (
+            plainHeadOrShell
+            :st
+            :scope
+            :ast
+            :unitDecl
+            :callableId
+            suffix: suffix.stringView
+            :thisName
+        )
     }
     return (st.reg.newType name: suffix.stringView typetype: ztypes.ztypetype.recordType)
 }
@@ -1379,7 +1388,8 @@ resolveTyperefCallShell: function {
 # no generic template. A head that resolves takes no arguments at all,
 # whatever is written for one (`i64 "s"`): it is refused, and the head
 # answers, as where the arguments settle (completeApplication). A head that
-# does not resolve yet is the shell named `suffix`.
+# does not resolve yet is the shell named `suffix`. `thisName` is the type
+# being declared, whose parameters its fields' types name.
 plainHeadOrShell: function {
     st: zenv.ZSymbolTable
     scope: ztypes.declid
@@ -1387,12 +1397,13 @@ plainHeadOrShell: function {
     unitDecl: ztypes.declid
     callableId: zast.nodeid
     suffix: StringView
+    thisName: StringView
 } out ztypes.tid is {
     plain: typeApplicationTemplate :st :scope :ast :unitDecl callableNid: callableId
     if plain.isZero then {
-        # a number is no name a later definition could give a type to
         cn: ast.nodes.get i: callableId
         hn: atomNameId :ast n: cn
+        # a number is no name a later definition could give a type to
         if hn.notZero when (isNumericLiteralNameAt :ast ref: hn) then (
             addError
             :st
@@ -1402,10 +1413,49 @@ plainHeadOrShell: function {
             e: zast.err.typeError
             msg: "'\{zast.nameTextAt :ast ref: hn}' is a number, not a type: it takes no arguments"
         )
+        # a generic parameter stands for one type, which takes no arguments
+        # here: the parameter answers, as a plain head does
+        gp: headGenericParam :st :ast :scope :hn :thisName nid: callableId
+        if gp.notZero then {
+            gpn: zast.nameTextAt :ast ref: hn
+            (
+                addError
+                :st
+                nodeid: callableId
+                lineno: (nodeLine n: cn)
+                colno: (nodeCol n: cn)
+                e: zast.err.genericError
+                msg: "'\{gpn}' is a generic parameter: it takes no type arguments"
+            )
+            return gp
+        }
         return (st.reg.newType name: suffix typetype: ztypes.ztypetype.recordType)
     }
     refuseNonGenericApplication :st :ast tplId: plain at: callableId
     return plain
+}
+
+# headGenericParam -- the generic parameter a type application's head `hn`
+# names: one a declaration at or around `scope` owns, or one the type being
+# declared (`thisName`) owns -- its fields' types resolve in the scope around
+# it. 0 when the head names no generic parameter.
+headGenericParam: function {
+    st: zenv.ZSymbolTable
+    ast: Ast
+    scope: ztypes.declid
+    hn: zast.nameid
+    thisName: StringView
+    nid: zast.nodeid
+} out ztypes.tid is {
+    if hn.isZero or (isNumericLiteralNameAt :ast ref: hn) then return ztypes.tid.zero
+    own: scope
+    if thisName.length > 0 then {
+        od: st.typing.declFindChild parentDeclId: scope nameId: (nameIdOf :ast name: thisName)
+        if od.notZero then own = od
+    }
+    gp: declare.genericParamInScope :st :ast scope: own nameId: hn :nid
+    if (st.reg.typetypeOf typeId: gp) != ztypes.ztypetype.genericParam then return ztypes.tid.zero
+    return gp
 }
 
 # the base type name of parameter operation `op`.
