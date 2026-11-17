@@ -1,0 +1,125 @@
+#doc.lang: en
+
+#//: Zerolang Standard Library: zd
+
+#doc.title: Zerolang Standard Library -- zd
+#doc.content type=main id=content
+#doc.heading.number level=4
+#doc.heading.anchor level=4
+#doc.link rel=stylesheet href=style/zerolang.css
+#doc.link rel=icon type=image/png sizes=192x192 href=style/favicon-192x192.png
+#doc.link rel=icon type=image/x-icon href=style/favicon-48x48.ico
+#doc.link rel=icon type=image/png sizes=32x32 href=style/favicon-32x32.png
+#doc.link rel=icon type=image/png sizes=16x16 href=style/favicon-16x16.png
+
+#doc.script src=style/tocbot.min.js
+#doc.script src=style/init.js
+#doc.script src=style/prism.min.js
+#doc.script src=style/prism-zerolang.js
+#doc.author: pw <p@zerolang.org>
+#doc.datecreated: 2026-11-17
+#doc.version: v0.1
+
+#doc.body class=toc-sidebar
+#nav id=nav: [#include literal=true: style/nav.html]
+
+#header:
+  #-: zd
+
+#nav id=toc class=toc-sidebar:
+  #div id=tocfile: Table of Contents
+  #doc.toc
+
+
+#--: Overview
+
+The declarations live in #~"lib/system/zd.z", which is the one place they are
+written; every definition there carries its own doc comment, and #~"zls" shows
+each on hover. This page explains how the unit is used.
+
+The #~"zd" unit reads and writes [#> to=./zdata.html: data files] (#~".zd")
+while a program runs. A read turns the file into a tree of #b:"entries". Every
+value sits in an #~"Entry", which says where the value was written, under which
+name, at which path, and with which type, and holds a #~"Node": the value
+itself. The node is a union, so a #~"match" on it must name every arm.
+
+A read needs no compiler in the program. It checks each field and arm name
+against the file's own #~"data" and #~"choice" declarations, and it applies the
+defaults those declarations give. A file that needs the compiler -- one that
+names another unit's type, refers to another definition, or computes a value
+with an operator or an interpolation -- is refused, and the refusal names what
+and where. #~"zc data" stays the full check of a data file.
+
+#--: Reading
+
+#~"zd.read path:" reads a file; #~"zd.parse source: file:" reads text that a
+program already holds. Both answer a #~"Result": the file's entry, or a
+#~"zd.Error". An error's text is #~"file:line:column: path: what", and
+#~"orPanic" prints it when the program cannot go on.
+
+A file #~"known.zd" that declares #~"failure: data { program: text  stage:
+text }" and lists its values in #~"failures: list { ... }" reads so:
+
+#code language=zerolang: """
+  main: function is {
+      doc: (zd.read path: "known.zd").orPanic
+      for each row: (doc.itemsAt path: "failures").orPanic loop {
+          program: (row.textAt path: "program").orPanic
+          stage: (row.textAt path: "stage").orPanic
+          print "\{program} (\{stage})"
+      }
+  }
+  """
+
+#--: The tree
+
+A #~"Node" is one of eight arms:
+
+#ul:
+  [#*: #~"integer" -- a number with no fraction: #~"5", #~"-3", #~"0xff",
+    #~"8080.u16". It is read as an #~"i64"; a value outside it is refused.]
+  [#*: #~"float" -- a number with a fraction or an exponent: #~"2.5". An
+    integer written where a float type is declared is read as that float.]
+  [#*: #~"text" -- a string, its escapes decoded.]
+  [#*: #~"boolean" -- #~"true" or #~"false".]
+  [#*: #~"listValue" -- #~"list { ... }": the items in order. A labelled
+    item's label is its entry's name.]
+  [#*: #~"dataValue" -- #~"(T f: v ...)": every field of #~"T" in the order
+    its declaration gives them. A field the value leaves out holds its
+    default; one with no default must be written.]
+  [#*: #~"choiceValue" -- #~"T.arm", or #~"T.arm (payload)": the arm, and
+    the entry it carries (none for an arm declared #~"null").]
+  [#*: #~"unitValue" -- #~"unit { ... }", and the file itself: its value
+    definitions in order. A file's #~"data" and #~"choice" declarations are
+    no values and are not in the tree.]
+
+An #~"Entry" holds #~"file", #~"name" (the definition, field or label; empty
+for an unlabelled item), #~"at" (line and column), #~"path" and #~"type" (the
+type written: #~"u16", #~"failure", #~"stage", a list's #~"out" type; empty
+when none was written) besides its #~"node".
+
+#--: Paths and accessors
+
+A #b:"path" names an entry below another: a field of a data value or a
+definition of a unit by name, an item of a list by #~"[n]" or by its label, and
+a step into what a choice value carries. Steps are joined by #~".":
+#~"failures[1].stage.count". The empty path names the entry itself.
+
+Each accessor reads one kind of value at a path, and answers its error when the
+path names nothing or another kind of value:
+
+#ul:
+  [#*: #~"entryAt", #~"itemsAt", #~"textAt", #~"armAt", #~"payloadAt" -- a
+    #~"ResultView": a readonly view into the tree, which stays owned by the
+    entry it was read from.]
+  [#*: #~"integerAt", #~"floatAt", #~"booleanAt" -- a #~"ResultVR" holding
+    the value.]
+
+#--: Writing
+
+#~"zd.write path: header: schema: doc:" writes the file's unit #~"doc" after
+the comment block #~"header" and the declarations #~"schema", both written as
+given: a program that writes its own data file knows its types, and keeps them
+as text. #~"zd.format" answers the same text without writing it. The values
+are written in the form #~"zl fmt" keeps, every field of a data value
+included, so what one program writes another reads back to the same entries.

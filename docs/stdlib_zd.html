@@ -1,0 +1,177 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Zerolang Standard Library -- zd</title>
+<link rel="stylesheet" href="style/zerolang.css">
+<link rel="icon" href="style/favicon-192x192.png" type="image/png" sizes="192x192">
+<link rel="icon" href="style/favicon-48x48.ico" type="image/x-icon">
+<link rel="icon" href="style/favicon-32x32.png" type="image/png" sizes="32x32">
+<link rel="icon" href="style/favicon-16x16.png" type="image/png" sizes="16x16">
+<script src="style/tocbot.min.js"></script>
+<script src="style/init.js"></script>
+<script src="style/prism.min.js"></script>
+<script src="style/prism-zerolang.js"></script>
+<meta name="author" content="pw &lt;p@zerolang.org&gt;">
+<meta name="datecreated" content="2026-11-17">
+<meta name="version" content="v0.1">
+</head>
+<body class="toc-sidebar">
+<nav id="nav">
+  <div class="doc-wrapper">
+    <a title="Zerolang" href="./index.html">Zerolang</a>
+  </div>
+
+  <label>
+    <input id="mode-checkbox" class="mode-checkbox" type="checkbox" />
+    <div class="mode-slot">
+      <div class="sun-icon-wrapper">
+        <svg
+          class="sun-icon"
+          xmlns="http://www.w3.org/2000/svg"
+          width="24"
+          height="24"
+          viewBox="0 0 24 24"
+          fill="none"
+          stroke="currentColor"
+          stroke-width="2"
+          stroke-linecap="round"
+          stroke-linejoin="round"
+        >
+          <circle cx="12" cy="12" r="5"></circle>
+          <line x1="12" y1="1" x2="12" y2="3"></line>
+          <line x1="12" y1="21" x2="12" y2="23"></line>
+          <line x1="4.22" y1="4.22" x2="5.64" y2="5.64"></line>
+          <line x1="18.36" y1="18.36" x2="19.78" y2="19.78"></line>
+          <line x1="1" y1="12" x2="3" y2="12"></line>
+          <line x1="21" y1="12" x2="23" y2="12"></line>
+          <line x1="4.22" y1="19.78" x2="5.64" y2="18.36"></line>
+          <line x1="18.36" y1="5.64" x2="19.78" y2="4.22"></line>
+        </svg>
+      </div>
+      <div class="mode-button"></div>
+      <div class="moon-icon-wrapper">
+        <svg
+          class="moon-icon"
+          xmlns="http://www.w3.org/2000/svg"
+          width="24"
+          height="24"
+          viewBox="0 0 24 24"
+          fill="none"
+          stroke="currentColor"
+          stroke-width="2"
+          stroke-linecap="round"
+          stroke-linejoin="round"
+        >
+          <path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"></path>
+        </svg>
+      </div>
+    </div>
+  </label>
+
+
+</nav>
+<header>
+<h1 id="zd"><a href="#zd">zd</a></h1>
+</header>
+<nav class="toc-sidebar" id="toc">
+<div id="tocfile">
+Table of Contents</div>
+
+<ul>
+<li><a href="#zd">zd</a>
+<ul>
+<li><a href="#overview">Overview</a>
+</li>
+<li><a href="#reading">Reading</a>
+</li>
+<li><a href="#the-tree">The tree</a>
+</li>
+<li><a href="#paths-and-accessors">Paths and accessors</a>
+</li>
+<li><a href="#writing">Writing</a>
+</li>
+</ul>
+</li>
+</ul>
+
+</nav>
+<main id="content">
+<h2 id="overview"><a href="#overview">1. Overview</a></h2>
+<p>The declarations live in <code>lib/system/zd.z</code>, which is the one place they are
+written; every definition there carries its own doc comment, and <code>zls</code> shows
+each on hover. This page explains how the unit is used.</p>
+<p>The <code>zd</code> unit reads and writes <a href="./zdata.html">data files</a> (<code>.zd</code>)
+while a program runs. A read turns the file into a tree of <strong>entries</strong>. Every
+value sits in an <code>Entry</code>, which says where the value was written, under which
+name, at which path, and with which type, and holds a <code>Node</code>: the value
+itself. The node is a union, so a <code>match</code> on it must name every arm.</p>
+<p>A read needs no compiler in the program. It checks each field and arm name
+against the file's own <code>data</code> and <code>choice</code> declarations, and it applies the
+defaults those declarations give. A file that needs the compiler -- one that
+names another unit's type, refers to another definition, or computes a value
+with an operator or an interpolation -- is refused, and the refusal names what
+and where. <code>zc data</code> stays the full check of a data file.</p>
+<h2 id="reading"><a href="#reading">2. Reading</a></h2>
+<p><code>zd.read path:</code> reads a file; <code>zd.parse source: file:</code> reads text that a
+program already holds. Both answer a <code>Result</code>: the file's entry, or a
+<code>zd.Error</code>. An error's text is <code>file:line:column: path: what</code>, and
+<code>orPanic</code> prints it when the program cannot go on.</p>
+<p>A file <code>known.zd</code> that declares <code>failure: data { program: text  stage:
+text }</code> and lists its values in <code>failures: list { ... }</code> reads so:</p>
+<pre><code class="language-zerolang">main: function is {
+    doc: (zd.read path: "known.zd").orPanic
+    for each row: (doc.itemsAt path: "failures").orPanic loop {
+        program: (row.textAt path: "program").orPanic
+        stage: (row.textAt path: "stage").orPanic
+        print "\{program} (\{stage})"
+    }
+}</code></pre>
+<h2 id="the-tree"><a href="#the-tree">3. The tree</a></h2>
+<p>A <code>Node</code> is one of eight arms:</p>
+<ul>
+<li><code>integer</code> -- a number with no fraction: <code>5</code>, <code>-3</code>, <code>0xff</code>,
+<code>8080.u16</code>. It is read as an <code>i64</code>; a value outside it is refused.</li>
+<li><code>float</code> -- a number with a fraction or an exponent: <code>2.5</code>. An
+integer written where a float type is declared is read as that float.</li>
+<li><code>text</code> -- a string, its escapes decoded.</li>
+<li><code>boolean</code> -- <code>true</code> or <code>false</code>.</li>
+<li><code>listValue</code> -- <code>list { ... }</code>: the items in order. A labelled
+item's label is its entry's name.</li>
+<li><code>dataValue</code> -- <code>(T f: v ...)</code>: every field of <code>T</code> in the order
+its declaration gives them. A field the value leaves out holds its
+default; one with no default must be written.</li>
+<li><code>choiceValue</code> -- <code>T.arm</code>, or <code>T.arm (payload)</code>: the arm, and
+the entry it carries (none for an arm declared <code>null</code>).</li>
+<li><code>unitValue</code> -- <code>unit { ... }</code>, and the file itself: its value
+definitions in order. A file's <code>data</code> and <code>choice</code> declarations are
+no values and are not in the tree.</li>
+</ul>
+<p>An <code>Entry</code> holds <code>file</code>, <code>name</code> (the definition, field or label; empty
+for an unlabelled item), <code>at</code> (line and column), <code>path</code> and <code>type</code> (the
+type written: <code>u16</code>, <code>failure</code>, <code>stage</code>, a list's <code>out</code> type; empty
+when none was written) besides its <code>node</code>.</p>
+<h2 id="paths-and-accessors"><a href="#paths-and-accessors">4. Paths and accessors</a></h2>
+<p>A <strong>path</strong> names an entry below another: a field of a data value or a
+definition of a unit by name, an item of a list by <code>[n]</code> or by its label, and
+a step into what a choice value carries. Steps are joined by <code>.</code>:
+<code>failures[1].stage.count</code>. The empty path names the entry itself.</p>
+<p>Each accessor reads one kind of value at a path, and answers its error when the
+path names nothing or another kind of value:</p>
+<ul>
+<li><code>entryAt</code>, <code>itemsAt</code>, <code>textAt</code>, <code>armAt</code>, <code>payloadAt</code> -- a
+<code>ResultView</code>: a readonly view into the tree, which stays owned by the
+entry it was read from.</li>
+<li><code>integerAt</code>, <code>floatAt</code>, <code>booleanAt</code> -- a <code>ResultVR</code> holding
+the value.</li>
+</ul>
+<h2 id="writing"><a href="#writing">5. Writing</a></h2>
+<p><code>zd.write path: header: schema: doc:</code> writes the file's unit <code>doc</code> after
+the comment block <code>header</code> and the declarations <code>schema</code>, both written as
+given: a program that writes its own data file knows its types, and keeps them
+as text. <code>zd.format</code> answers the same text without writing it. The values
+are written in the form <code>zl fmt</code> keeps, every field of a data value
+included, so what one program writes another reads back to the same entries.</p>
+</main>
+</body>
+</html>

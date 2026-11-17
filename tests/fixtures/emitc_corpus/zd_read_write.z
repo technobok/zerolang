@@ -1,0 +1,137 @@
+# zd_read_write -- the stdlib `zd` unit: a data file read into entries, every
+# node kind and accessor, each refusal with its position, and the writer's text
+# read back to the same entries
+public: unit {
+    :main
+}
+
+# sample -- one data file holding every kind of value
+sample: """
+    # sample -- every kind of value a data file holds
+    stage: choice {
+        cc: null
+        posix: null
+        paid: seats
+    }
+    seats: data {
+        count: 1
+        monthly: true
+    }
+    failure: data {
+        program: text
+        :stage
+        weight: f64
+        notes: list {} out staticlist text
+    }
+    port: 8080.u16
+    offset: -3
+    mask: 0xff
+    ratio: 2.5
+    name: "relay \"one\"\tend"
+    debug: false
+    failures: list {
+        (failure program: "os_spawn_fds" stage: stage.posix weight: 2)
+        (failure program: "x" stage: stage.paid (seats count: 12) weight: 0.5 notes: list { "a" "b" })
+    }
+    sizes: list { small: 1 large: 9 }
+    site: unit {
+        title: "Docs"
+    }
+    """
+
+# refusals -- files a read refuses, each for one reason
+refusals: list {
+    "f: data { a: text }\nx: (f a: \"1\" b: 2)\n"
+    "c: choice { a: null }\nx: c.b\n"
+    "a: 1\nb: a\n"
+    "x: 1 + 2\n"
+    "n: 3\nx: \"n is \\{n}\"\n"
+    "x: (toolchain.project name: \"p\")\n"
+    "x: (\n"
+    "f: data { a: text  b: text }\nx: (f a: \"1\")\n"
+    "f: data { a: text }\nx: (f a: \"1\" a: \"2\")\n"
+    "c: choice { a: null  b: text }\nx: c.b\n"
+    "x: 300.u8\n"
+    "f: data { a: u8 }\nx: (f a: \"text\")\n"
+} out staticlist StringView
+
+main: function is {
+    doc: (zd.parse source: sample.string file: "sample.zd").orPanic
+    for each row: (doc.itemsAt path: "failures").orPanic loop {
+        program: (row.textAt path: "program").orPanic
+        stage: (row.armAt path: "stage").orPanic
+        weight: (row.floatAt path: "weight").orPanic
+        notes: (row.itemsAt path: "notes").orPanic
+        print "\{row.path}: \{program} \{stage} \{weight} notes \{notes.length}"
+    }
+    print "port \{(doc.integerAt path: "port").orPanic} \{(doc.entryAt path: "port").orPanic.type}"
+    print "offset \{(doc.integerAt path: "offset").orPanic} mask \{(doc.integerAt path: "mask"
+    ).orPanic}"
+    print "ratio \{(doc.floatAt path: "ratio").orPanic} debug \{(doc.booleanAt path: "debug"
+    ).orPanic}"
+    print "name [\{(doc.textAt path: "name").orPanic}]"
+    print "count \{(doc.integerAt path: "failures[1].stage.count").orPanic}"
+    {
+        pay: (doc.payloadAt path: "failures[1].stage").orPanic
+        print "payload \{pay.type} monthly \{(pay.booleanAt path: "monthly").orPanic}"
+    }
+    print "large \{(doc.integerAt path: "sizes.large").orPanic} title \{(
+        doc.textAt
+        path: "site.title"
+    ).orPanic}"
+    checks: List String
+    checks.append "failures[5]".string
+    checks.append "failures[0].nosuch".string
+    checks.append "port".string
+    for each c: checks loop {
+        r: doc.textAt path: c.stringView
+        match (
+            r
+        ) case ok then print "unexpected" case err then print r
+    }
+    {
+        p: doc.payloadAt path: "failures[0].stage"
+        match (
+            p
+        ) case ok then print "unexpected" case err then print p
+    }
+    n: doc.node
+    match (
+        n
+    ) case unitValue then {
+        for each d: n loop print "\{d.name} at \{d.at.line}:\{d.at.column}"
+    } case integer then null case float then null case text then null case boolean then null case listValue then null case dataValue then null case choiceValue then null
+    schema: """
+        stage: choice {
+            cc: null
+            posix: null
+            paid: seats
+        }
+
+        seats: data {
+            count: 1
+            monthly: true
+        }
+
+        failure: data {
+            program: text
+            :stage
+            weight: f64
+            notes: list {} out staticlist text
+        }
+        """
+    written: zd.format header: "# sample -- written back by zd" :schema :doc
+    print written
+    again: (zd.parse source: written.copy file: "again.zd").orPanic
+    second: zd.format header: "# sample -- written back by zd" :schema doc: again
+    print "round trip \{second == written}"
+    k: u64
+    for each src: refusals loop {
+        fname: "refused\{k}.zd"
+        r: zd.parse source: src.string file: fname.stringView
+        match (
+            r
+        ) case ok then print "unexpected" case err then print r
+        k = k + 1
+    }
+}

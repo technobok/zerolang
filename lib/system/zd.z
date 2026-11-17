@@ -1,0 +1,1666 @@
+# zd -- zerolang DATA files (`.zd`, docs/zdata.pdoc), read and written while a
+# program runs. A file reads as a tree of entries: every value sits in an Entry
+# that says where it was written, under which name and path, with which type,
+# and holds a Node -- a union, so a consumer that matches one names every arm.
+# Field and arm names are checked against the file's own `data` and `choice`
+# declarations, and defaults applied, with no compiler in the program: what
+# needs one -- another unit's type, a reference to another definition, an
+# operator, an interpolation -- is refused at read, naming it. `zc data` stays
+# the author's full check. The writer writes values in the form `zl fmt`
+# keeps.
+#
+#   doc: (zd.read path: "tests/mingw-known-failures.zd").orPanic
+#   for each row: (doc.itemsAt path: "failures").orPanic loop {
+#       program: (row.textAt path: "program").orPanic
+#       stage: (row.armAt path: "stage").orPanic
+#   }
+
+# Public interface -- the definitions other units may reference; all other
+# top-level definitions are private to this unit.
+public: unit {
+    :where
+    :Node
+    :ChoiceValue
+    :Entry
+    :Error
+    :read
+    :parse
+    :write
+    :format
+}
+
+# where -- a value's place in its file, 1-based
+where: record {
+    line: u32
+    column: u32
+}
+
+# Node -- one value of a data file
+Node: union {
+    # a number with no fraction or exponent: `5`, `-3`, `8080.u16` (the type it
+    # was written with is the Entry's)
+    integer: Box i64
+    # a number with a fraction or an exponent: `2.5`
+    float: Box f64
+    # a string, its escapes decoded
+    text: String
+    # `true` or `false`
+    boolean: Box bool
+    # `list { ... }`: the items in order; a labelled item's label is its
+    # Entry's name
+    listValue: List Entry
+    # `(T f: v ...)`: every field of T in its declaration's order, a field the
+    # value leaves out holding its default
+    dataValue: List Entry
+    # `T.arm`, or `T.arm (payload)`
+    choiceValue: ChoiceValue
+    # `unit { ... }`, and the file itself: the definitions, in order
+    unitValue: List Entry
+}
+
+# ChoiceValue -- the arm a choice value is, and what it carries
+ChoiceValue: class {
+    arm: String
+    # none only for an arm declared `null`
+    payload: Option Entry
+}
+
+# Entry -- one value where it was written
+Entry: class {
+    # the file it was read from
+    file: String
+    # the definition, field or label it was written under; "" for an
+    # unlabelled list item
+    name: String
+    at: where
+    # where it lies in the file's tree, for a report: `failures[3].stage`
+    path: String
+    # the type it was written with -- `u16`, `failure`, `stage`, a list's `out`
+    # type -- or "" when none was written
+    type: String
+    node: Node
+} as {
+    # entryAt -- the entry `path` names below this one: a definition of a unit
+    # or a field of a data value by name, an item of a list by `[n]` or by its
+    # label, steps joined by `.` (`failures[3].stage`); "" is this entry
+    entryAt: function {e: this.view path: StringView.view} outx (ResultView Entry E: Error) is {
+        f: locate :e path: path.string
+        match (
+            f
+        ) case some then {
+            return ((ResultView Entry E: Error).ok from: f)
+        } case none then {
+            return ((ResultView Entry E: Error).err (missing :e :path))
+        }
+    }
+
+    # itemsAt -- the items of the list at `path`, in order; a labelled item's
+    # label is its name
+    itemsAt: function {e: this.view path: StringView.view} outx (ResultView (List Entry) E: Error
+    ) is {
+        f: locate :e path: path.string
+        match (
+            f
+        ) case none then {
+            return ((ResultView (List Entry) E: Error).err (missing :e :path))
+        } case some then {
+            n: f.node
+            match (
+                n
+            ) case listValue then {
+                return ((ResultView (List Entry) E: Error).ok from: n)
+            } else {
+                return ((ResultView (List Entry) E: Error).err (wrongKind found: f want: "a list"))
+            }
+        }
+    }
+
+    # textAt -- the text at `path`, viewed: the entry keeps owning it
+    textAt: function {e: this.view path: StringView.view} outx (ResultView String E: Error) is {
+        f: locate :e path: path.string
+        match (
+            f
+        ) case none then {
+            return ((ResultView String E: Error).err (missing :e :path))
+        } case some then {
+            n: f.node
+            match (
+                n
+            ) case text then {
+                return ((ResultView String E: Error).ok from: n)
+            } else {
+                return ((ResultView String E: Error).err (wrongKind found: f want: "a text"))
+            }
+        }
+    }
+
+    # armAt -- the arm of the choice value at `path`
+    armAt: function {e: this.view path: StringView.view} outx (ResultView String E: Error) is {
+        f: locate :e path: path.string
+        match (
+            f
+        ) case none then {
+            return ((ResultView String E: Error).err (missing :e :path))
+        } case some then {
+            n: f.node
+            match (
+                n
+            ) case choiceValue then {
+                a: n.arm
+                return ((ResultView String E: Error).ok from: a)
+            } else {
+                er: wrongKind found: f want: "a choice value"
+                return ((ResultView String E: Error).err er)
+            }
+        }
+    }
+
+    # payloadAt -- what the choice value at `path` carries
+    payloadAt: function {e: this.view path: StringView.view} outx (ResultView Entry E: Error) is {
+        f: locate :e path: path.string
+        match (
+            f
+        ) case none then {
+            return ((ResultView Entry E: Error).err (missing :e :path))
+        } case some then {
+            n: f.node
+            match (
+                n
+            ) case choiceValue then {
+                p: n.payload
+                match (
+                    p
+                ) case some then {
+                    return ((ResultView Entry E: Error).ok from: p)
+                } case none then {
+                    er: (
+                        errorAt
+                        file: f.file.stringView
+                        at: f.at
+                        path: f.path.stringView
+                        what: "arm '\{n.arm}' carries no value".stringView
+                    )
+                    return ((ResultView Entry E: Error).err er)
+                }
+            } else {
+                return ((ResultView Entry E: Error).err (wrongKind found: f want: "a choice value"))
+            }
+        }
+    }
+
+    # integerAt -- the integer at `path`, as an i64 whatever type it was
+    # written with (that is its Entry's type)
+    integerAt: function {e: this.view path: StringView.view} out (ResultVR i64 E: Error) is {
+        f: locate :e path: path.string
+        match (
+            f
+        ) case none then {
+            return ((ResultVR i64 E: Error).err (missing :e :path))
+        } case some then {
+            n: f.node
+            match (
+                n
+            ) case integer then {
+                return ((ResultVR i64 E: Error).ok n)
+            } else {
+                return ((ResultVR i64 E: Error).err (wrongKind found: f want: "an integer"))
+            }
+        }
+    }
+
+    # floatAt -- the float at `path`; an integer written where a float type is
+    # declared was read as a float
+    floatAt: function {e: this.view path: StringView.view} out (ResultVR f64 E: Error) is {
+        f: locate :e path: path.string
+        match (
+            f
+        ) case none then {
+            return ((ResultVR f64 E: Error).err (missing :e :path))
+        } case some then {
+            n: f.node
+            match (
+                n
+            ) case float then {
+                return ((ResultVR f64 E: Error).ok n)
+            } else {
+                return ((ResultVR f64 E: Error).err (wrongKind found: f want: "a float"))
+            }
+        }
+    }
+
+    # booleanAt -- the truth value at `path`
+    booleanAt: function {e: this.view path: StringView.view} out (ResultVR bool E: Error) is {
+        f: locate :e path: path.string
+        match (
+            f
+        ) case none then {
+            return ((ResultVR bool E: Error).err (missing :e :path))
+        } case some then {
+            n: f.node
+            match (
+                n
+            ) case boolean then {
+                return ((ResultVR bool E: Error).ok n)
+            } else {
+                return ((ResultVR bool E: Error).err (wrongKind found: f want: "true or false"))
+            }
+        }
+    }
+}
+
+# Error -- what a read or an accessor refused, and where
+Error: class {
+    # the file as the caller named it
+    file: String
+    at: where
+    # the entry's path, "" for the file as a whole
+    path: String
+    # what is wrong there
+    what: String
+    # `file:line:column: path: what`, what stringView answers
+    text: String
+} as {
+    stringViewable: StringViewable.implement
+    # the error as a report prints it, `file:line:column: path: what`
+    stringView: function {e: this.view} outx StringView is {
+        return e.text.stringView
+    }
+}
+
+# errorAt -- an Error about the entry at `path`, written `at` in `file`; its
+# text is composed once, here
+errorAt: function {file: StringView at: where path: StringView what: StringView} out Error is {
+    t: "\{file}:\{at.line}:\{at.column}: "
+    if path.length > 0 then t.append "\{path}: "
+    t.append what
+    return (Error file: file.string :at path: path.string what: what.string text: t)
+}
+
+# fileError -- an Error about the file as a whole
+fileError: function {file: StringView what: StringView} out Error is {
+    return (errorAt :file at: (where line: 0 column: 0) path: "" :what)
+}
+
+# ---- paths ----------------------------------------------------------------
+
+# stepsOf -- the steps of `path`: a name, or an index `[n]`; `.` joins them
+stepsOf: function {path: StringView.view} out List String is {
+    r: List String
+    start: u64
+    i: u64
+    for i < path.length loop {
+        b: (path.byteAt :i).or d: 0
+        if b == ascii.dot then {
+            if i > start then r.append (path.substring from: start to: i).string
+            start = i + 1
+        } else if b == ascii.bracketOpen then {
+            if i > start then r.append (path.substring from: start to: i).string
+            start = i
+        } else if b == ascii.bracketClose then {
+            r.append (path.substring from: start to: i + 1).string
+            start = i + 1
+        }
+        i = i + 1
+    }
+    if start < path.length then r.append (path.substring from: start to: path.length).string
+    return r
+}
+
+# indexOf -- the number an index step `[n]` names; none when `step` is no index
+indexOf: function {step: StringView} out optionval u64 is {
+    if step.length < 3 then return (optionval.none u64)
+    if ((step.byteAt 0).or d: 0) != ascii.bracketOpen then return (optionval.none u64)
+    p: (step.substring from: 1 to: step.length - 1).parseU64
+    if p.ok then return (optionval.some p)
+    return (optionval.none u64)
+}
+
+# childOf -- the entry one step `step` names below `e`, or none
+childOf: function {e: Entry.view step: String.take} outx OptionView Entry is {
+    ix: indexOf step: step.stringView
+    n: e.node
+    match (
+        n
+    ) case listValue then {
+        k: u64
+        for each it: n loop {
+            if ix.some when k == ix then return ((OptionView Entry).some from: it)
+            if ix.none when it.name == step then return ((OptionView Entry).some from: it)
+            k = k + 1
+        }
+    } case dataValue then {
+        for each fd: n loop {
+            if fd.name == step then return ((OptionView Entry).some from: fd)
+        }
+    } case unitValue then {
+        for each d: n loop {
+            if d.name == step then return ((OptionView Entry).some from: d)
+        }
+    } case choiceValue then {
+        # a step below a choice value is a step into what its arm carries
+        p: n.payload
+        match (
+            p
+        ) case some then {
+            return (childOf e: p step: step.take)
+        } case none then null
+    } else null
+    return (OptionView.none Entry)
+}
+
+# locate -- the entry `path` names below `e` (entryAt), or none
+locate: function {e: Entry.view path: String.take} outx OptionView Entry is {
+    return (locateSteps :e steps: (stepsOf path: path.stringView) k: 0)
+}
+
+# locateSteps -- the entry steps `k` on of `steps` name below `e`, or none
+locateSteps: function {e: Entry.view steps: (List String).take k: u64} outx OptionView Entry is {
+    if k >= steps.length then return ((OptionView Entry).some from: e)
+    c: childOf :e step: (steps.get i: k).copy
+    match (
+        c
+    ) case some then {
+        return (locateSteps e: c steps: steps.take k: k + 1)
+    } case none then {
+        return (OptionView.none Entry)
+    }
+}
+
+# missing -- the Error for a `path` below `e` that names nothing: at the
+# deepest entry it reaches, naming the step that entry does not have
+missing: function {e: Entry.view path: StringView.view} out Error is {
+    return (missingSteps :e steps: (stepsOf :path) k: 0)
+}
+
+# missingSteps -- missing, from step `k` of `steps`
+missingSteps: function {e: Entry.view steps: (List String).take k: u64} out Error is {
+    if k < steps.length then {
+        c: childOf :e step: (steps.get i: k).copy
+        match (
+            c
+        ) case some then {
+            return (missingSteps e: c steps: steps.take k: k + 1)
+        } case none then {
+            return (
+                errorAt
+                file: e.file.stringView
+                at: e.at
+                path: e.path.stringView
+                what: "\{kindOf n: e.node} has no '\{steps.get i: k}'".stringView
+            )
+        }
+    }
+    return (
+        errorAt
+        file: e.file.stringView
+        at: e.at
+        path: e.path.stringView
+        what: "nothing here".stringView
+    )
+}
+
+# wrongKind -- the Error for an entry that holds another kind of value than
+# the accessor reads
+wrongKind: function {found: Entry.view want: StringView} out Error is {
+    return (
+        errorAt
+        file: found.file.stringView
+        at: found.at
+        path: found.path.stringView
+        what: "expected \{want}, found \{kindOf n: found.node}".stringView
+    )
+}
+
+# kindOf -- what a node is, as a report names it
+kindOf: function {n: Node.view} out String is {
+    match (
+        n
+    ) case integer then {
+        return "an integer".string
+    } case float then {
+        return "a float".string
+    } case text then {
+        return "a text".string
+    } case boolean then {
+        return "true or false".string
+    } case listValue then {
+        return "a list".string
+    } case dataValue then {
+        return "a data value".string
+    } case choiceValue then {
+        return "a choice value".string
+    } case unitValue then {
+        return "a unit".string
+    }
+}
+
+# ---- reading --------------------------------------------------------------
+
+# FieldDecl -- one field of a `data` declaration: its type, or its default
+FieldDecl: class {
+    name: String
+    # the type it was declared with, "" when a default gives it
+    type: String
+    # the default's node in the declaration, 0 when there is none
+    default: zast.nodeid
+}
+
+# DataDecl -- a `data` declaration of the file
+DataDecl: class {
+    name: String
+    fields: List FieldDecl
+}
+
+# ArmDecl -- one arm of a `choice` declaration
+ArmDecl: class {
+    name: String
+    # the type of what it carries, "" for an arm declared `null`
+    payload: String
+}
+
+# ChoiceDecl -- a `choice` declaration of the file
+ChoiceDecl: class {
+    name: String
+    arms: List ArmDecl
+}
+
+# zdWord -- the words a data file spells its own values and types with, the
+# scalar types in one run from `textType` to `f128Type`: the integer types
+# from `i8Type` to `c32Type`, the float types from `f16Type` on
+zdWord: list {
+    trueWord: "true"
+    falseWord: "false"
+    nullWord: "null"
+    textType: "text"
+    boolType: "bool"
+    i8Type: "i8"
+    i16Type: "i16"
+    i32Type: "i32"
+    i64Type: "i64"
+    i128Type: "i128"
+    u8Type: "u8"
+    u16Type: "u16"
+    u32Type: "u32"
+    u64Type: "u64"
+    u128Type: "u128"
+    c8Type: "c8"
+    c32Type: "c32"
+    f16Type: "f16"
+    f32Type: "f32"
+    f64Type: "f64"
+    f128Type: "f128"
+} out staticlist StringView
+
+# Schema -- what a read reads with: the parsed file, its `data` and `choice`
+# declarations, and the words it knows
+Schema: class {
+    p: zparser.Parser
+    datas: List DataDecl
+    choices: List ChoiceDecl
+    words: zast.Vocab
+}
+
+# Reader -- one read: the file, and the first refusal
+Reader: class {
+    file: String
+    failed: bool
+    refusal: Option Error
+}
+
+# read -- the data file at `path`, as an Entry whose node is the file's
+# unitValue; an Error for a file that cannot be read or holds what a data file
+# may not
+read: function {path: StringView} out (Result Entry E: Error) is {
+    r: io.readText :path
+    match (
+        r
+    ) case ok then {
+        return (parse source: r.take file: path)
+    } case err then {
+        return ((Result Entry E: Error).err (fileError file: path what: "cannot be read"))
+    }
+}
+
+# parse -- the data file text `source`, read as the file `file` (which names
+# its unit and every report)
+parse: function {source: String.take file: StringView} out (Result Entry E: Error) is {
+    p: zparser.Parser.create
+    p.ext = ".zd".string
+    tk: zlexer.Tokenizer.create :source fsno: zvfs.fsno
+    lx: zlexer.Lexer.create lexer: tk
+    lx.advance pool: p.ast.names
+    body: p.acceptUnitBody lex: lx
+    rd: Reader file: file.string failed: false refusal: Option.none Error
+    sc: (
+        Schema
+        p: p.take
+        datas: List DataDecl
+        choices: List ChoiceDecl
+        words: (zast.Vocab.create block: zdWord)
+    )
+    syntaxRefusal :rd ast: sc.p.ast
+    if rd.failed.not then collectDecls :sc :body
+    root: (
+        Entry
+        file: file.string
+        name: (unitNameOf :file)
+        at: (where line: 1 column: 1)
+        path: "".string
+        type: "".string
+        node: Node.unitValue (definitionsOf :rd :sc ids: body prefix: "")
+    )
+    if rd.failed then {
+        fo: rd.refusal
+        match (
+            fo
+        ) case some then {
+            er: (
+                errorAt
+                file: fo.file.stringView
+                at: fo.at
+                path: fo.path.stringView
+                what: fo.what.stringView
+            )
+            return ((Result Entry E: Error).err er)
+        } case none then {
+            return ((Result Entry E: Error).err (fileError :file what: "refused"))
+        }
+    }
+    return ((Result Entry E: Error).ok root.take)
+}
+
+# unitNameOf -- the unit a file is: its name without directory or extension
+unitNameOf: function {file: StringView} out String is {
+    s: u64
+    i: u64
+    for i < file.length loop {
+        b: (file.byteAt :i).or d: 0
+        if (b == 0c/) or (b == 0c\\) then s = i + 1
+        i = i + 1
+    }
+    e: file.length
+    j: s
+    for j < file.length loop {
+        if ((file.byteAt i: j).or d: 0) == ascii.dot then e = j
+        j = j + 1
+    }
+    return (file.substring from: s to: e).string
+}
+
+# refuse -- the read stops at node `nid`: the first refusal is kept
+refuse: function {
+    rd: Reader ast: zast.Ast.view nid: zast.nodeid path: StringView what: StringView
+} is {
+    if rd.failed then return
+    rd.failed = true
+    rd.refusal = Option.some (errorAt file: rd.file.stringView at: (whereOf :ast :nid) :path :what)
+}
+
+# whereOf -- node `nid`'s place
+whereOf: function {ast: zast.Ast.view nid: zast.nodeid} out where is {
+    p: zast.posOf n: (ast.nodes.get i: nid)
+    return (where line: p.line column: p.col)
+}
+
+# syntaxRefusal -- the first parse error the file holds, as the read's refusal
+syntaxRefusal: function {rd: Reader ast: zast.Ast.view} is {
+    for each n: ast.nodes loop {
+        match (
+            n
+        ) case error then {
+            (
+                refuse
+                :rd
+                :ast
+                nid: n.nodeid
+                path: ""
+                what: (zast.nameTextAt :ast ref: n.msg).stringView
+            )
+            return
+        } else null
+    }
+}
+
+# nodeName -- the name node `nid` spells: an atom's, a shorthand `:name`'s, or
+# the label of a definition, an argument or an item; "" for any other node. Owned: the tree
+# is read again while it is kept.
+nodeName: function {ast: zast.Ast.view nid: zast.nodeid} out String is {
+    n: ast.nodes.get i: nid
+    match (
+        n
+    ) case atomid then {
+        return (zast.nameTextCopy :ast ref: n.name)
+    } case namedoperation then {
+        return (zast.nameTextCopy :ast ref: n.name)
+    } case labelvalue then {
+        return (zast.nameTextCopy :ast ref: n.name)
+    } else {
+        return "".string
+    }
+}
+
+# valueNode -- the value a definition, an argument or an item writes: its
+# operation; any other node is its own value
+valueNode: function {ast: zast.Ast.view nid: zast.nodeid} out zast.nodeid is {
+    n: ast.nodes.get i: nid
+    match (
+        n
+    ) case namedoperation then {
+        return n.operation
+    } else {
+        return nid
+    }
+}
+
+# kidsList -- the nodes of `span`, read out of the tree
+kidsList: function {ast: zast.Ast.view span: zast.kidspan} out ListVal zast.nodeid is {
+    r: ListVal zast.nodeid
+    for each k: (zast.kidsOf :ast :span) loop r.append k
+    return r
+}
+
+# wordOf -- `text`'s slot in zdWord, zdWord.length when it is none of them
+wordOf: function {sc: Schema.view text: StringView} out u64 is {
+    return (sc.words.slotOf :text)
+}
+
+# isScalarType -- slot `w` is one of the scalar types
+isScalarType: function {w: u64} out bool is {
+    return (w >= zdWord.slot.textType) and (w <= zdWord.slot.f128Type)
+}
+
+# isNumericType -- slot `w` is an integer or a float type
+isNumericType: function {w: u64} out bool is {
+    return (w >= zdWord.slot.i8Type) and (w <= zdWord.slot.f128Type)
+}
+
+# isFloatType -- a number written with the type in slot `w` is read as a float,
+# whatever it looks like (`5.f32`)
+isFloatType: function {w: u64} out bool is {
+    return (w >= zdWord.slot.f16Type) and (w <= zdWord.slot.f128Type)
+}
+
+# collectDecls -- the `data` and `choice` declarations of the file's top level;
+# their names are gathered first, so a field can name a type declared after it
+collectDecls: function {sc: Schema body: (ListVal zast.nodeid).view} is {
+    names: List String
+    for each id: body loop {
+        if (declKindOf ast: sc.p.ast :id) != declkind.none then names.append (
+            nodeName
+            ast: sc.p.ast
+            nid: id
+        )
+    }
+    for each id: body loop recordDecl :sc :id :names
+}
+
+# declkind -- what a definition of the file declares, when it declares a type
+declkind: variant {
+    none: null
+    dataDecl: null
+    choiceDecl: null
+}
+
+# declKindOf -- the type definition `id` is, a `data` or a `choice`; none for
+# a value
+declKindOf: function {ast: zast.Ast.view id: zast.nodeid} out declkind is {
+    v: ast.nodes.get i: (valueNode :ast nid: id)
+    match (
+        v
+    ) case objectdef then {
+        if v.kind.dataDef then return declkind.dataDecl
+        if v.kind.choiceDef then return declkind.choiceDecl
+    } else null
+    return declkind.none
+}
+
+# isItemsOf -- the `is` members of type definition `nid`
+isItemsOf: function {ast: zast.Ast.view nid: zast.nodeid} out zast.kidspan is {
+    v: ast.nodes.get i: nid
+    match (
+        v
+    ) case objectdef then {
+        return v.isItems
+    } else {
+        return (zast.kidspan first: 0 count: 0)
+    }
+}
+
+# recordDecl -- definition `id` recorded on `sc` when it declares a type
+recordDecl: function {sc: Schema id: zast.nodeid names: (List String).view} is {
+    k: declKindOf ast: sc.p.ast :id
+    if k == declkind.none then return
+    nm: nodeName ast: sc.p.ast nid: id
+    items: (
+        kidsList
+        ast: sc.p.ast
+        span: (isItemsOf ast: sc.p.ast nid: (valueNode ast: sc.p.ast nid: id))
+    )
+    if k == declkind.dataDecl then {
+        fields: List FieldDecl
+        for each it: items loop fields.append (fieldDeclOf :sc nid: it :names)
+        sc.datas.append (DataDecl name: nm.take fields: fields.take)
+    } else {
+        arms: List ArmDecl
+        for each it: items loop {
+            t: nodeName ast: sc.p.ast nid: (valueNode ast: sc.p.ast nid: it)
+            if (wordOf :sc text: t.stringView) == zdWord.slot.nullWord then t = "".string
+            arms.append (ArmDecl name: (nodeName ast: sc.p.ast nid: it) payload: t.take)
+        }
+        sc.choices.append (ChoiceDecl name: nm.take arms: arms.take)
+    }
+}
+
+# fieldDeclOf -- field `nid` of a `data` declaration: written with a type's
+# name it has that type, written with any other value that value is its default
+fieldDeclOf: function {
+    sc: Schema.view nid: zast.nodeid names: (List String).view
+} out FieldDecl is {
+    v: valueNode ast: sc.p.ast :nid
+    t: nodeName ast: sc.p.ast nid: v
+    fname: nodeName ast: sc.p.ast :nid
+    n: sc.p.ast.nodes.get i: v
+    # `program: text` names its type, and the shorthand `:stage` names a type
+    # that is also the field's name
+    named: n.atomid or n.labelvalue
+    if named when (isTypeName :sc t: t.stringView :names) then {
+        return (FieldDecl name: fname.take type: t.take default: zast.nodeid)
+    }
+    return (FieldDecl name: fname.take type: "".string default: v)
+}
+
+# isTypeName -- `t` names a type: a scalar type, or a declaration the file
+# makes (`names`)
+isTypeName: function {sc: Schema.view t: StringView names: (List String).view} out bool is {
+    if (isScalarType w: (wordOf :sc text: t)) then return true
+    for each nm: names loop {
+        if nm.stringView == t then return true
+    }
+    return false
+}
+
+# definitionsOf -- the value definitions of `ids` as entries, in order; a
+# declaration is no value and is skipped, and one inside a nested unit refused
+definitionsOf: function {
+    rd: Reader sc: Schema.view ids: (ListVal zast.nodeid).view prefix: StringView
+} out List Entry is {
+    defs: List Entry
+    for each id: ids loop {
+        if rd.failed then return defs
+        n: sc.p.ast.nodes.get i: id
+        if n.namedoperation.not then {
+            (
+                refuse
+                :rd
+                ast: sc.p.ast
+                nid: id
+                path: prefix
+                what: "a data file holds definitions, `name: value`"
+            )
+            return defs
+        }
+        isDecl: (declKindOf ast: sc.p.ast :id) != declkind.none
+        if isDecl when prefix.length > 0 then {
+            (
+                refuse
+                :rd
+                ast: sc.p.ast
+                nid: id
+                path: prefix
+                what: "zd reads data and choice declarations at the top of the file"
+            )
+            return defs
+        }
+        if isDecl.not then {
+            nm: nodeName ast: sc.p.ast nid: id
+            pth: childPath :prefix name: nm.stringView
+            vn: valueNode ast: sc.p.ast nid: id
+            defs.append (valueOf :rd :sc nid: vn name: nm.stringView path: pth.stringView want: "")
+        }
+    }
+    return defs
+}
+
+# childPath -- the path of `name` under `prefix`, as a report shows it
+childPath: function {prefix: StringView name: StringView} out String is {
+    if prefix.length == 0 then return name.string
+    return "\{prefix}.\{name}"
+}
+
+# placeholder -- the entry a refused value leaves, which the read discards
+placeholder: function {rd: Reader.view} out Entry is {
+    return (
+        Entry
+        file: rd.file.copy
+        name: "".string
+        at: (where line: 0 column: 0)
+        path: "".string
+        type: "".string
+        node: Node.text "".string
+    )
+}
+
+# entryOf -- an Entry for node `nid`
+entryOf: function {
+    rd: Reader.view
+    ast: zast.Ast.view
+    nid: zast.nodeid
+    name: StringView
+    path: StringView
+    type: StringView
+    node: Node.take
+} out Entry is {
+    return (
+        Entry
+        file: rd.file.copy
+        name: name.string
+        at: (whereOf :ast :nid)
+        path: path.string
+        type: type.string
+        :node
+    )
+}
+
+# valueOf -- the value node `nid` writes, under `name` at `path`; `want` is
+# the type its place declares, "" when it declares none
+valueOf: function {
+    rd: Reader sc: Schema.view nid: zast.nodeid name: StringView path: StringView want: StringView
+} out Entry is {
+    e: valueAsWritten :rd :sc :nid :name :path
+    if rd.failed.not then checkKind :rd :sc :nid entry: e :want
+    return e
+}
+
+# valueAsWritten -- the value node `nid` writes, by its own form
+valueAsWritten: function {
+    rd: Reader sc: Schema.view nid: zast.nodeid name: StringView path: StringView
+} out Entry is {
+    n: sc.p.ast.nodes.get i: nid
+    match (
+        n
+    ) case atomid then {
+        return (atomValue :rd :sc :nid :name :path)
+    } case dottedpath then {
+        return (dottedValue :rd :sc :nid :name :path)
+    } case atomstring then {
+        return (textValue :rd ast: sc.p.ast :nid :name :path parts: n.stringparts)
+    } case listblock then {
+        return (listValueOf :rd :sc :nid :name :path)
+    } case call then {
+        if n.infix then {
+            (
+                refuse
+                :rd
+                ast: sc.p.ast
+                :nid
+                :path
+                what: "an operator computes a value; a data file holds values written as they are"
+            )
+            return (placeholder :rd)
+        }
+        return (callValue :rd :sc :nid :name :path)
+    } case unitdef then {
+        defs: definitionsOf :rd :sc ids: (kidsList ast: sc.p.ast span: n.body) prefix: path
+        return (entryOf :rd ast: sc.p.ast :nid :name :path type: "" node: Node.unitValue defs.take)
+    } else {
+        (
+            refuse
+            :rd
+            ast: sc.p.ast
+            :nid
+            :path
+            what: "a data file holds values, data and choice declarations and units"
+        )
+        return (placeholder :rd)
+    }
+}
+
+# atomValue -- a bare word: a number, `true` or `false`; a name of another
+# definition is refused
+atomValue: function {
+    rd: Reader sc: Schema.view nid: zast.nodeid name: StringView path: StringView
+} out Entry is {
+    text: nodeName ast: sc.p.ast :nid
+    w: wordOf :sc text: text.stringView
+    if w == zdWord.slot.trueWord then return (
+        entryOf
+        :rd
+        ast: sc.p.ast
+        :nid
+        :name
+        :path
+        type: ""
+        node: Node.boolean true
+    )
+    if w == zdWord.slot.falseWord then return (
+        entryOf
+        :rd
+        ast: sc.p.ast
+        :nid
+        :name
+        :path
+        type: ""
+        node: Node.boolean false
+    )
+    if (isNumberText t: text.stringView) then return (
+        numberValue
+        :rd
+        :sc
+        :nid
+        :name
+        :path
+        text: text.stringView
+        type: ""
+    )
+    what: "'\{text}' names another definition; zd reads values written in place (zc data reads references)"
+    refuse :rd ast: sc.p.ast :nid :path what: what.stringView
+    return (placeholder :rd)
+}
+
+# isNumberText -- `t` is a number literal: a digit first, or a sign and a digit
+isNumberText: function {t: StringView} out bool is {
+    b: (t.byteAt 0).or d: 0
+    if (ascii.isDigit :b) then return true
+    if (b == 0c-) or (b == 0c+) then return (ascii.isDigit b: ((t.byteAt 1).or d: 0))
+    return false
+}
+
+# numberValue -- number literal `text`, written with type `type` ("" untyped)
+numberValue: function {
+    rd: Reader
+    sc: Schema.view
+    nid: zast.nodeid
+    name: StringView
+    path: StringView
+    text: StringView
+    type: StringView
+} out Entry is {
+    tw: wordOf :sc text: type
+    if (isFloatText t: text) or (isFloatType w: tw) then {
+        fv: text.parseF64
+        if fv.ok then return (entryOf :rd ast: sc.p.ast :nid :name :path :type node: Node.float fv)
+        what: "'\{text}' is no number zd reads"
+        refuse :rd ast: sc.p.ast :nid :path what: what.stringView
+        return (placeholder :rd)
+    }
+    iv: integerOf t: text
+    match (
+        iv
+    ) case ok then {
+        if (fitsType v: iv w: tw).not then {
+            what: "\{text} does not fit \{type}"
+            refuse :rd ast: sc.p.ast :nid :path what: what.stringView
+            return (placeholder :rd)
+        }
+        return (entryOf :rd ast: sc.p.ast :nid :name :path :type node: Node.integer iv)
+    } case err then {
+        what: "'\{text}' is no integer zd reads: integers are read as i64"
+        refuse :rd ast: sc.p.ast :nid :path what: what.stringView
+        return (placeholder :rd)
+    }
+}
+
+# isFloatText -- a decimal number literal with a fraction or an exponent
+isFloatText: function {t: StringView} out bool is {
+    if (
+        (t.startsWith prefix: "0x") or (t.startsWith prefix: "0b") or (t.startsWith prefix: "0o")
+    ) then return false
+    for each b: t.byteView loop {
+        if (b == ascii.dot) or (b == 0ce) or (b == 0cE) then return true
+    }
+    return false
+}
+
+# integerOf -- integer literal `t`: decimal with an optional sign, or `0x`,
+# `0b`, `0o` with no sign
+integerOf: function {t: StringView} out (resultval i64 e: parseerror) is {
+    if (t.startsWith prefix: "0x") then return (
+        radixOf
+        digits: (t.substring from: 2 to: t.length)
+        radix: 16
+    )
+    if (t.startsWith prefix: "0b") then return (
+        radixOf
+        digits: (t.substring from: 2 to: t.length)
+        radix: 2
+    )
+    if (t.startsWith prefix: "0o") then return (
+        radixOf
+        digits: (t.substring from: 2 to: t.length)
+        radix: 8
+    )
+    if (t.startsWith prefix: "+") then return (t.substring from: 1 to: t.length).parseI64
+    return t.parseI64
+}
+
+# radixOf -- `digits` in base `radix`, as an i64
+radixOf: function {digits: StringView radix: u64} out (resultval i64 e: parseerror) is {
+    if digits.length == 0 then return ((resultval i64 e: parseerror).err parseerror.empty)
+    v: u64
+    for each b: digits.byteView loop {
+        d: digitValue :b
+        if d >= radix then return ((resultval i64 e: parseerror).err parseerror.invalidDigit)
+        if v > (9223372036854775807 - d / radix) then return ((resultval i64 e: parseerror
+        ).err parseerror.overflow
+        )
+        v = v * radix + d
+    }
+    return ((resultval i64 e: parseerror).ok v.i64.orPanic)
+}
+
+# digitValue -- the value of digit byte `b` in any base up to 16; 99 for a byte
+# that is no digit
+digitValue: function {b: u8} out u64 is {
+    if (ascii.isDigit :b) then return b - 0c0
+    if b >= 0ca when b <= 0cf then return (b - 0ca).u64 + 10
+    if b >= 0cA when b <= 0cF then return (b - 0cA).u64 + 10
+    return 99
+}
+
+# fitsType -- `v` fits the integer type in slot `w`; any i64 fits a slot that
+# names no narrower type
+fitsType: function {v: i64 w: u64} out bool is {
+    if w == zdWord.slot.i8Type then return (v >= -128) and (v <= 127)
+    if w == zdWord.slot.i16Type then return (v >= -32768) and (v <= 32767)
+    if w == zdWord.slot.i32Type then return (v >= -2147483648) and (v <= 2147483647)
+    if w == zdWord.slot.u8Type then return (v >= 0) and (v <= 255)
+    if w == zdWord.slot.u16Type then return (v >= 0) and (v <= 65535)
+    if w == zdWord.slot.u32Type then return (v >= 0) and (v <= 4294967295)
+    if (w >= zdWord.slot.u64Type) and (w <= zdWord.slot.c32Type) then return v >= 0
+    return true
+}
+
+# dottedValue -- `a.b`: a number written with its type (`8080.u16`), or a
+# choice value (`stage.posix`); anything else names another definition
+dottedValue: function {
+    rd: Reader sc: Schema.view nid: zast.nodeid name: StringView path: StringView
+} out Entry is {
+    n: sc.p.ast.nodes.get i: nid
+    match (
+        n
+    ) case dottedpath then {
+        pt: nodeName ast: sc.p.ast nid: n.parent
+        ct: nodeName ast: sc.p.ast nid: n.child
+        if (isNumberText t: pt.stringView) when (isScalarType w: (wordOf :sc text: ct.stringView)
+        ) then {
+            return (numberValue :rd :sc :nid :name :path text: pt.stringView type: ct.stringView)
+        }
+        if (choiceNamed :sc name: (pathText ast: sc.p.ast nid: n.parent).stringView).some then {
+            return (choiceValueOf :rd :sc :nid :name :path armNid: nid payload: zast.nodeid)
+        }
+    } else null
+    what: "'\{(
+        pathText
+        ast: sc.p.ast
+        :nid
+    )}' names another definition; zd reads values written in place"
+    refuse :rd ast: sc.p.ast :nid :path what: what.stringView
+    return (placeholder :rd)
+}
+
+# pathText -- a name or a dotted path of names, as written
+pathText: function {ast: zast.Ast.view nid: zast.nodeid} out String is {
+    n: ast.nodes.get i: nid
+    match (
+        n
+    ) case dottedpath then {
+        return "\{pathText :ast nid: n.parent}.\{pathText :ast nid: n.child}"
+    } else {
+        return (nodeName :ast :nid)
+    }
+}
+
+# choiceNamed -- the index of the choice declaration named `name`, or none
+choiceNamed: function {sc: Schema.view name: StringView} out optionval u64 is {
+    k: u64
+    for each c: sc.choices loop {
+        if c.name.stringView == name then return (optionval.some k)
+        k = k + 1
+    }
+    return (optionval.none u64)
+}
+
+# dataNamed -- the index of the data declaration named `name`, or none
+dataNamed: function {sc: Schema.view name: StringView} out optionval u64 is {
+    k: u64
+    for each d: sc.datas loop {
+        if d.name.stringView == name then return (optionval.some k)
+        k = k + 1
+    }
+    return (optionval.none u64)
+}
+
+# choiceValueOf -- the choice value `armNid` names (`stage.paid`), carrying the
+# value node `payload` (0 for none): the arm must be declared, and carry a value
+# exactly when it is declared with a type
+choiceValueOf: function {
+    rd: Reader
+    sc: Schema.view
+    nid: zast.nodeid
+    name: StringView
+    path: StringView
+    armNid: zast.nodeid
+    payload: zast.nodeid
+} out Entry is {
+    an: sc.p.ast.nodes.get i: armNid
+    tn: String
+    arm: String
+    match (
+        an
+    ) case dottedpath then {
+        tn = pathText ast: sc.p.ast nid: an.parent
+        arm = nodeName ast: sc.p.ast nid: an.child
+    } else null
+    k: (choiceNamed :sc name: tn.stringView).or d: 0
+    decl: sc.choices.get i: k
+    for each a: decl.arms loop {
+        if a.name == arm then {
+            if a.payload.length > 0 when payload.isZero then {
+                what: "arm '\{arm}' of choice '\{tn}' carries a \{a.payload}; write it with the value it carries"
+                refuse :rd ast: sc.p.ast :nid :path what: what.stringView
+                return (placeholder :rd)
+            }
+            if a.payload.length == 0 when payload.notZero then {
+                what: "arm '\{arm}' of choice '\{tn}' is declared null and carries nothing"
+                refuse :rd ast: sc.p.ast :nid :path what: what.stringView
+                return (placeholder :rd)
+            }
+            po: Option.none Entry
+            if payload.notZero then {
+                pp: childPath prefix: path name: arm.stringView
+                pe: (
+                    valueOf
+                    :rd
+                    :sc
+                    nid: payload
+                    name: ""
+                    path: pp.stringView
+                    want: a.payload.stringView
+                )
+                po = Option.some pe.take
+            }
+            cv: ChoiceValue arm: arm.copy payload: po.take
+            return (
+                entryOf
+                :rd
+                ast: sc.p.ast
+                :nid
+                :name
+                :path
+                type: tn.stringView
+                node: Node.choiceValue cv.take
+            )
+        }
+    }
+    what: "choice '\{tn}' has no arm '\{arm}'"
+    refuse :rd ast: sc.p.ast :nid :path what: what.stringView
+    return (placeholder :rd)
+}
+
+# textValue -- a string literal's text; an interpolation is refused
+textValue: function {
+    rd: Reader
+    ast: zast.Ast.view
+    nid: zast.nodeid
+    name: StringView
+    path: StringView
+    parts: zast.kidspan
+} out Entry is {
+    t: String
+    for each pid: (zast.kidsOf :ast span: parts) loop {
+        pn: ast.nodes.get i: pid
+        match (
+            pn
+        ) case stringchunk then {
+            t.append (zast.literalTextAt :ast ref: pn.text)
+        } else {
+            (
+                refuse
+                :rd
+                :ast
+                :nid
+                :path
+                what: "an interpolation computes a text; a data file holds texts written as they are"
+            )
+            return (placeholder :rd)
+        }
+    }
+    return (entryOf :rd :ast :nid :name :path type: "" node: Node.text t.take)
+}
+
+# listValueOf -- `list { ... }`: its items, a label each item's name; an
+# `out` type is the Entry's type
+listValueOf: function {
+    rd: Reader sc: Schema.view nid: zast.nodeid name: StringView path: StringView
+} out Entry is {
+    items: List Entry
+    ot: String
+    els: ListVal zast.nodeid
+    n: sc.p.ast.nodes.get i: nid
+    match (
+        n
+    ) case listblock then {
+        els = kidsList ast: sc.p.ast span: n.elements
+        if n.outType.notZero then ot = typeText ast: sc.p.ast nid: n.outType
+    } else null
+    k: u64
+    for each eid: els loop {
+        if rd.failed then return (placeholder :rd)
+        lbl: nodeName ast: sc.p.ast nid: eid
+        ip: "\{path}[\{k}]"
+        items.append (
+            valueOf
+            :rd
+            :sc
+            nid: (valueNode ast: sc.p.ast nid: eid)
+            name: lbl.stringView
+            path: ip.stringView
+            want: ""
+        )
+        k = k + 1
+    }
+    return (
+        entryOf
+        :rd
+        ast: sc.p.ast
+        :nid
+        :name
+        :path
+        type: ot.stringView
+        node: Node.listValue items.take
+    )
+}
+
+# typeText -- a type written in a list's `out`: `staticlist text`
+typeText: function {ast: zast.Ast.view nid: zast.nodeid} out String is {
+    n: ast.nodes.get i: nid
+    match (
+        n
+    ) case call then {
+        t: pathText :ast nid: n.callable
+        for each aid: (zast.kidsOf :ast span: n.arguments) loop {
+            t.append " \{typeText :ast nid: (valueNode :ast nid: aid)}"
+        }
+        return t
+    } else {
+        return (pathText :ast :nid)
+    }
+}
+
+# callValue -- `(T f: v ...)`, a data value, or `T.arm (payload)`, a choice
+# value carrying one
+callValue: function {
+    rd: Reader sc: Schema.view nid: zast.nodeid name: StringView path: StringView
+} out Entry is {
+    callable: zast.nodeid
+    args: ListVal zast.nodeid
+    n: sc.p.ast.nodes.get i: nid
+    match (
+        n
+    ) case call then {
+        callable = n.callable
+        args = kidsList ast: sc.p.ast span: n.arguments
+    } else null
+    cn: sc.p.ast.nodes.get i: callable
+    if cn.dottedpath when (choiceNamed :sc name: (pathText ast: sc.p.ast nid: cn.parent).stringView
+    ).some then {
+        if args.length != 1 then {
+            refuse :rd ast: sc.p.ast :nid :path what: "a choice value carries one value"
+            return (placeholder :rd)
+        }
+        pv: valueNode ast: sc.p.ast nid: (args.get i: 0)
+        return (choiceValueOf :rd :sc :nid :name :path armNid: callable payload: pv)
+    }
+    tn: pathText ast: sc.p.ast nid: callable
+    ddo: dataNamed :sc name: tn.stringView
+    match (
+        ddo
+    ) case some then {
+        return (dataValueOf :rd :sc :nid :name :path decl: (sc.datas.get i: ddo) written: args)
+    } case none then {
+        what: "'\{tn}' is no data type this file declares; zd reads the file's own types"
+        refuse :rd ast: sc.p.ast :nid :path what: what.stringView
+        return (placeholder :rd)
+    }
+}
+
+# dataValueOf -- data value of `decl` with the arguments `written`: every
+# field in the declaration's order, the written ones as written and the others
+# their default; a field written twice, one the type does not declare and a
+# missing one with no default are refused
+dataValueOf: function {
+    rd: Reader
+    sc: Schema.view
+    nid: zast.nodeid
+    name: StringView
+    path: StringView
+    decl: DataDecl.view
+    written: (ListVal zast.nodeid).view
+} out Entry is {
+    if (writtenFieldsKnown :rd ast: sc.p.ast :path :decl :written).not then return (placeholder :rd)
+    fields: List Entry
+    for each f: decl.fields loop {
+        if rd.failed then return (placeholder :rd)
+        fp: childPath prefix: path name: f.name.stringView
+        src: argumentFor ast: sc.p.ast :written field: f.name.stringView
+        if src.isZero then src = f.default
+        if src.isZero then {
+            what: "data '\{decl.name}' needs field '\{f.name}', which has no default"
+            refuse :rd ast: sc.p.ast :nid :path what: what.stringView
+            return (placeholder :rd)
+        }
+        fields.append (
+            valueOf
+            :rd
+            :sc
+            nid: src
+            name: f.name.stringView
+            path: fp.stringView
+            want: f.type.stringView
+        )
+    }
+    return (
+        entryOf
+        :rd
+        ast: sc.p.ast
+        :nid
+        :name
+        :path
+        type: decl.name.stringView
+        node: Node.dataValue fields.take
+    )
+}
+
+# writtenFieldsKnown -- every argument `written` of a data value of `decl`
+# names one of its fields, once; the first that does not is refused
+writtenFieldsKnown: function {
+    rd: Reader
+    ast: zast.Ast.view
+    path: StringView
+    decl: DataDecl.view
+    written: (ListVal zast.nodeid).view
+} out bool is {
+    seen: List String
+    for each aid: written loop {
+        lbl: nodeName :ast nid: aid
+        if lbl.length == 0 then {
+            refuse :rd :ast nid: aid :path what: "a data value names each field it writes"
+            return false
+        }
+        if (fieldDeclared :decl name: lbl.stringView).not then {
+            what: "data '\{decl.name}' has no field '\{lbl}'"
+            refuse :rd :ast nid: aid :path what: what.stringView
+            return false
+        }
+        if (seen.contains item: lbl) then {
+            what: "field '\{lbl}' is written twice"
+            refuse :rd :ast nid: aid :path what: what.stringView
+            return false
+        }
+        seen.append lbl.take
+    }
+    return true
+}
+
+# fieldDeclared -- `decl` declares a field `name`
+fieldDeclared: function {decl: DataDecl.view name: StringView} out bool is {
+    for each f: decl.fields loop {
+        if f.name.stringView == name then return true
+    }
+    return false
+}
+
+# argumentFor -- the value node of the argument labelled `field`, 0 when none
+argumentFor: function {
+    ast: zast.Ast.view written: (ListVal zast.nodeid).view field: StringView
+} out zast.nodeid is {
+    for each aid: written loop {
+        if (nodeName :ast nid: aid).stringView == field then return (valueNode :ast nid: aid)
+    }
+    return zast.nodeid
+}
+
+# checkKind -- entry `entry` holds what its place's type `want` admits; an
+# untyped number must fit the numeric type of its place, and an integer in a
+# float type is read as that float. The entry's type stays the one written.
+checkKind: function {rd: Reader sc: Schema.view nid: zast.nodeid entry: Entry want: StringView} is {
+    if want.length == 0 then return
+    w: wordOf :sc text: want
+    if (kindAdmits :entry :want :w).not then {
+        what: "expected \{want}, found \{kindOf n: entry.node}"
+        refuse :rd ast: sc.p.ast :nid path: entry.path.stringView what: what.stringView
+        return
+    }
+    if entry.type.length > 0 then return
+    iv: integerHeld n: entry.node
+    if iv.some when (isFloatType :w) then {
+        fv: iv.i64.f64
+        if fv.err then {
+            what: "\{iv} has no exact \{want}"
+            refuse :rd ast: sc.p.ast :nid path: entry.path.stringView what: what.stringView
+            return
+        }
+        entry.node = Node.float fv
+    } else if iv.some when (fitsType v: iv :w).not then {
+        what: "\{iv} does not fit \{want}"
+        refuse :rd ast: sc.p.ast :nid path: entry.path.stringView what: what.stringView
+    }
+}
+
+# integerHeld -- the integer `n` holds; none for any other value
+integerHeld: function {n: Node.view} out optionval i64 is {
+    match (
+        n
+    ) case integer then {
+        return (optionval.some n.i64)
+    } else {
+        return (optionval.none i64)
+    }
+}
+
+# kindAdmits -- the value `entry` holds is one of type `want`, whose word slot
+# is `w`
+kindAdmits: function {entry: Entry.view want: StringView w: u64} out bool is {
+    n: entry.node
+    match (
+        n
+    ) case text then {
+        return w == zdWord.slot.textType
+    } case boolean then {
+        return w == zdWord.slot.boolType
+    } case integer then {
+        return (isNumericType :w)
+    } case float then {
+        return (isFloatType :w)
+    } case dataValue then {
+        return entry.type.stringView == want
+    } case choiceValue then {
+        return entry.type.stringView == want
+    } else {
+        return true
+    }
+}
+
+# ---- writing --------------------------------------------------------------
+
+# lineWidth -- the column a written line keeps within, as `zl fmt` does
+lineWidth: 100
+
+# write -- `doc`, the file's unit (unitValue), written to `path` after the
+# comment block `header` and the declarations `schema`, both as given
+write: function {path: StringView header: StringView schema: StringView doc: Entry.view} out (
+    Result
+    null
+    E: Error
+) is {
+    t: format :header :schema :doc
+    r: io.writeText :path content: t
+    match (
+        r
+    ) case ok then {
+        return ((Result null E: Error).ok null)
+    } case err then {
+        return ((Result null E: Error).err (fileError file: path what: "cannot be written"))
+    }
+}
+
+# format -- the text `write` writes
+format: function {header: StringView schema: StringView doc: Entry.view} out String is {
+    t: String
+    appendBlock :t block: header
+    appendBlock :t block: schema
+    n: doc.node
+    match (
+        n
+    ) case unitValue then {
+        appendDefinitions :t defs: n indent: 0
+    } else {
+        appendValue :t e: doc indent: 0
+        t.append "\n"
+    }
+    return t
+}
+
+# appendBlock -- `block` and a blank line after it, nothing when it is empty
+appendBlock: function {t: String block: StringView} is {
+    if block.length == 0 then return
+    t.append block
+    if ((block.byteAt block.length - 1).or d: 0) != ascii.lf then t.append "\n"
+    t.append "\n"
+}
+
+# pad -- `n` levels of indentation
+pad: function {t: String n: u64} is {
+    i: u64
+    for i < n loop {
+        t.append "    "
+        i = i + 1
+    }
+}
+
+# appendValue -- entry `e`'s value as `zl fmt` writes it, its own lines
+# indented `indent` levels
+appendValue: function {t: String e: Entry.view indent: u64} is {
+    n: e.node
+    match (
+        n
+    ) case integer then {
+        t.append "\{n}"
+        if e.type.length > 0 then t.append ".\{e.type}"
+    } case float then {
+        t.append (floatText v: n)
+        if e.type.length > 0 then t.append ".\{e.type}"
+    } case text then {
+        appendQuoted :t s: n.stringView
+    } case boolean then {
+        if n then t.append "true" else t.append "false"
+    } case listValue then {
+        if n.length == 0 then {
+            t.append "list {}"
+            if e.type.length > 0 then t.append " out \{e.type}"
+            return
+        }
+        t.append "list {\n"
+        for each it: n loop {
+            pad :t n: indent + 1
+            if it.name.length > 0 then t.append "\{it.name}: "
+            appendValue :t e: it indent: indent + 1
+            t.append "\n"
+        }
+        pad :t n: indent
+        t.append "}"
+        if e.type.length > 0 then t.append " out \{e.type}"
+    } case dataValue then {
+        one: String
+        one.append "(\{e.type}"
+        for each f: n loop {
+            one.append " \{f.name}: "
+            appendValue t: one e: f indent: indent + 1
+        }
+        one.append ")"
+        if (isOneLine s: one.stringView) when (indent * 4 + one.length) <= lineWidth then {
+            t.append one
+            return
+        }
+        t.append "(\n"
+        pad :t n: indent + 1
+        t.append e.type
+        t.append "\n"
+        for each f: n loop {
+            pad :t n: indent + 1
+            t.append "\{f.name}: "
+            appendValue :t e: f indent: indent + 1
+            t.append "\n"
+        }
+        pad :t n: indent
+        t.append ")"
+    } case choiceValue then {
+        t.append "\{e.type}.\{n.arm}"
+        p: n.payload
+        match (
+            p
+        ) case some then {
+            t.append " "
+            appendValue :t e: p :indent
+        } case none then null
+    } case unitValue then {
+        t.append "unit {\n"
+        appendDefinitions :t defs: n indent: indent + 1
+        pad :t n: indent
+        t.append "}"
+    }
+}
+
+# appendDefinitions -- the definitions `defs`, one a line at `indent`; a
+# definition that spans lines is followed by a blank line when another comes
+# after it, as `zl fmt` writes them
+appendDefinitions: function {t: String defs: (List Entry).view indent: u64} is {
+    k: u64
+    for each d: defs loop {
+        pad :t n: indent
+        start: t.length
+        t.append "\{d.name}: "
+        appendValue :t e: d :indent
+        spans: (isOneLine s: (t.stringView.substring from: start to: t.length)).not
+        t.append "\n"
+        k = k + 1
+        if spans when k < defs.length then t.append "\n"
+    }
+}
+
+# isOneLine -- `s` holds no line break
+isOneLine: function {s: StringView} out bool is {
+    for each b: s.byteView loop {
+        if b == ascii.lf then return false
+    }
+    return true
+}
+
+# floatText -- `v` as a float literal: a fraction always written
+floatText: function {v: f64} out String is {
+    s: "\{v}"
+    if (isFloatText t: s.stringView).not then s.append ".0"
+    return s
+}
+
+# appendQuoted -- `s` as a string literal, its quote, backslash and control
+# bytes escaped
+appendQuoted: function {t: String s: StringView} is {
+    t.appendByte b: ascii.doubleQuote
+    for each b: s.byteView loop {
+        if b == ascii.doubleQuote then {
+            t.append "\\\""
+        } else if b == 0c\\ then {
+            t.append "\\\\"
+        } else if b == ascii.lf then {
+            t.append "\\n"
+        } else if b == ascii.ht then {
+            t.append "\\t"
+        } else if b == ascii.cr then {
+            t.append "\\r"
+        } else {
+            t.appendByte :b
+        }
+    }
+    t.appendByte b: ascii.doubleQuote
+}
