@@ -79,7 +79,6 @@ literalFitsMessage: function {
         tk: ztypes.numkindByName name: target
         return (constFitsKindMessage :st :v k: tk.kind spelling: lit)
     }
-    if lit.startsWith "-" then return (ztypes.negativeLiteralFits :lit :target)
     kind: ztypes.numkindByName name: target
     parsed: ztypes.parseNumberAs numstr: lit k: kind.kind
     if parsed.err.length > 0 then return parsed.err.copy
@@ -1985,31 +1984,6 @@ constArithFloat: function {op: arithop a: f64 b: f64} out ztypes.cval is {
     return ztypes.noConst
 }
 
-# constValEq -- do two compile-time values denote the same thing? Only defined
-# within a kind: comparing an int to a tag is not false, it is unanswerable,
-# which is what `has` reports.
-constValEq: function {st: zenv.ZSymbolTable.view a: ztypes.cval b: ztypes.cval} out ffoldval is {
-    if a.kind.ivalKind when b.kind.ivalKind then {
-        r: 0.0
-        # interned by value, so one value has one spelling
-        if a.ival == b.ival when a.bigId == b.bigId then r = 1.0
-        return (ffoldval has: true val: r)
-    }
-    if a.kind.armKind when b.kind.armKind then {
-        r: 0.0
-        if a.armTid == b.armTid when a.armName == b.armName then r = 1.0
-        return (ffoldval has: true val: r)
-    }
-    if a.kind.svalKind when b.kind.svalKind then {
-        constStr: constStringAt :st id: a.strId
-        bs: constStringAt :st id: b.strId
-        r: 0.0
-        if constStr.stringView == bs then r = 1.0
-        return (ffoldval has: true val: r)
-    }
-    return (ffoldval has: false val: 0.0)
-}
-
 # constStrArgAt -- one argument of a static string method, found by LABEL or by
 # POSITION. Argument labels are optional (`sv.startsWith "ztr_"` is legal), so a
 # namedoperation carrying no name is the positional form and is matched on its
@@ -3327,7 +3301,8 @@ integerDivision: function {
 # methods and records a reached `error`; the first changes nothing a body emits
 # and the second is a diagnostic this walk must never raise. The `if` arm folds
 # a branch the emitter already reads its own channel for, and a body's `match`
-# is decided by foldCaseArm. Measured on a self-compile, the
+# on a constant is decided by its held arm (recordConstMatchFold). Measured on a
+# self-compile, the
 # two together allocate for every call and every `if` in the program and move
 # not one byte of emitted C. A METHOD ON A STRING CONSTANT is the exception:
 # `(GREETING.substring from: 0 to: 5)` folds, and it is asked only where the

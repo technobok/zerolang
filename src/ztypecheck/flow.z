@@ -2824,7 +2824,6 @@ checkCase: function {
     ast: Ast
     casenode: caseref
 } out ztypes.tid is {
-    foldCaseArm :st :ast :unitDecl n: casenode
     statics.constFailClear :st
     matchMarker: st.pushBlock node: casenode.nid
     # a typedef over a union or variant is matched on its base's arms
@@ -3434,62 +3433,6 @@ stampFoldedLoop: function {st: zenv.ZSymbolTable nid: zast.nodeid fold: ztyping.
         :foreign
         :nid
         value: fold
-    )
-}
-
-# foldCaseArm -- which arm of a `match` a constant subject selects, stamped on
-# the match the way foldIfBranch stamps an `if`. A BINDING arm (`case x then`)
-# names its payload rather than testing a value, so a match holding one is not
-# decidable here at all.
-foldCaseArm: function {
-    ast: Ast
-    st: zenv.ZSymbolTable
-    unitDecl: ztypes.declid
-    n: caseref
-} is {
-    # a numeric generic parameter's dissection is decided per mono where it is
-    # emitted, which also refuses a value no arm covers
-    if (st.typing.numericParamRead.has key: n.subject) then return
-    sv: statics.evalConstNode :st scope: st.curScope :ast :unitDecl nid: n.subject
-    if sv.kind.none then return
-    known: true
-    stmt: zast.nodeid
-    decided: false
-    kC: u64
-    for kC < n.nclauses loop {
-        clId: zast.caseClauseAt :ast nid: n.nid i: kC
-        kC = kC + 1
-        if known then {
-            cl: caseClauseRefAt :ast nid: clId
-            if cl.nid.notZero then {
-                if cl.name.notZero then {
-                    known = false
-                } else {
-                    av: statics.evalConstNode :st scope: st.curScope :ast :unitDecl nid: cl.matcharm
-                    eq: consteval.constValEq :st a: av b: sv
-                    if eq.has then {
-                        if eq.val > 0.0 when decided.not then {
-                            stmt = cl.statement
-                            decided = true
-                        }
-                    } else {
-                        known = false
-                    }
-                }
-            } else {
-                known = false
-            }
-        }
-    }
-    if known.not then return
-    if decided.not then stmt = n.elseclause
-    foreign: st.typing.rowIsForeign nid: n.nid
-    (
-        ztyping.setAgreed
-        shared: st.typing.foldedBranch
-        :foreign
-        nid: n.nid
-        value: (ztyping.foldedbranch known: true :stmt)
     )
 }
 

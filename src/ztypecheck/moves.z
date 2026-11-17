@@ -6381,66 +6381,10 @@ stampArgDisposition: function {
     st.typing.argDisposition.set key: dispNid value: dispVal
 }
 
-# consumeBoxedName -- a bare reftype name boxed by value is MOVED into the box,
-# so the name is invalidated. A readonly, pinned or borrowed source cannot be
-# moved and is refused instead, each in its own terms. This is the box's own
-# chain and not consumeBareArgOwnership's: the verb differs, and a box carries
-# no receiver and no callee pins for held locks to travel into.
-consumeBoxedName: function {
-    st: zenv.ZSymbolTable
-    ast: Ast
-    name: StringView
-    nodeid: zast.nodeid
-    lineno: u32
-    colno: u32
-} is {
-    nameVid: st.lookupVarId nameId: (nameIdOf :ast :name)
-    known: false
-    vid: ztypes.vid
-    if nameVid.some then {
-        known = true
-        vid = nameVid
-    }
-    if known.not then {
-        st.invalidate nameId: (nameIdOf :ast :name) loc: takenHere
-        return
-    }
-    if (nameIsReadonly :st :ast :name) then {
-        (
-            readonlyMoveError
-            :st
-            :ast
-            :nodeid
-            :lineno
-            :colno
-            :name
-            verb: "into a box"
-        )
-        return
-    }
-    if (
-        pinnedMoveError
-        :st
-        :ast
-        :nodeid
-        :lineno
-        :colno
-        :name
-        verb: "into a box"
-    ) then return
-    if (isBorrowedVar :st :vid) then {
-        mb8Keep: keepSourceHint :st :ast :name
-        mb8: "Cannot move borrowed variable '\{name}' into a box — borrowed names stay bound to their source for the full scope\{mb8Keep}"
-        addError :st :nodeid :lineno :colno e: zast.err.ownerError msg: mb8
-        return
-    }
-    st.invalidate nameId: (nameIdOf :ast :name) loc: takenHere
-}
-
 # bindBoxedArgument -- the box's value argument once its type is known. A
 # TRIVIAL argument (a bare name or a literal) is stamped with the boxed type at
-# its innermost node, and a bare reftype name is moved into the box; anything
-# else is hoisted, having no name to invalidate.
+# its innermost node; anything else is hoisted. A box holds a value type (its
+# `anyval` bound), so no argument is a reftype name to move into it.
 bindBoxedArgument: function {
     st: zenv.ZSymbolTable
     ast: Ast
@@ -6465,17 +6409,6 @@ bindBoxedArgument: function {
     }
     iid: nodeId n: (ast.nodes.get i: arg.operation)
     if iid.notZero then stampGate :st nid: iid tid: argT
-    if (st.reg.isReftypeOf tid: argT).not then return
-    # an OWNED copy of the name: the move below lends ast exclusively, and a
-    # view of the pool would still be holding it
-    bn: zast.nameTextCopy :ast ref: (zast.atomNameIdOf n: (ast.nodes.get i: arg.operation))
-    if bn.length == 0 then return
-    # the position is read into locals first: a nested `ast.nodes` read cannot
-    # stand in an argument of a call that is already lending ast
-    bxid: nodeId n: (ast.nodes.get i: arg.operation)
-    bxln: nodeLine n: (ast.nodes.get i: arg.operation)
-    bxcl: nodeCol n: (ast.nodes.get i: arg.operation)
-    consumeBoxedName :st :ast name: bn.stringView nodeid: bxid lineno: bxln colno: bxcl
 }
 
 # returnedBareFieldName -- `return <base>.<field>` where the member is a field
