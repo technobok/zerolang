@@ -2580,6 +2580,7 @@ emitC: function {
             borrowBoxUses: IdSet u64
             aggUses: IdSet u64
             aggReaderUses: IdSet u64
+            aggArrayUses: (IdMapV u64 v: ztypes.tid)
             contLabelUsed: (IdMapV u64 v: bool)
         )
         typeDefs: (
@@ -2720,6 +2721,7 @@ emitC: function {
     writeDemanded :prog :ctx protos: fnProtoText bodies: fnBodyText
     appendWrittenAggs :prog literals: ctx.literals buf: protosBuf
     emitStaticListReaders :prog :ctx buf: protosBuf
+    emitStaticListArrays :prog :ctx buf: protosBuf
     (
         appendWrittenFns
         plan: ctx.plan
@@ -3481,6 +3483,31 @@ emitStaticListReaders: function {
         if (ctx.reach.aggReaderUses.has item: id).not then continue
         count: (prog.typing.constAggs.get i: id).itemCount
         emitStaticListReader :prog :ctx :id :count :buf
+    }
+}
+
+# emitStaticListArrays -- the copy `_zag<row>_array()` of each reached list row
+# written C calls (noteAggArrayUse), in row order: the row's elements in a
+# value of the array type it is read as, so `primes.array` is an expression
+# wherever it is read.
+emitStaticListArrays: function {
+    prog: Program.view
+    ctx: Ctx
+    buf: String.borrow
+} is {
+    i: 1.u64
+    for i < prog.typing.constAggs.length loop {
+        id: i
+        i = i + 1
+        at: (ctx.reach.aggArrayUses.get key: id).or d: ztypes.tid.zero
+        if at.isZero then continue
+        ct: typeRefC :prog :ctx tid: at
+        n: nativerows.monoLengthText :prog monoId: at
+        dsym: "_zag\{id}"
+        buf.append "static \{ct} \{dsym}_array(void) {\n"
+        buf.append "    \{ct} a;\n"
+        buf.append "    for (int64_t i = 0; i < \{n}; i++) a.data[i] = \{dsym}[i];\n"
+        buf.append "    return a;\n}\n\n"
     }
 }
 

@@ -705,7 +705,7 @@ mainUnitTid: function {prog: Program.view known: KnownNames.view} out ztypes.tid
 
 # emitStaticListMember -- a list's member read through `n`, whose base is the
 # list row `row`: a label (`codes.ht`), an ordinal (`primes.0`), `.length`, or
-# `.array` (the whole list copied into an array temp). A read the checker
+# `.array` (the whole list copied into an array value, `_zag<row>_array()`). A read the checker
 # folded is its node constant already; this spells the ones it does not fold,
 # an element of a typedef type. "" for any other member.
 emitStaticListMember: function {
@@ -719,15 +719,10 @@ emitStaticListMember: function {
     if mnId == zast.wellKnown.slot.tyArray then {
         listTid: stampIdOf :prog nid: n.nodeid
         daid: chaseAggregateTypedef :prog :ctx tid: listTid
-        daCt: typeRefC :prog :ctx tid: daid
-        daLen: nativerows.monoLengthText :prog monoId: daid
-        daN: ctx.stmt.argHoistCtr
-        ctx.stmt.argHoistCtr = ctx.stmt.argHoistCtr + 1
-        daNm: "_da\{daN}"
-        noteAggUse :ctx :row
-        daRaw: "\{daCt} \{daNm};\nfor (int64_t _i = 0; _i < \{daLen.stringView}; _i++) { \{daNm}.data[_i] = _zag\{row}[_i]; }\n"
-        values.recordRawHoist stmt: ctx.stmt text: daRaw
-        return (stating :facts from: pathFacts text: daNm)
+        # spelled here, where the type is noted, for the copy written later
+        typeRefC :prog :ctx tid: daid
+        noteAggArrayUse :ctx :row tid: daid
+        return (stating :facts from: callFacts text: "_zag\{row}_array()")
     }
     g: prog.typing.constAggs.get i: row
     # `primes.first` and `codes.4` reach a LABELLED element by its name, an
@@ -1831,6 +1826,14 @@ noteAggUse: function {ctx: Ctx row: u64} is {
         return
     }
     ctx.reach.aggUses.add item: row
+}
+
+# noteAggArrayUse -- written C calls static list row `row`'s copy
+# `_zag<row>_array()` into a value of the array type `tid`: it is written with
+# the row it copies, which are fixed together.
+noteAggArrayUse: function {ctx: Ctx row: u64 tid: ztypes.tid} is {
+    noteAggUse :ctx :row
+    if ctx.literals.aggsFixed.not then ctx.reach.aggArrayUses.set key: row value: tid
 }
 
 # noteAggReaderUse -- written C calls static list row `row`'s reader

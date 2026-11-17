@@ -487,7 +487,7 @@ dottedBaseNodeId: function {prog: Program.view n: astnode.view} out zast.nodeid 
 # openInPlace -- begin a condition evaluated where it is written: a `when`
 # conjunct past the first, a loop's test, a do-while's trailing test. The
 # hoists pending around it stay pending; the ones its text records are its own,
-# and closeInPlace or wrapInPlace ends it. `guarded` says it runs only on some
+# and closeInPlace or assignInPlaceTest ends it. `guarded` says it runs only on some
 # paths, or at every loop test, so nothing evaluated before it may be moved
 # into it (settleAhead).
 openInPlace: function {stmt: StatementState guarded: bool} out hoistmark is {
@@ -569,9 +569,15 @@ assignInPlace: function {stmt: StatementState mark: hoistmark text: StringView} 
 # `(_ahN = v, _ccN = (cond), destroy(&_ahN), _ccN)` -- so the statement
 # declaring it owes it nothing. A hoist an inner part assigns only on some paths
 # is zeroed first, so a path that skips it releases nothing. A raw hoist is a
-# statement no expression can hold, and takes wrapInPlace.
+# statement, which no C17 expression holds: no construct the emitter writes
+# leaves one inside a condition it evaluates in place, and one that did would
+# be an emitter failure.
 assignInPlaceTest: function {ctx: Ctx mark: hoistmark cond: StringView} out String is {
-    if ctx.stmt.argHoistRaw.length > mark.raw then return (wrapInPlace :ctx :mark :cond)
+    if ctx.stmt.argHoistRaw.length > mark.raw then {
+        emitFail :ctx what: "a statement inside a condition evaluated at every test".string line: 0
+        closeInPlace stmt: ctx.stmt :mark
+        return cond.string
+    }
     r: "(".string
     rel: String
     i: mark.names
@@ -611,23 +617,6 @@ assignInPlaceTest: function {ctx: Ctx mark: hoistmark cond: StringView} out Stri
     closeInPlace stmt: ctx.stmt :mark
     r.append "\{cc} = \{condInParens :cond}\{rel}, \{cc})"
     return r
-}
-
-# wrapInPlace -- end what openInPlace began, for a condition that recorded a
-# raw hoist (a statement no expression can hold): the hoists run where the
-# condition is evaluated -- past a short circuit, at every loop test -- as a
-# statement expression that declares them, computes the test, releases what
-# they owed and yields the test.
-wrapInPlace: function {ctx: Ctx mark: hoistmark cond: StringView} out String is {
-    ltmp: FnTemps n: 0 listFrees: List OwedFree
-    ccN: values.tmpNext stmt: ctx.stmt tmp: ltmp
-    lbuf: String
-    flushArgHoists :ctx ind: " " tmp: ltmp buf: lbuf
-    cw: condInParens :cond
-    lbuf.append " bool _cc\{ccN} = \{cw};"
-    flushBlockFrees tmp: ltmp lL: 0 diverged: false buf: lbuf
-    closeInPlace stmt: ctx.stmt :mark
-    return "({\{lbuf} _cc\{ccN}; })"
 }
 
 # pushLoopLabel -- allocate a unique break-target label for a loop and push it.
