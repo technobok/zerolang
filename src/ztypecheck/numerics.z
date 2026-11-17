@@ -344,6 +344,112 @@ variantTagLayout: function {
     }
 }
 
+# checkInstanceContainment -- a value type holds its fields and its arms by
+# value, so one that reaches itself through them has no size. A definition's
+# own cycle is refused where it resolves (resolve's containment cycle), and so
+# is a cycle that passes through one; a cycle of instances of generic records
+# and variants alone is minted after that, through type arguments no
+# definition sees -- `V t` holding `(W t: t)` holding `(V t: t)` -- so it is
+# found here and refused once, at the first instance's template.
+checkInstanceContainment: function {ast: Ast st: zenv.ZSymbolTable} is {
+    reported: IdSet ztypes.tid
+    last: st.reg.nextTid
+    t: ztypes.tid 1
+    for t < last loop {
+        tid: t
+        t = t.next
+        if (instanceHeldByValue :st :tid).not then continue
+        if (reported.has item: (st.reg.genericOriginOf :tid)) then continue
+        reach: instancesReached :st root: tid
+        if (reach.contains item: tid).not then continue
+        reportContainmentCycle :ast :st :tid
+        # the cycle's other members are the same refusal
+        for each c: reach loop {
+            back: instancesReached :st root: c
+            if (back.contains item: tid) then reported.add item: (st.reg.genericOriginOf tid: c)
+        }
+    }
+}
+
+# instanceHeldByValue -- `tid` is an instance of a generic record or variant
+# laid out as its own fields or arms: neither static data nor native.
+instanceHeldByValue: function {st: zenv.ZSymbolTable.view tid: ztypes.tid} out bool is {
+    if (st.reg.genericOriginOf :tid).isZero then return false
+    tt: st.reg.typetypeOf typeId: tid
+    if tt != ztypes.ztypetype.recordType when tt != ztypes.ztypetype.variantType then return false
+    return (st.reg.isStaticOf :tid).not and (st.reg.isNativeOf :tid).not
+}
+
+# instancesReached -- the instances `root` holds by value, directly or through
+# fields, arms, typedef bases and array elements of instances (heldInto), each
+# once: `root` itself among them when it holds itself.
+instancesReached: function {st: zenv.ZSymbolTable.view root: ztypes.tid} out ListVal ztypes.tid is {
+    seen: IdSet ztypes.tid
+    found: ListVal ztypes.tid
+    work: ListVal ztypes.tid
+    heldInto :st tid: root dst: work
+    for work.length > 0 loop {
+        cur: work.pop
+        if (seen.has item: cur) then continue
+        seen.add item: cur
+        if (instanceHeldByValue :st tid: cur) then found.append from: cur
+        heldInto :st tid: cur dst: work
+    }
+    return found
+}
+
+# heldInto -- the types `tid` holds by value, appended to `dst`: a typedef its
+# base, an array its element, an instance of a generic record its fields (a
+# function reference is a pointer), of a generic variant its arms' payloads.
+# Anything else is not walked: a reference type is a pointer, a native its own
+# C, and a definition's own fields are checked where it resolves.
+heldInto: function {st: zenv.ZSymbolTable.view tid: ztypes.tid dst: ListVal ztypes.tid} is {
+    tb: st.typing.typedefBaseTidOf :tid
+    if tb.notZero then {
+        dst.append from: tb
+        return
+    }
+    if (valIsMonoOf reg: st.reg typing: st.typing :tid wk: zast.wellKnown.slot.tyArray) then {
+        dst.append from: (conform.arrayElemTid reg: st.reg :tid)
+        return
+    }
+    if (instanceHeldByValue :st :tid).not then return
+    if (st.reg.typetypeOf typeId: tid) == ztypes.ztypetype.recordType then {
+        ids: ListVal ztypes.tid
+        nameIds: ListVal zast.nameid
+        conform.dataFieldIds reg: st.reg typing: st.typing :tid :ids :nameIds
+        for each f: ids loop {
+            fnRef: (st.reg.typetypeOf typeId: f) == ztypes.ztypetype.functionType
+            if fnRef.not then dst.append from: f
+        }
+        return
+    }
+    names: ListVal zast.nameid
+    zenv.sumArmNameIds ty: st.typing reg: st.reg :tid ids: names
+    for each an: names loop {
+        pt: (st.typing.declChildOfId parentTypeId: tid nameId: an).or d: ztypes.tid.zero
+        if pt.notZero when pt != st.typing.nullTypeId then dst.append from: pt
+    }
+}
+
+# reportContainmentCycle -- instance `tid` holds itself by value: refused at
+# its template's declaration, naming the instance.
+reportContainmentCycle: function {ast: Ast st: zenv.ZSymbolTable tid: ztypes.tid} is {
+    d: st.typing.declIdOfType typeId: (st.reg.genericOriginOf :tid)
+    nd: zast.nodeid
+    if d.notZero then nd = (st.typing.decls.get i: d).node
+    nm: specWrittenName :st :ast :tid
+    (
+        addError
+        :st
+        nodeid: nd
+        lineno: (nodeLine n: (ast.nodes.get i: nd))
+        colno: (nodeCol n: (ast.nodes.get i: nd))
+        e: zast.err.typeError
+        msg: "containment cycle: value type '\{nm}' contains itself by value; box the field behind a class, union, or Option"
+    )
+}
+
 # unionSlotBytes -- a union's payload slot, in bytes, on every target: the
 # language fixes it, so whether an arm is held inline is a fact about the
 # program and never about the machine it is built for.
