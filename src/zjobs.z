@@ -13,6 +13,7 @@ public: unit {
     :PoolJob
     :mkJob
     :runJobs
+    :timedOut
     :withZlink
     :zlinkArgs
     :slurp
@@ -322,9 +323,20 @@ dropChild: function {pool: JobPool k: u64} out u64 is {
     return job
 }
 
-# reapOne -- a child has exited: find its job, record the step's status (124
-# when the child was killed for its deadline), and advance the job to its next
-# step or end it.
+# killedStatus -- the status a step killed at its deadline is recorded with:
+# spawn's timeout convention
+killedStatus: 124
+
+# timedOut -- whether a step's recorded `status` says the pool killed it at its
+# deadline, so the step said nothing about its input: a report names it so,
+# not as a step that failed on what it was given
+timedOut: function {status: i32} out bool is {
+    return status == killedStatus
+}
+
+# reapOne -- a child has exited: find its job, record the step's status
+# (killedStatus when the child was killed for its deadline), and advance the
+# job to its next step or end it.
 reapOne: function {
     jobs: (List PoolJob).view
     pool: JobPool
@@ -344,7 +356,7 @@ reapOne: function {
         j2: jobs.get i: jk
         stw: j2.steps.get i: kstep
         stStatus: status
-        if (pool.killeds.get i: jk) then stStatus = 124
+        if (pool.killeds.get i: jk) then stStatus = killedStatus
         statuses.set i: jk val: stStatus
         ended: false
         if stStatus != 0 when stw.allowFail.false then {
@@ -363,7 +375,7 @@ reapOne: function {
 }
 
 # killOverdue -- kill every running child past its job's deadline, once each;
-# reapOne records it as 124 when the child is collected.
+# reapOne records it as killedStatus when the child is collected.
 killOverdue: function {pool: JobPool} is {
     now: os.monotonicMillis
     k: u64
@@ -380,8 +392,8 @@ killOverdue: function {pool: JobPool} is {
 
 # runJobs -- drive every job through its steps with at most maxJobs
 # children in flight. Steps within a job stay sequential; jobs overlap.
-# A step past its deadline is killed and recorded as 124 (spawn's
-# timeout convention). Results land in the caller's statuses/failSteps,
+# A step past its deadline is killed and recorded as killedStatus
+# (timedOut). Results land in the caller's statuses/failSteps,
 # indexed by job: failStep -1 = every step ran (status = the LAST
 # step's exit); otherwise the index of the hard-failing step.
 runJobs: function {

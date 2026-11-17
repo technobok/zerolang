@@ -115,16 +115,18 @@ Program: class {
     name: String
 }
 
-# Emitted -- the shared emit: where its files go, the programs, and whether
-# each job's emit succeeded (an eager job's: and its C compiled). Job 0 is zc's
-# own C; then each variant of `progs` in order, then the eager emit of `users`
-# and of `libs`.
+# Emitted -- the shared emit: where its files go, the programs, whether each
+# job's emit succeeded (an eager job's: and its C compiled), and whether a job
+# was killed at the step limit instead (zjobs.timedOut). Job 0 is zc's own C;
+# then each variant of `progs` in order, then the eager emit of `users` and of
+# `libs`.
 Emitted: class {
     dir: String
     progs: List Program
     users: List Program
     libs: List Program
     ok: ListVal bool
+    timedOut: ListVal bool
 }
 
 # UnusedCc -- a compiler the unused check runs
@@ -167,6 +169,7 @@ emitShared: function {r: Runner.view} out Emitted is {
         users: (userUnitPrograms :r)
         libs: (programsUnder dirs: (listOf2 a: r.sys.stringView b: r.srcDir.stringView))
         ok: ListVal bool
+        timedOut: ListVal bool
     )
     pool: emitPool :r :em
     statuses: ListVal i32
@@ -177,6 +180,9 @@ emitShared: function {r: Runner.view} out Emitted is {
     k: u64
     for k < pool.length loop {
         em.ok.append ((failSteps.get i: k) == -1) and ((statuses.get i: k) == 0)
+        em.timedOut.append (
+            ((failSteps.get i: k) != -1) and (zjobs.timedOut status: (statuses.get i: k))
+        )
         k = k + 1
     }
     return em
@@ -1301,8 +1307,22 @@ aliasLabelled: function {c: StringView} out bool is {
 }
 
 # checkEager -- the eager check: the programs and the user units against
-# eagerKnown, the lib/system and src units against eagerLibKnown
+# eagerKnown, the lib/system and src units against eagerLibKnown. A job killed
+# at the step limit judged nothing, so then the check names those jobs and
+# compares no set.
 checkEager: function {r: Runner em: Emitted.view} is {
+    first: jobOf :em v: emitVariant.length i: 0
+    slow: timedOutOf :em from: (jobOf :em v: emitVariant.slot.eager i: 0) progs: em.progs
+    for each nm: (timedOutOf :em from: first progs: em.users) loop slow.append nm.copy
+    libSlow: timedOutOf :em from: first + em.users.length progs: em.libs
+    for each nm: libSlow loop slow.append nm.copy
+    if slow.length > 0 then {
+        names: String
+        for each nm: slow loop names.append " \{nm}"
+        print "FAIL(emitted) eager: \{slow.length} jobs did not finish within the \{r.timeoutSecs} s a step may take (--timeout), so the eager set was not judged: the host was too slow, or a step hung:\{names}"
+        r.fails = r.fails + 1
+        return
+    }
     bad: List String
     i: u64
     for i < em.progs.length loop {
@@ -1310,7 +1330,6 @@ checkEager: function {r: Runner em: Emitted.view} is {
         ).name.copy
         i = i + 1
     }
-    first: jobOf :em v: emitVariant.length i: 0
     for each nm: (failedOf :em from: first progs: em.users) loop bad.append nm.copy
     libBad: failedOf :em from: first + em.users.length progs: em.libs
     known: namesOf block: expected.eagerKnown
@@ -1326,6 +1345,18 @@ failedOf: function {em: Emitted.view from: u64 progs: (List Program).view} out L
     i: u64
     for i < progs.length loop {
         if (em.ok.get i: from + i).false then names.append (progs.get :i).name.copy
+        i = i + 1
+    }
+    return names
+}
+
+# timedOutOf -- the names of `progs` whose jobs, from job `from` on, were killed
+# at the step limit
+timedOutOf: function {em: Emitted.view from: u64 progs: (List Program).view} out List String is {
+    names: List String
+    i: u64
+    for i < progs.length loop {
+        if (em.timedOut.get i: from + i) then names.append (progs.get :i).name.copy
         i = i + 1
     }
     return names

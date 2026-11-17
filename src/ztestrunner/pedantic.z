@@ -55,7 +55,14 @@ runPedanticCases: function {r: Runner} is {
         dir: drivers.stringView
         if i >= pedanticDrivers.length then dir = corpus.stringView
         job: jobs.get :i
-        if (pedanticFile :dir name: job.name.stringView failStep: (failSteps.get :i) :found
+        if (
+            pedanticFile
+            :dir
+            name: job.name.stringView
+            failStep: (failSteps.get :i)
+            status: (statuses.get :i)
+            limit: r.timeoutSecs
+            :found
         ).false then {
             bad = bad + 1
         }
@@ -131,9 +138,10 @@ pedanticJob: function {
 
 # pedanticFile -- one file's verdict: zc emitted it and the compiler read it,
 # its -Wpedantic lines added to `found`. A FAIL line says what broke when
-# either step did; answers false then.
+# either step did, by the failing step's `status`: a compiler killed at the
+# `limit` seconds a step may take judged nothing. Answers false then.
 pedanticFile: function {
-    dir: StringView name: StringView failStep: i64 found: List String
+    dir: StringView name: StringView failStep: i64 status: i32 limit: i32 found: List String
 } out bool is {
     if failStep == 0 then {
         print "FAIL(pedantic) \{name}: zc did not emit it (\{dir}/\{name}.zc says why)"
@@ -141,8 +149,12 @@ pedanticFile: function {
     }
     clog: "\{dir}/\{name}.log"
     log: slurp path: clog.stringView
+    if failStep == 1 when (zjobs.timedOut :status) then {
+        print "FAIL(pedantic) \{name}: the C compiler did not finish within the \{limit} s a step may take (--timeout), so its C was not judged: the host was too slow, or the compiler hung (\{clog})"
+        return false
+    }
     if failStep == 1 then {
-        print "FAIL(pedantic) \{name}: the C compiler rejects its C (\{clog}):"
+        print "FAIL(pedantic) \{name}: the C compiler rejects its C (exit \{status}, \{clog}):"
         shown: u64
         for each ln: log.stringView.lines loop {
             if (ln.contains needle: pedanticWord.error) when shown < 3 then {
