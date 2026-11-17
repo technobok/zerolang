@@ -2607,8 +2607,8 @@ checkResolvedValueCall: function {
         # A plain cross-unit class/record dotted construction
         # (`unit.Type field: val`): the dotted callee resolved to
         # a constructible type (not a function / tagged subtype /
-        # generic). Walk the ctor args (hoist + consume) and the
-        # value IS the constructed type, so the binding stamps.
+        # generic) that its path names. Read without arguments, a
+        # member of that type is a value of it, so the binding stamps.
         dctt: st.reg.typetypeOf typeId: dro
         isCtorT: dctt.isUserFamily
         if isCtorT then {
@@ -2624,34 +2624,22 @@ checkResolvedValueCall: function {
                 dct: checkTypeConstruction :st :unitDecl :ast :call tid: dro
                 return (callleg handled: true tid: dct)
             }
-            # a record-typed callable that names no type is read off a
-            # receiver: off a list it is `.get`, which walks its
-            # arguments as that record's and stays untyped; off anything else
-            # it is a value, whatever its type
-            if call.nargs > 0 when (callableReadsStaticList :st :ast :call).not then {
-                reportValueCalledWithArgs :st :unitDecl :ast :call
-                return (callleg handled: true tid: ztypes.tid.zero)
-            }
-            if call.nargs > 0 then {
-                dcm: st.pushCall node: call.nid
-                (
-                    walkCallArgsHoist
-                    :st
-                    :unitDecl
-                    :ast
-                    :call
-                    funcId: dro
-                    isCtor: true
-                    reportUnknown: false
-                    recvImplicit: false
-                )
-                checkMissingCallArgs :ast :st :call funcId: dro isCtor: true recvImplicit: true
-                st.typing.callKind.set key: call.nid value: zast.callkind.recordCreate
-                st.popTo marker: dcm
-                dck: dro
-                dcvv: true
-                st.walk.consts.constructedTypes.set key: dck value: dcvv
-            }
+        }
+        # a callable that names no type and is no function is read off a
+        # receiver -- a list's position, a field, a constant's member -- and is
+        # a value of the type it resolved to, whatever that type is: a value
+        # takes no arguments. A generic parameter's members are its
+        # instance's, which a template walk does not know.
+        if call.nargs > 0 when dctt != ztypes.ztypetype.genericParam when (
+            memberaccess.pathNamesType
+            :st
+            :ast
+            nid: call.callable
+        ).not then {
+            reportValueCalledWithArgs :st :unitDecl :ast :call
+            return (callleg handled: true tid: ztypes.tid.zero)
+        }
+        if isCtorT then {
             setdc: dro
             stampGate :st nid: call.nid tid: setdc
             return (callleg handled: true tid: dro)
@@ -3006,6 +2994,11 @@ refuseValueCallArgs: function {
     msg: "too many arguments: the callee is a value of type '\{tn}', not a function"
     if nameId.notZero then {
         nm: zast.nameTextAt :ast ref: nameId
+        # a list's position is named by the path that reads it
+        if (isNumericLiteralNameAt :ast ref: nameId) then {
+            nm = String
+            moves.exprTextOf :ast n: (ast.nodes.get i: call.callable) dst: nm
+        }
         msg = "too many arguments: '\{nm}' is a value of type '\{tn}', not a function"
     }
     # an object that declares `call` is called where it is read bare, and
