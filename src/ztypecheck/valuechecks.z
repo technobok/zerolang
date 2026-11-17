@@ -2554,7 +2554,7 @@ checkRepoint: function {
     xpins: List ztyping.PinPath
     for each bp: bpins loop moves.appendFollowedPin :st p: bp dst: xpins depth: 0 holder: xVid
     if (refuseRepointOutlives :st :ast :rasgn :xVid pins: xpins) then return
-    releaseCascade :st holder: ztypes.zlockholder.var xVid
+    releaseKeepingReadonly :st :ast :xVid
     (
         installPins
         :st
@@ -2598,6 +2598,17 @@ refuseRepointReadonly: function {
     return true
 }
 
+# releaseKeepingReadonly -- a re-point releases what the borrowed `xVid` held;
+# a readonly binding (a `.view` result, a `view` parameter) stays readonly, as
+# a reassignment keeps the mode its target was bound with, so its lock on
+# itself is taken again
+releaseKeepingReadonly: function {st: zenv.ZSymbolTable ast: Ast xVid: ztypes.vid} is {
+    xName: varNameText :st :ast vid: xVid
+    ro: moves.nameIsReadonly :st :ast name: xName.stringView
+    releaseCascade :st holder: ztypes.zlockholder.var xVid
+    if ro then readonlySelfLock :st :ast name: xName.stringView vid: xVid
+}
+
 # repointOwned -- `x = v` with `v` an owned value -- a call's result, a
 # construction -- or a view a call hands back, into the borrowed `x`: the
 # value is stored in `x`'s companion
@@ -2631,7 +2642,7 @@ repointOwned: function {
         lineno: rasgn.lineno
         colno: rasgn.colno
     )
-    releaseCascade :st holder: ztypes.zlockholder.var xVid
+    releaseKeepingReadonly :st :ast :xVid
     checkNarrowedTargetWrite :st :ast :rasgn
     st.typing.repoints.add item: rasgn.nid
     st.typing.ownedRepoints.add item: rasgn.nid
