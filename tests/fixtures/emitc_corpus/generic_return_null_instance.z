@@ -1,0 +1,51 @@
+# generic_return_null_instance -- a generic method that returns its type's
+# parameter, `out T` or `outx T.view`, on an instance whose argument is null:
+# that instance's method returns nothing, and what its body hands to `return`
+# is that null. It was refused ("a function with no `out` type returns no
+# value"), so `(Result null E: ..).orPanic` could not be checked under --eager.
+public: unit {
+    :main
+}
+
+# Reply -- a value of T, or the text saying why there is none
+Reply: union {
+    err: String
+    ok: T
+} as {
+    T: AnyRef.generic
+    # the value, viewed, or a panic with the reason
+    value: function {r: this.view} outx T.view is {
+        match (
+            r
+        ) case ok then {
+            return r
+        } case err then {
+            panic msg: r.stringView
+        }
+    }
+}
+
+# Fault -- an error with text
+Fault: class {
+    message: String
+} as {
+    stringViewable: StringViewable.implement
+    stringView: function {f: this.view} outx StringView is {
+        return f.message.stringView
+    }
+}
+
+# done -- a step that answers nothing when it succeeds
+done: function {fail: bool} out (Result null E: Fault) is {
+    if fail then return ((Result null E: Fault).err (Fault message: "step failed".string))
+    return ((Result null E: Fault).ok null)
+}
+
+main: function is {
+    a: (Reply null).ok null
+    a.value
+    (done fail: false).orPanic
+    b: (Reply String).ok "text".string
+    print b.value
+    print "done"
+}
