@@ -500,12 +500,12 @@ ci-windows: bin/zc bin/zgate $(BUILDDIR)/ztestrunner $(BUILDDIR)/wineprefix/.rea
 # native tools (src/ztestrunner/windows.z says each check). cl's flags are
 # spelled -flag: MSYS2 rewrites a /flag argument as a path.
 windows-guest: $(NATIVEC_INC)/zthread_shim.inc
-	@d=$(WINDOWS_DIR); fail=0; t=tests/c/zthread_shim_test.c; \
+	@d=$(WINDOWS_DIR); fail=0; t=tests/c/zthread_shim_test.c; c=tests/c/zconsole_read.c; \
 	cl -nologo -std:c17 -experimental:c11atomics -W3 -O2 -I$(NATIVEC_INC) $$t -Fe:$$d/shim-msvc.exe -Fo:$$d/ > $$d/cl.log 2>&1 \
 	  || { echo "windows-guest FAIL: cl did not build the shim test"; tail -5 $$d/cl.log; fail=1; }; \
 	gcc -std=c17 -Wall -Wextra -Wno-unused-function -O2 -I$(NATIVEC_INC) -o $$d/shim-gcc.exe $$t > $$d/gcc.log 2>&1 \
 	  || { echo "windows-guest FAIL: UCRT64 gcc did not build the shim test"; tail -5 $$d/gcc.log; fail=1; }; \
-	gcc -std=c17 -Wall -Wextra -O2 -o $$d/zconsole_read.exe tests/c/zconsole_read.c -lshell32 > $$d/console-cc.log 2>&1 \
+	gcc -std=c17 -Wall -Wextra -O2 -o $$d/zconsole_read.exe $$c -lshell32 > $$d/console-cc.log 2>&1 \
 	  || { echo "windows-guest FAIL: UCRT64 gcc did not build the console reader"; tail -5 $$d/console-cc.log; fail=1; }; \
 	$(MAKE) --no-print-directory zc bin/zl bin/zls $(BUILDDIR)/ztestrunner tcc > $$d/native-build.log 2>&1 \
 	  || { echo "windows-guest FAIL: zc, zl, zls, the runner and tcc did not build natively"; tail -10 $$d/native-build.log; exit 1; }; \
