@@ -4741,17 +4741,19 @@ forComprehensionTid: function {
     return ztypes.tid.zero
 }
 
-# reportBoxUnknownArgument -- the builtin Box constructs with `from:`; any
-# other label is reported, and the argument is still taken as the value so the
-# rest of the check has something to work with.
+# reportBoxUnknownArgument -- a Box takes one value, labelled `from:`, and the
+# template also takes its `t:` type argument (boxArgumentTid); `arg` is any
+# other argument.
 reportBoxUnknownArgument: function {
     st: zenv.ZSymbolTable
     ast: Ast
     arg: argref
 } is {
-    if arg.name == zast.wellKnown.slot.wkFrom then return
-    an: zast.nameTextCopy :ast ref: arg.name
-    msg: "the builtin Box constructs with 'from:'; unknown argument '\{an}'"
+    msg: "the builtin Box takes its value labelled 'from:'".string
+    if arg.name.notZero then {
+        an: zast.nameTextCopy :ast ref: arg.name
+        msg = "the builtin Box constructs with 'from:'; unknown argument '\{an}'"
+    }
     (
         addError
         :st
@@ -4782,45 +4784,115 @@ boxCallIsInstantiation: function {
     return true
 }
 
-# boxArgumentTid -- the type a `Box` construction is given: an explicit `t:` type
-# argument, or the type of the single value it boxes. 0 when neither is present.
+# boxArgumentTid -- the element type of a Box construction, once its one value
+# is checked. `given` is an instance's own element type; the template takes it
+# from its `t:` argument when one is written (boxTypeArgTid), and otherwise from
+# the value's own type, a literal taking its default. A known element type
+# checks the value as a parameter checks its argument: a literal lands in it
+# when its value fits, and any other value must convert to it without loss. The
+# first other argument is refused, and stands in as the value when no `from:`
+# is written. 0 when there is no value, or no type for it.
 boxArgumentTid: function {
     st: zenv.ZSymbolTable
     unitDecl: ztypes.declid
     ast: Ast
     call: callref
     tplId: ztypes.tid
+    given: ztypes.tid
 } out ztypes.tid is {
     # Box names its own type parameter; asking the template for it keeps this
     # site correct across a rename. An id compare has two zeros -- a template
     # that declared none, and an unlabelled argument -- so the compare is
     # guarded rather than trusted.
     boxParam: firstGenericParamId :st templateId: tplId
-    fnd: false
-    vt: ztypes.tid
+    elemT: given
+    valueId: zast.nodeid
+    strayId: zast.nodeid
     kAiter: u64
     for kAiter < call.nargs loop {
         argId: zast.callArgAt :ast nid: call.nid i: kAiter
         kAiter = kAiter + 1
         arg: argRefAt :ast nid: argId
         if arg.nid.isZero then continue
-        if fnd then continue
-        if boxParam.notZero when arg.name == boxParam then continue
-        reportBoxUnknownArgument :st :ast :arg
-        fnd = true
-        avt: callchecks.checkOwnedValueAt :st :unitDecl :ast nid: arg.operation
-        vt = valuechecks.materialiseLiteral :ast :st t: avt
-        if vt.isZero then continue
-        moves.bindBoxedArgument :st :ast :arg argT: vt
+        if given.isZero when boxParam.notZero when arg.name == boxParam then {
+            elemT = boxTypeArgTid :st :unitDecl :ast :arg :tplId :boxParam
+        } else if arg.name == zast.wellKnown.slot.wkFrom then {
+            valueId = argId
+        } else if strayId.isZero then {
+            strayId = argId
+        }
     }
-    return vt
+    if strayId.notZero then {
+        reportBoxUnknownArgument :st :ast arg: (argRefAt :ast nid: strayId)
+        if valueId.isZero then valueId = strayId
+    }
+    if valueId.isZero then return ztypes.tid.zero
+    return (checkBoxedValue :st :unitDecl :ast :valueId :elemT typed: strayId.isZero)
 }
 
-# checkBoxConstruction -- `Box from: val`: the value's (materialised) type
-# binds t; the argument is consumed (hoisted first when non-trivial); the
-# instance carries create plus the element type's children copied for
-# transparent member access. Heap passthrough (List/Map boxing) lands when
-# an example needs it.
+# checkBoxedValue -- the value a Box is made from. With an element type `elemT`
+# it is checked as an argument is against its parameter (when `typed`: not
+# after a refused argument stood in for it); without one, its own type is the
+# element type, a literal taking its default. Answers the element type, 0 when
+# the value has no type.
+checkBoxedValue: function {
+    st: zenv.ZSymbolTable
+    unitDecl: ztypes.declid
+    ast: Ast
+    valueId: zast.nodeid
+    elemT: ztypes.tid
+    typed: bool
+} out ztypes.tid is {
+    value: argRefAt :ast nid: valueId
+    avt: callchecks.checkOwnedValueAt :st :unitDecl :ast nid: value.operation
+    if avt.isZero then return ztypes.tid.zero
+    et: elemT
+    if et.isZero then {
+        et = valuechecks.materialiseLiteral :ast :st t: avt
+    } else if typed then {
+        numerics.checkArgTypeMismatch :st :ast ptid: et vt: avt pnId: value.name arg: value
+    }
+    bindT: avt
+    if (valuechecks.isAnyLiteralTid :st tid: avt) then bindT = et
+    moves.bindBoxedArgument :st :ast arg: value argT: bindT
+    return et
+}
+
+# boxTypeArgTid -- the type the Box template's `t:` argument names, read as any
+# generic construction reads a type argument, which refuses one that names no
+# type. 0 when it was refused.
+boxTypeArgTid: function {
+    st: zenv.ZSymbolTable
+    unitDecl: ztypes.declid
+    ast: Ast
+    arg: argref
+    tplId: ztypes.tid
+    boxParam: zast.nameid
+} out ztypes.tid is {
+    sfx: String
+    subs: IdMapV zast.nameid v: ztypes.tid
+    valueSubs: IdMapV zast.nameid v: u64
+    bound: IdSet zast.nameid
+    (
+        typeargs.bindTypeArgSub
+        :st
+        :unitDecl
+        :ast
+        :arg
+        pk: boxParam
+        :sfx
+        :subs
+        :valueSubs
+        boundParams: bound
+        tk: (st.typing.declIdOfType typeId: tplId)
+    )
+    return ((subs.get key: boxParam).or d: ztypes.tid.zero)
+}
+
+# checkBoxConstruction -- `Box from: val` and `Box t: T from: val`: the element
+# type (boxArgumentTid) binds t; the argument is consumed (hoisted first when
+# non-trivial); the instance carries create plus the element type's children
+# copied for transparent member access.
 checkBoxConstruction: function {
     st: zenv.ZSymbolTable
     unitDecl: ztypes.declid
@@ -4828,7 +4900,7 @@ checkBoxConstruction: function {
     call: callref
     tplId: ztypes.tid
 } out ztypes.tid is {
-    vt: boxArgumentTid :st :unitDecl :ast :call :tplId
+    vt: boxArgumentTid :st :unitDecl :ast :call :tplId given: ztypes.tid.zero
     if vt.isZero then return ztypes.tid.zero
     tn: st.reg.nameOf tid: vt
     mname: "_\{tn}"
@@ -4855,8 +4927,7 @@ checkBoxConstruction: function {
 # checkBoxInstanceConstruction -- a construction whose callee is an INSTANCE of
 # Box, by an alias (`BP from: v`, `BP: (Box point)`) or by its spelling
 # (`(Box point) from: v`): made as `Box from: v` is, by its one value, which
-# must be of the instance's element type. Any other argument is refused by the
-# same rule as the template's (boxArgumentTid).
+# lands in the instance's element type as an argument lands in its parameter's.
 checkBoxInstanceConstruction: function {
     st: zenv.ZSymbolTable
     unitDecl: ztypes.declid
@@ -4867,9 +4938,9 @@ checkBoxInstanceConstruction: function {
     tplId: st.reg.genericOriginOf tid: boxTid
     elemT: st.reg.genericTypeArgAt specId: boxTid ordinal: 0
     errsBefore: st.typing.errors.length
-    vt: boxArgumentTid :st :unitDecl :ast :call :tplId
-    # an argument boxArgumentTid refused is the one mistake to report; the
-    # value is still the instance, so nothing after it is refused for its type
+    vt: boxArgumentTid :st :unitDecl :ast :call :tplId given: elemT
+    # a refused argument or value is the one mistake to report; the value is
+    # still the instance, so nothing after it is refused for its type
     if st.typing.errors.length > errsBefore then return boxTid
     if vt.isZero then {
         if call.nargs == 0 then {
@@ -4885,21 +4956,7 @@ checkBoxInstanceConstruction: function {
         }
         return boxTid
     }
-    if vt != elemT then {
-        en: st.reg.nameOf tid: elemT
-        vn: st.reg.nameOf tid: vt
-        (
-            addError
-            :st
-            nodeid: call.nid
-            lineno: call.lineno
-            colno: call.colno
-            e: zast.err.callError
-            msg: "this Box holds a '\{en}', and 'from:' is given a '\{vn}'"
-        )
-        return boxTid
-    }
-    return (finishBoxConstruction :st :ast :call :tplId mid: boxTid :vt)
+    return (finishBoxConstruction :st :ast :call :tplId mid: boxTid vt: elemT)
 }
 
 # finishBoxConstruction -- the Box instance `mid` of element `vt`, built by
