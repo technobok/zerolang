@@ -1609,6 +1609,19 @@ constraintAdmits: function {
     # completion: both wear GENERIC_PARAM, and the tag is what covers both
     if (st.reg.typetypeOf typeId: argTid) == ztypes.ztypetype.genericParam then return true
     cd: st.reg.genericParamConstraintOf :tdecl :paramName
+    return (descAdmits :ast :st :tdecl :cd :argTid)
+}
+
+# descAdmits -- a generic argument bound `cd` admits; `tdecl` is the
+# declaration the bound's names resolve in.
+descAdmits: function {
+    ast: Ast
+    st: zenv.ZSymbolTable
+    tdecl: ztypes.declid
+    cd: ztypes.constraintdesc
+    argTid: ztypes.tid
+} out bool is {
+    if (st.reg.typetypeOf typeId: argTid) == ztypes.ztypetype.genericParam then return true
     ck: cd.kind
     if ck == ztypes.constraintkind.none then return true
     # `null` is reference-family (user, 2026-09-30): an absent reference. It
@@ -1620,6 +1633,38 @@ constraintAdmits: function {
     if isNul when ck == ztypes.constraintkind.valType then return false
     if ck == ztypes.constraintkind.other then return (namedBoundAdmits :ast :st :tdecl :cd :argTid)
     return (constraintHolds :ast :st :ck :argTid)
+}
+
+# methodBoundUnmet -- the first bound method `nameId` adds to its type's
+# parameters (ZTypeRegistry.methodBoundsOf) that instance `monoId`'s argument
+# does not meet: the template's method, the parameter and the argument. All
+# zero when it meets every one, and for a member of no instance -- the method
+# then exists on the instance.
+methodBoundUnmet: function {
+    ast: Ast
+    st: zenv.ZSymbolTable
+    monoId: ztypes.tid
+    nameId: zast.nameid
+} out ztyping.unmetbound is {
+    none: ztyping.unmetbound tdecl: ztypes.declid paramName: zast.nameid argTid: ztypes.tid
+    origin: st.reg.genericOriginOf tid: monoId
+    if origin.isZero then return none
+    tmd: st.typing.declMemberIdOf parentTypeId: origin :nameId
+    if tmd.isZero then return none
+    bounds: st.reg.methodBoundsOf mdecl: tmd
+    if bounds.length == 0 then return none
+    names: st.reg.genericParamNamesOf tdecl: (st.typing.declIdOfType typeId: origin)
+    for each b: bounds loop {
+        k: u64
+        for k < names.length while (names.get i: k) != b.paramName loop k = k + 1
+        if k < names.length then {
+            arg: st.reg.genericTypeArgAt specId: monoId ordinal: k
+            if arg.notZero when (descAdmits :ast :st tdecl: tmd cd: b.bound argTid: arg).not then {
+                return (ztyping.unmetbound tdecl: tmd paramName: b.paramName argTid: arg)
+            }
+        }
+    }
+    return none
 }
 
 # check that a generic argument satisfies its parameter's constraint. A refusal
@@ -2321,17 +2366,7 @@ constraintUnmetText: function {
 } out String is {
     an: specWrittenName :st :ast tid: argTid
     cdx: st.reg.genericParamConstraintOf :tdecl :paramName
-    con: constraintTextOf desc: cdx
-    # a bound no kind classifies is spelled by its own name, an application
-    # by its own text
-    if con.length == 0 when cdx.boundApp.notZero then con = (
-        statics.typeExprText
-        :ast
-        nid: cdx.boundApp
-    )
-    if con.length == 0 when cdx.boundName.notZero then {
-        con = zast.nameTextCopy :ast ref: cdx.boundName
-    }
+    con: boundSpelling :ast desc: cdx
     tdn: qualifiedTemplateName :st :tdecl
     pnmT: zast.nameTextAt :ast ref: paramName
     m: "generic argument '\{an}' does not satisfy constraint '\{con}' on parameter '\{pnmT}' of '\{tdn}'"
@@ -2345,6 +2380,56 @@ constraintUnmetText: function {
         m.append why
     }
     return m
+}
+
+# boundSpelling -- a bound as a report names it: its family, else its own
+# name, else the text of the application it is written as.
+boundSpelling: function {ast: Ast.view desc: ztypes.constraintdesc} out String is {
+    con: constraintTextOf :desc
+    if con.length == 0 when desc.boundApp.notZero then con = (
+        statics.typeExprText
+        :ast
+        nid: desc.boundApp
+    )
+    if con.length == 0 when desc.boundName.notZero then {
+        con = zast.nameTextCopy :ast ref: desc.boundName
+    }
+    return con
+}
+
+# refuseUnmetMethodBound -- `bt` is an instance whose argument does not meet a
+# bound its member `cnId` adds to the type's parameter (methodBoundUnmet): the
+# method does not exist on it, and the use is refused there, naming the bound.
+refuseUnmetMethodBound: function {
+    st: zenv.ZSymbolTable
+    ast: Ast
+    dp: dpref
+    bt: ztypes.tid
+    cnId: zast.nameid
+} out bool is {
+    if bt.isZero or (st.reg.isPartialOf tid: bt) then return false
+    u: methodBoundUnmet :ast :st monoId: bt nameId: cnId
+    if u.tdecl.isZero then return false
+    if st.mode.quietBounds then return true
+    origin: st.reg.genericOriginOf tid: bt
+    for each mb: (st.reg.methodBoundsOf mdecl: u.tdecl) loop {
+        if mb.paramName == u.paramName then {
+            an: specWrittenName :st :ast tid: u.argTid
+            con: boundSpelling :ast desc: mb.bound
+            mnT: zast.nameTextAt :ast ref: cnId
+            pnmT: zast.nameTextAt :ast ref: u.paramName
+            tdn: qualifiedTemplateName :st tdecl: (st.typing.declIdOfType typeId: origin)
+            m: "generic argument '\{an}' does not satisfy constraint '\{con}' that method '\{mnT}' places on parameter '\{pnmT}' of '\{tdn}'"
+            why: boundFamilyUnmetReason :ast :st tdecl: u.tdecl desc: mb.bound argTid: u.argTid
+            if why.length > 0 then {
+                m.append ": "
+                m.append why
+            }
+            declare.reportConstraintUnmet :st at: dp.nid lineno: dp.lineno colno: dp.colno msg: m
+            return true
+        }
+    }
+    return true
 }
 
 # boundFamilyUnmetReason -- the family, when that is why a bound refuses its

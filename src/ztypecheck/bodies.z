@@ -2078,31 +2078,53 @@ collectOwedIn: function {
     names: (ListVal zast.nameid).borrow
     ops: (ListVal zast.nodeid).borrow
 } is {
-    for each mId: (zast.kidsOf :ast :span) loop {
-        m: ast.nodes.get i: mId
-        if m.namedoperation when (
-            isFunctionDefWithBody
-            o: (ast.nodes.get i: m.operation)
-        ) when (instanceMemberOwed :st :monoId nameId: m.name) then {
-            markInstanceMemberWalked :st :monoId nameId: m.name
-            if (st.walk.bodies.refusedBodies.has item: m.operation).not then {
-                names.append m.name
-                ops.append m.operation
+    bodied: bodiedMembersIn :ast :span
+    for each b: bodied loop {
+        if (instanceMemberOwed :st :ast :monoId nameId: b.name) then {
+            markInstanceMemberWalked :st :monoId nameId: b.name
+            if (st.walk.bodies.refusedBodies.has item: b.op).not then {
+                names.append b.name
+                ops.append b.op
             }
         }
     }
+}
+
+# bodiedmember -- a member of a template's span with a function body: its name
+# and the body's operation
+bodiedmember: record {
+    name: zast.nameid
+    op: zast.nodeid
+}
+
+# bodiedMembersIn -- the members of `span` that are functions with a body, read
+# before any is asked about: asking (instanceMemberOwed) may resolve, which
+# needs the tree a walk of the span lends
+bodiedMembersIn: function {ast: Ast.view span: zast.kidspan} out ListVal bodiedmember is {
+    r: ListVal bodiedmember
+    for each mId: (zast.kidsOf :ast :span) loop {
+        m: ast.nodes.get i: mId
+        if m.namedoperation when (isFunctionDefWithBody o: (ast.nodes.get i: m.operation)) then {
+            r.append (bodiedmember name: m.name op: m.operation)
+        }
+    }
+    return r
 }
 
 # instanceMemberOwed -- an instance's bodied member its walk still owes: one
 # not yet walked that the program uses (bodiedMemberDeferred).
 instanceMemberOwed: function {
     st: zenv.ZSymbolTable
+    ast: Ast
     monoId: ztypes.tid
     nameId: zast.nameid
 } out bool is {
     md: st.typing.declMemberIdOf parentTypeId: monoId :nameId
     if md.isZero then return true
     if (st.typing.declIsWalked declId: md) then return false
+    # a method whose bound the instance does not meet is no member of it: never
+    # walked, under --eager either
+    if (conform.methodBoundUnmet :ast :st :monoId :nameId).tdecl.notZero then return false
     return (bodiedMemberDeferred :st ownerTid: monoId memberDecl: md).not
 }
 
@@ -2138,12 +2160,8 @@ spanOwesWalk: function {
     span: zast.kidspan
     monoId: ztypes.tid
 } out bool is {
-    for each mId: (zast.kidsOf :ast :span) loop {
-        m: ast.nodes.get i: mId
-        if m.namedoperation when (
-            isFunctionDefWithBody
-            o: (ast.nodes.get i: m.operation)
-        ) when (instanceMemberOwed :st :monoId nameId: m.name) then return true
+    for each b: (bodiedMembersIn :ast :span) loop {
+        if (instanceMemberOwed :st :ast :monoId nameId: b.name) then return true
     }
     return false
 }
@@ -2905,6 +2923,7 @@ collectOwedUnitFns: function {
         if bm.nid.notZero when (isFunctionDefWithBody o: (ast.nodes.get i: bm.operation)) when (
             instanceMemberOwed
             :st
+            :ast
             :monoId
             nameId: bm.name
         ) then {

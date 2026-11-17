@@ -4825,11 +4825,43 @@ form as the <code>as</code> clause on <a href="#record">compound type definition
 first generic parameter in <code>as</code> can be specified without name at call sites;
 the remainder require names. This makes the instantiation interface
 self-documenting.</p>
-<p>Methods (functions with a parameter of type <code>this</code>) <em><strong>must not</strong></em> have an
-<code>as</code> clause. They inherit generic parameters from the enclosing type
-definition. Static functions (functions without <code>this</code>, including those in a
-type's <code>as</code> block) may declare their own generic parameters and are
-independently monomorphized.</p>
+<p>A method (a function with a parameter of type <code>this</code>) inherits the generic
+parameters of the type it is declared in. Its own <code>as</code> clause may name two
+kinds of parameter. A name that is not one of the type's parameters is the
+method's own, inferred from its arguments at each call and monomorphized per
+instance of it, as a static function's is. A name that <em><strong>is</strong></em> one of the type's
+parameters is a <strong>method bound</strong>: it adds a bound to that parameter for this
+method only. The type keeps its own bound, so every instance of it is still a
+type; the method exists only on the instances whose argument meets both bounds.
+A use of it on any other instance is an error that names the bound, and an
+instance that does not meet it compiles while nothing uses the method on it.
+Static functions (functions without <code>this</code>, including those in a type's
+<code>as</code> block) may declare their own generic parameters and are independently
+monomorphized.</p>
+<pre><code class="language-zerolang"># Outcome -- a value, or the reason there is none
+Outcome: union {
+    err: E
+    ok: T
+} as {
+    T: AnyRef.generic
+    E: AnyRef.generic
+    # the reason's text: only on the instances whose E is StringViewable
+    describe: function as { E: StringViewable.generic } in {o: this.view} outx StringView is {
+        match (
+            o
+        ) case err then {
+            return o.stringView
+        } case ok then {
+            return "fine"
+        }
+    }
+}
+
+# Code -- a reason with no text: (Outcome String E: Code) is a type, and
+# `describe` is no member of it
+Code: class {
+    n: u32
+}</code></pre>
 <p>A function usually will return a value. The type of the returned item is
 specified by the argument named <code>out</code> or <code>outx</code>. Ownership of a returned
 reftype value after the call implicitly lies with the caller (<code>.take</code> is the

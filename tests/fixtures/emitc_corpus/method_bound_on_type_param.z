@@ -1,0 +1,88 @@
+# method_bound_on_type_param -- a method may add a bound to its type's own
+# parameter: `describe` exists only on the instances whose E is
+# StringViewable. An instance whose E is not keeps every other member, and
+# compiles while nothing calls `describe` on it (under --eager too).
+public: unit {
+    :main
+}
+
+# Outcome -- a value or the reason there is none
+Outcome: union {
+    err: E
+    ok: T
+} as {
+    T: AnyRef.generic
+    E: AnyRef.generic
+    # the reason, viewed, or "fine" for a value -- only where E has text
+    describe: function as { E: StringViewable.generic } in {o: this.view} outx StringView is {
+        match (
+            o
+        ) case err then {
+            return o.stringView
+        } case ok then {
+            return "fine"
+        }
+    }
+    # whether this holds a value -- on every instance
+    holds: function {o: this.view} out bool is {
+        match (
+            o
+        ) case ok then {
+            return true
+        } case err then {
+            return false
+        }
+    }
+}
+
+# Fault -- a reason with text
+Fault: class {
+    message: String
+} as {
+    stringViewable: StringViewable.implement
+    stringView: function {f: this.view} outx StringView is {
+        return f.message.stringView
+    }
+}
+
+# Code -- a reason with no text, only a number
+Code: class {
+    n: u32
+}
+
+# Held -- one value of any reference type; `size` only where it is text
+Held: class {
+    v: T
+} as {
+    T: AnyRef.generic
+    # the text's length in bytes
+    size: function as { T: StringViewable.generic } in {h: this.view} out u64 is {
+        return h.v.stringView.length
+    }
+}
+
+parse: function {good: bool} out (Outcome String E: Fault) is {
+    if good then return ((Outcome String E: Fault).ok "42".string)
+    return ((Outcome String E: Fault).err (Fault message: "not a number".string))
+}
+
+lookup: function {good: bool} out (Outcome String E: Code) is {
+    if good then return ((Outcome String E: Code).ok "found".string)
+    return ((Outcome String E: Code).err (Code n: 404))
+}
+
+main: function is {
+    a: parse good: true
+    b: parse good: false
+    print "a: \{a.describe}"
+    print "b: \{b.describe}"
+    c: lookup good: false
+    print "c holds: \{c.holds}"
+    match (
+        c
+    ) case ok then print "c: \{c}" case err then print "c: code \{c.n}"
+    h: (Held String) v: "hello".string
+    print "h: \{h.size} \{(Held String).size h}"
+    k: (Held Code) v: (Code n: 7)
+    print "k: \{k.v.n}"
+}

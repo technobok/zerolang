@@ -783,6 +783,64 @@ genericDefaultNode: function {ast: Ast.view n: astnode.view} out zast.nodeid is 
     }
 }
 
+# genericParamDesc -- the bound written at generic-parameter operation `op`,
+# classified: its family, or the declaration it names. `tdecl` is the
+# declaration the bound's names resolve in.
+genericParamDesc: function {
+    ast: Ast.view
+    st: zenv.ZSymbolTable
+    tdecl: ztypes.declid
+    op: astnode.view
+} out ztypes.constraintdesc is {
+    cb: genericConstraintBase :ast n: op
+    cbId: genericConstraintBaseId :ast n: op
+    if cbId.isZero then cbId = (
+        familyBoundLeafId
+        :ast
+        :st
+        :tdecl
+        :op
+    )
+    k: ztypes.constraintkind.none
+    if cb.length > 0 then k = constraintKindForId id: cbId
+    # a family's name a declaration in scope takes -- a unit's own
+    # `StringLike` -- names that declaration, as any name does; the system
+    # and core units' own are the families
+    if k != ztypes.constraintkind.other when (
+        boundNameShadowsFamily
+        :ast
+        :st
+        :tdecl
+        :op
+    ) then k = ztypes.constraintkind.other
+    # a bound written as a type application names the instance it builds,
+    # and is found through that node rather than a name
+    ba: genericBoundApplication :ast n: op
+    if ba.notZero then k = ztypes.constraintkind.other
+    # a bound no kind classifies is a DECLARATION, and what it admits is
+    # that declaration's business: its name is kept so the check can find it
+    bn: zast.nameid
+    bq: zast.nameid
+    if k == ztypes.constraintkind.other then {
+        bn = atomNameId :ast n: (ast.nodes.get i: (
+            genericBoundAtomId
+            :ast
+            n: op
+        )
+        )
+        bq = genericBoundQualifierId :ast n: op
+    }
+    return (
+        ztypes.constraintdesc
+        kind: k
+        numKind: (constraintIntKindId id: cbId)
+        boundName: bn
+        boundQual: bq
+        boundApp: ba
+        defaultNode: (genericDefaultNode :ast n: op)
+    )
+}
+
 # registerGenericParamOne -- record one member's generic-param declaration.
 registerGenericParamOne: function {
     ast: Ast.view
@@ -791,54 +849,17 @@ registerGenericParamOne: function {
     m: astnode.view
 } is {
     if m.namedoperation when (isGenericParam :ast op: (ast.nodes.get i: m.operation)) then {
-        cb: genericConstraintBase :ast n: (ast.nodes.get i: m.operation)
-        cbId: genericConstraintBaseId :ast n: (ast.nodes.get i: m.operation)
-        if cbId.isZero then cbId = (
-            familyBoundLeafId
-            :ast
-            :st
-            :tdecl
-            op: (ast.nodes.get i: m.operation)
-        )
-        k: ztypes.constraintkind.none
-        if cb.length > 0 then k = constraintKindForId id: cbId
-        # a family's name a declaration in scope takes -- a unit's own
-        # `StringLike` -- names that declaration, as any name does; the system
-        # and core units' own are the families
-        if k != ztypes.constraintkind.other when (
-            boundNameShadowsFamily
-            :ast
-            :st
-            :tdecl
-            op: (ast.nodes.get i: m.operation)
-        ) then k = ztypes.constraintkind.other
-        # a bound written as a type application names the instance it builds,
-        # and is found through that node rather than a name
-        ba: genericBoundApplication :ast n: (ast.nodes.get i: m.operation)
-        if ba.notZero then k = ztypes.constraintkind.other
-        # a bound no kind classifies is a DECLARATION, and what it admits is
-        # that declaration's business: its name is kept so the check can find it
-        bn: zast.nameid
-        bq: zast.nameid
-        if k == ztypes.constraintkind.other then {
-            bn = atomNameId :ast n: (ast.nodes.get i: (
-                genericBoundAtomId
-                :ast
-                n: (ast.nodes.get i: m.operation)
-            )
-            )
-            bq = genericBoundQualifierId :ast n: (ast.nodes.get i: m.operation)
-        }
+        cd: genericParamDesc :ast :st :tdecl op: (ast.nodes.get i: m.operation)
         (
             st.reg.addGenericParam
             :tdecl
             paramName: m.name
-            kind: k
-            numKind: (constraintIntKindId id: cbId)
-            boundName: bn
-            boundQual: bq
-            boundApp: ba
-            defaultNode: (genericDefaultNode :ast n: (ast.nodes.get i: m.operation))
+            kind: cd.kind
+            numKind: cd.numKind
+            boundName: cd.boundName
+            boundQual: cd.boundQual
+            boundApp: cd.boundApp
+            defaultNode: cd.defaultNode
         )
         # the BOUND names a real declaration -- `anyval`, a protocol -- but
         # everything above reads it as TEXT and maps it to a constraint kind,
@@ -854,7 +875,7 @@ registerGenericParamOne: function {
             :st
             :tdecl
             op: (ast.nodes.get i: m.operation)
-            base: cb.stringView
+            base: (genericConstraintBase :ast n: (ast.nodes.get i: m.operation)).stringView
         )
         # and the parameter itself, keyed to the OPERATION node -- what
         # Spans keys a declaration's own row to.
@@ -1538,6 +1559,9 @@ registerFnGenericParams: function {
     fnDecl: ztypes.declid
     fid: ztypes.tid
     fnode: fnref
+    # the generic type the function is a method of, 0 for any other function:
+    # an item naming one of its parameters is a method bound, not a parameter
+    ownerD: ztypes.declid
 } is {
     st.reg.setGeneric typeId: fid value: true
     # Function templates register their param constraints like type
@@ -1546,7 +1570,106 @@ registerFnGenericParams: function {
     {
         fn: ast.nodes.get i: fnode.nid
         if fn.functiondef then {
-            registerGenericParams :st :ast tdecl: fnDecl items: fn.asItems
+            for each rid: (zast.kidsOf :ast span: fn.asItems) loop {
+                rm: ast.nodes.get i: rid
+                if (isOwnerParamItem :st :ast :ownerD m: rm).not then (
+                    registerGenericParamOne
+                    :st
+                    :ast
+                    tdecl: fnDecl
+                    m: rm
+                )
+            }
+        }
+    }
+}
+
+# genericOwnerDecl -- the declaration of the generic TYPE a method (owner
+# `ownerNameId`) belongs to; 0 for a free function, a method of a type with no
+# parameters, and a function of a generic unit -- whose own `as` item naming
+# the unit's parameter is a parameter of its own, inferred from its arguments.
+genericOwnerDecl: function {
+    st: zenv.ZSymbolTable.view
+    unitDecl: ztypes.declid
+    scope: ztypes.declid
+    ownerNameId: zast.nameid
+} out ztypes.declid is {
+    none: ztypes.declid
+    if ownerNameId.isZero then return none
+    od: declOfUnitDef :st :scope :unitDecl nameId: ownerNameId
+    if od.isZero then return none
+    if (
+        (st.reg.typetypeOf typeId: (st.typing.decls.get i: od).typeId) == ztypes.ztypetype.unitType
+    ) then {
+        return none
+    }
+    if (st.reg.genericParamNamesOf tdecl: od).length == 0 then return none
+    return od
+}
+
+# isOwnerParamItem -- `as` item `m` of a method of generic type `ownerD`
+# names one of the type's own parameters: a METHOD BOUND, which adds a bound
+# to that parameter for this method only, rather than a parameter of its own.
+isOwnerParamItem: function {
+    st: zenv.ZSymbolTable.view
+    ast: Ast.view
+    ownerD: ztypes.declid
+    m: astnode.view
+} out bool is {
+    if ownerD.isZero then return false
+    if m.namedoperation.not then return false
+    if (isGenericParam :ast op: (ast.nodes.get i: m.operation)).not then return false
+    return (st.reg.isGenericParamOf tdecl: ownerD name: m.name)
+}
+
+# fnHasOwnGenericParam -- `as` items `items` declare a generic parameter of
+# the function's own: one that is no method bound (isOwnerParamItem).
+fnHasOwnGenericParam: function {
+    st: zenv.ZSymbolTable.view
+    ast: Ast.view
+    items: zast.kidspan
+    ownerD: ztypes.declid
+} out bool is {
+    for each rid: (zast.kidsOf :ast span: items) loop {
+        rm: ast.nodes.get i: rid
+        if (isOwnerParamItem :st :ast :ownerD m: rm) then continue
+        if rm.namedoperation when (isGenericParam :ast op: (ast.nodes.get i: rm.operation)) then {
+            return true
+        }
+    }
+    return false
+}
+
+# registerMethodBounds -- the method bounds a method of generic type `ownerD`
+# writes: each recorded on the method (ZTypeRegistry.addMethodBound), its
+# bound's names resolving from the method, and its spelling recorded for the
+# report on a bound that names nothing (checkGenericBounds).
+registerMethodBounds: function {
+    st: zenv.ZSymbolTable
+    ast: Ast.view
+    fnDecl: ztypes.declid
+    ownerD: ztypes.declid
+    fnode: fnref
+} is {
+    fn: ast.nodes.get i: fnode.nid
+    if fn.functiondef.not then return
+    for each rid: (zast.kidsOf :ast span: fn.asItems) loop {
+        rm: ast.nodes.get i: rid
+        bounds: isOwnerParamItem :st :ast :ownerD m: rm
+        if bounds when rm.namedoperation then {
+            op: ast.nodes.get i: rm.operation
+            cd: genericParamDesc :ast :st tdecl: fnDecl :op
+            st.reg.addMethodBound mdecl: fnDecl paramName: rm.name bound: cd
+            (
+                recordGenericBoundAtom
+                :ast
+                :st
+                tdecl: fnDecl
+                :op
+                base: (genericConstraintBase :ast n: op).stringView
+            )
+            # the name is the TYPE's parameter
+            recordGenericParamRef :st nid: rm.operation scope: ownerD name: rm.name
         }
     }
 }
@@ -1650,12 +1773,14 @@ resolveFunction: function {
     # the as-items are read through a view scoped to this block: the walks
     # below lend ast
     isgen: false
+    # a method of a generic type may bound the type's own parameters
+    ownerD: genericOwnerDecl :st :unitDecl scope: rf :ownerNameId
     # the `as` items' values, for the ones that are no generic parameter
     asOps: ListVal zast.nodeid
     {
         fn: ast.nodes.get i: fnId
         if fn.functiondef then {
-            isgen = zast.itemsHaveGenericParam :ast items: fn.asItems
+            isgen = fnHasOwnGenericParam :st :ast items: fn.asItems :ownerD
             for each faId: (zast.kidsOf :ast span: fn.asItems) loop {
                 fa: ast.nodes.get i: faId
                 if fa.namedoperation then asOps.append from: fa.operation
@@ -1678,8 +1803,9 @@ resolveFunction: function {
     # records ownership and defaults on member declarations, which needs the
     # owner reachable from its type id.
     if fnDecl.notZero then st.typing.declSetType declId: fnDecl typeId: dfid
+    if ownerD.notZero when fnDecl.notZero then registerMethodBounds :st :ast :fnDecl :ownerD :fnode
     if isgen then {
-        registerFnGenericParams :st :ast :fnDecl :fid :fnode
+        registerFnGenericParams :st :ast :fnDecl :fid :fnode :ownerD
     }
     receiverEnclDecl: receiverOwnerDecl :st :ast :unitDecl :rf :thisName
     sgkPrev: st.walk.bounds.sigGenericDecl

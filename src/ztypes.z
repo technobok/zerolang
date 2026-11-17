@@ -1299,6 +1299,19 @@ constraintdesc: record {
     defaultNode: zast.nodeid
 }
 
+# methodbound -- a bound a METHOD adds to a parameter of its own type, written
+# in the method's `as { }` with the parameter's name (`describe: function as {
+# E: StringViewable.generic } in {...}`): the method exists only on the
+# instances whose argument for that parameter meets it.
+methodbound: record {
+    # the method declaration that adds it
+    mdecl: declid
+    # the type's parameter it bounds
+    paramName: zast.nameid
+    # what the argument must be
+    bound: constraintdesc
+}
+
 # ParamDesc / ParamList -- a template's generic parameters in declaration
 # order, each with the constraint classified at registration and the canonical
 # GENERIC_PARAM type id minted for it during resolution (0 until then).
@@ -1382,6 +1395,8 @@ ZTypeRegistry: class {
     regMainUnitId: zast.nameid
     # generic-template metadata, keyed by the TEMPLATE's DeclId
     genericParams: (IdMapR declid V: ParamList)
+    # the bounds methods add to their type's parameters, few enough to scan
+    methodBounds: ListVal methodbound
 } as {
     # allocType -- an id with no ZType behind it, for an expression that has
     # no type: the result of auto-calling a method declared without `out`.
@@ -2124,6 +2139,24 @@ ZTypeRegistry: class {
         }
     }
 
+    # addMethodBound -- method `mdecl` adds `bound` to its type's parameter
+    # `paramName`
+    addMethodBound: function {
+        t: this mdecl: declid paramName: zast.nameid bound: constraintdesc
+    } is {
+        t.methodBounds.append (methodbound :mdecl :paramName :bound)
+    }
+
+    # methodBoundsOf -- the bounds method `mdecl` adds to its type's parameters,
+    # in the order written; none for a method that adds none
+    methodBoundsOf: function {t: this.view mdecl: declid} out ListVal methodbound is {
+        found: ListVal methodbound
+        for each b: t.methodBounds loop {
+            if b.mdecl == mdecl then found.append b
+        }
+        return found
+    }
+
     # instancesOf -- every FUNCTION minted from the generic function or method
     # `origin`, in minting order
     instancesOf: function {t: this.view origin: tid} out ListVal tid is {
@@ -2340,6 +2373,7 @@ newRegistry: function {} out ZTypeRegistry is {
         variableById: (List ZVariable i: vid)
         regMainUnitId: zast.nameid.zero
         genericParams: (IdMapR declid V: ParamList)
+        methodBounds: ListVal methodbound
     )
     # The reserved rows, minted here in a fixed order so every caller agrees
     # on their ids: 0 = notype (the no-type / unresolved sentinel every
