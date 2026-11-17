@@ -368,6 +368,19 @@ transportReadable: function {tp: Transport.view millis: i32} out (ResultVR bool 
     }
 }
 
+# transportClose -- end a tcp session's connection before the process ends:
+# closing the Conn sends what is still queued and then the end of the stream.
+# A socket left for the process exit to tear down is RESET on Windows, and a
+# client that has not read the last replies yet loses them. Standard output
+# and a replay file need nothing.
+transportClose: function {tp: Transport} is {
+    match (
+        tp
+    ) case tcp then {
+        if tp.close.err then io.eprintln "zls: closing the connection failed"
+    } else null
+}
+
 # ---- json-rpc send -------------------------------------------------
 # The send helpers take the transport by argument (not off `this`): a
 # caller passes `tp: this.transport`, a leaf disjoint from `this.docs` /
@@ -9689,6 +9702,7 @@ serveFrom: function {p: cli.Parsed.view} is {
                 ) case ok then {
                     srv.transport = Transport.tcp ao
                     serve :srv
+                    transportClose tp: srv.transport
                 } case err then {
                     io.eprintln "zls: accept failed"
                     os.exit code: 3

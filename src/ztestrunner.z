@@ -2604,15 +2604,27 @@ lspListenCase: function {r: Runner zlsB: StringView} is {
     deadline: os.monotonicMillis + (r.timeoutSecs.i64 * 1000)
     port: awaitListenPort path: outP.stringView :deadline
     want: frameLsp src: "{\"jsonrpc\":\"2.0\",\"id\":1,\"result\":null}"
-    got: String
-    if port != 0 then got = listenExchange :port :deadline
+    lg: ListenGot bytes: String failed: false
+    if port != 0 then lg = listenExchange :port :deadline
     st: reapWithin :children :deadline
-    if got.stringView.endsWith want when st == 0 then {
+    if lg.failed then {
+        print "FAIL(lsp) listen (port \{port}: the connection failed after \{lg.bytes.length} bytes instead of closing -- the server must close it before it exits, or a client can lose its last replies)"
+        r.fails = r.fails + 1
+    } else if lg.bytes.stringView.endsWith want when st == 0 then {
         r.passN = r.passN + 1
     } else {
-        print "FAIL(lsp) listen (port \{port}: the \{got.length} bytes answered do not end with the reply to shutdown, exit \{st})"
+        print "FAIL(lsp) listen (port \{port}: the \{lg.bytes.length} bytes answered do not end with the reply to shutdown, exit \{st})"
         r.fails = r.fails + 1
     }
+}
+
+# ListenGot -- what a listen exchange received, and whether it ended in a
+# failed read or poll instead of the server's close (a read answering 0): on
+# Windows a socket a process leaves open at exit is reset, and the client
+# loses what it had not read yet
+ListenGot: class {
+    bytes: String
+    failed: bool
 }
 
 # awaitListenPort -- the port `zls --listen` announces in its stdout file at
@@ -2644,8 +2656,8 @@ listenPort: function {path: StringView} out u16 is {
 
 # listenExchange -- connect to `port`, send `initialize`, `shutdown` and
 # `exit`, and read what the server answers until it closes, or `deadline`
-listenExchange: function {port: u16 deadline: i64} out String is {
-    got: String
+listenExchange: function {port: u16 deadline: i64} out ListenGot is {
+    got: ListenGot bytes: String failed: false
     cr: net.connect :port
     match cr case ok then null case err then return got
     req: (
@@ -2657,14 +2669,20 @@ listenExchange: function {port: u16 deadline: i64} out String is {
     buf: Bytes
     for os.monotonicMillis <= deadline loop {
         pr: cr.pollReadable timeoutMillis: 100
-        if pr.err then break
+        if pr.err then {
+            got.failed = true
+            break
+        }
         if pr then {
             rr: cr.read into: buf max: 4096
-            if rr.err then break
+            if rr.err then {
+                got.failed = true
+                break
+            }
             if rr == 0 then break
         }
     }
-    for each c: buf loop got.appendByte b: c
+    for each c: buf loop got.bytes.appendByte b: c
     return got
 }
 
