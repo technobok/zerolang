@@ -519,7 +519,7 @@ windows-guest: $(NATIVEC_INC)/zthread_shim.inc
 # since then touching WINDOWS_PATHS, the sources Windows behaviour depends on.
 # Never fails: ci ends with it, as a reminder rather than a gate, since ci runs
 # where no Windows host may be.
-WINDOWS_VERIFIED := tests/windows-verified.txt
+WINDOWS_VERIFIED := tests/known/windows.zd
 WINDOWS_DUE_DAYS := 14
 WINDOWS_DUE_TOUCHED_DAYS := 2
 WINDOWS_PATHS := src/zemitterc.z src/zemitterc src/zc.z src/zcobj.z src/zcheck.z src/ztestrunner.z \

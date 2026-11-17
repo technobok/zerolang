@@ -7,11 +7,12 @@
 #                        when it is not due. Answers 0 either way.
 #   windows-record FILE  FILE written for HEAD, now: what a green ci-windows
 #                        leaves, for windows-due to read
-# FILE holds a comment line, then `<commit> <unix time> <date>`. The time comes
-# from `date`, the commits from git. A subunit of zgate.
+# FILE is a data file (tests/known/windows.zd) read and written through the
+# standard library's zd unit: `commit`, `time` (unix seconds) and `date`. The
+# time comes from `date`, the commits from git. A subunit of zgate.
 
-# verifiedHead -- the comment line a record starts with
-verifiedHead: "# the last green make ci-windows: commit, unix time, date (written by ci-windows; read by windows-due)"
+# verifiedHead -- the comment block a record starts with
+verifiedHead: "# windows -- the last green `make ci-windows`: the commit it ran at, and when\n# (unix seconds, and the date). Written by ci-windows (zgate windows-record);\n# read by windows-due."
 
 # runWindowsDue -- the windows-due subcommand from its command line `p`
 runWindowsDue: function {g: Gate.view p: cli.Parsed.view} out i32 is {
@@ -26,14 +27,21 @@ runWindowsDue: function {g: Gate.view p: cli.Parsed.view} out i32 is {
         print "windows-due: make ci-windows has never passed (tools/windows/README.md)"
         return 0
     }
-    rec: recordWords text: (zjobs.slurp path: file.stringView).stringView
-    if rec.length < 3 then {
-        print "windows-due: \{file} holds no record -- run make ci-windows (tools/windows/README.md)"
+    rd: zd.read path: file.stringView
+    match (
+        rd
+    ) case err then {
+        print "windows-due: \{rd.stringView} -- run make ci-windows (tools/windows/README.md)"
+        return 0
+    } case ok then null
+    pr: recordProblem e: rd
+    if pr.length > 0 then {
+        print "windows-due: \{pr} -- run make ci-windows (tools/windows/README.md)"
         return 0
     }
-    sha: rec.get i: 0
-    at: (rec.get i: 1).stringView.parseI64.or d: -1
-    day: rec.get i: 2
+    sha: (rd.textAt path: "commit").orPanic.copy
+    at: (rd.integerAt path: "time").orPanic
+    day: (rd.textAt path: "date").orPanic.copy
     now: (dateText :g format: "+%s").stringView.parseI64.or d: -1
     if (at < 0) or (now < 0) then {
         io.eprintln "zgate windows-due: no time to judge by (the record's, or date's)"
@@ -62,21 +70,35 @@ runWindowsRecord: function {g: Gate.view p: cli.Parsed.view} out i32 is {
         io.eprintln "zgate windows-record: no commit or no time to record"
         return 1
     }
-    w: io.writeText path: file content: "\{verifiedHead}\n\{sha} \{now} \{day}\n"
+    defs: List zd.Entry
+    defs.append (zd.entry name: "commit" type: "" node: zd.Node.text sha.take)
+    defs.append (
+        zd.entry
+        name: "time"
+        type: ""
+        node: zd.Node.integer (now.stringView.parseI64.or d: 0)
+    )
+    defs.append (zd.entry name: "date" type: "" node: zd.Node.text day.take)
+    doc: zd.entry name: "windows" type: "" node: zd.Node.unitValue defs.take
+    w: zd.write path: file.stringView header: verifiedHead schema: "" :doc
     if w.err then {
-        io.eprintln "zgate windows-record: cannot write \{file}"
+        io.eprintln "zgate windows-record: \{w.stringView}"
         return 1
     }
     return 0
 }
 
-# recordWords -- the words of a record's first line that is no comment
-recordWords: function {text: StringView} out List String is {
-    for each ln: text.lines loop {
-        if (ln.startsWith "#").not when ln.trim.length > 0 then return (wordsOf text: ln)
-    }
-    none: List String
-    return none
+# recordProblem -- what is wrong with the record `e`: zd's report of the first
+# of `commit`, `time` and `date` it lacks or holds as another kind; "" when it
+# holds all three
+recordProblem: function {e: zd.Entry.view} out String is {
+    c: e.textAt path: "commit"
+    if c.err then return c.stringView.string
+    t: e.integerAt path: "time"
+    if t.err then return t.stringView.string
+    d: e.textAt path: "date"
+    if d.err then return d.stringView.string
+    return "".string
 }
 
 # dateText -- what `date` prints for `format`, its line break trimmed; empty

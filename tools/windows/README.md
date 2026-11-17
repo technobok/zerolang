@@ -13,7 +13,7 @@ cheapest to most real:
 
 The first four are part of `make ci` and print `skipped (needs ...)` without
 their tools. `make ci-windows` is not, since it needs the machine. Run it at
-stage gates and commit the `tests/windows-verified.txt` a green run writes;
+stage gates and commit the `tests/known/windows.zd` a green run writes;
 `make ci` ends with `make windows-due`, which says when a run is due again.
 `tests/known/mingw.zd` lists only the run cases marked `posix` in
 `tests/fixtures/run_cases.txt` (POSIX file descriptors and signals, which
@@ -141,7 +141,7 @@ copy of it.
 
 ```bash
 tools/windows/winvm.sh ci        # up, make ci-windows, down (about 12 minutes)
-git add tests/windows-verified.txt && git commit -m "windows: record a green ci-windows"
+git add tests/known/windows.zd && git commit -m "windows: record a green ci-windows"
 ```
 
 Other commands: `up`, `down`, `status`, `ssh [cmd]`, `screenshot out.png`,
