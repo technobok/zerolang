@@ -18,14 +18,12 @@ public: unit {
     :slurp
 }
 
-# jobWord -- every word the pool reads off outside text: the emitted C's
-# `zlink:` comment, and the flag naming tcc's runtime payload. A word is
-# classified by its slot (zast.Vocab), never by comparing its text.
+# jobWord -- every word the pool reads off outside text: the flag naming tcc's
+# runtime payload. A word is classified by its slot (zast.Vocab), never by
+# comparing its text.
 jobWord: list {
     # a C compiler's flag naming tcc's runtime payload
     ccPayload: "-B"
-    zlinkOpen: "zlink:"
-    zlinkClose: "*/"
 } out staticlist StringView
 
 # slurp -- file content as an owned String, or "" when unreadable.
@@ -40,35 +38,17 @@ slurp: function {path: StringView} out String is {
     }
 }
 
-# zlinkArgs -- the libraries the emitted C declares in its `zlink:` header,
-# `/* zlink: name name */`, as the compiler family `fam` names them
-# (zcc.libraryArg). The generated file states its own link
-# requirements, so the harness reads them off the artifact rather than being
-# told separately. Only the header is parsed: these files reach 5.8 MB.
-#
-# The marker is SEARCHED for in that header, not read off a fixed line number.
-# Pinning it to line 2 meant any emitter change that inserted a line above it
-# would drop every library with no error -- and the reader would go on linking,
-# because a missing library the libc happens to supply looks like success.
+# zlinkArgs -- the libraries the emitted C file at `csrc` declares in its
+# `zlink:` header line (zcc.linksOf), as the compiler family `fam` names them
+# (zcc.libraryArg). The generated file states its own link requirements, so the
+# harness reads them off the artifact rather than being told separately.
 zlinkArgs: function {csrc: StringView fam: zcc.ccfamily} out List String is {
-    words: zast.Vocab.create block: jobWord
     flags: List String
     text: slurp path: csrc
-    if text.length == 0 then return flags
-    end: text.length
-    if end > 512 then end = 512
-    head: text.stringView.substring from: 0 to: end
-    for each line: (head.split sep: "\n") loop {
-        if (line.startsWith prefix: "/* zlink:") then {
-            seen: false
-            for each token: (line.split sep: " ") loop {
-                word: words.slotOf text: token
-                if word == jobWord.slot.zlinkClose then seen = false
-                if seen then flags.append from: (zcc.libraryArg f: fam name: token)
-                if word == jobWord.slot.zlinkOpen then seen = true
-            }
-        }
-    }
+    for each lib: (zcc.linksOf csrc: text.stringView) loop (
+        flags.append
+        from: (zcc.libraryArg f: fam name: lib.stringView)
+    )
     return flags
 }
 

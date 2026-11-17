@@ -1,8 +1,9 @@
-# zcc -- the C compiler a build hands its C to: which family it is, and how that
-# family spells the parts of a command line that differ between families. A
-# DRIVER's fact, read by zc, the C backend and the test runner alike, so it is
-# a leaf: it opens nothing of the compiler, and the runner builds without the
-# type checker.
+# zcc -- the C compiler a build hands its C to: which family it is, how that
+# family spells the parts of a command line that differ between families, and
+# what an emitted C file's header asks of the build (its sources and
+# libraries). A DRIVER's fact, read by zc, the C backend and the test runner
+# alike, so it is a leaf: it opens nothing of the compiler, and the runner
+# builds without the type checker.
 
 # Public interface -- the definitions other units may reference; all other
 # top-level definitions are private to this unit.
@@ -18,6 +19,8 @@ public: unit {
     :objectExt
     :mainStackArgs
     :spawnCompiler
+    :csrcsOf
+    :linksOf
 }
 
 # ccfamily -- the C compiler a build hands its C to, by family: what the C
@@ -172,4 +175,43 @@ spawnCompiler: function {
     rm: io.remove path: scratch
     rm.drop
     return rc
+}
+
+# headerLines -- how many leading lines of an emitted C file hold its header
+headerLines: 8
+
+# csrcsOf -- the `zcsrc:` lines of an emitted C file's header, each the source
+# path under the vendor directory followed by its defines, space-separated
+csrcsOf: function {csrc: StringView} out List String is {
+    return (headerBodies :csrc open: "/* zcsrc: ")
+}
+
+# linksOf -- the libraries an emitted C file's `zlink:` header line names, one
+# word each; none when it has no such line
+linksOf: function {csrc: StringView} out List String is {
+    r: List String
+    for each body: (headerBodies :csrc open: "/* zlink: ") loop {
+        for each w: (body.stringView.split sep: " ") loop {
+            if w.length > 0 then r.append from: w.string
+        }
+    }
+    return r
+}
+
+# headerBodies -- what stands between `open` and ` */` on each line of an
+# emitted C file's header that opens so. Only the header is read: these files
+# reach megabytes.
+headerBodies: function {csrc: StringView open: StringView} out List String is {
+    r: List String
+    n: u64
+    for each ln: csrc.lines loop {
+        n = n + 1
+        if n > headerLines then break
+        lo: ln.stripPrefix p: open
+        if lo.some then {
+            body: lo.stripSuffix s: " */"
+            if body.some then r.append from: body.string
+        }
+    }
+    return r
 }
