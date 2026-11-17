@@ -112,7 +112,7 @@ SKIP     := mathutil genmath dissectlib
 EXAMPLES := $(wildcard examples/*.z)
 NAMES    := $(filter-out $(SKIP),$(basename $(notdir $(EXAMPLES))))
 
-.PHONY: all check complexity-report style-lint-fast style-lint test doc-check arch-check emitted-check ci ci-gates ci-legs gate-guards gate-same-c ci-corpus fuzz fuzz-ci fuzz-known \
+.PHONY: all check complexity-report style-lint-fast style-lint test doc-check arch-check emitted-check ci ci-gates ci-legs gate-guards gate-same-c ci-corpus fuzz fuzz-ci fuzz-known fuzz-recheck fuzz-reduce \
 	test-math-arm64 test-sqlite-arm64 test-mingw test-tcc-mingw test-msvc-wine test-msvc-corpus ci-windows windows-guest windows-due test-math-noasm test-portable-scalars math-asm-guard \
 	bench-math bench-math-kernels test-clang test-tcc test-tcc-heavy readable-check build \
 	tcc zc zl zls regen-goldens regen-fmt-goldens regen-matrix matrix-guard regen-constparity constparity-guard regen-math-asm \
@@ -915,6 +915,22 @@ endif
 fuzz-known: out/zc-asan out/zfuzz
 	@rm -rf $(BUILDDIR)/fuzz-ci
 	$(FUZZ_CI_RUN) --write-known
+
+# fuzz-recheck -- build every saved finding under DIR again, at any depth, and
+# list the ones that still fail with their signatures:
+# `make fuzz-recheck DIR=out/fuzz/findings`.
+# fuzz-reduce -- shrink the finding FILE while it shows the same defect (runs
+# of lines, then runs of tokens) and write what is left to OUT:
+# `make fuzz-reduce FILE=out/fuzz/findings/fz12.z OUT=fz12-small.z`.
+FUZZ_TOOL = out/zfuzz --zc $(CURDIR)/out/zc-asan --system $(CURDIR)/lib/system \
+	  --corpus $(CURDIR)/examples,$(CURDIR)/tests/fixtures/emitc_corpus
+fuzz-recheck: out/zc-asan out/zfuzz
+	@rm -rf $(BUILDDIR)/fuzz-recheck
+	$(FUZZ_TOOL) --work $(CURDIR)/$(BUILDDIR)/fuzz-recheck --recheck $(DIR)
+
+fuzz-reduce: out/zc-asan out/zfuzz
+	@rm -rf $(BUILDDIR)/fuzz-reduce
+	$(FUZZ_TOOL) --work $(CURDIR)/$(BUILDDIR)/fuzz-reduce --reduce $(FILE) --out $(OUT)
 
 out/zparser: bin/zc tests/unit/zparser_dump.z $(wildcard lib/system/*.z) $(wildcard lib/system/system/*.z lib/system/math/*.z)
 	@mkdir -p $(BUILDDIR)

@@ -10,16 +10,25 @@
 # Usage: zfuzz --zc <zc> --system <dir> --corpus <dir>[,<dir>...] --work <dir>
 #              [--seed N] [--count N] [--jobs N] [--timeout SECS]
 #              [--known FILE] [--write-known]
+#        zfuzz ... --recheck <dir>
+#        zfuzz ... --reduce <file> --out <file>
 # A case is decided by the seed, the NAME of the program it edits and a round
 # number, and the program it takes tokens from by name too. So a run repeats
 # exactly whatever the number of threads, and a program added to the corpus
 # adds cases of its own and leaves nearly every other case as it was.
 # Findings are kept in <work>/findings; exit status 1 when there is one.
 #
-# `--known FILE` names the signatures a run is known to show, one a line, `#`
-# for a comment. The run then fails on a signature the file does not list, and
-# on a listed one it no longer shows: a fixed defect leaves the list in the
-# same change. `--write-known` writes the file from the run instead.
+# `--known FILE` names the signatures a run is known to show: a data file
+# (tests/known/fuzz.zd) whose `findings` lists them. The run then fails on a
+# signature the file does not list, and on a listed one it no longer shows: a
+# fixed defect leaves the list in the same change. `--write-known` writes the
+# file from the run instead.
+#
+# `--recheck DIR` builds every saved finding, each `.z` file under DIR at any
+# depth, and reports the ones that still fail, with their signatures.
+# `--reduce FILE` shrinks one finding while it shows the same defect -- runs of
+# lines first, then runs of tokens -- and writes what is left to `--out`. Both
+# build with the corpus folders as source roots, and judge as a run does.
 
 public: unit {
     :main
@@ -257,6 +266,60 @@ verdict: function {status: i32 errText: StringView} out String is {
     return "crash: exit status \{status} with no diagnostic"
 }
 
+# Build -- how one build of a program by zc ended
+Build: class {
+    status: i32
+    # what zc wrote to its standard error
+    err: String
+}
+
+# buildOnce -- program `text`, written as `<dir>/<name>.z`, built by `zc` with
+# `dir` and then `roots` as its source roots; the files the build made are
+# removed again
+buildOnce: function {
+    zc: StringView
+    system: StringView
+    roots: (List String).view
+    dir: StringView
+    name: StringView
+    text: StringView
+    timeout: i32
+} out Build is {
+    src: "\{dir}/\{name}.z"
+    io.writeText path: src content: text
+    errPath: "\{dir}/\{name}.err"
+    bin: "\{dir}/\{name}.bin"
+    argv: List String
+    argv.append zc.string
+    argv.append "build".string
+    argv.append name.string
+    argv.append "--src".string
+    argv.append dir.string
+    for each r: roots loop {
+        argv.append "--src".string
+        argv.append r.copy
+    }
+    argv.append "--system".string
+    argv.append system.string
+    argv.append "-o".string
+    argv.append bin.copy
+    argv.append "--cflags".string
+    argv.append "-O0 -w".string
+    status: (
+        os.spawn
+        :argv
+        cwd: dir
+        outPath: os.nullDevice.stringView
+        errPath: errPath.stringView
+        timeoutSecs: timeout
+    )
+    b: Build :status err: (slurp path: errPath.stringView)
+    io.remove path: src
+    io.remove path: errPath
+    io.remove path: bin
+    return b
+}
+
 # Report -- what one worker found
 Report: class {
     # cases run
@@ -345,45 +408,28 @@ Worker: class {
             e = e + 1
         }
         name: "fz\{k}"
-        src: "\{w.work}/\{name}.z"
-        io.writeText path: src content: text
-        errPath: "\{w.work}/\{name}.err"
-        argv: List String
-        argv.append w.zc.copy
-        argv.append "build".string
-        argv.append name.copy
-        argv.append "--src".string
-        argv.append w.work.copy
-        argv.append "--src".string
-        argv.append (fdirs.get i: bi).copy
-        argv.append "--system".string
-        argv.append w.system.copy
-        argv.append "-o".string
-        argv.append "\{w.work}/\{name}.bin"
-        argv.append "--cflags".string
-        argv.append "-O0 -w".string
-        status: (
-            os.spawn
-            :argv
-            cwd: w.work.stringView
-            outPath: os.nullDevice.stringView
-            errPath: errPath.stringView
-            timeoutSecs: w.timeout
+        roots: List String
+        roots.append (fdirs.get i: bi).copy
+        b: (
+            buildOnce
+            zc: w.zc.stringView
+            system: w.system.stringView
+            :roots
+            dir: w.work.stringView
+            name: name.stringView
+            text: text.stringView
+            timeout: w.timeout
         )
         rep.cases = rep.cases + 1
-        if status == 0 then rep.built = rep.built + 1
-        errText: slurp path: errPath.stringView
-        v: verdict :status errText: errText.stringView
+        if b.status == 0 then rep.built = rep.built + 1
+        v: verdict status: b.status errText: b.err.stringView
         if v.length > 0 then {
             keep: "\{w.work}/findings"
             io.writeText path: "\{keep}/\{name}.z" content: text
-            io.writeText path: "\{keep}/\{name}.err" content: errText
+            io.writeText path: "\{keep}/\{name}.err" content: b.err
             rep.findings.append v.take
             rep.shown.append "\{name} (from \{files.get i: bi})"
         }
-        io.remove path: src
-        io.remove path: errPath
-        io.remove path: "\{w.work}/\{name}.bin"
     }
 }
 
@@ -481,11 +527,39 @@ main: function is {
         shortName: "".string
         help: "write the --known file from this run".string
     )
+    (
+        cli.addOption
+        spec: sp
+        name: "--recheck".string
+        shortName: "".string
+        help: "build every finding under this folder instead of fuzzing".string
+        required: false
+    )
+    (
+        cli.addOption
+        spec: sp
+        name: "--reduce".string
+        shortName: "".string
+        help: "shrink this finding instead of fuzzing".string
+        required: false
+    )
+    (
+        cli.addOption
+        spec: sp
+        name: "--out".string
+        shortName: "".string
+        help: "where --reduce writes what is left".string
+        required: false
+    )
     parsed: cli.parse spec: sp args: os.args
     match (
         parsed
     ) case ok then {
-        run p: parsed
+        if (parsed.option name: "--recheck").some then {
+            recheck p: parsed
+        } else if (parsed.option name: "--reduce").some then {
+            reduce p: parsed
+        } else run p: parsed
     } case err then {
         io.eprintln (cli.helpText spec: sp)
         os.exit code: 2
@@ -494,32 +568,28 @@ main: function is {
 
 # run -- the fuzz run the command line `p` asks for
 run: function {p: cli.Parsed.view} is {
-    seed: (optionOr :p name: "--seed" d: "1").stringView.parseU64.or d: 1
-    count: (optionOr :p name: "--count" d: "1000").stringView.parseU64.or d: 1000
-    jobs: (optionOr :p name: "--jobs" d: "0").stringView.parseU64.or d: 0
-    timeout: (optionOr :p name: "--timeout" d: "20").stringView.parseU64.or d: 20
-    if jobs == 0 then jobs = os.cpuCount.u64.or d: 1
-    work: optionOr :p name: "--work" d: ""
+    seed: numberOption :p name: "--seed" d: 1
+    count: numberOption :p name: "--count" d: 1000
+    jobs: jobsOf :p
+    work: pathOption :p name: "--work"
     io.mkdirp path: "\{work}/findings"
-    corpus: optionOr :p name: "--corpus" d: ""
     handles: List (thread.JoinHandle Report)
     lane: u64
     for lane < jobs loop {
-        dirs: List String
-        for each d: (corpus.stringView.split sep: ",") loop dirs.append d.string
+        dirs: corpusDirs :p
         handles.append (
             thread.spawn
             task: (
                 Worker
-                zc: (optionOr :p name: "--zc" d: "")
-                system: (optionOr :p name: "--system" d: "")
+                zc: (pathOption :p name: "--zc")
+                system: (pathOption :p name: "--system")
                 :dirs
                 work: work.copy
                 :seed
                 :count
                 :lane
                 lanes: jobs
-                timeout: (timeout.i32.or d: 20)
+                timeout: (timeoutOf :p)
             )
         )
         lane = lane + 1
@@ -547,6 +617,47 @@ run: function {p: cli.Parsed.view} is {
     }
     print "zfuzz: seed \{seed}, \{cases} cases, \{built} built, \{cases - built - total} refused, \{total} findings (\{kinds.length} distinct)"
     report :p :kinds :shown :seed :count :total
+}
+
+# numberOption -- the option `name` of the command line as a number, or `d`
+# when it is absent or not a number
+numberOption: function {p: cli.Parsed.view name: StringView d: u64} out u64 is {
+    return ((optionOr :p :name d: "").stringView.parseU64.or :d)
+}
+
+# jobsOf -- the threads the command line asks for: `--jobs`, else the cpu count
+jobsOf: function {p: cli.Parsed.view} out u64 is {
+    jobs: numberOption :p name: "--jobs" d: 0
+    if jobs == 0 then jobs = os.cpuCount.u64.or d: 1
+    return jobs
+}
+
+# timeoutOf -- the seconds a build may take: `--timeout`, else 20
+timeoutOf: function {p: cli.Parsed.view} out i32 is {
+    return ((numberOption :p name: "--timeout" d: 20).i32.or d: 20)
+}
+
+# corpusDirs -- the folders the command line's `--corpus` names, absolute
+corpusDirs: function {p: cli.Parsed.view} out List String is {
+    dirs: List String
+    corpus: optionOr :p name: "--corpus" d: ""
+    for each d: (corpus.stringView.split sep: ",") loop dirs.append (absolutePath p: d)
+    return dirs
+}
+
+# absolutePath -- `p` from the folder zfuzz runs in, when it is relative: each
+# build runs in a folder of its own, where a relative path names nothing
+absolutePath: function {p: StringView} out String is {
+    if (p.length == 0) or (path.isAbsolute :p) then return p.string
+    here: os.cwd
+    if here.err then return p.string
+    return (path.join a: here.stringView b: p)
+}
+
+# pathOption -- the path option `name` of the command line, made absolute
+pathOption: function {p: cli.Parsed.view name: StringView} out String is {
+    v: optionOr :p :name d: ""
+    return (absolutePath p: v.stringView)
 }
 
 # report -- say what the run found and end it: every finding, or, with
@@ -641,4 +752,362 @@ judgeAgainstKnown: function {
     }
     print "zfuzz: \{kinds.length - fresh} known, \{fresh} not listed, \{gone} listed but gone"
     return (fresh == 0) and (gone == 0)
+}
+
+# isDir -- whether `path` names a folder, following links
+isDir: function {path: StringView} out bool is {
+    st: io.stat :path
+    if st.err then return false
+    return st.kind == io.filekind.dir
+}
+
+# findingFiles -- the `.z` files under the folder `dir`, at any depth,
+# appended to `into`
+findingFiles: function {dir: StringView into: (List String).borrow} is {
+    ls: io.listDir path: dir
+    if ls.err then return
+    for each e: ls loop {
+        p: "\{dir}/\{e}"
+        if e.stringView.endsWith ".z" then {
+            into.append p.copy
+        } else if (isDir path: p.stringView) then findingFiles dir: p.stringView :into
+    }
+}
+
+# savedName -- the program name a saved finding is built under, whatever its
+# file is called: a file name need not be a unit name
+savedName: "fz"
+
+# Rechecker -- the task of one thread of a recheck: every finding under `top`
+# (findingFiles, sorted) whose position is `lane` modulo `lanes`, each built in
+# the thread's own folder `dir`
+Rechecker: class {
+    zc: String
+    system: String
+    # the source roots after the finding's own folder
+    roots: List String
+    dir: String
+    top: String
+    lane: u64
+    lanes: u64
+    timeout: i32
+} as {
+    task: (thread.Task Report).implement
+
+    call: function {w: this} out Report is {
+        rep: Report cases: 0 built: 0 findings: List String shown: List String
+        io.mkdirp path: w.dir
+        files: List String
+        findingFiles dir: w.top.stringView into: files
+        files.sort
+        k: w.lane
+        for k < files.length loop {
+            f: files.get i: k
+            text: slurp path: f.stringView
+            b: (
+                buildOnce
+                zc: w.zc.stringView
+                system: w.system.stringView
+                roots: w.roots
+                dir: w.dir.stringView
+                name: savedName
+                text: text.stringView
+                timeout: w.timeout
+            )
+            rep.cases = rep.cases + 1
+            if b.status == 0 then rep.built = rep.built + 1
+            v: verdict status: b.status errText: b.err.stringView
+            if v.length > 0 then {
+                rep.findings.append v.take
+                rep.shown.append f.copy
+            }
+            k = k + w.lanes
+        }
+        return rep
+    }
+}
+
+# recheck -- build every finding under the folder `--recheck` names, and
+# report each that still fails with its signature, then how many show each
+# signature
+recheck: function {p: cli.Parsed.view} is {
+    top: optionOr :p name: "--recheck" d: ""
+    work: pathOption :p name: "--work"
+    files: List String
+    findingFiles dir: top.stringView into: files
+    files.sort
+    jobs: jobsOf :p
+    handles: List (thread.JoinHandle Report)
+    lane: u64
+    for lane < jobs loop {
+        handles.append (
+            thread.spawn
+            task: (
+                Rechecker
+                zc: (pathOption :p name: "--zc")
+                system: (pathOption :p name: "--system")
+                roots: (corpusDirs :p)
+                dir: "\{work}/recheck/\{lane}"
+                top: top.copy
+                :lane
+                lanes: jobs
+                timeout: (timeoutOf :p)
+            )
+        )
+        lane = lane + 1
+    }
+    left: List String
+    sigs: List String
+    for handles.length > 0 loop {
+        h: handles.pop
+        rep: h.join
+        fi: u64
+        for fi < rep.findings.length loop {
+            f: rep.shown.get i: fi
+            v: rep.findings.get i: fi
+            left.append "\{f.stringView.substring from: top.length + 1 to: f.length}: \{v}"
+            sigs.append v.copy
+            fi = fi + 1
+        }
+    }
+    left.sort
+    for each l: left loop print "LEFT \{l}"
+    sigs.sort
+    si: u64
+    for si < sigs.length loop {
+        n: 1.u64
+        for (si + n) < sigs.length loop {
+            if (sigs.get i: si + n) != (sigs.get i: si) then break
+            n = n + 1
+        }
+        print "\{n} \{sigs.get i: si}"
+        si = si + n
+    }
+    print "zfuzz: \{left.length} of \{files.length} findings still fail"
+}
+
+# quoteMarkAt -- how many bytes the quote mark at byte `at` of `text` takes: 1
+# for ' and `, 3 for the typographic ones, 0 when none starts there
+quoteMarkAt: function {text: StringView at: u64} out u64 is {
+    rest: text.substring from: at to: text.length
+    if (rest.startsWith "'") or (rest.startsWith "`") then return 1
+    if (rest.startsWith "‘") or (rest.startsWith "’") then return 3
+    return 0
+}
+
+# reduceKey -- the signature `v` with every quoted name in it written `X`: a
+# reduction keeps the defect, whatever names its report carries
+reduceKey: function {v: StringView} out String is {
+    r: String
+    inQuote: false
+    i: u64
+    for i < v.length loop {
+        mark: quoteMarkAt text: v at: i
+        if mark > 0 then {
+            if inQuote.not then r.append "X"
+            inQuote = inQuote.not
+            i = i + mark
+        } else {
+            if inQuote.not then r.appendByte ((v.byteAt :i).or d: ascii.space)
+            i = i + 1
+        }
+    }
+    return r
+}
+
+# Reducer -- what a reduction builds with, and the defect it keeps
+Reducer: class {
+    zc: String
+    system: String
+    # the source roots after the folder it builds in
+    roots: List String
+    dir: String
+    # the finding's program name
+    name: String
+    timeout: i32
+    # the reduceKey of the finding's signature
+    want: String
+} as {
+    # keeps -- whether the program `text` still shows the finding
+    keeps: function {r: this.view text: StringView} out bool is {
+        if text.trim.length == 0 then return false
+        b: (
+            buildOnce
+            zc: r.zc.stringView
+            system: r.system.stringView
+            roots: r.roots
+            dir: r.dir.stringView
+            name: r.name.stringView
+            :text
+            timeout: r.timeout
+        )
+        v: verdict status: b.status errText: b.err.stringView
+        return (reduceKey v: v.stringView) == r.want
+    }
+}
+
+# joinKept -- the pieces `keep` marks, joined
+joinKept: function {pieces: (List String).view keep: (ListVal bool).view} out String is {
+    t: String
+    i: u64
+    for i < pieces.length loop {
+        if (keep.get :i) then t.append (pieces.get :i)
+        i = i + 1
+    }
+    return t
+}
+
+# setRun -- `keep` set to `val` at the pieces `live` names from its position
+# `from` up to `to`
+setRun: function {
+    keep: (ListVal bool).borrow live: (ListVal u64).view from: u64 to: u64 val: bool
+} is {
+    j: from
+    for j < to loop {
+        keep.set i: (live.get i: j) :val
+        j = j + 1
+    }
+}
+
+# without -- `l` without its items from position `from` up to `to`
+without: function {l: (ListVal u64).view from: u64 to: u64} out ListVal u64 is {
+    r: ListVal u64
+    j: u64
+    for j < l.length loop {
+        if (j < from) or (j >= to) then r.append (l.get i: j)
+        j = j + 1
+    }
+    return r
+}
+
+# shrink -- clear in `keep` every run of the pieces `cand` names whose removal
+# keeps the finding: runs of half of them first, halved down to single pieces,
+# and the pass of single pieces repeated while it removes one
+shrink: function {
+    r: Reducer.view
+    pieces: (List String).view
+    cand: (ListVal u64).view
+    keep: (ListVal bool).borrow
+} is {
+    live: ListVal u64
+    for each c: cand loop live.append c
+    n: live.length / 2
+    if n == 0 then n = 1
+    for live.length > 0 loop {
+        before: live.length
+        live = shrinkPass :r :pieces :keep :live :n
+        if (n == 1) and (live.length == before) then break
+        if n > 1 then n = n / 2
+    }
+}
+
+# shrinkPass -- one pass over the pieces `live` names, in runs of `n`: a run
+# whose removal keeps the finding is cleared in `keep`; answers the pieces left
+shrinkPass: function {
+    r: Reducer.view
+    pieces: (List String).view
+    keep: (ListVal bool).borrow
+    live: (ListVal u64).view
+    n: u64
+} out ListVal u64 is {
+    left: without l: live from: 0 to: 0
+    i: u64
+    for i < left.length loop {
+        end: i + n
+        if end > left.length then end = left.length
+        setRun :keep live: left from: i to: end val: false
+        if (r.keeps text: (joinKept :pieces :keep).stringView) then {
+            left = without l: left from: i to: end
+        } else {
+            setRun :keep live: left from: i to: end val: true
+            i = end
+        }
+    }
+    return left
+}
+
+# shrinkPieces -- `text` cut into `pieces`, with every run of the pieces `cand`
+# names that the finding does not need removed
+shrinkPieces: function {
+    r: Reducer.view
+    pieces: (List String).view
+    cand: (ListVal u64).view
+} out String is {
+    keep: ListVal bool
+    for keep.length < pieces.length loop keep.append true
+    shrink :r :pieces :cand :keep
+    return (joinKept :pieces :keep)
+}
+
+# shrinkLines -- `text` with every run of lines the finding does not need
+# removed
+shrinkLines: function {r: Reducer.view text: String.view} out String is {
+    lines: List String
+    ids: ListVal u64
+    for each ln: text.stringView.lines loop {
+        ids.append lines.length
+        lines.append "\{ln}\n"
+    }
+    return (shrinkPieces :r pieces: lines cand: ids)
+}
+
+# reduce -- shrink the finding `--reduce` names while it shows the same defect
+# (reduceKey): runs of its lines first, then runs of its tokens, then the lines
+# again. What is left goes to `--out`.
+reduce: function {p: cli.Parsed.view} is {
+    file: optionOr :p name: "--reduce" d: ""
+    dest: optionOr :p name: "--out" d: ""
+    if dest.length == 0 then {
+        io.eprintln "zfuzz: --reduce needs --out FILE"
+        os.exit code: 2
+    }
+    work: pathOption :p name: "--work"
+    dir: "\{work}/reduce"
+    io.mkdirp path: dir
+    r: (
+        Reducer
+        zc: (pathOption :p name: "--zc")
+        system: (pathOption :p name: "--system")
+        roots: (corpusDirs :p)
+        dir: dir.copy
+        name: savedName.string
+        timeout: (timeoutOf :p)
+        want: String
+    )
+    text: slurp path: file.stringView
+    b: (
+        buildOnce
+        zc: r.zc.stringView
+        system: r.system.stringView
+        roots: r.roots
+        dir: r.dir.stringView
+        name: r.name.stringView
+        text: text.stringView
+        timeout: r.timeout
+    )
+    v: verdict status: b.status errText: b.err.stringView
+    if v.length == 0 then {
+        print "zfuzz: \{file} shows no finding"
+        os.exit code: 1
+    }
+    r.want = reduceKey v: v.stringView
+    text = shrinkLines :r :text
+    toks: Tokens.create text: text.copy
+    pieces: List String
+    i: u64
+    for i < toks.count loop {
+        pieces.append (toks.piece :i).string
+        i = i + 1
+    }
+    text = shrinkPieces :r :pieces cand: toks.words
+    # the lines the token pass emptied
+    text = shrinkLines :r :text
+    io.writeText path: dest content: text
+    n: u64
+    for each ln: text.stringView.lines loop {
+        # a line counted; its text is not needed
+        ln.drop
+        n = n + 1
+    }
+    print "zfuzz: \{v} -- \{n} lines -> \{dest}"
 }
