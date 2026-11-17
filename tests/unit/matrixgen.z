@@ -11,8 +11,8 @@
 # Usage: matrixgen [--root DIR] [--cells DIR] [--system DIR]
 #   --root   the repository the fixtures are written under (default `.`):
 #            per family emitc_corpus/matrix_<f>.z (and matrix_<f>_conf.z for the
-#            implementation cells), run_golden/matrix_<f>*.out, the matrix_ rows of
-#            run_cases.txt, and errors/matrix_<f>_refused.z + .err.
+#            implementation cells), run_golden/matrix_<f>*.out, matrix_cases.zd
+#            (through caselist), and errors/matrix_<f>_refused.z + .err.
 #   --cells  one program per cell into DIR plus DIR/manifest.txt (name family
 #            position verdict expected detail) instead, to look at a cell alone.
 #   --system the system units the table is checked against (default `lib/system`).
@@ -2759,7 +2759,7 @@ pick: function {
     return buf
 }
 
-# writeRun -- one RUN program and its golden; its run_cases row appended to cases
+# writeRun -- one RUN program and its golden; its name appended to cases
 writeRun: function {
     root: StringView
     f: Family.view
@@ -2767,7 +2767,7 @@ writeRun: function {
     slots: (List Slot).view
     decls: StringView
     stem: StringView
-    cases: String
+    cases: (List String).borrow
 } is {
     if slots.length == 0 then return
     prog: program :f :poss :slots :decls what: "RUN"
@@ -2775,7 +2775,7 @@ writeRun: function {
     writeUnit :f dir: "\{root}/tests/fixtures/emitc_corpus" :stem
     gold: golden :poss :slots
     writeFile path: "\{root}/tests/fixtures/run_golden/\{stem}.out" content: gold.stringView
-    cases.append "\{stem} tests/fixtures/emitc_corpus\n"
+    cases.append stem.string
 }
 
 # writeRefused -- the family's REFUSED program and its .err: the implementation
@@ -2807,7 +2807,7 @@ writeFamily: function {
     rows: (List Row).view
     slots: (List Slot).view
     fi: u64
-    cases: String
+    cases: (List String).borrow
 } is {
     f: fams.get i: fi
     stem: "matrix_\{f.name}"
@@ -2830,14 +2830,14 @@ writeFamily: function {
 }
 
 # writeFixtures -- every family's programs and goldens under root, their
-# run_cases rows appended to `cases`
+# names appended to `cases`
 writeFixtures: function {
     root: StringView
     fams: (List Family).view
     poss: (List Position).view
     rows: (List Row).view
     slots: (List Slot).view
-    cases: String
+    cases: (List String).borrow
 } is {
     ensureDir path: "\{root}/tests/fixtures/emitc_corpus"
     ensureDir path: "\{root}/tests/fixtures/run_golden"
@@ -2849,35 +2849,8 @@ writeFixtures: function {
     }
 }
 
-# writeCases -- run_cases.txt with its matrix_ rows replaced by cases, IN PLACE:
-# the block goes where the first matrix_ row stood, so rows other commits
-# appended after it stay where they are and a regeneration reproduces the
-# committed file. With no matrix_ row yet, the block is appended.
-writeCases: function {root: StringView cases: String.view} is {
-    path: "\{root}/tests/fixtures/run_cases.txt"
-    content: String
-    if (io.exists :path) then content = slurp path: path.stringView
-    buf: spliceCases content: content.stringView cases: cases.stringView
-    writeFile :path content: buf.stringView
-}
-
-# spliceCases -- the run_cases.txt text `content` with its matrix_ rows replaced
-# by `cases`, at the first of them, or appended when there is none
-spliceCases: function {content: StringView cases: StringView} out String is {
-    buf: String
-    placed: false
-    for each ln: content.lines loop {
-        isMatrix: ln.startsWith prefix: "matrix_"
-        if isMatrix when placed.not then buf.append cases
-        if isMatrix then placed = true
-        if ln.length > 0 when isMatrix.not then {
-            buf.append ln
-            buf.append "\n"
-        }
-    }
-    if placed.not then buf.append cases
-    return buf
-}
+# casesHeader -- the comment block matrix_cases.zd starts with
+casesHeader: "# matrix_cases -- the RUN programs matrixgen writes from the table\n# tests/fixtures/matrix_expect.zd, read by the runner beside run_cases.zd.\n# `make regen-matrix` writes the whole file: edit the table, not this file."
 
 # writeCells -- one program per writable cell, and the manifest
 writeCells: function {
@@ -3004,10 +2977,11 @@ main: function is {
         lfDir: "\{opts.cellsDir}/lockflow"
         lockflow.lfWriteCells dir: lfDir.stringView cells: lfCells rows: lfRows
     } else {
-        cases: String
+        cases: List String
         writeFixtures root: opts.root.stringView :fams :poss :rows :slots :cases
         lockflow.lfWriteFixtures root: opts.root.stringView cells: lfCells rows: lfRows :cases
-        writeCases root: opts.root.stringView :cases
+        path: "\{opts.root}/tests/fixtures/matrix_cases.zd"
+        caselist.write path: path.stringView header: casesHeader names: cases
     }
     report :fams :poss :rows :slots
     lockflow.lfReport cells: lfCells

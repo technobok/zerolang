@@ -17,8 +17,8 @@
 #
 # Usage: constparitygen [--root DIR] [--cells DIR]
 #   --root   the repository the fixtures are written under (default `.`):
-#            per kind emitc_corpus/cpar_<k>.z, run_golden/cpar_<k>.out, the
-#            cpar_ rows of run_cases.txt, and per refused reader
+#            per kind emitc_corpus/cpar_<k>.z, run_golden/cpar_<k>.out,
+#            cpar_cases.zd (through caselist), and per refused reader
 #            errors/cpar_<k>_<reader>.z + .err + .zcargs.
 #   --cells  one program per cell into DIR plus DIR/manifest.txt (name kind
 #            reader position verdict detail) instead, to look at a cell alone.
@@ -942,7 +942,7 @@ writeKind: function {
     rows: (List Row).view
     slots: (List Slot).view
     ki: u64
-    cases: String
+    cases: (List String).borrow
 } is {
     k: ks.get i: ki
     run: pick :slots :ki expected: outcome.run
@@ -952,7 +952,7 @@ writeKind: function {
         writeFile path: "\{root}/tests/fixtures/emitc_corpus/\{stem}.z" content: prog.stringView
         gold: golden :k :rs :rows slots: run
         writeFile path: "\{root}/tests/fixtures/run_golden/\{stem}.out" content: gold.stringView
-        cases.append "\{stem} tests/fixtures/emitc_corpus\n"
+        cases.append stem.copy
     }
     refused: pick :slots :ki expected: outcome.refused
     ri: u64
@@ -982,8 +982,8 @@ writeKind: function {
     }
 }
 
-# writeFixtures -- every kind's programs and goldens under root, and the cpar_
-# rows of run_cases.txt replaced by this run's
+# writeFixtures -- every kind's programs and goldens under root, and
+# cpar_cases.zd naming the RUN ones
 writeFixtures: function {
     root: StringView
     ks: (List Kind).view
@@ -994,36 +994,18 @@ writeFixtures: function {
     ensureDir path: "\{root}/tests/fixtures/emitc_corpus"
     ensureDir path: "\{root}/tests/fixtures/run_golden"
     ensureDir path: "\{root}/tests/fixtures/errors"
-    cases: String
+    cases: List String
     ki: u64
     for ki < ks.length loop {
         writeKind :root :ks :rs :rows :slots :ki :cases
         ki = ki + 1
     }
-    path: "\{root}/tests/fixtures/run_cases.txt"
-    content: String
-    if (io.exists :path) then content = slurp path: path.stringView
-    buf: spliceCases content: content.stringView cases: cases.stringView
-    writeFile :path content: buf.stringView
+    path: "\{root}/tests/fixtures/cpar_cases.zd"
+    caselist.write path: path.stringView header: casesHeader names: cases
 }
 
-# spliceCases -- the run_cases.txt text `content` with its cpar_ rows replaced
-# by `cases`, at the first of them, or appended when there is none
-spliceCases: function {content: StringView cases: StringView} out String is {
-    buf: String
-    placed: false
-    for each ln: content.lines loop {
-        isOurs: ln.startsWith prefix: "cpar_"
-        if isOurs when placed.not then buf.append cases
-        if isOurs then placed = true
-        if ln.length > 0 when isOurs.not then {
-            buf.append ln
-            buf.append "\n"
-        }
-    }
-    if placed.not then buf.append cases
-    return buf
-}
+# casesHeader -- the comment block cpar_cases.zd starts with
+casesHeader: "# cpar_cases -- the RUN programs constparitygen writes from the table\n# tests/fixtures/constparity_expect.txt, read by the runner beside\n# run_cases.zd. `make regen-constparity` writes the whole file: edit the table,\n# not this file."
 
 # writeCells -- one program per writable cell, KNOWN ones included, and the
 # manifest

@@ -144,7 +144,7 @@ ZLSCOPE := src/*.z $(SRC_SUBUNITS) lib/system/*.z lib/system/system/*.z lib/syst
 # gives each tree its own roots.
 ZLFULLSCOPE := src/*.z $(SRC_SUBUNITS) lib/system/*.z lib/system/system/*.z lib/system/math/*.z
 # What the formatter checks; tests/fixtures/ is input and stays as written.
-FMTSCOPE := src/*.z $(SRC_SUBUNITS) lib/system/*.z lib/system/system/*.z lib/system/math/*.z examples/*.z tests/unit/*.z tests/unit/matrixgen/*.z $(TOOLSRC) lib/system/*.zd project.zd tests/fixtures/zdata/zd_written.zd tests/known/*.zd tests/fixtures/*_baseline.zd
+FMTSCOPE := src/*.z $(SRC_SUBUNITS) lib/system/*.z lib/system/system/*.z lib/system/math/*.z examples/*.z tests/unit/*.z tests/unit/matrixgen/*.z $(TOOLSRC) lib/system/*.zd project.zd tests/fixtures/zdata/zd_written.zd tests/known/*.zd tests/fixtures/*_baseline.zd tests/fixtures/*_cases.zd
 
 all: bin/zc bin/zl bin/zls
 
@@ -351,7 +351,7 @@ $(BUILDDIR)/wineprefix/.ready:
 # test-mingw -- the RUN corpus built for Windows by mingw-w64 against the UCRT
 # (zc --target x86_64-w64-mingw32) and run under wine against the same goldens (Windows'
 # own `<name>.windows.out` where a case has one). A case marked `posix` in
-# run_cases.txt is listed as `(posix)` rather than run.
+# run_cases.zd is listed as `(posix)` rather than run.
 # tests/known/mingw.zd is the expected failure set; a move either way
 # fails. Skipped without the cross compiler and wine.
 MINGW_CC := x86_64-w64-mingw32-gcc
@@ -967,7 +967,7 @@ regen-matrix: out/matrixgen
 # under a scratch root, with none left over that it no longer writes.
 matrix-guard: out/matrixgen
 	@d=$$(mktemp -d); mkdir -p $$d/tests/fixtures; \
-	cp tests/fixtures/matrix_expect.zd tests/fixtures/run_cases.txt $$d/tests/fixtures/; \
+	cp tests/fixtures/matrix_expect.zd $$d/tests/fixtures/; \
 	$(BUILDDIR)/matrixgen --root $$d > $$d/gen.log 2>&1 || { cat $$d/gen.log; rm -rf $$d; exit 1; }; \
 	bad=0; n=0; \
 	for f in $$(cd $$d && find tests/fixtures -type f ! -name matrix_expect.zd); do \
@@ -996,7 +996,7 @@ regen-constparity: out/constparitygen
 # regenerated under a scratch root, with none left over that it no longer writes.
 constparity-guard: out/constparitygen
 	@d=$$(mktemp -d); mkdir -p $$d/tests/fixtures; \
-	cp tests/fixtures/constparity_expect.txt tests/fixtures/run_cases.txt $$d/tests/fixtures/; \
+	cp tests/fixtures/constparity_expect.txt $$d/tests/fixtures/; \
 	$(BUILDDIR)/constparitygen --root $$d > $$d/gen.log 2>&1 || { cat $$d/gen.log; rm -rf $$d; exit 1; }; \
 	bad=0; n=0; \
 	for f in $$(cd $$d && find tests/fixtures -type f ! -name constparity_expect.txt); do \

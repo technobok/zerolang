@@ -9,7 +9,13 @@
 # A subunit of ztestrunner.
 
 # caseLists -- the case lists, under tests/fixtures
-caseLists: list { "run_cases.txt" "smoke_cases.txt" "dump_cases.txt" } out staticlist StringView
+caseLists: list {
+    "run_cases.zd"
+    "matrix_cases.zd"
+    "cpar_cases.zd"
+    "smoke_cases.zd"
+    "dump_cases.zd"
+} out staticlist StringView
 
 # runFixtureCases -- the case-list check and the L023 check; one pass for each,
 # or a fail for each case that breaks one
@@ -27,11 +33,13 @@ checkCaseLists: function {r: Runner.view} out u64 is {
     bad: u64
     listed: List String
     for each l: caseLists loop {
-        names: caseNames path: "\{r.root}/tests/fixtures/\{l}".stringView
+        cases: List CaseProgram
+        casePrograms path: "\{r.root}/tests/fixtures/\{l}".stringView into: cases
         seen: List String
-        for each n: names loop {
+        for each c: cases loop {
+            n: c.name
             if (seen.contains item: n) then {
-                print "FAIL(fixtures) cases: \{n} is listed twice in tests/fixtures/\{l} -- the runner would build and run it twice; delete one line"
+                print "FAIL(fixtures) cases: \{n} is listed twice in tests/fixtures/\{l} -- the runner would build and run it twice; delete one"
                 bad = bad + 1
             } else seen.append n.copy
             listed.append n.copy
@@ -41,7 +49,7 @@ checkCaseLists: function {r: Runner.view} out u64 is {
         for each n: (fixtureNames dir: d.stringView suffix: ".z") loop {
             path: "\{d}/\{n}.z"
             if (declaresMain path: path.stringView) when (listed.contains item: n).false then {
-                print "FAIL(fixtures) cases: \{n} declares main but is in no case list -- nothing compiles it. Add it to run_cases.txt with a tests/fixtures/run_golden/<name>.out, or to smoke_cases.txt when its output depends on the machine (build only)"
+                print "FAIL(fixtures) cases: \{n} declares main but is in no case list -- nothing compiles it. Add it to run_cases.zd with a tests/fixtures/run_golden/<name>.out, or to smoke_cases.zd when its output depends on the machine (build only)"
                 bad = bad + 1
             }
         }
@@ -55,20 +63,6 @@ listOfDirs: function {a: StringView b: StringView} out List String is {
     l.append a.string
     l.append b.string
     return l
-}
-
-# caseNames -- the first word of each line of the case list at `path`, `#`
-# lines and empty ones left out
-caseNames: function {path: StringView} out List String is {
-    names: List String
-    text: slurp :path
-    for each ln: text.stringView.lines loop {
-        l: ln.trim
-        if (l.length == 0) or (l.startsWith "#") then continue
-        sp: (l.indexOf " ").or d: l.length
-        names.append (l.substring from: 0 to: sp).string
-    }
-    return names
 }
 
 # checkGenericParams -- the params check: `zl lint --counts` over the

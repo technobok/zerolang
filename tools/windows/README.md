@@ -16,7 +16,7 @@ their tools. `make ci-windows` is not, since it needs the machine. Run it at
 stage gates and commit the `tests/known/windows.zd` a green run writes;
 `make ci` ends with `make windows-due`, which says when a run is due again.
 `tests/known/mingw.zd` lists only the run cases marked `posix` in
-`tests/fixtures/run_cases.txt` (POSIX file descriptors and signals, which
+`tests/fixtures/run_cases.zd` (POSIX file descriptors and signals, which
 Windows does not have); `tests/known/tccmingw.zd` adds what tcc
 cannot build on any system (`f128`), each with its reason. Wine is not
 Windows: it maps POSIX paths such as `/tmp` and accepts paths past `MAX_PATH`

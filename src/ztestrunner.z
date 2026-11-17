@@ -1,11 +1,12 @@
 # ztestrunner.z -- the self-hosted corpus test gate, driven entirely by
 # os.spawn. Case kinds, each compared to a committed golden under
 # tests/fixtures:
-#   run      run_cases.txt -> emit -> cc -> run; stdout matches
-#            run_golden/<n>.out, exit code matches <n>.exit (0 default) --
-#            <n>.<os>.out / .exit where the system the case is built for has
-#            its own. A case whose line ends in `posix` checks something only
-#            POSIX has, and a build for Windows skips it (listed as such)
+#   run      run_cases.zd (+ matrix_cases.zd, cpar_cases.zd) -> emit -> cc
+#            -> run; stdout matches run_golden/<n>.out, exit code matches
+#            <n>.exit (0 default) -- <n>.<os>.out / .exit where the system the
+#            case is built for has its own. A case marked `posix` checks
+#            something only POSIX has, and a build for Windows skips it
+#            (listed as such)
 #   lsp      framed JSON-RPC transcripts replayed through zls
 #   leak     every buildable example + emitc_corpus program under the
 #            SANITIZER ITS COMPILER HAS -- ASan with detect_leaks=1 for gcc and
@@ -17,7 +18,7 @@
 #   errcode  every error zast.errFacts lists is reported by some golden
 #   lone     every run case, with one unrelated error written at the top of
 #            `main`, reports that error and no other
-#   dump     dump_cases.txt -> `zc dump --canon` matches dump_golden/<n>.canon
+#   dump     dump_cases.zd -> `zc dump --canon` matches dump_golden/<n>.canon
 #   docpage  docs/*.html is what the renderer writes from its .pdoc, a link
 #            between pages names a page and an anchor that exist, and the
 #            code table of docs/errors.pdoc is zast.errFacts' (docErrorTable)
@@ -212,14 +213,12 @@ oneDir: function {d: StringView} out List String is {
     return l
 }
 
-# manifestDirs -- the source roots a case manifest's directory column names,
-# each under `root`. The column is a list joined by ":", the manifest's own
-# separator: a program that lives under tests/unit still needs src on the
-# roots, and zc searches them in order. It is split before the root is
-# joined, so a root with a drive letter (`C:\r`) stays one path.
-manifestDirs: function {root: StringView column: StringView} out List String is {
+# caseDirs -- the source roots of case program `c` under the repository
+# `root`: its own directory first, then its `roots`
+caseDirs: function {root: StringView c: CaseProgram.view} out List String is {
     l: List String
-    for each d: (column.split sep: ":") loop l.append (path.join a: root b: d)
+    l.append (path.join a: root b: c.dir.stringView)
+    for each d: c.roots loop l.append (path.join a: root b: d.stringView)
     return l
 }
 
@@ -523,12 +522,10 @@ deframeLsp: function {raw: StringView} out String is {
 }
 
 # runnerWord -- every word the runner reads off outside text: the LSP frame
-# header, a case list's marker and its own name. A word is classified by its
+# header and its own name. A word is classified by its
 # slot here (zast.Vocab), never by comparing its text.
 runnerWord: list {
     lspHeader: "Content-Length: "
-    # a run case's third word: it checks something only POSIX has
-    casePosix: "posix"
     # the driver a USAGE case names when it runs the runner itself
     ownName: "ztestrunner"
     # what a USAGE case's `cwd` file says when its driver runs in the case's
@@ -679,14 +676,10 @@ Runner: class {
     errors: String
     # where the RUN cases' expected output lives
     rungold: String
-    # the RUN case list
-    runcases: String
     # the examples directory
     examplesDir: String
     # the emitc corpus directory
     corpusDir: String
-    # the SQL-dump case list
-    dumpcases: String
     # where the dump cases' expected output lives
     dumpgold: String
     # the compiler's own source, which the arch and doc ratchets walk
@@ -2041,13 +2034,13 @@ runRunCases: function {r: Runner} is {
     met: falseFlags n: known.length
     runPool: List PoolJob
     windows: ztarget.targetIsWindows triple: r.target.stringView
-    for each c: (runCaseLines :r) loop {
+    for each c: (runCasePrograms :r) loop {
         if (isSelected :r name: c.name.stringView dir: c.dir.stringView).false then {
             markUnselected :known :met name: c.name.stringView
         } else if c.posix when windows then {
             # what it checks has no Windows counterpart: listed, not run
             runOutcome :r :known :met name: c.name.stringView why: runWhy.slot.posix
-        } else runPool.append (runCaseJob :r name: c.name.stringView dir: c.dir.stringView)
+        } else runPool.append (runCaseJob :r :c)
     }
     runStatuses: ListVal i32
     runFailSteps: ListVal i64
@@ -2071,43 +2064,50 @@ runRunCases: function {r: Runner} is {
     knownLeft :r :known :met
 }
 
-# RunCaseLine -- one line of the RUN case list: the case, its directory
-# column, and whether it checks something only POSIX has
-RunCaseLine: class {
+# CaseProgram -- one program of a case list (tests/fixtures/*_cases.zd)
+CaseProgram: class {
     name: String
+    # the directory that holds <name>.z, from the repository root
     dir: String
+    # more source roots its units come from, from the repository root
+    roots: List String
+    # it checks what only POSIX has: on Windows it is listed, not run
     posix: bool
 }
 
-# runCaseLines -- the RUN case list's lines with a name and a directory
-runCaseLines: function {r: Runner.view} out List RunCaseLine is {
-    lines: List RunCaseLine
-    words: zast.Vocab.create block: runnerWord
-    text: slurp path: r.runcases.stringView
-    for each ln: text.stringView.lines loop {
-        cols: List String
-        for each pc: (ln.split sep: " ") loop {
-            if pc.length > 0 then cols.append pc.string
-        }
-        if cols.length >= 2 then {
-            posix: false
-            k: 2.u64
-            for k < cols.length loop {
-                if (
-                    (words.slotOf text: (cols.get i: k).stringView) == runnerWord.slot.casePosix
-                ) then posix = true
-                k = k + 1
-            }
-            lines.append (RunCaseLine name: (cols.get i: 0).copy dir: (cols.get i: 1).copy :posix)
-        }
+# runLists -- the RUN kind's case lists under tests/fixtures: the hand-written
+# one, then the ones the two matrix generators write
+runLists: list { "run_cases.zd" "matrix_cases.zd" "cpar_cases.zd" } out staticlist StringView
+
+# casePrograms -- the programs of the case list at `path`, appended to `into`
+casePrograms: function {path: StringView into: (List CaseProgram).borrow} is {
+    doc: (zd.read :path).orPanic
+    for each row: (doc.itemsAt path: "programs").orPanic loop {
+        roots: List String
+        for each rt: (row.itemsAt path: "roots").orPanic loop roots.append (rt.textAt path: ""
+        ).orPanic.copy
+        into.append (
+            CaseProgram
+            name: (row.textAt path: "name").orPanic.copy
+            dir: (row.textAt path: "dir").orPanic.copy
+            :roots
+            posix: (row.booleanAt path: "posix").orPanic
+        )
     }
-    return lines
 }
 
-# runCaseJob -- RUN case `name`'s job: emit and compile (or, with --zc-build,
+# runCasePrograms -- the RUN kind's programs, from each of runLists
+runCasePrograms: function {r: Runner.view} out List CaseProgram is {
+    l: List CaseProgram
+    for each f: runLists loop casePrograms path: "\{r.root}/tests/fixtures/\{f}".stringView into: l
+    return l
+}
+
+# runCaseJob -- RUN case `c`'s job: emit and compile (or, with --zc-build,
 # zc builds it), then run it under --exec's words when it gives some
-runCaseJob: function {r: Runner.view name: StringView dir: StringView} out PoolJob is {
-    srcAbs: manifestDirs root: r.root.stringView column: dir
+runCaseJob: function {r: Runner.view c: CaseProgram.view} out PoolJob is {
+    name: c.name.stringView
+    srcAbs: caseDirs root: r.root.stringView :c
     cpath: "\{r.tmp.stringView}/\{name}.c"
     bpath: "\{r.tmp.stringView}/\{name}.bin"
     opath: "\{r.tmp.stringView}/\{name}.out"
@@ -3300,47 +3300,24 @@ loneErrorJob: function {
 # with no errors, or that reports from what an error left behind. A check
 # stops at the first error, so the whole kind takes about a second.
 runLoneErrorCases: function {r: Runner} is {
-    rcC: slurp path: r.runcases.stringView
     pool: List PoolJob
-    words: zast.Vocab.create block: runnerWord
     windows: ztarget.targetIsWindows triple: r.target.stringView
-    for each ln: rcC.stringView.lines loop queueLoneErrorCase :r :ln :words :windows :pool
+    for each c: (runCasePrograms :r) loop {
+        if c.posix.not or windows.not then queueLoneErrorCase :r :c :pool
+    }
     statuses: ListVal i32
     failSteps: ListVal i64
     zjobs.runJobs jobs: pool maxJobs: r.jobsMax :statuses :failSteps
     for each job: pool loop checkLoneErrorJob :r name: job.name.stringView
 }
 
-# queueLoneErrorCase -- the LONE job for one line of run_cases.txt: its name,
-# its source-root column and its markers. A POSIX-only case is not a program on
-# Windows, and the LONE kind skips it as the RUN kind does.
-queueLoneErrorCase: function {
-    r: Runner
-    ln: StringView
-    words: zast.Vocab.view
-    windows: bool
-    pool: (List PoolJob).borrow
-} is {
-    nameStr: String
-    dirStr: String
-    posixOnly: false
-    idx: u64
-    for each pc: (ln.split sep: " ") loop {
-        if pc.length > 0 then {
-            if idx == 0 then {
-                nameStr = pc.string
-            } else if idx == 1 then {
-                dirStr = pc.string
-            } else if (words.slotOf text: pc) == runnerWord.slot.casePosix then {
-                posixOnly = true
-            }
-            idx = idx + 1
-        }
-    }
-    if (idx < 2) or (posixOnly and windows) then return
-    srcAbs: manifestDirs root: r.root.stringView column: dirStr.stringView
-    if (loneErrorJob :r name: nameStr.stringView :srcAbs :pool).not then {
-        print "FAIL(lone) \{nameStr}: no source root holds it with a line that opens `main`"
+# queueLoneErrorCase -- the LONE job for RUN case `c`. A POSIX-only case is
+# not a program on Windows, and the LONE kind skips it there as the RUN kind
+# does.
+queueLoneErrorCase: function {r: Runner c: CaseProgram.view pool: (List PoolJob).borrow} is {
+    srcAbs: caseDirs root: r.root.stringView :c
+    if (loneErrorJob :r name: c.name.stringView :srcAbs :pool).not then {
+        print "FAIL(lone) \{c.name}: no source root holds it with a line that opens `main`"
         r.fails = r.fails + 1
     }
 }
@@ -3502,56 +3479,43 @@ rootFree: function {text: StringView root: StringView} out String is {
     return (t.stringView.replace needle: "\{rs}/" replacement: "")
 }
 
+# dumpCaseJob -- DUMP case `c`'s job: `zc dump --canon` of it
+dumpCaseJob: function {r: Runner.view c: CaseProgram.view} out PoolJob is {
+    srcAbs: "\{r.root}/\{c.dir}"
+    dpath: "\{r.tmp}/\{c.name}.canon"
+    da: (
+        dumpArgv
+        zc: r.zc.stringView
+        name: c.name.stringView
+        srcdir: srcAbs.stringView
+        sys: r.sys.stringView
+    )
+    # a dump case pins the whole-program model, which for a unit with no
+    # `main` is the EAGER tier's -- the compiler resolves what a program
+    # demands, and a program that demands nothing is entitled to an empty
+    # model. `<name>.zcargs` beside the source names the flag, the way an
+    # error fixture does.
+    dxf: "\{srcAbs}/\{c.name}.zcargs"
+    steps: List PoolStep
+    steps.append (
+        zjobs.mkStep
+        argv: (withExtraArgs argv: da file: dxf.stringView)
+        cwd: ""
+        outPath: dpath.stringView
+        errPath: os.nullDevice.stringView
+        timeoutSecs: r.timeoutSecs
+        allowFail: true
+        zlinkFrom: ""
+    )
+    return (zjobs.mkJob name: c.name.stringView :steps)
+}
+
 # runDumpCases -- the DUMP (canonical state) cases kind.
 runDumpCases: function {r: Runner} is {
-    # ---------------- DUMP (canonical state) cases ----------------
-    ddC: slurp path: r.dumpcases.stringView
-    ddv: ddC.stringView
+    cases: List CaseProgram
+    casePrograms path: "\{r.root}/tests/fixtures/dump_cases.zd".stringView into: cases
     dumpPool: List PoolJob
-    for each ln: ddv.lines loop {
-        if ln.length > 0 then {
-            nameStr: String
-            dirStr: String
-            idx: u64
-            for each pc: (ln.split sep: " ") loop {
-                if pc.length > 0 then {
-                    if idx == 0 then {
-                        nameStr = pc.string
-                    } else if idx == 1 then dirStr = pc.string
-                    idx = idx + 1
-                }
-            }
-            if idx >= 2 then {
-                srcAbs: "\{r.root.stringView}/\{dirStr.stringView}"
-                dpath: "\{r.tmp.stringView}/\{nameStr.stringView}.canon"
-                steps: List PoolStep
-                da: (
-                    dumpArgv
-                    zc: r.zc.stringView
-                    name: nameStr.stringView
-                    srcdir: srcAbs.stringView
-                    sys: r.sys.stringView
-                )
-                # a dump case pins the whole-program model, which for a unit
-                # with no `main` is the EAGER tier's -- the compiler resolves
-                # what a program demands, and a program that demands nothing
-                # is entitled to an empty model. `<name>.zcargs` beside the
-                # source names the flag, the way an error fixture does.
-                dxf: "\{srcAbs.stringView}/\{nameStr.stringView}.zcargs"
-                steps.append (
-                    zjobs.mkStep
-                    argv: (withExtraArgs argv: da file: dxf.stringView)
-                    cwd: ""
-                    outPath: dpath.stringView
-                    errPath: os.nullDevice.stringView
-                    timeoutSecs: r.timeoutSecs
-                    allowFail: true
-                    zlinkFrom: ""
-                )
-                dumpPool.append (zjobs.mkJob name: nameStr.stringView :steps)
-            }
-        }
-    }
+    for each c: cases loop dumpPool.append (dumpCaseJob :r :c)
     dumpStatuses: ListVal i32
     dumpFailSteps: ListVal i64
     zjobs.runJobs jobs: dumpPool maxJobs: r.jobsMax statuses: dumpStatuses failSteps: dumpFailSteps
@@ -4152,86 +4116,72 @@ absoluteFrom: function {base: StringView p: StringView} out String is {
     return (path.join a: base b: p)
 }
 
+# smokeCaseJob -- SMOKE case `c`'s job: emit, compile, run with no arguments
+smokeCaseJob: function {r: Runner.view c: CaseProgram.view} out PoolJob is {
+    srcAbs: caseDirs root: r.root.stringView :c
+    cpath: "\{r.tmp.stringView}/S_\{c.name.stringView}.c"
+    bpath: "\{r.tmp.stringView}/S_\{c.name.stringView}.bin"
+    opath: "\{r.tmp.stringView}/S_\{c.name.stringView}.out"
+    steps: List PoolStep
+    za: (
+        zcArgv
+        zc: r.zc.stringView
+        ccFwd: r.ccFwd.stringView
+        name: c.name.stringView
+        srcdirs: srcAbs
+        sys: r.sys.stringView
+        outc: cpath.stringView
+    )
+    steps.append (
+        zjobs.mkStep
+        argv: za
+        cwd: ""
+        outPath: os.nullDevice.stringView
+        errPath: os.nullDevice.stringView
+        timeoutSecs: 0
+        allowFail: false
+        zlinkFrom: ""
+    )
+    ga: (
+        ccArgv
+        cc: r.cc.stringView
+        ccflags: r.ccflags.stringView
+        target: r.target.stringView
+        bin: bpath.stringView
+        csrc: cpath.stringView
+        asan: false
+    )
+    steps.append (
+        zjobs.mkStep
+        argv: ga
+        cwd: ""
+        outPath: os.nullDevice.stringView
+        errPath: os.nullDevice.stringView
+        timeoutSecs: 0
+        allowFail: false
+        zlinkFrom: cpath.stringView
+        zc: r.zc.stringView
+    )
+    ba: binArgv bin: bpath.stringView argsFile: ""
+    steps.append (
+        zjobs.mkStep
+        argv: ba
+        cwd: ""
+        outPath: opath.stringView
+        errPath: os.nullDevice.stringView
+        timeoutSecs: r.timeoutSecs
+        allowFail: true
+        zlinkFrom: ""
+    )
+    return (zjobs.mkJob name: c.name.stringView :steps)
+}
+
 # runSmokeCases -- the SMOKE (per-unit no-arg golden) cases kind.
 runSmokeCases: function {r: Runner} is {
-    # ---------------- SMOKE (per-unit no-arg golden) cases ----------------
-    smokecases: "\{r.root.stringView}/tests/fixtures/smoke_cases.txt"
-    scC: slurp path: smokecases.stringView
-    scv: scC.stringView
+    cases: List CaseProgram
+    casePrograms path: "\{r.root}/tests/fixtures/smoke_cases.zd".stringView into: cases
     smokePool: List PoolJob
-    for each sln: scv.lines loop {
-        if sln.length > 0 then {
-            nameStr: String
-            dirStr: String
-            idx: u64
-            for each pc: (sln.split sep: " ") loop {
-                if pc.length > 0 then {
-                    if idx == 0 then {
-                        nameStr = pc.string
-                    } else if idx == 1 then dirStr = pc.string
-                    idx = idx + 1
-                }
-            }
-            if idx >= 2 then {
-                srcAbs: manifestDirs root: r.root.stringView column: dirStr.stringView
-                cpath: "\{r.tmp.stringView}/S_\{nameStr.stringView}.c"
-                bpath: "\{r.tmp.stringView}/S_\{nameStr.stringView}.bin"
-                opath: "\{r.tmp.stringView}/S_\{nameStr.stringView}.out"
-                steps: List PoolStep
-                za: (
-                    zcArgv
-                    zc: r.zc.stringView
-                    ccFwd: r.ccFwd.stringView
-                    name: nameStr.stringView
-                    srcdirs: srcAbs
-                    sys: r.sys.stringView
-                    outc: cpath.stringView
-                )
-                steps.append (
-                    zjobs.mkStep
-                    argv: za
-                    cwd: ""
-                    outPath: os.nullDevice.stringView
-                    errPath: os.nullDevice.stringView
-                    timeoutSecs: 0
-                    allowFail: false
-                    zlinkFrom: ""
-                )
-                ga: (
-                    ccArgv
-                    cc: r.cc.stringView
-                    ccflags: r.ccflags.stringView
-                    target: r.target.stringView
-                    bin: bpath.stringView
-                    csrc: cpath.stringView
-                    asan: false
-                )
-                steps.append (
-                    zjobs.mkStep
-                    argv: ga
-                    cwd: ""
-                    outPath: os.nullDevice.stringView
-                    errPath: os.nullDevice.stringView
-                    timeoutSecs: 0
-                    allowFail: false
-                    zlinkFrom: cpath.stringView
-                    zc: r.zc.stringView
-                )
-                ba: binArgv bin: bpath.stringView argsFile: ""
-                steps.append (
-                    zjobs.mkStep
-                    argv: ba
-                    cwd: ""
-                    outPath: opath.stringView
-                    errPath: os.nullDevice.stringView
-                    timeoutSecs: r.timeoutSecs
-                    allowFail: true
-                    zlinkFrom: ""
-                )
-                smokePool.append (zjobs.mkJob name: nameStr.stringView :steps)
-            }
-        }
-    }
+    for each c: cases loop smokePool.append (smokeCaseJob :r :c)
     smokeStatuses: ListVal i32
     smokeFailSteps: ListVal i64
     (
@@ -4928,10 +4878,8 @@ runnerFrom: function {p: cli.Parsed.view} out Runner is {
         exec: (textOr :p name: opt.exec d: "")
         errors: String
         rungold: String
-        runcases: String
         examplesDir: String
         corpusDir: String
-        dumpcases: String
         dumpgold: String
         srcDir: String
         unitDir: String
@@ -4951,10 +4899,8 @@ runnerPathsUnderRoot: function {r: Runner} is {
     r.sys = "\{root}/lib/system"
     r.errors = "\{root}/tests/fixtures/errors"
     r.rungold = "\{root}/tests/fixtures/run_golden"
-    r.runcases = "\{root}/tests/fixtures/run_cases.txt"
     r.examplesDir = "\{root}/examples"
     r.corpusDir = "\{root}/tests/fixtures/emitc_corpus"
-    r.dumpcases = "\{root}/tests/fixtures/dump_cases.txt"
     r.dumpgold = "\{root}/tests/fixtures/dump_golden"
     r.srcDir = "\{root}/src"
     r.unitDir = "\{root}/tests/unit"
