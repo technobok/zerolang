@@ -1,0 +1,59 @@
+# Programs the vendored tcc cannot build, and the stage each one fails at.
+# Read by `make test-tcc`. Each program is a `failure`, with
+# the stage it stops at.
+#
+#   (zc)  zc refuses the program before any C is compiled, naming the unit,
+#         what it needs and the toolchain: a refusal in the unit's C
+#         implementation file (nativec.zd) speaks for it. This is the
+#         finished state.
+#   (cc)  nothing speaks for the type yet: tcc rejects the emitted C with a
+#         parse error naming a type the program never wrote, in a temp file
+#         zc has already deleted. This is what such a refusal exists to
+#         replace.
+#
+# The gate fails on movement in EITHER direction, so a change in what tcc
+# accepts is a deliberate edit here rather than a silent one.
+#
+# Every line below is (zc): each of these programs reaches f128, whose C needs
+# __float128, which tcc has none of; the C backend refuses it by name. i128,
+# u128 and f16 build under tcc -- a value is a struct there
+# (natives/_Z_INT128.inc, natives/_Z_F16.inc) -- so their programs are not
+# listed. An error fixture is not listed either: it stops at its own error,
+# before emission, where the refusal is made.
+
+# __float128: system's quadfloat subunit, refused by the C backend.
+
+# stage -- where a case stops
+stage: choice {
+    # zc refuses it, or fails to emit it
+    zc: null
+    # the emitted C does not compile or link
+    cc: null
+    # it builds, but its output or exit status differs from its golden
+    run: null
+    # it checks something only POSIX has, and is listed rather than run
+    posix: null
+}
+
+# failure -- one case expected to fail, and where
+failure: data {
+    program: text
+    :stage
+}
+
+# failures -- the cases, by name
+failures: list {
+    (failure program: "float_widths" stage: stage.zc)
+    (failure program: "float_mod" stage: stage.zc)
+    (failure program: "f128_constant_precision" stage: stage.zc)
+    (failure program: "f128_exponents" stage: stage.zc)
+    (failure program: "float_functions_wide" stage: stage.zc)
+    # An emission fixture whose subjects are f16 and f128 constants.
+    (failure program: "float_constant_emission_wide" stage: stage.zc)
+    # math's constants as f128.
+    (failure program: "math_constants_wide" stage: stage.zc)
+    # a generic instance at f128 of a sum bound, and a run-time value of the sum:
+    # each uses the f128 arm (bound_used_arms, the f64 instance, builds).
+    (failure program: "bound_used_arms_f128" stage: stage.zc)
+    (failure program: "bound_runtime_all_arms" stage: stage.zc)
+}

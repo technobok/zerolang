@@ -11,7 +11,7 @@
 #            SANITIZER ITS COMPILER HAS -- ASan with detect_leaks=1 for gcc and
 #            clang, `-b` with TCC_BOUNDS_PRINT_HEAP for tcc, which has no ASan
 #            at all. No use-after-free, no double free, nothing held at exit
-#            outside tests/known-leaks.txt. The spelling is proved to work on a
+#            outside tests/known/leaks.zd. The spelling is proved to work on a
 #            deliberate leak before any verdict is trusted (proveSanitizer).
 #   error    errors/<n>.z must fail with the error[Exxxx] lines of <n>.err
 #   errcode  every error zast.errFacts lists is reported by some golden
@@ -697,7 +697,7 @@ Runner: class {
     passN: u64
     # how many ran clean under a sanitizer
     leakclean: u64
-    # how many leaked but were expected to, per tests/known-leaks.txt
+    # how many leaked but were expected to, per tests/known/leaks.zd
     xleak: u64
     # how many failed but were expected to
     xfail: u64
@@ -2408,34 +2408,36 @@ runWhy: list {
     posix: "posix"
 } out staticlist StringView
 
-# KnownCase -- one line of the RUN cases' expected failures: the case, and why
-# it fails, by its slot in runWhy
+# KnownCase -- one of the RUN cases' expected failures: the case, and why
 KnownCase: class {
     name: String
     why: u64
 }
 
-# knownCases -- the expected failures --known names, one `<case> (<why>)` a
-# line, `#` lines and empty ones left out; none without --known
+# knownCases -- the expected failures the data file --known names
+# (tests/known/*.zd): its list `failures`, each a `failure` whose `stage` arm
+# is a runWhy word; none without --known. A file zd refuses, or a stage that is
+# no runWhy word, fails the run.
 knownCases: function {r: Runner} out List KnownCase is {
     cases: List KnownCase
     if r.known.length == 0 then return cases
     words: zast.Vocab.create block: runWhy
-    text: slurp path: r.known.stringView
-    for each ln: text.stringView.lines loop {
-        l: ln.trim
-        if (l.length == 0) or (l.startsWith "#") then continue
-        open: (l.indexOf " (").or d: l.length
-        why: words.none
-        if open < l.length when l.endsWith ")" then why = (
-            words.slotOf
-            text: (l.substring from: open + 2 to: l.length - 1)
-        )
-        if why < runWhy.length then {
-            cases.append (KnownCase name: (l.substring from: 0 to: open).string :why)
-        } else {
-            print "FAIL(run) \{r.known}: '\{l}' is no `<case> (<why>)` line with a why of zc, cc, run or posix"
-            r.fails = r.fails + 1
+    rd: zd.read path: r.known.stringView
+    match (
+        rd
+    ) case err then {
+        print "FAIL(run) \{rd.stringView}"
+        r.fails = r.fails + 1
+    } case ok then {
+        for each row: (rd.itemsAt path: "failures").orPanic loop {
+            arm: (row.armAt path: "stage").orPanic
+            why: words.slotOf text: arm.stringView
+            if why < runWhy.length then {
+                cases.append (KnownCase name: (row.textAt path: "program").orPanic.copy :why)
+            } else {
+                print "FAIL(run) \{r.known}: stage '\{arm}' of \{row.path} is none of zc, cc, run or posix"
+                r.fails = r.fails + 1
+            }
         }
     }
     return cases
@@ -2846,23 +2848,17 @@ lspRelative: function {text: StringView uris: LspUris.view} out String is {
     return (t.stringView.replace needle: hostDir replacement: "/.zerolang/targets/HOST/")
 }
 
-# knownLeakers -- the programs recorded in tests/known-leaks.txt as expected to
-# hold memory at exit under a given compiler family, one "<name> (<kind>)" per
-# line. Keyed by family and not by name alone because the two sanitizers do not
-# measure the same thing: see isLeak.
+# knownLeakers -- the programs tests/known/leaks.zd records as expected to hold
+# memory at exit under the compiler family `kind`. Keyed by family and not by
+# name alone because the two sanitizers do not measure the same thing: see
+# isLeak.
 knownLeakers: function {root: StringView kind: StringView} out List String is {
     names: List String
-    path: "\{root}/tests/known-leaks.txt"
-    text: slurp path: path.stringView
-    suffix: " (\{kind})"
-    for each line: text.stringView.lines loop {
-        if line.length > 0 when (line.startsWith prefix: "#").not when (
-            line.endsWith
-            :suffix
-        ) then {
-            name: line.substring from: 0 to: line.length - suffix.length
-            names.append from: name.string
-        }
+    path: "\{root}/tests/known/leaks.zd"
+    doc: (zd.read path: path.stringView).orPanic
+    for each row: (doc.itemsAt path: "leaks").orPanic loop {
+        if (row.armAt path: "family").orPanic == kind then names.append (row.textAt path: "program"
+        ).orPanic.copy
     }
     return names
 }

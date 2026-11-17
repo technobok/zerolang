@@ -144,7 +144,7 @@ ZLSCOPE := src/*.z $(SRC_SUBUNITS) lib/system/*.z lib/system/system/*.z lib/syst
 # gives each tree its own roots.
 ZLFULLSCOPE := src/*.z $(SRC_SUBUNITS) lib/system/*.z lib/system/system/*.z lib/system/math/*.z
 # What the formatter checks; tests/fixtures/ is input and stays as written.
-FMTSCOPE := src/*.z $(SRC_SUBUNITS) lib/system/*.z lib/system/system/*.z lib/system/math/*.z examples/*.z tests/unit/*.z tests/unit/matrixgen/*.z $(TOOLSRC) lib/system/*.zd project.zd tests/fixtures/zdata/zd_written.zd
+FMTSCOPE := src/*.z $(SRC_SUBUNITS) lib/system/*.z lib/system/system/*.z lib/system/math/*.z examples/*.z tests/unit/*.z tests/unit/matrixgen/*.z $(TOOLSRC) lib/system/*.zd project.zd tests/fixtures/zdata/zd_written.zd tests/known/*.zd
 
 all: bin/zc bin/zl bin/zls
 
@@ -303,11 +303,11 @@ ci-corpus: bin/zc bin/zl bin/zls bin/zgate $(BUILDDIR)/ztestrunner
 
 # test-math-arm64 -- the math corpus cross-built for aarch64 and run under qemu
 # against the same goldens, on the builtin word primitives (-DZ_MATH_NOASM) and
-# on the generated asm kernels. The cases tests/arm64-known-failures.txt lists
+# on the generated asm kernels. The cases tests/known/arm64.zd lists
 # are refused for aarch64 (f128, which only x86-64 has): any other outcome of
 # theirs fails. Skipped without the cross tools.
 ARM64_RUN = $(BUILDDIR)/ztestrunner --zc bin/zc --cc aarch64-linux-gnu-gcc --target aarch64-linux-gnu \
-  --exec "qemu-aarch64 -L /usr/aarch64-linux-gnu" --only run --known tests/arm64-known-failures.txt \
+  --exec "qemu-aarch64 -L /usr/aarch64-linux-gnu" --only run --known tests/known/arm64.zd \
   --root . --jobs $(NPROC)
 ARM64_TOOLS = command -v aarch64-linux-gnu-gcc >/dev/null 2>&1 && command -v qemu-aarch64 >/dev/null 2>&1
 test-math-arm64: bin/zc bin/zl $(BUILDDIR)/ztestrunner
@@ -352,7 +352,7 @@ $(BUILDDIR)/wineprefix/.ready:
 # (zc --target x86_64-w64-mingw32) and run under wine against the same goldens (Windows'
 # own `<name>.windows.out` where a case has one). A case marked `posix` in
 # run_cases.txt is listed as `(posix)` rather than run.
-# tests/mingw-known-failures.txt is the expected failure set; a move either way
+# tests/known/mingw.zd is the expected failure set; a move either way
 # fails. Skipped without the cross compiler and wine.
 MINGW_CC := x86_64-w64-mingw32-gcc
 # The packaged x86_64-w64-mingw32-gcc links msvcrt.dll by default, but every
@@ -363,7 +363,7 @@ MINGW_CC := x86_64-w64-mingw32-gcc
 MINGW_CFLAGS := -mcrtdll=ucrt
 MINGW_UCRT_CHECK := $(MINGW_CC) $(MINGW_CFLAGS) -E -x c /dev/null > /dev/null 2>&1
 MINGW_UCRT_FIX := needs mingw-w64 gcc 14 or newer for -mcrtdll=ucrt, as Ubuntu 26.10's gcc-mingw-w64-x86-64
-MINGW_KNOWN := tests/mingw-known-failures.txt
+MINGW_KNOWN := tests/known/mingw.zd
 test-mingw: bin/zc $(BUILDDIR)/ztestrunner $(BUILDDIR)/wineprefix/.ready
 	@if [ -n "$(WINDOWS_HOST)" ]; then \
 	  echo "test-mingw: skipped (Linux only: it runs Windows builds under wine; on Windows make test runs them natively)"; exit 0; fi; \
@@ -380,10 +380,10 @@ test-mingw: bin/zc $(BUILDDIR)/ztestrunner $(BUILDDIR)/wineprefix/.ready
 # test-tcc-mingw -- the RUN corpus built for Windows by the vendored tcc (the
 # cross compiler above, which links the UCRT, as MSVC and MSYS2 UCRT64 gcc do) as a backend
 # (--cc-forward, so units tcc cannot build are refused by name), run under wine
-# against the same goldens. tests/tcc-mingw-known-failures.txt is the expected
+# against the same goldens. tests/known/tccmingw.zd is the expected
 # failure set: test-tcc's, plus what a Windows build reaches that a Linux one
 # does not, each explained there. Skipped without wine.
-TCC_MINGW_KNOWN := tests/tcc-mingw-known-failures.txt
+TCC_MINGW_KNOWN := tests/known/tccmingw.zd
 test-tcc-mingw: bin/zc $(BUILDDIR)/ztestrunner $(BUILDDIR)/wineprefix/.ready
 	@if [ -n "$(WINDOWS_HOST)" ]; then \
 	  echo "test-tcc-mingw: skipped (Linux only: it runs Windows builds under wine; on Windows make test-tcc runs them natively)"; exit 0; fi; \
@@ -424,11 +424,11 @@ test-msvc-wine: bin/zc $(BUILDDIR)/ztestrunner $(BUILDDIR)/wineprefix/.ready $(N
 # natively) as a backend (--cc-forward, so units
 # cl cannot build are refused by name) and run under wine against the same
 # goldens. cl's absolute paths are spelled Z:/... (zcc.msvcPath), since link.exe
-# reads a path starting with / as an option. tests/msvc-known-failures.txt is the
+# reads a path starting with / as an option. tests/known/msvc.zd is the
 # expected failure set -- only the programs cl cannot build at all, refused by
 # zc, and the POSIX-only ones -- and a move either way fails. Skipped without
 # MSVC_WINE or wine.
-MSVC_KNOWN := tests/msvc-known-failures.txt
+MSVC_KNOWN := tests/known/msvc.zd
 # On a Windows host it is the same run with the cl on PATH, natively.
 ifneq ($(WINDOWS_HOST),)
 MSVC_CORPUS_RUN = $(BUILDDIR)/ztestrunner --zc bin/zc --cc cl --cc-forward
@@ -630,11 +630,11 @@ test-o2: bin/zc bin/zl $(BUILDDIR)/ztestrunner
 TCC_RUN_DEPS := bin/zc bin/zl bin/zls bin/zgate $(BUILDDIR)/tcc $(BUILDDIR)/ztestrunner
 
 # test-tcc -- the corpus under the vendored tcc, as a backend (--cc-forward), so
-# units tcc cannot build are refused by name. tests/tcc-known-failures.txt is
+# units tcc cannot build are refused by name. tests/known/tcc.zd is
 # the expected failure set; a move either way fails. On Windows (the native tcc,
 # in the VM's windows-guest) it is the Windows list test-tcc-mingw keeps, whose
 # `(posix)` cases the runner lists rather than runs.
-TCC_KNOWN := $(if $(WINDOWS_HOST),tests/tcc-mingw-known-failures.txt,tests/tcc-known-failures.txt)
+TCC_KNOWN := $(if $(WINDOWS_HOST),tests/known/tccmingw.zd,tests/known/tcc.zd)
 # empty for the fast tier; test-tcc-heavy overrides it.
 TCC_TIER ?=
 

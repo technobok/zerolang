@@ -8,16 +8,16 @@ cheapest to most real:
 | `make test-mingw` | the whole run corpus, built for Windows by mingw-w64 against the Universal C Runtime (UCRT), run under wine | mingw-w64 + its UCRT files + wine |
 | `make test-tcc-mingw` | the whole run corpus, built for Windows by the vendored tcc (cross-built for Windows, linking the UCRT), run under wine | wine |
 | `make test-msvc-wine` | MSVC itself (`cl.exe` under wine) builds and runs the thread shim's test | wine + msvc-wine (below) |
-| `make test-msvc-corpus` | the whole run corpus, built for Windows by MSVC (`cl.exe` under wine), run under wine; the cases in `tests/msvc-known-failures.txt` are expected to fail | wine + msvc-wine (below) |
+| `make test-msvc-corpus` | the whole run corpus, built for Windows by MSVC (`cl.exe` under wine), run under wine; the cases in `tests/known/msvc.zd` are expected to fail | wine + msvc-wine (below) |
 | `make ci-windows` | on a real Windows machine: the shim under MSVC and UCRT64 gcc; every corpus binary; non-ASCII text on a console; a file given by its drive path to zc and zl; then zc, zl, zls and the vendored tcc built natively there, and `make ci` with them (the Linux-only legs say so and skip) | a Windows host over ssh, e.g. the VM below |
 
 The first four are part of `make ci` and print `skipped (needs ...)` without
 their tools. `make ci-windows` is not, since it needs the machine. Run it at
 stage gates and commit the `tests/windows-verified.txt` a green run writes;
 `make ci` ends with `make windows-due`, which says when a run is due again.
-`tests/mingw-known-failures.txt` lists only the run cases marked `posix` in
+`tests/known/mingw.zd` lists only the run cases marked `posix` in
 `tests/fixtures/run_cases.txt` (POSIX file descriptors and signals, which
-Windows does not have); `tests/tcc-mingw-known-failures.txt` adds what tcc
+Windows does not have); `tests/known/tccmingw.zd` adds what tcc
 cannot build on any system (`f128`), each with its reason. Wine is not
 Windows: it maps POSIX paths such as `/tmp` and accepts paths past `MAX_PATH`
 without the `\\?\` prefix, so only `make ci-windows` proves a case portable.
