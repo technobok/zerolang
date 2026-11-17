@@ -894,11 +894,11 @@ fuzz: out/zc-asan out/zfuzz
 	  --work $(CURDIR)/$(BUILDDIR)/fuzz --seed $(SEED) --count $(N)
 
 # fuzz-ci -- the fixed-seed fuzz run of `make ci`. It fails on a finding whose
-# signature tests/fuzz-known-findings.txt does not list, and on a listed one
+# signature tests/known/fuzz.zd does not list, and on a listed one
 # the run no longer shows. `make fuzz-known` writes that file from the run.
 FUZZ_CI_SEED := 11
 FUZZ_CI_N := 2500
-FUZZ_KNOWN := tests/fuzz-known-findings.txt
+FUZZ_KNOWN := tests/known/fuzz.zd
 FUZZ_CI_RUN = out/zfuzz --zc $(CURDIR)/out/zc-asan --system $(CURDIR)/lib/system \
 	  --corpus $(CURDIR)/examples,$(CURDIR)/tests/fixtures/emitc_corpus \
 	  --work $(CURDIR)/$(BUILDDIR)/fuzz-ci --seed $(FUZZ_CI_SEED) --count $(FUZZ_CI_N) \

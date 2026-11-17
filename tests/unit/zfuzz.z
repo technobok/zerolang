@@ -578,28 +578,31 @@ report: function {
     if (judgeAgainstKnown path: knownPath.stringView :kinds :shown).not then os.exit code: 1
 }
 
-# knownHeader -- the comment that heads a file of known signatures
-knownHeader: function {seed: u64 count: u64} out String is {
-    h: String
-    h.append "# The findings the fixed-seed fuzz run of `make ci` is known to show, one\n"
-    h.append "# signature a line. Each is a defect of zc that is not fixed yet. The run\n"
-    h.append "# fails on a signature that is not listed here, and on a listed one it no\n"
-    h.append "# longer shows: fix the defect and delete its line in the same change.\n"
-    h.append "# `make fuzz-known` writes this file from a run.\n"
-    h.append "#\n"
-    h.append "# seed \{seed}, \{count} cases\n"
-    return h
-}
+# knownHeader -- the comment that heads the data file of known signatures
+knownHeader: "# fuzz -- the findings the fixed-seed fuzz run of `make ci` is known to show,\n# each a signature in `findings`, from the run of `seed` with `cases` cases.\n# Each is a defect of zc that is not fixed yet. The run fails on a signature\n# not listed here, and on a listed one it no longer shows: fix the defect and\n# delete its line in the same change. `make fuzz-known` writes this file from\n# a run."
 
-# writeKnown -- write the signatures `kinds` to `path`, in order
+# writeKnown -- write the signatures `kinds` to the data file `path`, in order,
+# with the run they come from
 writeKnown: function {path: StringView kinds: List String seed: u64 count: u64} is {
     kinds.sort
-    text: knownHeader :seed :count
-    for each k: kinds loop {
-        text.append k.stringView.trimEnd
-        text.append "\n"
-    }
-    io.writeText :path content: text
+    items: List zd.Entry
+    for each k: kinds loop items.append (
+        zd.entry
+        name: ""
+        type: ""
+        node: zd.Node.text k.stringView.trimEnd.string
+    )
+    defs: List zd.Entry
+    defs.append (zd.entry name: "seed" type: "" node: zd.Node.integer seed.i64.orPanic)
+    defs.append (zd.entry name: "cases" type: "" node: zd.Node.integer count.i64.orPanic)
+    defs.append (
+        zd.entry
+        name: "findings"
+        type: "staticlist text"
+        node: zd.Node.listValue items.take
+    )
+    doc: zd.entry name: "fuzz" type: "" node: zd.Node.unitValue defs.take
+    (zd.write :path header: knownHeader schema: "" :doc).orPanic
 }
 
 # judgeAgainstKnown -- compare the signatures a run showed, `kinds`, with the
@@ -612,11 +615,9 @@ judgeAgainstKnown: function {
     shown: (List String).view
 } out bool is {
     known: List String
-    listed: slurp :path
-    for each ln: listed.stringView.lines loop {
-        t: ln.trimEnd
-        if (t.length > 0) and (t.startsWith "#").not then known.append t.string
-    }
+    doc: (zd.read :path).orPanic
+    for each f: (doc.itemsAt path: "findings").orPanic loop known.append (f.textAt path: ""
+    ).orPanic.copy
     fresh: u64
     si: u64
     for si < kinds.length loop {
