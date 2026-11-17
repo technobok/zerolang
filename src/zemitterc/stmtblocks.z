@@ -3247,41 +3247,33 @@ emitExitDestroy: function {
     }
 }
 
-# seedUnionArmAlias -- narrow match subject `sname` to union `vtid`'s arm `arm`:
-# reads of it inside the arm read the payload's cell, cast to `pc`, whose types
-# (`pcHeld`) are recorded where that alias is read.
-seedUnionArmAlias: function {
+# seedArmAlias -- narrow match subject `sname` to sum `vtid`'s arm `arm` by an
+# alias: reads of it inside the arm read the payload where it lies in the
+# subject's storage (`recv`, read with `acc`), as armAliasText names it -- the
+# cell cast for a union, the data member for a variant -- the one way an `if`
+# names a narrowed arm too. Answers whether the arm has a payload to alias.
+seedArmAlias: function {
     prog: Program.view
     ctx: Ctx
     vtid: ztypes.tid
     arm: zast.nameid
-    pc: StringView
-    pcHeld: ListVal ztypes.tid
-    slotRecv: StringView
-    slotRecvF: exprfacts
-    slotAcc: StringView
+    recv: StringView
+    recvF: exprfacts
+    acc: StringView
     sname: StringView
     snameVid: ztypes.vid
     ind: StringView
     buf: String.borrow
-} is {
-    inl: types.armIsInlineC :prog tid: vtid :arm
-    msl: armSlotC :prog :ctx tid: vtid recv: slotRecv acc: slotAcc :arm inline: inl
-    nbv: armCellRef :pc slot: msl.stringView inline: inl
-    holdForAlias narrow: ctx.narrow val: nbv.stringView held: pcHeld
+} out bool is {
+    af: exprfacts
+    nbv: armAliasText :prog :ctx tid: vtid :arm :recv :recvF :acc facts: af
+    if nbv.length == 0 then return false
     cmt: "\{ind}    /* alias: \{sname} => \{nbv} */\n"
     buf.append cmt
-    (
-        varEntrySet
-        xs: ctx.narrow.box
-        vid: snameVid
-        val: nbv.stringView
-        facts: (memberreads.armCellFacts recvF: slotRecvF inline: inl)
-    )
+    varEntrySet xs: ctx.narrow.box vid: snameVid val: nbv.stringView facts: af
     co: prog.typing.declChildOfId parentTypeId: vtid nameId: arm
-    if co.some then {
-        varTidSet xs: ctx.narrow.tid vid: snameVid tid: co
-    }
+    if co.some then varTidSet xs: ctx.narrow.tid vid: snameVid tid: co
+    return true
 }
 
 # emit one arm of a match over a tagged sum.
@@ -3308,9 +3300,6 @@ emitMatchClause: function {
         tg: spelledTagConst :prog :ctx tid: vtid armId: arm
         l2: "\{ind}case \{tg}: {\n"
         buf.append l2
-        # held: a union arm's cast is recorded where its alias is read
-        pcHeld: ListVal ztypes.tid
-        pc: heldArmPayloadC :prog :ctx tid: vtid :arm held: pcHeld
         bodyInd: "\{ind}    "
         didSeed: false
         unptr: false
@@ -3321,72 +3310,70 @@ emitMatchClause: function {
         prevV: narrowfacts.varEntryGet xs: ctx.narrow.box vid: snameVid
         prevF: narrowfacts.varEntryFactsOf xs: ctx.narrow.box vid: snameVid
         prevT: (narrowfacts.varTidGet xs: ctx.narrow.tid vid: snameVid).or d: ztypes.tid.zero
-        if pc.length > 0 when sname.length > 0 then {
-            if isUni then {
-                (
-                    seedUnionArmAlias
+        # a union's arm, and a variant's whose body WRITES the subject, are named
+        # by an alias into the subject's storage: a shadowing local of the same C
+        # name would hide the variable a write must reach. Any other variant arm
+        # is read through a shadow local holding the payload.
+        aliased: false
+        if sname.length > 0 then {
+            aliased = isUni
+            if aliased.false then {
+                aliased = (
+                    narrowfacts.bodyReassigns
                     :prog
-                    :ctx
-                    :vtid
-                    :arm
-                    pc: pc.stringView
-                    :pcHeld
-                    :slotRecv
-                    :slotRecvF
-                    :slotAcc
-                    :sname
-                    :snameVid
-                    :ind
-                    :buf
+                    n: (prog.ast.nodes.get i: c.statement)
+                    name: sname
                 )
-                didSeed = true
-            } else if (
-                narrowfacts.bodyReassigns
-                :prog
-                n: (prog.ast.nodes.get i: c.statement)
-                name: sname
-            ) then {
-                # a body that WRITES the subject must reach the variable, which a
-                # shadowing local of the same C name would hide: the payload is
-                # aliased instead, and each read picks the alias or the variable
-                # by its stamp
-                armMV: memberC :prog :ctx owner: vtid kind: memberkind.arm nameId: arm
-                nbvV: "_m\{mN}.data.\{armMV}"
-                varEntrySet xs: ctx.narrow.box vid: snameVid val: nbvV.stringView facts: pathFacts
-                cov: prog.typing.declChildOfId parentTypeId: vtid nameId: arm
-                if cov.some then {
-                    varTidSet xs: ctx.narrow.tid vid: snameVid tid: cov
-                }
-                didSeed = true
-            } else {
-                snE: localnames.varCName known: ctx.known :prog vid: snameVid
-                armMP: memberC :prog :ctx owner: vtid kind: memberkind.arm nameId: arm
-                l3: "\{ind}    \{pc} \{snE} = _m\{mN}.data.\{armMP};\n"
-                buf.append l3
-                l4: "\{ind}    (void)\{snE};\n"
-                buf.append l4
-                # the shadow IS the payload: a narrowing an enclosing guard gave
-                # the subject would spell the arm's reads through the old value
-                if prevV.length > 0 then {
-                    vidRemove xs: ctx.narrow.box vid: snameVid
-                    vidRemove xs: ctx.narrow.tid vid: snameVid
-                    didSeed = true
-                }
-                # a subject that arrives by pointer (a method's `this`) is
-                # shadowed by a VALUE here, so the arm must read it as one
-                if (isPtrVid :ctx vid: snameVid) then {
-                    dropPtrVid stmt: ctx.stmt vid: snameVid
-                    unptr = true
-                }
-                # a data payload is a handle: the shadow reads through it
-                pyo: prog.typing.declChildOfId parentTypeId: vtid nameId: arm
-                if pyo.some when (argforms.isStaticHandle :prog tid: pyo) then {
-                    ctx.stmt.ptrVids.append from: snameVid
-                    staticArm = true
-                }
             }
         }
-        # what no alias took is spelled by the clause's own text (the shadow)
+        # held: the payload's C types, recorded where the shadow spells them
+        pcHeld: ListVal ztypes.tid
+        pc: String
+        if aliased then {
+            didSeed = (
+                seedArmAlias
+                :prog
+                :ctx
+                :vtid
+                :arm
+                recv: slotRecv
+                recvF: slotRecvF
+                acc: slotAcc
+                :sname
+                :snameVid
+                :ind
+                :buf
+            )
+        } else {
+            pc = heldArmPayloadC :prog :ctx tid: vtid :arm held: pcHeld
+        }
+        if pc.length > 0 when sname.length > 0 then {
+            snE: localnames.varCName known: ctx.known :prog vid: snameVid
+            armMP: memberC :prog :ctx owner: vtid kind: memberkind.arm nameId: arm
+            l3: "\{ind}    \{pc} \{snE} = _m\{mN}.data.\{armMP};\n"
+            buf.append l3
+            l4: "\{ind}    (void)\{snE};\n"
+            buf.append l4
+            # the shadow IS the payload: a narrowing an enclosing guard gave
+            # the subject would spell the arm's reads through the old value
+            if prevV.length > 0 then {
+                vidRemove xs: ctx.narrow.box vid: snameVid
+                vidRemove xs: ctx.narrow.tid vid: snameVid
+                didSeed = true
+            }
+            # a subject that arrives by pointer (a method's `this`) is
+            # shadowed by a VALUE here, so the arm must read it as one
+            if (isPtrVid :ctx vid: snameVid) then {
+                dropPtrVid stmt: ctx.stmt vid: snameVid
+                unptr = true
+            }
+            # a data payload is a handle: the shadow reads through it
+            pyo: prog.typing.declChildOfId parentTypeId: vtid nameId: arm
+            if pyo.some when (argforms.isStaticHandle :prog tid: pyo) then {
+                ctx.stmt.ptrVids.append from: snameVid
+                staticArm = true
+            }
+        }
         releaseHeld :ctx held: pcHeld
         dv: false
         if assignTo.length > 0 then {
