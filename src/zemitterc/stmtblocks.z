@@ -251,17 +251,6 @@ ifDiverges: function {
     }
 }
 
-# dropPtrVid -- forget that `vid` arrives by pointer, for the scope in which a
-# narrowing has shadowed it with its payload VALUE; the caller re-appends it
-# when that scope closes.
-dropPtrVid: function {stmt: StatementState vid: ztypes.vid} is {
-    kept: ListVal ztypes.vid
-    for each v: stmt.ptrVids loop {
-        if v != vid then kept.append from: v
-    }
-    stmt.ptrVids = kept.take
-}
-
 # needsValueDeref -- a pointer-valued expression standing where a VALUE is
 # wanted: a return, a binding's initialiser, a match subject. An as-block
 # method's receiver is a C pointer in EVERY family, so a read of it in one of
@@ -2875,8 +2864,6 @@ emitMatchStmt: function {
             :ctx
             :c
             :vtid
-            :isUni
-            :mN
             slotRecv: mRecv.stringView
             slotRecvF: mRecvF
             slotAcc: mAcc
@@ -3282,8 +3269,6 @@ emitMatchClause: function {
     ctx: Ctx
     c: astnode.view
     vtid: ztypes.tid
-    isUni: bool
-    mN: u64
     # a union subject's storage and the access its slot is read with
     slotRecv: StringView
     slotRecvF: exprfacts
@@ -3302,34 +3287,17 @@ emitMatchClause: function {
         buf.append l2
         bodyInd: "\{ind}    "
         didSeed: false
-        unptr: false
-        staticArm: false
         # the narrowing an enclosing scope gave the subject, put back when the
         # arm ends: a match on a name an `if` narrowed must not end that `if`'s
         # narrowing for the statements after the match
         prevV: narrowfacts.varEntryGet xs: ctx.narrow.box vid: snameVid
         prevF: narrowfacts.varEntryFactsOf xs: ctx.narrow.box vid: snameVid
         prevT: (narrowfacts.varTidGet xs: ctx.narrow.tid vid: snameVid).or d: ztypes.tid.zero
-        # a union's arm, and a variant's whose body WRITES the subject, are named
-        # by an alias into the subject's storage: a shadowing local of the same C
-        # name would hide the variable a write must reach. Any other variant arm
-        # is read through a shadow local holding the payload.
-        aliased: false
+        # a named subject's reads inside the arm read the payload in place, by
+        # the alias an `if` narrowing uses too: a write to the subject reaches
+        # the variable, a pointer subject (a method's `this`) is read through
+        # the alias as a value, and no copy of the payload is made
         if sname.length > 0 then {
-            aliased = isUni
-            if aliased.false then {
-                aliased = (
-                    narrowfacts.bodyReassigns
-                    :prog
-                    n: (prog.ast.nodes.get i: c.statement)
-                    name: sname
-                )
-            }
-        }
-        # held: the payload's C types, recorded where the shadow spells them
-        pcHeld: ListVal ztypes.tid
-        pc: String
-        if aliased then {
             didSeed = (
                 seedArmAlias
                 :prog
@@ -3344,37 +3312,7 @@ emitMatchClause: function {
                 :ind
                 :buf
             )
-        } else {
-            pc = heldArmPayloadC :prog :ctx tid: vtid :arm held: pcHeld
         }
-        if pc.length > 0 when sname.length > 0 then {
-            snE: localnames.varCName known: ctx.known :prog vid: snameVid
-            armMP: memberC :prog :ctx owner: vtid kind: memberkind.arm nameId: arm
-            l3: "\{ind}    \{pc} \{snE} = _m\{mN}.data.\{armMP};\n"
-            buf.append l3
-            l4: "\{ind}    (void)\{snE};\n"
-            buf.append l4
-            # the shadow IS the payload: a narrowing an enclosing guard gave
-            # the subject would spell the arm's reads through the old value
-            if prevV.length > 0 then {
-                vidRemove xs: ctx.narrow.box vid: snameVid
-                vidRemove xs: ctx.narrow.tid vid: snameVid
-                didSeed = true
-            }
-            # a subject that arrives by pointer (a method's `this`) is
-            # shadowed by a VALUE here, so the arm must read it as one
-            if (isPtrVid :ctx vid: snameVid) then {
-                dropPtrVid stmt: ctx.stmt vid: snameVid
-                unptr = true
-            }
-            # a data payload is a handle: the shadow reads through it
-            pyo: prog.typing.declChildOfId parentTypeId: vtid nameId: arm
-            if pyo.some when (argforms.isStaticHandle :prog tid: pyo) then {
-                ctx.stmt.ptrVids.append from: snameVid
-                staticArm = true
-            }
-        }
-        releaseHeld :ctx held: pcHeld
         dv: false
         if assignTo.length > 0 then {
             armInd: "\{ind}    "
@@ -3406,8 +3344,6 @@ emitMatchClause: function {
                 prevTid: prevT
             )
         }
-        if unptr then ctx.stmt.ptrVids.append from: snameVid
-        if staticArm then dropPtrVid stmt: ctx.stmt vid: snameVid
         if dv.not then {
             l5: "\{ind}    break;\n"
             buf.append l5
@@ -5657,8 +5593,8 @@ valueIsItsPointer: function {
 }
 
 # heldArmPayloadC -- armPayloadC with the types it spells held in `held`, not
-# recorded: the caller records them where the text is written (releaseHeld), or
-# where an alias spelling it is read (holdForAlias).
+# recorded: the alias spelling it records them where it is read
+# (holdForAlias).
 heldArmPayloadC: function {
     prog: Program.view
     ctx: Ctx
@@ -5672,11 +5608,6 @@ heldArmPayloadC: function {
     for each t: ctx.stmt.heldTypeUses loop held.append t
     ctx.stmt.heldTypeUses = ListVal ztypes.tid
     return pc
-}
-
-# releaseHeld -- record the types `held` still holds: their text is written.
-releaseHeld: function {ctx: Ctx held: ListVal ztypes.tid} is {
-    for held.length > 0 loop emitplan.noteTypeUse :ctx tid: held.pop
 }
 
 # holdForAlias -- the types `held` holds are spelled by alias `val`: recorded
