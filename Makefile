@@ -144,7 +144,7 @@ ZLSCOPE := src/*.z $(SRC_SUBUNITS) lib/system/*.z lib/system/system/*.z lib/syst
 # gives each tree its own roots.
 ZLFULLSCOPE := src/*.z $(SRC_SUBUNITS) lib/system/*.z lib/system/system/*.z lib/system/math/*.z
 # What the formatter checks; tests/fixtures/ is input and stays as written.
-FMTSCOPE := src/*.z $(SRC_SUBUNITS) lib/system/*.z lib/system/system/*.z lib/system/math/*.z examples/*.z tests/unit/*.z tests/unit/matrixgen/*.z $(TOOLSRC) lib/system/*.zd project.zd tests/fixtures/zdata/zd_written.zd tests/known/*.zd tests/fixtures/*_baseline.zd tests/fixtures/*_cases.zd
+FMTSCOPE := src/*.z $(SRC_SUBUNITS) lib/system/*.z lib/system/system/*.z lib/system/math/*.z examples/*.z tests/unit/*.z tests/unit/matrixgen/*.z $(TOOLSRC) lib/system/*.zd project.zd tests/fixtures/zdata/zd_written.zd tests/known/*.zd tests/fixtures/*_baseline.zd tests/fixtures/*_cases.zd tests/fixtures/*_expect.zd tests/view_guard.zd
 
 all: bin/zc bin/zl bin/zls
 
