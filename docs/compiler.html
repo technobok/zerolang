@@ -129,6 +129,8 @@ Table of Contents</div>
 </li>
 <li><a href="#evaluation-order">Evaluation Order</a>
 </li>
+<li><a href="#narrowed-arms">Narrowed Arms</a>
+</li>
 </ul>
 </li>
 <li><a href="#bootstrapping-self-hosting">Bootstrapping &amp; self-hosting</a>
@@ -743,6 +745,24 @@ that may write needs one only when a part that is not constant follows it.
 <code>h.bump + h.count</code> keeps a temp for <code>h.bump</code>, and <code>x.v + (addTo c: x d: 1)</code>
 one for <code>x.v</code>. A literal, a folded constant and a plain address never need
 one. <code>order_pure_parts</code> pins each case by running it.</p>
+<h3 id="narrowed-arms"><a href="#narrowed-arms">8.12. Narrowed Arms</a></h3>
+<p>The checker decides where a name is narrowed to one arm of a sum (see
+<a href="./typechecker.html#type-narrowing">type narrowing</a>); the emitter
+decides how that arm's payload is <strong>named</strong> in C, and it names it one way
+wherever the narrowing comes from -- an <code>if</code> predicate, a guard that
+diverges, a match arm, a match <code>else</code> left with one arm. <code>armAliasText</code>
+builds an <strong>alias</strong>: the payload where it lies in the subject's storage, a
+union's cell cast to the payload type (<code>(*(z_t18_t*)z_v4.data)</code>, or the arm's
+inline member) or a variant's <code>data</code> member (<code>_m0.data.a1</code>). The alias is
+seeded into <code>ctx.narrow</code> under the variable's id, and every read of the name
+in the narrowed scope spells the alias instead, so no copy of the payload is
+made, a write to the payload reaches the variable, and a name with an alias is
+never read as a pointer (a method's <code>this</code> included). A match reads its
+subject through its storage: a union variable itself, otherwise the <code>_mN</code>
+temporary the match evaluates the subject into. The payload's C types are
+recorded where an alias is read, not where it is built, so an arm that never
+reads its payload spells no cast. When an arm ends, the narrowing an enclosing
+scope gave the name is put back.</p>
 <h2 id="bootstrapping-self-hosting"><a href="#bootstrapping-self-hosting">9. Bootstrapping &amp; self-hosting</a></h2>
 <p>The compiler is self-hosted: it is written in zerolang (<code>src/*.z</code>) and
 compiles itself. A C toolchain is the only requirement to build and test
