@@ -1,0 +1,404 @@
+# windows -- the WINDOWS kind (`--only windows`), run on a Windows host by
+# `make windows-guest`, after `make ci-windows` has copied the tree and the
+# run-corpus binaries it built under wine there, and after the recipe has built
+# the shim test, the console reader and the native tools. It judges:
+#   the shim   the thread shim's test under MSVC and under UCRT64 gcc;
+#   the corpus every run case's binary run natively, in a directory of its
+#              own, against its golden's stdout and exit code (Windows' own
+#              `<name>.windows.out` / `.exit` where the case has one): the set
+#              that fails must be the one wine sees (--known), and every case
+#              on which the two disagree is named;
+#   a console  os_unicode_text on a console of its own, read back by
+#              tests/c/zconsole_read.c (ssh gives every program pipes);
+#   paths      zc and zl given a file by its drive path from another
+#              directory name it, and the system unit, natively, and zl finds
+#              the file's project;
+#   cl         zc build --cc cl builds sqlite_hello to its golden;
+#   make ci    every gate on Windows itself, the Linux-only ones saying so.
+# --tmp is the guest's work directory: the binaries in its build/, the shim
+# test as shim-msvc.exe and shim-gcc.exe, the console reader as
+# zconsole_read.exe, and the logs, guest-fails.txt among them, beside them
+# (--save-temps keeps it). A subunit of ztestrunner.
+
+# shimMarker -- what the shim test prints when every check held
+shimMarker: "zthread shim OK"
+
+# shimBuilds -- the compilers the shim test is built by, as its binary names them
+shimBuilds: list { "msvc" "gcc" } out staticlist StringView
+
+# runWindowsCases -- every Windows check; a fail each one that breaks, and the
+# summary line when none did
+runWindowsCases: function {r: Runner} is {
+    failsBefore: r.fails
+    for each v: shimBuilds loop windowsShim :r build: v
+    passed: windowsCorpus :r
+    windowsConsole :r
+    windowsPaths :r
+    windowsCl :r
+    ci: windowsMakeCi :r
+    if r.fails == failsBefore then {
+        print "windows-guest OK: the thread shim under MSVC and UCRT64 gcc; \{passed} run-corpus binaries match their goldens on Windows, the rest as under wine; non-ASCII text on a console; drive paths; zc build --cc cl; make ci with the native tools (\{ci})"
+    }
+}
+
+# guestFail -- one Windows check broken: its line, and `detail` below it
+guestFail: function {r: Runner what: StringView detail: StringView} is {
+    print "windows-guest FAIL: \{what}"
+    if detail.length > 0 then print detail
+    r.fails = r.fails + 1
+}
+
+# windowsShim -- the shim test as `build` built it, run; it must exit 0 and
+# print shimMarker. A test the recipe could not build is reported there.
+windowsShim: function {r: Runner build: StringView} is {
+    exe: "\{r.tmp}/shim-\{build}.exe"
+    if (io.exists path: exe).not then return
+    log: "\{r.tmp}/shim-\{build}.log"
+    a: List String
+    a.append from: exe.copy
+    rc: spawnLogged argv: a cwd: "" log: log.stringView timeoutSecs: 300
+    text: slurp path: log.stringView
+    if rc == 0 when (text.stringView.contains needle: shimMarker) then return
+    (
+        guestFail
+        :r
+        what: "the shim test under \{build}".stringView
+        detail: (tailOf text: text.stringView n: 10).stringView
+    )
+}
+
+# windowsCorpus -- each run case's binary run natively and judged against its
+# goldens; the failure set, written to guest-fails.txt, against --known.
+# Answers how many cases matched.
+windowsCorpus: function {r: Runner} out u64 is {
+    fails: List String
+    names: List String
+    jobs: List PoolJob
+    for each ln: (runCaseLines :r) loop {
+        name: ln.name.stringView
+        bin: "\{r.tmp}/build/\{name}.bin"
+        if ln.posix then {
+            fails.append "\{name} (posix)"
+        } else if (io.exists path: bin).not then {
+            fails.append "\{name} (cc)"
+        } else if (io.exists path: (goldenFor :r :name ext: ".out")) then {
+            names.append name.string
+            jobs.append (windowsRunJob :r :name bin: bin.stringView)
+        }
+    }
+    statuses: ListVal i32
+    failSteps: ListVal i64
+    zjobs.runJobs :jobs maxJobs: r.jobsMax :statuses :failSteps
+    passed: u64
+    i: u64
+    for i < names.length loop {
+        name: (names.get :i).stringView
+        res: "\{r.tmp}/build/run_\{name}/\{name}.out"
+        if (matchesGoldens :r :name outPath: res.stringView status: (statuses.get :i)) then {
+            passed = passed + 1
+        } else {
+            fails.append "\{name} (run)"
+        }
+        i = i + 1
+    }
+    fails.sort
+    written: String
+    for each f: fails loop written.append "\{f}\n"
+    w: io.writeText path: "\{r.tmp}/guest-fails.txt" content: written
+    w.drop
+    compareFailSets :r guest: fails
+    return passed
+}
+
+# windowsRunJob -- run case `name`'s binary copied into a directory of its own
+# as `<name>.exe`, run there with its arguments and no input, its stdout kept
+windowsRunJob: function {r: Runner.view name: StringView bin: StringView} out PoolJob is {
+    rd: "\{r.tmp}/build/run_\{name}"
+    io.mkdirp path: rd
+    exe: "\{rd}/\{name}.exe"
+    copied: io.writeText path: exe content: (slurp path: bin)
+    copied.drop
+    steps: List PoolStep
+    steps.append (
+        zjobs.mkStep
+        argv: (
+            binArgv
+            bin: (nativePath p: exe.stringView).stringView
+            argsFile: "\{r.rungold}/\{name}.args".stringView
+        )
+        cwd: rd.stringView
+        outPath: "\{rd}/\{name}.out".stringView
+        errPath: os.nullDevice.stringView
+        timeoutSecs: 60
+        allowFail: true
+        zlinkFrom: ""
+    )
+    return (zjobs.mkJob :name :steps)
+}
+
+# compareFailSets -- the guest's failure set against the one wine sees
+# (--known): each case on which they disagree named, and a fail when any does
+compareFailSets: function {r: Runner guest: (List String).view} is {
+    wine: List String
+    for each ln: (slurp path: r.known.stringView).stringView.lines loop {
+        t: ln.trim
+        if t.length > 0 when (t.startsWith "#").not then wine.append t.string
+    }
+    wine.sort
+    differ: false
+    for each g: guest loop {
+        if (wine.contains item: g).not then {
+            print "  fails on Windows, not under wine: \{g}"
+            differ = true
+        }
+    }
+    for each w: wine loop {
+        if (guest.contains item: w).not then {
+            print "  passes on Windows, not under wine: \{w}"
+            differ = true
+        }
+    }
+    if differ then (
+        guestFail
+        :r
+        what: "the Windows failure set differs from \{r.known}".stringView
+        detail: ""
+    )
+}
+
+# windowsConsole -- os_unicode_text, run by the console reader on a console of
+# its own, shows its golden
+windowsConsole: function {r: Runner} is {
+    name: "os_unicode_text"
+    gold: "\{r.rungold}/\{name}"
+    a: List String
+    a.append from: "\{r.tmp}/zconsole_read.exe"
+    a.append from: (nativePath p: "\{gold}.out".stringView)
+    a.append from: (nativePath p: "\{r.tmp}/build/run_\{name}/\{name}.exe".stringView)
+    for each ln: (slurp path: "\{gold}.args".stringView).stringView.lines loop {
+        if ln.length > 0 then a.append from: ln.string
+    }
+    log: "\{r.tmp}/console.log"
+    rc: spawnLogged argv: a cwd: "" log: log.stringView timeoutSecs: 120
+    if rc != 0 then {
+        (
+            guestFail
+            :r
+            what: "os_unicode_text on a console does not show its golden"
+            detail: (logText log: log.stringView).stringView
+        )
+    }
+}
+
+# windowsPaths -- zc and zl given a file by its drive path, run from another
+# directory: zc names the file and the system unit natively, zl finds the
+# file's project
+windowsPaths: function {r: Runner} is {
+    w: nativePath p: r.root.stringView
+    file: "\{w}\\tests\\fixtures\\errors\\display_path_cleaned.z"
+    za: List String
+    za.append from: (nativePath p: r.zc.stringView)
+    za.append from: "build".string
+    za.append from: file.copy
+    za.append from: "-o".string
+    za.append from: "drive.exe".string
+    zlog: "\{r.tmp}/drive-zc.log"
+    zrc: spawnLogged argv: za cwd: r.tmp.stringView log: zlog.stringView timeoutSecs: 300
+    zrc.drop
+    zt: logText log: zlog.stringView
+    want1: " --> \{file}:5:23"
+    want2: "     = note: unit 'io' is \{w}\\lib\\system\\io.z"
+    if (
+        (hasLine text: zt.stringView line: want1.stringView).not or
+        (hasLine text: zt.stringView line: want2.stringView).not
+    ) then {
+        (
+            guestFail
+            :r
+            what: "zc given a drive path does not name the files natively"
+            detail: zt.stringView
+        )
+    }
+    src: "\{w}\\src\\zsource.z"
+    la: List String
+    la.append from: (nativePath p: "\{r.root}/bin/zl".stringView)
+    la.append from: "lint".string
+    la.append from: "--full".string
+    la.append from: src.copy
+    llog: "\{r.tmp}/drive-zl.log"
+    lrc: spawnLogged argv: la cwd: r.tmp.stringView log: llog.stringView timeoutSecs: 600
+    lt: logText log: llog.stringView
+    if (lt.stringView.contains needle: " --> \{src}:").not then {
+        (
+            guestFail
+            :r
+            what: "zl lint given a drive path does not find its project"
+            detail: (diagnosticLines text: lt.stringView n: 5).stringView
+        )
+    }
+    lrc.drop
+}
+
+# windowsCl -- zc build --cc cl builds sqlite_hello, C objects included, and
+# the program prints its golden
+windowsCl: function {r: Runner} is {
+    exe: "\{r.tmp}/sqlite-cl.exe"
+    a: List String
+    a.append from: (nativePath p: r.zc.stringView)
+    a.append from: "build".string
+    a.append from: "tests/fixtures/emitc_corpus/sqlite_hello.z".string
+    a.append from: "--cc".string
+    a.append from: "cl".string
+    a.append from: "-o".string
+    a.append from: exe.copy
+    log: "\{r.tmp}/zc-cl.log"
+    rc: spawnLogged argv: a cwd: r.root.stringView log: log.stringView timeoutSecs: 600
+    if rc == 0 then {
+        run: List String
+        run.append from: exe.copy
+        res: "\{r.tmp}/sqlite-cl.out"
+        rrc: spawnLogged argv: run cwd: "" log: res.stringView timeoutSecs: 60
+        if rrc == 0 when (
+            (slurp path: res.stringView) == (slurp path: "\{r.rungold}/sqlite_hello.out".stringView)
+        ) then return
+    }
+    (
+        guestFail
+        :r
+        what: "zc build --cc cl does not build sqlite_hello to its golden"
+        detail: (tailOf text: (logText log: log.stringView).stringView n: 10).stringView
+    )
+}
+
+# windowsMakeCi -- `make ci` with the native tools; answers the summary the OK
+# line quotes: the legs skipped as Linux-only, the toolchains that agree in the
+# bootstrap, and the run cases MSVC passes natively
+windowsMakeCi: function {r: Runner} out String is {
+    a: List String
+    a.append from: "make".string
+    a.append from: "--no-print-directory".string
+    a.append from: "ci".string
+    log: "\{r.tmp}/native-ci.log"
+    rc: spawnLogged argv: a cwd: r.root.stringView log: log.stringView timeoutSecs: 0
+    text: logText log: log.stringView
+    if rc != 0 then {
+        failing: String
+        n: u64
+        for each ln: text.stringView.lines loop {
+            if n < 20 when (ln.contains needle: "FAIL") or (ln.contains needle: "Error ") then {
+                failing.append "\{ln}\n"
+                n = n + 1
+            }
+        }
+        guestFail :r what: "make ci with the native tools" detail: failing.stringView
+    }
+    return (ciSummary text: text.stringView)
+}
+
+# ciSummary -- what a native `make ci` log says, for the OK line: the legs it
+# skipped as Linux-only, the toolchains that agree in the bootstrap, and the run
+# cases MSVC passes natively
+ciSummary: function {text: StringView} out String is {
+    skipped: u64
+    agree: String
+    msvc: String
+    marker: " RUN cases pass on Windows (MSVC, natively)"
+    for each ln: text.lines loop {
+        if (ln.contains needle: "skipped (Linux only") then skipped = skipped + 1
+        ag: ln.indexOf "agreement OK: "
+        if ag.some when agree.length == 0 then agree = (
+            firstWords
+            text: (ln.substring from: ag to: ln.length)
+            n: 4
+        )
+        mv: ln.indexOf marker
+        if mv.some when msvc.length == 0 then msvc = "\{(
+            lastWord
+            text: (ln.substring from: 0 to: mv)
+        )}\{marker}"
+    }
+    return "\{skipped} Linux-only legs skipped; \{agree} agree in the bootstrap; \{msvc}"
+}
+
+# nativePath -- `p` absolute, read from the working directory, and spelled
+# with the native separator, as the system names a file (path.join)
+nativePath: function {p: StringView} out String is {
+    cwd: os.cwd
+    if cwd.err then return (path.clean :p)
+    return (path.join a: cwd.stringView b: p)
+}
+
+# spawnLogged -- `argv` run in `cwd` (this process's when empty) with no
+# input, its stdout to `log` and its stderr to `<log>.err`; answers its exit
+# status (124 past `timeoutSecs`, 0 waiting for ever)
+spawnLogged: function {
+    argv: List String cwd: StringView log: StringView timeoutSecs: i32
+} out i32 is {
+    return (os.spawn :argv :cwd outPath: log errPath: "\{log}.err".stringView :timeoutSecs)
+}
+
+# logText -- what a spawnLogged child wrote: its stdout, then its stderr
+logText: function {log: StringView} out String is {
+    t: slurp path: log
+    t.append (slurp path: "\{log}.err".stringView)
+    return t
+}
+
+# hasLine -- `text` holds `line` as one whole line, a line end's CR aside
+hasLine: function {text: StringView line: StringView} out bool is {
+    for each ln: text.lines loop {
+        if ln.trim == line.trim then return true
+    }
+    return false
+}
+
+# tailOf -- the last `n` lines of `text`
+tailOf: function {text: StringView n: u64} out String is {
+    all: List String
+    for each ln: text.lines loop all.append ln.string
+    res: String
+    i: u64
+    if all.length > n then i = all.length - n
+    for i < all.length loop {
+        res.append "\{all.get :i}\n"
+        i = i + 1
+    }
+    return res
+}
+
+# diagnosticLines -- the first `n` lines of `text` that open an error or a
+# warning
+diagnosticLines: function {text: StringView n: u64} out String is {
+    res: String
+    k: u64
+    for each ln: text.lines loop {
+        if k < n when (ln.startsWith "error") or (ln.startsWith "warning") then {
+            res.append "\{ln}\n"
+            k = k + 1
+        }
+    }
+    return res
+}
+
+# firstWords -- the first `n` words of `text`, one space between each
+firstWords: function {text: StringView n: u64} out String is {
+    res: String
+    k: u64
+    for each w: (text.split sep: " ") loop {
+        if w.length > 0 when k < n then {
+            if k > 0 then res.append " "
+            res.append w
+            k = k + 1
+        }
+    }
+    return res
+}
+
+# lastWord -- the last word of `text`
+lastWord: function {text: StringView} out String is {
+    last: String
+    for each w: (text.split sep: " ") loop {
+        if w.length > 0 then last = w.string
+    }
+    return last
+}

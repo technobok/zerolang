@@ -491,77 +491,27 @@ ci-windows: bin/zc bin/zgate $(BUILDDIR)/ztestrunner $(BUILDDIR)/wineprefix/.rea
 	echo "ci-windows OK on $(WINDOWS_SSH) in $$dest; recorded in $(WINDOWS_VERIFIED) -- commit it"
 
 # windows-guest -- what ci-windows runs on the Windows machine, in the copied
-# tree. The thread shim's test is built and run under MSVC (cl) and UCRT64
-# gcc. Then every run-corpus binary ci-windows built is run natively, in a
-# directory of its own, against its golden's stdout and exit code (Windows' own
-# `<name>.windows.out` / `.exit` where the case has one); the failure
-# set must equal $(MINGW_KNOWN), what fails under wine, and the report names
-# each program on which wine and Windows disagree. os_unicode_text runs once
-# more on a console of its own, which tests/c/zconsole_read.c reads back: ssh
-# gives every program pipes. Then the tools and tcc are built natively (MSYS2
-# make, UCRT64 gcc). zc and zl, given a file by its drive path from another
-# directory, must name it and the system unit natively, and zl must find the
-# file's project. Last, `make ci` runs with the native tools: every gate on
-# Windows itself, the Linux-only ones saying so. cl's flags are spelled
-# -flag: MSYS2 rewrites a /flag argument as a path.
+# tree: it builds the thread shim's test with MSVC (cl) and with UCRT64 gcc, the
+# console reader (tests/c/zconsole_read.c) and the native tools and tcc (MSYS2
+# make, UCRT64 gcc), then the runner's windows kind judges them and what
+# ci-windows built: the shim under both compilers, every run-corpus binary
+# natively against its goldens with the failure set of $(MINGW_KNOWN), non-ASCII
+# text on a console, drive paths, zc build --cc cl, and `make ci` with the
+# native tools (src/ztestrunner/windows.z says each check). cl's flags are
+# spelled -flag: MSYS2 rewrites a /flag argument as a path.
 windows-guest: $(NATIVEC_INC)/zthread_shim.inc
 	@d=$(WINDOWS_DIR); fail=0; t=tests/c/zthread_shim_test.c; \
 	cl -nologo -std:c17 -experimental:c11atomics -W3 -O2 -I$(NATIVEC_INC) $$t -Fe:$$d/shim-msvc.exe -Fo:$$d/ > $$d/cl.log 2>&1 \
 	  || { echo "windows-guest FAIL: cl did not build the shim test"; tail -5 $$d/cl.log; fail=1; }; \
 	gcc -std=c17 -Wall -Wextra -Wno-unused-function -O2 -I$(NATIVEC_INC) -o $$d/shim-gcc.exe $$t > $$d/gcc.log 2>&1 \
 	  || { echo "windows-guest FAIL: UCRT64 gcc did not build the shim test"; tail -5 $$d/gcc.log; fail=1; }; \
-	for v in msvc gcc; do \
-	  [ -f $$d/shim-$$v.exe ] || continue; \
-	  timeout 300 $$d/shim-$$v.exe > $$d/shim-$$v.log 2>&1 && grep -q "zthread shim OK" $$d/shim-$$v.log \
-	    || { echo "windows-guest FAIL: the shim test under $$v"; tail -10 $$d/shim-$$v.log; fail=1; }; \
-	done; \
-	n=0; pass=0; : > $$d/guest-fails.txt; nl=$$(printf '\nx'); nl=$${nl%x}; \
-	while read -r name dir rest; do \
-	  [ -n "$$name" ] || continue; \
-	  if [ "$$rest" = posix ]; then echo "$$name (posix)" >> $$d/guest-fails.txt; continue; fi; \
-	  g=tests/fixtures/run_golden/$$name; \
-	  if [ ! -f $$d/build/$$name.bin ]; then echo "$$name (cc)" >> $$d/guest-fails.txt; continue; fi; \
-	  [ -f $$g.out ] || continue; \
-	  go=$$g.out; [ -f $$g.windows.out ] && go=$$g.windows.out; \
-	  ge=$$g.exit; [ -f $$g.windows.exit ] && ge=$$g.windows.exit; \
-	  n=$$((n + 1)); rd=$$d/build/run_$$name; mkdir -p $$rd; cp $$d/build/$$name.bin $$rd/$$name.exe; \
-	  set -f; IFS="$$nl"; set -- $$( [ -f $$g.args ] && grep -v '^$$' $$g.args ); unset IFS; set +f; \
-	  (cd $$rd && timeout 60 ./$$name.exe "$$@" < /dev/null > $$name.out 2> /dev/null); rc=$$?; \
-	  want=0; [ -f $$ge ] && want=$$(tr -d ' \r\n' < $$ge); \
-	  if cmp -s $$rd/$$name.out $$go && [ "$$rc" = "$$want" ]; then pass=$$((pass + 1)); \
-	  else echo "$$name (run)" >> $$d/guest-fails.txt; fi; \
-	done < tests/fixtures/run_cases.txt; \
-	sort -o $$d/guest-fails.txt $$d/guest-fails.txt; \
-	grep -v '^#' $(MINGW_KNOWN) | grep -v '^ *$$' | sort > $$d/wine-fails.txt; \
-	if ! cmp -s $$d/wine-fails.txt $$d/guest-fails.txt; then \
-	  comm -13 $$d/wine-fails.txt $$d/guest-fails.txt | sed 's/^/  fails on Windows, not under wine: /'; \
-	  comm -23 $$d/wine-fails.txt $$d/guest-fails.txt | sed 's/^/  passes on Windows, not under wine: /'; \
-	  echo "windows-guest FAIL: the Windows failure set differs from $(MINGW_KNOWN)"; fail=1; \
-	fi; \
-	g=tests/fixtures/run_golden/os_unicode_text; c=tests/c/zconsole_read.c; set -f; IFS="$$nl"; set -- $$(grep -v '^$$' $$g.args); unset IFS; set +f; \
-	{ gcc -std=c17 -Wall -Wextra -O2 -o $$d/zconsole_read.exe $$c -lshell32 \
-	  && $$d/zconsole_read.exe "$$(cygpath -w $$g.out)" "$$(cygpath -w $$d/build/run_os_unicode_text/os_unicode_text.exe)" "$$@"; } \
-	  > $$d/console.log 2>&1 \
-	  || { echo "windows-guest FAIL: os_unicode_text on a console does not show its golden"; cat $$d/console.log; fail=1; }; \
-	ci=""; \
-	if $(MAKE) --no-print-directory zc bin/zl bin/zls $(BUILDDIR)/ztestrunner tcc > $$d/native-build.log 2>&1; then \
-	  r=$$PWD; w=$$(cygpath -w "$$r"); \
-	  (cd $$d && "$$r/bin/zc" build "$$w\\tests\\fixtures\\errors\\display_path_cleaned.z" -o drive.exe) > $$d/drive-zc.log 2>&1; \
-	  grep -qxF " --> $$w\\tests\\fixtures\\errors\\display_path_cleaned.z:5:23" $$d/drive-zc.log \
-	    && grep -qxF "     = note: unit 'io' is $$w\\lib\\system\\io.z" $$d/drive-zc.log \
-	    || { echo "windows-guest FAIL: zc given a drive path does not name the files natively"; cat $$d/drive-zc.log; fail=1; }; \
-	  (cd $$d && "$$r/bin/zl" lint --full "$$w\\src\\zsource.z") > $$d/drive-zl.log 2>&1 \
-	    && grep -qF " --> $$w\\src\\zsource.z:" $$d/drive-zl.log \
-	    || { echo "windows-guest FAIL: zl lint given a drive path does not find its project"; grep -m5 -E '^(error|warning)' $$d/drive-zl.log; fail=1; }; \
-	  { "$$r/bin/zc" build tests/fixtures/emitc_corpus/sqlite_hello.z --cc cl -o $$d/sqlite-cl.exe \
-	    && $$d/sqlite-cl.exe > $$d/sqlite-cl.out && cmp -s $$d/sqlite-cl.out tests/fixtures/run_golden/sqlite_hello.out; } > $$d/zc-cl.log 2>&1 \
-	    || { echo "windows-guest FAIL: zc build --cc cl does not build sqlite_hello to its golden"; tail -10 $$d/zc-cl.log; fail=1; }; \
-	  $(MAKE) --no-print-directory ci > $$d/native-ci.log 2>&1 \
-	    || { echo "windows-guest FAIL: make ci with the native tools"; grep -E 'FAIL|Error [0-9]' $$d/native-ci.log | head -20; fail=1; }; \
-	  ci="$$(grep -c 'skipped (Linux only' $$d/native-ci.log) Linux-only legs skipped; $$(grep -m1 -o 'agreement OK: [0-9]* toolchain(s)' $$d/native-ci.log) agree in the bootstrap; $$(grep -m1 -o '[0-9]* RUN cases pass on Windows (MSVC, natively)' $$d/native-ci.log)"; \
-	else echo "windows-guest FAIL: zc, zl, zls, the runner and tcc did not build natively"; tail -10 $$d/native-build.log; fail=1; fi; \
-	if [ $$fail -ne 0 ]; then exit 1; fi; \
-	echo "windows-guest OK: the thread shim under MSVC and UCRT64 gcc; $$pass of $$n run-corpus binaries match their goldens on Windows, the rest as under wine; non-ASCII text on a console; drive paths; zc build --cc cl; make ci with the native tools ($$ci)"
+	gcc -std=c17 -Wall -Wextra -O2 -o $$d/zconsole_read.exe tests/c/zconsole_read.c -lshell32 > $$d/console-cc.log 2>&1 \
+	  || { echo "windows-guest FAIL: UCRT64 gcc did not build the console reader"; tail -5 $$d/console-cc.log; fail=1; }; \
+	$(MAKE) --no-print-directory zc bin/zl bin/zls $(BUILDDIR)/ztestrunner tcc > $$d/native-build.log 2>&1 \
+	  || { echo "windows-guest FAIL: zc, zl, zls, the runner and tcc did not build natively"; tail -10 $$d/native-build.log; exit 1; }; \
+	$(BUILDDIR)/ztestrunner --zc bin/zc --only windows --root . --tmp $$d --known $(MINGW_KNOWN) --save-temps --jobs $(NPROC) \
+	  || fail=1; \
+	[ $$fail -eq 0 ]
 
 # windows-due -- one line saying make ci-windows is due, nothing when it is not:
 # it has never passed, or its last green run ($(WINDOWS_VERIFIED)) is
