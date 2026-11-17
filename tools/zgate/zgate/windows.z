@@ -1,0 +1,107 @@
+# windows -- the record of the last green `make ci-windows`, and whether
+# another run is due:
+#   windows-due FILE DAYS TOUCHED PATH...
+#                        one line when ci-windows is due again: its last green
+#                        run (FILE) is DAYS days old, or TOUCHED days old with
+#                        a commit since then touching one of PATH; nothing
+#                        when it is not due. Answers 0 either way.
+#   windows-record FILE  FILE written for HEAD, now: what a green ci-windows
+#                        leaves, for windows-due to read
+# FILE holds a comment line, then `<commit> <unix time> <date>`. The time comes
+# from `date`, the commits from git. A subunit of zgate.
+
+# verifiedHead -- the comment line a record starts with
+verifiedHead: "# the last green make ci-windows: commit, unix time, date (written by ci-windows; read by windows-due)"
+
+# runWindowsDue -- the windows-due subcommand from its command line `p`
+runWindowsDue: function {g: Gate.view p: cli.Parsed.view} out i32 is {
+    file: path.join a: g.repo.stringView b: (operand :p name: "FILE").stringView
+    days: (operand :p name: "DAYS").stringView.parseI64.or d: -1
+    touchedDays: (operand :p name: "TOUCHED").stringView.parseI64.or d: -1
+    if (days < 0) or (touchedDays < 0) then {
+        io.eprintln "zgate windows-due: DAYS and TOUCHED are numbers of days"
+        return wrongUsage
+    }
+    if (io.exists path: file).not then {
+        print "windows-due: make ci-windows has never passed (tools/windows/README.md)"
+        return 0
+    }
+    rec: recordWords text: (zjobs.slurp path: file.stringView).stringView
+    if rec.length < 3 then {
+        print "windows-due: \{file} holds no record -- run make ci-windows (tools/windows/README.md)"
+        return 0
+    }
+    sha: rec.get i: 0
+    at: (rec.get i: 1).stringView.parseI64.or d: -1
+    day: rec.get i: 2
+    now: (dateText :g format: "+%s").stringView.parseI64.or d: -1
+    if (at < 0) or (now < 0) then {
+        io.eprintln "zgate windows-due: no time to judge by (the record's, or date's)"
+        return 1
+    }
+    age: now - at / 86400
+    short: sha.stringView.substring from: 0 to: 8
+    if age >= days then {
+        print "windows-due: make ci-windows last passed \{age} days ago (\{day}, \{short}) -- run it (tools/windows/README.md)"
+        return 0
+    }
+    touched: commitsTouching :g sha: sha.stringView paths: p.extraArgs
+    if age >= touchedDays when touched > 0 then {
+        print "windows-due: \{touched} commit(s) touching Windows-relevant sources since make ci-windows last passed (\{day}, \{short}) -- run it (tools/windows/README.md)"
+    }
+    return 0
+}
+
+# runWindowsRecord -- the windows-record subcommand from its command line `p`
+runWindowsRecord: function {g: Gate.view p: cli.Parsed.view} out i32 is {
+    file: path.join a: g.repo.stringView b: (operand :p name: "FILE").stringView
+    sha: fullSha :g rev: "HEAD"
+    now: dateText :g format: "+%s"
+    day: dateText :g format: "+%F"
+    if (sha.length == 0) or (now.length == 0) or (day.length == 0) then {
+        io.eprintln "zgate windows-record: no commit or no time to record"
+        return 1
+    }
+    w: io.writeText path: file content: "\{verifiedHead}\n\{sha} \{now} \{day}\n"
+    if w.err then {
+        io.eprintln "zgate windows-record: cannot write \{file}"
+        return 1
+    }
+    return 0
+}
+
+# recordWords -- the words of a record's first line that is no comment
+recordWords: function {text: StringView} out List String is {
+    for each ln: text.lines loop {
+        if (ln.startsWith "#").not when ln.trim.length > 0 then return (wordsOf text: ln)
+    }
+    none: List String
+    return none
+}
+
+# dateText -- what `date` prints for `format`, its line break trimmed; empty
+# when it cannot be run
+dateText: function {g: Gate.view format: StringView} out String is {
+    a: List String
+    a.append from: "date".string
+    a.append from: format.string
+    c: captured :g argv: a cwd: "" tag: "date"
+    if c.status != 0 then return String
+    return c.text.stringView.trim.string
+}
+
+# commitsTouching -- the commits after `sha` up to HEAD that change one of
+# `paths`; 0 when git cannot answer
+commitsTouching: function {g: Gate.view sha: StringView paths: (List String).view} out u64 is {
+    a: gitArgv repo: g.repo.stringView words: "log --oneline"
+    a.append from: "\{sha}..HEAD"
+    a.append from: "--".string
+    for each pth: paths loop a.append from: pth.copy
+    c: captured :g argv: a cwd: "" tag: "touched"
+    if c.status != 0 then return 0
+    n: u64
+    for each ln: c.text.stringView.lines loop {
+        if ln.trim.length > 0 then n = n + 1
+    }
+    return n
+}

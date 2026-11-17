@@ -82,7 +82,7 @@ abSplit: function {
     k: u64
     for k < runNames.length loop {
         log: zjobs.slurp path: "\{tmp}/\{runNames.get i: k}.log".stringView
-        n: heapCount text: log.stringView
+        n: (perf.heapUsageOf text: log.stringView).allocs
         if (statuses.get i: k) != 0 then n = -1
         counts.append n
         whys.append (firstError text: log.stringView status: (statuses.get i: k))
@@ -179,32 +179,10 @@ copyDir: function {from: StringView to: StringView} is {
     rc.drop
 }
 
-# heapCount -- the allocations valgrind's `total heap usage: N allocs` line
-# of `text` counts; -1 when it has none
-heapCount: function {text: StringView} out i64 is {
-    for each ln: text.lines loop {
-        at: ln.indexOf "total heap usage: "
-        if at.some then {
-            rest: ln.substring from: at + 18 to: ln.length
-            digits: String
-            i: u64
-            for i < rest.length loop {
-                b: (rest.byteAt :i).or d: 0
-                if b == ascii.space then break
-                if (ascii.isDigit :b) then digits.appendByte :b
-                i = i + 1
-            }
-            n: digits.stringView.parseI64
-            if n.ok then return n
-        }
-    }
-    return -1
-}
-
 # firstError -- why a run failed: its exit status and the first line of its
 # log that says error; empty when it did not fail
 firstError: function {text: StringView status: i32} out String is {
-    if status == 0 when (heapCount :text) >= 0 then return "".string
+    if status == 0 when (perf.heapUsageOf :text).found then return "".string
     for each ln: text.lines loop {
         if (ln.startsWith "==").not when ln.contains "error" then return "exit \{status}: \{ln}"
     }

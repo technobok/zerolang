@@ -464,7 +464,7 @@ WINDOWS_SSH ?= zlwin
 WINDOWS_SSH_FLAGS ?=
 WINDOWS_SSH_CMD = ssh $(WINDOWS_SSH_FLAGS) -o BatchMode=yes -o ConnectTimeout=10 $(WINDOWS_SSH)
 WINDOWS_DIR := $(BUILDDIR)/windows
-ci-windows: bin/zc $(BUILDDIR)/ztestrunner $(BUILDDIR)/wineprefix/.ready
+ci-windows: bin/zc bin/zgate $(BUILDDIR)/ztestrunner $(BUILDDIR)/wineprefix/.ready
 	@if ! $(WINDOWS_SSH_CMD) true > /dev/null 2>&1; then \
 	  echo "ci-windows: skipped (no ssh to $(WINDOWS_SSH); to bring up the zlwin VM, or set up another Windows host, see tools/windows/README.md)"; exit 0; fi; \
 	miss=$$($(WINDOWS_SSH_CMD) 'for c in make tar cl gcc; do command -v $$c > /dev/null || printf " %s" $$c; done'); \
@@ -487,8 +487,7 @@ ci-windows: bin/zc $(BUILDDIR)/ztestrunner $(BUILDDIR)/wineprefix/.ready
 	$(WINDOWS_SSH_CMD) "cat $$dest/$(WINDOWS_DIR)/guest-fails.txt" > $(WINDOWS_DIR)/guest-fails.txt 2> /dev/null || true; \
 	cat $(WINDOWS_DIR)/guest.log; \
 	if [ $$rc -ne 0 ]; then echo "ci-windows FAIL on $(WINDOWS_SSH) in $$dest (log $(WINDOWS_DIR)/guest.log)"; exit 1; fi; \
-	{ echo "# the last green make ci-windows: commit, unix time, date (written by ci-windows; read by windows-due)"; \
-	  echo "$$(git rev-parse HEAD) $$(date +%s) $$(date +%F)"; } > $(WINDOWS_VERIFIED); \
+	bin/zgate windows-record $(WINDOWS_VERIFIED) || { echo "ci-windows FAIL: cannot record the run in $(WINDOWS_VERIFIED)"; exit 1; }; \
 	echo "ci-windows OK on $(WINDOWS_SSH) in $$dest; recorded in $(WINDOWS_VERIFIED) -- commit it"
 
 # windows-guest -- what ci-windows runs on the Windows machine, in the copied
@@ -575,16 +574,8 @@ WINDOWS_DUE_DAYS := 14
 WINDOWS_DUE_TOUCHED_DAYS := 2
 WINDOWS_PATHS := src/zemitterc.z src/zemitterc src/zc.z src/zcobj.z src/zcheck.z src/ztestrunner.z \
 	lib/system bootstrap/zc.c Makefile tests/c
-windows-due:
-	@if [ ! -f $(WINDOWS_VERIFIED) ]; then echo "windows-due: make ci-windows has never passed (tools/windows/README.md)"; exit 0; fi; \
-	set -- $$(grep -v '^#' $(WINDOWS_VERIFIED)); sha=$$1; at=$$2; day=$$3; \
-	age=$$(( ($$(date +%s) - at) / 86400 )); \
-	touched=$$(git log --oneline $$sha..HEAD -- $(WINDOWS_PATHS) 2> /dev/null | wc -l); \
-	if [ $$age -ge $(WINDOWS_DUE_DAYS) ]; then \
-	  echo "windows-due: make ci-windows last passed $$age days ago ($$day, $$(echo $$sha | cut -c1-8)) -- run it (tools/windows/README.md)"; \
-	elif [ $$age -ge $(WINDOWS_DUE_TOUCHED_DAYS) ] && [ $$touched -gt 0 ]; then \
-	  echo "windows-due: $$touched commit(s) touching Windows-relevant sources since make ci-windows last passed ($$day, $$(echo $$sha | cut -c1-8)) -- run it (tools/windows/README.md)"; \
-	fi
+windows-due: bin/zgate
+	@bin/zgate windows-due $(WINDOWS_VERIFIED) $(WINDOWS_DUE_DAYS) $(WINDOWS_DUE_TOUCHED_DAYS) $(WINDOWS_PATHS)
 
 # test-math-noasm -- the math corpus on math's C kernels (-DZ_MATH_NOASM).
 test-math-noasm: bin/zc bin/zl $(BUILDDIR)/ztestrunner
@@ -1267,26 +1258,15 @@ pedantic-check: bin/zc $(BUILDDIR)/ztestrunner
 	echo "pedantic-check OK: the C of the drivers and the run cases has no -Wpedantic diagnostic, $(PEDANTIC_WHERE)"
 
 # perf -- the self-compile's numbers (docs/testing.pdoc, Performance): line
-# count, wall, peak RSS, phase split and the allocation total.
-PERFARGS := zc --src src --system lib/system --emit-c /dev/null
-PERFRUN  := $(PERFBIN) $(PERFARGS)
+# count, wall, peak RSS, phase split and the allocation total, measured by
+# `zgate perf`.
 
 # The series binary: bin/zc.c compiled by PERFCC at PERFOPT.
 $(PERFBIN): bin/zc.c $(MIMALLOC_OBJ) $(BUILDDIR)/buildstamp.o
 	@$(PERFCC) -std=c17 -w $(PERFOPT) $(STAMPDEF) -o $@ $(MIMALLOC_OBJ) $(BUILDDIR)/buildstamp.o bin/zc.c $(call ZLINKOF,bin/zc.c,,,$(ZC)) -lpthread -lm
 
-perf: $(PERFBIN)
-	@echo "== zerolang line count (.z) =="
-	@lsrc=$$(cat src/*.z $(SRC_SUBUNITS) | wc -l); llib=$$(cat lib/system/*.z lib/system/system/*.z lib/system/math/*.z | wc -l); \
-	  printf "  src/**/*.z: %s    lib/system/**/*.z: %s    total: %s\n" "$$lsrc" "$$llib" "$$((lsrc + llib))"
-	@echo "== self-compile wall best-of-5 (mimalloc; drop run 1) + peak RSS =="
-	@for i in 1 2 3 4 5; do /usr/bin/time -f "  %es  %MkB" $(PERFRUN) 2>&1 | tail -1; done
-	@echo "== phase split (parse / typecheck / emit) =="
-	@$(PERFBIN) zc --src src --system lib/system --time --emit-c /dev/null 2>&1 | tail -1 | sed 's/^/  /'
-	@echo "== allocations (valgrind memcheck: total heap blocks for one self-compile) =="
-	@if command -v valgrind >/dev/null 2>&1; then \
-	  valgrind --tool=memcheck $(PERFRUN) 2>&1 | grep 'total heap usage' | sed 's/.*usage: /  /'; \
-	else echo "  (valgrind not installed -- skipping alloc total)"; fi
+perf: $(PERFBIN) bin/zgate
+	@bin/zgate perf report $(PERFBIN)
 
 # perf-strict -- the allocation ratchet: heap blocks for one self-compile of
 # $(PERFBIN), bit-identical run to run. It refuses a clang-built binary (LLVM
@@ -1294,33 +1274,13 @@ perf: $(PERFBIN)
 # allocs != frees. Above ALLOC_BASELINE fails; a commit raising it says why in
 # its message, and one lowering the count lowers it here.
 ALLOC_BASELINE := 2814833
-# ALLOC_LINE -- the one measurement every allocation number comes from.
-ALLOC_LINE = valgrind --tool=memcheck $(PERFRUN) 2>&1 | grep 'total heap usage' | sed 's/.*usage: //'
 
 ifdef WINDOWS_HOST
 perf-strict:
 	@echo "perf-strict: skipped (Linux only: it counts heap blocks under valgrind memcheck, which Windows does not have)"
 else
-perf-strict: $(PERFBIN)
-	@command -v valgrind >/dev/null 2>&1 \
-	  || { echo "perf-strict: valgrind is not installed -- the allocation ratchet cannot measure"; exit 1; }
-	@readelf -p .comment $(PERFBIN) | grep -qi clang \
-	  && { echo "perf-strict: $(PERFBIN) is clang-built (PERFCC=$(PERFCC)) -- refusing to measure"; exit 1; } || true
-	@sha=$$(git rev-parse --short HEAD); dirty=$$(git diff --quiet && git diff --cached --quiet && echo clean || echo DIRTY); \
-	  echo "== perf-strict @ $$sha ($$dirty), $(PERFCC) $(firstword $(PERFOPT)) =="
-	@$(PERFRUN) > /dev/null || { echo "perf-strict: self-compile FAILED (exit $$?)"; exit 1; }
-	@line=$$($(ALLOC_LINE)); \
-	  echo "  $$line"; \
-	  a=$$(echo "$$line" | sed 's/ allocs.*//;s/,//g'); f=$$(echo "$$line" | sed 's/.* allocs, //;s/ frees.*//;s/,//g'); \
-	  test "$$a" = "$$f" || { echo "perf-strict: allocs != frees -- incomplete or leaking run"; exit 1; }; \
-	  if [ "$$a" -gt "$(ALLOC_BASELINE)" ]; then \
-	    echo "perf-strict FAIL: $$a allocations > ALLOC_BASELINE $(ALLOC_BASELINE) -- lower the count, or raise the baseline with the reason in the commit"; exit 1; \
-	  elif [ "$$a" -lt "$(ALLOC_BASELINE)" ]; then \
-	    echo "perf-strict: $$a < ALLOC_BASELINE $(ALLOC_BASELINE) -- lower the baseline in the Makefile"; \
-	  else echo "perf-strict OK: $$a allocations (baseline $(ALLOC_BASELINE))"; fi
-	@if command -v perf >/dev/null 2>&1 && perf stat -e instructions true >/dev/null 2>&1; then \
-	  perf stat -e instructions -r 3 $(PERFRUN) 2>&1 | grep -E 'instructions' | sed 's/^ */  /'; \
-	else echo "  (perf stat unavailable -- instructions not measured)"; fi
+perf-strict: $(PERFBIN) bin/zgate
+	@bin/zgate perf strict $(PERFBIN) $(ALLOC_BASELINE) --cc $(PERFCC) --opt $(firstword $(PERFOPT))
 endif
 
 # pre-push -- check, test and the allocation ratchet.
@@ -1331,20 +1291,11 @@ pre-push: check test perf-strict
 # one clang, once with -fno-builtin-malloc. The difference belongs at zero.
 ELIDECC   ?= clang
 NOBUILTIN := -fno-builtin-malloc -fno-builtin-free -fno-builtin-calloc -fno-builtin-realloc
-perf-elision: bin/zc.c
-	@command -v $(ELIDECC) >/dev/null 2>&1 || { echo "perf-elision: $(ELIDECC) not installed -- skipping"; exit 0; }
-	@command -v valgrind >/dev/null 2>&1 || { echo "perf-elision: valgrind not installed -- skipping"; exit 0; }
-	@sha=$$(git rev-parse --short HEAD); dirty=$$(git diff --quiet && git diff --cached --quiet && echo clean || echo DIRTY); \
-	  echo "== perf-elision @ $$sha ($$dirty), $(ELIDECC) A/B over bin/zc.c =="
-	@$(ELIDECC) -std=c17 -w $(PERFOPT) -o $(BUILDDIR)/zc-elide bin/zc.c $(call ZLINKOF,bin/zc.c,,,$(ZC)) -lpthread -lm
-	@$(ELIDECC) -std=c17 -w $(PERFOPT) $(NOBUILTIN) -o $(BUILDDIR)/zc-noelide bin/zc.c $(call ZLINKOF,bin/zc.c,,,$(ZC)) -lpthread -lm
-	@blocks() { valgrind --tool=memcheck $$1 $(PERFARGS) 2>&1 \
-	    | grep 'total heap usage' | sed 's/.*usage: //;s/ allocs.*//;s/,//g'; }; \
-	  kept=$$(blocks $(BUILDDIR)/zc-noelide); left=$$(blocks $(BUILDDIR)/zc-elide); \
-	  test -n "$$kept" -a -n "$$left" || { echo "perf-elision: no allocation total -- a run failed"; exit 1; }; \
-	  printf "  as emitted:            %s allocs\n" "$$kept"; \
-	  printf "  after LLVM deletion:   %s allocs\n" "$$left"; \
-	  printf "  write-only pool:       %s\n" "$$((kept - left))"
+perf-elision: bin/zc.c bin/zgate
+	@command -v $(ELIDECC) >/dev/null 2>&1 || { echo "perf-elision: $(ELIDECC) not installed -- skipping"; exit 0; }; \
+	$(ELIDECC) -std=c17 -w $(PERFOPT) -o $(BUILDDIR)/zc-elide bin/zc.c $(call ZLINKOF,bin/zc.c,,,$(ZC)) -lpthread -lm && \
+	$(ELIDECC) -std=c17 -w $(PERFOPT) $(NOBUILTIN) -o $(BUILDDIR)/zc-noelide bin/zc.c $(call ZLINKOF,bin/zc.c,,,$(ZC)) -lpthread -lm && \
+	bin/zgate perf elision $(BUILDDIR)/zc-noelide $(BUILDDIR)/zc-elide --cc $(ELIDECC)
 
 # sqlite-decls-guard -- the part of SQLite's C interface the sqlite unit's
 # fragments declare instead of including (its @decls row) compiles after the

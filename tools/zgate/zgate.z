@@ -12,6 +12,12 @@
 #   run TAG OUT [SHA]     the per-batch gate of SHA against snapshot TAG
 #   time ci|gates OUT [SHA]
 #                         make ci, or each ci-gates leg alone, timed
+#   windows-due FILE DAYS TOUCHED PATH... | windows-record FILE
+#                         whether make ci-windows is due again, and the record
+#                         of its last green run
+#   perf report ZC | strict ZC BASELINE | elision KEPT LEFT
+#                         the self-compile's numbers the Makefile's perf
+#                         targets print, measured and judged
 # The repository is the current directory, or --repo DIR. Snapshots, the run
 # lock and scratch files live in $ZGATE_HOME (~/.cache/zerolang/gate when it is
 # not set). The worktree a run or a timing makes stands beside the repository,
@@ -33,6 +39,9 @@ command: list {
     pregate: "pregate"
     run: "run"
     time: "time"
+    perf: "perf"
+    windowsDue: "windows-due"
+    windowsRecord: "windows-record"
     help: "help"
 } out staticlist StringView
 
@@ -43,6 +52,8 @@ opt: list {
     set: "--set"
     normalise: "--normalise"
     refSystem: "--ref-system"
+    cc: "--cc"
+    opt: "--opt"
 } out staticlist StringView
 
 # PoolStep, PoolJob -- a spawn of a job and a job, of the job pool (zjobs)
@@ -75,6 +86,10 @@ printUsage: function is {
     io.eprintln "  pregate                  the quick checks of the .z files changed since HEAD"
     io.eprintln "  run TAG OUT [SHA]        the per-batch gate of SHA (HEAD) against snapshot TAG"
     io.eprintln "  time ci|gates OUT [SHA]  make ci, or each ci-gates leg alone, timed"
+    io.eprintln "  perf report ZC | strict ZC BASELINE | elision KEPT LEFT [--cc CC] [--opt FLAG]"
+    io.eprintln "                           the self-compile's numbers, measured and judged"
+    io.eprintln "  windows-due FILE DAYS TOUCHED PATH...  whether make ci-windows is due again"
+    io.eprintln "  windows-record FILE      FILE written for HEAD: the record of a green ci-windows"
     io.eprintln "The repository is the current directory, or --repo DIR; snapshots and the run"
     io.eprintln "lock live in $ZGATE_HOME (default ~/.cache/zerolang/gate)."
 }
@@ -127,6 +142,9 @@ runCommand: function {which: u64 args: (List String).take} out i32 is {
     if which == command.slot.asan then return (runAsan :g p: pr)
     if which == command.slot.pregate then return (pregate.runPregate :g)
     if which == command.slot.run then return (gaterun.runGateCommand :g p: pr)
+    if which == command.slot.perf then return (perf.runPerfCommand :g p: pr)
+    if which == command.slot.windowsDue then return (windows.runWindowsDue :g p: pr)
+    if which == command.slot.windowsRecord then return (windows.runWindowsRecord :g p: pr)
     return (timing.runTimeCommand :g p: pr)
 }
 
@@ -161,6 +179,18 @@ specOf: function {which: u64} out cli.Spec is {
         addOperand :sp name: "WHAT" required: true
         addOperand :sp name: "OUT" required: true
         addOperand :sp name: "SHA" required: false
+    } else if which == command.slot.perf then {
+        addOperand :sp name: "WHAT" required: true
+        addOperand :sp name: "BIN" required: true
+        addOperand :sp name: "ARG" required: false
+        addValue :sp name: opt.cc
+        addValue :sp name: opt.opt
+    } else if which == command.slot.windowsDue then {
+        addOperand :sp name: "FILE" required: true
+        addOperand :sp name: "DAYS" required: true
+        addOperand :sp name: "TOUCHED" required: true
+    } else if which == command.slot.windowsRecord then {
+        addOperand :sp name: "FILE" required: true
     }
     return sp
 }

@@ -1,0 +1,318 @@
+# perf -- `zgate perf report|strict|elision ...`: the self-compile's numbers the
+# Makefile's perf targets print. The Makefile builds what is measured and keeps
+# the allocation baseline; this measures and judges.
+#   report ZC            the line count, the wall best-of-5 and peak RSS, the
+#                        phase split and the allocation total (make perf)
+#   strict ZC BASELINE   the allocation ratchet (make perf-strict): heap blocks
+#                        of one self-compile under valgrind memcheck, refused
+#                        above BASELINE, and the instructions when perf stat
+#                        is there. A clang-built ZC is refused (LLVM deletes
+#                        write-only allocations), and so are a failed run and
+#                        allocs != frees
+#   elision KEPT LEFT    the allocations LLVM deletes as write-only: one
+#                        compiler's build of bin/zc.c without and with its
+#                        malloc builtins (make perf-elision)
+# The self-compile is `ZC zc --src src --system lib/system --emit-c <null>`, run
+# in the repository. --cc and --opt name how ZC was built, for the report's
+# head line. A subunit of zgate.
+
+# perfWord -- what `zgate perf` measures, by the word that names it
+perfWord: list { report: "report" strict: "strict" elision: "elision" } out staticlist StringView
+
+# HeapUsage -- valgrind's `total heap usage` line: its allocations and frees,
+# and the line after `usage: ` as valgrind wrote it. Not found when the text
+# has no such line.
+HeapUsage: class {
+    found: bool
+    allocs: i64
+    frees: i64
+    line: String
+}
+
+# runPerfCommand -- the perf subcommand from its command line `p`
+runPerfCommand: function {g: Gate.view p: cli.Parsed.view} out i32 is {
+    words: zast.Vocab.create block: perfWord
+    what: operand :p name: "WHAT"
+    which: words.slotOf text: what.stringView
+    if which == words.none then {
+        io.eprintln "zgate perf: measures report, strict or elision, not '\{what}'"
+        return wrongUsage
+    }
+    a: operand :p name: "BIN"
+    b: operand :p name: "ARG"
+    cc: optionText :p name: opt.cc d: "cc"
+    cflag: optionText :p name: opt.opt d: ""
+    if which == perfWord.slot.report then return (perfReport :g zc: a.stringView)
+    if b.length == 0 then {
+        io.eprintln "zgate perf \{what}: names two binaries, or a binary and its baseline"
+        return wrongUsage
+    }
+    if which == perfWord.slot.strict then {
+        return (
+            perfStrict
+            :g
+            zc: a.stringView
+            baseline: b.stringView
+            cc: cc.stringView
+            cflag: cflag.stringView
+        )
+    }
+    return (perfElision :g kept: a.stringView left: b.stringView cc: cc.stringView)
+}
+
+# selfCompile -- the self-compile `zc` runs, its arguments after `before`
+selfCompile: function {before: StringView zc: StringView} out List String is {
+    a: wordsOf text: before
+    a.append from: zc.string
+    for each w: (wordsOf text: "zc --src src --system lib/system --emit-c") loop (
+        a.append
+        from: w.copy
+    )
+    a.append from: os.nullDevice
+    return a
+}
+
+# heapUsageOf -- valgrind's `total heap usage` line in `text`: `N allocs, M
+# frees, ...`, each count written with its thousands commas
+heapUsageOf: function {text: StringView} out HeapUsage is {
+    for each ln: text.lines loop {
+        at: ln.indexOf "usage: "
+        if at.some when (ln.contains needle: "total heap usage: ") then {
+            rest: ln.substring from: at + 7 to: ln.length
+            fr: rest.indexOf "allocs, "
+            if fr.some then {
+                return (
+                    HeapUsage
+                    found: true
+                    allocs: (countBefore text: rest)
+                    frees: (countBefore text: (rest.substring from: fr + 8 to: rest.length))
+                    line: rest.trim.string
+                )
+            }
+        }
+    }
+    return (HeapUsage found: false allocs: -1 frees: -1 line: String)
+}
+
+# countBefore -- the number `text` starts with, its commas skipped; -1 for none
+countBefore: function {text: StringView} out i64 is {
+    digits: String
+    for each b: text.byteView loop {
+        if b == ascii.space then break
+        if (ascii.isDigit :b) then digits.appendByte :b
+    }
+    n: digits.stringView.parseI64
+    if n.ok then return n
+    return -1
+}
+
+# valgrindUsage -- the heap usage of `argv` run under valgrind memcheck in the
+# repository; not found when valgrind wrote no total (the run did not finish)
+valgrindUsage: function {g: Gate.view argv: (List String).view tag: StringView} out HeapUsage is {
+    a: wordsOf text: "valgrind --tool=memcheck"
+    for each w: argv loop a.append from: w.copy
+    c: captured :g argv: a cwd: g.repo.stringView :tag
+    return (heapUsageOf text: c.err.stringView)
+}
+
+# hasTool -- `argv` runs and exits 0: the tool it names is installed
+hasTool: function {g: Gate.view argv: List String} out bool is {
+    c: captured :g :argv cwd: "" tag: "perftool"
+    return c.status == 0
+}
+
+# headState -- HEAD's short sha and whether the tree is `clean` or `DIRTY`, as
+# a report's head line names it
+headState: function {g: Gate.view} out String is {
+    s: (
+        captured
+        :g
+        argv: (gitArgv repo: g.repo.stringView words: "rev-parse --short HEAD")
+        cwd: ""
+        tag: "perfsha"
+    )
+    d1: (
+        captured
+        :g
+        argv: (gitArgv repo: g.repo.stringView words: "diff --quiet")
+        cwd: ""
+        tag: "perfd1"
+    )
+    d2: (
+        captured
+        :g
+        argv: (gitArgv repo: g.repo.stringView words: "diff --cached --quiet")
+        cwd: ""
+        tag: "perfd2"
+    )
+    state: "clean"
+    if (d1.status != 0) or (d2.status != 0) then state = "DIRTY"
+    return "\{s.text.stringView.trim} (\{state})"
+}
+
+# perfStrict -- the allocation ratchet; answers 0 when the count is at or below
+# `baseline`
+perfStrict: function {
+    g: Gate.view zc: StringView baseline: StringView cc: StringView cflag: StringView
+} out i32 is {
+    if (hasTool :g argv: (wordsOf text: "valgrind --version")).not then {
+        print "perf-strict: valgrind is not installed -- the allocation ratchet cannot measure"
+        return 1
+    }
+    re: wordsOf text: "readelf -p .comment"
+    re.append from: zc.string
+    comment: captured :g argv: re cwd: "" tag: "perfcomment"
+    if ((lowerText text: comment.text.stringView).contains needle: "clang") then {
+        print "perf-strict: \{zc} is clang-built (PERFCC=\{cc}) -- refusing to measure"
+        return 1
+    }
+    print "== perf-strict @ \{headState :g}, \{cc} \{cflag} =="
+    run: selfCompile before: "" :zc
+    rc: runTo argv: run cwd: g.repo.stringView outPath: os.nullDevice.stringView errPath: ""
+    if rc != 0 then {
+        print "perf-strict: self-compile FAILED (exit \{rc})"
+        return 1
+    }
+    hu: valgrindUsage :g argv: run tag: "perfstrict"
+    print "  \{hu.line}"
+    if hu.found.not or (hu.allocs != hu.frees) then {
+        print "perf-strict: allocs != frees -- incomplete or leaking run"
+        return 1
+    }
+    bl: baseline.parseI64
+    if bl.err then {
+        io.eprintln "zgate perf strict: the baseline '\{baseline}' is no number"
+        return wrongUsage
+    }
+    if hu.allocs > bl then {
+        print "perf-strict FAIL: \{hu.allocs} allocations > ALLOC_BASELINE \{baseline} -- lower the count, or raise the baseline with the reason in the commit"
+        return 1
+    }
+    if hu.allocs < bl then {
+        print "perf-strict: \{hu.allocs} < ALLOC_BASELINE \{baseline} -- lower the baseline in the Makefile"
+    } else {
+        print "perf-strict OK: \{hu.allocs} allocations (baseline \{baseline})"
+    }
+    printInstructions :g :zc
+    return 0
+}
+
+# printInstructions -- the self-compile's instruction count, the mean of three
+# runs under perf stat; a note when perf stat cannot count them here
+printInstructions: function {g: Gate.view zc: StringView} is {
+    if (hasTool :g argv: (wordsOf text: "perf stat -e instructions true")).not then {
+        print "  (perf stat unavailable -- instructions not measured)"
+        return
+    }
+    c: (
+        captured
+        :g
+        argv: (selfCompile before: "perf stat -e instructions -r 3" :zc)
+        cwd: g.repo.stringView
+        tag: "perfstat"
+    )
+    for each ln: c.err.stringView.lines loop {
+        if (ln.contains needle: "instructions") then print "  \{ln.trim}"
+    }
+}
+
+# perfReport -- the self-compile's numbers, for reading; answers 0
+perfReport: function {g: Gate.view zc: StringView} out i32 is {
+    print "== zerolang line count (.z) =="
+    ls: lineCountOf :g dirs: "src"
+    ll: lineCountOf :g dirs: "lib/system"
+    print "  src/**/*.z: \{ls}    lib/system/**/*.z: \{ll}    total: \{ls + ll}"
+    print "== self-compile wall best-of-5 (mimalloc; drop run 1) + peak RSS =="
+    k: u64
+    for k < 5 loop {
+        k = k + 1
+        t: selfCompile before: "/usr/bin/time -f" :zc
+        t.insert from: "  %es  %MkB".string at: 2
+        c: captured :g argv: t cwd: g.repo.stringView tag: "perfwall"
+        print (lastLine text: c.err.stringView)
+    }
+    print "== phase split (parse / typecheck / emit) =="
+    ph: selfCompile before: "" :zc
+    ph.insert from: "--time".string at: ph.length - 2
+    pc: captured :g argv: ph cwd: g.repo.stringView tag: "perfphase"
+    print "  \{lastLine text: pc.err.stringView}"
+    print "== allocations (valgrind memcheck: total heap blocks for one self-compile) =="
+    if (hasTool :g argv: (wordsOf text: "valgrind --version")).not then {
+        print "  (valgrind not installed -- skipping alloc total)"
+        return 0
+    }
+    hu: valgrindUsage :g argv: (selfCompile before: "" :zc) tag: "perfreport"
+    print "  \{hu.line}"
+    return 0
+}
+
+# perfElision -- the write-only allocations LLVM deletes: `kept`'s total (its
+# malloc builtins off) beside `left`'s; answers 1 when a run gave no total
+perfElision: function {g: Gate.view kept: StringView left: StringView cc: StringView} out i32 is {
+    if (hasTool :g argv: (wordsOf text: "valgrind --version")).not then {
+        print "perf-elision: valgrind not installed -- skipping"
+        return 0
+    }
+    print "== perf-elision @ \{headState :g}, \{cc} A/B over bin/zc.c =="
+    k: valgrindUsage :g argv: (selfCompile before: "" zc: kept) tag: "perfkept"
+    l: valgrindUsage :g argv: (selfCompile before: "" zc: left) tag: "perfleft"
+    if k.found.not or l.found.not then {
+        print "perf-elision: no allocation total -- a run failed"
+        return 1
+    }
+    print "  as emitted:            \{k.allocs} allocs"
+    print "  after LLVM deletion:   \{l.allocs} allocs"
+    print "  write-only pool:       \{k.allocs - l.allocs}"
+    return 0
+}
+
+# lineCountOf -- the lines of every .z file under the repository's `dirs`, one
+# level of subdirectories down
+lineCountOf: function {g: Gate.view dirs: StringView} out u64 is {
+    root: "\{g.repo}/\{dirs}"
+    n: zLinesIn dir: root.stringView
+    ls: io.listDir path: root
+    if ls.err then return n
+    for each e: ls loop {
+        if (e.stringView.endsWith ".z").not then n = n + (zLinesIn dir: "\{root}/\{e}".stringView)
+    }
+    return n
+}
+
+# zLinesIn -- the lines of the .z files directly in `dir`; 0 when it is no
+# directory
+zLinesIn: function {dir: StringView} out u64 is {
+    n: u64
+    ls: io.listDir path: dir
+    if ls.err then return 0
+    for each e: ls loop {
+        if e.stringView.endsWith ".z" then n = n + (linesIn path: "\{dir}/\{e}".stringView)
+    }
+    return n
+}
+
+# linesIn -- the line breaks in the file at `path`, as `wc -l` counts them
+linesIn: function {path: StringView} out u64 is {
+    text: zjobs.slurp :path
+    n: u64
+    for each b: text.stringView.byteView loop {
+        if b == ascii.lf then n = n + 1
+    }
+    return n
+}
+
+# lowerText -- `text` with its ASCII letters in lower case
+lowerText: function {text: StringView} out String is {
+    r: String
+    for each b: text.byteView loop r.appendByte (ascii.lower :b)
+    return r
+}
+
+# lastLine -- the last line of `text` that holds anything
+lastLine: function {text: StringView} out String is {
+    last: String
+    for each ln: text.lines loop {
+        if ln.trim.length > 0 then last = ln.string
+    }
+    return last
+}
