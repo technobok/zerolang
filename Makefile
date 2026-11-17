@@ -988,7 +988,7 @@ out/constparitygen: bin/zc tests/unit/constparitygen.z $(wildcard lib/system/*.z
 	bin/zc constparitygen --src tests/unit --system lib/system --emit-c $(BUILDDIR)/constparitygen.c
 	$(CC) $(CFLAGS) -o $(BUILDDIR)/constparitygen $(BUILDDIR)/constparitygen.c $(call ZLINKOF,$(BUILDDIR)/constparitygen.c) -lm
 
-# regen-constparity -- rewrite the cpar_ fixtures from tests/fixtures/constparity_expect.txt.
+# regen-constparity -- rewrite the cpar_ fixtures from tests/fixtures/constparity_expect.zd.
 regen-constparity: out/constparitygen
 	$(BUILDDIR)/constparitygen --root .
 
@@ -996,10 +996,10 @@ regen-constparity: out/constparitygen
 # regenerated under a scratch root, with none left over that it no longer writes.
 constparity-guard: out/constparitygen
 	@d=$$(mktemp -d); mkdir -p $$d/tests/fixtures; \
-	cp tests/fixtures/constparity_expect.txt $$d/tests/fixtures/; \
+	cp tests/fixtures/constparity_expect.zd $$d/tests/fixtures/; \
 	$(BUILDDIR)/constparitygen --root $$d > $$d/gen.log 2>&1 || { cat $$d/gen.log; rm -rf $$d; exit 1; }; \
 	bad=0; n=0; \
-	for f in $$(cd $$d && find tests/fixtures -type f ! -name constparity_expect.txt); do \
+	for f in $$(cd $$d && find tests/fixtures -type f ! -name constparity_expect.zd); do \
 	  n=$$((n+1)); \
 	  if ! cmp -s $$d/$$f $$f; then echo "constparity-guard FAIL: $$f differs from constparitygen's output"; bad=1; fi; \
 	done; \
