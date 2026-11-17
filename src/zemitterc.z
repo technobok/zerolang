@@ -509,7 +509,8 @@ RtTexts: class {
     # and their heads, as its reader cut it: its id
     parsePieced: function {t: this x: PiecedText.take} out rtid is {
         # a stretch never crosses a piece's edge: each is written or not with
-        # its piece
+        # its piece, and a fill's span always starts and ends at an edge
+        # (fillSpan)
         edges: ListVal u64
         for each p: x.pieces loop {
             edges.append p.at
@@ -690,7 +691,10 @@ RtTexts: class {
     # the bindings, a cname binding (`bindIds`) without its `z_` prefix, which
     # the text spells itself (`z_@File@_t`), a raw one (`rawIds`) as it stands
     # (rtAppendHole), and a hole bound to nothing a failure added to `fails`
-    # naming `path`. Every other key and hole is written as it stands.
+    # naming `path`. Every other key and hole is written as it stands. The span
+    # starts and ends at an edge of the text's cut -- a whole text, or a
+    # piece's bounds (its body is the whole piece) -- so no stretch straddles
+    # it.
     fillSpan: function {
         t: this.view
         id: rtid
@@ -715,11 +719,6 @@ RtTexts: class {
             sg: t.segs.get i: k
             if sg.from >= to then break
             k = k + 1
-            if (sg.from < from) or (sg.to > to) then {
-                # a literal the span cuts: no hole or key straddles a span's end
-                buf.append (tv.substring from: (rtClipFrom :sg :from) to: (rtClipTo :sg :to))
-                continue
-            }
             run: tv.substring from: sg.from to: sg.to
             if sg.kind.literal then {
                 buf.append run
@@ -793,18 +792,6 @@ rtAppendKey: function {buf: String.borrow name: zast.nameid keys: RtKeys.view} o
         ki = ki + 1
     }
     return false
-}
-
-# rtClipFrom -- where stretch `sg` starts within a span starting at `from`
-rtClipFrom: function {sg: rtseg from: u64} out u64 is {
-    if from > sg.from then return from
-    return sg.from
-}
-
-# rtClipTo -- where stretch `sg` ends within a span ending at `to`
-rtClipTo: function {sg: rtseg to: u64} out u64 is {
-    if to < sg.to then return to
-    return sg.to
 }
 
 # rtAppendHole -- append the text hole `name` fills with to `buf`, and answer

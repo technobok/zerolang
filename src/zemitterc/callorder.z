@@ -1360,16 +1360,6 @@ userCreateCallC: function {
     )
 }
 
-# callKindIsCreate -- the checker stamped call `nid` as the construction of a
-# user record or class.
-callKindIsCreate: function {prog: Program.view nid: zast.nodeid} out bool is {
-    ck: prog.typing.callKind.get key: nid
-    if ck.some then {
-        return (ck == zast.callkind.recordCreate) or (ck == zast.callkind.classCreate)
-    }
-    return false
-}
-
 # emitTypeQualCall -- `point.add a: x b: y`: a dotted callee whose base
 # resolves to a record type and whose member is a FUNCTION child; args
 # reorder to the method's param order by label.
@@ -1391,12 +1381,7 @@ emitTypeQualCall: function {
             btid = stampIdOf :prog nid: bnid
         }
     }
-    # a type written as an application (`(Pair t: u64).create`) is stamped on
-    # the construction, with the instance
     isCreate: mnId == zast.wellKnown.slot.wkCreate
-    if btid.isZero when isCreate when (callKindIsCreate :prog nid: call.nodeid) then {
-        btid = stampIdOf :prog nid: call.nodeid
-    }
     if btid.isZero then return "".string
     bttq: prog.reg.typetypeOf typeId: btid
     # a receiver's family decides how it is CARRIED, never how the call is
@@ -4610,7 +4595,8 @@ dispatchReceiverTid: function {
 
 # dispatchSlotNames -- the vtable method's parameter name ids. The receiver is
 # implicit at the call site, so it is not a slot an argument can land in;
-# filtered by id, like the match itself.
+# filtered by id, like the match itself: `this`, or the name the registry
+# records for a named receiver (`t: this.view`).
 dispatchSlotNames: function {
     prog: Program.view
     rtid: ztypes.tid
@@ -4631,9 +4617,11 @@ dispatchSlotNames: function {
         ids: mpIds
         nameIds: paramNameIds
     )
+    rn: prog.reg.thisParamNameIdOf tid: mtid
     vpn: ListVal zast.nameid
     for each nmId: paramNameIds loop {
-        if nmId != zast.wellKnown.slot.wkThis then vpn.append nmId
+        isRecv: (nmId == zast.wellKnown.slot.wkThis) or (rn.notZero and (nmId == rn))
+        if isRecv.not then vpn.append nmId
     }
     return vpn
 }
