@@ -4595,8 +4595,7 @@ dispatchReceiverTid: function {
 
 # dispatchSlotNames -- the vtable method's parameter name ids. The receiver is
 # implicit at the call site, so it is not a slot an argument can land in;
-# filtered by id, like the match itself: `this`, or the name the registry
-# records for a named receiver (`t: this.view`).
+# filtered by id, like the match itself.
 dispatchSlotNames: function {
     prog: Program.view
     rtid: ztypes.tid
@@ -4617,11 +4616,9 @@ dispatchSlotNames: function {
         ids: mpIds
         nameIds: paramNameIds
     )
-    rn: prog.reg.thisParamNameIdOf tid: mtid
     vpn: ListVal zast.nameid
     for each nmId: paramNameIds loop {
-        isRecv: (nmId == zast.wellKnown.slot.wkThis) or (rn.notZero and (nmId == rn))
-        if isRecv.not then vpn.append nmId
+        if nmId != zast.wellKnown.slot.wkThis then vpn.append nmId
     }
     return vpn
 }
@@ -4668,40 +4665,6 @@ appendSlottedDispatchArgs: function {
     }
     orderEnd order: ctx.order st: ord
     return orderPrefix
-}
-
-# appendPlainDispatchArgs -- the arguments in written order, for a method whose
-# only parameter is the implicit receiver.
-appendPlainDispatchArgs: function {
-    prog: Program.view
-    ctx: Ctx
-    call: zast.callrow.view
-    dargs: String
-} out String is {
-    ord: orderBegin order: ctx.order slots: call.arguments.count
-    i: u64
-    w: u64
-    for i < call.arguments.count loop {
-        aId: zast.kidAt kids: prog.ast.kids span: call.arguments :i
-        i = i + 1
-        a: prog.ast.nodes.get i: aId
-        if a.namedoperation then {
-            orderDispatchArg :prog :ctx op: (prog.ast.nodes.get i: a.operation) slot: w :ord
-            w = w + 1
-        }
-    }
-    prefix: orderFinish order: ctx.order st: ord
-    wi: u64
-    for wi < w loop {
-        vo: orderSlotText t: ctx st: ord slot: wi
-        if vo.length > 0 then {
-            dargs.append ", "
-            dargs.append vo
-        }
-        wi = wi + 1
-    }
-    orderEnd order: ctx.order st: ord
-    return prefix
 }
 
 # orderDispatchArg -- one written argument of a vtable call, built in evaluation
@@ -4785,13 +4748,10 @@ emitProtocolDispatch: function {
         acc: acc.stringView
         isFacet: (prog.reg.typetypeOf typeId: rtid) == ztypes.ztypetype.facetType
     )
+    # a dispatch call has arguments, so its method has slots for them: one that
+    # takes its receiver alone is auto-called, on another path
     vpn: dispatchSlotNames :prog :rtid :mnId
-    prefix: String
-    if vpn.length > 0 then {
-        prefix = appendSlottedDispatchArgs :prog :ctx :call :vpn :dargs
-    } else {
-        prefix = appendPlainDispatchArgs :prog :ctx :call :dargs
-    }
+    prefix: appendSlottedDispatchArgs :prog :ctx :call :vpn :dargs
     dslot: memberC :prog :ctx owner: rtid kind: memberkind.slot nameId: mnId
     return (
         stating
