@@ -4038,21 +4038,35 @@ checkRegularCall: function {
         reportValueCalledWithArgs :st :unitDecl :ast :call
         return ztypes.tid.zero
     }
+    ctorTid: bareCtorTypeOf :st :call tid: ck.fid
     typedefBase: ztypes.tid
-    if ck.isCtor then typedefBase = typedefBaseOf :st tid: ck.fid
+    if ck.isCtor then typedefBase = typedefBaseOf :st tid: ctorTid
     # the callable names the typedef it builds, stamped as any construction's is
     if typedefBase.notZero then (
         stampGate
         :st
         nid: (nodeId n: (ast.nodes.get i: call.callable))
-        tid: ck.fid
+        tid: ctorTid
     )
-    if typedefBase.notZero then return (checkTypedefCreate :st :unitDecl :ast :call tdId: ck.fid)
+    if typedefBase.notZero then return (checkTypedefCreate :st :unitDecl :ast :call tdId: ctorTid)
     if ck.isUser then {
         return (checkUserFnCall :st :unitDecl :ast :call funcId: ck.fid isCtor: ck.isCtor :cnId)
     }
     nleg: checkNonUserCall :st :unitDecl :ast :call funcId: ck.fid isGen: ck.isGen :cnId
     return nleg.tid
+}
+
+# bareCtorTypeOf -- the type a bare callee `tid` builds when it constructs: a
+# numeric generic parameter written with arguments is, on an instance walk,
+# that instance's singleton type, whose create takes none; any other callee
+# builds its own type.
+bareCtorTypeOf: function {
+    st: zenv.ZSymbolTable.view call: callref tid: ztypes.tid
+} out ztypes.tid is {
+    if call.nargs == 0 then return tid
+    sgt: instantiate.monoSubstTid :st :tid
+    if (st.typing.isSingletonType tid: sgt) then return sgt
+    return tid
 }
 
 # holderslot -- which generic-parameter HOLDER an argument binds, and which
