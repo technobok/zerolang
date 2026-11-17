@@ -272,14 +272,15 @@ a007Check: function {g: Gate.view srcs: (List String).view} out u64 is {
             hits.append (rest.substring from: 0 to: colon).string
         }
     }
-    baseline: zjobs.slurp path: "\{g.repo}/tests/fixtures/arch_baseline.txt".stringView
+    bp: "\{g.repo}/tests/fixtures/arch_baseline.zd"
+    baseline: (zd.read path: bp.stringView).orPanic
     bad: u64
     for each f: srcs loop {
         nn: u64
         for each h: hits loop {
             if h == f then nn = nn + 1
         }
-        nb: baselineRow text: baseline.stringView code: "A007" file: f.stringView
+        nb: baselineRow doc: baseline code: "A007" file: f.stringView
         if nn > nb then {
             print "A007    \{f}: \{nb} -> \{nn} (an export no other unit reads)"
             bad = bad + 1
@@ -310,16 +311,14 @@ srcFiles: function {g: Gate.view} out List String is {
     return l
 }
 
-# baselineRow -- the count the arch baseline `text` holds for `code` and
-# `file`; 0 when it has no such row
-baselineRow: function {text: StringView code: StringView file: StringView} out u64 is {
-    for each ln: text.lines loop {
-        cols: wordsOf text: ln
-        if cols.length == 3 when (cols.get i: 0).stringView == code when (
-            (cols.get i: 1).stringView == file
+# baselineRow -- the count the arch baseline `doc` holds for `code` and `file`;
+# 0 when it has no such row
+baselineRow: function {doc: zd.Entry.view code: StringView file: StringView} out u64 is {
+    for each row: (doc.itemsAt path: "rows").orPanic loop {
+        if (row.textAt path: "rule").orPanic == code when (
+            (row.textAt path: "file").orPanic == file
         ) then {
-            n: (cols.get i: 2).stringView.parseU64
-            if n.ok then return n
+            return (row.integerAt path: "count").orPanic.u64.orPanic
         }
     }
     return 0

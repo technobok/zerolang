@@ -710,12 +710,12 @@ Runner: class {
 
 # runArchCases -- the architecture ratchet. `zl lint --full --arch` over every
 # compiler and front-end unit, counted per (rule, file) and compared with
-# tests/fixtures/arch_baseline.txt, exactly (ratchetCheck, ratchetStale): a
+# tests/fixtures/arch_baseline.zd, exactly (ratchetCheck, ratchetStale): a
 # count above its baseline is a new finding and fails; a count below it fails
 # until its row is lowered in the same commit; a row no finding meets is spent
 # and fails until deleted; a file with no baseline row must be clean.
 runArchCases: function {r: Runner} is {
-    basePath: "\{r.root.stringView}/tests/fixtures/arch_baseline.txt"
+    basePath: "\{r.root.stringView}/tests/fixtures/arch_baseline.zd"
     if (io.exists path: basePath).not then {
         r.skip = r.skip + 1
         return
@@ -1017,7 +1017,7 @@ appendPrograms: function {progs: List String dir: StringView} is {
 # block is also built and run, and must print that text. A checked block
 # that parses -- every one but an error= of a syntax error (E00xx) -- must also
 # be laid out as `zl fmt` lays it. The skipped and the unformatted are counted
-# per page and ratcheted, exactly, against tests/fixtures/doccode_baseline.txt
+# per page and ratcheted, exactly, against tests/fixtures/doccode_baseline.zd
 # as the arch kind's findings are. The C each emit writes is compiled, and not
 # linked, by the runner's C compiler. The kind runs once, and not again under
 # --cc-forward (test-clang, test-tcc): the emit is nearly all of its time.
@@ -1397,9 +1397,9 @@ emitVerdict: function {status: i32 errText: StringView want: StringView} out Str
 }
 
 # doccodeRatchet -- the per-page counts of skipped and unformatted blocks
-# against tests/fixtures/doccode_baseline.txt (rows `none <page> N` and `fmt
-# <page> N`), exactly. A page whose fmt count moved lists its unformatted
-# blocks. True when anything failed.
+# against tests/fixtures/doccode_baseline.zd (its rows of rule `none` and
+# `fmt`, one per page), exactly. A page whose fmt count moved lists its
+# unformatted blocks. True when anything failed.
 doccodeRatchet: function {
     pages: (List String).view
     blocks: (List zdocblocks.DocBlock).view
@@ -1409,7 +1409,7 @@ doccodeRatchet: function {
     statuses: (ListVal i32).view
     root: StringView
 } out bool is {
-    basePath: "\{root}/tests/fixtures/doccode_baseline.txt"
+    basePath: "\{root}/tests/fixtures/doccode_baseline.zd"
     baseKeys: List String
     baseCounts: ListVal u64
     readRatchetBaseline path: basePath.stringView keys: baseKeys counts: baseCounts
@@ -1807,37 +1807,17 @@ archSrcFiles: function {root: StringView into: List String} is {
     } case err then null
 }
 
-# readRatchetBaseline -- parse a ratchet baseline into parallel key / count lists, a key
-# being "<code> <file>". Comment lines and short rows are skipped. Both ratchets, arch
-# and docs, read the same three-column format, so they read it through here.
+# readRatchetBaseline -- a ratchet baseline (a data file, tests/fixtures/*_baseline.zd)
+# as parallel key / count lists, a key being "<rule> <file>" of each `row` of its
+# `rows`. The arch, doc and doccode ratchets read the one row type through here.
 readRatchetBaseline: function {path: StringView keys: List String counts: ListVal u64} is {
-    bC: slurp :path
-    for each bl: bC.stringView.lines loop {
-        if bl.length > 0 when (bl.startsWith prefix: "#").not then {
-            k0: String
-            k1: String
-            cnt: u64
-            idx: u64
-            for each pc: (bl.split sep: " ") loop {
-                if pc.length > 0 then {
-                    if idx == 0 then k0 = pc.string
-                    if idx == 1 then k1 = pc.string
-                    if idx == 2 then {
-                        pv: pc.parseI64
-                        match (
-                            pv
-                        ) case ok then {
-                            cnt = pv.u64.orPanic
-                        } case err then null
-                    }
-                    idx = idx + 1
-                }
-            }
-            if idx >= 3 then {
-                keys.append from: "\{k0.stringView} \{k1.stringView}"
-                counts.append from: cnt
-            }
-        }
+    doc: (zd.read :path).orPanic
+    for each row: (doc.itemsAt path: "rows").orPanic loop {
+        (
+            keys.append
+            from: "\{(row.textAt path: "rule").orPanic} \{(row.textAt path: "file").orPanic}"
+        )
+        counts.append from: (row.integerAt path: "count").orPanic.u64.orPanic
     }
 }
 
@@ -1855,7 +1835,7 @@ docRatchetCode: function {code: StringView} out bool is {
 
 # runDocCases -- the documentation ratchet. `zl lint --docs-all` over every compiler,
 # stdlib and front-end unit, counted per (rule, file) and compared with
-# tests/fixtures/doc_baseline.txt: a count above its baseline is a newly undocumented
+# tests/fixtures/doc_baseline.zd: a count above its baseline is a newly undocumented
 # member -- or a new doc that only re-says its declaration -- and fails; a count below
 # fails until its row is lowered, and a spent row until it is deleted (the same exact
 # ratchet as the arch kind). Heavy: it is a full-corpus lint pass,
@@ -1863,7 +1843,7 @@ docRatchetCode: function {code: StringView} out bool is {
 # walk tests/unit: a test driver is not the corpus a reader learns the language from.
 runDocCases: function {r: Runner} is {
     if r.heavy.not then return
-    basePath: "\{r.root.stringView}/tests/fixtures/doc_baseline.txt"
+    basePath: "\{r.root.stringView}/tests/fixtures/doc_baseline.zd"
     if (io.exists path: basePath).not then {
         r.skip = r.skip + 1
         return

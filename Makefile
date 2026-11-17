@@ -144,7 +144,7 @@ ZLSCOPE := src/*.z $(SRC_SUBUNITS) lib/system/*.z lib/system/system/*.z lib/syst
 # gives each tree its own roots.
 ZLFULLSCOPE := src/*.z $(SRC_SUBUNITS) lib/system/*.z lib/system/system/*.z lib/system/math/*.z
 # What the formatter checks; tests/fixtures/ is input and stays as written.
-FMTSCOPE := src/*.z $(SRC_SUBUNITS) lib/system/*.z lib/system/system/*.z lib/system/math/*.z examples/*.z tests/unit/*.z tests/unit/matrixgen/*.z $(TOOLSRC) lib/system/*.zd project.zd tests/fixtures/zdata/zd_written.zd tests/known/*.zd
+FMTSCOPE := src/*.z $(SRC_SUBUNITS) lib/system/*.z lib/system/system/*.z lib/system/math/*.z examples/*.z tests/unit/*.z tests/unit/matrixgen/*.z $(TOOLSRC) lib/system/*.zd project.zd tests/fixtures/zdata/zd_written.zd tests/known/*.zd tests/fixtures/*_baseline.zd
 
 all: bin/zc bin/zl bin/zls
 
@@ -152,7 +152,7 @@ all: bin/zc bin/zl bin/zls
 check: style-lint-fast complexity-report
 
 # complexity-report -- every function over A008's threshold, highest first, into
-# $(COMPLEXITY_TSV); the per-file ratchet is tests/fixtures/arch_baseline.txt.
+# $(COMPLEXITY_TSV); the per-file ratchet is tests/fixtures/arch_baseline.zd.
 COMPLEXITY_SCOPE := src/*.z $(SRC_SUBUNITS) lib/system/*.z lib/system/system/*.z lib/system/math/*.z tests/unit/*.z tests/unit/matrixgen/*.z examples/*.z $(TOOLSRC)
 COMPLEXITY_TSV := $(BUILDDIR)/cognitive-complexity.tsv
 complexity-report: bin/zl
@@ -199,12 +199,12 @@ test: bin/zc bin/zl bin/zls bin/zgate $(BUILDDIR)/ztestrunner $(BUILDDIR)/tcc
 # doc-check -- the doccode kind alone: every zerolang example in docs/*.pdoc and
 # README.md emits with `zc emit --eager` (or fails as its expect= says) and is
 # laid out as zl fmt lays it, with check=none and unformatted blocks ratcheted in
-# tests/fixtures/doccode_baseline.txt. `make test` runs it too.
+# tests/fixtures/doccode_baseline.zd. `make test` runs it too.
 doc-check: bin/zc bin/zl $(BUILDDIR)/ztestrunner
 	$(BUILDDIR)/ztestrunner --zc bin/zc --cc $(CC) --root . --jobs $(NPROC) --only doccode
 
 # arch-check -- the arch kind alone: `zl lint --full --arch --counts` over the
-# compiler and front-end units against tests/fixtures/arch_baseline.txt, in
+# compiler and front-end units against tests/fixtures/arch_baseline.zd, in
 # seconds. `make test` runs it too.
 arch-check: bin/zc bin/zl $(BUILDDIR)/ztestrunner
 	$(BUILDDIR)/ztestrunner --zc bin/zc --cc $(CC) --root . --jobs $(NPROC) --only arch
