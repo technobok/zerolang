@@ -1243,11 +1243,13 @@ convOk: function {value: StringView} out String is {
 }
 
 # convFloatToFloat -- a float -> float conversion. Overflowing to infinity when
-# the source was finite is out of range; anything that does not survive the
-# round trip back to the source type lost precision.
+# the source was finite is out of range; a number that does not survive the
+# round trip back to the source type lost precision. A NaN converts to a NaN,
+# as an infinity converts to an infinity: every float type holds both, and the
+# round trip, which no NaN survives, tests numbers only.
 convFloatToFloat: function {scT: StringView tcT: StringView} out String is {
     f: "(\{tcT})(@V@)"
-    b: "((isinf(\{f}) && !isinf(@V@)) ? \{convErr arm: "outOfRange"} : (\{scT}) \{f} != (@V@) ? \{(convErr
+    b: "((isinf(\{f}) && !isinf(@V@)) ? \{convErr arm: "outOfRange"} : (!isnan(@V@) && (\{scT}) \{f} != (@V@)) ? \{(convErr
         arm: "precisionLoss"
     )} : \{convOk value: f.stringView})"
     return b
@@ -1308,8 +1310,10 @@ convMagExpr: function {signed: bool wide: bool needs: List String} out String is
 # convIntToFloat -- an integer -> float conversion. It is exact when the
 # magnitude's significant span -- highest set bit down to lowest -- fits the
 # destination's mantissa, so the test counts the span rather than comparing
-# values. f16 also has a range bound, which no other float here is narrow
-# enough to need.
+# values. A magnitude the conversion would round past the largest finite value
+# is out of range, as a float's is in convFloatToFloat: from 65520 (2^16 - 2^4)
+# up for f16, and from 2^128 - 2^103 up for f32, which only a u128 reaches.
+# Below those bounds no inexact magnitude has a span that fits.
 convIntToFloat: function {
     srcK: ztypes.numkind
     dstK: ztypes.numkind
@@ -1326,19 +1330,33 @@ convIntToFloat: function {
     } else {
         convNeed :needs piece: "@span64"
     }
-    rangeAnd: String
-    if dstK == ztypes.numkind.f16Type then {
-        rangeAnd = " && \{mag} <= 65504"
-        if wide then {
-            rangeAnd = " && !z_u128_lt(Z_U128_U64(65504), \{mag})"
-            convNeed :needs piece: "@u128_lt"
-            convNeed :needs piece: "@u128_u64"
-        }
-    }
-    n: "((\{span} <= \{p}\{rangeAnd}) ? \{convOk value: okValue} : \{(convErr
+    over: convIntOverflow :srcK :dstK mag: mag.stringView :needs
+    n: "((\{span} <= \{p}) ? \{convOk value: okValue} : \{(convErr
         arm: "precisionLoss"
     )})"
+    if over.length > 0 then n = "((\{over}) ? \{convErr arm: "outOfRange"} : \{n})"
     return n
+}
+
+# convIntOverflow -- the C test that an integer's magnitude `mag` rounds past
+# the destination float's largest finite value, or "" when no magnitude of the
+# source can: f16 from 65520 up, f32 from 2^128 - 2^103 up -- the top 25 bits
+# of a u128 all set, read as its high half shifted down by 39.
+convIntOverflow: function {
+    srcK: ztypes.numkind dstK: ztypes.numkind mag: StringView needs: List String
+} out String is {
+    wide: (srcK == ztypes.numkind.i128Type) or (srcK == ztypes.numkind.u128Type)
+    if dstK == ztypes.numkind.f16Type then {
+        if wide.not then return "\{mag} >= 65520"
+        convNeed :needs piece: "@u128_lt"
+        convNeed :needs piece: "@u128_u64"
+        return "!z_u128_lt(\{mag}, Z_U128_U64(65520))"
+    }
+    if (dstK == ztypes.numkind.f32Type) and (srcK == ztypes.numkind.u128Type) then {
+        convNeed :needs piece: "@u128_hi"
+        return "(z_u128_hi(\{mag}) >> 39) == 0x1FFFFFFu"
+    }
+    return "".string
 }
 
 # convRange128 -- convRangeCond for a 128-bit SOURCE, whose value is no C
@@ -1511,8 +1529,8 @@ convHalfCast: function {
 
 # convFloatToHalf -- a float -> f16 conversion, convFloatToFloat's test through
 # the f16 helpers: rounded once from the source, out of range when that made an
-# infinity of a finite value, precision lost when it does not read back. `scT`
-# is the type the source is read as.
+# infinity of a finite value, precision lost when a number does not read back,
+# and a NaN a NaN. `scT` is the type the source is read as.
 convFloatToHalf: function {srcK: ztypes.numkind scT: StringView needs: List String} out String is {
     from: "z_f16_from_f64"
     if (ztypes.mantissaOf k: srcK) == 24 then from = "z_f16_from_f32"
@@ -1522,7 +1540,7 @@ convFloatToHalf: function {srcK: ztypes.numkind scT: StringView needs: List Stri
     convNeed :needs piece: "@f16_to_f32"
     b: "((isinf(z_f16_to_f32(\{h})) && !isinf(@V@)) ? \{(convErr
         arm: "outOfRange"
-    )} : (\{scT})z_f16_to_f32(\{h}) != (@V@) ? \{(convErr
+    )} : (!isnan(@V@) && (\{scT})z_f16_to_f32(\{h}) != (@V@)) ? \{(convErr
         arm: "precisionLoss"
     )} : \{convOk value: h.stringView})"
     return b
