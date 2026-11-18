@@ -3317,6 +3317,7 @@ emitResultCombinator: function {
     payArmId: zast.wellKnown.slot.wkOk
     if isOpt then payArmId = zast.wellKnown.slot.wkSome
     recvExprF: exprfacts
+    recvMark: pendingHoistMark stmt: ctx.stmt
     recvExpr: argforms.valueExprC :prog :ctx n: (prog.ast.nodes.get i: bnid) facts: recvExprF
     if recvExpr.length == 0 then return "".string
     okTag: spelledTagConst :prog :ctx tid: rtid armId: payArmId
@@ -3339,27 +3340,54 @@ emitResultCombinator: function {
     if a.namedoperation then opId = a.operation
     if opId.isZero then return "".string
     dExprF: exprfacts
+    dMark: pendingHoistMark stmt: ctx.stmt
     dExpr: argforms.valueExprC :prog :ctx n: (prog.ast.nodes.get i: opId) facts: dExprF
     if dExpr.length == 0 then return "".string
     payC: memberC :prog :ctx owner: rtid kind: memberkind.arm nameId: payArmId
-    # the receiver is read for its tag and then its payload
+    # the receiver is read for its tag and then its payload, and the default is
+    # an argument: it is evaluated, after the receiver, whichever arm the
+    # result holds. Each is read into its temp unless that costs nothing.
     rcCType: "\{rcT}_t"
-    pre: String
-    spelled: (
-        orderOnePart
+    ord: callorder.orderBegin order: ctx.order slots: 2
+    argforms.orderNamesTwice st: ord slot: 0
+    argforms.orderNamesTwice st: ord slot: 1
+    (
+        callorder.orderPartWith
         :prog
         :ctx
-        mark: (pendingHoistMark stmt: ctx.stmt)
+        st: ord
+        mark: recvMark
         text: recvExpr
         tf: recvExprF
-        nid: bnid
-        ctype: rcCType.stringView
         constant: false
-        twice: true
-        prefix: pre
+        fid: ztypes.tid
+        pid: ztypes.tid.zero
+        pname: zast.nameid
+        ctype: rcCType.stringView
+        slot: 0
+        valueNid: bnid
     )
-    r: spelled.stringView
-    ro: "(\{r}.tag == \{okTag.stringView} ? \{r}.data.\{payC} : (\{dExpr.stringView}))"
+    (
+        callorder.orderPartWith
+        :prog
+        :ctx
+        st: ord
+        mark: dMark
+        text: dExpr
+        tf: dExprF
+        constant: false
+        fid: ztypes.tid
+        pid: ztypes.tid.zero
+        pname: zast.nameid
+        ctype: ""
+        slot: 1
+        valueNid: opId
+    )
+    pre: callorder.orderFinish order: ctx.order st: ord
+    r: (callorder.orderSlotText t: ctx st: ord slot: 0).string
+    d: (callorder.orderSlotText t: ctx st: ord slot: 1).string
+    callorder.orderEnd order: ctx.order st: ord
+    ro: "(\{r}.tag == \{okTag.stringView} ? \{r}.data.\{payC} : (\{d}))"
     return (stating :facts from: callFacts text: (orderWrap prefix: pre call: ro))
 }
 
