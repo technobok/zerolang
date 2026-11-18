@@ -1242,6 +1242,17 @@ convOk: function {value: StringView} out String is {
     return o
 }
 
+# srcFiniteC -- the C test that a float source is a finite number: `x - x` is 0
+# for every finite x and a NaN for an infinity or a NaN. libm's isinf and
+# isnan take float, double and long double only (mingw's traps on any other
+# type), and a source may be an f128, so its tests are arithmetic, which every
+# float type answers the same way.
+srcFiniteC: "(((@V@) - (@V@)) == 0)"
+
+# srcNumberC -- the C test that a float source is a number: a NaN is the one
+# value unequal to itself
+srcNumberC: "((@V@) == (@V@))"
+
 # convFloatToFloat -- a float -> float conversion. Overflowing to infinity when
 # the source was finite is out of range; a number that does not survive the
 # round trip back to the source type lost precision. A NaN converts to a NaN,
@@ -1249,7 +1260,7 @@ convOk: function {value: StringView} out String is {
 # round trip, which no NaN survives, tests numbers only.
 convFloatToFloat: function {scT: StringView tcT: StringView} out String is {
     f: "(\{tcT})(@V@)"
-    b: "((isinf(\{f}) && !isinf(@V@)) ? \{convErr arm: "outOfRange"} : (!isnan(@V@) && (\{scT}) \{f} != (@V@)) ? \{(convErr
+    b: "((isinf(\{f}) && \{srcFiniteC}) ? \{convErr arm: "outOfRange"} : (\{srcNumberC} && (\{scT}) \{f} != (@V@)) ? \{(convErr
         arm: "precisionLoss"
     )} : \{convOk value: f.stringView})"
     return b
@@ -1538,9 +1549,9 @@ convFloatToHalf: function {srcK: ztypes.numkind scT: StringView needs: List Stri
     h: "\{from}(@V@)"
     convNeedCall :needs call: h.stringView
     convNeed :needs piece: "@f16_to_f32"
-    b: "((isinf(z_f16_to_f32(\{h})) && !isinf(@V@)) ? \{(convErr
+    b: "((isinf(z_f16_to_f32(\{h})) && \{srcFiniteC}) ? \{(convErr
         arm: "outOfRange"
-    )} : (!isnan(@V@) && (\{scT})z_f16_to_f32(\{h}) != (@V@)) ? \{(convErr
+    )} : (\{srcNumberC} && (\{scT})z_f16_to_f32(\{h}) != (@V@)) ? \{(convErr
         arm: "precisionLoss"
     )} : \{convOk value: h.stringView})"
     return b
