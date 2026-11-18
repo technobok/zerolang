@@ -1,0 +1,225 @@
+# covdata -- what a coverage run measured, read from gcov's JSON report of a
+# zc built with `--line-marks`: for each zerolang file the times each line
+# ran, and for each zerolang function the times it was entered. The C a
+# statement or a function is written as counts on its source line, and an
+# instance of a generic counts on the lines of its definition, so the report
+# names source lines although gcov counted C. The C that comes from no
+# statement (the runtime, the types, the helpers zc writes itself) is under the
+# C file's own name, and is left out here. A subunit of zgate.
+
+# SourceFile -- one zerolang file of the build
+SourceFile: class {
+    # as the report names it: the path a diagnostic shows, from the repository
+    path: String
+    # by line number: the times the line's C ran, added up; -1 for a line no C
+    # is counted on (and for index 0)
+    counts: ListVal i64
+}
+
+# Coverage -- the files, and the functions in four lists side by side: a
+# function is the definition at one line of one file, whatever C it was
+# written as
+Coverage: class {
+    files: List SourceFile
+    # the function's file, an index of `files`
+    fnFile: ListVal u64
+    # the line its definition starts on
+    fnLine: ListVal u64
+    # its name as the source writes it, `Owner.name` for one written inside
+    # another definition
+    fnName: List String
+    # the times it was entered, all its C functions together
+    fnCalls: ListVal i64
+}
+
+# noCode -- a line's count when no C is counted on it
+noCode: -1
+
+# load -- the Coverage in gcov's report `text`, its functions named from the
+# sources under `repo`; empty for a report that does not parse
+load: function {repo: StringView text: StringView} out Coverage is {
+    cov: (
+        Coverage
+        files: List SourceFile
+        fnFile: ListVal u64
+        fnLine: ListVal u64
+        fnName: List String
+        fnCalls: ListVal i64
+    )
+    pr: json.parse source: text
+    match (
+        pr
+    ) case err then null case ok then {
+        n: (json.at v: pr path: "files").n
+        i: u64
+        for i < n loop {
+            at: "files/\{i}"
+            loadFile :cov :repo root: pr at: at.stringView
+            i = i + 1
+        }
+    }
+    return cov
+}
+
+# loadFile -- the report's file at `at`, when it is a zerolang one
+loadFile: function {cov: Coverage repo: StringView root: json.Value.view at: StringView} is {
+    key: "\{at}/file"
+    named: json.textAt v: root path: key.stringView
+    file: String
+    match (
+        named
+    ) case some then {
+        file = named.copy
+    } case none then null
+    if (file.stringView.endsWith suffix: ".z").not then return
+    counts: ListVal i64
+    all: "\{at}/lines"
+    n: (json.at v: root path: all.stringView).n
+    i: u64
+    for i < n loop {
+        numKey: "\{all}/\{i}/line_number"
+        countKey: "\{all}/\{i}/count"
+        (
+            addCount
+            :counts
+            num: ((json.intAt v: root path: numKey.stringView).or d: 0)
+            count: ((json.intAt v: root path: countKey.stringView).or d: 0)
+        )
+        i = i + 1
+    }
+    fi: cov.files.length
+    src: sourceLines path: "\{repo}/\{file}".stringView
+    cov.files.append (SourceFile path: file.take :counts)
+    loadFns :cov :root :at file: fi :src
+}
+
+# addCount -- `count` more for line `num` of `counts`, grown to hold it
+addCount: function {counts: ListVal i64 num: i64 count: i64} is {
+    if num < 1 then return
+    at: num.u64.orPanic
+    for counts.length <= at loop counts.append noCode
+    old: counts.get i: at
+    if old == noCode then old = 0
+    counts.set i: at val: old + count
+}
+
+# loadFns -- the functions of the report's file at `at`, which is file `file`
+# of `cov` and reads `src`. gcov lists one for each C function: the instances
+# of a generic start on one line and are one function here.
+loadFns: function {
+    cov: Coverage
+    root: json.Value.view
+    at: StringView
+    file: u64
+    src: (List String).view
+} is {
+    first: cov.fnLine.length
+    all: "\{at}/functions"
+    n: (json.at v: root path: all.stringView).n
+    i: u64
+    for i < n loop {
+        lineKey: "\{all}/\{i}/start_line"
+        callsKey: "\{all}/\{i}/execution_count"
+        line: ((json.intAt v: root path: lineKey.stringView).or d: 0).u64.orPanic
+        calls: (json.intAt v: root path: callsKey.stringView).or d: 0
+        k: first
+        for k < cov.fnLine.length while (cov.fnLine.get i: k) != line loop k = k + 1
+        if k < cov.fnLine.length then {
+            cov.fnCalls.set i: k val: (cov.fnCalls.get i: k) + calls
+        } else {
+            cov.fnFile.append file
+            cov.fnLine.append line
+            cov.fnName.append (nameAt :src :line)
+            cov.fnCalls.append calls
+        }
+        i = i + 1
+    }
+}
+
+# sourceLines -- the lines of the file at `path`; none when it cannot be read
+sourceLines: function {path: StringView} out List String is {
+    lines: List String
+    text: zjobs.slurp :path
+    for each ln: text.stringView.lines loop lines.append ln.string
+    return lines
+}
+
+# nameAt -- the name of the function whose definition starts on `line` of
+# `src`: what stands before `: function` there, after the name of the
+# definition it is written inside when the line is indented. `(line N)` when
+# the line holds no such definition.
+nameAt: function {src: (List String).view line: u64} out String is {
+    if (line == 0) or (line > src.length) then return "(line \{line})"
+    text: (src.get i: line - 1).stringView
+    cut: text.indexOf needle: ": function"
+    if cut.none then return "(line \{line})"
+    name: (text.substring from: 0 to: cut).trim.string
+    if (text.startsWith prefix: " ").not then return name
+    k: line - 1
+    for k > 0 loop {
+        k = k - 1
+        above: (src.get i: k).stringView
+        if (startsDefinition t: above) then {
+            colon: (above.indexOf needle: ":").or d: 0
+            return "\{above.substring from: 0 to: colon}.\{name}"
+        }
+    }
+    return name
+}
+
+# startsDefinition -- the source line `t` starts a definition at the left
+# margin: it is not blank, a comment, or the close of a block, and it names
+# something
+startsDefinition: function {t: StringView} out bool is {
+    if t.length == 0 then return false
+    if (t.startsWith prefix: " ") or (t.startsWith prefix: "#") then return false
+    if (t.startsWith prefix: "}") or (t.startsWith prefix: ")") then return false
+    return (t.contains needle: ":")
+}
+
+# nextFnLine -- the line the next function of file `file` after line `line`
+# starts on; one past the file's last counted line when there is none
+nextFnLine: function {cov: Coverage.view file: u64 line: u64} out u64 is {
+    best: (cov.files.get i: file).counts.length
+    i: u64
+    for i < cov.fnLine.length loop {
+        l: cov.fnLine.get :i
+        if (cov.fnFile.get :i) == file when l > line when l < best then best = l
+        i = i + 1
+    }
+    return best
+}
+
+# LineCount -- counted lines, and how many of them ran
+LineCount: class {
+    counted: u64
+    ran: u64
+}
+
+# linesIn -- the counted lines of file `file` from line `from` up to, not
+# including, line `to`
+linesIn: function {cov: Coverage.view file: u64 from: u64 to: u64} out LineCount is {
+    c: LineCount counted: 0 ran: 0
+    counts: (cov.files.get i: file).counts
+    i: from
+    for i < to while i < counts.length loop {
+        n: counts.get :i
+        if n != noCode then c.counted = c.counted + 1
+        if n > 0 then c.ran = c.ran + 1
+        i = i + 1
+    }
+    return c
+}
+
+# fileIndex -- the file of `cov` at `path`, or whose path ends in `/path`;
+# their count when none is
+fileIndex: function {cov: Coverage.view path: StringView} out u64 is {
+    tail: "/\{path}"
+    i: u64
+    for i < cov.files.length loop {
+        p: (cov.files.get :i).path.stringView
+        if (p == path) or (p.endsWith suffix: tail) then return i
+        i = i + 1
+    }
+    return cov.files.length
+}

@@ -18,6 +18,12 @@
 #   perf report ZC | strict ZC BASELINE | elision KEPT LEFT
 #                         the self-compile's numbers the Makefile's perf
 #                         targets print, measured and judged
+#   coverage OUT [--check FILE] [--write FILE]
+#                         what the test suite runs of zc, by zerolang line and
+#                         function, and the list of functions no test enters
+#   covprobe OUT FILE.z TARGET...
+#                         whether compiling FILE.z reaches each TARGET, with
+#                         the coverage build in OUT
 # The repository is the current directory, or --repo DIR. Snapshots, the run
 # lock and scratch files live in $ZGATE_HOME (~/.cache/zerolang/gate when it is
 # not set). The worktree a run or a timing makes stands beside the repository,
@@ -42,6 +48,8 @@ command: list {
     perf: "perf"
     windowsDue: "windows-due"
     windowsRecord: "windows-record"
+    coverage: "coverage"
+    covprobe: "covprobe"
     help: "help"
 } out staticlist StringView
 
@@ -54,6 +62,8 @@ opt: list {
     refSystem: "--ref-system"
     cc: "--cc"
     opt: "--opt"
+    check: "--check"
+    write: "--write"
 } out staticlist StringView
 
 # PoolStep, PoolJob -- a spawn of a job and a job, of the job pool (zjobs)
@@ -90,6 +100,11 @@ printUsage: function is {
     io.eprintln "                           the self-compile's numbers, measured and judged"
     io.eprintln "  windows-due FILE DAYS TOUCHED PATH...  whether make ci-windows is due again"
     io.eprintln "  windows-record FILE      FILE written for HEAD: the record of a green ci-windows"
+    io.eprintln "  coverage OUT [--check FILE] [--write FILE]"
+    io.eprintln "                           what the test suite runs of zc, by zerolang line and"
+    io.eprintln "                           function; FILE lists the functions no test enters"
+    io.eprintln "  covprobe OUT FILE.z TARGET...  whether compiling FILE.z reaches each TARGET (a"
+    io.eprintln "                           function's name, or path.z:LINE), with OUT's build"
     io.eprintln "The repository is the current directory, or --repo DIR; snapshots and the run"
     io.eprintln "lock live in $ZGATE_HOME (default ~/.cache/zerolang/gate)."
 }
@@ -145,6 +160,8 @@ runCommand: function {which: u64 args: (List String).take} out i32 is {
     if which == command.slot.perf then return (perf.runPerfCommand :g p: pr)
     if which == command.slot.windowsDue then return (windows.runWindowsDue :g p: pr)
     if which == command.slot.windowsRecord then return (windows.runWindowsRecord :g p: pr)
+    if which == command.slot.coverage then return (coverage.runCoverageCommand :g p: pr)
+    if which == command.slot.covprobe then return (coverage.runProbeCommand :g p: pr)
     return (timing.runTimeCommand :g p: pr)
 }
 
@@ -190,6 +207,13 @@ specOf: function {which: u64} out cli.Spec is {
         addOperand :sp name: "DAYS" required: true
         addOperand :sp name: "TOUCHED" required: true
     } else if which == command.slot.windowsRecord then {
+        addOperand :sp name: "FILE" required: true
+    } else if which == command.slot.coverage then {
+        addOperand :sp name: "OUT" required: true
+        addValue :sp name: opt.check
+        addValue :sp name: opt.write
+    } else if which == command.slot.covprobe then {
+        addOperand :sp name: "OUT" required: true
         addOperand :sp name: "FILE" required: true
     }
     return sp

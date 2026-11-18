@@ -1,0 +1,343 @@
+# covreport -- what is written from a coverage run's data (covdata): the
+# report OUT/coverage.md, the list of the functions no test enters
+# (tests/known/coverage.zd) with its check, and covprobe's answers. A function
+# is named by its file and its name; where two definitions of a file share
+# both, they are judged together: entered when either is. A subunit of zgate.
+
+# Coverage -- a coverage run's data
+Coverage: covdata.Coverage
+
+# knownHeader -- the comment that heads the list of functions no test enters
+knownHeader: "# coverage -- the functions of zc that no test enters: the build of `make\n# coverage` holds them, and nothing the suite runs calls them. `make\n# coverage-check` (a leg of make ci) fails on a function not listed here that\n# no test enters: add a test that reaches it, or delete it when nothing can.\n# It fails on a listed one too, when a test enters it now or the build no\n# longer holds it: delete its line in the same change. `why` says what is\n# known of it; `untriaged` is a function nobody has looked at yet. `make\n# coverage-known` writes this file from a run and keeps each `why`."
+
+# knownSchema -- the row type of that list
+knownSchema: "# unentered -- one function no test enters: its file, and its name as the\n# source writes it (`Owner.name` for one written inside another definition)\nunentered: data {\n    file: text\n    name: text\n    why: text\n}"
+
+# untriaged -- the `why` of a function nobody has looked at yet
+untriaged: "untriaged"
+
+# shown -- how many functions the report lists as least covered
+shown: 40
+
+# percent -- `part` of `whole` in tenths of a percent, written `12.3%`
+percent: function {part: u64 whole: u64} out String is {
+    if whole == 0 then return "-".string
+    tenths: part * 1000 / whole
+    return "\{tenths / 10}.\{tenths % 10}%"
+}
+
+# totals -- the counted lines of every file, and how many ran
+totals: function {cov: Coverage.view} out covdata.LineCount is {
+    t: covdata.LineCount counted: 0 ran: 0
+    i: u64
+    for i < cov.files.length loop {
+        c: covdata.linesIn :cov file: i from: 0 to: (cov.files.get :i).counts.length
+        t.counted = t.counted + c.counted
+        t.ran = t.ran + c.ran
+        i = i + 1
+    }
+    return t
+}
+
+# entered -- function `i`, or another of its file with its name, was entered
+entered: function {cov: Coverage.view i: u64} out bool is {
+    if (cov.fnCalls.get :i) > 0 then return true
+    file: cov.fnFile.get :i
+    name: (cov.fnName.get :i).stringView
+    k: u64
+    for k < cov.fnLine.length loop {
+        if (cov.fnFile.get i: k) == file when (cov.fnCalls.get i: k) > 0 when (
+            (cov.fnName.get i: k).stringView == name
+        ) then return true
+        k = k + 1
+    }
+    return false
+}
+
+# keyOf -- function `i` as the list names it: `<file> <name>`
+keyOf: function {cov: Coverage.view i: u64} out String is {
+    return "\{(cov.files.get i: (cov.fnFile.get :i)).path} \{cov.fnName.get :i}"
+}
+
+# functionKeys -- the functions of `cov` by key, each once, sorted: the ones
+# no test enters when `unentered`, else all of them
+functionKeys: function {cov: Coverage.view unentered: bool} out List String is {
+    keys: List String
+    i: u64
+    for i < cov.fnLine.length loop {
+        if unentered.not or (entered :cov :i).not then {
+            key: keyOf :cov :i
+            if (keys.contains item: key).not then keys.append key.take
+        }
+        i = i + 1
+    }
+    keys.sort
+    return keys
+}
+
+# summary -- the run in one line
+summary: function {cov: Coverage.view} out String is {
+    t: totals :cov
+    all: functionKeys :cov unentered: false
+    never: functionKeys :cov unentered: true
+    return "\{t.ran} of \{t.counted} lines ran (\{(
+        percent
+        part: t.ran
+        whole: t.counted
+    )}) in \{cov.files.length} files; \{never.length} of \{all.length} functions never entered"
+}
+
+# sortedPaths -- the files' paths, sorted
+sortedPaths: function {cov: Coverage.view} out List String is {
+    paths: List String
+    for each f: cov.files loop paths.append f.path.copy
+    paths.sort
+    return paths
+}
+
+# writeReport -- the report of `cov` at `path`
+writeReport: function {cov: Coverage.view path: StringView} is {
+    t: String
+    t.append "# What the test suite runs of zc\n\n"
+    t.append "Counted by gcov on a zc built with `zc --line-marks`: a line is a line of a\n"
+    t.append ".z file, and a function is a zerolang function, each instance of a generic\n"
+    t.append "counted on the lines of its definition. `make coverage` writes this file.\n\n"
+    t.append "\{summary :cov}.\n\n"
+    appendFiles :cov :t
+    appendUnentered :cov :t
+    appendLeastCovered :cov :t
+    w: io.writeText :path content: t.stringView
+    w.drop
+}
+
+# appendFiles -- the table of files
+appendFiles: function {cov: Coverage.view t: String.borrow} is {
+    t.append "## Files\n\n| File | Counted lines | Ran | |\n|---|---|---|---|\n"
+    for each p: (sortedPaths :cov) loop {
+        i: covdata.fileIndex :cov path: p.stringView
+        c: covdata.linesIn :cov file: i from: 0 to: (cov.files.get :i).counts.length
+        t.append "| \{p} | \{c.counted} | \{c.ran} | \{percent part: c.ran whole: c.counted} |\n"
+    }
+    t.append "\n"
+}
+
+# appendUnentered -- the functions no test enters, file by file
+appendUnentered: function {cov: Coverage.view t: String.borrow} is {
+    t.append "## Functions no test enters\n\n"
+    for each p: (sortedPaths :cov) loop {
+        file: covdata.fileIndex :cov path: p.stringView
+        lines: ListVal u64
+        i: u64
+        for i < cov.fnLine.length loop {
+            if (cov.fnFile.get :i) == file when (entered :cov :i).not then lines.append (
+                cov.fnLine.get
+                :i
+            )
+            i = i + 1
+        }
+        if lines.length > 0 then {
+            lines.sort
+            t.append "### \{p}\n\n"
+            for each l: lines loop t.append "- \{nameAtLine :cov :file line: l} (line \{l})\n"
+            t.append "\n"
+        }
+    }
+}
+
+# nameAtLine -- the name of the function of file `file` that starts on `line`
+nameAtLine: function {cov: Coverage.view file: u64 line: u64} out String is {
+    i: u64
+    for i < cov.fnLine.length loop {
+        if (cov.fnFile.get :i) == file when (cov.fnLine.get :i) == line then return (
+            cov.fnName.get
+            :i
+        ).copy
+        i = i + 1
+    }
+    return "".string
+}
+
+# appendLeastCovered -- the entered functions with the most counted lines
+# that did not run, the most first
+appendLeastCovered: function {cov: Coverage.view t: String.borrow} is {
+    rows: List String
+    i: u64
+    for i < cov.fnLine.length loop {
+        if (cov.fnCalls.get :i) > 0 then {
+            file: cov.fnFile.get :i
+            line: cov.fnLine.get :i
+            c: covdata.linesIn :cov :file from: line to: (covdata.nextFnLine :cov :file :line)
+            missed: c.counted - c.ran
+            # sorted as text: the most missed lines give the lowest number
+            if missed > 0 then rows.append "\{1000000 - missed} \{(
+                keyOf
+                :cov
+                :i
+            )} (line \{line}): \{missed} of \{c.counted} lines did not run"
+        }
+        i = i + 1
+    }
+    rows.sort
+    t.append "## Entered functions with the most lines that did not run\n\n"
+    k: u64
+    for k < rows.length while k < shown loop {
+        row: (rows.get i: k).stringView
+        cut: (row.indexOf needle: " ").or d: 0
+        t.append "- \{row.substring from: cut + 1 to: row.length}\n"
+        k = k + 1
+    }
+}
+
+# KnownRow -- one row of the list of functions no test enters
+KnownRow: class {
+    # `<file> <name>`, as keyOf writes a function
+    key: String
+    why: String
+}
+
+# readKnown -- the rows of the list at `path`; none when there is no file
+# there. A file zd refuses stops the run with its error.
+readKnown: function {path: StringView} out List KnownRow is {
+    rows: List KnownRow
+    if (io.exists :path).not then return rows
+    doc: (zd.read :path).orPanic
+    for each r: (doc.itemsAt path: "functions").orPanic loop {
+        file: (r.textAt path: "file").orPanic
+        name: (r.textAt path: "name").orPanic
+        rows.append (KnownRow key: "\{file} \{name}" why: (r.textAt path: "why").orPanic.copy)
+    }
+    return rows
+}
+
+# whyOf -- the `why` the rows `known` give the function `key`; `untriaged`
+# when they do not list it
+whyOf: function {known: (List KnownRow).view key: StringView} out String is {
+    for each r: known loop {
+        if r.key.stringView == key then return r.why.copy
+    }
+    return untriaged.string
+}
+
+# writeKnown -- the list at `path` written from `cov`: each function no test
+# enters, with the `why` the file there gave it
+writeKnown: function {cov: Coverage.view path: StringView} is {
+    old: readKnown :path
+    items: List zd.Entry
+    for each key: (functionKeys :cov unentered: true) loop {
+        cut: (key.stringView.indexOf needle: " ").or d: 0
+        fields: List zd.Entry
+        fields.append (
+            zd.entry
+            name: "file"
+            type: ""
+            node: zd.Node.text (key.stringView.substring from: 0 to: cut).string
+        )
+        fields.append (
+            zd.entry
+            name: "name"
+            type: ""
+            node: zd.Node.text (key.stringView.substring from: cut + 1 to: key.length).string
+        )
+        fields.append (
+            zd.entry
+            name: "why"
+            type: ""
+            node: zd.Node.text (whyOf known: old key: key.stringView)
+        )
+        items.append (zd.entry name: "" type: "unentered" node: zd.Node.dataValue fields.take)
+    }
+    n: items.length
+    defs: List zd.Entry
+    defs.append (
+        zd.entry
+        name: "functions"
+        type: "staticlist unentered"
+        node: zd.Node.listValue items.take
+    )
+    doc: zd.entry name: "" type: "" node: zd.Node.unitValue defs.take
+    (zd.write :path header: knownHeader schema: knownSchema :doc).orPanic
+    print "coverage: wrote \{n} functions to \{path}"
+}
+
+# checkKnown -- `cov` against the list at `path`: false, each difference
+# printed, when a function no test enters is not listed, or a listed one is
+# entered now or is not in the build
+checkKnown: function {cov: Coverage.view path: StringView} out bool is {
+    known: readKnown :path
+    never: functionKeys :cov unentered: true
+    all: functionKeys :cov unentered: false
+    bad: u64
+    for each key: never loop {
+        listed: false
+        for each r: known loop {
+            if r.key == key then listed = true
+        }
+        if listed.not then {
+            print "coverage-check: no test enters `\{key}`, and \{path} does not list it: add a test that reaches it, or delete it when nothing can"
+            bad = bad + 1
+        }
+    }
+    for each r: known loop {
+        if (never.contains item: r.key).not then {
+            now: "the build no longer holds it"
+            if (all.contains item: r.key) then now = "a test enters it now"
+            print "coverage-check: \{path} lists `\{r.key}`, and \{now}: delete its line"
+            bad = bad + 1
+        }
+    }
+    if bad > 0 then return false
+    print "coverage-check OK: \{never.length} functions no test enters, each listed in \{path}"
+    return true
+}
+
+# printTarget -- covprobe's answer for `target`: `path.z:LINE`, or a
+# function's name (with or without the `Owner.` before it)
+printTarget: function {cov: Coverage.view target: StringView} is {
+    colon: target.lastIndexOf needle: ".z:"
+    if colon.some then {
+        printLine :cov file: (target.substring from: 0 to: colon + 2) line: (
+            target.substring
+            from: colon + 3
+            to: target.length
+        )
+        return
+    }
+    tail: ".\{target}"
+    found: false
+    i: u64
+    for i < cov.fnLine.length loop {
+        name: (cov.fnName.get :i).stringView
+        if (name == target) or (name.endsWith suffix: tail) then {
+            found = true
+            where: "\{(cov.files.get i: (cov.fnFile.get :i)).path}:\{cov.fnLine.get :i}"
+            n: cov.fnCalls.get :i
+            if n > 0 then {
+                print "\{name} (\{where}): entered (count \{n})"
+            } else print "\{name} (\{where}): not entered"
+        }
+        i = i + 1
+    }
+    if found.not then print "\{target}: the build holds no function of that name"
+}
+
+# printLine -- covprobe's answer for line `line` (as written) of `file`
+printLine: function {cov: Coverage.view file: StringView line: StringView} is {
+    fi: covdata.fileIndex :cov path: file
+    n: line.parseU64
+    if n.err then {
+        print "\{file}:\{line}: that is no line number"
+        return
+    }
+    if fi == cov.files.length then {
+        print "\{file}:\{line}: the build holds no such file"
+        return
+    }
+    counts: (cov.files.get i: fi).counts
+    count: covdata.noCode
+    if n < counts.length then count = counts.get i: n
+    if count == covdata.noCode then {
+        print "\{file}:\{line}: no C is counted on this line (the statement starts on another)"
+    } else if count > 0 then {
+        print "\{file}:\{line}: ran (count \{count})"
+    } else print "\{file}:\{line}: did not run"
+}

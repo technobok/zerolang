@@ -1,0 +1,312 @@
+# coverage -- `zgate coverage OUT [--check FILE] [--write FILE]`: what the
+# test suite runs of zc, by zerolang line and function.
+#   1. The build: bin/zc emits zc itself with `--line-marks --readable-names`
+#      (OUT/bin/zc.c); gcc compiles it with `--coverage` and no optimiser into
+#      OUT/bin/zc. The repository's zl and zls are linked beside it, where
+#      the test runner looks for them.
+#   2. The workload, each step's output under OUT/log: the test runner's
+#      default kinds with that zc (what `make test` runs), then the zc commands
+#      of covCommands, then the programs of the fixed-seed generator run of
+#      `make ci` (zfuzz --generate, emitted only). A step that fails fails the
+#      run: the suite is green under bin/zc, so it shows a zc that works
+#      differently without the optimiser.
+#   3. gcov writes OUT/gcov.json; OUT/coverage.md is the report (covreport).
+#   4. --check FILE holds the functions no step entered to the list FILE
+#      (tests/known/coverage.zd; `make coverage-check`); --write FILE writes
+#      that list from this run.
+# `zgate covprobe OUT FILE.z TARGET...` answers "does this program reach
+# that?" with the build of the last coverage run in OUT: it compiles FILE.z
+# alone, with counters of its own, and says for each TARGET -- a function's
+# name, or `path.z:LINE` -- how often it ran.
+# gcov and --coverage are gcc's: Linux only. A subunit of zgate.
+
+# covCommands -- the zc command lines of the workload beside the test runner's:
+# what the Makefile's rules and guards ask of bin/zc directly. `{o}` stands
+# for the run's scratch directory OUT/o, `{bin}` for OUT/bin.
+covCommands: list {
+    # bin/zc, bin/zl, bin/zls, out/ztestrunner and bin/zgate: the programs
+    # `make test` builds
+    "zc --src src --system lib/system --emit-c {o}/zc.c"
+    "zl --src src --system lib/system --emit-c {o}/zl.c"
+    "zls --src src --system lib/system --emit-c {o}/zls.c"
+    "ztestrunner --src src --system lib/system --emit-c {o}/ztestrunner.c"
+    "zgate --src tools/zgate --src src --system lib/system --emit-c {o}/zgate.c"
+    # every definition of the compiler and the linter, reached or not
+    "zc --src src --system lib/system --eager --emit-c {o}/zc-eager.c"
+    "zl --src src --system lib/system --eager --emit-c {o}/zl-eager.c"
+    # readable-check
+    "zc --src src --system lib/system --readable-names --emit-c {o}/zc-rn.c"
+    "hello --src examples --system lib/system --readable-names --target x86_64-w64-mingw32 --emit-c {o}/hello-win.c"
+    # prelude-share-guard
+    "dump hello --src examples --system lib/system -o {o}/hello.sql"
+    # sqlite-decls-guard, and the rule of zthread_shim.inc
+    "natives show sqlite.@decls --c --system lib/system"
+    "natives show prelude.@zthread --c --system lib/system"
+    # view-guard
+    "natives check views --system lib/system --emitter src/zemitterc.z --register tests/view_guard.zd"
+    # native-guard
+    "natives check rows --system lib/system"
+    # out/zfuzz and out/zc-asan: zc builds a program itself
+    "build examples/hello.z --system lib/system -o {o}/hello"
+    # the link line of every driver (ZLINKOF)
+    "cobj {bin}/zc.c --link --cc gcc"
+} out staticlist StringView
+
+# covWord -- what a coverage run reads and writes by spelling
+covWord: list {
+    # the seconds one step of a runner case may take under the unoptimised zc
+    stepLimit: "300"
+    # the fixed-seed generator run's data file: its seed and its count
+    fuzzKnown: "tests/known/fuzzgen.zd"
+} out staticlist StringView
+
+# commandLimit -- the seconds one of covCommands may take
+commandLimit: 900
+
+# runCoverageCommand -- the coverage subcommand from its command line `p`
+runCoverageCommand: function {g: Gate.view p: cli.Parsed.view} out i32 is {
+    dir: absolute p: (operand :p name: "OUT").stringView
+    io.removeTree path: dir.stringView
+    io.mkdirp path: "\{dir}/bin"
+    io.mkdirp path: "\{dir}/log"
+    io.mkdirp path: "\{dir}/o"
+    t0: os.monotonicMillis
+    if (buildCovered :g dir: dir.stringView).not then return 1
+    print "coverage: the build took \{secsSince :t0} s"
+    if (runWorkload :g dir: dir.stringView).not then return 1
+    if (gcovReport dir: "\{dir}/bin".stringView into: "\{dir}/gcov.json".stringView).not then {
+        io.eprintln "zgate coverage: gcov could not read the counters in \{dir}/bin"
+        return 1
+    }
+    report: zjobs.slurp path: "\{dir}/gcov.json".stringView
+    cov: covdata.load repo: g.repo.stringView text: report.stringView
+    if cov.files.length == 0 then {
+        io.eprintln "zgate coverage: \{dir}/gcov.json names no zerolang file"
+        return 1
+    }
+    covreport.writeReport :cov path: "\{dir}/coverage.md".stringView
+    print "coverage: \{covreport.summary :cov}; \{dir}/coverage.md, \{secsSince :t0} s in all"
+    writeTo: optionText :p name: opt.write d: ""
+    if writeTo.length > 0 then covreport.writeKnown :cov path: writeTo.stringView
+    checkWith: optionText :p name: opt.check d: ""
+    if checkWith.length > 0 when (covreport.checkKnown :cov path: checkWith.stringView).not then {
+        return 1
+    }
+    return 0
+}
+
+# step -- `argv` run in `cwd`, its output as `<dir>/log/<name>.log` and
+# `.err`, its seconds printed; true when it exits 0
+step: function {dir: StringView name: StringView argv: List String cwd: StringView} out bool is {
+    t0: os.monotonicMillis
+    log: "\{dir}/log/\{name}"
+    rc: runTo :argv :cwd outPath: "\{log}.log".stringView errPath: "\{log}.err".stringView
+    print "coverage: \{name} rc=\{rc} secs=\{secsSince :t0}"
+    if rc != 0 then io.eprintln "zgate coverage: \{name} failed (\{log}.log, \{log}.err)"
+    return rc == 0
+}
+
+# buildCovered -- the coverage build of zc in `dir`/bin, and the repository's
+# zl and zls linked beside it; false when a step fails
+buildCovered: function {g: Gate.view dir: StringView} out bool is {
+    bin: "\{dir}/bin"
+    emit: List String
+    emit.append from: "\{g.repo}/bin/zc"
+    for each w: (
+        wordsOf
+        text: "zc --src src --system lib/system --line-marks --readable-names --emit-c"
+    ) loop emit.append from: w.copy
+    emit.append from: "\{bin}/zc.c"
+    if (step :dir name: "emit" argv: emit cwd: g.repo.stringView).not then return false
+    cc: wordsOf text: "gcc -std=c17 -O0 --coverage -w -c zc.c -o zc.o"
+    if (step :dir name: "compile" argv: cc cwd: bin.stringView).not then return false
+    objs: List String
+    objs.append from: "\{g.repo}/bin/zc"
+    for each w: (wordsOf text: "cobj zc.c --link --cc gcc") loop objs.append from: w.copy
+    linked: captured :g argv: objs cwd: bin.stringView tag: "covlink"
+    if linked.status != 0 then {
+        io.eprintln "zgate coverage: zc cobj could not name the build's objects: \{linked.err}"
+        return false
+    }
+    link: wordsOf text: "gcc --coverage -o zc zc.o"
+    for each w: (wordsOf text: linked.text.stringView) loop link.append from: w.copy
+    link.append from: "-lm".string
+    if (step :dir name: "link" argv: link cwd: bin.stringView).not then return false
+    for each tool: (wordsOf text: "zl zls") loop {
+        ln: wordsOf text: "ln -sf"
+        ln.append from: "\{g.repo}/bin/\{tool}"
+        ln.append from: "\{bin}/\{tool}"
+        if (runTo argv: ln cwd: "" outPath: "" errPath: "") != 0 then return false
+    }
+    return true
+}
+
+# runWorkload -- the workload against `dir`/bin/zc, in order; false when a
+# step fails
+runWorkload: function {g: Gate.view dir: StringView} out bool is {
+    zc: "\{dir}/bin/zc"
+    runner: List String
+    runner.append from: "\{g.repo}/out/ztestrunner"
+    runner.append from: "--zc".string
+    runner.append from: zc.copy
+    for each w: (wordsOf text: "--cc gcc --root . --jobs") loop runner.append from: w.copy
+    runner.append from: "\{g.jobs}"
+    runner.append from: "--timeout".string
+    runner.append from: covWord.stepLimit.string
+    if (step :dir name: "test" argv: runner cwd: g.repo.stringView).not then return false
+    if (runCommands :g :dir zc: zc.stringView).not then return false
+    return (
+        step
+        :dir
+        name: "fuzz-gen"
+        argv: (fuzzArgv :g :dir zc: zc.stringView)
+        cwd: g.repo.stringView
+    )
+}
+
+# runCommands -- covCommands with `zc`, in the job pool, each one's output as
+# `dir`/log/zc<n>.log and .err; false, and each failure named, when one fails
+runCommands: function {g: Gate.view dir: StringView zc: StringView} out bool is {
+    t0: os.monotonicMillis
+    jobs: List PoolJob
+    i: u64
+    for i < covCommands.length loop {
+        argv: List String
+        argv.append from: zc.string
+        for each w: (wordsOf text: (covCommands.get :i)) loop {
+            inO: w.stringView.replace needle: "{o}" replacement: "\{dir}/o".stringView
+            argv.append (
+                inO.stringView.replace
+                needle: "{bin}"
+                replacement: "\{dir}/bin".stringView
+            )
+        }
+        steps: List PoolStep
+        steps.append (
+            zjobs.mkStep
+            :argv
+            cwd: g.repo.stringView
+            outPath: "\{dir}/log/zc\{i}.log".stringView
+            errPath: "\{dir}/log/zc\{i}.err".stringView
+            timeoutSecs: commandLimit
+            allowFail: false
+            zlinkFrom: ""
+        )
+        jobs.append (zjobs.mkJob name: "zc\{i}".stringView :steps)
+        i = i + 1
+    }
+    statuses: ListVal i32
+    failSteps: ListVal i64
+    zjobs.runJobs :jobs maxJobs: g.jobs :statuses :failSteps
+    passed: true
+    k: u64
+    for k < jobs.length loop {
+        if (failSteps.get i: k) >= 0 then {
+            io.eprintln "zgate coverage: `zc \{covCommands.get i: k}` failed (exit \{(
+                statuses.get
+                i: k
+            )}; \{dir}/log/zc\{k}.err)"
+            passed = false
+        }
+        k = k + 1
+    }
+    print "coverage: \{jobs.length} zc commands secs=\{secsSince :t0}"
+    return passed
+}
+
+# fuzzArgv -- the generator's fixed-seed run of `make ci`, its programs
+# emitted by `zc` and not built: the seed and the count its data file records
+fuzzArgv: function {g: Gate.view dir: StringView zc: StringView} out List String is {
+    known: (zd.read path: "\{g.repo}/\{covWord.fuzzKnown}".stringView).orPanic
+    a: List String
+    a.append from: "\{g.repo}/out/zfuzz"
+    a.append from: "--generate".string
+    a.append from: "--zc".string
+    a.append from: zc.string
+    a.append from: "--system".string
+    a.append from: "\{g.repo}/lib/system"
+    a.append from: "--work".string
+    a.append from: "\{dir}/fuzz"
+    a.append from: "--seed".string
+    a.append from: "\{(known.integerAt path: "seed").orPanic}"
+    a.append from: "--count".string
+    a.append from: "\{(known.integerAt path: "cases").orPanic}"
+    a.append from: "--configs".string
+    a.append from: "0".string
+    return a
+}
+
+# gcovReport -- gcov's JSON report of the counters in `dir` (zc.gcda, written
+# by the runs of the zc built there), written to `into`; false when gcov fails
+gcovReport: function {dir: StringView into: StringView} out bool is {
+    argv: wordsOf text: "gcov --json-format --stdout zc.gcda"
+    return (runTo :argv cwd: dir outPath: into errPath: os.nullDevice.stringView) == 0
+}
+
+# runProbeCommand -- the covprobe subcommand from its command line `p`: FILE.z
+# compiled by the coverage zc of OUT with its counters written apart
+# (OUT/probe), then each target's count
+runProbeCommand: function {g: Gate.view p: cli.Parsed.view} out i32 is {
+    dir: absolute p: (operand :p name: "OUT").stringView
+    file: absolute p: (operand :p name: "FILE").stringView
+    zc: "\{dir}/bin/zc"
+    if (io.exists path: zc).not then {
+        io.eprintln "zgate covprobe: \{dir} holds no coverage build: run `zgate coverage \{dir}` (make coverage) first"
+        return wrongUsage
+    }
+    probe: "\{dir}/probe"
+    io.removeTree path: probe.stringView
+    io.mkdirp path: probe
+    cp: wordsOf text: "cp"
+    cp.append from: "\{dir}/bin/zc.gcno"
+    cp.append from: "\{probe}/zc.gcno"
+    if (runTo argv: cp cwd: "" outPath: "" errPath: "") != 0 then return 1
+    # the counters of this run go to OUT/probe, whatever directory the build
+    # wrote into them
+    os.setEnv key: "GCOV_PREFIX" value: probe.stringView
+    os.setEnv key: "GCOV_PREFIX_STRIP" value: "99"
+    c: (
+        captured
+        :g
+        argv: (probeArgv :g zc: zc.stringView file: file.stringView)
+        cwd: ""
+        tag: "covprobe"
+    )
+    verdict: "ok".string
+    for each ln: c.err.stringView.lines loop {
+        if verdict == "ok" when ln.length > 0 then verdict = ln.string
+    }
+    print "zc: \{verdict}"
+    into: "\{probe}/gcov.json"
+    if (gcovReport dir: probe.stringView into: into.stringView).not then {
+        io.eprintln "zgate covprobe: gcov could not read the counters in \{probe}"
+        return 1
+    }
+    report: zjobs.slurp path: into.stringView
+    cov: covdata.load repo: g.repo.stringView text: report.stringView
+    for each target: p.extraArgs loop covreport.printTarget :cov target: target.stringView
+    return 0
+}
+
+# probeArgv -- `zc` emitting the unit of `file`, its own directory, the
+# examples and the corpus as its roots, the C thrown away
+probeArgv: function {g: Gate.view zc: StringView file: StringView} out List String is {
+    name: path.baseName p: file
+    uname: name.stringView
+    if (uname.endsWith suffix: ".z") then uname = uname.substring from: 0 to: uname.length - 2
+    a: List String
+    a.append from: zc.string
+    a.append from: "emit".string
+    a.append from: uname.string
+    a.append from: "--src".string
+    a.append from: (path.dirname p: file)
+    a.append from: "--src".string
+    a.append from: "\{g.repo}/examples"
+    a.append from: "--src".string
+    a.append from: "\{g.repo}/tests/fixtures/emitc_corpus"
+    a.append from: "--system".string
+    a.append from: "\{g.repo}/lib/system"
+    a.append from: "-o".string
+    a.append from: os.nullDevice
+    return a
+}

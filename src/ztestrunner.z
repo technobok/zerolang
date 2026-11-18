@@ -531,6 +531,8 @@ runnerWord: list {
     lspHeader: "Content-Length: "
     # the driver a USAGE case names when it runs the runner itself
     ownName: "ztestrunner"
+    # the driver a usage case's `args` names that is the compiler under test
+    zcName: "zc"
     # what a USAGE case's `cwd` file says when its driver runs in the case's
     # own empty directory
     scratchCwd: "scratch"
@@ -3794,7 +3796,8 @@ runVfsCases: function {r: Runner} is {
 # runUsageCases -- the USAGE cases kind: a driver run with one command line,
 # judged by what it says and how it exits. Each directory under
 # tests/fixtures/usage is one case. Its `args` file is one line: the driver's
-# name (`zc`, `zl`, `ztestrunner`), then the arguments, where `$ROOT` stands
+# name (`zc`, which is the compiler --zc names; `zl`; `ztestrunner`), then the
+# arguments, where `$ROOT` stands
 # for the repository root, `$SCRATCH` for an empty directory of the case's own
 # and `$HOST` for this host's target triple. The driver runs in the repository
 # root, or in the scratch directory when the case's `cwd` file says `scratch`.
@@ -3838,6 +3841,7 @@ runUsageCase: function {r: Runner.view dir: StringView name: StringView} out boo
         argv: (
             usageArgv
             root: rootAbs.stringView
+            zc: (absoluteFrom base: workingDir.stringView p: r.zc.stringView).stringView
             caseDir: src.stringView
             scratch: scratch.stringView
         )
@@ -3936,9 +3940,12 @@ hostTriple: function out String is {
 }
 
 # usageArgv -- the command a USAGE case's `args` line gives. Its first word
-# names a driver: that program in the `bin` directory under `root`, or, for
-# `ztestrunner`, the running runner itself.
-usageArgv: function {root: StringView caseDir: StringView scratch: StringView} out List String is {
+# names a driver: for `zc` the compiler under test (`zc`, its path), for
+# `ztestrunner` the running runner itself, else that program in the `bin`
+# directory under `root`.
+usageArgv: function {
+    root: StringView zc: StringView caseDir: StringView scratch: StringView
+} out List String is {
     argsP: "\{caseDir}/args"
     argsLine: slurp path: argsP.stringView
     words: zast.Vocab.create block: runnerWord
@@ -3953,6 +3960,8 @@ usageArgv: function {root: StringView caseDir: StringView scratch: StringView} o
             argv.append from: arg.take
         } else if (words.slotOf text: arg.stringView) == runnerWord.slot.ownName then {
             argv.append from: ownPath
+        } else if (words.slotOf text: arg.stringView) == runnerWord.slot.zcName then {
+            argv.append from: zc.string
         } else {
             argv.append from: "\{root}/bin/\{arg}"
         }
