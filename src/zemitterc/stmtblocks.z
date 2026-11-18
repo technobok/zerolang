@@ -2275,9 +2275,11 @@ emitStmt: function {
     tmp: FnTemps
     buf: String.borrow
 } is {
+    marked: linemarks.open :prog :ctx :n :buf
     tL: tmp.listFrees.length
     emitStmtParts :prog :ctx :n :ind :tmp :buf
     releaseStatementTemps :prog :ctx :n :tmp from: tL :buf
+    linemarks.close opened: marked :buf
 }
 
 # releaseStatementTemps -- the temporaries a statement line's arguments needed
@@ -3466,10 +3468,12 @@ emitBranchAssignOptional: function {
             sxId: zast.kidAt kids: prog.ast.kids span: n.statements i: si
             sx: prog.ast.nodes.get i: sxId
             if (si + 1) == cnt then {
+                marked: linemarks.open :prog :ctx n: sx :buf
                 vx: emitExpr :prog :ctx n: sx
                 flushArgHoists :ctx :ind :tmp :buf
                 emitOptionalAssign :ctx :target :someTag :someC :payC vx: vx.stringView :ind :buf
                 emitValueTakeInvalidations :prog :ctx n: sx :ind :buf
+                linemarks.close opened: marked :buf
             } else {
                 emitStmt :prog :ctx n: sx :ind :tmp :buf
                 # a diverging statement -- typically an `if` the emitter folded
@@ -3481,10 +3485,12 @@ emitBranchAssignOptional: function {
             si = si + 1
         }
     } else {
+        marked2: linemarks.open :prog :ctx :n :buf
         vx2: emitExpr :prog :ctx :n
         flushArgHoists :ctx :ind :tmp :buf
         emitOptionalAssign :ctx :target :someTag :someC :payC vx: vx2.stringView :ind :buf
         emitValueTakeInvalidations :prog :ctx :n :ind :buf
+        linemarks.close opened: marked2 :buf
     }
 }
 
@@ -5265,6 +5271,7 @@ emitBranchAssign: function {
             emitStmt :prog :ctx :n :ind :tmp :buf
             return
         }
+        marked: linemarks.open :prog :ctx :n :buf
         vx2F: exprfacts
         vx2: emitExprWith :prog :ctx :n facts: vx2F
         # an argument the value hoisted is declared in the arm, which runs it
@@ -5275,6 +5282,7 @@ emitBranchAssign: function {
         values.emitArmTakeZero :prog :ctx :n rv: vx2.stringView :ind :buf
         emitValueTakeInvalidations :prog :ctx :n :ind :buf
         flushBlockFrees :tmp lL: listFreesMark diverged: false :buf
+        linemarks.close opened: marked :buf
     }
 }
 
@@ -5295,7 +5303,11 @@ emitBranchLastAssign: function {
         emitStmt :prog :ctx n: sx :ind :tmp :buf
         return true
     }
-    if (emitNestedControlAssign :prog :ctx line: sx :target :ind :tmp :buf) then return false
+    marked: linemarks.open :prog :ctx n: sx :buf
+    if (emitNestedControlAssign :prog :ctx line: sx :target :ind :tmp :buf) then {
+        linemarks.close opened: marked :buf
+        return false
+    }
     vxF: exprfacts
     vx: emitExprWith :prog :ctx n: sx facts: vxF
     # an argument the value hoisted is declared here, inside the branch; the
@@ -5304,6 +5316,7 @@ emitBranchLastAssign: function {
     appendArmAssign :prog :ctx n: sx :target vx: vx.stringView :vxF :ind :buf
     values.emitArmTakeZero :prog :ctx n: sx rv: vx.stringView :ind :buf
     emitValueTakeInvalidations :prog :ctx n: sx :ind :buf
+    linemarks.close opened: marked :buf
     return false
 }
 
@@ -5395,7 +5408,9 @@ emitStatementBlock: function {
         if trTail when (i + 1) == nst then tailNow = true
         handled: false
         if tailNow then {
+            marked: linemarks.open :prog :ctx n: s :buf
             handled = emitTailStmt :prog :ctx n: s :ind :tmp :buf
+            linemarks.close opened: marked :buf
         }
         if handled.not then emitStmt :prog :ctx n: s :ind :tmp :buf
         trunc: false
@@ -5523,22 +5538,26 @@ emitComprehensionNode: function {
             stId: zast.kidAt kids: prog.ast.kids span: n.statements i: si
             st: prog.ast.nodes.get i: stId
             if si == (cnt - 1) then {
+                marked: linemarks.open :prog :ctx n: st :buf
                 av: emitExpr :prog :ctx n: st
                 flushArgHoists :ctx :ind :tmp :buf
                 la: "\{ind}\{listCb}_append(&\{listVar}, (\{av}));\n"
                 buf.append la
                 emitAppendedValueMoves :prog :ctx n: st :ind :buf
+                linemarks.close opened: marked :buf
             } else {
                 emitStmt :prog :ctx n: st :ind :tmp :buf
             }
             si = si + 1
         }
     } else {
+        marked2: linemarks.open :prog :ctx :n :buf
         av2: emitExpr :prog :ctx :n
         flushArgHoists :ctx :ind :tmp :buf
         la2: "\{ind}\{listCb}_append(&\{listVar}, (\{av2}));\n"
         buf.append la2
         emitAppendedValueMoves :prog :ctx :n :ind :buf
+        linemarks.close opened: marked2 :buf
     }
 }
 

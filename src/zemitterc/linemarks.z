@@ -1,0 +1,153 @@
+# linemarks -- `zc --line-marks`: the C says which source line each of its
+# lines came from, in `#line` directives, so a tool that reads C positions (a
+# coverage counter, a debugger) reports zerolang ones. A `#line` names the next
+# C line only -- the one after it counts on from there -- so a statement that
+# takes several C lines needs one before each. The writers therefore mark
+# REGIONS as they go (`open`, `close`): a region is one statement or one
+# function, and regions nest as the statements do. `resolve` runs once over the
+# whole text and writes the directives. An implementation subunit of zemitterc.
+
+# markWord -- the lines a region is written as until `resolve` reads them
+markWord: list {
+    # a region's first line begins with this; the source line, the quoted path
+    # and markWord.shut follow it
+    open: "/*zl+ "
+    # what a region's first line ends with
+    shut: "*/"
+    # a region's last line
+    close: "/*zl-*/"
+} out staticlist StringView
+
+# open -- begin in `buf` the region of the C written for node `n`; true when
+# one was begun, which `close` is then owed. None is begun without
+# --line-marks, for a node that has no line, or where `buf` stands inside a
+# line.
+open: function {prog: Program.view ctx: Ctx.view n: astnode.view buf: String.borrow} out bool is {
+    if ctx.known.lineMarks.not then return false
+    line: (zast.posOf :n).line
+    if line == 0 then return false
+    if buf.length > 0 when (buf.endsWith suffix: "\n").not then return false
+    buf.append markWord.open
+    buf.append "\{line} \""
+    appendPathOf :prog :ctx fs: (prog.ast.fsnoForNode nodeid: (zast.nodeIdOf :n)) :buf
+    buf.append "\""
+    buf.append markWord.shut
+    buf.append "\n"
+    return true
+}
+
+# appendPathOf -- the path of file `fs` as a diagnostic shows it, escaped for a
+# C string; the main unit's for a row that names no file
+appendPathOf: function {prog: Program.view ctx: Ctx.view fs: zvfs.fsno buf: String.borrow} is {
+    p: prog.typing.filePaths.get key: fs
+    match (
+        p
+    ) case some then {
+        buf.append (consts.cEscape text: p.stringView)
+    } case none then {
+        buf.append ctx.known.lineMain
+    }
+}
+
+# close -- end in `buf` the region `open` began, when it began one
+close: function {opened: bool buf: String.borrow} is {
+    if opened.not then return
+    buf.append markWord.close
+    buf.append "\n"
+}
+
+# Regions -- the regions open at the line `resolve` is reading, and what the
+# directives it wrote have said so far
+Regions: class {
+    # the open regions' source lines, innermost last
+    lines: List String
+    # their quoted paths, beside `lines`
+    paths: List String
+    # the path the last directive written named; empty while the C's own holds
+    named: String
+    # the C file's own path, escaped for a C string
+    cq: String
+    # the number of the next line written
+    at: u64
+} as {
+    # edge -- the line `t`, its indent taken off, opens or closes a region:
+    # true when it does, and the line is then not part of the C
+    edge: function {r: this t: StringView} out bool is {
+        if (isOpen :t) then {
+            body: t.substring from: markWord.open.length to: t.length - markWord.shut.length
+            cut: (body.indexOf needle: " ").or d: 0
+            r.lines.append (body.substring from: 0 to: cut).string
+            r.paths.append (body.substring from: cut + 1 to: body.length).string
+            return true
+        }
+        if t != markWord.close then return false
+        if r.lines.length > 0 then {
+            r.lines.pop
+            r.paths.pop
+        }
+        return true
+    }
+
+    # direct -- into `res`, the directive the next line written is owed: the
+    # innermost region's line when it has `code`, or the C's own position when
+    # the last region has just ended
+    direct: function {r: this code: bool res: String.borrow} is {
+        if r.lines.length == 0 then {
+            if r.named.length == 0 then return
+            res.append "#line \{r.at + 1} \"\{r.cq}\"\n"
+            r.named = "".string
+            r.at = r.at + 1
+            return
+        }
+        if code.not then return
+        top: r.lines.length - 1
+        res.append "#line "
+        res.append (r.lines.get i: top)
+        if (r.paths.get i: top) != r.named then {
+            res.append " "
+            res.append (r.paths.get i: top)
+            r.named = (r.paths.get i: top).copy
+        }
+        res.append "\n"
+        r.at = r.at + 1
+    }
+}
+
+# resolve -- `text` with its regions written as directives: `#line N "path"`
+# before each line inside a region (the path only where it changes), and
+# `#line K "cPath"` before the first line after the outermost region ends, K
+# being that line's own number in the answer, so the C no region covers keeps
+# its true position.
+resolve: function {
+    text: StringView
+    # the file the C is written to, as the directives name it
+    cPath: StringView
+} out String is {
+    res: String
+    r: (
+        Regions
+        lines: List String
+        paths: List String
+        named: String
+        cq: (consts.cEscape text: cPath)
+        at: 1
+    )
+    # the line before ended in a backslash: the next one continues it
+    joined: false
+    for each ln: text.lines loop {
+        t: ln.trimStart
+        if (r.edge :t) then continue
+        r.direct code: (t.length > 0) and joined.not :res
+        res.append ln
+        res.append "\n"
+        r.at = r.at + 1
+        joined = ln.endsWith suffix: "\\"
+    }
+    return res
+}
+
+# isOpen -- the line `t`, its indent taken off, is a region's first
+isOpen: function {t: StringView} out bool is {
+    if (t.startsWith prefix: markWord.open).not then return false
+    return (t.endsWith suffix: markWord.shut)
+}

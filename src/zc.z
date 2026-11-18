@@ -174,6 +174,7 @@ opt: list {
     readableNames: "--readable-names"
     nativecFiles: "--nativec-files"
     markNatives: "--mark-natives"
+    lineMarks: "--line-marks"
     eager: "--eager"
     src: "--src"
     system: "--system"
@@ -284,6 +285,7 @@ addEmitSwitches: function {sp: cli.Spec.borrow} is {
     addSwitch :sp name: opt.timed
     addSwitch :sp name: opt.nativecFiles
     addSwitch :sp name: opt.markNatives
+    addSwitch :sp name: opt.lineMarks
 }
 
 # buildSpec -- what `zc build` and `zc run` take: compileSpec's members, the
@@ -439,7 +441,7 @@ printUsage: function is {
     io.eprintln "  -o OUT  --src DIR  --release  --cc CC  --cc-mode MODE"
     io.eprintln "  --target TRIPLE"
     io.eprintln "  --cflags STR  --ldflags STR  --save-temps  --time  --fast-hash"
-    io.eprintln "  --readable-names  --mark-natives  --eager"
+    io.eprintln "  --readable-names  --mark-natives  --line-marks  --eager"
     io.eprintln "  --system DIR  --tcc-lib DIR  -h/--help  -V/--version"
     io.eprintln "A command takes its own flags only (zc help <command>). A value is"
     io.eprintln "written `--name VALUE` or `--name=VALUE`."
@@ -457,7 +459,7 @@ printCommandHelp: function {zv: zast.Vocab.view cmd: StringView} is {
         io.eprintln "       --cc CC --cc-mode spawn|inproc --tcc-lib DIR --target TRIPLE"
         io.eprintln "       --cflags STR --ldflags STR --save-temps --time"
         io.eprintln "       --fast-hash --readable-names --eager"
-        io.eprintln "       --nativec-files --mark-natives"
+        io.eprintln "       --nativec-files --mark-natives --line-marks"
     } else if w == zcWord.slot.vRun then {
         io.eprintln "usage: zc run <src> [flags] [-- args]"
         io.eprintln "Build <src>, then run it. It takes the flags of build, before <src> or"
@@ -471,6 +473,10 @@ printCommandHelp: function {zv: zast.Vocab.view cmd: StringView} is {
         io.eprintln "--mark-natives writes a comment line before each piece of C a unit's"
         io.eprintln "nativec.zd rendered, naming the row and the file and line it is written"
         io.eprintln "at; without those lines the C is the same."
+        io.eprintln "--line-marks writes `#line` directives naming the source file and line"
+        io.eprintln "each statement's and each function's C came from, so a tool that reads C"
+        io.eprintln "positions (a coverage counter, a debugger) reports zerolang ones; without"
+        io.eprintln "those lines the C is the same."
         io.eprintln "It takes the flags of build, without --save-temps."
     } else if w == zcWord.slot.vDump then {
         io.eprintln "usage: zc dump <src> [--canon] [flags]"
@@ -1368,6 +1374,9 @@ ZcFlags: class {
     # written; the rows are then read from their nativec.zd files, which
     # carry the places
     markNatives: bool
+    # --line-marks: write `#line` directives naming the source line each
+    # statement's and each function's C came from
+    lineMarks: bool
     # --link: `zc cobj` prints the libraries the file declares after its objects
     link: bool
     # --eager: typecheck every definition, not only what main reaches
@@ -1409,6 +1418,7 @@ ZcFlags: class {
             readableNames: (p.hasFlag name: opt.readableNames)
             nativecFiles: (p.hasFlag name: opt.nativecFiles)
             markNatives: (p.hasFlag name: opt.markNatives)
+            lineMarks: (p.hasFlag name: opt.lineMarks)
             link: (p.hasFlag name: opt.link)
             eagerCheck: (p.hasFlag name: opt.eager)
             :progArgs
@@ -1676,6 +1686,16 @@ outTarget: function {primary: StringView fallback: StringView} out String is {
     if primary.length > 0 then return primary.string
     if fallback.length > 0 then return fallback.string
     return "-".string
+}
+
+# cOutputPath -- the file the C is written to, as --line-marks names it: the
+# output of a command that writes C ("zc.c" for the standard output), else the
+# temporary a build compiles (buildAndRun)
+cOutputPath: function {zv: zast.Vocab.view cf: ZcFlags.view emitc: bool} out String is {
+    if emitc.not then return (tempPath uname: cf.unitname.stringView ext: ".c")
+    tgt: outTarget primary: cf.emitTarget.stringView fallback: cf.outPath.stringView
+    if (zv.slotOf text: tgt.stringView) == zcWord.slot.stdoutPath then return "zc.c".string
+    return tgt
 }
 
 # chooseExePath -- where a build writes its executable: a temporary under
@@ -1997,12 +2017,17 @@ emitCSource: function {
     # the user units' C implementation files, checked
     users: (List zemitterc.UserImplementation).view
     cf: ZcFlags.view
+    # the file the C is written to, which --line-marks names (cOutputPath)
+    cPath: StringView
     ccFamily: zcc.ccfamily
     t0: i64
     t1: i64
     t2: i64
 } out String is {
     emitErrs: List zast.ErrorData
+    # what --line-marks names beside `cPath`: the main unit's file
+    mainPath: String
+    if cf.lineMarks then mainPath = vfs.displayPath dentryid: mainFsno
     csrc: (
         zemitterc.emitC
         program: prog
@@ -2011,6 +2036,9 @@ emitCSource: function {
         :users
         servedRows: (cf.nativecFiles or cf.markNatives).not
         markNatives: cf.markNatives
+        lineMarks: cf.lineMarks
+        :cPath
+        mainPath: mainPath.stringView
         fastHash: cf.fastHash
         readableNames: cf.readableNames
         errs: emitErrs
@@ -2145,6 +2173,7 @@ bareDumpRefused: function {spec: cli.Spec.view p: cli.Parsed.view} out bool is {
     if (p.hasFlag name: opt.timed) then unread.append from: opt.timed.string
     if (p.hasFlag name: opt.nativecFiles) then unread.append from: opt.nativecFiles.string
     if (p.hasFlag name: opt.markNatives) then unread.append from: opt.markNatives.string
+    if (p.hasFlag name: opt.lineMarks) then unread.append from: opt.lineMarks.string
     if unread.length == 0 then return false
     refused :spec e: cli.CliError.unknownFlag (unread.get i: 0).copy
     return true
@@ -2326,6 +2355,8 @@ compileUnit: function {
         systemdir: systemdir.stringView
         withServed: cf.nativecFiles or cf.markNatives
     )
+    cPath: String
+    if cf.lineMarks then cPath = cOutputPath :zv :cf emitc: mode.emitc
     csrc: (
         emitCSource
         :prog
@@ -2334,6 +2365,7 @@ compileUnit: function {
         :mainFsno
         :users
         :cf
+        cPath: cPath.stringView
         ccFamily: (zcc.ccFamilyOf ccPath: ccReal.stringView)
         t0: parseStart
         t1: parseEnd
