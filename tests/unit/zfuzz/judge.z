@@ -46,6 +46,8 @@ Judge: class {
     timeout: i32
     # how many of `configs` to build under, from the first
     configCount: u64
+    # the formatter to judge, or "" to judge none
+    zl: String
 }
 
 # Expect -- what a program must do: print `stdout`, then exit with `exit`; a
@@ -91,25 +93,115 @@ judgeProgram: function {
     err: "\{dir}/\{name}.err"
     io.writeText path: src content: text
     v: emit :j :dir :name c: c.stringView err: err.stringView
-    io.remove path: src
-    if v.kind.length > 0 then {
-        io.remove path: err
-        io.remove path: c
-        return v
-    }
     k: u64
-    for k < j.configCount loop {
-        cv: runConfig :j cfg: (configs.get i: k) :dir :name c: c.stringView :want
-        if cv.kind.length > 0 then {
-            io.remove path: c
-            io.remove path: err
-            return cv
-        }
+    for v.kind.length == 0 while k < j.configCount loop {
+        v = runConfig :j cfg: (configs.get i: k) :dir :name c: c.stringView :want
         k = k + 1
     }
+    if v.kind.length == 0 then v = fmtJudge :j :dir :name :want
+    io.remove path: src
     io.remove path: c
     io.remove path: err
-    return pass
+    return v
+}
+
+# fmtJudge -- the formatter judge, when `j` names a `zl`: the program laid out
+# by `zl fmt --stdout`; the layout is final (`zl fmt --check`); `zl lint` reads
+# it and exits 0 or 1; and the layout, built under the first configuration,
+# prints what the model expects. A finding's kind starts `fmt: `.
+fmtJudge: function {
+    j: Judge.view dir: StringView name: StringView want: Expect.view
+} out Verdict is {
+    if j.zl.length == 0 then return pass
+    fdir: "\{dir}/fmt"
+    io.mkdirp path: fdir
+    laid: "\{fdir}/\{name}.z"
+    err: "\{fdir}/\{name}.err"
+    c: "\{fdir}/\{name}.c"
+    v: pass
+    s1: (
+        zlRun
+        :j
+        cmd: "fmt"
+        option: "--stdout"
+        file: "\{dir}/\{name}.z"
+        outPath: laid.stringView
+        err: err.stringView
+    )
+    if s1 != 0 then {
+        v = (
+            finding
+            kind: "fmt: refused"
+            config: "zl"
+            detail: (firstLineWith text: (slurp path: err.stringView).stringView needle: "zl"
+            ).stringView
+        )
+    } else if (
+        (
+            zlRun
+            :j
+            cmd: "fmt"
+            option: "--check"
+            file: laid
+            outPath: os.nullDevice.stringView
+            err: err.stringView
+        ) !=
+        0
+    ) then {
+        v = finding kind: "fmt: not idempotent" config: "zl" detail: ""
+    } else if (
+        (
+            zlRun
+            :j
+            cmd: "lint"
+            option: ""
+            file: laid
+            outPath: os.nullDevice.stringView
+            err: err.stringView
+        ) >
+        1
+    ) then {
+        v = (
+            finding
+            kind: "lint: crash"
+            config: "zl"
+            detail: (firstLine text: (slurp path: err.stringView).stringView).stringView
+        )
+    } else {
+        v = emit :j dir: fdir.stringView :name c: c.stringView err: err.stringView
+        if v.kind.length == 0 then v = (
+            runConfig
+            :j
+            cfg: (configs.get i: 0)
+            dir: fdir.stringView
+            :name
+            c: c.stringView
+            :want
+        )
+        if v.kind.length > 0 then v.kind = "fmt: \{v.kind}"
+    }
+    io.remove path: laid
+    io.remove path: err
+    io.remove path: c
+    return v
+}
+
+# zlRun -- `zl cmd [option] file`, its output in `outPath` and its errors in
+# `err`: its exit status
+zlRun: function {
+    j: Judge.view
+    cmd: StringView
+    option: StringView
+    file: String.view
+    outPath: StringView
+    err: StringView
+} out i32 is {
+    argv: List String
+    argv.append j.zl.copy
+    argv.append cmd.string
+    if option.length > 0 then argv.append option.string
+    argv.append file.copy
+    return (os.spawn :argv cwd: "." :outPath errPath: err timeoutSecs: j.timeout)
 }
 
 # emit -- program `name` in `dir` emitted to the C file `c` by the compiler
