@@ -939,9 +939,11 @@ settleAhead: function {prog: Program.view ctx: Ctx} is {
     if ctx.stmt.guardDepth > 0 then return
     for true loop {
         # the earliest part not yet made a statement, then the earliest piece
-        pe: earliestUnsettled order: ctx.order
+        pe: earliestUnsettled order: ctx.order stmt: ctx.stmt
         if pe.found.not then return
-        if pe.isPend then {
+        if pe.isHoist then {
+            settleHoistAhead :ctx i: pe.at
+        } else if pe.isPend then {
             # settled into its temp, the part is a piece at the end of the list
             # -- or, with no C type for a temp, stays in its call
             np: ctx.order.pieces.length
@@ -953,21 +955,33 @@ settleAhead: function {prog: Program.view ctx: Ctx} is {
     }
 }
 
-# unsettled -- the earliest part or piece settleAhead has still to make a
-# statement: whether there is one, whether it is a waiting part (else a
-# piece), its index in its list, and when it was built.
+# unsettled -- the earliest part, piece or initialised hoist settleAhead has
+# still to make a statement: whether there is one, whether it is a waiting
+# part or a hoist (else a piece), its index in its list, and when it was
+# built.
 unsettled: record {
     found: bool
     isPend: bool
+    isHoist: false
     at: u64
     seq: u64
 }
 
-# earliestUnsettled -- the part or piece at or above the order floor, not yet
-# made a statement, that was built first.
-earliestUnsettled: function {order: OrderState.view} out unsettled is {
+# earliestUnsettled -- the part, piece or hoist initialiser at or above the
+# order floor, not yet made a statement, that was built first. A hoist's
+# initialiser is the value of an argument that needs an address; it runs where
+# it was built, before the call that reads it.
+earliestUnsettled: function {order: OrderState.view stmt: StatementState.view} out unsettled is {
     r: unsettled found: false isPend: false at: 0 seq: 0
     fl: order.seqFloor
+    hi: stmt.argHoistFloor
+    for hi < stmt.argHoists.length loop {
+        ah: stmt.argHoists.get i: hi
+        if ah.val.length > 0 when ah.seq >= fl when (seqBeats :r seq: ah.seq) then {
+            r = unsettled found: true isPend: false isHoist: true at: hi seq: ah.seq
+        }
+        hi = hi + 1
+    }
     pi: u64
     for pi < order.pends.length loop {
         pd: order.pends.get i: pi
@@ -991,6 +1005,24 @@ earliestUnsettled: function {order: OrderState.view} out unsettled is {
 seqBeats: function {r: unsettled seq: u64} out bool is {
     if r.found.not then return true
     return seq < r.seq
+}
+
+# settleHoistAhead -- hoist `i`'s initialiser as a statement ahead of the one
+# being built: the hoist is declared zero, and assigned where it was built.
+settleHoistAhead: function {ctx: Ctx i: u64} is {
+    v: String
+    nm: String
+    {
+        h: ctx.stmt.argHoists.getMut :i
+        v swap h.val
+        nm.append h.name
+    }
+    ctx.stmt.argHoistRaw.append (
+        RawHoist
+        text: "\{nm} = \{v};\n"
+        at: ctx.stmt.argHoists.length
+        settles: true
+    )
 }
 
 # settlePieceAhead -- piece `i`'s assignment as a statement ahead of the one
