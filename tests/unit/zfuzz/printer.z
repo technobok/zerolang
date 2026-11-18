@@ -1,0 +1,283 @@
+# printer -- a prog.Prog written as zerolang text, and the output the model
+# expects of it. Every compound expression is in parentheses, since operators
+# have no precedence, and so is every argument but a name; a literal used as
+# a receiver is in parentheses too. A local is `v<id>`, a parameter `a<id>`,
+# a loop counter `i<id>`, a function `f<id>`, a unit constant `k<id>`; a
+# print statement prints `p<id>` and its value, a float through `show16`,
+# `show32` or `show64` (its bits, or `nan`).
+
+# Printer -- a program being written: the text, and the float printers it uses
+Printer: class {
+    text: String
+    # which of show16, show32, show64 the text calls
+    shows: ListVal bool
+} as {
+    # line -- `text` on a line of its own, `depth` levels in
+    line: function as { T: StringLike.generic } in {w: this depth: u64 text: T.view} is {
+        i: u64
+        for i < depth loop {
+            w.text.append "    "
+            i = i + 1
+        }
+        w.text.append text
+        w.text.append "\n"
+    }
+}
+
+# programText -- the text of program `p`, made for case `index` of seed `seed`
+programText: function {p: prog.Prog.view seed: u64 index: u64} out String is {
+    w: Printer text: String shows: ListVal bool
+    for w.shows.length < 3 loop w.shows.append false
+    w.line depth: 0 text: "# zfuzz generate: seed \{seed}, case \{index}"
+    k: 1.u64
+    for k < p.konsts.length loop {
+        w.text.append "\n"
+        w.line depth: 0 text: "k\{k}: \{exprText :w :p id: (p.konsts.get i: k).e}"
+        k = k + 1
+    }
+    f: 2.u64
+    for f < p.funcs.length loop {
+        functionText :w :p fn: (f.u32.or d: 0)
+        f = f + 1
+    }
+    functionText :w :p fn: 1
+    showHelpers :w
+    return w.text.copy
+}
+
+# functionText -- function `fn`, main when it is 1
+functionText: function {w: Printer p: prog.Prog.view fn: u32} is {
+    f: p.funcs.get i: fn.u64
+    w.text.append "\n"
+    if fn == 1 then {
+        w.line depth: 0 text: "main: function is {"
+    } else {
+        head: String
+        head.append "f\{fn}: function "
+        if f.count > 0 then {
+            head.append "{"
+            k: u32
+            for k < f.count loop {
+                if k > 0 then head.append " "
+                param: p.paramAt :f :k
+                head.append "a\{param}: \{prog.tyName t: (p.localTy id: param)}"
+                k = k + 1
+            }
+            head.append "} "
+        }
+        head.append "out \{prog.tyName t: f.ret} is {"
+        w.line depth: 0 text: head
+    }
+    blockText :w :p first: f.body depth: 1
+    w.line depth: 0 text: "}"
+}
+
+# blockText -- the statements from `first` on, `depth` levels in
+blockText: function {w: Printer p: prog.Prog.view first: u32 depth: u64} is {
+    s: first
+    for s != 0 loop {
+        stmtText :w :p id: s :depth
+        s = (p.stmtAt id: s).next
+    }
+}
+
+# stmtText -- the statement `id`
+stmtText: function {w: Printer p: prog.Prog.view id: u32 depth: u64} is {
+    s: p.stmtAt :id
+    k: s.kind
+    if k == prog.sk.decl then {
+        w.line :depth text: "\{localName :p id: s.local}: \{exprText :w :p id: s.e}"
+    } else if k == prog.sk.assign then {
+        w.line :depth text: "\{localName :p id: s.local} = \{exprText :w :p id: s.e}"
+    } else if k == prog.sk.print then {
+        w.line :depth text: "print \"p\{id} \\{\{printedValue :w :p id: s.e}}\""
+    } else if k == prog.sk.ifs then {
+        w.line :depth text: "if \{exprText :w :p id: s.e} then {"
+        blockText :w :p first: s.body depth: depth + 1
+        if s.other != 0 then {
+            w.line :depth text: "} else {"
+            blockText :w :p first: s.other depth: depth + 1
+        }
+        w.line :depth text: "}"
+    } else if k == prog.sk.counted then {
+        loopText :w :p :s :depth
+    } else if k == prog.sk.brk then {
+        w.line :depth text: "break"
+    } else if k == prog.sk.ret then {
+        w.line :depth text: "return \{exprText :w :p id: s.e}"
+    } else {
+        w.line :depth text: (callText :w :p id: s.e bare: true)
+    }
+}
+
+# loopText -- a counted loop: its counter, then the loop, which steps the
+# counter as its last statement
+loopText: function {w: Printer p: prog.Prog.view s: prog.stmt depth: u64} is {
+    c: localName :p id: s.local
+    w.line :depth text: "\{c}: 0.u32"
+    w.line :depth text: "for \{c} < \{s.n}.u32 loop {"
+    blockText :w :p first: s.body depth: depth + 1
+    w.line depth: depth + 1 text: "\{c} = \{c} + 1.u32"
+    w.line :depth text: "}"
+}
+
+# printedValue -- what a print statement interpolates for expression `id`: a
+# float through its show function
+printedValue: function {w: Printer p: prog.Prog.view id: u32} out String is {
+    t: (p.exprAt :id).ty
+    if (prog.isFloat :t) then {
+        slot: (t - prog.ty.f16).u64
+        w.shows.set i: slot val: true
+        return "show\{(prog.tys.get i: t.u64).bits} x: \{atom :w :p :id}"
+    }
+    return (exprText :w :p :id)
+}
+
+# showHelpers -- the float printers the text calls
+showHelpers: function {w: Printer} is {
+    k: u64
+    for k < 3 loop {
+        if (w.shows.get i: k) then {
+            t: prog.ty.f16 + (k.u8.or d: 0)
+            bits: (prog.tys.get i: t.u64).bits
+            w.text.append "\n"
+            w.line depth: 0 text: "show\{bits}: function {x: \{prog.tyName :t}} out String is {"
+            w.line depth: 1 text: "if x != x then return \"nan\".string"
+            w.line depth: 1 text: "return \"\\{x.bits}\""
+            w.line depth: 0 text: "}"
+        }
+        k = k + 1
+    }
+}
+
+# localName -- the name of local `id`
+localName: function {p: prog.Prog.view id: u32} out String is {
+    k: (p.locals.get i: id.u64).kind
+    if k == prog.lk.param then return "a\{id}"
+    if k == prog.lk.counter then return "i\{id}"
+    return "v\{id}"
+}
+
+# atom -- expression `id` as a receiver or an argument: in parentheses unless
+# it is a name or a bool literal
+atom: function {w: Printer p: prog.Prog.view id: u32} out String is {
+    e: p.exprAt :id
+    t: exprText :w :p :id
+    if (e.kind == prog.ek.name) or (e.kind == prog.ek.konst) then return t
+    if e.kind == prog.ek.lit when e.ty == prog.ty.bool then return t
+    if e.kind == prog.ek.call when e.b == 0 then return t
+    if t.startsWith "(" then return t
+    return "(\{t})"
+}
+
+# exprText -- expression `id`
+exprText: function {w: Printer p: prog.Prog.view id: u32} out String is {
+    e: p.exprAt :id
+    k: e.kind
+    if k == prog.ek.lit then return (litText :e)
+    if k == prog.ek.name then return (localName :p id: e.ref)
+    if k == prog.ek.konst then return "k\{e.ref}"
+    if k == prog.ek.bin then return "(\{exprText :w :p id: e.a} \{(prog.ops.get i: e.op.u64
+    ).text} \{exprText :w :p id: e.b})"
+    if k == prog.ek.not then return "\{atom :w :p id: e.a}.not"
+    if k == prog.ek.conv then return (convText :w :p :e)
+    if k == prog.ek.call then return (callText :w :p :id bare: false)
+    return (branchText :w :p :e)
+}
+
+# branchText -- `if c then a else b`, or the same as a `match` on `c`
+branchText: function {w: Printer p: prog.Prog.view e: prog.expr} out String is {
+    c: exprText :w :p id: e.a
+    if (c.startsWith "(").not then c = "(\{c})"
+    yes: exprText :w :p id: e.b
+    no: exprText :w :p id: e.c
+    if e.kind == prog.ek.ifv then return "(if \{c} then \{yes} else \{no})"
+    return "(match \{c} case true then \{yes} case false then \{no})"
+}
+
+# convText -- the conversion `e`: lossless, `.or d:` a default, or `.orPanic`
+convText: function {w: Printer p: prog.Prog.view e: prog.expr} out String is {
+    v: typed body: (atom :w :p id: e.a) t: e.ty
+    if e.c == 1 then return "\{v}.orPanic"
+    if e.b == 0 then return v
+    return "(\{v}.or d: \{atom :w :p id: e.b})"
+}
+
+# callText -- the call `id`; `bare` as a statement, else in parentheses when
+# it has arguments
+callText: function {w: Printer p: prog.Prog.view id: u32 bare: bool} out String is {
+    e: p.exprAt :id
+    t: "f\{e.ref}"
+    if e.b == 0 then return t
+    f: p.funcs.get i: e.ref.u64
+    k: u32
+    for k < e.b loop {
+        param: p.paramAt :f :k
+        t.append " a\{param}: \{atom :w :p id: (p.argAt call: e :k)}"
+        k = k + 1
+    }
+    if bare then return t
+    return "(\{t})"
+}
+
+# litText -- the literal `e`, with its type's suffix
+litText: function {e: prog.expr} out String is {
+    if e.ty == prog.ty.bool then {
+        if e.lo == 1 then return "true".string
+        return "false".string
+    }
+    v: model.zv lo: e.lo hi: e.hi
+    if (prog.isFloat t: e.ty) then return (typed body: (floatDigits b: e.lo t: e.ty) t: e.ty)
+    if (prog.tys.get i: e.ty.u64).signed when (model.isNeg :v) then {
+        return (typed body: (model.decimal v: (model.neg128 a: v) neg: true) t: e.ty)
+    }
+    return (typed body: (model.decimal :v neg: false) t: e.ty)
+}
+
+# typed -- `body`, a value, with the suffix of type `t`: a literal's type or
+# the conversion it names
+typed: function {body: String t: u8} out String is {
+    s: body.copy
+    s.append "."
+    s.append (prog.tyName :t).stringView
+    return s
+}
+
+# floatDigits -- the exact decimal text of the float bits `b` of type `t`, a
+# finite value m * 2^e with e at least -40: m * 5^-e, its point -e digits from
+# the right
+floatDigits: function {b: u64 t: u8} out String is {
+    x: model.trimmed x: (model.unpack :b :t)
+    sign: if x.neg then "-" else ""
+    if x.m == 0 then return "\{sign}0.0"
+    if x.e >= 0 then return "\{sign}\{(
+        model.decimal
+        v: (model.shl128 a: (model.zv lo: x.m hi: 0) n: (x.e.u64.or d: 0))
+        neg: false
+    )}.0"
+    k: (0 - x.e).u64.or d: 0
+    n: model.zv lo: x.m hi: 0
+    i: u64
+    for i < k loop {
+        n = model.mul128 a: n b: (model.zv lo: 5 hi: 0)
+        i = i + 1
+    }
+    digits: model.decimal v: n neg: false
+    for digits.length <= k loop digits = "0\{digits}"
+    cut: digits.length - k
+    s: sign.string
+    s.append (digits.stringView.substring from: 0 to: cut)
+    s.append "."
+    s.append (digits.stringView.substring from: cut to: digits.length)
+    return s
+}
+
+# expectedOutput -- the standard output the model expects: each printed line
+expectedOutput: function {r: model.Run.view} out String is {
+    s: String
+    for each l: r.lines loop {
+        s.append l
+        s.append "\n"
+    }
+    return s
+}

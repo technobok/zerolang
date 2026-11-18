@@ -1,0 +1,974 @@
+# gen -- the type-directed generator of zfuzz's `--generate` mode. It chooses
+# a type, then a form that yields it, and builds a prog.Prog that zc must
+# accept, that terminates, and whose output the model (model.Run) predicts.
+#
+# Rules every program keeps, so that whatever zc refuses is a finding:
+# - every function is reached from main, since a declaration nothing uses is
+#   only parsed; a function calls only functions after it, and itself only
+#   through a depth parameter that falls on each call and is tested first;
+# - a loop counts with its own counter up to a literal, and nothing else
+#   writes the counter; a `break` and a `return` end a block, and only an `if`
+#   with one branch holds a `return`, so no statement follows a block that
+#   always exits;
+# - every literal is typed, so no arithmetic is untyped; a constant integer
+#   operation whose exact result is outside its type becomes `^`, and a
+#   constant zero divisor becomes 1 (zc refuses both); a lossy conversion
+#   takes `.or d:` a literal, and `.orPanic` only in a planned panic;
+# - a division the model finds dividing by zero at run time, which was not
+#   planned, gets its divisor written `(d | 1)`, and the model runs again;
+# - a fold check is written three ways: a unit constant (not for f16, which
+#   does not fold, nor for a float that is not finite somewhere), the same
+#   expression in main, and a function over parameters called with the same
+#   literals;
+# - about one program in ten ends in a planned panic: a division by a local
+#   bound to zero, or `.orPanic` on a conversion that fails.
+
+# knobs -- the generator's budgets
+knobs: record {
+    # functions besides main and the fold checks', at most
+    funcs: 3.u64
+    # parameters of a function, at most
+    params: 3.u64
+    # statements of a block, at most
+    stmts: 5.u64
+    # an expression's depth
+    depth: 3.u64
+    # blocks inside blocks
+    nest: 2.u64
+    # a loop's count, at most
+    trips: 6.u64
+    # fold checks, at most
+    folds: 2.u64
+}
+
+# Gen -- the state of one program's generation
+Gen: class {
+    p: prog.Prog
+    rng: Rng
+    k: knobs
+    # the function being written
+    fn: u32
+    # the locals in scope, by id
+    scope: ListVal u32
+    # the loops around the statement being written
+    loops: u32
+    # the blocks around it
+    nest: u32
+    # functions some call reaches
+    called: ListVal bool
+    # the division a planned panic divides by zero in, or 0
+    planned: u32
+    # the fold checks' print statements: 1 unit form, 2 body, 3 run
+    formOf: ListVal u8
+} as {
+    # create -- a generator for the case seeded `s`
+    create: function {s: u64 k: knobs} out this is {
+        return (
+            meta.create
+            p: prog.Prog.create
+            rng: (Rng :s)
+            :k
+            fn: 1
+            scope: ListVal u32
+            loops: 0
+            nest: 0
+            called: ListVal bool
+            planned: 0
+            formOf: ListVal u8
+        )
+    }
+
+    # chance -- true one time in `n`
+    chance: function {g: this n: u64} out bool is {
+        return (g.rng.below :n) == 0
+    }
+
+    # pick -- a number below `n`
+    pick: function {g: this n: u64} out u64 is {
+        return (g.rng.below :n)
+    }
+}
+
+# Generated -- a program's generator, holding the program, and how the model
+# ran it
+Generated: class {
+    gen: Gen
+    run: model.Run
+}
+
+# generate -- the program of case seed `s`: generated, then run by the model
+# and repaired until it runs as planned. A program the model cannot run within
+# its step limit is generated again from the next seed, with smaller budgets.
+generate: function {s: u64} out Generated is {
+    k: knobs
+    seed: s
+    tries: 0
+    for true loop {
+        g: Gen.create s: seed :k
+        build :g
+        r: settle :g
+        if r.over.not or (tries >= 4) then return (Generated gen: g run: r)
+        tries = tries + 1
+        seed = seed + 0x9E3779B97F4A7C15
+        k.trips = 2
+        k.stmts = 3
+        k.funcs = 2
+    }
+    return (Generated gen: (Gen.create :s :k) run: model.Run.create)
+}
+
+# settle -- run the model over `g`'s program, writing `(d | 1)` for each
+# divisor an unplanned division by zero meets, until the run is as planned
+settle: function {g: Gen} out model.Run is {
+    for true loop {
+        r: model.Run.create
+        model.runMain :r p: g.p
+        if (r.divNode == 0) or (r.divNode == g.planned) then return r
+        guardDivisor :g id: r.divNode
+    }
+    return model.Run.create
+}
+
+# guardDivisor -- the division `id`'s divisor written `(d | 1)`, never 0
+guardDivisor: function {g: Gen id: u32} is {
+    e: g.p.exprAt :id
+    t: e.ty
+    one: litInt :g :t lo: 1 hi: 0
+    e.b = binNode :g o: prog.op.bor :t a: e.b b: one
+    g.p.setExpr :id :e
+}
+
+# build -- the whole program: the functions' signatures, their bodies, then
+# main with its fold checks and, sometimes, a planned panic
+build: function {g: Gen} is {
+    n: g.pick n: g.k.funcs + 1
+    i: u64
+    for i < n loop {
+        signature :g
+        i = i + 1
+    }
+    f: g.p.funcs.length - 1
+    for f >= 2 loop {
+        functionBody :g fn: (f.u32.or d: 0)
+        f = f - 1
+    }
+    mainBody :g
+}
+
+# signature -- a new function: what it returns and its parameters, the first
+# sometimes a depth parameter its own calls lower
+signature: function {g: Gen} is {
+    f: (
+        prog.func
+        ret: (anyType :g)
+        first: (prog.idOf n: g.p.params.length + 1)
+        count: 0
+        body: 0
+        depth: 0
+    )
+    if (g.chance n: 4) then {
+        f.depth = g.p.addLocal kind: prog.lk.param t: prog.ty.u32
+        g.p.params.append f.depth
+        f.count = 1
+    }
+    n: g.pick n: g.k.params + 1
+    i: u64
+    for i < n loop {
+        g.p.params.append (g.p.addLocal kind: prog.lk.param t: (anyType :g))
+        f.count = f.count + 1
+        i = i + 1
+    }
+    g.p.funcs.append f
+    g.called.append false
+}
+
+# functionBody -- the body of function `fn`: statements, sometimes a call of
+# itself through its depth parameter, then a return
+functionBody: function {g: Gen fn: u32} is {
+    g.fn = fn
+    g.scope = ListVal u32
+    f: g.p.funcs.get i: fn.u64
+    k: u32
+    for k < f.count loop {
+        g.scope.append (g.p.paramAt :f :k)
+        k = k + 1
+    }
+    b: newBlock
+    statements :g :b
+    if f.depth != 0 then selfCall :g :b :f
+    (
+        addStmt
+        :g
+        :b
+        s: (
+            prog.stmt
+            kind: prog.sk.ret
+            local: 0
+            e: (genExpr :g t: f.ret d: g.k.depth)
+            body: 0
+            other: 0
+            n: 0
+            next: 0
+        )
+    )
+    f.body = b.first
+    g.p.funcs.set i: fn.u64 val: f
+}
+
+# selfCall -- `v: e` and `if depth > 0 then { v = this function's call with
+# depth - 1 }`
+selfCall: function {g: Gen b: Block f: prog.func} is {
+    v: g.p.addLocal kind: prog.lk.local t: f.ret
+    (
+        addStmt
+        :g
+        :b
+        s: (
+            prog.stmt
+            kind: prog.sk.decl
+            local: v
+            e: (genExpr :g t: f.ret d: 1)
+            body: 0
+            other: 0
+            n: 0
+            next: 0
+        )
+    )
+    g.scope.append v
+    d: name :g id: f.depth
+    zero: litInt :g t: prog.ty.u32 lo: 0 hi: 0
+    cond: binNode :g o: prog.op.gt t: prog.ty.bool a: d b: zero
+    inner: newBlock
+    call: callNode :g fn: g.fn
+    e: g.p.exprAt id: call
+    lowered: (
+        binNode
+        :g
+        o: prog.op.sub
+        t: prog.ty.u32
+        a: (name :g id: f.depth)
+        b: (litInt :g t: prog.ty.u32 lo: 1 hi: 0)
+    )
+    g.p.args.set i: e.a.u64 val: lowered
+    (
+        addStmt
+        :g
+        b: inner
+        s: (prog.stmt kind: prog.sk.assign local: v e: call body: 0 other: 0 n: 0 next: 0)
+    )
+    (
+        addStmt
+        :g
+        :b
+        s: (prog.stmt kind: prog.sk.ifs local: 0 e: cond body: inner.first other: 0 n: 0 next: 0)
+    )
+}
+
+# mainBody -- main: statements, a print of a call of every function no call
+# reaches yet, the fold checks, and one time in ten a planned panic
+mainBody: function {g: Gen} is {
+    g.fn = 1
+    g.scope = ListVal u32
+    b: newBlock
+    statements :g :b
+    f: 2.u64
+    for f < g.p.funcs.length loop {
+        if (g.called.get i: f - 2).not then {
+            call: callNode :g fn: (f.u32.or d: 0)
+            addPrint :g :b e: call form: 0
+        }
+        f = f + 1
+    }
+    n: g.pick n: g.k.folds + 1
+    i: u64
+    for i < n loop {
+        foldCheck :g :b
+        i = i + 1
+    }
+    if (g.chance n: 10) then plannedPanic :g :b
+    main: g.p.funcs.get i: 1
+    main.body = b.first
+    g.p.funcs.set i: 1 val: main
+}
+
+# Block -- a block being written: its first and last statement
+Block: class {
+    first: u32
+    last: u32
+}
+
+# newBlock -- an empty block
+newBlock: function out Block is {
+    return (Block first: 0 last: 0)
+}
+
+# addStmt -- `s` added at the end of block `b`
+addStmt: function {g: Gen b: Block s: prog.stmt} is {
+    id: g.p.addStmt :s
+    if b.first == 0 then {
+        b.first = id
+    } else {
+        prev: g.p.stmtAt id: b.last
+        prev.next = id
+        g.p.setStmt id: b.last s: prev
+    }
+    b.last = id
+}
+
+# addPrint -- `print` of expression `e` at the end of block `b`; `form`
+# names a fold check's form, 0 for none
+addPrint: function {g: Gen b: Block e: u32 form: u8} is {
+    addStmt :g :b s: (prog.stmt kind: prog.sk.print local: 0 :e body: 0 other: 0 n: 0 next: 0)
+    for g.formOf.length < g.p.stmts.length loop g.formOf.append 0
+    g.formOf.set i: b.last.u64 val: form
+}
+
+# statements -- one to `stmts` statements at the end of block `b`
+statements: function {g: Gen b: Block} is {
+    n: 1 + (g.pick n: g.k.stmts)
+    i: u64
+    for i < n loop {
+        statement :g :b
+        i = i + 1
+    }
+}
+
+# statement -- one statement at the end of block `b`, its kind drawn by
+# weight; a block or a loop only while the nesting allows
+statement: function {g: Gen b: Block} is {
+    w: g.pick n: 14
+    deep: g.nest.u64 >= g.k.nest
+    if w < 4 then {
+        declare :g :b
+    } else if w < 6 then {
+        assign :g :b
+    } else if w < 9 then {
+        t: anyType :g
+        addPrint :g :b e: (genExpr :g :t d: g.k.depth) form: 0
+    } else if (w < 11) and deep.not then {
+        ifStatement :g :b
+    } else if (w < 13) and deep.not then {
+        loopStatement :g :b
+    } else {
+        exitStatement :g :b
+    }
+}
+
+# declare -- `v: e`, a new local in scope after it
+declare: function {g: Gen b: Block} is {
+    t: anyType :g
+    e: genExpr :g :t d: g.k.depth
+    v: g.p.addLocal kind: prog.lk.local :t
+    addStmt :g :b s: (prog.stmt kind: prog.sk.decl local: v :e body: 0 other: 0 n: 0 next: 0)
+    g.scope.append v
+}
+
+# assign -- `v = e` to a local in scope, or a declaration when there is none
+assign: function {g: Gen b: Block} is {
+    mine: ListVal u32
+    for each v: g.scope loop {
+        if (g.p.locals.get i: v.u64).kind == prog.lk.local then mine.append v
+    }
+    if mine.length == 0 then {
+        declare :g :b
+        return
+    }
+    v: mine.get i: (g.pick n: mine.length)
+    e: genExpr :g t: (g.p.localTy id: v) d: g.k.depth
+    addStmt :g :b s: (prog.stmt kind: prog.sk.assign local: v :e body: 0 other: 0 n: 0 next: 0)
+}
+
+# ifStatement -- `if c then { ... } else { ... }`, the else sometimes left out
+ifStatement: function {g: Gen b: Block} is {
+    c: genExpr :g t: prog.ty.bool d: g.k.depth
+    yes: subBlock :g
+    no: u32
+    if (g.chance n: 2) then no = subBlock :g
+    addStmt :g :b s: (prog.stmt kind: prog.sk.ifs local: 0 e: c body: yes other: no n: 0 next: 0)
+}
+
+# subBlock -- a nested block's first statement; its locals go out of scope at
+# its end
+subBlock: function {g: Gen} out u32 is {
+    kept: g.scope.length
+    g.nest = g.nest + 1
+    inner: newBlock
+    statements :g b: inner
+    g.nest = g.nest - 1
+    for g.scope.length > kept loop g.scope.pop
+    return inner.first
+}
+
+# loopStatement -- a counted loop up to a literal count, its counter in scope
+# from the loop on
+loopStatement: function {g: Gen b: Block} is {
+    c: g.p.addLocal kind: prog.lk.counter t: prog.ty.u32
+    n: 1 + (g.pick n: g.k.trips)
+    g.scope.append c
+    g.loops = g.loops + 1
+    body: subBlock :g
+    g.loops = g.loops - 1
+    (
+        addStmt
+        :g
+        :b
+        s: (prog.stmt kind: prog.sk.counted local: c e: 0 :body other: 0 n: (n.u32.or d: 1) next: 0)
+    )
+}
+
+# exitStatement -- `if c then { break }` inside a loop, `if c then { return
+# e }` in a function, else a call whose value is dropped
+exitStatement: function {g: Gen b: Block} is {
+    inner: newBlock
+    if (g.loops > 0) and (g.chance n: 2) then {
+        (
+            addStmt
+            :g
+            b: inner
+            s: (prog.stmt kind: prog.sk.brk local: 0 e: 0 body: 0 other: 0 n: 0 next: 0)
+        )
+    } else if g.fn != 1 then {
+        f: g.p.funcs.get i: g.fn.u64
+        (
+            addStmt
+            :g
+            b: inner
+            s: (
+                prog.stmt
+                kind: prog.sk.ret
+                local: 0
+                e: (genExpr :g t: f.ret d: g.k.depth)
+                body: 0
+                other: 0
+                n: 0
+                next: 0
+            )
+        )
+    } else {
+        f: callable :g t: (anyType :g)
+        if f != 0 then (
+            addStmt
+            :g
+            :b
+            s: (
+                prog.stmt
+                kind: prog.sk.call
+                local: 0
+                e: (callNode :g fn: f)
+                body: 0
+                other: 0
+                n: 0
+                next: 0
+            )
+        )
+        return
+    }
+    c: genExpr :g t: prog.ty.bool d: g.k.depth
+    (
+        addStmt
+        :g
+        :b
+        s: (prog.stmt kind: prog.sk.ifs local: 0 e: c body: inner.first other: 0 n: 0 next: 0)
+    )
+}
+
+# ---------------- expressions ----------------
+
+# anyType -- a scalar type, each as likely as another
+anyType: function {g: Gen} out u8 is {
+    return ((g.pick n: prog.tys.length).u8.or d: 0)
+}
+
+# genExpr -- an expression of type `t` at most `d` deep
+genExpr: function {g: Gen t: u8 d: u64} out u32 is {
+    if (d == 0) or (g.chance n: 4) then return (leaf :g :t)
+    w: g.pick n: 10
+    if w < 5 then return (operation :g :t :d)
+    if w < 6 then return (branchValue :g :t :d)
+    if w < 8 then {
+        f: callable :g :t
+        if f != 0 then return (callNode :g fn: f)
+    }
+    if (w < 9) and (t != prog.ty.bool) then return (conversion :g :t :d)
+    if (prog.isFloat :t).not then return (g.p.addExpr (
+        prog.expr
+        kind: prog.ek.not
+        ty: t
+        op: 0
+        a: (genExpr :g :t d: d - 1)
+        b: 0
+        c: 0
+        ref: 0
+        lo: 0
+        hi: 0
+    )
+    )
+    return (leaf :g :t)
+}
+
+# operation -- `a op b` yielding `t`: a comparison or `and`/`or` for bool,
+# arithmetic for a number
+operation: function {g: Gen t: u8 d: u64} out u32 is {
+    if t == prog.ty.bool then {
+        if (g.chance n: 3) then {
+            o: if (g.chance n: 2) then prog.op.land else prog.op.lor
+            return (binNode :g :o :t a: (genExpr :g :t d: d - 1) b: (genExpr :g :t d: d - 1))
+        }
+        u: anyType :g
+        o: prog.op.lt + ((g.pick n: 6).u8.or d: 0)
+        if u == prog.ty.bool then o = prog.op.eq + ((g.pick n: 2).u8.or d: 0)
+        return (binNode :g :o :t a: (genExpr :g t: u d: d - 1) b: (genExpr :g t: u d: d - 1))
+    }
+    o: (g.pick n: 10).u8.or d: 0
+    if (prog.isFloat :t) then o = (g.pick n: 5).u8.or d: 0
+    a: genExpr :g :t d: d - 1
+    b: u32
+    if (o == prog.op.shl) or (o == prog.op.shr) then {
+        b = shiftCount :g :t :d
+    } else {
+        b = genExpr :g :t d: d - 1
+    }
+    return (binNode :g :o :t :a :b)
+}
+
+# shiftCount -- a shift's count of type `t`: mostly a small literal, at times
+# one at or past the width, or any expression
+shiftCount: function {g: Gen t: u8 d: u64} out u32 is {
+    if (g.chance n: 3) then return (genExpr :g :t d: d - 1)
+    w: (prog.tys.get i: t.u64).bits.u64.or d: 8
+    return (litInt :g :t lo: (g.pick n: w + 3) hi: 0)
+}
+
+# branchValue -- `if c then a else b`, or the same as a `match` on `c`
+branchValue: function {g: Gen t: u8 d: u64} out u32 is {
+    k: prog.ek.ifv
+    if (g.chance n: 2) then k = prog.ek.matchv
+    cond: genExpr :g t: prog.ty.bool d: d - 1
+    yes: genExpr :g :t d: d - 1
+    no: genExpr :g :t d: d - 1
+    return (g.p.addExpr (prog.expr kind: k ty: t op: 0 a: cond b: yes c: no ref: 0 lo: 0 hi: 0))
+}
+
+# conversion -- a value of another type converted to `t`: a lossy conversion
+# takes `.or d:` a literal of `t`
+conversion: function {g: Gen t: u8 d: u64} out u32 is {
+    s: anyType :g
+    for (s == prog.ty.bool) or (s == t) loop s = anyType :g
+    a: genExpr :g t: s d: d - 1
+    b: u32
+    if (lossy from: s to: t) then b = leaf :g :t
+    return (g.p.addExpr (prog.expr kind: prog.ek.conv ty: t op: 0 :a :b c: 0 ref: 0 lo: 0 hi: 0))
+}
+
+# lossy -- whether converting `from` to `to` can lose information: zc's rule
+# (znativecheck's convIsLossy), so the conversion returns a result to handle
+lossy: function {from: u8 to: u8} out bool is {
+    if from == to then return false
+    a: prog.tys.get i: from.u64
+    b: prog.tys.get i: to.u64
+    if a.float then {
+        if b.float then return a.mant > b.mant
+        return true
+    }
+    if b.float then return a.bits > b.mant
+    if a.signed == b.signed then return a.bits > b.bits
+    if a.signed then return true
+    return a.bits >= b.bits
+}
+
+# callable -- a function returning `t` that the function being written may
+# call (one after it; main may call any), or 0
+callable: function {g: Gen t: u8} out u32 is {
+    found: ListVal u32
+    f: (g.fn + 1).u64
+    if f < 2 then f = 2
+    for f < g.p.funcs.length loop {
+        if (g.p.funcs.get i: f).ret == t then found.append (f.u32.or d: 0)
+        f = f + 1
+    }
+    if found.length == 0 then return 0
+    return (found.get i: (g.pick n: found.length))
+}
+
+# callNode -- a call of function `fn`: a depth argument is a literal 0 to 3,
+# every other argument any expression of its type. The arguments take their
+# places in `args` after they are made, since a call among them takes places
+# of its own.
+callNode: function {g: Gen fn: u32} out u32 is {
+    f: g.p.funcs.get i: fn.u64
+    vals: ListVal u32
+    k: u32
+    for k < f.count loop {
+        param: g.p.paramAt :f :k
+        if param == f.depth then {
+            vals.append (litInt :g t: prog.ty.u32 lo: (g.pick n: 4) hi: 0)
+        } else {
+            vals.append (genExpr :g t: (g.p.localTy id: param) d: 1)
+        }
+        k = k + 1
+    }
+    first: prog.idOf n: g.p.args.length + 1
+    for each v: vals loop g.p.args.append v
+    g.called.set i: (fn - 2).u64 val: true
+    return (g.p.addExpr (
+        prog.expr
+        kind: prog.ek.call
+        ty: f.ret
+        op: 0
+        a: first
+        b: f.count
+        c: 0
+        ref: fn
+        lo: 0
+        hi: 0
+    )
+    )
+}
+
+# leaf -- a local of type `t` in scope, or a literal
+leaf: function {g: Gen t: u8} out u32 is {
+    mine: ListVal u32
+    for each v: g.scope loop {
+        if (g.p.localTy id: v) == t then mine.append v
+    }
+    if (mine.length > 0) and (g.chance n: 3).not then return (
+        name
+        :g
+        id: (mine.get i: (g.pick n: mine.length))
+    )
+    return (literal :g :t)
+}
+
+# name -- a reference to local `id`
+name: function {g: Gen id: u32} out u32 is {
+    return (g.p.addExpr (
+        prog.expr
+        kind: prog.ek.name
+        ty: (g.p.localTy :id)
+        op: 0
+        a: 0
+        b: 0
+        c: 0
+        ref: id
+        lo: 0
+        hi: 0
+    )
+    )
+}
+
+# binNode -- `a o b` of type `t`. When both sides are constants, or the
+# divisor is, the constant's own rules apply: an integer result outside `t`
+# turns the operator into `^`, a zero divisor becomes 1.
+binNode: function {g: Gen o: u8 t: u8 a: u32 b: u32} out u32 is {
+    rhs: b
+    ot: (g.p.exprAt id: a).ty
+    divides: (o == prog.op.div) or (o == prog.op.rem)
+    if divides and (prog.isInt t: ot) when (isConst :g id: b) when (
+        model.isZero
+        v: (constValue :g id: b)
+    ) then {
+        rhs = litInt :g t: ot lo: 1 hi: 0
+    }
+    op: o
+    if (
+        (prog.isInt t: ot) and
+        (prog.ops.get i: o.u64).compares.not and
+        (isConst :g id: a) and
+        (isConst :g id: rhs)
+    ) then {
+        ir: model.intArith :o t: ot a: (constValue :g id: a) b: (constValue :g id: rhs)
+        if ir.over then op = prog.op.bxor
+    }
+    return (g.p.addExpr (prog.expr kind: prog.ek.bin ty: t :op :a b: rhs c: 0 ref: 0 lo: 0 hi: 0))
+}
+
+# isConst -- whether expression `id` is a compile-time constant: literals and
+# unit constants under operators and lossless conversions
+isConst: function {g: Gen id: u32} out bool is {
+    e: g.p.exprAt :id
+    if (e.kind == prog.ek.lit) or (e.kind == prog.ek.konst) then return true
+    if e.kind == prog.ek.bin then return (isConst :g id: e.a) and (isConst :g id: e.b)
+    if e.kind == prog.ek.not then return (isConst :g id: e.a)
+    if e.kind == prog.ek.conv when e.b == 0 when e.c == 0 then return (isConst :g id: e.a)
+    return false
+}
+
+# constValue -- the value of the constant expression `id`
+constValue: function {g: Gen.view id: u32} out model.zv is {
+    r: model.Run.create
+    frame: ListVal model.zv
+    return (model.evalExpr :r p: g.p :frame :id)
+}
+
+# ---------------- literals ----------------
+
+# litInt -- the integer or bool literal of type `t` holding (`lo`, `hi`), cut
+# to `t`
+litInt: function {g: Gen t: u8 lo: u64 hi: u64} out u32 is {
+    v: model.wrapTo v: (model.zv :lo :hi) :t
+    return (g.p.addExpr (
+        prog.expr
+        kind: prog.ek.lit
+        ty: t
+        op: 0
+        a: 0
+        b: 0
+        c: 0
+        ref: 0
+        lo: v.lo
+        hi: v.hi
+    )
+    )
+}
+
+# literal -- a literal of type `t`: the edges of its range and values near
+# them, small values, and random bits
+literal: function {g: Gen t: u8} out u32 is {
+    if t == prog.ty.bool then return (litInt :g :t lo: (g.pick n: 2) hi: 0)
+    if (prog.isFloat :t) then return (floatLiteral :g :t)
+    w: g.pick n: 6
+    lo: g.rng.next
+    hi: g.rng.next
+    if w < 2 then {
+        lo = g.pick n: 17
+        lo = lo - 8
+        hi = if (lo >> 63) == 1 then model.ones else 0
+    } else if w < 4 then {
+        edge: edgeValue :g :t
+        lo = edge.lo
+        hi = edge.hi
+    }
+    return (litInt :g :t :lo :hi)
+}
+
+# edgeValue -- one of the values at the ends of `t`'s range, or next to them
+edgeValue: function {g: Gen t: u8} out model.zv is {
+    info: prog.tys.get i: t.u64
+    w: (info.bits.u64.or d: 8) - 1
+    top: model.sub128 a: (model.shl128 a: (model.zv lo: 1 hi: 0) n: w) b: (model.zv lo: 1 hi: 0)
+    if info.signed.not then top = (
+        model.add128
+        a: (model.shl128 a: top n: 1)
+        b: (model.zv lo: 1 hi: 0)
+    )
+    bottom: model.zv
+    if info.signed then bottom = model.bitNot a: top
+    nudge: model.zv lo: (g.pick n: 3) hi: 0
+    if (g.chance n: 2) then return (model.sub128 a: top b: nudge)
+    return (model.add128 a: bottom b: nudge)
+}
+
+# floatLiteral -- a literal of float type `t`: m * 2^e with m below 2^11,
+# exact in every float type and short in decimal, or the type's largest value
+floatLiteral: function {g: Gen t: u8} out u32 is {
+    m: g.pick n: 2048
+    neg: g.chance n: 2
+    e: ((g.pick n: 41).i32.or d: 0) - 20
+    if t == prog.ty.f16 then {
+        span: (model.bitLen :m).i32.or d: 0
+        hi: 16 - span
+        e = ((g.pick n: 25 + (hi.u64.or d: 0)).i32.or d: 0) - 24
+    }
+    x: model.fbits kind: 0 :neg :m :e
+    if (g.chance n: 12) then x = largest :t :neg
+    return (g.p.addExpr (
+        prog.expr
+        kind: prog.ek.lit
+        ty: t
+        op: 0
+        a: 0
+        b: 0
+        c: 0
+        ref: 0
+        lo: (model.pack :x :t)
+        hi: 0
+    )
+    )
+}
+
+# largest -- the largest finite value of float type `t` below 2^128, with
+# sign `neg`
+largest: function {t: u8 neg: bool} out model.fbits is {
+    if t == prog.ty.f16 then return (model.fbits kind: 0 :neg m: 2047 e: 5)
+    return (model.fbits kind: 0 :neg m: 0xFFFFFF e: 104)
+}
+
+# ---------------- fold checks and planned panics ----------------
+
+# foldCheck -- one constant expression over typed literals, printed in its
+# three forms: the unit constant, the expression in main, and a function over
+# parameters called with the same literals
+foldCheck: function {g: Gen b: Block} is {
+    t: anyType :g
+    for t == prog.ty.bool loop t = anyType :g
+    lits: ListVal u32
+    e: constTree :g :t d: 2 :lits
+    if (t != prog.ty.f16) and (finiteThroughout :g id: e) then {
+        kid: prog.idOf n: g.p.konsts.length + 1
+        g.p.konsts.append (prog.konst :e ty: t)
+        kref: g.p.addExpr (
+            prog.expr
+            kind: prog.ek.konst
+            ty: t
+            op: 0
+            a: 0
+            b: 0
+            c: 0
+            ref: kid
+            lo: 0
+            hi: 0
+        )
+        addPrint :g :b e: kref form: 1
+    }
+    addPrint :g :b e: (copyTree :g id: e params: ListVal u32 :lits) form: 2
+    addPrint :g :b e: (foldFunction :g :e :t :lits) form: 3
+}
+
+# constTree -- an operator tree over literals of type `t`, `d` deep; each
+# literal's id is appended to `lits`
+constTree: function {g: Gen t: u8 d: u64 lits: (ListVal u32).borrow} out u32 is {
+    if (d == 0) or (g.chance n: 4) then {
+        l: literal :g :t
+        lits.append l
+        return l
+    }
+    o: (g.pick n: 10).u8.or d: 0
+    if (prog.isFloat :t) then o = (g.pick n: 4).u8.or d: 0
+    a: constTree :g :t d: d - 1 :lits
+    b: constTree :g :t d: d - 1 :lits
+    return (binNode :g :o :t :a :b)
+}
+
+# finiteThroughout -- whether no operation of the constant float tree `id`
+# gives an infinity or a NaN (a unit constant refuses one); true for integers
+finiteThroughout: function {g: Gen id: u32} out bool is {
+    e: g.p.exprAt :id
+    if (prog.isFloat t: e.ty).not then return true
+    if (model.unpack b: (constValue :g :id).lo t: e.ty).kind != 0 then return false
+    if e.kind == prog.ek.bin then return (
+        (finiteThroughout :g id: e.a) and (finiteThroughout :g id: e.b)
+    )
+    return true
+}
+
+# copyTree -- a copy of the tree `id`; with `params`, the literal `lits[k]`
+# becomes a reference to `params[k]`
+copyTree: function {g: Gen id: u32 params: (ListVal u32).view lits: (ListVal u32).view} out u32 is {
+    e: g.p.exprAt :id
+    if e.kind == prog.ek.lit then {
+        k: u64
+        for k < params.length loop {
+            if (lits.get i: k) == id then return (name :g id: (params.get i: k))
+            k = k + 1
+        }
+        return (g.p.addExpr e)
+    }
+    if e.kind == prog.ek.bin then {
+        e.a = copyTree :g id: e.a :params :lits
+        e.b = copyTree :g id: e.b :params :lits
+    }
+    return (g.p.addExpr e)
+}
+
+# foldFunction -- a function returning the tree `e` over parameters in place
+# of its literals, and a call of it with those literals
+foldFunction: function {g: Gen e: u32 t: u8 lits: (ListVal u32).view} out u32 is {
+    f: prog.func ret: t first: (prog.idOf n: g.p.params.length + 1) count: 0 body: 0 depth: 0
+    params: ListVal u32
+    for params.length < lits.length loop {
+        id: g.p.addLocal kind: prog.lk.param :t
+        params.append id
+        g.p.params.append id
+        f.count = f.count + 1
+    }
+    body: copyTree :g id: e :params :lits
+    f.body = g.p.addStmt (prog.stmt kind: prog.sk.ret local: 0 e: body body: 0 other: 0 n: 0 next: 0
+    )
+    g.p.funcs.append f
+    g.called.append true
+    fn: prog.idOf n: g.p.funcs.length
+    first: prog.idOf n: g.p.args.length + 1
+    for each l: lits loop g.p.args.append (copyTree :g id: l params: ListVal u32 :lits)
+    return (g.p.addExpr (
+        prog.expr
+        kind: prog.ek.call
+        ty: t
+        op: 0
+        a: first
+        b: f.count
+        c: 0
+        ref: fn
+        lo: 0
+        hi: 0
+    )
+    )
+}
+
+# plannedPanic -- the last statement of main panics: a division by a local
+# bound to zero, or `.orPanic` on a conversion that fails
+plannedPanic: function {g: Gen b: Block} is {
+    if (g.chance n: 2) then {
+        t: prog.ty.i8 + ((g.pick n: 10).u8.or d: 0)
+        z: g.p.addLocal kind: prog.lk.local :t
+        (
+            addStmt
+            :g
+            :b
+            s: (
+                prog.stmt
+                kind: prog.sk.decl
+                local: z
+                e: (litInt :g :t lo: 0 hi: 0)
+                body: 0
+                other: 0
+                n: 0
+                next: 0
+            )
+        )
+        o: if (g.chance n: 2) then prog.op.div else prog.op.rem
+        div: g.p.addExpr (
+            prog.expr
+            kind: prog.ek.bin
+            ty: t
+            op: o
+            a: (genExpr :g :t d: 1)
+            b: (name :g id: z)
+            c: 0
+            ref: 0
+            lo: 0
+            hi: 0
+        )
+        g.planned = div
+        addPrint :g :b e: div form: 0
+        return
+    }
+    src: g.p.addLocal kind: prog.lk.local t: prog.ty.i32
+    (
+        addStmt
+        :g
+        :b
+        s: (
+            prog.stmt
+            kind: prog.sk.decl
+            local: src
+            e: (litInt :g t: prog.ty.i32 lo: 300 hi: 0)
+            body: 0
+            other: 0
+            n: 0
+            next: 0
+        )
+    )
+    conv: g.p.addExpr (
+        prog.expr
+        kind: prog.ek.conv
+        ty: prog.ty.u8
+        op: 0
+        a: (name :g id: src)
+        b: 0
+        c: 1
+        ref: 0
+        lo: 0
+        hi: 0
+    )
+    addPrint :g :b e: conv form: 0
+}

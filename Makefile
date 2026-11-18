@@ -139,12 +139,12 @@ CHECKER_SRCS := src/ztypecheck.z $(wildcard src/ztypecheck/*.z)
 EMITTER_SRCS := src/zemitterc.z $(wildcard src/zemitterc/*.z)
 
 # What the parse-tier linter reads.
-ZLSCOPE := src/*.z $(SRC_SUBUNITS) lib/system/*.z lib/system/system/*.z lib/system/math/*.z tests/unit/*.z tests/unit/matrixgen/*.z $(TOOLSRC)
+ZLSCOPE := src/*.z $(SRC_SUBUNITS) lib/system/*.z lib/system/system/*.z lib/system/math/*.z tests/unit/*.z tests/unit/matrixgen/*.z tests/unit/zfuzz/*.z $(TOOLSRC)
 # What the --full tier reads. It checks a file as the unit it is, so style-lint
 # gives each tree its own roots.
 ZLFULLSCOPE := src/*.z $(SRC_SUBUNITS) lib/system/*.z lib/system/system/*.z lib/system/math/*.z
 # What the formatter checks; tests/fixtures/ is input and stays as written.
-FMTSCOPE := src/*.z $(SRC_SUBUNITS) lib/system/*.z lib/system/system/*.z lib/system/math/*.z examples/*.z tests/unit/*.z tests/unit/matrixgen/*.z $(TOOLSRC) lib/system/*.zd project.zd tests/fixtures/zdata/zd_written.zd tests/known/*.zd tests/fixtures/*_baseline.zd tests/fixtures/*_cases.zd tests/fixtures/*_expect.zd tests/view_guard.zd
+FMTSCOPE := src/*.z $(SRC_SUBUNITS) lib/system/*.z lib/system/system/*.z lib/system/math/*.z examples/*.z tests/unit/*.z tests/unit/matrixgen/*.z tests/unit/zfuzz/*.z $(TOOLSRC) lib/system/*.zd project.zd tests/fixtures/zdata/zd_written.zd tests/known/*.zd tests/fixtures/*_baseline.zd tests/fixtures/*_cases.zd tests/fixtures/*_expect.zd tests/view_guard.zd
 
 all: bin/zc bin/zl bin/zls
 
@@ -153,7 +153,7 @@ check: style-lint-fast complexity-report
 
 # complexity-report -- every function over A008's threshold, highest first, into
 # $(COMPLEXITY_TSV); the per-file ratchet is tests/fixtures/arch_baseline.zd.
-COMPLEXITY_SCOPE := src/*.z $(SRC_SUBUNITS) lib/system/*.z lib/system/system/*.z lib/system/math/*.z tests/unit/*.z tests/unit/matrixgen/*.z examples/*.z $(TOOLSRC)
+COMPLEXITY_SCOPE := src/*.z $(SRC_SUBUNITS) lib/system/*.z lib/system/system/*.z lib/system/math/*.z tests/unit/*.z tests/unit/matrixgen/*.z tests/unit/zfuzz/*.z examples/*.z $(TOOLSRC)
 COMPLEXITY_TSV := $(BUILDDIR)/cognitive-complexity.tsv
 complexity-report: bin/zl
 	@mkdir -p $(BUILDDIR)
@@ -883,7 +883,7 @@ out/zc-asan: bin/zc $(wildcard src/*.z lib/system/*.z lib/system/system/*) $(SRC
 	@mkdir -p $(BUILDDIR)
 	bin/zc build src/zc.z --system lib/system -o $@ --cflags "-O1 -g -fno-omit-frame-pointer $(FUZZ_SAN)" --ldflags "$(FUZZ_SAN)"
 
-out/zfuzz: bin/zc tests/unit/zfuzz.z $(wildcard lib/system/*.z) $(wildcard lib/system/system/*.z)
+out/zfuzz: bin/zc tests/unit/zfuzz.z $(wildcard tests/unit/zfuzz/*.z) $(wildcard lib/system/*.z) $(wildcard lib/system/system/*.z)
 	@mkdir -p $(BUILDDIR)
 	bin/zc build tests/unit/zfuzz.z --system lib/system -o $@
 
@@ -970,7 +970,7 @@ regen-fmt-goldens: out/zfmt
 	@echo "regenerated fmt goldens via $(BUILDDIR)/zfmt"
 
 # The ownership matrix generator: every type family by every position.
-out/matrixgen: bin/zc tests/unit/matrixgen.z $(wildcard tests/unit/matrixgen/*.z) $(wildcard src/*.z) $(SRC_SUBUNITS) $(wildcard lib/system/*.z) $(wildcard lib/system/system/*.z lib/system/math/*.z)
+out/matrixgen: bin/zc tests/unit/matrixgen.z $(wildcard tests/unit/matrixgen/*.z tests/unit/zfuzz/*.z) $(wildcard src/*.z) $(SRC_SUBUNITS) $(wildcard lib/system/*.z) $(wildcard lib/system/system/*.z lib/system/math/*.z)
 	@mkdir -p $(BUILDDIR)
 	bin/zc matrixgen --src tests/unit --src src --system lib/system --emit-c $(BUILDDIR)/matrixgen.c
 	$(CC) $(CFLAGS) -o $(BUILDDIR)/matrixgen $(BUILDDIR)/matrixgen.c $(call ZLINKOF,$(BUILDDIR)/matrixgen.c) -lm

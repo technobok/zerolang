@@ -1,0 +1,343 @@
+# prog -- the program tree of zfuzz's generator. A generated program is a set
+# of flat tables of records keyed by u32 ids, id 0 of each the sentinel "none"
+# (the compiler's own convention), so an edit names a node by its id. A node's
+# kind is a code of a constant block; links between nodes are ids.
+
+# ty -- the scalar types, by their index in `tys`
+ty: list {
+    bool: 0
+    i8: 1
+    i16: 2
+    i32: 3
+    i64: 4
+    i128: 5
+    u8: 6
+    u16: 7
+    u32: 8
+    u64: 9
+    u128: 10
+    f16: 11
+    f32: 12
+    f64: 13
+} out staticlist u8
+
+# tyinfo -- what a scalar type is
+tyinfo: data {
+    # the name a program writes
+    name: ""
+    # its width in bits; 1 for bool
+    bits: 0
+    # a signed integer
+    signed: false
+    # a float
+    float: false
+    # a float's significand bits, the hidden bit counted
+    mant: 0
+    # a float's largest exponent: its largest finite value is below 2^(maxExp + 1)
+    maxExp: 0
+}
+
+# tys -- every scalar type, in `ty` order
+tys: list {
+    (tyinfo name: "bool" bits: 1 signed: false float: false mant: 0 maxExp: 0)
+    (tyinfo name: "i8" bits: 8 signed: true float: false mant: 0 maxExp: 0)
+    (tyinfo name: "i16" bits: 16 signed: true float: false mant: 0 maxExp: 0)
+    (tyinfo name: "i32" bits: 32 signed: true float: false mant: 0 maxExp: 0)
+    (tyinfo name: "i64" bits: 64 signed: true float: false mant: 0 maxExp: 0)
+    (tyinfo name: "i128" bits: 128 signed: true float: false mant: 0 maxExp: 0)
+    (tyinfo name: "u8" bits: 8 signed: false float: false mant: 0 maxExp: 0)
+    (tyinfo name: "u16" bits: 16 signed: false float: false mant: 0 maxExp: 0)
+    (tyinfo name: "u32" bits: 32 signed: false float: false mant: 0 maxExp: 0)
+    (tyinfo name: "u64" bits: 64 signed: false float: false mant: 0 maxExp: 0)
+    (tyinfo name: "u128" bits: 128 signed: false float: false mant: 0 maxExp: 0)
+    (tyinfo name: "f16" bits: 16 signed: true float: true mant: 11 maxExp: 15)
+    (tyinfo name: "f32" bits: 32 signed: true float: true mant: 24 maxExp: 127)
+    (tyinfo name: "f64" bits: 64 signed: true float: true mant: 53 maxExp: 1023)
+} out staticlist tyinfo
+
+# op -- the binary operators, by their index in `ops`
+op: list {
+    add: 0
+    sub: 1
+    mul: 2
+    div: 3
+    rem: 4
+    band: 5
+    bor: 6
+    bxor: 7
+    shl: 8
+    shr: 9
+    lt: 10
+    gt: 11
+    le: 12
+    ge: 13
+    eq: 14
+    ne: 15
+    land: 16
+    lor: 17
+} out staticlist u8
+
+# opinfo -- what a binary operator takes and gives
+opinfo: data {
+    # its text in a program
+    text: ""
+    # it takes integers
+    ints: false
+    # it takes floats
+    floats: false
+    # it takes bools
+    bools: false
+    # it answers a bool whatever it takes
+    compares: false
+}
+
+# ops -- every binary operator, in `op` order
+ops: list {
+    (opinfo text: "+" ints: true floats: true bools: false compares: false)
+    (opinfo text: "-" ints: true floats: true bools: false compares: false)
+    (opinfo text: "*" ints: true floats: true bools: false compares: false)
+    (opinfo text: "/" ints: true floats: true bools: false compares: false)
+    (opinfo text: "%" ints: true floats: true bools: false compares: false)
+    (opinfo text: "&" ints: true floats: false bools: false compares: false)
+    (opinfo text: "|" ints: true floats: false bools: false compares: false)
+    (opinfo text: "^" ints: true floats: false bools: false compares: false)
+    (opinfo text: "<<" ints: true floats: false bools: false compares: false)
+    (opinfo text: ">>" ints: true floats: false bools: false compares: false)
+    (opinfo text: "<" ints: true floats: true bools: false compares: true)
+    (opinfo text: ">" ints: true floats: true bools: false compares: true)
+    (opinfo text: "<=" ints: true floats: true bools: false compares: true)
+    (opinfo text: ">=" ints: true floats: true bools: false compares: true)
+    (opinfo text: "==" ints: true floats: true bools: true compares: true)
+    (opinfo text: "!=" ints: true floats: true bools: true compares: true)
+    (opinfo text: "and" ints: false floats: false bools: true compares: false)
+    (opinfo text: "or" ints: false floats: false bools: true compares: false)
+} out staticlist opinfo
+
+# ek -- the kinds of expression node
+ek: list {
+    none: 0
+    # a typed literal: its value in `lo` and `hi`
+    lit: 1
+    # a local or a parameter, `ref`
+    name: 2
+    # `a op b`
+    bin: 3
+    # `a.not`
+    not: 4
+    # `a` converted to the node's type; a lossy conversion takes `.or d:` the
+    # literal `b`, or panics on an error (`.orPanic`) when `c` is 1
+    conv: 5
+    # a call of function `ref`: its arguments are the `b` ids of `args` from
+    # position `a`
+    call: 6
+    # `if a then b else c`
+    ifv: 7
+    # `match a case true then b case false then c`
+    matchv: 8
+    # the unit constant `ref`
+    konst: 9
+} out staticlist u8
+
+# expr -- one expression node
+expr: record {
+    kind: 0.u8
+    # its type, a `ty`
+    ty: 0.u8
+    # a binary operator, an `op`
+    op: 0.u8
+    # its operands, by id; their meaning is the kind's
+    a: 0.u32
+    b: 0.u32
+    c: 0.u32
+    # a name's local, a call's function or a unit constant
+    ref: 0.u32
+    # a literal's value: an integer as 128-bit two's complement, low limb
+    # first; a float's bits in `lo`; a bool 0 or 1
+    lo: 0.u64
+    hi: 0.u64
+}
+
+# sk -- the kinds of statement
+sk: list {
+    none: 0
+    # `local: e` -- a new local
+    decl: 1
+    # `local = e`
+    assign: 2
+    # `print "p<id> \{e}"`
+    print: 3
+    # `if e then { body } else { other }`; `other` 0 leaves the else out
+    ifs: 4
+    # a counted loop: `local: 0.u32`, then `for local < n loop { body ...
+    # local = local + 1.u32 }`
+    counted: 5
+    # `break`
+    brk: 6
+    # `return e`
+    ret: 7
+    # `e` -- a call whose value is dropped
+    call: 8
+} out staticlist u8
+
+# stmt -- one statement. A block is its first statement; `next` links the rest.
+stmt: record {
+    kind: 0.u8
+    # the local it declares, assigns or counts with
+    local: 0.u32
+    # its expression
+    e: 0.u32
+    # the first statement of its body, and of its else
+    body: 0.u32
+    other: 0.u32
+    # a loop's count
+    n: 0.u32
+    # the statement after it in its block
+    next: 0.u32
+}
+
+# lk -- the kinds of local
+lk: list {
+    none: 0
+    # a local a `decl` binds
+    local: 1
+    # a parameter
+    param: 2
+    # a loop's counter
+    counter: 3
+} out staticlist u8
+
+# local -- a local, a parameter or a loop counter
+local: record {
+    kind: 0.u8
+    ty: 0.u8
+}
+
+# func -- a function. Function 1 is `main`.
+func: record {
+    # what it returns, a `ty`; main returns nothing (its `ty` is unused)
+    ret: 0.u8
+    # its parameters: `count` ids of `params` from position `first`
+    first: 0.u32
+    count: 0.u32
+    # its body's first statement
+    body: 0.u32
+    # the parameter that falls by one on each recursive call, or 0
+    depth: 0.u32
+}
+
+# konst -- a unit-level constant: `k<id>: e`
+konst: record {
+    e: 0.u32
+    ty: 0.u8
+}
+
+# Prog -- one generated program
+Prog: class {
+    exprs: ListVal expr
+    stmts: ListVal stmt
+    locals: ListVal local
+    funcs: ListVal func
+    konsts: ListVal konst
+    # call arguments, by expression id
+    args: ListVal u32
+    # function parameters, by local id
+    params: ListVal u32
+} as {
+    # create -- an empty program: every table holds its sentinel, and main is
+    # function 1
+    create: function out this is {
+        p: (
+            meta.create
+            exprs: ListVal expr
+            stmts: ListVal stmt
+            locals: ListVal local
+            funcs: ListVal func
+            konsts: ListVal konst
+            args: ListVal u32
+            params: ListVal u32
+        )
+        p.exprs.append expr
+        p.stmts.append stmt
+        p.locals.append local
+        p.funcs.append func
+        p.funcs.append func
+        p.konsts.append konst
+        p.args.append 0
+        p.params.append 0
+        return p
+    }
+
+    # addExpr -- `e` added, by its new id
+    addExpr: function {p: this e: expr} out u32 is {
+        p.exprs.append e
+        return (idOf n: p.exprs.length)
+    }
+
+    # addStmt -- `s` added, by its new id
+    addStmt: function {p: this s: stmt} out u32 is {
+        p.stmts.append s
+        return (idOf n: p.stmts.length)
+    }
+
+    # addLocal -- a local of kind `kind` and type `t`, by its new id
+    addLocal: function {p: this kind: u8 t: u8} out u32 is {
+        p.locals.append (local :kind ty: t)
+        return (idOf n: p.locals.length)
+    }
+
+    # exprAt -- the expression `id`, a copy
+    exprAt: function {p: this.view id: u32} out expr is {
+        return (p.exprs.get i: id.u64)
+    }
+
+    # stmtAt -- the statement `id`, a copy
+    stmtAt: function {p: this.view id: u32} out stmt is {
+        return (p.stmts.get i: id.u64)
+    }
+
+    # setExpr -- the expression `id` replaced by `e`
+    setExpr: function {p: this id: u32 e: expr} is {
+        p.exprs.set i: id.u64 val: e
+    }
+
+    # setStmt -- the statement `id` replaced by `s`
+    setStmt: function {p: this id: u32 s: stmt} is {
+        p.stmts.set i: id.u64 val: s
+    }
+
+    # localTy -- the type of the local `id`
+    localTy: function {p: this.view id: u32} out u8 is {
+        return (p.locals.get i: id.u64).ty
+    }
+
+    # argAt -- argument `k` of the call expression `call`
+    argAt: function {p: this.view call: expr k: u32} out u32 is {
+        return (p.args.get i: (call.a + k).u64)
+    }
+
+    # paramAt -- parameter `k` of function `f`
+    paramAt: function {p: this.view f: func k: u32} out u32 is {
+        return (p.params.get i: (f.first + k).u64)
+    }
+}
+
+# idOf -- the id of the last of `n` table rows
+idOf: function {n: u64} out u32 is {
+    return ((n - 1).u32.or d: 0)
+}
+
+# isInt -- whether `t` is an integer type
+isInt: function {t: u8} out bool is {
+    info: tys.get i: t.u64
+    return info.float.not and (t != ty.bool)
+}
+
+# isFloat -- whether `t` is a float type
+isFloat: function {t: u8} out bool is {
+    return (tys.get i: t.u64).float
+}
+
+# tyName -- the name a program writes for `t`
+tyName: function {t: u8} out text is {
+    return (tys.get i: t.u64).name
+}

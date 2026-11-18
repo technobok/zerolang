@@ -12,6 +12,9 @@
 #              [--known FILE] [--write-known]
 #        zfuzz ... --recheck <dir>
 #        zfuzz ... --reduce <file> --out <file>
+#        zfuzz --generate --zc <zc> --system <dir> --work <dir>
+#              [--seed N] [--count N] [--jobs N] [--timeout SECS]
+#              [--configs N] [--tcc <tcc> --tcc-lib <dir>]
 # A case is decided by the seed, the NAME of the program it edits and a round
 # number, and the program it takes tokens from by name too. So a run repeats
 # exactly whatever the number of threads, and a program added to the corpus
@@ -23,6 +26,14 @@
 # signature the file does not list, and on a listed one it no longer shows: a
 # fixed defect leaves the list in the same change. `--write-known` writes the
 # file from the run instead.
+#
+# `--generate` takes its cases from a generator instead of the corpus
+# (zfuzz/gen.z): each case is a typed program that terminates, whose output a
+# model of the language predicts (zfuzz/model.z). The compiler under test
+# emits the program's C once; the C is built and run under each C
+# configuration of zfuzz/judge.z (`--configs N` runs the first N, 0 only
+# emits), and every run must print what the model expects and exit as it
+# expects. A refusal is a finding too, since every generated program is valid.
 #
 # `--recheck DIR` builds every saved finding, each `.z` file under DIR at any
 # depth, and reports the ones that still fail, with their signatures.
@@ -447,6 +458,29 @@ optionOr: function {p: cli.Parsed.view name: StringView d: StringView} out Strin
 }
 
 main: function is {
+    sp: fuzzSpec
+    parsed: cli.parse spec: sp args: os.args
+    match (
+        parsed
+    ) case ok then {
+        if (parsed.hasFlag name: "--generate") then {
+            generateRun p: parsed
+        } else if (corpusDirs p: parsed).length == 0 then {
+            io.eprintln "zfuzz: --corpus is required without --generate"
+            os.exit code: 2
+        } else if (parsed.option name: "--recheck").some then {
+            recheck p: parsed
+        } else if (parsed.option name: "--reduce").some then {
+            reduce p: parsed
+        } else run p: parsed
+    } case err then {
+        io.eprintln (cli.helpText spec: sp)
+        os.exit code: 2
+    }
+}
+
+# fuzzSpec -- zfuzz's command line: its options and flags
+fuzzSpec: function out cli.Spec is {
     sp: cli.Spec.create programName: "zfuzz".string summary: "token-mutation fuzzer for zc".string
     (
         cli.addOption
@@ -469,8 +503,8 @@ main: function is {
         spec: sp
         name: "--corpus".string
         shortName: "".string
-        help: "corpus directories, comma separated".string
-        required: true
+        help: "corpus directories, comma separated (not with --generate)".string
+        required: false
     )
     (
         cli.addOption
@@ -551,19 +585,38 @@ main: function is {
         help: "where --reduce writes what is left".string
         required: false
     )
-    parsed: cli.parse spec: sp args: os.args
-    match (
-        parsed
-    ) case ok then {
-        if (parsed.option name: "--recheck").some then {
-            recheck p: parsed
-        } else if (parsed.option name: "--reduce").some then {
-            reduce p: parsed
-        } else run p: parsed
-    } case err then {
-        io.eprintln (cli.helpText spec: sp)
-        os.exit code: 2
-    }
+    (
+        cli.addFlag
+        spec: sp
+        name: "--generate".string
+        shortName: "".string
+        help: "generate typed programs and judge them against the model".string
+    )
+    (
+        cli.addOption
+        spec: sp
+        name: "--tcc".string
+        shortName: "".string
+        help: "with --generate: the tcc of the tcc configuration".string
+        required: false
+    )
+    (
+        cli.addOption
+        spec: sp
+        name: "--tcc-lib".string
+        shortName: "".string
+        help: "with --generate: that tcc's library folder (-B)".string
+        required: false
+    )
+    (
+        cli.addOption
+        spec: sp
+        name: "--configs".string
+        shortName: "".string
+        help: "with --generate: how many C configurations to run (5); 0 only emits".string
+        required: false
+    )
+    return sp
 }
 
 # run -- the fuzz run the command line `p` asks for
@@ -1110,4 +1163,157 @@ reduce: function {p: cli.Parsed.view} is {
         n = n + 1
     }
     print "zfuzz: \{v} -- \{n} lines -> \{dest}"
+}
+
+# ---------------- --generate ----------------
+
+# GenWorker -- the task of one thread of a generate run: every case whose
+# number is `lane` modulo `lanes`, each judged in the thread's own folder
+GenWorker: class {
+    j: judge.Judge
+    # where findings and the lanes' folders go
+    work: String
+    seed: u64
+    count: u64
+    lane: u64
+    lanes: u64
+} as {
+    task: (thread.Task Report).implement
+
+    call: function {w: this} out Report is {
+        rep: Report cases: 0 built: 0 findings: List String shown: List String
+        dir: "\{w.work}/lane\{w.lane}"
+        io.mkdirp path: dir
+        k: w.lane
+        for k < w.count loop {
+            w.genCase dir: dir.stringView :k :rep
+            k = k + w.lanes
+        }
+        return rep
+    }
+
+    # genCase -- case `k`: generate, judge, and record a finding with the program
+    genCase: function {w: this.view dir: StringView k: u64 rep: Report} is {
+        g: gen.generate s: (caseSeed seed: w.seed :k)
+        name: "gz\{k}"
+        text: printer.programText p: g.gen.p seed: w.seed index: k
+        exitCode: i32
+        if g.run.panicked then exitCode = 1
+        want: (
+            judge.Expect
+            stdout: (printer.expectedOutput r: g.run)
+            exit: exitCode
+            err: "zpanic: \{g.run.msg}"
+        )
+        v: judge.pass
+        if g.run.over then {
+            v = judge.finding kind: "generator: step limit" config: "model" detail: ""
+        } else {
+            v = judge.judgeProgram j: w.j :dir name: name.stringView text: text.stringView :want
+        }
+        rep.cases = rep.cases + 1
+        if v.kind.length == 0 then {
+            rep.built = rep.built + 1
+            return
+        }
+        sig: signatureOf :v :g
+        keep: "\{w.work}/findings"
+        io.writeText path: "\{keep}/\{name}.z" content: text
+        report: sig.copy
+        report.append "\n"
+        report.append v.detail
+        report.append "\n--- expected output, exit \{exitCode}\n"
+        report.append want.stdout
+        io.writeText path: "\{keep}/\{name}.err" content: report
+        rep.findings.append sig.take
+        rep.shown.append name.take
+    }
+}
+
+# caseSeed -- the generator's seed for case `k` of the run seeded `seed`
+caseSeed: function {seed: u64 k: u64} out u64 is {
+    return (seed * 0x2545F4914F6CDD1D) ^ (k + 1 * 0x9E3779B97F4A7C15)
+}
+
+# signatureOf -- the signature of finding `v` of the generated program `g`:
+# a mismatch names the print statement's form, its type and its top operator,
+# so two programs that differ the same way read alike
+signatureOf: function {v: judge.Verdict.view g: gen.Generated.view} out String is {
+    if v.label == 0 then return "\{v.kind} \{v.config}: \{normalise line: v.detail.stringView}"
+    e: g.gen.p.exprAt id: (g.gen.p.stmtAt id: v.label).e
+    form: "print"
+    if v.label.u64 < g.gen.formOf.length then {
+        f: g.gen.formOf.get i: v.label.u64
+        if f == 1 then form = "fold-unit"
+        if f == 2 then form = "fold-body"
+        if f == 3 then form = "fold-run"
+    }
+    top: "value".string
+    if e.kind == prog.ek.bin then top = (prog.ops.get i: e.op.u64).text.string
+    if e.kind == prog.ek.conv then top = "conversion".string
+    if e.kind == prog.ek.call then top = "call".string
+    return "\{v.kind} \{v.config}: \{form} \{prog.tyName t: e.ty} \{top}"
+}
+
+# generateRun -- the generate run the command line `p` asks for
+generateRun: function {p: cli.Parsed.view} is {
+    os.setEnv key: "DEBUGINFOD_URLS" value: ""
+    seed: numberOption :p name: "--seed" d: 1
+    count: numberOption :p name: "--count" d: 1000
+    jobs: jobsOf :p
+    work: pathOption :p name: "--work"
+    io.mkdirp path: "\{work}/findings"
+    handles: List (thread.JoinHandle Report)
+    lane: u64
+    for lane < jobs loop {
+        handles.append (
+            thread.spawn
+            task: (
+                GenWorker
+                j: (judgeOf :p)
+                work: work.copy
+                :seed
+                :count
+                :lane
+                lanes: jobs
+            )
+        )
+        lane = lane + 1
+    }
+    cases: u64
+    passed: u64
+    kinds: List String
+    shown: List String
+    total: u64
+    for handles.length > 0 loop {
+        h: handles.pop
+        rep: h.join
+        cases = cases + rep.cases
+        passed = passed + rep.built
+        fi: u64
+        for fi < rep.findings.length loop {
+            total = total + 1
+            sig: rep.findings.get i: fi
+            if (kinds.contains item: sig).not then {
+                kinds.append sig.copy
+                shown.append (rep.shown.get i: fi).copy
+            }
+            fi = fi + 1
+        }
+    }
+    print "zfuzz generate: seed \{seed}, \{cases} programs, \{passed} passed, \{total} findings (\{kinds.length} distinct)"
+    report :p :kinds :shown :seed :count :total
+}
+
+# judgeOf -- the judge the command line `p` describes
+judgeOf: function {p: cli.Parsed.view} out judge.Judge is {
+    return (
+        judge.Judge
+        zc: (pathOption :p name: "--zc")
+        system: (pathOption :p name: "--system")
+        tcc: (pathOption :p name: "--tcc")
+        tccLib: (pathOption :p name: "--tcc-lib")
+        timeout: (timeoutOf :p)
+        configCount: (numberOption :p name: "--configs" d: judge.configs.length)
+    )
 }

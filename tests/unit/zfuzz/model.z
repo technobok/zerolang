@@ -1,0 +1,854 @@
+# model -- the generator's interpreter: it runs a program tree (prog.Prog) and
+# answers what the compiled program must print, and its exit status. Integers
+# are 128-bit two's complement in two u64 limbs, every operation written on u64
+# alone, so the model does not reuse the narrow C operators it checks. Floats
+# are kept as their bits; arithmetic decodes them to the host's f32 or f64,
+# computes there and reads the bits back. f16 arithmetic computes in f32 and
+# rounds once to f16 here, by the model's own rounding. A conversion is a test
+# of exactness on the bits, never the host's conversion.
+#
+# Operands and arguments are evaluated left to right, both sides of `and` and
+# `or` included. A run stops at a panic, at the end of main, or when it has
+# taken `stepLimit` steps -- a generator bug, never a hang.
+
+# zv -- one value: an integer extended to 128 bits from its type's width, a
+# float's bits in `lo`, a bool 0 or 1
+zv: record {
+    lo: 0.u64
+    hi: 0.u64
+}
+
+# stepLimit -- the steps a run may take
+stepLimit: 400000
+
+# ones -- every bit set
+ones: 0xFFFFFFFFFFFFFFFF.u64
+
+# low32 -- the low 32 bits
+low32: 0xFFFFFFFF.u64
+
+# ---------------- 128-bit integers ----------------
+
+# wrapTo -- `v` cut to the width of type `t` and extended again: the value a
+# wrapping operation of `t` gives
+wrapTo: function {v: zv t: u8} out zv is {
+    info: prog.tys.get i: t.u64
+    w: info.bits.u64.or d: 0
+    if w >= 128 then return v
+    if w == 64 then {
+        if info.signed when (v.lo >> 63) == 1 then return (zv lo: v.lo hi: ones)
+        return (zv lo: v.lo hi: 0)
+    }
+    mask: (1.u64 << w) - 1
+    lo: v.lo & mask
+    if info.signed when ((lo >> (w - 1)) & 1) == 1 then return (zv lo: lo | mask.not hi: ones)
+    return (zv :lo hi: 0)
+}
+
+# isNeg -- whether `v` read as signed 128 is negative
+isNeg: function {v: zv} out bool is {
+    return (v.hi >> 63) == 1
+}
+
+# isZero -- whether `v` is 0
+isZero: function {v: zv} out bool is {
+    return (v.lo == 0) and (v.hi == 0)
+}
+
+# add128 -- `a + b`, wrapping at 128 bits
+add128: function {a: zv b: zv} out zv is {
+    lo: a.lo + b.lo
+    carry: u64
+    if lo < a.lo then carry = 1
+    return (zv :lo hi: a.hi + b.hi + carry)
+}
+
+# neg128 -- `-a`, wrapping at 128 bits
+neg128: function {a: zv} out zv is {
+    return (add128 a: (zv lo: a.lo.not hi: a.hi.not) b: (zv lo: 1 hi: 0))
+}
+
+# sub128 -- `a - b`, wrapping at 128 bits
+sub128: function {a: zv b: zv} out zv is {
+    return (add128 :a b: (neg128 a: b))
+}
+
+# mul64 -- the full 128-bit product of two u64, by 32-bit halves
+mul64: function {x: u64 y: u64} out zv is {
+    x0: x & low32
+    x1: x >> 32
+    y0: y & low32
+    y1: y >> 32
+    p00: x0 * y0
+    p01: x0 * y1
+    p10: x1 * y0
+    mid: (p00 >> 32) + (p01 & low32) + (p10 & low32)
+    lo: p00 & low32 | (mid << 32)
+    hi: x1 * y1 + (p01 >> 32) + (p10 >> 32) + (mid >> 32)
+    return (zv :lo :hi)
+}
+
+# mul128 -- `a * b`, wrapping at 128 bits
+mul128: function {a: zv b: zv} out zv is {
+    r: mul64 x: a.lo y: b.lo
+    return (zv lo: r.lo hi: r.hi + (a.lo * b.hi) + (a.hi * b.lo))
+}
+
+# ucmp -- -1, 0 or 1 as `a` is below, equal to or above `b`, both unsigned
+ucmp: function {a: zv b: zv} out i32 is {
+    if a.hi != b.hi then return (if a.hi < b.hi then -1.i32 else 1.i32)
+    if a.lo != b.lo then return (if a.lo < b.lo then -1.i32 else 1.i32)
+    return 0
+}
+
+# scmp -- ucmp of `a` and `b` read as signed
+scmp: function {a: zv b: zv} out i32 is {
+    flip: 0x8000000000000000.u64
+    return (ucmp a: (zv lo: a.lo hi: a.hi ^ flip) b: (zv lo: b.lo hi: b.hi ^ flip))
+}
+
+# shl128 -- `a` shifted left by `n` bits, `n` below 128
+shl128: function {a: zv n: u64} out zv is {
+    if n == 0 then return a
+    if n >= 64 then return (zv lo: 0 hi: a.lo << (n - 64))
+    return (zv lo: a.lo << n hi: (a.hi << n) | (a.lo >> (64 - n)))
+}
+
+# lshr128 -- `a` shifted right by `n` bits, `n` below 128, zeros shifted in
+lshr128: function {a: zv n: u64} out zv is {
+    if n == 0 then return a
+    if n >= 64 then return (zv lo: a.hi >> (n - 64) hi: 0)
+    return (zv lo: (a.lo >> n) | (a.hi << (64 - n)) hi: a.hi >> n)
+}
+
+# ashr128 -- `a` shifted right by `n` bits, `n` below 128, the sign shifted in
+ashr128: function {a: zv n: u64} out zv is {
+    if (isNeg v: a) then return (bitNot a: (lshr128 a: (bitNot :a) :n))
+    return (lshr128 :a :n)
+}
+
+# bitNot -- every bit of `a` flipped
+bitNot: function {a: zv} out zv is {
+    return (zv lo: a.lo.not hi: a.hi.not)
+}
+
+# udivrem -- the quotient and remainder of `a / b` unsigned, `b` not 0, by
+# shift and subtract; the remainder in the answer's second value
+udivrem: function {a: zv b: zv} out divrem is {
+    q: zv
+    r: zv
+    i: 128.u64
+    for i > 0 loop {
+        i = i - 1
+        r = shl128 a: r n: 1
+        r.lo = r.lo | ((lshr128 :a n: i).lo & 1)
+        if (ucmp a: r :b) >= 0 then {
+            r = sub128 a: r :b
+            q = add128 a: q b: (shl128 a: (zv lo: 1 hi: 0) n: i)
+        }
+    }
+    return (divrem :q :r)
+}
+
+# divrem -- a quotient and a remainder
+divrem: record {
+    q: zv
+    r: zv
+}
+
+# sdivrem -- the quotient and remainder of `a / b` signed, truncating toward
+# zero: the remainder takes the dividend's sign
+sdivrem: function {a: zv b: zv} out divrem is {
+    an: isNeg v: a
+    bn: isNeg v: b
+    ma: if an then neg128 :a else a
+    mb: if bn then neg128 a: b else b
+    d: udivrem a: ma b: mb
+    q: d.q
+    r: d.r
+    if an != bn then q = neg128 a: q
+    if an then r = neg128 a: r
+    return (divrem :q :r)
+}
+
+# fitsTy -- whether the exact result `r` of an operation on operands of type
+# `t` is a value of `t`. Up to 64 bits the operands, extended to 128, give an
+# exact 128-bit result, so a result is a value of `t` exactly when cutting it
+# to `t` leaves it as it is.
+fitsTy: function {r: zv t: u8} out bool is {
+    w: wrapTo v: r :t
+    return (w.lo == r.lo) and (w.hi == r.hi)
+}
+
+# overflows -- whether the integer operation `o` of type `t` over `a` and `b`
+# has an exact result outside `t`: a constant one is refused
+overflows: function {o: u8 t: u8 a: zv b: zv r: zv} out bool is {
+    if (prog.tys.get i: t.u64).bits < 128 then return (fitsTy :r :t).not
+    if (prog.tys.get i: t.u64).signed then return (overflowsS128 :o :a :b :r)
+    if o == prog.op.add then return (ucmp a: r b: a) < 0
+    if o == prog.op.sub then return (ucmp :a :b) < 0
+    if o == prog.op.mul then {
+        if (isZero v: a) then return false
+        return (ucmp a: (udivrem a: r b: a).q :b) != 0
+    }
+    return false
+}
+
+# overflowsS128 -- overflows for i128
+overflowsS128: function {o: u8 a: zv b: zv r: zv} out bool is {
+    sa: isNeg v: a
+    sb: isNeg v: b
+    sr: isNeg v: r
+    if o == prog.op.add then return (sa == sb) and (sr != sa)
+    if o == prog.op.sub then return (sa != sb) and (sr != sa)
+    minusOne: zv lo: ones hi: ones
+    smallest: zv lo: 0 hi: 0x8000000000000000
+    if o == prog.op.div then return ((ucmp :a b: smallest) == 0) and ((ucmp a: b b: minusOne) == 0)
+    if o != prog.op.mul then return false
+    if (isZero v: a) or (isZero v: b) then return false
+    if ((ucmp :a b: minusOne) == 0) and ((ucmp a: b b: smallest) == 0) then return true
+    if ((ucmp a: b b: minusOne) == 0) and ((ucmp :a b: smallest) == 0) then return true
+    return (ucmp a: (sdivrem a: r b: a).q :b) != 0
+}
+
+# shiftCount -- the count of a shift, `n` of type `t` read as unsigned: a
+# count of the width or more, a negative one included, shifts every bit out
+shiftCount: function {n: zv t: u8} out u64 is {
+    w: (prog.tys.get i: t.u64).bits.u64.or d: 0
+    lo: n.lo
+    hi: n.hi
+    if w < 128 then hi = 0
+    if w < 64 then lo = lo & ((1.u64 << w) - 1)
+    if (hi != 0) or (lo >= w) then return w
+    return lo
+}
+
+# intShift -- `a << n` or `a >> n` of type `t`
+intShift: function {o: u8 t: u8 a: zv n: zv} out zv is {
+    w: (prog.tys.get i: t.u64).bits.u64.or d: 0
+    c: shiftCount :n :t
+    if o == prog.op.shl then {
+        if c >= w then return (zv lo: 0 hi: 0)
+        return (wrapTo v: (shl128 :a n: c) :t)
+    }
+    if (prog.tys.get i: t.u64).signed then {
+        if c < w then return (ashr128 :a n: c)
+        if (isNeg v: a) then return (zv lo: ones hi: ones)
+        return (zv lo: 0 hi: 0)
+    }
+    if c >= w then return (zv lo: 0 hi: 0)
+    return (lshr128 :a n: c)
+}
+
+# intCompare -- the comparison `o` of the integers `a` and `b` of type `t`
+intCompare: function {o: u8 t: u8 a: zv b: zv} out bool is {
+    c: ucmp :a :b
+    if (prog.tys.get i: t.u64).signed then c = scmp :a :b
+    return (compareBy :o :c)
+}
+
+# compareBy -- the comparison `o` given `c`, -1, 0 or 1 as the left side is
+# below, equal to or above the right
+compareBy: function {o: u8 c: i32} out bool is {
+    if o == prog.op.lt then return c < 0
+    if o == prog.op.gt then return c > 0
+    if o == prog.op.le then return c <= 0
+    if o == prog.op.ge then return c >= 0
+    if o == prog.op.eq then return c == 0
+    return c != 0
+}
+
+# intresult -- an integer operation's value, and what stops it: a division by
+# zero, or an exact result outside the type (which only a constant refuses)
+intresult: record {
+    v: zv
+    divZero: false
+    over: false
+}
+
+# intArith -- the arithmetic or bitwise operation `o` of type `t`
+intArith: function {o: u8 t: u8 a: zv b: zv} out intresult is {
+    if (o == prog.op.shl) or (o == prog.op.shr) then return (
+        intresult
+        v: (intShift :o :t :a n: b)
+        divZero: false
+        over: false
+    )
+    if o == prog.op.band then return (
+        intresult
+        v: (zv lo: a.lo & b.lo hi: a.hi & b.hi)
+        divZero: false
+        over: false
+    )
+    if o == prog.op.bor then return (
+        intresult
+        v: (zv lo: a.lo | b.lo hi: a.hi | b.hi)
+        divZero: false
+        over: false
+    )
+    if o == prog.op.bxor then return (
+        intresult
+        v: (zv lo: a.lo ^ b.lo hi: a.hi ^ b.hi)
+        divZero: false
+        over: false
+    )
+    if (o == prog.op.div) or (o == prog.op.rem) when (isZero v: b) then return (
+        intresult
+        v: zv
+        divZero: true
+        over: false
+    )
+    r: exactArith :o :t :a :b
+    return (intresult v: (wrapTo v: r :t) divZero: false over: (overflows :o :t :a :b :r))
+}
+
+# exactArith -- `a o b` for + - * / %, wrapping only at 128 bits
+exactArith: function {o: u8 t: u8 a: zv b: zv} out zv is {
+    if o == prog.op.add then return (add128 :a :b)
+    if o == prog.op.sub then return (sub128 :a :b)
+    if o == prog.op.mul then return (mul128 :a :b)
+    d: udivrem :a :b
+    if (prog.tys.get i: t.u64).signed then d = sdivrem :a :b
+    if o == prog.op.div then return d.q
+    return d.r
+}
+
+# ---------------- floats ----------------
+
+# fbits -- a float taken apart: `kind` 0 a number of value m * 2^e and sign
+# `neg`, 1 an infinity, 2 a NaN
+fbits: record {
+    kind: 0.u8
+    neg: false
+    m: 0.u64
+    e: 0.i32
+}
+
+# floatfmt -- the field layout of a float type: its fraction bits, its
+# exponent bits and its exponent bias
+floatfmt: record {
+    frac: 0.u64
+    ebits: 0.u64
+    bias: 0.i32
+}
+
+# fmtOf -- the layout of float type `t`
+fmtOf: function {t: u8} out floatfmt is {
+    if t == prog.ty.f16 then return (floatfmt frac: 10 ebits: 5 bias: 15)
+    if t == prog.ty.f32 then return (floatfmt frac: 23 ebits: 8 bias: 127)
+    return (floatfmt frac: 52 ebits: 11 bias: 1023)
+}
+
+# unpack -- the bits `b` of a float of type `t` taken apart
+unpack: function {b: u64 t: u8} out fbits is {
+    f: fmtOf :t
+    neg: ((b >> (f.frac + f.ebits)) & 1) == 1
+    ex: (b >> f.frac) & ((1.u64 << f.ebits) - 1)
+    m: b & ((1.u64 << f.frac) - 1)
+    if ex == ((1.u64 << f.ebits) - 1) then return (
+        fbits
+        kind: (if m == 0 then 1.u8 else 2.u8)
+        :neg
+        m: 0
+        e: 0
+    )
+    lowExp: 1 - f.bias - (f.frac.i32.or d: 0)
+    if ex == 0 then return (fbits kind: 0 :neg :m e: lowExp)
+    return (fbits kind: 0 :neg m: m | (1.u64 << f.frac) e: (ex.i32.or d: 0) + (lowExp - 1))
+}
+
+# bitLen -- the number of bits `m` needs: 0 for 0
+bitLen: function {m: u64} out u64 is {
+    n: u64
+    v: m
+    for v != 0 loop {
+        v = v >> 1
+        n = n + 1
+    }
+    return n
+}
+
+# trimmed -- `x` with the trailing zero bits of its m moved into its e
+trimmed: function {x: fbits} out fbits is {
+    r: x
+    if r.m == 0 then return r
+    for (r.m & 1) == 0 loop {
+        r.m = r.m >> 1
+        r.e = r.e + 1
+    }
+    return r
+}
+
+# exactIn -- whether the number `x` is a value of float type `t` exactly
+exactIn: function {x: fbits t: u8} out bool is {
+    if x.kind != 0 then return true
+    r: trimmed :x
+    if r.m == 0 then return true
+    info: prog.tys.get i: t.u64
+    f: fmtOf :t
+    span: bitLen m: r.m
+    if span > (info.mant.u64.or d: 0) then return false
+    lowest: 1 - f.bias - (f.frac.i32.or d: 0)
+    if r.e < lowest then return false
+    top: r.e + ((span - 1).i32.or d: 0)
+    return top <= (info.maxExp.i32.or d: 0)
+}
+
+# pack -- the bits of float type `t` holding `x`, which must be exact in it
+pack: function {x: fbits t: u8} out u64 is {
+    f: fmtOf :t
+    signBit: if x.neg then 1.u64 << (f.frac + f.ebits) else 0.u64
+    expAll: (1.u64 << f.ebits) - 1
+    if x.kind == 1 then return signBit | (expAll << f.frac)
+    if x.kind == 2 then return (expAll << f.frac) | (1.u64 << (f.frac - 1))
+    r: trimmed :x
+    if r.m == 0 then return signBit
+    span: bitLen m: r.m
+    top: r.e + ((span - 1).i32.or d: 0)
+    lowest: 1 - f.bias - (f.frac.i32.or d: 0)
+    if top < (1 - f.bias) then return signBit | (r.m << ((r.e - lowest).u64.or d: 0))
+    mm: r.m << (f.frac + 1 - span)
+    ex: (top + f.bias).u64.or d: 0
+    return signBit | (ex << f.frac) | (mm - (1.u64 << f.frac))
+}
+
+# roundToF16 -- the f16 nearest the number `x`, ties to even, as bits
+roundToF16: function {x: fbits} out u64 is {
+    if x.kind != 0 then return (pack :x t: prog.ty.f16)
+    signBit: if x.neg then 0x8000.u64 else 0.u64
+    if x.m == 0 then return signBit
+    span: bitLen m: x.m
+    top: x.e + ((span - 1).i32.or d: 0)
+    if top > 15 then return signBit | 0x7C00
+    q: top - 10
+    if q < -24 then q = -24
+    shift: q - x.e
+    if shift <= 0 then return (pack :x t: prog.ty.f16)
+    if shift >= 64 then return signBit
+    s: shift.u64.or d: 0
+    keep: x.m >> s
+    rest: x.m & ((1.u64 << s) - 1)
+    half: 1.u64 << (s - 1)
+    if (rest > half) or ((rest == half) and ((keep & 1) == 1)) then keep = keep + 1
+    if keep == 0 then return signBit
+    return (pack x: (fbits kind: 0 neg: x.neg m: keep e: q) t: prog.ty.f16)
+}
+
+# host -- the host values a float computation reads: a run-time zero, so a
+# NaN or an infinity the model makes is made when it runs
+host: record {
+    zero: 0.0.f64
+    zero32: 0.0.f32
+}
+
+# toF64 -- the f64 whose bits are `b`
+toF64: function {h: host b: u64} out f64 is {
+    x: unpack :b t: prog.ty.f64
+    if x.kind == 2 then return h.zero / h.zero
+    if x.kind == 1 then return (if x.neg then -1.0.f64 / h.zero else 1.0.f64 / h.zero)
+    v: (x.m.f64.or d: 0.0).scaleB n: x.e
+    if x.neg then v = v * -1.0
+    return v
+}
+
+# toF32 -- the f32 whose bits are `b`, of float type `t` (f32 or f16)
+toF32: function {h: host b: u64 t: u8} out f32 is {
+    x: unpack :b :t
+    if x.kind == 2 then return h.zero32 / h.zero32
+    if x.kind == 1 then return (if x.neg then -1.0.f32 / h.zero32 else 1.0.f32 / h.zero32)
+    v: (x.m.f32.or d: 0.0).scaleB n: x.e
+    if x.neg then v = v * -1.0
+    return v
+}
+
+# floatArith -- `a o b` of float type `t`, as bits
+floatArith: function {h: host o: u8 t: u8 a: u64 b: u64} out u64 is {
+    if t == prog.ty.f64 then {
+        x: toF64 :h b: a
+        y: toF64 :h :b
+        return (f64Op :o :x :y).bits
+    }
+    x: toF32 :h b: a :t
+    y: toF32 :h :b :t
+    r: f32Op :o :x :y
+    if t == prog.ty.f32 then return r.bits
+    return (roundToF16 x: (unpack b: r.bits t: prog.ty.f32))
+}
+
+# f64Op -- `x o y` in f64
+f64Op: function {o: u8 x: f64 y: f64} out f64 is {
+    if o == prog.op.add then return x + y
+    if o == prog.op.sub then return x - y
+    if o == prog.op.mul then return x * y
+    if o == prog.op.div then return x / y
+    return x % y
+}
+
+# f32Op -- `x o y` in f32
+f32Op: function {o: u8 x: f32 y: f32} out f32 is {
+    if o == prog.op.add then return x + y
+    if o == prog.op.sub then return x - y
+    if o == prog.op.mul then return x * y
+    if o == prog.op.div then return x / y
+    return x % y
+}
+
+# floatCompare -- the comparison `o` of the floats with bits `a` and `b`: a
+# NaN is unordered, so only `!=` holds against one
+floatCompare: function {h: host o: u8 t: u8 a: u64 b: u64} out bool is {
+    if (isNan b: a :t) or (isNan :b :t) then return o == prog.op.ne
+    return (compareBy :o c: (floatOrder :h :t :a :b))
+}
+
+# floatOrder -- -1, 0 or 1 as the number with bits `a` is below, equal to or
+# above the one with bits `b`, neither a NaN
+floatOrder: function {h: host t: u8 a: u64 b: u64} out i32 is {
+    if t == prog.ty.f64 then {
+        x: toF64 :h b: a
+        y: toF64 :h :b
+        if x < y then return -1
+        if x > y then return 1
+        return 0
+    }
+    x: toF32 :h b: a :t
+    y: toF32 :h :b :t
+    if x < y then return -1
+    if x > y then return 1
+    return 0
+}
+
+# isNan -- whether the float bits `b` of type `t` are a NaN
+isNan: function {b: u64 t: u8} out bool is {
+    return (unpack :b :t).kind == 2
+}
+
+# ---------------- conversions ----------------
+
+# convresult -- a conversion's answer: its value, or that it failed
+convresult: record {
+    v: zv
+    ok: false
+}
+
+# convert -- `v` of type `s` converted to type `t`
+convert: function {v: zv s: u8 t: u8} out convresult is {
+    if s == t then return (convresult :v ok: true)
+    sf: prog.isFloat t: s
+    tf: prog.isFloat :t
+    if sf.not and tf.not then return (intToInt :v :s :t)
+    if sf.not then return (intToFloat :v :s :t)
+    if tf then return (floatToFloat b: v.lo :s :t)
+    return (floatToInt b: v.lo :s :t)
+}
+
+# intToInt -- the integer `v` of type `s` as integer type `t`: it converts
+# when its value is one of `t`'s. The value's sign is the source type's: a
+# u128 of 2^127 or more has the bits of a negative i128.
+intToInt: function {v: zv s: u8 t: u8} out convresult is {
+    negative: (prog.tys.get i: s.u64).signed and (isNeg :v)
+    w: wrapTo :v :t
+    same: (w.lo == v.lo) and (w.hi == v.hi)
+    if (prog.tys.get i: t.u64).signed then return (
+        convresult
+        v: w
+        ok: same and ((isNeg v: w) == negative)
+    )
+    return (convresult v: w ok: same and negative.not)
+}
+
+# intToFloat -- the integer `v` of type `s` as float type `t`: it converts
+# when the value is exact in `t`
+intToFloat: function {v: zv s: u8 t: u8} out convresult is {
+    neg: (prog.tys.get i: s.u64).signed and (isNeg :v)
+    mag: if neg then neg128 a: v else v
+    e: i32
+    if (isZero v: mag).not then {
+        for (mag.lo & 1) == 0 loop {
+            mag = lshr128 a: mag n: 1
+            e = e + 1
+        }
+    }
+    if mag.hi != 0 then return (convresult v: zv ok: false)
+    x: fbits kind: 0 :neg m: mag.lo :e
+    if (exactIn :x :t).not then return (convresult v: zv ok: false)
+    return (convresult v: (zv lo: (pack :x :t) hi: 0) ok: true)
+}
+
+# floatToFloat -- the float bits `b` of type `s` as float type `t`: a NaN and
+# an infinity convert as they are, a number when it is exact in `t`
+floatToFloat: function {b: u64 s: u8 t: u8} out convresult is {
+    x: unpack :b t: s
+    if (exactIn :x :t).not then return (convresult v: zv ok: false)
+    return (convresult v: (zv lo: (pack :x :t) hi: 0) ok: true)
+}
+
+# floatToInt -- the float bits `b` of type `s` as integer type `t`: it
+# converts when the value is a whole number inside `t`
+floatToInt: function {b: u64 s: u8 t: u8} out convresult is {
+    x: trimmed x: (unpack :b t: s)
+    if x.kind != 0 then return (convresult v: zv ok: false)
+    if x.m == 0 then return (convresult v: zv ok: true)
+    if x.e < 0 then return (convresult v: zv ok: false)
+    if ((bitLen m: x.m) + (x.e.u64.or d: 0)) > 128 then return (convresult v: zv ok: false)
+    signed: (prog.tys.get i: t.u64).signed
+    if x.neg and signed.not then return (convresult v: zv ok: false)
+    mag: shl128 a: (zv lo: x.m hi: 0) n: (x.e.u64.or d: 0)
+    v: if x.neg then neg128 a: mag else mag
+    if signed when (isNeg :v) != x.neg then return (convresult v: zv ok: false)
+    w: wrapTo :v :t
+    return (convresult v: w ok: (w.lo == v.lo) and (w.hi == v.hi))
+}
+
+# ---------------- running a program ----------------
+
+# Run -- one run of the model: what the program printed and how it ended.
+# A frame is a function call's locals, by local id.
+Run: class {
+    h: host
+    # the lines printed, in order
+    lines: List String
+    steps: u64
+    # it panicked, with this message
+    panicked: bool
+    msg: String
+    # it ran past stepLimit
+    over: bool
+    # the division a run-time zero divisor stopped, or 0
+    divNode: u32
+} as {
+    # create -- a run that has not started
+    create: function out this is {
+        return (
+            meta.create
+            h: host
+            lines: List String
+            steps: 0
+            panicked: false
+            msg: String
+            over: false
+            divNode: 0
+        )
+    }
+
+    # stopped -- whether the run has ended early
+    stopped: function {r: this.view} out bool is {
+        return r.panicked or r.over
+    }
+
+    # step -- count one step; past the limit the run ends
+    step: function {r: this} is {
+        r.steps = r.steps + 1
+        if r.steps > stepLimit then r.over = true
+    }
+
+    # fail -- the run ends with the panic message `m`
+    fail: function {r: this m: StringView} is {
+        if r.stopped then return
+        r.panicked = true
+        r.msg = m.string
+    }
+}
+
+# flow -- how a block ended: `kind` 0 at its end, 1 at a `break`, 2 at a
+# `return` of `v`
+flow: record {
+    kind: 0.u8
+    v: zv
+}
+
+# runMain -- run the program `p` from main
+runMain: function {r: Run p: prog.Prog.view} is {
+    frame: newFrame :p
+    execBlock :r :p :frame first: (p.funcs.get i: 1).body
+}
+
+# newFrame -- a frame of zeros, one for each local of `p`
+newFrame: function {p: prog.Prog.view} out ListVal zv is {
+    frame: ListVal zv
+    for frame.length < p.locals.length loop frame.append zv
+    return frame
+}
+
+# execBlock -- run the statements from `first` on
+execBlock: function {r: Run p: prog.Prog.view frame: (ListVal zv).borrow first: u32} out flow is {
+    s: first
+    for s != 0 loop {
+        if r.stopped then return (flow kind: 0 v: zv)
+        f: execStmt :r :p :frame id: s
+        if f.kind != 0 then return f
+        s = (p.stmtAt id: s).next
+    }
+    return (flow kind: 0 v: zv)
+}
+
+# execStmt -- run the statement `id`
+execStmt: function {r: Run p: prog.Prog.view frame: (ListVal zv).borrow id: u32} out flow is {
+    r.step
+    s: p.stmtAt :id
+    k: s.kind
+    if (k == prog.sk.decl) or (k == prog.sk.assign) then {
+        v: evalExpr :r :p :frame id: s.e
+        frame.set i: s.local.u64 val: v
+    } else if k == prog.sk.print then {
+        v: evalExpr :r :p :frame id: s.e
+        if r.stopped.not then r.lines.append "p\{id} \{show :v t: (p.exprAt id: s.e).ty}"
+    } else if k == prog.sk.ifs then {
+        c: evalExpr :r :p :frame id: s.e
+        if c.lo == 1 then return (execBlock :r :p :frame first: s.body)
+        return (execBlock :r :p :frame first: s.other)
+    } else if k == prog.sk.counted then {
+        return (execLoop :r :p :frame :s)
+    } else if k == prog.sk.brk then {
+        return (flow kind: 1 v: zv)
+    } else if k == prog.sk.ret then {
+        return (flow kind: 2 v: (evalExpr :r :p :frame id: s.e))
+    } else if k == prog.sk.call then {
+        evalExpr :r :p :frame id: s.e
+    }
+    return (flow kind: 0 v: zv)
+}
+
+# execLoop -- run the counted loop `s`: its counter from 0 while it is below
+# the count, a `break` leaving the counter where it is
+execLoop: function {r: Run p: prog.Prog.view frame: (ListVal zv).borrow s: prog.stmt} out flow is {
+    frame.set i: s.local.u64 val: zv
+    for (frame.get i: s.local.u64).lo < s.n loop {
+        if r.stopped then return (flow kind: 0 v: zv)
+        r.step
+        f: execBlock :r :p :frame first: s.body
+        if f.kind == 1 then return (flow kind: 0 v: zv)
+        if f.kind == 2 then return f
+        c: frame.get i: s.local.u64
+        frame.set i: s.local.u64 val: (zv lo: c.lo + 1 hi: 0)
+    }
+    return (flow kind: 0 v: zv)
+}
+
+# evalExpr -- the value of expression `id`
+evalExpr: function {r: Run p: prog.Prog.view frame: (ListVal zv).borrow id: u32} out zv is {
+    if r.stopped then return zv
+    r.step
+    e: p.exprAt :id
+    k: e.kind
+    if k == prog.ek.lit then return (zv lo: e.lo hi: e.hi)
+    if k == prog.ek.name then return (frame.get i: e.ref.u64)
+    if k == prog.ek.bin then return (evalBin :r :p :frame :id)
+    if k == prog.ek.not then return (evalNot v: (evalExpr :r :p :frame id: e.a) t: e.ty)
+    if k == prog.ek.conv then return (evalConv :r :p :frame :e)
+    if k == prog.ek.call then return (evalCall :r :p :frame :e)
+    if k == prog.ek.konst then return (evalExpr :r :p :frame id: (p.konsts.get i: e.ref.u64).e)
+    c: evalExpr :r :p :frame id: e.a
+    if c.lo == 1 then return (evalExpr :r :p :frame id: e.b)
+    return (evalExpr :r :p :frame id: e.c)
+}
+
+# evalNot -- `v.not` of type `t`
+evalNot: function {v: zv t: u8} out zv is {
+    if t == prog.ty.bool then return (zv lo: 1 - v.lo hi: 0)
+    return (wrapTo v: (bitNot a: v) :t)
+}
+
+# evalBin -- the value of the binary operation `id`, both operands evaluated,
+# left first
+evalBin: function {r: Run p: prog.Prog.view frame: (ListVal zv).borrow id: u32} out zv is {
+    e: p.exprAt :id
+    a: evalExpr :r :p :frame id: e.a
+    b: evalExpr :r :p :frame id: e.b
+    if r.stopped then return zv
+    t: (p.exprAt id: e.a).ty
+    o: e.op
+    if o == prog.op.land then return (zv lo: a.lo & b.lo hi: 0)
+    if o == prog.op.lor then return (zv lo: a.lo | b.lo hi: 0)
+    if (prog.ops.get i: o.u64).compares then return (boolOf b: (compareValues :r :o :t :a :b))
+    if (prog.isFloat :t) then return (zv lo: (floatArith h: r.h :o :t a: a.lo b: b.lo) hi: 0)
+    ir: intArith :o :t :a :b
+    if ir.divZero then {
+        r.divNode = id
+        r.fail m: "division by zero"
+    }
+    return ir.v
+}
+
+# compareValues -- the comparison `o` of `a` and `b`, of type `t`
+compareValues: function {r: Run.view o: u8 t: u8 a: zv b: zv} out bool is {
+    if (prog.isFloat :t) then return (floatCompare h: r.h :o :t a: a.lo b: b.lo)
+    if t == prog.ty.bool then return (compareBy :o c: (ucmp :a :b))
+    return (intCompare :o :t :a :b)
+}
+
+# boolOf -- `b` as a value
+boolOf: function {b: bool} out zv is {
+    if b then return (zv lo: 1 hi: 0)
+    return zv
+}
+
+# evalConv -- the value of the conversion `e`
+evalConv: function {r: Run p: prog.Prog.view frame: (ListVal zv).borrow e: prog.expr} out zv is {
+    v: evalExpr :r :p :frame id: e.a
+    if r.stopped then return zv
+    c: convert :v s: (p.exprAt id: e.a).ty t: e.ty
+    if c.ok then return c.v
+    if e.c == 1 then {
+        r.fail m: "orPanic: result is err"
+        return zv
+    }
+    return (evalExpr :r :p :frame id: e.b)
+}
+
+# evalCall -- the value of the call `e`: its arguments left to right, then
+# the function's body in a frame of its own
+evalCall: function {r: Run p: prog.Prog.view frame: (ListVal zv).borrow e: prog.expr} out zv is {
+    f: p.funcs.get i: e.ref.u64
+    vals: ListVal zv
+    k: u32
+    for k < f.count loop {
+        vals.append (evalExpr :r :p :frame id: (p.argAt call: e :k))
+        k = k + 1
+    }
+    if r.stopped then return zv
+    callee: newFrame :p
+    k = 0
+    for k < f.count loop {
+        callee.set i: (p.paramAt :f :k).u64 val: (vals.get i: k.u64)
+        k = k + 1
+    }
+    return (execBlock :r :p frame: callee first: f.body).v
+}
+
+# show -- the text a program prints for `v` of type `t`: a float as its bits,
+# or `nan`, since a NaN's sign and payload are not promised
+show: function {v: zv t: u8} out String is {
+    if t == prog.ty.bool then {
+        if v.lo == 1 then return "true".string
+        return "false".string
+    }
+    if (prog.isFloat :t) then {
+        if (isNan b: v.lo :t) then return "nan".string
+        return (decimal v: (zv lo: v.lo hi: 0) neg: false)
+    }
+    if (prog.tys.get i: t.u64).signed when (isNeg :v) then return (
+        decimal
+        v: (neg128 a: v)
+        neg: true
+    )
+    return (decimal :v neg: false)
+}
+
+# decimal -- the unsigned 128-bit `v` in decimal, after a `-` when `neg`
+decimal: function {v: zv neg: bool} out String is {
+    digits: ListVal u8
+    n: v
+    ten: zv lo: 10 hi: 0
+    d: udivrem a: n b: ten
+    digits.append (d.r.lo.u8.or d: 0)
+    n = d.q
+    for (isZero v: n).not loop {
+        d = udivrem a: n b: ten
+        digits.append (d.r.lo.u8.or d: 0)
+        n = d.q
+    }
+    s: String
+    if neg then s.append "-"
+    for digits.length > 0 loop s.appendByte 48 + digits.pop
+    return s
+}

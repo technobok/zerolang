@@ -1,0 +1,317 @@
+# judge -- how zfuzz's `--generate` mode judges one generated program. The
+# compiler under test emits the program's C once; the C is built under each
+# C configuration of `configs`, each build is run, and its standard output,
+# exit status and the first line of its standard error are compared with what
+# the model expects. A generated program is valid, so a refusal is a finding
+# too. The first difference is the program's finding.
+
+# config -- one C configuration: the compiler and its flags. With `tcc` the
+# compiler is the tcc that `Judge.tcc` names, run with `-B Judge.tccLib`.
+config: data {
+    name: ""
+    cc: ""
+    flags: ""
+    tcc: false
+}
+
+# configs -- the C configurations every program is built and run under
+configs: list {
+    (
+        config
+        name: "gcc-O0-san"
+        cc: "gcc"
+        flags: "-std=c17 -w -O0 -g -fsanitize=address,undefined -fsanitize=float-cast-overflow -fno-sanitize-recover=all"
+        tcc: false
+    )
+    (config name: "gcc-O2" cc: "gcc" flags: "-std=c17 -w -O2" tcc: false)
+    (
+        config
+        name: "clang-O0-san"
+        cc: "clang"
+        flags: "-std=c17 -w -O0 -g -fsanitize=address,undefined -fno-sanitize-recover=all"
+        tcc: false
+    )
+    (config name: "clang-O2" cc: "clang" flags: "-std=c17 -w -O2" tcc: false)
+    (config name: "tcc" cc: "" flags: "-w" tcc: true)
+} out staticlist config
+
+# Judge -- what judging needs: the compiler under test and the C compilers
+Judge: class {
+    zc: String
+    system: String
+    # the tcc to run and its library folder
+    tcc: String
+    tccLib: String
+    # seconds a build or a run may take
+    timeout: i32
+    # how many of `configs` to build under, from the first
+    configCount: u64
+}
+
+# Expect -- what a program must do: print `stdout`, then exit with `exit`; a
+# panic's message is `err`, the first line of its standard error
+Expect: class {
+    stdout: String
+    exit: i32
+    err: String
+}
+
+# Verdict -- what judging found: `kind` empty for a pass, else the finding's
+# kind and `config`; `detail` is the line that shows it, and `label` the print
+# statement whose line differs, or 0
+Verdict: class {
+    kind: String
+    config: String
+    detail: String
+    label: u32
+}
+
+# pass -- a verdict of no finding
+pass: function out Verdict is {
+    return (Verdict kind: String config: String detail: String label: 0)
+}
+
+# finding -- a verdict of finding `kind` under `config`, shown by `detail`
+finding: function {kind: StringView config: StringView detail: StringView} out Verdict is {
+    return (Verdict kind: kind.string config: config.string detail: detail.string label: 0)
+}
+
+# judgeProgram -- program `text`, written as `<dir>/<name>.z`, emitted by the
+# compiler under test and run under each configuration against `want`. The
+# files it makes are removed again.
+judgeProgram: function {
+    j: Judge.view
+    dir: StringView
+    name: StringView
+    text: StringView
+    want: Expect.view
+} out Verdict is {
+    src: "\{dir}/\{name}.z"
+    c: "\{dir}/\{name}.c"
+    err: "\{dir}/\{name}.err"
+    io.writeText path: src content: text
+    v: emit :j :dir :name c: c.stringView err: err.stringView
+    io.remove path: src
+    if v.kind.length > 0 then {
+        io.remove path: err
+        io.remove path: c
+        return v
+    }
+    k: u64
+    for k < j.configCount loop {
+        cv: runConfig :j cfg: (configs.get i: k) :dir :name c: c.stringView :want
+        if cv.kind.length > 0 then {
+            io.remove path: c
+            io.remove path: err
+            return cv
+        }
+        k = k + 1
+    }
+    io.remove path: c
+    io.remove path: err
+    return pass
+}
+
+# emit -- program `name` in `dir` emitted to the C file `c` by the compiler
+# under test, its standard error in `err`: a pass, or the finding
+emit: function {
+    j: Judge.view dir: StringView name: StringView c: StringView err: StringView
+} out Verdict is {
+    argv: List String
+    argv.append j.zc.copy
+    argv.append "emit".string
+    argv.append name.string
+    argv.append "--src".string
+    argv.append dir.string
+    argv.append "--system".string
+    argv.append j.system.copy
+    argv.append "-o".string
+    argv.append c.string
+    status: (
+        os.spawn
+        :argv
+        cwd: dir
+        outPath: os.nullDevice.stringView
+        errPath: err
+        timeoutSecs: j.timeout
+    )
+    text: slurp path: err
+    v: verdict :status errText: text.stringView
+    if v.length > 0 then return (finding kind: v.stringView config: "zc" detail: "")
+    if status != 0 then return (
+        finding
+        kind: "refused"
+        config: "zc"
+        detail: (firstLineWith text: text.stringView needle: "error").stringView
+    )
+    csrc: slurp path: c
+    if (csrc.contains "/* zlink: */").not then return (
+        finding
+        kind: "generator: links a library"
+        config: "zc"
+        detail: ""
+    )
+    return pass
+}
+
+# runConfig -- the C file `c` built under `cfg` and run: a pass, or the
+# finding
+runConfig: function {
+    j: Judge.view
+    cfg: config
+    dir: StringView
+    name: StringView
+    c: StringView
+    want: Expect.view
+} out Verdict is {
+    bin: "\{dir}/\{name}"
+    bin.append "."
+    bin.append cfg.name.stringView
+    cerr: "\{dir}/\{name}.cc"
+    argv: List String
+    if cfg.tcc then {
+        argv.append j.tcc.copy
+        argv.append "-B".string
+        argv.append j.tccLib.copy
+    } else {
+        argv.append cfg.cc.string
+    }
+    for each f: (cfg.flags.split sep: " ") loop argv.append f.string
+    argv.append "-o".string
+    argv.append bin.copy
+    argv.append c.string
+    argv.append "-lm".string
+    status: (
+        os.spawn
+        :argv
+        cwd: dir
+        outPath: os.nullDevice.stringView
+        errPath: cerr.stringView
+        timeoutSecs: j.timeout
+    )
+    ctext: slurp path: cerr.stringView
+    io.remove path: cerr
+    if status != 0 then {
+        line: firstLineWith text: ctext.stringView needle: "error"
+        return (
+            finding
+            kind: "bad C"
+            config: cfg.name.stringView
+            detail: (fromError :line).stringView
+        )
+    }
+    v: runBinary :j :cfg bin: bin.stringView :dir :want
+    io.remove path: bin
+    return v
+}
+
+# runBinary -- the built program `bin` run and compared with `want`
+runBinary: function {
+    j: Judge.view
+    cfg: config
+    bin: StringView
+    dir: StringView
+    want: Expect.view
+} out Verdict is {
+    outPath: "\{bin}.out"
+    errPath: "\{bin}.stderr"
+    argv: List String
+    argv.append bin.string
+    status: (
+        os.spawn
+        :argv
+        cwd: dir
+        outPath: outPath.stringView
+        errPath: errPath.stringView
+        timeoutSecs: j.timeout
+    )
+    got: slurp path: outPath.stringView
+    err: slurp path: errPath.stringView
+    io.remove path: outPath
+    io.remove path: errPath
+    if status == 124 then return (finding kind: "hang" config: cfg.name.stringView detail: "")
+    san: firstLineWith text: err.stringView needle: "ERROR: AddressSanitizer"
+    if san.length > 0 then return (
+        finding
+        kind: "asan"
+        config: cfg.name.stringView
+        detail: san.stringView
+    )
+    leak: firstLineWith text: err.stringView needle: "ERROR: LeakSanitizer"
+    if leak.length > 0 then return (
+        finding
+        kind: "leak"
+        config: cfg.name.stringView
+        detail: leak.stringView
+    )
+    ub: firstLineWith text: err.stringView needle: "runtime error:"
+    if ub.length > 0 then return (
+        finding
+        kind: "ub"
+        config: cfg.name.stringView
+        detail: ub.stringView
+    )
+    v: compareOutput :cfg got: got.stringView want: want.stdout.stringView
+    if v.kind.length > 0 then return v
+    if status != want.exit then {
+        if want.exit == 0 then return (
+            finding
+            kind: "panic: unexpected"
+            config: cfg.name.stringView
+            detail: (firstLine text: err.stringView).stringView
+        )
+        ex: "exit \{status}"
+        return (finding kind: "panic: missing" config: cfg.name.stringView detail: ex.stringView)
+    }
+    if want.exit != 0 when (firstLine text: err.stringView) != want.err then return (
+        finding
+        kind: "panic: message"
+        config: cfg.name.stringView
+        detail: (firstLine text: err.stringView).stringView
+    )
+    return pass
+}
+
+# compareOutput -- the first line where `got` and `want` differ: a mismatch
+# naming the print statement of `want`'s line, or a pass
+compareOutput: function {cfg: config got: StringView want: StringView} out Verdict is {
+    if got == want then return pass
+    gl: List String
+    for each l: got.lines loop gl.append l.string
+    k: u64
+    for each l: want.lines loop {
+        if (k >= gl.length) or ((gl.get i: k) != l) then {
+            v: finding kind: "mismatch" config: cfg.name.stringView detail: l
+            v.label = labelOf line: l
+            return v
+        }
+        k = k + 1
+    }
+    return (finding kind: "mismatch" config: cfg.name.stringView detail: "extra output")
+}
+
+# labelOf -- the print statement a line `p<id> <value>` names, or 0
+labelOf: function {line: StringView} out u32 is {
+    if (line.startsWith "p").not then return 0
+    sp: line.indexOf needle: " "
+    end: line.length
+    match sp case some then { end = sp } case none then null
+    return (((line.substring from: 1 to: end).parseU64.or d: 0).u32.or d: 0)
+}
+
+# fromError -- `line` from its `error` on: a C compiler's report without the
+# file and position that come before it
+fromError: function {line: String.view} out String is {
+    at: line.stringView.indexOf needle: "error"
+    match (
+        at
+    ) case some then return (line.stringView.substring from: at to: line.length
+    ).string case none then null
+    return line.copy
+}
+
+# firstLine -- the first line of `text`
+firstLine: function {text: StringView} out String is {
+    for each l: text.lines loop return l.string
+    return String
+}
