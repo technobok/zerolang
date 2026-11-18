@@ -28,9 +28,10 @@
 # file from the run instead.
 #
 # `--generate` takes its cases from a generator instead of the corpus
-# (zfuzz/gen.z): each case is a typed program that terminates, whose output a
-# model of the language predicts (zfuzz/model.z). The compiler under test
-# emits the program's C once; the C is built and run under each C
+# (zfuzz/gen.z): each case is a typed program that terminates -- scalars,
+# the records, variants, classes and unions it declares, and lists of them --
+# whose output a model of the language predicts (zfuzz/model.z). The compiler
+# under test emits the program's C once; the C is built and run under each C
 # configuration of zfuzz/judge.z (`--configs N` runs the first N, 0 only
 # emits), and every run must print what the model expects and exit as it
 # expects. A refusal is a finding too, since every generated program is valid.
@@ -1330,8 +1331,9 @@ caseSeed: function {seed: u64 k: u64} out u64 is {
 }
 
 # signatureOf -- the signature of finding `v` of the generated program `g`:
-# a mismatch names the print statement's form, its type and its top operator,
-# so two programs that differ the same way read alike
+# a mismatch names the print statement's form, its type and its top operator
+# or form (a field, an arm predicate, a match, a list's item or length), so
+# two programs that differ the same way read alike
 signatureOf: function {v: judge.Verdict.view g: gen.Generated.view} out String is {
     if v.label == 0 then return "\{v.kind} \{v.config}: \{normalise line: v.detail.stringView}"
     e: g.gen.p.exprAt id: (g.gen.p.stmtAt id: v.label).e
@@ -1342,11 +1344,21 @@ signatureOf: function {v: judge.Verdict.view g: gen.Generated.view} out String i
         if f == 2 then form = "fold-body"
         if f == 3 then form = "fold-run"
     }
-    top: "value".string
-    if e.kind == prog.ek.bin then top = (prog.ops.get i: e.op.u64).text.string
-    if e.kind == prog.ek.conv then top = "conversion".string
-    if e.kind == prog.ek.call then top = "call".string
-    return "\{v.kind} \{v.config}: \{form} \{prog.tyName t: e.ty} \{top}"
+    return "\{v.kind} \{v.config}: \{form} \{g.gen.p.typeName t: e.ty} \{topOf :e}"
+}
+
+# topOf -- the top operator of the printed expression `e`, or the form it is
+topOf: function {e: prog.expr} out String is {
+    k: e.kind
+    if k == prog.ek.bin then return (prog.ops.get i: e.op.u64).text.string
+    if k == prog.ek.conv then return "conversion".string
+    if k == prog.ek.call then return "call".string
+    if k == prog.ek.field then return "field".string
+    if k == prog.ek.isarm then return "arm predicate".string
+    if k == prog.ek.vmatch then return "match".string
+    if (k == prog.ek.lget) or (k == prog.ek.lat) then return "list item".string
+    if k == prog.ek.llen then return "list length".string
+    return "value".string
 }
 
 # generateRun -- the generate run the command line `p` asks for

@@ -12,7 +12,9 @@
 # taken `stepLimit` steps -- a generator bug, never a hang.
 
 # zv -- one value: an integer extended to 128 bits from its type's width, a
-# float's bits in `lo`, a bool 0 or 1
+# float's bits in `lo`, a bool 0 or 1; a record's or a variant's tuple id in
+# `lo` (a variant's tuple holds its arm, counted from 1, then its payload); a
+# list's id in `Run.lists`, and a class object's too (its fields, in order)
 zv: record {
     lo: 0.u64
     hi: 0.u64
@@ -601,10 +603,24 @@ floatToInt: function {b: u64 s: u8 t: u8} out convresult is {
 
 # ---------------- running a program ----------------
 
+# tuple -- a record's value: `count` cells of `Run.cells` from `first`. A
+# tuple never changes; writing a field makes a new one, so a record copied
+# by a binding or an argument is a copy.
+tuple: record {
+    first: 0.u64
+    count: 0.u64
+}
+
 # Run -- one run of the model: what the program printed and how it ended.
 # A frame is a function call's locals, by local id.
 Run: class {
     h: host
+    # the record values made so far, by id (0 is none), and their cells
+    tuples: ListVal tuple
+    cells: ListVal zv
+    # the lists made so far, by id (0 is none); a list is a reference, so a
+    # list passed on is the same list
+    lists: List (ListVal zv)
     # the lines printed, in order
     lines: List String
     steps: u64
@@ -618,9 +634,16 @@ Run: class {
 } as {
     # create -- a run that has not started
     create: function out this is {
+        tuples: ListVal tuple
+        tuples.append tuple
+        lists: List (ListVal zv)
+        lists.append (ListVal zv)
         return (
             meta.create
             h: host
+            tuples: tuples.take
+            cells: ListVal zv
+            lists: lists.take
             lines: List String
             steps: 0
             panicked: false
@@ -639,6 +662,77 @@ Run: class {
     step: function {r: this} is {
         r.steps = r.steps + 1
         if r.steps > stepLimit then r.over = true
+    }
+
+    # newTuple -- a record value holding `vals`, by its id
+    newTuple: function {r: this vals: (ListVal zv).view} out zv is {
+        first: r.cells.length
+        for each v: vals loop r.cells.append v
+        r.tuples.append (tuple :first count: vals.length)
+        return (zv lo: r.tuples.length - 1 hi: 0)
+    }
+
+    # cellOf -- field `k` (counted from 1) of the record value `v`; 0 for a
+    # record no tuple holds (a local an edit left unbound reads as zeros)
+    cellOf: function {r: this.view v: zv k: u32} out zv is {
+        t: r.tuples.get i: v.lo
+        if k.u64 > t.count then return zv
+        return (r.cells.get i: t.first + k.u64 - 1)
+    }
+
+    # newList -- an empty list, as a value
+    newList: function {r: this} out zv is {
+        r.lists.append (ListVal zv)
+        return (zv lo: r.lists.length - 1 hi: 0)
+    }
+
+    # listLen -- how many items the list `v` holds
+    listLen: function {r: this.view v: zv} out u64 is {
+        return (r.lists.get i: v.lo).length
+    }
+
+    # listItem -- item `k` of the list `v`
+    listItem: function {r: this.view v: zv k: u64} out zv is {
+        return ((r.lists.get i: v.lo).get i: k)
+    }
+
+    # listPush -- `x` appended to the list `v`
+    listPush: function {r: this v: zv x: zv} is {
+        l: r.lists.getMut i: v.lo
+        l.append x
+    }
+
+    # listPut -- item `k` of the list `v` replaced by `x`
+    listPut: function {r: this v: zv k: u64 x: zv} is {
+        l: r.lists.getMut i: v.lo
+        l.set i: k val: x
+    }
+
+    # objCell -- field `k` (counted from 1) of the class object `v`; 0 for
+    # one no object holds
+    objCell: function {r: this.view v: zv k: u32} out zv is {
+        l: r.lists.get i: v.lo
+        if k.u64 > l.length then return zv
+        return (l.get i: k.u64 - 1)
+    }
+
+    # objPut -- field `k` (counted from 1) of the class object `v` set to `x`
+    objPut: function {r: this v: zv k: u32 x: zv} is {
+        l: r.lists.getMut i: v.lo
+        if k.u64 <= l.length then l.set i: k.u64 - 1 val: x
+    }
+
+    # newObject -- a class object holding `vals`, as a value
+    newObject: function {r: this vals: (ListVal zv).view} out zv is {
+        r.lists.append vals.copy
+        return (zv lo: r.lists.length - 1 hi: 0)
+    }
+
+    # listCopy -- a new list holding the items of the list `v`
+    listCopy: function {r: this v: zv} out zv is {
+        c: (r.lists.get i: v.lo).copy
+        r.lists.append c.take
+        return (zv lo: r.lists.length - 1 hi: 0)
     }
 
     # fail -- the run ends with the panic message `m`
@@ -687,25 +781,190 @@ execStmt: function {r: Run p: prog.Prog.view frame: (ListVal zv).borrow id: u32}
     s: p.stmtAt :id
     k: s.kind
     if (k == prog.sk.decl) or (k == prog.sk.assign) then {
+        frame.set i: s.local.u64 val: (evalExpr :r :p :frame id: s.e)
+        return (flow kind: 0 v: zv)
+    }
+    if k == prog.sk.print then {
         v: evalExpr :r :p :frame id: s.e
-        frame.set i: s.local.u64 val: v
-    } else if k == prog.sk.print then {
-        v: evalExpr :r :p :frame id: s.e
-        if r.stopped.not then r.lines.append "p\{id} \{show :v t: (p.exprAt id: s.e).ty}"
-    } else if k == prog.sk.ifs then {
+        if r.stopped.not then r.lines.append "p\{id} \{(
+            show
+            :v
+            t: (p.scOf t: (p.exprAt id: s.e).ty)
+        )}"
+        return (flow kind: 0 v: zv)
+    }
+    if k == prog.sk.ifs then {
         c: evalExpr :r :p :frame id: s.e
         if c.lo == 1 then return (execBlock :r :p :frame first: s.body)
         return (execBlock :r :p :frame first: s.other)
-    } else if k == prog.sk.counted then {
-        return (execLoop :r :p :frame :s)
-    } else if k == prog.sk.brk then {
-        return (flow kind: 1 v: zv)
-    } else if k == prog.sk.ret then {
-        return (flow kind: 2 v: (evalExpr :r :p :frame id: s.e))
-    } else if k == prog.sk.call then {
+    }
+    if k == prog.sk.counted then return (execLoop :r :p :frame :s)
+    if k == prog.sk.brk then return (flow kind: 1 v: zv)
+    if k == prog.sk.ret then return (flow kind: 2 v: (evalExpr :r :p :frame id: s.e))
+    if k == prog.sk.call then {
         evalExpr :r :p :frame id: s.e
+        return (flow kind: 0 v: zv)
+    }
+    return (execAggStmt :r :p :frame :s)
+}
+
+# execAggStmt -- execStmt for a statement on a record, a variant or a list: a
+# field written, a match, an item appended or replaced, a `for each`
+execAggStmt: function {
+    r: Run p: prog.Prog.view frame: (ListVal zv).borrow s: prog.stmt
+} out flow is {
+    k: s.kind
+    if k == prog.sk.setf then {
+        v: evalExpr :r :p :frame id: s.e
+        root: frame.get i: s.local.u64
+        frame.set i: s.local.u64 val: (setPath :r :p cur: root place: s.place :v)
+    } else if k == prog.sk.vmatch then {
+        c: chooseCase :r :p :frame subject: s.e first: s.cases count: s.n
+        if c != 0 then return (execBlock :r :p :frame first: (p.cases.get i: c.u64).body)
+    } else if k == prog.sk.lappend then {
+        l: evalExpr :r :p :frame id: s.place
+        v: evalExpr :r :p :frame id: s.e
+        if r.stopped.not then r.listPush v: l x: v
+    } else if k == prog.sk.lset then {
+        execSet :r :p :frame :s
+    } else if k == prog.sk.walk then {
+        return (execEach :r :p :frame :s)
     }
     return (flow kind: 0 v: zv)
+}
+
+# execSet -- `place.set i: (idx % place.length) val: e`
+execSet: function {r: Run p: prog.Prog.view frame: (ListVal zv).borrow s: prog.stmt} is {
+    l: evalExpr :r :p :frame id: s.place
+    i: evalExpr :r :p :frame id: s.idx
+    v: evalExpr :r :p :frame id: s.e
+    n: r.listLen v: l
+    if n == 0 then r.fail m: "division by zero"
+    if r.stopped.not then r.listPut v: l k: i.lo % n x: v
+}
+
+# execEach -- the `for each` `s`: its body once for each item of the list,
+# the item bound to its local; a `break` ends the walk
+execEach: function {r: Run p: prog.Prog.view frame: (ListVal zv).borrow s: prog.stmt} out flow is {
+    l: evalExpr :r :p :frame id: s.place
+    k: u64
+    for k < (r.listLen v: l) loop {
+        if r.stopped then return (flow kind: 0 v: zv)
+        r.step
+        frame.set i: s.local.u64 val: (r.listItem v: l :k)
+        f: execBlock :r :p :frame first: s.body
+        if f.kind == 1 then return (flow kind: 0 v: zv)
+        if f.kind == 2 then return f
+        k = k + 1
+    }
+    return (flow kind: 0 v: zv)
+}
+
+# chooseCase -- the entry of `cases` (`count` from `first`) that the value of
+# the variant expression `subject` takes, its payload bound to the entry's
+# narrowed local; 0 when the run stopped
+chooseCase: function {
+    r: Run p: prog.Prog.view frame: (ListVal zv).borrow subject: u32 first: u32 count: u32
+} out u32 is {
+    v: evalExpr :r :p :frame id: subject
+    if r.stopped then return 0
+    tag: (r.cellOf :v k: 1).lo
+    k: u32
+    for k < count loop {
+        c: p.cases.get i: (first + k).u64
+        if (c.arm.u64 == tag) or (c.arm == 0) then {
+            if c.narrow != 0 then frame.set i: c.narrow.u64 val: (r.cellOf :v k: 2)
+            return first + k
+        }
+        k = k + 1
+    }
+    return 0
+}
+
+# setPath -- the value `cur` of the root of the field expression `place`,
+# with that field written `v`: each record on the way a new tuple, a class
+# object written in place
+setPath: function {r: Run p: prog.Prog.view cur: zv place: u32 v: zv} out zv is {
+    path: ListVal u32
+    tys: ListVal u32
+    e: p.exprAt id: place
+    for e.kind == prog.ek.field loop {
+        path.append e.ref
+        tys.append (p.exprAt id: e.a).ty
+        e = p.exprAt id: e.a
+    }
+    return (rebuild :r :p :cur :path :tys at: path.length :v)
+}
+
+# rebuild -- `cur` with the field the last `at` entries of `path` lead to (the
+# last entry first) written `v`; `tys` holds the type each entry is a field of
+rebuild: function {
+    r: Run p: prog.Prog.view cur: zv path: (ListVal u32).view tys: (ListVal u32).view at: u64 v: zv
+} out zv is {
+    if at == 0 then return v
+    k: path.get i: at - 1
+    if (p.kindOf t: (tys.get i: at - 1)) == prog.tk.cls then {
+        inner: rebuild :r :p cur: (r.objCell v: cur :k) :path :tys at: at - 1 :v
+        r.objPut v: cur :k x: inner
+        return cur
+    }
+    t: r.tuples.get i: cur.lo
+    vals: ListVal zv
+    j: u64
+    for j < t.count loop {
+        vals.append (r.cells.get i: t.first + j)
+        j = j + 1
+    }
+    for vals.length < k.u64 loop vals.append zv
+    inner: rebuild :r :p cur: (vals.get i: k.u64 - 1) :path :tys at: at - 1 :v
+    vals.set i: k.u64 - 1 val: inner
+    return (r.newTuple :vals)
+}
+
+# zeroOf -- the value of type `t` whose fields hold their defaults: a
+# scalar's 0, false or +0.0, a record of zeros, a variant's first arm holding
+# a zero
+zeroOf: function {r: Run p: prog.Prog.view t: u32} out zv is {
+    kind: p.kindOf :t
+    if (p.isList :t) then return r.newList
+    if (p.isSum :t) then {
+        arm: ListVal zv
+        arm.append (zv lo: 1 hi: 0)
+        pt: p.memberTy :t k: 1
+        if pt == 0 then arm.append zv else arm.append (zeroOf :r :p t: pt)
+        return (r.newTuple vals: arm)
+    }
+    if (p.hasFields :t).not then return zv
+    vals: ListVal zv
+    k: 1.u32
+    for k <= (p.memberCount :t) loop {
+        vals.append (zeroOf :r :p t: (p.memberTy :t :k))
+        k = k + 1
+    }
+    if kind == prog.tk.cls then return (r.newObject :vals)
+    return (r.newTuple :vals)
+}
+
+# valuesEqual -- whether `a` and `b` of type `t` are equal: a record's
+# fields each by its own `==`
+valuesEqual: function {r: Run.view p: prog.Prog.view t: u32 a: zv b: zv} out bool is {
+    kind: p.kindOf :t
+    if kind == prog.tk.vnt then {
+        tag: (r.cellOf v: a k: 1).lo
+        if tag != (r.cellOf v: b k: 1).lo then return false
+        pt: p.memberTy :t k: (tag.u32.or d: 1)
+        if pt == 0 then return true
+        return (valuesEqual :r :p t: pt a: (r.cellOf v: a k: 2) b: (r.cellOf v: b k: 2))
+    }
+    if kind != prog.tk.rec then return (compareValues :r o: prog.op.eq t: (p.scOf :t) :a :b)
+    k: 1.u32
+    for k <= (p.memberCount :t) loop {
+        mt: p.memberTy :t :k
+        if (valuesEqual :r :p t: mt a: (r.cellOf v: a :k) b: (r.cellOf v: b :k)
+        ).not then return false
+        k = k + 1
+    }
+    return true
 }
 
 # execLoop -- run the counted loop `s`: its counter from 0 while it is below
@@ -733,13 +992,113 @@ evalExpr: function {r: Run p: prog.Prog.view frame: (ListVal zv).borrow id: u32}
     if k == prog.ek.lit then return (zv lo: e.lo hi: e.hi)
     if k == prog.ek.name then return (frame.get i: e.ref.u64)
     if k == prog.ek.bin then return (evalBin :r :p :frame :id)
-    if k == prog.ek.not then return (evalNot v: (evalExpr :r :p :frame id: e.a) t: e.ty)
+    if k == prog.ek.not then return (evalNot v: (evalExpr :r :p :frame id: e.a) t: (p.scOf t: e.ty))
     if k == prog.ek.conv then return (evalConv :r :p :frame :e)
     if k == prog.ek.call then return (evalCall :r :p :frame :e)
     if k == prog.ek.konst then return (evalExpr :r :p :frame id: (p.konsts.get i: e.ref.u64).e)
+    if (k == prog.ek.ifv) or (k == prog.ek.matchv) then return (evalBranch :r :p :frame :e)
+    return (evalAggregate :r :p :frame :e)
+}
+
+# evalBranch -- `if a then b else c`, or the same `match` on `a`
+evalBranch: function {r: Run p: prog.Prog.view frame: (ListVal zv).borrow e: prog.expr} out zv is {
     c: evalExpr :r :p :frame id: e.a
     if c.lo == 1 then return (evalExpr :r :p :frame id: e.b)
     return (evalExpr :r :p :frame id: e.c)
+}
+
+# evalAggregate -- evalExpr for a record's, a variant's, a union's or a list's
+# expression
+evalAggregate: function {
+    r: Run p: prog.Prog.view frame: (ListVal zv).borrow e: prog.expr
+} out zv is {
+    k: e.kind
+    if k == prog.ek.make then return (evalMake :r :p :frame :e)
+    if k == prog.ek.field then return (evalField :r :p :frame :e)
+    if k == prog.ek.arm then return (evalArm :r :p :frame :e)
+    if k == prog.ek.isarm then {
+        v: evalExpr :r :p :frame id: e.a
+        if r.stopped then return zv
+        return (boolOf b: (r.cellOf :v k: 1).lo == e.ref.u64)
+    }
+    if k == prog.ek.vmatch then {
+        c: chooseCase :r :p :frame subject: e.a first: e.b count: e.c
+        if c == 0 then return zv
+        return (evalExpr :r :p :frame id: (p.cases.get i: c.u64).e)
+    }
+    return (evalList :r :p :frame :e)
+}
+
+# evalField -- field `e.ref` of the record or class `e.a`
+evalField: function {r: Run p: prog.Prog.view frame: (ListVal zv).borrow e: prog.expr} out zv is {
+    base: evalExpr :r :p :frame id: e.a
+    if r.stopped then return zv
+    if (p.kindOf t: (p.exprAt id: e.a).ty) == prog.tk.cls then return (r.objCell v: base k: e.ref)
+    return (r.cellOf v: base k: e.ref)
+}
+
+# evalArm -- arm `e.ref` of a variant or union, holding the payload `e.a`
+evalArm: function {r: Run p: prog.Prog.view frame: (ListVal zv).borrow e: prog.expr} out zv is {
+    arm: ListVal zv
+    arm.append (zv lo: e.ref.u64 hi: 0)
+    if e.a == 0 then arm.append zv else arm.append (evalExpr :r :p :frame id: e.a)
+    if r.stopped then return zv
+    return (r.newTuple vals: arm)
+}
+
+# evalList -- evalExpr for a list's expression: a new list, an item, the
+# length, a copy
+evalList: function {r: Run p: prog.Prog.view frame: (ListVal zv).borrow e: prog.expr} out zv is {
+    k: e.kind
+    if k == prog.ek.newlist then return r.newList
+    if k == prog.ek.lget then return (evalGet :r :p :frame :e)
+    if k == prog.ek.lat then return (evalAt :r :p :frame :e)
+    l: evalExpr :r :p :frame id: e.a
+    if r.stopped then return zv
+    if k == prog.ek.llen then return (zv lo: (r.listLen v: l) hi: 0)
+    return (r.listCopy v: l)
+}
+
+# evalAt -- item `b` of the list `a`, unchecked: past its end, the panic a
+# List gives
+evalAt: function {r: Run p: prog.Prog.view frame: (ListVal zv).borrow e: prog.expr} out zv is {
+    l: evalExpr :r :p :frame id: e.a
+    i: evalExpr :r :p :frame id: e.b
+    if r.stopped then return zv
+    n: r.listLen v: l
+    if i.lo >= n then {
+        m: "List get: index \{i.lo} out of bounds (length \{n})"
+        r.fail m: m.stringView
+        return zv
+    }
+    return (r.listItem v: l k: i.lo)
+}
+
+# evalGet -- item `b % a.length` of the list `a`
+evalGet: function {r: Run p: prog.Prog.view frame: (ListVal zv).borrow e: prog.expr} out zv is {
+    l: evalExpr :r :p :frame id: e.a
+    i: evalExpr :r :p :frame id: e.b
+    if r.stopped then return zv
+    n: r.listLen v: l
+    if n == 0 then {
+        r.fail m: "division by zero"
+        return zv
+    }
+    return (r.listItem v: l k: i.lo % n)
+}
+
+# evalMake -- the record `e` builds, its fields left to right
+evalMake: function {r: Run p: prog.Prog.view frame: (ListVal zv).borrow e: prog.expr} out zv is {
+    if e.b == 0 then return (zeroOf :r :p t: e.ty)
+    vals: ListVal zv
+    k: u32
+    for k < e.b loop {
+        vals.append (evalExpr :r :p :frame id: (p.args.get i: (e.a + k).u64))
+        k = k + 1
+    }
+    if r.stopped then return zv
+    if (p.kindOf t: e.ty) == prog.tk.cls then return (r.newObject :vals)
+    return (r.newTuple :vals)
 }
 
 # evalNot -- `v.not` of type `t`
@@ -755,8 +1114,13 @@ evalBin: function {r: Run p: prog.Prog.view frame: (ListVal zv).borrow id: u32} 
     a: evalExpr :r :p :frame id: e.a
     b: evalExpr :r :p :frame id: e.b
     if r.stopped then return zv
-    t: (p.exprAt id: e.a).ty
+    ot: (p.exprAt id: e.a).ty
     o: e.op
+    if (p.isAggregate t: ot) then {
+        same: valuesEqual :r :p t: ot :a :b
+        return (boolOf b: same == (o == prog.op.eq))
+    }
+    t: p.scOf t: ot
     if o == prog.op.land then return (zv lo: a.lo & b.lo hi: 0)
     if o == prog.op.lor then return (zv lo: a.lo | b.lo hi: 0)
     if (prog.ops.get i: o.u64).compares then return (boolOf b: (compareValues :r :o :t :a :b))
@@ -786,7 +1150,7 @@ boolOf: function {b: bool} out zv is {
 evalConv: function {r: Run p: prog.Prog.view frame: (ListVal zv).borrow e: prog.expr} out zv is {
     v: evalExpr :r :p :frame id: e.a
     if r.stopped then return zv
-    c: convert :v s: (p.exprAt id: e.a).ty t: e.ty
+    c: convert :v s: (p.scOf t: (p.exprAt id: e.a).ty) t: (p.scOf t: e.ty)
     if c.ok then return c.v
     if e.c == 1 then {
         r.fail m: "orPanic: result is err"

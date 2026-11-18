@@ -2,9 +2,14 @@
 # expects of it. Every compound expression is in parentheses, since operators
 # have no precedence, and so is every argument but a name; a literal used as
 # a receiver is in parentheses too. A local is `v<id>`, a parameter `a<id>`,
-# a loop counter `i<id>`, a function `f<id>`, a unit constant `k<id>`; a
+# a loop counter `n<id>`, a function `g<id>`, a unit constant `k<id>` (no
+# name a type has); a
 # print statement prints `p<id>` and its value, a float through `show16`,
-# `show32` or `show64` (its bits, or `nan`).
+# `show32` or `show64` (its bits, or `nan`). A declared record is `rec<id>`,
+# its fields `m1`, `m2`, ... each declared with its type's default; a
+# declared variant is `vnt<id>`, its arms `c1`, `c2`, ...; a declared class
+# is `Cls<id>`, its fields as a record's; a declared union is `Uni<id>`, its
+# arms as a variant's; the item a `for each` binds is `x<id>`
 
 # Printer -- a program being written: the text, and the float printers it uses
 Printer: class {
@@ -29,20 +34,185 @@ programText: function {p: prog.Prog.view seed: u64 index: u64} out String is {
     w: Printer text: String shows: ListVal bool
     for w.shows.length < 3 loop w.shows.append false
     w.line depth: 0 text: "# zfuzz generate: seed \{seed}, case \{index}"
+    declsText :w :p
+    r: Reach funcs: ListVal bool konsts: ListVal bool
+    for r.funcs.length < p.funcs.length loop r.funcs.append false
+    for r.konsts.length < p.konsts.length loop r.konsts.append false
+    reachFunction :r :p fn: 1
     k: 1.u64
     for k < p.konsts.length loop {
-        w.text.append "\n"
-        w.line depth: 0 text: "k\{k}: \{exprText :w :p id: (p.konsts.get i: k).e}"
+        if (r.konsts.get i: k) then {
+            w.text.append "\n"
+            w.line depth: 0 text: "k\{k}: \{exprText :w :p id: (p.konsts.get i: k).e}"
+        }
         k = k + 1
     }
     f: 2.u64
     for f < p.funcs.length loop {
-        functionText :w :p fn: (f.u32.or d: 0)
+        if (r.funcs.get i: f) then functionText :w :p fn: (f.u32.or d: 0)
         f = f + 1
     }
     functionText :w :p fn: 1
     showHelpers :w
     return w.text.copy
+}
+
+# Reach -- the functions and unit constants main reaches, by id: the ones the
+# text holds (an edit of the reducer can leave others unused)
+Reach: class {
+    funcs: ListVal bool
+    konsts: ListVal bool
+}
+
+# reachFunction -- function `fn` reached, and what its body reaches
+reachFunction: function {r: Reach p: prog.Prog.view fn: u32} is {
+    if (r.funcs.get i: fn.u64) then return
+    r.funcs.set i: fn.u64 val: true
+    reachBlock :r :p first: (p.funcs.get i: fn.u64).body
+}
+
+# reachBlock -- what the statements from `first` on reach
+reachBlock: function {r: Reach p: prog.Prog.view first: u32} is {
+    s: first
+    for s != 0 loop {
+        st: p.stmtAt id: s
+        reachExpr :r :p id: st.e
+        reachExpr :r :p id: st.place
+        reachExpr :r :p id: st.idx
+        reachBlock :r :p first: st.body
+        reachBlock :r :p first: st.other
+        k: u32
+        if st.kind != prog.sk.vmatch then k = st.n
+        for k < st.n loop {
+            reachBlock :r :p first: (p.cases.get i: (st.cases + k).u64).body
+            k = k + 1
+        }
+        s = st.next
+    }
+}
+
+# reachExpr -- what expression `id` reaches: the functions it calls and the
+# unit constants it reads, through every operand
+reachExpr: function {r: Reach p: prog.Prog.view id: u32} is {
+    if id == 0 then return
+    e: p.exprAt :id
+    k: e.kind
+    if k == prog.ek.konst then {
+        reachKonst :r :p k: e.ref
+        return
+    }
+    if k == prog.ek.call then reachFunction :r :p fn: e.ref
+    if (k == prog.ek.call) or (k == prog.ek.make) then {
+        reachArgs :r :p first: e.a count: e.b
+        return
+    }
+    if k == prog.ek.vmatch then {
+        reachExpr :r :p id: e.a
+        j: u32
+        for j < e.c loop {
+            reachExpr :r :p id: (p.cases.get i: (e.b + j).u64).e
+            j = j + 1
+        }
+        return
+    }
+    if (k == prog.ek.lit) or (k == prog.ek.name) or (k == prog.ek.newlist) then return
+    reachExpr :r :p id: e.a
+    if (k == prog.ek.field) or (k == prog.ek.arm) or (k == prog.ek.isarm) then return
+    reachExpr :r :p id: e.b
+    # a conversion's `c` is a flag, not an operand
+    if k != prog.ek.conv then reachExpr :r :p id: e.c
+}
+
+# reachKonst -- unit constant `k` reached, and what its value reaches
+reachKonst: function {r: Reach p: prog.Prog.view k: u32} is {
+    if (r.konsts.get i: k.u64) then return
+    r.konsts.set i: k.u64 val: true
+    reachExpr :r :p id: (p.konsts.get i: k.u64).e
+}
+
+# reachArgs -- what the `count` arguments from `first` in `args` reach
+reachArgs: function {r: Reach p: prog.Prog.view first: u32 count: u32} is {
+    j: u32
+    for j < count loop {
+        reachExpr :r :p id: (p.args.get i: (first + j).u64)
+        j = j + 1
+    }
+}
+
+# declsText -- the types the program declares
+declsText: function {w: Printer p: prog.Prog.view} is {
+    t: 1.u64
+    for t < p.types.length loop {
+        id: t.u32.or d: 0
+        if (p.hasFields t: id) then fieldsDeclText :w :p :id
+        if (p.isSum t: id) then armsDeclText :w :p :id
+        t = t + 1
+    }
+}
+
+# fieldsDeclText -- the declaration of the record or class `id`
+fieldsDeclText: function {w: Printer p: prog.Prog.view id: u32} is {
+    word: if (p.kindOf t: id) == prog.tk.cls then "class" else "record"
+    w.text.append "\n"
+    w.line depth: 0 text: "\{p.typeName t: id}: \{word} {"
+    k: 1.u32
+    for k <= (p.memberCount t: id) loop {
+        w.line depth: 1 text: "m\{k}: \{defaultText :p t: (p.memberTy t: id :k)}"
+        k = k + 1
+    }
+    w.line depth: 0 text: "}"
+}
+
+# armsDeclText -- the declaration of the variant or union `id`
+armsDeclText: function {w: Printer p: prog.Prog.view id: u32} is {
+    word: if (p.kindOf t: id) == prog.tk.uni then "union" else "variant"
+    w.text.append "\n"
+    w.line depth: 0 text: "\{p.typeName t: id}: \{word} {"
+    k: 1.u32
+    for k <= (p.memberCount t: id) loop {
+        pt: p.memberTy t: id :k
+        pn: if pt == 0 then "null".string else p.typeName t: pt
+        w.line depth: 1 text: "c\{k}: \{pn}"
+        k = k + 1
+    }
+    w.line depth: 0 text: "}"
+}
+
+# zeroText -- the value of type `t` whose fields hold their defaults (the
+# model's zeroOf): a scalar's zero; a record's type alone, or with a value for
+# each field of a declared type, which has no default; a variant's first arm
+# holding a zero
+zeroText: function {p: prog.Prog.view t: u32} out String is {
+    if (p.kindOf :t) == prog.tk.lval then return "(\{p.typeName :t})"
+    if (p.isSum :t).not when (p.hasFields :t).not then return (defaultText :p :t)
+    s: p.typeName :t
+    if (p.isSum :t) then {
+        pt: p.memberTy :t k: 1
+        if pt == 0 then return "\{s}.c1"
+        return "(\{s}.c1 \{zeroText :p t: pt})"
+    }
+    req: false
+    k: 1.u32
+    for k <= (p.memberCount :t) loop {
+        mt: p.memberTy :t :k
+        if (p.kindOf t: mt) != prog.tk.scalar then {
+            s.append " m\{k}: \{zeroText :p t: mt}"
+            req = true
+        }
+        k = k + 1
+    }
+    if req then return "(\{s})"
+    return s
+}
+
+# defaultText -- a field's declaration of type `t`: its zero, or the type
+# itself for a record (whose default is its fields' defaults)
+defaultText: function {p: prog.Prog.view t: u32} out String is {
+    sc: p.scOf :t
+    if sc == prog.noScalar then return (p.typeName :t)
+    if sc == prog.ty.bool then return "false".string
+    if (prog.isFloat t: sc) then return (typed body: "0.0".string t: sc)
+    return (typed body: "0".string t: sc)
 }
 
 # functionText -- function `fn`, main when it is 1
@@ -53,19 +223,19 @@ functionText: function {w: Printer p: prog.Prog.view fn: u32} is {
         w.line depth: 0 text: "main: function is {"
     } else {
         head: String
-        head.append "f\{fn}: function "
+        head.append "g\{fn}: function "
         if f.count > 0 then {
             head.append "{"
             k: u32
             for k < f.count loop {
                 if k > 0 then head.append " "
                 param: p.paramAt :f :k
-                head.append "a\{param}: \{prog.tyName t: (p.localTy id: param)}"
+                head.append "a\{param}: \{p.typeName t: (p.localTy id: param)}"
                 k = k + 1
             }
             head.append "} "
         }
-        head.append "out \{prog.tyName t: f.ret} is {"
+        head.append "out \{p.typeName t: f.ret} is {"
         w.line depth: 0 text: head
     }
     blockText :w :p first: f.body depth: 1
@@ -105,9 +275,54 @@ stmtText: function {w: Printer p: prog.Prog.view id: u32 depth: u64} is {
         w.line :depth text: "break"
     } else if k == prog.sk.ret then {
         w.line :depth text: "return \{exprText :w :p id: s.e}"
+    } else if k == prog.sk.setf then {
+        w.line :depth text: "\{exprText :w :p id: s.place} = \{exprText :w :p id: s.e}"
+    } else if k == prog.sk.vmatch then {
+        matchText :w :p :s :depth
+    } else if k == prog.sk.lappend then {
+        w.line :depth text: "\{exprText :w :p id: s.place}.append \{atom :w :p id: s.e}"
+    } else if k == prog.sk.lset then {
+        l: exprText :w :p id: s.place
+        (
+            w.line
+            :depth
+            text: "\{l}.set i: (\{exprText :w :p id: s.idx} % \{l}.length) val: \{(
+                atom
+                :w
+                :p
+                id: s.e
+            )}"
+        )
+    } else if k == prog.sk.walk then {
+        (
+            w.line
+            :depth
+            text: "for each \{localName :p id: s.local}: \{exprText :w :p id: s.place} loop {"
+        )
+        blockText :w :p first: s.body depth: depth + 1
+        w.line :depth text: "}"
     } else {
         w.line :depth text: (callText :w :p id: s.e bare: true)
     }
+}
+
+# matchText -- a match statement over a variant local: each arm's block, the
+# `else` last
+matchText: function {w: Printer p: prog.Prog.view s: prog.stmt depth: u64} is {
+    head: "match \{exprText :w :p id: s.e}"
+    k: u32
+    for k < s.n loop {
+        c: p.cases.get i: (s.cases + k).u64
+        arm: if c.arm == 0 then "else".string else "case c\{c.arm} then"
+        if k == 0 then {
+            w.line :depth text: "\{head} \{arm} {"
+        } else {
+            w.line :depth text: "} \{arm} {"
+        }
+        blockText :w :p first: c.body depth: depth + 1
+        k = k + 1
+    }
+    w.line :depth text: "}"
 }
 
 # loopText -- a counted loop: its counter, then the loop, which steps the
@@ -125,10 +340,11 @@ loopText: function {w: Printer p: prog.Prog.view s: prog.stmt depth: u64} is {
 # float through its show function
 printedValue: function {w: Printer p: prog.Prog.view id: u32} out String is {
     t: (p.exprAt :id).ty
-    if (prog.isFloat :t) then {
-        slot: (t - prog.ty.f16).u64
+    if (p.isFloatTy :t) then {
+        sc: p.scOf :t
+        slot: (sc - prog.ty.f16).u64
         w.shows.set i: slot val: true
-        return "show\{(prog.tys.get i: t.u64).bits} x: \{atom :w :p :id}"
+        return "show\{(prog.tys.get i: sc.u64).bits} x: \{atom :w :p :id}"
     }
     return (exprText :w :p :id)
 }
@@ -152,9 +368,12 @@ showHelpers: function {w: Printer} is {
 
 # localName -- the name of local `id`
 localName: function {p: prog.Prog.view id: u32} out String is {
-    k: (p.locals.get i: id.u64).kind
+    l: p.locals.get i: id.u64
+    k: l.kind
+    if k == prog.lk.narrow then return (localName :p id: l.of)
+    if k == prog.lk.elem then return "x\{id}"
     if k == prog.lk.param then return "a\{id}"
-    if k == prog.lk.counter then return "i\{id}"
+    if k == prog.lk.counter then return "n\{id}"
     return "v\{id}"
 }
 
@@ -164,7 +383,9 @@ atom: function {w: Printer p: prog.Prog.view id: u32} out String is {
     e: p.exprAt :id
     t: exprText :w :p :id
     if (e.kind == prog.ek.name) or (e.kind == prog.ek.konst) then return t
-    if e.kind == prog.ek.lit when e.ty == prog.ty.bool then return t
+    if e.kind == prog.ek.make when e.b == 0 then return t
+    if e.kind == prog.ek.field when (isPlace :p :id) then return t
+    if e.kind == prog.ek.lit when (p.isBoolTy t: e.ty) then return t
     if e.kind == prog.ek.call when e.b == 0 then return t
     if t.startsWith "(" then return t
     return "(\{t})"
@@ -174,7 +395,7 @@ atom: function {w: Printer p: prog.Prog.view id: u32} out String is {
 exprText: function {w: Printer p: prog.Prog.view id: u32} out String is {
     e: p.exprAt :id
     k: e.kind
-    if k == prog.ek.lit then return (litText :e)
+    if k == prog.ek.lit then return (litText :e sc: (p.scOf t: e.ty))
     if k == prog.ek.name then return (localName :p id: e.ref)
     if k == prog.ek.konst then return "k\{e.ref}"
     if k == prog.ek.bin then return "(\{exprText :w :p id: e.a} \{(prog.ops.get i: e.op.u64
@@ -182,7 +403,77 @@ exprText: function {w: Printer p: prog.Prog.view id: u32} out String is {
     if k == prog.ek.not then return "\{atom :w :p id: e.a}.not"
     if k == prog.ek.conv then return (convText :w :p :e)
     if k == prog.ek.call then return (callText :w :p :id bare: false)
-    return (branchText :w :p :e)
+    if (k == prog.ek.ifv) or (k == prog.ek.matchv) then return (branchText :w :p :e)
+    return (aggregateText :w :p :e)
+}
+
+# aggregateText -- exprText for a record's, a variant's, a union's or a list's
+# expression
+aggregateText: function {w: Printer p: prog.Prog.view e: prog.expr} out String is {
+    k: e.kind
+    if k == prog.ek.make then return (makeText :w :p :e)
+    if k == prog.ek.field then return "\{atom :w :p id: e.a}.m\{e.ref}"
+    if k == prog.ek.arm then {
+        t: "\{p.typeName t: e.ty}.c\{e.ref}"
+        if e.a == 0 then return t
+        return "(\{t} \{atom :w :p id: e.a})"
+    }
+    if k == prog.ek.isarm then return "\{atom :w :p id: e.a}.c\{e.ref}"
+    if k == prog.ek.vmatch then return (matchValueText :w :p :e)
+    return (listText :w :p :e)
+}
+
+# listText -- exprText for a list's expression: a new list, an item (at an
+# index kept inside the list, or past its end in a planned panic), the
+# length, a copy
+listText: function {w: Printer p: prog.Prog.view e: prog.expr} out String is {
+    k: e.kind
+    if k == prog.ek.newlist then return "(\{p.typeName t: e.ty})"
+    l: exprText :w :p id: e.a
+    if k == prog.ek.lget then return "(\{l}.get i: (\{exprText :w :p id: e.b} % \{l}.length))"
+    if k == prog.ek.lat then return "(\{l}.get i: \{atom :w :p id: e.b})"
+    if k == prog.ek.llen then return "\{l}.length"
+    return "\{l}.copy"
+}
+
+# matchValueText -- `match` over a variant local as a value: each arm's
+# value, the `else` last
+matchValueText: function {w: Printer p: prog.Prog.view e: prog.expr} out String is {
+    t: "(match \{exprText :w :p id: e.a}"
+    k: u32
+    for k < e.c loop {
+        c: p.cases.get i: (e.b + k).u64
+        if c.arm == 0 then {
+            t.append " else \{exprText :w :p id: c.e}"
+        } else {
+            t.append " case c\{c.arm} then \{exprText :w :p id: c.e}"
+        }
+        k = k + 1
+    }
+    t.append ")"
+    return t
+}
+
+# isPlace -- whether expression `id` is a local or a field of one, which a
+# reader writes without parentheses
+isPlace: function {p: prog.Prog.view id: u32} out bool is {
+    e: p.exprAt :id
+    if e.kind == prog.ek.name then return true
+    if e.kind == prog.ek.field then return (isPlace :p id: e.a)
+    return false
+}
+
+# makeText -- the record `e` builds: zeroText when every field keeps its
+# default, else the type and each field's value
+makeText: function {w: Printer p: prog.Prog.view e: prog.expr} out String is {
+    if e.b == 0 then return (zeroText :p t: e.ty)
+    t: p.typeName t: e.ty
+    k: u32
+    for k < e.b loop {
+        t.append " m\{k + 1}: \{atom :w :p id: (p.args.get i: (e.a + k).u64)}"
+        k = k + 1
+    }
+    return "(\{t})"
 }
 
 # branchText -- `if c then a else b`, or the same as a `match` on `c`
@@ -197,7 +488,7 @@ branchText: function {w: Printer p: prog.Prog.view e: prog.expr} out String is {
 
 # convText -- the conversion `e`: lossless, `.or d:` a default, or `.orPanic`
 convText: function {w: Printer p: prog.Prog.view e: prog.expr} out String is {
-    v: typed body: (atom :w :p id: e.a) t: e.ty
+    v: typed body: (atom :w :p id: e.a) t: (p.scOf t: e.ty)
     if e.c == 1 then return "\{v}.orPanic"
     if e.b == 0 then return v
     return "(\{v}.or d: \{atom :w :p id: e.b})"
@@ -207,7 +498,7 @@ convText: function {w: Printer p: prog.Prog.view e: prog.expr} out String is {
 # it has arguments
 callText: function {w: Printer p: prog.Prog.view id: u32 bare: bool} out String is {
     e: p.exprAt :id
-    t: "f\{e.ref}"
+    t: "g\{e.ref}"
     if e.b == 0 then return t
     f: p.funcs.get i: e.ref.u64
     k: u32
@@ -220,18 +511,18 @@ callText: function {w: Printer p: prog.Prog.view id: u32 bare: bool} out String 
     return "(\{t})"
 }
 
-# litText -- the literal `e`, with its type's suffix
-litText: function {e: prog.expr} out String is {
-    if e.ty == prog.ty.bool then {
+# litText -- the literal `e` of the scalar type `sc`, with its type's suffix
+litText: function {e: prog.expr sc: u8} out String is {
+    if sc == prog.ty.bool then {
         if e.lo == 1 then return "true".string
         return "false".string
     }
     v: model.zv lo: e.lo hi: e.hi
-    if (prog.isFloat t: e.ty) then return (typed body: (floatDigits b: e.lo t: e.ty) t: e.ty)
-    if (prog.tys.get i: e.ty.u64).signed when (model.isNeg :v) then {
-        return (typed body: (model.decimal v: (model.neg128 a: v) neg: true) t: e.ty)
+    if (prog.isFloat t: sc) then return (typed body: (floatDigits b: e.lo t: sc) t: sc)
+    if (prog.tys.get i: sc.u64).signed when (model.isNeg :v) then {
+        return (typed body: (model.decimal v: (model.neg128 a: v) neg: true) t: sc)
     }
-    return (typed body: (model.decimal :v neg: false) t: e.ty)
+    return (typed body: (model.decimal :v neg: false) t: sc)
 }
 
 # typed -- `body`, a value, with the suffix of type `t`: a literal's type or

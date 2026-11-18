@@ -21,7 +21,40 @@
 #   expression in main, and a function over parameters called with the same
 #   literals;
 # - about one program in ten ends in a planned panic: a division by a local
-#   bound to zero, or `.orPanic` on a conversion that fails.
+#   bound to zero, `.orPanic` on a conversion that fails, or a list read past
+#   its end.
+#
+# Declared types: records and variants (held by value; a field or a payload
+# is a scalar or an earlier one, never a reference), classes (a field may
+# also be a list of a valtype or an earlier class) and unions (an arm holds
+# nothing, a class, or a scalar of 64 bits or fewer -- the 8-byte slot).
+# Records and variants compare with `==`; a field or arm with no default is
+# given one where a zero is built.
+#
+# Ownership discipline (probed in E2b.0, plan "E2b.0 results"), so that a
+# refusal of a program inside it is a finding:
+# - a binding of a reference type borrows and locks its source, so no class,
+#   union or list local is ever bound from a name: it is built (a
+#   construction, an arm, `ListVal t` then items, a ListVal's `.copy`) or is
+#   a call's value, and is only reassigned from those;
+# - a class, union or list goes to a parameter by its bare name (by
+#   reference: writes reach the caller), or a class or union as a new
+#   construction; one call never takes the same one twice, and the names it
+#   takes are frozen while its other arguments are generated;
+# - a list's item is read at `i % length` and every list holds an item from
+#   its declaration on (no `pop`), so a read never panics unplanned; a list a
+#   `for each` walks, one an operation reads, or one a call takes, is frozen:
+#   no append, set or argument while frozen; a `for each` item, and a List's
+#   item, are read only (a view);
+# - fields are written through a record local, a class local or parameter,
+#   or a class payload a match arm narrows -- never through an item;
+# - narrowing: a match's subject is a bare variant or union local, out of
+#   scope in its arms (an arm's payload takes its name; in an `else` or an
+#   arm with no payload it is not used); an if-condition that would narrow
+#   (an arm predicate, bare, under `.not` or compared) is written
+#   `(c and true)`; and no statement inside a match arm returns or breaks
+#   out of the arm, so no arm always leaves -- an arm that did would narrow
+#   the subject for the rest of the block.
 
 # knobs -- the generator's budgets
 knobs: record {
@@ -39,6 +72,18 @@ knobs: record {
     trips: 6.u64
     # fold checks, at most
     folds: 2.u64
+    # declared records, at most
+    recs: 3.u64
+    # fields of a record, at most
+    fields: 4.u64
+    # declared variants, at most
+    vnts: 3.u64
+    # arms of a variant, at most
+    arms: 4.u64
+    # declared classes, at most
+    classes: 2.u64
+    # declared unions, at most
+    unions: 2.u64
 }
 
 # Gen -- the state of one program's generation
@@ -60,6 +105,25 @@ Gen: class {
     planned: u32
     # the fold checks' print statements: 1 unit form, 2 body, 3 run
     formOf: ListVal u8
+    # the records the program declares
+    recs: ListVal u32
+    # the variants it declares
+    vnts: ListVal u32
+    # the classes it declares
+    cls: ListVal u32
+    # the unions it declares
+    unis: ListVal u32
+    # the records and variants, the types held by value
+    vals: ListVal u32
+    # every type it declares, in order
+    decls: ListVal u32
+    # the lists a statement or an argument may not write or pass on: one a
+    # `for each` walks, one an operation is reading, one a call already takes
+    frozen: ListVal u32
+    # inside a match arm: no `return`, and a `break` only out of a loop at or
+    # past `armLoops` loops deep
+    inArm: bool
+    armLoops: u32
 } as {
     # create -- a generator for the case seeded `s`
     create: function {s: u64 k: knobs} out this is {
@@ -75,6 +139,15 @@ Gen: class {
             called: ListVal bool
             planned: 0
             formOf: ListVal u8
+            recs: ListVal u32
+            vnts: ListVal u32
+            cls: ListVal u32
+            unis: ListVal u32
+            vals: ListVal u32
+            decls: ListVal u32
+            frozen: ListVal u32
+            inArm: false
+            armLoops: 0
         )
     }
 
@@ -141,6 +214,7 @@ guardDivisor: function {g: Gen id: u32} is {
 # build -- the whole program: the functions' signatures, their bodies, then
 # main with its fold checks and, sometimes, a planned panic
 build: function {g: Gen} is {
+    declareTypes :g
     n: g.pick n: g.k.funcs + 1
     i: u64
     for i < n loop {
@@ -155,26 +229,93 @@ build: function {g: Gen} is {
     mainBody :g
 }
 
+# declareTypes -- the records, variants and classes the program declares, in
+# a random order: a record's field, or a variant arm's payload, is a scalar or
+# a record or variant declared before it (a valtype holds no reference); an
+# arm has no payload one time in three; a class's field is any of those, a
+# list of a valtype, or a class declared before it
+declareTypes: function {g: Gen} is {
+    nr: g.pick n: g.k.recs + 1
+    nv: g.pick n: g.k.vnts + 1
+    nc: g.pick n: g.k.classes + 1
+    nu: g.pick n: g.k.unions + 1
+    for (
+        (g.recs.length.u64 < nr) or
+        (g.vnts.length.u64 < nv) or
+        (g.cls.length.u64 < nc) or
+        (
+            g.unis.length.u64 < nu
+        )
+    ) loop {
+        kind: declKind :g :nr :nv :nc :nu
+        members: ListVal u32
+        m: 1 + (g.pick n: g.k.fields)
+        if (kind == prog.tk.vnt) or (kind == prog.tk.uni) then m = 1 + (g.pick n: g.k.arms)
+        for members.length < m loop members.append (memberType :g :kind)
+        id: g.p.addDecl :kind :members
+        if kind == prog.tk.rec then g.recs.append id
+        if kind == prog.tk.vnt then g.vnts.append id
+        if kind == prog.tk.cls then g.cls.append id
+        if kind == prog.tk.uni then g.unis.append id
+        if (kind == prog.tk.rec) or (kind == prog.tk.vnt) then g.vals.append id
+        g.decls.append id
+    }
+}
+
+# declKind -- the kind of the next declared type: one whose count is still
+# below its target (`nr` records, `nv` variants, `nc` classes, `nu` unions)
+declKind: function {g: Gen nr: u64 nv: u64 nc: u64 nu: u64} out u8 is {
+    open: ListVal u8
+    if g.recs.length.u64 < nr then open.append prog.tk.rec
+    if g.vnts.length.u64 < nv then open.append prog.tk.vnt
+    if g.cls.length.u64 < nc then open.append prog.tk.cls
+    if g.unis.length.u64 < nu then open.append prog.tk.uni
+    return (open.get i: (g.pick n: open.length))
+}
+
+# memberType -- the type of a new member of a declared type of kind `kind`. A
+# union's arm holds nothing, a class, or a scalar of 64 bits or fewer: a bare
+# value arm lives in the union's 8-byte slot.
+memberType: function {g: Gen kind: u8} out u32 is {
+    if (kind == prog.tk.vnt) or (kind == prog.tk.uni) when (g.chance n: 3) then return 0
+    if kind == prog.tk.uni then return (unionArmType :g)
+    if kind == prog.tk.cls then {
+        if (g.chance n: 6) then return (g.p.listOf elem: (valType :g))
+        if g.cls.length > 0 when (g.chance n: 6) then return (g.cls.get i: (g.pick n: g.cls.length))
+    }
+    if g.vals.length > 0 when (g.chance n: 4) then return (g.vals.get i: (g.pick n: g.vals.length))
+    return (anyType :g)
+}
+
+# unionArmType -- the payload type of a union's arm: a class declared before
+# it, or a scalar of 64 bits or fewer
+unionArmType: function {g: Gen} out u32 is {
+    if g.cls.length > 0 when (g.chance n: 2) then return (g.cls.get i: (g.pick n: g.cls.length))
+    t: anyType :g
+    for (prog.tys.get i: (g.p.scOf :t).u64).bits > 64 loop t = anyType :g
+    return t
+}
+
 # signature -- a new function: what it returns and its parameters, the first
 # sometimes a depth parameter its own calls lower
 signature: function {g: Gen} is {
     f: (
         prog.func
-        ret: (anyType :g)
+        ret: (valueType :g)
         first: (prog.idOf n: g.p.params.length + 1)
         count: 0
         body: 0
         depth: 0
     )
     if (g.chance n: 4) then {
-        f.depth = g.p.addLocal kind: prog.lk.param t: prog.ty.u32
+        f.depth = g.p.addLocal kind: prog.lk.param t: (g.p.tyOf sc: prog.ty.u32)
         g.p.params.append f.depth
         f.count = 1
     }
     n: g.pick n: g.k.params + 1
     i: u64
     for i < n loop {
-        g.p.params.append (g.p.addLocal kind: prog.lk.param t: (anyType :g))
+        g.p.params.append (g.p.addLocal kind: prog.lk.param t: (paramType :g))
         f.count = f.count + 1
         i = i + 1
     }
@@ -236,18 +377,19 @@ selfCall: function {g: Gen b: Block f: prog.func} is {
     )
     g.scope.append v
     d: name :g id: f.depth
-    zero: litInt :g t: prog.ty.u32 lo: 0 hi: 0
-    cond: binNode :g o: prog.op.gt t: prog.ty.bool a: d b: zero
+    zero: litInt :g t: (g.p.tyOf sc: prog.ty.u32) lo: 0 hi: 0
+    cond: binNode :g o: prog.op.gt t: (g.p.tyOf sc: prog.ty.bool) a: d b: zero
     inner: newBlock
     call: callNode :g fn: g.fn
+    if call == 0 then return
     e: g.p.exprAt id: call
     lowered: (
         binNode
         :g
         o: prog.op.sub
-        t: prog.ty.u32
+        t: (g.p.tyOf sc: prog.ty.u32)
         a: (name :g id: f.depth)
-        b: (litInt :g t: prog.ty.u32 lo: 1 hi: 0)
+        b: (litInt :g t: (g.p.tyOf sc: prog.ty.u32) lo: 1 hi: 0)
     )
     g.p.args.set i: e.a.u64 val: lowered
     (
@@ -274,8 +416,10 @@ mainBody: function {g: Gen} is {
     f: 2.u64
     for f < g.p.funcs.length loop {
         if (g.called.get i: f - 2).not then {
-            call: callNode :g fn: (f.u32.or d: 0)
-            addPrint :g :b e: call form: 0
+            fn: f.u32.or d: 0
+            provideLists :g :b :fn
+            call: callNode :g :fn
+            if call != 0 then addPrint :g :b e: (scalarOf :g e: call) form: 0
         }
         f = f + 1
     }
@@ -336,18 +480,24 @@ statements: function {g: Gen b: Block} is {
 # statement -- one statement at the end of block `b`, its kind drawn by
 # weight; a block or a loop only while the nesting allows
 statement: function {g: Gen b: Block} is {
-    w: g.pick n: 14
+    w: g.pick n: 19
     deep: g.nest.u64 >= g.k.nest
     if w < 4 then {
         declare :g :b
     } else if w < 6 then {
         assign :g :b
-    } else if w < 9 then {
+    } else if w < 7 then {
+        setField :g :b
+    } else if w < 8 then {
+        if deep.not then matchStatement :g :b else setField :g :b
+    } else if w < 10 then {
+        listStatement :g :b :deep
+    } else if w < 13 then {
         t: anyType :g
         addPrint :g :b e: (genExpr :g :t d: g.k.depth) form: 0
-    } else if (w < 11) and deep.not then {
+    } else if (w < 15) and deep.not then {
         ifStatement :g :b
-    } else if (w < 13) and deep.not then {
+    } else if (w < 18) and deep.not then {
         loopStatement :g :b
     } else {
         exitStatement :g :b
@@ -356,7 +506,7 @@ statement: function {g: Gen b: Block} is {
 
 # declare -- `v: e`, a new local in scope after it
 declare: function {g: Gen b: Block} is {
-    t: anyType :g
+    t: valueType :g
     e: genExpr :g :t d: g.k.depth
     v: g.p.addLocal kind: prog.lk.local :t
     addStmt :g :b s: (prog.stmt kind: prog.sk.decl local: v :e body: 0 other: 0 n: 0 next: 0)
@@ -367,7 +517,11 @@ declare: function {g: Gen b: Block} is {
 assign: function {g: Gen b: Block} is {
     mine: ListVal u32
     for each v: g.scope loop {
-        if (g.p.locals.get i: v.u64).kind == prog.lk.local then mine.append v
+        if (g.p.locals.get i: v.u64).kind == prog.lk.local when (
+            isValue
+            p: g.p
+            t: (g.p.localTy id: v)
+        ) then mine.append v
     }
     if mine.length == 0 then {
         declare :g :b
@@ -378,9 +532,453 @@ assign: function {g: Gen b: Block} is {
     addStmt :g :b s: (prog.stmt kind: prog.sk.assign local: v :e body: 0 other: 0 n: 0 next: 0)
 }
 
+# setField -- `v.m1.m2 = e`, a field of a record local in scope, or an
+# assignment when there is none
+setField: function {g: Gen b: Block} is {
+    v: fieldOwner :g
+    place: u32
+    if v != 0 then place = fieldPlace :g :v
+    if place == 0 then {
+        assign :g :b
+        return
+    }
+    e: genExpr :g t: (g.p.exprAt id: place).ty d: g.k.depth
+    (
+        addStmt
+        :g
+        :b
+        s: (prog.stmt kind: prog.sk.setf local: v :e body: 0 other: 0 n: 0 :place next: 0)
+    )
+}
+
+# fieldOwner -- a local whose fields a statement may write: a record local,
+# or a class local, parameter or narrowed payload; 0 when none is in scope
+fieldOwner: function {g: Gen} out u32 is {
+    mine: ListVal u32
+    for each v: g.scope loop {
+        lk: (g.p.locals.get i: v.u64).kind
+        lt: g.p.localTy id: v
+        if lk == prog.lk.local when (g.p.kindOf t: lt) == prog.tk.rec then mine.append v
+        if (lk == prog.lk.local) or (lk == prog.lk.param) or (lk == prog.lk.narrow) when (
+            (g.p.kindOf t: lt) == prog.tk.cls
+        ) then mine.append v
+    }
+    if mine.length == 0 then return 0
+    return (mine.get i: (g.pick n: mine.length))
+}
+
+# fieldPlace -- a field of local `v` to write, through its records and
+# classes, never a list (lists are appended to); 0 when the way down meets a
+# type with no other field
+fieldPlace: function {g: Gen v: u32} out u32 is {
+    place: name :g id: v
+    for true loop {
+        t: (g.p.exprAt id: place).ty
+        ways: ListVal u32
+        k: 1.u32
+        for k <= (g.p.memberCount :t) loop {
+            if (g.p.isList t: (g.p.memberTy :t :k)).not then ways.append k
+            k = k + 1
+        }
+        if ways.length == 0 then return 0
+        place = fieldNode :g base: place k: (ways.get i: (g.pick n: ways.length))
+        ft: (g.p.exprAt id: place).ty
+        if (g.p.hasFields t: ft).not or (g.chance n: 2) then return place
+    }
+    return place
+}
+
+# ---------------- lists ----------------
+
+# listStatement -- a statement on a list: a new list, an item appended or
+# replaced, or a `for each` over one (not where blocks may not nest)
+listStatement: function {g: Gen b: Block deep: bool} is {
+    l: listPlace :g writable: true
+    w: g.pick n: 5
+    if (l == 0) or (w == 0) then {
+        t: g.p.listOf elem: (valType :g)
+        if g.cls.length > 0 when (g.chance n: 3) then t = (
+            g.p.refListOf
+            elem: (g.cls.get i: (g.pick n: g.cls.length))
+        )
+        declareList :g :b :t
+        return
+    }
+    if (w <= 2) and deep.not then {
+        forEach :g :b
+        return
+    }
+    lt: g.p.localTy id: l
+    elem: g.p.elemOf t: lt
+    g.frozen.append l
+    if w <= 3 then {
+        e: genExpr :g t: elem d: g.k.depth
+        (
+            addStmt
+            :g
+            :b
+            s: (prog.stmt kind: prog.sk.lappend local: l :e place: (name :g id: l) next: 0)
+        )
+    } else {
+        idx: genExpr :g t: (g.p.tyOf sc: prog.ty.u64) d: 1
+        e: genExpr :g t: elem d: g.k.depth
+        (
+            addStmt
+            :g
+            :b
+            s: (prog.stmt kind: prog.sk.lset local: l :e place: (name :g id: l) :idx next: 0)
+        )
+    }
+    g.frozen.pop
+}
+
+# declareList -- `v: ListVal t` then one to three items appended, or now and
+# then a copy of a list of that type in scope; `v` in scope after them
+declareList: function {g: Gen b: Block t: u32} out u32 is {
+    v: g.p.addLocal kind: prog.lk.local :t
+    src: u32
+    if (g.p.kindOf :t) == prog.tk.lval when (g.chance n: 4) then src = (
+        listOfType
+        :g
+        :t
+        writable: false
+    )
+    if src != 0 then {
+        copy: g.p.addExpr (
+            prog.expr
+            kind: prog.ek.lcopy
+            ty: t
+            op: 0
+            a: (name :g id: src)
+            b: 0
+            c: 0
+            ref: 0
+            lo: 0
+            hi: 0
+        )
+        (
+            addStmt
+            :g
+            :b
+            s: (prog.stmt kind: prog.sk.decl local: v e: copy body: 0 other: 0 n: 0 next: 0)
+        )
+        g.scope.append v
+        return v
+    }
+    empty: g.p.addExpr (
+        prog.expr
+        kind: prog.ek.newlist
+        ty: t
+        op: 0
+        a: 0
+        b: 0
+        c: 0
+        ref: 0
+        lo: 0
+        hi: 0
+    )
+    addStmt :g :b s: (prog.stmt kind: prog.sk.decl local: v e: empty body: 0 other: 0 n: 0 next: 0)
+    n: 1 + (g.pick n: 3)
+    i: u64
+    for i < n loop {
+        e: genExpr :g t: (g.p.elemOf :t) d: g.k.depth
+        (
+            addStmt
+            :g
+            :b
+            s: (prog.stmt kind: prog.sk.lappend local: v :e place: (name :g id: v) next: 0)
+        )
+        i = i + 1
+    }
+    g.scope.append v
+    return v
+}
+
+# forEach -- `for each x: l loop { ... }` over a list in scope, which the body
+# may read but not write or pass on; the item in scope inside
+forEach: function {g: Gen b: Block} is {
+    l: listPlace :g writable: false
+    if l == 0 then return
+    x: g.p.addLocal kind: prog.lk.elem t: (g.p.elemOf t: (g.p.localTy id: l))
+    kept: g.scope.length
+    g.scope.append x
+    g.frozen.append l
+    g.loops = g.loops + 1
+    body: subBlock :g
+    g.loops = g.loops - 1
+    g.frozen.pop
+    for g.scope.length > kept loop g.scope.pop
+    (
+        addStmt
+        :g
+        :b
+        s: (
+            prog.stmt
+            kind: prog.sk.walk
+            local: x
+            e: 0
+            :body
+            other: 0
+            n: 0
+            place: (name :g id: l)
+            next: 0
+        )
+    )
+}
+
+# listPlace -- a list local or parameter in scope, one a statement may write
+# when `writable`; 0 when there is none
+listPlace: function {g: Gen writable: bool} out u32 is {
+    mine: ListVal u32
+    for each v: g.scope loop {
+        if (g.p.isList t: (g.p.localTy id: v)) then {
+            if writable.not or (g.frozen.contains item: v).not then mine.append v
+        }
+    }
+    if mine.length == 0 then return 0
+    return (mine.get i: (g.pick n: mine.length))
+}
+
+# listOfType -- a list local or parameter of type `t` in scope (not frozen
+# when `writable`), or 0
+listOfType: function {g: Gen t: u32 writable: bool} out u32 is {
+    mine: ListVal u32
+    for each v: g.scope loop {
+        if (g.p.localTy id: v) == t then {
+            if writable.not or (g.frozen.contains item: v).not then mine.append v
+        }
+    }
+    if mine.length == 0 then return 0
+    return (mine.get i: (g.pick n: mine.length))
+}
+
+# listRead -- an item of type `t` of a list in scope, at an index computed
+# while the list may not be written, or 0 when no list holds `t`
+listRead: function {g: Gen t: u32} out u32 is {
+    l: listOfType :g t: (g.p.listOf elem: t) writable: false
+    if l == 0 then return 0
+    g.frozen.append l
+    idx: genExpr :g t: (g.p.tyOf sc: prog.ty.u64) d: 1
+    g.frozen.pop
+    return (g.p.addExpr (
+        prog.expr
+        kind: prog.ek.lget
+        ty: t
+        op: 0
+        a: (name :g id: l)
+        b: idx
+        c: 0
+        ref: 0
+        lo: 0
+        hi: 0
+    )
+    )
+}
+
+# classListRead -- a field of type `t` of an item of a List of a class in
+# scope (`(l.get i: ...).m<k>`, read through the item's view), or 0
+classListRead: function {g: Gen t: u32} out u32 is {
+    found: ListVal u32
+    for each v: g.scope loop {
+        lt: g.p.localTy id: v
+        if (g.p.kindOf t: lt) == prog.tk.lref when (
+            hasField
+            p: g.p
+            holder: (g.p.elemOf t: lt)
+            want: t
+            depth: 1
+        ) then found.append v
+    }
+    if found.length == 0 then return 0
+    l: found.get i: (g.pick n: found.length)
+    ct: g.p.elemOf t: (g.p.localTy id: l)
+    ways: ListVal u32
+    k: 1.u32
+    for k <= (g.p.memberCount t: ct) loop {
+        if (g.p.memberTy t: ct :k) == t then ways.append k
+        k = k + 1
+    }
+    g.frozen.append l
+    idx: genExpr :g t: (g.p.tyOf sc: prog.ty.u64) d: 1
+    g.frozen.pop
+    item: g.p.addExpr (
+        prog.expr
+        kind: prog.ek.lget
+        ty: ct
+        op: 0
+        a: (name :g id: l)
+        b: idx
+        c: 0
+        ref: 0
+        lo: 0
+        hi: 0
+    )
+    return (fieldNode :g base: item k: (ways.get i: (g.pick n: ways.length)))
+}
+
+# listLength -- the length of a list in scope, or 0 when there is none
+listLength: function {g: Gen} out u32 is {
+    l: listPlace :g writable: false
+    if l == 0 then return 0
+    return (g.p.addExpr (
+        prog.expr
+        kind: prog.ek.llen
+        ty: (g.p.tyOf sc: prog.ty.u64)
+        op: 0
+        a: (name :g id: l)
+        b: 0
+        c: 0
+        ref: 0
+        lo: 0
+        hi: 0
+    )
+    )
+}
+
+# provideLists -- a new list in block `b` for each list parameter of function
+# `fn` that no list in scope can stand for, so main can call it
+provideLists: function {g: Gen b: Block fn: u32} is {
+    f: g.p.funcs.get i: fn.u64
+    used: ListVal u32
+    k: u32
+    for k < f.count loop {
+        pt: g.p.localTy id: (g.p.paramAt :f :k)
+        if (g.p.isList t: pt) then {
+            have: u32
+            for each v: g.scope loop {
+                if (g.p.localTy id: v) == pt when (used.contains item: v).not when (
+                    g.frozen.contains
+                    item: v
+                ).not then have = v
+            }
+            if have == 0 then have = declareList :g :b t: pt
+            used.append have
+        }
+        k = k + 1
+    }
+}
+
+# matchStatement -- `match v case ... then { ... } else { ... }` over a
+# variant local in scope, or a field write when there is none
+matchStatement: function {g: Gen b: Block} is {
+    v: variantLocal :g
+    if v == 0 then {
+        setField :g :b
+        return
+    }
+    t: g.p.localTy id: v
+    subject: name :g id: v
+    arms: chosenArms :g :t
+    # an arm's block may hold matches of its own, whose entries go in first
+    vals: ListVal prog.mcase
+    outer: g.inArm
+    floor: g.armLoops
+    g.inArm = true
+    g.armLoops = g.loops
+    for each arm: arms loop {
+        narrow: narrowFor :g :v :t :arm
+        saved: g.scope.copy
+        dropFromScope :g :v
+        if narrow != 0 then g.scope.append narrow
+        body: subBlock :g
+        g.scope = saved.take
+        vals.append (prog.mcase :arm e: 0 :body :narrow)
+    }
+    g.inArm = outer
+    g.armLoops = floor
+    first: prog.idOf n: g.p.cases.length + 1
+    for each c: vals loop g.p.cases.append c
+    n: arms.length.u32.or d: 0
+    (
+        addStmt
+        :g
+        :b
+        s: (
+            prog.stmt
+            kind: prog.sk.vmatch
+            local: 0
+            e: subject
+            body: 0
+            other: 0
+            :n
+            place: 0
+            cases: first
+            next: 0
+        )
+    )
+}
+
+# variantLocal -- a variant or union local or parameter in scope (or a
+# payload that is one), or 0
+variantLocal: function {g: Gen} out u32 is {
+    mine: ListVal u32
+    for each v: g.scope loop {
+        if (g.p.isSum t: (g.p.localTy id: v)) then mine.append v
+    }
+    if mine.length == 0 then return 0
+    return (mine.get i: (g.pick n: mine.length))
+}
+
+# chosenArms -- the arms a match over the variant `t` lists: each arm three
+# times in four, and an `else` (0) last when some arm is left out
+chosenArms: function {g: Gen t: u32} out ListVal u32 is {
+    arms: ListVal u32
+    k: 1.u32
+    for k <= (g.p.memberCount :t) loop {
+        if (g.chance n: 4).not then arms.append k
+        k = k + 1
+    }
+    if arms.length == 0 then arms.append 1 + ((g.pick n: (g.p.memberCount :t).u64).u32.or d: 0)
+    if arms.length < (g.p.memberCount :t).u64 then arms.append 0
+    return arms
+}
+
+# narrowFor -- the local that names arm `arm`'s payload inside its body, as
+# the subject `v` itself is written; 0 for the `else` and an arm with none
+narrowFor: function {g: Gen v: u32 t: u32 arm: u32} out u32 is {
+    if arm == 0 then return 0
+    pt: g.p.memberTy :t k: arm
+    if pt == 0 then return 0
+    g.p.locals.append (prog.local kind: prog.lk.narrow ty: pt of: v)
+    return (prog.idOf n: g.p.locals.length)
+}
+
+# dropFromScope -- the local `v` out of scope: inside a match on it, its name
+# is the arm's payload, or (in the `else` and an arm with none) not used
+dropFromScope: function {g: Gen v: u32} is {
+    kept: ListVal u32
+    for each x: g.scope loop {
+        if x != v then kept.append x
+    }
+    g.scope = kept.take
+}
+
+# condition -- a bool expression for an `if`. An arm predicate there -- bare,
+# under `.not`, or compared with a bool -- narrows its variant in a branch,
+# and, when the branch always exits, in the rest of the block; so such a
+# condition is written `(c and true)`, which narrows nothing.
+condition: function {g: Gen d: u64} out u32 is {
+    bt: g.p.tyOf sc: prog.ty.bool
+    c: genExpr :g t: bt :d
+    if (mayNarrow p: g.p id: c).not then return c
+    return (binNode :g o: prog.op.land t: bt a: c b: (litInt :g t: bt lo: 1 hi: 0))
+}
+
+# mayNarrow -- whether the bool expression `id` is an arm predicate, one under
+# `.not`, or one compared with `==` or `!=`
+mayNarrow: function {p: prog.Prog.view id: u32} out bool is {
+    e: p.exprAt :id
+    if e.kind == prog.ek.isarm then return true
+    if e.kind == prog.ek.not then return (mayNarrow :p id: e.a)
+    if e.kind == prog.ek.bin when (e.op == prog.op.eq) or (e.op == prog.op.ne) then {
+        return (mayNarrow :p id: e.a) or (mayNarrow :p id: e.b)
+    }
+    return false
+}
+
 # ifStatement -- `if c then { ... } else { ... }`, the else sometimes left out
 ifStatement: function {g: Gen b: Block} is {
-    c: genExpr :g t: prog.ty.bool d: g.k.depth
+    c: condition :g d: g.k.depth
     yes: subBlock :g
     no: u32
     if (g.chance n: 2) then no = subBlock :g
@@ -402,7 +1000,7 @@ subBlock: function {g: Gen} out u32 is {
 # loopStatement -- a counted loop up to a literal count, its counter in scope
 # from the loop on
 loopStatement: function {g: Gen b: Block} is {
-    c: g.p.addLocal kind: prog.lk.counter t: prog.ty.u32
+    c: g.p.addLocal kind: prog.lk.counter t: (g.p.tyOf sc: prog.ty.u32)
     n: 1 + (g.pick n: g.k.trips)
     g.scope.append c
     g.loops = g.loops + 1
@@ -420,14 +1018,19 @@ loopStatement: function {g: Gen b: Block} is {
 # e }` in a function, else a call whose value is dropped
 exitStatement: function {g: Gen b: Block} is {
     inner: newBlock
-    if (g.loops > 0) and (g.chance n: 2) then {
+    # inside a match arm, an exit the arm's own block cannot contain would let
+    # the arm always leave (a constant condition decides it), and that
+    # narrows the subject for the rest of the block
+    canBreak: g.loops > g.armLoops
+    canReturn: (g.fn != 1) and g.inArm.not
+    if canBreak and (g.chance n: 2) then {
         (
             addStmt
             :g
             b: inner
             s: (prog.stmt kind: prog.sk.brk local: 0 e: 0 body: 0 other: 0 n: 0 next: 0)
         )
-    } else if g.fn != 1 then {
+    } else if canReturn then {
         f: g.p.funcs.get i: g.fn.u64
         (
             addStmt
@@ -463,7 +1066,7 @@ exitStatement: function {g: Gen b: Block} is {
         )
         return
     }
-    c: genExpr :g t: prog.ty.bool d: g.k.depth
+    c: condition :g d: g.k.depth
     (
         addStmt
         :g
@@ -475,13 +1078,374 @@ exitStatement: function {g: Gen b: Block} is {
 # ---------------- expressions ----------------
 
 # anyType -- a scalar type, each as likely as another
-anyType: function {g: Gen} out u8 is {
-    return ((g.pick n: prog.tys.length).u8.or d: 0)
+anyType: function {g: Gen} out u32 is {
+    return (g.p.tyOf sc: ((g.pick n: prog.tys.length).u8.or d: 0))
+}
+
+# valueType -- the type of a local, a parameter or a function's value: a
+# scalar, or now and then a declared type
+valueType: function {g: Gen} out u32 is {
+    if g.decls.length > 0 when (g.chance n: 3) then return (
+        g.decls.get
+        i: (g.pick n: g.decls.length)
+    )
+    return (anyType :g)
+}
+
+# valType -- a type held by value: a scalar, or now and then a declared
+# record or variant
+valType: function {g: Gen} out u32 is {
+    if g.vals.length > 0 when (g.chance n: 3) then return (g.vals.get i: (g.pick n: g.vals.length))
+    return (anyType :g)
+}
+
+# paramType -- the type of a parameter: a valueType, or now and then a list
+# of a valType or a List of a class
+paramType: function {g: Gen} out u32 is {
+    if g.cls.length > 0 when (g.chance n: 12) then return (
+        g.p.refListOf
+        elem: (g.cls.get i: (g.pick n: g.cls.length))
+    )
+    if (g.chance n: 6) then return (g.p.listOf elem: (valType :g))
+    return (valueType :g)
+}
+
+# isValue -- whether a local of type `t` may be assigned: anything but a list
+isValue: function {p: prog.Prog.view t: u32} out bool is {
+    return (p.isList :t).not
+}
+
+# classExpr -- an expression of the class type `t`: a construction or a call,
+# never a name, whose binding would borrow it
+classExpr: function {g: Gen t: u32 d: u64} out u32 is {
+    if d > 0 when (g.chance n: 3) then {
+        f: callable :g :t
+        if f != 0 then return (callNode :g fn: f)
+    }
+    if d == 0 then return (makeNode :g :t d: 0)
+    return (makeNode :g :t d: d - 1)
+}
+
+# unionExpr -- an expression of the union type `t`: an arm built, or a call,
+# never a name, whose binding would borrow it
+unionExpr: function {g: Gen t: u32 d: u64} out u32 is {
+    if d > 0 when (g.chance n: 3) then {
+        f: callable :g :t
+        if f != 0 then return (callNode :g fn: f)
+    }
+    if d == 0 then return (armNode :g :t d: 0)
+    return (armNode :g :t d: d - 1)
+}
+
+# listExpr -- a list of type `t` as a value: a copy of a ListVal in scope,
+# or a new empty list (a List of a class has no copy)
+listExpr: function {g: Gen t: u32} out u32 is {
+    src: u32
+    if (g.p.kindOf :t) == prog.tk.lval then src = listOfType :g :t writable: false
+    if src != 0 then return (
+        g.p.addExpr
+        (prog.expr kind: prog.ek.lcopy ty: t op: 0 a: (name :g id: src) b: 0 c: 0 ref: 0 lo: 0 hi: 0
+        )
+    )
+    return (g.p.addExpr (
+        prog.expr
+        kind: prog.ek.newlist
+        ty: t
+        op: 0
+        a: 0
+        b: 0
+        c: 0
+        ref: 0
+        lo: 0
+        hi: 0
+    )
+    )
+}
+
+# scalarOf -- `e`, or when it is a record its first field, and so on to a
+# scalar, a variant its first arm's predicate: something a print statement
+# can print
+scalarOf: function {g: Gen e: u32} out u32 is {
+    x: e
+    for (g.p.hasFields t: (g.p.exprAt id: x).ty) loop x = fieldNode :g base: x k: 1
+    xt: (g.p.exprAt id: x).ty
+    if (g.p.isSum t: xt) then return (isArmNode :g subject: x arm: 1)
+    if (g.p.isList t: xt) then return (
+        g.p.addExpr
+        (
+            prog.expr
+            kind: prog.ek.llen
+            ty: (g.p.tyOf sc: prog.ty.u64)
+            op: 0
+            a: x
+            b: 0
+            c: 0
+            ref: 0
+            lo: 0
+            hi: 0
+        )
+    )
+    return x
+}
+
+# isArmNode -- whether the variant expression `subject` holds arm `arm`
+isArmNode: function {g: Gen subject: u32 arm: u32} out u32 is {
+    return (g.p.addExpr (
+        prog.expr
+        kind: prog.ek.isarm
+        ty: (g.p.tyOf sc: prog.ty.bool)
+        op: 0
+        a: subject
+        b: 0
+        c: 0
+        ref: arm
+        lo: 0
+        hi: 0
+    )
+    )
+}
+
+# variantExpr -- an expression of the variant type `t` at most `d` deep: an
+# arm built, a call, a branch value, a match value, a field of a record in
+# scope, or a leaf
+variantExpr: function {g: Gen t: u32 d: u64} out u32 is {
+    if (d == 0) or (g.chance n: 4) then return (leaf :g :t)
+    w: g.pick n: 9
+    if w < 3 then return (armNode :g :t d: d - 1)
+    if w < 4 then return (branchValue :g :t :d)
+    if w < 6 then {
+        f: callable :g :t
+        if f != 0 then return (callNode :g fn: f)
+    }
+    if w < 7 then {
+        r: fieldRead :g :t
+        if r != 0 then return r
+    }
+    if w < 8 then {
+        m: matchValue :g :t :d
+        if m != 0 then return m
+    }
+    return (leaf :g :t)
+}
+
+# armNode -- an arm of the variant `t`, its payload at most `d` deep
+armNode: function {g: Gen t: u32 d: u64} out u32 is {
+    k: 1 + ((g.pick n: (g.p.memberCount :t).u64).u32.or d: 0)
+    pt: g.p.memberTy :t :k
+    payload: u32
+    if pt != 0 then payload = genExpr :g t: pt :d
+    return (g.p.addExpr (
+        prog.expr
+        kind: prog.ek.arm
+        ty: t
+        op: 0
+        a: payload
+        b: 0
+        c: 0
+        ref: k
+        lo: 0
+        hi: 0
+    )
+    )
+}
+
+# matchValue -- `match v case ... then e ... else e` of type `t` over a
+# variant local in scope, each value at most `d` deep; 0 when no variant is
+# in scope
+matchValue: function {g: Gen t: u32 d: u64} out u32 is {
+    v: variantLocal :g
+    if v == 0 then return 0
+    vt: g.p.localTy id: v
+    subject: name :g id: v
+    vals: ListVal prog.mcase
+    for each arm: (chosenArms :g t: vt) loop {
+        narrow: narrowFor :g :v t: vt :arm
+        saved: g.scope.copy
+        dropFromScope :g :v
+        if narrow != 0 then g.scope.append narrow
+        e: genExpr :g :t d: d - 1
+        g.scope = saved.take
+        vals.append (prog.mcase :arm :e body: 0 :narrow)
+    }
+    first: prog.idOf n: g.p.cases.length + 1
+    for each c: vals loop g.p.cases.append c
+    return (g.p.addExpr (
+        prog.expr
+        kind: prog.ek.vmatch
+        ty: t
+        op: 0
+        a: subject
+        b: first
+        c: (vals.length.u32.or d: 0)
+        ref: 0
+        lo: 0
+        hi: 0
+    )
+    )
+}
+
+# fieldNode -- field `k` of the record expression `base`
+fieldNode: function {g: Gen base: u32 k: u32} out u32 is {
+    t: g.p.memberTy t: (g.p.exprAt id: base).ty :k
+    return (g.p.addExpr (
+        prog.expr
+        kind: prog.ek.field
+        ty: t
+        op: 0
+        a: base
+        b: 0
+        c: 0
+        ref: k
+        lo: 0
+        hi: 0
+    )
+    )
+}
+
+# recordExpr -- an expression of the record type `t` at most `d` deep: a
+# construction, a call, a branch value, a field of a record in scope, or a
+# leaf
+recordExpr: function {g: Gen t: u32 d: u64} out u32 is {
+    if (d == 0) or (g.chance n: 4) then return (leaf :g :t)
+    w: g.pick n: 8
+    if w < 3 then return (makeNode :g :t d: d - 1)
+    if w < 4 then return (branchValue :g :t :d)
+    if w < 6 then {
+        f: callable :g :t
+        if f != 0 then return (callNode :g fn: f)
+    }
+    if w < 7 then {
+        r: fieldRead :g :t
+        if r != 0 then return r
+    }
+    if w < 8 then {
+        m: matchValue :g :t :d
+        if m != 0 then return m
+    }
+    return (leaf :g :t)
+}
+
+# makeNode -- the record `t` built from a value for each field, each at most
+# `d` deep; or, now and then, with every field at its default
+makeNode: function {g: Gen t: u32 d: u64} out u32 is {
+    n: g.p.memberCount :t
+    if (g.chance n: 5) then return (
+        g.p.addExpr
+        (prog.expr kind: prog.ek.make ty: t op: 0 a: 0 b: 0 c: 0 ref: 0 lo: 0 hi: 0)
+    )
+    vals: ListVal u32
+    k: 1.u32
+    for k <= n loop {
+        vals.append (genExpr :g t: (g.p.memberTy :t :k) :d)
+        k = k + 1
+    }
+    first: prog.idOf n: g.p.args.length + 1
+    for each v: vals loop g.p.args.append v
+    return (g.p.addExpr (
+        prog.expr
+        kind: prog.ek.make
+        ty: t
+        op: 0
+        a: first
+        b: n
+        c: 0
+        ref: 0
+        lo: 0
+        hi: 0
+    )
+    )
+}
+
+# fieldRead -- a field of type `t` of a record local in scope, reached
+# through its records, or 0 when no local has one
+fieldRead: function {g: Gen t: u32} out u32 is {
+    found: ListVal u32
+    for each v: g.scope loop {
+        lt: g.p.localTy id: v
+        if (g.p.hasFields t: lt) when (hasField p: g.p holder: lt want: t depth: 3
+        ) then found.append v
+    }
+    if found.length == 0 then return 0
+    x: name :g id: (found.get i: (g.pick n: found.length))
+    for true loop {
+        ways: fieldWays :g holder: (g.p.exprAt id: x).ty want: t
+        x = fieldNode :g base: x k: (ways.get i: (g.pick n: ways.length))
+        if (g.p.exprAt id: x).ty == t then return x
+    }
+    return 0
+}
+
+# fieldWays -- the fields of `holder` that are of type `want`, or lead to one
+# through their records and classes
+fieldWays: function {g: Gen holder: u32 want: u32} out ListVal u32 is {
+    ways: ListVal u32
+    k: 1.u32
+    for k <= (g.p.memberCount t: holder) loop {
+        mt: g.p.memberTy t: holder :k
+        ok: mt == want
+        if ok.not when (g.p.hasFields t: mt) then ok = hasField p: g.p holder: mt :want depth: 2
+        if ok then ways.append k
+        k = k + 1
+    }
+    return ways
+}
+
+# hasField -- whether the record `holder` has a field of type `want`,
+# directly or through its records at most `depth` deep
+hasField: function {p: prog.Prog.view holder: u32 want: u32 depth: u64} out bool is {
+    if depth == 0 then return false
+    k: 1.u32
+    for k <= (p.memberCount t: holder) loop {
+        mt: p.memberTy t: holder :k
+        if mt == want then return true
+        if (p.hasFields t: mt) when (hasField :p holder: mt :want depth: depth - 1) then return true
+        k = k + 1
+    }
+    return false
 }
 
 # genExpr -- an expression of type `t` at most `d` deep
-genExpr: function {g: Gen t: u8 d: u64} out u32 is {
+genExpr: function {g: Gen t: u32 d: u64} out u32 is {
+    k: g.p.kindOf :t
+    if k == prog.tk.rec then return (recordExpr :g :t :d)
+    if k == prog.tk.vnt then return (variantExpr :g :t :d)
+    if k == prog.tk.cls then return (classExpr :g :t :d)
+    if k == prog.tk.uni then return (unionExpr :g :t :d)
+    if (g.p.isList :t) then return (listExpr :g :t)
     if (d == 0) or (g.chance n: 4) then return (leaf :g :t)
+    r: readForm :g :t :d
+    if r != 0 then return r
+    return (scalarForm :g :t :d)
+}
+
+# readForm -- now and then, a value of the scalar type `t` read from where the
+# program holds one: a field of a record or a class in scope, a match value,
+# a list's item or length, an arm predicate; 0 when none is chosen or there
+# is none to read
+readForm: function {g: Gen t: u32 d: u64} out u32 is {
+    r: u32
+    if (g.chance n: 10) then r = fieldRead :g :t
+    if r == 0 when (g.chance n: 12) then r = matchValue :g :t :d
+    if r == 0 when (g.chance n: 10) then r = listRead :g :t
+    if r == 0 when (g.chance n: 10) then r = classListRead :g :t
+    if r == 0 when (g.p.scOf :t) == prog.ty.u64 when (g.chance n: 6) then r = listLength :g
+    if r == 0 when (g.p.isBoolTy :t) when (g.chance n: 8) then r = predicate :g
+    return r
+}
+
+# predicate -- whether a variant or union local in scope holds one of its
+# arms; 0 when none is in scope
+predicate: function {g: Gen} out u32 is {
+    v: variantLocal :g
+    if v == 0 then return 0
+    vt: g.p.localTy id: v
+    k: 1 + ((g.pick n: (g.p.memberCount t: vt).u64).u32.or d: 0)
+    return (isArmNode :g subject: (name :g id: v) arm: k)
+}
+
+# scalarForm -- a value of the scalar type `t` computed at most `d` deep: an
+# operation, a branch value, a call, a conversion, a `.not`, or a leaf
+scalarForm: function {g: Gen t: u32 d: u64} out u32 is {
     w: g.pick n: 10
     if w < 5 then return (operation :g :t :d)
     if w < 6 then return (branchValue :g :t :d)
@@ -489,8 +1453,8 @@ genExpr: function {g: Gen t: u8 d: u64} out u32 is {
         f: callable :g :t
         if f != 0 then return (callNode :g fn: f)
     }
-    if (w < 9) and (t != prog.ty.bool) then return (conversion :g :t :d)
-    if (prog.isFloat :t).not then return (g.p.addExpr (
+    if (w < 9) and (g.p.isBoolTy :t).not then return (conversion :g :t :d)
+    if (g.p.isFloatTy :t).not then return (g.p.addExpr (
         prog.expr
         kind: prog.ek.not
         ty: t
@@ -508,19 +1472,22 @@ genExpr: function {g: Gen t: u8 d: u64} out u32 is {
 
 # operation -- `a op b` yielding `t`: a comparison or `and`/`or` for bool,
 # arithmetic for a number
-operation: function {g: Gen t: u8 d: u64} out u32 is {
-    if t == prog.ty.bool then {
+operation: function {g: Gen t: u32 d: u64} out u32 is {
+    if (g.p.isBoolTy :t) then {
         if (g.chance n: 3) then {
             o: if (g.chance n: 2) then prog.op.land else prog.op.lor
             return (binNode :g :o :t a: (genExpr :g :t d: d - 1) b: (genExpr :g :t d: d - 1))
         }
         u: anyType :g
+        if g.vals.length > 0 when (g.chance n: 6) then u = g.vals.get i: (g.pick n: g.vals.length)
         o: prog.op.lt + ((g.pick n: 6).u8.or d: 0)
-        if u == prog.ty.bool then o = prog.op.eq + ((g.pick n: 2).u8.or d: 0)
+        if (g.p.isBoolTy t: u) or (g.p.isAggregate t: u) then o = (
+            prog.op.eq + ((g.pick n: 2).u8.or d: 0)
+        )
         return (binNode :g :o :t a: (genExpr :g t: u d: d - 1) b: (genExpr :g t: u d: d - 1))
     }
     o: (g.pick n: 10).u8.or d: 0
-    if (prog.isFloat :t) then o = (g.pick n: 5).u8.or d: 0
+    if (g.p.isFloatTy :t) then o = (g.pick n: 5).u8.or d: 0
     a: genExpr :g :t d: d - 1
     b: u32
     if (o == prog.op.shl) or (o == prog.op.shr) then {
@@ -533,17 +1500,17 @@ operation: function {g: Gen t: u8 d: u64} out u32 is {
 
 # shiftCount -- a shift's count of type `t`: mostly a small literal, at times
 # one at or past the width, or any expression
-shiftCount: function {g: Gen t: u8 d: u64} out u32 is {
+shiftCount: function {g: Gen t: u32 d: u64} out u32 is {
     if (g.chance n: 3) then return (genExpr :g :t d: d - 1)
-    w: (prog.tys.get i: t.u64).bits.u64.or d: 8
+    w: (prog.tys.get i: (g.p.scOf :t).u64).bits.u64.or d: 8
     return (litInt :g :t lo: (g.pick n: w + 3) hi: 0)
 }
 
 # branchValue -- `if c then a else b`, or the same as a `match` on `c`
-branchValue: function {g: Gen t: u8 d: u64} out u32 is {
+branchValue: function {g: Gen t: u32 d: u64} out u32 is {
     k: prog.ek.ifv
     if (g.chance n: 2) then k = prog.ek.matchv
-    cond: genExpr :g t: prog.ty.bool d: d - 1
+    cond: condition :g d: d - 1
     yes: genExpr :g :t d: d - 1
     no: genExpr :g :t d: d - 1
     return (g.p.addExpr (prog.expr kind: k ty: t op: 0 a: cond b: yes c: no ref: 0 lo: 0 hi: 0))
@@ -551,12 +1518,12 @@ branchValue: function {g: Gen t: u8 d: u64} out u32 is {
 
 # conversion -- a value of another type converted to `t`: a lossy conversion
 # takes `.or d:` a literal of `t`
-conversion: function {g: Gen t: u8 d: u64} out u32 is {
+conversion: function {g: Gen t: u32 d: u64} out u32 is {
     s: anyType :g
-    for (s == prog.ty.bool) or (s == t) loop s = anyType :g
+    for (g.p.isBoolTy t: s) or (s == t) loop s = anyType :g
     a: genExpr :g t: s d: d - 1
     b: u32
-    if (lossy from: s to: t) then b = leaf :g :t
+    if (lossy from: (g.p.scOf t: s) to: (g.p.scOf :t)) then b = leaf :g :t
     return (g.p.addExpr (prog.expr kind: prog.ek.conv ty: t op: 0 :a :b c: 0 ref: 0 lo: 0 hi: 0))
 }
 
@@ -577,13 +1544,16 @@ lossy: function {from: u8 to: u8} out bool is {
 }
 
 # callable -- a function returning `t` that the function being written may
-# call (one after it; main may call any), or 0
-callable: function {g: Gen t: u8} out u32 is {
+# call (one after it; main may call any) with the lists in scope, or 0
+callable: function {g: Gen t: u32} out u32 is {
     found: ListVal u32
     f: (g.fn + 1).u64
     if f < 2 then f = 2
     for f < g.p.funcs.length loop {
-        if (g.p.funcs.get i: f).ret == t then found.append (f.u32.or d: 0)
+        fn: f.u32.or d: 0
+        if (g.p.funcs.get i: f).ret == t when (
+            (listArgs :g :fn).length == (listParams :g :fn).u64
+        ) then found.append fn
         f = f + 1
     }
     if found.length == 0 then return 0
@@ -596,17 +1566,36 @@ callable: function {g: Gen t: u8} out u32 is {
 # of its own.
 callNode: function {g: Gen fn: u32} out u32 is {
     f: g.p.funcs.get i: fn.u64
+    lists: listArgs :g :fn
+    if lists.length != (listParams :g :fn).u64 then return 0
+    # the lists it takes may not be written or passed on by the other arguments
+    kept: g.frozen.length
+    for each l: lists loop g.frozen.append l
     vals: ListVal u32
+    li: u64
     k: u32
     for k < f.count loop {
         param: g.p.paramAt :f :k
+        pt: g.p.localTy id: param
         if param == f.depth then {
-            vals.append (litInt :g t: prog.ty.u32 lo: (g.pick n: 4) hi: 0)
+            vals.append (litInt :g t: (g.p.tyOf sc: prog.ty.u32) lo: (g.pick n: 4) hi: 0)
+        } else if (g.p.isList t: pt) then {
+            vals.append (name :g id: (lists.get i: li))
+            li = li + 1
+        } else if ((g.p.kindOf t: pt) == prog.tk.cls) or ((g.p.kindOf t: pt) == prog.tk.uni) then {
+            c: classArg :g t: pt
+            if c != 0 then {
+                vals.append (name :g id: c)
+                g.frozen.append c
+            } else {
+                vals.append (genExpr :g t: pt d: 1)
+            }
         } else {
-            vals.append (genExpr :g t: (g.p.localTy id: param) d: 1)
+            vals.append (genExpr :g t: pt d: 1)
         }
         k = k + 1
     }
+    for g.frozen.length > kept loop g.frozen.pop
     first: prog.idOf n: g.p.args.length + 1
     for each v: vals loop g.p.args.append v
     g.called.set i: (fn - 2).u64 val: true
@@ -625,8 +1614,63 @@ callNode: function {g: Gen fn: u32} out u32 is {
     )
 }
 
-# leaf -- a local of type `t` in scope, or a literal
-leaf: function {g: Gen t: u8} out u32 is {
+# classArg -- two times in three, a class or union local or parameter of type
+# `t` in scope that no argument of the call already takes; else 0, for a new
+# one
+classArg: function {g: Gen t: u32} out u32 is {
+    if (g.chance n: 3) then return 0
+    mine: ListVal u32
+    for each v: g.scope loop {
+        lk: (g.p.locals.get i: v.u64).kind
+        if (lk == prog.lk.local) or (lk == prog.lk.param) when (g.p.localTy id: v) == t when (
+            g.frozen.contains
+            item: v
+        ).not then mine.append v
+    }
+    if mine.length == 0 then return 0
+    return (mine.get i: (g.pick n: mine.length))
+}
+
+# listParams -- how many list parameters function `fn` has
+listParams: function {g: Gen fn: u32} out u32 is {
+    f: g.p.funcs.get i: fn.u64
+    n: u32
+    k: u32
+    for k < f.count loop {
+        if (g.p.isList t: (g.p.localTy id: (g.p.paramAt :f :k))) then n = n + 1
+        k = k + 1
+    }
+    return n
+}
+
+# listArgs -- for each list parameter of function `fn`, in order, a list in
+# scope of its type that is not frozen, each a different one; fewer when the
+# scope has too few
+listArgs: function {g: Gen fn: u32} out ListVal u32 is {
+    f: g.p.funcs.get i: fn.u64
+    got: ListVal u32
+    k: u32
+    for k < f.count loop {
+        pt: g.p.localTy id: (g.p.paramAt :f :k)
+        if (g.p.isList t: pt) then {
+            pick: u32
+            for each v: g.scope loop {
+                if (g.p.localTy id: v) == pt when (got.contains item: v).not when (
+                    g.frozen.contains
+                    item: v
+                ).not then pick = v
+            }
+            if pick == 0 then return got
+            got.append pick
+        }
+        k = k + 1
+    }
+    return got
+}
+
+# leaf -- a local of type `t` in scope, or a literal (for a record, one built
+# of literals)
+leaf: function {g: Gen t: u32} out u32 is {
     mine: ListVal u32
     for each v: g.scope loop {
         if (g.p.localTy id: v) == t then mine.append v
@@ -636,6 +1680,8 @@ leaf: function {g: Gen t: u8} out u32 is {
         :g
         id: (mine.get i: (g.pick n: mine.length))
     )
+    if (g.p.hasFields :t) then return (makeNode :g :t d: 0)
+    if (g.p.isSum :t) then return (armNode :g :t d: 0)
     return (literal :g :t)
 }
 
@@ -659,11 +1705,11 @@ name: function {g: Gen id: u32} out u32 is {
 # binNode -- `a o b` of type `t`. When both sides are constants, or the
 # divisor is, the constant's own rules apply: an integer result outside `t`
 # turns the operator into `^`, a zero divisor becomes 1.
-binNode: function {g: Gen o: u8 t: u8 a: u32 b: u32} out u32 is {
+binNode: function {g: Gen o: u8 t: u32 a: u32 b: u32} out u32 is {
     rhs: b
     ot: (g.p.exprAt id: a).ty
     divides: (o == prog.op.div) or (o == prog.op.rem)
-    if divides and (prog.isInt t: ot) when (isConst :g id: b) when (
+    if divides and (g.p.isIntTy t: ot) when (isConst :g id: b) when (
         model.isZero
         v: (constValue :g id: b)
     ) then {
@@ -671,12 +1717,18 @@ binNode: function {g: Gen o: u8 t: u8 a: u32 b: u32} out u32 is {
     }
     op: o
     if (
-        (prog.isInt t: ot) and
+        (g.p.isIntTy t: ot) and
         (prog.ops.get i: o.u64).compares.not and
         (isConst :g id: a) and
         (isConst :g id: rhs)
     ) then {
-        ir: model.intArith :o t: ot a: (constValue :g id: a) b: (constValue :g id: rhs)
+        ir: (
+            model.intArith
+            :o
+            t: (g.p.scOf t: ot)
+            a: (constValue :g id: a)
+            b: (constValue :g id: rhs)
+        )
         if ir.over then op = prog.op.bxor
     }
     return (g.p.addExpr (prog.expr kind: prog.ek.bin ty: t :op :a b: rhs c: 0 ref: 0 lo: 0 hi: 0))
@@ -704,8 +1756,8 @@ constValue: function {g: Gen.view id: u32} out model.zv is {
 
 # litInt -- the integer or bool literal of type `t` holding (`lo`, `hi`), cut
 # to `t`
-litInt: function {g: Gen t: u8 lo: u64 hi: u64} out u32 is {
-    v: model.wrapTo v: (model.zv :lo :hi) :t
+litInt: function {g: Gen t: u32 lo: u64 hi: u64} out u32 is {
+    v: model.wrapTo v: (model.zv :lo :hi) t: (g.p.scOf :t)
     return (g.p.addExpr (
         prog.expr
         kind: prog.ek.lit
@@ -723,9 +1775,9 @@ litInt: function {g: Gen t: u8 lo: u64 hi: u64} out u32 is {
 
 # literal -- a literal of type `t`: the edges of its range and values near
 # them, small values, and random bits
-literal: function {g: Gen t: u8} out u32 is {
-    if t == prog.ty.bool then return (litInt :g :t lo: (g.pick n: 2) hi: 0)
-    if (prog.isFloat :t) then return (floatLiteral :g :t)
+literal: function {g: Gen t: u32} out u32 is {
+    if (g.p.isBoolTy :t) then return (litInt :g :t lo: (g.pick n: 2) hi: 0)
+    if (g.p.isFloatTy :t) then return (floatLiteral :g :t)
     w: g.pick n: 6
     lo: g.rng.next
     hi: g.rng.next
@@ -742,8 +1794,8 @@ literal: function {g: Gen t: u8} out u32 is {
 }
 
 # edgeValue -- one of the values at the ends of `t`'s range, or next to them
-edgeValue: function {g: Gen t: u8} out model.zv is {
-    info: prog.tys.get i: t.u64
+edgeValue: function {g: Gen t: u32} out model.zv is {
+    info: prog.tys.get i: (g.p.scOf :t).u64
     w: (info.bits.u64.or d: 8) - 1
     top: model.sub128 a: (model.shl128 a: (model.zv lo: 1 hi: 0) n: w) b: (model.zv lo: 1 hi: 0)
     if info.signed.not then top = (
@@ -760,17 +1812,18 @@ edgeValue: function {g: Gen t: u8} out model.zv is {
 
 # floatLiteral -- a literal of float type `t`: m * 2^e with m below 2^11,
 # exact in every float type and short in decimal, or the type's largest value
-floatLiteral: function {g: Gen t: u8} out u32 is {
+floatLiteral: function {g: Gen t: u32} out u32 is {
     m: g.pick n: 2048
     neg: g.chance n: 2
     e: ((g.pick n: 41).i32.or d: 0) - 20
-    if t == prog.ty.f16 then {
+    sc: g.p.scOf :t
+    if sc == prog.ty.f16 then {
         span: (model.bitLen :m).i32.or d: 0
         hi: 16 - span
         e = ((g.pick n: 25 + (hi.u64.or d: 0)).i32.or d: 0) - 24
     }
     x: model.fbits kind: 0 :neg :m :e
-    if (g.chance n: 12) then x = largest :t :neg
+    if (g.chance n: 12) then x = largest t: sc :neg
     return (g.p.addExpr (
         prog.expr
         kind: prog.ek.lit
@@ -780,7 +1833,7 @@ floatLiteral: function {g: Gen t: u8} out u32 is {
         b: 0
         c: 0
         ref: 0
-        lo: (model.pack :x :t)
+        lo: (model.pack :x t: sc)
         hi: 0
     )
     )
@@ -795,15 +1848,39 @@ largest: function {t: u8 neg: bool} out model.fbits is {
 
 # ---------------- fold checks and planned panics ----------------
 
+# indexPanic -- a list of one to three items, and a print of its item at an
+# index past its end, read from a local so the read happens at run time
+indexPanic: function {g: Gen b: Block} is {
+    l: declareList :g :b t: (g.p.listOf elem: (anyType :g))
+    u64t: g.p.tyOf sc: prog.ty.u64
+    at: g.p.addLocal kind: prog.lk.local t: u64t
+    past: litInt :g t: u64t lo: 100 + (g.pick n: 5) hi: 0
+    addStmt :g :b s: (prog.stmt kind: prog.sk.decl local: at e: past body: 0 other: 0 n: 0 next: 0)
+    elem: g.p.elemOf t: (g.p.localTy id: l)
+    read: g.p.addExpr (
+        prog.expr
+        kind: prog.ek.lat
+        ty: elem
+        op: 0
+        a: (name :g id: l)
+        b: (name :g id: at)
+        c: 0
+        ref: 0
+        lo: 0
+        hi: 0
+    )
+    addPrint :g :b e: read form: 0
+}
+
 # foldCheck -- one constant expression over typed literals, printed in its
 # three forms: the unit constant, the expression in main, and a function over
 # parameters called with the same literals
 foldCheck: function {g: Gen b: Block} is {
     t: anyType :g
-    for t == prog.ty.bool loop t = anyType :g
+    for (g.p.isBoolTy :t) loop t = anyType :g
     lits: ListVal u32
     e: constTree :g :t d: 2 :lits
-    if (t != prog.ty.f16) and (finiteThroughout :g id: e) then {
+    if ((g.p.scOf :t) != prog.ty.f16) and (finiteThroughout :g id: e) then {
         kid: prog.idOf n: g.p.konsts.length + 1
         g.p.konsts.append (prog.konst :e ty: t)
         kref: g.p.addExpr (
@@ -826,14 +1903,14 @@ foldCheck: function {g: Gen b: Block} is {
 
 # constTree -- an operator tree over literals of type `t`, `d` deep; each
 # literal's id is appended to `lits`
-constTree: function {g: Gen t: u8 d: u64 lits: (ListVal u32).borrow} out u32 is {
+constTree: function {g: Gen t: u32 d: u64 lits: (ListVal u32).borrow} out u32 is {
     if (d == 0) or (g.chance n: 4) then {
         l: literal :g :t
         lits.append l
         return l
     }
     o: (g.pick n: 10).u8.or d: 0
-    if (prog.isFloat :t) then o = (g.pick n: 4).u8.or d: 0
+    if (g.p.isFloatTy :t) then o = (g.pick n: 4).u8.or d: 0
     a: constTree :g :t d: d - 1 :lits
     b: constTree :g :t d: d - 1 :lits
     return (binNode :g :o :t :a :b)
@@ -843,8 +1920,8 @@ constTree: function {g: Gen t: u8 d: u64 lits: (ListVal u32).borrow} out u32 is 
 # gives an infinity or a NaN (a unit constant refuses one); true for integers
 finiteThroughout: function {g: Gen id: u32} out bool is {
     e: g.p.exprAt :id
-    if (prog.isFloat t: e.ty).not then return true
-    if (model.unpack b: (constValue :g :id).lo t: e.ty).kind != 0 then return false
+    if (g.p.isFloatTy t: e.ty).not then return true
+    if (model.unpack b: (constValue :g :id).lo t: (g.p.scOf t: e.ty)).kind != 0 then return false
     if e.kind == prog.ek.bin then return (
         (finiteThroughout :g id: e.a) and (finiteThroughout :g id: e.b)
     )
@@ -872,7 +1949,7 @@ copyTree: function {g: Gen id: u32 params: (ListVal u32).view lits: (ListVal u32
 
 # foldFunction -- a function returning the tree `e` over parameters in place
 # of its literals, and a call of it with those literals
-foldFunction: function {g: Gen e: u32 t: u8 lits: (ListVal u32).view} out u32 is {
+foldFunction: function {g: Gen e: u32 t: u32 lits: (ListVal u32).view} out u32 is {
     f: prog.func ret: t first: (prog.idOf n: g.p.params.length + 1) count: 0 body: 0 depth: 0
     params: ListVal u32
     for params.length < lits.length loop {
@@ -905,10 +1982,15 @@ foldFunction: function {g: Gen e: u32 t: u8 lits: (ListVal u32).view} out u32 is
 }
 
 # plannedPanic -- the last statement of main panics: a division by a local
-# bound to zero, or `.orPanic` on a conversion that fails
+# bound to zero, `.orPanic` on a conversion that fails, or a list read past
+# its end
 plannedPanic: function {g: Gen b: Block} is {
+    if (g.chance n: 3) then {
+        indexPanic :g :b
+        return
+    }
     if (g.chance n: 2) then {
-        t: prog.ty.i8 + ((g.pick n: 10).u8.or d: 0)
+        t: g.p.tyOf sc: prog.ty.i8 + ((g.pick n: 10).u8.or d: 0)
         z: g.p.addLocal kind: prog.lk.local :t
         (
             addStmt
@@ -942,7 +2024,7 @@ plannedPanic: function {g: Gen b: Block} is {
         addPrint :g :b e: div form: 0
         return
     }
-    src: g.p.addLocal kind: prog.lk.local t: prog.ty.i32
+    src: g.p.addLocal kind: prog.lk.local t: (g.p.tyOf sc: prog.ty.i32)
     (
         addStmt
         :g
@@ -951,7 +2033,7 @@ plannedPanic: function {g: Gen b: Block} is {
             prog.stmt
             kind: prog.sk.decl
             local: src
-            e: (litInt :g t: prog.ty.i32 lo: 300 hi: 0)
+            e: (litInt :g t: (g.p.tyOf sc: prog.ty.i32) lo: 300 hi: 0)
             body: 0
             other: 0
             n: 0
@@ -961,7 +2043,7 @@ plannedPanic: function {g: Gen b: Block} is {
     conv: g.p.addExpr (
         prog.expr
         kind: prog.ek.conv
-        ty: prog.ty.u8
+        ty: (g.p.tyOf sc: prog.ty.u8)
         op: 0
         a: (name :g id: src)
         b: 0

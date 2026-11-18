@@ -1,9 +1,12 @@
 # prog -- the program tree of zfuzz's generator. A generated program is a set
 # of flat tables of records keyed by u32 ids, id 0 of each the sentinel "none"
 # (the compiler's own convention), so an edit names a node by its id. A node's
-# kind is a code of a constant block; links between nodes are ids.
+# kind is a code of a constant block; links between nodes are ids. A type is
+# an id into the program's own `types` table, which holds a row for each
+# scalar type and one for each type the program declares.
 
-# ty -- the scalar types, by their index in `tys`
+# ty -- the scalar types, by their index in `tys`: a scalar's CODE, which a
+# `types` row of kind `tk.scalar` holds
 ty: list {
     bool: 0
     i8: 1
@@ -113,6 +116,41 @@ ops: list {
     (opinfo text: "or" ints: false floats: false bools: true compares: false)
 } out staticlist opinfo
 
+# tk -- the kinds of a program's type
+tk: list {
+    none: 0
+    # a scalar type: `sc` its code in `tys`
+    scalar: 1
+    # a record the program declares: its fields
+    rec: 2
+    # a variant the program declares: its arms' payload types, 0 for an arm
+    # with none
+    vnt: 3
+    # a ListVal of `elem`
+    lval: 4
+    # a class the program declares: its fields
+    cls: 5
+    # a union the program declares: its arms, as a variant's
+    uni: 6
+    # a List of the class `elem`
+    lref: 7
+} out staticlist u8
+
+# tyrow -- one type of a program
+tyrow: record {
+    kind: 0.u8
+    # a scalar's code, a `ty`
+    sc: 0.u8
+    # a declared type's fields: the types of `count` members from `first`
+    first: 0.u32
+    count: 0.u32
+    # a list's element type
+    elem: 0.u32
+}
+
+# noScalar -- the scalar code of a type that is not a scalar
+noScalar: 255.u8
+
 # ek -- the kinds of expression node
 ek: list {
     none: 0
@@ -136,13 +174,36 @@ ek: list {
     matchv: 8
     # the unit constant `ref`
     konst: 9
+    # a record built from `b` field values, the `b` ids of `args` from
+    # position `a`; with none, the record whose fields hold their defaults
+    make: 10
+    # field `ref` (counted from 1) of the record `a`
+    field: 11
+    # arm `ref` (counted from 1) of the variant `ty`, its payload `a` (0 for
+    # an arm with none)
+    arm: 12
+    # whether the variant `a` holds arm `ref`, a bool
+    isarm: 13
+    # `match a case ... then ... else ...` over the variant local `a`: `c`
+    # entries of `cases` from `b`
+    vmatch: 14
+    # an empty list of type `ty`
+    newlist: 15
+    # item `b % a.length` of the list `a`, a name
+    lget: 16
+    # how many items the list `a` holds, a u64
+    llen: 17
+    # a copy of the list `a`
+    lcopy: 18
+    # item `b` of the list `a`, unchecked: a planned panic past its end
+    lat: 19
 } out staticlist u8
 
 # expr -- one expression node
 expr: record {
     kind: 0.u8
-    # its type, a `ty`
-    ty: 0.u8
+    # its type, an id of `types`
+    ty: 0.u32
     # a binary operator, an `op`
     op: 0.u8
     # its operands, by id; their meaning is the kind's
@@ -177,6 +238,18 @@ sk: list {
     ret: 7
     # `e` -- a call whose value is dropped
     call: 8
+    # `place = e`, `place` a field of a local, a `field` expression whose
+    # records lead to `local`
+    setf: 9
+    # `match e case ... then { ... } ... else { ... }` over the variant local
+    # `e`: `n` entries of `cases` from `cases`
+    vmatch: 10
+    # `place.append e`, `place` a list
+    lappend: 11
+    # `place.set i: (idx % place.length) val: e`
+    lset: 12
+    # `for each local: place loop { body }`, `local` an item of the list
+    walk: 13
 } out staticlist u8
 
 # stmt -- one statement. A block is its first statement; `next` links the rest.
@@ -191,6 +264,12 @@ stmt: record {
     other: 0.u32
     # a loop's count
     n: 0.u32
+    # the field a `setf` writes, an expression
+    place: 0.u32
+    # a `vmatch`'s first entry of `cases`
+    cases: 0.u32
+    # an `lset`'s index, an expression
+    idx: 0.u32
     # the statement after it in its block
     next: 0.u32
 }
@@ -204,18 +283,36 @@ lk: list {
     param: 2
     # a loop's counter
     counter: 3
+    # a match arm's payload, named as the variant local `of` it narrows
+    narrow: 4
+    # an item of the list a `for each` walks
+    elem: 5
 } out staticlist u8
 
 # local -- a local, a parameter or a loop counter
 local: record {
     kind: 0.u8
-    ty: 0.u8
+    # its type, an id of `types`
+    ty: 0.u32
+    # the local a `narrow` stands for
+    of: 0.u32
+}
+
+# mcase -- one arm of a `match` over a variant: arm `arm` (counted from 1),
+# or 0 for the `else`; a match value's value `e`, a match statement's block
+# from `body`; the payload, named as the subject, is the local `narrow`, or 0
+mcase: record {
+    arm: 0.u32
+    e: 0.u32
+    body: 0.u32
+    narrow: 0.u32
 }
 
 # func -- a function. Function 1 is `main`.
 func: record {
-    # what it returns, a `ty`; main returns nothing (its `ty` is unused)
-    ret: 0.u8
+    # what it returns, an id of `types`; main returns nothing (its `ret` is
+    # unused)
+    ret: 0.u32
     # its parameters: `count` ids of `params` from position `first`
     first: 0.u32
     count: 0.u32
@@ -228,11 +325,17 @@ func: record {
 # konst -- a unit-level constant: `k<id>: e`
 konst: record {
     e: 0.u32
-    ty: 0.u8
+    # its type, an id of `types`
+    ty: 0.u32
 }
 
 # Prog -- one generated program
 Prog: class {
+    types: ListVal tyrow
+    # the members of the declared types, by type id
+    members: ListVal u32
+    # the id of each scalar type, by its code
+    scalarIds: ListVal u32
     exprs: ListVal expr
     stmts: ListVal stmt
     locals: ListVal local
@@ -242,12 +345,17 @@ Prog: class {
     args: ListVal u32
     # function parameters, by local id
     params: ListVal u32
+    # the arms of the matches over variants
+    cases: ListVal mcase
 } as {
-    # create -- an empty program: every table holds its sentinel, and main is
-    # function 1
+    # create -- an empty program: every table holds its sentinel, a row of
+    # `types` stands for each scalar type, and main is function 1
     create: function out this is {
         p: (
             meta.create
+            types: ListVal tyrow
+            members: ListVal u32
+            scalarIds: ListVal u32
             exprs: ListVal expr
             stmts: ListVal stmt
             locals: ListVal local
@@ -255,7 +363,14 @@ Prog: class {
             konsts: ListVal konst
             args: ListVal u32
             params: ListVal u32
+            cases: ListVal mcase
         )
+        p.types.append tyrow
+        p.members.append 0
+        for p.scalarIds.length < tys.length loop {
+            p.types.append (tyrow kind: tk.scalar sc: (p.scalarIds.length.u8.or d: 0))
+            p.scalarIds.append (idOf n: p.types.length)
+        }
         p.exprs.append expr
         p.stmts.append stmt
         p.locals.append local
@@ -264,6 +379,7 @@ Prog: class {
         p.konsts.append konst
         p.args.append 0
         p.params.append 0
+        p.cases.append mcase
         return p
     }
 
@@ -279,8 +395,128 @@ Prog: class {
         return (idOf n: p.stmts.length)
     }
 
+    # tyOf -- the id of the scalar type of code `sc`
+    tyOf: function {p: this.view sc: u8} out u32 is {
+        return (p.scalarIds.get i: sc.u64)
+    }
+
+    # scOf -- the scalar code of type `t`, or noScalar
+    scOf: function {p: this.view t: u32} out u8 is {
+        row: p.types.get i: t.u64
+        if row.kind != tk.scalar then return noScalar
+        return row.sc
+    }
+
+    # isIntTy -- whether type `t` is an integer type
+    isIntTy: function {p: this.view t: u32} out bool is {
+        c: p.scOf :t
+        if c == noScalar then return false
+        return (isInt t: c)
+    }
+
+    # isFloatTy -- whether type `t` is a float type
+    isFloatTy: function {p: this.view t: u32} out bool is {
+        c: p.scOf :t
+        if c == noScalar then return false
+        return (isFloat t: c)
+    }
+
+    # isBoolTy -- whether type `t` is bool
+    isBoolTy: function {p: this.view t: u32} out bool is {
+        return (p.scOf :t) == ty.bool
+    }
+
+    # typeName -- the name a program writes for type `t`
+    typeName: function {p: this.view t: u32} out String is {
+        row: p.types.get i: t.u64
+        if row.kind == tk.rec then return "rec\{t}"
+        if row.kind == tk.vnt then return "vnt\{t}"
+        if row.kind == tk.lval then return "ListVal \{p.typeName t: row.elem}"
+        if row.kind == tk.cls then return "Cls\{t}"
+        if row.kind == tk.uni then return "Uni\{t}"
+        if row.kind == tk.lref then return "List \{p.typeName t: row.elem}"
+        return (tyName t: row.sc).stringView.string
+    }
+
+    # kindOf -- the kind of type `t`, a `tk`
+    kindOf: function {p: this.view t: u32} out u8 is {
+        return (p.types.get i: t.u64).kind
+    }
+
+    # addDecl -- a declared type of kind `kind` whose members have the types
+    # `members`, by its new id
+    addDecl: function {p: this kind: u8 members: (ListVal u32).view} out u32 is {
+        first: idOf n: p.members.length + 1
+        for each m: members loop p.members.append m
+        p.types.append (tyrow :kind sc: noScalar :first count: (members.length.u32.or d: 0))
+        return (idOf n: p.types.length)
+    }
+
+    # memberTy -- the type of member `k` (counted from 1) of declared type `t`
+    memberTy: function {p: this.view t: u32 k: u32} out u32 is {
+        row: p.types.get i: t.u64
+        return (p.members.get i: (row.first + k - 1).u64)
+    }
+
+    # listOf -- the type ListVal of `elem`, made the first time it is asked for
+    listOf: function {p: this elem: u32} out u32 is {
+        return (p.listKind kind: tk.lval :elem)
+    }
+
+    # refListOf -- the type List of the class `elem`, made the first time
+    refListOf: function {p: this elem: u32} out u32 is {
+        return (p.listKind kind: tk.lref :elem)
+    }
+
+    # listKind -- the list type of kind `kind` (lval or lref) of `elem`
+    listKind: function {p: this kind: u8 elem: u32} out u32 is {
+        k: 1.u64
+        for k < p.types.length loop {
+            row: p.types.get i: k
+            if row.kind == kind when row.elem == elem then return (k.u32.or d: 0)
+            k = k + 1
+        }
+        p.types.append (tyrow :kind sc: noScalar first: 0 count: 0 :elem)
+        return (idOf n: p.types.length)
+    }
+
+    # isList -- whether type `t` is a ListVal or a List
+    isList: function {p: this.view t: u32} out bool is {
+        k: p.kindOf :t
+        return (k == tk.lval) or (k == tk.lref)
+    }
+
+    # elemOf -- the element type of the list type `t`
+    elemOf: function {p: this.view t: u32} out u32 is {
+        return (p.types.get i: t.u64).elem
+    }
+
+    # isSum -- whether type `t` is a declared variant or union, which holds
+    # one of its arms
+    isSum: function {p: this.view t: u32} out bool is {
+        k: p.kindOf :t
+        return (k == tk.vnt) or (k == tk.uni)
+    }
+
+    # hasFields -- whether type `t` is a declared record or class
+    hasFields: function {p: this.view t: u32} out bool is {
+        k: p.kindOf :t
+        return (k == tk.rec) or (k == tk.cls)
+    }
+
+    # isAggregate -- whether type `t` is a declared record or variant
+    isAggregate: function {p: this.view t: u32} out bool is {
+        k: p.kindOf :t
+        return (k == tk.rec) or (k == tk.vnt)
+    }
+
+    # memberCount -- how many members declared type `t` has
+    memberCount: function {p: this.view t: u32} out u32 is {
+        return (p.types.get i: t.u64).count
+    }
+
     # addLocal -- a local of kind `kind` and type `t`, by its new id
-    addLocal: function {p: this kind: u8 t: u8} out u32 is {
+    addLocal: function {p: this kind: u8 t: u32} out u32 is {
         p.locals.append (local :kind ty: t)
         return (idOf n: p.locals.length)
     }
@@ -306,7 +542,7 @@ Prog: class {
     }
 
     # localTy -- the type of the local `id`
-    localTy: function {p: this.view id: u32} out u8 is {
+    localTy: function {p: this.view id: u32} out u32 is {
         return (p.locals.get i: id.u64).ty
     }
 

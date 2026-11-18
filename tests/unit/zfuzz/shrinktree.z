@@ -16,7 +16,8 @@
 edit: list {
     # the statement `id` is taken out of its block
     dropStmt: 1
-    # the expression `id` becomes a literal of its type, all bits zero
+    # the expression `id` becomes a literal of its type, all bits zero; a
+    # record, the record whose fields hold their defaults
     leafExpr: 2
     # the counted loop `id` runs once
     oneTrip: 3
@@ -34,6 +35,16 @@ applyEdit: function {p: prog.Prog e: treeedit} out bool is {
     if e.kind == edit.leafExpr then {
         x: p.exprAt id: e.id
         if x.kind == prog.ek.lit then return false
+        if (p.isList t: x.ty) then return false
+        if (p.kindOf t: x.ty) != prog.tk.scalar then {
+            if x.kind == prog.ek.make when x.b == 0 then return false
+            (
+                p.setExpr
+                id: e.id
+                e: (prog.expr kind: prog.ek.make ty: x.ty op: 0 a: 0 b: 0 c: 0 ref: 0 lo: 0 hi: 0)
+            )
+            return true
+        }
         (
             p.setExpr
             id: e.id
@@ -52,16 +63,7 @@ applyEdit: function {p: prog.Prog e: treeedit} out bool is {
 # when no block does
 dropStmt: function {p: prog.Prog id: u32} out bool is {
     next: (p.stmtAt :id).next
-    f: 1.u64
-    for f < p.funcs.length loop {
-        fn: p.funcs.get i: f
-        if fn.body == id then {
-            fn.body = next
-            p.funcs.set i: f val: fn
-            return true
-        }
-        f = f + 1
-    }
+    if (unlinkFromBodies :p :id :next) then return true
     k: 1.u64
     for k < p.stmts.length loop {
         s: p.stmts.get i: k
@@ -73,6 +75,33 @@ dropStmt: function {p: prog.Prog id: u32} out bool is {
             return true
         }
         k = k + 1
+    }
+    return false
+}
+
+# unlinkFromBodies -- the statement `id` taken out of a function's body or a
+# match arm's block it begins, `next` beginning it instead: false when it
+# begins none
+unlinkFromBodies: function {p: prog.Prog id: u32 next: u32} out bool is {
+    f: 1.u64
+    for f < p.funcs.length loop {
+        fn: p.funcs.get i: f
+        if fn.body == id then {
+            fn.body = next
+            p.funcs.set i: f val: fn
+            return true
+        }
+        f = f + 1
+    }
+    c: 1.u64
+    for c < p.cases.length loop {
+        mc: p.cases.get i: c
+        if mc.body == id then {
+            mc.body = next
+            p.cases.set i: c val: mc
+            return true
+        }
+        c = c + 1
     }
     return false
 }
@@ -139,6 +168,7 @@ shrinkPass: function {
         stmts: g.gen.p.stmts.copy
         funcs: g.gen.p.funcs.copy
         exprs: g.gen.p.exprs.copy
+        cases: g.gen.p.cases.copy
         if (applyEdit p: g.gen.p :e) then {
             if (keeps :s :g) then {
                 done.append e
@@ -147,6 +177,7 @@ shrinkPass: function {
                 g.gen.p.stmts = stmts.take
                 g.gen.p.funcs = funcs.take
                 g.gen.p.exprs = exprs.take
+                g.gen.p.cases = cases.take
             }
         }
     }
