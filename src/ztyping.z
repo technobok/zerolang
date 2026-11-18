@@ -1161,6 +1161,9 @@ ZTyping: class {
     # every Decl row, indexed by its DeclId: row 0 is the sentinel and ids are
     # minted dense in mint order and never removed, so the id IS the index
     decls: (List Decl i: ztypes.declid)
+    # the declarations marked `containing`, outermost first: the containment
+    # path, which a resolution off it sets aside (suspendContainment)
+    containPath: ListVal ztypes.declid
     # type id -> the declaration that minted it (first mint wins): a
     # definition, a method or function member, a type member, or a
     # monomorphisation's own clone (declCloneType). A type nothing defines --
@@ -1517,8 +1520,38 @@ ZTyping: class {
     # declaration declares. A grey hit through a containment edge is a layout
     # cycle only when the target is on THIS path.
     declSetContaining: function {t: this declId: ztypes.declid mark: bool} is {
-        decl: t.decls.getMut i: declId
-        decl.containing = mark
+        was: false
+        {
+            decl: t.decls.getMut i: declId
+            was = decl.containing
+            decl.containing = mark
+        }
+        # the marks nest as the typerefs do: the last one set is the first cleared
+        if mark when was.not then t.containPath.append declId
+        if mark.not when was then t.containPath.pop
+    }
+
+    # suspendContainment -- the containment path set aside, for a resolution
+    # that does not run through it: every declaration on it unmarked, and the
+    # path handed back for resumeContainment
+    suspendContainment: function {t: this} out ListVal ztypes.declid is {
+        saved: t.containPath.copy
+        for each d: saved loop {
+            decl: t.decls.getMut i: d
+            decl.containing = false
+        }
+        t.containPath = ListVal ztypes.declid
+        return saved
+    }
+
+    # resumeContainment -- the containment path `saved` set aside by
+    # suspendContainment, marked again
+    resumeContainment: function {t: this saved: (ListVal ztypes.declid).take} is {
+        for each d: saved loop {
+            decl: t.decls.getMut i: d
+            decl.containing = true
+        }
+        t.containPath = saved.take
     }
 
     # whether this declaration has a field or arm typeref open below it
@@ -3005,6 +3038,7 @@ newTyping: function {nodeEst: 0.u64} out ZTyping is {
         asAliasKind: (IdMapV ztypes.declid v: u8)
         unitTypesById: (IdMapV zast.nodeid v: ztypes.tid)
         decls: (List Decl i: ztypes.declid)
+        containPath: ListVal ztypes.declid
         declByTypeId: (IdMapV ztypes.tid v: ztypes.declid)
         unitFnTemplate: (IdMapV ztypes.tid v: ztypes.tid)
         publicNsByOwner: (IdMapV ztypes.declid v: ztypes.declid)

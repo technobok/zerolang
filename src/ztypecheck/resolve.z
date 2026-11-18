@@ -3511,6 +3511,7 @@ resolveDemandedDefs: function {st: zenv.ZSymbolTable ast: Ast} is {
     pMs: st.typing.curMonoStamp
     pMf: st.walk.fn.curMonoFnTid
     st.mode.inContainmentEdge = false
+    offPath: st.typing.suspendContainment
     st.mode.genericWalk = false
     st.typing.curMonoStamp = ztypes.tid.zero
     st.walk.fn.curMonoFnTid = ztypes.tid
@@ -3525,6 +3526,7 @@ resolveDemandedDefs: function {st: zenv.ZSymbolTable ast: Ast} is {
     if st.walk.resolve.typerefPassRan then {
         stampPendingTyperefs :st :ast unitDecl: st.typing.mainUnitRoot
     }
+    st.typing.resumeContainment saved: offPath.take
     st.mode = savedMode
     st.typing.curMonoStamp = pMs
     st.walk.fn.curMonoFnTid = pMf
@@ -4500,12 +4502,17 @@ stampPendingTyperefs: function {
         st.walk.resolve.typerefNew.length == 0
     ) then return
     # a declaration's type-refs belong to no instance and no template walk,
-    # whichever walk asked for them
+    # whichever walk asked for them -- and to no containment path: a field
+    # being laid out can ask for them (a template resolved on demand), and
+    # they are other declarations', which no field of its reaches
     prevMono: st.typing.curMonoStamp
     savedMode: st.mode
     st.typing.curMonoStamp = ztypes.tid.zero
     st.mode.genericWalk = false
+    st.mode.inContainmentEdge = false
+    offPath: st.typing.suspendContainment
     stampPendingTyperefsIn :st :ast :unitDecl
+    st.typing.resumeContainment saved: offPath.take
     st.typing.curMonoStamp = prevMono
     st.mode = savedMode
 }
