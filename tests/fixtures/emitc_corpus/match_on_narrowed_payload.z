@@ -1,0 +1,54 @@
+# match_on_narrowed_payload -- inside an arm of a match, the subject's name
+# reads the arm's payload; a match on that name narrows the payload, so its
+# arms read the payload (or its own arm's payload), never the outer variant.
+# Before the fix the inner match restored the local's declared type: a bool
+# payload read back as the variant ("the arms of a `match` yield 'outer' and
+# 'bool'"), and a variant payload's arms were looked up on the outer variant.
+
+inner: variant {
+    d1: i32
+    d2: null
+}
+
+outer: variant {
+    c1: bool
+    c2: inner
+    c3: null
+}
+
+pick: function {n: i32} out outer is {
+    if n > 10.i32 then return (outer.c1 n > 20.i32)
+    if n > 0.i32 then return (outer.c2 (inner.d1 n))
+    if n > -10.i32 then return (outer.c2 inner.d2)
+    return outer.c3
+}
+
+describe: function {v: outer} out String is {
+    s: "none".string
+    match (
+        v
+    ) case c1 then {
+        r: match v case true then v case false then v
+        s = "flag \{r}"
+    } case c2 then {
+        match (
+            v
+        ) case d1 then {
+            s = "count \{v + 1.i32}"
+        } case d2 then {
+            s = "empty".string
+        }
+    } else null
+    return s
+}
+
+main: function is {
+    print "\{describe v: (pick n: 30.i32)} \{describe v: (pick n: 15.i32)}"
+    print "\{describe v: (pick n: 4.i32)} \{describe v: (pick n: -3.i32)} \{(
+        describe
+        v: (pick n: -20.i32)
+    )}"
+    w: pick n: 7.i32
+    k: match w case c2 then (match w case d1 then w case d2 then 0.i32) else -1.i32
+    print "value \{k}"
+}

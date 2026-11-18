@@ -2314,6 +2314,18 @@ walkCaseClauses: function {
     return (casearmfacts empty: anyEmpty diverges: allDiverge kind: kindAcc)
 }
 
+# restartNarrowing -- a match on the bare name `targetName` narrows it afresh
+# from its declared sum: what an enclosing `if` or exclusion ruled out is no
+# longer known inside. A name that reads an enclosing arm's payload (a shadow
+# narrowing) is that payload: the match narrows the payload, so it keeps the
+# row that says so.
+restartNarrowing: function {st: zenv.ZSymbolTable ast: Ast.view targetName: StringView} is {
+    if targetName.length == 0 then return
+    nm: nameIdOf :ast name: targetName
+    if (st.isShadowNarrowed nameId: nm) then return
+    st.resetNarrowing nameId: nm
+}
+
 # finishCaseMatch -- close a match once its arms are walked: pop the match
 # scope, decide exhaustiveness, record what the subject can no longer hold,
 # and answer the match's own value type.
@@ -2395,11 +2407,7 @@ checkCaseArms: function {
         relCounts: ListVal u64
     )
     st.pushBlock node: zast.nodeid
-    if targetName.length > 0 then st.resetNarrowing nameId: (
-        nameIdOf
-        :ast
-        name: targetName.stringView
-    )
+    restartNarrowing :st :ast targetName: targetName.stringView
     covered: List String
     diverging: List String
     armTypes: ListVal ztypes.tid
