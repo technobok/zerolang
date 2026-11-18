@@ -19,6 +19,7 @@ public: unit {
     :renderDiff
     :sourceParses
     :settleFixes
+    :relayFixes
     :topUnitPathOf
     :unitAnchorFsno
     :unitNameOf
@@ -7132,6 +7133,34 @@ settleFixes: function {source: String.take path: StringView opts: lintopts} out 
         round = round + 1
     }
     return text
+}
+
+# relayFixes -- a laid-out `text` through the safe fixes and the printer
+# again while the layout offers a fix: a fix can need the layout first, as
+# `(x != (false))` is one only once the printer drops the parentheses round
+# `false`. The last layout that offers none, or the one before a round that
+# would break the source or that the printer refuses; at most four rounds.
+relayFixes: function {
+    text: String.take
+    path: StringView
+    opts: lintopts
+    width: u32
+    collapse: bool
+} out String is {
+    t: text.take
+    round: u64
+    for round < 4 loop {
+        b: analyzeSource source: t.copy path: path.string :opts
+        if b.edits.length == 0 then return t
+        fixed: zfix.applyEdits source: t.stringView edits: b.edits
+        if (sourceParses source: fixed.copy).not then return t
+        settled: settleFixes source: fixed.take :path :opts
+        res: zfmt.formatSource source: settled.stringView :width :collapse raw: false gate: true
+        if res.ok.not then return t
+        t swap res.text
+        round = round + 1
+    }
+    return t
 }
 
 # sourceParses -- true if `source` parses with no embedded parse errors. `zl fmt`
