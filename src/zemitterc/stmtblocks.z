@@ -2495,8 +2495,9 @@ emitGenericDissect: function {
 # matchOrdinalPairRoute -- an ordinal-pair subject (two ordinal variants matched
 # together) has its own emitter. True when it took the match. That emitter
 # writes the subject into every arm's test (`if (s) ... else if (!s)`), so a
-# subject that is a CALL is evaluated into a temp first: it runs once, and
-# what it moved is zeroed once. A subject held through a pointer -- a `this`
+# subject that reading twice would repeat -- a call, a bare name that calls a
+# function -- is evaluated into a temp first: it runs once, and what a call
+# moved is zeroed once. A subject held through a pointer -- a `this`
 # or `.view` parameter -- is loaded, as the tag switch loads it: the test is of
 # the value, and a pointer tested is never null.
 matchOrdinalPairRoute: function {
@@ -2504,6 +2505,8 @@ matchOrdinalPairRoute: function {
     ctx: Ctx
     m: zast.caserow.view
     subj: StringView
+    # the subject's facts: one that reading twice would repeat is held in a temp
+    subjF: exprfacts
     # the subject's stamped type name
     assignTo: StringView
     ind: StringView
@@ -2518,11 +2521,13 @@ matchOrdinalPairRoute: function {
         # the temp's name, built only for a call subject
         subjOnce: String
         core: prog.ast.nodes.get i: m.subject
-        if core.call then {
+        # a call node, or any subject that reading twice would repeat -- a bare
+        # name that calls a function among them -- is read once, into the temp
+        if core.call or subjF.once or subjF.stated.not then {
             ct: consts.pairSubjectCType :ctx :prog tid: sTid
             mp: values.tmpNext stmt: ctx.stmt :tmp
             buf.append "\{ind}\{ct} _mp\{mp} = \{subj};\n"
-            emitCallTakeInvalidations :prog :ctx call: core :ind :buf
+            if core.call then emitCallTakeInvalidations :prog :ctx call: core :ind :buf
             subjOnce = "_mp\{mp}"
         } else if (needsValueDeref :prog :ctx n: core tid: sTid) then {
             subjOnce = "(*\{subj})"
@@ -2787,6 +2792,7 @@ emitMatchStmt: function {
         :ctx
         :m
         subj: sx.stringView
+        subjF: sxF
         :assignTo
         :ind
         :tmp
