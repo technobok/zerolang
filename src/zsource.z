@@ -18,6 +18,7 @@ public: unit {
     :lineDiffEdits
     :renderDiff
     :sourceParses
+    :settleFixes
     :topUnitPathOf
     :unitAnchorFsno
     :unitNameOf
@@ -1299,6 +1300,17 @@ trimBackWs: function {s: StringView hi: u64} out u64 is {
     return h
 }
 
+# skipFwdWs -- the first byte at or after `lo` of `s` that is not white space,
+# or the end
+skipFwdWs: function {s: StringView lo: u64} out u64 is {
+    i: lo
+    for i < s.length loop {
+        if (ascii.isSpace b: (docByteAt :s :i)).not then return i
+        i = i + 1
+    }
+    return s.length
+}
+
 # parenGroupStart -- the index of the `(` matching the `)` at `close - 1`; 0 when
 # that byte is not a `)` or nothing matches it (no operand starts at byte 0).
 parenGroupStart: function {s: StringView close: u64} out u64 is {
@@ -2367,6 +2379,21 @@ Analysis: class {
             t.warn code: "L028" msg: what line: lp.line col: lp.col width: 1
             return
         }
+        # the operand's text starts after the operator: a path read off a
+        # parenthesised group, `(b.not).not`, starts at its `(`, which the tree
+        # does not record, so only openers may stand before its first atom
+        litLen: (
+            zast.poolTextAt
+            pool: ast.names
+            ref: (zast.atomNameIdOf n: (ast.nodes.get i: litId))
+        ).length.u64
+        opLo: skipFwdWs s: srcv lo: litLo + litLen
+        opndLo: skipFwdWs s: srcv lo: opLo + 2
+        if (opndLo > xLo) or (onlyOpensBetween s: srcv lo: opndLo hi: xLo).not then {
+            t.warn code: "L028" msg: what line: lp.line col: lp.col width: 1
+            return
+        }
+        xLo = opndLo
         xText: (srcv.substring from: xLo to: xHi).string
         suffix: ".not"
         if neg.not then suffix = ""
@@ -7086,6 +7113,25 @@ codepointLen: function {s: StringView} out u64 is {
         b = b + 1
     }
     return c
+}
+
+# settleFixes -- `source`, after a round of safe fixes, with the fast tier's
+# further fixes applied until a round offers none: two fixes that overlap, a
+# comparison inside a comparison, are made one round apart, and a layout that
+# leaves one for the next format is not final (`zl fmt`, zls's formatting). A round whose fixes would
+# break the source ends the rounds before it; there are at most eight.
+settleFixes: function {source: String.take path: StringView opts: lintopts} out String is {
+    text: source.take
+    round: 1
+    for round < 8 loop {
+        b: analyzeSource source: text.copy path: path.string :opts
+        if b.edits.length == 0 then return text
+        next: zfix.applyEdits source: text.stringView edits: b.edits
+        if (sourceParses source: next.copy).not then return text
+        text = next.take
+        round = round + 1
+    }
+    return text
 }
 
 # sourceParses -- true if `source` parses with no embedded parse errors. `zl fmt`
