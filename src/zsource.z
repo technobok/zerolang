@@ -3762,15 +3762,18 @@ Analysis: class {
     # widens a builtin numeric losslessly by itself there. A lossy conversion
     # types as a Result, so a conversion that types as plain `T` is the lossless
     # one. A typedef does not widen implicitly and is never reported; neither is
-    # a suffixed literal (`5.u32`), which is a literal's type, not a conversion.
+    # a suffixed literal (`5.u32`), which is a literal's type, not a conversion,
+    # nor a value at a destination that takes its type `exact`ly: an arm's
+    # payload, where the widening is the conversion the construction needs.
     wideningRedundant: function {
         t: this
         ast: Ast.view
         opId: zast.nodeid
         destTid: ztypes.tid
         st: zenv.ZSymbolTable
+        exact: false
     } is {
-        if destTid.isZero then return
+        if destTid.isZero or exact then return
         cln: u32
         ccl: u32
         from: ztypes.tid
@@ -3983,6 +3986,8 @@ Analysis: class {
         if names.length == 0 then return
         strTid: ztypecheck.stdTidRo :ast :st wk: zast.wellKnown.slot.tyString
         svTid: ztypecheck.stdTidRo :ast :st wk: zast.wellKnown.slot.tyStringView
+        # an arm's payload takes its type exactly: a field or a parameter widens
+        sumCallee: (st.reg.typetypeOf typeId: origin).isSum
         firstArg: true
         for each aId: (zast.kidsOf :ast span: arguments) loop {
             arg: ast.nodes.get i: aId
@@ -3997,7 +4002,14 @@ Analysis: class {
             }
             firstArg = false
             if pidx.none then continue
-            t.wideningRedundant :ast opId: arg.operation destTid: (ids.get i: pidx) :st
+            (
+                t.wideningRedundant
+                :ast
+                opId: arg.operation
+                destTid: (ids.get i: pidx)
+                :st
+                exact: sumCallee
+            )
             (
                 t.slConvArg
                 :ast
