@@ -68,7 +68,7 @@ C toolchain: the test runner (#~"src/ztestrunner.z"), the linter
     mingw-w64 and tcc for Windows under wine, MSVC under wine), and the legs
     only #~"make ci" runs (#~"CI_ONLY": the heavy corpus #~"ci-corpus", clang,
     #~"-O2", arm64 under qemu, the fuzzer's and the generator's fixed
-    seeds, both build modes).
+    seeds, both build modes, the coverage ratchet #~"coverage-check").
     A leg whose tools are missing says so and passes.]
   [#*: #~"test-bootstrap": the seed builds a compiler that rebuilds itself
     to a byte-identical fixpoint, under gcc, clang and the vendored tcc, and
@@ -131,6 +131,49 @@ finding is kept in #~"out/fuzz-gen/findings": the program, and what differed
 with the output the model expects. #~"make fuzz-gen SEED=7 N=20000" runs a
 campaign; #~"make ci" runs 320 programs of seed 11 (#~"fuzz-gen-ci", about 30
 seconds alone).
+
+#---: Coverage
+
+#~"make coverage" measures what the test suite runs of #~"zc", and writes
+the report #~"out/coverage/coverage.md". It counts in zerolang terms: a
+#b:"line" is a line of a #~".z" file, and a #b:"function" is a zerolang
+function. The run (#~"zgate coverage") has four steps.
+
+#ol:
+  [#*: #~"bin/zc" emits the compiler's own source with #~"--line-marks"
+    (see [#> to=./zc.html: zc]): the C names, in #~"#line" directives, the
+    source line each statement and each function came from. gcc compiles
+    that C with #~"--coverage" and without the optimiser.]
+  [#*: The workload runs against that compiler. It is the suite itself: the
+    test runner's default kinds (what #~"make test" runs), the #~"zc"
+    command lines the Makefile's rules and guards issue directly, and the
+    programs of the generator's fixed-seed run, emitted and not built. A
+    step that fails fails the run.]
+  [#*: #~"gcov" reports each line's count. The C of a statement counts on
+    the statement's first line; an instance of a generic counts on the
+    lines of its definition. The C that comes from no statement -- the
+    runtime, the types, the helpers #~"zc" writes itself -- is not
+    counted.]
+  [#*: The report lists, per file, the counted lines and how many ran; the
+    functions no test enters; and the entered functions with the most
+    lines that did not run.]
+
+#~"make coverage-check", a leg of #~"make ci", is the same run with a
+ratchet: #~"tests/known/coverage.zd" lists the functions no test enters,
+each with a #~"why". The leg fails on such a function that the file does
+not list: add a test that reaches it, or delete it when nothing can. It
+fails on a listed function too, when a test enters it now or the build no
+longer holds it: delete its line in the same change. #~"untriaged" is the
+#~"why" of a function nobody has looked at yet. #~"make coverage-known"
+writes the file from a run and keeps each #~"why". The run takes about two
+minutes. It needs gcc and gcov, so on a Windows host the leg prints that it
+is skipped.
+
+#~"zgate covprobe out/coverage FILE.z TARGET..." answers one question
+with the build of the last run: does compiling this program reach that? It
+compiles #~"FILE.z" alone and says for each target -- a function's name, or
+#~"path.z:LINE" -- whether it ran. Use it to write the test for a listed
+function: write the program you think reaches it, and ask.
 
 #--: The test runner
 
@@ -208,8 +251,9 @@ it.
 Lists of expected failures, each read by one leg: the data files of
 #~"tests/known/" -- #~"leaks.zd", and one per toolchain (#~"tcc.zd",
 #~"mingw.zd", ...) naming the cases it refuses or fails and the stage each
-stops at -- and #~"fuzz.zd" and #~"fuzzgen.zd", the signatures the
-fixed-seed runs of the fuzzer and of the generator are known to show.
+stops at -- #~"fuzz.zd" and #~"fuzzgen.zd", the signatures the
+fixed-seed runs of the fuzzer and of the generator are known to show, and
+#~"coverage.zd", the functions of #~"zc" that no test enters.
 
 Every list and table the tests keep is a data file: the case lists, the
 lists of expected failures, the ratchet baselines below, the two matrix

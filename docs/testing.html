@@ -89,6 +89,8 @@ Table of Contents</div>
 </li>
 <li><a href="#fuzzing">Fuzzing</a>
 </li>
+<li><a href="#coverage">Coverage</a>
+</li>
 </ul>
 </li>
 <li><a href="#the-test-runner">The test runner</a>
@@ -142,7 +144,7 @@ corpus's C under another toolchain (<code>GATE_SAME_C</code>: full UBSan,
 mingw-w64 and tcc for Windows under wine, MSVC under wine), and the legs
 only <code>make ci</code> runs (<code>CI_ONLY</code>: the heavy corpus <code>ci-corpus</code>, clang,
 <code>-O2</code>, arm64 under qemu, the fuzzer's and the generator's fixed
-seeds, both build modes).
+seeds, both build modes, the coverage ratchet <code>coverage-check</code>).
 A leg whose tools are missing says so and passes.</li>
 <li><code>test-bootstrap</code>: the seed builds a compiler that rebuilds itself
 to a byte-identical fixpoint, under gcc, clang and the vendored tcc, and
@@ -200,6 +202,45 @@ finding is kept in <code>out/fuzz-gen/findings</code>: the program, and what dif
 with the output the model expects. <code>make fuzz-gen SEED=7 N=20000</code> runs a
 campaign; <code>make ci</code> runs 320 programs of seed 11 (<code>fuzz-gen-ci</code>, about 30
 seconds alone).</p>
+<h3 id="coverage"><a href="#coverage">2.3. Coverage</a></h3>
+<p><code>make coverage</code> measures what the test suite runs of <code>zc</code>, and writes
+the report <code>out/coverage/coverage.md</code>. It counts in zerolang terms: a
+<strong>line</strong> is a line of a <code>.z</code> file, and a <strong>function</strong> is a zerolang
+function. The run (<code>zgate coverage</code>) has four steps.</p>
+<ol>
+<li><code>bin/zc</code> emits the compiler's own source with <code>--line-marks</code>
+(see <a href="./zc.html">zc</a>): the C names, in <code>#line</code> directives, the
+source line each statement and each function came from. gcc compiles
+that C with <code>--coverage</code> and without the optimiser.</li>
+<li>The workload runs against that compiler. It is the suite itself: the
+    test runner's default kinds (what <code>make test</code> runs), the <code>zc</code>
+    command lines the Makefile's rules and guards issue directly, and the
+    programs of the generator's fixed-seed run, emitted and not built. A
+    step that fails fails the run.</li>
+<li><code>gcov</code> reports each line's count. The C of a statement counts on
+the statement's first line; an instance of a generic counts on the
+lines of its definition. The C that comes from no statement -- the
+runtime, the types, the helpers <code>zc</code> writes itself -- is not
+counted.</li>
+<li>The report lists, per file, the counted lines and how many ran; the
+    functions no test enters; and the entered functions with the most
+    lines that did not run.</li>
+</ol>
+<p><code>make coverage-check</code>, a leg of <code>make ci</code>, is the same run with a
+ratchet: <code>tests/known/coverage.zd</code> lists the functions no test enters,
+each with a <code>why</code>. The leg fails on such a function that the file does
+not list: add a test that reaches it, or delete it when nothing can. It
+fails on a listed function too, when a test enters it now or the build no
+longer holds it: delete its line in the same change. <code>untriaged</code> is the
+<code>why</code> of a function nobody has looked at yet. <code>make coverage-known</code>
+writes the file from a run and keeps each <code>why</code>. The run takes about two
+minutes. It needs gcc and gcov, so on a Windows host the leg prints that it
+is skipped.</p>
+<p><code>zgate covprobe out/coverage FILE.z TARGET...</code> answers one question
+with the build of the last run: does compiling this program reach that? It
+compiles <code>FILE.z</code> alone and says for each target -- a function's name, or
+<code>path.z:LINE</code> -- whether it ran. Use it to write the test for a listed
+function: write the program you think reaches it, and ask.</p>
 <h2 id="the-test-runner"><a href="#the-test-runner">3. The test runner</a></h2>
 <p><code>out/ztestrunner --zc bin/zc --cc gcc --root .</code> runs the default kinds;
 <code>--only KIND</code> runs one; <code>--heavy</code> adds the self-host ASan run, the
@@ -275,8 +316,9 @@ it.</p>
 <p>Lists of expected failures, each read by one leg: the data files of
 <code>tests/known/</code> -- <code>leaks.zd</code>, and one per toolchain (<code>tcc.zd</code>,
 <code>mingw.zd</code>, ...) naming the cases it refuses or fails and the stage each
-stops at -- and <code>fuzz.zd</code> and <code>fuzzgen.zd</code>, the signatures the
-fixed-seed runs of the fuzzer and of the generator are known to show.</p>
+stops at -- <code>fuzz.zd</code> and <code>fuzzgen.zd</code>, the signatures the
+fixed-seed runs of the fuzzer and of the generator are known to show, and
+<code>coverage.zd</code>, the functions of <code>zc</code> that no test enters.</p>
 <p>Every list and table the tests keep is a data file: the case lists, the
 lists of expected failures, the ratchet baselines below, the two matrix
 tables (<code>matrix_expect.zd</code>, <code>constparity_expect.zd</code>) and the record of

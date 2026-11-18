@@ -112,7 +112,7 @@ SKIP     := mathutil genmath dissectlib
 EXAMPLES := $(wildcard examples/*.z)
 NAMES    := $(filter-out $(SKIP),$(basename $(notdir $(EXAMPLES))))
 
-.PHONY: all check complexity-report style-lint-fast style-lint test doc-check arch-check emitted-check ci ci-gates ci-legs gate-guards gate-same-c ci-corpus fuzz fuzz-ci fuzz-known fuzz-recheck fuzz-reduce fuzz-gen fuzz-gen-ci fuzz-gen-known \
+.PHONY: all check complexity-report style-lint-fast style-lint test doc-check arch-check emitted-check ci ci-gates ci-legs gate-guards gate-same-c ci-corpus fuzz fuzz-ci fuzz-known fuzz-recheck fuzz-reduce fuzz-gen fuzz-gen-ci fuzz-gen-known coverage coverage-check coverage-known \
 	test-math-arm64 test-sqlite-arm64 test-mingw test-tcc-mingw test-msvc-wine test-msvc-corpus ci-windows windows-guest windows-due test-math-noasm test-portable-scalars math-asm-guard \
 	bench-math bench-math-kernels test-clang test-tcc test-tcc-heavy readable-check build \
 	tcc zc zl zls regen-goldens regen-fmt-goldens regen-matrix matrix-guard regen-constparity constparity-guard regen-math-asm \
@@ -290,7 +290,7 @@ gate-same-c: $(GATE_SAME_C)
 # ci-gates -- the gates ci runs in parallel, after perf-strict: the per-batch
 # gate's legs and the slower corpus runs only ci makes.
 CI_ONLY := complexity-report readable-check test-tcc-heavy test-clang \
-	test-o2 test-math-arm64 test-sqlite-arm64 mode-parity fuzz-ci fuzz-gen-ci ci-corpus
+	test-o2 test-math-arm64 test-sqlite-arm64 mode-parity fuzz-ci fuzz-gen-ci coverage-check ci-corpus
 ci-gates: $(GATE_GUARDS) $(GATE_SAME_C) $(CI_ONLY)
 
 # ci-legs -- ci-gates' legs on one line, which `zgate time gates` runs one at a
@@ -954,6 +954,29 @@ endif
 fuzz-gen-known: $(FUZZ_GEN_TOOLS)
 	@rm -rf $(BUILDDIR)/fuzz-gen-ci
 	$(FUZZ_GEN_CI_RUN) --write-known
+
+# coverage -- what the test suite runs of zc, by zerolang line and function
+# (zgate coverage; docs/testing.pdoc, Coverage): the report is
+# out/coverage/coverage.md. coverage-check, a leg of make ci, also holds the
+# functions no test enters to tests/known/coverage.zd: it fails on one that is
+# not listed, and on a listed one a test enters now. `make coverage-known`
+# writes that file from a run.
+COVERAGE_TOOLS := bin/zc bin/zl bin/zls bin/zgate out/zfuzz $(BUILDDIR)/ztestrunner $(BUILDDIR)/tcc
+COVERAGE_KNOWN := tests/known/coverage.zd
+COVERAGE_RUN = bin/zgate coverage $(BUILDDIR)/coverage --jobs $(NPROC)
+coverage: $(COVERAGE_TOOLS)
+	$(COVERAGE_RUN)
+
+ifdef WINDOWS_HOST
+coverage-check:
+	@echo "coverage-check: skipped (Linux only: it counts what zc runs with gcc's --coverage and gcov; the Linux run measures the same suite)"
+else
+coverage-check: $(COVERAGE_TOOLS)
+	$(COVERAGE_RUN) --check $(COVERAGE_KNOWN)
+endif
+
+coverage-known: $(COVERAGE_TOOLS)
+	$(COVERAGE_RUN) --write $(COVERAGE_KNOWN)
 
 # fuzz-recheck -- build every saved finding under DIR again, at any depth, and
 # list the ones that still fail with their signatures:
