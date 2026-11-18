@@ -91,6 +91,8 @@ Table of Contents</div>
 </li>
 <li><a href="#coverage">Coverage</a>
 </li>
+<li><a href="#mutation-testing">Mutation testing</a>
+</li>
 </ul>
 </li>
 <li><a href="#the-test-runner">The test runner</a>
@@ -241,6 +243,59 @@ with the build of the last run: does compiling this program reach that? It
 compiles <code>FILE.z</code> alone and says for each target -- a function's name, or
 <code>path.z:LINE</code> -- whether it ran. Use it to write the test for a listed
 function: write the program you think reaches it, and ask.</p>
+<h3 id="mutation-testing"><a href="#mutation-testing">2.4. Mutation testing</a></h3>
+<p>Coverage says which lines the tests run. <strong>Mutation testing</strong> asks more:
+would the tests notice if a line were wrong? <code>make mutate
+FILE=src/ztypecheck/flow.z</code> (<code>zgate mutate</code>) makes many copies of <code>zc</code>,
+each with one small edit of that file -- a <strong>mutant</strong> -- and runs the suite
+against each. The suite must fail. A mutant is <strong>killed</strong> when it does.</p>
+<p>The edits are the slips a hand makes, and each has a name:</p>
+<table>
+<thead>
+<tr><th style="text-align: left">Name</th><th style="text-align: left">The edit</th></tr>
+</thead>
+<tbody>
+<tr><td><code>eq</code></td><td><code>==</code> for <code>!=</code>, and back</td></tr>
+<tr><td><code>negate</code></td><td>a relation for its opposite: <code>&lt;</code> for <code>&gt;=</code>, <code>&gt;</code> for <code>&lt;=</code></td></tr>
+<tr><td><code>edge</code></td><td>a relation for its neighbour: <code>&lt;</code> for <code>&lt;=</code>, <code>&gt;</code> for <code>&gt;=</code></td></tr>
+<tr><td><code>andor</code></td><td><code>and</code> for <code>or</code>, and back</td></tr>
+<tr><td><code>bool</code></td><td><code>true</code> for <code>false</code>, and back</td></tr>
+<tr><td><code>notdrop</code></td><td>a <code>.not</code> taken off</td></tr>
+<tr><td><code>notadd</code></td><td>a condition of <code>if</code> or <code>when</code> negated</td></tr>
+<tr><td><code>delete</code></td><td>a statement that stands whole on one line, taken out</td></tr>
+</tbody>
+</table>
+<p>Only code inside a function's body is edited. A mutant goes through these
+steps, and the first that decides it ends it:</p>
+<ol>
+<li>The edit is on a line the last <code>make coverage</code> did not run: the
+    mutant is <strong>uncovered</strong> and is not built. No test can fail for it.</li>
+<li><code>bin/zc</code> builds the mutant. A mutant it refuses is <strong>stillborn</strong>:
+it is no program, and it is not counted.</li>
+<li><code>self</code>: the mutant compiles the compiler's own source.</li>
+<li><code>test</code>: the test runner's default kinds pass with the mutant as
+<code>--zc</code>. The runner stops early at a failure (<code>--stop-early</code>).</li>
+<li><code>fuzz</code>: the generator's fixed-seed programs, emitted by the mutant,
+print what the generator's model expects.</li>
+</ol>
+<p>A mutant that passes all three <strong>survived</strong>. Each stage runs under a time
+limit and a memory limit: a mutant that loops or allocates without end fails
+its stage there.</p>
+<p><code>out/mutate/&lt;file&gt;/survivors.md</code> lists the survivors, each with its line
+and its edit. A survivor is one of two things. Most are a <strong>missing
+test</strong>: write the fixture that fails for the mutant, and run <code>make mutate
+FILE=... MUTANT=&lt;id&gt;</code> to see it killed. The others are <strong>equivalent</strong>: the
+edit changes nothing a program can see -- it moves a bound past a value that
+cannot occur, or negates a test whose two arms do the same. Record those in
+<code>tests/known/mutants/&lt;file&gt;.zd</code> with the reason; a row names the function,
+the edit's name and which of the function's edits of that name it is. The
+<strong>score</strong> is the killed mutants among those that were run and are not
+recorded as equivalent. If a survivor shows that the compiler accepts or
+emits something wrong, that is a defect: fix it first.</p>
+<p>A whole file takes hours, so <code>make ci</code> never runs this. <code>N=20</code> runs
+twenty mutants picked by <code>SEED</code>, which measures the cost; <code>RESUME=1</code>
+takes a stopped run up from <code>out/mutate/&lt;file&gt;/mutants.zd</code>. It needs
+Linux with a user session of systemd, which sets the memory limit.</p>
 <h2 id="the-test-runner"><a href="#the-test-runner">3. The test runner</a></h2>
 <p><code>out/ztestrunner --zc bin/zc --cc gcc --root .</code> runs the default kinds;
 <code>--only KIND</code> runs one; <code>--heavy</code> adds the self-host ASan run, the
@@ -361,6 +416,7 @@ commits against a snapshot of an earlier, gated state. Its home,
 <tr><td><code>zgate time ci|gates OUT</code></td><td><code>make ci</code>, or each leg of <code>ci-gates</code> alone, timed</td></tr>
 <tr><td><code>zgate coverage OUT</code></td><td>what the test suite runs of <code>zc</code>, by zerolang line and function: the report <code>OUT/coverage.md</code>; <code>--check FILE</code> holds the functions no test enters to the list FILE, <code>--write FILE</code> writes it</td></tr>
 <tr><td><code>zgate covprobe OUT FILE.z TARGET...</code></td><td>compiles FILE.z with the coverage build in OUT and says whether each TARGET ran: a function's name, or <code>path.z:LINE</code></td></tr>
+<tr><td><code>zgate mutate FILE OUT</code></td><td>mutation testing of one source file of <code>zc</code>: builds the compiler with each small edit of FILE and says which edits the suite does not notice (<code>OUT/survivors.md</code>)</td></tr>
 <tr><td><code>zgate perf report|strict|elision</code></td><td>the measurements behind <code>make perf</code>, <code>perf-strict</code> and <code>perf-elision</code>; the Makefile builds the binaries and keeps <code>ALLOC_BASELINE</code></td></tr>
 </tbody>
 </table>

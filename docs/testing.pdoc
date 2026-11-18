@@ -175,6 +175,62 @@ compiles #~"FILE.z" alone and says for each target -- a function's name, or
 #~"path.z:LINE" -- whether it ran. Use it to write the test for a listed
 function: write the program you think reaches it, and ask.
 
+#---: Mutation testing
+
+Coverage says which lines the tests run. #b:"Mutation testing" asks more:
+would the tests notice if a line were wrong? #~"make mutate
+FILE=src/ztypecheck/flow.z" (#~"zgate mutate") makes many copies of #~"zc",
+each with one small edit of that file -- a #b:"mutant" -- and runs the suite
+against each. The suite must fail. A mutant is #b:"killed" when it does.
+
+The edits are the slips a hand makes, and each has a name:
+
+#table:
+  [#tr: [#th: Name] [#th: The edit]]
+  [#tr: [#td: #~"eq"] [#td: #~"==" for #~"!=", and back]]
+  [#tr: [#td: #~"negate"] [#td: a relation for its opposite: #~"<" for #~">=", #~">" for #~"<="]]
+  [#tr: [#td: #~"edge"] [#td: a relation for its neighbour: #~"<" for #~"<=", #~">" for #~">="]]
+  [#tr: [#td: #~"andor"] [#td: #~"and" for #~"or", and back]]
+  [#tr: [#td: #~"bool"] [#td: #~"true" for #~"false", and back]]
+  [#tr: [#td: #~"notdrop"] [#td: a #~".not" taken off]]
+  [#tr: [#td: #~"notadd"] [#td: a condition of #~"if" or #~"when" negated]]
+  [#tr: [#td: #~"delete"] [#td: a statement that stands whole on one line, taken out]]
+
+Only code inside a function's body is edited. A mutant goes through these
+steps, and the first that decides it ends it:
+
+#ol:
+  [#*: The edit is on a line the last #~"make coverage" did not run: the
+    mutant is #b:"uncovered" and is not built. No test can fail for it.]
+  [#*: #~"bin/zc" builds the mutant. A mutant it refuses is #b:"stillborn":
+    it is no program, and it is not counted.]
+  [#*: #~"self": the mutant compiles the compiler's own source.]
+  [#*: #~"test": the test runner's default kinds pass with the mutant as
+    #~"--zc". The runner stops early at a failure (#~"--stop-early").]
+  [#*: #~"fuzz": the generator's fixed-seed programs, emitted by the mutant,
+    print what the generator's model expects.]
+
+A mutant that passes all three #b:"survived". Each stage runs under a time
+limit and a memory limit: a mutant that loops or allocates without end fails
+its stage there.
+
+#~"out/mutate/<file>/survivors.md" lists the survivors, each with its line
+and its edit. A survivor is one of two things. Most are a #b:"missing
+test": write the fixture that fails for the mutant, and run #~"make mutate
+FILE=... MUTANT=<id>" to see it killed. The others are #b:"equivalent": the
+edit changes nothing a program can see -- it moves a bound past a value that
+cannot occur, or negates a test whose two arms do the same. Record those in
+#~"tests/known/mutants/<file>.zd" with the reason; a row names the function,
+the edit's name and which of the function's edits of that name it is. The
+#b:"score" is the killed mutants among those that were run and are not
+recorded as equivalent. If a survivor shows that the compiler accepts or
+emits something wrong, that is a defect: fix it first.
+
+A whole file takes hours, so #~"make ci" never runs this. #~"N=20" runs
+twenty mutants picked by #~"SEED", which measures the cost; #~"RESUME=1"
+takes a stopped run up from #~"out/mutate/<file>/mutants.zd". It needs
+Linux with a user session of systemd, which sets the memory limit.
+
 #--: The test runner
 
 #~"out/ztestrunner --zc bin/zc --cc gcc --root ." runs the default kinds;
@@ -299,6 +355,7 @@ commits against a snapshot of an earlier, gated state. Its home,
   [#tr: [#td: #~"zgate time ci|gates OUT"] [#td: #~"make ci", or each leg of #~"ci-gates" alone, timed]]
   [#tr: [#td: #~"zgate coverage OUT"] [#td: what the test suite runs of #~"zc", by zerolang line and function: the report #~"OUT/coverage.md"; #~"--check FILE" holds the functions no test enters to the list FILE, #~"--write FILE" writes it]]
   [#tr: [#td: #~"zgate covprobe OUT FILE.z TARGET..."] [#td: compiles FILE.z with the coverage build in OUT and says whether each TARGET ran: a function's name, or #~"path.z:LINE"]]
+  [#tr: [#td: #~"zgate mutate FILE OUT"] [#td: mutation testing of one source file of #~"zc": builds the compiler with each small edit of FILE and says which edits the suite does not notice (#~"OUT/survivors.md")]]
   [#tr: [#td: #~"zgate perf report|strict|elision"] [#td: the measurements behind #~"make perf", #~"perf-strict" and #~"perf-elision"; the Makefile builds the binaries and keeps #~"ALLOC_BASELINE"]]
 
 #--: Performance

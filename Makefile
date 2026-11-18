@@ -112,7 +112,7 @@ SKIP     := mathutil genmath dissectlib
 EXAMPLES := $(wildcard examples/*.z)
 NAMES    := $(filter-out $(SKIP),$(basename $(notdir $(EXAMPLES))))
 
-.PHONY: all check complexity-report style-lint-fast style-lint test doc-check arch-check emitted-check ci ci-gates ci-legs gate-guards gate-same-c ci-corpus fuzz fuzz-ci fuzz-known fuzz-recheck fuzz-reduce fuzz-gen fuzz-gen-ci fuzz-gen-known coverage coverage-check coverage-known \
+.PHONY: all check complexity-report style-lint-fast style-lint test doc-check arch-check emitted-check ci ci-gates ci-legs gate-guards gate-same-c ci-corpus fuzz fuzz-ci fuzz-known fuzz-recheck fuzz-reduce fuzz-gen fuzz-gen-ci fuzz-gen-known coverage coverage-check coverage-known mutate \
 	test-math-arm64 test-sqlite-arm64 test-mingw test-tcc-mingw test-msvc-wine test-msvc-corpus ci-windows windows-guest windows-due test-math-noasm test-portable-scalars math-asm-guard \
 	bench-math bench-math-kernels test-clang test-tcc test-tcc-heavy readable-check build \
 	tcc zc zl zls regen-goldens regen-fmt-goldens regen-matrix matrix-guard regen-constparity constparity-guard regen-math-asm \
@@ -144,7 +144,7 @@ ZLSCOPE := src/*.z $(SRC_SUBUNITS) lib/system/*.z lib/system/system/*.z lib/syst
 # gives each tree its own roots.
 ZLFULLSCOPE := src/*.z $(SRC_SUBUNITS) lib/system/*.z lib/system/system/*.z lib/system/math/*.z
 # What the formatter checks; tests/fixtures/ is input and stays as written.
-FMTSCOPE := src/*.z $(SRC_SUBUNITS) lib/system/*.z lib/system/system/*.z lib/system/math/*.z examples/*.z tests/unit/*.z tests/unit/matrixgen/*.z tests/unit/zfuzz/*.z $(TOOLSRC) lib/system/*.zd project.zd tests/fixtures/zdata/zd_written.zd tests/known/*.zd tests/fixtures/*_baseline.zd tests/fixtures/*_cases.zd tests/fixtures/*_expect.zd tests/view_guard.zd
+FMTSCOPE := src/*.z $(SRC_SUBUNITS) lib/system/*.z lib/system/system/*.z lib/system/math/*.z examples/*.z tests/unit/*.z tests/unit/matrixgen/*.z tests/unit/zfuzz/*.z $(TOOLSRC) lib/system/*.zd project.zd tests/fixtures/zdata/zd_written.zd tests/known/*.zd $(wildcard tests/known/mutants/*.zd) tests/fixtures/*_baseline.zd tests/fixtures/*_cases.zd tests/fixtures/*_expect.zd tests/view_guard.zd
 
 all: bin/zc bin/zl bin/zls
 
@@ -977,6 +977,18 @@ endif
 
 coverage-known: $(COVERAGE_TOOLS)
 	$(COVERAGE_RUN) --write $(COVERAGE_KNOWN)
+
+# mutate -- mutation testing of one source file of zc (zgate mutate;
+# docs/testing.pdoc, Mutation testing): `make mutate FILE=src/ztypecheck/flow.z`
+# builds zc with each small edit of FILE that the last `make coverage` reached,
+# and asks whether the suite fails for it. out/mutate/<file>/survivors.md lists
+# the edits nothing noticed. A whole file takes hours: it is run by hand, never
+# by make ci. N=20 runs twenty mutants picked by SEED (1), to measure the cost;
+# RESUME=1 takes a stopped run up; MUTANT=12,57 runs those again.
+MUTATE_OUT = $(BUILDDIR)/mutate/$(basename $(notdir $(FILE)))
+mutate: $(COVERAGE_TOOLS)
+	@test -n "$(FILE)" || { echo "make mutate: FILE=src/<file>.z names the file to mutate (run make coverage first)"; exit 2; }
+	bin/zgate mutate $(FILE) $(MUTATE_OUT) --jobs $(NPROC) $(if $(N),--limit $(N)) $(if $(SEED),--seed $(SEED)) $(if $(RESUME),--resume) $(if $(MUTANT),--mutant $(MUTANT))
 
 # fuzz-recheck -- build every saved finding under DIR again, at any depth, and
 # list the ones that still fail with their signatures:
