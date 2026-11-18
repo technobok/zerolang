@@ -1,0 +1,296 @@
+# shrinktree -- generated findings: the data file kept beside each one, and
+# the structural reducer. A finding is saved as its program (`gz<k>.z`), what
+# differed (`gz<k>.err`) and a data file (`gz<k>.zd`) holding the run's seed,
+# the case, the edits made to the generated program, the finding's signature
+# and the output the model expects. A recheck judges the program against that
+# expected output, so it does not depend on the generator.
+#
+# The reducer generates the program again from the seed and the case, then
+# edits its tree while the finding shows the same signature: a statement
+# dropped, an expression replaced by a literal of its type, a loop's count
+# cut to one. After each edit the model runs again, so the expected output is
+# the edited program's own; an edit the model cannot run as planned, or one
+# that changes the signature, is undone.
+
+# edit -- the kinds of tree edit
+edit: list {
+    # the statement `id` is taken out of its block
+    dropStmt: 1
+    # the expression `id` becomes a literal of its type, all bits zero
+    leafExpr: 2
+    # the counted loop `id` runs once
+    oneTrip: 3
+} out staticlist u8
+
+# treeedit -- one edit of a generated program
+treeedit: record {
+    kind: 0.u8
+    id: 0.u32
+}
+
+# applyEdit -- edit `e` made to program `p`: false when it changes nothing
+applyEdit: function {p: prog.Prog e: treeedit} out bool is {
+    if e.kind == edit.dropStmt then return (dropStmt :p id: e.id)
+    if e.kind == edit.leafExpr then {
+        x: p.exprAt id: e.id
+        if x.kind == prog.ek.lit then return false
+        (
+            p.setExpr
+            id: e.id
+            e: (prog.expr kind: prog.ek.lit ty: x.ty op: 0 a: 0 b: 0 c: 0 ref: 0 lo: 0 hi: 0)
+        )
+        return true
+    }
+    s: p.stmtAt id: e.id
+    if (s.kind != prog.sk.counted) or (s.n <= 1) then return false
+    s.n = 1
+    p.setStmt id: e.id :s
+    return true
+}
+
+# dropStmt -- the statement `id` taken out of whichever block holds it: false
+# when no block does
+dropStmt: function {p: prog.Prog id: u32} out bool is {
+    next: (p.stmtAt :id).next
+    f: 1.u64
+    for f < p.funcs.length loop {
+        fn: p.funcs.get i: f
+        if fn.body == id then {
+            fn.body = next
+            p.funcs.set i: f val: fn
+            return true
+        }
+        f = f + 1
+    }
+    k: 1.u64
+    for k < p.stmts.length loop {
+        s: p.stmts.get i: k
+        if (s.next == id) or (s.body == id) or (s.other == id) then {
+            if s.next == id then s.next = next
+            if s.body == id then s.body = next
+            if s.other == id then s.other = next
+            p.stmts.set i: k val: s
+            return true
+        }
+        k = k + 1
+    }
+    return false
+}
+
+# dataPathOf -- the data file beside the program `program`: its `.z` made `.zd`
+dataPathOf: function {program: StringView} out String is {
+    s: (program.substring from: 0 to: program.length - 2).string
+    s.append ".zd"
+    return s
+}
+
+# Shrinker -- what a reduction judges with, and the signature it keeps
+Shrinker: class {
+    j: judge.Judge
+    # the folder it builds in, and the program's name there
+    dir: String
+    name: String
+    # the run's seed and the case, which the program text names
+    seed: u64
+    index: u64
+    # the reduceKey of the finding's signature
+    want: String
+}
+
+# keeps -- whether `g`'s program, as edited, still shows the finding: the model
+# runs it again, and the judge judges it against that run
+keeps: function {s: Shrinker.view g: gen.Generated.view} out bool is {
+    r: model.Run.create
+    model.runMain :r p: g.gen.p
+    if r.over then return false
+    if (r.divNode != 0) and (r.divNode != g.gen.planned) then return false
+    text: printer.programText p: g.gen.p seed: s.seed index: s.index
+    v: (
+        judge.judgeProgram
+        j: s.j
+        dir: s.dir.stringView
+        name: s.name.stringView
+        text: text.stringView
+        want: (expectOf :r)
+    )
+    if v.kind.length == 0 then return false
+    return (reduceKey v: (signatureOf :v :g).stringView) == s.want
+}
+
+# expectOf -- what the model's run `r` expects of the program
+expectOf: function {r: model.Run.view} out judge.Expect is {
+    code: i32
+    if r.panicked then code = 1
+    return (judge.Expect stdout: (printer.expectedOutput :r) exit: code err: "zpanic: \{r.msg}")
+}
+
+# shrinkPass -- every edit of kind `kind` that keeps the finding, made to `g`
+# and appended to `done`: true when one was made
+shrinkPass: function {
+    s: Shrinker.view g: gen.Generated kind: u8 done: (ListVal treeedit).borrow
+} out bool is {
+    made: false
+    n: g.gen.p.stmts.length
+    if kind == edit.leafExpr then n = g.gen.p.exprs.length
+    id: n
+    for id > 1 loop {
+        id = id - 1
+        e: treeedit :kind id: (id.u32.or d: 0)
+        stmts: g.gen.p.stmts.copy
+        funcs: g.gen.p.funcs.copy
+        exprs: g.gen.p.exprs.copy
+        if (applyEdit p: g.gen.p :e) then {
+            if (keeps :s :g) then {
+                done.append e
+                made = true
+            } else {
+                g.gen.p.stmts = stmts.take
+                g.gen.p.funcs = funcs.take
+                g.gen.p.exprs = exprs.take
+            }
+        }
+    }
+    return made
+}
+
+# shrink -- `g` reduced while it shows the finding: statements dropped, then
+# expressions made literals, then loops cut to one trip, the three passes
+# repeated while one makes an edit; the edits made, in order
+shrink: function {s: Shrinker.view g: gen.Generated} out ListVal treeedit is {
+    done: ListVal treeedit
+    round: u64
+    for round < 4 loop {
+        a: shrinkPass :s :g kind: edit.dropStmt :done
+        b: shrinkPass :s :g kind: edit.leafExpr :done
+        c: shrinkPass :s :g kind: edit.oneTrip :done
+        if (a or b or c).not then return done
+        round = round + 1
+    }
+    return done
+}
+
+# writeFinding -- the data file `path` of a generated finding: the run's
+# `seed`, the case `index`, the `edits` made to the program, its signature
+# `sig` and what the model expects of it, `want`
+writeFinding: function {
+    path: StringView
+    seed: u64
+    index: u64
+    edits: (ListVal treeedit).view
+    sig: StringView
+    want: judge.Expect.view
+} is {
+    kinds: List zd.Entry
+    ids: List zd.Entry
+    for each e: edits loop {
+        kinds.append (zd.entry name: "" type: "" node: zd.Node.integer e.kind.i64)
+        ids.append (zd.entry name: "" type: "" node: zd.Node.integer e.id.i64)
+    }
+    defs: List zd.Entry
+    defs.append (zd.entry name: "seed" type: "" node: zd.Node.integer (seed.i64.or d: 0))
+    defs.append (zd.entry name: "index" type: "" node: zd.Node.integer (index.i64.or d: 0))
+    defs.append (
+        zd.entry
+        name: "editKinds"
+        type: "staticlist i64"
+        node: zd.Node.listValue kinds.take
+    )
+    defs.append (zd.entry name: "editIds" type: "staticlist i64" node: zd.Node.listValue ids.take)
+    defs.append (zd.entry name: "signature" type: "" node: zd.Node.text sig.string)
+    defs.append (zd.entry name: "stdout" type: "" node: zd.Node.text want.stdout.copy)
+    defs.append (zd.entry name: "exit" type: "" node: zd.Node.integer want.exit.i64)
+    defs.append (zd.entry name: "err" type: "" node: zd.Node.text want.err.copy)
+    doc: zd.entry name: "finding" type: "" node: zd.Node.unitValue defs.take
+    (zd.write :path header: findingHeader schema: "" :doc).orPanic
+}
+
+# findingHeader -- the comment heading a generated finding's data file
+findingHeader: "# a finding of zfuzz --generate: the run's seed and the case that made the\n# program, the edits a reduction made to it (editKinds, editIds: shrinktree's\n# `edit` codes and node ids), the finding's signature, and the output and\n# exit status the model expects of the program beside this file."
+
+# Finding -- a generated finding's data file, read
+Finding: class {
+    seed: u64
+    index: u64
+    edits: ListVal treeedit
+    signature: String
+    want: judge.Expect
+}
+
+# readFinding -- the data file `path` of a generated finding
+readFinding: function {path: StringView} out Finding is {
+    doc: (zd.read :path).orPanic
+    edits: ListVal treeedit
+    kinds: (doc.itemsAt path: "editKinds").orPanic
+    ids: (doc.itemsAt path: "editIds").orPanic
+    k: u64
+    for k < kinds.length loop {
+        kind: ((kinds.get i: k).integerAt path: "").orPanic
+        id: ((ids.get i: k).integerAt path: "").orPanic
+        edits.append (treeedit kind: (kind.u8.or d: 0) id: (id.u32.or d: 0))
+        k = k + 1
+    }
+    want: (
+        judge.Expect
+        stdout: (doc.textAt path: "stdout").orPanic.copy
+        exit: ((doc.integerAt path: "exit").orPanic.i32.or d: 0)
+        err: (doc.textAt path: "err").orPanic.copy
+    )
+    return (
+        Finding
+        seed: ((doc.integerAt path: "seed").orPanic.u64.or d: 0)
+        index: ((doc.integerAt path: "index").orPanic.u64.or d: 0)
+        :edits
+        signature: (doc.textAt path: "signature").orPanic.copy
+        :want
+    )
+}
+
+# reduceFinding -- the generated finding whose program is `file` (its data
+# file beside it) reduced in `dir` with judge `j`; the program left is written
+# to `dest`, with its data file beside it
+reduceFinding: function {j: judge.Judge.take file: StringView dest: StringView dir: StringView} is {
+    zdPath: dataPathOf program: file
+    f: readFinding path: zdPath.stringView
+    g: gen.generate s: (caseSeed seed: f.seed k: f.index)
+    for each e: f.edits loop applyEdit p: g.gen.p :e
+    text: printer.programText p: g.gen.p seed: f.seed index: f.index
+    if text != (slurp path: file) then {
+        io.eprintln "zfuzz: the generator no longer makes \{file}; reduce it as text (a .z without its .zd)"
+        os.exit code: 1
+    }
+    s: (
+        Shrinker
+        j: j.take
+        dir: dir.string
+        name: "gz\{f.index}"
+        seed: f.seed
+        index: f.index
+        want: (reduceKey v: f.signature.stringView)
+    )
+    if (keeps :s :g).not then {
+        print "zfuzz: \{file} shows no finding"
+        os.exit code: 1
+    }
+    done: f.edits.copy
+    for each e: (shrink :s :g) loop done.append e
+    r: model.Run.create
+    model.runMain :r p: g.gen.p
+    left: printer.programText p: g.gen.p seed: f.seed index: f.index
+    io.writeText path: dest content: left
+    destZd: dataPathOf program: dest
+    (
+        writeFinding
+        path: destZd.stringView
+        seed: f.seed
+        index: f.index
+        edits: done
+        sig: f.signature.stringView
+        want: (expectOf :r)
+    )
+    lines: u64
+    for each ln: left.stringView.lines loop {
+        ln.drop
+        lines = lines + 1
+    }
+    print "zfuzz: \{f.signature} -- \{done.length} edits, \{lines} lines -> \{dest}"
+}

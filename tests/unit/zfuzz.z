@@ -38,10 +38,14 @@
 # fmtJudge).
 #
 # `--recheck DIR` builds every saved finding, each `.z` file under DIR at any
-# depth, and reports the ones that still fail, with their signatures.
+# depth, and reports the ones that still fail, with their signatures. A
+# generated finding -- a `.z` with a `.zd` beside it -- is judged against the
+# output its data file says the model expects.
 # `--reduce FILE` shrinks one finding while it shows the same defect -- runs of
 # lines first, then runs of tokens -- and writes what is left to `--out`. Both
-# build with the corpus folders as source roots, and judge as a run does.
+# build with the corpus folders as source roots, and judge as a run does. A
+# generated finding is reduced on its tree instead (zfuzz/shrinktree.z), and
+# its data file is written beside `--out`.
 
 public: unit {
     :main
@@ -881,6 +885,8 @@ Rechecker: class {
     lane: u64
     lanes: u64
     timeout: i32
+    # the judge of a generated finding, one with a data file beside it
+    j: judge.Judge
 } as {
     task: (thread.Task Report).implement
 
@@ -893,6 +899,11 @@ Rechecker: class {
         k: w.lane
         for k < files.length loop {
             f: files.get i: k
+            if (io.exists path: (shrinktree.dataPathOf program: f.stringView)) then {
+                w.recheckGenerated file: f.stringView :rep
+                k = k + w.lanes
+                continue
+            }
             text: slurp path: f.stringView
             b: (
                 buildOnce
@@ -914,6 +925,31 @@ Rechecker: class {
             k = k + w.lanes
         }
         return rep
+    }
+
+    # recheckGenerated -- the generated finding `file` judged against the
+    # output its data file says the model expects
+    recheckGenerated: function {w: this.view file: StringView rep: Report} is {
+        fd: shrinktree.readFinding path: (shrinktree.dataPathOf program: file).stringView
+        text: slurp path: file
+        name: "gz\{fd.index}"
+        v: (
+            judge.judgeProgram
+            j: w.j
+            dir: w.dir.stringView
+            name: name.stringView
+            text: text.stringView
+            want: fd.want
+        )
+        rep.cases = rep.cases + 1
+        if v.kind.length == 0 then {
+            rep.built = rep.built + 1
+            return
+        }
+        sig: "\{v.kind} \{v.config}: "
+        sig.append (normalise line: v.detail.stringView)
+        rep.findings.append sig.take
+        rep.shown.append file.string
     }
 }
 
@@ -942,6 +978,7 @@ recheck: function {p: cli.Parsed.view} is {
                 :lane
                 lanes: jobs
                 timeout: (timeoutOf :p)
+                j: (judgeOf :p)
             )
         )
         lane = lane + 1
@@ -1154,6 +1191,16 @@ reduce: function {p: cli.Parsed.view} is {
     work: pathOption :p name: "--work"
     dir: "\{work}/reduce"
     io.mkdirp path: dir
+    if (io.exists path: (shrinktree.dataPathOf program: file.stringView)) then {
+        (
+            shrinktree.reduceFinding
+            j: (judgeOf :p)
+            file: file.stringView
+            dest: dest.stringView
+            dir: dir.stringView
+        )
+        return
+    }
     r: (
         Reducer
         zc: (pathOption :p name: "--zc")
@@ -1262,6 +1309,16 @@ GenWorker: class {
         report.append "\n--- expected output, exit \{exitCode}\n"
         report.append want.stdout
         io.writeText path: "\{keep}/\{name}.err" content: report
+        zdPath: "\{keep}/\{name}.zd"
+        (
+            shrinktree.writeFinding
+            path: zdPath.stringView
+            seed: w.seed
+            index: k
+            edits: ListVal shrinktree.treeedit
+            sig: sig.stringView
+            :want
+        )
         rep.findings.append sig.take
         rep.shown.append name.take
     }
