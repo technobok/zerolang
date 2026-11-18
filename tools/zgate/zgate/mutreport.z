@@ -1,0 +1,217 @@
+# mutreport -- what a mutation run (mutate) says at its end: the counts and
+# the score, and OUT/survivors.md, the survivors with their edits. A survivor
+# is a missing test unless its edit changes nothing a program can see; that
+# kind is listed, with the reason, in tests/known/mutants/<file>.zd and is
+# left out of the score. A row there names a mutant by the function it is
+# in, the kind of its edit, and which of the function's edits of that kind it
+# is, counted from 1: a change elsewhere in the file does not move it.
+# A subunit of zgate.
+
+# Run -- a mutation run
+Run: mutate.Run
+
+# outcomeWord, stageWord -- a mutant's outcome and deciding stage
+outcomeWord: mutate.outcomeWord
+stageWord: mutate.stageWord
+
+# Equivalent -- one row of the list of equivalent mutants
+Equivalent: class {
+    # the function the edit is in, as covdata names one
+    where: String
+    # the kind of the edit (mutsites.opWord)
+    op: String
+    # which of the function's edits of that kind, from 1
+    nth: u64
+    why: String
+}
+
+# knownPath -- the list of equivalent mutants of the run's file
+knownPath: function {r: Run.view} out String is {
+    base: path.baseName p: r.rel.stringView
+    name: base.stringView
+    if (name.endsWith suffix: ".z") then name = name.substring from: 0 to: name.length - 2
+    return "\{r.repo}/tests/known/mutants/\{name}.zd"
+}
+
+# readKnown -- the rows of the list at `path`; none when there is no file
+readKnown: function {path: StringView} out List Equivalent is {
+    rows: List Equivalent
+    if (io.exists :path).not then return rows
+    doc: (zd.read :path).orPanic
+    for each row: (doc.itemsAt path: "equivalents").orPanic loop rows.append (
+        Equivalent
+        where: (row.textAt path: "where").orPanic.copy
+        op: (row.textAt path: "op").orPanic.copy
+        nth: (row.integerAt path: "nth").orPanic.u64.orPanic
+        why: (row.textAt path: "why").orPanic.copy
+    )
+    return rows
+}
+
+# whereOf -- the function line `line` of the run's file is in: the nearest
+# definition of one at or above it
+whereOf: function {r: Run.view line: u64} out String is {
+    at: line
+    for at > 0 loop {
+        if at <= r.lines.length when (
+            (r.lines.get i: at - 1).stringView.contains
+            needle: ": function"
+        ) then return (covdata.nameAt src: r.lines line: at)
+        at = at - 1
+    }
+    return "".string
+}
+
+# nthOf -- which of its function's edits of its kind site `i` is, from 1;
+# `where` is that function
+nthOf: function {r: Run.view i: u64 where: StringView} out u64 is {
+    op: (r.sites.get :i).op.stringView
+    n: u64
+    k: u64
+    for k <= i loop {
+        s: r.sites.get i: k
+        if s.op.stringView == op when (whereOf :r line: s.line).stringView == where then n = n + 1
+        k = k + 1
+    }
+    return n
+}
+
+# whyOf -- the reason the rows `known` give for site `i`, which is in `where`;
+# empty when they do not list it
+whyOf: function {r: Run.view known: (List Equivalent).view i: u64 where: StringView} out String is {
+    op: (r.sites.get :i).op.stringView
+    for each e: known loop {
+        if e.where.stringView == where when e.op.stringView == op when (
+            e.nth ==
+            (
+                nthOf
+                :r
+                :i
+                :where
+            )
+        ) then return e.why.copy
+    }
+    return "".string
+}
+
+# percent -- `part` of `whole` in tenths of a percent, written `12.3%`
+percent: function {part: u64 whole: u64} out String is {
+    if whole == 0 then return "-".string
+    tenths: part * 1000 / whole
+    return "\{tenths / 10}.\{tenths % 10}%"
+}
+
+# recorded -- how many survivors the rows `known` list as equivalent
+recorded: function {r: Run.view known: (List Equivalent).view} out u64 is {
+    n: u64
+    i: u64
+    for i < r.sites.length loop {
+        if (r.outcomes.get :i) == outcomeWord.slot.survived then {
+            where: whereOf :r line: (r.sites.get :i).line
+            if (whyOf :r :known :i where: where.stringView).length > 0 then n = n + 1
+        }
+        i = i + 1
+    }
+    return n
+}
+
+# summary -- the run in one line: the counts, and the score -- the killed
+# among the mutants that were run and are not recorded as equivalent
+summary: function {r: Run.view} out String is {
+    known: readKnown path: (knownPath :r).stringView
+    killed: mutate.countOf :r outcome: outcomeWord.slot.killed
+    survived: mutate.countOf :r outcome: outcomeWord.slot.survived
+    same: recorded :r :known
+    judged: killed + survived - same
+    return "\{r.sites.length} mutants: \{(
+        mutate.countOf
+        :r
+        outcome: outcomeWord.slot.uncovered
+    )} uncovered, \{mutate.countOf :r outcome: outcomeWord.slot.stillborn} stillborn, \{(
+        mutate.countOf
+        :r
+        outcome: outcomeWord.slot.pending
+    )} not run, \{(
+        mutate.progress
+        :r
+    )}, \{same} of the survivors recorded as equivalent; score \{killed} of \{judged} (\{(
+        percent
+        part: killed
+        whole: judged
+    )})"
+}
+
+# writeSurvivors -- OUT/survivors.md at `path`: the summary, then each
+# survivor -- the ones to act on first, then the recorded equivalents -- and
+# the mutants no test could reach
+writeSurvivors: function {r: Run.view path: StringView} is {
+    known: readKnown path: (knownPath :r).stringView
+    t: String
+    t.append "# Mutants of \{r.rel} that the test suite does not kill\n\n"
+    t.append "\{summary :r}.\n\n"
+    t.append "## Survivors to act on\n\n"
+    t.append "Each is a missing test, or an edit no program can see: add the test, or a row\n"
+    t.append "to \{knownPath :r} with the reason.\n\n"
+    appendSurvivors :r :known listed: false :t
+    t.append "## Survivors recorded as equivalent\n\n"
+    appendSurvivors :r :known listed: true :t
+    t.append "## Not run: on a line no test executes\n\n"
+    i: u64
+    for i < r.sites.length loop {
+        if (r.outcomes.get :i) == outcomeWord.slot.uncovered then {
+            s: r.sites.get :i
+            t.append "- #\{i + 1} \{r.rel}:\{s.line} \{s.op}\n"
+        }
+        i = i + 1
+    }
+    w: io.writeText :path content: t.stringView
+    w.drop
+}
+
+# appendSurvivors -- the survivors the rows `known` list (`listed`), or the
+# ones they do not, each with its edit
+appendSurvivors: function {
+    r: Run.view
+    known: (List Equivalent).view
+    listed: bool
+    t: String.borrow
+} is {
+    i: u64
+    for i < r.sites.length loop {
+        if (r.outcomes.get :i) == outcomeWord.slot.survived then {
+            s: r.sites.get :i
+            where: whereOf :r line: s.line
+            why: whyOf :r :known :i where: where.stringView
+            if why.length > 0 == listed then {
+                t.append "### #\{i + 1} \{r.rel}:\{s.line} in \{where} -- \{s.op} \{(
+                    nthOf
+                    :r
+                    :i
+                    where: where.stringView
+                )}\n\n"
+                appendEdit :r :i :t
+                if listed then t.append "Equivalent: \{why}\n"
+                t.append "\n"
+            }
+        }
+        i = i + 1
+    }
+}
+
+# appendEdit -- site `i`'s source line and its edit
+appendEdit: function {r: Run.view i: u64 t: String.borrow} is {
+    s: r.sites.get :i
+    if (s.line > 0) and (s.line <= r.lines.length) then {
+        t.append "    \{(r.lines.get i: s.line - 1).stringView.trim}\n\n"
+    }
+    if s.op.stringView == mutsites.opWord.delete then {
+        t.append "The line is taken out.\n"
+        return
+    }
+    old: r.text.stringView.substring from: s.from to: s.to
+    if s.put.length == 0 then {
+        t.append "`\{old}` is taken off.\n"
+        return
+    }
+    t.append "`\{old}` becomes `\{s.put}`.\n"
+}

@@ -1,0 +1,805 @@
+# mutate -- `zgate mutate FILE OUT [--coverage DIR] [--limit N] [--seed S]
+# [--at-once M] [--resume] [--mutant IDS] [--list] [--cc CC] [--opt FLAG]`: mutation
+# testing of FILE, one source file of zc under src/. It asks whether the test
+# suite would notice a wrong compiler: each mutant is zc with one small edit
+# of FILE (mutsites lists the edits), and the suite must fail for it.
+#   - A mutant on a line the last coverage run (DIR, out/coverage when not
+#     given) did not execute is not run: no test can fail for it. It is
+#     recorded `uncovered`.
+#   - bin/zc builds the mutant from a copy of src/ with the edit. A mutant
+#     bin/zc refuses is `stillborn`: it is no program, and is not counted.
+#   - Three stages follow, and the first that fails kills the mutant: it
+#     compiles zc's own source (`self`); the test runner's default kinds pass
+#     with it, stopped early at a failure (`test`); the generator's fixed-seed
+#     programs print what its model expects under the first C configuration
+#     (`fuzz`). A stage that outlives its limit, or its memory cap, fails.
+#   - A mutant no stage kills `survived`: a test is missing, or the edit
+#     changes nothing a program can see. tests/known/mutants/<file>.zd lists
+#     the second kind, each with its reason.
+# OUT/mutants.zd holds every mutant's outcome and is written as the run goes:
+# --resume takes a run up where it stopped, and --mutant runs the listed ones
+# again (to show that a new test kills a survivor). OUT/survivors.md lists the
+# survivors with their edits; OUT/m<id> keeps a survivor's or a stillborn
+# mutant's source and logs. --limit N runs N mutants chosen by --seed, to
+# measure the cost. --list writes mutants.zd and the counts and runs nothing.
+# M mutants run at once (4), the jobs shared among them.
+# Each stage runs in a systemd scope with a memory limit and under `timeout`,
+# which ends the whole process group: a mutant that loops or allocates without
+# end stops there and leaves nothing behind. Linux only; never run by make ci.
+# A subunit of zgate.
+
+# outcomeWord -- what became of a mutant, as mutants.zd spells it
+outcomeWord: list {
+    pending: "pending"
+    uncovered: "uncovered"
+    stillborn: "stillborn"
+    killed: "killed"
+    survived: "survived"
+} out staticlist StringView
+
+# stageWord -- the stage that decided a mutant, as mutants.zd spells it
+stageWord: list {
+    none: "-"
+    build: "build"
+    self: "self"
+    test: "test"
+    fuzz: "fuzz"
+} out staticlist StringView
+
+# mutWord -- what a run reads and writes by spelling
+mutWord: list {
+    # the seconds the self, test and fuzz stages may take
+    selfLimit: "60"
+    testLimit: "900"
+    fuzzLimit: "300"
+    # the memory one stage's processes may hold together
+    memory: "MemoryMax=8G"
+    noSwap: "MemorySwapMax=0"
+    # the seconds one step of a runner case may take under a mutant: an
+    # unoptimised zc on a loaded host needs more than the runner's own 60
+    stepLimit: "150"
+    # the generator run's data file: its seed and its count
+    fuzzKnown: "tests/known/fuzzgen.zd"
+    # where a file under test must be
+    srcDir: "src/"
+} out staticlist StringView
+
+# stepOf -- a mutant's job, step by step: the index of each in its job
+stepOf: list {
+    copy: "copy"
+    place: "place"
+    emit: "emit"
+    cc: "cc"
+    tools: "tools"
+    self: "self"
+    test: "test"
+    fuzz: "fuzz"
+} out staticlist StringView
+
+# backstop -- the seconds the job pool gives a stage beyond its own limit
+backstop: 60
+
+# dataHeader -- the comment that heads OUT/mutants.zd
+dataHeader: "# mutants -- the mutants of `file`, by their place in mutsites' order (`id`,\n# from 1): the line and the kind of each edit, what became of it and the stage\n# that decided it. `zgate mutate` writes this file as a run goes and reads it\n# back under --resume."
+
+# dataSchema -- the row type of OUT/mutants.zd
+dataSchema: "# mutant -- one edit and its outcome: pending, uncovered, stillborn, killed or\n# survived; `stage` is build, self, test or fuzz, `-` where none decided; `how`\n# is the first line the deciding stage reported (the test that failed)\nmutant: data {\n    id: u64\n    line: u64\n    op: text\n    outcome: text\n    stage: text\n    how: text\n}"
+
+# Run -- what one run of `zgate mutate` holds
+Run: class {
+    repo: String
+    # OUT
+    dir: String
+    # FILE, from the repository
+    rel: String
+    # FILE's text, and its lines
+    text: String
+    lines: List String
+    sites: List mutsites.Site
+    # each site's outcome and deciding stage (slots of outcomeWord, stageWord)
+    outcomes: ListVal u64
+    stages: ListVal u64
+    # for a mutant a stage decided, the first line that stage reported
+    hows: List String
+    # the C compiler the mutants are built with, and its optimiser flag
+    cc: String
+    optFlag: String
+    # what a mutant links with beside its own C: the objects and libraries of
+    # zc's units (zc cobj --link)
+    links: List String
+    # how many mutants run at once, and the jobs each one's stages get
+    atOnce: u64
+    jobsEach: u64
+    fuzzSeed: String
+    fuzzCount: String
+    # tenths of a second spent in each step this run, by stepOf's slot, and
+    # how many mutants reached it
+    spent: ListVal u64
+    reached: ListVal u64
+}
+
+# runMutateCommand -- the mutate subcommand from its command line `p`
+runMutateCommand: function {g: Gate.view p: cli.Parsed.view} out i32 is {
+    rel: operand :p name: "FILE"
+    full: "\{g.repo}/\{rel}"
+    if (rel.stringView.startsWith prefix: mutWord.srcDir).not or (io.exists path: full).not then {
+        io.eprintln "zgate mutate: FILE is a source file of zc, written from the repository (src/...), not '\{rel}'"
+        return wrongUsage
+    }
+    covDir: optionText :p name: opt.coverage d: "\{g.repo}/out/coverage".stringView
+    report: "\{absolute p: covDir.stringView}/gcov.json"
+    if (io.exists path: report).not then {
+        io.eprintln "zgate mutate: \{report} is not there: run `make coverage` first (or name a coverage run with --coverage DIR)"
+        return wrongUsage
+    }
+    if (capWorks :g).not then {
+        io.eprintln "zgate mutate: `systemd-run --user --scope` does not run here, so a mutant's memory cannot be limited"
+        return 1
+    }
+    r: newRun :g :p rel: rel.stringView
+    if r.links.length == 0 then return 1
+    dataPath: "\{r.dir}/mutants.zd"
+    if (p.hasFlag name: opt.resume) when (readData :r path: dataPath.stringView).not then {
+        io.eprintln "zgate mutate: \{dataPath} is not this file's run (--resume)"
+        return wrongUsage
+    }
+    markUncovered :r report: report.stringView
+    todo: chosen :r :p
+    print "mutate: \{rel}: \{r.sites.length} mutants, \{(
+        countOf
+        :r
+        outcome: outcomeWord.slot.uncovered
+    )} uncovered, \{todo.length} to run, \{r.atOnce} at once"
+    if (p.hasFlag name: opt.listOnly) then {
+        writeData :r path: dataPath.stringView
+        printKinds :r
+        return 0
+    }
+    t0: os.monotonicMillis
+    done: u64
+    for done < todo.length loop {
+        # a chunk waits for its slowest mutant while the others' slots stand
+        # idle, so it is long; the data file is written after each
+        upto: done + (r.atOnce * 16)
+        if upto > todo.length then upto = todo.length
+        runChunk :g :r :todo from: done to: upto
+        done = upto
+        writeData :r path: dataPath.stringView
+        print "mutate: \{done} of \{todo.length} run, \{progress :r}, \{secsSince :t0} s"
+    }
+    writeData :r path: dataPath.stringView
+    mutreport.writeSurvivors :r path: "\{r.dir}/survivors.md".stringView
+    printCosts :r
+    print "mutate: \{mutreport.summary :r}; \{r.dir}/survivors.md"
+    return 0
+}
+
+# printKinds -- how many sites each kind of edit has, and how many of them
+# are on a line no test executes
+printKinds: function {r: Run.view} is {
+    for each op: mutsites.opWord loop {
+        all: u64
+        uncovered: u64
+        i: u64
+        for i < r.sites.length loop {
+            if (r.sites.get :i).op.stringView == op then {
+                all = all + 1
+                if (r.outcomes.get :i) == outcomeWord.slot.uncovered then uncovered = uncovered + 1
+            }
+            i = i + 1
+        }
+        print "mutate: \{op}: \{all} mutants, \{uncovered} uncovered"
+    }
+}
+
+# capWorks -- a systemd scope with a memory limit runs a command here
+capWorks: function {g: Gate.view} out bool is {
+    argv: capped limit: "5" secsFile: os.nullDevice.stringView
+    argv.append from: "true".string
+    return (captured :g :argv cwd: "" tag: "mutcap").status == 0
+}
+
+# capped -- the words that run a command in a scope of its own with the
+# memory limit, under `timeout` with `limit` seconds, its wall-clock seconds
+# written to `secsFile`
+capped: function {limit: StringView secsFile: StringView} out List String is {
+    a: wordsOf text: "systemd-run --user --scope -q -p"
+    a.append from: mutWord.memory.string
+    a.append from: "-p".string
+    a.append from: mutWord.noSwap.string
+    a.append from: "--".string
+    for each w: (timed :secsFile) loop a.append from: w.copy
+    for each w: (wordsOf text: "timeout -k 5") loop a.append from: w.copy
+    a.append from: limit.string
+    return a
+}
+
+# timed -- the words that run a command with its wall-clock seconds written
+# to `secsFile`
+timed: function {secsFile: StringView} out List String is {
+    a: wordsOf text: "/usr/bin/time -f %e -o"
+    a.append from: secsFile.string
+    return a
+}
+
+# newRun -- the Run the command line `p` asks for, with FILE read, its sites
+# listed and the link words asked of bin/zc; with no link words when zc
+# cannot name them
+newRun: function {g: Gate.view p: cli.Parsed.view rel: StringView} out Run is {
+    dir: absolute p: (operand :p name: "OUT").stringView
+    io.mkdirp path: "\{dir}/ref"
+    text: zjobs.slurp path: "\{g.repo}/\{rel}".stringView
+    atOnce: numberOr text: (optionText :p name: opt.atOnce d: "4").stringView d: 4
+    jobsEach: g.jobs / atOnce
+    if jobsEach == 0 then jobsEach = 1
+    known: (zd.read path: "\{g.repo}/\{mutWord.fuzzKnown}".stringView).orPanic
+    cc: optionText :p name: opt.cc d: "gcc"
+    r: (
+        Run
+        repo: g.repo.copy
+        dir: dir.copy
+        rel: rel.string
+        lines: (covdata.sourceLines path: "\{g.repo}/\{rel}".stringView)
+        sites: (mutsites.enumerate text: text.stringView)
+        text: text.take
+        outcomes: ListVal u64
+        stages: ListVal u64
+        hows: List String
+        cc: cc.copy
+        optFlag: (optionText :p name: opt.opt d: "-O0")
+        links: (linkWords :g dir: dir.stringView cc: cc.stringView)
+        :atOnce
+        :jobsEach
+        fuzzSeed: "\{(known.integerAt path: "seed").orPanic}"
+        fuzzCount: "\{(known.integerAt path: "cases").orPanic}"
+        spent: ListVal u64
+        reached: ListVal u64
+    )
+    for each s: r.sites loop {
+        r.outcomes.append outcomeWord.slot.pending
+        r.stages.append stageWord.slot.none
+        r.hows.append "".string
+    }
+    for each w: stepOf loop {
+        r.spent.append 0
+        r.reached.append 0
+    }
+    return r
+}
+
+# numberOr -- the number `text` writes; `d` when it writes none, or zero
+numberOr: function {text: StringView d: u64} out u64 is {
+    n: text.parseU64
+    if n.ok when n > 0 then return n
+    return d
+}
+
+# linkWords -- what a zc built by `cc` links with beside its own C: bin/zc
+# emits zc into `dir`/ref and names its units' objects and libraries. None,
+# with the reason printed, when a step fails.
+linkWords: function {g: Gate.view dir: StringView cc: StringView} out List String is {
+    nothing: List String
+    emit: List String
+    emit.append from: "\{g.repo}/bin/zc"
+    for each w: (wordsOf text: "zc --src src --system lib/system --emit-c") loop (
+        emit.append
+        from: w.copy
+    )
+    emit.append from: "\{dir}/ref/zc.c"
+    if (runTo argv: emit cwd: g.repo.stringView outPath: "" errPath: "") != 0 then return nothing
+    ask: List String
+    ask.append from: "\{g.repo}/bin/zc"
+    ask.append from: "cobj".string
+    ask.append from: "\{dir}/ref/zc.c"
+    ask.append from: "--link".string
+    ask.append from: "--cc".string
+    ask.append from: cc.string
+    c: captured :g argv: ask cwd: g.repo.stringView tag: "mutlink"
+    if c.status != 0 then {
+        io.eprintln "zgate mutate: zc cobj could not name the objects a zc links with: \{c.err}"
+        return nothing
+    }
+    return (wordsOf text: c.text.stringView)
+}
+
+# markUncovered -- each pending site on a line the coverage run in `report`
+# (gcov's JSON) did not execute is `uncovered`
+markUncovered: function {r: Run report: StringView} is {
+    text: zjobs.slurp path: report
+    cov: covdata.load repo: r.repo.stringView text: text.stringView
+    file: covdata.fileIndex :cov path: r.rel.stringView
+    i: u64
+    for i < r.sites.length loop {
+        pending: (r.outcomes.get :i) == outcomeWord.slot.pending
+        if pending when (ran :cov :file line: (r.sites.get :i).line).not then {
+            r.outcomes.set :i val: outcomeWord.slot.uncovered
+        }
+        i = i + 1
+    }
+}
+
+# ran -- line `line` of file `file` executed: the nearest counted line at or
+# above it, inside the function it is in, has a count. The C of a statement
+# counts on the statement's first line, so a later line of it has none of its
+# own. False outside every function, and for a file the build does not hold.
+ran: function {cov: covdata.Coverage.view file: u64 line: u64} out bool is {
+    if file == cov.files.length then return false
+    start: u64
+    i: u64
+    for i < cov.fnLine.length loop {
+        l: cov.fnLine.get :i
+        if (cov.fnFile.get :i) == file when l <= line when l > start then start = l
+        i = i + 1
+    }
+    if start == 0 then return false
+    counts: (cov.files.get i: file).counts
+    at: line
+    for at >= start loop {
+        if at < counts.length when (counts.get i: at) != covdata.noCode then return (
+            (counts.get i: at) > 0
+        )
+        at = at - 1
+    }
+    return false
+}
+
+# chosen -- the sites to run, by index: the ones --mutant lists (ids from 1,
+# split at commas), whatever became of them before; else every pending one, or
+# --limit of them picked by --seed
+chosen: function {r: Run p: cli.Parsed.view} out ListVal u64 is {
+    picked: ListVal u64
+    ids: optionText :p name: opt.mutant d: ""
+    if ids.length > 0 then {
+        for each w: (ids.stringView.split sep: ",") loop {
+            n: w.trim.parseU64
+            if n.ok when n > 0 when n <= r.sites.length then {
+                picked.append n - 1
+                r.outcomes.set i: n - 1 val: outcomeWord.slot.pending
+                r.stages.set i: n - 1 val: stageWord.slot.none
+            }
+        }
+        return picked
+    }
+    i: u64
+    for i < r.sites.length loop {
+        if (r.outcomes.get :i) == outcomeWord.slot.pending then picked.append i
+        i = i + 1
+    }
+    limit: numberOr text: (optionText :p name: opt.limit d: "").stringView d: picked.length
+    if limit >= picked.length then return picked
+    # a shuffle by a small linear congruential generator, so a seed names its
+    # choice on every host
+    x: numberOr text: (optionText :p name: opt.seed d: "1").stringView d: 1
+    k: picked.length
+    for k > 1 loop {
+        x = x % 2147483648 * 1103515245 + 12345 % 2147483648
+        j: x % k
+        k = k - 1
+        a: picked.get i: k
+        picked.set i: k val: (picked.get i: j)
+        picked.set i: j val: a
+    }
+    kept: ListVal u64
+    n: picked.length - limit
+    for n < picked.length loop {
+        kept.append (picked.get i: n)
+        n = n + 1
+    }
+    kept.sort
+    return kept
+}
+
+# mutantDir -- where site `i`'s mutant is built and run
+mutantDir: function {r: Run.view i: u64} out String is {
+    return "\{r.dir}/m\{i + 1}"
+}
+
+# runChunk -- the sites `todo[from, to)`, each a job of the pool, then each
+# judged and its directory cleared
+runChunk: function {
+    g: Gate.view
+    r: Run
+    todo: (ListVal u64).view
+    from: u64
+    to: u64
+} is {
+    jobs: List PoolJob
+    k: from
+    for k < to loop {
+        jobs.append (mutantJob :r i: (todo.get i: k))
+        k = k + 1
+    }
+    statuses: ListVal i32
+    failSteps: ListVal i64
+    zjobs.runJobs :jobs maxJobs: r.atOnce :statuses :failSteps
+    k = from
+    for k < to loop {
+        judge :r i: (todo.get i: k) failStep: (failSteps.get i: k - from)
+        k = k + 1
+    }
+}
+
+# mutantJob -- site `i`'s job: its directory made and its source written
+# here, then a copy of src/ with that source in place, the build, and the
+# three stages
+mutantJob: function {r: Run.view i: u64} out PoolJob is {
+    made: mutantDir :r :i
+    m: made.stringView
+    io.removeTree path: m
+    io.mkdirp path: "\{m}/log"
+    io.mkdirp path: "\{m}/bin"
+    w: io.writeText path: "\{m}/mutated.z" content: (
+        mutsites.applied
+        text: r.text.stringView
+        site: (r.sites.get :i)
+    ).stringView
+    w.drop
+    steps: List PoolStep
+    copy: wordsOf text: "cp -r"
+    copy.append from: "\{r.repo}/src"
+    copy.append from: "\{m}/src"
+    steps.append (stepIn :r :m name: stepOf.copy argv: copy limit: 0)
+    place: wordsOf text: "cp"
+    place.append from: "\{m}/mutated.z"
+    place.append from: "\{m}/\{r.rel}"
+    steps.append (stepIn :r :m name: stepOf.place argv: place limit: 0)
+    steps.append (stepIn :r :m name: stepOf.emit argv: (emitArgv :r :m) limit: 0)
+    steps.append (stepIn :r :m name: stepOf.cc argv: (ccArgv :r :m) limit: 0)
+    tools: wordsOf text: "ln -sf"
+    tools.append from: "\{r.repo}/bin/zl"
+    tools.append from: "\{r.repo}/bin/zls"
+    tools.append from: "\{m}/bin/"
+    steps.append (stepIn :r :m name: stepOf.tools argv: tools limit: 0)
+    steps.append (
+        stepIn
+        :r
+        :m
+        name: stepOf.self
+        argv: (selfArgv :r :m)
+        limit: (numberOr text: mutWord.selfLimit d: 0)
+    )
+    steps.append (
+        stepIn
+        :r
+        :m
+        name: stepOf.test
+        argv: (testArgv :r :m)
+        limit: (numberOr text: mutWord.testLimit d: 0)
+    )
+    steps.append (
+        stepIn
+        :r
+        :m
+        name: stepOf.fuzz
+        argv: (fuzzArgv :r :m)
+        limit: (numberOr text: mutWord.fuzzLimit d: 0)
+    )
+    return (zjobs.mkJob name: "m\{i + 1}".stringView :steps)
+}
+
+# stepIn -- `argv` as a step of the mutant in `m`, run in the repository, its
+# output `m`/log/<name>.log and .err. With a `limit` the pool ends it that many
+# seconds, and the backstop, after it starts: the stage's own `timeout` ends
+# it first.
+stepIn: function {
+    r: Run.view
+    m: StringView
+    name: StringView
+    argv: (List String).take
+    limit: u64
+} out PoolStep is {
+    wait: 0.i32
+    if limit > 0 then wait = (limit + backstop).i32.orPanic
+    return (
+        zjobs.mkStep
+        :argv
+        cwd: r.repo.stringView
+        outPath: "\{m}/log/\{name}.log".stringView
+        errPath: "\{m}/log/\{name}.err".stringView
+        timeoutSecs: wait
+        allowFail: false
+        zlinkFrom: ""
+    )
+}
+
+# emitArgv -- bin/zc emitting the mutant's source in `m` as C
+emitArgv: function {r: Run.view m: StringView} out List String is {
+    a: timed secsFile: "\{m}/log/\{stepOf.emit}.secs".stringView
+    a.append from: "\{r.repo}/bin/zc"
+    a.append from: "zc".string
+    a.append from: "--src".string
+    a.append from: "\{m}/src"
+    a.append from: "--system".string
+    a.append from: "\{r.repo}/lib/system"
+    a.append from: "--emit-c".string
+    a.append from: "\{m}/bin/zc.c"
+    return a
+}
+
+# ccArgv -- the C compiler building the mutant in `m` from its C
+ccArgv: function {r: Run.view m: StringView} out List String is {
+    a: timed secsFile: "\{m}/log/\{stepOf.cc}.secs".stringView
+    a.append from: r.cc.copy
+    if (zcc.ccFamilyOf ccPath: r.cc.stringView).tcc then {
+        a.append from: "-B".string
+        a.append from: "\{r.repo}/out/tcc-lib"
+    } else {
+        a.append from: "-std=c17".string
+        a.append from: r.optFlag.copy
+    }
+    a.append from: "-w".string
+    a.append from: "-o".string
+    a.append from: "\{m}/bin/zc"
+    a.append from: "\{m}/bin/zc.c"
+    for each w: r.links loop a.append from: w.copy
+    a.append from: "-lm".string
+    return a
+}
+
+# selfArgv -- the mutant in `m` compiling zc's own source, capped
+selfArgv: function {r: Run.view m: StringView} out List String is {
+    a: capped limit: mutWord.selfLimit secsFile: "\{m}/log/\{stepOf.self}.secs".stringView
+    a.append from: "\{m}/bin/zc"
+    for each w: (wordsOf text: "zc --src src --system lib/system --emit-c") loop (
+        a.append
+        from: w.copy
+    )
+    a.append from: "\{m}/self.c"
+    return a
+}
+
+# testArgv -- the test runner's default kinds with the mutant in `m`, stopped
+# early at a failure, capped; its scratch directory is the mutant's own
+testArgv: function {r: Run.view m: StringView} out List String is {
+    a: capped limit: mutWord.testLimit secsFile: "\{m}/log/\{stepOf.test}.secs".stringView
+    a.append from: "\{r.repo}/out/ztestrunner"
+    a.append from: "--zc".string
+    a.append from: "\{m}/bin/zc"
+    for each w: (wordsOf text: "--cc gcc --root . --stop-early --jobs") loop a.append from: w.copy
+    a.append from: "\{r.jobsEach}"
+    a.append from: "--timeout".string
+    a.append from: mutWord.stepLimit.string
+    a.append from: "--tmp".string
+    a.append from: "\{m}/tmp"
+    return a
+}
+
+# fuzzArgv -- the generator's fixed-seed programs emitted by the mutant in
+# `m`, built and run under the first C configuration, capped
+fuzzArgv: function {r: Run.view m: StringView} out List String is {
+    a: capped limit: mutWord.fuzzLimit secsFile: "\{m}/log/\{stepOf.fuzz}.secs".stringView
+    a.append from: "\{r.repo}/out/zfuzz"
+    a.append from: "--generate".string
+    a.append from: "--zc".string
+    a.append from: "\{m}/bin/zc"
+    a.append from: "--system".string
+    a.append from: "\{r.repo}/lib/system"
+    a.append from: "--work".string
+    a.append from: "\{m}/fuzz"
+    a.append from: "--seed".string
+    a.append from: r.fuzzSeed.copy
+    a.append from: "--count".string
+    a.append from: r.fuzzCount.copy
+    a.append from: "--configs".string
+    a.append from: "1".string
+    a.append from: "--jobs".string
+    a.append from: "\{r.jobsEach}"
+    return a
+}
+
+# judge -- site `i`'s outcome from the step its job stopped at (`failStep`, -1
+# when every step passed), its steps' seconds added to the run's, and its
+# directory cleared: all of it for a killed mutant, the build and the scratch
+# for another
+judge: function {r: Run i: u64 failStep: i64} is {
+    m: mutantDir :r :i
+    outcome: u64
+    stage: u64
+    outcome = outcomeWord.slot.survived
+    stage = stageWord.slot.none
+    if failStep >= 0 then {
+        at: failStep.u64.orPanic
+        outcome = outcomeWord.slot.killed
+        stage = stageWord.slot.fuzz
+        if at == stepOf.slot.test then stage = stageWord.slot.test
+        if at == stepOf.slot.self then stage = stageWord.slot.self
+        if at < stepOf.slot.self then {
+            outcome = outcomeWord.slot.stillborn
+            stage = stageWord.slot.build
+        }
+    }
+    r.outcomes.set :i val: outcome
+    r.stages.set :i val: stage
+    if failStep >= 0 then {
+        was: r.hows.set :i val: (
+            firstReport
+            m: m.stringView
+            step: (stepOf.get i: failStep.u64.orPanic)
+        )
+        was.drop
+    }
+    k: u64
+    for k < stepOf.length loop {
+        tenths: tenthsIn path: "\{m}/log/\{stepOf.get i: k}.secs".stringView
+        if tenths > 0 then {
+            r.spent.set i: k val: (r.spent.get i: k) + tenths
+            r.reached.set i: k val: (r.reached.get i: k) + 1
+        }
+        k = k + 1
+    }
+    if outcome == outcomeWord.slot.killed then {
+        io.removeTree path: m.stringView
+        return
+    }
+    for each part: (wordsOf text: "src bin tmp fuzz") loop (
+        io.removeTree
+        path: "\{m}/\{part}".stringView
+    )
+    gone: io.remove path: "\{m}/self.c"
+    gone.drop
+}
+
+# reportWord -- how a line that names a failure starts, in a stage's output
+reportWord: list {
+    failed: "FAIL"
+    finding: "FINDING"
+    refused: "error"
+} out staticlist StringView
+
+# firstReport -- what step `step` of the mutant in `m` said went wrong: the
+# first line of its output that names a failure, else its first line of all;
+# a note when it wrote nothing, as a stage ended at its limit does
+firstReport: function {m: StringView step: StringView} out String is {
+    first: "".string
+    for each ext: (wordsOf text: "log err") loop {
+        text: zjobs.slurp path: "\{m}/log/\{step}.\{ext}".stringView
+        for each ln: text.stringView.lines loop {
+            for each w: reportWord loop {
+                if (ln.startsWith prefix: w) then return (clipped line: ln)
+            }
+            if first.length == 0 when ln.trim.length > 0 then first = clipped line: ln
+        }
+    }
+    if first.length > 0 then return first
+    return "(it wrote nothing: ended at its limit, or by a signal)".string
+}
+
+# clipped -- `line`, cut to what fits one line of a data file
+clipped: function {line: StringView} out String is {
+    if line.length <= 160 then return line.string
+    return (line.substring from: 0 to: 160).string
+}
+
+# tenthsIn -- the seconds `/usr/bin/time` wrote to the file at `path`
+# (`12.34`), in tenths; 0 when the file is not there or holds none. A stage
+# that was killed leaves a line of words first: the last line is read.
+tenthsIn: function {path: StringView} out u64 is {
+    text: zjobs.slurp :path
+    last: "".string
+    for each ln: text.stringView.lines loop {
+        if ln.trim.length > 0 then last = ln.trim.string
+    }
+    dot: last.stringView.indexOf needle: "."
+    if dot.none then return 0
+    whole: (last.stringView.substring from: 0 to: dot).parseU64
+    part: (last.stringView.substring from: dot + 1 to: dot + 2).parseU64
+    if whole.err then return 0
+    if part.err then return 0
+    return whole * 10 + part
+}
+
+# countOf -- how many sites have the outcome `outcome`
+countOf: function {r: Run.view outcome: u64} out u64 is {
+    n: u64
+    for each o: r.outcomes loop {
+        if o == outcome then n = n + 1
+    }
+    return n
+}
+
+# killedAt -- how many mutants stage `stage` killed
+killedAt: function {r: Run.view stage: u64} out u64 is {
+    n: u64
+    i: u64
+    for i < r.outcomes.length loop {
+        killed: (r.outcomes.get :i) == outcomeWord.slot.killed
+        if killed when (r.stages.get :i) == stage then n = n + 1
+        i = i + 1
+    }
+    return n
+}
+
+# progress -- the counts so far, in one phrase
+progress: function {r: Run.view} out String is {
+    return "killed \{countOf :r outcome: outcomeWord.slot.killed} (self \{(
+        killedAt
+        :r
+        stage: stageWord.slot.self
+    )}, test \{killedAt :r stage: stageWord.slot.test}, fuzz \{(
+        killedAt
+        :r
+        stage: stageWord.slot.fuzz
+    )}), survived \{countOf :r outcome: outcomeWord.slot.survived}, stillborn \{(
+        countOf
+        :r
+        outcome: outcomeWord.slot.stillborn
+    )}"
+}
+
+# printCosts -- what each step cost this run: the mutants that reached it and
+# its mean seconds
+printCosts: function {r: Run.view} is {
+    k: u64
+    for k < stepOf.length loop {
+        n: r.reached.get i: k
+        if n > 0 then {
+            mean: (r.spent.get i: k) / n
+            print "mutate: step \{stepOf.get i: k}: \{n} mutants, \{mean / 10}.\{mean % 10} s each"
+        }
+        k = k + 1
+    }
+}
+
+# readData -- the outcomes OUT/mutants.zd at `path` holds, into `r`; false
+# when it is the record of another file or of another list of sites. True, and
+# nothing read, when there is no file.
+readData: function {r: Run path: StringView} out bool is {
+    if (io.exists :path).not then return true
+    doc: (zd.read :path).orPanic
+    if (doc.textAt path: "file").orPanic.stringView != r.rel.stringView then return false
+    rows: (doc.itemsAt path: "mutants").orPanic
+    if rows.length != r.sites.length then return false
+    outcomes: zast.Vocab.create block: outcomeWord
+    stages: zast.Vocab.create block: stageWord
+    i: u64
+    for each row: rows loop {
+        o: outcomes.slotOf text: (row.textAt path: "outcome").orPanic.stringView
+        s: stages.slotOf text: (row.textAt path: "stage").orPanic.stringView
+        if o < outcomeWord.length when s < stageWord.length then {
+            r.outcomes.set :i val: o
+            r.stages.set :i val: s
+            was: r.hows.set :i val: (row.textAt path: "how").orPanic.copy
+            was.drop
+        }
+        i = i + 1
+    }
+    return true
+}
+
+# writeData -- OUT/mutants.zd at `path`, from `r`
+writeData: function {r: Run.view path: StringView} is {
+    items: List zd.Entry
+    i: u64
+    for i < r.sites.length loop {
+        s: r.sites.get :i
+        fields: List zd.Entry
+        fields.append (zd.entry name: "id" type: "" node: zd.Node.integer (i + 1).i64.orPanic)
+        fields.append (zd.entry name: "line" type: "" node: zd.Node.integer s.line.i64.orPanic)
+        fields.append (zd.entry name: "op" type: "" node: zd.Node.text s.op.copy)
+        fields.append (
+            zd.entry
+            name: "outcome"
+            type: ""
+            node: zd.Node.text (outcomeWord.get i: (r.outcomes.get :i)).string
+        )
+        fields.append (
+            zd.entry
+            name: "stage"
+            type: ""
+            node: zd.Node.text (stageWord.get i: (r.stages.get :i)).string
+        )
+        fields.append (zd.entry name: "how" type: "" node: zd.Node.text (r.hows.get :i).copy)
+        items.append (zd.entry name: "" type: "mutant" node: zd.Node.dataValue fields.take)
+        i = i + 1
+    }
+    defs: List zd.Entry
+    defs.append (zd.entry name: "file" type: "" node: zd.Node.text r.rel.copy)
+    defs.append (
+        zd.entry
+        name: "mutants"
+        type: "staticlist mutant"
+        node: zd.Node.listValue items.take
+    )
+    doc: zd.entry name: "" type: "" node: zd.Node.unitValue defs.take
+    (zd.write :path header: dataHeader schema: dataSchema :doc).orPanic
+}

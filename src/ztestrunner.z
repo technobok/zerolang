@@ -545,6 +545,7 @@ opt: list {
     ccForward: "--cc-forward"
     report: "--report"
     heavy: "--heavy"
+    stopEarly: "--stop-early"
     saveTemps: "--save-temps"
     regenLsp: "--regen-lsp"
     regenUsage: "--regen-usage"
@@ -661,6 +662,10 @@ Runner: class {
     # whether the heavy kinds run: the self-host ASan pass, the byte-identity
     # fixpoint and the doc ratchet
     heavy: bool
+    # stop a full run once a case has failed: after the error cases, inside
+    # the run cases, and after the leak cases (stopsEarly). For a run that only
+    # asks whether everything passes
+    stopEarly: bool
     # exit 0 whatever happened, for a run that is gathering numbers rather than
     # gating
     report: bool
@@ -2036,11 +2041,14 @@ countRows: function {text: StringView codes: List String counts: ListVal u64} ou
     return true
 }
 
-# runRunCases -- the RUN cases kind.
+# runRunCases -- the RUN cases kind. With --stop-early the cases run a slice
+# at a time, and the kind ends at the first slice with a failure: a run that
+# only asks whether everything passes has its answer there.
 runRunCases: function {r: Runner} is {
     known: knownCases :r
     met: falseFlags n: known.length
     runPool: List PoolJob
+    passed: List String
     windows: ztarget.targetIsWindows triple: r.target.stringView
     for each c: (runCasePrograms :r) loop {
         if (isSelected :r name: c.name.stringView dir: c.dir.stringView).false then {
@@ -2049,14 +2057,37 @@ runRunCases: function {r: Runner} is {
             # what it checks has no Windows counterpart: listed, not run
             runOutcome :r :known :met name: c.name.stringView why: runWhy.slot.posix
         } else runPool.append (runCaseJob :r :c)
+        if (sliceIsFull :r jobs: runPool) then {
+            runRunSlice :r :known :met jobs: runPool :passed
+            if (stopsEarly :r) then return
+        }
     }
+    runRunSlice :r :known :met jobs: runPool :passed
+    if r.repeats > 0 then repeatRunCases :r names: passed
+    knownLeft :r :known :met
+}
+
+# sliceIsFull -- with --stop-early, `jobs` holds a slice of RUN cases: enough
+# to keep every job slot busy for a few cases
+sliceIsFull: function {r: Runner.view jobs: (List PoolJob).view} out bool is {
+    return r.stopEarly and (jobs.length >= (r.jobsMax * 4))
+}
+
+# runRunSlice -- the RUN case jobs `jobs` in the pool, each judged, and `jobs`
+# left empty; the names of the ones that passed are added to `passed`
+runRunSlice: function {
+    r: Runner
+    known: (List KnownCase).view
+    met: ListVal bool
+    jobs: List PoolJob
+    passed: List String
+} is {
     runStatuses: ListVal i32
     runFailSteps: ListVal i64
-    zjobs.runJobs jobs: runPool maxJobs: r.jobsMax statuses: runStatuses failSteps: runFailSteps
-    passed: List String
+    zjobs.runJobs :jobs maxJobs: r.jobsMax statuses: runStatuses failSteps: runFailSteps
     rji: u64
-    for rji < runPool.length loop {
-        job: runPool.get i: rji
+    for rji < jobs.length loop {
+        job: jobs.get i: rji
         if (
             judgeRunCase
             :r
@@ -2068,8 +2099,7 @@ runRunCases: function {r: Runner} is {
         ) then passed.append job.name.copy
         rji = rji + 1
     }
-    if r.repeats > 0 then repeatRunCases :r names: passed
-    knownLeft :r :known :met
+    for jobs.length > 0 loop jobs.pop
 }
 
 # CaseProgram -- one program of a case list (tests/fixtures/*_cases.zd)
@@ -4626,6 +4656,9 @@ printUsage: function is {
     io.eprintln "  --tmp DIR       the scratch directory (default: its own, under the system's)"
     io.eprintln "  --save-temps    keep the scratch directory"
     io.eprintln "  --heavy         add the self-host ASan run, the fixpoint and the doc ratchet"
+    io.eprintln "  --stop-early    in a full run, stop once a case has failed: after the error"
+    io.eprintln "                  cases, at the first slice of run cases with a failure, or"
+    io.eprintln "                  after the leak cases"
     io.eprintln "  --report        exit 0 whatever failed"
     io.eprintln "  --regen-lsp     rewrite the LSP goldens from this run's answers"
     io.eprintln "  --regen-usage   rewrite each usage case's expected files from this run's answers"
@@ -4688,6 +4721,7 @@ runnerSpec: function out cli.Spec is {
     addSwitch :sp name: opt.ccForward
     addSwitch :sp name: opt.report
     addSwitch :sp name: opt.heavy
+    addSwitch :sp name: opt.stopEarly
     addSwitch :sp name: opt.saveTemps
     addSwitch :sp name: opt.regenLsp
     addSwitch :sp name: opt.regenUsage
@@ -4886,6 +4920,7 @@ runnerFrom: function {p: cli.Parsed.view} out Runner is {
         jobsMax: (jobsOf :p)
         timeoutSecs: (timeoutOf :p)
         heavy: (p.hasFlag name: opt.heavy)
+        stopEarly: (p.hasFlag name: opt.stopEarly)
         report: (p.hasFlag name: opt.report)
         saveTemps: (p.hasFlag name: opt.saveTemps)
         regenLsp: (p.hasFlag name: opt.regenLsp)
@@ -4965,38 +5000,60 @@ runKinds: function {r: Runner} is {
     if r.only < kindWord.length then {
         runOneKind :r
     } else {
-        runRunCases :r
-        runLspCases :r
-        runLeakCases :r
         runErrorCases :r
         runLoneErrorCases :r
-        runZdataCases :r
-        runDumpCases :r
-        runDifferentialCases :r
-        runVfsCases :r
-        runProjectCases :r
-        runUsageCases :r
-        runErrCodeCases :r
-        runSmokeCases :r
-        runFmtCases :r
-        vocab.runVocabCases :r
-        pins.runPinsCases :r
-        fixtures.runFixtureCases :r
-        natives.runNativesCases :r
-        usernative.runUserNativeCases :r
-        piece.runPieceCases :r
-        statictcc.runStaticTccCases :r
-        cobj.runCobjCases :r
-        linemarks.runLineMarkCases :r
-        runDoccodeCases :r
-        runDocPageCases :r
-        runSelfhostAsan :r
-        runFixpoint :r
-        runArchCases :r
-        runDocCases :r
+        if (stopsEarly :r).not then runProgramKinds :r
     }
+    finishRun :r
+}
 
-    # ---------------- summary ----------------
+# stopsEarly -- with --stop-early, a case has failed: the full run ends here
+stopsEarly: function {r: Runner.view} out bool is {
+    return r.stopEarly and (r.fails > 0)
+}
+
+# runProgramKinds -- the default kinds after the error cases, which come
+# first because zc alone answers them, in seconds: the run cases, the LSP and
+# the leak cases, then (unless the run stops early) the rest
+runProgramKinds: function {r: Runner} is {
+    runRunCases :r
+    if (stopsEarly :r) then return
+    runLspCases :r
+    runLeakCases :r
+    if (stopsEarly :r).not then runOtherKinds :r
+}
+
+# runOtherKinds -- the default kinds after the leak cases
+runOtherKinds: function {r: Runner} is {
+    runZdataCases :r
+    runDumpCases :r
+    runDifferentialCases :r
+    runVfsCases :r
+    runProjectCases :r
+    runUsageCases :r
+    runErrCodeCases :r
+    runSmokeCases :r
+    runFmtCases :r
+    vocab.runVocabCases :r
+    pins.runPinsCases :r
+    fixtures.runFixtureCases :r
+    natives.runNativesCases :r
+    usernative.runUserNativeCases :r
+    piece.runPieceCases :r
+    statictcc.runStaticTccCases :r
+    cobj.runCobjCases :r
+    linemarks.runLineMarkCases :r
+    runDoccodeCases :r
+    runDocPageCases :r
+    runSelfhostAsan :r
+    runFixpoint :r
+    runArchCases :r
+    runDocCases :r
+}
+
+# finishRun -- the scratch directory removed unless kept, the counts printed,
+# and the runner's exit: 0 when no case failed, or with --report
+finishRun: function {r: Runner} is {
     if r.saveTemps then {
         print "kept test artifacts at \{r.tmp.stringView}"
     } else {

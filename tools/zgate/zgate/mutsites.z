@@ -1,0 +1,291 @@
+# mutsites -- the mutants of one zerolang source file: each a single edit of
+# its text that changes what the code does, of a kind a slip of the hand makes.
+# Only code inside a function's body is edited, read by token, so a comment or
+# a string's text is never touched. The edits, by the word `Site.op` holds:
+#   eq       `==` for `!=`, and back
+#   negate   a relation for its opposite: `<` for `>=`, `>` for `<=`
+#   edge     a relation for its neighbour: `<` for `<=`, `>` for `>=`
+#   andor    `and` for `or`, and back
+#   bool     `true` for `false`, and back
+#   notdrop  a `.not` taken off
+#   notadd   a condition of `if` or `when` negated: `(cond).not`
+#   delete   a statement that stands whole on one line, taken out
+# A subunit of zgate.
+
+# Site -- one mutant: the bytes [from, to) of the file replaced by `put`
+Site: class {
+    # the line the edit starts on
+    line: u64
+    # which edit it is, a word of opWord
+    op: String
+    from: u64
+    to: u64
+    put: String
+}
+
+# opWord -- the edits, by the word that names each in a data file
+opWord: list {
+    eq: "eq"
+    negate: "negate"
+    edge: "edge"
+    andor: "andor"
+    truth: "bool"
+    notdrop: "notdrop"
+    notadd: "notadd"
+    delete: "delete"
+} out staticlist StringView
+
+# word -- the spellings the scan reads
+word: list {
+    eq: "=="
+    ne: "!="
+    lt: "<"
+    gt: ">"
+    le: "<="
+    ge: ">="
+    conj: "and"
+    disj: "or"
+    yes: "true"
+    no: "false"
+    negation: "not"
+} out staticlist StringView
+
+# toktype -- a token's kind
+toktype: zlexer.toktype
+
+# Scan -- where the scan of a file's tokens stands
+Scan: class {
+    sites: List Site
+    # how many `(` and `{` are open
+    paren: i64
+    brace: i64
+    # for each function body open, the `{` depth it began at
+    bodies: ListVal i64
+    # a `function` was read, and its `is` not yet
+    fnSeen: bool
+    # an `is` was read: the next `{` opens a body
+    bodyNext: bool
+    # the line being read: where it starts, the depths it started at, whether
+    # it started inside a body, whether a token of it was read, whether its
+    # first one closes a block, and whether a depth fell below its start
+    lineFrom: u64
+    lineParen: i64
+    lineBrace: i64
+    lineInBody: bool
+    lineHas: bool
+    lineCloses: bool
+    lineLow: bool
+}
+
+# isTrivia -- a token of kind `k` is space, a line end, a comment or a file end
+isTrivia: function {k: toktype} out bool is {
+    if (k == toktype.wsTok) or (k == toktype.commentTok) then return true
+    if (k == toktype.eolTok) or (k == toktype.eofTok) then return true
+    return k == toktype.bofTok
+}
+
+# spelling -- token `t` as `text` writes it
+spelling: function {text: StringView t: zlexer.token} outx StringView is {
+    return (text.substring from: t.offset to: t.offset + t.width.u64)
+}
+
+# enumerate -- the mutants of the source `text`, in the order of its text
+enumerate: function {text: StringView} out List Site is {
+    pool: zast.StringPool.create
+    toks: tokenize.scan source: text.string :pool
+    s: (
+        Scan
+        sites: List Site
+        paren: 0
+        brace: 0
+        bodies: ListVal i64
+        fnSeen: false
+        bodyNext: false
+        lineFrom: 0
+        lineParen: 0
+        lineBrace: 0
+        lineInBody: false
+        lineHas: false
+        lineCloses: false
+        lineLow: false
+    )
+    i: u64
+    for i < toks.length loop {
+        t: toks.get :i
+        if (t.toktype == toktype.eolTok) or (t.toktype == toktype.eofTok) then {
+            endLine :s :t
+        } else if (isTrivia k: t.toktype).not then {
+            if s.bodies.length > 0 then tokenSites :s :text :toks :i
+            readToken :s :t
+        }
+        i = i + 1
+    }
+    found: List Site
+    found swap s.sites
+    return found
+}
+
+# endLine -- the line that ends at token `t` is read: a `delete` site when it
+# is one whole statement of a body, then the next line's start
+endLine: function {s: Scan t: zlexer.token} is {
+    next: t.offset + t.width.u64
+    whole: s.lineHas and s.lineInBody and s.lineCloses.not and s.lineLow.not
+    level: (s.lineParen == 0) and (s.paren == 0) and (s.brace == s.lineBrace)
+    if whole and level then s.sites.append (
+        Site
+        line: t.lineno.u64
+        op: opWord.delete.string
+        from: s.lineFrom
+        to: next
+        put: "".string
+    )
+    s.lineFrom = next
+    s.lineParen = s.paren
+    s.lineBrace = s.brace
+    s.lineInBody = s.bodies.length > 0
+    s.lineHas = false
+    s.lineCloses = false
+    s.lineLow = false
+}
+
+# readToken -- token `t`, not trivia, moves the depths, opens and closes the
+# function bodies, and is noted for its line
+readToken: function {s: Scan t: zlexer.token} is {
+    k: t.toktype
+    closes: (k == toktype.braceCloseTok) or (k == toktype.parenCloseTok)
+    if s.lineHas.not then s.lineCloses = closes
+    s.lineHas = true
+    if k == toktype.functionTok then s.fnSeen = true
+    if k == toktype.isTok when s.fnSeen then {
+        s.fnSeen = false
+        s.bodyNext = true
+    }
+    if k == toktype.nativeTok then s.bodyNext = false
+    if k == toktype.parenOpenTok then s.paren = s.paren + 1
+    if k == toktype.parenCloseTok then s.paren = s.paren - 1
+    if k == toktype.braceOpenTok then {
+        if s.bodyNext then s.bodies.append s.brace
+        s.bodyNext = false
+        s.brace = s.brace + 1
+    }
+    if k == toktype.braceCloseTok then {
+        s.brace = s.brace - 1
+        if s.bodies.length > 0 when (
+            (s.bodies.get i: s.bodies.length - 1) == s.brace
+        ) then s.bodies.pop
+    }
+    if (s.paren < s.lineParen) or (s.brace < s.lineBrace) then s.lineLow = true
+}
+
+# tokenSites -- the sites token `i` of `toks` gives, inside a body
+tokenSites: function {s: Scan text: StringView toks: (ListVal zlexer.token).view i: u64} is {
+    t: toks.get :i
+    if (t.toktype == toktype.ifTok) or (t.toktype == toktype.whenTok) then {
+        conditionSite :s :text :toks :i
+        return
+    }
+    if t.toktype == toktype.dotTok then {
+        dropSite :s :text :toks :i
+        return
+    }
+    if t.toktype != toktype.refIdTok then return
+    w: spelling :text :t
+    swapSite :s :t :w a: word.eq b: word.ne op: opWord.eq
+    swapSite :s :t :w a: word.conj b: word.disj op: opWord.andor
+    swapSite :s :t :w a: word.yes b: word.no op: opWord.truth
+    swapSite :s :t :w a: word.lt b: word.ge op: opWord.negate
+    swapSite :s :t :w a: word.gt b: word.le op: opWord.negate
+    oneSite :s :t :w a: word.lt b: word.le op: opWord.edge
+    oneSite :s :t :w a: word.gt b: word.ge op: opWord.edge
+    oneSite :s :t :w a: word.le b: word.lt op: opWord.edge
+    oneSite :s :t :w a: word.ge b: word.gt op: opWord.edge
+}
+
+# swapSite -- when token `t`, spelled `w`, is `a` or `b`: the site that writes
+# the other
+swapSite: function {
+    s: Scan t: zlexer.token w: StringView a: StringView b: StringView op: StringView
+} is {
+    oneSite :s :t :w :a :b :op
+    oneSite :s :t :w a: b b: a :op
+}
+
+# oneSite -- when token `t`, spelled `w`, is `a`: the site that writes `b`
+oneSite: function {
+    s: Scan t: zlexer.token w: StringView a: StringView b: StringView op: StringView
+} is {
+    if w != a then return
+    s.sites.append (
+        Site
+        line: t.lineno.u64
+        op: op.string
+        from: t.offset
+        to: t.offset + t.width.u64
+        put: b.string
+    )
+}
+
+# dropSite -- token `i` is a `.`: when `not` stands right after it, the site
+# that takes both off
+dropSite: function {s: Scan text: StringView toks: (ListVal zlexer.token).view i: u64} is {
+    if (i + 1) >= toks.length then return
+    dot: toks.get :i
+    after: toks.get i: i + 1
+    if after.toktype != toktype.refIdTok then return
+    if (spelling :text t: after) != word.negation then return
+    s.sites.append (
+        Site
+        line: dot.lineno.u64
+        op: opWord.notdrop.string
+        from: dot.offset
+        to: after.offset + after.width.u64
+        put: "".string
+    )
+}
+
+# conditionSite -- token `i` is an `if` or a `when`: the site that negates the
+# condition after it, which runs to the next `when` or `then` outside any
+# bracket. None for a condition that already ends in `.not` -- taking that off
+# is the same mutant -- and none where no end is found.
+conditionSite: function {s: Scan text: StringView toks: (ListVal zlexer.token).view i: u64} is {
+    depth: i64
+    first: toks.length
+    last: toks.length
+    j: i + 1
+    for j < toks.length loop {
+        k: (toks.get i: j).toktype
+        ends: (k == toktype.thenTok) or (k == toktype.whenTok)
+        if ends and (depth == 0) then break
+        if k == toktype.eofTok then return
+        if (k == toktype.parenOpenTok) or (k == toktype.braceOpenTok) then depth = depth + 1
+        if (k == toktype.parenCloseTok) or (k == toktype.braceCloseTok) then depth = depth - 1
+        if (isTrivia :k).not then {
+            if first == toks.length then first = j
+            last = j
+        }
+        j = j + 1
+    }
+    if (j >= toks.length) or (first == toks.length) then return
+    a: toks.get i: first
+    b: toks.get i: last
+    if b.toktype == toktype.refIdTok when (spelling :text t: b) == word.negation then return
+    from: a.offset
+    to: b.offset + b.width.u64
+    s.sites.append (
+        Site
+        line: a.lineno.u64
+        op: opWord.notadd.string
+        :from
+        :to
+        put: "(\{text.substring :from :to}).not"
+    )
+}
+
+# applied -- `text` with the edit of `site` made
+applied: function {text: StringView site: Site.view} out String is {
+    res: String
+    res.append (text.substring from: 0 to: site.from)
+    res.append site.put
+    res.append (text.substring from: site.to to: text.length)
+    return res
+}

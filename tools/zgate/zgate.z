@@ -24,6 +24,10 @@
 #   covprobe OUT FILE.z TARGET...
 #                         whether compiling FILE.z reaches each TARGET, with
 #                         the coverage build in OUT
+#   mutate FILE OUT [--coverage DIR] [--limit N] [--seed S] [--at-once M]
+#          [--resume] [--mutant IDS] [--list] [--cc CC] [--opt FLAG]
+#                         mutation testing of one source file of zc: whether
+#                         the suite fails for each small edit of it
 # The repository is the current directory, or --repo DIR. Snapshots, the run
 # lock and scratch files live in $ZGATE_HOME (~/.cache/zerolang/gate when it is
 # not set). The worktree a run or a timing makes stands beside the repository,
@@ -50,6 +54,7 @@ command: list {
     windowsRecord: "windows-record"
     coverage: "coverage"
     covprobe: "covprobe"
+    mutate: "mutate"
     help: "help"
 } out staticlist StringView
 
@@ -64,6 +69,13 @@ opt: list {
     opt: "--opt"
     check: "--check"
     write: "--write"
+    coverage: "--coverage"
+    limit: "--limit"
+    seed: "--seed"
+    atOnce: "--at-once"
+    resume: "--resume"
+    mutant: "--mutant"
+    listOnly: "--list"
 } out staticlist StringView
 
 # PoolStep, PoolJob -- a spawn of a job and a job, of the job pool (zjobs)
@@ -105,6 +117,10 @@ printUsage: function is {
     io.eprintln "                           function; FILE lists the functions no test enters"
     io.eprintln "  covprobe OUT FILE.z TARGET...  whether compiling FILE.z reaches each TARGET (a"
     io.eprintln "                           function's name, or path.z:LINE), with OUT's build"
+    io.eprintln "  mutate FILE OUT [--coverage DIR] [--limit N] [--seed S] [--at-once M] [--resume]"
+    io.eprintln "         [--mutant IDS] [--list] [--cc CC] [--opt FLAG]"
+    io.eprintln "                           whether the suite fails for each small edit of FILE, a"
+    io.eprintln "                           source file of zc; OUT/survivors.md lists the rest"
     io.eprintln "The repository is the current directory, or --repo DIR; snapshots and the run"
     io.eprintln "lock live in $ZGATE_HOME (default ~/.cache/zerolang/gate)."
 }
@@ -162,6 +178,7 @@ runCommand: function {which: u64 args: (List String).take} out i32 is {
     if which == command.slot.windowsRecord then return (windows.runWindowsRecord :g p: pr)
     if which == command.slot.coverage then return (coverage.runCoverageCommand :g p: pr)
     if which == command.slot.covprobe then return (coverage.runProbeCommand :g p: pr)
+    if which == command.slot.mutate then return (mutate.runMutateCommand :g p: pr)
     return (timing.runTimeCommand :g p: pr)
 }
 
@@ -215,6 +232,18 @@ specOf: function {which: u64} out cli.Spec is {
     } else if which == command.slot.covprobe then {
         addOperand :sp name: "OUT" required: true
         addOperand :sp name: "FILE" required: true
+    } else if which == command.slot.mutate then {
+        addOperand :sp name: "FILE" required: true
+        addOperand :sp name: "OUT" required: true
+        addValue :sp name: opt.coverage
+        addValue :sp name: opt.limit
+        addValue :sp name: opt.seed
+        addValue :sp name: opt.atOnce
+        addValue :sp name: opt.mutant
+        addValue :sp name: opt.cc
+        addValue :sp name: opt.opt
+        cli.addFlag spec: sp name: opt.resume.string shortName: "".string help: "".string
+        cli.addFlag spec: sp name: opt.listOnly.string shortName: "".string help: "".string
     }
     return sp
 }
