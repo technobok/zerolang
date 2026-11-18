@@ -1625,35 +1625,47 @@ convBodyOf: function {
     # below compares C arithmetic values
     vT: scT.string
     if srcK == ztypes.numkind.f16Type then vT = "float".string
-    okValue: convOkValue :srcK :dstK :tcT :needs
     body: String
-    # the four corners of float/integer, each with its own way of failing
-    if (ztypes.isFloatKind k: srcK) then {
+    # the four corners of float/integer, each with its own way of failing. A
+    # float narrowed to a float holds the value its own test computed.
+    if (ztypes.isFloatKind k: srcK) when (ztypes.isFloatKind k: dstK) then {
         if dstK == ztypes.numkind.f16Type then {
             body = convFloatToHalf :srcK scT: vT.stringView :needs
-        } else if (ztypes.isFloatKind k: dstK) then {
-            body = convFloatToFloat :scT :tcT
         } else {
-            body = (
-                convFloatToInt
-                scT: vT.stringView
-                trunc: (convTruncC :srcK :dstK :tcT :needs).stringView
-                :dstK
-                okValue: okValue.stringView
-            )
+            body = convFloatToFloat :scT :tcT
         }
     } else {
-        if (ztypes.isFloatKind k: dstK) then {
-            body = convIntToFloat :srcK :dstK okValue: okValue.stringView :needs
-        } else {
-            body = convIntToInt :srcK :dstK okValue: okValue.stringView :needs
-        }
+        body = convCornerBody :srcK :dstK vT: vT.stringView :tcT :needs
     }
     if srcK == ztypes.numkind.f16Type then {
         convNeed :needs piece: "@f16_to_f32"
         return (body.stringView.replace needle: "@V@" replacement: "z_f16_to_f32(@V@)")
     }
     return body
+}
+
+# convCornerBody -- a checked conversion with an integer on either side: the
+# value a passing test holds (convOkValue), whose helpers only these corners
+# need, then the corner's test. `vT` is the type the source is read as.
+convCornerBody: function {
+    srcK: ztypes.numkind dstK: ztypes.numkind vT: StringView tcT: StringView needs: List String
+} out String is {
+    okValue: convOkValue :srcK :dstK :tcT :needs
+    if (ztypes.isFloatKind k: srcK) then return (
+        convFloatToInt
+        scT: vT
+        trunc: (convTruncC :srcK :dstK :tcT :needs).stringView
+        :dstK
+        okValue: okValue.stringView
+    )
+    if (ztypes.isFloatKind k: dstK) then return (
+        convIntToFloat
+        :srcK
+        :dstK
+        okValue: okValue.stringView
+        :needs
+    )
+    return (convIntToInt :srcK :dstK okValue: okValue.stringView :needs)
 }
 
 # convKinds -- the numeric kinds in the order the conversion rows stand
