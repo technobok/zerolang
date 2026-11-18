@@ -1,0 +1,405 @@
+# linemarks -- the LINEMARKS kind: what `zc --line-marks` writes is directives
+# and nothing else, every C compiler takes them, and they name the right
+# lines. Each RUN case is emitted with the flag and without it. The marked C
+# without its `#line` lines must be the unmarked C: a difference is a mark
+# that changed what the emitter wrote. The marked C is then built by --cc and
+# run against the case's goldens. A case the --known file lists is left to the
+# run kind. Last, on Linux with gcc, the fixture tests/fixtures/linemarks is
+# built with gcc's --coverage and run, and the lines gcov reports as run and
+# as not run, per source file, must be its golden marks.lines.
+# A subunit of ztestrunner.
+
+# markWord -- what the kind reads and writes by spelling
+markWord: list {
+    # how a line --line-marks adds starts
+    directive: "#line "
+    # the flag under test
+    option: "--line-marks"
+    # a counted line that ran, and one that did not, in marks.lines
+    hit: "hit"
+    miss: "miss"
+} out staticlist StringView
+
+# covFiles -- the fixture's source files, in the order marks.lines lists them;
+# the first is the program
+covFiles: list { "marks" "shapes" } out staticlist StringView
+
+# runLineMarkCases -- the run cases in the job pool, each judged, then the
+# coverage fixture
+runLineMarkCases: function {r: Runner} is {
+    dir: "\{r.tmp}/linemarks"
+    io.mkdirp path: dir
+    known: knownCases :r
+    windows: ztarget.targetIsWindows triple: r.target.stringView
+    jobs: List PoolJob
+    for each c: (runCasePrograms :r) loop {
+        if (isSelected :r name: c.name.stringView dir: c.dir.stringView).false then continue
+        if c.posix when windows then continue
+        if (isKnown :known name: c.name.stringView) then continue
+        jobs.append (markJob :r dir: dir.stringView :c)
+    }
+    statuses: ListVal i32
+    failSteps: ListVal i64
+    zjobs.runJobs :jobs maxJobs: r.jobsMax :statuses :failSteps
+    i: u64
+    for i < jobs.length loop {
+        job: jobs.get :i
+        (
+            judgeMarked
+            :r
+            dir: dir.stringView
+            name: job.name.stringView
+            status: (statuses.get :i)
+            failStep: (failSteps.get :i)
+        )
+        i = i + 1
+    }
+    runCoverageFixture :r dir: dir.stringView
+}
+
+# isKnown -- the --known file lists RUN case `name`, at any stage
+isKnown: function {known: (List KnownCase).view name: StringView} out bool is {
+    for each k: known loop {
+        if k.name == name then return true
+    }
+    return false
+}
+
+# markJob -- RUN case `c` in `dir`: emitted with the flag (<name>.c) and
+# without it (<name>.plain.c), the marked C built, and the binary run
+markJob: function {r: Runner.view dir: StringView c: CaseProgram.view} out PoolJob is {
+    name: c.name.stringView
+    srcdirs: caseDirs root: r.root.stringView :c
+    cpath: "\{dir}/\{name}.c"
+    ppath: "\{dir}/\{name}.plain.c"
+    bpath: "\{dir}/\{name}.bin"
+    opath: "\{dir}/\{name}.out"
+    rdir: "\{dir}/run_\{name}"
+    io.mkdirp path: rdir
+    steps: List PoolStep
+    marked: emitArgv :r :name :srcdirs outc: cpath.stringView
+    marked.append from: markWord.option.string
+    steps.append (quietStep argv: marked cwd: "" limit: 0)
+    steps.append (
+        quietStep
+        argv: (emitArgv :r :name :srcdirs outc: ppath.stringView)
+        cwd: ""
+        limit: 0
+    )
+    steps.append (
+        zjobs.mkStep
+        argv: (
+            ccArgv
+            cc: r.cc.stringView
+            ccflags: r.ccflags.stringView
+            target: r.target.stringView
+            bin: bpath.stringView
+            csrc: cpath.stringView
+            asan: false
+        )
+        cwd: ""
+        outPath: os.nullDevice.stringView
+        errPath: os.nullDevice.stringView
+        timeoutSecs: 0
+        allowFail: false
+        zlinkFrom: cpath.stringView
+        zc: r.zc.stringView
+    )
+    steps.append (
+        zjobs.mkStep
+        argv: (runArgv :r :name bin: bpath.stringView)
+        cwd: rdir.stringView
+        outPath: opath.stringView
+        errPath: os.nullDevice.stringView
+        timeoutSecs: r.timeoutSecs
+        allowFail: true
+        zlinkFrom: ""
+    )
+    return (zjobs.mkJob :name :steps)
+}
+
+# emitArgv -- zc emitting `name` from `srcdirs` into `outc`, for --target
+emitArgv: function {
+    r: Runner.view name: StringView srcdirs: (List String).view outc: StringView
+} out List String is {
+    za: (
+        zcArgv
+        zc: r.zc.stringView
+        ccFwd: r.ccFwd.stringView
+        :name
+        :srcdirs
+        sys: r.sys.stringView
+        :outc
+    )
+    if r.target.length > 0 then {
+        za.append from: "--target".string
+        za.append from: r.target.copy
+    }
+    return za
+}
+
+# quietStep -- a step that must pass and whose output nothing reads; `limit`
+# is the seconds it may take, 0 for no limit
+quietStep: function {argv: (List String).take cwd: StringView limit: i32} out PoolStep is {
+    return (
+        zjobs.mkStep
+        :argv
+        :cwd
+        outPath: os.nullDevice.stringView
+        errPath: os.nullDevice.stringView
+        timeoutSecs: limit
+        allowFail: false
+        zlinkFrom: ""
+    )
+}
+
+# judgeMarked -- RUN case `name`'s verdict from its job's `status` and
+# `failStep` (markJob's steps, in order)
+judgeMarked: function {r: Runner dir: StringView name: StringView status: i32 failStep: i64} is {
+    if failStep >= 0 when failStep < 3 then {
+        what: "zc did not emit it with --line-marks"
+        if failStep == 1 then what = "zc did not emit it"
+        if failStep == 2 then what = "the C compiler rejects its C with the directives in it"
+        print "FAIL(linemarks) \{name}: \{what} (exit \{status})"
+        r.fails = r.fails + 1
+        return
+    }
+    cpath: "\{dir}/\{name}.c"
+    ppath: "\{dir}/\{name}.plain.c"
+    opath: "\{dir}/\{name}.out"
+    marked: slurp path: cpath.stringView
+    plain: slurp path: ppath.stringView
+    if (
+        (linesOf c: marked.stringView marks: false) != (linesOf c: plain.stringView marks: true)
+    ) then {
+        print "FAIL(linemarks) \{name}: its C with --line-marks, the #line lines taken out, is not its C without the flag (\{dir}/\{name}.c against \{name}.plain.c; keep them with --save-temps)"
+        r.fails = r.fails + 1
+        return
+    }
+    gold: goldenFor :r :name ext: ".out"
+    if (io.exists path: gold) when (matchesGoldens :r :name outPath: opath.stringView :status
+    ).not then {
+        print "FAIL(linemarks) \{name}: built with --line-marks it does not print its golden"
+        r.fails = r.fails + 1
+        return
+    }
+    r.passN = r.passN + 1
+}
+
+# linesOf -- C text `c` line by line; with `marks` false, without the lines
+# --line-marks adds
+linesOf: function {c: StringView marks: bool} out String is {
+    res: String
+    for each l: c.lines loop {
+        if marks.not when (l.startsWith prefix: markWord.directive) then continue
+        res.append l
+        res.append "\n"
+    }
+    return res
+}
+
+# runCoverageFixture -- the fixture built with --coverage in `dir`/cov, run,
+# and gcov's report of its lines against marks.lines. Skipped where gcov does
+# not read the build: off Linux, and under a --cc that is not gcc.
+runCoverageFixture: function {r: Runner dir: StringView} is {
+    if z.build.os != z.build.oskind.linux then {
+        print "SKIP(linemarks) coverage (Linux only: the fixture's lines are read from gcc's counters with gcov)"
+        r.skip = r.skip + 1
+        return
+    }
+    if (zcc.ccFamilyOf ccPath: r.cc.stringView).gcc.not then {
+        print "SKIP(linemarks) coverage (gcov reads gcc's counters, and --cc is \{r.cc})"
+        r.skip = r.skip + 1
+        return
+    }
+    cov: "\{dir}/cov"
+    io.mkdirp path: cov
+    prog: covFiles.get i: 0
+    jobs: List PoolJob
+    jobs.append (coverageJob :r cov: cov.stringView :prog)
+    statuses: ListVal i32
+    failSteps: ListVal i64
+    zjobs.runJobs :jobs maxJobs: 1 :statuses :failSteps
+    failStep: failSteps.get i: 0
+    if failStep >= 0 then {
+        print "FAIL(linemarks) coverage: step \{failStep} of emit, build, run, gcov failed (exit \{(
+            statuses.get
+            i: 0
+        )}; \{cov})"
+        r.fails = r.fails + 1
+        return
+    }
+    jpath: "\{cov}/gcov.json"
+    report: slurp path: jpath.stringView
+    got: coveredLines report: report.stringView
+    goldPath: "\{r.root}/tests/fixtures/linemarks/\{prog}.lines"
+    want: slurp path: goldPath.stringView
+    if got == want then {
+        r.passN = r.passN + 1
+        return
+    }
+    print "FAIL(linemarks) coverage: the lines gcov reports for the fixture are not \{goldPath}. A line `zc --line-marks` names is the wrong one, or the fixture changed. Reported:"
+    print got
+    r.fails = r.fails + 1
+}
+
+# coverageJob -- the fixture program `prog` in `cov`: emitted with the flag,
+# built with --coverage beside its C (gcc then names the counters' files after
+# the program), run, and read by the gcov beside --cc into gcov.json
+coverageJob: function {r: Runner.view cov: StringView prog: StringView} out PoolJob is {
+    fixtures: "\{r.root}/tests/fixtures/linemarks"
+    srcdirs: oneDir d: fixtures.stringView
+    ccflags: "\{r.ccflags} -O0 --coverage"
+    jpath: "\{cov}/gcov.json"
+    cpath: "\{cov}/\{prog}.c"
+    bpath: "\{cov}/\{prog}"
+    marked: emitArgv :r name: prog :srcdirs outc: cpath.stringView
+    marked.append from: markWord.option.string
+    steps: List PoolStep
+    steps.append (quietStep argv: marked cwd: "" limit: 0)
+    steps.append (
+        zjobs.mkStep
+        argv: (
+            ccArgv
+            cc: r.cc.stringView
+            ccflags: ccflags.stringView
+            target: ""
+            bin: bpath.stringView
+            csrc: cpath.stringView
+            asan: false
+        )
+        cwd: ""
+        outPath: os.nullDevice.stringView
+        errPath: os.nullDevice.stringView
+        timeoutSecs: 0
+        allowFail: false
+        zlinkFrom: cpath.stringView
+        zc: r.zc.stringView
+    )
+    run: List String
+    run.append from: bpath.copy
+    steps.append (quietStep argv: run cwd: cov limit: r.timeoutSecs)
+    gcov: List String
+    gcov.append from: (gcovFor cc: r.cc.stringView)
+    gcov.append from: "--json-format".string
+    gcov.append from: "--stdout".string
+    gcov.append from: "\{prog}.c"
+    steps.append (
+        zjobs.mkStep
+        argv: gcov
+        cwd: cov
+        outPath: jpath.stringView
+        errPath: os.nullDevice.stringView
+        timeoutSecs: r.timeoutSecs
+        allowFail: false
+        zlinkFrom: ""
+    )
+    return (zjobs.mkJob name: prog :steps)
+}
+
+# gcovFor -- the gcov that reads what the gcc `cc` writes: the same name with
+# `gcov` where it says `gcc`, so a versioned or prefixed gcc finds its own
+gcovFor: function {cc: StringView} out String is {
+    at: cc.lastIndexOf needle: "gcc"
+    if at.none then return "gcov".string
+    return "\{cc.substring from: 0 to: at}gcov\{cc.substring from: at + 3 to: cc.length}"
+}
+
+# coveredLines -- from gcov's `report`, each counted line of the
+# fixture's files as marks.lines writes it: `<file> <line> hit` or `miss`, the
+# files in covFiles' order and each one's lines rising. Empty for a report
+# that does not parse.
+coveredLines: function {report: StringView} out String is {
+    res: String
+    pr: json.parse source: report
+    match (
+        pr
+    ) case err then null case ok then {
+        files: (json.at v: pr path: "files").n
+        for each name: covFiles loop {
+            fi: u64
+            for fi < files loop {
+                at: "files/\{fi}"
+                if (isFile root: pr at: at.stringView :name) then {
+                    fileLines root: pr at: at.stringView :name :res
+                }
+                fi = fi + 1
+            }
+        }
+    }
+    return res
+}
+
+# isFile -- the report's file at `at` is the fixture's source file `name`
+isFile: function {root: json.Value.view at: StringView name: StringView} out bool is {
+    key: "\{at}/file"
+    file: json.textAt v: root path: key.stringView
+    match (
+        file
+    ) case some then {
+        tail: "linemarks/\{name}.z"
+        return (file.stringView.endsWith suffix: tail)
+    } case none then {
+        return false
+    }
+}
+
+# fileLines -- into `res`, the counted lines of the report's file at `at`,
+# named `name`, rising. gcov lists a line once for each C function it starts,
+# so a line's count is the sum of its entries.
+fileLines: function {root: json.Value.view at: StringView name: StringView res: String.borrow} is {
+    nums: ListVal i64
+    counts: ListVal i64
+    all: "\{at}/lines"
+    n: (json.at v: root path: all.stringView).n
+    i: u64
+    for i < n loop {
+        numKey: "\{all}/\{i}/line_number"
+        countKey: "\{all}/\{i}/count"
+        (
+            addCount
+            :nums
+            :counts
+            num: ((json.intAt v: root path: numKey.stringView).or d: 0)
+            count: ((json.intAt v: root path: countKey.stringView).or d: 0)
+        )
+        i = i + 1
+    }
+    last: i64
+    best: lowestAbove :nums :last
+    for best < nums.length loop {
+        word: markWord.miss
+        if (counts.get i: best) > 0 then word = markWord.hit
+        res.append "\{name}.z \{nums.get i: best} \{word}\n"
+        last = nums.get i: best
+        best = lowestAbove :nums :last
+    }
+}
+
+# addCount -- `count` more for line `num`, in the lists side by side
+addCount: function {nums: ListVal i64 counts: ListVal i64 num: i64 count: i64} is {
+    k: u64
+    for k < nums.length while (nums.get i: k) != num loop k = k + 1
+    if k == nums.length then {
+        nums.append num
+        counts.append 0
+    }
+    counts.set i: k val: (counts.get i: k) + count
+}
+
+# lowestAbove -- the index of the lowest of `nums` above `last`; their count
+# when none is
+lowestAbove: function {nums: (ListVal i64).view last: i64} out u64 is {
+    best: nums.length
+    j: u64
+    for j < nums.length loop {
+        nj: nums.get i: j
+        if nj > last then {
+            if best == nums.length then {
+                best = j
+            } else if nj < (nums.get i: best) then best = j
+        }
+        j = j + 1
+    }
+    return best
+}
