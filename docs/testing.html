@@ -141,7 +141,8 @@ sanitizer, the math and Windows legs), the legs that rebuild the run
 corpus's C under another toolchain (<code>GATE_SAME_C</code>: full UBSan,
 mingw-w64 and tcc for Windows under wine, MSVC under wine), and the legs
 only <code>make ci</code> runs (<code>CI_ONLY</code>: the heavy corpus <code>ci-corpus</code>, clang,
-<code>-O2</code>, arm64 under qemu, the fuzzer's fixed seed, both build modes).
+<code>-O2</code>, arm64 under qemu, the fuzzer's and the generator's fixed
+seeds, both build modes).
 A leg whose tools are missing says so and passes.</li>
 <li><code>test-bootstrap</code>: the seed builds a compiler that rebuilds itself
 to a byte-identical fixpoint, under gcc, clang and the vendored tcc, and
@@ -165,6 +166,29 @@ again and lists the ones that still fail. <code>make fuzz-reduce FILE=&lt;findin
 OUT=&lt;file&gt;</code> shrinks one finding while it shows the same defect -- runs of
 lines first, then runs of tokens -- so that what is left can become a
 fixture.</p>
+<p><code>make fuzz-gen</code> runs the same tool as a <strong>generator</strong>
+(<code>zfuzz --generate</code>). Each case is a new program that the generator writes
+from scratch: typed scalars of every width (i8 to i128, u8 to u128, f16,
+f32 and f64), every operator, conversions, locals, <code>if</code> and <code>match</code>
+values, counted loops with <code>break</code>, and functions that call each other and recurse.
+Each program is valid and stops, and the generator has a <strong>model</strong> -- an
+interpreter of its own -- that says what the program prints and how it
+exits. About one program in ten ends in a planned panic. Each constant
+expression is also written three ways -- a unit constant, the expression in
+a body, and a function over parameters -- so that the compiler's folding is
+checked against the C.</p>
+<p>The compiler built with AddressSanitizer emits each program's C once. The C
+is built and run under five configurations: gcc and clang at <code>-O0</code> with
+AddressSanitizer and UBSan, gcc and clang at <code>-O2</code>, and tcc. Every run must
+print what the model expects and exit as it expects. <code>zl fmt</code> also lays
+each program out: the layout must be final, <code>zl lint</code> must read it, and
+the layout must run like the program. A refusal is a finding too. Before a
+run, the model's integer arithmetic is checked against the output of
+<code>overflow_methods</code>, whose values are computed outside the compiler. A
+finding is kept in <code>out/fuzz-gen/findings</code>: the program, and what differed
+with the output the model expects. <code>make fuzz-gen SEED=7 N=20000</code> runs a
+campaign; <code>make ci</code> runs 320 programs of seed 11 (<code>fuzz-gen-ci</code>, about 30
+seconds alone).</p>
 <h2 id="the-test-runner"><a href="#the-test-runner">3. The test runner</a></h2>
 <p><code>out/ztestrunner --zc bin/zc --cc gcc --root .</code> runs the default kinds;
 <code>--only KIND</code> runs one; <code>--heavy</code> adds the self-host ASan run, the
@@ -239,8 +263,8 @@ it.</p>
 <p>Lists of expected failures, each read by one leg: the data files of
 <code>tests/known/</code> -- <code>leaks.zd</code>, and one per toolchain (<code>tcc.zd</code>,
 <code>mingw.zd</code>, ...) naming the cases it refuses or fails and the stage each
-stops at -- and <code>fuzz.zd</code>, the signatures the fixed-seed fuzz run is known
-to show.</p>
+stops at -- and <code>fuzz.zd</code> and <code>fuzzgen.zd</code>, the signatures the
+fixed-seed runs of the fuzzer and of the generator are known to show.</p>
 <p>Every list and table the tests keep is a data file: the case lists, the
 lists of expected failures, the ratchet baselines below, the two matrix
 tables (<code>matrix_expect.zd</code>, <code>constparity_expect.zd</code>) and the record of

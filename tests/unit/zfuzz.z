@@ -465,7 +465,10 @@ main: function is {
     match (
         parsed
     ) case ok then {
-        if (parsed.hasFlag name: "--generate") then {
+        if (parsed.option name: "--model-check").some then {
+            text: slurp path: (optionOr p: parsed name: "--model-check" d: "").stringView
+            if (model.checkGolden text: text.stringView) > 0 then os.exit code: 1
+        } else if (parsed.hasFlag name: "--generate") then {
             generateRun p: parsed
         } else if (corpusDirs p: parsed).length == 0 then {
             io.eprintln "zfuzz: --corpus is required without --generate"
@@ -483,7 +486,11 @@ main: function is {
 
 # fuzzSpec -- zfuzz's command line: its options and flags
 fuzzSpec: function out cli.Spec is {
-    sp: cli.Spec.create programName: "zfuzz".string summary: "token-mutation fuzzer for zc".string
+    sp: (
+        cli.Spec.create
+        programName: "zfuzz".string
+        summary: "fuzzer for zc: mutated corpus programs, or generated ones (--generate)".string
+    )
     (
         cli.addOption
         spec: sp
@@ -587,6 +594,12 @@ fuzzSpec: function out cli.Spec is {
         help: "where --reduce writes what is left".string
         required: false
     )
+    generateOptions :sp
+    return sp
+}
+
+# generateOptions -- the options of `--generate` mode, added to `sp`
+generateOptions: function {sp: cli.Spec} is {
     (
         cli.addFlag
         spec: sp
@@ -613,6 +626,14 @@ fuzzSpec: function out cli.Spec is {
     (
         cli.addOption
         spec: sp
+        name: "--model-check".string
+        shortName: "".string
+        help: "check the generator's model against overflow_methods' golden output".string
+        required: false
+    )
+    (
+        cli.addOption
+        spec: sp
         name: "--zl".string
         shortName: "".string
         help: "with --generate: the formatter to judge (zl fmt, zl lint)".string
@@ -626,7 +647,6 @@ fuzzSpec: function out cli.Spec is {
         help: "with --generate: how many C configurations to run (5); 0 only emits".string
         required: false
     )
-    return sp
 }
 
 # run -- the fuzz run the command line `p` asks for
@@ -679,7 +699,7 @@ run: function {p: cli.Parsed.view} is {
         }
     }
     print "zfuzz: seed \{seed}, \{cases} cases, \{built} built, \{cases - built - total} refused, \{total} findings (\{kinds.length} distinct)"
-    report :p :kinds :shown :seed :count :total
+    report :p :kinds :shown :seed :count :total header: knownHeader
 }
 
 # numberOption -- the option `name` of the command line as a number, or `d`
@@ -733,6 +753,8 @@ report: function {
     seed: u64
     count: u64
     total: u64
+    # the comment heading a written --known file
+    header: StringView
 } is {
     knownPath: optionOr :p name: "--known" d: ""
     if knownPath.length == 0 then {
@@ -745,19 +767,24 @@ report: function {
         return
     }
     if (p.hasFlag name: "--write-known") then {
-        writeKnown path: knownPath.stringView :kinds :seed :count
+        writeKnown path: knownPath.stringView :kinds :seed :count :header
         print "zfuzz: wrote \{kinds.length} signatures to \{knownPath}"
         return
     }
     if (judgeAgainstKnown path: knownPath.stringView :kinds :shown).not then os.exit code: 1
 }
 
+# genKnownHeader -- knownHeader for the fixed-seed run of --generate
+genKnownHeader: "# fuzzgen -- the findings the fixed-seed run of `zfuzz --generate` in `make ci`\n# is known to show, each a signature in `findings`, from the run of `seed` with\n# `cases` programs. Each is a defect not fixed yet. The run fails on a\n# signature not listed here, and on a listed one it no longer shows: fix the\n# defect and delete its line in the same change. `make fuzz-gen-known` writes\n# this file from a run."
+
 # knownHeader -- the comment that heads the data file of known signatures
 knownHeader: "# fuzz -- the findings the fixed-seed fuzz run of `make ci` is known to show,\n# each a signature in `findings`, from the run of `seed` with `cases` cases.\n# Each is a defect of zc that is not fixed yet. The run fails on a signature\n# not listed here, and on a listed one it no longer shows: fix the defect and\n# delete its line in the same change. `make fuzz-known` writes this file from\n# a run."
 
 # writeKnown -- write the signatures `kinds` to the data file `path`, in order,
 # with the run they come from
-writeKnown: function {path: StringView kinds: List String seed: u64 count: u64} is {
+writeKnown: function {
+    path: StringView kinds: List String seed: u64 count: u64 header: StringView
+} is {
     kinds.sort
     items: List zd.Entry
     for each k: kinds loop items.append (
@@ -776,7 +803,7 @@ writeKnown: function {path: StringView kinds: List String seed: u64 count: u64} 
         node: zd.Node.listValue items.take
     )
     doc: zd.entry name: "fuzz" type: "" node: zd.Node.unitValue defs.take
-    (zd.write :path header: knownHeader schema: "" :doc).orPanic
+    (zd.write :path :header schema: "" :doc).orPanic
 }
 
 # judgeAgainstKnown -- compare the signatures a run showed, `kinds`, with the
@@ -1312,7 +1339,7 @@ generateRun: function {p: cli.Parsed.view} is {
         }
     }
     print "zfuzz generate: seed \{seed}, \{cases} programs, \{passed} passed, \{total} findings (\{kinds.length} distinct)"
-    report :p :kinds :shown :seed :count :total
+    report :p :kinds :shown :seed :count :total header: genKnownHeader
 }
 
 # judgeOf -- the judge the command line `p` describes

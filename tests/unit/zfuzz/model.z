@@ -852,3 +852,108 @@ decimal: function {v: zv neg: bool} out String is {
     for digits.length > 0 loop s.appendByte 48 + digits.pop
     return s
 }
+
+# ---------------- self-check ----------------
+
+# checkGolden -- the model's integer arithmetic against `text`, the output of
+# emitc_corpus/overflow_methods, whose values are computed outside the
+# compiler: each line `<type> add|sub|mul <a> <b> = <value or none>` or
+# `<type> sat <a> <b> = <add> <sub> <mul>`. The lines the model disagrees
+# with, each printed; the number of lines checked is printed last.
+checkGolden: function {text: StringView} out u64 is {
+    bad: u64
+    n: u64
+    for each line: text.lines loop {
+        words: List String
+        for each w: (line.split sep: " ") loop words.append w.string
+        if words.length >= 6 then {
+            n = n + 1
+            if (checkLine :words).not then {
+                print "MODEL \{line}"
+                bad = bad + 1
+            }
+        }
+    }
+    print "model: \{n} lines checked, \{bad} differ"
+    return bad
+}
+
+# checkLine -- whether the model gives the golden line `words` its values
+checkLine: function {words: (List String).view} out bool is {
+    t: tyNamed name: (words.get i: 0).stringView
+    if t == prog.ty.bool then return false
+    a: parseDecimal s: (words.get i: 2).stringView
+    b: parseDecimal s: (words.get i: 3).stringView
+    kind: (words.get i: 1).stringView
+    if kind == goldenWord.sat then {
+        if words.length < 8 then return false
+        ok: (satText o: prog.op.add :t :a :b) == (words.get i: 5)
+        ok = ok and ((satText o: prog.op.sub :t :a :b) == (words.get i: 6))
+        return ok and ((satText o: prog.op.mul :t :a :b) == (words.get i: 7))
+    }
+    o: prog.op.add
+    if kind == goldenWord.sub then o = prog.op.sub
+    if kind == goldenWord.mul then o = prog.op.mul
+    ir: intArith :o :t :a :b
+    got: show v: ir.v :t
+    if ir.over then got = "none".string
+    return got == (words.get i: 5)
+}
+
+# goldenWord -- the operation words of overflow_methods' output
+goldenWord: list {
+    add: "add"
+    sub: "sub"
+    mul: "mul"
+    sat: "sat"
+} out staticlist StringView
+
+# satText -- the saturating `a o b` of type `t` as text: an exact result
+# outside `t` becomes the end it passed
+satText: function {o: u8 t: u8 a: zv b: zv} out String is {
+    ir: intArith :o :t :a :b
+    if ir.over.not then return (show v: ir.v :t)
+    info: prog.tys.get i: t.u64
+    w: (info.bits.u64.or d: 8) - 1
+    one: zv lo: 1 hi: 0
+    top: sub128 a: (shl128 a: one n: w) b: one
+    if info.signed.not then top = add128 a: (shl128 a: top n: 1) b: one
+    bottom: zv
+    if info.signed then bottom = bitNot a: top
+    low: false
+    if info.signed then {
+        low = isNeg v: a
+        if o == prog.op.mul then low = (isNeg v: a) != (isNeg v: b)
+    } else {
+        low = o == prog.op.sub
+    }
+    if low then return (show v: bottom :t)
+    return (show v: top :t)
+}
+
+# tyNamed -- the type a program names `name`; bool for none
+tyNamed: function {name: StringView} out u8 is {
+    k: u64
+    for k < prog.tys.length loop {
+        if (prog.tys.get i: k).name.stringView == name then return (k.u8.or d: 0)
+        k = k + 1
+    }
+    return prog.ty.bool
+}
+
+# parseDecimal -- the integer `s` spells in decimal, a `-` first for a
+# negative one, as 128 bits
+parseDecimal: function {s: StringView} out zv is {
+    v: zv
+    neg: s.startsWith "-"
+    i: u64
+    if neg then i = 1
+    ten: zv lo: 10 hi: 0
+    for i < s.length loop {
+        d: (s.byteAt :i).or d: 48
+        v = add128 a: (mul128 a: v b: ten) b: (zv lo: d - 48 hi: 0)
+        i = i + 1
+    }
+    if neg then return (neg128 a: v)
+    return v
+}

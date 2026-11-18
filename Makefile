@@ -112,7 +112,7 @@ SKIP     := mathutil genmath dissectlib
 EXAMPLES := $(wildcard examples/*.z)
 NAMES    := $(filter-out $(SKIP),$(basename $(notdir $(EXAMPLES))))
 
-.PHONY: all check complexity-report style-lint-fast style-lint test doc-check arch-check emitted-check ci ci-gates ci-legs gate-guards gate-same-c ci-corpus fuzz fuzz-ci fuzz-known fuzz-recheck fuzz-reduce \
+.PHONY: all check complexity-report style-lint-fast style-lint test doc-check arch-check emitted-check ci ci-gates ci-legs gate-guards gate-same-c ci-corpus fuzz fuzz-ci fuzz-known fuzz-recheck fuzz-reduce fuzz-gen fuzz-gen-ci fuzz-gen-known \
 	test-math-arm64 test-sqlite-arm64 test-mingw test-tcc-mingw test-msvc-wine test-msvc-corpus ci-windows windows-guest windows-due test-math-noasm test-portable-scalars math-asm-guard \
 	bench-math bench-math-kernels test-clang test-tcc test-tcc-heavy readable-check build \
 	tcc zc zl zls regen-goldens regen-fmt-goldens regen-matrix matrix-guard regen-constparity constparity-guard regen-math-asm \
@@ -290,7 +290,7 @@ gate-same-c: $(GATE_SAME_C)
 # ci-gates -- the gates ci runs in parallel, after perf-strict: the per-batch
 # gate's legs and the slower corpus runs only ci makes.
 CI_ONLY := complexity-report readable-check test-tcc-heavy test-clang \
-	test-o2 test-math-arm64 test-sqlite-arm64 mode-parity fuzz-ci ci-corpus
+	test-o2 test-math-arm64 test-sqlite-arm64 mode-parity fuzz-ci fuzz-gen-ci ci-corpus
 ci-gates: $(GATE_GUARDS) $(GATE_SAME_C) $(CI_ONLY)
 
 # ci-legs -- ci-gates' legs on one line, which `zgate time gates` runs one at a
@@ -915,6 +915,45 @@ endif
 fuzz-known: out/zc-asan out/zfuzz
 	@rm -rf $(BUILDDIR)/fuzz-ci
 	$(FUZZ_CI_RUN) --write-known
+
+# fuzz-gen -- zfuzz --generate: N typed programs decided by SEED, each emitted
+# once by the AddressSanitizer build of the compiler and built and run under
+# the five C configurations (gcc and clang at -O0 with ASan+UBSan and at -O2,
+# and tcc), and laid out by zl. Every run must print what the generator's
+# model expects, and the model is first checked against overflow_methods'
+# golden output. A finding is kept in out/fuzz-gen/findings.
+# `make fuzz-gen SEED=7 N=20000` for a campaign.
+FUZZ_GEN_TOOLS := out/zc-asan out/zfuzz bin/zl $(BUILDDIR)/tcc
+FUZZ_GEN_ARGS = --zc $(CURDIR)/out/zc-asan --system $(CURDIR)/lib/system \
+	  --tcc $(CURDIR)/$(BUILDDIR)/tcc --tcc-lib $(CURDIR)/$(TCCLIB) --zl $(CURDIR)/bin/zl
+FUZZ_MODEL_CHECK = out/zfuzz --zc $(CURDIR)/out/zc-asan --system $(CURDIR)/lib/system \
+	  --work $(CURDIR)/$(BUILDDIR) --model-check tests/fixtures/run_golden/overflow_methods.out
+fuzz-gen: $(FUZZ_GEN_TOOLS)
+	@rm -rf $(BUILDDIR)/fuzz-gen
+	@$(FUZZ_MODEL_CHECK)
+	out/zfuzz --generate $(FUZZ_GEN_ARGS) --work $(CURDIR)/$(BUILDDIR)/fuzz-gen --seed $(SEED) --count $(N)
+
+# fuzz-gen-ci -- the fixed-seed generator run of `make ci`: it fails on a finding
+# whose signature tests/known/fuzzgen.zd does not list, and on a listed one the
+# run no longer shows. `make fuzz-gen-known` writes that file from the run.
+FUZZ_GEN_CI_SEED := 11
+FUZZ_GEN_CI_N := 320
+FUZZ_GEN_KNOWN := tests/known/fuzzgen.zd
+FUZZ_GEN_CI_RUN = out/zfuzz --generate $(FUZZ_GEN_ARGS) --work $(CURDIR)/$(BUILDDIR)/fuzz-gen-ci \
+	  --seed $(FUZZ_GEN_CI_SEED) --count $(FUZZ_GEN_CI_N) --known $(FUZZ_GEN_KNOWN)
+ifdef WINDOWS_HOST
+fuzz-gen-ci:
+	@echo "fuzz-gen-ci: skipped (Linux only: it judges programs under gcc and clang with AddressSanitizer, which no UCRT64 gcc has; the Linux run judges the same programs)"
+else
+fuzz-gen-ci: $(FUZZ_GEN_TOOLS)
+	@rm -rf $(BUILDDIR)/fuzz-gen-ci
+	@$(FUZZ_MODEL_CHECK)
+	$(FUZZ_GEN_CI_RUN)
+endif
+
+fuzz-gen-known: $(FUZZ_GEN_TOOLS)
+	@rm -rf $(BUILDDIR)/fuzz-gen-ci
+	$(FUZZ_GEN_CI_RUN) --write-known
 
 # fuzz-recheck -- build every saved finding under DIR again, at any depth, and
 # list the ones that still fail with their signatures:
