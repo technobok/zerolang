@@ -272,7 +272,7 @@ renderDefault: function {
                 stating
                 :facts
                 from: constFacts
-                text: (floatBitsC bits: (ztypecheck.floatLexemeBits lex: lt.stringView :k) :k)
+                text: (floatBitsC :ctx bits: (ztypecheck.floatLexemeBits lex: lt.stringView :k) :k)
             )
         }
         wlD: (
@@ -412,12 +412,14 @@ narrowConstToKind: function {v: i64 k: ztypes.numkind} out i64 is {
 # f16 (whose every value a double spells), nothing for an f64 -- so every C
 # compiler reads the same value. "" for an infinity,
 # which the checker refuses before it gets here.
-floatValueC: function {prog: Program.view v: ztypes.cval k: ztypes.numkind} out String is {
-    return (floatBitsC bits: (ztypecheck.constFloatBits typing: prog.typing :v :k) :k)
+floatValueC: function {prog: Program.view ctx: Ctx v: ztypes.cval k: ztypes.numkind} out String is {
+    return (floatBitsC :ctx bits: (ztypecheck.constFloatBits typing: prog.typing :v :k) :k)
 }
 
-# floatBitsC -- floatValueC for the bits themselves
-floatBitsC: function {bits: math.BigInt.view k: ztypes.numkind} out String is {
+# floatBitsC -- floatValueC for the bits themselves. An f16 constant is the
+# prelude's Z_F16_C, the type's own value where the C compiler has _Float16 and
+# its bits where it has none.
+floatBitsC: function {ctx: Ctx bits: math.BigInt.view k: ztypes.numkind} out String is {
     mb: (ztypes.mantissaOf :k) - 1
     eb: ztypes.floatExpBits :k
     one: math.BigInt from: 1
@@ -426,7 +428,10 @@ floatBitsC: function {bits: math.BigInt.view k: ztypes.numkind} out String is {
     if field == ((1 << eb.i64.orPanic) - 1) then return "".string
     bias: (1 << (eb - 1).i64.orPanic) - 1
     r: String
-    if k.f16Type then r.append "Z_F16_C("
+    if k.f16Type then {
+        preludeNeed :ctx memb: "@f16_c"
+        r.append "Z_F16_C("
+    }
     if k.f128Type then r.append "(__extension__ "
     if (bits.bit i: mb + eb) == 1 then r.append "-"
     # the fraction's bits, padded to whole hex digits
@@ -474,7 +479,7 @@ cvalText: function {
         text: (intCvalText :prog :ctx :tid :v)
     )
     if v.kind.fvalKind then {
-        return (stating :facts from: constFacts text: (floatCvalText :prog :tid :v))
+        return (stating :facts from: constFacts text: (floatCvalText :prog :ctx :tid :v))
     }
     if v.kind.armKind then return (values.armCvalText :prog :ctx :v :facts)
     if v.kind.aggKind then return (aggCvalText :prog :ctx :v :facts)
@@ -566,13 +571,14 @@ bigValueC: function {ctx: Ctx b: math.BigInt.view} out String is {
 # written as holds nearest it, an f64 where the type is no float one.
 floatCvalText: function {
     prog: Program.view
+    ctx: Ctx
     tid: ztypes.tid
     v: ztypes.cval
 } out String is {
     fk: constScalarKindForTid :prog :tid
     k: ztypes.numkind.f64Type
     if fk.has when (ztypes.isFloatKind k: fk.kind) then k = fk.kind
-    return (floatValueC :prog :v :k)
+    return (floatValueC :prog :ctx :v :k)
 }
 
 # cvalStrText -- the C text for a folded STRING value: a `_zcsN` static minted
