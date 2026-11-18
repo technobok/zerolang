@@ -2121,6 +2121,14 @@ armLeafLocal: function {st: zenv.ZSymbolTable ast: Ast.view nid: zast.nodeid} ou
     return cur
 }
 
+# armLeafReadsRef -- an arm's bare-name value reads a reference: the type it
+# reads, which inside a match arm is the narrowed payload and not the
+# variable's declared sum -- a number read out of a union is a copy, and hands
+# the union on no more than a number read out of a record does
+armLeafReadsRef: function {st: zenv.ZSymbolTable.view nid: zast.nodeid} out bool is {
+    return (st.reg.isReftypeOf tid: (walkTypeOf :st :nid))
+}
+
 # armLeafBorrowed -- an arm's bare-name value reads a borrowed variable: the
 # name is a reference, whichever scope declared it
 armLeafBorrowed: function {st: zenv.ZSymbolTable.view nid: zast.nodeid} out bool is {
@@ -2375,7 +2383,7 @@ armLeafPins: function {
     none: pinread owned: false marker: ztypes.zparamownership.noneMode
     from: armLeafLocal :st :ast nid: leaf
     if from.notZero then {
-        if borrowing then armLocalPin :st :ast :leaf :from :writes :dst
+        if borrowing then armLocalPin :st :ast :leaf :writes :dst
         return none
     }
     if borrowing then fieldReadPin :st :ast :vt nid: leaf :writes :dst
@@ -2388,19 +2396,18 @@ armLeafPins: function {
     return (pinread owned: pinned and vp.owned marker: vp.marker)
 }
 
-# armLocalPin -- an arm that yields the bare reftype local `from` of an enclosing
-# scope: the binding is a second name for it on that arm's path, so it pins it
-# as `b: w` does, readonly through a readonly local.
+# armLocalPin -- an arm `leaf` that yields a bare reference local of an
+# enclosing scope: the binding is a second name for it on that arm's path, so
+# it pins it as `b: w` does, readonly through a readonly local.
 armLocalPin: function {
     st: zenv.ZSymbolTable
     ast: Ast.view
     leaf: zast.nodeid
-    from: ztypes.vid
     # the destination may write through the local
     writes: bool
     dst: List ztyping.PinPath
 } is {
-    if (st.reg.isReftypeOf tid: (st.reg.variableTypeOf id: from)).not then return
+    if (armLeafReadsRef :st nid: leaf).not then return
     np: ListVal zast.nameid
     np.append (zast.atomNameIdOf n: (ast.nodes.get i: leaf))
     mw: (pathIsReadonly :st path: np).not and writes
@@ -2768,7 +2775,7 @@ refuseArmLeavesIntoOwned: function {st: zenv.ZSymbolTable ast: Ast rasgn: reasgr
     armValueLeaves :st :ast nid: rasgn.value into: leaves
     for each lf: leaves loop {
         from: armLeafLocal :st :ast nid: lf
-        if from.notZero when (st.reg.isReftypeOf tid: (st.reg.variableTypeOf id: from)) then {
+        if from.notZero when (armLeafReadsRef :st nid: lf) then {
             (
                 reportModeChange
                 :st
@@ -6008,7 +6015,7 @@ moveArmLeavesIntoArgument: function {
     armValueLeaves :st :ast nid: arg.operation into: leaves
     for each lf: leaves loop {
         from: armLeafLocal :st :ast nid: lf
-        if from.notZero when (st.reg.isReftypeOf tid: (st.reg.variableTypeOf id: from)) then {
+        if from.notZero when (armLeafReadsRef :st nid: lf) then {
             partial: armLeafIsPartial :st :ast :leaves :from
             nm: zast.nameTextAt :ast ref: (zast.atomNameIdOf n: (ast.nodes.get i: lf))
             (
@@ -6514,7 +6521,7 @@ recordReturnedOwnedLocal: function {
             from: armLeafLocal :st :ast nid: lf
             if from.notZero then {
                 lt: st.reg.variableTypeOf id: from
-                if (st.reg.isReftypeOf tid: lt) then {
+                if (armLeafReadsRef :st nid: lf) then {
                     partial: armLeafIsPartial :st :ast :leaves :from
                     returnOwnedLocal :st :ast nid: lf vid: from tid: lt
                     # the arm hands the local out on its path, as a binding of

@@ -1,0 +1,43 @@
+# match_value_union_scalar -- a match value whose arm yields a union's narrowed
+# number payload hands on a copy of the number, not the union: it locks
+# nothing and is no borrowed value. Before the fix each of these was refused:
+# the union passed beside it ("already has exclusive lock held by a
+# temporary"), the payload read beside it ("Cannot take shared lock"), and
+# the value stored in an owned local ("Cannot reassign owned 'w' with a
+# borrowed value").
+
+Un: union {
+    c1: f32
+    c2: u64
+    c3: i64
+}
+
+pick: function {n: i32} out Un is {
+    if n > 10.i32 then return (Un.c3 -5)
+    if n > 0.i32 then return (Un.c2 42.u64)
+    return (Un.c1 1.5.f32)
+}
+
+both: function {u: Un k: u64} out u64 is {
+    if u.c2 then return k + 1.u64
+    return k
+}
+
+twice: function {u: Un f: bool} out i64 is {
+    r: 0.i64
+    match (
+        u
+    ) case c3 then {
+        r = u.not + (match f case true then u case false then 0.i64)
+    } else null
+    return r
+}
+
+main: function is {
+    v: pick n: 3.i32
+    print "both \{both u: v k: (match v case c2 then v else 0.u64)}"
+    print "twice \{twice u: (pick n: 20.i32) f: true}"
+    w: 7.u64
+    w = match v case c2 then v else w
+    print "stored \{w}"
+}
