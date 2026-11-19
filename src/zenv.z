@@ -501,6 +501,9 @@ FunctionState: class {
 ValueState: class {
     # the next synthesised name's number, so two temps never collide
     nextTempId: u64
+    # each re-point companion's borrow, which a diagnostic names for it: the
+    # companion holds what the borrow refers to
+    companionOf: (IdMapV ztypes.vid v: ztypes.vid)
     # the unnamed locals the statement line being walked has made, by name:
     # read, and dropped, when the line ends
     lineUnnamedLocals: ListVal zast.nameid
@@ -918,6 +921,7 @@ newWalkState: function out WalkState is {
         value: (
             ValueState
             nextTempId: 0
+            companionOf: (IdMapV ztypes.vid v: ztypes.vid)
             lineUnnamedLocals: ListVal zast.nameid
             draft: (
                 ValueDraft
@@ -1639,6 +1643,16 @@ ZSymbolTable: class {
     defineVar: function {t: this nameId: zast.nameid vid: ztypes.vid} is {
         t.reg.setVariableName id: vid name: nameId
         t.defineLocal :nameId ztypeId: (t.reg.variableTypeOf id: vid) varId: vid
+    }
+
+    # newTempName -- the name of one of the checker's unnamed locals: `#t` and a
+    # number. `#` starts a comment, so no identifier holds one: a source name
+    # never resolves to it, and its lock paths never meet a source name's.
+    newTempName: function {t: this pool: zast.StringPool} out zast.nameid is {
+        tn: t.walk.value.nextTempId
+        t.walk.value.nextTempId = tn + 1
+        text: "#t\{tn}"
+        return (zast.poolSet :pool text: text.stringView)
     }
 
     # defineTemp -- a binding for one of the checker's own temporaries, which no
@@ -2641,11 +2655,13 @@ ZSymbolTable: class {
         return (t.walk.value.tempVars.has item: vid)
     }
 
-    # the variable holding a lock, by its local's name
+    # the variable holding a lock, by its local's name; a re-point companion by
+    # its borrow's
     formatVarHolder: function {
         t: this.view pool: zast.StringPool.view vid: ztypes.vid
     } out String is {
-        nmId: t.localNameOfVar :vid
+        named: (t.walk.value.companionOf.get key: vid).or d: vid
+        nmId: t.localNameOfVar vid: named
         if nmId.isZero then return "<var:\{vid}>"
         return (zast.poolTextCopy :pool ref: nmId)
     }

@@ -4736,15 +4736,12 @@ mintReceiverTemp: function {
     # would then free twice.
     exN: st.walk.value.tempNameOf.get key: recvNid
     if exN.some then return exN
-    tn: st.walk.value.nextTempId
-    st.walk.value.nextTempId = tn + 1
-    tname: "_t\{tn}"
     # WHAT A VALUE IS HELD IN DOES NOT ALWAYS OWN IT (valueIsLent): a temporary
     # over storage something else owns would free that storage.
     rown: ztypes.zownership.owned
     if (valueIsLent :st :ast nid: recvNid) then rown = ztypes.zownership.borrowed
     vid: st.reg.newVariable ztypeId: recvT ownership: rown
-    tnId: zast.poolSet pool: ast.names text: tname.stringView
+    tnId: st.newTempName pool: ast.names
     st.defineTemp nameId: tnId :vid
     # a view of it may leave the scope it is bound in -- an argument carrying
     # it out of a call -- and the result that keeps it adopts it there
@@ -5444,7 +5441,7 @@ checkWriteLock: function {
     )
 }
 
-# hoistArg -- hoist a non-trivial call argument into a fresh `_tN` synth temp:
+# hoistArg -- hoist a non-trivial call argument into a fresh synth temp:
 # define the temp (OWNED, synth origin anf) in the open CALL scope, record it as
 # the argument's temporary (tempOf), and, for the dump only, the synth
 # Assignment / AtomId rows + their type stamps (hoistRows). The parsed argument
@@ -5461,10 +5458,7 @@ hoistArg: function {
     argPins: List ztyping.PinPath
     # the call holds the argument's path itself (lockFieldArgForCall)
     callHolds: false
-} out String is {
-    tn: st.walk.value.nextTempId
-    st.walk.value.nextTempId = tn + 1
-    tname: "_t\{tn}"
+} out zast.nameid is {
     # the argument's position
     ln: u32
     co: u32
@@ -5512,7 +5506,7 @@ hoistArg: function {
         id: vid
         origin: (valuechecks.pinRootAt pins: hpins i: 0)
     )
-    tnId: zast.poolSet pool: ast.names text: tname.stringView
+    tnId: st.newTempName pool: ast.names
     st.defineTemp nameId: tnId :vid
     # the hoisted temp is the user-written hoist made explicit: it borrows
     # its source path for the call scope (SHARED prefixes, leaf kind from
@@ -5566,8 +5560,8 @@ hoistArg: function {
     }
     if assignId.notZero then st.typing.setDefVariable nid: assignId :vid
     if st.recording then st.typing.tempOf.set key: argId value: vid
-    if consumes then st.invalidate nameId: (nameIdOf :ast name: tname.stringView) loc: takenHere
-    return tname
+    if consumes then st.invalidate nameId: tnId loc: takenHere
+    return tnId
 }
 
 # hoistRows -- the synth Assignment / AtomId rows a hoisted argument shows as
@@ -5722,7 +5716,7 @@ lockFieldArgForCall: function {
 moveTakenTempLocks: function {
     st: zenv.ZSymbolTable
     ast: Ast
-    tnm: String.view
+    tnm: zast.nameid
     # the argument is an owned value with locks, at a taking parameter
     taken: bool
     # the callable whose receiver could keep the temporary, zero when none
@@ -5734,7 +5728,7 @@ moveTakenTempLocks: function {
     arg: argref
 } is {
     if taken.not then return
-    tkd: st.findLocal nameId: (nameIdOf :ast name: tnm.stringView)
+    tkd: st.findLocal nameId: tnm
     tkv: st.typing.declLocalVarOf declId: tkd
     if tkv.isZero then return
     # a `w.take` argument is reported as w
@@ -5878,7 +5872,7 @@ lockNonTrivialArg: function {
         if rootIsVar then pinTemp = argIsFresh :st :ast nid: arg.operation
     }
     if pinTemp then {
-        tnId: nameIdOf :ast name: tnm.stringView
+        tnId: tnm
         pinsAppendOne :pins nameId: tnId shared: isViewArg mutable: isViewArg.not
         tvo: st.lookupVarId nameId: tnId
         if tvo.some then {
@@ -5893,7 +5887,7 @@ lockNonTrivialArg: function {
             lockCallArg
             :st
             pool: ast.names
-            nameId: (nameIdOf :ast name: tnm.stringView)
+            nameId: tnm
             callId: call.nid
             shared: true
             mutable: isViewArg.not
