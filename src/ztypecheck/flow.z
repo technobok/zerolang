@@ -95,6 +95,15 @@ constHeldArm: function {st: zenv.ZSymbolTable.view v: ztypes.cval} out zast.name
     return v.armName
 }
 
+# heldArmOfConst -- the arm the match subject `subject` holds when it is a sum
+# constant (constHeldArm of its recorded value); 0 for any other subject.
+heldArmOfConst: function {st: zenv.ZSymbolTable.view subject: zast.nodeid} out zast.nameid is {
+    v: st.typing.nodeConstAt nid: subject
+    if v.isConst.not then return zast.nameid
+    if v.kind.aggKind.not when v.armName.isZero then return zast.nameid
+    return (constHeldArm :st :v)
+}
+
 # recordConstMatchFold -- a match whose subject is a unit constant's name selects
 # the arm the constant holds, as an `if` on a constant condition selects its
 # branch (foldIfBranch): only that arm's body is emitted.
@@ -2060,7 +2069,8 @@ missingArms: function {
 # caseIsExhaustive -- whether an else-less match covers every arm its subject
 # can still hold, reporting the missing ones when it does not. Narrowing and
 # construction both shrink that set, so the answer is about what the subject
-# can reach here, not about the type's full arm list.
+# can reach here, not about the type's full arm list: a constant holds the one
+# arm its value has, and a match no path reaches holds none.
 caseIsExhaustive: function {
     st: zenv.ZSymbolTable
     ast: Ast.view
@@ -2071,8 +2081,14 @@ caseIsExhaustive: function {
     covered: (List String).view
 } out bool is {
     if isSum.not then return false
+    if st.isUnreachable then return true
     required: List String
-    consteval.requiredArms :st :ast :subjT :targetName into: required
+    held: heldArmOfConst :st subject: casenode.subject
+    if held.notZero then {
+        required.append (zast.poolTextCopy pool: ast.names ref: held)
+    } else {
+        consteval.requiredArms :st :ast :subjT :targetName into: required
+    }
     missing: List String
     missingArms :required :covered into: missing
     if missing.length == 0 then return true
