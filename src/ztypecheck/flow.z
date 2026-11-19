@@ -2563,6 +2563,38 @@ dissectArmByValue: function {ast: Ast.view m: zast.caserow.view value: u64} out 
     return zast.nodeid
 }
 
+# refuseNonNumeralCases -- a match on a numeric parameter dissects by value: each
+# `case` names one, an integer numeral, and one that is no numeral (`case other`)
+# could never match and is refused.
+refuseNonNumeralCases: function {
+    st: zenv.ZSymbolTable
+    ast: Ast.view
+    m: zast.caserow.view
+    pname: StringView
+} is {
+    for each cId: (zast.kidsOf :ast span: m.clauses) loop {
+        cnode: ast.nodes.get i: cId
+        if cnode.caseclause when cnode.name.notZero then {
+            cnt: zast.poolTextAt pool: ast.names ref: cnode.name
+            if (numeralBits text: cnt.stringView).none then {
+                arm: ast.nodes.get i: cnode.matcharm
+                (
+                    addErrorWithHint
+                    :st
+                    nodeid: (zast.nodeIdOf n: arm)
+                    lineno: (nodeLine n: arm)
+                    colno: (nodeCol n: arm)
+                    e: zast.err.genericError
+                    msg: "a case of a match on the numeric parameter '\{pname}' names a value, and '\{cnt}' is no integer numeral"
+                    note: "".string
+                    hint: "write the value the case selects, such as `case 0`".string
+                    width: cnt.length
+                )
+            }
+        }
+    }
+}
+
 # numeralBits -- an integer numeral's two's-complement bits (`-5`, `0x10`), none
 # for any other text.
 numeralBits: function {text: StringView} out optionval u64 is {
@@ -2813,6 +2845,7 @@ checkDissectedArm: function {
                 ownerTid: st.typing.curMonoStamp
                 :darg
             )
+            if darg.valueArg then refuseNonNumeralCases :st :ast m: mn pname: pname.stringView
         }
     }
     rebindSkippedArms :st :ast :casenode :win
