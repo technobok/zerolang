@@ -7108,7 +7108,8 @@ checkResolvedMethodCall: function {
 # reftype payload moves in, its locks with it, which the value being built
 # keeps as a construction keeps a moved-in field's (pushCarriedPins); any other
 # payload's locks come in its record (composeChildRecord). A non-owned arm pins
-# its payload instead (pinPayloadOfArm).
+# its payload instead (pinPayloadOfArm), whatever its family: it holds a
+# pointer to a valtype as to a reftype, as a `.view` parameter does.
 movePayloadIntoArm: function {
     st: zenv.ZSymbolTable
     ast: Ast
@@ -7124,13 +7125,13 @@ movePayloadIntoArm: function {
     armId: zast.nameid
 } is {
     if vt.isZero then return
-    if (st.reg.isReftypeOf tid: vt).not then return
     if (st.typing.declIsBorrowedFieldId parentTypeId: dtp nameId: armId) then {
         amd: st.typing.declMemberIdOf parentTypeId: dtp nameId: armId
         armView: (st.typing.decls.get i: amd).ownership == ztypes.zparamownership.viewMode
         pinPayloadOfArm :st :ast :op :armView :nodeid :lineno :colno
         return
     }
+    if (st.reg.isReftypeOf tid: vt).not then return
     carry: List ztyping.PinPath
     bn: zast.atomNameIdOf n: (ast.nodes.get i: op)
     if bn.notZero then {
@@ -7157,11 +7158,12 @@ movePayloadIntoArm: function {
 }
 
 # pinPayloadOfArm -- a non-owned arm (`some: T.borrow`, `some: t.view`) holds a
-# reference into its payload's source, as a non-owned field does: a bare-name
-# payload is pinned for the life of the value built at the arm's strength --
-# EXCLUSIVE for `.borrow`, SHARED for `.view` -- its owner keeps it, and nothing
-# is moved. Any other payload (a path, a
-# call) brings the pins its own expression took.
+# reference into its payload's source, as a non-owned field does: a payload
+# that names a variable or a field of one is pinned for the life of the value
+# built at the arm's strength -- EXCLUSIVE for `.borrow`, SHARED for `.view` --
+# its owner keeps it, and nothing is moved. A value that names no storage -- a
+# call's result, a literal, a constant, a function's name -- has nothing for
+# the arm to point at, and is refused, as a marker on it is.
 pinPayloadOfArm: function {
     st: zenv.ZSymbolTable
     ast: Ast
@@ -7190,7 +7192,19 @@ pinPayloadOfArm: function {
         )
         return
     }
-    if (st.lookupVarId nameId: (pth.get i: 0)).none then return
+    if (st.lookupVarId nameId: (pth.get i: 0)).none then {
+        rnm: zast.nameTextAt :ast ref: (pth.get i: 0)
+        (
+            addError
+            :st
+            :nodeid
+            :lineno
+            :colno
+            e: zast.err.ownerError
+            msg: "a non-owned arm points into its payload's source, and '\{rnm}' names no storage: bind the value to a name first"
+        )
+        return
+    }
     own: ztypes.zparamownership.borrowMode
     if armView then own = ztypes.zparamownership.viewMode
     stampArgDisposition :st :ast :op :own
