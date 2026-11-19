@@ -29,6 +29,7 @@ public: unit {
     :walkjob
     :sumArmNames
     :sumArmNameIds
+    :isSumArm
     :isImplementationLabelOf
     :newSymbolTable
     :formatPath
@@ -182,17 +183,52 @@ sumArmNameIds: function {
     n8: ty.declRowSlots ownerTid: ot8
     for i8 < n8 loop {
         r8: ty.declRowAt ownerTid: ot8 membersOnly: true slot: i8
+        # an arm is what the type declares as one (an arm may carry a function);
+        # a type not declared yet answers by its rows' kinds
+        ka: ty.declRowIsArm ownerTid: ot8 slot: i8
         i8 = i8 + 1
         if r8.keep then {
-            armTid: r8.tid
+            isArm: ka.or d: (undeclaredRowIsArm :reg tid: r8.tid)
             # an implementation marker is a member of its type but no arm of it
-            if (isExcludableKind k: (reg.typetypeOf typeId: armTid)) when (
-                reg.isTagGenericOriginOf
-                typeId: armTid
-            ).not when (isImplementationLabelOf :ty :reg tid: ot8 nameId: r8.name
+            if isArm when (isImplementationLabelOf :ty :reg tid: ot8 nameId: r8.name
             ).not then ids.append r8.name
         }
     }
+}
+
+# isSumArm -- `nameId` is one of sumArmNameIds's arms of `tid`, asked of the one
+# name: a child the type declares as an arm, or of a type not declared yet a
+# row its type reads as one, and no implementation marker.
+isSumArm: function {
+    ty: ZTyping.view
+    reg: ztypes.ZTypeRegistry.view
+    tid: ztypes.tid
+    nameId: zast.nameid
+} out bool is {
+    # a partial carries no rows of its own: its template's arms are its arms
+    ot: tid
+    if (reg.isPartialOf :tid) then {
+        po: reg.genericOriginOf :tid
+        if po.notZero then ot = po
+    }
+    md: ty.declMemberIdOf parentTypeId: ot :nameId
+    isArm: false
+    if md.notZero then {
+        isArm = (ty.decls.get i: md).kind.armDecl
+    } else {
+        pv: ty.declPendMemberType parentTypeId: ot :nameId
+        if pv.isZero then return false
+        isArm = undeclaredRowIsArm :reg tid: pv
+    }
+    if isArm.not then return false
+    return (isImplementationLabelOf :ty :reg tid: ot :nameId).not
+}
+
+# undeclaredRowIsArm -- a row of a type not declared yet, of type `tid`, read as
+# an arm by its type alone: a function, a tag or an enum member is none.
+undeclaredRowIsArm: function {reg: ztypes.ZTypeRegistry.view tid: ztypes.tid} out bool is {
+    if (isExcludableKind k: (reg.typetypeOf typeId: tid)).not then return false
+    return (reg.isTagGenericOriginOf typeId: tid).not
 }
 
 # sumArmNames -- sumArmNameIds as texts, for the readers that spell an arm
