@@ -4302,6 +4302,9 @@ dispatchArgText: function {
     prog: Program.view
     ctx: Ctx
     n: astnode.view
+    # the vtable method and the parameter the argument lands in
+    fid: ztypes.tid
+    pnameId: zast.nameid
     facts: exprfacts.borrow
 } out String is {
     ctx.order.lastArgByPtr = false
@@ -4312,18 +4315,33 @@ dispatchArgText: function {
         return (stating :facts from: avF text: sit)
     }
     atid: stampIdOf :prog nid: (interpPartNodeId :n)
-    apfx: String
-    chasedColTid: chaseAggregateTypedef :prog :ctx tid: atid
-    if (chasedColTid == atid).not then apfx = "&".string
-    if (
-        types.isCollectionOriginTid
+    # the slot takes the argument as the implementing method does
+    # (types.protoParamCtype): by pointer where its parameter is passed by
+    # reference, as an ordinary call's argument is (paramTakesPointer)
+    pid: (
+        types.specParamTid
+        :prog
+        pid: ((prog.typing.declChildOfId parentTypeId: fid nameId: pnameId).or d: ztypes.tid.zero)
+    )
+    ptra: (
+        paramTakesPointer
+        :prog
         :ctx
-        originTid: (originTidOf :prog tid: atid)
-    ) then apfx = "&".string
-    # a value view goes by value, as the slot takes it (protoParamCtype)
-    if (types.isValueViewTid :prog :ctx tid: atid) then apfx = "".string
-    ctx.order.lastArgByPtr = apfx.length > 0
-    if (pathIsPointer :prog :ctx :n) then apfx = "".string
+        :fid
+        :pnameId
+        :pid
+        takesArg: (paramTakesArg :prog :fid :pnameId)
+    )
+    apfx: String
+    if ptra then apfx = "&".string
+    ctx.order.lastArgByPtr = ptra
+    if ptra when (
+        argAlreadyPointer
+        :prog
+        :ctx
+        :n
+        vid: (atomVidIfPlain :prog :ctx :n text: av.stringView)
+    ) then apfx = "".string
     # a value a call returns has no address: it is bound to a temp first, freed
     # when the checker's temporary owns it (a view it does not)
     if apfx.length > 0 when avF.place.not then {

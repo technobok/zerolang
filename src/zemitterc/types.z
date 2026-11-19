@@ -2208,13 +2208,7 @@ maybePreEmitElem: function {
     buf: String.borrow
 } is {
     if eid.isZero then return
-    elemTid: eid
-    elemName: prog.reg.nameOf tid: eid
-    if (definedInUnitTid :prog tid: eid).isZero when elemName.length > 0 then {
-        srid: canonTypeId :prog tid: eid
-        if srid.notZero then elemTid = srid
-    }
-    cid: chaseAggregateTypedef :prog :ctx tid: elemTid
+    cid: preEmitTargetOf :prog :ctx :eid
     # a type written C never reaches is not written: an ordinal field is its
     # scalar, so its enum is reached only where a tag constant is spelled
     if (nativerows.typeReached reach: ctx.reach tid: cid).not then return
@@ -2258,6 +2252,37 @@ maybePreEmitElem: function {
         emitUnionMono :prog :ctx tid: cid :buf
     }
     emitplan.ctxBindMain known: ctx.known name: smPe.stringView unitDecl: smPeD
+}
+
+# preEmitSlotType -- a type a protocol's or a facet's vtable slot names, as its
+# return or a parameter: the slot is a function pointer, whose prototype needs
+# only a declaration of the types it names, so a forward-declared one (a class,
+# a record, a union -- isFwdDeclared) is left to its own place in the order. A
+# class holding the protocol by value comes after the protocol, and emitting it
+# here would put it first. A type with no forward declaration (a variant, a
+# facet) is emitted ahead, as maybePreEmitElem does.
+preEmitSlotType: function {
+    prog: Program.view
+    ctx: Ctx
+    eid: ztypes.tid
+    buf: String.borrow
+} is {
+    if eid.isZero then return
+    if (isFwdDeclared typeDefs: ctx.typeDefs tid: (preEmitTargetOf :prog :ctx :eid)) then return
+    maybePreEmitElem :prog :ctx :eid :buf
+}
+
+# preEmitTargetOf -- the type a pre-emit of `eid` writes: a shell named after a
+# system type is its canonical type, and an aggregate typedef the end of its
+# chain.
+preEmitTargetOf: function {prog: Program.view ctx: Ctx eid: ztypes.tid} out ztypes.tid is {
+    elemTid: eid
+    elemName: prog.reg.nameOf tid: eid
+    if (definedInUnitTid :prog tid: eid).isZero when elemName.length > 0 then {
+        srid: canonTypeId :prog tid: eid
+        if srid.notZero then elemTid = srid
+    }
+    return (chaseAggregateTypedef :prog :ctx tid: elemTid)
 }
 
 # preEmitEmbeddedTypes -- emit the main-unit user types a variant/record/class
@@ -3938,13 +3963,19 @@ methodRetCtype: function {
     return "".string
 }
 
-# protoParamCtype -- a protocol spec-method param's C type: typeRefC, with a
-# `*` for an owned collection param (List/Map and the Bytes typedef), which the
-# vtable function pointers and wrappers pass by pointer. A value view
-# (ListView, the ByteView typedef) goes by value, as everywhere else.
+# protoParamCtype -- a protocol's or a facet's spec-method parameter's C type,
+# in its vtable slot and its wrappers: the implementing method's own parameter
+# type (argforms.paramCType), which conformance makes the spec's -- a pointer
+# where the parameter is passed by reference (a class, an owning union, a
+# borrowed String, a List, a marked valtype), const where it is a view. The
+# wrapper hands its parameters on to the implementing method as they are, so
+# the slot cannot differ from it.
 protoParamCtype: function {
     prog: Program.view
     ctx: Ctx
+    # the spec method and the parameter
+    fid: ztypes.tid
+    pnameId: zast.nameid
     pid: ztypes.tid
 } out String is {
     # The spec param is usually a SHELL named after the system type; canonicalize
@@ -3952,13 +3983,7 @@ protoParamCtype: function {
     # collection mono). A param already resolved to a CANONICAL id (a linked
     # declaration, e.g. system i64) is trusted as-is. Mirrors typeRefC's shell
     # gate.
-    cpid: pid
-    pidShell: (definedInUnitTid :prog tid: pid).isZero
-    if pidShell then {
-        rcid: canonTypeId :prog tid: pid
-        if rcid.notZero then cpid = rcid
-    }
-    pct: typeRefC :prog :ctx tid: cpid
+    pct: argforms.paramCType :prog :ctx :fid :pnameId pid: (specParamTid :prog :pid)
     if pct.length == 0 then {
         (
             emitFail
@@ -3966,14 +3991,17 @@ protoParamCtype: function {
             what: "an interface slot's parameter type the C backend cannot spell".string
             line: 0
         )
-        return "".string
     }
-    isCol: false
-    ccm: chaseAggregateTypedef :prog :ctx tid: cpid
-    if (ccm == cpid).not then isCol = true
-    if (isCollectionOriginTid :ctx originTid: (originTidOf :prog tid: cpid)) then isCol = true
-    if isCol when (isValueViewTid :prog :ctx tid: cpid).not then return "\{pct}*"
     return pct
+}
+
+# specParamTid -- a spec method's parameter type as the C backend resolves it:
+# a shell named after a system type is that type.
+specParamTid: function {prog: Program.view pid: ztypes.tid} out ztypes.tid is {
+    if (definedInUnitTid :prog tid: pid).notZero then return pid
+    rcid: canonTypeId :prog tid: pid
+    if rcid.notZero then return rcid
+    return pid
 }
 
 # facetImplTids -- the deduplicated impl type ids implementing to facet `tid`,
@@ -4062,7 +4090,7 @@ emitOneFacet: function {
         }
         mroP: ztypecheck.methodReturnOf reg: prog.reg typing: prog.typing mid: smid
         if mroP.some then {
-            maybePreEmitElem :prog :ctx eid: mroP :buf
+            preEmitSlotType :prog :ctx eid: mroP :buf
         }
         ret: cReturnText ret: (methodRetCtype :prog :ctx mid: smid)
         vparams: "void*".string
@@ -4070,7 +4098,7 @@ emitOneFacet: function {
         pids: ListVal ztypes.tid
         pidsNm: ListVal zast.nameid
         callorder.recFieldLists :prog tid: smid names: pnames ids: pids nameIds: pidsNm
-        preEmitEmbeddedTypes :prog :ctx ids: pids :buf
+        for each sp: pids loop preEmitSlotType :prog :ctx eid: sp :buf
         pi: u64
         pn: pnames.length
         for pi < pn loop {
@@ -4086,7 +4114,7 @@ emitOneFacet: function {
             rpnV: prog.reg.thisParamNameIdOf tid: smid
             if rpnV.notZero when (pidsNm.get i: pi) == rpnV then isThis = true
             if isThis.not then {
-                pct: protoParamCtype :prog :ctx :pid
+                pct: protoParamCtype :prog :ctx fid: smid pnameId: (pidsNm.get i: pi) :pid
                 vparams.append ", "
                 vparams.append pct
             }
@@ -4173,7 +4201,7 @@ emitOneProtocol: function {
         }
         mroP: ztypecheck.methodReturnOf reg: prog.reg typing: prog.typing mid: smid
         if mroP.some then {
-            maybePreEmitElem :prog :ctx eid: mroP :buf
+            preEmitSlotType :prog :ctx eid: mroP :buf
         }
         ret: cReturnText ret: (methodRetCtype :prog :ctx mid: smid)
         vparams: "void*".string
@@ -4181,7 +4209,7 @@ emitOneProtocol: function {
         pids: ListVal ztypes.tid
         pidsNm: ListVal zast.nameid
         callorder.recFieldLists :prog tid: smid names: pnames ids: pids nameIds: pidsNm
-        preEmitEmbeddedTypes :prog :ctx ids: pids :buf
+        for each sp: pids loop preEmitSlotType :prog :ctx eid: sp :buf
         pi: u64
         pn: pnames.length
         for pi < pn loop {
@@ -4192,7 +4220,7 @@ emitOneProtocol: function {
             rpnV: prog.reg.thisParamNameIdOf tid: smid
             if rpnV.notZero when (pidsNm.get i: pi) == rpnV then isThis = true
             if isThis.not then {
-                pct: protoParamCtype :prog :ctx :pid
+                pct: protoParamCtype :prog :ctx fid: smid pnameId: (pidsNm.get i: pi) :pid
                 vparams.append ", "
                 vparams.append pct
             }
@@ -4390,7 +4418,7 @@ emitImplementationImpl: function {
             rpnW: prog.reg.thisParamNameIdOf tid: smid
             if rpnW.notZero when (pidsNm.get i: pi) == rpnW then isThis = true
             if isThis.not then {
-                pct: protoParamCtype :prog :ctx :pid
+                pct: protoParamCtype :prog :ctx fid: smid pnameId: (pidsNm.get i: pi) :pid
                 pnmP: (
                     memberC
                     :prog

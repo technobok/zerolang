@@ -4644,6 +4644,8 @@ appendSlottedDispatchArgs: function {
     prog: Program.view
     ctx: Ctx
     call: zast.callrow.view
+    # the vtable method
+    fid: ztypes.tid
     vpn: (ListVal zast.nameid).view
     dargs: String
 } out String is {
@@ -4660,6 +4662,8 @@ appendSlottedDispatchArgs: function {
                     :prog
                     :ctx
                     op: (prog.ast.nodes.get i: a.operation)
+                    :fid
+                    pnameId: (vpn.get i: argSlot)
                     slot: argSlot
                     :ord
                 )
@@ -4688,12 +4692,15 @@ orderDispatchArg: function {
     prog: Program.view
     ctx: Ctx
     op: astnode.view
+    # the vtable method and the parameter the argument lands in
+    fid: ztypes.tid
+    pnameId: zast.nameid
     slot: u64
     ord: orderstate.borrow
 } is {
     mk: pendingHoistMark stmt: ctx.stmt
     txtF: exprfacts
-    txt: argforms.dispatchArgText :prog :ctx n: op facts: txtF
+    txt: argforms.dispatchArgText :prog :ctx n: op :fid :pnameId facts: txtF
     constant: (
         orderConstantWith
         :prog
@@ -4766,7 +4773,8 @@ emitProtocolDispatch: function {
     # a dispatch call has arguments, so its method has slots for them: one that
     # takes its receiver alone is auto-called, on another path
     vpn: dispatchSlotNames :prog :rtid :mnId
-    prefix: appendSlottedDispatchArgs :prog :ctx :call :vpn :dargs
+    mtid: (prog.typing.declChildOfId parentTypeId: rtid nameId: mnId).or d: ztypes.tid.zero
+    prefix: appendSlottedDispatchArgs :prog :ctx :call fid: mtid :vpn :dargs
     dslot: memberC :prog :ctx owner: rtid kind: memberkind.slot nameId: mnId
     return (
         stating

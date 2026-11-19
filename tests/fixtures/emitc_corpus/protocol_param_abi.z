@@ -1,0 +1,75 @@
+# A protocol's or a facet's vtable slot takes each parameter as the
+# implementing method does, so the wrapper hands it on unchanged and a call
+# through the vtable passes it as an ordinary call does: a class by pointer
+# (a write through a `.borrow` one reaches the caller), a `.take` class by
+# value, an owning union, a borrowed List, a `.take` List, a Map, a `.view`
+# record, a borrowed String.
+Cnt: class { n: i64 }
+Opt: union {
+    has: String
+    none: null
+}
+Rec: record { x: i64 }
+Ops: protocol {
+    bump: function {t: this.view c: Cnt.borrow} out i64
+    eat: function {t: this.view c: Cnt.take} out i64
+    peek: function {t: this.view o: Opt} out u64
+    sum: function {t: this.view xs: (ListVal i64)} out i64
+    keep: function {t: this.view xs: (ListVal i64).take} out i64
+    look: function {t: this.view m: (MapRV String v: i64)} out i64
+    rx: function {t: this.view r: Rec.view} out i64
+    named: function {t: this.view s: String} out u64
+}
+Impl: class { k: i64 } as {
+    ops: Ops.implement
+    bump: function {t: this.view c: Cnt.borrow} out i64 is {
+        c.n = c.n + t.k
+        return c.n
+    }
+    eat: function {t: this.view c: Cnt.take} out i64 is { return c.n + t.k }
+    peek: function {t: this.view o: Opt} out u64 is {
+        match (o) case has then return o.length case none then return 0
+    }
+    sum: function {t: this.view xs: (ListVal i64)} out i64 is {
+        s: t.k
+        for each x: xs loop s = s + x
+        return s
+    }
+    keep: function {t: this.view xs: (ListVal i64).take} out i64 is { return (xs.length.i64.or d: 0) }
+    look: function {t: this.view m: (MapRV String v: i64)} out i64 is {
+        k: "a".string
+        g: m.get key: k
+        match (g) case some then return g case none then return -1
+    }
+    rx: function {t: this.view r: Rec.view} out i64 is { return r.x + t.k }
+    named: function {t: this.view s: String} out u64 is { return s.length }
+}
+Sz: facet {
+    width: function {t: this.view r: Rec.view} out i64
+}
+Fv: record { w: i64 } as {
+    sz: Sz.implement
+    width: function {t: this.view r: Rec.view} out i64 is { return t.w * r.x }
+}
+main: function is {
+    o: Ops.create from: (Impl k: 10)
+    c: Cnt n: 1
+    print "bump \{o.bump :c} \{c.n}"
+    print "eat \{o.eat c: (Cnt n: 5)}"
+    print "peek \{o.peek o: (Opt.has "abcd".string)} \{o.peek o: Opt.none}"
+    xs: ListVal i64
+    xs.append 1
+    xs.append 2
+    print "sum \{o.sum :xs} \{xs.length}"
+    ys: ListVal i64
+    ys.append 7
+    print "keep \{o.keep xs: ys.take}"
+    m: MapRV String v: i64
+    m.set key: "a".string value: 3
+    print "look \{o.look :m}"
+    r: Rec x: 4
+    print "rx \{o.rx :r}"
+    print "named \{o.named s: "hey".string}"
+    f: Sz.create from: (Fv w: 3)
+    print "facet \{f.width :r}"
+}
