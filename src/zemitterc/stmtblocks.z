@@ -2554,6 +2554,14 @@ matchOrdinalPairRoute: function {
     return false
 }
 
+# genericInstOf -- the instance whose generic arguments the body being emitted
+# reads: a method's own instance when it has type parameters of its own, else
+# the receiver type (a function's own instance is that).
+genericInstOf: function {ctx: Ctx.view} out ztypes.tid is {
+    if ctx.known.curInstTid.notZero then return ctx.known.curInstTid
+    return ctx.known.curThisTid
+}
+
 # matchGenericRoute -- a subject whose type is a GENERIC PARAMETER, named either
 # bare or through a dotted path, dissects instead of switching: there is no
 # tag to switch on until the parameter is bound. True when it took the match.
@@ -2574,21 +2582,20 @@ matchGenericRoute: function {
         nid: (interpPartNodeId n: (prog.ast.nodes.get i: m.subject))
     )
     if subjSid.notZero when (prog.reg.isTypeParamOf tid: subjSid) then {
-        # the parameter's name, from its declaration in the owner's template
+        # the parameter the subject names, bound by the instance or by the one it
+        # belongs to (ztypecheck.dissectedArgOf), as the checker read it
         paramName: (
-            prog.reg.genericParamNameOfTid
-            tdecl: (
-                prog.typing.declIdOfType
-                typeId: (types.genericOriginTid :prog tid: ctx.known.curThisTid)
-            )
-            ptid: subjSid
+            ztypecheck.dissectionParamName
+            typing: prog.typing
+            ast: prog.ast
+            subject: m.subject
         )
         (
             emitGenericDissect
             :prog
             :ctx
             :m
-            ownerTid: ctx.known.curThisTid
+            ownerTid: (genericInstOf :ctx)
             :paramName
             :assignTo
             :ind
@@ -2603,7 +2610,7 @@ matchGenericRoute: function {
         dleafId: aliasChildNameId :prog n: (prog.ast.nodes.get i: dcore)
         dbnid: dottedBaseNodeId :prog n: (prog.ast.nodes.get i: dcore)
         dbst: stampIdOf :prog nid: dbnid
-        downer: ctx.known.curThisTid
+        downer: genericInstOf :ctx
         if (prog.reg.genericArgCount specId: dbst) > 0 then downer = dbst
         if downer.notZero when dleafId.notZero then {
             dkey: types.genericOwnerKey :prog ownerTid: downer

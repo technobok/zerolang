@@ -1,0 +1,82 @@
+# A compile-time `match` on a generic parameter selects its arm by what the
+# instance binds the parameter to -- the instance of the function itself, or the
+# instance it belongs to, outward: a generic unit's parameter read in a member
+# with type parameters of its own, a generic class's parameter read in a method
+# with type parameters of its own, the method's own parameter, and a generic
+# unit's parameter read in a class it declares. A unit constant matched in a
+# generic function is no parameter: its own value selects the arm.
+ops: unit as {
+    t: anyval.generic
+    kind: function as { u: anyval.generic } in { v: t w: u } out i64 is {
+        a: match (t) case i64 then 1 case f64 then 2 else 3
+        b: match (u) case bool then 10 case u8 then 20 else 30
+        return a + b
+    }
+}
+
+ints: (ops t: i64)
+flts: (ops t: f64)
+
+Box: class {
+    val: T
+} as {
+    T: AnyRef.generic
+    only: function as { m: anyval.generic } in {:this k: m} out StringView is {
+        match T case String then {
+            return "string"
+        } else {
+            return "else"
+        }
+    }
+    own: function as { m: anyval.generic } in {:this k: m} out StringView is {
+        match m case i64 then {
+            return "int"
+        } else {
+            return "other"
+        }
+    }
+}
+
+gu: unit as {
+    w: anyval.generic
+    Slot: class {
+        used: u32
+        which: function {:this} out StringView is {
+            match cap case 0 then {
+                return "zero"
+            } else {
+                return "else"
+            }
+        }
+        outer: function {:this} out StringView is {
+            match w case bool then {
+                return "bool"
+            } else {
+                return "notbool"
+            }
+        }
+    } as { cap: u32.generic }
+}
+
+gb: (gu w: bool)
+
+shape: choice {
+    circle: i64
+    square: i64
+    dot: null
+}
+
+SH: (shape.square 4)
+
+show: function as { t: anyval.generic } in { v: t } out i64 is {
+    match SH case circle then return 1 case square then return 2 case dot then return 3
+}
+
+main: function is {
+    print "\{ints.kind v: 1 w: true} \{flts.kind v: 1.5 w: 7.u8} \{ints.kind v: 2 w: 3.5}"
+    b: Box val: "s".string
+    print "\{b.only k: 1} \{b.own k: 1} \{b.own k: true}"
+    s: (gb.Slot cap: 0) used: 0
+    print "\{s.which} \{s.outer}"
+    print "\{show v: 5}"
+}

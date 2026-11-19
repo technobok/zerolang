@@ -4455,6 +4455,27 @@ refuseYieldedLocks: function {st: zenv.ZSymbolTable ast: Ast arg: argref argT: z
     )
 }
 
+# paramDeclFromWalk -- the declaration whose generic parameter `nameId` is, found
+# from the function being walked -- its template's declaration (templateDeclOf),
+# whether the walk is the template's or an instance's -- outward through the
+# declarations enclosing it: a method's own parameters, then its class's, then
+# its unit's. 0 when none on the way out declares it.
+paramDeclFromWalk: function {
+    st: zenv.ZSymbolTable.view
+    nameId: zast.nameid
+} out ztypes.declid is {
+    ft: st.walk.fn.currentFnTid
+    if ft.isZero then ft = st.walk.fn.curMonoFnTid
+    if ft.isZero then ft = st.typing.curMonoStamp
+    if ft.isZero or nameId.isZero then return ztypes.declid.zero
+    d: templateDeclOf reg: st.reg typing: st.typing tid: ft
+    for d.notZero loop {
+        if (st.reg.isGenericParamOf tdecl: d name: nameId) then return d
+        d = st.typing.declParentOf declId: d
+    }
+    return ztypes.declid.zero
+}
+
 # caseGenericSubjectTid -- the type of a `match` subject that is not a value: a
 # bare generic parameter, resolved against the enclosing generic context so it
 # stamps as a genericParam and the emitter can dissect it per mono. 0 when the
@@ -4465,61 +4486,39 @@ caseGenericSubjectTid: function {
     ast: Ast.view
     casenode: caseref
 } out ztypes.tid is {
-    subjT: ztypes.tid
     gsn: flow.subjectAtomName :ast n: (ast.nodes.get i: casenode.subject)
-    if gsn.length > 0 then {
-        gdecl: ztypes.declid
-        {
-            gdecl = (
-                declOfUnitDef
-                :st
-                scope: st.curScope
-                unitDecl: st.walk.fn.synthOwnerUnit
-                nameId: st.walk.fn.synthOwnerName
-            )
-        }
-        if gdecl.notZero when (
-            st.reg.isGenericParamOf
-            tdecl: gdecl
-            name: (nameIdOf :ast name: gsn.stringView)
-        ).not then {
-            gdecl = ztypes.declid.zero
-        }
-        if gdecl.isZero then {
-            gur: unitDecl
-            if gur.notZero when (
-                st.reg.isGenericParamOf
-                tdecl: gur
-                name: (nameIdOf :ast name: gsn.stringView)
-            ) then gdecl = gur
-        }
-        if gdecl.isZero when st.typing.curMonoStamp.notZero then {
-            # a mono-clone body walk: the subject's template is the
-            # current mono's generic origin
-            mog: ztypes.tid
-            mgo: st.reg.genericOriginOf tid: st.typing.curMonoStamp
-            if mgo.notZero then mog = mgo
-            if mog.notZero then {
-                gdecl = st.typing.declIdOfType typeId: mog
-                if gdecl.notZero when (
-                    st.reg.isGenericParamOf
-                    tdecl: gdecl
-                    name: (nameIdOf :ast name: gsn.stringView)
-                ).not then gdecl = ztypes.declid.zero
-            }
-        }
-        if gdecl.isZero when gdecl.isZero then gdecl = (
-            bodies.monoSubjectDecl
-            :st
-            :ast
-            :unitDecl
-            gsn: gsn.stringView
-        )
-        if gdecl.notZero then {
-            subjT = declare.genericParamSubjectTid :st :ast :casenode :gdecl gsn: gsn.stringView
-        }
-    }
-    return subjT
+    if gsn.length == 0 then return ztypes.tid
+    # the function being walked, then the declarations enclosing it: a method's
+    # own parameters, its class's, its unit's
+    gdecl: paramDeclFromWalk :st nameId: (nameIdOf :ast name: gsn.stringView)
+    if gdecl.isZero then gdecl = synthOrUnitParamDecl :st :unitDecl :ast gsn: gsn.stringView
+    if gdecl.isZero then return ztypes.tid
+    return (declare.genericParamSubjectTid :st :ast :casenode :gdecl gsn: gsn.stringView)
+}
+
+# synthOrUnitParamDecl -- the declaration whose generic parameter `gsn` a `match`
+# subject names when the walk has no function of its own to start from
+# (paramDeclFromWalk): the definition a synthesised body belongs to, else the
+# unit, else a unit-level template the walk carries the name of
+# (bodies.monoSubjectDecl). 0 when none declares it.
+synthOrUnitParamDecl: function {
+    st: zenv.ZSymbolTable
+    unitDecl: ztypes.declid
+    ast: Ast.view
+    gsn: StringView
+} out ztypes.declid is {
+    gid: nameIdOf :ast name: gsn
+    sd: (
+        declOfUnitDef
+        :st
+        scope: st.curScope
+        unitDecl: st.walk.fn.synthOwnerUnit
+        nameId: st.walk.fn.synthOwnerName
+    )
+    if sd.notZero when (st.reg.isGenericParamOf tdecl: sd name: gid) then return sd
+    if unitDecl.notZero when (st.reg.isGenericParamOf tdecl: unitDecl name: gid
+    ) then return unitDecl
+    return (bodies.monoSubjectDecl :st :ast :unitDecl :gsn)
 }
 
 # caseSubjectTid -- type a match's subject. A subject that types to nothing and

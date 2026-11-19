@@ -2604,9 +2604,37 @@ dissectArmByType: function {
     return zast.nodeid
 }
 
-# dissectedArgOf -- what the instance `ownerTid` bound its template's generic
-# parameter `paramName` to; a type argument of no type when the owner is no
-# instance of a template declaring that parameter.
+# dissectionOwnerOf -- the instance that binds the generic parameter `paramName`
+# where the instance `ownerTid` is walked or emitted: `ownerTid` itself when it
+# carries an argument for the parameter its template (templateDeclOf) declares,
+# else the instance it belongs to, outward. A function written in a generic unit
+# or class takes the enclosing instance's parameters, which its own instance does
+# not carry: its template may list them after its own, but the instance's
+# arguments are its own parameters'. 0 when no instance on the way out binds it.
+dissectionOwnerOf: function {
+    reg: ztypes.ZTypeRegistry.view
+    typing: ztyping.ZTyping.view
+    ownerTid: ztypes.tid
+    paramName: zast.nameid
+} out ztypes.tid is {
+    cur: ownerTid
+    for cur.notZero loop {
+        orig: reg.genericOriginOf tid: cur
+        if orig.notZero then {
+            ord: reg.paramOrdinalOf tdecl: (templateDeclOf :reg :typing tid: cur) :paramName
+            if ord.some when ord < (reg.genericArgCount specId: cur) then return cur
+        }
+        nxt: reg.ownerTidOf tid: cur
+        if nxt.isZero when orig.notZero then nxt = reg.ownerTidOf tid: orig
+        cur = nxt
+    }
+    return ztypes.tid.zero
+}
+
+# dissectedArgOf -- what the instance `ownerTid` -- or the enclosing instance
+# that binds it (dissectionOwnerOf) -- bound the generic parameter `paramName`
+# to; a type argument of no type when no instance on the way out declares that
+# parameter.
 dissectedArgOf: function {
     reg: ztypes.ZTypeRegistry.view
     typing: ztyping.ZTyping.view
@@ -2614,14 +2642,26 @@ dissectedArgOf: function {
     paramName: zast.nameid
 } out ztypes.genericarg is {
     none: ztypes.genericarg.typeArg ztypes.tid.zero
-    if ownerTid.isZero then return none
-    orig: reg.genericOriginOf tid: ownerTid
-    if orig.isZero then return none
-    tk: typing.declIdOfType typeId: orig
-    if tk.isZero then return none
-    ord: reg.paramOrdinalOf tdecl: tk :paramName
+    inst: dissectionOwnerOf :reg :typing :ownerTid :paramName
+    if inst.isZero then return none
+    ord: reg.paramOrdinalOf tdecl: (templateDeclOf :reg :typing tid: inst) :paramName
     if ord.none then return none
-    return (reg.genericArgAt specId: ownerTid ordinal: ord)
+    return (reg.genericArgAt specId: inst ordinal: ord)
+}
+
+# dissectionParamName -- the generic parameter a `match` subject names: the bare
+# name, or the numeric parameter a read recorded in numericParamRead reads (the
+# parameter through a name of the instance, `match B8.cap`). A named constant
+# whose value is the parameter (`SAME: cap`) is no subject: spec.pdoc, a `match`
+# never dissects a named constant. 0 for a subject that is no name.
+dissectionParamName: function {
+    typing: ztyping.ZTyping.view
+    ast: Ast.view
+    subject: zast.nodeid
+} out zast.nameid is {
+    np: typing.numericParamRead.get key: subject
+    if np.some then return np
+    return (atomNameId :ast n: (ast.nodes.get i: subject))
 }
 
 # dissectedArgText -- the argument `darg` the instance `ownerTid` bound its
@@ -2665,8 +2705,9 @@ dissectedArmOf: function {
     ) case valueArg then {
         win = dissectArmByValue :ast :m value: darg
     } case typeArg then {
-        # the template's own declaration is the scope its arms are written in
-        tsc: typing.declIdOfType typeId: (reg.genericOriginOf tid: ownerTid)
+        # the template's own declaration is the scope its arms are written in --
+        # through a copy of it (a class or unit instance's) to the declaration
+        tsc: templateDeclOf :reg :typing tid: ownerTid
         win = dissectArmByType :typing :ast :m scope: tsc :darg
     }
     if win.isZero then win = m.elseclause
@@ -2754,8 +2795,8 @@ checkDissectedArm: function {
     {
         mn: ast.nodes.get i: casenode.nid
         if mn.caseexpr then {
-            pname = subjectAtomName :ast n: (ast.nodes.get i: mn.subject)
-            pnId = nameIdOf :ast name: pname.stringView
+            pnId = dissectionParamName typing: st.typing :ast subject: mn.subject
+            pname = zast.nameTextCopy :ast ref: pnId
             darg = (
                 dissectedArgOf
                 reg: st.reg
@@ -2804,40 +2845,91 @@ markInstanceDissection: function {st: zenv.ZSymbolTable ast: Ast.view casenode: 
     sn: nodeId n: (ast.nodes.get i: casenode.subject)
     if sn.isZero then return
     if (st.typing.rowIsForeign nid: sn) then return
-    dsn: subjectAtomName :ast n: (ast.nodes.get i: casenode.subject)
-    if dsn.length == 0 then return
-    orig: st.reg.genericOriginOf tid: st.typing.curMonoStamp
-    if orig.isZero then return
-    tk: st.typing.declIdOfType typeId: orig
-    if tk.isZero then return
-    ptid: (
-        (st.reg.genericParamTidOf tdecl: tk paramName: (nameIdOf :ast name: dsn.stringView)).or
-        d: ztypes.tid.zero
+    pn: dissectionParamName typing: st.typing :ast subject: casenode.subject
+    if pn.isZero then return
+    # the parameter is the template's of the instance that binds it
+    inst: (
+        dissectionOwnerOf
+        reg: st.reg
+        typing: st.typing
+        ownerTid: st.typing.curMonoStamp
+        paramName: pn
     )
+    if inst.isZero then return
+    tk: templateDeclOf reg: st.reg typing: st.typing tid: inst
+    if tk.isZero then return
+    ptid: (st.reg.genericParamTidOf tdecl: tk paramName: pn).or d: ztypes.tid.zero
     if ptid.isZero then return
     ztyping.nodeTypeSet tbl: st.typing.nodeType nid: sn tid: ptid
 }
 
-# monoDissectionHandled -- on a per-mono instance walk, a subject that is a bare
-# TYPE name is a compile-time dissection: the match scope is closed and only the
-# selected arm is walked (checkDissectedArm). True when the subject is one.
+# monoDissectionHandled -- on a per-mono instance walk, a subject that names a
+# generic parameter some instance on the way out binds (dissectionParamName,
+# dissectedArgOf) is a compile-time dissection: the match scope is closed and only
+# the selected arm is walked (checkDissectedArm). A local of that name is a value,
+# and a name no instance binds -- a unit constant, a type -- is matched as what it
+# is. True when the subject is a dissection.
 monoDissectionHandled: function {
     st: zenv.ZSymbolTable
     ast: Ast.view
     casenode: caseref
     matchMarker: zenv.openpos
+    # asked before the subject is typed: a type parameter only, as a value
+    # parameter is typed (its singleton) first
+    typeOnly: bool
 } out bool is {
-    dsn: subjectAtomName :ast n: (ast.nodes.get i: casenode.subject)
-    if dsn.length > 0 then {
-        dsv: st.lookupVarId nameId: (nameIdOf :ast name: dsn.stringView)
-        match (
-            dsv
-        ) case some then null case none then {
-            st.popTo marker: matchMarker
-            return true
-        }
+    sn: atomNameId :ast n: (ast.nodes.get i: casenode.subject)
+    if sn.notZero when (st.lookupVarId nameId: sn).some then return false
+    pn: dissectionParamName typing: st.typing :ast subject: casenode.subject
+    if pn.isZero then return false
+    darg: (
+        dissectedArgOf
+        reg: st.reg
+        typing: st.typing
+        ownerTid: st.typing.curMonoStamp
+        paramName: pn
+    )
+    if (dissectionArgFound :darg).not then return false
+    if typeOnly when darg.valueArg then return false
+    st.popTo marker: matchMarker
+    return true
+}
+
+# instanceDissection -- an instance walk's `match` that is a compile-time
+# dissection (monoDissectionHandled): its subject marked as the parameter it
+# names, and only the arm the instance selects walked (checkDissectedArm); the
+# match's type then. None when the walk is no instance's or the match is no
+# dissection.
+instanceDissection: function {
+    st: zenv.ZSymbolTable
+    unitDecl: ztypes.declid
+    ast: Ast
+    casenode: caseref
+    matchMarker: zenv.openpos
+    typeOnly: bool
+    # the subject's type once typed; asked after typing, an untyped subject is
+    # no dissection
+    subjT: ztypes.tid
+} out optionval ztypes.tid is {
+    if st.typing.curMonoStamp.isZero then return (optionval.none ztypes.tid)
+    if typeOnly.not when subjT.isZero then return (optionval.none ztypes.tid)
+    if (monoDissectionHandled :st :ast :casenode :matchMarker :typeOnly).not then {
+        return (optionval.none ztypes.tid)
     }
-    return false
+    markInstanceDissection :st :ast :casenode
+    return (optionval.some (checkDissectedArm :st :unitDecl :ast :casenode))
+}
+
+# dissectionArgFound -- `darg` is an argument some instance bound: a value, or a
+# type that is not none.
+dissectionArgFound: function {darg: ztypes.genericarg} out bool is {
+    match (
+        darg
+    ) case valueArg then {
+        return true
+    } case typeArg then {
+        return darg.notZero
+    }
 }
 
 # checkCase -- walk a match: push the `match` scope, type the subject, push
@@ -2856,21 +2948,29 @@ checkCase: function {
 } out ztypes.tid is {
     statics.constFailClear :st
     matchMarker: st.pushBlock node: casenode.nid
-    # a typedef over a union or variant is matched on its base's arms
-    subjT: typedefSumBase :st tid: (valuechecks.caseSubjectTid :st :unitDecl :ast :casenode)
-    # per-mono instance walk: a subject that is a bare TYPE name (resolved
-    # by the instance's scope define, not a value) is a compile-time
-    # dissection -- only the arm this instance selects is walked
-    if st.typing.curMonoStamp.notZero when subjT.notZero when st.typing.curMonoStamp.notZero when subjT.notZero when (
-        monoDissectionHandled
+    # an instance walk's subject that names a generic parameter by name -- the
+    # instance's own or an enclosing one's -- is a dissection before it is read
+    # as a value: bound to a type, the name would read as that type's bare
+    # construction. One that reads as a parameter only through its type (a
+    # numeric parameter's alias) is asked below, once typed.
+    early: (
+        instanceDissection
         :st
+        :unitDecl
         :ast
         :casenode
         :matchMarker
-    ) then {
-        markInstanceDissection :st :ast :casenode
-        return (checkDissectedArm :st :unitDecl :ast :casenode)
-    }
+        typeOnly: true
+        subjT: ztypes.tid
+    )
+    if early.some then return early
+    # a typedef over a union or variant is matched on its base's arms
+    subjT: typedefSumBase :st tid: (valuechecks.caseSubjectTid :st :unitDecl :ast :casenode)
+    # per-mono instance walk: a subject that reads as a generic parameter only
+    # through its type (a numeric parameter's alias) is a compile-time
+    # dissection -- only the arm this instance selects is walked
+    late: instanceDissection :st :unitDecl :ast :casenode :matchMarker typeOnly: false :subjT
+    if late.some then return late
     if subjT.notZero when (st.reg.isTypeParamOf tid: subjT) then {
         # a genericParam subject IS a compile-time dissection: write the
         # marker stamp directly (an instance's row must carry the
