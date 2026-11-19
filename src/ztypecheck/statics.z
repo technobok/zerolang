@@ -3886,10 +3886,9 @@ constOfUnitMember: function {
 }
 
 # constValueOfMemberTidId -- the memoised compile-time value of a member of the
-# unit whose type id is `unitTid`. A nested namespace has no unit-name index
-# entry to reach it through, but resolveNamespaceUnit has already evaluated its
-# members against this id, so the read is a pure lookup rather than a descent.
-# Asked by the member's name id.
+# unit whose type id is `unitTid`, asked by the member's name id. A nested
+# namespace has no unit-name index entry to reach it through, so its members
+# are read off its type id. The first read folds that member alone.
 constValueOfMemberTidId: function {
     # the tree the constant's expression is read from
     ast: Ast
@@ -7283,6 +7282,21 @@ constFoldDecl: function {
     if (forInstancesOnly :st :ast owner: own defnId: opId) then return
     unm: unitRootOfDecl typing: st.typing :declId
     if unm.isZero then return
+    # a nested unit's constant is demanded as any definition is, the one
+    # member alone: the demand runs both channels (resolveConstantMember), and
+    # the shape channel reports what the value channel only finds no value for
+    # -- a construction whose head names nothing. A file unit's constant is
+    # demanded where its name is resolved, and a re-export by its own chase,
+    # which folds here to ask whether it is a constant.
+    if own != unm when (st.typing.decls.get i: declId).kind.constDecl when (
+        resolve.declIsNamespace
+        :st
+        :ast
+        declId: own
+    ) when (st.walk.consts.nsConstsDemanded.has item: declId).not then {
+        st.walk.consts.nsConstsDemanded.add item: declId
+        resolve.resolveDemandedDecl :st :ast :declId
+    }
     constFailClear :st
     valFound: (
         bodies.constValueOfMemberAt
