@@ -268,8 +268,11 @@ checkClauseBody: function {
     return (lastStmtType :st :ast block: (ast.nodes.get i: clause.statement))
 }
 
-# lastStmtType -- the resolved type id of a statement block's last statement
-# (the value of a do-block), or 0 when empty/untyped.
+# lastStmtType -- the type of what a statement block yields (the value of a
+# do-block, of an arm): its last statement's, or 0 when empty/untyped. A last
+# line that is a binding, a write or an exchange yields no value
+# (moves.lineIsStatementOnly, as the return of a body ending on one has none):
+# it answers `null`, which a value position refuses as it does an empty arm.
 lastStmtType: function {
     st: zenv.ZSymbolTable.view ast: Ast.view block: astnode.view
 } out ztypes.tid is {
@@ -284,6 +287,9 @@ lastStmtType: function {
             if last.statementline then {
                 lst: walkTypeOf :st nid: last.nodeid
                 if lst.notZero then result = lst
+                if (moves.lineIsStatementOnly :ast lineId: last.nodeid) then {
+                    result = st.typing.nullTypeId
+                }
             }
         }
     } else {
@@ -296,6 +302,17 @@ lastStmtType: function {
         }
     }
     return result
+}
+
+# forBodyValueTid -- the type a `for` body yields (lastStmtType). In value
+# position the body's value is an arm's: a control value's arms agree on one
+# type (moves.armValueOf), as a binding's do.
+forBodyValueTid: function {st: zenv.ZSymbolTable ast: Ast fornode: forref} out ztypes.tid is {
+    elemT: lastStmtType :st :ast block: (ast.nodes.get i: fornode.body)
+    if (st.walk.stmtBlocks.has item: fornode.body) then return elemT
+    av: moves.armValueOf :st :ast blockId: fornode.body
+    if av.nid.notZero then return av.tid
+    return elemT
 }
 
 # refuseUnitValue -- a unit -- a file unit, a nested one, a generic unit's
@@ -619,10 +636,7 @@ checkFor: function {
     # comprehension. Asked of the last statement's type instead, a bare
     # `return` handed back the builtin's own function type and a `List` of
     # it was minted, which the constraint check then refused by name.
-    if fornode.body.notZero when st.isUnreachable.not then {
-        fb: ast.nodes.get i: fornode.body
-        elemT = lastStmtType :st :ast block: fb
-    }
+    if fornode.body.notZero when st.isUnreachable.not then elemT = forBodyValueTid :st :ast :fornode
     # THE VALUE IS APPENDED, and only in value position: a statement loop
     # whose last line happens to have a value discards it, and stmtBlocks is
     # what says which this is (noteStatementBlocks runs before the walk reaches

@@ -3347,6 +3347,8 @@ armValueOf: function {st: zenv.ZSymbolTable ast: Ast blockId: zast.nodeid} out a
     vt: walkTypeOf :st nid: lineId
     if (isControlValue :ast nid: valId) then vt = valueArmsTid :st :ast nid: valId first: vt
     if vt.isZero or ((st.reg.typetypeOf typeId: vt) == ztypes.ztypetype.neverType) then return none
+    # a nested `if` or `match` one of whose arms yields nothing yields nothing
+    if vt == st.typing.nullTypeId then return none
     cf: st.typing.nodeConstAt nid: valId
     num: cf.kind.ivalKind or cf.kind.fvalKind
     # a nested `if` or `match` of literal arms yields the literal type itself
@@ -3360,8 +3362,11 @@ armValueOf: function {st: zenv.ZSymbolTable ast: Ast blockId: zast.nodeid} out a
 # used as an expression one result type. A typed arm governs an untyped literal
 # one, whose value must then fit it (checkNumericCoercion); untyped arms alone
 # yield what the first of them does, or the float one's type when one is a
-# float; two arms of different types are refused. The node is restamped with
-# the answer; `first` -- the first arm's type -- when no arm yields a value.
+# float; two arms of different types are refused. An arm that diverges yields
+# no value and is skipped; one that finishes without a value (a `null` body, a
+# binding last, a nested value with such an arm) makes the whole yield `null`,
+# which a value position refuses. The node is restamped with the answer;
+# `first` -- the first arm's type -- when no arm yields a value.
 valueArmsTid: function {
     st: zenv.ZSymbolTable
     ast: Ast
@@ -3371,9 +3376,21 @@ valueArmsTid: function {
     blocks: ListVal zast.nodeid
     valuechecks.controlArmBlocks :ast :nid into: blocks
     arms: ListVal armvalue
+    valueless: false
     for each blk: blocks loop {
         av: armValueOf :st :ast blockId: blk
-        if av.nid.notZero then arms.append from: av
+        if av.nid.notZero then {
+            arms.append from: av
+        } else if (
+            (flow.lastStmtType :st :ast block: (ast.nodes.get i: blk)) == st.typing.nullTypeId
+        ) then {
+            valueless = true
+        }
+    }
+    if valueless then {
+        nt: st.typing.nullTypeId
+        stampGate :st :nid tid: nt
+        return nt
     }
     governing: numerics.typedArmsAgree :st :ast :nid :arms
     if governing.untyped then return governing.tid
@@ -7639,8 +7656,7 @@ implicitReturnValue: function {
     ln: ast.nodes.get i: lineId
     if ln.statementline then innerId = ln.statementline
     if innerId.isZero then return innerId
-    arm: declare.rowArmAt :ast nid: innerId
-    if arm.assignment or arm.reassignment or arm.swapstmt then return zast.nodeid
+    if (lineIsStatementOnly :ast :lineId) then return zast.nodeid
     # a bare `return`, `break` or `continue` leaves rather than yields
     ctl: flow.ctlDivKind bn: (zast.atomNameIdOf n: (ast.nodes.get i: innerId))
     if ctl > 0 then return zast.nodeid
@@ -7649,6 +7665,16 @@ implicitReturnValue: function {
     # `null`, or a call answering nothing, is no value to hand back
     if lineType == typing.nullTypeId then return zast.nodeid
     return innerId
+}
+
+# lineIsStatementOnly -- the statement line `lineId` is a binding, a write or an
+# exchange: it does its work and yields no value, whatever type its line is
+# stamped with (a binding's line carries the bound type).
+lineIsStatementOnly: function {ast: Ast.view lineId: zast.nodeid} out bool is {
+    ln: ast.nodes.get i: lineId
+    if ln.statementline.not then return false
+    arm: declare.rowArmAt :ast nid: ln.statementline
+    return arm.assignment or arm.reassignment or arm.swapstmt
 }
 
 # reportValuelessTail -- an `out`-typed function body whose last line has no
