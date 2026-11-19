@@ -648,6 +648,19 @@ emitGenPrologue: function {
     if ctx.gen.hasValue then {
         riI: genSynthField :prog gen: ctx.gen which: gensynth.resumeInput k: 0
         riC: genFieldC :prog :ctx nameId: riI
+        # an input held by value owns what the field holds: the last call's
+        # value, unless a `name: yield` moved it out, goes as the next arrives
+        if (genInputByPointer :prog :ctx).not then (
+            buf.append
+            (
+                stmtblocks.destroyLineC
+                :prog
+                :ctx
+                tid: (genInputTid :prog :ctx)
+                nm: riC.stringView
+                ind: "    "
+            )
+        )
         lgv: "    \{riC} = \{ctx.gen.valC};\n"
         buf.append lgv
     }
@@ -716,7 +729,8 @@ emitYieldFromNode: function {
 
 # emitExprFormYield -- `name: yield E` in a bidirectional generator: suspend
 # (yield E), then bind name to the resume input the next `.call value:` provides.
-# A valtype binds the value directly; a borrowed reftype binds a pointer alias.
+# An input held by pointer (genInputByPointer) binds a pointer alias; any other
+# binds the name to the suspension's slot, which owns the value.
 emitExprFormYield: function {
     prog: Program.view
     ctx: Ctx
@@ -747,9 +761,7 @@ emitExprFormYield: function {
     ltid: stampIdOf :prog nid: aid
     cTypeText: typeRefC :prog :ctx tid: ltid
     if cTypeText.length == 0 then cTypeText = "int64_t".string
-    tt: prog.reg.typetypeOf typeId: ltid
-    isRef: tt.isReferenceData
-    if isRef then {
+    if (genInputByPointer :prog :ctx) then {
         lp0: "\{ind}\{cTypeText}* __borrow_\{nm} = \{srcC};\n"
         buf.append lp0
         lp1: "\{ind}/* alias: \{nm} => (*__borrow_\{nm}) */\n"
@@ -884,13 +896,10 @@ hoistExprYields: function {
     # carry nothing and stay on the statement leg
     ltid: stampIdOf :prog nid: cid
     if ltid.isZero then return
-    # a REFTYPE resume value is held as a pointer into the caller's argument,
-    # and a temp for it would have to carry the borrow alias the binding leg
-    # sets up. That leg still owns those; reftype `accepts` is deferred polish
-    # either way, so the hoist declines rather than guessing at the C.
-    ttk: prog.reg.typetypeOf typeId: ltid
-    if ttk == ztypes.ztypetype.classType then return
-    if ttk == ztypes.ztypetype.unionType then return
+    # a resume value held as a POINTER into the caller's argument (a borrowed
+    # input) would need the borrow alias the binding leg sets up, so the hoist
+    # declines it rather than guessing at the C
+    if (genInputByPointer :prog :ctx) then return
     kNum: ctx.gen.yieldNext
     emitYieldStmt :prog :ctx callId: cid :ind :buf
     # into the state object's slot, NOT a C local: the suspension above
@@ -900,8 +909,14 @@ hoistExprYields: function {
     yvC: genFieldC :prog :ctx nameId: yvK
     riK: genSynthField :prog gen: ctx.gen which: gensynth.resumeInput k: 0
     riC: genFieldC :prog :ctx nameId: riK
+    # the slot OWNS the value it takes, as the field did: what a pass of this
+    # suspension left in it before goes first, and the field is emptied, so
+    # each value has one owner and is freed once
+    buf.append (stmtblocks.destroyLineC :prog :ctx tid: ltid nm: yvC.stringView :ind)
     lrv: "\{ind}\{yvC} = \{riC};\n"
     buf.append lrv
+    zr: values.movedZeroC :prog :ctx tid: ltid
+    if zr.length > 0 then buf.append "\{ind}\{riC} = \{zr};\n"
     kv: kNum
     ctx.gen.yieldTempK.set key: cid value: kv
 }
@@ -1013,6 +1028,28 @@ genSynthField: function {
     } case forCount then {
         return (row.forCounts.get i: k - 1)
     }
+}
+
+# genInputTid -- the type of the `#resume_input` field: the per-call input's
+genInputTid: function {prog: Program.view ctx: Ctx} out ztypes.tid is {
+    riI: genSynthField :prog gen: ctx.gen which: gensynth.resumeInput k: 0
+    return ((prog.typing.declChildOfId parentTypeId: ctx.gen.tid nameId: riI).or d: ztypes.tid.zero)
+}
+
+# genInputByPointer -- the per-call input is held as a pointer into the
+# caller's argument: a borrowed input (bare, `.borrow`, `.view`) of a type a
+# borrow points at. An owned input (`.take`, `.hold`) and any other one are
+# held by value, and the field owns what it holds.
+genInputByPointer: function {prog: Program.view ctx: Ctx} out bool is {
+    riI: genSynthField :prog gen: ctx.gen which: gensynth.resumeInput k: 0
+    return (
+        callorder.fieldIsReftypePtr
+        :prog
+        :ctx
+        owner: ctx.gen.tid
+        fnameId: riI
+        ffid: (genInputTid :prog :ctx)
+    )
 }
 
 # emitSpillSaves -- before a suspension's `return`: every open loop counter,

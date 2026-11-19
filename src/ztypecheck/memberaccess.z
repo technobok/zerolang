@@ -5248,23 +5248,21 @@ refuseNullTyped: function {
     return true
 }
 
-# bindFunctionParam -- bind one declared parameter into the body's scope: its type,
-# its ownership (a receiver may be `borrow` or `view` only -- an object cannot own
-# itself), its locks, and the readonly and privacy gates its type expression
-# carries. A template's own bare param has no stamp, so it binds the canonical
-# param tid off the FUNCTION child instead.
-bindFunctionParam: function {
+# paramTidOf -- the type of one declared parameter of the function `fnTid`,
+# resolved, stamped on its node and checked: a generic template's own bare
+# param has no stamp, so it takes the canonical param tid off the FUNCTION
+# child instead, and a receiver its type.
+paramTidOf: function {
     st: zenv.ZSymbolTable
     unitDecl: ztypes.declid
     ast: Ast
     rf: ztypes.declid
     pm: argref
     thisName: StringView
-    isGenDef: bool
     fnTid: ztypes.tid
-} is {
-    # every value form a parameter may be declared by, an `if` or a `match`
-    # included, keys the parameter's variable
+} out ztypes.tid is {
+    isGenDef: fnTid.notZero and (st.reg.isGenericOf tid: fnTid)
+    # the node the parameter's type is stamped on
     pnid: zast.nodeIdOf n: (ast.nodes.get i: pm.operation)
     ptid: paramTypeId :st :ast :unitDecl opNid: pm.operation
     if st.walk.fn.curMonoFnTid.notZero then {
@@ -5330,6 +5328,26 @@ bindFunctionParam: function {
             ptid = thOpt
         }
     }
+    return ptid
+}
+
+# bindFunctionParam -- bind one declared parameter into the body's scope: its type
+# (paramTidOf), its ownership (a receiver may be `borrow` or `view` only -- an
+# object cannot own itself), its locks, and the readonly and privacy gates its
+# type expression carries.
+bindFunctionParam: function {
+    st: zenv.ZSymbolTable
+    unitDecl: ztypes.declid
+    ast: Ast
+    rf: ztypes.declid
+    pm: argref
+    thisName: StringView
+    fnTid: ztypes.tid
+} is {
+    # every value form a parameter may be declared by, an `if` or a `match`
+    # included, keys the parameter's variable
+    pnid: zast.nodeIdOf n: (ast.nodes.get i: pm.operation)
+    ptid: paramTidOf :st :unitDecl :ast :rf :pm :thisName :fnTid
     pown: declare.pathOwnership :ast n: (ast.nodes.get i: pm.operation)
     hasOwn: false
     ownMode: ztypes.zparamownership.borrowMode

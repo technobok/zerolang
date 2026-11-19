@@ -721,28 +721,46 @@ reportUnresolvedInstArgs: function {
     }
 }
 
-# yieldInputTidOf -- the type of a generator `call`'s per-call input: its SECOND
-# parameter, the receiver being first. 0 when it declares none, which is what
-# makes reading `yield`'s value there an error rather than a silent zero.
-yieldInputTidOf: function {
-    # the scope the parameter is looked up in
+# geninput -- a generator `call`'s per-call input as its body sees it: the type
+# `yield` evaluates to, and the name its declaration gives it, which names
+# nothing in the body. Both zero for any other function, and for a generator
+# that declares no input -- which makes reading `yield`'s value there an error
+# rather than a silent zero.
+geninput: record {
+    tid: ztypes.tid
+    name: zast.nameid
+}
+
+# bindParams -- bind the parameters of `fn` into its body's scope
+# (bindFunctionParam). A generator `call`'s SECOND parameter -- the receiver is
+# first -- is its per-call input, which no body binding names (spec.pdoc, The
+# per-call input): its type is checked and answered instead.
+bindParams: function {
     st: zenv.ZSymbolTable
-    # the tree the parameter list is read from
+    unitDecl: ztypes.declid
     ast: Ast
-    # the `call` whose input is wanted
-    defn: fnref
-} out ztypes.tid is {
-    if defn.nparams < 2 then return ztypes.tid
-    pmId: zast.fnParamAt :ast nid: defn.nid i: 1
-    if pmId.isZero then return ztypes.tid
-    pn: ast.nodes.get i: pmId
-    if pn.namedoperation then {
-        po: st.lookup nameId: pn.name
-        if po.some then {
-            return po
+    rf: ztypes.declid
+    fn: fnref
+    thisName: StringView
+    fnTid: ztypes.tid
+} out geninput is {
+    input: geninput tid: ztypes.tid name: zast.nameid
+    isGenCall: (generatorCallOf typing: st.typing nid: fn.nid).notZero
+    kP: u64
+    for kP < fn.nparams loop {
+        pmId: zast.fnParamAt :ast nid: fn.nid i: kP
+        isInput: isGenCall and (kP == 1)
+        kP = kP + 1
+        pm: argRefAt :ast nid: pmId
+        if pm.nid.isZero then continue
+        if isInput then {
+            pt: memberaccess.paramTidOf :st :unitDecl :ast :rf :pm :thisName :fnTid
+            input = geninput tid: pt name: pm.name
+        } else {
+            memberaccess.bindFunctionParam :st :unitDecl :ast :rf :pm :thisName :fnTid
         }
     }
-    return ztypes.tid
+    return input
 }
 
 # bindExplicitTypeArg -- an explicit type argument binds its parameter to the
@@ -1599,15 +1617,10 @@ checkFunctionBodyIn: function {
         st.pushScope parent: rf node: fn.nid
         st.fnScopes.append (zenv.openpos.create from: st.open.length - 1)
         exitMark: st.exitLog.length
-        kP: u64
-        for kP < fn.nparams loop {
-            pmId: zast.fnParamAt :ast nid: fn.nid i: kP
-            kP = kP + 1
-            pm: argRefAt :ast nid: pmId
-            if pm.nid.notZero then {
-                memberaccess.bindFunctionParam :st :unitDecl :ast :rf :pm :thisName :isGenDef :fnTid
-            }
-        }
+        # a generator's `call`, or an instance's copy of one: its body yields
+        # its values, and its return is the wrapper the lowering wrote
+        isGenCall: (generatorCallOf typing: st.typing nid: fn.nid).notZero
+        input: bindParams :st :unitDecl :ast :rf :fn :thisName :fnTid
         setSynthOwnerLabel :st :unitDecl :ast :defName :defNameId :thisName
         st.walk.fn.currentThisTid = thisTid
         prevFn: st.walk.fn.currentFnTid
@@ -1620,9 +1633,6 @@ checkFunctionBodyIn: function {
             d: ztypes.tid
         )
         st.walk.fn.currentReturnTypeId = crt
-        # a generator's `call`, or an instance's copy of one: its body yields
-        # its values, and its return is the wrapper the lowering wrote
-        isGenCall: (generatorCallOf typing: st.typing nid: fn.nid).notZero
         # the body walk is where a user function's return type is first
         # known: an owned result holding a reference into an input is
         # declared `outx` or refused here
@@ -1664,7 +1674,9 @@ checkFunctionBodyIn: function {
         # inside a nested function literal never sees this scope because
         # the literal pushes its own.
         prevYi: st.walk.fn.currentYieldInputTid
+        prevIn: st.walk.fn.currentInputName
         st.walk.fn.currentYieldInputTid = ztypes.tid
+        st.walk.fn.currentInputName = zast.nameid
         # the class a suspending loop or `with` in this body mints its state
         # fields on: the walked generator's -- an instance's own in an instance
         # walk -- and never a generic template's, whose fields would be typed by
@@ -1678,11 +1690,11 @@ checkFunctionBodyIn: function {
             if (st.reg.isGenericOf tid: thisTid).not then st.walk.fn.currentGenTid = thisTid
             ykp: st.reg.ctlPlaceholder
             st.define nameId: zast.wellKnown.slot.wkYield ztypeId: ykp
-            # what `yield` evaluates to: the per-call input, which is the
-            # SECOND parameter -- the receiver is first. Stashed rather than
+            # what `yield` evaluates to: the per-call input. Stashed rather than
             # read off a name at the yield, because the input is not a body
             # binding and the label it carries is the CALL SITE's.
-            st.walk.fn.currentYieldInputTid = yieldInputTidOf :st :ast defn: fn
+            st.walk.fn.currentYieldInputTid = input.tid
+            st.walk.fn.currentInputName = input.name
         }
         bodyErrs: st.typing.errors.length
         prevTailBody: st.tailBody
@@ -1701,6 +1713,7 @@ checkFunctionBodyIn: function {
         st.tailBody = prevTailBody
         st.tailBlock = prevTailBlock
         st.walk.fn.currentYieldInputTid = prevYi
+        st.walk.fn.currentInputName = prevIn
         st.walk.fn.currentGenTid = prevGen
         st.walk.fn.genSpillNext = prevSpill
         st.walk.fn.currentReturnTypeId = prevRet

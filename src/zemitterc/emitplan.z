@@ -136,6 +136,21 @@ paramVidByNameId: function {
     }
 }
 
+# paramCName -- the C name of parameter `nameId` of the function `op`: its
+# variable's (varCName). The one parameter no variable stands behind -- a
+# generator `call`'s per-call input, which no body binding names -- is `z_in`,
+# a spelling no local takes.
+paramCName: function {
+    prog: Program.view
+    ctx: Ctx.view
+    op: astnode.view
+    nameId: zast.nameid
+} out String is {
+    pv: paramVidByNameId :prog :op :nameId
+    if pv.isZero then return "z_in".string
+    return (localnames.varCName known: ctx.known :prog vid: pv)
+}
+
 # cnameById -- a type's default C name: its id alone. The emitted C is a
 # build artifact rather than a reading surface, so the source name rides
 # along only under --readable-names.
@@ -711,9 +726,7 @@ fnParamsC: function {
             params.append "int64_t"
         }
         params.append " "
-        pmnV: paramVidByNameId :prog :op nameId: pnmId
-        pmnDecl: localnames.varCName known: ctx.known :prog vid: pmnV
-        params.append pmnDecl
+        params.append (paramCName :prog :ctx :op nameId: pnmId)
         pi = pi + 1
     }
     if pn == 0 then params.append "void"
@@ -3984,8 +3997,7 @@ setupGenCtx: function {
     types.recFieldIds :prog tid: mid ids: gids nameIds: gnm
     gpi: u64
     for gpi < gnm.length loop {
-        gv: paramVidByNameId :prog :op nameId: (gnm.get i: gpi)
-        gc: localnames.varCName known: ctx.known :prog vid: gv
+        gc: paramCName :prog :ctx :op nameId: (gnm.get i: gpi)
         if gpi == 0 then ctx.gen.recvC = gc.copy
         if gpi == 1 then ctx.gen.valC = gc.copy
         gpi = gpi + 1

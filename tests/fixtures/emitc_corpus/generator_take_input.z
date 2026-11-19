@@ -1,0 +1,108 @@
+# A generator's owned per-call input (`.take`, `.hold`) has one owner at a
+# time: the instance's input field until a `name: yield` moves it into that
+# suspension's slot. Each call's value is freed once -- the next call frees
+# the last one nothing kept -- and a value a `name: yield` binds is kept across
+# a later suspension, in a loop as at the top level: a class, a String and a
+# protocol taken, a class held, and calls that bind none.
+Bag: class {
+    x: i64
+    tag: String
+}
+
+Keep: generator { n: i64 } as {
+    call: function {bag: Bag.take} out i64 is {
+        yield 0
+        k: 0
+        for k < 3 loop {
+            k = k + 1
+            b: yield k
+            yield b.x
+            yield (b.tag.length.i64.or d: 0)
+        }
+    }
+}
+
+Words: generator { n: i64 } as {
+    call: function {w: String.take} out i64 is {
+        yield 0
+        a: yield 1
+        yield 2
+        yield (a.length.i64.or d: 0)
+    }
+}
+
+Shape: protocol {
+    area: function {t: this.view} out u64
+}
+Sq: class { side: u64 name: String } as {
+    shape: Shape.implement
+    area: function {t: this.view} out u64 is { return t.side * t.side }
+}
+
+Areas: generator { n: i64 } as {
+    call: function {s: Shape.take} out u64 is {
+        yield 0
+        a: yield 1
+        yield 2
+        yield a.area
+    }
+}
+
+Pass: generator { n: i64 } as {
+    call: function {bag: Bag.take} out i64 is {
+        yield 1
+        yield 2
+        yield 3
+    }
+}
+
+Held: generator { n: i64 } as {
+    call: function {bag: Bag.hold} out i64 is {
+        yield 1
+        b: yield 2
+        yield b.x
+    }
+}
+
+main: function is {
+    with g: (Keep n: 0) do {
+        i: 0
+        for i < 9 loop {
+            i = i + 1
+            r: g.call bag: (Bag x: i * 10 tag: "tag\{i}")
+            match (r) case some then print "keep \{r}" case none then print "keep none"
+        }
+    }
+    with h: (Words n: 0) do {
+        i: 0
+        for i < 5 loop {
+            i = i + 1
+            r: h.call w: "w\{i * 111}"
+            match (r) case some then print "words \{r}" case none then print "words none"
+        }
+    }
+    with s: (Areas n: 0) do {
+        i: 0.u64
+        for i < 5 loop {
+            i = i + 1
+            r: s.call s: (Shape.create from: (Sq side: i name: "sq".string))
+            match (r) case some then print "areas \{r}" case none then print "areas none"
+        }
+    }
+    with p: (Pass n: 0) do {
+        i: 0
+        for i < 4 loop {
+            i = i + 1
+            r: p.call bag: (Bag x: i tag: "pass\{i}")
+            match (r) case some then print "pass \{r}" case none then print "pass none"
+        }
+    }
+    with q: (Held n: 0) do {
+        i: 0
+        for i < 4 loop {
+            i = i + 1
+            r: q.call bag: (Bag x: i * 7 tag: "held\{i}")
+            match (r) case some then print "held \{r}" case none then print "held none"
+        }
+    }
+}
