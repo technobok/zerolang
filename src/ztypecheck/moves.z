@@ -2318,6 +2318,20 @@ fieldReadPin: function {
     fp: ListVal zast.nameid
     vn: ast.nodes.get i: nid
     if (isMarkedMove :ast n: vn) then return
+    # a field read off a value no name holds is part of that value: the pin is
+    # rooted at the temporary its read holds the value in, which then lives as
+    # long as the pin
+    fields: ListVal zast.nameid
+    base: fieldChainBase :st :ast :nid :fields
+    if base != nid then {
+        btn: st.walk.value.tempNameOf.get key: base
+        if btn.some then {
+            holdUnnamedLocal :st recvNid: base tnId: btn dst: fp
+            for each f: fields loop fp.append f
+            pinsAppend pins: dst path: fp shared: true mutable: writes carried: false
+            return
+        }
+    }
     if (movedFieldPath :st :ast n: vn).not then return
     appendValueTuple :ast n: vn dst: fp
     if fp.length < 2 then return
@@ -3929,35 +3943,109 @@ reportHeldIntoSlot: function {
 
 # appendValueTuple -- the source path of a value node (root first), appended onto
 # dst. Ownership and access markers are not addressable segments, so
-# `rec.field.borrow` contributes (rec, field); non-path shapes contribute nothing.
+# `rec.field.borrow` contributes (rec, field). A path is rooted at a name: one
+# that hangs off a value no name holds (`(mk k: 3).s`) contributes nothing,
+# as non-path shapes do -- its first member is no root to look up.
 appendValueTuple: function {ast: Ast.view n: astnode.view dst: ListVal zast.nameid} is {
+    if (valueTupleRoot :ast :n).isZero then return
+    appendNamedTuple :ast :n :dst
+}
+
+# appendNamedTuple -- appendValueTuple's walk, for a path rooted at a name
+appendNamedTuple: function {ast: Ast.view n: astnode.view dst: ListVal zast.nameid} is {
     match (
         n
     ) case atomid then {
         dst.append n.name
     } case dottedpath then {
-        appendValueTuple :ast n: (ast.nodes.get i: n.parent) :dst
+        appendNamedTuple :ast n: (ast.nodes.get i: n.parent) :dst
         cid: atomNameId :ast n: (ast.nodes.get i: n.child)
         if cid.notZero when (isStripMarkerId nameId: cid).not then dst.append cid
     } else null
 }
 
-# valueTupleRoot -- the first name appendValueTuple would append for `n`,
-# zero when it would append none
+# valueTupleRoot -- the name a path is rooted at, zero when `n` is no path or
+# hangs off a value no name holds
 valueTupleRoot: function {ast: Ast.view n: astnode.view} out zast.nameid is {
     match (
         n
     ) case atomid then {
         return n.name
     } case dottedpath then {
-        r: valueTupleRoot :ast n: (ast.nodes.get i: n.parent)
-        if r.notZero then return r
-        cid: atomNameId :ast n: (ast.nodes.get i: n.child)
-        if cid.notZero when (isStripMarkerId nameId: cid).not then return cid
-        return zast.nameid
+        return (valueTupleRoot :ast n: (ast.nodes.get i: n.parent))
     } else {
         return zast.nameid
     }
+}
+
+# fieldChainBase -- the node a chain of FIELD reads at `nid` hangs off --
+# `(mk k: 3)` in `(mk k: 3).inner.s` -- with the fields past it, root first,
+# appended onto `fields`; `nid` itself when it reads no field. Markers are no
+# segments, and a member that is no field (a method, a constant) ends the chain.
+fieldChainBase: function {
+    st: zenv.ZSymbolTable.view
+    ast: Ast.view
+    nid: zast.nodeid
+    fields: ListVal zast.nameid
+} out zast.nodeid is {
+    rev: ListVal zast.nameid
+    cur: nid
+    for cur.notZero loop {
+        n: ast.nodes.get i: cur
+        if n.dottedpath.not then break
+        mem: dottedMemberId :st :ast nid: cur child: n.child
+        if (isStripMarkerId nameId: mem).not when (
+            memberReadIsField
+            :st
+            parentNid: n.parent
+            nameId: mem
+        ).not then break
+        if (isStripMarkerId nameId: mem).not then rev.append mem
+        cur = n.parent
+    }
+    k: rev.length
+    for k > 0 loop {
+        k = k - 1
+        fields.append (rev.get i: k)
+    }
+    return cur
+}
+
+# receiverHoldsValue -- the receiver at `nid` is storage a value no name holds
+# owns: that value itself (receiverIsValue), or a field read off it, which is
+# part of it
+receiverHoldsValue: function {
+    st: zenv.ZSymbolTable
+    ast: Ast
+    unitDecl: ztypes.declid
+    nid: zast.nodeid
+} out bool is {
+    fields: ListVal zast.nameid
+    return (receiverIsValue :st :ast :unitDecl nid: (fieldChainBase :st :ast :nid :fields))
+}
+
+# valueReceiverPath -- the path a pinning result keeps on a receiver that holds
+# a value (receiverHoldsValue): the unnamed local holding it, or -- a field
+# read off such a value -- that value's unnamed local and the fields down to
+# the receiver: a view of a field is a view of what holds it, and keeps it
+# alive.
+valueReceiverPath: function {
+    st: zenv.ZSymbolTable
+    ast: Ast
+    recvT: ztypes.tid
+    recvNid: zast.nodeid
+    dst: ListVal zast.nameid
+} is {
+    fields: ListVal zast.nameid
+    base: fieldChainBase :st :ast nid: recvNid :fields
+    if base == recvNid then {
+        unnamedReceiverLocal :st :ast :recvT :recvNid :dst
+        return
+    }
+    n0: dst.length
+    unnamedReceiverLocal :st :ast recvT: (walkTypeOf :st nid: base) recvNid: base :dst
+    if dst.length == n0 then return
+    for each f: fields loop dst.append f
 }
 
 # argPinTuple -- what a value node passed to a locking parameter reads
@@ -4524,13 +4612,13 @@ captureValueReceiver: function {
             ownedValueReceiver :st :ast :unitDecl :call
             return ztypes.tid
         }
-        if (receiverIsValue :st :ast :unitDecl nid: rcv).not then return ztypes.tid
+        if (receiverHoldsValue :st :ast :unitDecl nid: rcv).not then return ztypes.tid
         movePins from: rpins dst: pins
         return ztypes.tid
     }
     if (receiverRootIsVar :st :ast :call) when (receiverIsFreshValue :st :ast nid: rcv
     ).not then return ztypes.tid
-    if (receiverIsValue :st :ast :unitDecl nid: rcv).not then return ztypes.tid
+    if (receiverHoldsValue :st :ast :unitDecl nid: rcv).not then return ztypes.tid
     movePins from: rpins dst: pins
     if pins.length > 0 then return ztypes.tid
     return (walkTypeOf :st nid: rcv)
@@ -4634,7 +4722,7 @@ joinValueReceiver: function {
     # the call's argument pins
     pins: List ztyping.PinPath
 } is {
-    if rvT.notZero then unnamedReceiverLocal :st :ast recvT: rvT :recvNid dst: path
+    if rvT.notZero then valueReceiverPath :st :ast recvT: rvT :recvNid dst: path
     for each rp: rvPins loop (
         pinsAppend
         :pins
@@ -4662,7 +4750,7 @@ valueReceiverPins: function {
     pins: List ztyping.PinPath
 } is {
     if path.length > 0 when (st.lookupVarId nameId: (path.get i: 0)).some then return
-    if (receiverIsValue :st :ast :unitDecl nid: recvNid).not then return
+    if (receiverHoldsValue :st :ast :unitDecl nid: recvNid).not then return
     rpins: List ztyping.PinPath
     (
         readValuePins
@@ -4678,8 +4766,15 @@ valueReceiverPins: function {
     if (resultPins :st :funcId).not then {
         # nothing keeps the receiver locked, but it is still a value that owns
         # its storage; a receiver whose own walk left pins owns nothing and
-        # hands those on instead.
-        if rpins.length == 0 then ownedReceiverTemp :st :ast :recvT :recvNid
+        # hands those on instead. A field read off a value is part of the
+        # value, which its own read already holds.
+        if rpins.length == 0 when (receiverIsValue :st :ast :unitDecl nid: recvNid) then (
+            ownedReceiverTemp
+            :st
+            :ast
+            :recvT
+            :recvNid
+        )
         return
     }
     for path.length > 0 loop path.pop
@@ -4687,7 +4782,7 @@ valueReceiverPins: function {
         movePins from: rpins dst: pins
         return
     }
-    unnamedReceiverLocal :st :ast :recvT :recvNid dst: path
+    valueReceiverPath :st :ast :recvT :recvNid dst: path
 }
 
 # unnamedReceiverLocal -- a pinning call's receiver that is a value rather than
@@ -4711,6 +4806,18 @@ unnamedReceiverLocal: function {
     if (valuechecks.isViewFamilyTid :ast :st tid: recvT) then return
     tnId: mintReceiverTemp :st :ast :recvT :recvNid
     if tnId.isZero then return
+    holdUnnamedLocal :st :recvNid :tnId :dst
+}
+
+# holdUnnamedLocal -- the temporary `tnId` holding the value at `recvNid` is
+# kept by the line being walked: an unnamed local of its scope, and the root of
+# the path `dst` receives
+holdUnnamedLocal: function {
+    st: zenv.ZSymbolTable
+    recvNid: zast.nodeid
+    tnId: zast.nameid
+    dst: ListVal zast.nameid
+} is {
     st.walk.value.lineUnnamedLocals.append tnId
     st.typing.unnamedLocalOfNode.set key: recvNid value: tnId
     dst.append tnId
