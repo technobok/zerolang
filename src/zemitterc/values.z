@@ -2444,22 +2444,33 @@ unhandledExpr: function {ctx: Ctx line: u32} out String is {
 }
 
 # ifIsTernary -- an `if` a C ternary spells: every arm is one value that stays
-# inside the expression.
+# inside the expression (ternaryOperand).
 ifIsTernary: function {prog: Program.view n: astnode.view} out bool is {
     match (
         n
     ) case ifexpr then {
         for each clId: (zast.kidsOf ast: prog.ast span: n.clauses) loop {
             cl: prog.ast.nodes.get i: clId
-            if cl.ifclause when (isSimpleValueNode n: (prog.ast.nodes.get i: cl.statement)
+            if cl.ifclause when (ternaryOperand :prog n: (prog.ast.nodes.get i: cl.statement)
             ).not then return false
         }
         if n.elseclause.notZero when (
-            isSimpleValueNode
+            ternaryOperand
+            :prog
             n: (prog.ast.nodes.get i: n.elseclause)
         ).not then return false
     } else null
     return (ztypecheck.armLeaves ast: prog.ast :n inLoop: false).not
+}
+
+# ternaryOperand -- the arm body `n` is one value a ternary's operand spells: a
+# value expression, and not one stamped `never` (a `panic`, or a `match` whose
+# every arm leaves), which yields nothing to spell. Such an arm runs as the
+# statement it is (stmtblocks.emitBranchLastAssign), in the statements
+# emitControlExpr builds.
+ternaryOperand: function {prog: Program.view n: astnode.view} out bool is {
+    if (isSimpleValueNode :n).not then return false
+    return (stmtblocks.matchDiverges :prog nid: (argforms.armValueNode :prog :n)).not
 }
 
 # controlValueIsReference -- an `if`, a `match`, a block or a `with` used as a

@@ -626,7 +626,15 @@ checkMemberAutoCall: function {
         }
         valuechecks.noteStatementAutoCall :st nid: dp.nid
         lockAutoCallReceiver :ast :st :dp shared: aShr
-        landLiteralReceiver :st :ast recv: dp.parent method: mo instance: ztypes.tid.zero
+        (
+            landLiteralReceiver
+            :st
+            :ast
+            recv: dp.parent
+            method: mo
+            instance: ztypes.tid.zero
+            call: zast.nodeid
+        )
         ro: conform.methodReturnOf reg: st.reg typing: st.typing mid: mo
         match (
             ro
@@ -6491,6 +6499,24 @@ callReceiverId: function {ast: Ast.view call: callref} out zast.nodeid is {
     return zast.nodeid
 }
 
+# callArgsFold -- every argument of the call `call` has a compile-time value; true
+# for no call.
+callArgsFold: function {st: zenv.ZSymbolTable.view ast: Ast.view call: zast.nodeid} out bool is {
+    if call.isZero then return true
+    cn: ast.nodes.get i: call
+    match (
+        cn
+    ) case call then {
+        for each aId: (zast.kidsOf :ast span: cn.arguments) loop {
+            op: aId
+            an: ast.nodes.get i: aId
+            match an case namedoperation then op = an.operation else null
+            if (st.typing.nodeConstAt nid: op).isConst.not then return false
+        }
+    } else null
+    return true
+}
+
 # landLiteralReceiver -- a literal that is the receiver of a native `method`
 # LANDS where the method reads it, as a literal argument lands in its
 # parameter: a number's operator in the type its one generic parameter is bound
@@ -6502,24 +6528,28 @@ callReceiverId: function {ast: Ast.view call: callref} out zast.nodeid is {
 # settles its literal itself, and a method bound to or returning a literal type
 # is computed by the compiler: neither lands. `recv` is the receiver's node, a
 # call's or an auto-called path's; `instance` is the generic call's instance, 0
-# for a method that is not generic.
+# for a method that is not generic; `call` is the call, 0 for an auto-called
+# path, which takes no arguments.
 landLiteralReceiver: function {
     st: zenv.ZSymbolTable
     ast: Ast
     recv: zast.nodeid
     method: ztypes.tid
     instance: ztypes.tid
+    call: zast.nodeid
 } is {
     if method.isZero or (st.reg.isNativeOf tid: method).not then return
     if recv.isZero then return
     rt: walkTypeOf :st nid: recv
     target: valuechecks.literalLandingTid :st :ast :rt :method :instance
-    # a receiver of a literal type with no compile-time value -- an `if` or a
-    # `match` of literal arms on a condition only run time knows -- that
-    # nothing else gives a type is no literal the compiler can compute with: it
-    # lands in its default, as it does when it is bound
+    # an operation of a literal type with no compile-time value -- its
+    # receiver or an argument an `if` or a `match` of literal arms on a
+    # condition only run time knows (`1 + (if c then 4 else 5)`) -- that
+    # nothing else gives a type is no literal the compiler can compute with:
+    # it lands in its default, as it does when it is bound
     if (valuechecks.isAnyLiteralTid :st tid: target) then {
         folds: (st.typing.nodeConstAt nid: recv).isConst
+        if folds then folds = callArgsFold :st :ast :call
         if folds.not then target = valuechecks.materialiseLiteral :ast :st t: rt
     }
     if target.isZero or (valuechecks.isAnyLiteralTid :st tid: target) then return
@@ -7076,6 +7106,7 @@ checkResolvedMethodCall: function {
         recv: (callReceiverId :ast :call)
         method: dro
         instance: ztypes.tid.zero
+        call: call.nid
     )
     # A synthesized `create` has no recorded return: explicit
     # `.create` constructs, so the result is the base type.
@@ -7259,6 +7290,7 @@ checkGenericFnCall: function {
         recv: (callReceiverId :ast :call)
         method: dro
         instance: midG
+        call: call.nid
     )
     callchecks.checkGenericCallMissingArgs :ast :st :call mid: midG recvImplicit: recvVal
     rroG: methodReceiverRootId :ast n: callableNode
