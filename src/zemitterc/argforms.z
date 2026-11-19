@@ -3384,6 +3384,40 @@ armLeafIsAddress: function {
     return (localnames.nodeIsRefBorrowResult :prog :ctx n: (prog.ast.nodes.get i: leaf))
 }
 
+# parkArmLeaf -- the temporary an owned arm value `leaf`, of type `tid`, of a
+# reference control value is parked in: declared zero by the statement around
+# the value (or by the outermost one, inside nested arms), destroyed where the
+# checker's temporary owes it, and answered by name for the arm to assign.
+parkArmLeaf: function {
+    prog: Program.view
+    ctx: Ctx
+    leaf: zast.nodeid
+    tid: ztypes.tid
+} out String is {
+    nm: argHoistName :prog :ctx argNid: leaf fallback: "_ah"
+    dt: String
+    if (hoistOwes :prog argNid: leaf ptr: false) then dt = (
+        hoistDestroyLine
+        :prog
+        :ctx
+        :tid
+        nm: nm.stringView
+    )
+    ph: (
+        ArgHoist
+        name: nm.copy
+        val: String
+        ctype: (hoistCtype :prog :ctx :tid ptr: false)
+        dtor: dt
+    )
+    if ctx.narrow.armRefDepth > 0 then {
+        ctx.narrow.armParks.append ph
+    } else {
+        ctx.stmt.argHoists.append ph
+    }
+    return nm
+}
+
 # armRefLeaf -- an arm of a reference control value, as the address its pointer
 # takes: a place arm's own address (a pointer local already is one), or a zeroed
 # temporary the statement releases, assigned the arm's value, and its address.
@@ -3424,27 +3458,7 @@ armRefLeaf: function {
         return (stating :facts from: (addrFacts e: textF) text: "((\{ct}*)&(\{text}))")
     }
     # declared zero by the statement and assigned where the arm runs
-    nm: argHoistName :prog :ctx argNid: lf fallback: "_ah"
-    dt: String
-    if (hoistOwes :prog argNid: lf ptr: false) then dt = (
-        hoistDestroyLine
-        :prog
-        :ctx
-        tid: lt
-        nm: nm.stringView
-    )
-    ph: (
-        ArgHoist
-        name: nm.copy
-        val: String
-        ctype: (hoistCtype :prog :ctx tid: lt ptr: false)
-        dtor: dt
-    )
-    if ctx.narrow.armRefDepth > 0 then {
-        ctx.narrow.armParks.append ph
-    } else {
-        ctx.stmt.argHoists.append ph
-    }
+    nm: parkArmLeaf :prog :ctx leaf: lf tid: lt
     if heap then {
         return (stating :facts from: callFacts text: "(\{nm} = \{text}, \{nm})")
     }

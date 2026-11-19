@@ -5402,9 +5402,11 @@ emitBranchLastAssign: function {
     return false
 }
 
-# emitNestedControlAssign -- a branch whose value is itself a `match`, or an
-# `if` one of whose arms leaves, assigns the target from that construct's arms
-# in statements, since no single C expression can spell it; false for any other
+# emitNestedControlAssign -- a branch whose value is itself a `match`, an `if`
+# one of whose arms leaves, or a `for` comprehension assigns the target from
+# that construct in statements, since no single C expression can spell it: a
+# match's or an if's arms each assign it, and a comprehension builds its list
+# in it, as a binding of one does (emitControlBindValue). False for any other
 # value.
 emitNestedControlAssign: function {
     prog: Program.view
@@ -5430,6 +5432,32 @@ emitNestedControlAssign: function {
             return false
         }
         emitIfAssign :prog :ctx n: mn :target :ind :tmp :buf
+        return true
+    } case forexpr then {
+        ltid: stampIdOf :prog nid: mn.nodeid
+        lcb: spelledCname :ctx tid: ltid
+        # the list is built where the value lands: in the target, or, when the
+        # target is the pointer a reference value's arms assign addresses to,
+        # in the temporary the arm is parked in, whose address it then takes
+        listVar: target.string
+        refCv: false
+        if ctx.narrow.armRefCv > 0 then refCv = target == "_cv\{ctx.narrow.armRefCv - 1}"
+        if refCv then listVar = argforms.parkArmLeaf :prog :ctx leaf: mn.nodeid tid: ltid
+        noteMemberUse :ctx mono: ltid member: memberWord.slot.create
+        buf.append "\{ind}\{listVar} = \{lcb}_create((uint64_t)0);\n"
+        (
+            emitListComprehension
+            :prog
+            :ctx
+            listTid: ltid
+            forNode: (prog.ast.nodes.get i: mn.nodeid)
+            listCb: lcb.stringView
+            listVar: listVar.stringView
+            :ind
+            :tmp
+            :buf
+        )
+        if refCv then buf.append "\{ind}\{target} = &\{listVar};\n"
         return true
     } else {
         return false
