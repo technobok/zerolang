@@ -5004,6 +5004,20 @@ Analysis: class {
         )
     }
 
+    # warnUnreadInput -- L014 for a generator `call`'s per-call input that no
+    # `yield` value reads: each call's argument is handed over and never looked at.
+    warnUnreadInput: function {t: this prog: Ast.view site: zast.namedsite} is {
+        pnm: zast.poolTextAt pool: prog.names ref: site.name
+        (
+            t.warn
+            code: "L014"
+            msg: "input '\{pnm}' is never read: no `yield` value is used -- read it with `v: yield x`, or remove the input"
+            line: site.line
+            col: site.col
+            width: pnm.length
+        )
+    }
+
     # reportParamAt -- one parameter. The receiver is exempt from the use test
     # and takes L027 instead, since what is judged of it is mutation rather than
     # use; every other parameter takes L020 when it is read but never written
@@ -5038,6 +5052,12 @@ Analysis: class {
             return
         }
         vo: st.typing.defVariableId.get key: pOpId
+        # a generator `call`'s per-call input is no body binding: the only way to
+        # it is the value a `yield` gives back
+        if vo.none when (ztypecheck.generatorCallOf typing: st.typing nid: fop).notZero then {
+            if (yieldValueUsed ast: prog root: fop).not then t.warnUnreadInput :prog :site
+            return
+        }
         if vo.some then {
             umut: st.typing.variableMutated.has item: vo
             if (used.has item: vo) when umut.not then {
@@ -5551,6 +5571,39 @@ unitMemberIsWalkable: function {
 }
 
 # ---- L013 / L014 unused-variable helpers ----
+
+# yieldValueUsed -- some `yield` under `root` has its value used: bound
+# (`v: yield x`), passed or tested, which reads the input the call was resumed
+# with. A `yield` that stands as its own statement discards that input.
+yieldValueUsed: function {ast: Ast.view root: zast.nodeid} out bool is {
+    alone: IdSet zast.nodeid
+    work: ListVal zast.nodeid
+    work.append root
+    for work.length > 0 loop {
+        id: work.pop
+        n: ast.nodes.get i: id
+        match (
+            n
+        ) case statementline then {
+            ln: ast.nodes.get i: n.statementline
+            match (
+                ln
+            ) case call then {
+                if (zast.isYieldCalleeAt :ast callableId: ln.callable) then (
+                    alone.add
+                    item: n.statementline
+                )
+            } else null
+        } case call then {
+            if (zast.isYieldCalleeAt :ast callableId: n.callable) when (alone.has item: id
+            ).not then {
+                return true
+            }
+        } else null
+        zast.childIdsInto :ast :n acc: work
+    }
+    return false
+}
 
 # writeTargetAtoms -- every BARE atom node that is a reassignment target. A
 # reassignment's target atom carries an atomVariableId stamp exactly as a read
