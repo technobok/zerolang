@@ -1797,14 +1797,7 @@ checkReadonlyBindSource: function {
     # readonly, and takes the same self-lock. Without this the binding is
     # a laundering step -- `i: c.sub` off a `view` receiver would hand back
     # a freely mutable name.
-    roPath: ListVal zast.nameid
-    moves.appendValueTuple :ast n: (ast.nodes.get i: asgn.value) dst: roPath
-    roDeep: false
-    if roPath.length > 0 when (st.reg.isReftypeOf tid: vt) when (
-        moves.pathLeafIsMethod
-        :st
-        path: roPath
-    ).not when (moves.pathIsReadonly :st path: roPath) then roDeep = true
+    roDeep: moves.valueReadsReadonlyPlace :st :ast nid: asgn.value :vt
     if roDeep when (valueIsHold :ast n: (ast.nodes.get i: asgn.value)).not then {
         rop: ListVal zast.nameid
         rop.append asgn.name
@@ -2096,13 +2089,6 @@ checkAssignmentIn: function {
         # `own` already draws exactly that line: the pin transfers only to a
         # binding that the borrow actually flowed into.
         pending: bread.marker
-        roRef: false
-        if own == ztypes.zownership.borrowed then roRef = pending == ztypes.zparamownership.viewMode
-        # An `out T.hold` result is readonly for a different reason: it is
-        # OWNED, so it can never satisfy the borrowed gate above, and the
-        # freeze is a property of the value rather than of a reference into
-        # someone else's. Both end at the same self-lock below.
-        if pending == ztypes.zparamownership.holdMode then roRef = true
         st.walk.value.draft.marker = ztypes.zparamownership.noneMode
         # the block bound the name before this statement began
         redefined: grey.isZero and asgn.name.notZero
@@ -2126,21 +2112,16 @@ checkAssignmentIn: function {
         st.reg.setVariableOrigin id: boundVid origin: ztypes.zvarorigin.local
         setk: vt
         stampGate :st nid: asgn.nid tid: setk
-        if roRef then {
-            rrn: (ast.names.texts.get i: asgn.name).stringView
-            rrr: readonlySelfLock :st :ast name: rrn vid: boundVid
-            if rrr.length > 0 then {
-                (
-                    addError
-                    :st
-                    nodeid: asgn.nid
-                    lineno: asgn.lineno
-                    colno: asgn.colno
-                    e: zast.err.ownerError
-                    msg: rrr
-                )
-            }
-        }
+        (
+            readonlyByMarker
+            :st
+            :ast
+            :own
+            marker: pending
+            name: asgn.name
+            vid: boundVid
+            nid: asgn.nid
+        )
         checkReadonlyBindSource :st :ast :asgn :vt :boundVid
         instX: (own == ztypes.zownership.borrowed) or (pboX and (bpins.length > 0))
         st.walk.value.draft.owned = false
@@ -3179,6 +3160,18 @@ checkWith: function {
         noteGenBorrowBinding :st :ast :own nameId: withnode.name value: withnode.value
         boundVid: vid
         st.typing.setDefVariable nid: withnode.nid vid: boundVid
+        # a `.view` value, or an arm read out of a readonly path, makes the
+        # alias readonly, as it does a plain binding
+        (
+            readonlyByMarker
+            :st
+            :ast
+            :own
+            marker: wread.marker
+            name: withnode.name
+            vid: boundVid
+            nid: withnode.nid
+        )
         if (withValueCrossesSuspension :st :ast :withnode :own) then {
             # a literal value's type is the literal placeholder until a slot
             # asks for a width; a field is such a slot
@@ -4013,6 +4006,44 @@ installBorrowLocks: function {
         :mutable
     )
     if re.length > 0 then addError :st :nodeid :lineno :colno e: zast.err.ownerError msg: re
+}
+
+# readonlyByMarker -- a binding (`b: v`, `with b: v do`) of a value marked
+# readonly is readonly for its scope. A borrow of a `.view` value -- an `outx
+# T.view` result, or a control value one of whose arms is read out of a readonly
+# path (moves.pinsOfArms) -- is that view. An `out T.hold` value is readonly for
+# a different reason: it is OWNED, so the borrowed gate never holds for it, and
+# the freeze is a property of the value rather than of a reference into
+# someone else's. Both take the readonly self-lock; a lock that cannot be taken
+# is reported at the binding.
+readonlyByMarker: function {
+    st: zenv.ZSymbolTable
+    ast: Ast.view
+    own: ztypes.zownership
+    marker: ztypes.zparamownership
+    name: zast.nameid
+    vid: ztypes.vid
+    # the binding, which a refused lock is reported at
+    nid: zast.nodeid
+} is {
+    ro: false
+    if own == ztypes.zownership.borrowed then ro = marker == ztypes.zparamownership.viewMode
+    if marker == ztypes.zparamownership.holdMode then ro = true
+    if ro.not then return
+    rn: (ast.names.texts.get i: name).stringView
+    rr: readonlySelfLock :st :ast name: rn :vid
+    if rr.length > 0 then {
+        bn: ast.nodes.get i: nid
+        (
+            addError
+            :st
+            nodeid: nid
+            lineno: (nodeLine n: bn)
+            colno: (nodeCol n: bn)
+            e: zast.err.ownerError
+            msg: rr
+        )
+    }
 }
 
 # readonlySelfLock -- make `name` a readonly binding: it holds a shared lock on

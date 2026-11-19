@@ -3369,6 +3369,21 @@ armValueNode: function {prog: Program.view n: astnode.view} out zast.nodeid is {
     }
 }
 
+# armLeafIsAddress -- the C of a place arm's value `leaf`, read from the name
+# `base`, already is the address the arm hands its reference control value: a
+# pointer local, or a call handing back a reference (a `T*` in C, as
+# `d: o.peek` binds it).
+armLeafIsAddress: function {
+    prog: Program.view
+    ctx: Ctx
+    leaf: zast.nodeid
+    base: zast.nodeid
+} out bool is {
+    pv: atomVid :prog nid: (atomNodeId n: (prog.ast.nodes.get i: base))
+    if pv.notZero when (isPtrVid :ctx vid: pv) then return true
+    return (localnames.nodeIsRefBorrowResult :prog :ctx n: (prog.ast.nodes.get i: leaf))
+}
+
 # armRefLeaf -- an arm of a reference control value, as the address its pointer
 # takes: a place arm's own address (a pointer local already is one), or a zeroed
 # temporary the statement releases, assigned the arm's value, and its address.
@@ -3398,8 +3413,7 @@ armRefLeaf: function {
         # a `.borrow` of a name reads that name's storage, as the bare name does
         under: localnames.rhsBorrowMarkerBase :prog n: (prog.ast.nodes.get i: lf)
         baseN: if under.isZero then lf else under
-        pv: atomVid :prog nid: (atomNodeId n: (prog.ast.nodes.get i: baseN))
-        if pv.notZero when (isPtrVid :ctx vid: pv) then {
+        if (armLeafIsAddress :prog :ctx leaf: lf base: baseN) then {
             return (
                 stating
                 :facts
@@ -3633,7 +3647,7 @@ armCellNew: function {ctx: Ctx pc: StringView value: StringView} out String is {
 # does: a typedef over a class is that class.
 isReftypeParam: function {
     prog: Program.view
-    ctx: Ctx
+    ctx: Ctx.view
     tid: ztypes.tid
 } out bool is {
     cid: (

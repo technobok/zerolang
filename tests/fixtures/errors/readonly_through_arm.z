@@ -1,0 +1,81 @@
+# Readonly is deep through an arm: a binding of an `if`, a `match` or a block
+# is a second name for the place the arm that ran yields, so it is readonly
+# when any arm's place is read out of a readonly path. A `with` alias takes
+# the same answer from its value, as a plain binding does: a `.view` result
+# makes it readonly.
+Inner: class {
+    n: i64
+}
+
+Outer: class {
+    a: Inner
+    b: Inner
+} as {
+    peek: function {t: this.view} outx Inner.view is { return t.a }
+}
+
+Frozen: union {
+    some: Inner.view
+    none: null
+}
+
+Box: class {
+    h: Inner.hold
+    w: Inner
+}
+
+# an arm reads a narrowed `.view` payload
+payloadArm: function {j: Inner k: Inner} is {
+    f: Frozen.some k
+    match (
+        f
+    ) case some then {
+        d: if j.n > 0 then f else j
+        d.n = 3
+    } else null
+}
+
+# a `match` value whose arm reads a `.view` parameter
+matchArm: function {x: Inner.view y: Inner} is {
+    d: match (y.n > 0) case true then y else x
+    d.n = 3
+}
+
+# an arm reads a field of a `.view` parameter
+fieldArm: function {o: Outer.view c: bool} is {
+    d: if c then o.a else o.b
+    d.n = 3
+}
+
+# an arm reads a `.hold` field
+holdArm: function {bx: Box c: bool} is {
+    d: if c then bx.h else bx.w
+    d.n = 3
+}
+
+# a `with` alias of an `if` whose arm reads a `.view` parameter
+withArm: function {x: Inner.view y: Inner c: bool} is {
+    with d: (if c then y else x) do {
+        d.n = 3
+    }
+}
+
+# a `with` alias of a `.view` result
+withViewResult: function {o: Outer} is {
+    with d: o.peek do {
+        d.n = 3
+    }
+}
+
+main: function is {
+    j: Inner n: 2
+    k: Inner n: 1
+    payloadArm :j :k
+    matchArm x: j y: k
+    o: Outer a: (Inner n: 1) b: (Inner n: 2)
+    fieldArm :o c: true
+    bx: Box h: (Inner n: 1) w: (Inner n: 2)
+    holdArm :bx c: true
+    withArm x: j y: k c: true
+    withViewResult :o
+}

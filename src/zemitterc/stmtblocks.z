@@ -2089,32 +2089,50 @@ emitWithBody: function {
     tmp: FnTemps
     buf: String.borrow
 } is {
-    wnm: localnames.varCName known: ctx.known :prog vid: (localnames.defVid :prog nid: n.nodeid)
+    wvid: localnames.defVid :prog nid: n.nodeid
+    wnm: localnames.varCName known: ctx.known :prog vid: wvid
     wsid: stampIdDeep :prog n: (prog.ast.nodes.get i: n.value)
     wct: withValueCType :prog :ctx n: (prog.ast.nodes.get i: n.value) :wsid
-    wv: emitExpr :prog :ctx n: (prog.ast.nodes.get i: n.value)
-    # a non-lvalue receiver (`with x: (mk).iterate do`) hoisted an _ahN temp
-    # while that expression was built; declare it before the line that reads
-    # it, as the plain-binding path does
-    flushArgHoists :ctx :ind :tmp :buf
-    wfO: prog.typing.genLocalFieldOf.get key: (localnames.defVid :prog nid: n.nodeid)
-    match (
-        wfO
-    ) case some then {
-        emitWithField :prog :ctx :n wf: wfO wv: wv.stringView :ind :buf
-    } case none then {
-        (
-            localnames.emitWithLocal
-            :prog
-            :ctx
-            :n
-            :wsid
-            wnm: wnm.stringView
-            wct: wct.stringView
-            wv: wv.stringView
-            :ind
-            :buf
-        )
+    wfO: prog.typing.genLocalFieldOf.get key: wvid
+    # an `if`, a `match` or a block with a place arm: the alias is a second
+    # name for the place the arm that ran yields, as a plain binding's is
+    refBound: false
+    if wfO.none then refBound = (
+        values.emitReferenceBind
+        :prog
+        :ctx
+        avn: (prog.ast.nodes.get i: n.value)
+        :ind
+        :tmp
+        :buf
+        nm: wnm.stringView
+        ct: wct.stringView
+        nameVid: wvid
+    )
+    if refBound.not then {
+        wv: emitExpr :prog :ctx n: (prog.ast.nodes.get i: n.value)
+        # a non-lvalue receiver (`with x: (mk).iterate do`) hoisted an _ahN temp
+        # while that expression was built; declare it before the line that reads
+        # it, as the plain-binding path does
+        flushArgHoists :ctx :ind :tmp :buf
+        match (
+            wfO
+        ) case some then {
+            emitWithField :prog :ctx :n wf: wfO wv: wv.stringView :ind :buf
+        } case none then {
+            (
+                localnames.emitWithLocal
+                :prog
+                :ctx
+                :n
+                :wsid
+                wnm: wnm.stringView
+                wct: wct.stringView
+                wv: wv.stringView
+                :ind
+                :buf
+            )
+        }
     }
     # a `with` binds a value as an ordinary binding does: the value may be a
     # call that took ownership of an argument, so that source is zeroed here.

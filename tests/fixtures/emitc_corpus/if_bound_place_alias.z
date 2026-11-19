@@ -1,0 +1,112 @@
+# A binding of an `if`, a `match`, a block or a `with` whose arm is a place is
+# a second name for that place, whatever the type owns: a write through it
+# reaches the local the arm read. The types up to `Outer` own nothing, so a
+# copy would have been as cheap as an alias -- and lost every write. A `with`
+# over an `if` one of whose arms makes a value of its own keeps that value for
+# the block (`Named`).
+Inner: class {
+    n: i64
+}
+
+Box: class {
+    v: t
+} as {
+    t: anyval.generic
+}
+
+Pick: union {
+    one: Inner
+    none: null
+}
+
+Bump: protocol {
+    bump: function {t: this}
+    get: function {t: this.view} out i64
+}
+
+Ctr: class { n: i64 } as {
+    bp: Bump.implement
+    bump: function {c: this} is { c.n = c.n + 1 }
+    get: function {c: this.view} out i64 is { return c.n }
+}
+
+Named: class {
+    n: i64
+    s: String
+}
+
+mkNamed: function {n: i64} out Named is { return (Named :n s: "made".string) }
+
+Outer: class {
+    a: Inner
+    b: Inner
+} as {
+    first: function {t: this} outx Inner.borrow is { return t.a }
+}
+
+main: function is {
+    j: Inner n: 1
+    k: Inner n: 2
+    c: j.n > 0
+    {
+        d: if c then j else k
+        d.n = 10
+    }
+    {
+        d: match (k.n > 1) case true then k else j
+        d.n = 20
+    }
+    {
+        d: {
+            j
+        }
+        d.n = d.n + 1
+    }
+    with d: (if c.not then j else k) do {
+        d.n = d.n + 1
+    }
+    print "class: \{j.n} \{k.n}"
+
+    g: Box v: 3
+    h: Box v: 4
+    {
+        d: if c then g else h
+        d.v = 30
+    }
+    print "generic class: \{g.v} \{h.v}"
+
+    u: Pick.one (Inner n: 5)
+    w: Pick.none
+    {
+        d: if c then u else w
+        match (d) case one then d.n = 50 case none then null
+    }
+    match (u) case one then print "union: \{u.n}" case none then print "union: none"
+
+    p: Bump.create from: (Ctr n: 6)
+    q: Bump.create from: (Ctr n: 7)
+    {
+        d: if c then p else q
+        d.bump
+    }
+    print "protocol: \{p.get} \{q.get}"
+
+    o: Outer a: (Inner n: 8) b: (Inner n: 9)
+    {
+        d: if c then o.first else o.b
+        d.n = 80
+    }
+    print "outx arm: \{o.a.n} \{o.b.n}"
+
+    r: if c then j else k
+    print "read: \{r.n}"
+
+    nj: Named n: 1 s: "nj".string
+    with d: (if c then (mkNamed n: 7) else nj) do {
+        print "with owned arm: \{d.n} \{d.s}"
+    }
+    with d: (if c.not then (mkNamed n: 7) else nj) do {
+        d.n = 12
+    }
+    print "with place arm: \{nj.n} \{nj.s}"
+}

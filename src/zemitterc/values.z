@@ -2463,11 +2463,16 @@ ifIsTernary: function {prog: Program.view n: astnode.view} out bool is {
 }
 
 # controlValueIsReference -- an `if`, a `match`, a block or a `with` used as a
-# value whose type owns something and one of whose arms (a block's or a `with`'s
-# one body) is a place (armLeafIsPlace): what it yields is storage something
-# else owns on that arm's path, so it is emitted as a reference to the arm's
-# value (emitControlRef) rather than as a value of its own, which every use
-# would free.
+# value one of whose arms (a block's or a `with`'s one body) is a place
+# (armLeafIsPlace), of a type whose copy is not that place: a class or a union
+# whose payload lives in its header (argforms.isReftypeParam, the question a
+# borrowed parameter asks), or a type that owns something. What it yields is
+# storage something else owns on that arm's path, so it is emitted as a
+# reference to the arm's value (emitControlRef) rather than as a value of its
+# own. A copy would lose every write through the binding -- a binding of a
+# reftype place is a second name for it, whatever the type owns, as `d: j` is
+# -- and every use of an owning copy would free it. A view, a protocol and the
+# other value-natives share what they refer to with their copy.
 controlValueIsReference: function {
     prog: Program.view
     ctx: Ctx.view
@@ -2478,7 +2483,8 @@ controlValueIsReference: function {
     nid: zast.nodeIdOf :n
     vt: bindingStampOf :prog nid: (controlValueStampNid :prog :n)
     if vt.isZero then return false
-    owns: vt == ctx.known.strTid
+    owns: argforms.isReftypeParam :prog :ctx tid: vt
+    if owns.not then owns = vt == ctx.known.strTid
     if owns.not then owns = isHeapPtrCollection :prog :ctx tid: vt
     if owns.not then owns = types.ownsResources :prog :ctx tid: vt
     if owns.not then return false
