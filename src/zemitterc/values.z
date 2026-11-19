@@ -2006,10 +2006,9 @@ emitDottedTagRead: function {
     return "".string
 }
 
-# moveMarkerMovesBase -- whether `.take`/`.hold` on this base moves a heap
-# value: a String, a union, a protocol value (it owns its box), a by-value
-# class (a borrowed pointer-param class is not a move source), or a function
-# value.
+# moveMarkerMovesBase -- whether `.take`/`.hold` on this base moves a value: a
+# reftype held by value -- one a borrowed pointer parameter points at is not a
+# move source -- or a function value.
 moveMarkerMovesBase: function {
     prog: Program.view
     ctx: Ctx.view
@@ -2019,14 +2018,9 @@ moveMarkerMovesBase: function {
     tknid: atomNodeId n: (prog.ast.nodes.get i: pnid)
     if tknid.isZero then tknid = pnid
     tkt: stampIdOf :prog nid: tknid
-    if tkt == ctx.known.strTid then return true
-    tt: prog.reg.typetypeOf typeId: tkt
-    if (tt == ztypes.ztypetype.unionType) or (tt == ztypes.ztypetype.protocolType) then return true
-    if tt == ztypes.ztypetype.functionType then return true
-    if tt == ztypes.ztypetype.classType then {
-        return (isPtrVid :ctx vid: (atomVid :prog nid: tknid)).not
-    }
-    return false
+    if (prog.reg.typetypeOf typeId: tkt) == ztypes.ztypetype.functionType then return true
+    if (prog.reg.isReftypeOf tid: tkt).not then return false
+    return (isPtrVid :ctx vid: (atomVid :prog nid: tknid)).not
 }
 
 # baseAtomNamesFunction -- a bare atom that is not a local and whose reference
@@ -3949,13 +3943,14 @@ emitRepointCompanion: function {
     cv: co
     tid: chaseAggregateTypedef :prog :ctx tid: (prog.reg.variableTypeOf id: cv)
     nm: companionCName known: ctx.known :prog :cv
-    ct: companionCType :prog :ctx :tid
+    ct: localCType :prog :ctx :tid
     buf.append "\{ind}\{ct} \{nm} = \{zeroValueC :prog :ctx :tid};\n"
 }
 
-# companionCType -- the C type a companion of type `tid` is held as: the String
-# struct, a heap collection's pointer, any other type's value.
-companionCType: function {
+# localCType -- the C type a local of type `tid` is held as -- a named one, a
+# re-point companion, a discarded result's temporary: the String struct, a heap
+# collection's pointer, any other type's value.
+localCType: function {
     prog: Program.view
     ctx: Ctx
     tid: ztypes.tid
@@ -4008,7 +4003,7 @@ emitOwnedRepoint: function {
     rv: reassignRhsText :prog :ctx :valueNode :ind :tmp :buf :facts
     flushArgHoists :ctx :ind :tmp :buf
     rrn: tmpNext stmt: ctx.stmt :tmp
-    ct: companionCType :prog :ctx :tid
+    ct: localCType :prog :ctx :tid
     buf.append "\{ind}\{ct} _rr\{rrn} = \{rv};\n"
     buf.append (stmtblocks.destroyLineC :prog :ctx :tid nm: cn.stringView :ind)
     buf.append "\{ind}\{cn} = _rr\{rrn};\n"
