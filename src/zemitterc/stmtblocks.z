@@ -152,6 +152,15 @@ blockDiverges: function {
     }
 }
 
+# armBodyDiverges -- an arm's body leaves on every path, whether it is a block
+# (blockDiverges) or one expression stamped `never` (stmtDiverges), as a bare
+# `case none then panic msg: ..` is; the arm needs no `break` after it, in a
+# statement match or in one whose arms assign a value.
+armBodyDiverges: function {prog: Program.view ctx: Ctx.view nid: zast.nodeid} out bool is {
+    if (blockDiverges :prog :ctx n: (prog.ast.nodes.get i: nid)) then return true
+    return (stmtDiverges :prog :ctx sid: nid)
+}
+
 # stmtDiverges -- one statement leaves its block on every path: a `never` stamp
 # (panic, unreachable, break, continue, an all-arms-diverge match), a `return`
 # valued or bare, an if/else chain whose every arm diverges, or a loop that never
@@ -3316,7 +3325,8 @@ emitMatchClause: function {
                 :buf
             )
         }
-        dv: false
+        # an arm that leaves needs no `break` after it
+        dv: armBodyDiverges :prog :ctx nid: c.statement
         if assignTo.length > 0 then {
             armInd: "\{ind}    "
             (
@@ -3334,7 +3344,6 @@ emitMatchClause: function {
             lL: tmp.listFrees.length
             cst: prog.ast.nodes.get i: c.statement
             emitBodyNode :prog :ctx n: cst ind: bodyInd.stringView :tmp :buf
-            dv = blockDiverges :prog :ctx n: cst
             closeScopeBlock :prog :ctx :tmp :lL diverged: dv node: c.nodeid :buf
         }
         if didSeed then {
@@ -3372,7 +3381,8 @@ emitMatchElse: function {
         l7: "\{ind}default: {\n"
         buf.append l7
         bodyInd: "\{ind}    "
-        dv8: false
+        # an else that leaves needs no `break` after it
+        dv8: armBodyDiverges :prog :ctx nid: oId
         if assignTo.length > 0 then {
             armInd: "\{ind}    "
             (
@@ -3389,7 +3399,6 @@ emitMatchElse: function {
         } else {
             lLe: tmp.listFrees.length
             emitBodyNode :prog :ctx n: o ind: bodyInd.stringView :tmp :buf
-            dv8 = blockDiverges :prog :ctx n: o
             closeScopeBlock :prog :ctx :tmp lL: lLe diverged: dv8 node: oId :buf
         }
         if dv8.not then {
