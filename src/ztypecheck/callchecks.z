@@ -1090,18 +1090,14 @@ checkUntypedArgLabel: function {
         for each bIdU: boundArgIds loop {
             if bIdU == dcnU then dupU = true
         }
-        if dupU when reportUnknown then {
-            paramName: zast.nameTextAt :ast ref: pnIdU
-            dmU: "argument '\{paramName}' specified more than once"
-            (
-                addError
-                :st
-                nodeid: arg.nid
-                lineno: arg.lineno
-                colno: arg.colno
-                e: zast.err.callError
-                msg: dmU
-            )
+        if dupU when reportUnknown or isCtor.not when (
+            receiverParamOf
+            :st
+            :funcId
+            :isCtor
+            pnId: pnIdU
+        ).not then {
+            reportArgGivenTwice :st :ast pnId: pnIdU :arg
         } else {
             boundArgIds.append dcnU
         }
@@ -1603,7 +1599,20 @@ checkTypedCallArg: function {
         pnId = positionalParamNameId :st funcId: effId idx: argIdx skipRecv: recvImplicit
         if pnId.isZero when isCtor.not then reportSurplusPositional :st :ast :call :effId :arg
     }
-    numerics.coerceArgToParam :st :ast :effId :vt :pnId :boundArgIds :reportUnknown :wasPos :arg
+    (
+        numerics.coerceArgToParam
+        :st
+        :ast
+        :effId
+        :vt
+        :pnId
+        :boundArgIds
+        reportDuplicate: (
+            reportUnknown or isCtor.not and (receiverParamOf :st :funcId :isCtor :pnId).not
+        )
+        :wasPos
+        :arg
+    )
     ownFn: ownershipCallee :st :effId :funcId :isCtor
     ownCtor: isCtor and (ownFn == funcId)
     aow: argOwnershipOf :st funcId: ownFn isCtor: ownCtor :pnId :vt
@@ -4398,6 +4407,39 @@ lockGenericValueArg: function {
     conform.refuseUnshareablePins :st :ast :arg :pins from: pinMark
 }
 
+# receiverParamOf -- `pnId` names the receiver parameter of the method `funcId`
+# a call (not a construction) is made to: the receiver check reports it given
+# twice (walkOneCallArg), so the duplicate check leaves it be
+receiverParamOf: function {
+    st: zenv.ZSymbolTable.view
+    funcId: ztypes.tid
+    isCtor: bool
+    pnId: zast.nameid
+} out bool is {
+    if isCtor or funcId.isZero or pnId.isZero then return false
+    rn: st.reg.thisParamNameIdOf tid: funcId
+    if rn.isZero then rn = zast.wellKnown.slot.wkThis
+    return pnId == rn
+}
+
+# reportArgGivenTwice -- an argument binds a parameter an earlier one of the call
+# already bound (a positional one and a label, or the same label twice): the
+# call is refused, whichever path binds its arguments
+reportArgGivenTwice: function {
+    st: zenv.ZSymbolTable ast: Ast.view pnId: zast.nameid arg: argref
+} is {
+    paramName: zast.nameTextAt :ast ref: pnId
+    (
+        addError
+        :st
+        nodeid: arg.nid
+        lineno: arg.lineno
+        colno: arg.colno
+        e: zast.err.callError
+        msg: "argument '\{paramName}' specified more than once"
+    )
+}
+
 # inferGenericCallSubs -- read one call's arguments into the generic-parameter
 # substitutions: an explicit type argument names its parameter, a value argument
 # infers from the type it walks to, and a positional one binds by index.
@@ -4422,6 +4464,8 @@ inferGenericCallSubs: function {
 } is {
     posIdx: u64
     lockMark: st.argLocks.length
+    # the parameter slots bound so far: a second binding is refused
+    boundSlots: ListVal u64
     kAiter: u64
     for kAiter < call.nargs loop {
         argId: zast.callArgAt :ast nid: call.nid i: kAiter
@@ -4441,16 +4485,11 @@ inferGenericCallSubs: function {
         spellGenericArgUnderscore :st :ast :unitDecl :funcId :pNames :posIdx :arg
         avt: checkValueAt :st :unitDecl :ast nid: arg.operation
         if wantTypes then recordArgType :argTypes at: kAiter - 1 tid: avt
-        # a value that did not type is reported HERE, as the concrete
-        # argument walk reports it (walkOneCallArg): walking on would bind
-        # nothing and let the emitter write the unresolved name into C for the
-        # C compiler to reject
-        if avt.u64 == 0 when st.typing.errors.length == errG then {
-            valuechecks.reportUnresolvedValue :st :unitDecl :ast nid: arg.operation
-            reportUntypedCallArg :st :unitDecl :ast nid: arg.operation
-        }
+        reportUntypedGenericArg :st :unitDecl :ast :arg :avt :errG
         hs: argHolderSlot :st :ast :arg :funcId :pNames :pHolders :pHolderIds :posIdx
         posIdx = posIdx + 1
+        if (slotGivenTwice :st :ast :pNames nSlots: pHolderIds.length :boundSlots :arg :hs
+        ) then continue
         mat: conform.argBindingTid :st :ast :funcId holder: hs.holder :avt
         if hs.slot < pHolderIds.length then {
             (
@@ -4480,6 +4519,46 @@ inferGenericCallSubs: function {
         }
     }
     moves.layArgLocks :st pool: ast.names mark: lockMark
+}
+
+# reportUntypedGenericArg -- a value argument of a generic call that did not
+# type (`avt` 0) and was not reported since `errG` is reported HERE, as the
+# concrete argument walk reports it (walkOneCallArg): walking on would bind
+# nothing and let the emitter write the unresolved name into C for the C
+# compiler to reject.
+reportUntypedGenericArg: function {
+    st: zenv.ZSymbolTable
+    unitDecl: ztypes.declid
+    ast: Ast
+    arg: argref
+    avt: ztypes.tid
+    errG: u64
+} is {
+    if (avt.u64 != 0) or (st.typing.errors.length != errG) then return
+    valuechecks.reportUnresolvedValue :st :unitDecl :ast nid: arg.operation
+    reportUntypedCallArg :st :unitDecl :ast nid: arg.operation
+}
+
+# slotGivenTwice -- the argument binds the parameter slot `hs` names, which an
+# earlier argument of the call bound: it is reported, and the answer is true.
+# A slot past the parameters (`nSlots`) binds nothing; a free one is recorded
+# in `boundSlots` as bound.
+slotGivenTwice: function {
+    st: zenv.ZSymbolTable
+    ast: Ast
+    pNames: (ListVal zast.nameid).view
+    nSlots: u64
+    boundSlots: ListVal u64
+    arg: argref
+    hs: holderslot
+} out bool is {
+    if hs.slot >= nSlots then return false
+    if (boundSlots.contains item: hs.slot).not then {
+        boundSlots.append hs.slot
+        return false
+    }
+    reportArgGivenTwice :st :ast pnId: (pNames.get i: hs.slot) :arg
+    return true
 }
 
 # bindValueArg -- what one value argument says about the call's generic
