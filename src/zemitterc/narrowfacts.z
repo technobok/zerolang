@@ -282,7 +282,10 @@ entryText: function {xs: (List VarEntry).view at: u64 facts: exprfacts.borrow} o
 # it -- and the checker stamped the read with the local's declared type. The
 # alias stays for the reads the narrowing still covers, and each read is told
 # apart by its own stamp, so the emitter never has to re-derive where a
-# narrowing ends.
+# narrowing ends. An arm whose payload is the sum itself (`more: Chain`)
+# narrows to the local's own type, so there the stamp tells nothing: the
+# checker's record of the reads a narrowing end reaches decides
+# (ZTyping.wholeLocalReads).
 narrowingEndedAt: function {
     prog: Program.view
     narrow: NarrowState.view
@@ -290,9 +293,12 @@ narrowingEndedAt: function {
     vid: ztypes.vid
 } out bool is {
     if (varEntryHas xs: narrow.box :vid).not then return false
+    if (prog.typing.wholeLocalReads.has item: nid) then return true
     stamped: stampIdOf :prog :nid
     if stamped.isZero then return false
-    return stamped == (prog.reg.variableTypeOf id: vid)
+    whole: prog.reg.variableTypeOf id: vid
+    if stamped != whole then return false
+    return ((varTidGet xs: narrow.tid :vid).or d: ztypes.tid.zero) != whole
 }
 
 # wholeLocalName -- the local's own storage: a take alias where one stands,
