@@ -1,0 +1,218 @@
+# consteval -- the mutants of src/ztypecheck/consteval.z that no test can kill, each with the
+# reason: `zgate mutate` (make mutate) leaves them out of the score and lists them apart in
+# survivors.md. A row names a mutant by the function its edit is in, the kind of the edit (op,
+# as mutsites names it) and which of the function's edits of that kind it is, from 1, so an
+# edit elsewhere in the file does not move it; `code` is the line the edit is on, as the row was
+# written, and a row whose line no longer reads so is listed as stale and counts for nothing.
+
+# equivalent -- one mutant no program can tell from zc: where, which edit, why, and its line
+equivalent: data {
+    where: text
+    op: text
+    nth: u64
+    why: text
+    code: text
+}
+
+equivalents: list {
+    (
+        equivalent
+        where: "numericArgStandsIn"
+        op: "delete"
+        nth: 3
+        why: "numericBoundTid resolves a numeric bound's kind name through the system unit, which declares every scalar: boundTid is never 0"
+        code: "if boundTid.isZero then return true"
+    )
+    (
+        equivalent
+        where: "refuseWideAggItem"
+        op: "delete"
+        nth: 2
+        why: "a bigId-0 integer is an i64, and a float here is untyped and inside f64: constFitsKindMessage reports nothing for either, as the early return does"
+        code: "if v.bigId == 0 when (constPastF64 :st :v).not then return"
+    )
+    (
+        equivalent
+        where: "constFitsKind"
+        op: "delete"
+        nth: 1
+        why: "a fast path: bigFitsKind answers as intValueFits for every integer kind, the only kinds constFitsKind is asked about"
+        code: "if v.bigId == 0 then return (ztypes.intValueFits v: v.ival :k)"
+    )
+    (
+        equivalent
+        where: "bigFitsKind"
+        op: "bool"
+        nth: 1
+        why: "w is 0 only for a non-integer kind, and the one caller, constFitsKind, asks integer kinds alone"
+        code: "if w == 0 then return false"
+    )
+    (
+        equivalent
+        where: "bigFitsKind"
+        op: "edge"
+        nth: 3
+        why: "only b == 0 changes branch, and the negative branch answers true for it as well (0 bits is under w)"
+        code: "if b.sign >= 0 then return b.bitLength < w"
+    )
+    (
+        equivalent
+        where: "constNumTidOf"
+        op: "andor"
+        nth: 1
+        why: "an untyped operand's tid is replaced by the typed operand's (constOfTypedFold) or resolved to the same i64 or f64 (constValueTid)"
+        code: "if v.kind.ivalKind or v.kind.fvalKind then return (literalDefaultTid :st :scope :ast :v)"
+    )
+    (
+        equivalent
+        where: "constIntNot"
+        op: "eq"
+        nth: 3
+        why: "a fast path: wrapBig in the same width gives the same value, and constOfBig keeps an in-range result inline"
+        code: "if v.bigId == 0 when bits <= 64 then {"
+    )
+    (
+        equivalent
+        where: "constOfTypedFloatFold"
+        op: "andor"
+        nth: 1
+        why: "both operands have a value here (constOfTypedFold returned otherwise), so `and` and `or` agree"
+        code: "if lf.has.not or rf.has.not then return ztypes.noConst"
+    )
+    (
+        equivalent
+        where: "constFloatFolds"
+        op: "delete"
+        nth: 1
+        why: "after the divZero record the division gives an infinity or NaN, whose floatOverflow record is dropped: the first failure wins"
+        code: "return false"
+    )
+    (
+        equivalent
+        where: "constOfConversion"
+        op: "delete"
+        nth: 4
+        why: "scalarTidOf of one of the sixteen scalar names is never 0: the system unit declares them all"
+        code: "if target.isZero then return ztypes.noConst"
+    )
+    (
+        equivalent
+        where: "constShiftInt"
+        op: "delete"
+        nth: 5
+        why: "a left shift past the width through wrapToWidth is 0 as well: i64 `<<` reads a count past 63 as 0"
+        code: "return (optionval.some 0)"
+    )
+    (
+        equivalent
+        where: "constArithI64"
+        op: "bool"
+        nth: 2
+        why: "a fast path: constArithBig computes the same in-range sum, and constOfBig keeps it inline"
+        code: "return (arithfast done: true v: ztypes.makeIntConst a + b)"
+    )
+    (
+        equivalent
+        where: "constArithI64"
+        op: "bool"
+        nth: 5
+        why: "a fast path: constArithBig computes a * 0 = 0 the same"
+        code: "if b == 0 then return (arithfast done: true v: ztypes.makeIntConst 0)"
+    )
+    (
+        equivalent
+        where: "constArithI64"
+        op: "bool"
+        nth: 8
+        why: "constArithBig records the same divZero (the first record wins) and answers noConst"
+        code: "return (arithfast done: true v: ztypes.noConst)"
+    )
+    (
+        equivalent
+        where: "constShiftExact"
+        op: "edge"
+        nth: 2
+        why: "bigId is set only for a value outside i64 (constOfBig), so it is never 0 here: `<= 0` and `< 0` decide alike"
+        code: "if rv.bigId != 0 when (constBigOf typing: st.typing v: rv).sign < 0 then return ztypes.noConst"
+    )
+    (
+        equivalent
+        where: "constStrArgAt"
+        op: "delete"
+        nth: 7
+        why: "two arguments match one parameter only when it is given twice, which the call is refused for (reportArgGivenTwice)"
+        code: "found = true"
+    )
+    (
+        equivalent
+        where: "constOfCall"
+        op: "delete"
+        nth: 12
+        why: "its one caller reaches it only for a call-shaped plan on the same node: isCall always holds"
+        code: "if isCall.not then return ztypes.noConst"
+    )
+    (
+        equivalent
+        where: "evalConstPlan"
+        op: "eq"
+        nth: 1
+        why: "innerId is read only for a one-part string; node 0 is the placeholder row, so evalConstString joins the same chunk"
+        code: "if parts == 1 then innerId = zast.kidAt kids: ast.kids span: n.stringparts i: 0"
+    )
+    (
+        equivalent
+        where: "evalConstString"
+        op: "delete"
+        nth: 12
+        why: "the parser joins every literal run into one chunk, so an all-chunk literal returns earlier: the line is never reached with plain true"
+        code: "if plain then return (ztypes.makeStrConst (constInternString :st text: joined.stringView))"
+    )
+    (
+        equivalent
+        where: "stampConstAt"
+        op: "delete"
+        nth: 3
+        why: "an `other` shape folds to noConst recording nothing, and refuseUnfoldedLiteral finds no operator parts on it"
+        code: "if plan.shape.other then return"
+    )
+    (
+        equivalent
+        where: "stampConstAt"
+        op: "delete"
+        nth: 12
+        why: "a function-valued constant stamped fnKind is read by no reader: they key on ival, fval, sval, arm and agg"
+        code: "return"
+    )
+    (
+        equivalent
+        where: "markOperandsTaken"
+        op: "delete"
+        nth: 8
+        why: "the option receiver's const_agg row is marked reached only in the raw dump: the emitter writes an aggregate only when its own reach has it, and the run, the C and the canonical dump are the same"
+        code: "callable = n.callable"
+    )
+    (
+        equivalent
+        where: "markOperandsTaken"
+        op: "delete"
+        nth: 9
+        why: "node 0 is the placeholder row, never a dotted path: the test that follows does nothing"
+        code: "if callable.isZero then return"
+    )
+    (
+        equivalent
+        where: "integerDivision"
+        op: "bool"
+        nth: 1
+        why: "every divZero failure is recorded on a binary operator's node: br.nid is never 0"
+        code: "if br.nid.isZero then return true"
+    )
+    (
+        equivalent
+        where: "integerDivision"
+        op: "delete"
+        nth: 2
+        why: "as the bool edit of this line: the condition never holds"
+        code: "if br.nid.isZero then return true"
+    )
+}

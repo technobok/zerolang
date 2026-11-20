@@ -1,0 +1,51 @@
+# A union arm whose value fits the 8-byte slot is held in it: a data value is
+# a handle to its static object, 8 bytes whatever its fields; a `str` up to 7
+# chars is its length byte and 7 chars; a variant with a u8 tag and a u16
+# payload is 4 bytes aligned to 2, so a record of it, a u8 and a u16 is 8. A
+# generic union whose arm holds an instance of itself holds a reference to a
+# heap cell, which is no containment cycle.
+part: data { name: text  count: u64  size: u64 }
+nut: (part name: "nut" count: 3 size: 9)
+
+tag2: variant {
+    a: u16
+    b: null
+}
+packed: record { v: tag2  x: u8  y: u16 }
+
+Fits: union {
+    p: part
+    s7: (str to: 7)
+    v: tag2
+    k: packed
+    s: String
+}
+
+Chain: union {
+    last: t
+    more: (Chain :t)
+} as { t: anyval.generic }
+
+show: function {f: Fits} is {
+    match (f) case p then {
+        print "part \{f.name} \{f.count} \{f.size}"
+    } case s7 then {
+        print "str \{f}"
+    } case v then {
+        match (f) case a then print "tag2 a \{f}" case b then print "tag2 b"
+    } case k then {
+        w: f.v
+        match (w) case a then print "packed \{w} \{f.x} \{f.y}" case b then print "packed b"
+    } case s then print "string \{f}"
+}
+
+main: function is {
+    show f: (Fits.p nut)
+    show f: (Fits.s7 ("seven77".str to: 7))
+    show f: (Fits.v (tag2.a 513))
+    show f: (Fits.k (packed v: (tag2.a 7) x: 200 y: 65535))
+    show f: (Fits.s "x".string)
+    c: (Chain t: i64).last 5
+    d: (Chain t: i64).more c
+    match (d) case last then print "last \{d}" case more then print "more"
+}
