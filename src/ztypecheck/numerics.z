@@ -209,6 +209,9 @@ valtypeLayout: function {
     # its typetype, and is not laid out as its declared fields
     nl: nativeLayout :ast :st :tid :refBytes :depth
     if nl.known or nl.cyclic then return nl
+    # a native nativeLayout does not measure is not measured: it declares no
+    # fields, so a record's layout would read it as 0 bytes
+    if (st.reg.isNativeOf :tid) then return unknownLayout
     tt: st.reg.typetypeOf typeId: tid
     # a data value is held as a handle to its static object
     if tt == ztypes.ztypetype.recordType when (st.reg.isStaticOf :tid) then return (
@@ -225,7 +228,8 @@ valtypeLayout: function {
 
 # nativeLayout -- the value types the runtime lays out: a numeric its width,
 # `str N` its length field (1, 2 or 4 bytes, as the emitter's capLenT picks)
-# and N chars, `array t to: N` N elements. Any other native is not measured.
+# and N chars, `array t to: N` N elements, a `text`, a `StringView` or a
+# `staticlist` its pointer and its u64 length. Any other native is not measured.
 nativeLayout: function {
     ast: Ast.view
     st: zenv.ZSymbolTable.view
@@ -244,6 +248,13 @@ nativeLayout: function {
         if cap <= 255 then w = 1
         return (valtypelayout size: (alignUp n: w + cap a: w) align: w known: true cyclic: false)
     }
+    if (pointerAndLengthNative :ast :st :tid) then return (
+        valtypelayout
+        size: (alignUp n: 8 + refBytes a: 8)
+        align: 8
+        known: true
+        cyclic: false
+    )
     if (valIsMonoOf reg: st.reg typing: st.typing :tid wk: zast.wellKnown.slot.tyArray) then {
         el: (
             valtypeLayout
@@ -258,6 +269,23 @@ nativeLayout: function {
         return (valtypelayout size: el.size * n align: el.align known: true cyclic: false)
     }
     return unknownLayout
+}
+
+# pointerAndLengthNative -- a native the runtime holds as a pointer and a u64
+# length: `text` and `StringView` (one C type), a `staticlist` instance. Decided
+# by the system's own declarations, never by a name a user's type may share.
+pointerAndLengthNative: function {
+    ast: Ast.view
+    st: zenv.ZSymbolTable.view
+    tid: ztypes.tid
+} out bool is {
+    if tid.isZero then return false
+    if (valIsMonoOf reg: st.reg typing: st.typing :tid wk: zast.wellKnown.slot.tyStaticlist
+    ) then return true
+    if (
+        tid == (moves.stdTidPeek :ast typing: st.typing wk: zast.wellKnown.slot.tyText)
+    ) then return true
+    return tid == (moves.stdTidPeek :ast typing: st.typing wk: zast.wellKnown.slot.tyStringView)
 }
 
 # recordLayout -- a record's fields laid out in order, each at its alignment,
@@ -492,8 +520,9 @@ checkUnionSlotArms: function {
 } is {
     names: ListVal zast.nameid
     zenv.sumArmNameIds ty: st.typing reg: st.reg tid: uid ids: names
-    # a static list's element is static storage, never boxed: the view a walk
-    # yields holds it whole, whatever its size
+    # a static list's element is static storage, never boxed and never too
+    # wide: the view a walk yields POINTS at it, whatever its size (StaticView
+    # is laid out as OptionView, one pointer arm), so no arm of it is inline
     staticView: (
         valIsMonoOf
         reg: st.reg
@@ -510,10 +539,7 @@ checkUnionSlotArms: function {
         key: st.typing.armKey parentTypeId: uid nameId: nm
         if (st.walk.boxedArms.has item: key) then continue
         if (st.typing.declOwnershipOfId parentTypeId: uid nameId: nm).some then continue
-        if staticView then {
-            st.typing.inlineArms.add item: key
-            continue
-        }
+        if staticView then continue
         lay: valtypeLayout :ast :st tid: ptid refBytes: slotB depth: 0
         if lay.known when lay.size <= slotB when lay.align <= slotB then {
             st.typing.inlineArms.add item: key
