@@ -6353,6 +6353,32 @@ evalConstViaDottedParent: function {
     return (constOfUnitPathMember :st :scope :ast :parentId :ncId)
 }
 
+# literalConstValue -- the value of the numeric literal `lex` at `nid`; one no
+# constant holds (past 512 bits) records why, where it is written, in the
+# words a body uses (noteWideLiteral).
+literalConstValue: function {
+    st: zenv.ZSymbolTable
+    ast: Ast.view
+    nid: zast.nodeid
+    lex: StringView
+} out ztypes.cval is {
+    v: consteval.constLiteralValue :st name: lex
+    if v.kind.none when (memberaccess.literalPastWide :lex) then {
+        ln: ast.nodes.get i: nid
+        (
+            consteval.constFailRecord
+            :st
+            kind: ztypes.constfailkind.wideLiteral
+            nodeid: nid
+            lineno: (nodeLine n: ln)
+            colno: (nodeCol n: ln)
+            width: lex.length
+            strId: (consteval.constInternString :st text: lex)
+        )
+    }
+    return v
+}
+
 # evalConstNode -- the compile-time value of a node, or `none` when the node is
 # not a constant shape. Silence is deliberate here -- a shape with no value is not automatically an
 # error, because this walk also runs over definitions that are not constants at
@@ -6384,7 +6410,7 @@ evalConstNode: function {
         if nv.length == 0 then noName = true
         if noName.not then {
             isLit = isNumericLiteralName name: nv.stringView
-            if isLit then litVal = consteval.constLiteralValue :st name: nv.stringView
+            if isLit then litVal = literalConstValue :st :ast :nid lex: nv.stringView
         }
         nv.drop
         if noName then return ztypes.noConst
@@ -8009,6 +8035,26 @@ unfoldedMemberWhy: function {
     return true
 }
 
+# foldRecordsReason -- the definition `nid` (0 for none) folds to no value
+# and RECORDS why -- a conversion that can lose data, a literal no constant
+# holds -- which is rendered at the definition: a reader of it adds nothing
+# (unfoldedWhy's rule). The failure slot is left as it was.
+foldRecordsReason: function {
+    st: zenv.ZSymbolTable
+    scope: ztypes.declid
+    ast: Ast
+    unitDecl: ztypes.declid
+    nid: zast.nodeid
+} out bool is {
+    if nid.isZero then return false
+    heldF: st.walk.consts.fail
+    constFailClear :st
+    dv: evalConstNode :st :scope :ast :unitDecl :nid
+    said: dv.kind.none and st.walk.consts.fail.failed
+    st.walk.consts.fail = heldF
+    return said
+}
+
 # unfoldedNameWhy -- a bare name with no value. A name nothing declares is the
 # body's unknown reference. A constant computed from others is asked in turn,
 # so the report lands where the reason is written; any other declaration -- a
@@ -8046,6 +8092,7 @@ unfoldedNameWhy: function {
             visiting.append from: defOp
             return (unfoldedWhy :st scope: od :ast :unitDecl nid: defOp :visiting)
         }
+        if (foldRecordsReason :st scope: od :ast :unitDecl nid: defOp) then return true
     }
     (
         reportUnfolded

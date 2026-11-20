@@ -72,6 +72,9 @@ literalFitsMessage: function {
     st: zenv.ZSymbolTable lit: StringView target: StringView
 } out String is {
     if (isNumericTypeName name: target).not then return "".string
+    # one past the 512 bits has no value at all: that is its reason, whatever
+    # the target (a float holds 10^160, but no constant holds the literal)
+    if (memberaccess.literalPastWide lex: lit) then return "integer literal \{lit} overflows"
     # a literal with a value is settled by it, as every landing is; the lexeme
     # path below reads what has none -- a hex, octal or binary one past i64
     v: constLiteralValue :st name: lit
@@ -516,8 +519,10 @@ constFailRecord: function {
     )
 }
 
-# renderConstFail -- report one recorded failure.
-renderConstFail: function {st: zenv.ZSymbolTable f: ztypes.constfail} is {
+# renderOwnReport -- a failure reported as its own kind of error, not as a
+# value the fold could not give: a non-exhaustive match, a mismatch in the
+# body's words, a reached `error`. Answers whether `f` was one.
+renderOwnReport: function {st: zenv.ZSymbolTable f: ztypes.constfail.view} out bool is {
     if f.kind.nonExhaustive then {
         mj: constStringAt :st id: f.strId
         (
@@ -532,7 +537,7 @@ renderConstFail: function {st: zenv.ZSymbolTable f: ztypes.constfail} is {
             hint: String
             width: f.width
         )
-        return
+        return true
     }
     if f.kind.mismatch then {
         # the body's own words, and so the body's code: a number that cannot
@@ -550,7 +555,7 @@ renderConstFail: function {st: zenv.ZSymbolTable f: ztypes.constfail} is {
             hint: String
             width: f.width
         )
-        return
+        return true
     }
     if f.kind.reachedError then {
         # E0601: the program itself asserting, in the user's own words. Not an
@@ -566,8 +571,14 @@ renderConstFail: function {st: zenv.ZSymbolTable f: ztypes.constfail} is {
             msg: um.stringView
         )
         st.typing.isError = true
-        return
+        return true
     }
+    return false
+}
+
+# renderConstFail -- report one recorded failure.
+renderConstFail: function {st: zenv.ZSymbolTable f: ztypes.constfail} is {
+    if (renderOwnReport :st :f) then return
     noMethodMsg: String
     hintText: String
     if f.kind.interp then {
@@ -582,6 +593,11 @@ renderConstFail: function {st: zenv.ZSymbolTable f: ztypes.constfail} is {
             noMethodMsg = "constant integer operation overflows \{ovt}"
             hintText = "the result does not fit the \{ovt} the left-hand operand gives it"
         }
+    }
+    if f.kind.wideLiteral then {
+        wl: constStringAt :st id: f.strId
+        noMethodMsg = "integer literal \{wl} overflows"
+        hintText = "an untyped integer constant holds up to 512 bits".string
     }
     if f.kind.floatOverflow then {
         fot: constStringAt :st id: f.strId
