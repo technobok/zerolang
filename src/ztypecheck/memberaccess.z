@@ -2921,15 +2921,7 @@ reportUnknownMemberAs: function {
             gpMm: st.reg.genericParamNamesOf tdecl: (st.typing.declIdOfType typeId: gpOwn)
             if (gpMm.contains item: cnId) then stillMiss = false
         }
-        # a numeric-type-named member on a numeric base is a width
-        # conversion; the identity form (x.T where x is already T) is
-        # not a declared child but is a valid (redundant) cast.
-        if stillMiss then {
-            # the base by ID, the builtin itself or a literal type: a user type
-            # spelled like a scalar is a type of its own and converts to nothing
-            baseNum: (numerics.isNumericTid :st tid: bt) or (isLiteralTypeId reg: st.reg tid: bt)
-            if (isScalarNameId id: cnId) when baseNum then stillMiss = false
-        }
+        if stillMiss when (scalarNameNoMiss :st :ast :dp :bt :cnId) then stillMiss = false
         if stillMiss when (
             memberDefinitionFailed
             :st
@@ -4134,6 +4126,27 @@ checkNumericSuffixCast: function {
         }
     }
     return (callleg handled: false tid: ztypes.tid.zero)
+}
+
+# scalarNameNoMiss -- a member named like a scalar that the base `bt` does not
+# declare, which is no missing member. On a numeric base it is the identity
+# conversion (`x.T` where x is already T), a valid redundant cast. A literal
+# type's conversions are only the ones it declares, whatever its value: one it
+# does not (`(if c then 2.5 else 1.0).i64`) is refused as a constant's is
+# (refuseLiteralConversion), which says all there is to say. The base is asked
+# by id: a user type spelled like a scalar is a type of its own and converts
+# to nothing.
+scalarNameNoMiss: function {
+    st: zenv.ZSymbolTable
+    ast: Ast
+    dp: dpref
+    bt: ztypes.tid
+    cnId: zast.nameid
+} out bool is {
+    if (isScalarNameId id: cnId).not then return false
+    if (numerics.isNumericTid :st tid: bt) then return true
+    if (isLiteralTypeId reg: st.reg tid: bt).not then return false
+    return (refuseLiteralConversion :st :ast :dp litTid: bt childId: cnId)
 }
 
 # refuseLiteralConversion -- a numeric conversion the literal type `litTid`
