@@ -703,11 +703,13 @@ floatLexemeBits: function {lex: StringView k: ztypes.numkind} out math.BigInt is
     return (math.BigInt from: 0)
 }
 
-# floatLiteralRat -- a float literal's value as a fraction; none past a decimal
-# exponent of 1000, where the fraction would outgrow what one holds, and for a
-# negative zero, which no fraction spells
+# floatLiteralRat -- a float literal's value as a fraction; none where the
+# fraction must outgrow constFracBits whatever its digits (fracExponentLimit),
+# so a huge exponent is never expanded, and for a negative zero, which no
+# fraction spells. Within the limit constOfRat decides, by the parts' bits.
 floatLiteralRat: function {lex: StringView.view} out Option math.BigRat is {
-    if (decimalExponentPast :lex limit: 1000) then return (Option math.BigRat).none
+    if (decimalExponentPast :lex limit: (fracExponentLimit :lex)) then return (Option math.BigRat
+    ).none
     r: math.BigRat.parse text: lex
     match (
         r
@@ -724,6 +726,22 @@ floatLiteralFloat: function {lex: StringView.view} out Option math.BigFloat is {
     f: math.BigFloat.parse text: lex prec: constFloatPrec
     match f case ok then return ((Option math.BigFloat).some f.take) case err then null
     return (Option math.BigFloat).none
+}
+
+# fracExponentLimit -- the decimal exponent past which a float literal's
+# fraction has a part wider than constFracBits however its digits fall: 4096
+# bits hold 1,233 decimal digits, and the mantissa's digits cancel at most as
+# many powers of ten as there are of them
+fracExponentLimit: function {lex: StringView.view} out i64 is {
+    e: (lex.indexOf "e").or d: ((lex.indexOf "E").or d: lex.length)
+    digits: i64
+    i: u64
+    for i < e loop {
+        c: (lex.byteAt :i).or d: 0
+        if c >= 48 when c <= 57 then digits = digits + 1
+        i = i + 1
+    }
+    return 1234 + digits
 }
 
 # decimalExponentPast -- a float lexeme's decimal exponent lies beyond
