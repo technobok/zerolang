@@ -626,7 +626,7 @@ checkMemberAutoCall: function {
         }
         valuechecks.noteStatementAutoCall :st nid: dp.nid
         lockAutoCallReceiver :ast :st :dp shared: aShr
-        (
+        landedA: (
             landLiteralReceiver
             :st
             :ast
@@ -639,7 +639,14 @@ checkMemberAutoCall: function {
         match (
             ro
         ) case some then {
-            result = selfReturnOnInstance :st recvTid: bt ret: ro
+            result = (
+                landedResult
+                :st
+                recv: dp.parent
+                landed: landedA
+                result: (selfReturnOnInstance :st recvTid: bt ret: ro)
+                stampNid: zast.nodeid
+            )
             # an auto-call's only input is its receiver: the pin its result
             # keeps, if any, is the receiver path at the strength the reader
             # took. Built locally, then pushed through the full field path (a
@@ -6541,9 +6548,16 @@ callArgsFold: function {st: zenv.ZSymbolTable.view ast: Ast.view call: zast.node
 # the number's default, i64, and every member of a string literal in its
 # StringView. It must fit there, and its node is stamped with that type, which
 # is the type the operation is emitted in, as that type's member of the same
-# name. A conversion
-# settles its literal itself, and a method bound to or returning a literal type
-# is computed by the compiler: neither lands. `recv` is the receiver's node, a
+# name. A conversion settles its literal itself, and a method bound to or
+# returning a literal type is computed by the compiler: neither lands -- while
+# the operation has a compile-time value. One with none, a value only run time
+# knows (`(if c then 1 else 2).u8`, `1 + (if c then 4 else 5)`), is no literal
+# the compiler can compute with: what nothing else gives a type lands in its
+# default, as it does when it is bound, and the operation is that type's. The
+# answer is then the member it runs as, whose result is the operation's (a
+# conversion of an i64 answers a Result); 0 where something else gave the type
+# (an operand's, whose instance has the result already), for an operation that
+# folds, and for one that lands nowhere. `recv` is the receiver's node, a
 # call's or an auto-called path's; `instance` is the generic call's instance, 0
 # for a method that is not generic; `call` is the call, 0 for an auto-called
 # path, which takes no arguments.
@@ -6554,23 +6568,27 @@ landLiteralReceiver: function {
     method: ztypes.tid
     instance: ztypes.tid
     call: zast.nodeid
-} is {
-    if method.isZero or (st.reg.isNativeOf tid: method).not then return
-    if recv.isZero then return
+} out ztypes.tid is {
+    if method.isZero or (st.reg.isNativeOf tid: method).not then return ztypes.tid.zero
+    if recv.isZero then return ztypes.tid.zero
     rt: walkTypeOf :st nid: recv
     target: valuechecks.literalLandingTid :st :ast :rt :method :instance
-    # an operation of a literal type with no compile-time value -- its
-    # receiver or an argument an `if` or a `match` of literal arms on a
-    # condition only run time knows (`1 + (if c then 4 else 5)`) -- that
-    # nothing else gives a type is no literal the compiler can compute with:
-    # it lands in its default, as it does when it is bound
-    if (valuechecks.isAnyLiteralTid :st tid: target) then {
-        folds: (st.typing.nodeConstAt nid: recv).isConst
-        if folds then folds = callArgsFold :st :ast :call
-        if folds.not then target = valuechecks.materialiseLiteral :ast :st t: rt
-    }
-    if target.isZero or (valuechecks.isAnyLiteralTid :st tid: target) then return
-    if (st.reg.typetypeOf typeId: target) == ztypes.ztypetype.genericParam then return
+    folds: (st.typing.nodeConstAt nid: recv).isConst
+    if folds then folds = callArgsFold :st :ast :call
+    defaulted: (
+        folds.not and
+        (target.isZero or (valuechecks.isAnyLiteralTid :st tid: target)) and
+        (
+            isLiteralTypeId
+            reg: st.reg
+            tid: rt
+        )
+    )
+    if defaulted then target = valuechecks.materialiseLiteral :ast :st t: rt
+    if target.isZero or (valuechecks.isAnyLiteralTid :st tid: target) then return ztypes.tid.zero
+    if (
+        (st.reg.typetypeOf typeId: target) == ztypes.ztypetype.genericParam
+    ) then return ztypes.tid.zero
     rn: ast.nodes.get i: recv
     (
         numerics.checkNumericCoercion
@@ -6590,6 +6608,27 @@ landLiteralReceiver: function {
     owner: memberaccess.typedefMemberOwner :st :ast bt: target cnId: nm
     forceMemberOf :st :ast parentTypeId: owner nameId: nm
     stdtypes.markMemberUsed :st ownerTid: owner nameId: nm
+    if defaulted.not then return ztypes.tid.zero
+    return (st.typing.declTypeOf declId: (st.typing.declMemberIdOf parentTypeId: owner nameId: nm))
+}
+
+# landedResult -- the result of an operation on a literal receiver once
+# landLiteralReceiver has landed it: what the member it runs as returns, on the
+# type it landed in, stamped on `stampNid` (the call) when there is one;
+# `result` itself when it did not land.
+landedResult: function {
+    st: zenv.ZSymbolTable
+    recv: zast.nodeid
+    landed: ztypes.tid
+    result: ztypes.tid
+    stampNid: zast.nodeid
+} out ztypes.tid is {
+    if landed.isZero then return result
+    lro: conform.methodReturnOf reg: st.reg typing: st.typing mid: landed
+    if lro.none then return result
+    r: selfReturnOnInstance :st recvTid: (walkTypeOf :st nid: recv) ret: lro
+    if stampNid.notZero then stampGate :st nid: stampNid tid: r
+    return r
 }
 
 # stampArgDisposition -- record what the call does with the argument `op`:
@@ -7116,7 +7155,7 @@ checkResolvedMethodCall: function {
         setmr: mres
         stampGate :st nid: call.nid tid: setmr
     }
-    (
+    landedC: (
         landLiteralReceiver
         :st
         :ast
@@ -7124,6 +7163,14 @@ checkResolvedMethodCall: function {
         method: dro
         instance: ztypes.tid.zero
         call: call.nid
+    )
+    mres = (
+        landedResult
+        :st
+        recv: (callReceiverId :ast :call)
+        landed: landedC
+        result: mres
+        stampNid: call.nid
     )
     # A synthesized `create` has no recorded return: explicit
     # `.create` constructs, so the result is the base type.
@@ -7300,7 +7347,8 @@ checkGenericFnCall: function {
     callableNode: ast.nodes.get i: call.callable
     midG: genericCallInstance :st :ast :call
     # a refused binding says all there is to say: the receiver lands nowhere
-    if st.typing.errors.length == errG then (
+    landedG: ztypes.tid
+    if st.typing.errors.length == errG then landedG = (
         landLiteralReceiver
         :st
         :ast
@@ -7308,6 +7356,14 @@ checkGenericFnCall: function {
         method: dro
         instance: midG
         call: call.nid
+    )
+    gfr = (
+        landedResult
+        :st
+        recv: (callReceiverId :ast :call)
+        landed: landedG
+        result: gfr
+        stampNid: call.nid
     )
     callchecks.checkGenericCallMissingArgs :ast :st :call mid: midG recvImplicit: recvVal
     rroG: methodReceiverRootId :ast n: callableNode
