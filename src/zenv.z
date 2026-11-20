@@ -3429,34 +3429,40 @@ ZSymbolTable: class {
         if d.isZero then return
         allSubs: ListVal zast.nameid
         sumArmNameIds ty: t.typing reg: t.reg tid: fullTypeId ids: allSubs
-        newExcl: IdSet zast.nameid
-        t.collectExcluded :nameId into: newExcl
-        newExcl.add item: subtypeName
-
-        remainIdx: ListVal u64
-        rn: allSubs.length
-        ri: u64
-        for ri < rn loop {
-            nm: allSubs.get i: ri
-            isExcl: newExcl.has item: nm
-            if isExcl.not then {
-                riv: ri
-                remainIdx.append riv
-            }
-            ri = ri + 1
-        }
-
-        if remainIdx.length == 0 then t.markUnreachable kind: divkind.exit
-        narrowedSub: zast.nameid
-        if remainIdx.length == 1 then {
-            soleIx: remainIdx.get i: 0
-            sole: allSubs.get i: soleIx
-            narrowedSub = sole
-        }
         e: t.reg.newEntry ztypeId: fullTypeId
-        e.narrowedSubtype = narrowedSub
-        for each s: newExcl loop {
-            e.excludedSubtypes.add item: s
+        t.collectExcluded :nameId into: e.excludedSubtypes
+        e.excludedSubtypes.add item: subtypeName
+        remaining: u64
+        for each nm: allSubs loop {
+            if (e.excludedSubtypes.has item: nm).not then {
+                remaining = remaining + 1
+                e.narrowedSubtype = nm
+            }
+        }
+        if remaining == 0 then t.markUnreachable kind: divkind.exit
+        if remaining != 1 then e.narrowedSubtype = zast.nameid
+        t.appendRow row: e declId: d
+    }
+
+    # holdArm -- `name` holds `armName`, an arm of the sum `fullTypeId` that
+    # carries nothing (`b.true`, `o.none`): there is no payload to narrow to,
+    # so one row records the arm exactly and every other arm as excluded, the
+    # row the exclusions of all the others would leave. When the arm was
+    # excluded already nothing remains, and the scope is unreachable.
+    holdArm: function {t: this nameId: zast.nameid armName: zast.nameid fullTypeId: ztypes.tid} is {
+        d: t.subjectDecl :nameId
+        if d.isZero then return
+        allSubs: ListVal zast.nameid
+        sumArmNameIds ty: t.typing reg: t.reg tid: fullTypeId ids: allSubs
+        e: t.reg.newEntry ztypeId: fullTypeId
+        t.collectExcluded :nameId into: e.excludedSubtypes
+        if (e.excludedSubtypes.has item: armName) then {
+            t.markUnreachable kind: divkind.exit
+        } else {
+            e.narrowedSubtype = armName
+        }
+        for each nm: allSubs loop {
+            if nm != armName then e.excludedSubtypes.add item: nm
         }
         t.appendRow row: e declId: d
     }

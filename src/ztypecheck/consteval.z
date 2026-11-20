@@ -136,19 +136,18 @@ cmpOpOf: function {opnId: zast.nameid} out cmpop is {
 }
 
 # predDottedCore -- an ArmPredFact from an exploded predicate dotted node
-# (`x.a` carrying a dpArmPredicate stamp on a non-bool receiver with a
-# bare-variable subject), or none.
+# (`x.a` carrying a dpArmPredicate stamp, with a bare-variable subject), or
+# none. A bool receiver is no exception: bool is an ordinary 2-arm variant, so
+# `b.false` excludes b's `false` arm as `o.no` excludes o's `no`.
 predDottedCore: function {
     st: zenv.ZSymbolTable.view
     nid: zast.nodeid
     parent: astnode.view
     childName: zast.nameid
-    boolId: ztypes.tid
     negated: bool
 } out Option ArmPredFact is {
     ptid: (st.typing.dpArmPredicate.get key: nid).or d: ztypes.tid
     if ptid.isZero then return (Option.none ArmPredFact)
-    if ptid == boolId then return (Option.none ArmPredFact)
     sn: zast.atomNameIdOf n: parent
     if sn.isZero then return (Option.none ArmPredFact)
     if childName.isZero then return (Option.none ArmPredFact)
@@ -159,7 +158,9 @@ predDottedCore: function {
     return (Option.some (ArmPredFact subject: sn armName: arm fullTid: ptid :negated))
 }
 
-# predDottedFact -- predDottedCore over an astnode.
+# predDottedFact -- predDottedCore over an astnode; a bare name of type bool is
+# the predicate itself, the fact that it holds `true` (`b == false` states
+# what `b.false` does, and a bare `b` what `b.true` does).
 predDottedFact: function {
     ast: Ast.view
     st: zenv.ZSymbolTable.view
@@ -176,12 +177,20 @@ predDottedFact: function {
             nid: n.nodeid
             parent: (ast.nodes.get i: n.parent)
             childName: (zast.atomNameIdOf n: (ast.nodes.get i: n.child))
-            :boolId
             :negated
         )
-    } else {
-        return (Option.none ArmPredFact)
-    }
+    } else null
+    sb: zast.atomNameIdOf :n
+    if sb.isZero or boolId.isZero then return (Option.none ArmPredFact)
+    if (walkTypeOf :st nid: (nodeId :n)) != boolId then return (Option.none ArmPredFact)
+    return (Option.some (
+        ArmPredFact
+        subject: sb
+        armName: zast.wellKnown.slot.wkTrue
+        fullTid: boolId
+        :negated
+    )
+    )
 }
 
 # armSuffixSide -- the `.true` / `.false` / `.not` suffix on a dotted arm
@@ -273,6 +282,19 @@ equalityArmFact: function {
     return (Option.none ArmPredFact)
 }
 
+# truthyArmFact -- a bare 2-arm sum as the condition IS an arm predicate with
+# the arm left implicit, so it states the same fact `if x.<arm>` states and
+# narrows both branches the same way: the then branch holds the arm, the else
+# branch excludes it and collapses only when what remains carries a payload.
+truthyArmFact: function {st: zenv.ZSymbolTable.view n: astnode.view} out Option ArmPredFact is {
+    ta: truthyCondArmOf typing: st.typing nid: (nodeId :n)
+    if ta.isZero then return (Option.none ArmPredFact)
+    sj: zast.atomNameIdOf :n
+    ft: walkTypeOf :st nid: (nodeId :n)
+    if sj.isZero or ft.isZero then return (Option.none ArmPredFact)
+    return (Option.some (ArmPredFact subject: sj armName: ta fullTid: ft negated: false))
+}
+
 # predFactOf -- recognize an if-condition operation as an arm predicate:
 # bare `x.a`, trailing-bool `x.a.true` / `x.a.false`, or the comparison
 # `(x.a) == true` / `(x.a) == false`. none otherwise.
@@ -282,26 +304,14 @@ predFactOf: function {
     n: astnode.view
     boolId: ztypes.tid
 } out Option ArmPredFact is {
-    # A bare 2-arm sum as the condition IS an arm predicate with the arm left
-    # implicit, so it states the same fact `if x.<arm>` states and narrows both
-    # branches the same way: the then branch holds the arm, the else branch
-    # excludes it and collapses only when what remains carries a payload.
-    {
-        ta0: truthyCondArmOf typing: st.typing nid: (nodeId :n)
-        if ta0.notZero then {
-            sj0: zast.atomNameIdOf :n
-            ft0: walkTypeOf :st nid: (nodeId :n)
-            if sj0.notZero when ft0.notZero then {
-                return (Option.some (
-                    ArmPredFact
-                    subject: sj0
-                    armName: ta0
-                    fullTid: ft0
-                    negated: false
-                )
-                )
-            }
-        }
+    ta0: truthyArmFact :st :n
+    if ta0.some then {
+        return (Option.some ta0)
+    }
+    # a bare bool is the predicate `b.true`, as a bare 2-arm sum is above
+    bf0: predDottedFact :ast :st :n :boolId negated: false
+    if bf0.some then {
+        return (Option.some bf0)
     }
     ef0: equalityArmFact :ast :st :n :boolId
     if ef0.some then {
@@ -336,13 +346,19 @@ predFactOf: function {
             :boolId
             negated: true
         )
+        # `.not`, bool's negation method, on a bare bool reads as its `.false`
+        if (zast.atomNameIdOf n: (ast.nodes.get i: n.child)) == zast.wellKnown.slot.wkNot then {
+            nf: predDottedFact :ast :st n: (ast.nodes.get i: n.parent) :boolId negated: true
+            if nf.some then {
+                return (Option.some nf)
+            }
+        }
         return (
             predDottedCore
             :st
             nid: n.nodeid
             parent: (ast.nodes.get i: n.parent)
             childName: (zast.atomNameIdOf n: (ast.nodes.get i: n.child))
-            :boolId
             negated: false
         )
     } else {
