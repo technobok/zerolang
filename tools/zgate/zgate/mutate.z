@@ -16,12 +16,14 @@
 #   - A mutant no stage kills `survived`: a test is missing, or the edit
 #     changes nothing a program can see. tests/known/mutants/<file>.zd lists
 #     the second kind, each with its reason.
-# OUT/mutants.zd holds every mutant's outcome and is written as the run goes:
-# --resume takes a run up where it stopped, and --mutant runs the listed ones
+# OUT/mutants.zd holds every mutant's outcome and is written as the run goes,
+# beside OUT/source.z, the text it mutated: --resume takes a run up where it
+# stopped -- after an edit of FILE too, keeping an outcome only where the
+# mutant's function reads as it did (readData) -- and --mutant runs the listed ones
 # again (to show that a new test kills a survivor). OUT/survivors.md lists the
 # survivors with their edits; OUT/m<id> keeps a survivor's or a stillborn
 # mutant's source and logs. --limit N runs N mutants chosen by --seed, to
-# measure the cost. --list writes mutants.zd and the counts and runs nothing.
+# measure the cost; --limit 0 runs none and writes the report. --list writes mutants.zd and the counts and runs nothing.
 # M mutants run at once (a quarter of --jobs, so each has four), the jobs
 # shared among them.
 # Each stage runs in a systemd scope with a memory limit and under `timeout`,
@@ -63,6 +65,9 @@ mutWord: list {
     fuzzKnown: "tests/known/fuzzgen.zd"
     # where a file under test must be
     srcDir: "src/"
+    # the copy of FILE a run mutated, in OUT: --resume reads an earlier run's
+    # outcomes against it
+    sourceCopy: "source.z"
 } out staticlist StringView
 
 # stepOf -- a mutant's job, step by step: the index of each in its job
@@ -145,6 +150,8 @@ runMutateCommand: function {g: Gate.view p: cli.Parsed.view} out i32 is {
         return wrongUsage
     }
     markUncovered :r report: report.stringView
+    wsrc: io.writeText path: "\{r.dir}/\{mutWord.sourceCopy}" content: r.text.stringView
+    wsrc.drop
     todo: chosen :r :p
     print "mutate: \{rel}: \{r.sites.length} mutants, \{(
         countOf
@@ -368,7 +375,12 @@ chosen: function {r: Run p: cli.Parsed.view} out ListVal u64 is {
         if (r.outcomes.get :i) == outcomeWord.slot.pending then picked.append i
         i = i + 1
     }
-    limit: numberOr text: (optionText :p name: opt.limit d: "").stringView d: picked.length
+    limitText: optionText :p name: opt.limit d: ""
+    # `--limit 0` runs none: the report and the data file are written, nothing
+    # is built (numberOr reads a 0 as no number)
+    zero: limitText.stringView.parseU64
+    if zero.ok when zero == 0 then return (ListVal u64)
+    limit: numberOr text: limitText.stringView d: picked.length
     if limit >= picked.length then return picked
     # a shuffle by a small linear congruential generator, so a seed names its
     # choice on every host
@@ -744,16 +756,80 @@ printCosts: function {r: Run.view} is {
 }
 
 # readData -- the outcomes OUT/mutants.zd at `path` holds, into `r`; false
-# when it is the record of another file or of another list of sites. True, and
-# nothing read, when there is no file.
+# when it is the record of another file, or does not match the text it was
+# made from. True, and nothing read, when there is no file. With OUT/source.z,
+# the text that run mutated, each mutant is found again by its key
+# (mutreport.siteKeys) and keeps a decided outcome -- killed or stillborn --
+# only where its function reads as it did; without it, by place, which only an
+# unedited file keeps.
 readData: function {r: Run path: StringView} out bool is {
     if (io.exists :path).not then return true
     doc: (zd.read :path).orPanic
     if (doc.textAt path: "file").orPanic.stringView != r.rel.stringView then return false
     rows: (doc.itemsAt path: "mutants").orPanic
-    if rows.length != r.sites.length then return false
     outcomes: zast.Vocab.create block: outcomeWord
     stages: zast.Vocab.create block: stageWord
+    srcPath: "\{r.dir}/\{mutWord.sourceCopy}"
+    if (io.exists path: srcPath) then {
+        # the text that run mutated: each mutant is found again by its key,
+        # however the file's edits moved it
+        oldText: zjobs.slurp path: srcPath.stringView
+        oldLines: covdata.sourceLines path: srcPath.stringView
+        oldSites: mutsites.enumerate text: oldText.stringView
+        if oldSites.length != rows.length then return false
+        oldWs: mutreport.lineFunctions lines: oldLines
+        newWs: mutreport.lineFunctions lines: r.lines
+        oldKeys: mutreport.siteKeys ws: oldWs sites: oldSites
+        newKeys: mutreport.siteKeys ws: newWs sites: r.sites
+        byKey: MapRV String v: u64
+        j: u64
+        for each k: oldKeys loop {
+            byKey.set key: k.copy value: j
+            j = j + 1
+        }
+        # whether each function reads as it did, asked once per function
+        same: MapRV String v: bool
+        kept: u64
+        i: u64
+        for i < r.sites.length loop {
+            jo: byKey.get key: (newKeys.get :i)
+            if jo.some then {
+                fn: (newWs.get i: (r.sites.get :i).line - 1).copy
+                sm: same.get key: fn
+                unchanged: false
+                if sm.some then {
+                    unchanged = sm
+                } else {
+                    unchanged = (
+                        (mutreport.functionText lines: oldLines ws: oldWs name: fn.stringView
+                        ).stringView ==
+                        (mutreport.functionText lines: r.lines ws: newWs name: fn.stringView
+                        ).stringView
+                    )
+                    same.set key: fn.copy value: unchanged
+                }
+                row: rows.get i: jo
+                o: outcomes.slotOf text: (row.textAt path: "outcome").orPanic.stringView
+                st: stages.slotOf text: (row.textAt path: "stage").orPanic.stringView
+                # a survivor runs again (a new test may kill it), and so does
+                # every mutant of a function the edit changed
+                decided: (o == outcomeWord.slot.killed) or (o == outcomeWord.slot.stillborn)
+                if unchanged when decided when st < stageWord.length then {
+                    r.outcomes.set :i val: o
+                    r.stages.set :i val: st
+                    was: r.hows.set :i val: (row.textAt path: "how").orPanic.copy
+                    was.drop
+                    kept = kept + 1
+                }
+            }
+            i = i + 1
+        }
+        print "mutate: resume: \{kept} of \{r.sites.length} outcomes taken over from \{srcPath}"
+        return true
+    }
+    # a run from before OUT/source.z: its rows are read by place, which only an
+    # unedited file keeps
+    if rows.length != r.sites.length then return false
     i: u64
     for each row: rows loop {
         o: outcomes.slotOf text: (row.textAt path: "outcome").orPanic.stringView

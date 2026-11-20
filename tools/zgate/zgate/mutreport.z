@@ -23,6 +23,11 @@ Equivalent: class {
     # which of the function's edits of that kind, from 1
     nth: u64
     why: String
+    # the line the edit is on, trimmed, as the row was written against it; ""
+    # in a row that predates it. A row whose line no longer reads so names
+    # another mutant now (its function was edited): it is stale, and counts
+    # for nothing until it is checked again
+    code: String
 }
 
 # knownPath -- the list of equivalent mutants of the run's file
@@ -44,22 +49,96 @@ readKnown: function {path: StringView} out List Equivalent is {
         op: (row.textAt path: "op").orPanic.copy
         nth: (row.integerAt path: "nth").orPanic.u64.orPanic
         why: (row.textAt path: "why").orPanic.copy
+        code: (rowCode :row)
     )
     return rows
+}
+
+# rowCode -- a row's `code`, "" when it has none
+rowCode: function {row: zd.Entry.view} out String is {
+    c: row.textAt path: "code"
+    match c case ok then return c.copy case err then null
+    return "".string
+}
+
+# siteCode -- the line site `i` is on, trimmed, as a row's `code` spells it
+siteCode: function {r: Run.view i: u64} out String is {
+    ln: (r.sites.get :i).line
+    if (ln == 0) or (ln > r.lines.length) then return "".string
+    return (r.lines.get i: ln - 1).stringView.trim.string
 }
 
 # whereOf -- the function line `line` of the run's file is in: the nearest
 # definition of one at or above it
 whereOf: function {r: Run.view line: u64} out String is {
+    return (whereIn lines: r.lines :line)
+}
+
+# whereIn -- whereOf over the lines `lines` of any text of the file: the run's,
+# or the one an earlier run mutated
+whereIn: function {lines: (List String).view line: u64} out String is {
     at: line
     for at > 0 loop {
-        if at <= r.lines.length when (
-            (r.lines.get i: at - 1).stringView.contains
+        if at <= lines.length when (
+            (lines.get i: at - 1).stringView.contains
             needle: ": function"
-        ) then return (covdata.nameAt src: r.lines line: at)
+        ) then return (covdata.nameAt src: lines line: at)
         at = at - 1
     }
     return "".string
+}
+
+# lineFunctions -- the function each line of `lines` is in, by whereIn: one
+# entry per line
+lineFunctions: function {lines: (List String).view} out List String is {
+    ws: List String
+    i: u64
+    for i < lines.length loop {
+        ws.append (whereIn :lines line: i + 1)
+        i = i + 1
+    }
+    return ws
+}
+
+# functionText -- the lines `ws` places in the function `name`, joined: what
+# an edit of that function changes
+functionText: function {
+    lines: (List String).view
+    ws: (List String).view
+    name: StringView
+} out String is {
+    t: String
+    i: u64
+    for i < lines.length loop {
+        if (ws.get :i).stringView == name then {
+            t.append (lines.get :i).stringView
+            t.append "\n"
+        }
+        i = i + 1
+    }
+    return t
+}
+
+# siteKeys -- each site's key as a row of tests/known/mutants names a mutant:
+# its function, the kind of its edit and which of the function's edits of that
+# kind it is, from 1, tab-separated. One pass: the sites are in the file's
+# order, and `ws` is lineFunctions of `lines`.
+siteKeys: function {
+    ws: (List String).view
+    sites: (List mutsites.Site).view
+} out List String is {
+    keys: List String
+    seen: MapRV String v: u64
+    for each s: sites loop {
+        w: "".string
+        if s.line > 0 when s.line <= ws.length then w = (ws.get i: s.line - 1).copy
+        k: "\{w}\t\{s.op}"
+        n: (seen.get key: k).or d: 0
+        n = n + 1
+        keys.append "\{k}\t\{n}"
+        seen.set key: k.take value: n
+    }
+    return keys
 }
 
 # nthOf -- which of its function's edits of its kind site `i` is, from 1;
@@ -89,9 +168,39 @@ whyOf: function {r: Run.view known: (List Equivalent).view i: u64 where: StringV
                 :i
                 :where
             )
-        ) then return e.why.copy
+        ) then {
+            # a stale row names another mutant now
+            if e.code.length > 0 when (
+                e.code.stringView != (siteCode :r :i).stringView
+            ) then return "".string
+            return e.why.copy
+        }
     }
     return "".string
+}
+
+# staleRows -- the rows `known` whose `code` no longer reads at the mutant they
+# name, or that name none: the function was edited since they were written
+staleRows: function {r: Run.view known: (List Equivalent).view} out List String is {
+    stale: List String
+    ws: lineFunctions lines: r.lines
+    keys: siteKeys :ws sites: r.sites
+    for each e: known loop {
+        if e.code.length == 0 then continue
+        want: "\{e.where}\t\{e.op}\t\{e.nth}"
+        found: false
+        fresh: false
+        i: u64
+        for i < keys.length loop {
+            if (keys.get :i).stringView == want.stringView then {
+                found = true
+                fresh = e.code.stringView == (siteCode :r :i).stringView
+            }
+            i = i + 1
+        }
+        if found.not or fresh.not then stale.append "\{e.where} \{e.op} \{e.nth}: \{e.code}"
+    }
+    return stale
 }
 
 # percent -- `part` of `whole` in tenths of a percent, written `12.3%`
@@ -155,6 +264,14 @@ writeSurvivors: function {r: Run.view path: StringView} is {
     appendSurvivors :r :known listed: false :t
     t.append "## Survivors recorded as equivalent\n\n"
     appendSurvivors :r :known listed: true :t
+    stale: staleRows :r :known
+    if stale.length > 0 then {
+        t.append "## Stale rows\n\n"
+        t.append "Rows of \{knownPath :r} whose line no longer reads as written: their function\n"
+        t.append "was edited, so each names another mutant now. Check each again and rewrite it.\n\n"
+        for each sr: stale loop t.append "- \{sr}\n"
+        t.append "\n"
+    }
     t.append "## Not run: on a line no test executes\n\n"
     i: u64
     for i < r.sites.length loop {
