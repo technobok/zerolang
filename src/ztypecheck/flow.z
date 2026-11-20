@@ -203,16 +203,9 @@ postGuardRecord: function {
 } is {
     if (st.isShadowNarrowed nameId: subject).not then return
     # the emitter reads these per statement, so each instance walk records its
-    # own; a template walk's partial names no type the emitter writes. A
-    # template walk after them (a generic unit's) re-binds the name, so the
-    # variable it names is the one the emitter will find.
-    if (st.reg.isPartialOf tid: fullTid) then {
-        if (st.typing.postGuardTid.has key: stmtNid) then {
-            pgt: (st.lookupVarId nameId: subject).or d: ztypes.vid.zero
-            st.typing.setPostGuardVar nid: stmtNid vid: pgt
-        }
-        return
-    }
+    # own; a template walk's partial names no type the emitter writes, and its
+    # statement is a template row, which no instance's record is laid on
+    if (st.reg.isPartialOf tid: fullTid) then return
     arm: st.getSubtypeName nameId: subject
     if arm.isZero then return
     po: st.typing.declChildOfId parentTypeId: fullTid nameId: arm
@@ -846,8 +839,8 @@ writescope: record {
     body: zast.nodeid
 }
 
-# readWriteScope -- read one node: record the writes it makes, add the names it
-# binds over its body to `inner`, and hand its children to `kids`.
+# readWriteScope -- read one node: record the writes it makes, add the name a
+# `with` binds over its body to `inner`, and hand its children to `kids`.
 readWriteScope: function {
     ast: Ast.view
     nid: zast.nodeid
@@ -869,12 +862,12 @@ readWriteScope: function {
         inner.add item: n.name
         return (writescope walk: true block: false body: n.body)
     }
-    if n.forexpr.not then return (writescope walk: true block: false body: zast.nodeid)
-    for each cnId: (zast.kidsOf :ast span: n.conditions) loop {
-        cn: ast.nodes.get i: cnId
-        if cn.namedoperation when cn.name.notZero then inner.add item: cn.name
-    }
-    return (writescope walk: true block: false body: n.body)
+    # a loop's binding shadows its name in what follows it in the loop -- its
+    # later conditions, its body and its postconditions (spec: a postcondition
+    # reads the loop's variable) -- as a block's binding shadows the lines
+    # after it, so a loop is read as one
+    if n.forexpr then return (writescope walk: true block: true body: zast.nodeid)
+    return (writescope walk: true block: false body: zast.nodeid)
 }
 
 # collectBlockWrites -- a block's lines in order: a binding shadows its name for
@@ -904,10 +897,13 @@ addOuterWrite: function {
     if (bound.has item: nm).not then names.append nm
 }
 
-# bindingNameOfLine -- the name a block line binds (`name: value`), 0 when it
-# binds none.
+# bindingNameOfLine -- the name a block line binds (`name: value`), or a loop's
+# binding (`x: E`, a condition of a loop collectOuterWrites reads as a block):
+# 0 when it binds none.
 bindingNameOfLine: function {ast: Ast.view nid: zast.nodeid} out zast.nameid is {
     line: ast.nodes.get i: nid
+    # a loop's binding (`x: E`) binds its name over what follows it in the loop
+    if line.namedoperation then return line.name
     if line.statementline.not then return zast.nameid.zero
     inner: ast.nodes.get i: line.statementline
     if inner.assignment then return inner.name

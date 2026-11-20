@@ -52,6 +52,58 @@ forArmCond: function {
     return cond
 }
 
+# armsSpan -- a loop's `while:` arms: its conditions after the binding, which
+# the grammar puts first (forArmCond).
+armsSpan: function {prog: Program.view n: zast.forrow.view} out zast.kidspan is {
+    c: n.conditions
+    if c.count == 0 then return c
+    if (forCondIsNamed :prog kId: (zast.kidAt kids: prog.ast.kids span: c i: 0)).not then return c
+    if c.count == 1 then return (zast.kidspan first: 0 count: 0)
+    return (zast.kidspan first: c.first + 1 count: c.count - 1)
+}
+
+# emitForArms -- a binding loop's `while:` arms, tested as the first statement
+# after the binding (emitForArmBreak). Arms that cannot stay in one C
+# expression -- a block that runs statements, a suspension, a move
+# (stmtblocks.condsNeedSteps) -- are written as statements computing into a
+# guard (emitSteppedCond), and the break tests the guard, as a loop with no
+# binding writes its conditions; the rest are joined in place (forArmCond).
+emitForArms: function {
+    prog: Program.view
+    ctx: Ctx
+    m: zast.forrow.view
+    ind: StringView
+    tmp: FnTemps
+    buf: String.borrow
+} is {
+    arms: armsSpan :prog n: m
+    sus: false
+    if ctx.gen.active then {
+        for each a: (zast.kidsOf ast: prog.ast span: arms) loop {
+            if (zast.yieldCountIn ast: prog.ast nid: a) > 0 then sus = true
+        }
+    }
+    if (stmtblocks.condsNeedSteps :prog :ctx suspends: sus conds: arms) then {
+        gv: stmtblocks.newCondGuard stmt: ctx.stmt :ind :buf
+        (
+            stmtblocks.emitSteppedCond
+            :prog
+            :ctx
+            conds: arms
+            gvar: gv.stringView
+            inLoop: true
+            :ind
+            :tmp
+            :buf
+        )
+        emitForArmBreak :prog :ctx node: m.nodeid armc: gv.stringView :ind :buf
+        return
+    }
+    armC: forArmCond :prog :ctx n: m
+    flushArgHoists :ctx :ind :tmp :buf
+    emitForArmBreak :prog :ctx node: m.nodeid armc: armC.stringView :ind :buf
+}
+
 # emitForArmBreak -- the arms' test `armc` of the loop `node`, as the loop's
 # first statement after its binding: `if (!(c)) break;`, the break after what
 # the checker recorded a failing arm destroys (exitDestroy of the loop): the
@@ -206,17 +258,7 @@ emitCountedRangeFor: function {
     lh: "\{ind}for (\{ctR} \{lbl} = 0; \{fn} > 0; \{st1}, \{st2}) {\n"
     buf.append lh
     bodyInd: "\{ind}    "
-    armC: forArmCond :prog :ctx n: m
-    flushArgHoists :ctx ind: bodyInd.stringView :tmp :buf
-    (
-        emitForArmBreak
-        :prog
-        :ctx
-        node: m.nodeid
-        armc: armC.stringView
-        ind: bodyInd.stringView
-        :buf
-    )
+    emitForArms :prog :ctx :m ind: bodyInd.stringView :tmp :buf
     # the body is a BLOCK: whatever it registers -- an argument hoisted to an
     # `_ah` temp, an owned local -- is declared per iteration and has to be
     # freed per iteration. Without the mark those frees stayed pending and
@@ -374,17 +416,7 @@ emitClosedRangeFor: function {
         lh: "\{inner}do {\n"
         buf.append lh
         bodyInd: "\{inner}    "
-        armX: forArmCond :prog :ctx n: m
-        flushArgHoists :ctx ind: bodyInd.stringView :tmp :buf
-        (
-            emitForArmBreak
-            :prog
-            :ctx
-            node: m.nodeid
-            armc: armX.stringView
-            ind: bodyInd.stringView
-            :buf
-        )
+        emitForArms :prog :ctx :m ind: bodyInd.stringView :tmp :buf
         lLR: tmp.listFrees.length
         dvR: false
         if m.body.notZero then {
