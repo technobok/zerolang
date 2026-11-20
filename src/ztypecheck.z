@@ -169,6 +169,8 @@ public: unit {
     # the Decl of the FILE unit a name denotes: the program root's child of that name, or 0
     unitDeclOfName: resolve.unitDeclOfName
     :filePathsOf
+    # the file a checker report belongs to, by its stamp or its node
+    :errorFileOf
     # member `nameId` is private on the type/unit that minted `tid`: true iff that type has a
     # publicNs (a `public:` block) and `nameId` is not one of its exposed edges
     declMemberIsPrivate: memberaccess.declMemberIsPrivate
@@ -313,31 +315,81 @@ addErrorWithHint: function {
     hint: String
     width: u64
 } is {
-    dup: false
+    # a report repeating an earlier one's line and text at the same node is
+    # that report. At another node it is the same report when it is in the
+    # same file, which the tree knows and this table does not: it is held for
+    # the end of the check (settleHeldErrors)
+    held: false
     for each prev: st.typing.errors loop {
-        if prev.lineno == lineno when prev.msg.stringView == msg then dup = true
+        if prev.lineno == lineno when prev.msg.stringView == msg then {
+            if prev.nodeid == nodeid then return
+            held = true
+        }
     }
-    if dup.not then {
-        st.typing.errors.append (
-            zast.ErrorData
-            :nodeid
-            :lineno
-            :colno
-            width: width.u32.orPanic
-            err: e
-            msg: msg.copy
-            fsno: zvfs.fsno
-            note: note.copy
-            hint: hint.copy
-        )
-        st.typing.isError = true
+    row: (
+        zast.ErrorData
+        :nodeid
+        :lineno
+        :colno
+        width: width.u32.orPanic
+        err: e
+        msg: msg.copy
+        fsno: zvfs.fsno
+        note: note.copy
+        hint: hint.copy
+    )
+    if held then {
+        st.typing.heldErrors.append row
+        return
+    }
+    st.typing.errors.append row
+    st.typing.isError = true
+}
+
+# errorFileOf -- the file a report belongs to: its own stamp when it carries
+# one, else its node's, 0 when it has neither.
+errorFileOf: function {e: zast.ErrorData.view ast: Ast.view} out zvfs.fsno is {
+    if e.fsno.notZero then return e.fsno
+    if e.nodeid.isZero then return zvfs.fsno
+    return (ast.fsnoForNode nodeid: e.nodeid)
+}
+
+# settleHeldErrors -- the reports addErrorWithHint held, once the tree can say
+# which file each is in: one whose file, line and text no report has is
+# another file's report and joins the others; the rest repeat a report.
+settleHeldErrors: function {st: zenv.ZSymbolTable ast: Ast.view} is {
+    held: List zast.ErrorData
+    held swap st.typing.heldErrors
+    for each h: held loop {
+        hf: errorFileOf e: h :ast
+        repeats: false
+        for each prev: st.typing.errors loop {
+            if prev.lineno == h.lineno when prev.msg.stringView == h.msg when (
+                (errorFileOf e: prev :ast) == hf
+            ) then repeats = true
+        }
+        if repeats.not then {
+            st.typing.errors.append (
+                zast.ErrorData
+                nodeid: h.nodeid
+                lineno: h.lineno
+                colno: h.colno
+                width: h.width
+                err: h.err
+                msg: h.msg.copy
+                fsno: h.fsno
+                note: h.note.copy
+                hint: h.hint.copy
+            )
+            st.typing.isError = true
+        }
     }
 }
 
 # addError -- append a typecheck diagnostic to the typing's error list,
-# deduped by line and text: a spec resolved more than once reports once, and
-# a statement that fails one lock twice (the call's own lock, then the pin its
-# binding would hold) reports it once.
+# deduped by file, line and text (addErrorWithHint): a spec resolved more than
+# once reports once, and a statement that fails one lock twice (the call's own
+# lock, then the pin its binding would hold) reports it once.
 addError: function {
     st: zenv.ZSymbolTable
     nodeid: zast.nodeid
@@ -426,6 +478,7 @@ indexAddedUnits: function {
         st.typing.filePaths.set key: f value: (vfs.displayPath dentryid: f)
         fi = fi + 1
     }
+    settleHeldErrors :st ast: program
 }
 
 # resolveUnitMemberLate -- the unit member `name` of `unitDecl`, resolved for a
@@ -440,6 +493,7 @@ resolveUnitMemberLate: function {
 } out ztypes.tid is {
     t: resolve.descendNamed :st scope: ztypes.declid :ast :unitDecl :name
     resolve.stampResolvedOnDemand :st :ast
+    settleHeldErrors :st :ast
     return t
 }
 
