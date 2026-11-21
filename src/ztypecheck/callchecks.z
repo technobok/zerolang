@@ -1079,6 +1079,11 @@ callargs: record {
     reportUnknown: bool
     # a dotted call supplies its receiver through the dot
     recvImplicit: bool
+    # the call constructs a generic reference whose type arguments it writes
+    # (`blk 4 a: 1`, `(Pair t: u64)`), not an instance already applied (`B5
+    # 3` with `B5: (Box cap: 5)`): its unlabelled first argument may be the
+    # first generic parameter's value
+    genericRef: false
 }
 
 # bindCallArgs -- THE ONE BINDER of a concrete call's arguments, run before any
@@ -1105,7 +1110,8 @@ bindCallArgs: function {
         typeArg: false
         if ca.isCtor then typeArg = (
             (ctorArgNamesTemplateParam :st tplId: ca.funcId :arg) or
-            (ctorLeadingTypeArg :st :ast :unitDecl tplId: ca.funcId :arg argIdx: k - 1)
+            (ctorLeadingTypeArg :st :ast :unitDecl tplId: ca.funcId :arg argIdx: k - 1) or
+            (ca.genericRef and (ctorLeadingNumericArg :st tplId: ca.funcId :arg argIdx: k - 1))
         )
         known: true
         if arg.name.notZero when members then known = (
@@ -1981,11 +1987,9 @@ walkOneCallArg: function {
             ca: callargs :effId :funcId :isCtor :reportUnknown :recvImplicit
             bindCallArg :st :ast :call :ca :arg
         }
-        # a label naming the template's own parameter supplies that parameter,
-        # not one of the constructor's, and so does a leading type argument
-        if isCtor when (ctorArgNamesTemplateParam :st tplId: funcId :arg) then return
-        if isCtor when (ctorLeadingTypeArg :st :ast :unitDecl tplId: funcId :arg :argIdx
-        ) then return
+        # a type argument supplies a generic parameter of the template, not one
+        # of the constructor's (bindCallArgs decided which arguments are)
+        if (st.typing.argBindOf nid: arg.nid).outcome.typeArgument then return
         (
             checkTypedCallArg
             :st
@@ -2227,6 +2231,67 @@ ctorLeadingTypeArg: function {
     return (typeargs.elidedPrimaryTypeArg :st :unitDecl :ast opId: arg.operation)
 }
 
+# ctorLeadingNumericArg -- a construction's first argument, unlabelled, where the
+# template's first generic parameter takes a value (`blk 4 a: 1`): its label is
+# optional, so it is that parameter's (typeargs.numericLeadingParam), not the
+# first field's.
+ctorLeadingNumericArg: function {
+    st: zenv.ZSymbolTable.view
+    tplId: ztypes.tid
+    arg: argref
+    argIdx: u64
+} out bool is {
+    if (argIdx != 0) or arg.name.notZero then return false
+    tpl: tplId
+    og: st.reg.genericOriginOf tid: tplId
+    if og.notZero then tpl = og
+    tk: st.typing.declIdOfType typeId: tpl
+    if tk.isZero then return false
+    return (typeargs.numericLeadingParam :st tdecl: tk label: arg.name :argIdx).notZero
+}
+
+# bindTypeApplication -- the arguments of a type application that constructs its
+# instance (`(Pair t: u64)`, `(blk 4)`): the application resolved each one as a
+# type argument (instantiate.genericTypeConstruction), which is what the binder
+# records of it -- a type argument binds no field.
+bindTypeApplication: function {
+    st: zenv.ZSymbolTable
+    ast: Ast
+    call: callref
+    inst: ztypes.tid
+} is {
+    ca: (
+        callargs
+        effId: inst
+        funcId: inst
+        isCtor: true
+        reportUnknown: false
+        recvImplicit: false
+        genericRef: true
+    )
+    bound: ListVal zast.nameid
+    k: u64
+    for k < call.nargs loop {
+        arg: argRefAt :ast nid: (zast.callArgAt :ast nid: call.nid i: k)
+        k = k + 1
+        if arg.nid.isZero then continue
+        (
+            st.typing.setArgBind
+            nid: arg.nid
+            value: (
+                decideArgBind
+                :st
+                :ast
+                :call
+                :ca
+                :bound
+                :arg
+                byLabel: ztyping.argoutcome.typeArgument
+            )
+        )
+    }
+}
+
 # ctorTypeArgParamTid -- the type of a construction's type argument when it
 # names a type PARAMETER of the template being walked (`(Cell t: t val: v)`),
 # as the instance being walked sees it. 0 for a type argument naming anything
@@ -2263,6 +2328,8 @@ walkCallArgsHoist: function {
     isCtor: bool
     reportUnknown: bool
     recvImplicit: bool
+    # the construction writes the type arguments of a generic reference
+    genericRef: false
 } out List ztyping.PinPath is {
     pins: List ztyping.PinPath
     argIdx: u64
@@ -2275,7 +2342,7 @@ walkCallArgsHoist: function {
         :ast
         :unitDecl
         :call
-        ca: (callargs :effId :funcId :isCtor :reportUnknown :recvImplicit)
+        ca: (callargs :effId :funcId :isCtor :reportUnknown :recvImplicit :genericRef)
     )
     # whether the call's result keeps its arguments' locks -- a construction,
     # an `outx` or reference-returning callee -- is one fact for every argument
@@ -2650,6 +2717,7 @@ checkDottedTypeApplication: function {
     gres: instantiate.genericTypeConstruction :ast :st :unitDecl :call :tplId
     namesType: memberaccess.pathNamesType :st :ast nid: call.callable
     if gres.notZero then {
+        bindTypeApplication :st :ast :call inst: gres
         if namesType then {
             checkTypeApplicationValue :ast :st :call tid: gres
             stampConstructionKind :st nid: call.nid tid: gres
@@ -2864,6 +2932,7 @@ fieldBoundGenericConstruction: function {
             isCtor: true
             reportUnknown: false
             recvImplicit: false
+            genericRef: true
         )
         checkMissingCallArgs :ast :st :call funcId: gmid isCtor: true recvImplicit: false
         st.popTo marker: cm
@@ -2925,6 +2994,7 @@ checkBareGenericCall: function {
         )
         gres: instantiate.genericTypeConstruction :ast :st :unitDecl :call tplId: funcId
         if gres.notZero then {
+            bindTypeApplication :st :ast :call inst: gres
             checkTypeApplicationValue :ast :st :call tid: gres
             stampConstructionKind :st nid: call.nid tid: gres
             return (callleg handled: true tid: gres)
