@@ -1592,8 +1592,8 @@ exprRootNameId: function {ast: Ast.view n: astnode.view} out zast.nameid is {
 # Such a root outlives the call; an owned local, or one whose pins reach
 # storage that dies with the call (pinRootDiesWithCall), does not.
 rootIsBorrowedParam: function {
-    st: zenv.ZSymbolTable.view
-    ast: Ast.view
+    st: zenv.ZSymbolTable
+    ast: Ast
     n: astnode.view
 } out bool is {
     rn: exprRootNameId :ast :n
@@ -1605,7 +1605,7 @@ rootIsBorrowedParam: function {
         if (st.reg.variableOwnershipOf id: vo) != ztypes.zownership.borrowed then return false
         if (st.reg.variableOriginOf id: vo) == ztypes.zvarorigin.param then return true
         if (localHasBorrowSource :st vid: vo).not then return false
-        return (pinRootDiesWithCall :st nameId: rn depth: 0).not
+        return (pinRootDiesWithCall :st :ast nameId: rn depth: 0).not
     } case none then {
         return false
     }
@@ -1875,18 +1875,13 @@ reportReturnKeepsDyingStorage: function {
     # where the refusal is reported
     st: zenv.ZSymbolTable
     # the tree that names the storage a pin is rooted at
-    ast: Ast.view
+    ast: Ast
     # the returned argument
     arg: argref
     # what it keeps locked (returnedPins)
     rpins: (List ztyping.PinPath).view
 } out bool is {
-    roots: ListVal zast.nameid
-    for each p: rpins loop roots.append (p.path.get i: 0)
-    deadNm: zast.nameid
-    for each rn: roots loop {
-        if deadNm.isZero when (pinRootDiesWithCall :st nameId: rn depth: 0) then deadNm = rn
-    }
+    deadNm: firstDyingRoot :st :ast pins: rpins
     if deadNm.isZero then return false
     dn: lockRootPhrase :st :ast nameId: deadNm
     m4: "Cannot return this value: it keeps \{dn} locked, which dies with this call"
@@ -1899,6 +1894,84 @@ reportReturnKeepsDyingStorage: function {
         e: zast.err.ownerError
         msg: m4
     )
+    return true
+}
+
+# firstDyingRoot -- the root of the first of `pins` that points at storage dying
+# with this call (pinRootDiesWithCall); zero when none does.
+firstDyingRoot: function {
+    st: zenv.ZSymbolTable ast: Ast pins: (List ztyping.PinPath).view
+} out zast.nameid is {
+    for each p: pins loop {
+        rn: p.path.get i: 0
+        if (pinRootDiesWithCall :st :ast nameId: rn depth: 0) then return rn
+    }
+    return zast.nameid
+}
+
+# reportReturnedLocalLocks -- the refusal of returning the local `nameId`, which
+# holds the locks `held`: through an `out` function the caller cannot see them,
+# and a lock on storage that dies with this call points at nothing once it
+# returns. A lock on a view that keeps nothing (viewKeepsNothing) keeps nothing.
+# Answers whether it reported.
+reportReturnedLocalLocks: function {
+    st: zenv.ZSymbolTable
+    ast: Ast
+    # the returned argument
+    arg: argref
+    nameId: zast.nameid
+    held: (List ztyping.PinPath).view
+} out bool is {
+    keptRoot: zast.nameid
+    for each hp: held loop {
+        r: hp.path.get i: 0
+        if keptRoot.isZero when (viewKeepsNothing :st :ast nameId: r depth: 0).not then keptRoot = r
+    }
+    if keptRoot.isZero then return false
+    deadSrc: firstDyingRoot :st :ast pins: held
+    wn: zast.nameTextAt :ast ref: nameId
+    rootPhrase: lockRootPhrase :st :ast nameId: keptRoot
+    msg: String
+    if st.walk.fn.currentFnPins.not then {
+        fnNm: declWrittenName :st :ast tid: st.walk.fn.currentFnTid
+        msg = "Cannot return '\{wn}': it holds locks on \{rootPhrase}, which the caller cannot see because '\{fnNm}' is `out`, not `outx`"
+    } else if deadSrc.notZero then {
+        sn: lockRootPhrase :st :ast nameId: deadSrc
+        msg = "Cannot return '\{wn}': it holds locks on \{sn}, which dies with this call"
+    }
+    if msg.length == 0 then return false
+    (
+        addError
+        :st
+        nodeid: arg.nid
+        lineno: arg.lineno
+        colno: arg.colno
+        e: zast.err.ownerError
+        :msg
+    )
+    return true
+}
+
+# viewKeepsNothing -- the root `nameId` is an owned view that keeps nothing
+# locked, nor does any view it reads through: it reads the program's own bytes,
+# so a pin on it keeps nothing either.
+viewKeepsNothing: function {
+    st: zenv.ZSymbolTable ast: Ast nameId: zast.nameid depth: u64
+} out bool is {
+    if depth > 16 then return false
+    vo: st.lookupVarId :nameId
+    if vo.none then return false
+    vid: vo
+    if (st.reg.variableOwnershipOf id: vid) == ztypes.zownership.borrowed then return false
+    if (valuechecks.isViewFamilyTid :ast :st tid: (st.reg.variableTypeOf id: vid)
+    ).not then return false
+    held: List ztyping.PinPath
+    st.heldLockPaths holder: ztypes.zlockholder.var vid dst: held
+    roots: ListVal zast.nameid
+    for each hp: held loop roots.append (hp.path.get i: 0)
+    for each r: roots loop {
+        if (viewKeepsNothing :st :ast nameId: r depth: depth + 1).not then return false
+    }
     return true
 }
 
@@ -1973,40 +2046,7 @@ checkReturnCarries: function {
                 )
             } else st.heldLockPaths holder: ztypes.zlockholder.var rvo dst: held
             if held.length > 0 then {
-                wn: zast.nameTextAt :ast ref: rbn
-                rootPhrase: lockRootPhrase :st :ast nameId: (valuechecks.pinRootAt pins: held i: 0)
-                if st.walk.fn.currentFnPins.not then {
-                    fnNm: declWrittenName :st :ast tid: st.walk.fn.currentFnTid
-                    m1: "Cannot return '\{wn}': it holds locks on \{rootPhrase}, which the caller cannot see because '\{fnNm}' is `out`, not `outx`"
-                    (
-                        addError
-                        :st
-                        nodeid: arg.nid
-                        lineno: arg.lineno
-                        colno: arg.colno
-                        e: zast.err.ownerError
-                        msg: m1
-                    )
-                    return
-                }
-                for each hp: held loop {
-                    srcNm: hp.path.get i: 0
-                    svo: st.lookupVarId nameId: srcNm
-                    if svo.some when (pinRootDiesWithCall :st nameId: srcNm depth: 0) then {
-                        sn: lockRootPhrase :st :ast nameId: srcNm
-                        m2: "Cannot return '\{wn}': it holds locks on \{sn}, which dies with this call"
-                        (
-                            addError
-                            :st
-                            nodeid: arg.nid
-                            lineno: arg.lineno
-                            colno: arg.colno
-                            e: zast.err.ownerError
-                            msg: m2
-                        )
-                        return
-                    }
-                }
+                if (reportReturnedLocalLocks :st :ast :arg nameId: rbn :held) then return
                 # the locks travel with the value: the caller's binding installs
                 # the callee's pins, which name these very parameters
                 valuechecks.releaseCascade :st holder: ztypes.zlockholder.var rvo
@@ -4292,9 +4332,13 @@ pinsPush: function {
 # at storage that dies with this call. An owned local, temporary or `.take`
 # parameter does and a borrowed parameter does not; a borrowed local does only
 # when what it borrows does --
-# the locks it holds, else the source it was borrowed from.
+# the locks it holds, else the source it was borrowed from. A view is no
+# storage: a view derived from one reads the first one's source, so a view
+# local dies only when what it keeps locked does, and one that keeps nothing
+# reads the program's own bytes.
 pinRootDiesWithCall: function {
-    st: zenv.ZSymbolTable.view
+    st: zenv.ZSymbolTable
+    ast: Ast
     # the pin's root name
     nameId: zast.nameid
     # how many borrowed locals the walk has gone through
@@ -4304,15 +4348,21 @@ pinRootDiesWithCall: function {
     vo: st.lookupVarId :nameId
     if vo.none then return false
     vid: vo
-    # an owned value dies with the call: a local, or a `.take` parameter
-    if (st.reg.variableOwnershipOf id: vid) != ztypes.zownership.borrowed then return true
-    if (st.reg.variableOriginOf id: vid) == ztypes.zvarorigin.param then return false
     held: List ztyping.PinPath
+    # an owned value dies with the call: a local, or a `.take` parameter -- but
+    # an owned view holds no storage, only what it keeps locked
+    if (st.reg.variableOwnershipOf id: vid) != ztypes.zownership.borrowed then {
+        if (valuechecks.isViewFamilyTid :ast :st tid: (st.reg.variableTypeOf id: vid)
+        ).not then return true
+        st.heldLockPaths holder: ztypes.zlockholder.var vid dst: held
+        return (heldRootsDieWithCall :st :ast :held :depth)
+    }
+    if (st.reg.variableOriginOf id: vid) == ztypes.zvarorigin.param then return false
     st.heldLockPaths holder: ztypes.zlockholder.var vid dst: held
-    if held.length > 0 then return (heldRootsDieWithCall :st :held :depth)
+    if held.length > 0 then return (heldRootsDieWithCall :st :ast :held :depth)
     bo: st.reg.variableBorrowOriginOf id: vid
     if bo.isZero or (bo == nameId) then return false
-    return (pinRootDiesWithCall :st nameId: bo depth: depth + 1)
+    return (pinRootDiesWithCall :st :ast nameId: bo depth: depth + 1)
 }
 
 # heldRootsDieWithCall -- whether any lock a borrowed local holds is rooted at
@@ -4343,14 +4393,15 @@ paramReachedFrom: function {
 
 # storage that dies with this call.
 heldRootsDieWithCall: function {
-    st: zenv.ZSymbolTable.view
+    st: zenv.ZSymbolTable
+    ast: Ast
     held: (List ztyping.PinPath).view
     depth: u64
 } out bool is {
     roots: ListVal zast.nameid
     for each hp: held loop roots.append (hp.path.get i: 0)
     for each r: roots loop {
-        if (pinRootDiesWithCall :st nameId: r depth: depth + 1) then return true
+        if (pinRootDiesWithCall :st :ast nameId: r depth: depth + 1) then return true
     }
     return false
 }
