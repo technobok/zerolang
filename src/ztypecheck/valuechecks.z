@@ -2452,6 +2452,7 @@ mintRepointCompanion: function {
     )
     tnId: st.newTempName pool: ast.names
     st.defineVarAt index: io nameId: tnId vid: cv
+    st.reg.setVariableName id: cv name: tnId
     st.reg.setVariableOrigin id: cv origin: ztypes.zvarorigin.local
     st.addToExitsLeaving index: io since: borrowVid vid: cv
     st.typing.repointCompanion.set key: borrowVid value: cv
@@ -2536,7 +2537,7 @@ checkRepoint: function {
     st.walk.value.draft.owned = false
     st.walk.value.draft.marker = ztypes.zparamownership.noneMode
     if owned then {
-        repointOwned :st :ast :rasgn :xVid pins: bpins
+        repointOwned :st :ast :rasgn :xVid pins: bpins :isView
         return
     }
     if (refuseRepointReadonly :st :ast :rasgn :xVid :lvt pins: bpins :roV) then return
@@ -2605,14 +2606,18 @@ releaseKeepingReadonly: function {st: zenv.ZSymbolTable ast: Ast xVid: ztypes.vi
 # construction -- or a view a call hands back, into the borrowed `x`: the
 # value is stored in `x`'s companion
 # (mintRepointCompanion), whose old value, and the locks it held, go first, and
-# `x` refers to it. A lock the value holds is its companion's, so what it locks
-# must live as long as `x`. Refused where `x` can have no companion.
+# `x` refers to it, so what it locks must live as long as `x`. After the
+# re-point `x` keeps what `v` keeps: a view is no storage, so `x` holds the
+# view's own locks; any other value is the companion's, a local of `x`'s scope,
+# which `x` keeps locked. Refused where `x` can have no companion.
 repointOwned: function {
     st: zenv.ZSymbolTable
     ast: Ast
     rasgn: reasgref
     xVid: ztypes.vid
     pins: (List ztyping.PinPath).view
+    # `v` is a view
+    isView: bool
 } is {
     cv: (st.typing.repointCompanion.get key: xVid).or d: ztypes.vid
     if cv.isZero then cv = mintRepointCompanion :st :ast borrowVid: xVid
@@ -2622,22 +2627,94 @@ repointOwned: function {
     }
     if (refuseRepointOutlives :st :ast :rasgn :xVid :pins) then return
     releaseCascade :st holder: ztypes.zlockholder.var cv
-    if pins.length > 0 then (
-        installPins
-        :st
-        pool: ast.names
-        :pins
-        vid: cv
-        onlyRoot: zast.nameid
-        forceShared: false
-        nodeid: rasgn.nid
-        lineno: rasgn.lineno
-        colno: rasgn.colno
-    )
+    kept: List ztyping.PinPath
+    if isView then {
+        repointViewPins :st :xVid :pins dst: kept
+    } else {
+        if pins.length > 0 then (
+            installPins
+            :st
+            pool: ast.names
+            :pins
+            vid: cv
+            onlyRoot: zast.nameid
+            forceShared: false
+            nodeid: rasgn.nid
+            lineno: rasgn.lineno
+            colno: rasgn.colno
+        )
+        companionPin :st :ast :xVid :cv dst: kept
+    }
     releaseKeepingReadonly :st :ast :xVid
+    if kept.length > 0 then {
+        (
+            installPins
+            :st
+            pool: ast.names
+            pins: kept
+            vid: xVid
+            onlyRoot: zast.nameid
+            forceShared: false
+            nodeid: rasgn.nid
+            lineno: rasgn.lineno
+            colno: rasgn.colno
+        )
+        st.reg.setVariableBorrowOrigin id: xVid origin: (pinRootAt pins: kept i: 0)
+    }
     checkNarrowedTargetWrite :st :ast :rasgn
     st.typing.repoints.add item: rasgn.nid
     st.typing.ownedRepoints.add item: rasgn.nid
+}
+
+# repointViewPins -- what `x` keeps once re-pointed at a view that keeps `pins`,
+# onto `dst`: those pins, with one rooted at `x` itself -- a view derived from
+# `x`, as in `x = x.substring from: 1 to: x.length` -- replaced by what `x`
+# keeps now, which is that view's source. Read before `x`'s own locks go.
+repointViewPins: function {
+    st: zenv.ZSymbolTable
+    xVid: ztypes.vid
+    pins: (List ztyping.PinPath).view
+    dst: List ztyping.PinPath
+} is {
+    xn: st.reg.variableNameOf id: xVid
+    for each p: pins loop {
+        if (p.path.get i: 0) != xn then {
+            (
+                moves.pinsAppend
+                pins: dst
+                path: p.path
+                shared: p.shared
+                mutable: p.mutable
+                carried: p.carried
+            )
+        } else {
+            own: List ztyping.PinPath
+            st.heldLockPaths holder: ztypes.zlockholder.var xVid dst: own
+            for each op: own loop {
+                if (op.path.get i: 0) != xn then (
+                    moves.pinsAppend
+                    pins: dst
+                    path: op.path
+                    shared: op.shared
+                    mutable: op.mutable
+                    carried: op.carried
+                )
+            }
+        }
+    }
+}
+
+# companionPin -- `x`'s pin on its re-point companion `cv`, onto `dst`: once
+# re-pointed at an owned value, `x` refers to the companion that holds it, a
+# local of `x`'s scope, as readonly as `x` itself.
+companionPin: function {
+    st: zenv.ZSymbolTable ast: Ast xVid: ztypes.vid cv: ztypes.vid dst: List ztyping.PinPath
+} is {
+    cp: ListVal zast.nameid
+    cp.append (st.reg.variableNameOf id: cv)
+    xn: varNameText :st :ast vid: xVid
+    mw: (moves.nameIsReadonly :st :ast name: xn.stringView).not
+    moves.pinsAppend pins: dst path: cp shared: true mutable: mw carried: false
 }
 
 # reportRepointMode -- the refusal of re-pointing the borrowed target at a

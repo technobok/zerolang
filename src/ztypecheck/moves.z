@@ -1603,12 +1603,30 @@ rootIsBorrowedParam: function {
         vo
     ) case some then {
         if (st.reg.variableOwnershipOf id: vo) != ztypes.zownership.borrowed then return false
-        if (st.reg.variableOriginOf id: vo) == ztypes.zvarorigin.param then return true
+        # a parameter outlives the call, unless it was re-pointed at what does not
+        if (st.reg.variableOriginOf id: vo) == ztypes.zvarorigin.param when (
+            holdsBorrows
+            :st
+            vid: vo
+            self: rn
+        ).not then return true
         if (localHasBorrowSource :st vid: vo).not then return false
         return (pinRootDiesWithCall :st :ast nameId: rn depth: 0).not
     } case none then {
         return false
     }
+}
+
+# holdsBorrows -- the variable `vid`, named `self`, holds a lock on something
+# other than itself: a parameter does only once it is re-pointed. A readonly
+# self-lock marks the reference itself and borrows nothing.
+holdsBorrows: function {st: zenv.ZSymbolTable.view vid: ztypes.vid self: zast.nameid} out bool is {
+    held: List ztyping.PinPath
+    st.heldLockPaths holder: ztypes.zlockholder.var vid dst: held
+    for each hp: held loop {
+        if (hp.path.get i: 0) != self then return true
+    }
+    return false
 }
 
 # localHasBorrowSource -- a borrowed local names what it reads: a lock row it
@@ -1967,10 +1985,10 @@ viewKeepsNothing: function {
     ).not then return false
     held: List ztyping.PinPath
     st.heldLockPaths holder: ztypes.zlockholder.var vid dst: held
-    roots: ListVal zast.nameid
-    for each hp: held loop roots.append (hp.path.get i: 0)
-    for each r: roots loop {
-        if (viewKeepsNothing :st :ast nameId: r depth: depth + 1).not then return false
+    for each hp: held loop {
+        r: hp.path.get i: 0
+        if r != nameId when (viewKeepsNothing :st :ast nameId: r depth: depth + 1
+        ).not then return false
     }
     return true
 }
@@ -4357,17 +4375,18 @@ pinRootDiesWithCall: function {
         if (valuechecks.isViewFamilyTid :ast :st tid: (st.reg.variableTypeOf id: vid)
         ).not then return true
         st.heldLockPaths holder: ztypes.zlockholder.var vid dst: held
-        return (heldRootsDieWithCall :st :ast :held :depth)
+        return (heldRootsDieWithCall :st :ast :held :depth self: nameId)
     }
-    if (st.reg.variableOriginOf id: vid) == ztypes.zvarorigin.param then return false
+    # a parameter is the caller's, unless it was re-pointed at what is not
+    isParam: (st.reg.variableOriginOf id: vid) == ztypes.zvarorigin.param
+    if isParam when (holdsBorrows :st :vid self: nameId).not then return false
     st.heldLockPaths holder: ztypes.zlockholder.var vid dst: held
-    if held.length > 0 then return (heldRootsDieWithCall :st :ast :held :depth)
+    if held.length > 0 then return (heldRootsDieWithCall :st :ast :held :depth self: nameId)
     bo: st.reg.variableBorrowOriginOf id: vid
     if bo.isZero or (bo == nameId) then return false
     return (pinRootDiesWithCall :st :ast nameId: bo depth: depth + 1)
 }
 
-# heldRootsDieWithCall -- whether any lock a borrowed local holds is rooted at
 # paramReachedFrom -- the parameter a pin rooted at `nameId` keeps locked: the
 # root itself, or through a borrowed local or a hoisted temporary, a parameter
 # what it holds is rooted at (as pinRootDiesWithCall follows them); zero when
@@ -4393,17 +4412,19 @@ paramReachedFrom: function {
     return zast.nameid
 }
 
-# storage that dies with this call.
+# heldRootsDieWithCall -- whether any lock a borrowed local holds is rooted at
+# storage that dies with this call. The local's readonly self-lock, rooted at
+# `self`, marks the reference itself and roots nothing.
 heldRootsDieWithCall: function {
     st: zenv.ZSymbolTable
     ast: Ast
     held: (List ztyping.PinPath).view
     depth: u64
+    self: zast.nameid
 } out bool is {
-    roots: ListVal zast.nameid
-    for each hp: held loop roots.append (hp.path.get i: 0)
-    for each r: roots loop {
-        if (pinRootDiesWithCall :st :ast nameId: r depth: depth + 1) then return true
+    for each hp: held loop {
+        r: hp.path.get i: 0
+        if r != self when (pinRootDiesWithCall :st :ast nameId: r depth: depth + 1) then return true
     }
     return false
 }
