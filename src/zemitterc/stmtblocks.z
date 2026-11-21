@@ -2068,20 +2068,14 @@ emitWithBindValue: function {
     }
 }
 
-# emitWithBody -- `with x: <value> do <body>`: the value is bound for the body's
-# duration and destroyed with the block it was bound in, whatever exit the body
-# takes. The binding is emitted into the ENCLOSING C block rather than braces of
-# its own, so that block's flush is where its cleanup belongs -- and inside a
-# loop body that flush runs per iteration. `bindTo` names the local the body's
-# value assigns to, "" when the `with` is a statement and the value is dropped.
-emitWithBody: function {
+# emitWithBinding -- the binding a `with` makes for its body: an alias of the
+# place an `if`, a `match` or a block arm yields, a generator's field, or the
+# header's own C local (localnames.emitWithLocal), and the zeroing of a source
+# the value took. Whatever position the `with` is in, this is its binding.
+emitWithBinding: function {
     prog: Program.view
     ctx: Ctx
     n: zast.withrow.view
-    bindTo: StringView
-    # the target's C type and stamped type; unused when bindTo is ""
-    bindCt: StringView
-    bindTid: ztypes.tid
     ind: StringView
     tmp: FnTemps
     buf: String.borrow
@@ -2136,6 +2130,27 @@ emitWithBody: function {
     # What the `with` owns is destroyed where the checker lists it, at the
     # `with`'s end (emitScopeDestroy).
     emitValueTakeInvalidations :prog :ctx n: (prog.ast.nodes.get i: n.value) :ind :buf
+}
+
+# emitWithBody -- `with x: <value> do <body>`: the value is bound for the body's
+# duration and destroyed with the block it was bound in, whatever exit the body
+# takes. The binding is emitted into the ENCLOSING C block rather than braces of
+# its own, so that block's flush is where its cleanup belongs -- and inside a
+# loop body that flush runs per iteration. `bindTo` names the local the body's
+# value assigns to, "" when the `with` is a statement and the value is dropped.
+emitWithBody: function {
+    prog: Program.view
+    ctx: Ctx
+    n: zast.withrow.view
+    bindTo: StringView
+    # the target's C type and stamped type; unused when bindTo is ""
+    bindCt: StringView
+    bindTid: ztypes.tid
+    ind: StringView
+    tmp: FnTemps
+    buf: String.borrow
+} is {
+    emitWithBinding :prog :ctx :n :ind :tmp :buf
     wbody: prog.ast.nodes.get i: n.body
     if bindTo.length > 0 then {
         wvb: values.withValueBlock n: wbody
@@ -5261,46 +5276,7 @@ emitTailStmt: function {
         # emitTailValue binds and returns it
         if (ztypecheck.withForwardsTail ast: prog.ast n: (prog.ast.nodes.get i: n.nodeid)
         ).not then return false
-        # an owned copy: the with-binding's emission below lends ast
-        wnmT: (
-            localnames.varCName
-            known: ctx.known
-            :prog
-            vid: (localnames.defVid :prog nid: n.nodeid)
-        )
-        wsidT: stampIdDeep :prog n: (prog.ast.nodes.get i: n.value)
-        wctT: withValueCType :prog :ctx n: (prog.ast.nodes.get i: n.value) wsid: wsidT
-        wvT: emitExpr :prog :ctx n: (prog.ast.nodes.get i: n.value)
-        # a reference-returning callee hands back `T*`, so a `with` binding
-        # ALIASES its source exactly as a plain binding does
-        {
-            wrbT: localnames.refBorrowCalleeFid :prog :ctx n: (prog.ast.nodes.get i: n.value)
-            if wrbT.notZero when (
-                localnames.fnReturnsRefBorrow
-                :prog
-                :ctx
-                fid: wrbT
-                retTid: wsidT
-            ) then {
-                wctTP: localnames.refPtrC :prog tid: wrbT base: wctT.stringView
-                wctT = wctTP.take
-                ctx.stmt.ptrVids.append (localnames.defVid :prog nid: n.nodeid)
-                wvT = (
-                    localnames.unloadValueStructRef
-                    :prog
-                    :ctx
-                    n: (prog.ast.nodes.get i: n.value)
-                    e: wvT.stringView
-                )
-            }
-        }
-        if wctT.length > 0 then {
-            lwT: "\{ind}\{wctT} \{wnmT} = \{wvT};\n"
-            buf.append lwT
-        } else {
-            withLine: "\{ind}int64_t \{wnmT} = \{wvT};\n"
-            buf.append withLine
-        }
+        emitWithBinding :prog :ctx :n :ind :tmp :buf
         ctx.stmt.tailRetActive = true
         emitBodyNode :prog :ctx n: (prog.ast.nodes.get i: n.body) :ind :tmp :buf
         return true

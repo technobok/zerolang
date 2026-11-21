@@ -1,0 +1,68 @@
+# A `with` that ends a function, its body returning, binds its value exactly as
+# a `with` anywhere else does: an alias of the parameter an `if` or a `match`
+# arm yields (returned as that parameter, no copy), an alias a write goes
+# through, a value it took.
+Node: class {
+    name: String
+}
+
+Mode: variant {
+    one: null
+    two: null
+}
+
+pickIf: function {n: Node.view m: Node.view c: bool} outx Node.view is {
+    with b: (if c then n else m) do {
+        return b
+    }
+}
+
+pickName: function {n: Node.borrow} outx Node.borrow is {
+    with b: n do {
+        return b
+    }
+}
+
+pickMatch: function {n: Node.view m: Node.view k: Mode} outx Node.view is {
+    with b: (match k case one then n case two then m) do {
+        return b
+    }
+}
+
+rename: function {n: Node.borrow} out i64 is {
+    with b: n do {
+        b.name = "renamed".string
+        return 1
+    }
+}
+
+takeIt: function {x: Node.take} out Node is {
+    with a: x.take do {
+        return a
+    }
+}
+
+notTail: function {n: Node.view m: Node.view c: bool} outx Node.view is {
+    with b: (if c then n else m) do {
+        if c then return b
+    }
+    return m
+}
+
+viaAlias: function {n: Node.borrow} is {
+    pn: pickName n: n.borrow
+    pn.name = "viaAlias".string
+}
+
+main: function is {
+    n: Node name: "a".string
+    m: Node name: "b".string
+    print "\{(pickIf :n :m c: true).name} \{(pickIf :n :m c: false).name}"
+    viaAlias n: n.borrow
+    print "\{n.name} \{(pickMatch :n :m k: Mode.two).name}"
+    r: rename n: n.borrow
+    print "\{r} \{n.name}"
+    t: Node name: "taken".string
+    u: takeIt x: t.take
+    print "\{u.name} \{(notTail :n :m c: true).name}"
+}
