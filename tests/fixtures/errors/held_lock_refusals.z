@@ -1,0 +1,74 @@
+# A lock refuses what would break the value it guards: a typedef built from a
+# borrowing call's result keeps that result's source locked; a for-expression
+# that yields a field another name holds reads and moves it, which that name's
+# lock refuses; a field read off a call's result is that result's, never a
+# local's that shares the field's name; and a write of a whole value under a
+# borrow of its field is refused once.
+sid: typedef String
+
+pick: function {s: String.borrow} outx String.borrow is {
+    return s
+}
+
+castKeepsLock: function is {
+    s: "hello".string
+    k: sid (pick :s)
+    s.append "x"
+    print "\{k}"
+}
+
+Box: class {
+    v: i64
+}
+
+Holder: class {
+    p: Box
+}
+
+loopYieldsField: function is {
+    h: Holder p: (Box v: 3)
+    xs: ListVal i64
+    xs.append 1
+    b: h.p
+    ys: for each e: xs loop h.p
+    print "\{ys.length} \{b.v}"
+}
+
+pass: function {p: (SpanPair u64).take} outx SpanPair u64 is {
+    return p
+}
+
+fieldOfResult: function is {
+    buf: ListVal u64
+    buf.append from: 1
+    buf.append from: 2
+    w: buf.span
+    lo: 5.u64
+    s: (pass p: (w.split at: 1)).lo.slice from: 0 to: 1
+    lo = 7
+    print "\{s.length} \{lo}"
+}
+
+Q: class {
+    n: i64
+}
+
+P: class {
+    a: Q
+    c: Q
+}
+
+wholeUnderFieldBorrow: function is {
+    p: P a: (Q n: 1) c: (Q n: 2)
+    b: p.a.borrow
+    p = P a: (Q n: 3) c: (Q n: 4)
+    b.n = 3
+    print "\{b.n}"
+}
+
+main: function is {
+    castKeepsLock
+    loopYieldsField
+    fieldOfResult
+    wholeUnderFieldBorrow
+}

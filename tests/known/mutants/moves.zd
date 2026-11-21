@@ -1,0 +1,283 @@
+# moves -- the mutants of src/ztypecheck/moves.z that no test can kill, each with the
+# reason: `zgate mutate` (make mutate) leaves them out of the score and lists them apart in
+# survivors.md. A row names a mutant by the function its edit is in, the kind of the edit (op,
+# as mutsites names it) and which of the function's edits of that kind it is, from 1, so an
+# edit elsewhere in the file does not move it; `code` is the line the edit is on, as the row was
+# written, and a row whose line no longer reads so is listed as stale and counts for nothing.
+
+# equivalent -- one mutant no program can tell from zc: where, which edit, why, and its line
+equivalent: data {
+    where: text
+    op: text
+    nth: u64
+    why: text
+    code: text
+}
+
+
+equivalents: list {
+    (
+        equivalent
+        where: "methodReceiverIsView"
+        op: "delete"
+        nth: 2
+        why: "declOwnershipOfId with name 0 finds no member: no declaration is edged under name 0 (pool ids start at 1, and declNewScope, the one declNew with name 0, passes parent 0), so the lookup answers none and the function returns false, as the guard does"
+        code: "if rpn.isZero then return false"
+    )
+    (
+        equivalent
+        where: "listSlotTid"
+        op: "bool"
+        nth: 1
+        why: "the slot type is the type of `X.slot` alone, and staticListAsValue refuses it wherever a value is read but as a dotted path's base, before an argument, a generic bound or a lock asks its family; read through, the base is a member read with no declaration behind it (receiverIsValue is false, so dottedBaseTid mints no temporary), its member is a label's position checkListSlotRead types, and a marker on it is refused as naming no storage. 2,972 programs (errors, corpus, examples): identical diagnostics and C"
+        code: "st.reg.setValtype typeId: t value: true"
+    )
+    (
+        equivalent
+        where: "checkListSlotRead"
+        op: "delete"
+        nth: 5
+        why: "a parent typed as the list's slot is only an `X.slot` the slot branch of checkStaticListMember stamped after listRowOfNode found X's row in the same walk: staticListAsValue refuses a slot read as any value but a dotted path's base, so no binding, argument, arm or result carries the type, and listRowOfNode of the same base answers that row, never 0"
+        code: "if lr == 0 then return (callleg handled: true tid: ztypes.tid.zero)"
+    )
+    (
+        equivalent
+        where: "refuseReadUnderPin"
+        op: "delete"
+        nth: 5
+        why: "a fast path: the path's root from appendValueTuple is the name rootNameIdOf gives, so findExclusiveVarLock scans the same declaration and answers only an exclusive var-held row on it, which hasExclusiveVarLock would have found; with none the scan finds nothing, and the function does nothing else"
+        code: "if (st.hasExclusiveVarLock declId: rd).not then return"
+    )
+    (
+        equivalent
+        where: "checkReturnCarries"
+        op: "delete"
+        nth: 1
+        why: "with argT 0 the next line returns: isReftypeOf reads the sentinel row 0, whose valtype flag no setValtype sets (each sets a freshly minted id), and answers false"
+        code: "if argT.isZero then return"
+    )
+    (
+        equivalent
+        where: "checkReturnCarries"
+        op: "delete"
+        nth: 18
+        why: "the return that closes the bare-name leg: without it control reaches reportReturnKeepsDyingStorage, whose pins are an atom read's record, which holds none, or for `w.take` the set reportReturnedLocalLocks already judged, where a root that dies with the call was reported or is a view that keeps nothing; the next line then returns, as the argument is an atom or a `.take` path and no call"
+        code: "return"
+    )
+    (
+        equivalent
+        where: "armValueLeaves"
+        op: "delete"
+        nth: 1
+        why: "for a node that is no control value controlArmBlocks appends nothing: its arms are doexpr and withexpr and branchArmBlocks' ifexpr and caseexpr, exactly isControlValue's set, so the loop adds no leaf"
+        code: "if (isControlValue :ast :nid).not then return"
+    )
+    (
+        equivalent
+        where: "fieldReadPin"
+        op: "bool"
+        nth: 1
+        why: "only the temporary-rooted pin with writes false changes, from shared to exclusive and readonly either way; mutable, which markVarMutated and refuseRepointReadonly read, is false in both, its root is the receiver temporary minted for that one node, which no later lock request names, and refuseUnshareablePins sees only `.take` arguments, which never reach fieldReadPin"
+        code: "pinsAppend pins: dst path: fp shared: true mutable: writes carried: false"
+    )
+    (
+        equivalent
+        where: "fieldReadPin"
+        op: "delete"
+        nth: 14
+        why: "movedFieldPath holds only for a chain of field reads that ends at an atom, and appendNamedTuple drops only strip-marker names, which no field can have (they are reserved words), so fp has at least two segments here"
+        code: "if fp.length < 2 then return"
+    )
+    (
+        equivalent
+        where: "mergedPin"
+        op: "delete"
+        nth: 7
+        why: "every pin is made with shared equal to not mutable (pinsAppend, pinsPush, pinsPushOne, mergedPin), and lock rows hand back the same pairing, so the AND of the pins' shared is the negation of mu, the OR of their mutable: the cover test `sh.not or mu` and the returned `sh and mu.not` read the same whether or not later pins fold into sh"
+        code: "sh = sh and r.shared"
+    )
+    (
+        equivalent
+        where: "mergedPin"
+        op: "andor"
+        nth: 3
+        why: "a merged pin's carried is read by no one: pinsOfArms' output goes to installPins (lock rows hold no carried flag), to recordTempPins, read back only by relayTempPins, which installs the pins and adopts their roots whatever the flag, to pinsFromArg (carried false), to the return checks, and to a receiver's pins, which join a call's pins only when resultPins holds (receiverResultPath, valueReceiverPins), where pinCallResult pushes every pin; the readers of carried (adoptKeptTemps carriedOnly, pushCarriedPins, coversCarried, mergedPin) read only unmerged pins"
+        code: "ca = ca or r.carried"
+    )
+    (
+        equivalent
+        where: "recordWithLocks"
+        op: "notadd"
+        nth: 2
+        why: "valNid is a bare atom (handBackLocalLocks needs atomNameIdOf), whose record is an atom read's and holds no pins, so own.len is always 0; the edit only gives an owned local that holds no locks a record of length 0 marked owned where it had none, and every reader of an atom's record tests its length first or does not read `owned` (armRecordPins, followDyingReferences, armLeafPins, armLeafMarker, checkComprehensionValue, returnedPins)"
+        code: "if held.length == 0 when own.len == 0 then return"
+    )
+    (
+        equivalent
+        where: "recordWithLocks"
+        op: "eq"
+        nth: 2
+        why: "`own.len != 0` is the negated `own.len == 0`: own.len is always 0 for the bare atom handBackLocalLocks passes, and a record of length 0 marked owned is read by no one (see the notadd row of this line)"
+        code: "if held.length == 0 when own.len == 0 then return"
+    )
+    (
+        equivalent
+        where: "localFieldPath"
+        op: "delete"
+        nth: 3
+        why: "movedFieldPath holds only for a chain of dotted paths ending at an atom, so rootNameIdOf answers that atom's name, which is never 0; lookupVarId of 0 would answer none anyway"
+        code: "if root.isZero then return false"
+    )
+    (
+        equivalent
+        where: "layArgLocks"
+        op: "delete"
+        nth: 2
+        why: "with n <= mark the loop starts at k = mark and never runs, and dropArgLocks returns at its own `argLocks.length <= mark` test: only an empty ListVal is made"
+        code: "if n <= mark then return"
+    )
+    (
+        equivalent
+        where: "reportPathConflict"
+        op: "edge"
+        nth: 1
+        why: "lockCallPath and lockCallArgPath reach it only when the shared intent lock on a strict prefix of the path conflicts, which needs an exclusive row on that prefix or above it; that row is an ancestor of the path as well, so the probe of the path's own lock conflicts too and rw is never empty"
+        code: "if rw.length > 0 then {"
+    )
+    (
+        equivalent
+        where: "lockCallArgPath"
+        op: "bool"
+        nth: 3
+        why: "the edit flips lockMutable on the intent rows laid on the path's prefixes; a row's lockMutable is read only by heldLockPaths, which collects target rows, and a scope pop copies rows unchanged"
+        code: "mutable: false"
+    )
+    (
+        equivalent
+        where: "ownedValueReceiver"
+        op: "notdrop"
+        nth: 2
+        why: "dottedBaseTid has already minted the receiver's temporary: it runs for every dotted path's base, the callable `x.m` included, and calls ownedReceiverTemp under the same receiverIsValue test with no root-is-variable condition; mintReceiverTemp returns the name already made (tempNameOf), so either answer of the flipped test changes nothing"
+        code: ").not then return"
+    )
+    (
+        equivalent
+        where: "captureValueReceiver"
+        op: "delete"
+        nth: 2
+        why: "rcv is 0 only for a callable that is no dotted path or a placeholder base; node 0 is the sentinel no walk types or records, so receiverPinsNothing of its type 0 is false, readValuePins leaves no pins, ownedValueReceiver returns at its own rpn.isZero, and the pinning leg answers walkTypeOf of node 0, which is 0, as the early return does"
+        code: "if rcv.isZero then return ztypes.tid"
+    )
+    (
+        equivalent
+        where: "receiverIsFreshValue"
+        op: "bool"
+        nth: 1
+        why: "both callers test the id first: captureValueReceiver returns on rcv.isZero and ownedValueReceiver on rpn.isZero, so nid is never 0 here"
+        code: "if nid.isZero then return false"
+    )
+    (
+        equivalent
+        where: "receiverIsValue"
+        op: "bool"
+        nth: 2
+        why: "the initial value only: `isPath = bn.dottedpath` overwrites it two lines later, before any read"
+        code: "isPath: false"
+    )
+    (
+        equivalent
+        where: "adoptKeptTemps"
+        op: "bool"
+        nth: 1
+        why: "equivalent by behaviour: a receiver temporary a result adopts (mintReceiverTemp sets adoptableTemps, not pinnedTempPending) is left listed in the popped call scope, which only the dump's temp_destroy row shows (moved becomes owned); the emitter reads the adopting scope's list through tempScopeOf, so the C, the diagnostics and the run are the same"
+        code: "if ((st.walk.value.pinnedTempPending.get key: ato).or d: false).not then ("
+    )
+    (
+        equivalent
+        where: "recordTempPins"
+        op: "eq"
+        nth: 1
+        why: "the recorded pins are read only by relayTempPins, for a temporary in adoptableTemps, and lockNonTrivialArg puts a hoisted argument's temporary there (pinTemp) only when the argument's root names no variable or the argument is a fresh value -- exactly where hoistArg clears onlyRoot; where onlyRoot is nonzero the record is never read, whichever pins it holds"
+        code: "if onlyRoot.isZero or ((p.path.get i: 0) == onlyRoot) then {"
+    )
+    (
+        equivalent
+        where: "pathLeafMethodId"
+        op: "delete"
+        nth: 12
+        why: "the leaf-is-a-field answer at the last segment: without it the loop sets cur to the field's type and ends, and the function's last line returns ztypes.tid, the same value; st is only read"
+        code: "return ztypes.tid"
+    )
+    (
+        equivalent
+        where: "pathIsReadonly"
+        op: "delete"
+        nth: 1
+        why: "no caller passes an empty path: checkBorrowResultSource and valueReadsReadonlyPlace return first on one, placePins, armLocalPin and nameIsReadonly pass one name, and fieldReadPin a path of two or more"
+        code: "if path.length == 0 then return false"
+    )
+    (
+        equivalent
+        where: "pinnedMoveError"
+        op: "delete"
+        nth: 1
+        why: "on an empty name nameIdOf answers a miss or the empty text's id, which no variable has, so lookupVarId gives none and the next line returns false, as the guard does; checkMoveMarkerVar and consumeBareArgOwnership pass a variable's name"
+        code: "if name.length == 0 then return false"
+    )
+    (
+        equivalent
+        where: "hoistRows"
+        op: "delete"
+        nth: 7
+        why: "equivalent by behaviour: hoistRows runs only under dumpRows, so a compile is unaffected; the edit drops the type stamp of a hoisted argument's synthetic atom, a typed_nodes row of `zc dump` without --canon, which names node ids"
+        code: "stampGate :st nid: atomId tid: atomT"
+    )
+    (
+        equivalent
+        where: "lockBorrowedArgPath"
+        op: "bool"
+        nth: 5
+        why: "carried on a call's pins is read only on pinCallResult's leg for a result that keeps nothing (pushCarriedPins, and adoptKeptTemps carriedOnly, which adopts only temporaries' roots); this pin is added only when calleePins holds, and with resultPins pinCallResult's doPins is true and pushes every pin whatever its flag, while a construction's pins go to pinConstructionResult, which pushes every pin too, or to a create with funcPins"
+        code: "pinsAppend :pins path: src shared: true mutable: isViewArg.not carried: false"
+    )
+    (
+        equivalent
+        where: "landLiteralReceiver"
+        op: "andor"
+        nth: 1
+        why: "the edit goes on only for a non-native method on a literal receiver; every integer and float literal member is native, and the one non-native member a literal reaches is StringView.byteView, for which literalLandingTid answers StringView, so `defaulted` is false and the function returns zero as before, having stamped the receiver StringView and demanded byteView, which the call already demanded"
+        code: "if method.isZero or (st.reg.isNativeOf tid: method).not then return ztypes.tid.zero"
+    )
+    (
+        equivalent
+        where: "lockNestedMethodReceiver"
+        op: "edge"
+        nth: 1
+        why: "it runs only when the receiver is no bare atom, and the receiver tuple (appendNamedTuple) has one entry only when every segment after the root is a strip marker: `x.borrow.m` and `x.hold.m` are refused by the parser, and `x.public.m` on a value is refused before any lock"
+        code: "if rtupC.length > 1 then {"
+    )
+    (
+        equivalent
+        where: "checkResolvedMethodCall"
+        op: "delete"
+        nth: 13
+        why: "checkNativeTemplateArgs checks an argument only where the callee's parameter is the template's own generic parameter (instanceArgFor answers 0 otherwise); a method reached on a native mono is the mono's member, respecialised by mintMonoMember and substitutedMemberTid, so its parameters are concrete and the regular argument check reports the mismatch"
+        code: "callchecks.checkNativeTemplateArgs :st :ast :call funcId: dro recvImplicit: recvVal"
+    )
+    (
+        equivalent
+        where: "checkGenericFnCall"
+        op: "bool"
+        nth: 1
+        why: "it changes only a callee with no `this` receiver, reached through a type or unit base (a static reached through a value is refused); for such a base takeValueReceiver finds nothing -- no record, receiverIsValue and receiverRootIsVar false -- and checkGenericCallMissingArgs' recvImplicit skips only a parameter named `this`, which such a function has none of"
+        code: "recvVal: true"
+    )
+    (
+        equivalent
+        where: "lineIsStatementOnly"
+        op: "bool"
+        nth: 1
+        why: "both callers ask only about a statement line: implicitReturnValue returns first unless the line's statementline gave a nonzero inner id, and flow.lastStmtType calls it inside `if last.statementline then`, so the guard never fires"
+        code: "if ln.statementline.not then return false"
+    )
+}

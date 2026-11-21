@@ -1,0 +1,74 @@
+# A reference return points into a `.borrow` or `.view` parameter, and each
+# refusal gives its own reason: a `with` alias of a record copied out of the
+# parameter's fields is a local; an owned call result is rooted at no
+# parameter; an owned result built from a local keeps that local locked; a
+# second name for a local is a local, though its own lock was refused; and a
+# view parameter re-pointed at a local's view is not the caller's to return
+# from an `out` function.
+pt: record {
+    x: i64
+}
+
+Holder: class {
+    a: pt
+    b: pt
+}
+
+Node: class {
+    name: String
+}
+
+W: class {
+    s: String.borrow
+}
+
+Box: class {
+    v: i64
+}
+
+aliasOfCopy: function {h: Holder.view c: bool} outx pt.view is {
+    with v: (if c then h.a else h.b) do {
+        return v
+    }
+}
+
+mk: function {k: i64} out Node is {
+    return (Node name: "t".string)
+}
+
+ownedResult: function {n: Node.view} outx Node.view is {
+    return (mk k: 1)
+}
+
+fromLocal: function {k: i64} out W is {
+    loc: "x".string
+    return (W s: loc)
+}
+
+secondName: function {p: Box.borrow} outx Box.borrow is {
+    o: Box v: 1
+    a1: o
+    b: o
+    print "\{a1.v}"
+    return b
+}
+
+repointed: function {s: StringView} out StringView is {
+    loc: "abc".string
+    t: loc.stringView
+    s = t
+    return s
+}
+
+main: function is {
+    h: Holder a: (pt x: 1) b: (pt x: 2)
+    print "\{(aliasOfCopy :h c: true).x}"
+    n: Node name: "a".string
+    print "\{(ownedResult :n).name}"
+    w: fromLocal k: 1
+    print "\{w.s}"
+    q: Box v: 2
+    r: secondName p: q
+    print "\{r.v}"
+    print "\{repointed s: "x"}"
+}
