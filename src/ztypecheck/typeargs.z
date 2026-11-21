@@ -3852,7 +3852,7 @@ bindCallNumericParam: function {
     vsI: (IdMapV zast.nameid v: u64)
 } out bool is {
     dnv: dvs.get key: param
-    if (callWritesLabel :ast :call label: param).not when dnv.some then {
+    if (callWritesLabel :st :ast :call label: param).not when dnv.some then {
         appendNumericArgSuffix :sfx bits: dnv :cd
         vsI.set key: param value: dnv
         return true
@@ -3861,15 +3861,27 @@ bindCallNumericParam: function {
     return (bindNumericArg :sfx valSubs: vsI :param :na :cd)
 }
 
-# callWritesLabel -- the call writes an argument labelled `label`.
-callWritesLabel: function {ast: Ast.view call: callref label: zast.nameid} out bool is {
+# callWritesLabel -- the call writes a type argument for its generic parameter
+# `label`, as the binder decided.
+callWritesLabel: function {
+    st: zenv.ZSymbolTable.view ast: Ast.view call: callref label: zast.nameid
+} out bool is {
+    return (typeArgumentFor :st :ast :call param: label).notZero
+}
+
+# typeArgumentFor -- the argument of the generic call that the binder stamped as
+# the type argument for `param` (its node); 0 for none.
+typeArgumentFor: function {
+    st: zenv.ZSymbolTable.view ast: Ast.view call: callref param: zast.nameid
+} out zast.nodeid is {
     k: u64
     for k < call.nargs loop {
-        arg: argRefAt :ast nid: (zast.callArgAt :ast nid: call.nid i: k)
+        aid: zast.callArgAt :ast nid: call.nid i: k
         k = k + 1
-        if arg.nid.notZero when arg.name == label then return true
+        b: st.typing.argBindOf nid: aid
+        if b.outcome.typeArgument when b.param == param then return aid
     }
-    return false
+    return zast.nodeid
 }
 
 # genericCallNumericArg -- the value a generic function call writes for its
@@ -3883,24 +3895,20 @@ genericCallNumericArg: function {
     tdecl: ztypes.declid
     param: zast.nameid
 } out numarg is {
-    kAiter: u64
-    for kAiter < call.nargs loop {
-        argId: zast.callArgAt :ast nid: call.nid i: kAiter
-        kAiter = kAiter + 1
+    argId: typeArgumentFor :st :ast :call :param
+    if argId.notZero then {
         arg: argRefAt :ast nid: argId
-        if arg.nid.notZero when arg.name == param then {
-            return (
-                numericGenericArg
-                :ast
-                :st
-                :unitDecl
-                scope: st.curScope
-                :tdecl
-                :param
-                argOp: arg.operation
-                inBody: true
-            )
-        }
+        return (
+            numericGenericArg
+            :ast
+            :st
+            :unitDecl
+            scope: st.curScope
+            :tdecl
+            :param
+            argOp: arg.operation
+            inBody: true
+        )
     }
     pn: zast.nameTextAt :ast ref: param
     tn: specWrittenName :st :ast tid: (st.typing.declTypeOf declId: tdecl)
