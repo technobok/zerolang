@@ -4276,6 +4276,41 @@ implStructC: function {prog: Program.view ctx: Ctx.view tid: ztypes.tid} out Str
     return "\{ecn}_t"
 }
 
+# implCallArgs -- the arguments a wrapper passes the implementer's method
+# `mnameId`, in that method's own parameters' order: the receiver (`_self`, by
+# pointer in both families) where it is declared -- first when it declares none
+# -- and every other parameter as the wrapper names it, the spec method
+# `smid`'s parameter of the same name (a conformance is exact).
+implCallArgs: function {
+    prog: Program.view
+    ctx: Ctx
+    implTid: ztypes.tid
+    mnameId: zast.nameid
+    smid: ztypes.tid
+} out String is {
+    owner: ztypecheck.valOpOwner typing: prog.typing tid: implTid nameId: mnameId
+    implMid: (prog.typing.declChildOfId parentTypeId: owner nameId: mnameId).or d: ztypes.tid.zero
+    pnames: List String
+    pids: ListVal ztypes.tid
+    pidsNm: ListVal zast.nameid
+    callorder.recFieldLists :prog tid: implMid names: pnames ids: pids nameIds: pidsNm
+    rpn: prog.reg.thisParamNameIdOf tid: implMid
+    cargs: String
+    sawThis: false
+    for each nm: pidsNm loop {
+        if cargs.length > 0 then cargs.append ", "
+        if (nm == zast.wellKnown.slot.wkThis) or (rpn.notZero and (nm == rpn)) then {
+            cargs.append "_self"
+            sawThis = true
+        } else cargs.append (memberC :prog :ctx owner: smid kind: memberkind.param nameId: nm)
+    }
+    if sawThis then return cargs
+    lead: "_self".string
+    if cargs.length > 0 then lead.append ", "
+    lead.append cargs
+    return lead
+}
+
 # implMethodCname -- the C name an implementation wrapper calls for the impl's
 # `mname`. A NATIVE member's symbol is the canon-named one a fragment defines,
 # whichever unit is being emitted; the per-unit emission pass rebinds mainName,
@@ -4400,8 +4435,6 @@ emitImplementationImpl: function {
         }
         ret: methodRetCtype :prog :ctx mid: smid
         wparams: "void* _data".string
-        # every method takes its receiver by pointer now, in both families
-        cargs: "_self".string
         pnames: List String
         pids: ListVal ztypes.tid
         pidsNm: ListVal zast.nameid
@@ -4431,12 +4464,11 @@ emitImplementationImpl: function {
                 wparams.append pct
                 wparams.append " "
                 wparams.append pnmP
-                cargs.append ", "
-                cargs.append pnmP
             }
             pi = pi + 1
         }
         implMc: implMethodCname :prog :ctx :implTid :mnameId mname: mname.stringView
+        cargs: implCallArgs :prog :ctx :implTid :mnameId :smid
         retkw: "return ".string
         if ret.length == 0 then {
             retkw = "".string
