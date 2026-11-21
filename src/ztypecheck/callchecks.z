@@ -1611,7 +1611,6 @@ checkNativeTemplateArgs: function {
     ast: Ast
     call: callref
     funcId: ztypes.tid
-    recvImplicit: bool
 } is {
     cn: ast.nodes.get i: call.callable
     if cn.dottedpath.not then return
@@ -1624,15 +1623,7 @@ checkNativeTemplateArgs: function {
         arg: argRefAt :ast nid: (zast.callArgAt :ast nid: call.nid i: k)
         k = k + 1
         if arg.nid.isZero then continue
-        pnId: arg.name
-        if pnId.isZero then pnId = (
-            unlabelledParamOf
-            :st
-            :ast
-            effId: funcId
-            isCtor: false
-            :recvImplicit
-        )
+        pnId: (st.typing.argBindOf nid: arg.nid).param
         if pnId.isZero then continue
         pt: (st.typing.declChildOfId parentTypeId: funcId nameId: pnId).or d: ztypes.tid.zero
         want: instanceArgFor :st :tdecl :inst param: pt
@@ -1948,7 +1939,7 @@ walkOneCallArg: function {
         } else {
             # `_.ARM` / `_.create ...`: the `_` is the parameter's type, spelled
             # into the tree before the argument is walked
-            spellCallArgUnderscore :st :ast :unitDecl :effId :isCtor :recvImplicit :arg
+            spellArgUnderscore :st :ast :unitDecl :effId :arg
             caPrev: st.walk.value.callArgNode
             savedMode: st.mode
             st.walk.value.callArgNode = zast.nodeIdOf n: (ast.nodes.get i: arg.operation)
@@ -1956,7 +1947,7 @@ walkOneCallArg: function {
             # the view marker an argument's check reads is its own value's: one
             # an earlier argument left would make a plain field read a view
             st.walk.value.draft.marker = ztypes.zparamownership.noneMode
-            if (argSlotOwns :st :ast :effId :funcId :isCtor :recvImplicit :arg) then {
+            if (argSlotOwns :st :effId :funcId :isCtor :arg) then {
                 vt = (
                     valuechecks.checkMovedValueAt
                     :st
@@ -2042,40 +2033,19 @@ underscoreRoot: function {ast: Ast.view op: zast.nodeid} out zast.nodeid is {
     return zast.nodeid
 }
 
-# spellCallArgUnderscore -- spellUnderscore for an argument of a concrete call:
-# the parameter is the label, else the one the unlabelled argument binds.
-spellCallArgUnderscore: function {
+# spellArgUnderscore -- spellUnderscore for an argument of a call of `effId`,
+# before the argument is walked: the parameter is the one the binder stamped.
+spellArgUnderscore: function {
     st: zenv.ZSymbolTable
     ast: Ast
     unitDecl: ztypes.declid
     effId: ztypes.tid
-    isCtor: bool
-    recvImplicit: bool
     arg: argref
 } is {
     us: underscoreRoot :ast op: arg.operation
     if us.isZero then return
-    pn: arg.name
-    if pn.isZero then pn = unlabelledParamOf :st :ast :effId :isCtor :recvImplicit
+    pn: (st.typing.argBindOf nid: arg.nid).param
     spellUnderscore :st :ast :unitDecl :effId pnId: pn at: us
-}
-
-# spellGenericArgUnderscore -- spellUnderscore for an argument of a generic
-# call, whose inference walks the arguments first: the parameter is the label,
-# else the one the unlabelled argument binds.
-spellGenericArgUnderscore: function {
-    st: zenv.ZSymbolTable
-    ast: Ast
-    unitDecl: ztypes.declid
-    funcId: ztypes.tid
-    recvImplicit: bool
-    arg: argref
-} is {
-    us: underscoreRoot :ast op: arg.operation
-    if us.isZero then return
-    pn: arg.name
-    if pn.isZero then pn = unlabelledParamOf :st :ast effId: funcId isCtor: false :recvImplicit
-    spellUnderscore :st :ast :unitDecl effId: funcId pnId: pn at: us
 }
 
 # spellUnderscore -- the `_` at `at` stands for the type of the parameter the
@@ -2195,15 +2165,12 @@ ownershipCallee: function {
 # projection there takes its source (checkOwnedValueAt).
 argSlotOwns: function {
     st: zenv.ZSymbolTable.view
-    ast: Ast.view
     effId: ztypes.tid
     funcId: ztypes.tid
     isCtor: bool
-    recvImplicit: bool
     arg: argref
 } out bool is {
-    pnId: arg.name
-    if pnId.isZero then pnId = unlabelledParamOf :st :ast :effId :isCtor :recvImplicit
+    pnId: (st.typing.argBindOf nid: arg.nid).param
     if pnId.isZero then return false
     ownFn: ownershipCallee :st :effId :funcId :isCtor
     oo: st.typing.declOwnershipOfId parentTypeId: ownFn nameId: pnId
@@ -4349,27 +4316,6 @@ recordArgType: function {argTypes: ListVal ztypes.tid at: u64 tid: ztypes.tid} i
     argTypes.set i: at val: tid
 }
 
-# argParamSlot -- the position in `pNames` of the parameter an argument of a
-# generic call fills: the one its label names, else the one the unlabelled
-# argument binds (unlabelledParamOf); the parameter count for none.
-argParamSlot: function {
-    st: zenv.ZSymbolTable.view
-    ast: Ast.view
-    arg: argref
-    funcId: ztypes.tid
-    pNames: (ListVal zast.nameid).view
-    recvImplicit: bool
-} out u64 is {
-    pn: arg.name
-    if pn.isZero then pn = unlabelledParamOf :st :ast effId: funcId isCtor: false :recvImplicit
-    i: u64
-    for i < pNames.length loop {
-        if (pNames.get :i) == pn then return i
-        i = i + 1
-    }
-    return pNames.length
-}
-
 # checkPartialParamArgs -- an argument to a parameter declared over the
 # function's generic parameters (`j: (Job R).take`) is checked, once the call's
 # instance `mid` fixes the parameter's type, as a concrete call's argument is:
@@ -4386,8 +4332,6 @@ checkPartialParamArgs: function {
     pHolderIds: (ListVal ztypes.tid).view
     # each argument's walked type, by position (inferGenericCallSubs)
     argTypes: (ListVal ztypes.tid).view
-    # the dot supplied the receiver, which pNames then leaves out
-    recvImplicit: bool
 } is {
     instIds: ListVal ztypes.tid
     instNames: ListVal zast.nameid
@@ -4397,14 +4341,18 @@ checkPartialParamArgs: function {
         arg: argRefAt :ast nid: (zast.callArgAt :ast nid: call.nid i: k)
         k = k + 1
         if arg.nid.isZero or (isGenericParamLabel :gparams label: arg.name) then continue
-        slot: argParamSlot :st :ast :arg :funcId :pNames :recvImplicit
-        if (slot >= pHolderIds.length) or (slot >= instIds.length) then continue
+        # the parameter the argument binds, read by name in each list: the
+        # instance's holds the receiver, which the call's own may leave out
+        pn: (st.typing.argBindOf nid: arg.nid).param
+        slot: nameSlotIn names: pNames name: pn
+        islot: nameSlotIn names: instNames name: pn
+        if (slot >= pHolderIds.length) or (islot >= instIds.length) then continue
         if (st.reg.isPartialOf tid: (pHolderIds.get i: slot)).not then continue
-        ptid: instIds.get i: slot
+        ptid: instIds.get i: islot
         vt: ztypes.tid.zero
         if k <= argTypes.length then vt = argTypes.get i: k - 1
         if vt.isZero or (numerics.typesCompatible :ast :st a: vt b: ptid) then continue
-        aow: argOwnershipOf :st :funcId isCtor: false pnId: (pNames.get i: slot) :vt
+        aow: argOwnershipOf :st :funcId isCtor: false pnId: pn :vt
         (
             numerics.noteSpecStandIn
             :st
@@ -4585,7 +4533,7 @@ inferGenericCallSubs: function {
         }
         errG: st.typing.errors.length
         # `_` is the parameter's type here too: this walk is the argument's first
-        spellGenericArgUnderscore :st :ast :unitDecl :funcId :recvImplicit :arg
+        spellArgUnderscore :st :ast :unitDecl effId: funcId :arg
         avt: checkValueAt :st :unitDecl :ast nid: arg.operation
         if wantTypes then recordArgType :argTypes at: kAiter - 1 tid: avt
         reportUntypedGenericArg :st :unitDecl :ast :arg :avt :errG
