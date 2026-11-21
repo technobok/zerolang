@@ -3582,13 +3582,15 @@ methodReceiverTuple: function {ast: Ast.view n: astnode.view dst: ListVal zast.n
     }
 }
 
-# dottedReceiverNodeId -- the nodeid of a dotted callable's receiver expression
-# (its stamped type is the immediate receiver type); 0 otherwise.
+# dottedReceiverNodeId -- the nodeid of a dotted callable's receiver expression,
+# whatever it is -- a name, a call, a literal, an `if`, a `match`, a block (its
+# stamped type is the immediate receiver type); 0 when the callable is not
+# dotted.
 dottedReceiverNodeId: function {ast: Ast.view n: astnode.view} out zast.nodeid is {
     match (
         n
     ) case dottedpath then {
-        return (nodeId n: (ast.nodes.get i: n.parent))
+        return (zast.nodeIdOf n: (ast.nodes.get i: n.parent))
     } else {
         return zast.nodeid
     }
@@ -4580,10 +4582,11 @@ takeValueReceiver: function {
 }
 
 # receiverPinsNothing -- a receiver whose storage no result can point into: a
-# text's bytes are the program's, so what a call hands back over them (its
-# view among them) keeps the text's binding unlocked.
+# literal's bytes and a text's are the program's, so what a call hands back
+# over them (its view among them) keeps nothing locked.
 receiverPinsNothing: function {ast: Ast st: zenv.ZSymbolTable recvT: ztypes.tid} out bool is {
     if recvT.isZero then return false
+    if (valuechecks.isAnyLiteralTid :st tid: recvT) then return true
     return recvT == (stdTid :ast :st wk: zast.wellKnown.slot.tyText)
 }
 
@@ -4728,6 +4731,7 @@ captureValueReceiver: function {
 } out ztypes.tid is {
     rcv: dottedReceiverNodeId :ast n: (ast.nodes.get i: call.callable)
     if rcv.isZero then return ztypes.tid
+    if (receiverPinsNothing :ast :st recvT: (walkTypeOf :st nid: rcv)) then return ztypes.tid
     rpins: List ztyping.PinPath
     (
         readValuePins

@@ -1,0 +1,83 @@
+# A method called on a value -- an `if`, a `match`, a block, a `with` -- takes
+# its receiver from the arm that ran, as a method on a name does: a value passed
+# by reference appears only once in a call, and an `outx` result keeps the
+# receiver locked while it lives, and a view of a local cannot be returned.
+Doc: class {
+    s: String
+} as {
+    addFrom: function {:this o: Doc.view} is {
+        this.s.append o.s.stringView
+    }
+    look: function {t: this.view k: u64} outx StringView is {
+        return (t.s.substring from: k to: t.s.length)
+    }
+}
+
+Mode: variant {
+    one: null
+    two: null
+}
+
+Holder: class {
+    d: Doc
+    e: Doc
+}
+
+ifTwice: function {a: Doc.borrow b: Doc.borrow c: bool} is {
+    (if c then a else b).addFrom o: a
+}
+
+matchTwice: function {a: Doc.borrow b: Doc.borrow m: Mode} is {
+    (match (m) case one then a case two then b).addFrom o: a
+}
+
+fieldTwice: function {h: Holder.borrow c: bool} is {
+    (if c then h.d else h.e).addFrom o: h.d
+}
+
+ifKept: function {a: Doc.borrow b: Doc.borrow c: bool} is {
+    v: (if c then a else b).look k: 0
+    a.s = "0123456789".string
+    print v
+}
+
+matchKept: function {a: Doc.borrow b: Doc.borrow m: Mode} is {
+    v: (match (m) case one then a case two then b).look k: 0
+    a.s = "0123456789".string
+    print v
+}
+
+blockKept: function {a: Doc.borrow c: bool} is {
+    v: ({
+        if c then print "in"
+        a
+    }).look k: 0
+    a.s = "0123456789".string
+    print v
+}
+
+withKept: function {a: Doc.borrow} is {
+    v: (with q: a do q).look k: 0
+    a.s = "0123456789".string
+    print v
+}
+
+ifViewReturned: function {c: bool} out StringView is {
+    a: "abc".string
+    b: "de".string
+    return ((if c then a else b).substring from: 1 to: 2)
+}
+
+main: function is {
+    a: Doc s: "abc".string
+    b: Doc s: "x".string
+    ifTwice a: a.borrow b: b.borrow c: true
+    matchTwice a: a.borrow b: b.borrow m: Mode.one
+    h: Holder d: (Doc s: "d".string) e: (Doc s: "e".string)
+    fieldTwice h: h.borrow c: true
+    ifKept a: a.borrow b: b.borrow c: true
+    matchKept a: a.borrow b: b.borrow m: Mode.one
+    blockKept a: a.borrow c: true
+    withKept a: a.borrow
+    print (ifViewReturned c: true)
+}
