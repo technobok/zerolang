@@ -689,6 +689,36 @@ resolveMonoRefParts: function {
     return r
 }
 
+# refuseLiteralTypeArgs -- each argument of a type reference to the template
+# `tplId` that names a literal type is refused (memberaccess.
+# refuseLiteralTypeArg), once the template is known: a reference with no label
+# finds it only after its arguments resolve. A labelled argument's type is its
+# substitution (`typeSubs`), the unlabelled one's the first (`firstA`).
+refuseLiteralTypeArgs: function {
+    st: zenv.ZSymbolTable
+    ast: Ast
+    arguments: (ListVal zast.nodeid).view
+    typeSubs: (IdMapV zast.nameid v: ztypes.tid).view
+    firstA: ztypes.tid
+    tplId: ztypes.tid
+} is {
+    tdecl: templateDeclOf reg: st.reg typing: st.typing tid: tplId
+    for each argId: arguments loop {
+        arg: argRefAt :ast nid: argId
+        if arg.nid.isZero then continue
+        at: firstA
+        if arg.name.notZero then at = (typeSubs.get key: arg.name).or d: ztypes.tid.zero
+        if at.notZero then (
+            memberaccess.refuseLiteralTypeArg
+            :st
+            :ast
+            nid: arg.operation
+            tid: at
+            templateDecl: tdecl
+        )
+    }
+}
+
 # mintMonoRefParts -- resolveMonoRefParts once the site is set.
 mintMonoRefParts: function {
     st: zenv.ZSymbolTable
@@ -743,6 +773,7 @@ mintMonoRefParts: function {
         if sfx.length == 0 then return ztypes.tid.zero
         if tplId.isZero then tplId = typeApplicationTemplate :st :scope :ast :unitDecl :callableNid
         if tplId.isZero then return ztypes.tid.zero
+        refuseLiteralTypeArgs :st :ast :arguments :typeSubs :firstA :tplId
         if (
             completeApplication
             :st
@@ -2802,6 +2833,14 @@ collectTypeArgAt: function {
         return (argscan miss: anyMiss tid: ztypes.tid.zero)
     }
     argTid: bindResolvedTypeArg :ast :st :unitDecl :opId baseId: baseNameId :pk0 :sfx :subs
+    if argTid.notZero then (
+        memberaccess.refuseLiteralTypeArg
+        :st
+        :ast
+        nid: opId
+        tid: argTid
+        templateDecl: tk0
+    )
     if argTid.isZero then anyMiss = true
     return (argscan miss: anyMiss tid: argTid)
 }

@@ -932,6 +932,42 @@ refuseLiteralTyperef: function {
     )
 }
 
+# refuseLiteralTypeArg -- a literal type written as a type argument
+# (`ListVal t: intliteral`, `g n: intliteral x: 1`): it would be the declared
+# type of what the instance holds at run time -- an element, a field, a
+# parameter -- which a compile-time type may not be (refuseLiteralTyperef). A
+# compile-time template takes one: a static list's element, and the places
+# staticLiteralTyperefs names. `templateDecl` is the declaration of the
+# template the argument is for (its type may not be resolved yet); `nid` the
+# argument's type node.
+refuseLiteralTypeArg: function {
+    st: zenv.ZSymbolTable
+    ast: Ast.view
+    nid: zast.nodeid
+    tid: ztypes.tid
+    templateDecl: ztypes.declid
+} is {
+    if (valuechecks.isAnyLiteralTid :st :tid).not then return
+    if (st.walk.staticLiteralTyperefs.has item: nid) then return
+    slt: moves.stdTidPeek :ast typing: st.typing wk: zast.wellKnown.slot.tyStaticlist
+    if templateDecl == (st.typing.declIdOfType typeId: slt) then return
+    ltn: st.reg.nameOf :tid
+    dflt: literalDefaultName :st :tid
+    pos: zast.posOf n: (ast.nodes.get i: nid)
+    (
+        addErrorWithHint
+        :st
+        nodeid: nid
+        lineno: pos.line
+        colno: pos.col
+        e: zast.err.typeError
+        msg: "'\{ltn}' is a compile-time type and cannot be a type argument: what an instance holds at run time has a type of its own"
+        note: "a literal wears it until context pins one; it never reaches emission".string
+        hint: "name the type the value should have, such as `\{dflt}`"
+        width: ltn.length
+    )
+}
+
 # paramIsThisReceiver -- the parameter's type names the receiver: bare `this`
 # or a marker-suffixed `this.view` / `this.borrow`.
 paramIsThisReceiver: function {ast: Ast.view op: astnode.view} out bool is {
