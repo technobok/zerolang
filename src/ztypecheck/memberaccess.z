@@ -5270,6 +5270,27 @@ refuseNullTyped: function {
     return true
 }
 
+# signatureParamTid -- a parameter's type as its function's signature holds it,
+# where the body binds that rather than what the parameter's type name reads
+# from the body's scope: an instance walk's substituted type (the mono FUNCTION
+# child), and a template's parameter declared by one of its own generic
+# parameters (the nearest declaration -- the name may shadow a scalar of the
+# same spelling, `as {u8: anyval.generic} in {x: u8}`). 0 otherwise.
+signatureParamTid: function {
+    st: zenv.ZSymbolTable.view fnTid: ztypes.tid isGenDef: bool pnId: zast.nameid
+} out ztypes.tid is {
+    if st.walk.fn.curMonoFnTid.notZero then {
+        mpo: st.typing.declChildOfId parentTypeId: st.walk.fn.curMonoFnTid nameId: pnId
+        if mpo.some then return mpo
+    }
+    if isGenDef.not or fnTid.isZero then return ztypes.tid.zero
+    pc: (st.typing.declChildOfId parentTypeId: fnTid nameId: pnId).or d: ztypes.tid.zero
+    if pc.notZero when (
+        (st.reg.typetypeOf typeId: pc) == ztypes.ztypetype.genericParam
+    ) then return pc
+    return ztypes.tid.zero
+}
+
 # paramTidOf -- the type of one declared parameter of the function `fnTid`,
 # resolved, stamped on its node and checked: a generic template's own bare
 # param has no stamp, so it takes the canonical param tid off the FUNCTION
@@ -5286,25 +5307,8 @@ paramTidOf: function {
     isGenDef: fnTid.notZero and (st.reg.isGenericOf tid: fnTid)
     # the node the parameter's type is stamped on
     pnid: zast.nodeIdOf n: (ast.nodes.get i: pm.operation)
-    ptid: paramTypeId :st :ast :unitDecl opNid: pm.operation
-    if st.walk.fn.curMonoFnTid.notZero then {
-        # per-mono instance walk: the mono FUNCTION child
-        # carries the substituted param type
-        mpo: st.typing.declChildOfId parentTypeId: st.walk.fn.curMonoFnTid nameId: pm.name
-        if mpo.some then {
-            ptid = mpo
-        }
-    }
-    # a template's own bare param carries no stamp; bind the canonical param tid
-    # from the FUNCTION child so the walk types it
-    if ptid.isZero when isGenDef when fnTid.notZero then {
-        paramChild: st.typing.declChildOfId parentTypeId: fnTid nameId: pm.name
-        if paramChild.some when (
-            (st.reg.typetypeOf typeId: paramChild) == ztypes.ztypetype.genericParam
-        ) then {
-            ptid = paramChild
-        }
-    }
+    ptid: signatureParamTid :st :fnTid :isGenDef pnId: pm.name
+    if ptid.isZero then ptid = paramTypeId :st :ast :unitDecl opNid: pm.operation
     fpt: statics.foldedParamTid :st :ast :fnTid :pm
     if fpt.notZero then ptid = fpt
     if ptid.isZero when (unitRootedPath :st :ast scope: rf node: pm.operation) then {
