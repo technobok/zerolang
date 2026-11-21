@@ -30,6 +30,8 @@ public: unit {
     :loopentry
     :loopend
     :specstandin
+    :argoutcome
+    :argbind
     :typedefclash
     :unmetbound
     :monosite
@@ -190,6 +192,35 @@ specstandin: record {
     # field, a reassignment or a return. Only a borrowing place may hold a
     # implementer as the spec implicitly
     owning: bool
+}
+
+# argoutcome -- what the binder decided about one argument of a call
+# (callchecks.bindCallArgs), for the reports made where the argument is walked.
+argoutcome: variant {
+    # it binds `param` (none when the parameter list gives it nothing to bind)
+    bound: null
+    # it is a type argument: it binds a generic parameter, not a value one
+    typeArgument: null
+    # it names the receiver the call already supplied
+    receiverTwice: null
+    # its label names no parameter
+    unknownLabel: null
+    # it is unlabelled where the callee has no parameter for it
+    surplus: null
+    # it binds a parameter an earlier argument bound
+    givenTwice: null
+}
+
+# argbind -- the parameter one argument of a call binds, decided once for the
+# call before any argument is walked (callchecks.bindCallArgs): every reader of
+# "which parameter" -- the walk, the reports, the emitter -- reads this.
+argbind: record {
+    # the parameter, by name (its label, or the one the unlabelled argument
+    # binds); zero for none
+    param: zast.nameid
+    # it binds by position rather than by its label
+    positional: bool
+    outcome: argoutcome
 }
 
 # One row of a declChildWalk, read by slot instead of accumulated into a
@@ -879,6 +910,9 @@ ZTyping: class {
     # The emitter reads it to zero the source of a taken argument, and the LSP
     # to word the argument's ownership.
     argDisposition: (IdMapV zast.nodeid v: ztypes.zparamownership)
+    # the parameter each argument of a call binds, by the argument's node
+    # (setArgBind); absent for an argument no binder saw
+    argParam: (IdMapV zast.nodeid v: argbind)
     # dotted calls whose base NAMES A TYPE (`Counter.make`, `other.T.helper`,
     # `(Pair t: u64).create`), by call node id: decided once, from the
     # environment (dottedBaseIsValue), so a local that shadows a type's name is
@@ -2337,6 +2371,19 @@ ZTyping: class {
         t.memberConst.set key: k :value
     }
 
+    # setArgBind -- the binder's decision for the argument `nid` (setAgreed).
+    setArgBind: function {t: this nid: zast.nodeid value: argbind} is {
+        foreign: t.rowIsForeign :nid
+        setAgreed shared: t.argParam :foreign :nid :value
+    }
+
+    # argBindOf -- the binder's decision for the argument `nid`; one it never
+    # saw binds nothing.
+    argBindOf: function {t: this.view nid: zast.nodeid} out argbind is {
+        none: argbind param: zast.nameid positional: false outcome: argoutcome.bound
+        return ((t.argParam.get key: nid).or d: none)
+    }
+
     # setNodeConst -- the compile-time value of the use site `nid` (setAgreed).
     setNodeConst: function {t: this nid: zast.nodeid value: ztypes.cval} is {
         foreign: t.rowIsForeign :nid
@@ -2979,6 +3026,7 @@ newTyping: function {nodeEst: 0.u64} out ZTyping is {
         postGuardTid: (IdMapV zast.nodeid v: ztypes.tid)
         postGuardArm: (IdMapV zast.nodeid v: zast.nameid)
         argDisposition: (IdMapV zast.nodeid v: ztypes.zparamownership)
+        argParam: (IdMapV zast.nodeid v: argbind)
         callBaseNamesType: IdSet zast.nodeid
         armLeafMoves: IdSet zast.nodeid
         repoints: IdSet zast.nodeid

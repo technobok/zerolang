@@ -1082,45 +1082,116 @@ callargs: record {
     recvImplicit: bool
 }
 
-# argbinding -- the parameter an argument binds: `pnId`, 0 for none, and
-# whether it binds by position rather than by its label.
-argbinding: record {
-    pnId: zast.nameid
-    positional: bool
+# bindCallArgs -- THE ONE BINDER of a concrete call's arguments, run before any
+# of them is walked: each argument, in the order written, binds the parameter
+# its label names, else the one the unlabelled argument binds, and the decision
+# is stamped on the argument (ZTyping.argParam, decideArgBind), so every reader
+# of "which parameter" reads one answer. A construction's type argument binds a
+# generic parameter, not a field. Nothing is reported here: bindCallArg reports
+# where the walk meets each argument.
+bindCallArgs: function {
+    st: zenv.ZSymbolTable
+    ast: Ast
+    unitDecl: ztypes.declid
+    call: callref
+    ca: callargs
+} is {
+    bound: ListVal zast.nameid
+    members: ca.effId.notZero and ((st.typing.declMemberCount ownerTid: ca.effId) > 0)
+    k: u64
+    for k < call.nargs loop {
+        arg: argRefAt :ast nid: (zast.callArgAt :ast nid: call.nid i: k)
+        k = k + 1
+        if arg.nid.isZero then continue
+        typeArg: false
+        if ca.isCtor then typeArg = (
+            (ctorArgNamesTemplateParam :st tplId: ca.funcId :arg) or
+            (ctorLeadingTypeArg :st :ast :unitDecl tplId: ca.funcId :arg argIdx: k - 1)
+        )
+        known: true
+        if arg.name.notZero when members then known = (
+            st.typing.declChildOfId
+            parentTypeId: ca.effId
+            nameId: arg.name
+        ).some
+        (
+            st.typing.setArgBind
+            nid: arg.nid
+            value: (
+                decideArgBind
+                :st
+                :ast
+                :call
+                :ca
+                :bound
+                :arg
+                byLabel: (labelOutcome :arg :typeArg :known)
+            )
+        )
+    }
 }
 
-# bindCallArg -- the parameter the call's argument `arg` binds: its label's, else
-# the one the unlabelled argument binds (unlabelledParamOf).
-# What the parameter list alone decides is reported here, once, whether or not
-# the value typed: the receiver supplied twice, a label no parameter has, a call
-# of something that takes none, a positional argument past the last parameter,
-# and a parameter already bound (`bound`, which the binding joins).
-bindCallArg: function {
+# bindGenericCallArgs -- bindCallArgs for a generic call: a label naming one of
+# the template's generic parameters (`gparams`) is a type argument, and a value
+# label must name one of its value parameters (`pNames`).
+bindGenericCallArgs: function {
     st: zenv.ZSymbolTable
+    ast: Ast.view
+    call: callref
+    ca: callargs
+    gparams: (ListVal zast.nameid).view
+    pNames: (ListVal zast.nameid).view
+} is {
+    bound: ListVal zast.nameid
+    k: u64
+    for k < call.nargs loop {
+        arg: argRefAt :ast nid: (zast.callArgAt :ast nid: call.nid i: k)
+        k = k + 1
+        if arg.nid.isZero then continue
+        typeArg: isGenericParamLabel :gparams label: arg.name
+        known: (nameSlotIn names: pNames name: arg.name) < pNames.length
+        (
+            st.typing.setArgBind
+            nid: arg.nid
+            value: (
+                decideArgBind
+                :st
+                :ast
+                :call
+                :ca
+                :bound
+                :arg
+                byLabel: (labelOutcome :arg :typeArg :known)
+            )
+        )
+    }
+}
+
+# decideArgBind -- the binder's decision for one argument `arg` of a call. What
+# the call's kind says of the argument's label comes as `byLabel` (labelOutcome):
+# a type argument binds no value parameter, and a label the callee has no
+# parameter for binds none. Then a label naming the receiver the call already
+# supplied supplies it twice; a label binds the parameter it names, an
+# unlabelled argument the one unlabelledParamOf names, or nothing (surplus);
+# and a parameter an earlier argument bound (`bound`, which each binding joins)
+# is given twice.
+decideArgBind: function {
+    st: zenv.ZSymbolTable.view
     ast: Ast.view
     call: callref
     ca: callargs
     bound: ListVal zast.nameid
     arg: argref
-} out argbinding is {
-    refuseReceiverTwice :st :ast :call :ca :arg
+    byLabel: ztyping.argoutcome
+} out ztyping.argbind is {
     pn: arg.name
-    if pn.notZero when ca.effId.notZero when (
-        (st.typing.declMemberCount ownerTid: ca.effId) > 0
-    ) when (
-        st.typing.declChildOfId
-        parentTypeId: ca.effId
-        nameId: pn
-    ).none then reportUnknownArgument :st :ast ownerTid: ca.effId label: pn :arg
-    if ca.reportUnknown when ca.isCtor.not when ca.funcId.notZero then (
-        reportNoParameters
-        :st
-        :ast
-        funcId: ca.funcId
-        :arg
-    )
     positional: pn.isZero
-    if positional then {
+    oc: ztyping.argoutcome.bound
+    if byLabel.typeArgument then {
+        oc = byLabel
+    } else if (receiverGivenTwice :st :ast :call :ca :arg) then {
+        oc = ztyping.argoutcome.receiverTwice
+    } else if positional then {
         pn = (
             unlabelledParamOf
             :st
@@ -1129,56 +1200,92 @@ bindCallArg: function {
             isCtor: ca.isCtor
             recvImplicit: ca.recvImplicit
         )
-        if pn.isZero when ca.isCtor.not then (
-            reportSurplusPositional
-            :st
-            :ast
-            :call
-            effId: ca.effId
-            :arg
-        )
+        if pn.isZero when ca.isCtor.not then oc = ztyping.argoutcome.surplus
+    } else oc = byLabel
+    if oc.bound when pn.notZero when ca.effId.notZero then {
+        if (nameSlotIn names: bound name: pn) < bound.length then {
+            oc = ztyping.argoutcome.givenTwice
+        } else bound.append pn
     }
-    if ca.effId.notZero then bindParam :st :ast :ca :bound :pn :arg
-    return (argbinding pnId: pn :positional)
+    return (ztyping.argbind param: pn :positional outcome: oc)
 }
 
-# bindParam -- the argument `arg` binds the parameter `pn`: it joins `bound`,
-# the parameters the call's earlier arguments bound, or, already there, is a
-# parameter given twice and reported -- but where it is the receiver of a call
-# that reports no unknown label. True when it was given twice.
-bindParam: function {
+# labelOutcome -- what a call's kind says of an argument's label: a type
+# argument (`typeArg`), a label naming no parameter (`known` false), else
+# nothing yet.
+labelOutcome: function {arg: argref typeArg: bool known: bool} out ztyping.argoutcome is {
+    if typeArg then return ztyping.argoutcome.typeArgument
+    if arg.name.notZero when known.not then return ztyping.argoutcome.unknownLabel
+    return ztyping.argoutcome.bound
+}
+
+# nameSlotIn -- the position of `name` in `names`; their count when absent.
+nameSlotIn: function {names: (ListVal zast.nameid).view name: zast.nameid} out u64 is {
+    i: u64
+    for i < names.length loop {
+        if (names.get :i) == name then return i
+        i = i + 1
+    }
+    return names.length
+}
+
+# bindCallArg -- the parameter the call's argument `arg` binds, as the binder
+# decided (bindCallArgs). What the parameter list alone decides is reported
+# here, once, where the walk meets the argument, whether or not its value
+# typed: the receiver supplied twice, a label no parameter has, a call of
+# something that takes none, an unlabelled argument with no parameter to
+# bind, and a parameter already bound.
+bindCallArg: function {
+    st: zenv.ZSymbolTable
+    ast: Ast.view
+    call: callref
+    ca: callargs
+    arg: argref
+} out ztyping.argbind is {
+    b: st.typing.argBindOf nid: arg.nid
+    if b.outcome.receiverTwice then reportReceiverTwice :st :ast :call :ca :arg
+    if b.outcome.unknownLabel then (
+        reportUnknownArgument
+        :st
+        :ast
+        ownerTid: ca.effId
+        label: b.param
+        :arg
+    )
+    if ca.reportUnknown when ca.isCtor.not when ca.funcId.notZero then (
+        reportNoParameters
+        :st
+        :ast
+        funcId: ca.funcId
+        :arg
+    )
+    if b.outcome.surplus then reportSurplusPositional :st :ast :call effId: ca.effId :arg
+    reportGivenTwice :st :ast :ca :b :arg
+    return b
+}
+
+# reportGivenTwice -- the argument binds a parameter an earlier one bound
+# (`b`, the binder's decision): reported, but where it is the receiver of a
+# construction-like call that reports no unknown label.
+reportGivenTwice: function {
     st: zenv.ZSymbolTable
     ast: Ast.view
     ca: callargs
-    bound: ListVal zast.nameid
-    pn: zast.nameid
+    b: ztyping.argbind
     arg: argref
-} out bool is {
-    if pn.isZero then return false
-    seen: false
-    for each b: bound loop {
-        if b == pn then seen = true
-    }
-    if seen.not then {
-        bound.append pn
-        return false
-    }
-    if ca.reportUnknown or ca.isCtor.not when (
-        receiverParamOf
-        :st
-        funcId: ca.funcId
-        isCtor: ca.isCtor
-        pnId: pn
-    ).not then reportArgGivenTwice :st :ast pnId: pn :arg
-    return true
+} is {
+    if b.outcome.givenTwice.not then return
+    if ca.reportUnknown.not when ca.isCtor then return
+    if (receiverParamOf :st funcId: ca.funcId isCtor: ca.isCtor pnId: b.param) then return
+    reportArgGivenTwice :st :ast pnId: b.param :arg
 }
 
-# refuseReceiverTwice -- THE RECEIVER IS SUPPLIED ONCE. An argument that names
+# receiverGivenTwice -- THE RECEIVER IS SUPPLIED ONCE. An argument that names
 # the receiver parameter when the call already supplied it supplies it twice,
 # and emission binds one and drops the other -- a wrong answer taken from an
-# object the reader can plainly see being handed over. True when it reported.
-refuseReceiverTwice: function {
-    st: zenv.ZSymbolTable ast: Ast.view call: callref ca: callargs arg: argref
+# object the reader can plainly see being handed over.
+receiverGivenTwice: function {
+    st: zenv.ZSymbolTable.view ast: Ast.view call: callref ca: callargs arg: argref
 } out bool is {
     if ca.isCtor or ca.funcId.isZero or arg.name.isZero then return false
     receiverName: receiverParamNameOf :st tid: ca.funcId
@@ -1186,12 +1293,17 @@ refuseReceiverTwice: function {
     if arg.name != receiverName then return false
     # a callee that declares no receiver has none to supply twice
     if (st.typing.declChildOfId parentTypeId: ca.funcId nameId: receiverName).none then return false
+    return (receiverSuppliedBy :ast :call recvImplicit: ca.recvImplicit).length > 0
+}
+
+# reportReceiverTwice -- the report of an argument receiverGivenTwice answers.
+reportReceiverTwice: function {
+    st: zenv.ZSymbolTable ast: Ast.view call: callref ca: callargs arg: argref
+} is {
     by9: receiverSuppliedBy :ast :call recvImplicit: ca.recvImplicit
-    if by9.length == 0 then return false
     lb9: zast.nameTextAt :ast ref: arg.name
     m9: "the receiver is supplied twice: by \{by9} and by '\{lb9}:'"
     addError :st nodeid: arg.nid lineno: arg.lineno colno: arg.colno e: zast.err.callError msg: m9
-    return true
 }
 
 # receiverSuppliedBy -- how a call ALREADY supplied its receiver, phrased the way
@@ -1666,7 +1778,6 @@ checkTypedCallArg: function {
     isCtor: bool
     reportUnknown: bool
     recvImplicit: bool
-    boundArgIds: ListVal zast.nameid
     vt: ztypes.tid
     pins: List ztyping.PinPath
     # the call's result keeps its arguments' locks (walkCallArgsHoist decides)
@@ -1677,8 +1788,8 @@ checkTypedCallArg: function {
     # the parameter's name travels as its id: the label's, or the positional
     # slot's; text is taken only where a report spells it
     ca: callargs :effId :funcId :isCtor :reportUnknown :recvImplicit
-    ab: bindCallArg :st :ast :call :ca bound: boundArgIds :arg
-    pnId: ab.pnId
+    ab: bindCallArg :st :ast :call :ca :arg
+    pnId: ab.param
     if ab.positional then {
         numerics.coercePositionalArg :st :ast :effId :vt :pnId :arg
     } else {
@@ -1799,7 +1910,6 @@ walkOneCallArg: function {
     reportUnknown: bool
     recvImplicit: bool
     argIdx: u64
-    boundArgIds: ListVal zast.nameid
     pins: List ztyping.PinPath
     # the call's result keeps its arguments' locks
     calleePins: bool
@@ -1879,7 +1989,7 @@ walkOneCallArg: function {
         # here for the arguments it would otherwise skip entirely.
         if vt.u64 == 0 then {
             ca: callargs :effId :funcId :isCtor :reportUnknown :recvImplicit
-            bindCallArg :st :ast :call :ca bound: boundArgIds :arg
+            bindCallArg :st :ast :call :ca :arg
         }
         # a label naming the template's own parameter supplies that parameter,
         # not one of the constructor's, and so does a leading type argument
@@ -1896,7 +2006,6 @@ walkOneCallArg: function {
             :isCtor
             :reportUnknown
             :recvImplicit
-            :boundArgIds
             :vt
             :pins
             :calleePins
@@ -2191,10 +2300,17 @@ walkCallArgsHoist: function {
 } out List ztyping.PinPath is {
     pins: List ztyping.PinPath
     argIdx: u64
-    boundArgIds: ListVal zast.nameid
     effId: funcId
     if isCtor then effId = ctorEffectiveTid :st :ast :call :funcId
     conform.forceAllMembers :st :ast tid: effId
+    (
+        bindCallArgs
+        :st
+        :ast
+        :unitDecl
+        :call
+        ca: (callargs :effId :funcId :isCtor :reportUnknown :recvImplicit)
+    )
     # whether the call's result keeps its arguments' locks -- a construction,
     # an `outx` or reference-returning callee -- is one fact for every argument
     calleePins: isCtor
@@ -2216,7 +2332,6 @@ walkCallArgsHoist: function {
             :reportUnknown
             :recvImplicit
             :argIdx
-            :boundArgIds
             :pins
             :calleePins
             :argId
@@ -4099,18 +4214,6 @@ bareCtorTypeOf: function {
     return tid
 }
 
-# holderslot -- which generic-parameter HOLDER an argument binds, and which
-# declared parameter slot it took.
-holderslot: record {
-    # the generic parameter the argument's declared type names. 0 when that
-    # type name was never interned (a minted mono like `ListRef_String`): it
-    # binds no generic parameter, which is not the same as an unknown label
-    holder: zast.nameid
-    # the declared parameter's index; the holder list's length when no
-    # parameter matched
-    slot: u64
-}
-
 # isGenericParamLabel -- the argument's label names one of the template's own
 # generic parameters, which is what makes it an explicit TYPE argument rather
 # than a value.
@@ -4124,29 +4227,6 @@ isGenericParamLabel: function {
         if label == gp2 then found = true
     }
     return found
-}
-
-# argHolderSlot -- the declared parameter an argument binds: a LABEL names one,
-# and an unlabelled argument binds the one unlabelledParamOf names. A label
-# naming no parameter is reported here, which is the one place holding the
-# owner to name it against.
-argHolderSlot: function {
-    st: zenv.ZSymbolTable
-    ast: Ast
-    arg: argref
-    funcId: ztypes.tid
-    pNames: (ListVal zast.nameid).view
-    pHolders: (ListVal zast.nameid).view
-    # the dot supplied the receiver, which pNames then leaves out
-    recvImplicit: bool
-} out holderslot is {
-    slotIdx: argParamSlot :st :ast :arg :funcId :pNames :recvImplicit
-    holder: zast.nameid
-    if slotIdx < pHolders.length then holder = pHolders.get i: slotIdx
-    if arg.name.notZero when slotIdx >= pNames.length then {
-        reportUnknownArgument :st :ast ownerTid: funcId label: arg.name :arg
-    }
-    return (holderslot :holder slot: slotIdx)
 }
 
 # reportGenericBindingConflict -- one generic parameter bound twice, to two
@@ -4479,8 +4559,6 @@ inferGenericCallSubs: function {
     recvImplicit: bool
 } is {
     lockMark: st.argLocks.length
-    # the parameters bound so far: a second binding is refused (bindParam)
-    bound: ListVal zast.nameid
     ca: (
         callargs
         effId: funcId
@@ -4489,13 +4567,15 @@ inferGenericCallSubs: function {
         reportUnknown: true
         :recvImplicit
     )
+    bindGenericCallArgs :st :ast :call :ca :gparams :pNames
     kAiter: u64
     for kAiter < call.nargs loop {
         argId: zast.callArgAt :ast nid: call.nid i: kAiter
         kAiter = kAiter + 1
         arg: argRefAt :ast nid: argId
         if arg.nid.isZero then continue
-        if (isGenericParamLabel :gparams label: arg.name) then {
+        b: st.typing.argBindOf nid: arg.nid
+        if b.outcome.typeArgument then {
             # a numeric parameter's value is read where the mono is keyed
             fnDecl: templateDeclOf reg: st.reg typing: st.typing tid: funcId
             argBound: st.reg.genericParamConstraintOf tdecl: fnDecl paramName: arg.name
@@ -4509,27 +4589,21 @@ inferGenericCallSubs: function {
         avt: checkValueAt :st :unitDecl :ast nid: arg.operation
         if wantTypes then recordArgType :argTypes at: kAiter - 1 tid: avt
         reportUntypedGenericArg :st :unitDecl :ast :arg :avt :errG
-        # the receiver named when the dot supplied it binds nothing more
-        if (refuseReceiverTwice :st :ast :call :ca :arg) then continue
-        hs: argHolderSlot :st :ast :arg :funcId :pNames :pHolders :recvImplicit
-        if hs.slot < pHolderIds.length when (
-            bindParam
-            :st
-            :ast
-            :ca
-            :bound
-            pn: (pNames.get i: hs.slot)
-            :arg
-        ) then continue
-        mat: conform.argBindingTid :st :ast :funcId holder: hs.holder :avt
-        if hs.slot < pHolderIds.length then {
+        # what the parameter list alone decides is reported as on a concrete call
+        bindCallArg :st :ast :call :ca :arg
+        if b.outcome.receiverTwice or b.outcome.givenTwice then continue
+        slot: nameSlotIn names: pNames name: b.param
+        holder: zast.nameid
+        if slot < pHolders.length then holder = pHolders.get i: slot
+        mat: conform.argBindingTid :st :ast :funcId :holder :avt
+        if slot < pHolderIds.length then {
             (
                 lockGenericValueArg
                 :st
                 :ast
                 :call
                 :funcId
-                pnId: (pNames.get i: hs.slot)
+                pnId: b.param
                 :arg
                 vt: avt
                 :pins
@@ -4541,9 +4615,9 @@ inferGenericCallSubs: function {
                 :arg
                 :gparams
                 :subs
-                holder: hs.holder
-                ptid: (pHolderIds.get i: hs.slot)
-                pnId: (pNames.get i: hs.slot)
+                :holder
+                ptid: (pHolderIds.get i: slot)
+                pnId: b.param
                 :avt
                 :mat
             )
@@ -4655,26 +4729,18 @@ checkConstantCallArgs: function {
     fid: ztypes.tid
     recvImplicit: bool
 } is {
+    # bound and reported as a body binds and reports a call's arguments: a
+    # dotted method's receiver comes through the dot, as there
+    ca: callargs effId: fid funcId: fid isCtor: false reportUnknown: recvImplicit.not :recvImplicit
+    bindCallArgs :st :ast :unitDecl :call :ca
     ai: u64
     for ai < call.nargs loop {
         arg: argRefAt :ast nid: (zast.callArgAt :ast nid: call.nid i: ai)
         ai = ai + 1
         if arg.nid.isZero then continue
-        pn: arg.name
-        if pn.notZero then {
-            pnT: (st.typing.declChildOfId parentTypeId: fid nameId: pn).or d: ztypes.tid.zero
-            if pnT.isZero then {
-                reportUnknownArgument :st :ast ownerTid: fid label: pn :arg
-                continue
-            }
-        } else {
-            pn = unlabelledParamOf :st :ast effId: fid isCtor: false :recvImplicit
-            if pn.isZero then {
-                reportSurplusPositional :st :ast :call effId: fid :arg
-                continue
-            }
-        }
-        numerics.checkConstantArgKind :st :scope :ast :unitDecl :fid paramName: pn :arg
+        b: bindCallArg :st :ast :call :ca :arg
+        if b.outcome.bound.not or b.param.isZero then continue
+        numerics.checkConstantArgKind :st :scope :ast :unitDecl :fid paramName: b.param :arg
     }
     checkMissingCallArgs :ast :st :call funcId: fid isCtor: false :recvImplicit
 }

@@ -478,6 +478,10 @@ schemaSql: function {} out String is {
     )
     (
         acc.append
+        s: "CREATE TABLE IF NOT EXISTS arg_param (node_id INTEGER PRIMARY KEY, param TEXT NOT NULL, positional INTEGER NOT NULL, outcome TEXT NOT NULL);\n"
+    )
+    (
+        acc.append
         s: "CREATE TABLE IF NOT EXISTS call_generic_binding (call_node INTEGER NOT NULL, param_name INTEGER NOT NULL, type_id INTEGER NOT NULL, PRIMARY KEY (call_node, param_name));\n"
     )
     acc.append monoSchemaSql
@@ -574,6 +578,25 @@ argAtomName: function {ast: Ast.view id: zast.nodeid} out String is {
         return (zast.nameTextCopy :ast ref: n.name)
     } else {
         return "".string
+    }
+}
+
+# argOutcomeName -- the binder's outcome for an argument, as the dump spells it.
+argOutcomeName: function {o: ztyping.argoutcome} out StringView is {
+    match (
+        o
+    ) case bound then {
+        return "bound"
+    } case typeArgument then {
+        return "type argument"
+    } case receiverTwice then {
+        return "receiver twice"
+    } case unknownLabel then {
+        return "unknown label"
+    } case surplus then {
+        return "surplus"
+    } case givenTwice then {
+        return "given twice"
     }
 }
 
@@ -1013,6 +1036,14 @@ ZDumper: class {
             adInt: ztypes.zparamownershipInt ad.value
             rowAd: "INSERT INTO arg_disposition VALUES (\{ad.key}, \{adInt});\n"
             this.acc.append s: rowAd
+        }
+        for each ap: typing.argParam.iterateItems loop {
+            apn: zast.poolTextAt :pool ref: ap.value.param
+            app: u64
+            if ap.value.positional then app = 1
+            apo: argOutcomeName o: ap.value.outcome
+            rowAp: "INSERT INTO arg_param VALUES (\{ap.key}, '\{apn}', \{app}, '\{apo}');\n"
+            this.acc.append s: rowAp
         }
         for each cg: typing.callGenericBinding.iterateItems loop {
             rowCg: "INSERT INTO call_generic_binding VALUES (\{cg.key.call}, \{cg.key.param}, \{cg.value});\n"
@@ -1721,6 +1752,21 @@ ZDumper: class {
         this.emitSection title: "arg_disposition" :rows
     }
 
+    # emit the parameter each call argument binds, as the binder decided
+    appendArgParamCanon: function {:this ast: Ast.view st: zenv.ZSymbolTable.view} is {
+        rows: List String
+        for each ap: st.typing.argParam.iterateItems loop {
+            ant: canonNodeText :ast nid: ap.key
+            apn: zast.nameTextCopy :ast ref: ap.value.param
+            apSql: sqlStr s: apn.stringView
+            how: "label"
+            if ap.value.positional then how = "unlabelled"
+            apo: argOutcomeName o: ap.value.outcome
+            rows.append "\{ant} | \{apSql} | \{how} | \{apo}"
+        }
+        this.emitSection title: "arg_param" :rows
+    }
+
     # emit which type argument each call bound a generic parameter to
     appendCallGenericBindingCanon: function {:this program: Ast.view st: zenv.ZSymbolTable} is {
         rows: List String
@@ -1800,6 +1846,7 @@ dumpCanon: function {program: Ast.view symtab: zenv.ZSymbolTable} out String is 
     d.appendTypesCanon unm: mu.stringView st: symtab
     d.appendDeclChildCanon ast: program unm: mu.stringView st: symtab
     d.appendArgDispositionCanon ast: program st: symtab
+    d.appendArgParamCanon ast: program st: symtab
     d.appendGenericChildrenCanon unm: mu.stringView st: symtab
     d.appendGenericArgsCanon unm: mu.stringView st: symtab
     d.appendImplementationCanon unm: mu.stringView st: symtab
