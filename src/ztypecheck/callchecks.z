@@ -1119,24 +1119,39 @@ bindCallArg: function {
             :arg
         )
     }
-    if ca.effId.notZero when pn.notZero then {
-        seen: false
-        for each b: bound loop {
-            if b == pn then seen = true
-        }
-        if seen.not then {
-            bound.append pn
-        } else if ca.reportUnknown or ca.isCtor.not when (
-            receiverParamOf
-            :st
-            funcId: ca.funcId
-            isCtor: ca.isCtor
-            pnId: pn
-        ).not then {
-            reportArgGivenTwice :st :ast pnId: pn :arg
-        }
-    }
+    if ca.effId.notZero then bindParam :st :ast :ca :bound :pn :arg
     return (argbinding pnId: pn :positional)
+}
+
+# bindParam -- the argument `arg` binds the parameter `pn`: it joins `bound`,
+# the parameters the call's earlier arguments bound, or, already there, is a
+# parameter given twice and reported -- but where it is the receiver of a call
+# that reports no unknown label. True when it was given twice.
+bindParam: function {
+    st: zenv.ZSymbolTable
+    ast: Ast.view
+    ca: callargs
+    bound: ListVal zast.nameid
+    pn: zast.nameid
+    arg: argref
+} out bool is {
+    if pn.isZero then return false
+    seen: false
+    for each b: bound loop {
+        if b == pn then seen = true
+    }
+    if seen.not then {
+        bound.append pn
+        return false
+    }
+    if ca.reportUnknown or ca.isCtor.not when (
+        receiverParamOf
+        :st
+        funcId: ca.funcId
+        isCtor: ca.isCtor
+        pnId: pn
+    ).not then reportArgGivenTwice :st :ast pnId: pn :arg
+    return true
 }
 
 # refuseReceiverTwice -- THE RECEIVER IS SUPPLIED ONCE. An argument that names
@@ -4461,8 +4476,16 @@ inferGenericCallSubs: function {
 } is {
     posIdx: u64
     lockMark: st.argLocks.length
-    # the parameter slots bound so far: a second binding is refused
-    boundSlots: ListVal u64
+    # the parameters bound so far: a second binding is refused (bindParam)
+    bound: ListVal zast.nameid
+    ca: (
+        callargs
+        effId: funcId
+        :funcId
+        isCtor: false
+        reportUnknown: true
+        recvImplicit: false
+    )
     kAiter: u64
     for kAiter < call.nargs loop {
         argId: zast.callArgAt :ast nid: call.nid i: kAiter
@@ -4485,7 +4508,14 @@ inferGenericCallSubs: function {
         reportUntypedGenericArg :st :unitDecl :ast :arg :avt :errG
         hs: argHolderSlot :st :ast :arg :funcId :pNames :pHolders :pHolderIds :posIdx
         posIdx = posIdx + 1
-        if (slotGivenTwice :st :ast :pNames nSlots: pHolderIds.length :boundSlots :arg :hs
+        if hs.slot < pHolderIds.length when (
+            bindParam
+            :st
+            :ast
+            :ca
+            :bound
+            pn: (pNames.get i: hs.slot)
+            :arg
         ) then continue
         mat: conform.argBindingTid :st :ast :funcId holder: hs.holder :avt
         if hs.slot < pHolderIds.length then {
@@ -4534,28 +4564,6 @@ reportUntypedGenericArg: function {
     if (avt.u64 != 0) or (st.typing.errors.length != errG) then return
     valuechecks.reportUnresolvedValue :st :unitDecl :ast nid: arg.operation
     reportUntypedCallArg :st :unitDecl :ast nid: arg.operation
-}
-
-# slotGivenTwice -- the argument binds the parameter slot `hs` names, which an
-# earlier argument of the call bound: it is reported, and the answer is true.
-# A slot past the parameters (`nSlots`) binds nothing; a free one is recorded
-# in `boundSlots` as bound.
-slotGivenTwice: function {
-    st: zenv.ZSymbolTable
-    ast: Ast
-    pNames: (ListVal zast.nameid).view
-    nSlots: u64
-    boundSlots: ListVal u64
-    arg: argref
-    hs: holderslot
-} out bool is {
-    if hs.slot >= nSlots then return false
-    if (boundSlots.contains item: hs.slot).not then {
-        boundSlots.append hs.slot
-        return false
-    }
-    reportArgGivenTwice :st :ast pnId: (pNames.get i: hs.slot) :arg
-    return true
 }
 
 # bindValueArg -- what one value argument says about the call's generic
