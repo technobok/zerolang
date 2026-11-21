@@ -2575,11 +2575,10 @@ mergePins: function {pins: (List ztyping.PinPath).view dst: List ztyping.PinPath
 # pinPathCovered -- pin `i`'s path lies under a shorter path another pin of the
 # set locks exclusive (`d: if c then o.first else o.b`, `first` lending `o`):
 # that lock already keeps every other holder off the longer path, so locking
-# it as well adds nothing, and would set the one holder against itself. A pin
-# carried with a moved value is kept.
+# it as well adds nothing, and would set the one holder against itself. That a
+# covered pin came with a moved value goes onto its cover (coversCarried).
 pinPathCovered: function {pins: (List ztyping.PinPath).view i: u64} out bool is {
     p: pins.get :i
-    if p.carried then return false
     j: u64
     for j < pins.length loop {
         q: pins.get i: j
@@ -2622,7 +2621,24 @@ mergedPin: function {pins: (List ztyping.PinPath).view i: u64} out ztyping.PinPa
         }
         k = k + 1
     }
+    if sh.not or mu then ca = ca or (coversCarried :pins path: p.path.listView)
     return (ztyping.PinPath path: p.path.copy shared: sh and mu.not mutable: mu carried: ca)
+}
+
+# coversCarried -- a pin of `pins` that came with a moved value lies under
+# `path`, which the set locks exclusive and so covers it (pinPathCovered): the
+# cover keeps what the covered pin carried.
+coversCarried: function {
+    pins: (List ztyping.PinPath).view path: ListViewVal zast.nameid
+} out bool is {
+    for each r: pins loop {
+        if r.carried when r.path.length > path.length when (
+            zenv.isPrefix
+            p: path
+            whole: r.path.listView
+        ) then return true
+    }
+    return false
 }
 
 # readonlyMarker -- the marker of a value whose arms are marked `a` and `b`:
