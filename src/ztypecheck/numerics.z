@@ -1191,7 +1191,7 @@ checkNumericCoercion: function {
     vn9: valueNid
     wn9: ast.nodes.get i: vn9
     if wn9.namedoperation then vn9 = wn9.operation
-    recordHelperScalarTarget :st :dstTid valueNid: vn9
+    recordUntypedConstDest :st :dstTid valueNid: vn9
     # an `if` or a `match` lands each arm's value in the destination
     if (moves.isControlValue :ast nid: vn9) then {
         checkArmsCoercion :st :ast :dstTid nid: vn9
@@ -1253,13 +1253,15 @@ checkArmsCoercion: function {
     }
 }
 
-# recordHelperScalarTarget -- an untyped numeric constant landing in an i128,
-# u128, f16, f32 or f128 destination (a scalar typedef over one included) is
-# recorded with it, for the emitter (ZTyping.helperScalarTarget): its value is
-# then written as that type's nearest, rounded once, where the f64 it was
-# stamped with would be rounded again by C. Not inside a generic instance's
-# walk: the node is the template's, and the table keys on the node alone.
-recordHelperScalarTarget: function {
+# recordUntypedConstDest -- an untyped numeric constant landing in a destination
+# C cannot read it as is recorded with it, for the emitter
+# (ZTyping.untypedConstDest): C reads the constant as a 64-bit integer or a
+# double, so a 128-bit integer (a scalar typedef over one included) takes the
+# value written as its own, and a float of any width but f64 its nearest,
+# rounded once, where C would round the double again. Not inside a generic
+# instance's walk: the node is the template's, and the table keys on the node
+# alone.
+recordUntypedConstDest: function {
     st: zenv.ZSymbolTable
     dstTid: ztypes.tid
     valueNid: zast.nodeid
@@ -1271,14 +1273,12 @@ recordHelperScalarTarget: function {
     # the destination's kind, through any typedef, by declaration
     nk: baseNumKind :st tid: dstTid
     if nk.has.not then return
+    k: nk.kind
     wide: (
-        (nk.kind == ztypes.numkind.i128Type) or
-        (nk.kind == ztypes.numkind.u128Type) or
-        (nk.kind == ztypes.numkind.f16Type) or
-        (nk.kind == ztypes.numkind.f32Type) or
-        (nk.kind == ztypes.numkind.f128Type)
+        ((ztypes.intKindBits :k) == 128) or
+        ((ztypes.isFloatKind :k) and (k != ztypes.numkind.f64Type))
     )
-    if wide then st.typing.helperScalarTarget.set key: valueNid value: dstTid
+    if wide then st.typing.untypedConstDest.set key: valueNid value: dstTid
 }
 
 # checkUntypedConstFits -- an untyped folded constant at `valueNid` is settled by
