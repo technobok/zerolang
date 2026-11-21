@@ -2086,7 +2086,7 @@ implementation: (
         (
             c.row
             key: "@utf8_decode"
-            demand: list { "count" "codepoints" }
+            demand: list { "count" "cpiter_call" }
             fragments: list {
                 """
                 static uint32_t z_utf8_decode_one(
@@ -2157,22 +2157,6 @@ implementation: (
                     it.length = self->size;
                     it.cursor = 0;
                     return it;
-                }
-
-
-                """
-                """
-                static z_@optionval_u32@_t z_@CpIter@_call(z_@CpIter@_t* it);
-                static z_@optionval_u32@_t z_@CpIter@_call(z_@CpIter@_t* it) {
-                    z_@optionval_u32@_t out = {0};
-                    if (it->cursor >= it->length) {
-                        out.tag = @ARM_optionval_u32.none@;
-                        return out;
-                    }
-                    uint32_t cp = z_utf8_decode_one(it->data, it->length, &it->cursor);
-                    out.tag = @ARM_optionval_u32.some@;
-                    out.data.@MEMBER_optionval_u32.some@ = cp;
-                    return out;
                 }
 
 
@@ -2921,12 +2905,125 @@ implementation: (
         (c.row key: "return")
         (c.row key: "break")
         (c.row key: "continue")
-        # system.CpIter
-        (c.row key: "CpIter.call")
-        # system.Splitter
-        (c.row key: "Splitter.call")
-        # system.LinesIter
-        (c.row key: "LinesIter.call")
+        # system.CpIter -- the step a walk of the cursor calls, written where one does
+        (
+            c.row
+            key: "CpIter.call"
+            demand: list { "cpiter_call" }
+            fragments: list {
+                """
+                static z_@optionval_u32@_t z_@CpIter@_call(z_@CpIter@_t* it);
+                static z_@optionval_u32@_t z_@CpIter@_call(z_@CpIter@_t* it) {
+                    z_@optionval_u32@_t out = {0};
+                    if (it->cursor >= it->length) {
+                        out.tag = @ARM_optionval_u32.none@;
+                        return out;
+                    }
+                    uint32_t cp = z_utf8_decode_one(it->data, it->length, &it->cursor);
+                    out.tag = @ARM_optionval_u32.some@;
+                    out.data.@MEMBER_optionval_u32.some@ = cp;
+                    return out;
+                }
+
+
+                """
+            }
+        )
+        # system.Splitter -- the step a walk of the cursor calls, written where one does
+        (
+            c.row
+            key: "Splitter.call"
+            demand: list { "splitter_call" }
+            needs: list { "prelude.@xmalloc" }
+            fragments: list {
+                """
+                static z_@Option_StringView@_t z_@Splitter@_call(z_@Splitter@_t* s);
+                static z_@Option_StringView@_t z_@Splitter@_call(z_@Splitter@_t* s) {
+                    z_@Option_StringView@_t out = {0};
+                    if (s->done) {
+                        out.tag = @ARM_Option_StringView.none@;
+                        return out;
+                    }
+                    const char* start = s->src + s->cursor;
+                    uint64_t remaining = s->src_len - s->cursor;
+                    if (s->sep_len > remaining) {
+                        /* no more separators possible — return the tail */
+                        z_@StringView@_t* boxed = (z_@StringView@_t*)z_xmalloc(sizeof(z_@StringView@_t));
+                        boxed->data = start;
+                        boxed->size = remaining;
+                        s->cursor = s->src_len;
+                        s->done = true;
+                        out.tag = @ARM_Option_StringView.some@;
+                        out.data = boxed;
+                        return out;
+                    }
+                    uint64_t scan_end = remaining - s->sep_len;
+                    for (uint64_t i = 0; i <= scan_end; i++) {
+                        if (memcmp(start + i, s->sep, s->sep_len) == 0) {
+                            z_@StringView@_t* boxed = (z_@StringView@_t*)z_xmalloc(sizeof(z_@StringView@_t));
+                            boxed->data = start;
+                            boxed->size = i;
+                            s->cursor += i + s->sep_len;
+                            out.tag = @ARM_Option_StringView.some@;
+                            out.data = boxed;
+                            return out;
+                        }
+                    }
+                    /* no separator in remaining — final fragment */
+                    z_@StringView@_t* boxed = (z_@StringView@_t*)z_xmalloc(sizeof(z_@StringView@_t));
+                    boxed->data = start;
+                    boxed->size = remaining;
+                    s->cursor = s->src_len;
+                    s->done = true;
+                    out.tag = @ARM_Option_StringView.some@;
+                    out.data = boxed;
+                    return out;
+                }
+
+
+                """
+            }
+        )
+        # system.LinesIter -- the step a walk of the cursor calls, written where one does
+        (
+            c.row
+            key: "LinesIter.call"
+            demand: list { "linesiter_call" }
+            needs: list { "prelude.@xmalloc" }
+            fragments: list {
+                """
+                static z_@Option_StringView@_t z_@LinesIter@_call(z_@LinesIter@_t* s);
+                static z_@Option_StringView@_t z_@LinesIter@_call(z_@LinesIter@_t* s) {
+                    z_@Option_StringView@_t out = {0};
+                    if (s->done) {
+                        out.tag = @ARM_Option_StringView.none@;
+                        return out;
+                    }
+                    const char* start = s->src + s->cursor;
+                    uint64_t remaining = s->src_len - s->cursor;
+                    uint64_t i = 0;
+                    while (i < remaining && start[i] != '\n') i++;
+                    uint64_t line_len = i;
+                    if (line_len > 0 && start[line_len - 1] == '\r') line_len--;
+                    z_@StringView@_t* boxed = (z_@StringView@_t*)z_xmalloc(sizeof(z_@StringView@_t));
+                    boxed->data = start;
+                    boxed->size = line_len;
+                    if (i == remaining) {
+                        s->cursor = s->src_len;
+                        s->done = true;
+                    } else {
+                        s->cursor += i + 1;
+                        if (s->cursor >= s->src_len) s->done = true;
+                    }
+                    out.tag = @ARM_Option_StringView.some@;
+                    out.data = boxed;
+                    return out;
+                }
+
+
+                """
+            }
+        )
         # system.resultval
         (c.row key: "resultval.orPanic")
         (c.row key: "resultval.or")
@@ -7277,7 +7374,6 @@ foundation: (
                     c.row
                     key: "@split"
                     demand: list { "sv_split" }
-                    needs: list { "prelude.@xmalloc" }
                     fragments: list {
                         """
                         static z_@Splitter@_t z_@StringView@_split(
@@ -7296,59 +7392,12 @@ foundation: (
 
 
                         """
-                        """
-                        static z_@Option_StringView@_t z_@Splitter@_call(z_@Splitter@_t* s);
-                        static z_@Option_StringView@_t z_@Splitter@_call(z_@Splitter@_t* s) {
-                            z_@Option_StringView@_t out = {0};
-                            if (s->done) {
-                                out.tag = @ARM_Option_StringView.none@;
-                                return out;
-                            }
-                            const char* start = s->src + s->cursor;
-                            uint64_t remaining = s->src_len - s->cursor;
-                            if (s->sep_len > remaining) {
-                                /* no more separators possible — return the tail */
-                                z_@StringView@_t* boxed = (z_@StringView@_t*)z_xmalloc(sizeof(z_@StringView@_t));
-                                boxed->data = start;
-                                boxed->size = remaining;
-                                s->cursor = s->src_len;
-                                s->done = true;
-                                out.tag = @ARM_Option_StringView.some@;
-                                out.data = boxed;
-                                return out;
-                            }
-                            uint64_t scan_end = remaining - s->sep_len;
-                            for (uint64_t i = 0; i <= scan_end; i++) {
-                                if (memcmp(start + i, s->sep, s->sep_len) == 0) {
-                                    z_@StringView@_t* boxed = (z_@StringView@_t*)z_xmalloc(sizeof(z_@StringView@_t));
-                                    boxed->data = start;
-                                    boxed->size = i;
-                                    s->cursor += i + s->sep_len;
-                                    out.tag = @ARM_Option_StringView.some@;
-                                    out.data = boxed;
-                                    return out;
-                                }
-                            }
-                            /* no separator in remaining — final fragment */
-                            z_@StringView@_t* boxed = (z_@StringView@_t*)z_xmalloc(sizeof(z_@StringView@_t));
-                            boxed->data = start;
-                            boxed->size = remaining;
-                            s->cursor = s->src_len;
-                            s->done = true;
-                            out.tag = @ARM_Option_StringView.some@;
-                            out.data = boxed;
-                            return out;
-                        }
-
-
-                        """
                     }
                 )
                 (
                     c.row
                     key: "@lines"
                     demand: list { "sv_lines" }
-                    needs: list { "prelude.@xmalloc" }
                     fragments: list {
                         """
                         static z_@LinesIter@_t z_@StringView@_lines(const z_@StringView@_t* self);
@@ -7361,37 +7410,6 @@ foundation: (
                             s.cursor = 0;
                             s.done = (self->size == 0);
                             return s;
-                        }
-
-
-                        """
-                        """
-                        static z_@Option_StringView@_t z_@LinesIter@_call(z_@LinesIter@_t* s);
-                        static z_@Option_StringView@_t z_@LinesIter@_call(z_@LinesIter@_t* s) {
-                            z_@Option_StringView@_t out = {0};
-                            if (s->done) {
-                                out.tag = @ARM_Option_StringView.none@;
-                                return out;
-                            }
-                            const char* start = s->src + s->cursor;
-                            uint64_t remaining = s->src_len - s->cursor;
-                            uint64_t i = 0;
-                            while (i < remaining && start[i] != '\n') i++;
-                            uint64_t line_len = i;
-                            if (line_len > 0 && start[line_len - 1] == '\r') line_len--;
-                            z_@StringView@_t* boxed = (z_@StringView@_t*)z_xmalloc(sizeof(z_@StringView@_t));
-                            boxed->data = start;
-                            boxed->size = line_len;
-                            if (i == remaining) {
-                                s->cursor = s->src_len;
-                                s->done = true;
-                            } else {
-                                s->cursor += i + 1;
-                                if (s->cursor >= s->src_len) s->done = true;
-                            }
-                            out.tag = @ARM_Option_StringView.some@;
-                            out.data = boxed;
-                            return out;
                         }
 
 
