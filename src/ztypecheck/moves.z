@@ -654,7 +654,7 @@ checkMemberAutoCall: function {
             tup: ListVal zast.nameid
             if (receiverPinsNothing :ast :st recvT: bt).not then {
                 appendValueTuple :ast n: (ast.nodes.get i: dp.parent) dst: tup
-                cutAtViewingMethod :st :ast recv: dp.parent dst: tup
+                cutAtMethod :st :ast recv: dp.parent dst: tup
             }
             recvPins: List ztyping.PinPath
             if (receiverPinsNothing :ast :st recvT: bt).not then (
@@ -4232,8 +4232,23 @@ argPinTuple: function {
 # argIsFresh -- argument `nid` is a fresh value at the end of a path
 # (argPinTuple): a value of its own, which nothing names
 argIsFresh: function {st: zenv.ZSymbolTable.view ast: Ast.view nid: zast.nodeid} out bool is {
-    tup: ListVal zast.nameid
-    return (argPinTuple :st :ast n: (ast.nodes.get i: nid) dst: tup)
+    return (passesFreshValue :st :ast n: (ast.nodes.get i: nid))
+}
+
+# passesFreshValue -- argPinTuple's answer without its path: the read `n`
+# passes a member that makes a value of its own, so no name holds it.
+passesFreshValue: function {st: zenv.ZSymbolTable.view ast: Ast.view n: astnode.view} out bool is {
+    match (
+        n
+    ) case dottedpath then {
+        if (passesFreshValue :st :ast n: (ast.nodes.get i: n.parent)) then return true
+        cid: dottedMemberId :st :ast nid: n.nodeid child: n.child
+        if cid.isZero or (isStripMarkerId nameId: cid) then return false
+        if (memberReadIsField :st parentNid: n.parent nameId: cid) then return false
+        return (readReturnsBorrow :st nid: n.nodeid).not
+    } else {
+        return false
+    }
 }
 
 # readReturnsBorrow -- the dotted read `nid` calls a function whose result
@@ -4646,7 +4661,7 @@ receiverResultPath: function {
     if (receiverPinsNothing :ast :st recvT: rcvT) then return
     methodReceiverTuple :ast n: (ast.nodes.get i: call.callable) :dst
     (
-        cutAtViewingMethod
+        cutAtMethod
         :st
         :ast
         recv: (dottedReceiverNodeId :ast n: (ast.nodes.get i: call.callable))
@@ -4671,15 +4686,21 @@ receiverResultPath: function {
     )
 }
 
-# cutAtViewingMethod -- `dst`, the path a result pins on its receiver `recv`, cut
-# where it passes through a method that hands back a view of its base -- `first`
-# in `s.first.trim`: what the result keeps is that base, not a path through the
-# method, which no write to the base would meet (argPinTuple, which cuts an
-# argument's path the same way). A path ending in a fresh value is left whole.
-cutAtViewingMethod: function {
+# cutAtMethod -- `dst`, the path a result pins on its receiver `recv`, cut where
+# it passes through a method, as argPinTuple cuts an argument's: at one that
+# hands back a view of its base -- `first` in `s.first.trim` -- what the result
+# keeps is that base, not a path through the method, which no write to the base
+# would meet; at one that makes a value of its own -- `fresh` in
+# `g.fresh.inner` -- nothing a name holds is read, and the path is empty: the
+# receiver is a value, held as an unnamed local.
+cutAtMethod: function {
     st: zenv.ZSymbolTable.view ast: Ast.view recv: zast.nodeid dst: ListVal zast.nameid
 } is {
     if dst.length <= 1 then return
+    if (argIsFresh :st :ast nid: recv) then {
+        for dst.length > 0 loop dst.pop
+        return
+    }
     k: viewingMethodPrefix :st :ast nid: recv
     if (k == 0) or (k >= dst.length) then return
     for dst.length > k loop dst.pop
@@ -4785,21 +4806,14 @@ captureValueReceiver: function {
     return (walkTypeOf :st nid: rcv)
 }
 
-# receiverIsFreshValue -- a receiver path rooted in a variable that still ends
-# in a fresh value: an auto-call returning what it owns, not a view into its
-# base (`grid.pop`, not `b.rowsMut`). What its result borrows is that value,
-# which nothing names, so it is an unnamed local as a call's result is.
+# receiverIsFreshValue -- a receiver path rooted in a variable that passes a
+# fresh value on the way: a method returning what it owns, not a view into its
+# base (`grid.pop`, `g.fresh.inner`, not `b.rowsMut`). What the receiver reads
+# is that value, which nothing names, so it is an unnamed local as a call's
+# result is (argIsFresh).
 receiverIsFreshValue: function {st: zenv.ZSymbolTable ast: Ast.view nid: zast.nodeid} out bool is {
     if nid.isZero then return false
-    isPath: false
-    bn: ast.nodes.get i: nid
-    isPath = bn.dottedpath
-    if isPath.not then return false
-    rdo: st.typing.refDecl.get key: nid
-    if rdo.none then return false
-    fid: st.typing.declTypeOf declId: rdo
-    if (st.reg.typetypeOf typeId: fid) != ztypes.ztypetype.functionType then return false
-    return (resultPins :st funcId: fid).not
+    return (argIsFresh :st :ast :nid)
 }
 
 # receiverRootIsVar -- the method call's receiver path is rooted in a variable.
@@ -5818,8 +5832,11 @@ hoistArg: function {
         isCtl: isControlValue :ast nid: argId
         # and so does a value no variable roots -- a method or field read off a
         # call's result (`(xs.get i: 0).stringView`), off a literal, off an
-        # auto-called function: what it keeps is what its own walk left
-        rootless: hrt.isZero or (st.lookupVarId nameId: hrt).none
+        # auto-called function, off a method's fresh value (`g.fresh.inner`):
+        # what it keeps is what its own walk left
+        rootless: (
+            hrt.isZero or (st.lookupVarId nameId: hrt).none or (argIsFresh :st :ast nid: argId)
+        )
         # and every one of them is this argument's: a construction's root is
         # its type, which names none of what it locks
         if isCallArg or isCtl or rootless then hrt = zast.nameid

@@ -1,0 +1,100 @@
+# A path through a method that makes a value of its own (`g.fresh.inner`)
+# starts again at that value: what a result read off it keeps is the value,
+# held as an unnamed local while the result lives, not the variable the path
+# began at -- so `g` may be written meanwhile, bound or passed on. A view
+# method followed by one that copies (`g.firstItem.again`) is a value too,
+# and a list a method of a parameter makes, walked (`o.libs`), is freed after
+# the walk.
+Item: class {
+    s: String
+} as {
+    again: function {t: this.view} out Item is {
+        return (Item s: t.s.copy)
+    }
+}
+
+Bag: class {
+    items: List Item
+    inner: Holder
+} as {
+    fresh: function {t: this.view} out Wrap is {
+        b: Bag items: List Item inner: (Holder items: List Item)
+        b.items.append (Item s: "one".string)
+        return (Wrap inner: b)
+    }
+    firstItem: function {t: this.view} outx Item.view is {
+        return (t.items.get i: 0)
+    }
+    itemAt: function {t: this.view i: u64} outx Item.view is {
+        return (t.items.get :i)
+    }
+}
+
+Holder: class {
+    items: List Item
+}
+
+Wrap: class {
+    inner: Bag
+}
+
+keep: function {v: Item.view} outx Item.view is {
+    return v
+}
+
+bound: function is {
+    g: Bag items: List Item inner: (Holder items: List Item)
+    w: g.fresh.inner.itemAt i: 0
+    g = Bag items: List Item inner: (Holder items: List Item)
+    print w.s
+}
+
+hoisted: function is {
+    g: Bag items: List Item inner: (Holder items: List Item)
+    w: keep v: (g.fresh.inner.itemAt i: 0)
+    g = Bag items: List Item inner: (Holder items: List Item)
+    print w.s
+}
+
+viewThenFresh: function is {
+    g: Bag items: List Item inner: (Holder items: List Item)
+    g.items.append (Item s: "two".string)
+    w: g.firstItem.again
+    g = Bag items: List Item inner: (Holder items: List Item)
+    print w.s
+}
+
+freshThenView: function is {
+    g: Bag items: List Item inner: (Holder items: List Item)
+    w: g.fresh.inner.firstItem
+    print w.s
+}
+
+Lib: class {
+    name: String
+}
+
+Opts: class {
+    raw: List String
+} as {
+    libs: function {t: this.view} out List Lib is {
+        got: List Lib
+        for each r: t.raw loop got.append (Lib name: r.copy)
+        return got
+    }
+}
+
+walk: function {o: Opts.view} is {
+    for each l: o.libs loop print l.name
+}
+
+main: function is {
+    bound
+    hoisted
+    viewThenFresh
+    freshThenView
+    raw: List String
+    raw.append "m".string
+    o: Opts :raw
+    walk :o
+}
