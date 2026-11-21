@@ -4594,8 +4594,23 @@ checkConstantOperator: function {
     constFailClear :st
     lv: evalConstNode :st :scope :ast :unitDecl nid: lhsId
     st.walk.consts.fail = held
-    # an operand with no value is the evaluator's to explain
-    if lv.isConst then constantMemberTid :st :scope :ast :unitDecl site: opSite rv: lv
+    # an operand with no value is the evaluator's to explain; an operator
+    # found takes its argument as a body's method call does
+    if lv.isConst then {
+        cm: constantMemberTid :st :scope :ast :unitDecl site: opSite rv: lv
+        if st.typing.reportCount == errsOp when (
+            (st.reg.typetypeOf typeId: cm.memberTid) == ztypes.ztypetype.functionType
+        ) then (
+            callchecks.checkConstantCallArgs
+            :st
+            :scope
+            :ast
+            :unitDecl
+            :call
+            fid: cm.memberTid
+            recvImplicit: true
+        )
+    }
     if st.typing.reportCount == errsOp then return false
     st.walk.consts.shapesReported.add item: nid
     return true
@@ -4783,7 +4798,24 @@ checkConstantMethodCall: function {
     st.walk.consts.fail = held
     cm: constantMemberTid :st :scope :ast :unitDecl :site :rv
     fid: cm.memberTid
-    if (st.reg.typetypeOf typeId: fid) != ztypes.ztypetype.functionType then return
+    if (st.reg.typetypeOf typeId: fid) != ztypes.ztypetype.functionType then {
+        # a value called with arguments is refused as a body refuses it: an
+        # arm read as a member is its predicate, a bool
+        mnm: atomNameId :ast n: (ast.nodes.get i: site.childId)
+        vtc: fid
+        if (zenv.isSumArm ty: st.typing reg: st.reg tid: cm.recvTid nameId: mnm) then {
+            vtc = stdTid :ast :st wk: zast.wellKnown.slot.wkBool
+        }
+        if site.isCall then (
+            callchecks.refuseValueCallArgs
+            :st
+            :ast
+            call: site.call
+            vt: vtc
+            nameId: mnm
+        )
+        return
+    }
     if site.isCall then {
         (
             callchecks.checkConstantCallArgs

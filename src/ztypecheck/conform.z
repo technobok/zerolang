@@ -4935,7 +4935,9 @@ checkGenericCall: function {
 }
 
 # reportConstantConstraintArg -- a value that is not a string, given for a
-# generic parameter: the body's constraint report, for the type the value has.
+# generic parameter: the body's constraint report, for the type the value has,
+# where that type does not meet the bound. One that meets it is no refusal:
+# the call has no compile-time value, which the evaluator says.
 reportConstantConstraintArg: function {
     st: zenv.ZSymbolTable
     ast: Ast
@@ -4949,6 +4951,25 @@ reportConstantConstraintArg: function {
     if av.kind.fvalKind then at = stdTid :ast :st wk: zast.wellKnown.slot.tyF64
     if av.kind.armKind then at = av.armTid
     if at.isZero then return
+    ftd: st.typing.declIdOfType typeId: fid
+    gpn: st.reg.genericParamNameOfTid tdecl: ftd ptid: pt
+    # an untyped number is a literal, which lands as a body's does
+    # (argBindingTid): an integer under a bound admitting a float literal binds
+    # one
+    if av.numTid.isZero when av.kind.ivalKind or av.kind.fvalKind then {
+        lt: st.reg.literalFloatTid
+        if av.kind.ivalKind then lt = st.reg.literalIntTid
+        if (constraintAdmits :ast :st tdecl: ftd paramName: gpn argTid: lt) then return
+        if av.kind.ivalKind when (
+            constraintAdmits
+            :ast
+            :st
+            tdecl: ftd
+            paramName: gpn
+            argTid: st.reg.literalFloatTid
+        ) then return
+    }
+    if (constraintAdmits :ast :st tdecl: ftd paramName: gpn argTid: at) then return
     (
         addErrorWithHint
         :st
