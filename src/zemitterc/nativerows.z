@@ -535,8 +535,9 @@ tmplNestedRead: function {
 # dotted marker `<expr>.<numtype>` names; no file (impl 0) when it names none.
 # The member's name is asked first: a name no type's row gives a body is what
 # nearly every dotted marker carries. A member the RECEIVER'S OWN type
-# declares with a body the author wrote wins over any conversion its typedef
-# chain end would offer: a typedef converts as its chain end, which is where
+# declares with a body the author wrote -- or the first link of its typedef
+# chain that declares one (typedefDeclaredMember) -- wins over any conversion
+# its typedef chain end would offer: a typedef converts as its chain end, which is where
 # the conversions themselves (`is native`) are declared, but a typedef over
 # `i64` that declares its own `u32` declared a method. A conversion's row has
 # a body naming no argument: a bodyless row of the same member name
@@ -556,8 +557,15 @@ convRowNameOf: function {
     # a Box's conversions are its element's
     boxElem: values.boxMemberElem :prog :n
     if boxElem.notZero then ownerTid = boxElem
-    mo9: prog.typing.declChildOfId parentTypeId: ownerTid nameId: mn2Id
-    if mo9.some when (prog.reg.isNativeOf tid: mo9).not then return none
+    # the receiver's own member, or the first typedef link's that declares one
+    mo9: (prog.typing.declChildOfId parentTypeId: ownerTid nameId: mn2Id).or d: ztypes.tid.zero
+    if mo9.isZero then mo9 = (
+        ztypecheck.typedefDeclaredMember
+        typing: prog.typing
+        tid: ownerTid
+        name: mn2Id
+    )
+    if mo9.notZero when (prog.reg.isNativeOf tid: mo9).not then return none
     srcTid: ztypecheck.typedefChaseTid typing: prog.typing tid: ownerTid
     rk: rowNameOfMember :prog :pieces owner: srcTid name: mn2Id
     row: pieces.rows.ofName n: rk
