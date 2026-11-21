@@ -842,24 +842,40 @@ ctorFieldIsFilled: function {
     return ownTT.isFieldwise
 }
 
-# ctorArgProvided -- the caller supplied this parameter, by the unlabelled
-# argument (`positional`, the parameter it binds; 0 when there is none) or by
-# naming it.
+# ctorArgProvided -- an argument of `call` supplies the parameter `nameId`, as
+# the binder decided (argSupplies); a call with no arguments supplies none.
 ctorArgProvided: function {
-    provided: (ListVal zast.nameid).view
-    positional: zast.nameid
+    st: zenv.ZSymbolTable.view
+    ast: Ast.view
+    call: callref
     nameId: zast.nameid
 } out bool is {
-    if positional.notZero when nameId == positional then return true
-    found: false
-    for each pv: provided loop {
-        if pv == nameId then found = true
+    k: u64
+    for k < call.nargs loop {
+        b: st.typing.argBindOf nid: (zast.callArgAt :ast nid: call.nid i: k)
+        k = k + 1
+        if b.param == nameId when (argSupplies oc: b.outcome) then return true
     }
-    return found
+    return false
+}
+
+# argSupplies -- an argument with the binder's outcome `oc` supplies the name it
+# binds: a parameter, given once or again, or the generic parameter a labelled
+# type argument names (a member of that name is refused where it is written).
+# An unlabelled type argument and a label naming no parameter supply nothing.
+argSupplies: function {oc: ztyping.argoutcome} out bool is {
+    return oc.bound or oc.givenTwice or oc.typeArgument
+}
+
+# noCall -- a call with no arguments, for a missing-argument question asked of
+# no call (missingCtorFields).
+noCall: function out callref is {
+    zn: zast.nodeid
+    return (callref nid: zn callable: zn nargs: 0 lineno: 0 colno: 0 infix: false)
 }
 
 # missingCtorFields -- collect each required field/param (no default) of
-# `funcId` that the provided labels / positional count do not cover, into
+# `funcId` that no argument of `call` supplies (a zero callref for none), into
 # missingNames/missingIds. A construction's body-carrying FUNCTION-typed
 # (fnptr) fields are auto-bound.
 #
@@ -873,8 +889,7 @@ missingCtorFields: function {
     st: zenv.ZSymbolTable
     funcId: ztypes.tid
     isCtor: bool
-    provided: (ListVal zast.nameid).view
-    posCount: u64
+    call: callref
     # whether the receiver arrived some other way than as an argument. Only a
     # dotted call on a VALUE binds it that way; a type-qualified call leaves it
     # to the arguments, where it is required and counted like any other
@@ -901,8 +916,6 @@ missingCtorFields: function {
         ids: mkIds
     )
     thisPnId: receiverParamNameOf :st tid: effId
-    positional: zast.nameid
-    if posCount > 0 then positional = unlabelledParamOf :st :ast :effId :isCtor :recvImplicit
     ri: u64
     nr: st.typing.declRowSlots ownerTid: effId
     for ri < nr loop {
@@ -913,13 +926,13 @@ missingCtorFields: function {
         pcid: row.tid
         pnameId: row.name
         # THE RECEIVER IS REQUIRED WHENEVER NOTHING ELSE SUPPLIED IT: through a
-        # type, the unlabelled argument is the receiver (unlabelledParamOf), so
-        # `point.sub p` -- receiver given, `a` omitted -- reports `a`.
+        # type, the unlabelled argument is the receiver, so `point.sub p` --
+        # receiver given, `a` omitted -- reports `a`.
         if recvImplicit when (isReceiverParamName :pnameId :thisPnId) then continue
         if (asksNoArgument :st :ast :isCtor :effId :pcid nameId: pnameId) then continue
         pnId: pnameId
-        if (fieldSupplied :st :isCtor :effId :pcid :pnId :provided :positional) then {
-            walkDefaultedFnField :st :ast :isCtor :effId :pcid :pnId :provided :positional
+        if (fieldSupplied :st :ast :call :isCtor :effId :pcid :pnId) then {
+            walkDefaultedFnField :st :ast :call :isCtor :effId :pcid :pnId
             continue
         }
         missingNames.append (zast.nameTextCopy :ast ref: pnId)
@@ -933,15 +946,14 @@ missingCtorFields: function {
 walkDefaultedFnField: function {
     st: zenv.ZSymbolTable
     ast: Ast
+    call: callref
     isCtor: bool
     effId: ztypes.tid
     pcid: ztypes.tid
     pnId: zast.nameid
-    provided: (ListVal zast.nameid).view
-    positional: zast.nameid
 } is {
     if isCtor.not then return
-    if (ctorArgProvided :provided :positional nameId: pnId) then return
+    if (ctorArgProvided :st :ast :call nameId: pnId) then return
     if (ctorFieldIsFilled :st ownerTid: effId fieldTid: pcid) then (
         valuechecks.walkDefinitionById
         :st
@@ -959,19 +971,19 @@ isReceiverParamName: function {pnameId: zast.nameid thisPnId: zast.nameid} out b
 
 # fieldSupplied -- a required field/param of `effId` that needs no argument
 # here: a construction's field filled some other way, one with a default, or
-# one the call's labels or unlabelled argument already cover.
+# one an argument of the call binds.
 fieldSupplied: function {
     st: zenv.ZSymbolTable
+    ast: Ast.view
+    call: callref
     isCtor: bool
     effId: ztypes.tid
     pcid: ztypes.tid
     pnId: zast.nameid
-    provided: (ListVal zast.nameid).view
-    positional: zast.nameid
 } out bool is {
     if isCtor when (ctorFieldIsFilled :st ownerTid: effId fieldTid: pcid) then return true
     if (st.typing.declHasDefaultId parentTypeId: effId nameId: pnId) then return true
-    return (ctorArgProvided :provided :positional nameId: pnId)
+    return (ctorArgProvided :st :ast :call nameId: pnId)
 }
 
 # receiverParamNameOf -- the pool id of a method's receiver-parameter name, 0
@@ -1021,18 +1033,6 @@ checkMissingCallArgs: function {
     if createBase.some then {
         return
     }
-    posCount: u64
-    provided: ListVal zast.nameid
-    kAiter: u64
-    for kAiter < call.nargs loop {
-        argId: zast.callArgAt :ast nid: call.nid i: kAiter
-        kAiter = kAiter + 1
-        arg: ast.nodes.get i: argId
-        if arg.namedoperation then {
-            if arg.name.isZero then posCount = posCount + 1
-            if arg.name.notZero then provided.append arg.name
-        }
-    }
     missingNames: List String
     missingIds: ListVal ztypes.tid
     (
@@ -1041,8 +1041,7 @@ checkMissingCallArgs: function {
         :st
         :funcId
         :isCtor
-        :provided
-        :posCount
+        :call
         :recvImplicit
         :missingNames
         :missingIds
