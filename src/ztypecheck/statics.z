@@ -781,7 +781,8 @@ staticListFits: function {
 
 # constOfList -- a list definition's value: its row in the aggregate store
 # (resolveStaticListInto). A list is a constant: a unit (or a type's `as`
-# block) declares it, and its name reads it.
+# block) declares it, and its name reads it. A generic type's list is its
+# instance's own, typed and range-checked with that instance's arguments.
 constOfList: function {
     st: zenv.ZSymbolTable
     scope: ztypes.declid
@@ -793,7 +794,13 @@ constOfList: function {
 } out ztypes.cval is {
     dnode: staticListRefAt :ast :nid
     if dnode.nid.isZero then return ztypes.noConst
-    noSubs: IdMapV zast.nameid v: ztypes.tid
+    mono: activeConstMono :st ownerDecl: scope
+    tpl: ztypes.tid
+    subs: IdMapV zast.nameid v: ztypes.tid
+    if mono.notZero then {
+        tpl = st.reg.genericOriginOf tid: mono
+        instanceTypeSubs :st tdecl: (st.typing.declIdOfType typeId: tpl) monoId: mono dst: subs
+    }
     row: (
         resolveStaticListInto
         :ast
@@ -801,13 +808,31 @@ constOfList: function {
         :unitDecl
         :scope
         :dnode
-        monoId: ztypes.tid
-        tplId: ztypes.tid
-        subs: noSubs
+        monoId: mono
+        tplId: tpl
+        :subs
         :want
     )
     if row == 0 then return ztypes.noConst
     return (ztypes.makeAggConst id: row)
+}
+
+# instanceTypeSubs -- the type arguments of `monoId`, an instance of the
+# template `tdecl` declares, by its parameters' names, onto `dst`. A numeric
+# argument is read off the instance itself where it is wanted (unitMonoIdSubs).
+instanceTypeSubs: function {
+    st: zenv.ZSymbolTable.view
+    tdecl: ztypes.declid
+    monoId: ztypes.tid
+    dst: (IdMapV zast.nameid v: ztypes.tid)
+} is {
+    pn: st.reg.genericParamNamesOf :tdecl
+    pi: u64
+    for pi < pn.length loop {
+        ta: st.reg.genericTypeArgAt specId: monoId ordinal: pi
+        if ta.notZero then dst.set key: (pn.get i: pi) value: ta
+        pi = pi + 1
+    }
 }
 
 # staticListWantParts -- the parts of list type `want` a list with no `out`
