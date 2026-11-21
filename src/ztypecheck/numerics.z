@@ -125,7 +125,7 @@ refuseTagTooNarrow: function {
         lineno: pos.line
         colno: pos.col
         e: zast.err.typeError
-        msg: "the type has \{arms} arms, and its tag, a \{tagName}, numbers \{room}: declare a wider tag in the `as` section, as in `tag: u16.tag`"
+        msg: "the type has \{arms} arms, and its tag type, \{tagName}, numbers \{room}: declare a wider tag in the `as` section, as in `tag: u16.tag`"
         width: 1
     )
 }
@@ -638,36 +638,38 @@ reportWideArm: function {
     } else if lay.known.not then {
         msg = "arm `\{an}` of `\{un}` holds `\{pn}`, whose size the checker cannot measure against a union's slot; write `(Box \{pn})`"
     }
+    # an instance's arm is the template's, written over its parameter: a Box
+    # argument is refused by the value bound, so the cure is the template's,
+    # its arm written boxed -- whether the union is an instance of its own or
+    # one of a generic unit's instance
+    org: st.reg.genericOriginOf tid: uid
+    if org.notZero when lay.known then {
+        tat: (st.typing.declChildOfId parentTypeId: org nameId: nm).or d: ztypes.tid.zero
+        tan: specWrittenName :st :ast tid: tat
+        if tat.notZero when tat != ptid then {
+            msg = "arm `\{an}` of `\{un}` holds `\{pn}` (\{lay.size} bytes), wider than a union's \{slotB}-byte slot; an instance this wide needs the template's arm written `(Box \{tan})`"
+        }
+    }
     # an instance's refusal stands where the program instantiated it: the
     # template may be another unit's, the system's among them, and the
     # argument that made the arm wide is the instantiation's
     so: st.walk.fn.monoSite.get key: uid
-    if so.some then {
-        org: st.reg.genericOriginOf tid: uid
-        if org.notZero then {
-            # a Box argument is refused by the value bound, so the cure is the
-            # template's: its arm written boxed
-            tat: (st.typing.declChildOfId parentTypeId: org nameId: nm).or d: ztypes.tid.zero
-            tan: specWrittenName :st :ast tid: tat
-            if lay.known then {
-                msg = "arm `\{an}` of `\{un}` holds `\{pn}` (\{lay.size} bytes), wider than a union's \{slotB}-byte slot; an instance this wide needs the template's arm written `(Box \{tan})`"
-            }
-            und: (st.typing.decls.get i: so.unitDecl).node
-            st.typing.noteReport
-            st.typing.errors.append (
-                zast.ErrorData
-                nodeid: zast.nodeid
-                lineno: so.lineno
-                colno: so.colno
-                width: 1
-                err: zast.err.typeError
-                msg: msg.copy
-                fsno: (ast.fsnoForNode nodeid: und)
-                note: String
-                hint: String
-            )
-            return
-        }
+    if so.some when org.notZero then {
+        und: (st.typing.decls.get i: so.unitDecl).node
+        st.typing.noteReport
+        st.typing.errors.append (
+            zast.ErrorData
+            nodeid: zast.nodeid
+            lineno: so.lineno
+            colno: so.colno
+            width: 1
+            err: zast.err.typeError
+            msg: msg.copy
+            fsno: (ast.fsnoForNode nodeid: und)
+            note: String
+            hint: String
+        )
+        return
     }
     nn: ast.nodes.get i: nd
     (
@@ -1002,8 +1004,9 @@ reportArmTypes: function {
 } is {
     what: "an `if`"
     if (ast.nodes.get i: nid).caseexpr then what = "a `match`"
-    an: specWrittenName :st :ast tid: a.tid
-    bn: specWrittenName :st :ast tid: b.tid
+    atn: reportTypeNames :st :ast expected: a.tid got: b.tid
+    an: atn.expected.stringView
+    bn: atn.got.stringView
     bnode: ast.nodes.get i: b.nid
     (
         addErrorWithHint
@@ -1365,8 +1368,11 @@ checkArgTypeMismatch: function {
         owning: false
     )
     if (argMismatchSkipped :st :ast :vt :ptid) then return
-    en7: specWrittenName :st :ast tid: ptid
-    an7: specWrittenName :st :ast tid: vt
+    # two types of the same name say nothing to the reader: each is spelled
+    # with the unit that declares it
+    rt7: reportTypeNames :st :ast expected: ptid got: vt
+    en7: rt7.expected.copy
+    an7: rt7.got.copy
     emit: true
     if an7.length == 0 then {
         if st.typing.errors.length > 0 then emit = false
@@ -1379,15 +1385,6 @@ checkArgTypeMismatch: function {
     ptDecl: templateDeclOf reg: st.reg typing: st.typing tid: ptid
     if (isLiteralTypeId reg: st.reg tid: vt) when ptDecl.isZero then emit = false
     if emit.not then return
-    # two types of the same name say nothing to the reader: each is spelled
-    # with the unit that declares it
-    if en7 == an7 then {
-        qp7: qualifiedTypePair :st expected: ptid got: vt name: en7.stringView
-        if qp7.ok then {
-            en7 = qp7.expected.copy
-            an7 = qp7.got.copy
-        }
-    }
     pn: zast.nameTextAt :ast ref: pnId
     mm7: "argument '\{pn}' type mismatch: expected \{en7}, got \{an7}"
     en7b: String
@@ -1486,8 +1483,9 @@ checkYieldedValue: function {
         return
     }
     if (typesCompatible :ast :st a: argT b: elem) then return
-    en: specWrittenName :st :ast tid: elem
-    an: specWrittenName :st :ast tid: argT
+    etn: reportTypeNames :st :ast expected: elem got: argT
+    en: etn.expected.stringView
+    an: etn.got.stringView
     (
         addError
         :st
@@ -1579,9 +1577,8 @@ checkReturnTypeMatch: function {
         )
         return
     }
-    en: specWrittenName :st :ast tid: expR
-    an: specWrittenName :st :ast tid: argT
-    m4: "return type mismatch: function expects \{en}, got \{an}"
+    rtn: reportTypeNames :st :ast expected: expR got: argT
+    m4: "return type mismatch: function expects \{rtn.expected}, got \{rtn.got}"
     n4: String
     h4: String
     if (yieldIsInScope :st) then {
@@ -1740,6 +1737,24 @@ QualifiedPair: class {
     # printing. One side qualified and the other not reads as two unrelated
     # types, and a shell that names no unit qualifies neither
     ok: bool
+}
+
+# reportTypeNames -- the two types a report sets against each other, as the
+# program spells them; where the two spellings are one name for two types,
+# each spelled with the unit that declares it (qualifiedTypePair).
+reportTypeNames: function {
+    st: zenv.ZSymbolTable.view
+    ast: Ast.view
+    expected: ztypes.tid
+    got: ztypes.tid
+} out QualifiedPair is {
+    en: specWrittenName :st :ast tid: expected
+    an: specWrittenName :st :ast tid: got
+    plain: QualifiedPair expected: en.copy got: an.copy ok: false
+    if (en != an) or (expected == got) then return plain
+    qp: qualifiedTypePair :st :expected :got name: en.stringView
+    if qp.ok then return qp
+    return plain
 }
 
 # qualifiedTypePair -- the two types of a report that share `name`, each
