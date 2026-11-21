@@ -198,16 +198,35 @@ valtypeLayout: function {
     st: zenv.ZSymbolTable.view
     tid: ztypes.tid
     refBytes: u64
-    depth: u64
+    # the types this measure has met: one met again while it is still being
+    # measured contains itself (the containment check refuses it); one
+    # measured already is that measure
+    memo: (IdMapV ztypes.tid v: valtypelayout)
 } out valtypelayout is {
     if tid.isZero then return unknownLayout
-    if depth > 32 then return (valtypelayout size: 0 align: 1 known: false cyclic: true)
+    seen: memo.get key: tid
+    if seen.some then return seen
+    memo.set key: tid value: (valtypelayout size: 0 align: 1 known: false cyclic: true)
+    lay: measureValtype :ast :st :tid :refBytes :memo
+    memo.set key: tid value: lay
+    return lay
+}
+
+# measureValtype -- valtypeLayout's measure of one type, its parts measured
+# through valtypeLayout.
+measureValtype: function {
+    ast: Ast.view
+    st: zenv.ZSymbolTable.view
+    tid: ztypes.tid
+    refBytes: u64
+    memo: (IdMapV ztypes.tid v: valtypelayout)
+} out valtypelayout is {
     tb: st.typing.typedefBaseTidOf :tid
-    if tb.notZero then return (valtypeLayout :ast :st tid: tb :refBytes depth: depth + 1)
+    if tb.notZero then return (valtypeLayout :ast :st tid: tb :refBytes :memo)
     if (st.typing.ordinalVariant.has key: tid) then return (fixedLayout n: 1)
     # the runtime's shapes first: a `str` or an `array` instance is a record by
     # its typetype, and is not laid out as its declared fields
-    nl: nativeLayout :ast :st :tid :refBytes :depth
+    nl: nativeLayout :ast :st :tid :refBytes :memo
     if nl.known or nl.cyclic then return nl
     # a native nativeLayout does not measure is not measured: it declares no
     # fields, so a record's layout would read it as 0 bytes
@@ -221,8 +240,8 @@ valtypeLayout: function {
         known: true
         cyclic: false
     )
-    if tt == ztypes.ztypetype.recordType then return (recordLayout :ast :st :tid :refBytes :depth)
-    if tt == ztypes.ztypetype.variantType then return (variantLayout :ast :st :tid :refBytes :depth)
+    if tt == ztypes.ztypetype.recordType then return (recordLayout :ast :st :tid :refBytes :memo)
+    if tt == ztypes.ztypetype.variantType then return (variantLayout :ast :st :tid :refBytes :memo)
     return unknownLayout
 }
 
@@ -235,7 +254,7 @@ nativeLayout: function {
     st: zenv.ZSymbolTable.view
     tid: ztypes.tid
     refBytes: u64
-    depth: u64
+    memo: (IdMapV ztypes.tid v: valtypelayout)
 } out valtypelayout is {
     if (st.reg.isNativeOf :tid) then {
         nk: numKindOfTid typing: st.typing :tid
@@ -262,7 +281,7 @@ nativeLayout: function {
             :st
             tid: (conform.arrayElemTid reg: st.reg :tid)
             :refBytes
-            depth: depth + 1
+            :memo
         )
         if el.known.not then return el
         n: st.reg.sizedLength specId: tid
@@ -295,7 +314,7 @@ recordLayout: function {
     st: zenv.ZSymbolTable.view
     tid: ztypes.tid
     refBytes: u64
-    depth: u64
+    memo: (IdMapV ztypes.tid v: valtypelayout)
 } out valtypelayout is {
     ids: ListVal ztypes.tid
     nameIds: ListVal zast.nameid
@@ -306,7 +325,7 @@ recordLayout: function {
         fl: valtypelayout size: refBytes align: refBytes known: true cyclic: false
         fid: ft
         if (st.reg.typetypeOf typeId: fid) != ztypes.ztypetype.functionType then {
-            fl = valtypeLayout :ast :st tid: fid :refBytes depth: depth + 1
+            fl = valtypeLayout :ast :st tid: fid :refBytes :memo
         }
         if fl.known.not then return fl
         off = (alignUp n: off a: fl.align) + fl.size
@@ -322,9 +341,9 @@ variantLayout: function {
     st: zenv.ZSymbolTable.view
     tid: ztypes.tid
     refBytes: u64
-    depth: u64
+    memo: (IdMapV ztypes.tid v: valtypelayout)
 } out valtypelayout is {
-    tag: variantTagLayout :ast :st :tid :refBytes :depth
+    tag: variantTagLayout :ast :st :tid :refBytes :memo
     if tag.known.not then return tag
     usz: u64
     ual: 1.u64
@@ -334,7 +353,7 @@ variantLayout: function {
         anId: an
         pt: (st.typing.declChildOfId parentTypeId: tid nameId: anId).or d: ztypes.tid.zero
         if pt.isZero or (pt == st.typing.nullTypeId) then continue
-        pl: valtypeLayout :ast :st tid: pt :refBytes depth: depth + 1
+        pl: valtypeLayout :ast :st tid: pt :refBytes :memo
         if pl.known.not then return pl
         if pl.size > usz then usz = pl.size
         if pl.align > ual then ual = pl.align
@@ -355,7 +374,7 @@ variantTagLayout: function {
     st: zenv.ZSymbolTable.view
     tid: ztypes.tid
     refBytes: u64
-    depth: u64
+    memo: (IdMapV ztypes.tid v: valtypelayout)
 } out valtypelayout is {
     key: tid
     go: st.reg.genericOriginOf :tid
@@ -366,7 +385,7 @@ variantTagLayout: function {
     ) case some then {
         if tb.isZero then return (fixedLayout n: 4)
         btid: tb
-        return (valtypeLayout :ast :st tid: btid :refBytes depth: depth + 1)
+        return (valtypeLayout :ast :st tid: btid :refBytes :memo)
     } case none then {
         return (fixedLayout n: 1)
     }
@@ -540,7 +559,8 @@ checkUnionSlotArms: function {
         if (st.walk.boxedArms.has item: key) then continue
         if (st.typing.declOwnershipOfId parentTypeId: uid nameId: nm).some then continue
         if staticView then continue
-        lay: valtypeLayout :ast :st tid: ptid refBytes: slotB depth: 0
+        lmemo: IdMapV ztypes.tid v: valtypelayout
+        lay: valtypeLayout :ast :st tid: ptid refBytes: slotB memo: lmemo
         if lay.known when lay.size <= slotB when lay.align <= slotB then {
             st.typing.inlineArms.add item: key
         } else if lay.cyclic.not then {
@@ -628,7 +648,8 @@ reportWideArm: function {
         ztypes.tid.create
         from: ((st.typing.declChildOfId parentTypeId: uid nameId: nm).or d: ztypes.tid.zero)
     )
-    lay: valtypeLayout :ast :st tid: ptid refBytes: slotB depth: 0
+    lmemo: IdMapV ztypes.tid v: valtypelayout
+    lay: valtypeLayout :ast :st tid: ptid refBytes: slotB memo: lmemo
     an: zast.nameTextCopy :ast ref: nm
     un: specWrittenName :st :ast tid: uid
     pn: specWrittenName :st :ast tid: ptid
