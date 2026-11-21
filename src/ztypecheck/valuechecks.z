@@ -336,8 +336,9 @@ refuseSingletonWrite: function {st: zenv.ZSymbolTable ast: Ast target: zast.node
     return true
 }
 
-# staticListAsValue -- a value of type `vt` written where a value is wanted:
-# a list's `slot` is none, and is refused. `vt` itself otherwise, 0 when
+# staticListAsValue -- a value of type `vt` read at `nid`: a list's `slot` is
+# none, and is refused wherever a value is read -- but as the base of a dotted
+# path, which reads its member (`blk.slot.label`). `vt` itself otherwise, 0 when
 # refused.
 staticListAsValue: function {
     st: zenv.ZSymbolTable
@@ -346,6 +347,7 @@ staticListAsValue: function {
     nid: zast.nodeid
 } out ztypes.tid is {
     if vt.isZero or (vt != st.typing.listSlotTid) then return vt
+    if nid == st.walk.value.memberBaseNid then return vt
     nn: ast.nodes.get i: nid
     (
         addErrorWithHint
@@ -2056,7 +2058,6 @@ checkAssignmentIn: function {
         refuseUntypedValue :st :ast nid: asgn.value
     }
     if (refuseNullValue :st :ast :vt nid: asgn.value) then return
-    vt = staticListAsValue :st :ast :vt nid: asgn.value
     if (flow.refuseUnitValue :st :ast :vt nid: asgn.value) then return
     refuseValueBorrow :st :ast :vt value: asgn.value
     if vt.notZero then {
@@ -3182,7 +3183,6 @@ checkWith: function {
     # a literal bound to a name takes its default, as a plain binding's does:
     # a literal type has no run-time variable
     vt = materialiseLiteral :ast :st t: vt
-    vt = staticListAsValue :st :ast :vt nid: withnode.value
     if (flow.refuseUnitValue :st :ast :vt nid: withnode.value) then vt = ztypes.tid
     refuseValueBorrow :st :ast :vt value: withnode.value
     if vt.u64 == 0 when st.typing.errors.length == errW then {
@@ -3653,7 +3653,6 @@ checkForConditionIn: function {
     }
     st.mode = savedMode
     st.walk.eachSubjectNid = esPrev
-    vt = staticListAsValue :st :ast :vt nid: cond.operation
     if (flow.refuseUnitValue :st :ast :vt nid: cond.operation) then vt = ztypes.tid
     # a condition that typed to nothing and raised nothing is an
     # unresolvable name -- the same rule the binding and operand sites
@@ -4901,7 +4900,8 @@ checkValueRowAt: function {
     ast: Ast
     nid: zast.nodeid
 } out ztypes.tid is {
-    t: checkValueArmAt :st :unitDecl :ast :nid
+    t: staticListAsValue :st :ast vt: (checkValueArmAt :st :unitDecl :ast :nid) :nid
+    if t.isZero then return t
     memberaccess.refuseCompileTimeSumValue :st :ast :nid :t
     consteval.stampConstAt :st :unitDecl :ast :nid
     ult: untypedNameReadTid :st :ast :nid
