@@ -1673,6 +1673,37 @@ callNodeIdOf: function {n: astnode.view} out zast.nodeid is {
     }
 }
 
+# namesFunction -- the node `nid` is a name that resolved to a function or a
+# method (a zero-argument call written as a read, `(mk)`).
+namesFunction: function {st: zenv.ZSymbolTable.view ast: Ast.view nid: zast.nodeid} out bool is {
+    rd: (st.typing.refDecl.get key: (zast.nodeIdOf n: (ast.nodes.get i: nid))).or d: ztypes.declid
+    if rd.isZero then return false
+    k: (st.typing.decls.get i: rd).kind
+    return k.funcDecl or k.methodDecl
+}
+
+# deadRootPhrase -- what a returned expression's root is, said for a report that
+# it dies with this call: a call (`isCall`), whose value is made here; a
+# parameter re-pointed at what does not outlive the call (`n = mk`); a
+# parameter the call owns; or a local. Empty when the expression has no root
+# name.
+deadRootPhrase: function {
+    st: zenv.ZSymbolTable ast: Ast n: astnode.view isCall: bool
+} out String is {
+    rn: exprRootNameId :ast :n
+    if rn.isZero then return String
+    rnm: zast.nameTextAt :ast ref: rn
+    if isCall then return "'\{rnm}' is called here, and the value it makes dies with this call"
+    vo: st.lookupVarId nameId: rn
+    if vo.some when (st.reg.variableOriginOf id: vo) == ztypes.zvarorigin.param then {
+        if (holdsBorrows :st vid: vo self: rn) then {
+            return "'\{rnm}' is a parameter re-pointed at a value that dies with this call"
+        }
+        return "'\{rnm}' is a parameter this call owns, and it dies with the call"
+    }
+    return "'\{rnm}' is a local and dies with this call"
+}
+
 # rootNameTextOf -- the root name of an expression as text; empty when it has
 # none (a literal, a construction, a call), so the report can say so instead
 # of naming a variable that does not exist.
@@ -1713,9 +1744,15 @@ checkReturnRooting: function {
             okRef = rootIsBorrowedParam :st :ast n: (ast.nodes.get i: arg.operation)
         }
         if okRef.not then {
-            rnm: rootNameTextOf :ast n: (ast.nodes.get i: arg.operation)
-            m1: "a reference return must point into a `.borrow`/`.view` parameter; '\{rnm}' is a local and dies with this call"
-            if rnm.length == 0 then {
+            rph: (
+                deadRootPhrase
+                :st
+                :ast
+                n: (ast.nodes.get i: arg.operation)
+                isCall: cid.notZero or (namesFunction :st :ast nid: arg.operation)
+            )
+            m1: "a reference return must point into a `.borrow`/`.view` parameter; \{rph}"
+            if rph.length == 0 then {
                 m1 = "a reference return must point into a `.borrow`/`.view` parameter; this expression is not rooted at one and dies with this call".string
             }
             (
@@ -1955,12 +1992,14 @@ reportReturnedLocalLocks: function {
     wn: zast.nameTextAt :ast ref: nameId
     rootPhrase: lockRootPhrase :st :ast nameId: keptRoot
     msg: String
-    if st.walk.fn.currentFnPins.not then {
-        fnNm: declWrittenName :st :ast tid: st.walk.fn.currentFnTid
-        msg = "Cannot return '\{wn}': it holds locks on \{rootPhrase}, which the caller cannot see because '\{fnNm}' is `out`, not `outx`"
-    } else if deadSrc.notZero then {
+    # storage that dies with the call is the reason whatever the `out`: `outx`
+    # would not keep it
+    if deadSrc.notZero then {
         sn: lockRootPhrase :st :ast nameId: deadSrc
         msg = "Cannot return '\{wn}': it holds locks on \{sn}, which dies with this call"
+    } else if st.walk.fn.currentFnPins.not then {
+        fnNm: declWrittenName :st :ast tid: st.walk.fn.currentFnTid
+        msg = "Cannot return '\{wn}': it holds locks on \{rootPhrase}, which the caller cannot see because '\{fnNm}' is `out`, not `outx`"
     }
     if msg.length == 0 then return false
     (
@@ -2036,13 +2075,20 @@ checkReturnCarries: function {
     if rbn.notZero then {
         if rvo.notZero then {
             # a view PARAMETER holds no locks of its own: what it views is the
-            # caller's, which a plain `out` result would leave unlocked
+            # caller's, which a plain `out` result would leave unlocked. One
+            # re-pointed (`s = t`) views what it was re-pointed at, which its
+            # locks say below
             if (st.reg.variableOriginOf id: rvo) == ztypes.zvarorigin.param when (
                 valuechecks.isViewFamilyTid
                 :ast
                 :st
                 tid: argT
-            ) when st.walk.fn.currentFnPins.not when st.walk.fn.currentReturnMarker.isReference.not then {
+            ) when st.walk.fn.currentFnPins.not when st.walk.fn.currentReturnMarker.isReference.not when (
+                holdsBorrows
+                :st
+                vid: rvo
+                self: rbn
+            ).not then {
                 pwn: zast.nameTextAt :ast ref: rbn
                 pfn: declWrittenName :st :ast tid: st.walk.fn.currentFnTid
                 pm: "Cannot return '\{pwn}': it views what the caller passed, which the caller cannot see because '\{pfn}' is `out`, not `outx`"
