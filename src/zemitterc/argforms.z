@@ -1209,9 +1209,6 @@ stringViewBinopOperand: function {
 instargval: record {
     # the argument used an interpolation, which had to be built before the call
     usedInterp: bool
-    # its position, for the natives that map labels onto a positional C
-    # signature
-    posIdx: u64
     # the argument's value node, 0 for an interpolated argument -- what a
     # pointer parameter re-reads when the value text loaded a pointer
     avNd: zast.nodeid
@@ -1240,14 +1237,11 @@ instanceMethodArgValue: function {
     mco: ztypes.tid
     posParamNameId: zast.nameid
     posParamId: ztypes.tid
-    posIdx: u64
     av: String.borrow
     # the facts of what is appended to `av`
     avF: exprfacts.borrow
 } out instargval is {
-    positionalIdx: posIdx
-    ca: ctorArgFor :prog :call label: posParamNameId posIdx: positionalIdx
-    isLabelled: ca.labelled
+    ca: ctorArgFor :prog :call label: posParamNameId
     iiF: exprfacts
     iiVal: (
         ctorInterpArgAt
@@ -1270,27 +1264,16 @@ instanceMethodArgValue: function {
         atomVarId = iiVal.take
         stateFacts facts: avF from: iiF
         usedInterp = true
-        if isLabelled.not then positionalIdx = positionalIdx + 1
     } else {
-        avNd = ctorArgNodeByLabel :prog :call label: posParamNameId
+        avNd = ca.nid
         if avNd.isZero then {
             atomVarId = stating facts: avF from: constFacts text: "0".string
         } else {
             atomVarId = ctorArgTextAt :prog :ctx aid: avNd facts: avF
         }
-        if isLabelled.not then {
-            pF: exprfacts
-            pv: ctorArgByPosition :prog :ctx :call idx: positionalIdx facts: pF
-            if pv.length > 0 then {
-                atomVarId = pv.take
-                stateFacts facts: avF from: pF
-                avNd = ctorArgNodeByPosition :prog :call idx: positionalIdx
-            }
-            positionalIdx = positionalIdx + 1
-        }
     }
     av.append atomVarId
-    return (instargval :usedInterp posIdx: positionalIdx :avNd)
+    return (instargval :usedInterp :avNd)
 }
 
 # instanceMethodArgPtr -- how one argument of a user-object method is passed:
@@ -1333,7 +1316,7 @@ instanceMethodArgPtr: function {
 }
 
 # instanceMethodArg -- one declared parameter of a user-object method, from its
-# name to the C text that passes it. Answers the positional cursor for the next.
+# name to the C text that passes it.
 instanceMethodArg: function {
     prog: Program.view
     ctx: Ctx
@@ -1341,10 +1324,9 @@ instanceMethodArg: function {
     mco: ztypes.tid
     posParamNameId: zast.nameid
     posParamId: ztypes.tid
-    posIdx: u64
     args: String.borrow
     facts: exprfacts.borrow
-} out u64 is {
+} is {
     atomVarId: String
     avF: exprfacts
     avr: (
@@ -1355,7 +1337,6 @@ instanceMethodArg: function {
         :mco
         :posParamNameId
         :posParamId
-        :posIdx
         av: atomVarId
         :avF
     )
@@ -1383,7 +1364,6 @@ instanceMethodArg: function {
         :args
         :facts
     )
-    return avr.posIdx
 }
 
 # passMethodArg -- a method argument's C text, appended to `args`, once its
@@ -1507,8 +1487,7 @@ appendArgValue: function {
 }
 
 # methodArgPositions -- for each declared parameter of a method, where its
-# argument is written (from 1, 0 for none -- the receiver's) and the positional
-# cursor its value is read with, walking the parameters as the value lookup does.
+# argument is written (from 1, 0 for none -- the receiver's).
 methodArgPositions: function {
     prog: Program.view
     call: zast.callrow.view
@@ -1516,20 +1495,17 @@ methodArgPositions: function {
     # the receiver parameter's name
     # the receiver parameter's name, which no argument fills
     recvNm: zast.nameid
-    posStart: u64
     writ: ListVal u64
-    posAt: ListVal u64
 } is {
-    positionalIdx: posStart
     for each pnB: pidsNm loop {
-        posAt.append positionalIdx
         if pnB == recvNm then {
             writ.append 0
-        } else {
-            ca: ctorArgFor :prog :call label: pnB posIdx: positionalIdx
-            writ.append (writtenArgPosition :prog :call nid: ca.nid)
-            if ca.labelled.not then positionalIdx = positionalIdx + 1
-        }
+        } else writ.append (
+            writtenArgPosition
+            :prog
+            :call
+            nid: (boundArgNode :prog :call param: pnB)
+        )
     }
 }
 
@@ -1608,7 +1584,7 @@ stringKeyArgPointer: function {
             :ctx
             av: expr
             tid: ctx.known.strTid
-            argNid: (ctorArgNodeByLabel :prog :call :label)
+            argNid: (boundArgNode :prog :call param: label)
         )
         return "&\{nmK}"
     }
@@ -1822,68 +1798,17 @@ colArgWith: function {
     consumes: bool
     facts: exprfacts.borrow
 } out String is {
-    posFirst: String
-    posF: exprfacts
-    havePos: false
-    for each aId: (zast.kidsOf ast: prog.ast span: call.arguments) loop {
-        a: prog.ast.nodes.get i: aId
-        if a.namedoperation then {
-            if a.name == label then {
-                ic: (
-                    emitColInterpArg
-                    :prog
-                    :ctx
-                    n: (prog.ast.nodes.get i: a.operation)
-                    :consumes
-                )
-                # an interpolation, hoisted to its temp
-                if ic.length > 0 then return (stating :facts from: pathFacts text: ic)
-                return (
-                    standInText
-                    :prog
-                    :ctx
-                    n: (prog.ast.nodes.get i: a.operation)
-                    text: (
-                        valueExprC
-                        :prog
-                        :ctx
-                        n: (prog.ast.nodes.get i: a.operation)
-                        :facts
-                    )
-                    :facts
-                )
-            }
-            if a.name.isZero when havePos.not then {
-                havePos = true
-                icp: (
-                    emitColInterpArg
-                    :prog
-                    :ctx
-                    n: (prog.ast.nodes.get i: a.operation)
-                    :consumes
-                )
-                if icp.length > 0 then {
-                    posFirst = icp.take
-                    posF = pathFacts
-                } else {
-                    aOpNode: prog.ast.nodes.get i: a.operation
-                    posFirst = (
-                        standInText
-                        :prog
-                        :ctx
-                        n: aOpNode
-                        text: (valueExprC :prog :ctx n: aOpNode facts: posF)
-                        facts: posF
-                    )
-                }
-            }
-        }
-    }
-    if havePos then return (stating :facts from: posF text: posFirst)
-    return (stating :facts from: constFacts text: "0".string)
+    av: boundArgNode :prog :call param: label
+    if av.isZero then return (stating :facts from: constFacts text: "0".string)
+    ic: emitColInterpArg :prog :ctx n: (prog.ast.nodes.get i: av) :consumes
+    # an interpolation, hoisted to its temp
+    if ic.length > 0 then return (stating :facts from: pathFacts text: ic)
+    avn: prog.ast.nodes.get i: av
+    return (standInText :prog :ctx n: avn text: (valueExprC :prog :ctx n: avn :facts) :facts)
 }
 
-# listArgWith -- listArg, its facts stated into `facts`.
+# listArgWith -- listArg, its facts stated into `facts`: the argument that binds
+# `label` (boundArgNode), `0` for none.
 listArgWith: function {
     prog: Program.view
     ctx: Ctx
@@ -1891,46 +1816,10 @@ listArgWith: function {
     label: zast.nameid
     facts: exprfacts.borrow
 } out String is {
-    posFirst: String
-    posF: exprfacts
-    havePos: false
-    for each aId: (zast.kidsOf ast: prog.ast span: call.arguments) loop {
-        a: prog.ast.nodes.get i: aId
-        if a.namedoperation then {
-            if a.name == label then {
-                return (
-                    standInText
-                    :prog
-                    :ctx
-                    n: (prog.ast.nodes.get i: a.operation)
-                    text: (
-                        valueExprC
-                        :prog
-                        :ctx
-                        n: (prog.ast.nodes.get i: a.operation)
-                        :facts
-                    )
-                    :facts
-                )
-            }
-            if a.name.isZero when havePos.not then {
-                havePos = true
-                aOpNode: prog.ast.nodes.get i: a.operation
-                posFirst = (
-                    standInText
-                    :prog
-                    :ctx
-                    n: aOpNode
-                    text: (valueExprC :prog :ctx n: aOpNode facts: posF)
-                    facts: posF
-                )
-            }
-        }
-    }
-    # a single positional arg binds to the (sole) labelless call site, e.g.
-    # `xs.get i2` -> the `i` param.
-    if havePos then return (stating :facts from: posF text: posFirst)
-    return (stating :facts from: constFacts text: "0".string)
+    av: boundArgNode :prog :call param: label
+    if av.isZero then return (stating :facts from: constFacts text: "0".string)
+    avn: prog.ast.nodes.get i: av
+    return (standInText :prog :ctx n: avn text: (valueExprC :prog :ctx n: avn :facts) :facts)
 }
 
 # orderPairArgs -- the two labelled arguments of a native leg, placed into slots
@@ -2051,12 +1940,18 @@ labelArgText: function {
 labelArgNode: function {
     prog: Program.view call: zast.callrow.view label: zast.nameid form: argform
 } out zast.nodeid is {
-    byLabel: ctorArgNodeByLabel :prog :call :label
-    if byLabel.notZero then return byLabel
+    aId: boundArgId :prog :call param: label
+    # these forms pass only a labelled argument
     match (
         form
-    ) case labelled then return zast.nodeid case addressed then return zast.nodeid case viewed then return zast.nodeid case value then null case moved then null case read then null
-    return (ctorArgNodeByPosition :prog :call idx: 0)
+    ) case labelled then {
+        if (argWrittenLabelled :prog :aId).not then return zast.nodeid
+    } case addressed then {
+        if (argWrittenLabelled :prog :aId).not then return zast.nodeid
+    } case viewed then {
+        if (argWrittenLabelled :prog :aId).not then return zast.nodeid
+    } case value then null case moved then null case read then null
+    return (argValueNode :prog :aId)
 }
 
 # armHeldC -- what a union's boxed arm `arm` holds for the payload `av`, the
@@ -2127,17 +2022,11 @@ emitQualRecvMethodCall: function {
     recvExQ: String
     recvQF: exprfacts
     recvPtrQ: false
-    posStartQ: u64
     if (fnTypeTakesThis :prog tid: mtid) then {
-        recvNdQ: zast.nodeid
-        if (ctorHasLabel :prog :call label: recvNmQ) then {
-            recvExQ = ctorArgByLabelWith :prog :ctx :call label: recvNmQ facts: recvQF
-            recvNdQ = ctorArgNodeByLabel :prog :call label: recvNmQ
-        } else {
-            recvExQ = ctorArgByPosition :prog :ctx :call idx: 0 facts: recvQF
-            recvNdQ = ctorArgNodeByPosition :prog :call idx: 0
-            posStartQ = 1
-        }
+        # the receiver: the argument that binds it, by its label or as the
+        # call's unlabelled argument
+        recvNdQ: boundArgNode :prog :call param: recvNmQ
+        if recvNdQ.notZero then recvExQ = ctorArgTextAt :prog :ctx aid: recvNdQ facts: recvQF
         # a receiver already held as a pointer passes as it stands -- as
         # WRITTEN, since the construction-argument text loads a pointer-held
         # valtype and the receiver slot wants the pointer
@@ -2168,7 +2057,6 @@ emitQualRecvMethodCall: function {
         recvExpr: recvExQ.stringView
         recvF: recvQF
         recvIsPtr: recvPtrQ
-        posStart: posStartQ
         :facts
     )
 }
@@ -2289,62 +2177,81 @@ fieldArgText: function {
 }
 
 # ctorArgPositions -- for each parameter of a construction, in declaration
-# order: where its argument is written (from 1, 0 for none) and the positional
-# cursor it is read with. With `labelsOnly` only a label binds an argument.
+# order: where the argument that binds it is written (from 1, 0 for none).
 ctorArgPositions: function {
     prog: Program.view
     call: zast.callrow.view
     nameIds: (ListVal zast.nameid).view
-    labelsOnly: bool
     writ: ListVal u64
-    posAt: ListVal u64
 } is {
-    positionalIdx: u64
     for each nm: nameIds loop {
-        posAt.append positionalIdx
-        if labelsOnly then {
-            writ.append (
-                writtenArgPosition
-                :prog
-                :call
-                nid: (ctorArgNodeByLabel :prog :call label: nm)
-            )
-        } else {
-            ca: ctorArgFor :prog :call label: nm posIdx: positionalIdx
-            writ.append (writtenArgPosition :prog :call nid: ca.nid)
-            if ca.labelled.not then positionalIdx = positionalIdx + 1
-        }
+        writ.append (writtenArgPosition :prog :call nid: (boundArgNode :prog :call param: nm))
     }
 }
 
-# ctorArgFor -- the argument a constructor parameter binds: the labelled
-# argument when the call spells the label, else the positional argument at
-# `posIdx`.
-ctorArgFor: function {
-    prog: Program.view
-    call: zast.callrow.view
-    label: zast.nameid
-    posIdx: u64
-} out ctorarg is {
-    if (ctorHasLabel :prog :call :label) then {
-        return (ctorarg nid: (ctorArgNodeByLabel :prog :call :label) labelled: true)
-    }
-    return (ctorarg nid: (ctorArgNodeByPosition :prog :call idx: posIdx) labelled: false)
-}
-
-# the constructor-argument node matching a field label.
-ctorArgNodeByLabel: function {
-    prog: Program.view call: zast.callrow.view label: zast.nameid
+# boundArgId -- THE ARGUMENT OF `call` THAT BINDS THE PARAMETER `param`, as the
+# checker's binder decided it (ZTyping.argParam): by its label or as the
+# unlabelled argument alike. Its argument node; 0 for none. An argument no
+# binder saw is a cast's (Box, a typedef's create, a projection, an arm's
+# payload), whose form reads it by its label.
+boundArgId: function {
+    prog: Program.view call: zast.callrow.view param: zast.nameid
 } out zast.nodeid is {
     for each aId: (zast.kidsOf ast: prog.ast span: call.arguments) loop {
         a: prog.ast.nodes.get i: aId
-        if a.namedoperation when a.name == label then return a.operation
+        if a.namedoperation then {
+            bo: prog.typing.argParam.get key: aId
+            match (
+                bo
+            ) case some then {
+                if bo.outcome.bound when bo.param == param then return aId
+            } case none then {
+                if a.name == param then return aId
+            }
+        }
     }
     return zast.nodeid
 }
 
-# ctorArgByLabel -- that argument's emitted text. Selected through the node
-# above so a caller can ask about the same argument by node.
+# boundArgNode -- the value node of the argument that binds `param`
+# (boundArgId); 0 for none.
+boundArgNode: function {
+    prog: Program.view call: zast.callrow.view param: zast.nameid
+} out zast.nodeid is {
+    return (argValueNode :prog aId: (boundArgId :prog :call :param))
+}
+
+# argValueNode -- the value node of the argument node `aId`; 0 for none.
+argValueNode: function {prog: Program.view aId: zast.nodeid} out zast.nodeid is {
+    if aId.isZero then return zast.nodeid
+    a: prog.ast.nodes.get i: aId
+    match (
+        a
+    ) case namedoperation then {
+        return a.operation
+    } else return zast.nodeid
+}
+
+# argWrittenLabelled -- the argument node `aId` binds by its label, not as the
+# unlabelled argument; an argument no binder saw binds by its label.
+argWrittenLabelled: function {prog: Program.view aId: zast.nodeid} out bool is {
+    if aId.isZero then return false
+    return (prog.typing.argBindOf nid: aId).positional.not
+}
+
+# ctorArgFor -- the argument a parameter `label` binds (boundArgId), and whether
+# it is written with its label.
+ctorArgFor: function {
+    prog: Program.view
+    call: zast.callrow.view
+    label: zast.nameid
+} out ctorarg is {
+    aId: boundArgId :prog :call param: label
+    return (ctorarg nid: (argValueNode :prog :aId) labelled: (argWrittenLabelled :prog :aId))
+}
+
+# ctorArgByLabel -- the emitted text of the argument that binds `label`
+# (boundArgNode).
 ctorArgByLabel: function {
     prog: Program.view
     ctx: Ctx
@@ -2363,7 +2270,7 @@ ctorArgByLabelWith: function {
     label: zast.nameid
     facts: exprfacts.borrow
 } out String is {
-    aid: ctorArgNodeByLabel :prog :call :label
+    aid: boundArgNode :prog :call param: label
     if aid.isZero then return (stating :facts from: constFacts text: "0".string)
     return (ctorArgTextAt :prog :ctx :aid :facts)
 }
@@ -2421,53 +2328,9 @@ argIsPointerByLabel: function {
     call: zast.callrow.view
     label: zast.nameid
 } out bool is {
-    for each aId: (zast.kidsOf ast: prog.ast span: call.arguments) loop {
-        a: prog.ast.nodes.get i: aId
-        if a.namedoperation when a.name == label then return (
-            pathIsPointer
-            :prog
-            :ctx
-            n: (prog.ast.nodes.get i: a.operation)
-        )
-    }
-    return false
-}
-
-# ctorArgNodeByPosition -- ctorArgByPosition's node id rather than its C text,
-# for a caller that must look the argument up again instead of printing it.
-# 0 when there is no positional argument at that index.
-ctorArgNodeByPosition: function {
-    prog: Program.view call: zast.callrow.view idx: u64
-} out zast.nodeid is {
-    seen: u64
-    for each aId: (zast.kidsOf ast: prog.ast span: call.arguments) loop {
-        a: prog.ast.nodes.get i: aId
-        if a.namedoperation then {
-            an: zast.nameTextAt ast: prog.ast ref: a.name
-            if an.length == 0 then {
-                if seen == idx then return a.operation
-                seen = seen + 1
-            }
-        }
-    }
-    return zast.nodeid
-}
-
-# ctorArgByPosition -- the idx-th POSITIONAL (unlabeled) argument's C text, for a
-# method call passing args positionally (`this.formatLockHolder holder`) rather
-# than by label; "" when there is no such arg.
-# ctorArgByPosition -- that argument's emitted text, selected through the node
-# above so a caller can ask about the same argument by node.
-ctorArgByPosition: function {
-    prog: Program.view
-    ctx: Ctx
-    call: zast.callrow.view
-    idx: u64
-    facts: exprfacts.borrow
-} out String is {
-    posParamId: ctorArgNodeByPosition :prog :call :idx
-    if posParamId.isZero then return "".string
-    return (ctorArgTextAt :prog :ctx aid: posParamId :facts)
+    av: boundArgNode :prog :call param: label
+    if av.isZero then return false
+    return (pathIsPointer :prog :ctx n: (prog.ast.nodes.get i: av))
 }
 
 # ctorInterpArgAt -- the interp-arg form (emitInterpArgForParam) for one
@@ -2497,15 +2360,6 @@ ctorInterpArgAt: function {
     )
 }
 
-# ctorHasLabel -- whether a call carries a named argument with this label.
-ctorHasLabel: function {prog: Program.view call: zast.callrow.view label: zast.nameid} out bool is {
-    for each aId: (zast.kidsOf ast: prog.ast span: call.arguments) loop {
-        a: prog.ast.nodes.get i: aId
-        if a.namedoperation when a.name == label then return true
-    }
-    return false
-}
-
 # metaCreateFieldText -- one field of a `meta.create`: its labelled argument, a
 # borrowed reftype field taking the source's address, or the typed zero of a
 # field the call leaves out.
@@ -2522,7 +2376,7 @@ metaCreateFieldText: function {
 } out String is {
     av: String
     avF: exprfacts
-    if (ctorHasLabel :prog :call label: fnameId) then {
+    if (boundArgId :prog :call param: fnameId).notZero then {
         av = ctorArgByLabelWith :prog :ctx :call label: fnameId facts: avF
         # a borrowed reftype field is a pointer; a source stored INLINE
         # (the receiver's own field, a field of a parameter) is passed
@@ -2542,7 +2396,7 @@ metaCreateFieldText: function {
                 av: av.stringView
                 :avF
                 pid: ffidL
-                argNid: (ctorArgNodeByLabel :prog :call label: fnameId)
+                argNid: (boundArgNode :prog :call param: fnameId)
                 facts: avMF
             )
             av = avM.take
@@ -3981,11 +3835,12 @@ viewArgCoerce: function {
     avF: exprfacts
     facts: exprfacts.borrow
 } out String is {
+    boundId: boundArgId :prog :call param: label
     for each argId: (zast.kidsOf ast: prog.ast span: call.arguments) loop {
         fa: prog.ast.nodes.get i: argId
         if fa.namedoperation then {
             faOpNode: prog.ast.nodes.get i: fa.operation
-            if fa.name == label then {
+            if argId == boundId then {
                 stampTid: (
                     stampIdOf
                     :prog
@@ -4214,8 +4069,8 @@ lowerNativeArg: function {
     return (stating :facts from: av1F text: av1)
 }
 
-# emitNativeArg -- find one native-call argument by label, else by the
-# positional cursor, and lower it (lowerNativeArg).
+# emitNativeArg -- the native call's argument that binds `pnameId`
+# (boundArgNode), lowered (lowerNativeArg); its default, or `0`, for none.
 emitNativeArg: function {
     prog: Program.view
     ctx: Ctx
@@ -4223,47 +4078,19 @@ emitNativeArg: function {
     fid: ztypes.tid
     pnameId: zast.nameid
     pid: ztypes.tid
-    usePos: bool
-    posIdx: u64
     facts: exprfacts.borrow
 } out String is {
-    seen: u64
-    for each aId: (zast.kidsOf ast: prog.ast span: call.arguments) loop {
-        a: prog.ast.nodes.get i: aId
-        if a.namedoperation then {
-            al: zast.nameTextAt ast: prog.ast ref: a.name
-            if usePos then {
-                if al.length == 0 then {
-                    if seen == posIdx then {
-                        return (
-                            lowerNativeArg
-                            :prog
-                            :ctx
-                            :fid
-                            :pnameId
-                            :pid
-                            op: (prog.ast.nodes.get i: a.operation)
-                            :facts
-                        )
-                    }
-                    seen = seen + 1
-                }
-            } else {
-                if a.name == pnameId then {
-                    return (
-                        lowerNativeArg
-                        :prog
-                        :ctx
-                        :fid
-                        :pnameId
-                        :pid
-                        op: (prog.ast.nodes.get i: a.operation)
-                        :facts
-                    )
-                }
-            }
-        }
-    }
+    av: boundArgNode :prog :call param: pnameId
+    if av.notZero then return (
+        lowerNativeArg
+        :prog
+        :ctx
+        :fid
+        :pnameId
+        :pid
+        op: (prog.ast.nodes.get i: av)
+        :facts
+    )
     # an argument the call leaves out is its declared default
     if (prog.typing.declHasDefaultId parentTypeId: fid nameId: pnameId) then {
         return (

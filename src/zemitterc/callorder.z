@@ -743,10 +743,6 @@ emitInstanceMethodBody: function {
     # receiver passed as an argument from the expression it was written as -- so
     # the caller answers it and this stays one emission for both
     recvIsPtr: bool
-    # where the positional cursor starts for the NON-receiver parameters. A
-    # dotted receiver consumes no argument and leaves it at 0; a receiver
-    # supplied as the call's one unlabelled argument has already taken slot 0
-    posStart: u64
     facts: exprfacts.borrow
 } out String is {
     pids: ListVal ztypes.tid
@@ -768,9 +764,7 @@ emitInstanceMethodBody: function {
         :call
         :pidsNm
         :recvNm
-        :posStart
         writ: ctx.order.writ
-        posAt: ctx.order.posAt
     )
     for ctx.order.done.length < (wbase + pn) loop ctx.order.done.append false
     ord: orderBegin order: ctx.order slots: pn
@@ -792,7 +786,6 @@ emitInstanceMethodBody: function {
             :recvExpr
             :recvF
             :recvIsPtr
-            posIdx: (ctx.order.posAt.get i: wbase + pi)
             written: (ctx.order.writ.get i: wbase + pi)
             slot: pi
             :ord
@@ -826,8 +819,6 @@ orderMethodParam: function {
     recvExpr: StringView
     recvF: exprfacts
     recvIsPtr: bool
-    # the positional cursor the parameter's value is read with
-    posIdx: u64
     # where its argument is written, from 1; 0 for none
     written: u64
     slot: u64
@@ -869,7 +860,6 @@ orderMethodParam: function {
             :mco
             posParamNameId: pname
             posParamId: pid
-            :posIdx
             args: one
             facts: oneF
         )
@@ -1265,7 +1255,6 @@ emitInstanceMethodCall: function {
             recvExpr: recvExpr.stringView
             :recvF
             recvIsPtr: rIsPtr
-            posStart: 0
             :facts
         )
     }
@@ -1328,13 +1317,13 @@ userCreateCallC: function {
     pidsNm: ListVal zast.nameid
     recFieldLists :prog tid: fid names: pnames ids: pids nameIds: pidsNm
     pn: pnames.length
-    wbase: orderPositions :prog order: ctx.order :call nameIds: pidsNm labelsOnly: true
+    wbase: orderPositions :prog order: ctx.order :call nameIds: pidsNm
     ord: orderBegin order: ctx.order slots: pn
     k: u64
     for k < pn loop {
         pi: orderNextParam order: ctx.order base: wbase
         k = k + 1
-        aNid: argforms.ctorArgNodeByLabel :prog :call label: (pidsNm.get i: pi)
+        aNid: argforms.boundArgNode :prog :call param: (pidsNm.get i: pi)
         if aNid.notZero then {
             (
                 orderUserFnArg
@@ -1584,7 +1573,7 @@ userCreateCtor: function {
     cpiNm: ListVal zast.nameid
     recFieldLists :prog tid: cco names: cpn ids: cpi nameIds: cpiNm
     ccn: cpn.length
-    wbase: orderPositions :prog order: ctx.order :call nameIds: cpiNm labelsOnly: false
+    wbase: orderPositions :prog order: ctx.order :call nameIds: cpiNm
     ord: orderBegin order: ctx.order slots: ccn
     k: u64
     for k < ccn loop {
@@ -1596,7 +1585,6 @@ userCreateCtor: function {
             :prog
             :call
             label: (cpiNm.get i: ci)
-            posIdx: (ctx.order.posAt.get i: wbase + ci)
         )
         cavF: exprfacts
         cav: (
@@ -1695,10 +1683,10 @@ emitRecordCtor: function {
     wbase: u64
     na: fn0
     if fixed then {
-        wbase = orderPositions :prog order: ctx.order :call nameIds: argNm labelsOnly: false
+        wbase = orderPositions :prog order: ctx.order :call nameIds: argNm
         na = argNm.length
     } else {
-        wbase = orderPositions :prog order: ctx.order :call nameIds: fidsNm labelsOnly: false
+        wbase = orderPositions :prog order: ctx.order :call nameIds: fidsNm
     }
     ord: orderBegin order: ctx.order slots: fn0
     k: u64
@@ -1715,7 +1703,6 @@ emitRecordCtor: function {
             :tid
             ffid: (fids.get i: fi)
             fnameId: (fidsNm.get i: fi)
-            posIdx: (ctx.order.posAt.get i: wbase + ai)
             written: (ctx.order.writ.get i: wbase + ai)
             slot: fi
             :ord
@@ -1813,15 +1800,13 @@ orderRecordField: function {
     # the field's type and name id
     ffid: ztypes.tid
     fnameId: zast.nameid
-    # the positional cursor the field's argument is read with
-    posIdx: u64
     # where its argument is written, from 1; 0 for none
     written: u64
     slot: u64
     ord: orderstate.borrow
 } is {
     mk: pendingHoistMark stmt: ctx.stmt
-    ca: argforms.ctorArgFor :prog :call label: fnameId :posIdx
+    ca: argforms.ctorArgFor :prog :call label: fnameId
     avF: exprfacts
     av: argforms.fieldArgText :prog :ctx :tid :ca nameId: fnameId fid: ffid facts: avF
     # a borrowed reftype field is a pointer; a source stored INLINE (the
@@ -1908,18 +1893,9 @@ orderPositions: function {
     order: OrderState
     call: zast.callrow.view
     nameIds: (ListVal zast.nameid).view
-    labelsOnly: bool
 } out u64 is {
     wbase: order.writ.length
-    (
-        argforms.ctorArgPositions
-        :prog
-        :call
-        :nameIds
-        :labelsOnly
-        writ: order.writ
-        posAt: order.posAt
-    )
+    argforms.ctorArgPositions :prog :call :nameIds writ: order.writ
     for order.done.length < (wbase + nameIds.length) loop order.done.append false
     return wbase
 }
@@ -1994,71 +1970,40 @@ orderArgAtWith: function {
 orderDropPositions: function {order: OrderState base: u64} is {
     for order.writ.length > base loop {
         order.writ.pop
-        order.posAt.pop
         order.done.pop
     }
 }
 
-# argSlotList -- per call-argument (in call order), the index of the parameter
-# slot it binds in `fpNames` (declaration order): a named arg binds by name, an
-# unlabelled arg binds the next free slot via a positional cursor (first-arg
-# elision). Returns `fpNames.length` (an out-of-range sentinel) for an argument
-# that binds no value slot (e.g. a generic type-arg, whose name is not a value
-# param). Lets a call's named args be emitted to C in PARAMETER order.
+# argSlotList -- per call argument (in call order), the index in `fpNameIds`
+# (declaration order) of the parameter it binds, as the binder decided
+# (ZTyping.argParam; an argument no binder saw binds by its label);
+# `fpNameIds.length` for one that binds no value parameter (a type argument).
+# Lets a call's arguments be emitted to C in PARAMETER order.
 argSlotList: function {
     prog: Program.view
     call: zast.callrow.view
     fpNameIds: (ListVal zast.nameid).view
 } out ListVal u64 is {
     result: ListVal u64
-    cn: fpNameIds.length
-    consumed: ListVal bool
-    ci: u64
-    for ci < cn loop {
-        consumed.append false
-        ci = ci + 1
-    }
-    cursor: u64
     for each argId: (zast.kidsOf ast: prog.ast span: call.arguments) loop {
+        slot: fpNameIds.length
         a: prog.ast.nodes.get i: argId
-        match (
-            a
-        ) case namedoperation then {
-            # the label and the parameter names are both pool ids already, so
-            # the match is an id compare. An UNLABELLED argument carries no name;
-            # the empty spelling has an id of its own, so both are excluded
-            hasLbl: a.name.notZero
-            if hasLbl when a.name == zast.wellKnown.slot.wkEmpty then hasLbl = false
-            slot: fpNameIds.length
-            if hasLbl then {
-                fi: u64
-                for fi < cn loop {
-                    if (fpNameIds.get i: fi) == a.name then slot = fi
-                    fi = fi + 1
-                }
-            } else {
-                adv: true
-                for adv loop {
-                    if cursor >= cn then {
-                        adv = false
-                    } else {
-                        if (consumed.get i: cursor) then {
-                            cursor = cursor + 1
-                        } else {
-                            adv = false
-                        }
-                    }
-                }
-                if cursor < cn then {
-                    slot = cursor
-                    cursor = cursor + 1
-                }
+        if a.namedoperation then {
+            pn: a.name
+            bo: prog.typing.argParam.get key: argId
+            match (
+                bo
+            ) case some then {
+                pn = zast.nameid
+                if bo.outcome.bound then pn = bo.param
+            } case none then null
+            fi: u64
+            for fi < fpNameIds.length loop {
+                if pn.notZero when (fpNameIds.get i: fi) == pn then slot = fi
+                fi = fi + 1
             }
-            if slot < cn then consumed.set i: slot val: true
-            result.append slot
-        } else {
-            result.append fpNameIds.length
         }
+        result.append slot
     }
     return result
 }
@@ -2085,7 +2030,7 @@ emitMetaCreateCall: function {
         recFieldLists :prog tid: et names: fnames ids: fids nameIds: fidsNm
         fn0: fnames.length
         # the fields' arguments are built in the order they are written
-        wbase: orderPositions :prog order: ctx.order :call nameIds: fidsNm labelsOnly: true
+        wbase: orderPositions :prog order: ctx.order :call nameIds: fidsNm
         ord: orderBegin order: ctx.order slots: fn0
         k: u64
         for k < fn0 loop {
@@ -3987,13 +3932,13 @@ emitClassNativeCall: function {
         argNameIds.append (pNameIds.get i: k + 1)
         k = k + 1
     }
-    wbase: orderPositions :prog order: ctx.order :call nameIds: argNameIds labelsOnly: true
+    wbase: orderPositions :prog order: ctx.order :call nameIds: argNameIds
     ord: orderBegin order: ctx.order slots: na
     done: u64
     for done < na loop {
         best: orderNextParam order: ctx.order base: wbase
         pnb: argNameIds.get i: best
-        lnid: argforms.ctorArgNodeByLabel :prog :call label: pnb
+        lnid: argforms.boundArgNode :prog :call param: pnb
         if lnid.isZero when (
             prog.typing.declHasDefaultId
             parentTypeId: mtid
@@ -4190,7 +4135,7 @@ emitNativeCreate: function {
     pidsNm: ListVal zast.nameid
     recFieldLists :prog tid: crid names: pnames ids: pids nameIds: pidsNm
     pn: pnames.length
-    wbase: orderPositions :prog order: ctx.order :call nameIds: pidsNm labelsOnly: true
+    wbase: orderPositions :prog order: ctx.order :call nameIds: pidsNm
     slots: argSlotList :prog :call fpNameIds: pidsNm
     ord: orderBegin order: ctx.order slots: pn
     k: u64
@@ -4317,7 +4262,7 @@ emitNativeFreeFnCall: function {
         )
     }
     m: pn.length
-    wbase: orderPositions :prog order: ctx.order :call nameIds: pidlNm labelsOnly: false
+    wbase: orderPositions :prog order: ctx.order :call nameIds: pidlNm
     ord: orderBegin order: ctx.order slots: m
     # an argument a body names twice is read into a temporary first; a free
     # function has no receiver, so its slot 0 is @A1@
@@ -4400,8 +4345,6 @@ orderNativeFreeArgs: function {
             :fid
             pnameId: (pidlNm.get i: j)
             pid: (pidl.get i: j)
-            usePos: (argforms.ctorHasLabel :prog :call label: (pidlNm.get i: j)).not
-            posIdx: (ctx.order.posAt.get i: wbase + j)
             facts: avF
         )
         wr: ctx.order.writ.get i: wbase + j
