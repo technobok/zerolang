@@ -186,7 +186,7 @@ foldInstanceConstant: function {
     st.walk.instanceConstsChecked.add item: k
     prev: st.walk.consts.mono
     st.walk.consts.mono = mono
-    from: st.typing.errors.length
+    from: st.typing.reportCount
     constFoldDecl :ast :st :declId
     st.walk.consts.mono = prev
     bodies.noteInstanceErrors :st :ast :mono :from
@@ -430,7 +430,7 @@ staticListElemValue: function {
     }
     held: st.walk.consts.fail
     constFailClear :st
-    errA: st.typing.errors.length
+    errA: st.typing.reportCount
     cv: evalConstNode :st :scope :ast :unitDecl nid: opRef
     got: st.walk.consts.fail
     st.walk.consts.fail = held
@@ -460,7 +460,7 @@ staticListElemValue: function {
     }
     # an element whose evaluation reported why it has no value -- the
     # definition it names failed -- has its one error already
-    if st.typing.errors.length > errA then return ztypes.noConst
+    if st.typing.reportCount > errA then return ztypes.noConst
     # one that recorded no reason says why through the part of it that has
     # none, as a definition does; the walk must not drop the failure an
     # enclosing fold holds
@@ -1250,7 +1250,7 @@ foldedDeclType: function {
     if bare.not then return ztypes.tid
     fd: st.typing.declMemberIdOf parentTypeId: ownerTid nameId: dm.name
     if fd.isZero then return ztypes.tid
-    errsBefore: st.typing.errors.length
+    errsBefore: st.typing.reportCount
     constFoldDecl :ast :st declId: fd
     # AN ARM CONSTANT MUST NAME AN ARM SOMETHING DECLARES. A GENERIC
     # PARAMETER'S declaration wears the same shape -- `t: anyval.generic` reads
@@ -1261,7 +1261,7 @@ foldedDeclType: function {
     # which knows how to resolve one.
     cvD: constValueOfDecl :st declId: fd
     # a value the fold refused declares nothing: its report is the member's
-    if cvD.kind.none when st.typing.errors.length > errsBefore then return ztypes.tid
+    if cvD.kind.none when st.typing.reportCount > errsBefore then return ztypes.tid
     if cvD.kind.armKind then {
         avD: st.typing.declMemberIdOf parentTypeId: cvD.armTid nameId: cvD.armName
         if avD.isZero then return ztypes.tid
@@ -2227,7 +2227,7 @@ mintUnitStaticListInstances: function {
         k: st.typing.memberConstKey parentTypeId: monoId nameId: nm.name
         if (st.walk.consts.evalState.has key: k) then continue
         st.walk.consts.evalState.set key: k value: ztyping.constevalstate.evaluating
-        from: st.typing.errors.length
+        from: st.typing.reportCount
         row: (
             resolveStaticListInto
             :ast
@@ -2406,9 +2406,9 @@ numericArgFold: function {
         reportNumericArg :ast :st :tdecl :param :argOp :nameId why: "is a run-time value"
         return (argfold v: ztypes.noConst reported: true)
     }
-    errBefore: st.typing.errors.length
+    errBefore: st.typing.reportCount
     if inBody when nameId.isZero then checkValueAt :st :unitDecl :ast nid: argOp
-    if st.typing.errors.length > errBefore then return (argfold v: ztypes.noConst reported: true)
+    if st.typing.reportCount > errBefore then return (argfold v: ztypes.noConst reported: true)
     held: st.walk.consts.fail
     constFailClear :st
     v: evalConstNode :st :unitDecl :scope :ast nid: argOp
@@ -4568,9 +4568,9 @@ checkConstantMethodShapeAt: function {
     if (qualifierUnitDecl :st :scope :ast nid: site.recvId).notZero then return false
     inner: checkConstantMethodShapeAt :st :scope :ast :unitDecl nid: site.recvId
     if inner then return true
-    errsBefore: st.typing.errors.length
+    errsBefore: st.typing.reportCount
     checkConstantMethodCall :st :scope :ast :unitDecl :site
-    if st.typing.errors.length == errsBefore then return false
+    if st.typing.reportCount == errsBefore then return false
     st.walk.consts.shapesReported.add item: nid
     return true
 }
@@ -4589,14 +4589,14 @@ checkConstantOperator: function {
     opIdN: (operatorPartsAt :ast :nid).operator
     call: callRefAt :ast :nid
     opSite: constmethodsite pathId: call.callable recvId: lhsId childId: opIdN isCall: true :call
-    errsOp: st.typing.errors.length
+    errsOp: st.typing.reportCount
     held: st.walk.consts.fail
     constFailClear :st
     lv: evalConstNode :st :scope :ast :unitDecl nid: lhsId
     st.walk.consts.fail = held
     # an operand with no value is the evaluator's to explain
     if lv.isConst then constantMemberTid :st :scope :ast :unitDecl site: opSite rv: lv
-    if st.typing.errors.length == errsOp then return false
+    if st.typing.reportCount == errsOp then return false
     st.walk.consts.shapesReported.add item: nid
     return true
 }
@@ -4611,7 +4611,7 @@ checkConstantFnCall: function {
     unitDecl: ztypes.declid
     nid: zast.nodeid
 } out bool is {
-    errsBefore: st.typing.errors.length
+    errsBefore: st.typing.reportCount
     sr: strRefAt :ast :nid
     if sr.nid.notZero then {
         checkConstantInterpParts :st :scope :ast :unitDecl node: sr
@@ -4622,7 +4622,7 @@ checkConstantFnCall: function {
         if fid.isZero then return false
         callchecks.checkConstantCallArgs :st :scope :ast :unitDecl :call :fid recvImplicit: false
     }
-    if st.typing.errors.length == errsBefore then return false
+    if st.typing.reportCount == errsBefore then return false
     st.walk.consts.shapesReported.add item: nid
     return true
 }
@@ -5403,7 +5403,7 @@ staticArgValue: function {
 } out ztypes.cval is {
     {
         a: argRefAt :ast nid: argNid
-        errA: st.typing.errors.length
+        errA: st.typing.reportCount
         av: ztypes.noConst
         # a nested list is of the field's list type
         if (ast.nodes.get i: a.operation).listblock then {
@@ -5414,7 +5414,7 @@ staticArgValue: function {
             av = evalConstNode :st :scope :ast :unitDecl nid: a.operation
             # one with no value and no recorded reason says why through the
             # part of it that has none, as a definition does
-            unsaid: st.typing.errors.length == errA
+            unsaid: st.typing.reportCount == errA
             if av.kind.none when st.walk.consts.fail.kind.none when unsaid then {
                 visiting: ListVal zast.nodeid
                 said: unfoldedPartWhy :st :scope :ast :unitDecl nid: a.operation :visiting
@@ -5423,7 +5423,7 @@ staticArgValue: function {
         }
         # a value whose own fold was reported (a cycle through it) is not
         # reported again here
-        if av.kind.none when st.typing.errors.length > errA then return ztypes.noConst
+        if av.kind.none when st.typing.reportCount > errA then return ztypes.noConst
         return (
             constFitToField
             :st
@@ -6935,7 +6935,7 @@ resolveCalledConstantDef: function {
                     ctr: st.reg.typeById.get i: ctpl
                     cgen = ctr.isgeneric
                 }
-                errA: st.typing.errors.length
+                errA: st.typing.reportCount
                 if cgen when (
                     resolve.resolveInstantiatedAlias
                     :ast
@@ -6946,7 +6946,7 @@ resolveCalledConstantDef: function {
                     :defn
                 ) then cbu = true
                 # an instantiation refused for its arguments is reported there
-                if cgen when st.typing.errors.length > errA then cbu = true
+                if cgen when st.typing.reportCount > errA then cbu = true
             }
             if ckn.not then {
                 crm: "Unknown reference '\{cbn}'"

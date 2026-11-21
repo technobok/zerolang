@@ -146,10 +146,10 @@ checkInterpPart: function {
     ast: Ast
     partId: zast.nodeid
 } is {
-    en0: st.typing.errors.length
+    en0: st.typing.reportCount
     if (refuseBlockPart :st :ast :partId) then return
     ptid: checkValueAt :st :unitDecl :ast nid: partId
-    if st.typing.errors.length != en0 then return
+    if st.typing.reportCount != en0 then return
     if ptid.isZero then {
         valuechecks.reportUnresolvedValue :st :unitDecl :ast nid: partId
         valuechecks.refuseUntypedValue :st :ast nid: partId
@@ -1446,7 +1446,7 @@ dottedBaseTid: function {
     savedMode: st.mode
     if baseIsName then st.mode.suppressBareCtor = true
     st.mode.suppressFnAutoCall = childIsRef
-    errsBase: st.typing.errors.length
+    errsBase: st.typing.reportCount
     outerBase: st.walk.value.memberBaseNid
     st.walk.value.memberBaseNid = dp.parent
     bt: checkValueAt :st :unitDecl :ast nid: dp.parent
@@ -1458,7 +1458,7 @@ dottedBaseTid: function {
     if baseIsName then valuechecks.readSingletonBase :st :ast :unitDecl base: dp.parent :bt
     # a base refused as a call missing its arguments has no value to read a
     # member of: that refusal is the one error
-    if st.typing.errors.length > errsBase when (
+    if st.typing.reportCount > errsBase when (
         (st.reg.typetypeOf typeId: bt) == ztypes.ztypetype.functionType
     ) then {
         return ztypes.tid.zero
@@ -1870,9 +1870,9 @@ checkArmBorrowSources: function {
 } is {
     leaves: ListVal zast.nodeid
     armValueLeaves :st :ast nid: arg.operation into: leaves
-    errs: st.typing.errors.length
+    errs: st.typing.reportCount
     for each lf: leaves loop {
-        if st.typing.errors.length == errs then (
+        if st.typing.reportCount == errs then (
             checkBorrowResultSource
             :st
             :ast
@@ -3371,15 +3371,15 @@ checkComprehensionValue: function {
             return
         }
     }
-    errsBefore: st.typing.errors.length
+    errsBefore: st.typing.reportCount
     # the element's own pins are judged below, as a lock the list cannot keep
     refuseBorrowedTake :st :ast n: vn9 vt: elemT byPins: false
-    if st.typing.errors.length == errsBefore when (isMarkedMove :ast n: vn9).not then {
+    if st.typing.reportCount == errsBefore when (isMarkedMove :ast n: vn9).not then {
         checkFieldMove :st :ast n: vn9
     }
     # an element that keeps locks of its own -- a view a call hands back, an
     # `outx` result -- is stored in the list, which cannot keep them
-    if st.typing.errors.length != errsBefore then return
+    if st.typing.reportCount != errsBefore then return
     held: List ztyping.PinPath
     pinsOfValue :st :ast vt: elemT nid: valueNid borrowing: false verb: "store" dst: held
     if held.length == 0 then return
@@ -6842,9 +6842,9 @@ returnedBareFieldName: function {
 # itself or an arm of an `if` or a `match`.
 refuseYieldedBorrow: function {st: zenv.ZSymbolTable ast: Ast arg: argref argT: ztypes.tid} is {
     if argT.isZero then return
-    errs: st.typing.errors.length
+    errs: st.typing.reportCount
     valuechecks.refuseYieldedLocks :st :ast :arg :argT
-    if st.typing.errors.length != errs then return
+    if st.typing.reportCount != errs then return
     verb: "as a yielded value"
     refuseBorrowedMove :st :ast n: (ast.nodes.get i: arg.operation) vt: argT :verb
     refuseBorrowedArms :st :ast nid: arg.operation :verb
@@ -6945,9 +6945,9 @@ refuseReturnedArms: function {st: zenv.ZSymbolTable ast: Ast nid: zast.nodeid} i
                 lineno: (nodeLine n: ln)
                 colno: (nodeCol n: ln)
             )
-            errR: st.typing.errors.length
+            errR: st.typing.reportCount
             reportReturnedBareField :st :ast arg: la
-            if st.typing.errors.length == errR then {
+            if st.typing.reportCount == errR then {
                 refuseBorrowedMove :st :ast n: ln vt: lt verb: "as an owned result"
             }
         }
@@ -7061,7 +7061,7 @@ checkReturnedValue: function {
         )
         return
     }
-    errR: st.typing.errors.length
+    errR: st.typing.reportCount
     argT: ztypes.tid
     if st.walk.fn.currentReturnMarker.isReference then {
         argT = checkValueAt :st :unitDecl :ast nid: arg.operation
@@ -7076,7 +7076,7 @@ checkReturnedValue: function {
     # name is in scope. currentReturnTypeId is exactly the condition under
     # which the return-type check below already runs.
     if argT.u64 == 0 when (
-        st.typing.errors.length == errR
+        st.typing.reportCount == errR
     ) when st.walk.fn.currentReturnTypeId.notZero then {
         valuechecks.reportUnresolvedValue :st :unitDecl :ast nid: arg.operation
     }
@@ -7451,7 +7451,7 @@ checkGenericFnCall: function {
     rvPinsG: List ztyping.PinPath
     rvTG: takeValueReceiver :st :ast :unitDecl :call funcId: dro :recvVal pins: rvPinsG
     pinsG: List ztyping.PinPath
-    errG: st.typing.errors.length
+    errG: st.typing.reportCount
     gfr: conform.checkGenericCall :st :unitDecl :ast :call funcId: dro pins: pinsG
     if gfr.notZero then {
         setgf: gfr
@@ -7462,7 +7462,7 @@ checkGenericFnCall: function {
     midG: genericCallInstance :st :ast :call
     # a refused binding says all there is to say: the receiver lands nowhere
     landedG: ztypes.tid
-    if st.typing.errors.length == errG then landedG = (
+    if st.typing.reportCount == errG then landedG = (
         landLiteralReceiver
         :st
         :ast
@@ -7611,9 +7611,9 @@ moveGenericFieldArg: function {
     vt: ztypes.tid
 } is {
     stampArgDisposition :st :ast op: arg.operation own: ztypes.zparamownership.takeMode
-    errM: st.typing.errors.length
+    errM: st.typing.reportCount
     refuseBorrowedTake :st :ast n: opN :vt
-    if st.typing.errors.length == errM when (isMarkedMove :ast n: opN).not then {
+    if st.typing.reportCount == errM when (isMarkedMove :ast n: opN).not then {
         checkFieldMove :st :ast n: opN
     }
 }
@@ -7755,7 +7755,7 @@ checkImplicitReturn: function {
         lineType: (walkTypeOf :st nid: lsid)
     )
     if valId.isZero then {
-        if st.typing.errors.length == bodyErrs then reportValuelessTail :st :ast :defn :lsid :expR
+        if st.typing.reportCount == bodyErrs then reportValuelessTail :st :ast :defn :lsid :expR
         return
     }
     argT: walkTypeOf :st nid: valId

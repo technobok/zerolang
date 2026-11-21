@@ -463,9 +463,9 @@ checkCapacityArg: function {
     argId: zast.nodeid
     argOpId: zast.nodeid
 } is {
-    errC: st.typing.errors.length
+    errC: st.typing.reportCount
     vt: checkValueAt :st :unitDecl :ast nid: argOpId
-    if st.typing.errors.length != errC then return
+    if st.typing.reportCount != errC then return
     if vt.isZero then {
         ubn: unresolvedBareCallable :ast :st :unitDecl nid: argOpId
         if ubn.length > 0 then reportUnknownNameAt :st :ast nid: argOpId name: ubn
@@ -1736,13 +1736,13 @@ checkClauseCondition: function {
     cond: argref
     boolId: ztypes.tid
 } is {
-    errC: st.typing.errors.length
+    errC: st.typing.reportCount
     ctv: checkValueAt :st :unitDecl :ast nid: cond.operation
     # a condition that typed to nothing and raised nothing is an
     # unresolvable name, exactly as in a binding or an operand: the
     # 0 disables the bool check below, and the emitter would write
     # the bare name into the C.
-    if ctv.isZero when st.typing.errors.length == errC then {
+    if ctv.isZero when st.typing.reportCount == errC then {
         reportUnresolvedValue :st :unitDecl :ast nid: cond.operation
         refuseUntypedValue :st :ast nid: cond.operation
     }
@@ -2040,7 +2040,7 @@ checkAssignmentIn: function {
     asgn: asgnref
     grey: ztypes.declid
 } is {
-    errsBefore: st.typing.errors.length
+    errsBefore: st.typing.reportCount
     # an `if` or a `match` that is the whole value runs as statements, so its
     # arms may leave
     outerForm: st.walk.formValueNid
@@ -2049,7 +2049,7 @@ checkAssignmentIn: function {
     st.walk.formValueNid = outerForm
     mvt: materialiseLiteral :ast :st t: vt
     vt = mvt
-    if vt.isZero when st.typing.errors.length == errsBefore then {
+    if vt.isZero when st.typing.reportCount == errsBefore then {
         reportUnresolvedValue :st :unitDecl :ast nid: asgn.value
         refuseUntypedValue :st :ast nid: asgn.value
     }
@@ -2287,7 +2287,7 @@ checkReassignment: function {
     ast: Ast
     rasgn: reasgref
 } is {
-    errsBeforeTarget: st.typing.errors.length
+    errsBeforeTarget: st.typing.reportCount
     lvt: refillTargetType :st :ast :rasgn
     if lvt.isZero then {
         st.mode.inAssignTarget = true
@@ -2297,7 +2297,7 @@ checkReassignment: function {
     # a target that resolved to nothing and raised nothing: an unresolvable
     # root name is an unknown reference, as at a read -- a local is not in
     # scope before the line that binds it
-    if lvt.isZero when st.typing.errors.length == errsBeforeTarget then {
+    if lvt.isZero when st.typing.reportCount == errsBeforeTarget then {
         unresolvedTarget: unresolvedBareCallable :ast :st :unitDecl nid: rasgn.topath
         if unresolvedTarget.length > 0 then (
             reportUnknownNameAt
@@ -2310,7 +2310,7 @@ checkReassignment: function {
     # a target the walk accepted may still name no storage: the value is walked
     # for its own mistakes, and nothing below is asked of a slot that is not one
     addressable: isAddressableTarget :ast :st nid: rasgn.topath
-    if st.typing.errors.length == errsBeforeTarget when addressable.not then {
+    if st.typing.reportCount == errsBeforeTarget when addressable.not then {
         reportNotAddressable :st :ast target: rasgn.topath write: "reassignment"
         checkMovedValueAt :st :unitDecl :ast nid: rasgn.value owning: false
         return
@@ -2372,7 +2372,7 @@ checkReassignment: function {
     ) then return
     if (refuseModeChange :st :ast :rasgn targetHeld: hbVid.notZero vt: ztypes.tid) then return
     moves.checkWriteLock :st :ast n: (ast.nodes.get i: rasgn.topath) verb: "assign to" moving: false
-    errsBeforeValue: st.typing.errors.length
+    errsBeforeValue: st.typing.reportCount
     # a function-typed target is written a reference as any value is: a bare
     # callable path is called, and `.copy` is the reference
     owPrev: st.walk.value.owningValueNid
@@ -2381,7 +2381,7 @@ checkReassignment: function {
     st.walk.value.owningValueNid = owPrev
     # a value that resolved to nothing and raised nothing: an unresolvable
     # root name is an unknown reference, as at a binding
-    if rvt.isZero when st.typing.errors.length == errsBeforeValue then {
+    if rvt.isZero when st.typing.reportCount == errsBeforeValue then {
         unresolvedValue: unresolvedBareCallable :ast :st :unitDecl nid: rasgn.value
         if unresolvedValue.length > 0 then (
             reportUnknownNameAt
@@ -2506,9 +2506,9 @@ checkRepoint: function {
         )
         return
     }
-    errR: st.typing.errors.length
+    errR: st.typing.reportCount
     rvt: checkValueAt :st :unitDecl :ast nid: rasgn.value
-    if rvt.isZero or (st.typing.errors.length != errR) then return
+    if rvt.isZero or (st.typing.reportCount != errR) then return
     numerics.checkReassignedType :st :ast :rasgn :lvt :rvt
     bpins: List ztyping.PinPath
     rread: (
@@ -2946,12 +2946,12 @@ checkSwap: function {
     ast: Ast
     swapnode: swapref
 } is {
-    errL: st.typing.errors.length
+    errL: st.typing.reportCount
     lwt: walkSwapSide :st :unitDecl :ast side: swapnode.lhs
-    lok: st.typing.errors.length == errL
-    errR: st.typing.errors.length
+    lok: st.typing.reportCount == errL
+    errR: st.typing.reportCount
     rwt: walkSwapSide :st :unitDecl :ast side: swapnode.rhs
-    rok: st.typing.errors.length == errR
+    rok: st.typing.reportCount == errR
     lt: checkSwapSide :st :unitDecl :ast :swapnode side: swapnode.lhs walked: lwt ok: lok
     rt: checkSwapSide :st :unitDecl :ast :swapnode side: swapnode.rhs walked: rwt ok: rok
     if lt.isZero then return
@@ -3018,9 +3018,9 @@ checkSwapSide: function {
         return none
     }
     if (refuseSingletonWrite :st :ast target: side) then return none
-    errW: st.typing.errors.length
+    errW: st.typing.reportCount
     moves.checkWriteLock :st :ast n: (ast.nodes.get i: side) verb: "swap" moving: false
-    if st.typing.errors.length != errW then return none
+    if st.typing.reportCount != errW then return none
     if (
         refuseBorrowedWrite
         :st
@@ -3177,14 +3177,14 @@ checkWith: function {
     withMarker: st.pushBlock node: withnode.nid
     # the name is bound, grey, while its value is checked
     grey: st.beginLocal nameId: withnode.name
-    errW: st.typing.errors.length
+    errW: st.typing.reportCount
     vt: checkValueAt :st :unitDecl :ast nid: withnode.value
     # a literal bound to a name takes its default, as a plain binding's does:
     # a literal type has no run-time variable
     vt = materialiseLiteral :ast :st t: vt
     if (flow.refuseUnitValue :st :ast :vt nid: withnode.value) then vt = ztypes.tid
     refuseValueBorrow :st :ast :vt value: withnode.value
-    if vt.u64 == 0 when st.typing.errors.length == errW then {
+    if vt.u64 == 0 when st.typing.reportCount == errW then {
         reportUnresolvedValue :st :unitDecl :ast nid: withnode.value
     }
     # a value that failed still binds its name, typeless, so the body's reads
@@ -3622,7 +3622,7 @@ checkForConditionIn: function {
     if isEach then fbnId = zast.atomNameIdOf n: (ast.nodes.get i: cond.operation)
     facId: forFactoryTid :st :unitDecl :ast :fbnId
     vt: ztypes.tid
-    errC: st.typing.errors.length
+    errC: st.typing.reportCount
     # An `each` header's value is the ITERATOR, not a call. `for each x: 5.times loop`
     # lowers to a counted C loop and emits no call at all, so a member that
     # keeps its FUNCTION stamp here is legitimate and its arity never
@@ -3656,7 +3656,7 @@ checkForConditionIn: function {
     # a condition that typed to nothing and raised nothing is an
     # unresolvable name -- the same rule the binding and operand sites
     # follow. Without it the emitter writes the bare name into the C.
-    if vt.isZero when st.typing.errors.length == errC then {
+    if vt.isZero when st.typing.reportCount == errC then {
         reportUnresolvedValue :st :unitDecl :ast nid: cond.operation
         refuseUntypedValue :st :ast nid: cond.operation
     }
@@ -3700,9 +3700,9 @@ checkForPostcondition: function {
     pcOp: pcId
     pc: argRefAt :ast nid: pcOp
     if pc.nid.notZero then pcOp = pc.operation
-    errP: st.typing.errors.length
+    errP: st.typing.reportCount
     pcVt: checkValueAt :st :unitDecl :ast nid: pcOp
-    if pcVt.isZero when st.typing.errors.length == errP then {
+    if pcVt.isZero when st.typing.reportCount == errP then {
         reportUnresolvedValue :st :unitDecl :ast nid: pcOp
         refuseUntypedValue :st :ast nid: pcOp
     }
@@ -4616,7 +4616,7 @@ caseSubjectTid: function {
     ast: Ast
     casenode: caseref
 } out ztypes.tid is {
-    errS: st.typing.errors.length
+    errS: st.typing.reportCount
     subjT: checkValueAt :st :unitDecl :ast nid: casenode.subject
     # a numeric generic parameter is dissected per mono, never matched as the
     # number it reads as
@@ -4626,7 +4626,7 @@ caseSubjectTid: function {
         return gs
     }
     if subjT.isZero then subjT = caseGenericSubjectTid :st :unitDecl :ast :casenode
-    if subjT.isZero when st.typing.errors.length == errS then {
+    if subjT.isZero when st.typing.reportCount == errS then {
         reportUnresolvedValue :st :unitDecl :ast nid: casenode.subject
     }
     # a subject no variable holds -- a call's owning result -- is held, and

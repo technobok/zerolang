@@ -218,7 +218,7 @@ checkProjectionCreate: function {
         found = true
         # a projection or construction as the source is a temporary this one
         # consumes or re-views, so it owns what it holds
-        pErrs: st.typing.errors.length
+        pErrs: st.typing.reportCount
         pvt: checkOwnedValueAt :st :unitDecl :ast nid: arg.operation
         if (projectionSourceRefused :st :unitDecl :ast :pjId value: pvt :arg errMark: pErrs
         ) then continue
@@ -351,7 +351,7 @@ reportUnresolvedCastArg: function {
     errMark: u64
 } is {
     if vt.notZero then return
-    if st.typing.errors.length != errMark then return
+    if st.typing.reportCount != errMark then return
     ub: valuechecks.unresolvedBareCallable :ast :st :unitDecl nid: argId
     if ub.length == 0 then return
     um: "Unknown reference '\{ub}'"
@@ -465,7 +465,7 @@ checkTypedefCreate: function {
             }
             if isFrom then {
                 found = true
-                errsBefore: st.typing.errors.length
+                errsBefore: st.typing.reportCount
                 # a construction as the source is a temporary the cast takes
                 vt: checkOwnedValueAt :st :unitDecl :ast nid: arg.operation
                 (
@@ -1833,9 +1833,9 @@ checkTypedCallArg: function {
     # `.take` on one is checked where the marker is
     if dispHit when isTake then {
         opN: ast.nodes.get i: arg.operation
-        errM: st.typing.errors.length
+        errM: st.typing.reportCount
         moves.refuseBorrowedTake :st :ast n: opN :vt
-        if st.typing.errors.length == errM when (moves.isMarkedMove :ast n: opN).not then {
+        if st.typing.reportCount == errM when (moves.isMarkedMove :ast n: opN).not then {
             moves.checkFieldMove :st :ast n: opN
         }
     }
@@ -1914,7 +1914,7 @@ walkOneCallArg: function {
     arg: argRefAt :ast nid: argId
     if arg.nid.notZero then {
         vt: ztypes.tid
-        errV: st.typing.errors.length
+        errV: st.typing.reportCount
         # a type argument names a type: it constructs nothing. A leading one
         # may go unlabelled (`(intrange u8 cur: 0 ..)`), as the scan binds it
         isTypeArg: false
@@ -1975,7 +1975,7 @@ walkOneCallArg: function {
                 :vt
             )
         }
-        if vt.u64 == 0 when st.typing.errors.length == errV then {
+        if vt.u64 == 0 when st.typing.reportCount == errV then {
             valuechecks.reportUnresolvedValue :st :unitDecl :ast nid: arg.operation
         }
         # A value that did not type must not take its LABEL checks down
@@ -2426,7 +2426,7 @@ checkYieldCall: function {
             kYa = kYa + 1
             ya: argRefAt :ast nid: yaId
             if ya.nid.notZero then {
-                yErrs: st.typing.errors.length
+                yErrs: st.typing.reportCount
                 yaT: checkOwnedValueAt :st :unitDecl :ast nid: ya.operation
                 (
                     reportUnresolvedCastArg
@@ -2545,7 +2545,7 @@ checkTaggedCtorArg: function {
                 msg: uum
             )
         }
-        uErrs: st.typing.errors.length
+        uErrs: st.typing.reportCount
         uvt: valuechecks.checkMovedValueAt :st :unitDecl :ast nid: arg.operation owning: true
         reportUnresolvedCastArg :st :unitDecl :ast argId: arg.operation vt: uvt errMark: uErrs
         # the value built keeps what its payload keeps
@@ -2712,7 +2712,7 @@ checkDottedTypeApplication: function {
         gtdD: typeargs.checkGenericTypedefCall :st :unitDecl :ast :call :tplId
         if gtdD.handled then return gtdD
     }
-    errD: st.typing.errors.length
+    errD: st.typing.reportCount
     vokD: typeargs.validateGenericTypeArgs :ast :st :unitDecl :call :tplId allowFrom: false
     gres: instantiate.genericTypeConstruction :ast :st :unitDecl :call :tplId
     namesType: memberaccess.pathNamesType :st :ast nid: call.callable
@@ -2888,7 +2888,7 @@ fieldBoundGenericConstruction: function {
     # the template answers the construction rules for every instance of it, and
     # asked before inference, a sum is refused by its rule rather than by the
     # arms inference would read as fields
-    if vok when st.typing.errors.length == errB when (
+    if vok when st.typing.reportCount == errB when (
         refuseNameConstruction
         :ast
         :st
@@ -2904,7 +2904,7 @@ fieldBoundGenericConstruction: function {
     }
     # a refused argument is reported; inference would only report it again
     # as a parameter it cannot infer
-    if vok when st.typing.errors.length == errB then {
+    if vok when st.typing.reportCount == errB then {
         gmid = (
             instantiate.inferGenericConstruction
             :st
@@ -2949,7 +2949,7 @@ fieldBoundGenericConstruction: function {
     # emitted (unknown/duplicate by validation, or cannot-infer
     # by inferGenericConstruction): resolve to the template so a
     # single diagnostic stands without a downstream cascade.
-    if st.typing.errors.length > errB then {
+    if st.typing.reportCount > errB then {
         sttE: tplId
         stampGate :st nid: call.nid tid: sttE
         return (callleg handled: true tid: tplId)
@@ -2982,7 +2982,7 @@ checkBareGenericCall: function {
             gtd: typeargs.checkGenericTypedefCall :st :unitDecl :ast :call tplId: funcId
             if gtd.handled then return gtd
         }
-        errB: st.typing.errors.length
+        errB: st.typing.reportCount
         vok: (
             typeargs.validateGenericTypeArgs
             :ast
@@ -3084,9 +3084,9 @@ reportValueCalledWithArgs: function {
     # value -- is typed here, by the walk any other value gets. A walk that
     # reports its own error says all there is to say about the callee.
     if vt.isZero then {
-        errC: st.typing.errors.length
+        errC: st.typing.reportCount
         vt = checkValueAt :st :unitDecl :ast nid: call.callable
-        if st.typing.errors.length != errC then return
+        if st.typing.reportCount != errC then return
     }
     if vt.isZero then {
         # said only of a program nothing else is wrong with: what left the
@@ -3734,10 +3734,10 @@ checkWrappedCall: function {
     ast: Ast
     call: callref
 } out ztypes.tid is {
-    errX: st.typing.errors.length
+    errX: st.typing.reportCount
     if call.nargs > 0 then st.walk.typeAppsNamed.add item: call.callable
     wcv: checkValueAt :st :unitDecl :ast nid: call.callable
-    if wcv.u64 == 0 when st.typing.errors.length == errX then {
+    if wcv.u64 == 0 when st.typing.reportCount == errX then {
         valuechecks.reportUnresolvedValue :st :unitDecl :ast nid: call.callable
     }
     if wcv.u64 == 0 then return ztypes.tid.zero
@@ -4600,7 +4600,7 @@ inferGenericCallSubs: function {
             if argNumeric.not then bodies.bindExplicitTypeArg :st :unitDecl :ast :arg :subs
             continue
         }
-        errG: st.typing.errors.length
+        errG: st.typing.reportCount
         # `_` is the parameter's type here too: this walk is the argument's first
         spellArgUnderscore :st :ast :unitDecl effId: funcId :arg
         avt: checkValueAt :st :unitDecl :ast nid: arg.operation
@@ -4656,7 +4656,7 @@ reportUntypedGenericArg: function {
     avt: ztypes.tid
     errG: u64
 } is {
-    if (avt.u64 != 0) or (st.typing.errors.length != errG) then return
+    if (avt.u64 != 0) or (st.typing.reportCount != errG) then return
     valuechecks.reportUnresolvedValue :st :unitDecl :ast nid: arg.operation
     reportUntypedCallArg :st :unitDecl :ast nid: arg.operation
 }
