@@ -4645,16 +4645,31 @@ markAggsReached: function {ast: Ast.view st: zenv.ZSymbolTable} is {
 }
 
 # markAggReached -- aggregate row `id` and the aggregates it holds are reached
-# from the run-time use at `at`; each, the first time, has its untyped numbers
-# checked against i64 and f64, reported at that use.
+# from the run-time use at `at`, which the emitter writes out once. Its untyped
+# numbers are checked against i64 and f64, reported at the use, once for each
+# SOURCE the row is reached from (aggSourceKey): two constants of one value
+# are two mistakes, one constant used twice is one. Equal values share a row,
+# so the row alone cannot say which.
 markAggReached: function {ast: Ast.view st: zenv.ZSymbolTable id: u32 at: zast.nodeid} is {
     if (id == 0) or (aggHasNoValue :st :id) then return
+    first: false
     {
         g: st.typing.constAggs.getMut i: id.u64
-        if g.reached then return
+        first = g.reached.not
         g.reached = true
     }
-    markAggItemsReached :ast :st :id :at
+    key: aggSourceKey :st :id :at
+    check: (st.walk.consts.aggsChecked.has item: key).not
+    if check then st.walk.consts.aggsChecked.add item: key
+    if first or check then markAggItemsReached :ast :st :id :at :check
+}
+
+# aggSourceKey -- the row `id` with the source a use at `at` reaches it from:
+# the declaration the use reads (a constant), else the use's own node.
+aggSourceKey: function {st: zenv.ZSymbolTable.view id: u32 at: zast.nodeid} out u64 is {
+    src: (st.typing.refDecl.get key: at).or d: ztypes.declid
+    if src.notZero then return (id.u64 << 33) | src.u64
+    return (id.u64 << 33) | ((1.u64 << 32) | at.u64)
 }
 
 # markAggItemsReached -- the aggregates row `id` holds are reached with it. A
@@ -4662,7 +4677,14 @@ markAggReached: function {ast: Ast.view st: zenv.ZSymbolTable id: u32 at: zast.n
 # reached. A choice value is written inside its holder, in braces
 # (staticChoiceInit), so it has no object of its own there: only what it holds
 # is reached.
-markAggItemsReached: function {ast: Ast.view st: zenv.ZSymbolTable id: u32 at: zast.nodeid} is {
+markAggItemsReached: function {
+    ast: Ast.view
+    st: zenv.ZSymbolTable
+    id: u32
+    at: zast.nodeid
+    # the row's untyped numbers are checked from this use
+    check: bool
+} is {
     start: u64
     count: u64
     {
@@ -4676,12 +4698,12 @@ markAggItemsReached: function {ast: Ast.view st: zenv.ZSymbolTable id: u32 at: z
         k = k + 1
         if v.kind.aggKind then {
             if (st.typing.constAggs.get i: v.aggId.u64).kind.staticChoice then {
-                markAggItemsReached :ast :st id: v.aggId :at
+                markAggItemsReached :ast :st id: v.aggId :at :check
             } else {
                 markAggReached :ast :st id: v.aggId :at
             }
         }
-        consteval.refuseWideAggItem :ast :st :v :at
+        if check then consteval.refuseWideAggItem :ast :st :v :at
     }
 }
 
