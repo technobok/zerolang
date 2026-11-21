@@ -1053,41 +1053,6 @@ coercePositionalArg: function {
     checkArgTypeMismatch :st :ast ptid: cpidP :vt :pnId :arg
 }
 
-# coerceArgToParam -- check a named argument against the parameter it binds to:
-# that the types are compatible, and that a literal coerces to the parameter's
-# width rather than carrying its own default.
-coerceArgToParam: function {
-    st: zenv.ZSymbolTable
-    ast: Ast
-    effId: ztypes.tid
-    vt: ztypes.tid
-    # the parameter's name (the label's, or the positional slot's)
-    pnId: zast.nameid
-    boundArgIds: ListVal zast.nameid
-    # report a parameter given twice: every call but a construction's second
-    # walk (checkUntypedArgLabel answers the same)
-    reportDuplicate: bool
-    wasPos: bool
-    arg: argref
-} is {
-    if effId.isZero then return
-    if pnId.isZero then return
-    # the parameter's pool id is identity enough: effId is
-    # fixed across this call's argument walk, so two args
-    # collide exactly when they name the same parameter
-    dcnid: pnId
-    dupSeen: false
-    for each bId: boundArgIds loop {
-        if bId == dcnid then dupSeen = true
-    }
-    if dupSeen when reportDuplicate then {
-        callchecks.reportArgGivenTwice :st :ast :pnId :arg
-    } else {
-        boundArgIds.append dcnid
-    }
-    if wasPos then coercePositionalArg :st :ast :effId :vt :pnId :arg
-}
-
 # argMismatchSkipped -- the argument/parameter pairs a plain type compare does
 # not decide: two numerics coerce, and a spec, a generic parameter and a
 # function type each carry their own implementation rule.
@@ -1449,25 +1414,20 @@ checkArgTypeMismatch: function {
     )
 }
 
-# checkNamedArgParam -- a labelled argument must name a parameter the callee
-# has, and its value must fit that parameter's type.
-checkNamedArgParam: function {
+# checkNamedArgType -- a labelled argument's value must fit the type of the
+# parameter its label names (a label naming none is the binder's report).
+checkNamedArgType: function {
     st: zenv.ZSymbolTable
     ast: Ast
     effId: ztypes.tid
-    # the label's name, zero for a positional argument
+    # the label's name
     pnId: zast.nameid
     vt: ztypes.tid
     arg: argref
 } is {
-    if pnId.isZero then return
-    if effId.isZero then return
-    if (st.typing.declMemberCount ownerTid: effId) == 0 then return
+    if pnId.isZero or effId.isZero then return
     pcidX: (st.typing.declChildOfId parentTypeId: effId nameId: pnId).or d: ztypes.tid.zero
-    if pcidX.isZero then {
-        callchecks.reportUnknownArgument :st :ast ownerTid: effId label: pnId :arg
-        return
-    }
+    if pcidX.isZero then return
     checkArgTypeMismatch :st :ast ptid: pcidX :vt :pnId :arg
 }
 
