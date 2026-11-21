@@ -711,41 +711,59 @@ ctorSelfRecursionAt: function {
     return true
 }
 
-# positionalParamNameId -- the funcId's parameter name at `idx` (declaration
-# order), zero when absent. Positional call args map to it. With
-# skipRecv, receiver rows (`this` or the fn's recorded receiver name) are excluded
-# from the count: a dotted method call supplies the receiver implicitly, so
-# its positional args map onto the remaining params.
-positionalParamNameId: function {
-    # the symbol table the parameter rows are read from
+# unlabelledParamOf -- THE PARAMETER A CALL'S UNLABELLED ARGUMENT BINDS, zero for
+# none (docs/spec.pdoc, call arguments): the callee's first declared parameter;
+# where it declares a receiver, the first one after it when the dot supplied the
+# receiver (`recvImplicit`), and the receiver itself when the call leaves the
+# receiver to its arguments. A construction (`isCtor`) reads its first field the
+# same way. The parameters are the callee's data rows (conform.dataFieldKeeps,
+# the list its C is laid out from); a field that takes no argument
+# (asksNoArgument) holds no position. A call carries at most one unlabelled
+# argument, and the grammar puts it first, so there is no position to count.
+unlabelledParamOf: function {
     st: zenv.ZSymbolTable.view
-    # the function whose parameter list is walked
-    funcId: ztypes.tid
-    # the positional index asked for
-    idx: u64
-    # whether receiver rows are left out of the count
-    skipRecv: bool
+    ast: Ast.view
+    # the callee, or a construction's effective type
+    effId: ztypes.tid
+    isCtor: bool
+    recvImplicit: bool
 } out zast.nameid is {
-    seen: u64
-    ppi: u64
-    ppn: st.typing.declRowSlots ownerTid: funcId
-    for ppi < ppn loop {
-        prow: st.typing.declRowAt ownerTid: funcId membersOnly: false slot: ppi
-        ppi = ppi + 1
-        if prow.keep then {
-            pnid: prow.name
-            isRecv: false
-            if skipRecv then {
-                if pnid == zast.wellKnown.slot.wkThis then isRecv = true
-                if (st.reg.thisParamNameIs tid: funcId nameId: pnid) then isRecv = true
-            }
-            if isRecv.not then {
-                if seen == idx then return pnid
-                seen = seen + 1
-            }
+    if effId.isZero then return zast.nameid
+    isFn: (st.reg.typetypeOf typeId: effId) == ztypes.ztypetype.functionType
+    mkIds: ListVal zast.nameid
+    if isFn.not then (
+        conform.implementationMarkerIds
+        reg: st.reg
+        typing: st.typing
+        tid: effId
+        ids: mkIds
+    )
+    thisPnId: zast.nameid
+    if isCtor.not then thisPnId = receiverParamNameOf :st tid: effId
+    first: zast.nameid
+    n: st.typing.declRowSlots ownerTid: effId
+    i: u64
+    for i < n loop {
+        row: st.typing.declRowAt ownerTid: effId membersOnly: true slot: i
+        i = i + 1
+        if (conform.dataFieldKeeps reg: st.reg typing: st.typing tid: effId :row :isFn :mkIds
+        ).not then continue
+        if isCtor.not when (isReceiverParamName pnameId: row.name :thisPnId) then {
+            if recvImplicit.not then return row.name
+        } else if first.isZero when (
+            asksNoArgument
+            :st
+            :ast
+            :isCtor
+            :effId
+            pcid: row.tid
+            nameId: row.name
+        ).not then {
+            first = row.name
+            if isCtor or recvImplicit then return first
         }
     }
-    return zast.nameid
+    return first
 }
 
 # methodKeeperOf -- what could keep a value a call takes past the call: the
@@ -824,15 +842,15 @@ ctorFieldIsFilled: function {
     return ownTT.isFieldwise
 }
 
-# ctorArgProvided -- the caller supplied this parameter, by taking its
-# positional slot or by naming it.
+# ctorArgProvided -- the caller supplied this parameter, by the unlabelled
+# argument (`positional`, the parameter it binds; 0 when there is none) or by
+# naming it.
 ctorArgProvided: function {
     provided: (ListVal zast.nameid).view
-    posCount: u64
-    posI: u64
+    positional: zast.nameid
     nameId: zast.nameid
 } out bool is {
-    if posI < posCount then return true
+    if positional.notZero when nameId == positional then return true
     found: false
     for each pv: provided loop {
         if pv == nameId then found = true
@@ -883,7 +901,8 @@ missingCtorFields: function {
         ids: mkIds
     )
     thisPnId: receiverParamNameOf :st tid: effId
-    vpos: u64
+    positional: zast.nameid
+    if posCount > 0 then positional = unlabelledParamOf :st :ast :effId :isCtor :recvImplicit
     ri: u64
     nr: st.typing.declRowSlots ownerTid: effId
     for ri < nr loop {
@@ -893,18 +912,14 @@ missingCtorFields: function {
         ).not then continue
         pcid: row.tid
         pnameId: row.name
-        # THE RECEIVER IS REQUIRED WHENEVER NOTHING ELSE SUPPLIED IT, and it is
-        # the first declared parameter, so it also takes positional slot 0.
-        # Skipping it unconditionally credited that slot to the NEXT parameter,
-        # which is how `point.sub p` -- receiver given, `a` omitted -- ran with
-        # `a` at zero instead of being reported.
+        # THE RECEIVER IS REQUIRED WHENEVER NOTHING ELSE SUPPLIED IT: through a
+        # type, the unlabelled argument is the receiver (unlabelledParamOf), so
+        # `point.sub p` -- receiver given, `a` omitted -- reports `a`.
         if recvImplicit when (isReceiverParamName :pnameId :thisPnId) then continue
         if (asksNoArgument :st :ast :isCtor :effId :pcid nameId: pnameId) then continue
-        posI: vpos
-        vpos = vpos + 1
         pnId: pnameId
-        if (fieldSupplied :st :isCtor :effId :pcid :pnId :provided :posCount :posI) then {
-            walkDefaultedFnField :st :ast :isCtor :effId :pcid :pnId :provided :posCount :posI
+        if (fieldSupplied :st :isCtor :effId :pcid :pnId :provided :positional) then {
+            walkDefaultedFnField :st :ast :isCtor :effId :pcid :pnId :provided :positional
             continue
         }
         missingNames.append (zast.nameTextCopy :ast ref: pnId)
@@ -923,11 +938,10 @@ walkDefaultedFnField: function {
     pcid: ztypes.tid
     pnId: zast.nameid
     provided: (ListVal zast.nameid).view
-    posCount: u64
-    posI: u64
+    positional: zast.nameid
 } is {
     if isCtor.not then return
-    if (ctorArgProvided :provided :posCount :posI nameId: pnId) then return
+    if (ctorArgProvided :provided :positional nameId: pnId) then return
     if (ctorFieldIsFilled :st ownerTid: effId fieldTid: pcid) then (
         valuechecks.walkDefinitionById
         :st
@@ -945,7 +959,7 @@ isReceiverParamName: function {pnameId: zast.nameid thisPnId: zast.nameid} out b
 
 # fieldSupplied -- a required field/param of `effId` that needs no argument
 # here: a construction's field filled some other way, one with a default, or
-# one the call's labels or positional count already cover.
+# one the call's labels or unlabelled argument already cover.
 fieldSupplied: function {
     st: zenv.ZSymbolTable
     isCtor: bool
@@ -953,12 +967,11 @@ fieldSupplied: function {
     pcid: ztypes.tid
     pnId: zast.nameid
     provided: (ListVal zast.nameid).view
-    posCount: u64
-    posI: u64
+    positional: zast.nameid
 } out bool is {
     if isCtor when (ctorFieldIsFilled :st ownerTid: effId fieldTid: pcid) then return true
     if (st.typing.declHasDefaultId parentTypeId: effId nameId: pnId) then return true
-    return (ctorArgProvided :provided :posCount :posI nameId: pnId)
+    return (ctorArgProvided :provided :positional nameId: pnId)
 }
 
 # receiverParamNameOf -- the pool id of a method's receiver-parameter name, 0
@@ -1076,8 +1089,8 @@ argbinding: record {
     positional: bool
 }
 
-# bindCallArg -- the parameter the call's `argIdx`-th argument `arg` binds: its
-# label's, else the slot its position names (an implicit receiver left out).
+# bindCallArg -- the parameter the call's argument `arg` binds: its label's, else
+# the one the unlabelled argument binds (unlabelledParamOf).
 # What the parameter list alone decides is reported here, once, whether or not
 # the value typed: the receiver supplied twice, a label no parameter has, a call
 # of something that takes none, a positional argument past the last parameter,
@@ -1087,7 +1100,6 @@ bindCallArg: function {
     ast: Ast.view
     call: callref
     ca: callargs
-    argIdx: u64
     bound: ListVal zast.nameid
     arg: argref
 } out argbinding is {
@@ -1109,7 +1121,14 @@ bindCallArg: function {
     )
     positional: pn.isZero
     if positional then {
-        pn = positionalParamNameId :st funcId: ca.effId idx: argIdx skipRecv: ca.recvImplicit
+        pn = (
+            unlabelledParamOf
+            :st
+            :ast
+            effId: ca.effId
+            isCtor: ca.isCtor
+            recvImplicit: ca.recvImplicit
+        )
         if pn.isZero when ca.isCtor.not then (
             reportSurplusPositional
             :st
@@ -1157,19 +1176,22 @@ bindParam: function {
 # refuseReceiverTwice -- THE RECEIVER IS SUPPLIED ONCE. An argument that names
 # the receiver parameter when the call already supplied it supplies it twice,
 # and emission binds one and drops the other -- a wrong answer taken from an
-# object the reader can plainly see being handed over.
+# object the reader can plainly see being handed over. True when it reported.
 refuseReceiverTwice: function {
     st: zenv.ZSymbolTable ast: Ast.view call: callref ca: callargs arg: argref
-} is {
-    if ca.isCtor or ca.funcId.isZero or arg.name.isZero then return
-    receiverName: st.reg.thisParamNameIdOf tid: ca.funcId
+} out bool is {
+    if ca.isCtor or ca.funcId.isZero or arg.name.isZero then return false
+    receiverName: receiverParamNameOf :st tid: ca.funcId
     if receiverName.isZero then receiverName = zast.wellKnown.slot.wkThis
-    if arg.name != receiverName then return
+    if arg.name != receiverName then return false
+    # a callee that declares no receiver has none to supply twice
+    if (st.typing.declChildOfId parentTypeId: ca.funcId nameId: receiverName).none then return false
     by9: receiverSuppliedBy :ast :call recvImplicit: ca.recvImplicit
-    if by9.length == 0 then return
+    if by9.length == 0 then return false
     lb9: zast.nameTextAt :ast ref: arg.name
     m9: "the receiver is supplied twice: by \{by9} and by '\{lb9}:'"
     addError :st nodeid: arg.nid lineno: arg.lineno colno: arg.colno e: zast.err.callError msg: m9
+    return true
 }
 
 # receiverSuppliedBy -- how a call ALREADY supplied its receiver, phrased the way
@@ -1485,17 +1507,20 @@ checkNativeTemplateArgs: function {
     tpl: st.reg.genericOriginOf tid: inst
     if tpl.isZero or (st.reg.isNativeOf tid: tpl).not then return
     tdecl: st.typing.declIdOfType typeId: tpl
-    pos: u64
     k: u64
     for k < call.nargs loop {
         arg: argRefAt :ast nid: (zast.callArgAt :ast nid: call.nid i: k)
         k = k + 1
         if arg.nid.isZero then continue
         pnId: arg.name
-        if pnId.isZero then {
-            pnId = positionalParamNameId :st :funcId idx: pos skipRecv: recvImplicit
-            pos = pos + 1
-        }
+        if pnId.isZero then pnId = (
+            unlabelledParamOf
+            :st
+            :ast
+            effId: funcId
+            isCtor: false
+            :recvImplicit
+        )
         if pnId.isZero then continue
         pt: (st.typing.declChildOfId parentTypeId: funcId nameId: pnId).or d: ztypes.tid.zero
         want: instanceArgFor :st :tdecl :inst param: pt
@@ -1641,7 +1666,6 @@ checkTypedCallArg: function {
     isCtor: bool
     reportUnknown: bool
     recvImplicit: bool
-    argIdx: u64
     boundArgIds: ListVal zast.nameid
     vt: ztypes.tid
     pins: List ztyping.PinPath
@@ -1653,7 +1677,7 @@ checkTypedCallArg: function {
     # the parameter's name travels as its id: the label's, or the positional
     # slot's; text is taken only where a report spells it
     ca: callargs :effId :funcId :isCtor :reportUnknown :recvImplicit
-    ab: bindCallArg :st :ast :call :ca :argIdx bound: boundArgIds :arg
+    ab: bindCallArg :st :ast :call :ca bound: boundArgIds :arg
     pnId: ab.pnId
     if ab.positional then {
         numerics.coercePositionalArg :st :ast :effId :vt :pnId :arg
@@ -1814,7 +1838,7 @@ walkOneCallArg: function {
         } else {
             # `_.ARM` / `_.create ...`: the `_` is the parameter's type, spelled
             # into the tree before the argument is walked
-            spellCallArgUnderscore :st :ast :unitDecl :effId :recvImplicit :argIdx :arg
+            spellCallArgUnderscore :st :ast :unitDecl :effId :isCtor :recvImplicit :arg
             caPrev: st.walk.value.callArgNode
             savedMode: st.mode
             st.walk.value.callArgNode = zast.nodeIdOf n: (ast.nodes.get i: arg.operation)
@@ -1822,7 +1846,7 @@ walkOneCallArg: function {
             # the view marker an argument's check reads is its own value's: one
             # an earlier argument left would make a plain field read a view
             st.walk.value.draft.marker = ztypes.zparamownership.noneMode
-            if (argSlotOwns :st :effId :funcId :isCtor :recvImplicit :argIdx :arg) then {
+            if (argSlotOwns :st :ast :effId :funcId :isCtor :recvImplicit :arg) then {
                 vt = (
                     valuechecks.checkMovedValueAt
                     :st
@@ -1855,7 +1879,7 @@ walkOneCallArg: function {
         # here for the arguments it would otherwise skip entirely.
         if vt.u64 == 0 then {
             ca: callargs :effId :funcId :isCtor :reportUnknown :recvImplicit
-            bindCallArg :st :ast :call :ca :argIdx bound: boundArgIds :arg
+            bindCallArg :st :ast :call :ca bound: boundArgIds :arg
         }
         # a label naming the template's own parameter supplies that parameter,
         # not one of the constructor's, and so does a leading type argument
@@ -1872,7 +1896,6 @@ walkOneCallArg: function {
             :isCtor
             :reportUnknown
             :recvImplicit
-            :argIdx
             :boundArgIds
             :vt
             :pins
@@ -1911,45 +1934,38 @@ underscoreRoot: function {ast: Ast.view op: zast.nodeid} out zast.nodeid is {
 }
 
 # spellCallArgUnderscore -- spellUnderscore for an argument of a concrete call:
-# the parameter is the label, else the one at the argument's position.
+# the parameter is the label, else the one the unlabelled argument binds.
 spellCallArgUnderscore: function {
     st: zenv.ZSymbolTable
     ast: Ast
     unitDecl: ztypes.declid
     effId: ztypes.tid
+    isCtor: bool
     recvImplicit: bool
-    argIdx: u64
     arg: argref
 } is {
     us: underscoreRoot :ast op: arg.operation
     if us.isZero then return
     pn: arg.name
-    if pn.isZero then pn = (
-        positionalParamNameId
-        :st
-        funcId: effId
-        idx: argIdx
-        skipRecv: recvImplicit
-    )
+    if pn.isZero then pn = unlabelledParamOf :st :ast :effId :isCtor :recvImplicit
     spellUnderscore :st :ast :unitDecl :effId pnId: pn at: us
 }
 
 # spellGenericArgUnderscore -- spellUnderscore for an argument of a generic
 # call, whose inference walks the arguments first: the parameter is the label,
-# else the name at the argument's position in `pNames`.
+# else the one the unlabelled argument binds.
 spellGenericArgUnderscore: function {
     st: zenv.ZSymbolTable
     ast: Ast
     unitDecl: ztypes.declid
     funcId: ztypes.tid
-    pNames: (ListVal zast.nameid).view
-    posIdx: u64
+    recvImplicit: bool
     arg: argref
 } is {
     us: underscoreRoot :ast op: arg.operation
     if us.isZero then return
     pn: arg.name
-    if pn.isZero when posIdx < pNames.length then pn = pNames.get i: posIdx
+    if pn.isZero then pn = unlabelledParamOf :st :ast effId: funcId isCtor: false :recvImplicit
     spellUnderscore :st :ast :unitDecl effId: funcId pnId: pn at: us
 }
 
@@ -2070,21 +2086,15 @@ ownershipCallee: function {
 # projection there takes its source (checkOwnedValueAt).
 argSlotOwns: function {
     st: zenv.ZSymbolTable.view
+    ast: Ast.view
     effId: ztypes.tid
     funcId: ztypes.tid
     isCtor: bool
     recvImplicit: bool
-    argIdx: u64
     arg: argref
 } out bool is {
     pnId: arg.name
-    if pnId.isZero then pnId = (
-        positionalParamNameId
-        :st
-        funcId: effId
-        idx: argIdx
-        skipRecv: recvImplicit
-    )
+    if pnId.isZero then pnId = unlabelledParamOf :st :ast :effId :isCtor :recvImplicit
     if pnId.isZero then return false
     ownFn: ownershipCallee :st :effId :funcId :isCtor
     oo: st.typing.declOwnershipOfId parentTypeId: ownFn nameId: pnId
@@ -4117,9 +4127,9 @@ isGenericParamLabel: function {
 }
 
 # argHolderSlot -- the declared parameter an argument binds: a LABEL names one,
-# and an unlabelled argument takes the next positional slot. A label naming no
-# parameter is reported here, which is the one place holding the owner to name
-# it against.
+# and an unlabelled argument binds the one unlabelledParamOf names. A label
+# naming no parameter is reported here, which is the one place holding the
+# owner to name it against.
 argHolderSlot: function {
     st: zenv.ZSymbolTable
     ast: Ast
@@ -4127,30 +4137,13 @@ argHolderSlot: function {
     funcId: ztypes.tid
     pNames: (ListVal zast.nameid).view
     pHolders: (ListVal zast.nameid).view
-    pHolderIds: (ListVal ztypes.tid).view
-    posIdx: u64
+    # the dot supplied the receiver, which pNames then leaves out
+    recvImplicit: bool
 } out holderslot is {
+    slotIdx: argParamSlot :st :ast :arg :funcId :pNames :recvImplicit
     holder: zast.nameid
-    slotIdx: pHolderIds.length
-    if arg.name.isZero then {
-        if posIdx < pHolders.length then {
-            holder = pHolders.get i: posIdx
-            slotIdx = posIdx
-        }
-        return (holderslot :holder slot: slotIdx)
-    }
-    argFound: false
-    hi: u64
-    hn2: pNames.length
-    for hi < hn2 loop {
-        if (pNames.get i: hi) == arg.name then {
-            holder = pHolders.get i: hi
-            slotIdx = hi
-            argFound = true
-        }
-        hi = hi + 1
-    }
-    if argFound.not then {
+    if slotIdx < pHolders.length then holder = pHolders.get i: slotIdx
+    if arg.name.notZero when slotIdx >= pNames.length then {
         reportUnknownArgument :st :ast ownerTid: funcId label: arg.name :arg
     }
     return (holderslot :holder slot: slotIdx)
@@ -4276,13 +4269,22 @@ recordArgType: function {argTypes: ListVal ztypes.tid at: u64 tid: ztypes.tid} i
     argTypes.set i: at val: tid
 }
 
-# argParamSlot -- the declared parameter an argument fills: the one its label
-# names (the parameter count for a label naming none), else the `posIdx`th
-argParamSlot: function {arg: argref pNames: (ListVal zast.nameid).view posIdx: u64} out u64 is {
-    if arg.name.isZero then return posIdx
+# argParamSlot -- the position in `pNames` of the parameter an argument of a
+# generic call fills: the one its label names, else the one the unlabelled
+# argument binds (unlabelledParamOf); the parameter count for none.
+argParamSlot: function {
+    st: zenv.ZSymbolTable.view
+    ast: Ast.view
+    arg: argref
+    funcId: ztypes.tid
+    pNames: (ListVal zast.nameid).view
+    recvImplicit: bool
+} out u64 is {
+    pn: arg.name
+    if pn.isZero then pn = unlabelledParamOf :st :ast effId: funcId isCtor: false :recvImplicit
     i: u64
     for i < pNames.length loop {
-        if (pNames.get :i) == arg.name then return i
+        if (pNames.get :i) == pn then return i
         i = i + 1
     }
     return pNames.length
@@ -4304,18 +4306,18 @@ checkPartialParamArgs: function {
     pHolderIds: (ListVal ztypes.tid).view
     # each argument's walked type, by position (inferGenericCallSubs)
     argTypes: (ListVal ztypes.tid).view
+    # the dot supplied the receiver, which pNames then leaves out
+    recvImplicit: bool
 } is {
     instIds: ListVal ztypes.tid
     instNames: ListVal zast.nameid
     conform.dataFieldIds reg: st.reg typing: st.typing tid: mid ids: instIds nameIds: instNames
-    posIdx: u64
     k: u64
     for k < call.nargs loop {
         arg: argRefAt :ast nid: (zast.callArgAt :ast nid: call.nid i: k)
         k = k + 1
         if arg.nid.isZero or (isGenericParamLabel :gparams label: arg.name) then continue
-        slot: argParamSlot :arg :pNames :posIdx
-        posIdx = posIdx + 1
+        slot: argParamSlot :st :ast :arg :funcId :pNames :recvImplicit
         if (slot >= pHolderIds.length) or (slot >= instIds.length) then continue
         if (st.reg.isPartialOf tid: (pHolderIds.get i: slot)).not then continue
         ptid: instIds.get i: slot
@@ -4473,8 +4475,9 @@ inferGenericCallSubs: function {
     # only when `wantTypes`
     argTypes: ListVal ztypes.tid
     wantTypes: bool
+    # the dot supplied the receiver, which pNames then leaves out
+    recvImplicit: bool
 } is {
-    posIdx: u64
     lockMark: st.argLocks.length
     # the parameters bound so far: a second binding is refused (bindParam)
     bound: ListVal zast.nameid
@@ -4484,7 +4487,7 @@ inferGenericCallSubs: function {
         :funcId
         isCtor: false
         reportUnknown: true
-        recvImplicit: false
+        :recvImplicit
     )
     kAiter: u64
     for kAiter < call.nargs loop {
@@ -4502,12 +4505,13 @@ inferGenericCallSubs: function {
         }
         errG: st.typing.errors.length
         # `_` is the parameter's type here too: this walk is the argument's first
-        spellGenericArgUnderscore :st :ast :unitDecl :funcId :pNames :posIdx :arg
+        spellGenericArgUnderscore :st :ast :unitDecl :funcId :recvImplicit :arg
         avt: checkValueAt :st :unitDecl :ast nid: arg.operation
         if wantTypes then recordArgType :argTypes at: kAiter - 1 tid: avt
         reportUntypedGenericArg :st :unitDecl :ast :arg :avt :errG
-        hs: argHolderSlot :st :ast :arg :funcId :pNames :pHolders :pHolderIds :posIdx
-        posIdx = posIdx + 1
+        # the receiver named when the dot supplied it binds nothing more
+        if (refuseReceiverTwice :st :ast :call :ca :arg) then continue
+        hs: argHolderSlot :st :ast :arg :funcId :pNames :pHolders :recvImplicit
         if hs.slot < pHolderIds.length when (
             bindParam
             :st
@@ -4640,8 +4644,8 @@ composeChildRecord: function {st: zenv.ZSymbolTable nid: zast.nodeid} is {
 
 # checkConstantCallArgs -- the arguments of a unit-level call against the
 # callee's parameters, as a body checks them: each label names one, an
-# unlabelled argument takes the first slot after the receiver (`recvImplicit`)
-# or the first, every required one is given, and each value fits its parameter.
+# unlabelled argument binds the one unlabelledParamOf names, every required one
+# is given, and each value fits its parameter.
 checkConstantCallArgs: function {
     st: zenv.ZSymbolTable
     scope: ztypes.declid
@@ -4651,7 +4655,6 @@ checkConstantCallArgs: function {
     fid: ztypes.tid
     recvImplicit: bool
 } is {
-    idx: u64
     ai: u64
     for ai < call.nargs loop {
         arg: argRefAt :ast nid: (zast.callArgAt :ast nid: call.nid i: ai)
@@ -4665,8 +4668,7 @@ checkConstantCallArgs: function {
                 continue
             }
         } else {
-            pn = positionalParamNameId :st funcId: fid :idx skipRecv: recvImplicit
-            idx = idx + 1
+            pn = unlabelledParamOf :st :ast effId: fid isCtor: false :recvImplicit
             if pn.isZero then {
                 reportSurplusPositional :st :ast :call effId: fid :arg
                 continue
