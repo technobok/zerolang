@@ -484,9 +484,10 @@ checkCapacityArg: function {
 }
 
 # nodeNamesType -- the name or path at `nid` resolves to a TYPE: a bare name no
-# open scope defines that the environment finds as a type, or a path whose member
-# is a type declaration (`other.T`). A local of the same name shadows the type,
-# and a numeric literal interns like a name but names nothing.
+# open scope defines that the environment finds as a type, or a type parameter
+# of a declaration enclosing the body (`t.create`), or a path whose member is a
+# type declaration (`other.T`). A local of the same name shadows the type, and
+# a numeric literal interns like a name but names nothing.
 nodeNamesType: function {
     st: zenv.ZSymbolTable
     ast: Ast
@@ -514,6 +515,8 @@ nodeNamesType: function {
     if (memberaccess.enclosingAsAliasTid :st :ast scope: st.curScope :nameId
     ).notZero then return true
     if (isNumericLiteralNameAt :ast ref: nameId) then return false
+    if (declare.genericParamInScope :st :ast scope: st.curScope :nameId :nid
+    ).notZero then return true
     return (statics.nameNamesType :st :ast :unitDecl :nameId)
 }
 
@@ -1410,18 +1413,20 @@ readsFnRefAsCall: function {st: zenv.ZSymbolTable.view t: ztypes.tid} out bool i
     return st.mode.inAssignTarget.not
 }
 
-# bareNameTypeLookup -- the type a bare name in a body denotes: a type
-# parameter of a declaration enclosing the body, which shadows any type of its
-# name -- read as a value it is its instance's zero-argument construction --
-# else a type the scope reaches
+# bareNameTypeLookup -- the type a bare name in a body denotes, written at
+# `nid` (0 when it is asked for no node): a type parameter of a declaration
+# enclosing the body, which shadows any type of its name -- read as a value it
+# is its instance's zero-argument construction, called it constructs -- else a
+# type the scope reaches
 bareNameTypeLookup: function {
     st: zenv.ZSymbolTable
     unitDecl: ztypes.declid
     ast: Ast
-    node: atomref
+    nameId: zast.nameid
+    nid: zast.nodeid
 } out optionval ztypes.tid is {
-    fo: walkLookupTyperefById :st scope: st.curScope :ast :unitDecl baseId: node.name
-    gp: declare.genericParamInScope :st :ast scope: st.curScope nameId: node.name nid: node.nid
+    fo: walkLookupTyperefById :st scope: st.curScope :ast :unitDecl baseId: nameId
+    gp: declare.genericParamInScope :st :ast scope: st.curScope :nameId :nid
     if gp.notZero then fo = optionval.some gp
     return fo
 }
@@ -1436,7 +1441,7 @@ typeOfBareName: function {
     node: atomref
 } out ztypes.tid is {
     result: ztypes.tid
-    fo: bareNameTypeLookup :st :unitDecl :ast :node
+    fo: bareNameTypeLookup :st :unitDecl :ast nameId: node.name nid: node.nid
     # `type` in a type's members names that type, in a body as in a signature,
     # and in a generic type's members the instance being checked (spec, type):
     # `type.make` is the type's own `make`
@@ -4456,7 +4461,7 @@ unresolvedBareName: function {
     # are reached through `this`, a value or the type -- so a type on the way
     # out claims only its constants and parameters, as resolution does.
     if (nameDeclaredOutward :st from: st.curScope :nameId) then return "".string
-    ubw: walkLookupTyperefById :st scope: st.curScope :ast :unitDecl baseId: nameId
+    ubw: bareNameTypeLookup :st :unitDecl :ast :nameId nid: zast.nodeid
     if ubw.some then {
         return "".string
     }

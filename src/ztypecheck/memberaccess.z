@@ -3899,31 +3899,7 @@ checkUnresolvedMember: function {
         tid: bt
         spelling: ctorspelling.createCall
     ) then return ztypes.tid.zero
-    if (st.reg.isTypeParamOf tid: bt) then {
-        cn: zast.nameTextAt :ast ref: cnId
-        # `.copy` is an ownership primitive, not a constrained member:
-        # every instantiation copies, so a generic-param receiver types
-        # it t -> t (the per-instance clone emits the concrete copy).
-        if cnId == zast.wellKnown.slot.wkCopy then {
-            stampGate :st nid: dp.nid tid: bt
-            return bt
-        }
-        # A MEMBER ON A TYPE PARAMETER RESOLVES AT INSTANTIATION, not in the
-        # template: `add: function {a: t b: t} out t is { return a + b }` and
-        # `area: function {s: T} out u64 is { return s.area }` are checked
-        # against each concrete type by the per-instance clone. Operators are
-        # methods, and a bound only decides which types may instantiate, so a
-        # member the bound does not declare is not refused here either (duck
-        # typing, spec "What a bound promises"). An operator keeps the
-        # coercible lhs result; a named member's result is not known until
-        # the instance, and the template types it as nothing, which every
-        # later check reads as not yet known.
-        if (isOperatorName name: cn.stringView) then {
-            stampGate :st nid: dp.nid tid: bt
-            return bt
-        }
-        return ztypes.tid
-    }
+    if (st.reg.isTypeParamOf tid: bt) then return (typeParamMemberTid :st :ast :dp :bt :cnId)
     cpleg: checkCopyMember :st :ast :dp :bt :cnId
     if cpleg.handled then return cpleg.tid
     # `.view` marks a parameter type and is never a value member. The
@@ -3953,6 +3929,35 @@ checkUnresolvedMember: function {
     }
     reportUnknownMember :st :ast :dp :bt :cnId
     return ztypes.tid.zero
+}
+
+# typeParamMemberTid -- the member `cnId` read through a type parameter `bt`, on
+# a template's walk. A MEMBER ON A TYPE PARAMETER RESOLVES AT INSTANTIATION,
+# not in the template: `add: function {a: t b: t} out t is { return a + b }`
+# and `area: function {s: T} out u64 is { return s.area }` are checked against
+# each concrete type by the per-instance clone. Operators are methods, and a
+# bound only decides which types may instantiate, so a member the bound does
+# not declare is not refused here either (duck typing, spec "What a bound
+# promises"). What the template knows of the result: `.copy`, an ownership
+# primitive every instantiation has, and `create`, which makes a value of the
+# parameter, are a `t`; an operator keeps the coercible lhs result; a named
+# member's result is not known until the instance, and the template types it
+# as nothing, which every later check reads as not yet known.
+typeParamMemberTid: function {
+    st: zenv.ZSymbolTable
+    ast: Ast
+    dp: dpref
+    bt: ztypes.tid
+    cnId: zast.nameid
+} out ztypes.tid is {
+    isT: (cnId == zast.wellKnown.slot.wkCopy) or (cnId == zast.wellKnown.slot.wkCreate)
+    if isT.not then {
+        cn: zast.nameTextAt :ast ref: cnId
+        isT = isOperatorName name: cn.stringView
+    }
+    if isT.not then return ztypes.tid
+    stampGate :st nid: dp.nid tid: bt
+    return bt
 }
 
 # checkMarkerMember -- the access and conversion markers a dotted path can name
