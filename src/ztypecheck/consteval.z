@@ -1160,7 +1160,6 @@ constFailMismatch: function {
 # neither: an f128 compared through its nearest f64 can get the answer wrong.
 constOfTypedFold: function {
     st: zenv.ZSymbolTable
-    scope: ztypes.declid
     ast: Ast
     lv: ztypes.cval
     rv: ztypes.cval
@@ -1173,9 +1172,9 @@ constOfTypedFold: function {
     lNum: lv.kind.ivalKind or lv.kind.fvalKind
     rNum: rv.kind.ivalKind or rv.kind.fvalKind
     if lNum.not or rNum.not then return ztypes.noConst
-    gov: constNumTidOf :st :scope :ast v: lv
+    gov: lv.numTid
     landing: rv
-    if lv.numTid.isZero when rv.numTid.notZero then {
+    if gov.isZero then {
         gov = rv.numTid
         landing = lv
     }
@@ -2541,7 +2540,7 @@ constOfBinopFold: function {
         return ztypes.noConst
     }
     if lv.numTid.notZero or rv.numTid.notZero then {
-        return (constOfTypedFold :st :scope :ast :lv :rv :opnId :nid :ln :co)
+        return (constOfTypedFold :st :ast :lv :rv :opnId :nid :ln :co)
     }
     if lv.kind.ivalKind when rv.kind.ivalKind then {
         if cop.other.not then return (constCompareInt :st :ast op: cop :lv :rv)
@@ -3454,12 +3453,10 @@ useSiteAsks: function {
     pbt: walkTypeOf :st nid: plan.parentId
     # `blk.slot.a` reads a label's position, a constant
     if pbt == st.typing.listSlotTid when pbt.notZero then return true
-    # `inst.blk` reads a member of a unit or a unit instance (`wi: (wrap t: i64)`)
+    # `inst.blk` reads a member of a unit or a unit instance (`wi: (wrap t: i64)`),
+    # and `unit.CONST.u8` converts another unit's constant
     if (st.reg.typetypeOf typeId: pbt) == ztypes.ztypetype.unitType then return true
     pn: atomNameId :ast n: (ast.nodes.get i: plan.parentId)
-    # `unit.CONST` reads another unit's constant, which a conversion after it
-    # (`unit.CONST.u8`) folds
-    if (memberaccess.rootNamesAnyUnit :st scope: st.curScope nameId: pn) then return true
     pv: zast.nameTextAt :ast ref: pn
     return (statics.isNumericLiteralName name: pv.stringView)
 }
