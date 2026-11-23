@@ -963,6 +963,8 @@ checkDotted: function {
     dp: dpref
     coerce: bool
 } out ztypes.tid is {
+    tro: st.typing.typedRecv.get key: dp.nid
+    if tro.some then return (checkTypedRead :st :unitDecl :ast :dp tr: tro :coerce)
     if (typeref.refuseMisplacedImplement :st :ast nid: dp.nid) then return ztypes.tid.zero
     # an alias reached through its type (`Tree.Node x: 1`) names the type; read
     # as a value (`w: p.Inner`) it constructs, as the type's own name does
@@ -994,6 +996,141 @@ checkDotted: function {
     bt: moves.dottedBaseTid :st :unitDecl :ast :dp
     if bt.isZero then return ztypes.tid.zero
     return (memberaccess.checkDottedOn :st :unitDecl :ast :dp :bt :coerce)
+}
+
+# checkTypedRead -- the `v.m` the checker made of a method called through its
+# type, `T.m v` (callchecks.rewriteTypedCall). The receiver is walked first and
+# must be a T: `v.m` finds the member of v's own type, which is T's member only
+# when v is a T, so a receiver is never converted. A literal has no type of its
+# own until it lands, and takes T as it does as T's argument -- in the tree,
+# where every later reader sees it (literalTakesType): `i64.u64 5` converts the
+# i64 5, where `5.u64` would write a u64 literal.
+checkTypedRead: function {
+    st: zenv.ZSymbolTable
+    unitDecl: ztypes.declid
+    ast: Ast
+    dp: dpref
+    tr: ztyping.typedrecv
+    coerce: bool
+} out ztypes.tid is {
+    bt: moves.dottedBaseTid :st :unitDecl :ast :dp
+    if bt.isZero then return ztypes.tid.zero
+    rd: dp
+    if bt != tr.tid then {
+        cn: literalCastName :ast :st lit: bt to: tr.tid
+        if cn.isZero then {
+            # a template's types are compared in each instance's walk
+            if st.templateWalk then return (
+                memberaccess.checkDottedOn
+                :st
+                :unitDecl
+                :ast
+                :dp
+                bt: tr.tid
+                :coerce
+            )
+            reportTypedReceiver :st :ast :tr arg: (argRefAt :ast nid: tr.arg) got: bt
+            return ztypes.tid.zero
+        }
+        rd = literalTakesType :st :unitDecl :ast :dp nameId: cn
+        # a literal that does not fit T was refused by its conversion
+        if (walkTypeOf :st nid: rd.parent) != tr.tid then return ztypes.tid.zero
+    }
+    return (memberaccess.checkDottedOn :st :unitDecl :ast dp: rd bt: tr.tid :coerce)
+}
+
+# literalCastName -- the member that converts a value of literal type `lit` to
+# `to`, as the literal is written converted (`5.i64`, `"ab".stringView`): a
+# number's scalar by its name, a text literal's `stringView` or `text`. Zero
+# for none: `lit` is no literal, or does not land in `to`.
+literalCastName: function {
+    ast: Ast st: zenv.ZSymbolTable lit: ztypes.tid to: ztypes.tid
+} out zast.nameid is {
+    if (isLiteralTypeId reg: st.reg tid: lit) when (numerics.isNumericTid :st tid: to) then {
+        return (st.typing.declNameOf declId: (st.typing.declIdOfType typeId: to))
+    }
+    if (numerics.isTextLiteralTid :st tid: lit).not then return zast.nameid
+    if (
+        to == (stdTid :ast :st wk: zast.wellKnown.slot.tyStringView)
+    ) then return zast.wellKnown.slot.wkStringView
+    if to == (stdTid :ast :st wk: zast.wellKnown.slot.tyText) then return zast.wellKnown.slot.tyText
+    return zast.nameid
+}
+
+# literalTakesType -- the literal receiver of the read `dp` converted in the
+# tree by its member `nameId`: `lit.m` becomes `(lit.T).m`, the conversion a
+# fresh row typed by the literal's own conversion legs, which refuse a value
+# that does not fit. The receiver is already walked, and is not walked again.
+# Answers the read over the conversion.
+literalTakesType: function {
+    st: zenv.ZSymbolTable unitDecl: ztypes.declid ast: Ast dp: dpref nameId: zast.nameid
+} out dpref is {
+    ln: u32
+    co: u32
+    {
+        rn: ast.nodes.get i: dp.parent
+        ln = nodeLine n: rn
+        co = nodeCol n: rn
+    }
+    aid: zast.tableReserve :ast from: dp.parent
+    (
+        zast.tableAdd
+        :ast
+        n: astnode.atomid (zast.atomidrow nodeid: aid lineno: ln colno: co name: nameId)
+    )
+    cid: zast.tableReserve :ast from: dp.parent
+    (
+        zast.tableAdd
+        :ast
+        n: astnode.dottedpath (
+            zast.dottedpathrow
+            nodeid: cid
+            lineno: ln
+            colno: co
+            parent: dp.parent
+            child: aid
+        )
+    )
+    (
+        zast.tableSet
+        :ast
+        id: dp.nid
+        child: astnode.dottedpath (
+            zast.dottedpathrow
+            nodeid: dp.nid
+            lineno: dp.lineno
+            colno: dp.colno
+            parent: cid
+            child: dp.child
+        )
+    )
+    cr: dpref nid: cid parent: dp.parent child: aid lineno: ln colno: co
+    leg: memberaccess.checkNumericSuffixCast :st :ast dp: cr
+    if leg.handled.not then leg = memberaccess.checkUntypedConstantCast :st :ast dp: cr
+    if leg.handled.not then statics.checkUntypedTextCast :st :ast dp: cr
+    consteval.stampConstAt :st :unitDecl :ast nid: cid
+    return (dpref nid: dp.nid parent: cid child: dp.child lineno: dp.lineno colno: dp.colno)
+}
+
+# reportTypedReceiver -- the receiver of a method called through its type
+# (checkTypedRead) is of another type.
+reportTypedReceiver: function {
+    st: zenv.ZSymbolTable ast: Ast tr: ztyping.typedrecv arg: argref got: ztypes.tid
+} is {
+    rt: numerics.reportTypeNames :st :ast expected: tr.tid :got
+    pn: zast.nameTextAt :ast ref: tr.param
+    (
+        addErrorWithHint
+        :st
+        nodeid: arg.nid
+        lineno: arg.lineno
+        colno: arg.colno
+        e: zast.err.callError
+        msg: "argument '\{pn}' type mismatch: expected \{rt.expected}, got \{rt.got}"
+        note: String
+        hint: "a method called through a type takes a value of that type as its receiver; to use the member of \{rt.got}, call it on the value itself"
+        width: 1
+    )
 }
 
 # checkBareTypeValue -- a bare TYPE name in value position is zero-argument

@@ -3861,6 +3861,160 @@ checkExplicitConstruction: function {
     return (callleg handled: true tid: (checkTypeConstruction :st :unitDecl :ast :call tid: bt))
 }
 
+# rewriteTypedCall -- A METHOD CALLED THROUGH ITS TYPE IS THE CALL ON ITS
+# RECEIVER (docs/spec.pdoc, Calls): `T.m v a` is `v.m a`, and `T.m v`, which
+# passes nothing else, is the read `v.m` when m needs no other argument. The
+# tree is made to say so before any argument is walked: the callable becomes
+# `v.m` over fresh rows and the receiver's argument leaves the list, or the
+# call's own row becomes the read.
+# Everything after -- the walk, the moves and locks, the emitter -- sees the
+# value form, so a member reached through a value is reached through its type
+# the same way. The walk of `v.m` checks the receiver against T (typedRecv).
+# A call that passes no receiver, or passes it twice, keeps its written form and
+# its own report. True when it rewrote.
+rewriteTypedCall: function {
+    st: zenv.ZSymbolTable ast: Ast call: callref dro: ztypes.tid
+} out bool is {
+    if (moves.methodHasThisReceiver :st mid: dro).not then return false
+    rn: receiverParamNameOf :st tid: dro
+    if rn.isZero then rn = zast.wellKnown.slot.wkThis
+    recvArg: argref nid: zast.nodeid name: zast.nameid operation: zast.nodeid lineno: 0 colno: 0
+    rest: ListVal zast.nodeid
+    k: u64
+    for k < call.nargs loop {
+        aid: zast.callArgAt :ast nid: call.nid i: k
+        k = k + 1
+        arg: argRefAt :ast nid: aid
+        if arg.nid.notZero when arg.name.isZero or (arg.name == rn) then {
+            if recvArg.nid.notZero then return false
+            recvArg = arg
+        } else {
+            rest.append aid
+        }
+    }
+    if recvArg.nid.isZero then return false
+    dp: statics.dpRefAt :ast nid: call.callable
+    tt: walkTypeOf :st nid: dp.parent
+    if tt.isZero then return false
+    mn: zast.nameid
+    mLine: u32
+    mCol: u32
+    {
+        cn: ast.nodes.get i: dp.child
+        mn = atomNameId :ast n: cn
+        mLine = nodeLine n: cn
+        mCol = nodeCol n: cn
+    }
+    cid: zast.tableReserve :ast from: dp.child
+    (
+        zast.tableAdd
+        :ast
+        n: astnode.atomid (zast.atomidrow nodeid: cid lineno: mLine colno: mCol name: mn)
+    )
+    readId: call.nid
+    if rest.length == 0 when (valuechecks.fnAutoCallable :st mid: dro) then {
+        (
+            zast.tableSet
+            :ast
+            id: call.nid
+            child: astnode.dottedpath (
+                zast.dottedpathrow
+                nodeid: call.nid
+                lineno: call.lineno
+                colno: call.colno
+                parent: recvArg.operation
+                child: cid
+            )
+        )
+    } else {
+        readId = zast.tableReserve :ast from: call.callable
+        (
+            zast.tableAdd
+            :ast
+            n: astnode.dottedpath (
+                zast.dottedpathrow
+                nodeid: readId
+                lineno: dp.lineno
+                colno: dp.colno
+                parent: recvArg.operation
+                child: cid
+            )
+        )
+        (
+            zast.tableSet
+            :ast
+            id: call.nid
+            child: astnode.call (
+                zast.callrow
+                nodeid: call.nid
+                lineno: call.lineno
+                colno: call.colno
+                callable: readId
+                arguments: (zast.kidsAdd kids: ast.kids xs: rest)
+                infix: false
+            )
+        )
+    }
+    (
+        st.typing.typedRecv.set
+        key: readId
+        value: (ztyping.typedrecv tid: tt arg: recvArg.nid param: rn)
+    )
+    ast.writtenAs.set key: readId value: dp.parent
+    return true
+}
+
+# checkTypeBaseCall -- a dotted call whose base names a type
+# (callBaseNamesType). A method called through its type is walked as the call
+# on its receiver (rewriteTypedCall). A template's walk puts the written
+# row back once it has walked it: each instance copies the template's rows and
+# rewrites its own copy, where T is that instance's. Unhandled for any other
+# call, which goes on as written.
+checkTypeBaseCall: function {
+    st: zenv.ZSymbolTable
+    unitDecl: ztypes.declid
+    ast: Ast
+    call: callref
+    dro: ztypes.tid
+} out callleg is {
+    unhandled: callleg handled: false tid: ztypes.tid.zero
+    if dro.isZero or call.infix then return unhandled
+    if (
+        instantiate.dottedBaseIsValue
+        :st
+        :ast
+        :unitDecl
+        n: (ast.nodes.get i: call.callable)
+    ) then return unhandled
+    span: zast.kidspan first: 0 count: 0
+    {
+        cn: ast.nodes.get i: call.nid
+        if cn.call then span = cn.arguments
+    }
+    if (rewriteTypedCall :st :ast :call :dro).not then {
+        st.typing.callBaseNamesType.add item: call.nid
+        return unhandled
+    }
+    t: valuechecks.checkValueArmAt :st :unitDecl :ast nid: call.nid
+    if st.templateWalk then {
+        (
+            zast.tableSet
+            :ast
+            id: call.nid
+            child: astnode.call (
+                zast.callrow
+                nodeid: call.nid
+                lineno: call.lineno
+                colno: call.colno
+                callable: call.callable
+                arguments: span
+                infix: call.infix
+            )
+        )
+    }
+    return (callleg handled: true tid: t)
+}
+
 # checkDottedCallableCall -- the callable resolved through a dotted path.
 # An unresolved one (a list's `.get`) still walks its arguments so
 # their atoms stamp; a resolved one dispatches as a method or a value call.
@@ -3871,13 +4025,8 @@ checkDottedCallableCall: function {
     call: callref
     dro: ztypes.tid
 } out callleg is {
-    if dro.notZero when call.infix.not when (
-        instantiate.dottedBaseIsValue
-        :st
-        :ast
-        :unitDecl
-        n: (ast.nodes.get i: call.callable)
-    ).not then st.typing.callBaseNamesType.add item: call.nid
+    tleg: checkTypeBaseCall :st :unitDecl :ast :call :dro
+    if tleg.handled then return tleg
     # a `T.create` whose member the lookup did not find was refused there, by the
     # same rules (checkUnresolvedMember); its arguments are walked below as values
     if dro.notZero then {
