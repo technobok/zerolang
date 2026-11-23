@@ -368,6 +368,28 @@ carryPinsIntoDraft: function {st: zenv.ZSymbolTable pins: (List ztyping.PinPath)
     st.walk.value.draft.owned = true
 }
 
+# readBorrowedField -- a read of the field `cnId` of `bt` off a VALUE no
+# variable holds (receiverIsValue: a temporary, a call's result), when the
+# field is borrowed (`.view`, `.borrow`): it holds a borrow of a value it does
+# not own, in the mode its declaration marks, so the value read is that
+# borrow, which nothing takes -- taking it would copy what the field refers to
+# and free it twice. Read off a named place, the place's own rules decide: the
+# path's pins, the field's readonly-ness.
+readBorrowedField: function {
+    st: zenv.ZSymbolTable
+    ast: Ast
+    unitDecl: ztypes.declid
+    base: zast.nodeid
+    bt: ztypes.tid
+    cnId: zast.nameid
+} is {
+    if (st.typing.declIsBorrowedFieldId parentTypeId: bt nameId: cnId).not then return
+    if (receiverIsValue :st :ast :unitDecl nid: base).not then return
+    st.walk.value.draft.owned = false
+    fmo: st.typing.declOwnershipOfId parentTypeId: bt nameId: cnId
+    if fmo.some then st.walk.value.draft.marker = fmo
+}
+
 # projectionSourceBorrows -- a projection (`Speaker d`, `Bytes.create from: d`)
 # of the walked source `src`, of type `vt`, borrows it: the source is marked
 # `.borrow`, or it is a reftype place written without a marker and the
