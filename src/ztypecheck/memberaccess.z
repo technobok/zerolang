@@ -3960,6 +3960,50 @@ typeParamMemberTid: function {
     return bt
 }
 
+# checkStrConversion -- `.str` on a String, a StringView or a str, or on a
+# string literal read as its StringView, is the sized-conversion form: the path
+# resolves to the str TEMPLATE (unstamped -- the call check mints the sized
+# instance and stamps only the Call node). It converts a VALUE: through a type
+# (`String.str s to: 8`) there is no value to convert, and it is refused for
+# that. Unhandled on any other base.
+checkStrConversion: function {
+    st: zenv.ZSymbolTable ast: Ast unitDecl: ztypes.declid dp: dpref bt: ztypes.tid
+} out callleg is {
+    miss: callleg handled: false tid: ztypes.tid
+    isStrBase: (
+        (bt == (stdTid :ast :st wk: zast.wellKnown.slot.tyString)) or
+        (bt == (stdTid :ast :st wk: zast.wellKnown.slot.tyStringView)) or
+        (bt == st.reg.literalTextTid)
+    )
+    if isStrBase.not then {
+        bgo: st.reg.genericOriginOf tid: bt
+        if bgo.notZero when (
+            bgo == (stdTid :ast :st wk: zast.wellKnown.slot.tyStr)
+        ) then isStrBase = true
+    }
+    if isStrBase.not then return miss
+    if (valuechecks.nodeNamesType :st :ast :unitDecl nid: dp.parent) then {
+        tn: specWrittenName :st :ast tid: bt
+        cn: ast.nodes.get i: dp.child
+        (
+            addErrorWithHint
+            :st
+            nodeid: dp.child
+            lineno: (nodeLine n: cn)
+            colno: (nodeCol n: cn)
+            e: zast.err.typeError
+            msg: "'.str' converts a value to a str, and '\{tn}' here names a type, which has no value to convert"
+            note: String
+            hint: "write the conversion on the value: `v.str to: 8`".string
+            width: 3
+        )
+        return (callleg handled: true tid: ztypes.tid.zero)
+    }
+    sto: stdtypes.stdTidOpt :ast :st wk: zast.wellKnown.slot.tyStr
+    if sto.some then return (callleg handled: true tid: sto)
+    return miss
+}
+
 # checkMarkerMember -- the access and conversion markers a dotted path can name
 # instead of a member: `.private` / `.public` carry the base's own type,
 # `.stringView` and `.str` convert between the two string forms, and `.borrow` is
@@ -3968,6 +4012,7 @@ typeParamMemberTid: function {
 checkMarkerMember: function {
     st: zenv.ZSymbolTable
     ast: Ast
+    unitDecl: ztypes.declid
     dp: dpref
     bt: ztypes.tid
     cnId: zast.nameid
@@ -4059,31 +4104,7 @@ checkMarkerMember: function {
         )
         return (callleg handled: true tid: ztypes.tid.zero)
     }
-    # `.str` on String/StringView/str bases, and on a string literal read as its
-    # StringView, is the sized-conversion form: the path resolves to the str
-    # TEMPLATE (unstamped -- the call check mints the sized instance and stamps
-    # only the Call node).
-    if cnId == zast.wellKnown.slot.tyStr then {
-        isStrBase: (
-            (bt == (stdTid :ast :st wk: zast.wellKnown.slot.tyString)) or
-            (bt == (stdTid :ast :st wk: zast.wellKnown.slot.tyStringView)) or
-            (bt == st.reg.literalTextTid)
-        )
-        if isStrBase.not then {
-            bga: ztypes.tid
-            bgo: st.reg.genericOriginOf tid: bt
-            if bgo.notZero then bga = bgo
-            if bga.notZero when (
-                bga == (stdTid :ast :st wk: zast.wellKnown.slot.tyStr)
-            ) then isStrBase = true
-        }
-        if isStrBase then {
-            sto: stdtypes.stdTidOpt :ast :st wk: zast.wellKnown.slot.tyStr
-            if sto.some then {
-                return (callleg handled: true tid: sto)
-            }
-        }
-    }
+    if cnId == zast.wellKnown.slot.tyStr then return (checkStrConversion :st :ast :unitDecl :dp :bt)
     if cnId == zast.wellKnown.slot.wkBorrow then {
         # a `.borrow` VALUE bound by a binding or a `with` is a second name for
         # what it names: the alias may write through itself, so it pins the
@@ -4296,7 +4317,7 @@ checkDottedOn: function {
     if (refuseStaticMarker :st :ast :dp :bt :cnId) then return ztypes.tid.zero
     noStorage: moves.refuseMarkerWithoutStorage :st :unitDecl :ast :dp :bt :cnId
     if noStorage then return ztypes.tid.zero
-    mkm: checkMarkerMember :st :ast :dp :bt :cnId
+    mkm: checkMarkerMember :st :ast :unitDecl :dp :bt :cnId
     if mkm.handled then return mkm.tid
     xfm: moves.checkTransferMarker :st :unitDecl :ast :dp :bt :cnId
     if xfm.handled then return xfm.tid
