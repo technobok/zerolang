@@ -1429,20 +1429,7 @@ constOfConversion: function {
         constFailMismatch :st :nid :ln :co msg: fm.stringView
         return ztypes.noConst
     }
-    if v.numTid.notZero when (declaredLossless :st :ast from: v.numTid :targetId).not then {
-        sn: specWrittenName :st :ast tid: v.numTid
-        tn: zast.nameTextCopy :ast ref: targetId
-        conv: "'\{sn}' to '\{tn}'"
-        (
-            constFailRecord
-            :st
-            kind: ztypes.constfailkind.lossyConversion
-            nodeid: nid
-            lineno: ln
-            colno: co
-            width: 1
-            strId: (constInternString :st text: conv.stringView)
-        )
+    if v.numTid.notZero when (typedConversionFolds :st :ast :v :targetId :nid :ln :co).not then {
         return ztypes.noConst
     }
     if v.numTid.isZero then {
@@ -1456,6 +1443,88 @@ constOfConversion: function {
     tk: (numerics.numKindOfTid typing: st.typing tid: target).kind
     if (ztypes.isFloatKind k: tk) then c = constLandedFloat :st :v k: tk
     return (ztypes.typedConst :c numTid: target)
+}
+
+# typedConversionFolds -- whether the typed number `v` folds through its
+# conversion `targetId`, recording why not. The conversion is the member of the
+# first link of v's typedef chain that declares one of that name, else the
+# chain end's, a scalar's (conversionLink). One written with a body is a
+# function, which only a run can call; any other must be lossless.
+typedConversionFolds: function {
+    st: zenv.ZSymbolTable
+    ast: Ast
+    v: ztypes.cval
+    targetId: zast.nameid
+    nid: zast.nodeid
+    ln: u32
+    co: u32
+} out bool is {
+    link: conversionLink :st from: v.numTid :targetId
+    if (conversionHasBody :st :ast tid: link :targetId) then {
+        tn1: zast.nameTextCopy :ast ref: targetId
+        (
+            constFailRecord
+            :st
+            kind: ztypes.constfailkind.unsupportedMethod
+            nodeid: nid
+            lineno: ln
+            colno: co
+            width: 1
+            strId: (constInternString :st text: tn1.stringView)
+        )
+        return false
+    }
+    if (declaredLossless :st :ast from: link :targetId) then return true
+    sn: specWrittenName :st :ast tid: v.numTid
+    tn: zast.nameTextCopy :ast ref: targetId
+    conv: "'\{sn}' to '\{tn}'"
+    (
+        constFailRecord
+        :st
+        kind: ztypes.constfailkind.lossyConversion
+        nodeid: nid
+        lineno: ln
+        colno: co
+        width: 1
+        strId: (constInternString :st text: conv.stringView)
+    )
+    return false
+}
+
+# conversionLink -- the type whose member answers the conversion `targetId` of
+# a value of type `from`: the first link of from's typedef chain that declares
+# a member of that name (a typedef's own member wins over its base's), else the
+# chain's end. Read off the declarations: a constant folds while members may
+# still be resolving.
+conversionLink: function {
+    st: zenv.ZSymbolTable.view
+    from: ztypes.tid
+    targetId: zast.nameid
+} out ztypes.tid is {
+    t: from
+    for (st.typing.declMemberIdOf parentTypeId: t nameId: targetId).isZero loop {
+        b: st.typing.typedefBaseTidOf tid: t
+        if b.isZero then return t
+        t = b
+    }
+    return t
+}
+
+# conversionHasBody -- the member `targetId` of the type `tid` is a function
+# written with a body, not a native conversion
+conversionHasBody: function {
+    st: zenv.ZSymbolTable.view
+    ast: Ast.view
+    tid: ztypes.tid
+    targetId: zast.nameid
+} out bool is {
+    md: st.typing.declMemberIdOf parentTypeId: tid nameId: targetId
+    if md.isZero then return false
+    nop: ast.nodes.get i: (st.typing.decls.get i: md).node
+    if nop.namedoperation.not then return false
+    fnode: ast.nodes.get i: nop.operation
+    if fnode.functiondef.not then return false
+    return (declare.functiondefIsNative op: (ast.nodes.get i: nop.operation)).not
 }
 
 # constLandedFloat -- the number `v` as a constant of float kind `k`: its
