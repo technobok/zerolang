@@ -5742,7 +5742,18 @@ constFitToField: function {
     if num when untyped when ftid == st.reg.literalIntTid when v.kind.ivalKind then return v
     if num when untyped when ftid == st.reg.literalFloatTid then return v
     isNum: (typeIsNumberOf :st tid: ftid float: false) or (typeIsNumberOf :st tid: ftid float: true)
-    if num when untyped when isNum then return (constFitNumber :st :scope :ast :v :ftid :at :ln :co)
+    if num when untyped when isNum then return (
+        constFitNumber
+        :st
+        :scope
+        :ast
+        :v
+        :ftid
+        :name
+        :at
+        :ln
+        :co
+    )
     txT: stdTid :ast :st wk: zast.wellKnown.slot.tyText
     if v.kind.svalKind when ftid == txT when untyped or (v.numTid == txT) then {
         return (ztypes.typedConst c: v numTid: txT)
@@ -5827,20 +5838,40 @@ stampDeclaredSignature: function {st: zenv.ZSymbolTable ast: Ast fid: ztypes.tid
     )
 }
 
-# constFitNumber -- the untyped number `v` as a value of the number type `ftid`
-# (a typedef over one included): it must fit the base type (constFitsType,
-# reported at `at`), and it converts as its literal would.
+# constFitNumber -- the untyped number `v` as the value of the field `name`,
+# of the number type `ftid`: it must fit (constFitsType, reported at `at`), and
+# it converts as its literal would. A typedef field takes no literal -- a
+# literal takes a typedef only where a list's `out` asks for one -- and is
+# refused as a body refuses it.
 constFitNumber: function {
     st: zenv.ZSymbolTable
     scope: ztypes.declid
     ast: Ast
     v: ztypes.cval
     ftid: ztypes.tid
+    name: zast.nameid
     at: zast.nodeid
     ln: u32
     co: u32
 } out ztypes.cval is {
-    base: conform.typedefChaseTid typing: st.typing tid: ftid
+    if (st.typing.typedefBaseTidOf tid: ftid).notZero then {
+        lit: st.reg.literalIntTid
+        if v.kind.fvalKind then lit = st.reg.literalFloatTid
+        en: specWrittenName :st :ast tid: ftid
+        gn: specWrittenName :st :ast tid: lit
+        an: zast.nameTextAt :ast ref: name
+        (
+            addError
+            :st
+            nodeid: at
+            lineno: ln
+            colno: co
+            e: zast.err.callError
+            msg: "argument '\{an}' type mismatch: expected \{en}, got \{gn}"
+        )
+        return ztypes.noConst
+    }
+    base: ftid
     fm: numerics.constFitsType :st :v target: base
     if fm.length > 0 then {
         addError :st nodeid: at lineno: ln colno: co e: zast.err.typeError msg: fm
