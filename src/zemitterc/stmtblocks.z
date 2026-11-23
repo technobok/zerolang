@@ -682,8 +682,7 @@ popLoopLabel: function {stmt: StatementState id: u64 ind: StringView buf: String
 }
 
 # destroyLineC -- the statement, indented by `ind`, that frees the value `nm` of
-# type tid: destroyFnC handed destroyOperand's form of nm; "" when it owns
-# nothing.
+# type tid, as a line (destroyTextC); "" when it owns nothing.
 destroyLineC: function {
     prog: Program.view
     ctx: Ctx
@@ -691,16 +690,51 @@ destroyLineC: function {
     nm: StringView
     ind: StringView
 } out String is {
+    return (destroyTextC :prog :ctx :tid :nm :ind line: true)
+}
+
+# destroyStmtC -- the statement that frees the value `nm` of type tid, with no
+# indentation or line end (destroyTextC); "" when it owns nothing.
+destroyStmtC: function {
+    prog: Program.view
+    ctx: Ctx
+    tid: ztypes.tid
+    nm: StringView
+} out String is {
+    return (destroyTextC :prog :ctx :tid :nm ind: "" line: false)
+}
+
+# destroyTextC -- the statement that frees the value `nm` of type tid,
+# destroyFnC handed destroyOperand's form of nm: a `line` at `ind`, else the
+# bare statement; "" when it owns nothing.
+destroyTextC: function {
+    prog: Program.view
+    ctx: Ctx
+    tid: ztypes.tid
+    nm: StringView
+    ind: StringView
+    line: bool
+} out String is {
     dt: types.destroyTargetTid :prog :ctx :tid
     if dt.isZero then return String
     types.noteDestroyUse :prog :ctx tid: dt
     if dt == ctx.known.strTid then {
         preludeNeed :ctx memb: "@String_free"
-        return "\{ind}\{ctx.known.strC}_free(&\{nm});\n"
+        if line then return "\{ind}\{ctx.known.strC}_free(&\{nm});\n"
+        return "\{ctx.known.strC}_free(&\{nm});"
     }
     addr: "&"
     if (valueIsItsPointer :prog :ctx tid: dt) then addr = ""
-    return "\{ind}\{types.ctxCnameView :ctx tid: dt}_destroy(\{addr}\{nm});\n"
+    if line then return "\{ind}\{types.ctxCnameView :ctx tid: dt}_destroy(\{addr}\{nm});\n"
+    return "\{types.ctxCnameView :ctx tid: dt}_destroy(\{addr}\{nm});"
+}
+
+# appendOwed -- an owed destroy (OwedFree.stmt), written as a line at `ind`, the
+# indentation of the block it is released in.
+appendOwed: function {buf: String.borrow ind: StringView stmt: StringView} is {
+    buf.append ind
+    buf.append stmt
+    buf.append "\n"
 }
 
 # foldedBranchOf -- the clause the typechecker's constant fold selected for an
@@ -1536,7 +1570,7 @@ emitForStmt: function {
     # the temporaries the conditions registered are released where the loop
     # ends, AFTER the break label: both the path that falls out and the path
     # that jumps reach it there
-    flushBlockFrees :tmp lL: lLh diverged: false :buf
+    flushBlockFrees :tmp lL: lLh diverged: false :ind :buf
     ctx.stmt.condDepth = ctx.stmt.condDepth - condBump
 }
 
@@ -2323,7 +2357,7 @@ emitStmt: function {
     marked: linemarks.open :prog :ctx :n :buf
     tL: tmp.listFrees.length
     emitStmtParts :prog :ctx :n :ind :tmp :buf
-    releaseStatementTemps :prog :ctx :n :tmp from: tL :buf
+    releaseStatementTemps :prog :ctx :n :tmp from: tL :ind :buf
     linemarks.close opened: marked :buf
 }
 
@@ -2339,6 +2373,8 @@ releaseStatementTemps: function {
     tmp: FnTemps
     # the block's releases owed before the statement began
     from: u64
+    # the statement's indentation
+    ind: StringView
     buf: String.borrow
 } is {
     if tmp.listFrees.length <= from then return
@@ -2358,7 +2394,7 @@ releaseStatementTemps: function {
         return
     }
     if (prog.typing.tempHoldingLines.has item: lineId) then {
-        emitUnheldTempFrees :prog :tmp :from :buf
+        emitUnheldTempFrees :prog :tmp :from :ind :buf
         return
     }
     live: (stmtDiverges :prog :ctx sid: lineId).not
@@ -2366,7 +2402,7 @@ releaseStatementTemps: function {
     for tmp.listFrees.length > from loop {
         o: tmp.listFrees.pop
         if o.temp then {
-            if live then buf.append o.stmt
+            if live then appendOwed :buf :ind stmt: o.stmt.stringView
         } else {
             kept.append o
         }
@@ -2382,13 +2418,14 @@ emitUnheldTempFrees: function {
     prog: Program.view
     tmp: FnTemps
     from: u64
+    ind: StringView
     buf: String.borrow
 } is {
     kept: List OwedFree
     for tmp.listFrees.length > from loop {
         o: tmp.listFrees.pop
         if o.temp when o.tag.notZero when (prog.typing.unheldTemps.has item: o.tag) then {
-            buf.append o.stmt
+            appendOwed :buf :ind stmt: o.stmt.stringView
         } else {
             kept.append o
         }
@@ -2821,7 +2858,7 @@ emitMatchStmt: function {
                 :tmp
                 :buf
             )
-            flushBlockFrees :tmp lL: lLM diverged: false :buf
+            flushBlockFrees :tmp lL: lLM diverged: false ind: indM.stringView :buf
         } else {
             emitBodyNode :prog :ctx n: mwn ind: indM.stringView :tmp :buf
             (
@@ -3145,11 +3182,13 @@ flushBlockFrees: function {
     tmp: FnTemps
     lL: u64
     diverged: bool
+    # the indentation of the block's own statements
+    ind: StringView
     buf: String.borrow
 } is {
     for tmp.listFrees.length > lL loop {
         lvo: tmp.listFrees.pop
-        if diverged.not then buf.append lvo.stmt
+        if diverged.not then appendOwed :buf :ind stmt: lvo.stmt.stringView
     }
 }
 
@@ -3169,7 +3208,7 @@ closeScopeBlock: function {
     ind: StringView
     buf: String.borrow
 } is {
-    flushBlockFrees :tmp :lL :diverged :buf
+    flushBlockFrees :tmp :lL :diverged :ind :buf
     if diverged.not then emitScopeDestroy :prog :ctx :node :ind :buf
 }
 
@@ -3285,7 +3324,7 @@ emitContinueFrees: function {
     i: tmp.listFrees.length
     for i > lMark loop {
         i = i - 1
-        buf.append (tmp.listFrees.get :i).stmt
+        appendOwed :buf :ind stmt: (tmp.listFrees.get :i).stmt.stringView
     }
     if allRows.not then emitExitDestroy :prog :ctx :ind :buf
 }
@@ -3684,7 +3723,7 @@ emitDoBindValue: function {
                 :tmp
                 :buf
             )
-            flushBlockFrees :tmp lL: lLe diverged: false :buf
+            flushBlockFrees :tmp lL: lLe diverged: false ind: innerInd.stringView :buf
             l4: "\{ind}}\n"
             buf.append l4
         }
@@ -4039,7 +4078,7 @@ emitPlainBindingFor: function {
     ev: emitExpr :prog :ctx n: opN
     flushArgHoists :ctx ind: bodyInd.stringView :tmp :buf
     buf.append "\{bodyInd}\{ovc}_t _iter\{mN} = \{ev};\n"
-    flushBlockFrees :tmp :lL diverged: false :buf
+    flushBlockFrees :tmp :lL diverged: false ind: bodyInd.stringView :buf
     emitValueTakeInvalidations :prog :ctx n: opN ind: bodyInd.stringView :buf
     (
         emitOptionLoopTail
@@ -4397,7 +4436,7 @@ emitSteppedConjunct: function {
     flushArgHoists :ctx :ind :tmp :buf
     cw: condInParens cond: ct.stringView
     buf.append "\{ind}\{gvar} = \{cw} ? 1 : 0;\n"
-    flushBlockFrees :tmp :lL diverged: false :buf
+    flushBlockFrees :tmp :lL diverged: false :ind :buf
     condNode: prog.ast.nodes.get i: kId
     emitValueTakeInvalidations :prog :ctx n: condNode :ind :buf
 }
@@ -4609,7 +4648,7 @@ emitPlainIfHead: function {
     lL: tmp.listFrees.length
     flushArgHoists :ctx ind: indN.stringView :tmp :buf
     buf.append "\{indN}\{gv} = \{cw} ? 1 : 0;\n"
-    flushBlockFrees :tmp :lL diverged: false :buf
+    flushBlockFrees :tmp :lL diverged: false ind: indN.stringView :buf
     buf.append "\{indN}if (\{gv}) {\n"
     return 1
 }
@@ -5425,7 +5464,7 @@ emitBranchAssign: function {
         appendArmAssign :prog :ctx :n :target vx: vx2.stringView vxF: vx2F :ind :buf
         values.emitArmTakeZero :prog :ctx :n rv: vx2.stringView :ind :buf
         emitValueTakeInvalidations :prog :ctx :n :ind :buf
-        flushBlockFrees :tmp lL: listFreesMark diverged: false :buf
+        flushBlockFrees :tmp lL: listFreesMark diverged: false :ind :buf
         linemarks.close opened: marked :buf
     }
 }
@@ -5848,7 +5887,7 @@ emitReturnCleanup: function {
         what: "a return whose destroys the checker did not record".string
         line: 0
     )
-    for each owed: tmp.listFrees loop buf.append owed.stmt
+    for each owed: tmp.listFrees loop appendOwed :buf :ind stmt: owed.stmt.stringView
     if allRows.not then emitExitDestroy :prog :ctx :ind :buf
 }
 
