@@ -106,16 +106,13 @@ emitNativeArgMethod: function {
     nativepieces.rowNeedsAdd :ctx :row cond: nativepieces.condAlways
     key: nativerows.rowLabel pieces: ctx.pieces :prog n: rowKey
     mk: pendingHoistMark stmt: ctx.stmt
+    # the dotted base, or the argument a call through a type passes it as
+    recvNid: argforms.callRecvNodeId :prog :call
+    if recvNid.isZero then return "".string
     recvF: exprfacts
-    recv: (
-        memberreads.emitDottedReceiver
-        :prog
-        :ctx
-        callable: (prog.ast.nodes.get i: call.callable)
-        facts: recvF
-    )
+    recv: emitExprWith :prog :ctx n: (prog.ast.nodes.get i: recvNid) facts: recvF
     if recv.length == 0 then return "".string
-    if (dottedReceiverIsPtr :prog :ctx callable: (prog.ast.nodes.get i: call.callable)) then {
+    if (argforms.receiverNodeIsPtr :prog :ctx n: (prog.ast.nodes.get i: recvNid)) then {
         rd: "(*\{recv})"
         recv = rd.copy
         recvF = values.operandFacts e: recvF place: true
@@ -133,7 +130,6 @@ emitNativeArgMethod: function {
     # the receiver is evaluated first, then the arguments as written
     ord: orderBegin order: ctx.order slots: pNames.length
     orderNamesTwiceArgs pieces: ctx.pieces st: ord :body count: pNames.length firstHole: 0
-    recvNid: memberreads.dottedParentNodeId n: (prog.ast.nodes.get i: call.callable)
     (
         orderArgAtWith
         :prog
@@ -989,7 +985,9 @@ emitOperatorCallForm: function {
 } out String is {
     mnO: aliasChildName :prog n: (prog.ast.nodes.get i: call.callable)
     if mnO.length == 0 then return "".string
-    if call.arguments.count.u64 != 1 then return "".string
+    # one operand beside the receiver, which a call through a type passes as
+    # an argument too
+    if (argforms.valueArgCount :prog :call) != 1 then return "".string
     opNameId: aliasChildNameId :prog n: (prog.ast.nodes.get i: call.callable)
     owner: ztypes.tid
     method: ztypes.tid
@@ -1081,12 +1079,10 @@ emitOperatorCallForm: function {
         :owner
         mnId: opNameId
     ).not then return "".string
-    lhsNid: zast.nodeid
-    cb: prog.ast.nodes.get i: call.callable
-    if cb.dottedpath then lhsNid = cb.parent
+    lhsNid: argforms.callRecvNodeId :prog :call
     if lhsNid.isZero then return "".string
     rhsNid: zast.nodeid
-    a0: prog.ast.nodes.get i: (zast.kidAt kids: prog.ast.kids span: call.arguments i: 0)
+    a0: prog.ast.nodes.get i: (argforms.firstValueArgId :prog :call)
     if a0.namedoperation then rhsNid = a0.operation
     if rhsNid.isZero then return "".string
     opId: opNameId
@@ -3828,18 +3824,15 @@ demandMethodRow: function {prog: Program.view ctx: Ctx mfid: ztypes.tid} is {
     if row > 0 then nativepieces.demandNativeRow :ctx :row
 }
 
-# nativeCallRecvNode -- the node of a native method call's receiver: a variable
-# (`f.close`) or a field path (`this.c.load`); 0 for any other receiver, which
-# has no address to pass
-nativeCallRecvNode: function {prog: Program.view calr: astnode.view} out zast.nodeid is {
-    if (dottedBaseAtom :prog n: calr).length > 0 then return (
-        stmtblocks.dottedBaseNodeId
-        :prog
-        n: calr
-    )
-    rn: memberreads.dottedParentNodeId n: calr
-    if rn.isZero or (prog.ast.nodes.get i: rn).dottedpath.not then return zast.nodeid
-    return rn
+# nativeCallRecvNode -- the node of a native method call's receiver `recv`
+# when it has an address to pass: a variable (`f.close`) or a field path
+# (`this.c.load`); 0 for any other receiver
+nativeCallRecvNode: function {prog: Program.view recv: zast.nodeid} out zast.nodeid is {
+    if recv.isZero then return zast.nodeid
+    rnode: prog.ast.nodes.get i: recv
+    if (narrowfacts.atomTextOf :prog n: rnode).length > 0 then return (atomNodeId n: rnode)
+    if rnode.dottedpath.not then return zast.nodeid
+    return recv
 }
 
 # nativeCallRecvExpr -- the receiver a native method takes by pointer: the
@@ -3847,14 +3840,16 @@ nativeCallRecvNode: function {prog: Program.view calr: astnode.view} out zast.no
 nativeCallRecvExpr: function {
     prog: Program.view
     ctx: Ctx
-    calr: astnode.view
+    # the receiver's node
+    recvNid: zast.nodeid
     bn: StringView
     bnid: zast.nodeid
 } out String is {
     if bn.length == 0 then {
         rF: exprfacts
-        rt: memberreads.emitDottedReceiver :prog :ctx callable: calr facts: rF
-        if (dottedReceiverIsPtr :prog :ctx callable: calr) then return rt
+        rnode: prog.ast.nodes.get i: recvNid
+        rt: emitExprWith :prog :ctx n: rnode facts: rF
+        if (argforms.receiverNodeIsPtr :prog :ctx n: rnode) then return rt
         return "&(\{rt})"
     }
     recvVid: atomVid :prog nid: bnid
@@ -3891,9 +3886,11 @@ emitClassNativeCall: function {
     facts: exprfacts.borrow
 } out String is {
     calr: prog.ast.nodes.get i: call.callable
-    bn: dottedBaseAtom :prog n: calr
-    bnid: nativeCallRecvNode :prog :calr
-    valRecv: memberreads.nativeValueRecvNode :calr :bnid
+    # the dotted base, or the argument a call through a type passes it as
+    rcvNid: argforms.callRecvNodeId :prog :call
+    bn: narrowfacts.atomTextOf :prog n: (prog.ast.nodes.get i: rcvNid)
+    bnid: nativeCallRecvNode :prog recv: rcvNid
+    valRecv: memberreads.nativeValueRecvNode recv: rcvNid :bnid
     if bnid.isZero then bnid = valRecv
     if bnid.isZero then return "".string
     mnId: aliasChildNameId :prog n: calr
@@ -3912,7 +3909,7 @@ emitClassNativeCall: function {
     if tmplInst then noteTmplMemberUse :prog :ctx :cid :mnId
     fc: spelledCname :ctx tid: cid
     recvExpr: values.nativeValueRecvExpr :prog :ctx :cid recvNid: valRecv
-    if valRecv.isZero then recvExpr = nativeCallRecvExpr :prog :ctx :calr :bn :bnid
+    if valRecv.isZero then recvExpr = nativeCallRecvExpr :prog :ctx recvNid: rcvNid :bn :bnid
     pNames: List String
     pIds: ListVal ztypes.tid
     pNameIds: ListVal zast.nameid
