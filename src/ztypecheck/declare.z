@@ -6288,7 +6288,25 @@ typedefOverNumericDecl: function {
 } out bool is {
     cnId: atomNameId :ast n: (ast.nodes.get i: callableId)
     if cnId.isZero then return false
-    d: declOfUnitDef :st :unitDecl :scope nameId: cnId
+    return (namesNumericTypedefDecl :st :ast :unitDecl :scope nameId: cnId depth: 0)
+}
+
+# namesNumericTypedefDecl -- `nameId` names a unit declaration written `X:
+# typedef B`, where B is a scalar or, by the same question, a typedef over one
+# (`deep: typedef plain`): by the written names, the shape the parse answers;
+# numericTypedefNamed then asks the resolved chain itself. A chain deeper than
+# any written one answers no, and the construction is refused as no numeric
+# typedef's.
+namesNumericTypedefDecl: function {
+    st: zenv.ZSymbolTable.view
+    ast: Ast.view
+    unitDecl: ztypes.declid
+    scope: ztypes.declid
+    nameId: zast.nameid
+    depth: u64
+} out bool is {
+    if depth > 64 then return false
+    d: declOfUnitDef :st :unitDecl :scope :nameId
     if d.isZero then return false
     dn: (st.typing.decls.get i: d).node
     if dn.isZero then return false
@@ -6302,9 +6320,8 @@ typedefOverNumericDecl: function {
     if o.nid.isZero then return false
     b: objectTypedefBaseId :ast onode: o
     if b.isZero then return false
-    # by the base's written name, the shape the parse answers;
-    # numericTypedefNamed then asks the resolved base itself
-    return (memberaccess.isScalarNameId id: b)
+    if (memberaccess.isScalarNameId id: b) then return true
+    return (namesNumericTypedefDecl :st :ast :unitDecl :scope nameId: b depth: depth + 1)
 }
 
 # numericTypedefNamed -- the typedef over a numeric type the callee `callableId`
@@ -6324,18 +6341,46 @@ numericTypedefNamed: function {
         ztypes.tid.create
         from: (resolve.resolveNamedTypeId :st :ast :unitDecl :scope nameId: cnId thisName: "")
     )
-    base: st.typing.typedefBaseTidOf tid: tdTid
-    if base.isZero then return ztypes.tid
-    if (numerics.isNumericTid :st tid: base).not then return ztypes.tid
+    if (st.typing.typedefBaseTidOf tid: tdTid).isZero then return ztypes.tid
+    end: conform.typedefChaseTid typing: st.typing tid: tdTid
+    if (numerics.isNumericTid :st tid: end).not then return ztypes.tid
     return tdTid
+}
+
+# refuseTypedefArgument -- the refusal a construction in a body gives a
+# typedef's argument of type `got` where its base is `base`
+refuseTypedefArgument: function {
+    st: zenv.ZSymbolTable
+    ast: Ast.view
+    base: ztypes.tid
+    got: ztypes.tid
+    valueId: zast.nodeid
+    vl: u32
+    vc: u32
+} is {
+    en: specWrittenName :st :ast tid: base
+    an: specWrittenName :st :ast tid: got
+    (
+        addErrorWithHint
+        :st
+        nodeid: valueId
+        lineno: vl
+        colno: vc
+        e: zast.err.callError
+        msg: "argument 'from' type mismatch: expected \{en}, got \{an}"
+        note: "a typedef is constructed from exactly its base type".string
+        hint: "convert the value to \{en} first"
+        width: 1
+    )
 }
 
 # constOfNumericTypedef -- a typedef over a numeric type applied to one value
 # (`NONE: rid 0`, `rid from: 0`): that value, carrying the typedef as its type.
-# A typedef costs nothing at run time, so its constant is its base's. The value
-# fits the base as a literal written there would, and a typed value must be the
-# base itself -- a typedef constructs from exactly its base. noConst when the
-# callee is no numeric typedef.
+# A typedef costs nothing at run time, so its constant is its base's. The rule
+# is a body's: a typedef constructs from exactly its base, or from itself. A
+# typed value must be one of the two; an untyped literal fits a scalar base as
+# a literal written there would, and a typedef base (`deep: typedef plain`)
+# takes no literal. noConst when the callee is no numeric typedef.
 constOfNumericTypedef: function {
     st: zenv.ZSymbolTable
     scope: ztypes.declid
@@ -6364,22 +6409,14 @@ constOfNumericTypedef: function {
     if (v.kind.ivalKind or v.kind.fvalKind).not then return ztypes.noConst
     vl: nodeLine n: (ast.nodes.get i: valueId)
     vc: nodeCol n: (ast.nodes.get i: valueId)
-    if v.numTid.notZero when (v.numTid == base).not then {
-        # the refusal a construction in a body gives
-        en: specWrittenName :st :ast tid: base
-        an: specWrittenName :st :ast tid: v.numTid
-        (
-            addErrorWithHint
-            :st
-            nodeid: valueId
-            lineno: vl
-            colno: vc
-            e: zast.err.callError
-            msg: "argument 'from' type mismatch: expected \{en}, got \{an}"
-            note: "a typedef is constructed from exactly its base type".string
-            hint: "convert the value to \{en} first"
-            width: 1
-        )
+    if v.numTid.notZero when v.numTid != base when v.numTid != tdTid then {
+        refuseTypedefArgument :st :ast :base got: v.numTid :valueId :vl :vc
+        return ztypes.noConst
+    }
+    if v.numTid.isZero when (st.typing.typedefBaseTidOf tid: base).notZero then {
+        lit: st.reg.literalIntTid
+        if v.kind.fvalKind then lit = st.reg.literalFloatTid
+        refuseTypedefArgument :st :ast :base got: lit :valueId :vl :vc
         return ztypes.noConst
     }
     fm: numerics.constFitsType :st :v target: base
