@@ -563,7 +563,7 @@ emitSvCompareCall: function {
         argFacts: bnvF
         bf: svValueForm :prog :ctx expr: bnv isStr: btIsStr vid: dcbV facts: argFacts
         cargs: String
-        ca: prog.ast.nodes.get i: (firstValueArgId :prog :call)
+        ca: prog.ast.nodes.get i: (firstArgId :prog :call)
         if ca.namedoperation then {
             argF: exprfacts
             cae: emitExprWith :prog :ctx n: (prog.ast.nodes.get i: ca.operation) facts: argF
@@ -681,7 +681,7 @@ emitSvSplitCall: function {
     if (isStringyTid known: ctx.known tid: btid) when mnId == zast.wellKnown.slot.wkSplit then {
         nativepieces.needsAddM :ctx uname: "sviter" memb: "sv_split"
         sepx: String
-        sa: prog.ast.nodes.get i: (firstValueArgId :prog :call)
+        sa: prog.ast.nodes.get i: (firstArgId :prog :call)
         if sa.namedoperation then {
             argFacts: exprfacts
             sfrag: (
@@ -740,7 +740,7 @@ emitSvArgNativeCall: function {
         # the argument is built once, as the native takes it
         if mnId == zast.wellKnown.slot.wkByteAt then {
             barg: String
-            ba: prog.ast.nodes.get i: (firstValueArgId :prog :call)
+            ba: prog.ast.nodes.get i: (firstArgId :prog :call)
             if ba.namedoperation then barg.append (
                 emitExpr
                 :prog
@@ -760,7 +760,7 @@ emitSvArgNativeCall: function {
             return (stating :facts from: callFacts text: eb)
         }
         argx: String
-        a: prog.ast.nodes.get i: (firstValueArgId :prog :call)
+        a: prog.ast.nodes.get i: (firstArgId :prog :call)
         if a.namedoperation then {
             argFacts: exprfacts
             afrag: (
@@ -815,9 +815,7 @@ emitSvSimpleCall: function {
             recvS = baseForm.copy
         }
         args: String
-        qrV: qualRecvArgId :prog :call
         for each aId: (zast.kidsOf ast: prog.ast span: call.arguments) loop {
-            if aId == qrV then continue
             a: prog.ast.nodes.get i: aId
             if a.namedoperation then {
                 aOpNode: prog.ast.nodes.get i: a.operation
@@ -1979,21 +1977,11 @@ armPayloadNamesStorage: function {
     return op.atomid or op.dottedpath
 }
 
-# emitQualRecvMethodCall -- the ordinary method emission for a type-qualified
-# call, whose RECEIVER is among the ARGUMENTS rather than reached through a
-# dot: it is the call's one unlabelled argument, or it carries the receiver
-# parameter's own declared name. Both call forms then share ONE
-# argument-placement rule and a label binds by name in either; walking the
-# call's arguments in WRITTEN order would silently swap a pair of reordered
-# labels.
-#
-# THE CHECKER ANSWERED WHERE THE RECEIVER COMES FROM, and this reads the
-# answer. A call reaches here only when the walk stamped its receiver as coming
-# from the arguments; otherwise the dot supplies it and the call is
-# emitInstanceMethodCall's. Deriving it a second time -- off the base atom's
-# variable id, or off the name -- is what let the two sides disagree and emit a
-# call with the receiver slot never filled.
-emitQualRecvMethodCall: function {
+# emitTypeStaticCall -- a function of a type called through the type, which
+# passes no receiver (`point.origin`, `T.helper a: 1`). A method with a
+# receiver never reaches here: the checker made each such call the call on
+# its receiver (`T.m v` is `v.m`), which the dot supplies.
+emitTypeStaticCall: function {
     prog: Program.view
     ctx: Ctx
     call: zast.callrow.view
@@ -2001,44 +1989,17 @@ emitQualRecvMethodCall: function {
     facts: exprfacts.borrow
 } out String is {
     if (prog.typing.callBaseNamesType.has item: call.nodeid).not then return "".string
-    recvExQ: String
-    recvQF: exprfacts
-    recvPtrQ: false
-    if (fnTypeTakesThis :prog tid: mtid) then {
-        # the receiver: the argument that binds it, by its label or as the
-        # call's unlabelled argument
-        recvNdQ: argValueNode :prog aId: (qualRecvArgId :prog :call)
-        if recvNdQ.notZero then recvExQ = ctorArgTextAt :prog :ctx aid: recvNdQ facts: recvQF
-        # a receiver already held as a pointer passes as it stands -- as
-        # WRITTEN, since the construction-argument text loads a pointer-held
-        # valtype and the receiver slot wants the pointer
-        if recvNdQ.notZero then {
-            recvPtrQ = receiverNodeIsPtr :prog :ctx n: (prog.ast.nodes.get i: recvNdQ)
-            if recvPtrQ when (ptrHeldValtype :prog :ctx n: (prog.ast.nodes.get i: recvNdQ)) then {
-                recvExQ = (
-                    emitExprWith
-                    :prog
-                    :ctx
-                    n: (prog.ast.nodes.get i: recvNdQ)
-                    facts: recvQF
-                )
-            }
-        }
-        # no receiver supplied at all: the checker reports the missing
-        # argument, and the stamp keeps the dotted leg from claiming this call,
-        # so declining reports an unhandled callee rather than hoisting a
-        # zeroed temp nobody passed
-        if recvExQ.length == 0 then return "".string
-    }
+    if (fnTypeTakesThis :prog tid: mtid) then return "".string
+    recvF: exprfacts
     return (
         callorder.emitInstanceMethodBody
         :prog
         :ctx
         :call
         mco: mtid
-        recvExpr: recvExQ.stringView
-        recvF: recvQF
-        recvIsPtr: recvPtrQ
+        recvExpr: ""
+        :recvF
+        recvIsPtr: false
         :facts
     )
 }
@@ -2203,47 +2164,16 @@ boundArgNode: function {
     return (argValueNode :prog aId: (boundArgId :prog :call :param))
 }
 
-# qualRecvArgId -- THE ARGUMENT THAT IS THE RECEIVER of a call written through
-# a type, `T.m v` (callBaseNamesType): the one the binder bound to the method's
-# receiver parameter. 0 for a call through a value, whose dotted base is the
-# receiver, and for a method with no receiver.
-qualRecvArgId: function {prog: Program.view call: zast.callrow.view} out zast.nodeid is {
-    if (prog.typing.callBaseNamesType.has item: call.nodeid).not then return zast.nodeid
-    rdo: prog.typing.refDecl.get key: call.callable
-    if rdo.none then return zast.nodeid
-    mtid: (prog.typing.decls.get i: rdo).typeId
-    if (fnTypeTakesThis :prog tid: mtid).not then return zast.nodeid
-    recvNm: prog.reg.thisParamNameIdOf tid: mtid
-    if recvNm.isZero then recvNm = zast.wellKnown.slot.wkThis
-    return (boundArgId :prog :call param: recvNm)
-}
-
-# callRecvNodeId -- the node of a method call's receiver: the value of the
-# argument that is the receiver of a call written through a type
-# (qualRecvArgId), else the callable's dotted base. 0 when it has neither.
+# callRecvNodeId -- the node of a method call's receiver: the callable's
+# dotted base. 0 when it has none.
 callRecvNodeId: function {prog: Program.view call: zast.callrow.view} out zast.nodeid is {
-    q: qualRecvArgId :prog :call
-    if q.notZero then return (argValueNode :prog aId: q)
     return (memberreads.dottedParentNodeId n: (prog.ast.nodes.get i: call.callable))
 }
 
-# firstValueArgId -- the first argument of `call` that passes a value, the
-# receiver of a call written through a type left out (qualRecvArgId); 0 for
-# none.
-firstValueArgId: function {prog: Program.view call: zast.callrow.view} out zast.nodeid is {
-    q: qualRecvArgId :prog :call
-    for each aId: (zast.kidsOf ast: prog.ast span: call.arguments) loop {
-        if aId != q then return aId
-    }
+# firstArgId -- the first argument of `call`; 0 for none.
+firstArgId: function {prog: Program.view call: zast.callrow.view} out zast.nodeid is {
+    for each aId: (zast.kidsOf ast: prog.ast span: call.arguments) loop return aId
     return zast.nodeid
-}
-
-# valueArgCount -- the arguments of `call` that pass values: every one but the
-# receiver of a call written through a type (qualRecvArgId)
-valueArgCount: function {prog: Program.view call: zast.callrow.view} out u64 is {
-    n: call.arguments.count.u64
-    if (qualRecvArgId :prog :call).notZero then n = n - 1
-    return n
 }
 
 # argValueNode -- the value node of the argument node `aId`; 0 for none.
