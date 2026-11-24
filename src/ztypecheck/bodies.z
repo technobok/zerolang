@@ -1070,7 +1070,6 @@ walkDemandedDef: function {
         # inside a method's body would leave the ambient receiver cleared, and the
         # rest of that method then reads `b.private` as external code. The type
         # branch has bracketed these two since it was the only branch.
-        prevL: st.walk.fn.synthLabel.copy
         prevOwnerUnit: st.walk.fn.synthOwnerUnit
         prevOwnerName: st.walk.fn.synthOwnerName
         prevT: st.walk.fn.currentThisTid
@@ -1088,7 +1087,6 @@ walkDemandedDef: function {
             :ast
             declId: dd
         )
-        st.walk.fn.synthLabel = prevL.take
         st.walk.fn.synthOwnerUnit = prevOwnerUnit
         st.walk.fn.synthOwnerName = prevOwnerName
         st.walk.fn.currentThisTid = prevT
@@ -1354,7 +1352,6 @@ walkDeferredBody: function {
     typeName: zast.nameTextCopy :ast ref: (st.typing.decls.get i: ownerDecl).name
     prevMono: st.typing.curMonoStamp
     savedMode: st.mode
-    prevL: st.walk.fn.synthLabel.copy
     prevU: st.walk.fn.synthOwnerUnit
     prevN: st.walk.fn.synthOwnerName
     prevThis: st.walk.fn.currentThisTid
@@ -1381,7 +1378,6 @@ walkDeferredBody: function {
     markMemberWalked :st :declId
     st.typing.curMonoStamp = prevMono
     st.mode = savedMode
-    st.walk.fn.synthLabel = prevL.take
     st.walk.fn.synthOwnerUnit = prevU
     st.walk.fn.synthOwnerName = prevN
     st.walk.fn.currentThisTid = prevThis
@@ -1393,42 +1389,24 @@ methodLabel: function {ast: Ast.view typeName: StringView memberId: zast.nameid}
     return "\{typeName}.\{mn}"
 }
 
-# setSynthOwnerLabel -- synth rows carry the unit member's dump label: a method's
-# nodes live inside its TYPE's subtree, so the label is the type name. The same
-# pair travels as ids too -- a method's owner is its TYPE, everything else owns
-# itself -- which is what checkCase reads instead of splitting the label apart.
-setSynthOwnerLabel: function {
+# setSynthOwner -- the definition the synth rows of this walk belong to, as
+# ids: a method's owner is its TYPE (its nodes live inside the type's
+# subtree), everything else owns itself. checkCase resolves a bare `match t`
+# subject against it, and the dump's synth rows carry it.
+setSynthOwner: function {
     st: zenv.ZSymbolTable
     unitDecl: ztypes.declid
     ast: Ast.view
     defName: StringView
-    # the definition's interned name; it spells the synth label when `defName` is empty
+    # the definition's interned name, when the caller holds it
     defNameId: zast.nameid
     thisName: StringView
 } is {
-    # Synth rows carry the unit member's dump label: a method's nodes
-    # live inside its TYPE's subtree, so the label is the type name.
-    # Nested method walks save and restore it around their bodies.
-    lblUnit: zast.poolTextAt pool: ast.names ref: (unitNameIdOf :st :unitDecl)
-    # the label's pair as ids: a method's owner is its TYPE, everything
-    # else owns itself. checkCase reads this instead of splitting the
-    # label back apart.
     st.walk.fn.synthOwnerUnit = unitDecl
-    {
-        soid: defNameId
-        if soid.isZero then soid = zast.poolFind pool: ast.names text: defName
-        if thisName.length > 0 then soid = zast.poolFind pool: ast.names text: thisName
-        st.walk.fn.synthOwnerName = soid
-    }
-    # the definition's spelling: the label's, else the interned name's
-    dnT: zast.nameTextAt :ast ref: defNameId
-    # the spelling is chosen first and composed once: a method's own name wins,
-    # then the label's, then the interned one
-    lblName: if thisName.length > 0 then thisName else if (
-        defName.length == 0
-    ) then dnT.stringView else defName
-    lbl: "\{lblUnit}.\{lblName}"
-    st.walk.fn.synthLabel = lbl.take
+    soid: defNameId
+    if soid.isZero then soid = zast.poolFind pool: ast.names text: defName
+    if thisName.length > 0 then soid = zast.poolFind pool: ast.names text: thisName
+    st.walk.fn.synthOwnerName = soid
 }
 
 # checkFunctionBody -- type-check one function body. Pushes a scope, binds each
@@ -1626,7 +1604,7 @@ checkFunctionBodyIn: function {
         # its values, and its return is the wrapper the lowering wrote
         isGenCall: (generatorCallOf typing: st.typing nid: fn.nid).notZero
         input: bindParams :st :unitDecl :ast :rf :fn :thisName :fnTid
-        setSynthOwnerLabel :st :unitDecl :ast :defName :defNameId :thisName
+        setSynthOwner :st :unitDecl :ast :defName :defNameId :thisName
         st.walk.fn.currentThisTid = thisTid
         prevFn: st.walk.fn.currentFnTid
         st.walk.fn.currentFnTid = walkedFnTid :st :fnTid
@@ -1998,7 +1976,6 @@ stampOneFnMono: function {
     }
     st.typing.curMonoStamp = monoId
     st.walk.fn.curMonoFnTid = monoId
-    prevL: st.walk.fn.synthLabel.copy
     prevOwnerUnit: st.walk.fn.synthOwnerUnit
     prevOwnerName: st.walk.fn.synthOwnerName
     prevT: st.walk.fn.currentThisTid
@@ -2022,7 +1999,6 @@ stampOneFnMono: function {
     )
     st.typing.endInstanceWalk next: (nextRowOf :ast)
     noteInstanceErrors :st :ast mono: monoId from: errsBefore
-    st.walk.fn.synthLabel = prevL.take
     st.walk.fn.synthOwnerUnit = prevOwnerUnit
     st.walk.fn.synthOwnerName = prevOwnerName
     st.walk.fn.currentThisTid = prevT
@@ -2228,7 +2204,6 @@ stampOneClassMono: function {
         bindMonoParams :st :monoId
     }
     st.typing.curMonoStamp = monoId
-    prevL: st.walk.fn.synthLabel.copy
     prevOwnerUnit: st.walk.fn.synthOwnerUnit
     prevOwnerName: st.walk.fn.synthOwnerName
     prevT: st.walk.fn.currentThisTid
@@ -2293,7 +2268,6 @@ stampOneClassMono: function {
         collectOwedMembers :st :ast :clsOpId :monoId names: mNames ops: mOps
     }
     noteInstanceErrors :st :ast mono: monoId from: errsBefore
-    st.walk.fn.synthLabel = prevL.take
     st.walk.fn.synthOwnerUnit = prevOwnerUnit
     st.walk.fn.synthOwnerName = prevOwnerName
     st.walk.fn.currentThisTid = prevT
@@ -3098,7 +3072,6 @@ walkUnitMonoFns: function {
     idxs: ListVal u64
     collectOwedUnitFns :st :ast :bodyIds :monoId :idxs
     st.typing.curMonoStamp = monoId
-    prevL: st.walk.fn.synthLabel.copy
     prevOwnerUnit: st.walk.fn.synthOwnerUnit
     prevOwnerName: st.walk.fn.synthOwnerName
     prevT: st.walk.fn.currentThisTid
@@ -3159,7 +3132,6 @@ walkUnitMonoFns: function {
         idxs = ListVal u64
         collectOwedUnitFns :st :ast :bodyIds :monoId :idxs
     }
-    st.walk.fn.synthLabel = prevL.take
     st.walk.fn.synthOwnerUnit = prevOwnerUnit
     st.walk.fn.synthOwnerName = prevOwnerName
     st.walk.fn.currentThisTid = prevT
