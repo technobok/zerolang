@@ -1882,43 +1882,15 @@ emitIfStmt: function {
     }
     ctx.stmt.condDepth = ctx.stmt.condDepth + 1
     ifAssign: String
-    opened: emitIfClauses :prog :ctx clauses: n.clauses assignTo: ifAssign.stringView :ind :tmp :buf
-    chS: List String
-    chV: ListVal ztypes.vid
-    chA: ListVal zast.nameid
-    chT: ListVal ztypes.tid
-    chN: ListVal bool
-    chR: List String
-    chRF: ListVal exprfacts
-    (
-        chainFactsOfClauses
+    opened: (
+        emitIfClauses
         :prog
         :ctx
         clauses: n.clauses
-        upTo: n.clauses.count
-        subjects: chS
-        svids: chV
-        arms: chA
-        tids: chT
-        negs: chN
-        recvs: chR
-        recvFs: chRF
-    )
-    (
-        emitElse
-        :prog
-        :ctx
-        oId: n.elseclause
+        elseId: n.elseclause
         assignTo: ifAssign.stringView
         :ind
         :tmp
-        chSubjects: chS
-        chSubjectVids: chV
-        chArms: chA
-        chTids: chT
-        chNegs: chN
-        chRecvs: chR
-        chRecvFs: chRF
         :buf
     )
     le: "\{ind}}\n"
@@ -3841,43 +3813,15 @@ emitIfAssign: function {
     }
     # each branch runs only when selected, as a statement if's branches do
     ctx.stmt.condDepth = ctx.stmt.condDepth + 1
-    opened: emitIfClauses :prog :ctx clauses: n.clauses assignTo: target :ind :tmp :buf
-    chS: List String
-    chV: ListVal ztypes.vid
-    chA: ListVal zast.nameid
-    chT: ListVal ztypes.tid
-    chN: ListVal bool
-    chR: List String
-    chRF: ListVal exprfacts
-    (
-        chainFactsOfClauses
+    opened: (
+        emitIfClauses
         :prog
         :ctx
         clauses: n.clauses
-        upTo: n.clauses.count
-        subjects: chS
-        svids: chV
-        arms: chA
-        tids: chT
-        negs: chN
-        recvs: chR
-        recvFs: chRF
-    )
-    (
-        emitElse
-        :prog
-        :ctx
-        oId: n.elseclause
+        elseId: n.elseclause
         assignTo: target
         :ind
         :tmp
-        chSubjects: chS
-        chSubjectVids: chV
-        chArms: chA
-        chTids: chT
-        chNegs: chN
-        chRecvs: chR
-        chRecvFs: chRF
         :buf
     )
     le: "\{ind}}\n"
@@ -4243,44 +4187,25 @@ restoreCondExclusions: function {narrow: NarrowState mark: u64} is {
     }
 }
 
-# chainFactsOfClauses -- the accumulated single-bare-conjunct facts of an
-# if chain's first `upTo` clauses (subject/arm/tid/negated parallel lists), by
-# the checker's accumulation rule exactly.
-chainFactsOfClauses: function {
+# addClauseFacts -- the fact clause `clauseId` of an if chain leaves on
+# `facts` when it fails, by the checker's accumulation rule exactly: a clause
+# of one condition that is a bare arm predicate records it (chainCondFact)
+addClauseFacts: function {
     prog: Program.view
     ctx: Ctx
-    clauses: zast.kidspan
-    upTo: u64
-    subjects: List String
-    svids: ListVal ztypes.vid
-    arms: ListVal zast.nameid
-    tids: ListVal ztypes.tid
-    negs: ListVal bool
-    recvs: List String
-    recvFs: ListVal exprfacts
+    clauseId: zast.nodeid
+    facts: narrowfacts.ChainFacts
 } is {
-    seen: u64
-    for each clauseId: (zast.kidsOf ast: prog.ast span: clauses) while seen < upTo loop {
-        seen = seen + 1
-        c: prog.ast.nodes.get i: clauseId
-        # a clause of ONE condition: the fact it records, if any, is the
-        # clause's
-        if c.ifclause when c.conditions.count.u64 == 1 then {
-            k: prog.ast.nodes.get i: (zast.kidAt kids: prog.ast.kids span: c.conditions i: 0)
-            if k.namedoperation then (
-                narrowfacts.chainCondFact
-                :prog
-                :ctx
-                n: (prog.ast.nodes.get i: k.operation)
-                :subjects
-                :svids
-                :arms
-                :tids
-                :negs
-                :recvs
-                :recvFs
-            )
-        }
+    c: prog.ast.nodes.get i: clauseId
+    if c.ifclause when c.conditions.count.u64 == 1 then {
+        k: prog.ast.nodes.get i: (zast.kidAt kids: prog.ast.kids span: c.conditions i: 0)
+        if k.namedoperation then (
+            narrowfacts.chainCondFact
+            :prog
+            :ctx
+            n: (prog.ast.nodes.get i: k.operation)
+            :facts
+        )
     }
 }
 
@@ -4660,81 +4585,40 @@ hoistsPending: function {stmt: StatementState.view} out bool is {
     return stmt.argHoistRaw.length > stmt.argHoistRawFloor
 }
 
-# emitIfClauses -- an if chain's clauses in order, answering the blocks they
-# opened around themselves. A clause after the first runs only where every
-# clause before it failed, so the facts those failures leave -- an arm a bare
-# predicate tested is ruled out, a negated one names the arm the subject holds
-# (chainFactsOfClauses over the clauses before it) -- narrow its conditions and
-# its body as they narrow the else (emitElse). The checker narrows a later
-# clause the same way.
+# emitIfClauses -- an if chain's clauses in order, then its else (elseId, 0
+# for none), answering the blocks the clauses opened around themselves. A
+# clause after the first runs only where every clause before it failed, so the
+# facts those failures leave -- an arm a bare predicate tested is ruled out, a
+# negated one names the arm the subject holds -- are gathered as the clauses
+# go (addClauseFacts) and narrow each later clause's conditions and body, and
+# the else, alike (layerChainFacts). The checker narrows a later clause the
+# same way.
 emitIfClauses: function {
     prog: Program.view
     ctx: Ctx
     clauses: zast.kidspan
+    elseId: zast.nodeid
     assignTo: StringView
     ind: StringView
     tmp: FnTemps
     buf: String.borrow
 } out u64 is {
+    facts: (
+        narrowfacts.ChainFacts
+        subjects: List String
+        svids: ListVal ztypes.vid
+        arms: ListVal zast.nameid
+        tids: ListVal ztypes.tid
+        negs: ListVal bool
+        recvs: List String
+        recvFs: ListVal exprfacts
+    )
     opened: u64
     at: u64
     for each cId: (zast.kidsOf ast: prog.ast span: clauses) loop {
-        xMark: ctx.narrow.exSaves.length
-        sVid: ListVal ztypes.vid
-        sPrevV: List String
-        sPrevF: ListVal exprfacts
-        sPrevT: ListVal ztypes.tid
-        if at > 0 then {
-            chS: List String
-            chV: ListVal ztypes.vid
-            chA: ListVal zast.nameid
-            chT: ListVal ztypes.tid
-            chN: ListVal bool
-            chR: List String
-            chRF: ListVal exprfacts
-            (
-                chainFactsOfClauses
-                :prog
-                :ctx
-                :clauses
-                upTo: at
-                subjects: chS
-                svids: chV
-                arms: chA
-                tids: chT
-                negs: chN
-                recvs: chR
-                recvFs: chRF
-            )
-            (
-                narrowfacts.layerChainExclusions
-                narrow: ctx.narrow
-                svids: chV
-                arms: chA
-                tids: chT
-                negs: chN
-            )
-            # the alias comments belong to the clause's body, which writes its own
-            unusedCmt: String
-            (
-                seedElseNarrows
-                :prog
-                :ctx
-                subjects: chS
-                chVids: chV
-                arms: chA
-                tids: chT
-                negs: chN
-                recvs: chR
-                recvFs: chRF
-                :ind
-                svids: sVid
-                prevV: sPrevV
-                prevF: sPrevF
-                prevT: sPrevT
-                buf: unusedCmt
-            )
-        }
+        # the alias comments belong to the clause's body, which writes its own
+        unusedCmt: String
+        save: layerChainFacts :prog :ctx :facts :ind buf: unusedCmt
         opened = (
             opened +
             (
@@ -4749,10 +4633,11 @@ emitIfClauses: function {
                 :buf
             )
         )
-        restoreNarrowSeeds narrow: ctx.narrow svids: sVid prevV: sPrevV prevF: sPrevF prevT: sPrevT
-        restoreCondExclusions narrow: ctx.narrow mark: xMark
+        unlayerChainFacts narrow: ctx.narrow :save
+        addClauseFacts :prog :ctx clauseId: cId :facts
         at = at + 1
     }
+    emitElse :prog :ctx oId: elseId :assignTo :ind :tmp :facts :buf
     return opened
 }
 
@@ -4906,13 +4791,7 @@ negatedChainArm: function {
 seedElseNarrows: function {
     prog: Program.view
     ctx: Ctx
-    subjects: (List String).view
-    chVids: (ListVal ztypes.vid).view
-    arms: (ListVal zast.nameid).view
-    tids: (ListVal ztypes.tid).view
-    negs: (ListVal bool).view
-    recvs: (List String).view
-    recvFs: (ListVal exprfacts).view
+    facts: narrowfacts.ChainFacts.view
     ind: StringView
     svids: ListVal ztypes.vid
     prevV: List String
@@ -4922,22 +4801,22 @@ seedElseNarrows: function {
 } is {
     done: IdSet ztypes.vid
     gi: u64
-    for gi < chVids.length loop {
-        gv: chVids.get i: gi
+    for gi < facts.svids.length loop {
+        gv: facts.svids.get i: gi
         if (done.has item: gv).not then {
             done.add item: gv
-            gs: subjects.get i: gi
-            grecv: recvs.get i: gi
-            na: negatedChainArm svids: chVids :arms :negs subj: gv
+            gs: facts.subjects.get i: gi
+            grecv: facts.recvs.get i: gi
+            na: negatedChainArm svids: facts.svids arms: facts.arms negs: facts.negs subj: gv
             (
                 narrowfacts.seedElseSubject
                 :prog
                 :ctx
                 subj: gs.stringView
                 subjVid: gv
-                owner: (tids.get i: gi)
+                owner: (facts.tids.get i: gi)
                 recv: grecv.stringView
-                recvF: (recvFs.get i: gi)
+                recvF: (facts.recvFs.get i: gi)
                 negArm: na
                 :ind
                 :svids
@@ -4951,7 +4830,8 @@ seedElseNarrows: function {
     }
 }
 
-# emit an if/match else branch.
+# emitElse -- an if chain's else branch, narrowed knowing every clause's fact
+# in `facts` failed
 emitElse: function {
     prog: Program.view
     ctx: Ctx
@@ -4959,13 +4839,7 @@ emitElse: function {
     assignTo: StringView
     ind: StringView
     tmp: FnTemps
-    chSubjects: (List String).view
-    chSubjectVids: (ListVal ztypes.vid).view
-    chArms: (ListVal zast.nameid).view
-    chTids: (ListVal ztypes.tid).view
-    chNegs: (ListVal bool).view
-    chRecvs: (List String).view
-    chRecvFs: (ListVal exprfacts).view
+    facts: narrowfacts.ChainFacts.view
     buf: String.borrow
 } is {
     if oId.isZero then return
@@ -4973,37 +4847,7 @@ emitElse: function {
     lh: "\{ind}} else {\n"
     buf.append lh
     bodyInd: "\{ind}    "
-    xMark: ctx.narrow.exSaves.length
-    (
-        narrowfacts.layerChainExclusions
-        narrow: ctx.narrow
-        svids: chSubjectVids
-        arms: chArms
-        tids: chTids
-        negs: chNegs
-    )
-    sVid: ListVal ztypes.vid
-    sPrevV: List String
-    sPrevF: ListVal exprfacts
-    sPrevT: ListVal ztypes.tid
-    (
-        seedElseNarrows
-        :prog
-        :ctx
-        subjects: chSubjects
-        chVids: chSubjectVids
-        arms: chArms
-        tids: chTids
-        negs: chNegs
-        recvs: chRecvs
-        recvFs: chRecvFs
-        :ind
-        svids: sVid
-        prevV: sPrevV
-        prevF: sPrevF
-        prevT: sPrevT
-        :buf
-    )
+    save: layerChainFacts :prog :ctx :facts :ind :buf
     if assignTo.length > 0 then {
         (
             emitBranchAssign
@@ -5022,8 +4866,66 @@ emitElse: function {
         dvF: blockDiverges :prog :ctx n: o
         closeScopeBlock :prog :ctx :tmp lL: lLe diverged: dvF node: oId ind: bodyInd.stringView :buf
     }
-    restoreNarrowSeeds narrow: ctx.narrow svids: sVid prevV: sPrevV prevF: sPrevF prevT: sPrevT
-    restoreCondExclusions narrow: ctx.narrow mark: xMark
+    unlayerChainFacts narrow: ctx.narrow :save
+}
+
+# ChainSave -- what layerChainFacts changed in the narrowing state, for
+# unlayerChainFacts to put back: where the exclusions it pushed start, and the
+# subjects it seeded with what each held before
+ChainSave: class {
+    mark: u64
+    svids: ListVal ztypes.vid
+    prevV: List String
+    prevF: ListVal exprfacts
+    prevT: ListVal ztypes.tid
+}
+
+# layerChainFacts -- narrow for code that runs once every fact in `facts`
+# failed (a later clause of the chain, or its else): each positive fact's arm
+# excluded, and each subject left with one arm aliased to it, the alias
+# comments onto `buf`
+layerChainFacts: function {
+    prog: Program.view
+    ctx: Ctx
+    facts: narrowfacts.ChainFacts.view
+    ind: StringView
+    buf: String.borrow
+} out ChainSave is {
+    save: (
+        ChainSave
+        mark: ctx.narrow.exSaves.length
+        svids: ListVal ztypes.vid
+        prevV: List String
+        prevF: ListVal exprfacts
+        prevT: ListVal ztypes.tid
+    )
+    narrowfacts.layerChainExclusions narrow: ctx.narrow :facts
+    (
+        seedElseNarrows
+        :prog
+        :ctx
+        :facts
+        :ind
+        svids: save.svids
+        prevV: save.prevV
+        prevF: save.prevF
+        prevT: save.prevT
+        :buf
+    )
+    return save
+}
+
+# unlayerChainFacts -- the narrowing state as it was before layerChainFacts
+unlayerChainFacts: function {narrow: NarrowState save: ChainSave.view} is {
+    (
+        restoreNarrowSeeds
+        :narrow
+        svids: save.svids
+        prevV: save.prevV
+        prevF: save.prevF
+        prevT: save.prevT
+    )
+    restoreCondExclusions :narrow mark: save.mark
 }
 
 # refReturnText -- the address a reference-returning function hands back for

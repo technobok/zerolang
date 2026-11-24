@@ -1403,56 +1403,56 @@ classifyCondFact: function {
     }
 }
 
-# chainCondFact -- one condition operation as a bare arm predicate, recorded
-# into the parallel chain-fact lists. Classification is classifyCondFact's; this
-# adds only the text the else emission reuses rather than re-deriving -- the
-# subject spelling and the emitted receiver.
-chainCondFact: function {
-    prog: Program.view
-    ctx: Ctx
-    n: astnode.view
+# ChainFacts -- the arm facts of an if chain's clauses so far, one entry per
+# clause whose one condition is a bare arm predicate (chainCondFact): what a
+# later clause, and the else, run knowing failed
+ChainFacts: class {
+    # each subject as written, its variable, the arm, the arm's owner type, and
+    # whether the predicate is negated
     subjects: List String
     svids: ListVal ztypes.vid
     arms: ListVal zast.nameid
     tids: ListVal ztypes.tid
     negs: ListVal bool
+    # each subject's emitted C and its facts, which the else reuses rather than
+    # emitting again
     recvs: List String
     recvFs: ListVal exprfacts
-} is {
+}
+
+# chainCondFact -- one condition operation as a bare arm predicate, recorded
+# onto `facts`. Classification is classifyCondFact's; this adds only the text
+# the else emission reuses rather than re-deriving -- the subject spelling and
+# the emitted receiver.
+chainCondFact: function {prog: Program.view ctx: Ctx n: astnode.view facts: ChainFacts} is {
     f: classifyCondFact :prog :n
     if f.ok.not then return
     parent: prog.ast.nodes.get i: f.parentNid
     subj: atomTextOf :prog n: parent
     rvF: exprfacts
     rv: emitExprWith :prog :ctx n: parent facts: rvF
-    subjects.append subj.string
-    svids.append f.svid
-    arms.append f.armRef
-    tids.append f.owner
-    negs.append f.neg
-    recvs.append rv
-    recvFs.append rvF
+    facts.subjects.append subj.string
+    facts.svids.append f.svid
+    facts.arms.append f.armRef
+    facts.tids.append f.owner
+    facts.negs.append f.neg
+    facts.recvs.append rv
+    facts.recvFs.append rvF
 }
 
 # layerChainExclusions -- on the else side every positive chain fact failed, so
 # each one's arm is excluded for the else body. A negated fact names the arm the
 # subject has instead, and is seeded rather than excluded.
-layerChainExclusions: function {
-    narrow: NarrowState
-    svids: (ListVal ztypes.vid).view
-    arms: (ListVal zast.nameid).view
-    tids: (ListVal ztypes.tid).view
-    negs: (ListVal bool).view
-} is {
+layerChainExclusions: function {narrow: NarrowState facts: ChainFacts.view} is {
     fi: u64
-    for fi < negs.length loop {
-        if (negs.get i: fi).not then {
+    for fi < facts.negs.length loop {
+        if (facts.negs.get i: fi).not then {
             (
                 pushExclusion
                 :narrow
-                vid: (svids.get i: fi)
-                arm: (arms.get i: fi)
-                owner: (tids.get i: fi)
+                vid: (facts.svids.get i: fi)
+                arm: (facts.arms.get i: fi)
+                owner: (facts.tids.get i: fi)
             )
         }
         fi = fi + 1
