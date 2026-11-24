@@ -2446,32 +2446,6 @@ resolveAliasKeyIn: function {
     return atid
 }
 
-# ensureDefGenericParams -- register a generic type definition's parameter names
-# against its Decl. `registerGenericParams` runs from the definition resolvers,
-# but a def can be marked RESOLVED by a path that never reached one -- the
-# descent then short-circuits, and `getOrMintSpec` reads an arity of zero for a
-# template that plainly has parameters, which costs it the trie. `addGenericParam`
-# already refuses a name it holds, so re-registering is a no-op.
-ensureDefGenericParams: function {
-    st: zenv.ZSymbolTable
-    ast: Ast.view
-    declId: ztypes.declid
-} is {
-    if declId.isZero then return
-    dnG: zast.nodeid
-    dgG: st.typing.decls.get i: declId
-    dnG = dgG.node
-    dgG.drop
-    if dnG.isZero then return
-    bmG: ast.nodes.get i: dnG
-    if bmG.namedoperation then {
-        odG: ast.nodes.get i: bmG.operation
-        if odG.objectdef when (zast.itemsHaveGenericParam :ast items: odG.asItems) then {
-            declare.registerGenericParams :st :ast tdecl: declId items: odG.asItems
-        }
-    }
-}
-
 # resolve a dotted name one segment at a time from `scope`, answering the
 # type it lands on
 descendNamed: function {
@@ -2549,10 +2523,6 @@ descendNamedId: function {
     }
     ddecl: declOfUnitDef :st scope: rf :unitDecl :nameId
     if (defWasResolved :st scope: rf :unitDecl :nameId) then {
-        # already resolved -- but not necessarily by a path that registered the
-        # generic parameters, and the spec trie cannot key a template whose
-        # arity reads as zero.
-        ensureDefGenericParams :st :ast declId: ddecl
         return (resolvedDescentTid :st :ast :unitDecl :nameId :classified :tid)
     }
     if (st.typing.declIsResolving declId: ddecl) then {
