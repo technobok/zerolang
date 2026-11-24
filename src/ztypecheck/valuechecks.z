@@ -2205,13 +2205,7 @@ checkAssignmentIn: function {
     st.walk.formValueNid = outerForm
     mvt: materialiseLiteral :ast :st t: vt
     vt = mvt
-    if vt.isZero when st.typing.reportCount == errsBefore then {
-        reportUnresolvedValue :st :unitDecl :ast nid: asgn.value
-        refuseUntypedValue :st :ast nid: asgn.value
-    }
-    if (refuseNullValue :st :ast :vt nid: asgn.value) then return
-    if (flow.refuseUnitValue :st :ast :vt nid: asgn.value) then return
-    refuseValueBorrow :st :ast :vt value: asgn.value
+    if (refuseUnbindable :st :unitDecl :ast :vt nid: asgn.value since: errsBefore) then return
     if vt.notZero then {
         bpins: List ztyping.PinPath
         bread: (
@@ -3320,6 +3314,30 @@ reportNotAddressable: function {
     )
 }
 
+# refuseUnbindable -- the value `nid`, of type `vt`, cannot be bound to a name:
+# an unresolvable name or an expression that produces no value (a 0 nothing
+# reported since `since`), a value of type `null` or `never`, or a unit. Each is
+# reported, and the answer is true for the last two; a 0 still binds its name,
+# typeless. A borrow the binding may not take is reported too. A plain binding
+# and a `with` bind through this one check.
+refuseUnbindable: function {
+    st: zenv.ZSymbolTable
+    unitDecl: ztypes.declid
+    ast: Ast
+    vt: ztypes.tid
+    nid: zast.nodeid
+    since: u64
+} out bool is {
+    if vt.isZero when st.typing.reportCount == since then {
+        reportUnresolvedValue :st :unitDecl :ast :nid
+        refuseUntypedValue :st :ast :nid
+    }
+    if (refuseNullValue :st :ast :vt :nid) then return true
+    if (flow.refuseUnitValue :st :ast :vt :nid) then return true
+    refuseValueBorrow :st :ast :vt value: nid
+    return false
+}
+
 # checkWith -- walk `with name: value do body`: push the `with` scope, bind the
 # alias variable (BORROWED for a plain-path value), walk the body, then pop. The
 # with node carries the bound value's type; the with-expression's value is the
@@ -3338,11 +3356,8 @@ checkWith: function {
     # a literal bound to a name takes its default, as a plain binding's does:
     # a literal type has no run-time variable
     vt = materialiseLiteral :ast :st t: vt
-    if (flow.refuseUnitValue :st :ast :vt nid: withnode.value) then vt = ztypes.tid
-    refuseValueBorrow :st :ast :vt value: withnode.value
-    if vt.u64 == 0 when st.typing.reportCount == errW then {
-        reportUnresolvedValue :st :unitDecl :ast nid: withnode.value
-    }
+    if (refuseUnbindable :st :unitDecl :ast :vt nid: withnode.value since: errW
+    ) then vt = ztypes.tid
     # a value that failed still binds its name, typeless, so the body's reads
     # of it are not each an unknown reference
     if vt.isZero then {
