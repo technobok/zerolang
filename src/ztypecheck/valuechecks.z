@@ -1505,8 +1505,11 @@ typeOfBareName: function {
             lineno: node.lineno
             colno: node.colno
         ) then isAutoFn = false
+        # bareFnCall answers the function itself when it refuses the call
+        bareCall: false
         if isAutoFn when st.mode.suppressFnAutoCall.not then {
             result = bareFnCall :st :ast :node fid: fo
+            bareCall = result != fo
         }
         # a type read as its zero value is the instance's: a generic unit's
         # parameter, or an alias of it, is the instance's argument, and the
@@ -1538,8 +1541,28 @@ typeOfBareName: function {
         # the definition the name resolved to, wherever it lives: a namespace
         # member is no definition of the unit the read is written in
         walkDefinitionById :st :ast tid: fo
+        pinBareCallResult :st :ast fid: fo called: bareCall
     }
     return result
+}
+
+# pinBareCallResult -- the result of `fid` called by its bare name (when
+# `called`) is a call's, with no argument and no receiver to pin: what the
+# function declares of it (`out T.hold`) reaches what takes the value. It is
+# taken after the definition's walk, which starts from an empty draft.
+pinBareCallResult: function {st: zenv.ZSymbolTable ast: Ast.view fid: ztypes.tid called: bool} is {
+    if called.not then return
+    noPins: List ztyping.PinPath
+    noRecv: ListVal zast.nameid
+    (
+        moves.pinCallResult
+        :st
+        pool: ast.names
+        funcId: fid
+        pins: noPins
+        recvPath: noRecv
+        recvShared: true
+    )
 }
 
 # checkBareNameValue -- a bare name read as a value, checked as the
