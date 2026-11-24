@@ -1224,8 +1224,9 @@ ZTyping: class {
     # type id -> the declaration that minted it (first mint wins): a
     # definition, a method or function member, a type member, or a
     # monomorphisation's own clone (declCloneType). A type nothing defines --
-    # the shell a name that resolved nowhere leaves -- has none.
-    declByTypeId: (IdMapV ztypes.tid v: ztypes.declid)
+    # the shell a name that resolved nowhere leaves -- has none. Dense
+    # (denseAt): nearly every type id has its declaration.
+    declByTypeId: (ListVal ztypes.declid i: ztypes.tid)
     # a generic function a unit instance keeps as a template of its own
     # (keepMonoFnGeneric): the template unit's function it copies, whose
     # declaration its instances bind their arguments through
@@ -1667,14 +1668,13 @@ ZTyping: class {
     declSetType: function {t: this declId: ztypes.declid typeId: ztypes.tid} is {
         decl: t.decls.getMut i: declId
         decl.typeId = typeId
-        if typeId.notZero then {
-            seen: false
-            ex: t.declByTypeId.get key: typeId
-            if ex.some then {
-                seen = true
-            }
-            if seen.not then t.declByTypeId.set key: typeId value: declId
-        }
+        decl.drop
+        if typeId.notZero when (t.declIdOfType :typeId).isZero then (
+            denseSet
+            tbl: t.declByTypeId
+            id: typeId
+            value: declId
+        )
     }
 
     # unitMemberCopySet -- record `copy` as the instance `mono`'s copy of its
@@ -1768,12 +1768,7 @@ ZTyping: class {
     # carry instantiated types. (templateDeclOf, in ztypecheck, answers the
     # TEMPLATE's instead; the two differ on monos.)
     declIdOfType: function {t: this.view typeId: ztypes.tid} out ztypes.declid is {
-        od: ztypes.declid
-        go: t.declByTypeId.get key: typeId
-        if go.some then {
-            od = go
-        }
-        return od
+        return (denseAt tbl: t.declByTypeId id: typeId)
     }
 
     # setMemberType -- record a member declaration's type. The member names
@@ -1813,7 +1808,7 @@ ZTyping: class {
         defines: mk8.methodDecl or mk8.funcDecl or mk8.typeDecl
         if childTypeId.notZero when defines then {
             existingDecl: t.declIdOfType typeId: childTypeId
-            if existingDecl.isZero then t.declByTypeId.set key: childTypeId value: md8
+            if existingDecl.isZero then denseSet tbl: t.declByTypeId id: childTypeId value: md8
         }
     }
 
@@ -3004,15 +2999,35 @@ armSuffixSideOf: function {
     }
 }
 
+# denseAt -- the value at id `id` of a dense table: a list indexed by the id
+# itself, for an id space nearly every id of which has a value. The zero value
+# where nothing is set: the length test is not an index adjustment but the
+# sparse tail -- the table grows only as far as the highest id set (denseSet).
+denseAt: function as { k: anyval.generic v: anyval.generic } in {
+    tbl: (ListVal v i: k).view
+    id: k
+} out v is {
+    if id.u64 >= tbl.length then return v
+    return (tbl.get i: id)
+}
+
+# denseSet -- set the value at id `id` of a dense table (denseAt), growing it
+# with zero values as far as `id`
+denseSet: function as { k: anyval.generic v: anyval.generic } in {
+    tbl: (ListVal v i: k)
+    id: k
+    value: v
+} is {
+    for tbl.length <= id.u64 loop tbl.append v
+    tbl.set i: id val: value
+}
+
 # nodeTypeAt -- the type id stamped on node `nid`; 0 when nothing is stamped
-# there (nodeTypeSet records neither a 0 node id nor a 0 type id). A node id
-# indexes the table directly; the length test is not an index adjustment but
-# the sparse tail -- the table grows only as far as the highest stamped id.
+# there (nodeTypeSet records neither a 0 node id nor a 0 type id)
 nodeTypeAt: function {
     tbl: (ListVal ztypes.tid i: zast.nodeid).view nid: zast.nodeid
 } out ztypes.tid is {
-    if nid.u64 >= tbl.length then return ztypes.tid.zero
-    return (tbl.get i: nid)
+    return (denseAt :tbl id: nid)
 }
 
 # nodeTypeSet -- stamp node `nid` with type id `tid`. astnode id 0 means "no node"
@@ -3023,9 +3038,7 @@ nodeTypeSet: function {
 } is {
     if nid.isZero then return
     if tid.isZero then return
-    for tbl.length <= nid.u64 loop tbl.append ztypes.tid
-    v: tid
-    tbl.set i: nid val: v
+    denseSet :tbl id: nid value: tid
 }
 
 # construct an empty ZTyping, pre-sizing its tables for roughly
@@ -3156,7 +3169,7 @@ newTyping: function {nodeEst: 0.u64} out ZTyping is {
         unitTypesById: (IdMapV zast.nodeid v: ztypes.tid)
         decls: (List Decl i: ztypes.declid)
         containPath: ListVal ztypes.declid
-        declByTypeId: (IdMapV ztypes.tid v: ztypes.declid)
+        declByTypeId: (ListVal ztypes.declid i: ztypes.tid)
         unitFnTemplate: (IdMapV ztypes.tid v: ztypes.tid)
         publicNsByOwner: (IdMapV ztypes.declid v: ztypes.declid)
         refDecl: (IdMapV zast.nodeid v: ztypes.declid)
