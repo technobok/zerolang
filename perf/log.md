@@ -260,7 +260,29 @@ the account there under its own `<a id="r-<commit>">` anchor.
 | 2026-11-24 | 96502ba2 | [re-baseline after 683 commits: the reviews, then arcs E to H](#r-96502ba2) | 1.11s | 1.22s | 208MB / 176MB | 112 / 645 / 359 (total 1116) | 2,795,874 | 573MB | 85.3s | 219,466 |
 | 2026-11-24 | 097aa8ae | [every bounds check panics through one out-of-line function](#r-097aa8ae) | 1.09s | -- | 207MB / -- | 106 / 643 / 351 (total 1100) | 2,794,906 | 572MB | -- | 219,450 |
 | 2026-11-24 | 2eb3aa52 | [facts worked out once, and one dense table](#r-2eb3aa52) | 1.07s | -- | 208MB / -- | 155 / 604 / 354 (total 1113) | 2,795,791 | 577MB | -- | 219,463 |
+| 2026-11-24 | 1b7ef32b | [fields recorded once, if chains in one pass, appends in place](#r-1b7ef32b) | 1.12s | -- | 207MB / -- | 106 / 636 / 355 (total 1097) | 2,593,773 | 568MB | -- | 219,399 |
 
+
+<a id="r-1b7ef32b"></a>
+**Fields recorded once, if chains in one pass, appends in place** (perf
+arc items 4c, 4g and 5a: four commits after `467efd70`). Mostly an
+allocation row. Instructions:u `-r 3` of `bin/zc` (-O2), each commit against
+the one before it, and allocations (the self-compile under memcheck):
+
+| commit | item | what | own source | fixed input | allocations |
+|---|---|---|---|---|---|
+| `77f597c5` | 4c | every type's data fields recorded once by the check | -0.10% | -0.09% | +2,490 |
+| `3f3c59cb` | 4c | the readers of a definition's fields read its run | -0.28% | -0.22% | -122,475 |
+| `230ac92e` | 4g | an if chain's facts gathered as its clauses go | +0.04% | 0.00% | -1,921 |
+| `1b7ef32b` | 5a | an append of a reading interpolation writes into the receiver | -0.21% | -0.17% | -80,100 |
+
+Over the four: allocations 2,795,791 -> 2,593,773 (-7.2%; bytes churned
+577MB -> 568MB); the fixed input allocates 444,805. `bin/zc` 5,967.0M ->
+5,931.6M on its own source (-0.6%) and 1,164.3M -> 1,158.2M on the fixed
+input (-0.5%); `out/zc-perf` (-O1) 9,582M -> 9,522M and 1,871M -> 1,864M.
+Since the arc's start (`8ee7fe1e`): instructions -17.9% (own source) and
+-16.9% (fixed input), allocations -7.2%. 5a bumps the seed, so zc's own
+appends are lowered in `bin/zc` too.
 
 <a id="r-2eb3aa52"></a>
 **Facts worked out once, and one dense table** (perf arc items 4a, 4b,
