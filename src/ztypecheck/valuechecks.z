@@ -1076,7 +1076,7 @@ literalTakesType: function {
         ln = nodeLine n: rn
         co = nodeCol n: rn
     }
-    aid: freshAtom :ast from: dp.parent name: nameId line: ln col: co
+    aid: madeAtom :ast from: dp.parent name: nameId line: ln col: co
     cid: freshPath :ast from: dp.parent parent: dp.parent child: aid line: ln col: co
     setPath :ast id: dp.nid parent: cid child: dp.child line: dp.lineno col: dp.colno
     cr: dpref nid: cid parent: dp.parent child: aid lineno: ln colno: co
@@ -1186,14 +1186,24 @@ bareFnCall: function {
 }
 
 # freshAtom -- a checker rewrite's new name row for `name`, reserved beside
-# `from` (its file and place) and made at `line` / `col`. The set forms below
-# replace a row `id` its parent already holds, so every reader after sees the
-# new form.
+# `from` (its file and place) and made at `line` / `col`: a name written in the
+# source, moved. The set forms below replace a row `id` its parent already
+# holds, so every reader after sees the new form.
 freshAtom: function {
     ast: Ast from: zast.nodeid name: zast.nameid line: u32 col: u32
 } out zast.nodeid is {
     id: zast.tableReserve :ast :from
     zast.tableAdd :ast n: astnode.atomid (zast.atomidrow nodeid: id lineno: line colno: col :name)
+    return id
+}
+
+# madeAtom -- freshAtom for a name the rewrite adds that nobody wrote, recorded
+# in Ast.made
+madeAtom: function {
+    ast: Ast from: zast.nodeid name: zast.nameid line: u32 col: u32
+} out zast.nodeid is {
+    id: freshAtom :ast :from :name :line :col
+    ast.made.add item: id
     return id
 }
 
@@ -1355,7 +1365,7 @@ callsObjectBare: function {st: zenv.ZSymbolTable ast: Ast node: atomref t: ztype
 rewriteReadAsObjectCall: function {ast: Ast node: atomref} is {
     aid: freshAtom :ast from: node.nid name: node.name line: node.lineno col: node.colno
     cid: (
-        freshAtom
+        madeAtom
         :ast
         from: node.nid
         name: zast.wellKnown.slot.wkCall
@@ -1367,14 +1377,16 @@ rewriteReadAsObjectCall: function {ast: Ast node: atomref} is {
 
 # rewriteFieldReadAsObjectCall -- the checked field read `dp` of a callable
 # object becomes, in the tree, the base of its `call`: the read moves to a fresh
-# row (keeping its stamp), and its own row -- which its parent holds -- becomes
-# the dotted path `<read>.call`.
+# row (keeping its type and the declaration it reads), and its own row -- which
+# its parent holds -- becomes the dotted path `<read>.call`.
 rewriteFieldReadAsObjectCall: function {
     st: zenv.ZSymbolTable ast: Ast dp: dpref tid: ztypes.tid
 } is {
     rid: freshPath :ast from: dp.nid parent: dp.parent child: dp.child line: dp.lineno col: dp.colno
     stampGate :st nid: rid :tid
-    cid: freshAtom :ast from: dp.nid name: zast.wellKnown.slot.wkCall line: dp.lineno col: dp.colno
+    rd: st.typing.refDecl.get key: dp.nid
+    if rd.some then memberaccess.stampRefDecl :st nid: rid declId: rd
+    cid: madeAtom :ast from: dp.nid name: zast.wellKnown.slot.wkCall line: dp.lineno col: dp.colno
     setPath :ast id: dp.nid parent: rid child: cid line: dp.lineno col: dp.colno
 }
 
