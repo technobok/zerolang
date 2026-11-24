@@ -697,6 +697,11 @@ Decl: class {
     # the declaration this one is a member of. The parent chain IS the member
     # index -- there is no separate table
     parent: ztypes.declid
+    # the nearest unit scope at or above this row (ZTyping.declScopeOf): the row
+    # itself when it is a lookup FRAME (a file unit, a namespace, a subunit, a
+    # template, and their clones) or a `public:` block, else its parent's; 0
+    # for none. The scope walks ask this, never the node.
+    scope: ztypes.declid
     # what kind of declaration it is
     kind: declkind
     # the AST node that declared it
@@ -738,10 +743,6 @@ Decl: class {
     # grantsPrivate -- the field's declared type was a `.private` friend handle
     # (syntactic; not derivable from typeId).
     grantsPrivate: bool
-    # a unit-kind row that is a lookup FRAME (a file unit, a namespace, a
-    # subunit, a template, and their clones -- not a `public:` block): the
-    # scope walks ask this bit, never the node
-    unitScope: bool
     # fnptrField -- the member occupies a struct function-pointer slot: an
     # is-block function member of a record or class, or an as-block member of a
     # generic class. Where it was declared, not its kind, decides this.
@@ -1317,6 +1318,7 @@ ZTyping: class {
             Decl
             :name
             :parent
+            scope: ztypes.declid
             :kind
             :node
             typeId: ztypes.tid
@@ -1328,7 +1330,6 @@ ZTyping: class {
             walked: false
             containing: false
             grantsPrivate: false
-            unitScope: false
             fnptrField: false
             varId: ztypes.vid
             rows: 0
@@ -1340,7 +1341,13 @@ ZTyping: class {
             nameId: name
             childDeclId: id
         )
-        if kind.publicNs then t.publicNsByOwner.set key: parent value: id
+        sc: t.declScopeOf declId: parent
+        if kind.publicNs then {
+            t.publicNsByOwner.set key: parent value: id
+            sc = id
+        }
+        no: t.decls.getMut i: id
+        no.scope = sc
         return id
     }
 
@@ -1356,14 +1363,32 @@ ZTyping: class {
     # declSetUnitScope -- mark a unit-kind row as a lookup scope.
     declSetUnitScope: function {t: this declId: ztypes.declid} is {
         fo: t.decls.getMut i: declId
-        fo.unitScope = true
+        fo.scope = declId
     }
 
-    # declIsUnitScope -- the scope bit (a `public:` block is one too).
+    # declScopeOf -- the nearest unit scope at or above `declId`: a unit (file,
+    # inline, subunit, template) or a `public:` block, which a bare-name walk
+    # consults; 0 for none. A row's scope is fixed when the row is made: a row is
+    # marked a scope (declSetUnitScope) and placed under its parent
+    # (declSetParent) before any child is made under it.
+    declScopeOf: function {t: this.view declId: ztypes.declid} out ztypes.declid is {
+        return (t.decls.get i: declId).scope
+    }
+
+    # declSetParent -- place row `declId`, made with no parent, under `parent`:
+    # a scope or a clone, which is climbed out of but not looked up by name
+    declSetParent: function {t: this declId: ztypes.declid parent: ztypes.declid} is {
+        sc: t.declScopeOf declId: parent
+        fo: t.decls.getMut i: declId
+        fo.parent = parent
+        if fo.scope != declId then fo.scope = sc
+    }
+
+    # declIsUnitScope -- the row is a unit scope: its scope is itself (a
+    # `public:` block is one too)
     declIsUnitScope: function {t: this.view declId: ztypes.declid} out bool is {
-        decl: t.decls.get i: declId
-        if decl.kind.publicNs then return true
-        return decl.unitScope
+        if declId.isZero then return false
+        return (t.declScopeOf :declId) == declId
     }
 
     # declNewScope -- a body scope under `parent` (a function declaration, or
@@ -1373,8 +1398,7 @@ ZTyping: class {
         # climbed out of, never looked up, and a function's children stay its
         # parameters
         id: t.declNew name: zast.nameid.zero parent: ztypes.declid kind: declkind.scopeDecl :node
-        fo: t.decls.getMut i: id
-        fo.parent = parent
+        t.declSetParent declId: id :parent
         return id
     }
 
@@ -1995,7 +2019,7 @@ ZTyping: class {
         tname = to.name
         tnode = to.node
         tkind = to.kind
-        tscope = to.unitScope
+        tscope = to.scope == templateDeclId
         for each c: to.children.iterateItems loop kids.append c.value
         to.drop
         if tname.isZero then return ztypes.declid.zero
@@ -2004,9 +2028,7 @@ ZTyping: class {
         # parameter declarations.
         id: t.declNew name: tname parent: ztypes.declid kind: tkind node: tnode
         if tscope then t.declSetUnitScope declId: id
-        no: t.decls.getMut i: id
-        no.parent = templateDeclId
-        no.drop
+        t.declSetParent declId: id parent: templateDeclId
         for each kd: kids loop {
             cn: zast.nameid
             cnode: zast.nodeid
@@ -3153,6 +3175,7 @@ newTyping: function {nodeEst: 0.u64} out ZTyping is {
         Decl
         name: zast.nameid.zero
         parent: ztypes.declid
+        scope: ztypes.declid
         kind: declkind.noneDecl
         node: zast.nodeid
         typeId: ztypes.tid
@@ -3164,7 +3187,6 @@ newTyping: function {nodeEst: 0.u64} out ZTyping is {
         walked: false
         containing: false
         grantsPrivate: false
-        unitScope: false
         fnptrField: false
         varId: ztypes.vid
         rows: 0
@@ -3203,10 +3225,9 @@ newTyping: function {nodeEst: 0.u64} out ZTyping is {
     childTid.constAggIndex.next.append 0
     # the program root, DeclId 1: the file units are parented to it, so every
     # declaration but this one has a parent. Minted with parent 0, so it takes
-    # no name edge and lands in no namespace; it carries no unit-scope bit and
-    # no type id, which is what keeps it out of the bare-name walks --
-    # unitScopeOf climbs through it and probeScopeTyperef finds no member
-    # index on it.
+    # no name edge and lands in no namespace; it is no unit scope and has no
+    # type id, which is what keeps it out of the bare-name walks -- its scope is
+    # 0, and probeScopeTyperef finds no member index on it.
     childTid.programRoot = (
         childTid.declNew
         name: zast.nameid.zero
