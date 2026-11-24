@@ -1076,38 +1076,9 @@ literalTakesType: function {
         ln = nodeLine n: rn
         co = nodeCol n: rn
     }
-    aid: zast.tableReserve :ast from: dp.parent
-    (
-        zast.tableAdd
-        :ast
-        n: astnode.atomid (zast.atomidrow nodeid: aid lineno: ln colno: co name: nameId)
-    )
-    cid: zast.tableReserve :ast from: dp.parent
-    (
-        zast.tableAdd
-        :ast
-        n: astnode.dottedpath (
-            zast.dottedpathrow
-            nodeid: cid
-            lineno: ln
-            colno: co
-            parent: dp.parent
-            child: aid
-        )
-    )
-    (
-        zast.tableSet
-        :ast
-        id: dp.nid
-        child: astnode.dottedpath (
-            zast.dottedpathrow
-            nodeid: dp.nid
-            lineno: dp.lineno
-            colno: dp.colno
-            parent: cid
-            child: dp.child
-        )
-    )
+    aid: freshAtom :ast from: dp.parent name: nameId line: ln col: co
+    cid: freshPath :ast from: dp.parent parent: dp.parent child: aid line: ln col: co
+    setPath :ast id: dp.nid parent: cid child: dp.child line: dp.lineno col: dp.colno
     cr: dpref nid: cid parent: dp.parent child: aid lineno: ln colno: co
     leg: memberaccess.checkNumericSuffixCast :st :ast dp: cr
     if leg.handled.not then leg = memberaccess.checkUntypedConstantCast :st :ast dp: cr
@@ -1214,38 +1185,102 @@ bareFnCall: function {
     }
 }
 
+# freshAtom -- a checker rewrite's new name row for `name`, reserved beside
+# `from` (its file and place) and made at `line` / `col`. The set forms below
+# replace a row `id` its parent already holds, so every reader after sees the
+# new form.
+freshAtom: function {
+    ast: Ast from: zast.nodeid name: zast.nameid line: u32 col: u32
+} out zast.nodeid is {
+    id: zast.tableReserve :ast :from
+    zast.tableAdd :ast n: astnode.atomid (zast.atomidrow nodeid: id lineno: line colno: col :name)
+    return id
+}
+
+# freshPath -- a rewrite's new dotted-path row `parent.child`, beside `from`
+freshPath: function {
+    ast: Ast from: zast.nodeid parent: zast.nodeid child: zast.nodeid line: u32 col: u32
+} out zast.nodeid is {
+    id: zast.tableReserve :ast :from
+    (
+        zast.tableAdd
+        :ast
+        n: astnode.dottedpath (zast.dottedpathrow nodeid: id lineno: line colno: col :parent :child)
+    )
+    return id
+}
+
+# setAtom -- row `id` becomes the name `name`
+setAtom: function {ast: Ast id: zast.nodeid name: zast.nameid line: u32 col: u32} is {
+    (
+        zast.tableSet
+        :ast
+        :id
+        child: astnode.atomid (zast.atomidrow nodeid: id lineno: line colno: col :name)
+    )
+}
+
+# setPath -- row `id` becomes the dotted path `parent.child`
+setPath: function {
+    ast: Ast id: zast.nodeid parent: zast.nodeid child: zast.nodeid line: u32 col: u32
+} is {
+    (
+        zast.tableSet
+        :ast
+        :id
+        child: astnode.dottedpath (
+            zast.dottedpathrow
+            nodeid: id
+            lineno: line
+            colno: col
+            :parent
+            :child
+        )
+    )
+}
+
+# setCall -- row `id` becomes the call of `callable` with `arguments`
+setCall: function {
+    ast: Ast
+    id: zast.nodeid
+    callable: zast.nodeid
+    arguments: zast.kidspan
+    line: u32
+    col: u32
+    infix: false
+} is {
+    (
+        zast.tableSet
+        :ast
+        :id
+        child: astnode.call (
+            zast.callrow
+            nodeid: id
+            lineno: line
+            colno: col
+            :callable
+            :arguments
+            :infix
+        )
+    )
+}
+
 # rewriteReadAsCall -- the bare read `node` of a variable holding a function
 # reference becomes, in the tree, the call it makes: the name moves to a fresh
 # row, and the read's own row -- which every parent already holds -- is
 # replaced by a call of that name with no arguments, at the name's position.
 # What the checker walks next, and the emitter later, is that call.
 rewriteReadAsCall: function {ast: Ast node: atomref} is {
-    aid: zast.tableReserve :ast from: node.nid
-    (
-        zast.tableAdd
-        :ast
-        n: astnode.atomid (
-            zast.atomidrow
-            nodeid: aid
-            lineno: node.lineno
-            colno: node.colno
-            name: node.name
-        )
-    )
+    aid: freshAtom :ast from: node.nid name: node.name line: node.lineno col: node.colno
     none: ListVal zast.nodeid
     (
-        zast.tableSet
+        setCall
         :ast
         id: node.nid
-        child: astnode.call (
-            zast.callrow
-            nodeid: node.nid
-            lineno: node.lineno
-            colno: node.colno
-            callable: aid
-            arguments: (zast.kidsAdd kids: ast.kids xs: none)
-            infix: false
-        )
+        callable: aid
+        arguments: (zast.kidsAdd kids: ast.kids xs: none)
+        line: node.lineno
+        col: node.colno
     )
 }
 
@@ -1318,43 +1353,16 @@ callsObjectBare: function {st: zenv.ZSymbolTable ast: Ast node: atomref t: ztype
 # -- which every parent already holds -- becomes the dotted path of its `call`,
 # at the read's position. What is walked next, and emitted, is the written call.
 rewriteReadAsObjectCall: function {ast: Ast node: atomref} is {
-    aid: zast.tableReserve :ast from: node.nid
-    (
-        zast.tableAdd
+    aid: freshAtom :ast from: node.nid name: node.name line: node.lineno col: node.colno
+    cid: (
+        freshAtom
         :ast
-        n: astnode.atomid (
-            zast.atomidrow
-            nodeid: aid
-            lineno: node.lineno
-            colno: node.colno
-            name: node.name
-        )
+        from: node.nid
+        name: zast.wellKnown.slot.wkCall
+        line: node.lineno
+        col: node.colno
     )
-    cid: zast.tableReserve :ast from: node.nid
-    (
-        zast.tableAdd
-        :ast
-        n: astnode.atomid (
-            zast.atomidrow
-            nodeid: cid
-            lineno: node.lineno
-            colno: node.colno
-            name: zast.wellKnown.slot.wkCall
-        )
-    )
-    (
-        zast.tableSet
-        :ast
-        id: node.nid
-        child: astnode.dottedpath (
-            zast.dottedpathrow
-            nodeid: node.nid
-            lineno: node.lineno
-            colno: node.colno
-            parent: aid
-            child: cid
-        )
-    )
+    setPath :ast id: node.nid parent: aid child: cid line: node.lineno col: node.colno
 }
 
 # rewriteFieldReadAsObjectCall -- the checked field read `dp` of a callable
@@ -1364,45 +1372,10 @@ rewriteReadAsObjectCall: function {ast: Ast node: atomref} is {
 rewriteFieldReadAsObjectCall: function {
     st: zenv.ZSymbolTable ast: Ast dp: dpref tid: ztypes.tid
 } is {
-    rid: zast.tableReserve :ast from: dp.nid
-    (
-        zast.tableAdd
-        :ast
-        n: astnode.dottedpath (
-            zast.dottedpathrow
-            nodeid: rid
-            lineno: dp.lineno
-            colno: dp.colno
-            parent: dp.parent
-            child: dp.child
-        )
-    )
+    rid: freshPath :ast from: dp.nid parent: dp.parent child: dp.child line: dp.lineno col: dp.colno
     stampGate :st nid: rid :tid
-    cid: zast.tableReserve :ast from: dp.nid
-    (
-        zast.tableAdd
-        :ast
-        n: astnode.atomid (
-            zast.atomidrow
-            nodeid: cid
-            lineno: dp.lineno
-            colno: dp.colno
-            name: zast.wellKnown.slot.wkCall
-        )
-    )
-    (
-        zast.tableSet
-        :ast
-        id: dp.nid
-        child: astnode.dottedpath (
-            zast.dottedpathrow
-            nodeid: dp.nid
-            lineno: dp.lineno
-            colno: dp.colno
-            parent: rid
-            child: cid
-        )
-    )
+    cid: freshAtom :ast from: dp.nid name: zast.wellKnown.slot.wkCall line: dp.lineno col: dp.colno
+    setPath :ast id: dp.nid parent: rid child: cid line: dp.lineno col: dp.colno
 }
 
 # readsFnRefAsCall -- a read of a variable of type `t` is a call of the function

@@ -2082,12 +2082,7 @@ spellUnderscore: function {
     if tnm.notZero then {
         bare: walkLookupTyperefById :st scope: st.curScope :ast :unitDecl baseId: tnm
         if (bare.or d: ztypes.tid.zero) == ptid then {
-            (
-                zast.tableSet
-                :ast
-                id: at
-                child: astnode.atomid (zast.atomidrow nodeid: at lineno: line colno: col name: tnm)
-            )
+            valuechecks.setAtom :ast id: at name: tnm :line :col
             return
         }
         # the declaration that declares the type -- its unit, or a subunit of
@@ -2117,31 +2112,9 @@ spellQualifiedUnderscore: function {
     line: u32
     col: u32
 } is {
-    uid: zast.tableReserve :ast from: at
-    (
-        zast.tableAdd
-        :ast
-        n: astnode.atomid (zast.atomidrow nodeid: uid lineno: line colno: col name: unitName)
-    )
-    tid: zast.tableReserve :ast from: at
-    (
-        zast.tableAdd
-        :ast
-        n: astnode.atomid (zast.atomidrow nodeid: tid lineno: line colno: col name: typeName)
-    )
-    (
-        zast.tableSet
-        :ast
-        id: at
-        child: astnode.dottedpath (
-            zast.dottedpathrow
-            nodeid: at
-            lineno: line
-            colno: col
-            parent: uid
-            child: tid
-        )
-    )
+    uid: valuechecks.freshAtom :ast from: at name: unitName :line :col
+    tid: valuechecks.freshAtom :ast from: at name: typeName :line :col
+    valuechecks.setPath :ast id: at parent: uid child: tid :line :col
 }
 
 # ownershipCallee -- the function whose parameters say what a call does to its
@@ -3905,54 +3878,36 @@ rewriteTypedCall: function {
         mLine = nodeLine n: cn
         mCol = nodeCol n: cn
     }
-    cid: zast.tableReserve :ast from: dp.child
-    (
-        zast.tableAdd
-        :ast
-        n: astnode.atomid (zast.atomidrow nodeid: cid lineno: mLine colno: mCol name: mn)
-    )
+    cid: valuechecks.freshAtom :ast from: dp.child name: mn line: mLine col: mCol
     readId: call.nid
     if rest.length == 0 when (valuechecks.fnAutoCallable :st mid: dro) then {
         (
-            zast.tableSet
+            valuechecks.setPath
             :ast
             id: call.nid
-            child: astnode.dottedpath (
-                zast.dottedpathrow
-                nodeid: call.nid
-                lineno: call.lineno
-                colno: call.colno
-                parent: recvArg.operation
-                child: cid
-            )
+            parent: recvArg.operation
+            child: cid
+            line: call.lineno
+            col: call.colno
         )
     } else {
-        readId = zast.tableReserve :ast from: call.callable
-        (
-            zast.tableAdd
+        readId = (
+            valuechecks.freshPath
             :ast
-            n: astnode.dottedpath (
-                zast.dottedpathrow
-                nodeid: readId
-                lineno: dp.lineno
-                colno: dp.colno
-                parent: recvArg.operation
-                child: cid
-            )
+            from: call.callable
+            parent: recvArg.operation
+            child: cid
+            line: dp.lineno
+            col: dp.colno
         )
         (
-            zast.tableSet
+            valuechecks.setCall
             :ast
             id: call.nid
-            child: astnode.call (
-                zast.callrow
-                nodeid: call.nid
-                lineno: call.lineno
-                colno: call.colno
-                callable: readId
-                arguments: (zast.kidsAdd kids: ast.kids xs: rest)
-                infix: false
-            )
+            callable: readId
+            arguments: (zast.kidsAdd kids: ast.kids xs: rest)
+            line: call.lineno
+            col: call.colno
         )
     }
     (
@@ -3996,22 +3951,16 @@ checkTypeBaseCall: function {
         return unhandled
     }
     t: valuechecks.checkValueArmAt :st :unitDecl :ast nid: call.nid
-    if st.templateWalk then {
-        (
-            zast.tableSet
-            :ast
-            id: call.nid
-            child: astnode.call (
-                zast.callrow
-                nodeid: call.nid
-                lineno: call.lineno
-                colno: call.colno
-                callable: call.callable
-                arguments: span
-                infix: call.infix
-            )
-        )
-    }
+    if st.templateWalk then (
+        valuechecks.setCall
+        :ast
+        id: call.nid
+        callable: call.callable
+        arguments: span
+        line: call.lineno
+        col: call.colno
+        infix: call.infix
+    )
     return (callleg handled: true tid: t)
 }
 
