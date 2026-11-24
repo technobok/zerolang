@@ -4209,6 +4209,35 @@ valueTupleRoot: function {ast: Ast.view n: astnode.view} out zast.nameid is {
     }
 }
 
+# dottedseg -- what one member of a dotted read does with the value it is read
+# off (segmentOf). The walks over a dotted read's members ask this, so they
+# share one answer for each kind of member.
+dottedseg: variant {
+    # a strip marker (`.take`, `.view`): no segment; the base passes on as it is
+    marker: null
+    # a field the base stores
+    field: null
+    # a method that hands back a view of its base, which stays locked
+    # (readReturnsBorrow)
+    viewing: null
+    # a method that makes a value of its own, which no name holds
+    making: null
+}
+
+# segmentOf -- what the member `mem` (dottedMemberId) that the dotted read `nid`
+# reads off the node `parent` does with it
+segmentOf: function {
+    st: zenv.ZSymbolTable.view
+    nid: zast.nodeid
+    parent: zast.nodeid
+    mem: zast.nameid
+} out dottedseg is {
+    if (isStripMarkerId nameId: mem) then return dottedseg.marker
+    if (memberReadIsField :st parentNid: parent nameId: mem) then return dottedseg.field
+    if (readReturnsBorrow :st :nid) then return dottedseg.viewing
+    return dottedseg.making
+}
+
 # fieldChainBase -- the node a chain of FIELD reads at `nid` hangs off --
 # `(mk k: 3)` in `(mk k: 3).inner.s` -- with the fields past it, root first,
 # appended onto `fields`; `nid` itself when it reads no field. Markers are no
@@ -4225,13 +4254,10 @@ fieldChainBase: function {
         n: ast.nodes.get i: cur
         if n.dottedpath.not then break
         mem: dottedMemberId :st :ast nid: cur child: n.child
-        if (isStripMarkerId nameId: mem).not when (
-            memberReadIsField
-            :st
-            parentNid: n.parent
-            nameId: mem
-        ).not then break
-        if (isStripMarkerId nameId: mem).not then rev.append mem
+        seg: segmentOf :st nid: cur parent: n.parent :mem
+        if seg == dottedseg.field then {
+            rev.append mem
+        } else if seg != dottedseg.marker then break
         cur = n.parent
     }
     k: rev.length
@@ -4299,15 +4325,20 @@ argPinTuple: function {
         return false
     } case dottedpath then {
         cid: dottedMemberId :st :ast nid: n.nodeid child: n.child
-        if cid.isZero or (isStripMarkerId nameId: cid) then {
-            return (argPinTuple :st :ast n: (ast.nodes.get i: n.parent) :dst)
-        }
+        seg: segmentOf :st nid: n.nodeid parent: n.parent mem: cid
+        if seg == dottedseg.marker then return (
+            argPinTuple
+            :st
+            :ast
+            n: (ast.nodes.get i: n.parent)
+            :dst
+        )
         if (argPinTuple :st :ast n: (ast.nodes.get i: n.parent) :dst) then return true
-        if (memberReadIsField :st parentNid: n.parent nameId: cid) then {
+        if seg == dottedseg.field then {
             dst.append cid
             return false
         }
-        if (readReturnsBorrow :st nid: n.nodeid) then return false
+        if seg == dottedseg.viewing then return false
         for dst.length > 0 loop dst.pop
         return true
     } else {
@@ -4329,9 +4360,7 @@ passesFreshValue: function {st: zenv.ZSymbolTable.view ast: Ast.view n: astnode.
     ) case dottedpath then {
         if (passesFreshValue :st :ast n: (ast.nodes.get i: n.parent)) then return true
         cid: dottedMemberId :st :ast nid: n.nodeid child: n.child
-        if cid.isZero or (isStripMarkerId nameId: cid) then return false
-        if (memberReadIsField :st parentNid: n.parent nameId: cid) then return false
-        return (readReturnsBorrow :st nid: n.nodeid).not
+        return (segmentOf :st nid: n.nodeid parent: n.parent mem: cid) == dottedseg.making
     } else {
         return false
     }
@@ -4828,14 +4857,11 @@ viewingMethodPrefix: function {
             par = n.parent
             mem = dottedMemberId :st :ast nid: n.nodeid child: n.child
         } else null
-        if par.notZero when mem.notZero when (isStripMarkerId nameId: mem).not when (
-            memberReadIsField
-            :st
-            parentNid: par
-            nameId: mem
-        ).not then {
+        seg: dottedseg.marker
+        if par.notZero then seg = segmentOf :st nid: cur parent: par :mem
+        if (seg == dottedseg.viewing) or (seg == dottedseg.making) then {
             first = idx
-            borrows = readReturnsBorrow :st nid: cur
+            borrows = seg == dottedseg.viewing
         }
         idx = idx - 1
         cur = par
