@@ -259,7 +259,33 @@ the account there under its own `<a id="r-<commit>">` anchor.
 | 2026-11-04 | acf9c47d | [a project reads the prelude once](#r-acf9c47d) | 0.97s | 1.05s | 196MB / 167MB | 106 / 529 / 360 (total 995) | 2,770,117 | 559MB | 43.0s | 204,876 |
 | 2026-11-24 | 96502ba2 | [re-baseline after 683 commits: the reviews, then arcs E to H](#r-96502ba2) | 1.11s | 1.22s | 208MB / 176MB | 112 / 645 / 359 (total 1116) | 2,795,874 | 573MB | 85.3s | 219,466 |
 | 2026-11-24 | 097aa8ae | [every bounds check panics through one out-of-line function](#r-097aa8ae) | 1.09s | -- | 207MB / -- | 106 / 643 / 351 (total 1100) | 2,794,906 | 572MB | -- | 219,450 |
+| 2026-11-24 | 2eb3aa52 | [facts worked out once, and one dense table](#r-2eb3aa52) | 1.07s | -- | 208MB / -- | 155 / 604 / 354 (total 1113) | 2,795,791 | 577MB | -- | 219,463 |
 
+
+<a id="r-2eb3aa52"></a>
+**Facts worked out once, and one dense table** (perf arc items 4a, 4b,
+4d, 4e, 4f and 6: six commits after `b42c2569`). Each commit removes work
+that answered a fixed question again on every ask, or a second mechanism
+for one job. Instructions:u `-r 3` of `bin/zc` (-O2), each commit against
+the one before it, the fixed input outside any project:
+
+| commit | item | what | own source | fixed input |
+|---|---|---|---|---|
+| `f370ec38` | 4a | a runtime text's hole guards, cut once | +0.01% | -1.21% |
+| `2c6875b9` | 4b | generic parameters registered by their resolver alone | -0.93% | -0.71% |
+| `c58e8502` | 4f | the written static aggregates in one pass | -1.09% | 0.00% |
+| `ff130e4a` | 4e | a class's template row indexed once | -0.60% | -0.30% |
+| `d17e07d0` | 4d | a declaration's unit scope kept on its row | -1.07% | -0.39% |
+| `2eb3aa52` | 6 | type id -> declaration as a dense table | -5.13% | -4.13% |
+
+Over the six: `bin/zc` 6,522.8M -> 5,967.0M on its own source (-8.5%) and
+1,246.4M -> 1,164.3M on the fixed input (-6.6%); `out/zc-perf` (-O1)
+10,430M -> 9,582M (-8.1%) and 2,055M -> 1,871M (-9.0%). Since the arc's
+start (`8ee7fe1e`, `bin/zc` 7,227M / 1,393.5M): -17.4% and -16.4%.
+Allocations 2,794,906 -> 2,795,791 (+885, nearly all the new source: the
+dense pair's instances); the fixed input allocates 471,948. 4d widens a
+declaration row by 8 bytes (peak RSS +4MB) and 6 gives about 2MB back.
+Wall best of five 1.07s, phases on a busy machine.
 
 <a id="r-097aa8ae"></a>
 **Every bounds check panics through one out-of-line function** (perf arc
