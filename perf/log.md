@@ -262,7 +262,51 @@ the account there under its own `<a id="r-<commit>">` anchor.
 | 2026-11-24 | 2eb3aa52 | [facts worked out once, and one dense table](#r-2eb3aa52) | 1.07s | -- | 208MB / -- | 155 / 604 / 354 (total 1113) | 2,795,791 | 577MB | -- | 219,463 |
 | 2026-11-24 | 1b7ef32b | [fields recorded once, if chains in one pass, appends in place](#r-1b7ef32b) | 1.12s | -- | 207MB / -- | 106 / 636 / 355 (total 1097) | 2,593,773 | 568MB | -- | 219,399 |
 | 2026-11-24 | 6e850df8 | [a syntax node is read in place, and the S simplifications](#r-6e850df8) | 1.02s | -- | 208MB / -- | 116 / 603 / 323 (total 1042) | 2,611,250 | 569MB | -- | 219,298 |
+| 2026-11-25 | 018108af | [the perf arc's end: lock rows, rewrites, names by id; re-baseline](#r-018108af) | 1.02s | -- | 207MB / -- | 104 / 591 / 320 (total 1015) | 2,476,458 | 567MB | -- | 219,362 |
 
+
+<a id="r-018108af"></a>
+**The perf arc's end: lock rows, rewrites, names by id; re-baseline** (the
+arc's remaining list: eight commits after `fd99845f`, then the arc against
+its start). Instructions:u `-r 3` of `bin/zc` (-O2), each commit against
+the one before it, the fixed input outside any project; allocations are
+perf-strict's exact count:
+
+| commit | what | own source | fixed input | allocations |
+|---|---|---|---|---|
+| `5200fcaa` | a lock row keeps only the fields after its root (no one-name path lists) | -0.32% | -0.21% | -118,304 |
+| `5672f7e0` | a function reference called bare is its variable's read, for tooling (a defect) | 0.0% | 0.0% | +30 |
+| `17e3884a` | a name a check's rewrite made answers nothing in zls (four defects) | +0.24% | 0.0% | +284 |
+| `7edcd591` | the synth label, which nothing read, is gone | -0.04% | -0.07% | -12,627 |
+| `dd49017d` | the type being declared travels as its name id, not its text | -0.15% | -0.07% | -4,034 |
+| `16285b35` | a call through a type with no receiver, or two, is refused once | -0.11% | 0.0% | -231 |
+| `f4ecc8a3` | deep readonly is the binding's marker: an owned result is writable (a defect) | 0.0% | 0.0% | +90 |
+| `018108af` | `ztestrunner --times` | -- | -- | 0 |
+
+`17e3884a`'s rise is all source (each compiler on the old source does the
+same work): a new field on `Ast` shifts the ids its declarations take, and
+callgrind finds the difference in id-map probing, not new work. Over the
+eight: allocations 2,611,250 -> 2,476,458 (-5.2%).
+
+The arc against its start, both sides measured in one session, each
+compiler from its own tree's root, instructions:u `-r 3` twice,
+interleaved (each pair within 0.1%); `8ee7fe1e` rebuilt from the p-0
+snapshot:
+
+| | `8ee7fe1e` (p-0) | `018108af` | change |
+|---|---|---|---|
+| `out/zc-perf` (-O1), own source | 11,654.7M | 9,071.5M | -22.2% |
+| `out/zc-perf` (-O1), fixed input | 2,259.5M | 1,775.1M | -21.4% |
+| `bin/zc` (-O2), own source | 7,227.4M | 5,711.9M | -21.0% |
+| `bin/zc` (-O2), fixed input | 1,393.6M | 1,120.9M | -19.6% |
+| allocations, own source | 2,795,953 | 2,476,458 | -11.4% |
+| allocations, fixed input | 471,990 | 415,911 | -11.9% |
+
+The largest single steps were one out-of-line bounds panic (item 3,
+-9.5%), the dense type table (-5.1%), and reading a syntax node in place
+(-1.8% / -2.4%); the allocation fall is mostly fields recorded once (4c),
+appends in place (5a) and the lock rows here. Wall time for the
+self-compile is 1.02s against 1.11s at the arc's start.
 
 <a id="r-6e850df8"></a>
 **A syntax node is read in place, and the S simplifications** (perf arc
