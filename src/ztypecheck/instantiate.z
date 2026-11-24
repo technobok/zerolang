@@ -137,7 +137,7 @@ unitInstanceMemberTid: function {
     node: ast.nodes.get i: nid
     if node.dottedpath then parentId = node.parent
     if parentId.isZero then return ztypes.tid
-    ui: unitInstanceOfTyperef :st :scope :ast :unitDecl nid: parentId thisName: ""
+    ui: unitInstanceOfTyperef :st :scope :ast :unitDecl nid: parentId thisName: zast.nameid
     if ui.isZero then return ztypes.tid
     ensureUnitMonoBuilt :st :scope :ast monoId: ui
     # a numeric generic parameter is the instance's singleton type
@@ -257,7 +257,7 @@ bareGenericType: function {
     # `thisName` is empty
     scope: ztypes.declid
     # the type whose declaration the position is in, when the caller knows it
-    thisName: StringView
+    thisName: zast.nameid
 } out ztypes.tid is {
     if (ownsTypeParams :st :tid).not then return tid
     tdecl: st.typing.declIdOfType typeId: tid
@@ -267,8 +267,8 @@ bareGenericType: function {
         return mono
     }
     tn: st.reg.nameOf :tid
-    own: tn.stringView == thisName
-    if thisName.length == 0 then own = (callchecks.enclosingTypeDecl :st :scope) == tdecl
+    own: (nameIdOf :ast name: tn.stringView) == thisName
+    if thisName.isZero then own = (callchecks.enclosingTypeDecl :st :scope) == tdecl
     hint: "apply type arguments first, e.g. '(ListVal t: u8)', or give each parameter a default".string
     if own then hint = "inside its own declaration, `type` is the instance being checked".string
     n: ast.nodes.getView i: nid
@@ -296,13 +296,13 @@ namedTypeArg: function {
     ast: Ast
     unitDecl: ztypes.declid
     scope: ztypes.declid
-    thisName: StringView
+    thisName: zast.nameid
     aid: ztypes.tid
     argNid: zast.nodeid
 } out ztypes.tid is {
     nameId: atomNameId :ast n: (ast.nodes.getView i: argNid)
     if nameId == zast.wellKnown.slot.wkThis then return aid
-    if nameId == zast.wellKnown.slot.wkType when thisName.length != 0 then {
+    if nameId == zast.wellKnown.slot.wkType when thisName.notZero then {
         sa: selfApplicationTid :st :ast :unitDecl :scope templateId: aid nid: argNid
         if sa.notZero then return sa
         return aid
@@ -422,7 +422,7 @@ qualifierUnitTid: function {
                 declId: h.declId
             ).not then return ztypes.tid.zero
         }
-        q = resolve.resolveAtomType :st :ast :unitDecl :scope nameId: nm thisName: ""
+        q = resolve.resolveAtomType :st :ast :unitDecl :scope nameId: nm thisName: zast.nameid
     } case dottedpath then {
         par: n.parent
         chn: atomNameId :ast n: (ast.nodes.getView i: n.child)
@@ -449,7 +449,7 @@ qualifierUnitTid: function {
             :ast
             :unitDecl
             :scope
-            thisName: ""
+            thisName: zast.nameid
             enclDecl: ztypes.declid
             opNid: nid
             :nid
@@ -715,7 +715,7 @@ unitInstanceOfTyperef: function {
     ast: Ast
     unitDecl: ztypes.declid
     nid: zast.nodeid
-    thisName: StringView
+    thisName: zast.nameid
 } out ztypes.tid is {
     isRef: false
     isApp: false
@@ -3524,7 +3524,7 @@ constructionArgTid: function {
         scope: st.curScope
         :ast
         :unitDecl
-        thisName: ""
+        thisName: zast.nameid
         enclDecl: ztypes.declid
         opNid: opId
         nid: zast.nodeid
@@ -3546,7 +3546,7 @@ constructionArgTid: function {
             tid: named
             nid: opId
             scope: st.curScope
-            thisName: ""
+            thisName: zast.nameid
         )
     }
     return (instanceTypeOf :st :ast :unitDecl tid: named)
@@ -4464,7 +4464,14 @@ baseNamesBareGeneric: function {
     }
     if baseNm.isZero then return false
     return (
-        (resolve.resolveAtomType :st :ast :unitDecl scope: st.curScope nameId: baseNm thisName: ""
+        (
+            resolve.resolveAtomType
+            :st
+            :ast
+            :unitDecl
+            scope: st.curScope
+            nameId: baseNm
+            thisName: zast.nameid
         ) ==
         bt
     )

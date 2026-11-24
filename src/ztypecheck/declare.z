@@ -721,22 +721,17 @@ declOfFnDef: function {
     scope: ztypes.declid
     ownerNameId: zast.nameid
     defName: StringView
-    thisName: StringView
+    thisName: zast.nameid
 } out ztypes.declid is {
-    if thisName.length == 0 then return (
+    if thisName.isZero then return (
         declOfUnitDef
         :st
         :scope
         :unitDecl
         nameId: (nameIdOf :ast name: defName)
     )
-    mown: declOfUnitDef :st :scope :unitDecl nameId: (nameIdOf :ast name: thisName)
-    if ownerNameId.notZero when (
-        zast.poolTextEq
-        pool: ast.names
-        ref: ownerNameId
-        s: thisName
-    ).not then {
+    mown: declOfUnitDef :st :scope :unitDecl nameId: thisName
+    if ownerNameId.notZero when ownerNameId != thisName then {
         malt: declOfUnitDef :st :scope :unitDecl nameId: ownerNameId
         if malt.notZero then mown = malt
     }
@@ -1193,7 +1188,7 @@ numericParamRefTid: function {
     scope: ztypes.declid
     # the enclosing type's name, asked last: a signature's reference is
     # recorded with its owner's name and no declaration
-    thisName: StringView
+    thisName: zast.nameid
     enclDecl: ztypes.declid
     arg: argref
 } out ztypes.tid is {
@@ -1202,8 +1197,8 @@ numericParamRefTid: function {
     if nameId.isZero then return ztypes.tid
     owner: enclDecl
     if owner.isZero then owner = statics.numericParamOwnerFrom :st :scope :nameId
-    if owner.isZero when thisName.length > 0 then {
-        tto: bodies.walkLookupTyperef :st :scope :ast :unitDecl base: thisName
+    if owner.isZero when thisName.notZero then {
+        tto: walkLookupTyperefById :st :scope :ast :unitDecl baseId: thisName
         if tto.some then {
             owner = st.typing.declIdOfType typeId: tto
         }
@@ -1484,7 +1479,7 @@ registerGenericOrReceiverParam: function {
     fid: ztypes.tid
     fnDecl: ztypes.declid
     receiverEnclDecl: ztypes.declid
-    thisName: StringView
+    thisName: zast.nameid
     genParam: bool
     fnParam: bool
     ptn: zast.nameid
@@ -1536,7 +1531,7 @@ registerGenericOrReceiverParam: function {
         paramTid: genericParamTidMint :st :ast tdecl: receiverEnclDecl nameId: ptn
         paramNid: stampNodeId n: (ast.nodes.getView i: pm.operation)
         ztyping.nodeTypeSet tbl: st.typing.nodeType nid: paramNid tid: paramTid
-        if thisName.length != 0 then {
+        if thisName.notZero then {
             st.typing.setMemberType parentTypeId: fid nameId: pm.name childTypeId: paramTid
         }
     }
@@ -1694,19 +1689,18 @@ recordFnBodyPresence: function {
 # type for a method, the enclosing unit for a free function.
 receiverOwnerDecl: function {
     st: zenv.ZSymbolTable.view
-    ast: Ast.view
     unitDecl: ztypes.declid
     rf: ztypes.declid
-    thisName: StringView
+    thisName: zast.nameid
 } out ztypes.declid is {
     receiverEnclDecl: ztypes.declid
-    if thisName.length != 0 then {
+    if thisName.notZero then {
         receiverEnclDecl = (
             declOfUnitDef
             :st
             scope: rf
             :unitDecl
-            nameId: (nameIdOf :ast name: thisName)
+            nameId: thisName
         )
     } else {
         ero: unitDecl
@@ -1752,7 +1746,7 @@ resolveFunction: function {
     ownerNameId: zast.nameid
     defName: StringView
     fnId: zast.nodeid
-    thisName: StringView
+    thisName: zast.nameid
     skipThisType: bool
 } out ztypes.tid is {
     # a METHOD's signature resolves in the scope of its declaration, under
@@ -1809,7 +1803,7 @@ resolveFunction: function {
     if isgen then {
         registerFnGenericParams :st :ast :fnDecl :fid :fnode :ownerD
     }
-    receiverEnclDecl: receiverOwnerDecl :st :ast :unitDecl :rf :thisName
+    receiverEnclDecl: receiverOwnerDecl :st :unitDecl :rf :thisName
     sgkPrev: st.walk.bounds.sigGenericDecl
     if isgen then st.walk.bounds.sigGenericDecl = fnDecl
     # the signature is the function's scope: its parameters are in it
@@ -1870,7 +1864,7 @@ resolveMethodFn: function {
     scope: ztypes.declid
     ownerNameId: zast.nameid
     mname: StringView
-    thisName: StringView
+    thisName: zast.nameid
     opId: zast.nodeid
     skipThis: false
 } out optionval ztypes.tid is {
@@ -1909,7 +1903,7 @@ resolveMethodFnLazy: function {
     scope: ztypes.declid
     ownerNameId: zast.nameid
     mname: StringView
-    thisName: StringView
+    thisName: zast.nameid
     opId: zast.nodeid
     lazyOk: bool
 } out optionval ztypes.tid is {
@@ -2343,7 +2337,7 @@ attachMethods: function {
                 :unitDecl
                 ownerNameId: ownerNmId
                 mname: mname.stringView
-                thisName: defName
+                thisName: ownerNmId
                 opId: am.operation
                 lazyOk: agen.not
             )
@@ -2575,7 +2569,7 @@ attachMarkers: function {
                     :scope
                     :ast
                     :unitDecl
-                    thisName: ""
+                    thisName: zast.nameid
                     nid: mmOp
                 )
             }
@@ -2667,7 +2661,7 @@ objectTypedefBaseTid: function {
         :scope
         :ast
         :unitDecl
-        thisName: ""
+        thisName: zast.nameid
         enclDecl: ztypes.declid
         opNid: bn
         nid: zast.nodeid
@@ -2681,7 +2675,7 @@ objectTypedefBaseTid: function {
     }
     anId: rootNameIdOf :ast n: (ast.nodes.getView i: bn)
     if anId.isZero then return ztypes.tid.zero
-    return (resolve.resolveAtomType :st :scope :ast :unitDecl nameId: anId thisName: "")
+    return (resolve.resolveAtomType :st :scope :ast :unitDecl nameId: anId thisName: zast.nameid)
 }
 
 # fnFieldFlaggableName -- an is-block FUNCTION member that should become a struct
@@ -3401,7 +3395,7 @@ attachRecordIsItems: function {
                 :unitDecl
                 ownerNameId: ownerNmId
                 mname: fname.stringView
-                thisName: defName
+                thisName: ownerNmId
                 opId: fm.operation
                 lazyOk: isgen.not
             )
@@ -3611,7 +3605,7 @@ attachSumMethods: function {
                 :unitDecl
                 ownerNameId: ownerNmId
                 mname: mname.stringView
-                thisName: defName
+                thisName: ownerNmId
                 opId: am.operation
                 lazyOk: isgen.not
             )
@@ -3884,7 +3878,7 @@ resolveVariant: function {
                 :scope
                 ownerTid: variantTid
                 oId: fm.operation
-                thisName: defName
+                thisName: (nameIdOf :ast name: defName)
             )
             if (memberaccess.refuseArmPayload :st :ast :fm :defName :cid :isChoice) then continue
             st.typing.setMemberType parentTypeId: variantTid nameId: fm.name childTypeId: cid
@@ -3894,7 +3888,7 @@ resolveVariant: function {
                 :scope
                 :ast
                 :unitDecl
-                thisName: ""
+                thisName: zast.nameid
                 nid: fm.operation
             )
         }
@@ -4104,7 +4098,7 @@ attachUnionArm: function {
         :scope
         ownerTid: uid
         oId: armTe
-        thisName: defName
+        thisName: (nameIdOf :ast name: defName)
     )
     # a payload refused where it is written has no type to judge; a generic
     # parameter has no family until an instance binds it (`anyval.generic` is a
@@ -4148,7 +4142,7 @@ attachUnionArm: function {
         :scope
         :ast
         :unitDecl
-        thisName: ""
+        thisName: zast.nameid
         nid: armTe
     )
 }
@@ -4313,7 +4307,7 @@ resolveClassMethodDecl: function {
                 :unitDecl
                 ownerNameId: ownerNmId
                 mname: fname.stringView
-                thisName: defName
+                thisName: ownerNmId
                 opId: fm.operation
                 lazyOk: isgen.not
             )
@@ -4720,7 +4714,7 @@ resolveClassAsMethods: function {
                     :unitDecl
                     ownerNameId: ownerNmId
                     mname: itemName.stringView
-                    thisName: defName
+                    thisName: ownerNmId
                     opId: item.operation
                 )
                 if methodTid.some then {
@@ -4958,7 +4952,7 @@ resolveClass: function {
             :scope
             :ast
             :unitDecl
-            thisName: ""
+            thisName: zast.nameid
             nid: (objectTypedefBaseNode :ast onode: cnode)
         )
     }
@@ -5070,7 +5064,7 @@ resolveFacet: function {
     # emitters omit its slot and the checker refuses the call -- but that is a
     # decision about the MEMBER, taken where the member is used, rather than a
     # rewriting of what its type means.
-    specThisStr: defName.string
+    specThis: nameIdOf :ast name: defName
     dropThis: true
     kSiter: u64
     for kSiter < fnode.nis loop {
@@ -5089,7 +5083,7 @@ resolveFacet: function {
                 :unitDecl
                 ownerNameId: ownerNmId
                 mname: mname.stringView
-                thisName: specThisStr.stringView
+                thisName: specThis
                 opId: sm.operation
                 skipThis: dropThis
             )
@@ -5184,12 +5178,12 @@ resolveProtocol: function {
     # A protocol spec receiver is normally dropped (resolves to nothing). The reference
     # resolves StringViewable NESTED inside String's `:StringViewable` marker, so its
     # spec `:this` binds to the enclosing String -- mirror that for the system protocol.
-    specThisStr: defName.string
+    specThis: nameId
     dropThis: true
     if unitDecl == st.typing.systemUnitRoot when (
         nameId == zast.wellKnown.slot.tyStringViewable
     ) then {
-        specThisStr = "String".string
+        specThis = zast.wellKnown.slot.tyString
         dropThis = false
     }
     # `type` inside a protocol is the protocol, for the reason resolveFacet
@@ -5212,7 +5206,7 @@ resolveProtocol: function {
                 :unitDecl
                 ownerNameId: ownerNmId
                 mname: mname.stringView
-                thisName: specThisStr.stringView
+                thisName: specThis
                 opId: sm.operation
                 skipThis: dropThis
             )
@@ -5609,7 +5603,7 @@ resolveInlineGenericUnit: function {
                     :unitDecl
                     ownerNameId: ownerNmId
                     mname: fn.stringView
-                    thisName: ""
+                    thisName: zast.nameid
                     opId: bmNode.operation
                 )
                 match (
@@ -5740,7 +5734,7 @@ buildUnitMonoMember: function {
                 unitDecl: tmplUnitName
                 ownerNameId: tmplNameId
                 mname: fn.stringView
-                thisName: ""
+                thisName: zast.nameid
                 opId: fmNode.operation
             )
             {
@@ -6345,7 +6339,15 @@ numericTypedefNamed: function {
     cnId: atomNameId :ast n: (ast.nodes.getView i: callableId)
     tdTid: (
         ztypes.tid.create
-        from: (resolve.resolveNamedTypeId :st :ast :unitDecl :scope nameId: cnId thisName: "")
+        from: (
+            resolve.resolveNamedTypeId
+            :st
+            :ast
+            :unitDecl
+            :scope
+            nameId: cnId
+            thisName: zast.nameid
+        )
     )
     if (st.typing.typedefBaseTidOf tid: tdTid).isZero then return ztypes.tid
     end: conform.typedefChaseTid typing: st.typing tid: tdTid

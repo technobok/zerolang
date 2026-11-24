@@ -279,29 +279,6 @@ dottedDefTargetIds: function {ast: Ast.view n: astnode.view} out ztypes.deftarge
     }
 }
 
-# resolveNamedType -- resolve a bare type NAME to its canonical id via the
-# declare-before-bind index (definingSiteForId -> declareCanonicalTypeId), minting a
-# RECORD shell only for a numeric-literal default or an unresolved/forward name.
-# `thisName` scopes the enclosing type's generic params. resolveAtomType aliases
-# the self-type keywords `this`/`type` to the enclosing type name and calls here,
-# so a native method's `:this` / `rhs: type` lands on the one canonical id, not a
-# fresh shell.
-resolveNamedType: function {
-    st: zenv.ZSymbolTable
-    ast: Ast
-    unitDecl: ztypes.declid
-    scope: ztypes.declid
-    name: StringView
-    thisName: StringView
-    nid: zast.nodeid.zero
-} out ztypes.tid is {
-    # a name that reaches here as text is interned first, so the id form
-    # can mint it by the same spelling
-    nameId: zast.poolFind pool: ast.names text: name
-    if nameId.isZero then nameId = ast.internString text: name
-    return (resolveNamedTypeId :st :scope :ast :unitDecl :nameId :thisName :nid)
-}
-
 # literalNameTypeId -- a name that IS a numeric literal types as the literal's
 # DEFAULT scalar (system i64/f64). It is not a name reference, so a unit-local
 # scalar shadow must not capture it; pre-index (defNodeIndexBuilt false) keeps
@@ -374,9 +351,15 @@ nodeRefused: function {st: zenv.ZSymbolTable.view nid: zast.nodeid} out bool is 
     return (st.typing.refusedValues.has item: nid)
 }
 
-# resolveNamedTypeId -- resolveNamedType by the name's id. The spelling is read
-# through a block-scoped borrow where a literal is classified, and copied only
-# where a type is minted or declared under it.
+# resolveNamedTypeId -- resolve a bare type NAME, by its id, to its canonical id
+# via the declare-before-bind index (definingSiteForId -> declareCanonicalTypeId),
+# minting a RECORD shell only for a numeric-literal default or an
+# unresolved/forward name. `thisName` scopes the enclosing type's generic params.
+# resolveAtomType aliases the self-type keywords `this`/`type` to the enclosing
+# type and calls here, so a native method's `:this` / `rhs: type` lands on the
+# one canonical id, not a fresh shell. The spelling is read through a
+# block-scoped borrow where a literal is classified, and copied only where a
+# type is minted or declared under it.
 resolveNamedTypeId: function {
     # the symbol table the type is declared or found in
     st: zenv.ZSymbolTable
@@ -389,7 +372,7 @@ resolveNamedTypeId: function {
     # the type's name, interned
     nameId: zast.nameid
     # the enclosing type's name for `this`/`type`, "" outside a type
-    thisName: StringView
+    thisName: zast.nameid
     # the referencing node, for the generic-parameter record; 0 when none
     nid: zast.nodeid.zero
 } out ztypes.tid is {
@@ -448,26 +431,14 @@ resolveAtomType: function {
     scope: ztypes.declid
     # the atom's name, interned
     nameId: zast.nameid
-    thisName: StringView
+    thisName: zast.nameid
     nid: zast.nodeid.zero
 } out ztypes.tid is {
     if nameId == zast.wellKnown.slot.wkThis then {
-        # the receiver's name is both the name and the receiver: the second
-        # role reads an owned copy
-        tnOwn: thisName.string
-        return (
-            resolveNamedType
-            :st
-            :scope
-            :ast
-            :unitDecl
-            name: thisName
-            thisName: tnOwn.stringView
-        )
+        return (resolveNamedTypeId :st :scope :ast :unitDecl nameId: thisName :thisName)
     }
-    if nameId == zast.wellKnown.slot.wkType when thisName.length != 0 then {
-        tnOwnT: thisName.string
-        named: resolveNamedType :st :scope :ast :unitDecl name: thisName thisName: tnOwnT.stringView
+    if nameId == zast.wellKnown.slot.wkType when thisName.notZero then {
+        named: resolveNamedTypeId :st :scope :ast :unitDecl nameId: thisName :thisName
         selfApp: instantiate.selfApplicationTid :st :ast :unitDecl :scope templateId: named :nid
         if selfApp.notZero then return selfApp
         return named
@@ -478,9 +449,11 @@ resolveAtomType: function {
 # monoArgName -- a pending-instantiation argument's recorded name: `this` and
 # `type` map to the enclosing type (the recordResolvedName mapping); "" when
 # there is no enclosing type.
-monoArgName: function {an: StringView anId: zast.nameid thisName: StringView} out String is {
-    if anId == zast.wellKnown.slot.wkThis then return thisName.string
-    if anId == zast.wellKnown.slot.wkType then return thisName.string
+monoArgName: function {
+    ast: Ast.view an: StringView anId: zast.nameid thisName: zast.nameid
+} out String is {
+    if anId == zast.wellKnown.slot.wkThis then return (zast.nameTextCopy :ast ref: thisName)
+    if anId == zast.wellKnown.slot.wkType then return (zast.nameTextCopy :ast ref: thisName)
     return an.string
 }
 
@@ -528,7 +501,7 @@ resolveMonoRefInline: function {
     ast: Ast
     unitDecl: ztypes.declid
     scope: ztypes.declid
-    thisName: StringView
+    thisName: zast.nameid
     enclDecl: ztypes.declid
     opNid: zast.nodeid
     nid: zast.nodeid
@@ -589,7 +562,7 @@ monoRefArgTid: function {
     ast: Ast
     unitDecl: ztypes.declid
     scope: ztypes.declid
-    thisName: StringView
+    thisName: zast.nameid
     enclDecl: ztypes.declid
     arg: argref
     an: StringView
@@ -629,6 +602,7 @@ monoRefArgTid: function {
     } else {
         anc: (
             monoArgName
+            :ast
             :an
             anId: (atomNameId :ast n: (ast.nodes.getView i: arg.operation))
             :thisName
@@ -785,7 +759,7 @@ unitInstanceMemberNamed: function {
     if (instantiate.isUnitNameDecl :st :scope nameId: qualId) then return ztypes.tid
     qt: (
         ztypes.tid.create
-        from: (resolveAtomType :st :ast :unitDecl :scope nameId: qualId thisName: "")
+        from: (resolveAtomType :st :ast :unitDecl :scope nameId: qualId thisName: zast.nameid)
     )
     if (st.reg.typetypeOf typeId: qt) != ztypes.ztypetype.unitType then return ztypes.tid
     if (st.reg.genericOriginOf tid: qt).isZero then return ztypes.tid
@@ -803,11 +777,11 @@ resolveTyperefAtomShell: function {
     unitDecl: ztypes.declid
     scope: ztypes.declid
     nameId: zast.nameid
-    thisName: StringView
+    thisName: zast.nameid
     demand: bool
     nid: zast.nodeid.zero
 } out ztypes.tid is {
-    npO: statics.numericParamTypeOwner :st :ast :unitDecl :scope :nameId :thisName
+    npO: statics.numericParamTypeOwner :st :unitDecl :scope :nameId :thisName
     if npO.notZero then return (typeref.numericParamBoundOf :st :ast :scope owner: npO :nameId)
     if demand then {
         walkScope: typeargs.scopeFor typing: st.typing :scope :unitDecl
@@ -826,7 +800,7 @@ stampMemberSignature: function {
     ast: Ast
     unitDecl: ztypes.declid
     scope: ztypes.declid
-    thisName: StringView
+    thisName: zast.nameid
     ownerTid: ztypes.tid
     fnNodeId: zast.nodeid
     mid: ztypes.tid
@@ -906,7 +880,7 @@ stampForcedTyperef: function {
     ast: Ast
     unitDecl: ztypes.declid
     scope: ztypes.declid
-    thisName: StringView
+    thisName: zast.nameid
     nid: zast.nodeid
 } is {
     if nid.isZero then return
@@ -1878,7 +1852,7 @@ resolveAppliedMemberAlias: function {
         unitDecl: (unitRootOfDecl typing: st.typing :declId)
         :scope
         nid: vid
-        thisName: ""
+        thisName: zast.nameid
     )
     if rt.isZero then return ztypes.tid
     rtid: rt
@@ -2099,7 +2073,7 @@ aliasTargetTid: function {
                 :ast
                 unitDecl: homeUnit
                 nameId: tuId
-                thisName: ""
+                thisName: zast.nameid
             )
             if rtb.notZero then rto = optionval.some rtb
         }
@@ -2163,7 +2137,7 @@ aliasTargetTid: function {
             :ast
             unitDecl: hUnitDecl
             nameId: tnId
-            thisName: ""
+            thisName: zast.nameid
         )
         st.typing.declSetResolving declId: adecl mark: false
         if bat.notZero then atid = bat
@@ -2664,7 +2638,7 @@ resolveDottedDef: function {
                 :ast
                 :unitDecl
                 nameId: acId
-                thisName: ""
+                thisName: zast.nameid
             )
         }
         sda: aid
@@ -2737,7 +2711,7 @@ resolveDef: function {
             ownerNameId: zast.nameid
             :defName
             fnId: defnId
-            thisName: ""
+            thisName: zast.nameid
             skipThisType: false
         )
         ztyping.nodeTypeSet tbl: st.typing.nodeType nid: defnId tid: fid
@@ -4882,7 +4856,7 @@ checkBareGenericReturnAt: function {ast: Ast st: zenv.ZSymbolTable slot: u64} is
         tid: rtd
         nid: rn
         scope: rsc
-        thisName: ""
+        thisName: zast.nameid
     )
     # a generic type's name, stamped with its defaults' instance: that
     # instance is what the function returns
@@ -5103,7 +5077,7 @@ walkUnitTemplateBodies: function {
                 defName: dn.stringView
                 defNameId: zast.nameid
                 fn: cfbFr
-                thisName: ""
+                thisName: zast.nameid
                 thisTid: ztypes.tid
                 :ast
                 declId: fdecl
@@ -5516,7 +5490,7 @@ resolveInstantiatedAlias: function {
         :scope
         :ast
         :unitDecl
-        thisName: ""
+        thisName: zast.nameid
         enclDecl: ztypes.declid
         opNid: defn.nid
         nid: zast.nodeid

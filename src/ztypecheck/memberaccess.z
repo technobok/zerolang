@@ -96,11 +96,11 @@ genericParamTypeId: function {
     unitDecl: ztypes.declid
     scope: ztypes.declid
     nameId: zast.nameid
-    thisName: StringView
+    thisName: zast.nameid
     nid: zast.nodeid
 } out ztypes.tid is {
-    if thisName.length == 0 then return ztypes.tid.zero
-    enclosingDecl: declOfUnitDef :st :scope :unitDecl nameId: (nameIdOf :ast name: thisName)
+    if thisName.isZero then return ztypes.tid.zero
+    enclosingDecl: declOfUnitDef :st :scope :unitDecl nameId: thisName
     return (typeAsMemberTid :st :ast tdecl: enclosingDecl :nameId :nid numeric: true)
 }
 
@@ -519,7 +519,6 @@ asAliasTargetOf: function {
     if have.notZero then return have
     if (st.typing.declIsResolving declId: md) then return ztypes.tid.zero
     op: (argRefAt :ast nid: (st.typing.decls.get i: md).node).operation
-    tn: zast.nameTextCopy :ast ref: (st.typing.decls.get i: tdecl).name
     sgt: (
         statics.numericParamAliasTarget
         :st
@@ -539,7 +538,7 @@ asAliasTargetOf: function {
         :ast
         unitDecl: (unitRootOfDecl typing: st.typing declId: tdecl)
         nid: op
-        thisName: tn.stringView
+        thisName: (st.typing.decls.get i: tdecl).name
     )
     st.typing.declSetResolving declId: md mark: false
     if t.notZero then {
@@ -715,7 +714,7 @@ pathInstanceTid: function {
         unitDecl: (owningUnitDecl :st declId: scope)
         :scope
         nid: parentNid
-        thisName: ""
+        thisName: zast.nameid
     )
     if (st.reg.genericOriginOf tid: t).isZero then return ztypes.tid.zero
     return t
@@ -865,7 +864,7 @@ fieldSlotTid: function {
     scope: ztypes.declid
     ownerTid: ztypes.tid
     oId: zast.nodeid
-    thisName: StringView
+    thisName: zast.nameid
 } out ztypes.tid is {
     pt9: typeargs.partialFieldTid :st :ast :unitDecl :scope :ownerTid :oId
     if pt9.notZero then return pt9
@@ -1167,7 +1166,7 @@ registerValueParam: function {
     unitDecl: ztypes.declid
     rf: ztypes.declid
     fid: ztypes.tid
-    thisName: StringView
+    thisName: zast.nameid
     # the head name id of the declared type (the atom of `pm.operation`)
     ptn: zast.nameid
     # the partial specialisation the typeref resolves to when its argument names
@@ -1426,7 +1425,7 @@ declaredFieldTid: function {
         :scope
         ownerTid: rid
         oId: fm.operation
-        thisName: defName
+        thisName: (nameIdOf :ast name: defName)
     )
 }
 
@@ -1517,7 +1516,7 @@ attachDeclaredField: function {
         :scope
         :ast
         :unitDecl
-        thisName: ""
+        thisName: zast.nameid
         nid: fm.operation
     )
     dcn1Id: dottedChildNameId :ast n: (ast.nodes.getView i: fm.operation)
@@ -1592,7 +1591,7 @@ detectTagAccessor: function {
             :ast
             :unitDecl
             nid: am.operation
-            thisName: defName
+            thisName: (nameIdOf :ast name: defName)
         )
     )
     # a storage that is not an integer is refused where the storage is
@@ -1666,7 +1665,15 @@ variantTagBaseTid: function {
                 if bd.notZero when (st.typing.decls.get i: bd).kind.staticListDecl then {
                     declared = ztypes.tid.zero
                 } else {
-                    rr: resolve.resolveAtomType :st :ast :unitDecl :scope nameId: bnId thisName: ""
+                    rr: (
+                        resolve.resolveAtomType
+                        :st
+                        :ast
+                        :unitDecl
+                        :scope
+                        nameId: bnId
+                        thisName: zast.nameid
+                    )
                     if (isTagStorage :st tid: rr) then {
                         declared = rr
                     } else if rr.notZero then {
@@ -2353,7 +2360,7 @@ resolveNamedFieldSlot: function {
         :scope
         ownerTid: cid
         oId: fm.operation
-        thisName: defName
+        thisName: (nameIdOf :ast name: defName)
     )
     if fm.name != zast.wellKnown.slot.wkResumeInput when (
         fieldTypeNeedsCleanup
@@ -2399,7 +2406,7 @@ resolveNamedFieldSlot: function {
         :scope
         :ast
         :unitDecl
-        thisName: ""
+        thisName: zast.nameid
         nid: fm.operation
     )
     recordFieldDefault :st :ast :scope :cid :cidf :fname :fm
@@ -5375,7 +5382,7 @@ paramTidOf: function {
     ast: Ast
     rf: ztypes.declid
     pm: argref
-    thisName: StringView
+    thisName: zast.nameid
     fnTid: ztypes.tid
 } out ztypes.tid is {
     isGenDef: fnTid.notZero and (st.reg.isGenericOf tid: fnTid)
@@ -5418,12 +5425,12 @@ paramTidOf: function {
             }
         }
     }
-    if thisName.length > 0 when (
+    if thisName.notZero when (
         paramIsThisReceiver
         :ast
         op: (ast.nodes.getView i: pm.operation)
     ) then {
-        thOpt: bodies.walkLookupTyperef :st scope: rf :ast :unitDecl base: thisName
+        thOpt: walkLookupTyperefById :st scope: rf :ast :unitDecl baseId: thisName
         if thOpt.some then {
             ptid = thOpt
         }
@@ -5441,7 +5448,7 @@ bindFunctionParam: function {
     ast: Ast
     rf: ztypes.declid
     pm: argref
-    thisName: StringView
+    thisName: zast.nameid
     fnTid: ztypes.tid
 } is {
     # every value form a parameter may be declared by, an `if` or a `match`

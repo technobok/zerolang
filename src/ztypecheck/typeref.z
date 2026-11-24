@@ -53,17 +53,17 @@ recordResolvedName: function {
     ast: Ast
     unitDecl: ztypes.declid
     scope: ztypes.declid
-    thisName: StringView
+    thisName: zast.nameid
     # the referenced name, interned
     nameId: zast.nameid
     nid: zast.nodeid
     recScope: ztypes.declid
 } is {
     if nameId == zast.wellKnown.slot.wkThis then {
-        recordNodeName :ast :st name: thisName :nid scope: recScope
+        recordNodeNameId :st nameId: thisName :nid scope: recScope
     } else {
         if nameId == zast.wellKnown.slot.wkType then {
-            recordNodeName :ast :st name: thisName :nid scope: recScope
+            recordNodeNameId :st nameId: thisName :nid scope: recScope
         } else {
             if (isNumericLiteralNameAt :ast ref: nameId) then {
                 # the literal's spelling decides its default
@@ -81,7 +81,7 @@ recordResolvedName: function {
                 # declaration is written (refuseSingletonDeclType) and keeps
                 # its bound's type, known now and in no scope the deferred
                 # stamp searches
-                npO: statics.numericParamTypeOwner :st :ast :unitDecl :scope :nameId :thisName
+                npO: statics.numericParamTypeOwner :st :unitDecl :scope :nameId :thisName
                 if npO.notZero then {
                     npT: numericParamBoundOf :st :ast :scope owner: npO :nameId
                     ztyping.nodeTypeSet tbl: st.typing.nodeType :nid tid: npT
@@ -96,8 +96,8 @@ recordResolvedName: function {
                 # it no-stamp so resolution doesn't chase or report it
                 gskip: false
                 gpnr: nameId
-                if thisName.length > 0 then {
-                    enclK: declOfUnitDef :st :scope :unitDecl nameId: (nameIdOf :ast name: thisName)
+                if thisName.notZero then {
+                    enclK: declOfUnitDef :st :scope :unitDecl nameId: thisName
                     if (st.reg.isGenericParamOf tdecl: enclK name: gpnr) then {
                         gskip = true
                     } else if (ast.nodes.get i: nid).labelvalue.not when (
@@ -136,7 +136,7 @@ singletonPathArg: function {
     ast: Ast
     unitDecl: ztypes.declid
     scope: ztypes.declid
-    thisName: StringView
+    thisName: zast.nameid
     nid: zast.nodeid
 } out ztypes.tid is {
     parentId: zast.nodeid
@@ -163,7 +163,7 @@ recordDottedTyperef: function {
     ast: Ast
     unitDecl: ztypes.declid
     scope: ztypes.declid
-    thisName: StringView
+    thisName: zast.nameid
     nid: zast.nodeid
 } is {
     # Ownership/access strip marker (this.borrow / StringView.borrow / Container.private):
@@ -215,7 +215,7 @@ recordDottedTyperef: function {
             :scope
             :ast
             unitDecl: udQ
-            thisName: ""
+            thisName: zast.nameid
             nameId: cnId
             :nid
             recScope: qfr
@@ -271,7 +271,7 @@ stampDottedMember: function {
     scope: ztypes.declid
     ast: Ast
     unitDecl: ztypes.declid
-    thisName: StringView
+    thisName: zast.nameid
     nid: zast.nodeid
     parentId: zast.nodeid
     # the parent's name, zero for an application or a path
@@ -292,7 +292,7 @@ recordUnitPathTyperef: function {
     st: zenv.ZSymbolTable
     ast: Ast
     scope: ztypes.declid
-    thisName: StringView
+    thisName: zast.nameid
     nid: zast.nodeid
     parentId: zast.nodeid
     # the parent's name, zero for a path
@@ -336,7 +336,7 @@ recordTyperefArgs: function {
     ast: Ast
     unitDecl: ztypes.declid
     scope: ztypes.declid
-    thisName: StringView
+    thisName: zast.nameid
     callableId: zast.nodeid
     argIds: (ListVal zast.nodeid).view
 } is {
@@ -390,7 +390,7 @@ recordTyperef: function {
     ast: Ast
     unitDecl: ztypes.declid
     scope: ztypes.declid
-    thisName: StringView
+    thisName: zast.nameid
     nid: zast.nodeid
 } is {
     # the row is read through a view scoped to this block: the recordings below
@@ -531,7 +531,7 @@ recordReturnType: function {
     ast: Ast
     unitDecl: ztypes.declid
     scope: ztypes.declid
-    thisName: StringView
+    thisName: zast.nameid
     oId: zast.nodeid
 } is {
     if oId.isZero then return
@@ -549,11 +549,9 @@ recordReturnType: function {
     }
     stampTypePathAlias :st :ast :scope nid: oId
     # only a name some `as` item spells as a type may be an alias
-    if rnm.notZero when (st.walk.asTypeShapedNames.has item: rnm) when (
-        thisName.length > 0
-    ) when (
+    if rnm.notZero when (st.walk.asTypeShapedNames.has item: rnm) when thisName.notZero when (
         st.reg.isGenericParamOf
-        tdecl: (declOfUnitDef :st :scope :unitDecl nameId: (nameIdOf :ast name: thisName))
+        tdecl: (declOfUnitDef :st :scope :unitDecl nameId: thisName)
         name: rnm
     ).not then (
         memberaccess.genericParamTypeId
@@ -609,7 +607,7 @@ checkReturnNamesType: function {
     scope: ztypes.declid
     ast: Ast
     unitDecl: ztypes.declid
-    thisName: StringView
+    thisName: zast.nameid
     oId: zast.nodeid
 } is {
     if (ztyping.nodeTypeAt tbl: st.typing.nodeType nid: oId).notZero then return
@@ -696,7 +694,7 @@ dottedTyperefShell: function {
     unitDecl: ztypes.declid
     scope: ztypes.declid
     nid: zast.nodeid
-    thisName: StringView
+    thisName: zast.nameid
 } out ztypes.tid is {
     # the dotted row's parent and child ids
     parentId: zast.nodeid
@@ -765,7 +763,7 @@ numericParamTyperef: function {
     nid: zast.nodeid
     parentId: zast.nodeid
     leafId: zast.nameid
-    thisName: StringView
+    thisName: zast.nameid
 } out ztypes.tid is {
     if (
         (leafNamesNoMember :leafId) or (memberaccess.isScalarNameId id: leafId)
@@ -792,7 +790,7 @@ numericParamTyperefOf: function {
     nid: zast.nodeid
     parentId: zast.nodeid
     leafId: zast.nameid
-    thisName: StringView
+    thisName: zast.nameid
 } out ztypes.tid is {
     # the template named bare is no type without its arguments: it is resolved
     # as a name, which says nothing of that
@@ -823,7 +821,7 @@ numericParamTyperefOf: function {
     bound: statics.numericBoundTid :ast :st :scope :cd
     if bound.isZero then return ztypes.tid
     # a field's type-ref resolves in the scope its type is written in
-    encl: declOfUnitDef :st :unitDecl :scope nameId: (nameIdOf :ast name: thisName)
+    encl: declOfUnitDef :st :unitDecl :scope nameId: thisName
     if (memberaccess.scopeIsWithin typing: st.typing :scope root: tdecl) or (encl == tdecl) then {
         return (statics.abstractSingletonOf :st :ast :tdecl param: leafId :bound)
     }
@@ -888,7 +886,7 @@ peeledTyperef: function {
     nid: zast.nodeid
     parentId: zast.nodeid
     leafId: zast.nameid
-    thisName: StringView
+    thisName: zast.nameid
 } out ztypes.tid is {
     # an instance's numeric generic parameter is no member to peel: it is the
     # instance's singleton type
@@ -1020,7 +1018,7 @@ resolveTyperefShell: function {
     unitDecl: ztypes.declid
     scope: ztypes.declid
     nid: zast.nodeid
-    thisName: StringView
+    thisName: zast.nameid
 } out ztypes.tid is {
     # a declaration refused where it is written declares no type
     if (resolve.nodeRefused :st :nid) then return ztypes.tid
@@ -1145,7 +1143,7 @@ resolveFieldTyperef: function {
     unitDecl: ztypes.declid
     scope: ztypes.declid
     nid: zast.nodeid
-    thisName: StringView
+    thisName: zast.nameid
 } out ztypes.tid is {
     savedMode: st.mode
     st.mode.inContainmentEdge = true
@@ -1341,7 +1339,7 @@ staticListOutWrote: function {
             }
         }
         if opId.isZero then continue
-        at: resolveTyperefShell :st :scope :ast :unitDecl nid: opId thisName: ""
+        at: resolveTyperefShell :st :scope :ast :unitDecl nid: opId thisName: zast.nameid
         # an untyped element or index is written as its literal type here
         if (valuechecks.isAnyLiteralTid :st tid: at) then (
             st.walk.staticLiteralTyperefs.add

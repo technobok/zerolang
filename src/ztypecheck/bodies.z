@@ -557,7 +557,7 @@ instArgTypeOf: function {
                 :ast
                 unitDecl: r.declUnit
                 :nid
-                thisName: ""
+                thisName: zast.nameid
             )
         }
     }
@@ -744,7 +744,7 @@ bindParams: function {
     ast: Ast
     rf: ztypes.declid
     fn: fnref
-    thisName: StringView
+    thisName: zast.nameid
     fnTid: ztypes.tid
 } out geninput is {
     input: geninput tid: ztypes.tid name: zast.nameid
@@ -1082,7 +1082,7 @@ walkDemandedDef: function {
             defName: ""
             defNameId: nameId
             fn: cfbFr
-            thisName: ""
+            thisName: zast.nameid
             thisTid: ztypes.tid
             :ast
             declId: dd
@@ -1233,7 +1233,7 @@ checkMethodBodies: function {
                             defName: qn.stringView
                             defNameId: zast.nameid
                             fn: imFr
-                            thisName: typeName.stringView
+                            thisName: typeNameId
                             thisTid: typeTid
                             :ast
                             declId: isMethodDecl
@@ -1280,7 +1280,7 @@ checkMethodBodies: function {
                             defName: qn2.stringView
                             defNameId: zast.nameid
                             fn: amFr
-                            thisName: typeName.stringView
+                            thisName: typeNameId
                             thisTid: typeTid
                             :ast
                             declId: asMethodDecl
@@ -1369,7 +1369,7 @@ walkDeferredBody: function {
         defName: qn.stringView
         defNameId: zast.nameid
         fn: (fnRefAt :ast nid: opId)
-        thisName: typeName.stringView
+        thisName: (st.typing.decls.get i: ownerDecl).name
         thisTid: ownerTid
         :ast
         :declId
@@ -1400,12 +1400,12 @@ setSynthOwner: function {
     defName: StringView
     # the definition's interned name, when the caller holds it
     defNameId: zast.nameid
-    thisName: StringView
+    thisName: zast.nameid
 } is {
     st.walk.fn.synthOwnerUnit = unitDecl
     soid: defNameId
     if soid.isZero then soid = zast.poolFind pool: ast.names text: defName
-    if thisName.length > 0 then soid = zast.poolFind pool: ast.names text: thisName
+    if thisName.notZero then soid = thisName
     st.walk.fn.synthOwnerName = soid
 }
 
@@ -1421,7 +1421,10 @@ checkFunctionBody: function {
     # is a composed label (`Type.method`), which no id spells
     defNameId: zast.nameid
     fn: fnref
-    thisName: StringView
+    # the name of the type a method belongs to; zero for a free function, and
+    # for a method of a class instance, which has no name in the source
+    thisName: zast.nameid
+    # the type a method belongs to, an instance's too; zero for a free function
     thisTid: ztypes.tid
     ast: Ast
     declId: ztypes.declid
@@ -1512,7 +1515,7 @@ checkFunctionBodyIn: function {
     # is a composed label (`Type.method`), which no id spells
     defNameId: zast.nameid
     fn: fnref
-    thisName: StringView
+    thisName: zast.nameid
     thisTid: ztypes.tid
     ast: Ast
     declId: ztypes.declid
@@ -1544,7 +1547,7 @@ checkFunctionBodyIn: function {
     # a method's body demands what it names when it is walked, as its owner's
     # resolution scans no member body; a type constructed only inside it must
     # resolve before the walk, or the construction stamps type 0
-    if thisName.length > 0 then (
+    if thisTid.notZero then (
         resolve.scanDefCalls
         :st
         scope: rf
@@ -1768,7 +1771,7 @@ checkNamespaceBodies: function {
                     defName: defNameText.stringView
                     defNameId: zast.nameid
                     fn: cfbFr
-                    thisName: ""
+                    thisName: zast.nameid
                     thisTid: ztypes.tid
                     :ast
                     declId: memberDecl
@@ -1822,7 +1825,7 @@ checkUnitBodies: function {
                     defName: "main"
                     defNameId: zast.nameid
                     fn: cfbFr
-                    thisName: ""
+                    thisName: zast.nameid
                     thisTid: ztypes.tid
                     :ast
                     declId: memberDecl
@@ -1871,7 +1874,7 @@ checkUnitBodies: function {
                         defName: defName.stringView
                         defNameId: zast.nameid
                         fn: cfbFr
-                        thisName: ""
+                        thisName: zast.nameid
                         thisTid: ztypes.tid
                         :ast
                         declId: hDeclId
@@ -1940,7 +1943,7 @@ stampMonoTemplateFn: function {
                 :unitDecl
                 :fnOpId
                 monoId: t
-                ownerName: ""
+                ownerNameId: zast.nameid
                 ownerTid: ztypes.tid.zero
             )
         }
@@ -1959,9 +1962,9 @@ stampOneFnMono: function {
     scope: ztypes.declid
     fnOpId: zast.nodeid
     monoId: ztypes.tid
-    # the type a generic method belongs to, its receiver's type; "" and 0 for a
-    # free function
-    ownerName: StringView
+    # the type a generic method belongs to, its receiver's type, by name and by
+    # id; zero for a free function
+    ownerNameId: zast.nameid
     ownerTid: ztypes.tid
 } is {
     if (firstInstanceWalk :st :ast :monoId opId: fnOpId).not then return
@@ -1992,7 +1995,7 @@ stampOneFnMono: function {
         defName: monoNm.stringView
         defNameId: zast.nameid
         fn: cfbFr
-        thisName: ownerName
+        thisName: ownerNameId
         thisTid: ownerTid
         :ast
         declId: fnTemplateDecl
@@ -2239,7 +2242,6 @@ stampOneClassMono: function {
                     :ast
                     :unitDecl
                     :monoId
-                    monoNm: monoNm.stringView
                     :mop
                     methodTid: mgen
                 )
@@ -2256,7 +2258,7 @@ stampOneClassMono: function {
                 defName: q.stringView
                 defNameId: zast.nameid
                 fn: cfbFr
-                thisName: monoNm.stringView
+                thisName: zast.nameid
                 thisTid: monoId
                 :ast
                 declId: classTemplateDecl
@@ -2291,7 +2293,6 @@ stampMemberFnMonos: function {
     unitDecl: ztypes.declid
     # the class instance a method's `this` is, 0 for a unit's function
     monoId: ztypes.tid
-    monoNm: StringView
     mop: zast.nodeid
     methodTid: ztypes.tid
 } is {
@@ -2314,7 +2315,7 @@ stampMemberFnMonos: function {
             defName: q.stringView
             defNameId: zast.nameid
             fn: cfbFr
-            thisName: monoNm
+            thisName: zast.nameid
             thisTid: monoId
             :ast
             declId: methodDecl
@@ -2355,9 +2356,6 @@ stampMonoTemplateMethods: function {
         }
     }
     mi: u64
-    # the owner's name labels each instance, and only an instance needs it
-    clsName: String
-    if mTids.length > 0 then clsName = zast.nameTextCopy :ast ref: clsNameId
     for mi < mTids.length loop {
         mt: mTids.get i: mi
         mop: mOps.get i: mi
@@ -2371,7 +2369,7 @@ stampMonoTemplateMethods: function {
                 :unitDecl
                 fnOpId: mop
                 monoId: t
-                ownerName: clsName.stringView
+                ownerNameId: clsNameId
                 ownerTid: clsTid
             )
         }
@@ -3102,7 +3100,6 @@ walkUnitMonoFns: function {
                         :ast
                         :unitDecl
                         monoId: ztypes.tid
-                        monoNm: ""
                         mop: bm2.operation
                         methodTid: ugen
                     )
@@ -3121,7 +3118,7 @@ walkUnitMonoFns: function {
                     defName: q.stringView
                     defNameId: zast.nameid
                     fn: cfbFr
-                    thisName: ""
+                    thisName: zast.nameid
                     thisTid: ztypes.tid
                     :ast
                     declId: unitTemplateDecl
