@@ -272,7 +272,7 @@ appendLinesAsOps: function {ops: String.borrow lines: StringView} is {
 appendFormattedNum: function {
     ctx: Ctx
     # the string being built, and the temp counter value for the scalar buffer
-    sNm: StringView
+    dst: StringView
     bN: u64
     size: u64
     # the formatting call, which answers the length it wrote
@@ -297,7 +297,7 @@ appendFormattedNum: function {
             :ops
         )
         preludeNeed :ctx memb: "@String_append"
-        st: "\{ctx.known.strC}_append(&\{sNm}, _b\{bN}, (uint64_t)_b\{bN}_n)"
+        st: "\{ctx.known.strC}_append(\{dst}, _b\{bN}, (uint64_t)_b\{bN}_n)"
         interpStep :expr text: st.stringView :ind :buf :ops
         return
     }
@@ -315,8 +315,8 @@ appendFormattedNum: function {
     buf.append ";\n"
     buf.append ind
     buf.append ctx.known.strC
-    buf.append "_append(&"
-    buf.append sNm
+    buf.append "_append("
+    buf.append dst
     buf.append ", _b"
     appendDecimal :buf n: bN
     buf.append ", (uint64_t)_b"
@@ -333,7 +333,7 @@ appendViewPart: function {
     # the part's C text
     val: StringView
     valF: exprfacts
-    sNm: StringView
+    dst: StringView
     expr: bool
     ind: StringView
     tmp: FnTemps
@@ -357,7 +357,7 @@ appendViewPart: function {
         )
     }
     preludeNeed :ctx memb: "@String_append"
-    st: "\{ctx.known.strC}_append(&\{sNm}, \{rd}.data, \{rd}.size)"
+    st: "\{ctx.known.strC}_append(\{dst}, \{rd}.data, \{rd}.size)"
     interpStep :expr text: st.stringView :ind :buf :ops
 }
 
@@ -369,7 +369,7 @@ appendStrPart: function {
     n: astnode.view
     val: StringView
     valF: exprfacts
-    sNm: StringView
+    dst: StringView
     expr: bool
     ind: StringView
     tmp: FnTemps
@@ -399,7 +399,7 @@ appendStrPart: function {
         )
     }
     preludeNeed :ctx memb: "@String_append"
-    st: "\{ctx.known.strC}_append(&\{sNm}, \{rd}.data, \{rd}.len)"
+    st: "\{ctx.known.strC}_append(\{dst}, \{rd}.data, \{rd}.len)"
     interpStep :expr text: st.stringView :ind :buf :ops
 }
 
@@ -418,7 +418,7 @@ appendStringPart: function {
     # the part's C text
     val: StringView
     valF: exprfacts
-    sNm: StringView
+    dst: StringView
     expr: bool
     ind: StringView
     buf: String.borrow
@@ -442,7 +442,7 @@ appendStringPart: function {
         # behind it
         if an0.length == 0 when (pathIsPointer :prog :ctx :n) then sAcc = "->".string
         preludeNeed :ctx memb: "@String_append"
-        sa: "\{ctx.known.strC}_append(&\{sNm}, \{val}\{sAcc}data, \{val}\{sAcc}size)"
+        sa: "\{ctx.known.strC}_append(\{dst}, \{val}\{sAcc}data, \{val}\{sAcc}size)"
         interpStep :expr text: sa.stringView :ind :buf :ops
         return
     }
@@ -462,7 +462,7 @@ appendStringPart: function {
         :ops
     )
     preludeNeed :ctx memb: "@String_append"
-    sh: "\{ctx.known.strC}_append(&\{sNm}, \{hNm}.data, \{hNm}.size)"
+    sh: "\{ctx.known.strC}_append(\{dst}, \{hNm}.data, \{hNm}.size)"
     interpStep :expr text: sh.stringView :ind :buf :ops
     if (values.scopeOwnsTemp :prog argNid: (interpPartNodeId :n)) then {
         preludeNeed :ctx memb: "@String_free"
@@ -495,7 +495,7 @@ interpBoolPart: function {
     # the bool's C expression
     val: StringView
     # the string being built
-    sNm: StringView
+    dst: StringView
     # the temp number for the part's locals
     bN: u64
     # the build is used as a value: its steps are operands on `ops`
@@ -541,12 +541,12 @@ interpBoolPart: function {
         :ops
     )
     preludeNeed :ctx memb: "@String_append"
-    st: "\{ctx.known.strC}_append(&\{sNm}, \{bn}, (uint64_t)\{nn})"
+    st: "\{ctx.known.strC}_append(\{dst}, \{bn}, (uint64_t)\{nn})"
     interpStep :expr text: st.stringView :ind :buf :ops
 }
 
 # interpScalarPart -- an interpolated number or bool, formatted and appended
-# to `sNm`: false when the part's type `pt` (with its numeric kind `nk`) is
+# to the String at `dst`: false when the part's type `pt` (with its numeric kind `nk`) is
 # neither, and nothing is written.
 interpScalarPart: function {
     prog: Program.view
@@ -554,7 +554,7 @@ interpScalarPart: function {
     pt: ztypes.tid
     nk: ztypes.suffixinfo
     val: StringView
-    sNm: StringView
+    dst: StringView
     expr: bool
     ind: StringView
     tmp: FnTemps
@@ -568,7 +568,7 @@ interpScalarPart: function {
         (
             appendFormattedNum
             :ctx
-            :sNm
+            :dst
             :bN
             size: 48
             call: "z_fmt_i128(_b\{bN}, \{val})"
@@ -583,7 +583,7 @@ interpScalarPart: function {
         (
             appendFormattedNum
             :ctx
-            :sNm
+            :dst
             :bN
             size: 48
             call: "z_fmt_u128(_b\{bN}, \{val})"
@@ -595,7 +595,7 @@ interpScalarPart: function {
     } else if pt.notZero when ctx.known.boolTid.notZero when (
         (ztypecheck.typedefChaseTid typing: prog.typing tid: pt) == ctx.known.boolTid
     ) then {
-        interpBoolPart :prog :ctx :val :sNm :bN :expr :ind :buf :ops
+        interpBoolPart :prog :ctx :val :dst :bN :expr :ind :buf :ops
     } else if (interpPartIsInt :prog tid: pt :nk) then {
         # u64 is the one integer width whose range does not fit in
         # int64_t, so it is formatted unsigned -- signed, u64 max would print
@@ -618,7 +618,7 @@ interpScalarPart: function {
         (
             appendFormattedNum
             :ctx
-            :sNm
+            :dst
             :bN
             size: 32
             call: "\{fmtFn}(_b\{bN}, (\{cast})\{val})"
@@ -633,7 +633,7 @@ interpScalarPart: function {
         (
             appendFormattedNum
             :ctx
-            :sNm
+            :dst
             :bN
             size: 64
             call: "quadmath_snprintf(_b\{bN}, 64, \"%Qg\", \{val})"
@@ -654,7 +654,7 @@ interpScalarPart: function {
         (
             appendFormattedNum
             :ctx
-            :sNm
+            :dst
             :bN
             size: 64
             call: "snprintf(_b\{bN}, 64, \"%g\", (double)\{fv})"
@@ -670,13 +670,14 @@ interpScalarPart: function {
 }
 
 # emitInterpPart -- one part of a string interpolation, appended to the String
-# `sNm` being built: as statements on `buf`, or, for a build used as a value
-# (`expr`), as operands of its comma expression on `ops`.
+# at `dst` (its address: a String being built, or the receiver of an append
+# the checker marked, emitInterpAppend): as statements on `buf`, or, for a
+# build used as a value (`expr`), as operands of its comma expression on `ops`.
 emitInterpPart: function {
     prog: Program.view
     ctx: Ctx
     n: astnode.view
-    sNm: StringView
+    dst: StringView
     expr: bool
     ind: StringView
     tmp: FnTemps
@@ -687,7 +688,7 @@ emitInterpPart: function {
         tv: zast.literalTextAt ast: prog.ast ref: n.text
         esc: consts.cEscape text: tv
         preludeNeed :ctx memb: "@String_append"
-        sc: "\{ctx.known.strC}_append(&\{sNm}, \"\{esc}\", sizeof(\"\{esc}\")-1)"
+        sc: "\{ctx.known.strC}_append(\{dst}, \"\{esc}\", sizeof(\"\{esc}\")-1)"
         interpStep :expr text: sc.stringView :ind :buf :ops
         return
     }
@@ -712,7 +713,7 @@ emitInterpPart: function {
         :pt
         :nk
         val: val.stringView
-        :sNm
+        :dst
         :expr
         :ind
         :tmp
@@ -721,7 +722,7 @@ emitInterpPart: function {
     ) then {
         null
     } else if pt.notZero when (pt == ctx.known.svTid) or (pt == ctx.known.textTid) then {
-        appendViewPart :ctx val: val.stringView :valF :sNm :expr :ind :tmp :buf :ops
+        appendViewPart :ctx val: val.stringView :valF :dst :expr :ind :tmp :buf :ops
     } else if pt.notZero when pt == ctx.known.strTid then {
         (
             appendStringPart
@@ -730,7 +731,7 @@ emitInterpPart: function {
             :n
             val: val.stringView
             :valF
-            :sNm
+            :dst
             :expr
             :ind
             :buf
@@ -749,7 +750,7 @@ emitInterpPart: function {
             :n
             val: val.stringView
             :valF
-            :sNm
+            :dst
             :expr
             :ind
             :tmp

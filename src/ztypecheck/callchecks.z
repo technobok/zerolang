@@ -4585,6 +4585,45 @@ checkPartialParamArgs: function {
     }
 }
 
+# interpAppendsInPlace -- the statement `recv.append "<interp>"`, String's
+# append given one interpolation, whose parts can be written straight into the
+# receiver in order with no String of their own: every part is a literal or a
+# chain of field reads off a variable, so no part runs code, and no part's path
+# overlaps the receiver's (the lock analysis' path rule), so no part reads
+# what the appends change.
+interpAppendsInPlace: function {
+    st: zenv.ZSymbolTable ast: Ast call: callref arg: argref
+} out bool is {
+    if (call.nargs != 1) or (call.nid != st.walk.value.stmtExprNid) then return false
+    cn: ast.nodes.get i: call.callable
+    if cn.dottedpath.not then return false
+    if (
+        (atomNameId :ast n: (ast.nodes.get i: cn.child)) != zast.wellKnown.slot.wkAppend
+    ) then return false
+    if (
+        (walkTypeOf :st nid: cn.parent) != (stdTid :ast :st wk: zast.wellKnown.slot.tyString)
+    ) then return false
+    rpath: ListVal zast.nameid
+    moves.appendValueTuple :ast n: (ast.nodes.get i: cn.parent) dst: rpath
+    if rpath.length == 0 then return false
+    op: ast.nodes.get i: arg.operation
+    if op.atomstring.not then return false
+    holes: false
+    for each pId: (zast.kidsOf :ast span: op.stringparts) loop {
+        p: ast.nodes.get i: pId
+        if p.stringchunk then continue
+        holes = true
+        fields: ListVal zast.nameid
+        base: ast.nodes.get i: (moves.fieldChainBase :st :ast nid: pId :fields)
+        if base.atomid.not then return false
+        if (st.lookupVarId nameId: base.name).none then return false
+        ppath: ListVal zast.nameid
+        moves.appendValueTuple :ast n: p dst: ppath
+        if (zenv.pathsOverlap a: rpath.listView b: ppath.listView) then return false
+    }
+    return holes
+}
+
 # lockGenericValueArg -- what a generic call does to one value argument's
 # source, decided while the arguments are walked and in their order, exactly as
 # a concrete call's walk decides it: a later argument that moves the same value
@@ -4607,6 +4646,12 @@ lockGenericValueArg: function {
 } is {
     if pnId.isZero then return
     conform.refuseCrossingParamArg :st :ast :funcId :pnId :arg :vt
+    # an interpolation appended where its parts can go straight into the
+    # receiver is no value of its own: nothing to hold, lock or free
+    if (interpAppendsInPlace :st :ast :call :arg) then {
+        st.typing.interpAppends.add item: call.nid
+        return
+    }
     # a valtype takes the lock, and an `outx` result's pin, only when its
     # parameter takes it by pointer; the TEMPLATE's marker answers, as below
     vow: valtypeArgOwn :st :funcId :pnId :vt

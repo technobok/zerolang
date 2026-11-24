@@ -2804,6 +2804,42 @@ emitInterpPrint: function {
     }
 }
 
+# emitInterpAppend -- `recv.append "<interp>"` the checker marked
+# (ZTyping.interpAppends): each part appended straight into the receiver, in
+# the order written, with no String of its own
+emitInterpAppend: function {
+    prog: Program.view
+    ctx: Ctx
+    call: zast.callrow.view
+    ind: StringView
+    tmp: FnTemps
+    buf: String.borrow
+} is {
+    rcvNid: argforms.callRecvNodeId :prog :call
+    bn: narrowfacts.atomTextOf :prog n: (prog.ast.nodes.get i: rcvNid)
+    bnid: callorder.nativeCallRecvNode :prog recv: rcvNid
+    dst: callorder.nativeCallRecvExpr :prog :ctx recvNid: rcvNid :bn :bnid
+    a: prog.ast.nodes.get i: (argforms.firstArgId :prog :call)
+    if a.namedoperation.not then return
+    lit: prog.ast.nodes.get i: a.operation
+    if lit.atomstring.not then return
+    unusedOps: String
+    for each pId: (zast.kidsOf ast: prog.ast span: lit.stringparts) loop {
+        (
+            parttexts.emitInterpPart
+            :prog
+            :ctx
+            n: (prog.ast.nodes.get i: pId)
+            dst: dst.stringView
+            expr: false
+            :ind
+            :tmp
+            :buf
+            ops: unusedOps
+        )
+    }
+}
+
 # emitInterpBuild -- the create/append chain for an interpolated literal;
 # answers the buffer's C NAME, which the caller prints, frees or binds. The
 # name is the checker's temporary for the literal (`tempOf` keyed by the
@@ -2859,13 +2895,14 @@ emitInterpBuild: function {
         :buf
         :ops
     )
+    sAddr: "&\{sNm}"
     for each qId: (zast.kidsOf ast: prog.ast span: parts) loop {
         (
             parttexts.emitInterpPart
             :prog
             :ctx
             n: (prog.ast.nodes.get i: qId)
-            sNm: sNm.stringView
+            dst: sAddr.stringView
             :expr
             :ind
             :tmp
