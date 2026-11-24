@@ -4713,8 +4713,7 @@ takeValueReceiver: function {
     unitDecl: ztypes.declid
     call: callref
     funcId: ztypes.tid
-    # false when the dotted base names a type and hands the receiver to the
-    # arguments
+    # false when the dotted base names a type, which passes no receiver
     recvVal: bool
     pins: List ztyping.PinPath
 } out ztypes.tid is {
@@ -7329,14 +7328,15 @@ checkResolvedMethodCall: function {
         if dleg.handled then return dleg.tid
     }
     mcm: st.pushCall node: call.nid
-    # A DOTTED BASE THAT NAMES A TYPE leaves the receiver to the
-    # arguments (`Counter.increment c`); every other base passes it
-    # through the dot.
+    # A DOTTED BASE THAT NAMES A TYPE passes no receiver: a method with one
+    # called through its type was walked as the call on its receiver
+    # (callchecks.rewriteTypedCall), so the method here takes none. Every
+    # other base passes the receiver through the dot.
     # AN INFIX LEFT OPERAND IS A VALUE EXPRESSION. `a op b` evaluates `a` the
     # way any value position does -- a function auto-calls, a bare type name
     # constructs -- so the receiver always arrives through the dot. Only the
     # DOTTED spelling reads its left as a path, where a bare type name is
-    # type-qualified dispatch and hands the receiver to the arguments.
+    # type-qualified dispatch.
     # checkDottedCallableCall answered whether the base names a type, once, for
     # every dotted call (callBaseNamesType); an infix call is never in it
     recvVal: (st.typing.callBaseNamesType.has item: call.nid).not
@@ -7545,18 +7545,11 @@ checkGenericFnCall: function {
     # check happens at take; the pop releases it before the next statement).
     # A unit-member callee (io.eprintln) has no value root and skips.
     mcmG: st.pushCall node: call.nid
-    # a dotted base that names a type leaves the receiver to the arguments
-    # (`Acc.put a text: s`), as on the concrete leg (checkResolvedMethodCall)
-    recvVal: true
-    if (methodHasThisReceiver :st mid: dro) then recvVal = (
-        st.typing.callBaseNamesType.has
-        item: call.nid
-    ).not
     # the locks the call's result may keep: a hoisted argument's temporary
     # joins them AS IT IS MINTED, in argument order, so the walk and the
     # instance's own pass write to one list
     rvPinsG: List ztyping.PinPath
-    rvTG: takeValueReceiver :st :ast :unitDecl :call funcId: dro :recvVal pins: rvPinsG
+    rvTG: takeValueReceiver :st :ast :unitDecl :call funcId: dro recvVal: true pins: rvPinsG
     pinsG: List ztyping.PinPath
     errG: st.typing.reportCount
     gfr: conform.checkGenericCall :st :unitDecl :ast :call funcId: dro pins: pinsG
@@ -7586,13 +7579,13 @@ checkGenericFnCall: function {
         result: gfr
         stampNid: call.nid
     )
-    callchecks.checkGenericCallMissingArgs :ast :st :call mid: midG recvImplicit: recvVal
+    callchecks.checkGenericCallMissingArgs :ast :st :call mid: midG recvImplicit: true
     rroG: methodReceiverRootId :ast n: callableNode
     recvShrG: lockMethodReceiver :st :ast :call :dro rroId: rroG
     st.popTo marker: mcmG
     # the result pins the receiver as a concrete method's does
     rtupG: ListVal zast.nameid
-    if recvVal then (
+    (
         receiverResultPath
         :st
         :ast

@@ -709,10 +709,10 @@ ctorSelfRecursionAt: function {
 
 # unlabelledParamOf -- THE PARAMETER A CALL'S UNLABELLED ARGUMENT BINDS, zero for
 # none (docs/spec.pdoc, call arguments): the callee's first declared parameter;
-# where it declares a receiver, the first one after it when the dot supplied the
-# receiver (`recvImplicit`), and the receiver itself when the call leaves the
-# receiver to its arguments. A construction (`isCtor`) reads its first field the
-# same way. The parameters are the callee's data rows (conform.dataFieldKeeps,
+# where it declares a receiver, the first one after it, as the receiver comes
+# through the dot (a method called through its type is the call on its
+# receiver, rewriteTypedCall). A construction (`isCtor`) reads its first field
+# the same way. The parameters are the callee's data rows (conform.dataFieldKeeps,
 # the list its C is laid out from); a field that takes no argument
 # (asksNoArgument) holds no position. A call carries at most one unlabelled
 # argument, and the grammar puts it first, so there is no position to count.
@@ -722,7 +722,6 @@ unlabelledParamOf: function {
     # the callee, or a construction's effective type
     effId: ztypes.tid
     isCtor: bool
-    recvImplicit: bool
 } out zast.nameid is {
     if effId.isZero then return zast.nameid
     isFn: (st.reg.typetypeOf typeId: effId) == ztypes.ztypetype.functionType
@@ -736,7 +735,6 @@ unlabelledParamOf: function {
     )
     thisPnId: zast.nameid
     if isCtor.not then thisPnId = receiverParamNameOf :st tid: effId
-    first: zast.nameid
     n: st.typing.declRowSlots ownerTid: effId
     i: u64
     for i < n loop {
@@ -744,22 +742,12 @@ unlabelledParamOf: function {
         i = i + 1
         if (conform.dataFieldKeeps reg: st.reg typing: st.typing tid: effId :row :isFn :mkIds
         ).not then continue
-        if isCtor.not when (isReceiverParamName pnameId: row.name :thisPnId) then {
-            if recvImplicit.not then return row.name
-        } else if first.isZero when (
-            asksNoArgument
-            :st
-            :ast
-            :isCtor
-            :effId
-            pcid: row.tid
-            nameId: row.name
-        ).not then {
-            first = row.name
-            if isCtor or recvImplicit then return first
+        if isCtor.not when (isReceiverParamName pnameId: row.name :thisPnId) then continue
+        if (asksNoArgument :st :ast :isCtor :effId pcid: row.tid nameId: row.name).not then {
+            return row.name
         }
     }
-    return first
+    return zast.nameid
 }
 
 # methodKeeperOf -- what could keep a value a call takes past the call: the
@@ -886,9 +874,9 @@ missingCtorFields: function {
     funcId: ztypes.tid
     isCtor: bool
     call: callref
-    # whether the receiver arrived some other way than as an argument. Only a
-    # dotted call on a VALUE binds it that way; a type-qualified call leaves it
-    # to the arguments, where it is required and counted like any other
+    # the call supplied the receiver through its dot, so it is no argument to
+    # require (a method called through its type is the call on its receiver,
+    # rewriteTypedCall)
     recvImplicit: bool
     missingNames: List String
     missingIds: ListVal ztypes.tid
@@ -1021,8 +1009,7 @@ checkMissingCallArgs: function {
     call: callref
     funcId: ztypes.tid
     isCtor: bool
-    # whether the call's own shape already supplied the receiver -- a dotted
-    # call on a value does, a type-qualified call does not
+    # the call supplied the receiver through its dot
     recvImplicit: bool
 } is {
     createBase: metaCreateBaseId :ast n: (ast.nodes.getView i: call.callable)
@@ -1193,14 +1180,7 @@ decideArgBind: function {
     } else if (receiverGivenTwice :st :ast :call :ca :arg) then {
         oc = ztyping.argoutcome.receiverTwice
     } else if positional then {
-        pn = (
-            unlabelledParamOf
-            :st
-            :ast
-            effId: ca.effId
-            isCtor: ca.isCtor
-            recvImplicit: ca.recvImplicit
-        )
+        pn = unlabelledParamOf :st :ast effId: ca.effId isCtor: ca.isCtor
         if pn.isZero when ca.isCtor.not then oc = ztyping.argoutcome.surplus
     } else oc = byLabel
     if oc.bound when pn.notZero when ca.effId.notZero then {
@@ -1244,7 +1224,10 @@ bindCallArg: function {
     arg: argref
 } out ztyping.argbind is {
     b: st.typing.argBindOf nid: arg.nid
-    if b.outcome.receiverTwice then reportReceiverTwice :st :ast :call :ca :arg
+    if b.outcome.receiverTwice then {
+        by9: receiverSuppliedBy :ast :call recvImplicit: ca.recvImplicit
+        reportReceiverTwice :st :ast :arg by: by9.stringView
+    }
     if b.outcome.unknownLabel then (
         reportUnknownArgument
         :st
@@ -1277,7 +1260,6 @@ reportGivenTwice: function {
 } is {
     if b.outcome.givenTwice.not then return
     if ca.reportUnknown.not when ca.isCtor then return
-    if (receiverParamOf :st funcId: ca.funcId isCtor: ca.isCtor pnId: b.param) then return
     reportArgGivenTwice :st :ast pnId: b.param :arg
 }
 
@@ -1297,34 +1279,24 @@ receiverGivenTwice: function {
     return (receiverSuppliedBy :ast :call recvImplicit: ca.recvImplicit).length > 0
 }
 
-# reportReceiverTwice -- the report of an argument receiverGivenTwice answers.
-reportReceiverTwice: function {
-    st: zenv.ZSymbolTable ast: Ast.view call: callref ca: callargs arg: argref
-} is {
-    by9: receiverSuppliedBy :ast :call recvImplicit: ca.recvImplicit
+# reportReceiverTwice -- the receiver is supplied twice: by `by` (the dot of a
+# call on a value, or the unlabelled argument of a call through a type) and by
+# `arg`, which is labelled with the receiver's name
+reportReceiverTwice: function {st: zenv.ZSymbolTable ast: Ast.view arg: argref by: StringView} is {
     lb9: zast.nameTextAt :ast ref: arg.name
-    m9: "the receiver is supplied twice: by \{by9} and by '\{lb9}:'"
+    m9: "the receiver is supplied twice: by \{by} and by '\{lb9}:'"
     addError :st nodeid: arg.nid lineno: arg.lineno colno: arg.colno e: zast.err.callError msg: m9
 }
 
 # receiverSuppliedBy -- how a call ALREADY supplied its receiver, phrased the way
-# a diagnostic names it, or "" when it did not. A dotted call on a value passes it
-# through the dot; a type-qualified call passes it as the one unlabelled argument,
-# of which a call carries at most one and it comes first.
+# a diagnostic names it, or "" when it did not: a dotted call on a value passes
+# it through the dot. A method called through its type is the call on its
+# receiver before any argument binds (rewriteTypedCall).
 receiverSuppliedBy: function {ast: Ast.view call: callref recvImplicit: bool} out String is {
-    if recvImplicit then {
-        rr: methodReceiverRoot :ast n: (ast.nodes.getView i: call.callable)
-        byDot: "'\{rr}.'"
-        return byDot
-    }
-    ki: u64
-    for ki < call.nargs loop {
-        aid: zast.callArgAt :ast nid: call.nid i: ki
-        ki = ki + 1
-        an: ast.nodes.getView i: aid
-        if an.namedoperation when an.name.isZero then return "the unlabelled argument".string
-    }
-    return "".string
+    if recvImplicit.not then return "".string
+    rr: methodReceiverRoot :ast n: (ast.nodes.getView i: call.callable)
+    byDot: "'\{rr}.'"
+    return byDot
 }
 
 # refuseSingletonFieldArgs -- each argument of a `meta.create` of `owner` that
@@ -3823,12 +3795,13 @@ checkExplicitConstruction: function {
 # Everything after -- the walk, the moves and locks, the emitter -- sees the
 # value form, so a member reached through a value is reached through its type
 # the same way. The walk of `v.m` checks the receiver against T (typedRecv).
-# A call that passes no receiver, or passes it twice, keeps its written form and
-# its own report. True when it rewrote.
+# A call that passes no receiver, or passes two -- the unlabelled argument and
+# one labelled with the receiver's name -- is refused here, and the rest of it
+# is not walked.
 rewriteTypedCall: function {
     st: zenv.ZSymbolTable ast: Ast call: callref dro: ztypes.tid
-} out bool is {
-    if (moves.methodHasThisReceiver :st mid: dro).not then return false
+} out typedcall is {
+    if (moves.methodHasThisReceiver :st mid: dro).not then return typedcall.kept
     rn: receiverParamNameOf :st tid: dro
     if rn.isZero then rn = zast.wellKnown.slot.wkThis
     recvArg: argref nid: zast.nodeid name: zast.nameid operation: zast.nodeid lineno: 0 colno: 0
@@ -3839,16 +3812,24 @@ rewriteTypedCall: function {
         k = k + 1
         arg: argRefAt :ast nid: aid
         if arg.nid.notZero when arg.name.isZero or (arg.name == rn) then {
-            if recvArg.nid.notZero then return false
+            # the grammar puts the unlabelled argument first, so a second
+            # receiver is the labelled one
+            if recvArg.nid.notZero then {
+                reportReceiverTwice :st :ast :arg by: "the unlabelled argument"
+                return typedcall.refused
+            }
             recvArg = arg
         } else {
             rest.append aid
         }
     }
-    if recvArg.nid.isZero then return false
+    if recvArg.nid.isZero then {
+        reportMissingReceiver :st :ast :call :dro :rn
+        return typedcall.refused
+    }
     dp: statics.dpRefAt :ast nid: call.callable
     tt: walkTypeOf :st nid: dp.parent
-    if tt.isZero then return false
+    if tt.isZero then return typedcall.kept
     mn: zast.nameid
     mLine: u32
     mCol: u32
@@ -3896,7 +3877,37 @@ rewriteTypedCall: function {
         value: (ztyping.typedrecv tid: tt arg: recvArg.nid param: rn)
     )
     ast.writtenAs.set key: readId value: dp.parent
-    return true
+    return typedcall.rewrote
+}
+
+# typedcall -- what rewriteTypedCall made of a method called through its type
+typedcall: variant {
+    # the call on its receiver now
+    rewrote: null
+    # left as written: the method takes no receiver
+    kept: null
+    # reported: the call passes no receiver, or passes two
+    refused: null
+}
+
+# reportMissingReceiver -- a method called through its type with no argument
+# that supplies its receiver `rn`, which is a required argument like any other
+reportMissingReceiver: function {
+    st: zenv.ZSymbolTable ast: Ast call: callref dro: ztypes.tid rn: zast.nameid
+} is {
+    pcid: (st.typing.declChildOfId parentTypeId: dro nameId: rn).or d: ztypes.tid.zero
+    tnm: specWrittenName :st :ast tid: pcid
+    pname: zast.nameTextCopy :ast ref: rn
+    mm: "missing required argument '\{pname}' (type: \{tnm})"
+    (
+        addError
+        :st
+        nodeid: call.nid
+        lineno: call.lineno
+        colno: call.colno
+        e: zast.err.callError
+        msg: mm
+    )
 }
 
 # checkTypeBaseCall -- a dotted call whose base names a type
@@ -3926,7 +3937,9 @@ checkTypeBaseCall: function {
         cn: ast.nodes.getView i: call.nid
         if cn.call then span = cn.arguments
     }
-    if (rewriteTypedCall :st :ast :call :dro).not then {
+    tc: rewriteTypedCall :st :ast :call :dro
+    if tc.refused then return (callleg handled: true tid: ztypes.tid.zero)
+    if tc.kept then {
         st.typing.callBaseNamesType.add item: call.nid
         return unhandled
     }
@@ -4639,21 +4652,6 @@ lockGenericValueArg: function {
         :arg
     )
     conform.refuseUnshareablePins :st :ast :arg :pins from: pinMark
-}
-
-# receiverParamOf -- `pnId` names the receiver parameter of the method `funcId`
-# a call (not a construction) is made to: the receiver check reports it given
-# twice (walkOneCallArg), so the duplicate check leaves it be
-receiverParamOf: function {
-    st: zenv.ZSymbolTable.view
-    funcId: ztypes.tid
-    isCtor: bool
-    pnId: zast.nameid
-} out bool is {
-    if isCtor or funcId.isZero or pnId.isZero then return false
-    rn: receiverParamNameOf :st tid: funcId
-    if rn.isZero then rn = zast.wellKnown.slot.wkThis
-    return pnId == rn
 }
 
 # reportArgGivenTwice -- an argument binds a parameter an earlier one of the call
