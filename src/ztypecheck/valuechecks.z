@@ -1960,36 +1960,43 @@ materialiseLiteral: function {
     return dn
 }
 
-# checkReadonlyBindSource -- the readonly and take bookkeeping a binding's SOURCE
-# earns. Readonly is DEEP: a reftype read out of a readonly path is itself
-# readonly and takes the same self-lock, or the binding would be a laundering
-# step -- and a bare name launders exactly as a path does, which is why the
-# rule asks about a one-segment path too.
-checkReadonlyBindSource: function {
+# bindingMarker -- the marker a binding's value carries: its own (`pending`, what
+# a call's result keeps), else a view when the value reads a readonly place.
+# Readonly is DEEP: a reftype read out of a readonly place is a view of it, and
+# a binding that borrows it is readonly too (readonlyByMarker), as an arm's
+# value is (moves.armLeafMarker). Without this the binding is a laundering step
+# -- `i: c.sub` off a `view` receiver would hand back a freely mutable name. A
+# bare name launders exactly as a path does, so a one-segment path counts. What
+# the binding OWNS -- a call's result, `c.abs.string` -- is its own, and
+# writable.
+bindingMarker: function {
     st: zenv.ZSymbolTable
     ast: Ast.view
-    asgn: asgnref
+    nid: zast.nodeid
     vt: ztypes.tid
-    boundVid: ztypes.vid
+    pending: ztypes.zparamownership
+} out ztypes.zparamownership is {
+    if pending != ztypes.zparamownership.noneMode then return pending
+    if (moves.valueReadsReadonlyPlace :st :ast :nid :vt) then return ztypes.zparamownership.viewMode
+    return pending
+}
+
+# checkReadonlyBindSource -- a `hold` value is owned but frozen: its binding takes
+# the readonly self-lock, in both families (as lockReadonlyParam says of a
+# parameter). The lock is what makes the marker mean anything, so writes,
+# mutating receivers and re-passing to a mutable parameter are caught by the
+# ordinary lock rules.
+checkReadonlyBindSource: function {
+    st: zenv.ZSymbolTable ast: Ast.view asgn: asgnref boundVid: ztypes.vid
 } is {
-    # Readonly is deep: a reftype read out of a readonly path is itself
-    # readonly, and takes the same self-lock. Without this the binding is
-    # a laundering step -- `i: c.sub` off a `view` receiver would hand back
-    # a freely mutable name. A `hold` value is owned but frozen, and takes it
-    # too, in both families (as lockReadonlyParam says of a parameter): the
-    # lock is what makes the marker mean anything, so writes, mutating
-    # receivers and re-passing to a mutable parameter are caught by the
-    # ordinary lock rules.
-    if (
-        (valueIsHold :ast n: (ast.nodes.getView i: asgn.value)) or
-        (
-            moves.valueReadsReadonlyPlace
-            :st
-            :ast
-            nid: asgn.value
-            :vt
-        )
-    ) then takeReadonlySelfLock :st :ast name: asgn.name vid: boundVid nid: asgn.nid
+    if (valueIsHold :ast n: (ast.nodes.getView i: asgn.value)) then (
+        takeReadonlySelfLock
+        :st
+        :ast
+        name: asgn.name
+        vid: boundVid
+        nid: asgn.nid
+    )
 }
 
 # recordRootAt -- the root of pin `i` of the record `vp`, zero past its end.
@@ -2243,12 +2250,12 @@ checkAssignmentIn: function {
             :st
             :ast
             :own
-            marker: pending
+            marker: (bindingMarker :st :ast nid: asgn.value :vt :pending)
             name: asgn.name
             vid: boundVid
             nid: asgn.nid
         )
-        checkReadonlyBindSource :st :ast :asgn :vt :boundVid
+        checkReadonlyBindSource :st :ast :asgn :boundVid
         instX: (own == ztypes.zownership.borrowed) or (pboX and (bpins.length > 0))
         st.walk.value.draft.owned = false
         if instX then {
