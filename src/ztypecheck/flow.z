@@ -1755,21 +1755,17 @@ partialTemplateOf: function {st: zenv.ZSymbolTable.view tid: ztypes.tid} out zty
     return og
 }
 
-# subjectAtomName -- a match subject's bare-atom name (narrowing requires a
-# simple addressable name): "" for dotted/complex
-# subjects and numeric atoms.
-subjectAtomName: function {ast: Ast.view n: astnode.view} out String is {
+# subjectAtomNameId -- a match subject's bare-atom name (narrowing requires a
+# simple addressable name): 0 for a dotted or complex subject and a numeric
+# atom.
+subjectAtomNameId: function {ast: Ast.view n: astnode.view} out zast.nameid is {
     match (
         n
     ) case atomid then {
-        saB: ast.names.texts.get i: n.name
-        if (statics.isNumericLiteralName name: saB.stringView) then {
-            return "".string
-        } else {
-            return saB.copy
-        }
+        if (isNumericLiteralNameAt :ast ref: n.name) then return zast.nameid.zero
+        return n.name
     } else {
-        return "".string
+        return zast.nameid.zero
     }
 }
 
@@ -1831,7 +1827,7 @@ casearmfacts: record {
 narrowCaseArmSubject: function {
     st: zenv.ZSymbolTable
     ast: Ast.view
-    targetName: StringView
+    targetName: zast.nameid
     armName: StringView
     armTid: ztypes.tid
     subjT: ztypes.tid
@@ -1839,7 +1835,7 @@ narrowCaseArmSubject: function {
     if armTid.isZero then return
     (
         st.narrow
-        nameId: (nameIdOf :ast name: targetName)
+        nameId: targetName
         toTypeId: armTid
         subtypeName: (nameIdOf :ast name: armName)
         shadow: true
@@ -1848,7 +1844,7 @@ narrowCaseArmSubject: function {
         armPayloadReadonly
         :st
         :ast
-        subject: (nameIdOf :ast name: targetName)
+        subject: targetName
         parentTid: subjT
         armName: (nameIdOf :ast name: armName)
         payloadTid: armTid
@@ -1924,7 +1920,7 @@ checkCaseClause: function {
     subjT: ztypes.tid
     isSum: bool
     armsPublic: bool
-    targetName: StringView
+    targetName: zast.nameid
     neverId: ztypes.tid
     covered: List String
     diverging: List String
@@ -1980,7 +1976,7 @@ checkCaseClause: function {
             armTid: (armo.or d: ztypes.tid.zero)
         )
     }
-    if targetName.length > 0 when subjT.notZero then {
+    if targetName.notZero when subjT.notZero then {
         (
             narrowCaseArmSubject
             :st
@@ -2078,7 +2074,7 @@ caseIsExhaustive: function {
     casenode: caseref
     subjT: ztypes.tid
     isSum: bool
-    targetName: StringView
+    targetName: zast.nameid
     covered: (List String).view
 } out bool is {
     if isSum.not then return false
@@ -2183,7 +2179,7 @@ caseResultTid: function {
 applyCaseExclusions: function {
     st: zenv.ZSymbolTable
     ast: Ast.view
-    targetName: StringView
+    targetName: zast.nameid
     subjT: ztypes.tid
     diverging: (List String).view
     casenode: caseref
@@ -2191,18 +2187,18 @@ applyCaseExclusions: function {
     for each dn2: diverging loop {
         (
             st.exclude
-            nameId: (nameIdOf :ast name: targetName)
+            nameId: targetName
             subtypeName: (nameIdOf :ast name: dn2.stringView)
             fullTypeId: subjT
         )
     }
     if diverging.length > 0 then {
-        shadowCollapseIfSingle :ast :st name: (nameIdOf :ast name: targetName) fullTid: subjT
+        shadowCollapseIfSingle :ast :st name: targetName fullTid: subjT
         (
             postGuardRecord
             :st
             stmtNid: casenode.nid
-            subject: (nameIdOf :ast name: targetName)
+            subject: targetName
             fullTid: subjT
         )
     }
@@ -2217,7 +2213,7 @@ checkCaseElse: function {
     ast: Ast
     casenode: caseref
     subjT: ztypes.tid
-    targetName: StringView
+    targetName: zast.nameid
     neverId: ztypes.tid
     covered: List String
     armTypes: ListVal ztypes.tid
@@ -2238,16 +2234,16 @@ checkCaseElse: function {
         marker: elseMarker
         since: st.releaseMark
     )
-    if targetName.length > 0 when subjT.notZero then {
+    if targetName.notZero when subjT.notZero then {
         for each en2: covered loop {
             (
                 st.exclude
-                nameId: (nameIdOf :ast name: targetName)
+                nameId: targetName
                 subtypeName: (nameIdOf :ast name: en2.stringView)
                 fullTypeId: subjT
             )
         }
-        shadowCollapseIfSingle :ast :st name: (nameIdOf :ast name: targetName) fullTid: subjT
+        shadowCollapseIfSingle :ast :st name: targetName fullTid: subjT
     }
     et: walkCaseElseBody :st :unitDecl :ast :casenode :neverId :armTypes
     # the else is an arm: it decides `allDiverge` like any other. Leaving it
@@ -2303,7 +2299,7 @@ walkCaseClauses: function {
     casenode: caseref
     subjT: ztypes.tid
     isSum: bool
-    targetName: StringView
+    targetName: zast.nameid
     neverId: ztypes.tid
     covered: List String
     diverging: List String
@@ -2358,11 +2354,10 @@ walkCaseClauses: function {
 # longer known inside. A name that reads an enclosing arm's payload (a shadow
 # narrowing) is that payload: the match narrows the payload, so it keeps the
 # row that says so.
-restartNarrowing: function {st: zenv.ZSymbolTable ast: Ast.view targetName: StringView} is {
-    if targetName.length == 0 then return
-    nm: nameIdOf :ast name: targetName
-    if (st.isShadowNarrowed nameId: nm) then return
-    st.resetNarrowing nameId: nm
+restartNarrowing: function {st: zenv.ZSymbolTable targetName: zast.nameid} is {
+    if targetName.isZero then return
+    if (st.isShadowNarrowed nameId: targetName) then return
+    st.resetNarrowing nameId: targetName
 }
 
 # finishCaseMatch -- close a match once its arms are walked: pop the match
@@ -2374,7 +2369,7 @@ finishCaseMatch: function {
     casenode: caseref
     subjT: ztypes.tid
     isSum: bool
-    targetName: StringView
+    targetName: zast.nameid
     hasElse: bool
     allDiverge: bool
     anyEmpty: bool
@@ -2390,7 +2385,7 @@ finishCaseMatch: function {
     if exhaustive.not then {
         exhaustive = caseIsExhaustive :st :ast :casenode :subjT :isSum :targetName :covered
     }
-    if targetName.length > 0 when subjT.notZero then {
+    if targetName.notZero when subjT.notZero then {
         applyCaseExclusions :st :ast :targetName :subjT :diverging :casenode
     }
     return (
@@ -2419,11 +2414,8 @@ checkCaseArms: function {
     matchMarker: zenv.openpos
 } out ztypes.tid is {
     restMark: st.restoreMark
-    targetName: String
-    if isSum then {
-        tn: subjectAtomName :ast n: (ast.nodes.get i: casenode.subject)
-        targetName = tn.take
-    }
+    targetName: zast.nameid
+    if isSum then targetName = subjectAtomNameId :ast n: (ast.nodes.get i: casenode.subject)
     neverId: ztypes.tid
     nvOpt: stdtypes.stdTidOpt :ast :st wk: zast.wellKnown.slot.tyNever
     if nvOpt.some then {
@@ -2446,7 +2438,7 @@ checkCaseArms: function {
         relCounts: ListVal u64
     )
     st.pushBlock node: zast.nodeid
-    restartNarrowing :st :ast targetName: targetName.stringView
+    restartNarrowing :st :targetName
     covered: List String
     diverging: List String
     armTypes: ListVal ztypes.tid
@@ -2460,7 +2452,7 @@ checkCaseArms: function {
         :casenode
         :subjT
         :isSum
-        targetName: targetName.stringView
+        :targetName
         :neverId
         :covered
         :diverging
@@ -2480,7 +2472,7 @@ checkCaseArms: function {
             :ast
             :casenode
             :subjT
-            targetName: targetName.stringView
+            :targetName
             :neverId
             :covered
             :armTypes
@@ -2498,7 +2490,7 @@ checkCaseArms: function {
         :casenode
         :subjT
         :isSum
-        targetName: targetName.stringView
+        :targetName
         :hasElse
         :allDiverge
         :anyEmpty
