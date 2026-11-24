@@ -290,9 +290,7 @@ borrowedPointerField: function {
 } out bool is {
     pnid: zast.nodeIdOf n: (prog.ast.nodes.get i: n.parent)
     pstamp: stampIdOf :prog nid: pnid
-    prid: types.canonTypeId :prog tid: pstamp
     ptid: pstamp
-    if prid.notZero then ptid = prid
     if (
         prog.typing.declIsBorrowedFieldId
         parentTypeId: ptid
@@ -2073,8 +2071,7 @@ baseAtomReadsAsValue: function {prog: Program.view n: astnode.view} out bool is 
 # boxMemberElem -- the element type a member read off a Box reaches: a Box's
 # fields and methods are its element's, the ownership markers and `.copy` its
 # own (ztypecheck.boxMemberDelegates). 0 when the base is not a Box or the
-# member is the box's. A parameter's stamp is a shell named after the Box, so
-# it is canonicalised as nodeIsAtomBox does.
+# member is the box's.
 boxMemberElem: function {
     prog: Program.view
     n: zast.dottedpathrow.view
@@ -2084,12 +2081,7 @@ boxMemberElem: function {
     bnid: interpPartNodeId n: (prog.ast.nodes.get i: n.parent)
     bt: stampIdOf :prog nid: bnid
     if bt.isZero then return ztypes.tid.zero
-    if (prog.reg.isBoxOf tid: bt).not then {
-        bxc: types.canonTypeId :prog tid: bt
-        if bxc.isZero then return ztypes.tid.zero
-        bt = bxc
-        if (prog.reg.isBoxOf tid: bt).not then return ztypes.tid.zero
-    }
+    if (prog.reg.isBoxOf tid: bt).not then return ztypes.tid.zero
     if (prog.reg.genericArgCount specId: bt) != 1 then return ztypes.tid.zero
     return (prog.reg.genericTypeArgAt specId: bt ordinal: 0)
 }
@@ -4324,12 +4316,6 @@ emitHoistedReturn: function {
 
 # nodeIsAtomBox -- n is a bare atom whose type is a builtin Box (a heap pointer),
 # so an arithmetic/compare operand must auto-deref (`b` -> `(*b)`).
-#
-# The stamp is asked first and then CANONICALISED, because a PARAMETER's type is
-# a fresh shell id named after the real one: a Box local answered here and a Box
-# parameter did not, so `b + 0` added one to an address and `b == 7` compared
-# the address. typeRefC canonicalises before the same question for the same
-# reason.
 nodeIsAtomBox: function {
     prog: Program.view
     n: astnode.view
@@ -4337,13 +4323,7 @@ nodeIsAtomBox: function {
     match (
         n
     ) case atomid then {
-        bxt: stampIdOf :prog nid: n.nodeid
-        if (prog.reg.isBoxOf tid: bxt) then return true
-        if bxt.isZero then return false
-        bxc: ztypes.tid
-        bxc = types.canonTypeId :prog tid: bxt
-        if bxc.isZero then return false
-        return (prog.reg.isBoxOf tid: bxc)
+        return (prog.reg.isBoxOf tid: (stampIdOf :prog nid: n.nodeid))
     } else {
         return false
     }
