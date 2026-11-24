@@ -90,23 +90,34 @@ typedefChaseTid: function {typing: ztyping.ZTyping.view tid: ztypes.tid} out zty
     return cur
 }
 
-# typedefDeclaredMember -- the member `name` as the first link of `tid`'s
-# typedef chain that declares it declares it (the spec: a typedef's own member
-# wins, else the first link that declares it answers): its type. 0 when only
-# the chain end could -- `tid` is no typedef, or no typedef link declares it --
-# whose conversions and lenient members answer.
-typedefDeclaredMember: function {
+# typedefLinkDeclaring -- the first link of `tid`'s typedef chain that declares
+# the member `name` -- `tid` itself, or a base it hands the member on to -- else
+# the chain's end, whose conversions and lenient members answer for it. A
+# typedef's own member wins over its base's (the spec), and one it hides
+# (`twice: null`) is its own declaration too. Read off the declarations, so a
+# member still resolving counts. Every chain ends: a typedef of itself is
+# refused, and no base is recorded for it (refuseTypedefOfItself).
+typedefLinkDeclaring: function {
     typing: ztyping.ZTyping.view tid: ztypes.tid name: zast.nameid
 } out ztypes.tid is {
     cur: tid
-    for true loop {
+    for (typing.declMemberIdOf parentTypeId: cur nameId: name).isZero loop {
         b: typing.typedefBaseTidOf tid: cur
-        if b.isZero then return ztypes.tid.zero
-        m: (typing.declChildOfId parentTypeId: cur nameId: name).or d: ztypes.tid.zero
-        if m.notZero then return m
+        if b.isZero then return cur
         cur = b
     }
-    return ztypes.tid.zero
+    return cur
+}
+
+# typedefDeclaredMember -- the type of the member `name` that a typedef link of
+# `tid`'s chain declares (typedefLinkDeclaring); 0 when only the chain's end
+# could -- `tid` is no typedef, or no typedef link declares it.
+typedefDeclaredMember: function {
+    typing: ztyping.ZTyping.view tid: ztypes.tid name: zast.nameid
+} out ztypes.tid is {
+    link: typedefLinkDeclaring :typing :tid :name
+    if (typing.typedefBaseTidOf tid: link).isZero then return ztypes.tid.zero
+    return ((typing.declChildOfId parentTypeId: link nameId: name).or d: ztypes.tid.zero)
 }
 
 # forceMemberDecl -- resolve one member's signature on demand: the rung below
