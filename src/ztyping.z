@@ -459,17 +459,14 @@ datafield: record {
     name: zast.nameid
     # whether a data value may hold the field's type
     isStatic: bool
-    # the field's default, folded and fitted to the field, once one has been;
-    # none until then, and for a field with no default
-    defaultVal: ztypes.cval
 }
 
 # fieldspan -- a type's run of rows in ZTyping.fieldRows
 fieldspan: record {
-    # the first row
-    from: u32
+    # the first row; 0 for no run, as row 0 is fieldRows' sentinel
+    from: 0.u32
     # how many rows
-    count: u32
+    count: 0.u32
 }
 
 # armkey -- one union arm: the union's type and the arm's name
@@ -1188,7 +1185,15 @@ ZTyping: class {
     # in, from its declaration (`tag: u8.tag`) or the spec's u8 default. Absent
     # for a data-sourced tag, whose constants set their own width.
     variantTagBase: (IdMapV ztypes.tid v: ztypes.tid)
+    # each type's data fields, a run per type (fieldSpans): row 0 is a sentinel,
+    # so no real run starts at 0
     fieldRows: ListVal datafield
+    # each type's run of rows in fieldRows (fieldsOf), recorded by the check
+    # (ztypecheck.dataFieldsOf); dense: the check records one for every type
+    fieldSpans: (ListVal fieldspan i: ztypes.tid)
+    # a field row's default, folded and fitted to the field, once one has been
+    # (staticFieldDefault): few rows have one, so they are kept apart from the rows
+    fieldDefaults: (IdMapV u64 v: ztypes.cval)
     # the system unit's root DeclId, resolved once: the member probe below it
     # runs per reference, so it must not re-resolve the unit name each time
     systemUnitRoot: ztypes.declid
@@ -1760,6 +1765,17 @@ ZTyping: class {
             found = co
         }
         return found
+    }
+
+    # fieldsOf -- `tid`'s run of rows in fieldRows; a zero run (from 0) when the
+    # check recorded none
+    fieldsOf: function {t: this.view tid: ztypes.tid} out fieldspan is {
+        return (denseAt tbl: t.fieldSpans id: tid)
+    }
+
+    # setFieldsOf -- record `span` as `tid`'s run of rows in fieldRows
+    setFieldsOf: function {t: this tid: ztypes.tid span: fieldspan} is {
+        denseSet tbl: t.fieldSpans id: tid value: span
     }
 
     # declIdOfType -- the declaration that minted `typeId`; 0 for a type with
@@ -3159,6 +3175,8 @@ newTyping: function {nodeEst: 0.u64} out ZTyping is {
         truthyCondArm: (IdMapV zast.nodeid v: zast.nameid)
         variantTagBase: (IdMapV ztypes.tid v: ztypes.tid)
         fieldRows: ListVal datafield
+        fieldSpans: (ListVal fieldspan i: ztypes.tid)
+        fieldDefaults: (IdMapV u64 v: ztypes.cval)
         systemUnitRoot: ztypes.declid
         mainUnitRoot: ztypes.declid
         collectionsUnitRoot: ztypes.declid
@@ -3236,6 +3254,7 @@ newTyping: function {nodeEst: 0.u64} out ZTyping is {
         reached: false
     )
     childTid.constAggIndex.next.append 0
+    childTid.fieldRows.append (datafield tid: ztypes.tid name: zast.nameid.zero isStatic: false)
     # the program root, DeclId 1: the file units are parented to it, so every
     # declaration but this one has a parent. Minted with parent 0, so it takes
     # no name edge and lands in no namespace; it is no unit scope and has no

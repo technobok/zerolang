@@ -3729,9 +3729,9 @@ typedefMethodOwner: function {
 }
 
 # recFieldLists -- a record type's field names and type ids in order
-# (non-FUNCTION children, implementation markers excluded). The filter lives in
-# ztypecheck: the C struct layout the emitter lays down and the data-field
-# list the checker validates against must agree field for field.
+# (non-FUNCTION children, implementation markers excluded), as the check
+# recorded them (fieldsOf): the C struct layout the emitter lays down and the
+# data-field list the checker validates against agree field for field.
 recFieldLists: function {
     prog: Program.view
     tid: ztypes.tid
@@ -3739,16 +3739,26 @@ recFieldLists: function {
     ids: ListVal ztypes.tid
     nameIds: ListVal zast.nameid
 } is {
-    (
-        ztypecheck.dataFieldNames
-        ast: prog.ast
-        reg: prog.reg
-        typing: prog.typing
-        :tid
-        :names
-        :ids
-        :nameIds
+    sp: fieldsOf :prog :tid
+    k: u64
+    for k < sp.count loop {
+        f: prog.typing.fieldRows.get i: sp.from.u64 + k
+        names.append (prog.ast.names.texts.get i: f.name).copy
+        ids.append f.tid
+        nameIds.append f.name
+        k = k + 1
+    }
+}
+
+# fieldsOf -- `tid`'s data fields, the run of rows the check recorded for every
+# type (ztypecheck.recordAllDataFields); the emitter never works them out
+fieldsOf: function {prog: Program.view tid: ztypes.tid} out ztyping.fieldspan is {
+    sp: prog.typing.fieldsOf :tid
+    if sp.from == 0 then (
+        panic
+        msg: "zemitterc: the check recorded no data fields for a type the emitter reads"
     )
+    return sp
 }
 
 # applyTmpl -- substitute one @@KEY@@ placeholder in template text.

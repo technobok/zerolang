@@ -571,8 +571,8 @@ emitTypedefCreateCall: function {
 
 # memberOrdinal -- the position of the member named `nameId` among `owner`'s
 # members of `kind`, in declaration order: a field among the data fields the
-# struct lays down (ztypecheck.dataFieldIds, through any typedef to the
-# aggregate it aliases), an arm among the sum's arms (armOrdinalOf, the
+# struct lays down (callorder.fieldsOf, through any typedef to the aggregate
+# it aliases), an arm among the sum's arms (armOrdinalOf, the
 # ordinal its tag constant carries), a slot among the interface's spec
 # methods. none when the owner declares no such member.
 memberOrdinal: function {
@@ -596,45 +596,27 @@ memberOrdinal: function {
     } case slot then {
         return (slotOrdinalOf :prog tid: t :nameId)
     } else {
-        return (fieldOrdinalOf :prog typeDefs: ctx.typeDefs tid: t :nameId)
+        return (fieldOrdinalOf :prog tid: t :nameId)
     }
 }
 
 # fieldOrdinalOf -- the position of the data field named `nameId` among
-# `tid`'s (ztypecheck.dataFieldIds' order); none when it declares no such
-# field. Each type's list is read once per emit into ctx.fieldNameIds.
+# `tid`'s, in the order the check recorded them (callorder.fieldsOf); none when
+# it declares no such field
 fieldOrdinalOf: function {
     prog: Program.view
-    # the emission context, whose cache keeps each list once read
-    typeDefs: TypeDefState
     # the record or class
     tid: ztypes.tid
     # the field's name, interned
     nameId: zast.nameid
 } out optionval u64 is {
-    start: u64
-    so: typeDefs.fieldListAt.get key: tid
-    match (
-        so
-    ) case some then {
-        start = so
-    } case none then {
-        start = typeDefs.fieldNameIds.length
-        ids: ListVal ztypes.tid
-        nms: ListVal zast.nameid
-        ztypecheck.dataFieldIds reg: prog.reg typing: prog.typing :tid :ids nameIds: nms
-        for each fnm: nms loop typeDefs.fieldNameIds.append fnm
-        typeDefs.fieldNameIds.append zast.nameid.zero
-        typeDefs.fieldListAt.set key: tid value: start
-    }
+    sp: callorder.fieldsOf :prog :tid
     k: u64
-    i: start
-    for true loop {
-        f: typeDefs.fieldNameIds.get :i
-        if f.isZero then break
-        if f == nameId then return (optionval.some k)
+    for k < sp.count loop {
+        if (
+            (prog.typing.fieldRows.get i: sp.from.u64 + k).name == nameId
+        ) then return (optionval.some k)
         k = k + 1
-        i = i + 1
     }
     return (optionval.none u64)
 }
@@ -1735,7 +1717,14 @@ recFieldIds: function {
     ids: ListVal ztypes.tid
     nameIds: ListVal zast.nameid
 } is {
-    ztypecheck.dataFieldIds reg: prog.reg typing: prog.typing :tid :ids :nameIds
+    sp: callorder.fieldsOf :prog :tid
+    k: u64
+    for k < sp.count loop {
+        f: prog.typing.fieldRows.get i: sp.from.u64 + k
+        ids.append f.tid
+        nameIds.append f.name
+        k = k + 1
+    }
 }
 
 # demandContainerCalls -- the element and key methods the author wrote that a

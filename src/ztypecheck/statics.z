@@ -5392,20 +5392,15 @@ staticFieldRowValue: function {
     # refused where it is declared (refuseNonStaticMember), as in staticFieldValue
     if fr.isStatic.not then return ztypes.noConst
     if argNid.notZero then return (staticArgValue :st :scope :ast :unitDecl :ftid :name :argNid)
-    if fr.defaultVal.isConst then return fr.defaultVal
+    known: st.typing.fieldDefaults.get key: row.u64
+    if known.some then return known
     dv: constOfFieldDefault :st :ast :ownerTid :ftid :name
     if dv.kind.none then {
         missingFieldError :st :ast :ftid :name :at :ln :co
         return ztypes.noConst
     }
     fv: constFitToField :st :scope :ast v: dv :ftid :name :at :ln :co
-    if fv.isConst then {
-        (
-            st.typing.fieldRows.set
-            i: row.u64
-            val: (ztyping.datafield tid: ftid :name isStatic: true defaultVal: fv)
-        )
-    }
+    if fv.isConst then st.typing.fieldDefaults.set key: row.u64 value: fv
     return fv
 }
 
@@ -5677,33 +5672,72 @@ constAggField: function {
 # data value may hold them do not change, so each construction reads the row
 # rather than asking again.
 dataFieldsOf: function {st: zenv.ZSymbolTable ast: Ast tid: ztypes.tid} out ztyping.fieldspan is {
-    known: st.walk.fieldSpans.get key: tid
-    if known.some then {
-        return known
-    }
+    known: st.typing.fieldsOf :tid
+    if known.from > 0 then return known
     conform.forceAllMembers :st :ast :tid
+    return (recordDataFields :st :ast :tid)
+}
+
+# recordAllDataFields -- the check's last step: every type's data fields
+# recorded, so the emitter reads each type's and each function's from
+# st.typing.fieldsOf and never works them out again. A type no construction
+# asked for (dataFieldsOf) is recorded as its rows stand now, unforced, which
+# is what any later reader would find; a unit and a generic parameter have no
+# data fields. One pair of lists serves every type.
+recordAllDataFields: function {st: zenv.ZSymbolTable ast: Ast} is {
+    ftids: ListVal ztypes.tid
+    fnames: ListVal zast.nameid
+    t: 1.u64
+    for t < st.reg.nextTid.u64 loop {
+        tid: ztypes.tid.create from: t
+        t = t + 1
+        tt: st.reg.typetypeOf typeId: tid
+        if (tt == ztypes.ztypetype.unitType) or (tt == ztypes.ztypetype.genericParam) then continue
+        if (st.typing.fieldsOf :tid).from > 0 then continue
+        for ftids.length > 0 loop ftids.pop
+        for fnames.length > 0 loop fnames.pop
+        conform.dataFieldIds reg: st.reg typing: st.typing :tid ids: ftids nameIds: fnames
+        recordFieldRows :st :ast :tid :ftids :fnames
+    }
+}
+
+# recordDataFields -- dataFieldsOf's recording: `tid`'s data fields
+# (dataFieldIds) as its run
+recordDataFields: function {
+    st: zenv.ZSymbolTable ast: Ast tid: ztypes.tid
+} out ztyping.fieldspan is {
     ftids: ListVal ztypes.tid
     fnames: ListVal zast.nameid
     conform.dataFieldIds reg: st.reg typing: st.typing :tid ids: ftids nameIds: fnames
+    return (recordFieldRows :st :ast :tid :ftids :fnames)
+}
+
+# recordFieldRows -- the fields `ftids` / `fnames` appended to
+# st.typing.fieldRows as `tid`'s run, recorded and answered
+recordFieldRows: function {
+    st: zenv.ZSymbolTable
+    ast: Ast
+    tid: ztypes.tid
+    ftids: (ListVal ztypes.tid).view
+    fnames: (ListVal zast.nameid).view
+} out ztyping.fieldspan is {
     from: st.typing.fieldRows.length
     fi: u64
     for fi < fnames.length loop {
         ft: ftids.get i: fi
-        isStatic: isStaticMemberTid :st :ast tid: ft
         (
             st.typing.fieldRows.append
             from: (
                 ztyping.datafield
                 tid: ft
                 name: (fnames.get i: fi)
-                :isStatic
-                defaultVal: ztypes.noConst
+                isStatic: (isStaticMemberTid :st :ast tid: ft)
             )
         )
         fi = fi + 1
     }
     span: ztyping.fieldspan from: from.u32.orPanic count: fnames.length.u32.orPanic
-    st.walk.fieldSpans.set key: tid value: span
+    st.typing.setFieldsOf :tid :span
     return span
 }
 
