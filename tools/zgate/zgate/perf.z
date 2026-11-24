@@ -5,8 +5,8 @@
 #                        phase split and the allocation total (make perf)
 #   strict ZC BASELINE   the allocation ratchet (make perf-strict): heap blocks
 #                        of one self-compile under valgrind memcheck, refused
-#                        above BASELINE, and the instructions when perf stat
-#                        is there. A clang-built ZC is refused (LLVM deletes
+#                        above BASELINE, and the user-space instructions when
+#                        perf stat can count them. A clang-built ZC is refused (LLVM deletes
 #                        write-only allocations), and so are a failed run and
 #                        allocs != frees
 #   elision KEPT LEFT    the allocations LLVM deletes as write-only: one
@@ -197,23 +197,36 @@ perfStrict: function {
     return 0
 }
 
-# printInstructions -- the self-compile's instruction count, the mean of three
-# runs under perf stat; a note when perf stat cannot count them here
+# printInstructions -- the self-compile's instruction count; a note when perf
+# stat cannot count them here
 printInstructions: function {g: Gate.view zc: StringView} is {
-    if (hasTool :g argv: (wordsOf text: "perf stat -e instructions true")).not then {
+    n: instructionsOf :g argv: (selfCompile before: "" :zc) cwd: g.repo.stringView
+    if n < 0 then {
         print "  (perf stat unavailable -- instructions not measured)"
         return
     }
-    c: (
-        captured
-        :g
-        argv: (selfCompile before: "perf stat -e instructions -r 3" :zc)
-        cwd: g.repo.stringView
-        tag: "perfstat"
-    )
+    print "  \{millionsText :n} instructions:u (perf stat, the mean of 3 runs)"
+}
+
+# instructionsOf -- the user-space instructions of `argv` run in `cwd`: perf
+# stat's mean of three runs, or -1 when a run failed or perf stat gave no count
+instructionsOf: function {g: Gate.view argv: (List String).view cwd: StringView} out i64 is {
+    a: wordsOf text: "perf stat -e instructions:u -r 3"
+    for each w: argv loop a.append from: w.copy
+    c: captured :g argv: a :cwd tag: "perfstat"
+    if c.status != 0 then return -1
     for each ln: c.err.stringView.lines loop {
-        if (ln.contains needle: "instructions") then print "  \{ln.trim}"
+        if (ln.contains needle: "instructions:u") then return (countBefore text: ln.trim)
     }
+    return -1
+}
+
+# millionsText -- an instruction count in millions to one place, or FAIL for
+# no count
+millionsText: function {n: i64} out String is {
+    if n < 0 then return "FAIL".string
+    t: n / 100000
+    return "\{t / 10}.\{t % 10}M"
 }
 
 # perfReport -- the self-compile's numbers, for reading; answers 0

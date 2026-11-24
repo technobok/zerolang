@@ -1,8 +1,9 @@
-# absplit -- `zgate ab OLDZC NEWZC OLDTREE [NEWTREE]`: the allocation split of
-# a self-compile (`zc zc --src src --system lib/system --emit-c /dev/null`
-# under valgrind memcheck, the perf-strict measurement). OLDTREE and NEWTREE
-# hold src/ and lib/system/; NEWTREE is the repository when it is not given.
-# It prints each of the four counts and the split:
+# absplit -- `zgate ab OLDZC NEWZC OLDTREE [NEWTREE] [--fx FILE]`: the
+# allocation split of a self-compile (`zc zc --src src --system lib/system
+# --emit-c /dev/null` under valgrind memcheck, the perf-strict measurement),
+# then both compilers' instructions. OLDTREE and NEWTREE hold src/ and
+# lib/system/; NEWTREE is the repository when it is not given. It prints each
+# of the four counts and the split:
 #   behaviour = new compiler - old compiler, on the old source
 #   source    = new source - old source, compiled by the new compiler
 # A run that does not compile reads FAIL, with zc's first error: a compiler
@@ -17,6 +18,8 @@
 runAbCommand: function {g: Gate.view p: cli.Parsed.view} out i32 is {
     newTree: operand :p name: "NEWTREE"
     if newTree.length == 0 then newTree = g.repo.copy
+    fx: optionText :p name: opt.fx d: ""
+    if fx.length > 0 then fx = absolute p: fx.stringView
     return (
         abSplit
         :g
@@ -24,18 +27,22 @@ runAbCommand: function {g: Gate.view p: cli.Parsed.view} out i32 is {
         newZc: (absolute p: (operand :p name: "NEWZC").stringView).stringView
         oldTree: (absolute p: (operand :p name: "OLDTREE").stringView).stringView
         newTree: (absolute p: newTree.stringView).stringView
+        fx: fx.stringView
         lines: List String
     )
 }
 
-# abSplit -- the four self-compiles and the split; each printed line is also
-# added to `lines`, for a gate's log. Answers 0, or 1 when a run failed.
+# abSplit -- the four self-compiles and the split, then the instructions
+# (instructionLines) on the self-compile and on the program `fx` when it is
+# not empty; each printed line is also added to `lines`, for a gate's log.
+# Answers 0, or 1 when a run failed.
 abSplit: function {
     g: Gate.view
     oldZc: StringView
     newZc: StringView
     oldTree: StringView
     newTree: StringView
+    fx: StringView
     lines: List String
 } out i32 is {
     tmp: "\{g.home}/ab/\{os.pid}"
@@ -53,18 +60,14 @@ abSplit: function {
         stageTree from: tree to: "\{tmp}/w/\{run}".stringView
         side: "o"
         if run.startsWith "n" then side = "n"
-        a: List String
-        a.append from: "valgrind".string
-        a.append from: "--tool=memcheck".string
-        a.append from: "\{tmp}/\{side}/zc"
-        for each w: (wordsOf text: "zc --src src --system lib/system --emit-c /dev/null") loop (
-            a.append
-            from: w.copy
-        )
         steps: List PoolStep
         steps.append (
             zjobs.mkStep
-            argv: a
+            argv: (
+                perf.selfCompile
+                before: "valgrind --tool=memcheck"
+                zc: "\{tmp}/\{side}/zc".stringView
+            )
             cwd: "\{tmp}/w/\{run}".stringView
             outPath: os.nullDevice.stringView
             errPath: "\{tmp}/\{run}.log".stringView
@@ -129,9 +132,92 @@ abSplit: function {
         )
         ok = false
     }
+    instructionLines :g :lines tmp: tmp.stringView :fx
     io.removeTree path: tmp.stringView
     if ok then return 0
     return 1
+}
+
+# instructionLines -- each compiler's user-space instructions, perf stat's
+# mean of three runs, one run at a time: on the self-compile, each compiler on
+# its own source (the trees of runs oo and nn), and on the program `fx` when
+# it is not empty. The self-compile's change is the behaviour and the source
+# together; a fixed program separates them (perf/log.md, Fixed input). No
+# tree holds a project.zd: a run inside a project reads it on every compile.
+# An emit finds its project from the program's directory, so `fx` runs where
+# zgate does.
+instructionLines: function {g: Gate.view lines: List String tmp: StringView fx: StringView} is {
+    if (perf.hasTool :g argv: (wordsOf text: "perf stat -e instructions:u true")).not then {
+        say :lines text: "instructions: perf stat cannot count them here"
+        return
+    }
+    (
+        sayInstructions
+        :g
+        :lines
+        what: "self-compile"
+        old: (perf.selfCompile before: "" zc: "\{tmp}/o/zc".stringView)
+        new: (perf.selfCompile before: "" zc: "\{tmp}/n/zc".stringView)
+        oldCwd: "\{tmp}/w/oo".stringView
+        newCwd: "\{tmp}/w/nn".stringView
+    )
+    if fx.length == 0 then return
+    (
+        sayInstructions
+        :g
+        :lines
+        what: fx
+        old: (emitArgv zc: "\{tmp}/o/zc".stringView file: fx)
+        new: (emitArgv zc: "\{tmp}/n/zc".stringView file: fx)
+        oldCwd: ""
+        newCwd: ""
+    )
+}
+
+# sayInstructions -- one line: the instructions of the old compiler's run
+# `old` in `oldCwd` and the new one's `new` in `newCwd`, and the change
+sayInstructions: function {
+    g: Gate.view
+    lines: List String
+    what: StringView
+    old: (List String).view
+    new: (List String).view
+    oldCwd: StringView
+    newCwd: StringView
+} is {
+    o: perf.instructionsOf :g argv: old cwd: oldCwd
+    n: perf.instructionsOf :g argv: new cwd: newCwd
+    both: "old \{perf.millionsText n: o}  new \{perf.millionsText :n}"
+    if (o < 0) or (n < 0) then {
+        say :lines text: "instructions, \{what}: \{both}".stringView
+        return
+    }
+    say :lines text: "instructions, \{what}: \{both}  \{changeText :o :n}".stringView
+}
+
+# emitArgv -- the compiler `zc` emitting the program `file`, its C discarded
+emitArgv: function {zc: StringView file: StringView} out List String is {
+    a: List String
+    a.append from: zc.string
+    a.append from: "emit".string
+    a.append from: file.string
+    a.append from: "-o".string
+    a.append from: os.nullDevice
+    return a
+}
+
+# changeText -- the change from `o` to `n` as a signed percentage to two
+# places, cut toward zero
+changeText: function {o: i64 n: i64} out String is {
+    d: n - o * 10000 / o
+    sign: "+"
+    if d < 0 then {
+        sign = "-"
+        d = 0 - d
+    }
+    pad: ""
+    if (d % 100) < 10 then pad = "0"
+    return "\{sign}\{d / 100}.\{pad}\{d % 100}%"
 }
 
 # runNames -- the four runs: old or new compiler, then old or new source
@@ -160,14 +246,14 @@ copyTo: function {from: StringView to: StringView} is {
     rc.drop
 }
 
-# stageTree -- what a self-compile reads of the tree `from` -- src/,
-# lib/system/ and project.z -- copied to `to`
+# stageTree -- what a self-compile reads of the tree `from` -- src/ and
+# lib/system/ -- copied to `to`. The self-compile names every directory it
+# reads, so the tree's project.zd stays behind: an old tree saved without it
+# would otherwise compile outside a project and the new one inside.
 stageTree: function {from: StringView to: StringView} is {
     io.mkdirp path: "\{to}/lib"
     copyDir from: "\{from}/src".stringView to: "\{to}/src".stringView
     copyDir from: "\{from}/lib/system".stringView to: "\{to}/lib/system".stringView
-    pz: "\{from}/project.z"
-    if (io.exists path: pz) then copyTo from: pz.stringView to: "\{to}/project.z".stringView
 }
 
 # copyDir -- the directory `from` copied whole to `to`

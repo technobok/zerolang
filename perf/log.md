@@ -14,7 +14,10 @@ C: `bin/zc` is the driver you run, built at `OPTFLAGS` (**-O2**), and
 and rebuilt by every perf target. The split exists because -O2 moves wall by
 ~30% and allocations by nothing, so a driver rebuilt at another level would
 quietly rewrite the wall column while the allocation column still looked right.
-Never hand-time `bin/zc` for a row.
+Never hand-time `bin/zc` for a row. Its instructions are recorded too (from the
+perf arc, 2026-11): it is the build users run, and a change is ranked by it.
+`bin/zgate ab PREVZC bin/zc PREVTREE --fx FX` counts both compilers' instructions
+on the self-compile and on the fixed input.
 
 `make perf` prints the core row: the zerolang line count, self-compile wall
 best-of-5 + peak RSS, the parse/typecheck/emit phase split, and (when valgrind is
@@ -40,10 +43,14 @@ valgrind --tool=dhat --dhat-out-file=/tmp/zc.dhat out/zc-perf zc --src src \
 source, so it cannot separate "the compiler got slower" from "its source got
 bigger". This 39,105-line synthetic program -- records, arithmetic, loops,
 labelled calls, interpolation and `ListVal` appends, in syntax every compiler
-since 2026-09-11 accepts -- is the same input for any two compilers:
+since 2026-09-11 accepts -- is the same input for any two compilers. Write it
+OUTSIDE the repository, where no project.zd lies at or above it: `zc emit`
+reads the nearest project.zd, and a compile inside a project costs 1.0% more on
+this input (in the repository's out/, or beside a 5-line project.zd of its own):
 
 ```bash
-python3 - 1500 > out/fx.z <<'PY'
+FX=../zl-fx/fx.z; mkdir -p ../zl-fx
+python3 - 1500 > $FX <<'PY'
 import sys
 n = int(sys.argv[1])
 F = '''f{i}: function {{a: i64 b: i64}} out i64 is {{
@@ -82,7 +89,7 @@ out.append('    print "\\{xs.length}"\n}\n')
 sys.stdout.write("".join(out))
 PY
 # each compiler runs from ITS OWN tree's root (one before cf2c975e reads src/runtime):
-perf stat -e instructions:u -r 3 out/zc-perf emit out/fx.z -o /dev/null
+perf stat -e instructions:u -r 3 out/zc-perf emit $FX -o /dev/null
 ```
 
 A speed claim needs BOTH binaries on the SAME input -- `perf stat -r 7` over
