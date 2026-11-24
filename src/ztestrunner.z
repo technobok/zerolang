@@ -551,6 +551,7 @@ opt: list {
     heavy: "--heavy"
     stopEarly: "--stop-early"
     saveTemps: "--save-temps"
+    times: "--times"
     regenLsp: "--regen-lsp"
     regenUsage: "--regen-usage"
     only: "--only"
@@ -675,6 +676,12 @@ Runner: class {
     report: bool
     # keep the scratch directory, so a failure can be inspected after the run
     saveTemps: bool
+    # print the milliseconds each kind took, once the run is over
+    times: bool
+    # when the kind running now began (os.monotonicMillis), for --times
+    lapFrom: i64
+    # each kind that finished and its milliseconds, in the order they ran, for --times
+    laps: List String
     # rewrite the LSP goldens from this run's answers instead of comparing
     regenLsp: bool
     # rewrite the expected files each USAGE case has from this run's answers
@@ -4659,6 +4666,7 @@ printUsage: function is {
     io.eprintln "  --timeout N     the seconds one step of a case may take (default 60)"
     io.eprintln "  --tmp DIR       the scratch directory (default: its own, under the system's)"
     io.eprintln "  --save-temps    keep the scratch directory"
+    io.eprintln "  --times         print the milliseconds each kind took"
     io.eprintln "  --heavy         add the self-host ASan run, the fixpoint and the doc ratchet"
     io.eprintln "  --stop-early    in a full run, stop once a case has failed: after the error"
     io.eprintln "                  cases, at the first slice of run cases with a failure, or"
@@ -4727,6 +4735,7 @@ runnerSpec: function out cli.Spec is {
     addSwitch :sp name: opt.heavy
     addSwitch :sp name: opt.stopEarly
     addSwitch :sp name: opt.saveTemps
+    addSwitch :sp name: opt.times
     addSwitch :sp name: opt.regenLsp
     addSwitch :sp name: opt.regenUsage
     addSwitch :sp name: opt.zcBuild
@@ -4927,6 +4936,9 @@ runnerFrom: function {p: cli.Parsed.view} out Runner is {
         stopEarly: (p.hasFlag name: opt.stopEarly)
         report: (p.hasFlag name: opt.report)
         saveTemps: (p.hasFlag name: opt.saveTemps)
+        times: (p.hasFlag name: opt.times)
+        lapFrom: os.monotonicMillis
+        laps: List String
         regenLsp: (p.hasFlag name: opt.regenLsp)
         regenUsage: (p.hasFlag name: opt.regenUsage)
         only: (onlyKind :p)
@@ -5001,14 +5013,27 @@ runKinds: function {r: Runner} is {
     # symbols come from the binaries' own DWARF.
     os.setEnv key: "DEBUGINFOD_URLS" value: ""
 
+    r.lapFrom = os.monotonicMillis
     if r.only < kindWord.length then {
         runOneKind :r
+        lap :r kind: (kindWord.get i: r.only)
     } else {
         runErrorCases :r
+        lap :r kind: "error"
         runLoneErrorCases :r
+        lap :r kind: "lone error"
         if (stopsEarly :r).not then runProgramKinds :r
     }
     finishRun :r
+}
+
+# lap -- with --times, the milliseconds `kind` took: the time since the last lap
+lap: function {r: Runner kind: StringView} is {
+    if r.times.not then return
+    now: os.monotonicMillis
+    ms: now - r.lapFrom
+    r.lapFrom = now
+    r.laps.append "\{kind} \{ms} ms"
 }
 
 # stopsEarly -- with --stop-early, a case has failed: the full run ends here
@@ -5021,38 +5046,65 @@ stopsEarly: function {r: Runner.view} out bool is {
 # the leak cases, then (unless the run stops early) the rest
 runProgramKinds: function {r: Runner} is {
     runRunCases :r
+    lap :r kind: "run"
     if (stopsEarly :r) then return
     runLspCases :r
+    lap :r kind: "lsp"
     runLeakCases :r
+    lap :r kind: "leak"
     if (stopsEarly :r).not then runOtherKinds :r
 }
 
 # runOtherKinds -- the default kinds after the leak cases
 runOtherKinds: function {r: Runner} is {
     runZdataCases :r
+    lap :r kind: "zdata"
     runDumpCases :r
+    lap :r kind: "dump"
     runDifferentialCases :r
+    lap :r kind: "differential"
     runVfsCases :r
+    lap :r kind: "vfs"
     runProjectCases :r
+    lap :r kind: "project"
     runUsageCases :r
+    lap :r kind: "usage"
     runErrCodeCases :r
+    lap :r kind: "errcode"
     runSmokeCases :r
+    lap :r kind: "smoke"
     runFmtCases :r
+    lap :r kind: "fmt"
     vocab.runVocabCases :r
+    lap :r kind: "vocab"
     pins.runPinsCases :r
+    lap :r kind: "pins"
     fixtures.runFixtureCases :r
+    lap :r kind: "fixtures"
     natives.runNativesCases :r
+    lap :r kind: "natives"
     usernative.runUserNativeCases :r
+    lap :r kind: "usernative"
     piece.runPieceCases :r
+    lap :r kind: "piece"
     statictcc.runStaticTccCases :r
+    lap :r kind: "statictcc"
     cobj.runCobjCases :r
+    lap :r kind: "cobj"
     linemarks.runLineMarkCases :r
+    lap :r kind: "linemarks"
     runDoccodeCases :r
+    lap :r kind: "doccode"
     runDocPageCases :r
+    lap :r kind: "docpage"
     runSelfhostAsan :r
+    lap :r kind: "selfhost asan"
     runFixpoint :r
+    lap :r kind: "fixpoint"
     runArchCases :r
+    lap :r kind: "arch"
     runDocCases :r
+    lap :r kind: "docs"
 }
 
 # finishRun -- the scratch directory removed unless kept, the counts printed,
@@ -5063,6 +5115,7 @@ finishRun: function {r: Runner} is {
     } else {
         io.removeTree path: r.tmp.stringView
     }
+    for each l: r.laps loop print "time \{l}"
     print "----"
     print "pass=\{r.passN} leak-clean=\{r.leakclean} xfail=\{r.xfail} xleak=\{r.xleak} skip=\{r.skip} fails=\{r.fails}"
     if r.report then {
