@@ -537,10 +537,10 @@ tagaccessor: record {
 typedefbase: record {
     # the base's name, interned: for a base named through its unit (`pr.Cell`),
     # the member it reaches
-    name: zast.nameid
+    name: zast.nameid.zero
     # the base's type, resolved structurally at declaration (a parameterized
     # base rides the spec trie, a bare atom the unit ladder); 0 until it does
-    tid: ztypes.tid
+    tid: ztypes.tid.zero
 }
 
 # constevalstate -- how far the evaluation of one member constant has got.
@@ -881,8 +881,9 @@ ZTyping: class {
     # bool's type, cached because the truthiness checks ask for it constantly
     boolTid: ztypes.tid
     # each typedef's base, keyed by the typedef's tid so the answer does not
-    # depend on which unit the read happens in
-    typedefBase: (IdMapV ztypes.tid v: typedefbase)
+    # depend on which unit the read happens in; dense (typedefBaseOf), a
+    # zero row for a type that is no typedef
+    typedefBase: (ListVal typedefbase i: ztypes.tid)
     # an untyped numeric constant -- a literal, or a fold of literals -- that
     # lands in a destination C cannot read it as, and that destination: C reads
     # the constant as a 64-bit integer or a double, so the emitter spells it as
@@ -2685,9 +2686,29 @@ ZTyping: class {
     # typedefBaseTidOf -- the type a typedef wraps: its base INSTANCE id, or 0
     # when `tid` is not a typedef or its base has not resolved
     typedefBaseTidOf: function {t: this.view tid: ztypes.tid} out ztypes.tid is {
-        b: t.typedefBase.get key: tid
-        if b.some then return b.tid
-        return ztypes.tid.zero
+        return (t.typedefBaseOf :tid).tid
+    }
+
+    # typedefBaseOf -- `tid`'s typedef base: its name and its type; a zero row
+    # when `tid` is no typedef (isTypedef)
+    typedefBaseOf: function {t: this.view tid: ztypes.tid} out typedefbase is {
+        return (denseAt tbl: t.typedefBase id: tid)
+    }
+
+    # isTypedef -- `tid` is a typedef: its base has a name or a type
+    isTypedef: function {t: this.view tid: ztypes.tid} out bool is {
+        b: t.typedefBaseOf :tid
+        return b.name.notZero or b.tid.notZero
+    }
+
+    # setTypedefBase -- record `base` as typedef `tid`'s base. A base with
+    # neither a name nor a type would read as no typedef, so it is never set.
+    setTypedefBase: function {t: this tid: ztypes.tid base: typedefbase} is {
+        if base.name.isZero when base.tid.isZero then (
+            panic
+            msg: "ztyping: a typedef base with neither a name nor a type"
+        )
+        denseSet tbl: t.typedefBase id: tid value: base
     }
 
     # isAsConstDecl -- whether a member declaration is such a constant
@@ -3092,7 +3113,7 @@ newTyping: function {nodeEst: 0.u64} out ZTyping is {
         wholeLocalReads: IdSet zast.nodeid
         hashUsed: IdSet ztypes.tid
         boolTid: ztypes.tid
-        typedefBase: (IdMapV ztypes.tid v: typedefbase)
+        typedefBase: (ListVal typedefbase i: ztypes.tid)
         untypedConstDest: (IdMapV zast.nodeid v: ztypes.tid)
         dpTaggedParent: (IdMapV zast.nodeid v: ztypes.tid)
         dpArmPredicate: (IdMapV zast.nodeid v: ztypes.tid)
