@@ -258,7 +258,31 @@ the account there under its own `<a id="r-<commit>">` anchor.
 | 2026-11-04 | d1fde8ef | [the emitter reads the rows as data](#r-d1fde8ef) | 0.95s | 0.99s | 195MB / 166MB | 109 / 491 / 346 (total 946) | 2,751,540 | 559MB | 41.7s | 203,728 |
 | 2026-11-04 | acf9c47d | [a project reads the prelude once](#r-acf9c47d) | 0.97s | 1.05s | 196MB / 167MB | 106 / 529 / 360 (total 995) | 2,770,117 | 559MB | 43.0s | 204,876 |
 | 2026-11-24 | 96502ba2 | [re-baseline after 683 commits: the reviews, then arcs E to H](#r-96502ba2) | 1.11s | 1.22s | 208MB / 176MB | 112 / 645 / 359 (total 1116) | 2,795,874 | 573MB | 85.3s | 219,466 |
+| 2026-11-24 | 097aa8ae | [every bounds check panics through one out-of-line function](#r-097aa8ae) | 1.09s | -- | 207MB / -- | 106 / 643 / 351 (total 1100) | 2,794,906 | 572MB | -- | 219,450 |
 
+
+<a id="r-097aa8ae"></a>
+**Every bounds check panics through one out-of-line function** (perf arc
+item 3). Each list getter wrote its own snprintf and z_panic block inline,
+which kept even `ast.nodes.get` from being inlined at -O2. The check is now
+one line calling z_oob or z_oob_window, and the message is written once.
+The seed was bumped in the same commit, so `bin/zc` and `out/zc-perf` both
+carry the new getters. Instructions:u `-r 3`, the fixed input outside any
+project, each compiler from its own tree:
+
+| build | before (`8a7d61c9`) | after (`097aa8ae`) | change |
+|---|---|---|---|
+| `bin/zc` (-O2), own source | 7,209.4M | 6,522.8M | -9.52% |
+| `bin/zc` (-O2), fixed input | 1,393.7M | 1,246.4M | -10.56% |
+| `out/zc-perf` (-O1), own source | 11,649M | 10,430M | -10.5% |
+| `out/zc-perf` (-O1), fixed input | 2,259M | 2,055M | -9.0% |
+
+Allocations fall 872 (2,795,778 -> 2,794,906: behaviour -427, source -445);
+the fixed input allocates 472,083. `bin/zc` is 1.7% smaller. Wall barely
+moves (best of five 1.09s, the arc's start 1.11s): the work removed was
+cheap instructions around each element read. Marking the helper
+`cold, noinline`, and adding a branch hint, each changed instructions by
+0.03% or less and grew the binary 3.8%, so neither is used.
 
 <a id="r-96502ba2"></a>
 **Re-baseline after 683 commits** (`acf9c47d` -> `96502ba2`: the project
