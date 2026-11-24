@@ -175,55 +175,63 @@ sumArmNameIds: function {
     tid: ztypes.tid
     ids: ListVal zast.nameid
 } is {
-    # a partial carries no rows of its own: its template's arms are its arms
-    ot8: tid
-    if (reg.isPartialOf :tid) then {
-        po8: reg.genericOriginOf :tid
-        if po8.notZero then ot8 = po8
-    }
+    ot8: armRowsOwner :reg :tid
     i8: u64
     n8: ty.declRowSlots ownerTid: ot8
     for i8 < n8 loop {
         r8: ty.declRowAt ownerTid: ot8 membersOnly: true slot: i8
-        # an arm is what the type declares as one (an arm may carry a function);
-        # a type not declared yet answers by its rows' kinds
         ka: ty.declRowIsArm ownerTid: ot8 slot: i8
         i8 = i8 + 1
-        if r8.keep then {
-            isArm: ka.or d: (undeclaredRowIsArm :reg tid: r8.tid)
-            # an implementation marker is a member of its type but no arm of it
-            if isArm when (isImplementationLabelOf :ty :reg tid: ot8 nameId: r8.name
-            ).not then ids.append r8.name
+        if r8.keep when (memberIsArm :ty :reg owner: ot8 nameId: r8.name declared: ka rowTid: r8.tid
+        ) then {
+            ids.append r8.name
         }
     }
 }
 
+# armRowsOwner -- the type whose rows are `tid`'s arms: `tid` itself, or for a
+# partial, which carries no rows of its own, its template
+armRowsOwner: function {reg: ztypes.ZTypeRegistry.view tid: ztypes.tid} out ztypes.tid is {
+    if (reg.isPartialOf :tid).not then return tid
+    po: reg.genericOriginOf :tid
+    if po.isZero then return tid
+    return po
+}
+
+# memberIsArm -- THE ARM RULE, for the member `nameId` of `owner` (armRowsOwner),
+# whose row has the type `rowTid`: an arm is what the type declares as one
+# (`declared`; an arm may carry a function), and a type not declared yet
+# (`declared` none) answers by the row's type (undeclaredRowIsArm). An
+# implementation marker is a member of its type but no arm of it.
+memberIsArm: function {
+    ty: ZTyping.view
+    reg: ztypes.ZTypeRegistry.view
+    owner: ztypes.tid
+    nameId: zast.nameid
+    declared: optionval bool
+    rowTid: ztypes.tid
+} out bool is {
+    if (declared.or d: (undeclaredRowIsArm :reg tid: rowTid)).not then return false
+    return (isImplementationLabelOf :ty :reg tid: owner :nameId).not
+}
+
 # isSumArm -- `nameId` is one of sumArmNameIds's arms of `tid`, asked of the one
-# name: a child the type declares as an arm, or of a type not declared yet a
-# row its type reads as one, and no implementation marker.
+# name by the same rule (memberIsArm).
 isSumArm: function {
     ty: ZTyping.view
     reg: ztypes.ZTypeRegistry.view
     tid: ztypes.tid
     nameId: zast.nameid
 } out bool is {
-    # a partial carries no rows of its own: its template's arms are its arms
-    ot: tid
-    if (reg.isPartialOf :tid) then {
-        po: reg.genericOriginOf :tid
-        if po.notZero then ot = po
-    }
+    ot: armRowsOwner :reg :tid
     md: ty.declMemberIdOf parentTypeId: ot :nameId
-    isArm: false
     if md.notZero then {
-        isArm = (ty.decls.get i: md).kind.armDecl
-    } else {
-        pv: ty.declPendMemberType parentTypeId: ot :nameId
-        if pv.isZero then return false
-        isArm = undeclaredRowIsArm :reg tid: pv
+        da: optionval.some (ty.decls.get i: md).kind.armDecl
+        return (memberIsArm :ty :reg owner: ot :nameId declared: da rowTid: ztypes.tid)
     }
-    if isArm.not then return false
-    return (isImplementationLabelOf :ty :reg tid: ot :nameId).not
+    pv: ty.declPendMemberType parentTypeId: ot :nameId
+    if pv.isZero then return false
+    return (memberIsArm :ty :reg owner: ot :nameId declared: optionval.none bool rowTid: pv)
 }
 
 # undeclaredRowIsArm -- a row of a type not declared yet, of type `tid`, read as
