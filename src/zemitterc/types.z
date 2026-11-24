@@ -231,7 +231,7 @@ svBaseExprOfAsString: function {
     match (
         n
     ) case dottedpath then {
-        return (emitExpr :prog :ctx n: (prog.ast.nodes.get i: n.parent))
+        return (emitExpr :prog :ctx n: (prog.ast.nodes.getView i: n.parent))
     } else {
         return "".string
     }
@@ -246,9 +246,9 @@ colArgAsStringViewExpr: function {
     label: zast.nameid
 } out String is {
     for each aId: (zast.kidsOf ast: prog.ast span: call.arguments) loop {
-        a: prog.ast.nodes.get i: aId
+        a: prog.ast.nodes.getView i: aId
         if a.namedoperation when a.name == label then {
-            opn: prog.ast.nodes.get i: a.operation
+            opn: prog.ast.nodes.getView i: a.operation
             if (memberreads.isSvAsStringNode :prog known: ctx.known n: opn) then {
                 return (svBaseExprOfAsString :prog :ctx n: opn)
             }
@@ -273,7 +273,7 @@ emitEmptyColCreate: function {
         zmid0: (
             values.bindingStampOf
             :prog
-            nid: (interpPartNodeId n: (prog.ast.nodes.get i: call.callable))
+            nid: (interpPartNodeId n: (prog.ast.nodes.getView i: call.callable))
         )
         zmid: chaseAggregateTypedef :prog :ctx tid: zmid0
         zo: originTidOf :prog tid: zmid
@@ -306,7 +306,7 @@ emitEmptyColCreate: function {
     )
     if isCol.not then return "".string
     cb: spelledCname :ctx tid: mid
-    ccap: values.listCapArg :prog :ctx n: (prog.ast.nodes.get i: call.nodeid)
+    ccap: values.listCapArg :prog :ctx n: (prog.ast.nodes.getView i: call.nodeid)
     noteMemberUse :ctx mono: mid member: memberWord.slot.create
     return (stating :facts from: callFacts text: "\{cb}_create((uint64_t)\{ccap})")
 }
@@ -553,13 +553,13 @@ emitTypedefCreateCall: function {
     tidS: stampIdOf :prog nid: call.nodeid
     if isTdCk when (isTypedefType :prog tid: tidS) then {
         for each aIdS: (zast.kidsOf ast: prog.ast span: call.arguments) loop {
-            aS: prog.ast.nodes.get i: aIdS
+            aS: prog.ast.nodes.getView i: aIdS
             if aS.namedoperation then {
                 return (
                     emitExprWith
                     :prog
                     :ctx
-                    n: (prog.ast.nodes.get i: aS.operation)
+                    n: (prog.ast.nodes.getView i: aS.operation)
                     :facts
                 )
             }
@@ -701,7 +701,7 @@ markerReadsFieldValue: function {
     pnid: zast.nodeid
 } out bool is {
     isPath: false
-    pn: prog.ast.nodes.get i: pnid
+    pn: prog.ast.nodes.getView i: pnid
     isPath = pn.dottedpath
     if isPath.not then return false
     pt: stampIdOf :prog nid: pnid
@@ -755,7 +755,7 @@ emitCollectionBind: function {
     buf: String.borrow
     nm: StringView
 } out bool is {
-    avn: prog.ast.nodes.get i: n.value
+    avn: prog.ast.nodes.getView i: n.value
     nbrw: localnames.bindingVarIsBorrowed :prog :n
     ltid: localnames.bindChasedTid :prog :ctx :n :avn
     isList: isListOriginOf :prog :ctx tid: ltid
@@ -812,7 +812,7 @@ controlValueOwnsArms: function {
     match (
         n
     ) case doexpr then {
-        if (ztypecheck.blockHasBreak ast: prog.ast n: (prog.ast.nodes.get i: n.statement)
+        if (ztypecheck.blockHasBreak ast: prog.ast n: (prog.ast.nodes.getView i: n.statement)
         ) then return false
         return (values.armValueOwned :prog :ctx blockId: n.statement)
     } case withexpr then {
@@ -942,7 +942,7 @@ emitObjIterRecv: function {
         ownGit = true
     } else {
         ivexF: exprfacts
-        ivex: emitExprWith :prog :ctx n: (prog.ast.nodes.get i: cOp) facts: ivexF
+        ivex: emitExprWith :prog :ctx n: (prog.ast.nodes.getView i: cOp) facts: ivexF
         # A construction written as a bare TYPE NAME is an atom in the AST and a
         # call in the emitted C: the shape test reads `Counter` as an lvalue,
         # while what it becomes is `<T>_create(...)`, and the loop then asks for
@@ -951,7 +951,7 @@ emitObjIterRecv: function {
         # what the iterable's own arguments hoisted is declared ahead of it,
         # before the loop label like the instance
         flushArgHoists :ctx :ind :tmp :buf
-        hoistIt: isForIterCall :prog n: (prog.ast.nodes.get i: cOp)
+        hoistIt: isForIterCall :prog n: (prog.ast.nodes.getView i: cOp)
         if hoistIt.not then hoistIt = ivexF.place.not
         if hoistIt then {
             lgi: "\{ind}\{itCb}_t _git\{mN} = \{ivex};\n"
@@ -967,7 +967,7 @@ emitObjIterRecv: function {
     # `for each r: (g s: src) loop` with a `.take` param left `src` live: the
     # enclosing scope freed it and the iterator's destructor freed it again --
     # `free(): double free detected`. A non-call iterable reduces to a no-op.
-    stmtblocks.emitValueTakeInvalidations :prog :ctx n: (prog.ast.nodes.get i: cOp) :ind :buf
+    stmtblocks.emitValueTakeInvalidations :prog :ctx n: (prog.ast.nodes.getView i: cOp) :ind :buf
     # the loop owns the iterator instance: register its destroy for the
     # enclosing block's flush (and the return path), freeing owned
     # captured params. Registered BEFORE the loop label so break /
@@ -1009,12 +1009,12 @@ emitObjIterField: function {
         bcn: spelledCname :ctx tid: bareFnId
         ivex = "\{bcn}()"
     } else {
-        ivex = emitExpr :prog :ctx n: (prog.ast.nodes.get i: cOp)
+        ivex = emitExpr :prog :ctx n: (prog.ast.nodes.getView i: cOp)
     }
     flushArgHoists :ctx :ind :tmp :buf
     la: "\{ind}\{recv} = \{ivex};\n"
     buf.append la
-    stmtblocks.emitValueTakeInvalidations :prog :ctx n: (prog.ast.nodes.get i: cOp) :ind :buf
+    stmtblocks.emitValueTakeInvalidations :prog :ctx n: (prog.ast.nodes.getView i: cOp) :ind :buf
     return recv
 }
 
@@ -4324,11 +4324,11 @@ markerValueMade: function {
 # A type written in a signature or an `as` block is typed by the marker too, and
 # makes nothing.
 makesMarkerValue: function {prog: Program.view nid: zast.nodeid} out bool is {
-    n: prog.ast.nodes.get i: nid
+    n: prog.ast.nodes.getView i: nid
     if n.call then return true
     if n.dottedpath.not then return false
     pt: ztyping.nodeTypeAt tbl: prog.typing.nodeType nid: n.parent
-    cn: zast.atomNameIdOf n: (prog.ast.nodes.get i: n.child)
+    cn: zast.atomNameIdOf n: (prog.ast.nodes.getView i: n.child)
     return (zenv.isImplementationLabelOf ty: prog.typing reg: prog.reg tid: pt nameId: cn)
 }
 
@@ -4701,7 +4701,7 @@ noArgNativeRhs: function {
             :ctx
             :prog
             :unitName
-            n: (prog.ast.nodes.get i: n.statementline)
+            n: (prog.ast.nodes.getView i: n.statementline)
         )
     } case dottedpath then {
         nu: (
@@ -4745,10 +4745,10 @@ emitProtocolCreateCall: function {
     # a facet copies its source either way: one helper serves both verbs
     if isFct then suffix = "create".string
     for each aId: (zast.kidsOf ast: prog.ast span: call.arguments) loop {
-        a: prog.ast.nodes.get i: aId
+        a: prog.ast.nodes.getView i: aId
         # the source is the `from:` argument, or the one unlabelled argument
         if a.namedoperation when a.name.isZero or (a.name == zast.wellKnown.slot.wkFrom) then {
-            fop: prog.ast.nodes.get i: a.operation
+            fop: prog.ast.nodes.getView i: a.operation
             fromBase: narrowfacts.atomOrBaseText :prog n: fop
             # the source's type is what the checker recorded it standing in
             # as (standInOf), as every implicit box reads it -- a union a
@@ -4763,7 +4763,7 @@ emitProtocolCreateCall: function {
                 fromTid = (
                     canonTypeId
                     :prog
-                    tid: (stmtblocks.stampIdDeep :prog n: (prog.ast.nodes.get i: a.operation))
+                    tid: (stmtblocks.stampIdDeep :prog n: (prog.ast.nodes.getView i: a.operation))
                 )
             }
             if fromTid.isZero then return "".string

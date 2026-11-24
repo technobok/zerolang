@@ -4,7 +4,7 @@
 # isInterp -- true when a literal has any non-chunk part.
 isInterp: function {prog: Program.view parts: zast.kidspan} out bool is {
     for each pId: (zast.kidsOf ast: prog.ast span: parts) loop {
-        p: prog.ast.nodes.get i: pId
+        p: prog.ast.nodes.getView i: pId
         isC: false
         if p.stringchunk then isC = true
         if isC.not then return true
@@ -43,7 +43,7 @@ ternaryClause: function {
             stmtblocks.armInPlace
             :prog
             :ctx
-            n: (prog.ast.nodes.get i: c.statement)
+            n: (prog.ast.nodes.getView i: c.statement)
             :ref
             facts: vxF
         )
@@ -72,7 +72,7 @@ ternaryConds: function {
         kId: zast.kidAt kids: prog.ast.kids span: c.conditions :i
         guarded: isFirst.not or (i > 0)
         i = i + 1
-        k: prog.ast.nodes.get i: kId
+        k: prog.ast.nodes.getView i: kId
         if k.namedoperation then {
             cvF: exprfacts
             cv: (
@@ -113,7 +113,7 @@ emitTernaryChain: function {
     i: u64
     for i < n.clauses.count loop {
         cId: zast.kidAt kids: prog.ast.kids span: n.clauses :i
-        clause: prog.ast.nodes.get i: cId
+        clause: prog.ast.nodes.getView i: cId
         cxF: exprfacts
         cx: ternaryClause :prog :ctx c: clause isFirst: i == 0 :ref facts: cxF
         i = i + 1
@@ -207,15 +207,15 @@ ternaryAsStatements: function {
         stating
         :facts
         from: callFacts
-        text: (emitControlPtrExpr :prog :ctx n: (prog.ast.nodes.get i: nid))
+        text: (emitControlPtrExpr :prog :ctx n: (prog.ast.nodes.getView i: nid))
     )
-    icx: emitControlExpr :prog :ctx n: (prog.ast.nodes.get i: nid)
+    icx: emitControlExpr :prog :ctx n: (prog.ast.nodes.getView i: nid)
     if icx.length > 0 then return (stating :facts from: callFacts text: icx)
     return (
         stating
         :facts
         from: failedFacts
-        text: (unhandledExpr :ctx line: (ztypecheck.nodeLine n: (prog.ast.nodes.get i: nid)))
+        text: (unhandledExpr :ctx line: (ztypecheck.nodeLine n: (prog.ast.nodes.getView i: nid)))
     )
 }
 
@@ -259,7 +259,7 @@ borrowedFieldPath: function {
     n: zast.dottedpathrow.view
 } out bool is {
     if (borrowedPointerField :prog :ctx :n).not then return false
-    return (fieldBaseIsPlace :prog n: (prog.ast.nodes.get i: n.parent))
+    return (fieldBaseIsPlace :prog n: (prog.ast.nodes.getView i: n.parent))
 }
 
 # fieldBaseIsPlace -- a field read off `n` reads storage a variable names: `n`
@@ -275,7 +275,7 @@ fieldBaseIsPlace: function {prog: Program.view n: astnode.view} out bool is {
         if (memberDeclIsField :prog nid: n.nodeid).not when (markerEmitsBase id: cid).not then {
             return false
         }
-        return (fieldBaseIsPlace :prog n: (prog.ast.nodes.get i: n.parent))
+        return (fieldBaseIsPlace :prog n: (prog.ast.nodes.getView i: n.parent))
     } else {
         return false
     }
@@ -288,7 +288,7 @@ borrowedPointerField: function {
     ctx: Ctx
     n: zast.dottedpathrow.view
 } out bool is {
-    pnid: zast.nodeIdOf n: (prog.ast.nodes.get i: n.parent)
+    pnid: zast.nodeIdOf n: (prog.ast.nodes.getView i: n.parent)
     pstamp: stampIdOf :prog nid: pnid
     ptid: pstamp
     if (
@@ -296,7 +296,7 @@ borrowedPointerField: function {
         parentTypeId: ptid
         nameId: (aliasOrChildId :prog aliasId: n.nodeid childId: n.child)
     ).not then return false
-    ft: stampIdOf :prog nid: (zast.nodeIdOf n: (prog.ast.nodes.get i: n.nodeid))
+    ft: stampIdOf :prog nid: (zast.nodeIdOf n: (prog.ast.nodes.getView i: n.nodeid))
     return (argforms.borrowedFieldHeldByPointer :prog :ctx fid: ft)
 }
 
@@ -313,10 +313,10 @@ takeAliasBaseNid: function {
     match (
         n
     ) case statementline then {
-        return (takeAliasBaseNid :ctx :prog n: (prog.ast.nodes.get i: n.statementline))
+        return (takeAliasBaseNid :ctx :prog n: (prog.ast.nodes.getView i: n.statementline))
     } case dottedpath then {
         if (leafMoves :prog leaf: n.child).not then return zast.nodeid
-        bnid: atomNodeId n: (prog.ast.nodes.get i: n.parent)
+        bnid: atomNodeId n: (prog.ast.nodes.getView i: n.parent)
         bt: stampIdOf :prog nid: bnid
         bo: originTidOf :prog tid: bt
         if bo.notZero then return zast.nodeid
@@ -338,7 +338,7 @@ takeAliasBaseNid: function {
 # stringviewOfBaseNid), "" for none
 baseAtomText: function {prog: Program.view nid: zast.nodeid} outx StringView is {
     if nid.isZero then return ""
-    return (narrowfacts.atomTextOf :prog n: (prog.ast.nodes.get i: nid))
+    return (narrowfacts.atomTextOf :prog n: (prog.ast.nodes.getView i: nid))
 }
 
 # takeStringSource -- if `n` is a `<atom>.take` that moves a heap value
@@ -354,17 +354,17 @@ takeStringSource: function {
     match (
         n
     ) case statementline then {
-        return (takeStringSource :prog :ctx n: (prog.ast.nodes.get i: n.statementline))
+        return (takeStringSource :prog :ctx n: (prog.ast.nodes.getView i: n.statementline))
     } case dottedpath then {
         if (leafMoves :prog leaf: n.child).not then return "".string
         if (moveMarkerMovesBase :prog :ctx pnid: n.parent).not then return "".string
-        bnid: atomNodeId n: (prog.ast.nodes.get i: n.parent)
+        bnid: atomNodeId n: (prog.ast.nodes.getView i: n.parent)
         bt: stampIdOf :prog nid: bnid
         if (prog.reg.typetypeOf typeId: bt) == ztypes.ztypetype.functionType then return "".string
         baseName: (
             zast.nameTextAt
             ast: prog.ast
-            ref: (zast.atomNameIdOf n: (prog.ast.nodes.get i: n.parent))
+            ref: (zast.atomNameIdOf n: (prog.ast.nodes.getView i: n.parent))
         )
         return (
             emitLocalAtomName
@@ -387,7 +387,7 @@ isFieldTake: function {prog: Program.view n: astnode.view} out bool is {
     match (
         n
     ) case statementline then {
-        return (isFieldTake :prog n: (prog.ast.nodes.get i: n.statementline))
+        return (isFieldTake :prog n: (prog.ast.nodes.getView i: n.statementline))
     } case dottedpath then {
         if (leafMoves :prog leaf: n.child).not then return false
         return (prog.ast.nodes.get i: n.parent).dottedpath
@@ -415,10 +415,10 @@ isLocalTake: function {prog: Program.view n: astnode.view} out bool is {
     match (
         n
     ) case statementline then {
-        return (isLocalTake :prog n: (prog.ast.nodes.get i: n.statementline))
+        return (isLocalTake :prog n: (prog.ast.nodes.getView i: n.statementline))
     } case dottedpath then {
         if (leafMoves :prog leaf: n.child).not then return false
-        pn: prog.ast.nodes.get i: n.parent
+        pn: prog.ast.nodes.getView i: n.parent
         if pn.atomid.not then return false
         return (prog.typing.atomVariableId.get key: pn.nodeid).some
     } else {
@@ -436,11 +436,11 @@ armTakeLeaf: function {prog: Program.view n: astnode.view} out zast.nodeid is {
     ) case statement then {
         if n.statements.count.u64 == 1 then {
             s0Id: zast.kidAt kids: prog.ast.kids span: n.statements i: 0
-            return (armTakeLeaf :prog n: (prog.ast.nodes.get i: s0Id))
+            return (armTakeLeaf :prog n: (prog.ast.nodes.getView i: s0Id))
         }
         return zast.nodeid
     } case statementline then {
-        return (armTakeLeaf :prog n: (prog.ast.nodes.get i: n.statementline))
+        return (armTakeLeaf :prog n: (prog.ast.nodes.getView i: n.statementline))
     } else {
         leaf: zast.nodeIdOf :n
         if (isFieldTake :prog :n) or (isLocalTake :prog :n) then return leaf
@@ -467,7 +467,7 @@ armValueExpr: function {
     if (
         movedSourceNeedsZero
         :prog
-        n: (prog.ast.nodes.get i: tn)
+        n: (prog.ast.nodes.getView i: tn)
     ).not then return (stating :facts from: vxF text: vx)
     tt: stampIdOf :prog nid: tn
     tz: movedZeroC :prog :ctx tid: tt
@@ -508,7 +508,7 @@ emitArmTakeZero: function {
 } is {
     tn: armTakeLeaf :prog :n
     if tn.isZero then return
-    if (movedSourceNeedsZero :prog n: (prog.ast.nodes.get i: tn)).not then return
+    if (movedSourceNeedsZero :prog n: (prog.ast.nodes.getView i: tn)).not then return
     tz: movedZeroC :prog :ctx tid: (stampIdOf :prog nid: tn)
     if tz.length == 0 then return
     zl: "\{ind}\{rv} = \{tz};\n"
@@ -531,16 +531,16 @@ emitNarrowedTakeZero: function {
     match (
         n
     ) case statementline then {
-        sln: prog.ast.nodes.get i: n.statementline
+        sln: prog.ast.nodes.getView i: n.statementline
         emitNarrowedTakeZero :prog :ctx n: sln :ind :buf
     } case dottedpath then {
         if (leafMoves :prog leaf: n.child) then {
-            baseVid: atomVid :prog nid: (atomNodeId n: (prog.ast.nodes.get i: n.parent))
+            baseVid: atomVid :prog nid: (atomNodeId n: (prog.ast.nodes.getView i: n.parent))
             if (narrowfacts.varEntryHas xs: ctx.narrow.box vid: baseVid) then {
                 bn: (
                     zast.nameTextAt
                     ast: prog.ast
-                    ref: (zast.atomNameIdOf n: (prog.ast.nodes.get i: n.parent))
+                    ref: (zast.atomNameIdOf n: (prog.ast.nodes.getView i: n.parent))
                 )
                 box: emitLocalAtomName :prog :ctx name: bn.stringView vid: baseVid
                 tido: narrowfacts.varTidGet xs: ctx.narrow.tid vid: baseVid
@@ -552,13 +552,13 @@ emitNarrowedTakeZero: function {
         }
     } case call then {
         for each argId: (zast.kidsOf ast: prog.ast span: n.arguments) loop {
-            a: prog.ast.nodes.get i: argId
+            a: prog.ast.nodes.getView i: argId
             if a.namedoperation then {
                 (
                     emitNarrowedTakeZero
                     :prog
                     :ctx
-                    n: (prog.ast.nodes.get i: a.operation)
+                    n: (prog.ast.nodes.getView i: a.operation)
                     :ind
                     :buf
                 )
@@ -657,7 +657,7 @@ movedSourceNeedsZero: function {prog: Program.view n: astnode.view} out bool is 
     src: zast.nodeid
     mb: moveMarkerBase :prog :n
     if mb.notZero then {
-        src = atomNodeId n: (prog.ast.nodes.get i: mb)
+        src = atomNodeId n: (prog.ast.nodes.getView i: mb)
     } else if (isBareNameValue :n) then {
         src = interpPartNodeId :n
     }
@@ -852,11 +852,11 @@ listCapArg: function {
     match (
         n
     ) case call then {
-        afterType: argumentsAreCreates :prog callable: (prog.ast.nodes.get i: n.callable)
+        afterType: argumentsAreCreates :prog callable: (prog.ast.nodes.getView i: n.callable)
         i: u64
         for i < n.arguments.count loop {
             aId: zast.kidAt kids: prog.ast.kids span: n.arguments :i
-            a: prog.ast.nodes.get i: aId
+            a: prog.ast.nodes.getView i: aId
             if a.namedoperation then {
                 an: zast.nameTextAt ast: prog.ast ref: a.name
                 isCap: a.name == zast.wellKnown.slot.wkCapacity
@@ -865,7 +865,7 @@ listCapArg: function {
                     emitExpr
                     :prog
                     :ctx
-                    n: (prog.ast.nodes.get i: a.operation)
+                    n: (prog.ast.nodes.getView i: a.operation)
                 )
             }
             i = i + 1
@@ -1105,7 +1105,7 @@ collectionValueCallRhs: function {
     match (
         n
     ) case statementline then {
-        return (collectionValueCallRhs :prog n: (prog.ast.nodes.get i: n.statementline))
+        return (collectionValueCallRhs :prog n: (prog.ast.nodes.getView i: n.statementline))
     } case dottedpath then {
         # a bare dotted path returning a collection (e.g. `st.allNames`) is a
         # no-arg method auto-call or field access -- a value, never a construction.
@@ -1124,7 +1124,7 @@ collectionValueCallRhs: function {
         if cav.some then {
             return true
         }
-        return (baseAtomNamesFunction :prog n: (prog.ast.nodes.get i: n.nodeid))
+        return (baseAtomNamesFunction :prog n: (prog.ast.nodes.getView i: n.nodeid))
     } case call then {
         cko: prog.typing.callKind.get key: n.nodeid
         if cko.some then {
@@ -1136,13 +1136,13 @@ collectionValueCallRhs: function {
         cn: (
             zast.nameTextAt
             ast: prog.ast
-            ref: (zast.atomNameIdOf n: (prog.ast.nodes.get i: n.callable))
+            ref: (zast.atomNameIdOf n: (prog.ast.nodes.getView i: n.callable))
         )
         if cn.length == 0 then {
             # a dotted-path method callable (e.g. `p.operationPaths lex: lx`)
             # returning a List is a value-producing call, not a construction --
             # emit the call rather than falling to the empty-collection default.
-            dct: callorder.aliasChildName :prog n: (prog.ast.nodes.get i: n.callable)
+            dct: callorder.aliasChildName :prog n: (prog.ast.nodes.getView i: n.callable)
             return dct.length > 0
         }
         return true
@@ -1224,11 +1224,11 @@ emitInterpStmtValue: function {
     } case dottedpath then {
         cm: aliasOrChildId :prog aliasId: n.nodeid childId: n.child
         if cm == zast.wellKnown.slot.wkString then {
-            dpr: prog.ast.nodes.get i: n.parent
+            dpr: prog.ast.nodes.getView i: n.parent
             return (emitInterpStmtValue :prog :ctx n: dpr :ind :tmp :buf :facts)
         }
         if (ztypecheck.isStringViewMember nameId: cm) then {
-            dpr: prog.ast.nodes.get i: n.parent
+            dpr: prog.ast.nodes.getView i: n.parent
             return (emitInterpStmtValue :prog :ctx n: dpr :ind :tmp :buf :facts)
         }
         return "".string
@@ -1279,10 +1279,10 @@ emitInlineVariantCtor: function {
         av: "0".string
         got: false
         for each aId: (zast.kidsOf ast: prog.ast span: call.arguments) loop {
-            a: prog.ast.nodes.get i: aId
+            a: prog.ast.nodes.getView i: aId
             if a.namedoperation when got.not then {
                 got = true
-                aOpNode: prog.ast.nodes.get i: a.operation
+                aOpNode: prog.ast.nodes.getView i: a.operation
                 avF: exprfacts
                 av = argforms.valueExprC :prog :ctx n: aOpNode facts: avF
             }
@@ -1316,7 +1316,7 @@ emitArmCtorCall: function {
     call: zast.callrow.view
     facts: exprfacts.borrow
 } out String is {
-    arm: aliasChildNameId :prog n: (prog.ast.nodes.get i: call.callable)
+    arm: aliasChildNameId :prog n: (prog.ast.nodes.getView i: call.callable)
     if arm.isZero then return "".string
     stid: stampIdOf :prog nid: call.nodeid
     if stid.isZero then return "".string
@@ -1335,11 +1335,11 @@ emitArmCtorCall: function {
     got: false
     payNid: zast.nodeid
     for each aId: (zast.kidsOf ast: prog.ast span: call.arguments) loop {
-        a: prog.ast.nodes.get i: aId
+        a: prog.ast.nodes.getView i: aId
         if a.namedoperation when got.not then {
             got = true
             payNid = a.operation
-            av = emitExpr :prog :ctx n: (prog.ast.nodes.get i: a.operation)
+            av = emitExpr :prog :ctx n: (prog.ast.nodes.getView i: a.operation)
         }
     }
     inl: types.armIsInlineC :prog tid: stid :arm
@@ -1541,12 +1541,12 @@ emitDottedNestedBase: function {
     # a nested base (e.g. it.target.a): emit the base expression, then chain
     # `.`/`->` by whether the base resolves to a pointer (a pointer variable or a lock field).
     baseAtomF: exprfacts
-    baseAtom: nestedBaseText :prog :ctx n: (prog.ast.nodes.get i: n.parent) facts: baseAtomF
+    baseAtom: nestedBaseText :prog :ctx n: (prog.ast.nodes.getView i: n.parent) facts: baseAtomF
     baseVid: (
         argforms.atomVidIfPlain
         :prog
         :ctx
-        n: (prog.ast.nodes.get i: n.parent)
+        n: (prog.ast.nodes.getView i: n.parent)
         text: baseAtom.stringView
     )
     if baseAtomF.failed then {
@@ -1557,7 +1557,7 @@ emitDottedNestedBase: function {
         memberreads.nestedStringMember
         :prog
         :ctx
-        parent: (prog.ast.nodes.get i: n.parent)
+        parent: (prog.ast.nodes.getView i: n.parent)
         base: baseAtom.stringView
         baseF: baseAtomF
         :mnId
@@ -1569,12 +1569,12 @@ emitDottedNestedBase: function {
     # leg above missed it (bstamp keys off an atom base, 0 for a nested
     # path). Resolve the List mono from the base node and emit the call. A
     # CLASS receiver reaches the nested leg rather than the atom one.
-    baseNid: interpPartNodeId n: (prog.ast.nodes.get i: n.parent)
+    baseNid: interpPartNodeId n: (prog.ast.nodes.getView i: n.parent)
     nlid: stampIdOf :prog nid: baseNid
     nlid = callorder.typedefMethodOwner :prog :ctx tid: nlid :mnId
     # a Map/Set-typed base is a heap pointer regardless of how it was
     # reached (a field path fails pathIsPointer's lock-field test)
-    nbPar: prog.ast.nodes.get i: n.parent
+    nbPar: prog.ast.nodes.getView i: n.parent
     nbPtr: pathIsPointer :prog :ctx n: nbPar
     nstPtr: nbPtr
     if nstPtr.not then nstPtr = isHeapPtrCollection :prog :ctx tid: nlid
@@ -1610,7 +1610,7 @@ emitDottedNestedBase: function {
         localnames.nodeIsRefBorrowResult
         :prog
         :ctx
-        n: (prog.ast.nodes.get i: n.parent)
+        n: (prog.ast.nodes.getView i: n.parent)
     ) then {
         baseAtom = hoistedBorrowDeref :prog :ctx av: baseAtom.stringView tid: nlid
         baseAtomF = memberreads.derefFacts
@@ -1721,12 +1721,12 @@ emitValtypeCopy: function {
     # the expression is built so the common path keeps handing emitExpr's
     # result straight back: binding it to a local first costs a String on every
     # `.copy` in the program.
-    if (stmtblocks.needsValueDeref :prog :ctx n: (prog.ast.nodes.get i: n.parent) :tid) then {
+    if (stmtblocks.needsValueDeref :prog :ctx n: (prog.ast.nodes.getView i: n.parent) :tid) then {
         cvlF: exprfacts
-        cvl: emitExprWith :prog :ctx n: (prog.ast.nodes.get i: n.parent) facts: cvlF
+        cvl: emitExprWith :prog :ctx n: (prog.ast.nodes.getView i: n.parent) facts: cvlF
         return (stating :facts from: (operandFacts e: cvlF place: true) text: "(*\{cvl})")
     }
-    return (emitExprWith :prog :ctx n: (prog.ast.nodes.get i: n.parent) :facts)
+    return (emitExprWith :prog :ctx n: (prog.ast.nodes.getView i: n.parent) :facts)
 }
 
 # emitCopyConversion -- `.copy`, whose shape depends on the receiver family. A
@@ -1738,13 +1738,13 @@ emitCopyConversion: function {
     n: zast.dottedpathrow.view
     facts: exprfacts.borrow
 } out String is {
-    cvp: stampIdOf :prog nid: (interpPartNodeId n: (prog.ast.nodes.get i: n.parent))
+    cvp: stampIdOf :prog nid: (interpPartNodeId n: (prog.ast.nodes.getView i: n.parent))
     # `.copy` of a function is another reference to it: the base, which the
     # checker stamped as the function and not as a call of it
     if cvp.notZero when (prog.reg.typetypeOf typeId: cvp) == ztypes.ztypetype.functionType then {
         # a function a folded data value holds is known: it is named, and the
         # value is not read
-        bn: prog.ast.nodes.get i: n.parent
+        bn: prog.ast.nodes.getView i: n.parent
         direct: (
             callorder.foldedFnRefC
             :prog
@@ -1782,14 +1782,14 @@ emitDottedStringConversion: function {
     n: zast.dottedpathrow.view
     facts: exprfacts.borrow
 } out String is {
-    scl: bindLitIndex :prog literals: ctx.literals n: (prog.ast.nodes.get i: n.parent)
+    scl: bindLitIndex :prog literals: ctx.literals n: (prog.ast.nodes.getView i: n.parent)
     if scl > 0 then {
         sclv: litView :ctx li: scl
         preludeNeed :ctx memb: "@String_from_view"
         return (stating :facts from: callFacts text: "\{ctx.known.strC}_from_view(\{sclv})")
     }
     if (stampIsSv :prog known: ctx.known nid: n.parent).not then return "".string
-    baseValue: emitExpr :prog :ctx n: (prog.ast.nodes.get i: n.parent)
+    baseValue: emitExpr :prog :ctx n: (prog.ast.nodes.getView i: n.parent)
     preludeNeed :ctx memb: "@String_from_view"
     return (stating :facts from: callFacts text: "\{ctx.known.strC}_from_view(\{baseValue})")
 }
@@ -1806,7 +1806,7 @@ emitDottedConversionRead: function {
     facts: exprfacts.borrow
 } out String is {
     mnc0Id: aliasOrChildId :prog aliasId: n.nodeid childId: n.child
-    dps: prog.ast.nodes.get i: n.parent
+    dps: prog.ast.nodes.getView i: n.parent
     ccbc: emitplan.emitCrossUnitBareCreate :ctx :prog parent: dps childId: mnc0Id :facts
     if ccbc.length > 0 then return ccbc
     if mnc0Id == zast.wellKnown.slot.wkCopy then {
@@ -1820,8 +1820,8 @@ emitDottedConversionRead: function {
     # an arm PREDICATE on a unit's constant (`u.k.a`, `k: kind.a`) has the
     # three segments of a cross-unit tag; the checker said it tests the arm
     if (narrowfacts.dottedArmPredicateTid :prog nid: n.nodeid).notZero then return "".string
-    xpb: memberreads.dottedParentNodeId n: (prog.ast.nodes.get i: n.parent)
-    xpt: aliasChildNameId :prog n: (prog.ast.nodes.get i: n.parent)
+    xpb: memberreads.dottedParentNodeId n: (prog.ast.nodes.getView i: n.parent)
+    xpt: aliasChildNameId :prog n: (prog.ast.nodes.getView i: n.parent)
     xar: aliasOrChildId :prog aliasId: n.nodeid childId: n.child
     xtag: emitCrossUnitTag :prog :ctx pbase: xpb ptype: xpt arm: xar :facts
     if xtag.length > 0 then return xtag
@@ -1880,7 +1880,7 @@ armPredicateC: function {
     mnc0Id: zast.nameid
     facts: exprfacts.borrow
 } out String is {
-    pn: prog.ast.nodes.get i: n.parent
+    pn: prog.ast.nodes.getView i: n.parent
     recvPF: exprfacts
     recvP: emitExprWith :prog :ctx n: pn facts: recvPF
     valP: recvP.copy
@@ -1934,7 +1934,7 @@ tagAccessorReadC: function {
     dtr: ztypes.tid
     facts: exprfacts.borrow
 } out String is {
-    pn: prog.ast.nodes.get i: n.parent
+    pn: prog.ast.nodes.getView i: n.parent
     recvTF: exprfacts
     recvT: emitExprWith :prog :ctx n: pn facts: recvTF
     tatE: ztypes.tid
@@ -2013,7 +2013,7 @@ moveMarkerMovesBase: function {
     # the marker's base node id
     pnid: zast.nodeid
 } out bool is {
-    tknid: atomNodeId n: (prog.ast.nodes.get i: pnid)
+    tknid: atomNodeId n: (prog.ast.nodes.getView i: pnid)
     if tknid.isZero then tknid = pnid
     tkt: stampIdOf :prog nid: tknid
     if (prog.reg.typetypeOf typeId: tkt) == ztypes.ztypetype.functionType then return true
@@ -2078,7 +2078,7 @@ boxMemberElem: function {
 } out ztypes.tid is {
     mnId: aliasOrChildId :prog aliasId: n.nodeid childId: n.child
     if (ztypecheck.boxMemberDelegates nameId: mnId).not then return ztypes.tid.zero
-    bnid: interpPartNodeId n: (prog.ast.nodes.get i: n.parent)
+    bnid: interpPartNodeId n: (prog.ast.nodes.getView i: n.parent)
     bt: stampIdOf :prog nid: bnid
     if bt.isZero then return ztypes.tid.zero
     if (prog.reg.isBoxOf tid: bt).not then return ztypes.tid.zero
@@ -2105,7 +2105,7 @@ emitDottedRead: function {
     # the member is asked by ID: the legs below lend ast, and an id is a scalar
     dcMnId: aliasOrChildId :prog aliasId: n.nodeid childId: n.child
     if dcMnId == zast.wellKnown.slot.wkOrPanic then {
-        pStamp: stampIdOf :prog nid: (interpPartNodeId n: (prog.ast.nodes.get i: n.parent))
+        pStamp: stampIdOf :prog nid: (interpPartNodeId n: (prog.ast.nodes.getView i: n.parent))
         pMono: chaseAggregateTypedef :prog :ctx tid: pStamp
         isRcc: originIsTid :prog tid: pMono originTid: (ctx.origins.get i: family.slot.resultval)
         if isRcc then {
@@ -2114,7 +2114,7 @@ emitDottedRead: function {
                 argforms.valueExprC
                 :prog
                 :ctx
-                n: (prog.ast.nodes.get i: n.parent)
+                n: (prog.ast.nodes.getView i: n.parent)
                 facts: rcRecvF
             )
             return (
@@ -2159,7 +2159,7 @@ emitDottedRead: function {
     if dmr.length > 0 when (borrowedPointerField :prog :ctx :n) when (
         fieldBaseIsPlace
         :prog
-        n: (prog.ast.nodes.get i: n.parent)
+        n: (prog.ast.nodes.getView i: n.parent)
     ).not then {
         return (stating :facts from: (operandFacts e: facts place: true) text: "(*\{dmr})")
     }
@@ -2183,8 +2183,12 @@ emitDottedMemberRead: function {
     n: zast.dottedpathrow.view
     facts: exprfacts.borrow
 } out String is {
-    bn2r: zast.nameTextAt ast: prog.ast ref: (zast.atomNameIdOf n: (prog.ast.nodes.get i: n.parent))
-    baseAtomNid: atomNodeId n: (prog.ast.nodes.get i: n.parent)
+    bn2r: (
+        zast.nameTextAt
+        ast: prog.ast
+        ref: (zast.atomNameIdOf n: (prog.ast.nodes.getView i: n.parent))
+    )
+    baseAtomNid: atomNodeId n: (prog.ast.nodes.getView i: n.parent)
     baseAtomVid: atomVid :prog nid: baseAtomNid
     # the receiver's variable, for the pointer-access checks below
     bn2v: (
@@ -2209,7 +2213,7 @@ emitDottedMemberRead: function {
     # call returns (`mkList.length`), and a string constant is its static: neither
     # is a local to address, so each takes the legs a call base takes, exactly as
     # the parenthesised `(mkList).length` does
-    if (baseAtomReadsAsValue :prog n: (prog.ast.nodes.get i: n.parent)) then bn2 = "".string
+    if (baseAtomReadsAsValue :prog n: (prog.ast.nodes.getView i: n.parent)) then bn2 = "".string
     # a data value's name is the address of its static object, and a number
     # no variable holds -- a numeric generic parameter's value -- is its value
     bk: (prog.typing.nodeConstAt nid: baseAtomNid).kind
@@ -2224,14 +2228,14 @@ emitDottedMemberRead: function {
     # function-type id -- a symbol nothing defines. emitDottedCall already
     # carries this leg for the CALL form; the READ form never got it.
     if bn2.length == 0 then {
-        nbId: interpPartNodeId n: (prog.ast.nodes.get i: n.parent)
+        nbId: interpPartNodeId n: (prog.ast.nodes.getView i: n.parent)
         nbT: memberreads.chaseStrTypedef :prog known: ctx.known tid: (stampIdOf :prog nid: nbId)
         # StringView only: svValueForm reads a String receiver's expression
         # twice, once for .data and once for .size, and twice is a second
         # evaluation when the expression is a call.
         if nbT == ctx.known.svTid then {
             nbXF: exprfacts
-            nbX: emitExprWith :prog :ctx n: (prog.ast.nodes.get i: n.parent) facts: nbXF
+            nbX: emitExprWith :prog :ctx n: (prog.ast.nodes.getView i: n.parent) facts: nbXF
             if nbX.length > 0 then {
                 bn2 = (
                     argforms.addressableText
@@ -2315,11 +2319,11 @@ emitExprArms: function {
     match (
         n
     ) case statementline then {
-        return (emitExprArms :prog :ctx n: (prog.ast.nodes.get i: n.statementline) :facts)
+        return (emitExprArms :prog :ctx n: (prog.ast.nodes.getView i: n.statementline) :facts)
     } case statement then {
         if n.statements.count.u64 == 1 then {
             s0Id: zast.kidAt kids: prog.ast.kids span: n.statements i: 0
-            return (emitExprArms :prog :ctx n: (prog.ast.nodes.get i: s0Id) :facts)
+            return (emitExprArms :prog :ctx n: (prog.ast.nodes.getView i: s0Id) :facts)
         }
         emitFail :ctx what: "unhandled expr (multi-statement)".string line: n.lineno
         return (stating :facts from: failedFacts text: "0".string)
@@ -2343,7 +2347,7 @@ emitExprArms: function {
             loadValueStructRef
             :prog
             :ctx
-            n: (prog.ast.nodes.get i: n.nodeid)
+            n: (prog.ast.nodes.getView i: n.nodeid)
             e: dre.take
             :facts
         )
@@ -2352,7 +2356,7 @@ emitExprArms: function {
         if li > 0 then return (stating :facts from: pathFacts text: (litView :ctx :li))
         # an interpolation is an owned String rvalue, built where it is
         # evaluated -- the same shape as a call returning one
-        ie: argforms.emitInterpArgExpr :prog :ctx n: (prog.ast.nodes.get i: n.nodeid)
+        ie: argforms.emitInterpArgExpr :prog :ctx n: (prog.ast.nodes.getView i: n.nodeid)
         if ie.length > 0 then return (stating :facts from: callFacts text: ie)
         emitFail :ctx what: "unhandled atomstring expr".string line: n.lineno
         return (
@@ -2371,15 +2375,15 @@ emitExprArms: function {
         vfb: stmtblocks.foldedBranchOf :prog nid: n.nodeid
         if vfb.known when vfb.stmt.notZero when (
             isSimpleValueNode
-            n: (prog.ast.nodes.get i: vfb.stmt)
+            n: (prog.ast.nodes.getView i: vfb.stmt)
         ) then {
-            return (armValueExpr :prog :ctx n: (prog.ast.nodes.get i: vfb.stmt) :facts)
+            return (armValueExpr :prog :ctx n: (prog.ast.nodes.getView i: vfb.stmt) :facts)
         }
-        if (controlValueIsReference :prog :ctx n: (prog.ast.nodes.get i: n.nodeid)) then {
-            return (emitControlRef :prog :ctx n: (prog.ast.nodes.get i: n.nodeid) :facts)
+        if (controlValueIsReference :prog :ctx n: (prog.ast.nodes.getView i: n.nodeid)) then {
+            return (emitControlRef :prog :ctx n: (prog.ast.nodes.getView i: n.nodeid) :facts)
         }
-        if (ifIsTernary :prog n: (prog.ast.nodes.get i: n.nodeid)).not then {
-            icx: emitControlExpr :prog :ctx n: (prog.ast.nodes.get i: n.nodeid)
+        if (ifIsTernary :prog n: (prog.ast.nodes.getView i: n.nodeid)).not then {
+            icx: emitControlExpr :prog :ctx n: (prog.ast.nodes.getView i: n.nodeid)
             if icx.length > 0 then return (stating :facts from: callFacts text: icx)
             return (stating :facts from: failedFacts text: (unhandledExpr :ctx line: n.lineno))
         }
@@ -2390,33 +2394,33 @@ emitExprArms: function {
             loadValueStructRef
             :prog
             :ctx
-            n: (prog.ast.nodes.get i: n.nodeid)
+            n: (prog.ast.nodes.getView i: n.nodeid)
             e: cve.take
             :facts
         )
     } case caseexpr then {
-        if (controlValueIsReference :prog :ctx n: (prog.ast.nodes.get i: n.nodeid)) then {
-            return (emitControlRef :prog :ctx n: (prog.ast.nodes.get i: n.nodeid) :facts)
+        if (controlValueIsReference :prog :ctx n: (prog.ast.nodes.getView i: n.nodeid)) then {
+            return (emitControlRef :prog :ctx n: (prog.ast.nodes.getView i: n.nodeid) :facts)
         }
-        mcx: emitControlExpr :prog :ctx n: (prog.ast.nodes.get i: n.nodeid)
+        mcx: emitControlExpr :prog :ctx n: (prog.ast.nodes.getView i: n.nodeid)
         if mcx.length > 0 then return (stating :facts from: callFacts text: mcx)
         return (stating :facts from: failedFacts text: (unhandledExpr :ctx line: n.lineno))
     } case withexpr then {
         # grammar.pdoc: "`with` can be used as an expression. The result will be
         # the value of the `do` expression." It reaches C the way an `if` or a
         # `match` does -- no C expression spells a scope with a binding in it
-        if (controlValueIsReference :prog :ctx n: (prog.ast.nodes.get i: n.nodeid)) then {
-            return (emitControlRef :prog :ctx n: (prog.ast.nodes.get i: n.nodeid) :facts)
+        if (controlValueIsReference :prog :ctx n: (prog.ast.nodes.getView i: n.nodeid)) then {
+            return (emitControlRef :prog :ctx n: (prog.ast.nodes.getView i: n.nodeid) :facts)
         }
-        wcx: emitControlExpr :prog :ctx n: (prog.ast.nodes.get i: n.nodeid)
+        wcx: emitControlExpr :prog :ctx n: (prog.ast.nodes.getView i: n.nodeid)
         if wcx.length > 0 then return (stating :facts from: callFacts text: wcx)
         return (stating :facts from: failedFacts text: (unhandledExpr :ctx line: n.lineno))
     } case doexpr then {
         # a block used as a value: its statements run ahead, as a `with`'s do
-        if (controlValueIsReference :prog :ctx n: (prog.ast.nodes.get i: n.nodeid)) then {
-            return (emitControlRef :prog :ctx n: (prog.ast.nodes.get i: n.nodeid) :facts)
+        if (controlValueIsReference :prog :ctx n: (prog.ast.nodes.getView i: n.nodeid)) then {
+            return (emitControlRef :prog :ctx n: (prog.ast.nodes.getView i: n.nodeid) :facts)
         }
-        dcx: emitControlExpr :prog :ctx n: (prog.ast.nodes.get i: n.nodeid)
+        dcx: emitControlExpr :prog :ctx n: (prog.ast.nodes.getView i: n.nodeid)
         if dcx.length > 0 then return (stating :facts from: callFacts text: dcx)
         return (stating :facts from: failedFacts text: (unhandledExpr :ctx line: n.lineno))
     } else {
@@ -2442,14 +2446,14 @@ ifIsTernary: function {prog: Program.view n: astnode.view} out bool is {
         n
     ) case ifexpr then {
         for each clId: (zast.kidsOf ast: prog.ast span: n.clauses) loop {
-            cl: prog.ast.nodes.get i: clId
-            if cl.ifclause when (ternaryOperand :prog n: (prog.ast.nodes.get i: cl.statement)
+            cl: prog.ast.nodes.getView i: clId
+            if cl.ifclause when (ternaryOperand :prog n: (prog.ast.nodes.getView i: cl.statement)
             ).not then return false
         }
         if n.elseclause.notZero when (
             ternaryOperand
             :prog
-            n: (prog.ast.nodes.get i: n.elseclause)
+            n: (prog.ast.nodes.getView i: n.elseclause)
         ).not then return false
     } else null
     return (ztypecheck.armLeaves ast: prog.ast :n inLoop: false).not
@@ -2465,10 +2469,10 @@ ternaryOperand: function {prog: Program.view n: astnode.view} out bool is {
     vn: argforms.armValueNode :prog :n
     inner: vn
     {
-        ln: prog.ast.nodes.get i: vn
+        ln: prog.ast.nodes.getView i: vn
         if ln.statementline then inner = ln.statementline
     }
-    if (stmtblocks.forexprValue n: (prog.ast.nodes.get i: inner)) then return false
+    if (stmtblocks.forexprValue n: (prog.ast.nodes.getView i: inner)) then return false
     return (stmtblocks.matchDiverges :prog nid: vn).not
 }
 
@@ -2507,7 +2511,7 @@ controlValueIsReference: function {
             armLeafIsPlace
             :prog
             :ctx
-            n: (prog.ast.nodes.get i: lf)
+            n: (prog.ast.nodes.getView i: lf)
         ) then place = true
     }
     return place
@@ -2521,7 +2525,7 @@ armLeafNode: function {
     blockId: zast.nodeid
 } out zast.nodeid is {
     isBlock: false
-    bn: prog.ast.nodes.get i: blockId
+    bn: prog.ast.nodes.getView i: blockId
     isBlock = bn.statement
     if isBlock.not then return blockId
     lineId: ztypecheck.lastStmtLineIdAt ast: prog.ast oId: blockId
@@ -2547,23 +2551,23 @@ armLeafIsPlace: function {
     match (
         n
     ) case statementline then {
-        return (armLeafIsPlace :prog :ctx n: (prog.ast.nodes.get i: n.statementline))
+        return (armLeafIsPlace :prog :ctx n: (prog.ast.nodes.getView i: n.statementline))
     } case statement then {
         if n.statements.count.u64 != 1 then return false
         s0Id: zast.kidAt kids: prog.ast.kids span: n.statements i: 0
-        return (armLeafIsPlace :prog :ctx n: (prog.ast.nodes.get i: s0Id))
+        return (armLeafIsPlace :prog :ctx n: (prog.ast.nodes.getView i: s0Id))
     } case atomid then {
         # a local the checker moved into where the value lands is the arm's own
         if (prog.typing.armLeafMoves.has item: n.nodeid) then return false
         return (prog.typing.armLeafPlaces.has item: n.nodeid)
     } case ifexpr then {
-        return (controlValueIsReference :prog :ctx n: (prog.ast.nodes.get i: n.nodeid))
+        return (controlValueIsReference :prog :ctx n: (prog.ast.nodes.getView i: n.nodeid))
     } case caseexpr then {
-        return (controlValueIsReference :prog :ctx n: (prog.ast.nodes.get i: n.nodeid))
+        return (controlValueIsReference :prog :ctx n: (prog.ast.nodes.getView i: n.nodeid))
     } case doexpr then {
-        return (controlValueIsReference :prog :ctx n: (prog.ast.nodes.get i: n.nodeid))
+        return (controlValueIsReference :prog :ctx n: (prog.ast.nodes.getView i: n.nodeid))
     } case withexpr then {
-        return (controlValueIsReference :prog :ctx n: (prog.ast.nodes.get i: n.nodeid))
+        return (controlValueIsReference :prog :ctx n: (prog.ast.nodes.getView i: n.nodeid))
     } else {
         if (armTakeLeaf :prog :n).notZero then return false
         if (prog.typing.armLeafMoves.has item: (zast.nodeIdOf :n)) then return false
@@ -2585,7 +2589,7 @@ emitControlRef: function {
     match (
         n
     ) case ifexpr then {
-        if (ifIsTernary :prog n: (prog.ast.nodes.get i: n.nodeid)) then {
+        if (ifIsTernary :prog n: (prog.ast.nodes.getView i: n.nodeid)) then {
             ptr = emitTernaryChain :prog :ctx :n ref: true facts: ptrF
         }
     } else null
@@ -2757,7 +2761,7 @@ operandValueC: function {
     nid: zast.nodeid
     facts: exprfacts.borrow
 } out String is {
-    n: prog.ast.nodes.get i: nid
+    n: prog.ast.nodes.getView i: nid
     vF: exprfacts
     v: argforms.valueExprC :prog :ctx :n facts: vF
     if (nodeIsAtomBox :prog :n) then {
@@ -2808,12 +2812,12 @@ emitInterpAppend: function {
     buf: String.borrow
 } is {
     rcvNid: argforms.callRecvNodeId :prog :call
-    bn: narrowfacts.atomTextOf :prog n: (prog.ast.nodes.get i: rcvNid)
+    bn: narrowfacts.atomTextOf :prog n: (prog.ast.nodes.getView i: rcvNid)
     bnid: callorder.nativeCallRecvNode :prog recv: rcvNid
     dst: callorder.nativeCallRecvExpr :prog :ctx recvNid: rcvNid :bn :bnid
-    a: prog.ast.nodes.get i: (argforms.firstArgId :prog :call)
+    a: prog.ast.nodes.getView i: (argforms.firstArgId :prog :call)
     if a.namedoperation.not then return
-    lit: prog.ast.nodes.get i: a.operation
+    lit: prog.ast.nodes.getView i: a.operation
     if lit.atomstring.not then return
     unusedOps: String
     for each pId: (zast.kidsOf ast: prog.ast span: lit.stringparts) loop {
@@ -2821,7 +2825,7 @@ emitInterpAppend: function {
             parttexts.emitInterpPart
             :prog
             :ctx
-            n: (prog.ast.nodes.get i: pId)
+            n: (prog.ast.nodes.getView i: pId)
             dst: dst.stringView
             expr: false
             :ind
@@ -2855,7 +2859,7 @@ emitInterpBuild: function {
 } out String is {
     est: u64
     for each pId: (zast.kidsOf ast: prog.ast span: parts) loop {
-        p: prog.ast.nodes.get i: pId
+        p: prog.ast.nodes.getView i: pId
         isC: false
         if p.stringchunk then {
             isC = true
@@ -2893,7 +2897,7 @@ emitInterpBuild: function {
             parttexts.emitInterpPart
             :prog
             :ctx
-            n: (prog.ast.nodes.get i: qId)
+            n: (prog.ast.nodes.getView i: qId)
             dst: sAddr.stringView
             :expr
             :ind
@@ -2916,10 +2920,10 @@ emitPrintStmt: function {
 } is {
     emitted: false
     for each aId: (zast.kidsOf ast: prog.ast span: call.arguments) loop {
-        a: prog.ast.nodes.get i: aId
+        a: prog.ast.nodes.getView i: aId
         if a.namedoperation when emitted.not then {
             emitted = true
-            emitPrintArg :prog :ctx n: (prog.ast.nodes.get i: a.operation) :ind :tmp :buf
+            emitPrintArg :prog :ctx n: (prog.ast.nodes.getView i: a.operation) :ind :tmp :buf
         }
     }
     if emitted.not then {
@@ -2989,7 +2993,7 @@ emitPrintValueExpr: function {
         preludeNeed :ctx memb: "@String_print"
         lsb: "\{ind}\{ctx.known.strC}_print(&_h\{hps});\n"
         buf.append lsb
-        if (memberreads.dottedReturnsReference :prog :ctx n: (prog.ast.nodes.get i: eid)
+        if (memberreads.dottedReturnsReference :prog :ctx n: (prog.ast.nodes.getView i: eid)
         ) then return
         preludeNeed :ctx memb: "@String_free"
         lsf: "\{ind}\{ctx.known.strC}_free(&_h\{hps});\n"
@@ -3033,7 +3037,7 @@ emitPrintCallValue: function {
         loadValueStructRef
         :prog
         :ctx
-        n: (prog.ast.nodes.get i: call.nodeid)
+        n: (prog.ast.nodes.getView i: call.nodeid)
         e: value
         facts: ceF
     )
@@ -3117,9 +3121,9 @@ stringviewOfBaseNid: function {
         mn: aliasOrChildId :prog aliasId: n.nodeid childId: n.child
         if (ztypecheck.isStringViewMember nameId: mn) then {
             # a base atom naming a FUNCTION is a call, whose String has no name
-            if (baseAtomNamesFunction :prog n: (prog.ast.nodes.get i: n.parent)
+            if (baseAtomNamesFunction :prog n: (prog.ast.nodes.getView i: n.parent)
             ) then return zast.nodeid
-            bnid: atomNodeId n: (prog.ast.nodes.get i: n.parent)
+            bnid: atomNodeId n: (prog.ast.nodes.getView i: n.parent)
             sid: stampIdOf :prog nid: bnid
             if (
                 sid ==
@@ -3148,7 +3152,7 @@ stringCopyLitIndex: function {
     ) case dottedpath then {
         mnId: aliasOrChildId :prog aliasId: n.nodeid childId: n.child
         if mnId == zast.wellKnown.slot.wkString then {
-            return (bindLitIndex :prog :literals n: (prog.ast.nodes.get i: n.parent))
+            return (bindLitIndex :prog :literals n: (prog.ast.nodes.getView i: n.parent))
         } else {
             return 0
         }
@@ -3186,13 +3190,14 @@ copyRvalueHoist: function {
         cnId: aliasOrChildId :prog aliasId: n.nodeid childId: n.child
         if cnId != zast.wellKnown.slot.wkCopy then return "".string
         if (
-            (stmtblocks.stampIdDeep :prog n: (prog.ast.nodes.get i: n.parent)) != ctx.known.strTid
+            (stmtblocks.stampIdDeep :prog n: (prog.ast.nodes.getView i: n.parent)) !=
+            ctx.known.strTid
         ) then return "".string
         # the receiver is spelled again by the caller when this declines, so
         # what this spelling hoisted is dropped with it
         hmk: pendingHoistMark stmt: ctx.stmt
         pvF: exprfacts
-        pv: emitExprWith :prog :ctx n: (prog.ast.nodes.get i: n.parent) facts: pvF
+        pv: emitExprWith :prog :ctx n: (prog.ast.nodes.getView i: n.parent) facts: pvF
         if pvF.place then {
             dropHoistsTo :ctx mark: hmk
             return "".string
@@ -3201,7 +3206,7 @@ copyRvalueHoist: function {
             copyReceiverTemp
             :prog
             :ctx
-            argNid: (zast.nodeIdOf n: (prog.ast.nodes.get i: n.parent))
+            argNid: (zast.nodeIdOf n: (prog.ast.nodes.getView i: n.parent))
             pv: pv.stringView
         )
         preludeNeed :ctx memb: "@String_copy"
@@ -3250,7 +3255,7 @@ emitStringBindValue: function {
     } case dottedpath then {
         cndId: aliasOrChildId :prog aliasId: n.nodeid childId: n.child
         if cndId == zast.wellKnown.slot.wkString then {
-            dpv: prog.ast.nodes.get i: n.parent
+            dpv: prog.ast.nodes.getView i: n.parent
             return (emitStringBindValue :prog :ctx n: dpv :nm :nmVid :ind :tmp :buf)
         }
         if cndId == zast.wellKnown.slot.wkCopy then {
@@ -3258,21 +3263,21 @@ emitStringBindValue: function {
             # receiver is a non-lvalue, so hoist it to a borrowed temp (List.get
             # returns a shallow view -- never freed) before String_copy(&temp).
             if (
-                (stmtblocks.stampIdDeep :prog n: (prog.ast.nodes.get i: n.parent)) ==
+                (stmtblocks.stampIdDeep :prog n: (prog.ast.nodes.getView i: n.parent)) ==
                 ctx.known.strTid
             ) then {
                 # the value is spelled again by the caller when this declines,
                 # so what this spelling hoisted is dropped with it
                 hmk: pendingHoistMark stmt: ctx.stmt
                 pvF: exprfacts
-                pv: emitExprWith :prog :ctx n: (prog.ast.nodes.get i: n.parent) facts: pvF
+                pv: emitExprWith :prog :ctx n: (prog.ast.nodes.getView i: n.parent) facts: pvF
                 if pvF.place then dropHoistsTo :ctx mark: hmk
                 if pvF.place.not then {
                     tnm: (
                         copyReceiverTemp
                         :prog
                         :ctx
-                        argNid: (zast.nodeIdOf n: (prog.ast.nodes.get i: n.parent))
+                        argNid: (zast.nodeIdOf n: (prog.ast.nodes.getView i: n.parent))
                         pv: pv.stringView
                     )
                     flushArgHoists :ctx :ind :tmp :buf
@@ -3305,10 +3310,10 @@ emitOptionBoxHoist: function {
     match (
         n
     ) case statementline then {
-        sln: prog.ast.nodes.get i: n.statementline
+        sln: prog.ast.nodes.getView i: n.statementline
         return (emitOptionBoxHoist :prog :ctx n: sln :ind :tmp :buf)
     } case call then {
-        cnId: aliasChildNameId :prog n: (prog.ast.nodes.get i: n.callable)
+        cnId: aliasChildNameId :prog n: (prog.ast.nodes.getView i: n.callable)
         if cnId != zast.wellKnown.slot.wkSome then return "".string
         mid: stampIdOf :prog nid: n.nodeid
         if (originIsTid :prog tid: mid originTid: (ctx.origins.get i: family.slot.option)
@@ -3319,10 +3324,10 @@ emitOptionBoxHoist: function {
         avNid: zast.nodeid
         got: false
         for each argId: (zast.kidsOf ast: prog.ast span: n.arguments) loop {
-            a: prog.ast.nodes.get i: argId
+            a: prog.ast.nodes.getView i: argId
             if a.namedoperation when got.not then {
                 got = true
-                aOpNode: prog.ast.nodes.get i: a.operation
+                aOpNode: prog.ast.nodes.getView i: a.operation
                 avNid = a.operation
                 av = emitExpr :prog :ctx n: aOpNode
             }
@@ -3401,7 +3406,7 @@ emitStringReturnValue: function {
     } case dottedpath then {
         cndId: aliasOrChildId :prog aliasId: n.nodeid childId: n.child
         if cndId == zast.wellKnown.slot.wkString then {
-            dpw: prog.ast.nodes.get i: n.parent
+            dpw: prog.ast.nodes.getView i: n.parent
             return (emitStringReturnValue :prog :ctx n: dpw :ind :tmp :buf)
         } else {
             return false
@@ -3422,7 +3427,7 @@ armValueOwned: function {
 } out bool is {
     valId: blockId
     isBlock: false
-    bn: prog.ast.nodes.get i: blockId
+    bn: prog.ast.nodes.getView i: blockId
     isBlock = bn.statement
     if isBlock then {
         lineId: ztypecheck.lastStmtLineIdAt ast: prog.ast oId: blockId
@@ -3437,7 +3442,7 @@ armValueOwned: function {
         )
         if valId.isZero then return true
     }
-    vn: prog.ast.nodes.get i: valId
+    vn: prog.ast.nodes.getView i: valId
     nested: vn.ifexpr or vn.caseexpr or vn.doexpr or vn.withexpr
     if nested then return (types.controlValueOwnsArms :prog :ctx n: vn)
     return (armLeafIsPlace :prog :ctx n: vn).not
@@ -3602,13 +3607,13 @@ emitStringMatchBind: function {
     if isStr.not when btid != ctx.known.svTid then return false
     isMatch: false
     isIf: false
-    vn: prog.ast.nodes.get i: n.value
+    vn: prog.ast.nodes.getView i: n.value
     isMatch = vn.caseexpr
     isIf = vn.ifexpr
     # an if a ternary spells stays on the expression path
-    if isIf then isIf = (ifIsTernary :prog n: (prog.ast.nodes.get i: n.value)).not
+    if isIf then isIf = (ifIsTernary :prog n: (prog.ast.nodes.getView i: n.value)).not
     if isMatch.not when isIf.not then return false
-    avn: prog.ast.nodes.get i: n.value
+    avn: prog.ast.nodes.getView i: n.value
     smT: svTypeC :ctx
     if isStr then {
         smT = strTypeC :ctx
@@ -3657,7 +3662,7 @@ emitStringBind: function {
     btid: ztypes.tid
 } out bool is {
     handled: false
-    avn: prog.ast.nodes.get i: n.value
+    avn: prog.ast.nodes.getView i: n.value
     # a block value is bound as a collection's is: the local declared, the block
     # assigning its last value
     if avn.doexpr when (btid == ctx.known.svTid) or (btid == ctx.known.strTid) then {
@@ -3669,7 +3674,7 @@ emitStringBind: function {
             stmtblocks.emitDoBindValue
             :prog
             :ctx
-            n: (prog.ast.nodes.get i: n.value)
+            n: (prog.ast.nodes.getView i: n.value)
             :nm
             ct: dct.stringView
             tid: btid
@@ -3809,7 +3814,7 @@ emitNarrowedTakeBind: function {
     buf: String.borrow
     nm: StringView
 } out bool is {
-    avn: prog.ast.nodes.get i: n.value
+    avn: prog.ast.nodes.getView i: n.value
     # owned: the base's name outlives the ctx writes below
     tabA: (baseAtomText :prog nid: (takeAliasBaseNid :ctx :prog n: avn)).string
     tabAV: atomVid :prog nid: (takeAliasBaseNid :ctx :prog n: avn)
@@ -3961,7 +3966,7 @@ reassignMoveSource: function {
     if zsrc.length > 0 then return zsrc
     mmb: moveMarkerBase :prog n: valueNode
     if mmb.isZero then return zsrc
-    return (implicitTakeSource :prog :ctx n: (prog.ast.nodes.get i: mmb))
+    return (implicitTakeSource :prog :ctx n: (prog.ast.nodes.getView i: mmb))
 }
 
 # emitMovedArgZeroing -- args moved into a construction/call RHS (e.g.
@@ -4051,7 +4056,7 @@ emitOwnedRepoint: function {
     cv: co
     tid: chaseAggregateTypedef :prog :ctx tid: (prog.reg.variableTypeOf id: cv)
     cn: companionCName known: ctx.known :prog :cv
-    valueNode: prog.ast.nodes.get i: n.value
+    valueNode: prog.ast.nodes.getView i: n.value
     facts: exprfacts
     rv: reassignRhsText :prog :ctx :valueNode :ind :tmp :buf :facts
     flushArgHoists :ctx :ind :tmp :buf
@@ -4164,9 +4169,9 @@ withValueNodeId: function {
     prog: Program.view
     n: zast.withrow.view
 } out zast.nodeid is {
-    vb: withValueBlock n: (prog.ast.nodes.get i: n.body)
+    vb: withValueBlock n: (prog.ast.nodes.getView i: n.body)
     isBlk: false
-    bn: prog.ast.nodes.get i: vb
+    bn: prog.ast.nodes.getView i: vb
     isBlk = bn.statement
     if isBlk.not then return vb
     lineId: ztypecheck.lastStmtLineIdAt ast: prog.ast oId: vb
@@ -4267,7 +4272,7 @@ condHoldsControlValue: function {
         wid: pieces.condScan.get i: wi
         wi = wi + 1
         if wid.notZero then {
-            wn: prog.ast.nodes.get i: wid
+            wn: prog.ast.nodes.getView i: wid
             if (isControlValueNode :prog nid: wid) then return true
             if wn.functiondef.not then (
                 zast.childIdsInto
@@ -4284,10 +4289,10 @@ condHoldsControlValue: function {
 # ternary-shaped: what emitControlExpr builds when it is used as a value (as
 # emitExpr's legs for each do).
 isControlValueNode: function {prog: Program.view nid: zast.nodeid} out bool is {
-    n: prog.ast.nodes.get i: nid
+    n: prog.ast.nodes.getView i: nid
     if n.caseexpr or n.withexpr or n.doexpr then return true
     if n.ifexpr.not then return false
-    return (ifIsTernary :prog n: (prog.ast.nodes.get i: nid)).not
+    return (ifIsTernary :prog n: (prog.ast.nodes.getView i: nid)).not
 }
 
 # emitHoistedReturn -- a return whose value is materialised into a temp
@@ -4397,7 +4402,7 @@ armPayloadC: function {
 # (movedSourceNeedsZero): it is zeroed, so that destroy frees nothing.
 boxedLocalNeedsZero: function {prog: Program.view nid: zast.nodeid} out bool is {
     if nid.isZero then return false
-    n: prog.ast.nodes.get i: nid
+    n: prog.ast.nodes.getView i: nid
     if (isBareNameValue :n).not then return false
     if (atomVid :prog nid: (interpPartNodeId :n)).isZero then return false
     return (movedSourceNeedsZero :prog :n)
@@ -4551,7 +4556,7 @@ nativeValueRecvExpr: function {
 } out String is {
     if recvNid.isZero then return "".string
     rvF: exprfacts
-    rv: emitExprWith :prog :ctx n: (prog.ast.nodes.get i: recvNid) facts: rvF
+    rv: emitExprWith :prog :ctx n: (prog.ast.nodes.getView i: recvNid) facts: rvF
     rvt: (
         callBaseTemp
         :prog

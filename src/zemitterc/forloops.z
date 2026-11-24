@@ -46,7 +46,7 @@ forArmCond: function {
     cond: String
     for each kId: (zast.kidsOf ast: prog.ast span: n.conditions) loop {
         if (forCondIsNamed :prog :kId).not then {
-            stmtblocks.emitForCond :prog :ctx n: (prog.ast.nodes.get i: kId) :cond
+            stmtblocks.emitForCond :prog :ctx n: (prog.ast.nodes.getView i: kId) :cond
         }
     }
     return cond
@@ -354,7 +354,7 @@ emitClosedRangeFor: function {
     match (
         n
     ) case call then {
-        startNid: memberreads.dottedParentNodeId n: (prog.ast.nodes.get i: n.callable)
+        startNid: memberreads.dottedParentNodeId n: (prog.ast.nodes.getView i: n.callable)
         if startNid.isZero then return false
         mN: values.tmpNext stmt: ctx.stmt :tmp
         rs: "_rs\{mN}"
@@ -368,11 +368,11 @@ emitClosedRangeFor: function {
             isDo: false
             postTest: m.postconditions.count.u64 > 0
         )
-        startx: emitExpr :prog :ctx n: (prog.ast.nodes.get i: startNid)
+        startx: emitExpr :prog :ctx n: (prog.ast.nodes.getView i: startNid)
         flushArgHoists :ctx :ind :tmp :buf
         d0: "\{ind}\{ctR} \{rs} = \{startx};\n"
         buf.append d0
-        tox: emitExpr :prog :ctx n: (prog.ast.nodes.get i: toNid)
+        tox: emitExpr :prog :ctx n: (prog.ast.nodes.getView i: toNid)
         flushArgHoists :ctx :ind :tmp :buf
         d1: "\{ind}\{ctR} \{re} = \{tox};\n"
         buf.append d1
@@ -485,7 +485,7 @@ closedRangeMemberOf: function {prog: Program.view n: astnode.view} out zast.name
     match (
         n
     ) case call then {
-        mnId: aliasChildNameId :prog n: (prog.ast.nodes.get i: n.callable)
+        mnId: aliasChildNameId :prog n: (prog.ast.nodes.getView i: n.callable)
         if (isClosedRangeMemberId id: mnId) then return mnId
         return zast.nameid
     } else {
@@ -504,7 +504,7 @@ rangeToNode: function {prog: Program.view n: astnode.view} out zast.nodeid is {
     ) case call then {
         if n.arguments.count.u64 != 1 then return zast.nodeid
         aId: zast.kidAt kids: prog.ast.kids span: n.arguments i: 0
-        a: prog.ast.nodes.get i: aId
+        a: prog.ast.nodes.getView i: aId
         if a.namedoperation then return a.operation
         return zast.nodeid
     } else {
@@ -572,10 +572,10 @@ rangeBoundExpr: function {
             bct: (
                 intScalarCTypeOf
                 :prog
-                tid: (stampTidDeep :prog n: (prog.ast.nodes.get i: n.parent))
+                tid: (stampTidDeep :prog n: (prog.ast.nodes.getView i: n.parent))
             )
             if bct.length > 0 then {
-                return (emitExpr :prog :ctx n: (prog.ast.nodes.get i: n.parent))
+                return (emitExpr :prog :ctx n: (prog.ast.nodes.getView i: n.parent))
             }
         }
         return "".string
@@ -610,7 +610,7 @@ rangeTid: function {
         n
     ) case call then {
         # the CLOSED family: only it takes an argument, so only it is a call
-        callableNode: prog.ast.nodes.get i: n.callable
+        callableNode: prog.ast.nodes.getView i: n.callable
         if (isClosedRangeMemberId id: (aliasChildNameId :prog n: callableNode)) then {
             rsid: memberreads.dottedReceiverStampId :prog callable: callableNode
             return (tidDeep :prog sid: rsid)
@@ -620,7 +620,7 @@ rangeTid: function {
         # the COUNT family, whose receiver rangeBoundExpr reads as the bound
         cmnId: aliasOrChildId :prog aliasId: n.nodeid childId: n.child
         if (isCountRangeMemberId id: cmnId) then {
-            rt2: stampTidDeep :prog n: (prog.ast.nodes.get i: n.parent)
+            rt2: stampTidDeep :prog n: (prog.ast.nodes.getView i: n.parent)
             return rt2
         }
         return ztypes.tid.zero
@@ -649,7 +649,7 @@ rangeCType: function {
 # forCondIsNamed -- a `for` condition that binds a name (`i: 0`) is an
 # initialiser, not a test.
 forCondIsNamed: function {prog: Program.view kId: zast.nodeid} out bool is {
-    k: prog.ast.nodes.get i: kId
+    k: prog.ast.nodes.getView i: kId
     if k.namedoperation.not then return false
     lbl: zast.nameTextAt ast: prog.ast ref: k.name
     return lbl.length > 0
@@ -875,7 +875,7 @@ hoistExprYields: function {
 } is {
     if nid.isZero then return
     {
-        n: prog.ast.nodes.get i: nid
+        n: prog.ast.nodes.getView i: nid
         # an `if`'s FIRST clause's FIRST condition is the one part of it that
         # runs unconditionally and exactly once, so it hoists like any other
         # expression. Every later condition is guarded by the ones before it
@@ -883,7 +883,7 @@ hoistExprYields: function {
         # the descent goes no further.
         if n.ifexpr then {
             if n.clauses.count.u64 > 0 then {
-                c0: prog.ast.nodes.get i: (zast.kidAt kids: prog.ast.kids span: n.clauses i: 0)
+                c0: prog.ast.nodes.getView i: (zast.kidAt kids: prog.ast.kids span: n.clauses i: 0)
                 if c0.ifclause when c0.conditions.count.u64 > 0 then (
                     hoistExprYields
                     :prog
@@ -957,7 +957,7 @@ emitYieldStmt: function {
     # an interpolated yield value builds via a self-contained statement
     # expression (emitExpr :ast cannot emit the chain)
     yopId: zast.yieldCallOperandAt ast: prog.ast nid: callId
-    yx: prog.ast.nodes.get i: yopId
+    yx: prog.ast.nodes.getView i: yopId
     veF: exprfacts
     ve: argforms.emitInterpArgExpr :prog :ctx n: yx
     if ve.length == 0 then ve = emitExprWith :prog :ctx n: yx facts: veF

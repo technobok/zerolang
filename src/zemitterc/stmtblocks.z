@@ -55,8 +55,8 @@ ternaryCondPart: function {
 } out String is {
     mk: openInPlace stmt: ctx.stmt :guarded
     cvF: exprfacts
-    cv: argforms.valueExprC :prog :ctx n: (prog.ast.nodes.get i: op) facts: cvF
-    tw: truthyCondText :prog :ctx n: (prog.ast.nodes.get i: op) raw: cv.stringView
+    cv: argforms.valueExprC :prog :ctx n: (prog.ast.nodes.getView i: op) facts: cvF
+    tw: truthyCondText :prog :ctx n: (prog.ast.nodes.getView i: op) raw: cv.stringView
     # a truthiness test written around the condition is a value computed from it
     if tw.length > 0 when tw.stringView != cv then {
         cv = tw.take
@@ -153,7 +153,7 @@ blockDiverges: function {
         return false
     } case doexpr then {
         # a `do` body (a `with`'s) is the block it wraps
-        return (blockDiverges :prog :ctx n: (prog.ast.nodes.get i: n.statement))
+        return (blockDiverges :prog :ctx n: (prog.ast.nodes.getView i: n.statement))
     } else {
         return false
     }
@@ -164,7 +164,7 @@ blockDiverges: function {
 # `case none then panic msg: ..` is; the arm needs no `break` after it, in a
 # statement match or in one whose arms assign a value.
 armBodyDiverges: function {prog: Program.view ctx: Ctx.view nid: zast.nodeid} out bool is {
-    if (blockDiverges :prog :ctx n: (prog.ast.nodes.get i: nid)) then return true
+    if (blockDiverges :prog :ctx n: (prog.ast.nodes.getView i: nid)) then return true
     return (stmtDiverges :prog :ctx sid: nid)
 }
 
@@ -178,11 +178,11 @@ stmtDiverges: function {
     sid: zast.nodeid
 } out bool is {
     if sid.isZero then return false
-    sn: prog.ast.nodes.get i: sid
+    sn: prog.ast.nodes.getView i: sid
     match (
         sn
     ) case statementline then {
-        inn: prog.ast.nodes.get i: sn.statementline
+        inn: prog.ast.nodes.getView i: sn.statementline
         # the typechecker's `never` stamp IS the control-flow fact: checkCase
         # only stamps it on an exhaustive match whose every arm -- else included
         # -- diverges, and a panic or diverging call carries it because it does
@@ -242,11 +242,11 @@ ifDiverges: function {
         if ffb.known then {
             # every branch folded away: nothing is emitted, so nothing diverges
             if ffb.stmt.isZero then return false
-            return (blockDiverges :prog :ctx n: (prog.ast.nodes.get i: ffb.stmt))
+            return (blockDiverges :prog :ctx n: (prog.ast.nodes.getView i: ffb.stmt))
         }
         if n.elseclause.isZero then return false
         for each cId: (zast.kidsOf ast: prog.ast span: n.clauses) loop {
-            cl: prog.ast.nodes.get i: cId
+            cl: prog.ast.nodes.getView i: cId
             match (
                 cl
             ) case ifclause then {
@@ -255,13 +255,13 @@ ifDiverges: function {
                     blockDiverges
                     :prog
                     :ctx
-                    n: (prog.ast.nodes.get i: cl.statement)
+                    n: (prog.ast.nodes.getView i: cl.statement)
                 ).not then return false
             } else {
                 return false
             }
         }
-        return (blockDiverges :prog :ctx n: (prog.ast.nodes.get i: n.elseclause))
+        return (blockDiverges :prog :ctx n: (prog.ast.nodes.getView i: n.elseclause))
     } else {
         return false
     }
@@ -378,7 +378,7 @@ emitExplicitTakeZero: function {
         values.emitTakenSourceZero
         :prog
         :ctx
-        n: (prog.ast.nodes.get i: a.operation)
+        n: (prog.ast.nodes.getView i: a.operation)
         :ts
         :ind
         :buf
@@ -393,7 +393,7 @@ emitImplicitMoveZero: function {
     ind: StringView
     buf: String.borrow
 } is {
-    values.emitMovedSourceZero :prog :ctx n: (prog.ast.nodes.get i: a.operation) :ind :buf
+    values.emitMovedSourceZero :prog :ctx n: (prog.ast.nodes.getView i: a.operation) :ind :buf
 }
 
 # emitCallTakeInvalidations -- zero the source local of each ownership-moved arg
@@ -411,9 +411,9 @@ emitCallTakeInvalidations: function {
     buf: String.borrow
 } is {
     for each argId: (zast.kidsOf ast: prog.ast span: call.arguments) loop {
-        a: prog.ast.nodes.get i: argId
+        a: prog.ast.nodes.getView i: argId
         if a.namedoperation.not then continue
-        opNode: prog.ast.nodes.get i: a.operation
+        opNode: prog.ast.nodes.getView i: a.operation
         isHold: false
         isTake: false
         {
@@ -433,7 +433,7 @@ emitCallTakeInvalidations: function {
     }
     # a moving call can sit under the callable: `(f xs: a).not` calls `not`
     # on the value `f` moved `a` into
-    callableNode: prog.ast.nodes.get i: call.callable
+    callableNode: prog.ast.nodes.getView i: call.callable
     emitValueTakeInvalidations :prog :ctx n: callableNode :ind :buf
 }
 
@@ -451,16 +451,16 @@ emitValueTakeInvalidations: function {
     match (
         n
     ) case statementline then {
-        statementlineNode: prog.ast.nodes.get i: n.statementline
+        statementlineNode: prog.ast.nodes.getView i: n.statementline
         emitValueTakeInvalidations :prog :ctx n: statementlineNode :ind :buf
     } case call then {
         emitCallTakeInvalidations :prog :ctx call: n :ind :buf
     } case namedoperation then {
-        operationNode: prog.ast.nodes.get i: n.operation
+        operationNode: prog.ast.nodes.getView i: n.operation
         emitValueTakeInvalidations :prog :ctx n: operationNode :ind :buf
     } case dottedpath then {
         if n.parent.notZero then {
-            parentNode: prog.ast.nodes.get i: n.parent
+            parentNode: prog.ast.nodes.getView i: n.parent
             emitValueTakeInvalidations :prog :ctx n: parentNode :ind :buf
         }
     } else null
@@ -483,7 +483,7 @@ dottedBaseNodeId: function {prog: Program.view n: astnode.view} out zast.nodeid 
     match (
         n
     ) case dottedpath then {
-        return (atomNodeId n: (prog.ast.nodes.get i: n.parent))
+        return (atomNodeId n: (prog.ast.nodes.getView i: n.parent))
     } else {
         return zast.nodeid
     }
@@ -812,7 +812,7 @@ plainLiteralText: function {prog: Program.view n: astnode.view} out String is {
         n
     ) case atomstring then {
         if n.stringparts.count.u64 == 1 then {
-            p: prog.ast.nodes.get i: (zast.kidAt kids: prog.ast.kids span: n.stringparts i: 0)
+            p: prog.ast.nodes.getView i: (zast.kidAt kids: prog.ast.kids span: n.stringparts i: 0)
             if p.stringchunk then {
                 pt: zast.literalTextAt ast: prog.ast ref: p.text
                 pc: pt.string
@@ -842,10 +842,10 @@ emitErrorStmt: function {
     lit: String
     got: false
     for each aId: (zast.kidsOf ast: prog.ast span: call.arguments) loop {
-        a: prog.ast.nodes.get i: aId
+        a: prog.ast.nodes.getView i: aId
         if a.namedoperation when got.not then {
             got = true
-            opn: prog.ast.nodes.get i: a.operation
+            opn: prog.ast.nodes.getView i: a.operation
             av = emitExprWith :prog :ctx n: opn facts: avF
             lit = plainLiteralText :prog n: opn
         }
@@ -870,7 +870,7 @@ emitErrorStmt: function {
     ).not then {
         em: lit.copy
         if em.length == 0 then em = "compile-time error".string
-        cn: prog.ast.nodes.get i: call.callable
+        cn: prog.ast.nodes.getView i: call.callable
         ctx.emitErrors.append (
             ztypecheck.reachedErrorData
             nodeid: call.callable
@@ -897,10 +897,10 @@ emitPanicStmt: function {
     avF: exprfacts
     got: false
     for each aId: (zast.kidsOf ast: prog.ast span: call.arguments) loop {
-        a: prog.ast.nodes.get i: aId
+        a: prog.ast.nodes.getView i: aId
         if a.namedoperation when got.not then {
             got = true
-            aOpNode: prog.ast.nodes.get i: a.operation
+            aOpNode: prog.ast.nodes.getView i: a.operation
             av = emitExprWith :prog :ctx n: aOpNode facts: avF
         }
     }
@@ -955,12 +955,12 @@ emitCallStmt: function {
     # an operation the compiler computed (`100 - 250`) has nothing left to run
     folded: (prog.typing.nodeConstAt nid: call.nodeid).kind
     if folded.ivalKind or folded.fvalKind or folded.svalKind then return
-    cn0Id: zast.atomNameIdOf n: (prog.ast.nodes.get i: call.callable)
+    cn0Id: zast.atomNameIdOf n: (prog.ast.nodes.getView i: call.callable)
     # a statement form arrives either as its core alias (an atom) or spelled
     # qualified (a dotted path, whose atom carries no name)
     sfnId: cn0Id
     if cn0Id.isZero then {
-        sfnId = consts.stmtFormNameId :prog n: (prog.ast.nodes.get i: call.callable)
+        sfnId = consts.stmtFormNameId :prog n: (prog.ast.nodes.getView i: call.callable)
     }
     if sfnId == zast.wellKnown.slot.wkPrint then {
         values.emitPrintStmt :prog :ctx :call :ind :tmp :buf
@@ -980,7 +980,7 @@ emitCallStmt: function {
         ctx.stmt.exitNode = call.nodeid
         hasArg: false
         for each aId: (zast.kidsOf ast: prog.ast span: call.arguments) loop {
-            a: prog.ast.nodes.get i: aId
+            a: prog.ast.nodes.getView i: aId
             if a.namedoperation when hasArg.not then {
                 hasArg = true
                 emitReturnOfNode :prog :ctx vid: a.operation :ind :tmp :buf
@@ -1063,7 +1063,7 @@ emitControlCollectionBind: function {
             emitDoBindValue
             :prog
             :ctx
-            n: (prog.ast.nodes.get i: avn.nodeid)
+            n: (prog.ast.nodes.getView i: avn.nodeid)
             :nm
             ct: ct.stringView
             tid: ltid
@@ -1102,7 +1102,7 @@ emitTypedBind: function {
     ct: StringView
     ltid: ztypes.tid
 } is {
-    avn: prog.ast.nodes.get i: n.value
+    avn: prog.ast.nodes.getView i: n.value
     rv: emitExpr :prog :ctx n: avn
     flushArgHoists :ctx :ind :tmp :buf
     if ct.length == 0 then {
@@ -1136,7 +1136,7 @@ emitAssignment: function {
     tmp: FnTemps
     buf: String.borrow
 } is {
-    avn: prog.ast.nodes.get i: n.value
+    avn: prog.ast.nodes.getView i: n.value
     btid: values.bindingStampOf :prog nid: n.nodeid
     ct: consts.bindDeclaredCType :prog :ctx :n :btid
     nameVid: localnames.defVid :prog nid: n.nodeid
@@ -1657,7 +1657,7 @@ doWhileCondText: function {
     if end == ztyping.loopend.once then return "0".string
     for each pk: (zast.kidsOf ast: prog.ast span: n.postconditions) loop {
         if (condFoldsTrue :prog nid: pk).not then {
-            pkn: prog.ast.nodes.get i: pk
+            pkn: prog.ast.nodes.getView i: pk
             # the checker stamps the OPERATION node, so unwrap the same way
             pkop: pk
             if pkn.namedoperation then pkop = pkn.operation
@@ -1669,7 +1669,7 @@ doWhileCondText: function {
                 truthyCondText
                 :prog
                 :ctx
-                n: (prog.ast.nodes.get i: pkop)
+                n: (prog.ast.nodes.getView i: pkop)
                 raw: pcv.stringView
             )
             if tw8.length > 0 then pcv = tw8.take
@@ -1767,7 +1767,7 @@ emitPlainWhileHead: function {
     cond: String
     for each kId: (zast.kidsOf ast: prog.ast span: n.conditions) loop {
         if (forloops.forCondIsNamed :prog :kId).not then {
-            emitForCond :prog :ctx n: (prog.ast.nodes.get i: kId) :cond
+            emitForCond :prog :ctx n: (prog.ast.nodes.getView i: kId) :cond
         }
     }
     # `for loop { ... }` -- no conditions, no postconditions: an unconditional
@@ -1986,7 +1986,7 @@ emitGenLocalBind: function {
     rtsid: chaseAggregateTypedef :prog :ctx tid: (prog.reg.variableTypeOf id: nameVid)
     # a comprehension is built where the local lives, in the field: a loop, not
     # an expression, so there is no value to store
-    vn: prog.ast.nodes.get i: n.value
+    vn: prog.ast.nodes.getView i: n.value
     if (forexprValue n: vn) then {
         buf.append (destroyLineC :prog :ctx tid: rtsid nm: fld.stringView :ind)
         lcb: spelledCname :ctx tid: rtsid
@@ -2020,7 +2020,7 @@ emitGenLocalBind: function {
         nm2: fld.stringView
         rtnid: n.nodeid
         :rtsid
-        valueNode: (prog.ast.nodes.get i: n.value)
+        valueNode: (prog.ast.nodes.getView i: n.value)
         # what an earlier walk of this binding left in the field
         destroyOld: true
         :ind
@@ -2088,8 +2088,8 @@ emitWithBinding: function {
 } is {
     wvid: localnames.defVid :prog nid: n.nodeid
     wnm: localnames.varCName known: ctx.known :prog vid: wvid
-    wsid: stampIdDeep :prog n: (prog.ast.nodes.get i: n.value)
-    wct: withValueCType :prog :ctx n: (prog.ast.nodes.get i: n.value) :wsid
+    wsid: stampIdDeep :prog n: (prog.ast.nodes.getView i: n.value)
+    wct: withValueCType :prog :ctx n: (prog.ast.nodes.getView i: n.value) :wsid
     wfO: prog.typing.genLocalFieldOf.get key: wvid
     # an `if`, a `match` or a block with a place arm: the alias is a second
     # name for the place the arm that ran yields, as a plain binding's is
@@ -2098,7 +2098,7 @@ emitWithBinding: function {
         values.emitReferenceBind
         :prog
         :ctx
-        avn: (prog.ast.nodes.get i: n.value)
+        avn: (prog.ast.nodes.getView i: n.value)
         :ind
         :tmp
         :buf
@@ -2107,7 +2107,7 @@ emitWithBinding: function {
         nameVid: wvid
     )
     if refBound.not then {
-        wv: emitExpr :prog :ctx n: (prog.ast.nodes.get i: n.value)
+        wv: emitExpr :prog :ctx n: (prog.ast.nodes.getView i: n.value)
         # a non-lvalue receiver (`with x: (mk).iterate do`) hoisted an _ahN temp
         # while that expression was built; declare it before the line that reads
         # it, as the plain-binding path does
@@ -2135,7 +2135,7 @@ emitWithBinding: function {
     # call that took ownership of an argument, so that source is zeroed here.
     # What the `with` owns is destroyed where the checker lists it, at the
     # `with`'s end (emitScopeDestroy).
-    emitValueTakeInvalidations :prog :ctx n: (prog.ast.nodes.get i: n.value) :ind :buf
+    emitValueTakeInvalidations :prog :ctx n: (prog.ast.nodes.getView i: n.value) :ind :buf
 }
 
 # emitWithBody -- `with x: <value> do <body>`: the value is bound for the body's
@@ -2157,7 +2157,7 @@ emitWithBody: function {
     buf: String.borrow
 } is {
     emitWithBinding :prog :ctx :n :ind :tmp :buf
-    wbody: prog.ast.nodes.get i: n.body
+    wbody: prog.ast.nodes.getView i: n.body
     if bindTo.length > 0 then {
         wvb: values.withValueBlock n: wbody
         # THE BODY MAY BE A CONTROL VALUE of its own -- an `if`, a `match` or a
@@ -2185,7 +2185,7 @@ emitWithBody: function {
                 emitBranchAssign
                 :prog
                 :ctx
-                n: (prog.ast.nodes.get i: wvb)
+                n: (prog.ast.nodes.getView i: wvb)
                 target: bindTo
                 scope: zast.nodeid
                 :ind
@@ -2257,7 +2257,7 @@ emitDoStmt: function {
     tmp: FnTemps
     buf: String.borrow
 } is {
-    if (ztypecheck.blockHasBreak ast: prog.ast n: (prog.ast.nodes.get i: n.statement)) then {
+    if (ztypecheck.blockHasBreak ast: prog.ast n: (prog.ast.nodes.getView i: n.statement)) then {
         ldo: "\{ind}do {\n"
         buf.append ldo
         indd: "\{ind}    "
@@ -2274,7 +2274,7 @@ emitDoStmt: function {
         # it: what the checker recorded its end destroys is spent here -- not
         # when its last line returned the body's value (a `with` block in
         # return position), whose return freed them
-        body: prog.ast.nodes.get i: n.statement
+        body: prog.ast.nodes.getView i: n.statement
         emitBodyNode :prog :ctx n: body :ind :tmp :buf
         if (blockDiverges :prog :ctx n: body).not when ctx.stmt.tailReturned.not then (
             emitScopeDestroy
@@ -2412,11 +2412,11 @@ emitStmtParts: function {
     match (
         n
     ) case statementline then {
-        sln: prog.ast.nodes.get i: n.statementline
+        sln: prog.ast.nodes.getView i: n.statementline
         emitStmt :prog :ctx n: sln :ind :tmp :buf
     } case statement then {
         for each stmtId: (zast.kidsOf ast: prog.ast span: n.statements) loop {
-            emitStmt :prog :ctx n: (prog.ast.nodes.get i: stmtId) :ind :tmp :buf
+            emitStmt :prog :ctx n: (prog.ast.nodes.getView i: stmtId) :ind :tmp :buf
         }
     } case doexpr then {
         emitDoStmt :prog :ctx :n :ind :tmp :buf
@@ -2482,7 +2482,7 @@ emitGenericDissect: function {
                 emitBranchAssign
                 :prog
                 :ctx
-                n: (prog.ast.nodes.get i: win)
+                n: (prog.ast.nodes.getView i: win)
                 target: assignTo
                 scope: win
                 :ind
@@ -2535,14 +2535,14 @@ matchOrdinalPairRoute: function {
     tmp: FnTemps
     buf: String.borrow
 } out bool is {
-    sTid: stampIdDeep :prog n: (prog.ast.nodes.get i: m.subject)
+    sTid: stampIdDeep :prog n: (prog.ast.nodes.getView i: m.subject)
     if (isOrdinalPair :prog tid: sTid) then {
         # the temps the subject's text reads are declared before it is used,
         # as the tag switch declares them before its `_m` (emitMatchSubjectTemp)
         flushArgHoists :ctx :ind :tmp :buf
         # the temp's name, built only for a call subject
         subjOnce: String
-        core: prog.ast.nodes.get i: m.subject
+        core: prog.ast.nodes.getView i: m.subject
         # a call node, or any subject that reading twice would repeat -- a bare
         # name that calls a function among them -- is read once, into the temp
         if core.call or subjF.once or subjF.stated.not then {
@@ -2598,7 +2598,7 @@ matchGenericRoute: function {
     subjSid: (
         ztyping.nodeTypeAt
         tbl: prog.typing.nodeType
-        nid: (interpPartNodeId n: (prog.ast.nodes.get i: m.subject))
+        nid: (interpPartNodeId n: (prog.ast.nodes.getView i: m.subject))
     )
     if subjSid.notZero when (prog.reg.isTypeParamOf tid: subjSid) then {
         # the parameter the subject names, bound by the instance or by the one it
@@ -2624,10 +2624,10 @@ matchGenericRoute: function {
         return true
     }
     dcore: m.subject
-    dcn: prog.ast.nodes.get i: dcore
+    dcn: prog.ast.nodes.getView i: dcore
     if dcn.dottedpath then {
-        dleafId: aliasChildNameId :prog n: (prog.ast.nodes.get i: dcore)
-        dbnid: dottedBaseNodeId :prog n: (prog.ast.nodes.get i: dcore)
+        dleafId: aliasChildNameId :prog n: (prog.ast.nodes.getView i: dcore)
+        dbnid: dottedBaseNodeId :prog n: (prog.ast.nodes.getView i: dcore)
         dbst: stampIdOf :prog nid: dbnid
         downer: genericInstOf :ctx
         if (prog.reg.genericArgCount specId: dbst) > 0 then downer = dbst
@@ -2744,7 +2744,7 @@ emitMatchSubjectTemp: function {
     tmp: FnTemps
     buf: String.borrow
 } is {
-    subjT: prog.ast.nodes.get i: m.subject
+    subjT: prog.ast.nodes.getView i: m.subject
     sxM: "\{sx}"
     if (needsValueDeref :prog :ctx n: subjT tid: vtid) then {
         sxM = "(*\{sx})"
@@ -2779,7 +2779,7 @@ emitMatchStmt: function {
     # a match on a unit constant runs the one arm the constant holds
     mfb: foldedBranchOf :prog nid: m.nodeid
     if mfb.known then {
-        mwn: prog.ast.nodes.get i: mfb.stmt
+        mwn: prog.ast.nodes.getView i: mfb.stmt
         mscope: branchScopeOf :prog clauses: m.clauses elseclause: m.elseclause stmt: mfb.stmt
         buf.append "\{ind}{\n"
         indM: "\{ind}    "
@@ -2815,7 +2815,7 @@ emitMatchStmt: function {
         return
     }
     sxF: exprfacts
-    sx: emitExprWith :prog :ctx n: (prog.ast.nodes.get i: m.subject) facts: sxF
+    sx: emitExprWith :prog :ctx n: (prog.ast.nodes.getView i: m.subject) facts: sxF
     if (
         matchOrdinalPairRoute
         :prog
@@ -2828,7 +2828,7 @@ emitMatchStmt: function {
         :tmp
         :buf
     ) then return
-    subjStamp: stampIdDeep :prog n: (prog.ast.nodes.get i: m.subject)
+    subjStamp: stampIdDeep :prog n: (prog.ast.nodes.getView i: m.subject)
     vtid: types.canonTypeId :prog tid: subjStamp
     if (matchGenericRoute :prog :ctx :m :assignTo :ind :tmp :buf) then return
     # a typedef over a union or variant is matched on its base's tag
@@ -2852,11 +2852,11 @@ emitMatchStmt: function {
     }
     vc: spelledCname :ctx tid: vtid
     mN: values.tmpNext stmt: ctx.stmt :tmp
-    sname: narrowfacts.atomTextOf :prog n: (prog.ast.nodes.get i: m.subject)
+    sname: narrowfacts.atomTextOf :prog n: (prog.ast.nodes.getView i: m.subject)
     # the subject's variable: inside an arm the bound name IS the subject,
     # narrowed, so its declaration must carry the same identifier the body's
     # references resolve to
-    snameV: atomVid :prog nid: (atomNodeId n: (prog.ast.nodes.get i: m.subject))
+    snameV: atomVid :prog nid: (atomNodeId n: (prog.ast.nodes.getView i: m.subject))
     # the subject's storage, as the receiver its tag and payload are read off:
     # the `_mN` temporary, or -- for a union subject that is a variable -- the
     # variable itself, as an `if` narrowing reads it. A payload write in an arm
@@ -2865,7 +2865,7 @@ emitMatchStmt: function {
     mRecv: String
     mRecvF: exprfacts
     mAcc: "."
-    subjM: prog.ast.nodes.get i: m.subject
+    subjM: prog.ast.nodes.getView i: m.subject
     if isUni when (localnames.nodeIsBareAtom n: subjM) when snameV.notZero then {
         mRecv = sx.take
         mRecvF = sxF
@@ -2896,7 +2896,7 @@ emitMatchStmt: function {
     }
     bodyInd: "\{ind}    "
     for each cId: (zast.kidsOf ast: prog.ast span: m.clauses) loop {
-        c: prog.ast.nodes.get i: cId
+        c: prog.ast.nodes.getView i: cId
         (
             emitMatchClause
             :prog
@@ -2916,7 +2916,7 @@ emitMatchStmt: function {
     }
     covA: ListVal zast.nameid
     for each c3Id: (zast.kidsOf ast: prog.ast span: m.clauses) loop {
-        c3: prog.ast.nodes.get i: c3Id
+        c3: prog.ast.nodes.getView i: c3Id
         if c3.caseclause then {
             cnm: clauseArmId :prog nid: c3.nodeid written: c3.name
             covA.append cnm
@@ -3000,7 +3000,7 @@ emitOrdinalPairMatch: function {
     falseArm: ordinalPairFirstArmId :prog :tid
     firstB: true
     for each cId: (zast.kidsOf ast: prog.ast span: m.clauses) loop {
-        c: prog.ast.nodes.get i: cId
+        c: prog.ast.nodes.getView i: cId
         if c.caseclause then {
             condB: subj.string
             if falseArm.notZero when (
@@ -3018,7 +3018,7 @@ emitOrdinalPairMatch: function {
                     emitBranchAssign
                     :prog
                     :ctx
-                    n: (prog.ast.nodes.get i: c.statement)
+                    n: (prog.ast.nodes.getView i: c.statement)
                     target: assignTo
                     scope: c.nodeid
                     ind: armInd.stringView
@@ -3057,7 +3057,7 @@ emitBoolElse: function {
     buf: String.borrow
 } is {
     if oId.notZero then {
-        o: prog.ast.nodes.get i: oId
+        o: prog.ast.nodes.getView i: oId
         leB: "\{ind}else {\n"
         buf.append leB
         indE: "\{ind}    "
@@ -3129,7 +3129,7 @@ emitScopedBody: function {
     lL: tmp.listFrees.length
     dv: false
     if body.notZero then {
-        bn: prog.ast.nodes.get i: body
+        bn: prog.ast.nodes.getView i: body
         emitBodyNode :prog :ctx n: bn :ind :tmp :buf
         dv = blockDiverges :prog :ctx n: bn
     }
@@ -3164,7 +3164,7 @@ branchScopeOf: function {
 } out zast.nodeid is {
     if elseclause == stmt then return stmt
     for each cId: (zast.kidsOf ast: prog.ast span: clauses) loop {
-        c: prog.ast.nodes.get i: cId
+        c: prog.ast.nodes.getView i: cId
         body: zast.nodeid
         match (
             c
@@ -3382,7 +3382,7 @@ emitMatchClause: function {
                 emitBranchAssign
                 :prog
                 :ctx
-                n: (prog.ast.nodes.get i: c.statement)
+                n: (prog.ast.nodes.getView i: c.statement)
                 target: assignTo
                 scope: c.nodeid
                 ind: armInd.stringView
@@ -3391,7 +3391,7 @@ emitMatchClause: function {
             )
         } else {
             lL: tmp.listFrees.length
-            cst: prog.ast.nodes.get i: c.statement
+            cst: prog.ast.nodes.getView i: c.statement
             emitBodyNode :prog :ctx n: cst ind: bodyInd.stringView :tmp :buf
             (
                 closeScopeBlock
@@ -3436,7 +3436,7 @@ emitMatchElse: function {
     buf: String.borrow
 } is {
     if oId.notZero then {
-        o: prog.ast.nodes.get i: oId
+        o: prog.ast.nodes.getView i: oId
         l7: "\{ind}default: {\n"
         buf.append l7
         bodyInd: "\{ind}    "
@@ -3536,7 +3536,7 @@ emitBranchAssignOptional: function {
         si: u64
         for si < cnt loop {
             sxId: zast.kidAt kids: prog.ast.kids span: n.statements i: si
-            sx: prog.ast.nodes.get i: sxId
+            sx: prog.ast.nodes.getView i: sxId
             if (si + 1) == cnt then {
                 marked: linemarks.open :prog :ctx n: sx :buf
                 vx: emitExpr :prog :ctx n: sx
@@ -3586,7 +3586,8 @@ emitDoBindValue: function {
     ) case doexpr then {
         ld: "\{ind}\{ct} \{nm};\n"
         buf.append ld
-        if (ztypecheck.blockHasBreak ast: prog.ast n: (prog.ast.nodes.get i: n.statement)) then {
+        if (ztypecheck.blockHasBreak ast: prog.ast n: (prog.ast.nodes.getView i: n.statement)
+        ) then {
             noneTag: spelledTagConst :prog :ctx :tid armId: zast.wellKnown.slot.wkNone
             someTag: spelledTagConst :prog :ctx :tid armId: zast.wellKnown.slot.wkSome
             someC: (
@@ -3628,7 +3629,7 @@ emitDoBindValue: function {
                 emitBranchAssignOptional
                 :prog
                 :ctx
-                n: (prog.ast.nodes.get i: n.statement)
+                n: (prog.ast.nodes.getView i: n.statement)
                 target: nm
                 someTag: someTag.stringView
                 someC: someC.stringView
@@ -3637,7 +3638,7 @@ emitDoBindValue: function {
                 :tmp
                 :buf
             )
-            dvO: blockDiverges :prog :ctx n: (prog.ast.nodes.get i: n.statement)
+            dvO: blockDiverges :prog :ctx n: (prog.ast.nodes.getView i: n.statement)
             (
                 closeScopeBlock
                 :prog
@@ -3661,7 +3662,7 @@ emitDoBindValue: function {
                 emitBranchAssign
                 :prog
                 :ctx
-                n: (prog.ast.nodes.get i: n.statement)
+                n: (prog.ast.nodes.getView i: n.statement)
                 target: nm
                 scope: n.nodeid
                 ind: innerInd.stringView
@@ -3725,7 +3726,7 @@ emitIfBindValue: function {
         # other arms are dead
         bfb: foldedBranchOf :prog nid: n.nodeid
         if bfb.known when bfb.stmt.notZero then {
-            bwn: prog.ast.nodes.get i: bfb.stmt
+            bwn: prog.ast.nodes.getView i: bfb.stmt
             if (values.isSimpleValueNode n: bwn) then {
                 bvx: emitExpr :prog :ctx n: bwn
                 flushArgHoists :ctx :ind :tmp :buf
@@ -3767,7 +3768,7 @@ emitIfAssign: function {
             emitBranchAssign
             :prog
             :ctx
-            n: (prog.ast.nodes.get i: bfb.stmt)
+            n: (prog.ast.nodes.getView i: bfb.stmt)
             :target
             scope: (
                 branchScopeOf
@@ -3937,7 +3938,7 @@ emitOptionLoopTail: function {
     forloops.emitForArms :prog :ctx :m ind: bodyInd.stringView :tmp :buf
     dvG: false
     if m.body.notZero then {
-        mb: prog.ast.nodes.get i: m.body
+        mb: prog.ast.nodes.getView i: m.body
         emitBodyNode :prog :ctx n: mb ind: bodyInd.stringView :tmp :buf
         dvG = blockDiverges :prog :ctx n: mb
     }
@@ -3977,11 +3978,11 @@ emitPlainBindingFor: function {
     if m.isEach then return false
     if m.conditions.count.u64 == 0 then return false
     c0Id: zast.kidAt kids: prog.ast.kids span: m.conditions i: 0
-    c0: prog.ast.nodes.get i: c0Id
+    c0: prog.ast.nodes.getView i: c0Id
     if c0.namedoperation.not then return false
     lblR: zast.nameTextAt ast: prog.ast ref: c0.name
     if lblR.length == 0 then return false
-    opN: prog.ast.nodes.get i: c0.operation
+    opN: prog.ast.nodes.getView i: c0.operation
     lblV: localnames.defVid :prog nid: (interpPartNodeId n: opN)
     lbl: localnames.varCName known: ctx.known :prog vid: lblV
     ovid: forloops.stampTidDeep :prog n: opN
@@ -4031,12 +4032,12 @@ emitForCond: function {
         # a loop's test runs at every iteration, so it is evaluated in place
         mk7: openInPlace stmt: ctx.stmt guarded: true
         cvF: exprfacts
-        cv: argforms.valueExprC :prog :ctx n: (prog.ast.nodes.get i: n.operation) facts: cvF
+        cv: argforms.valueExprC :prog :ctx n: (prog.ast.nodes.getView i: n.operation) facts: cvF
         tw7: (
             truthyCondText
             :prog
             :ctx
-            n: (prog.ast.nodes.get i: n.operation)
+            n: (prog.ast.nodes.getView i: n.operation)
             raw: cv.stringView
         )
         if tw7.length > 0 then cv = tw7.take
@@ -4169,14 +4170,14 @@ addClauseFacts: function {
     clauseId: zast.nodeid
     facts: narrowfacts.ChainFacts
 } is {
-    c: prog.ast.nodes.get i: clauseId
+    c: prog.ast.nodes.getView i: clauseId
     if c.ifclause when c.conditions.count.u64 == 1 then {
-        k: prog.ast.nodes.get i: (zast.kidAt kids: prog.ast.kids span: c.conditions i: 0)
+        k: prog.ast.nodes.getView i: (zast.kidAt kids: prog.ast.kids span: c.conditions i: 0)
         if k.namedoperation then (
             narrowfacts.chainCondFact
             :prog
             :ctx
-            n: (prog.ast.nodes.get i: k.operation)
+            n: (prog.ast.nodes.getView i: k.operation)
             :facts
         )
     }
@@ -4231,7 +4232,7 @@ appendCondText: function {
     # the chain so far; a `&&` is inserted when it is not empty
     cond: String.borrow
 } is {
-    k: prog.ast.nodes.get i: kId
+    k: prog.ast.nodes.getView i: kId
     opId: kId
     if k.namedoperation then opId = k.operation
     # a conjunct past the first runs only when the ones before it held
@@ -4239,8 +4240,8 @@ appendCondText: function {
     mk: openInPlace stmt: ctx.stmt :guarded
     {
         cvF: exprfacts
-        cv: argforms.valueExprC :prog :ctx n: (prog.ast.nodes.get i: opId) facts: cvF
-        tw: truthyCondText :prog :ctx n: (prog.ast.nodes.get i: opId) raw: cv.stringView
+        cv: argforms.valueExprC :prog :ctx n: (prog.ast.nodes.getView i: opId) facts: cvF
+        tw: truthyCondText :prog :ctx n: (prog.ast.nodes.getView i: opId) raw: cv.stringView
         if tw.length > 0 then cv = tw.take
         if guarded then {
             cond.append " && "
@@ -4285,7 +4286,7 @@ condMovesLocal: function {
 } out bool is {
     probe: String
     for each cId: (zast.kidsOf ast: prog.ast span: conds) loop {
-        condNode: prog.ast.nodes.get i: cId
+        condNode: prog.ast.nodes.getView i: cId
         emitValueTakeInvalidations :prog :ctx n: condNode ind: "" buf: probe
     }
     return probe.length > 0
@@ -4335,7 +4336,7 @@ emitSteppedConjunct: function {
     cw: condInParens cond: ct.stringView
     buf.append "\{ind}\{gvar} = \{cw} ? 1 : 0;\n"
     flushBlockFrees :tmp :lL diverged: false :ind :buf
-    condNode: prog.ast.nodes.get i: kId
+    condNode: prog.ast.nodes.getView i: kId
     emitValueTakeInvalidations :prog :ctx n: condNode :ind :buf
 }
 
@@ -4598,7 +4599,7 @@ emitIfClauses: function {
                 emitIfClause
                 :prog
                 :ctx
-                n: (prog.ast.nodes.get i: cId)
+                n: (prog.ast.nodes.getView i: cId)
                 isFirst: at == 0
                 :assignTo
                 :ind
@@ -4702,7 +4703,7 @@ emitIfClause: function {
             buf.append cmtS
             si = si + 1
         }
-        cst: prog.ast.nodes.get i: n.statement
+        cst: prog.ast.nodes.getView i: n.statement
         if assignTo.length > 0 then {
             (
                 emitBranchAssign
@@ -4812,7 +4813,7 @@ emitElse: function {
     buf: String.borrow
 } is {
     if oId.isZero then return
-    o: prog.ast.nodes.get i: oId
+    o: prog.ast.nodes.getView i: oId
     lh: "\{ind}} else {\n"
     buf.append lh
     bodyInd: "\{ind}    "
@@ -4904,7 +4905,7 @@ refReturnText: function {
     vid: zast.nodeid
     rv: StringView
 } out String is {
-    if (pathIsPointer :prog :ctx n: (prog.ast.nodes.get i: vid)) then return rv.string
+    if (pathIsPointer :prog :ctx n: (prog.ast.nodes.getView i: vid)) then return rv.string
     return "&\{rv}"
 }
 
@@ -4928,7 +4929,7 @@ emitDirectReturn: function {
         needsValueDeref
         :prog
         :ctx
-        n: (prog.ast.nodes.get i: vid)
+        n: (prog.ast.nodes.getView i: vid)
         tid: (stampIdOf :prog nid: vid)
     ) then rvOut = "(*\{rv})"
     buf.append "\{ind}return \{rvOut};\n"
@@ -4954,14 +4955,14 @@ emitPlainReturn: function {
         argforms.standInText
         :prog
         :ctx
-        n: (prog.ast.nodes.get i: vid)
-        text: (emitExprWith :prog :ctx n: (prog.ast.nodes.get i: vid) facts: rvF)
+        n: (prog.ast.nodes.getView i: vid)
+        text: (emitExprWith :prog :ctx n: (prog.ast.nodes.getView i: vid) facts: rvF)
         facts: rvF
     )
     flushArgHoists :ctx :ind :tmp :buf
     cleanup: String
     emitReturnCleanup :prog :ctx :tmp :ind buf: cleanup
-    rtid: stampIdOf :prog nid: (interpPartNodeId n: (prog.ast.nodes.get i: vid))
+    rtid: stampIdOf :prog nid: (interpPartNodeId n: (prog.ast.nodes.getView i: vid))
     # an implementer returned as the spec is its box, of the spec's type
     so: prog.typing.standInOf.get key: vid
     if so.some then {
@@ -4973,8 +4974,8 @@ emitPlainReturn: function {
     # the sources the value moves out of -- a taken argument, a narrowed
     # payload's box -- zeroed once the value is in its temp
     moved: String
-    emitValueTakeInvalidations :prog :ctx n: (prog.ast.nodes.get i: vid) :ind buf: moved
-    values.emitNarrowedTakeZero :prog :ctx n: (prog.ast.nodes.get i: vid) :ind buf: moved
+    emitValueTakeInvalidations :prog :ctx n: (prog.ast.nodes.getView i: vid) :ind buf: moved
+    values.emitNarrowedTakeZero :prog :ctx n: (prog.ast.nodes.getView i: vid) :ind buf: moved
     hoist: (
         trivial.not and
         isPtr.not and
@@ -4987,7 +4988,8 @@ emitPlainReturn: function {
     # owned local is freed after -- the source's owner, and the local on a path
     # whose arm did not take it, included
     if retCt.length > 0 when (isHeapPtrCollection :prog :ctx tid: rtid) when (
-        (moved.length > 0) or (types.controlValueOwnsArms :prog :ctx n: (prog.ast.nodes.get i: vid))
+        (moved.length > 0) or
+        (types.controlValueOwnsArms :prog :ctx n: (prog.ast.nodes.getView i: vid))
     ) then {
         hpc: "\{retCt}*"
         (
@@ -5060,14 +5062,14 @@ emitReturnOfNode: function {
     # a value typed `never` -- a `match` whose every arm leaves -- does not
     # finish: it runs as the statement it is, and no return follows it
     if (matchDiverges :prog nid: vid) then {
-        emitStmt :prog :ctx n: (prog.ast.nodes.get i: vid) :ind :tmp :buf
+        emitStmt :prog :ctx n: (prog.ast.nodes.getView i: vid) :ind :tmp :buf
         return
     }
     # a value typed `null` -- `null` itself, a call answering nothing -- is
     # handed back by a function answering nothing: run, then a bare return
-    if (stampIsNullType :prog nid: (interpPartNodeId n: (prog.ast.nodes.get i: vid))) then {
-        if (isNullValueAtom :prog n: (prog.ast.nodes.get i: vid)).not then {
-            nre: emitExpr :prog :ctx n: (prog.ast.nodes.get i: vid)
+    if (stampIsNullType :prog nid: (interpPartNodeId n: (prog.ast.nodes.getView i: vid))) then {
+        if (isNullValueAtom :prog n: (prog.ast.nodes.getView i: vid)).not then {
+            nre: emitExpr :prog :ctx n: (prog.ast.nodes.getView i: vid)
             flushArgHoists :ctx :ind :tmp :buf
             buf.append "\{ind}(void)(\{nre});\n"
         }
@@ -5075,14 +5077,14 @@ emitReturnOfNode: function {
         buf.append "\{ind}return;\n"
         return
     }
-    bx: values.emitOptionBoxHoist :prog :ctx n: (prog.ast.nodes.get i: vid) :ind :tmp :buf
+    bx: values.emitOptionBoxHoist :prog :ctx n: (prog.ast.nodes.getView i: vid) :ind :tmp :buf
     if bx.length > 0 then {
-        emitValueTakeInvalidations :prog :ctx n: (prog.ast.nodes.get i: vid) :ind :buf
+        emitValueTakeInvalidations :prog :ctx n: (prog.ast.nodes.getView i: vid) :ind :buf
         emitReturnCleanup :prog :ctx :tmp :ind :buf
         buf.append "\{ind}return \{bx};\n"
         return
     }
-    if (values.emitStringReturnValue :prog :ctx n: (prog.ast.nodes.get i: vid) :ind :tmp :buf
+    if (values.emitStringReturnValue :prog :ctx n: (prog.ast.nodes.getView i: vid) :ind :tmp :buf
     ) then return
     emitPlainReturn :prog :ctx :vid :ind :tmp :buf
 }
@@ -5114,7 +5116,7 @@ emitTailValue: function {
     isBlock: false
     isCtl: false
     {
-        vn: prog.ast.nodes.get i: vid
+        vn: prog.ast.nodes.getView i: vid
         isBlock = vn.doexpr
         # A `with` THAT YIELDS A VALUE binds a return local like any other
         # control value. emitTailStmt would emit the binding and then the body
@@ -5134,7 +5136,7 @@ emitTailValue: function {
     rtid: (
         stampIdOf
         :prog
-        nid: (values.controlValueStampNid :prog n: (prog.ast.nodes.get i: vid))
+        nid: (values.controlValueStampNid :prog n: (prog.ast.nodes.getView i: vid))
     )
     ct: typeRefC :prog :ctx tid: rtid
     if (isHeapPtrCollection :prog :ctx tid: rtid) then ct = "\{ct}*"
@@ -5173,7 +5175,7 @@ emitControlBindValue: function {
     tmp: FnTemps
     buf: String.borrow
 } out bool is {
-    vn: prog.ast.nodes.get i: vid
+    vn: prog.ast.nodes.getView i: vid
     if (emitIfBindValue :prog :ctx n: vn :nm :ct :ind :tmp :buf) then return true
     if (emitMatchBindValue :prog :ctx n: vn :nm :ct :ind :tmp :buf) then return true
     if (emitWithBindValue :prog :ctx n: vn :rtid :nm :ct :ind :tmp :buf) then return true
@@ -5233,7 +5235,7 @@ emitTailStmt: function {
             emitTailStmt
             :prog
             :ctx
-            n: (prog.ast.nodes.get i: n.statementline)
+            n: (prog.ast.nodes.getView i: n.statementline)
             :ind
             :tmp
             :buf
@@ -5257,14 +5259,14 @@ emitTailStmt: function {
         # return position passes inward only when the checker said it does
         # (withForwardsTail); otherwise the `with` IS the tail value, and
         # emitTailValue binds and returns it
-        if (ztypecheck.withForwardsTail ast: prog.ast n: (prog.ast.nodes.get i: n.nodeid)
+        if (ztypecheck.withForwardsTail ast: prog.ast n: (prog.ast.nodes.getView i: n.nodeid)
         ).not then return false
         emitWithBinding :prog :ctx :n :ind :tmp :buf
         ctx.stmt.tailRetActive = true
-        emitBodyNode :prog :ctx n: (prog.ast.nodes.get i: n.body) :ind :tmp :buf
+        emitBodyNode :prog :ctx n: (prog.ast.nodes.getView i: n.body) :ind :tmp :buf
         return true
     } case doexpr then {
-        dstT: prog.ast.nodes.get i: n.statement
+        dstT: prog.ast.nodes.getView i: n.statement
         if (ztypecheck.blockHasBreak ast: prog.ast n: dstT) then return false
         ctx.stmt.tailRetActive = true
         emitBodyNode :prog :ctx n: dstT :ind :tmp :buf
@@ -5299,7 +5301,7 @@ emitBranchAssign: function {
         si: u64
         for (si + 1) < cnt loop {
             sxId: zast.kidAt kids: prog.ast.kids span: n.statements i: si
-            emitStmt :prog :ctx n: (prog.ast.nodes.get i: sxId) :ind :tmp :buf
+            emitStmt :prog :ctx n: (prog.ast.nodes.getView i: sxId) :ind :tmp :buf
             si = si + 1
         }
         dv: false
@@ -5349,7 +5351,7 @@ emitBranchLastAssign: function {
     tmp: FnTemps
     buf: String.borrow
 } out bool is {
-    sx: prog.ast.nodes.get i: lineId
+    sx: prog.ast.nodes.getView i: lineId
     if (stmtDiverges :prog :ctx sid: lineId) then {
         emitStmt :prog :ctx n: sx :ind :tmp :buf
         return true
@@ -5387,7 +5389,7 @@ emitNestedControlAssign: function {
     buf: String.borrow
 } out bool is {
     if line.statementline.not then return false
-    mn: prog.ast.nodes.get i: line.statementline
+    mn: prog.ast.nodes.getView i: line.statementline
     match (
         mn
     ) case caseexpr then {
@@ -5396,7 +5398,11 @@ emitNestedControlAssign: function {
         ctx.stmt.condDepth = ctx.stmt.condDepth - 1
         return true
     } case ifexpr then {
-        if (ztypecheck.armLeaves ast: prog.ast n: (prog.ast.nodes.get i: mn.nodeid) inLoop: false
+        if (
+            ztypecheck.armLeaves
+            ast: prog.ast
+            n: (prog.ast.nodes.getView i: mn.nodeid)
+            inLoop: false
         ).not then {
             return false
         }
@@ -5419,7 +5425,7 @@ emitNestedControlAssign: function {
             :prog
             :ctx
             listTid: ltid
-            forNode: (prog.ast.nodes.get i: mn.nodeid)
+            forNode: (prog.ast.nodes.getView i: mn.nodeid)
             listCb: lcb.stringView
             listVar: listVar.stringView
             :ind
@@ -5482,7 +5488,7 @@ emitStatementBlock: function {
     nst: stmts.count.u64
     for i < nst loop {
         stmtId: zast.kidAt kids: prog.ast.kids span: stmts :i
-        s: prog.ast.nodes.get i: stmtId
+        s: prog.ast.nodes.getView i: stmtId
         tailNow: false
         if trTail when (i + 1) == nst then tailNow = true
         handled: false
@@ -5586,7 +5592,7 @@ emitAppendedValueMoves: function {
             emitAppendedValueMoves
             :prog
             :ctx
-            n: (prog.ast.nodes.get i: n.statementline)
+            n: (prog.ast.nodes.getView i: n.statementline)
             :ind
             :buf
         )
@@ -5615,7 +5621,7 @@ emitComprehensionNode: function {
         si: u64
         for si < cnt loop {
             stId: zast.kidAt kids: prog.ast.kids span: n.statements i: si
-            st: prog.ast.nodes.get i: stId
+            st: prog.ast.nodes.getView i: stId
             if si == (cnt - 1) then {
                 marked: linemarks.open :prog :ctx n: st :buf
                 av: emitExpr :prog :ctx n: st
@@ -5776,7 +5782,7 @@ isYieldNode: function {prog: Program.view n: astnode.view} out bool is {
     match (
         n
     ) case statementline then {
-        return (isYieldNode :prog n: (prog.ast.nodes.get i: n.statementline))
+        return (isYieldNode :prog n: (prog.ast.nodes.getView i: n.statementline))
     } case call then {
         return (zast.isYieldCalleeAt ast: prog.ast callableId: n.callable)
     } else {

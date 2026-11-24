@@ -165,29 +165,29 @@ refBorrowCalleeFid: function {
     match (
         n
     ) case statementline then {
-        return (refBorrowCalleeFid :prog :ctx n: (prog.ast.nodes.get i: n.statementline))
+        return (refBorrowCalleeFid :prog :ctx n: (prog.ast.nodes.getView i: n.statementline))
     } case call then {
-        cid: stampIdOf :prog nid: (interpPartNodeId n: (prog.ast.nodes.get i: n.callable))
+        cid: stampIdOf :prog nid: (interpPartNodeId n: (prog.ast.nodes.getView i: n.callable))
         if (prog.typing.returnsReference tid: cid) then return cid
-        ch8: callorder.aliasChildName :prog n: (prog.ast.nodes.get i: n.callable)
+        ch8: callorder.aliasChildName :prog n: (prog.ast.nodes.getView i: n.callable)
         if ch8.length == 0 then return ztypes.tid.zero
         recvTid: (
             memberreads.dottedReceiverStampId
             :prog
-            callable: (prog.ast.nodes.get i: n.callable)
+            callable: (prog.ast.nodes.getView i: n.callable)
         )
         recvTid = (
             callorder.typedefMethodOwner
             :prog
             :ctx
             tid: recvTid
-            mnId: (aliasChildNameId :prog n: (prog.ast.nodes.get i: n.callable))
+            mnId: (aliasChildNameId :prog n: (prog.ast.nodes.getView i: n.callable))
         )
         mf8: (
             (
                 prog.typing.declChildOfId
                 parentTypeId: recvTid
-                nameId: (aliasChildNameId :prog n: (prog.ast.nodes.get i: n.callable))
+                nameId: (aliasChildNameId :prog n: (prog.ast.nodes.getView i: n.callable))
             ).or
             d: ztypes.tid.zero
         )
@@ -196,7 +196,7 @@ refBorrowCalleeFid: function {
     } case dottedpath then {
         # a zero-arg method auto-call reads as a dotted path
         ch7: aliasOrChildId :prog aliasId: n.nodeid childId: n.child
-        pt7: stampIdOf :prog nid: (interpPartNodeId n: (prog.ast.nodes.get i: n.parent))
+        pt7: stampIdOf :prog nid: (interpPartNodeId n: (prog.ast.nodes.getView i: n.parent))
         cc7: prog.typing.declChildOfId parentTypeId: pt7 nameId: ch7
         match (
             cc7
@@ -229,7 +229,7 @@ rhsBorrowMarkerBase: function {
             (aliasOrChildId :prog aliasId: n.nodeid childId: n.child) !=
             zast.wellKnown.slot.wkBorrow
         ) then return zast.nodeid
-        pidB: interpPartNodeId n: (prog.ast.nodes.get i: n.parent)
+        pidB: interpPartNodeId n: (prog.ast.nodes.getView i: n.parent)
         bst: stampIdOf :prog nid: pidB
         if bst.isZero then return zast.nodeid
         if (prog.reg.isReftypeOf tid: bst).not then return zast.nodeid
@@ -312,7 +312,7 @@ valueStructRefNode: function {
     match (
         n
     ) case statementline then {
-        return (valueStructRefNode :prog :ctx n: (prog.ast.nodes.get i: n.statementline))
+        return (valueStructRefNode :prog :ctx n: (prog.ast.nodes.getView i: n.statementline))
     } case call then null case dottedpath then null else {
         return zast.nodeid
     }
@@ -350,7 +350,7 @@ emitBorrowAliasBind: function {
     tmp: FnTemps
     buf: String.borrow
 } out bool is {
-    avn: prog.ast.nodes.get i: n.value
+    avn: prog.ast.nodes.getView i: n.value
     ab: aliasBaseOf :prog :ctx :n :avn
     # the type questions come AFTER the shape one: a binding that borrows
     # nothing is the common case, and it leaves here without paying for them
@@ -364,7 +364,7 @@ emitBorrowAliasBind: function {
     # a VALTYPE place read is a real copy -- the binding is its own value, and
     # aliasing it would make a write through it reach the source
     if placeLeg when (prog.reg.isReftypeOf tid: btid).not then return false
-    base: prog.ast.nodes.get i: ab.node
+    base: prog.ast.nodes.getView i: ab.node
     hmk: pendingHoistMark stmt: ctx.stmt
     rvmF: exprfacts
     rvm: emitExprWith :prog :ctx n: base facts: rvmF
@@ -417,9 +417,9 @@ rhsIsBorrowGet: function {
     match (
         n
     ) case statementline then {
-        return (rhsIsBorrowGet :prog :ctx n: (prog.ast.nodes.get i: n.statementline))
+        return (rhsIsBorrowGet :prog :ctx n: (prog.ast.nodes.getView i: n.statementline))
     } case call then {
-        cbl: prog.ast.nodes.get i: n.callable
+        cbl: prog.ast.nodes.getView i: n.callable
         chId: aliasChildNameId :prog n: cbl
         isMut: (chId == zast.wellKnown.slot.wkGetMut) or (chId == zast.wellKnown.slot.wkGetView)
         if isMut.not when (chId == zast.wellKnown.slot.wkGet).not then return false
@@ -475,7 +475,7 @@ pathRootsAtVariable: function {
     } case labelvalue then {
         return (atomVid :prog nid: n.nodeid).notZero
     } case dottedpath then {
-        return (pathRootsAtVariable :prog n: (prog.ast.nodes.get i: n.parent))
+        return (pathRootsAtVariable :prog n: (prog.ast.nodes.getView i: n.parent))
     } else {
         return false
     }
@@ -512,11 +512,11 @@ rhsIsBorrowedFieldRead: function {
     match (
         n
     ) case statementline then {
-        sfr: prog.ast.nodes.get i: n.statementline
+        sfr: prog.ast.nodes.getView i: n.statementline
         return (rhsIsBorrowedFieldRead :prog :ctx :abind n: sfr)
     } case dottedpath then {
-        dn: prog.ast.nodes.get i: n.nodeid
-        rtn: prog.ast.nodes.get i: n.parent
+        dn: prog.ast.nodes.getView i: n.nodeid
+        rtn: prog.ast.nodes.getView i: n.parent
         if (pathRootsAtVariable :prog n: rtn).not when (
             values.borrowedPointerField
             :prog
@@ -524,7 +524,7 @@ rhsIsBorrowedFieldRead: function {
             :n
         ).not then return false
         if (bindingVarIsBorrowed :prog n: abind).not then return false
-        fpid: interpPartNodeId n: (prog.ast.nodes.get i: n.parent)
+        fpid: interpPartNodeId n: (prog.ast.nodes.getView i: n.parent)
         fco: (
             prog.typing.declChildOfId
             parentTypeId: (stampIdOf :prog nid: fpid)
@@ -681,7 +681,7 @@ withBorrowsPlace: function {
     vid: ztypes.vid
 } out bool is {
     if vid.isZero then return false
-    wv: prog.ast.nodes.get i: n.value
+    wv: prog.ast.nodes.getView i: n.value
     if (nodeIsBareAtom n: wv).not when (rhsIsBorrowGet :prog :ctx n: wv).not then return false
     if (prog.reg.variableOwnershipOf id: vid) != ztypes.zownership.borrowed then return false
     return (prog.reg.isReftypeOf tid: (prog.reg.variableTypeOf id: vid))
@@ -703,14 +703,14 @@ emitWithLocal: function {
 } is {
     wc: wct.string
     # `with v: src.borrow`: the alias is a pointer to its source
-    bmbW: rhsBorrowMarkerBase :prog n: (prog.ast.nodes.get i: n.value)
+    bmbW: rhsBorrowMarkerBase :prog n: (prog.ast.nodes.getView i: n.value)
     if bmbW.notZero then {
         addrW: "&"
         if (
             pathIsPointer
             :prog
             :ctx
-            n: (prog.ast.nodes.get i: bmbW)
+            n: (prog.ast.nodes.getView i: bmbW)
         ) then addrW = ""
         lw0: "\{ind}\{wc}* __borrow_\{wnm} = \{addrW}\{wv};\n"
         buf.append lw0
@@ -725,7 +725,7 @@ emitWithLocal: function {
     wvid: defVid :prog nid: n.nodeid
     if (withBorrowsPlace :prog :ctx :n vid: wvid) then {
         addrP: "&"
-        if (pathIsPointer :prog :ctx n: (prog.ast.nodes.get i: n.value)) then addrP = ""
+        if (pathIsPointer :prog :ctx n: (prog.ast.nodes.getView i: n.value)) then addrP = ""
         preludeNeed :ctx memb: "@typeof"
         lp0: "\{ind}Z_TYPEOF(\{addrP}\{wv}) __borrow_\{wnm} = \{addrP}\{wv};\n"
         buf.append lp0
@@ -735,7 +735,7 @@ emitWithLocal: function {
         return
     }
     wvC: wv.string
-    wrb: refBorrowCalleeFid :prog :ctx n: (prog.ast.nodes.get i: n.value)
+    wrb: refBorrowCalleeFid :prog :ctx n: (prog.ast.nodes.getView i: n.value)
     if wrb.notZero when (fnReturnsRefBorrow :prog :ctx fid: wrb retTid: wsid) then {
         wctP: refPtrC :prog tid: wrb base: wc.stringView
         wc = wctP.take
@@ -744,7 +744,7 @@ emitWithLocal: function {
             unloadValueStructRef
             :prog
             :ctx
-            n: (prog.ast.nodes.get i: n.value)
+            n: (prog.ast.nodes.getView i: n.value)
             e: wvC.stringView
         )
     }
@@ -776,7 +776,7 @@ objIterForNamed: function {
     # an `each` binding the checker walked through an implied `.iterate` is
     # emitted from the `E.iterate` node it minted, as the written call would be
     cOp = (prog.typing.forImplicitIterate.get key: cNid).or d: cOp
-    lblV: defVid :prog nid: (interpPartNodeId n: (prog.ast.nodes.get i: cOp))
+    lblV: defVid :prog nid: (interpPartNodeId n: (prog.ast.nodes.getView i: cOp))
     lbl: varCName known: ctx.known :prog vid: lblV
     tids: emitplan.objIterIterableTid :prog :cOp
     if tids.itid.isZero then return false
@@ -822,7 +822,7 @@ emitObjIterFor: function {
 } out bool is {
     if m.conditions.count.u64 == 0 then return false
     c0Id: zast.kidAt kids: prog.ast.kids span: m.conditions i: 0
-    c0: prog.ast.nodes.get i: c0Id
+    c0: prog.ast.nodes.getView i: c0Id
     match (
         c0
     ) case namedoperation then {
@@ -861,13 +861,13 @@ emitIntRangeFor: function {
 } out bool is {
     if m.conditions.count.u64 == 0 then return false
     c0Id: zast.kidAt kids: prog.ast.kids span: m.conditions i: 0
-    c0: prog.ast.nodes.get i: c0Id
+    c0: prog.ast.nodes.getView i: c0Id
     match (
         c0
     ) case namedoperation then {
         labelText: zast.nameTextAt ast: prog.ast ref: c0.name
         if labelText.length == 0 then return false
-        labelVid: defVid :prog nid: (interpPartNodeId n: (prog.ast.nodes.get i: c0.operation))
+        labelVid: defVid :prog nid: (interpPartNodeId n: (prog.ast.nodes.getView i: c0.operation))
         lbl: if labelVid.isZero then nameCName :ctx name: labelText.stringView else (
             varCName
             known: ctx.known
@@ -878,13 +878,13 @@ emitIntRangeFor: function {
         # closed range's receiver is its start, not its bound, so it has no
         # bound to read and the half-open leg would decline the header and hand
         # it to the object path to build a cursor.
-        crM: forloops.closedRangeMemberOf :prog n: (prog.ast.nodes.get i: c0.operation)
+        crM: forloops.closedRangeMemberOf :prog n: (prog.ast.nodes.getView i: c0.operation)
         if crM.notZero then return (
             forloops.emitClosedRangeFor
             :prog
             :ctx
             :m
-            n: (prog.ast.nodes.get i: c0.operation)
+            n: (prog.ast.nodes.getView i: c0.operation)
             lbl: lbl.stringView
             down: crM == zast.wellKnown.slot.wkDownto
             :ind
@@ -896,7 +896,7 @@ emitIntRangeFor: function {
             :prog
             :ctx
             :m
-            n: (prog.ast.nodes.get i: c0.operation)
+            n: (prog.ast.nodes.getView i: c0.operation)
             lbl: lbl.stringView
             :ind
             :tmp

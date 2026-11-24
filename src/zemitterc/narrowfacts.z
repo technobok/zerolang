@@ -212,7 +212,7 @@ typedefBorrowSource: function {
     match (
         n
     ) case statementline then {
-        return (typedefBorrowSource :prog n: (prog.ast.nodes.get i: n.statementline))
+        return (typedefBorrowSource :prog n: (prog.ast.nodes.getView i: n.statementline))
     } case call then {
         ck: prog.typing.callKind.get key: n.nodeid
         if ck.none then return zast.nodeid
@@ -227,7 +227,7 @@ typedefBorrowSource: function {
 # one unlabelled argument; 0 when it has neither.
 castSourceArg: function {prog: Program.view call: zast.callrow.view} out zast.nodeid is {
     for each aId: (zast.kidsOf ast: prog.ast span: call.arguments) loop {
-        a: prog.ast.nodes.get i: aId
+        a: prog.ast.nodes.getView i: aId
         if a.namedoperation when (
             a.name.isZero or (a.name == zast.wellKnown.slot.wkFrom)
         ) then return a.operation
@@ -239,7 +239,7 @@ castSourceArg: function {prog: Program.view call: zast.callrow.view} out zast.no
 # `xs.borrow`), else the node itself.
 underBorrowMarker: function {prog: Program.view nid: zast.nodeid} out zast.nodeid is {
     if nid.isZero then return zast.nodeid
-    src: prog.ast.nodes.get i: nid
+    src: prog.ast.nodes.getView i: nid
     if src.dottedpath.not then return nid
     if (
         (aliasOrChildId :prog aliasId: src.nodeid childId: src.child) !=
@@ -510,7 +510,7 @@ emitReassignStmt: function {
         emitRepointStmt :prog :ctx :n :ind :tmp :buf
         return
     }
-    topathNode: prog.ast.nodes.get i: n.topath
+    topathNode: prog.ast.nodes.getView i: n.topath
     nm2: emitReassignLvalue :prog :ctx n: topathNode
     rtnid: interpPartNodeId n: topathNode
     # a collection-typedef lvalue (Bytes) stores and destroys as its
@@ -536,7 +536,7 @@ emitReassignStmt: function {
         nm2: nm2.stringView
         :rtnid
         :rtsid
-        valueNode: (prog.ast.nodes.get i: n.value)
+        valueNode: (prog.ast.nodes.getView i: n.value)
         :destroyOld
         :ind
         :tmp
@@ -558,7 +558,7 @@ emitRepointStmt: function {
     tmp: FnTemps
     buf: String.borrow
 } is {
-    topathNode: prog.ast.nodes.get i: n.topath
+    topathNode: prog.ast.nodes.getView i: n.topath
     tgt: emitReassignLvalue :prog :ctx n: topathNode
     xv: atomVid :prog nid: (atomNodeId n: topathNode)
     ptr: String
@@ -585,7 +585,7 @@ emitRepointStmt: function {
         )
         return
     }
-    base: prog.ast.nodes.get i: (underBorrowMarker :prog nid: n.value)
+    base: prog.ast.nodes.getView i: (underBorrowMarker :prog nid: n.value)
     rvm: emitExpr :prog :ctx n: base
     flushArgHoists :ctx :ind :tmp :buf
     if ptr.length > 0 then {
@@ -655,10 +655,10 @@ emitReassignLvalue: function {
         ba: (
             zast.nameTextAt
             ast: prog.ast
-            ref: (zast.atomNameIdOf n: (prog.ast.nodes.get i: n.parent))
+            ref: (zast.atomNameIdOf n: (prog.ast.nodes.getView i: n.parent))
         )
         if ba.length > 0 then {
-            baseVid: atomVid :prog nid: (atomNodeId n: (prog.ast.nodes.get i: n.parent))
+            baseVid: atomVid :prog nid: (atomNodeId n: (prog.ast.nodes.getView i: n.parent))
             nbo: varEntryGet xs: ctx.narrow.box vid: baseVid
             if nbo.length > 0 then {
                 # the write spells the alias, and with it the payload's type
@@ -676,7 +676,7 @@ emitReassignLvalue: function {
             }
         }
         memFpId: aliasOrChildId :prog aliasId: n.nodeid childId: n.child
-        rpnid: interpPartNodeId n: (prog.ast.nodes.get i: n.parent)
+        rpnid: interpPartNodeId n: (prog.ast.nodes.getView i: n.parent)
         stampTid: stampIdOf :prog nid: rpnid
         rsc: stampTid
         rsFp: stampTid
@@ -686,12 +686,12 @@ emitReassignLvalue: function {
             recvFp: (
                 zast.nameTextAt
                 ast: prog.ast
-                ref: (zast.atomNameIdOf n: (prog.ast.nodes.get i: n.parent))
+                ref: (zast.atomNameIdOf n: (prog.ast.nodes.getView i: n.parent))
             )
             accFpL: ".".string
             recvFpC: String
             if recvFp.length > 0 then {
-                rfn: atomNodeId n: (prog.ast.nodes.get i: n.parent)
+                rfn: atomNodeId n: (prog.ast.nodes.getView i: n.parent)
                 rfv: atomVid :prog nid: rfn
                 if (isPtrVid :ctx vid: rfv) then accFpL = "->".string
                 rfF: exprfacts
@@ -707,8 +707,8 @@ emitReassignLvalue: function {
             } else {
                 # a field reached through a path (`this.inner.zero`): the path
                 # itself, through `->` when it resolves to a pointer
-                recvFpC = emitExpr :prog :ctx n: (prog.ast.nodes.get i: n.parent)
-                if (pathIsPointer :prog :ctx n: (prog.ast.nodes.get i: n.parent)
+                recvFpC = emitExpr :prog :ctx n: (prog.ast.nodes.getView i: n.parent)
+                if (pathIsPointer :prog :ctx n: (prog.ast.nodes.getView i: n.parent)
                 ) then accFpL = "->".string
             }
             memFpC: (
@@ -789,7 +789,7 @@ seedFromPredicate: function {
             :prog
             :ctx
             tid: armTid
-            parent: (prog.ast.nodes.get i: n.parent)
+            parent: (prog.ast.nodes.getView i: n.parent)
             childName: armId
             :names
             :svids
@@ -869,14 +869,14 @@ seedNegatedFromPredicate: function {
         dap: dottedArmPredicateTid :prog nid: n.nodeid
         if dap.isZero then return
         if (isOrdinalVariant :prog tid: dap) then return
-        subj: atomTextOf :prog n: (prog.ast.nodes.get i: n.parent)
+        subj: atomTextOf :prog n: (prog.ast.nodes.getView i: n.parent)
         if subj.length == 0 then return
-        snv: atomVid :prog nid: (atomNodeId n: (prog.ast.nodes.get i: n.parent))
+        snv: atomVid :prog nid: (atomNodeId n: (prog.ast.nodes.getView i: n.parent))
         ctorArmName: aliasOrChildId :prog aliasId: n.nodeid childId: n.child
         rem: remainingArm :prog narrow: ctx.narrow subjVid: snv tid: dap extra: ctorArmName
         if rem.isZero then return
         recvF: exprfacts
-        recvText: emitExprWith :prog :ctx n: (prog.ast.nodes.get i: n.parent) facts: recvF
+        recvText: emitExprWith :prog :ctx n: (prog.ast.nodes.getView i: n.parent) facts: recvF
         accessOp: ".".string
         if (isPtrVid :ctx vid: snv) then accessOp = "->".string
         aliasF: exprfacts
@@ -955,27 +955,27 @@ seedEqualityCond: function {
     # the operator node is read ONCE: as a repeated subexpression it is emitted
     # per use, and the hoisted temporaries the uses it loses leave behind are a
     # warn-check failure
-    opNS: prog.ast.nodes.get i: ipS.operator
+    opNS: prog.ast.nodes.getView i: ipS.operator
     if (zast.atomNameIdOf n: opNS) != zast.wellKnown.slot.wkOpEq then return false
-    lsdS: boolArmSideOf :prog n: (prog.ast.nodes.get i: ipS.lhs)
-    rsdS: boolArmSideOf :prog n: (prog.ast.nodes.get i: ipS.rhs)
+    lsdS: boolArmSideOf :prog n: (prog.ast.nodes.getView i: ipS.lhs)
+    rsdS: boolArmSideOf :prog n: (prog.ast.nodes.getView i: ipS.rhs)
     if rsdS.truthy then {
-        blS: prog.ast.nodes.get i: ipS.lhs
+        blS: prog.ast.nodes.getView i: ipS.lhs
         seedFromPredicate :prog :ctx n: blS :names :svids :vals :valFs :tids
         return true
     }
     if rsdS.falsy then {
-        lnS: prog.ast.nodes.get i: ipS.lhs
+        lnS: prog.ast.nodes.getView i: ipS.lhs
         seedNegatedFromPredicate :prog :ctx n: lnS :names :svids :vals :valFs :tids
         return true
     }
     if lsdS.truthy then {
-        brS: prog.ast.nodes.get i: ipS.rhs
+        brS: prog.ast.nodes.getView i: ipS.rhs
         seedFromPredicate :prog :ctx n: brS :names :svids :vals :valFs :tids
         return true
     }
     if lsdS.falsy then {
-        rnS: prog.ast.nodes.get i: ipS.rhs
+        rnS: prog.ast.nodes.getView i: ipS.rhs
         seedNegatedFromPredicate :prog :ctx n: rnS :names :svids :vals :valFs :tids
         return true
     }
@@ -1028,16 +1028,16 @@ seedCondOp: function {
             ast: prog.ast
             typing: prog.typing
             nid: n.nodeid
-            parent: (prog.ast.nodes.get i: n.parent)
-            child: (prog.ast.nodes.get i: n.child)
+            parent: (prog.ast.nodes.getView i: n.parent)
+            child: (prog.ast.nodes.getView i: n.child)
         )
         if sd.truthy then {
-            dpp: prog.ast.nodes.get i: n.parent
+            dpp: prog.ast.nodes.getView i: n.parent
             seedFromPredicate :prog :ctx n: dpp :names :svids :vals :valFs :tids
             return
         }
         if sd.falsy then {
-            dpq: prog.ast.nodes.get i: n.parent
+            dpq: prog.ast.nodes.getView i: n.parent
             seedNegatedFromPredicate :prog :ctx n: dpq :names :svids :vals :valFs :tids
             return
         }
@@ -1047,7 +1047,7 @@ seedCondOp: function {
             :prog
             :ctx
             tid: armTid
-            parent: (prog.ast.nodes.get i: n.parent)
+            parent: (prog.ast.nodes.getView i: n.parent)
             childName: cn
             :names
             :svids
@@ -1071,13 +1071,13 @@ seedCondOne: function {
     valFs: ListVal exprfacts
     tids: ListVal ztypes.tid
 } is {
-    k: prog.ast.nodes.get i: condId
+    k: prog.ast.nodes.getView i: condId
     if k.namedoperation then {
         (
             seedCondOp
             :prog
             :ctx
-            n: (prog.ast.nodes.get i: k.operation)
+            n: (prog.ast.nodes.getView i: k.operation)
             :names
             :svids
             :vals
@@ -1123,9 +1123,9 @@ layerCondExclusion: function {
     narrow: NarrowState
     condId: zast.nodeid
 } is {
-    k: prog.ast.nodes.get i: condId
+    k: prog.ast.nodes.getView i: condId
     if k.namedoperation.not then return
-    f: classifyCondFact :prog n: (prog.ast.nodes.get i: k.operation)
+    f: classifyCondFact :prog n: (prog.ast.nodes.getView i: k.operation)
     if f.ok.not then return
     if f.neg.not then return
     pushExclusion :narrow vid: f.svid arm: f.armRef owner: f.owner
@@ -1200,13 +1200,13 @@ ifPredicateSeeds: function {
     tids: ListVal ztypes.tid
 } is {
     for each condId: (zast.kidsOf ast: prog.ast span: conds) loop {
-        k: prog.ast.nodes.get i: condId
+        k: prog.ast.nodes.getView i: condId
         if k.namedoperation then {
             (
                 seedCondOp
                 :prog
                 :ctx
-                n: (prog.ast.nodes.get i: k.operation)
+                n: (prog.ast.nodes.getView i: k.operation)
                 :names
                 :svids
                 :vals
@@ -1261,7 +1261,7 @@ classifyFactCore: function {
     noFact: noArmFact
     if owner.isZero then return noFact
     if (isOrdinalVariant :prog tid: owner) then return noFact
-    parent: prog.ast.nodes.get i: parentNid
+    parent: prog.ast.nodes.getView i: parentNid
     subj: atomTextOf :prog n: parent
     if subj.length == 0 then return noFact
     return (
@@ -1318,29 +1318,29 @@ classifyEqualityCond: function {
     ipC: zast.infixPartsOf ast: prog.ast :n
     if ipC.found.not then return miss
     # read ONCE, as in seedEqualityCond
-    opNC: prog.ast.nodes.get i: ipC.operator
+    opNC: prog.ast.nodes.getView i: ipC.operator
     if (zast.atomNameIdOf n: opNC) != zast.wellKnown.slot.wkOpEq then return miss
-    lsdC: boolArmSideOf :prog n: (prog.ast.nodes.get i: ipC.lhs)
-    rsdC: boolArmSideOf :prog n: (prog.ast.nodes.get i: ipC.rhs)
+    lsdC: boolArmSideOf :prog n: (prog.ast.nodes.getView i: ipC.lhs)
+    rsdC: boolArmSideOf :prog n: (prog.ast.nodes.getView i: ipC.rhs)
     if rsdC.truthy then return (
         eqcondfact
         handled: true
-        fact: (classifyInnerFact :prog n: (prog.ast.nodes.get i: ipC.lhs) neg: false)
+        fact: (classifyInnerFact :prog n: (prog.ast.nodes.getView i: ipC.lhs) neg: false)
     )
     if rsdC.falsy then return (
         eqcondfact
         handled: true
-        fact: (classifyInnerFact :prog n: (prog.ast.nodes.get i: ipC.lhs) neg: true)
+        fact: (classifyInnerFact :prog n: (prog.ast.nodes.getView i: ipC.lhs) neg: true)
     )
     if lsdC.truthy then return (
         eqcondfact
         handled: true
-        fact: (classifyInnerFact :prog n: (prog.ast.nodes.get i: ipC.rhs) neg: false)
+        fact: (classifyInnerFact :prog n: (prog.ast.nodes.getView i: ipC.rhs) neg: false)
     )
     if lsdC.falsy then return (
         eqcondfact
         handled: true
-        fact: (classifyInnerFact :prog n: (prog.ast.nodes.get i: ipC.rhs) neg: true)
+        fact: (classifyInnerFact :prog n: (prog.ast.nodes.getView i: ipC.rhs) neg: true)
     )
     return (eqcondfact handled: true fact: noArmFact)
 }
@@ -1381,14 +1381,14 @@ classifyCondFact: function {
             ast: prog.ast
             typing: prog.typing
             nid: n.nodeid
-            parent: (prog.ast.nodes.get i: n.parent)
-            child: (prog.ast.nodes.get i: n.child)
+            parent: (prog.ast.nodes.getView i: n.parent)
+            child: (prog.ast.nodes.getView i: n.child)
         )
         if sd.truthy then {
-            return (classifyInnerFact :prog n: (prog.ast.nodes.get i: n.parent) neg: false)
+            return (classifyInnerFact :prog n: (prog.ast.nodes.getView i: n.parent) neg: false)
         }
         if sd.falsy then {
-            return (classifyInnerFact :prog n: (prog.ast.nodes.get i: n.parent) neg: true)
+            return (classifyInnerFact :prog n: (prog.ast.nodes.getView i: n.parent) neg: true)
         }
         return (
             classifyFactCore
@@ -1427,7 +1427,7 @@ ChainFacts: class {
 chainCondFact: function {prog: Program.view ctx: Ctx n: astnode.view facts: ChainFacts} is {
     f: classifyCondFact :prog :n
     if f.ok.not then return
-    parent: prog.ast.nodes.get i: f.parentNid
+    parent: prog.ast.nodes.getView i: f.parentNid
     subj: atomTextOf :prog n: parent
     rvF: exprfacts
     rv: emitExprWith :prog :ctx n: parent facts: rvF
@@ -1528,7 +1528,7 @@ postGuardStmtId: function {
     match (
         n
     ) case statementline then {
-        return (postGuardStmtId :prog n: (prog.ast.nodes.get i: n.statementline))
+        return (postGuardStmtId :prog n: (prog.ast.nodes.getView i: n.statementline))
     } case ifexpr then {
         po: prog.typing.postGuardName.get key: n.nodeid
         match (

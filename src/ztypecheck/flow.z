@@ -9,11 +9,11 @@ blockEndsInReturn: function {ast: Ast.view block: astnode.view} out bool is {
         ne: block.statements.count.u64
         if ne > 0 then {
             lastId: zast.kidAt kids: ast.kids span: block.statements i: ne - 1
-            last: ast.nodes.get i: lastId
+            last: ast.nodes.getView i: lastId
             match (
                 last
             ) case statementline then {
-                return (exprCallIsReturn :ast op: (ast.nodes.get i: last.statementline))
+                return (exprCallIsReturn :ast op: (ast.nodes.getView i: last.statementline))
             } else {
                 return false
             }
@@ -30,7 +30,9 @@ exprCallIsReturn: function {ast: Ast.view op: astnode.view} out bool is {
     match (
         op
     ) case call then {
-        return (atomNameId :ast n: (ast.nodes.get i: op.callable)) == zast.wellKnown.slot.wkReturn
+        return (
+            (atomNameId :ast n: (ast.nodes.getView i: op.callable)) == zast.wellKnown.slot.wkReturn
+        )
     } else {
         return false
     }
@@ -113,7 +115,7 @@ recordConstMatchFold: function {
     unitDecl: ztypes.declid
     casenode: caseref
 } is {
-    sn: atomNameId :ast n: (ast.nodes.get i: casenode.subject)
+    sn: atomNameId :ast n: (ast.nodes.getView i: casenode.subject)
     if sn.isZero then return
     v: constSumValueOf :st :ast :unitDecl nameId: sn
     if v.kind.none then return
@@ -253,7 +255,7 @@ checkClauseConditions: function {
             # not only for the body: `when` short-circuits, so a later conjunct
             # runs only where this one held. Applying it here is what makes
             # `if x.some when x > 3` mean what the nested form means.
-            fo: consteval.predFactOf :ast :st n: (ast.nodes.get i: cond.operation) :boolId
+            fo: consteval.predFactOf :ast :st n: (ast.nodes.getView i: cond.operation) :boolId
             if fo.some then {
                 pf: fo.take
                 applyPredFact :ast :st f: pf holds: true
@@ -272,7 +274,7 @@ checkClauseBody: function {
 } out ztypes.tid is {
     if clause.nid.isZero then return ztypes.tid.zero
     checkStatement :st :unitDecl :ast blockId: clause.statement
-    return (lastStmtType :st :ast block: (ast.nodes.get i: clause.statement))
+    return (lastStmtType :st :ast block: (ast.nodes.getView i: clause.statement))
 }
 
 # lastStmtType -- the type of what a statement block yields (the value of a
@@ -290,7 +292,7 @@ lastStmtType: function {
         ne: block.statements.count.u64
         if ne > 0 then {
             lastId: zast.kidAt kids: ast.kids span: block.statements i: ne - 1
-            last: ast.nodes.get i: lastId
+            last: ast.nodes.getView i: lastId
             if last.statementline then {
                 lst: walkTypeOf :st nid: last.nodeid
                 if lst.notZero then result = lst
@@ -315,7 +317,7 @@ lastStmtType: function {
 # position the body's value is an arm's: a control value's arms agree on one
 # type (moves.armValueOf), as a binding's do.
 forBodyValueTid: function {st: zenv.ZSymbolTable ast: Ast fornode: forref} out ztypes.tid is {
-    elemT: lastStmtType :st :ast block: (ast.nodes.get i: fornode.body)
+    elemT: lastStmtType :st :ast block: (ast.nodes.getView i: fornode.body)
     if (st.walk.stmtBlocks.has item: fornode.body) then return elemT
     av: moves.armValueOf :st :ast blockId: fornode.body
     if av.nid.notZero then return av.tid
@@ -337,7 +339,7 @@ refuseUnitValue: function {
     ut: statics.typeExprText :ast :nid
     ln: u32
     co: u32
-    vn: ast.nodes.get i: nid
+    vn: ast.nodes.getView i: nid
     ln = nodeLine n: vn
     co = nodeCol n: vn
     (
@@ -396,7 +398,7 @@ blockHasBreak: function {ast: Ast.view n: astnode.view} out bool is {
     for i < nk loop {
         k: zast.childAt :ast :n :i
         i = i + 1
-        if (blockHasBreak :ast n: (ast.nodes.get i: k)) then return true
+        if (blockHasBreak :ast n: (ast.nodes.getView i: k)) then return true
     }
     return false
 }
@@ -412,7 +414,7 @@ armLeaves: function {ast: Ast.view n: astnode.view inLoop: bool} out bool is {
     ) case statement then {
         return (statementsLeave :ast span: n.statements :inLoop)
     } case statementline then {
-        return (armLeaves :ast n: (ast.nodes.get i: n.statementline) :inLoop)
+        return (armLeaves :ast n: (ast.nodes.getView i: n.statementline) :inLoop)
     } case atomid then {
         if n.name == zast.wellKnown.slot.wkReturn then return true
         if inLoop then return false
@@ -422,16 +424,16 @@ armLeaves: function {ast: Ast.view n: astnode.view inLoop: bool} out bool is {
     } case caseexpr then {
         return (clauseArmsLeave :ast clauses: n.clauses elseId: n.elseclause :inLoop)
     } case withexpr then {
-        return (armLeaves :ast n: (ast.nodes.get i: n.body) :inLoop)
+        return (armLeaves :ast n: (ast.nodes.getView i: n.body) :inLoop)
     } case forexpr then {
         if n.body.isZero then return false
-        return (armLeaves :ast n: (ast.nodes.get i: n.body) inLoop: true)
+        return (armLeaves :ast n: (ast.nodes.getView i: n.body) inLoop: true)
     } case doexpr then {
-        return (armLeaves :ast n: (ast.nodes.get i: n.statement) inLoop: true)
+        return (armLeaves :ast n: (ast.nodes.getView i: n.statement) inLoop: true)
     } case assignment then {
-        return (armLeaves :ast n: (ast.nodes.get i: n.value) :inLoop)
+        return (armLeaves :ast n: (ast.nodes.getView i: n.value) :inLoop)
     } case reassignment then {
-        return (armLeaves :ast n: (ast.nodes.get i: n.value) :inLoop)
+        return (armLeaves :ast n: (ast.nodes.getView i: n.value) :inLoop)
     } else {
         return (exprCallIsReturn :ast op: n)
     }
@@ -440,7 +442,7 @@ armLeaves: function {ast: Ast.view n: astnode.view inLoop: bool} out bool is {
 # statementsLeave -- armLeaves over a block's statements.
 statementsLeave: function {ast: Ast.view span: zast.kidspan inLoop: bool} out bool is {
     for each sId: (zast.kidsOf :ast :span) loop {
-        if (armLeaves :ast n: (ast.nodes.get i: sId) :inLoop) then return true
+        if (armLeaves :ast n: (ast.nodes.getView i: sId) :inLoop) then return true
     }
     return false
 }
@@ -453,10 +455,10 @@ clauseArmsLeave: function {
     inLoop: bool
 } out bool is {
     for each cId: (zast.kidsOf :ast span: clauses) loop {
-        if (clauseArmLeaves :ast cl: (ast.nodes.get i: cId) :inLoop) then return true
+        if (clauseArmLeaves :ast cl: (ast.nodes.getView i: cId) :inLoop) then return true
     }
     if elseId.isZero then return false
-    return (armLeaves :ast n: (ast.nodes.get i: elseId) :inLoop)
+    return (armLeaves :ast n: (ast.nodes.getView i: elseId) :inLoop)
 }
 
 # clauseArmLeaves -- armLeaves over one `if` or `case` clause's body.
@@ -464,9 +466,9 @@ clauseArmLeaves: function {ast: Ast.view cl: astnode.view inLoop: bool} out bool
     match (
         cl
     ) case ifclause then {
-        return (armLeaves :ast n: (ast.nodes.get i: cl.statement) :inLoop)
+        return (armLeaves :ast n: (ast.nodes.getView i: cl.statement) :inLoop)
     } case caseclause then {
-        return (armLeaves :ast n: (ast.nodes.get i: cl.statement) :inLoop)
+        return (armLeaves :ast n: (ast.nodes.getView i: cl.statement) :inLoop)
     } else {
         return false
     }
@@ -490,7 +492,7 @@ refuseLeavingArm: function {
 } is {
     if st.walk.value.stmtExprNid == nid then return
     if st.walk.formValueNid == nid then return
-    if (armLeaves :ast n: (ast.nodes.get i: nid) inLoop: false).not then return
+    if (armLeaves :ast n: (ast.nodes.getView i: nid) inLoop: false).not then return
     (
         addErrorWithHint
         :st
@@ -517,7 +519,7 @@ checkDo: function {
     doMarker: st.pushBlock node: donode.nid
     # a `break` leaves part of the block unrun on some paths: a lock it
     # releases is released on the paths that ran it only
-    doPath: blockHasBreak :ast n: (ast.nodes.get i: donode.statement)
+    doPath: blockHasBreak :ast n: (ast.nodes.getView i: donode.statement)
     if doPath then st.markPath marker: doMarker since: st.releaseMark
     restMark: st.restoreMark
     st.openBreakScope
@@ -525,7 +527,7 @@ checkDo: function {
     st.define nameId: zast.wellKnown.slot.wkBreak ztypeId: dbk
     brkMark: st.loopBreakTakes.length
     checkStatement :st :unitDecl :ast blockId: donode.statement
-    result: lastStmtType :st :ast block: (ast.nodes.get i: donode.statement)
+    result: lastStmtType :st :ast block: (ast.nodes.getView i: donode.statement)
     broke: st.breakLeavesInnermost
     endTook: ListVal ztypes.declid
     if broke then st.takenDeclsInScope into: endTook
@@ -768,12 +770,12 @@ nodeWritesNarrowedName: function {
     t1: zast.nameid
     t2: zast.nameid
     {
-        wn: ast.nodes.get i: nid
+        wn: ast.nodes.getView i: nid
         if wn.functiondef then return false
-        if wn.reassignment then t1 = atomNameId :ast n: (ast.nodes.get i: wn.topath)
+        if wn.reassignment then t1 = atomNameId :ast n: (ast.nodes.getView i: wn.topath)
         if wn.swapstmt then {
-            t1 = atomNameId :ast n: (ast.nodes.get i: wn.lhs)
-            t2 = atomNameId :ast n: (ast.nodes.get i: wn.rhs)
+            t1 = atomNameId :ast n: (ast.nodes.getView i: wn.lhs)
+            t2 = atomNameId :ast n: (ast.nodes.getView i: wn.rhs)
         }
         zast.childIdsInto :ast n: wn acc: work
     }
@@ -854,7 +856,7 @@ readWriteScope: function {
     inner: IdSet zast.nameid
     kids: ListVal zast.nodeid
 } out writescope is {
-    n: ast.nodes.get i: nid
+    n: ast.nodes.getView i: nid
     if n.functiondef then return (writescope walk: false block: false body: zast.nodeid)
     if n.reassignment then addOuterWrite :ast target: n.topath :bound :names
     if n.swapstmt then {
@@ -897,7 +899,7 @@ addOuterWrite: function {
     bound: (IdSet zast.nameid).view
     names: ListVal zast.nameid
 } is {
-    nm: atomNameId :ast n: (ast.nodes.get i: target)
+    nm: atomNameId :ast n: (ast.nodes.getView i: target)
     if nm.isZero then return
     if (bound.has item: nm).not then names.append nm
 }
@@ -906,11 +908,11 @@ addOuterWrite: function {
 # binding (`x: E`, a condition of a loop collectOuterWrites reads as a block):
 # 0 when it binds none.
 bindingNameOfLine: function {ast: Ast.view nid: zast.nodeid} out zast.nameid is {
-    line: ast.nodes.get i: nid
+    line: ast.nodes.getView i: nid
     # a loop's binding (`x: E`) binds its name over what follows it in the loop
     if line.namedoperation then return line.name
     if line.statementline.not then return zast.nameid.zero
-    inner: ast.nodes.get i: line.statementline
+    inner: ast.nodes.getView i: line.statementline
     if inner.assignment then return inner.name
     return zast.nameid.zero
 }
@@ -918,7 +920,7 @@ bindingNameOfLine: function {ast: Ast.view nid: zast.nodeid} out zast.nameid is 
 # forCondBindsName -- the condition is the loop's binding (`x: E`), not one of
 # its `while` tests
 forCondBindsName: function {ast: Ast.view condId: zast.nodeid} out bool is {
-    k: ast.nodes.get i: condId
+    k: ast.nodes.getView i: condId
     if k.namedoperation.not then return false
     return (zast.nameTextAt :ast ref: k.name).length > 0
 }
@@ -1292,7 +1294,7 @@ checkIfClauses: function {
         clause: ifClauseRefAt :ast nid: clauseId
         dead: false
         if clause.nid.notZero then {
-            if (isEmptyBody :st :ast :unitDecl n: (ast.nodes.get i: clause.statement)
+            if (isEmptyBody :st :ast :unitDecl n: (ast.nodes.getView i: clause.statement)
             ) then anyEmpty = true
             if skipDead when clause.statement != fbr.stmt then dead = true
             if clause.statement == fbr.stmt then beforeSelected = false
@@ -1418,18 +1420,18 @@ deadBodyDiverges: function {
     body: zast.nodeid
 } out bool is {
     lastId: body
-    bn: ast.nodes.get i: body
+    bn: ast.nodes.getView i: body
     if bn.statement then {
         if bn.statements.count.u64 == 0 then return false
         sId: zast.kidAt kids: ast.kids span: bn.statements i: bn.statements.count.u64 - 1
-        sl: ast.nodes.get i: sId
+        sl: ast.nodes.getView i: sId
         lastId = sId
         if sl.statementline then lastId = sl.statementline
     }
     head: lastId
-    ln: ast.nodes.get i: lastId
+    ln: ast.nodes.getView i: lastId
     if ln.call then head = ln.callable
-    hn: atomNameId :ast n: (ast.nodes.get i: head)
+    hn: atomNameId :ast n: (ast.nodes.getView i: head)
     builtin: (hn == zast.wellKnown.slot.wkReturn) or (hn == zast.wellKnown.slot.wkBreak)
     builtin = (
         builtin or (hn == zast.wellKnown.slot.wkContinue) or (hn == zast.wellKnown.slot.wkPanic)
@@ -1465,7 +1467,7 @@ layConditionTakes: function {
 
 # branchArmBlocks -- controlArmBlocks for an `if` or a `match`.
 branchArmBlocks: function {ast: Ast.view nid: zast.nodeid into: ListVal zast.nodeid} is {
-    n: ast.nodes.get i: nid
+    n: ast.nodes.getView i: nid
     elseId: zast.nodeid
     if n.ifexpr then {
         k: u64
@@ -1612,7 +1614,7 @@ checkIf: function {
     hasElse: false
     if ifnode.elseclause.notZero then {
         hasElse = true
-        if (isEmptyBody :st :ast :unitDecl n: (ast.nodes.get i: ifnode.elseclause)
+        if (isEmptyBody :st :ast :unitDecl n: (ast.nodes.getView i: ifnode.elseclause)
         ) then anyEmpty = true
         elseDead: false
         if skipDead when ifnode.elseclause != fbr.stmt then elseDead = true
@@ -1626,7 +1628,7 @@ checkIf: function {
                 st.restoreBreakSeen
                 seen: brokeBefore
             )
-            et: lastStmtType :st :ast block: (ast.nodes.get i: ifnode.elseclause)
+            et: lastStmtType :st :ast block: (ast.nodes.getView i: ifnode.elseclause)
             if st.isUnreachable then elseDvg = true
             etc: et
             branchTypes.append etc
@@ -1788,11 +1790,11 @@ isEmptyBody: function {
     ) case statement then {
         if n.statements.count.u64 == 0 then return true
         if n.statements.count.u64 != 1 then return false
-        sl: ast.nodes.get i: (zast.kidAt kids: ast.kids span: n.statements i: 0)
+        sl: ast.nodes.getView i: (zast.kidAt kids: ast.kids span: n.statements i: 0)
         match (
             sl
         ) case statementline then {
-            v: ast.nodes.get i: sl.statementline
+            v: ast.nodes.getView i: sl.statementline
             match (
                 v
             ) case atomid then {
@@ -1871,7 +1873,7 @@ checkSumArmName: function {
     ) then {
         subjTn: specWrittenName :st :ast tid: subjT
         amsg: "type '\{subjTn}' has no arm '\{armName}'"
-        marm: ast.nodes.get i: clause.matcharm
+        marm: ast.nodes.getView i: clause.matcharm
         (
             addError
             :st
@@ -1938,12 +1940,13 @@ checkCaseClause: function {
     anyEmpty: false
     allDiverge: true
     # the arm as written, for the messages
-    writtenId: atomNameId :ast n: (ast.nodes.get i: clause.matcharm)
+    writtenId: atomNameId :ast n: (ast.nodes.getView i: clause.matcharm)
     # through the public interface a renamed arm is the arm it renames, as a
     # member read is (checkDottedOn): stamped on the clause for the emitter
     armId: memberaccess.publicCaseArm :st :ast :clause :subjT written: writtenId :armsPublic
     armName: zast.nameTextCopy :ast ref: armId
-    if (isEmptyBody :st :ast :unitDecl n: (ast.nodes.get i: clause.statement)) then anyEmpty = true
+    if (isEmptyBody :st :ast :unitDecl n: (ast.nodes.getView i: clause.statement)
+    ) then anyEmpty = true
     # A value-match literal arm wears the subject's concrete type.
     if isSum.not when (statics.isNumericLiteralName name: armName.stringView
     ) when subjT.notZero when (
@@ -2041,7 +2044,7 @@ walkCaseArmBody: function {
     armTypes: ListVal ztypes.tid
 } out bool is {
     checkStatement :st :unitDecl :ast blockId: clause.statement
-    at: lastStmtType :st :ast block: (ast.nodes.get i: clause.statement)
+    at: lastStmtType :st :ast block: (ast.nodes.getView i: clause.statement)
     armTypes.append at
     if at.isZero or (at != neverId) then return false
     diverging.append armName.string
@@ -2223,7 +2226,7 @@ checkCaseElse: function {
 } out casearmfacts is {
     anyEmpty: false
     allDiverge: true
-    if (isEmptyBody :st :ast :unitDecl n: (ast.nodes.get i: casenode.elseclause)
+    if (isEmptyBody :st :ast :unitDecl n: (ast.nodes.getView i: casenode.elseclause)
     ) then anyEmpty = true
     elseMarker: st.pushBlock node: casenode.elseclause
     # a lock the else releases is released on its path alone, unless the
@@ -2284,7 +2287,7 @@ walkCaseElseBody: function {
     brokeBefore: st.breakLeavesInnermost
     walkBodyAt :st :unitDecl :ast bodyId: casenode.elseclause
     if ruledOut then st.restoreBreakSeen seen: brokeBefore
-    et: lastStmtType :st :ast block: (ast.nodes.get i: casenode.elseclause)
+    et: lastStmtType :st :ast block: (ast.nodes.getView i: casenode.elseclause)
     armTypes.append et
     return et
 }
@@ -2415,7 +2418,7 @@ checkCaseArms: function {
 } out ztypes.tid is {
     restMark: st.restoreMark
     targetName: zast.nameid
-    if isSum then targetName = subjectAtomNameId :ast n: (ast.nodes.get i: casenode.subject)
+    if isSum then targetName = subjectAtomNameId :ast n: (ast.nodes.getView i: casenode.subject)
     neverId: ztypes.tid
     nvOpt: stdtypes.stdTidOpt :ast :st wk: zast.wellKnown.slot.tyNever
     if nvOpt.some then {
@@ -2529,11 +2532,11 @@ rejectGenericValueMatch: function {
     # over a VALUE whose type is the generic parameter has no per-
     # instance arm dispatch (the template body is shared), so it is
     # rejected rather than silently taking the else path.
-    gvid: zast.nodeIdOf n: (ast.nodes.get i: casenode.subject)
+    gvid: zast.nodeIdOf n: (ast.nodes.getView i: casenode.subject)
     gvav: st.typing.atomVariableId.get key: gvid
     if gvav.some then {
         gvav.drop
-        subject: ast.nodes.get i: casenode.subject
+        subject: ast.nodes.getView i: casenode.subject
         subjectName: specWrittenName :st :ast tid: subjT
         gm: "cannot match over a value of generic parameter type '\{subjectName}'"
         gh: "dissect the type parameter itself (`match \{subjectName}`), or move the value dispatch outside the generic"
@@ -2561,7 +2564,7 @@ rejectGenericValueMatch: function {
 # compares as the same bits.
 dissectArmByValue: function {ast: Ast.view m: zast.caserow.view value: u64} out zast.nodeid is {
     for each cId: (zast.kidsOf :ast span: m.clauses) loop {
-        cnode: ast.nodes.get i: cId
+        cnode: ast.nodes.getView i: cId
         if cnode.caseclause when cnode.name.notZero then {
             cnt: zast.poolTextAt pool: ast.names ref: cnode.name
             if (
@@ -2582,11 +2585,11 @@ refuseNonNumeralCases: function {
     pname: StringView
 } is {
     for each cId: (zast.kidsOf :ast span: m.clauses) loop {
-        cnode: ast.nodes.get i: cId
+        cnode: ast.nodes.getView i: cId
         if cnode.caseclause when cnode.name.notZero then {
             cnt: zast.poolTextAt pool: ast.names ref: cnode.name
             if (numeralBits text: cnt.stringView).none then {
-                arm: ast.nodes.get i: cnode.matcharm
+                arm: ast.nodes.getView i: cnode.matcharm
                 (
                     addErrorWithHint
                     :st
@@ -2632,7 +2635,7 @@ dissectArmByType: function {
     if darg.isZero or scope.isZero then return zast.nodeid
     ud: unitRootOfDecl :typing declId: scope
     for each cId: (zast.kidsOf :ast span: m.clauses) loop {
-        cnode: ast.nodes.get i: cId
+        cnode: ast.nodes.getView i: cId
         if cnode.caseclause then {
             at: (
                 (resolve.walkLookupTyperefByIdRo :ast :typing unitDecl: ud :scope baseId: cnode.name
@@ -2702,7 +2705,7 @@ dissectionParamName: function {
 } out zast.nameid is {
     np: typing.numericParamRead.get key: subject
     if np.some then return np
-    return (atomNameId :ast n: (ast.nodes.get i: subject))
+    return (atomNameId :ast n: (ast.nodes.getView i: subject))
 }
 
 # dissectedArgText -- the argument `darg` the instance `ownerTid` bound its
@@ -2766,7 +2769,7 @@ rebindOuterUses: function {st: zenv.ZSymbolTable ast: Ast.view root: zast.nodeid
     for wi < work.length loop {
         wid: work.get i: wi
         wi = wi + 1
-        wn: ast.nodes.get i: wid
+        wn: ast.nodes.getView i: wid
         zast.childIdsInto :ast n: wn acc: work
         if wn.atomid when (st.typing.atomVariableId.get key: wid).some then {
             outer: st.lookupVarId nameId: wn.name
@@ -2834,7 +2837,7 @@ checkDissectedArm: function {
     pname: String
     pnId: zast.nameid
     {
-        mn: ast.nodes.get i: casenode.nid
+        mn: ast.nodes.getView i: casenode.nid
         if mn.caseexpr then {
             pnId = dissectionParamName typing: st.typing :ast subject: mn.subject
             pname = zast.nameTextCopy :ast ref: pnId
@@ -2865,7 +2868,7 @@ checkDissectedArm: function {
     armBlock: win
     armMarker: st.pushBlock node: armBlock
     checkStatement :st :unitDecl :ast blockId: armBlock
-    at: lastStmtType :st :ast block: (ast.nodes.get i: win)
+    at: lastStmtType :st :ast block: (ast.nodes.getView i: win)
     # the one arm that runs: where it leaves, the match does
     armKind: st.unreachableKind
     st.popTo marker: armMarker
@@ -2884,7 +2887,7 @@ checkDissectedArm: function {
 # template's subject does: the emitter dissects on it (matchGenericRoute), and
 # the copy has no template walk to mark it.
 markInstanceDissection: function {st: zenv.ZSymbolTable ast: Ast.view casenode: caseref} is {
-    sn: stampNodeId n: (ast.nodes.get i: casenode.subject)
+    sn: stampNodeId n: (ast.nodes.getView i: casenode.subject)
     if sn.isZero then return
     if (st.typing.rowIsForeign nid: sn) then return
     pn: dissectionParamName typing: st.typing :ast subject: casenode.subject
@@ -2920,7 +2923,7 @@ monoDissectionHandled: function {
     # parameter is typed (its singleton) first
     typeOnly: bool
 } out bool is {
-    sn: atomNameId :ast n: (ast.nodes.get i: casenode.subject)
+    sn: atomNameId :ast n: (ast.nodes.getView i: casenode.subject)
     if sn.notZero when (st.lookupVarId nameId: sn).some then return false
     pn: dissectionParamName typing: st.typing :ast subject: casenode.subject
     if pn.isZero then return false
@@ -3017,7 +3020,7 @@ checkCase: function {
         # a genericParam subject IS a compile-time dissection: write the
         # marker stamp directly (an instance's row must carry the
         # param, not its substitution, for the emitter's dispatch gate)
-        gmn: stampNodeId n: (ast.nodes.get i: casenode.subject)
+        gmn: stampNodeId n: (ast.nodes.getView i: casenode.subject)
         if gmn.notZero then {
             gmv: subjT
             ztyping.nodeTypeSet tbl: st.typing.nodeType nid: gmn tid: gmv
@@ -3040,7 +3043,7 @@ checkCase: function {
     # Any other subject -- a numeric, string, class, record, or a constant --
     # has no child arms to dissect into.
     if subjT.notZero when isSum.not when isGenericSubj.not then {
-        subjNode: ast.nodes.get i: casenode.subject
+        subjNode: ast.nodes.getView i: casenode.subject
         subjectName: specWrittenName :st :ast tid: subjT
         smsg: "match subject must be a union, variant, or generic parameter, got '\{subjectName}'"
         (
@@ -3085,7 +3088,7 @@ consumedCaseTid: function {
 # asgnRefAt -- the assignment row `nid` as plain values (all zero for any
 # other arm).
 asgnRefAt: function {ast: Ast.view nid: zast.nodeid} out asgnref is {
-    n: ast.nodes.get i: nid
+    n: ast.nodes.getView i: nid
     if n.assignment then {
         return (asgnref :nid name: n.name value: n.value lineno: n.lineno colno: n.colno)
     }
@@ -3113,7 +3116,7 @@ ifclauseref: record {
 # ifClauseRefAt -- the if-clause row `nid` as plain values (all zero for any
 # other arm).
 ifClauseRefAt: function {ast: Ast.view nid: zast.nodeid} out ifclauseref is {
-    n: ast.nodes.get i: nid
+    n: ast.nodes.getView i: nid
     if n.ifclause then {
         return (
             ifclauseref
@@ -3131,7 +3134,7 @@ ifClauseRefAt: function {ast: Ast.view nid: zast.nodeid} out ifclauseref is {
 # caseClauseRefAt -- the match-arm row `nid` as plain values (all zero for
 # any other arm).
 caseClauseRefAt: function {ast: Ast.view nid: zast.nodeid} out caseclauseref is {
-    n: ast.nodes.get i: nid
+    n: ast.nodes.getView i: nid
     if n.caseclause then {
         return (
             caseclauseref
@@ -3182,7 +3185,7 @@ checkStmtExpression: function {
     }
     if et0.notZero then stampGate :st nid: lineId tid: et0
     k0: exprDivKind :st :ast :valueId
-    isControl: (ctlDivKind bn: (zast.atomNameIdOf n: (ast.nodes.get i: valueId))) > 0
+    isControl: (ctlDivKind bn: (zast.atomNameIdOf n: (ast.nodes.getView i: valueId))) > 0
     recordControlDestroy :st :ast :valueId kind: k0
     # a statement whose value resolved to nothing and raised nothing:
     # an unresolvable root name is an unknown reference (the emitter
@@ -3208,7 +3211,7 @@ checkStmtExpression: function {
 # exprDivKind -- how the expression `valueId`, once walked, leaves: a control
 # word's own kind, `exit` for a return or panic call, `none` when it does not.
 exprDivKind: function {st: zenv.ZSymbolTable.view ast: Ast.view valueId: zast.nodeid} out u8 is {
-    k: ctlDivKind bn: (zast.atomNameIdOf n: (ast.nodes.get i: valueId))
+    k: ctlDivKind bn: (zast.atomNameIdOf n: (ast.nodes.getView i: valueId))
     if k > 0 then return k
     if (isReturnCallKind o: (st.typing.callKind.get key: valueId)) then return zenv.divkind.exit
     return zenv.divkind.none
@@ -3226,10 +3229,10 @@ recordControlDestroy: function {
     if kind == zenv.divkind.exit then {
         ret: ztypes.vid
         {
-            vn: ast.nodes.get i: valueId
+            vn: ast.nodes.getView i: valueId
             if vn.call when vn.arguments.count == 1 then {
                 a0: argRefAt :ast nid: (zast.kidAt kids: ast.kids span: vn.arguments i: 0)
-                rn: zast.atomNameIdOf n: (ast.nodes.get i: a0.operation)
+                rn: zast.atomNameIdOf n: (ast.nodes.getView i: a0.operation)
                 if rn.notZero when (nameReadsPayload :st nameId: rn).not then {
                     ret = (st.lookupVarId nameId: rn).or d: ztypes.vid
                 }
@@ -3382,7 +3385,7 @@ noteStatementBlocks: function {st: zenv.ZSymbolTable ast: Ast.view innerId: zast
         noteStmtBlock :st blk: n.statement
     } case withexpr then {
         noteStmtBlock :st blk: n.body
-        noteStmtBlock :st blk: (doStatementOf n: (ast.nodes.get i: n.body))
+        noteStmtBlock :st blk: (doStatementOf n: (ast.nodes.getView i: n.body))
     } case ifexpr then {
         k: u64
         for k < n.clauses.count loop {
@@ -3489,9 +3492,9 @@ withForwardsTail: function {ast: Ast.view n: astnode.view} out bool is {
     match (
         n
     ) case withexpr then {
-        ds: doStatementOf n: (ast.nodes.get i: n.body)
+        ds: doStatementOf n: (ast.nodes.getView i: n.body)
         if ds.isZero then return false
-        return (blockHasBreak :ast n: (ast.nodes.get i: ds)).not
+        return (blockHasBreak :ast n: (ast.nodes.getView i: ds)).not
     } else {
         return false
     }
@@ -3502,16 +3505,16 @@ withForwardsTail: function {ast: Ast.view n: astnode.view} out bool is {
 # last line, as the emitter hands it on.
 forwardTail: function {st: zenv.ZSymbolTable ast: Ast.view innerId: zast.nodeid} is {
     if innerId.isZero then return
-    n: ast.nodes.get i: innerId
+    n: ast.nodes.getView i: innerId
     match (
         n
     ) case withexpr then {
         # its body is a `do` block, whose own block holds the lines
-        if (withForwardsTail :ast n: (ast.nodes.get i: innerId)) then {
-            st.tailBlock = doStatementOf n: (ast.nodes.get i: n.body)
+        if (withForwardsTail :ast n: (ast.nodes.getView i: innerId)) then {
+            st.tailBlock = doStatementOf n: (ast.nodes.getView i: n.body)
         }
     } case doexpr then {
-        if (blockHasBreak :ast n: (ast.nodes.get i: n.statement)
+        if (blockHasBreak :ast n: (ast.nodes.getView i: n.statement)
         ).not then st.tailBlock = n.statement
     } else null
 }
@@ -3531,7 +3534,7 @@ walkBodyAt: function {
 # return on their own.
 tailIsControl: function {st: zenv.ZSymbolTable.view ast: Ast.view lineId: zast.nodeid} out bool is {
     innerId: zast.nodeid
-    ln: ast.nodes.get i: lineId
+    ln: ast.nodes.getView i: lineId
     if ln.statementline then innerId = ln.statementline
     if innerId.isZero then return false
     arm: declare.rowArmAt :ast nid: innerId
@@ -3539,7 +3542,7 @@ tailIsControl: function {st: zenv.ZSymbolTable.view ast: Ast.view lineId: zast.n
     lt: walkTypeOf :st nid: lineId
     ltt: st.reg.typetypeOf typeId: lt
     if lt.notZero when ltt == ztypes.ztypetype.neverType then return true
-    return (ctlDivKind bn: (zast.atomNameIdOf n: (ast.nodes.get i: innerId))) > 0
+    return (ctlDivKind bn: (zast.atomNameIdOf n: (ast.nodes.getView i: innerId))) > 0
 }
 
 # foldLoopEntry -- a loop's preconditions read in the order they run: a true one
@@ -3651,7 +3654,7 @@ caseArmsArePublic: function {
         :st
         :ast
         bt: subjT
-        baseNode: (ast.nodes.get i: subject)
+        baseNode: (ast.nodes.getView i: subject)
     ).not
 }
 

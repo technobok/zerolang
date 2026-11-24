@@ -11,7 +11,7 @@ namesFunctionWithBody: function {
 } out bool is {
     fn: typeargs.declaredFunctionNode :st :ast :unitDecl :scope :baseId
     if fn.isZero then return false
-    return (isFunctionDefWithBody o: (ast.nodes.get i: fn))
+    return (isFunctionDefWithBody o: (ast.nodes.getView i: fn))
 }
 
 # signatureDeclaresParam -- the function `fnId`'s signature declares a value
@@ -40,7 +40,8 @@ signatureTypeHolds: function {ast: Ast.view fnId: zast.nodeid nid: zast.nodeid} 
         k = k + 1
         if (typeRefHolds :ast root: pm.operation :nid) then return true
     }
-    return (typeRefHolds :ast root: (statics.fnReturnTyperefOf op: (ast.nodes.get i: fnId)) :nid)
+    return (typeRefHolds :ast root: (statics.fnReturnTyperefOf op: (ast.nodes.getView i: fnId)) :nid
+    )
 }
 
 # typeRefHolds -- `nid` is `root` or a node of it where a name is looked up as
@@ -48,7 +49,7 @@ signatureTypeHolds: function {ast: Ast.view fnId: zast.nodeid nid: zast.nodeid} 
 typeRefHolds: function {ast: Ast.view root: zast.nodeid nid: zast.nodeid} out bool is {
     if root.isZero then return false
     if root == nid then return true
-    n: ast.nodes.get i: root
+    n: ast.nodes.getView i: root
     match (
         n
     ) case dottedpath then {
@@ -79,10 +80,12 @@ refuseParamAsType: function {
     if fn.isZero then return false
     if (signatureDeclaresParam :ast fnId: fn :nameId).not then return false
     if (signatureTypeHolds :ast fnId: fn :nid).not then return false
-    n: ast.nodes.get i: nid
+    n: ast.nodes.getView i: nid
     if n.labelvalue then return false
     # the name the node looks up first: its own, or its path's root
-    if n.dottedpath when (rootNameIdOf :ast n: (ast.nodes.get i: nid)) != nameId then return false
+    if n.dottedpath when (
+        (rootNameIdOf :ast n: (ast.nodes.getView i: nid)) != nameId
+    ) then return false
     if (st.typing.refusedValues.has item: nid) then return true
     nn: zast.nameTextAt :ast ref: nameId
     fnm: zast.nameTextAt :ast ref: st.walk.sigFnName
@@ -135,7 +138,7 @@ noMainError: function {
     em: "unit '\{unc}' declares no 'main': there is nothing to compile it from"
     en: "compilation is demand-driven -- `main` is the root, and what it reaches is what gets checked and emitted".string
     eh: "add `main: function is { ... }`, or compile the program that opens this unit instead".string
-    un: ast.nodes.get i: unitdefId
+    un: ast.nodes.getView i: unitdefId
     st.typing.noteReport
     st.typing.errors.append (
         zast.ErrorData
@@ -408,7 +411,7 @@ demandInstArgs: function {
     if r.scopeDeclId.notZero then rf = r.scopeDeclId
     for each nid: r.argNodeIds loop {
         if nid.notZero then {
-            resolve.scanCallsInNode :st scope: rf :ast node: (ast.nodes.get i: nid)
+            resolve.scanCallsInNode :st scope: rf :ast node: (ast.nodes.getView i: nid)
         }
     }
 }
@@ -633,7 +636,7 @@ mintUnitMonoOf: function {
     templateName.drop
     # sited at the instantiation, which an error in its walk names
     if r.callId.notZero then {
-        n: ast.nodes.get i: r.callId
+        n: ast.nodes.getView i: r.callId
         ms: ztyping.monosite lineno: (nodeLine :n) colno: (nodeCol :n) unitDecl: r.declUnit
         st.walk.fn.monoSite.set key: mono value: ms
     }
@@ -707,7 +710,7 @@ reportUnresolvedInstArgs: function {
         if rt.notZero then continue
         an8: an.copy
         if an8.length == 0 then an8 = "the argument".string
-        n8: ast.nodes.get i: nid
+        n8: ast.nodes.getView i: nid
         (
             declare.addResolveErrorAt
             :st
@@ -773,7 +776,7 @@ bindExplicitTypeArg: function {
     subs: (IdMapV zast.nameid v: ztypes.tid)
     template: ztypes.tid
 } is {
-    tn3: zast.nameTextCopy :ast ref: (atomNameId :ast n: (ast.nodes.get i: arg.operation))
+    tn3: zast.nameTextCopy :ast ref: (atomNameId :ast n: (ast.nodes.getView i: arg.operation))
     to3: walkLookupTyperef :st scope: st.curScope :ast :unitDecl base: tn3.stringView
     if to3.some then {
         (
@@ -812,7 +815,7 @@ monoSubjectDecl: function {
 # fnRefAt -- the function row `nid` as plain values (all zero for any other
 # arm).
 fnRefAt: function {ast: Ast.view nid: zast.nodeid} out fnref is {
-    n: ast.nodes.get i: nid
+    n: ast.nodes.getView i: nid
     if n.functiondef then return (declare.fnRefOf fnode: n)
     zn: zast.nodeid
     return (
@@ -886,7 +889,7 @@ scanFnSig: function {
         kP = kP + 1
         pm: argRefAt :ast nid: pmId
         if pm.nid.notZero then {
-            bnId: rootNameIdOf :ast n: (ast.nodes.get i: pm.operation)
+            bnId: rootNameIdOf :ast n: (ast.nodes.getView i: pm.operation)
             if bnId.notZero then maybeWalkMethodsById :st :unitDecl :scope :ast nameId: bnId
         }
     }
@@ -915,8 +918,9 @@ scanMemberSignatures: function {
             fmId: zast.objIsItemAt :ast nid: opId i: kF
             kF = kF + 1
             fm: argRefAt :ast nid: fmId
-            if fm.nid.notZero when (nodeIsFunctiondef o: (ast.nodes.get i: fm.operation)).not then {
-                bnId: rootNameIdOf :ast n: (ast.nodes.get i: fm.operation)
+            if fm.nid.notZero when (nodeIsFunctiondef o: (ast.nodes.getView i: fm.operation)
+            ).not then {
+                bnId: rootNameIdOf :ast n: (ast.nodes.getView i: fm.operation)
                 if bnId.notZero then {
                     maybeWalkMethodsById :st :unitDecl :scope :ast nameId: bnId
                 }
@@ -1003,9 +1007,10 @@ walkDeclaredDef: function {
     if mm2.namedoperation then mopId = mm2.operation
     if mopId.isZero then return
     isFn: false
-    if (isFunctionDefWithBody o: (ast.nodes.get i: mopId)) then isFn = true
+    if (isFunctionDefWithBody o: (ast.nodes.getView i: mopId)) then isFn = true
     canW: isFn
-    if canW.not when (objectdefHasMethodBodies :ast op: (ast.nodes.get i: mopId)) then canW = true
+    if canW.not when (objectdefHasMethodBodies :ast op: (ast.nodes.getView i: mopId)
+    ) then canW = true
     if canW.not then return
     st.typing.declSetWalked declId: dd
     # A DEMAND MET INSIDE A DEMANDED BODY WAITS ITS TURN. The mark is laid now,
@@ -1044,7 +1049,7 @@ walkDemandedDef: function {
     mopId: zast.nodeid
     mm2: ast.nodes.get i: memId
     if mm2.namedoperation then mopId = mm2.operation
-    isFn: isFunctionDefWithBody o: (ast.nodes.get i: mopId)
+    isFn: isFunctionDefWithBody o: (ast.nodes.getView i: mopId)
     # a walk reached from a use runs in a neutral context, as a drain does: the
     # use may sit in an instance's or a template's walk, whose state belongs to
     # that body and not to this definition
@@ -1114,13 +1119,13 @@ objectdefHasMethodBodies: function {ast: Ast.view op: astnode.view} out bool is 
         op
     ) case objectdef then {
         for each imId: (zast.kidsOf :ast span: op.isItems) loop {
-            im: ast.nodes.get i: imId
-            if im.namedoperation when (isFunctionDefWithBody o: (ast.nodes.get i: im.operation)
+            im: ast.nodes.getView i: imId
+            if im.namedoperation when (isFunctionDefWithBody o: (ast.nodes.getView i: im.operation)
             ) then return true
         }
         for each amId: (zast.kidsOf :ast span: op.asItems) loop {
-            am: ast.nodes.get i: amId
-            if am.namedoperation when (isFunctionDefWithBody o: (ast.nodes.get i: am.operation)
+            am: ast.nodes.getView i: amId
+            if am.namedoperation when (isFunctionDefWithBody o: (ast.nodes.getView i: am.operation)
             ) then return true
         }
         return false
@@ -1202,7 +1207,7 @@ checkMethodBodies: function {
                 im: argRefAt :ast nid: imId
                 if im.nid.notZero when (
                     isFunctionDefWithBody
-                    o: (ast.nodes.get i: im.operation)
+                    o: (ast.nodes.getView i: im.operation)
                 ) then {
                     imIsFn = true
                     imOp = im.operation
@@ -1253,7 +1258,7 @@ checkMethodBodies: function {
                 am: argRefAt :ast nid: amId
                 if am.nid.notZero when (
                     isFunctionDefWithBody
-                    o: (ast.nodes.get i: am.operation)
+                    o: (ast.nodes.getView i: am.operation)
                 ) then {
                     amIsFn = true
                     amOp = am.operation
@@ -1566,7 +1571,7 @@ checkFunctionBodyIn: function {
         :st
         scope: rf
         :ast
-        op: (ast.nodes.get i: fn.nid)
+        op: (ast.nodes.getView i: fn.nid)
     )
     # a body is walked only once everything demanded so far has resolved:
     # an owner or function resolved late (from a walk) queued what its
@@ -1768,7 +1773,7 @@ checkNamespaceBodies: function {
         if bm.nid.notZero then {
             if (zast.unitOpDeclaresUnit :ast opId: bm.operation) then {
                 checkNamespaceBodies :ast :st scope: rf :unitDecl unitdefId: bm.operation
-            } else if (objectdefHasMethodBodies :ast op: (ast.nodes.get i: bm.operation)) then {
+            } else if (objectdefHasMethodBodies :ast op: (ast.nodes.getView i: bm.operation)) then {
                 # a type's methods, which walkDeclaredDef leaves to this walk
                 # for a namespace member as it does a function
                 resolve.walkNamespaceOwner :st :ast :unitDecl :nsDecl memId: bm.nid nameId: bm.name
@@ -1825,7 +1830,7 @@ checkUnitBodies: function {
             mm: argRefAt :ast nid: mmId
             if mm.nid.notZero when mm.name == zast.wellKnown.slot.wkMain when (
                 declare.isFunctionDefOp
-                op: (ast.nodes.get i: mm.operation)
+                op: (ast.nodes.getView i: mm.operation)
             ) then {
                 foundMain = true
                 memberDecl: resolve.declOfUnitDefIds typing: st.typing :unitDecl nameId: mm.name
@@ -2045,8 +2050,8 @@ stampMonoTemplateClass: function {
     cop: ast.nodes.get i: clsOpId
     if cop.objectdef then isCand = true
     if isCand.not then return
-    if (objectdefIsGeneric :ast o: (ast.nodes.get i: clsOpId)).not then return
-    if (objectdefHasMethodBodies :ast op: (ast.nodes.get i: clsOpId)).not then return
+    if (objectdefIsGeneric :ast o: (ast.nodes.getView i: clsOpId)).not then return
+    if (objectdefHasMethodBodies :ast op: (ast.nodes.getView i: clsOpId)).not then return
     templateTid: unitBodyMemberTid :st :ast :unitDecl :ownerTid nameId: clsNameId
     if templateTid.isZero then return
     last: st.reg.nextTid
@@ -2080,7 +2085,7 @@ collectOwedMembers: function {
     names: (ListVal zast.nameid).borrow
     ops: (ListVal zast.nodeid).borrow
 } is {
-    cop: ast.nodes.get i: clsOpId
+    cop: ast.nodes.getView i: clsOpId
     if cop.objectdef.not then return
     isSpan: cop.isItems
     asSpan: cop.asItems
@@ -2125,8 +2130,9 @@ bodiedmember: record {
 bodiedMembersIn: function {ast: Ast.view span: zast.kidspan} out ListVal bodiedmember is {
     r: ListVal bodiedmember
     for each mId: (zast.kidsOf :ast :span) loop {
-        m: ast.nodes.get i: mId
-        if m.namedoperation when (isFunctionDefWithBody o: (ast.nodes.get i: m.operation)) then {
+        m: ast.nodes.getView i: mId
+        if m.namedoperation when (isFunctionDefWithBody o: (ast.nodes.getView i: m.operation)
+        ) then {
             r.append (bodiedmember name: m.name op: m.operation)
         }
     }
@@ -2362,7 +2368,7 @@ stampMonoTemplateMethods: function {
         cop: ast.nodes.get i: clsOpId
         if cop.objectdef.not then return
     }
-    if (objectdefIsGeneric :ast o: (ast.nodes.get i: clsOpId)) then return
+    if (objectdefIsGeneric :ast o: (ast.nodes.getView i: clsOpId)) then return
     clsTid: unitBodyMemberTid :st :ast :unitDecl :ownerTid nameId: clsNameId
     if clsTid.isZero then return
     mTids: ListVal ztypes.tid
@@ -2410,8 +2416,9 @@ genericMethodsIn: function {
     ops: ListVal zast.nodeid
 } is {
     for each itId: (zast.kidsOf :ast :span) loop {
-        it: ast.nodes.get i: itId
-        if it.namedoperation when (isFunctionDefWithBody o: (ast.nodes.get i: it.operation)) then {
+        it: ast.nodes.getView i: itId
+        if it.namedoperation when (isFunctionDefWithBody o: (ast.nodes.getView i: it.operation)
+        ) then {
             mo: (st.typing.declChildOfId parentTypeId: clsTid nameId: it.name).or d: ztypes.tid.zero
             if mo.notZero when (st.reg.isGenericOf tid: mo) then {
                 tids.append from: mo
@@ -2467,16 +2474,16 @@ stampUnitMonoMembers: function {
         clsOp: zast.nodeid
         mNm: zast.nameid
         {
-            im: program.nodes.get i: imId
+            im: program.nodes.getView i: imId
             if im.namedoperation then {
                 mNm = im.name
-                if (resolve.isUnitOp op: (program.nodes.get i: im.operation)) then {
+                if (resolve.isUnitOp op: (program.nodes.getView i: im.operation)) then {
                     imOp = im.operation
                 } else {
-                    if (isFunctionDefWithBody o: (program.nodes.get i: im.operation)) then {
+                    if (isFunctionDefWithBody o: (program.nodes.getView i: im.operation)) then {
                         fnOp = im.operation
                     } else {
-                        opNode: program.nodes.get i: im.operation
+                        opNode: program.nodes.getView i: im.operation
                         if opNode.objectdef then {
                             clsOp = im.operation
                         }
@@ -2604,7 +2611,7 @@ firstInstanceWalk: function {
     tn: specWrittenName :st :ast tid: org
     mn: specWrittenName :st :ast tid: monoId
     m: "instantiating '\{tn}' does not end: each instance instantiates it again, at a larger type argument ('\{mn}')"
-    opn: ast.nodes.get i: opId
+    opn: ast.nodes.getView i: opId
     (
         addError
         :st
@@ -2633,7 +2640,7 @@ instanceBodyAt: function {
     }
     bodyId: zast.nodeid
     {
-        fv: ast.nodes.get i: opId
+        fv: ast.nodes.getView i: opId
         if fv.functiondef then bodyId = fv.body
     }
     if bodyId.isZero then return opId
@@ -2643,7 +2650,7 @@ instanceBodyAt: function {
     returnSrc: zast.nodeid
     paramSrc: ListVal zast.nodeid
     {
-        fv: ast.nodes.get i: opId
+        fv: ast.nodes.getView i: opId
         if fv.functiondef then {
             returnSrc = fv.returntype
             zast.appendSpan kids: ast.kids acc: paramSrc span: fv.parameters
@@ -2664,7 +2671,7 @@ instanceBodyAt: function {
     bcId: zast.tableAdd :ast n: bc
     row: astnode.placeholder
     {
-        fv: ast.nodes.get i: opId
+        fv: ast.nodes.getView i: opId
         if fv.functiondef then {
             row = astnode.functiondef (
                 zast.functionrow
@@ -2870,7 +2877,7 @@ templateUnitStampAt: function {
     ast: Ast.view
     opId: zast.nodeid
 } out ztypes.tid is {
-    tuo: ast.nodes.get i: opId
+    tuo: ast.nodes.getView i: opId
     if tuo.unitdef.not then return ztypes.tid
     return (ztyping.nodeTypeAt tbl: st.typing.nodeType nid: opId)
 }
@@ -2942,7 +2949,7 @@ collectOwedUnitFns: function {
     di: u64
     for di < bodyIds.count loop {
         bm: argRefAt :ast nid: (zast.kidAt kids: ast.kids span: bodyIds i: di)
-        if bm.nid.notZero when (isFunctionDefWithBody o: (ast.nodes.get i: bm.operation)) when (
+        if bm.nid.notZero when (isFunctionDefWithBody o: (ast.nodes.getView i: bm.operation)) when (
             instanceMemberOwed
             :st
             :ast
@@ -3182,7 +3189,7 @@ stampUnitNestedMethods: function {
         if bm.nid.notZero when (
             objectdefHasMethodBodies
             :ast
-            op: (ast.nodes.get i: bm.operation)
+            op: (ast.nodes.getView i: bm.operation)
         ) then {
             inst: (
                 (st.typing.declChildOfId parentTypeId: monoId nameId: bm.name).or
@@ -3235,7 +3242,7 @@ constValueOfMemberAt: function {
     dcol: u32
     dnode: zast.nodeid
     {
-        dn: ast.nodes.get i: dnid
+        dn: ast.nodes.getView i: dnid
         if dn.namedoperation then {
             opid = dn.operation
             dline = dn.lineno

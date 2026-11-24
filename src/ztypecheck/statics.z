@@ -48,7 +48,7 @@ bareArgNamesNothing: function {
 } out bool is {
     # a bare name, or the pun `(fx :n)` whose value is the name it labels, as
     # numericParamRefTid reads it
-    nameId: atomNameId :ast n: (ast.nodes.get i: arg.operation)
+    nameId: atomNameId :ast n: (ast.nodes.getView i: arg.operation)
     if nameId.isZero or (isNumericLiteralNameAt :ast ref: nameId) then return false
     if (walkLookupTyperefById :st :scope :ast :unitDecl baseId: nameId).some then return false
     od: constOwnerDeclForId :st :scope :unitDecl :nameId
@@ -115,14 +115,14 @@ refuseSingletonDeclType: function {
     typeNid: zast.nodeid
 } is {
     if typeNid.isZero then return
-    n: ast.nodes.get i: typeNid
+    n: ast.nodes.getView i: typeNid
     an: zast.atomNameIdOf :n
     baseNid: typeNid
     if an.notZero when isFunction.not then return
     if an.isZero then {
         baseNid = markedTyperefBase :ast nid: typeNid
         if baseNid.isZero then return
-        an = zast.atomNameIdOf n: (ast.nodes.get i: baseNid)
+        an = zast.atomNameIdOf n: (ast.nodes.getView i: baseNid)
     }
     if an.isZero then return
     owner: numericParamOwnerFrom :st scope: ownerDecl nameId: an
@@ -177,7 +177,7 @@ foldInstanceConstant: function {
     if isConst.not when (st.typing.isAsConstDecl :declId).not then return
     opId: zast.nodeid
     {
-        dn: ast.nodes.get i: dnode
+        dn: ast.nodes.getView i: dnode
         if dn.namedoperation then opId = dn.operation
     }
     if (constReadsNumericParam :st :ast owner: own :opId).not then return
@@ -247,12 +247,12 @@ asItemNamesOf: function {
     st: zenv.ZSymbolTable.view ast: Ast.view tdecl: ztypes.declid
 } out ListVal zast.nameid is {
     names: ListVal zast.nameid
-    dn: ast.nodes.get i: (st.typing.decls.get i: tdecl).node
+    dn: ast.nodes.getView i: (st.typing.decls.get i: tdecl).node
     if dn.namedoperation.not then return names
-    op: ast.nodes.get i: dn.operation
+    op: ast.nodes.getView i: dn.operation
     if op.objectdef.not then return names
     for each amId: (zast.kidsOf :ast span: op.asItems) loop {
-        am: ast.nodes.get i: amId
+        am: ast.nodes.getView i: amId
         if am.namedoperation then names.append am.name
     }
     return names
@@ -271,7 +271,7 @@ reportUnknownAsHead: function {
 } out bool is {
     headNid: zast.nodeid
     {
-        vn: ast.nodes.get i: item.operation
+        vn: ast.nodes.getView i: item.operation
         if vn.call then headNid = vn.callable
         if vn.dottedpath then headNid = item.operation
     }
@@ -281,14 +281,14 @@ reportUnknownAsHead: function {
     # a head through a unit (`sch.row`) is checked at its root, then at its member
     rootNid: headNid
     {
-        hn0: ast.nodes.get i: headNid
+        hn0: ast.nodes.getView i: headNid
         match (
             hn0
         ) case dottedpath then {
             rootNid = hn0.parent
         } else null
     }
-    headId: zast.atomNameIdOf n: (ast.nodes.get i: rootNid)
+    headId: zast.atomNameIdOf n: (ast.nodes.getView i: rootNid)
     if headId.isZero then return false
     td: st.typing.declIdOfType typeId: parentId
     if td.isZero then return false
@@ -305,7 +305,7 @@ reportUnknownAsHead: function {
         if rootNid == headNid then return false
         return (reportMissingHeadMember :st scope: td :ast callable: headNid)
     }
-    hn: ast.nodes.get i: rootNid
+    hn: ast.nodes.getView i: rootNid
     (
         addErrorWithHint
         :st
@@ -342,11 +342,11 @@ staticListElemParts: function {ast: Ast.view opId: zast.nodeid} out staticlistel
     zt: zast.nodeid
     miss: staticlistelem litId: zt tagId: zt ok: false
     if opId.isZero then return miss
-    n: ast.nodes.get i: opId
+    n: ast.nodes.getView i: opId
     match (
         n
     ) case dottedpath then {
-        pt: typeargs.atomName :ast n: (ast.nodes.get i: n.parent)
+        pt: typeargs.atomName :ast n: (ast.nodes.getView i: n.parent)
         if (isNumericLiteralName name: pt.stringView).not then return miss
         return (staticlistelem litId: n.parent tagId: n.child ok: true)
     } case atomid then {
@@ -378,7 +378,7 @@ staticListElemValues: function {
         kV = kV + 1
         opRef: zast.nodeid
         {
-            el: ast.nodes.get i: elId
+            el: ast.nodes.getView i: elId
             if el.namedoperation then opRef = el.operation
         }
         # a nested list is a value of the list's element type
@@ -425,7 +425,7 @@ staticListElemValue: function {
     if opRef.isZero then return ztypes.noConst
     de: staticListElemParts :ast opId: opRef
     if de.ok then {
-        lt: zast.nameTextAt :ast ref: (atomNameId :ast n: (ast.nodes.get i: de.litId))
+        lt: zast.nameTextAt :ast ref: (atomNameId :ast n: (ast.nodes.getView i: de.litId))
         return (consteval.constLiteralValue :st name: lt.stringView)
     }
     held: st.walk.consts.fail
@@ -519,7 +519,7 @@ staticListKindsAgree: function {
         }
         msg: staticListElemMismatch :ast :st :kind :vt :first :firstTid :elemTid
         if msg.length > 0 then {
-            el: ast.nodes.get i: elId
+            el: ast.nodes.getView i: elId
             (
                 addErrorWithHint
                 :st
@@ -613,7 +613,7 @@ staticListKindText: function {kind: ztypes.zconstkind} out String is {
 staticListTagWritten: function {ast: Ast dnode: staticlistref} out bool is {
     k: u64
     for k < dnode.nelems loop {
-        el: ast.nodes.get i: (zast.listElemAt :ast nid: dnode.nid i: k)
+        el: ast.nodes.getView i: (zast.listElemAt :ast nid: dnode.nid i: k)
         k = k + 1
         if el.namedoperation then {
             de: staticListElemParts :ast opId: el.operation
@@ -650,11 +650,11 @@ staticListElemTypeName: function {
         if cv.kind.svalKind.not then allString = false
         if cv.kind.fvalKind.not then allFloat = false
         opRef: zast.nodeid
-        el: ast.nodes.get i: elId
+        el: ast.nodes.getView i: elId
         if el.namedoperation then opRef = el.operation
         de: staticListElemParts :ast opId: opRef
         if de.tagId.notZero then {
-            tgId: atomNameId :ast n: (ast.nodes.get i: de.tagId)
+            tgId: atomNameId :ast n: (ast.nodes.getView i: de.tagId)
             if pick.isZero then pick = tgId
             if (tgId == pick).not then {
                 pn: zast.nameTextAt :ast ref: pick
@@ -859,7 +859,7 @@ refuseListOutAgainst: function {
     ot: ztypes.tid
     want: ztypes.tid
 } is {
-    n: ast.nodes.get i: outId
+    n: ast.nodes.getView i: outId
     gn: specWrittenName :st :ast tid: ot
     en: specWrittenName :st :ast tid: want
     (
@@ -1052,7 +1052,7 @@ resolveStaticListInto: function {
                 memberIdAt = ast.internString text: ord.stringView
             }
             if (taken.has item: memberIdAt) then {
-                elD: ast.nodes.get i: elId
+                elD: ast.nodes.getView i: elId
                 dnm: zast.nameTextAt :ast ref: memberIdAt
                 (
                     addErrorWithHint
@@ -1163,14 +1163,14 @@ qualifierUnitDecl: function {
 typeExprText: function {ast: Ast.view nid: zast.nodeid} out String is {
     if nid.isZero then return "".string
     isCall: false
-    node: ast.nodes.get i: nid
+    node: ast.nodes.getView i: nid
     # exprTextOf spells atoms, dotted paths and calls; any other node spells
     # nothing a report could name
     if node.atomid.not when node.dottedpath.not when node.call.not then return "".string
     isCall = node.call
     r: String
     if isCall then r.append "("
-    moves.exprTextOf :ast n: (ast.nodes.get i: nid) dst: r
+    moves.exprTextOf :ast n: (ast.nodes.getView i: nid) dst: r
     if isCall then r.append ")"
     return r
 }
@@ -1334,7 +1334,7 @@ defaultReadsNumericParam: function {
     ownerDecl: ztypes.declid
     node: zast.nodeid
 } out bool is {
-    n: ast.nodes.get i: node
+    n: ast.nodes.getView i: node
     an: zast.atomNameIdOf :n
     if an.notZero when (numericParamOwnerFrom :st scope: ownerDecl nameId: an).notZero then {
         return false
@@ -1365,7 +1365,7 @@ singletonFieldType: function {
     dm: argref
 } out ztypes.tid is {
     if (st.reg.typetypeOf typeId: ownerTid) == ztypes.ztypetype.functionType then return ztypes.tid
-    vnId: zast.atomNameIdOf n: (ast.nodes.get i: dm.operation)
+    vnId: zast.atomNameIdOf n: (ast.nodes.getView i: dm.operation)
     if vnId.isZero then return ztypes.tid
     # the parameter is the owner's or an enclosing definition's -- a unit's --
     # found as a read of the name in a body finds it
@@ -1437,9 +1437,9 @@ pathNamesTypeConstant: function {
 } out bool is {
     leafId: zast.nameid
     qualNid: zast.nodeid
-    n: ast.nodes.get i: node
+    n: ast.nodes.getView i: node
     if n.dottedpath then {
-        leafId = zast.atomNameIdOf n: (ast.nodes.get i: n.child)
+        leafId = zast.atomNameIdOf n: (ast.nodes.getView i: n.child)
         qualNid = n.parent
     }
     if leafId.isZero then return false
@@ -1468,7 +1468,7 @@ pathNamesTypeConstant: function {
 # (`zast.astnode.view`), and its value forms -- a suffixed literal,
 # an arm -- have paths of their own.
 valueDeclares: function {ast: Ast.view node: zast.nodeid} out bool is {
-    n: ast.nodes.get i: node
+    n: ast.nodes.getView i: node
     if (zast.atomNameIdOf :n).notZero then return true
     if n.atomstring or n.ifexpr or n.caseexpr or n.listblock then return true
     if (convertsExpression :ast :node) then return true
@@ -1480,11 +1480,11 @@ valueDeclares: function {ast: Ast.view node: zast.nodeid} out bool is {
 # string literal, `"x".text`: a value, whose base names no type the way `4.u64`,
 # `zast.nodeid` and a type application's `(List t: u8).view` do.
 convertsExpression: function {ast: Ast.view node: zast.nodeid} out bool is {
-    n: ast.nodes.get i: node
+    n: ast.nodes.getView i: node
     match (
         n
     ) case dottedpath then {
-        pn: ast.nodes.get i: n.parent
+        pn: ast.nodes.getView i: n.parent
         if pn.atomstring or pn.ifexpr or pn.caseexpr then return true
         return (operatorPartsAt :ast nid: n.parent).found
     } else {
@@ -1537,9 +1537,9 @@ aliasNamesType: function {
     if (st.typing.isSingletonType tid: (st.typing.declTypeOf :declId)) then return true
     ndo: st.typing.decls.get i: declId
     if ndo.kind.reexportDecl then {
-        nnp: ast.nodes.get i: ndo.node
+        nnp: ast.nodes.getView i: ndo.node
         if nnp.namedoperation then {
-            nvn: ast.nodes.get i: nnp.operation
+            nvn: ast.nodes.getView i: nnp.operation
             ntk: resolve.dottedDefTargetIds :ast n: nvn
             # a unit of any kind qualifies it, a nested one as a file one does,
             # seen from where the alias is written, not from where it is read
@@ -1578,7 +1578,7 @@ qualifierIsUnitPath: function {
     scope: ztypes.declid
     valueNid: zast.nodeid
 } out bool is {
-    vn: ast.nodes.get i: valueNid
+    vn: ast.nodes.getView i: valueNid
     if vn.dottedpath.not then return false
     if (ast.nodes.get i: vn.parent).dottedpath.not then return false
     return (unitDeclOfPath :st :scope :ast nid: vn.parent).notZero
@@ -1710,10 +1710,10 @@ singletonPathAlias: function {
     parentId: zast.nodeid
     leafId: zast.nameid
     {
-        n: ast.nodes.get i: op
+        n: ast.nodes.getView i: op
         if n.dottedpath then {
             parentId = n.parent
-            leafId = atomNameId :ast n: (ast.nodes.get i: n.child)
+            leafId = atomNameId :ast n: (ast.nodes.getView i: n.child)
         }
     }
     if parentId.isZero or leafId.isZero then return ztypes.tid
@@ -1721,7 +1721,7 @@ singletonPathAlias: function {
     pnm: zast.nameid
     isApp: false
     {
-        pn: ast.nodes.get i: parentId
+        pn: ast.nodes.getView i: parentId
         isApp = pn.call
         pnm = zast.atomNameIdOf n: pn
     }
@@ -1765,7 +1765,7 @@ resolveDeepAlias: function {
     if v.dottedpath.not then return ztypes.tid.zero
     qn: ast.nodes.get i: v.parent
     if qn.dottedpath.not then return ztypes.tid.zero
-    cn: atomNameId :ast n: (ast.nodes.get i: v.child)
+    cn: atomNameId :ast n: (ast.nodes.getView i: v.child)
     qcn: atomNameId :ast n: (ast.nodes.get i: qn.child)
     if cn.isZero or qcn.isZero then return ztypes.tid.zero
     pu: unitDeclOfPath :st :scope :ast nid: v.parent
@@ -1908,7 +1908,7 @@ aliasValueSite: function {
 } out argref is {
     ar: argRefAt :ast nid: (st.typing.decls.get i: adecl).node
     if ar.operation.isZero then return ar
-    vn: ast.nodes.get i: ar.operation
+    vn: ast.nodes.getView i: ar.operation
     return (
         argref
         nid: ar.operation
@@ -1940,7 +1940,7 @@ fnReturnBaseNameIdOf: function {ast: Ast.view op: astnode.view} out zast.nameid 
         op
     ) case functiondef then {
         if op.returntype.isZero then return zast.nameid.zero
-        return (declare.baseTypeNameId :ast n: (ast.nodes.get i: op.returntype))
+        return (declare.baseTypeNameId :ast n: (ast.nodes.getView i: op.returntype))
     } else {
         return zast.nameid.zero
     }
@@ -2098,15 +2098,15 @@ fillMonoMethodSignature: function {
     } else {
         # template return unresolved at signature time
         # (out t): derive from the method's AST typeref.
-        rnmId: fnReturnBaseNameIdOf :ast op: (ast.nodes.get i: fmNode.operation)
+        rnmId: fnReturnBaseNameIdOf :ast op: (ast.nodes.getView i: fmNode.operation)
         # a name the function declares as its own generic parameter is that
         # parameter, nearer than any of the unit's
-        if (declare.fnDeclaresGeneric :ast op: (ast.nodes.get i: fmNode.operation) nameId: rnmId
+        if (declare.fnDeclaresGeneric :ast op: (ast.nodes.getView i: fmNode.operation) nameId: rnmId
         ) then return
         if rnmId.isZero then {
             # a qualified return (`out lib.T`) names a type declared elsewhere,
             # resolved where the template writes it
-            rtr: fnReturnTyperefOf op: (ast.nodes.get i: fmNode.operation)
+            rtr: fnReturnTyperefOf op: (ast.nodes.getView i: fmNode.operation)
             if rtr.notZero when (ast.nodes.get i: rtr).dottedpath then {
                 qt: (
                     typeref.resolveTyperefShell
@@ -2179,7 +2179,7 @@ mintUnitAliasInstances: function {
         if nm.nid.isZero then continue
         ad: st.typing.declFindChild parentDeclId: rf nameId: nm.name
         if (
-            ad.isZero or (declare.isBareGenericParam :ast op: (ast.nodes.get i: nm.operation))
+            ad.isZero or (declare.isBareGenericParam :ast op: (ast.nodes.getView i: nm.operation))
         ) then continue
         # an alias of a type, bare or dotted, or one whose value instantiates
         # a generic (`Vals: (ListVal t: t)`), as bareNameDenotesType asks
@@ -2277,7 +2277,7 @@ declOperationOf: function {
 } out zast.nodeid is {
     dn: (st.typing.decls.get i: declId).node
     if dn.isZero then return dn
-    nop: ast.nodes.get i: dn
+    nop: ast.nodes.getView i: dn
     if nop.namedoperation then return nop.operation
     return zast.nodeid
 }
@@ -2489,7 +2489,7 @@ reportNumericArg: function {
         what = "'\{at}'"
         w = at.length.u32.orPanic
     }
-    n: ast.nodes.get i: argOp
+    n: ast.nodes.getView i: argOp
     (
         addErrorWithHint
         :st
@@ -2609,13 +2609,13 @@ memberRefusedForNumericParam: function {
     ownerDecl: templateDeclOf reg: st.reg typing: st.typing tid: owner
     if (defaultReadsNumericParam :st :ast :ownerDecl node: op) then return true
     base: op
-    if (zast.atomNameIdOf n: (ast.nodes.get i: op)).isZero then base = (
+    if (zast.atomNameIdOf n: (ast.nodes.getView i: op)).isZero then base = (
         markedTyperefBase
         :ast
         nid: op
     )
     if base.isZero then return false
-    bn: zast.atomNameIdOf n: (ast.nodes.get i: base)
+    bn: zast.atomNameIdOf n: (ast.nodes.getView i: base)
     if bn.isZero then return false
     if (numericParamOwnerFrom :st scope: ownerDecl nameId: bn).isZero then return false
     # a type's bare field so named is a slot of the singleton type, which the
@@ -2627,7 +2627,7 @@ memberRefusedForNumericParam: function {
 # markedTyperefBase -- the base of a marked type-ref, `T` in `T.hold`; 0 for any
 # other node.
 markedTyperefBase: function {ast: Ast.view nid: zast.nodeid} out zast.nodeid is {
-    n: ast.nodes.get i: nid
+    n: ast.nodes.getView i: nid
     if (isStripMarkerId nameId: (memberaccess.dottedChildNameId :ast :n)
     ).not then return zast.nodeid
     match (
@@ -2710,7 +2710,7 @@ constReadsNumericParamVia: function {
     kids: ListVal zast.nodeid
     nameId: zast.nameid
     {
-        n: ast.nodes.get i: opId
+        n: ast.nodes.getView i: opId
         # a bare name, or a pun's labelled one
         nameId = atomNameId :ast :n
         ip: operatorPartsAt :ast nid: opId
@@ -2749,10 +2749,10 @@ dottedTypeMemberName: function {ast: Ast.view n: astnode.view} out zast.nameid i
     match (
         n
     ) case dottedpath then {
-        if (atomNameId :ast n: (ast.nodes.get i: n.parent)) != zast.wellKnown.slot.wkType then {
+        if (atomNameId :ast n: (ast.nodes.getView i: n.parent)) != zast.wellKnown.slot.wkType then {
             return zast.nameid
         }
-        return (atomNameId :ast n: (ast.nodes.get i: n.child))
+        return (atomNameId :ast n: (ast.nodes.getView i: n.child))
     } else null
     return zast.nameid
 }
@@ -2851,7 +2851,12 @@ checkUntypedTextCast: function {st: zenv.ZSymbolTable ast: Ast dp: dpref} out ca
     notCast: callleg handled: false tid: ztypes.tid.zero
     v: st.typing.nodeConstAt nid: dp.parent
     if v.kind.svalKind.not or v.numTid.notZero then return notCast
-    target: textLiteralCastTarget :ast :st nameId: (atomNameId :ast n: (ast.nodes.get i: dp.child))
+    target: (
+        textLiteralCastTarget
+        :ast
+        :st
+        nameId: (atomNameId :ast n: (ast.nodes.getView i: dp.child))
+    )
     if target.isZero then return notCast
     stampGate :st nid: dp.parent tid: target
     stampGate :st nid: dp.nid tid: target
@@ -3175,17 +3180,17 @@ bareCalleeKind: function {
 # found for any other row.
 operatorPartsAt: function {ast: Ast.view nid: zast.nodeid} out zast.infixparts is {
     zn: zast.nodeid
-    ip: zast.infixPartsOf :ast n: (ast.nodes.get i: nid)
+    ip: zast.infixPartsOf :ast n: (ast.nodes.getView i: nid)
     if ip.found then return ip
-    n: ast.nodes.get i: nid
+    n: ast.nodes.getView i: nid
     absent: zast.infixparts found: false lhs: zn operator: zn rhs: zn
     if n.call.not then return absent
     if n.arguments.count.u64 != 1 then return absent
-    cb: ast.nodes.get i: n.callable
+    cb: ast.nodes.getView i: n.callable
     if cb.dottedpath.not then return absent
-    opText: zast.nameTextAt :ast ref: (zast.atomNameIdOf n: (ast.nodes.get i: cb.child))
+    opText: zast.nameTextAt :ast ref: (zast.atomNameIdOf n: (ast.nodes.getView i: cb.child))
     if (memberaccess.isOperatorName name: opText.stringView).not then return absent
-    an: ast.nodes.get i: (zast.kidAt kids: ast.kids span: n.arguments i: 0)
+    an: ast.nodes.getView i: (zast.kidAt kids: ast.kids span: n.arguments i: 0)
     if an.namedoperation.not then return absent
     return (zast.infixparts found: true lhs: cb.parent operator: cb.child rhs: an.operation)
 }
@@ -3193,7 +3198,7 @@ operatorPartsAt: function {ast: Ast.view nid: zast.nodeid} out zast.infixparts i
 # strRefAt -- the atomstring row `nid` as plain values (all zero for any other
 # arm).
 strRefAt: function {ast: Ast.view nid: zast.nodeid} out strref is {
-    n: ast.nodes.get i: nid
+    n: ast.nodes.getView i: nid
     if n.atomstring then {
         return (strref :nid nparts: n.stringparts.count lineno: n.lineno colno: n.colno)
     }
@@ -3216,7 +3221,7 @@ dpRefOf: function {dp: zast.dottedpathrow.view} out dpref is {
 # dpRefAt -- the dotted-path row `nid` as plain values (all zero for any other
 # arm).
 dpRefAt: function {ast: Ast.view nid: zast.nodeid} out dpref is {
-    n: ast.nodes.get i: nid
+    n: ast.nodes.getView i: nid
     if n.dottedpath then return (dpRefOf dp: n)
     zn: zast.nodeid
     return (dpref nid: zn parent: zn child: zn lineno: 0 colno: 0)
@@ -3237,7 +3242,7 @@ callRefOf: function {call: zast.callrow.view} out callref is {
 
 # callRefAt -- the call row `nid` as plain values (all zero for any other arm).
 callRefAt: function {ast: Ast.view nid: zast.nodeid} out callref is {
-    n: ast.nodes.get i: nid
+    n: ast.nodes.getView i: nid
     if n.call then return (callRefOf call: n)
     zn: zast.nodeid
     return (callref nid: zn callable: zn nargs: 0 lineno: 0 colno: 0 infix: false)
@@ -3245,7 +3250,7 @@ callRefAt: function {ast: Ast.view nid: zast.nodeid} out callref is {
 
 # caseRefAt -- the match row `nid` as plain values (all zero for any other arm).
 caseRefAt: function {ast: Ast.view nid: zast.nodeid} out caseref is {
-    n: ast.nodes.get i: nid
+    n: ast.nodes.getView i: nid
     if n.caseexpr then {
         return (
             caseref
@@ -3264,7 +3269,7 @@ caseRefAt: function {ast: Ast.view nid: zast.nodeid} out caseref is {
 # staticListRefAt -- what the list walk reads of list definition `nid`: its
 # element count and position (all zero for any other arm).
 staticListRefAt: function {ast: Ast.view nid: zast.nodeid} out staticlistref is {
-    n: ast.nodes.get i: nid
+    n: ast.nodes.getView i: nid
     if n.listblock then {
         return (
             staticlistref
@@ -3286,18 +3291,18 @@ staticListRefAt: function {ast: Ast.view nid: zast.nodeid} out staticlistref is 
 markFoldedFnFieldCall: function {st: zenv.ZSymbolTable ast: Ast nid: zast.nodeid} is {
     callable: zast.nodeid
     {
-        n: ast.nodes.get i: nid
+        n: ast.nodes.getView i: nid
         match n case call then callable = n.callable else return
     }
     baseId: zast.nodeid
     field: zast.nameid
     {
-        cn: ast.nodes.get i: callable
+        cn: ast.nodes.getView i: callable
         match (
             cn
         ) case dottedpath then {
             baseId = cn.parent
-            field = zast.atomNameIdOf n: (ast.nodes.get i: cn.child)
+            field = zast.atomNameIdOf n: (ast.nodes.getView i: cn.child)
         } else return
     }
     if field.isZero then return
@@ -3351,7 +3356,7 @@ constantOperandType: function {
     rhsId: zast.nodeid
     opId: zast.nodeid
     {
-        n: ast.nodes.get i: nid
+        n: ast.nodes.getView i: nid
         kind = zast.kindOf :n
         match (
             n
@@ -3360,7 +3365,7 @@ constantOperandType: function {
         } case dottedpath then {
             # a numeric conversion (`10.u64`, `N.u8`) has the type it names,
             # which is what it folds to
-            cn: atomNameId :ast n: (ast.nodes.get i: n.child)
+            cn: atomNameId :ast n: (ast.nodes.getView i: n.child)
             if (memberaccess.isScalarNameId id: cn) then {
                 isConversion = true
                 nameId = cn
@@ -3435,7 +3440,7 @@ constantBinopType: function {
 } out ztypes.tid is {
     lt: constantOperandType :st :scope :ast :unitDecl nid: lhsId
     rt: constantOperandType :st :scope :ast :unitDecl nid: rhsId
-    if (isComparisonOp nameId: (atomNameId :ast n: (ast.nodes.get i: opId))) then {
+    if (isComparisonOp nameId: (atomNameId :ast n: (ast.nodes.getView i: opId))) then {
         return (constantCompareType :st :ast :nid :lhsId :rhsId :lt :rt)
     }
     result: lt
@@ -3470,13 +3475,13 @@ constantCompareType: function {
     if lLit.not when lt.notZero then conc = lt
     if conc.isZero when rLit.not when rt.notZero then conc = rt
     if lLit when conc.notZero then {
-        lid: stampNodeId n: (ast.nodes.get i: lhsId)
+        lid: stampNodeId n: (ast.nodes.getView i: lhsId)
         if lid.notZero then {
             ztyping.nodeTypeSet tbl: st.typing.nodeType nid: lid tid: conc
         }
     }
     if rLit when conc.notZero then {
-        rid: stampNodeId n: (ast.nodes.get i: rhsId)
+        rid: stampNodeId n: (ast.nodes.getView i: rhsId)
         if rid.notZero then {
             setr: conc
             ztyping.nodeTypeSet tbl: st.typing.nodeType nid: rid tid: setr
@@ -3514,7 +3519,7 @@ constantLineType: function {
     )
     if mt0.notZero then {
         ztyping.nodeTypeSet tbl: st.typing.nodeType nid: stmtId tid: mt0
-        innerNid: stampNodeId n: (ast.nodes.get i: innerId)
+        innerNid: stampNodeId n: (ast.nodes.getView i: innerId)
         if innerNid.notZero then {
             ztyping.nodeTypeSet tbl: st.typing.nodeType nid: innerNid tid: mt0
         }
@@ -3543,7 +3548,7 @@ constantBranchWalk: function {
     isStmt: false
     lineIds: ListVal zast.nodeid
     {
-        block: ast.nodes.get i: nid
+        block: ast.nodes.getView i: nid
         if block.statement then {
             isStmt = true
             for each s: (zast.kidsOf :ast span: block.statements) loop {
@@ -3556,7 +3561,7 @@ constantBranchWalk: function {
     for each stmtId: lineIds loop {
         innerId: zast.nodeid
         {
-            s: ast.nodes.get i: stmtId
+            s: ast.nodes.getView i: stmtId
             if s.statementline then innerId = s.statementline
         }
         if innerId.notZero then {
@@ -3591,7 +3596,7 @@ readUnitIf: function {
     nid: zast.nodeid
     clauseIds: ListVal zast.nodeid
 } out unitifsite is {
-    n: ast.nodes.get i: nid
+    n: ast.nodes.getView i: nid
     if n.ifexpr.not then return (unitifsite isIf: false elseId: zast.nodeid)
     appendKidIds :ast span: n.clauses ids: clauseIds
     return (unitifsite isIf: true elseId: n.elseclause)
@@ -3605,7 +3610,7 @@ readIfClause: function {
     clauseId: zast.nodeid
     condIds: ListVal zast.nodeid
 } out zast.nodeid is {
-    clause: ast.nodes.get i: clauseId
+    clause: ast.nodes.getView i: clauseId
     if clause.ifclause.not then return zast.nodeid
     appendKidIds :ast span: clause.conditions ids: condIds
     return clause.statement
@@ -3782,7 +3787,7 @@ constOfMatch: function {
     if sv.kind.armKind.not then {
         stn: specWrittenName :st :ast tid: (constValueTid :st :scope :ast v: sv)
         sm: "match subject must be a union, variant, or generic parameter, got '\{stn}'"
-        sn: ast.nodes.get i: cr.subject
+        sn: ast.nodes.getView i: cr.subject
         (
             consteval.constFailMismatch
             :st
@@ -3795,7 +3800,7 @@ constOfMatch: function {
     }
     stmt: consteval.constMatchArm :st :ast :cr subject: sv
     if stmt.isZero then return ztypes.noConst
-    sn: atomNameId :ast n: (ast.nodes.get i: cr.subject)
+    sn: atomNameId :ast n: (ast.nodes.getView i: cr.subject)
     narrows: payload.isConst and sn.notZero
     if narrows then {
         st.walk.consts.narrows.append (ztyping.constnarrow name: sn value: payload)
@@ -3893,7 +3898,7 @@ constDefIsComputed: function {
     # (inner v: b.v)`), a list (`a: list { 1 a.0 }`) and a function's call
     callableId: zast.nodeid
     {
-        n: ast.nodes.get i: nid
+        n: ast.nodes.getView i: nid
         if (operatorPartsAt :ast :nid).found or n.listblock then return true
         if n.call then callableId = n.callable
     }
@@ -4060,11 +4065,11 @@ unitMemberHoldsValue: function {
     if dn.isZero then return false
     opId: zast.nodeid
     {
-        n: ast.nodes.get i: dn
+        n: ast.nodes.getView i: dn
         if n.namedoperation then opId = n.operation
     }
     if opId.isZero then return false
-    op: ast.nodes.get i: opId
+    op: ast.nodes.getView i: opId
     return (op.functiondef or op.objectdef or op.unitdef or op.listblock).not
 }
 
@@ -4080,7 +4085,7 @@ typeMemberHoldsConstant: function {
 } out bool is {
     objId: zast.nodeid
     td: st.typing.decls.get i: typeDecl
-    nop: ast.nodes.get i: td.node
+    nop: ast.nodes.getView i: td.node
     if nop.namedoperation then objId = nop.operation
     if objId.isZero then return false
     orf: declare.objRefAt :ast nid: objId
@@ -4150,7 +4155,7 @@ constBlockValue: function {
     isStmt: false
     lineIds: ListVal zast.nodeid
     {
-        n: ast.nodes.get i: nid
+        n: ast.nodes.getView i: nid
         if n.statement then {
             isStmt = true
             for each s: (zast.kidsOf :ast span: n.statements) loop {
@@ -4163,7 +4168,7 @@ constBlockValue: function {
     for each sId: lineIds loop {
         innerId: zast.nodeid
         {
-            s: ast.nodes.get i: sId
+            s: ast.nodes.getView i: sId
             if s.statementline then innerId = s.statementline
         }
         if innerId.notZero then r = evalConstNode :st :scope :ast :unitDecl nid: innerId
@@ -4186,7 +4191,7 @@ foldIfCond: function {
     isOther: false
     opId: zast.nodeid
     {
-        cond: ast.nodes.get i: condId
+        cond: ast.nodes.getView i: condId
         if cond.namedoperation then {
             # a labelled condition other than `when` is not a plain guard, and
             # this fold does not speak for it
@@ -4240,7 +4245,7 @@ foldReadsLocal: function {
         wid: work.get i: wi
         wi = wi + 1
         if wid.notZero then {
-            wn: ast.nodes.get i: wid
+            wn: ast.nodes.getView i: wid
             nm: zast.atomNameIdOf n: wn
             if (st.typing.declFindLocal :scope nameId: nm).notZero then return true
             # the member of a path is the root's to answer for
@@ -4274,7 +4279,7 @@ foldIfBranch: function {
     clauseIds: ListVal zast.nodeid
     elseId: zast.nodeid
     {
-        n: ast.nodes.get i: nid
+        n: ast.nodes.getView i: nid
         if n.ifexpr then {
             isIf = true
             for each c: (zast.kidsOf :ast span: n.clauses) loop {
@@ -4293,7 +4298,7 @@ foldIfBranch: function {
             condIds: ListVal zast.nodeid
             stmtId: zast.nodeid
             {
-                clause: ast.nodes.get i: clauseId
+                clause: ast.nodes.getView i: clauseId
                 if clause.ifclause then {
                     isClause = true
                     for each c: (zast.kidsOf :ast span: clause.conditions) loop {
@@ -4519,14 +4524,14 @@ constMethodSiteAt: function {ast: Ast.view nid: zast.nodeid} out constmethodsite
     recvId: zast.nodeid
     childId: zast.nodeid
     isCall: false
-    n: ast.nodes.get i: nid
+    n: ast.nodes.getView i: nid
     if n.dottedpath then {
         pathId = nid
         recvId = n.parent
         childId = n.child
     }
     if recvId.isZero when call.nid.notZero when call.infix.not then {
-        cn: ast.nodes.get i: call.callable
+        cn: ast.nodes.getView i: call.callable
         if cn.dottedpath then {
             pathId = call.callable
             recvId = cn.parent
@@ -4552,7 +4557,7 @@ checkConstantMethodShapeAt: function {
     rhsId: zast.nodeid
     isIf: false
     {
-        ipn: ast.nodes.get i: nid
+        ipn: ast.nodes.getView i: nid
         ip: operatorPartsAt :ast :nid
         if ip.found then {
             lhsId = ip.lhs
@@ -4694,7 +4699,7 @@ checkConstantIfBranchShape: function {
     bn: ast.nodes.get i: fb.stmt
     if bn.statement when bn.statements.count.u64 > 0 then {
         sId: zast.kidAt kids: ast.kids span: bn.statements i: bn.statements.count.u64 - 1
-        sl: ast.nodes.get i: sId
+        sl: ast.nodes.getView i: sId
         if sl.statementline then lastId = sl.statementline
     }
     if lastId.isZero then return false
@@ -4718,7 +4723,7 @@ constantMemberTid: function {
     rv: ztypes.cval
 } out constmember is {
     none: constmember recvTid: ztypes.tid.zero memberTid: ztypes.tid.zero
-    methodId: atomNameId :ast n: (ast.nodes.get i: site.childId)
+    methodId: atomNameId :ast n: (ast.nodes.getView i: site.childId)
     if methodId.isZero then return none
     dp: dpRefAt :ast nid: site.pathId
     # a function's name has no value here, and its members are its type's
@@ -4812,7 +4817,7 @@ checkConstantMethodCall: function {
     if (st.reg.typetypeOf typeId: fid) != ztypes.ztypetype.functionType then {
         # a value called with arguments is refused as a body refuses it: an
         # arm read as a member is its predicate, a bool
-        mnm: atomNameId :ast n: (ast.nodes.get i: site.childId)
+        mnm: atomNameId :ast n: (ast.nodes.getView i: site.childId)
         vtc: fid
         if (zenv.isSumArm ty: st.typing reg: st.reg tid: cm.recvTid nameId: mnm) then {
             vtc = stdTid :ast :st wk: zast.wellKnown.slot.wkBool
@@ -4850,7 +4855,7 @@ checkConstantMethodCall: function {
         :unitDecl
         dp: (dpRefAt :ast nid: site.pathId)
         bt: cm.recvTid
-        cnId: (atomNameId :ast n: (ast.nodes.get i: site.childId))
+        cnId: (atomNameId :ast n: (ast.nodes.getView i: site.childId))
         mo: fid
         result: fid
         hint: sh.stringView
@@ -4883,7 +4888,7 @@ unitSplitCallHint: function {
         missingIds: misI
     )
     if misN.length == 0 then return "".string
-    line: nodeLine n: (ast.nodes.get i: pathId)
+    line: nodeLine n: (ast.nodes.getView i: pathId)
     names: String
     args: String
     k: u64
@@ -4894,7 +4899,7 @@ unitSplitCallHint: function {
         opId: zast.nodeid
         dLine: u32
         {
-            dn: ast.nodes.get i: (st.typing.decls.get i: d).node
+            dn: ast.nodes.getView i: (st.typing.decls.get i: d).node
             if dn.namedoperation then opId = dn.operation
             dLine = nodeLine n: dn
         }
@@ -4986,7 +4991,7 @@ constOfBinop: function {
     if lv.kind.none then return ztypes.noConst
     rv: singletonAsBound :st v: (evalConstNode :st :scope :ast :unitDecl nid: rhsId)
     if rv.kind.none then return ztypes.noConst
-    opnId: atomNameId :ast n: (ast.nodes.get i: opId)
+    opnId: atomNameId :ast n: (ast.nodes.getView i: opId)
     if opnId.isZero then return ztypes.noConst
     return (consteval.constOfBinopFold :st :scope :ast :lv :rv :opnId :nid :ln :co)
 }
@@ -5059,14 +5064,14 @@ staticChoiceHead: function {
     if st.typing.staticTypesSeen.not then return ztypes.tid.zero
     headId: zast.nodeid
     {
-        cn: ast.nodes.get i: callableId
+        cn: ast.nodes.getView i: callableId
         if cn.dottedpath when (ast.nodes.get i: cn.child).atomid then headId = cn.parent
     }
     if headId.isZero then return ztypes.tid.zero
     # the head's own name, the last of a unit path's
-    hn: atomNameId :ast n: (ast.nodes.get i: headId)
+    hn: atomNameId :ast n: (ast.nodes.getView i: headId)
     if hn.isZero when (ast.nodes.get i: headId).dottedpath then {
-        hn = atomNameId :ast n: (ast.nodes.get i: (dpRefAt :ast nid: headId).child)
+        hn = atomNameId :ast n: (ast.nodes.getView i: (dpRefAt :ast nid: headId).child)
     }
     if (st.walk.choiceNames.has item: hn).not then return ztypes.tid.zero
     ct: namedTypeAtHead :st :scope :ast :unitDecl :headId
@@ -5092,7 +5097,7 @@ constOfStaticChoice: function {
 } out ztypes.cval is {
     ct: staticChoiceHead :st :scope :ast :unitDecl :callableId
     if ct.isZero then return ztypes.noConst
-    armId: atomNameId :ast n: (ast.nodes.get i: (dpRefAt :ast nid: callableId).child)
+    armId: atomNameId :ast n: (ast.nodes.getView i: (dpRefAt :ast nid: callableId).child)
     conform.forceAllMembers :st :ast tid: ct
     ad: st.typing.declMemberIdOf parentTypeId: ct nameId: armId
     an: zast.nameTextCopy :ast ref: armId
@@ -5166,9 +5171,9 @@ staticCtorHead: function {
     if st.typing.staticTypesSeen.not then return ztypes.tid.zero
     headId: callableId
     {
-        cn: ast.nodes.get i: callableId
+        cn: ast.nodes.getView i: callableId
         if cn.dottedpath when (
-            (atomNameId :ast n: (ast.nodes.get i: cn.child)) == zast.wellKnown.slot.wkCreate
+            (atomNameId :ast n: (ast.nodes.getView i: cn.child)) == zast.wellKnown.slot.wkCreate
         ) then headId = cn.parent
     }
     t: namedTypeAtHead :st :scope :ast :unitDecl :headId
@@ -5186,14 +5191,14 @@ namedTypeAtHead: function {
     headId: zast.nodeid
 } out ztypes.tid is {
     t: ztypes.tid
-    hn: atomNameId :ast n: (ast.nodes.get i: headId)
+    hn: atomNameId :ast n: (ast.nodes.getView i: headId)
     if hn.notZero then t = typeNamedFrom :st :scope :ast lookupUnit: unitDecl typeNameId: hn
     # a path is a type only through a unit (`tbl.row`, `inner.row`, `c.row`
     # with `c: inner`): a member read on a value (`x.isZero`), which the fold
     # meets far more often, is never resolved here
     if hn.isZero when (ast.nodes.get i: headId).dottedpath then {
         qn: (dpRefAt :ast nid: headId).parent
-        rn: atomNameId :ast n: (ast.nodes.get i: qn)
+        rn: atomNameId :ast n: (ast.nodes.getView i: qn)
         viaUnit: (
             (nameDenotesUnit :st :scope nameId: rn) or
             (qualifierUnitDecl :st :scope :ast nid: qn).notZero
@@ -5491,7 +5496,7 @@ constOfFnRef: function {
     nid: zast.nodeid
 } out ztypes.cval is {
     if (ast.nodes.get i: nid).call then {
-        cnn: ast.nodes.get i: nid
+        cnn: ast.nodes.getView i: nid
         (
             addError
             :st
@@ -5511,10 +5516,10 @@ constOfFnRef: function {
     why: String
     fnode: zast.nodeid
     {
-        dn: ast.nodes.get i: (st.typing.decls.get i: fd).node
+        dn: ast.nodes.getView i: (st.typing.decls.get i: fd).node
         if dn.namedoperation then fnode = dn.operation
     }
-    if fnode.notZero when (declare.functiondefIsNative op: (ast.nodes.get i: fnode)) then {
+    if fnode.notZero when (declare.functiondefIsNative op: (ast.nodes.getView i: fnode)) then {
         why = "'\{fname}' is a native function: it has no body a static value can refer to"
     } else if (memberaccess.declaresFunctionWithBody :st :ast declId: fd).not then {
         why = "'\{fname}' is a spec: it has no body a static value can refer to"
@@ -5527,7 +5532,7 @@ constOfFnRef: function {
         why = "'\{fname}' is a method: a static value refers to a function, and a method is bound to its receiver"
     }
     if why.length > 0 then {
-        n: ast.nodes.get i: nid
+        n: ast.nodes.getView i: nid
         (
             addError
             :st
@@ -5557,7 +5562,7 @@ fnRefTid: function {
     nid: zast.nodeid
 } out ztypes.tid is {
     ft: ztypes.tid
-    hn: atomNameId :ast n: (ast.nodes.get i: nid)
+    hn: atomNameId :ast n: (ast.nodes.getView i: nid)
     if hn.notZero then {
         lk: walkLookupTyperefById :st :scope :ast :unitDecl baseId: hn
         match lk case some then ft = lk case none then null
@@ -5565,8 +5570,8 @@ fnRefTid: function {
     }
     if (ast.nodes.get i: nid).dottedpath.not then return ft
     dr: dpRefAt :ast :nid
-    rn: atomNameId :ast n: (ast.nodes.get i: dr.parent)
-    cn: atomNameId :ast n: (ast.nodes.get i: dr.child)
+    rn: atomNameId :ast n: (ast.nodes.getView i: dr.parent)
+    cn: atomNameId :ast n: (ast.nodes.getView i: dr.child)
     if rn.isZero or cn.isZero then return ft
     # the unit the path names declares the function: its declaration there
     ud: unitDeclOfPath :st :scope :ast nid: dr.parent
@@ -5850,7 +5855,7 @@ stampDeclaredSignature: function {st: zenv.ZSymbolTable ast: Ast fid: ztypes.tid
     if dn.isZero or dp.isZero then return
     opId: zast.nodeid
     {
-        nn: ast.nodes.get i: dn
+        nn: ast.nodes.getView i: dn
         if nn.namedoperation then opId = nn.operation
     }
     if opId.isZero then return
@@ -6204,7 +6209,7 @@ constStaticListSlotRead: function {
     labelId: zast.nameid
 } out ztypes.cval is {
     {
-        gc: ast.nodes.get i: gcId
+        gc: ast.nodes.getView i: gcId
         if gc.atomid.not then return ztypes.noConst
         if gc.name != zast.wellKnown.slot.wkSlot then return ztypes.noConst
     }
@@ -6293,7 +6298,7 @@ unitDeclOfPath: function {
 } out ztypes.declid is {
     ud: qualifierUnitDecl :st :scope :ast :nid
     if ud.notZero then return ud
-    n: ast.nodes.get i: nid
+    n: ast.nodes.getView i: nid
     match (
         n
     ) case atomid then {
@@ -6484,7 +6489,7 @@ literalConstValue: function {
 } out ztypes.cval is {
     v: consteval.constLiteralValue :st name: lex
     if v.kind.none when (memberaccess.literalPastWide :lex) then {
-        ln: ast.nodes.get i: nid
+        ln: ast.nodes.getView i: nid
         (
             consteval.constFailRecord
             :st
@@ -6804,7 +6809,7 @@ resolveDottedConstantDef: function {
         # a type's `as` constant (`cfg.LIMIT`) is a value, and so is `row.create`,
         # a data value in a static position: the value channel folds both
         if isCtor when ldr == 0 then {
-            cId: atomNameId :ast n: (ast.nodes.get i: defn.child)
+            cId: atomNameId :ast n: (ast.nodes.getView i: defn.child)
             sct: (
                 typeNamedFrom
                 :st
@@ -6903,7 +6908,7 @@ reportMissingHeadMember: function {
     qualId: zast.nodeid
     memberNid: zast.nodeid
     {
-        hn: ast.nodes.get i: callable
+        hn: ast.nodes.getView i: callable
         match (
             hn
         ) case dottedpath then {
@@ -6913,15 +6918,15 @@ reportMissingHeadMember: function {
             }
         } else null
     }
-    memberId: atomNameId :ast n: (ast.nodes.get i: memberNid)
+    memberId: atomNameId :ast n: (ast.nodes.getView i: memberNid)
     if qualId.isZero or memberId.isZero then return false
     ud: qualifierUnitDecl :st :scope :ast nid: qualId
     if ud.isZero then return false
     if (st.typing.declFindChild parentDeclId: ud nameId: memberId).notZero then return false
     if (resolve.declOfUnitDefIds typing: st.typing unitDecl: ud nameId: memberId
     ).notZero then return false
-    cn: ast.nodes.get i: memberNid
-    un: zast.nameTextAt :ast ref: (atomNameId :ast n: (ast.nodes.get i: qualId))
+    cn: ast.nodes.getView i: memberNid
+    un: zast.nameTextAt :ast ref: (atomNameId :ast n: (ast.nodes.getView i: qualId))
     mn: zast.nameTextAt :ast ref: memberId
     (
         addErrorWithHint
@@ -6975,7 +6980,7 @@ resolveCalledConstantDef: function {
             # construction and was reported as a malformed constant.
             cscp: resolve.unitScopeOf typing: st.typing declId: scope
             csg: ListVal zast.nameid
-            instantiate.instCallablePath :ast op: (ast.nodes.get i: defn.callable) segs: csg
+            instantiate.instCallablePath :ast op: (ast.nodes.getView i: defn.callable) segs: csg
             cdc: instantiate.instTemplateDecl :st scopeDeclId: cscp segs: csg
             # a unit template written in a generic unit is applied as a type
             # is, below (collectMainInstantiations)
@@ -7108,17 +7113,17 @@ resolveDottedConstantRead: function {
     # `blk.slot.label`: the parent is a block's `slot`
     viaSlot: false
     {
-        sfB: ast.nodes.get i: dr.parent
+        sfB: ast.nodes.getView i: dr.parent
         if sfB.atomid then sfLit = zast.nameTextCopy :ast ref: sfB.name
         if sfB.dottedpath then {
-            gpc: ast.nodes.get i: sfB.child
+            gpc: ast.nodes.getView i: sfB.child
             if gpc.atomid then {
                 qUnitPath = sfB.parent
                 sfLit = zast.nameTextCopy :ast ref: gpc.name
                 viaSlot = gpc.name == zast.wellKnown.slot.wkSlot
             }
         }
-        sfC: ast.nodes.get i: dr.child
+        sfC: ast.nodes.getView i: dr.child
         if sfC.atomid then sfTy = zast.nameTextCopy :ast ref: sfC.name
     }
     # the read is classified in the unit its path names, as the same
@@ -7423,7 +7428,7 @@ constFoldDecl: function {
     if dnode.isZero then return
     opId: zast.nodeid
     {
-        dn: ast.nodes.get i: dnode
+        dn: ast.nodes.getView i: dnode
         if dn.namedoperation then opId = dn.operation
     }
     # a lookup reaches a template's constant over its numeric parameter as the
@@ -7491,15 +7496,15 @@ reportMissingQualifiedMember: function {
     ln: u32
     co: u32
     {
-        dn: ast.nodes.get i: defnId
+        dn: ast.nodes.getView i: defnId
         ln = nodeLine n: dn
         co = nodeCol n: dn
         if dn.dottedpath then {
-            memberId = atomNameId :ast n: (ast.nodes.get i: dn.child)
-            pn: ast.nodes.get i: dn.parent
+            memberId = atomNameId :ast n: (ast.nodes.getView i: dn.child)
+            pn: ast.nodes.getView i: dn.parent
             if pn.dottedpath then {
-                unitId = atomNameId :ast n: (ast.nodes.get i: pn.parent)
-                typeId = atomNameId :ast n: (ast.nodes.get i: pn.child)
+                unitId = atomNameId :ast n: (ast.nodes.getView i: pn.parent)
+                typeId = atomNameId :ast n: (ast.nodes.getView i: pn.child)
             }
         }
     }
@@ -7728,7 +7733,7 @@ constDefNeedsValue: function {
 # compile-time `if` or `match`. These are the shapes whose missing value is a
 # refusal.
 isComputedConstantDef: function {ast: Ast.view nid: zast.nodeid} out bool is {
-    n: ast.nodes.get i: nid
+    n: ast.nodes.getView i: nid
     if n.ifexpr or n.caseexpr then return true
     return (operatorPartsAt :ast :nid).found
 }
@@ -7820,7 +7825,7 @@ constNameClosesRing: function {
     if cd.isZero then return false
     defOp: zast.nodeid
     {
-        dn: ast.nodes.get i: (st.typing.decls.get i: cd).node
+        dn: ast.nodes.getView i: (st.typing.decls.get i: cd).node
         if dn.namedoperation then defOp = dn.operation
     }
     if defOp.isZero or (visiting.contains item: defOp).not then return false
@@ -7829,8 +7834,8 @@ constNameClosesRing: function {
         consteval.reportConstError
         :st
         nodeid: nid
-        lineno: (nodeLine n: (ast.nodes.get i: nid))
-        colno: (nodeCol n: (ast.nodes.get i: nid))
+        lineno: (nodeLine n: (ast.nodes.getView i: nid))
+        colno: (nodeCol n: (ast.nodes.getView i: nid))
         width: nameText.length
         msg: "constant '\{nameText}' is defined in terms of itself"
         hint: "a unit constant may only read constants that do not read it back".string
@@ -7856,7 +7861,7 @@ unfoldedCallWhy: function {
     for ai < call.nargs loop {
         arg: argRefAt :ast nid: (zast.callArgAt :ast nid: call.nid i: ai)
         ai = ai + 1
-        an: atomNameId :ast n: (ast.nodes.get i: arg.operation)
+        an: atomNameId :ast n: (ast.nodes.getView i: arg.operation)
         if an.notZero then {
             if (
                 constNameClosesRing
@@ -8078,7 +8083,7 @@ unfoldedBranchWhy: function {
 branchValueLine: function {ast: Ast.view nid: zast.nodeid} out zast.nodeid is {
     lastLine: zast.nodeid
     {
-        block: ast.nodes.get i: nid
+        block: ast.nodes.getView i: nid
         if block.statement when block.statements.count > 0 then {
             lastLine = (
                 zast.kidAt
@@ -8089,7 +8094,7 @@ branchValueLine: function {ast: Ast.view nid: zast.nodeid} out zast.nodeid is {
         }
     }
     if lastLine.isZero then return zast.nodeid
-    s: ast.nodes.get i: lastLine
+    s: ast.nodes.getView i: lastLine
     if s.statementline then return s.statementline
     return zast.nodeid
 }
@@ -8113,7 +8118,7 @@ unfoldedBinopWhy: function {
     constFailClear :st
     lk: constKindName :st v: lv
     rk: constKindName :st v: rv
-    opn: zast.nameTextCopy :ast ref: (atomNameId :ast n: (ast.nodes.get i: br.operator))
+    opn: zast.nameTextCopy :ast ref: (atomNameId :ast n: (ast.nodes.getView i: br.operator))
     (
         reportUnfolded
         :st
@@ -8136,8 +8141,8 @@ unfoldedMemberWhy: function {
     parentId: zast.nodeid
     childId: zast.nodeid
 } out bool is {
-    pn: zast.atomNameIdOf n: (ast.nodes.get i: parentId)
-    cn: zast.atomNameIdOf n: (ast.nodes.get i: childId)
+    pn: zast.atomNameIdOf n: (ast.nodes.getView i: parentId)
+    cn: zast.atomNameIdOf n: (ast.nodes.getView i: childId)
     if pn.isZero or cn.isZero then return false
     hit: envLookup :st :scope nameId: pn
     if hit.declId.isZero then return false
@@ -8259,7 +8264,7 @@ reportUnfoldedAs: function {
     msg: String
     hint: String
 } is {
-    n: ast.nodes.get i: nid
+    n: ast.nodes.getView i: nid
     (
         addErrorWithHint
         :st
@@ -8280,7 +8285,7 @@ reportUnfoldedAs: function {
 headNamesUnit: function {
     st: zenv.ZSymbolTable.view scope: ztypes.declid ast: Ast.view callable: zast.nodeid
 } out bool is {
-    nm: typeargs.atomName :ast n: (ast.nodes.get i: callable)
+    nm: typeargs.atomName :ast n: (ast.nodes.getView i: callable)
     if nm.length == 0 then return false
     return (nameDenotesUnit :st :scope nameId: (nameIdOf :ast name: nm.stringView))
 }

@@ -276,7 +276,8 @@ indexDeclDef: function {
         # numeric literal at its root is a typed constant (`Q: 0.25.f64`),
         # which keeps its constDecl as the bare literal does
         dkind: ztyping.declkind.reexportDecl
-        if (isNumericLiteralNameAt :ast ref: (rootNameIdOf :ast n: (ast.nodes.get i: opNid))) then {
+        if (isNumericLiteralNameAt :ast ref: (rootNameIdOf :ast n: (ast.nodes.getView i: opNid))
+        ) then {
             dkind = ztyping.declkind.constDecl
         }
         defDecl = st.typing.declNew name: nameRef parent: parentDeclId kind: dkind node: nopNodeId
@@ -311,10 +312,10 @@ indexDeclFnInner: function {
     declId: ztypes.declid
     fnNodeId: zast.nodeid
 } is {
-    fn: ast.nodes.get i: fnNodeId
+    fn: ast.nodes.getView i: fnNodeId
     if fn.functiondef then {
         for each pId: (zast.kidsOf :ast span: fn.parameters) loop {
-            pn: ast.nodes.get i: pId
+            pn: ast.nodes.getView i: pId
             if pn.namedoperation then {
                 (
                     st.typing.declNew
@@ -326,7 +327,7 @@ indexDeclFnInner: function {
             }
         }
         for each aId: (zast.kidsOf :ast span: fn.asItems) loop {
-            an: ast.nodes.get i: aId
+            an: ast.nodes.getView i: aId
             if an.namedoperation then {
                 (
                     indexDeclAsMember
@@ -355,11 +356,11 @@ indexDeclStaticListInner: function {
     nodes: ListVal zast.nodeid
     ords: ListVal u64
     {
-        dn: ast.nodes.get i: staticListNodeId
+        dn: ast.nodes.getView i: staticListNodeId
         if dn.listblock then {
             ord: u64
             for each eId: (zast.kidsOf :ast span: dn.elements) loop {
-                en: ast.nodes.get i: eId
+                en: ast.nodes.getView i: eId
                 if en.namedoperation then {
                     nrefs.append en.name
                     nodes.append en.nodeid
@@ -481,7 +482,7 @@ indexDeclAsMember: function {
     nopNodeId: zast.nodeid
     opNodeId: zast.nodeid
 } is {
-    opNode: ast.nodes.get i: opNodeId
+    opNode: ast.nodes.getView i: opNodeId
     if (typeref.asOpIsTypeShaped :ast :opNode) then st.walk.asTypeShapedNames.add item: nameRef
     match (
         opNode
@@ -540,7 +541,7 @@ indexDeclPublicEntries: function {
                 isRef: false
                 isLabel: false
                 {
-                    mop: ast.nodes.get i: m.operation
+                    mop: ast.nodes.getView i: m.operation
                     if mop.labelvalue then {
                         isRef = true
                         isLabel = true
@@ -638,7 +639,7 @@ asItemCanAlias: function {
     if item.operation.isZero or (item.name == zast.wellKnown.slot.wkTag) then return false
     if (zast.implementBaseOf :ast opId: item.operation).notZero then return false
     if (zast.isGenericParamOp :ast opId: item.operation) then return false
-    op: ast.nodes.get i: item.operation
+    op: ast.nodes.getView i: item.operation
     if op.functiondef or (isLabelValue :op) then return false
     return (namesNullType :st :ast ownerDecl: tdecl nameId: (zast.atomNameIdOf n: op)).not
 }
@@ -669,13 +670,13 @@ collectMentions: function {ast: Ast.view n: astnode.view into: (IdSet zast.namei
     } case labelvalue then {
         into.add item: n.name
     } case dottedpath then {
-        collectMentions :ast n: (ast.nodes.get i: n.parent) :into
+        collectMentions :ast n: (ast.nodes.getView i: n.parent) :into
     } case caseclause then {
-        collectMentions :ast n: (ast.nodes.get i: n.statement) :into
+        collectMentions :ast n: (ast.nodes.getView i: n.statement) :into
     } else {
         kids: zast.childIds :ast :n
         for each k: kids loop {
-            collectMentions :ast n: (ast.nodes.get i: k) :into
+            collectMentions :ast n: (ast.nodes.getView i: k) :into
         }
     }
 }
@@ -700,7 +701,7 @@ isGenericParam: function {ast: Ast.view op: astnode.view} out bool is {
     match (
         op
     ) case call then {
-        return (isGenericParam :ast op: (ast.nodes.get i: op.callable))
+        return (isGenericParam :ast op: (ast.nodes.getView i: op.callable))
     } case dottedpath then {
         return (zast.markerKindOfLeaf :ast leaf: op.child).genericBound
     } else {
@@ -822,7 +823,7 @@ genericParamDesc: function {
     bn: zast.nameid
     bq: zast.nameid
     if k == ztypes.constraintkind.other then {
-        bn = atomNameId :ast n: (ast.nodes.get i: (
+        bn = atomNameId :ast n: (ast.nodes.getView i: (
             genericBoundAtomId
             :ast
             n: op
@@ -848,8 +849,8 @@ registerGenericParamOne: function {
     tdecl: ztypes.declid
     m: astnode.view
 } is {
-    if m.namedoperation when (isGenericParam :ast op: (ast.nodes.get i: m.operation)) then {
-        cd: genericParamDesc :ast :st :tdecl op: (ast.nodes.get i: m.operation)
+    if m.namedoperation when (isGenericParam :ast op: (ast.nodes.getView i: m.operation)) then {
+        cd: genericParamDesc :ast :st :tdecl op: (ast.nodes.getView i: m.operation)
         (
             st.reg.addGenericParam
             :tdecl
@@ -874,8 +875,8 @@ registerGenericParamOne: function {
             :ast
             :st
             :tdecl
-            op: (ast.nodes.get i: m.operation)
-            base: (genericConstraintBase :ast n: (ast.nodes.get i: m.operation)).stringView
+            op: (ast.nodes.getView i: m.operation)
+            base: (genericConstraintBase :ast n: (ast.nodes.getView i: m.operation)).stringView
         )
         # and the parameter itself, keyed to the OPERATION node -- what
         # Spans keys a declaration's own row to.
@@ -896,7 +897,7 @@ recordGenericBoundAtom: function {
 } is {
     bnid: genericBoundAtomId :ast n: op
     if bnid.isZero then return
-    bnm: atomNameId :ast n: (ast.nodes.get i: bnid)
+    bnm: atomNameId :ast n: (ast.nodes.getView i: bnid)
     if bnm.isZero then bnm = nameIdOf :ast name: base
     st.walk.bounds.genericBoundName.set key: bnid value: bnm
     st.walk.bounds.genericBoundScope.set key: bnid value: tdecl
@@ -915,7 +916,7 @@ boundNameShadowsFamily: function {
     if (genericBoundQualifierId :ast n: op).notZero then return false
     bnid: genericBoundAtomId :ast n: op
     if bnid.isZero then return false
-    return (familyNameTaken :st :tdecl nameId: (atomNameId :ast n: (ast.nodes.get i: bnid)))
+    return (familyNameTaken :st :tdecl nameId: (atomNameId :ast n: (ast.nodes.getView i: bnid)))
 }
 
 # familyNameTaken -- a bare bound name written on template `tdecl` reaches a
@@ -944,11 +945,11 @@ genericBoundQualifierId: function {ast: Ast.view n: astnode.view} out zast.namei
     match (
         n
     ) case call then {
-        return (genericBoundQualifierId :ast n: (ast.nodes.get i: n.callable))
+        return (genericBoundQualifierId :ast n: (ast.nodes.getView i: n.callable))
     } case dottedpath then {
         r: zast.nameid
-        pn: ast.nodes.get i: n.parent
-        if pn.dottedpath then r = atomNameId :ast n: (ast.nodes.get i: pn.parent)
+        pn: ast.nodes.getView i: n.parent
+        if pn.dottedpath then r = atomNameId :ast n: (ast.nodes.getView i: pn.parent)
         return r
     } else {
         return zast.nameid.zero
@@ -962,7 +963,7 @@ genericBoundApplication: function {ast: Ast.view n: astnode.view} out zast.nodei
     match (
         n
     ) case call then {
-        return (genericBoundApplication :ast n: (ast.nodes.get i: n.callable))
+        return (genericBoundApplication :ast n: (ast.nodes.getView i: n.callable))
     } case dottedpath then {
         if (ast.nodes.get i: n.parent).call then return n.parent
         return zast.nodeid
@@ -980,9 +981,9 @@ genericConstraintBase: function {ast: Ast.view n: astnode.view} out String is {
     match (
         n
     ) case call then {
-        return (genericConstraintBase :ast n: (ast.nodes.get i: n.callable))
+        return (genericConstraintBase :ast n: (ast.nodes.getView i: n.callable))
     } case dottedpath then {
-        pn: ast.nodes.get i: n.parent
+        pn: ast.nodes.getView i: n.parent
         an: typeargs.atomName :ast n: pn
         if an.length > 0 then return an
         return (statics.typeExprText :ast nid: n.parent)
@@ -997,9 +998,9 @@ genericConstraintBaseId: function {ast: Ast.view n: astnode.view} out zast.namei
     match (
         n
     ) case call then {
-        return (genericConstraintBaseId :ast n: (ast.nodes.get i: n.callable))
+        return (genericConstraintBaseId :ast n: (ast.nodes.getView i: n.callable))
     } case dottedpath then {
-        return (atomNameId :ast n: (ast.nodes.get i: n.parent))
+        return (atomNameId :ast n: (ast.nodes.getView i: n.parent))
     } else {
         return zast.nameid
     }
@@ -1022,7 +1023,7 @@ familyBoundLeafId: function {
     if qd != st.typing.systemUnitRoot when qd != st.typing.coreUnitRoot then {
         return zast.nameid.zero
     }
-    return (atomNameId :ast n: (ast.nodes.get i: (genericBoundAtomId :ast n: op)))
+    return (atomNameId :ast n: (ast.nodes.getView i: (genericBoundAtomId :ast n: op)))
 }
 
 # genericBoundAtomId -- the node the bound is SPELLED at, for a report: the
@@ -1032,11 +1033,11 @@ genericBoundAtomId: function {ast: Ast.view n: astnode.view} out zast.nodeid is 
     match (
         n
     ) case call then {
-        return (genericBoundAtomId :ast n: (ast.nodes.get i: n.callable))
+        return (genericBoundAtomId :ast n: (ast.nodes.getView i: n.callable))
     } case dottedpath then {
         pid: n.parent
         leaf: zast.nodeid
-        pn: ast.nodes.get i: pid
+        pn: ast.nodes.getView i: pid
         if pn.dottedpath then leaf = pn.child
         if leaf.notZero then return leaf
         return pid
@@ -1054,7 +1055,7 @@ registerGenericParams: function {
     items: zast.kidspan
 } is {
     for each rid: (zast.kidsOf :ast span: items) loop {
-        rm: ast.nodes.get i: rid
+        rm: ast.nodes.getView i: rid
         registerGenericParamOne :st :ast :tdecl m: rm
     }
 }
@@ -1117,7 +1118,7 @@ pathOwnership: function {ast: Ast.view n: astnode.view} out optionval ztypes.zpa
     match (
         n
     ) case dottedpath then {
-        cid: atomNameId :ast n: (ast.nodes.get i: n.child)
+        cid: atomNameId :ast n: (ast.nodes.getView i: n.child)
         if (
             cid == zast.wellKnown.slot.wkBorrow
         ) then return (optionval.some ztypes.zparamownership.borrowMode)
@@ -1148,8 +1149,8 @@ baseTypeNameId: function {ast: Ast.view n: astnode.view} out zast.nameid is {
     } case labelvalue then {
         return n.name
     } case dottedpath then {
-        if (isStripMarkerId nameId: (atomNameId :ast n: (ast.nodes.get i: n.child))) then {
-            return (baseTypeNameId :ast n: (ast.nodes.get i: n.parent))
+        if (isStripMarkerId nameId: (atomNameId :ast n: (ast.nodes.getView i: n.child))) then {
+            return (baseTypeNameId :ast n: (ast.nodes.getView i: n.parent))
         }
         return zast.nameid.zero
     } else {
@@ -1164,7 +1165,7 @@ genericApplHeadId: function {ast: Ast.view n: astnode.view} out zast.nameid is {
     match (
         n
     ) case call then {
-        return (atomNameId :ast n: (ast.nodes.get i: n.callable))
+        return (atomNameId :ast n: (ast.nodes.getView i: n.callable))
     } else {
         return zast.nameid.zero
     }
@@ -1197,7 +1198,7 @@ numericParamRefTid: function {
     arg: argref
 } out ztypes.tid is {
     # a bare name, or the pun `(fx :n)` whose value is the name it labels
-    nameId: atomNameId :ast n: (ast.nodes.get i: arg.operation)
+    nameId: atomNameId :ast n: (ast.nodes.getView i: arg.operation)
     if nameId.isZero then return ztypes.tid
     owner: enclDecl
     if owner.isZero then owner = statics.numericParamOwnerFrom :st :scope :nameId
@@ -1221,7 +1222,7 @@ numericParamRefTid: function {
 # the binding keeps its destructor. noneMode for any other return.
 returnMarkerAt: function {ast: Ast.view oId: zast.nodeid} out ztypes.zparamownership is {
     if oId.isZero then return ztypes.zparamownership.noneMode
-    m: pathOwnership :ast n: (ast.nodes.get i: oId)
+    m: pathOwnership :ast n: (ast.nodes.getView i: oId)
     if m.some when m.isReference or (m == ztypes.zparamownership.holdMode) then return m
     return ztypes.zparamownership.noneMode
 }
@@ -1236,7 +1237,7 @@ returnHasBorrowMarker: function {ast: Ast.view oId: zast.nodeid} out bool is {
 # with or without a marker), which is what a constructor writes.
 returnNamesThis: function {ast: Ast.view oId: zast.nodeid} out bool is {
     if oId.isZero then return false
-    return (rootNameIdOf :ast n: (ast.nodes.get i: oId)) == zast.wellKnown.slot.wkThis
+    return (rootNameIdOf :ast n: (ast.nodes.getView i: oId)) == zast.wellKnown.slot.wkThis
 }
 
 # pinHonestyAt -- checkPinHonesty on a type whose members may not be attached
@@ -1385,9 +1386,9 @@ fnHasPinnableInput: function {
     for kP < fnode.nparams loop {
         pmId: zast.fnParamAt :ast nid: fnode.nid i: kP
         kP = kP + 1
-        pm: ast.nodes.get i: pmId
+        pm: ast.nodes.getView i: pmId
         if pm.namedoperation then {
-            po: pathOwnership :ast n: (ast.nodes.get i: pm.operation)
+            po: pathOwnership :ast n: (ast.nodes.getView i: pm.operation)
             match (
                 po
             ) case some then {
@@ -1505,7 +1506,7 @@ registerGenericOrReceiverParam: function {
         # it whether the call reads or writes, which is what
         # methodReceiverIsView asks. A bodyless spec has no other
         # chance to record it.
-        rcvOw: pathOwnership :ast n: (ast.nodes.get i: pm.operation)
+        rcvOw: pathOwnership :ast n: (ast.nodes.getView i: pm.operation)
         if rcvOw.some then {
             (
                 st.typing.setChildOwnership
@@ -1533,7 +1534,7 @@ registerGenericOrReceiverParam: function {
         # member type -- unit template methods stay childless (emit
         # `(void)`); unit bodies clone, so the stamp is per-clone.
         paramTid: genericParamTidMint :st :ast tdecl: receiverEnclDecl nameId: ptn
-        paramNid: stampNodeId n: (ast.nodes.get i: pm.operation)
+        paramNid: stampNodeId n: (ast.nodes.getView i: pm.operation)
         ztyping.nodeTypeSet tbl: st.typing.nodeType nid: paramNid tid: paramTid
         if thisName.length != 0 then {
             st.typing.setMemberType parentTypeId: fid nameId: pm.name childTypeId: paramTid
@@ -1543,7 +1544,7 @@ registerGenericOrReceiverParam: function {
     # canonical type: the ownership row is what a call's argument reads. The
     # row needs the member laid above, and a receiver recorded its own.
     if isRecvP.not then {
-        gOw: pathOwnership :ast n: (ast.nodes.get i: pm.operation)
+        gOw: pathOwnership :ast n: (ast.nodes.getView i: pm.operation)
         if gOw.some then {
             st.typing.setChildOwnershipId parentTypeId: fid nameId: pm.name ownership: gOw
         }
@@ -1568,10 +1569,10 @@ registerFnGenericParams: function {
     # templates do (checkGenericCall checks satisfaction per call).
     # the as-items are read through a view scoped to this block
     {
-        fn: ast.nodes.get i: fnode.nid
+        fn: ast.nodes.getView i: fnode.nid
         if fn.functiondef then {
             for each rid: (zast.kidsOf :ast span: fn.asItems) loop {
-                rm: ast.nodes.get i: rid
+                rm: ast.nodes.getView i: rid
                 if (isOwnerParamItem :st :ast :ownerD m: rm).not then (
                     registerGenericParamOne
                     :st
@@ -1618,7 +1619,7 @@ isOwnerParamItem: function {
 } out bool is {
     if ownerD.isZero then return false
     if m.namedoperation.not then return false
-    if (isGenericParam :ast op: (ast.nodes.get i: m.operation)).not then return false
+    if (isGenericParam :ast op: (ast.nodes.getView i: m.operation)).not then return false
     return (st.reg.isGenericParamOf tdecl: ownerD name: m.name)
 }
 
@@ -1631,9 +1632,10 @@ fnHasOwnGenericParam: function {
     ownerD: ztypes.declid
 } out bool is {
     for each rid: (zast.kidsOf :ast span: items) loop {
-        rm: ast.nodes.get i: rid
+        rm: ast.nodes.getView i: rid
         if (isOwnerParamItem :st :ast :ownerD m: rm) then continue
-        if rm.namedoperation when (isGenericParam :ast op: (ast.nodes.get i: rm.operation)) then {
+        if rm.namedoperation when (isGenericParam :ast op: (ast.nodes.getView i: rm.operation)
+        ) then {
             return true
         }
     }
@@ -1651,13 +1653,13 @@ registerMethodBounds: function {
     ownerD: ztypes.declid
     fnode: fnref
 } is {
-    fn: ast.nodes.get i: fnode.nid
+    fn: ast.nodes.getView i: fnode.nid
     if fn.functiondef.not then return
     for each rid: (zast.kidsOf :ast span: fn.asItems) loop {
-        rm: ast.nodes.get i: rid
+        rm: ast.nodes.getView i: rid
         bounds: isOwnerParamItem :st :ast :ownerD m: rm
         if bounds when rm.namedoperation then {
-            op: ast.nodes.get i: rm.operation
+            op: ast.nodes.getView i: rm.operation
             cd: genericParamDesc :ast :st tdecl: fnDecl :op
             st.reg.addMethodBound mdecl: fnDecl paramName: rm.name bound: cd
             (
@@ -1778,11 +1780,11 @@ resolveFunction: function {
     # the `as` items' values, for the ones that are no generic parameter
     asOps: ListVal zast.nodeid
     {
-        fn: ast.nodes.get i: fnId
+        fn: ast.nodes.getView i: fnId
         if fn.functiondef then {
             isgen = fnHasOwnGenericParam :st :ast items: fn.asItems :ownerD
             for each faId: (zast.kidsOf :ast span: fn.asItems) loop {
-                fa: ast.nodes.get i: faId
+                fa: ast.nodes.getView i: faId
                 if fa.namedoperation then asOps.append from: fa.operation
             }
         }
@@ -1988,9 +1990,9 @@ asBindingOf: function {
 } out asbinding is {
     r: asbinding declared: false struck: false
     for each amId: (zast.kidsOf :ast span: asItems) loop {
-        am: ast.nodes.get i: amId
+        am: ast.nodes.getView i: amId
         if am.namedoperation when am.name == nameId then {
-            vn: atomNameId :ast n: (ast.nodes.get i: am.operation)
+            vn: atomNameId :ast n: (ast.nodes.getView i: am.operation)
             if (namesNullType :st :ast :ownerDecl nameId: vn) then {
                 r.struck = true
             } else {
@@ -2012,7 +2014,7 @@ refuseValtypeCopy: function {
     defName: StringView
 } is {
     for each amId: (zast.kidsOf :ast span: asItems) loop {
-        am: ast.nodes.get i: amId
+        am: ast.nodes.getView i: amId
         if am.namedoperation when am.name == zast.wellKnown.slot.wkCopy then {
             (
                 addErrorWithHint
@@ -2118,7 +2120,7 @@ reportAsConstruction: function {
 } out bool is {
     headNid: zast.nodeid
     {
-        vn: ast.nodes.get i: item.operation
+        vn: ast.nodes.getView i: item.operation
         if vn.call.not then return false
         headNid = vn.callable
     }
@@ -2164,7 +2166,7 @@ reportAsMemberNotConstant: function {
     vnId: zast.nameid
     ln: u32
     co: u32
-    vn: ast.nodes.get i: item.operation
+    vn: ast.nodes.getView i: item.operation
     vnId = zast.atomNameIdOf n: vn
     ln = nodeLine n: vn
     co = nodeCol n: vn
@@ -2285,7 +2287,7 @@ methodsAreTemplate: function {
     objId: zast.nodeid
     parentId: ztypes.tid
 } out bool is {
-    onA: ast.nodes.get i: objId
+    onA: ast.nodes.getView i: objId
     if onA.objectdef when (zast.itemsHaveGenericParam :ast items: onA.asItems) then return true
     return (st.reg.isGenericOf tid: parentId)
 }
@@ -2317,7 +2319,7 @@ attachMethods: function {
             mname: zast.nameTextCopy :ast ref: am.name
             if am.name == zast.wellKnown.slot.wkCreate then hasCreate = true
             {
-                mop: ast.nodes.get i: am.operation
+                mop: ast.nodes.getView i: am.operation
                 if mop.functiondef then {
                     (
                         checkMemberDeclEagerly
@@ -2349,7 +2351,7 @@ attachMethods: function {
                 mido
             ) case some then {
                 st.typing.setMemberType parentTypeId: parentId nameId: am.name childTypeId: mido
-                markGenericMethod :st op: (ast.nodes.get i: am.operation) mid: mido isgen: agen
+                markGenericMethod :st op: (ast.nodes.getView i: am.operation) mid: mido isgen: agen
             } case none then {
                 attachAsConstant :st :ast :parentId item: am
             }
@@ -2371,7 +2373,7 @@ asItemIsNoMarker: function {
     ptid: parentId
     itemDecl: st.typing.declMemberIdOf parentTypeId: ptid nameId: item
     if (st.typing.isAsConstDecl declId: itemDecl) then return true
-    vnId: zast.atomNameIdOf n: (ast.nodes.get i: op)
+    vnId: zast.atomNameIdOf n: (ast.nodes.getView i: op)
     if vnId.isZero then return false
     ownDecl: st.typing.declIdOfType typeId: ptid
     return (st.typing.declFindChild parentDeclId: ownDecl nameId: vnId).notZero
@@ -2409,7 +2411,7 @@ asItemMarkerTarget: function {
     ) case some then {
         refused = asItemNamesPlainType :st :ast :parentId :item
     } case none then {
-        if (isLabelValue op: (ast.nodes.get i: op)).not then {
+        if (isLabelValue op: (ast.nodes.getView i: op)).not then {
             asItemTypeNameRefused :st :scope :ast :unitDecl :parentId :item :op
             # a member the path's type does not declare is the value's error,
             # where it is written: the member has no type, and a read of it --
@@ -2453,7 +2455,7 @@ asItemTypeNameRefused: function {
     item: zast.nameid
     op: zast.nodeid
 } is {
-    vnId: zast.atomNameIdOf n: (ast.nodes.get i: op)
+    vnId: zast.atomNameIdOf n: (ast.nodes.getView i: op)
     if vnId.isZero then return
     if (isNumericLiteralNameAt :ast ref: vnId) then return
     # `create: null` opts out of a member; null is no type an item declares
@@ -2522,7 +2524,7 @@ attachMarkers: function {
         mmName: zast.nameid
         cnm: String
         {
-            mm: ast.nodes.get i: mmId
+            mm: ast.nodes.getView i: mmId
             # a method is no marker, and is asked nothing more
             if mm.namedoperation when (ast.nodes.get i: mm.operation).functiondef.not then {
                 isMarker = true
@@ -2534,7 +2536,7 @@ attachMarkers: function {
                     mmOp = ib
                     implemented = true
                 }
-                cnm = zast.nameTextCopy :ast ref: (atomNameId :ast n: (ast.nodes.get i: mmOp))
+                cnm = zast.nameTextCopy :ast ref: (atomNameId :ast n: (ast.nodes.getView i: mmOp))
             }
         }
         # a member already folded to a constant of the type is no marker, and
@@ -2563,7 +2565,7 @@ attachMarkers: function {
             # so it resolves when something does -- forceMemberDecl.
             lazyTag: false
             if st.typing.eagerAll.not when mmName == zast.wellKnown.slot.wkTag then {
-                opName: atomNameId :ast n: (ast.nodes.get i: mmOp)
+                opName: atomNameId :ast n: (ast.nodes.getView i: mmOp)
                 if opName == zast.wellKnown.slot.wkTag then lazyTag = true
             }
             if (statics.isNumericLiteralName name: cnm.stringView).not when lazyTag.not then {
@@ -2632,13 +2634,13 @@ objectTypedefBaseId: function {ast: Ast.view onode: objref} out zast.nameid is {
     bn: objectTypedefBaseNode :ast :onode
     if bn.isZero then return zast.nameid.zero
     # a base named through its unit (`pr.Cell`) is named by the member it reaches
-    bnn: ast.nodes.get i: bn
+    bnn: ast.nodes.getView i: bn
     match (
         bnn
     ) case dottedpath then {
-        return (atomNameId :ast n: (ast.nodes.get i: bnn.child))
+        return (atomNameId :ast n: (ast.nodes.getView i: bnn.child))
     } else null
-    return (typeargs.paramTypeBaseNameId :ast op: (ast.nodes.get i: bn))
+    return (typeargs.paramTypeBaseNameId :ast op: (ast.nodes.getView i: bn))
 }
 
 # objectTypedefBaseTid -- the base type id of a typedef, or 0 when the object
@@ -2677,7 +2679,7 @@ objectTypedefBaseTid: function {
         dtid: resolve.resolveDottedArgTid :st :scope :ast nid: bn
         if dtid.notZero then return dtid
     }
-    anId: rootNameIdOf :ast n: (ast.nodes.get i: bn)
+    anId: rootNameIdOf :ast n: (ast.nodes.getView i: bn)
     if anId.isZero then return ztypes.tid.zero
     return (resolve.resolveAtomType :st :scope :ast :unitDecl nameId: anId thisName: "")
 }
@@ -2741,12 +2743,12 @@ scanPublicEntry: function {
     aliases: ListVal aliasentry
     badMsg: StringView
 } is {
-    bn: ast.nodes.get i: nid
+    bn: ast.nodes.getView i: nid
     if bn.namedoperation.not then return
     ent: argRefAt :ast :nid
     if (refuseNestedVisibility :st :ast m: ent) then return
     pubIds.add item: bn.name
-    bop: ast.nodes.get i: bn.operation
+    bop: ast.nodes.getView i: bn.operation
     match (
         bop
     ) case labelvalue then null case atomid then {
@@ -2799,7 +2801,7 @@ scanTypeAsBlock: function {
 } out bool is {
     if n.namedoperation.not then return false
     if (zast.unitOpKindIs :ast opId: n.operation k: zast.unitkind.publicNs).not then return false
-    opNode: ast.nodes.get i: n.operation
+    opNode: ast.nodes.getView i: n.operation
     if opNode.unitdef then (
         scanPublicBlock
         :st
@@ -2905,7 +2907,7 @@ scanVisibility: function {
             scanTypeAsBlock
             :st
             :ast
-            n: (ast.nodes.get i: aId)
+            n: (ast.nodes.getView i: aId)
             :pubIds
             :aliases
         ) then pubFound = true
@@ -2918,7 +2920,7 @@ scanVisibility: function {
             memberaccess.scanTypeField
             :st
             :ast
-            n: (ast.nodes.get i: fId)
+            n: (ast.nodes.getView i: fId)
             :memberIds
             :grants
             :excl
@@ -2931,7 +2933,7 @@ scanVisibility: function {
     for kA2iter < onode.nas loop {
         a2Id: zast.objAsItemAt :ast nid: onode.nid i: kA2iter
         kA2iter = kA2iter + 1
-        scanTypeAsMember :ast n: (ast.nodes.get i: a2Id) :memberIds :excl :pubIds
+        scanTypeAsMember :ast n: (ast.nodes.getView i: a2Id) :memberIds :excl :pubIds
     }
     installRenameAliases :st :ast :aliases :memberIds
 }
@@ -2963,14 +2965,14 @@ scanUnitMember: function {
     memberIds: IdSet zast.nameid
     memberNameList: ListVal zast.nameid
 } out bool is {
-    um: ast.nodes.get i: nid
+    um: ast.nodes.getView i: nid
     if um.namedoperation.not then return false
     if (zast.unitOpKindIs :ast opId: um.operation k: zast.unitkind.publicNs).not then {
         memberIds.add item: um.name
         memberNameList.append from: um.name
         return false
     }
-    uop: ast.nodes.get i: um.operation
+    uop: ast.nodes.getView i: um.operation
     if uop.unitdef.not then return false
     # "" for badMsg: an atom naming no sibling is not a malformed entry here but
     # a DEFINITION of the block (`MAX: 10`), which a unit's public block may hold
@@ -3035,7 +3037,7 @@ applyUnitVisibility: function {
         for each uIdV: program.units loop {
             opIdV: zast.nodeid
             nmV: zast.nameid
-            ruV: program.nodes.get i: uIdV
+            ruV: program.nodes.getView i: uIdV
             if ruV.namedoperation then {
                 opIdV = ruV.operation
                 nmV = ruV.name
@@ -3070,7 +3072,7 @@ applyUnitVisibility: function {
                             mIds: zast.unitBodyIdsAt ast: program unitId: opIdV
                             mref: program.names.find s: "main"
                             for each memberIdAt: (zast.kidsOf ast: program span: mIds) loop {
-                                mn: program.nodes.get i: memberIdAt
+                                mn: program.nodes.getView i: memberIdAt
                                 if mn.namedoperation when (
                                     mn.name == mref
                                 ) when mref.notZero then {
@@ -3152,8 +3154,8 @@ refuseSelfNamedMember: function {
     if fm.operation.isZero then return false
     vn: ast.nodes.get i: fm.operation
     head: zast.nameid
-    if vn.atomid then head = atomNameId :ast n: (ast.nodes.get i: fm.operation)
-    if vn.dottedpath then head = rootNameIdOf :ast n: (ast.nodes.get i: fm.operation)
+    if vn.atomid then head = atomNameId :ast n: (ast.nodes.getView i: fm.operation)
+    if vn.dottedpath then head = rootNameIdOf :ast n: (ast.nodes.getView i: fm.operation)
     if head.isZero then return false
     if head != fm.name then return false
     od: st.typing.declIdOfType typeId: ownerTid
@@ -3166,8 +3168,8 @@ refuseSelfNamedMember: function {
         addErrorWithHint
         :st
         nodeid: fm.operation
-        lineno: (nodeLine n: (ast.nodes.get i: fm.operation))
-        colno: (nodeCol n: (ast.nodes.get i: fm.operation))
+        lineno: (nodeLine n: (ast.nodes.getView i: fm.operation))
+        colno: (nodeCol n: (ast.nodes.getView i: fm.operation))
         e: zast.err.typeError
         msg: "'\{nn}' is \{what} of '\{tn}', not a type"
         note: "".string
@@ -3194,7 +3196,7 @@ attachRecordField: function {
     if (refuseStringDefault :st :ast what: "field" nameId: fm.name :fm) then return
     refuseSelfNamedMember :st :ast ownerTid: rid :fm
     memberaccess.refuseMarkedFunctionType :st :ast :unitDecl :scope typeNid: fm.operation
-    ftnR: fieldHeadNameId :ast n: (ast.nodes.get i: fm.operation)
+    ftnR: fieldHeadNameId :ast n: (ast.nodes.getView i: fm.operation)
     # a field's type-ref can name a SIBLING function (an fn-ptr
     # slot defaulting to it), which is a member like any other
     mrefR: fieldHeadMemberTid :st :ast :unitDecl :defName ownerTid: rid nameId: ftnR
@@ -3204,10 +3206,10 @@ attachRecordField: function {
         if (st.reg.typetypeOf typeId: mrefR) == ztypes.ztypetype.functionType then {
             st.typing.setChildFnptrField pool: ast.names parentTypeId: rid name: fname
         }
-        pdkR: stampNodeId n: (ast.nodes.get i: fm.operation)
+        pdkR: stampNodeId n: (ast.nodes.getView i: fm.operation)
         pdoR: rid
         st.walk.pendingDefault.owner.set key: pdkR value: pdoR
-        pdk2R: stampNodeId n: (ast.nodes.get i: fm.operation)
+        pdk2R: stampNodeId n: (ast.nodes.getView i: fm.operation)
         pdiR: mrefR
         st.walk.pendingDefault.id.set key: pdk2R value: pdiR
         handledR = true
@@ -3268,14 +3270,14 @@ checkTypedefShape: function {st: zenv.ZSymbolTable ast: Ast.view onode: objref} 
     if bn.isZero then return
     # the names the base reads, collected once for every parameter to ask
     baseNames: IdSet zast.nameid
-    collectMentions :ast n: (ast.nodes.get i: bn) into: baseNames
+    collectMentions :ast n: (ast.nodes.getView i: bn) into: baseNames
     kAiter: u64
     for kAiter < onode.nas loop {
         amId: zast.objAsItemAt :ast nid: onode.nid i: kAiter
         kAiter = kAiter + 1
         am: argRefAt :ast nid: amId
         if am.nid.isZero then continue
-        amOp: ast.nodes.get i: am.operation
+        amOp: ast.nodes.getView i: am.operation
         nm: zast.nameTextAt :ast ref: am.name
         if am.name == zast.wellKnown.slot.wkCreate when (isFunctionDefOp op: amOp) then {
             (
@@ -3334,7 +3336,7 @@ recordTypedefBase: function {
 # objAsItemsOf -- an object definition's as-block items; an empty span when
 # the node is not an objectdef.
 objAsItemsOf: function {ast: Ast nid: zast.nodeid} out zast.kidspan is {
-    od: ast.nodes.get i: nid
+    od: ast.nodes.getView i: nid
     if od.objectdef then return od.asItems
     return (zast.kidspan first: 0 count: 0)
 }
@@ -3352,7 +3354,7 @@ recordisdecls: record {
 # parameters of its own. A generic function is a method, in the `as` section.
 refuseGenericFnptrField: function {st: zenv.ZSymbolTable ast: Ast.view fm: argref} out bool is {
     if (fnFieldFlaggableName nameId: fm.name).not then return false
-    op: ast.nodes.get i: fm.operation
+    op: ast.nodes.getView i: fm.operation
     if op.functiondef.not then return false
     if (zast.itemsHaveGenericParam :ast items: op.asItems).not then return false
     nm: zast.nameTextAt :ast ref: fm.name
@@ -3618,7 +3620,7 @@ attachSumMethods: function {
             ) case some then {
                 if (sumMethodNameRejected :st :am).not then {
                     st.typing.setMemberType parentTypeId: sumTid nameId: am.name childTypeId: mido
-                    markGenericMethod :st op: (ast.nodes.get i: am.operation) mid: mido :isgen
+                    markGenericMethod :st op: (ast.nodes.getView i: am.operation) mid: mido :isgen
                 }
             } else {
                 # a generic template's tag accessor is its instances'
@@ -3785,7 +3787,7 @@ resolveVariant: function {
     eqAsV: false
     neAsV: false
     {
-        onEqAsV: ast.nodes.get i: vnode.nid
+        onEqAsV: ast.nodes.getView i: vnode.nid
         if onEqAsV.objectdef then {
             eqAsV = (
                 asBindingOf
@@ -3849,7 +3851,7 @@ resolveVariant: function {
             armCountV = armCountV + 1
             if armCountV == 1 then firstArmV = fm.name
             if armCountV == 2 then secondArmV = fm.name
-            anV: atomNameId :ast n: (ast.nodes.get i: fm.operation)
+            anV: atomNameId :ast n: (ast.nodes.getView i: fm.operation)
             if (namesNullType :st :ast ownerDecl: vDecl nameId: anV).not then allNullV = false
             if fm.name == zast.wellKnown.slot.wkTag then {
                 mt: "'tag' is a reserved member name".string
@@ -4020,7 +4022,7 @@ refuseReftypeBounds: function {
         if fm.nid.notZero when (
             isGenericParam
             :ast
-            op: (ast.nodes.get i: fm.operation)
+            op: (ast.nodes.getView i: fm.operation)
         ) when (conform.boundAdmitsReftype :st :ast :tdecl :fm) then {
             pn: zast.nameTextAt :ast ref: fm.name
             mb: "a \{what}'s type parameter holds valtypes; bound '\{pn}' with 'anyval.generic'"
@@ -4074,7 +4076,7 @@ attachUnionArm: function {
     # the arm's call shape is read as plain values: the lookup below lends ast
     acr: statics.callRefAt :ast nid: armOpId
     if acr.nid.notZero then {
-        calleeName: atomNameId :ast n: (ast.nodes.get i: acr.callable)
+        calleeName: atomNameId :ast n: (ast.nodes.getView i: acr.callable)
         ct: (
             (walkLookupTyperefById :st :scope :ast :unitDecl baseId: calleeName).or
             d: ztypes.tid.zero
@@ -4110,7 +4112,7 @@ attachUnionArm: function {
     boxesParam: cid.notZero and ((st.reg.typetypeOf typeId: cid) == ztypes.ztypetype.genericParam)
     if armTe != fm.operation when cid.notZero when boxesParam.not when (st.reg.isValtypeOf tid: cid
     ).not then {
-        bxw: typeargs.atomName :ast n: (ast.nodes.get i: armTe)
+        bxw: typeargs.atomName :ast n: (ast.nodes.getView i: armTe)
         mbx: "'\{bxw}' is already a reftype; a union arm holds it directly -- drop the Box"
         (
             addResolveErrorAt
@@ -4130,7 +4132,7 @@ attachUnionArm: function {
     # An arm's marker is the payload's, not the union's: the shell
     # resolve above strips it, so record it per member the way a class
     # field does. `view` / `hold` are what a match arm reads back.
-    alk: pathOwnership :ast n: (ast.nodes.get i: fm.operation)
+    alk: pathOwnership :ast n: (ast.nodes.getView i: fm.operation)
     if alk.some then {
         (
             st.typing.setChildOwnership
@@ -4194,7 +4196,7 @@ resolveUnion: function {
         st.reg.setGeneric typeId: uid value: true
         typeDecl: declOfUnitDef :st :scope :unitDecl nameId: (nameIdOf :ast name: defName)
         {
-            onRg: ast.nodes.get i: vnode.nid
+            onRg: ast.nodes.getView i: vnode.nid
             if onRg.objectdef then {
                 registerGenericParams :st :ast tdecl: typeDecl items: onRg.asItems
             }
@@ -4283,13 +4285,13 @@ resolveClassMethodDecl: function {
     fm: argref
 } is {
     if (refuseGenericFnptrField :st :ast :fm) then return
-    if (isFunctionDefOp op: (ast.nodes.get i: fm.operation)) then {
+    if (isFunctionDefOp op: (ast.nodes.getView i: fm.operation)) then {
         fname: zast.nameTextCopy :ast ref: fm.name
         produces: false
         if isgen.not then {
             produces = true
         } else {
-            if (functiondefIsNative op: (ast.nodes.get i: fm.operation)).not then {
+            if (functiondefIsNative op: (ast.nodes.getView i: fm.operation)).not then {
                 produces = true
             } else {
                 # Flipped collection families resolve their native
@@ -4340,7 +4342,7 @@ refuseNumericParamName: function {
     ownerTid: ztypes.tid
     dm: argref
 } is {
-    if (isGenericParam :ast op: (ast.nodes.get i: dm.operation)) then return
+    if (isGenericParam :ast op: (ast.nodes.getView i: dm.operation)) then return
     tdecl: st.typing.declIdOfType typeId: ownerTid
     if (st.reg.genericParamConstraintOf :tdecl paramName: dm.name).numKind.has.not then return
     pn: zast.nameTextAt :ast ref: dm.name
@@ -4370,7 +4372,7 @@ recordMemberRefField: function {
     mref: ztypes.tid
     fm: argref
 } is {
-    fieldOwn: pathOwnership :ast n: (ast.nodes.get i: fm.operation)
+    fieldOwn: pathOwnership :ast n: (ast.nodes.getView i: fm.operation)
     st.typing.setMemberType parentTypeId: cid nameId: fm.name childTypeId: mref
     if (st.reg.typetypeOf typeId: mref) == ztypes.ztypetype.functionType then {
         st.typing.setChildFnptrField pool: ast.names parentTypeId: cid name: fname
@@ -4386,10 +4388,10 @@ recordMemberRefField: function {
     }
     # a sibling-member ref default: the construction fill
     # stamps the default's node with the member's type.
-    pdk: stampNodeId n: (ast.nodes.get i: fm.operation)
+    pdk: stampNodeId n: (ast.nodes.getView i: fm.operation)
     pdo: cid
     st.walk.pendingDefault.owner.set key: pdk value: pdo
-    fieldNid: stampNodeId n: (ast.nodes.get i: fm.operation)
+    fieldNid: stampNodeId n: (ast.nodes.getView i: fm.operation)
     pdi: mref
     st.walk.pendingDefault.id.set key: fieldNid value: pdi
 }
@@ -4404,7 +4406,7 @@ rootIsStringLiteral: function {ast: Ast.view n: astnode.view} out bool is {
     ) case atomstring then {
         return true
     } case dottedpath then {
-        return (rootIsStringLiteral :ast n: (ast.nodes.get i: n.parent))
+        return (rootIsStringLiteral :ast n: (ast.nodes.getView i: n.parent))
     } else {
         return false
     }
@@ -4432,7 +4434,7 @@ refuseStringDefault: function {
     # the declaration, whose root is tested
     fm: argref
 } out bool is {
-    fop: ast.nodes.get i: fm.operation
+    fop: ast.nodes.getView i: fm.operation
     if (rootIsStringLiteral :ast n: fop).not then return false
     built: stringBuiltAtRunTime :ast n: fop
     if built.length == 0 then return false
@@ -4464,16 +4466,16 @@ stringBuiltAtRunTime: function {ast: Ast.view n: astnode.view} out String is {
         n
     ) case atomstring then {
         for each pnId: (zast.kidsOf :ast span: n.stringparts) loop {
-            pn: ast.nodes.get i: pnId
+            pn: ast.nodes.getView i: pnId
             if pn.stringchunk.not then return "an interpolated string".string
         }
         return "".string
     } case dottedpath then {
-        cId: atomNameId :ast n: (ast.nodes.get i: n.child)
+        cId: atomNameId :ast n: (ast.nodes.getView i: n.child)
         if (cId == zast.wellKnown.slot.wkString) or (cId == zast.wellKnown.slot.wkCopy) then {
             return "an owned String".string
         }
-        return (stringBuiltAtRunTime :ast n: (ast.nodes.get i: n.parent))
+        return (stringBuiltAtRunTime :ast n: (ast.nodes.getView i: n.parent))
     } else {
         return "".string
     }
@@ -4499,7 +4501,7 @@ refuseStringArmPayload: function {
     # the payload type the hint offers: a choice carries text
     payload: "String"
 } out bool is {
-    aop: ast.nodes.get i: fm.operation
+    aop: ast.nodes.getView i: fm.operation
     if (rootIsStringLiteral :ast n: aop).not then return false
     aname: zast.nameTextAt :ast ref: fm.name
     ap: zast.posOf n: aop
@@ -4544,7 +4546,7 @@ resolveClassFieldEntry: function {
         :fm
     ) then return false
     refuseSelfNamedMember :st :ast ownerTid: cid :fm
-    ftn: fieldHeadNameId :ast n: (ast.nodes.get i: fm.operation)
+    ftn: fieldHeadNameId :ast n: (ast.nodes.getView i: fm.operation)
     # A NON-OWNED field marker (lock / borrow / view) makes the
     # slot static: it is set in the constructor, never reassigned,
     # the constructor locks the caller's argument rather than
@@ -4552,7 +4554,7 @@ resolveClassFieldEntry: function {
     # (take / hold) is an ordinary field on all three counts --
     # `hold` freezes the contents, not the slot.
     borrowedField: false
-    fieldOwn: pathOwnership :ast n: (ast.nodes.get i: fm.operation)
+    fieldOwn: pathOwnership :ast n: (ast.nodes.getView i: fm.operation)
     if fieldOwn.some then {
         # This test is INVERTED: anything not named here becomes a
         # borrowed field, so a new owned mode must be listed or it is
@@ -4596,7 +4598,7 @@ refuseValueBorrowField: function {
     nameId: zast.nameid
     fm: argref
 } is {
-    fop: ast.nodes.get i: fm.operation
+    fop: ast.nodes.getView i: fm.operation
     # a `.borrow` WRITTEN on the field; a generator's state is the lowering's
     # own class, whose `#resume_input` borrows the caller's argument whatever
     # its type
@@ -4638,7 +4640,7 @@ resolveClassField: function {
     needsDtor: false
     fm: argRefAt :ast nid: fmId
     if fm.nid.notZero then {
-        if (isFunctionDefOp op: (ast.nodes.get i: fm.operation)) then {
+        if (isFunctionDefOp op: (ast.nodes.getView i: fm.operation)) then {
             resolveClassMethodDecl :st :ast :unitDecl :scope :defName :cid :isgen :fm
         } else {
             if (
@@ -4669,7 +4671,7 @@ attachGenericAsConstants: function {
         item: argRefAt :ast nid: (zast.objAsItemAt :ast nid: cnode.nid i: k)
         k = k + 1
         if item.nid.isZero or item.operation.isZero then continue
-        if (isFunctionDefOp op: (ast.nodes.get i: item.operation)) then continue
+        if (isFunctionDefOp op: (ast.nodes.getView i: item.operation)) then continue
         attachAsConstant :st :ast parentId: cid :item
     }
 }
@@ -4694,10 +4696,10 @@ resolveClassAsMethods: function {
         amP4Id: zast.objAsItemAt :ast nid: cnode.nid i: itemIdx
         itemIdx = itemIdx + 1
         item: argRefAt :ast nid: amP4Id
-        if item.nid.notZero when (isFunctionDefOp op: (ast.nodes.get i: item.operation)) then {
+        if item.nid.notZero when (isFunctionDefOp op: (ast.nodes.getView i: item.operation)) then {
             itemName: zast.nameTextCopy :ast ref: item.name
             produces: false
-            isNative: functiondefIsNative op: (ast.nodes.get i: item.operation)
+            isNative: functiondefIsNative op: (ast.nodes.getView i: item.operation)
             if isgen then {
                 if isNative then {
                     if unitDecl == st.typing.collectionsUnitRoot then {
@@ -4929,7 +4931,7 @@ resolveClass: function {
         st.reg.setGeneric typeId: cid value: true
         typeDecl: declOfUnitDef :st :scope :unitDecl nameId: (nameIdOf :ast name: defName)
         {
-            onRg: ast.nodes.get i: cnode.nid
+            onRg: ast.nodes.getView i: cnode.nid
             if onRg.objectdef then {
                 registerGenericParams :st :ast tdecl: typeDecl items: onRg.asItems
             }
@@ -5011,7 +5013,7 @@ registerInterfaceGenerics: function {
     fnode: objref
 } out bool is {
     tdecl: declOfUnitDef :st :scope :unitDecl nameId: (nameIdOf :ast name: defName)
-    od: ast.nodes.get i: fnode.nid
+    od: ast.nodes.getView i: fnode.nid
     if od.objectdef.not then return false
     k: u64
     for k < fnode.nis loop {
@@ -5131,7 +5133,7 @@ refuseSpecWithoutReceiver: function {
     if (ast.nodes.get i: sm.operation).functiondef.not then return
     if (memberaccess.functionNamesReceiver :ast fnId: sm.operation) then return
     mname: zast.nameTextCopy :ast ref: sm.name
-    n: ast.nodes.get i: sm.nid
+    n: ast.nodes.getView i: sm.nid
     (
         addErrorWithHint
         :st
@@ -5450,11 +5452,11 @@ registerUnitGenericParams: function {
         # param definition's value node carries it so template signatures
         # and bodies stamp it.
         for each gmId: (zast.kidsOf :ast span: bodyIds) loop {
-            gm: ast.nodes.get i: gmId
+            gm: ast.nodes.getView i: gmId
             if gm.namedoperation when (
                 isBareGenericParam
                 :ast
-                op: (ast.nodes.get i: gm.operation)
+                op: (ast.nodes.getView i: gm.operation)
             ) then {
                 paramName: zast.nameTextAt :ast ref: gm.name
                 paramTid: (
@@ -5462,7 +5464,7 @@ registerUnitGenericParams: function {
                     from: (genericParamTidMint :st :ast tdecl: unitRootDecl nameId: gm.name)
                 )
                 linkDeclType :st :scope :ast :unitDecl name: paramName.stringView tid: paramTid
-                gpnid: stampNodeId n: (ast.nodes.get i: gm.operation)
+                gpnid: stampNodeId n: (ast.nodes.getView i: gm.operation)
                 ztyping.nodeTypeSet tbl: st.typing.nodeType nid: gpnid tid: paramTid
             }
         }
@@ -5481,10 +5483,10 @@ attachMonoUnitFuncs: function {
     bodyIds: zast.unitBodyIdsAt :ast unitId: templateOpId
     {
         for each fm: (zast.kidsOf :ast span: bodyIds) loop {
-            fmNode: ast.nodes.get i: fm
+            fmNode: ast.nodes.getView i: fm
             if fmNode.namedoperation when (
                 isFunctionDefOp
-                op: (ast.nodes.get i: fmNode.operation)
+                op: (ast.nodes.getView i: fmNode.operation)
             ) then {
                 fn: zast.nameTextAt :ast ref: fmNode.name
                 shellId: (
@@ -5566,10 +5568,10 @@ resolveInlineGenericUnit: function {
                 if gm.nid.notZero when (
                     isBareGenericParam
                     :ast
-                    op: (ast.nodes.get i: gm.operation)
+                    op: (ast.nodes.getView i: gm.operation)
                 ) then {
                     paramTid: genericParamTidMint :st :ast tdecl: templateDecl nameId: gm.name
-                    gpnid: stampNodeId n: (ast.nodes.get i: gm.operation)
+                    gpnid: stampNodeId n: (ast.nodes.getView i: gm.operation)
                     ztyping.nodeTypeSet tbl: st.typing.nodeType nid: gpnid tid: paramTid
                     # the parameter's own declaration carries the
                     # GENERIC_PARAM id, as a generic file unit's does: the
@@ -5669,11 +5671,11 @@ registerMonoFnParams: function {
 } is {
     if op.functiondef then {
         for each ppmId: (zast.kidsOf :ast span: op.parameters) loop {
-            ppm: ast.nodes.get i: ppmId
+            ppm: ast.nodes.getView i: ppmId
             if ppm.namedoperation then {
-                pptn: atomNameId :ast n: (ast.nodes.get i: ppm.operation)
+                pptn: atomNameId :ast n: (ast.nodes.getView i: ppm.operation)
                 # the function's own generic parameter is nearer than the unit's
-                if (fnDeclaresGeneric :ast op: (ast.nodes.get i: op.nodeid) nameId: pptn
+                if (fnDeclaresGeneric :ast op: (ast.nodes.getView i: op.nodeid) nameId: pptn
                 ) then continue
                 ppgo: subs.get key: pptn
                 if ppgo.some then {
@@ -5695,7 +5697,7 @@ fnDeclaresGeneric: function {ast: Ast.view op: astnode.view nameId: zast.nameid}
         for k < op.asItems.count loop {
             gi: argRefAt :ast nid: (zast.kidAt kids: ast.kids span: op.asItems i: k)
             k = k + 1
-            if gi.name == nameId when (isGenericParam :ast op: (ast.nodes.get i: gi.operation)
+            if gi.name == nameId when (isGenericParam :ast op: (ast.nodes.getView i: gi.operation)
             ) then {
                 return true
             }
@@ -5721,7 +5723,7 @@ buildUnitMonoMember: function {
     fmNode: argref
     subs: (IdMapV zast.nameid v: ztypes.tid).view
 } is {
-    if (isFunctionDefOp op: (ast.nodes.get i: fmNode.operation)) then {
+    if (isFunctionDefOp op: (ast.nodes.getView i: fmNode.operation)) then {
         fn: zast.nameTextCopy :ast ref: fmNode.name
         srcId: ztypes.tid
         tfo: st.typing.declChildOfId parentTypeId: tplId nameId: fmNode.name
@@ -5791,7 +5793,14 @@ buildUnitMonoMember: function {
             )
             instantiate.copyReturnMarkers :st fromFn: srcId toFn: newFnId
         }
-        registerMonoFnParams :st :ast op: (ast.nodes.get i: fmNode.operation) fnId: newFnId :subs
+        (
+            registerMonoFnParams
+            :st
+            :ast
+            op: (ast.nodes.getView i: fmNode.operation)
+            fnId: newFnId
+            :subs
+        )
         if srcId.notZero then keepMonoFnGeneric :st :srcId :newFnId
     }
 }
@@ -6085,7 +6094,7 @@ genericParamSubjectTid: function {
     gid: zast.nameid
 } out ztypes.tid is {
     subjT: genericParamTidMint :st :ast tdecl: gdecl nameId: gid
-    gsnid: stampNodeId n: (ast.nodes.get i: casenode.subject)
+    gsnid: stampNodeId n: (ast.nodes.getView i: casenode.subject)
     if gsnid.notZero when subjT.notZero then {
         # direct write, NOT stampGate: this genericParam stamp IS
         # the dissection marker the emitter dispatches on -- it
@@ -6144,7 +6153,7 @@ rowarm: variant {
 # rowArmAt -- the arm tag of row `nid`; the row view is this frame's and
 # dies here.
 rowArmAt: function {ast: Ast.view nid: zast.nodeid} out rowarm is {
-    n: ast.nodes.get i: nid
+    n: ast.nodes.getView i: nid
     match (
         n
     ) case call then {
@@ -6240,7 +6249,7 @@ objRefOf: function {o: zast.objectdefrow.view} out objref is {
 # objRefAt -- the object-definition row `nid` as plain values (all zero for
 # any other arm).
 objRefAt: function {ast: Ast.view nid: zast.nodeid} out objref is {
-    n: ast.nodes.get i: nid
+    n: ast.nodes.getView i: nid
     if n.objectdef then return (objRefOf o: n)
     zn: zast.nodeid
     return (
@@ -6267,7 +6276,7 @@ asItemNamesNoValue: function {
 } out bool is {
     if item.name == zast.wellKnown.slot.wkTag then return true
     if (zast.implementBaseOf :ast opId: item.operation).notZero then return true
-    op: ast.nodes.get i: item.operation
+    op: ast.nodes.getView i: item.operation
     if op.functiondef or (isBareGenericParam :ast :op) or (isLabelValue :op) then return true
     return (namesNullType :st :ast ownerDecl: typeDecl nameId: (zast.atomNameIdOf n: op))
 }
@@ -6283,7 +6292,7 @@ typedefOverNumericDecl: function {
     scope: ztypes.declid
     callableId: zast.nodeid
 } out bool is {
-    cnId: atomNameId :ast n: (ast.nodes.get i: callableId)
+    cnId: atomNameId :ast n: (ast.nodes.getView i: callableId)
     if cnId.isZero then return false
     return (namesNumericTypedefDecl :st :ast :unitDecl :scope nameId: cnId depth: 0)
 }
@@ -6309,7 +6318,7 @@ namesNumericTypedefDecl: function {
     if dn.isZero then return false
     opId: zast.nodeid
     {
-        n: ast.nodes.get i: dn
+        n: ast.nodes.getView i: dn
         if n.namedoperation then opId = n.operation
     }
     if opId.isZero then return false
@@ -6333,7 +6342,7 @@ numericTypedefNamed: function {
     # the declaration answers first, so nothing is minted for a callee that
     # is no typedef; the type then resolves on demand, as a reference's would
     if (typedefOverNumericDecl :st :ast :unitDecl :scope :callableId).not then return ztypes.tid
-    cnId: atomNameId :ast n: (ast.nodes.get i: callableId)
+    cnId: atomNameId :ast n: (ast.nodes.getView i: callableId)
     tdTid: (
         ztypes.tid.create
         from: (resolve.resolveNamedTypeId :st :ast :unitDecl :scope nameId: cnId thisName: "")
@@ -6394,7 +6403,7 @@ constOfNumericTypedef: function {
     # the one argument: written bare, or labelled `from`
     valueId: args.get i: 0
     {
-        an: ast.nodes.get i: valueId
+        an: ast.nodes.getView i: valueId
         if an.namedoperation then {
             # a positional argument is a named operation with no name
             if an.name.notZero when (an.name == zast.wellKnown.slot.wkFrom).not then {
@@ -6405,8 +6414,8 @@ constOfNumericTypedef: function {
     }
     v: statics.evalConstNode :st :scope :ast :unitDecl nid: valueId
     if (v.kind.ivalKind or v.kind.fvalKind).not then return ztypes.noConst
-    vl: nodeLine n: (ast.nodes.get i: valueId)
-    vc: nodeCol n: (ast.nodes.get i: valueId)
+    vl: nodeLine n: (ast.nodes.getView i: valueId)
+    vc: nodeCol n: (ast.nodes.getView i: valueId)
     if v.numTid.notZero when v.numTid != base when v.numTid != tdTid then {
         refuseTypedefArgument :st :ast :base got: v.numTid :valueId :vl :vc
         return ztypes.noConst

@@ -506,7 +506,7 @@ recordImplementation: function {
         rcm: "'\{rcin}' is a reference type and cannot implement the facet '\{rcsn}'"
         rch: "a facet holds the value implementing it INLINE, so a reference one would put a reference inside a value; declare '\{rcsn}' a protocol, the way the stdlib pairs `valhashable` (a facet) with `RefHashable` (a protocol)"
         rcn: String
-        rcnode: ast.nodes.get i: markerOp
+        rcnode: ast.nodes.getView i: markerOp
         (
             addErrorWithHint
             :st
@@ -571,7 +571,7 @@ refuseGenericSpecMarker: function {
         labelled = true
     }
     ex.append ").implement"
-    n: ast.nodes.get i: markerOp
+    n: ast.nodes.getView i: markerOp
     (
         addError
         :st
@@ -821,7 +821,7 @@ checkImplementationSignature: function {
 implementationReport: function {
     st: zenv.ZSymbolTable ast: Ast.view markerOp: zast.nodeid msg: String
 } is {
-    mnode: ast.nodes.get i: markerOp
+    mnode: ast.nodes.getView i: markerOp
     (
         addError
         :st
@@ -981,7 +981,7 @@ specReturnUnresolved: function {
     if md.isZero then return false
     fnode: valMemberFnNode :ast typing: st.typing memberDecl: md
     if fnode.isZero then return false
-    fn: ast.nodes.get i: fnode
+    fn: ast.nodes.getView i: fnode
     match (
         fn
     ) case functiondef then {
@@ -1127,7 +1127,7 @@ implementTargetOf: function {
 # protocol or facet: only an interface is implemented. `op` is the X.
 reportNotImplementable: function {st: zenv.ZSymbolTable ast: Ast op: zast.nodeid} is {
     xt: statics.typeExprText :ast nid: op
-    n: ast.nodes.get i: op
+    n: ast.nodes.getView i: op
     (
         addErrorWithHint
         :st
@@ -1163,7 +1163,7 @@ implementBaseResolves: function {
         # by its arguments
         return (specTypetypeOf :st tid: htpl).isInterface.not
     }
-    vnId: zast.atomNameIdOf n: (ast.nodes.get i: op)
+    vnId: zast.atomNameIdOf n: (ast.nodes.getView i: op)
     if vnId.isZero then return true
     if (walkLookupTyperefById :st :scope :ast :unitDecl baseId: vnId).some then return true
     return (envLookup :st :scope nameId: vnId).declId.notZero
@@ -1196,7 +1196,7 @@ refuseMarkerHolder: function {
         }
     }
     if msg.length == 0 then return false
-    n: ast.nodes.get i: markerOp
+    n: ast.nodes.getView i: markerOp
     (
         addError
         :st
@@ -1423,11 +1423,11 @@ qualifierDecl: function {
 } out ztypes.declid is {
     zd: ztypes.declid
     if node.isZero then return zd
-    q: ast.nodes.get i: node
+    q: ast.nodes.getView i: node
     if q.dottedpath then {
         pd: qualifierDecl :st :ast :ownerDecl node: q.parent
         if pd.isZero or (st.typing.decls.get i: pd).kind.unitDecl.not then return zd
-        segId: zast.atomNameIdOf n: (ast.nodes.get i: q.child)
+        segId: zast.atomNameIdOf n: (ast.nodes.getView i: q.child)
         if segId.isZero then return zd
         sd: declOfUnitDef :st scope: pd unitDecl: pd nameId: segId
         return (aliasTargetDecl :st :ast aliasDecl: sd)
@@ -2006,14 +2006,14 @@ sumArmHeadDecl: function {
     op: zast.nodeid
 } out ztypes.declid is {
     d: ztypes.declid
-    n: ast.nodes.get i: op
+    n: ast.nodes.getView i: op
     # a bare name, or the `:T` shorthand arm, whose label is the type's name
     if n.atomid or n.labelvalue then {
         d = (
             memberaccess.nearestDeclOf
             :st
             scope: (typeargs.scopeFor typing: st.typing :unitDecl :scope)
-            baseId: (atomNameId :ast n: (ast.nodes.get i: op))
+            baseId: (atomNameId :ast n: (ast.nodes.getView i: op))
         )
     } else if n.call then {
         return (
@@ -2025,12 +2025,17 @@ sumArmHeadDecl: function {
             op: (statics.callRefAt :ast nid: op).callable
         )
     } else if n.dottedpath then {
-        qu: boundQualifierUnit :st :scope qualId: (atomNameId :ast n: (ast.nodes.get i: n.parent))
+        qu: (
+            boundQualifierUnit
+            :st
+            :scope
+            qualId: (atomNameId :ast n: (ast.nodes.getView i: n.parent))
+        )
         if qu.notZero then {
             d = (
                 st.typing.declFindChild
                 parentDeclId: qu
-                nameId: (atomNameId :ast n: (ast.nodes.get i: n.child))
+                nameId: (atomNameId :ast n: (ast.nodes.getView i: n.child))
             )
         }
     }
@@ -2668,7 +2673,7 @@ checkKeyMember: function {
     md: st.typing.declMemberIdOf parentTypeId: owner :nameId
     if md.isZero then return
     dn: (st.typing.decls.get i: md).node
-    mnode: ast.nodes.get i: dn
+    mnode: ast.nodes.getView i: dn
     kn: specWrittenName :st :ast tid: owner
     msg: "'\{kn}' cannot be a Map or Set key: "
     msg.append why
@@ -2984,7 +2989,7 @@ valDeclaredSource: function {
     memberDecl: ztypes.declid
 } out valopsrc is {
     fnode: valMemberFnNode :ast :typing :memberDecl
-    if (declare.functiondefIsNative op: (ast.nodes.get i: fnode)) then return valopsrc.builtin
+    if (declare.functiondefIsNative op: (ast.nodes.getView i: fnode)) then return valopsrc.builtin
     if nameId == zast.wellKnown.slot.wkHash then return valopsrc.written
     if (valRhsIsOwner :ast :typing :owner :fnode) then return valopsrc.written
     return valopsrc.none
@@ -2998,7 +3003,7 @@ valMemberFnNode: function {
     memberDecl: ztypes.declid
 } out zast.nodeid is {
     fnode: zast.nodeid
-    dn: ast.nodes.get i: (typing.decls.get i: memberDecl).node
+    dn: ast.nodes.getView i: (typing.decls.get i: memberDecl).node
     if dn.namedoperation then fnode = dn.operation
     return fnode
 }
@@ -3031,8 +3036,8 @@ valRhsIsOwner: function {
     pm: zast.fnParamAt :ast nid: fnode i: 1
     if pm.isZero then return false
     rn: zast.nameid
-    pn: ast.nodes.get i: pm
-    if pn.namedoperation then rn = rootNameIdOf :ast n: (ast.nodes.get i: pn.operation)
+    pn: ast.nodes.getView i: pm
+    if pn.namedoperation then rn = rootNameIdOf :ast n: (ast.nodes.getView i: pn.operation)
     if rn.isZero then return false
     if rn == zast.wellKnown.slot.wkThis then return true
     if rn == zast.wellKnown.slot.wkType then return true
@@ -3205,7 +3210,7 @@ refuseListMemberWithoutElemOp: function {
     m: "type '\{btn}' has no member '\{cn}'"
     h: "its element type '\{en}' has no '=='"
     if isSort then h = "its element type '\{en}' has no 'compare'"
-    cn2: ast.nodes.get i: dp.child
+    cn2: ast.nodes.getView i: dp.child
     (
         addErrorWithHint
         :st
@@ -3284,7 +3289,7 @@ refuseHashWithoutPartHash: function {
     if miss == bt when eqSrc.written or eqSrc.negated then {
         h = "its `==` is written by hand, and a generated `hash` would not agree with it".string
     }
-    cn2: ast.nodes.get i: dp.child
+    cn2: ast.nodes.getView i: dp.child
     (
         addErrorWithHint
         :st
@@ -3332,7 +3337,7 @@ refuseEqWithoutPartEq: function {
         hm: "its part of type '\{mn}' has no '=='"
         h = hm.take
     }
-    cn2: ast.nodes.get i: dp.child
+    cn2: ast.nodes.getView i: dp.child
     (
         addErrorWithHint
         :st
@@ -3852,7 +3857,7 @@ reportOwnedStandIn: function {ast: Ast st: zenv.ZSymbolTable su: ztyping.specsta
     vn: specWrittenName :st :ast tid: su.value
     sn: specWrittenName :st :ast tid: su.spec
     fix: "wrap it: `\{sn}.create from: (...)`"
-    bn: zast.atomNameIdOf n: (ast.nodes.get i: su.valueNid)
+    bn: zast.atomNameIdOf n: (ast.nodes.getView i: su.valueNid)
     if bn.isZero then bn = moves.takenBareName :ast nid: su.valueNid
     if bn.notZero then {
         bt: zast.nameTextAt :ast ref: bn
@@ -4954,7 +4959,7 @@ checkGenericCall: function {
         gk: ztyping.callslot call: call.nid param: ge.key
         st.typing.callGenericBinding.set key: gk value: ge.value
     }
-    calleeNodeId: stampNodeId n: (ast.nodes.get i: call.callable)
+    calleeNodeId: stampNodeId n: (ast.nodes.getView i: call.callable)
     calleeTid: mid
     stampGate :st nid: calleeNodeId tid: calleeTid
     rt: methodReturnOf reg: st.reg typing: st.typing :mid

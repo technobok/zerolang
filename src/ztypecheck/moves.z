@@ -107,9 +107,9 @@ definedAsGenerator: function {
     dn: (st.typing.decls.get i: d).node
     if dn.isZero then return false
     isGen: false
-    nop: ast.nodes.get i: dn
+    nop: ast.nodes.getView i: dn
     if nop.namedoperation then {
-        def: ast.nodes.get i: nop.operation
+        def: ast.nodes.getView i: nop.operation
         if def.objectdef when def.kind == zast.objectkind.generatorDef then isGen = true
     }
     return isGen
@@ -214,7 +214,7 @@ refuseBlockPart: function {st: zenv.ZSymbolTable ast: Ast.view partId: zast.node
 reportNotPrintable: function {
     st: zenv.ZSymbolTable ast: Ast partId: zast.nodeid ptid: ztypes.tid
 } is {
-    part: ast.nodes.get i: partId
+    part: ast.nodes.getView i: partId
     ptn: specWrittenName :st :ast tid: ptid
     pm: "type '\{ptn}' is not printable in an interpolation"
     (
@@ -261,7 +261,7 @@ selfReturnOnInstance: function {
 # `create` (explicit construction: `T.create` is bare-name construction).
 createDottedBaseId: function {ast: Ast.view n: astnode.view} out optionval zast.nodeid is {
     if n.dottedpath then {
-        ccn: atomNameId :ast n: (ast.nodes.get i: n.child)
+        ccn: atomNameId :ast n: (ast.nodes.getView i: n.child)
         if ccn == zast.wellKnown.slot.wkCreate then return (optionval.some n.parent)
     }
     return (optionval.none zast.nodeid)
@@ -301,7 +301,7 @@ unionCreateArmId: function {
 dottedNodeMemberId: function {
     st: zenv.ZSymbolTable.view ast: Ast.view nid: zast.nodeid
 } out zast.nameid is {
-    n: ast.nodes.get i: nid
+    n: ast.nodes.getView i: nid
     match (
         n
     ) case dottedpath then {
@@ -321,7 +321,7 @@ consumeProjectionSource: function {
     argT: ztypes.tid
     consumes: bool
 } is {
-    if (argIsTrivial :ast op: (ast.nodes.get i: arg.operation)).not then {
+    if (argIsTrivial :ast op: (ast.nodes.getView i: arg.operation)).not then {
         hp: List ztyping.PinPath
         appendRecordPins :st vp: (valuePinsOf :st nid: arg.operation) dst: hp
         # a consumed source moves into the instance, and its locks with it: the
@@ -343,7 +343,7 @@ consumeProjectionSource: function {
         return
     }
     if consumes.not then return
-    pbn: zast.nameTextAt :ast ref: (zast.atomNameIdOf n: (ast.nodes.get i: arg.operation))
+    pbn: zast.nameTextAt :ast ref: (zast.atomNameIdOf n: (ast.nodes.getView i: arg.operation))
     if pbn.length == 0 then return
     pbv: st.lookupVarId nameId: (nameIdOf :ast name: pbn.stringView)
     if pbv.some then {
@@ -402,7 +402,7 @@ projectionSourceBorrows: function {
     src: zast.nodeid
     vt: ztypes.tid
 } out bool is {
-    sn: ast.nodes.get i: src
+    sn: ast.nodes.getView i: src
     mk: zast.markerKindOf :ast n: sn
     if mk.borrowMarker then return true
     if mk.unmarked.not then return false
@@ -418,7 +418,7 @@ projectionSourceBorrows: function {
 valueCoreNid: function {ast: Ast.view nid: zast.nodeid} out zast.nodeid is {
     cur: nid
     for cur.notZero loop {
-        n: ast.nodes.get i: cur
+        n: ast.nodes.getView i: cur
         if n.statementline then {
             cur = n.statementline
         } else if n.statement when n.statements.count == 1 then {
@@ -440,8 +440,8 @@ consumeCastFromArg: function {
     aOpId: zast.nodeid
     vt: ztypes.tid
 } is {
-    if (argIsTrivial :ast op: (ast.nodes.get i: aOpId)) then {
-        bn: zast.nameTextAt :ast ref: (zast.atomNameIdOf n: (ast.nodes.get i: aOpId))
+    if (argIsTrivial :ast op: (ast.nodes.getView i: aOpId)) then {
+        bn: zast.nameTextAt :ast ref: (zast.atomNameIdOf n: (ast.nodes.getView i: aOpId))
         if bn.length > 0 then {
             bvo: st.lookupVarId nameId: (nameIdOf :ast name: bn.stringView)
             # only a REFTYPE source transfers. A
@@ -475,15 +475,15 @@ consumeCastFromArg: function {
 # borrowed view (a call's result) already pinned what it reads.
 pinTypedefBorrowSource: function {st: zenv.ZSymbolTable ast: Ast src: zast.nodeid} is {
     srcN: src
-    so: ast.nodes.get i: src
+    so: ast.nodes.getView i: src
     if so.dottedpath when (
-        (atomNameId :ast n: (ast.nodes.get i: so.child)) == zast.wellKnown.slot.wkBorrow
+        (atomNameId :ast n: (ast.nodes.getView i: so.child)) == zast.wellKnown.slot.wkBorrow
     ) then {
         srcN = so.parent
     }
     if srcN == src when (valuePinsOf :st nid: src).len > 0 then return
     tup: ListVal zast.nameid
-    appendValueTuple :ast n: (ast.nodes.get i: srcN) dst: tup
+    appendValueTuple :ast n: (ast.nodes.getView i: srcN) dst: tup
     pinsPush :st path: tup shared: false mutable: true
 }
 
@@ -561,7 +561,7 @@ lockAutoCallReceiver: function {
     dp: dpref
     shared: bool
 } is {
-    recvN: ast.nodes.get i: dp.parent
+    recvN: ast.nodes.getView i: dp.parent
     (
         lockTransientReceiver
         :ast
@@ -625,7 +625,7 @@ checkMemberAutoCall: function {
         aShr: callReadsReceiver :st mid: mo nid: dp.nid
         # a receiver that is a `.view` result is read-only, written as a member
         # read (`(xs.get i: 0).pop`) exactly as written as a call
-        bnid: dottedReceiverNodeId :ast n: (ast.nodes.get i: dp.nid)
+        bnid: dottedReceiverNodeId :ast n: (ast.nodes.getView i: dp.nid)
         bro: (
             bnid.notZero and ((valuePinsOf :st nid: bnid).marker == ztypes.zparamownership.viewMode)
         )
@@ -675,7 +675,7 @@ checkMemberAutoCall: function {
             # field list passed as an argument is a non-owning shallow copy).
             tup: ListVal zast.nameid
             if (receiverPinsNothing :ast :st recvT: bt).not then {
-                appendValueTuple :ast n: (ast.nodes.get i: dp.parent) dst: tup
+                appendValueTuple :ast n: (ast.nodes.getView i: dp.parent) dst: tup
                 cutAtMethod :st :ast recv: dp.parent dst: tup
             }
             recvPins: List ztyping.PinPath
@@ -722,7 +722,7 @@ listValueMember: function {
     forceMemberOf :st :ast parentTypeId: gt nameId: cnId
     if (st.typing.declChildOfId parentTypeId: gt nameId: cnId).some then return true
     pp: ListVal zast.nameid
-    appendValueTuple :ast n: (ast.nodes.get i: dp.parent) dst: pp
+    appendValueTuple :ast n: (ast.nodes.getView i: dp.parent) dst: pp
     bn: zenv.formatPath pool: ast.names path: pp.listView
     mn: zast.nameTextAt :ast ref: cnId
     (
@@ -778,7 +778,7 @@ checkStaticListMember: function {
     if cnId == zast.wellKnown.slot.wkSlot then {
         if g.slot.isZero then {
             pp: ListVal zast.nameid
-            appendValueTuple :ast n: (ast.nodes.get i: dp.parent) dst: pp
+            appendValueTuple :ast n: (ast.nodes.getView i: dp.parent) dst: pp
             bn: zenv.formatPath pool: ast.names path: pp.listView
             (
                 addErrorWithHint
@@ -863,7 +863,7 @@ checkListSlotRead: function {
     dp: dpref
     cnId: zast.nameid
 } out callleg is {
-    pn: ast.nodes.get i: dp.parent
+    pn: ast.nodes.getView i: dp.parent
     row: zast.nodeid
     if pn.dottedpath then row = pn.parent
     lr: listRowOfNode :st nid: row
@@ -942,9 +942,9 @@ checkDropMarkerVar: function {
                     ahint = throughHint :st pool: ast.names vid: elh verb: "read"
                 }
                 aen: String
-                aid: zast.nodeIdOf n: (ast.nodes.get i: dp.parent)
-                aln: nodeLine n: (ast.nodes.get i: dp.parent)
-                acl: nodeCol n: (ast.nodes.get i: dp.parent)
+                aid: zast.nodeIdOf n: (ast.nodes.getView i: dp.parent)
+                aln: nodeLine n: (ast.nodes.getView i: dp.parent)
+                acl: nodeCol n: (ast.nodes.getView i: dp.parent)
                 (
                     addErrorWithHint
                     :st
@@ -1093,12 +1093,12 @@ reportBareMemberRef: function {
     if (st.reg.typetypeOf typeId: result) != ztypes.ztypetype.functionType then return false
     if (st.typing.declIsFnptrFieldId parentTypeId: bt nameId: cnId) then return false
     cn: zast.nameTextCopy :ast ref: cnId
-    bfl: nodeLine n: (ast.nodes.get i: dp.child)
-    bfc: nodeCol n: (ast.nodes.get i: dp.child)
+    bfl: nodeLine n: (ast.nodes.getView i: dp.child)
+    bfc: nodeCol n: (ast.nodes.getView i: dp.child)
     # the read is named as written: the whole path, which is also how its
     # reference is spelled (`Gauge.tenfold.copy`)
     wtp: ListVal zast.nameid
-    appendValueTuple :ast n: (ast.nodes.get i: dp.nid) dst: wtp
+    appendValueTuple :ast n: (ast.nodes.getView i: dp.nid) dst: wtp
     wpath: zenv.formatPath pool: ast.names path: wtp.listView
     (
         valuechecks.bareFnRefErrorFor
@@ -1149,14 +1149,14 @@ refuseMarkerWithoutStorage: function {
         :ast
         :unitDecl
         scope: st.curScope
-        baseId: (zast.atomNameIdOf n: (ast.nodes.get i: dp.parent))
+        baseId: (zast.atomNameIdOf n: (ast.nodes.getView i: dp.parent))
     ) then return true
     # a function with no reference form at all is refused in those words
     if isFn when (refuseNativeReference :st :ast :dp :bt) then return true
     if isFn when (refuseBoundMethodReference :st :ast :dp :bt :cnId) then return true
     if (valuechecks.isAddressableTarget :ast :st nid: dp.parent) then return false
     tp: ListVal zast.nameid
-    appendValueTuple :ast n: (ast.nodes.get i: dp.parent) dst: tp
+    appendValueTuple :ast n: (ast.nodes.getView i: dp.parent) dst: tp
     what: "this value".string
     hint: "write the value without a marker".string
     if (ast.nodes.get i: dp.parent).atomstring then {
@@ -1197,7 +1197,7 @@ refuseNativeReference: function {
 } out bool is {
     if (valuechecks.isNativeFnTid :st tid: bt).not then return false
     ntp: ListVal zast.nameid
-    appendValueTuple :ast n: (ast.nodes.get i: dp.parent) dst: ntp
+    appendValueTuple :ast n: (ast.nodes.getView i: dp.parent) dst: ntp
     pth: zenv.formatPath pool: ast.names path: ntp.listView
     mnr: "'\{pth}' is native and has no reference form"
     addError :st nodeid: dp.nid lineno: dp.lineno colno: dp.colno e: zast.err.callError msg: mnr
@@ -1226,7 +1226,7 @@ refuseBoundMethodReference: function {
     cnId: zast.nameid
 } out bool is {
     if (methodHasThisReceiver :st mid: bt).not then return false
-    rootNm: typeargs.dottedRootName :ast n: (ast.nodes.get i: dp.parent)
+    rootNm: typeargs.dottedRootName :ast n: (ast.nodes.getView i: dp.parent)
     baseIsValue: false
     if rootNm.length > 0 then {
         rvo: st.lookupVarId nameId: (nameIdOf :ast name: rootNm.stringView)
@@ -1236,7 +1236,7 @@ refuseBoundMethodReference: function {
     }
     if baseIsValue.not then return false
     cn: zast.nameTextAt :ast ref: cnId
-    mNm: callchecks.dottedChildName :ast n: (ast.nodes.get i: dp.parent)
+    mNm: callchecks.dottedChildName :ast n: (ast.nodes.getView i: dp.parent)
     # composed with append, not interpolation: a dotted path built inline reads
     # to A002 as a composed table key
     bound: rootNm.copy
@@ -1350,7 +1350,7 @@ checkTransferMarker: function {
         return (callleg handled: true tid: bt)
     }
     if (isMoveMarkerId nameId: cnId) then takeMarkerOnField :st :ast :dp
-    mkRootId: zast.atomNameIdOf n: (ast.nodes.get i: dp.parent)
+    mkRootId: zast.atomNameIdOf n: (ast.nodes.getView i: dp.parent)
     # a numeric literal is an atom too, and names no variable
     notVariable: mkRootId.isZero or (isNumericLiteralNameAt :ast ref: mkRootId)
     if (isDropMarkerId nameId: cnId) when notVariable then {
@@ -1456,7 +1456,7 @@ dottedBaseTid: function {
     baseIsName: false
     childIsRef: false
     {
-        dpkN: ast.nodes.get i: dp.parent
+        dpkN: ast.nodes.getView i: dp.parent
         if dpkN.atomid then baseIsName = true
         if dpkN.dottedpath then baseIsName = true
         # a type application there names its type, as a name does
@@ -1488,7 +1488,7 @@ dottedBaseTid: function {
     if bt.isZero then {
         # an unresolved bare-name base may be a unit-qualified member
         # path (io.stdout): the side map types the base as the UNIT type.
-        ubn: zast.nameTextAt :ast ref: (atomNameId :ast n: (ast.nodes.get i: dp.parent))
+        ubn: zast.nameTextAt :ast ref: (atomNameId :ast n: (ast.nodes.getView i: dp.parent))
         if ubn.length > 0 then {
             ubo: (
                 st.typing.declTypeOf
@@ -1529,7 +1529,7 @@ dottedBaseTid: function {
         :st
         t: bt
     )
-    isOpB: boxMemberDelegates nameId: (atomNameId :ast n: (ast.nodes.get i: dp.child))
+    isOpB: boxMemberDelegates nameId: (atomNameId :ast n: (ast.nodes.getView i: dp.child))
     if isOpB when (st.reg.isBoxOf tid: bt) when (st.reg.genericArgCount specId: bt) == 1 then {
         bxE: st.reg.genericTypeArgAt specId: bt ordinal: 0
         if bxE.notZero then bt = bxE
@@ -1563,13 +1563,13 @@ refuseReadUnderPin: function {
 } is {
     # the root alone answers the common case: no variable holds an EXCLUSIVE
     # lock on it, so there is nothing to overlap and no path to build
-    rid: rootNameIdOf :ast n: (ast.nodes.get i: nid)
+    rid: rootNameIdOf :ast n: (ast.nodes.getView i: nid)
     if rid.isZero then return
     rd: st.findLocal nameId: rid
     if rd.isZero then return
     if (st.hasExclusiveVarLock declId: rd).not then return
     rp: ListVal zast.nameid
-    appendValueTuple :ast n: (ast.nodes.get i: nid) dst: rp
+    appendValueTuple :ast n: (ast.nodes.getView i: nid) dst: rp
     if rp.length == 0 then return
     rvo: st.lookupVarId nameId: (rp.get i: 0)
     if rvo.none then return
@@ -1698,7 +1698,10 @@ callNodeIdOf: function {n: astnode.view} out zast.nodeid is {
 # namesFunction -- the node `nid` is a name that resolved to a function or a
 # method (a zero-argument call written as a read, `(mk)`).
 namesFunction: function {st: zenv.ZSymbolTable.view ast: Ast.view nid: zast.nodeid} out bool is {
-    rd: (st.typing.refDecl.get key: (zast.nodeIdOf n: (ast.nodes.get i: nid))).or d: ztypes.declid
+    rd: (
+        (st.typing.refDecl.get key: (zast.nodeIdOf n: (ast.nodes.getView i: nid))).or
+        d: ztypes.declid
+    )
     if rd.isZero then return false
     k: (st.typing.decls.get i: rd).kind
     return k.funcDecl or k.methodDecl
@@ -1755,7 +1758,7 @@ checkReturnRooting: function {
     marker: ztypes.zparamownership
 } out bool is {
     if argT.isZero then return false
-    cid: callNodeIdOf n: (ast.nodes.get i: arg.operation)
+    cid: callNodeIdOf n: (ast.nodes.getView i: arg.operation)
     if st.walk.fn.currentReturnMarker.isReference then {
         okRef: false
         # a call, and a control value (what its arms keep, pendReturnedPins), is
@@ -1802,7 +1805,7 @@ checkReturnRooting: function {
         if cko.unionCreate then isCtor = true
         if cko.recordCreate then isCtor = true
     }
-    mcb: callchecks.metaCreateBaseId :ast n: (ast.nodes.get i: cr.callable)
+    mcb: callchecks.metaCreateBaseId :ast n: (ast.nodes.getView i: cr.callable)
     if mcb.some then {
         isCtor = true
     }
@@ -1821,7 +1824,7 @@ checkReturnRooting: function {
             nameId: fpn
         ) then {
             srcOk: false
-            fcid: callNodeIdOf n: (ast.nodes.get i: fa.operation)
+            fcid: callNodeIdOf n: (ast.nodes.getView i: fa.operation)
             if fcid.notZero then {
                 # a call's result references what its own rules allow
                 srcOk = true
@@ -1831,7 +1834,7 @@ checkReturnRooting: function {
             if srcOk.not then {
                 tn2: specWrittenName :st :ast tid: argT
                 fld: zast.nameTextAt :ast ref: fpn
-                src: rootNameTextOf :ast n: (ast.nodes.get i: fa.operation)
+                src: rootNameTextOf :ast n: (ast.nodes.getView i: fa.operation)
                 m2: "the returned `\{tn2}` stores '\{src}' in its non-owned field '\{fld}', but '\{src}' is not a `.borrow`/`.view` parameter -- an `outx` result may only reference what its caller still owns"
                 if src.length == 0 then {
                     m2 = "the returned `\{tn2}` fills its non-owned field '\{fld}' from an expression that is not rooted at a `.borrow`/`.view` parameter -- an `outx` result may only reference what its caller still owns"
@@ -1889,7 +1892,7 @@ checkBorrowResultSource: function {
         return
     }
     path: ListVal zast.nameid
-    appendValueTuple :ast n: (ast.nodes.get i: arg.operation) dst: path
+    appendValueTuple :ast n: (ast.nodes.getView i: arg.operation) dst: path
     if path.length == 0 then return
     # a no-paren auto-call is a path whose leaf is a method: what it lends is
     # the method's result, judged by the method's own flag
@@ -1912,7 +1915,7 @@ checkBorrowResultSource: function {
     ff: frozenFieldInPath :st :path upTo: path.length
     m: String
     if ff.isZero then {
-        rnm: rootNameTextOf :ast n: (ast.nodes.get i: arg.operation)
+        rnm: rootNameTextOf :ast n: (ast.nodes.getView i: arg.operation)
         m = "a `.borrow` result cannot be lent through '\{rnm}', a `.view`: a view converts to no other ownership -- declare `outx T.view`, or take '\{rnm}' as `.borrow`"
     } else {
         fnm: zast.nameTextAt :ast ref: ff
@@ -1943,7 +1946,7 @@ checkArmBorrowSources: function {
                 lineno: arg.lineno
                 colno: arg.colno
             )
-            cid: (callNodeIdOf n: (ast.nodes.get i: lf))
+            cid: (callNodeIdOf n: (ast.nodes.getView i: lf))
             :marker
         )
     }
@@ -2232,7 +2235,7 @@ armBorrowedLeaves: function {
     all: ListVal zast.nodeid
     armValueLeaves :st :ast :nid into: all
     for each lf: all loop {
-        n: ast.nodes.get i: lf
+        n: ast.nodes.getView i: lf
         if (zast.atomNameIdOf :n).isZero then into.append from: lf
     }
 }
@@ -2249,7 +2252,7 @@ refuseBorrowedArms: function {
     leaves: ListVal zast.nodeid
     armBorrowedLeaves :st :ast :nid into: leaves
     for each lf: leaves loop {
-        ln: ast.nodes.get i: lf
+        ln: ast.nodes.getView i: lf
         refuseBorrowedMove :st :ast n: ln vt: (walkTypeOf :st nid: lf) :verb
     }
 }
@@ -2261,7 +2264,7 @@ armLeafLocal: function {st: zenv.ZSymbolTable ast: Ast.view nid: zast.nodeid} ou
     none: ztypes.vid.zero
     av: st.typing.atomVariableId.get key: nid
     if av.none then return none
-    cur: st.lookupVarId nameId: (zast.atomNameIdOf n: (ast.nodes.get i: nid))
+    cur: st.lookupVarId nameId: (zast.atomNameIdOf n: (ast.nodes.getView i: nid))
     if cur.none then return none
     if (cur == av).not then return none
     return cur
@@ -2299,7 +2302,10 @@ armLeafIsPartial: function {
 
 # markLeafTakeMaybe -- the move the arm leaf `leaf` just recorded is a maybe.
 markLeafTakeMaybe: function {st: zenv.ZSymbolTable ast: Ast.view leaf: zast.nodeid} is {
-    st.markTakeMaybe declId: (st.findLocal nameId: (zast.atomNameIdOf n: (ast.nodes.get i: leaf)))
+    (
+        st.markTakeMaybe
+        declId: (st.findLocal nameId: (zast.atomNameIdOf n: (ast.nodes.getView i: leaf)))
+    )
 }
 
 # pinread -- a value's pins as the destination that receives it reads them
@@ -2440,7 +2446,7 @@ placePins: function {
     # a TYPE name or a zero-arg function resolves to no variable: those
     # construct or call rather than naming storage, and the binding owns what
     # they hand back
-    bn: zast.atomNameIdOf n: (ast.nodes.get i: nid)
+    bn: zast.atomNameIdOf n: (ast.nodes.getView i: nid)
     if bn.isZero then return
     if (st.lookupVarId nameId: bn).none then return
     np: ListVal zast.nameid
@@ -2462,7 +2468,7 @@ fieldReadPin: function {
 } is {
     if (st.reg.isReftypeOf tid: vt).not then return
     fp: ListVal zast.nameid
-    vn: ast.nodes.get i: nid
+    vn: ast.nodes.getView i: nid
     if (isMarkedMove :ast n: vn) then return
     # a field read off a value no name holds is part of that value: the pin is
     # rooted at the temporary its read holds the value in, which then lives as
@@ -2594,7 +2600,7 @@ armLocalPin: function {
 } is {
     if (armLeafReadsRef :st nid: leaf).not then return
     np: ListVal zast.nameid
-    np.append (zast.atomNameIdOf n: (ast.nodes.get i: leaf))
+    np.append (zast.atomNameIdOf n: (ast.nodes.getView i: leaf))
     mw: (pathIsReadonly :st path: np).not and writes
     pinsAppend pins: dst path: np shared: true mutable: mw carried: false
 }
@@ -2745,7 +2751,7 @@ reportArmKeepsDyingStorage: function {
 } is {
     dn: lockRootPhrase :st :ast nameId: root :rootVid
     m: "Cannot \{verb} this value: it keeps \{dn} locked, which dies with the scope that declares it"
-    ln: ast.nodes.get i: leaf
+    ln: ast.nodes.getView i: leaf
     (
         addError
         :st
@@ -2790,7 +2796,7 @@ recordHandedBackLocks: function {st: zenv.ZSymbolTable ast: Ast.view valNid: zas
 # handBackLocalLocks -- recordHandedBackLocks for a value that is a local this
 # scope declared: its held locks join the value's record.
 handBackLocalLocks: function {st: zenv.ZSymbolTable ast: Ast.view valNid: zast.nodeid} is {
-    bn: zast.atomNameIdOf n: (ast.nodes.get i: valNid)
+    bn: zast.atomNameIdOf n: (ast.nodes.getView i: valNid)
     if bn.isZero then return
     if (st.scopeBindsHere nameId: bn).not then return
     hv: st.lookupVarId nameId: bn
@@ -2970,11 +2976,11 @@ refuseStaticListStatement: function {
 } out bool is {
     if vt.isZero or ((listRowOfNode :st :nid) == 0) then return false
     tp: ListVal zast.nameid
-    appendValueTuple :ast n: (ast.nodes.get i: nid) dst: tp
+    appendValueTuple :ast n: (ast.nodes.getView i: nid) dst: tp
     pp: zenv.formatPath pool: ast.names path: tp.listView
     ln: u32
     co: u32
-    vn: ast.nodes.get i: nid
+    vn: ast.nodes.getView i: nid
     ln = nodeLine n: vn
     co = nodeCol n: vn
     (
@@ -3024,11 +3030,11 @@ exprTextOf: function {ast: Ast.view n: astnode.view dst: String} is {
     ) case atomid then {
         dst.append (zast.nameTextAt :ast ref: n.name)
     } case dottedpath then {
-        exprTextOf :ast n: (ast.nodes.get i: n.parent) :dst
+        exprTextOf :ast n: (ast.nodes.getView i: n.parent) :dst
         dst.append "."
-        exprTextOf :ast n: (ast.nodes.get i: n.child) :dst
+        exprTextOf :ast n: (ast.nodes.getView i: n.child) :dst
     } case call then {
-        exprTextOf :ast n: (ast.nodes.get i: n.callable) :dst
+        exprTextOf :ast n: (ast.nodes.getView i: n.callable) :dst
         for each argId: (zast.kidsOf :ast span: n.arguments) loop {
             argTextOf :ast arg: (argRefAt :ast nid: argId) :dst
         }
@@ -3045,9 +3051,9 @@ argTextOf: function {ast: Ast.view arg: argref dst: String} is {
         dst.append (zast.nameTextAt :ast ref: arg.name)
         dst.append ": "
     }
-    nested: (ast.nodes.get i: arg.operation).call
+    nested: (ast.nodes.getView i: arg.operation).call
     if nested then dst.append "("
-    exprTextOf :ast n: (ast.nodes.get i: arg.operation) :dst
+    exprTextOf :ast n: (ast.nodes.getView i: arg.operation) :dst
     if nested then dst.append ")"
 }
 
@@ -3107,14 +3113,14 @@ dottedLendsResult: function {st: zenv.ZSymbolTable nid: zast.nodeid} out bool is
 # arm's path. Both sides of a lifetime ask this -- the mint below and the
 # argument hoist -- so the two cannot drift apart.
 valueIsLent: function {st: zenv.ZSymbolTable ast: Ast nid: zast.nodeid} out bool is {
-    if (callHandsBackBorrow :st :ast n: (ast.nodes.get i: nid)) then return true
+    if (callHandsBackBorrow :st :ast n: (ast.nodes.getView i: nid)) then return true
     # a FIELD read off a lent value is lent too: `(hs.get i: 0).parts` is
     # storage the list's element owns. A valtype field is read by copy, and the
     # copy is the temporary's own
     fbase: zast.nodeid
     fReft: st.reg.isReftypeOf tid: (walkTypeOf :st :nid)
     {
-        n: ast.nodes.get i: nid
+        n: ast.nodes.getView i: nid
         if fReft when n.dottedpath when (
             memberReadIsField
             :st
@@ -3134,7 +3140,7 @@ callHandsBackBorrow: function {st: zenv.ZSymbolTable ast: Ast.view n: astnode.vi
     match (
         n
     ) case call then {
-        cal: ast.nodes.get i: n.callable
+        cal: ast.nodes.getView i: n.callable
         ft: walkTypeOf :st nid: (zast.nodeIdOf n: cal)
         if ft.notZero when (st.typing.returnsReference tid: ft) then return true
         ch: memberaccess.dottedChildNameId :ast n: cal
@@ -3203,9 +3209,9 @@ reportModeChange: function {
     tmode: "owned"
     if targetHeld then tmode = "held"
     tt: String
-    exprTextOf :ast n: (ast.nodes.get i: rasgn.topath) dst: tt
+    exprTextOf :ast n: (ast.nodes.getView i: rasgn.topath) dst: tt
     mm: "Cannot reassign \{tmode} '\{tt}' with a \{vmode} value: a reassignment keeps the ownership its target was bound with"
-    vn: ast.nodes.get i: value
+    vn: ast.nodes.getView i: value
     (
         addError
         :st
@@ -3237,7 +3243,7 @@ refuseBorrowedReassign: function {
         refuseBorrowedMove
         :st
         :ast
-        n: (ast.nodes.get i: rasgn.value)
+        n: (ast.nodes.getView i: rasgn.value)
         vt: rvt
         verb: "by reassignment"
     )
@@ -3320,7 +3326,7 @@ withValueOwnership: function {
 } out ztypes.zownership is {
     lent: (isControlValue :ast :nid) and (valueIsLent :st :ast :nid)
     if lent then return ztypes.zownership.borrowed
-    v: ast.nodes.get i: nid
+    v: ast.nodes.getView i: nid
     match (
         v
     ) case atomid then {
@@ -3335,7 +3341,7 @@ withValueOwnership: function {
         }
     } case dottedpath then {
         if (zast.markerKindOfLeaf :ast leaf: v.child).takeMarker then return ztypes.zownership.owned
-        if (movedFieldPath :st :ast n: (ast.nodes.get i: v.nodeid)
+        if (movedFieldPath :st :ast n: (ast.nodes.getView i: v.nodeid)
         ) then return ztypes.zownership.borrowed
         return ztypes.zownership.owned
     } else {
@@ -3352,9 +3358,9 @@ withValueIsMemberCall: function {
     match (
         v
     ) case dottedpath then {
-        if (isMoveMarkerId nameId: (atomNameId :ast n: (ast.nodes.get i: v.child))
+        if (isMoveMarkerId nameId: (atomNameId :ast n: (ast.nodes.getView i: v.child))
         ) then return false
-        return (movedFieldPath :st :ast n: (ast.nodes.get i: v.nodeid)).not
+        return (movedFieldPath :st :ast n: (ast.nodes.getView i: v.nodeid)).not
     } else {
         return false
     }
@@ -3372,7 +3378,7 @@ forValueNode: function {
         ne9: block.statements.count.u64
         if ne9 == 0 then return zast.nodeid
         lastId: zast.kidAt kids: ast.kids span: block.statements i: ne9 - 1
-        last: ast.nodes.get i: lastId
+        last: ast.nodes.getView i: lastId
         if last.statementline.not then return zast.nodeid
         return (
             implicitReturnValue
@@ -3412,7 +3418,7 @@ checkComprehensionValue: function {
 } is {
     if (st.reg.isReftypeOf tid: elemT).not then return
     if fornode.body.isZero then return
-    valueNid: forValueNode :st :ast block: (ast.nodes.get i: fornode.body)
+    valueNid: forValueNode :st :ast block: (ast.nodes.getView i: fornode.body)
     if valueNid.isZero then return
     vn9: ast.nodes.get i: valueNid
     bn9: zast.atomNameIdOf n: vn9
@@ -3470,7 +3476,7 @@ checkComprehensionValue: function {
 # isControlValue -- the node is an `if` or a `match`, whose value is its arms',
 # or a block or a `with`, whose value is its body's: a body is a one-arm value.
 isControlValue: function {ast: Ast.view nid: zast.nodeid} out bool is {
-    n: ast.nodes.get i: nid
+    n: ast.nodes.getView i: nid
     return n.ifexpr or n.caseexpr or n.doexpr or n.withexpr
 }
 
@@ -3536,7 +3542,7 @@ valueArmsTid: function {
         if av.nid.notZero then {
             arms.append from: av
         } else if (
-            (flow.lastStmtType :st :ast block: (ast.nodes.get i: blk)) == st.typing.nullTypeId
+            (flow.lastStmtType :st :ast block: (ast.nodes.getView i: blk)) == st.typing.nullTypeId
         ) then {
             valueless = true
         }
@@ -3581,7 +3587,7 @@ recordControlPlaceLeaves: function {st: zenv.ZSymbolTable ast: Ast nid: zast.nod
     leaves: ListVal zast.nodeid
     armValueLeaves :st :ast :nid into: leaves
     for each lf: leaves loop {
-        ln: ast.nodes.get i: lf
+        ln: ast.nodes.getView i: lf
         place: false
         if (zast.atomNameIdOf n: ln).notZero then {
             place = (armLeafLocal :st :ast nid: lf).notZero or (armLeafBorrowed :st nid: lf)
@@ -3653,7 +3659,7 @@ argIsTrivial: function {ast: Ast.view op: astnode.view} out bool is {
         return true
     } case atomstring then {
         for each spId: (zast.kidsOf :ast span: op.stringparts) loop {
-            sp: ast.nodes.get i: spId
+            sp: ast.nodes.getView i: spId
             match (
                 sp
             ) case stringchunk then null else {
@@ -3672,7 +3678,7 @@ methodReceiverRootId: function {ast: Ast.view n: astnode.view} out zast.nameid i
     match (
         n
     ) case dottedpath then {
-        return (zast.atomNameIdOf n: (ast.nodes.get i: n.parent))
+        return (zast.atomNameIdOf n: (ast.nodes.getView i: n.parent))
     } else {
         return zast.nameid
     }
@@ -3685,7 +3691,7 @@ methodReceiverRootId: function {ast: Ast.view n: astnode.view} out zast.nameid i
 # fields stay independent.
 methodReceiverTuple: function {ast: Ast.view n: astnode.view dst: ListVal zast.nameid} is {
     if n.dottedpath then {
-        appendValueTuple :ast n: (ast.nodes.get i: n.parent) :dst
+        appendValueTuple :ast n: (ast.nodes.getView i: n.parent) :dst
     }
 }
 
@@ -3697,7 +3703,7 @@ dottedReceiverNodeId: function {ast: Ast.view n: astnode.view} out zast.nodeid i
     match (
         n
     ) case dottedpath then {
-        return (zast.nodeIdOf n: (ast.nodes.get i: n.parent))
+        return (zast.nodeIdOf n: (ast.nodes.getView i: n.parent))
     } else {
         return zast.nodeid
     }
@@ -4001,11 +4007,11 @@ takenHere: function {} out optionval ztypes.zsrcpos is {
 # comprehension builds, a function a call runs, or a method call's receiver
 # path.
 keeperText: function {ast: Ast.view keeper: zast.nodeid} out String is {
-    kn: ast.nodes.get i: keeper
+    kn: ast.nodes.getView i: keeper
     if kn.forexpr then return "the list this loop builds".string
     if kn.call then {
         fnText: String
-        exprTextOf :ast n: (ast.nodes.get i: kn.callable) dst: fnText
+        exprTextOf :ast n: (ast.nodes.getView i: kn.callable) dst: fnText
         return "a `.take` parameter of '\{fnText}'"
     }
     tup: ListVal zast.nameid
@@ -4189,8 +4195,8 @@ appendNamedTuple: function {ast: Ast.view n: astnode.view dst: ListVal zast.name
     ) case atomid then {
         dst.append n.name
     } case dottedpath then {
-        appendNamedTuple :ast n: (ast.nodes.get i: n.parent) :dst
-        cid: atomNameId :ast n: (ast.nodes.get i: n.child)
+        appendNamedTuple :ast n: (ast.nodes.getView i: n.parent) :dst
+        cid: atomNameId :ast n: (ast.nodes.getView i: n.child)
         if cid.notZero when (isStripMarkerId nameId: cid).not then dst.append cid
     } else null
 }
@@ -4203,7 +4209,7 @@ valueTupleRoot: function {ast: Ast.view n: astnode.view} out zast.nameid is {
     ) case atomid then {
         return n.name
     } case dottedpath then {
-        return (valueTupleRoot :ast n: (ast.nodes.get i: n.parent))
+        return (valueTupleRoot :ast n: (ast.nodes.getView i: n.parent))
     } else {
         return zast.nameid
     }
@@ -4251,7 +4257,7 @@ fieldChainBase: function {
     rev: ListVal zast.nameid
     cur: nid
     for cur.notZero loop {
-        n: ast.nodes.get i: cur
+        n: ast.nodes.getView i: cur
         if n.dottedpath.not then break
         mem: dottedMemberId :st :ast nid: cur child: n.child
         seg: segmentOf :st nid: cur parent: n.parent :mem
@@ -4330,10 +4336,10 @@ argPinTuple: function {
             argPinTuple
             :st
             :ast
-            n: (ast.nodes.get i: n.parent)
+            n: (ast.nodes.getView i: n.parent)
             :dst
         )
-        if (argPinTuple :st :ast n: (ast.nodes.get i: n.parent) :dst) then return true
+        if (argPinTuple :st :ast n: (ast.nodes.getView i: n.parent) :dst) then return true
         if seg == dottedseg.field then {
             dst.append cid
             return false
@@ -4349,7 +4355,7 @@ argPinTuple: function {
 # argIsFresh -- argument `nid` is a fresh value at the end of a path
 # (argPinTuple): a value of its own, which nothing names
 argIsFresh: function {st: zenv.ZSymbolTable.view ast: Ast.view nid: zast.nodeid} out bool is {
-    return (passesFreshValue :st :ast n: (ast.nodes.get i: nid))
+    return (passesFreshValue :st :ast n: (ast.nodes.getView i: nid))
 }
 
 # passesFreshValue -- argPinTuple's answer without its path: the read `n`
@@ -4358,7 +4364,7 @@ passesFreshValue: function {st: zenv.ZSymbolTable.view ast: Ast.view n: astnode.
     match (
         n
     ) case dottedpath then {
-        if (passesFreshValue :st :ast n: (ast.nodes.get i: n.parent)) then return true
+        if (passesFreshValue :st :ast n: (ast.nodes.getView i: n.parent)) then return true
         cid: dottedMemberId :st :ast nid: n.nodeid child: n.child
         return (segmentOf :st nid: n.nodeid parent: n.parent mem: cid) == dottedseg.making
     } else {
@@ -4679,7 +4685,7 @@ ownedValueReceiver: function {
     unitDecl: ztypes.declid
     call: callref
 } is {
-    rpn: dottedReceiverNodeId :ast n: (ast.nodes.get i: call.callable)
+    rpn: dottedReceiverNodeId :ast n: (ast.nodes.getView i: call.callable)
     if rpn.isZero then return
     if (receiverIsValue :st :ast :unitDecl nid: rpn).not then return
     if (receiverRootIsVar :st :ast :call) when (
@@ -4711,7 +4717,7 @@ takeValueReceiver: function {
     if recvVal.not then return ztypes.tid
     # a receiver that is a `.view` result is read-only: a method that writes its
     # receiver cannot take one, as no `.borrow` can be lent from it
-    rvNid: dottedReceiverNodeId :ast n: (ast.nodes.get i: call.callable)
+    rvNid: dottedReceiverNodeId :ast n: (ast.nodes.getView i: call.callable)
     rvRo: (
         rvNid.notZero and ((valuePinsOf :st nid: rvNid).marker == ztypes.zparamownership.viewMode)
     )
@@ -4772,14 +4778,14 @@ receiverResultPath: function {
     # a function stored in a field takes no receiver: what it hands back is
     # its own, not a view of the object that holds it
     if (calleeIsFieldFunction :st nid: call.callable) then return
-    rcvT: walkTypeOf :st nid: (dottedReceiverNodeId :ast n: (ast.nodes.get i: call.callable))
+    rcvT: walkTypeOf :st nid: (dottedReceiverNodeId :ast n: (ast.nodes.getView i: call.callable))
     if (receiverPinsNothing :ast :st recvT: rcvT) then return
-    methodReceiverTuple :ast n: (ast.nodes.get i: call.callable) :dst
+    methodReceiverTuple :ast n: (ast.nodes.getView i: call.callable) :dst
     (
         cutAtMethod
         :st
         :ast
-        recv: (dottedReceiverNodeId :ast n: (ast.nodes.get i: call.callable))
+        recv: (dottedReceiverNodeId :ast n: (ast.nodes.getView i: call.callable))
         :dst
     )
     if dst.length > 0 then {
@@ -4794,7 +4800,7 @@ receiverResultPath: function {
         :st
         :ast
         :rvT
-        recvNid: (dottedReceiverNodeId :ast n: (ast.nodes.get i: call.callable))
+        recvNid: (dottedReceiverNodeId :ast n: (ast.nodes.getView i: call.callable))
         :rvPins
         path: dst
         :pins
@@ -4833,7 +4839,7 @@ viewingMethodPrefix: function {
     depth: u64
     cur: nid
     for cur.notZero loop {
-        n: ast.nodes.get i: cur
+        n: ast.nodes.getView i: cur
         par: zast.nodeid
         match (
             n
@@ -4848,7 +4854,7 @@ viewingMethodPrefix: function {
     idx: depth
     cur = nid
     for cur.notZero loop {
-        n: ast.nodes.get i: cur
+        n: ast.nodes.getView i: cur
         par: zast.nodeid
         mem: zast.nameid
         match (
@@ -4886,7 +4892,7 @@ captureValueReceiver: function {
     # receives the pins a borrowed receiver left
     pins: List ztyping.PinPath
 } out ztypes.tid is {
-    rcv: dottedReceiverNodeId :ast n: (ast.nodes.get i: call.callable)
+    rcv: dottedReceiverNodeId :ast n: (ast.nodes.getView i: call.callable)
     if rcv.isZero then return ztypes.tid
     if (receiverPinsNothing :ast :st recvT: (walkTypeOf :st nid: rcv)) then return ztypes.tid
     rpins: List ztyping.PinPath
@@ -4931,7 +4937,7 @@ receiverIsFreshValue: function {st: zenv.ZSymbolTable ast: Ast.view nid: zast.no
 # receiverRootIsVar -- the method call's receiver path is rooted in a variable.
 receiverRootIsVar: function {st: zenv.ZSymbolTable ast: Ast.view call: callref} out bool is {
     rvTup: ListVal zast.nameid
-    methodReceiverTuple :ast n: (ast.nodes.get i: call.callable) dst: rvTup
+    methodReceiverTuple :ast n: (ast.nodes.getView i: call.callable) dst: rvTup
     if rvTup.length == 0 then return false
     return (st.lookupVarId nameId: (rvTup.get i: 0)).some
 }
@@ -5476,7 +5482,7 @@ valueReadsReadonlyPlace: function {
 } out bool is {
     if (st.reg.isReftypeOf tid: vt).not then return false
     path: ListVal zast.nameid
-    appendValueTuple :ast n: (ast.nodes.get i: nid) dst: path
+    appendValueTuple :ast n: (ast.nodes.getView i: nid) dst: path
     if path.length == 0 then return false
     if (pathLeafIsMethod :st :path) then return false
     return (pathIsReadonly :st :path)
@@ -5622,12 +5628,12 @@ readonlyMoveError: function {
 # `.take` gets. A field that owns nothing -- a number, a record, a view -- hands
 # on its value, and answers to checkFieldMove.
 takeMarkerOnField: function {st: zenv.ZSymbolTable ast: Ast.view dp: dpref} is {
-    fieldN: ast.nodes.get i: dp.parent
+    fieldN: ast.nodes.getView i: dp.parent
     if (movedFieldPath :st :ast n: fieldN) then {
         ft: walkTypeOf :st nid: dp.parent
         if (refuseBorrowedMove :st :ast n: fieldN vt: ft verb: "with '.take'") then return
     }
-    checkFieldMove :st :ast n: (ast.nodes.get i: dp.nid)
+    checkFieldMove :st :ast n: (ast.nodes.getView i: dp.nid)
 }
 
 # checkFieldMove -- a move out of a field leaves the field empty, which is a write
@@ -5647,7 +5653,7 @@ movedFieldPath: function {st: zenv.ZSymbolTable.view ast: Ast.view n: astnode.vi
     match (
         n
     ) case dottedpath then {
-        p: ast.nodes.get i: n.parent
+        p: ast.nodes.getView i: n.parent
         cid: dottedMemberId :st :ast nid: n.nodeid child: n.child
         if (isMoveMarkerId nameId: cid) then return (movedFieldPath :st :ast n: p)
         if (memberReadIsField :st parentNid: n.parent nameId: cid).not then return false
@@ -5670,7 +5676,7 @@ dottedMemberId: function {
 } out zast.nameid is {
     ai: st.typing.aliasInternalIdOf nodeid: nid
     if ai.notZero then return ai
-    return (atomNameId :ast n: (ast.nodes.get i: child))
+    return (atomNameId :ast n: (ast.nodes.getView i: child))
 }
 
 # memberReadIsField -- the member `nameId` read off the node `parentNid` is a
@@ -5699,7 +5705,7 @@ isMarkedMove: function {ast: Ast.view n: astnode.view} out bool is {
     match (
         n
     ) case dottedpath then {
-        return (isMoveMarkerId nameId: (atomNameId :ast n: (ast.nodes.get i: n.child)))
+        return (isMoveMarkerId nameId: (atomNameId :ast n: (ast.nodes.getView i: n.child)))
     } else {
         return false
     }
@@ -5931,13 +5937,13 @@ hoistArg: function {
     # must stay drained-without-locks, or it would double the call's own
     # receiver locks under a temp holder
     if hown == ztypes.zownership.borrowed then {
-        hrt: rootNameIdOf :ast n: (ast.nodes.get i: argId)
+        hrt: rootNameIdOf :ast n: (ast.nodes.getView i: argId)
         # a CALL's result pins exactly what that call left: every call drains
         # the side channel before it pushes its own (pinCallResult), so no
         # residue can stand in for this argument's -- `(s.substring from: 0
         # to: 4)` and `(pick :l i: 0)` hold their sources as `s.stringView`
         # does, and a later argument moving or writing them meets the temp
-        isCallArg: (ast.nodes.get i: argId).call
+        isCallArg: (ast.nodes.getView i: argId).call
         # and so does a control value: what its arms hand back, whatever each
         # is rooted at
         isCtl: isControlValue :ast nid: argId
@@ -6036,7 +6042,7 @@ lockBorrowedArgPath: function {
     av: List ztyping.PinPath
     ar: pinread
 } out pinread is {
-    an: ast.nodes.get i: arg.operation
+    an: ast.nodes.getView i: arg.operation
     seen: valueTupleRoot :ast n: an
     if seen.isZero then return ar
     # residue left by an EARLIER argument of this call must not stand in for
@@ -6104,7 +6110,7 @@ lockFieldArgForCall: function {
     arg: argref
     isViewArg: bool
 } out bool is {
-    opN: ast.nodes.get i: arg.operation
+    opN: ast.nodes.getView i: arg.operation
     if (movedFieldPath :st :ast n: opN).not then return false
     src: ListVal zast.nameid
     appendValueTuple :ast n: opN dst: src
@@ -6277,7 +6283,7 @@ lockNonTrivialArg: function {
     # an owned value no name holds, lent to a call whose result keeps it locked:
     # the result pins the temp, which outlives the call as an unnamed local. A
     # root that names no variable (`mkList`, auto-called) holds nothing either.
-    argRoot: rootNameIdOf :ast n: (ast.nodes.get i: arg.operation)
+    argRoot: rootNameIdOf :ast n: (ast.nodes.getView i: arg.operation)
     rootIsVar: argRoot.notZero and (st.lookupVarId nameId: argRoot).some
     pinTemp: false
     if calleePins when isLockish when pinsLike then {
@@ -6306,9 +6312,9 @@ lockNonTrivialArg: function {
             callId: call.nid
             shared: true
             mutable: isViewArg.not
-            nodeid: (zast.nodeIdOf n: (ast.nodes.get i: arg.operation))
-            lineno: (nodeLine n: (ast.nodes.get i: arg.operation))
-            colno: (nodeCol n: (ast.nodes.get i: arg.operation))
+            nodeid: (zast.nodeIdOf n: (ast.nodes.getView i: arg.operation))
+            lineno: (nodeLine n: (ast.nodes.getView i: arg.operation))
+            colno: (nodeCol n: (ast.nodes.getView i: arg.operation))
             queued: true
         )
     }
@@ -6341,7 +6347,7 @@ hoistTrivialArg: function {
     # A trivial literal argument coerces in place at the
     # parameter boundary (no hoist: restamp its bare node).
     if pt.notZero then {
-        argNid: stampNodeId n: (ast.nodes.get i: arg.operation)
+        argNid: stampNodeId n: (ast.nodes.getView i: arg.operation)
         if argNid.notZero then {
             stamped: pt
             stampGate :st nid: argNid tid: stamped
@@ -6354,9 +6360,9 @@ hoistTrivialArg: function {
     # identically: a take parameter consumes it, a lock/borrow
     # parameter locks it (see docs/typechecker.pdoc, `:name` at
     # the argument site).
-    bnId: zast.atomNameIdOf n: (ast.nodes.get i: arg.operation)
+    bnId: zast.atomNameIdOf n: (ast.nodes.getView i: arg.operation)
     if bnId.isZero then {
-        bnId = atomNameId :ast n: (ast.nodes.get i: arg.operation)
+        bnId = atomNameId :ast n: (ast.nodes.getView i: arg.operation)
     }
     byRef: isRecvArg or (st.reg.isReftypeOf tid: vt)
     if bnId.notZero when byRef or valByPointer then {
@@ -6375,9 +6381,9 @@ hoistTrivialArg: function {
                     :keeper
                     :calleePins
                     :pins
-                    nodeid: (zast.nodeIdOf n: (ast.nodes.get i: arg.operation))
-                    lineno: (nodeLine n: (ast.nodes.get i: arg.operation))
-                    colno: (nodeCol n: (ast.nodes.get i: arg.operation))
+                    nodeid: (zast.nodeIdOf n: (ast.nodes.getView i: arg.operation))
+                    lineno: (nodeLine n: (ast.nodes.getView i: arg.operation))
+                    colno: (nodeCol n: (ast.nodes.getView i: arg.operation))
                 )
             } else {
                 if isLockish then {
@@ -6389,9 +6395,9 @@ hoistTrivialArg: function {
                         callId: call.nid
                         shared: true
                         mutable: isViewArg.not
-                        nodeid: (zast.nodeIdOf n: (ast.nodes.get i: arg.operation))
-                        lineno: (nodeLine n: (ast.nodes.get i: arg.operation))
-                        colno: (nodeCol n: (ast.nodes.get i: arg.operation))
+                        nodeid: (zast.nodeIdOf n: (ast.nodes.getView i: arg.operation))
+                        lineno: (nodeLine n: (ast.nodes.getView i: arg.operation))
+                        colno: (nodeCol n: (ast.nodes.getView i: arg.operation))
                         queued: true
                     )
                     # the call's result keeps this pin
@@ -6426,7 +6432,7 @@ moveArmLeavesIntoArgument: function {
         from: armLeafLocal :st :ast nid: lf
         if from.notZero when (armLeafReadsRef :st nid: lf) then {
             partial: armLeafIsPartial :st :ast :leaves :from
-            nm: zast.nameTextAt :ast ref: (zast.atomNameIdOf n: (ast.nodes.get i: lf))
+            nm: zast.nameTextAt :ast ref: (zast.atomNameIdOf n: (ast.nodes.getView i: lf))
             (
                 consumeBareArgOwnership
                 :st
@@ -6437,8 +6443,8 @@ moveArmLeavesIntoArgument: function {
                 :calleePins
                 :pins
                 nodeid: lf
-                lineno: (nodeLine n: (ast.nodes.get i: lf))
-                colno: (nodeCol n: (ast.nodes.get i: lf))
+                lineno: (nodeLine n: (ast.nodes.getView i: lf))
+                colno: (nodeCol n: (ast.nodes.getView i: lf))
             )
             if partial then markLeafTakeMaybe :st :ast leaf: lf
             st.typing.armLeafMoves.add item: lf
@@ -6453,7 +6459,7 @@ moveArmFieldLeaves: function {st: zenv.ZSymbolTable ast: Ast nid: zast.nodeid} i
     leaves: ListVal zast.nodeid
     armBorrowedLeaves :st :ast :nid into: leaves
     for each lf: leaves loop {
-        ln: ast.nodes.get i: lf
+        ln: ast.nodes.getView i: lf
         lt: walkTypeOf :st nid: lf
         refuseBorrowedMove :st :ast n: ln vt: lt verb: "into a `.take` parameter"
     }
@@ -6469,7 +6475,7 @@ atomReadsNoVariable: function {
     vt: ztypes.tid
 } out bool is {
     if (st.reg.isReftypeOf tid: vt).not then return false
-    nm: zast.atomNameIdOf n: (ast.nodes.get i: op)
+    nm: zast.atomNameIdOf n: (ast.nodes.getView i: op)
     if nm.isZero then return false
     return (st.lookupVarId nameId: nm).none
 }
@@ -6500,7 +6506,7 @@ hoistAndLockArg: function {
     calleePins: bool
     arg: argref
 } is {
-    trivial: argIsTrivial :ast op: (ast.nodes.get i: arg.operation)
+    trivial: argIsTrivial :ast op: (ast.nodes.getView i: arg.operation)
     # a bare name that is no variable -- a function it auto-calls, a type it
     # constructs -- hands over a value no name holds: a temporary like a call's
     if trivial when (atomReadsNoVariable :st :ast op: arg.operation :vt) then trivial = false
@@ -6715,17 +6721,17 @@ argIsItsDefault: function {
 
 # takenBareName -- the name `x` of a value written `x.take`, or 0.
 takenBareName: function {ast: Ast.view nid: zast.nodeid} out zast.nameid is {
-    vn: ast.nodes.get i: nid
+    vn: ast.nodes.getView i: nid
     if vn.dottedpath.not then return zast.nameid
-    cid: atomNameId :ast n: (ast.nodes.get i: vn.child)
+    cid: atomNameId :ast n: (ast.nodes.getView i: vn.child)
     if cid != zast.wellKnown.slot.wkTake then return zast.nameid
-    return (zast.atomNameIdOf n: (ast.nodes.get i: vn.parent))
+    return (zast.atomNameIdOf n: (ast.nodes.getView i: vn.parent))
 }
 
 # callReceiverId -- the receiver node of the dotted call `call` (`4` in
 # `4 + w`, `"ab"` in `"ab".substring ...`), 0 when the callee is not dotted.
 callReceiverId: function {ast: Ast.view call: callref} out zast.nodeid is {
-    cb: ast.nodes.get i: call.callable
+    cb: ast.nodes.getView i: call.callable
     if cb.dottedpath then return cb.parent
     return zast.nodeid
 }
@@ -6734,13 +6740,13 @@ callReceiverId: function {ast: Ast.view call: callref} out zast.nodeid is {
 # for no call.
 callArgsFold: function {st: zenv.ZSymbolTable.view ast: Ast.view call: zast.nodeid} out bool is {
     if call.isZero then return true
-    cn: ast.nodes.get i: call
+    cn: ast.nodes.getView i: call
     match (
         cn
     ) case call then {
         for each aId: (zast.kidsOf :ast span: cn.arguments) loop {
             op: aId
-            an: ast.nodes.get i: aId
+            an: ast.nodes.getView i: aId
             match an case namedoperation then op = an.operation else null
             if (st.typing.nodeConstAt nid: op).isConst.not then return false
         }
@@ -6847,7 +6853,7 @@ stampArgDisposition: function {
     op: zast.nodeid
     own: ztypes.zparamownership
 } is {
-    dispNid: stampNodeId n: (ast.nodes.get i: op)
+    dispNid: stampNodeId n: (ast.nodes.getView i: op)
     if dispNid.isZero then return
     dispVal: own
     st.typing.argDisposition.set key: dispNid value: dispVal
@@ -6863,7 +6869,7 @@ bindBoxedArgument: function {
     arg: argref
     argT: ztypes.tid
 } is {
-    if (argIsTrivial :ast op: (ast.nodes.get i: arg.operation)).not then {
+    if (argIsTrivial :ast op: (ast.nodes.getView i: arg.operation)).not then {
         hp: List ztyping.PinPath
         appendRecordPins :st vp: (valuePinsOf :st nid: arg.operation) dst: hp
         (
@@ -6879,7 +6885,7 @@ bindBoxedArgument: function {
         )
         return
     }
-    iid: stampNodeId n: (ast.nodes.get i: arg.operation)
+    iid: stampNodeId n: (ast.nodes.getView i: arg.operation)
     if iid.notZero then stampGate :st nid: iid tid: argT
 }
 
@@ -6939,7 +6945,7 @@ refuseYieldedBorrow: function {st: zenv.ZSymbolTable ast: Ast arg: argref argT: 
     valuechecks.refuseYieldedLocks :st :ast :arg :argT
     if st.typing.reportCount != errs then return
     verb: "as a yielded value"
-    refuseBorrowedMove :st :ast n: (ast.nodes.get i: arg.operation) vt: argT :verb
+    refuseBorrowedMove :st :ast n: (ast.nodes.getView i: arg.operation) vt: argT :verb
     refuseBorrowedArms :st :ast nid: arg.operation :verb
 }
 
@@ -6954,7 +6960,7 @@ reportReturnedBareField: function {
     if st.walk.fn.currentReturnMarker.isReference then return
     bfn: returnedBareFieldName :ast :st nid: arg.operation
     if bfn.length == 0 then return
-    fieldN: ast.nodes.get i: arg.operation
+    fieldN: ast.nodes.getView i: arg.operation
     txt: String
     exprTextOf :ast n: fieldN dst: txt
     borrowedMoveError :st :ast n: fieldN text: txt.stringView verb: "as an owned result"
@@ -6989,7 +6995,7 @@ recordReturnedOwnedLocal: function {
                     returnOwnedLocal :st :ast nid: lf vid: from tid: lt
                     # the arm hands the local out on its path, as a binding of
                     # the value takes it
-                    lfn: ast.nodes.get i: lf
+                    lfn: ast.nodes.getView i: lf
                     (
                         st.invalidateDeclAs
                         declId: (st.findLocal nameId: (zast.atomNameIdOf n: lfn))
@@ -7007,7 +7013,7 @@ recordReturnedOwnedLocal: function {
         }
         return
     }
-    rbnId: zast.atomNameIdOf n: (ast.nodes.get i: arg.operation)
+    rbnId: zast.atomNameIdOf n: (ast.nodes.getView i: arg.operation)
     if rbnId.isZero then return
     rvv: st.lookupVarId nameId: rbnId
     rvid: ztypes.vid
@@ -7055,7 +7061,7 @@ refuseReturnedArmReferences: function {st: zenv.ZSymbolTable ast: Ast nid: zast.
     leaves: ListVal zast.nodeid
     armValueLeaves :st :ast :nid into: leaves
     for each lf: leaves loop {
-        ln: ast.nodes.get i: lf
+        ln: ast.nodes.getView i: lf
         if (zast.atomNameIdOf n: ln).notZero when (armLeafLocal :st :ast nid: lf).isZero when (
             armLeafBorrowed
             :st
@@ -7106,14 +7112,14 @@ returnHandsOnStorage: function {st: zenv.ZSymbolTable.view tid: ztypes.tid} out 
 # reportReturnedBorrowedName -- the borrowed name read by the atom `nid`,
 # returned as an owned result: the caller still owns what it names.
 reportReturnedBorrowedName: function {st: zenv.ZSymbolTable ast: Ast.view nid: zast.nodeid} is {
-    rbNm: zast.nameTextAt :ast ref: (zast.atomNameIdOf n: (ast.nodes.get i: nid))
+    rbNm: zast.nameTextAt :ast ref: (zast.atomNameIdOf n: (ast.nodes.getView i: nid))
     mbr: "Cannot return borrowed variable '\{rbNm}' as an owned result — the caller still owns it; return '\{rbNm}.copy' (duplicate), declare the source '.take' (transfer ownership in), or declare the return '.borrow'"
     (
         addError
         :st
-        nodeid: (zast.nodeIdOf n: (ast.nodes.get i: nid))
-        lineno: (nodeLine n: (ast.nodes.get i: nid))
-        colno: (nodeCol n: (ast.nodes.get i: nid))
+        nodeid: (zast.nodeIdOf n: (ast.nodes.getView i: nid))
+        lineno: (nodeLine n: (ast.nodes.getView i: nid))
+        colno: (nodeCol n: (ast.nodes.getView i: nid))
         e: zast.err.ownerError
         msg: mbr
     )
@@ -7139,7 +7145,7 @@ checkReturnedValue: function {
         return
     }
     if st.walk.fn.currentReturnsNothing then {
-        opn: ast.nodes.get i: arg.operation
+        opn: ast.nodes.getView i: arg.operation
         (
             addErrorWithHint
             :st
@@ -7250,12 +7256,12 @@ lockNestedMethodReceiver: function {
     # tuple; the immediate receiver type (the stamped
     # parent) drives the reader/writer kind.
     rtupC: ListVal zast.nameid
-    callableNode: ast.nodes.get i: call.callable
+    callableNode: ast.nodes.getView i: call.callable
     methodReceiverTuple :ast n: callableNode dst: rtupC
     if rtupC.length > 1 then {
         rvoN: st.lookupVarId nameId: (rtupC.get i: 0)
         if rvoN.some then {
-            callableNode: ast.nodes.get i: call.callable
+            callableNode: ast.nodes.getView i: call.callable
             rpidN: dottedReceiverNodeId :ast n: callableNode
             rvtN: walkTypeOf :st nid: rpidN
             if rvtN.notZero then {
@@ -7291,7 +7297,7 @@ checkResolvedMethodCall: function {
     call: callref
     dro: ztypes.tid
 } out ztypes.tid is {
-    tdcb: createDottedBaseId :ast n: (ast.nodes.get i: call.callable)
+    tdcb: createDottedBaseId :ast n: (ast.nodes.getView i: call.callable)
     tdcid: zast.nodeid
     if tdcb.some then {
         tdcid = tdcb
@@ -7349,7 +7355,7 @@ checkResolvedMethodCall: function {
     # The receiver locks for the call's duration too, after
     # the args; the strength it took is the strength the result's pin
     # keeps on it.
-    rro: methodReceiverRootId :ast n: (ast.nodes.get i: call.callable)
+    rro: methodReceiverRootId :ast n: (ast.nodes.getView i: call.callable)
     recvShr: lockMethodReceiver :st :ast :call :dro rroId: rro
     st.popTo marker: mcm
     mres: ztypes.tid
@@ -7357,7 +7363,11 @@ checkResolvedMethodCall: function {
     if mro.some then {
         # a self-type return reached on an instance is the instance, as the
         # dotted auto-call answers it
-        recvTid: walkTypeOf :st nid: (dottedReceiverNodeId :ast n: (ast.nodes.get i: call.callable))
+        recvTid: (
+            walkTypeOf
+            :st
+            nid: (dottedReceiverNodeId :ast n: (ast.nodes.getView i: call.callable))
+        )
         mres = selfReturnOnInstance :st :recvTid ret: mro
         setmr: mres
         stampGate :st nid: call.nid tid: setmr
@@ -7382,7 +7392,7 @@ checkResolvedMethodCall: function {
     # A synthesized `create` has no recorded return: explicit
     # `.create` constructs, so the result is the base type.
     if mres.isZero then {
-        cdb: createDottedBaseId :ast n: (ast.nodes.get i: call.callable)
+        cdb: createDottedBaseId :ast n: (ast.nodes.getView i: call.callable)
         cdbid: zast.nodeid
         if cdb.some then {
             cdbid = cdb
@@ -7435,7 +7445,7 @@ movePayloadIntoArm: function {
     }
     if (st.reg.isReftypeOf tid: vt).not then return
     carry: List ztyping.PinPath
-    bn: zast.atomNameIdOf n: (ast.nodes.get i: op)
+    bn: zast.atomNameIdOf n: (ast.nodes.getView i: op)
     if bn.notZero then {
         bvo: st.lookupVarId nameId: bn
         if bvo.some then {
@@ -7479,7 +7489,7 @@ pinPayloadOfArm: function {
 } is {
     pth: ListVal zast.nameid
     {
-        pn: ast.nodes.get i: op
+        pn: ast.nodes.getView i: op
         if pn.atomid or pn.dottedpath then appendValueTuple :ast n: pn dst: pth
     }
     if pth.length == 0 then {
@@ -7606,7 +7616,7 @@ checkGenericFnCall: function {
 genericCallInstance: function {
     st: zenv.ZSymbolTable.view ast: Ast.view call: callref
 } out ztypes.tid is {
-    cnid: zast.nodeIdOf n: (ast.nodes.get i: call.callable)
+    cnid: zast.nodeIdOf n: (ast.nodes.getView i: call.callable)
     return (walkTypeOf :st nid: cnid)
 }
 
@@ -7766,7 +7776,7 @@ moveYieldedValue: function {st: zenv.ZSymbolTable ast: Ast valueNid: zast.nodeid
     for each lf: leaves loop {
         from: armLeafLocal :st :ast nid: lf
         if from.isZero then continue
-        d: st.findLocal nameId: (zast.atomNameIdOf n: (ast.nodes.get i: lf))
+        d: st.findLocal nameId: (zast.atomNameIdOf n: (ast.nodes.getView i: lf))
         if d.isZero then continue
         if (st.innermostOpenIs scope: (st.typing.declParentOf declId: d)).not then continue
         if (st.ownsDestroy vid: from).not then continue
@@ -7805,7 +7815,7 @@ lastStmtLineId: function {ast: Ast.view block: astnode.view} out zast.nodeid is 
         ne: block.statements.count.u64
         if ne > 0 then {
             lastId: zast.kidAt kids: ast.kids span: block.statements i: ne - 1
-            last: ast.nodes.get i: lastId
+            last: ast.nodes.getView i: lastId
             if last.statementline then return last.nodeid
         }
     }
@@ -7815,7 +7825,7 @@ lastStmtLineId: function {ast: Ast.view block: astnode.view} out zast.nodeid is 
 # the node id of the last statement line in operation `oId`.
 lastStmtLineIdAt: function {ast: Ast.view oId: zast.nodeid} out zast.nodeid is {
     if oId.isZero then return zast.nodeid
-    return (lastStmtLineId :ast block: (ast.nodes.get i: oId))
+    return (lastStmtLineId :ast block: (ast.nodes.getView i: oId))
 }
 
 # checkImplicitReturn -- the value an `out`-typed function body ends on IS its
@@ -7888,7 +7898,7 @@ recordTailExit: function {
     st: zenv.ZSymbolTable ast: Ast.view lineId: zast.nodeid valId: zast.nodeid
 } is {
     if valId.isZero then return
-    vn: ast.nodes.get i: valId
+    vn: ast.nodes.getView i: valId
     # a `do` line, and a `with` that hands return position to its own body,
     # record at that body's last line instead
     if vn.doexpr then return
@@ -7916,12 +7926,12 @@ implicitReturnValue: function {
     lineType: ztypes.tid
 } out zast.nodeid is {
     innerId: zast.nodeid
-    ln: ast.nodes.get i: lineId
+    ln: ast.nodes.getView i: lineId
     if ln.statementline then innerId = ln.statementline
     if innerId.isZero then return innerId
     if (lineIsStatementOnly :ast :lineId) then return zast.nodeid
     # a bare `return`, `break` or `continue` leaves rather than yields
-    ctl: flow.ctlDivKind bn: (zast.atomNameIdOf n: (ast.nodes.get i: innerId))
+    ctl: flow.ctlDivKind bn: (zast.atomNameIdOf n: (ast.nodes.getView i: innerId))
     if ctl > 0 then return zast.nodeid
     if lineType.isZero then return zast.nodeid
     if (reg.typetypeOf typeId: lineType) == ztypes.ztypetype.neverType then return zast.nodeid
@@ -7934,7 +7944,7 @@ implicitReturnValue: function {
 # exchange: it does its work and yields no value, whatever type its line is
 # stamped with (a binding's line carries the bound type).
 lineIsStatementOnly: function {ast: Ast.view lineId: zast.nodeid} out bool is {
-    ln: ast.nodes.get i: lineId
+    ln: ast.nodes.getView i: lineId
     if ln.statementline.not then return false
     arm: declare.rowArmAt :ast nid: ln.statementline
     return arm.assignment or arm.reassignment or arm.swapstmt
@@ -7960,7 +7970,7 @@ reportTailFallsOut: function {
     st: zenv.ZSymbolTable ast: Ast.view lsid: zast.nodeid expR: ztypes.tid
 } is {
     en: specWrittenName :st :ast tid: expR
-    lnode: ast.nodes.get i: lsid
+    lnode: ast.nodes.getView i: lsid
     (
         addErrorWithHint
         :st
@@ -7987,7 +7997,7 @@ reportNoTailValue: function {
     ln: defn.lineno
     co: defn.colno
     if lsid.notZero then {
-        lnode: ast.nodes.get i: lsid
+        lnode: ast.nodes.getView i: lsid
         ln = nodeLine n: lnode
         co = nodeCol n: lnode
     }

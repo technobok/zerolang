@@ -19,7 +19,7 @@ dottedBaseAtom: function {prog: Program.view n: astnode.view} outx StringView is
     match (
         n
     ) case dottedpath then {
-        return (narrowfacts.atomTextOf :prog n: (prog.ast.nodes.get i: n.parent))
+        return (narrowfacts.atomTextOf :prog n: (prog.ast.nodes.getView i: n.parent))
     } else {
         return ""
     }
@@ -55,7 +55,7 @@ dottedReceiverIsPtr: function {
             argforms.receiverNodeIsPtr
             :prog
             :ctx
-            n: (prog.ast.nodes.get i: callable.parent)
+            n: (prog.ast.nodes.getView i: callable.parent)
         )
     } else {
         return false
@@ -89,7 +89,7 @@ emitNativeArgMethod: function {
     # the member name decides whether to look at all, and it is read through a
     # BORROWED view: an owned copy here is one allocation per call in the
     # program, paid to discover that almost none of them are this
-    mnId: aliasChildNameId :prog n: (prog.ast.nodes.get i: call.callable)
+    mnId: aliasChildNameId :prog n: (prog.ast.nodes.getView i: call.callable)
     if (ctx.pieces.rows.memberBodies.has item: mnId).not then return "".string
     # a str instance's members are declared on its template
     srcT: ownerTid
@@ -109,9 +109,9 @@ emitNativeArgMethod: function {
     recvNid: argforms.callRecvNodeId :prog :call
     if recvNid.isZero then return "".string
     recvF: exprfacts
-    recv: emitExprWith :prog :ctx n: (prog.ast.nodes.get i: recvNid) facts: recvF
+    recv: emitExprWith :prog :ctx n: (prog.ast.nodes.getView i: recvNid) facts: recvF
     if recv.length == 0 then return "".string
-    if (argforms.receiverNodeIsPtr :prog :ctx n: (prog.ast.nodes.get i: recvNid)) then {
+    if (argforms.receiverNodeIsPtr :prog :ctx n: (prog.ast.nodes.getView i: recvNid)) then {
         rd: "(*\{recv})"
         recv = rd.copy
         recvF = values.operandFacts e: recvF place: true
@@ -215,7 +215,7 @@ orderNativeArgs: function {
     slots: argSlotList :prog :call fpNameIds: rest
     ai: u64
     for each aId: (zast.kidsOf ast: prog.ast span: call.arguments) loop {
-        a: prog.ast.nodes.get i: aId
+        a: prog.ast.nodes.getView i: aId
         if a.namedoperation then {
             slot: (slots.get i: ai) + 1
             if slot < fpNameIds.length then {
@@ -225,7 +225,7 @@ orderNativeArgs: function {
                     argforms.valueExprC
                     :prog
                     :ctx
-                    n: (prog.ast.nodes.get i: a.operation)
+                    n: (prog.ast.nodes.getView i: a.operation)
                     facts: avF
                 )
                 (
@@ -516,7 +516,7 @@ orderSettle: function {
     } else if fid.notZero then {
         ct = argforms.paramCType :prog :ctx :fid pnameId: pnm :pid
     } else {
-        if vnid.notZero then ct = consts.operandScalarC :prog n: (prog.ast.nodes.get i: vnid)
+        if vnid.notZero then ct = consts.operandScalarC :prog n: (prog.ast.nodes.getView i: vnid)
         if ct.length == 0 then {
             preludeNeed :ctx memb: "@value_typeof"
             ct = "Z_VALUE_TYPEOF(\{text})"
@@ -649,7 +649,7 @@ orderConstantWith: function {
         if (values.dottedTaggedTid :prog nid: n.nodeid).notZero then return true
         mid: aliasOrChildId :prog aliasId: n.nodeid childId: n.child
         if mid == zast.wellKnown.slot.wkString then {
-            return (values.bindLitIndex :prog :literals n: (prog.ast.nodes.get i: n.parent)) > 0
+            return (values.bindLitIndex :prog :literals n: (prog.ast.nodes.getView i: n.parent)) > 0
         }
     }
     if tf.fixedAddr then return true
@@ -837,7 +837,8 @@ orderMethodParam: function {
                 av: recvExpr
                 avF: recvF
                 :pid
-                argNid: (memberreads.dottedParentNodeId n: (prog.ast.nodes.get i: call.callable))
+                argNid: (memberreads.dottedParentNodeId n: (prog.ast.nodes.getView i: call.callable)
+                )
                 facts: oneF
             )
         }
@@ -862,7 +863,7 @@ orderMethodParam: function {
                 orderConstantWith
                 :prog
                 literals: ctx.literals
-                n: (prog.ast.nodes.get i: (writtenArgNode :prog :call pos: written - 1))
+                n: (prog.ast.nodes.getView i: (writtenArgNode :prog :call pos: written - 1))
                 tf: oneF
                 byPtr: ctx.order.lastArgByPtr
             )
@@ -890,7 +891,7 @@ orderMethodParam: function {
 writtenArgNode: function {prog: Program.view call: zast.callrow.view pos: u64} out zast.nodeid is {
     w: u64
     for each aId: (zast.kidsOf ast: prog.ast span: call.arguments) loop {
-        a: prog.ast.nodes.get i: aId
+        a: prog.ast.nodes.getView i: aId
         if a.namedoperation then {
             if w == pos then return a.operation
             w = w + 1
@@ -959,7 +960,7 @@ operatorReceiverTid: function {
     ctx: Ctx
     call: zast.callrow.view
 } out ztypes.tid is {
-    rt0: memberreads.dottedReceiverStampId :prog callable: (prog.ast.nodes.get i: call.callable)
+    rt0: memberreads.dottedReceiverStampId :prog callable: (prog.ast.nodes.getView i: call.callable)
     rtc: chaseAggregateTypedef :prog :ctx tid: rt0
     boxTid: rtc
     if (prog.reg.isBoxOf tid: boxTid) when (prog.reg.genericArgCount specId: boxTid) == 1 then {
@@ -981,10 +982,10 @@ emitOperatorCallForm: function {
     call: zast.callrow.view
     facts: exprfacts.borrow
 } out String is {
-    mnO: aliasChildName :prog n: (prog.ast.nodes.get i: call.callable)
+    mnO: aliasChildName :prog n: (prog.ast.nodes.getView i: call.callable)
     if mnO.length == 0 then return "".string
     if call.arguments.count.u64 != 1 then return "".string
-    opNameId: aliasChildNameId :prog n: (prog.ast.nodes.get i: call.callable)
+    opNameId: aliasChildNameId :prog n: (prog.ast.nodes.getView i: call.callable)
     owner: ztypes.tid
     method: ztypes.tid
     # THE CHECKER ALREADY RESOLVED THIS ONE. Re-deriving the receiver type, the
@@ -1078,7 +1079,7 @@ emitOperatorCallForm: function {
     lhsNid: argforms.callRecvNodeId :prog :call
     if lhsNid.isZero then return "".string
     rhsNid: zast.nodeid
-    a0: prog.ast.nodes.get i: (argforms.firstArgId :prog :call)
+    a0: prog.ast.nodes.getView i: (argforms.firstArgId :prog :call)
     if a0.namedoperation then rhsNid = a0.operation
     if rhsNid.isZero then return "".string
     opId: opNameId
@@ -1114,21 +1115,25 @@ emitSynthOperatorCallForm: function {
     call: zast.callrow.view
     facts: exprfacts.borrow
 } out String is {
-    mnS: aliasChildName :prog n: (prog.ast.nodes.get i: call.callable)
+    mnS: aliasChildName :prog n: (prog.ast.nodes.getView i: call.callable)
     if mnS.length == 0 then return "".string
     if (ztypecheck.isOperatorName name: mnS).not then return "".string
     if call.arguments.count.u64 != 1 then return "".string
-    rt0S: memberreads.dottedReceiverStampId :prog callable: (prog.ast.nodes.get i: call.callable)
+    rt0S: (
+        memberreads.dottedReceiverStampId
+        :prog
+        callable: (prog.ast.nodes.getView i: call.callable)
+    )
     rtcS: (
         typedefMethodOwner
         :prog
         :ctx
         tid: rt0S
-        mnId: (aliasChildNameId :prog n: (prog.ast.nodes.get i: call.callable))
+        mnId: (aliasChildNameId :prog n: (prog.ast.nodes.getView i: call.callable))
     )
     ownerS: rtcS
     if ownerS.isZero then return "".string
-    nidS: aliasChildNameId :prog n: (prog.ast.nodes.get i: call.callable)
+    nidS: aliasChildNameId :prog n: (prog.ast.nodes.getView i: call.callable)
     if nidS.isZero then return "".string
     if (
         prog.typing.declMemberIsSynth
@@ -1149,16 +1154,16 @@ emitInstanceMethodCall: function {
     call: zast.callrow.view
     facts: exprfacts.borrow
 } out String is {
-    mn: aliasChildName :prog n: (prog.ast.nodes.get i: call.callable)
+    mn: aliasChildName :prog n: (prog.ast.nodes.getView i: call.callable)
     if mn.length == 0 then return "".string
-    callableNode: prog.ast.nodes.get i: call.callable
+    callableNode: prog.ast.nodes.getView i: call.callable
     # THE RECEIVER IS EMITTED ONLY ONCE THIS LEG HAS COMMITTED. Emitting it to
     # decide whether to answer left the emission behind on every decline: an
     # orphaned hoist the C compiler warns about, and -- because the leg that
     # DID answer emitted it again -- a receiver expression EVALUATED TWICE.
     # `a.or rhs: b` with a call for a receiver called that call twice. What the
     # emission stood in for is the shape test below, which costs nothing.
-    cbShape: prog.ast.nodes.get i: call.callable
+    cbShape: prog.ast.nodes.getView i: call.callable
     if cbShape.dottedpath.not then return "".string
     # the other side of the same stamp: a call through a type passes no
     # receiver, and the dot names the type, whatever the base emits to
@@ -1166,7 +1171,7 @@ emitInstanceMethodCall: function {
     recvTid: (
         memberreads.dottedReceiverStampId
         :prog
-        callable: (prog.ast.nodes.get i: call.callable)
+        callable: (prog.ast.nodes.getView i: call.callable)
     )
     # a Box's methods are its element's, called through the cell: the box IS
     # the pointer to the element a method takes its receiver by
@@ -1177,7 +1182,7 @@ emitInstanceMethodCall: function {
         :prog
         :ctx
         tid: recvTid
-        mnId: (aliasChildNameId :prog n: (prog.ast.nodes.get i: call.callable))
+        mnId: (aliasChildNameId :prog n: (prog.ast.nodes.getView i: call.callable))
     )
     rtid: rtidc
     if rtid.isZero then return "".string
@@ -1198,7 +1203,7 @@ emitInstanceMethodCall: function {
     mco: (
         prog.typing.declChildOfId
         parentTypeId: rtid
-        nameId: (aliasChildNameId :prog n: (prog.ast.nodes.get i: call.callable))
+        nameId: (aliasChildNameId :prog n: (prog.ast.nodes.getView i: call.callable))
     )
     # a NATIVE member is the native dispatchers' to emit -- the String and
     # StringView emitters, the collection ones, a class's row -- and there is
@@ -1223,7 +1228,7 @@ emitInstanceMethodCall: function {
             # a box a call hands back is owned by nothing else: bound to a
             # temp the scope frees, as a read off it is
             bxBase: zast.nodeid
-            cbx: prog.ast.nodes.get i: call.callable
+            cbx: prog.ast.nodes.getView i: call.callable
             if cbx.dottedpath then bxBase = cbx.parent
             bxRh: (
                 values.ownedReceiverHoist
@@ -1231,7 +1236,7 @@ emitInstanceMethodCall: function {
                 :ctx
                 exprF: recvF
                 expr: recvExpr.stringView
-                n: (prog.ast.nodes.get i: bxBase)
+                n: (prog.ast.nodes.getView i: bxBase)
             )
             if bxRh.length > 0 then {
                 recvExpr = bxRh.take
@@ -1324,7 +1329,7 @@ userCreateCallC: function {
                 pinId: (pids.get i: pi)
                 pinNmId: (pidsNm.get i: pi)
                 pname: (pidsNm.get i: pi)
-                argOpNode: (prog.ast.nodes.get i: aNid)
+                argOpNode: (prog.ast.nodes.getView i: aNid)
                 slot: pi
                 :ord
             )
@@ -1367,12 +1372,12 @@ emitTypeQualCall: function {
     # the checker decided whether the base names a type (callBaseNamesType); the
     # type is the base's stamp -- an instance's own, inside a generic body
     if (prog.typing.callBaseNamesType.has item: call.nodeid).not then return "".string
-    mnId: aliasChildNameId :prog n: (prog.ast.nodes.get i: call.callable)
+    mnId: aliasChildNameId :prog n: (prog.ast.nodes.getView i: call.callable)
     btid: ztypes.tid
     {
-        cq: prog.ast.nodes.get i: call.callable
+        cq: prog.ast.nodes.getView i: call.callable
         if cq.dottedpath then {
-            bnid: interpPartNodeId n: (prog.ast.nodes.get i: cq.parent)
+            bnid: interpPartNodeId n: (prog.ast.nodes.getView i: cq.parent)
             btid = stampIdOf :prog nid: bnid
         }
     }
@@ -1522,7 +1527,7 @@ createArgText: function {
         fid: cco
         pinId: pid
         pinNmId: pnameId
-        argOpNode: (prog.ast.nodes.get i: ca.nid)
+        argOpNode: (prog.ast.nodes.getView i: ca.nid)
         :facts
     )
 }
@@ -1577,7 +1582,7 @@ userCreateCtor: function {
                 orderConstantWith
                 :prog
                 literals: ctx.literals
-                n: (prog.ast.nodes.get i: (writtenArgNode :prog :call pos: wr - 1))
+                n: (prog.ast.nodes.getView i: (writtenArgNode :prog :call pos: wr - 1))
                 tf: cavF
                 byPtr: cavPtr
             )
@@ -1809,7 +1814,7 @@ orderRecordField: function {
             orderConstantWith
             :prog
             literals: ctx.literals
-            n: (prog.ast.nodes.get i: (writtenArgNode :prog :call pos: written - 1))
+            n: (prog.ast.nodes.getView i: (writtenArgNode :prog :call pos: written - 1))
             tf: avF
             byPtr: byref
         )
@@ -1914,7 +1919,7 @@ orderArgAtWith: function {
         orderConstantWith
         :prog
         literals: ctx.literals
-        n: (prog.ast.nodes.get i: nid)
+        n: (prog.ast.nodes.getView i: nid)
         :tf
         :byPtr
     )
@@ -1957,7 +1962,7 @@ argSlotList: function {
     result: ListVal u64
     for each argId: (zast.kidsOf ast: prog.ast span: call.arguments) loop {
         slot: fpNameIds.length
-        a: prog.ast.nodes.get i: argId
+        a: prog.ast.nodes.getView i: argId
         if a.namedoperation then {
             pn: a.name
             bo: prog.typing.argParam.get key: argId
@@ -1988,7 +1993,7 @@ emitMetaCreateCall: function {
     call: zast.callrow.view
     facts: exprfacts.borrow
 } out String is {
-    mcb: ztypecheck.metaCreateBaseId ast: prog.ast n: (prog.ast.nodes.get i: call.callable)
+    mcb: ztypecheck.metaCreateBaseId ast: prog.ast n: (prog.ast.nodes.getView i: call.callable)
     match (
         mcb
     ) case some then {
@@ -2034,7 +2039,7 @@ emitMetaCreateCall: function {
                     orderConstantWith
                     :prog
                     literals: ctx.literals
-                    n: (prog.ast.nodes.get i: (writtenArgNode :prog :call pos: wr - 1))
+                    n: (prog.ast.nodes.getView i: (writtenArgNode :prog :call pos: wr - 1))
                     tf: avF
                     byPtr: ptrField
                 )
@@ -2127,7 +2132,7 @@ emitFnCallWithFid: function {
     ord: orderBegin order: ctx.order slots: paramNameIds.length
     ai: u64
     for each argId: (zast.kidsOf ast: prog.ast span: call.arguments) loop {
-        a: prog.ast.nodes.get i: argId
+        a: prog.ast.nodes.getView i: argId
         if a.namedoperation then {
             argSlot: argSlots.get i: ai
             if argSlot < paramNameIds.length then {
@@ -2139,7 +2144,7 @@ emitFnCallWithFid: function {
                     pinId: (fpIds.get i: argSlot)
                     pinNmId: (paramNameIds.get i: argSlot)
                     pname: (paramNameIds.get i: argSlot)
-                    argOpNode: (prog.ast.nodes.get i: a.operation)
+                    argOpNode: (prog.ast.nodes.getView i: a.operation)
                     slot: argSlot
                     :ord
                 )
@@ -2190,9 +2195,9 @@ emitGenericFnCall: function {
     call: zast.callrow.view
     facts: exprfacts.borrow
 } out String is {
-    gdc: aliasChildName :prog n: (prog.ast.nodes.get i: call.callable)
+    gdc: aliasChildName :prog n: (prog.ast.nodes.getView i: call.callable)
     if gdc.length > 0 then return "".string
-    gmf: stampIdOf :prog nid: (interpPartNodeId n: (prog.ast.nodes.get i: call.callable))
+    gmf: stampIdOf :prog nid: (interpPartNodeId n: (prog.ast.nodes.getView i: call.callable))
     if gmf.isZero then return "".string
     if (prog.reg.typetypeOf typeId: gmf) != ztypes.ztypetype.functionType then return "".string
     gmo: originTidOf :prog tid: gmf
@@ -2208,7 +2213,7 @@ dottedMemberTidOf: function {
     prog: Program.view
     callableId: zast.nodeid
 } out ztypes.tid is {
-    pb: memberreads.dottedParentNodeId n: (prog.ast.nodes.get i: callableId)
+    pb: memberreads.dottedParentNodeId n: (prog.ast.nodes.getView i: callableId)
     if (consts.pathUnitTidOf :prog baseId: pb).isZero then return ztypes.tid
     return (stampIdOf :prog nid: callableId)
 }
@@ -2222,7 +2227,7 @@ calledInstanceOf: function {
     call: zast.callrow.view
     fid: ztypes.tid
 } out ztypes.tid is {
-    sf: stampIdOf :prog nid: (interpPartNodeId n: (prog.ast.nodes.get i: call.callable))
+    sf: stampIdOf :prog nid: (interpPartNodeId n: (prog.ast.nodes.getView i: call.callable))
     if (originIsTid :prog tid: sf originTid: fid).not then return fid
     if (prog.reg.isNativeOf tid: sf) then return fid
     return sf
@@ -2319,17 +2324,17 @@ emitFnptrFieldCall: function {
     call: zast.callrow.view
     facts: exprfacts.borrow
 } out String is {
-    mnId: aliasChildNameId :prog n: (prog.ast.nodes.get i: call.callable)
+    mnId: aliasChildNameId :prog n: (prog.ast.nodes.getView i: call.callable)
     if mnId.isZero then return "".string
     recvTid: (
         memberreads.dottedReceiverStampId
         :prog
-        callable: (prog.ast.nodes.get i: call.callable)
+        callable: (prog.ast.nodes.getView i: call.callable)
     )
     rtid: chaseAggregateTypedef :prog :ctx tid: recvTid
     if rtid.isZero then return "".string
     if (prog.typing.declIsFnptrFieldId parentTypeId: rtid nameId: mnId).not then return "".string
-    callableNode: prog.ast.nodes.get i: call.callable
+    callableNode: prog.ast.nodes.getView i: call.callable
     # a function a folded data value holds is known, and called by its name: the
     # value itself is never read
     direct: foldedFnRefC :prog :ctx callable: callableNode :mnId
@@ -2355,7 +2360,7 @@ emitFnptrFieldCall: function {
             tid: rtid
         )
     }
-    rptr: dottedReceiverIsPtr :prog :ctx callable: (prog.ast.nodes.get i: call.callable)
+    rptr: dottedReceiverIsPtr :prog :ctx callable: (prog.ast.nodes.getView i: call.callable)
     acc: ".".string
     if rptr then acc = "->".string
     # the slot's own parameter list decides how each argument is passed:
@@ -2396,7 +2401,7 @@ emitFnptrFieldCall: function {
     ord: orderBegin order: ctx.order slots: argIds.length
     ai: u64
     for each aId: (zast.kidsOf ast: prog.ast span: call.arguments) loop {
-        a: prog.ast.nodes.get i: aId
+        a: prog.ast.nodes.getView i: aId
         if a.namedoperation then {
             slot: slots.get i: ai
             if slot >= argIds.length then slot = ai
@@ -2409,7 +2414,7 @@ emitFnptrFieldCall: function {
                 :argIds
                 :argNmIds
                 :slot
-                op: (prog.ast.nodes.get i: a.operation)
+                op: (prog.ast.nodes.getView i: a.operation)
                 :ord
             )
         }
@@ -2535,9 +2540,9 @@ emitFnptrLocalCall: function {
     facts: exprfacts.borrow
 } out String is {
     if fid.notZero then return "".string
-    dct: aliasChildName :prog n: (prog.ast.nodes.get i: call.callable)
+    dct: aliasChildName :prog n: (prog.ast.nodes.getView i: call.callable)
     if dct.length > 0 then return "".string
-    cnid: interpPartNodeId n: (prog.ast.nodes.get i: call.callable)
+    cnid: interpPartNodeId n: (prog.ast.nodes.getView i: call.callable)
     cTid: stampIdOf :prog nid: cnid
     if cTid.isZero then return "".string
     if (prog.reg.typetypeOf typeId: cTid) != ztypes.ztypetype.functionType then return "".string
@@ -2565,7 +2570,7 @@ emitFnptrLocalCall: function {
     ord: orderBegin order: ctx.order slots: pIds.length
     ai: u64
     for each aId: (zast.kidsOf ast: prog.ast span: call.arguments) loop {
-        a: prog.ast.nodes.get i: aId
+        a: prog.ast.nodes.getView i: aId
         if a.namedoperation then {
             slot: slots.get i: ai
             if slot >= pIds.length then slot = ai
@@ -2578,7 +2583,7 @@ emitFnptrLocalCall: function {
                 argIds: pIds
                 argNmIds: pNmIds
                 :slot
-                op: (prog.ast.nodes.get i: a.operation)
+                op: (prog.ast.nodes.getView i: a.operation)
                 :ord
             )
         }
@@ -2622,9 +2627,9 @@ emitUserFnCall: function {
     ord: orderBegin order: ctx.order slots: fpIdsNm.length
     ai8: u64
     for each aId: (zast.kidsOf ast: prog.ast span: call.arguments) loop {
-        a: prog.ast.nodes.get i: aId
+        a: prog.ast.nodes.getView i: aId
         if a.namedoperation then {
-            argOpNode: prog.ast.nodes.get i: a.operation
+            argOpNode: prog.ast.nodes.getView i: a.operation
             argSlot: slots.get i: ai8
             if argSlot < fpIdsNm.length then {
                 (
@@ -2770,7 +2775,7 @@ namedCalleeFnId: function {
     prog: Program.view
     call: zast.callrow.view
 } out ztypes.tid is {
-    calleeNode: atomNodeId n: (prog.ast.nodes.get i: call.callable)
+    calleeNode: atomNodeId n: (prog.ast.nodes.getView i: call.callable)
     fid: ztypes.tid
     if calleeNode.notZero then {
         clv: prog.typing.atomVariableId.get key: calleeNode
@@ -2804,7 +2809,7 @@ namedCalleeCtorTid: function {
         if gmid.notZero then return gmid
         return fid
     }
-    cstid: stampIdOf :prog nid: (interpPartNodeId n: (prog.ast.nodes.get i: call.callable))
+    cstid: stampIdOf :prog nid: (interpPartNodeId n: (prog.ast.nodes.getView i: call.callable))
     if cstid.isZero then return fid
     # a type's alias reached through it (`Tree.Node x: 1`) constructs its target
     crd: (prog.typing.refDecl.get key: call.callable).or d: ztypes.declid
@@ -2832,7 +2837,7 @@ emitUndeclaredCall: function {
     call: zast.callrow.view
     facts: exprfacts.borrow
 } out String is {
-    callableNode: prog.ast.nodes.get i: call.callable
+    callableNode: prog.ast.nodes.getView i: call.callable
     mcb: ztypecheck.metaCreateBaseId ast: prog.ast n: callableNode
     if mcb.some then {
         return (emitMetaCreateCall :prog :ctx :call :facts)
@@ -3098,7 +3103,7 @@ emitSiblingFnCall: function {
     rtid: ztypes.tid
     facts: exprfacts.borrow
 } out String is {
-    rcal: prog.ast.nodes.get i: call.callable
+    rcal: prog.ast.nodes.getView i: call.callable
     if rcal.atomid.not then return "".string
     if (prog.typing.atomVariableId.get key: call.callable).some then return "".string
     return (emitUserFnCall :prog :ctx :call fid: rtid :facts)
@@ -3237,7 +3242,7 @@ literalReceiverLanding: function {prog: Program.view call: zast.callrow.view} ou
     return (
         memberreads.dottedReceiverStampId
         :prog
-        callable: (prog.ast.nodes.get i: call.callable)
+        callable: (prog.ast.nodes.getView i: call.callable)
     )
 }
 
@@ -3286,7 +3291,7 @@ emitCallValue: function {
     # -- each building names, keys and receiver text -- to discover what its
     # own shape already says. Both spellings reach one emitter, and a call this
     # declines falls through to the rest of the chain.
-    calleeName: aliasChildName :prog n: (prog.ast.nodes.get i: call.callable)
+    calleeName: aliasChildName :prog n: (prog.ast.nodes.getView i: call.callable)
     isOp: ztypecheck.isOperatorName name: calleeName
     if call.arguments.count.u64 == 1 when isOp then {
         eopc: emitOperatorCallForm :prog :ctx :call :facts
@@ -3454,8 +3459,8 @@ emitDeclaredOperator: function {
     recvF: exprfacts
     # the place `recv` addresses, "" when the receiver is a pointer already
     recvPlace: String
-    if (pathIsPointer :prog :ctx n: (prog.ast.nodes.get i: lhsNid)) then {
-        recv = emitExprWith :prog :ctx n: (prog.ast.nodes.get i: lhsNid) facts: recvF
+    if (pathIsPointer :prog :ctx n: (prog.ast.nodes.getView i: lhsNid)) then {
+        recv = emitExprWith :prog :ctx n: (prog.ast.nodes.getView i: lhsNid) facts: recvF
     } else {
         # `&` needs an LVALUE, and a receiver that is itself a call is not one --
         # `&f(x)` is rejected by C. It is bound to a temp as a method call's
@@ -3622,8 +3627,8 @@ listOperandAddr: function {
     tid: ztypes.tid
     facts: exprfacts.borrow
 } out String is {
-    if (pathIsPointer :prog :ctx n: (prog.ast.nodes.get i: nid)) then {
-        return (emitExprWith :prog :ctx n: (prog.ast.nodes.get i: nid) :facts)
+    if (pathIsPointer :prog :ctx n: (prog.ast.nodes.getView i: nid)) then {
+        return (emitExprWith :prog :ctx n: (prog.ast.nodes.getView i: nid) :facts)
     }
     lvF: exprfacts
     lv: values.operandValueC :prog :ctx :nid facts: lvF
@@ -3809,7 +3814,7 @@ demandMethodRow: function {prog: Program.view ctx: Ctx mfid: ztypes.tid} is {
 # (`this.c.load`); 0 for any other receiver
 nativeCallRecvNode: function {prog: Program.view recv: zast.nodeid} out zast.nodeid is {
     if recv.isZero then return zast.nodeid
-    rnode: prog.ast.nodes.get i: recv
+    rnode: prog.ast.nodes.getView i: recv
     if (narrowfacts.atomTextOf :prog n: rnode).length > 0 then return (atomNodeId n: rnode)
     if rnode.dottedpath.not then return zast.nodeid
     return recv
@@ -3827,7 +3832,7 @@ nativeCallRecvExpr: function {
 } out String is {
     if bn.length == 0 then {
         rF: exprfacts
-        rnode: prog.ast.nodes.get i: recvNid
+        rnode: prog.ast.nodes.getView i: recvNid
         rt: emitExprWith :prog :ctx n: rnode facts: rF
         if (argforms.receiverNodeIsPtr :prog :ctx n: rnode) then return rt
         return "&(\{rt})"
@@ -3865,9 +3870,9 @@ emitClassNativeCall: function {
     ownerTid: ztypes.tid
     facts: exprfacts.borrow
 } out String is {
-    calr: prog.ast.nodes.get i: call.callable
+    calr: prog.ast.nodes.getView i: call.callable
     rcvNid: argforms.callRecvNodeId :prog :call
-    bn: narrowfacts.atomTextOf :prog n: (prog.ast.nodes.get i: rcvNid)
+    bn: narrowfacts.atomTextOf :prog n: (prog.ast.nodes.getView i: rcvNid)
     bnid: nativeCallRecvNode :prog recv: rcvNid
     valRecv: memberreads.nativeValueRecvNode recv: rcvNid :bnid
     if bnid.isZero then bnid = valRecv
@@ -4079,7 +4084,7 @@ callArgOperationAt: function {
     prog: Program.view call: zast.callrow.view i: u64
 } out zast.nodeid is {
     if i >= call.arguments.count then return zast.nodeid
-    a: prog.ast.nodes.get i: (zast.kidAt kids: prog.ast.kids span: call.arguments :i)
+    a: prog.ast.nodes.getView i: (zast.kidAt kids: prog.ast.kids span: call.arguments :i)
     if a.namedoperation then return a.operation
     return zast.nodeid
 }
@@ -4175,7 +4180,7 @@ emitNativeFreeFnCall: function {
     fid: ztypes.tid
     facts: exprfacts.borrow
 } out String is {
-    calr: prog.ast.nodes.get i: call.callable
+    calr: prog.ast.nodes.getView i: call.callable
     mn: ""
     if (dottedBaseAtom :prog n: calr).length > 0 then {
         mn = aliasChildName :prog n: calr
@@ -4409,11 +4414,11 @@ emitUserIterCall: function {
     call: zast.callrow.view
     facts: exprfacts.borrow
 } out String is {
-    bn: dottedBaseAtom :prog n: (prog.ast.nodes.get i: call.callable)
+    bn: dottedBaseAtom :prog n: (prog.ast.nodes.getView i: call.callable)
     if bn.length == 0 then return "".string
-    mnId: aliasChildNameId :prog n: (prog.ast.nodes.get i: call.callable)
+    mnId: aliasChildNameId :prog n: (prog.ast.nodes.getView i: call.callable)
     if mnId != zast.wellKnown.slot.wkCall then return "".string
-    bnid: stmtblocks.dottedBaseNodeId :prog n: (prog.ast.nodes.get i: call.callable)
+    bnid: stmtblocks.dottedBaseNodeId :prog n: (prog.ast.nodes.getView i: call.callable)
     recvTid: stampIdOf :prog nid: bnid
     if recvTid.isZero then return "".string
     iterId: recvTid
@@ -4448,13 +4453,13 @@ emitUserIterCall: function {
     # `.call` takes at most ONE argument -- the per-call input -- so the first
     # one IS it, whatever the author labelled it.
     for each argId: (zast.kidsOf ast: prog.ast span: call.arguments) loop {
-        atomVarId: prog.ast.nodes.get i: argId
+        atomVarId: prog.ast.nodes.getView i: argId
         if atomVarId.namedoperation then {
             valArg: (
                 iterCallValueArg
                 :prog
                 :ctx
-                vop: (prog.ast.nodes.get i: atomVarId.operation)
+                vop: (prog.ast.nodes.getView i: atomVarId.operation)
             )
             return (stating :facts from: callFacts text: "\{callC}(\{recvExpr}, \{valArg})")
         }
@@ -4558,7 +4563,7 @@ appendSlottedDispatchArgs: function {
     ord: orderBegin order: ctx.order slots: vpn.length
     slotIdx: u64
     for each aId: (zast.kidsOf ast: prog.ast span: call.arguments) loop {
-        a: prog.ast.nodes.get i: aId
+        a: prog.ast.nodes.getView i: aId
         if a.namedoperation then {
             argSlot: argSlots.get i: slotIdx
             if argSlot < vpn.length then {
@@ -4566,7 +4571,7 @@ appendSlottedDispatchArgs: function {
                     orderDispatchArg
                     :prog
                     :ctx
-                    op: (prog.ast.nodes.get i: a.operation)
+                    op: (prog.ast.nodes.getView i: a.operation)
                     :fid
                     pnameId: (vpn.get i: argSlot)
                     slot: argSlot
@@ -4639,13 +4644,13 @@ emitProtocolDispatch: function {
     call: zast.callrow.view
     facts: exprfacts.borrow
 } out String is {
-    mn: aliasChildName :prog n: (prog.ast.nodes.get i: call.callable)
-    mnId: aliasChildNameId :prog n: (prog.ast.nodes.get i: call.callable)
+    mn: aliasChildName :prog n: (prog.ast.nodes.getView i: call.callable)
+    mnId: aliasChildNameId :prog n: (prog.ast.nodes.getView i: call.callable)
     if mn.length == 0 then return "".string
     if mnId == zast.wellKnown.slot.wkCreate then return "".string
-    mk: zast.markerKindOf ast: prog.ast n: (prog.ast.nodes.get i: call.callable)
+    mk: zast.markerKindOf ast: prog.ast n: (prog.ast.nodes.getView i: call.callable)
     if mk.borrowMarker or mk.dropMarker then return "".string
-    callableNode: prog.ast.nodes.get i: call.callable
+    callableNode: prog.ast.nodes.getView i: call.callable
     rtid: dispatchReceiverTid :prog :ctx callable: callableNode :mnId
     if (isDispatchableTid :prog tid: rtid).not then return "".string
     recvF: exprfacts

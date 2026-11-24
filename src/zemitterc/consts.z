@@ -261,7 +261,7 @@ renderDefault: function {
     dl: dv
     if dl.literal then {
         if dl.isZero then return "".string
-        lt: ztypecheck.rootNameOf ast: prog.ast n: (prog.ast.nodes.get i: dl)
+        lt: ztypecheck.rootNameOf ast: prog.ast n: (prog.ast.nodes.getView i: dl)
         # a float literal is the target type's value nearest it, as a body
         # literal is
         if (ztypes.isFloatLexeme numstr: lt.stringView) then {
@@ -774,14 +774,14 @@ emitListSlotRead: function {
 } out String is {
     st0: prog.typing.listSlotTid
     if st0.isZero then return "".string
-    pid: interpPartNodeId n: (prog.ast.nodes.get i: n.parent)
+    pid: interpPartNodeId n: (prog.ast.nodes.getView i: n.parent)
     if (stampIdOf :prog nid: pid) != st0 then return "".string
     lp: zast.nodeid
     {
-        pn: prog.ast.nodes.get i: pid
+        pn: prog.ast.nodes.getView i: pid
         if pn.dottedpath then lp = pn.parent
     }
-    row: memberreads.listRowOf :prog nid: (interpPartNodeId n: (prog.ast.nodes.get i: lp))
+    row: memberreads.listRowOf :prog nid: (interpPartNodeId n: (prog.ast.nodes.getView i: lp))
     if row == 0 then return "".string
     pos: prog.typing.aggLabelPos id: row.u32.orPanic label: mnId
     if pos.some then {
@@ -1221,7 +1221,7 @@ dottedTypeConstRead: function {
     n: zast.dottedpathrow.view
     facts: exprfacts.borrow
 } out String is {
-    bt: stampIdOf :prog nid: (interpPartNodeId n: (prog.ast.nodes.get i: n.parent))
+    bt: stampIdOf :prog nid: (interpPartNodeId n: (prog.ast.nodes.getView i: n.parent))
     if bt.isZero then return "".string
     cid: aliasOrChildId :prog aliasId: n.nodeid childId: n.child
     # a list's `slot.label` is the label's position, a constant of the
@@ -1369,7 +1369,11 @@ emitDottedNativeMarker: function {
     # a list's member read (`codes.ht`, `consts.codes.ht`, `primes.0`,
     # `codes.slot.lf`): the list is the base's row, whatever shape the base
     # takes; no base is emitted
-    listRow: memberreads.listRowOf :prog nid: (interpPartNodeId n: (prog.ast.nodes.get i: n.parent))
+    listRow: (
+        memberreads.listRowOf
+        :prog
+        nid: (interpPartNodeId n: (prog.ast.nodes.getView i: n.parent))
+    )
     if listRow != 0 then {
         memberText: emitStaticListMember :prog :ctx :n row: listRow mnId: mn2Id :facts
         if memberText.length > 0 then return memberText
@@ -1396,12 +1400,12 @@ emitDottedNativeMarker: function {
     }
     # `.private` is a compile-time friend marker -- it emits the receiver itself.
     if (zast.markerKindOfName id: mn2Id).privateMarker then {
-        return (emitExprWith :prog :ctx n: (prog.ast.nodes.get i: n.parent) :facts)
+        return (emitExprWith :prog :ctx n: (prog.ast.nodes.getView i: n.parent) :facts)
     }
     # `.borrow` on a value is the ownership marker, and the checker accepts it
     # as one; it emits the receiver itself.
     if (zast.markerKindOfName id: mn2Id).borrowMarker then {
-        return (emitExprWith :prog :ctx n: (prog.ast.nodes.get i: n.parent) :facts)
+        return (emitExprWith :prog :ctx n: (prog.ast.nodes.getView i: n.parent) :facts)
     }
     # `.take` / `.hold` hands on the base itself (markerHandsOnBase)
     if (ztypecheck.isMoveMarkerId nameId: mn2Id) when (
@@ -1410,17 +1414,17 @@ emitDottedNativeMarker: function {
         :ctx
         pnid: n.parent
     ) then {
-        return (emitExprWith :prog :ctx n: (prog.ast.nodes.get i: n.parent) :facts)
+        return (emitExprWith :prog :ctx n: (prog.ast.nodes.getView i: n.parent) :facts)
     }
     # a runtime numeric conversion `<expr>.<numtype>`
     ncKey: nativerows.convRowNameOf :prog pieces: ctx.pieces :n :mn2Id
     if ncKey.impl > 0 then {
         ncMk: pendingHoistMark stmt: ctx.stmt
         ncValF: exprfacts
-        ncVal: emitExprWith :prog :ctx n: (prog.ast.nodes.get i: n.parent) facts: ncValF
+        ncVal: emitExprWith :prog :ctx n: (prog.ast.nodes.getView i: n.parent) facts: ncValF
         # a Box's element, like a pointer's pointee, is read through it
         ncThrough: (values.boxMemberElem :prog :n).notZero
-        if (pathIsPointer :prog :ctx n: (prog.ast.nodes.get i: n.parent)) then ncThrough = true
+        if (pathIsPointer :prog :ctx n: (prog.ast.nodes.getView i: n.parent)) then ncThrough = true
         if ncThrough then {
             ncDeref: "(*\{ncVal})"
             ncVal = ncDeref.copy
@@ -1464,7 +1468,7 @@ bindDeclaredCType: function {
 } out String is {
     # a scalar the system declares keeps its C scalar; anything else, a type
     # spelled like a scalar included, is spelled from its id below
-    avn: prog.ast.nodes.get i: n.value
+    avn: prog.ast.nodes.getView i: n.value
     ct: String
     if btid.notZero then ct = scalarTypeRefC :prog :ctx tid: btid
     if ct.length == 0 then {
@@ -1594,7 +1598,7 @@ unitConstTextOf: function {
     facts: exprfacts.borrow
 } out String is {
     cn8: zast.nameid
-    ca8: prog.ast.nodes.get i: n.child
+    ca8: prog.ast.nodes.getView i: n.child
     if ca8.atomid then cn8 = ca8.name
     if cn8.notZero then {
         unitTid: pathUnitTidOf :prog baseId: n.parent
@@ -1776,7 +1780,7 @@ emitStaticFnProtos: function {
         fid: (prog.typing.decls.get i: v.fnDecl).typeId
         fnode: zast.nodeid
         {
-            dn: prog.ast.nodes.get i: (prog.typing.decls.get i: v.fnDecl).node
+            dn: prog.ast.nodes.getView i: (prog.typing.decls.get i: v.fnDecl).node
             if dn.namedoperation then fnode = dn.operation
         }
         if fnode.isZero then continue
@@ -1785,7 +1789,7 @@ emitStaticFnProtos: function {
             :prog
             :ctx
             :fid
-            op: (prog.ast.nodes.get i: fnode)
+            op: (prog.ast.nodes.getView i: fnode)
             :buf
             tail: ";\n"
         )

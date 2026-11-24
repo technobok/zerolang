@@ -79,7 +79,7 @@ givesFromOp: function {ast: Ast nid: zast.nodeid dst: GivesParts} is {
     parentId: zast.nodeid
     lf: zast.markerkind.unmarked
     {
-        n: ast.nodes.get i: nid
+        n: ast.nodes.getView i: nid
         match (
             n
         ) case dottedpath then {
@@ -216,11 +216,11 @@ mkReturnBody: function {
 # marker: the field is a reference the instance keeps locked for its life.
 typePathIsReference: function {ast: Ast.view nid: zast.nodeid} out bool is {
     if nid.isZero then return false
-    n: ast.nodes.get i: nid
+    n: ast.nodes.getView i: nid
     match (
         n
     ) case dottedpath then {
-        lid: zast.atomNameIdOf n: (ast.nodes.get i: n.child)
+        lid: zast.atomNameIdOf n: (ast.nodes.getView i: n.child)
         if lid == zast.wellKnown.slot.wkBorrow then return true
         return lid == zast.wellKnown.slot.wkView
     } else {
@@ -359,12 +359,12 @@ bindsYieldValue: function {ast: Ast.view n: astnode.view} out bool is {
     ) case functiondef then {
         return false
     } case assignment then {
-        if (isYieldValue :ast n: (ast.nodes.get i: n.value)) then return true
+        if (isYieldValue :ast n: (ast.nodes.getView i: n.value)) then return true
     } else null
     kids: zast.childIds :ast :n
     i: u64
     for i < kids.length loop {
-        if (bindsYieldValue :ast n: (ast.nodes.get i: (kids.get :i))) then return true
+        if (bindsYieldValue :ast n: (ast.nodes.getView i: (kids.get :i))) then return true
         i = i + 1
     }
     return false
@@ -388,7 +388,7 @@ promoteIterables: function {ast: Ast ctr: NameCtr nid: zast.nodeid} out astnode 
     coP: u32
     lineIds: ListVal zast.nodeid
     {
-        n: ast.nodes.get i: nid
+        n: ast.nodes.getView i: nid
         if n.statement then {
             isStmt = true
             lnP = n.lineno
@@ -426,7 +426,7 @@ spillBeforeYields: function {ast: Ast ctr: NameCtr nid: zast.nodeid} is {
     kids: ListVal zast.nodeid
     lines: ListVal zast.nodeid
     {
-        n: ast.nodes.get i: nid
+        n: ast.nodes.getView i: nid
         if n.functiondef or n.objectdef or n.unitdef then return
         if (zast.yieldCountOf :ast :n) == 0 then return
         zast.childIdsInto :ast :n acc: kids
@@ -485,7 +485,7 @@ spillStep: function {
     parts: ListVal zast.nodeid
     holders: ListVal zast.nodeid
 } out zast.nodeid is {
-    n: ast.nodes.get i: nid
+    n: ast.nodes.getView i: nid
     match (
         n
     ) case assignment then {
@@ -503,13 +503,13 @@ spillStep: function {
         if (zast.isYieldCalleeAt :ast callableId: n.callable) then {
             return (zast.yieldCallOperandAt :ast :nid)
         }
-        cb: ast.nodes.get i: n.callable
+        cb: ast.nodes.getView i: n.callable
         if cb.dottedpath then {
             parts.append cb.parent
             holders.append n.callable
         }
         for each aId: (zast.kidsOf :ast span: n.arguments) loop {
-            a: ast.nodes.get i: aId
+            a: ast.nodes.getView i: aId
             if a.namedoperation then {
                 parts.append a.operation
                 holders.append aId
@@ -525,7 +525,7 @@ spillStep: function {
 # it that runs unconditionally; zero when it has none.
 firstConditionOf: function {ast: Ast.view clauses: zast.kidspan} out zast.nodeid is {
     if clauses.count.u64 == 0 then return zast.nodeid
-    c0: ast.nodes.get i: (zast.kidAt kids: ast.kids span: clauses i: 0)
+    c0: ast.nodes.getView i: (zast.kidAt kids: ast.kids span: clauses i: 0)
     if c0.ifclause when c0.conditions.count.u64 > 0 then {
         return (zast.kidAt kids: ast.kids span: c0.conditions i: 0)
     }
@@ -570,7 +570,7 @@ partHoldsYield: function {ast: Ast.view part: zast.nodeid} out bool is {
 # runs in the body while it is suspended, and a name bound to a synthetic local
 # would borrow what it names.
 spillStaysPut: function {ast: Ast.view nid: zast.nodeid} out bool is {
-    n: ast.nodes.get i: nid
+    n: ast.nodes.getView i: nid
     match (
         n
     ) case atomid then {
@@ -579,7 +579,7 @@ spillStaysPut: function {ast: Ast.view nid: zast.nodeid} out bool is {
         return true
     } case atomstring then {
         for each pId: (zast.kidsOf :ast span: n.stringparts) loop {
-            p: ast.nodes.get i: pId
+            p: ast.nodes.getView i: pId
             if p.stringchunk.not then return false
         }
         return true
@@ -600,7 +600,7 @@ spillPart: function {
     spillIn :ast :ctr nid: part :dst
     ln: u32
     co: u32
-    pp: zast.posOf n: (ast.nodes.get i: part)
+    pp: zast.posOf n: (ast.nodes.getView i: part)
     ln = pp.line
     co = pp.col
     synthN: "_part\{ctr.bump}"
@@ -651,14 +651,14 @@ promoteLine: function {ast: Ast ctr: NameCtr nid: zast.nodeid dst: ListVal zast.
     lnQ: u32
     coQ: u32
     {
-        n: ast.nodes.get i: nid
+        n: ast.nodes.getView i: nid
         if n.statementline then {
             innerId = n.statementline
             lnQ = n.lineno
             coQ = n.colno
-            isFor = lineIsFor n: (ast.nodes.get i: n.statementline)
+            isFor = lineIsFor n: (ast.nodes.getView i: n.statementline)
             if isFor.not then {
-                isFor = lineIsWith n: (ast.nodes.get i: n.statementline)
+                isFor = lineIsWith n: (ast.nodes.getView i: n.statementline)
             }
         }
     }
@@ -706,7 +706,7 @@ promoteWrappedBody: function {ast: Ast ctr: NameCtr oId: zast.nodeid} out zast.n
     lnY: u32
     coY: u32
     {
-        n: ast.nodes.get i: oId
+        n: ast.nodes.getView i: oId
         if n.doexpr then {
             isDo = true
             innerId = n.statement
@@ -792,7 +792,7 @@ promoteWith: function {ast: Ast ctr: NameCtr nid: zast.nodeid} out astnode is {
     valW: zast.nodeid
     bodyW: zast.nodeid
     {
-        n: ast.nodes.get i: nid
+        n: ast.nodes.getView i: nid
         if n.withexpr then {
             isWith = true
             lnW = n.lineno
@@ -867,17 +867,17 @@ promoteForCond: function {
     hl0: u32
     hc0: u32
     {
-        c0: ast.nodes.get i: c0Id
+        c0: ast.nodes.getView i: c0Id
         if c0.namedoperation then {
             cn0: zast.nameTextAt :ast ref: c0.name
             if cn0.length > 0 when suspends when (
                 condIsTrivial
                 :ast
-                n: (ast.nodes.get i: c0.operation)
+                n: (ast.nodes.getView i: c0.operation)
             ).not then doHoist = true
             if doHoist then {
                 # synth nodes carry the ITERABLE's source position
-                hp0: zast.posOf n: (ast.nodes.get i: c0.operation)
+                hp0: zast.posOf n: (ast.nodes.getView i: c0.operation)
                 hl0 = hp0.line
                 hc0 = hp0.col
                 opId = c0.operation
@@ -946,7 +946,7 @@ promoteFor: function {
     condIds: ListVal zast.nodeid
     postIds: ListVal zast.nodeid
     {
-        n: ast.nodes.get i: nid
+        n: ast.nodes.getView i: nid
         if n.forexpr then {
             isFor = true
             lnS = n.lineno
@@ -968,7 +968,7 @@ promoteFor: function {
     nbodyId: promoteIterablesIdAt :ast :ctr oId: bodyId
     suspends: false
     if nbodyId.notZero then {
-        nb: ast.nodes.get i: nbodyId
+        nb: ast.nodes.getView i: nbodyId
         suspends = (zast.yieldCountOf :ast n: nb) > 0
     }
     nconds: ListVal zast.nodeid
@@ -1017,12 +1017,12 @@ countedRangeHeader: function {ast: Ast.view n: astnode.view} out bool is {
     match (
         n
     ) case call then {
-        cn: ast.nodes.get i: n.callable
+        cn: ast.nodes.getView i: n.callable
         mid: zast.nameid
         match (
             cn
         ) case dottedpath then {
-            ch: ast.nodes.get i: cn.child
+            ch: ast.nodes.getView i: cn.child
             if ch.atomid then mid = ch.name
         } else null
         return (mid == zast.wellKnown.slot.wkUpto) or (mid == zast.wellKnown.slot.wkDownto)
@@ -1044,7 +1044,7 @@ condIsTrivial: function {ast: Ast.view n: astnode.view} out bool is {
     ) case call then {
         return false
     } case dottedpath then {
-        return (condIsTrivial :ast n: (ast.nodes.get i: n.parent))
+        return (condIsTrivial :ast n: (ast.nodes.getView i: n.parent))
     } else {
         return true
     }
@@ -1239,7 +1239,7 @@ callBodyIdOf: function {
     # the `call` whose body is wanted
     callFnId: zast.nodeid
 } out zast.nodeid is {
-    cf: ast.nodes.get i: callFnId
+    cf: ast.nodes.getView i: callFnId
     match (
         cf
     ) case functiondef then {
@@ -1258,10 +1258,10 @@ declaredInputTypeId: function {
     # the `call` whose input is wanted
     callFnId: zast.nodeid
 } out zast.nodeid is {
-    cf: ast.nodes.get i: callFnId
+    cf: ast.nodes.getView i: callFnId
     if cf.functiondef then {
         for each pId: (zast.kidsOf :ast span: cf.parameters) loop {
-            pn: ast.nodes.get i: pId
+            pn: ast.nodes.getView i: pId
             if pn.namedoperation then return pn.operation
         }
     }
@@ -1285,13 +1285,13 @@ resumeFieldPath: function {
     line: u32
     col: u32
     {
-        pp: zast.posOf n: (ast.nodes.get i: nid)
+        pp: zast.posOf n: (ast.nodes.getView i: nid)
         line = pp.line
         col = pp.col
-        bn: ast.nodes.get i: nid
+        bn: ast.nodes.getView i: nid
         if bn.dottedpath then {
             parentId = bn.parent
-            leafId = zast.atomNameIdOf n: (ast.nodes.get i: bn.child)
+            leafId = zast.atomNameIdOf n: (ast.nodes.getView i: bn.child)
         }
     }
     if leafId == zast.wellKnown.slot.wkBorrow then return (zast.cloneTreeAt :ast :nid)
@@ -1343,12 +1343,12 @@ readDeclaredParts: function {
     # filled with what the definition declares
     dst: DeclParts
 } is {
-    obn: ast.nodes.get i: objId
+    obn: ast.nodes.getView i: objId
     if obn.objectdef then {
         dst.line = obn.lineno
         dst.colno = obn.colno
         for each amId: (zast.kidsOf :ast span: obn.asItems) loop {
-            am: ast.nodes.get i: amId
+            am: ast.nodes.getView i: amId
             if am.namedoperation when am.name == zast.wellKnown.slot.wkCall then {
                 dst.callFnId = am.operation
                 dst.inputTypeId = declaredInputTypeId :ast callFnId: am.operation
@@ -1358,7 +1358,7 @@ readDeclaredParts: function {
         # generated `create` takes exactly these, so what the state machine
         # needs never reaches the construction site.
         for each imId: (zast.kidsOf :ast span: obn.isItems) loop {
-            im: ast.nodes.get i: imId
+            im: ast.nodes.getView i: imId
             if im.namedoperation then {
                 inm: zast.nameTextAt :ast ref: im.name
                 dst.names.append inm.copy
@@ -1578,7 +1578,7 @@ lowerDeclared: function {
     yieldSlots: u64
     forSlots: u64
     {
-        body: ast.nodes.get i: callBodyId
+        body: ast.nodes.getView i: callBodyId
         yieldSlots = zast.yieldCountOf :ast n: body
         forSlots = zast.suspendingForCountOf :ast n: body
         # `a: yield e` binds the value the NEXT call supplies. With no input
