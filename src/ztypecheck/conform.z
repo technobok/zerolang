@@ -4955,41 +4955,24 @@ checkGenericCall: function {
 }
 
 # reportConstantConstraintArg -- a value that is not a string, given for a
-# generic parameter: the body's constraint report, for the type the value has,
-# where that type does not meet the bound. One that meets it is no refusal:
-# the call has no compile-time value, which the evaluator says.
+# generic parameter, of type `argTid` as a body sees it (statics.constArgTid):
+# it binds the parameter as a body's argument does (argBindingTid), and gets
+# the body's constraint report where that type does not meet the bound. One
+# that meets it is no refusal: the call has no compile-time value, which the
+# evaluator says.
 reportConstantConstraintArg: function {
     st: zenv.ZSymbolTable
     ast: Ast
     fid: ztypes.tid
     pt: ztypes.tid
-    av: ztypes.cval
+    argTid: ztypes.tid
     arg: argref
 } is {
-    at: ztypes.tid
-    if av.kind.ivalKind then at = stdTid :ast :st wk: zast.wellKnown.slot.tyI64
-    if av.kind.fvalKind then at = stdTid :ast :st wk: zast.wellKnown.slot.tyF64
-    if av.kind.armKind then at = av.armTid
-    if at.isZero then return
+    if argTid.isZero then return
     ftd: st.typing.declIdOfType typeId: fid
     gpn: st.reg.genericParamNameOfTid tdecl: ftd ptid: pt
-    # an untyped number is a literal, which lands as a body's does
-    # (argBindingTid): an integer under a bound admitting a float literal binds
-    # one
-    if av.numTid.isZero when av.kind.ivalKind or av.kind.fvalKind then {
-        lt: st.reg.literalFloatTid
-        if av.kind.ivalKind then lt = st.reg.literalIntTid
-        if (constraintAdmits :ast :st tdecl: ftd paramName: gpn argTid: lt) then return
-        if av.kind.ivalKind when (
-            constraintAdmits
-            :ast
-            :st
-            tdecl: ftd
-            paramName: gpn
-            argTid: st.reg.literalFloatTid
-        ) then return
-    }
-    if (constraintAdmits :ast :st tdecl: ftd paramName: gpn argTid: at) then return
+    bt: argBindingTid :st :ast funcId: fid holder: gpn avt: argTid
+    if (constraintAdmits :ast :st tdecl: ftd paramName: gpn argTid: bt) then return
     (
         addErrorWithHint
         :st
@@ -4997,18 +4980,7 @@ reportConstantConstraintArg: function {
         lineno: arg.lineno
         colno: arg.colno
         e: zast.err.genericError
-        msg: (
-            constraintUnmetText
-            :ast
-            :st
-            tdecl: (st.typing.declIdOfType typeId: fid)
-            paramName: (
-                st.reg.genericParamNameOfTid
-                tdecl: (st.typing.declIdOfType typeId: fid)
-                ptid: pt
-            )
-            argTid: at
-        )
+        msg: (constraintUnmetText :ast :st tdecl: ftd paramName: gpn argTid: bt)
         note: "".string
         hint: "".string
         width: 1
