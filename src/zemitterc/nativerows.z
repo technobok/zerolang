@@ -476,9 +476,9 @@ wordOperatorRowBinds: function {
     return (rtHas :pieces id: (rowBody :pieces :row) slot: rtHole.slot.holeL)
 }
 
-# isColGetMutRef -- `fid` is a List/ListView mono's `getMut` whose element is a
-# COMPOUND VALTYPE, i.e. the one case where emitColGet's generated `getMut`
-# returns a pointer that `get` does not.
+# isColGetMutRef -- `fid` is a List/ListView mono's `getMut` or `getView` whose
+# element is a COMPOUND VALTYPE, i.e. the one case where emitColGet's generated
+# `getMut` and `getView` return a pointer that `get` does not.
 isColGetMutRef: function {
     prog: Program.view
     ctx: Ctx
@@ -491,13 +491,11 @@ isColGetMutRef: function {
         (types.isListViewOriginOf :prog :ctx tid: ownG)
     )
     if isLG.not then return false
-    if (
-        (
-            prog.typing.declNameOf
-            declId: (ztypecheck.templateDeclOf reg: prog.reg typing: prog.typing tid: fid)
-        ) !=
-        zast.wellKnown.slot.wkGetMut
-    ) then return false
+    gn: (
+        prog.typing.declNameOf
+        declId: (ztypecheck.templateDeclOf reg: prog.reg typing: prog.typing tid: fid)
+    )
+    if gn != zast.wellKnown.slot.wkGetMut when gn != zast.wellKnown.slot.wkGetView then return false
     eG: listElemType :prog monoId: ownG
     if (elemBorrowsByPtr :prog :ctx tid: eG) then return false
     return (elemRefByPtr :prog :ctx tid: eG)
@@ -1656,7 +1654,8 @@ emitListMono: function {
     emitListMembersOnDemand :ctx :monoId nm: nm.stringView ect: ect.stringView :buf
     useGet: memberUsed reach: ctx.reach mono: monoId member: memberWord.slot.getOne
     useMut: memberUsed reach: ctx.reach mono: monoId member: memberWord.slot.getMut
-    if useGet or useMut then {
+    useView: memberUsed reach: ctx.reach mono: monoId member: memberWord.slot.getView
+    if useGet or useMut or useView then {
         (
             emitColGet
             :ctx
@@ -1667,6 +1666,7 @@ emitListMono: function {
             mutPtr: (elemRefByPtr :prog :ctx tid: eid)
             hasGet: useGet
             hasMut: useMut
+            hasView: useView
             :buf
         )
     }
@@ -1928,6 +1928,7 @@ emitColGet: function {
     mutPtr: bool
     hasGet: bool
     hasMut: bool
+    hasView: false
     buf: String.borrow
 } is {
     rt: ect.string
@@ -1967,6 +1968,24 @@ emitColGet: function {
         buf.append m1
         buf.append guard
         buf.append mrv
+        buf.append "}\n\n"
+    }
+    # `getView` is `getMut` read only: the same pointer into the storage for a
+    # compound valtype element, through the const receiver `get` takes; the
+    # checker keeps it from being written through
+    if hasView then {
+        vrt: ect.string
+        vrv: "    return _this->data[_idx];\n".string
+        if mutPtr then {
+            vrt = "\{ect}*"
+            vrv = "    return (\{vrt})&_this->data[_idx];\n"
+        }
+        v0: "static \{vrt} z_\{nm}_getView(const z_\{nm}_t* _this, uint64_t _idx);\n"
+        buf.append v0
+        v1: "static \{vrt} z_\{nm}_getView(const z_\{nm}_t* _this, uint64_t _idx) {\n"
+        buf.append v1
+        buf.append guard
+        buf.append vrv
         buf.append "}\n\n"
     }
 }

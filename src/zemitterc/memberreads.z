@@ -873,6 +873,34 @@ narrowListIndex: function {
     return (orderWrap prefix: pre call: r)
 }
 
+# listElemRef -- a List mono's element reference, `getView` (`isView`) or
+# `getMut`: the reference the generated function hands back (emitColGet), read
+# as the element where that is a pointer to a borrowed element.
+listElemRef: function {
+    prog: Program.view
+    ctx: Ctx
+    call: zast.callrow.view
+    bt: ztypes.tid
+    recvR: String
+    isView: bool
+    facts: exprfacts.borrow
+} out String is {
+    v: listArg :prog :ctx :call label: zast.wellKnown.slot.wkI
+    cb: spelledCname :ctx tid: bt
+    e: "\{cb}_getMut(\{recvR}, \{v})"
+    if isView then {
+        noteMemberUse :ctx mono: bt member: memberWord.slot.getView
+        e = "\{cb}_getView(\{recvR}, \{v})"
+    } else noteMemberUse :ctx mono: bt member: memberWord.slot.getMut
+    if (listGetIsPtr :prog :ctx monoId: bt) then return (
+        stating
+        :facts
+        from: (values.operandFacts e: callFacts place: true)
+        text: "(*\{e})"
+    )
+    return (stating :facts from: callFacts text: e)
+}
+
 # emitListMethodCall -- a method call on a List-mono receiver. Maps the
 # labeled arguments to the runtime method's positional C signature.
 emitListMethodCall: function {
@@ -915,18 +943,26 @@ emitListMethodCall: function {
         )
         return (stating :facts from: callFacts text: e1)
     }
-    if mnId == zast.wellKnown.slot.wkGetMut then {
-        vm: listArg :prog :ctx :call label: zast.wellKnown.slot.wkI
-        noteMemberUse :ctx mono: bt member: memberWord.slot.getMut
-        e1m: "\{cb}_getMut(\{recvR}, \{vm})"
-        if (listGetIsPtr :prog :ctx monoId: bt) then return (
-            stating
-            :facts
-            from: (values.operandFacts e: callFacts place: true)
-            text: "(*\{e1m})"
-        )
-        return (stating :facts from: callFacts text: e1m)
-    }
+    if mnId == zast.wellKnown.slot.wkGetView then return (
+        listElemRef
+        :prog
+        :ctx
+        :call
+        :bt
+        :recvR
+        isView: true
+        :facts
+    )
+    if mnId == zast.wellKnown.slot.wkGetMut then return (
+        listElemRef
+        :prog
+        :ctx
+        :call
+        :bt
+        :recvR
+        isView: false
+        :facts
+    )
     if mnId == zast.wellKnown.slot.wkSlice then {
         return (stating :facts from: callFacts text: (
             emitOrderedPair
