@@ -334,6 +334,9 @@ rtseg: record {
     from: u64
     to: u64
     name: zast.nameid
+    # a hole spelled after a `?`, `&&` or `||` of its text: the C it becomes
+    # may not evaluate what fills it
+    guarded: false
 }
 
 # rtinfo -- where a parsed text's stretches lie in RtTexts.segs, and what a fill
@@ -391,6 +394,12 @@ rtmark: record {
     # its bytes, its `@`s included
     at: u64
     to: u64
+}
+
+# rtGuards -- `text` holds a `?`, `&&` or `||`: C after it in the same
+# expression may not be evaluated
+rtGuards: function {text: StringView} out bool is {
+    return (text.contains "?") or (text.contains "&&") or (text.contains "||")
 }
 
 # rtNextMark -- the first hole or key of `text` at or after `from`. A `@@` opens a
@@ -574,6 +583,7 @@ RtTexts: class {
         open: false
         # what the holes and keys spell (addMark)
         spells: u64
+        guarded: false
         lit: u64
         for lit < text.length loop {
             m: rtNextMark :text from: lit
@@ -582,7 +592,8 @@ RtTexts: class {
                 break
             }
             t.addLiterals from: lit to: m.at :edges
-            spells = spells | (t.addMark :text :m)
+            if guarded.not then guarded = rtGuards text: (text.substring from: lit to: m.at)
+            spells = spells | (t.addMark :text :m :guarded)
             lit = m.to
         }
         t.addLiterals from: lit to: text.length :edges
@@ -599,9 +610,10 @@ RtTexts: class {
         )
     }
 
-    # addMark -- the hole or key `m` of `text` as a stretch, its name interned:
-    # 1 when it is an ARM hole, 2 a MEMBER hole
-    addMark: function {t: this text: StringView m: rtmark} out u64 is {
+    # addMark -- the hole or key `m` of `text` as a stretch, its name interned
+    # and `guarded` whether a guard comes before it: 1 when it is an ARM hole,
+    # 2 a MEMBER hole
+    addMark: function {t: this text: StringView m: rtmark guarded: bool} out u64 is {
         spells: u64
         hid: zast.nameid.zero
         k: rtsegkind.hole
@@ -614,7 +626,7 @@ RtTexts: class {
             if (nm.startsWith prefix: "MEMBER_") then spells = 2
             hid = t.holes.pool.set s: nm
         }
-        t.segs.append (rtseg kind: k from: m.at to: m.to name: hid)
+        t.segs.append (rtseg kind: k from: m.at to: m.to name: hid :guarded)
         return spells
     }
 
@@ -657,22 +669,13 @@ RtTexts: class {
     }
 
     # holeGuarded -- whether text `id` spells the hole `hole` after a `?`, `&&`
-    # or `||`: where the C it becomes may not evaluate what fills it
+    # or `||` (rtseg.guarded)
     holeGuarded: function {t: this.view id: rtid hole: zast.nameid} out bool is {
-        text: (t.texts.get i: id).stringView
-        guarded: false
         inf: t.infos.get i: id
         k: inf.segFrom
         for k < inf.segTo loop {
             sg: t.segs.get i: k
-            if sg.kind.hole then {
-                if sg.name == hole when guarded then return true
-            } else if sg.kind.literal then {
-                lit: text.substring from: sg.from to: sg.to
-                if (
-                    (lit.contains "?") or (lit.contains "&&") or (lit.contains "||")
-                ) then guarded = true
-            }
+            if sg.kind.hole when sg.guarded when sg.name == hole then return true
             k = k + 1
         }
         return false
