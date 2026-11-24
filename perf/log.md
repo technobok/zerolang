@@ -261,7 +261,33 @@ the account there under its own `<a id="r-<commit>">` anchor.
 | 2026-11-24 | 097aa8ae | [every bounds check panics through one out-of-line function](#r-097aa8ae) | 1.09s | -- | 207MB / -- | 106 / 643 / 351 (total 1100) | 2,794,906 | 572MB | -- | 219,450 |
 | 2026-11-24 | 2eb3aa52 | [facts worked out once, and one dense table](#r-2eb3aa52) | 1.07s | -- | 208MB / -- | 155 / 604 / 354 (total 1113) | 2,795,791 | 577MB | -- | 219,463 |
 | 2026-11-24 | 1b7ef32b | [fields recorded once, if chains in one pass, appends in place](#r-1b7ef32b) | 1.12s | -- | 207MB / -- | 106 / 636 / 355 (total 1097) | 2,593,773 | 568MB | -- | 219,399 |
+| 2026-11-24 | 6e850df8 | [a syntax node is read in place, and the S simplifications](#r-6e850df8) | 1.02s | -- | 208MB / -- | 116 / 603 / 323 (total 1042) | 2,611,250 | 569MB | -- | 219,298 |
 
+
+<a id="r-6e850df8"></a>
+**A syntax node is read in place, and the S simplifications** (perf arc
+item 6's last table, the S items, and item 8's node copy: sixteen commits
+after `4590d40c`). Instructions:u `-r 3` of `bin/zc` (-O2), each commit
+against the one before it, the fixed input outside any project:
+
+| commit | item | what | own source | fixed input | allocations |
+|---|---|---|---|---|---|
+| `0633711a` | 6 | a typedef's base in a dense table | -1.55% | -0.64% | +882 |
+| S1-S14 | 7 | thirteen simplification commits (one a defect: a `with` refuses a value it cannot bind) | -0.15% together | 0.0% together | -8,317 together |
+| `3bbcc6ec` | 8 | `ListVal.getView`, the readonly element reference (seed bumped) | -0.17% | +0.14% | +1,625 |
+| `6e850df8` | 8 | every node read bound or handed on reads in place | -1.77% | -2.38% | +23,287 |
+
+The node copy was item 1 of the plan (2.01% of the self-compile after
+item 3). `getView` reads it in place: 2,308 reads moved, 145 stay copies
+where the code writes the tree while the node is held -- the checker
+refuses those as views, so the rule needs no judgement at a site. The
+allocation rise is the checker's lock bookkeeping for each view in zc's
+own source, paid once per compile of it; the fixed input, which reads no
+nodes, gains without it. Over the sixteen: `bin/zc` 5,931.6M -> 5,718.8M
+on its own source (-3.6%) and 1,158.2M -> 1,124.2M on the fixed input
+(-2.9%). Since the arc's start (`8ee7fe1e`): instructions -20.9% (own
+source) and -19.3% (fixed input), allocations 2,795,874 -> 2,611,250
+(-6.6%).
 
 <a id="r-1b7ef32b"></a>
 **Fields recorded once, if chains in one pass, appends in place** (perf
