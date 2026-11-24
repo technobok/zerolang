@@ -341,16 +341,17 @@ emitAllDefaultedCall: function {
     fnTid: ztypes.tid
     fcn: StringView
 } out String is {
-    pidl: ListVal ztypes.tid
-    pidlNm: ListVal zast.nameid
-    types.recFieldIds :prog tid: fnTid ids: pidl nameIds: pidlNm
-    m: pidl.length
+    sp: callorder.fieldsOf :prog tid: fnTid
+    m: sp.count.u64
     if m == 0 then return "".string
     j: u64
     allDef: true
     for j < m loop {
-        pnjId: pidlNm.get i: j
-        hd: prog.typing.declHasDefaultId parentTypeId: fnTid nameId: pnjId
+        hd: (
+            prog.typing.declHasDefaultId
+            parentTypeId: fnTid
+            nameId: (callorder.fieldAt :prog :sp i: j).name
+        )
         if hd.not then allDef = false
         j = j + 1
     }
@@ -358,11 +359,10 @@ emitAllDefaultedCall: function {
     args: String
     k: u64
     for k < m loop {
-        pik: pidl.get i: k
-        pnkId: pidlNm.get i: k
-        dt: prog.typing.declDefaultOfId parentTypeId: fnTid nameId: pnkId
+        f: callorder.fieldAt :prog :sp i: k
+        dt: prog.typing.declDefaultOfId parentTypeId: fnTid nameId: f.name
         facts: exprfacts
-        rv: renderDefault :prog :ctx dv: dt targetTid: pik :facts
+        rv: renderDefault :prog :ctx dv: dt targetTid: f.tid :facts
         if k > 0 then args.append ", "
         args.append rv
         k = k + 1
@@ -828,12 +828,7 @@ fnRefOrCallC: function {
     if fad.length > 0 then return (stating :facts from: callFacts text: fad)
     nat: types.nativeNoArgCallC :prog :ctx :fnTid
     if nat.length > 0 then return (stating :facts from: callFacts text: nat)
-    if requireNoParams then {
-        fpi: ListVal ztypes.tid
-        fpiNm: ListVal zast.nameid
-        types.recFieldIds :prog tid: fnTid ids: fpi nameIds: fpiNm
-        if fpi.length > 0 then return "".string
-    }
+    if requireNoParams when (callorder.fieldsOf :prog tid: fnTid).count > 0 then return "".string
     return (stating :facts from: callFacts text: "\{cname}()")
 }
 
@@ -1738,10 +1733,7 @@ emitStaticRecord: function {
     count: u64
     buf: String.borrow
 } is {
-    fnames: List String
-    fids: ListVal ztypes.tid
-    fidsNm: ListVal zast.nameid
-    callorder.recFieldLists :prog :tid names: fnames ids: fids nameIds: fidsNm
+    sp: callorder.fieldsOf :prog :tid
     rc: spelledCname :ctx :tid
     buf.append "static const \{rc}_t _zag\{id} = { "
     k: u64
@@ -1751,7 +1743,7 @@ emitStaticRecord: function {
             staticAggItemText
             :prog
             :ctx
-            tid: (fids.get i: k)
+            tid: (callorder.fieldAt :prog :sp i: k).tid
             v: (prog.typing.constAggItems.get i: start + k)
         )
         k = k + 1

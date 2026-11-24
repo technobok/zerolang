@@ -121,14 +121,13 @@ emitNativeArgMethod: function {
         d: ztypes.tid.zero
     )
     if mtid.isZero then return "".string
-    pNames: List String
     pIds: ListVal ztypes.tid
     pNameIds: ListVal zast.nameid
-    recFieldLists :prog tid: mtid names: pNames ids: pIds nameIds: pNameIds
-    if pNames.length < 2 then return "".string
+    types.recFieldIds :prog tid: mtid ids: pIds nameIds: pNameIds
+    if pIds.length < 2 then return "".string
     # the receiver is evaluated first, then the arguments as written
-    ord: orderBegin order: ctx.order slots: pNames.length
-    orderNamesTwiceArgs pieces: ctx.pieces st: ord :body count: pNames.length firstHole: 0
+    ord: orderBegin order: ctx.order slots: pIds.length
+    orderNamesTwiceArgs pieces: ctx.pieces st: ord :body count: pIds.length firstHole: 0
     (
         orderArgAtWith
         :prog
@@ -146,7 +145,7 @@ emitNativeArgMethod: function {
     oprefix: orderFinish order: ctx.order st: ord
     rn: ListVal zast.nameid
     rv: List String
-    filledAll: nativeHoleValues t: ctx st: ord count: pNames.length firstHole: 0 names: rn vals: rv
+    filledAll: nativeHoleValues t: ctx st: ord count: pIds.length firstHole: 0 names: rn vals: rv
     orderEnd order: ctx.order st: ord
     # a slot no argument fills leaves the caller on its ordinary path rather than
     # emitting a body with a hole still in it
@@ -1305,11 +1304,10 @@ userCreateCallC: function {
     fid: ztypes.tid
     facts: exprfacts.borrow
 } out String is {
-    pnames: List String
     pids: ListVal ztypes.tid
     pidsNm: ListVal zast.nameid
-    recFieldLists :prog tid: fid names: pnames ids: pids nameIds: pidsNm
-    pn: pnames.length
+    types.recFieldIds :prog tid: fid ids: pids nameIds: pidsNm
+    pn: pids.length
     wbase: orderPositions :prog order: ctx.order :call nameIds: pidsNm
     ord: orderBegin order: ctx.order slots: pn
     k: u64
@@ -1459,23 +1457,13 @@ emitCtorDefaultsFill: function {
 } out String is {
     cco: userCreateFn :prog :tid
     if cco.notZero then {
-        cpi: ListVal ztypes.tid
-        cpiNm: ListVal zast.nameid
-        types.recFieldIds :prog tid: cco ids: cpi nameIds: cpiNm
+        csp: fieldsOf :prog tid: cco
         cargs: String
         ci: u64
-        ccn: cpi.length
-        for ci < ccn loop {
+        for ci < csp.count loop {
             argFacts: exprfacts
-            cav: (
-                paramDefaultText
-                :prog
-                :ctx
-                :cco
-                nameId: (cpiNm.get i: ci)
-                pid: (cpi.get i: ci)
-                facts: argFacts
-            )
+            cf: fieldAt :prog sp: csp i: ci
+            cav: paramDefaultText :prog :ctx :cco nameId: cf.name pid: cf.tid facts: argFacts
             ci = ci + 1
             if cargs.length > 0 then cargs.append ", "
             cargs.append cav
@@ -1488,23 +1476,13 @@ emitCtorDefaultsFill: function {
         }
         return (stating :facts from: callFacts text: "\{ccb}(\{cargs})")
     }
-    fids: ListVal ztypes.tid
-    fidsNm: ListVal zast.nameid
-    types.recFieldIds :prog :tid ids: fids nameIds: fidsNm
+    sp: fieldsOf :prog :tid
     args: String
     fi: u64
-    fn0: fids.length
-    for fi < fn0 loop {
+    for fi < sp.count loop {
         argFacts: exprfacts
-        av: (
-            argforms.fieldDefaultText
-            :prog
-            :ctx
-            :tid
-            nameId: (fidsNm.get i: fi)
-            fid: (fids.get i: fi)
-            facts: argFacts
-        )
+        f: fieldAt :prog :sp i: fi
+        av: argforms.fieldDefaultText :prog :ctx :tid nameId: f.name fid: f.tid facts: argFacts
         fi = fi + 1
         if args.length > 0 then args.append ", "
         args.append av
@@ -1561,11 +1539,10 @@ userCreateCtor: function {
     # class creates through its template's function (emitTmplClassMono)
     named: ""
 } out String is {
-    cpn: List String
     cpi: ListVal ztypes.tid
     cpiNm: ListVal zast.nameid
-    recFieldLists :prog tid: cco names: cpn ids: cpi nameIds: cpiNm
-    ccn: cpn.length
+    types.recFieldIds :prog tid: cco ids: cpi nameIds: cpiNm
+    ccn: cpi.length
     wbase: orderPositions :prog order: ctx.order :call nameIds: cpiNm
     ord: orderBegin order: ctx.order slots: ccn
     k: u64
@@ -1657,11 +1634,10 @@ emitRecordCtor: function {
         }
         return (userCreateCtor :prog :ctx :call :cco :facts named: named.stringView)
     }
-    fnames: List String
     fids: ListVal ztypes.tid
     fidsNm: ListVal zast.nameid
-    recFieldLists :prog :tid names: fnames ids: fids nameIds: fidsNm
-    fn0: fnames.length
+    types.recFieldIds :prog :tid ids: fids nameIds: fidsNm
+    fn0: fids.length
     # a field of a numeric parameter's singleton type takes no argument: the
     # arguments bind to the other fields, and it holds its default, the type's
     # one value
@@ -2018,11 +1994,10 @@ emitMetaCreateCall: function {
     ) case some then {
         et: stampIdOf :prog nid: call.nodeid
         if et.isZero then return "".string
-        fnames: List String
         fids: ListVal ztypes.tid
         fidsNm: ListVal zast.nameid
-        recFieldLists :prog tid: et names: fnames ids: fids nameIds: fidsNm
-        fn0: fnames.length
+        types.recFieldIds :prog tid: et ids: fids nameIds: fidsNm
+        fn0: fids.length
         # the fields' arguments are built in the order they are written
         wbase: orderPositions :prog order: ctx.order :call nameIds: fidsNm
         ord: orderBegin order: ctx.order slots: fn0
@@ -2320,13 +2295,10 @@ foldedFnRefC: function {
         tid = g.tid
         start = g.itemStart
     }
-    fnames: List String
-    fids: ListVal ztypes.tid
-    fnIds: ListVal zast.nameid
-    recFieldLists :prog :tid names: fnames ids: fids nameIds: fnIds
+    sp: fieldsOf :prog :tid
     k: u64
-    for k < fnIds.length loop {
-        if (fnIds.get i: k) == mnId then {
+    for k < sp.count loop {
+        if (fieldAt :prog :sp i: k).name == mnId then {
             v: prog.typing.constAggItems.get i: start + k
             if v.kind.fnKind.not then return "".string
             return (spelledCname :ctx tid: (prog.typing.decls.get i: v.fnDecl).typeId)
@@ -2393,12 +2365,8 @@ emitFnptrFieldCall: function {
         (prog.typing.declChildOfId parentTypeId: rtid nameId: mnId).or
         d: ztypes.tid.zero
     )
-    pNames: List String
-    pIds: ListVal ztypes.tid
-    pNmIds: ListVal zast.nameid
-    if fnTid.notZero then {
-        recFieldLists :prog tid: fnTid names: pNames ids: pIds nameIds: pNmIds
-    }
+    sp: ztyping.fieldspan
+    if fnTid.notZero then sp = fieldsOf :prog tid: fnTid
     # the slot's parameters other than the receiver, which the call supplies
     argIds: ListVal ztypes.tid
     argNmIds: ListVal zast.nameid
@@ -2407,15 +2375,16 @@ emitFnptrFieldCall: function {
         takesThis: false
         if fnTid.notZero then takesThis = argforms.fnTypeTakesThis :prog tid: fnTid
         pk: u64
-        for pk < pNmIds.length loop {
-            pnk: pNmIds.get i: pk
+        for pk < sp.count loop {
+            f: fieldAt :prog :sp i: pk
+            pnk: f.name
             isRecv: false
             if takesThis then {
                 if pnk == zast.wellKnown.slot.wkThis then isRecv = true
                 if thisNm.notZero when pnk == thisNm then isRecv = true
             }
             if isRecv.not then {
-                argIds.append (pIds.get i: pk)
+                argIds.append f.tid
                 argNmIds.append pnk
             }
             pk = pk + 1
@@ -2587,10 +2556,9 @@ emitFnptrLocalCall: function {
     # here as soon as an unbound METHOD reference can reach a local: a receiver
     # parameter is a pointer in both type families, so `f this: a rhs: 5`
     # emitted `z_v4(z_v3, 5)` and passed the receiver by value into a `z_t12_t*`.
-    pNames: List String
     pIds: ListVal ztypes.tid
     pNmIds: ListVal zast.nameid
-    recFieldLists :prog tid: cTid names: pNames ids: pIds nameIds: pNmIds
+    types.recFieldIds :prog tid: cTid ids: pIds nameIds: pNmIds
     # each written argument fills the parameter its label names, and is built in
     # the order it is written
     slots: argSlotList :prog :call fpNameIds: pNmIds
@@ -3761,6 +3729,11 @@ fieldsOf: function {prog: Program.view tid: ztypes.tid} out ztyping.fieldspan is
     return sp
 }
 
+# fieldAt -- row `i` of the run `sp` (fieldsOf): a field's type and name
+fieldAt: function {prog: Program.view sp: ztyping.fieldspan i: u64} out ztyping.datafield is {
+    return (prog.typing.fieldRows.get i: sp.from.u64 + i)
+}
+
 # applyTmpl -- substitute one @@KEY@@ placeholder in template text.
 applyTmpl: function {text: String key: StringView val: StringView} out String is {
     needle: "@@\{key}@@"
@@ -3916,13 +3889,10 @@ emitClassNativeCall: function {
     fc: spelledCname :ctx tid: cid
     recvExpr: values.nativeValueRecvExpr :prog :ctx :cid recvNid: valRecv
     if valRecv.isZero then recvExpr = nativeCallRecvExpr :prog :ctx recvNid: rcvNid :bn :bnid
-    pNames: List String
-    pIds: ListVal ztypes.tid
-    pNameIds: ListVal zast.nameid
-    recFieldLists :prog tid: mtid names: pNames ids: pIds nameIds: pNameIds
+    sp: fieldsOf :prog tid: mtid
     mn: zast.nameTextAt ast: prog.ast ref: mnId
     # the receiver is parameter 0; a method taking nothing else is a plain call
-    np: pNames.length
+    np: sp.count.u64
     if np < 2 then {
         c0: nativeMethodCallOpen fc: fc.stringView mn: mn.stringView recv: recvExpr.stringView
         c0.append ")"
@@ -3933,7 +3903,7 @@ emitClassNativeCall: function {
     argNameIds: ListVal zast.nameid
     k: u64
     for k < na loop {
-        argNameIds.append (pNameIds.get i: k + 1)
+        argNameIds.append (fieldAt :prog :sp i: k + 1).name
         k = k + 1
     }
     wbase: orderPositions :prog order: ctx.order :call nameIds: argNameIds
@@ -3957,7 +3927,7 @@ emitClassNativeCall: function {
                 :ctx
                 cco: mtid
                 nameId: pnb
-                pid: (pIds.get i: best + 1)
+                pid: (fieldAt :prog :sp i: best + 1).tid
                 facts: dF
             )
             (
@@ -3977,7 +3947,7 @@ emitClassNativeCall: function {
                 types.nativeMethodArgForm
                 :prog
                 :ctx
-                pid: (pIds.get i: best + 1)
+                pid: (fieldAt :prog :sp i: best + 1).tid
             )
             # a template's function takes every argument by value, as a slot holds
             # it (@@T@@), a collection included
@@ -4032,15 +4002,12 @@ emitClassNativeRead: function {
         row = methodFragRow :prog pieces: ctx.pieces :mfid
         if row == 0 then return "".string
     }
-    pNames: List String
-    pIds: ListVal ztypes.tid
-    pNameIds: ListVal zast.nameid
-    recFieldLists :prog tid: mfid names: pNames ids: pIds nameIds: pNameIds
+    sp: fieldsOf :prog tid: mfid
     # every parameter past the receiver must have a default, which the read
     # passes: `db.transaction` begins in transaction's default mode
     k: 1.u64
-    for k < pNames.length loop {
-        if (prog.typing.declHasDefaultId parentTypeId: mfid nameId: (pNameIds.get i: k)
+    for k < sp.count loop {
+        if (prog.typing.declHasDefaultId parentTypeId: mfid nameId: (fieldAt :prog :sp i: k).name
         ).not then return "".string
         k = k + 1
     }
@@ -4057,7 +4024,7 @@ emitClassNativeRead: function {
         recv: rexp.stringView
     )
     k = 1
-    for k < pNames.length loop {
+    for k < sp.count loop {
         dF: exprfacts
         c1.append ", "
         c1.append (
@@ -4065,8 +4032,8 @@ emitClassNativeRead: function {
             :prog
             :ctx
             cco: mfid
-            nameId: (pNameIds.get i: k)
-            pid: (pIds.get i: k)
+            nameId: (fieldAt :prog :sp i: k).name
+            pid: (fieldAt :prog :sp i: k).tid
             facts: dF
         )
         k = k + 1
@@ -4134,11 +4101,10 @@ emitNativeCreate: function {
     )
     if crid.isZero then return "".string
     demandMethodRow :prog :ctx mfid: crid
-    pnames: List String
     pids: ListVal ztypes.tid
     pidsNm: ListVal zast.nameid
-    recFieldLists :prog tid: crid names: pnames ids: pids nameIds: pidsNm
-    pn: pnames.length
+    types.recFieldIds :prog tid: crid ids: pids nameIds: pidsNm
+    pn: pids.length
     wbase: orderPositions :prog order: ctx.order :call nameIds: pidsNm
     slots: argSlotList :prog :call fpNameIds: pidsNm
     ord: orderBegin order: ctx.order slots: pn
@@ -4249,10 +4215,9 @@ emitNativeFreeFnCall: function {
     nativepieces.needsAddM :ctx uname: un.stringView memb: "@unit"
     if body.isZero then nativepieces.needsAddM :ctx uname: un.stringView memb: mn
     nativepieces.rowNeedsAdd :ctx :row cond: nativepieces.condAlways
-    pn: List String
     pidl: ListVal ztypes.tid
     pidlNm: ListVal zast.nameid
-    recFieldLists :prog tid: fid names: pn ids: pidl nameIds: pidlNm
+    types.recFieldIds :prog tid: fid ids: pidl nameIds: pidlNm
     # a via function's parameter types, which an argument is lowered to
     viaTids: ListVal ztypes.tid
     if viaMember.length > 0 then {
@@ -4265,7 +4230,7 @@ emitNativeFreeFnCall: function {
             tids: viaTids
         )
     }
-    m: pn.length
+    m: pidl.length
     wbase: orderPositions :prog order: ctx.order :call nameIds: pidlNm
     ord: orderBegin order: ctx.order slots: m
     # an argument a body names twice is read into a temporary first; a free

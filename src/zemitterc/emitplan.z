@@ -653,23 +653,12 @@ registerReftypeParams: function {
     fid: ztypes.tid
     op: astnode.view
 } is {
-    pIds: ListVal ztypes.tid
-    pNmIds: ListVal zast.nameid
-    types.recFieldIds :prog tid: fid ids: pIds nameIds: pNmIds
+    sp: callorder.fieldsOf :prog tid: fid
     ri: u64
-    rn: pNmIds.length
-    for ri < rn loop {
-        rpid: pIds.get i: ri
-        regp: (
-            argforms.paramTypeIsPointer
-            :prog
-            :ctx
-            :fid
-            pnameId: (pNmIds.get i: ri)
-            pid: rpid
-        )
-        if regp then {
-            rvd: paramVidByNameId :prog :op nameId: (pNmIds.get i: ri)
+    for ri < sp.count loop {
+        f: callorder.fieldAt :prog :sp i: ri
+        if (argforms.paramTypeIsPointer :prog :ctx :fid pnameId: f.name pid: f.tid) then {
+            rvd: paramVidByNameId :prog :op nameId: f.name
             ctx.stmt.ptrVids.append rvd
         }
         ri = ri + 1
@@ -721,14 +710,13 @@ fnParamsC: function {
     op: astnode.view
 } out String is {
     params: String
-    cIds: ListVal ztypes.tid
-    cNmIds: ListVal zast.nameid
-    types.recFieldIds :prog tid: fid ids: cIds nameIds: cNmIds
+    sp: callorder.fieldsOf :prog tid: fid
     pi: u64
-    pn: cNmIds.length
+    pn: sp.count.u64
     for pi < pn loop {
-        pnmId: cNmIds.get i: pi
-        ct: argforms.paramCType :prog :ctx :fid pnameId: pnmId pid: (cIds.get i: pi)
+        f: callorder.fieldAt :prog :sp i: pi
+        pnmId: f.name
+        ct: argforms.paramCType :prog :ctx :fid pnameId: pnmId pid: f.tid
         if pi > 0 then params.append ", "
         if ct.length > 0 then {
             params.append ct
@@ -3124,14 +3112,12 @@ keyFnParamConstC: function {
     index: u64
 } out String is {
     if fid.isZero then return "".string
-    pIds: ListVal ztypes.tid
-    pIdsNm: ListVal zast.nameid
-    types.recFieldIds :prog tid: fid ids: pIds nameIds: pIdsNm
-    if index >= pIdsNm.length then return "".string
+    sp: callorder.fieldsOf :prog tid: fid
+    if index >= sp.count then return "".string
     if (
         prog.typing.declOwnershipIs
         parentTypeId: fid
-        nameId: (pIdsNm.get i: index)
+        nameId: (callorder.fieldAt :prog :sp i: index).name
         own: ztypes.zparamownership.viewMode
     ) then return "const ".string
     return "".string
@@ -4016,12 +4002,10 @@ setupGenCtx: function {
     }
     ctx.gen.hasValue = hasVal
     # the C names the state machine reads the receiver and the input through
-    gids: ListVal ztypes.tid
-    gnm: ListVal zast.nameid
-    types.recFieldIds :prog tid: mid ids: gids nameIds: gnm
+    gsp: callorder.fieldsOf :prog tid: mid
     gpi: u64
-    for gpi < gnm.length loop {
-        gc: paramCName :prog :ctx :op nameId: (gnm.get i: gpi)
+    for gpi < gsp.count loop {
+        gc: paramCName :prog :ctx :op nameId: (callorder.fieldAt :prog sp: gsp i: gpi).name
         if gpi == 0 then ctx.gen.recvC = gc.copy
         if gpi == 1 then ctx.gen.valC = gc.copy
         gpi = gpi + 1

@@ -5390,7 +5390,7 @@ staticFieldRowValue: function {
     ftid: fr.tid
     name: fr.name
     # refused where it is declared (refuseNonStaticMember), as in staticFieldValue
-    if fr.isStatic.not then return ztypes.noConst
+    if (isStaticMemberTid :st :ast tid: ftid).not then return ztypes.noConst
     if argNid.notZero then return (staticArgValue :st :scope :ast :unitDecl :ftid :name :argNid)
     known: st.typing.fieldDefaults.get key: row.u64
     if known.some then return known
@@ -5675,7 +5675,7 @@ dataFieldsOf: function {st: zenv.ZSymbolTable ast: Ast tid: ztypes.tid} out ztyp
     known: st.typing.fieldsOf :tid
     if known.from > 0 then return known
     conform.forceAllMembers :st :ast :tid
-    return (recordDataFields :st :ast :tid)
+    return (recordDataFields :st :tid)
 }
 
 # recordAllDataFields -- the check's last step: every type's data fields
@@ -5684,7 +5684,7 @@ dataFieldsOf: function {st: zenv.ZSymbolTable ast: Ast tid: ztypes.tid} out ztyp
 # asked for (dataFieldsOf) is recorded as its rows stand now, unforced, which
 # is what any later reader would find; a unit and a generic parameter have no
 # data fields. One pair of lists serves every type.
-recordAllDataFields: function {st: zenv.ZSymbolTable ast: Ast} is {
+recordAllDataFields: function {st: zenv.ZSymbolTable} is {
     ftids: ListVal ztypes.tid
     fnames: ListVal zast.nameid
     t: 1.u64
@@ -5697,26 +5697,23 @@ recordAllDataFields: function {st: zenv.ZSymbolTable ast: Ast} is {
         for ftids.length > 0 loop ftids.pop
         for fnames.length > 0 loop fnames.pop
         conform.dataFieldIds reg: st.reg typing: st.typing :tid ids: ftids nameIds: fnames
-        recordFieldRows :st :ast :tid :ftids :fnames
+        recordFieldRows :st :tid :ftids :fnames
     }
 }
 
 # recordDataFields -- dataFieldsOf's recording: `tid`'s data fields
 # (dataFieldIds) as its run
-recordDataFields: function {
-    st: zenv.ZSymbolTable ast: Ast tid: ztypes.tid
-} out ztyping.fieldspan is {
+recordDataFields: function {st: zenv.ZSymbolTable tid: ztypes.tid} out ztyping.fieldspan is {
     ftids: ListVal ztypes.tid
     fnames: ListVal zast.nameid
     conform.dataFieldIds reg: st.reg typing: st.typing :tid ids: ftids nameIds: fnames
-    return (recordFieldRows :st :ast :tid :ftids :fnames)
+    return (recordFieldRows :st :tid :ftids :fnames)
 }
 
 # recordFieldRows -- the fields `ftids` / `fnames` appended to
 # st.typing.fieldRows as `tid`'s run, recorded and answered
 recordFieldRows: function {
     st: zenv.ZSymbolTable
-    ast: Ast
     tid: ztypes.tid
     ftids: (ListVal ztypes.tid).view
     fnames: (ListVal zast.nameid).view
@@ -5725,15 +5722,7 @@ recordFieldRows: function {
     fi: u64
     for fi < fnames.length loop {
         ft: ftids.get i: fi
-        (
-            st.typing.fieldRows.append
-            from: (
-                ztyping.datafield
-                tid: ft
-                name: (fnames.get i: fi)
-                isStatic: (isStaticMemberTid :st :ast tid: ft)
-            )
-        )
+        st.typing.fieldRows.append (ztyping.datafield tid: ft name: (fnames.get i: fi))
         fi = fi + 1
     }
     span: ztyping.fieldspan from: from.u32.orPanic count: fnames.length.u32.orPanic

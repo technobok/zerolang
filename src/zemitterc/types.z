@@ -658,10 +658,7 @@ nativeNoArgCallC: function {
     fnTid: ztypes.tid
 } out String is {
     if (prog.reg.isNativeOf tid: fnTid).not then return "".string
-    pi: ListVal ztypes.tid
-    pnm: ListVal zast.nameid
-    recFieldIds :prog tid: fnTid ids: pi nameIds: pnm
-    if pi.length > 0 then return "".string
+    if (callorder.fieldsOf :prog tid: fnTid).count > 0 then return "".string
     un: definedInUnitName :prog tid: fnTid
     if un.length == 0 then return "".string
     fd: prog.typing.declIdOfType typeId: fnTid
@@ -1515,14 +1512,13 @@ unionReachEdges: function {
     tid: ztypes.tid
     acc: ListVal ztypes.tid
 } is {
-    ids: ListVal ztypes.tid
-    names: ListVal zast.nameid
-    recFieldIds :prog :tid :ids nameIds: names
+    sp: callorder.fieldsOf :prog :tid
     dw: destroyWritten :prog :ctx :tid
     i: u64
-    for i < ids.length loop {
-        p: ids.get :i
-        nm: names.get :i
+    for i < sp.count loop {
+        f: callorder.fieldAt :prog :sp :i
+        p: f.tid
+        nm: f.name
         i = i + 1
         if (armIsInlineC :prog :tid arm: nm) then {
             acc.append p
@@ -2955,9 +2951,7 @@ emitOneFnptrTypedef: function {
 } is {
     if (seen.contains item: tid) then return
     seen.append tid
-    pIds: ListVal ztypes.tid
-    pIdsNm: ListVal zast.nameid
-    recFieldIds :prog :tid ids: pIds nameIds: pIdsNm
+    sp: callorder.fieldsOf :prog :tid
     # A method's `this` receiver is the owner: the typedef takes the owner's id
     # so it matches the method's emitted signature. Never matched by name, which
     # can land on an unrelated same-named type (a stdlib generic template).
@@ -2968,11 +2962,11 @@ emitOneFnptrTypedef: function {
     }
     rIds: ListVal ztypes.tid
     ri: u64
-    rn: pIds.length
-    for ri < rn loop {
-        rpv: pIds.get i: ri
+    for ri < sp.count loop {
+        rf: callorder.fieldAt :prog :sp i: ri
+        rpv: rf.tid
         if ownT.notZero then {
-            isRecv: ((pIdsNm.get i: ri) == zast.wellKnown.slot.wkThis) or (rpv == ownT)
+            isRecv: (rf.name == zast.wellKnown.slot.wkThis) or (rpv == ownT)
             if isRecv then rpv = ownT
         }
         rIds.append rpv
@@ -2989,7 +2983,7 @@ emitOneFnptrTypedef: function {
     if srt.notZero then fwdDeclareSpec :prog :ctx tid: srt :buf
     skipIt: false
     sj: u64
-    sn: pIds.length
+    sn: rIds.length
     for sj < sn loop {
         spid: rIds.get i: sj
         if (isComplexFnptrParam :prog typeDefs: ctx.typeDefs tid: spid) then skipIt = true
@@ -2999,7 +2993,7 @@ emitOneFnptrTypedef: function {
     ) then skipIt = true
     if skipIt then return
     di: u64
-    dn: pIds.length
+    dn: rIds.length
     for di < dn loop {
         pidd: rIds.get i: di
         if (prog.reg.typetypeOf typeId: pidd) == ztypes.ztypetype.functionType then {
@@ -3015,7 +3009,7 @@ emitOneFnptrTypedef: function {
     if rtid.notZero then ensureFwdStruct :prog :ctx tid: rtid :buf
     params: String
     pi: u64
-    pn: pIdsNm.length
+    pn: rIds.length
     for pi < pn loop {
         pidp: rIds.get i: pi
         pct: (
@@ -3023,7 +3017,7 @@ emitOneFnptrTypedef: function {
             :prog
             :ctx
             fid: tid
-            pnameId: (pIdsNm.get i: pi)
+            pnameId: (callorder.fieldAt :prog :sp i: pi).name
             pid: pidp
         )
         if pi > 0 then params.append ", "
@@ -4027,19 +4021,16 @@ specMemberIsSelfTyped: function {
     ifaceTid: ztypes.tid
     smid: ztypes.tid
 } out bool is {
-    pnames: List String
-    pids: ListVal ztypes.tid
-    pidsNm: ListVal zast.nameid
-    callorder.recFieldLists :prog tid: smid names: pnames ids: pids nameIds: pidsNm
+    sp: callorder.fieldsOf :prog tid: smid
     rpn: prog.reg.thisParamNameIdOf tid: smid
     found: false
     pi: u64
-    for pi < pnames.length loop {
+    for pi < sp.count loop {
         isRecv: (
-            ((pidsNm.get i: pi) == zast.wellKnown.slot.wkThis) or
-            (rpn.notZero and ((pidsNm.get i: pi) == rpn))
+            ((callorder.fieldAt :prog :sp i: pi).name == zast.wellKnown.slot.wkThis) or
+            (rpn.notZero and ((callorder.fieldAt :prog :sp i: pi).name == rpn))
         )
-        if isRecv.not when (pids.get i: pi) == ifaceTid then found = true
+        if isRecv.not when (callorder.fieldAt :prog :sp i: pi).tid == ifaceTid then found = true
         pi = pi + 1
     }
     return found
@@ -4083,13 +4074,12 @@ emitOneFacet: function {
         }
         ret: cReturnText ret: (methodRetCtype :prog :ctx mid: smid)
         vparams: "void*".string
-        pnames: List String
         pids: ListVal ztypes.tid
         pidsNm: ListVal zast.nameid
-        callorder.recFieldLists :prog tid: smid names: pnames ids: pids nameIds: pidsNm
+        recFieldIds :prog tid: smid ids: pids nameIds: pidsNm
         for each sp: pids loop preEmitSlotType :prog :ctx eid: sp :buf
         pi: u64
-        pn: pnames.length
+        pn: pids.length
         for pi < pn loop {
             pid: pids.get i: pi
             # spec receivers are dropped when the spec resolves; a MARKED one is
@@ -4194,13 +4184,12 @@ emitOneProtocol: function {
         }
         ret: cReturnText ret: (methodRetCtype :prog :ctx mid: smid)
         vparams: "void*".string
-        pnames: List String
         pids: ListVal ztypes.tid
         pidsNm: ListVal zast.nameid
-        callorder.recFieldLists :prog tid: smid names: pnames ids: pids nameIds: pidsNm
+        recFieldIds :prog tid: smid ids: pids nameIds: pidsNm
         for each sp: pids loop preEmitSlotType :prog :ctx eid: sp :buf
         pi: u64
-        pn: pnames.length
+        pn: pids.length
         for pi < pn loop {
             pid: pids.get i: pi
             isThis: (pidsNm.get i: pi) == zast.wellKnown.slot.wkThis
@@ -4279,10 +4268,9 @@ implCallArgs: function {
 } out String is {
     owner: ztypecheck.valOpOwner typing: prog.typing tid: implTid nameId: mnameId
     implMid: (prog.typing.declChildOfId parentTypeId: owner nameId: mnameId).or d: ztypes.tid.zero
-    pnames: List String
     pids: ListVal ztypes.tid
     pidsNm: ListVal zast.nameid
-    callorder.recFieldLists :prog tid: implMid names: pnames ids: pids nameIds: pidsNm
+    recFieldIds :prog tid: implMid ids: pids nameIds: pidsNm
     rpn: prog.reg.thisParamNameIdOf tid: implMid
     cargs: String
     sawThis: false
@@ -4424,30 +4412,34 @@ emitImplementationImpl: function {
         }
         ret: methodRetCtype :prog :ctx mid: smid
         wparams: "void* _data".string
-        pnames: List String
-        pids: ListVal ztypes.tid
-        pidsNm: ListVal zast.nameid
-        callorder.recFieldLists :prog tid: smid names: pnames ids: pids nameIds: pidsNm
+        sp: callorder.fieldsOf :prog tid: smid
         pi: u64
-        pn: pnames.length
+        pn: sp.count.u64
         for pi < pn loop {
-            pid: pids.get i: pi
-            isThis: (pidsNm.get i: pi) == zast.wellKnown.slot.wkThis
+            pid: (callorder.fieldAt :prog :sp i: pi).tid
+            isThis: (callorder.fieldAt :prog :sp i: pi).name == zast.wellKnown.slot.wkThis
             # A marked receiver is an ALIAS (`{t: this.view}`), so neither its
             # name nor its type says `this`. The registry records which
             # parameter IS the receiver; that is the question to ask, and it is
             # the same one methodReceiverIsView asks.
             rpnW: prog.reg.thisParamNameIdOf tid: smid
-            if rpnW.notZero when (pidsNm.get i: pi) == rpnW then isThis = true
+            if rpnW.notZero when (callorder.fieldAt :prog :sp i: pi).name == rpnW then isThis = true
             if isThis.not then {
-                pct: protoParamCtype :prog :ctx fid: smid pnameId: (pidsNm.get i: pi) :pid
+                pct: (
+                    protoParamCtype
+                    :prog
+                    :ctx
+                    fid: smid
+                    pnameId: (callorder.fieldAt :prog :sp i: pi).name
+                    :pid
+                )
                 pnmP: (
                     memberC
                     :prog
                     :ctx
                     owner: smid
                     kind: memberkind.param
-                    nameId: (pidsNm.get i: pi)
+                    nameId: (callorder.fieldAt :prog :sp i: pi).name
                 )
                 wparams.append ", "
                 wparams.append pct
@@ -4723,10 +4715,7 @@ nativeNoArgOf: function {
         (prog.reg.typetypeOf typeId: calleeTid) != ztypes.ztypetype.functionType
     ) then return "".string
     if (prog.reg.isNativeOf tid: calleeTid).not then return "".string
-    pi: ListVal ztypes.tid
-    pnm: ListVal zast.nameid
-    recFieldIds :prog tid: calleeTid ids: pi nameIds: pnm
-    if pi.length > 0 then return "".string
+    if (callorder.fieldsOf :prog tid: calleeTid).count > 0 then return "".string
     duo: definedInUnitName :prog tid: calleeTid
     if duo.length == 0 then return "".string
     return duo.string
@@ -5030,14 +5019,12 @@ structDestroyNontrivial: function {
     ctx: Ctx.view
     tid: ztypes.tid
 } out bool is {
-    fids: ListVal ztypes.tid
-    fidsNm: ListVal zast.nameid
-    recFieldIds :prog :tid ids: fids nameIds: fidsNm
+    sp: callorder.fieldsOf :prog :tid
     fi: u64
-    fn0: fids.length
-    for fi < fn0 loop {
-        fid: fids.get i: fi
-        fnameId: fidsNm.get i: fi
+    for fi < sp.count loop {
+        f: callorder.fieldAt :prog :sp i: fi
+        fid: f.tid
+        fnameId: f.name
         if (prog.typing.declIsBorrowedFieldId parentTypeId: tid nameId: fnameId).not then {
             if fid == ctx.known.strTid then return true
             if (fieldIsBox :prog :fid).notZero then return true
