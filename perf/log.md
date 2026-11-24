@@ -250,7 +250,63 @@ the account there under its own `<a id="r-<commit>">` anchor.
 | 2026-11-03 | cf2c975e | [native C from the rows zc carries](#r-cf2c975e) | 0.95s | 1.02s | 195MB / 168MB | 108 / 493 / 351 (total 952) | 2,795,025 | 564MB | 42.2s | 203,800 |
 | 2026-11-04 | d1fde8ef | [the emitter reads the rows as data](#r-d1fde8ef) | 0.95s | 0.99s | 195MB / 166MB | 109 / 491 / 346 (total 946) | 2,751,540 | 559MB | 41.7s | 203,728 |
 | 2026-11-04 | acf9c47d | [a project reads the prelude once](#r-acf9c47d) | 0.97s | 1.05s | 196MB / 167MB | 106 / 529 / 360 (total 995) | 2,770,117 | 559MB | 43.0s | 204,876 |
+| 2026-11-24 | 96502ba2 | [re-baseline after 683 commits: the reviews, then arcs E to H](#r-96502ba2) | 1.11s | 1.22s | 208MB / 176MB | 112 / 645 / 359 (total 1116) | 2,795,874 | 573MB | 85.3s | 219,466 |
 
+
+<a id="r-96502ba2"></a>
+**Re-baseline after 683 commits** (`acf9c47d` -> `96502ba2`: the project
+review R0-R8, the after-R8 batches B-E2, then arcs F, G and H; no change in
+the range was a performance change, and none added a row). The perf arc
+starts from this row. Machine: gcc 15.3.0, glibc 2.44, valgrind 3.27.1.
+`acf9c47d`, rebuilt today, measures 10,507M instructions on its own source
+and 1,985M on the fixed input (its row: 10,506M and 2,004M), so the
+columns below compare on today's toolchain. Both sides measured in one
+session, `out/zc-perf` each from its own tree's root, instructions:u
+`-r 3` twice, interleaved (each pair within 0.02%):
+
+| commit | instructions (own source) | fixed input | allocs | fixed-input allocs | LOC |
+|---|---|---|---|---|---|
+| `acf9c47d` | 10,507M | 1,985M | 2,770,190 | 486,112 | 204,876 |
+| `96502ba2` | 11,654M | 2,259M | 2,795,874 | 472,035 | 219,466 |
+
+**On the same input the compiler does 13.8% more work.** It allocates 2.9%
+less (-14.1K blocks; bytes 120.8MB -> 121.6MB). The self-compile does 10.9%
+more work for 7.1% more source and allocates 0.9% more. The fixed input
+over the range, by the same measure (`out/zc-perf` built at each point):
+
+| commit | date | fixed input | step |
+|---|---|---|---|
+| `acf9c47d` | 11-04 | 1,985M | |
+| `69021f38` | 11-07 | 2,022M | +37M |
+| `267a3f45` | 11-11 | 2,092M | +70M |
+| `f6477304` | 11-14 | 2,121M | +29M |
+| `ba147b18` | 11-17 | 2,126M | +5M |
+| `94b3d7cd` | 11-18 | 2,126M | 0 |
+| `df8fef7a` | 11-18 | 2,206M | +80M |
+| `cb3f8559` | 11-21 | 2,235M | +29M |
+| `7db401c9` | 11-23 | 2,256M | +22M |
+| `96502ba2` | 11-24 | 2,259M | +3M |
+
+Only one step has a single cause. `3d5c0a3c` made a row's hole spelled
+after a `?`, `&&` or `||` read once into a temp (a correctness fix). Its
+test, `rt.holeGuarded`, searches every literal segment of the row's text
+for the three operators each time a row is filled. The text is fixed, but
+the answer is recomputed: 292K `contains` calls, 76M instructions, 3.1%
+of the fixed input. The rest of the rise is spread across the checker's
+lookups. Callgrind on both compilers (a `--readable-names` gcc -O1 build
+of each) puts the type checker at 1,125M -> 1,303M (+15.8%) and the
+emitter at 625M -> 730M (+17%, three quarters of it `holeGuarded`).
+Hash-map finds and gets went from 304M to 358M, list reads from 451M to
+491M, and text search from 43M to 123M.
+
+Where the self-compile goes (callgrind, 12.6G instructions in that
+build): the type checker 56%, of which the body walk is 46%; the emitter
+30%; parsing and the rest 13%. Six leaf functions make 20%:
+`ast.nodes.get` 6.0% (6.0M calls on the fixed input, each copying the
+44-byte node), `decls.get` 5.1%, the name -> declaration map 4.3%, the
+type-row get 2.6%, the type -> declaration map 3.6%. Wall, RSS and the
+phase split are `make perf` on a quiet machine. `make test` is warm, the
+second of two runs: 7,664 cases where `acf9c47d` ran 3,366.
 
 <a id="r-acf9c47d"></a>
 **A project reads the prelude once** (`d1fde8ef` -> `acf9c47d`; `make ci`
