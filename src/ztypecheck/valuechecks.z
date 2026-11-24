@@ -2357,15 +2357,12 @@ retakeHoldLock: function {
     hbVid: ztypes.vid
     hbNmId: zast.nameid
 } is {
-    hrp: ListVal zast.nameid
-    hrp.append hbNmId
     hrh: ztypes.zlockholder.var hbVid
     hrr: (
-        st.tryLock
+        st.tryLockLocal
         pool: ast.names
-        path: hrp.listView
+        root: hbNmId
         lockType: ztypes.zlockstate.shared
-        lockScope: ztypes.zlockscope.target
         holder: hrh
         mutable: false
     )
@@ -4173,17 +4170,19 @@ installBorrowLocks: function {
 } is {
     n: src.length
     if n == 0 then return
+    root: src.get i: 0
     # a reference that may write is a mutable use of the path's ROOT. This is
     # the other enforcement point beside lockCallArg: a PATH-shaped argument
     # (`pool: program.names`) never reaches lockCallArg, it installs here.
-    if mutable then moves.markVarMutated :st nameId: (src.get i: 0)
+    if mutable then moves.markVarMutated :st nameId: root
     end: 1.u64
     for end < n loop {
         hs: ztypes.zlockholder.var vid
         rs: (
             st.tryLock
             :pool
-            path: (src.slice from: 0 to: end)
+            :root
+            tail: (src.slice from: 1 to: end)
             lockType: ztypes.zlockstate.shared
             lockScope: ztypes.zlockscope.intent
             holder: hs
@@ -4198,7 +4197,8 @@ installBorrowLocks: function {
     re: (
         st.tryLock
         :pool
-        path: src.listView
+        :root
+        tail: (src.slice from: 1 to: n)
         lockType: lk
         lockScope: ztypes.zlockscope.target
         holder: he
@@ -4266,15 +4266,12 @@ readonlySelfLock: function {
     vid: ztypes.vid
 } out String is {
     if name.isZero or vid.isZero then return "".string
-    rsp: ListVal zast.nameid
-    rsp.append name
     rsh: ztypes.zlockholder.var vid
     return (
-        st.tryLock
+        st.tryLockLocal
         pool: ast.names
-        path: rsp.listView
+        root: name
         lockType: ztypes.zlockstate.shared
-        lockScope: ztypes.zlockscope.target
         holder: rsh
         mutable: false
     )

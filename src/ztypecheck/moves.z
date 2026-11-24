@@ -3748,17 +3748,14 @@ lockCallArg: function {
         st.queueArgLock :callId :segFrom isPath: false :shared :mutable :nodeid :lineno :colno
         return
     }
-    pth: ListVal zast.nameid
-    pth.append nameId
     h: ztypes.zlockholder.call callId
     clk: ztypes.zlockstate.exclusive
     if shared when mutable.not then clk = ztypes.zlockstate.shared
     r: (
-        st.tryLock
+        st.tryLockLocal
         :pool
-        path: pth.listView
+        root: nameId
         lockType: clk
-        lockScope: ztypes.zlockscope.target
         holder: h
         :mutable
         :probe
@@ -3830,12 +3827,13 @@ lockCallPath: function {
 } is {
     n: path.length
     if n == 0 then return
+    root: path.get i: 0
     if mutable then {
         # a NESTED receiver (`st.reg.foo`) may write through its path, which
         # is a mutable use of the ROOT. The third and last lock-taking entry
         # point, beside lockCallArg (bare names) and installBorrowLocks (path
         # args).
-        markVarMutated :st nameId: (path.get i: 0)
+        markVarMutated :st nameId: root
         (
             checkFrozenWrite
             :st
@@ -3856,7 +3854,8 @@ lockCallPath: function {
         rs: (
             st.tryLock
             :pool
-            path: (path.slice from: 0 to: end)
+            :root
+            tail: (path.slice from: 1 to: end)
             lockType: ztypes.zlockstate.shared
             lockScope: ztypes.zlockscope.intent
             holder: he
@@ -3884,7 +3883,8 @@ lockCallPath: function {
     re: (
         st.tryLock
         :pool
-        path: path.listView
+        :root
+        tail: (path.slice from: 1 to: n)
         lockType: clk
         lockScope: ztypes.zlockscope.target
         holder: he
@@ -3912,7 +3912,8 @@ reportPathConflict: function {
     rw: (
         st.tryLock
         :pool
-        path: path.listView
+        root: (path.get i: 0)
+        tail: (path.slice from: 1 to: path.length)
         :lockType
         lockScope: ztypes.zlockscope.target
         :holder
@@ -3946,7 +3947,8 @@ lockCallArgPath: function {
 } is {
     n: path.length
     if n == 0 then return
-    if mutable then markVarMutated :st nameId: (path.get i: 0)
+    root: path.get i: 0
+    if mutable then markVarMutated :st nameId: root
     if queued then {
         segFrom: st.argLockSegs.length
         st.argLockSegs.extendView from: path.listView
@@ -3961,7 +3963,8 @@ lockCallArgPath: function {
         rs: (
             st.tryLock
             :pool
-            path: (path.slice from: 0 to: end)
+            :root
+            tail: (path.slice from: 1 to: end)
             lockType: ztypes.zlockstate.shared
             lockScope: ztypes.zlockscope.intent
             holder: he
@@ -3988,7 +3991,8 @@ lockCallArgPath: function {
     re: (
         st.tryLock
         :pool
-        path: path.listView
+        :root
+        tail: (path.slice from: 1 to: n)
         lockType: lk
         lockScope: ztypes.zlockscope.target
         holder: he

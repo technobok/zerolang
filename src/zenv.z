@@ -46,7 +46,8 @@ ZTyping: ztyping.ZTyping
 
 
 # A lock path is the dotted path of a value as name ids: the root local's
-# name, then each field read off it.
+# name, then each field read off it. A lock row keeps only the fields (its
+# tail): the row is laid over the root local, which names the root.
 
 # Two lock paths are equal iff same length and every segment matches.
 pathsEqual: function {a: ListViewVal zast.nameid b: ListViewVal zast.nameid} out bool is {
@@ -90,8 +91,9 @@ holderEq: function {a: ztypes.zlockholder b: ztypes.zlockholder} out bool is {
     return a == b
 }
 
-# Multi-granularity conflict for a NEW lock acquisition. Both paths share
-# the same root (caller filters by entry name). Same path: conflict iff
+# Multi-granularity conflict for a NEW lock acquisition. Both paths are the
+# fields after the same root (the caller filters by the local), so the root
+# itself is never compared. Same path: conflict iff
 # either side is EXCLUSIVE. Strict-ancestor existing: conflict iff that
 # ancestor is EXCLUSIVE, or is a SHARED TARGET and the request is EXCLUSIVE --
 # a live read of a subtree excludes a writer below it, while a SHARED INTENT
@@ -1541,7 +1543,7 @@ ZSymbolTable: class {
                     le.lockScope = e.lockScope
                     le.lockHolder = e.lockHolder
                     le.lockMutable = e.lockMutable
-                    for each seg: e.lockPath loop le.lockPath.append seg
+                    for each seg: e.lockTail loop le.lockTail.append seg
                     mLocks.append le
                 }
             }
@@ -2649,7 +2651,8 @@ ZSymbolTable: class {
                 b: holder
             ) then {
                 p: ListVal zast.nameid
-                for each seg: e.lockPath loop p.append seg
+                p.append (t.typing.declNameOf declId: e.declId)
+                p.extendView from: e.lockTail.listView
                 dst.append (
                     ztyping.PinPath
                     path: p
@@ -2776,13 +2779,16 @@ ZSymbolTable: class {
 
     # --- locks ---
 
-    # Try to acquire a lock on `path` (segments; root is a variable name);
-    # returns "" on success or an error message.
+    # Try to acquire a lock on the path `root`.`tail`; returns "" on success or
+    # an error message.
     tryLock: function {
         t: this
         pool: zast.StringPool.view
-        # a WINDOW, so a prefix of a longer path is handed in without a copy
-        path: ListViewVal zast.nameid
+        # the local the path starts at
+        root: zast.nameid
+        # the fields read off `root`, empty for the local as a whole: a WINDOW,
+        # so a prefix of a longer path is handed in without a copy
+        tail: ListViewVal zast.nameid
         lockType: ztypes.zlockstate
         lockScope: ztypes.zlockscope
         holder: ztypes.zlockholder
@@ -2797,8 +2803,7 @@ ZSymbolTable: class {
         # answers with this empty message, and an empty String constructed
         # bare owns no buffer, where `"".string` allocates one for each.
         ok: String
-        if path.length == 0 then return ok
-        d: t.findLocal nameId: (path.get i: 0)
+        d: t.findLocal nameId: root
         if d.isZero then return ok
         if (t.isTakenDecl declId: d) then return ok
         dv: t.typing.declLocalVarOf declId: d
@@ -2825,11 +2830,11 @@ ZSymbolTable: class {
                     lockAcquireConflict
                     existingType: e.lockType
                     existingScope: e.lockScope
-                    existingPath: e.lockPath.listView
+                    existingPath: e.lockTail.listView
                     existingVarHeld: e.lockHolder.var
                     reqType: lockType
                     reqScope: lockScope
-                    reqPath: path
+                    reqPath: tail
                 )
                 if conflict then {
                     # the formatting method takes `this` exclusively:
@@ -2845,7 +2850,7 @@ ZSymbolTable: class {
                 # binding ends early when it is dropped or moved, and this
                 # holder -- unless it is a call, over before any binding
                 # could end -- would be left pointing at an unlocked path
-                same: pathsEqual a: e.lockPath.listView b: path
+                same: pathsEqual a: e.lockTail.listView b: tail
                 if same then {
                     eShared: e.lockType == ztypes.zlockstate.shared
                     rShared: lockType == ztypes.zlockstate.shared
@@ -2860,17 +2865,22 @@ ZSymbolTable: class {
         }
         if conflictFound then {
             cType: ztypes.zlockstate.exclusive
+            # the two paths whole, root first, for the message
+            rPath: ListVal zast.nameid
+            rPath.append root
+            rPath.extendView from: tail
             cPath: ListVal zast.nameid
+            cPath.append root
             cHolder: ztypes.zlockholder.var ztypes.vid
             ce: t.entries.get i: conflictAt
             cType = ce.lockType
             cHolder = ce.lockHolder
-            for each cseg: ce.lockPath loop cPath.append cseg
+            for each cseg: ce.lockTail loop cPath.append cseg
             if cHolder.call then {
                 return (
                     formatAliasConflict
                     :pool
-                    reqPath: path
+                    reqPath: rPath.listView
                     existingPath: cPath.listView
                     sameCall: conflictSelf
                 )
@@ -2878,7 +2888,7 @@ ZSymbolTable: class {
             return (
                 t.formatLockConflict
                 :pool
-                reqPath: path
+                reqPath: rPath.listView
                 reqType: lockType
                 existingType: cType
                 existingPath: cPath.listView
@@ -2886,8 +2896,33 @@ ZSymbolTable: class {
             )
         }
         if idempotent or probe then return ok
-        t.layLockRow :d :path :lockType :lockScope :holder :mutable
+        t.layLockRow :d :tail :lockType :lockScope :holder :mutable
         return ok
+    }
+
+    # tryLockLocal -- tryLock on the local `root` as a whole, through no field. It
+    # is a TARGET lock: an intent is only ever the step toward a deeper one
+    tryLockLocal: function {
+        t: this
+        pool: zast.StringPool.view
+        root: zast.nameid
+        lockType: ztypes.zlockstate
+        holder: ztypes.zlockholder
+        mutable: bool
+        probe: false
+    } out String is {
+        whole: ListVal zast.nameid
+        return (
+            t.tryLock
+            :pool
+            :root
+            tail: whole.listView
+            :lockType
+            lockScope: ztypes.zlockscope.target
+            :holder
+            :mutable
+            :probe
+        )
     }
 
     # layLockRow -- lay the overlay row that records a lock just acquired on
@@ -2895,7 +2930,7 @@ ZSymbolTable: class {
     layLockRow: function {
         t: this
         d: ztypes.declid
-        path: ListViewVal zast.nameid
+        tail: ListViewVal zast.nameid
         lockType: ztypes.zlockstate
         lockScope: ztypes.zlockscope
         holder: ztypes.zlockholder
@@ -2918,9 +2953,9 @@ ZSymbolTable: class {
         le.lockScope = lockScope
         le.lockHolder = holder
         le.lockMutable = mutable
-        # the entry OWNS its copy of the path: one sized grow from the window
-        # rather than an append per segment
-        le.lockPath.extendView from: path
+        # the entry OWNS its copy of the fields: one sized grow from the window
+        # rather than an append per segment, and none for the local as a whole
+        le.lockTail.extendView from: tail
         t.appendRow row: le declId: d
     }
 
@@ -3048,6 +3083,7 @@ ZSymbolTable: class {
         d: t.findLocal nameId: (path.get i: 0)
         if d.isZero then return (optionval.none ztypes.zlockholder)
         if (t.typing.declRowsOf declId: d) == 0 then return (optionval.none ztypes.zlockholder)
+        fields: path.slice from: 1 to: path.length
         ne: t.entries.length
         j: ne
         for j > 0 loop {
@@ -3056,7 +3092,7 @@ ZSymbolTable: class {
             if e.declId == d when e.hasLock when (
                 e.lockType == ztypes.zlockstate.exclusive
             ) when e.lockHolder.var then {
-                ov: pathsOverlap a: e.lockPath.listView b: path.listView
+                ov: pathsOverlap a: e.lockTail.listView b: fields
                 if ov then return (optionval.some e.lockHolder)
             }
             j = j - 1
@@ -3096,13 +3132,14 @@ ZSymbolTable: class {
         d: t.findLocal nameId: (path.get i: 0)
         if d.isZero then return (optionval.none ztypes.zlockholder)
         if (t.typing.declRowsOf declId: d) == 0 then return (optionval.none ztypes.zlockholder)
+        fields: path.slice from: 1 to: path.length
         ne: t.entries.length
         j: ne
         for j > 0 loop {
             j2: j - 1
             e: t.entries.get i: j2
             if e.declId == d when e.hasLock when e.lockType == ztypes.zlockstate.exclusive then {
-                ov: pathsOverlap a: e.lockPath.listView b: path.listView
+                ov: pathsOverlap a: e.lockTail.listView b: fields
                 if ov then return (optionval.some e.lockHolder)
             }
             j = j - 1
@@ -3144,6 +3181,7 @@ ZSymbolTable: class {
         d: t.findLocal nameId: (path.get i: 0)
         if d.isZero then return (optionval.none ztypes.zlockholder)
         if (t.typing.declRowsOf declId: d) == 0 then return (optionval.none ztypes.zlockholder)
+        fields: path.slice from: 1 to: path.length
         ne: t.entries.length
         j: ne
         for j > 0 loop {
@@ -3151,10 +3189,10 @@ ZSymbolTable: class {
             e: t.entries.get i: j2
             if e.declId == d when e.hasLock when e.lockType == ztypes.zlockstate.shared then {
                 blocks: (
-                    (isPrefix p: path.listView whole: e.lockPath.listView) or
+                    (isPrefix p: fields whole: e.lockTail.listView) or
                     (
                         (e.lockScope == ztypes.zlockscope.target) and
-                        (isPrefix p: e.lockPath.listView whole: path.listView)
+                        (isPrefix p: e.lockTail.listView whole: fields)
                     )
                 )
                 if blocks then return (optionval.some e.lockHolder)
@@ -3170,13 +3208,14 @@ ZSymbolTable: class {
         d: t.findLocal nameId: (path.get i: 0)
         if d.isZero then return false
         if (t.typing.declRowsOf declId: d) == 0 then return false
+        fields: path.slice from: 1 to: path.length
         ne: t.entries.length
         j: ne
         for j > 0 loop {
             j2: j - 1
             e: t.entries.get i: j2
             if e.declId == d when e.hasLock then {
-                ov: pathsOverlap a: e.lockPath.listView b: path.listView
+                ov: pathsOverlap a: e.lockTail.listView b: fields
                 if ov then return true
             }
             j = j - 1
