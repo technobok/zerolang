@@ -1963,67 +1963,21 @@ checkReadonlyBindSource: function {
     # Readonly is deep: a reftype read out of a readonly path is itself
     # readonly, and takes the same self-lock. Without this the binding is
     # a laundering step -- `i: c.sub` off a `view` receiver would hand back
-    # a freely mutable name.
-    roDeep: moves.valueReadsReadonlyPlace :st :ast nid: asgn.value :vt
-    if roDeep when (valueIsHold :ast n: (ast.nodes.get i: asgn.value)).not then {
-        rop: ListVal zast.nameid
-        rop.append asgn.name
-        roh: ztypes.zlockholder.var boundVid
-        ror: (
-            st.tryLock
-            pool: ast.names
-            path: rop.listView
-            lockType: ztypes.zlockstate.shared
-            lockScope: ztypes.zlockscope.target
-            holder: roh
-            mutable: false
+    # a freely mutable name. A `hold` value is owned but frozen, and takes it
+    # too, in both families (as lockReadonlyParam says of a parameter): the
+    # lock is what makes the marker mean anything, so writes, mutating
+    # receivers and re-passing to a mutable parameter are caught by the
+    # ordinary lock rules.
+    if (
+        (valueIsHold :ast n: (ast.nodes.get i: asgn.value)) or
+        (
+            moves.valueReadsReadonlyPlace
+            :st
+            :ast
+            nid: asgn.value
+            :vt
         )
-        if ror.length > 0 then {
-            (
-                addError
-                :st
-                nodeid: asgn.nid
-                lineno: asgn.lineno
-                colno: asgn.colno
-                e: zast.err.ownerError
-                msg: ror
-            )
-        }
-    }
-    if (valueIsHold :ast n: (ast.nodes.get i: asgn.value)) then {
-        # Owned but frozen: the same readonly self-lock a `view` parameter
-        # takes, so writes, mutating receivers and re-passing to a mutable
-        # parameter are all caught by the ordinary lock rules. Ownership is
-        # the other axis and is already `owned` above.
-        #
-        # Both families, as lockReadonlyParam says of a parameter: a valtype
-        # leaf normally skips locking, the read being a copy, but a `hold`
-        # valtype is not a copy -- the lock is what makes the marker mean
-        # anything.
-        hpp: ListVal zast.nameid
-        hpp.append asgn.name
-        hph: ztypes.zlockholder.var boundVid
-        hpr: (
-            st.tryLock
-            pool: ast.names
-            path: hpp.listView
-            lockType: ztypes.zlockstate.shared
-            lockScope: ztypes.zlockscope.target
-            holder: hph
-            mutable: false
-        )
-        if hpr.length > 0 then {
-            (
-                addError
-                :st
-                nodeid: asgn.nid
-                lineno: asgn.lineno
-                colno: asgn.colno
-                e: zast.err.ownerError
-                msg: hpr
-            )
-        }
-    }
+    ) then takeReadonlySelfLock :st :ast name: asgn.name vid: boundVid nid: asgn.nid
 }
 
 # recordRootAt -- the root of pin `i` of the record `vp`, zero past its end.
@@ -2721,8 +2675,7 @@ refuseRepointReadonly: function {
 } out bool is {
     if (isViewFamilyTid :ast :st tid: lvt) when (stdtypes.isMutableViewTid :ast :st tid: lvt
     ).not then return false
-    xName: varNameText :st :ast vid: xVid
-    if (moves.nameIsReadonly :st :ast name: xName.stringView) then return false
+    if (moves.nameIsReadonly :st name: (st.localNameOfVar vid: xVid)) then return false
     ro: roV
     for each rp: pins loop {
         if rp.mutable.not then ro = true
@@ -2737,10 +2690,10 @@ refuseRepointReadonly: function {
 # a reassignment keeps the mode its target was bound with, so its lock on
 # itself is taken again
 releaseKeepingReadonly: function {st: zenv.ZSymbolTable ast: Ast xVid: ztypes.vid} is {
-    xName: varNameText :st :ast vid: xVid
-    ro: moves.nameIsReadonly :st :ast name: xName.stringView
+    xName: st.localNameOfVar vid: xVid
+    ro: moves.nameIsReadonly :st name: xName
     releaseCascade :st holder: ztypes.zlockholder.var xVid
-    if ro then readonlySelfLock :st :ast name: xName.stringView vid: xVid
+    if ro then readonlySelfLock :st :ast name: xName vid: xVid
 }
 
 # repointOwned -- `x = v` with `v` an owned value -- a call's result, a
@@ -2784,7 +2737,7 @@ repointOwned: function {
             lineno: rasgn.lineno
             colno: rasgn.colno
         )
-        companionPin :st :ast :xVid :cv dst: kept
+        companionPin :st :xVid :cv dst: kept
     }
     releaseKeepingReadonly :st :ast :xVid
     if kept.length > 0 then {
@@ -2849,12 +2802,11 @@ repointViewPins: function {
 # re-pointed at an owned value, `x` refers to the companion that holds it, a
 # local of `x`'s scope, as readonly as `x` itself.
 companionPin: function {
-    st: zenv.ZSymbolTable ast: Ast xVid: ztypes.vid cv: ztypes.vid dst: List ztyping.PinPath
+    st: zenv.ZSymbolTable xVid: ztypes.vid cv: ztypes.vid dst: List ztyping.PinPath
 } is {
     cp: ListVal zast.nameid
     cp.append (st.reg.variableNameOf id: cv)
-    xn: varNameText :st :ast vid: xVid
-    mw: (moves.nameIsReadonly :st :ast name: xn.stringView).not
+    mw: (moves.nameIsReadonly :st name: (st.localNameOfVar vid: xVid)).not
     moves.pinsAppend pins: dst path: cp shared: true mutable: mw carried: false
 }
 
@@ -3524,7 +3476,6 @@ bindForBorrowedElement: function {
     ast: Ast
     cond: argref
     elem: ztypes.tid
-    nm: StringView
     # the element is a reference into the container's storage (an OptionView's
     # payload), not a view value of its own
     aliasesStorage: bool
@@ -3583,7 +3534,7 @@ bindForBorrowedElement: function {
     if fpins.length > 0 when (pinsAllShared pins: fpins) then elr = true
     if elr.not then elr = iterElementIsReadonly :st iterName: iterNm
     if elr when aliasesStorage then {
-        erm: readonlySelfLock :st :ast name: nm :vid
+        erm: readonlySelfLock :st :ast name: nmId :vid
         if erm.length > 0 then {
             ecn: ast.nodes.get i: cond.operation
             end: zast.nodeIdOf n: ecn
@@ -3824,29 +3775,25 @@ checkForConditionIn: function {
         reportUnresolvedValue :st :unitDecl :ast nid: cond.operation
         refuseUntypedValue :st :ast nid: cond.operation
     }
-    nm: zast.nameTextCopy :ast ref: cond.name
     # A bare `for while <cond> loop` must be boolean or a 2-arm sum; anything
     # else is a type error rather than invalid C.
-    if nm.length == 0 when vt.notZero then {
+    if cond.name.isZero when vt.notZero then {
         checkBareForCondition :st :ast :cond :vt
     }
-    if nm.length > 0 when vt.notZero then {
-        (
-            stdtypes.bindForIteration
-            :st
-            :unitDecl
-            :ast
-            :cond
-            :vt
-            nm: nm.stringView
-            :facId
-            :spillFor
-            :isEach
-        )
-    }
+    if cond.name.notZero when vt.notZero then (
+        stdtypes.bindForIteration
+        :st
+        :unitDecl
+        :ast
+        :cond
+        :vt
+        :facId
+        :spillFor
+        :isEach
+    )
     # an iterable that failed still binds its loop name, typeless, so
     # the body's reads of it are not each an unknown reference
-    if nm.length > 0 when vt.isZero then {
+    if cond.name.notZero when vt.isZero then {
         st.define nameId: cond.name ztypeId: ztypes.tid
     }
 }
@@ -4282,20 +4229,30 @@ readonlyByMarker: function {
     if own == ztypes.zownership.borrowed then ro = marker == ztypes.zparamownership.viewMode
     if marker == ztypes.zparamownership.holdMode then ro = true
     if ro.not then return
-    rn: (ast.names.texts.get i: name).stringView
-    rr: readonlySelfLock :st :ast name: rn :vid
-    if rr.length > 0 then {
-        bn: ast.nodes.get i: nid
-        (
-            addError
-            :st
-            nodeid: nid
-            lineno: (nodeLine n: bn)
-            colno: (nodeCol n: bn)
-            e: zast.err.ownerError
-            msg: rr
-        )
-    }
+    takeReadonlySelfLock :st :ast :name :vid :nid
+}
+
+# takeReadonlySelfLock -- the binding `nid` of `name` takes the readonly
+# self-lock (readonlySelfLock); a lock that cannot be taken is reported there
+takeReadonlySelfLock: function {
+    st: zenv.ZSymbolTable
+    ast: Ast.view
+    name: zast.nameid
+    vid: ztypes.vid
+    nid: zast.nodeid
+} is {
+    rr: readonlySelfLock :st :ast :name :vid
+    if rr.length == 0 then return
+    bn: ast.nodes.get i: nid
+    (
+        addError
+        :st
+        nodeid: nid
+        lineno: (nodeLine n: bn)
+        colno: (nodeCol n: bn)
+        e: zast.err.ownerError
+        msg: rr
+    )
 }
 
 # readonlySelfLock -- make `name` a readonly binding: it holds a shared lock on
@@ -4305,13 +4262,12 @@ readonlyByMarker: function {
 readonlySelfLock: function {
     st: zenv.ZSymbolTable
     ast: Ast.view
-    name: StringView
+    name: zast.nameid
     vid: ztypes.vid
 } out String is {
-    if name.length == 0 then return "".string
-    if vid.isZero then return "".string
+    if name.isZero or vid.isZero then return "".string
     rsp: ListVal zast.nameid
-    rsp.append (nameIdOf :ast :name)
+    rsp.append name
     rsh: ztypes.zlockholder.var vid
     return (
         st.tryLock
