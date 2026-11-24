@@ -54,18 +54,14 @@ implementation: (
         (
             c.row
             key: "@window"
-            needs: list { "prelude.@panic" }
+            needs: list { "prelude.@oob_window" }
             fragments: list {
                 """
                 /* the bounds of a window over [from, to) of `len` elements: a list's or an
                    array's storage lent as a SpanVal or a view, or a window split in two. */
                 static void z_coll_window_check(uint64_t _from, uint64_t _to, uint64_t _len, const char* _who);
                 static void z_coll_window_check(uint64_t _from, uint64_t _to, uint64_t _len, const char* _who) {
-                    if (_from > _to || _to > _len) {
-                        char _zp_buf[160];
-                        snprintf(_zp_buf, sizeof(_zp_buf), "%s: [%llu, %llu) out of bounds (length %llu)", _who, (unsigned long long)_from, (unsigned long long)_to, (unsigned long long)_len);
-                        z_panic(_zp_buf);
-                    }
+                    if (_from > _to || _to > _len) z_oob_window(_who, _from, _to, _len);
                 }
                 """
             }
@@ -1069,15 +1065,11 @@ implementation: (
                 (
                     c.section
                     member: "set"
-                    needs: list { "prelude.@panic" }
+                    needs: list { "prelude.@oob" }
                     text: """
                         static @@ELEM_T@@ z_@@NAME@@_set(z_@@NAME@@_t* _this, uint64_t _idx, @@ELEM_T@@ _val);
                         static @@ELEM_T@@ z_@@NAME@@_set(z_@@NAME@@_t* _this, uint64_t _idx, @@ELEM_T@@ _val) {
-                            if (_idx >= _this->length) {
-                                char _zp_buf[96];
-                                snprintf(_zp_buf, sizeof(_zp_buf), "List set: index %llu out of bounds (length %llu)", (unsigned long long)_idx, (unsigned long long)_this->length);
-                                z_panic(_zp_buf);
-                            }
+                            if (_idx >= _this->length) z_oob("List set", _idx, _this->length);
                             @@ELEM_T@@ _old = _this->data[_idx];
                             _this->data[_idx] = _val;
                             return _old;
@@ -1173,18 +1165,14 @@ implementation: (
         (
             c.template
             name: "List_insert"
-            needs: list { "prelude.@panic" }
+            needs: list { "prelude.@oob" }
             sections: list {
                 (
                     c.section
                     text: """
                         static void z_@@NAME@@_insert(z_@@NAME@@_t* _this, @@ELEM_T@@ _val, uint64_t _at);
                         static void z_@@NAME@@_insert(z_@@NAME@@_t* _this, @@ELEM_T@@ _val, uint64_t _at) {
-                            if (_at > _this->length) {
-                                char _zp_buf[96];
-                                snprintf(_zp_buf, sizeof(_zp_buf), "List insert: index %llu out of bounds (length %llu)", (unsigned long long)_at, (unsigned long long)_this->length);
-                                z_panic(_zp_buf);
-                            }
+                            if (_at > _this->length) z_oob("List insert", _at, _this->length);
                             z_@@NAME@@_grow(_this, _this->length + 1);
                             memmove(&_this->data[_at + 1], &_this->data[_at], (_this->length - _at) * sizeof(@@ELEM_T@@));
                             _this->data[_at] = _val;
@@ -1896,18 +1884,14 @@ implementation: (
         (
             c.template
             name: "SpanVal_set"
-            needs: list { "prelude.@panic" }
+            needs: list { "prelude.@oob" }
             sections: list {
                 (
                     c.section
                     text: """
                         static @@ELEM_T@@ z_@@NAME@@_set(z_@@NAME@@_t* _this, uint64_t _idx, @@ELEM_T@@ _val);
                         static @@ELEM_T@@ z_@@NAME@@_set(z_@@NAME@@_t* _this, uint64_t _idx, @@ELEM_T@@ _val) {
-                            if (_idx >= _this->length) {
-                                char _zp_buf[96];
-                                snprintf(_zp_buf, sizeof(_zp_buf), "SpanVal set: index %llu out of bounds (length %llu)", (unsigned long long)_idx, (unsigned long long)_this->length);
-                                z_panic(_zp_buf);
-                            }
+                            if (_idx >= _this->length) z_oob("SpanVal set", _idx, _this->length);
                             @@ELEM_T@@ _old = _this->data[_idx];
                             _this->data[_idx] = _val;
                             return _old;
@@ -1919,18 +1903,14 @@ implementation: (
         (
             c.template
             name: "SpanVal_slice"
-            needs: list { "prelude.@panic" }
+            needs: list { "prelude.@oob_window" }
             sections: list {
                 (
                     c.section
                     text: """
                         static z_@@NAME@@_t z_@@NAME@@_slice(z_@@NAME@@_t* _this, uint64_t _from, uint64_t _to);
                         static z_@@NAME@@_t z_@@NAME@@_slice(z_@@NAME@@_t* _this, uint64_t _from, uint64_t _to) {
-                            if (_from > _to || _to > _this->length) {
-                                char _zp_buf[128];
-                                snprintf(_zp_buf, sizeof(_zp_buf), "SpanVal slice: [%llu, %llu) out of bounds (length %llu)", (unsigned long long)_from, (unsigned long long)_to, (unsigned long long)_this->length);
-                                z_panic(_zp_buf);
-                            }
+                            if (_from > _to || _to > _this->length) z_oob_window("SpanVal slice", _from, _to, _this->length);
                             return (z_@@NAME@@_t){ .length = _to - _from, .data = _this->data + _from };
                         }
                         """
@@ -1965,15 +1945,11 @@ implementation: (
                 (
                     c.section
                     member: "get"
-                    needs: list { "prelude.@panic" }
+                    needs: list { "prelude.@oob" }
                     text: """
                         static @@ELEM_T@@ z_@@NAME@@_get(z_@@NAME@@_t _this, uint64_t _idx);
                         static @@ELEM_T@@ z_@@NAME@@_get(z_@@NAME@@_t _this, uint64_t _idx) {
-                            if (_idx >= @@LEN@@) {
-                                char _zp_buf[96];
-                                snprintf(_zp_buf, sizeof(_zp_buf), "array get: index %llu out of bounds (length @@LEN@@)", (unsigned long long)_idx);
-                                z_panic(_zp_buf);
-                            }
+                            if (_idx >= @@LEN@@) z_oob("array get", _idx, @@LEN@@);
                             return _this.data[_idx];
                         }
                         """
@@ -1981,15 +1957,11 @@ implementation: (
                 (
                     c.section
                     member: "set"
-                    needs: list { "prelude.@panic" }
+                    needs: list { "prelude.@oob" }
                     text: """
                         static @@ELEM_T@@ z_@@NAME@@_set(z_@@NAME@@_t* _this, uint64_t _idx, @@ELEM_T@@ _val);
                         static @@ELEM_T@@ z_@@NAME@@_set(z_@@NAME@@_t* _this, uint64_t _idx, @@ELEM_T@@ _val) {
-                            if (_idx >= @@LEN@@) {
-                                char _zp_buf[96];
-                                snprintf(_zp_buf, sizeof(_zp_buf), "array set: index %llu out of bounds (length @@LEN@@)", (unsigned long long)_idx);
-                                z_panic(_zp_buf);
-                            }
+                            if (_idx >= @@LEN@@) z_oob("array set", _idx, @@LEN@@);
                             @@ELEM_T@@ _old = _this->data[_idx];
                             _this->data[_idx] = _val;
                             return _old;

@@ -4102,7 +4102,9 @@ implementation: (
         (
             c.row
             key: "u128.f32"
-            needs: list { "prelude.int128" "prelude.@u128_to_f64" "prelude.@u128_span" "prelude.@u128_hi" }
+            needs: list {
+                "prelude.int128" "prelude.@u128_to_f64" "prelude.@u128_span" "prelude.@u128_hi"
+            }
             body: "(((z_u128_hi((@V@)) >> 39) == 0x1FFFFFFu) ? (z_@RT@_t){ .tag = @ERRTAG@, .data.@ERRMEMBER@@TAG_converror@ = @ARM_converror.outOfRange@ } : ((z_u128_span((@V@)) <= 24) ? (z_@RT@_t){ .tag = @OKTAG@, .data.@OKMEMBER@ = (float)z_u128_to_f64(@V@) } : (z_@RT@_t){ .tag = @ERRTAG@, .data.@ERRMEMBER@@TAG_converror@ = @ARM_converror.precisionLoss@ }))"
         )
         (
@@ -8292,6 +8294,38 @@ foundation: (
                     demand: list { "@unreachable" }
                     needs: list { "@panic" "@noreturn" }
                     text: "static Z_NORETURN void z_unreachable(void) { z_panic(\"unreachable\"); }"
+                )
+                (
+                    c.piece
+                    name: "oob"
+                    demand: list { "@oob" }
+                    needs: list { "@panic" "@noreturn" }
+                    text: """
+                        /* z_oob -- the panic of every bounds check: an index past the end of `_len`
+                           elements, `_who` naming the operation ("List get"). Out of line, a getter
+                           or a setter is its compare and its load, small enough to inline. */
+                        static Z_NORETURN void z_oob(const char* _who, uint64_t _idx, uint64_t _len);
+                        static Z_NORETURN void z_oob(const char* _who, uint64_t _idx, uint64_t _len) {
+                            char _zp_buf[160];
+                            snprintf(_zp_buf, sizeof(_zp_buf), "%s: index %llu out of bounds (length %llu)", _who, (unsigned long long)_idx, (unsigned long long)_len);
+                            z_panic(_zp_buf);
+                        }
+                        """
+                )
+                (
+                    c.piece
+                    name: "oob_window"
+                    demand: list { "@oob_window" }
+                    needs: list { "@panic" "@noreturn" }
+                    text: """
+                        /* z_oob_window -- a window [from, to) that is not one over `_len` elements */
+                        static Z_NORETURN void z_oob_window(const char* _who, uint64_t _from, uint64_t _to, uint64_t _len);
+                        static Z_NORETURN void z_oob_window(const char* _who, uint64_t _from, uint64_t _to, uint64_t _len) {
+                            char _zp_buf[160];
+                            snprintf(_zp_buf, sizeof(_zp_buf), "%s: [%llu, %llu) out of bounds (length %llu)", _who, (unsigned long long)_from, (unsigned long long)_to, (unsigned long long)_len);
+                            z_panic(_zp_buf);
+                        }
+                        """
                 )
                 (
                     c.piece
