@@ -2222,23 +2222,8 @@ ctorLeadingNumericArg: function {
 # bindTypeApplication -- the arguments of a type application that constructs its
 # instance (`(Pair t: u64)`, `(blk 4)`): the application resolved each one as a
 # type argument (instantiate.genericTypeConstruction), which is what the binder
-# records of it -- a type argument binds no field.
-bindTypeApplication: function {
-    st: zenv.ZSymbolTable
-    ast: Ast
-    call: callref
-    inst: ztypes.tid
-} is {
-    ca: (
-        callargs
-        effId: inst
-        funcId: inst
-        isCtor: true
-        reportUnknown: false
-        recvImplicit: false
-        genericRef: true
-    )
-    bound: ListVal zast.nameid
+# records of it -- a type argument binds no field, so its label is all it binds.
+bindTypeApplication: function {st: zenv.ZSymbolTable ast: Ast call: callref} is {
     k: u64
     for k < call.nargs loop {
         arg: argRefAt :ast nid: (zast.callArgAt :ast nid: call.nid i: k)
@@ -2248,14 +2233,10 @@ bindTypeApplication: function {
             st.typing.setArgBind
             nid: arg.nid
             value: (
-                decideArgBind
-                :st
-                :ast
-                :call
-                :ca
-                :bound
-                :arg
-                byLabel: ztyping.argoutcome.typeArgument
+                ztyping.argbind
+                param: arg.name
+                positional: arg.name.isZero
+                outcome: ztyping.argoutcome.typeArgument
             )
         )
     }
@@ -2686,7 +2667,7 @@ checkDottedTypeApplication: function {
     gres: instantiate.genericTypeConstruction :ast :st :unitDecl :call :tplId
     namesType: memberaccess.pathNamesType :st :ast nid: call.callable
     if gres.notZero then {
-        bindTypeApplication :st :ast :call inst: gres
+        bindTypeApplication :st :ast :call
         if namesType then {
             checkTypeApplicationValue :ast :st :call tid: gres
             stampConstructionKind :st nid: call.nid tid: gres
@@ -2963,7 +2944,7 @@ checkBareGenericCall: function {
         )
         gres: instantiate.genericTypeConstruction :ast :st :unitDecl :call tplId: funcId
         if gres.notZero then {
-            bindTypeApplication :st :ast :call inst: gres
+            bindTypeApplication :st :ast :call
             checkTypeApplicationValue :ast :st :call tid: gres
             stampConstructionKind :st nid: call.nid tid: gres
             return (callleg handled: true tid: gres)
@@ -4667,7 +4648,7 @@ receiverParamOf: function {
     pnId: zast.nameid
 } out bool is {
     if isCtor or funcId.isZero or pnId.isZero then return false
-    rn: st.reg.thisParamNameIdOf tid: funcId
+    rn: receiverParamNameOf :st tid: funcId
     if rn.isZero then rn = zast.wellKnown.slot.wkThis
     return pnId == rn
 }
