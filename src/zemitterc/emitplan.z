@@ -42,6 +42,30 @@ opCnameOf: function {ow: zast.Vocab.view name: StringView} out String is {
     return (opCname.get i: k).string
 }
 
+# readableStem -- the readable C name stem of type `tid`: its own name, or for an
+# application its template's stem and each argument's, joined with `_`
+# (`ListVal_i64`, `box_8`). cnameOf puts the tid in front, which keeps it
+# unique.
+readableStem: function {prog: Program.view tid: ztypes.tid} out String is {
+    if (prog.reg.isApplicationOf :tid).not then return (prog.reg.nameOf :tid)
+    s: readableStem :prog tid: (prog.reg.genericOriginOf :tid)
+    n: prog.reg.genericArgCount specId: tid
+    i: u64
+    for i < n loop {
+        s.append "_"
+        a: prog.reg.genericArgAt specId: tid ordinal: i
+        match (
+            a
+        ) case typeArg then {
+            s.append (readableStem :prog tid: a)
+        } case valueArg then {
+            s.append "\{a}"
+        }
+        i = i + 1
+    }
+    return s
+}
+
 # cnameOf -- the id-based C name base for a type ("z_t{id}_{name}", dots
 # joined with underscores).
 cnameOf: function {
@@ -2364,8 +2388,8 @@ buildTypeCnames: function {
             if readableNames then {
                 onm: String
                 oti: prog.reg.ownerTidOf tid: ctb
-                if oti.notZero then onm = prog.reg.nameOf tid: oti
-                tnm: prog.reg.nameOf tid: ctb
+                if oti.notZero then onm = readableStem :prog tid: oti
+                tnm: readableStem :prog tid: ctb
                 cn = cnameOf tid: ctb ownerName: onm.stringView name: tnm.stringView :ow
             } else {
                 cn = cnameById tid: ctb
