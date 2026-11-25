@@ -6642,84 +6642,19 @@ spelledAsSignature: function {st: zenv.ZSymbolTable.view tid: ztypes.tid} out bo
     return ((st.walk.fn.hasBody.get key: tid).or d: false)
 }
 
-# typeArgWrittenName -- a type argument as an application spells it. A function
-# type is named, not spelled out: its signature can name this very application
-# (`held: function {xs: (List held)}`), and would be spelled without end.
-typeArgWrittenName: function {
-    st: zenv.ZSymbolTable.view ast: Ast.view tid: ztypes.tid
-} out String is {
-    if (spelledAsSignature :st :tid) then return (st.reg.nameOf :tid)
-    return (specWrittenName :st :ast :tid)
-}
-
-# declWrittenName -- a declaration as a program names it: its name, or for an
-# instance of a generic one the application that names it, `(Getter i64)`.
-# The first argument is written without its label, as the style guide writes
-# it (lint L003); every later one carries its label: `(MapRR String V: i64)`.
-# A message naming a function itself says this; the function's TYPE, as a
-# value has it, is spelled by specWrittenName.
-# Trailing arguments that are their parameter's default are left out, as the
-# instance's label leaves them (defaultsTailLength): `(ListVal u8)`. An
-# instance's numeric parameter as a type is named through the instance,
-# `(Box 5).cap`, except where the walk reads the parameter's bare name as
-# that very type -- the instance's own code -- which names it `cap`, as the
-# template's walk does.
+# declWrittenName -- a declaration as a program names it (writtenTypeName): its
+# name, or for an instance of a generic one the application that names it,
+# `(Getter i64)`. A message naming a function itself says this; the function's
+# TYPE, as a value has it, is spelled by specWrittenName. An instance's numeric
+# parameter as a type is named through the instance, `(Box 5).cap`, except
+# where the walk reads the parameter's bare name as that very type -- the
+# instance's own code -- which names it `cap`, as the template's walk does.
 declWrittenName: function {st: zenv.ZSymbolTable.view ast: Ast.view tid: ztypes.tid} out String is {
     sg: st.typing.singletons.get key: tid
-    # a template's own parameter is named as the template's body names it
     if sg.some when sg.instance.notZero when (
-        (statics.monoSingletonOf :st nameId: sg.param) != tid
-    ) then {
-        sw: declWrittenName :st :ast tid: sg.instance
-        sw.append "."
-        sw.append (zast.nameTextAt :ast ref: sg.param)
-        return sw
-    }
-    org: st.reg.genericOriginOf :tid
-    if org.isZero then return (st.reg.nameOf :tid)
-    otid: org
-    r: "(\{declWrittenName :st :ast tid: otid}"
-    tdecl: st.typing.declIdOfType typeId: otid
-    pns: st.reg.genericParamNamesOf :tdecl
-    n: st.reg.genericArgCount specId: tid
-    for n > 1 loop {
-        if (argIsItsDefault :st :tdecl spec: tid ordinal: n - 1).not then break
-        n = n - 1
-    }
-    i: u64
-    for i < n loop {
-        a: st.reg.genericArgAt specId: tid ordinal: i
-        at: String
-        match (
-            a
-        ) case valueArg then {
-            at = st.reg.valueArgText :tdecl paramName: (st.reg.genericParamNameAt :tdecl :i) bits: a
-        } case typeArg then {
-            at = typeArgWrittenName :st :ast tid: a
-        }
-        if i > 0 when i < pns.length then {
-            pt: zast.nameTextAt :ast ref: (pns.get :i)
-            r.append " \{pt}: \{at}"
-        } else {
-            r.append " \{at}"
-        }
-        i = i + 1
-    }
-    r.append ")"
-    return r
-}
-
-# argIsItsDefault -- whether the spec's `ordinal`th argument is a type its
-# parameter's default named (one recorded by defaultTypeTid).
-argIsItsDefault: function {
-    st: zenv.ZSymbolTable.view
-    tdecl: ztypes.declid
-    spec: ztypes.tid
-    ordinal: u64
-} out bool is {
-    d: st.reg.genericParamDefaultTidAt :tdecl i: ordinal
-    if d.isZero then return false
-    return (st.reg.genericTypeArgAt specId: spec :ordinal) == d
+        (statics.monoSingletonOf :st nameId: sg.param) == tid
+    ) then return (st.reg.nameOf :tid)
+    return (writtenTypeName reg: st.reg typing: st.typing :ast :tid)
 }
 
 # takenBareName -- the name `x` of a value written `x.take`, or 0.

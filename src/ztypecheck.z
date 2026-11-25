@@ -980,6 +980,71 @@ isLiteralTypeId: function {reg: ztypes.ZTypeRegistry.view tid: ztypes.tid} out b
 }
 
 
+# writtenTypeName -- type `tid` as a program writes it, each type by its own
+# name, as a message or a dump names it. An instance is the application that
+# names it, always parenthesised: `(ListVal i64)`, `(MapRR String V: Value)`,
+# `(box 8)`. Its first argument is written without its label, as the style
+# guide writes it (lint L003), and every later one with it; the trailing
+# arguments its parameters' defaults supply are left out (shownArgCount), and a
+# numeric argument is written as its value. An instance's numeric parameter as
+# a type is named through the instance: `(Box 5).cap`.
+writtenTypeName: function {
+    reg: ztypes.ZTypeRegistry.view
+    typing: ztyping.ZTyping.view
+    ast: Ast.view
+    tid: ztypes.tid
+} out String is {
+    sg: typing.singletons.get key: tid
+    if sg.some when sg.instance.notZero then {
+        sw: writtenTypeName :reg :typing :ast tid: sg.instance
+        sw.append "."
+        sw.append (zast.nameTextAt :ast ref: sg.param)
+        return sw
+    }
+    org: reg.genericOriginOf :tid
+    if org.isZero then return (reg.nameOf :tid)
+    tdecl: typing.declIdOfType typeId: org
+    pns: reg.genericParamNamesOf :tdecl
+    r: "(\{reg.nameViewOf tid: org}"
+    n: shownArgCount :reg :tdecl spec: tid
+    i: u64
+    for i < n loop {
+        a: reg.genericArgAt specId: tid ordinal: i
+        at: String
+        match (
+            a
+        ) case valueArg then {
+            at = reg.valueArgText :tdecl paramName: (reg.genericParamNameAt :tdecl :i) bits: a
+        } case typeArg then {
+            at = writtenTypeName :reg :typing :ast tid: a
+        }
+        if i > 0 when i < pns.length then {
+            pt: zast.nameTextAt :ast ref: (pns.get :i)
+            r.append " \{pt}: \{at}"
+        } else {
+            r.append " \{at}"
+        }
+        i = i + 1
+    }
+    r.append ")"
+    return r
+}
+
+# shownArgCount -- how many of instance `spec`'s arguments its spelling writes:
+# all but the trailing ones that are the types their parameters' defaults name,
+# and never fewer than one
+shownArgCount: function {
+    reg: ztypes.ZTypeRegistry.view tdecl: ztypes.declid spec: ztypes.tid
+} out u64 is {
+    n: reg.genericArgCount specId: spec
+    for n > 1 loop {
+        d: reg.genericParamDefaultTidAt :tdecl i: n - 1
+        if d.isZero or ((reg.genericTypeArgAt specId: spec ordinal: n - 1) != d) then break
+        n = n - 1
+    }
+    return n
+}
+
 # specWrittenName -- a spec as a program writes it: a function type no program
 # names, its signature written out (signatureText); any other, its name or the
 # application that names it (declWrittenName).
