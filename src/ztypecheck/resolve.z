@@ -2012,7 +2012,9 @@ stampAliasValues: function {st: zenv.ZSymbolTable ast: Ast.view} is {
 # but they carry no stamp, which is why `zast.astnode` answered nothing on the RHS
 # of `astnode: zast.astnode` while the same path in a parameter type answered fine:
 # there the type-ref walk stamps it. Recorded here, where the alias's canonical
-# id is already in hand.
+# id is already in hand. A VALUE alias (`again: bolt`, `S: mode.slow`) names
+# what it reads, as the same name does in a body -- never that value's type,
+# which is what its canonical id is.
 stampAliasValue: function {
     st: zenv.ZSymbolTable
     ast: Ast.view
@@ -2020,8 +2022,6 @@ stampAliasValue: function {
     tid: ztypes.tid
 } is {
     if tid.isZero then return
-    td: templateDeclOf reg: st.reg typing: st.typing :tid
-    if td.isZero then return
     # the value node under the alias's `name: value` pair. Both alias forms
     # land one node: the dotted form's path node -- which is the id the member
     # selector is keyed by, not the child atom's -- and the bare form's atom.
@@ -2031,7 +2031,88 @@ stampAliasValue: function {
     if n.namedoperation then opNid = n.operation
     d.drop
     if opNid.isZero then return
+    vd: aliasValueDecl :st :ast :declId
+    if vd.notZero then {
+        memberaccess.stampRefDecl :st nid: opNid declId: vd
+        stampAliasQualifier :st :ast :declId :opNid
+        return
+    }
+    td: templateDeclOf reg: st.reg typing: st.typing :tid
+    if td.isZero then return
     memberaccess.stampRefDecl :st nid: opNid declId: td
+}
+
+# aliasValueDecl -- what a VALUE alias's value names, one hop: the constant,
+# list or arm it reads, or the alias it reads when that one ends in a value
+# (`T: S` with `S: mode.slow`). 0 for an alias of a type or a unit.
+aliasValueDecl: function {
+    st: zenv.ZSymbolTable.view ast: Ast.view declId: ztypes.declid
+} out ztypes.declid is {
+    first: aliasOneHop :st :ast :declId
+    d: first
+    hops: u64
+    for d.notZero while hops < 16 loop {
+        hops = hops + 1
+        k: (st.typing.decls.get i: d).kind
+        if k.constDecl or k.staticListDecl or k.armDecl then return first
+        if k.reexportDecl.not then return ztypes.declid.zero
+        d = aliasOneHop :st :ast declId: d
+    }
+    return ztypes.declid.zero
+}
+
+# aliasOneHop -- the declaration an alias's value names: a definition of the
+# unit aliasValueHost answers, or a member of the type it answers. 0 when none.
+aliasOneHop: function {
+    st: zenv.ZSymbolTable.view ast: Ast.view declId: ztypes.declid
+} out ztypes.declid is {
+    tk: reexportTargetIdsOf typing: st.typing :ast :declId
+    if tk.defName.isZero then return ztypes.declid.zero
+    host: aliasValueHost :st :ast :declId
+    if host.isZero then return host
+    if (st.typing.decls.get i: host).kind.typeDecl then {
+        return (st.typing.declFindChild parentDeclId: host nameId: tk.defName)
+    }
+    return (declOfUnitDef :st unitDecl: host scope: host nameId: tk.defName)
+}
+
+# aliasValueHost -- where an alias's value is looked up: the alias's own unit
+# for a bare value, the unit a dotted value's qualifier names, or, when the
+# value is type-rooted (`S: mode.slow`, `TR: bool.true`), the type it names --
+# the alias's own type, which is its root's. 0 when none.
+aliasValueHost: function {
+    st: zenv.ZSymbolTable.view ast: Ast.view declId: ztypes.declid
+} out ztypes.declid is {
+    parent: st.typing.declParentOf :declId
+    if (aliasIsBareForm :st :ast :declId) then return parent
+    qual: (reexportTargetIdsOf typing: st.typing :ast :declId).unitName
+    if qual.isZero then return ztypes.declid.zero
+    u: conform.boundQualifierUnit :st scope: parent qualId: qual
+    if u.notZero then return u
+    td: templateDeclOf reg: st.reg typing: st.typing tid: (st.typing.declTypeOf :declId)
+    if td.isZero then return td
+    tdr: st.typing.decls.get i: td
+    if tdr.kind.typeDecl when tdr.name == qual then return td
+    return ztypes.declid.zero
+}
+
+# stampAliasQualifier -- the qualifier of a type-rooted value alias (`mode` in
+# `S: mode.slow`) names its type, as the same path does in a body. Into
+# toolRefDecl: nothing but the tooling asks what a qualifier names.
+stampAliasQualifier: function {
+    st: zenv.ZSymbolTable ast: Ast.view declId: ztypes.declid opNid: zast.nodeid
+} is {
+    qn: zast.nodeid
+    {
+        op: ast.nodes.getView i: opNid
+        match op case dottedpath then qn = op.parent else null
+    }
+    if qn.isZero then return
+    host: aliasValueHost :st :ast :declId
+    if host.isZero then return
+    if (st.typing.decls.get i: host).kind.typeDecl.not then return
+    key: stampNodeId n: (ast.nodes.getView i: qn)
+    if key.notZero then st.typing.toolRefDecl.set :key value: host
 }
 
 # aliasTargetTid -- the type a re-export alias stands for, when neither the nested-
