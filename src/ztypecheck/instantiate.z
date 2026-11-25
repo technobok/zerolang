@@ -4690,8 +4690,8 @@ wrapDoBreakValue: function {
         return st.typing.nullTypeId
     }
     payloadTid: valuechecks.materialiseLiteral :ast :st t: result
+    if payloadTid.isZero then return payloadTid
     payloadName: st.reg.nameOf tid: payloadTid
-    if payloadName.length == 0 then return payloadTid
     # the system's own Option or optionval: by its well-known slot, so a user
     # type spelled like one does not capture the value
     wrapWk: zast.wellKnown.slot.tyOptionval
@@ -4732,44 +4732,38 @@ forComprehensionTid: function {
 } out ztypes.tid is {
     # for-as-expression: a value-producing body makes the loop a List of
     # that element type (the comprehension form).
-    if elemT.notZero then {
-        isNull: (
-            (conform.isNullTid reg: st.reg tid: elemT) or
-            ((st.reg.nameViewOf tid: elemT).length == 0)
-        )
-        if isNull.not then {
-            # the comprehension's element decides the family, exactly as a
-            # written-out container declaration would: the system's own ListRef
-            # or ListVal, by its well-known slot, so a user type spelled like
-            # one does not capture the loop
-            ltWk: zast.wellKnown.slot.tyListRef
-            if (st.reg.isValtypeOf tid: elemT) then ltWk = zast.wellKnown.slot.tyListVal
-            lto: stdtypes.stdTidOpt :ast :st wk: ltWk
-            if lto.some then {
-                lsubs: IdMapV zast.nameid v: ztypes.tid
-                lv: elemT
-                # `lto` is whichever of ListRef / ListVal the element's family
-                # selected above; each names its own element parameter.
-                lsubs.set key: (firstGenericParamId :st templateId: lto) value: lv
-                lsfx: "_\{st.reg.nameViewOf tid: elemT}"
-                vsG: IdMapV zast.nameid v: u64
-                lmid: (
-                    getOrMintSpec
-                    :st
-                    scope: st.curScope
-                    :ast
-                    :unitDecl
-                    sfx: lsfx.stringView
-                    templateId: lto
-                    subs: lsubs
-                    valSubs: vsG
-                    fallbackArg: ztypes.tid.zero
-                )
-                if lmid.notZero then {
-                    setf: lmid
-                    stampGate :st nid: fornode.nid tid: setf
-                    return lmid
-                }
+    if elemT.notZero when (conform.isNullTid reg: st.reg tid: elemT).not then {
+        # the comprehension's element decides the family, exactly as a
+        # written-out container declaration would: the system's own ListRef
+        # or ListVal, by its well-known slot, so a user type spelled like
+        # one does not capture the loop
+        ltWk: zast.wellKnown.slot.tyListRef
+        if (st.reg.isValtypeOf tid: elemT) then ltWk = zast.wellKnown.slot.tyListVal
+        lto: stdtypes.stdTidOpt :ast :st wk: ltWk
+        if lto.some then {
+            lsubs: IdMapV zast.nameid v: ztypes.tid
+            lv: elemT
+            # `lto` is whichever of ListRef / ListVal the element's family
+            # selected above; each names its own element parameter.
+            lsubs.set key: (firstGenericParamId :st templateId: lto) value: lv
+            lsfx: "_\{st.reg.nameViewOf tid: elemT}"
+            vsG: IdMapV zast.nameid v: u64
+            lmid: (
+                getOrMintSpec
+                :st
+                scope: st.curScope
+                :ast
+                :unitDecl
+                sfx: lsfx.stringView
+                templateId: lto
+                subs: lsubs
+                valSubs: vsG
+                fallbackArg: ztypes.tid.zero
+            )
+            if lmid.notZero then {
+                setf: lmid
+                stampGate :st nid: fornode.nid tid: setf
+                return lmid
             }
         }
     }
