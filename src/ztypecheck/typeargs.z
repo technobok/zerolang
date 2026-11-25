@@ -18,8 +18,7 @@ atomName: function {ast: Ast.view n: astnode.view} out String is {
 }
 
 # collectMonoRefArgs -- read a mono type-reference's arguments into the type and
-# value substitutions, building the mangled suffix that names the instance.
-# Answers false when an argument names nothing resolvable.
+# value substitutions. Answers false when an argument names nothing resolvable.
 collectMonoRefArgs: function {
     st: zenv.ZSymbolTable
     ast: Ast
@@ -30,10 +29,12 @@ collectMonoRefArgs: function {
     # the template the arguments are written for
     tdecl: ztypes.declid
     arguments: (ListVal zast.nodeid).view
-    sfx: String
     typeSubs: (IdMapV zast.nameid v: ztypes.tid)
     valSubsR: (IdMapV zast.nameid v: u64)
     firstOut: ListVal ztypes.tid
+    # each number written where no numeric parameter takes it, refused once the
+    # template is known (refuseLiteralTypeArgs)
+    strayNumbers: ListVal zast.nodeid
 } out bool is {
     allOk: true
     firstA: ztypes.tid
@@ -58,14 +59,11 @@ collectMonoRefArgs: function {
                     :tdecl
                     :arg
                     param: pnR
-                    an: an.stringView
-                    :sfx
                     :typeSubs
                     :valSubsR
                 ).not then allOk = false
             } else if (statics.isNumericLiteralName name: an.stringView) then {
-                sfx.append s: "_"
-                sfx.append s: an
+                strayNumbers.append arg.operation
             } else if (
                 refuseSingletonTypeArg
                 :st
@@ -73,7 +71,6 @@ collectMonoRefArgs: function {
                 :scope
                 :enclDecl
                 :arg
-                :sfx
                 :typeSubs
             ) then {
                 null
@@ -93,9 +90,6 @@ collectMonoRefArgs: function {
                 )
                 if (okOut.get i: 0).not then allOk = false
                 if aid.notZero then {
-                    sfx.append s: "_"
-                    vn: monoValName :st :ast tid: aid
-                    sfx.append s: vn
                     if firstA.isZero then firstA = aid
                     sv: aid
                     typeSubs.set key: arg.name value: sv
@@ -117,7 +111,6 @@ refuseSingletonTypeArg: function {
     scope: ztypes.declid
     enclDecl: ztypes.declid
     arg: argref
-    sfx: String
     typeSubs: (IdMapV zast.nameid v: ztypes.tid)
 } out bool is {
     anId: atomNameId :ast n: (ast.nodes.getView i: arg.operation)
@@ -132,8 +125,6 @@ refuseSingletonTypeArg: function {
     st.walk.numericArgsRefused.add item: arg.operation
     st.walk.noStampNode.set key: arg.operation value: true
     bound: typeref.numericParamBoundOf :st :ast :scope :owner nameId: anId
-    sfx.append s: "_"
-    sfx.append s: (monoValName :st :ast tid: bound)
     typeSubs.set key: arg.name value: bound
     return true
 }
@@ -241,15 +232,11 @@ collectNumericMonoRefArg: function {
     # the numeric parameter the argument is for: its label, or the template's
     # first parameter when the leading argument is written unlabelled
     param: zast.nameid
-    an: StringView
-    sfx: String
     typeSubs: (IdMapV zast.nameid v: ztypes.tid)
     valSubsR: (IdMapV zast.nameid v: u64)
 } out bool is {
     depR: declare.numericParamRefTid :st :ast :unitDecl :scope :thisName :enclDecl :arg
     if depR.notZero then {
-        sfx.append s: "_"
-        sfx.append s: an
         typeSubs.set key: param value: depR
         return true
     }
@@ -274,12 +261,6 @@ collectNumericMonoRefArg: function {
         return false
     }
     if naR.state.refused then return false
-    (
-        appendNumericArgSuffix
-        :sfx
-        bits: naR.bits
-        cd: (st.reg.genericParamConstraintOf :tdecl paramName: param)
-    )
     valSubsR.set key: param value: naR.bits
     return true
 }
@@ -518,14 +499,12 @@ anyUnknownParamLabel: function {
 # reads as its walk's argument. False when there is nothing to bind it to.
 bindInheritedParam: function {
     st: zenv.ZSymbolTable
-    ast: Ast
     ud: ztypes.declid
     param: zast.nameid
     via: ztypes.tid
     walked: bool
     typeSubs: (IdMapV zast.nameid v: ztypes.tid)
     valSubs: (IdMapV zast.nameid v: u64)
-    sfx: String
 } out bool is {
     if via.isZero then {
         ptid: (st.reg.genericParamTidOf tdecl: ud paramName: param).or d: ztypes.tid.zero
@@ -533,8 +512,6 @@ bindInheritedParam: function {
         arg: ptid
         if walked then arg = (st.walk.fn.monoParamSubst.get key: ptid).or d: ptid
         typeSubs.set key: param value: arg
-        sfx.append s: "_"
-        sfx.append s: (monoValName :st :ast tid: arg)
         return true
     }
     viaDecl: st.typing.declIdOfType typeId: (st.reg.genericOriginOf tid: via)
@@ -546,14 +523,11 @@ bindInheritedParam: function {
     vg: st.reg.genericValueArgAt specId: via ordinal: oi
     if cd.numKind.has when vg.some then {
         valSubs.set key: param value: vg
-        appendNumericArgSuffix :sfx bits: vg :cd
         return true
     }
     av: st.reg.genericTypeArgAt specId: via ordinal: oi
     if av.isZero then return false
     typeSubs.set key: param value: av
-    sfx.append s: "_"
-    sfx.append s: (monoValName :st :ast tid: av)
     return true
 }
 
@@ -571,7 +545,6 @@ completeApplication: function {
     arguments: (ListVal zast.nodeid).view
     typeSubs: (IdMapV zast.nameid v: ztypes.tid)
     valSubsR: (IdMapV zast.nameid v: u64)
-    sfx: String
     firstA: ztypes.tid
     at: zast.nodeid
 } out bool is {
@@ -586,10 +559,9 @@ completeApplication: function {
         :tplId
         :typeSubs
         valSubs: valSubsR
-        :sfx
         :at
     ).not then return false
-    if (instantiate.fillApplicationDefaults :st :ast :tplId :typeSubs valSubs: valSubsR :sfx :firstA
+    if (instantiate.fillApplicationDefaults :st :ast :tplId :typeSubs valSubs: valSubsR :firstA
     ).not then {
         return false
     }
@@ -749,10 +721,10 @@ mintMonoRefParts: function {
             tplId = typeApplicationTemplate :st :scope :ast :unitDecl :callableNid
             if tplId.isZero then return ztypes.tid.zero
         }
-        sfx: String
         typeSubs: IdMapV zast.nameid v: ztypes.tid
         valSubsR: IdMapV zast.nameid v: u64
         firstOut: ListVal ztypes.tid
+        strayNumbers: ListVal zast.nodeid
         allOk: (
             collectMonoRefArgs
             :st
@@ -763,14 +735,17 @@ mintMonoRefParts: function {
             :enclDecl
             tdecl: (st.typing.declIdOfType typeId: tplId)
             :arguments
-            :sfx
             :typeSubs
             :valSubsR
             :firstOut
+            :strayNumbers
         )
         firstA: firstOut.get i: 0
         if allOk.not then return ztypes.tid.zero
-        if sfx.length == 0 then return ztypes.tid.zero
+        # no argument read is no application
+        if (
+            (typeSubs.length + valSubsR.length + strayNumbers.length) == 0
+        ) then return ztypes.tid.zero
         if tplId.isZero then tplId = typeApplicationTemplate :st :scope :ast :unitDecl :callableNid
         if tplId.isZero then return ztypes.tid.zero
         refuseLiteralTypeArgs :st :ast :arguments :typeSubs :firstA :tplId
@@ -784,7 +759,6 @@ mintMonoRefParts: function {
             :arguments
             :typeSubs
             :valSubsR
-            :sfx
             :firstA
             at: callableNid
         ).not then {
@@ -792,7 +766,6 @@ mintMonoRefParts: function {
         }
         # the synth `.call` return's wrapper is the one its element takes
         # (generatorWrapperOf)
-        tn: tname.copy
         gwv: (st.walk.generatorWrapper.get key: nid).or d: false
         if gwv when firstA.notZero then {
             # a `.borrow`/`.view` yield leaf asks for a VIEW into what the
@@ -817,7 +790,7 @@ mintMonoRefParts: function {
             if gwt.notZero then tplId = gwt
         }
         mainName: st.typing.mainUnitRoot
-        uat: instantiate.unitAppliedTypeRef :st :scope :ast :tplId :typeSubs :valSubsR :tn :sfx :nid
+        uat: instantiate.unitAppliedTypeRef :st :scope :ast :tplId :typeSubs :valSubsR :nid
         if uat.notZero then return uat
 
         # firstA rides as the fallback: when a template's param name differs
@@ -830,7 +803,6 @@ mintMonoRefParts: function {
             :scope
             :ast
             unitDecl: mainName
-            sfx: sfx.stringView
             templateId: tplId
             subs: typeSubs
             valSubs: valSubsR
@@ -1947,31 +1919,6 @@ refuseThisNamedReceiver: function {st: zenv.ZSymbolTable ast: Ast.view pm: argre
     )
 }
 
-# appendInstNumericLabel -- a numeric argument's label component: the value
-# keyed at its parameter's ordinal.
-appendInstNumericLabel: function {
-    st: zenv.ZSymbolTable.view
-    r: InstReq.view
-    args: (ListVal ztypes.genericarg).view
-    pn: (ListVal zast.nameid).view
-    lbl: zast.nameid
-    mn: String
-} is {
-    cd: st.reg.genericParamConstraintOf tdecl: r.tmplDeclId paramName: lbl
-    signed: ztypes.isSignedIntKind k: cd.numKind.kind
-    pi: u64
-    for pi < pn.length loop {
-        if (pn.get i: pi) == lbl when pi < args.length then {
-            a: args.get i: pi
-            match (
-                a
-            ) case valueArg then {
-                mn.append (numericArgText bits: a :signed)
-            } case typeArg then null
-        }
-        pi = pi + 1
-    }
-}
 
 # stampQualifiedTyperef -- a deferred type-ref spelled with its unit
 # (`zproject.BuildFacts`): the pending entry carries the LEAF name, which a
@@ -2062,75 +2009,6 @@ typeNameResolvesNowhere: function {
     return true
 }
 
-# defaultsTailLength -- how much of an instance's label its trailing default
-# arguments' components take, which the label leaves out: `ListVal_u8`, not
-# `ListVal_u8_u64`, the name a runtime fragment spells whatever index
-# parameter the list has. From
-# the last parameter back, while the key is the type its parameter's default
-# named (defaultTypeTid recorded it) and the label ends in that type's
-# component; never the first parameter's, so an instance is not labelled as
-# its template is (`Holder` over its default is `Holder_i64`). A label whose
-# builder wrote the components in another order keeps them.
-defaultsTailLength: function {
-    st: zenv.ZSymbolTable
-    ast: Ast
-    tk8: ztypes.declid
-    args: (ListVal ztypes.genericarg).view
-    label: StringView
-} out u64 is {
-    end: label.length
-    ki: args.length
-    for ki > 1 loop {
-        ki = ki - 1
-        d: st.reg.genericParamDefaultTidAt tdecl: tk8 i: ki
-        if d.isZero then break
-        if ((args.get i: ki) == (ztypes.genericarg.typeArg d)).not then break
-        cut: defaultComponentLength :st :ast :d head: (label.substring from: 0 to: end)
-        if cut == 0 then break
-        end = end - cut
-    }
-    return label.length - end
-}
-
-# defaultComponentLength -- the length of the `_<type>` component a default
-# `d` adds that `head` ends in, spelled as the instantiating scope or the
-# declaration names it; 0 when it ends in neither.
-defaultComponentLength: function {
-    st: zenv.ZSymbolTable
-    ast: Ast
-    d: ztypes.tid
-    head: StringView
-} out u64 is {
-    c1: "_\{monoValName :st :ast tid: d}"
-    if (head.endsWith suffix: c1) then return c1.length
-    c2: "_\{monoValName :st :ast tid: d}"
-    if (head.endsWith suffix: c2) then return c2.length
-    return 0
-}
-
-# monoValName -- the value-type name component of a get-wrapper mono name. A type
-# SHADOWING a builtin -- its name resolves through the prelude to a DIFFERENT
-# canonical id -- appends its own id, so its wrapper mono is distinct from the
-# builtin's same-named wrapper (a user i64 -> "i64_7" vs system "i64"); otherwise
-# the bare name. Without this the get-wrapper mono name (optionval_i64) collides
-# under the shared system key and the shadow reuses the system instance (wrong
-# `some`-arm type). Asked of the ids, from any unit: whoever defines it.
-monoValName: function {
-    ast: Ast
-    st: zenv.ZSymbolTable
-    tid: ztypes.tid
-} out String is {
-    tn: st.reg.nameOf :tid
-    # the prelude's type of that name, by id: never a program's own
-    nid: zast.poolFind pool: ast.names text: tn.stringView
-    if nid.isZero then return tn
-    bt: (
-        (statics.walkLookupTyperefFrom :st :ast scope: ztypes.declid baseId: nid).or
-        d: ztypes.tid.zero
-    )
-    if bt.notZero when (bt == tid).not then return "\{tn}_\{tid}"
-    return tn
-}
 
 # refuseLocalAsType -- a type written in a body naming a local or a parameter:
 # the nearest declaration of the name is that value, which is no type, refused
@@ -2225,7 +2103,6 @@ bindTypeArgSub: function {
     ast: Ast
     arg: argref
     pk: zast.nameid
-    sfx: String
     subs: (IdMapV zast.nameid v: ztypes.tid)
     valueSubs: (IdMapV zast.nameid v: u64)
     boundParams: IdSet zast.nameid
@@ -2247,14 +2124,11 @@ bindTypeArgSub: function {
             inBody: true
         )
         if naB.state.refused then return
-        appendNumericArgSuffix :sfx bits: naB.bits cd: cdB
         valueSubs.set key: pk value: naB.bits
         return
     }
     anId: paramTypeBaseNameId :ast op: (ast.nodes.getView i: opId)
     if (isNumericLiteralNameAt :ast ref: anId) then {
-        sfx.append s: "_"
-        sfx.append s: (zast.nameTextAt :ast ref: anId)
         boundParams.add item: pk
         return
     }
@@ -2293,9 +2167,6 @@ bindTypeArgSub: function {
         if lv.notZero then refuseValueTypeArg :st :unitDecl :ast :arg vt: lv
         return
     }
-    atn: monoValName :st :ast tid: argTid
-    sfx.append s: "_"
-    sfx.append s: atn
     pv2: argTid
     subs.set key: pk value: pv2
     boundParams.add item: pk
@@ -2328,7 +2199,6 @@ bindValueArgSub: function {
     fParams: (ListVal zast.nameid).view
     ptNames: (ListVal zast.nameid).view
     ptTids: (ListVal ztypes.tid).view
-    sfx: String
     subs: (IdMapV zast.nameid v: ztypes.tid)
     boundParams: IdSet zast.nameid
     tk: ztypes.declid
@@ -2343,7 +2213,7 @@ bindValueArgSub: function {
     }
     if vt0.isZero then return
     if gfound.not then {
-        bindPartialRowArg :st :ast :pk :ptNames :ptTids argTid: vt0 :sfx :subs :boundParams :tk
+        bindPartialRowArg :st :ast :pk :ptNames :ptTids argTid: vt0 :subs :boundParams :tk
         return
     }
     mv0: valuechecks.materialiseLiteral :ast :st t: vt0
@@ -2357,9 +2227,6 @@ bindValueArgSub: function {
     gp0: fParams.get i: gidx
     already: (subs.get key: gp0).or d: ztypes.tid.zero
     if already.notZero then return
-    vtn: monoValName :st :ast tid: mv0
-    sfx.append s: "_"
-    sfx.append s: vtn
     gpv: mv0
     subs.set key: gp0 value: gpv
     boundParams.add item: gp0
@@ -2376,7 +2243,6 @@ bindPartialRowArg: function {
     ptNames: (ListVal zast.nameid).view
     ptTids: (ListVal ztypes.tid).view
     argTid: ztypes.tid
-    sfx: String
     subs: (IdMapV zast.nameid v: ztypes.tid)
     boundParams: IdSet zast.nameid
     tk: ztypes.declid
@@ -2389,9 +2255,6 @@ bindPartialRowArg: function {
         if (boundParams.has item: gp) then continue
         bv: (subs.get key: gp).or d: ztypes.tid.zero
         if bv.isZero then continue
-        bvn: monoValName :st :ast tid: bv
-        sfx.append s: "_"
-        sfx.append s: bvn
         boundParams.add item: gp
     }
 }
@@ -2410,7 +2273,6 @@ inferConstructionArg: function {
     fParams: (ListVal zast.nameid).view
     ptNames: (ListVal zast.nameid).view
     ptTids: (ListVal ztypes.tid).view
-    sfx: String
     subs: (IdMapV zast.nameid v: ztypes.tid)
     valueSubs: (IdMapV zast.nameid v: u64)
     boundParams: IdSet zast.nameid
@@ -2447,7 +2309,7 @@ inferConstructionArg: function {
         return
     }
     if isP then {
-        bindTypeArgSub :st :unitDecl :ast :arg :pk :sfx :subs :valueSubs :boundParams :tk
+        bindTypeArgSub :st :unitDecl :ast :arg :pk :subs :valueSubs :boundParams :tk
     } else {
         (
             bindValueArgSub
@@ -2460,7 +2322,6 @@ inferConstructionArg: function {
             :fParams
             :ptNames
             :ptTids
-            :sfx
             :subs
             :boundParams
             :tk
@@ -2511,7 +2372,6 @@ constructionParamMissing: function {
     subs: (IdMapV zast.nameid v: ztypes.tid).view
     valueSubs: (IdMapV zast.nameid v: u64).view
     boundParams: IdSet zast.nameid
-    sfx: String.view
     tname: StringView
     reportMissing: bool
 } out bool is {
@@ -2528,7 +2388,7 @@ constructionParamMissing: function {
     primary: st.reg.genericParamNameAt :tdecl i: 0
     if firstMissing == primary when (refuseLeadingLocalArg :st :ast :call) then return true
     mmsg: "cannot infer type arguments for generic type '\{tname}'"
-    if sfx.length > 0 then {
+    if (subs.length + valueSubs.length) > 0 then {
         fmT: zast.nameTextAt :ast ref: firstMissing
         mmsg = "cannot infer generic parameter '\{fmT}' for '\{tname}'"
     }
@@ -2672,36 +2532,16 @@ numericGenericArg: function {
     return na
 }
 
-# bindNumericArg -- a read numeric generic argument bound: its suffix component
-# and its value substitution. false when it was refused.
+# bindNumericArg -- a read numeric generic argument bound: its value
+# substitution. false when it was refused.
 bindNumericArg: function {
-    sfx: String
-    valSubs: (IdMapV zast.nameid v: u64)
-    param: zast.nameid
-    na: numarg
-    cd: ztypes.constraintdesc
+    valSubs: (IdMapV zast.nameid v: u64) param: zast.nameid na: numarg
 } out bool is {
     if na.state.refused then return false
-    appendNumericArgSuffix :sfx bits: na.bits :cd
     valSubs.set key: param value: na.bits
     return true
 }
 
-# appendNumericArgSuffix -- a numeric generic argument's `_value` component of a
-# mono's suffix.
-appendNumericArgSuffix: function {sfx: String bits: u64 cd: ztypes.constraintdesc} is {
-    sfx.append s: "_"
-    sfx.append s: (numericArgText :bits signed: (ztypes.isSignedIntKind k: cd.numKind.kind))
-}
-
-# numericArgText -- a numeric generic argument's value as it spells a mono's
-# name: its decimal digits, a negative one's magnitude after `neg`.
-numericArgText: function {bits: u64 signed: bool} out String is {
-    if signed when bits > 9223372036854775807 then {
-        return "neg\{ztypes.absI64 v: (ztypes.bitsI64 b: bits)}"
-    }
-    return "\{bits}"
-}
 
 # bindNumericTypeArg -- a numeric generic parameter's argument read to its
 # value, which spells itself into the mono suffix and binds that param's VALUE:
@@ -2713,7 +2553,6 @@ bindNumericTypeArg: function {
     tdecl: ztypes.declid
     pk0: zast.nameid
     opId: zast.nodeid
-    sfx: String
     valueSubs: (IdMapV zast.nameid v: u64)
 } out bool is {
     na: (
@@ -2732,8 +2571,6 @@ bindNumericTypeArg: function {
         st.walk.numericArgDependent = true
         return true
     }
-    cd: st.reg.genericParamConstraintOf :tdecl paramName: pk0
-    appendNumericArgSuffix :sfx bits: na.bits :cd
     valueSubs.set key: pk0 value: na.bits
     return true
 }
@@ -2763,14 +2600,10 @@ bindResolvedTypeArg: function {
     opId: zast.nodeid
     baseId: zast.nameid
     pk0: zast.nameid
-    sfx: String
     subs: (IdMapV zast.nameid v: ztypes.tid)
 } out ztypes.tid is {
     aid: typeArgTid :st :ast :unitDecl :opId :baseId
     if aid.isZero then return ztypes.tid.zero
-    atn: monoValName :st :ast tid: aid
-    asfx: "_\{atn}"
-    sfx.append s: asfx
     if pk0.notZero then {
         pv: aid
         subs.set key: pk0 value: pv
@@ -2791,7 +2624,6 @@ collectTypeArgAt: function {
     tplId: ztypes.tid
     primaryName: zast.nameid
     tk0: ztypes.declid
-    sfx: String
     subs: (IdMapV zast.nameid v: ztypes.tid)
     valueSubs: (IdMapV zast.nameid v: u64)
     miss: bool
@@ -2829,17 +2661,14 @@ collectTypeArgAt: function {
             tdecl: tk0
             :pk0
             :opId
-            :sfx
             :valueSubs
         ).not then anyMiss = true
         return (argscan miss: anyMiss tid: ztypes.tid.zero)
     }
     if (isNumericLiteralNameAt :ast ref: baseNameId) then {
-        sfx.append s: "_"
-        sfx.append s: (zast.nameTextAt :ast ref: baseNameId)
         return (argscan miss: anyMiss tid: ztypes.tid.zero)
     }
-    argTid: bindResolvedTypeArg :ast :st :unitDecl :opId baseId: baseNameId :pk0 :sfx :subs
+    argTid: bindResolvedTypeArg :ast :st :unitDecl :opId baseId: baseNameId :pk0 :subs
     if argTid.notZero then (
         memberaccess.refuseLiteralTypeArg
         :st
@@ -2861,7 +2690,6 @@ collectGenericTypeArgs: function {
     call: callref
     tplId: ztypes.tid
     primaryName: zast.nameid
-    sfx: String
     subs: (IdMapV zast.nameid v: ztypes.tid)
     valueSubs: (IdMapV zast.nameid v: u64)
     tk0: ztypes.declid
@@ -2882,7 +2710,6 @@ collectGenericTypeArgs: function {
             :tplId
             :primaryName
             :tk0
-            :sfx
             :subs
             :valueSubs
             miss: anyMiss
@@ -3114,10 +2941,18 @@ checkGenericTypedefCall: function {
         return (typedefCallFailed :st :call :tplId)
     }
     tk: st.typing.declIdOfType typeId: tplId
-    sfx: String
-    missing: typedefInstanceSuffix :st :ast :tk :subs :valSubs :sfx
+    missing: typedefMissingParam :st :tk :subs :valSubs
     if missing.notZero then {
-        reportTypedefMissingParam :st :ast :call :tplId :tk :missing bound: sfx.length > 0
+        (
+            reportTypedefMissingParam
+            :st
+            :ast
+            :call
+            :tplId
+            :tk
+            :missing
+            bound: (subs.length + valSubs.length) > 0
+        )
         return (typedefCallFailed :st :call :tplId)
     }
     mid: (
@@ -3126,7 +2961,6 @@ checkGenericTypedefCall: function {
         scope: st.curScope
         :ast
         :unitDecl
-        sfx: sfx.stringView
         templateId: tplId
         :subs
         :valSubs
@@ -3200,35 +3034,19 @@ typedefInstanceSubs: function {
     return (applyTypedefTypePins :st :unitDecl :ast :call :tk :subs :valSubs)
 }
 
-# typedefInstanceSuffix -- the instance name's argument suffix, in the
-# template's parameter order: a type argument's name, a numeric one's value.
-# The first parameter nothing bound, or zero.
-typedefInstanceSuffix: function {
+# typedefMissingParam -- the first of the template's parameters, in their
+# order, that nothing bound; zero when every one is.
+typedefMissingParam: function {
     st: zenv.ZSymbolTable
-    ast: Ast
     tk: ztypes.declid
     subs: (IdMapV zast.nameid v: ztypes.tid).view
     valSubs: (IdMapV zast.nameid v: u64).view
-    sfx: String
 } out zast.nameid is {
     missing: zast.nameid
     gparams: st.reg.genericParamNamesOf tdecl: tk
     for each gp: gparams loop {
-        got: subs.get key: gp
-        gotV: valSubs.get key: gp
-        if got.some then {
-            sfx.append s: "_"
-            sfx.append s: (monoValName :st :ast tid: got)
-        } else if gotV.some then {
-            (
-                appendNumericArgSuffix
-                :sfx
-                bits: gotV
-                cd: (st.reg.genericParamConstraintOf tdecl: tk paramName: gp)
-            )
-        } else if missing.isZero then {
-            missing = gp
-        }
+        if (subs.has key: gp).not when (valSubs.has key: gp
+        ).not when missing.isZero then missing = gp
     }
     return missing
 }
@@ -3394,7 +3212,6 @@ applyTypedefTypePins: function {
         arg: argRefAt :ast nid: argId
         if arg.nid.isZero or arg.name.isZero then continue
         if (st.reg.isGenericParamOf tdecl: tk name: arg.name).not then continue
-        psfx: String
         pins: IdMapV zast.nameid v: ztypes.tid
         pvals: IdMapV zast.nameid v: u64
         pbound: IdSet zast.nameid
@@ -3405,7 +3222,6 @@ applyTypedefTypePins: function {
             :ast
             :arg
             pk: arg.name
-            sfx: psfx
             subs: pins
             valueSubs: pvals
             boundParams: pbound
@@ -3494,7 +3310,6 @@ fillOneDefault: function {
     pn: zast.nameid
     subs: (IdMapV zast.nameid v: ztypes.tid)
     valSubs: (IdMapV zast.nameid v: u64)
-    sfx: String
     grey: IdSet zast.nameid
 } out bool is {
     if (subs.has key: pn) or (valSubs.has key: pn) then return true
@@ -3529,9 +3344,9 @@ fillOneDefault: function {
             argOp: dn
             inBody: false
         )
-        return (bindNumericArg :sfx :valSubs param: pn :na :cd)
+        return (bindNumericArg :valSubs param: pn :na)
     }
-    dt: defaultTypeTid :st :ast unitDecl: dUnit :tdecl :pn :dn :subs :valSubs :sfx :grey
+    dt: defaultTypeTid :st :ast unitDecl: dUnit :tdecl :pn :dn :subs :valSubs :grey
     if dt.isZero then return false
     # the default is a member of the parameter's constraint, checked where it
     # is written; one that is not stops the instance there
@@ -3550,13 +3365,6 @@ fillOneDefault: function {
         return false
     }
     subs.set key: pn value: dt
-    # a literal default leaves the parameter untyped, and the instance holds the
-    # run-time type it materialises to (materialiseStaticListArgs): it adds no part to
-    # the instance's name
-    if (isLiteralTypeId reg: st.reg tid: dt) then return true
-    an: monoValName :st :ast tid: dt
-    sfx.append s: "_"
-    sfx.append s: an
     return true
 }
 
@@ -3572,7 +3380,6 @@ defaultTypeTid: function {
     dn: zast.nodeid
     subs: (IdMapV zast.nameid v: ztypes.tid)
     valSubs: (IdMapV zast.nameid v: u64)
-    sfx: String
     grey: IdSet zast.nameid
 } out ztypes.tid is {
     # the default resolves in the declaration's own scope, where its
@@ -3597,7 +3404,7 @@ defaultTypeTid: function {
     # another parameter of the same declaration: its binding, filled first
     other: st.reg.genericParamNameOfTid :tdecl ptid: dt
     if other.notZero then {
-        if (fillOneDefault :st :ast :tdecl pn: other :subs :valSubs :sfx :grey
+        if (fillOneDefault :st :ast :tdecl pn: other :subs :valSubs :grey
         ).not then return ztypes.tid.zero
         ov: (subs.get key: other).or d: ztypes.tid.zero
         if ov.isZero then {
@@ -3613,7 +3420,7 @@ defaultTypeTid: function {
         return ov
     }
     if (st.reg.isPartialOf tid: dt) then {
-        return (defaultOverParams :st :ast :unitDecl :tdecl :dt :subs :valSubs :sfx :grey)
+        return (defaultOverParams :st :ast :unitDecl :tdecl :dt :subs :valSubs :grey)
     }
     # names no parameter: every instance takes this type, which the read-only
     # lookup completes an argument list with
@@ -3632,7 +3439,6 @@ defaultOverParams: function {
     dt: ztypes.tid
     subs: (IdMapV zast.nameid v: ztypes.tid)
     valSubs: (IdMapV zast.nameid v: u64)
-    sfx: String
     grey: IdSet zast.nameid
 } out ztypes.tid is {
     idSubs: IdMapV ztypes.tid v: ztypes.genericarg
@@ -3641,7 +3447,7 @@ defaultOverParams: function {
         q: st.reg.genericParamNameAt :tdecl i: qi
         qi = qi + 1
         if (typeMentionsParam :st :tdecl tid: dt param: q).not then continue
-        if (fillOneDefault :st :ast :tdecl pn: q :subs :valSubs :sfx :grey
+        if (fillOneDefault :st :ast :tdecl pn: q :subs :valSubs :grey
         ).not then return ztypes.tid.zero
         qv: (subs.get key: q).or d: ztypes.tid.zero
         qt: (st.reg.genericParamTidOf :tdecl paramName: q).or d: ztypes.tid.zero
@@ -3894,19 +3700,16 @@ bindCallNumericParam: function {
     call: callref
     tdecl: ztypes.declid
     param: zast.nameid
-    cd: ztypes.constraintdesc
     dvs: (IdMapV zast.nameid v: u64).view
-    sfx: String
     vsI: (IdMapV zast.nameid v: u64)
 } out bool is {
     dnv: dvs.get key: param
     if (callWritesLabel :st :ast :call label: param).not when dnv.some then {
-        appendNumericArgSuffix :sfx bits: dnv :cd
         vsI.set key: param value: dnv
         return true
     }
     na: genericCallNumericArg :st :unitDecl :ast :call :tdecl :param
-    return (bindNumericArg :sfx valSubs: vsI :param :na :cd)
+    return (bindNumericArg valSubs: vsI :param :na)
 }
 
 # callWritesLabel -- the call writes a type argument for its generic parameter
@@ -4067,7 +3870,6 @@ bindCallParams: function {
     gparams: (ListVal zast.nameid).view
     subs: (IdMapV zast.nameid v: ztypes.tid).view
     dvs: (IdMapV zast.nameid v: u64).view
-    sfx: String
     vsI: (IdMapV zast.nameid v: u64)
     fname: StringView
     pHolderIds: (ListVal ztypes.tid).view
@@ -4086,9 +3888,7 @@ bindCallParams: function {
                 :call
                 :tdecl
                 param: gp3
-                cd: cd4
                 :dvs
-                :sfx
                 :vsI
             ).not then allOk = false
             continue
@@ -4108,9 +3908,6 @@ bindCallParams: function {
                 lineno: call.lineno
                 colno: call.colno
             )
-            an4: monoValName :st :ast tid: ggot
-            sfx.append s: "_"
-            sfx.append s: an4
         } case none then {
             if allOk then {
                 (

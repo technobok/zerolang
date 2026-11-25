@@ -564,44 +564,12 @@ instArgTypeOf: function {
     return result
 }
 
-# instMonoLabel -- the mono's label: the template's name and one component per
-# argument: a numeric parameter's value, a bare atom's own text or, for a
-# call-shaped argument, the label of the specialisation it names.
-instMonoLabel: function {
-    st: zenv.ZSymbolTable
-    scope: ztypes.declid
-    ast: Ast
-    r: InstReq.view
-    # the mono's arguments in parameter order, where a numeric argument's value
-    # is read
-    args: (ListVal ztypes.genericarg).view
-} out String is {
-    mn: zast.poolTextCopy pool: ast.names ref: r.tmplId
-    na: r.argNames.length
-    pn: st.reg.genericParamNamesOf tdecl: r.tmplDeclId
-    i: u64
-    for i < na loop {
-        mn.append "_"
-        an: r.argNames.get :i
-        lbl: r.argLabels.get :i
-        if (instNumericParam :st :r label: lbl) then {
-            typeargs.appendInstNumericLabel :st :r :args :pn :lbl :mn
-        } else if an.length > 0 then {
-            mn.append an
-        } else {
-            at: instArgTypeOf :st :scope :ast :r :i
-            if at.notZero then mn.append (typeargs.monoValName :st :ast tid: at)
-        }
-        i = i + 1
-    }
-    return mn
-}
 
 # mintUnitMonoOf -- one instantiation's mono: its arguments demanded and
 # drained (the mint pass precedes the drain), keyed in the template's
 # parameter order, found on the trie under the template or minted and
-# joined there. The label is display only. An argument nothing resolves is
-# reported here, where the request is.
+# joined there. An argument nothing resolves is reported here, where the
+# request is.
 mintUnitMonoOf: function {
     st: zenv.ZSymbolTable
     scope: ztypes.declid
@@ -621,12 +589,10 @@ mintUnitMonoOf: function {
     if got.some then {
         return
     }
-    label: instMonoLabel :st :scope :ast :r :args
     mono: (
         instantiate.createUnitMono
         :st
         :ast
-        monoName: label.stringView
         tmplDeclId: r.tmplDeclId
         tplTid: templateTid
         templateOpId: r.tmplOpId
@@ -1495,6 +1461,16 @@ walkedFnPins: function {
     return (typing.funcPins.has item: mono)
 }
 
+# underlinedNameId -- the name a refusal at a walked definition underlines when
+# the caller gave no text for it: its own name, else, for an instance's walk, the
+# name its template declares.
+underlinedNameId: function {
+    st: zenv.ZSymbolTable.view defName: StringView defNameId: zast.nameid declId: ztypes.declid
+} out zast.nameid is {
+    if defNameId.notZero or (defName.length > 0) then return defNameId
+    return (st.typing.declNameOf :declId)
+}
+
 # checkFunctionBodyIn -- checkFunctionBody's walk, once the expression position
 # it was reached from has been set aside.
 checkFunctionBodyIn: function {
@@ -1526,8 +1502,8 @@ checkFunctionBodyIn: function {
     # method), is its identity: a namespace member is not found by the
     # unit's name, and without it the walk skipped its return-type
     # checks. A mono instance walk passes the TEMPLATE's Decl -- its
-    # function is the mono's substituted child, found by label -- and
-    # keeps the name path.
+    # function is the mono's substituted child -- and claims nothing by
+    # name.
     fnDecl: ztypes.declid
     fnTid: ztypes.tid
     if st.typing.curMonoStamp.isZero then {
@@ -1609,7 +1585,15 @@ checkFunctionBodyIn: function {
         # known: an owned result holding a reference into an input is
         # declared `outx` or refused here
         if crt.notZero when isGenCall.not then {
-            declare.pinHonestyAt :st :ast fnode: fn retTid: crt :defName :defNameId
+            (
+                declare.pinHonestyAt
+                :st
+                :ast
+                fnode: fn
+                retTid: crt
+                :defName
+                defNameId: (underlinedNameId :st :defName :defNameId :declId)
+            )
         }
         # an instance walk returns what the instance it checks returns
         if crt.isZero when st.walk.fn.curMonoFnTid.notZero then {
@@ -1953,7 +1937,6 @@ stampOneFnMono: function {
 } is {
     if (firstInstanceWalk :st :ast :monoId opId: fnOpId).not then return
     minted: st.reg.nextTid
-    monoNm: st.reg.nameOf tid: monoId
     savedMode: st.mode
     st.mode.genericWalk = true
     st.pushScope parent: scope node: zast.nodeid
@@ -1976,7 +1959,7 @@ stampOneFnMono: function {
         :st
         :scope
         :unitDecl
-        defName: monoNm.stringView
+        defName: ""
         defNameId: zast.nameid
         fn: cfbFr
         thisName: ownerNameId
@@ -2182,7 +2165,6 @@ stampOneClassMono: function {
     mOps: ListVal zast.nodeid
     collectOwedMembers :st :ast :clsOpId :monoId names: mNames ops: mOps
     minted: st.reg.nextTid
-    monoNm: st.reg.nameOf tid: monoId
     savedMode: st.mode
     st.mode.genericWalk = true
     st.pushScope parent: scope node: zast.nodeid
@@ -2203,7 +2185,6 @@ stampOneClassMono: function {
             mnmId: mNames.get i: mi
             mop: mOps.get i: mi
             mi = mi + 1
-            mnm: zast.nameTextCopy :ast ref: mnmId
             mfo: st.typing.declChildOfId parentTypeId: monoId nameId: mnmId
             match (
                 mfo
@@ -2212,7 +2193,6 @@ stampOneClassMono: function {
             } case none then {
                 st.walk.fn.curMonoFnTid = ztypes.tid.zero
             }
-            q: "\{monoNm}.\{mnm}"
             origin: st.reg.genericOriginOf tid: monoId
             classTemplateDecl: st.typing.declIdOfType typeId: origin
             mgen: st.walk.fn.curMonoFnTid
@@ -2239,7 +2219,7 @@ stampOneClassMono: function {
                 :st
                 :scope
                 :unitDecl
-                defName: q.stringView
+                defName: ""
                 defNameId: zast.nameid
                 fn: cfbFr
                 thisName: zast.nameid
@@ -2287,7 +2267,6 @@ stampMemberFnMonos: function {
         bindMonoParams :st monoId: t
         st.typing.curMonoStamp = t
         st.walk.fn.curMonoFnTid = t
-        q: st.reg.nameOf tid: t
         st.typing.beginInstanceWalk next: (nextRowOf :ast)
         cfbFr: fnRefAt :ast nid: (instanceBodyAt :st :ast mono: t opId: mop)
         errsBefore: st.typing.errors.length
@@ -2296,7 +2275,7 @@ stampMemberFnMonos: function {
             :st
             :scope
             :unitDecl
-            defName: q.stringView
+            defName: ""
             defNameId: zast.nameid
             fn: cfbFr
             thisName: zast.nameid
@@ -2924,7 +2903,7 @@ collectOwedUnitFns: function {
                     di = di + 1
                     continue
                 }
-                mn: st.reg.nameOf tid: monoId
+                mn: writtenTypeName reg: st.reg typing: st.typing names: ast.names tid: monoId
                 fnm: zast.nameTextAt :ast ref: bm.name
                 (
                     panic
@@ -3044,7 +3023,6 @@ walkUnitMonoFns: function {
 } is {
     minted: st.reg.nextTid
     errsBefore: st.typing.errors.length
-    monoNm: st.reg.nameOf tid: monoId
     savedMode: st.mode
     st.mode.genericWalk = true
     st.pushScope parent: scope node: zast.nodeid
@@ -3064,8 +3042,6 @@ walkUnitMonoFns: function {
             memberId: zast.kidAt kids: ast.kids span: bodyIds i: bidx
             bm2: argRefAt :ast nid: memberId
             if bm2.nid.notZero then {
-                mnm: zast.nameTextCopy :ast ref: bm2.name
-                q: "\{monoNm}.\{mnm}"
                 mfo: st.typing.declChildOfId parentTypeId: monoId nameId: bm2.name
                 match (
                     mfo
@@ -3101,7 +3077,7 @@ walkUnitMonoFns: function {
                     :st
                     :scope
                     :unitDecl
-                    defName: q.stringView
+                    defName: ""
                     defNameId: zast.nameid
                     fn: cfbFr
                     thisName: zast.nameid

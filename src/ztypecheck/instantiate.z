@@ -176,18 +176,13 @@ selfApplicationTid: function {
 } out ztypes.tid is {
     if (ownsTypeParams :st tid: templateId).not then return ztypes.tid.zero
     tdecl: st.typing.declIdOfType typeId: templateId
-    sfx: String
     typeSubs: IdMapV zast.nameid v: ztypes.tid
     valSubsR: IdMapV zast.nameid v: u64
     firstA: ztypes.tid
     for each pn: (st.reg.genericParamNamesOf :tdecl) loop {
         declare.recordGenericParamRef :st :nid scope: tdecl name: pn
         pt: declare.genericParamTidMint :st :ast :tdecl nameId: pn
-        sfx.append s: "_"
-        if (st.reg.genericParamConstraintOf :tdecl paramName: pn).numKind.has then {
-            sfx.append s: (zast.nameTextAt :ast ref: pn)
-        } else {
-            sfx.append s: (typeargs.monoValName :st :ast tid: pt)
+        if (st.reg.genericParamConstraintOf :tdecl paramName: pn).numKind.has then {} else {
             if firstA.isZero then firstA = pt
         }
         typeSubs.set key: pn value: pt
@@ -198,7 +193,6 @@ selfApplicationTid: function {
         :scope
         :ast
         unitDecl: st.typing.mainUnitRoot
-        sfx: sfx.stringView
         :templateId
         subs: typeSubs
         valSubs: valSubsR
@@ -225,8 +219,7 @@ defaultsInstance: function {
     if (templateHasDefaults :st :tdecl).not then return ztypes.tid
     subs: IdMapV zast.nameid v: ztypes.tid
     valSubs: IdMapV zast.nameid v: u64
-    sfx: String
-    if (fillGenericDefaults :st :ast :tdecl :subs :valSubs :sfx).not then return ztypes.tid
+    if (fillGenericDefaults :st :ast :tdecl :subs :valSubs).not then return ztypes.tid
     if (subs.length + valSubs.length) != (st.reg.genericParamCountOf :tdecl) then return ztypes.tid
     return (
         getOrMintSpec
@@ -234,7 +227,6 @@ defaultsInstance: function {
         :scope
         :ast
         :unitDecl
-        sfx: sfx.stringView
         templateId: tid
         :subs
         :valSubs
@@ -327,7 +319,6 @@ bindInheritedParams: function {
     tplId: ztypes.tid
     typeSubs: (IdMapV zast.nameid v: ztypes.tid)
     valSubs: (IdMapV zast.nameid v: u64)
-    sfx: String
     # the application's callee
     at: zast.nodeid
     # a construction in a body, whose instance walk binds the unit's
@@ -356,14 +347,12 @@ bindInheritedParams: function {
         bound: (
             typeargs.bindInheritedParam
             :st
-            :ast
             :ud
             param: pn
             :via
             :walked
             :typeSubs
             :valSubs
-            :sfx
         )
         if bound.not then return true
     }
@@ -574,7 +563,6 @@ fillApplicationDefaults: function {
     tplId: ztypes.tid
     typeSubs: (IdMapV zast.nameid v: ztypes.tid)
     valSubs: (IdMapV zast.nameid v: u64)
-    sfx: String
     firstA: ztypes.tid
 } out bool is {
     tdecl: st.typing.declIdOfType typeId: tplId
@@ -587,7 +575,7 @@ fillApplicationDefaults: function {
             value: firstA
         )
     }
-    return (fillGenericDefaults :st :ast :tdecl subs: typeSubs :valSubs :sfx)
+    return (fillGenericDefaults :st :ast :tdecl subs: typeSubs :valSubs)
 }
 
 # templateHasDefaults -- one of the template's parameters declares a default.
@@ -788,9 +776,6 @@ unitAppliedTypeRef: function {
     tplId: ztypes.tid
     typeSubs: (IdMapV zast.nameid v: ztypes.tid).view
     valSubsR: (IdMapV zast.nameid v: u64).view
-    # the template's name and the argument suffix, the instance's label
-    tn: String
-    sfx: String
     nid: zast.nodeid
 } out ztypes.tid is {
     if (st.reg.typetypeOf typeId: tplId) != ztypes.ztypetype.unitType then return ztypes.tid.zero
@@ -803,7 +788,6 @@ unitAppliedTypeRef: function {
         tdecl: (st.typing.declIdOfType typeId: tplId)
         subs: typeSubs
         valSubs: valSubsR
-        label: "\{tn}\{sfx}"
     )
     if ium.notZero when nid.notZero then {
         ztyping.nodeTypeSet tbl: st.typing.nodeType :nid tid: ium
@@ -872,7 +856,6 @@ ensureUnitInstanceMono: function {
     tdecl: ztypes.declid
     subs: (IdMapV zast.nameid v: ztypes.tid).view
     valSubs: (IdMapV zast.nameid v: u64).view
-    label: String
     # the instance that owns this one as a member -- a generic unit's instance,
     # for the unit it declares -- set before the build reads it; 0 for none
     owner: ztypes.tid.zero
@@ -896,7 +879,6 @@ ensureUnitInstanceMono: function {
             createUnitMono
             :st
             :ast
-            monoName: label.stringView
             tmplDeclId: tdecl
             tplTid: tplId
             templateOpId: opId
@@ -933,27 +915,7 @@ enclosingInstanceOf: function {
     if ud.isZero or (declIsUnitTemplate :st :ast declId: ud).not then return ztypes.tid.zero
     utpl: st.typing.declTypeOf declId: ud
     if utpl.isZero then return ztypes.tid.zero
-    lbl: st.reg.nameOf tid: utpl
-    for each pn: (st.reg.genericParamNamesOf tdecl: ud) loop {
-        vo: valSubs.get key: pn
-        match (
-            vo
-        ) case some then {
-            (
-                typeargs.appendNumericArgSuffix
-                sfx: lbl
-                bits: vo
-                cd: (st.reg.genericParamConstraintOf tdecl: ud paramName: pn)
-            )
-        } case none then {
-            lbl.append s: "_"
-            (
-                lbl.append
-                s: (typeargs.monoValName :st :ast tid: ((subs.get key: pn).or d: ztypes.tid.zero))
-            )
-        }
-    }
-    return (ensureUnitInstanceMono :st :scope :ast tplId: utpl tdecl: ud :subs :valSubs label: lbl)
+    return (ensureUnitInstanceMono :st :scope :ast tplId: utpl tdecl: ud :subs :valSubs)
 }
 
 # ensureUnitMonoBuilt -- a unit instance's members, built now when its completion
@@ -1293,17 +1255,16 @@ collectMainInstantiations: function {
 # createUnitMono -- mint a mono UNIT with JOIN-only function-shell children
 # from a template unit body, then seed return/never demand. Identity is the
 # caller's: the trie under the template, keyed on the resolved arguments
-# (unitMonoOnTrie / unitMonoJoinTrie). `monoName` is the mono's LABEL --
-# display only, registered nowhere.
+# (unitMonoOnTrie / unitMonoJoinTrie). It carries no name: a program names it by
+# its application (writtenTypeName).
 createUnitMono: function {
     st: zenv.ZSymbolTable
     ast: Ast.view
-    monoName: StringView
     tmplDeclId: ztypes.declid
     tplTid: ztypes.tid
     templateOpId: zast.nodeid
 } out ztypes.tid is {
-    monoId: st.reg.newType name: monoName typetype: ztypes.ztypetype.unitType
+    monoId: st.reg.newType name: "" typetype: ztypes.ztypetype.unitType
     # the mono's declaration is the TEMPLATE's (its origin), and its members
     # hang off a clone of it -- the request resolved the template's Decl at
     # collection through the instantiation's own scope. Nothing registers the
@@ -1449,9 +1410,6 @@ mintNamespaceMember: function {
     if (st.typing.declTypeOf declId: nd).isZero then resolve.resolveDemandedDecl :st :ast declId: nd
     ntpl: st.typing.declTypeOf declId: nd
     if ntpl.isZero or (st.reg.isGenericOf tid: ntpl).not then return
-    lbl: st.reg.nameOf tid: monoId
-    lbl.append "_"
-    lbl.append (zast.nameTextAt :ast ref: member.name)
     inst: (
         ensureUnitInstanceMono
         :st
@@ -1461,7 +1419,6 @@ mintNamespaceMember: function {
         tdecl: nd
         subs: allSubs
         :valSubs
-        label: lbl
         owner: monoId
     )
     # a template with parameters of its own stays one, reached through the
@@ -1571,18 +1528,12 @@ unitNestedInstance: function {
     # a template with parameters of its own stays one, reached through the
     # instance, which binds the rest (bindInheritedParams)
     if (ownsTypeParams :st tid: tpl) then return tpl
-    sfx: String
     vs: IdMapV zast.nameid v: u64
     for each pn: (st.reg.genericParamNamesOf tdecl: td) loop {
         av: (subs.get key: pn).or d: ztypes.tid.zero
         vg: valSubs.get key: pn
-        if av.notZero then {
-            sfx.append s: "_"
-            sfx.append s: (typeargs.monoValName :st :ast tid: av)
-        } else if vg.some then {
+        if av.notZero then {} else if vg.some then {
             vs.set key: pn value: vg
-            cdP: st.reg.genericParamConstraintOf tdecl: td paramName: pn
-            typeargs.appendNumericArgSuffix :sfx bits: vg cd: cdP
         }
     }
     own: IdMapV zast.nameid v: ztypes.tid
@@ -1593,7 +1544,6 @@ unitNestedInstance: function {
         scope: rf
         :ast
         unitDecl: tmplUnitName
-        sfx: sfx.stringView
         templateId: tpl
         subs: own
         valSubs: vs
@@ -1918,14 +1868,12 @@ generatorCallWrap: function {
         value: elem
     )
     noVals: IdMapV zast.nameid v: u64
-    sfx: "_\{typeargs.monoValName :ast :st tid: elem}"
     return (
         getOrMintSpec
         :st
         :scope
         :ast
         :unitDecl
-        sfx: sfx.stringView
         templateId: tpl
         :subs
         valSubs: noVals
@@ -2164,7 +2112,6 @@ respecialize: function {
     if pn.length != an then return ztypes.tid.zero
     typeSubs: IdMapV zast.nameid v: ztypes.tid
     rvSubs: IdMapV zast.nameid v: u64
-    sfx: String
     mi: u64
     for mi < an loop {
         mp: pn.get i: mi
@@ -2187,12 +2134,8 @@ respecialize: function {
             sv: st.typing.singletonValueOf tid: mt
             if sv.isConst then bits = constBits64 :st v: sv
             rvSubs.set key: mp value: bits
-            typeargs.appendNumericArgSuffix :sfx :bits cd: cdm
         } else {
-            sfx.append s: "_"
             typeSubs.set key: mp value: mt
-            vn: typeargs.monoValName :st :ast tid: mt
-            sfx.append s: vn
         }
         mi = mi + 1
     }
@@ -2202,7 +2145,6 @@ respecialize: function {
         :scope
         :ast
         :unitDecl
-        sfx: sfx.stringView
         templateId: origin
         subs: typeSubs
         valSubs: rvSubs
@@ -2699,7 +2641,6 @@ mintMono: function {
     st: zenv.ZSymbolTable
     unitDecl: ztypes.declid
     scope: ztypes.declid
-    name: StringView
     templateId: ztypes.tid
     subs: (IdMapV zast.nameid v: ztypes.tid)
     idSubs: (IdMapV ztypes.tid v: ztypes.genericarg)
@@ -2786,7 +2727,7 @@ mintMono: function {
     # RECORD instances: the meta-create requalifies to the instance -- except
     # str/array, whose branches own their members.
     mintMonoRecordShape :ast :st :templateId :mid :tt
-    declare.mintMonoTagShape :st :mid :tt :name
+    declare.mintMonoTagShape :st :mid :tt :templateId
     declare.synthInstanceValueMembers :ast :st :templateId :mid :tt
     mintSpecInstanceShape :st :mid :tt
 }
@@ -2902,7 +2843,6 @@ mintSpecUnderTemplate: function {
     st: zenv.ZSymbolTable
     unitDecl: ztypes.declid
     scope: ztypes.declid
-    name: StringView
     templateId: ztypes.tid
     mid8: ztypes.tid
     subs: (IdMapV zast.nameid v: ztypes.tid)
@@ -2916,7 +2856,6 @@ mintSpecUnderTemplate: function {
             :scope
             :ast
             :unitDecl
-            :name
             :templateId
             :subs
             :idSubs
@@ -2951,7 +2890,6 @@ bindSpecDefaults: function {
     subs: (IdMapV zast.nameid v: ztypes.tid)
     valSubs: (IdMapV zast.nameid v: u64)
     fallbackArg: ztypes.tid
-    sfx: String
 } is {
     if fallbackArg.notZero then {
         for each pn: paramNames loop {
@@ -2965,7 +2903,7 @@ bindSpecDefaults: function {
             }
         }
     }
-    fillGenericDefaults :st :ast tdecl: tk8 :subs :valSubs :sfx
+    fillGenericDefaults :st :ast tdecl: tk8 :subs :valSubs
 }
 
 # buildSpecTrieKeys -- the arguments that key this spec's levels of the id trie, in
@@ -3048,11 +2986,12 @@ buildSpecTrieKeys: function {
 # instantiation and must find the spec rather than mint a second one.
 registerSpecOnTrie: function {
     st: zenv.ZSymbolTable
-    name: StringView
     templateId: ztypes.tid
     mid8: ztypes.tid
     args: (ListVal ztypes.genericarg).view
 } is {
+    # a copy: a node grows the registry the name would be a view into
+    tplNm: st.reg.nameOf tid: templateId
     cur: templateId
     ki: u64
     kn: args.length
@@ -3076,7 +3015,7 @@ registerSpecOnTrie: function {
                 # partial sets one, a node never has. Keep it that way --
                 # respecialize's only guard against walking a node is that
                 # origin being zero.
-                step = st.reg.newType :name typetype: ztypes.ztypetype.genericParam
+                step = st.reg.newType name: tplNm.stringView typetype: ztypes.ztypetype.genericParam
                 st.reg.setTrieNode typeId: step value: true
                 kj: u64
                 for kj <= ki loop {
@@ -3244,13 +3183,9 @@ numericLevelKeyedByParam: function {
 # mintValuePartialSpec -- the partial such a reference is: the template's
 # arguments recorded, a generic parameter among them, and no trie entry.
 mintValuePartialSpec: function {
-    st: zenv.ZSymbolTable
-    templateId: ztypes.tid
-    sfx: StringView
-    args: (ListVal ztypes.genericarg).view
+    st: zenv.ZSymbolTable templateId: ztypes.tid args: (ListVal ztypes.genericarg).view
 } out ztypes.tid is {
-    mn: "\{st.reg.nameOf tid: templateId}\{sfx}"
-    mid: st.reg.newType name: mn.stringView typetype: ztypes.ztypetype.genericParam
+    mid: st.reg.newType name: "" typetype: ztypes.ztypetype.genericParam
     st.reg.setGenericOrigin typeId: mid value: templateId
     st.reg.setPartial typeId: mid value: true
     for each a: args loop st.reg.appendGenericArg specId: mid arg: a
@@ -3301,7 +3236,6 @@ getOrMintSpec: function {
     st: zenv.ZSymbolTable
     unitDecl: ztypes.declid
     scope: ztypes.declid
-    sfx: StringView
     templateId: ztypes.tid
     subs: (IdMapV zast.nameid v: ztypes.tid)
     valSubs: (IdMapV zast.nameid v: u64)
@@ -3336,19 +3270,18 @@ getOrMintSpec: function {
         }
     }
     # the label components the defaults add, after the caller's own
-    defaultSuffix: String
     # a list template's parameters are all bound here, at the run-time types
     # their literals materialise to, so no literal default names the instance
     statics.materialiseStaticListArgs :st :ast :templateId pnames: paramNames :subs
     if (templateHasDefaults :st tdecl: tk8) then {
-        bindSpecDefaults :st :ast :tk8 :paramNames :subs :valSubs :fallbackArg sfx: defaultSuffix
+        bindSpecDefaults :st :ast :tk8 :paramNames :subs :valSubs :fallbackArg
     }
     args: ListVal ztypes.genericarg
     trieOk: buildSpecTrieKeys :ast :st :tk8 :paramNames :subs :valSubs :fallbackArg :args
     # a numeric level keyed by a generic parameter is a partial that stays off
     # the trie, where a value and a type id could coincide
     if trieOk when (numericLevelKeyedByParam :st :tk8 :paramNames :args) then {
-        return (mintValuePartialSpec :st :templateId :sfx :args)
+        return (mintValuePartialSpec :st :templateId :args)
     }
     if trieOk then {
         cur: templateId
@@ -3371,13 +3304,6 @@ getOrMintSpec: function {
         if hit then {
             return cur
         }
-    }
-    # composed only past the trie, because a HIT never reads it: the label is
-    # decided once, where the spec is minted
-    mn8: "\{st.reg.nameOf tid: templateId}\{sfx}\{defaultSuffix}"
-    if trieOk then {
-        defaultsCut: typeargs.defaultsTailLength :st :ast :tk8 :args label: mn8.stringView
-        if defaultsCut > 0 then mn8 = "\{mn8.substring from: 0 to: mn8.length - defaultsCut}"
     }
     idSubs: IdMapV ztypes.tid v: ztypes.genericarg
     if trieOk then buildSpecIdSubs :st :paramNames :args :idSubs :tk8
@@ -3412,7 +3338,6 @@ getOrMintSpec: function {
             tdecl: tk8
             :subs
             :valSubs
-            label: mn8
         )
     }
     mid8: ztypes.tid
@@ -3422,14 +3347,14 @@ getOrMintSpec: function {
         # completes it with concrete args per instance. It carries the same
         # label as any other spec -- `isPartial` on the row is what says it is
         # one, and the dump has that as its own column.
-        mid8 = st.reg.newType name: mn8.stringView typetype: ztypes.ztypetype.genericParam
+        mid8 = st.reg.newType name: "" typetype: ztypes.ztypetype.genericParam
         st.reg.setGenericOrigin typeId: mid8 value: templateId
         st.reg.setPartial typeId: mid8 value: true
     } else {
-        mid8 = st.reg.newType name: mn8.stringView typetype: (templateTypetypeOf :st :templateId)
+        mid8 = st.reg.newType name: "" typetype: (templateTypetypeOf :st :templateId)
     }
     if trieOk when mid8.notZero then {
-        registerSpecOnTrie :st name: mn8.stringView :templateId :mid8 :args
+        registerSpecOnTrie :st :templateId :mid8 :args
         recordNumericArgConsts :ast :st :scope monoId: mid8 tdecl: tk8
         # a partial's value arguments complete per instance: it has no singletons
         if hasParamKey.not then {
@@ -3454,7 +3379,6 @@ getOrMintSpec: function {
         :st
         :unitDecl
         :scope
-        name: mn8.stringView
         :templateId
         :mid8
         :subs
@@ -3649,7 +3573,6 @@ inferConstructionSubs: function {
     # the rows typed over the params, and their types
     ptNames: (ListVal zast.nameid).view
     ptTids: (ListVal ztypes.tid).view
-    sfx: String
     subs: (IdMapV zast.nameid v: ztypes.tid)
     valueSubs: (IdMapV zast.nameid v: u64)
     boundParams: IdSet zast.nameid
@@ -3671,7 +3594,6 @@ inferConstructionSubs: function {
             :fParams
             :ptNames
             :ptTids
-            :sfx
             :subs
             :valueSubs
             :boundParams
@@ -3771,7 +3693,6 @@ inferGenericConstruction: function {
     ptNames: ListVal zast.nameid
     ptTids: ListVal ztypes.tid
     classifyInferenceRows :st :tk :childNames :rowTids :fNames :fParams :ptNames :ptTids
-    sfx: String
     subs: IdMapV zast.nameid v: ztypes.tid
     valueSubs: IdMapV zast.nameid v: u64
     boundParams: IdSet zast.nameid
@@ -3780,7 +3701,6 @@ inferGenericConstruction: function {
     # bound by what the construction reaches it through, before any value
     # could infer them; their part of the label follows the inferred one's
     if (refuseInheritedLabel :st :ast :tplId :call) then return ztypes.tid.zero
-    isfx: String
     if (
         bindInheritedParams
         :st
@@ -3790,7 +3710,6 @@ inferGenericConstruction: function {
         :tplId
         typeSubs: subs
         valSubs: valueSubs
-        sfx: isfx
         at: call.callable
         walked: true
     ).not then {
@@ -3808,7 +3727,6 @@ inferGenericConstruction: function {
         :fParams
         :ptNames
         :ptTids
-        :sfx
         :subs
         :valueSubs
         :boundParams
@@ -3819,9 +3737,8 @@ inferGenericConstruction: function {
     # parameter it was written for again, as one it cannot infer, and a type
     # minted without it would read the argument once more as a field
     if st.typing.reportCount > enI then return ztypes.tid.zero
-    sfx.append s: isfx
     # a parameter no argument names takes its default
-    if (fillGenericDefaults :st :ast tdecl: tk :subs valSubs: valueSubs :sfx).not then {
+    if (fillGenericDefaults :st :ast tdecl: tk :subs valSubs: valueSubs).not then {
         return ztypes.tid.zero
     }
     if (
@@ -3833,7 +3750,6 @@ inferGenericConstruction: function {
         :subs
         :valueSubs
         :boundParams
-        :sfx
         tname: tname.stringView
         :reportMissing
     ) then {
@@ -3841,7 +3757,7 @@ inferGenericConstruction: function {
     }
     paramsM: st.reg.genericParamNamesOf tdecl: tk
     pmn: paramsM.length
-    if sfx.length == 0 then return ztypes.tid.zero
+    if (subs.length + valueSubs.length) == 0 then return ztypes.tid.zero
     # a numeric parameter bound with no value was refused, and is reported
     {
         pvi: u64
@@ -3858,7 +3774,6 @@ inferGenericConstruction: function {
         scope: st.curScope
         :ast
         :unitDecl
-        sfx: sfx.stringView
         templateId: tplId
         :subs
         valSubs: valueSubs
@@ -3937,7 +3852,6 @@ genericTypeConstruction: function {
     tname: st.reg.nameOf tid: tplId
     if tname.length == 0 then return ztypes.tid.zero
     tk0: st.typing.declIdOfType typeId: tplId
-    sfx: String
     subs: IdMapV zast.nameid v: ztypes.tid
     valueSubs: IdMapV zast.nameid v: u64
     primaryName: firstGenericParamId :st templateId: tplId
@@ -3952,7 +3866,6 @@ genericTypeConstruction: function {
         :call
         :tplId
         :primaryName
-        :sfx
         :subs
         :valueSubs
         :tk0
@@ -3963,7 +3876,7 @@ genericTypeConstruction: function {
     if anyMiss then return ztypes.tid.zero
     if dependent then return (valuePartialConstruction :st :ast :call :tplId)
     firstA: firstOut.get i: 0
-    if sfx.length == 0 then return ztypes.tid.zero
+    if (subs.length + valueSubs.length) == 0 then return ztypes.tid.zero
     if (
         bindInheritedParams
         :st
@@ -3973,7 +3886,6 @@ genericTypeConstruction: function {
         :tplId
         typeSubs: subs
         valSubs: valueSubs
-        :sfx
         at: call.callable
         walked: true
     ).not then {
@@ -3986,7 +3898,6 @@ genericTypeConstruction: function {
         :tplId
         typeSubs: subs
         valSubs: valueSubs
-        :sfx
         :firstA
     ).not then {
         return ztypes.tid.zero
@@ -4015,7 +3926,6 @@ genericTypeConstruction: function {
             tdecl: tk0
             :subs
             valSubs: valueSubs
-            label: "\{tname}\{sfx}"
         )
         if um.notZero then stampGate :st nid: call.nid tid: um
         return um
@@ -4026,7 +3936,6 @@ genericTypeConstruction: function {
         scope: st.curScope
         :ast
         :unitDecl
-        sfx: sfx.stringView
         templateId: tplId
         :subs
         valSubs: valueSubs
@@ -4140,8 +4049,7 @@ templateArmBase: function {
     tdecl: st.typing.declIdOfType typeId: bt
     subs: IdMapV zast.nameid v: ztypes.tid
     valSubs: IdMapV zast.nameid v: u64
-    sfx: String
-    if (fillGenericDefaults :st :ast :tdecl :subs :valSubs :sfx).not then return ztypes.tid
+    if (fillGenericDefaults :st :ast :tdecl :subs :valSubs).not then return ztypes.tid
     pi: u64
     for pi < (st.reg.genericParamCountOf :tdecl) loop {
         pn: st.reg.genericParamNameAt :tdecl i: pi
@@ -4169,7 +4077,6 @@ templateArmBase: function {
         scope: st.curScope
         :ast
         :unitDecl
-        sfx: sfx.stringView
         templateId: bt
         :subs
         :valSubs
@@ -4676,7 +4583,6 @@ wrapDoBreakValue: function {
     }
     payloadTid: valuechecks.materialiseLiteral :ast :st t: result
     if payloadTid.isZero then return payloadTid
-    payloadName: st.reg.nameOf tid: payloadTid
     # the system's own Option or optionval: by its well-known slot, so a user
     # type spelled like one does not capture the value
     wrapWk: zast.wellKnown.slot.tyOptionval
@@ -4688,7 +4594,6 @@ wrapDoBreakValue: function {
     # which getOrMintSpec rebinds to that same first parameter.
     optionSubs: IdMapV zast.nameid v: ztypes.tid
     optionSubs.set key: (firstGenericParamId :st templateId: optionTemplate) value: payloadTid
-    monoSuffix: "_\{payloadName}"
     vsF: IdMapV zast.nameid v: u64
     omid0: (
         getOrMintSpec
@@ -4696,7 +4601,6 @@ wrapDoBreakValue: function {
         scope: st.curScope
         :ast
         :unitDecl
-        sfx: monoSuffix.stringView
         templateId: optionTemplate
         subs: optionSubs
         valSubs: vsF
@@ -4731,7 +4635,6 @@ forComprehensionTid: function {
             # `lto` is whichever of ListRef / ListVal the element's family
             # selected above; each names its own element parameter.
             lsubs.set key: (firstGenericParamId :st templateId: lto) value: lv
-            lsfx: "_\{st.reg.nameViewOf tid: elemT}"
             vsG: IdMapV zast.nameid v: u64
             lmid: (
                 getOrMintSpec
@@ -4739,7 +4642,6 @@ forComprehensionTid: function {
                 scope: st.curScope
                 :ast
                 :unitDecl
-                sfx: lsfx.stringView
                 templateId: lto
                 subs: lsubs
                 valSubs: vsG
@@ -4883,7 +4785,6 @@ boxTypeArgTid: function {
     tplId: ztypes.tid
     boxParam: zast.nameid
 } out ztypes.tid is {
-    sfx: String
     subs: IdMapV zast.nameid v: ztypes.tid
     valueSubs: IdMapV zast.nameid v: u64
     bound: IdSet zast.nameid
@@ -4894,7 +4795,6 @@ boxTypeArgTid: function {
         :ast
         :arg
         pk: boxParam
-        :sfx
         :subs
         :valueSubs
         boundParams: bound
@@ -4916,8 +4816,6 @@ checkBoxConstruction: function {
 } out ztypes.tid is {
     vt: boxArgumentTid :st :unitDecl :ast :call :tplId given: ztypes.tid.zero
     if vt.isZero then return ztypes.tid.zero
-    tn: st.reg.nameOf tid: vt
-    mname: "_\{tn}"
     subs: IdMapV zast.nameid v: ztypes.tid
     sv: vt
     subs.set key: (firstGenericParamId :st templateId: tplId) value: sv
@@ -4928,7 +4826,6 @@ checkBoxConstruction: function {
         scope: st.curScope
         :ast
         :unitDecl
-        sfx: mname.stringView
         templateId: tplId
         :subs
         valSubs: vsJ
@@ -5049,15 +4946,13 @@ fillGenericDefaults: function {
     tdecl: ztypes.declid
     subs: (IdMapV zast.nameid v: ztypes.tid)
     valSubs: (IdMapV zast.nameid v: u64)
-    sfx: String
 } out bool is {
     grey: IdSet zast.nameid
     pi: u64
     for pi < (st.reg.genericParamCountOf :tdecl) loop {
         pn: st.reg.genericParamNameAt :tdecl i: pi
         pi = pi + 1
-        if (typeargs.fillOneDefault :st :ast :tdecl :pn :subs :valSubs :sfx :grey
-        ).not then return false
+        if (typeargs.fillOneDefault :st :ast :tdecl :pn :subs :valSubs :grey).not then return false
     }
     return true
 }
@@ -5176,22 +5071,11 @@ mintSumArmInstance: function {
         }
     }
     vsH: IdMapV zast.nameid v: u64
-    dsfx: String
-    if (fillGenericDefaults :st :ast :tdecl subs: armSubs valSubs: vsH sfx: dsfx).not then {
+    if (fillGenericDefaults :st :ast :tdecl subs: armSubs valSubs: vsH).not then {
         return (callleg handled: true tid: ztypes.tid)
     }
     if (refuseUninferredArmParam :st :ast :call :dtp :tdecl :armId :isNullPay subs: armSubs) then {
         return (callleg handled: true tid: ztypes.tid)
-    }
-    monoName: String
-    gi: u64
-    for gi < npar loop {
-        bv: (armSubs.get key: (st.reg.genericParamNameAt :tdecl i: gi)).or d: ztypes.tid.zero
-        gi = gi + 1
-        if bv.isZero then continue
-        an2: st.reg.nameOf tid: bv
-        monoName.append s: "_"
-        monoName.append s: an2
     }
     mintedT: (
         getOrMintSpec
@@ -5199,7 +5083,6 @@ mintSumArmInstance: function {
         scope: st.curScope
         :ast
         :unitDecl
-        sfx: monoName.stringView
         templateId: dtp
         subs: armSubs
         valSubs: vsH
