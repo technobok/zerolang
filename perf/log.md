@@ -308,6 +308,30 @@ The largest single steps were one out-of-line bounds panic (item 3,
 appends in place (5a) and the lock rows here. Wall time for the
 self-compile is 1.02s against 1.11s at the arc's start.
 
+Wall falls by half as much as instructions. Measured head to head after
+the seed bump (`d431e730`, the compiler unchanged since `018108af`), pinned
+to one Zen 5 core (`taskset -c 2`), seven interleaved runs, perf stat
+medians:
+
+| | p-0 | tip | change |
+|---|---|---|---|
+| `out/zc-perf` (-O1) own source: task-clock | 1,124 ms | 1,007 ms | -10.4% |
+| cycles:u / instructions:u | 5.78G / 11.65G | 5.17G / 9.07G | -10.6% / -22.1% |
+| IPC | 2.02 | 1.75 | |
+| `bin/zc` (-O2) own source: task-clock | 840 ms | 729 ms | -13.2% |
+| cycles:u / instructions:u | 4.31G / 7.23G | 3.74G / 5.71G | -13.2% / -21.0% |
+| `out/zc-perf` fixed input | 175 ms | 152 ms | -13.1% |
+| `bin/zc` fixed input | 125 ms | 104 ms | -16.8% |
+
+Wall follows cycles, and cycles fall less because the work removed was
+cheap: the bounds checks, the node copies and the duplicate lookups were
+loads that hit L1 and branches that predict. `bin/zc` own source, counted
+apart (no multiplexing): L1 loads 3,891M -> 3,037M (-22%), L1 misses 81M ->
+67M (-17%), branch misses 23M -> 21M (-9%). What remains is weighted
+towards misses, so IPC drops. Kernel cycles are flat (0.09G). Page faults
+rise (3,285 -> 5,005 at -O1) with no cost that shows. Tool:
+`claude/work/zerolang/perf-arc/wall.sh`.
+
 <a id="r-6e850df8"></a>
 **A syntax node is read in place, and the S simplifications** (perf arc
 item 6's last table, the S items, and item 8's node copy: sixteen commits
