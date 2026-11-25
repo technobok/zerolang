@@ -1566,15 +1566,23 @@ reportDataErrors: function {df: zdata.DataFile} is {
 # userImplementations -- the C implementation file of each unit the program
 # loaded that carries one beside it (`<unit>/nativec.zd`), each checked as a
 # data file is (zdata.open), the build stopping at one that does not check.
-# The standard library's units are left out: zc carries their rows.
+# The standard library's units are left out: zc carries their rows. A unit is
+# the standard library's by its file (unitIsSystems), never by its spelling: a
+# program's own unit spelled like a served one is a user unit, and the rows zc
+# carries for that spelling are not its own.
 userImplementations: function {
     prog: zast.Ast.view
     vfs: zvfs.ZVfs
-    rootid: zvfs.fsno
+    # the union the program's units were found in, and the system directory's
+    # own entry
+    roots: zcheck.VfsRoots.view
     srcdirs: (List String).view
     systemdir: StringView
     # the standard library's units too, whose rows zc otherwise carries
     withServed: bool
+    # the served units the program's own units displace, by their place in
+    # the served table (zemitterc.servedUnitIndex)
+    displaced: ListVal u64
 } out List zemitterc.UserImplementation is {
     r: List zemitterc.UserImplementation
     sawSystem: false
@@ -1582,8 +1590,17 @@ userImplementations: function {
         n: prog.nodes.getView i: u
         if n.namedoperation then {
             nm: (zast.poolTextAt pool: prog.names ref: n.name).stringView
-            if withServed or (zemitterc.isServedUnit name: nm).not then {
-                got: openUserImplementation :vfs :rootid :srcdirs :systemdir unitName: nm :r
+            own: systemsUnitOrDisplacing :vfs :roots unitName: nm :displaced
+            if withServed or own.not then {
+                got: (
+                    openUserImplementation
+                    :vfs
+                    rootid: roots.root
+                    :srcdirs
+                    :systemdir
+                    unitName: nm
+                    :r
+                )
                 if got when n.name == zast.wellKnown.slot.unSystem then sawSystem = true
             }
         }
@@ -1612,6 +1629,30 @@ openUserImplementation: function {
     reportDataErrors :df
     r.append (zemitterc.UserImplementation name: unitName.string file: df.take)
     return true
+}
+
+# systemsUnitOrDisplacing -- whether the program's unit `unitName` is the
+# standard library's (unitIsSystems). One that is not, spelled like a unit zc
+# carries rows for, displaces that served unit: its place in the served table
+# goes onto `displaced`.
+systemsUnitOrDisplacing: function {
+    vfs: zvfs.ZVfs roots: zcheck.VfsRoots.view unitName: StringView displaced: ListVal u64
+} out bool is {
+    if (unitIsSystems :vfs :roots :unitName) then return true
+    si: zemitterc.servedUnitIndex name: unitName
+    if si.some then displaced.append si
+    return false
+}
+
+# unitIsSystems -- the program's unit `unitName` is the standard library's: the
+# file the program reads for it is the one in the system directory
+unitIsSystems: function {
+    vfs: zvfs.ZVfs roots: zcheck.VfsRoots.view unitName: StringView
+} out bool is {
+    ufn: "\{unitName}.z"
+    got: vfs.walk parent: roots.root name: ufn.stringView
+    if got.isZero then return false
+    return got == (vfs.walk parent: roots.systemId name: ufn.stringView)
 }
 
 # nativecFileOf -- the path of `<unit>/nativec.zd` beside the unit's own file,
@@ -2014,6 +2055,8 @@ emitCSource: function {
     mainFsno: zvfs.fsno
     # the user units' C implementation files, checked
     users: (List zemitterc.UserImplementation).view
+    # the served units the program's own units displace (userImplementations)
+    displacedServed: (ListVal u64).view
     cf: ZcFlags.view
     # the file the C is written to, which --line-marks names (cOutputPath)
     cPath: StringView
@@ -2032,6 +2075,7 @@ emitCSource: function {
         reg: st.reg
         typing: st.typing
         :users
+        :displacedServed
         servedRows: (cf.nativecFiles or cf.markNatives).not
         markNatives: cf.markNatives
         lineMarks: cf.lineMarks
@@ -2078,7 +2122,8 @@ printEnvAndExit: function {cf: ZcFlags.view pf: zproject.ProjectFile.view} is {
 
 # mountBuild -- bind the build's roots into `vfs`: the stdlib, the generated
 # `z` unit -- made from this build's values and written to disk for people
-# and editors -- and the src roots. Answers the root a parse starts from.
+# and editors -- and the src roots. Answers the roots: the one a parse starts
+# from, and the system directory's own (zcheck.VfsRoots).
 mountBuild: function {
     vfs: zvfs.ZVfs
     cf: ZcFlags.view
@@ -2087,12 +2132,11 @@ mountBuild: function {
     cc: StringView
     ccMode: StringView
     tccDir: StringView
-} out zvfs.fsno is {
+} out zcheck.VfsRoots is {
     facts: cf.buildFacts :systemdir :cc :ccMode :tccDir
     layer: zproject.zLayer :pf :facts
     zproject.writeLayer :layer
-    roots: zcheck.buildRoots :vfs :systemdir srcdirs: cf.srcdirs :layer
-    return roots.root
+    return (zcheck.buildRoots :vfs :systemdir srcdirs: cf.srcdirs :layer)
 }
 
 # CLI entry point: read the verbs answered before any flag, then hand the
@@ -2287,7 +2331,7 @@ compileUnit: function {
         os.exit code: 2
     }
     vfs: zcheck.newVfs
-    rootid: (
+    roots: (
         mountBuild
         :vfs
         :cf
@@ -2297,6 +2341,7 @@ compileUnit: function {
         ccMode: ccMode.stringView
         tccDir: tccDir.stringView
     )
+    rootid: roots.root
     p: zparser.Parser.create
     prog: p.parseShared :vfs :rootid mainUnitName: cf.unitname store: prelude
     parseEnd: os.monotonicMillis
@@ -2344,14 +2389,16 @@ compileUnit: function {
         return
     }
     ccReal: ccRealPath name: ccPath.stringView
+    displacedServed: ListVal u64
     users: (
         userImplementations
         :prog
         :vfs
-        :rootid
+        :roots
         srcdirs: cf.srcdirs
         systemdir: systemdir.stringView
         withServed: cf.nativecFiles or cf.markNatives
+        displaced: displacedServed
     )
     cPath: String
     if cf.lineMarks then cPath = cOutputPath :zv :cf emitc: mode.emitc
@@ -2362,6 +2409,7 @@ compileUnit: function {
         :vfs
         :mainFsno
         :users
+        :displacedServed
         :cf
         cPath: cPath.stringView
         ccFamily: (zcc.ccFamilyOf ccPath: ccReal.stringView)

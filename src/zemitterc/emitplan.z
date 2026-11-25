@@ -276,9 +276,13 @@ nameRow: function {
 }
 
 # recordImplementedUnits -- the user units whose implementation file was read,
-# for a refusal to say which unit has none (noNativeImplFailure)
-recordImplementedUnits: function {ctx: Ctx users: (List UserImplementation).view} is {
+# for a refusal to say which unit has none (noNativeImplFailure), and the served
+# units the program's own units displace (registerImplementations)
+recordImplementedUnits: function {
+    ctx: Ctx users: (List UserImplementation).view displaced: (ListVal u64).view
+} is {
     for each u: users loop ctx.implementedUnits.add item: u.name.copy
+    for each k: displaced loop ctx.displacedServed.append k
 }
 
 # stringChunkText -- a stringchunk's text ("" for any other shape).
@@ -2458,6 +2462,9 @@ emitC: function {
     typing: ztyping.ZTyping.view
     # the user units' C implementation files, checked (UserImplementation)
     users: (List UserImplementation).view
+    # the served units the program's own units displace, by their place in the
+    # served table (zc's userImplementations)
+    displacedServed: (ListVal u64).view
     # the standard library's rows are the ones zc carries; false when its own
     # files are among `users` instead (zc --nativec-files)
     servedRows: true
@@ -2721,12 +2728,13 @@ emitC: function {
         cWords: (zast.Vocab.create block: cReserved)
         opWords: (zast.Vocab.create block: opSpelling)
         implementedUnits: Set String
+        displacedServed: ListVal u64
         boxedImplementation: IdSet ztypes.confid
         emittedListIters: IdSet ztypes.tid
         converrorTid: cerrId
         :origins
     )
-    recordImplementedUnits :ctx :users
+    recordImplementedUnits :ctx :users displaced: displacedServed
     if servedRows then {
         nativepieces.registerImplementations :ctx :prog :users
     } else {

@@ -583,7 +583,7 @@ registerImplementations: function {
 } is {
     w: newRowWalk
     fd: nativec.systemc.foundation
-    order: servedUnitOrder :fd
+    order: keptServedOrder order: (servedUnitOrder :fd) displaced: ctx.displacedServed
     for each c: fd.conditions loop (
         recordCondition
         :ctx
@@ -1478,12 +1478,36 @@ checkedArms: function {u: UserImplementation.view v: ztypes.cval name: StringVie
     return r
 }
 
-# isServedUnit -- whether zc carries the rows of unit `name` (`nativec.units`)
-isServedUnit: function {name: StringView} out bool is {
+# servedUnitIndex -- the place in the served table (`nativec.units`) of the unit
+# spelled `name`; none for a spelling zc carries no rows for
+servedUnitIndex: function {name: StringView} out optionval u64 is {
+    k: u64
     for each u: nativec.units loop {
-        if u.name.stringView == name then return true
+        if u.name.stringView == name then return (optionval.some k)
+        k = k + 1
     }
-    return false
+    return (optionval.none u64)
+}
+
+# servedForProgram -- the rows zc carries for the unit spelled `name` are the
+# program's: a served unit, and not one the program's own unit of that spelling
+# displaces (Ctx.displacedServed)
+servedForProgram: function {ctx: Ctx.view name: StringView} out bool is {
+    si: servedUnitIndex :name
+    if si.none then return false
+    return (ctx.displacedServed.contains item: si).not
+}
+
+# keptServedOrder -- the served units of `order` the program takes from the
+# standard library: those its own units displace give none of their rows
+keptServedOrder: function {
+    order: (ListVal u64).view displaced: (ListVal u64).view
+} out ListVal u64 is {
+    kept: ListVal u64
+    for each k: order loop {
+        if (displaced.contains item: k).not then kept.append k
+    }
+    return kept
 }
 
 # servedUnitOrder -- each served unit's place in `nativec.units`, in the order
@@ -2153,7 +2177,9 @@ noNativeImplFailure: function {
     ).length.u32.orPanic
     note: String
     hint: "`is native` promises a body from the unit's C implementation: write the body, or add the row".string
-    if (isServedUnit name: unitName).not when (ctx.implementedUnits.has item: unitName.string
+    if (servedForProgram :ctx name: unitName).not when (
+        ctx.implementedUnits.has
+        item: unitName.string
     ).not then {
         note = "unit '\{unitName}' has no C implementation file: \{unitName}/nativec.zd beside \{unitName}.z"
         hint = "write its rows in \{unitName}/nativec.zd (a runtime.nativec value), or write the body"
