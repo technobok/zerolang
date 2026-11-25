@@ -868,7 +868,7 @@ scanTypeNameOpt: function {
     bnId: zast.nameid
     o: ast.nodes.get i: oId
     bnId = rootNameIdOf :ast n: o
-    if bnId.notZero then maybeWalkMethodsById :st :unitDecl :scope :ast nameId: bnId
+    if bnId.notZero then maybeWalkMethods :st :unitDecl :scope :ast nameId: bnId
 }
 
 # scanFnSig -- recurse the method-walk trigger through a function signature in
@@ -890,7 +890,7 @@ scanFnSig: function {
         pm: argRefAt :ast nid: pmId
         if pm.nid.notZero then {
             bnId: rootNameIdOf :ast n: (ast.nodes.getView i: pm.operation)
-            if bnId.notZero then maybeWalkMethodsById :st :unitDecl :scope :ast nameId: bnId
+            if bnId.notZero then maybeWalkMethods :st :unitDecl :scope :ast nameId: bnId
         }
     }
 }
@@ -922,7 +922,7 @@ scanMemberSignatures: function {
             ).not then {
                 bnId: rootNameIdOf :ast n: (ast.nodes.getView i: fm.operation)
                 if bnId.notZero then {
-                    maybeWalkMethodsById :st :unitDecl :scope :ast nameId: bnId
+                    maybeWalkMethods :st :unitDecl :scope :ast nameId: bnId
                 }
             }
         }
@@ -951,23 +951,10 @@ scanMemberSignatures: function {
 # a body walk resolves a main-unit definition's name, scan the signature
 # typerefs (recursing per name) at the current scope position, then body-check
 # the type's methods. The early mark stops re-entry (a method constructing its
-# own type).
+# own type). The declaring node comes from the DECL, which is keyed by (unit,
+# name) and records the node that declared it, so any unit's definition can be
+# walked at the point something demands it.
 maybeWalkMethods: function {
-    st: zenv.ZSymbolTable
-    unitDecl: ztypes.declid
-    scope: ztypes.declid
-    ast: Ast
-    name: StringView
-} is {
-    nmId: zast.poolFind pool: ast.names text: name
-    maybeWalkMethodsById :st :unitDecl :scope :ast nameId: nmId
-}
-
-# maybeWalkMethodsById -- maybeWalkMethods for a name already interned. The
-# declaring node comes from the DECL, which is keyed by (unit, name) and
-# records the node that declared it, so any unit's definition can be walked
-# at the point something demands it.
-maybeWalkMethodsById: function {
     st: zenv.ZSymbolTable
     unitDecl: ztypes.declid
     scope: ztypes.declid
@@ -1396,15 +1383,12 @@ methodLabel: function {ast: Ast.view typeName: StringView memberId: zast.nameid}
 setSynthOwner: function {
     st: zenv.ZSymbolTable
     unitDecl: ztypes.declid
-    ast: Ast.view
-    defName: StringView
-    # the definition's interned name, when the caller holds it
+    # the definition's name, zero for an instance walk
     defNameId: zast.nameid
     thisName: zast.nameid
 } is {
     st.walk.fn.synthOwnerUnit = unitDecl
     soid: defNameId
-    if soid.isZero then soid = zast.poolFind pool: ast.names text: defName
     if thisName.notZero then soid = thisName
     st.walk.fn.synthOwnerName = soid
 }
@@ -1416,9 +1400,11 @@ checkFunctionBody: function {
     st: zenv.ZSymbolTable
     unitDecl: ztypes.declid
     scope: ztypes.declid
+    # the text a refused return clause underlines when no name id spells the
+    # walk (a method's or an instance's); "" when `defNameId` does
     defName: StringView
-    # the definition's name id when the caller holds one -- zero when `defName`
-    # is a composed label (`Type.method`), which no id spells
+    # the definition's own name; zero for a method's walk or an instance's,
+    # which no definition of the unit is named by
     defNameId: zast.nameid
     fn: fnref
     # the name of the type a method belongs to; zero for a free function, and
@@ -1510,9 +1496,11 @@ checkFunctionBodyIn: function {
     st: zenv.ZSymbolTable
     unitDecl: ztypes.declid
     scope: ztypes.declid
+    # the text a refused return clause underlines when no name id spells the
+    # walk (a method's or an instance's); "" when `defNameId` does
     defName: StringView
-    # the definition's name id when the caller holds one -- zero when `defName`
-    # is a composed label (`Type.method`), which no id spells
+    # the definition's own name; zero for a method's walk or an instance's,
+    # which no definition of the unit is named by
     defNameId: zast.nameid
     fn: fnref
     thisName: zast.nameid
@@ -1566,7 +1554,6 @@ checkFunctionBodyIn: function {
     # always there for, and leaves the body walk to this rf.
     {
         sfId: defNameId
-        if sfId.isZero then sfId = zast.poolFind pool: ast.names text: defName
         if sfId.notZero then {
             sfd: fnDecl
             if sfd.isZero then sfd = (
@@ -1582,16 +1569,10 @@ checkFunctionBodyIn: function {
             }
         }
     }
-    if defNameId.notZero then {
-        maybeWalkMethodsById :st :unitDecl scope: rf :ast nameId: defNameId
-    } else {
-        maybeWalkMethods :st scope: rf :unitDecl :ast name: defName
-    }
+    maybeWalkMethods :st :unitDecl scope: rf :ast nameId: defNameId
     hasBody: fn.body.notZero
     isGenDef: false
-    # the function's own tid, off the Decl the caller passed; a defName is
-    # display only (a mono walk's owner is a registry label such as
-    # `mathops_i64`, never an interned name).
+    # the function's own tid, off the Decl the caller passed
     if fnTid.notZero when (st.reg.isGenericOf tid: fnTid) then isGenDef = true
     if hasBody then {
         # A generic template's body is checked ONCE, for its diagnostics;
@@ -1607,7 +1588,7 @@ checkFunctionBodyIn: function {
         # its values, and its return is the wrapper the lowering wrote
         isGenCall: (generatorCallOf typing: st.typing nid: fn.nid).notZero
         input: bindParams :st :unitDecl :ast :rf :fn :thisName :fnTid
-        setSynthOwner :st :unitDecl :ast :defName :defNameId :thisName
+        setSynthOwner :st :unitDecl :defNameId :thisName
         st.walk.fn.currentThisTid = thisTid
         prevFn: st.walk.fn.currentFnTid
         st.walk.fn.currentFnTid = walkedFnTid :st :fnTid
@@ -1761,15 +1742,14 @@ checkNamespaceBodies: function {
             } else {
                 memberDecl: st.typing.declFindChild parentDeclId: nsDecl nameId: bm.name
                 if (bodyWalkOwed :st declId: memberDecl).not then continue
-                defNameText: zast.nameTextCopy :ast ref: bm.name
                 cfbFr: fnRefAt :ast nid: bm.operation
                 (
                     checkFunctionBody
                     :st
                     scope: rf
                     :unitDecl
-                    defName: defNameText.stringView
-                    defNameId: zast.nameid
+                    defName: ""
+                    defNameId: bm.name
                     fn: cfbFr
                     thisName: zast.nameid
                     thisTid: ztypes.tid
@@ -1822,8 +1802,8 @@ checkUnitBodies: function {
                     :st
                     :scope
                     :unitDecl
-                    defName: "main"
-                    defNameId: zast.nameid
+                    defName: ""
+                    defNameId: mm.name
                     fn: cfbFr
                     thisName: zast.nameid
                     thisTid: ztypes.tid
@@ -1850,7 +1830,6 @@ checkUnitBodies: function {
             bi = bi + 1
             bm: argRefAt :ast nid: bmId
             if bm.nid.notZero then {
-                defName: zast.nameTextCopy :ast ref: bm.name
                 # the target unit's own definitions are walked because something
                 # DEMANDED them, exactly as a dependency's are. Walking every one
                 # regardless is what made the root the one unit in the program
@@ -1871,8 +1850,8 @@ checkUnitBodies: function {
                         :st
                         :scope
                         :unitDecl
-                        defName: defName.stringView
-                        defNameId: zast.nameid
+                        defName: ""
+                        defNameId: bm.name
                         fn: cfbFr
                         thisName: zast.nameid
                         thisTid: ztypes.tid
