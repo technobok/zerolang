@@ -263,7 +263,51 @@ the account there under its own `<a id="r-<commit>">` anchor.
 | 2026-11-24 | 1b7ef32b | [fields recorded once, if chains in one pass, appends in place](#r-1b7ef32b) | 1.12s | -- | 207MB / -- | 106 / 636 / 355 (total 1097) | 2,593,773 | 568MB | -- | 219,399 |
 | 2026-11-24 | 6e850df8 | [a syntax node is read in place, and the S simplifications](#r-6e850df8) | 1.02s | -- | 208MB / -- | 116 / 603 / 323 (total 1042) | 2,611,250 | 569MB | -- | 219,298 |
 | 2026-11-25 | 018108af | [the perf arc's end: lock rows, rewrites, names by id; re-baseline](#r-018108af) | 1.02s | -- | 207MB / -- | 104 / 591 / 320 (total 1015) | 2,476,458 | 567MB | -- | 219,362 |
+| 2026-11-25 | dd903fea | [mono names by structure: an instance carries no name](#r-dd903fea) | 1.00s | -- | 207MB / -- | 104 / 590 / 315 (total 1009) | 2,399,613 | 565MB | -- | 219,055 |
 
+
+<a id="r-dd903fea"></a>
+**Mono names by structure: an instance carries no name** (eighteen
+commits, `2dfbe17a`..`dd903fea`, the plan's steps 1 to 7). A rule and
+correctness arc, not a perf one: an instance's row stopped carrying a
+composed label (`ListVal_i64`), so the label stopped being built on every
+argument resolution. Instructions:u of `bin/zc` (-O2), each commit against
+the one before it (zgate ab), the fixed input outside any project;
+allocations are perf-strict's exact count:
+
+| commit | what | own source | fixed input | allocations |
+|---|---|---|---|---|
+| `2dfbe17a` | an instance's label never names a generic parameter (a defect) | 0.0% | +0.02% | +46 |
+| `4abe2743` | a body walk is claimed and triggered by its name id | -0.04% | -0.03% | -615 |
+| `699647c5` | a type is named by id, an instance by no name | -0.05% | -0.03% | -4,858 |
+| `a8c120d0` | no type is told apart by an empty name | +0.08% | -0.01% | -90 |
+| `20ab83a8` | a cloned method's self type by id alone | -0.03% | +0.02% | -13,138 |
+| `e102a9b1` | the canonical dump keeps the main unit's rows by its root | -0.05% | +0.01% | -543 |
+| `2f5132c5` | environment and unit path read from the tables alone | -0.09% | -0.04% | +447 |
+| `19b7eb93` | one renderer spells a type | +0.08% | -0.05% | +51 |
+| `1fb86af8` | zls names a type with the checker's renderer | +0.18% | -0.02% | +1,031 |
+| `4301f96f` | an application told apart from a cloned method | -0.15% | +0.04% | +195 |
+| `21754f06` | a message names an instance as a program writes it | -0.05% | -0.03% | +30 |
+| `38ce6a3a` | a dump row names an instance as a program writes it | +0.03% | -0.03% | +307 |
+| `bfb2eb63` | the C stem and the value text from the structure | -0.07% | +0.03% | +655 |
+| `3c4b80cf` | an instance carries no name; the label plumbing is gone | -0.24% | -0.07% | -56,893 |
+| `c8f89a8e` | a type reference's argument looked up by its name id | -0.03% | 0.0% | -3,470 |
+| `9c8895e8` | coverage list, `dd903fea` the seed | -- | -- | 0 |
+
+The rises are source (each compiler on the old source does the same
+work or less): the renderer and its qualified leaves are new code in
+zc's own source. The arc against its start (`b5b58545`, the m-0
+snapshot), one session, zgate ab:
+
+| | `b5b58545` (m-0) | `dd903fea` | change |
+|---|---|---|---|
+| `bin/zc` (-O2), own source | 5,697.8M | 5,669.9M | -0.49% |
+| `bin/zc` (-O2), fixed input | 1,120.7M | 1,119.2M | -0.13% |
+| allocations, own source (perf-strict) | 2,476,458 | 2,399,613 | -3.1% |
+
+Of the 76,845 allocations, 50,582 left with the label plumbing (`3c4b80cf`)
+and 12,813 with a name copy per cloned parameter and return (`20ab83a8`).
+Wall for the self-compile is 1.00s against 1.02s at the perf arc's end.
 
 <a id="r-018108af"></a>
 **The perf arc's end: lock rows, rewrites, names by id; re-baseline** (the
