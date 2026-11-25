@@ -991,10 +991,11 @@ isLiteralTypeId: function {reg: ztypes.ZTypeRegistry.view tid: ztypes.tid} out b
 writtenTypeName: function {
     reg: ztypes.ZTypeRegistry.view
     typing: ztyping.ZTyping.view
-    ast: Ast.view
+    # the program's names, which spell the parameters and labels
+    names: zast.StringPool.view
     tid: ztypes.tid
 } out String is {
-    return (spellType :reg :typing :ast :tid qualified: false site: ztypes.declid)
+    return (spellType :reg :typing :names :tid qualified: false site: ztypes.declid)
 }
 
 # writtenTypeNameFrom -- writtenTypeName as a program in unit `site` writes it,
@@ -1003,11 +1004,11 @@ writtenTypeName: function {
 writtenTypeNameFrom: function {
     reg: ztypes.ZTypeRegistry.view
     typing: ztyping.ZTyping.view
-    ast: Ast.view
+    names: zast.StringPool.view
     tid: ztypes.tid
     site: ztypes.declid
 } out String is {
-    return (spellType :reg :typing :ast :tid qualified: true :site)
+    return (spellType :reg :typing :names :tid qualified: true :site)
 }
 
 # spellType -- writtenTypeName's walk: each type that is no instance is named
@@ -1015,26 +1016,26 @@ writtenTypeNameFrom: function {
 spellType: function {
     reg: ztypes.ZTypeRegistry.view
     typing: ztyping.ZTyping.view
-    ast: Ast.view
+    names: zast.StringPool.view
     tid: ztypes.tid
     qualified: bool
     site: ztypes.declid
 } out String is {
     sg: typing.singletons.get key: tid
     if sg.some when sg.instance.notZero then {
-        sw: spellType :reg :typing :ast tid: sg.instance :qualified :site
+        sw: spellType :reg :typing :names tid: sg.instance :qualified :site
         sw.append "."
-        sw.append (zast.nameTextAt :ast ref: sg.param)
+        sw.append (zast.poolTextAt pool: names ref: sg.param)
         return sw
     }
-    org: reg.genericOriginOf :tid
-    if org.isZero then {
+    if (reg.isApplicationOf :tid).not then {
         if qualified then return (qualifiedLeafName :reg :typing :tid :site)
         return (reg.nameOf :tid)
     }
+    org: reg.genericOriginOf :tid
     tdecl: typing.declIdOfType typeId: org
     pns: reg.genericParamNamesOf :tdecl
-    r: "(\{spellType :reg :typing :ast tid: org :qualified :site}"
+    r: "(\{spellType :reg :typing :names tid: org :qualified :site}"
     n: shownArgCount :reg :tdecl spec: tid
     i: u64
     for i < n loop {
@@ -1045,10 +1046,10 @@ spellType: function {
         ) case valueArg then {
             at = reg.valueArgText :tdecl paramName: (reg.genericParamNameAt :tdecl :i) bits: a
         } case typeArg then {
-            at = spellType :reg :typing :ast tid: a :qualified :site
+            at = spellType :reg :typing :names tid: a :qualified :site
         }
         if i > 0 when i < pns.length then {
-            pt: zast.nameTextAt :ast ref: (pns.get :i)
+            pt: zast.poolTextAt pool: names ref: (pns.get :i)
             r.append " \{pt}: \{at}"
         } else {
             r.append " \{at}"
